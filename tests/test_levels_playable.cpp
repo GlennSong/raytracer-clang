@@ -36,7 +36,13 @@
 #include "../src/engine/procgen/city/roads/road_entity.h"   // RoadEntity (signal census)
 #include "../src/engine/procgen/city/building_records.h"
 #include "../src/engine/procgen/city/shape_grammar.h"   // PartId (the dressing gate)
+#include "../src/engine/procgen/city/trades.h"
 #include "../src/engine/procgen/city/core_plan.h"  // CityBuildings doors (ADR-0080)
+#include "../src/engine/procgen/city/space_graph.h"   // the blueprints and the graph gate (issue #105)
+#include <fstream>
+#include <map>
+#include "../src/engine/procgen/furniture_kit.h"   // Piece (level_print_shop_interiors)
+#include "../src/engine/procgen/city/furniture.h"
 #include "../src/engine/procgen/city/city_svg.h"   // CityMapData (the in-road census)
 #include "../src/apps/citysim/city_render.h"        // CityRenderSystem (traffic census)
 #include "../src/apps/citysim/city_map_raster.h"    // the map tool's picture
@@ -96,6 +102,10 @@ std::string simLevelPath() {
 // THE HEAVY LEVELS: over a minute each to build cold on a CI runner (measured on the 2026-09-26 macOS run:
 // metro_mountain 366 s, metro_planned 323 s, island_8_weathered 168 s, island_8_saltwood 159 s, piedmont 99 s --
 // with them the gate never finished inside ctest's 30 minutes, so CI was red on a timeout, not on a finding).
+// island_8_rocky (tracked 2026-10-19) and island_8_nature (2026-10-21) joined them when the push runs timed out
+// again: the island's cold bake is minutes, and four print cases below load island_8_nature once it exists.
+// Then (2026-10-22 run, cold, Linux / macOS) piedmont_roads 578 / 418 s, tree_lab 193 s (macOS), scale_lab 169 /
+// 172 s -- and scale_lab grows its hero trees on EVERY load (156 s again warm), in every case that walks the levels.
 // RT_LEVEL_TESTS_SKIP_HEAVY=1 (the push workflow) leaves them out; the nightly workflow runs everything.
 bool skipHeavy() {
     const char* e = std::getenv("RT_LEVEL_TESTS_SKIP_HEAVY");
@@ -103,7 +113,8 @@ bool skipHeavy() {
 }
 bool isHeavyLevel(const std::string& name) {
     static const char* kHeavy[] = {"metro_mountain.json", "metro_planned.json", "island_8_weathered.json", "island_8_saltwood.json",
-                                   "piedmont.json"};
+                                   "piedmont.json", "island_8_rocky.json", "island_8_nature.json", "piedmont_roads.json",
+                                   "tree_lab.json", "scale_lab.json"};
     for (const char* h : kHeavy) if (name == h || (name.size() > std::strlen(h) && name.compare(name.size() - std::strlen(h), std::string::npos, h) == 0 && name[name.size() - std::strlen(h) - 1] == '/')) return true;
     return false;
 }
@@ -408,23 +419,13 @@ LevelFacts inspect(const std::string& name) {
         world.each<CityPlanDebug>([&](Entity, CityPlanDebug& plan) {
             if (plan.prisms.empty()) return;
             Noise noise(cfg.seed);
-            const double leafSize =
-                (2.0 * cfg.worldHalf) /
-                static_cast<double>(1 << (cfg.numLods - 1));
-            const double leafStep = leafSize / std::max(1, cfg.gridRes);
-            const double dilate = leafStep * 1.45;
+            // THE DRAWN GROUND: the leaf mesh's triangle under the point (lodSurfaceHeight), as the
+            // dressing and scenery gates measure. This used to be a model of it -- the field dilated
+            // by a cell, then the lower of that and any road plane within 1.6 cells -- and the model
+            // was the gap: river_town's riverside lot read a 10.1 m drop at a corner where the mesh
+            // drops 7.8 (2026-10-14).
             auto meshGround = [&](double x, double z) {
-                double y = terrainHeight(cfg.params, noise, x, z, dilate);
-                if (cfg.params.flattenIndex) {
-                    const double rp =
-                        roadPlaneNear(*cfg.params.flattenIndex,
-                                      cfg.params.flatten, x, z, leafStep * 1.6);
-                    if (rp < 1e29 &&
-                        !padPlaneAbove(*cfg.params.flattenIndex,
-                                       cfg.params.flatten, x, z, rp, dilate))
-                        y = std::min(y, rp);
-                }
-                return y;
+                return lodSurfaceHeight(cfg.params, noise, x, z, cfg.worldHalf, cfg.numLods, cfg.gridRes);
             };
             // plinth from the level JSON (the prism base = baseY - 0.5).
             double plinth = 0.15;
@@ -519,6 +520,31 @@ LevelFacts inspect(const std::string& name) {
                             if (pointInPolygon(poly, c)) { ++padsAtCentre; padY = fl.planeY(c.x, c.y); }
                         }
                         std::printf(" | pads covering its centre: %d (plane %.2f)\n", padsAtCentre, padY);
+                        // A GAP is the other end: the LOWEST wall point, and every region whose reach covers it.
+                        double low = 1e30; Vec2 lowAt(0, 0);
+                        for (std::size_t i = 0; i < prism.plan.size(); ++i) {
+                            const Vec2& a = prism.plan[i];
+                            const Vec2& b = prism.plan[(i + 1) % prism.plan.size()];
+                            const int steps = std::max(1, static_cast<int>(std::ceil((b - a).length())));
+                            for (int st = 0; st <= steps; ++st) {
+                                const Vec2 q = a + (b - a) * (static_cast<double>(st) / steps);
+                                const double g = meshGround(q.x, q.y);
+                                if (g < low) { low = g; lowAt = q; }
+                            }
+                        }
+                        std::printf("    [census]     lowest wall ground %.2f m (%.2f under the base) at (%.1f, %.1f):\n",
+                                    low, baseY - low, lowAt.x, lowAt.y);
+                        for (const TerrainFlatten& fl : cfg.params.flatten) {
+                            if (lowAt.x < fl.minX - fl.falloff || lowAt.x > fl.maxX + fl.falloff ||
+                                lowAt.y < fl.minZ - fl.falloff || lowAt.y > fl.maxZ + fl.falloff) continue;
+                            Poly2 poly;
+                            for (const Vec3& v : fl.polygon) poly.push_back(Vec2(v.x, v.z));
+                            const Vec2 pc = centroid(poly);
+                            std::printf("    [census]       p%d owner %d %s plane %.2f, %.0f m2 centred (%.1f, %.1f), falloff %.1f %s\n",
+                                        fl.priority, fl.owner, pointInPolygon(poly, lowAt) ? "IN" : "near",
+                                        fl.planeY(lowAt.x, lowAt.y), std::fabs(area(poly)), pc.x, pc.y, fl.falloff,
+                                        fl.falloffMode == TerrainFlatten::Falloff::DaylightBatter ? "batter" : "smooth");
+                        }
                     }
                 }
                 if (buried) ++f.censusBurials;
@@ -739,6 +765,50 @@ TEST_CASE(level_print_buildings_in_the_carriageway) {
     }
 }
 
+// THE BLUEPRINTS AND THE GRAPH GATE over a level's buildings (architectural toolkit, issue #105, foundation A): with
+// RT_BLUEPRINTS=<dir>, every enterable building's space graph as one SVG sheet in <dir>/<level>_<record>.svg (the
+// first 60 per level) and, per level, the gate's census -- how many buildings are modelled, how many every walker
+// reaches base to top, and what the rest fail on. RT_LEVELS picks the levels; the lab is one building.
+TEST_CASE(level_blueprints_and_graph_gate) {
+    const char* dir = std::getenv("RT_BLUEPRINTS");
+    if (!dir) return;
+    for (const std::string& name : shippedLevels()) {
+        std::unique_ptr<Renderer> renderer = Renderer::create();
+        RendererMeshUploader uploader(*renderer);
+        AssetManager assets(uploader);
+        World world;
+        RenderView view;
+        if (!LevelLoader::load(levelsDir() + "/" + name, world, *renderer, view, assets, false)) continue;
+        const CityBuildings* cbp = nullptr;
+        world.each<CityBuildings>([&](Entity, CityBuildings& cb) { cbp = &cb; });
+        if (!cbp) continue;
+        const std::string stem = name.substr(0, name.find(".json"));
+        int enterable = 0, modelled = 0, passing = 0, written = 0;
+        std::map<std::string, int> why;
+        for (std::size_t i = 0; i < cbp->records.size(); ++i) {
+            const BuildingRecord& r = cbp->records[i];
+            if (!r.enterable || r.plan.size() < 3) continue;
+            ++enterable;
+            const SpaceGraph g = spaceGraphOf(r.plan, r.params, r.baseY, &r.roof);
+            if (!g.modelled) continue;
+            ++modelled;
+            const std::vector<int> bad = unreachableCells(g);
+            if (bad.empty()) ++passing;
+            for (int c : bad) {
+                const Cell& cell = g.cells[static_cast<std::size_t>(c)];
+                ++why[std::string(r.recipe) + ": " + cellKindName(cell.kind) + (cell.kind == CellKind::Room ? std::string(":") + cellUseName(cell.use) : "") + "@" + std::to_string(cell.k0)];
+            }
+            if (written < 60) {
+                std::ofstream f(std::string(dir) + "/" + stem + "_" + std::to_string(i) + ".svg");
+                if (f) { f << blueprintSvg(g, stem + " record " + std::to_string(i) + " (" + r.recipe + ", " + std::to_string(g.storeys) + " storeys)", bad); ++written; }
+            }
+        }
+        std::printf("[blueprints] %s: %d enterable, %d modelled, %d pass the gate, %d sheets in %s\n", name.c_str(), enterable, modelled, passing, written, dir);
+        int shown = 0;
+        for (const auto& [w, n] : why) { if (shown++ >= 12) { std::printf("[blueprints]   ...\n"); break; } std::printf("[blueprints]   fails %s x%d\n", w.c_str(), n); }
+    }
+}
+
 TEST_CASE(level_print_tower_cores) {
     if (!std::getenv("RT_PRINT_CORES")) return;
     for (const std::string& name : shippedLevels()) {
@@ -949,6 +1019,14 @@ TEST_CASE(metro_signal_poles_stand_off_the_asphalt) {
     if (!graph || !sf) return;
     const RoadGraph& g = *graph;
     const int N = static_cast<int>(g.nodes.size());
+    // A CITY THAT PUBLISHES ITS KERB LINE (a lane-built one) is measured against the surface it drew -- junction
+    // corners included -- not against the lattice mesher's pads and straight ribbons between graph nodes, which
+    // on its curves put a pole standing on the sidewalk's tip 0.37 m "inside" (2026-10-20).
+    const std::vector<Poly2>* kerbLoops = nullptr;
+    world.each<engine::RoadBandDebug>([&](Entity, engine::RoadBandDebug& b) {
+        if (!kerbLoops && !b.loops.empty()) kerbLoops = &b.loops;
+    });
+    const engine::KerbLine kerb(kerbLoops);
 
     // The mesher's junction model.
     std::vector<int> deg(N, 0);
@@ -1028,6 +1106,7 @@ TEST_CASE(metro_signal_poles_stand_off_the_asphalt) {
             bodyDepth = std::max(bodyDepth,
                                  e.width * 0.5 - distSeg(p, g.nodes[e.a].pos, g.nodes[e.b].pos));
         }
+        if (!kerb.empty()) { padDepth = 0; compDepth = 0; bodyDepth = kerb.depth(p); }
         const char* kind = nullptr;
         double depth = 0;
         if (padDepth > 0.05) { kind = "pad"; depth = padDepth; ++inPad; }
@@ -1066,6 +1145,7 @@ TEST_CASE(metro_signal_poles_stand_off_the_asphalt) {
             depth = std::max(depth,
                              e.width * 0.5 - distSeg(q, g.nodes[e.a].pos, g.nodes[e.b].pos));
         }
+        if (!kerb.empty()) depth = kerb.depth(q);
         if (depth > 0.05) {
             ++lampInBody;
             if (depth > lampWorst) { lampWorst = depth; lampWorstAt = q; }
@@ -1073,7 +1153,7 @@ TEST_CASE(metro_signal_poles_stand_off_the_asphalt) {
     }
     std::printf("    [lamps] %d lamps: %d inside a carriageway; worst %.2f m at (%.1f, %.1f)\n",
                 lampTotal, lampInBody, lampWorst, lampWorstAt.x, lampWorstAt.y);
-    CHECK(lampTotal > 500);
+    CHECK(lampTotal > 400);   // the fixture must bite (the lane-built metro plants 464; the lattice's planted 1739)
     CHECK(lampInBody == 0);
 }
 
@@ -1588,6 +1668,7 @@ namespace {
 struct ParkCensus {
     int drivers = 0, bays = 0, parked = 0, inBay = 0, verge = 0, stacked = 0,
         atJunction = 0, offStreet = 0;
+    std::vector<std::string> where;   // the first few heaps and junction cars, with their bay and the street's width
 };
 ParkCensus parkCensus(const citysim::CityRenderSystem& city) {
     ParkCensus c;
@@ -1595,6 +1676,9 @@ ParkCensus parkCensus(const citysim::CityRenderSystem& city) {
     const auto& nav = city.nav();
     c.bays = static_cast<int>(sim.parkingBays().size());
     std::vector<Vec2> parkedAt;
+    std::vector<Real> parkedY;       // a garage stall's deck (else 0: the street)
+    std::vector<char> inGarage;
+    std::vector<int> parkedBay;
     for (std::size_t ai = 0; ai < sim.agents().size(); ++ai) {
         const auto& a = sim.agents()[ai];
         if (a.archetype != citysim::Agent::Mode::Driver) continue;
@@ -1609,17 +1693,45 @@ ParkCensus parkCensus(const citysim::CityRenderSystem& city) {
         // A driver resting IN its car is drawn at its own pose; one that got
         // out left the car where it parked.
         parkedAt.push_back(a.vehicle >= 0 ? a.pos : v.pos);
+        const bool g = a.parkedBay >= 0 && sim.parkingBays()[static_cast<std::size_t>(a.parkedBay)].garage >= 0;
+        inGarage.push_back(g ? 1 : 0);
+        parkedBay.push_back(a.parkedBay);
+        parkedY.push_back(g ? sim.parkingBays()[static_cast<std::size_t>(a.parkedBay)].y : 0.0);
     }
     for (std::size_t i = 0; i < parkedAt.size(); ++i) {
         for (std::size_t j = 0; j < parkedAt.size(); ++j) {
             if (i == j) continue;
             const Vec2 d = parkedAt[i] - parkedAt[j];
-            if (d.x * d.x + d.y * d.y < 3.0 * 3.0) { ++c.stacked; break; }
+            // A GARAGE'S STALLS are 2.5 m apart and its decks stand over each other: two cars there are a heap
+            // only if they are nearer than a stall's width on the same deck (the 3 m plan test counted
+            // neighbouring stalls, and the cars on the decks above, as heaps)
+            const bool both = inGarage[i] && inGarage[j];
+            const Real dy = parkedY[i] - parkedY[j];
+            if (both ? (d.x * d.x + d.y * d.y + dy * dy < 2.0 * 2.0) : (d.x * d.x + d.y * d.y < 3.0 * 3.0)) {
+                ++c.stacked;
+                if (c.where.size() < 8) {
+                    char b[160];
+                    std::snprintf(b, sizeof b, "heap at (%.1f, %.1f) with (%.1f, %.1f), %.1f m apart, bays %d and %d",
+                                  parkedAt[i].x, parkedAt[i].y, parkedAt[j].x, parkedAt[j].y, d.length(), parkedBay[i], parkedBay[j]);
+                    c.where.push_back(b);
+                }
+                break;
+            }
         }
         for (int n = 0; n < nav.nodeCount(); ++n) {
             if (!nav.isJunction(n)) continue;
             const Vec2 d = parkedAt[i] - nav.nodes[static_cast<std::size_t>(n)];
-            if (d.x * d.x + d.y * d.y < 10.0 * 10.0) { ++c.atJunction; break; }
+            if (d.x * d.x + d.y * d.y < 10.0 * 10.0) {
+                ++c.atJunction;
+                if (c.where.size() < 8) {
+                    char b[160];
+                    std::snprintf(b, sizeof b, "in a junction at (%.1f, %.1f), %.1f m from its node (%.1f, %.1f), bay %d",
+                                  parkedAt[i].x, parkedAt[i].y, d.length(), nav.nodes[static_cast<std::size_t>(n)].x,
+                                  nav.nodes[static_cast<std::size_t>(n)].y, parkedBay[i]);
+                    c.where.push_back(b);
+                }
+                break;
+            }
         }
     }
     return c;
@@ -1630,6 +1742,7 @@ void printPark(const char* when, const ParkCensus& c) {
                 "junction | %d off-street\n",
                 when, c.drivers, c.bays, c.parked, c.inBay, c.verge, c.stacked,
                 c.atJunction, c.offStreet);
+    for (const std::string& w : c.where) std::printf("      %s\n", w.c_str());
 }
 }  // namespace
 
@@ -1904,7 +2017,7 @@ TEST_CASE(metro_map_shows_the_city_and_its_bus_lines) {
     for (int ri = 0; ri < net.routeCount(); ++ri) {
         citysim::TransitLine l;
         for (const auto& pt : net.route(ri).path) l.path.push_back({pt.x, pt.y});
-        const engine::Vec3 c = citysim::routeColour(ri);
+        const engine::Vec3 c = citysim::routeColour(net.lineOf(ri));
         l.r = static_cast<float>(c.x); l.g = static_cast<float>(c.y); l.b = static_cast<float>(c.z);
         lines.push_back(l);
     }
@@ -1933,7 +2046,7 @@ TEST_CASE(metro_map_shows_the_city_and_its_bus_lines) {
     int hit = 0, tried = 0, worstRoute = 100;
     for (int ri = 0; ri < net.routeCount(); ++ri) {
         const auto& path = net.route(ri).path;
-        const engine::Vec3 c = citysim::routeColour(ri);
+        const engine::Vec3 c = citysim::routeColour(net.lineOf(ri));
         int rh = 0, rt = 0;
         for (std::size_t k = 0; k < path.size(); k += std::max<std::size_t>(1, path.size() / 40)) {
             const int x = static_cast<int>((path[k].x - (v.cx - v.w * 0.5 * v.metresPerPixel)) / v.metresPerPixel);
@@ -2373,6 +2486,13 @@ TEST_CASE(city_furniture_never_stands_in_a_road) {
         // shoulder, kerb, median and sidewalk alike. Judging furniture by the wide test says
         // "2002 of 2027 lamps in a road" and means only that lamps stand on pavements.
         RoadIntrusion scatter{"trees + rocks (any paved surface)"};
+        // ...but a STREET TREE (street planting, 2026-10-10) is planted in a pit in the sidewalk on
+        // purpose: it is kerb furniture, judged like a lamp -- its foot off the carriageway.
+        RoadIntrusion streetTrees{"street trees (carriageway)"};
+        std::set<std::pair<long long, long long>> streetTree;
+        world.each<engine::StreetFurniture>([&](Entity, engine::StreetFurniture& sf) {
+            for (const Vec3& b : sf.streetTrees) streetTree.insert({std::llround(b.x * 100), std::llround(b.z * 100)});
+        });
         world.each<InstanceGroup>([&](Entity, InstanceGroup& g) {
             // SCENERY only. Furniture, paint and structure ride in InstanceGroups too, and
             // some of those carry LOCAL transforms whose translation is the origin — 198 of
@@ -2380,7 +2500,12 @@ TEST_CASE(city_furniture_never_stands_in_a_road) {
             // scatter count into a fiction. A measurement that cannot say WHICH thing it
             // measured is not a measurement.
             if (g.drawClass != DrawClass::Scenery) return;
-            for (const Mat4& m : g.transforms) note(scatter, decks, m.m[0][3], m.m[2][3], 0.0, &plan);
+            for (const Mat4& m : g.transforms) {
+                if (streetTree.count({std::llround(m.m[0][3] * 100), std::llround(m.m[2][3] * 100)}))
+                    note(streetTrees, decks, m.m[0][3], m.m[2][3], 0.0);
+                else
+                    note(scatter, decks, m.m[0][3], m.m[2][3], 0.0, &plan);
+            }
         });
         // ...and the LOT trees (yard and park spots), planted one entity each: a bark
         // Renderable per tree (its leaves ride a second entity at the same Transform).
@@ -2428,7 +2553,7 @@ TEST_CASE(city_furniture_never_stands_in_a_road) {
             }
         }
 
-        const RoadIntrusion* all[] = {&scatter, &poles, &lamps, &stops};
+        const RoadIntrusion* all[] = {&scatter, &streetTrees, &poles, &lamps, &stops};
         for (const RoadIntrusion* r : all) {
             std::printf("    [furniture] %-14s %-20s %d of %d in a road%s\n", name, r->what.c_str(),
                         r->count, r->total,
@@ -2594,15 +2719,30 @@ TEST_CASE(scenery_is_planted_on_the_ground) {
         int total = 0, floating = 0, buried = 0;
         double worst = 0;
         engine::Vec2 worstAt(0, 0);
+        // STREET TREES stand in pits cut in the SIDEWALK (street planting, 2026-10-10), so their ground is
+        // the sidewalk as drawn -- not the terrain under it, 0.4 m down on a kerb and metres down under a
+        // viaduct (they read as 80% of the scenery "floating"). The drawn road's own triangles say where it is.
+        std::set<std::pair<long long, long long>> streetTree;
+        world.each<engine::StreetFurniture>([&](Entity, engine::StreetFurniture& sf) {
+            for (const Vec3& b : sf.streetTrees) streetTree.insert({std::llround(b.x * 100), std::llround(b.z * 100)});
+        });
+        const DrawnRoad drawnRoad = gatherDrawnRoad(world, /*withHeights=*/true);
+        int streetTotal = 0, streetOffRoad = 0;
         world.each<InstanceGroup>([&](Entity, InstanceGroup& g) {
             if (g.drawClass != DrawClass::Scenery) return;
             for (const Mat4& m : g.transforms) {
                 const double x = m.m[0][3], y = m.m[1][3], z = m.m[2][3];
                 // THE DRAWN GROUND: the leaf mesh's triangle under (x, z), not the
                 // smooth field at the point — across a pad edge those differ by metres.
-                const double ground = engine::lodSurfaceHeight(cfg->params, noise, x, z,
-                                                               cfg->worldHalf, cfg->numLods,
-                                                               cfg->gridRes);
+                double ground = engine::lodSurfaceHeight(cfg->params, noise, x, z,
+                                                         cfg->worldHalf, cfg->numLods,
+                                                         cfg->gridRes);
+                if (streetTree.count({std::llround(x * 100), std::llround(z * 100)})) {
+                    ++streetTotal;
+                    double top = 0;
+                    if (drawnRoad.topAt(x, z, &top, y + 0.15)) ground = top;   // the surface under the foot
+                    else ++streetOffRoad;   // (a pit off the drawn pavement is measured on the terrain)
+                }
                 // A trunk is bedded a little below grade and a rock a third of its
                 // height; neither should hang ABOVE it.
                 const double gap = y - ground;
@@ -2638,7 +2778,10 @@ TEST_CASE(scenery_is_planted_on_the_ground) {
         std::printf("    [grounded] %-22s %d scenery instances: %d floating > 0.3 m (worst %.2f m at "
                     "%.0f,%.0f), %d buried > 3 m\n",
                     name, total, floating, worst, worstAt.x, worstAt.y, buried);
+        std::printf("    [grounded] %-22s of them %d street-tree instances (bark + leaves) on the drawn sidewalk, "
+                    "%d off any drawn road\n", name, streetTotal, streetOffRoad);
         CHECK(total > 0);
+        CHECK(streetTotal > 0);
         CHECK(floating == 0);
     }
 }
@@ -2780,13 +2923,14 @@ TEST_CASE(lot_dressing_is_planted_on_the_ground) {
         // forecourt's on a paved plate — so a hedge's foot is measured against the
         // highest surface under it (the drawn ground, or the top of a curb, plate or
         // skirt from the lot pass that lies at or just below the foot), not the ground
-        // alone. Top-facing Trim/Path/Concrete triangles, hashed on a 2 m grid.
+        // alone. Top-facing triangles of EVERY lot part but the greenery itself, hashed
+        // on a 2 m grid: a community garden's crops grow in raised timber beds (Wood,
+        // soil top Detail), 0.36 m up -- a list of "planter" parts missed them all.
         struct TopTri { Vec3 a, b, c; };
         std::unordered_map<long long, std::vector<TopTri>> supports;
         auto cellKey = [](int cx, int cz) { return (static_cast<long long>(cx) << 32) ^ static_cast<uint32_t>(cz); };
         world.each<engine::LotPartChunk, Renderable>([&](Entity, engine::LotPartChunk& tag, Renderable& r) {
-            if (tag.part != static_cast<uint8_t>(PartId::Trim) && tag.part != static_cast<uint8_t>(PartId::Path) &&
-                tag.part != static_cast<uint8_t>(PartId::Concrete)) return;
+            if (tag.part == static_cast<uint8_t>(PartId::Foliage)) return;
             if (r.minDistance > 0) return;
             auto it = uploader.meshes.find(r.mesh.index);
             if (it == uploader.meshes.end()) return;
@@ -2818,7 +2962,9 @@ TEST_CASE(lot_dressing_is_planted_on_the_ground) {
                 const double l3 = 1.0 - l1 - l2;
                 if (l1 < -1e-4 || l2 < -1e-4 || l3 < -1e-4) continue;
                 const double y = l1 * t.a.y + l2 * t.b.y + l3 * t.c.y;
-                if (y <= p.y + 0.05 && y > best) best = y;
+                // (a foot may stand a little INTO what holds it: a crop's level base on a
+                // draped bed's soil sinks ~6 cm at the uphill end; that is planted, not afloat)
+                if (y <= p.y + 0.15 && y > best) best = y;
             }
             return best;
         };
@@ -3032,7 +3178,9 @@ TEST_CASE(freeway_census_links_routes_and_traffic) {
                 while (!work.empty()) {
                     auto& [v, ei] = work.back();
                     if (ei < nav.outLinks[v].size()) {
-                        const int w = nav.links[static_cast<std::size_t>(nav.outLinks[v][ei++])].to;
+                        const engine::NavLink& ol = nav.links[static_cast<std::size_t>(nav.outLinks[v][ei++])];
+                        if (ol.footpath) continue;   // a walk joins nothing for a car
+                        const int w = ol.to;
                         if (idx[w] < 0) {
                             idx[w] = low[w] = counter++;
                             stack.push_back(w);
@@ -3100,9 +3248,15 @@ TEST_CASE(freeway_census_links_routes_and_traffic) {
             CHECK(fwOff == fwLinks);
             CHECK(rampOn == ramps);
             CHECK(rampOff == ramps);
-            int linksInBig = 0;
-            for (const engine::NavLink& l : nav.links) linksInBig += comp[l.from] == big && comp[l.to] == big;
-            CHECK(linksInBig == static_cast<int>(nav.links.size()));   // one drivable network
+            // one drivable network -- of the DRIVABLE links: a park's or the quad's walk (a footpath, walkers only)
+            // is not a road and no car reaches it
+            int linksInBig = 0, drivable = 0;
+            for (const engine::NavLink& l : nav.links) {
+                if (l.footpath) continue;
+                ++drivable;
+                linksInBig += comp[l.from] == big && comp[l.to] == big;
+            }
+            CHECK(linksInBig == drivable);
             std::printf("    [freeway] %-18s connectivity: %d nodes, %d strongly connected components, the biggest "
                         "holds %d nodes; %d nodes are islands of one | links inside it:%s\n",
                         name, nn, comps, size[big], singles, cls.c_str());
@@ -3333,7 +3487,9 @@ TEST_CASE(editor_save_keeps_the_road_signs_entity) {
 // island's water may span more than a few metres of level.
 TEST_CASE(island_water_surface_has_no_spikes) {
     if (skipHeavy()) { std::printf("    skipped: loads island_8_saltwood (heavy, RT_LEVEL_TESTS_SKIP_HEAVY)\n"); return; }
-    std::ifstream in(levelsDir() + "/island_8_saltwood.json");
+    // (RT_WATER_LEVEL=name: another level's water, for the debug reports below -- island_8_weathered's rivers, say)
+    const char* waterLevel = std::getenv("RT_WATER_LEVEL");
+    std::ifstream in(levelsDir() + "/" + (waterLevel ? std::string(waterLevel) : std::string("island_8_saltwood")) + ".json");
     CHECK(in.good());
     if (!in.good()) return;
     const json root = json::parse(in);
@@ -3406,6 +3562,7 @@ TEST_CASE(level_print_road_edges_meet_the_ground) {
     for (const char* name : kCities) {
         if (!std::filesystem::exists(levelsDir() + "/" + name)) continue;
         if (const char* only = std::getenv("RT_LEVELS"); only && *only && std::string(name).find(only) == std::string::npos) continue;
+        if (skipHeavy() && isHeavyLevel(name)) continue;
         std::unique_ptr<Renderer> renderer = Renderer::create();
         RendererMeshUploader uploader(*renderer);
         AssetManager assets(uploader);
@@ -3611,6 +3768,7 @@ TEST_CASE(level_print_entrance_steps_meet_the_ground) {
     for (const char* name : kCities) {
         if (!std::filesystem::exists(levelsDir() + "/" + name)) continue;
         if (const char* only = std::getenv("RT_LEVELS"); only && *only && std::string(name).find(only) == std::string::npos) continue;
+        if (skipHeavy() && isHeavyLevel(name)) continue;
         std::unique_ptr<Renderer> renderer = Renderer::create();
         RendererMeshUploader uploader(*renderer);
         AssetManager assets(uploader);
@@ -3665,6 +3823,7 @@ TEST_CASE(level_print_buildings_by_the_freeway) {
     for (const char* name : kCities) {
         if (!std::filesystem::exists(levelsDir() + "/" + name)) continue;
         if (const char* only = std::getenv("RT_LEVELS"); only && *only && std::string(name).find(only) == std::string::npos) continue;
+        if (skipHeavy() && isHeavyLevel(name)) continue;
         std::unique_ptr<Renderer> renderer = Renderer::create();
         RendererMeshUploader uploader(*renderer);
         AssetManager assets(uploader);
@@ -3714,6 +3873,7 @@ TEST_CASE(level_print_skyline_by_recipe) {
     for (const char* name : kCities) {
         if (!std::filesystem::exists(levelsDir() + "/" + name)) continue;
         if (const char* only = std::getenv("RT_LEVELS"); only && *only && std::string(name).find(only) == std::string::npos) continue;
+        if (skipHeavy() && isHeavyLevel(name)) continue;
         std::unique_ptr<Renderer> renderer = Renderer::create();
         RendererMeshUploader uploader(*renderer);
         AssetManager assets(uploader);
@@ -3753,4 +3913,257 @@ TEST_CASE(level_print_skyline_by_recipe) {
             std::printf("      %-20s %4d (enterable %4d), tallest %2d floors %4.0f m, mean plate %5.0f m2  ->  teleport %.0f %.0f\n",
                         k.c_str(), t.n, t.enterable, t.tallest, t.metres, t.plate / std::max(1, t.n), t.at.x, t.at.y);
     }
+}
+
+// THE DAY'S CENSUS (Glenn: "Ridership feels sparse even when it was 28000 people"; "don't people do things through
+// the day? Shop? Jog?"). Print-only under RT_CENSUS=1: metro seeded at seven hours of the day, each run five minutes
+// to settle and five measured at REAL pace (trips are real seconds, stays are game hours: a fast clock would distort
+// the very thing measured) -- who is out, who is moving, who rides, who waits, what the bus planner said.
+TEST_CASE(metro_day_census_prints) {
+    if (!std::getenv("RT_CENSUS")) return;
+    std::unique_ptr<Renderer> renderer = Renderer::create();
+    RendererMeshUploader uploader(*renderer);
+    AssetManager assets(uploader);
+    World world;
+    RenderView view;
+    const char* lvl = std::getenv("RT_CENSUS_LEVEL");
+    const bool loaded = LevelLoader::load(lvl ? std::string(lvl) : simLevelPath(), world, *renderer, view, assets, false);
+    CHECK(loaded);
+    if (!loaded) return;
+    citysim::CityRenderSystem city;
+    CHECK(city.build(world, &assets, nullptr));
+    std::printf("    [census] hour | out%% (walkers out / moving, drivers moving, riding, waiting) | by role out%% "
+                "commuter/shopkeeper/stroller/student | boardings in 5 min | bus plans asked / taken / not worth it\n");
+    const char* only = std::getenv("RT_CENSUS_HOUR");   // one hour of the seven, to look closer
+    for (Real hour : {8.0, 10.0, 12.5, 15.0, 17.5, 20.0, 23.0}) {
+        if (only && std::fabs(std::atof(only) - hour) > 1e-6) continue;
+        city.setWorldClock(hour, 1.0 / 3600.0);
+        for (int i = 0; i < 3000; ++i) city.step(world, 0.1);   // settle 5 min
+        const long b0 = city.sim().busBoardAttempts();
+        const auto ps0 = city.sim().buses().planStats();
+        constexpr int kR = citysim::CitySim::Census::kRoles;
+        double wo = 0, wm = 0, dm = 0, rd = 0, wt = 0, ag = 0, rOut[kR] = {}, rAll[kR] = {}, rWork[kR] = {}, bm = 0, cm = 0, og = 0;
+        int samples = 0;
+        for (int i = 0; i < 3000; ++i) {
+            city.step(world, 0.1);
+            if (i % 100 != 0) continue;   // every 10 s
+            const citysim::CitySim::Census c = city.sim().census();
+            bm += c.busesMoving; cm += c.cabsMoving; og += c.outing;
+            wo += c.walkersOutside; wm += c.walkersMoving; dm += c.driversMoving; rd += c.riding; wt += c.waiting; ag += c.agents;
+            for (int r = 0; r < kR; ++r) { rOut[r] += c.outsideByRole[r]; rAll[r] += c.byRole[r]; rWork[r] += c.atWorkByRole[r]; }
+            ++samples;
+        }
+        const double n = samples;
+        const double out = (wo + dm + rd + wt) / n, all = ag / n;
+        const auto& ps = city.sim().buses().planStats();
+        auto pct = [](double a, double b) { return b > 0 ? 100.0 * a / b : 0.0; };
+        std::printf("    [census] %5.1f | %5.1f%% (%.0f / %.0f, %.0f, %.0f, %.0f) | %.1f / %.1f / %.1f / %.1f | %ld | %ld / %ld / %ld\n",
+                    hour, pct(out, all), wo / n, wm / n, dm / n, rd / n, wt / n, pct(rOut[0], rAll[0]), pct(rOut[1], rAll[1]),
+                    pct(rOut[2], rAll[2]), pct(rOut[3], rAll[3]), city.sim().busBoardAttempts() - b0, ps.asked - ps0.asked,
+                    ps.ok - ps0.ok, ps.noSaving - ps0.noSaving);
+        std::printf("    [census] %5.1f | service: buses moving %.0f, cabs moving %.0f | out somewhere (a stop, a night out) %.0f (%.1f%%)\n",
+                    hour, bm / n, cm / n, og / n, pct(og, ag));
+        {   // every role: how many, and the share of them out
+            std::string line;
+            const auto& roles = city.sim().roles().roles;
+            for (int r = 0; r < kR && r < static_cast<int>(roles.size()); ++r) {
+                if (rAll[r] <= 0) continue;
+                char b[96];
+                std::snprintf(b, sizeof b, "%s%s %.0f (%.0f%% out, %.0f%% at work)", line.empty() ? "" : ", ",
+                              roles[static_cast<std::size_t>(r)].name.c_str(), rAll[r] / n, pct(rOut[r], rAll[r]), pct(rWork[r], rAll[r]));
+                line += b;
+            }
+            std::printf("    [census] %5.1f | roles: %s\n", hour, line.c_str());
+        }
+        if (hour >= 23.0) {   // WHO DRIVES AT NIGHT: the drivers still moving, by tier / activity / bus or cab
+            static const char* kAct[] = {"AtHome", "Commuting", "AtWork", "Returning", "Shopping", "Outing", "Lunch"};
+            std::map<std::string, int> why;
+            const citysim::CitySim& sim = city.sim();
+            for (int i = 0; i < static_cast<int>(sim.agents().size()); ++i) {
+                const citysim::Agent& a = sim.agents()[static_cast<std::size_t>(i)];
+                if (a.mode != citysim::Agent::Mode::Driver || !a.moving) continue;
+                const char tier = a.tier == citysim::Agent::Tier::K ? 'K' : a.tier == citysim::Agent::Tier::V ? 'V' : 'D';
+                const int act = static_cast<int>(a.activity);
+                char key[96];
+                std::snprintf(key, sizeof key, "%s tier %c %s role %d departHome %.0f",
+                              sim.isBus(i) ? "bus" : sim.isTaxi(i) ? "cab" : "car", tier, act >= 0 && act < 7 ? kAct[act] : "?",
+                              static_cast<int>(a.role), std::floor(a.departHome));
+                ++why[key];
+            }
+            for (const auto& kv : why) std::printf("    [census night] %5d  %s\n", kv.second, kv.first.c_str());
+        }
+    }
+}
+
+// WALKERS IN THE ROAD (Glenn: "the npcs all over the roads is a problem. It's interfering with traffic ... they can
+// walk through vehicles"). Print-only under RT_ROADWALK=1: the island (or RT_CENSUS_LEVEL), a player standing
+// downtown where they were seen (RT_ROADWALK_AT="x z"), at the morning and the evening -- every visible walker of
+// the full sim whose spot is inside a carriageway, by why (CitySim::walkersInRoad).
+TEST_CASE(walkers_in_the_road_prints) {
+    if (!std::getenv("RT_ROADWALK")) return;
+    std::unique_ptr<Renderer> renderer = Renderer::create();
+    RendererMeshUploader uploader(*renderer);
+    AssetManager assets(uploader);
+    World world;
+    RenderView view;
+    const char* lvl = std::getenv("RT_CENSUS_LEVEL");
+    const bool loaded = LevelLoader::load(lvl ? std::string(lvl) : std::string("assets/levels/island_8_nature.json"), world,
+                                          *renderer, view, assets, false);
+    CHECK(loaded);
+    if (!loaded) return;
+    Real px = -3358, pz = -438;
+    if (const char* at = std::getenv("RT_ROADWALK_AT")) std::sscanf(at, "%lf %lf", &px, &pz);
+    {   // the player: the tier bubble's centre
+        Entity p = world.create();
+        Transform t;
+        t.position = Vec3(px, 15, pz);
+        world.add<Transform>(p, t);
+        world.add<engine::ControlledBy>(p, engine::ControlledBy{});
+    }
+    citysim::CityRenderSystem city;
+    CHECK(city.build(world, &assets, nullptr));
+    for (Real hour : {8.25, 17.5}) {
+        city.setWorldClock(hour, 1.0 / 3600.0);
+        for (int i = 0; i < 1800; ++i) city.step(world, 0.1);   // settle 3 min
+        std::map<std::string, int> all;
+        int visible = 0, samples = 0;
+        for (int s = 0; s < 5; ++s) {
+            for (int i = 0; i < 300; ++i) city.step(world, 0.1);
+            int v = 0;
+            for (const auto& kv : city.sim().walkersInRoad(&v)) all[kv.first] += kv.second;
+            visible += v;
+            ++samples;
+        }
+        int inRoad = 0;
+        for (const auto& kv : all) inRoad += kv.second;
+        std::printf("    [road walkers] %4.1f h: %.0f visible walkers near the player, %.0f of them in a carriageway (%.0f%%)\n",
+                    hour, visible / double(samples), inRoad / double(samples), visible ? 100.0 * inRoad / visible : 0.0);
+        std::vector<std::pair<int, std::string>> rows;
+        for (const auto& kv : all) rows.push_back({kv.second, kv.first});
+        std::sort(rows.rbegin(), rows.rend());
+        for (std::size_t r = 0; r < rows.size() && r < 12; ++r)
+            std::printf("    [road walkers]        %6.1f  %s\n", rows[r].first / double(samples), rows[r].second.c_str());
+    }
+}
+
+// SHOPS INSIDE AS WELL AS OUT (storefronts plan, stage 5; Glenn: "What about the interior does it look like a shop
+// would look?"). Print-only under RT_SHOP_INTERIORS=1: of the island's buildings whose facade shows shopfronts, how
+// many grow SHOP ROOMS behind them (furniture of a shop -- a counter, gondolas, bistro sets, shelves -- in the 10 m
+// behind a front), and of those that do not, why (not enterable, or the ground floor fell back to the floor plan).
+TEST_CASE(level_print_shop_interiors) {
+    if (!std::getenv("RT_SHOP_INTERIORS")) return;
+    std::unique_ptr<Renderer> renderer = Renderer::create();
+    RendererMeshUploader uploader(*renderer);
+    AssetManager assets(uploader);
+    World world;
+    RenderView view;
+    const char* lvl = std::getenv("RT_CENSUS_LEVEL");
+    CHECK(LevelLoader::load(lvl ? std::string(lvl) : std::string("assets/levels/island_8_nature.json"), world, *renderer,
+                            view, assets, false));
+    const CityBuildings* cb = nullptr;
+    world.each<CityBuildings>([&](Entity, CityBuildings& c) { cb = &c; });
+    CHECK(cb != nullptr);
+    if (!cb) return;
+    int withFronts = 0, sampled = 0, furnished = 0, fallback = 0, notEnterable = 0, frontsTotal = 0, frontsFurnished = 0;
+    for (const BuildingRecord& r : cb->records) {
+        const std::vector<ShopFront> fronts = shopFrontsOf(r.plan, r.params);
+        if (fronts.empty()) continue;
+        ++withFronts;
+        if (!r.enterable) { ++notEnterable; continue; }
+        if (sampled >= 400) continue;
+        ++sampled;
+        const BuildingMesh in = growInterior(r.plan, r.params, r.baseY, nullptr, 0, 1);
+        int good = 0;
+        for (const ShopFront& f : fronts) {
+            const Vec2 d = normalize(f.b - f.a);
+            const Real len = (f.b - f.a).length();
+            bool any = false;
+            for (const PlacedPiece& pp : in.furniture) {
+                if (pp.piece == static_cast<uint8_t>(Piece::CeilingLight)) continue;
+                const Vec2 at(pp.xform.m[0][3], pp.xform.m[2][3]);
+                const Real along = dot(at - f.a, d), depth = dot(f.a - at, f.n);
+                if (along >= 0 && along <= len && depth >= 0 && depth <= 10.5) { any = true; break; }
+            }
+            ++frontsTotal;
+            if (any) { ++good; ++frontsFurnished; }
+            // RT_SHOP_SPOTS: one furnished front per trade, for a camera script (its centre, outward normal, floor y)
+            static bool spotted[64] = {};
+            if (any && std::getenv("RT_SHOP_SPOTS") && f.trade < 64 && !spotted[f.trade]) {
+                spotted[f.trade] = true;
+                const Vec2 c = (f.a + f.b) * 0.5;
+                std::printf("    [shop spot] %d %s %.2f %.2f %.2f %.3f %.3f %.1f\n", f.trade,
+                            tradeById(f.trade) ? tradeById(f.trade)->name : "?", c.x, r.baseY, c.y, f.n.x, f.n.y, len);
+            }
+        }
+        if (good > 0) ++furnished; else {
+            ++fallback;
+            if (std::getenv("RT_SHOP_WHY") && fallback <= 6)
+                std::printf("    [shop why] building at %.0f %.0f: %d fronts, %zu pieces inside, floors %d core %d groundH %.1f\n",
+                            r.plan[0].x, r.plan[0].y, static_cast<int>(fronts.size()), in.furniture.size(), r.params.floors,
+                            r.params.core, r.params.groundHeight);
+        }
+    }
+    if (std::getenv("RT_SHOP_SPOTS")) {   // the parking garages you can drive into: their portals
+        int garages = 0, drivable = 0;
+        for (const BuildingRecord& r : cb->records) {
+            if (!r.params.parkingDecks) continue;
+            ++garages;
+            Vec2 at, outD;
+            if (!garagePortalOf(r.plan, r.params, at, outD)) continue;
+            if (++drivable <= 4)
+                std::printf("    [garage] portal %.2f %.2f %.2f facing %.3f %.3f, %zu stalls\n", at.x, r.baseY, at.y, outD.x,
+                            outD.y, garageStallsOf(r.plan, r.params).size());
+        }
+        std::printf("    [garage] %d garages, %d drivable\n", garages, drivable);
+    }
+    if (std::getenv("RT_SHOP_SPOTS")) {   // the Japanese towers: a store and restaurant floors, their doors
+        int shown = 0;
+        for (const BuildingRecord& r : cb->records) {
+            if (!(r.params.storeFloors && r.params.dineFloors) || r.plan.size() != 4 || shown >= 3) continue;
+            const std::vector<StoreyPlan> st = storeyPlans(r.plan, r.params);
+            int top = 1;
+            for (std::size_t k = 1; k < st.size(); ++k) if (st[k].tier == st[1].tier) top = static_cast<int>(k);
+            const Vec2 c = centroid(r.plan);
+            std::printf("    [tower] store %d floors, dining floor %d (y %.1f), centre %.2f %.2f, base %.2f, face %.2f %.2f, enterable %d\n",
+                        r.params.storeFloors, top, r.baseY + st[static_cast<std::size_t>(top)].y0, c.x, c.y, r.baseY,
+                        r.params.faceDir.x, r.params.faceDir.z, r.enterable ? 1 : 0);
+            ++shown;
+        }
+    }
+    if (std::getenv("RT_SHOP_SPOTS"))   // the indoor malls: their street doors and a unit front on the concourse
+        for (const BuildingRecord& r : cb->records) {
+            if (r.params.bigBox < 5) continue;
+            const std::vector<ShopFront> fr = shopFrontsOf(r.plan, r.params);
+            if (fr.empty()) { std::printf("    [mall] kind %d at %.0f %.0f: no units\n", r.params.bigBox, r.plan[0].x, r.plan[0].y); continue; }
+            const ShopFront& f = fr[fr.size() / 2];
+            std::printf("    [mall] kind %d arms %d court %.1f %.1f, %zu units, %zu plan corners, enterable %d; doors %.2f %.2f; a front %.2f %.2f %.2f %.3f %.3f\n",
+                        r.params.bigBox, r.params.mallArms, r.params.mallCourt.x, r.params.mallCourt.y, fr.size(), r.plan.size(),
+                        r.enterable ? 1 : 0, f.entry.x, f.entry.y, f.door.x, r.baseY, f.door.y, f.n.x, f.n.y);
+        }
+    if (std::getenv("RT_SHOP_SPOTS")) {   // the nightlife strips: where the low-rise nightlife buildings are
+        std::map<std::pair<int, int>, int> cells;
+        for (const BuildingRecord& r : cb->records)
+            if (r.params.shopMix == 2 && r.params.floors <= 2 && r.params.groundRetail)
+                ++cells[{static_cast<int>(std::floor(r.plan[0].x / 150.0)), static_cast<int>(std::floor(r.plan[0].y / 150.0))}];
+        std::vector<std::pair<int, std::pair<int, int>>> top;
+        for (const auto& kv : cells) top.push_back({kv.second, kv.first});
+        std::sort(top.rbegin(), top.rend());
+        for (std::size_t i = 0; i < top.size() && i < 6; ++i) {
+            std::printf("    [nightlife] %d low-rise nightlife buildings round %.0f %.0f\n", top[i].first,
+                        top[i].second.first * 150.0 + 75.0, top[i].second.second * 150.0 + 75.0);
+            for (const BuildingRecord& r : cb->records) {   // one of their fronts: a camera spot on the pavement
+                if (r.params.shopMix != 2 || r.params.floors > 2 || !r.params.groundRetail) continue;
+                if (static_cast<int>(std::floor(r.plan[0].x / 150.0)) != top[i].second.first ||
+                    static_cast<int>(std::floor(r.plan[0].y / 150.0)) != top[i].second.second) continue;
+                const std::vector<ShopFront> fr = shopFrontsOf(r.plan, r.params);
+                if (fr.empty()) continue;
+                const Vec2 c = (fr[0].a + fr[0].b) * 0.5;
+                std::printf("    [nightlife front] %.2f %.2f %.2f %.3f %.3f\n", c.x, r.baseY, c.y, fr[0].n.x, fr[0].n.y);
+                break;
+            }
+        }
+    }
+    std::printf("    [shop interiors] %d buildings show shopfronts; %d not enterable; of %d sampled, %d have shop rooms "
+                "furnished behind their fronts, %d have none (%d of %d fronts furnished)\n",
+                withFronts, notEnterable, sampled, furnished, fallback, frontsFurnished, frontsTotal);
 }

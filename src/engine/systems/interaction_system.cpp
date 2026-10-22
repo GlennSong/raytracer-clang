@@ -51,8 +51,9 @@ void InteractionSystem::update(FrameContext& ctx) {
         o.entity = s->set;
         o.key = s->piece;
         o.anchor = s->eye;
-        o.tap = "stand up";
-        o.name = fa ? std::string(fa->verbs[s->verb].verb == Verb::Lie ? "lying" : "sitting") + " on the " +
+        const Verb vb = fa ? fa->verbs[s->verb].verb : Verb::Sit;
+        o.tap = vb == Verb::Stand ? "step away" : "stand up";
+        o.name = fa ? std::string(vb == Verb::Lie ? "lying on the " : vb == Verb::Stand ? "standing at the " : "sitting on the ") +
                           furniturePieceName(fa->piece)
                     : "seated";
         o.exclusive = true;

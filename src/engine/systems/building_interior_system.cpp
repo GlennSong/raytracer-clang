@@ -6,6 +6,7 @@
 #include "../../profile.h"
 #include "../world.h"
 #include "../procgen/city/shape_grammar.h"
+#include "../procgen/city/architect.h"   // officeUseFor
 #include "../procgen/surface_maps.h"   // surfaceMaps (bake, ADR-0080)
 #include "../procgen/furniture_kit.h"
 #include "../procgen/furniture_library.h"   // which pieces are interactive
@@ -55,6 +56,7 @@ void BuildingInteriorSystem::fixedUpdate(FrameContext& ctx) {
     // RenderSystem to merge (the street-lamp pattern). The shader already
     // loops point lights; interiors were the one place with none.
     ctx.view.lighting.interiorPoints.clear();
+    ctx.view.lighting.viewerCeilingY = 0;
     if (!resident_.empty()) {
         const CityBuildings* cb = nullptr;
         ctx.world.each<CityBuildings>(
@@ -86,6 +88,11 @@ void BuildingInteriorSystem::fixedUpdate(FrameContext& ctx) {
                 // follow them up).
                 const int nSt = static_cast<int>(storeys.size());
                 const int f = storeyOf(r, player.y);
+                // the ceiling over the player, while they are in this building (its windows mirror its panels)
+                if (cb->recordAt(xz, player.y) == &r && f >= 0 && f < nSt) {
+                    const StoreyPlan& sp = storeys[static_cast<std::size_t>(f)];
+                    ctx.view.lighting.viewerCeilingY = static_cast<float>(r.baseY + sp.y0 + sp.h);
+                }
                 const int kFrom = std::max(0, std::min(f - WINDOW_BELOW, nSt - 4));
                 const int lightCount = std::min(nSt, kFrom + 4);
                 for (int k = kFrom; k < lightCount; ++k) {
@@ -131,6 +138,7 @@ void BuildingInteriorSystem::step(World& world, PhysicsWorld* phys,
     std::vector<const BuildingRecord*> nearby;
     cb->near(xz, RELEASE_M, nearby);
     std::vector<std::size_t> desired;   // record indices
+    std::vector<std::size_t> aloft;     // approached by a link door: grown round the walker's storey
     std::size_t insideKey = static_cast<std::size_t>(-1);
     for (const BuildingRecord* r : nearby) {
         if (!r->enterable) continue;
@@ -148,6 +156,19 @@ void BuildingInteriorSystem::step(World& world, PhysicsWorld* phys,
                 break;
             }
         }
+        // ...or a LINK door at the walker's own storey (a sky bridge's, ADR-0179): approached from the bridge, the
+        // tower is grown round that storey, not round its lobby (Glenn, 2026-10-21: "I'm standing in front of a
+        // skybridge and I can't cross it!" -- the far tower's floor was not there to step onto)
+        if (!inside && r->params.links > 0)
+            for (const LinkDoor& ld : linkDoors(r->plan, r->params, -1, r->baseY)) {
+                const Vec2 toP = xz - (ld.a + ld.b) * 0.5;
+                const Real feet = player.y - 0.7;
+                if (toP.length() < APPROACH_M + ld.len && dot(toP, ld.n) > 0 && feet > ld.y0 - 1.0 && feet < ld.y0 + ld.h) {
+                    approaching = true;
+                    aloft.push_back(key);
+                    break;
+                }
+            }
         if (inside) insideKey = key;
         if (inside || approaching) desired.push_back(key);
     }
@@ -158,7 +179,7 @@ void BuildingInteriorSystem::step(World& world, PhysicsWorld* phys,
     auto windowFor = [&](const BuildingRecord& r, bool inside, int& k0, int& k1) {
         const int n = r.params.floors + 1;
         if (n <= WHOLE_UP_TO) { k0 = 0; k1 = -1; return; }
-        if (!inside) { k0 = 0; k1 = std::min(n, 3); return; }
+        if (!inside) { k0 = 0; k1 = std::min(n, 3); return; }   // (`inside`: or approached aloft, by a link door)
         const int f = storeyOf(r, player.y);
         k0 = std::max(0, f - WINDOW_BELOW);
         k1 = std::min(n, f + WINDOW_ABOVE);
@@ -192,6 +213,15 @@ void BuildingInteriorSystem::step(World& world, PhysicsWorld* phys,
         }
     }
 
+    // A tower approached by its link door but resident with a window that misses the walker's storey (its lobby,
+    // grown when they passed its street door) is regrown round that storey.
+    for (std::size_t key : aloft) {
+        auto it = resident_.find(key);
+        if (it == resident_.end() || it->second.k1 < 0) continue;
+        const int f = storeyOf(cb->records[key], player.y);
+        if (f < it->second.k0 || f >= it->second.k1) release(world, phys, key);
+    }
+
     // ONE build per step; the record the player is inside builds regardless.
     bool builtThisStep = false;
     for (std::size_t key : desired) {
@@ -199,7 +229,7 @@ void BuildingInteriorSystem::step(World& world, PhysicsWorld* phys,
         if (resident_.size() >= MAX_RESIDENT && key != insideKey) continue;
         if (builtThisStep && key != insideKey) continue;
         int k0 = 0, k1 = -1;
-        windowFor(cb->records[key], key == insideKey, k0, k1);
+        windowFor(cb->records[key], key == insideKey || std::find(aloft.begin(), aloft.end(), key) != aloft.end(), k0, k1);
         build(world, phys, assets, renderer, cb->records[key], key, k0, k1);
         builtThisStep = true;
     }
@@ -258,7 +288,11 @@ void BuildingInteriorSystem::build(World& world, PhysicsWorld* phys,
                                    int k0, int k1) {
     const auto t0 = std::chrono::steady_clock::now();
     RenderMesh collider;
-    BuildingMesh bm = growInterior(r.plan, r.params, r.baseY, &collider, k0, k1);
+    // officeUse is runtime only (not in the lot cache): from the record's recipe and use
+    BuildingParams params = r.params;
+    params.officeUse = officeUseFor(r.recipe, r.type, params.residential);
+    params.civicRooms = civicRoomsFor(r.recipe);
+    BuildingMesh bm = growInterior(r.plan, params, r.baseY, &collider, k0, k1);
     const double growMs = msSince(t0);
 
     Resident res;
@@ -354,8 +388,11 @@ void BuildingInteriorSystem::build(World& world, PhysicsWorld* phys,
         const FurnitureLibrary& lib = FurnitureLibrary::global();
         Interactables set;
         for (const PlacedPiece& pp : bm.furniture)
-            if (lib.interactive(static_cast<Piece>(pp.piece))) set.pieces.push_back({pp.piece, pp.xform, 0});
+            if (lib.interactive(static_cast<Piece>(pp.piece)))
+                set.pieces.push_back({pp.piece, interactXform(lib.find(static_cast<Piece>(pp.piece)), pp.xform, pp.variant), 0, pp.unit, pp.variant});
+        for (const FurnishedUnit& u : bm.units) set.units.push_back({u.rect, u.y0});
         if (!set.pieces.empty()) {
+            set.building = static_cast<int>(key);   // whose people sit here (the citysim's indoor occupants)
             set.refreshBounds();
             Entity ie = world.create();
             world.add<Interactables>(ie, std::move(set));

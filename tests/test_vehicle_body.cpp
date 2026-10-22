@@ -313,7 +313,7 @@ TEST_CASE(fleet_catalogue_is_the_size_the_car_is_built_at) {
         // fleet slot WAS a car. The transit slot is an 11.4 m bus, so the bound
         // is per-class now rather than being quietly loosened for everyone --
         // an 8 m "car" should still fail.
-        const bool transit = (className == "bus");
+        const bool transit = (className == "bus" || className == "fire_engine");   // (a 9.2 m fire engine too)
         CHECK(size.x > 1.0 && size.x < 3.0);                          // width
         CHECK(size.y > 1.0 && size.y < (transit ? 4.0 : 3.5));        // height
         CHECK(size.z > 3.0 && size.z < (transit ? 15.0 : 8.0));       // length
@@ -569,24 +569,26 @@ TEST_CASE(car_picker_catalogue_builds_and_says_the_true_drivetrain) {
 TEST_CASE(fleet_mixed_carries_kit_and_classic_bodies_and_one_bus) {
     VehiclesVM v;
     CHECK(v.loaded);
-    CHECK(fleetSlotCount(v.vm) == 13);   // the default: the kit fleet
+    CHECK(fleetSlotCount(v.vm) == 14);   // the default: the kit fleet (the fire engine, 2026-10-13, the 14th)
     std::string err;
     CHECK(!selectFleet(v.vm, "no_such_fleet", &err));   // a bad name leaves the default...
-    CHECK(fleetSlotCount(v.vm) == 13);
+    CHECK(fleetSlotCount(v.vm) == 14);
     CHECK(selectFleet(v.vm, "fleet_mixed", &err));      // ...a good one switches it (the city bridge's call)
     const int n = fleetSlotCount(v.vm);
     std::printf("    fleet_mixed: %d slots\n", n);
-    CHECK(n == 25);
-    int buses = 0, kitSedans = 0, classicSedans = 0;
+    CHECK(n == 26);   // (and the fire engine, before the bus)
+    int buses = 0, kitSedans = 0, classicSedans = 0, fireEngines = 0;
     for (int s = 0; s < n; ++s) {
         Vec3 size;
         std::string cls, e;
         CHECK(loadFleetCatalogueEntry(v.vm, s, size, cls, &e));
         CHECK(size.x > 1.0 && size.z > 3.0);
         if (cls == "bus") ++buses;
+        if (cls == "fire_engine") ++fireEngines;
         if (cls == "sedan") (s < 12 ? kitSedans : classicSedans) += 1;
     }
     CHECK(buses == 1);
+    CHECK(fireEngines == 1);
     CHECK(kitSedans == 3 && classicSedans == 3);
     CarBodyRecipe kitBody, classicBody;
     CHECK(loadFleetCarBody(v.vm, 0, kitBody, &err));        // a kit body

@@ -1,6 +1,9 @@
 #include "city_render.h"
+#include "../../engine/ladder.h"   // the fire engines' ladders
 #include "../../engine/interaction.h"           // Interactables: the outdoor seats (M5)
 #include "../../engine/procgen/furniture_library.h"
+#include "../../engine/procgen/city/shop_signs.h"    // busSignImages: the buses' destination signs
+#include "../../engine/text/font.h"
 
 #include "bus_stop_props.h"
 
@@ -20,8 +23,13 @@
 #include <imgui.h>                                   // Living City debug section
 #endif
 #include "../../engine/procgen/vehicle/occupant.h"   // people seated on the bus
+#include "../../engine/interior_occupants.h"         // people inside a streamed interior (campus M4)
+#include "../../engine/procgen/furniture_kit.h"
+#include "../../engine/procgen/city/building_records.h"
 #ifdef RT_ENABLE_SCRIPTING
 #include "scripting/agent_goals.h"      // scripted goal tables (ADR-0064)
+#include "scripting/activities_lua.h"   // the activity catalog (activities.lua)
+#include "scripting/roles_lua.h"         // the role catalog (roles.lua)
 #include "scripting/vehicle_body.h"     // scripted fleet bodies (ADR-0065)
 #include "../../engine/scripting/script_vm.h"
 #include "../../engine/scripting/procgen_bindings.h"
@@ -31,6 +39,8 @@
 #endif
 
 #include <algorithm>
+#include <map>
+#include <unordered_map>
 #include <sstream>
 #include <chrono>
 #include <cstdlib>
@@ -83,6 +93,30 @@ void refreshBounds(InstanceGroup* g) {
 
 }  // namespace
 
+bool CityRenderSystem::carOccupied(int ai) const {
+    if (ai < 0 || ai >= static_cast<int>(sim_.agents().size())) return false;
+    if (ai == playerRidingAgent_ || ai == playerSeatAgent_) return true;   // the car you are in
+    return sim_.agents()[static_cast<std::size_t>(ai)].moving || sim_.isBus(ai) || sim_.isTaxi(ai);
+}
+
+Vec2 CityRenderSystem::drawnAgentPos(int i, Vec2* heading) const {
+    const Agent& a = sim_.agents()[static_cast<std::size_t>(i)];
+    if (heading) *heading = a.heading;
+    const Real period = sim_.tickPeriod();
+    if (period <= 0.0 || a.released) return a.pos;
+    const Vec2 d = a.pos - a.tickFromPos;
+    if (d.x * d.x + d.y * d.y >= 8.0 * 8.0) return a.pos;   // a placement snaps, never slides
+    const Real t = std::clamp(sim_.secondsSinceTick() / period, Real(0), Real(1));
+    if (heading) {
+        Real dy = std::atan2(a.heading.x, a.heading.y) - std::atan2(a.tickFromHeading.x, a.tickFromHeading.y);
+        while (dy > engine::PI) dy -= 2 * engine::PI;
+        while (dy < -engine::PI) dy += 2 * engine::PI;
+        const Real yw = std::atan2(a.tickFromHeading.x, a.tickFromHeading.y) + dy * t;
+        *heading = Vec2(std::sin(yw), std::cos(yw));
+    }
+    return a.tickFromPos + d * t;
+}
+
 Real CityRenderSystem::groundAt(Real x, Real z) const {
     // ON a road: the deck the mesher drew (RoadDeck). The terrain under a road
     // is carved 0.22 m below the profile on purpose; sampling it put every
@@ -127,6 +161,9 @@ int CityRenderSystem::drawSlotFor(int ai) const {
     int v = sim_.ambientSlotFor(a.vehicle >= 0 ? a.vehicle : 0);
     if (v >= drawVariantCount()) v %= drawVariantCount();
     if (busVariant_ >= 0 && sim_.isBus(ai) && busVariant_ < drawVariantCount()) v = busVariant_;
+    if (fireVariant_ >= 0 && fireVariant_ < drawVariantCount() && a.vehicle >= 0 &&
+        a.vehicle < static_cast<int>(sim_.vehicles().size()) &&
+        sim_.vehicles()[static_cast<std::size_t>(a.vehicle)].type == VehicleType::FireEngine) v = fireVariant_;
     return v;
 }
 
@@ -196,6 +233,20 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
         params_.busCommuteShare = c.busCommuteShare;
         params_.pedsPerKm = c.pedsPerKm;
         params_.maxAmbient = c.maxAmbient;
+        params_.nearTarget = c.nearTarget;
+        params_.farTarget = c.farTarget;
+        // RT_MAX_AMBIENT=<n>: the population cap per class for this run (scale tests on a real level without
+        // editing it -- the bake never sees it)
+        if (const char* m = std::getenv("RT_MAX_AMBIENT")) params_.maxAmbient = std::max(6, std::atoi(m));
+        // RT_DENSITY_SCALE=<k>: the level's cars per lane-km and walkers per km times k (with RT_MAX_AMBIENT: the
+        // scale runs past what the streets were sized for)
+        if (const char* k = std::getenv("RT_DENSITY_SCALE")) {
+            const double f = std::max(0.01, std::atof(k));
+            params_.carsPerLaneKm *= f;
+            params_.pedsPerKm *= f;
+        }
+        // RT_CARS_SCALE=<k>: cars per lane-km alone times k (the busy-streets A/B: more cars, the same walkers)
+        if (const char* k = std::getenv("RT_CARS_SCALE")) params_.carsPerLaneKm *= std::max(0.01, std::atof(k));
         params_.seed = c.seed;
         params_.hoursPerSecond = c.hoursPerSecond;
         params_.startHour = c.startHour;
@@ -213,6 +264,8 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
         params_.busRoutes = c.busRoutes;
         params_.busStops = c.busStops;
         params_.buses = c.buses;
+        params_.busServiceStart = c.busServiceStart;
+        params_.busServiceEnd = c.busServiceEnd;
         params_.busMaxWalk = c.busMaxWalk;
         params_.physicalCars = c.physicalCars;
         params_.wander = c.wander;
@@ -223,6 +276,11 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
         debugWidgets_ = c.debugWidgets;
         showPlan_ = showPlan_ || c.showPlan;
         authoredPlaces_ = c.places;   // level-authored destinations (ADR-0066)
+        footpaths_ = c.footpaths;     // the parks' and the quad's walks
+        jogLoops_ = c.jogLoops;       // the tracks to run
+        activityAreas_ = c.activityAreas;   // the pitches, the lawns
+        sitSpots_ = c.sitSpots;             // a fountain's rim
+        garages_ = c.garages;               // the parking garages you can drive into
     });
 
     // Merge every RoadEntity's constrained graph into one combined graph (a level
@@ -385,6 +443,7 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
     // An unrecognized type tag is warned-and-skipped so one typo can't drop the
     // level. Rebuilt fresh each build() so a reload doesn't accumulate places.
     places_ = PlaceMap{};
+    placeOfAuthored_.assign(authoredPlaces_.size(), kNoPlace);
     for (const engine::AuthoredPlace& ap : authoredPlaces_) {
         PlaceType type;
         if (!parsePlaceType(ap.type, type)) {
@@ -404,9 +463,12 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
             closeH = k.closeHour;
             synthetic = true;
         }
-        const PlaceId pid = places_.add(type, Vec2(ap.x, ap.z), nav_, openH, closeH, 0,
+        const PlaceId pid = places_.add(type, Vec2(ap.x, ap.z), nav_, openH, closeH, ap.capacity,
                                         ap.name, ap.hasEntrance ? &doorHint : nullptr);
+        placeOfAuthored_[static_cast<std::size_t>(&ap - authoredPlaces_.data())] = pid;
         if (synthetic) places_.setAuthoredHours(pid, false);
+        if (ap.campus) places_.setCampus(pid, ap.campus);
+        if (ap.floorArea > 0) places_.setFloorArea(pid, ap.floorArea);
     }
 
     // DENSITY population (roads-v2.1 4c): -1 counts are computed from the
@@ -504,8 +566,16 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
                 // Which slot is the BUS, by the script's own class name --
                 // so the transit fleet draws as a bus without a hard-coded
                 // index that a reordered fleet would silently break.
-                if (className == "bus") busVariant_ = v;
+                // ...and the slot IS a bus to the sim too: the type came from the built-in table by slot number
+                // (slot 24 wraps to a sedan), so ambientSlotFor, which skips Bus slots, dealt ordinary cars the bus
+                // body -- 1 in 25 cars a 12 m "sedan" wearing NOT IN SERVICE (Glenn: the signs stacked over the kerb)
+                // ...and the FIRE ENGINE, stationed in the fire stations' bays (never dealt to traffic), by its name
+                // too -- first, so the built-in table's type for its slot number (it stands where the bus did) is
+                // never read
+                if (className == "fire_engine") { fireVariant_ = v; body.type = VehicleType::FireEngine; }
+                else if (className == "bus") { busVariant_ = v; body.type = VehicleType::Bus; }
                 else if (body.type == VehicleType::Bus) busVariant_ = v;
+                else if (body.type == VehicleType::FireEngine) body.type = VehicleType::BoxTruck;
                 catalogue.push_back(body);
             }
             LOG_INFO << "[citysim] fleet: " << slots << " slots, bus variant "
@@ -516,11 +586,78 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
     }
 #endif
 
+    // THE WALKS (campus gap pass): the parks' paths and the quad's walks join the walking network, after the
+    // streets' own analyses and the places (link and node indices so far are unchanged) and before the sim reads it.
+    // Footpaths are walker-only (vehicle routing skips them; nearestNode never answers with one), so a route on foot
+    // simply finds the quad when it is the shorter way.
+    if (!footpaths_.empty() && !std::getenv("RT_NO_FOOTPATHS")) {
+        std::vector<std::array<Real, 5>> segs;
+        segs.reserve(footpaths_.size());
+        for (const auto& f : footpaths_) segs.push_back({f[0], f[1], f[2], f[3], f[4]});
+        const auto tf0 = std::chrono::steady_clock::now();
+        const engine::NavGraph::FootpathReport fr = nav_.appendFootpaths(segs);
+        LOG_INFO << "[citysim] footpaths joined in " << std::chrono::duration<double>(std::chrono::steady_clock::now() - tf0).count() << " s";
+        LOG_INFO << "[citysim] footpaths: " << fr.links << " walk links over " << fr.nodes << " nodes, " << fr.tees
+                 << " tees, " << fr.streetJoins << " ends joined to the streets, " << fr.unjoined << " ends with no street in reach";
+        // a paseo's shops: their doors are on its walks, not the street round the block (every shopper stood at the
+        // end of the paseo, by the restaurant there)
+        LOG_INFO << "[citysim] places entered from a walk: " << places_.snapToWalks(nav_);
+    }
     sim_.setJunctionPad(sidewalk_);
     sim_.ambientBus = params_.ambientBus;   // before build: it picks each driver's body
+    {   // THE GARAGES' STALLS become bays (~/.claude/plans/nightlife-and-malls.md stage 4b), laid with the kerbside ones
+        std::vector<CitySim::GarageIn> gins;
+        for (const engine::CitySimConfig::GarageSpec& gs : garages_) {
+            CitySim::GarageIn gi;
+            gi.portal = Vec2(gs.px, gs.pz);
+            gi.out = Vec2(gs.ox, gs.oz);
+            for (const auto& st : gs.stalls) gi.stalls.push_back({Vec2(st[0], st[1]), Vec2(st[2], st[3]), st[4]});
+            gi.buses = gs.buses;
+            gins.push_back(std::move(gi));
+        }
+        sim_.setGarages(std::move(gins));
+    }
     { const auto tT0 = std::chrono::steady_clock::now();
     sim_.build(nav_, carCount, pedCount, params_.seed);
     LOG_INFO << "[citysim] startup: sim.build " << std::chrono::duration<double>(std::chrono::steady_clock::now() - tT0).count() << " s"; }
+    // THE FIRE STATIONS' ENGINES (Glenn, 2026-10-13: "a fire truck should be an actual truck"): one parked behind each
+    // bay door of every fire station (vehicleBayDoors: the doors the facade draws), its nose to the door, on the bay's
+    // floor -- the fleet's fire engine, a vehicle like any other, which the sim never deals to traffic.
+    {
+        const engine::CityBuildings* cbs = nullptr;
+        world.each<engine::CityBuildings>([&](Entity, engine::CityBuildings& c) { cbs = &c; });
+        Real engineL = 0;
+        for (int fs = 0; fs < sim_.fleetSize(); ++fs)
+            if (sim_.fleetBody(fs).type == VehicleType::FireEngine) engineL = sim_.fleetBody(fs).length;
+        int stations = 0, engines = 0;
+        if (cbs && engineL > 0)
+            for (const engine::BuildingRecord& r : cbs->records) {
+                if (r.recipe != "fire_station") continue;
+                ++stations;
+                Vec2 out(0, 0);
+                for (const auto& [a, b] : engine::vehicleBayDoors(r.plan, r.params, out)) {
+                    const Vec2 mid = (a + b) * 0.5;
+                    Real deep = 0;   // how far the station runs back from this door
+                    for (const Vec2& q : r.plan) deep = std::max(deep, dot(mid - q, out));
+                    if (deep < engineL + 1.6) continue;   // (a station too shallow for its engine keeps the bay empty)
+                    const Vec2 pos = mid - out * (1.0 + engineL * 0.5);
+                    if (sim_.addStationedVehicle(VehicleType::FireEngine, pos, out, r.baseY) >= 0) {
+                        ++engines;
+                        if (engines <= 3)   // (where to find one: a bay door, its outward normal, the floor)
+                            LOG_INFO << "[citysim] fire engine in its bay: door " << mid.x << " " << mid.y << " out "
+                                     << out.x << " " << out.y << " floor " << r.baseY;
+                    }
+                }
+            }
+        if (stations > 0)
+            LOG_INFO << "[citysim] fire stations: " << stations << ", " << engines << " engines in their bays"
+                     << (engineL > 0 ? "" : " (the fleet has no fire engine)");
+    }
+    {
+        int stalls = 0;
+        for (const CitySim::ParkingBay& b : sim_.parkingBays()) stalls += b.garage >= 0;
+        if (!garages_.empty()) LOG_INFO << "[citysim] parking garages: " << garages_.size() << ", " << stalls << " stalls as bays";
+    }
     // THE SEATS out in the city (the furniture library, M5): every sit spot of the outdoor furniture the loader
     // laid -- park benches, plaza benches, café chairs -- for the strollers to use. Interiors are not out yet (they
     // stream in), and nobody walks into one to sit anyway.
@@ -549,8 +686,53 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
                 }
             }
         });
+        // THE RIMS (a fountain's): seats with no furniture, the hip measured from the ground under them
+        for (const auto& q : sitSpots_) {
+            CitySim::SeatSpot s;
+            s.pos = Vec2(q[0], q[1]);
+            s.face = normalize(Vec2(q[2], q[3]));
+            s.hip = (heightAt_ ? heightAt_(q[0], q[1]) : 0.0) + q[4];
+            seats.push_back(s);
+        }
+        // THE TRACKS (activity spots, behaviour plan step 3): each loop the sim's, with eight places round it to start a
+        // run from -- a jogger walks onto the track there, runs laps, and walks off
+        {
+            std::vector<std::vector<Vec2>> loops;
+            for (const auto& lp : jogLoops_) {
+                std::vector<Vec2> pts;
+                for (const auto& q : lp) pts.push_back(Vec2(q[0], q[1]));
+                loops.push_back(std::move(pts));
+            }
+            sim_.setLoops(std::move(loops));
+            for (int li = 0; li < sim_.loopCount(); ++li)
+                for (int k = 0; k < 8; ++k) {
+                    CitySim::ActivitySpot s;
+                    s.kind = SpotKind::Jog;
+                    s.loop = li;
+                    s.loopS = sim_.loopLength(li) * k / 8.0;
+                    Vec2 tg(1, 0);
+                    s.pos = sim_.loopPoint(li, s.loopS, &tg);
+                    s.face = tg;
+                    s.hip = 0;
+                    seats.push_back(s);
+                }
+        }
         const std::size_t offered = seats.size();
         sim_.setSeats(std::move(seats));
+        {   // THE AREAS a group plays on (a pitch) or settles on (a lawn)
+            std::vector<CitySim::ActivityArea> areas;
+            for (const auto& a : activityAreas_) {
+                CitySim::ActivityArea ar;
+                ar.kind = a.kind;
+                ar.center = Vec2(a.cx, a.cz);
+                ar.axis = Vec2(a.ax, a.az);
+                ar.halfL = a.halfL;
+                ar.halfW = a.halfW;
+                areas.push_back(ar);
+            }
+            sim_.setAreas(std::move(areas));
+            if (!sim_.areas().empty()) LOG_INFO << "[citysim] activity areas: " << sim_.areas().size() << " (pitches, lawns)";
+        }
         if (offered > 0) LOG_INFO << "[citysim] seats: " << sim_.seats().size() << " of " << offered << " outdoor seats reachable from the paths";
     }
     sim_.setPerceptionReliability(params_.perceptionReliability);
@@ -559,6 +741,16 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
     // once a player position is fed each fixed step (see step() below) — the
     // build warm-up therefore runs everything K, exactly as before.
     sim_.tieringEnabled = params_.tieredAgents;
+    // RT_NEAR_TARGET=<n>: hold about n agents in the full sim round the player (the ring adapts; the GPU crowd shows
+    // the rest) -- for populations past what a full ring can carry. The island at 309k: 28 -> 66 fps at 1500 (K
+    // 3,501 -> 1,350; ring x0.46). NOT on by default: metro_planned's ring holds more than 1500, and the smaller
+    // ring there lets a junction near (45, -195) gridlock (eastbound, northbound and southbound queues all
+    // waiting), which strands the regional bus and its riders (metro_planned_regional_bus_joins_the_towns).
+    // A level whose population needs it sets "nearTarget" (island_8_nature: 1500); RT_NEAR_TARGET overrides.
+    sim_.nearTarget = params_.nearTarget;
+    if (const char* nt = std::getenv("RT_NEAR_TARGET")) sim_.nearTarget = std::max(0, std::atoi(nt));
+    sim_.farTarget = params_.farTarget;   // (the busy streets: downtown's towers fill the far ring too)
+    if (const char* ft = std::getenv("RT_FAR_TARGET")) sim_.farTarget = std::max(0, std::atoi(ft));
     sim_.dormancyEnabled = params_.dormantAgents;
     sim_.pedPromoteRadius = params_.pedPromoteRadius;
     sim_.pedDemoteRadius = params_.pedDemoteRadius;
@@ -566,10 +758,40 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
     sim_.setHailPolicy(params_.hailChance, params_.hailMinMetres);
     sim_.setTaxiFraction(params_.taxiFraction);
     // Buses AFTER the cabs: setBuses skips an agent already marked as a taxi.
+    // the stations' ways in: a loop stops at each (one point per station, both tracks name it)
+    sim_.busAnchors.clear();
+    world.each<engine::RailTracks>([&](Entity, engine::RailTracks& rt) {
+        for (const engine::RailTrack& t : rt.tracks)
+            for (const engine::RailStop& st : t.stops) {
+                if (!st.hasAccess) continue;
+                bool have = false;
+                for (const Vec2& q : sim_.busAnchors) if ((q - st.access).length() < 20.0) have = true;
+                if (!have) sim_.busAnchors.push_back(st.access);
+            }
+    });
     { const auto tT0 = std::chrono::steady_clock::now();
     sim_.setBuses(params_.busRoutes, params_.busStops, params_.buses,
                   params_.busMaxWalk);
+    if (!sim_.busAnchors.empty())
+    {
+        LOG_INFO << "[citysim] bus lines stop at " << sim_.buses().anchorsServed() << " of " << sim_.buses().anchorCount() << " stations' ways in";
+        const auto& miss = sim_.buses().anchorMisses();
+        for (std::size_t a = 0; a < miss.size() && a < sim_.busAnchors.size(); ++a)
+            if (*miss[a]) LOG_INFO << "[citysim]   no bus at the way in at (" << sim_.busAnchors[a].x << ", " << sim_.busAnchors[a].y << "): " << miss[a];
+    }
     LOG_INFO << "[citysim] startup: setBuses " << std::chrono::duration<double>(std::chrono::steady_clock::now() - tT0).count() << " s"; }
+    // THE BUSES' DAY: with a depot to go back to, they run from busServiceStart to busServiceEnd and spend the night in
+    // its bays (Glenn: "a dedicated bus depot they return to at end of day"); without one, round the clock as before.
+    if (sim_.depotCount() > 0 && sim_.buses().routeCount() > 0) {
+        sim_.setBusService(params_.busServiceStart, params_.busServiceEnd);
+        int served = 0;
+        for (int r = 0; r < sim_.buses().routeCount(); ++r) served += sim_.depotOfRoute(r) >= 0 ? 1 : 0;
+        int parked = 0, bays = 0;
+        sim_.depotUse(parked, bays);
+        LOG_INFO << "[citysim] bus depots: " << sim_.depotCount() << " (" << bays << " bays), " << served << " of "
+                 << sim_.buses().routeCount() << " routes have one; service " << params_.busServiceStart << "-"
+                 << params_.busServiceEnd << " h";
+    }
     // The stops themselves, as something you can SEE: a pole, a route-coloured
     // sign and a bench (Glenn: "We should have stops with benches and signs for
     // bus stops so that we know where the route is"). The ground sampler goes
@@ -654,9 +876,14 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
     // What this LEVEL asked for, beside the density line above. Nothing used
     // to print it, so a level that silently failed to opt into tiering looked
     // exactly like one that had (2026-09-16).
-    LOG_INFO << "[citysim] buses: " << params_.buses << " on "
-             << sim_.buses().routeCount() << " derived routes of " << params_.busStops
+    {
+    int fleet = 0;
+    for (int r = 0; r < sim_.buses().routeCount(); ++r) fleet += sim_.buses().fleetOf(r);
+    LOG_INFO << "[citysim] buses: " << fleet << " on "
+             << sim_.buses().routeCount() << " derived routes" << (sim_.buses().twoWay() ? " (each loop both ways)" : "")
+             << " of " << params_.busStops
              << " stops; riders walk <= " << params_.busMaxWalk << " m to a stop";
+    }
     for (int r = 0; r < sim_.buses().routeCount(); ++r) {
         const BusRoute& br = sim_.buses().route(r);
         const Real lap = sim_.buses().rideSeconds(r, 0, 0);
@@ -695,6 +922,37 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
     // its archetype tables replace the built-ins BEFORE the warm-up below, so
     // the whole visible day runs on the scripted goals. Lua runs only here, at
     // load — every per-tick transition executes in C++ from the tables.
+    // THE ACTIVITY CATALOG (activities framework): what there is to go and do, and the menus that choose -- from
+    // assets/scripts/activities.lua when it is there (the built-in catalog otherwise: the same, by test)
+    {
+        const std::string code = engine::loadScriptCode("activities.lua", "");
+        if (!code.empty()) {
+            engine::ScriptVM vm;
+            std::string err;
+            citysim::ActivityCatalog cat;
+            if (vm.doString(code, &err) && engine::loadActivityCatalog(vm, cat, &err)) {
+                LOG_INFO << "[citysim] activities: " << cat.defs.size() << " activities, " << cat.menus.size() << " menus (activities.lua)";
+                sim_.setActivityCatalog(std::move(cat));
+            } else {
+                LOG_WARN << "[citysim] activities.lua: " << err << " (using the built-in catalog)";
+            }
+        }
+    }
+    {   // THE ROLES (roles.lua): every resident's day, built from its role's parts
+        const std::string code = engine::loadScriptCode("roles.lua", "");
+        if (!code.empty()) {
+            engine::ScriptVM vm;
+            std::string err;
+            citysim::RoleCatalog roles;
+            if (vm.doString(code, &err) && engine::loadRoleCatalog(vm, roles, &err) && roles.roles.size() >= 4) {
+                LOG_INFO << "[citysim] roles: " << roles.roles.size() << " (roles.lua)";
+                sim_.setRoleCatalog(std::move(roles));
+            } else {
+                LOG_WARN << "[citysim] roles.lua: " << (err.empty() ? "fewer than the four built-in roles" : err)
+                         << " (using the built-in roles)";
+            }
+        }
+    }
     if (!params_.agentScript.empty()) {
         engine::ScriptVM vm;
         std::string err;
@@ -705,11 +963,11 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
             engine::loadGoalTable(vm, pedName, ped, &err) &&
             engine::loadGoalTable(vm, drvName, driver, &err)) {
             sim_.setGoalTables(std::move(ped), std::move(driver));
-            // The day-off walkers' outing table, when the script has one.
+            // The stroller role's own day, when the script has one.
             citysim::GoalTable stroll;
             std::string serr;
             if (!params_.wander && engine::loadGoalTable(vm, "stroller", stroll, &serr))
-                sim_.setStrollerTable(std::move(stroll));
+                sim_.setRoleTable("stroller", std::move(stroll));
         } else {
             LOG_WARN << "citysim agents script: " << err << " (using built-ins)";
         }
@@ -726,15 +984,43 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
     if (!std::getenv("RT_NOCACHE")) sim_.setPopulationCacheDir("cache/population");
     { const auto tT0 = std::chrono::steady_clock::now();
     sim_.assignPlaces(places_, nav_);
+    {   // THE ACTIVITY SPOTS, by kind and where (tagged once the places are known)
+        int byKind[static_cast<int>(SpotKind::Count)] = {0}, campus = 0, sports = 0, campusJog = 0;
+        for (const CitySim::ActivitySpot& sp : sim_.spots()) {
+            ++byKind[static_cast<int>(sp.kind)];
+            campusJog += sp.kind == SpotKind::Jog && (sp.tags & spot_tag::kCampus) ? 1 : 0;
+            campus += (sp.tags & spot_tag::kCampus) ? 1 : 0;
+            sports += (sp.tags & spot_tag::kSports) ? 1 : 0;
+        }
+        std::string line;
+        for (int k = 0; k < static_cast<int>(SpotKind::Count); ++k)
+            if (byKind[k]) line += std::string(line.empty() ? "" : ", ") + std::to_string(byKind[k]) + " " + spotKindName(static_cast<SpotKind>(k));
+        LOG_INFO << "[citysim] activity spots: " << (line.empty() ? std::string("none") : line) << " | " << campus << " on a campus, "
+                 << sports << " by a sports field (" << campusJog << " campus jog)";
+    }
     LOG_INFO << "[citysim] startup: assignPlaces " << std::chrono::duration<double>(std::chrono::steady_clock::now() - tT0).count() << " s"; }
     if (sim_.populationCache().used)
         LOG_INFO << "[citysim] population: " << (sim_.populationCache().hit ? "read from" : "decided, cached in")
                  << " cache/population/" << std::hex << sim_.populationCache().key << std::dec << ".pop";
+    {
+        const CitySim::VenueStaffing at10 = sim_.venueStaffing(10.0), at22 = sim_.venueStaffing(22.0);
+        LOG_INFO << "[citysim] staffed places: " << at10.gated << " shops, cafes, restaurants, bars and clubs open only while"
+                 << " someone is on shift (" << at10.neverStaffed << " never staffed); staffed at 10:00 " << at10.staffedNow
+                 << ", at 22:00 " << at22.staffedNow;
+    }
     LOG_INFO << "[citysim] commutes: " << sim_.commuteStats().driversWithJobs << " drivers with jobs, "
              << sim_.commuteStats().crossTownDrivers << " cross-town (share " << params_.longCommuteShare
              << "), mean driver commute " << static_cast<int>(sim_.commuteStats().meanDriverCommute) << " m; "
              << sim_.commuteStats().busCommuters << " walkers ride to work in another town (share "
              << params_.busCommuteShare << ", " << sim_.commuteStats().busCommuteTried << " tried)";
+    {
+        const CitySim::CommuteStats& cs = sim_.commuteStats();
+        const int all = cs.ownTown + cs.nearbyTown + cs.farTown;
+        if (cs.towns > 1 && all > 0)
+            LOG_INFO << "[citysim] trip reach: " << cs.towns << " towns; work in own town " << (100.0 * cs.ownTown / all)
+                     << "%, a nearby town " << (100.0 * cs.nearbyTown / all) << "%, across the island " << (100.0 * cs.farTown / all) << "% | drivers " << cs.driverOwn << " / "
+                     << cs.driverNearby << " / " << cs.driverFar;
+    }
 
     // ONE CLOCK. A staged day/night cycle owns the world's hour and rate:
     // the sim opens at the sky's hour and its schedules run at the sky's
@@ -824,7 +1110,10 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
     if (assets) {
         pedMesh = assets->acquireMesh(buildPersonMesh(0.0, 0), "city:ped");
         Real e = params_.signalLensSize;
-        lensMesh = assets->acquireMesh(MeshBuilder::box(Vec3(e, e, e)), "city:signal");
+        // a thin plate, turned with the head (signalLensPose), a centimetre proud of the head's own lamp -- it was a
+        // 0.34 m CUBE, unturned, poking crooked through the lamp it lit (Glenn: "the stoplights are doubled up ...
+        // staggered over each other and z-fighting")
+        lensMesh = assets->acquireMesh(MeshBuilder::box(Vec3(e, e, 0.02)), "city:signal");
     }
 
     // One instance group per fleet slot; each is a body TYPE + SIZE (from the sim's
@@ -1064,11 +1353,58 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
     { InstanceGroup g; g.mesh = pedMesh; g.material = pedMaterial();
       g.renderLayer = engine::LayerSim; g.drawClass = engine::DrawClass::SimBody;
       world.add<InstanceGroup>(pedGroup_, g); }
+    // the mid-range band's stand-ins (RT_NO_FAR_BAND=1: none)
+    farCarGroups_.clear();
+    if (assets && !std::getenv("RT_NO_FAR_BAND")) {
+        farPedGroup_ = world.create();
+        { InstanceGroup g; g.mesh = pedMesh; g.material = pedMaterial();
+          g.renderLayer = engine::LayerSim; g.drawClass = engine::DrawClass::SimBody;
+          world.add<InstanceGroup>(farPedGroup_, g); }
+        const std::vector<Vec3> he = carGroupHalfExtents();
+        static const Vec3 kPaint[6] = {{0.55, 0.56, 0.58}, {0.12, 0.13, 0.15}, {0.62, 0.10, 0.09},
+                                       {0.14, 0.22, 0.42}, {0.82, 0.82, 0.80}, {0.30, 0.34, 0.30}};
+        for (int v = 0; v < drawVariantCount(); ++v) {
+            const Vec3 h = v < static_cast<int>(he.size()) ? he[static_cast<std::size_t>(v)] : Vec3(0.9, 0.7, 2.2);
+            // a body and a cabin, centred like the full model (it is placed half its height above the road)
+            engine::RenderMesh body = MeshBuilder::box(Vec3(h.x * 2, h.y * 1.1, h.z * 2));
+            MeshBuilder::transform(body, Mat4::translate(0, -h.y * 0.45, 0));
+            engine::RenderMesh cabin = MeshBuilder::box(Vec3(h.x * 1.7, h.y * 0.9, h.z * 1.0));
+            MeshBuilder::transform(cabin, Mat4::translate(0, h.y * 0.55, -h.z * 0.1));
+            const Vec3 paint = kPaint[v % 6];
+            for (engine::Vertex& vx : body.vertices) vx.color = paint;
+            for (engine::Vertex& vx : cabin.vertices) vx.color = Vec3(0.06, 0.07, 0.08);
+            MeshBuilder::append(body, cabin);
+            InstanceGroup g;
+            g.mesh = assets->acquireMesh(body, "city:farcar" + std::to_string(v));
+            g.material.albedo = Vec3(1, 1, 1);
+            g.material.roughness = 0.45f;
+            g.material.metallic = 0.3f;
+            g.renderLayer = engine::LayerSim;
+            g.drawClass = engine::DrawClass::SimBody;
+            const Entity e = world.create();
+            world.add<InstanceGroup>(e, g);
+            farCarGroups_.push_back(e);
+        }
+    }
     if (assets) {
         pedSeatedGroup_ = world.create();
         InstanceGroup g; g.mesh = assets->acquireMesh(buildSeatedPersonMesh(0), "city:ped_seated"); g.material = pedMaterial();
         g.renderLayer = engine::LayerSim; g.drawClass = engine::DrawClass::SimBody;
         world.add<InstanceGroup>(pedSeatedGroup_, g);
+        indoorSitGroup_ = world.create();
+        world.add<InstanceGroup>(indoorSitGroup_, g);
+        pedGroundGroup_ = world.create();
+        InstanceGroup gs = g;
+        gs.mesh = assets->acquireMesh(buildGroundSittingPersonMesh(0), "city:ped_ground_sit");
+        world.add<InstanceGroup>(pedGroundGroup_, gs);
+        pedLieGroup_ = world.create();
+        InstanceGroup gl = g;
+        gl.mesh = pedMesh;
+        world.add<InstanceGroup>(pedLieGroup_, gl);
+        indoorBodyGroup_ = world.create();
+        InstanceGroup b = g;
+        b.mesh = pedMesh;
+        world.add<InstanceGroup>(indoorBodyGroup_, b);
     }
     for (int s = 0; s < 3; ++s) {
         signalGroups_[s] = world.create();
@@ -1106,6 +1442,7 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
     // static, so its transforms are baked once here; only the lit lens (above)
     // changes each step.
     signalLinks_.clear();
+    signalLensCache_.clear();
     SignalController& sc = sim_.signals();
     for (int li = 0; li < nav_.linkCount(); ++li)
         if (sc.hasSignal(li)) signalLinks_.push_back(li);
@@ -1117,11 +1454,21 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
     // but the city decided where every pole stands.
     siteByLink_.clear();
     siteHasLink_.clear();
+    siteShared_.clear();
     engine::Entity adoptedPosts{};
     world.each<engine::StreetFurniture>([&](Entity, engine::StreetFurniture& f) {
-        if (f.navLinkCount != nav_.linkCount() || f.signalPoles.empty()) return;
+        // (the STREETS' links: the walks appended since are not the loader's. Comparing the whole count, every
+        // level with footpaths stopped adopting the placed poles and drew a second set of its own beside them --
+        // every signal on the island doubled, staggered. Glenn: "multiple traffic lights next to one another")
+        if (f.navLinkCount != nav_.streetLinkCount() || f.signalPoles.empty()) {
+            if (!f.signalPoles.empty())
+                LOG_WARN << "[citysim] the placed signal poles were built on a different street graph (" << f.navLinkCount
+                         << " links, the sim has " << nav_.streetLinkCount() << "): drawing our own";
+            return;
+        }
         siteByLink_.assign(nav_.linkCount(), SignalSite{});
         siteHasLink_.assign(nav_.linkCount(), 0);
+        siteShared_.assign(nav_.linkCount(), 0);
         for (const auto& s : f.signalPoles) {
             if (s.link < 0 || s.link >= nav_.linkCount()) continue;
             SignalSite st;
@@ -1131,7 +1478,12 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
             st.yaw = std::atan2(s.face.x, s.face.z);
             siteByLink_[s.link] = st;
             siteHasLink_[s.link] = 1;
+            if (s.shared) siteShared_[s.link] = 1;
         }
+        // the loader's post instances, in its order (a shared pole has none)
+        postLinkOf_.clear();
+        for (const auto& s : f.signalPoles)
+            if (!s.shared) postLinkOf_.push_back(s.link);
         adoptedPosts = f.postGroup;
     });
 
@@ -1147,8 +1499,19 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
         g.renderLayer = engine::LayerSim;   // debug layer toggle
         g.drawClass = engine::DrawClass::Furniture;
         for (int li : signalLinks_) g.transforms.push_back(signalPostPose(li));
+        postLinkOf_ = signalLinks_;
         refreshBounds(&g);
         world.add<InstanceGroup>(signalPostGroup_, g);
+    }
+    // ONE MODEL, ITS STATE A NUMBER: the head's own lamps light by the state each instance carries (mesh.vert,
+    // FLAG_SIGNAL_STATE) -- no lens geometry rebuilt or pushed per signal per bake
+    if (InstanceGroup* pg = world.get<InstanceGroup>(signalPostGroup_)) {
+        pg->material.flags |= engine::RenderMaterial::FLAG_SIGNAL_STATE;
+        if (pg->transforms.size() != postLinkOf_.size()) {
+            LOG_WARN << "[citysim] signal posts " << pg->transforms.size() << " vs " << postLinkOf_.size()
+                     << " links: lamps unlit";
+            postLinkOf_.clear();
+        }
     }
 
     // Curbside bay markings (R6b): one white outline instanced per bay —
@@ -1183,6 +1546,7 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
         // RenderSystem actually bites here.
         g.drawClass = engine::DrawClass::GroundPaint;
         for (const CitySim::ParkingBay& b : sim_.parkingBays()) {
+            if (b.garage >= 0) continue;   // a garage stall: the garage paints its own
             // Bay paint is PAINT: it rides at the road mesher's own stripe
             // lift (kRoadMarkLift, 2 cm), not a hand-picked 5 cm —
             // which read as a slab hovering over the asphalt.
@@ -1235,7 +1599,27 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
             engine::Vec3 base = signalSite(li).base;
             poles.push_back(engine::Vec2(base.x, base.z));
         }
+        const std::size_t poleCount = poles.size();
         sim_.setStaticObstacles(std::move(poles));
+        // ...and the street's FURNITURE: everything placed outdoors and drawn as furniture -- a bus stop's pole and
+        // bench, lamps, signs, benches, a cafe's tables (Glenn: "the npcs probably need to recognize vehicles and
+        // furniture as obstacles to avoid"). Each as a point with a body's clearance: the lean steers round it, the
+        // push-out keeps a walker from standing in it. (Interiors stream in later and are not here: nobody walks the
+        // pavement inside.)
+        std::vector<engine::Vec2> furniture;
+        world.each<engine::InstanceGroup>([&](Entity, engine::InstanceGroup& g) {
+            if (g.drawClass != engine::DrawClass::Furniture) return;
+            // (a MERGED mesh -- the street-name blades, the shop signs -- is one identity instance: not a thing on
+            // the pavement at the world's origin)
+            if (g.transforms.size() == 1 && std::fabs(g.transforms[0].m[0][3]) + std::fabs(g.transforms[0].m[2][3]) < 1e-6) return;
+            for (const Mat4& m : g.transforms) furniture.push_back(engine::Vec2(m.m[0][3], m.m[2][3]));
+        });
+        world.each<engine::Transform, engine::Renderable>([&](Entity, engine::Transform& t, engine::Renderable& r) {
+            if (r.drawClass == engine::DrawClass::Furniture) furniture.push_back(engine::Vec2(t.position.x, t.position.z));
+        });
+        sim_.addStaticObstacles(furniture, 0.75);
+        LOG_INFO << "[citysim] walkers steer round " << sim_.staticObstacleCount() << " static obstacles ("
+                 << poleCount << " signal poles, " << furniture.size() << " pieces of street furniture)";
     }
 
     // Crosswalks are painted into the ROAD TEXTURE now (ADR-0062): the road mesher
@@ -1428,9 +1812,7 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
     // Per-agent speed history for the brake-light hard-decel test (ADR-0065
     // follow-up); seeded to the warmed-up speed so the first bake sees no spurious
     // deceleration.
-    prevCarSpeed_.assign(sim_.agents().size(), 0.0);
-    for (std::size_t i = 0; i < sim_.agents().size(); ++i)
-        prevCarSpeed_[i] = sim_.agents()[i].speed;
+    drawCache_.clear();   // (an agent's speed history seeds on its first look: AgentDrawCache::fresh)
 
     built_ = true;
     syncGroups(world);
@@ -1532,9 +1914,7 @@ Mat4 CityRenderSystem::agentPose(const Agent& a, int agentIdx) const {
     // unindexed callers).
     auto smoothedUp = [&](Vec3 up) {
         if (agentIdx < 0 || !car) return up;
-        if (smoothUp_.size() <= static_cast<std::size_t>(agentIdx))
-            smoothUp_.resize(sim_.agents().size(), Vec3(0, 0, 0));
-        Vec3& su = smoothUp_[agentIdx];
+        Vec3& su = drawCache(agentIdx).smoothUp;
         // Gain from the bake interval (tau ~0.7 s), so the filter behaves the
         // same at the viewer's 60 Hz and the tests' 10 Hz.
         const Real k = 1.0 - std::exp(-bakeDt_ / 0.7);
@@ -1601,7 +1981,7 @@ Mat4 CityRenderSystem::agentPose(const Agent& a, int agentIdx) const {
             a.leg < static_cast<int>(a.route.links.size())) {
             const auto& bay = sim_.parkingBays()[static_cast<std::size_t>(a.targetBay)];
             const int li = a.route.links[static_cast<std::size_t>(a.leg)];
-            if (bay.link == li) {
+            if (bay.link == li && bay.garage < 0) {   // (a garage's stall is put away inside: no kerbside pull-in)
                 constexpr Real kPullIn = 14.0;
                 const Real remaining = bay.station - a.distOnLeg;
                 if (remaining < kPullIn + 2.0) {
@@ -1644,6 +2024,11 @@ Mat4 CityRenderSystem::agentPose(const Agent& a, int agentIdx) const {
             slot >= 0 && slot < static_cast<int>(carWheels_.size()) && carWheels_[static_cast<std::size_t>(slot)].size() >= 3
                 ? &carWheels_[static_cast<std::size_t>(slot)] : nullptr;
         const Real fl = drawHeading.length();
+        // A CAR THAT HAS NOT MOVED (at a light, in a queue, at the kerb) sits exactly where it sat: its last pose,
+        // not four surface samples and a fit again every bake
+        PoseCache* pc = agentIdx >= 0 ? &drawCache(agentIdx).pose : nullptr;
+        if (pc && pc->valid && pc->x == x && pc->z == z && pc->hx == drawHeading.x && pc->hz == drawHeading.y && pc->slot == slot)
+            return pc->m;
         if (wheels && fl > 1e-6) {
             const Vec2 f = drawHeading * (1.0 / fl);
             const Vec2 r(f.y, -f.x);                  // +X, the car's right
@@ -1687,6 +2072,7 @@ Mat4 CityRenderSystem::agentPose(const Agent& a, int agentIdx) const {
             m.m[0][1] = up.x; m.m[1][1] = up.y; m.m[2][1] = up.z;
             m.m[0][2] = fw.x; m.m[1][2] = fw.y; m.m[2][2] = fw.z;
             m.m[0][3] = x; m.m[1][3] = cy; m.m[2][3] = z;
+            if (pc) *pc = PoseCache{x, z, drawHeading.x, drawHeading.y, slot, true, m};
             return m;
         }
     }
@@ -1851,8 +2237,10 @@ Mat4 CityRenderSystem::signalLensPose(int link, SignalState s) const {
     Vec3 headTop = st.base + Vec3(0, sp.armHeight - 0.1, 0) + st.side * (sp.armLength - 0.2);
     Vec3 headCenter = headTop + Vec3(0, -0.55, 0);
     Real slotY = (s == SignalState::Red) ? 0.42 : (s == SignalState::Green) ? -0.42 : 0.0;
-    Vec3 p = headCenter + Vec3(0, slotY, 0) + st.face * 0.22;
-    return Mat4::trs(p, Quat(), Vec3(1, 1, 1));
+    // the head's lamp discs stand 0.22 m out and are 0.06 thick (street_kit::emitTrafficSignal): the plate's back
+    // face 1 cm in front of them, turned the way the head faces
+    Vec3 p = headCenter + Vec3(0, slotY, 0) + st.face * 0.27;
+    return Mat4::trs(p, Quat::fromAxisAngle(Vec3(0, 1, 0), st.yaw), Vec3(1, 1, 1));
 }
 
 // The turn side (-1 left / +1 right / 0 none) a car will take at the coming node,
@@ -1879,10 +2267,11 @@ void CityRenderSystem::syncCarLamps(World& world) {
     if (head) head->transforms.clear();
     if (brake) brake->transforms.clear();
     if (turn) turn->transforms.clear();
+    for (Entity e : busSignGroups_)
+        if (InstanceGroup* sg = world.get<InstanceGroup>(e)) sg->transforms.clear();
+    busSignsDrawn_ = 0;
 
     const std::vector<Agent>& agents = sim_.agents();
-    if (prevCarSpeed_.size() != agents.size())
-        prevCarSpeed_.assign(agents.size(), 0.0);
 
     // Externally-owned cars aren't drawn by this bridge (carGroups_ empty), so
     // their lamps aren't either. We still update prevCarSpeed_ below.
@@ -1894,10 +2283,14 @@ void CityRenderSystem::syncCarLamps(World& world) {
     // the sim clock keeps determinism intact.
     const bool blinkOn = std::fmod(sim_.seconds() * kTurnBlinkHz, 1.0) < 0.5;
 
-    for (std::size_t ai = 0; ai < agents.size(); ++ai) {
+    // (the K tier only: a far car has no drawn body and no lamps -- its speed is recorded once it is near again)
+    for (int nearIdx : sim_.nearAgents()) {
+        const std::size_t ai = static_cast<std::size_t>(nearIdx);
         const Agent& a = agents[ai];
-        const Real prev = prevCarSpeed_[ai];
-        prevCarSpeed_[ai] = a.speed;   // record for next step's decel test
+        AgentDrawCache& dcl = drawCache(static_cast<int>(ai));
+        const Real prev = dcl.fresh ? a.speed : dcl.prevSpeed;
+        dcl.prevSpeed = a.speed;   // record for next step's decel test
+        dcl.fresh = false;
         if (!drawCars) continue;
         if (a.mode != Agent::Mode::Driver) continue;
         if (a.released) continue;      // commandeered: the physical car owns its lamps
@@ -1907,6 +2300,24 @@ void CityRenderSystem::syncCarLamps(World& world) {
         // whose tail lights sit 2.3 m behind centre -- inside the saloon.
         const int v = drawSlotFor(static_cast<int>(ai));
         if (v < 0 || v >= static_cast<int>(carLights_.size())) continue;
+        // THE DESTINATION SIGN: the bus's line, or NOT IN SERVICE on its way in (same pose as the body)
+        // (never without its body: the same off-street rule syncGroups draws the bus by)
+        const bool putAway = !a.moving && a.vehicle >= 0 && a.vehicle < static_cast<int>(sim_.vehicles().size()) &&
+                             sim_.vehicles()[static_cast<std::size_t>(a.vehicle)].offStreet;
+        if (v == busVariant_ && sim_.isBus(static_cast<int>(ai)) && !putAway && !busSignGroups_.empty()) {
+            const int row = busSignRowFor(static_cast<int>(ai));
+            if (InstanceGroup* sg = row >= 0 ? world.get<InstanceGroup>(busSignGroups_[static_cast<std::size_t>(row)]) : nullptr) {
+                // THE BODY'S OWN POSE, as drawn this bake: agentPose(a) without the index skips the body's tilt
+                // low-pass, and up at the roof's front edge that difference was the sign sliding about on the bus
+                // (Glenn: "It's like it's not attached to the bus itself")
+                const auto drawn = busDrawnPose_.find(static_cast<int>(ai));
+                const auto po = physPose_.find(static_cast<int>(ai));
+                const Mat4 body = drawn != busDrawnPose_.end() ? drawn->second : po != physPose_.end() ? po->second : agentPose(a);
+                sg->transforms.push_back(body * busSignLocal_);
+                ++busSignsDrawn_;
+                busSignAt_ = sg->transforms.back().transformPoint(Vec3(0, 0, 0));
+            }
+        }
         const std::vector<LampMarker>& markers = carLights_[v];
         if (markers.empty()) continue;
 
@@ -1971,6 +2382,73 @@ void CityRenderSystem::syncCarLamps(World& world) {
     refreshBounds(head);
     refreshBounds(brake);
     refreshBounds(turn);
+    for (Entity e : busSignGroups_) refreshBounds(world.get<InstanceGroup>(e));
+}
+
+// The row a bus's sign shows: its line, or NOT IN SERVICE while it deadheads to the depot or stands off duty.
+int CityRenderSystem::busSignRowFor(int ai) const {
+    if (!sim_.busInService(ai)) return busSignOff_;
+    const int r = sim_.busRouteOf(ai);
+    return r >= 0 && r < static_cast<int>(busSignRow_.size()) ? busSignRow_[static_cast<std::size_t>(r)] : busSignOff_;
+}
+
+// THE DESTINATION SIGNS (Glenn, 2026-10-08: "Buses should probably show what line they are and whether they are in
+// service on an electric sign on front of the bus"). A label per route: its line's number (as the stop flags and the
+// HUD give it) and which way round the loop it runs -- CLOCKWISE / ANTICLOCKWISE as a map shows it (a loop has no
+// terminus to name), REGIONAL for the line between the towns, CIRCULAR for a loop run one way only -- and NOT IN
+// SERVICE. Amber LED dots on a black board across the top of the windscreen, lit (emissive) day and night.
+void CityRenderSystem::makeBusSigns(engine::FrameContext& ctx) {
+    busSignsTried_ = true;
+    const engine::Font* font = engine::signFont();
+    const citysim::BusNetwork& net = sim_.buses();
+    if (!font || !assets_ || busVariant_ < 0 || net.routeCount() <= 0) return;
+    std::vector<std::string> labels;
+    std::map<std::string, int> rowOf;
+    auto row = [&](const std::string& l) {
+        auto it = rowOf.find(l);
+        if (it != rowOf.end()) return it->second;
+        labels.push_back(l);
+        return rowOf[l] = static_cast<int>(labels.size()) - 1;
+    };
+    busSignRow_.assign(static_cast<std::size_t>(net.routeCount()), -1);
+    for (int r = 0; r < net.routeCount(); ++r) {
+        const citysim::BusRoute& br = net.route(r);
+        Real a2 = 0;   // the loop's turn, from its stops (x east, z down the map)
+        for (std::size_t k = 0; k < br.stops.size(); ++k) {
+            const Vec2 p = br.stops[k].pos, q = br.stops[(k + 1) % br.stops.size()].pos;
+            a2 += p.x * q.y - q.x * p.y;
+        }
+        const std::string way = br.regional ? "REGIONAL" : br.twin < 0 ? "CIRCULAR" : a2 > 0 ? "CLOCKWISE" : "ANTICLOCKWISE";
+        busSignRow_[static_cast<std::size_t>(r)] = row(std::to_string(net.lineOf(r) + 1) + "|" + way);
+    }
+    busSignOff_ = row("NOT IN SERVICE");
+    engine::TextImage day, lit;
+    engine::busSignImages(*font, labels, day, lit);
+    const engine::TextureHandle dayTex = ctx.renderer.uploadTexture(day.w, day.h, 4, day.rgba.data());
+    const engine::TextureHandle litTex = ctx.renderer.uploadTexture(lit.w, lit.h, 4, lit.rgba.data());
+    for (int k = 0; k < static_cast<int>(labels.size()); ++k) {
+        InstanceGroup g;
+        g.mesh = assets_->acquireMesh(engine::busSignMesh(k, static_cast<int>(labels.size())), "city:bussign" + std::to_string(k));
+        g.material.albedo = Vec3(1, 1, 1);
+        g.material.roughness = 0.35f;
+        g.material.albedoMap = dayTex;
+        g.material.emissiveMap = litTex;
+        g.material.emission = Vec3(1, 1, 1) * 2.4;
+        g.material.flags |= engine::RenderMaterial::FLAG_TWO_SIDED;   // (the quad's winding faces in; seen from the saloon too)
+        g.renderLayer = engine::LayerSim;
+        g.drawClass = engine::DrawClass::Furniture;
+        const Entity e = ctx.world.create();
+        ctx.world.add<InstanceGroup>(e, g);
+        busSignGroups_.push_back(e);
+    }
+    // ON THE BUS: across the top of the windscreen, just proud of the glass (the face is at 0.4916 of the length there,
+    // vehicle_forms.lua's bus roofline), its middle at 0.90 of the height; the body is drawn centred
+    const std::vector<Vec3> he = carGroupHalfExtents();
+    const Vec3 h = busVariant_ < static_cast<int>(he.size()) ? he[static_cast<std::size_t>(busVariant_)] : Vec3(1.275, 1.6, 5.7);
+    busSignLocal_ = Mat4::translate(0, h.y * 2 * 0.90 - h.y, h.z * 2 * 0.4916 + 0.04);
+    std::string all;
+    for (const std::string& l : labels) all += (all.empty() ? "" : ", ") + l;
+    LOG_INFO << "[citysim] bus destination signs: " << labels.size() << " labels (" << all << ")";
 }
 
 // Bake the CITY-PLAN outlines (ADR-0066), on first show (syncGroups).
@@ -2028,6 +2506,10 @@ void CityRenderSystem::syncGroups(World& world) {
     InstanceGroup* ped = world.get<InstanceGroup>(pedGroup_);
     InstanceGroup* pedSeated = pedSeatedGroup_.valid() ? world.get<InstanceGroup>(pedSeatedGroup_) : nullptr;
     if (pedSeated) pedSeated->transforms.clear();
+    InstanceGroup* pedGround = pedGroundGroup_.valid() ? world.get<InstanceGroup>(pedGroundGroup_) : nullptr;
+    InstanceGroup* pedLie = pedLieGroup_.valid() ? world.get<InstanceGroup>(pedLieGroup_) : nullptr;
+    if (pedGround) pedGround->transforms.clear();
+    if (pedLie) pedLie->transforms.clear();
     InstanceGroup* sig[3];
     for (int s = 0; s < 3; ++s) sig[s] = world.get<InstanceGroup>(signalGroups_[s]);
 
@@ -2037,8 +2519,25 @@ void CityRenderSystem::syncGroups(World& world) {
 
     carAgentIds_.assign(cars.size(), {});
     pedAgentIds_.assign(1, {});
+    // RT_DUMP_STATS: where the sync goes, section by section (the island profile: 13 ms a bake)
+    static const bool syncStats = std::getenv("RT_DUMP_STATS") != nullptr;
+    static double secMs[7] = {0, 0, 0, 0, 0, 0, 0};
+    static int secCalls = 0;
+    auto secT = std::chrono::steady_clock::now();
+    auto sec = [&](int k) {
+        if (!syncStats) return;
+        const auto n = std::chrono::steady_clock::now();
+        secMs[k] += std::chrono::duration<double, std::milli>(n - secT).count();
+        secT = n;
+    };
     const auto& agents = sim_.agents();
-    for (std::size_t ai = 0; ai < agents.size(); ++ai) {
+    // the draw cache: a new bake; every 600, drop what has not been drawn for that long
+    if (++drawBake_ % 600 == 0)
+        for (auto it = drawCache_.begin(); it != drawCache_.end();)
+            it = drawBake_ - it->second.used > 600 ? drawCache_.erase(it) : std::next(it);
+    // the K tier only, ascending (agents() order): a far agent has no render membership
+    for (int nearIdx : sim_.nearAgents()) {
+        const std::size_t ai = static_cast<std::size_t>(nearIdx);
         const Agent& a = agents[ai];
         // P4: a far (V) agent has NO render membership — no instance, no lamp,
         // no kinematic proxy (the physics diff keys off these id lists).
@@ -2061,6 +2560,10 @@ void CityRenderSystem::syncGroups(World& world) {
             if (busVariant_ >= 0 && sim_.isBus(static_cast<int>(ai)) &&
                 busVariant_ < drawVariantCount())
                 v = busVariant_;
+            if (fireVariant_ >= 0 && fireVariant_ < drawVariantCount() && a.vehicle >= 0 &&   // (someone took the engine)
+                a.vehicle < static_cast<int>(sim_.vehicles().size()) &&
+                sim_.vehicles()[static_cast<std::size_t>(a.vehicle)].type == VehicleType::FireEngine)
+                v = fireVariant_;
             if (!cars[v]) continue;
             // R5: a physically-possessed agent renders its Jolt body's pose —
             // real suspension, pitch and roll — while the sim's kinematic
@@ -2072,16 +2575,25 @@ void CityRenderSystem::syncGroups(World& world) {
             carAgentIds_[v].push_back(static_cast<int>(ai));
         } else if (ped && !pedsExternallyOwned_) {   // walkers owned externally: no bake
             if (!sim_.pedVisible(static_cast<int>(ai))) continue;   // indoors / riding
-            if (const CitySim::SeatSpot* st = sim_.seatedOn(static_cast<int>(ai))) {   // sitting (M5)
-                if (pedSeated)
-                    pedSeated->transforms.push_back(Mat4::translate(st->pos.x, st->hip, st->pos.y) *
-                                                    Mat4::rotateY(std::atan2(st->face.x, st->face.y)));
+            CitySim::RestPose rp;
+            if (sim_.restPose(static_cast<int>(ai), rp)) {   // sitting (M5), on the grass, lying in the sun
+                const Mat4 yaw = Mat4::rotateY(std::atan2(rp.face.x, rp.face.y));
+                if (rp.kind == CitySim::RestPose::Kind::Seat) {
+                    if (pedSeated) pedSeated->transforms.push_back(Mat4::translate(rp.pos.x, rp.hip, rp.pos.y) * yaw);
+                } else if (rp.kind == CitySim::RestPose::Kind::SitGround) {
+                    if (pedGround)
+                        pedGround->transforms.push_back(Mat4::translate(rp.pos.x, groundAt(rp.pos.x, rp.pos.y) + kGroundSitHip, rp.pos.y) * yaw);
+                } else if (pedLie) {   // on its back, head away from the way it faces (its feet point there)
+                    pedLie->transforms.push_back(Mat4::translate(rp.pos.x, groundAt(rp.pos.x, rp.pos.y) + kLieHalfDepth, rp.pos.y) *
+                                                 yaw * Mat4::rotateX(-engine::PI * 0.5));
+                }
                 continue;
             }
             ped->transforms.push_back(agentPose(a));
             pedAgentIds_[0].push_back(static_cast<int>(ai));
         }
     }
+    sec(0);
     // Scenery parked cars (R6b): bays seeded full at build render a real car
     // (variant by bay index) — and, riding the car groups, they get the same
     // kinematic collision boxes as ambient traffic for free.
@@ -2107,8 +2619,10 @@ void CityRenderSystem::syncGroups(World& world) {
         // Vehicle that replaced it, so the bridge must not draw it a second
         // time. The owner is released, not its car — the ownership link is kept
         // deliberately, so the agent can later discover the car is gone.
+        // (a released or player-controlled agent never leaves the K tier: the near list holds them all)
         std::vector<char> suppressed(vehicles.size(), 0);
-        for (const Agent& a : sim_.agents()) {
+        for (int ni : sim_.nearAgents()) {
+            const Agent& a = sim_.agents()[static_cast<std::size_t>(ni)];
             if (!a.released && !a.playerControlled) continue;
             if (a.car >= 0 && a.car < static_cast<int>(vehicles.size()))
                 suppressed[a.car] = 1;
@@ -2120,7 +2634,12 @@ void CityRenderSystem::syncGroups(World& world) {
         const Real rad = params_.sceneryRadius;
         const Real rad2 = rad * rad;
         int drawn = 0;
-        for (std::size_t vi = 0; vi < vehicles.size(); ++vi) {
+        // only the cars hashed within the draw radius (ascending, the same order), not the city's every vehicle
+        parkedScratch_.clear();
+        if (haveCentre && rad > 0) sim_.parkedNear(centre, rad, parkedScratch_);
+        else for (int vi = 0; vi < static_cast<int>(vehicles.size()); ++vi) parkedScratch_.push_back(vi);
+        for (int vidx : parkedScratch_) {
+            const std::size_t vi = static_cast<std::size_t>(vidx);
             const SimVehicle& sv = vehicles[vi];
             if (sv.driver >= 0) continue;      // someone is driving it: the agent
                                                // bake above already drew it
@@ -2135,6 +2654,8 @@ void CityRenderSystem::syncGroups(World& world) {
             // arrived in -- and could make an ordinary car a parked bus).
             int v = sim_.ambientSlotFor(static_cast<int>(vi));
             if (v >= drawVariantCount()) v %= drawVariantCount();
+            if (sv.type == VehicleType::Bus && busVariant_ >= 0 && busVariant_ < drawVariantCount()) v = busVariant_;   // a bus parked in its depot
+            if (sv.type == VehicleType::FireEngine && fireVariant_ >= 0 && fireVariant_ < drawVariantCount()) v = fireVariant_;   // in its bay
             if (!cars[v]) continue;
             // The ground sample is the per-frame cost the old one-shot bake
             // existed to avoid — but only a few dozen cars survive the cull, and
@@ -2146,7 +2667,8 @@ void CityRenderSystem::syncGroups(World& world) {
             // does — on an elevated deck it would still take the ground below.
             // No level parks on one today; if that changes, carry the bay (or
             // the link) on SimVehicle and switch this to deckYAt.
-            const Real y = groundAt(sv.pos.x, sv.pos.y) +
+            // ...or UP A GARAGE: on its deck (CitySim::addGarageBays)
+            const Real y = (sv.parkedY > -1e29 ? sv.parkedY : groundAt(sv.pos.x, sv.pos.y)) +
                            (v < static_cast<int>(he.size()) ? he[v].y : 0.65);
             const Real yaw = std::atan2(sv.heading.x, sv.heading.y);
             cars[v]->transforms.push_back(
@@ -2170,11 +2692,24 @@ void CityRenderSystem::syncGroups(World& world) {
     // CURRENT state — so a phase change moves the lit lens between the red/amber/
     // green emissive batches. The pole assembly (signalPostGroup_) is static and
     // left untouched. (The lit lens overlays the head's matching housing lamp.)
+    sec(1);
     SignalController& sc = sim_.signals();
-    for (int li : signalLinks_) {
+    if (signalLensCache_.size() != signalLinks_.size()) {   // first bake (after build adopted the placed poles)
+        signalLensCache_.resize(signalLinks_.size());
+        for (std::size_t k = 0; k < signalLinks_.size(); ++k)
+            for (int s = 0; s < 3; ++s) signalLensCache_[k][static_cast<std::size_t>(s)] = signalLensPose(signalLinks_[k], static_cast<SignalState>(s));
+    }
+    // each post's lit lamp: its link's state in the instance's bottom row (1 green, 2 amber, 3 red)
+    if (InstanceGroup* pg = signalPostGroup_.valid() ? world.get<InstanceGroup>(signalPostGroup_) : nullptr)
+        for (std::size_t k = 0; k < postLinkOf_.size() && k < pg->transforms.size(); ++k)
+            pg->transforms[k].m[3][0] = static_cast<Real>(static_cast<int>(sc.stateForLink(postLinkOf_[k])) + 1);
+    for (std::size_t sk = 0; sk < signalLinks_.size(); ++sk) {
+        const int li = signalLinks_[sk];
+        // a link sharing an earlier signal's pole lights nothing of its own: the head shows its approach's main
+        // link (two lit lamps on one head read as a broken light)
+        if (li < static_cast<int>(siteShared_.size()) && siteShared_[static_cast<std::size_t>(li)]) continue;
         SignalState st = sc.stateForLink(li);
-        int s = static_cast<int>(st);
-        if (sig[s]) sig[s]->transforms.push_back(signalLensPose(li, st));
+        // (the head's own lamp is lit by its state now; only the left arrow below is a separate lens)
         // THE LEFT ARROW (ADR-0109): a fourth lamp beside the head, on the side the left turn goes,
         // lit green (or amber) through the lead arrow while the straight-on lamps show red
         if (sc.hasLeftArrow(li)) {
@@ -2182,7 +2717,7 @@ void CityRenderSystem::syncGroups(World& world) {
             if (la != SignalState::Red && st == SignalState::Red) {
                 const Vec2 u = nav_.direction(li);
                 const Vec3 turnSide(-u.y, 0, u.x);   // the nav frame's left of travel, in the world
-                Mat4 pose = signalLensPose(li, SignalState::Green);
+                Mat4 pose = signalLensCache_[sk][static_cast<std::size_t>(SignalState::Green)];
                 pose = Mat4::trs(Vec3(0, 0, 0) + turnSide * 0.34, Quat(), Vec3(1, 1, 1)) * pose;
                 const int k = static_cast<int>(la);
                 if (sig[k]) sig[k]->transforms.push_back(pose);
@@ -2190,10 +2725,55 @@ void CityRenderSystem::syncGroups(World& world) {
         }
     }
 
+    // THE MID-RANGE BAND: far agents in reach, as stand-ins, run on from their last coarse tick
+    farDrawn_ = 0;
+    if (!farCarGroups_.empty() && sim_.hasTierCenter() && !gpuCrowd_ && crowdInit_) {   // (the GPU crowd draws them
+        // when it can -- and until feedGpuCrowd has decided whether it can, nothing: see its note)
+        std::vector<InstanceGroup*> fc;
+        for (Entity e : farCarGroups_) {
+            InstanceGroup* g = world.get<InstanceGroup>(e);
+            if (g) g->transforms.clear();
+            fc.push_back(g);
+        }
+        InstanceGroup* fp = farPedGroup_.valid() ? world.get<InstanceGroup>(farPedGroup_) : nullptr;
+        if (fp) fp->transforms.clear();
+        const std::vector<Vec3> heFar = carGroupHalfExtents();
+        const Vec2 c = sim_.tierCenter();
+        for (int vi : sim_.farAgents()) {
+            const Agent& a = sim_.agents()[static_cast<std::size_t>(vi)];
+            const bool car = a.mode == Agent::Mode::Driver;
+            const Real rad = car ? farCarRadius : farPedRadius;
+            const Vec2 d = a.pos - c;
+            if (d.x * d.x + d.y * d.y > rad * rad) continue;
+            Vec2 p, h;
+            if (!sim_.farDrawPose(vi, p, h)) continue;
+            AgentDrawCache& dcf = drawCache(vi);
+            if ((p - dcf.farYAt).lengthSquared() > 25.0) { dcf.farY = groundAt(p.x, p.y); dcf.farYAt = p; }
+            const Real yaw = std::atan2(h.x, h.y);
+            if (car) {
+                int v = drawSlotFor(vi);
+                if (v < 0 || v >= static_cast<int>(fc.size()) || !fc[static_cast<std::size_t>(v)]) continue;
+                const Real hy = v < static_cast<int>(heFar.size()) ? heFar[static_cast<std::size_t>(v)].y : 0.7;
+                fc[static_cast<std::size_t>(v)]->transforms.push_back(
+                    Mat4::trs(Vec3(p.x, dcf.farY + hy, p.y), Quat::fromAxisAngle(Vec3(0, 1, 0), yaw), Vec3(1, 1, 1)));
+            } else if (fp) {
+                fp->transforms.push_back(
+                    Mat4::trs(Vec3(p.x, dcf.farY + 0.9, p.y), Quat::fromAxisAngle(Vec3(0, 1, 0), yaw), Vec3(1, 1, 1)));
+            }
+            ++farDrawn_;
+        }
+        for (InstanceGroup* g : fc) refreshBounds(g);
+        refreshBounds(fp);
+    }
+
     for (InstanceGroup* c : cars) refreshBounds(c);
     refreshBounds(ped);
+    refreshBounds(pedSeated);
+    refreshBounds(pedGround);
+    refreshBounds(pedLie);
     for (int s = 0; s < 3; ++s) refreshBounds(sig[s]);
 
+    sec(2);
     // SEE-INTO VEHICLES. The clear glass rides exactly its bodies' transforms
     // (bodies and agent ids were pushed in lockstep above), and the people are
     // posed on the same pose: the driver on the driver's seat, and one rider per
@@ -2219,6 +2799,7 @@ void CityRenderSystem::syncGroups(World& world) {
                     if (!cars[v] || carSeeInto_[v]) continue;
                     for (int ai : carAgentIds_[v]) {
                         if (ai < 0) continue;
+                        if (!carOccupied(ai)) continue;   // a car left at the kerb is not swapped: nobody in it
                         const Real d = (ags[static_cast<std::size_t>(ai)].pos - c).length();
                         if (d < (nearSwap_.count(ai) ? kNearOut : kNearIn)) cand.push_back({d, ai});
                     }
@@ -2268,6 +2849,10 @@ void CityRenderSystem::syncGroups(World& world) {
                 if (!always && (!nearSwap_.count(ai) || !carInteriorGroups_[v].valid())) continue;   // behind opaque glass: nobody to see
                 const Mat4& xf = cars[v]->transforms[k];
                 busDrawnPose_[ai] = xf;
+                // NOBODY SITS IN A PARKED CAR (Glenn: "npc bodies sitting dormant in their parked cars ... They should
+                // either be in a house dormant or disappeared"): a driver is in the seat only while the car is on a
+                // trip -- moving, or a bus or a cab on duty; at rest the person is indoors and the car stands empty
+                if (!carOccupied(ai)) continue;
                 if (hasDriver && drv)
                     drv->transforms.push_back(
                         xf * Mat4::trs(carDriverSeat_[v], Quat(), Vec3(1, 1, 1)));
@@ -2289,6 +2874,7 @@ void CityRenderSystem::syncGroups(World& world) {
         for (InstanceGroup* r : rid) refreshBounds(r);
     }
 
+    sec(3);
     // Debug widgets: a ground footprint (coloured by state) + a forward arrow per
     // agent, scaled to the agent's speed so it reads as the present trajectory.
     {
@@ -2423,13 +3009,184 @@ void CityRenderSystem::syncGroups(World& world) {
         if (lot) { lot->boundsCenter = Vec3(0, 0, 0); lot->boundsRadius = 6000.0; }
     }
 
+    sec(4);
     // Emissive car lamps (ADR-0065 follow-up): headlights / brake / turn signals,
     // driven by each drawn car's carLampState. Always baked (not a debug widget).
     syncCarLamps(world);
+    sec(5);
+    if (syncStats && ++secCalls % 300 == 0) {
+        LOG_INFO << "[stats] group sync ms per bake: agents " << secMs[0] / secCalls << ", parked cars " << secMs[1] / secCalls
+                 << ", signals + bounds " << secMs[2] / secCalls << ", see-into vehicles " << secMs[3] / secCalls
+                 << ", debug widgets " << secMs[4] / secCalls << ", car lamps " << secMs[5] / secCalls;
+        for (double& m : secMs) m = 0;
+        secCalls = 0;
+    }
+}
+
+// PEOPLE INSIDE (campus M4). The sim rests an indoor agent at its place's door, undrawn; a streamed interior's
+// furniture set says where in the building a body can be. Once a second: count who is indoors at each streamed
+// building's place, and put that many on its seats and beds (planOccupants -- the same seats for the same count, so
+// a refresh adds or removes people rather than shuffling them), marking the spots taken so the player is not
+// offered someone's seat.
+void CityRenderSystem::stepIndoors(World& world, Real dt) {
+    indoorAcc_ += dt;
+    if (indoorAcc_ < 1.0) return;
+    indoorAcc_ = 0;
+    InstanceGroup* sit = indoorSitGroup_.valid() ? world.get<InstanceGroup>(indoorSitGroup_) : nullptr;
+    InstanceGroup* body = indoorBodyGroup_.valid() ? world.get<InstanceGroup>(indoorBodyGroup_) : nullptr;
+    if (!sit || !body) return;
+    sit->transforms.clear();
+    body->transforms.clear();
+    indoorDrawn_ = 0;
+    const engine::CityBuildings* cb = nullptr;
+    world.each<engine::CityBuildings>([&](Entity, engine::CityBuildings& c) { cb = &c; });
+    // A SLOT: one place's people on its own pieces -- each shop unit's (its staff behind the counter, its customers at
+    // its tables), and the building's own (the flats, the offices) on the rest
+    struct Slot { PlaceId place; std::vector<uint8_t> units; Vec2 door; int people = 0, staff = 0; };
+    struct Inside { engine::Interactables* set; int building; std::vector<Slot> slots; };
+    std::vector<Inside> inside;
+    world.each<engine::Interactables>([&](Entity, engine::Interactables& set) {
+        if (set.building < 0 || !cb || set.building >= static_cast<int>(cb->records.size())) return;
+        auto it = buildingPlace_.find(set.building);
+        if (it == buildingPlace_.end()) {
+            // the places whose sites are inside this building's plan; each shop unit takes the one inside its room
+            // (two storeys of a mall over the same rooms: the lower unit the lower id, as they were exported)
+            const engine::BuildingRecord& r = cb->records[static_cast<std::size_t>(set.building)];
+            std::vector<PlaceId> cand;
+            if (r.plan.size() >= 3)
+                for (const Place& p : places_.places())
+                    if (engine::pointInPolygon(r.plan, p.site)) cand.push_back(p.id);
+            BuildingPeople bp;
+            bp.unit.assign(set.units.size(), kNoPlace);
+            std::vector<std::size_t> order(set.units.size());
+            for (std::size_t u = 0; u < order.size(); ++u) order[u] = u;
+            std::stable_sort(order.begin(), order.end(), [&](std::size_t x, std::size_t y) { return set.units[x].y0 < set.units[y].y0; });
+            std::vector<uint8_t> claimed(cand.size(), 0);
+            for (std::size_t u : order)
+                for (std::size_t c = 0; c < cand.size(); ++c)
+                    if (!claimed[c] && set.units[u].rect.size() >= 3 && engine::pointInPolygon(set.units[u].rect, places_[cand[c]].site)) {
+                        bp.unit[u] = cand[c];
+                        claimed[c] = 1;
+                        break;
+                    }
+            for (std::size_t c = 0; c < cand.size() && bp.whole == kNoPlace; ++c)
+                if (!claimed[c]) bp.whole = cand[c];
+            it = buildingPlace_.emplace(set.building, std::move(bp)).first;
+            if (std::getenv("RT_CAMPUS_DEBUG")) {
+                int matched = 0;
+                for (PlaceId q : it->second.unit) matched += q != kNoPlace;
+                std::fprintf(stderr, "[indoors] building %d (%s, campus %d, %d floors, %zu pieces): place %d, %zu shop units (%d with a place), %zu places inside\n",
+                             set.building, r.recipe.c_str(), r.params.campus, r.params.floors, set.pieces.size(),
+                             it->second.whole == kNoPlace ? -1 : static_cast<int>(it->second.whole), set.units.size(), matched, cand.size());
+                for (std::size_t u = 0; u < set.units.size(); ++u) {
+                    const auto& rr = set.units[u].rect;
+                    Vec2 c(0, 0);
+                    for (const Vec2& q : rr) c = c + q * (1.0 / rr.size());
+                    const PlaceId q = it->second.unit[u];
+                    int pieces = 0;
+                    for (const engine::InteractPiece& ip : set.pieces) pieces += ip.unit == static_cast<int>(u);
+                    std::fprintf(stderr, "[indoors unit] building %d unit %zu at %.1f %.1f y %.1f (%.1f x %.1f), %d pieces: place %d %s\n", set.building, u, c.x, c.y,
+                                 set.units[u].y0, rr.size() > 2 ? (rr[1] - rr[0]).length() : 0.0, rr.size() > 3 ? (rr[3] - rr[0]).length() : 0.0, pieces,
+                                 q == kNoPlace ? -1 : static_cast<int>(q), q == kNoPlace ? "" : places_[q].name.c_str());
+                }
+                for (PlaceId q : cand) {
+                    bool got = false;
+                    for (PlaceId x : it->second.unit) got = got || x == q;
+                    if (!got) std::fprintf(stderr, "[indoors unit] building %d place %u \"%s\" (%s) site %.1f %.1f has no unit\n", set.building,
+                                           static_cast<unsigned>(q), places_[q].name.c_str(), placeTypeName(places_[q].type), places_[q].site.x, places_[q].site.y);
+                }
+            }
+        }
+        const BuildingPeople& bp = it->second;
+        // the door an indoor agent rests at (CitySim::assignPlaces' doorOf)
+        auto restAt = [&](PlaceId q) { const Place& p = places_[q]; return p.entrance + (p.site - p.entrance) * 0.4; };
+        Inside in{&set, set.building, {}};
+        Slot whole{bp.whole, std::vector<uint8_t>(set.units.size() + 1, 0), Vec2(0, 0)};
+        whole.units[0] = 1;   // the building's own pieces, and any shop unit that found no place
+        for (std::size_t u = 0; u < bp.unit.size(); ++u) {
+            if (bp.unit[u] == kNoPlace) { whole.units[u + 1] = 1; continue; }
+            Slot s{bp.unit[u], std::vector<uint8_t>(set.units.size() + 1, 0), restAt(bp.unit[u])};
+            s.units[u + 1] = 1;
+            in.slots.push_back(std::move(s));
+        }
+        if (bp.whole != kNoPlace) { whole.door = restAt(bp.whole); in.slots.push_back(std::move(whole)); }
+        if (!in.slots.empty()) inside.push_back(std::move(in));
+    });
+    // who is in: indoors, at rest, at that place's door -- and of them, who works there and is at work
+    // (the near list: interiors stream in round the player, and whoever rests inside one is near -- this was every
+    // indoor agent in the city against every streamed building, once a second)
+    if (!inside.empty())
+        for (int ni : sim_.nearAgents()) {
+            const Agent& a = sim_.agents()[static_cast<std::size_t>(ni)];
+            if (!a.indoors || a.moving) continue;
+            bool done = false;
+            for (Inside& in : inside) {
+                for (Slot& s : in.slots)
+                    if ((a.pos - s.door).lengthSquared() < 0.25) {
+                        ++s.people;
+                        s.staff += a.workPlace == s.place && a.activity == Agent::Activity::AtWork;
+                        done = true;
+                        break;
+                    }
+                if (done) break;
+            }
+        }
+    const engine::FurnitureLibrary& lib = engine::FurnitureLibrary::global();
+    const Real h = sim_.clockHours();
+    for (Inside& in : inside) {
+        engine::Interactables& set = *in.set;
+        std::vector<uint32_t>& held = indoorHeld_[in.building];
+        held.resize(set.pieces.size(), 0);
+        for (std::size_t i = 0; i < set.pieces.size(); ++i) set.pieces[i].taken &= ~held[i];   // ours back first
+        std::fill(held.begin(), held.end(), 0u);
+        for (Slot& s : in.slots) {
+            engine::OccupantPlan plan;
+            plan.people = s.people;
+            plan.staff = s.staff;
+            plan.units = &s.units;
+            plan.night = (h >= 22.5 || h < 6.5) && places_[s.place].type == PlaceType::Home;   // asleep at home, not at work
+            plan.lecturer = cb->records[static_cast<std::size_t>(in.building)].params.campus == 1 && s.people > 0 && !plan.night;
+            plan.seed = static_cast<uint32_t>(in.building);
+            const std::vector<engine::Occupant> occ = engine::planOccupants(set, lib, plan);
+            for (const engine::Occupant& o : occ) {
+                set.pieces[o.piece].taken |= o.spots;
+                held[o.piece] |= o.spots;
+                (o.pose == engine::Occupant::Pose::Sit ? sit : body)->transforms.push_back(o.at);
+                ++indoorDrawn_;
+            }
+            if (std::getenv("RT_CAMPUS_DEBUG") && s.people > 0) {
+                const Place& p = places_[s.place];
+                int lie = 0, stand = 0;
+                for (const engine::Occupant& o : occ) { lie += o.pose == engine::Occupant::Pose::Lie; stand += o.pose == engine::Occupant::Pose::Stand; }
+                std::fprintf(stderr, "[indoors] %.2f h building %d place %u (%s \"%s\" at %.0f %.0f): %d inside (%d staff), %zu placed (%d lying, %d standing)\n",
+                             h, in.building, static_cast<unsigned>(s.place), placeTypeName(p.type), p.name.c_str(), p.site.x, p.site.y,
+                             s.people, s.staff, occ.size(), lie, stand);
+                for (const engine::Occupant& o : occ)   // where to stand and look at them: 3 m in front, looking back
+                    if (o.pose == engine::Occupant::Pose::Stand) {
+                        const Vec3 at(o.at.m[0][3], o.at.m[1][3], o.at.m[2][3]);
+                        const Vec3 f = normalize(Vec3(o.at.m[0][2], 0, o.at.m[2][2]));
+                        const Vec3 eye = at + f * 3.0 + Vec3(0, 0.75, 0);
+                        std::fprintf(stderr, "[indoors view] place %u staff at %.2f %.2f %.2f camera %.2f %.2f %.2f -12 %.1f\n",
+                                     static_cast<unsigned>(s.place), at.x, at.y, at.z, eye.x, eye.y, eye.z,
+                                     std::atan2(-f.x, f.z) * 57.29577951308232);
+                        break;
+                    }
+            }
+        }
+    }
+    refreshBounds(sit);   // a group with no bounds is culled whole
+    refreshBounds(body);
+    // a building released since: forget what we held there
+    for (auto it = indoorHeld_.begin(); it != indoorHeld_.end();) {
+        bool live = false;
+        for (const Inside& in : inside) live = live || in.building == it->first;
+        it = live ? std::next(it) : indoorHeld_.erase(it);
+    }
 }
 
 void CityRenderSystem::step(World& world, Real dt) {
     if (!built_) return;
+    stepIndoors(world, dt);
     // WHERE ARE THE BUSES (print-only, RT_PRINT_BUSES=1). Same idea as
     // RT_PRINT_CORES: transit vehicles drive a loop across the whole city, so
     // finding one to look at by standing at a stop and waiting is a matter of
@@ -2558,7 +3315,10 @@ void CityRenderSystem::step(World& world, Real dt) {
     auto t2 = std::chrono::steady_clock::now();
     simMs += std::chrono::duration<double, std::milli>(t1 - t0).count();
     syncMs += std::chrono::duration<double, std::milli>(t2 - t1).count();
-    if (std::chrono::duration<double, std::milli>(t2 - t0).count() > 16.0)
+    // RT_SPIKE_MS=<ms>: the threshold (default 16); 0 logs every tick, what a spike is compared against
+    static const double spikeMs = std::getenv("RT_SPIKE_MS") ? std::atof(std::getenv("RT_SPIKE_MS")) : 16.0;
+    if (std::chrono::duration<double, std::milli>(t2 - t0).count() > spikeMs &&
+        (sim_.phaseTimes().steps != ph0.steps || std::chrono::duration<double, std::milli>(t2 - t1).count() > 16.0))
         LOG_INFO << "[stats] SPIKE citysim step " << std::chrono::duration<double, std::milli>(t1 - t0).count()
                  << " ms, group sync " << std::chrono::duration<double, std::milli>(t2 - t1).count() << " ms"
                  << " | phases ms: rehash " << (sim_.phaseTimes().rehash - ph0.rehash) / 1000.0
@@ -2609,7 +3369,18 @@ void CityRenderSystem::step(World& world, Real dt) {
                  << ", far(V) " << vTier << ", dormant(D) " << dormant
                  << ", moving " << moving << ", rolling " << rolling
                  << ", asleep " << sim_.sleepingAgents()
-                 << " | parked cars drawn " << parkedDrawn_;
+                 << " | parked cars drawn " << parkedDrawn_ << " | far band drawn " << farDrawn_
+                 << " | GPU crowd travellers " << crowdLive_ << " drawn " << crowdDrawnSeen_ << " | near ring x" << sim_.nearScale() << " far ring x" << sim_.farScale()
+                 << " | stand-ins left in the CPU band's groups " << [&] {
+                        std::size_t n = 0;   // (0 whenever the GPU crowd draws them: anything else is frozen boxes)
+                        for (Entity e : farCarGroups_)
+                            if (const InstanceGroup* g = world.get<InstanceGroup>(e)) n += g->transforms.size();
+                        return n;
+                    }()
+                 << " | sleepers' events " << (sim_.dormantEvents() - lastDormantEvents_) << " in "
+                 << (sim_.dormantEventMs() - lastDormantMs_) / calls << " ms per step";
+        lastDormantEvents_ = sim_.dormantEvents();
+        lastDormantMs_ = sim_.dormantEventMs();
         simMs = syncMs = 0.0;
         calls = 0;
     }
@@ -2622,13 +3393,259 @@ void CityRenderSystem::onStart(engine::FrameContext& ctx) {
     ctx.actions.bindButton("plan_widgets", engine::KeyCode::Semicolon);
 }
 
+void CityRenderSystem::feedGpuCrowd(engine::FrameContext& ctx) {
+    if (!built_ || farCarGroups_.empty() || !farPedGroup_.valid()) return;
+    World& world = ctx.world;
+    if (!crowdInit_) {
+        crowdInit_ = true;
+        if (!ctx.renderer.supportsGpuCrowd() || std::getenv("RT_NO_FAR_BAND")) return;
+        // what a traveller is drawn as: the band's stand-ins (a body per car slot, the box person last)
+        std::vector<engine::Renderer::CrowdKind> kinds;
+        const std::vector<Vec3> he = carGroupHalfExtents();
+        for (std::size_t v = 0; v < farCarGroups_.size(); ++v) {
+            const InstanceGroup* g = world.get<InstanceGroup>(farCarGroups_[v]);
+            if (!g) return;
+            kinds.push_back({g->mesh, g->material, static_cast<float>(v < he.size() ? he[v].y : 0.7), static_cast<float>(farCarDistance), 120.0f});
+        }
+        const InstanceGroup* pg = world.get<InstanceGroup>(farPedGroup_);
+        if (!pg) return;
+        kinds.push_back({pg->mesh, pg->material, 0.9f, static_cast<float>(farPedDistance), 60.0f});
+        ctx.renderer.setCrowdKinds(kinds);
+        // every link's ends with their heights (the ground, plus a deck's layer)
+        std::vector<float> L(static_cast<std::size_t>(nav_.linkCount()) * 6);
+        crowdLinkLen_.assign(static_cast<std::size_t>(nav_.linkCount()), 0.0f);
+        for (int li = 0; li < nav_.linkCount(); ++li) {
+            const engine::NavLink& k = nav_.links[static_cast<std::size_t>(li)];
+            const Vec2 a = nav_.nodes[static_cast<std::size_t>(k.from)], b = nav_.nodes[static_cast<std::size_t>(k.to)];
+            const Real lift = k.layer * kLayerClearance;
+            float* o = &L[static_cast<std::size_t>(li) * 6];
+            o[0] = static_cast<float>(a.x); o[1] = static_cast<float>(groundAt(a.x, a.y) + lift); o[2] = static_cast<float>(a.y);
+            o[3] = static_cast<float>(b.x); o[4] = static_cast<float>(groundAt(b.x, b.y) + lift); o[5] = static_cast<float>(b.y);
+            crowdLinkLen_[static_cast<std::size_t>(li)] = static_cast<float>((b - a).length());
+        }
+        ctx.renderer.setCrowdLinks(L);
+        gpuCrowd_ = true;
+        // THE CPU BAND STOPS HERE, so empty what it drew. It runs in the fixed step and this in the frame's update: a
+        // fixed step before the first update filled the stand-in groups with every far car round the spawn, and with
+        // the band off nothing cleared them -- a frozen first-frame snapshot of box cars on the streets and the
+        // freeway for the whole session, drawn by the ordinary instanced path, no collider (Glenn: "a black small
+        // cube on top of a gray bigger rectilinear block. I could pass through them").
+        for (Entity e : farCarGroups_)
+            if (InstanceGroup* g = world.get<InstanceGroup>(e)) g->transforms.clear();
+        if (InstanceGroup* g = world.get<InstanceGroup>(farPedGroup_)) g->transforms.clear();
+        LOG_INFO << "[citysim] GPU crowd on: " << kinds.size() << " kinds, " << nav_.linkCount() << " links";
+    }
+    if (!gpuCrowd_) return;
+    const std::vector<Agent>& agents = sim_.agents();
+    bool all = false;
+    sim_.takeCrowdChanges(crowdChanges_, all);
+    if (crowdSlot_.size() != agents.size()) { crowdSlot_.assign(agents.size(), -1); all = true; }
+    const std::size_t arenaBefore = crowdArena_.size() / 2;
+    crowdDirtySlots_.clear();
+    const int pedKind = static_cast<int>(farCarGroups_.size());
+    auto refresh = [&](int i) {
+        const Agent& a = agents[static_cast<std::size_t>(i)];
+        const bool car = a.mode == Agent::Mode::Driver;
+        const bool live = a.tier != Agent::Tier::K && a.moving && !a.released && !a.playerControlled && a.leg >= 0 &&
+                          a.leg < static_cast<int>(a.route.links.size()) && !(!car && sim_.riding(i));
+        int& slot = crowdSlot_[static_cast<std::size_t>(i)];
+        if (!live) {
+            if (slot >= 0) {
+                crowdGarbage_ += crowdRec_[static_cast<std::size_t>(slot)].routeLen;
+                crowdRec_[static_cast<std::size_t>(slot)] = engine::Renderer::CrowdAgent{};
+                crowdSpan_[static_cast<std::size_t>(slot)] = CrowdSpan{};
+                crowdOwner_[static_cast<std::size_t>(slot)] = -1;
+                crowdFree_.push_back(slot);
+                crowdDirtySlots_.push_back(static_cast<uint32_t>(slot));
+                --crowdLive_;
+                slot = -1;
+            }
+            return;
+        }
+        if (slot < 0) {
+            if (!crowdFree_.empty()) { slot = crowdFree_.back(); crowdFree_.pop_back(); }
+            else { slot = static_cast<int>(crowdRec_.size()); crowdRec_.emplace_back(); crowdOwner_.push_back(-1); crowdSpan_.emplace_back(); }
+            crowdOwner_[static_cast<std::size_t>(slot)] = i;
+            ++crowdLive_;
+        }
+        engine::Renderer::CrowdAgent r = crowdRec_[static_cast<std::size_t>(slot)];
+        CrowdSpan& sp = crowdSpan_[static_cast<std::size_t>(slot)];
+        const bool same = r.live && sp.size == a.route.links.size() && sp.first == a.route.links.front() &&
+                          sp.last == a.route.links.back() && a.leg >= sp.baseLeg;
+        if (!same) {   // a new route (or a new traveller): lay its span from the leg it is on
+            if (r.live) crowdGarbage_ += r.routeLen;
+            r.routeOff = static_cast<uint32_t>(crowdArena_.size() / 2);
+            float cum = 0;
+            for (std::size_t j = static_cast<std::size_t>(a.leg); j < a.route.links.size(); ++j) {
+                const int li = a.route.links[j];
+                uint32_t bits;
+                std::memcpy(&bits, &cum, sizeof bits);
+                crowdArena_.push_back(static_cast<uint32_t>(li));
+                crowdArena_.push_back(bits);
+                cum += crowdLinkLen_[static_cast<std::size_t>(li)];
+            }
+            r.routeLen = static_cast<uint32_t>(a.route.links.size() - static_cast<std::size_t>(a.leg));
+            sp = CrowdSpan{static_cast<uint32_t>(a.route.links.size()), a.route.links.front(), a.route.links.back(), a.leg};
+        }
+        // where the current leg starts within the span (its running distance)
+        float legStart = 0;
+        std::memcpy(&legStart, &crowdArena_[(r.routeOff + static_cast<uint32_t>(a.leg - sp.baseLeg)) * 2 + 1], sizeof legStart);
+        const engine::NavLink& L0 = nav_.links[static_cast<std::size_t>(a.route.links[static_cast<std::size_t>(a.leg)])];
+        const float xzLen = crowdLinkLen_[static_cast<std::size_t>(a.route.links[static_cast<std::size_t>(a.leg)])];
+        const Real along = L0.length > 1e-6 ? a.distOnLeg * xzLen / L0.length : 0;
+        r.dist0 = legStart + static_cast<float>(along);
+        r.t0 = static_cast<float>(a.vLastTick);
+        r.speed = car ? static_cast<float>(engine::classSpeed(L0.klass) * a.speedFactor)
+                      : static_cast<float>(a.speed > 0.3 ? a.speed : 1.3 * a.speedFactor);
+        const Vec2 A = nav_.nodes[static_cast<std::size_t>(L0.from)], B = nav_.nodes[static_cast<std::size_t>(L0.to)];
+        const Vec2 dir = xzLen > 1e-6 ? (B - A) * (1.0 / xzLen) : Vec2(1, 0);
+        r.side = static_cast<float>(dot(a.pos - (A + dir * along), Vec2(dir.y, -dir.x)));
+        r.kind = static_cast<uint32_t>(car ? std::clamp(drawSlotFor(i), 0, pedKind - 1) : pedKind);
+        r.live = 1;
+        crowdRec_[static_cast<std::size_t>(slot)] = r;
+        crowdDirtySlots_.push_back(static_cast<uint32_t>(slot));
+    };
+    if (all) for (int i = 0; i < static_cast<int>(agents.size()); ++i) refresh(i);
+    else for (int i : crowdChanges_) if (i >= 0 && i < static_cast<int>(agents.size())) refresh(i);
+    // the arena: compacted when its garbage outweighs what is live (every record's route re-laid, every record sent)
+    bool relaid = false;
+    if (crowdGarbage_ > 1000000 && crowdGarbage_ * 2 > crowdArena_.size() / 2) {
+        std::vector<uint32_t> fresh;
+        fresh.reserve(crowdArena_.size() / 2);
+        for (engine::Renderer::CrowdAgent& r : crowdRec_) {
+            if (!r.live) continue;   // (its span keeps its base leg: the entries move together)
+            const uint32_t off = static_cast<uint32_t>(fresh.size() / 2);
+            fresh.insert(fresh.end(), crowdArena_.begin() + r.routeOff * 2, crowdArena_.begin() + (r.routeOff + r.routeLen) * 2);
+            r.routeOff = off;
+        }
+        crowdArena_.swap(fresh);
+        crowdGarbage_ = 0;
+        relaid = true;
+    }
+    if (relaid || crowdArena_.size() / 2 > arenaBefore) ctx.renderer.setCrowdRoutes(crowdArena_, relaid ? 0 : arenaBefore);
+    if (relaid || all || !crowdDirtySlots_.empty()) ctx.renderer.setCrowdAgents(crowdRec_, crowdDirtySlots_, relaid || all);
+    ctx.renderer.setCrowdClock(static_cast<float>(sim_.seconds()));
+    crowdDrawnSeen_ = static_cast<int>(ctx.renderer.crowdDrawn());
+}
+
+void CityRenderSystem::dealOpenSigns(World& world, engine::Settings& settings, Vec3 cam) {
+    Real nearD = 1e30;
+    Vec3 nearAt, nearN;
+    std::vector<uint16_t> hired;
+    if (signedPlace_.size() != places_.size()) {   // once: which places have a sign (the rest need nobody counted)
+        signedPlace_.assign(places_.size(), 0);
+        world.each<engine::OpenSigns>([&](Entity, engine::OpenSigns& os) {
+            for (int ai : os.place) {
+                const PlaceId pid = ai >= 0 && ai < static_cast<int>(placeOfAuthored_.size()) ? placeOfAuthored_[static_cast<std::size_t>(ai)] : kNoPlace;
+                if (pid != kNoPlace && pid < static_cast<PlaceId>(signedPlace_.size())) signedPlace_[pid] = 1;
+            }
+        });
+    }
+    std::vector<int> staff;
+    sim_.staffOnShift(onShift_, places_.size(), &hired, &signedPlace_, signWatch_, &staff);
+    PlaceId nearPid = kNoPlace;
+    const Real clock = sim_.clockHours();
+    int signs = 0, lit = 0, closed = 0, unstaffed = 0, noHire = 0;
+    world.each<engine::OpenSigns, InstanceGroup>([&](Entity, engine::OpenSigns& os, InstanceGroup& g) {
+        bool changed = false;
+        for (std::size_t k = 0; k < os.at.size(); ++k) {
+            const int ai = os.place[k];
+            const PlaceId pid = ai >= 0 && ai < static_cast<int>(placeOfAuthored_.size()) ? placeOfAuthored_[static_cast<std::size_t>(ai)] : kNoPlace;
+            bool on = false;
+            if (pid != kNoPlace && pid < static_cast<PlaceId>(onShift_.size())) {
+                const bool open = places_[pid].openAt(clock), staffed = onShift_[pid] > 0;
+                on = open && staffed;
+                closed += !open;
+                unstaffed += open && !staffed;
+                noHire += open && !staffed && hired[pid] == 0;
+            }
+            ++signs;
+            lit += on;
+            const uint8_t v = on ? 1 : 0;
+            if (os.lit[k] != v) { os.lit[k] = v; changed = true; }
+            if (on) {
+                const Vec3 at(os.at[k].m[0][3], os.at[k].m[1][3], os.at[k].m[2][3]);
+                if ((at - cam).length() < nearD) { nearD = (at - cam).length(); nearAt = at; nearN = Vec3(os.at[k].m[0][2], 0, os.at[k].m[2][2]); nearPid = pid; }
+            }
+        }
+        if (!changed) return;
+        InstanceGroup* dark = world.get<InstanceGroup>(os.dark);
+        g.transforms.clear();
+        if (dark) dark->transforms.clear();
+        for (std::size_t k = 0; k < os.at.size(); ++k) {
+            if (os.lit[k]) g.transforms.push_back(os.at[k]);
+            else if (dark) dark->transforms.push_back(os.at[k]);
+        }
+    });
+    // the nearest lit sign's place and its staff (as of the last deal): where each one is and whether the sim has them
+    // at work -- the answer to "the sign is lit but nobody's in there"
+    std::string who;
+    if (signWatch_ != kNoPlace && signWatch_ < places_.size()) {
+        const Place& wp = places_[signWatch_];
+        int drawnFor = 0;   // stepIndoors' buildings that draw THIS place's people
+        for (const auto& kv : buildingPlace_) {
+            drawnFor += kv.second.whole == signWatch_;
+            for (PlaceId q : kv.second.unit) drawnFor += q == signWatch_;
+        }
+        char h[256];
+        std::snprintf(h, sizeof(h), " | place %u %s \"%s\" door %.1f %.1f, %d streamed buildings draw its people; staff:",
+                      static_cast<unsigned>(signWatch_), placeTypeName(wp.type), wp.name.c_str(), wp.door.x, wp.door.y, drawnFor);
+        who = h;
+        const Vec2 restAt = wp.entrance + (wp.site - wp.entrance) * 0.4;
+        for (int ai : staff) {
+            const Agent& a = sim_.agents()[static_cast<std::size_t>(ai)];
+            char b[160];
+            std::snprintf(b, sizeof(b), " %d[tier %d act %d%s%s at %.0f %.0f, %.1f m from rest]", ai, static_cast<int>(a.tier),
+                          static_cast<int>(a.activity), a.indoors ? " in" : "", a.moving ? " moving" : "", a.pos.x, a.pos.y, (a.pos - restAt).length());
+            if (who.size() < 1500) who += b;
+        }
+    }
+    signWatch_ = nearPid;
+    char buf[256];
+    std::snprintf(buf, sizeof(buf), "nearest lit %.1f %.1f %.1f facing %.2f %.2f (%.0f m); %d OPEN signs: %d lit, %d closed for the night, %d open but nobody on shift (%d with nobody hired) (%.2f h)",
+                  nearAt.x, nearAt.y, nearAt.z, nearN.x, nearN.z, nearD < 1e29 ? nearD : -1.0, signs, lit, closed, unstaffed, noHire, clock);
+    settings.setString("opensigns.telemetry", buf + who);
+}
+
 void CityRenderSystem::update(engine::FrameContext& ctx) {
+    feedGpuCrowd(ctx);
     // Stage the sun for the bake's car lamps (see solarElevation_).
     solarElevation_ = ctx.view.lighting.solarElevation;
     solarStaged_ = true;
     // The sim's own hour, for `daynight?` on the control channel: with a
     // staged cycle it must read the same as the sky's (one clock).
     ctx.settings.setDouble("citysim.hour", built_ ? sim_.clockHours() : -1.0);
+    if (built_ && !busSignsTried_ && busVariant_ >= 0 && sim_.buses().routeCount() > 0) makeBusSigns(ctx);
+    // THE FIRE ENGINES' LADDERS (engine/ladder.h; Glenn, 2026-10-13: "use it on the fire engine"): the ladder up the
+    // back of every parked fire engine near the player, for the LadderSystem to offer -- from the road behind it to
+    // its top, where you step off between the racked ladder's rails.
+    if (built_) {
+        Vec3 me(0, 0, 0);
+        bool havePlayer = false;
+        ctx.world.each<engine::Transform, engine::ControlledBy>([&](Entity, engine::Transform& t, engine::ControlledBy&) {
+            if (!havePlayer) { me = t.position; havePlayer = true; }
+        });
+        ctx.world.each<engine::Ladders>([&](Entity, engine::Ladders& lad) {
+            lad.moving.clear();
+            if (!havePlayer) return;
+            const auto& vs = sim_.vehicles();
+            for (const SimVehicle& sv : vs) {
+                if (sv.type != VehicleType::FireEngine || sv.driver >= 0) continue;
+                if ((sv.pos - Vec2(me.x, me.z)).length() > 40.0) continue;
+                const Real y = sv.parkedY > -1e29 ? sv.parkedY : groundAt(sv.pos.x, sv.pos.y);
+                const Vec2 back = sv.pos - sv.heading * (sv.length * 0.5);
+                engine::LadderSpec l;
+                l.out = sv.heading * -1.0;
+                l.foot = Vec3(back.x + l.out.x * 0.08, y, back.y + l.out.y * 0.08);
+                l.width = 0.44;
+                l.landY = y + sv.height;
+                l.topY = l.landY + 0.4;
+                const Vec2 on = back + sv.heading * 1.6;
+                l.exit = Vec3(on.x, l.landY, on.y);
+                lad.moving.push_back(l);
+            }
+        });
+    }
     // Per-frame so the key edge is never missed by the fixed-step tick.
     if (ctx.actions.pressed("agent_widgets")) debugWidgets_ = !debugWidgets_;
     // Semicolon flips the city-plan layer (blocks + lots) — and switches the
@@ -2659,6 +3676,372 @@ void CityRenderSystem::update(engine::FrameContext& ctx) {
     // deck height at the projected point — the numbers that separate "the
     // terrain is wrong" from "the road is wrong" from "the pad is wrong".
     {
+        // `parking?`: the kerbside bays and the garages' stalls, how many are taken, and the nearest taken garage
+        // stall to the camera (where to go and look)
+        // (the counts below walk every agent and vehicle on the island: kept only while a probe is asking -- see
+        // telemetry.askedAt in the control channel. The first question after a quiet spell answers from the last count.)
+        const double askedAt = ctx.settings.getDouble("telemetry.askedAt", -1e30);
+        const bool asked = std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count() - askedAt < 60.0;
+        if (++parkingTick_ % 60 == 0 && asked) {
+            int kerb = 0, kerbTaken = 0, stalls = 0, stallsTaken = 0;
+            Real bestD = 1e30;
+            Vec2 best;
+            Real bestY = 0;
+            const Vec2 cam(ctx.view.camera.position.x, ctx.view.camera.position.z);
+            for (const CitySim::ParkingBay& b : sim_.parkingBays()) {
+                const bool taken = b.occupant >= 0;
+                if (b.garage < 0) { ++kerb; kerbTaken += taken; continue; }
+                ++stalls;
+                stallsTaken += taken;
+                if (taken && (b.pos - cam).length() < bestD) { bestD = (b.pos - cam).length(); best = b.pos; bestY = b.y; }
+            }
+            char buf[256];
+            std::snprintf(buf, sizeof(buf), "kerb %d/%d taken, garage stalls %d/%d taken; nearest taken stall %.1f %.1f %.1f (%.0f m)",
+                          kerbTaken, kerb, stallsTaken, stalls, best.x, bestY, best.y, bestD < 1e29 ? bestD : -1.0);
+            ctx.settings.setString("parking.telemetry", buf);
+            // `traffic?` (the city's next ten: "the streets look empty"): drivers on the road island-wide and within
+            // 300 m of the camera, by tier, and how many of those near are parked, walking, cabs or buses
+            {
+                int drvMoving[3] = {0, 0, 0}, drvRest[3] = {0, 0, 0};   // car owners by tier K/V/D: under way, at rest
+                int drivingAll = 0, drivingNear = 0, nearCars = 0, nearCabs = 0, nearBuses = 0, nearPeds = 0, nearIndoors = 0, nearK = 0;
+                const auto& ag = sim_.agents();
+                for (std::size_t i = 0; i < ag.size(); ++i) {
+                    const Agent& a = ag[i];
+                    const bool driving = a.mode == Agent::Mode::Driver && a.vehicle >= 0 && a.moving;
+                    drivingAll += driving;
+                    if (a.mode == Agent::Mode::Driver || a.archetype == Agent::Mode::Driver) {
+                        const int t = a.tier == Agent::Tier::K ? 0 : a.tier == Agent::Tier::V ? 1 : 2;
+                        ++(a.moving ? drvMoving[t] : drvRest[t]);
+                    }
+                    if ((a.pos - cam).lengthSquared() > 300.0 * 300.0) continue;
+                    if (a.tier == Agent::Tier::K) ++nearK;
+                    if (driving) { ++drivingNear; if (sim_.isBus(static_cast<int>(i))) ++nearBuses; else if (sim_.isTaxi(static_cast<int>(i))) ++nearCabs; else ++nearCars; }
+                    else if (a.indoors) ++nearIndoors;
+                    else if (a.mode == Agent::Mode::Pedestrian) ++nearPeds;
+                }
+                static const bool dbg = std::getenv("RT_TRAFFIC_DEBUG") != nullptr;
+                if (dbg && parkingTick_ % 600 == 0) {
+                    int where[8] = {0}, dh[24] = {0}, dw[24] = {0}, roles[16] = {0};
+                    std::vector<Real> cs;
+                    for (const Agent& a : ag) {
+                        if (a.archetype != Agent::Mode::Driver || sim_.isBus(static_cast<int>(&a - ag.data())) || sim_.isTaxi(static_cast<int>(&a - ag.data()))) continue;
+                        ++where[static_cast<int>(sim_.scheduleSnapshot(a, sim_.clockHours()).where)];
+                        ++dh[static_cast<int>(std::fmod(a.departHome + 24.0, 24.0)) % 24];
+                        ++dw[static_cast<int>(sim_.departWorkHour(a)) % 24];
+                        ++roles[std::min(15, static_cast<int>(a.role))];
+                        cs.push_back(a.commuteSeconds);
+                    }
+                    std::sort(cs.begin(), cs.end());
+                    std::string l = "[traffic-debug] clock " + std::to_string(sim_.clockHours()) + " median(all) " + std::to_string(sim_.commuteSecondsMedian()) + " where:";
+                    for (int k = 0; k < 7; ++k) l += " " + std::to_string(where[k]);
+                    l += " | commuteSeconds p10/50/90 " + (cs.empty() ? std::string("-") : std::to_string(cs[cs.size() / 10]) + "/" + std::to_string(cs[cs.size() / 2]) + "/" + std::to_string(cs[cs.size() * 9 / 10]));
+                    l += " | departWorkHour:"; for (int k = 0; k < 24; ++k) l += " " + std::to_string(dw[k]);
+                    l += " | departHome:"; for (int k = 0; k < 24; ++k) l += " " + std::to_string(dh[k]);
+                    l += " | roles:"; for (int k = 0; k < 16; ++k) l += " " + std::to_string(roles[k]);
+                    std::fprintf(stderr, "%s\n", l.c_str());
+                }
+                // WHERE THE DRAWN CARS SIT ACROSS THE ROAD (Glenn: "cars driving on the sidewalk... down the middle of
+                // the road and not within a lane"): each near K car's drawn pose against its link -- under way, how far
+                // from the lane centre refreshPose aims at (pulling out counted apart); at rest on the street, whether
+                // it stands past the kerb of the nearest carriageway
+                int laneN = 0, laneOff = 0, laneOut = 0, laneInBays = 0, pulling = 0, restN = 0, restKerb = 0;
+                Real laneErrSum = 0;
+                std::string kerbWho;
+                for (int nearIdx : sim_.nearAgents()) {
+                    const Agent& a = ag[static_cast<std::size_t>(nearIdx)];
+                    if (a.mode != Agent::Mode::Driver || a.far() || a.released) continue;
+                    if ((a.pos - cam).lengthSquared() > 300.0 * 300.0) continue;
+                    const Vec3 w3 = agentPose(a).transformPoint(Vec3(0, 0, 0));
+                    const Vec2 w(w3.x, w3.z);
+                    if (a.moving && a.leg >= 0 && a.leg < static_cast<int>(a.route.links.size())) {
+                        if (a.pullLen > 0 && a.pullS < a.pullLen) { ++pulling; continue; }
+                        const int li = a.route.links[static_cast<std::size_t>(a.leg)];
+                        const engine::NavLink& L = nav_.links[static_cast<std::size_t>(li)];
+                        const Vec2 A = nav_.nodes[static_cast<std::size_t>(L.from)], d = nav_.direction(li);
+                        const Real side = dot(w - A, Vec2(d.y, -d.x));
+                        const int lanes = std::max(1, L.lanes);
+                        const Real sp = sim_.laneSpacingFor(li);
+                        Real want = (0.5 + std::clamp(Real(a.laneF), Real(0), Real(lanes - 1))) * sp;
+                        if (L.oneWay) want -= lanes * 0.5 * sp;
+                        ++laneN;
+                        laneErrSum += std::fabs(side - want);
+                        laneOff += std::fabs(side - want) > 1.0;
+                        laneOut += std::fabs(side) > L.width * 0.5;
+                        // over the bay line: the body reaches into the kerbside parking strip the street was built with
+                        const Real pw = L.parkWidth > 0 ? L.parkWidth : 0;
+                        laneInBays += pw > 0 && std::fabs(side) + 0.9 > L.width * 0.5 - pw + 0.2;
+                    } else if (!a.moving) {
+                        if (a.vehicle >= 0 && a.vehicle < static_cast<int>(sim_.vehicles().size()) &&
+                            sim_.vehicles()[static_cast<std::size_t>(a.vehicle)].offStreet) continue;
+                        const int li = nav_.nearestLink(w);
+                        if (li < 0) continue;
+                        const engine::NavLink& L = nav_.links[static_cast<std::size_t>(li)];
+                        const Vec2 A = nav_.nodes[static_cast<std::size_t>(L.from)], B = nav_.nodes[static_cast<std::size_t>(L.to)];
+                        const Real l2 = (B - A).lengthSquared();
+                        const Real t = l2 > 1e-9 ? std::clamp(dot(w - A, B - A) / l2, Real(0), Real(1)) : Real(0);
+                        ++restN;
+                        const Real past = (w - (A + (B - A) * t)).length() - L.width * 0.5;
+                        if (past > 0.3) {
+                            ++restKerb;
+                            if (kerbWho.size() < 700) {   // who: drawn where, its car where, at home or work
+                                const Vec2 vp = a.vehicle >= 0 && a.vehicle < static_cast<int>(sim_.vehicles().size())
+                                                    ? sim_.vehicles()[static_cast<std::size_t>(a.vehicle)].pos : Vec2(0, 0);
+                                char b[240];
+                                const int hn = a.home;
+                                const int outs = hn >= 0 && hn < nav_.nodeCount() ? static_cast<int>(nav_.outLinks[static_cast<std::size_t>(hn)].size()) : -1;
+                                const bool offS = a.vehicle >= 0 && a.vehicle < static_cast<int>(sim_.vehicles().size()) &&
+                                                  sim_.vehicles()[static_cast<std::size_t>(a.vehicle)].offStreet;
+                                std::snprintf(b, sizeof(b), " [%d %.1f,%.1f +%.1fm car %d %.1f,%.1f%s act %d goal %d rest %d bay %d h%d(out %d) w%d mode %d legs %zu trip %d]",
+                                              nearIdx, w.x, w.y, past, a.vehicle, vp.x, vp.y, offS ? " OFF" : "", static_cast<int>(a.activity), a.goal,
+                                              a.restNode, a.parkedBay, a.home, outs, a.work, static_cast<int>(a.mode), a.route.links.size(), a.tripGoal);
+                                kerbWho += b;
+                            }
+                        }
+                    }
+                }
+                // PARKED CARS NOBODY IS IN (Glenn, 2026-10-10: "there are still a lot of cars on the sidewalk"): the cars
+                // the parked pass draws -- no driver, not off-street -- within 300 m, past the kerb of the nearest street
+                int parkN = 0, parkKerb = 0, parkInBay = 0;
+                std::string parkWho;
+                {
+                    const auto& vs = sim_.vehicles();
+                    std::vector<char> bayCar(vs.size(), 0);
+                    for (const CitySim::ParkingBay& b : sim_.parkingBays())
+                        if (b.occupant >= 0 && b.occupant < static_cast<int>(ag.size())) {
+                            const int c = ag[static_cast<std::size_t>(b.occupant)].vehicle;
+                            if (c >= 0 && c < static_cast<int>(vs.size())) bayCar[static_cast<std::size_t>(c)] = 1;
+                        }
+                    for (std::size_t vi = 0; vi < vs.size(); ++vi) {
+                        const SimVehicle& sv = vs[vi];
+                        if (sv.driver >= 0 || sv.offStreet) continue;
+                        if ((sv.pos - cam).lengthSquared() > 300.0 * 300.0) continue;
+                        ++parkN;
+                        parkInBay += bayCar[vi];
+                        const int li = nav_.nearestLink(sv.pos);
+                        if (li < 0) continue;
+                        const engine::NavLink& L = nav_.links[static_cast<std::size_t>(li)];
+                        const Vec2 A = nav_.nodes[static_cast<std::size_t>(L.from)], B = nav_.nodes[static_cast<std::size_t>(L.to)];
+                        const Real l2 = (B - A).lengthSquared();
+                        const Real t = l2 > 1e-9 ? std::clamp(dot(sv.pos - A, B - A) / l2, Real(0), Real(1)) : Real(0);
+                        const Real past = (sv.pos - (A + (B - A) * t)).length() - L.width * 0.5;
+                        if (past > 0.3 && !bayCar[vi]) {
+                            ++parkKerb;
+                            if (parkWho.size() < 900) {
+                                char b[200];
+                                int owner = -1;
+                                for (std::size_t i = 0; i < ag.size() && owner < 0; ++i) if (ag[i].vehicle == static_cast<int>(vi)) owner = static_cast<int>(i);
+                                const Agent* o = owner >= 0 ? &ag[static_cast<std::size_t>(owner)] : nullptr;
+                                std::snprintf(b, sizeof(b), " [car %zu %.1f,%.1f +%.1fm link %d%s owner %d mode %d act %d moving %d far %d]", vi, sv.pos.x, sv.pos.y, past, li,
+                                              L.footpath ? " foot" : "", owner, o ? static_cast<int>(o->mode) : -1, o ? static_cast<int>(o->activity) : -1,
+                                              o ? int(o->moving) : -1, o ? int(o->far()) : -1);
+                                parkWho += b;
+                            }
+                        }
+                    }
+                }
+                // PILES (Glenn: "all the agents and vehicles are starting in one place... on top of one another like
+                // it's some spawn point"): drawn near K agents by 1.5 m cell -- how many stand in a cell with 3+ others,
+                // the biggest pile, and who is in it
+                std::unordered_map<int64_t, std::vector<int>> pile;
+                for (int nearIdx : sim_.nearAgents()) {
+                    const Agent& a = ag[static_cast<std::size_t>(nearIdx)];
+                    if (a.far() || a.released) continue;
+                    if (a.mode == Agent::Mode::Pedestrian && !sim_.pedVisible(nearIdx)) continue;
+                    if (a.mode == Agent::Mode::Driver && !a.moving && a.vehicle >= 0 && a.vehicle < static_cast<int>(sim_.vehicles().size()) &&
+                        sim_.vehicles()[static_cast<std::size_t>(a.vehicle)].offStreet) continue;
+                    if ((a.pos - cam).lengthSquared() > 300.0 * 300.0) continue;
+                    const int64_t cx = static_cast<int64_t>(std::floor(a.pos.x / 1.5)), cz = static_cast<int64_t>(std::floor(a.pos.y / 1.5));
+                    pile[(cx << 32) ^ (cz & 0xffffffff)].push_back(nearIdx);
+                }
+                int piled = 0;
+                const std::vector<int>* worst = nullptr;
+                for (const auto& [k, v] : pile) {
+                    if (v.size() >= 4) piled += static_cast<int>(v.size());
+                    if (!worst || v.size() > worst->size()) worst = &v;
+                }
+                std::string pileWho;
+                if (worst && worst->size() >= 4) {
+                    int cars = 0, peds = 0, mov = 0;
+                    std::map<int, int> homes, acts;
+                    for (int i : *worst) {
+                        const Agent& a = ag[static_cast<std::size_t>(i)];
+                        ++(a.mode == Agent::Mode::Driver ? cars : peds);
+                        mov += a.moving;
+                        ++homes[a.home];
+                        ++acts[static_cast<int>(a.activity)];
+                    }
+                    const Agent& a0 = ag[static_cast<std::size_t>(worst->front())];
+                    char pb[256];
+                    std::snprintf(pb, sizeof(pb), "; piled 4+ to a 1.5 m spot: %d agents, the worst %zu at %.1f,%.1f (%d cars %d on foot, %d moving, %zu homes, acts",
+                                  piled, worst->size(), a0.pos.x, a0.pos.y, cars, peds, mov, homes.size());
+                    pileWho = pb;
+                    for (const auto& [k, n] : acts) pileWho += " " + std::to_string(k) + ":" + std::to_string(n);
+                    pileWho += ")";
+                    if (std::getenv("RT_TRAFFIC_DEBUG"))
+                        for (std::size_t q = 0; q < worst->size() && q < 6; ++q) {
+                            const int i = (*worst)[q];
+                            const Agent& a = ag[static_cast<std::size_t>(i)];
+                            const int li = a.leg >= 0 && a.leg < static_cast<int>(a.route.links.size()) ? a.route.links[static_cast<std::size_t>(a.leg)] : -1;
+                            char qb[260];
+                            const engine::NavLink* Lq = li >= 0 ? &nav_.links[static_cast<std::size_t>(li)] : nullptr;
+                            std::snprintf(qb, sizeof(qb), " {%d st %d v %.2f leg %d/%zu link %d len %.1f w %.1f d %.1f hold %.1f junc %d sig %d next %d why %d gap %.2f/%.2f}",
+                                          i, static_cast<int>(a.state), a.speed, a.leg, a.route.links.size(), li, Lq ? Lq->length : -1.0, Lq ? Lq->width : -1.0,
+                                          a.distOnLeg, a.holdTimer, Lq ? static_cast<int>(nav_.isJunction(Lq->to)) : -1,
+                                          li >= 0 ? static_cast<int>(sim_.signals().hasSignal(li)) : -1,
+                                          a.leg + 1 < static_cast<int>(a.route.links.size()) ? a.route.links[static_cast<std::size_t>(a.leg + 1)] : -1,
+                                          sim_.holdWhyOf(i), std::min(sim_.gapOf(i), Real(99)), sim_.minGapOf(i));
+                            pileWho += qb;
+                        }
+                } else {
+                    pileWho = "; piled 4+ to a 1.5 m spot: " + std::to_string(piled);
+                }
+                char tb[768];
+                std::snprintf(tb, sizeof(tb), "driving %d island-wide; within 300 m: %d driving (%d cars, %d cabs, %d buses), %d on foot, %d indoors, %d in tier K; "
+                              "car owners under way K/V/D %d/%d/%d, at rest %d/%d/%d; sleeper waypoints %ld; "
+                              "near K cars under way %d (off their lane >1 m %d, over the bay line %d, past the kerb %d, mean lane error %.2f m), pulling out %d; "
+                              "at rest on the street %d (past the kerb %d)",
+                              drivingAll, drivingNear, nearCars, nearCabs, nearBuses, nearPeds, nearIndoors, nearK,
+                              drvMoving[0], drvMoving[1], drvMoving[2], drvRest[0], drvRest[1], drvRest[2], sim_.dormantWaypoints(),
+                              laneN, laneOff, laneInBays, laneOut, laneN ? laneErrSum / laneN : 0.0, pulling, restN, restKerb);
+                char pb[160];
+                std::snprintf(pb, sizeof(pb), "; parked with nobody in: %d drawn near (%d in a bay), %d past the kerb", parkN, parkInBay, parkKerb);
+                ctx.settings.setString("traffic.telemetry", std::string(tb) + pileWho + pb + (std::getenv("RT_TRAFFIC_DEBUG") ? kerbWho + parkWho : std::string()));
+            }
+        }
+        // THE OPEN SIGNS (storefronts stage 3): once a second, every window's sign lit while its place is open and
+        // someone who works there is at work; `opensigns?` says how many
+        if (built_ && parkingTick_ % 30 == 0) dealOpenSigns(ctx.world, ctx.settings, ctx.view.camera.position);
+        // THE BUS DEPOTS: `depots?` -- in service or not, buses on the road / heading in / parked in a depot bay, and the
+        // depot nearest the camera
+        if (built_ && parkingTick_ % 30 == 0 && asked && sim_.depotCount() > 0) {
+            int driving = 0, toDepot = 0, offDuty = 0, inBay = 0, buses = 0;
+            const auto& ag = sim_.agents();
+            for (std::size_t i = 0; i < ag.size(); ++i) {
+                if (!sim_.isBus(static_cast<int>(i))) continue;
+                ++buses;
+                if (ag[i].activity == Agent::Activity::Returning) ++toDepot;
+                else if (ag[i].activity == Agent::Activity::AtHome) ++offDuty;
+                else ++driving;
+            }
+            std::string stalled;   // buses heading in but standing still: who, where, which tier
+            for (std::size_t i = 0; i < ag.size(); ++i)
+                if (sim_.isBus(static_cast<int>(i)) && ag[i].activity == Agent::Activity::Returning && ag[i].speed < 0.2 && stalled.size() < 600) {
+                    char b2[96];
+                    std::snprintf(b2, sizeof(b2), " %zu@%.0f,%.0f%s%s", i, ag[i].pos.x, ag[i].pos.y, ag[i].far() ? "(far)" : "", ag[i].moving ? "" : "(rest)");
+                    stalled += b2;
+                }
+            {
+                char b3[160];
+                std::snprintf(b3, sizeof(b3), " [signs: %zu groups, %d drawn, last at %.1f %.1f %.1f]", busSignGroups_.size(), busSignsDrawn_,
+                              busSignAt_.x, busSignAt_.y, busSignAt_.z);
+                stalled += b3;
+            }
+            // BUS BODIES OUTSIDE A DEPOT (Glenn, 2026-10-10: "We shouldn't see buses parallel parked anymore"): a parked
+            // car drawn as the bus, or a driver who is not on the bus roster wearing it
+            {
+                int kerbBus = 0, wrongDriver = 0;
+                const auto& vs = sim_.vehicles();
+                std::vector<char> inDepot(vs.size(), 0);
+                for (const CitySim::ParkingBay& b : sim_.parkingBays())
+                    if (b.busOnly && b.occupant >= 0 && b.occupant < static_cast<int>(ag.size())) {
+                        const int c = ag[static_cast<std::size_t>(b.occupant)].vehicle;
+                        if (c >= 0 && c < static_cast<int>(vs.size())) inDepot[static_cast<std::size_t>(c)] = 1;
+                    }
+                for (std::size_t vi = 0; vi < vs.size(); ++vi) {
+                    if (vs[vi].driver >= 0 || vs[vi].offStreet || inDepot[vi]) continue;
+                    int v = sim_.ambientSlotFor(static_cast<int>(vi));
+                    if (drawVariantCount() > 0 && v >= drawVariantCount()) v %= drawVariantCount();
+                    if (v == busVariant_ || vs[vi].type == VehicleType::Bus) ++kerbBus;
+                }
+                for (std::size_t i = 0; i < ag.size(); ++i)
+                    if (ag[i].mode == Agent::Mode::Driver && !sim_.isBus(static_cast<int>(i)) &&
+                        drawSlotFor(static_cast<int>(i)) == busVariant_)
+                        ++wrongDriver;
+                // a bus being driven whose vehicle still says off-street: no body whenever it stands (the sign alone)
+                int putAway = 0;
+                for (std::size_t i = 0; i < ag.size(); ++i)
+                    if (sim_.isBus(static_cast<int>(i)) && ag[i].mode == Agent::Mode::Driver && ag[i].vehicle >= 0 &&
+                        ag[i].vehicle < static_cast<int>(vs.size()) && vs[static_cast<std::size_t>(ag[i].vehicle)].offStreet)
+                        ++putAway;
+                char b4[160];
+                std::snprintf(b4, sizeof(b4), " [bus bodies outside a depot: %d parked, %d non-bus drivers; driven but put away: %d]",
+                              kerbBus, wrongDriver, putAway);
+                stalled += b4;
+            }
+            ctx.settings.setString("depots.stalled", stalled);
+            const Vec3 cam = ctx.view.camera.position;
+            Real bestD = 1e30;
+            Vec2 best(0, 0);
+            int bays = 0;
+            for (const CitySim::ParkingBay& b : sim_.parkingBays()) {
+                if (!b.busOnly) continue;
+                ++bays;
+                if (b.occupant >= 0 && b.occupant < static_cast<int>(ag.size()) && !ag[static_cast<std::size_t>(b.occupant)].moving) ++inBay;
+                const Real d = (b.pos - Vec2(cam.x, cam.z)).length();
+                if (d < bestD) { bestD = d; best = b.pos; }
+            }
+            // the nearest bus on the road: where it is, which way it faces, what its sign says
+            int nb = -1;
+            Real nbD = 1e30;
+            for (std::size_t i = 0; i < ag.size(); ++i) {
+                if (!sim_.isBus(static_cast<int>(i)) || ag[i].mode != Agent::Mode::Driver) continue;
+                const Real d = (ag[i].pos - Vec2(cam.x, cam.z)).length();
+                if (d < nbD) { nbD = d; nb = static_cast<int>(i); }
+            }
+            std::string sign = "-";
+            if (nb >= 0 && !busSignGroups_.empty()) {
+                const int row = busSignRowFor(nb);
+                sign = row == busSignOff_ ? "NOT IN SERVICE" : "line " + std::to_string(sim_.buses().lineOf(sim_.busRouteOf(nb)) + 1);
+            }
+            char buf[400];
+            std::snprintf(buf, sizeof(buf), "%s; %d buses: %d on route, %d heading in, %d off duty, %d parked in %d depot bays; nearest depot bay %.0f %.0f (%.0f m); nearest bus %d at %.1f %.1f %.1f heading %.2f %.2f speed %.1f sign %s",
+                          sim_.busesInService() ? "in service" : "out of service", buses, driving, toDepot, offDuty, inBay, bays,
+                          best.x, best.y, bestD, nb, nb >= 0 ? ag[static_cast<std::size_t>(nb)].pos.x : 0.0,
+                          nb >= 0 ? groundAt(ag[static_cast<std::size_t>(nb)].pos.x, ag[static_cast<std::size_t>(nb)].pos.y) : 0.0,
+                          nb >= 0 ? ag[static_cast<std::size_t>(nb)].pos.y : 0.0,
+                          nb >= 0 ? ag[static_cast<std::size_t>(nb)].heading.x : 0.0, nb >= 0 ? ag[static_cast<std::size_t>(nb)].heading.y : 0.0,
+                          nb >= 0 ? ag[static_cast<std::size_t>(nb)].speed : 0.0, sign.c_str());
+            ctx.settings.setString("depots.telemetry", buf);
+        }
+        // `pin <id>` / `unpin <id>` (FOLLOW an agent: in the full sim wherever it goes)
+        // `findplace <name>`: the places whose name contains it -- where, what, open now, and who is in at its door
+        {
+            const std::string fq = ctx.settings.getString("findplace.request", "");
+            if (!fq.empty()) {
+                ctx.settings.setString("findplace.request", "");
+                std::string res;
+                const Real h = sim_.clockHours();
+                for (const Place& p : places_.places()) {
+                    if (p.name.find(fq) == std::string::npos || res.size() > 1200) continue;
+                    const Vec2 rest = p.entrance + (p.site - p.entrance) * 0.4;
+                    int in = 0, staff = 0;
+                    for (int ni : sim_.nearAgents()) {
+                        const Agent& a = sim_.agents()[static_cast<std::size_t>(ni)];
+                        if (!a.indoors || a.moving || (a.pos - rest).lengthSquared() >= 0.25) continue;
+                        ++in;
+                        staff += a.workPlace == p.id && a.activity == Agent::Activity::AtWork;
+                    }
+                    char b[256];
+                    std::snprintf(b, sizeof(b), "%s%u %s \"%s\" site %.1f %.1f door %.1f %.1f %s (%.1f-%.1f h), %d in (%d staff; near only)",
+                                  res.empty() ? "" : "; ", static_cast<unsigned>(p.id), placeTypeName(p.type), p.name.c_str(), p.site.x, p.site.y,
+                                  p.door.x, p.door.y, p.openAt(h) ? "open" : "closed", p.openHour, p.closeHour, in, staff);
+                    res += b;
+                }
+                ctx.settings.setString("findplace.result", res.empty() ? "no place named like that" : res);
+            }
+        }
+        {
+            const std::string pr = ctx.settings.getString("pin.request", "");
+            if (!pr.empty()) {
+                ctx.settings.setString("pin.request", "");
+                int id = -1, on = 1;
+                if (std::sscanf(pr.c_str(), "%d %d", &id, &on) >= 1 && id >= 0 && id < static_cast<int>(sim_.agents().size())) {
+                    sim_.pinAgent(id, on != 0);
+                    ctx.settings.setString("pin.status", std::to_string(sim_.pinnedCount()) + " followed; last " + std::to_string(id) +
+                                                             (on ? " pinned" : " unpinned"));
+                }
+            }
+        }
         const std::string q = ctx.settings.getString("ground.query", "");
         if (!q.empty()) {
             ctx.settings.setString("ground.query", "");
@@ -2831,6 +4214,8 @@ ImU32 placeColor(PlaceType t) {
         case PlaceType::Civic:  return IM_COL32(190, 130, 240, 255);
         case PlaceType::Cafe:        return IM_COL32(200, 140,  90, 255);
         case PlaceType::Restaurant:  return IM_COL32(230,  90,  80, 255);
+        case PlaceType::Bar:         return IM_COL32(170,  80, 200, 255);
+        case PlaceType::Club:        return IM_COL32(240,  60, 200, 255);
         case PlaceType::Supermarket: return IM_COL32(250, 220,  90, 255);
         default:                return IM_COL32(220, 220, 220, 255);
     }
@@ -2841,6 +4226,7 @@ const char* agentRoleName(Agent::Role r) {
         case Agent::Role::Commuter:   return "Commuter";
         case Agent::Role::Shopkeeper: return "Shopkeeper";
         case Agent::Role::Stroller:   return "Stroller";
+        case Agent::Role::Student:    return "Student";
         default:                      return "?";
     }
 }

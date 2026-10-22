@@ -36,6 +36,9 @@ private:
     // what render() draws
     bool show_ = false, marker_ = false;
     Vec3 anchor_{0, 0, 0};
+    bool carried_ = false;     // the focus rides the player's carrier: anchor_ from local_ at draw time
+    Vec3 local_{0, 0, 0};
+    Entity player_;
     std::string prompt_, name_;
     int others_ = 0;
     bool pad_ = false;   // the controller is the device in use: its buttons in the prompt

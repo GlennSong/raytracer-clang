@@ -1,0 +1,1994 @@
+{
+  "version": 1,
+  "name": "tree_lab",
+  "watch_scripts": true,
+  "_note": "TREE LAB (Glenn, 2026-10-17): recipe trees from assets/scripts/tree_recipes.lua -- a row of six seeds per species (z), and a gnarl row (z = -14): one oak from a plain tube (left) to the full gnarl (right). Edit the recipes and the level reloads. The ground is a flat terrain so the meadow grass and the flower layer (the island's) grow round the trees.",
+  "environment": {
+    "skyColor": [
+      0.55,
+      0.68,
+      0.86
+    ]
+  },
+  "lighting": {
+    "sun": {
+      "direction": [
+        0.45,
+        0.62,
+        -0.4
+      ],
+      "color": [
+        1.0,
+        0.96,
+        0.88
+      ],
+      "intensity": 7.0,
+      "castsShadow": true
+    },
+    "exposure": 0.6,
+    "ambientMultiplier": 0.7
+  },
+  "player": {
+    "position": [
+      0,
+      1.8,
+      -34
+    ],
+    "collider": {
+      "shape": "capsule",
+      "radius": 0.3,
+      "halfHeight": 0.6
+    }
+  },
+  "entities": [
+    {
+      "id": 2,
+      "name": "oak_1",
+      "shape": "tree",
+      "position": [
+        -40.0,
+        0,
+        0.0
+      ],
+      "tree": {
+        "recipe": "oak",
+        "seed": 1
+      }
+    },
+    {
+      "id": 3,
+      "name": "oak_2",
+      "shape": "tree",
+      "position": [
+        -24.0,
+        0,
+        0.0
+      ],
+      "tree": {
+        "recipe": "oak",
+        "seed": 2
+      }
+    },
+    {
+      "id": 4,
+      "name": "oak_3",
+      "shape": "tree",
+      "position": [
+        -8.0,
+        0,
+        0.0
+      ],
+      "tree": {
+        "recipe": "oak",
+        "seed": 3
+      }
+    },
+    {
+      "id": 5,
+      "name": "oak_4",
+      "shape": "tree",
+      "position": [
+        8.0,
+        0,
+        0.0
+      ],
+      "tree": {
+        "recipe": "oak",
+        "seed": 4
+      }
+    },
+    {
+      "id": 6,
+      "name": "oak_5",
+      "shape": "tree",
+      "position": [
+        24.0,
+        0,
+        0.0
+      ],
+      "tree": {
+        "recipe": "oak",
+        "seed": 5
+      }
+    },
+    {
+      "id": 7,
+      "name": "oak_6",
+      "shape": "tree",
+      "position": [
+        40.0,
+        0,
+        0.0
+      ],
+      "tree": {
+        "recipe": "oak",
+        "seed": 6
+      }
+    },
+    {
+      "id": 8,
+      "name": "birch_1",
+      "shape": "tree",
+      "position": [
+        -40.0,
+        0,
+        18.0
+      ],
+      "tree": {
+        "recipe": "birch",
+        "seed": 1
+      }
+    },
+    {
+      "id": 9,
+      "name": "birch_2",
+      "shape": "tree",
+      "position": [
+        -24.0,
+        0,
+        18.0
+      ],
+      "tree": {
+        "recipe": "birch",
+        "seed": 2
+      }
+    },
+    {
+      "id": 10,
+      "name": "birch_3",
+      "shape": "tree",
+      "position": [
+        -8.0,
+        0,
+        18.0
+      ],
+      "tree": {
+        "recipe": "birch",
+        "seed": 3
+      }
+    },
+    {
+      "id": 11,
+      "name": "birch_4",
+      "shape": "tree",
+      "position": [
+        8.0,
+        0,
+        18.0
+      ],
+      "tree": {
+        "recipe": "birch",
+        "seed": 4
+      }
+    },
+    {
+      "id": 12,
+      "name": "birch_5",
+      "shape": "tree",
+      "position": [
+        24.0,
+        0,
+        18.0
+      ],
+      "tree": {
+        "recipe": "birch",
+        "seed": 5
+      }
+    },
+    {
+      "id": 13,
+      "name": "birch_6",
+      "shape": "tree",
+      "position": [
+        40.0,
+        0,
+        18.0
+      ],
+      "tree": {
+        "recipe": "birch",
+        "seed": 6
+      }
+    },
+    {
+      "id": 14,
+      "name": "spruce_1",
+      "shape": "tree",
+      "position": [
+        -40.0,
+        0,
+        36.0
+      ],
+      "tree": {
+        "recipe": "spruce",
+        "seed": 1
+      }
+    },
+    {
+      "id": 15,
+      "name": "spruce_2",
+      "shape": "tree",
+      "position": [
+        -24.0,
+        0,
+        36.0
+      ],
+      "tree": {
+        "recipe": "spruce",
+        "seed": 2
+      }
+    },
+    {
+      "id": 16,
+      "name": "spruce_3",
+      "shape": "tree",
+      "position": [
+        -8.0,
+        0,
+        36.0
+      ],
+      "tree": {
+        "recipe": "spruce",
+        "seed": 3
+      }
+    },
+    {
+      "id": 17,
+      "name": "spruce_4",
+      "shape": "tree",
+      "position": [
+        8.0,
+        0,
+        36.0
+      ],
+      "tree": {
+        "recipe": "spruce",
+        "seed": 4
+      }
+    },
+    {
+      "id": 18,
+      "name": "spruce_5",
+      "shape": "tree",
+      "position": [
+        24.0,
+        0,
+        36.0
+      ],
+      "tree": {
+        "recipe": "spruce",
+        "seed": 5
+      }
+    },
+    {
+      "id": 19,
+      "name": "spruce_6",
+      "shape": "tree",
+      "position": [
+        40.0,
+        0,
+        36.0
+      ],
+      "tree": {
+        "recipe": "spruce",
+        "seed": 6
+      }
+    },
+    {
+      "id": 20,
+      "name": "gnarl_plain",
+      "shape": "tree",
+      "position": [
+        -24.0,
+        0,
+        -14.0
+      ],
+      "tree": {
+        "recipe": "oak",
+        "seed": 2,
+        "set": {
+          "lobes": 0,
+          "lobeDepth": 0,
+          "barkNoise": 0,
+          "nodeSwell": 0,
+          "flare": 0,
+          "crookChance": 0,
+          "meander": 0,
+          "lean": 0,
+          "light": 0,
+          "collar": 0
+        }
+      }
+    },
+    {
+      "id": 21,
+      "name": "gnarl_bend",
+      "shape": "tree",
+      "position": [
+        -8.0,
+        0,
+        -14.0
+      ],
+      "tree": {
+        "recipe": "oak",
+        "seed": 2,
+        "set": {
+          "lobes": 0,
+          "lobeDepth": 0,
+          "barkNoise": 0,
+          "nodeSwell": 0,
+          "flare": 0
+        }
+      }
+    },
+    {
+      "id": 22,
+      "name": "gnarl_flare_lobes",
+      "shape": "tree",
+      "position": [
+        8.0,
+        0,
+        -14.0
+      ],
+      "tree": {
+        "recipe": "oak",
+        "seed": 2,
+        "set": {
+          "barkNoise": 0,
+          "nodeSwell": 0
+        }
+      }
+    },
+    {
+      "id": 23,
+      "name": "gnarl_full",
+      "shape": "tree",
+      "position": [
+        24.0,
+        0,
+        -14.0
+      ],
+      "tree": {
+        "recipe": "oak",
+        "seed": 2,
+        "set": {}
+      }
+    },
+    {
+      "id": 24,
+      "name": "sakura_1",
+      "shape": "tree",
+      "position": [
+        -40.0,
+        0,
+        56.0
+      ],
+      "tree": {
+        "recipe": "sakura",
+        "seed": 1
+      }
+    },
+    {
+      "id": 25,
+      "name": "sakura_2",
+      "shape": "tree",
+      "position": [
+        -24.0,
+        0,
+        56.0
+      ],
+      "tree": {
+        "recipe": "sakura",
+        "seed": 2
+      }
+    },
+    {
+      "id": 26,
+      "name": "sakura_3",
+      "shape": "tree",
+      "position": [
+        -8.0,
+        0,
+        56.0
+      ],
+      "tree": {
+        "recipe": "sakura",
+        "seed": 3
+      }
+    },
+    {
+      "id": 27,
+      "name": "sakura_4",
+      "shape": "tree",
+      "position": [
+        8.0,
+        0,
+        56.0
+      ],
+      "tree": {
+        "recipe": "sakura",
+        "seed": 4
+      }
+    },
+    {
+      "id": 28,
+      "name": "sakura_5",
+      "shape": "tree",
+      "position": [
+        24.0,
+        0,
+        56.0
+      ],
+      "tree": {
+        "recipe": "sakura",
+        "seed": 5
+      }
+    },
+    {
+      "id": 29,
+      "name": "sakura_6",
+      "shape": "tree",
+      "position": [
+        40.0,
+        0,
+        56.0
+      ],
+      "tree": {
+        "recipe": "sakura",
+        "seed": 6
+      }
+    },
+    {
+      "id": 30,
+      "name": "maple_1",
+      "shape": "tree",
+      "position": [
+        -40.0,
+        0,
+        74.0
+      ],
+      "tree": {
+        "recipe": "maple",
+        "seed": 1
+      }
+    },
+    {
+      "id": 31,
+      "name": "maple_2",
+      "shape": "tree",
+      "position": [
+        -24.0,
+        0,
+        74.0
+      ],
+      "tree": {
+        "recipe": "maple",
+        "seed": 2
+      }
+    },
+    {
+      "id": 32,
+      "name": "maple_3",
+      "shape": "tree",
+      "position": [
+        -8.0,
+        0,
+        74.0
+      ],
+      "tree": {
+        "recipe": "maple",
+        "seed": 3
+      }
+    },
+    {
+      "id": 33,
+      "name": "maple_4",
+      "shape": "tree",
+      "position": [
+        8.0,
+        0,
+        74.0
+      ],
+      "tree": {
+        "recipe": "maple",
+        "seed": 4
+      }
+    },
+    {
+      "id": 34,
+      "name": "maple_5",
+      "shape": "tree",
+      "position": [
+        24.0,
+        0,
+        74.0
+      ],
+      "tree": {
+        "recipe": "maple",
+        "seed": 5
+      }
+    },
+    {
+      "id": 35,
+      "name": "maple_6",
+      "shape": "tree",
+      "position": [
+        40.0,
+        0,
+        74.0
+      ],
+      "tree": {
+        "recipe": "maple",
+        "seed": 6
+      }
+    },
+    {
+      "id": 36,
+      "name": "pine_1",
+      "shape": "tree",
+      "position": [
+        -40.0,
+        0,
+        92.0
+      ],
+      "tree": {
+        "recipe": "pine",
+        "seed": 1
+      }
+    },
+    {
+      "id": 37,
+      "name": "pine_2",
+      "shape": "tree",
+      "position": [
+        -24.0,
+        0,
+        92.0
+      ],
+      "tree": {
+        "recipe": "pine",
+        "seed": 2
+      }
+    },
+    {
+      "id": 38,
+      "name": "pine_3",
+      "shape": "tree",
+      "position": [
+        -8.0,
+        0,
+        92.0
+      ],
+      "tree": {
+        "recipe": "pine",
+        "seed": 3
+      }
+    },
+    {
+      "id": 39,
+      "name": "pine_4",
+      "shape": "tree",
+      "position": [
+        8.0,
+        0,
+        92.0
+      ],
+      "tree": {
+        "recipe": "pine",
+        "seed": 4
+      }
+    },
+    {
+      "id": 40,
+      "name": "pine_5",
+      "shape": "tree",
+      "position": [
+        24.0,
+        0,
+        92.0
+      ],
+      "tree": {
+        "recipe": "pine",
+        "seed": 5
+      }
+    },
+    {
+      "id": 41,
+      "name": "pine_6",
+      "shape": "tree",
+      "position": [
+        40.0,
+        0,
+        92.0
+      ],
+      "tree": {
+        "recipe": "pine",
+        "seed": 6
+      }
+    },
+    {
+      "id": 42,
+      "name": "hawthorn_1",
+      "shape": "tree",
+      "position": [
+        -27.0,
+        0,
+        110.0
+      ],
+      "tree": {
+        "recipe": "hawthorn",
+        "seed": 1
+      }
+    },
+    {
+      "id": 43,
+      "name": "hawthorn_2",
+      "shape": "tree",
+      "position": [
+        -22.0,
+        0,
+        110.0
+      ],
+      "tree": {
+        "recipe": "hawthorn",
+        "seed": 2
+      }
+    },
+    {
+      "id": 44,
+      "name": "mexican_sage_1",
+      "shape": "tree",
+      "position": [
+        -17.0,
+        0,
+        110.0
+      ],
+      "tree": {
+        "recipe": "mexican_sage",
+        "seed": 1
+      }
+    },
+    {
+      "id": 45,
+      "name": "mexican_sage_2",
+      "shape": "tree",
+      "position": [
+        -12.0,
+        0,
+        110.0
+      ],
+      "tree": {
+        "recipe": "mexican_sage",
+        "seed": 2
+      }
+    },
+    {
+      "id": 46,
+      "name": "blue_salvia_1",
+      "shape": "tree",
+      "position": [
+        -7.0,
+        0,
+        110.0
+      ],
+      "tree": {
+        "recipe": "blue_salvia",
+        "seed": 1
+      }
+    },
+    {
+      "id": 47,
+      "name": "blue_salvia_2",
+      "shape": "tree",
+      "position": [
+        -2.0,
+        0,
+        110.0
+      ],
+      "tree": {
+        "recipe": "blue_salvia",
+        "seed": 2
+      }
+    },
+    {
+      "id": 48,
+      "name": "euryops_1",
+      "shape": "tree",
+      "position": [
+        3.0,
+        0,
+        110.0
+      ],
+      "tree": {
+        "recipe": "euryops",
+        "seed": 1
+      }
+    },
+    {
+      "id": 49,
+      "name": "euryops_2",
+      "shape": "tree",
+      "position": [
+        8.0,
+        0,
+        110.0
+      ],
+      "tree": {
+        "recipe": "euryops",
+        "seed": 2
+      }
+    },
+    {
+      "id": 50,
+      "name": "hot_lips_1",
+      "shape": "tree",
+      "position": [
+        13.0,
+        0,
+        110.0
+      ],
+      "tree": {
+        "recipe": "hot_lips",
+        "seed": 1
+      }
+    },
+    {
+      "id": 51,
+      "name": "hot_lips_2",
+      "shape": "tree",
+      "position": [
+        18.0,
+        0,
+        110.0
+      ],
+      "tree": {
+        "recipe": "hot_lips",
+        "seed": 2
+      }
+    },
+    {
+      "id": 52,
+      "name": "hedge_1",
+      "shape": "tree",
+      "position": [
+        -8.0,
+        0,
+        118.0
+      ],
+      "tree": {
+        "recipe": "hedge",
+        "seed": 1
+      }
+    },
+    {
+      "id": 53,
+      "name": "hedge_2",
+      "shape": "tree",
+      "position": [
+        -6.2,
+        0,
+        118.0
+      ],
+      "tree": {
+        "recipe": "hedge",
+        "seed": 2
+      }
+    },
+    {
+      "id": 54,
+      "name": "hedge_3",
+      "shape": "tree",
+      "position": [
+        -4.4,
+        0,
+        118.0
+      ],
+      "tree": {
+        "recipe": "hedge",
+        "seed": 3
+      }
+    },
+    {
+      "id": 55,
+      "name": "hedge_4",
+      "shape": "tree",
+      "position": [
+        -2.5999999999999996,
+        0,
+        118.0
+      ],
+      "tree": {
+        "recipe": "hedge",
+        "seed": 4
+      }
+    },
+    {
+      "id": 56,
+      "name": "hedge_5",
+      "shape": "tree",
+      "position": [
+        -0.7999999999999998,
+        0,
+        118.0
+      ],
+      "tree": {
+        "recipe": "hedge",
+        "seed": 5
+      }
+    },
+    {
+      "id": 57,
+      "name": "hedge_6",
+      "shape": "tree",
+      "position": [
+        1.0,
+        0,
+        118.0
+      ],
+      "tree": {
+        "recipe": "hedge",
+        "seed": 6
+      }
+    },
+    {
+      "id": 58,
+      "name": "hedge_7",
+      "shape": "tree",
+      "position": [
+        2.8000000000000007,
+        0,
+        118.0
+      ],
+      "tree": {
+        "recipe": "hedge",
+        "seed": 7
+      }
+    },
+    {
+      "id": 59,
+      "name": "hedge_8",
+      "shape": "tree",
+      "position": [
+        4.6,
+        0,
+        118.0
+      ],
+      "tree": {
+        "recipe": "hedge",
+        "seed": 8
+      }
+    },
+    {
+      "id": 60,
+      "name": "spruce_near_1",
+      "shape": "tree",
+      "position": [
+        -40.0,
+        0,
+        128.0
+      ],
+      "tree": {
+        "recipe": "spruce",
+        "seed": 1,
+        "set": {
+          "foliage": 1,
+          "leafSize": 0.7
+        }
+      }
+    },
+    {
+      "id": 61,
+      "name": "spruce_near_2",
+      "shape": "tree",
+      "position": [
+        -24.0,
+        0,
+        128.0
+      ],
+      "tree": {
+        "recipe": "spruce",
+        "seed": 2,
+        "set": {
+          "foliage": 1,
+          "leafSize": 0.7
+        }
+      }
+    },
+    {
+      "id": 62,
+      "name": "spruce_near_3",
+      "shape": "tree",
+      "position": [
+        -8.0,
+        0,
+        128.0
+      ],
+      "tree": {
+        "recipe": "spruce",
+        "seed": 3,
+        "set": {
+          "foliage": 1,
+          "leafSize": 0.7
+        }
+      }
+    },
+    {
+      "id": 63,
+      "name": "spruce_near_4",
+      "shape": "tree",
+      "position": [
+        8.0,
+        0,
+        128.0
+      ],
+      "tree": {
+        "recipe": "spruce",
+        "seed": 4,
+        "set": {
+          "foliage": 1,
+          "leafSize": 0.7
+        }
+      }
+    },
+    {
+      "id": 64,
+      "name": "spruce_near_5",
+      "shape": "tree",
+      "position": [
+        24.0,
+        0,
+        128.0
+      ],
+      "tree": {
+        "recipe": "spruce",
+        "seed": 5,
+        "set": {
+          "foliage": 1,
+          "leafSize": 0.7
+        }
+      }
+    },
+    {
+      "id": 65,
+      "name": "spruce_near_6",
+      "shape": "tree",
+      "position": [
+        40.0,
+        0,
+        128.0
+      ],
+      "tree": {
+        "recipe": "spruce",
+        "seed": 6,
+        "set": {
+          "foliage": 1,
+          "leafSize": 0.7
+        }
+      }
+    },
+    {
+      "id": 66,
+      "name": "oak_near_1",
+      "shape": "tree",
+      "position": [
+        -24.0,
+        0,
+        146.0
+      ],
+      "tree": {
+        "recipe": "oak",
+        "seed": 1,
+        "set": {
+          "foliage": 2
+        }
+      }
+    },
+    {
+      "id": 67,
+      "name": "oak_near_2",
+      "shape": "tree",
+      "position": [
+        -8.0,
+        0,
+        146.0
+      ],
+      "tree": {
+        "recipe": "oak",
+        "seed": 2,
+        "set": {
+          "foliage": 2
+        }
+      }
+    },
+    {
+      "id": 68,
+      "name": "oak_near_3",
+      "shape": "tree",
+      "position": [
+        8.0,
+        0,
+        146.0
+      ],
+      "tree": {
+        "recipe": "oak",
+        "seed": 3,
+        "set": {
+          "foliage": 2
+        }
+      }
+    },
+    {
+      "id": 69,
+      "name": "oak_near_4",
+      "shape": "tree",
+      "position": [
+        24.0,
+        0,
+        146.0
+      ],
+      "tree": {
+        "recipe": "oak",
+        "seed": 4,
+        "set": {
+          "foliage": 2
+        }
+      }
+    },
+    {
+      "id": 70,
+      "name": "birch_near_1",
+      "shape": "tree",
+      "position": [
+        -24.0,
+        0,
+        160.0
+      ],
+      "tree": {
+        "recipe": "birch",
+        "seed": 1,
+        "set": {
+          "foliage": 2
+        }
+      }
+    },
+    {
+      "id": 71,
+      "name": "birch_near_2",
+      "shape": "tree",
+      "position": [
+        -8.0,
+        0,
+        160.0
+      ],
+      "tree": {
+        "recipe": "birch",
+        "seed": 2,
+        "set": {
+          "foliage": 2
+        }
+      }
+    },
+    {
+      "id": 72,
+      "name": "birch_near_3",
+      "shape": "tree",
+      "position": [
+        8.0,
+        0,
+        160.0
+      ],
+      "tree": {
+        "recipe": "birch",
+        "seed": 3,
+        "set": {
+          "foliage": 2
+        }
+      }
+    },
+    {
+      "id": 73,
+      "name": "birch_near_4",
+      "shape": "tree",
+      "position": [
+        24.0,
+        0,
+        160.0
+      ],
+      "tree": {
+        "recipe": "birch",
+        "seed": 4,
+        "set": {
+          "foliage": 2
+        }
+      }
+    },
+    {
+      "id": 74,
+      "name": "sakura_near_1",
+      "shape": "tree",
+      "position": [
+        -24.0,
+        0,
+        176.0
+      ],
+      "tree": {
+        "recipe": "sakura",
+        "seed": 1,
+        "set": {
+          "foliage": 2
+        }
+      }
+    },
+    {
+      "id": 75,
+      "name": "sakura_near_2",
+      "shape": "tree",
+      "position": [
+        -8.0,
+        0,
+        176.0
+      ],
+      "tree": {
+        "recipe": "sakura",
+        "seed": 2,
+        "set": {
+          "foliage": 2
+        }
+      }
+    },
+    {
+      "id": 76,
+      "name": "sakura_near_3",
+      "shape": "tree",
+      "position": [
+        8.0,
+        0,
+        176.0
+      ],
+      "tree": {
+        "recipe": "sakura",
+        "seed": 3,
+        "set": {
+          "foliage": 2
+        }
+      }
+    },
+    {
+      "id": 77,
+      "name": "sakura_near_4",
+      "shape": "tree",
+      "position": [
+        24.0,
+        0,
+        176.0
+      ],
+      "tree": {
+        "recipe": "sakura",
+        "seed": 4,
+        "set": {
+          "foliage": 2
+        }
+      }
+    },
+    {
+      "id": 78,
+      "name": "maple_near_1",
+      "shape": "tree",
+      "position": [
+        -24.0,
+        0,
+        192.0
+      ],
+      "tree": {
+        "recipe": "maple",
+        "seed": 1,
+        "set": {
+          "foliage": 2
+        }
+      }
+    },
+    {
+      "id": 79,
+      "name": "maple_near_2",
+      "shape": "tree",
+      "position": [
+        -8.0,
+        0,
+        192.0
+      ],
+      "tree": {
+        "recipe": "maple",
+        "seed": 2,
+        "set": {
+          "foliage": 2
+        }
+      }
+    },
+    {
+      "id": 80,
+      "name": "maple_near_3",
+      "shape": "tree",
+      "position": [
+        8.0,
+        0,
+        192.0
+      ],
+      "tree": {
+        "recipe": "maple",
+        "seed": 3,
+        "set": {
+          "foliage": 2
+        }
+      }
+    },
+    {
+      "id": 81,
+      "name": "maple_near_4",
+      "shape": "tree",
+      "position": [
+        24.0,
+        0,
+        192.0
+      ],
+      "tree": {
+        "recipe": "maple",
+        "seed": 4,
+        "set": {
+          "foliage": 2
+        }
+      }
+    },
+    {
+      "id": 82,
+      "name": "flax_1",
+      "shape": "tree",
+      "position": [
+        -20.0,
+        0,
+        214.0
+      ],
+      "tree": {
+        "recipe": "flax",
+        "seed": 1
+      }
+    },
+    {
+      "id": 83,
+      "name": "flax_2",
+      "shape": "tree",
+      "position": [
+        -16.5,
+        0,
+        214.0
+      ],
+      "tree": {
+        "recipe": "flax",
+        "seed": 2
+      }
+    },
+    {
+      "id": 84,
+      "name": "flax_3",
+      "shape": "tree",
+      "position": [
+        -13.0,
+        0,
+        214.0
+      ],
+      "tree": {
+        "recipe": "flax",
+        "seed": 3
+      }
+    },
+    {
+      "id": 85,
+      "name": "rush_1",
+      "shape": "tree",
+      "position": [
+        -9.5,
+        0,
+        214.0
+      ],
+      "tree": {
+        "recipe": "rush",
+        "seed": 1
+      }
+    },
+    {
+      "id": 86,
+      "name": "rush_2",
+      "shape": "tree",
+      "position": [
+        -6.0,
+        0,
+        214.0
+      ],
+      "tree": {
+        "recipe": "rush",
+        "seed": 2
+      }
+    },
+    {
+      "id": 87,
+      "name": "rush_3",
+      "shape": "tree",
+      "position": [
+        -2.5,
+        0,
+        214.0
+      ],
+      "tree": {
+        "recipe": "rush",
+        "seed": 3
+      }
+    },
+    {
+      "id": 88,
+      "name": "fescue_1",
+      "shape": "tree",
+      "position": [
+        1.0,
+        0,
+        214.0
+      ],
+      "tree": {
+        "recipe": "fescue",
+        "seed": 1
+      }
+    },
+    {
+      "id": 89,
+      "name": "fescue_2",
+      "shape": "tree",
+      "position": [
+        4.5,
+        0,
+        214.0
+      ],
+      "tree": {
+        "recipe": "fescue",
+        "seed": 2
+      }
+    },
+    {
+      "id": 90,
+      "name": "fescue_3",
+      "shape": "tree",
+      "position": [
+        8.0,
+        0,
+        214.0
+      ],
+      "tree": {
+        "recipe": "fescue",
+        "seed": 3
+      }
+    },
+    {
+      "id": 91,
+      "name": "fescue_4",
+      "shape": "tree",
+      "position": [
+        11.5,
+        0,
+        214.0
+      ],
+      "tree": {
+        "recipe": "fescue",
+        "seed": 4
+      }
+    },
+    {
+      "id": 92,
+      "name": "coconut_palm_1",
+      "shape": "tree",
+      "position": [
+        -30.0,
+        0,
+        232.0
+      ],
+      "tree": {
+        "recipe": "coconut_palm",
+        "seed": 1
+      }
+    },
+    {
+      "id": 93,
+      "name": "coconut_palm_2",
+      "shape": "tree",
+      "position": [
+        -18.0,
+        0,
+        232.0
+      ],
+      "tree": {
+        "recipe": "coconut_palm",
+        "seed": 2
+      }
+    },
+    {
+      "id": 94,
+      "name": "coconut_palm_3",
+      "shape": "tree",
+      "position": [
+        -6.0,
+        0,
+        232.0
+      ],
+      "tree": {
+        "recipe": "coconut_palm",
+        "seed": 3
+      }
+    },
+    {
+      "id": 95,
+      "name": "fan_palm_1",
+      "shape": "tree",
+      "position": [
+        8.0,
+        0,
+        232.0
+      ],
+      "tree": {
+        "recipe": "fan_palm",
+        "seed": 1
+      }
+    },
+    {
+      "id": 96,
+      "name": "fan_palm_2",
+      "shape": "tree",
+      "position": [
+        20.0,
+        0,
+        232.0
+      ],
+      "tree": {
+        "recipe": "fan_palm",
+        "seed": 2
+      }
+    },
+    {
+      "id": 97,
+      "name": "fan_palm_3",
+      "shape": "tree",
+      "position": [
+        32.0,
+        0,
+        232.0
+      ],
+      "tree": {
+        "recipe": "fan_palm",
+        "seed": 3
+      }
+    },
+    {
+      "id": 122,
+      "name": "royal_palm_1",
+      "shape": "tree",
+      "position": [
+        46.0,
+        0,
+        232.0
+      ],
+      "tree": {
+        "recipe": "royal_palm",
+        "seed": 1
+      }
+    },
+    {
+      "id": 123,
+      "name": "royal_palm_2",
+      "shape": "tree",
+      "position": [
+        58.0,
+        0,
+        232.0
+      ],
+      "tree": {
+        "recipe": "royal_palm",
+        "seed": 2
+      }
+    },
+    {
+      "id": 124,
+      "name": "royal_palm_3",
+      "shape": "tree",
+      "position": [
+        70.0,
+        0,
+        232.0
+      ],
+      "tree": {
+        "recipe": "royal_palm",
+        "seed": 3
+      }
+    },
+    {
+      "id": 98,
+      "name": "multistem_1",
+      "shape": "tree",
+      "position": [
+        -18.0,
+        0,
+        -34.0
+      ],
+      "tree": {
+        "recipe": "multistem",
+        "seed": 1
+      }
+    },
+    {
+      "id": 99,
+      "name": "multistem_2",
+      "shape": "tree",
+      "position": [
+        0.0,
+        0,
+        -34.0
+      ],
+      "tree": {
+        "recipe": "multistem",
+        "seed": 2
+      }
+    },
+    {
+      "id": 100,
+      "name": "multistem_3",
+      "shape": "tree",
+      "position": [
+        18.0,
+        0,
+        -34.0
+      ],
+      "tree": {
+        "recipe": "multistem",
+        "seed": 3
+      }
+    },
+    {
+      "id": 101,
+      "name": "river_birch_1",
+      "shape": "tree",
+      "position": [
+        -18.0,
+        0,
+        -52.0
+      ],
+      "tree": {
+        "recipe": "river_birch",
+        "seed": 1
+      }
+    },
+    {
+      "id": 102,
+      "name": "river_birch_2",
+      "shape": "tree",
+      "position": [
+        0.0,
+        0,
+        -52.0
+      ],
+      "tree": {
+        "recipe": "river_birch",
+        "seed": 2
+      }
+    },
+    {
+      "id": 103,
+      "name": "river_birch_3",
+      "shape": "tree",
+      "position": [
+        18.0,
+        0,
+        -52.0
+      ],
+      "tree": {
+        "recipe": "river_birch",
+        "seed": 3
+      }
+    },
+    {
+      "id": 104,
+      "name": "magnolia_1",
+      "shape": "tree",
+      "position": [
+        -18.0,
+        0,
+        -70.0
+      ],
+      "tree": {
+        "recipe": "magnolia",
+        "seed": 1
+      }
+    },
+    {
+      "id": 105,
+      "name": "magnolia_2",
+      "shape": "tree",
+      "position": [
+        0.0,
+        0,
+        -70.0
+      ],
+      "tree": {
+        "recipe": "magnolia",
+        "seed": 2
+      }
+    },
+    {
+      "id": 106,
+      "name": "magnolia_3",
+      "shape": "tree",
+      "position": [
+        18.0,
+        0,
+        -70.0
+      ],
+      "tree": {
+        "recipe": "magnolia",
+        "seed": 3
+      }
+    },
+    {
+      "id": 107,
+      "name": "weeping_willow_1",
+      "shape": "tree",
+      "position": [
+        -18.0,
+        0,
+        -90.0
+      ],
+      "tree": {
+        "recipe": "weeping_willow",
+        "seed": 1
+      }
+    },
+    {
+      "id": 108,
+      "name": "weeping_willow_2",
+      "shape": "tree",
+      "position": [
+        0.0,
+        0,
+        -90.0
+      ],
+      "tree": {
+        "recipe": "weeping_willow",
+        "seed": 2
+      }
+    },
+    {
+      "id": 109,
+      "name": "weeping_willow_3",
+      "shape": "tree",
+      "position": [
+        18.0,
+        0,
+        -90.0
+      ],
+      "tree": {
+        "recipe": "weeping_willow",
+        "seed": 3
+      }
+    },
+    {
+      "id": 110,
+      "name": "oak_age_young",
+      "shape": "tree",
+      "position": [
+        -60.0,
+        0,
+        -110.0
+      ],
+      "tree": {
+        "recipe": "oak",
+        "seed": 3,
+        "age": "young"
+      }
+    },
+    {
+      "id": 111,
+      "name": "oak_age_mature",
+      "shape": "tree",
+      "position": [
+        -36.0,
+        0,
+        -110.0
+      ],
+      "tree": {
+        "recipe": "oak",
+        "seed": 3,
+        "age": "mature"
+      }
+    },
+    {
+      "id": 112,
+      "name": "oak_age_old",
+      "shape": "tree",
+      "position": [
+        -6.0,
+        0,
+        -110.0
+      ],
+      "tree": {
+        "recipe": "oak",
+        "seed": 3,
+        "age": "old"
+      }
+    },
+    {
+      "id": 113,
+      "name": "oak_age_ancient",
+      "shape": "tree",
+      "position": [
+        40.0,
+        0,
+        -110.0
+      ],
+      "tree": {
+        "recipe": "oak",
+        "seed": 3,
+        "age": "ancient"
+      }
+    },
+    {
+      "id": 114,
+      "name": "spruce_age_young",
+      "shape": "tree",
+      "position": [
+        -60.0,
+        0,
+        -150.0
+      ],
+      "tree": {
+        "recipe": "spruce",
+        "seed": 3,
+        "age": "young"
+      }
+    },
+    {
+      "id": 115,
+      "name": "spruce_age_mature",
+      "shape": "tree",
+      "position": [
+        -36.0,
+        0,
+        -150.0
+      ],
+      "tree": {
+        "recipe": "spruce",
+        "seed": 3,
+        "age": "mature"
+      }
+    },
+    {
+      "id": 116,
+      "name": "spruce_age_old",
+      "shape": "tree",
+      "position": [
+        -6.0,
+        0,
+        -150.0
+      ],
+      "tree": {
+        "recipe": "spruce",
+        "seed": 3,
+        "age": "old"
+      }
+    },
+    {
+      "id": 117,
+      "name": "spruce_age_ancient",
+      "shape": "tree",
+      "position": [
+        30.0,
+        0,
+        -150.0
+      ],
+      "tree": {
+        "recipe": "spruce",
+        "seed": 3,
+        "age": "ancient"
+      }
+    },
+    {
+      "id": 118,
+      "name": "sakura_age_young",
+      "shape": "tree",
+      "position": [
+        -60.0,
+        0,
+        -195.0
+      ],
+      "tree": {
+        "recipe": "sakura",
+        "seed": 3,
+        "age": "young"
+      }
+    },
+    {
+      "id": 119,
+      "name": "sakura_age_mature",
+      "shape": "tree",
+      "position": [
+        -40.0,
+        0,
+        -195.0
+      ],
+      "tree": {
+        "recipe": "sakura",
+        "seed": 3,
+        "age": "mature"
+      }
+    },
+    {
+      "id": 120,
+      "name": "sakura_age_old",
+      "shape": "tree",
+      "position": [
+        -10.0,
+        0,
+        -195.0
+      ],
+      "tree": {
+        "recipe": "sakura",
+        "seed": 3,
+        "age": "old"
+      }
+    },
+    {
+      "id": 121,
+      "name": "sakura_age_ancient",
+      "shape": "tree",
+      "position": [
+        34.0,
+        0,
+        -195.0
+      ],
+      "tree": {
+        "recipe": "sakura",
+        "seed": 3,
+        "age": "ancient"
+      }
+    }
+  ],
+  "terrain": {
+    "size": 480,
+    "resolution": 256,
+    "heightScale": 0.04,
+    "noiseScale": 0.02,
+    "octaves": 1,
+    "seed": 3,
+    "material": {
+      "albedo": [
+        1,
+        1,
+        1
+      ],
+      "roughness": 1.0,
+      "surface": "terrain"
+    },
+    "groundCover": {
+      "dirtPatches": 0.15,
+      "seed": 5
+    }
+  },
+  "grass": {
+    "blades": 18,
+    "clumpRadius": 0.22,
+    "fadeEnd": 60,
+    "fadeStart": 44,
+    "height": 0.35,
+    "lean": 0.35,
+    "maxSlopeDeg": 32,
+    "nearRadius": 24,
+    "patchiness": 0.35,
+    "radius": 62,
+    "rootColor": [
+      0.018,
+      0.032,
+      0.008
+    ],
+    "seed": 7,
+    "spacing": 0.3,
+    "tipColor": [
+      0.1,
+      0.14,
+      0.03
+    ],
+    "variantTint": 0.18,
+    "width": 0.045,
+    "cardRadius": 320,
+    "cardSpacing": 1.6
+  },
+  "grassLayers": [
+    {
+      "clumpRadius": 0.28,
+      "lean": 0.25,
+      "width": 0.03,
+      "rootColor": [
+        0.02,
+        0.035,
+        0.01
+      ],
+      "tipColor": [
+        0.09,
+        0.13,
+        0.035
+      ],
+      "variantTint": 0.1,
+      "radius": 80,
+      "nearRadius": 30,
+      "fadeStart": 60,
+      "fadeEnd": 80,
+      "cards": false,
+      "where": "flowers",
+      "seed": 51,
+      "blades": 6,
+      "height": 0.78,
+      "flowers": 10,
+      "flowerSize": 0.1,
+      "spacing": 0.45,
+      "variants": 7,
+      "clumpScale": 0.02,
+      "clumpCut": 0.0,
+      "flowerColors": [
+        [
+          0.75,
+          0.74,
+          0.68
+        ],
+        [
+          0.8,
+          0.6,
+          0.04
+        ],
+        [
+          0.3,
+          0.09,
+          0.55
+        ],
+        [
+          0.14,
+          0.24,
+          0.7
+        ],
+        [
+          0.8,
+          0.24,
+          0.38
+        ],
+        [
+          0.7,
+          0.05,
+          0.03
+        ],
+        [
+          0.85,
+          0.32,
+          0.05
+        ]
+      ]
+    }
+  ]
+}

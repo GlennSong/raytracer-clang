@@ -4,6 +4,8 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <cstdlib>
+#include <string>
 
 namespace engine {
 
@@ -285,21 +287,12 @@ LodNodeMesh generateLodNodeMesh(const TerrainParams& params, const Noise& noise,
             Vertex& v = mesh.vertices[static_cast<size_t>(j) * n + i];
             if (my != h(i, j) && corridorOwned(v.position.x, v.position.z))
                 my = h(i, j);
-            v.tangent = Vec3(v.position.x, my, v.position.z);   // morph-target pos
+            v.tangent = packMorphTarget(my, v.normal);   // morph-target height (its normal: one eps every level here)
         }
     }
 
     mesh.indices.reserve(static_cast<size_t>(res) * res * 6);
-    for (int j = 0; j < res; j++) {
-        for (int i = 0; i < res; i++) {
-            uint32_t a = static_cast<uint32_t>(j * n + i);
-            uint32_t b = a + 1;
-            uint32_t c = a + static_cast<uint32_t>(n);
-            uint32_t d = c + 1;
-            // Clockwise-front winding (top faces up), matching generateTerrainChunks.
-            mesh.indices.insert(mesh.indices.end(), {a, b, d, a, d, c});
-        }
-    }
+    MeshBuilder::gridIndices(mesh, n, n);   // clockwise-front, top up, the CDLOD diagonal
 
     out.boundsMin = Vec3(node.minX, minY, node.minZ);
     out.boundsMax = Vec3(node.minX + node.size, maxY, node.minZ + node.size);
@@ -342,10 +335,36 @@ void addSkirts(RenderMesh& mesh, int n, double depth) {
     const uint32_t m = static_cast<uint32_t>(ring.size());
     for (uint32_t k = 0; k < m; ++k) {
         const uint32_t a = ring[k], b = ring[(k + 1) % m], a2 = base + k, b2 = base + (k + 1) % m;
-        mesh.indices.insert(mesh.indices.end(), {a, b, b2, a, b2, a2, a, b2, b, a, a2, b2});
+        // a skirt is seen from both sides (a crack opens either way): each quad twice, facing out and in
+        const Vec3 e = mesh.vertices[b].position - mesh.vertices[a].position;
+        const Vec3 out = normalize(Vec3(e.z, 0, -e.x));
+        for (const Vec3& f : {out, out * -1.0}) {
+            MeshBuilder::triFacing(mesh, a, b, b2, f);
+            MeshBuilder::triFacing(mesh, a, b2, a2, f);
+        }
     }
 }
 }  // namespace
+
+// The trapezoid weights of nine samples along a cell's edge, over 8 (an edge's mean height)
+static constexpr double kEdgeW[9] = {0.0625, 0.125, 0.125, 0.125, 0.125, 0.125, 0.125, 0.125, 0.0625};
+
+Vec3 bakedTileNormal(const pyramid::Pyramid& p, double x, double z, double s) {
+    // THE MEAN SLOPE over the square +-s, exactly: the mean of dh/dx over it is the mean height along its east edge
+    // less its west edge's, over 2s (nine samples an edge) -- a box filter, not two points that alias the bumps
+    // finer than s
+    double e = 0, w = 0, n = 0, so = 0;
+    for (int t = 0; t < 9; ++t) {
+        const double o = (t - 4) * 0.25 * s;
+        e += kEdgeW[t] * p.height(x + s, z + o);
+        w += kEdgeW[t] * p.height(x - s, z + o);
+        n += kEdgeW[t] * p.height(x + o, z + s);
+        so += kEdgeW[t] * p.height(x + o, z - s);
+    }
+    return normalize(Vec3(-(e - w) / (2.0 * s), 1.0, -(n - so) / (2.0 * s)));
+}
+
+double bakedNormalSpan(double cell, double normalEps) { return std::max(cell, normalEps > 0.0 ? normalEps : cell); }
 
 LodNodeMesh generateBakedTileMesh(const pyramid::Pyramid& p, const pyramid::HeightTile& t,
                                   const TerrainParams& params, const Noise& noise, double normalEps) {
@@ -354,7 +373,41 @@ LodNodeMesh generateBakedTileMesh(const pyramid::Pyramid& p, const pyramid::Heig
     const double x0 = p.spec.originX + static_cast<double>(t.key.tx) * res * step;
     const double z0 = p.spec.originZ + static_cast<double>(t.key.tz) * res * step;
     const double size = res * step;
-    const double eps = normalEps > 0.0 ? normalEps : step;
+    // NORMALS BY LEVEL (Glenn, 2026-10-19: the far grassland "looks faceted"): a vertex's normal is the drawn surface's
+    // slope over its OWN cell (never under normalEps). One 2 m span for every level matched the levels' shading but
+    // aliased on a far tile: each of its 32 m vertices took the tilt of whatever bump it stood on, and the tile shaded
+    // in blotchy blocks. The level-to-level match moves to the morph: each vertex also carries the coarser level's
+    // normal there (its morph target's x and z) and blends to it with its height, so a tile meets its parent shading
+    // as the parent does.
+    // (both spans are whole cells: k and k2 of them. bakedTileNormal's edge samples, read once a tile: the drawn ground
+    // along every grid column and row, a quarter cell apart, K cells past the tile's edges)
+    const int k = std::max(1, static_cast<int>(std::lround(bakedNormalSpan(step, normalEps) / step)));
+    const int k2 = std::max(1, static_cast<int>(std::lround(bakedNormalSpan(2.0 * step, normalEps) / step)));
+    const int K = std::max(k, k2), lines = n + 2 * K, M = 4 * (n - 1) + 8 * K + 1;
+    const double q = 0.25 * step;
+    std::vector<double> col(static_cast<std::size_t>(lines) * M), row(static_cast<std::size_t>(lines) * M);
+    for (int c = 0; c < lines; ++c)
+        for (int m = 0; m < M; ++m) {
+            col[static_cast<std::size_t>(c) * M + m] = p.height(x0 + (c - K) * step, z0 + (m - 4 * K) * q);
+            row[static_cast<std::size_t>(c) * M + m] = p.height(x0 + (m - 4 * K) * q, z0 + (c - K) * step);
+        }
+    // the mean height along line `c` (a column or row index), centred at grid vertex `at`, over +-kk cells
+    auto edge = [&](const std::vector<double>& L, int c, int at, int kk) {
+        double sum = 0;
+        for (int t = 0; t < 9; ++t) sum += kEdgeW[t] * L[static_cast<std::size_t>(c + K) * M + 4 * at + (t - 4) * kk + 4 * K];
+        return sum;
+    };
+    auto normalAt = [&](int i, int j, int kk) {
+        const double gx = (edge(col, i + kk, j, kk) - edge(col, i - kk, j, kk)) / (2.0 * kk * step);
+        const double gz = (edge(row, j + kk, i, kk) - edge(row, j - kk, i, kk)) / (2.0 * kk * step);
+        return normalize(Vec3(-gx, 1.0, -gz));
+    };
+    // A/B: RT_TERRAIN_NORMALS=fixed -- every level's normals over +-normalEps at two points, as before ADR-0204
+    static const bool fixedSpan = [] { const char* e = std::getenv("RT_TERRAIN_NORMALS"); return e && std::string(e) == "fixed"; }();
+    auto fixedNormal = [&](double x, double z) {
+        const double e = normalEps > 0.0 ? normalEps : step;
+        return normalize(Vec3(-(p.height(x + e, z) - p.height(x - e, z)), 2.0 * e, -(p.height(x, z + e) - p.height(x, z - e))));
+    };
     LodNodeMesh out;
     RenderMesh& mesh = out.mesh;
     mesh.tangentIsData = true;   // the morph target rides in the tangent slot
@@ -362,12 +415,7 @@ LodNodeMesh generateBakedTileMesh(const pyramid::Pyramid& p, const pyramid::Heig
     for (int j = 0; j < n; ++j)
         for (int i = 0; i < n; ++i) {
             const double x = x0 + i * step, z = z0 + j * step, y = t.at(i, j);
-            // Normal of the DRAWN surface, one eps for every level: no shading seam where levels meet.
-            const double dx = p.height(x + eps, z) - p.height(x - eps, z);
-            const double dz = p.height(x, z + eps) - p.height(x, z - eps);
-            Vec3 nrm(-dx, 2.0 * eps, -dz);
-            nrm = nrm * (1.0 / nrm.length());
-            Vertex v(Vec3(x, y, z), nrm);
+            Vertex v(Vec3(x, y, z), fixedSpan ? fixedNormal(x, z) : normalAt(i, j, k));
             v.u = static_cast<float>(x / size);
             v.v = static_cast<float>(z / size);
             v.color = terrainColor(x, z, y, v.normal.y, noise, params, v.normal.x, v.normal.z);
@@ -375,30 +423,38 @@ LodNodeMesh generateBakedTileMesh(const pyramid::Pyramid& p, const pyramid::Heig
             mesh.vertices.push_back(v);
         }
     // The CDLOD morph target, as generateLodNodeMesh: even vertices stay, odd ones collapse to
-    // the average of their even neighbours -- except where a flatten owns the ground.
+    // the average of their even neighbours -- except where a flatten owns the ground. Its normal likewise: the
+    // coarser level's at the even vertices, their average between (packMorphTarget)
     const double flattenDilate = step * 1.45;
     const FlattenGrid* fg = params.flattenIndex ? params.flattenIndex.get() : nullptr;
     static const FlattenGrid kNoGrid;
+    std::vector<Vec3> coarseN(static_cast<std::size_t>(n) * n);
+    for (int j = 0; j < n; j += 2)
+        for (int i = 0; i < n; i += 2)
+            coarseN[static_cast<std::size_t>(j) * n + i] = fixedSpan ? fixedNormal(x0 + i * step, z0 + j * step) : normalAt(i, j, k2);
+    auto cn = [&](int i, int j) { return coarseN[static_cast<std::size_t>(j) * n + i]; };
     for (int j = 0; j < n; ++j)
         for (int i = 0; i < n; ++i) {
             const bool ei = i % 2 == 0, ej = j % 2 == 0;
             double my;
-            if (ei && ej) my = t.at(i, j);
-            else if (!ei && ej) my = 0.5 * (t.at(i - 1, j) + t.at(i + 1, j));
-            else if (ei && !ej) my = 0.5 * (t.at(i, j - 1) + t.at(i, j + 1));
-            else my = 0.25 * (t.at(i - 1, j - 1) + t.at(i + 1, j - 1) + t.at(i - 1, j + 1) + t.at(i + 1, j + 1));
+            Vec3 mn;
+            if (ei && ej) { my = t.at(i, j); mn = cn(i, j); }
+            else if (!ei && ej) { my = 0.5 * (t.at(i - 1, j) + t.at(i + 1, j)); mn = cn(i - 1, j) + cn(i + 1, j); }
+            else if (ei && !ej) { my = 0.5 * (t.at(i, j - 1) + t.at(i, j + 1)); mn = cn(i, j - 1) + cn(i, j + 1); }
+            else {
+                my = 0.25 * (t.at(i - 1, j - 1) + t.at(i + 1, j - 1) + t.at(i - 1, j + 1) + t.at(i + 1, j + 1));
+                mn = cn(i - 1, j - 1) + cn(i + 1, j - 1) + cn(i - 1, j + 1) + cn(i + 1, j + 1);
+            }
             Vertex& v = mesh.vertices[static_cast<std::size_t>(j) * n + i];
             if (my != t.at(i, j) && !params.flatten.empty() &&
-                flattenCovers(fg ? *fg : kNoGrid, params.flatten, v.position.x, v.position.z, flattenDilate))
+                flattenCovers(fg ? *fg : kNoGrid, params.flatten, v.position.x, v.position.z, flattenDilate)) {
                 my = t.at(i, j);
-            v.tangent = Vec3(v.position.x, my, v.position.z);
+                mn = v.normal;
+            }
+            v.tangent = packMorphTarget(my, normalize(mn));
         }
     mesh.indices.reserve(static_cast<std::size_t>(res) * res * 6 + 12 * 4 * n);
-    for (int j = 0; j < res; ++j)
-        for (int i = 0; i < res; ++i) {
-            const uint32_t a = static_cast<uint32_t>(j * n + i), b = a + 1, c = a + static_cast<uint32_t>(n), d = c + 1;
-            mesh.indices.insert(mesh.indices.end(), {a, b, d, a, d, c});
-        }
+    MeshBuilder::gridIndices(mesh, n, n);
     const double skirt = 1.0 + t.error;
     addSkirts(mesh, n, skirt);
     out.boundsMin = Vec3(x0, static_cast<double>(t.minH) - skirt, z0);
@@ -421,11 +477,7 @@ LodNodeMesh generateBakedPatch(const pyramid::Pyramid& p, const LodNode& node) {
             hi = std::max(hi, y);
             mesh.vertices.push_back(Vertex(Vec3(x, y, z), Vec3(0, 1, 0)));
         }
-    for (int j = 0; j < res; ++j)
-        for (int i = 0; i < res; ++i) {
-            const uint32_t a = static_cast<uint32_t>(j * n + i), b = a + 1, c = a + static_cast<uint32_t>(n), d = c + 1;
-            mesh.indices.insert(mesh.indices.end(), {a, b, d, a, d, c});
-        }
+    MeshBuilder::gridIndices(mesh, n, n);
     out.boundsMin = Vec3(node.minX, lo, node.minZ);
     out.boundsMax = Vec3(node.minX + node.size, hi, node.minZ + node.size);
     return out;

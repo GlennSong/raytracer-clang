@@ -7,9 +7,11 @@
 
 #include "../src/renderer/renderer.h"
 #include "../src/rt_math.h"
+#include "../src/engine/mesh_audit.h"
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
 #include <vector>
 
 namespace mesh_invariants {
@@ -150,5 +152,11 @@ inline bool hasClearSpanAt(const RenderMesh& m, double x, double z, double yLo,
         if (h > yLo && h < yHi) return false;
     return true;
 }
+
+// The mesh audit (src/engine/mesh_audit.h), under the names the tests use.
+using Audit = MeshAudit;
+inline Audit audit(const RenderMesh& m) { return auditMesh(m); }
+inline int inwardTriangles(const RenderMesh& m) { return static_cast<int>(auditMesh(m).inward); }
+inline void printAudit(const char* what, const Audit& a) { printMeshAudit(what, a); }
 
 }  // namespace mesh_invariants

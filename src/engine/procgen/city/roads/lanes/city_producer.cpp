@@ -5,6 +5,7 @@
 #include "engine/procgen/city/roads/lanes/deck_mesh.h"
 #include "engine/procgen/city/roads/lanes/lots_producer.h"
 #include "engine/procgen/city/roads/lanes/road_twin.h"
+#include "engine/procgen/city/roads/road_builder.h"   // roadBuilderName: lanes is the default
 #include "engine/procgen/terrain_field.h"
 #include "log.h"
 
@@ -15,11 +16,13 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <set>
 
 namespace engine {
 namespace roads::lanes {
 
-const char* const kLanesBuildTag = "2026-10-02.2";   // .2: a street bridging a street is not a junction in the twin   // 2026-10-02.1: the seam pull stands down across a bridge (pass8 over Third and Dogwood)  //   // 2026-09-30.2: deck undersides in the concrete mesh (#97)   // .3: balanced mountain profiles, authored-class guardrails with min_drop, girders under their bridges
+const char* const kRailBuildTag = "2026-10-13.2";   // 10-13.2: station steel and track boxes from the mesh library   // 10-13.1: stair blocks and columns closed underneath, platforms from the ground up   // 10-12.5: ribbed steel canopies on a steel frame, lamps and their night lights; deck spines say what runs on them (a track is no street); buildings clear of the line; 10-12.4: a track lifts 0.2 m over the clearance; 10-12.3: a track's holds run on across its joints; a road ending under a track is structure; 10-12.2: the flight up walled at its landing's end; 10-12.1: a way under a held-up track, a flight up to each platform, railings and columns under held-up platforms; 10-11.7: .7: footways step where steep (60 % class); .6: only a footway end is held up by its floor; .5: only a heightless hold merges at 2 m; .4: thicker slab only over a track; .3: a stop names its way in (the bus line serves it); .2: a footbridge walled over the tracks it crosses; 10-11.1: footways (station ways in), footbridge stairs onto the platforms, piers off the platforms; .2: a stop's side is the body's +x; .1: ballast, sleepers, rails, platforms; tracks out of the twin
+const char* const kLanesBuildTag = "2026-10-15.2";   // 10-15.2: a layer vertex stands at the level of the road whose band of that layer reaches it (no sidewalk lifted into a deck overhead)   // 10-15.1: shoulders and sidewalks cut only at their own level (a street keeps its sidewalk under a track)   // 10-14.6: slab sides merge within 2 mm of their edge and overlap the neighbour they step under (no hairline cracks)   // 10-14.5: a seam keeps the step under a thinner neighbour (carriageway beside its shoulder)   // 10-14.4: a deck judges the ground under it as drawn (two triangles a cell, not bilinear): undersides over held ground   // 10-14.3: packMesh drops triangles with no area in float   // 10-14.2: layer slivers dropped by true slope (the fins), the side rule tests what is drawn   // 10-14.1: a thick slab beside a thin one shows its step (the freeway's one-way strip)   // 10-13.2: the mesh library (decks wound by triFacing, boxes and blocks from it)   // 10-13.1: nothing elevated is see-through from below (walls closed underneath over the twin decks' seam, track boxes closed, platforms reach the ground; the mesh audit)   // .2: a street bridging a street is not a junction in the twin   // 2026-10-02.1: the seam pull stands down across a bridge (pass8 over Third and Dogwood)  //   // 2026-09-30.2: deck undersides in the concrete mesh (#97)   // .3: balanced mountain profiles, authored-class guardrails with min_drop, girders under their bridges
 //   // .2: the lot pass keeps its clearance-width graph (roads/lotnav)
 //   // .1: the nav twin carries travel-lane widths (cars in the lane centre)
 //   // .3: hidden slab sides dropped, straight runs merged, layer boundaries oriented   // 2026-09-24.1: deck meshes welded, undersides only where a deck stands clear of the ground (ADR-0095)   // .2: slab sides only where they rise above the ground outside   // .1: the terrain is clamped under every deck VERTEX, not by centreline reach   // .2/.3: ramp ends (elevated or at-grade runs) welded to the road they merge into (nav twin)   // .4: one-way carriageways and ramps; the nav gets a deck's travel width   // .5: blocks are the holes of the pavement WITH its sidewalks
@@ -34,6 +37,18 @@ std::string graphDir(const std::string& path) { const size_t s = path.find_last_
 std::string terrainFileOf(const nlohmann::json& spec, const std::string& baseDir) {
     if (!spec.contains("terrain") || !spec["terrain"].is_object() || !spec["terrain"].contains("file")) return std::string();
     std::string f = spec["terrain"]["file"].get<std::string>(); if (f.empty() || f[0] == '/') return f; return baseDir + "/" + f;
+}
+
+// Does a graph spec use a track class: the built-in "rail" or one its own class table marks "track"?
+bool graphHasTrack(const nlohmann::json& spec) {
+    if (!spec.is_object() || !spec.contains("edges")) return false;
+    std::set<std::string> track{"rail", "light_rail"};   // the built-in track classes (road_graph_spec.cpp)
+    if (spec.contains("classes") && spec["classes"].is_object())
+        for (auto it = spec["classes"].begin(); it != spec["classes"].end(); ++it)
+            if (it.value().is_object() && it.value().value("track", false)) track.insert(it.key());
+    for (const auto& e : spec["edges"])
+        if (e.is_object() && track.count(e.value("class", std::string()))) return true;
+    return false;
 }
 
 double secondsSince(const std::chrono::steady_clock::time_point& t) { return std::chrono::duration<double>(std::chrono::steady_clock::now() - t).count(); }
@@ -61,6 +76,9 @@ public:
             else k = bundle::fnv1aStr("missing:" + e.graphPath, k);
             id.inputs.push_back(f);
             std::ifstream gf(e.graphPath); nlohmann::json spec; try { gf >> spec; } catch (const std::exception&) { spec = nlohmann::json(); }
+            // A graph with TRACK classes keys the rail tag too, so the track kit can change without re-baking every
+            // road-only level (their key stays what it was)
+            if (graphHasTrack(spec)) k = bundle::fnv1aStr(std::string("rail|") + kRailBuildTag, k);
             const std::string tf = terrainFileOf(spec, graphDir(e.graphPath));
             if (!tf.empty()) {
                 bundle::InputFile t; t.path = tf; uint64_t tk = bundle::kFnvOffset;
@@ -118,7 +136,7 @@ std::vector<CityEntity> cityEntities(const nlohmann::json& level) {
         nlohmann::json block;
         if (shape == "lanelab") block = ent.contains("lanelab") ? ent["lanelab"] : nlohmann::json::object();
         else if (shape == "road" && ent.contains("road") && ent["road"].is_object() &&
-                 ent["road"].value("builder", std::string()) == "lanes") block = ent["road"];
+                 roadBuilderName(ent["road"]) == "lanes") block = ent["road"];   // (lanes is the default: no key, a city)
         else continue;
         CityEntity e; e.ordinal = static_cast<int>(out.size()); e.entityIndex = idx; e.block = std::move(block);
         e.inlineGraph = e.block.contains("edges"); e.graphPath = e.inlineGraph ? std::string() : e.block.value("graph", std::string());
@@ -212,6 +230,7 @@ static RoadDeckField deckFromResult(const Result& r) {
             s.yAbs.push_back(r.heights ? r.heights->deckRoad(static_cast<int>(ei), e.xy[k]) : e.z[k]);
         s.halfWidth = lanes * 0.5 + shoulder;
         s.klass = classOf(e);
+        if (it != r.graph.classes.end()) s.use = it->second.track ? UnionSpine::Use::Track : it->second.footway ? UnionSpine::Use::Footway : UnionSpine::Use::Road;
         s.authoredDeck = e.isRamp() || s.klass == RoadClass::Freeway;
         // A road that bridges is a LAYER above the one it crosses, which is how a 2-D height
         // query tells them apart (RoadDeckField::heightAt). The build already measured it.
@@ -275,6 +294,7 @@ CityProducts cityProductsFromResult(const Result& r, double renderCell, bool wit
         }
     p.holes = pavementHoles(r, 2000.0);
     p.deck = deckFromResult(r);
+    p.rails = railTracks(r);
     p.bands = bandsFromResult(r);
     const double tTwin = secondsSince(t0); const auto t1 = std::chrono::steady_clock::now();
     size_t triangles = 0, bytes = 0; nlohmann::json materials = nlohmann::json::array();
@@ -282,13 +302,17 @@ CityProducts cityProductsFromResult(const Result& r, double renderCell, bool wit
     for (const NamedMesh& nm : named) {
         if (nm.mesh.vertices.empty()) continue;
         const bool paint = nm.name.rfind("paint", 0) == 0; const bool terrain = nm.name == "terrain";
-        const uint32_t flags = paint ? bundle::PackedMesh::kPaint : bundle::PackedMesh::kCollidable;
+        // sleepers and rails are drawn, never stood on: the ballast under them is the floor (a capsule snagging on
+        // every sleeper edge, and tens of thousands of boxes in the physics mesh, for nothing)
+        // (nor the canopy's ribbed sheet and its lamps, out of reach overhead)
+        const bool trackKitMesh = nm.name == "sleeper" || nm.name == "rail" || nm.name == "canopy" || nm.name == "station_lamp";
+        const uint32_t flags = paint ? bundle::PackedMesh::kPaint : trackKitMesh ? 0u : bundle::PackedMesh::kCollidable;
         std::vector<MeshBuilder::CellChunk> chunks = MeshBuilder::chunkByCell(nm.mesh, renderCell);
         std::sort(chunks.begin(), chunks.end(), [](const MeshBuilder::CellChunk& a, const MeshBuilder::CellChunk& b) { return a.cx != b.cx ? a.cx < b.cx : a.cz < b.cz; });
         size_t matTris = 0;
         for (MeshBuilder::CellChunk& c : chunks) {
             CityCellMesh cm; cm.cx = c.cx; cm.cz = c.cz;
-            const bool steel = nm.name == "guardrail";   // galvanised: smoother than concrete, still matte
+            const bool steel = nm.name == "guardrail" || nm.name == "rail" || nm.name == "canopy" || nm.name == "station_steel";   // galvanised: smoother than concrete, still matte
             cm.mesh = bundle::packMesh(c.mesh, nm.name, nm.color, flags, paint ? 0.7f : steel ? 0.42f : 0.93f, terrain ? 0.7 : 0.85);
             matTris += cm.mesh.triangleCount(); bytes += cm.mesh.bytes(); p.cells.push_back(std::move(cm));
         }
@@ -300,7 +324,7 @@ CityProducts cityProductsFromResult(const Result& r, double renderCell, bool wit
     std::map<std::string, double> timings = r.timings; timings["twin"] = tTwin; timings["meshes"] = tMeshes; timings["pack"] = tPack; if (withInvariants) timings["invariants"] = secondsSince(t3);
     p.report = {{"summary", summary(r)}, {"invariants", inv}, {"checked", withInvariants}, {"timings", timings}, {"seconds", r.seconds}, {"lanes", r.lanes.lanes.size()}, {"triangles", triangles},
                 {"meshBytes", bytes}, {"materials", materials}, {"cells", p.cells.size()}, {"holes", p.holes.size()}, {"deckSpines", p.deck.spines.size()}, {"kerbLoops", p.bands.loops.size()}, {"twinNodes", p.twin.graph.nodes.size()}, {"twinEdges", p.twin.graph.edges.size()},
-                {"navNodes", p.nav.nodes.size()}, {"navEdges", p.nav.edges.size()}, {"rowEdges", p.row.edges.size()}, {"hasTerrain", p.hasTerrain}};
+                {"navNodes", p.nav.nodes.size()}, {"navEdges", p.nav.edges.size()}, {"rowEdges", p.row.edges.size()}, {"railTracks", p.rails.size()}, {"hasTerrain", p.hasTerrain}};
     return p;
 }
 
@@ -325,6 +349,7 @@ void writeCityProducts(bundle::BundleWriter& w, int ordinal, const CityProducts&
     }
     nlohmann::json list = nlohmann::json::array(); for (const auto& kv : cells) list.push_back(kv.second);
     w.addJson(pre + "cells", nlohmann::json{{"cell", p.cell}, {"cells", list}});
+    if (!p.rails.empty()) w.addJson(pre + "rail/tracks", railTracksToJson(p.rails));
     w.addJson(pre + "report", p.report);
 }
 
@@ -357,6 +382,7 @@ bool readCityProducts(const bundle::Bundle& b, int ordinal, CityProducts& p, std
             CityCellMesh cm; cm.cx = cx; cm.cz = cz; BinReader r(v.data, v.size); if (!bundle::getPackedMesh(r, cm.mesh)) return fail(sec + ": unreadable"); p.cells.push_back(std::move(cm));
         }
     }
+    p.rails = railTracksFromJson(b.json(pre + "rail/tracks"));   // optional: a city with no track has none
     p.report = b.json(pre + "report");
     return true;
 }

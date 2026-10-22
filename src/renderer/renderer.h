@@ -132,6 +132,35 @@ struct RenderMaterial {
     // equal is open) -- so a near model and its far impostor CROSSFADE per pixel instead of popping.
     // Not with FLAG_GRASS (which owns the same push slot). Vulkan.
     static constexpr uint32_t FLAG_LOD_BAND = 1u << 19;
+    // A traffic signal's state rides each instance's bottom row (Mat4::m[3][0]: 0 none, 1 green, 2 amber, 3 red);
+    // mesh.vert lights the lamp of that colour. One static model per signal; only the number changes.
+    static constexpr uint32_t FLAG_SIGNAL_STATE = 1u << 20;
+    // FLAG_EMISSION_FOLLOWS_PAINT (bit 21): the emission is scaled by the vertex colour like the albedo -- a room's
+    // faint self-light (interior drywall) stays in proportion to its paint, so an oxblood bar wall is not lifted to
+    // grey. Vulkan + WebGPU (Metal owed).
+    static constexpr uint32_t FLAG_EMISSION_FOLLOWS_PAINT = 1u << 21;
+    // FLAG_FOLIAGE (bit 22): alpha-cut tree leaf cards lit AS FOLIAGE -- the normal faces the viewer (a card's back
+    // is not a dark side), bends part way to the sky, and the sun shines through -- as the forest's banded crowns
+    // (FLAG_LOD_BAND) always were. For a crown with no band: the tree lab's recipe trees (Glenn, 2026-10-17: the
+    // sakura came out a dusky mauve, half its cards their dark backs). Vulkan.
+    static constexpr uint32_t FLAG_FOLIAGE = 1u << 22;
+    // FLAG_UV_BLEND (bit 23; ADR-0183, Glenn, 2026-10-18: "we need to blend those textures better"): the mesh's tangent
+    // slot is DATA (RenderMesh::tangentIsData) -- a second UV and a weight (u2, v2, w) -- and the albedo and normal maps
+    // are sampled at both UVs and mixed by w: where a tree's trunk meets a limb or a root, each in its own bark mapping,
+    // the bark crossfades instead of cutting. The tangent frames come from the screen-space derivatives of each UV.
+    // Vulkan (Metal and WebGPU draw the first UV and a tangent that is not one).
+    static constexpr uint32_t FLAG_UV_BLEND = 1u << 23;
+    // FLAG_IMPOSTOR_VIEWS (bit 24; Glenn, 2026-10-18: "So can we make multi angle imposter cards"): a forest's far
+    // trees as MANY-VIEW impostors (forest.h appendImpostorViews): mesh.vert turns each tree's one card to the
+    // camera, mesh.frag picks and blends the baked views nearest the camera's direction round the tree and lights
+    // them by their normals. Casts no shadow (FLAG_SHADOW_ONLY crossed cards do). Vulkan.
+    static constexpr uint32_t FLAG_IMPOSTOR_VIEWS = 1u << 24;
+    // FLAG_TERRAIN (bit 25): the CDLOD ground, set by the backends' drawTerrain (never by a material) -- the lit pass
+    // reads the terrain normal map for it (setTerrainNormalMap). Vulkan.
+    static constexpr uint32_t FLAG_TERRAIN = 1u << 25;
+    // FLAG_CLUTTER (bit 26, with FLAG_GRASS): ground clutter planted like grass (GrassSystem: its rank, its fade) but a
+    // SOLID little mesh -- not a blade turned to the viewer and bent to the sky, no light through it. Vulkan.
+    static constexpr uint32_t FLAG_CLUTTER = 1u << 26;
     float lodIn0 = 0.0f, lodIn1 = 0.0f, lodOut0 = 0.0f, lodOut1 = 0.0f;
     float fadeStart = 0.0f, fadeEnd = 0.0f;   // FLAG_GRASS only
     // FLAG_GRASS: grows in over [fadeInStart, fadeInEnd] (the far field's cards, arriving as the
@@ -567,6 +596,17 @@ struct SceneLighting {
     // Aviation-beacon lights (BeaconLightSystem, every frame): the nearest
     // few lamps as red points, flashing. Merged like interiorPoints.
     std::vector<PointLight> beaconPoints;
+    // THE VIEWER'S ENCLOSURE (AudioSystem, every frame; the same box the walls and cabins muffle sound by): the
+    // cabin they ride in, else the building they stand in, as a box -- centre, its horizontal axis u, half
+    // extents (along u, across it, up). Glass inside it is the viewer's own window and reflects the room, not
+    // the sky (mesh.frag). viewerBoxValid false: out in the open.
+    bool viewerBoxValid = false;
+    Vec3 viewerBoxCentre;
+    Vec3 viewerBoxAxisU{1, 0, 0};
+    Vec3 viewerBoxHalf;
+    // ...and the ceiling over them (BuildingInteriorSystem, in a building; 0: none): its lit panels are what a night
+    // window mirrors
+    float viewerCeilingY = 0.0f;
     // The beacon flash clock and the night exposure adaptation (exposure /
     // authored exposure), published by DayNightSystem each frame so the
     // sprites and point lights flash and dim in step with the grown lamps.
@@ -757,6 +797,8 @@ public:
     virtual MeshHandle uploadPrepared(PreparedMesh&& mesh) { return uploadMesh(mesh.raw); }
     virtual void removeMesh(MeshHandle handle) = 0;
     virtual BoundingSphere getMeshBounds(MeshHandle handle) const = 0;
+    // (`channels` 2 keeps two channels on the GPU where the backend can: a normal's x and z, Vulkan's RG8; the others
+    // read the same .rg from RGBA)
     virtual TextureHandle uploadTexture(int width, int height, int channels,
                                         const uint8_t* data) = 0;
     // Float (HDR) texture upload — e.g. equirectangular environment maps decoded
@@ -781,6 +823,19 @@ public:
     virtual void setTerrainHorizon(TextureHandle /*map*/, float /*originX*/,
                                    float /*originZ*/, float /*extent*/,
                                    float /*encodeLo*/, float /*encodeHi*/) {}
+    // TERRAIN NORMAL MAP (ADR-0205, engine/procgen/terrain_world_map.h): a two-channel texture of the ground's normal
+    // (x, z; 0..1 for -1..1) over the square [originX, originX + extent)^2. The terrain (FLAG_TERRAIN) lights by it
+    // instead of its vertex normals beyond the camera distance where its mesh grows coarser than a texel, blended in
+    // over [fadeStart, fadeEnd]. An invalid handle switches it off. No-op by default (Vulkan).
+    virtual void setTerrainNormalMap(TextureHandle /*map*/, float /*originX*/, float /*originZ*/, float /*extent*/,
+                                     float /*fadeStart*/, float /*fadeEnd*/) {}
+    // TERRAIN SURFACE MAPS (ADR-0208, the same square): `cover`, four channels -- the ground-cover weights grass, dirt,
+    // sand, snow (rock the rest) -- which the terrain's layers take over from its vertices' over [fadeStart, fadeEnd];
+    // `macro`, four -- convexity (0.5 flat, 0 a gully, 1 a ridge), wetness, the rock's band tone (0.5: none) and its
+    // stains (ADR-0213: streaks below ledges, creases) -- shading the ground everywhere. Invalid
+    // handles switch them off. No-op by default (Vulkan).
+    virtual void setTerrainSurfaceMaps(TextureHandle /*cover*/, TextureHandle /*macro*/, float /*originX*/, float /*originZ*/,
+                                       float /*extent*/, float /*fadeStart*/, float /*fadeEnd*/) {}
     virtual RenderStats getRenderStats() const = 0;
     // The newest occlusion depth the GPU has finished (engine/occlusion.h), or null where the
     // backend has none (the caller then culls by frustum only).
@@ -853,9 +908,40 @@ public:
     virtual void drawMeshInstanced(MeshHandle handle,
                                    const std::vector<Mat4>& transforms,
                                    const RenderMaterial& material) {
-        for (const Mat4& m : transforms) drawMesh(handle, m, material);
+        // (a backend without instancing: the bottom row's per-instance DATA -- a grass rank and its ground's
+        // slope, a signal's state, read only by the Vulkan shaders -- must not reach its model matrix as a w)
+        for (Mat4 m : transforms) { m.m[3][0] = m.m[3][1] = m.m[3][2] = 0; drawMesh(handle, m, material); }
     }
     virtual void setReflectionProbes(const std::vector<ReflectionProbe>& /*probes*/) {}
+
+    // THE GPU CROWD (the 100k plan's mid-range band on compute): far travellers placed by a compute shader from their
+    // route and clock -- see shaders/vulkan/crowd.comp. The caller keeps the data; a backend copies what changed.
+    //   kinds:  what each traveller is drawn as (mesh, material, height above the road, how far it is drawn)
+    //   links:  6 floats per road link (its from and to ends, heights included), the routes' geometry
+    //   routes: 2 uints per entry (link, the route's running distance at that link's start, as float bits)
+    //   agents: one CrowdAgent per traveller slot; `dirty` the slots changed since the last call (all: everything)
+    // A backend without it returns false from supportsGpuCrowd and the caller draws its own (the CPU band).
+    struct CrowdKind {
+        MeshHandle mesh;
+        RenderMaterial material;
+        float yOffset = 0.0f;
+        float maxDistance = 2000.0f;
+        float minDistance = 0.0f;   // stand-ins are for distance: none nearer than this
+    };
+    struct CrowdAgent {   // 32 bytes, as crowd.comp reads it
+        uint32_t routeOff = 0, routeLen = 0;
+        float dist0 = 0, t0 = 0, speed = 0, side = 0;
+        uint32_t kind = 0, live = 0;
+    };
+    virtual bool supportsGpuCrowd() const { return false; }
+    virtual void setCrowdKinds(const std::vector<CrowdKind>& /*kinds*/) {}
+    virtual void setCrowdLinks(const std::vector<float>& /*sixPerLink*/) {}
+    virtual void setCrowdRoutes(const std::vector<uint32_t>& /*pairs*/, std::size_t /*firstChanged*/) {}
+    virtual void setCrowdAgents(const std::vector<CrowdAgent>& /*agents*/, const std::vector<uint32_t>& /*dirty*/,
+                                bool /*all*/) {}
+    virtual void setCrowdClock(float /*simSeconds*/) {}
+    virtual uint32_t crowdTravellers() const { return 0; }   // live records last uploaded (telemetry)
+    virtual uint32_t crowdDrawn() const { return 0; }        // instances the GPU emitted, a frame or two ago
 
     // Set (or clear, via `enabled = false`) the planetary atmosphere glow pass
     // (procedural-planet-plan P3). Backends without the pass ignore it. No-op default.

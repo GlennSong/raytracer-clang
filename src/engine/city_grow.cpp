@@ -36,17 +36,35 @@ NetLotResult growCity(const CityGrowInputs& in, LotGrowSetup* setupOut) {
                                           in.groundMeshCell, in.enterableAt);
     NetLotResult r;
 
-    const bool built = (in.blocks && !in.blocks->empty()) || (in.holes && !in.holes->empty());
+    // AUTHORED BLOCKS (toolkit_lab, issue #105): a level with no roads at all draws its blocks by hand --
+    // `citysim.blocks`, world XZ polygons, each already the buildable interior (behind whatever pavement the
+    // level drew itself). One lot, one building, through the same grow as a city lot: the same parceller
+    // (or citysim.wholeBlocks), the same architect, the same records the interior streams from and the
+    // elevator runs in.
+    std::vector<Poly2> authored;
+    if (!(in.blocks && !in.blocks->empty()) && !(in.holes && !in.holes->empty()) &&
+        in.citysim.contains("blocks") && in.citysim["blocks"].is_array()) {
+        for (const auto& poly : in.citysim["blocks"]) {
+            Poly2 b;
+            if (!poly.is_array()) continue;
+            for (const auto& pt : poly)
+                if (pt.is_array() && pt.size() >= 2) b.push_back(Vec2(pt[0].get<double>(), pt[1].get<double>()));
+            if (b.size() >= 3) authored.push_back(std::move(b));
+        }
+        LOG_INFO << "[citylots] " << authored.size() << " authored block(s) from citysim.blocks";
+    }
+    const bool built = (in.blocks && !in.blocks->empty()) || (in.holes && !in.holes->empty()) || !authored.empty();
     if (built) {
         // A WHOLE-CITY BUILDER'S BLOCKS. They are exact to the kerb and already inset by the
         // sidewalk (Clipper): the same parceller and grammar, no road graph to derive faces
         // from, and no miter inset to reject them.
-        const std::vector<Poly2> derived = in.blocks ? std::vector<Poly2>() : cityBlocksFromHoles(*in.holes, in.water);
-        const std::vector<Poly2>& blocks = in.blocks ? *in.blocks : derived;
+        const std::vector<Poly2> derived = (in.blocks || !authored.empty()) ? std::vector<Poly2>() : cityBlocksFromHoles(*in.holes, in.water);
+        const std::vector<Poly2>& blocks = !authored.empty() ? authored : in.blocks ? *in.blocks : derived;
         s.lp.roadMargin = 0;   // the block already begins behind the drawn sidewalk
         s.lp.smoothGround = in.smoothGround;
         s.lp.streetHeight = in.streetHeight;
         s.lp.nearFreeway = in.nearFreeway;
+        s.lp.trackKeepOut = in.trackKeepOut;
 #ifdef RT_ROADS_LANES
         s.lp.sidewalkRise = roads::lanes::lanesSidewalkRise();   // paving meets the drawn sidewalk (ADR-0086)
         s.lp.padFeatherInside = static_cast<Real>(roads::lanes::lanesPadFalloff(in.citysim.value("sidewalk", 4.0)));

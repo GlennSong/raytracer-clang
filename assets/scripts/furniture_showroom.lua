@@ -19,6 +19,7 @@ local ROWS = {
   { "sofa", "coffee_table", "tv_unit", "lounge_chair", "planter" },
   { "kitchen_base", "kitchen_sink", "kitchen_hob", "kitchen_tall", "kitchen_wall", "dining_table", "dining_chair" },
   { "bathtub", "toilet", "vanity" },
+  { "desk_pod", "cubicle", "meeting_table", "reception_desk", "water_cooler", "copier", "phone_booth" },
 }
 -- variant: bits 0-2 fabric, 3-4 wood, 5+ style
 local VARIANTS = { 0 + 0 * 8, 1 + 1 * 8 + 32, 3 + 2 * 8 + 64 }

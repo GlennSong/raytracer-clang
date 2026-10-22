@@ -77,9 +77,9 @@
   "groundCover": {
    "beachHeight": 3,
    "dirt": [
-    0.12,
-    0.085,
-    0.05
+    0.078,
+    0.056,
+    0.036
    ],
    "dirtPatches": 0.15,
    "grass": [
@@ -181,7 +181,7 @@
   "snowLine": 1300,
   "warp": 0.35,
   "weather": {
-   "res": 4096,
+   "res": 8192,
    "grow": {
     "res": 1024,
     "iterations": 250,
@@ -208,7 +208,8 @@
     "wavelength": 8,
     "slopeDamp": 0.3,
     "incise": 0.012,
-    "iterations": 20
+    "iterations": 20,
+    "stochasticFrom": 8192
    }
   },
   "forest": {
@@ -217,6 +218,17 @@
    "coverage": 0.42,
    "standScale": 650,
    "treeline": 640,
+   "regions": [
+    {
+     "name": "the pinewood in the foothills east of Saltwood",
+     "at": [-1500, -2300],
+     "radius": 900,
+     "edge": 300,
+     "altLo": 40,
+     "species": {"spruce": 6, "pine": 4, "fir": 1.5},
+     "others": 0.08
+    }
+   ],
    "shoreClear": 4,
    "maxSlopeDeg": 40,
    "cell": 256,
@@ -773,6 +785,8 @@
      0.7
     ]
    ]
-  }
- ]
+  },
+{"clutter": "stones", "seed": 41, "size": 0.9, "variants": 6, "spacing": 0.75, "nearRadius": 20, "radius": 48, "fadeStart": 28, "fadeEnd": 46, "clumpScale": 0.08, "clumpCut": 0.05, "color": [0.12, 0.112, 0.098]},
+{"clutter": "twigs", "seed": 43, "size": 0.9, "variants": 6, "spacing": 1.1, "nearRadius": 16, "radius": 38, "fadeStart": 22, "fadeEnd": 36, "clumpScale": 0.06, "clumpCut": 0.0}
+]
 }

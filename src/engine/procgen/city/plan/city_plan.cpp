@@ -214,6 +214,11 @@ RoadGraph planarizePolylines(const std::vector<Polyline>& roads, Real snap = 0.6
 // sample -- a 20 m connector of two samples between two arterials sat inside both their junctions and
 // no lane of it owned any pavement (the island's shaped cities, where contours, spokes and the grid meet)
 void collapseShortLinks(RoadGraph& g, Real sidewalk, bool chains = false) {
+    // Where each node STARTED, through every pass: a merge may not move any of them further than the link it
+    // collapses is long (2026-10-09). Uncapped, the union chained -- A to B, B to C, pass after pass -- and a
+    // cluster of near-misses 100 m across became one junction with 17 streets pulled into it.
+    std::vector<std::vector<Vec2>> origin(g.nodes.size());
+    for (std::size_t i = 0; i < g.nodes.size(); ++i) origin[i] = {g.nodes[i].pos};
     for (int pass = 0; pass < 6; ++pass) {
         // Only a link BETWEEN JUNCTIONS counts: the graph's edges are 15 m samples along a
         // road, and collapsing those would fold every street into a point.
@@ -228,13 +233,27 @@ void collapseShortLinks(RoadGraph& g, Real sidewalk, bool chains = false) {
         for (std::size_t i = 0; i < merge.size(); ++i) merge[i] = static_cast<int>(i);
         std::function<int(int)> find = [&](int a) { while (merge[static_cast<std::size_t>(a)] != a) a = merge[static_cast<std::size_t>(a)] = merge[static_cast<std::size_t>(merge[static_cast<std::size_t>(a)])]; return a; };
         bool any = false;
+        std::vector<std::vector<Vec2>> group = origin;   // per root: every original position merged into it
+        // join two groups only while the whole of the result stays within `cap` across
+        auto join = [&](int a, int b, Real cap) {
+            const int ra = find(a), rb = find(b);
+            if (ra == rb) return true;
+            for (const Vec2& p : group[static_cast<std::size_t>(ra)])
+                for (const Vec2& q : group[static_cast<std::size_t>(rb)])
+                    if ((p - q).length() > cap) return false;
+            const int lo = std::min(ra, rb), hi = std::max(ra, rb);
+            merge[static_cast<std::size_t>(hi)] = lo;
+            auto& G = group[static_cast<std::size_t>(lo)];
+            G.insert(G.end(), group[static_cast<std::size_t>(hi)].begin(), group[static_cast<std::size_t>(hi)].end());
+            any = true;
+            return true;
+        };
         for (const RoadEdge& e : g.edges) {
             const Vec2 pa = g.nodes[static_cast<std::size_t>(e.a)].pos, pb = g.nodes[static_cast<std::size_t>(e.b)].pos;
             if (degree[static_cast<std::size_t>(e.a)] < 3 || degree[static_cast<std::size_t>(e.b)] < 3) continue;
             const Real want = 0.5 * (widest[static_cast<std::size_t>(e.a)] + widest[static_cast<std::size_t>(e.b)]) + 4 * sidewalk;
             if ((pb - pa).length() >= want) continue;
-            const int ra = find(e.a), rb = find(e.b);
-            if (ra != rb) { merge[static_cast<std::size_t>(std::max(ra, rb))] = std::min(ra, rb); any = true; }
+            join(e.a, e.b, want);
         }
         if (chains) {
             std::vector<std::vector<std::pair<int, int>>> adj(g.nodes.size());   // node -> (other node, edge)
@@ -242,7 +261,6 @@ void collapseShortLinks(RoadGraph& g, Real sidewalk, bool chains = false) {
                 adj[static_cast<std::size_t>(g.edges[ei].a)].push_back({g.edges[ei].b, static_cast<int>(ei)});
                 adj[static_cast<std::size_t>(g.edges[ei].b)].push_back({g.edges[ei].a, static_cast<int>(ei)});
             }
-            auto unite = [&](int a, int b) { const int ra = find(a), rb = find(b); if (ra != rb) { merge[static_cast<std::size_t>(std::max(ra, rb))] = std::min(ra, rb); any = true; } };
             for (std::size_t j = 0; j < g.nodes.size(); ++j) {
                 if (degree[j] < 3) continue;
                 for (const auto& [first, e0] : adj[j]) {
@@ -261,8 +279,13 @@ void collapseShortLinks(RoadGraph& g, Real sidewalk, bool chains = false) {
                     if (degree[static_cast<std::size_t>(cur)] < 3 || cur == static_cast<int>(j)) continue;
                     const Real want = 0.5 * (widest[j] + widest[static_cast<std::size_t>(cur)]) + 4 * sidewalk;
                     if (len >= want) continue;
-                    unite(static_cast<int>(j), cur);
-                    for (int q : interior) unite(static_cast<int>(j), q);
+                    // the chain's interior goes with it only if the two ends could join
+                    std::vector<int> saved = merge;
+                    std::vector<std::vector<Vec2>> savedGroup = group;
+                    const bool wasAny = any;
+                    bool ok = join(static_cast<int>(j), cur, want);
+                    for (int q : interior) ok = ok && join(static_cast<int>(j), q, want);
+                    if (!ok) { merge.swap(saved); group.swap(savedGroup); any = wasAny; }
                 }
             }
         }
@@ -285,6 +308,7 @@ void collapseShortLinks(RoadGraph& g, Real sidewalk, bool chains = false) {
             for (std::size_t r = 0; r < g.nodes.size(); ++r)
                 if (keep[r] >= 0 && count[r] > 1) { sum[r] = g.nodes[static_cast<std::size_t>(keep[r])].pos * static_cast<double>(count[r]); }
         RoadGraph out;
+        std::vector<std::vector<Vec2>> outOrigin;
         std::vector<int> remap(g.nodes.size(), -1);
         for (std::size_t i = 0; i < g.nodes.size(); ++i) {
             const int r = find(static_cast<int>(i));
@@ -293,8 +317,11 @@ void collapseShortLinks(RoadGraph& g, Real sidewalk, bool chains = false) {
                 RoadNode n = g.nodes[static_cast<std::size_t>(r)];
                 n.pos = sum[static_cast<std::size_t>(r)] * (1.0 / std::max(1, count[static_cast<std::size_t>(r)]));
                 out.nodes.push_back(n);
+                outOrigin.emplace_back();
             }
             remap[i] = remap[static_cast<std::size_t>(r)];
+            auto& O = outOrigin[static_cast<std::size_t>(remap[i])];
+            O.insert(O.end(), origin[i].begin(), origin[i].end());
         }
         std::set<std::pair<int, int>> seen;
         for (const RoadEdge& e : g.edges) {
@@ -306,6 +333,7 @@ void collapseShortLinks(RoadGraph& g, Real sidewalk, bool chains = false) {
             out.edges.push_back(n);
         }
         g = std::move(out);
+        origin = std::move(outOrigin);
     }
 }
 
@@ -567,6 +595,55 @@ Real segmentDistance(const Vec2& a0, const Vec2& a1, const Vec2& b0, const Vec2&
     }
     return std::min(std::min(pointSegDistance(a0, b0, b1), pointSegDistance(a1, b0, b1)),
                     std::min(pointSegDistance(b0, a0, a1), pointSegDistance(b1, a0, a1)));
+}
+
+// MEETING EXACTLY (2026-10-09, Glenn: "many roads merged together"). The shaped layout lays its street
+// families separately -- grid, contours, spokes, wedge streets -- and each used to stop NEAR the next: a grid
+// street a few metres short of the boulevard or past it, a wedge street starting 8 m inside it, 20 m from where
+// a grid street came in. Planarizing joins only what touches (0.6 m), so the near-misses were overlapping
+// pavements with no junction, and collapseShortLinks then pulled them into one star. These put a street's end
+// ON the line it meets.
+
+// Every place polyline P crosses one of `lines`, as (station along P, point), by station.
+std::vector<std::pair<Real, Vec2>> crossingsWith(const std::vector<Vec2>& P, const std::vector<std::vector<Vec2>>& lines) {
+    std::vector<std::pair<Real, Vec2>> out;
+    Real st = 0;
+    for (std::size_t i = 0; i + 1 < P.size(); ++i) {
+        const Vec2 a0 = P[i], r = P[i + 1] - P[i];
+        const Real len = r.length();
+        for (const std::vector<Vec2>& L : lines)
+            for (std::size_t j = 0; j + 1 < L.size(); ++j) {
+                const Vec2 b0 = L[j], s2 = L[j + 1] - L[j];
+                const Real den = cross(r, s2);
+                if (std::fabs(den) < 1e-12) continue;
+                const Real t = cross(b0 - a0, s2) / den, u = cross(b0 - a0, r) / den;
+                if (t >= 0 && t < 1 && u >= 0 && u <= 1) out.push_back({st + t * len, a0 + r * t});
+            }
+        st += len;
+    }
+    std::sort(out.begin(), out.end(), [](const auto& x, const auto& y) { return x.first < y.first; });
+    return out;
+}
+
+// P between stations s0 and s1, its ends interpolated exactly.
+std::vector<Vec2> cutPolyline(const std::vector<Vec2>& P, Real s0, Real s1) {
+    std::vector<Vec2> out;
+    Real st = 0;
+    for (std::size_t i = 0; i + 1 < P.size(); ++i) {
+        const Real len = (P[i + 1] - P[i]).length(), e = st + len;
+        auto at = [&](Real s) { return P[i] + (P[i + 1] - P[i]) * (len > 1e-12 ? (s - st) / len : 0.0); };
+        if (out.empty() && s0 <= e) out.push_back(at(std::max(s0, st)));
+        if (!out.empty()) {
+            if (s1 <= e) { out.push_back(at(s1)); break; }
+            if (e > s0) out.push_back(P[i + 1]);
+        }
+        st = e;
+    }
+    // drop near-duplicate points the cuts leave
+    std::vector<Vec2> clean;
+    for (const Vec2& q : out) if (clean.empty() || (q - clean.back()).length() > 0.5) clean.push_back(q);
+    if (clean.size() == 1 && out.size() > 1) clean.push_back(out.back());
+    return clean;
 }
 
 std::vector<std::size_t> dpKeep(const Poly2& P, Real tol) {
@@ -1090,6 +1167,7 @@ CityPlan generatePlan(const Brief& B) {
                 if (shape.depth[static_cast<std::size_t>(j) * shape.n + i] >= shapeRim)
                     reach = std::max(reach, (shape.origin + Vec2(i * shape.cell, j * shape.cell) - shape.heart).length());
         const Real coreR = std::sqrt(std::max(Real(1), shape.area * landSpec.value("coreShare", 0.12)) / kPi);
+        std::vector<Polyline> grid;
         for (int axis = 0; axis < 2; ++axis) {
             const bool alongV = axis == 0;
             for (const auto& [off, idx] : gridPositions(alongV ? B.coreBlockU : B.coreBlockV, alongV ? B.midBlockU : B.midBlockV, coreR, reach)) {
@@ -1098,7 +1176,7 @@ CityPlan generatePlan(const Brief& B) {
                 cur.klass = arterial ? RoadClass::Arterial : RoadClass::Local;
                 cur.width = arterial ? B.arterialWidth : B.localWidth;
                 const Vec2 dirLine = alongV ? G.v : G.u;
-                auto flush = [&] { if (cur.pts.size() >= 2) roads.push_back(cur); cur.pts.clear(); };
+                auto flush = [&] { if (cur.pts.size() >= 2) grid.push_back(cur); cur.pts.clear(); };
                 for (Real t = -reach - 20; t <= reach + 20; t += 15.0) {
                     const Vec2 p = alongV ? G.toWorld(off, t) : G.toWorld(t, off);
                     const Real d = shape.depthAt(p);
@@ -1117,56 +1195,252 @@ CityPlan generatePlan(const Brief& B) {
         // should drive as a curve, not a zigzag
         const Real smoothM = landSpec.value("streetSmooth", 90.0);
         auto contourRoads = [&](Real level, RoadClass k, Real w) {
+            std::vector<std::vector<Vec2>> lines;
             for (const std::vector<Vec2>& c : shape.contour(level, 15.0, 250.0, smoothM)) {
                 Polyline pl; pl.klass = k; pl.width = w; pl.pts = c;
                 pl.closed = c.size() > 2 && (c.front() - c.back()).length() < 30.0;
+                // a LOOP too thin to hold a block (twice its area over its length, its mean width, under 80 m): a
+                // sliver of deep ground, and its two sides one street on top of the other -- not a boulevard
+                if (pl.closed) {
+                    Real area = 0, perim = 0;
+                    for (std::size_t i = 0; i < c.size(); ++i) {
+                        const Vec2 a2 = c[i], b2 = c[(i + 1) % c.size()];
+                        area += cross(a2, b2);
+                        perim += (b2 - a2).length();
+                    }
+                    if (std::fabs(area) / std::max(Real(1), perim) < 80.0) continue;
+                }
                 roads.push_back(pl);
+                lines.push_back(c);
+                if (pl.closed) lines.back().push_back(c.front());   // crossings test the closing segment too
             }
+            return lines;
         };
-        contourRoads(shapeRim, RoadClass::Arterial, B.arterialWidth);
+        std::vector<std::vector<std::vector<Vec2>>> ringLines{contourRoads(shapeRim, RoadClass::Arterial, B.arterialWidth)};
         std::vector<Real> levels{shapeRim};
         const int nRings = std::max(1, static_cast<int>(std::lround((shapeRim - edgeDepth) / std::max(Real(60), B.ringSpacing))));
         for (int k = 1; k <= nRings && shapeRim - edgeDepth > 60; ++k) {
             levels.push_back(shapeRim - (shapeRim - edgeDepth) * k / nRings);
-            contourRoads(levels.back(), RoadClass::Collector, B.collectorWidth);
+            ringLines.push_back(contourRoads(levels.back(), RoadClass::Collector, B.collectorWidth));
         }
-        // SPOKES: arterials from the rim down the depth to the last ring, every spokeSpacing along the rim
+        // THE GRID MEETS THE RIM. A grid street running alongside the boulevard (inside its corridor, within ~37
+        // degrees of its line) is cut out there. A grid street that comes to the boulevard ENDS ON IT -- cut back
+        // to where it crosses, or carried on to it when it stopped short -- if it meets it squarely enough (40
+        // degrees or more). Any other end, a glancing meeting or a dead end, goes back to the street's last crossing
+        // with another grid street: a grid street meeting a curve at 25 degrees made a skewed junction with a sliver
+        // of block beside it, and a cut-off stub poked into the gap. The ends on the boulevard are where the streets
+        // beyond start (below), so the grid carries on across it instead of missing it by 20 m.
+        const std::vector<std::vector<Vec2>>& rim = ringLines.front();
+        // JUNCTIONS ON A CONTOUR are one point or this far apart: collapseShortLinks merges junctions closer than
+        // (about) this along a road, and two of them 38 m apart on the boulevard came out as a street kinked into
+        // the other's node
+        const Real junctionGap = B.arterialWidth + 4 * B.sidewalk + 3.0;
+        struct Arrival { Vec2 at; RoadClass klass; };
+        std::vector<Arrival> gridEnds;
+        std::vector<std::vector<Vec2>> gridLines;   // as laid, for the streets beyond to keep clear of
+        {
+            const Real reachBack = 60.0, reachOn = 30.0, squarely = 0.64;   // sin 40 degrees
+            // alongside the boulevard: split there
+            struct Piece { std::vector<Vec2> pts; const Polyline* from; bool rim0 = false, rim1 = false; };
+            std::vector<Piece> pieces;
+            for (const Polyline& g : grid) {
+                const Real besideRim = B.arterialWidth / 2 + g.width / 2 + 2 * B.sidewalk;
+                pieces.push_back({{}, &g});
+                for (std::size_t i = 0; i < g.pts.size(); ++i) {
+                    const Vec2 dir = g.pts[std::min(i + 1, g.pts.size() - 1)] - g.pts[i > 0 && i + 1 == g.pts.size() ? i - 1 : i];
+                    bool beside = false;
+                    for (const std::vector<Vec2>& r : rim) {
+                        Vec2 rd(1, 0);
+                        bool past = false;
+                        // within ~37 degrees: a grid street at 30 degrees to the boulevard's curve, inside its
+                        // corridor, is a second carriageway beside it with a sliver of block between
+                        if (distToPolylineDir(g.pts[i], r, &rd, &past) < besideRim && !past && dir.length() > 1e-9 &&
+                            std::fabs(cross(dir * (1 / dir.length()), rd)) < 0.6) { beside = true; break; }
+                    }
+                    if (beside) { if (!pieces.back().pts.empty()) pieces.push_back({{}, &g}); }
+                    else pieces.back().pts.push_back(g.pts[i]);
+                }
+            }
+            // each end onto the boulevard: the nearest crossing within 60 m back along the street or 30 m on, met squarely
+            for (Piece& pc : pieces) {
+                std::vector<Vec2>& pts = pc.pts;
+                if (pts.size() < 2) continue;
+                const Vec2 d0 = (pts[0] - pts[1]) * (1 / std::max(Real(1e-9), (pts[0] - pts[1]).length()));
+                const Vec2 d1 = (pts.back() - pts[pts.size() - 2]) * (1 / std::max(Real(1e-9), (pts.back() - pts[pts.size() - 2]).length()));
+                std::vector<Vec2> ext{pts[0] + d0 * reachOn};
+                ext.insert(ext.end(), pts.begin(), pts.end());
+                ext.push_back(pts.back() + d1 * reachOn);
+                const Real total = roads::lanes::stations(ext).back();
+                auto square = [&](const Vec2& at, const Vec2& d) {
+                    Real best = 1e30;
+                    Vec2 rd(1, 0);
+                    for (const std::vector<Vec2>& r : rim) {
+                        Vec2 dd(1, 0);
+                        const Real dist = distToPolylineDir(at, r, &dd, nullptr);
+                        if (dist < best) { best = dist; rd = dd; }
+                    }
+                    return std::fabs(cross(d, rd)) >= squarely;
+                };
+                Real s0 = reachOn, s1 = total - reachOn;
+                for (const auto& [st, q] : crossingsWith(ext, rim))
+                    if (st <= reachOn + reachBack && st < total / 2 && (!pc.rim0 || std::fabs(st - reachOn) < std::fabs(s0 - reachOn))) { s0 = st; pc.rim0 = true; }
+                for (const auto& [st, q] : crossingsWith(ext, rim))
+                    if (st >= total - reachOn - reachBack && st > total / 2 && (!pc.rim1 || std::fabs(st - (total - reachOn)) < std::fabs(s1 - (total - reachOn)))) { s1 = st; pc.rim1 = true; }
+                std::vector<Vec2> cut = s1 - s0 >= 20.0 ? cutPolyline(ext, s0, s1) : std::vector<Vec2>{};
+                if (cut.size() >= 2) {
+                    pc.rim0 = pc.rim0 && square(cut.front(), d0);
+                    pc.rim1 = pc.rim1 && square(cut.back(), d1);
+                }
+                pts = cut;
+            }
+            // two grid streets meeting the boulevard closer than junctionGap -- or crossing each other within 1.6 of
+            // it of both their ends: a grid corner just inside the boulevard, a triangle of block between the three
+            // -- the less important one (a local before an avenue, then the less square) stops at its last crossing
+            {
+                struct End { std::size_t piece; bool last; Vec2 at; bool arterial; Real sq; };
+                std::vector<End> ends;
+                for (std::size_t i = 0; i < pieces.size(); ++i) {
+                    const Piece& pc = pieces[i];
+                    if (pc.pts.size() < 2) continue;
+                    for (bool last : {false, true}) {
+                        if (!(last ? pc.rim1 : pc.rim0)) continue;
+                        const Vec2 at = last ? pc.pts.back() : pc.pts.front();
+                        const Vec2 nb = last ? pc.pts[pc.pts.size() - 2] : pc.pts[1];
+                        Vec2 rd(1, 0), d = at - nb;
+                        Real best = 1e30;
+                        for (const std::vector<Vec2>& r : rim) { Vec2 dd(1, 0); const Real dist = distToPolylineDir(at, r, &dd, nullptr); if (dist < best) { best = dist; rd = dd; } }
+                        ends.push_back({i, last, at, pc.from->klass == RoadClass::Arterial, std::fabs(cross(d * (1 / std::max(Real(1e-9), d.length())), rd))});
+                    }
+                }
+                std::vector<char> gone(ends.size(), 0);
+                for (std::size_t a = 0; a < ends.size(); ++a)
+                    for (std::size_t b = a + 1; b < ends.size(); ++b) {
+                        if (gone[a] || gone[b] || ends[a].piece == ends[b].piece) continue;
+                        bool close = (ends[a].at - ends[b].at).length() < junctionGap;
+                        if (!close && (ends[a].at - ends[b].at).length() < 4 * junctionGap)
+                            for (const auto& [st, q] : crossingsWith(pieces[ends[a].piece].pts, {pieces[ends[b].piece].pts}))
+                                if ((q - ends[a].at).length() < 1.6 * junctionGap && (q - ends[b].at).length() < 1.6 * junctionGap) { close = true; break; }
+                        if (!close) continue;
+                        const bool loseA = ends[a].arterial != ends[b].arterial ? !ends[a].arterial : ends[a].sq < ends[b].sq;
+                        const End& l = ends[loseA ? a : b];
+                        gone[loseA ? a : b] = 1;
+                        (l.last ? pieces[l.piece].rim1 : pieces[l.piece].rim0) = false;
+                    }
+            }
+            // the other ends back to their last grid crossing -- against the pieces still standing, again until
+            // nothing moves (a piece cut back can leave another's crossing dangling)
+            for (int pass = 0; pass < 4; ++pass) {
+                bool moved = false;
+                std::vector<std::vector<Vec2>> standing;
+                std::vector<std::size_t> standingOf;
+                for (std::size_t i = 0; i < pieces.size(); ++i) if (pieces[i].pts.size() >= 2) { standing.push_back(pieces[i].pts); standingOf.push_back(i); }
+                for (std::size_t pi = 0; pi < pieces.size(); ++pi) {
+                    Piece& pc = pieces[pi];
+                    if (pc.pts.size() < 2 || (pc.rim0 && pc.rim1)) continue;
+                    std::vector<std::vector<Vec2>> others;
+                    for (std::size_t k = 0; k < standing.size(); ++k) if (standingOf[k] != pi) others.push_back(standing[k]);
+                    const Real total = roads::lanes::stations(pc.pts).back();
+                    Real lo = pc.rim0 ? 0 : 1e30, hi = pc.rim1 ? total : -1e30;
+                    for (const auto& [st, q] : crossingsWith(pc.pts, others)) {
+                        if (!pc.rim0) lo = std::min(lo, st);
+                        if (!pc.rim1) hi = std::max(hi, st);
+                    }
+                    if (lo > 0.5 || hi < total - 0.5) moved = true;
+                    pc.pts = hi - lo >= 20.0 ? cutPolyline(pc.pts, lo, hi) : std::vector<Vec2>{};
+                }
+                if (!moved) break;
+            }
+            for (const Piece& pc : pieces) {
+                if (pc.pts.size() < 2) continue;
+                if (pc.rim0) gridEnds.push_back({pc.pts.front(), pc.from->klass});
+                if (pc.rim1) gridEnds.push_back({pc.pts.back(), pc.from->klass});
+                Polyline cut = *pc.from;
+                cut.pts = pc.pts;
+                gridLines.push_back(cut.pts);
+                roads.push_back(cut);
+            }
+        }
+        // A street going OUT from a contour: down the depth from `from` (on that contour), ending where it meets
+        // the next contour out (or, past the last one, where the depth runs out).
+        auto outward = [&](const Vec2& from, std::size_t band) {
+            const std::size_t next = std::min(band + 1, levels.size() - 1);
+            std::vector<Vec2> line = descendDepth(shape, from, levels[next] - 8.0);
+            if (line.size() < 2 || next == band) return line;
+            for (const auto& [st, q] : crossingsWith(line, ringLines[next]))
+                if (st > 10.0) return cutPolyline(line, 0.0, st);
+            return line;
+        };
+        // Starting a street where one arrives: a start within `snap` of an arriving street's end moves onto it,
+        // so the two are one street through the junction, not two junctions a car-length apart.
+        auto snapTo = [](Vec2 p, const std::vector<Arrival>& arrivals, Real snap, RoadClass* klass) {
+            Real best = snap;
+            for (const Arrival& a : arrivals)
+                if ((a.at - p).length() < best && (!klass || *klass == RoadClass::Local || a.klass == *klass)) { best = (a.at - p).length(); p = a.at; }
+            return p;
+        };
+        // SPOKES: arterials from the rim down the depth to the last ring, every spokeSpacing along the rim -- each
+        // carrying on a grid avenue where one meets the rim near it
         std::vector<std::vector<Vec2>> spokeLines;
         const Real spokeSpacing = landSpec.value("spokeSpacing", 480.0);
-        for (const std::vector<Vec2>& rim : shape.contour(shapeRim, 15.0, 250.0, smoothM)) {
-            const std::vector<double> st = roads::lanes::stations(rim);
+        for (const std::vector<Vec2>& r : rim) {
+            const std::vector<double> st = roads::lanes::stations(r);
             const int k = std::max(1, static_cast<int>(std::lround(st.back() / spokeSpacing)));
             for (int i = 0; i < k; ++i) {
-                const Vec2 p = roads::lanes::pointAt(rim, st, st.back() * (i + 0.5) / k);
+                RoadClass art = RoadClass::Arterial;
+                const Vec2 at = roads::lanes::pointAt(r, st, st.back() * (i + 0.5) / k);
+                Vec2 p = snapTo(at, gridEnds, 0.2 * spokeSpacing, &art);   // carrying on an avenue,
+                if ((p - at).length() < 1e-9) p = snapTo(at, gridEnds, junctionGap, nullptr);   // or any street close by
                 Polyline sp; sp.klass = RoadClass::Arterial; sp.width = B.arterialWidth;
-                sp.pts = descendDepth(shape, p + shape.gradient(p) * 8.0, levels.back() - 8.0);
+                // to the last ring, crossing the ones between
+                sp.pts = descendDepth(shape, p, levels.back() - 8.0);
+                if (levels.size() > 1) {
+                    const auto xs = crossingsWith(sp.pts, ringLines.back());
+                    for (const auto& [s, q] : xs) if (s > 10.0) { sp.pts = cutPolyline(sp.pts, 0.0, s); break; }
+                }
                 if (sp.pts.size() >= 3) { spokeLines.push_back(sp.pts); roads.push_back(sp); }
             }
         }
-        // WEDGE STREETS across each band, square to its contours, staggered band to band, never
-        // beside a spoke or crowding the street before it where the lines converge (an inlet's shore)
+        // WEDGE STREETS across each band, square to its contours, staggered band to band, never beside a spoke, a
+        // grid street, or crowding the street before it where the lines converge (an inlet's shore). Each starts ON
+        // its band's inner contour -- where a street arrives from inside if one is within 0.42 of the spacing (the
+        // grid's ends on the rim, the last band's wedge streets on a ring) -- and ends on the next one out.
         const Real keep = B.arterialWidth / 2 + B.localWidth / 2 + 2 * B.sidewalk + 6;
+        std::vector<Arrival> arrivals = gridEnds;
         for (std::size_t bi = 0; bi + 1 < levels.size(); ++bi) {
             std::vector<std::vector<Vec2>> placed;
-            for (const std::vector<Vec2>& inner : shape.contour(levels[bi], 15.0, 150.0, smoothM)) {
+            std::vector<Arrival> ends;
+            for (const std::vector<Vec2>& inner : ringLines[bi]) {
                 const std::vector<double> st = roads::lanes::stations(inner);
                 const Real stagger = (bi % 2) * 0.5 * B.wedgeStreetSpacing;
                 for (Real s0 = stagger + 0.5 * B.wedgeStreetSpacing; s0 < st.back(); s0 += B.wedgeStreetSpacing) {
-                    const Vec2 p = roads::lanes::pointAt(inner, st, s0);
-                    std::vector<Vec2> line = descendDepth(shape, p + shape.gradient(p) * 8.0, levels[bi + 1] - 8.0);
-                    if (line.size() < 3) continue;
+                    const Vec2 p = snapTo(roads::lanes::pointAt(inner, st, s0), arrivals, std::max(0.42 * B.wedgeStreetSpacing, junctionGap), nullptr);
+                    std::vector<Vec2> line = outward(p, bi);
+                    if (line.size() < 2 || roads::lanes::stations(line).back() < 30.0) continue;
                     bool clash = false;
-                    for (const auto* set : {&spokeLines, &placed})
+                    for (const auto* set : {&spokeLines, &placed, &gridLines}) {
                         for (const std::vector<Vec2>& o : *set) {
-                            for (const Vec2& q : line) if (distToPolyline(q, o, false) < keep) { clash = true; break; }
+                            for (const Vec2& q : line) {
+                                // where it starts it meets what it carries on from: only further out is crowding
+                                if ((q - p).length() < keep) continue;
+                                // a spoke crosses every ring: a wedge street starting or ending beside that
+                                // crossing is the junction-gap problem again, so spokes are kept further off
+                                if (distToPolyline(q, o, false) < (set == &spokeLines ? std::max(keep, junctionGap) : keep)) { clash = true; break; }
+                            }
                             if (clash) break;
                         }
+                        if (clash) break;
+                    }
+                    // ending on the next contour beside another's end (the lines converge toward an inlet): one
+                    // junction or none
+                    for (const Arrival& e : ends) if ((e.at - line.back()).length() < junctionGap) { clash = true; break; }
                     if (clash) continue;
                     Polyline ls; ls.klass = RoadClass::Local; ls.width = B.localWidth; ls.pts = line;
                     placed.push_back(line);
+                    ends.push_back({line.back(), RoadClass::Local});
                     roads.push_back(ls);
                 }
             }
+            arrivals = ends;
         }
         // BRIDGES. The river is an edge of the depth, so nothing crosses it by accident: each bridge
         // is placed. Where an arterial comes down to the water (a spoke, a grid avenue), it crosses --
@@ -2400,6 +2674,101 @@ PlanScore evaluatePlan(CityPlan& plan) {
                 }
             }
     }
+    // MERGED STREETS (see PlanScore). Junctions: how many streets meet, and the narrowest angle between two
+    // leaving it. Overlap: every 2 m along each road (chain), the nearest OTHER road; inside its roadway (the two
+    // half widths, no sidewalks) counts, unless within twice that of a node the two share -- that is their
+    // junction, or a crossing (the graph is planar). A street that stops a few metres short of another, or runs
+    // into its side without a node, is counted: the builder paves the two into one blob.
+    {
+        const RoadGraph& g = plan.streets;
+        std::vector<std::vector<Vec2>> leaving(g.nodes.size());
+        for (const RoadEdge& e : g.edges) {
+            const Vec2 d = g.nodes[static_cast<std::size_t>(e.b)].pos - g.nodes[static_cast<std::size_t>(e.a)].pos;
+            if (d.length() < 1e-9) continue;
+            leaving[static_cast<std::size_t>(e.a)].push_back(d * (1 / d.length()));
+            leaving[static_cast<std::size_t>(e.b)].push_back(d * (-1 / d.length()));
+        }
+        const Real tightCos = std::cos(15.0 * kPi / 180.0);
+        std::vector<std::pair<int, Vec2>> crowded;
+        for (std::size_t n = 0; n < leaving.size(); ++n) {
+            const auto& L = leaving[n];
+            s.worstJunction = std::max(s.worstJunction, static_cast<int>(L.size()));
+            if (L.size() >= 5) { ++s.crowdedJunctions; crowded.push_back({static_cast<int>(L.size()), g.nodes[n].pos}); }
+            for (std::size_t i = 0; i < L.size(); ++i)
+                for (std::size_t j = i + 1; j < L.size(); ++j)
+                    if (dot(L[i], L[j]) > tightCos) ++s.tightTurns;
+        }
+        const std::vector<PlanChain> chains = chainsOf(g);
+        // segments on a 40 m hash
+        constexpr Real kCell = 40;
+        std::unordered_map<long long, std::vector<std::pair<int, int>>> cells;   // -> (chain, segment)
+        auto key = [](long long i, long long j) { return (i << 32) ^ (j & 0xffffffffLL); };
+        Real maxHalf = 0;
+        for (const PlanChain& c : chains) maxHalf = std::max(maxHalf, c.width / 2);
+        for (int ci = 0; ci < static_cast<int>(chains.size()); ++ci) {
+            const auto& P = chains[static_cast<std::size_t>(ci)].pts;
+            for (int k = 0; k + 1 < static_cast<int>(P.size()); ++k) {
+                const Vec2 a = P[static_cast<std::size_t>(k)], b = P[static_cast<std::size_t>(k) + 1];
+                const long long x0 = static_cast<long long>(std::floor(std::min(a.x, b.x) / kCell)), x1 = static_cast<long long>(std::floor(std::max(a.x, b.x) / kCell));
+                const long long y0 = static_cast<long long>(std::floor(std::min(a.y, b.y) / kCell)), y1 = static_cast<long long>(std::floor(std::max(a.y, b.y) / kCell));
+                for (long long x = x0; x <= x1; ++x)
+                    for (long long y = y0; y <= y1; ++y) cells[key(x, y)].push_back({ci, k});
+            }
+        }
+        std::vector<std::set<int>> nodesOf(chains.size());
+        for (std::size_t ci = 0; ci < chains.size(); ++ci) nodesOf[ci].insert(chains[ci].nodes.begin(), chains[ci].nodes.end());
+        struct Spot { Real m; Vec2 at; };
+        std::vector<Spot> spots;   // overlap, clustered 100 m
+        constexpr Real kStep = 2;
+        const int reach = static_cast<int>(std::ceil(2 * maxHalf / kCell)) + 1;
+        for (int ci = 0; ci < static_cast<int>(chains.size()); ++ci) {
+            const PlanChain& A = chains[static_cast<std::size_t>(ci)];
+            for (std::size_t k = 0; k + 1 < A.pts.size(); ++k) {
+                const Vec2 a = A.pts[k], b = A.pts[k + 1];
+                const Real L = (b - a).length();
+                const int steps = std::max(1, static_cast<int>(L / kStep));
+                for (int t = 0; t < steps; ++t) {
+                    const Vec2 q = a + (b - a) * ((t + 0.5) / steps);
+                    const long long cx = static_cast<long long>(std::floor(q.x / kCell)), cy = static_cast<long long>(std::floor(q.y / kCell));
+                    bool hit = false;
+                    for (long long x = cx - reach; x <= cx + reach && !hit; ++x)
+                        for (long long y = cy - reach; y <= cy + reach && !hit; ++y) {
+                            const auto it = cells.find(key(x, y));
+                            if (it == cells.end()) continue;
+                            for (const auto& [cj, sk] : it->second) {
+                                if (cj == ci) continue;
+                                const PlanChain& B = chains[static_cast<std::size_t>(cj)];
+                                const Real lim = (A.width + B.width) / 2;
+                                if (pointSegDistance(q, B.pts[static_cast<std::size_t>(sk)], B.pts[static_cast<std::size_t>(sk) + 1]) >= lim) continue;
+                                bool atJunction = false;
+                                for (int n : A.nodes)
+                                    if (nodesOf[static_cast<std::size_t>(cj)].count(n) && (g.nodes[static_cast<std::size_t>(n)].pos - q).length() < 2 * lim) { atJunction = true; break; }
+                                if (atJunction) continue;
+                                hit = true;
+                                break;
+                            }
+                        }
+                    if (!hit) continue;
+                    const Real m = L / steps;
+                    s.pavedOverlapM += m;
+                    bool merged = false;
+                    for (Spot& sp : spots) if ((sp.at - q).length() < 100) { sp.m += m; merged = true; break; }
+                    if (!merged) spots.push_back({m, q});
+                }
+            }
+        }
+        std::sort(spots.begin(), spots.end(), [](const Spot& x, const Spot& y) { return x.m > y.m; });
+        std::sort(crowded.begin(), crowded.end(), [](const auto& x, const auto& y) { return x.first > y.first; });
+        for (const Spot& sp : spots) if (s.messAt.size() < 3 && sp.m >= 20) s.messAt.push_back(sp.at);
+        for (const auto& c : crowded) if (s.messAt.size() < 5) s.messAt.push_back(c.second);
+        if (s.pavedOverlapM >= 100 || s.worstJunction >= 6 || s.tightTurns > 0) {
+            std::string n = std::to_string(static_cast<int>(std::round(s.pavedOverlapM))) + " m of street paved into another, worst junction " +
+                            std::to_string(s.worstJunction) + " streets (" + std::to_string(s.crowdedJunctions) + " of 5+), " +
+                            std::to_string(s.tightTurns) + " under 15 deg; look at";
+            for (const Vec2& at : s.messAt) n += " (" + std::to_string(static_cast<int>(std::round(at.x))) + ", " + std::to_string(static_cast<int>(std::round(at.y))) + ")";
+            s.notes.push_back(n);
+        }
+    }
     if (s.corridorOverlaps)
         s.notes.push_back(std::to_string(s.corridorOverlaps) + " road pairs overlap (worst " +
                           std::to_string(static_cast<int>(std::round(s.worstOverlap))) + " m into each other)");
@@ -2494,7 +2863,9 @@ nlohmann::json planToJson(const CityPlan& plan, const PlanScore& s) {
                   {"meanLotsPerLotBlock", s.meanLotsPerLotBlock}, {"streetComponents", s.streetComponents},
                   {"commutesSampled", s.commutesSampled}, {"freewayCommuteShare", s.freewayCommuteShare},
                   {"streetKm", s.streetKm}, {"freewayKm", s.freewayKm},
-                  {"corridorOverlaps", s.corridorOverlaps}, {"worstOverlap", s.worstOverlap}, {"notes", s.notes}};
+                  {"corridorOverlaps", s.corridorOverlaps}, {"worstOverlap", s.worstOverlap},
+                  {"worstJunction", s.worstJunction}, {"crowdedJunctions", s.crowdedJunctions}, {"tightTurns", s.tightTurns},
+                  {"pavedOverlapM", std::round(s.pavedOverlapM)}, {"notes", s.notes}};
     return j;
 }
 
@@ -2554,6 +2925,8 @@ std::string planToSvg(const CityPlan& plan, const PlanScore& s) {
     std::snprintf(buf, sizeof buf, "core grid %.0f%% rectangles; roads that share a line: %d",
                   100 * static_cast<double>(s.gridRectilinearShare), s.corridorOverlaps); text(buf);
     std::snprintf(buf, sizeof buf, "street network: %d piece%s", s.streetComponents, s.streetComponents == 1 ? "" : "s"); text(buf);
+    std::snprintf(buf, sizeof buf, "streets meet: %.0f m paved into another, worst junction %d, %d under 15 deg",
+                  static_cast<double>(s.pavedOverlapM), s.worstJunction, s.tightTurns); text(buf);
     for (const std::string& n : s.notes) text("! " + n);
     ++line;
     struct Key { const char* fill; const char* label; };

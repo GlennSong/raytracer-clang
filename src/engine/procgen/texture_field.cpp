@@ -141,6 +141,9 @@ Field2 fieldBladeTone(uint32_t seed, int count, double width, double lean, doubl
 Field2 fieldBands(double count) {
     return [count](double, double v) { return 0.5 + 0.5 * std::sin(v * count * 6.283185307179586); };
 }
+Field2 fieldStripes(double count) {
+    return [count](double u, double) { return 0.5 + 0.5 * std::sin(u * count * 6.283185307179586); };
+}
 Field2 fieldSmoothstep(Field2 a, double lo, double hi) {
     return [a, lo, hi](double u, double v) {
         const double t = clamp01((a(u, v) - lo) / (hi - lo));
@@ -163,6 +166,11 @@ Field2 fieldWarp(Field2 a, Field2 du, Field2 dv, double amount) {
     return [a, du, dv, amount](double u, double v) {
         return a(wrap01(u + (du(u, v) - 0.5) * 2.0 * amount), wrap01(v + (dv(u, v) - 0.5) * 2.0 * amount));
     };
+}
+
+Field2 fieldRepeat(Field2 a, int ku, int kv) {
+    const double fu = std::max(1, ku), fv = std::max(1, kv);
+    return [a, fu, fv](double u, double v) { return a(wrap01(u * fu), wrap01(v * fv)); };
 }
 
 ColorField2 colorConstant(const Vec3& c) { return [c](double, double) { return c; }; }

@@ -1,5 +1,6 @@
 #include "furniture_kit.h"
 #include "../mesh_builder.h"
+#include "lsystem.h"   // houseplants are grown, not modelled
 #include <cmath>
 #include <map>
 #include <memory>
@@ -17,6 +18,9 @@ const Vec3 kFabric[8] = {{0.48, 0.50, 0.53}, {0.20, 0.26, 0.40}, {0.45, 0.53, 0.
                          {0.74, 0.68, 0.58}, {0.22, 0.22, 0.24}, {0.72, 0.56, 0.22}, {0.20, 0.42, 0.44}};
 const Vec3 kWhite(0.90, 0.90, 0.88), kBlack(0.07, 0.07, 0.08), kSteel(0.62, 0.64, 0.67), kChrome(0.85, 0.86, 0.88);
 const Vec3 kPorcelain(0.95, 0.95, 0.93), kLinen(0.93, 0.92, 0.88);
+
+// A bar's timber: walnut or ebonised, by the wood bits.
+inline Vec3 barWood(uint32_t variant) { return ((variant >> 3) & 1u) ? kWood[1] : kWood[3] * 1.2; }
 
 // A piece under construction: the per-material meshes and the shape-kit words, placed in piece space.
 struct Maker {
@@ -422,7 +426,8 @@ FurniturePiece build(Piece p, uint32_t variant) {
             const bool four = (style & 4u) != 0;
             const Real L = four ? 3.2 : 4.8;
             k.out.size = {3.1, 1.38, L};
-            k.out.colliderH = 0.75;   // the desks collide; the low screen above them need not
+            // the desks and the screen down their middle collide; the chairs either side are seats (library spots)
+            k.out.colliders = {{Vec3(0, 0.375, L * 0.5), Vec3(1.6, 0.75, L)}, {Vec3(0, 1.05, L * 0.5), Vec3(0.04, 0.62, L)}};
             k.box(F::Wood, {0, 0.735, L * 0.5}, {1.6, 0.03, L}, 0.004, wood, 1);
             for (double x : {-0.76, 0.76})
                 for (double z : {0.05, L * 0.5, L - 0.05}) k.leg(F::Metal, {x, 0, z}, 0.72, 0.04, kWhite * 0.9);
@@ -447,6 +452,10 @@ FurniturePiece build(Piece p, uint32_t variant) {
             // A CUBICLE: fabric partitions on three sides (1.4 m), an L-shaped worktop, a pedestal, the chair
             // and the monitor; open at +z.
             k.out.size = {2.4, 1.45, 2.4};
+            // (the panels and the worktops collide, not the floor inside: you walk in and sit at it)
+            k.out.colliders = {{Vec3(0, 0.70, 0.03), Vec3(2.4, 1.4, 0.06)}, {Vec3(-1.17, 0.70, 1.2), Vec3(0.06, 1.4, 2.4)},
+                               {Vec3(1.17, 0.70, 1.2), Vec3(0.06, 1.4, 2.4)}, {Vec3(0, 0.37, 0.40), Vec3(2.2, 0.74, 0.70)},
+                               {Vec3(-0.80, 0.37, 1.15), Vec3(0.60, 0.74, 0.85)}};
             const Vec3 panel = fabric * 0.6 + Vec3(0.18, 0.18, 0.18);
             k.box(F::Fabric, {0, 0.70, 0.03}, {2.4, 1.4, 0.06}, 0.015, panel);
             for (double x : {-1.17, 1.17}) k.box(F::Fabric, {x, 0.70, 1.2}, {0.06, 1.4, 2.4}, 0.015, panel);
@@ -466,6 +475,7 @@ FurniturePiece build(Piece p, uint32_t variant) {
         case Piece::MeetingTable: {
             // A meeting table for six: a long top on two pedestal legs, three chairs a side.
             k.out.size = {3.0, 0.95, 2.4};
+            k.out.colliders = {{Vec3(0, 0.375, 1.2), Vec3(2.6, 0.75, 1.1)}};   // the table; its chairs are seats
             k.box(F::Wood, {0, 0.735, 1.2}, {2.6, 0.04, 1.1}, 0.015, wood, 1);
             for (double x : {-0.8, 0.8}) k.box(F::Metal, {x, 0.36, 1.2}, {0.12, 0.72, 0.7}, 0.01, kSteel * 0.7, 1);
             for (double x : {-0.85, 0.0, 0.85})
@@ -479,11 +489,14 @@ FurniturePiece build(Piece p, uint32_t variant) {
             break;
         }
         case Piece::Whiteboard: {
-            k.out.size = {1.9, 2.1, 0.06};
+            // style bit 2: a LECTURE HALL's board, 4 m x 1.3 m (Glenn: "the lecture hall should have a bigger whiteboard")
+            const bool wide = (style & 4u) != 0;
+            const double bw = wide ? 4.0 : 1.9, bh = wide ? 1.3 : 1.04, cy = wide ? 1.55 : 1.45;
+            k.out.size = {bw, wide ? 2.3 : 2.1, 0.06};
             k.out.solid = false;
-            k.box(F::Metal, {0, 1.45, 0.02}, {1.84, 1.04, 0.03}, 0.004, kChrome, 1);
-            k.box(F::Ceramic, {0, 1.45, 0.037}, {1.78, 0.98, 0.004}, 0.0, kPorcelain, 1);
-            k.box(F::Metal, {0, 0.92, 0.05}, {1.4, 0.02, 0.06}, 0.004, kChrome, 1);          // the pen tray
+            k.box(F::Metal, {0, cy, 0.02}, {bw - 0.06, bh, 0.03}, 0.004, kChrome, 1);
+            k.box(F::Ceramic, {0, cy, 0.037}, {bw - 0.12, bh - 0.06, 0.004}, 0.0, kPorcelain, 1);
+            k.box(F::Metal, {0, cy - bh * 0.5 - 0.01, 0.05}, {bw * 0.74, 0.02, 0.06}, 0.004, kChrome, 1);          // the pen tray
             k.box(F::Hard, {-0.3, 1.6, 0.04}, {0.6, 0.012, 0.002}, 0.0, Vec3(0.15, 0.25, 0.6), 1);   // a scrawl
             k.box(F::Hard, {0.2, 1.35, 0.04}, {0.8, 0.012, 0.002}, 0.0, Vec3(0.6, 0.15, 0.15), 1);
             break;
@@ -616,17 +629,47 @@ FurniturePiece build(Piece p, uint32_t variant) {
             for (double x : {-0.585, 0.585}) k.box(F::Wood, {x, 1.0, 0.18}, {0.03, 2.0, 0.34}, 0.003, wood, 1);
             uint32_t r = variant * 1597334677u + 7u;
             auto next = [&]() { r ^= r << 13; r ^= r >> 17; r ^= r << 5; return (r & 0xffffu) / 65535.0; };
-            static const Vec3 kSpines[8] = {{0.55, 0.12, 0.10}, {0.12, 0.20, 0.45}, {0.15, 0.40, 0.22}, {0.85, 0.80, 0.70},
-                                            {0.10, 0.10, 0.10}, {0.75, 0.55, 0.20}, {0.45, 0.30, 0.50}, {0.30, 0.50, 0.55}};
+            // BOOKS (Glenn: "It would be nice to have some more variety in the books"): cloth and leather in sixteen
+            // colours, every height and depth, gilt or cream title bands on the spine, now and then a stack lying
+            // flat. Each placement is its own bookcase (the library's `variety`: eight designs by position).
+            static const Vec3 kSpines[16] = {{0.55, 0.12, 0.10}, {0.12, 0.20, 0.45}, {0.15, 0.40, 0.22}, {0.85, 0.80, 0.70},
+                                             {0.10, 0.10, 0.10}, {0.75, 0.55, 0.20}, {0.45, 0.30, 0.50}, {0.30, 0.50, 0.55},
+                                             {0.40, 0.22, 0.12}, {0.60, 0.38, 0.22}, {0.35, 0.08, 0.10}, {0.08, 0.12, 0.25},
+                                             {0.70, 0.62, 0.40}, {0.55, 0.55, 0.52}, {0.20, 0.30, 0.15}, {0.80, 0.30, 0.20}};
+            static const Vec3 kBands[3] = {{0.80, 0.65, 0.25}, {0.88, 0.85, 0.75}, {0.08, 0.08, 0.08}};
             for (double y : {0.04, 0.42, 0.80, 1.18, 1.56}) {
                 k.box(F::Wood, {0, y, 0.18}, {1.14, 0.025, 0.32}, 0.002, wood, 1);
                 Real x = -0.55;
+                const int series = static_cast<int>(next() * 16);   // a shelf often holds a set in one binding
                 while (x < 0.53) {
-                    const Real w = 0.025 + 0.035 * next(), hh = 0.20 + 0.10 * next();
+                    if (next() < 0.07 && x < 0.30) {   // a stack lying flat
+                        const int n = 3 + static_cast<int>(next() * 3);
+                        Real yy = y + 0.013;
+                        for (int j = 0; j < n; ++j) {
+                            const Real th = 0.025 + 0.02 * next();
+                            k.box(F::Hard, {x + 0.12, yy + th * 0.5, 0.17}, {0.22 + 0.04 * next(), th, 0.17 + 0.04 * next()}, 0.002,
+                                  kSpines[static_cast<int>(next() * 16) % 16], 1);
+                            yy += th;
+                        }
+                        x += 0.28;
+                        continue;
+                    }
+                    const Real w = 0.02 + 0.045 * next(), hh = 0.18 + 0.13 * next(), dd = 0.16 + 0.08 * next();
                     if (x + w > 0.56) break;
-                    k.box(F::Hard, {x + w * 0.5, y + 0.013 + hh * 0.5, 0.17}, {w - 0.003, hh, 0.22}, 0.002,
-                          kSpines[static_cast<int>(next() * 8) % 8], 1);
-                    x += w;
+                    const Vec3 col = next() < 0.45 ? kSpines[series] * (0.85 + 0.3 * next())
+                                                   : kSpines[static_cast<int>(next() * 16) % 16];
+                    k.box(F::Hard, {x + w * 0.5, y + 0.013 + hh * 0.5, 0.29 - dd * 0.5}, {w - 0.003, hh, dd}, 0.002, col, 1);
+                    // title bands on the spine's face
+                    if (w > 0.026 && next() < 0.75) {
+                        const Vec3 band = kBands[static_cast<int>(next() * 3) % 3];
+                        const int nb = 1 + static_cast<int>(next() * 2);
+                        for (int j = 0; j < nb; ++j) {
+                            const Real by = y + 0.013 + hh * (0.62 + 0.22 * j + 0.06 * next());
+                            k.box(F::Hard, {x + w * 0.5, std::min(by, y + 0.013 + hh - 0.02), 0.292}, {w - 0.008, 0.012, 0.004},
+                                  0.0, band, 1);
+                        }
+                    }
+                    x += w + (next() < 0.04 ? 0.04 : 0.0);   // the odd gap where a book is out
                 }
             }
             break;
@@ -743,22 +786,98 @@ FurniturePiece build(Piece p, uint32_t variant) {
             k.turned(F::Metal, {0, 0, 0.11}, {{0.0, 0.0}, {0.09, 0.0}, {0.09, 0.02}, {0.02, 0.03}, {0.0, 0.03}}, kBlack * 2.0, 1.0, 16);
             k.rod(F::Metal, {0, 0.02, 0.11}, {0.0, 0.30, 0.13}, 0.008, kChrome, 8);
             k.rod(F::Metal, {0, 0.30, 0.13}, {0.0, 0.40, 0.04}, 0.008, kChrome, 8);
-            k.turned(F::Hard, {0, 0.34, 0.04}, {{0.0, 0.12}, {0.02, 0.12}, {0.06, 0.04}, {0.07, 0.0}}, shade, 1.0, 16);
+            // the shade: a lathe profile runs bottom to top (it was top to bottom -- the shade drew inside out; Glenn:
+            // "the desk lamp's shade is inside out"), an inner surface since it is open underneath, a lit bulb inside
+            k.turned(F::Hard, {0, 0.34, 0.04}, {{0.07, 0.0}, {0.06, 0.04}, {0.02, 0.12}, {0.0, 0.12}}, shade, 1.0, 16);
+            k.turned(F::Hard, {0, 0.34, 0.04}, {{0.0, 0.115}, {0.017, 0.115}, {0.056, 0.038}, {0.066, 0.0}}, shade * 0.6, 1.0, 16);
+            k.turned(F::Light, {0, 0.36, 0.04}, {{0.0, 0.0}, {0.02, 0.01}, {0.022, 0.03}, {0.01, 0.05}, {0.0, 0.055}},
+                     Vec3(1.0, 0.92, 0.75), 1.0, 10);
             break;
         }
         case Piece::PottedPlant: {
-            // a terracotta / white pot and a mound of leaves
-            k.out.size = {0.26, 0.42, 0.26};
+            // A HOUSEPLANT, GROWN (Glenn, 2026-10-03: "LOL is that a cactus on the teacher's desk. We should use the
+            // lsystem to build that."): a pot, and a plant from the engine's L-system -- the turtle's stems, a leaf
+            // card at every apex turned along its heading. The style bits pick the plant: a leafy bush (a ficus), an
+            // arching fern, a rosette of long upright leaves (a snake plant); the variant seeds its growth.
+            k.out.size = {0.30, 0.55, 0.30};
             k.out.solid = false;
             const Vec3 pot = (variant & 32u) ? kWhite : Vec3(0.66, 0.36, 0.24);
-            k.turned(F::Ceramic, {0, 0, 0.13}, {{0.0, 0.0}, {0.08, 0.0}, {0.11, 0.17}, {0.115, 0.18}, {0.0, 0.18}}, pot, 1.0, 16);
-            const Vec3 leaf(0.18, 0.40, 0.17);
-            for (int i = 0; i < 6; ++i) {
-                const double a = i * 1.047 + (variant % 7) * 0.3;
-                k.boxTilted(F::Fabric, {0.05 * std::cos(a), 0.29, 0.13 + 0.05 * std::sin(a)}, {0.06, 0.22, 0.015}, 0.007,
-                            0.35 * ((i % 2) ? 1 : -1), leaf * (0.85 + 0.05 * i));
+            k.turned(F::Ceramic, {0, 0, 0.15}, {{0.0, 0.0}, {0.07, 0.0}, {0.095, 0.15}, {0.10, 0.16}, {0.0, 0.16}}, pot, 1.0, 16);
+            k.turned(F::Fabric, {0, 0.145, 0.15}, {{0.0, 0.0}, {0.092, 0.0}, {0.0, 0.012}}, Vec3(0.22, 0.15, 0.10), 1.0, 14);
+            const int species = static_cast<int>((style >> 1) % 4u);
+            LSystem ls;
+            TurtleParams tp;
+            std::string axiom;
+            int iters = 3;
+            double leafL = 0.07, leafW = 0.035;
+            if (species == 0) {          // bush: branching stems, leaves all over
+                ls.rule('X', "F[+XL][-XL]&[XL]/F[^XL]", 1.0);
+                ls.rule('X', "F[&XL][/+XL]F[-XL]", 1.0);
+                axiom = "FX"; tp.length = 0.045f; tp.radius = 0.006f; tp.angleDeg = 32.0f; iters = 3;
+            } else if (species == 1) {   // fern: fronds arching out, leaflets along them
+                ls.rule('A', "F[+L][-L]^A", 1.0);
+                axiom = "[&&A]/(72)[&&A]/(72)[&&A]/(72)[&&A]/(72)[&&A]";
+                tp.length = 0.035f; tp.radius = 0.003f; tp.angleDeg = 22.0f; iters = 6; leafL = 0.04; leafW = 0.016;
+            } else if (species == 3) {   // a CACTUS (Glenn: "that's not what a cactus looks like"): a ribbed column,
+                                         // arms that turn out and then up, no leaves -- spines and a flower below
+                axiom = (variant & 64u) ? "FFF[&F^^FF]F/[&F^^F]F" : "FF[&F^^FFF]FF";
+                tp.length = 0.06f; tp.radius = 0.034f; tp.angleDeg = 45.0f; iters = 0;
+            } else {                     // rosette: long upright blades from the soil
+                axiom = "[&L]/[&L]/[&L]/[&L]/[&L]/[&L]/[L]";
+                tp.length = 0.03f; tp.radius = 0.004f; tp.angleDeg = 14.0f; iters = 0; leafL = 0.30; leafW = 0.05;
             }
-            k.turned(F::Fabric, {0, 0.17, 0.13}, {{0.0, 0.0}, {0.10, 0.02}, {0.09, 0.10}, {0.0, 0.14}}, leaf * 0.9, 1.0, 10);
+            tp.radiusTaper = species == 3 ? 0.72f : 0.8f;
+            tp.segmentSlices = species == 3 ? 12 : 5;
+            std::string sym = iters > 0 ? ls.expand(axiom, iters, variant * 2654435761u + 1u) : axiom;
+            for (char& ch : sym) if (ch == 'X' || ch == 'A') ch = 'L';
+            for (std::size_t i = 0; i < sym.size(); ++i)   // the plain turtle has no "/(72)": read "/(n)" as one roll
+                if (sym[i] == '(') { const std::size_t e = sym.find(')', i); if (e != std::string::npos) sym.erase(i, e - i + 1); }
+            const Vec3 soil(0, 0.155, 0.15);
+            const Vec3 stemCol(0.25, 0.35, 0.15), leafCol = (species == 2) ? Vec3(0.20, 0.38, 0.16) : Vec3(0.16, 0.40, 0.14);
+            RenderMesh stems = buildTurtleMesh(sym, tp);
+            const Vec3 cactusCol(0.22, 0.42, 0.24);
+            for (Vertex& v : stems.vertices) { v.position = v.position + soil; v.color = species == 3 ? cactusCol : stemCol; }
+            MeshBuilder::append(k.m(F::Fabric), stems);
+            if (species == 3) {
+                // RIBS: a cactus is fluted -- push each vertex out by its angle round its own stem segment (12 slices:
+                // every other one out) -- then spines down the ribs and a pink flower on the crown
+                RenderMesh& body = k.m(F::Fabric);
+                const std::size_t from = body.vertices.size() - stems.vertices.size();
+                for (std::size_t i = from; i < body.vertices.size(); ++i)
+                    if (((i - from) % 2) == 0) body.vertices[i].position = body.vertices[i].position + body.vertices[i].normal * 0.006;
+                uint32_t rr = variant * 2246822519u + 9u;
+                auto nx = [&]() { rr ^= rr << 13; rr ^= rr >> 17; rr ^= rr << 5; return (rr & 0xffffu) / 65535.0; };
+                for (std::size_t i = from; i < body.vertices.size(); i += 3) {
+                    if (nx() > 0.35) continue;
+                    const Vertex& v = body.vertices[i];
+                    k.rod(F::Hard, v.position, v.position + v.normal * 0.012, 0.0012, Vec3(0.85, 0.82, 0.70), 3);
+                }
+                Vec3 crown(0, 0, 0);
+                for (std::size_t i = from; i < body.vertices.size(); ++i)
+                    if (body.vertices[i].position.y > crown.y) crown = body.vertices[i].position;
+                if (variant & 128u)
+                    k.turned(F::Fabric, crown + Vec3(0, -0.005, 0), {{0.0, 0.0}, {0.018, 0.012}, {0.012, 0.022}, {0.0, 0.016}},
+                             Vec3(0.90, 0.35, 0.55), 1.0, 8);
+            }
+            uint32_t r = variant * 747796405u + 3u;
+            auto next = [&]() { r ^= r << 13; r ^= r >> 17; r ^= r << 5; return (r & 0xffffu) / 65535.0; };
+            for (const LeafPlacement& lf : species == 3 ? std::vector<LeafPlacement>{} : turtleLeaves(sym, tp)) {
+                // a leaf card: long along the heading, flat across it, a little colour each
+                Vec3 d = normalize(lf.direction);
+                if (species == 2) d = normalize(d + Vec3(0, 1.4, 0));
+                const Vec3 ref = std::fabs(d.y) > 0.9 ? Vec3(1, 0, 0) : Vec3(0, 1, 0);
+                const Vec3 xA = normalize(cross(ref, d)), zA = cross(xA, d);
+                RenderMesh leaf = MeshBuilder::roundedBox({leafW, leafL, 0.004}, 0.0, 1, 2.0);
+                const Vec3 c = leafCol * (0.85 + 0.3 * next());
+                for (Vertex& v : leaf.vertices) {
+                    const Vec3 q = v.position + Vec3(0, leafL * 0.5, 0);
+                    v.position = lf.position + soil + xA * q.x + d * q.y + zA * q.z;
+                    const Vec3 n = v.normal;
+                    v.normal = normalize(xA * n.x + d * n.y + zA * n.z);
+                    v.color = c;
+                }
+                MeshBuilder::append(k.m(F::Fabric), leaf);
+            }
             break;
         }
         case Piece::BookStack: {
@@ -818,12 +937,592 @@ FurniturePiece build(Piece p, uint32_t variant) {
             k.box(F::Ceramic, {0.05, 0.05, 0.045}, {0.015, 0.06, 0.012}, 0.005, kMug[variant % 4], 1);
             break;
         }
+        // THE UNIVERSITY CAMPUS: a dorm's single bed, a classroom's desk and stacking chair, a lecture hall's row of
+        // tip-up seats on its own riser, the lectern, a lab's bench, the library's long reading table.
+        case Piece::SingleBed: {
+            // A made single, 0.95 x 2.05: the frame on legs, a low timber headboard, the duvet, one pillow.
+            k.out.size = {0.95, 0.85, 2.05};
+            k.box(F::Wood, {0, 0.22, 1.02}, {0.95, 0.12, 2.03}, 0.01, wood, 1);
+            for (double x : {-0.42, 0.42})
+                for (double z : {0.06, 1.98}) k.leg(F::Wood, {x, 0, z}, 0.16, 0.05, wood * 0.9);
+            k.box(F::Wood, {0, 0.52, 0.03}, {0.95, 0.66, 0.05}, 0.01, wood * 0.95, 1);
+            k.box(F::Fabric, {0, 0.38, 1.04}, {0.88, 0.20, 1.94}, 0.05, kLinen);
+            k.box(F::Fabric, {0, 0.51, 1.30}, {0.98, 0.06, 1.46}, 0.03, fabric);
+            for (double x : {-0.49, 0.49}) k.box(F::Fabric, {x, 0.40, 1.30}, {0.03, 0.26, 1.46}, 0.012, fabric * 0.94);
+            k.box(F::Fabric, {0, 0.55, 0.30}, {0.66, 0.13, 0.36}, 0.05, kLinen * 1.02);
+            break;
+        }
+        case Piece::SchoolDesk: {
+            // A pupil's desk: a laminate top on a tubular steel frame, a book shelf under it.
+            k.out.size = {0.70, 0.74, 0.50};
+            // (Glenn: "the parts of the students desks don't seem connected together": the legs stopped short of
+            // the top and the shelf hung in the air -- a welded frame now: legs into an apron, the shelf on rails)
+            const Vec3 steel = kSteel * 0.6;
+            k.box(F::Hard, {0, 0.725, 0.25}, {0.70, 0.025, 0.50}, 0.006, wood * 1.1, 1);
+            for (double x : {-0.32, 0.32})
+                for (double z : {0.04, 0.46}) k.rod(F::Metal, {x, 0.0, z}, {x, 0.715, z}, 0.013, steel, 8);
+            for (double z : {0.04, 0.46}) k.rod(F::Metal, {-0.32, 0.70, z}, {0.32, 0.70, z}, 0.012, steel, 8);   // apron
+            for (double x : {-0.32, 0.32}) {
+                k.rod(F::Metal, {x, 0.70, 0.04}, {x, 0.70, 0.46}, 0.012, steel, 8);
+                k.rod(F::Metal, {x, 0.55, 0.04}, {x, 0.55, 0.46}, 0.010, steel, 8);   // the shelf's rails
+            }
+            k.box(F::Metal, {0, 0.56, 0.25}, {0.64, 0.012, 0.42}, 0.0, steel, 1);
+            break;
+        }
+        case Piece::SchoolChair: {
+            // A stacking chair: a moulded shell on four splayed steel legs.
+            k.out.size = {0.46, 0.80, 0.48};
+            k.out.solid = false;
+            const Vec3 shell = kFabric[(variant + 3) & 7u] * 0.9;
+            k.box(F::Hard, {0, 0.45, 0.26}, {0.42, 0.03, 0.40}, 0.015, shell);
+            k.boxTilted(F::Hard, {0, 0.66, 0.05}, {0.40, 0.34, 0.025}, 0.012, -0.12, shell);
+            for (double x : {-0.18, 0.18}) {
+                k.rod(F::Metal, {x * 1.1, 0.0, 0.44}, {x, 0.44, 0.40}, 0.011, kSteel * 0.7, 8);
+                k.rod(F::Metal, {x * 1.1, 0.0, 0.06}, {x, 0.44, 0.10}, 0.011, kSteel * 0.7, 8);
+                k.rod(F::Metal, {x, 0.44, 0.10}, {x, 0.62, 0.06}, 0.011, kSteel * 0.7, 8);
+            }
+            break;
+        }
+        case Piece::LectureRow: {
+            // A LECTURE HALL's row: six tip-up seats, the writing ledge for the row behind fixed to their backs, on
+            // its own carpeted RISER: style bits = the row's TIER, 0.18 m a tier -- a hall's rows step up toward
+            // the back, each standing on the flat floor as a solid block (the room program's grid numbers them).
+            const double h = 0.18 * static_cast<double>(style & 7u);
+            k.out.size = {3.4, 1.1 + h, 1.0};
+            // the collider is the RISER, not the seats' box: you step onto your row from the aisle stair beside it
+            // (a full-height box made every row a wall)
+            k.out.solid = h > 0;
+            k.out.colliderH = h;
+            const Vec3 carpet = kFabric[(variant + 5) & 7u] * 0.55;
+            if (h > 0) k.box(F::Fabric, {0, h * 0.5, 0.50}, {3.4, h, 1.0}, 0.0, carpet, 1);
+            // (a seat faces +z like every seat in the kit -- its back toward the riser's rear edge; Glenn: "those
+            // seats are facing the wrong way")
+            for (int i = 0; i < 6; ++i) {
+                const double x = -1.4 + i * 0.56;
+                k.box(F::Fabric, {x, h + 0.44, 0.40}, {0.50, 0.08, 0.44}, 0.025, fabric);               // the seat
+                k.boxTilted(F::Fabric, {x, h + 0.78, 0.16}, {0.50, 0.56, 0.07}, 0.025, -0.12, fabric);  // its back
+                k.box(F::Hard, {x - 0.28, h + 0.35, 0.37}, {0.05, 0.62, 0.55}, 0.01, kBlack * 2.5, 1);   // the standard
+            }
+            k.box(F::Hard, {1.68, h + 0.35, 0.37}, {0.05, 0.62, 0.55}, 0.01, kBlack * 2.5, 1);
+            // the writing ledge for the row behind, on this row's back
+            k.box(F::Wood, {0, h + 0.74, 0.06}, {3.36, 0.03, 0.12}, 0.005, wood, 1);
+            k.box(F::Hard, {0, h + 0.40, 0.11}, {3.36, 0.70, 0.03}, 0.005, kBlack * 2.5, 1);   // the modesty panel
+            break;
+        }
+        case Piece::AisleStep: {
+            // THE AISLE STAIR (Glenn: "there should be stairs that allow you to access the raised auditorium chairs"):
+            // beside each row, the aisle climbs its tier in two 9 cm steps -- the lower at the row's front half, the
+            // tier's own height at its back half -- so the aisle rises with the rows, a step at a time.
+            const double h = 0.18 * static_cast<double>(style & 7u);
+            k.out.size = {0.9, std::max(h, 0.02), 1.0};
+            k.out.solid = h > 0;
+            k.out.colliderH = std::max(h - 0.09, 0.0);   // the walkable truth: the lower tread (the step is 9 cm)
+            const Vec3 carpet = kFabric[(variant + 5) & 7u] * 0.55, nose(0.75, 0.70, 0.40);
+            if (h > 0) {
+                const double lo = std::max(h - 0.09, 0.0);
+                if (lo > 0) k.box(F::Fabric, {0, lo * 0.5, 0.75}, {0.9, lo, 0.5}, 0.0, carpet, 1);
+                k.box(F::Fabric, {0, h * 0.5, 0.25}, {0.9, h, 0.5}, 0.0, carpet, 1);
+                k.box(F::Hard, {0, h + 0.002, 0.49}, {0.9, 0.004, 0.03}, 0.0, nose, 1);    // nosing strips
+                if (lo > 0) k.box(F::Hard, {0, lo + 0.002, 0.99}, {0.9, 0.004, 0.03}, 0.0, nose, 1);
+            } else {
+                k.box(F::Fabric, {0, 0.005, 0.5}, {0.9, 0.01, 1.0}, 0.0, carpet, 1);   // the front row's aisle: a runner
+            }
+            break;
+        }
+        case Piece::Bleacher: {
+            // A SPORTS FIELD'S STAND: three tiers of aluminium bench planks rising away from the pitch (+z faces it),
+            // footboards between, a galvanised frame of uprights and raked stringers, a rail along the back.
+            k.out.size = {6.0, 2.1, 2.6};
+            k.out.solid = false;
+            const Vec3 alu(0.78, 0.80, 0.82), galv(0.55, 0.57, 0.60);
+            for (int t = 0; t < 3; ++t) {
+                const double seatY = 0.45 + 0.42 * t, z = 2.05 - 0.72 * t;
+                k.box(F::Metal, {0, seatY, z}, {6.0, 0.05, 0.28}, 0.008, alu, 1);                        // the seat plank
+                k.box(F::Metal, {0, seatY - 0.40, z + 0.30}, {6.0, 0.04, 0.32}, 0.006, alu * 0.92, 1);   // the footboard
+            }
+            for (double x : {-2.85, -0.95, 0.95, 2.85}) {
+                k.rod(F::Metal, {x, 0.0, 2.25}, {x, 0.45, 2.25}, 0.03, galv, 8);    // front leg
+                k.rod(F::Metal, {x, 0.0, 0.40}, {x, 1.95, 0.40}, 0.03, galv, 8);    // rear leg
+                k.rod(F::Metal, {x, 0.43, 2.25}, {x, 1.30, 0.40}, 0.025, galv, 8);  // raked stringer
+            }
+            k.rod(F::Metal, {-3.0, 1.95, 0.40}, {3.0, 1.95, 0.40}, 0.025, galv, 8);   // the back rail
+            break;
+        }
+        // --- RESTAURANTS, BARS AND CLUBS (storefronts stage 5; Glenn: "What about the interior does it look like a
+        // shop would look?"). Every one faces +z, its back on z = 0.
+        case Piece::BarCounter: {
+            // A BAR: a 1.8 m run of the counter -- a panelled front with a brass foot rail, a thick top overhanging the
+            // customers' side, the speed rail and a drip mat on the bartender's. Runs butt end to end.
+            k.out.size = {1.8, 1.12, 0.75};
+            k.out.colliderH = 1.08;
+            const Vec3 wood = barWood(variant);   // (a bar is walnut or ebonised, never birch)
+            const Vec3 top = (style & 1u) ? Vec3(0.12, 0.08, 0.06) : wood * 0.8, brass(0.62, 0.48, 0.22);
+            k.box(F::Wood, {0, 0.53, 0.30}, {1.8, 1.06, 0.50}, 0.006, wood * 0.75, 1);   // the carcass
+            for (int i = 0; i < 3; ++i)                                                  // raised panels, customers' side
+                k.box(F::Wood, {-0.6 + i * 0.6, 0.55, 0.56}, {0.50, 0.70, 0.03}, 0.008, wood * 0.9, 1);
+            k.box(F::Wood, {0, 1.085, 0.38}, {1.82, 0.06, 0.74}, 0.012, top, 2);         // the top
+            k.rod(F::Metal, {-0.9, 0.22, 0.68}, {0.9, 0.22, 0.68}, 0.025, brass, 10);    // the foot rail
+            for (double x : {-0.6, 0.6}) k.rod(F::Metal, {x, 0.08, 0.58}, {x, 0.22, 0.68}, 0.012, brass, 8);
+            k.box(F::Hard, {0.3, 1.12, 0.12}, {0.6, 0.012, 0.16}, 0.0, kBlack * 2.0, 1);  // the drip mat
+            break;
+        }
+        case Piece::BackBar: {
+            // The BACK BAR: low cupboards and a fridge door, a mirror, two lit glass shelves of bottles.
+            k.out.size = {1.8, 2.3, 0.5};
+            k.out.colliderH = 0.9;
+            const Vec3 wood = barWood(variant);
+            k.box(F::Wood, {0, 0.45, 0.25}, {1.8, 0.9, 0.48}, 0.006, wood * 0.7, 1);
+            k.front(F::Hard, -0.88, -0.02, 0.06, 0.86, 0.49, Vec3(0.10, 0.11, 0.12), kChrome, true);   // the bottle fridge
+            k.front(F::Wood, 0.02, 0.88, 0.06, 0.86, 0.49, wood * 0.8, kChrome, true);
+            k.box(F::Hard, {0, 0.92, 0.25}, {1.82, 0.04, 0.50}, 0.004, kBlack * 2.0, 1);
+            k.box(F::Metal, {0, 1.62, 0.02}, {1.7, 1.3, 0.02}, 0.0, Vec3(0.55, 0.60, 0.64), 1);       // the mirror
+            uint32_t r = variant * 2654435761u + 29u;
+            auto next = [&]() { r ^= r << 13; r ^= r >> 17; r ^= r << 5; return (r & 0xffffu) / 65535.0; };
+            static const Vec3 kBottles[6] = {{0.45, 0.25, 0.08}, {0.15, 0.35, 0.18}, {0.85, 0.85, 0.80},
+                                             {0.55, 0.12, 0.10}, {0.75, 0.55, 0.20}, {0.20, 0.25, 0.45}};
+            for (double y : {1.30, 1.75}) {
+                k.box(F::Metal, {0, y, 0.15}, {1.7, 0.015, 0.26}, 0.0, Vec3(0.70, 0.78, 0.80), 1);   // the glass shelf
+                k.box(F::Light, {0, y - 0.015, 0.05}, {1.6, 0.01, 0.02}, 0.0, Vec3(1.0, 0.75, 0.45), 1);   // its strip
+                for (int i = 0; i < 12; ++i) {
+                    const double h = 0.22 + 0.12 * next();
+                    k.turned(F::Hard, {-0.77 + i * 0.14, y + 0.008, 0.15},
+                             {{0.0, 0.0}, {0.04, 0.0}, {0.04, h * 0.65}, {0.014, h * 0.8}, {0.014, h}, {0.0, h}},
+                             kBottles[static_cast<int>(next() * 6) % 6], 1.0, 8);
+                }
+            }
+            break;
+        }
+        case Piece::BarStool: {
+            // A BAR STOOL: a round seat at 0.76 on a chrome column, a foot ring, a weighted base.
+            k.out.size = {0.42, 0.80, 0.42};
+            k.out.solid = false;
+            k.turned(F::Metal, {0, 0, 0.21}, {{0.0, 0.0}, {0.19, 0.0}, {0.19, 0.02}, {0.04, 0.04}, {0.0, 0.04}}, kChrome, 1.0, 16);
+            k.rod(F::Metal, {0, 0.03, 0.21}, {0, 0.74, 0.21}, 0.025, kChrome, 10);
+            for (int i = 0; i < 8; ++i) {   // the foot ring
+                const double a0 = i * kPi / 4, a1 = (i + 1) * kPi / 4;
+                k.rod(F::Metal, {0.16 * std::cos(a0), 0.30, 0.21 + 0.16 * std::sin(a0)},
+                      {0.16 * std::cos(a1), 0.30, 0.21 + 0.16 * std::sin(a1)}, 0.009, kChrome, 6);
+            }
+            static const Vec3 kLeather[3] = {{0.10, 0.09, 0.09}, {0.32, 0.07, 0.06}, {0.45, 0.28, 0.15}};   // black, oxblood, tan
+            k.turned(F::Fabric, {0, 0.72, 0.21}, {{0.0, 0.0}, {0.19, 0.0}, {0.20, 0.04}, {0.17, 0.08}, {0.0, 0.08}},
+                     kLeather[(variant >> 3) % 3u], 1.0, 18);
+            break;
+        }
+        case Piece::Booth: {
+            // A BOOTH: two high-backed upholstered benches facing across a table, its end against the wall (+z: out).
+            k.out.size = {1.9, 1.15, 1.3};
+            k.out.colliderH = 0.75;
+            const Vec3 wood = barWood(variant);
+            const Vec3 hide = (style & 1u) ? Vec3(0.40, 0.08, 0.08) : Vec3(0.12, 0.10, 0.10);   // oxblood or black hide
+            for (double s : {-1.0, 1.0}) {
+                const double x = s * 0.70;
+                k.box(F::Wood, {x, 0.22, 0.65}, {0.50, 0.44, 1.26}, 0.006, wood * 0.7, 1);              // the plinth
+                k.box(F::Fabric, {x - s * 0.02, 0.50, 0.65}, {0.46, 0.12, 1.22}, 0.04, hide, 3);         // the seat
+                k.box(F::Fabric, {s * 0.88, 0.80, 0.65}, {0.12, 0.70, 1.22}, 0.04, hide * 0.92, 3);      // the back
+            }
+            k.box(F::Wood, {0, 0.74, 0.60}, {0.76, 0.04, 1.10}, 0.01, wood, 1);                          // the table
+            k.rod(F::Metal, {0, 0.0, 0.60}, {0, 0.72, 0.60}, 0.04, kBlack, 10);
+            k.box(F::Metal, {0, 0.01, 0.60}, {0.5, 0.02, 0.5}, 0.004, kBlack, 1);
+            k.turned(F::Light, {0, 0.76, 0.20}, {{0.0, 0.0}, {0.04, 0.0}, {0.035, 0.08}, {0.0, 0.10}}, Vec3(1.0, 0.70, 0.40), 1.0, 10);
+            break;
+        }
+        case Piece::HighTable: {
+            // A POSEUR TABLE: a small round top at elbow height on a pedestal.
+            k.out.size = {0.7, 1.08, 0.7};
+            k.out.colliderH = 1.05;
+            k.turned(F::Metal, {0, 0, 0.35}, {{0.27, 0.0}, {0.27, 0.02}, {0.03, 0.05}, {0.03, 1.04}, {0.0, 1.05}}, kBlack, 1.0, 14);
+            k.turned(F::Wood, {0, 1.04, 0.35}, {{0.0, 0.0}, {0.33, 0.0}, {0.33, 0.035}, {0.0, 0.035}}, wood * 0.8, 1.0, 22);
+            break;
+        }
+        case Piece::DjBooth: {
+            // The DJ BOOTH: a black riser and desk, two decks and a mixer, a stack of speakers at each end, a lit
+            // strip along its front (+z: the floor).
+            k.out.size = {3.0, 2.0, 1.0};
+            k.out.colliderH = 1.05;
+            k.box(F::Hard, {0, 0.10, 0.5}, {3.0, 0.20, 1.0}, 0.004, kBlack * 1.5, 1);                    // the riser
+            k.box(F::Hard, {0, 0.62, 0.72}, {1.8, 0.84, 0.10}, 0.006, kBlack, 1);                        // the desk front
+            k.box(F::Light, {0, 0.40, 0.78}, {1.7, 0.03, 0.01}, 0.0, Vec3(0.20, 0.55, 1.0), 1);
+            k.box(F::Light, {0, 0.80, 0.78}, {1.7, 0.03, 0.01}, 0.0, Vec3(0.95, 0.20, 0.75), 1);
+            k.box(F::Hard, {0, 1.06, 0.55}, {1.8, 0.04, 0.45}, 0.004, kBlack * 2.0, 1);                  // the desk top
+            for (double x : {-0.55, 0.55}) {
+                k.box(F::Hard, {x, 1.11, 0.55}, {0.46, 0.06, 0.36}, 0.006, kSteel * 0.5, 1);
+                k.turned(F::Hard, {x - 0.04, 1.14, 0.55}, {{0.0, 0.0}, {0.15, 0.0}, {0.15, 0.012}, {0.0, 0.012}}, kBlack, 1.0, 20);
+            }
+            k.box(F::Hard, {0, 1.12, 0.55}, {0.30, 0.08, 0.34}, 0.006, kSteel * 0.4, 1);                  // the mixer
+            for (double x : {-1.25, 1.25})
+                for (int t = 0; t < 2; ++t) {
+                    const double y0 = 0.20 + t * 0.88;
+                    k.box(F::Hard, {x, y0 + 0.43, 0.45}, {0.5, 0.86, 0.6}, 0.008, kBlack * 1.2, 1);
+                    k.box(F::Hard, {x, y0 + 0.36, 0.755}, {0.34, 0.34, 0.012}, 0.0, Vec3(0.03, 0.03, 0.03), 1);   // woofer
+                    k.box(F::Hard, {x, y0 + 0.36, 0.762}, {0.12, 0.12, 0.012}, 0.0, kSteel * 0.3, 1);              // its cap
+                    k.box(F::Hard, {x, y0 + 0.72, 0.755}, {0.12, 0.08, 0.012}, 0.0, Vec3(0.03, 0.03, 0.03), 1);    // horn
+                }
+            break;
+        }
+        case Piece::DanceFloor: {
+            // A LIT DANCE FLOOR: a 4 x 4 m grid of glass tiles, each lit in one of the club's colours, in a dark frame.
+            k.out.size = {4.0, 0.06, 4.0};
+            k.out.solid = false;
+            static const Vec3 kTiles[5] = {{1.0, 0.25, 0.70}, {0.25, 0.55, 1.0}, {0.95, 0.75, 0.25}, {0.30, 0.95, 0.70},
+                                           {0.65, 0.30, 1.0}};
+            k.box(F::Hard, {0, 0.02, 2.0}, {4.0, 0.04, 4.0}, 0.0, kBlack, 1);
+            uint32_t r = variant * 2246822519u + 17u;
+            auto next = [&]() { r ^= r << 13; r ^= r >> 17; r ^= r << 5; return (r & 0xffffu) / 65535.0; };
+            for (int i = 0; i < 8; ++i)
+                for (int j = 0; j < 8; ++j) {
+                    const bool lit = ((i + j) & 1) == 0 || next() < 0.3;
+                    const Vec3 c = kTiles[static_cast<int>(next() * 5) % 5] * (lit ? 0.9 : 0.12);
+                    k.box(lit ? F::Light : F::Hard, {-1.75 + i * 0.5, 0.045, 0.25 + j * 0.5}, {0.46, 0.01, 0.46}, 0.0, c, 1);
+                }
+            break;
+        }
+        case Piece::KitchenPass: {
+            // The PASS: a stainless counter between the kitchen and the dining room, a heat-lamp gantry over it,
+            // plates waiting under the lamps (+z: the dining room).
+            k.out.size = {2.4, 1.75, 0.8};
+            k.out.colliderH = 0.95;
+            k.box(F::Metal, {0, 0.46, 0.40}, {2.4, 0.92, 0.76}, 0.004, kSteel, 1);
+            k.box(F::Metal, {0, 0.935, 0.40}, {2.44, 0.03, 0.80}, 0.004, kChrome, 1);
+            for (double x : {-1.1, 1.1}) k.rod(F::Metal, {x, 0.95, 0.40}, {x, 1.70, 0.40}, 0.02, kChrome, 8);
+            k.box(F::Metal, {0, 1.70, 0.40}, {2.3, 0.06, 0.30}, 0.004, kSteel * 0.8, 1);                  // the gantry
+            k.box(F::Light, {0, 1.665, 0.40}, {2.1, 0.01, 0.12}, 0.0, Vec3(1.0, 0.55, 0.25), 1);         // its lamps
+            for (int i = 0; i < 5; ++i)
+                k.turned(F::Ceramic, {-0.8 + i * 0.4, 0.95, 0.40}, {{0.0, 0.0}, {0.10, 0.0}, {0.14, 0.02}, {0.0, 0.02}},
+                         kPorcelain, 1.0, 16);
+            break;
+        }
+        case Piece::DeskScreen: {
+            // A DESK SCREEN (Glenn, 2026-10-13: "no office partitions in the office?"): a fabric panel between two desks
+            // in a row, running out from the wall (+z) past the desk and the chair, on two steel feet. 1.12 m tall --
+            // desk height and a hand's span over it, so it stands under a window too (furniture.cpp's window rule).
+            k.out.size = {0.05, 1.12, 1.30};
+            k.out.colliderH = 1.12;
+            const Vec3 panel = fabric * 0.6 + Vec3(0.18, 0.18, 0.18);
+            k.box(F::Fabric, {0, 0.61, 0.65}, {0.04, 1.0, 1.26}, 0.012, panel);
+            k.box(F::Metal, {0, 1.115, 0.65}, {0.05, 0.01, 1.28}, 0.0, kSteel, 1);              // the cap rail
+            for (double z : {0.12, 1.18}) {
+                k.box(F::Metal, {0, 0.06, z}, {0.03, 0.12, 0.03}, 0.0, kSteel, 1);              // a leg
+                k.box(F::Metal, {0, 0.008, z}, {0.05, 0.016, 0.24}, 0.0, kSteel * 0.85, 1);     // its foot
+            }
+            break;
+        }
+        case Piece::ReceptionDesk: {
+            // A RECEPTION DESK, 2.4 m: the worktop at desk height on the staff's side (-z, toward the screen behind),
+            // a panelled front standing to 1.08 m on the visitors' side (+z) with a ledge on top to sign in at, the
+            // monitor turned to the staff.
+            k.out.size = {2.4, 1.10, 0.80};
+            k.box(F::Wood, {0, 0.725, 0.32}, {2.36, 0.03, 0.60}, 0.006, wood, 1);              // the worktop
+            k.box(F::Hard, {0, 0.54, 0.74}, {2.40, 1.08, 0.08}, 0.01, kWhite, 1);              // the front
+            for (double x : {-1.16, 1.16}) k.box(F::Hard, {x, 0.54, 0.40}, {0.08, 1.08, 0.72}, 0.01, kWhite, 1);   // ends
+            k.box(F::Wood, {0, 1.085, 0.66}, {2.44, 0.03, 0.28}, 0.006, wood * 1.05, 1);       // the ledge
+            k.box(F::Hard, {0.75, 0.33, 0.30}, {0.42, 0.62, 0.50}, 0.004, kSteel * 0.85, 1);   // a pedestal
+            k.box(F::Hard, {-0.4, 0.76, 0.42}, {0.22, 0.012, 0.16}, 0.004, kBlack, 1);         // the monitor's foot
+            k.box(F::Hard, {-0.4, 0.92, 0.44}, {0.04, 0.30, 0.02}, 0.004, kBlack, 1);
+            k.box(F::Hard, {-0.4, 1.02, 0.41}, {0.58, 0.32, 0.022}, 0.004, kBlack, 1);         // its screen, facing -z
+            break;
+        }
+        case Piece::HospitalBed: {
+            // A HOSPITAL BED (Glenn, 2026-10-13: "do hospitals"): a steel frame on four castors, the mattress at 0.6 m
+            // with its head section raised, a sheet and a pillow, a plastic head- and footboard, folding side rails.
+            // The head at z = 0, against the wall.
+            k.out.size = {1.00, 1.00, 2.20};
+            for (double x : {-0.40, 0.40})
+                for (double z : {0.15, 2.05}) {
+                    k.rod(F::Metal, {x, 0.10, z}, {x, 0.42, z}, 0.025, kSteel, 8);
+                    k.turned(F::Hard, {x, 0, z}, {{0.0, 0.0}, {0.05, 0.0}, {0.05, 0.10}, {0.0, 0.10}}, kBlack, 1.0, 10);   // castor
+                }
+            k.box(F::Metal, {0, 0.44, 1.10}, {0.90, 0.06, 2.00}, 0.01, kSteel, 1);              // the frame
+            k.box(F::Fabric, {0, 0.55, 1.35}, {0.88, 0.16, 1.40}, 0.04, kLinen);                // the mattress, flat part
+            k.boxTilted(F::Fabric, {0, 0.68, 0.40}, {0.88, 0.14, 0.72}, 0.04, 0.45, kLinen);   // its raised head section
+            k.box(F::Fabric, {0, 0.84, 0.24}, {0.60, 0.10, 0.32}, 0.04, kLinen * 1.03);         // the pillow
+            k.box(F::Fabric, {0, 0.64, 1.50}, {0.92, 0.04, 1.10}, 0.02, fabric * 0.9 + Vec3(0.1, 0.1, 0.1));   // blanket
+            k.box(F::Hard, {0, 0.66, 0.03}, {0.98, 0.62, 0.05}, 0.02, kWhite);                   // headboard
+            k.box(F::Hard, {0, 0.58, 2.17}, {0.98, 0.42, 0.05}, 0.02, kWhite);                   // footboard
+            for (double x : {-0.47, 0.47}) {
+                k.box(F::Metal, {x, 0.78, 0.75}, {0.03, 0.03, 0.80}, 0.0, kChrome, 1);         // the side rails
+                k.box(F::Metal, {x, 0.62, 0.75}, {0.02, 0.32, 0.02}, 0.0, kChrome, 1);
+            }
+            break;
+        }
+        case Piece::ExamCouch: {
+            // An EXAMINATION COUCH: a padded top on a steel base, the head end raised, a paper roll across it.
+            k.out.size = {0.70, 0.90, 1.90};
+            k.box(F::Metal, {0, 0.30, 0.95}, {0.50, 0.60, 1.40}, 0.01, kSteel * 0.85, 1);
+            k.box(F::Fabric, {0, 0.66, 1.20}, {0.68, 0.10, 1.36}, 0.03, Vec3(0.30, 0.45, 0.55));
+            k.boxTilted(F::Fabric, {0, 0.76, 0.30}, {0.68, 0.10, 0.56}, 0.03, 0.35, Vec3(0.30, 0.45, 0.55));
+            k.box(F::Fabric, {0, 0.72, 1.20}, {0.50, 0.01, 1.30}, 0.0, kLinen, 1);              // the paper
+            break;
+        }
+        case Piece::WaitingSeats: {
+            // WAITING SEATS: four moulded seats on one steel beam, two legs.
+            k.out.size = {2.20, 0.82, 0.62};
+            k.box(F::Metal, {0, 0.38, 0.32}, {2.10, 0.05, 0.06}, 0.0, kSteel, 1);               // the beam
+            for (double x : {-0.85, 0.85}) {
+                k.box(F::Metal, {x, 0.19, 0.32}, {0.05, 0.38, 0.05}, 0.0, kSteel, 1);
+                k.box(F::Metal, {x, 0.01, 0.32}, {0.06, 0.02, 0.56}, 0.0, kSteel, 1);           // the foot
+            }
+            for (int i = 0; i < 4; ++i) {
+                const double x = -0.79 + i * 0.527;
+                k.box(F::Hard, {x, 0.45, 0.34}, {0.48, 0.05, 0.46}, 0.02, fabric * 0.8);        // the seat
+                k.boxTilted(F::Hard, {x, 0.66, 0.08}, {0.48, 0.40, 0.04}, 0.02, -0.12, fabric * 0.8);   // its back
+            }
+            break;
+        }
+        case Piece::Pew: {
+            // A PEW (Glenn, 2026-10-13: the church was empty): a 3 m timber bench, its back raked, carved ends, the
+            // kneeler on the back for the row behind. Faces +z (the altar).
+            k.out.size = {3.0, 0.95, 0.75};
+            k.box(F::Wood, {0, 0.44, 0.42}, {2.92, 0.05, 0.42}, 0.01, wood, 1);                 // the seat
+            k.boxTilted(F::Wood, {0, 0.70, 0.17}, {2.92, 0.50, 0.04}, 0.01, -0.14, wood);        // the back
+            for (double x : {-1.47, 1.47}) k.box(F::Wood, {x, 0.47, 0.37}, {0.06, 0.94, 0.70}, 0.02, wood * 0.85, 1);   // ends
+            k.box(F::Wood, {0, 0.76, 0.06}, {2.92, 0.03, 0.10}, 0.005, wood * 0.9, 1);          // the book ledge behind
+            k.box(F::Fabric, {0, 0.07, 0.04}, {2.80, 0.07, 0.12}, 0.02, Vec3(0.45, 0.12, 0.12));   // the kneeler
+            break;
+        }
+        case Piece::Altar: {
+            // The ALTAR: a table under a white cloth with a coloured frontal, two candlesticks, a book on its stand.
+            k.out.size = {2.0, 1.35, 0.90};
+            k.box(F::Wood, {0, 0.48, 0.45}, {1.96, 0.96, 0.86}, 0.01, wood * 0.8, 1);
+            k.box(F::Fabric, {0, 0.975, 0.45}, {2.0, 0.03, 0.90}, 0.005, kLinen, 1);
+            k.box(F::Fabric, {0, 0.70, 0.905}, {1.20, 0.52, 0.01}, 0.0, Vec3(0.50, 0.10, 0.14), 1);   // the frontal
+            for (double x : {-0.75, 0.75})
+                k.turned(F::Metal, {x, 0.99, 0.30}, {{0.06, 0.0}, {0.02, 0.04}, {0.015, 0.28}, {0.035, 0.30}, {0.012, 0.31},
+                                                     {0.012, 0.36}, {0.0, 0.36}}, Vec3(0.80, 0.65, 0.30), 1.0, 10);   // candlesticks
+            k.boxTilted(F::Wood, {0, 1.05, 0.45}, {0.36, 0.03, 0.26}, 0.004, -0.3, wood);       // the book stand
+            break;
+        }
+        case Piece::CinemaRow: {
+            // A CINEMA ROW: six plush seats with arms and cup holders on a carpeted RISER -- style bits the row's
+            // tier, 0.25 m a tier (a cinema rakes steeper than a lecture hall). Faces +z, the screen.
+            const double h = 0.25 * static_cast<double>(style & 7u);
+            k.out.size = {3.4, 1.05 + h, 1.0};
+            k.out.solid = h > 0;
+            k.out.colliderH = h;
+            const Vec3 carpet = Vec3(0.18, 0.08, 0.10);
+            const Vec3 plush = Vec3(0.55, 0.08, 0.10);
+            if (h > 0) k.box(F::Fabric, {0, h * 0.5, 0.50}, {3.4, h, 1.0}, 0.0, carpet, 1);
+            for (int i = 0; i < 6; ++i) {
+                const double x = -1.4 + i * 0.56;
+                k.box(F::Fabric, {x, h + 0.42, 0.42}, {0.50, 0.12, 0.48}, 0.04, plush);                 // the seat
+                k.boxTilted(F::Fabric, {x, h + 0.74, 0.14}, {0.50, 0.62, 0.12}, 0.04, -0.15, plush);   // its back
+            }
+            for (int i = 0; i < 7; ++i)
+                k.box(F::Hard, {-1.68 + i * 0.56, h + 0.55, 0.40}, {0.06, 0.20, 0.50}, 0.02, kBlack * 2.0, 1);   // arms
+            break;
+        }
+        case Piece::CinemaScreen: {
+            // The SCREEN: a 6 m white panel framed in black masking, hung high on the auditorium's front wall.
+            k.out.size = {6.0, 4.4, 0.08};
+            k.out.solid = false;
+            k.box(F::Hard, {0, 2.70, 0.03}, {6.0, 3.4, 0.05}, 0.0, kBlack, 1);
+            k.box(F::Hard, {0, 2.70, 0.06}, {5.6, 3.0, 0.01}, 0.0, Vec3(0.92, 0.92, 0.94), 1);
+            break;
+        }
+        case Piece::MarketStall: {
+            // A MARKET STALL: a trestle counter heaped with crates of produce, a striped awning on four posts.
+            k.out.size = {2.4, 2.45, 1.4};
+            const Vec3 stripe = kFabric[(variant + 2) & 7u];
+            k.box(F::Wood, {0, 0.82, 0.95}, {2.3, 0.05, 0.85}, 0.01, wood, 1);                  // the counter
+            k.box(F::Wood, {0, 0.42, 1.36}, {2.3, 0.78, 0.04}, 0.01, wood * 0.85, 1);           // its front
+            static const Vec3 produce[4] = {Vec3(0.75, 0.15, 0.10), Vec3(0.90, 0.55, 0.10), Vec3(0.35, 0.60, 0.20),
+                                            Vec3(0.85, 0.80, 0.25)};
+            for (int i = 0; i < 4; ++i) {
+                const double x = -0.82 + i * 0.55;
+                k.box(F::Wood, {x, 0.91, 1.0}, {0.48, 0.13, 0.60}, 0.005, wood * 1.1, 1);       // a crate
+                k.box(F::Hard, {x, 0.99, 1.0}, {0.42, 0.06, 0.52}, 0.03, produce[(i + variant) & 3u]);   // its fruit
+            }
+            for (double x : {-1.14, 1.14})
+                for (double z : {0.06, 1.34}) k.rod(F::Metal, {x, 0, z}, {x, 2.25, z}, 0.025, kSteel, 6);
+            for (int i = 0; i < 6; ++i)
+                k.boxTilted(F::Fabric, {-1.0 + i * 0.4, 2.32, 0.70}, {0.40, 0.03, 1.46}, 0.0, 0.08,
+                            (i & 1) ? stripe : kLinen);                                          // the awning
+            break;
+        }
+        case Piece::JudgeBench: {
+            // The BENCH: the judge's raised desk across the courtroom's front, panelled, the judge's high-backed chair
+            // behind it (at -z, toward the wall); the witness box at one end, the clerk's lower desk at the other.
+            k.out.size = {4.0, 1.85, 2.2};
+            k.box(F::Wood, {0, 0.15, 0.80}, {2.6, 0.30, 1.6}, 0.0, wood * 0.75, 1);              // the dais
+            k.box(F::Wood, {0, 0.70, 1.48}, {2.6, 1.10, 0.10}, 0.01, wood, 1);                   // the bench front
+            k.box(F::Wood, {0, 1.24, 1.33}, {2.6, 0.04, 0.40}, 0.005, wood * 1.1, 1);            // its top
+            k.box(F::Fabric, {0, 0.80, 0.55}, {0.60, 0.10, 0.55}, 0.03, Vec3(0.40, 0.12, 0.12));   // the chair's seat
+            k.box(F::Fabric, {0, 1.30, 0.30}, {0.62, 1.00, 0.10}, 0.03, Vec3(0.40, 0.12, 0.12));   // its high back
+            // the witness box (right) and the clerk's desk (left)
+            k.box(F::Wood, {1.65, 0.55, 1.20}, {0.70, 1.10, 0.06}, 0.01, wood, 1);
+            k.box(F::Wood, {1.98, 0.55, 0.85}, {0.06, 1.10, 0.70}, 0.01, wood, 1);
+            k.box(F::Wood, {1.65, 0.08, 0.85}, {0.70, 0.16, 0.70}, 0.0, wood * 0.75, 1);
+            k.box(F::Wood, {-1.65, 0.37, 1.70}, {0.70, 0.74, 0.50}, 0.01, wood, 1);
+            break;
+        }
+        case Piece::JuryBox: {
+            // The JURY BOX: two rows of six chairs behind a panelled rail, the back row on a step. Faces +z (the
+            // courtroom), to be set against a side wall.
+            k.out.size = {3.6, 1.55, 2.0};
+            k.box(F::Wood, {0, 0.10, 0.55}, {3.6, 0.20, 1.10}, 0.0, wood * 0.75, 1);             // the back row's step
+            k.box(F::Wood, {0, 0.50, 1.96}, {3.6, 1.0, 0.08}, 0.01, wood, 1);                    // the front rail
+            for (double x : {-1.78, 1.78}) k.box(F::Wood, {x, 0.50, 1.0}, {0.06, 1.0, 1.92}, 0.01, wood, 1);
+            for (int r = 0; r < 2; ++r)
+                for (int i = 0; i < 6; ++i) {
+                    const double x = -1.45 + i * 0.58, z = r == 0 ? 0.55 : 1.45, y0 = r == 0 ? 0.20 : 0.0;
+                    k.box(F::Fabric, {x, y0 + 0.46, z}, {0.46, 0.07, 0.44}, 0.025, fabric * 0.8);
+                    k.box(F::Fabric, {x, y0 + 0.80, z - 0.21}, {0.44, 0.55, 0.05}, 0.025, fabric * 0.8);
+                }
+            break;
+        }
+        case Piece::GearLocker: {
+            // A GEAR LOCKER: an open steel rack, a firefighter's turnout coat on its hook, the trousers folded down
+            // over the boots below, the helmet on the shelf over them. Faces +z; backs onto a wall.
+            k.out.size = {0.90, 1.95, 0.60};
+            const Vec3 tan(0.62, 0.52, 0.30), band(0.85, 0.85, 0.30);
+            for (double x : {-0.43, 0.43}) k.box(F::Metal, {x, 0.975, 0.30}, {0.04, 1.95, 0.58}, 0.0, kSteel, 1);   // the sides
+            k.box(F::Metal, {0, 1.65, 0.30}, {0.86, 0.03, 0.56}, 0.0, kSteel, 1);                 // the shelf
+            k.box(F::Metal, {0, 0.06, 0.30}, {0.86, 0.03, 0.56}, 0.0, kSteel, 1);                 // the floor
+            k.box(F::Metal, {0, 0.975, 0.03}, {0.86, 1.95, 0.02}, 0.0, kSteel * 0.8, 1);          // the back
+            k.box(F::Fabric, {0, 1.20, 0.25}, {0.56, 0.75, 0.24}, 0.05, tan);                       // the coat
+            k.box(F::Fabric, {0, 1.02, 0.38}, {0.58, 0.06, 0.02}, 0.0, band, 1);                     // its reflective band
+            k.box(F::Fabric, {0, 0.42, 0.30}, {0.48, 0.30, 0.30}, 0.06, tan * 0.9);                 // the trousers over the boots
+            for (double x : {-0.12, 0.12}) k.box(F::Hard, {x, 0.20, 0.32}, {0.16, 0.30, 0.28}, 0.04, kBlack);   // the boots
+            k.turned(F::Hard, {0, 1.67, 0.30}, {{0.0, 0.0}, {0.20, 0.0}, {0.17, 0.03}, {0.13, 0.12}, {0.07, 0.18}, {0.0, 0.19}},
+                     Vec3(0.80, 0.12, 0.08), 1.0, 12);                                               // the helmet
+            break;
+        }
+        case Piece::Machine: {
+            // A MACHINE TOOL (a factory floor's: a CNC mill or a lathe, by the style dice): a painted steel base, the
+            // working enclosure over it with its window, the control pendant on its arm, a warning-striped plinth, a
+            // stack light. Faces +z: its operator stands there.
+            const bool lathe = (style & 1u) != 0;
+            const Vec3 paint = lathe ? Vec3(0.30, 0.42, 0.36) : Vec3(0.78, 0.78, 0.74);
+            k.out.size = {lathe ? 2.6 : 2.0, 2.15, 1.6};
+            const double W = k.out.size.x;
+            k.box(F::Hard, {0, 0.04, 0.80}, {W, 0.08, 1.56}, 0.0, Vec3(0.85, 0.70, 0.10), 1);         // the plinth
+            k.box(F::Metal, {0, 0.50, 0.75}, {W - 0.1, 0.84, 1.4}, 0.01, paint * 0.8, 1);             // the base
+            k.box(F::Metal, {0, 1.40, 0.70}, {W - 0.2, 0.96, 1.2}, 0.03, paint, 1);                   // the enclosure
+            k.box(F::Hard, {lathe ? -0.2 : 0, 1.42, 1.31}, {W * 0.5, 0.55, 0.02}, 0.0, Vec3(0.20, 0.25, 0.28), 1);   // its window
+            k.box(F::Hard, {W * 0.5 - 0.15, 1.35, 1.36}, {0.30, 0.45, 0.10}, 0.01, kBlack * 2.0, 1);     // the pendant
+            k.rod(F::Metal, {W * 0.5 - 0.4, 1.95, 0.4}, {W * 0.5 - 0.4, 2.12, 0.4}, 0.02, kSteel, 6);   // the stack light's post
+            k.box(F::Light, {W * 0.5 - 0.4, 2.08, 0.4}, {0.07, 0.06, 0.07}, 0.0, Vec3(0.2, 0.9, 0.3), 1);
+            break;
+        }
+        case Piece::Workbench: {
+            // A WORKBENCH: a thick timber top on a steel frame, a vice at one end, a pegboard of tools behind it on
+            // its own uprights, a drawer unit under one end. Backs onto a wall (+z the worker's side).
+            k.out.size = {2.0, 1.85, 0.80};
+            k.box(F::Wood, {0, 0.88, 0.45}, {2.0, 0.06, 0.70}, 0.006, wood, 1);
+            for (double x : {-0.94, 0.94})
+                for (double z : {0.14, 0.76}) k.box(F::Metal, {x, 0.43, z}, {0.05, 0.86, 0.05}, 0.0, kSteel * 0.6, 1);
+            k.box(F::Metal, {0.6, 0.45, 0.45}, {0.6, 0.70, 0.62}, 0.006, Vec3(0.70, 0.15, 0.12), 1);   // drawers
+            k.box(F::Metal, {-0.75, 0.98, 0.70}, {0.16, 0.14, 0.16}, 0.01, Vec3(0.20, 0.30, 0.55), 1); // the vice
+            k.box(F::Hard, {0, 1.42, 0.04}, {1.9, 0.86, 0.02}, 0.0, Vec3(0.75, 0.68, 0.52), 1);      // the pegboard
+            for (int i = 0; i < 6; ++i)                                                               // its tools
+                k.box(F::Metal, {-0.75 + i * 0.3, 1.40 + (i % 2) * 0.12, 0.07}, {0.04, 0.26, 0.03}, 0.0, kSteel * (0.8 + 0.05 * i), 1);
+            break;
+        }
+        case Piece::PalletStack: {
+            // A PALLET of goods on the floor: the timber pallet, cartons stacked on it, shrink-wrapped.
+            k.out.size = {1.2, 1.45, 1.0};
+            k.box(F::Wood, {0, 0.07, 0.5}, {1.2, 0.14, 1.0}, 0.0, wood * 1.1, 1);
+            const int layers = 2 + static_cast<int>(style & 1u);
+            for (int l = 0; l < layers; ++l)
+                k.box(F::Hard, {0, 0.14 + 0.21 + l * 0.42, 0.5}, {1.14, 0.40, 0.94}, 0.01, Vec3(0.62, 0.48, 0.32) * (0.92 + 0.05 * l), 1);
+            k.box(F::Hard, {0, 0.14 + layers * 0.21, 0.5}, {1.17, layers * 0.42, 0.97}, 0.0, Vec3(0.85, 0.87, 0.90), 1);   // the wrap
+            break;
+        }
+        case Piece::Forklift: {
+            // A FORKLIFT: the counterweighted body, the overhead guard on its posts, the seat and wheel, the mast at
+            // the front (+z) with its forks down on the floor.
+            k.out.size = {1.2, 2.2, 2.9};
+            const Vec3 yellow(0.90, 0.68, 0.10);
+            k.box(F::Hard, {0, 0.55, 1.0}, {1.1, 0.80, 1.8}, 0.03, yellow, 1);                     // body
+            k.box(F::Hard, {0, 0.75, 0.15}, {1.1, 0.90, 0.30}, 0.03, kBlack * 2.5, 1);            // counterweight
+            for (double x : {-0.48, 0.48})
+                for (double z : {0.35, 1.70}) k.box(F::Metal, {x, 1.55, z}, {0.06, 1.25, 0.06}, 0.0, kBlack, 1);   // guard posts
+            k.box(F::Metal, {0, 2.17, 1.02}, {1.04, 0.05, 1.42}, 0.0, kBlack, 1);                 // the guard
+            k.box(F::Fabric, {0, 1.08, 0.75}, {0.50, 0.12, 0.50}, 0.03, kBlack * 2.0);            // the seat
+            k.box(F::Metal, {0, 1.62, 2.00}, {0.80, 1.16, 0.10}, 0.0, kSteel * 0.6, 1);           // the mast
+            k.box(F::Metal, {0, 1.10, 2.00}, {0.90, 2.0, 0.08}, 0.0, kSteel * 0.5, 1);
+            for (double x : {-0.30, 0.30}) k.box(F::Metal, {x, 0.04, 2.45}, {0.12, 0.05, 0.90}, 0.0, kSteel * 0.7, 1);   // forks
+            for (double x : {-0.50, 0.50})
+                for (double z : {0.45, 1.65})
+                    k.turned(F::Hard, {x, 0, z}, {{0.0, 0.0}, {0.12, 0.0}, {0.12, 0.30}, {0.0, 0.30}}, kBlack, 1.0, 10);   // wheels
+            break;
+        }
+        case Piece::Lectern: {
+            k.out.size = {0.70, 1.15, 0.55};
+            k.box(F::Wood, {0, 0.50, 0.30}, {0.60, 1.0, 0.45}, 0.01, wood, 1);
+            k.boxTilted(F::Wood, {0, 1.09, 0.28}, {0.70, 0.04, 0.52}, 0.008, -0.25, wood * 1.05);
+            k.box(F::Wood, {0, 0.03, 0.30}, {0.66, 0.06, 0.50}, 0.004, wood * 0.75, 1);
+            break;
+        }
+        case Piece::LabBench: {
+            // A LAB BENCH, 2.4 x 0.75: a black resin top over white cupboards, a sink at one end with its gooseneck
+            // tap, a service spine of sockets and gas taps along the back.
+            k.out.size = {2.4, 1.15, 0.75};
+            k.box(F::Hard, {0, 0.44, 0.38}, {2.36, 0.80, 0.70}, 0.006, kWhite, 1);
+            for (int d = 0; d < 4; ++d) {
+                const double x0 = -1.16 + d * 0.58;
+                k.front(F::Hard, x0, x0 + 0.58, 0.08, 0.80, 0.73, kWhite * 0.97, kChrome, true);
+            }
+            k.box(F::Hard, {0, 0.865, 0.375}, {2.4, 0.03, 0.75}, 0.004, Vec3(0.08, 0.08, 0.09), 1);
+            k.box(F::Ceramic, {0.85, 0.86, 0.40}, {0.40, 0.03, 0.34}, 0.01, Vec3(0.12, 0.12, 0.13), 1);   // the sink
+            k.rod(F::Metal, {0.85, 0.88, 0.12}, {0.85, 1.12, 0.12}, 0.012, kChrome, 8);
+            k.rod(F::Metal, {0.85, 1.12, 0.12}, {0.85, 1.10, 0.30}, 0.012, kChrome, 8);
+            k.box(F::Hard, {-0.2, 1.0, 0.06}, {1.8, 0.24, 0.10}, 0.01, kSteel * 0.85, 1);                  // the spine
+            for (int i = 0; i < 5; ++i) k.box(F::Hard, {-1.0 + i * 0.4, 1.0, 0.115}, {0.08, 0.06, 0.01}, 0.0, kWhite, 1);
+            break;
+        }
+        case Piece::ReadingTable: {
+            // The LIBRARY's long table for eight: an oak top, a green-shaded lamp at each end, four chairs a side
+            // (part of the piece: a reading room is tables in rows).
+            k.out.size = {2.6, 1.16, 2.0};
+            k.box(F::Wood, {0, 0.74, 1.0}, {2.4, 0.045, 0.95}, 0.01, wood, 1);
+            for (double x : {-1.1, 1.1})
+                for (double z : {0.6, 1.4}) k.leg(F::Wood, {x, 0, z}, 0.72, 0.07, wood * 0.9);
+            // the BANKER'S LAMPS (Glenn: "the green part is a shell and there's a lightbulb or two inside"): an open
+            // half-tube of green glass on a brass stem, two lit bulbs under it
+            for (double x : {-0.95, 0.95}) {
+                const Vec3 brass(0.55, 0.45, 0.25), green(0.10, 0.34, 0.18);
+                k.turned(F::Metal, {x, 0.765, 1.0}, {{0.07, 0.0}, {0.07, 0.015}, {0.012, 0.03}, {0.012, 0.30}, {0.0, 0.31}},
+                         brass, 1.0, 12);
+                k.rod(F::Metal, {x, 1.07, 1.0}, {x, 1.13, 1.0}, 0.008, brass, 6);
+                for (int seg = 0; seg < 7; ++seg) {   // the shade: a half tube along x, open underneath
+                    const double a0 = kPi * seg / 7.0, a1 = kPi * (seg + 1) / 7.0, am = (a0 + a1) * 0.5;
+                    const double r = 0.075, cw = r * (a1 - a0) + 0.004;
+                    k.boxTilted(F::Ceramic, {x, 1.10 + r * std::sin(am), 1.0 + r * std::cos(am)}, {0.34, 0.008, cw}, 0.0,
+                                kPi * 0.5 - am, green);
+                }
+                for (double bx : {-0.07, 0.07})
+                    k.turned(F::Light, {x + bx, 1.085, 1.0}, {{0.0, 0.0}, {0.022, 0.012}, {0.024, 0.03}, {0.012, 0.05}, {0.0, 0.055}},
+                             Vec3(1.0, 0.92, 0.75), 1.0, 10);
+            }
+            for (double x : {-0.9, -0.3, 0.3, 0.9})
+                for (int side = 0; side < 2; ++side) {
+                    const double s2 = side == 0 ? -1.0 : 1.0, zc = 1.0 + s2 * 0.72;
+                    // (Glenn: "the wooden chairs have a floating head rest": the back stood on nothing -- the rear
+                    // legs now run up past the seat and carry it)
+                    k.box(F::Wood, {x, 0.46, zc}, {0.44, 0.05, 0.42}, 0.012, wood * 0.95, 1);
+                    for (double lx : {-0.18, 0.18}) {
+                        k.leg(F::Wood, {x + lx, 0, zc - s2 * 0.17}, 0.44, 0.035, wood * 0.9);   // front legs
+                        k.leg(F::Wood, {x + lx, 0, zc + s2 * 0.19}, 0.95, 0.035, wood * 0.9);   // rear legs, up the back
+                    }
+                    k.box(F::Wood, {x, 0.86, zc + s2 * 0.19}, {0.40, 0.16, 0.03}, 0.008, wood * 0.95, 1);   // top rail
+                    k.box(F::Wood, {x, 0.64, zc + s2 * 0.19}, {0.36, 0.05, 0.025}, 0.006, wood * 0.95, 1);  // mid rail
+                }
+            break;
+        }
         case Piece::CeilingLight: {
             // THE ROOM'S LIGHT (Glenn, 2026-10-02: "actual ceiling light fixtures for where the ambient light comes
             // from"): hung by its TOP at y = size.y (placed so that is the ceiling). An office's recessed 600 x 1200
             // panel -- a white frame round a lit diffuser -- or, with style bit 5, a home's round flush fitting.
             k.out.solid = false;
-            if (variant & 32u) {
+            if (variant & 64u) {
+                // style bit 6: a bar's PENDANT -- a cord from the ceiling, a dark metal dome, a warm amber bulb under it
+                k.out.size = {0.36, 0.90, 0.36};
+                k.rod(F::Metal, {0, 0.30, 0.18}, {0, 0.90, 0.18}, 0.005, kBlack, 6);
+                k.turned(F::Metal, {0, 0.12, 0.18}, {{0.17, 0.0}, {0.16, 0.06}, {0.11, 0.14}, {0.04, 0.18}, {0.0, 0.19}},
+                         (variant & 128u) ? Vec3(0.55, 0.42, 0.22) : kBlack * 1.5, 1.0, 18);
+                k.turned(F::Light, {0, 0.07, 0.18}, {{0.0, 0.0}, {0.045, 0.02}, {0.05, 0.06}, {0.03, 0.09}, {0.0, 0.10}},
+                         Vec3(1.0, 0.62, 0.30), 1.0, 12);
+            } else if (variant & 32u) {
                 k.out.size = {0.42, 0.08, 0.42};
                 k.turned(F::Hard, {0, 0.06, 0.21}, {{0.0, 0.0}, {0.20, 0.0}, {0.21, 0.02}, {0.0, 0.02}}, kWhite, 1.0, 24);
                 k.turned(F::Light, {0, 0.0, 0.21}, {{0.0, 0.0}, {0.18, 0.0}, {0.19, 0.03}, {0.17, 0.06}, {0.0, 0.06}},
@@ -843,6 +1542,52 @@ FurniturePiece build(Piece p, uint32_t variant) {
             k.box(F::Fabric, {0, 0.030, 0.7}, {1.5, 0.012, 0.9}, 0.004, fabric, 1);
             break;
         }
+        case Piece::WaterCooler: {
+            // A WATER COOLER (Glenn, 2026-10-16: "a water cooler and so on"): a white cabinet, the drip tray and its
+            // two taps (cold blue, hot red) at cup height, the big blue bottle upside down on top. Faces +z.
+            k.out.size = {0.34, 1.34, 0.36};
+            k.box(F::Hard, {0, 0.50, 0.18}, {0.32, 1.0, 0.32}, 0.012, kWhite, 1);
+            k.box(F::Hard, {0, 0.80, 0.335}, {0.22, 0.16, 0.012}, 0.0, kBlack * 2.5, 1);          // the recess
+            k.box(F::Hard, {0, 0.73, 0.33}, {0.22, 0.02, 0.06}, 0.0, kSteel * 0.7, 1);            // its drip tray
+            k.box(F::Hard, {-0.05, 0.86, 0.33}, {0.04, 0.04, 0.05}, 0.004, Vec3(0.15, 0.35, 0.80), 1);   // cold
+            k.box(F::Hard, {0.05, 0.86, 0.33}, {0.04, 0.04, 0.05}, 0.004, Vec3(0.80, 0.15, 0.12), 1);    // hot
+            k.box(F::Hard, {0, 1.005, 0.18}, {0.26, 0.01, 0.26}, 0.0, kSteel * 0.8, 1);           // the collar
+            k.turned(F::Hard, {0, 1.0, 0.18}, {{0.0, 0.0}, {0.03, 0.0}, {0.03, 0.04}, {0.13, 0.09}, {0.135, 0.29},
+                                                {0.12, 0.33}, {0.0, 0.335}}, Vec3(0.45, 0.68, 0.88), 1.0, 16);
+            break;
+        }
+        case Piece::Copier: {
+            // A COPIER (the copy room's): a printer-copier on its paper-drawer base -- two drawers, the body with its
+            // output tray and a sheet in it, the scanner's lid on top, the control panel tilted toward the user (+z).
+            k.out.size = {0.62, 1.16, 0.68};
+            const Vec3 shell(0.82, 0.82, 0.80);
+            k.box(F::Hard, {0, 0.31, 0.33}, {0.60, 0.58, 0.62}, 0.008, shell * 0.92, 1);
+            k.front(F::Hard, -0.28, 0.28, 0.06, 0.30, 0.64, shell, kBlack * 3.0);
+            k.front(F::Hard, -0.28, 0.28, 0.32, 0.56, 0.64, shell, kBlack * 3.0);
+            k.box(F::Hard, {0, 0.81, 0.32}, {0.60, 0.42, 0.62}, 0.01, shell, 1);                  // the body
+            k.box(F::Hard, {-0.04, 0.86, 0.50}, {0.46, 0.08, 0.30}, 0.0, kBlack * 2.0, 1);        // the output slot
+            k.box(F::Ceramic, {-0.04, 0.905, 0.47}, {0.21, 0.004, 0.28}, 0.0, kPorcelain, 1);     // a sheet in it
+            k.box(F::Hard, {0, 1.06, 0.31}, {0.58, 0.06, 0.56}, 0.008, shell * 1.05, 1);          // the scanner lid
+            k.boxTilted(F::Hard, {0.17, 1.06, 0.61}, {0.24, 0.03, 0.12}, 0.004, 0.45, kBlack * 2.0);   // the panel
+            break;
+        }
+        case Piece::PhoneBooth: {
+            // A PHONE BOOTH (an office's acoustic pod): felt-lined walls and a roof with its light, a glass door on
+            // the front (+z), a shelf to lean a laptop on and a stool inside. Stood in a row against a wall.
+            k.out.size = {1.0, 2.25, 1.0};
+            const Vec3 felt = fabric * 0.8 + Vec3(0.08, 0.08, 0.08);
+            k.box(F::Hard, {0, 0.03, 0.5}, {1.0, 0.06, 1.0}, 0.0, kSteel * 0.6, 1);               // the plinth
+            k.box(F::Fabric, {0, 1.12, 0.03}, {1.0, 2.12, 0.06}, 0.01, felt);                      // the back
+            for (double x : {-0.47, 0.47}) k.box(F::Fabric, {x, 1.12, 0.5}, {0.06, 2.12, 1.0}, 0.01, felt);   // sides
+            k.box(F::Hard, {0, 2.21, 0.5}, {1.0, 0.08, 1.0}, 0.01, kWhite, 1);                     // the roof
+            k.box(F::Light, {0, 2.165, 0.5}, {0.5, 0.01, 0.5}, 0.0, Vec3(1.0, 0.95, 0.85), 1);   // its light
+            k.box(F::Wood, {0, 1.02, 0.22}, {0.84, 0.03, 0.36}, 0.004, wood, 1);                   // the shelf
+            k.turned(F::Hard, {0, 0, 0.62}, {{0.0, 0.0}, {0.18, 0.0}, {0.18, 0.02}, {0.03, 0.04}, {0.03, 0.62},
+                                              {0.17, 0.64}, {0.17, 0.68}, {0.0, 0.69}}, kBlack * 3.0, 1.0, 12);   // the stool
+            k.box(F::Metal, {0, 1.12, 0.975}, {0.88, 2.06, 0.012}, 0.0, Vec3(0.55, 0.62, 0.66), 1);   // the glass door
+            k.rod(F::Metal, {0.36, 0.9, 0.995}, {0.36, 1.4, 0.995}, 0.012, kChrome, 8);
+            break;
+        }
         default: break;
     }
     return k.out;
@@ -855,7 +1600,13 @@ const char* const kPieceNames[kPieceCount] = {
     "desk_pod", "cubicle", "meeting_table", "whiteboard",
     "shop_counter", "gondola", "wall_shelf", "clothes_rack", "cafe_table", "display_case", "drinks_fridge", "bookcase",
     "pallet_rack", "checkout", "bench", "plaza_bench", "bistro_table", "bistro_chair", "ceiling_light",
-    "desk_lamp", "potted_plant", "book_stack", "kettle", "fruit_bowl", "vase", "mug"};
+    "desk_lamp", "potted_plant", "book_stack", "kettle", "fruit_bowl", "vase", "mug",
+    "single_bed", "school_desk", "school_chair", "lecture_row", "lectern", "lab_bench", "reading_table", "aisle_step", "bleacher",
+    "bar_counter", "back_bar", "bar_stool", "booth", "high_table", "dj_booth", "dance_floor", "kitchen_pass",
+    "desk_screen", "reception_desk", "hospital_bed", "exam_couch", "waiting_seats",
+    "pew", "altar", "cinema_row", "cinema_screen", "market_stall", "judge_bench", "jury_box",
+    "gear_locker", "machine", "workbench", "pallet_stack", "forklift",
+    "water_cooler", "copier", "phone_booth"};
 
 }  // namespace
 

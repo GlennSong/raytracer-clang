@@ -1,6 +1,7 @@
 #include "level_loader.h"
 #ifdef RT_ENABLE_SCRIPTING
 #include "scripting/furniture_library_lua.h"
+#include "scripting/tree_recipes_lua.h"
 #endif
 #include "interaction.h"
 #include "furniture_draw.h"
@@ -25,8 +26,13 @@
 #include "procgen/earthwork.h"
 #include "procgen/grass.h"
 #include "procgen/stylized_tree.h"
-#include "procgen/forest.h"         // "forest": real trees + impostors at island scale (ADR-0129)
+#include "procgen/forest.h"
+#include "procgen/tree_lods.h"      // a recipe tree's hero / mid / light levels         // "forest": real trees + impostors at island scale (ADR-0129)
+#include "procgen/tree_cache.h"     // ...grown once, kept on disk
+#include "procgen/branch_cards.h"   // the recipe trees' branch cards (one atlas a forest species)
 #include "procgen/terrain_maps.h"
+#include "procgen/rock_layers.h"     // the macro map's rock bands (ADR-0209)
+#include "procgen/ground_clutter.h"  // grass layers of stones and twigs (ADR-0212)
 #include "procgen/terrain_weather.h"
 #include "procgen/trails.h"
 #include "systems/nature_collider_system.h"   // NatureColliders (#55)
@@ -44,13 +50,15 @@
 #include "../job_system.h"   // lodSurfaceHeight: the drawn ground
 #include "drawn_road.h"               // DrawnRoad: the road as built, for planting
 #include "procgen/city/city_lots.h"  // grow buildings on the road net's blocks (ADR-0066)
+#include "procgen/city/trades.h"     // one place per shop unit, of its trade (storefronts stage 1)
+#include "procgen/city/shop_signs.h"  // ...its name on its fascia (stage 2)
+#include "procgen/city/shape_grammar.h"   // shopFrontsOf
 #include "procgen/city/building_collider.h"  // prism + door notches (ADR-0080)
+#include "procgen/city/core_plan.h"          // coreReachesRoof / coreRoofHoles (the roof exit)
 #include "procgen/city/building_records.h"   // CityBuildings runtime records (ADR-0080)
 #include "procgen/city/roads/road_entity.h"
 #include "procgen/city/roads/road_builder.h"   // one interface, several road builders
-#include "procgen/deprecated/roads/road_net_mesh.h"   // DEPRECATED lattice mesher (roads module)
 #include "procgen/city/road_semantics.h"   // editor-authored roads (shape:"road")
-#include "procgen/city/citylots_producer.h"   // the lattice city's lot pre-pass as a producer (ADR-0084 C)
 #include "bundle/bake.h"
 #ifdef RT_ROADS_LANES
 #include "procgen/city/roads/lanes/lanes.h"     // the lanes road builder (ADR-0083/0089)
@@ -71,7 +79,6 @@
 #include "procgen/city/road_constraints.h"   // applyConstraints — bake roundabouts into the graph
 #include "procgen/city/road_mesh.h"   // triangulatePolygon (building prism colliders)
 #include "procgen/city/corridor_mesh.h"      // freeway corridors (plan §8)
-#include "procgen/deprecated/roads/road_lattice.h"       // swept-lattice freeway mesher
 #include "procgen/city/street_furniture.h"   // build-time signal/lamp placement
 #include "procgen/city/street_kit.h"  // trafficSignalProto, streetLamp
 #include "procgen/city/street_names.h"  // nameStreets
@@ -82,6 +89,8 @@
 #include "procgen/erosion.h"
 #include "procgen/lsystem.h"
 #include "procgen/tree.h"
+#include "procgen/tree_recipe.h"
+#include "procgen/leaf_card.h"
 #include "procgen/surface_maps.h"
 #include "procgen/rock.h"
 #include "procgen/scatter.h"
@@ -120,6 +129,17 @@ namespace engine {
 // every helper: loading is single-threaded and the alternative is an extra
 // out-param on a dozen call sites.
 static std::vector<std::string> g_loadedScriptFiles;
+// THE TREE TEXTURES uploaded this load, by content (Glenn's tree lab held 2197 textures, 4.9 GB: every tree uploaded
+// its own copy of its species' leaf atlas and bark maps, at every level -- identical pictures). Cleared as a level
+// load starts, as the renderer's textures are.
+static std::unordered_map<uint64_t, TextureHandle> g_treeTextures;
+static uint64_t textureKey(const TextureData& td) {
+    uint64_t h = 1469598103934665603ull ^ (static_cast<uint64_t>(td.width) << 32 | static_cast<uint64_t>(td.height) << 8 | td.channels);
+    const std::size_t n = td.pixels.size();
+    const std::size_t step = std::max<std::size_t>(1, n / 65536);   // (every byte of a small one; 64k spread over a big one)
+    for (std::size_t i = 0; i < n; i += step) h = (h ^ td.pixels[i]) * 1099511628211ull;
+    return h ^ n;
+}
 
 // The level being loaded, for producers that are keyed by it (the lanes road builder asks the
 // bundle for THIS level's city). Set once at the top of loadLevel, read far below.
@@ -283,6 +303,36 @@ static Collider buildCollider(const std::string& shape, const json& sizeJ,
     if (physics.contains("friction"))    c.friction    = physics["friction"].get<double>();
     if (physics.contains("restitution")) c.restitution = physics["restitution"].get<double>();
     return c;
+}
+
+// THE SURFACE CDLOD DRAWS: the leaf mesh's triangle under (x, z) (lodSurfaceHeight) -- what the player stands on and
+// the leaf collider is built from. Not entityGround: that one is dilated over a cell, up to 0.4 m above the mesh on a
+// hillside. Empty without a CDLOD terrain. BY POINTER: the closure is copied into every streamed chunk's preparer,
+// and a by-value config copied the whole flatten set each time -- 40,000 street strips x 14,000 chunks was 44 GB
+// and the OOM killer (2026-09-29).
+// THE STREET TREES' HEIGHTS (real_tree.h): each street species at its own street height.
+static double streetTreeHeight(engine::StreetSpecies sp) {
+    switch (sp) {
+        case engine::StreetSpecies::RoyalPalm: return 15.0;
+        case engine::StreetSpecies::CoconutPalm: return 12.0;
+        case engine::StreetSpecies::Monkeypod: return 11.0;
+        case engine::StreetSpecies::Poinciana: return 8.5;
+        case engine::StreetSpecies::Jacaranda: return 9.5;
+        case engine::StreetSpecies::Plumeria: return 5.5;
+        default: return 9.0;
+    }
+}
+
+static std::function<Real(Real, Real)> cdlodDrawnGround(World& world) {
+    std::function<Real(Real, Real)> g;
+    world.each<TerrainLodConfig>([&](Entity, TerrainLodConfig& c) {
+        auto cfgp = std::make_shared<const TerrainLodConfig>(c);
+        auto nz = std::make_shared<Noise>(c.seed);
+        g = [cfgp, nz](Real x, Real z) {
+            return lodSurfaceHeight(cfgp->params, *nz, x, z, cfgp->worldHalf, cfgp->numLods, cfgp->gridRes);
+        };
+    });
+    return g;
 }
 
 static void createEntityCommon(Entity e, const json& ent, World& world) {
@@ -553,6 +603,9 @@ static RenderMaterial::Surface surfaceForRoadMaterial(const std::string& name) {
     if (name == "sidewalk") return S::Pavement;                          // scored concrete flags
     if (name == "terrain") return S::TerrainGround;                      // the lab's ground: micro-relief over the baked grass colour
     if (name == "guardrail") return S::CorrugatedMetal;                  // a W-beam is corrugated; the loader keeps it dull
+    if (name == "ballast") return S::Asphalt;                            // crushed stone: asphalt's grain over its own colour (cobblestone read as blotches)
+    if (name == "sleeper") return S::Concrete;                           // concrete sleepers
+    if (name == "platform") return S::Pavement;                          // a platform is paving
     return S::None;                                                      // median grass slabs, paint_white, paint_yellow
 }
 
@@ -561,7 +614,9 @@ static ColliderSurface colliderSurfaceForRoadMaterial(const std::string& name) {
     if (name == "asphalt" || name == "shoulder") return ColliderSurface::Asphalt;
     if (name == "concrete" || name == "sidewalk") return ColliderSurface::Concrete;
     if (name == "terrain") return ColliderSurface::Terrain;
-    if (name == "guardrail") return ColliderSurface::Metal;
+    if (name == "guardrail" || name == "station_steel") return ColliderSurface::Metal;
+    if (name == "ballast") return ColliderSurface::Rock;
+    if (name == "platform") return ColliderSurface::Concrete;
     if (name.find("median") != std::string::npos || name.find("grass") != std::string::npos) return ColliderSurface::Grass;
     return ColliderSurface::Unknown;
 }
@@ -628,6 +683,8 @@ static void spawnRoadMeshes(const json& ent, std::vector<roads::RoadMesh>& meshe
     for (std::size_t mi = 0; mi < meshes.size(); ++mi) {
         roads::RoadMesh& rm = meshes[mi];
         if (rm.mesh.vertices.empty()) continue;
+        static const bool noTrackKit = std::getenv("RT_NO_TRACK_KIT") != nullptr;   // A/B: the sleepers' and rails' cost
+        if (noTrackKit && (rm.name == "sleeper" || rm.name == "rail")) continue;
         const bool onHost = hostTakesFirst && spawned == 0;
         const Entity me = onHost ? host : world.create();
         if (!onHost) createEntityCommon(me, ent, world);
@@ -641,7 +698,11 @@ static void spawnRoadMeshes(const json& ent, std::vector<roads::RoadMesh>& meshe
         if (rm.markings) mr.material.setSurface(RenderMaterial::Surface::RoadMarkings);
         else mr.material.setSurface(surfaceForRoadMaterial(rm.name));
         mr.mesh = assets.acquireMesh(rm.mesh, tag + ":" + rm.name + ":" + std::to_string(mi));
+        // a station's lamps: dark by day, lit on the dusk ramp with the street lamps (their light: RailStop::lamps)
+        const bool nightLamp = rm.name == "station_lamp";
+        if (nightLamp) mr.material.emission = Vec3(0, 0, 0);
         world.add<Renderable>(me, mr);
+        if (nightLamp) world.add<engine::NightGlow>(me, engine::NightGlow{Vec3(0.95, 0.97, 1.0) * 5.0});
         if (!rm.collidable) continue;
         MeshCollider mc;
         mc.vertices.reserve(rm.mesh.vertices.size());
@@ -702,8 +763,8 @@ static void loadRoadEntity(const json& ent, World& world, AssetManager& assets,
     if (net.look.markings)                           // lane paint via the surface shader
         r.material.setSurface(RenderMaterial::Surface::RoadMarkings);
     // WHICH BUILDER IS DATA (roads module, docs/road-module-plan.md): the road
-    // block's "builder" names it, default "lattice" — the swept lattice every
-    // shipped level is built with. The builder owes the surface, the deck it
+    // block's "builder" names it, default "lanes" -- the one builder since the lattice
+    // retired (2026-10-14). The builder owes the surface, the deck it
     // rides and the kerb band; the mesher's own curb band outlines ride along
     // for the city map, so the sidewalks drawn are the sidewalks built.
     roads::RoadBuildInput buildIn;
@@ -738,6 +799,7 @@ static void loadRoadEntity(const json& ent, World& world, AssetManager& assets,
     spawnRoadMeshes(ent, built.meshes, r, world, assets, "road:" + std::to_string(index), e, true);
     // The deck the mesh rode, for everything that must stand ON it (RoadDeck).
     if (!deck.empty()) world.add<RoadDeck>(e, RoadDeck{std::move(deck)});
+    if (!built.rails.empty()) world.add<RailTracks>(e, RailTracks{built.rails});
 #ifdef RT_ROADS_LANES
     publishCityProducts(builder, buildIn, built, world);
 #endif
@@ -796,6 +858,10 @@ static void loadLanesEntity(const json& ent, World& world, AssetManager& assets,
         if (built.bands.curbHeight > 0) net.look.curb = built.bands.curbHeight;
     }
     if (!built.deck.empty()) world.add<RoadDeck>(doc, RoadDeck{std::move(built.deck)});
+    if (!built.rails.empty()) {
+        LOG_INFO << "[lanelab] e" << index << ": " << built.rails.size() << " rail tracks";
+        world.add<RailTracks>(doc, RailTracks{built.rails});
+    }
     world.add<RoadEntity>(doc, net);      // an empty graph, but its LOOK is the city's
     publishCityProducts(b, in, built, world);
     LOG_INFO << "[lanelab] e" << index << ": " << built.meshes.size() << " cell meshes, " << tris
@@ -814,62 +880,153 @@ static void loadTreeEntity(const json& ent, World& world, Renderer& renderer,
     uint32_t seed = 0;
     TreeParams tp = readTreeParams(ent, seed);
 
-    TreeMesh tm = growTree(tp, seed);
-    if (tm.branches.vertices.empty()) return;
+    // A RECIPE TREE (tree_recipe.h; the tree lab): "tree": {"recipe": "oak", "seed": 3, "set": {"lobeDepth": 0}} --
+    // the species from assets/scripts/tree_recipes.lua, the seed drawing within its ranges, `set` pinning knobs
+    //
+    // ITS LEVELS OF DETAIL (Glenn, 2026-10-17: "hero trees have everything wielded. And then mid level doesn't have
+    // to wield them all and then furthest would be cards"): a recipe with near foliage (a leaf kit or sprays) and no
+    // `foliage` pinned grows TWICE -- the HERO (joints at every fork of wood, leaves one by one or sprays) drawn to
+    // kLodHeroOut, and the MID (joints on the trunk and main limbs only, crossed cards) from there out, the two
+    // crossfading per pixel over the band (FLAG_LOD_BAND) and each culled outside its own range. "lod": false keeps
+    // the one tree (the lab's comparison rows pin foliage and get the one they pin).
+    constexpr float kLodBand0 = 24.0f, kLodBand1 = 30.0f;
+    std::string barkStyle = ent.contains("tree") ? ent["tree"].value("barkStyle", std::string()) : std::string();
+    struct Level { TreeMesh tm; LeafCardAtlas atlas; float in0 = 0, in1 = 0, out0 = 0, out1 = 0; Real minD = 0, maxD = 0; };
+    std::vector<Level> levels;
+    bool fromRecipe = false;
+#ifdef RT_ENABLE_SCRIPTING
+    if (ent.contains("tree") && ent["tree"].contains("recipe")) {
+        std::string path;
+        const TreeRecipeBook& book = shippedTreeRecipes(&path);
+        if (!path.empty() && std::find(g_loadedScriptFiles.begin(), g_loadedScriptFiles.end(), path) == g_loadedScriptFiles.end())
+            g_loadedScriptFiles.push_back(path);   // (the script watcher reloads the level on an edit)
+        const std::string name = ent["tree"]["recipe"].get<std::string>();
+        // (its AGE: "tree": {"recipe": "oak", "age": "ancient"} -- tree_recipe.h TreeAge)
+        const TreeRecipe* found = book.find(name);
+        // (and its FORM: "form": "stand", a forest-grown tree -- TreeRecipe::forms)
+        const TreeRecipe agedR = found ? formedRecipe(agedRecipe(*found, ent["tree"].value("age", std::string())),
+                                                      ent["tree"].value("form", std::string()))
+                                       : TreeRecipe{};
+        if (const TreeRecipe* r = found ? &agedR : nullptr) {
+            std::map<std::string, double> overrides;
+            if (ent["tree"].contains("set") && ent["tree"]["set"].is_object())
+                for (auto it = ent["tree"]["set"].begin(); it != ent["tree"]["set"].end(); ++it)
+                    if (it.value().is_number()) overrides[it.key()] = it.value().get<double>();
+            if (barkStyle.empty()) barkStyle = r->bark;
+            RecipeLodBands bands;
+            bands.hero0 = kLodBand0; bands.hero1 = kLodBand1;
+            for (RecipeTreeLevel& rl : growRecipeLevels(*r, seed, overrides, bands, ent["tree"].value("lod", true))) {
+                Level L;
+                L.tm = std::move(rl.tree);
+                L.atlas = std::move(rl.atlas);
+                L.in0 = rl.in0; L.in1 = rl.in1; L.out0 = rl.out0; L.out1 = rl.out1;
+                L.minD = rl.minDistance; L.maxD = rl.maxDistance;
+                levels.push_back(std::move(L));
+            }
+            fromRecipe = true;
+        } else {
+            LOG_WARN << "tree e" << index << ": no recipe '" << name << "' in tree_recipes.lua";
+            return;
+        }
+    }
+#endif
+    if (!fromRecipe) {
+        Level L;
+        L.tm = growTree(tp, seed);
+        levels.push_back(std::move(L));
+    }
+    if (barkStyle.empty()) barkStyle = "oak";
+    if (levels.empty() || levels.front().tm.branches.vertices.empty()) return;
 
-    auto upload = [&](const TextureData& td) -> TextureHandle {
+    auto upload = [&](const TextureData& td) -> TextureHandle {   // (once a load per picture: g_treeTextures)
         if (td.pixels.empty()) return TextureHandle{};
-        return renderer.uploadTexture(td.width, td.height, td.channels, td.pixels.data());
+        const uint64_t key = textureKey(td);
+        auto it = g_treeTextures.find(key);
+        if (it != g_treeTextures.end()) return it->second;
+        const TextureHandle t = renderer.uploadTexture(td.width, td.height, td.channels, td.pixels.data());
+        g_treeTextures.emplace(key, t);
+        return t;
+    };
+    // the bark's maps, once for all its levels
+    TextureHandle barkAlbedo, barkNormal;
+    {
+        // THE BARK by kind (material_recipes.h: furrowed, plated, smooth, papery, ringed; the old style names map on),
+        // one tile a kind (cached), else the old per-style maps
+        BarkKind barkKind;
+        if (barkKindFromName(barkStyle, barkKind)) {
+            const BarkTextures bt = barkTextures(barkKind, 1u);
+            barkAlbedo = upload(bt.albedo);
+            barkNormal = upload(bt.normal);
+        } else {
+            BarkMaps bm = barkMaps(barkStyleFromName(barkStyle), 256, seed);
+            barkAlbedo = upload(bm.albedo);
+            barkNormal = upload(bm.normal);
+        }
+    }
+    auto banded = [](RenderMaterial& m, Renderable& r, const Level& L) {
+        if (L.in1 > L.in0 || L.out1 > L.out0) {
+            m.flags |= RenderMaterial::FLAG_LOD_BAND;
+            m.lodIn0 = L.in0; m.lodIn1 = L.in1; m.lodOut0 = L.out0; m.lodOut1 = L.out1;
+        }
+        r.minDistance = L.minD;
+        r.drawDistance = L.maxD;
     };
 
-    const std::string key = "tree:" + std::to_string(index) + ":" + std::to_string(seed);
-
-    // Bark entity: textured, collidable. It is the tree's *document* entity —
-    // it carries the SourceSpec (with the recipe) so the whole tree round-trips
-    // through the LevelWriter; the leaf entity is a runtime companion (no
-    // SourceSpec) regenerated from the recipe on load.
-    {
-        Entity e = world.create();
-        createEntityCommon(e, ent, world);
-
-        SourceSpec spec = buildSourceSpec(ent, "tree");
-        if (ent.contains("tree")) spec.recipe = ent["tree"].dump();
-        world.add<SourceSpec>(e, spec);
-
-        Renderable r;
-        r.mesh = assets.acquireMesh(tm.branches, key + ":bark");
-        r.material.albedo = Vec3(1, 1, 1);   // bark color is baked into vertex color
-        r.material.roughness = 1.0f;
-        // Per-species bark relief: value pattern (modulates vertex color) + normal map.
-        std::string styleName = ent.contains("tree")
-            ? ent["tree"].value("barkStyle", std::string("oak")) : "oak";
-        BarkMaps bm = barkMaps(barkStyleFromName(styleName), 256, seed);
-        r.material.albedoMap = upload(bm.albedo);
-        r.material.normalMap = upload(bm.normal);
-        if (ent.contains("material")) applyMaterial(ent["material"], r.material);
-        world.add<Renderable>(e, r);
-
-        MeshCollider mc;
-        mc.vertices = tm.collisionVertices;
-        mc.indices = tm.collisionIndices;
-        mc.surface = ColliderSurface::Wood;
-        if (ent.contains("physics"))
-            mc.friction = ent["physics"].value("friction", mc.friction);
-        world.add<MeshCollider>(e, mc);
-    }
-
-    // Leaf entity: alpha-cut cards at the same transform, no collision.
-    if (!tm.leaves.vertices.empty()) {
-        Entity e = world.create();
-        createEntityCommon(e, ent, world);
-
-        Renderable r;
-        r.mesh = assets.acquireMesh(tm.leaves, key + ":leaves");
-        r.material.albedo = Vec3(1, 1, 1);   // leaf color is baked into vertex color
-        r.material.roughness = 0.7f;
-        r.material.albedoMap = upload(leafTexture(128));
-        r.material.flags |= RenderMaterial::FLAG_ALPHA_TEST;
-        world.add<Renderable>(e, r);
+    for (std::size_t li = 0; li < levels.size(); ++li) {
+        const Level& L = levels[li];
+        const TreeMesh& tm = L.tm;
+        const std::string key = "tree:" + std::to_string(index) + ":" + std::to_string(seed) + ":" + std::to_string(li);
+        // Bark entity: textured. The FIRST level's is the tree's *document* entity -- it carries the SourceSpec (with
+        // the recipe) so the whole tree round-trips through the LevelWriter -- and its collider (the LAST level's mesh:
+        // the cheapest wood, the same limbs). The others are runtime companions regenerated from the recipe on load.
+        {
+            Entity e = world.create();
+            createEntityCommon(e, ent, world);
+            if (li == 0) {
+                SourceSpec spec = buildSourceSpec(ent, "tree");
+                if (ent.contains("tree")) spec.recipe = ent["tree"].dump();
+                world.add<SourceSpec>(e, spec);
+            }
+            Renderable r;
+            r.mesh = assets.acquireMesh(tm.branches, key + ":bark");
+            r.material.albedo = Vec3(1, 1, 1);   // bark color is baked into vertex color
+            r.material.roughness = 1.0f;
+            r.material.albedoMap = barkAlbedo;
+            r.material.normalMap = barkNormal;
+            if (tm.barkBlend) r.material.flags |= RenderMaterial::FLAG_UV_BLEND;   // (a trunk zone's bark crossfades)
+            if (ent.contains("material")) applyMaterial(ent["material"], r.material);
+            banded(r.material, r, L);
+            world.add<Renderable>(e, r);
+            if (li == 0) {
+                const TreeMesh& phys = levels.back().tm;
+                MeshCollider mc;
+                mc.vertices = phys.collisionVertices;
+                mc.indices = phys.collisionIndices;
+                mc.surface = ColliderSurface::Wood;
+                if (ent.contains("physics"))
+                    mc.friction = ent["physics"].value("friction", mc.friction);
+                world.add<MeshCollider>(e, mc);
+            }
+        }
+        // Leaf entity: alpha-cut cards (or sprays, or leaves one by one) at the same transform, no collision.
+        if (!tm.leaves.vertices.empty()) {
+            Entity e = world.create();
+            createEntityCommon(e, ent, world);
+            Renderable r;
+            r.mesh = assets.acquireMesh(tm.leaves, key + ":leaves");
+            r.material.albedo = Vec3(1, 1, 1);   // leaf color is baked into vertex color
+            r.material.roughness = 0.7f;
+            if (!L.atlas.albedo.pixels.empty()) {
+                r.material.albedoMap = upload(L.atlas.albedo);
+                r.material.normalMap = upload(L.atlas.normal);
+            } else {
+                r.material.albedoMap = upload(leafTexture(128));
+            }
+            r.material.flags |= RenderMaterial::FLAG_ALPHA_TEST | RenderMaterial::FLAG_FOLIAGE;
+            if (tm.foliage >= 1) r.material.flags |= RenderMaterial::FLAG_TWO_SIDED;   // (sprays, leaves: one winding)
+            banded(r.material, r, L);
+            world.add<Renderable>(e, r);
+        }
     }
 }
 
@@ -1579,7 +1736,10 @@ static bool applyGroundLayers(RenderMaterial& m, const TerrainParams& p, Rendere
     m.albedoMap = upload(GroundLayer::Grass, gp.grass);
     m.metallicRoughnessMap = upload(GroundLayer::Dirt, gp.dirt);
     m.normalMap = upload(GroundLayer::Sand, gp.sand);
-    m.aoMap = upload(GroundLayer::Rock, gp.rock);
+    {   // the rock: its four sub-layers in one atlas (ADR-0210)
+        const TextureData td = groundRockAtlasCached(gp.rock, size, gp.seed);
+        m.aoMap = renderer->uploadTexture(td.width, td.height, td.channels, td.pixels.data());
+    }
     m.albedo = Vec3(1, 1, 1);
     m.roughness = 0.95f;
     m.metallic = 0.0f;
@@ -1641,7 +1801,7 @@ static void loadChunkedTerrain(const TerrainParams& p, const Noise& noise,
 // THE BAKED GROUND'S CONTENT KEY (ADR-0095): everything the field reads -- the whole level JSON
 // (terrain, roads, grading, earthwork all come from it), the lane city's bundle (the carved grid),
 // every flatten the loader assembled, and a code tag bumped when the height code changes.
-static constexpr const char* kBakedGroundCodeTag = "2026-09-26.1";   // .1: the snowline wanders (lobes, aspect, tongues; ADR-0118)
+static constexpr const char* kBakedGroundCodeTag = "2026-10-21.2";   // 10-21.2: the road grid in a corridor along the roads, the full-resolution ground beyond (ADR-0221)   // 09-26.1: .1: the snowline wanders (lobes, aspect, tongues; ADR-0118)
 static constexpr const char* kHydroCarveCodeTag = "2026-09-25.shelf";   // sea mouths carry their channel across the shelf
 static uint64_t bakedGroundKey(const json& root, const TerrainParams& p) {
     using namespace engine::bundle;
@@ -1759,6 +1919,101 @@ static void loadCdlodTerrain(const TerrainParams& p, const json& t, World& world
             if (useCache && !pyramid::writePyramidBundle(*pyr, key, cachePath, &cacheErr))
                 LOG_WARN << "[terrain] baked ground not cached: " << cacheErr;
         }
+        // THE WORLD MAPS, over the authored world, each cached beside the tiles (cache/terrain/<key>.wmap):
+        //   the NORMAL MAP (ADR-0205): the drawn ground's slope per texel, the far ground's shading -- a texel of
+        //     max(2 m, the world / 8192), or the cdlod block's "normalTexel";
+        //   the COVER MAP (ADR-0208): the ground-cover weights per texel (grass, dirt, sand, snow), the far ground's
+        //     layers -- twice the normal map's texel; keyed on the whole terrain block too (the cover's palette, the
+        //     forest's litter, the trails and the rivers' shores all paint it) and kTerrainCoverCodeTag;
+        //   the MACRO MAP (ADR-0208): the ground maps' convexity and wetness at the cover map's texels (their own grid
+        //     is the weather's, 10 m or 5 m), shading every distance.
+        {
+            constexpr const char* kTerrainCoverCodeTag = "terrain-cover-map-v1";
+            const double extent = 2.0 * cfg.worldHalf;
+            const double nTexel = std::max(c.value("normalTexel", std::max(2.0 * spec.cell0, extent / 8192.0)), extent / 16384.0);
+            auto worldMap = [&](const char* what, const std::string& tag, int size, uint64_t baseKey,
+                                const std::function<TerrainWorldMap()>& bake) {
+                const auto t0 = std::chrono::steady_clock::now();
+                uint64_t k = baseKey;
+                const double kp[] = {extent, static_cast<double>(size)};
+                k = engine::bundle::fnv1a(kp, sizeof(kp), k);
+                k = engine::bundle::fnv1aStr(tag, k);
+                const std::string path = "cache/terrain/" + engine::bundle::hex16(k) + ".wmap";
+                auto m = std::make_shared<TerrainWorldMap>();
+                const bool hit = useCache && readTerrainWorldMap(path, k, *m);
+                if (!hit) {
+                    *m = bake();
+                    if (useCache && !writeTerrainWorldMap(*m, k, path)) LOG_WARN << "[terrain] " << what << " not cached: " << path;
+                }
+                LOG_INFO << "[terrain] " << what << ": " << m->size << "^2 (" << m->texel() << " m, " << m->channels << " channels), "
+                         << m->texels.size() / 1048576 << " MB, " << (hit ? "read from " : "baked and cached as ") << path << " in "
+                         << std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count() << " s";
+                return std::shared_ptr<const TerrainWorldMap>(m);
+            };
+            const std::shared_ptr<const pyramid::Pyramid> pc = pyr;
+            const int nSize = std::max(16, static_cast<int>(std::ceil(extent / nTexel)));
+            cfg.normalMap = worldMap("normal map", "terrain-normal-map-v2", nSize, key, [&] {
+                return bakeTerrainNormalMap([pc](double x, double z) { return pc->height(x, z); }, -cfg.worldHalf, -cfg.worldHalf,
+                                            extent, nSize);
+            });
+            const TerrainParams& tp = cfg.params;
+            if (tp.cover && tp.coverWeights) {
+                const int cSize = std::max(16, nSize / 2);
+                const std::shared_ptr<const TerrainWorldMap> nm = cfg.normalMap;
+                const Noise cnoise(cfg.seed);
+                cfg.coverMap = worldMap("cover map", std::string(kTerrainCoverCodeTag) + t.dump(), cSize, key, [&] {
+                    return bakeTerrainWorldMap(4, [&](double x, double z, uint8_t* out) {
+                        const double y = pc->height(x, z);
+                        const Vec3 n = nm->normalAt(x, z);
+                        const Vec3 w = terrainColor(x, z, y, n.y, cnoise, tp, n.x, n.z);
+                        const double sn = terrainSnowWeight(x, z, y, n.y, tp, n.x, n.z);
+                        auto b = [](double v) { return static_cast<uint8_t>(std::lround(std::clamp(v, 0.0, 1.0) * 255.0)); };
+                        out[0] = b(w.x); out[1] = b(w.y); out[2] = b(w.z); out[3] = b(sn);
+                    }, -cfg.worldHalf, -cfg.worldHalf, extent, cSize);
+                });
+                if (const std::shared_ptr<const TerrainMaps> maps = tp.cover->params().maps) {
+                    // ...and, where the ground grew from ROCK LAYERS (ADR-0209), the rock's bands: its tone (the
+                    // light and dark beds a face shows) and how hard it is; mid-grey and soft where there are none
+                    std::unique_ptr<RockLayers> rock;
+                    if (t.contains("weather") && t["weather"].is_object() && t["weather"].contains("grow") &&
+                        t["weather"]["grow"].is_object() && t["weather"]["grow"].contains("layers"))
+                        rock = std::make_unique<RockLayers>(rockLayersFromJson(t["weather"]["grow"]["layers"]), t.value("seed", 0u) + 17u);
+                    // ...and the STAINS (ADR-0213; the macro map's fourth channel): on a steep face, water running off a
+                    // ledge or a facet's lip above streaks the rock dark below it -- walk up the fall line from each
+                    // texel, the nearest convex break above (the maps' convexity) darkening it with distance, broken into
+                    // streaks across the face (noise along the contour); and every crease (concave) a little dark too
+                    const Noise stainNoise(t.value("seed", 0u) + 4271u);
+                    const std::shared_ptr<const TerrainWorldMap> nmap = cfg.normalMap;
+                    cfg.macroMap = worldMap("macro map", "terrain-macro-map-v7", cSize, key, [&] {
+                        return bakeTerrainWorldMap(4, [&](double x, double z, uint8_t* out) {
+                            const TerrainMapSample ms = maps->at(x, z);
+                            auto b = [](double v) { return static_cast<uint8_t>(std::lround(std::clamp(v, 0.0, 1.0) * 255.0)); };
+                            out[0] = b(0.5 + 0.5 * ms.convex);
+                            out[1] = b(ms.wet);
+                            const double y = rock ? pc->height(x, z) : 0.0;
+                            out[2] = b(rock ? rock->tone(x, z, y) : 0.5);
+                            double stain = 0.0;
+                            const Vec3 nrm = nmap->normalAt(x, z);
+                            const double steep = std::clamp((1.0 - nrm.y - 0.25) / 0.25, 0.0, 1.0);   // ~40..60 deg
+                            if (steep > 0.0) {
+                                const double hl = std::hypot(nrm.x, nrm.z);
+                                const double ux = -nrm.x / std::max(hl, 1e-6), uz = -nrm.z / std::max(hl, 1e-6);   // up the fall line
+                                for (int k = 1; k <= 8; ++k) {
+                                    const double d = 3.0 * k;
+                                    const double cv = maps->at(x + ux * d, z + uz * d).convex;
+                                    stain = std::max(stain, std::clamp(cv * 2.5, 0.0, 1.0) * (1.0 - d / 30.0));
+                                }
+                                const double across = x * uz - z * ux;   // along the contour
+                                const double streak = std::clamp(0.5 + 1.4 * stainNoise.fbm2(across / 2.5, y / 40.0, 3), 0.0, 1.0);
+                                stain *= steep * streak;
+                            }
+                            stain = std::max(stain, std::clamp(-ms.convex * 1.5, 0.0, 1.0) * 0.5);   // the creases
+                            out[3] = b(stain);
+                        }, -cfg.worldHalf, -cfg.worldHalf, extent, cSize);
+                    });
+                }
+            }
+        }
         const CdlodGeometry g = bakedCdlodGeometry(cfg.worldHalf);
         cfg.worldHalf = static_cast<float>(g.worldHalf);
         cfg.numLods = g.numLods;
@@ -1869,9 +2124,125 @@ static void loadTerrain(const TerrainParams& p, const Noise& noise, const json& 
 // crossed side cards and a top card on one atlas), merged into one mesh per far cell; the two
 // crossfade per pixel over [near - nearFade, near] (FLAG_LOD_BAND). Kept off the roads, the city's
 // graded ground and the water, exactly as the scatter is.
+// A RECIPE TREE'S LEVELS AS DRAWABLE PARTS (tree_lods.h; the forest's near trees and the city's street trees): each
+// level's bark and leaves, banded to fade in and out at its own distances -- the last out over [lastOut0, lastOut1]
+// and drawn to lastDrawM -- the bark in `wood` (its trunk zone's bark crossfading), the leaves in their level's atlas,
+// uploaded once a species by foliage mode (`leafTex`)
+struct RecipeTreePart { MeshHandle mesh; RenderMaterial mat; double drawM = 0, minM = 0; };
+static std::vector<RecipeTreePart> recipeTreeParts(const std::vector<RecipeTreeLevel>& levels, const std::string& key,
+                                                   const RenderMaterial& wood, const RenderMaterial& leafBase,
+                                                   std::map<int, std::pair<TextureHandle, TextureHandle>>& leafTex,
+                                                   double lastOut0, double lastOut1, double lastDrawM, Renderer& renderer,
+                                                   AssetManager& assets) {
+    auto uploadTex = [&](const TextureData& td) -> TextureHandle {
+        if (td.pixels.empty()) return TextureHandle{};
+        return renderer.uploadTexture(td.width, td.height, td.channels, td.pixels.data());
+    };
+    std::vector<RecipeTreePart> parts;
+    for (std::size_t li = 0; li < levels.size(); ++li) {
+        const RecipeTreeLevel& L = levels[li];
+        const bool last = li + 1 == levels.size();
+        auto band = [&](RenderMaterial& m) {
+            m.flags |= RenderMaterial::FLAG_LOD_BAND;
+            m.lodIn0 = L.in0; m.lodIn1 = L.in1;
+            m.lodOut0 = last ? static_cast<float>(lastOut0) : L.out0;
+            m.lodOut1 = last ? static_cast<float>(lastOut1) : L.out1;
+        };
+        const double drawM = last ? lastDrawM : L.maxDistance;
+        RecipeTreePart bark;
+        bark.mat = wood;
+        if (L.tree.barkBlend) bark.mat.flags |= RenderMaterial::FLAG_UV_BLEND;   // (a trunk zone's bark crossfades)
+        band(bark.mat);
+        bark.mesh = assets.acquireMesh(L.tree.branches, key + ":" + std::to_string(li) + ":bark");
+        bark.drawM = drawM;
+        bark.minM = L.minDistance;
+        parts.push_back(bark);
+        if (!L.tree.leaves.vertices.empty()) {
+            auto it = leafTex.find(L.tree.foliage);
+            if (it == leafTex.end())
+                it = leafTex.emplace(L.tree.foliage, std::make_pair(uploadTex(L.atlas.albedo), uploadTex(L.atlas.normal))).first;
+            RecipeTreePart leaf;
+            leaf.mat = leafBase;
+            leaf.mat.roughness = 0.7f;
+            leaf.mat.albedoMap = it->second.first;
+            leaf.mat.normalMap = it->second.second;
+            leaf.mat.flags |= RenderMaterial::FLAG_ALPHA_TEST | RenderMaterial::FLAG_FOLIAGE;
+            if (L.tree.foliage >= 1) leaf.mat.flags |= RenderMaterial::FLAG_TWO_SIDED;
+            band(leaf.mat);
+            leaf.mesh = assets.acquireMesh(L.tree.leaves, key + ":" + std::to_string(li) + ":leaves");
+            leaf.drawM = drawM;
+            leaf.minM = L.minDistance;
+            parts.push_back(leaf);
+        }
+    }
+    return parts;
+}
+
+// THE CITY'S RECIPE TREES, ON OR OFF: the level's `citysim.recipeTrees` (Glenn, 2026-10-20: the island's street palms
+// "replace them with the new palms"), RT_STREET_RECIPES=1 / =0 over it (the A/B). Off by default: a city grown before
+// keeps its trees.
+static bool cityRecipeTrees(const json& root) {
+    bool on = root.contains("citysim") && root["citysim"].is_object() && root["citysim"].value("recipeTrees", false);
+    if (const char* e = std::getenv("RT_STREET_RECIPES")) on = std::string(e) == "1";
+    return on;
+}
+
+#ifdef RT_ENABLE_SCRIPTING
+// THE CITY'S RECIPE TREES (RT_STREET_RECIPES=1: the street trees and the parks' and yards'; Glenn, 2026-10-18:
+// "everything needs to be in proportion"): a recipe at an age grown from each of `seeds` at the city's bands (hero to
+// 24 m, mid to 60, light to 130, the last level out to `drawTo`), kept in the tree cache, as drawable parts and the
+// tree's height. Empty: no such recipe.
+struct CityRecipeKit { std::vector<RecipeTreePart> parts; double height = 9.0; };
+static std::vector<CityRecipeKit> cityRecipeKits(const std::string& recipe, const std::string& age,
+                                                 const std::vector<uint32_t>& seeds, const std::string& label, double drawTo,
+                                                 Renderer& renderer, AssetManager& assets, bool* fromCache = nullptr) {
+    std::vector<CityRecipeKit> kits;
+    std::string path;
+    const TreeRecipeBook& book = shippedTreeRecipes(&path);
+    const TreeRecipe* found = book.find(recipe);
+    if (!found) return kits;
+    const TreeRecipe rr = agedRecipe(*found, age);
+    RecipeLodBands bands;
+    bands.hero0 = 18; bands.hero1 = 24; bands.mid0 = 50; bands.mid1 = 60; bands.light0 = 110; bands.light1 = 130;
+    const uint64_t ckey = recipeSpeciesKey(path, recipe, "city|" + age, seeds, bands);
+    std::vector<std::vector<RecipeTreeLevel>> levels;
+    const bool hit = loadRecipeSpecies(ckey, levels) && levels.size() == seeds.size();
+    if (!hit) {
+        levels.clear();
+        BranchCardSet cards;
+        for (uint32_t sd : seeds) levels.push_back(growRecipeLevels(rr, sd, {}, bands, true, &cards));
+        if (ckey) saveRecipeSpecies(ckey, levels);
+    }
+    if (fromCache) *fromCache = hit;
+    RenderMaterial wood;
+    wood.albedo = Vec3(1, 1, 1);
+    wood.roughness = 1.0f;
+    BarkKind bk;
+    if (barkKindFromName(rr.bark, bk)) {
+        const BarkTextures bt = barkTextures(bk, 1u);
+        wood.albedoMap = renderer.uploadTexture(bt.albedo.width, bt.albedo.height, bt.albedo.channels, bt.albedo.pixels.data());
+        wood.normalMap = renderer.uploadTexture(bt.normal.width, bt.normal.height, bt.normal.channels, bt.normal.pixels.data());
+    }
+    RenderMaterial leafBase;
+    leafBase.albedo = Vec3(1, 1, 1);
+    std::map<int, std::pair<TextureHandle, TextureHandle>> leafTex;
+    for (std::size_t v = 0; v < levels.size(); ++v) {
+        CityRecipeKit k;
+        k.parts = recipeTreeParts(levels[v], label + ":" + std::to_string(v), wood, leafBase, leafTex, drawTo - 40.0, drawTo,
+                                  drawTo + 10.0, renderer, assets);
+        k.height = 0.0;
+        for (const RenderMesh* mm : {&levels[v].front().tree.branches, &levels[v].front().tree.leaves})
+            for (const Vertex& vx : mm->vertices) k.height = std::max(k.height, static_cast<double>(vx.position.y));
+        kits.push_back(std::move(k));
+    }
+    return kits;
+}
+#endif
+
 static void loadForest(const json& fj, const TerrainParams& terrain, const Noise& terrainNoise, World& world,
                        Renderer& renderer, AssetManager& assets, double placeDilate,
-                       std::function<double(double, double)> drawnGround) {
+                       std::function<double(double, double)> drawnGround,
+                       const std::vector<engine::Poly2>* sealedLots = nullptr) {
     RT_PROFILE_ZONE_NAMED("loadForest");
     const auto t0 = std::chrono::steady_clock::now();
     const ForestParams fp = forestFromJson(fj);
@@ -1883,20 +2254,161 @@ static void loadForest(const json& fj, const TerrainParams& terrain, const Noise
     int vps = 1;
     for (const ForestSpecies& s : fp.species) vps = std::max(vps, s.variants);
     const int nVar = static_cast<int>(fp.species.size()) * vps;
-    struct Var { MeshHandle bark, leaves; int species = -1; ImpostorSlot slot; RealTree tree; };
+    // a variant's near parts: its bark and leaves, or a recipe tree's levels' (tree_lods.h), each an instanced draw
+    struct Part { MeshHandle mesh; RenderMaterial mat; double drawM = 0, minM = 0; };
+    // `shade`: the impostor's colour scale -- a recipe tree's crown is darkened inside by real shadows, which the
+    // impostor's picture (rasterised unlit, then lit as one card) never had
+    struct Var { std::vector<Part> parts; int species = -1; ImpostorSlot slot; RealTree tree; double shade = 1.0; };
     std::vector<Var> vars(nVar);
     std::vector<TextureHandle> folTex(fp.species.size());
     std::vector<TextureData> folData(fp.species.size());
+    std::vector<TextureData> barkData(fp.species.size());   // (a recipe's bark map, for its impostors' trunks)
+    // THE NEAR MATERIALS: fading out over the band into the impostors
+    RenderMaterial barkMat;
+    barkMat.albedo = Vec3(1, 1, 1);
+    barkMat.roughness = 0.92f; barkMat.metallic = 0.0f; barkMat.opacity = 1.0f;
+    barkMat.flags = RenderMaterial::FLAG_LOD_BAND;
+    barkMat.lodOut0 = static_cast<float>(fp.nearM - fp.nearFadeM);
+    barkMat.lodOut1 = static_cast<float>(fp.nearM);
+    auto uploadTex = [&](const TextureData& td) -> TextureHandle {
+        if (td.pixels.empty()) return TextureHandle{};
+        return renderer.uploadTexture(td.width, td.height, td.channels, td.pixels.data());
+    };
     for (std::size_t s = 0; s < fp.species.size(); ++s) {
-        folData[s] = realFoliageTexture(fp.species[s].species, 512, fp.seed + static_cast<uint32_t>(s) * 101u);
+        const ForestSpecies& fs = fp.species[s];
+        if (!fs.recipe.empty()) {
+#ifdef RT_ENABLE_SCRIPTING
+            // A RECIPE SPECIES: every variant grown at its levels, the last (the light tree) the impostor's picture
+            std::string path;
+            const TreeRecipeBook& book = shippedTreeRecipes(&path);
+            if (!path.empty() && std::find(g_loadedScriptFiles.begin(), g_loadedScriptFiles.end(), path) == g_loadedScriptFiles.end())
+                g_loadedScriptFiles.push_back(path);
+            const TreeRecipe* found = book.find(fs.recipe);
+            if (!found) {
+                LOG_WARN << "[forest] no recipe '" << fs.recipe << "' in tree_recipes.lua";
+                continue;
+            }
+            // (its age -- or each variant its own, dealt out by the mix's weights, the largest share first -- and its form)
+            std::vector<std::string> variantAges(static_cast<std::size_t>(fs.variants), fs.age);
+            // (a species grown both ways, forest.h formByDensity: its ages dealt over each half alike)
+            const int dealN = fs.formByDensity ? std::max(1, fs.variants / 2) : fs.variants;
+            if (!fs.ageMix.empty()) {
+                double sum = 0.0;
+                for (const auto& [a, w] : fs.ageMix) sum += std::max(0.0, w);
+                std::vector<std::pair<double, std::size_t>> rem;
+                std::vector<int> count(fs.ageMix.size(), 0);
+                int dealt = 0;
+                for (std::size_t k = 0; k < fs.ageMix.size() && sum > 0.0; ++k) {
+                    const double share = dealN * std::max(0.0, fs.ageMix[k].second) / sum;
+                    count[k] = static_cast<int>(share);
+                    dealt += count[k];
+                    rem.emplace_back(share - count[k], k);
+                }
+                std::stable_sort(rem.begin(), rem.end(), [](const auto& x, const auto& y) { return x.first > y.first; });
+                for (std::size_t q = 0; dealt < dealN && q < rem.size(); ++q, ++dealt) count[rem[q].second]++;
+                std::size_t v = 0;
+                for (std::size_t k = 0; k < fs.ageMix.size(); ++k)
+                    for (int c = 0; c < count[k] && v < static_cast<std::size_t>(dealN); ++c) variantAges[v++] = fs.ageMix[k].first;
+                for (std::size_t w = static_cast<std::size_t>(dealN); w < variantAges.size(); ++w)
+                    variantAges[w] = variantAges[w % static_cast<std::size_t>(dealN)];
+            }
+            std::vector<std::string> variantForms(variantAges.size(), fs.form);
+            if (fs.formByDensity)
+                for (int v = 0; v < dealN && v < fs.variants; ++v) variantForms[static_cast<std::size_t>(v)].clear();   // (open-grown)
+            std::vector<TreeRecipe> variantRecipes;
+            for (std::size_t v = 0; v < variantAges.size(); ++v)
+                variantRecipes.push_back(formedRecipe(agedRecipe(*found, variantAges[v]), variantForms[v]));
+            const TreeRecipe* r = &variantRecipes.front();
+            // its levels' distances: a tree's the forest's; a bush's within its own shorter reach
+            const double reach = fs.understory && fp.understoryM > 0 ? fp.understoryM : fp.nearM;
+            const double reachFade = fs.understory && fp.understoryM > 0 ? 10.0 : fp.nearFadeM;
+            RecipeLodBands bands;
+            bands.hero0 = fp.heroM - fp.heroFadeM; bands.hero1 = fp.heroM;
+            bands.mid0 = fp.midM - fp.midFadeM; bands.mid1 = fp.midM;
+            if (fp.lightM > 0) { bands.light0 = fp.lightM - fp.lightFadeM; bands.light1 = fp.lightM; }
+            if (fs.understory) {
+                bands.light0 = bands.light1 = 0;   // (a bush's leaves are small: each level nearer)
+                bands.hero0 = 0.15 * reach; bands.hero1 = 0.22 * reach;
+                bands.mid0 = 0.40 * reach; bands.mid1 = 0.50 * reach;
+            }
+            RenderMaterial wood = barkMat;
+            wood.roughness = 1.0f;
+            BarkKind kind;
+            if (barkKindFromName(r->bark, kind)) {
+                const BarkTextures bt = barkTextures(kind, 1u);
+                wood.albedoMap = uploadTex(bt.albedo);
+                wood.normalMap = uploadTex(bt.normal);
+                barkData[s] = bt.albedo;
+            }
+            std::map<int, std::pair<TextureHandle, TextureHandle>> leafTex;   // by foliage mode: one atlas a species
+            BranchCardSet branchCards;   // (and one branch-card atlas: baked from the first variant, worn by all)
+            // (the species' variants grown once and kept, procgen/tree_cache.h: read back if this recipe, age, seeds and
+            // bands were grown before by this build, else grown here and written for the next load)
+            std::vector<uint32_t> seeds;
+            for (int v = 0; v < fs.variants; ++v) seeds.push_back(fp.seed * 977u + static_cast<uint32_t>(s * 131 + v * 17));
+            std::string agesKey;
+            for (std::size_t v = 0; v < variantAges.size(); ++v) agesKey += "|" + variantForms[v] + ":" + variantAges[v];
+            const uint64_t cacheKey = recipeSpeciesKey(path, fs.recipe, agesKey, seeds, bands);
+            std::vector<std::vector<RecipeTreeLevel>> cached, grown;
+            const bool hit = loadRecipeSpecies(cacheKey, cached) && cached.size() == seeds.size();
+            for (int v = 0; v < fs.variants; ++v) {
+                Var& var = vars[s * vps + v];
+                var.species = static_cast<int>(s);
+                var.shade = 0.6;
+                const uint32_t seed = seeds[static_cast<std::size_t>(v)];
+                std::vector<RecipeTreeLevel> levels =
+                    hit ? std::move(cached[static_cast<std::size_t>(v)])
+                        : growRecipeLevels(variantRecipes[static_cast<std::size_t>(v)], seed, {}, bands, true, &branchCards);
+                if (!hit && cacheKey) grown.push_back(levels);
+                const std::string key = "forest:recipe:" + fs.recipe + ":" + std::to_string(fp.seed) + ":" + std::to_string(v);
+                for (const RecipeTreePart& pt : recipeTreeParts(levels, key, wood, barkMat, leafTex, reach - reachFade, reach,
+                                                                reach + 10.0, renderer, assets))
+                    var.parts.push_back({pt.mesh, pt.mat, pt.drawM, pt.minM});
+                // the impostor's tree: the light level, measured as real_tree.h measures its own
+                const TreeMesh& lt = levels.back().tree;
+                RealTree& rt = var.tree;
+                rt.bark = lt.branches;
+                rt.foliage = lt.leaves;
+                double top = 0, base = 1e9, reach = 0;
+                for (const Vertex& vx : lt.branches.vertices) top = std::max(top, static_cast<double>(vx.position.y));
+                for (const Vertex& vx : lt.leaves.vertices) {
+                    top = std::max(top, static_cast<double>(vx.position.y));
+                    base = std::min(base, static_cast<double>(vx.position.y));
+                    reach = std::max(reach, std::hypot(static_cast<double>(vx.position.x), static_cast<double>(vx.position.z)));
+                }
+                double trunkR = 0.1;
+                for (const TreeMesh::Limb& lm : lt.limbs) {   // the trunk's radius a metre up
+                    const double y0 = std::min(lm.a.y, lm.b.y), y1 = std::max(lm.a.y, lm.b.y);
+                    if (y0 <= 1.0 && y1 >= 1.0 && y1 > y0) {
+                        const double t = (1.0 - lm.a.y) / (lm.b.y - lm.a.y);
+                        trunkR = std::max(trunkR, lm.ra + (lm.rb - lm.ra) * std::clamp(t, 0.0, 1.0));
+                    }
+                }
+                rt.height = top;
+                rt.crownBase = base < 1e8 ? std::max(0.0, base) : 0.5 * top;
+                rt.crownRadius = std::max(0.5, reach);
+                rt.trunkRadius = trunkR * 1.45;
+                if (folData[s].pixels.empty()) folData[s] = levels.back().atlas.albedo;
+            }
+            if (!hit && cacheKey && grown.size() == seeds.size()) saveRecipeSpecies(cacheKey, grown);
+            LOG_INFO << "[forest] " << fs.recipe << " (" << agesKey << ")" << ": " << fs.variants
+                     << " variants " << (hit ? "from the tree cache" : cacheKey ? "grown, cached" : "grown");
+#endif
+            continue;
+        }
+        folData[s] = realFoliageTexture(fs.species, 512, fp.seed + static_cast<uint32_t>(s) * 101u);
         folTex[s] = renderer.uploadTexture(folData[s].width, folData[s].height, folData[s].channels, folData[s].pixels.data());
-        for (int v = 0; v < fp.species[s].variants; ++v) {
+        RenderMaterial leafMat = barkMat;
+        leafMat.roughness = 0.85f;
+        leafMat.flags |= RenderMaterial::FLAG_ALPHA_TEST | RenderMaterial::FLAG_TWO_SIDED | RenderMaterial::FLAG_WIND;
+        leafMat.albedoMap = folTex[s];
+        for (int v = 0; v < fs.variants; ++v) {
             Var& var = vars[s * vps + v];
             var.species = static_cast<int>(s);
-            var.tree = realTree(fp.species[s].species, fp.seed * 977u + static_cast<uint32_t>(s * 131 + v * 17), 0.0);
-            const std::string key = std::string("forest:") + realSpeciesName(fp.species[s].species) + ":" + std::to_string(fp.seed) + ":" + std::to_string(v);
-            var.bark = assets.acquireMesh(var.tree.bark, key + ":bark");
-            var.leaves = assets.acquireMesh(var.tree.foliage, key + ":leaves");
+            var.tree = realTree(fs.species, fp.seed * 977u + static_cast<uint32_t>(s * 131 + v * 17), 0.0);
+            const std::string key = std::string("forest:") + realSpeciesName(fs.species) + ":" + std::to_string(fp.seed) + ":" + std::to_string(v);
+            var.parts.push_back({assets.acquireMesh(var.tree.bark, key + ":bark"), barkMat, fp.nearM + 10.0});
+            var.parts.push_back({assets.acquireMesh(var.tree.foliage, key + ":leaves"), leafMat, fp.nearM + 10.0});
         }
     }
     // THE IMPOSTOR ATLAS: a column per variant, two side pictures (the second the tree turned a quarter, for the
@@ -1941,27 +2453,163 @@ static void loadForest(const json& fj, const TerrainParams& terrain, const Noise
         sl.tu0 = sl.u0; sl.tu1 = sl.u1;
         sl.tv0 = (2 * sh + eps) / ah; sl.tv1 = (2 * sh + th - eps) / ah;
     }
-    const TextureHandle atlasTex = renderer.uploadTexture(aw, ah, 4, atlas.data());
-    const TextureHandle normalAtlasTex = renderer.uploadTexture(aw, ah, 4, normalAtlas.data());
+    TextureHandle atlasTex = renderer.uploadTexture(aw, ah, 4, atlas.data());
+    TextureHandle normalAtlasTex = renderer.uploadTexture(aw, ah, 4, normalAtlas.data());
+    // MANY-VIEW IMPOSTORS (Glenn, 2026-10-18: "So can we make multi angle imposter cards"; forest.h): each variant
+    // seen from kImpostorAzimuths round it at kImpostorElevations, a block of cells a variant, the blocks in a grid;
+    // RT_IMPOSTOR_VIEWS=0 for the crossed cards above (the A/B)
+    const bool impViews = !(std::getenv("RT_IMPOSTOR_VIEWS") && std::string(std::getenv("RT_IMPOSTOR_VIEWS")) == "0");
+    if (impViews) {
+        const int vcw = 80, vch = 160;   // (the impostors start nearer now: 150 m in recipe_forest)
+        const int bw = kImpostorAzimuths * vcw, bh = kImpostorElevations * vch;
+        const int perRow = std::max(1, static_cast<int>(std::ceil(std::sqrt(nVar * static_cast<double>(bh) / bw))));
+        const int vw = perRow * bw, vh = ((nVar + perRow - 1) / perRow) * bh;
+        std::vector<uint8_t> vcol(static_cast<std::size_t>(vw) * vh * 4, 0), vnrm(static_cast<std::size_t>(vw) * vh * 4, 0);
+        for (std::size_t q = 0; q < vnrm.size(); q += 4) { vnrm[q] = 128; vnrm[q + 1] = 128; vnrm[q + 2] = 255; vnrm[q + 3] = 255; }
+        const double maxEl = (kImpostorElevations - 1) * kImpostorElevationStep;
+        for (int i = 0; i < nVar; ++i) {
+            Var& var = vars[i];
+            if (var.species < 0) continue;
+            if (fp.species[static_cast<std::size_t>(var.species)].understory) continue;   // (bushes have no impostor)
+            ImpostorSlot& sl = var.slot;
+            sl.centreY = 0.5 * var.tree.height;
+            double rb = 0.1;
+            for (const RenderMesh* m : {&var.tree.bark, &var.tree.foliage})
+                for (const Vertex& vx : m->vertices) rb = std::max(rb, std::hypot(vx.position.x, vx.position.z));
+            sl.Rb = rb * 1.03 + 0.05;
+            sl.Hh = impostorViewHalfHeight(var.tree, sl.centreY, maxEl) * 1.03 + 0.05;
+            const int bx = (i % perRow) * bw, by = (i / perRow) * bh;
+            for (int e = 0; e < kImpostorElevations; ++e)
+                for (int a = 0; a < kImpostorAzimuths; ++a) {
+                    const std::size_t off = (static_cast<std::size_t>(by + e * vch) * vw + bx + a * vcw) * 4;
+                    renderImpostorView(var.tree, folData[var.species], a * 2.0 * PI / kImpostorAzimuths, e * kImpostorElevationStep,
+                                       sl.centreY, sl.Rb, sl.Hh, vcw, vch, colourScale, vcol.data() + off, vw * 4, vnrm.data() + off,
+                                       &barkData[static_cast<std::size_t>(var.species)]);
+                }
+            sl.vu0 = static_cast<double>(bx) / vw; sl.vv0 = static_cast<double>(by) / vh;
+            sl.cellU = static_cast<double>(vcw) / vw; sl.cellV = static_cast<double>(vch) / vh;
+        }
+        if (const char* dump = std::getenv("RT_IMPOSTOR_DUMP")) {   // the views, over grey (a look at what the far trees wear)
+            std::vector<uint8_t> rgb(static_cast<std::size_t>(vw) * vh * 3);
+            for (std::size_t q = 0, n = static_cast<std::size_t>(vw) * vh; q < n; ++q) {
+                const double a = vcol[q * 4 + 3] / 255.0;
+                for (int k = 0; k < 3; ++k)
+                    rgb[q * 3 + k] = static_cast<uint8_t>(std::clamp(vcol[q * 4 + k] / static_cast<double>(colourScale) * a + 110.0 * (1.0 - a), 0.0, 255.0));
+            }
+            stbi_write_png(dump, vw, vh, 3, rgb.data(), vw * 3);
+        }
+        atlasTex = renderer.uploadTexture(vw, vh, 4, vcol.data());
+        normalAtlasTex = renderer.uploadTexture(vw, vh, 4, vnrm.data());
+    }
 
     // WHERE: off the roads, the graded ground and the water
     FlattenGrid keepOut;
     if (!terrain.flatten.empty()) keepOut = buildFlattenGrid(terrain.flatten);
     std::vector<const RoadDeckField*> decks;
     world.each<engine::RoadDeck>([&](Entity, engine::RoadDeck& d) { if (!d.field.spines.empty()) decks.push_back(&d.field); });
-    const engine::DrawnRoad drawnRoad = engine::gatherDrawnRoad(world);
+    const engine::DrawnRoad drawnRoad = engine::gatherDrawnRoad(world, /*withHeights=*/true);   // (heights: what stands over a crown)
     const double margin = fj.value("clearMargin", 4.0);
     const TrailNetwork* trails = terrain.cover ? terrain.cover->params().trails.get() : nullptr;
+    // ...and off the city lots' SEALED ground (a park's walks, a playground, a garden, a yard): the grass already
+    // stays off it, the forest's trees grew through the playgrounds (the open lots, 2026-10-09)
+    std::unordered_map<long long, std::vector<int>> sealedBins;
+    constexpr double kSealBin = 32.0;
+    auto sealKey = [](int i, int j) { return (static_cast<long long>(i) << 32) ^ static_cast<unsigned>(j); };
+    if (sealedLots)
+        for (std::size_t k = 0; k < sealedLots->size(); ++k) {
+            const engine::Poly2& poly = (*sealedLots)[k];
+            double x0 = 1e30, z0 = 1e30, x1 = -1e30, z1 = -1e30;
+            for (const engine::Vec2& v : poly) { x0 = std::min(x0, (double)v.x); x1 = std::max(x1, (double)v.x); z0 = std::min(z0, (double)v.y); z1 = std::max(z1, (double)v.y); }
+            for (int j = static_cast<int>(std::floor((z0 - 2) / kSealBin)); j <= static_cast<int>(std::floor((z1 + 2) / kSealBin)); ++j)
+                for (int i = static_cast<int>(std::floor((x0 - 2) / kSealBin)); i <= static_cast<int>(std::floor((x1 + 2) / kSealBin)); ++i)
+                    sealedBins[sealKey(i, j)].push_back(static_cast<int>(k));
+        }
+    auto onSealedLot = [&](double x, double z) {
+        if (sealedBins.empty()) return false;
+        auto it = sealedBins.find(sealKey(static_cast<int>(std::floor(x / kSealBin)), static_cast<int>(std::floor(z / kSealBin))));
+        if (it == sealedBins.end()) return false;
+        for (int k : it->second) {
+            const engine::Poly2& poly = (*sealedLots)[static_cast<std::size_t>(k)];
+            if (engine::pointInPolygon(poly, engine::Vec2(x, z))) return true;
+            for (std::size_t i = 0; i < poly.size(); ++i) {   // and a crown's width (1.5 m) off its edge
+                const engine::Vec2 a = poly[i], b = poly[(i + 1) % poly.size()], ab = b - a;
+                const double l2 = ab.x * ab.x + ab.y * ab.y;
+                double s = l2 > 1e-12 ? ((x - a.x) * ab.x + (z - a.y) * ab.y) / l2 : 0;
+                s = std::max(0.0, std::min(1.0, s));
+                if (std::hypot(x - (a.x + ab.x * s), z - (a.y + ab.y * s)) < 1.5) return true;
+            }
+        }
+        return false;
+    };
     auto exclude = [&](double x, double z) {
         if (terrain.hydro && terrain.hydro->isWet(x, z, 2.0)) return true;
+        if (onSealedLot(x, z)) return true;
         if (trails && trails->distance(x, z, 3.0) < 2.5) return true;   // the trails stay open (ADR-0134)
-        for (const RoadDeckField* d : decks) { double y = 0; if (d->heightAt(x, z, margin, &y)) return true; }
+        for (const RoadDeckField* d : decks) if (d->coversAny(x, z, margin)) return true;
         if (drawnRoad.near(x, z, margin)) return true;
         return !terrain.flatten.empty() && flattenCovers(keepOut, terrain.flatten, x, z, margin);
     };
     const GroundCover* cover = terrain.cover.get();
     const TerrainMaps* maps = cover ? cover->params().maps.get() : nullptr;
-    const std::vector<ForestTree> trees = placeForest(fp, terrain.size * 0.5, terrain.seaLevel, cover, maps, groundAt, exclude, vps);
+    std::vector<ForestTree> trees = placeForest(fp, terrain.size * 0.5, terrain.seaLevel, cover, maps, groundAt, exclude, vps);
+    {   // ...AND CLEAR OF WHAT A CROWN WOULD REACH (Glenn, 2026-10-20: trees through the elevated platform and the trains):
+        // the margin above is in plan only; a tree is its height and a crown 0.3 of it, and nothing drawn over it or a
+        // train's room may be inside that (DrawnRoad::blocksTree, the street and lot trees' question too)
+        const std::size_t before = trees.size();
+        trees.erase(std::remove_if(trees.begin(), trees.end(), [&](const ForestTree& t) {
+            const double h = vars[t.variant].tree.height * t.scale;
+            return drawnRoad.blocksTree(t.pos.x, t.pos.z, t.pos.y, h, 0.3 * h);
+        }), trees.end());
+        if (trees.size() != before) LOG_INFO << "[forest] " << (before - trees.size()) << " trees left out under decks and in the trains' room";
+    }
+    {   // THE CENSUS (Glenn, 2026-10-19: "we don't plant a lot of spruces"): each species' share and its altitudes, and
+        // with RT_FOREST_DUMP=path every tree as `x z alt species` (a map of what grows where)
+        std::vector<std::vector<float>> alts(fp.species.size());
+        std::FILE* dump = std::getenv("RT_FOREST_DUMP") ? std::fopen(std::getenv("RT_FOREST_DUMP"), "w") : nullptr;
+        const double sea = terrain.seaLevel > -1e29 ? terrain.seaLevel : 0.0;
+        for (const ForestTree& t : trees) {
+            const int s = vars[t.variant].species;
+            if (s < 0) continue;
+            alts[static_cast<std::size_t>(s)].push_back(static_cast<float>(t.pos.y - sea));
+            if (dump) std::fprintf(dump, "%.1f %.1f %.1f %d\n", t.pos.x, t.pos.z, t.pos.y - sea, s);
+        }
+        if (dump) std::fclose(dump);
+        std::ostringstream os;
+        for (std::size_t s = 0; s < alts.size(); ++s) {
+            auto& a = alts[s];
+            const ForestSpecies& fs = fp.species[s];
+            os << " " << (fs.recipe.empty() ? realSpeciesName(fs.species) : fs.recipe.c_str());
+            if (a.empty()) { os << " 0;"; continue; }
+            std::sort(a.begin(), a.end());
+            os << " " << a.size() << " (" << std::lround(100.0 * a.size() / std::max<std::size_t>(1, trees.size()))
+               << "%, " << std::lround(a[a.size() / 10]) << "-" << std::lround(a[a.size() * 9 / 10]) << " m);";
+        }
+        LOG_INFO << "[forest] census:" << os.str();
+        if (std::getenv("RT_FOREST_WHY")) {   // ...and per 100 m of altitude, each factor's mean over the land
+            constexpr int kBands = 12;
+            double sum[kBands][8] = {};
+            const double half = terrain.size * 0.5;
+            for (double z = -half; z < half; z += 50.0)
+                for (double x = -half; x < half; x += 50.0) {
+                    const double y = groundAt(x, z), alt = y - sea;
+                    if (alt < 2.0) continue;
+                    const double e = 1.5;
+                    const double gx = (groundAt(x + e, z) - groundAt(x - e, z)) / (2 * e), gz = (groundAt(x, z + e) - groundAt(x, z - e)) / (2 * e);
+                    const double slope = std::atan(std::sqrt(gx * gx + gz * gz)) * 180.0 / 3.14159265358979;
+                    const ForestWhy w = forestWhy(fp, terrain.seaLevel, cover, maps, x, z, y, slope);
+                    const int b = std::min(kBands - 1, static_cast<int>(alt / 100.0));
+                    const double f[8] = {1, w.stand, w.soil, w.scree, w.treeline, w.slope, w.cover,
+                                         w.stand * w.soil * w.scree * w.shore * w.treeline * w.slope * w.cover};
+                    for (int k = 0; k < 8; ++k) sum[b][k] += f[k];
+                }
+            for (int b = 0; b < kBands; ++b)
+                if (sum[b][0] > 0)
+                    LOG_INFO << "[forest] why " << b * 100 << "-" << b * 100 + 100 << " m: land " << sum[b][0] * 0.0025 << " km2, stand "
+                             << sum[b][1] / sum[b][0] << " soil " << sum[b][2] / sum[b][0] << " scree " << sum[b][3] / sum[b][0]
+                             << " treeline " << sum[b][4] / sum[b][0] << " slope " << sum[b][5] / sum[b][0] << " cover "
+                             << sum[b][6] / sum[b][0] << " => density " << sum[b][7] / sum[b][0];
+        }
+    }
 
     // TRUNK COLLIDERS (#55): a standing capsule per tree (not the understory), streamed round the player
     // by NatureColliderSystem
@@ -1980,12 +2628,6 @@ static void loadForest(const json& fj, const TerrainParams& terrain, const Noise
     }
 
     // NEAR: instanced models per (near cell, variant, part), fading out over the band
-    RenderMaterial barkMat;
-    barkMat.albedo = Vec3(1, 1, 1);
-    barkMat.roughness = 0.92f; barkMat.metallic = 0.0f; barkMat.opacity = 1.0f;
-    barkMat.flags = RenderMaterial::FLAG_LOD_BAND;
-    barkMat.lodOut0 = static_cast<float>(fp.nearM - fp.nearFadeM);
-    barkMat.lodOut1 = static_cast<float>(fp.nearM);
     const double nearCell = std::max(fp.cellM, 512.0);
     std::map<std::pair<int, int>, std::vector<std::vector<Mat4>>> nearCells;
     for (const ForestTree& t : trees) {
@@ -2009,18 +2651,15 @@ static void loadForest(const json& fj, const TerrainParams& terrain, const Noise
             cen = cen / static_cast<Real>(per[v].size());
             Real spread = 0;
             for (const Mat4& m : per[v]) spread = std::max(spread, (Vec3(m.m[0][3], m.m[1][3], m.m[2][3]) - cen).length());
-            RenderMaterial leafMat = barkMat;
-            leafMat.roughness = 0.85f;
-            leafMat.flags |= RenderMaterial::FLAG_ALPHA_TEST | RenderMaterial::FLAG_TWO_SIDED | RenderMaterial::FLAG_WIND;
-            leafMat.albedoMap = folTex[vars[v].species];
-            for (int part = 0; part < 2; ++part) {
+            for (const Part& part : vars[v].parts) {
                 InstanceGroup g;
-                g.mesh = part == 0 ? vars[v].bark : vars[v].leaves;
-                g.material = part == 0 ? barkMat : leafMat;
+                g.mesh = part.mesh;
+                g.material = part.mat;
                 g.transforms = per[v];
                 g.boundsCenter = cen;
                 g.boundsRadius = spread + vars[v].tree.height * 1.3;
-                g.drawDistance = fp.nearM + 10.0;
+                g.drawDistance = part.drawM;
+                g.minDistance = part.minM;
                 g.drawClass = engine::DrawClass::Scenery;
                 g.renderLayer = engine::LayerFoliage;
                 world.add<InstanceGroup>(world.create(), g);
@@ -2040,28 +2679,41 @@ static void loadForest(const json& fj, const TerrainParams& terrain, const Noise
     farMat.lodIn1 = static_cast<float>(fp.nearM);
     farMat.lodOut0 = static_cast<float>(fp.farM * 0.85);
     farMat.lodOut1 = static_cast<float>(fp.farM);
-    std::map<std::pair<int, int>, RenderMesh> farCells;
+    if (impViews) {
+        farMat.normalMap = normalAtlasTex;   // (the views' normals always: mesh.frag reads them)
+        farMat.flags |= RenderMaterial::FLAG_IMPOSTOR_VIEWS;
+    }
+    RenderMaterial farShadowMat = farMat;   // (a many-view impostor's shadow: crossed cards, nothing else)
+    farShadowMat.flags = (farMat.flags & ~RenderMaterial::FLAG_IMPOSTOR_VIEWS) | RenderMaterial::FLAG_SHADOW_ONLY;
+    std::map<std::pair<int, int>, RenderMesh> farCells, farShadowCells;
     for (const ForestTree& t : trees) {
         if (vars[t.variant].species < 0) continue;
         if (fp.species[static_cast<std::size_t>(vars[t.variant].species)].understory) continue;   // bushes: near only
-        RenderMesh& m = farCells[{static_cast<int>(std::floor(t.pos.x / fp.cellM)), static_cast<int>(std::floor(t.pos.z / fp.cellM))}];
-        appendImpostor(m, t, vars[t.variant].slot, 1.0 / colourScale);
+        const std::pair<int, int> key{static_cast<int>(std::floor(t.pos.x / fp.cellM)), static_cast<int>(std::floor(t.pos.z / fp.cellM))};
+        if (impViews) {
+            appendImpostorViews(farCells[key], t, vars[t.variant].slot, vars[t.variant].shade / colourScale);
+            appendImpostorShadow(farShadowCells[key], t, vars[t.variant].slot);
+        } else {
+            appendImpostor(farCells[key], t, vars[t.variant].slot, vars[t.variant].shade / colourScale);
+        }
     }
     std::size_t farVerts = 0;
-    for (auto& [key, mesh] : farCells) {
-        farVerts += mesh.vertices.size();
-        mesh.materialIndex = 0;
-        Entity e = world.create();
-        world.add<Transform>(e, Transform{});
-        world.add<PrevTransform>(e, PrevTransform{Transform{}});
-        Renderable r;
-        r.mesh = assets.acquireMesh(mesh, "forest:far:" + std::to_string(fp.seed) + ":" + std::to_string(key.first) + ":" + std::to_string(key.second));
-        r.material = farMat;
-        r.drawDistance = fp.farM + fp.cellM;
-        r.drawClass = engine::DrawClass::Scenery;
-        r.renderLayer = engine::LayerFoliage;
-        world.add<Renderable>(e, r);
-    }
+    for (int pass = 0; pass < 2; ++pass)
+        for (auto& [key, mesh] : pass == 0 ? farCells : farShadowCells) {
+            farVerts += mesh.vertices.size();
+            mesh.materialIndex = 0;
+            Entity e = world.create();
+            world.add<Transform>(e, Transform{});
+            world.add<PrevTransform>(e, PrevTransform{Transform{}});
+            Renderable r;
+            r.mesh = assets.acquireMesh(mesh, std::string(pass == 0 ? "forest:far:" : "forest:farshadow:") + std::to_string(fp.seed) + ":" +
+                                                  std::to_string(key.first) + ":" + std::to_string(key.second));
+            r.material = pass == 0 ? farMat : farShadowMat;
+            r.drawDistance = fp.farM + fp.cellM;
+            r.drawClass = engine::DrawClass::Scenery;
+            r.renderLayer = engine::LayerFoliage;
+            world.add<Renderable>(e, r);
+        }
     // ROCKS (ADR-0131): the forest block's rock layers, instanced per cell, bedded and tilted
     std::size_t nRocks = 0;
     if (!fp.rocks.empty()) {
@@ -2071,7 +2723,7 @@ static void loadForest(const json& fj, const TerrainParams& terrain, const Noise
         if (terrain.hydro) shoreAt = [h = terrain.hydro](double x, double z, double y) { return h->isWet(x, z, 0.0) ? 0.0 : h->shore(x, z, y); };
         auto excludeDry = [&](double x, double z) {
             if (trails && trails->distance(x, z, 3.0) < 1.5) return true;
-            for (const RoadDeckField* d : decks) { double yy = 0; if (d->heightAt(x, z, margin, &yy)) return true; }
+            for (const RoadDeckField* d : decks) if (d->coversAny(x, z, margin)) return true;
             if (drawnRoad.near(x, z, margin)) return true;
             return !terrain.flatten.empty() && flattenCovers(keepOut, terrain.flatten, x, z, margin);
         };
@@ -2623,21 +3275,18 @@ static void loadVegetation(const json& veg, const TerrainParams& terrain,
     auto drawnRoad = std::make_shared<engine::DrawnRoad>(engine::gatherDrawnRoad(world));
     auto onRoad = [footway, drawnRoad](const std::vector<const RoadDeckField*>& ds, double x, double z) {
         if (drawnRoad->covers(x, z)) return true;
-        for (const RoadDeckField* d : ds) {
-            double y = 0;
-            if (d->heightAt(x, z, footway, &y)) return true;
-        }
+        for (const RoadDeckField* d : ds)
+            if (d->coversAny(x, z, footway)) return true;
         return false;
     };
-    if (!terrain.flatten.empty() || !decks->empty() || !drawnRoad->empty()) {
+    if (!terrain.flatten.empty() || !decks->empty() || !drawnRoad->empty() || !drawnRoad->rails.empty()) {
         if (!terrain.flatten.empty()) keepOut = buildFlattenGrid(terrain.flatten);
         const TerrainParams& tp = terrain;
         scatter.exclude = [&tp, &keepOut, margin, decks, drawnRoad](double x, double z) {
-            for (const RoadDeckField* d : *decks) {
-                double y = 0;
-                if (d->heightAt(x, z, margin, &y)) return true;
-            }
+            for (const RoadDeckField* d : *decks)
+                if (d->coversAny(x, z, margin)) return true;
             if (drawnRoad->near(x, z, margin)) return true;
+            if (drawnRoad->inTrainEnvelope(x, z, -1e30, 1e30, margin)) return true;   // (the train's room, at any height)
             return !tp.flatten.empty() && flattenCovers(keepOut, tp.flatten, x, z, margin);
         };
     }
@@ -2658,7 +3307,7 @@ static void loadVegetation(const json& veg, const TerrainParams& terrain,
             // double-planted and, worse, used the pad plane's groundY, which
             // parks never set: every one of these trees spawned metres UNDER
             // the terrain (device: "trees are below the terrain").
-            if (!lb.treeSpots.empty()) continue;
+            if (!lb.treeSpots.empty() || lb.recipe == "playground" || lb.recipe == "community_garden") continue;   // (their beds and swings are no place for a tree)
             const double a = engine::area(lb.pad);
             int want = std::min(6, static_cast<int>(a * density));
             if (want < 1) continue;
@@ -3121,40 +3770,8 @@ static GrownLots growCityLots(
         return g;
     }
 #endif
-    // The lattice city's lot pre-pass comes out of the level's bundle when the `citylots` producer
-    // applies (ADR-0084 milestone C) — the same grow, done once and stored with its parts already
-    // split per render cell. A miss, an unreadable section or RT_NOCACHE falls through to growing here.
-    engine::NetLotResult r;
-    {
-        const auto tl = std::chrono::steady_clock::now();
-        auto since2 = [](const std::chrono::steady_clock::time_point& t) { return std::chrono::duration<double>(std::chrono::steady_clock::now() - t).count(); };
-        engine::registerCityLotsProducer();
-        bool fromBundle = false;
-        if (const engine::bundle::BundleProducer* p = engine::bundle::findProducer(engine::kCityLotsProducerName);
-            p && !inputs.levelPath.empty() && p->applies(inputs)) {
-            std::string err;
-            engine::bundle::Obtained o = engine::bundle::obtainForLevel(inputs, engine::kCityLotsProducerName);
-            if (o.bundle) {
-                const bool perCell = engine::lotcache::lotCellSize(*o.bundle, engine::kCityLotsSectionPrefix) > 0.0;
-                if (engine::lotcache::readLotResult(*o.bundle, engine::kCityLotsSectionPrefix, r, &err, /*withParts=*/!perCell) &&
-                    (!perCell || engine::lotcache::listLotCellParts(*o.bundle, engine::kCityLotsSectionPrefix, g.cellParts, &err))) {
-                    g.bundle = o.bundle; fromBundle = true;
-                    LOG_INFO << "[citylots] lots " << o.status << ": " << r.lots.size() << " buildings, " << r.plan.lots.size()
-                             << " lots, " << (g.cellParts.empty() ? std::to_string(r.parts.size()) + " whole parts" : std::to_string(g.cellParts.size()) + " cell parts")
-                             << ", read in " << since2(tl) << " s";
-                    // A warm load grows nothing, so the grow's skyline lines
-                    // never print; the census is computed from the records.
-                    const engine::SkylineCensus sc = engine::skylineCensus(r.lots);
-                    LOG_INFO << sc.line();
-                    LOG_INFO << sc.districtsLine();
-                } else {
-                    r = engine::NetLotResult(); g.cellParts.clear(); g.bundle.reset();
-                    LOG_WARN << "[citylots] lots bundle unusable (" << (err.empty() ? o.status : err) << "); growing in place";
-                }
-            }
-        }
-        if (!fromBundle) r = engine::growCity(gin);
-    }
+    // A city not built by the lanes builder grows its lots here, in place (no bundle).
+    engine::NetLotResult r = engine::growCity(gin);
     g.lots = std::move(r.lots);
     g.plan = std::move(r.plan);
     g.parts = std::move(r.parts);
@@ -3427,6 +4044,7 @@ bool LevelLoader::load(const std::string& path,
     std::function<void()> plantScatter;
     RT_PROFILE_ZONE_NAMED("levelLoad");
     g_loadedScriptFiles.clear();
+    g_treeTextures.clear();
     const auto tLoad0 = std::chrono::steady_clock::now();
     // Per-stage load timing (metropolis-scale-plan P4.3). One line at the end, so the cost of a
     // cold city is attributable without a profiler — which is what sizing a bundle producer needs.
@@ -3535,7 +4153,7 @@ bool LevelLoader::load(const std::string& path,
             g_lanes.nav = cp.lotNav;        // the streets a door faces, at the lot clearance widths (the sim routes on cp.nav)
             g_lanes.pavedSidewalk = cp.bands.sidewalkWidth;   // the band a door walks to
             LOG_INFO << "[lanelab] " << g_lanes.blocks.size() << " city blocks published for the terrain pre-pass";
-            sharedEroded = engine::roads::lanes::laneErodedBase(root, grid, sharedEroded);
+            sharedEroded = engine::roads::lanes::laneErodedBase(root, grid, sharedEroded, &g_lanes.deck);
             const double bx1 = grid->x0 + grid->res * (grid->nx - 1), by1 = grid->y0 + grid->res * (grid->ny - 1);
             LOG_INFO << "[lanelab] CDLOD terrain from the lab's conformed grid: " << grid->nx << " x " << grid->ny
                      << " @ " << grid->res << " m, " << (bx1 - grid->x0) << " x " << (by1 - grid->y0) << " m";
@@ -3595,7 +4213,6 @@ bool LevelLoader::load(const std::string& path,
     std::vector<TerrainFlatten> roadFlatten;
     std::vector<engine::RoadEntity> preNets;   // parsed nets, for the lot pre-pass
     std::vector<const json*> preNetEnts;    // matching entity per pre-pass net
-    RenderMesh roadWallMesh;                 // ADR-0075 P1b: retaining/fill walls (world space)
     if (levelGround && root.contains("entities")) {
         for (const auto& ent : root["entities"]) {
             if (ent.value("shape", std::string()) == "road") {
@@ -3609,9 +4226,6 @@ bool LevelLoader::load(const std::string& path,
                 // levelGround (natural) gates the metro's terrain-aware layout.
                 if (roadBlock.contains("generate"))
                     applyGenerateRecipe(net, roadBlock["generate"], levelGround);
-                std::vector<TerrainFlatten> r =
-                    roadNetConformRegions(net, levelGround);
-                roadFlatten.insert(roadFlatten.end(), r.begin(), r.end());
                 preNets.push_back(std::move(net));
                 preNetEnts.push_back(&ent);
             }
@@ -3795,8 +4409,8 @@ bool LevelLoader::load(const std::string& path,
             // draws. corridorAuthor engineers the ramp centrelines and the
             // at-grade flatten windows; the bake turns the solved corridor
             // into ordinary graph edges of its street net, and THE one road
-            // mesher (buildRoadNetMesh, via roadCache below) builds deck,
-            // ramps, parapets, undersides and portal bents from that graph.
+            // builder builds deck, ramps, parapets, undersides and portal
+            // bents from that graph.
             // The corridor renderer (sweepCorridor + its entity) is deleted;
             // signage returns with the R6 furniture pass.
             engine::CorridorAuthoring au =
@@ -3927,6 +4541,14 @@ bool LevelLoader::load(const std::string& path,
     // THE CITY'S SEALED LOTS for the grass (#48): every building's footprint, its paved lot, and plazas --
     // captured here because preLots is MOVED into the city's entity pass before the scatter runs
     auto sealedLotPolys = std::make_shared<std::vector<engine::Poly2>>();
+    // the city's PARKS (lawns: a "lawn" grass layer mows them, and the meadow keeps off them)
+    auto lawnLotPolys = std::make_shared<std::vector<engine::Poly2>>();
+    // the city's BLOCKS: managed ground -- the grass on them is mown, the wild layers (tall grass, flowers) keep off
+    auto managedPolys = std::make_shared<std::vector<engine::Poly2>>();
+    // THE STREETS' CHARACTER (the street-tree planting): the lots summed into 80 m cells -- their districts and how
+    // tall they stand -- for planStreetFurniture's StreetCharacter, long after preLots has moved on
+    struct CharCell { int votes[5] = {0, 0, 0, 0, 0}; double storeys = 0; int n = 0; };   // financial, commercial, residential, oldtown, industrial
+    auto charCells = std::make_shared<std::unordered_map<long long, CharCell>>();
     if (root.contains("terrain")) {
         TerrainParams terrainParams = readTerrainParams(root["terrain"]);
         terrainParams.erodedBase = sharedEroded;   // eroded base for mesh + carve + drape
@@ -4014,9 +4636,40 @@ bool LevelLoader::load(const std::string& path,
             preLots = growCityLots(lotInputs, preNets, root["citysim"], levelDir, lotGround,
                                    levelGround, freewayROWp, lotGroundWith,
                                    lotMeshCell, haveSpawn ? &spawnXZ : nullptr);
+            for (const engine::Poly2& bk : preLots.plan.blocks) if (bk.size() >= 3) managedPolys->push_back(bk);
             for (const engine::LotBuilding& lb : preLots.lots) {
+                const int dk = lb.district == "financial" ? 0 : lb.district == "commercial" ? 1 : lb.district == "oldtown" ? 3
+                             : lb.district == "industrial" ? 4 : 2;
+                CharCell& cc = (*charCells)[(static_cast<long long>(std::floor(lb.site.x / 80.0)) << 32) ^
+                                            (static_cast<long long>(std::floor(lb.site.y / 80.0)) & 0xffffffffLL)];
+                ++cc.votes[dk];
+                cc.storeys += engine::buildingStoreys(lb);
+                ++cc.n;
+            }
+            for (const engine::LotBuilding& lb : preLots.lots) {
+                if (std::getenv("RT_CAMPUS_DEBUG") && (lb.recipe == "sports_field" || lb.recipe == "campus_quad"))
+                    std::fprintf(stderr, "[campus draw] %s at (%.0f, %.0f) type %s padMesh %zu verts, %zu outdoor pieces\n", lb.recipe.c_str(),
+                                 lb.site.x, lb.site.y, lb.type.c_str(), lb.padMesh.vertices.size(), lb.furniture.size());
+                if (lb.type == "depot") {   // a bus depot's yard is paved: no meadow through it
+                    for (const engine::Poly2& sp : lb.sealed) if (sp.size() >= 3) sealedLotPolys->push_back(sp);
+                    continue;
+                }
                 if (lb.type == "park" || lb.type == "green") {
                     if (lb.recipe == "plaza" && lb.pad.size() >= 3) sealedLotPolys->push_back(lb.pad);
+                    // a PASEO is paved wall to wall: sealed out to the shopfronts (its pad stops 0.3 m short of them,
+                    // and a strip of grass grew along every front)
+                    if (lb.recipe == "paseo" && lb.pad.size() >= 3) {
+                        engine::Poly2 ccw = lb.pad;
+                        engine::ensureCCW(ccw);
+                        const engine::Poly2 wide = engine::offsetPlanPublic(ccw, -1.0);
+                        sealedLotPolys->push_back(wide.size() == lb.pad.size() ? wide : lb.pad);
+                    }
+                    // a mown pitch and its track: no wild grass or weeds on them (the island's meadow grew through)
+                    if (lb.recipe == "sports_field" && lb.pad.size() >= 3) sealedLotPolys->push_back(lb.pad);
+                    // a park's walks and plazas, and its lawn
+                    for (const engine::Poly2& sp : lb.sealed) if (sp.size() >= 3) sealedLotPolys->push_back(sp);
+                    if (lb.type == "park" && lb.recipe != "sports_field" && lb.recipe != "plaza" && lb.pad.size() >= 3)
+                        lawnLotPolys->push_back(lb.pad);
                     continue;
                 }
                 if (lb.pavedLot.size() >= 3) sealedLotPolys->push_back(lb.pavedLot);
@@ -4069,7 +4722,7 @@ bool LevelLoader::load(const std::string& path,
                 else
 #endif
                 for (const engine::LotBuilding& lb : preLots.lots) {
-                    if (lb.type == "park" || lb.type == "green" || lb.plan.size() < 3) continue;
+                    if (lb.type == "park" || lb.type == "green" || (lb.plan.size() < 3 && lb.type != "depot")) continue;
                     pads.push_back(engine::lotPadFlatten(lb));
                 }
 #ifdef RT_ROADS_LANES
@@ -4533,53 +5186,6 @@ bool LevelLoader::load(const std::string& path,
             }
 #endif
         }
-        // Retaining/fill walls (ADR-0075 P1b): one world-space entity for every
-        // road's grade-break structures — concrete-grey, with a static MeshCollider
-        // so cars and pedestrians can't walk through a cut face. The terrain batter
-        // grades down to each wall's top; the wall caps the residual step to natural.
-        // Retaining walls (roads-v2.1 R6a): built against the FULLY CARVED
-        // ground — base terrain + road conform + block grading — never the
-        // raw hill. Sampling the base terrain stood walls against blocks the
-        // city had already graded level (hillcity smoke: a wall fencing a
-        // flat lawn). Co-designed with the smoothstep conform: a wall fronts
-        // each DEEP cut face the feather leaves near-vertical, with a
-        // backfill bench capping the feather dip behind it; minWall 3.5
-        // keeps shallow grassy cuts open.
-        {
-            auto wallTp = std::make_shared<TerrainParams>(terrainParams);
-            auto wallNoise = std::make_shared<Noise>(terrainSeed);
-            StructureParams wp;
-            wp.minWall = 3.5;
-            const HeightField wallGround = [wallTp, wallNoise](double x, double z) {
-                return terrainHeight(*wallTp, *wallNoise, x, z);
-            };
-            for (const engine::RoadEntity& pn : preNets) {
-                StructureSet ws = buildRoadWalls(pn, wallGround, wp);
-                if (!ws.empty()) {
-                    LOG_INFO << "[walls] " << ws.walls.size()
-                             << " retaining segments";
-                    MeshBuilder::append(roadWallMesh, ws.mesh);
-                }
-            }
-        }
-        if (!roadWallMesh.vertices.empty()) {
-            Entity we = world.create();
-            world.add<Transform>(we, Transform{});             // mesh is world-space
-            world.add<PrevTransform>(we, PrevTransform{Transform{}});
-            Renderable wr;
-            wr.renderLayer = engine::LayerRoads;
-            wr.material.albedo = Vec3(1, 1, 1);                // grey carried in vertex colour
-            wr.material.roughness = 0.9f;
-            wr.mesh = assets.acquireMesh(roadWallMesh, "road_walls");
-            world.add<Renderable>(we, wr);
-            MeshCollider mc;
-            mc.vertices.reserve(roadWallMesh.vertices.size());
-            for (const Vertex& v : roadWallMesh.vertices) mc.vertices.push_back(v.position);
-            mc.indices = roadWallMesh.indices;
-            mc.friction = 0.9;
-            mc.surface = ColliderSurface::Concrete;
-            world.add<MeshCollider>(we, mc);
-        }
         // Entities (roads especially) drape on the CARVED terrain, so a road sits exactly
         // on its graded profile instead of the raw ground it no longer matches.
         //
@@ -4682,7 +5288,7 @@ bool LevelLoader::load(const std::string& path,
             // FORESTS (ADR-0129): real trees near, impostors far, placed by the ground's maps
             // (it lives in the terrain block: the ground cover lays litter under it)
             if (root.contains("terrain") && root["terrain"].contains("forest") && root["terrain"]["forest"].is_object())
-                loadForest(root["terrain"]["forest"], tp, nz, world, renderer, assets, placeDilate, drawn);
+                loadForest(root["terrain"]["forest"], tp, nz, world, renderer, assets, placeDilate, drawn, sealedLotPolys.get());
             // THE GRASS FIELD (flora plan): not scattered here -- GrassSystem plants it around
             // the camera, from clump meshes and the ground and density rules set up here.
             // GRASS LAYERS (ADR-0130): "grass" is the meadow; "grassLayers" adds more fields, each with a
@@ -4718,6 +5324,38 @@ bool LevelLoader::load(const std::string& path,
                 }
             LOG_INFO << "[grass] sealed ground: " << sealedRoads->tris.size() << " road triangles, " << sealedPads->polys.size() << " lot polygons (buildings, paved lots, plazas)";
             const std::shared_ptr<const PadIndex> padsRO = sealedPads;
+            auto lawnPads = std::make_shared<PadIndex>();
+            for (const engine::Poly2& poly : *lawnLotPolys) {
+                const int k = static_cast<int>(lawnPads->polys.size());
+                lawnPads->polys.push_back(poly);
+                double x0 = 1e30, z0 = 1e30, x1 = -1e30, z1 = -1e30;
+                for (const engine::Vec2& v : poly) { x0 = std::min(x0, (double)v.x); x1 = std::max(x1, (double)v.x); z0 = std::min(z0, (double)v.y); z1 = std::max(z1, (double)v.y); }
+                const double kb = lawnPads->kBin;
+                for (int j = static_cast<int>(std::floor(z0 / kb)); j <= static_cast<int>(std::floor(z1 / kb)); ++j)
+                    for (int i = static_cast<int>(std::floor(x0 / kb)); i <= static_cast<int>(std::floor(x1 / kb)); ++i)
+                        lawnPads->bins[PadIndex::key(i, j)].push_back(k);
+            }
+            const std::shared_ptr<const PadIndex> lawnsRO = lawnPads;
+            auto managedPads = std::make_shared<PadIndex>();
+            for (const engine::Poly2& poly : *managedPolys) {
+                const int k = static_cast<int>(managedPads->polys.size());
+                managedPads->polys.push_back(poly);
+                double x0 = 1e30, z0 = 1e30, x1 = -1e30, z1 = -1e30;
+                for (const engine::Vec2& v : poly) { x0 = std::min(x0, (double)v.x); x1 = std::max(x1, (double)v.x); z0 = std::min(z0, (double)v.y); z1 = std::max(z1, (double)v.y); }
+                const double kb = managedPads->kBin;
+                for (int j = static_cast<int>(std::floor(z0 / kb)); j <= static_cast<int>(std::floor(z1 / kb)); ++j)
+                    for (int i = static_cast<int>(std::floor(x0 / kb)); i <= static_cast<int>(std::floor(x1 / kb)); ++i)
+                        managedPads->bins[PadIndex::key(i, j)].push_back(k);
+            }
+            const std::shared_ptr<const PadIndex> managedRO = managedPads;
+            if (!managedPolys->empty()) LOG_INFO << "[grass] managed ground: " << managedPolys->size() << " city blocks mown";
+            // A LAWN layer (where: "lawn") mows the city's parks and the campus quad short; with one, the other
+            // layers keep off the parks (the meadow stood knee-deep on the quad)
+            bool haveLawn = false;
+            if (root.contains("grassLayers") && root["grassLayers"].is_array())
+                for (const json& gl : root["grassLayers"])
+                    haveLawn = haveLawn || (gl.is_object() && gl.value("where", std::string()) == "lawn");
+            if (!lawnLotPolys->empty()) LOG_INFO << "[grass] " << lawnLotPolys->size() << " park lawns" << (haveLawn ? ", mown" : "");
             auto plantGrass = [&](const json& gj, const std::string& tag) {
                 GrassField gf;
                 const double dilate = placeDilate;
@@ -4738,14 +5376,29 @@ bool LevelLoader::load(const std::string& path,
                 const std::string where = gj.value("where", std::string("meadow"));
                 // 0 meadow, 1 tall, 2 reeds, 3 flowers (open meadow patches), 4 clearing (a flower field
                 // in a forest clearing), 5 shore (flowers in clumps along the water)
-                const int kind = where == "tall" ? 1 : where == "reeds" ? 2 : where == "flowers" ? 3 : where == "clearing" ? 4 : where == "shore" ? 5 : 0;
+                // GROUND CLUTTER (ADR-0212, ground_clutter.h): "clutter": "stones" (bare earth, scree, rock) or "twigs"
+                // (under the trees) -- a layer of small solid meshes, planted as the grass is
+                ClutterKind clutterKind = ClutterKind::Stones;
+                const bool clutter = gj.contains("clutter") && clutterKindFromName(gj.value("clutter", std::string()), clutterKind);
+                const int kind = clutter ? (clutterKind == ClutterKind::Stones ? 7 : 8)
+                               : where == "tall" ? 1 : where == "reeds" ? 2 : where == "flowers" ? 3 : where == "clearing" ? 4 : where == "shore" ? 5
+                               : where == "lawn" ? 6 : 0;
                 const double clumpScale = gj.value("clumpScale", 0.06), clumpCut = gj.value("clumpCut", 0.25);
                 const double shore = gj.value("shoreBand", 6.0);
+                // MOWN in the city's blocks (managed ground): the meadow at a lawn's height; a lawn layer as it is
+                const double mown = gj.value("mownHeight", 0.3);
+                if (kind != 6 && !managedRO->polys.empty())
+                    gf.height = [managedRO, mown](double x, double z) { return managedRO->covers(x, z) ? mown : 1.0; };
                 gf.density = [maxSlope, thin, sea, patchiness, patchScale, patches, cover, hydro, kind, shore, clumpScale, clumpCut,
-                              sealedRoads, padsRO](double x, double z, double y, double slopeCos) {
+                              sealedRoads, padsRO, lawnsRO, haveLawn, managedRO](double x, double z, double y, double slopeCos) {
                     if (y < sea + 0.15) return 0.0;
+                    // the wild layers -- tall grass, meadow flowers, clearings -- keep off the city's managed blocks
+                    if ((kind == 1 || kind == 3 || kind == 4 || kind == 7 || kind == 8) && managedRO->covers(x, z)) return 0.0;
                     if (!sealedRoads->empty() && sealedRoads->near(x, z, 0.4)) return 0.0;   // the city's sealed ground
                     if (padsRO->covers(x, z)) return 0.0;
+                    // LAWNS: the lawn layer only on the parks, every other layer off them
+                    if (kind == 6) return lawnsRO->covers(x, z) && slopeCos > 0.8 ? 1.0 : 0.0;
+                    if (haveLawn && lawnsRO->covers(x, z)) return 0.0;
                     if (hydro && hydro->isWet(x, z, 0.3)) return 0.0;   // not in the rivers and lakes
                     const double slope = std::acos(std::clamp(slopeCos, -1.0, 1.0));
                     const TerrainMaps* maps = cover ? cover->params().maps.get() : nullptr;
@@ -4755,6 +5408,22 @@ bool LevelLoader::load(const std::string& path,
                         const double n = patches.fbm2(x * clumpScale + salt, z * clumpScale - salt, 3);
                         return std::clamp((n - clumpCut) * 5.0, 0.0, 1.0);
                     };
+                    if (kind == 7) {   // STONES: where the ground is bare -- earth, scree, rock, the pebbly shore -- in clumps
+                        // (and only where a loose stone can lie: none past ~38 deg -- Glenn, 2026-10-20: on the rocky
+                        // trial's faces "they float instead of adhering to the surface of the mountain")
+                        if (!cover || slopeCos < 0.79) return 0.0;
+                        const Cover c = cover->at(x, z, y, slopeCos);
+                        double d = 0.08 * c.grass + 0.8 * c.dirt + c.rock + 0.5 * c.sand;
+                        if (maps) d += 0.8 * maps->at(x, z).scree;
+                        if (hydro) d = std::max(d, hydro->shore(x, z, y));
+                        d *= 1.0 - c.snow;
+                        return std::clamp(d, 0.0, 1.0) * (0.25 + 0.75 * clumps(23.0));
+                    }
+                    if (kind == 8) {   // TWIGS: under the canopy, thickest where it is closed
+                        if (!cover || !cover->params().forest) return 0.0;
+                        const double here = forestCanopy(*cover->params().forest, sea, maps, x, z, y, slope * 57.2957795);
+                        return std::clamp((here - 0.3) / 0.4, 0.0, 1.0) * (0.3 + 0.7 * clumps(29.0));
+                    }
                     if (kind == 2 || kind == 5) {   // REEDS / SHORE FLOWERS: the fresh water's band, in clumps
                         if (y < sea + 0.6 || slope > 0.25) return 0.0;
                         double d = hydro && hydro->isWet(x, z, shore) ? 1.0 : 0.0;
@@ -4805,6 +5474,7 @@ bool LevelLoader::load(const std::string& path,
                 GrassClumpParams cp;
                 cp.blades = gj.value("blades", cp.blades);
                 cp.height = gj.value("height", cp.height);
+                gf.bladeHeight = cp.height;
                 cp.width = gj.value("width", cp.width);
                 cp.radius = gj.value("clumpRadius", cp.radius);
                 cp.lean = gj.value("lean", cp.lean);
@@ -4822,7 +5492,10 @@ bool LevelLoader::load(const std::string& path,
                 // Each variant is tinted a little differently (warmer / cooler, lighter / darker), so
                 // the field mottles instead of reading as one flat green.
                 const double tint = gj.value("variantTint", 0.14);
-                for (int v = 0; v < variants; ++v) {
+                for (int v = 0; v < variants && clutter; ++v)
+                    gf.clumps.push_back(assets.acquireMesh(groundClutter(clutterKind, gf.seed * 131u + static_cast<uint32_t>(v), gj.value("size", 0.5)),
+                                                           tag + ":clutter:" + std::to_string(v)));
+                for (int v = 0; v < variants && !clutter; ++v) {
                     GrassClumpParams vp = cp;
                     const double t = variants > 1 ? (static_cast<double>(v) / (variants - 1)) * 2.0 - 1.0 : 0.0;   // -1..1
                     vp.tipColor = Vec3(cp.tipColor.x * (1.0 + tint * t), cp.tipColor.y * (1.0 + tint * 0.4 * t),
@@ -4848,8 +5521,16 @@ bool LevelLoader::load(const std::string& path,
                 gf.material.flags = RenderMaterial::FLAG_GRASS | RenderMaterial::FLAG_WIND | RenderMaterial::FLAG_TWO_SIDED;
                 gf.material.fadeStart = static_cast<float>(gf.fadeStart);
                 gf.material.fadeEnd = static_cast<float>(gf.fadeEnd);
+                if (clutter) {   // solid, still, nothing a leg wades through; stones in the ground's own rock
+                    gf.material.flags = RenderMaterial::FLAG_GRASS | RenderMaterial::FLAG_CLUTTER;
+                    gf.material.roughness = 0.9f;
+                    gf.bladeHeight = 0.0;
+                    gf.alignToGround = true;
+                    if (clutterKind == ClutterKind::Stones)
+                        gf.material.albedo = colour("color", tp.cover ? tp.cover->params().rock * 1.1 : Vec3(0.13, 0.12, 0.105));
+                }
                 // THE FAR FIELD: cards of baked blades beyond the clumps, growing in as they fade
-                if (gj.value("cards", true)) {
+                if (gj.value("cards", !clutter)) {
                     const TextureData ct = grassCardTexture(gf.seed * 7919u + 3u, cp);
                     gf.card = assets.acquireMesh(grassCardMesh(cp), tag + ":card");
                     gf.cardSpacing = gj.value("cardSpacing", gf.cardSpacing);
@@ -4891,6 +5572,8 @@ bool LevelLoader::load(const std::string& path,
             pGridRes = c.gridRes;
         });
         Noise pnNoise(root["terrain"].value("seed", 0u));
+        TerrainParams pokeBare = tpFull;   // (RT_POKE_DUMP: the ground without any flatten, to tell a stamp from the grid)
+        pokeBare.flatten.clear(); pokeBare.flattenIndex.reset();
         float pWorldHalf = root["terrain"]["cdlod"].value("worldHalf", 1024.0);
         for (int lvl = 0; lvl < 3; ++lvl) {
             const double nodeSize = pWorldHalf * 2.0 / std::pow(2.0, pNumLods - 1 - lvl);
@@ -4923,6 +5606,13 @@ bool LevelLoader::load(const std::string& path,
                 std::vector<UnionSpine> spines;
                 std::vector<std::vector<double>> profs;
                 double sidewalk = 3.5, lift = 0.08;
+                // A PUBLISHED deck (a lane-built city): its carriageways stand side by side at different heights
+                // (a freeway's terraces, a ramp in the cut below it), so the deck at a point is the one whose
+                // CARRIAGEWAY is nearest (distance past its half-width), not the nearest centreline -- which took
+                // a ramp 2 m off its edge for the freeway the point stood on and called the cut slope between
+                // them a 5 m poke. And only a street has a sidewalk beside it: past a freeway's, a ramp's, a
+                // track's or a footway's edge is its slope, not a deck.
+                bool published = false;
             };
             std::vector<PokeSet> pokeSets;
             for (const engine::RoadEntity& net : preNets) {
@@ -4939,7 +5629,9 @@ bool LevelLoader::load(const std::string& path,
                     ps.spines, levelGround, 0.0, /*maxGrade=*/0.08,
                     net.look.sidewalk + 4.0,
                     net.look.perClassGrade ? &pokeRules : nullptr);
-                pokeSets.push_back(std::move(ps));
+                // (a net that welds to nothing -- a lane-built city's leftover recipe since the lattice retired --
+                // measures nothing, and must not stand in for the city's published deck below)
+                if (!ps.spines.empty()) pokeSets.push_back(std::move(ps));
             }
 #ifdef RT_ROADS_LANES
             // ...from the BUNDLE, not from the world. This report runs in the terrain section,
@@ -4953,8 +5645,9 @@ bool LevelLoader::load(const std::string& path,
                 if (engine::roads::lanes::readCityProducts(*g_lanes.bundle, 0, cp, &pokeErr) &&
                     !cp.deck.spines.empty()) {
                     PokeSet ps;
-                    ps.sidewalk = g_lanes.sidewalk;
+                    ps.sidewalk = g_lanes.pavedSidewalk > 0.0 ? g_lanes.pavedSidewalk : g_lanes.sidewalk;   // (the drawn band)
                     ps.lift = 0.0;               // a published deck's yAbs IS the surface
+                    ps.published = true;
                     ps.spines = cp.deck.spines;
                     ps.profs.reserve(ps.spines.size());
                     for (const UnionSpine& sp : ps.spines) ps.profs.push_back(sp.yAbs);
@@ -5019,6 +5712,10 @@ bool LevelLoader::load(const std::string& path,
                                 double tt = L2 < 1e-12 ? 0.0
                                     : std::max(0.0, std::min(1.0, dot(q - pp[sr.i], ab) / L2));
                                 double d2 = (q - (pp[sr.i] + ab * tt)).lengthSquared();
+                                if (pokeSet.published) {   // (signed: distance past the carriageway's edge)
+                                    const double de = std::sqrt(d2) - spines[sr.si].halfWidth;
+                                    d2 = de < 0.0 ? -de * de : de * de;
+                                }
                                 if (d2 < bestD2) {
                                     bestD2 = d2;
                                     h = profs[sr.si][sr.i] +
@@ -5163,7 +5860,9 @@ bool LevelLoader::load(const std::string& path,
                 for (std::size_t si = 0; si < spines.size(); ++si) {
                     const auto& pts = spines[si].points;
                     if (profs[si].size() < 2) continue;
-                    const double hw = spines[si].halfWidth + pokeSet.sidewalk - 0.3;
+                    const bool kerbside = !pokeSet.published ||
+                        (!spines[si].authoredDeck && spines[si].use == UnionSpine::Use::Road);
+                    const double hw = spines[si].halfWidth + (kerbside ? pokeSet.sidewalk : 0.0) - 0.3;
                     for (std::size_t i = 0; i + 1 < pts.size(); ++i) {
                         Vec2 d2v = pts[i + 1] - pts[i];
                         const double L = d2v.length();
@@ -5193,21 +5892,27 @@ bool LevelLoader::load(const std::string& path,
                                 // RT_POKE_SITE="x,z": full autopsy of samples
                                 // within 3 m of the given point — deck source,
                                 // corner heights, and what the corner clamp saw.
+                                // Several sites: "x,z;x,z;...".
                                 if (const char* site = std::getenv("RT_POKE_SITE")) {
-                                    double sx = 0, sz = 0;
-                                    if (sscanf(site, "%lf,%lf", &sx, &sz) == 2 &&
-                                        std::hypot(q.x - sx, q.y - sz) < 3.0 && lvl == 0) {
+                                    bool near = false;
+                                    for (const char* c = site; c && *c; c = std::strchr(c, ';') ? std::strchr(c, ';') + 1 : nullptr) {
+                                        double sx = 0, sz = 0;
+                                        if (sscanf(c, "%lf,%lf", &sx, &sz) == 2 && std::hypot(q.x - sx, q.y - sz) < 3.0) { near = true; break; }
+                                    }
+                                    if (near && lvl == 0) {
                                         LOG_INFO << "[poke-site] q=(" << q.x << "," << q.y
                                                  << ") gh=" << gh << " deck=" << deck
                                                  << " ownDeck=" << ownDeck
                                                  << " dd=" << dd << " chain=" << si
                                                  << " hw=" << spines[si].halfWidth;
-                                        // every priority-1 region covering q (dilated):
+                                        // every region reaching q, inside or by its feather (a road's, a pad's, a
+                                        // terrace's: the lanes sidewalk is no region, so a pad's feather lifts it):
                                         for (std::size_t ri = 0; ri < tpFull.flatten.size(); ++ri) {
                                             const TerrainFlatten& r = tpFull.flatten[ri];
-                                            if (r.priority != kRoadFlattenPriority || r.polygon.size() < 3) continue;
-                                            if (q.x < r.minX - dil || q.x > r.maxX + dil ||
-                                                q.y < r.minZ - dil || q.y > r.maxZ + dil) continue;
+                                            if (r.polygon.size() < 3) continue;
+                                            const double reach = r.falloff + dil;
+                                            if (q.x < r.minX - reach || q.x > r.maxX + reach ||
+                                                q.y < r.minZ - reach || q.y > r.maxZ + reach) continue;
                                             auto inPoly = [&](double px, double pz) {
                                                 bool in = false;
                                                 size_t np = r.polygon.size();
@@ -5239,11 +5944,13 @@ bool LevelLoader::load(const std::string& path,
                                                 return bd;
                                             };
                                             const bool insideR = inPoly(q.x, q.y);
-                                            if (!insideR && distPoly(q.x, q.y) > dil) continue;
+                                            const double dR = insideR ? 0.0 : distPoly(q.x, q.y);
+                                            if (!insideR && dR > reach) continue;
                                             LOG_INFO << "[poke-site]   region#" << ri
-                                                     << " owner=" << r.owner
-                                                     << " plane=" << r.planeY(q.x, q.y)
-                                                     << (insideR ? " INSIDE" : " (dilated)");
+                                                     << " priority=" << r.priority << " owner=" << r.owner
+                                                     << " plane=" << r.planeY(q.x, q.y) << " falloff=" << r.falloff
+                                                     << (insideR ? " INSIDE" : dR <= dil ? " (dilated)" : " feather d=") << (insideR || dR <= dil ? std::string() : std::to_string(dR))
+                                                     << " bbox x[" << r.minX << "," << r.maxX << "] z[" << r.minZ << "," << r.maxZ << "] verts " << r.polygon.size();
                                         }
                                         int mine = 0;
                                         for (std::size_t ri = 0; ri < tpFull.flatten.size(); ++ri) {
@@ -5299,7 +6006,10 @@ bool LevelLoader::load(const std::string& path,
                                         // last ~125 LOD2 sites).
                                         pf << lvl << "," << q.x << "," << q.y << ","
                                            << dd << "," << si << ","
-                                           << spines[si].points.size() << std::endl;
+                                           << spines[si].points.size() << "," << hw * li / (double)lats << ","
+                                           << spines[si].halfWidth << "," << static_cast<int>(spines[si].klass) << ","
+                                           << deck << "," << terrainHeight(pokeBare, pnNoise, q.x, q.y, dil) << ","
+                                           << tpFull.flatten.size() << std::endl;
                                     }
                                     if (dd > worst) { worst = dd; wx = q.x; wz = q.y; }
                                     if (dd > 0.3) {
@@ -5409,6 +6119,10 @@ bool LevelLoader::load(const std::string& path,
         cfg.busStops = cs.value("busStops", cfg.busStops);
         cfg.buses = cs.value("buses", cfg.buses);
         cfg.busMaxWalk = cs.value("busMaxWalk", cfg.busMaxWalk);
+        if (cs.contains("busService") && cs["busService"].is_array() && cs["busService"].size() == 2) {
+            cfg.busServiceStart = cs["busService"][0].get<float>();
+            cfg.busServiceEnd = cs["busService"][1].get<float>();
+        }
         cfg.physicalCars = cs.value("physicalCars", cfg.physicalCars);
         cfg.pedDemoteRadius = cs.value("pedDemoteRadius", cfg.pedDemoteRadius);
         cfg.localHz = cs.value("localHz", cfg.localHz);
@@ -5418,6 +6132,8 @@ bool LevelLoader::load(const std::string& path,
         cfg.busCommuteShare = cs.value("busCommuteShare", cfg.busCommuteShare);
         cfg.pedsPerKm = cs.value("pedsPerKm", cfg.pedsPerKm);
         cfg.maxAmbient = cs.value("maxAmbient", cfg.maxAmbient);
+        cfg.nearTarget = cs.value("nearTarget", cfg.nearTarget);
+        cfg.farTarget = cs.value("farTarget", cfg.farTarget);
         cfg.seed = cs.value("seed", cfg.seed);
         cfg.hoursPerSecond = cs.value("hoursPerSecond", cfg.hoursPerSecond);
         // ONE CLOCK, ONE AUTHOR (Glenn, 2026-09-16: "use the same tick for
@@ -5666,17 +6382,9 @@ bool LevelLoader::load(const std::string& path,
             std::function<Real(Real, Real)> dressingGround;
             Real dressingStep = 0;
             engine::Vec2 dressingOrigin(0, 0);
+            dressingGround = cdlodDrawnGround(world);
             world.each<TerrainLodConfig>([&](Entity, TerrainLodConfig& c) {
-                const TerrainLodConfig cfg = c;
-                auto nz = std::make_shared<Noise>(cfg.seed);
-                // BY POINTER: the closure is copied into every streamed chunk's preparer, and a by-value
-                // config copied the whole flatten set each time -- 40,000 street strips x 14,000 chunks
-                // was 44 GB and the OOM killer (2026-09-29).
-                auto cfgp = std::make_shared<const TerrainLodConfig>(c);
-                dressingGround = [cfgp, nz](Real x, Real z) {
-                    return lodSurfaceHeight(cfgp->params, *nz, x, z, cfgp->worldHalf, cfgp->numLods,
-                                            cfgp->gridRes);
-                };
+                const TerrainLodConfig& cfg = c;
                 const int res = std::max(2, cfg.gridRes + (cfg.gridRes % 2));
                 const float leaf = (2.0f * cfg.worldHalf) / static_cast<float>(1 << std::max(0, cfg.numLods - 1));
                 dressingStep = static_cast<Real>(leaf / static_cast<float>(res));   // the mesher's float step
@@ -5685,15 +6393,39 @@ bool LevelLoader::load(const std::string& path,
             if (!dressingGround && entityGround)
                 dressingGround = [g = entityGround](Real x, Real z) { return g(x, z); };
             // The road as drawn, for the lot trees below (drawn_road.h).
-            const engine::DrawnRoad lotRoad = engine::gatherDrawnRoad(world);
+            const engine::DrawnRoad lotRoad = engine::gatherDrawnRoad(world, /*withHeights=*/true);
             int lotTreesOnRoad = 0;
+            std::map<std::string, int> tradePlaces;   // the shop units that became places, by trade
+            std::vector<engine::ShopSign> shopSigns;   // ...and the boards that name them
+            int depotYards = 0, depotBays = 0;          // the bus depots' bays, to the buses
+            int surfaceLots = 0, surfaceStalls = 0;     // the big boxes' and malls' parking lots, to the drivers
+            struct OpenSpot { Vec3 at; Vec2 n; int place; };
+            std::vector<OpenSpot> openSpots;            // ...and the OPEN signs in their windows
             MeshHandle pad = assets.acquirePrimitive("box", Vec3(1, 1, 1));   // park pads
             // Street-tree kit for parks + unbuilt greens (device: "empty lots had
             // vegetation like trees and grass"): a few shared varieties, one mesh
             // upload each, reused across every planted lot.
             struct TreeKit { MeshHandle bark, leaves;
-                             RenderMaterial barkMat, leafMat; };
+                             RenderMaterial barkMat, leafMat;
+                             double height = 9.0; };   // the grown model's top, for what may stand over it
             std::vector<TreeKit> treeKits;
+            // ...or, RT_STREET_RECIPES=1, the recipe trees (cityRecipeKits): a park's mix -- oaks young and grown, a maple,
+            // a sakura, a birch, a young beech -- instanced by 280 m cell, each level a group, as the street trees are
+            const bool lotRecipes = cityRecipeTrees(root);
+            std::vector<CityRecipeKit> lotRecipeKits;
+            std::map<std::pair<int, int>, std::map<std::size_t, std::vector<Mat4>>> lotRecipeCells;
+#ifdef RT_ENABLE_SCRIPTING
+            if (lotRecipes) {
+                const std::pair<const char*, const char*> mix[] = {{"oak", "young"}, {"oak", "mature"}, {"maple", ""},
+                                                                   {"sakura", "mature"}, {"birch", ""}, {"beech", "young"}};
+                for (std::size_t m = 0; m < sizeof(mix) / sizeof(mix[0]); ++m) {
+                    std::vector<CityRecipeKit> k = cityRecipeKits(mix[m].first, mix[m].second, {0xF00Du + static_cast<uint32_t>(m) * 977u},
+                                                                  std::string("lotTree:recipe:") + mix[m].first + ":" + mix[m].second, 600.0,
+                                                                  renderer, assets);
+                    if (!k.empty()) lotRecipeKits.push_back(std::move(k.front()));
+                }
+            }
+#endif
             auto treeKit = [&](std::size_t variety) -> const TreeKit& {
                 while (treeKits.size() <= variety) {
                     const std::size_t i = treeKits.size();
@@ -5710,6 +6442,9 @@ bool LevelLoader::load(const std::string& path,
                     TreeKit k;
                     const std::string key = "lotTree:" + std::to_string(i);
                     k.bark = assets.acquireMesh(tm.branches, key + ":bark");
+                    k.height = 0.0;
+                    for (const RenderMesh* mm : {&tm.branches, &tm.leaves})
+                        for (const Vertex& v : mm->vertices) k.height = std::max(k.height, static_cast<double>(v.position.y));
                     k.barkMat.albedo = Vec3(1, 1, 1);
                     k.barkMat.roughness = 1.0f;
                     BarkMaps bm = barkMaps(barkStyleFromName("oak"), 128, seed);
@@ -5766,7 +6501,8 @@ bool LevelLoader::load(const std::string& path,
                     engine::spawnFurnitureGroups(world, assets, &renderer, outdoorDraw, list, Vec3(0.80, 0.78, 0.75), 150.0, made);
                     engine::Interactables set;
                     for (const engine::PlacedPiece& pp : list)
-                        if (flib.interactive(static_cast<engine::Piece>(pp.piece))) set.pieces.push_back({pp.piece, pp.xform, 0});
+                        if (flib.interactive(static_cast<engine::Piece>(pp.piece)))
+                            set.pieces.push_back({pp.piece, engine::interactXform(flib.find(static_cast<engine::Piece>(pp.piece)), pp.xform, pp.variant), 0, -1, pp.variant});
                     if (!set.pieces.empty()) {
                         set.refreshBounds();
                         seats += set.pieces.size();
@@ -5799,26 +6535,33 @@ bool LevelLoader::load(const std::string& path,
                     const engine::Vec2 n2(-d2.y, d2.x);
                     const double y0 =
                         (entityGround ? entityGround(a2.x, a2.y) : 0.0) - 0.3;
+                    // a closed block from the mesh library (it was four hand-indexed sides), its triangles into
+                    // the collider
+                    const engine::Vec2 c2[4] = {a2 + n2 * (thick * 0.5), a2 - n2 * (thick * 0.5),
+                                                b2 - n2 * (thick * 0.5), b2 + n2 * (thick * 0.5)};
+                    Vec3 foot[4], head[4];
+                    for (int c4 = 0; c4 < 4; ++c4) {
+                        foot[c4] = Vec3(c2[c4].x, y0, c2[c4].y);
+                        head[c4] = Vec3(c2[c4].x, y0 + 0.3 + h2, c2[c4].y);
+                    }
+                    engine::RenderMesh blockMesh;
+                    engine::MeshBuilder::emitBlock(blockMesh, foot, head, Vec3(1, 1, 1));
                     const uint32_t s0 =
                         static_cast<uint32_t>(buildingsMc.vertices.size());
-                    for (int c4 = 0; c4 < 4; ++c4) {
-                        const engine::Vec2 p2 =
-                            (c4 < 2 ? a2 : b2) +
-                            n2 * ((c4 % 2 == 0 ? 1.0 : -1.0) * thick * 0.5);
-                        buildingsMc.vertices.push_back(Vec3(p2.x, y0, p2.y));
-                        buildingsMc.vertices.push_back(
-                            Vec3(p2.x, y0 + 0.3 + h2, p2.y));
-                    }
-                    const uint32_t q[4] = { s0, s0 + 2, s0 + 6, s0 + 4 };
-                    for (int f2 = 0; f2 < 4; ++f2) {
-                        const uint32_t A2 = q[f2], B2 = q[(f2 + 1) % 4];
-                        buildingsMc.indices.insert(buildingsMc.indices.end(),
-                                                   { A2, B2, B2 + 1, A2, B2 + 1,
-                                                     A2 + 1 });
-                    }
+                    for (const engine::Vertex& vx : blockMesh.vertices)
+                        buildingsMc.vertices.push_back(vx.position);
+                    for (uint32_t ix : blockMesh.indices)
+                        buildingsMc.indices.push_back(s0 + ix);
                 };
                 for (const auto& fs : lb.fenceSegs)
                     wall(fs.first, fs.second, 0.95, 0.14);
+                for (const engine::LotBuilding::Area& ar : lb.areas) {   // a bus depot's shed: its four walls
+                    if (ar.kind != "bus_shed") continue;
+                    const engine::Vec2 au = ar.axis, av(-ar.axis.y, ar.axis.x);
+                    const engine::Vec2 q[4] = {ar.center - au * ar.halfL - av * ar.halfW, ar.center + au * ar.halfL - av * ar.halfW,
+                                               ar.center + au * ar.halfL + av * ar.halfW, ar.center - au * ar.halfL + av * ar.halfW};
+                    for (int k = 0; k < 4; ++k) wall(q[k], q[(k + 1) % 4], 7.5, 0.3);
+                }
                 for (const Vec3& ts : lb.treeSpots) {
                     const engine::Vec2 t2(ts.x, ts.z);
                     wall(t2 + engine::Vec2(-0.16, 0), t2 + engine::Vec2(0.16, 0),
@@ -5848,6 +6591,11 @@ bool LevelLoader::load(const std::string& path,
                                 if (ob.type == "park" ||
                                     ob.type == "green" || ob.plan.size() < 3)
                                     continue;
+                                // A COMPLEX's doors open into its own lot by design (cells.h, issue #105 step 5):
+                                // a bundle's inner tube is entered through its neighbour's lobby (two coincident
+                                // doorways, each unit's own notch), a courtyard's shops open onto the court. The
+                                // lot's plan is the whole block; its units collide one by one.
+                                if (&ob == &lb && units.size() > 1) continue;
                                 if (engine::pointInPolygon(ob.plan, outP)) {
                                     clear = false;
                                     if (std::getenv("RT_PRINT_DEMOTED"))
@@ -5873,10 +6621,41 @@ bool LevelLoader::load(const std::string& path,
                         if (u.enterable)
                             doorCuts.insert(doorCuts.end(), u.doors.begin(),
                                             u.doors.end());
+                    // A PARKING GARAGE you can drive into: its decks, ramps and rails, not a solid prism
+                    bool garage = false;
+                    for (const engine::BuildingUnit& u : units)
+                        if (u.params.parkingDecks && u.plan.size() >= 3 &&
+                            engine::garageColliderOf(u.plan, u.params, lb.baseY, buildingsMc.vertices, buildingsMc.indices))
+                            garage = true;
+                    // ONE BUILDING, ITS TIERS (architectural toolkit, issue #105, step 1): a flat-roofed single
+                    // unit collides tier by tier -- every setback deck and the roof deck walkable where the
+                    // exterior draws them, the parapets standing, the top cut through over the core's stairs
+                    // (the roof exit). Strips and compounds keep the one prism.
+                    bool tiered = false;
+                    if (!garage && units.size() == 1) {
+                        const engine::BuildingUnit& u = units.front();
+                        // The core's shafts cut every setback deck; the stairs' shafts cut the roof where
+                        // the core reaches it.
+                        std::vector<engine::Poly2> deckHoles, roofHoles;
+                        if (engine::wantsCore(u.params)) {
+                            const engine::CorePlan core =
+                                engine::coreFor(u.plan, u.params, engine::entranceEdgeFor(u.plan, u.params));
+                            deckHoles = engine::coreDeckHoles(core);
+                            if (engine::coreReachesRoof(u.params)) roofHoles = engine::coreRoofHoles(core);
+                        }
+                        tiered = engine::appendBuildingTiers(buildingsMc.vertices, buildingsMc.indices, u.plan,
+                                                             u.params, u.baseY, lb.groundY, doorCuts, deckHoles,
+                                                             roofHoles);
+                    }
+                    if (!garage && !tiered)
                     engine::appendBuildingPrism(
                         buildingsMc.vertices, buildingsMc.indices, lb.plan,
                         base, top, lb.baseY + 0.05, doorCuts,
                         lb.baseY - lb.groundY);
+                    // WHAT STANDS ON THE ROOF collides (the tanks, the HVAC, the masts' bases, a lantern, a screen's
+                    // ring): the items the grow recorded, walled on the deck they stand on.
+                    for (const engine::BuildingUnit& u : units)
+                        engine::appendRoofItems(buildingsMc.vertices, buildingsMc.indices, u.roof);
                     // A PAVED lot (ADR-0086) is a walkable slab to its lot
                     // line: the plate the lot pass drew at paveY gets the
                     // same prism treatment (top cap at the plate, sides down
@@ -5893,17 +6672,54 @@ bool LevelLoader::load(const std::string& path,
                                                  u.enterable, lb.recipe,
                                                  lb.type, lb.district});
                         cityB.records.back().beacons = u.beacons;
+                        cityB.records.back().roof = u.roof;
                     }
                     // Record the exact prism for the collider debug layer.
                     colliderPrisms.push_back({lb.plan, base, top, lb.district, lb.type});
                 }
                 // Tag it as a place the agents can route to. An unbuilt GREEN is
                 // scenery, not a schedule destination — no place tag.
-                if (lb.type != "green") {
+                // A BUS DEPOT (sculptBusDepot): no place for the schedules, its bays a garage only buses use, anchored
+                // on the street in front of its gate
+                // ...and an OPEN LOT's CAR PARK (recipe "car_park", sculptCarPark): the same yard, its stalls a garage for cars
+                if (lb.type == "depot") {
+                    engine::CitySimConfig::GarageSpec gs;
+                    const bool carPark = lb.recipe == "car_park";
+                    gs.buses = !carPark;
+                    for (const engine::LotBuilding::Area& ar : lb.areas) {
+                        if (ar.kind == (carPark ? "car_gate" : "bus_gate")) { gs.px = ar.center.x; gs.pz = ar.center.y; gs.ox = ar.axis.x; gs.oz = ar.axis.y; }
+                        if (ar.kind != (carPark ? "car_bay" : "bus_bay")) continue;
+                        const Real gy0 = dressingGround ? dressingGround(ar.center.x, ar.center.y) : lb.groundY;
+                        gs.stalls.push_back({ar.center.x, ar.center.y, ar.axis.x, ar.axis.y, gy0 + 0.05});
+                    }
+                    if (!gs.stalls.empty() && carPark) {
+                        ++surfaceLots;
+                        surfaceStalls += static_cast<int>(gs.stalls.size());
+                        cfg.garages.push_back(std::move(gs));
+                    } else if (!gs.stalls.empty()) {
+                        ++depotYards;
+                        depotBays += static_cast<int>(gs.stalls.size());
+                        LOG_INFO << "[citylots] bus depot at " << lb.site.x << " " << lb.site.y << ": " << gs.stalls.size() << " bays";
+                        cfg.garages.push_back(std::move(gs));
+                    }
+                }
+                if (lb.type != "green" && lb.type != "depot") {
                     engine::AuthoredPlace p;
                     p.type = lb.type;
                     p.x = static_cast<float>(lb.site.x);
                     p.z = static_cast<float>(lb.site.y);
+                    // THE UNIVERSITY (campus milestone 4): its halls, quad and field by recipe, so
+                    // the citysim can house students in the residence hall and send them to class.
+                    // Beds: one student per ~45 m2 of floor (a dorm room, its share of the corridor, the
+                    // bathrooms and lounge -- measured against the beds campusPlan furnishes).
+                    if (lb.recipe == "teaching_hall") p.campus = 1;
+                    else if (lb.recipe == "campus_library") p.campus = 2;
+                    else if (lb.recipe == "residence_hall") {
+                        p.campus = 3;
+                        const double storeys = std::max(1.0, std::floor(static_cast<double>(lb.height) / 3.3));
+                        p.capacity = static_cast<int>(engine::area(lb.plan) * storeys / 45.0);
+                    } else if (lb.recipe == "campus_quad" || lb.recipe == "dorm_courtyard") p.campus = 4;
+                    else if (lb.recipe == "sports_field") p.campus = 5;
                     // The real door (ADR-0080): first unit that has one --
                     // the citysim snaps this place's entrance from a step
                     // outside it instead of from the centroid.
@@ -5915,7 +6731,205 @@ bool LevelLoader::load(const std::string& path,
                         p.ez = static_cast<float>(d0.foot.y + d0.normal.y * 1.5);
                         break;
                     }
-                    cfg.places.push_back(std::move(p));
+                    for (const engine::LotBuilding::Walk& k : lb.walks)
+                        cfg.footpaths.push_back({k.a.x, k.a.y, k.b.x, k.b.y, k.streetEnds ? k.width : -k.width});
+                    for (const engine::LotBuilding::SitSpot& sp : lb.sitSpots)
+                        cfg.sitSpots.push_back({sp.at.x, sp.at.y, sp.face.x, sp.face.y, sp.hip});
+                    for (const engine::BuildingUnit& u : lb.units) {   // a garage's portal and stalls, for the drivers
+                        Vec2 pat, pout;
+                        if (!u.params.parkingDecks || u.plan.size() < 3 || !engine::garagePortalOf(u.plan, u.params, pat, pout))
+                            continue;
+                        engine::CitySimConfig::GarageSpec gs;
+                        gs.px = pat.x; gs.pz = pat.y; gs.ox = pout.x; gs.oz = pout.y;
+                        for (const engine::ParkingStall& st : engine::garageStallsOf(u.plan, u.params))
+                            gs.stalls.push_back({st.at.x, st.at.y, st.face.x, st.face.y, u.baseY + st.y});
+                        cfg.garages.push_back(std::move(gs));
+                    }
+                    // A BIG BOX'S OR A MALL'S PARKING LOT, for the drivers: its stalls as sculptParking striped them,
+                    // entered from the middle of its street edge (a garage at ground level, to the citysim)
+                    for (const engine::OpenSpace& o : lb.open) {
+                        if (o.kind != engine::OpenKind::Parking || lb.units.empty()) continue;
+                        const Vec3 fd3 = lb.units.front().params.faceDir;
+                        Vec2 fd(fd3.x, fd3.z);
+                        // a lot BEHIND the building faces the other way (its street is the back one)
+                        if (dot(centroid(o.poly) - centroid(lb.units.front().plan), fd) < 0) fd = fd * -1.0;
+                        Vec2 pat, pout;
+                        const std::vector<engine::ParkingStall> st = engine::surfaceStallsOf(o.poly, fd, &pat, &pout);
+                        if (st.empty()) continue;
+                        const Real y = lb.paveY != 0 ? lb.paveY : lb.units.front().baseY;
+                        engine::CitySimConfig::GarageSpec gs;
+                        gs.px = pat.x; gs.pz = pat.y; gs.ox = pout.x; gs.oz = pout.y;
+                        for (const engine::ParkingStall& sp : st) gs.stalls.push_back({sp.at.x, sp.at.y, sp.face.x, sp.face.y, y + 0.03});
+                        cfg.garages.push_back(std::move(gs));
+                        ++surfaceLots;
+                        surfaceStalls += static_cast<int>(st.size());
+                    }
+                    for (const engine::LotBuilding::Area& ar : lb.areas)
+                        cfg.activityAreas.push_back({ar.kind, ar.center.x, ar.center.y, ar.axis.x, ar.axis.y, ar.halfL, ar.halfW});
+                    for (const engine::Poly2& lp : lb.loops) {
+                        std::vector<std::array<double, 2>> pts;
+                        for (const engine::Vec2& v : lp) pts.push_back({v.x, v.y});
+                        if (pts.size() >= 3) cfg.jogLoops.push_back(std::move(pts));
+                    }
+                    if (p.campus && std::getenv("RT_CAMPUS_DEBUG"))
+                        std::fprintf(stderr, "[campus place] %s role %d door (%.1f, %.1f) site (%.1f, %.1f) floor y %.2f beds %d\n",
+                                     lb.recipe.c_str(), p.campus, p.ex, p.ez, p.x, p.z, static_cast<double>(lb.baseY), p.capacity);
+                    // ONE BUSINESS PER SHOP UNIT (storefronts plan, stage 1): each shopfront of the ground storey is
+                    // its own place, of its trade's type and hours (trades.h), its door the entrance, its site a step
+                    // inside -- the trade the facade drew, the interior was furnished for, and the fascia wears. A shop
+                    // building with fronts is its shops; without, it stays one generic shop (the citysim deals it a
+                    // kind: retailKindFor).
+                    int fronts = 0;
+                    for (const engine::BuildingUnit& u : lb.units) {   // a Japanese tower's store and restaurant floors
+                        std::vector<engine::MallSign> boards;
+                        if (u.plan.size() < 3 || !engine::towerSignsOf(u.plan, u.params, boards)) continue;
+                        const uint32_t ts = static_cast<uint32_t>(std::lround(u.plan[0].x * 3.0)) * 73856093u ^
+                                            static_cast<uint32_t>(std::lround(u.plan[0].y * 3.0)) * 19349663u;
+                        const Vec2 door = u.doors.empty() ? centroid(u.plan) : u.doors.front().foot + u.doors.front().normal * 1.5;
+                        for (const engine::MallSign& b : boards) {
+                            engine::ShopSign sign;
+                            sign.text = b.sky ? engine::skyName(ts) : engine::anchorName(ts);
+                            sign.trade = b.sky ? 14 : 2;
+                            sign.n = Vec3(b.n.x, 0, b.n.y);
+                            if (b.vertical) {   // reads down the board
+                                sign.right = Vec3(0, -1, 0);
+                                sign.up = cross(sign.n, Vec3(0, 1, 0)) * -1.0;
+                                sign.width = (b.y1 - b.y0);
+                                sign.height = b.width - 0.2;
+                            } else {
+                                sign.up = Vec3(0, 1, 0);
+                                sign.right = cross(sign.n * -1.0, sign.up);
+                                sign.width = b.width - 0.4;
+                                sign.height = (b.y1 - b.y0) - 0.3;
+                            }
+                            sign.centre = Vec3(b.centre.x, u.baseY + 0.5 * (b.y0 + b.y1), b.centre.y);
+                            shopSigns.push_back(std::move(sign));
+                            // and the places they name: the store (a shop), the restaurant floors (a restaurant and a bar
+                            // each), all entered by the tower's own door
+                            const int n = b.sky ? 2 * u.params.dineFloors : 1;
+                            for (int k = 0; k < n; ++k) {
+                                engine::AuthoredPlace sp;
+                                sp.type = !b.sky ? "shop" : (k & 1) ? "bar" : "restaurant";
+                                sp.x = static_cast<float>(centroid(u.plan).x);
+                                sp.z = static_cast<float>(centroid(u.plan).y);
+                                sp.openHour = !b.sky ? 10.0f : (k & 1) ? 17.0f : 11.0f;
+                                sp.closeHour = !b.sky ? 20.0f : (k & 1) ? 1.0f : 23.0f;
+                                sp.hasEntrance = true;
+                                sp.ex = static_cast<float>(door.x);
+                                sp.ez = static_cast<float>(door.y);
+                                sp.name = b.sky ? engine::skyName(ts + 31u * static_cast<uint32_t>(k)) : sign.text;
+                                cfg.places.push_back(std::move(sp));
+                            }
+                        }
+                    }
+                    for (const engine::BuildingUnit& u : lb.units) {   // the American mall's: a board over every entrance and anchor
+                        std::vector<engine::MallSign> boards;
+                        if (u.plan.size() < 3 || !engine::mallSignsOf(u.plan, u.params, boards)) continue;
+                        const uint32_t ms = static_cast<uint32_t>(std::lround(u.params.mallCourt.x)) * 73856093u ^
+                                            static_cast<uint32_t>(std::lround(u.params.mallCourt.y)) * 19349663u;
+                        int ai = 0;
+                        for (const engine::MallSign& b : boards) {
+                            engine::ShopSign sign;
+                            sign.text = b.anchor ? engine::anchorName(ms + 977u * static_cast<uint32_t>(++ai)) : engine::mallName(ms);
+                            sign.trade = b.anchor ? 13 : 2;
+                            sign.n = Vec3(b.n.x, 0, b.n.y);
+                            sign.up = Vec3(0, 1, 0);
+                            sign.right = cross(sign.n * -1.0, sign.up);
+                            sign.width = b.width - 0.4;
+                            sign.height = (b.y1 - b.y0) - 0.3;
+                            sign.centre = Vec3(b.centre.x, u.baseY + 0.5 * (b.y0 + b.y1), b.centre.y);
+                            shopSigns.push_back(std::move(sign));
+                        }
+                    }
+                    for (const engine::BuildingUnit& u : lb.units) {   // an indoor mall's name over its doors
+                        Vec2 mc, mn;
+                        Real my0 = 0, my1 = 0, mw = 0;
+                        if (u.plan.size() < 3 || !engine::mallSignOf(u.plan, u.params, mc, mn, my0, my1, mw)) continue;
+                        engine::ShopSign sign;
+                        sign.text = engine::mallName(static_cast<uint32_t>(std::lround(mc.x)) * 73856093u ^
+                                                     static_cast<uint32_t>(std::lround(mc.y)) * 19349663u);
+                        sign.trade = 2;   // (its board colour: the boutique's)
+                        sign.n = Vec3(mn.x, 0, mn.y);
+                        sign.up = Vec3(0, 1, 0);
+                        sign.right = cross(sign.n * -1.0, sign.up);
+                        sign.width = mw - 0.4;
+                        sign.height = (my1 - my0) - 0.2;
+                        sign.centre = Vec3(mc.x + mn.x * 0.03, u.baseY + 0.5 * (my0 + my1), mc.y + mn.y * 0.03);
+                        shopSigns.push_back(std::move(sign));
+                    }
+                    for (const engine::BuildingUnit& u : lb.units) {
+                        if (u.plan.size() < 3) continue;
+                        for (const engine::ShopFront& sf : engine::shopFrontsOf(u.plan, u.params)) {
+                            const engine::TradeInfo* tr = engine::tradeById(sf.trade);
+                            if (!tr) continue;
+                            engine::AuthoredPlace sp;
+                            sp.type = tr->placeType;
+                            sp.x = static_cast<float>(sf.door.x - sf.n.x * 2.5);
+                            sp.z = static_cast<float>(sf.door.y - sf.n.y * 2.5);
+                            sp.openHour = tr->openHour;
+                            sp.closeHour = tr->closeHour;
+                            sp.hasEntrance = true;
+                            sp.ex = static_cast<float>(sf.door.x + sf.n.x * 1.5);
+                            sp.ez = static_cast<float>(sf.door.y + sf.n.y * 1.5);
+                            if (sf.indoor) {   // a mall's unit: in through the mall's own doors
+                                sp.ex = static_cast<float>(sf.entry.x);
+                                sp.ez = static_cast<float>(sf.entry.y);
+                            }
+                            ++tradePlaces[tr->name];
+                            // ITS NAME, and the board over its fascia that carries it (shop_signs.h)
+                            const uint32_t nameSeed = static_cast<uint32_t>(std::lround(sf.door.x * 4.0)) * 73856093u ^
+                                                      static_cast<uint32_t>(std::lround(sf.door.y * 4.0)) * 19349663u;
+                            sp.name = engine::shopName(sf.trade, nameSeed);
+                            if (sf.fasciaY1 > sf.fasciaY0 + 0.2) {
+                                const Vec2 d = normalize(sf.b - sf.a);
+                                const Vec2 x0 = sf.a + d * 0.25, x1 = sf.b - d * 0.25;
+                                engine::ShopSign sign;
+                                sign.text = sp.name;
+                                sign.trade = sf.trade;
+                                // NEON (stage 3): a bar's name in script, a club's in tube letters
+                                sign.style = sf.trade == 14 ? 1 : sf.trade == 15 ? 2 : 0;
+                                sign.neon = engine::neonColour(sf.trade, nameSeed);
+                                sign.n = Vec3(sf.n.x, 0, sf.n.y);
+                                sign.up = Vec3(0, 1, 0);
+                                sign.right = cross(sign.n * -1.0, sign.up);   // reads left to right from the street
+                                sign.width = (x1 - x0).length();
+                                sign.height = (sf.fasciaY1 - sf.fasciaY0) - 0.08;
+                                const Vec2 mid = (x0 + x1) * 0.5 + sf.n * (sf.fasciaProud + 0.03);
+                                sign.centre = Vec3(mid.x, u.baseY + 0.5 * (sf.fasciaY0 + sf.fasciaY1), mid.y);
+                                if (sign.width > 1.0) shopSigns.push_back(std::move(sign));
+                            }
+                            // THE OPEN SIGN (stage 3): in the window beside the door, under the fascia, a hand's
+                            // width behind the glass -- lit by the citysim while someone is on shift (not a club's: it
+                            // has its neon and a doorman)
+                            if (sf.trade != 15) {
+                                const Real L = (sf.b - sf.a).length();
+                                const Vec2 d = (sf.b - sf.a) * (1.0 / std::max(L, Real(1e-6)));
+                                const Real td = dot(sf.door - sf.a, d);
+                                // the middle of the wider pane: between the door's frame (~1 m off its centre)
+                                // and the unit's end pier
+                                const bool left = td > L - td;
+                                const Real lo = left ? 0.35 : td + 1.0, hi = left ? td - 1.0 : L - 0.35;
+                                const Real at = 0.5 * (lo + hi);
+                                if (hi - lo > engine::kOpenSignW + 0.3) {
+                                    const Vec2 c = sf.a + d * at - sf.n * 0.3;
+                                    const Real top = sf.fasciaY1 > sf.fasciaY0 + 0.2 ? sf.fasciaY0 : Real(2.6);
+                                    openSpots.push_back({Vec3(c.x, u.baseY + top - 0.45, c.y), sf.n,
+                                                         static_cast<int>(cfg.places.size())});
+                                }
+                            }
+                            cfg.places.push_back(std::move(sp));
+                            ++fronts;
+                        }
+                    }
+                    // ITS FLOOR AREA (the busy streets): every storey of every unit, the weight the citysim draws its
+                    // residents or its staff by -- less the shop fronts, which are places of their own
+                    {
+                        double m2 = 0;
+                        for (const engine::BuildingUnit& u : lb.units)
+                            if (u.plan.size() >= 3) m2 += engine::area(u.plan) * (1.0 + std::max(0, u.params.floors));
+                        p.floorArea = static_cast<float>(std::max(0.0, m2 - 60.0 * fronts));
+                    }
+                    if (!(fronts > 0 && lb.type == "shop")) cfg.places.push_back(std::move(p));
                 }
 
                 // One tree (bark + leaf entities) planted at a world spot —
@@ -5931,7 +6945,17 @@ bool LevelLoader::load(const std::string& path,
                     Vec3 tPos(px, 0, pz);
                     tPos.y = dressingGround ? dressingGround(tPos.x, tPos.z)
                                             : (entityGround ? entityGround(tPos.x, tPos.z) : 0.0);
+                    if (!lotRecipeKits.empty()) {   // (a recipe tree: an instance in its cell's group)
+                        const std::size_t ki = th % lotRecipeKits.size();
+                        const double h = lotRecipeKits[ki].height;
+                        if (lotRoad.blocksTree(tPos.x, tPos.z, tPos.y, h * scale, 0.3 * h * scale)) { ++lotTreesOnRoad; return; }
+                        lotRecipeCells[{static_cast<int>(std::floor(tPos.x / 280.0)), static_cast<int>(std::floor(tPos.z / 280.0))}][ki].push_back(
+                            Mat4::trs(tPos, Quat::fromAxisAngle(Vec3(0, 1, 0), (th % 628u) / 100.0), Vec3(scale, scale, scale)));
+                        return;
+                    }
                     const TreeKit& kit = treeKit(th % 3u);
+                    // ...and never up through what is drawn over it (a track, a viaduct): see the street trees
+                    if (lotRoad.blocksTree(tPos.x, tPos.z, tPos.y, kit.height * scale, 0.3 * kit.height * scale)) { ++lotTreesOnRoad; return; }
                     Transform tt;
                     tt.position = tPos;
                     tt.scale = Vec3(scale, scale, scale);
@@ -5969,7 +6993,7 @@ bool LevelLoader::load(const std::string& path,
                         plantTreeAt(s.x, s.z, s.y, th >> 8);
                     }
                 }
-                if (lb.type == "park" || lb.type == "green") {
+                if (lb.type == "park" || lb.type == "green" || lb.type == "depot") {
                     // The lot's GROUND is the terrain (device: "remove the
                     // green pads ... make sure they adhere to the ground").
                     // Sculpted parks still carry a padMesh — but it holds only
@@ -6015,7 +7039,8 @@ bool LevelLoader::load(const std::string& path,
                     const double padArea = lb.pad.empty()
                         ? static_cast<double>(lb.width * lb.depth)
                         : engine::area(lb.pad);
-                    const int nTrees = lb.type == "park"
+                    const int nTrees = lb.type == "depot" || lb.recipe == "playground" || lb.recipe == "community_garden" ? 0
+                        : lb.type == "park"
                         ? std::max(3, std::min(14, static_cast<int>(padArea / 60.0)))
                         : std::max(1, std::min(4, static_cast<int>(padArea / 140.0)));
                     for (int ti = 0; lb.treeSpots.empty() && ti < nTrees; ++ti) {
@@ -6066,10 +7091,144 @@ bool LevelLoader::load(const std::string& path,
                     }
                 }
             }
+            {   // (the recipe lot trees: a group a cell, a kit and a level part)
+                std::size_t planted = 0, groups = 0;
+                for (auto& [cell, byKit] : lotRecipeCells)
+                    for (auto& [ki, xf] : byKit) {
+                        planted += xf.size();
+                        for (const RecipeTreePart& pt : lotRecipeKits[ki].parts) {
+                            InstanceGroup g;
+                            g.mesh = pt.mesh;
+                            g.material = pt.mat;
+                            g.transforms = xf;
+                            g.drawDistance = pt.drawM;
+                            g.minDistance = pt.minM;
+                            g.drawClass = engine::DrawClass::Scenery;
+                            g.renderLayer = engine::LayerFoliage;
+                            Vec3 cen(0, 0, 0);
+                            for (const Mat4& m : xf) cen = cen + Vec3(m.m[0][3], m.m[1][3], m.m[2][3]);
+                            cen = cen / static_cast<Real>(xf.size());
+                            Real spread = 0;
+                            for (const Mat4& m : xf) spread = std::max(spread, (Vec3(m.m[0][3], m.m[1][3], m.m[2][3]) - cen).length());
+                            g.boundsCenter = cen;
+                            g.boundsRadius = spread + lotRecipeKits[ki].height * 1.3;
+                            world.add<InstanceGroup>(world.create(), g);
+                            ++groups;
+                        }
+                    }
+                if (planted) LOG_INFO << "[trees] lot trees as recipe trees: " << planted << " in " << groups << " groups";
+            }
             LOG_INFO << "[trees] scatter: " << treesOnPad << " on pad, "
                      << treesOffPad << " skipped (not placeable on their pad), "
                      << treesNoPad << " planted with no pad to test, "
                      << lotTreesOnRoad << " kept off the drawn road";
+            if (depotYards) LOG_INFO << "[citylots] " << depotYards << " bus depots, " << depotBays << " bus bays";
+            if (surfaceLots) LOG_INFO << "[citylots] " << surfaceLots << " parking lots, " << surfaceStalls << " stalls for the drivers";
+            if (!tradePlaces.empty()) {
+                std::string line;
+                int all = 0;
+                for (const auto& kv : tradePlaces) { line += " " + kv.first + " " + std::to_string(kv.second); all += kv.second; }
+                LOG_INFO << "[citylots] " << all << " shop units are places of their trade:" << line;
+            }
+            // THE SHOP SIGNS (storefronts stage 2): each business's name on its fascia, lettered into atlas pages
+            // and merged per 200 m cell, like the street-name blades
+            if (const engine::Font* font = engine::signFont(); font && !shopSigns.empty()) {
+                // two sets: the lettered boards (the page is its own emissive map) and the NEON (stage 3: its own
+                // glow pages, the tubes and their halo, much brighter)
+                std::vector<engine::ShopSign> boardSigns, neonSigns;
+                for (engine::ShopSign& sg : shopSigns)
+                    ((sg.style != 0 && engine::neonFont()) ? neonSigns : boardSigns).push_back(sg);
+                int cellNo = 0;
+                auto place = [&](const std::vector<engine::ShopSign>& set, const engine::Font& face, const engine::Font* tube,
+                                 double glow) {
+                    if (set.empty()) return engine::ShopSignAtlas{};
+                    engine::ShopSignAtlas atlas = engine::buildShopSignAtlas(face, set, 2048, tube);
+                    const engine::ShopSignMeshes sm = engine::buildShopSignMeshes(set, atlas);
+                    std::vector<TextureHandle> pages, glows;
+                    for (const engine::TextImage& pg : atlas.pages)
+                        pages.push_back(renderer.uploadTexture(pg.w, pg.h, 4, pg.rgba.data()));
+                    for (const engine::TextImage& pg : atlas.glow)
+                        glows.push_back(renderer.uploadTexture(pg.w, pg.h, 4, pg.rgba.data()));
+                    for (const engine::ShopSignMeshes::Cell& c : sm.cells) {
+                        if (c.mesh.vertices.empty()) continue;
+                        InstanceGroup g;
+                        g.mesh = assets.acquireMesh(c.mesh, "city:shopsigns:" + std::to_string(cellNo++));
+                        g.material.albedo = Vec3(1, 1, 1);
+                        g.material.roughness = 0.6f;
+                        g.material.albedoMap = pages[static_cast<std::size_t>(c.page)];
+                        // LIT AT NIGHT (stage 3): the lettering glows in its trade's colour and the dark board hardly
+                        // at all; NightGlow ramps it in through dusk
+                        g.material.emissiveMap = glows.empty() ? pages[static_cast<std::size_t>(c.page)]
+                                                               : glows[static_cast<std::size_t>(c.page)];
+                        g.material.flags |= RenderMaterial::FLAG_TWO_SIDED;
+                        g.transforms.push_back(Mat4());
+                        g.boundsCenter = c.centre;
+                        g.boundsRadius = c.radius + 1.0;
+                        g.drawDistance = glows.empty() ? 220.0 : 320.0;   // (neon carries down a street at night)
+                        g.drawClass = engine::DrawClass::Furniture;
+                        const Entity signs = world.create();
+                        world.add<InstanceGroup>(signs, g);
+                        world.add<engine::NightGlow>(signs, engine::NightGlow{Vec3(1.0, 1.0, 1.0) * glow});
+                    }
+                    return atlas;
+                };
+                const engine::ShopSignAtlas atlas = place(boardSigns, *font, nullptr, 1.1);   // (2.2 washed the colours to white)
+                const engine::ShopSignAtlas neon = neonSigns.empty() ? engine::ShopSignAtlas{}
+                                                                     : place(neonSigns, *engine::neonFont(), engine::tubeFont(), 2.4);
+                LOG_INFO << "[signs] neon: " << neonSigns.size() << " signs on " << neon.pages.size() << " page(s); smallest capitals "
+                         << neon.smallestCapPx << " px";
+                if (std::getenv("RT_SIGN_DEBUG"))
+                    for (std::size_t k = 0; k < shopSigns.size(); k += std::max<std::size_t>(1, shopSigns.size() / 12))
+                        std::fprintf(stderr, "[sign] \"%s\" centre %.1f %.1f %.1f n %.2f %.2f w %.1f h %.2f\n", shopSigns[k].text.c_str(),
+                                     shopSigns[k].centre.x, shopSigns[k].centre.y, shopSigns[k].centre.z, shopSigns[k].n.x, shopSigns[k].n.z,
+                                     shopSigns[k].width, shopSigns[k].height);
+                LOG_INFO << "[signs] " << shopSigns.size() << " shop signs on " << atlas.pages.size()
+                         << " atlas page(s), " << cellNo << " cells; smallest capitals " << atlas.smallestCapPx << " px";
+            }
+            // THE OPEN SIGNS (stage 3): one sign mesh, two groups per 200 m cell -- lit and dark -- and the citysim
+            // deals the signs between them by who is on shift (engine::OpenSigns)
+            if (const engine::Font* tube = engine::tubeFont(); tube && !openSpots.empty()) {
+                engine::TextImage day, lit;
+                engine::openSignImages(*tube, day, lit);
+                const TextureHandle dayTex = renderer.uploadTexture(day.w, day.h, 4, day.rgba.data());
+                const TextureHandle litTex = renderer.uploadTexture(lit.w, lit.h, 4, lit.rgba.data());
+                const MeshHandle mesh = assets.acquireMesh(engine::openSignMesh(), "city:opensign");
+                std::map<std::pair<int, int>, std::vector<std::size_t>> cells;
+                for (std::size_t k = 0; k < openSpots.size(); ++k)
+                    cells[{static_cast<int>(std::floor(openSpots[k].at.x / 200.0)), static_cast<int>(std::floor(openSpots[k].at.z / 200.0))}].push_back(k);
+                for (const auto& [key, idx] : cells) {
+                    InstanceGroup g;
+                    g.mesh = mesh;
+                    g.material.albedo = Vec3(1, 1, 1);
+                    g.material.roughness = 0.3f;
+                    g.material.albedoMap = dayTex;
+                    g.material.emissiveMap = litTex;
+                    g.material.flags |= RenderMaterial::FLAG_TWO_SIDED | RenderMaterial::FLAG_ALPHA_TEST;
+                    g.boundsCenter = Vec3((key.first + 0.5) * 200.0, 0, (key.second + 0.5) * 200.0);
+                    Real lo = 1e30, hi = -1e30;
+                    for (std::size_t k : idx) { lo = std::min(lo, openSpots[k].at.y); hi = std::max(hi, openSpots[k].at.y); }
+                    g.boundsCenter.y = 0.5 * (lo + hi);
+                    g.boundsRadius = 150.0 + 0.5 * (hi - lo);
+                    g.drawDistance = 140.0;
+                    g.drawClass = engine::DrawClass::Furniture;
+                    engine::OpenSigns os;
+                    for (std::size_t k : idx) {
+                        const OpenSpot& sp = openSpots[k];
+                        os.at.push_back(Mat4::translate(sp.at.x, sp.at.y, sp.at.z) * Mat4::rotateY(std::atan2(sp.n.x, sp.n.y)));
+                        os.place.push_back(sp.place);
+                    }
+                    os.lit.assign(idx.size(), 0xFF);
+                    InstanceGroup dark = g;
+                    dark.transforms = os.at;   // dark until the citysim says otherwise
+                    g.material.emission = Vec3(1.0, 1.0, 1.0) * 2.2;   // (a lit sign: bright by day too)
+                    os.dark = world.create();
+                    world.add<InstanceGroup>(os.dark, dark);
+                    const Entity litE = world.create();
+                    world.add<InstanceGroup>(litE, g);
+                    world.add<engine::OpenSigns>(litE, std::move(os));
+                }
+                LOG_INFO << "[signs] " << openSpots.size() << " OPEN signs in " << cells.size() << " cells";
+            }
             if (!buildingsMc.indices.empty()) {
                 // Jolt mesh triangles are SINGLE-SIDED, and the grown plans
                 // arrive with mixed winding (offset/prow/courtyard plans flip
@@ -6122,6 +7281,28 @@ bool LevelLoader::load(const std::string& path,
                 world.add<engine::CityBuildings>(world.create(),
                                                 std::move(cityB));
             }
+            // NO HOLES WHILE A CELL STREAMS (the city's next ten #10; every aerial shot after a jump or a fast flight
+            // showed empty blocks): a cell's mass-box proxy draws only past facadeDistance, so while its facade and
+            // detail tiers were still streaming in nothing at all stood there. The tiers' commit and unload keep a
+            // count per cell; with none resident the proxy draws at every distance, and goes back to the far ring the
+            // moment a tier lands.
+            struct CellCover {
+                std::map<std::pair<int, int>, int> resident;
+                std::map<std::pair<int, int>, std::vector<Entity>> proxies;
+                double farFrom = 0;   // the proxies' minDistance when a tier is resident
+            };
+            auto cellCover = std::make_shared<CellCover>();
+            static const bool noStandIn = std::getenv("RT_NO_STANDIN") != nullptr;   // A/B: the proxies' old far-only rule
+            auto setCover = [cellCover, wpc = &world](std::pair<int, int> key, int delta) {
+                if (noStandIn) return;
+                int& n = cellCover->resident[key];
+                const bool was = n > 0;
+                n = std::max(0, n + delta);
+                if (was == (n > 0)) return;
+                for (Entity e : cellCover->proxies[key])
+                    if (wpc->alive(e))
+                        if (Renderable* r = wpc->get<Renderable>(e)) r->minDistance = n > 0 ? cellCover->farFrom : 0.0;
+            };
             // One entity per non-empty part class, with the shape-grammar's OWN
             // material recipes: materialFor(PartId) names the procedural surface
             // (brick/concrete/stucco/metal), which gets world-scaled UVs + the
@@ -6379,9 +7560,11 @@ bool LevelLoader::load(const std::string& path,
                             }
                             return out;
                         };
-                        it.commit = [commitChunk, assetsP, ents, minD, maxD, scale](std::shared_ptr<void> payload) -> std::size_t {
+                        const std::pair<int, int> coverKey{cx, cz};
+                        it.commit = [commitChunk, assetsP, ents, minD, maxD, scale, setCover, coverKey](std::shared_ptr<void> payload) -> std::size_t {
                             auto* p = static_cast<Prepared*>(payload.get());
                             if (!p) return 0;
+                            setCover(coverKey, +1);
                             std::size_t bytes = 0;
                             for (Chunk& c : p->chunks) {
                                 bytes += c.mesh.vertexCount * 56 + c.mesh.indexCount * 4;
@@ -6392,7 +7575,8 @@ bool LevelLoader::load(const std::string& path,
                         };
                         World* wp = &world;
                         AssetManager* ap = &assets;
-                        it.unload = [ents, wp, ap]() {
+                        it.unload = [ents, wp, ap, setCover, coverKey]() {
+                            setCover(coverKey, -1);
                             for (Entity e : *ents) {
                                 if (!wp->alive(e)) continue;
                                 if (const Renderable* r = wp->get<Renderable>(e)) ap->releaseMesh(r->mesh);
@@ -6512,7 +7696,11 @@ bool LevelLoader::load(const std::string& path,
                     r.material.roughness = glass ? 0.8f : 0.9f;
                     r.material.metallic = 0.0f;
                     r.material.emissiveMap = litWindows;
-                    r.minDistance = dd;
+                    // past the facade ring -- or anywhere, while the cell's tiers are still streaming (CellCover)
+                    const std::pair<int, int> ck{std::get<0>(key), std::get<1>(key)};
+                    const bool streamed = grown.bundle && !grown.cellParts.empty() && !(std::getenv("RT_STREAM_BUILDINGS") && std::getenv("RT_STREAM_BUILDINGS")[0] == '0');
+                    cellCover->farFrom = dd;
+                    r.minDistance = !streamed || noStandIn || cellCover->resident[ck] > 0 ? dd : 0.0;
                     r.lodCell = cell;   // swaps with the cell's facades (render_system lockstep)
                     r.mesh = assets.acquireMesh(pmesh, "");
                     Entity e = world.create();
@@ -6520,6 +7708,7 @@ bool LevelLoader::load(const std::string& path,
                     world.add<Transform>(e, t);
                     world.add<PrevTransform>(e, PrevTransform{t});
                     world.add<Renderable>(e, r);
+                    if (streamed) cellCover->proxies[ck].push_back(e);
                     // 0.4, not the panes' 1.3: mipmapping has already averaged the grid to a
                     // third, and at the night exposure a box glowing evenly at 1.3 read as a
                     // pale slab — the far city should be a soft, tinted glow, not lit boxes.
@@ -6531,6 +7720,12 @@ bool LevelLoader::load(const std::string& path,
                     ng.dayAlbedo = r.material.albedo;
                     world.add<engine::NightGlow>(e, ng);
                 }
+            }
+            {
+                int cells = 0, near0 = 0;
+                for (const auto& [k, es] : cellCover->proxies) { ++cells; if (cellCover->resident[k] == 0) ++near0; }
+                LOG_INFO << "[lots] stand-ins: " << cells << " cells' proxies follow their tiers' residency (" << near0
+                         << " drawing at every distance until a tier lands)";
             }
             lotStage("hlod proxies");
             // Publish the plan (blocks + lots + collider prisms) for the
@@ -6611,6 +7806,7 @@ bool LevelLoader::load(const std::string& path,
             furnGround = [g = entityGround](Real x, Real z) { return g(x, z); };
         else if (levelGround)
             furnGround = [g = levelGround](Real x, Real z) { return g(x, z); };
+        const std::function<Real(Real, Real)> carvedGround = furnGround;
         // ...and on the DECK where there is one: the carved sampler sits 0.22 m
         // under the drawn asphalt (road_net.cpp, "Carve a step BELOW"), and a
         // pole planted there stood with its foot inside the sidewalk band. The
@@ -6635,6 +7831,26 @@ bool LevelLoader::load(const std::string& path,
                 };
             }
         }
+        // ...and ON WHAT WAS DRAWN. Deck + curb is a rule about the sidewalk band, not the band itself: on the lanes
+        // cities the sidewalk was drawn up to 0.9 m below it, and past the drawn pavement (no sidewalk there) it
+        // stood street trees 0.38 m over the grass (scenery_is_planted_on_the_ground, 2026-10-14: ~450 trees). So a
+        // foot stands on the drawn road's top under it -- the highest no more than a metre over the rule's answer,
+        // so a street under a viaduct keeps its own pavement -- and where nothing was drawn, on the drawn terrain.
+        std::shared_ptr<const engine::DrawnRoad> drawnRoads;   // (with heights: the street trees look up, below)
+        if (furnGround && carvedGround) {
+            auto drawn = std::make_shared<const engine::DrawnRoad>(engine::gatherDrawnRoad(world, /*withHeights=*/true));
+            drawnRoads = drawn;
+            if (!drawn->empty()) {
+                std::function<Real(Real, Real)> terrain = cdlodDrawnGround(world);
+                if (!terrain) terrain = carvedGround;
+                auto rule = furnGround;
+                furnGround = [rule, terrain, drawn](Real x, Real z) {
+                    double top = 0;
+                    if (drawn->topAt(x, z, &top, rule(x, z) + 1.0)) return static_cast<Real>(top);
+                    return terrain(x, z);
+                };
+            }
+        }
         if (!combined.edges.empty()) {
             const engine::NavGraph nav = engine::buildNavGraph(combined);
             const engine::StreetFurniturePlan fplan =
@@ -6652,7 +7868,83 @@ bool LevelLoader::load(const std::string& path,
                     world.each<engine::RoadDeck>([&](Entity, engine::RoadDeck& d) {
                         if (!fp.deck && !d.field.spines.empty()) fp.deck = &d.field;
                     });
-                    return engine::planStreetFurniture(nav, furnGround, fp);
+                    // ...and the kerb line round all of it, junction corners included (a lane city's)
+                    world.each<engine::RoadBandDebug>([&](Entity, engine::RoadBandDebug& b) {
+                        if (!fp.kerbLoops && !b.loops.empty()) fp.kerbLoops = &b.loops;
+                    });
+                    fp.kerbLife = !std::getenv("RT_NO_KERB_LIFE");   // A/B: lamps and signals only
+                    // EACH STREET ITS OWN PLANTING (RT_ONE_PLANTING=1: the three broadleaves everywhere, as before): its
+                    // character from the lots round it (district, height), its ground (the hills are where the money
+                    // lives; low ground by the sea gets palms), and how far it is from its town's centre (the old core
+                    // against the new estates at the edge)
+                    std::vector<engine::Vec2> hubAt;
+                    if (root.contains("citysim") && root["citysim"].contains("districts") && root["citysim"]["districts"].contains("hubs"))
+                        for (const auto& hb : root["citysim"]["districts"]["hubs"])
+                            if (hb.contains("at") && hb["at"].size() >= 2) hubAt.push_back(engine::Vec2(hb["at"][0].get<double>(), hb["at"][1].get<double>()));
+                    if (!charCells->empty() && !std::getenv("RT_ONE_PLANTING")) {
+                        auto cells = charCells;
+                        auto ground = furnGround;
+                        auto lattice = [](long long x, long long z, uint32_t salt) {
+                            uint64_t k = static_cast<uint64_t>(x) * 0x9E3779B97F4A7C15ull ^ static_cast<uint64_t>(z) * 0xC2B2AE3D27D4EB4Full ^ salt;
+                            k ^= k >> 31; k *= 0xBF58476D1CE4E5B9ull; k ^= k >> 29;
+                            return (k & 0xFFFFFF) / static_cast<double>(0x1000000);
+                        };
+                        auto noise = [lattice](double x, double z, double cell, uint32_t salt) {   // value noise, smooth
+                            const double fx = x / cell, fz = z / cell;
+                            const long long ix = static_cast<long long>(std::floor(fx)), iz = static_cast<long long>(std::floor(fz));
+                            double tx = fx - ix, tz = fz - iz;
+                            tx = tx * tx * (3 - 2 * tx); tz = tz * tz * (3 - 2 * tz);
+                            const double a = lattice(ix, iz, salt), b = lattice(ix + 1, iz, salt), c = lattice(ix, iz + 1, salt), d = lattice(ix + 1, iz + 1, salt);
+                            return (a + (b - a) * tx) + ((c + (d - c) * tx) - (a + (b - a) * tx)) * tz;
+                        };
+                        fp.character = [cells, ground, hubAt, noise](engine::Vec2 at) {
+                            engine::StreetCharacter c;
+                            const long long cx = static_cast<long long>(std::floor(at.x / 80.0)), cz = static_cast<long long>(std::floor(at.y / 80.0));
+                            int votes[5] = {0, 0, 0, 0, 0}, n = 0;
+                            double storeys = 0;
+                            for (long long dz = -1; dz <= 1; ++dz)
+                                for (long long dx = -1; dx <= 1; ++dx) {
+                                    auto it = cells->find(((cx + dx) << 32) ^ ((cz + dz) & 0xffffffffLL));
+                                    if (it == cells->end()) continue;
+                                    for (int k = 0; k < 5; ++k) votes[k] += it->second.votes[k];
+                                    storeys += it->second.storeys;
+                                    n += it->second.n;
+                                }
+                            const double h = ground ? static_cast<double>(ground(at.x, at.y)) : 20.0;
+                            double dHub = 1e9;
+                            for (const engine::Vec2& hb : hubAt) dHub = std::min(dHub, static_cast<double>((hb - at).length()));
+                            auto smooth = [](double a, double b, double x) { const double t = std::clamp((x - a) / (b - a), 0.0, 1.0); return t * t * (3 - 2 * t); };
+                            c.coastal = h < 5.0;
+                            c.wealth = std::clamp(0.38 + 0.4 * smooth(8.0, 70.0, h) + 0.7 * (noise(at.x, at.y, 650.0, 17u) - 0.5), 0.0, 1.0);
+                            c.age = std::clamp(1.0 - smooth(250.0, 1900.0, dHub) + 0.4 * (noise(at.x, at.y, 500.0, 91u) - 0.5), 0.0, 1.0);
+                            if (n == 0) { c.kind = engine::StreetCharacter::Rural; return c; }
+                            const double avg = storeys / n;
+                            int best = 2;
+                            for (int k = 0; k < 5; ++k) if (votes[k] > votes[best]) best = k;
+                            if (avg >= 7.0 || (best == 0 && avg >= 4.0)) c.kind = engine::StreetCharacter::Downtown;
+                            else if (best == 1) c.kind = engine::StreetCharacter::Commercial;
+                            else if (best == 3) c.kind = engine::StreetCharacter::OldTown;
+                            else if (best == 4) c.kind = engine::StreetCharacter::Industrial;
+                            else c.kind = engine::StreetCharacter::Residential;
+                            return c;
+                        };
+                    }
+                    engine::StreetFurniturePlan planned = engine::planStreetFurniture(nav, furnGround, fp);
+                    // A STREET TREE GROWS CLEAR OF WHAT IS DRAWN OVER IT (Glenn, 2026-10-15: "a tree going through the
+                    // elevated train deck"): the planter keeps a trunk off the carriageway, but a 15 m palm on the
+                    // sidewalk under a track or a viaduct grew up through the deck. A pit with anything drawn over its
+                    // canopy (0.3 of the tree's height round the trunk, half a metre over the pavement to its top)
+                    // stays empty.
+                    if (drawnRoads && !drawnRoads->empty()) {
+                        const std::size_t before = planned.trees.size();
+                        planned.trees.erase(std::remove_if(planned.trees.begin(), planned.trees.end(), [&](const engine::StreetTree& st) {
+                            const double h = streetTreeHeight(st.species) * st.scale;
+                            return drawnRoads->blocksTree(st.base.x, st.base.z, st.base.y, h, 0.3 * h);
+                        }), planned.trees.end());
+                        if (planned.trees.size() != before)
+                            LOG_INFO << "[furniture] " << (before - planned.trees.size()) << " street trees left out under decks and tracks";
+                    }
+                    return planned;
                 }();
             if (!fplan.unpoledApproaches.empty()) {
                 std::string at;
@@ -6665,8 +7957,28 @@ bool LevelLoader::load(const std::string& path,
             engine::StreetFurniture sf;
             sf.navLinkCount = nav.linkCount();
             sf.lampHeads = fplan.lampHeads;
-            for (const engine::SignalSpot& s : fplan.signals)
-                sf.signalPoles.push_back({s.base, s.face, s.link});
+            for (const engine::StreetTree& st : fplan.trees) sf.streetTrees.push_back(st.base);
+            // ONE POLE PER APPROACH: a signalled link whose pole would stand within 2.5 m of one already placed,
+            // facing the same way (two links on one approach), shares that pole -- it planted its own a metre or
+            // two off, two heads staggered over each other (Glenn: "the stoplights are doubled up"; 9 on the
+            // island). Its lens then lights on the shared head; only one post is drawn.
+            std::vector<char> sharedPole;
+            for (const engine::SignalSpot& s : fplan.signals) {
+                engine::StreetFurniture::Signal sig{s.base, s.face, s.link, false};
+                bool shared = false;
+                for (const auto& o : sf.signalPoles) {
+                    const Vec3 d = o.base - s.base;
+                    if (d.x * d.x + d.z * d.z < 2.5 * 2.5 && o.face.x * s.face.x + o.face.z * s.face.z > 0.94) {
+                        sig.base = o.base;
+                        sig.face = o.face;
+                        shared = true;
+                        break;
+                    }
+                }
+                sig.shared = shared;
+                sf.signalPoles.push_back(sig);
+                sharedPole.push_back(shared ? 1 : 0);
+            }
             {
                 const double hubRadius =
                     root.contains("citysim") && root["citysim"].is_object()
@@ -6712,7 +8024,9 @@ bool LevelLoader::load(const std::string& path,
                                             "city:signalpost");
                 g.material.albedo = Vec3(1, 1, 1);   // colour rides the verts
                 g.material.roughness = 0.6f;
-                for (const auto& s : sf.signalPoles) {
+                for (std::size_t si = 0; si < sf.signalPoles.size(); ++si) {
+                    if (sharedPole[si]) continue;   // its pole is an earlier one's
+                    const auto& s = sf.signalPoles[si];
                     const Real yaw = std::atan2(s.face.x, s.face.z);
                     g.transforms.push_back(Mat4::trs(
                         s.base, Quat::fromAxisAngle(Vec3(0, 1, 0), yaw),
@@ -6857,8 +8171,260 @@ bool LevelLoader::load(const std::string& path,
                 }
                 world.add<engine::StreetDirectory>(world.create(), std::move(dir));
             }
+            // KERB LIFE (the city's next ten #3): street trees in their pits, litter bins, bike racks, news boxes --
+            // instanced in 280 m cells like the lamps. The trees are the lot pass's street-tree kit (growTree, three
+            // varieties), bark and leaves as two groups a cell.
+            if (!fplan.trees.empty() || !fplan.props.empty()) {
+                const Real cellSz = 280.0;
+                auto cellOf = [&](const Vec3& b) { return std::make_pair((int)std::floor(b.x / cellSz), (int)std::floor(b.z / cellSz)); };
+                const double kerbDist = root.contains("citysim") ? root["citysim"].value("kerbLifeDistance", 450.0) : 450.0;   // (700 m: +4.6 M triangles downtown, ~1 ms)
+                // THE STREET TREES' KINDS (real_tree.h): each street species (StreetSpecies) at its own street height,
+                // two models a kind, built only for the kinds some street planted -- the forest's broadleaves and the
+                // island's palms, monkeypods, flame trees, jacarandas and plumerias
+                struct StreetTreeKit { MeshHandle bark, leaves; RenderMaterial barkMat, leafMat; };
+                constexpr int kVariants = 2;
+                const int kKinds = static_cast<int>(engine::StreetSpecies::Count);
+                std::vector<StreetTreeKit> kits(static_cast<std::size_t>(kKinds * kVariants));
+                std::vector<char> used(static_cast<std::size_t>(kKinds), 0);
+                for (const engine::StreetTree& st : fplan.trees) used[static_cast<std::size_t>(st.species) % used.size()] = 1;
+                auto streetHeight = streetTreeHeight;
+                // RECIPE STREET TREES (RT_STREET_RECIPES=1; Glenn, 2026-10-18: "everything needs to be in proportion" --
+                // the city's street trees as the island's forests grow, ADR-0196..0199): the kinds a recipe grows, at a
+                // street age (an oak or a beech young, ~10 m: three storeys), at their levels, banded out to the kerb's
+                // draw distance and kept in the tree cache; the kinds with none (the island's palms and flowering trees)
+                // stay real_tree.h's
+                const bool streetRecipes = cityRecipeTrees(root);
+                static const std::map<std::string, std::pair<std::string, std::string>> kStreetRecipe = {
+                    {"oak", {"oak", "young"}}, {"beech", {"beech", "young"}}, {"maple", {"maple", ""}},
+                    {"coconut_palm", {"coconut_palm", ""}}, {"royal_palm", {"royal_palm", ""}}};
+                std::vector<std::vector<RecipeTreePart>> recipeKits(kits.size());
+                std::vector<double> recipeTall(kits.size(), 0.0);
+                for (int kd = 0; kd < kKinds; ++kd) {
+                    if (!used[static_cast<std::size_t>(kd)]) continue;
+                    const engine::StreetSpecies ss = static_cast<engine::StreetSpecies>(kd);
+#ifdef RT_ENABLE_SCRIPTING
+                    if (streetRecipes) {
+                        const auto mt = kStreetRecipe.find(engine::streetSpeciesName(ss));
+                        const uint32_t texSeed = 0x57EE7u + static_cast<uint32_t>(kd) * 7919u;
+                        std::vector<uint32_t> seeds;
+                        for (int vr = 0; vr < kVariants; ++vr) seeds.push_back(texSeed + static_cast<uint32_t>(vr) * 104729u);
+                        bool hit = false;
+                        std::vector<CityRecipeKit> rk;
+                        if (mt != kStreetRecipe.end())
+                            rk = cityRecipeKits(mt->second.first, mt->second.second, seeds,
+                                                std::string("streetTree:recipe:") + engine::streetSpeciesName(ss), kerbDist, renderer, assets, &hit);
+                        if (!rk.empty()) {
+                            for (int vr = 0; vr < kVariants; ++vr) {
+                                const std::size_t ki = static_cast<std::size_t>(kd * kVariants + vr);
+                                recipeKits[ki] = rk[static_cast<std::size_t>(vr)].parts;
+                                recipeTall[ki] = rk[static_cast<std::size_t>(vr)].height;
+                            }
+                            LOG_INFO << "[furniture] street " << engine::streetSpeciesName(ss) << ": the " << mt->second.first << " recipe"
+                                     << (mt->second.second.empty() ? "" : " (" + mt->second.second + ")") << (hit ? ", from the tree cache" : ", grown");
+                            continue;
+                        }
+                    }
+#endif
+                    engine::RealSpecies rs = engine::RealSpecies::Maple;
+                    if (!engine::realSpeciesFromName(engine::streetSpeciesName(ss), rs))
+                        LOG_WARN << "[furniture] no tree model for street species " << engine::streetSpeciesName(ss) << ": a maple stands in";
+                    // (the first three keep the seeds they were planted with)
+                    const uint32_t texSeed = kd < 3 ? 0x57EE7u + kd * 977u : 0x57EE7u + kd * 7919u;
+                    const TextureData fol = engine::realFoliageTexture(rs, 512, texSeed);
+                    const TextureHandle folTex = renderer.uploadTexture(fol.width, fol.height, fol.channels, fol.pixels.data());
+                    for (int vr = 0; vr < kVariants; ++vr) {
+                        const uint32_t seed = texSeed + static_cast<uint32_t>(vr) * 104729u;
+                        const engine::RealTree rt = engine::realTree(rs, seed, streetHeight(ss));
+                        StreetTreeKit& k = kits[static_cast<std::size_t>(kd * kVariants + vr)];
+                        const std::string nm = std::string("streetTree:") + engine::streetSpeciesName(ss) + ":" + std::to_string(vr);
+                        k.bark = assets.acquireMesh(rt.bark, nm + ":bark");
+                        k.leaves = assets.acquireMesh(rt.foliage, nm + ":leaves");
+                        k.barkMat.albedo = Vec3(1, 1, 1);
+                        k.barkMat.roughness = 0.92f;
+                        k.leafMat = k.barkMat;
+                        k.leafMat.roughness = 0.85f;
+                        k.leafMat.flags |= RenderMaterial::FLAG_ALPHA_TEST | RenderMaterial::FLAG_TWO_SIDED | RenderMaterial::FLAG_WIND;
+                        k.leafMat.albedoMap = folTex;
+                    }
+                }
+                std::map<std::pair<int, int>, std::map<int, std::vector<Mat4>>> treeCells;
+                std::map<std::pair<int, int>, std::vector<Mat4>> pitCells;
+                int bySpecies[16] = {0};
+                for (const engine::StreetTree& st : fplan.trees) {
+                    const Real yaw = std::fmod(st.base.x * 1.7 + st.base.z * 2.3, 6.2831853);
+                    const int kd = static_cast<int>(st.species) % kKinds;
+                    ++bySpecies[kd];
+                    treeCells[cellOf(st.base)][kd * kVariants + static_cast<int>(st.variety % kVariants)].push_back(
+                        Mat4::trs(st.base, Quat::fromAxisAngle(Vec3(0, 1, 0), yaw), Vec3(st.scale, st.scale, st.scale)));
+                    pitCells[cellOf(st.base)].push_back(Mat4::translate(st.base.x, st.base.y, st.base.z));
+                }
+                for (auto& [key, byKit] : treeCells)
+                    for (auto& [ki, xf] : byKit) {
+                        if (!recipeKits[static_cast<std::size_t>(ki)].empty()) {   // (a recipe kind: a group a level part)
+                            for (const RecipeTreePart& pt : recipeKits[static_cast<std::size_t>(ki)]) {
+                                InstanceGroup g;
+                                g.mesh = pt.mesh;
+                                g.material = pt.mat;
+                                g.transforms = xf;
+                                g.drawDistance = std::min(pt.drawM, kerbDist);
+                                g.minDistance = pt.minM;
+                                g.drawClass = engine::DrawClass::Scenery;
+                                g.renderLayer = engine::LayerFoliage;
+                                groupBounds(g, recipeTall[static_cast<std::size_t>(ki)] * 1.3);
+                                world.add<InstanceGroup>(world.create(), g);
+                            }
+                            continue;
+                        }
+                        const StreetTreeKit& kit = kits[static_cast<std::size_t>(ki)];
+                        const double reach = streetHeight(static_cast<engine::StreetSpecies>(ki / kVariants)) * 1.3;
+                        InstanceGroup g;
+                        g.mesh = kit.bark;
+                        g.material = kit.barkMat;
+                        g.transforms = xf;
+                        g.drawDistance = kerbDist;
+                        g.drawClass = engine::DrawClass::Scenery;
+                        g.renderLayer = engine::LayerFoliage;
+                        groupBounds(g, reach);
+                        world.add<InstanceGroup>(world.create(), g);
+                        if (kit.leaves.index) {
+                            InstanceGroup lg;
+                            lg.mesh = kit.leaves;
+                            lg.material = kit.leafMat;
+                            lg.transforms = std::move(xf);
+                            lg.drawDistance = kerbDist;
+                            lg.drawClass = engine::DrawClass::Scenery;
+                            lg.renderLayer = engine::LayerFoliage;
+                            groupBounds(lg, reach);
+                            world.add<InstanceGroup>(world.create(), lg);
+                        }
+                    }
+                {
+                    std::string mix;
+                    for (int kd = 0; kd < kKinds; ++kd)
+                        if (bySpecies[kd]) mix += std::string(" ") + engine::streetSpeciesName(static_cast<engine::StreetSpecies>(kd)) + " " + std::to_string(bySpecies[kd]);
+                    std::string schemes;
+                    for (int sc = 0; sc <= engine::StreetPlanting::Flowering; ++sc)
+                        schemes += std::string(" ") + engine::plantingSchemeName(static_cast<engine::StreetPlanting::Scheme>(sc)) + " " + std::to_string(fplan.planted[sc]);
+                    LOG_INFO << "[furniture] street trees by kind:" << mix << "; streets planted:" << schemes;
+                    if (std::getenv("RT_PLANTING_DEBUG"))   // where to look: every 400th tree of each kind
+                        for (int kd = 0; kd < kKinds; ++kd) {
+                            int seen = 0;
+                            for (const engine::StreetTree& st : fplan.trees)
+                                if (static_cast<int>(st.species) == kd && seen++ % 400 == 0)
+                                    std::fprintf(stderr, "[planting] %s at %.0f %.1f %.0f\n", engine::streetSpeciesName(st.species), st.base.x, st.base.y, st.base.z);
+                        }
+                }
+                MeshHandle pitMesh = assets.acquireMesh(engine::treePitProto(), "city:treepit");
+                for (auto& [key, transforms] : pitCells) {
+                    InstanceGroup g;
+                    g.mesh = pitMesh;
+                    g.material.albedo = Vec3(1, 1, 1);
+                    g.material.roughness = 0.9f;
+                    g.transforms = std::move(transforms);
+                    g.drawDistance = kerbDist * 0.6;
+                    g.drawClass = engine::DrawClass::Furniture;
+                    groupBounds(g, 1.0);
+                    world.add<InstanceGroup>(world.create(), g);
+                }
+                const MeshHandle propMesh[3] = {assets.acquireMesh(engine::litterBinProto(), "city:litterbin"),
+                                                assets.acquireMesh(engine::bikeRackProto(), "city:bikerack"),
+                                                assets.acquireMesh(engine::newsBoxesProto(), "city:newsboxes")};
+                std::map<std::pair<int, int>, std::array<std::vector<Mat4>, 3>> propCells;
+                int nProp[3] = {0, 0, 0};
+                for (const engine::KerbProp& kp : fplan.props) {
+                    // the prototype's +Z out to the pavement: a yaw about +Y takes +Z to (sin, cos)
+                    const Real yaw = std::atan2(kp.toPavement.x, kp.toPavement.y);
+                    propCells[cellOf(kp.base)][kp.kind % 3u].push_back(
+                        Mat4::trs(kp.base, Quat::fromAxisAngle(Vec3(0, 1, 0), yaw), Vec3(1, 1, 1)));
+                    ++nProp[kp.kind % 3u];
+                }
+                for (auto& [key, byKind] : propCells)
+                    for (int k = 0; k < 3; ++k) {
+                        if (byKind[k].empty()) continue;
+                        InstanceGroup g;
+                        g.mesh = propMesh[k];
+                        g.material.albedo = Vec3(1, 1, 1);
+                        g.material.metallic = k == 1 ? 0.6f : 0.2f;
+                        g.material.roughness = 0.5f;
+                        g.transforms = std::move(byKind[k]);
+                        g.drawDistance = kerbDist * 0.5;
+                        g.drawClass = engine::DrawClass::Furniture;
+                        groupBounds(g, 1.5);
+                        world.add<InstanceGroup>(world.create(), g);
+                    }
+                LOG_INFO << "[furniture] kerb life: " << fplan.trees.size() << " street trees, " << nProp[0] << " litter bins, "
+                         << nProp[1] << " bike racks, " << nProp[2] << " news boxes";
+            }
             LOG_INFO << "[furniture] " << sf.signalPoles.size() << " signals, "
                      << fplan.lampBases.size() << " street lamps";
+            // DOUBLED SIGNALS (Glenn: "the stoplights are doubled up ... staggered over each other and z-fighting"):
+            // poles within 2.5 m of another facing the same way -- two signalled links on one approach
+            {
+                std::map<std::pair<int, int>, std::vector<int>> cell;
+                for (int i = 0; i < static_cast<int>(sf.signalPoles.size()); ++i) {
+                    const Vec3& b0 = sf.signalPoles[static_cast<std::size_t>(i)].base;
+                    cell[{static_cast<int>(std::floor(b0.x / 5.0)), static_cast<int>(std::floor(b0.z / 5.0))}].push_back(i);
+                }
+                int doubled = 0;
+                std::string where;
+                for (int i = 0; i < static_cast<int>(sf.signalPoles.size()); ++i) {
+                    const auto& A = sf.signalPoles[static_cast<std::size_t>(i)];
+                    const int cx = static_cast<int>(std::floor(A.base.x / 5.0)), cz = static_cast<int>(std::floor(A.base.z / 5.0));
+                    bool dup = false;
+                    for (int dx = -1; dx <= 1 && !dup; ++dx)
+                        for (int dz = -1; dz <= 1 && !dup; ++dz) {
+                            auto it = cell.find({cx + dx, cz + dz});
+                            if (it == cell.end()) continue;
+                            for (int j : it->second) {
+                                if (j <= i) continue;
+                                const auto& B = sf.signalPoles[static_cast<std::size_t>(j)];
+                                const Vec3 d = A.base - B.base;
+                                const double d2 = d.x * d.x + d.z * d.z;   // (a shared pole is the same pole: not a double)
+                                if (d2 > 1e-4 && d2 < 2.5 * 2.5 && A.face.x * B.face.x + A.face.z * B.face.z > 0.94) { dup = true; break; }
+                            }
+                        }
+                    if (dup) {
+                        ++doubled;
+                        if (doubled <= 6) where += " (" + std::to_string(static_cast<int>(A.base.x)) + "," + std::to_string(static_cast<int>(A.base.z)) + ")";
+                    }
+                }
+                LOG_INFO << "[furniture] signal poles doubled (another within 2.5 m, same facing): " << doubled << where;
+                {   // ...and HEADS crowding each other, whichever way they face: what reads as "stacked" lights
+                    const engine::SignalParams sp0;
+                    std::vector<Vec3> heads;
+                    for (const auto& P : sf.signalPoles) {
+                        if (P.shared) continue;
+                        const Vec3 side(P.face.z, 0, -P.face.x);
+                        heads.push_back(P.base + Vec3(0, sp0.armHeight - 0.65, 0) + side * (sp0.armLength - 0.2));
+                    }
+                    int crowded = 0;
+                    std::string at;
+                    for (std::size_t i = 0; i < heads.size(); ++i)
+                        for (std::size_t j = 0; j < heads.size(); ++j) {
+                            if (i == j) continue;
+                            const Vec3 d = heads[i] - heads[j];
+                            if (d.x * d.x + d.z * d.z < 1.5 * 1.5 && std::fabs(d.y) < 1.0) {
+                                if (++crowded <= 6) at += " (" + std::to_string(static_cast<int>(heads[i].x)) + "," + std::to_string(static_cast<int>(heads[i].z)) + ")";
+                                break;
+                            }
+                        }
+                    LOG_INFO << "[furniture] signal heads within 1.5 m of another head: " << crowded << " of " << heads.size() << at;
+                }
+                // RT_SIGNAL_NEAR=x,z,r: every pole within r of (x, z) -- base, facing, its link's ends, width, lanes
+                if (const char* q = std::getenv("RT_SIGNAL_NEAR")) {
+                    double qx = 0, qz = 0, qr = 40;
+                    std::sscanf(q, "%lf,%lf,%lf", &qx, &qz, &qr);
+                    for (std::size_t i = 0; i < sf.signalPoles.size(); ++i) {
+                        const auto& P = sf.signalPoles[i];
+                        if ((P.base.x - qx) * (P.base.x - qx) + (P.base.z - qz) * (P.base.z - qz) > qr * qr) continue;
+                        const auto& L = nav.links[static_cast<std::size_t>(P.link)];
+                        LOG_INFO << "[signal near] pole " << i << (sharedPole[i] ? " (shared)" : "") << " base " << P.base.x << " "
+                                 << P.base.y << " " << P.base.z << " face " << P.face.x << " " << P.face.z << " | link " << P.link
+                                 << " " << nav.nodes[L.from].x << "," << nav.nodes[L.from].y << " -> " << nav.nodes[L.to].x << ","
+                                 << nav.nodes[L.to].y << " width " << L.width << " lanes " << L.lanes << " layer " << L.layer;
+                    }
+                }
+            }
             world.add<engine::StreetFurniture>(world.create(), std::move(sf));
         }
     }

@@ -22,6 +22,26 @@ const std::map<std::string, RoadClassSpec>& defaultClasses() {
         add("local", 3.5, 1, 1, 0.0, 1.8, 0.0, 1, 0.09, 40.0, 0.5);
         add("ramp", 3.6, 1, 0, 1.2, 0.0, 0.0, 0, 0.09, 40.0, 1.0);
         add("divider", 0.0, 0, 0, 0.0, 0.0, 1.5, -1, 1.0, 1.0, 0.0);
+        // double track: one track per direction at 4 m centres, a railway's grade (2.5 %) over a long window
+        add("rail", 4.0, 1, 1, 0.0, 0.0, 0.0, 3, 0.025, 400.0, 0.8);
+        m["rail"].track = true;
+        // a parapet where the track stands on structure; nothing at grade (the lab's own fence comes later)
+        BarrierSpec wall; wall.kind = BarrierKind::Wall; wall.h = 1.0; wall.set = true;
+        m["rail"].edges[3] = wall;   // EdgeRole::Elevated
+        // LIGHT RAIL in a town (Glenn: "Bigger cities: light rail ... a loop (Yamanote). Start simple."): a double track at
+        // 3.6 m centres, a tram's grade (5 %) over a street's window, so it climbs over a cross street and back in a block
+        add("light_rail", 3.6, 1, 1, 0.0, 0.0, 0.0, 2, 0.05, 120.0, 0.7);
+        m["light_rail"].track = true;
+        m["light_rail"].edges[3] = wall;
+        // a footway: one 3 m path, a parapet wherever it stands clear of the ground, and STAIRS where it is steep --
+        // the island's platforms stand 11-24 m over their streets (the track on the hillside above town): a 12 % ramp
+        // would have been 115-250 m long. 60 % is a stair's pitch (the mesher steps whatever is steeper than 15 %).
+        add("footway", 3.0, 1, 0, 0.0, 0.0, 0.0, 0, 0.6, 20.0, 0.4);
+        m["footway"].footway = true;
+        BarrierSpec parapet; parapet.kind = BarrierKind::Wall; parapet.h = 1.1; parapet.thick = 0.2; parapet.set = true;
+        m["footway"].edges[3] = parapet;   // EdgeRole::Elevated
+        m["footway"].edges[2].set = true;  // vs street: nothing (it meets one)
+        m["footway"].edges[4].set = true;  // at grade: nothing
         return m;
     }();
     return k;
@@ -128,6 +148,25 @@ std::vector<Vec2> resolvePath(const nlohmann::json& p, const RoadLabGraph& g, do
 
 const EdgeSpec* RoadLabGraph::find(const std::string& id) const { auto it = index.find(id); return it == index.end() ? nullptr : &edges[it->second]; }
 EdgeSpec* RoadLabGraph::find(const std::string& id) { auto it = index.find(id); return it == index.end() ? nullptr : &edges[it->second]; }
+bool RoadLabGraph::designed() const {
+    bool any = false;
+    for (const EdgeSpec& e : edges) {
+        if (e.xy.size() < 2 && !e.isRamp()) continue;
+        if (e.profile.empty()) return false;
+        any = true;
+    }
+    return any;
+}
+const CrossingSpec* RoadLabGraph::declaredCrossing(const std::string& a, const std::string& b, const Vec2& p, double within) const {
+    const CrossingSpec* best = nullptr;
+    double bd = within;
+    for (const CrossingSpec& c : crossings) {
+        if (!((c.a == a && c.b == b) || (c.a == b && c.b == a))) continue;
+        const double d = std::hypot(c.at.x - p.x, c.at.y - p.y);
+        if (d <= bd) { bd = d; best = &c; }
+    }
+    return best;
+}
 
 double RoadLabGraph::hw(const EdgeSpec& e) const {
     if (e.laneCount() == 0) return 0.0;
@@ -183,6 +222,8 @@ RoadLabGraph RoadLabGraph::fromJson(const nlohmann::json& spec, const std::strin
         c.lanes.w = num(j, "w", c.lanes.w); c.lanes.fwd = static_cast<int>(num(j, "fwd", c.lanes.fwd)); c.lanes.back = static_cast<int>(num(j, "back", c.lanes.back));
         c.lanes.gap = num(j, "gap", c.lanes.gap); c.shoulder = num(j, "shoulder", c.shoulder); c.sidewalk = num(j, "sidewalk", c.sidewalk); c.median = num(j, "median", c.median);
         c.rank = static_cast<int>(num(j, "rank", c.rank)); c.gMax = num(j, "g_max", c.gMax); c.window = num(j, "window", c.window); c.balance = num(j, "balance", c.balance); c.thick = num(j, "thick", c.thick);
+        if (j.contains("track") && j["track"].is_boolean()) c.track = j["track"].get<bool>();
+        if (j.contains("footway") && j["footway"].is_boolean()) c.footway = j["footway"].get<bool>();
         if (j.contains("edges") && j["edges"].is_object()) {
             static const char* kRoleKey[5] = {"seam", "median", "vs_street", "elevated", "at_grade"};
             for (size_t i = 0; i < 5; ++i) {
@@ -231,7 +272,14 @@ RoadLabGraph RoadLabGraph::fromJson(const nlohmann::json& spec, const std::strin
                 P.taper = num(p, "taper", 10 * e.lanes.w); P.taperOut = num(p, "taper_out", 0.0); e.pockets.push_back(P);
             }
         }
+        if (ej.contains("platforms")) for (const auto& pj : ej["platforms"]) {
+            PlatformSpec P; P.name = pj.value("name", std::string()); P.s0 = num(pj, "s0", 0.0); P.s1 = num(pj, "s1", 0.0);
+            const std::string side = pj.value("side", std::string("both")); P.side = side == "left" ? +1 : side == "right" ? -1 : 0;
+            P.w = num(pj, "w", P.w); P.h = num(pj, "h", P.h);
+            if (P.s1 > P.s0) e.platforms.push_back(P);
+        }
         if (ej.contains("z_min")) { e.hasZMin = true; e.zMin = ej["z_min"].get<double>(); }
+        if (ej.contains("profile")) { e.profileStep = ej["profile"].value("step", 1.0); e.profile = ej["profile"].at("z").get<std::vector<double>>(); }
         if (ej.contains("lots_range")) { e.lotsFrom = ej["lots_range"].at(0).get<double>(); e.lotsTo = ej["lots_range"].at(1).get<double>(); }
         if (ej.contains("floor")) for (const auto& fp : ej["floor"]) e.floorPts.push_back({fp.at(0).get<double>(), fp.at(1).get<double>(), fp.at(2).get<double>(), fp.size() > 3 ? fp.at(3).get<double>() : 0.0});
         auto hostLanes = [&](const nlohmann::json& a) { if (a.is_object()) { const EdgeSpec* h = g.find(a.at("edge").get<std::string>()); if (h) return h->lanes; } return e.lanes; };
@@ -242,6 +290,20 @@ RoadLabGraph RoadLabGraph::fromJson(const nlohmann::json& spec, const std::strin
         g.index[e.id] = static_cast<int>(g.edges.size()); g.edges.push_back(std::move(e));
     }
     if (spec.contains("connectors")) for (const auto& c : spec["connectors"]) g.connectors.push_back({c.at("from").get<std::string>(), c.at("to").get<std::string>(), num(c, "to_s", 0.0)});
+    if (spec.contains("crossings")) {
+        g.declaresCrossings = true;
+        for (const auto& c : spec["crossings"]) {
+            CrossingSpec x;
+            x.a = c.at("a").get<std::string>(); x.b = c.at("b").get<std::string>();
+            x.kind = c.value("kind", std::string("at_grade")); x.over = c.value("over", std::string());
+            x.at = Vec2(c.at("at").at(0).get<double>(), c.at("at").at(1).get<double>());
+            x.clearance = num(c, "clearance", -1.0);
+            if (x.kind != "bridge" && x.kind != "at_grade") throw std::runtime_error("crossing " + x.a + "/" + x.b + ": unknown kind " + x.kind);
+            // (a bridge may leave `over` empty: the design stage chooses by its own rule, and designedGraph writes the choice in)
+            if (x.kind == "bridge" && !x.over.empty() && x.over != x.a && x.over != x.b) throw std::runtime_error("crossing " + x.a + "/" + x.b + ": over names neither road");
+            g.crossings.push_back(x);
+        }
+    }
     if (g.edges.empty()) throw std::runtime_error("graph has no edges");
     return g;
 }

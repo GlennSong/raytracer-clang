@@ -1,6 +1,7 @@
 #include "engine/bundle/codecs.h"
 
 #include "engine/procgen/city/road_spec.h"
+#include "engine/mesh_builder.h"
 
 #include <cmath>
 
@@ -9,7 +10,7 @@ namespace bundle {
 
 namespace {
 constexpr uint32_t kMeshVersion = 1, kGridVersion = 1, kRoadGraphVersion = 1, kRoadEntityVersion = 1, kRingsVersion = 1;
-constexpr uint32_t kDeckVersion = 1, kBandVersion = 1;
+constexpr uint32_t kDeckVersion = 2, kBandVersion = 1;
 inline float f(double v) { return static_cast<float>(v); }
 }  // namespace
 
@@ -32,7 +33,17 @@ PackedMesh packMesh(const RenderMesh& m, const std::string& name, const Vec3& al
     p.flags = (flags & ~static_cast<uint32_t>(PackedMesh::kColorUniform)) | (uniform ? PackedMesh::kColorUniform : 0u);
     if (uniform) { p.vertexColor[0] = f(c0.x); p.vertexColor[1] = f(c0.y); p.vertexColor[2] = f(c0.z); }
     else { p.col.resize(3 * n); for (size_t i = 0; i < n; ++i) { const Vec3& c = m.vertices[i].color; p.col[3 * i] = f(c.x); p.col[3 * i + 1] = f(c.y); p.col[3 * i + 2] = f(c.z); } }
-    p.idx = m.indices;
+    // A triangle with no area IN FLOAT is dropped (MeshBuilder::kNoArea2, the rule triFacing builds by): built in
+    // double, a sub-millimetre edge kilometres from the origin passes triFacing and then collapses to two equal
+    // corners when stored -- 22 such in the island's lot parts (2026-10-14), past every builder at once.
+    p.idx.reserve(m.indices.size());
+    for (size_t t = 0; t + 2 < m.indices.size(); t += 3) {
+        const uint32_t ia = m.indices[t], ib = m.indices[t + 1], ic = m.indices[t + 2];
+        auto at = [&](uint32_t i) { return Vec3(p.pos[3 * i], p.pos[3 * i + 1], p.pos[3 * i + 2]); };
+        const Vec3 a = at(ia), b = at(ib), c = at(ic);
+        if (cross(c - a, b - a).lengthSquared() < MeshBuilder::kNoArea2) continue;
+        p.idx.insert(p.idx.end(), {ia, ib, ic});
+    }
     return p;
 }
 
@@ -212,6 +223,7 @@ void putDeckField(BinWriter& w, const RoadDeckField& d) {
         w.put<uint8_t>(s.accessBack);
         w.put<uint8_t>(static_cast<uint8_t>(s.authoredDeck));
         w.put<int32_t>(static_cast<int32_t>(s.layer));
+        w.put<uint8_t>(static_cast<uint8_t>(s.use));   // v2
     }
     w.put<uint32_t>(static_cast<uint32_t>(d.pads.size()));
     for (const RoadDeckField::Tri& t : d.pads) {
@@ -221,7 +233,7 @@ void putDeckField(BinWriter& w, const RoadDeckField& d) {
 }
 
 bool getDeckField(BinReader& r, RoadDeckField& d) {
-    uint32_t v = 0; if (!r.magic("DECK", &v) || v != kDeckVersion) return false;
+    uint32_t v = 0; if (!r.magic("DECK", &v) || v < 1 || v > kDeckVersion) return false;   // v1: every spine a road
     uint32_t n = 0; if (!r.get(n)) return false; d.spines.assign(n, UnionSpine{});
     for (UnionSpine& s : d.spines) {
         if (!getVec2s(r, s.points) || !getDoubles(r, s.yAbs) || !getDoubles(r, s.hw) ||
@@ -238,6 +250,11 @@ bool getDeckField(BinReader& r, RoadDeckField& d) {
         s.accessBack = accessBack;
         s.authoredDeck = authored != 0;
         s.layer = layer;
+        if (v >= 2) {
+            uint8_t use = 0;
+            if (!r.get(use) || use > 2) return false;
+            s.use = static_cast<UnionSpine::Use>(use);
+        }
     }
     if (!r.get(n)) return false; d.pads.assign(n, RoadDeckField::Tri{});
     for (RoadDeckField::Tri& t : d.pads) {

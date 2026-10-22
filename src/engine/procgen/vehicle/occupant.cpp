@@ -16,21 +16,7 @@ namespace {
 // to rotate about wherever the thigh left it.
 void pitchedBox(RenderMesh& out, const Vec3& size, const Vec3& centre,
                 const Vec3& color, Real pivotY, Real pivotZ, Real angle) {
-    RenderMesh b = MeshBuilder::box(size);
-    const Real ca = std::cos(angle), sa = std::sin(angle);
-    const std::uint32_t base = static_cast<std::uint32_t>(out.vertices.size());
-    for (Vertex v : b.vertices) {
-        Vec3 p = v.position + centre;
-        const Real ry = p.y - pivotY, rz = p.z - pivotZ;
-        p.y = pivotY + ry * ca - rz * sa;
-        p.z = pivotZ + ry * sa + rz * ca;
-        v.position = p;
-        const Vec3 n = v.normal;
-        v.normal = Vec3(n.x, n.y * ca - n.z * sa, n.y * sa + n.z * ca);
-        v.color = color;
-        out.vertices.push_back(v);
-    }
-    for (std::uint32_t i : b.indices) out.indices.push_back(base + i);
+    MeshBuilder::emitBox(out, MeshFrame::centred(centre, size).rotatedAbout(Vec3(0, pivotY, pivotZ), Vec3(1, 0, 0), angle), color);
 }
 
 void box(RenderMesh& out, const Vec3& size, const Vec3& centre, const Vec3& color) {

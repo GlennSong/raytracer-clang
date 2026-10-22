@@ -1,4 +1,6 @@
 #include "procgen_bindings.h"
+#include "../mesh_audit.h"
+#include "furniture_library_lua.h"
 
 #include "procgen_mesh.h"
 #include "lua_state.h"
@@ -10,16 +12,23 @@
 #include "../procgen/vehicle_mesh.h"
 #include "../procgen/vehicle/car_mesh.h"
 #include "../procgen/vehicle/occupant.h"
+#include "../procgen/person.h"
 #include "../procgen/terrain.h"
 #include "../procgen/scatter.h"
 #include "../procgen/city/shape_grammar.h"
+#include "../procgen/city/space_graph.h"
+#include "../procgen/city/circulation.h"
+#include "../procgen/city/mass_stack.h"
+#include "../procgen/city/architect.h"
+#include "../procgen/city/cells.h"
+#include "../procgen/city/envelope.h"
+#include "../procgen/city/section.h"
 #include "../procgen/furniture_kit.h"
 #include "../procgen/city/street_kit.h"
 #include "../procgen/city/road_network.h"
 #include "../procgen/city/road_mesh.h"
-#include "../procgen/city/roads/road_entity.h"   // buildRoadNetLattice (city.solid, S6)
+#include "../procgen/city/roads/road_entity.h"   // RoadEntity, the road builders
 #include "../procgen/city/roads/road_builder.h"   // city.road_builders(): the registry, by name
-#include "../procgen/deprecated/roads/road_net_mesh.h"   // DEPRECATED lattice mesher (roads module)
 #include "../procgen/city/road_crossings.h"
 #include "../procgen/city/polygon.h"
 #include "../procgen/city/parcel.h"
@@ -515,6 +524,22 @@ int l_mesh_occupant(lua_State* L) {
     return 1;
 }
 
+// mesh.person{ swing = radians, outfit = n } -> Mesh
+// A STANDING person (procgen/person.h: the city's walkers' body, 1.8 m), its ORIGIN AT ITS FEET (stand it on the
+// ground), facing +Z -- a scale reference anywhere (scale_block.lua).
+int l_mesh_person(lua_State* L) {
+    Real swing = 0;
+    int outfit = 0;
+    if (lua_istable(L, 1)) {
+        swing = static_cast<Real>(optField(L, 1, "swing", 0.0));
+        outfit = static_cast<int>(optField(L, 1, "outfit", 0.0));
+    }
+    RenderMesh m = buildStandingPerson(swing, outfit);
+    for (Vertex& v : m.vertices) v.position.y += 0.9;
+    pushMesh(L, std::make_shared<RenderMesh>(std::move(m)));
+    return 1;
+}
+
 // Assembly ops each return a NEW mesh (copy + apply), so scripts compose by
 // dataflow — the same shape the node graph's Mesh wires have.
 int l_mesh_merge(lua_State* L) {
@@ -640,7 +665,7 @@ ArchetypeBook makeArchetypeBook(ScriptVM& vm, const std::string& code,
 
 namespace {
 
-// mesh.lathe{profile={{r,y},...}, segments=16} -> mesh : revolve a 2D profile
+// mesh.lathe{profile={{r,y},...}, segments=16, smooth=false} -> mesh : revolve a 2D profile
 // around +Y at the origin. Columns, domes, finials, vases — the op library's
 // Lua face (the C++ grammar composes the same latheMesh).
 int l_mesh_lathe(lua_State* L) {
@@ -663,8 +688,16 @@ int l_mesh_lathe(lua_State* L) {
     lua_pop(L, 1);
     const int segs = static_cast<int>(optField(L, 1, "segments", 16.0));
     if (prof.size() < 2) return luaL_error(L, "mesh.lathe: profile needs >= 2 rows");
-    pushMesh(L, std::make_shared<RenderMesh>(
-                    latheMesh(Vec3(0, 0, 0), prof, segs, Vec3(1, 1, 1))));
+    // faceted (the shape grammar's look, the default) or smooth = true (normals through gentle bends, creased at
+    // sharp corners): the one lathe, MeshBuilder::lathe
+    lua_getfield(L, 1, "smooth");
+    const bool smooth = lua_toboolean(L, -1);
+    lua_pop(L, 1);
+    std::vector<std::pair<double, double>> pr;
+    for (const Vec2& q : prof) pr.push_back({q.x, q.y});
+    LatheStyle st;
+    st.faceted = !smooth;
+    pushMesh(L, std::make_shared<RenderMesh>(MeshBuilder::lathe(pr, segs, st)));
     return 1;
 }
 int l_mesh_translate(lua_State* L) {
@@ -972,19 +1005,21 @@ static void readAttachedFields(lua_State* L, int idx, BuildingParams& p) {
     if (lua_istable(L, -1)) {
         p.partyWalls = 0;
         const int n = static_cast<int>(lua_rawlen(L, -1));
-        for (int i = 1; i <= n && p.partyWalls < 2; ++i) {
+        for (int i = 1; i <= n && p.partyWalls < 4; ++i) {
             lua_rawgeti(L, -1, i);
             if (lua_istable(L, -1)) {
-                Real v[3] = {0, 0, 0};
-                for (int j = 0; j < 3; ++j) {
+                Real v[5] = {0, 0, 0, 0, 0};   // nx, nz, at [, top storey [, door 1/0]] (cells.h)
+                for (int j = 0; j < 5; ++j) {
                     lua_rawgeti(L, -1, j + 1);
-                    v[j] = lua_isnumber(L, -1) ? static_cast<Real>(lua_tonumber(L, -1)) : Real(0);
+                    v[j] = lua_isnumber(L, -1) ? static_cast<Real>(lua_tonumber(L, -1)) : (lua_isboolean(L, -1) && lua_toboolean(L, -1) ? Real(1) : Real(0));
                     lua_pop(L, 1);
                 }
                 const Vec2 nn(v[0], v[1]);
                 if (nn.length() > 1e-6) {
                     p.partyN[p.partyWalls] = normalize(nn);
                     p.partyAt[p.partyWalls] = v[2];
+                    p.partyTop[p.partyWalls] = static_cast<int16_t>(std::max(Real(0), v[3]));
+                    if (v[4] != 0) p.partyDoors = static_cast<uint8_t>(p.partyDoors | (1u << p.partyWalls));
                     ++p.partyWalls;
                 }
             }
@@ -997,6 +1032,8 @@ static void readAttachedFields(lua_State* L, int idx, BuildingParams& p) {
         const int chain = static_cast<int>(optField(L, idx, "big_box", 0.0));
         if (chain >= 1 && chain <= 4) dressBigBox(p, chain, p.seed);
     }
+    // campus = 1 teaching hall, 2 library, 3 residence hall (the university's room plans)
+    p.campus = static_cast<uint8_t>(std::clamp(static_cast<int>(optField(L, idx, "campus", p.campus)), 0, 3));
     p.backDoor = optBoolField(L, idx, "back_door", p.backDoor);
     p.fireEscape = optBoolField(L, idx, "fire_escape", p.fireEscape);
 }
@@ -1004,11 +1041,14 @@ static void readAttachedFields(lua_State* L, int idx, BuildingParams& p) {
 static void readTopField(lua_State* L, int idx, BuildingParams& p) {
     lua_getfield(L, idx, "top");
     if (lua_isstring(L, -1)) {
-        static const char* names[9] = {"auto", "penthouse", "screen", "sloped", "faceted", "lantern", "frame",
-                                       "antennas", "mast"};
+        static const char* names[15] = {"auto", "penthouse", "screen", "sloped", "faceted", "lantern", "frame",
+                                        "antennas", "mast", "none", "dome", "spire", "vault", "aperture", "flared"};
         const std::string t = lua_tostring(L, -1);
-        for (int i = 0; i < 9; ++i) if (t == names[i]) p.top = static_cast<uint8_t>(i);
+        for (int i = 0; i < 15; ++i) if (t == names[i]) p.top = static_cast<uint8_t>(i);
     }
+    lua_pop(L, 1);
+    lua_getfield(L, idx, "helipad");   // true: a pad on the roof; false: never; unset: the tall-tower rule
+    if (lua_isboolean(L, -1)) p.helipad = lua_toboolean(L, -1) ? 2 : 1;
     lua_pop(L, 1);
 }
 
@@ -1123,6 +1163,10 @@ BuildingParams readBuildingParamsOnto(lua_State* L, int idx, BuildingParams p) {
                    : e == "feathered" ? E::Feathered
                    : e == "twist" ? E::Twist
                    : e == "stack" ? E::Stack
+                   : e == "bulge" ? E::Bulge
+                   : e == "curves" ? E::Curves
+                   : e == "wave" ? E::Wave
+                   : e == "mesh" ? E::Mesh
                                   : E::None;
     }
     lua_pop(L, 1);
@@ -1142,7 +1186,23 @@ BuildingParams readBuildingParamsOnto(lua_State* L, int idx, BuildingParams p) {
     p.featherFrom = static_cast<Real>(optField(L, idx, "feather_from", p.featherFrom));
     p.twistDeg    = static_cast<Real>(optField(L, idx, "twist_deg", p.twistDeg));
     p.stackShift  = static_cast<Real>(optField(L, idx, "stack_shift", p.stackShift));
+    p.bulge       = static_cast<Real>(optField(L, idx, "bulge", p.bulge));
+    p.lean        = static_cast<Real>(optField(L, idx, "lean", p.lean));
+    p.wave        = static_cast<Real>(optField(L, idx, "wave", p.wave));
+    p.waveLen     = static_cast<Real>(optField(L, idx, "wave_len", p.waveLen));
+    p.massMesh    = static_cast<uint8_t>(optField(L, idx, "mass_mesh", p.massMesh));
+    // THE SKIN (envelope.h, ADR-0178): skin = "floors" | "double" | "plates" | "both", skin_gap = metres
+    lua_getfield(L, idx, "skin");
+    if (lua_isstring(L, -1)) {
+        const std::string sk = lua_tostring(L, -1);
+        p.skin = sk == "double" ? 1 : sk == "plates" ? 2 : sk == "both" ? 3 : 0;
+    } else if (lua_isnumber(L, -1)) {
+        p.skin = static_cast<uint8_t>(lua_tointeger(L, -1));
+    }
+    lua_pop(L, 1);
+    p.skinGap     = optField(L, idx, "skin_gap", p.skinGap);
     p.fins        = static_cast<uint8_t>(optField(L, idx, "fins", p.fins));
+    p.diagrid     = static_cast<uint8_t>(optField(L, idx, "diagrid", p.diagrid));
     p.curtainBay  = static_cast<Real>(optField(L, idx, "curtain_bay", p.curtainBay));
     p.spandrelFrac = static_cast<Real>(optField(L, idx, "spandrel", p.spandrelFrac));
     lua_getfield(L, idx, "glass");
@@ -1330,6 +1390,436 @@ static void readPlanAndRecipe(lua_State* L, BuildingParams& p, Poly2& plan) {
     }
 }
 
+// building.space_graph{ plan = {{x,z}, ...}, <params> | recipe = "name", seed = n, coreness = c, base_y = y, svg = true }
+//   -> { storeys, modelled, entrance, roof, cells = { {kind, use, storey, top, x0, z0, x1, z1, free} ... },
+//        portals = { {a, b (0 = the street), kind, storey, x, z} ... }, unreachable = { cell indices }, svg = "..." }
+// THE SPACE GRAPH of a building (space_graph.h, issue #105) and its gate, from Lua: the same adapter the tests and the
+// blueprint sheets use, so a recipe script can ask whether what it grew is walkable base to top. Cell and portal
+// indices are 1-based; `svg = true` adds the blueprint sheet.
+// A flag field: `name = true` or a non-zero number.
+static bool flagField(lua_State* L, int idx, const char* name) {
+    lua_getfield(L, idx, name);
+    const bool on = lua_isboolean(L, -1) ? lua_toboolean(L, -1) != 0 : (lua_isnumber(L, -1) && lua_tonumber(L, -1) != 0);
+    lua_pop(L, 1);
+    return on;
+}
+
+int l_building_space_graph(lua_State* L) {
+    luaL_checktype(L, 1, LUA_TTABLE);
+    BuildingParams p;
+    Poly2 plan;
+    readPlanAndRecipe(L, p, plan);
+    if (plan.size() < 3) return luaL_error(L, "building.space_graph: `plan` needs three or more points");
+    const SpaceGraph g = spaceGraphOf(plan, p, static_cast<Real>(optField(L, 1, "base_y", 0.0)));
+    const std::vector<int> bad = unreachableCells(g);
+    lua_newtable(L);
+    lua_pushinteger(L, g.storeys); lua_setfield(L, -2, "storeys");
+    lua_pushboolean(L, g.modelled); lua_setfield(L, -2, "modelled");
+    lua_pushinteger(L, g.entrance + 1); lua_setfield(L, -2, "entrance");
+    lua_pushinteger(L, g.roof + 1); lua_setfield(L, -2, "roof");
+    lua_newtable(L);
+    for (std::size_t i = 0; i < g.cells.size(); ++i) {
+        const Cell& c = g.cells[i];
+        Vec2 lo, hi;
+        bounds(c.plan, lo, hi);
+        lua_newtable(L);
+        lua_pushstring(L, cellKindName(c.kind)); lua_setfield(L, -2, "kind");
+        lua_pushstring(L, cellUseName(c.use)); lua_setfield(L, -2, "use");
+        lua_pushinteger(L, c.k0); lua_setfield(L, -2, "storey");
+        lua_pushinteger(L, c.k1); lua_setfield(L, -2, "top");
+        lua_pushnumber(L, lo.x); lua_setfield(L, -2, "x0");
+        lua_pushnumber(L, lo.y); lua_setfield(L, -2, "z0");
+        lua_pushnumber(L, hi.x); lua_setfield(L, -2, "x1");
+        lua_pushnumber(L, hi.y); lua_setfield(L, -2, "z1");
+        lua_pushnumber(L, c.freeArea); lua_setfield(L, -2, "free");
+        lua_rawseti(L, -2, static_cast<lua_Integer>(i + 1));
+    }
+    lua_setfield(L, -2, "cells");
+    lua_newtable(L);
+    for (std::size_t i = 0; i < g.portals.size(); ++i) {
+        const Portal& po = g.portals[i];
+        lua_newtable(L);
+        lua_pushinteger(L, po.a + 1); lua_setfield(L, -2, "a");
+        lua_pushinteger(L, po.b < 0 ? 0 : po.b + 1); lua_setfield(L, -2, "b");
+        lua_pushstring(L, portalKindName(po.kind)); lua_setfield(L, -2, "kind");
+        lua_pushinteger(L, po.storey); lua_setfield(L, -2, "storey");
+        lua_pushnumber(L, (po.p0.x + po.p1.x) * 0.5); lua_setfield(L, -2, "x");
+        lua_pushnumber(L, (po.p0.y + po.p1.y) * 0.5); lua_setfield(L, -2, "z");
+        lua_rawseti(L, -2, static_cast<lua_Integer>(i + 1));
+    }
+    lua_setfield(L, -2, "portals");
+    lua_newtable(L);
+    for (std::size_t i = 0; i < bad.size(); ++i) { lua_pushinteger(L, bad[i] + 1); lua_rawseti(L, -2, static_cast<lua_Integer>(i + 1)); }
+    lua_setfield(L, -2, "unreachable");
+    if (flagField(L, 1, "svg")) {
+        const std::string svg = blueprintSvg(g, "building", bad);
+        lua_pushlstring(L, svg.data(), svg.size());
+        lua_setfield(L, -2, "svg");
+    }
+    return 1;
+}
+
+// building.mass{ plan = {{x,z}, ...}, <params> | recipe = "name", seed = n, coreness = c, slices = true }
+//   -> { height, storeys, entries = { {storey, top, relation, varies, x0, z0, x1, z1} ... },
+//        slices = { {storey, tier, plan = {{x,z}, ...}} ... } (with slices = true) }
+// THE MASS (mass.h, mass_stack.h, issue #105 step 4): a building's stack -- its sections over storey ranges under
+// their transforms (the envelopes: setbacks, the taper, a twist, slid modules) -- and the storey outlines it slices
+// to, the same ones every grower reads. Indices are 1-based, storeys 0-based (0 = the ground).
+int l_building_mass(lua_State* L) {
+    luaL_checktype(L, 1, LUA_TTABLE);
+    BuildingParams p;
+    Poly2 plan;
+    readPlanAndRecipe(L, p, plan);
+    if (plan.size() < 3) return luaL_error(L, "building.mass: `plan` needs three or more points");
+    const Stack st = stackOf(plan, p);
+    lua_newtable(L);
+    lua_pushnumber(L, st.height()); lua_setfield(L, -2, "height");
+    lua_pushinteger(L, st.floors + 1); lua_setfield(L, -2, "storeys");
+    lua_newtable(L);
+    for (std::size_t i = 0; i < st.entries.size(); ++i) {
+        const StackEntry& e = st.entries[i];
+        static const char* const kRel[] = {"nest", "flush", "support"};
+        lua_newtable(L);
+        lua_pushinteger(L, e.k0); lua_setfield(L, -2, "storey");
+        lua_pushinteger(L, e.k1); lua_setfield(L, -2, "top");
+        lua_pushstring(L, kRel[static_cast<int>(e.rel)]); lua_setfield(L, -2, "relation");
+        lua_pushboolean(L, e.varies()); lua_setfield(L, -2, "varies");
+        Vec2 lo(0, 0), hi(0, 0);
+        const Poly2 outline = e.section.tessellate();
+        if (outline.size() >= 3) bounds(outline, lo, hi);
+        lua_pushnumber(L, lo.x); lua_setfield(L, -2, "x0");
+        lua_pushnumber(L, lo.y); lua_setfield(L, -2, "z0");
+        lua_pushnumber(L, hi.x); lua_setfield(L, -2, "x1");
+        lua_pushnumber(L, hi.y); lua_setfield(L, -2, "z1");
+        lua_rawseti(L, -2, static_cast<lua_Integer>(i + 1));
+    }
+    lua_setfield(L, -2, "entries");
+    if (flagField(L, 1, "slices")) {
+        const std::vector<StoreyPlan> storeys = sliceStoreys(st, p);
+        lua_newtable(L);
+        for (std::size_t k = 0; k < storeys.size(); ++k) {
+            lua_newtable(L);
+            lua_pushinteger(L, static_cast<lua_Integer>(k)); lua_setfield(L, -2, "storey");
+            lua_pushinteger(L, storeys[k].tier); lua_setfield(L, -2, "tier");
+            lua_newtable(L);
+            for (std::size_t i = 0; i < storeys[k].plan.size(); ++i) {
+                lua_newtable(L);
+                lua_pushnumber(L, storeys[k].plan[i].x); lua_rawseti(L, -2, 1);
+                lua_pushnumber(L, storeys[k].plan[i].y); lua_rawseti(L, -2, 2);
+                lua_rawseti(L, -2, static_cast<lua_Integer>(i + 1));
+            }
+            lua_setfield(L, -2, "plan");
+            lua_rawseti(L, -2, static_cast<lua_Integer>(k + 1));
+        }
+        lua_setfield(L, -2, "slices");
+    }
+    return 1;
+}
+
+// building.envelope{ plan = {...}, <params> | recipe = "name", skin = "double" | "plates" | "both", ... }
+//   -> { skin = 0..3, floors = {{x,z}...} | nil, veil = { [storey] = {{x,z}...} }, plates = { [storey] = {{x,z}...} } }
+// THE ENVELOPE (envelope.h, ADR-0178): the form as a skin round straight floors -- the floors inside it, the veil's
+// outline per storey, the plates' per storey; `floors` nil when the form is the floors.
+int l_building_envelope(lua_State* L) {
+    luaL_checktype(L, 1, LUA_TTABLE);
+    BuildingParams p;
+    Poly2 plan;
+    readPlanAndRecipe(L, p, plan);
+    if (plan.size() < 3) return luaL_error(L, "building.envelope: `plan` needs three or more points");
+    auto pushPoly = [&](const Poly2& poly) {
+        lua_newtable(L);
+        for (std::size_t i = 0; i < poly.size(); ++i) {
+            lua_newtable(L);
+            lua_pushnumber(L, poly[i].x); lua_rawseti(L, -2, 1);
+            lua_pushnumber(L, poly[i].y); lua_rawseti(L, -2, 2);
+            lua_rawseti(L, -2, static_cast<lua_Integer>(i + 1));
+        }
+    };
+    auto pushPerStorey = [&](const std::vector<Poly2>& per) {
+        lua_newtable(L);
+        for (std::size_t k = 0; k < per.size(); ++k) {
+            if (per[k].size() < 3) continue;
+            pushPoly(per[k]);
+            lua_rawseti(L, -2, static_cast<lua_Integer>(k));
+        }
+    };
+    lua_newtable(L);
+    lua_pushinteger(L, skinOf(p)); lua_setfield(L, -2, "skin");
+    const Poly2 floors = skinFloorsPlan(plan, p);
+    if (floors.size() >= 3) { pushPoly(floors); lua_setfield(L, -2, "floors"); }
+    pushPerStorey(skinSlices(plan, p)); lua_setfield(L, -2, "veil");
+    pushPerStorey(skinPlates(plan, p)); lua_setfield(L, -2, "plates");
+    return 1;
+}
+
+// building.cells{ box = {{x,z}, {x,z}, {x,z}, {x,z}}, tubes = {nx, ny} | court = depth | ring = sides, depth = d, floors = {n, ...}, <params> | recipe = "name", ... }
+//   -> { cells = { {x0, z0, x1, z1, floors, outer, connected, face_x, face_z, party, doors} ... },
+//        adjacencies = { {a, b, top, openings} ... } }
+// THE COMPLEX (cells.h, issue #105 step 5): a bundle of tubes on a box, their shared faces and the way into each.
+int l_building_cells(lua_State* L) {
+    luaL_checktype(L, 1, LUA_TTABLE);
+    BuildingParams p;
+    Poly2 plan;
+    readPlanAndRecipe(L, p, plan);
+    Poly2 box;
+    lua_getfield(L, 1, "box");
+    if (lua_istable(L, -1)) {
+        const int n = static_cast<int>(lua_rawlen(L, -1));
+        for (int i = 1; i <= n; ++i) {
+            lua_rawgeti(L, -1, i);
+            if (lua_istable(L, -1)) { lua_rawgeti(L, -1, 1); lua_rawgeti(L, -2, 2); box.push_back(Vec2(lua_tonumber(L, -2), lua_tonumber(L, -1))); lua_pop(L, 2); }
+            lua_pop(L, 1);
+        }
+    }
+    lua_pop(L, 1);
+    if (box.size() != 4) {
+        if (plan.size() < 3) return luaL_error(L, "building.cells: `box` needs four corners (or a `plan` to box)");
+        const OBB2 ob = orientedBoundingBox(plan);
+        box = {ob.center - ob.axis[0] * ob.half[0] - ob.axis[1] * ob.half[1], ob.center + ob.axis[0] * ob.half[0] - ob.axis[1] * ob.half[1],
+               ob.center + ob.axis[0] * ob.half[0] + ob.axis[1] * ob.half[1], ob.center - ob.axis[0] * ob.half[0] + ob.axis[1] * ob.half[1]};
+    }
+    int nx = 2, ny = 2;
+    lua_getfield(L, 1, "tubes");
+    if (lua_istable(L, -1)) { lua_rawgeti(L, -1, 1); lua_rawgeti(L, -2, 2); nx = static_cast<int>(lua_tointeger(L, -2)); ny = static_cast<int>(lua_tointeger(L, -1)); lua_pop(L, 2); }
+    lua_pop(L, 1);
+    std::vector<int> floors;
+    lua_getfield(L, 1, "floors");
+    if (lua_istable(L, -1)) {
+        const int n = static_cast<int>(lua_rawlen(L, -1));
+        for (int i = 1; i <= n; ++i) { lua_rawgeti(L, -1, i); floors.push_back(static_cast<int>(lua_tointeger(L, -1))); lua_pop(L, 1); }
+    }
+    lua_pop(L, 1);
+    const double court = optField(L, 1, "court", 0.0);   // court = <wing depth>: a courtyard block instead of tubes
+    const double ringN = optField(L, 1, "ring", 0.0);    // ring = <sides> (with depth = d): a ring of cells on the box's inscribed polygon
+    const double twins = optField(L, 1, "twins", 0.0);   // twins = <gap>: two towers along the box with a sky bridge (bridge = storey, bridge_w = width)
+    const bool mallK = flagField(L, 1, "mall");           // mall = true: the American mall as the spine, big-box anchors, a garage (ADR-0180)
+    Complex cx;
+    if (mallK) {
+        BuildingParams mp = architectMallWings(p.seed).params;
+        const BuildingParams ap = architectBigBox(p.seed ^ 0x51a3u).params;
+        BuildingRecipe gr;
+        BuildingParams gp = ap;
+        if (architectRecipeByName("parking_garage", p.seed ^ 0x2c7u, 0.3, 40.0, 1600.0, gr)) gp = gr.params;
+        lua_getfield(L, 1, "garage");
+        const bool withGarage = lua_isnil(L, -1) ? true : lua_toboolean(L, -1) != 0;
+        lua_pop(L, 1);
+        BuildingRecipe pr;
+        const bool hasPav = architectRecipeByName("oldtown_cafe", p.seed ^ 0x9e1u, 0.3, 13.0, 130.0, pr);
+        cx = mallCells(box, Vec2(p.faceDir.x, p.faceDir.z), mp, ap, gp, withGarage, static_cast<Real>(optField(L, 1, "depth", 30.0)), hasPav ? &pr.params : nullptr);
+    } else if (twins > 0) {
+        cx = twinTowers(box, p, static_cast<Real>(twins), floors, static_cast<int>(optField(L, 1, "bridge", 0.0)), static_cast<Real>(optField(L, 1, "bridge_w", 4.5)));
+    } else if (ringN >= 3) {
+        const OBB2 ob = orientedBoundingBox(box);
+        const Real R = std::min(ob.half[0], ob.half[1]);
+        Poly2 ngon;
+        for (int k = 0; k < static_cast<int>(ringN); ++k) {
+            const Real a2 = 2.0 * 3.14159265358979323846 * (k + 0.5) / ringN;
+            ngon.push_back(ob.center + ob.axis[0] * (std::cos(a2) * R) + ob.axis[1] * (std::sin(a2) * R));
+        }
+        cx = ringCells(ngon, p, static_cast<Real>(optField(L, 1, "depth", 12.0)), floors);
+    } else {
+        cx = court > 0 ? courtyardWings(box, p, static_cast<Real>(court), floors) : bundledTubes(box, p, nx, ny, floors);
+    }
+    lua_newtable(L);
+    lua_newtable(L);
+    for (std::size_t i = 0; i < cx.cells.size(); ++i) {
+        const CellFrame& c = cx.cells[i];
+        Vec2 lo(0, 0), hi(0, 0);
+        if (c.plan.size() >= 3) bounds(c.plan, lo, hi);
+        lua_newtable(L);
+        lua_pushnumber(L, lo.x); lua_setfield(L, -2, "x0");
+        lua_pushnumber(L, lo.y); lua_setfield(L, -2, "z0");
+        lua_pushnumber(L, hi.x); lua_setfield(L, -2, "x1");
+        lua_pushnumber(L, hi.y); lua_setfield(L, -2, "z1");
+        lua_pushinteger(L, c.params.floors); lua_setfield(L, -2, "floors");
+        lua_pushboolean(L, c.outerFace); lua_setfield(L, -2, "outer");
+        lua_pushboolean(L, c.connected); lua_setfield(L, -2, "connected");
+        lua_pushnumber(L, c.params.faceDir.x); lua_setfield(L, -2, "face_x");
+        lua_pushnumber(L, c.params.faceDir.z); lua_setfield(L, -2, "face_z");
+        lua_pushinteger(L, c.params.partyWalls); lua_setfield(L, -2, "party");
+        lua_pushinteger(L, c.params.partyDoors); lua_setfield(L, -2, "doors");
+        lua_pushinteger(L, c.params.links); lua_setfield(L, -2, "links");
+        lua_pushstring(L, c.role.c_str()); lua_setfield(L, -2, "role");
+        int openWalls = 0;
+        for (int k = 0; k < c.params.partyWalls; ++k) if (c.params.partyOpenK1[k] >= c.params.partyOpenK0[k]) ++openWalls;
+        lua_pushinteger(L, openWalls); lua_setfield(L, -2, "open_walls");
+        if (c.params.links > 0) {
+            lua_pushinteger(L, c.params.linkStorey[0]); lua_setfield(L, -2, "link_storey");
+            lua_pushnumber(L, c.params.linkLen[0]); lua_setfield(L, -2, "link_len");
+        }
+        lua_rawseti(L, -2, static_cast<lua_Integer>(i + 1));
+    }
+    lua_setfield(L, -2, "cells");
+    lua_newtable(L);
+    for (std::size_t i = 0; i < cx.bridges.size(); ++i) {
+        const Bridge& br = cx.bridges[i];
+        lua_newtable(L);
+        lua_pushinteger(L, br.a + 1); lua_setfield(L, -2, "a");
+        lua_pushinteger(L, br.b + 1); lua_setfield(L, -2, "b");
+        lua_pushinteger(L, br.storey); lua_setfield(L, -2, "storey");
+        lua_pushnumber(L, br.width); lua_setfield(L, -2, "width");
+        lua_pushnumber(L, br.span); lua_setfield(L, -2, "span");
+        lua_pushboolean(L, br.placed); lua_setfield(L, -2, "placed");
+        lua_rawseti(L, -2, static_cast<lua_Integer>(i + 1));
+    }
+    lua_setfield(L, -2, "bridges");
+    lua_newtable(L);
+    for (std::size_t i = 0; i < cx.adj.size(); ++i) {
+        const Adjacency& ad = cx.adj[i];
+        lua_newtable(L);
+        lua_pushinteger(L, ad.a + 1); lua_setfield(L, -2, "a");
+        lua_pushinteger(L, ad.b + 1); lua_setfield(L, -2, "b");
+        lua_pushinteger(L, ad.k1); lua_setfield(L, -2, "top");
+        lua_pushinteger(L, static_cast<lua_Integer>(ad.openings.size())); lua_setfield(L, -2, "openings");
+        lua_rawseti(L, -2, static_cast<lua_Integer>(i + 1));
+    }
+    lua_setfield(L, -2, "adjacencies");
+    return 1;
+}
+
+// building.circulation{ plan = {{x,z}, ...}, <params> | recipe = "name", seed = n, coreness = c }
+//   -> { valid, x0, z0, x1, z1 (the block), sky_lobby (0 = none),
+//        shafts = { {kind, x0, z0, x1, z1, storey, top, door_x, door_z, door_w, bank (0 = none)} ... },
+//        banks = { {shafts = {indices}, lobby_edge} ... }, zones = { {bank, storey, top} ... } }
+// THE CIRCULATION of a building (circulation.h, issue #105 step 3): its shafts, banks and zones as the preset lays
+// them out -- the same plan the core emitters, the elevator and the space graph read. Indices are 1-based.
+int l_building_circulation(lua_State* L) {
+    luaL_checktype(L, 1, LUA_TTABLE);
+    BuildingParams p;
+    Poly2 plan;
+    readPlanAndRecipe(L, p, plan);
+    if (plan.size() < 3) return luaL_error(L, "building.circulation: `plan` needs three or more points");
+    const CirculationPlan c = circulationFor(plan, p, entranceEdgeFor(plan, p));
+    lua_newtable(L);
+    lua_pushboolean(L, c.valid); lua_setfield(L, -2, "valid");
+    auto box = [&](const Poly2& poly) {
+        Vec2 lo(0, 0), hi(0, 0);
+        if (poly.size() >= 3) bounds(poly, lo, hi);
+        lua_pushnumber(L, lo.x); lua_setfield(L, -2, "x0");
+        lua_pushnumber(L, lo.y); lua_setfield(L, -2, "z0");
+        lua_pushnumber(L, hi.x); lua_setfield(L, -2, "x1");
+        lua_pushnumber(L, hi.y); lua_setfield(L, -2, "z1");
+    };
+    if (c.valid) box(c.rect());
+    lua_pushinteger(L, c.skyLobby + 1); lua_setfield(L, -2, "sky_lobby");
+    lua_newtable(L);
+    for (std::size_t i = 0; i < c.shafts.size(); ++i) {
+        const Shaft& s = c.shafts[i];
+        static const char* const kKind[] = {"hoistway", "stair", "service", "scenic", "escalator", "ramp", "vomitory"};
+        lua_newtable(L);
+        lua_pushstring(L, kKind[static_cast<int>(s.kind)]); lua_setfield(L, -2, "kind");
+        box(s.rect());
+        lua_pushinteger(L, s.k0); lua_setfield(L, -2, "storey");
+        lua_pushinteger(L, s.k1); lua_setfield(L, -2, "top");
+        const Vec2 df = s.doorFoot();
+        lua_pushnumber(L, df.x); lua_setfield(L, -2, "door_x");
+        lua_pushnumber(L, df.y); lua_setfield(L, -2, "door_z");
+        lua_pushnumber(L, s.doorW); lua_setfield(L, -2, "door_w");
+        lua_pushinteger(L, s.bank + 1); lua_setfield(L, -2, "bank");
+        lua_rawseti(L, -2, static_cast<lua_Integer>(i + 1));
+    }
+    lua_setfield(L, -2, "shafts");
+    lua_newtable(L);
+    for (std::size_t i = 0; i < c.banks.size(); ++i) {
+        const Bank& b = c.banks[i];
+        lua_newtable(L);
+        lua_newtable(L);
+        for (std::size_t j = 0; j < b.shafts.size(); ++j) { lua_pushinteger(L, b.shafts[j] + 1); lua_rawseti(L, -2, static_cast<lua_Integer>(j + 1)); }
+        lua_setfield(L, -2, "shafts");
+        lua_pushinteger(L, static_cast<lua_Integer>(b.lobbyEdge) + 1); lua_setfield(L, -2, "lobby_edge");
+        lua_rawseti(L, -2, static_cast<lua_Integer>(i + 1));
+    }
+    lua_setfield(L, -2, "banks");
+    lua_newtable(L);
+    for (std::size_t i = 0; i < c.zones.size(); ++i) {
+        const Zone& z = c.zones[i];
+        lua_newtable(L);
+        lua_pushinteger(L, z.bank + 1); lua_setfield(L, -2, "bank");
+        lua_pushinteger(L, z.k0); lua_setfield(L, -2, "storey");
+        lua_pushinteger(L, z.k1); lua_setfield(L, -2, "top");
+        lua_rawseti(L, -2, static_cast<lua_Integer>(i + 1));
+    }
+    lua_setfield(L, -2, "zones");
+    return 1;
+}
+
+// building.section{ rect = {w, d} | ngon = {n, r} | lot = {{x,z}, ...}, centre = {x, z}, inset = d,
+//                   chamfer = {corner, c}, notch = {edge, a0, a1, depth}, subtract = { rect = {w, d} | ngon = {n, r}, centre = {x, z} },
+//                   rounded = r, tol = t }
+//   -> { plan = {{x,z}, ...}, edges = n }   (rounded: every corner a quarter arc of radius r, tessellated within tol)
+// THE SECTION (section.h, issue #105 step 2a): a building outline as edges -- the rectangle, the drum's n-gon, a
+// lot's plan -- offset by `inset`, tessellated to the plan every other building word takes.
+int l_building_section(lua_State* L) {
+    luaL_checktype(L, 1, LUA_TTABLE);
+    Vec2 centre(0, 0);
+    lua_getfield(L, 1, "centre");
+    if (lua_istable(L, -1)) { lua_rawgeti(L, -1, 1); lua_rawgeti(L, -2, 2); centre = Vec2(lua_tonumber(L, -2), lua_tonumber(L, -1)); lua_pop(L, 2); }
+    lua_pop(L, 1);
+    Section s;
+    lua_getfield(L, 1, "rect");
+    if (lua_istable(L, -1)) { lua_rawgeti(L, -1, 1); lua_rawgeti(L, -2, 2); s = Section::rect(lua_tonumber(L, -2), lua_tonumber(L, -1), centre); lua_pop(L, 2); }
+    lua_pop(L, 1);
+    lua_getfield(L, 1, "ngon");
+    if (lua_istable(L, -1)) { lua_rawgeti(L, -1, 1); lua_rawgeti(L, -2, 2); s = Section::ngon(static_cast<int>(lua_tointeger(L, -2)), lua_tonumber(L, -1), centre); lua_pop(L, 2); }
+    lua_pop(L, 1);
+    lua_getfield(L, 1, "lot");
+    if (lua_istable(L, -1)) {
+        Poly2 plan;
+        const int n = static_cast<int>(lua_rawlen(L, -1));
+        for (int i = 1; i <= n; ++i) {
+            lua_rawgeti(L, -1, i);
+            if (lua_istable(L, -1)) { lua_rawgeti(L, -1, 1); lua_rawgeti(L, -2, 2); plan.push_back(Vec2(lua_tonumber(L, -2), lua_tonumber(L, -1))); lua_pop(L, 2); }
+            lua_pop(L, 1);
+        }
+        s = Section::fromLot(plan);
+    }
+    lua_pop(L, 1);
+    if (s.empty()) return luaL_error(L, "building.section: give rect = {w, d}, ngon = {n, r} or lot = {{x,z}, ...}");
+    const Real inset = static_cast<Real>(optField(L, 1, "inset", 0.0));
+    if (inset != 0.0) s = s.offset(inset);
+    // the surgery, in this order: a chamfer, a notch, a subtraction (each a table), then the rounding
+    lua_getfield(L, 1, "chamfer");
+    if (lua_istable(L, -1)) { lua_rawgeti(L, -1, 1); lua_rawgeti(L, -2, 2); s = s.chamfer(static_cast<std::size_t>(lua_tointeger(L, -2)), lua_tonumber(L, -1)); lua_pop(L, 2); }
+    lua_pop(L, 1);
+    lua_getfield(L, 1, "notch");
+    if (lua_istable(L, -1)) {
+        lua_rawgeti(L, -1, 1); lua_rawgeti(L, -2, 2); lua_rawgeti(L, -3, 3); lua_rawgeti(L, -4, 4);
+        s = s.notch(static_cast<std::size_t>(lua_tointeger(L, -4)), lua_tonumber(L, -3), lua_tonumber(L, -2), lua_tonumber(L, -1));
+        lua_pop(L, 4);
+    }
+    lua_pop(L, 1);
+    lua_getfield(L, 1, "subtract");   // { rect = {w, d}, centre = {x, z} } or { ngon = {n, r}, centre = {x, z} }
+    if (lua_istable(L, -1)) {
+        Vec2 c2(0, 0);
+        lua_getfield(L, -1, "centre");
+        if (lua_istable(L, -1)) { lua_rawgeti(L, -1, 1); lua_rawgeti(L, -2, 2); c2 = Vec2(lua_tonumber(L, -2), lua_tonumber(L, -1)); lua_pop(L, 2); }
+        lua_pop(L, 1);
+        Section cut;
+        lua_getfield(L, -1, "rect");
+        if (lua_istable(L, -1)) { lua_rawgeti(L, -1, 1); lua_rawgeti(L, -2, 2); cut = Section::rect(lua_tonumber(L, -2), lua_tonumber(L, -1), c2); lua_pop(L, 2); }
+        lua_pop(L, 1);
+        lua_getfield(L, -1, "ngon");
+        if (lua_istable(L, -1)) { lua_rawgeti(L, -1, 1); lua_rawgeti(L, -2, 2); cut = Section::ngon(static_cast<int>(lua_tointeger(L, -2)), lua_tonumber(L, -1), c2); lua_pop(L, 2); }
+        lua_pop(L, 1);
+        if (!cut.empty()) s = s.subtract(cut);
+    }
+    lua_pop(L, 1);
+    const Real roundedR = static_cast<Real>(optField(L, 1, "rounded", 0.0));   // corner radius: arcs
+    if (roundedR > 0.0) s = s.rounded(roundedR);
+    const Poly2 plan = s.tessellate(static_cast<Real>(optField(L, 1, "tol", 0.25)));
+    lua_newtable(L);
+    lua_newtable(L);
+    for (std::size_t i = 0; i < plan.size(); ++i) {
+        lua_newtable(L);
+        lua_pushnumber(L, plan[i].x); lua_rawseti(L, -2, 1);
+        lua_pushnumber(L, plan[i].y); lua_rawseti(L, -2, 2);
+        lua_rawseti(L, -2, static_cast<lua_Integer>(i + 1));
+    }
+    lua_setfield(L, -2, "plan");
+    lua_pushinteger(L, static_cast<lua_Integer>(s.outer.size())); lua_setfield(L, -2, "edges");
+    return 1;
+}
+
 int l_building_grow_plan_parts(lua_State* L) {
     BuildingParams p;
     Poly2 plan;
@@ -1351,6 +1841,7 @@ int l_building_grow_floor(lua_State* L) {
     const int k = std::clamp(static_cast<int>(optField(L, 1, "storey", 1.0)), 0, static_cast<int>(sps.size()) - 1);
     const Real cut = static_cast<Real>(optField(L, 1, "cutaway", 2.6));
     p.openDoorway = true;
+    ensureFurnitureLibraryLoaded();   // the rooms are furnished from furniture_rooms.lua (M3b)
     BuildingMesh bm = growInterior(plan, p, 0.0, nullptr, k, k + 1);
     const Real y0 = sps[static_cast<std::size_t>(k)].y0;
     // The furniture, into its finish parts.
@@ -1610,8 +2101,124 @@ int l_mesh_quad(lua_State* L) {
     Vec3 a = checkVec3(L, 1), b = checkVec3(L, 2), c = checkVec3(L, 3),
          d = checkVec3(L, 4), nrm = checkVec3(L, 5);
     auto m = std::make_shared<RenderMesh>();
-    emitQuad(*m, a, b, c, d, nrm, optColor(L, 6));
+    MeshBuilder::emitQuad(*m, a, b, c, d, nrm, optColor(L, 6));
     pushMesh(L, std::move(m));
+    return 1;
+}
+
+// --- THE MESH LIBRARY's solids and fills (mesh_builder.h), the same words as C++: every face wound by the library,
+// solids closed. Points are {x, y, z}; plan points {x, z}.
+std::vector<Vec3> checkVec3List(lua_State* L, int idx) {
+    luaL_checktype(L, idx, LUA_TTABLE);
+    std::vector<Vec3> out;
+    for (lua_Integer i = 1, n = static_cast<lua_Integer>(lua_rawlen(L, idx)); i <= n; ++i) {
+        lua_rawgeti(L, idx, i); out.push_back(checkVec3(L, -1)); lua_pop(L, 1);
+    }
+    return out;
+}
+std::vector<Vec2> checkPlanList(lua_State* L, int idx) {
+    luaL_checktype(L, idx, LUA_TTABLE);
+    std::vector<Vec2> out;
+    for (lua_Integer i = 1, n = static_cast<lua_Integer>(lua_rawlen(L, idx)); i <= n; ++i) {
+        lua_rawgeti(L, idx, i);
+        lua_rawgeti(L, -1, 1); lua_rawgeti(L, -2, 2);
+        out.push_back(Vec2(luaL_checknumber(L, -2), luaL_checknumber(L, -1)));
+        lua_pop(L, 3);
+    }
+    return out;
+}
+
+// mesh.block({foot a, b, c, d}, {head a, b, c, d}, color) -> mesh : any six-sided solid, closed, faces out
+int l_mesh_block(lua_State* L) {
+    const std::vector<Vec3> f = checkVec3List(L, 1), h = checkVec3List(L, 2);
+    if (f.size() != 4 || h.size() != 4) return luaL_error(L, "mesh.block: foot and head take four corners each");
+    const Vec3 foot[4] = {f[0], f[1], f[2], f[3]}, head[4] = {h[0], h[1], h[2], h[3]};
+    auto m = std::make_shared<RenderMesh>();
+    MeshBuilder::emitBlock(*m, foot, head, optColor(L, 3));
+    pushMesh(L, std::move(m));
+    return 1;
+}
+
+// mesh.box_frame{origin=, x=, y=, z=, color=, open_bottom=} -> mesh : a box spanning origin + [0,1] of each axis vector
+int l_mesh_box_frame(lua_State* L) {
+    luaL_checktype(L, 1, LUA_TTABLE);
+    MeshFrame f;
+    f.o = optVec3Field(L, 1, "origin", f.o);
+    f.x = optVec3Field(L, 1, "x", f.x);
+    f.y = optVec3Field(L, 1, "y", f.y);
+    f.z = optVec3Field(L, 1, "z", f.z);
+    const Vec3 col = optVec3Field(L, 1, "color", Vec3(0.8, 0.8, 0.8));
+    lua_getfield(L, 1, "open_bottom");
+    const bool open = lua_toboolean(L, -1);
+    lua_pop(L, 1);
+    auto m = std::make_shared<RenderMesh>();
+    MeshBuilder::emitBox(*m, f, col, open ? static_cast<uint8_t>(kFacesAll & ~kFaceBottom) : kFacesAll);
+    pushMesh(L, std::move(m));
+    return 1;
+}
+
+// mesh.polygon({points}, {holes...}, normal, color) -> mesh : a planar polygon with holes, any plane
+int l_mesh_polygon(lua_State* L) {
+    const std::vector<Vec3> ring = checkVec3List(L, 1);
+    std::vector<std::vector<Vec3>> holes;
+    if (lua_istable(L, 2))
+        for (lua_Integer i = 1, n = static_cast<lua_Integer>(lua_rawlen(L, 2)); i <= n; ++i) {
+            lua_rawgeti(L, 2, i); holes.push_back(checkVec3List(L, lua_gettop(L))); lua_pop(L, 1);
+        }
+    auto m = std::make_shared<RenderMesh>();
+    MeshBuilder::emitPolygon(*m, ring, holes, checkVec3(L, 3), optColor(L, 4));
+    pushMesh(L, std::move(m));
+    return 1;
+}
+
+// mesh.prism({{x, z}...}, {holes...}, y0, y1, color) -> mesh : a plan outline extruded, walls round every ring
+int l_mesh_prism(lua_State* L) {
+    const std::vector<Vec2> outline = checkPlanList(L, 1);
+    std::vector<std::vector<Vec2>> holes;
+    if (lua_istable(L, 2))
+        for (lua_Integer i = 1, n = static_cast<lua_Integer>(lua_rawlen(L, 2)); i <= n; ++i) {
+            lua_rawgeti(L, 2, i); holes.push_back(checkPlanList(L, lua_gettop(L))); lua_pop(L, 1);
+        }
+    auto m = std::make_shared<RenderMesh>();
+    MeshBuilder::emitPlanPrism(*m, outline, holes, luaL_checknumber(L, 3), luaL_checknumber(L, 4), optColor(L, 5));
+    pushMesh(L, std::move(m));
+    return 1;
+}
+
+// mesh.column(base, radius, height, sides, color, smooth) -> mesh : a capped cylinder standing on `base`
+int l_mesh_column(lua_State* L) {
+    auto m = std::make_shared<RenderMesh>();
+    MeshBuilder::emitCylinder(*m, checkVec3(L, 1), luaL_checknumber(L, 2), luaL_checknumber(L, 3),
+                              static_cast<int>(luaL_optinteger(L, 4, 12)), optColor(L, 5), !lua_toboolean(L, 6));
+    pushMesh(L, std::move(m));
+    return 1;
+}
+
+// mesh.flat_shade(m) / mesh.autosmooth(m, crease_deg) -> mesh : normals from the faces, flat or creased
+int l_mesh_flat_shade(lua_State* L) {
+    auto m = std::make_shared<RenderMesh>(checkMesh(L, 1));
+    MeshBuilder::flatShade(*m);
+    pushMesh(L, std::move(m));
+    return 1;
+}
+int l_mesh_autosmooth(lua_State* L) {
+    auto m = std::make_shared<RenderMesh>(checkMesh(L, 1));
+    MeshBuilder::autosmooth(*m, luaL_optnumber(L, 2, 50.0));
+    pushMesh(L, std::move(m));
+    return 1;
+}
+
+// mesh.audit(m) -> {tris, inward, flipped, degenerate, open_edges} : the engine's mesh audit (engine/mesh_audit.h), so
+// a script can check what it built
+int l_mesh_audit(lua_State* L) {
+    const RenderMesh& m = checkMesh(L, 1);
+    const MeshAudit a = auditMesh(m);
+    lua_newtable(L);
+    lua_pushinteger(L, a.tris); lua_setfield(L, -2, "tris");
+    lua_pushinteger(L, a.inward); lua_setfield(L, -2, "inward");
+    lua_pushinteger(L, a.flipped); lua_setfield(L, -2, "flipped");
+    lua_pushinteger(L, a.degenerate); lua_setfield(L, -2, "degenerate");
+    lua_pushinteger(L, static_cast<lua_Integer>(openEdges(m))); lua_setfield(L, -2, "open_edges");
     return 1;
 }
 
@@ -2342,72 +2949,6 @@ int l_city_road_builders(lua_State* L) {
     return 1;
 }
 
-// city.road_mesh(layout, { height=HeightField, sidewalk=, curb=, crosswalks= })
-//   -> mesh. Builds a connected road *surface* from a layout table (the one
-// city.layout returns, or one a recipe edited — added spine edges/nodes).
-//
-// ONE MESHER: this routes through `buildRoadNetLattice`, the same builder every
-// level road uses (road_net.cpp § "ONE MESHER"). It previously wrapped
-// `buildRoadMesh`, an analytic mesher the engine path had already retired — so a
-// Lua scene rendered roads with code that no longer shipped, which is exactly the
-// fork ADR-0042 forbids ("a Lua binding MUST wrap the SAME C++ builder the engine
-// uses, never a fork of its geometry").
-//
-// Honoured keys: `height` (drapes on terrain; absent = flat), `sidewalk`, `curb`,
-// `crosswalks`. The lattice owns carriageway/curb/marking appearance per road
-// class, so the old per-call colour and marking knobs (color, sidewalk_color,
-// curb_color, lane_color, markings, lane_width, plaza, corner_radius, …) no
-// longer apply and are not read — set the road class on the edge instead.
-// `lift` is likewise gone: the engine path never passed one either (the lattice
-// stands its slab proud of the ground itself).
-int l_city_road_mesh(lua_State* L) {
-    luaL_checktype(L, 1, LUA_TTABLE);
-    RoadGraph g;
-    // Nodes (1-based; the table is {x=,z=} points).
-    lua_getfield(L, 1, "nodes");
-    lua_Integer nn = lua_istable(L, -1) ? luaL_len(L, -1) : 0;
-    std::vector<int> remap(static_cast<std::size_t>(nn));
-    for (lua_Integer i = 1; i <= nn; ++i) {
-        lua_geti(L, -1, i);
-        double x = optField(L, -1, "x", 0.0), z = optField(L, -1, "z", 0.0);
-        remap[static_cast<std::size_t>(i - 1)] = g.addNode(Vec2(x, z), 0.01);
-        lua_pop(L, 1);
-    }
-    lua_pop(L, 1);
-    // Edges ({a, b, width}, 1-based node indices).
-    lua_getfield(L, 1, "edges");
-    lua_Integer ne = lua_istable(L, -1) ? luaL_len(L, -1) : 0;
-    for (lua_Integer i = 1; i <= ne; ++i) {
-        lua_geti(L, -1, i);
-        int a = static_cast<int>(optField(L, -1, "a", 0));
-        int b = static_cast<int>(optField(L, -1, "b", 0));
-        double w = optField(L, -1, "width", 8.0);
-        if (a >= 1 && a <= nn && b >= 1 && b <= nn)
-            g.addEdge(remap[a - 1], remap[b - 1], static_cast<Real>(w));
-        lua_pop(L, 1);
-    }
-    lua_pop(L, 1);
-
-    double sidewalkW = 3.0, curbH = 0.15;
-    bool crosswalks = true;
-    std::function<Real(Real, Real)> heightAt;
-    if (lua_istable(L, 2)) {
-        sidewalkW  = optField(L, 2, "sidewalk", sidewalkW);
-        curbH      = optField(L, 2, "curb", curbH);
-        crosswalks = optBoolField(L, 2, "crosswalks", crosswalks);
-        lua_getfield(L, 2, "height");
-        if (auto* hf = static_cast<HeightField*>(luaL_testudata(L, -1, kHeightMt))) {
-            HeightField h = *hf;
-            heightAt = [h](Real x, Real z) { return static_cast<Real>(h(x, z)); };
-        }
-        lua_pop(L, 1);
-    }
-    pushMesh(L, std::make_shared<RenderMesh>(
-                    buildRoadNetLattice(g, heightAt, nullptr, sidewalkW, curbH,
-                                        crosswalks)));
-    return 1;
-}
-
 // city.stroke{ points={{x,z},...}, width= | widths={...}, y=, color={r,g,b},
 //   closed= } -> a flat ribbon mesh: the centerline stroked at the given width(s),
 //   robust for any curve incl. tight bends and hairpins (ADR-0048). The
@@ -2440,135 +2981,6 @@ int l_city_stroke(lua_State* L) {
     Vec3 color = optVec3Field(L, 1, "color", Vec3(0.10, 0.10, 0.11));
     bool closed = optBoolField(L, 1, "closed", false);
     pushMesh(L, std::make_shared<RenderMesh>(strokeRibbon(pts, hw, y, color, closed)));
-    return 1;
-}
-
-// Read a `spines = { {points={{x,z}...}, width=, closed=}, ... }` field into spines.
-std::vector<UnionSpine> readUnionSpines(lua_State* L, int tbl) {
-    std::vector<UnionSpine> spines;
-    lua_getfield(L, tbl, "spines");
-    luaL_checktype(L, -1, LUA_TTABLE);
-    lua_Integer ns = luaL_len(L, -1);
-    for (lua_Integer si = 1; si <= ns; ++si) {
-        lua_geti(L, -1, si);
-        UnionSpine sp;
-        sp.halfWidth = optField(L, -1, "width", 8.0) * 0.5;
-        sp.closed = optBoolField(L, -1, "closed", false);
-        lua_getfield(L, -1, "points");
-        luaL_checktype(L, -1, LUA_TTABLE);
-        lua_Integer np = luaL_len(L, -1);
-        for (lua_Integer pi = 1; pi <= np; ++pi) {
-            lua_geti(L, -1, pi);
-            sp.points.push_back(Vec2(optField(L, -1, "x", 0.0), optField(L, -1, "z", 0.0)));
-            lua_pop(L, 1);
-        }
-        lua_pop(L, 1);                                  // points
-        spines.push_back(std::move(sp));
-        lua_pop(L, 1);                                  // spine
-    }
-    lua_pop(L, 1);                                      // spines
-    return spines;
-}
-
-// Spines from either an explicit `spines` list OR a `layout` (a city.layout result):
-// each graph edge becomes a spine, half-width from its width. The bridge that lets the
-// road GENERATORS feed straight into the union/roadbed pipeline.
-std::vector<UnionSpine> readSpinesArg(lua_State* L, int tbl) {
-    lua_getfield(L, tbl, "layout");
-    if (lua_istable(L, -1)) {
-        int layoutIdx = lua_gettop(L);
-        std::vector<Vec2> nodes;
-        lua_getfield(L, layoutIdx, "nodes");
-        if (lua_istable(L, -1)) {
-            lua_Integer nn = luaL_len(L, -1);
-            for (lua_Integer i = 1; i <= nn; ++i) {
-                lua_geti(L, -1, i);
-                nodes.push_back(Vec2(optField(L, -1, "x", 0.0), optField(L, -1, "z", 0.0)));
-                lua_pop(L, 1);
-            }
-        }
-        lua_pop(L, 1);                                  // nodes
-        std::vector<UnionSpine> spines;
-        lua_getfield(L, layoutIdx, "edges");
-        if (lua_istable(L, -1)) {
-            lua_Integer ne = luaL_len(L, -1);
-            for (lua_Integer i = 1; i <= ne; ++i) {
-                lua_geti(L, -1, i);
-                int a = static_cast<int>(optField(L, -1, "a", 0)) - 1;   // 1-based -> 0
-                int b = static_cast<int>(optField(L, -1, "b", 0)) - 1;
-                double w = optField(L, -1, "width", 8.0);
-                lua_pop(L, 1);
-                if (a >= 0 && b >= 0 && a < static_cast<int>(nodes.size()) &&
-                    b < static_cast<int>(nodes.size()) && a != b) {
-                    UnionSpine s; s.halfWidth = w * 0.5; s.points = { nodes[a], nodes[b] };
-                    spines.push_back(std::move(s));
-                }
-            }
-        }
-        lua_pop(L, 1);                                  // edges
-        lua_pop(L, 1);                                  // layout
-        return spines;
-    }
-    lua_pop(L, 1);                                      // (no layout)
-    return readUnionSpines(L, tbl);
-}
-
-// city.solid{ spines={...} | layout=..., y=, thickness=, corner_radius=, color=, side_color=,
-//   bottom_color=, max_grade=, height=(heightfield) } -> the welded outline EXTRUDED into a
-//   closed slab with real thickness (deck + walls + underside), riding a smoothed grade-limited
-//   profile over the optional terrain. The volumetric successor to city.weld (one-sided ribbon).
-int l_city_solid(lua_State* L) {
-    luaL_checktype(L, 1, LUA_TTABLE);
-    std::vector<UnionSpine> spines = readSpinesArg(L, 1);
-    // Roads-v2 S6: the weld is gone — city.solid now routes through the ONE
-    // road mesher. The spine polylines become a RoadGraph (nodes hash-deduped
-    // at shared positions, so touching spines weld into junctions) and
-    // buildRoadNetLattice builds carriageways, junction pads, curb/sidewalk
-    // band and per-class structure exactly like every level road.
-    const double sidewalkW = optField(L, 1, "sidewalk", 0.0);
-    const double curbH = optField(L, 1, "curb", 0.15);
-    const double topY = optField(L, 1, "y", 0.0);
-    RoadGraph g;
-    std::unordered_map<long long, int> nodeAt;
-    auto key = [](const Vec2& p) {
-        return (static_cast<long long>(std::llround(p.x * 8.0)) << 32) ^
-               (static_cast<long long>(std::llround(p.y * 8.0)) & 0xffffffffLL);
-    };
-    for (const UnionSpine& sp : spines) {
-        const bool hasY = sp.yAbs.size() == sp.points.size();
-        int prev = -1;
-        for (std::size_t i = 0; i < sp.points.size(); ++i) {
-            const long long k = key(sp.points[i]);
-            auto it = nodeAt.find(k);
-            int ni;
-            if (it != nodeAt.end()) ni = it->second;
-            else {
-                RoadNode n;
-                n.pos = sp.points[i];
-                if (hasY) { n.elev = sp.yAbs[i]; n.elevAbsolute = true; }
-                ni = static_cast<int>(g.nodes.size());
-                g.nodes.push_back(n);
-                nodeAt.emplace(k, ni);
-            }
-            if (prev >= 0 && prev != ni) {
-                RoadEdge e;
-                e.a = prev; e.b = ni;
-                e.width = sp.halfWidth * 2.0;
-                e.klass = sp.klass;
-                g.edges.push_back(e);
-            }
-            prev = ni;
-        }
-    }
-    std::function<Real(Real, Real)> ground = [topY](Real, Real) { return topY; };
-    lua_getfield(L, 1, "height");
-    if (auto* hf = static_cast<HeightField*>(luaL_testudata(L, -1, kHeightMt))) {
-        HeightField h = *hf;
-        ground = [h, topY](Real x, Real z) { return h(x, z) + topY; };
-    }
-    lua_pop(L, 1);
-    pushMesh(L, std::make_shared<RenderMesh>(
-        buildRoadNetLattice(g, ground, nullptr, sidewalkW, curbH)));
     return 1;
 }
 
@@ -3705,6 +4117,7 @@ void openProcgenLibrary(ScriptVM& vm) {
         {"car_shell", l_mesh_car_shell},
         {"car", l_mesh_car},
         {"occupant", l_mesh_occupant},
+        {"person", l_mesh_person},
         {"merge", l_mesh_merge},
         {"lathe", l_mesh_lathe},
         {"translate", l_mesh_translate},
@@ -3724,6 +4137,14 @@ void openProcgenLibrary(ScriptVM& vm) {
         {"lean_normals", l_mesh_lean_normals},
         {"color_by", l_mesh_color_by},
         {"tube", l_mesh_tube},
+        {"block", l_mesh_block},
+        {"box_frame", l_mesh_box_frame},
+        {"polygon", l_mesh_polygon},
+        {"prism", l_mesh_prism},
+        {"column", l_mesh_column},
+        {"flat_shade", l_mesh_flat_shade},
+        {"autosmooth", l_mesh_autosmooth},
+        {"audit", l_mesh_audit},
         {nullptr, nullptr},
     };
     luaL_newlib(L, kMeshFns);
@@ -3781,6 +4202,12 @@ void openProcgenLibrary(ScriptVM& vm) {
         {"grow", l_building_grow},
         {"grow_parts", l_building_grow_parts},
         {"grow_plan_parts", l_building_grow_plan_parts},
+        {"space_graph", l_building_space_graph},
+        {"section", l_building_section},
+        {"circulation", l_building_circulation},
+        {"mass", l_building_mass},
+        {"envelope", l_building_envelope},
+        {"cells", l_building_cells},
         {"grow_floor", l_building_grow_floor},
         {"height", l_building_height},
         {nullptr, nullptr},
@@ -3820,10 +4247,8 @@ void openProcgenLibrary(ScriptVM& vm) {
     static const luaL_Reg kCityFns[] = {
         {"layout", l_city_layout},
         {"lots", l_city_lots},
-        {"road_mesh", l_city_road_mesh},
         {"road_builders", l_city_road_builders},
         {"stroke", l_city_stroke},
-        {"solid", l_city_solid},
         {"resolve", l_city_resolve},
         {nullptr, nullptr},
     };

@@ -65,6 +65,21 @@ public:
         cur = c;
     }
 
+    // Take id out (its cell forgets it); a later place() puts it back.
+    void remove(int id) {
+        if (id < 0 || id >= static_cast<int>(cellOf_.size())) return;
+        int& cur = cellOf_[id];
+        if (cur < 0) return;
+        std::vector<int>& b = buckets_[cur];
+        for (std::size_t k = 0; k < b.size(); ++k)
+            if (b[k] == id) {
+                b[k] = b.back();
+                b.pop_back();
+                break;
+            }
+        cur = -1;
+    }
+
     // All ids hashed into cells the circle's bounding box touches — a SUPERSET
     // of the ids within `radius` of `pos`, sorted ascending. Callers apply
     // their own exact distance/state predicates, exactly as their old linear

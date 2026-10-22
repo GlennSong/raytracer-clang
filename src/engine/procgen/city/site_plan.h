@@ -39,6 +39,11 @@ struct SiteFrame {
         return {dot(d, u), dot(d, v)};
     }
     Vec2 toWorld(const Vec2& f) const { return origin + u * f.x + v * f.y; }
+    // (x, y) in the frame -- x along u, y along v -- in the world, and at height h in 3D (y up). THE PLAN FRAME every
+    // lot sculptor works in (a site, an open lot's rectangle, a depot's yard): its boxes are Scope::inFrame, its flat
+    // rectangles emitPlanRect (shape_grammar.h).
+    Vec2 W(Real x, Real y) const { return origin + u * x + v * y; }
+    Vec3 P(Real x, Real y, Real h) const { const Vec2 w = W(x, y); return Vec3(w.x, h, w.y); }
 };
 
 // Setbacks from the lot lines, by which side of the lot an edge is: the

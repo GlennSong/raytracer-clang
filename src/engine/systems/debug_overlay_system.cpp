@@ -174,7 +174,7 @@ void DebugOverlaySystem::render(FrameContext& ctx) {
             if (on) ImGui::PopStyleColor();
         }
         ImGui::SameLine();
-        if (ImGui::SmallButton(ctx.clock.paused() ? "Resume" : "Pause")) ctx.clock.setPaused(!ctx.clock.paused());
+        if (ImGui::SmallButton(ctx.clock.paused() ? "Resume##clock" : "Pause##clock")) ctx.clock.setPaused(!ctx.clock.paused());
     }
     ImGui::Separator();
 

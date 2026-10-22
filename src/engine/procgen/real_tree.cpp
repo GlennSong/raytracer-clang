@@ -15,7 +15,8 @@ namespace {
 constexpr double kPi = 3.14159265358979;
 
 // ---- names -----------------------------------------------------------------------------------
-const char* const kNames[] = {"spruce", "fir", "pine", "oak", "beech", "birch", "maple", "aspen", "willow", "alder", "shrub"};
+const char* const kNames[] = {"spruce", "fir", "pine", "oak", "beech", "birch", "maple", "aspen", "willow", "alder", "shrub",
+                              "royal_palm", "coconut_palm", "monkeypod", "poinciana", "jacaranda", "plumeria"};
 
 double smooth01(double a, double b, double x) {
     const double t = std::clamp((x - a) / (b - a), 0.0, 1.0);
@@ -50,7 +51,7 @@ void card(RenderMesh& m, const Vec3& base, const Vec3& along, const Vec3& side, 
         v.color = col;
         m.vertices.push_back(v);
     }
-    for (uint32_t i : {0u, 1u, 2u, 0u, 2u, 3u}) m.indices.push_back(b + i);
+    MeshBuilder::quadFacing(m, b, b + 1, b + 2, b + 3, n);
 }
 
 void tubeInto(RenderMesh& dst, const std::vector<Vec3>& pts, const std::vector<double>& radii, int sides, const std::vector<Vec3>& cols) {
@@ -69,6 +70,10 @@ struct Species {
     int limbs, targets, cardsPer;
     bool leader;       // a limb continues straight up
     double hang;       // cards lean down (birch)
+    // IN FLOWER (the street trees): this share of the leaf cards wears the flower tile (the atlas' last) in this
+    // colour. 0 for the forest species, which then draw exactly the random numbers they always did.
+    Vec3 bloom;
+    double bloomShare;
 };
 
 Species speciesOf(RealSpecies s) {
@@ -123,6 +128,39 @@ Species speciesOf(RealSpecies s) {
             p = {2.2, 4.5, {0.13, 0.11, 0.09}, {0.14, 0.12, 0.10}, {0.050, 0.085, 0.025},
                  0, 0, 0, 0, 0, 0, 0, 0, 0,
                  0.03, 0.55, 0.55, 0.45, 45, 75, 0.9, 5, 50, 5, false, 0};
+            break;
+        // street trees. Heights and spreads from the botanical references in CREDITS.md: a royal palm 15-25 m on a
+        // ~60 cm column, fronds ~3-4 m; a coconut 15-25 m (street ones 10-18), fronds 4-6 m; a monkeypod 15-25 m
+        // and wider than tall; a poinciana 5-12 m, wider than tall; a jacaranda 8-15 m; a plumeria 3-8 m
+        case RealSpecies::RoyalPalm:   // (palm(): bark = column, tint = fronds, bloom = crownshaft)
+            p = {14, 21, {0.16, 0.16, 0.15}, {0.20, 0.20, 0.19}, {0.040, 0.075, 0.022},
+                 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, false, 0, {0.06, 0.13, 0.04}, 0};
+            break;
+        case RealSpecies::CoconutPalm:
+            p = {10, 17, {0.10, 0.085, 0.065}, {0.15, 0.13, 0.10}, {0.060, 0.090, 0.026},
+                 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, false, 0, {0.14, 0.10, 0.03}, 0};
+            break;
+        case RealSpecies::Monkeypod:
+            p = {12, 18, {0.11, 0.09, 0.07}, {0.13, 0.11, 0.085}, {0.042, 0.080, 0.020},
+                 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                 0.16, 0.66, 0.78, 0.22, 10, 26, 1.7, 7, 190, 6, false, 0, {0, 0, 0}, 0};
+            break;
+        case RealSpecies::Poinciana:
+            p = {7, 11, {0.12, 0.11, 0.095}, {0.14, 0.13, 0.11}, {0.050, 0.085, 0.022},
+                 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                 0.24, 0.70, 0.72, 0.22, 12, 30, 1.3, 6, 150, 6, false, 0, {0.34, 0.045, 0.012}, 0.55};
+            break;
+        case RealSpecies::Jacaranda:
+            p = {9, 14, {0.11, 0.10, 0.085}, {0.13, 0.12, 0.10}, {0.048, 0.085, 0.026},
+                 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                 0.30, 0.62, 0.46, 0.32, 35, 58, 1.3, 5, 140, 6, false, 0, {0.13, 0.085, 0.27}, 0.7};
+            break;
+        case RealSpecies::Plumeria:
+            p = {4, 7, {0.15, 0.15, 0.13}, {0.18, 0.18, 0.16}, {0.040, 0.078, 0.022},
+                 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                 0.14, 0.66, 0.52, 0.34, 48, 70, 0.95, 9, 46, 4, false, 0, {0.36, 0.33, 0.20}, 0.32};
             break;
         case RealSpecies::Birch:
         default:
@@ -244,7 +282,8 @@ void shellCrown(RealTree& t, RealSpecies s, ProcRng& r, double h) {
     const double forkY = h * sp.forkFrac * r.in(0.9, 1.1);
     const Vec3 C(r.in(-0.3, 0.3), h * sp.centreFrac, r.in(-0.3, 0.3));
     const double R = h * sp.rFrac * r.in(0.88, 1.12), Ry = h * sp.ryFrac * r.in(0.9, 1.1);
-    const double r0 = h * (s == RealSpecies::Birch || s == RealSpecies::Aspen ? 0.013 : (s == RealSpecies::Shrub ? 0.018 : 0.02));
+    const double r0 = h * (s == RealSpecies::Birch || s == RealSpecies::Aspen ? 0.013 : (s == RealSpecies::Shrub ? 0.018 : 0.02)) *
+                      (s == RealSpecies::Plumeria ? 1.6 : s == RealSpecies::Monkeypod ? 1.45 : 1.0);   // stout, for their height
     std::vector<Vec3> axis;
     // the trunk runs on up into the crown (a stem that forks once at one point reads as a candelabra)
     const bool bush = s == RealSpecies::Shrub;   // many stems from the ground, no trunk
@@ -319,9 +358,121 @@ void shellCrown(RealTree& t, RealSpecies s, ProcRng& r, double h) {
             const Vec3 side = rotateAbout(perpTo(along), along, r.in(0, kPi));
             const double sz = sp.cardSize * r.in(0.8, 1.2);
             const double ao = (0.40 + 0.60 * smooth01(0.35, 1.0, rr)) * (0.72 + 0.28 * low);
-            card(t.foliage, base, along, side, sz, sz * 0.9, n, sp.tint * (ao * r.in(0.82, 1.15)), r.below(kTiles * kTiles));
+            if (sp.bloomShare <= 0) {
+                card(t.foliage, base, along, side, sz, sz * 0.9, n, sp.tint * (ao * r.in(0.82, 1.15)), r.below(kTiles * kTiles));
+                continue;
+            }
+            // in flower: the flower tile (the atlas' last) in the bloom colour, flowers carried on the OUTSIDE of the
+            // crown (the share rises toward the shell and the top); the leaves on the other three tiles
+            const double lift = r.in(0.82, 1.15);
+            const bool flower = r.next() < sp.bloomShare * (0.55 + 0.6 * smooth01(0.5, 1.0, rr)) * (0.75 + 0.5 * low);
+            const Vec3 tint = flower ? sp.bloom * (0.55 + 0.45 * ao) * lift : sp.tint * (ao * lift);
+            const int tile = flower ? kTiles * kTiles - 1 : r.below(kTiles * kTiles - 1);
+            card(t.foliage, base, along, side, flower ? sz * 0.85 : sz, (flower ? sz * 0.85 : sz) * 0.9, n, tint, tile);
         }
     }
+}
+
+// ---- palms: a column and a head of fronds ------------------------------------------------------------
+// A frond is a chain of cards along a drooping arc -- each card a stretch of feather leaf (the frond tile: a
+// midrib, leaflets both sides), two per stretch in a shallow V, narrowing to the tip -- so it arches as a real
+// one does instead of standing out as a flat board. Young fronds stand up out of the head, old ones hang.
+void palm(RealTree& t, RealSpecies s, ProcRng& r, double h) {
+    const Species sp = speciesOf(s);
+    const bool royal = s == RealSpecies::RoyalPalm;
+    const Vec3 up(0, 1, 0);
+    // the column: royal straight, swollen at the foot and a little mid-height, smooth pale grey with faint rings;
+    // coconut leaning and bowing back up (it grows toward the light), slimmer, ringed dark at every frond scar
+    const double topY = royal ? h * 0.80 : h * 0.90;   // where the fronds leave (royal: atop the crownshaft)
+    const double shaft = royal ? h * 0.13 : 0.0;
+    const double r0 = royal ? 0.30 * (h / 18.0 + 0.4) / 1.4 : 0.17 + 0.012 * h;
+    const double leanAz = r.in(0, 2 * kPi), lean = royal ? r.in(0.0, 0.015) : r.in(0.16, 0.32);
+    const Vec3 leanDir(std::cos(leanAz), 0, std::sin(leanAz));
+    std::vector<Vec3> pts, cols;
+    std::vector<double> rad;
+    const int n = 18;
+    const double colTop = topY - shaft;
+    for (int i = 0; i <= n; ++i) {
+        const double f = double(i) / n, y = colTop * f;
+        // the coconut's bow: out along its lean, curving back up over the top third
+        const double sway = royal ? lean * y : lean * colTop * (f - 0.35 * f * f * f);
+        pts.push_back(leanDir * sway + Vec3(0, y, 0));
+        double rr = r0 * (1.0 + 0.55 * std::exp(-y / 0.8));                       // the root flare
+        if (royal) rr *= 1.0 + 0.14 * std::exp(-std::pow((f - 0.42) / 0.2, 2.0)) - 0.12 * f;   // the mid swelling
+        else rr *= 1.0 - 0.25 * f;
+        rad.push_back(rr);
+        Vec3 c = sp.bark + (sp.barkHigh - sp.bark) * f;
+        if (!royal && i % 2) c = c * 0.62;                                        // the frond-scar rings
+        cols.push_back(c * r.in(0.92, 1.06));
+    }
+    tubeInto(t.bark, pts, rad, 9, cols);
+    const Vec3 head = pts.back();
+    Vec3 crown = head;
+    if (royal) {   // the crownshaft: glossy green, a touch wider than the column top, tapering into the fronds
+        std::vector<Vec3> sp2, sc;
+        std::vector<double> sr;
+        for (int i = 0; i <= 5; ++i) {
+            const double f = i / 5.0;
+            sp2.push_back(head + up * (shaft * f));
+            sr.push_back(rad.back() * (1.12 - 0.35 * f * f));
+            sc.push_back(sp.bloom * (0.9 + 0.2 * f));
+        }
+        tubeInto(t.bark, sp2, sr, 9, sc);
+        crown = head + up * shaft;
+    }
+    // the nuts, a bunch under the coconut's head
+    if (!royal) {
+        const int nuts = 4 + r.below(5);
+        for (int k = 0; k < nuts; ++k) {
+            const double a = r.in(0, 2 * kPi), rr = 0.13;
+            const Vec3 c = crown + Vec3(std::cos(a) * 0.28, r.in(-0.55, -0.25), std::sin(a) * 0.28);
+            tubeInto(t.bark, {c - up * rr, c - up * (rr * 0.5), c + up * (rr * 0.5), c + up * rr}, {0.01, rr * 0.9, rr * 0.9, 0.01}, 6,
+                     {sp.bloom, sp.bloom, sp.bloom * 0.8, sp.bloom * 0.8});
+        }
+    }
+    // the fronds
+    const int fronds = royal ? 13 + r.below(4) : 16 + r.below(5);
+    const double golden = 137.508 * kPi / 180.0;
+    double reach = 0, topMost = crown.y;
+    for (int k = 0; k < fronds; ++k) {
+        const double age = (k + r.next()) / fronds;                  // 0 the youngest (upright) .. 1 the oldest
+        const double az = k * golden + r.in(-0.2, 0.2);
+        const Vec3 d(std::cos(az), 0, std::sin(az));
+        const double L = (royal ? r.in(3.4, 4.3) : r.in(4.2, 5.4)) * (0.8 + 0.2 * std::sqrt(h / 16.0));
+        const double el0 = (royal ? 72.0 - 88.0 * age : 55.0 - 75.0 * age) * kPi / 180.0;   // leaving the head
+        const double droop = royal ? 0.55 : 0.85;                    // how far it bends over along its length (rad)
+        const int seg = 4;
+        Vec3 p = crown + d * (royal ? 0.18 : 0.25) + up * r.in(-0.25, 0.15);
+        const Vec3 rib0 = p;
+        for (int j = 0; j < seg; ++j) {
+            const double f0 = double(j) / seg, f1 = double(j + 1) / seg;
+            const double el = el0 - droop * std::pow(0.5 * (f0 + f1), 1.4) * (0.6 + 0.6 * age);
+            const Vec3 along = normalize(d * std::cos(el) + up * std::sin(el));
+            const double len = L / seg * 1.08;
+            const Vec3 side = normalize(cross(up, d));
+            // leaflets spread widest past the frond's middle, closing to the tip; the coconut's hang down in a V
+            const double wid = (royal ? 2.0 : 1.8) * (0.55 + 0.6 * std::sin(kPi * std::min(1.0, 0.25 + f0 * 0.9))) * (j == seg - 1 ? 0.6 : 1.0);
+            const double vee = royal ? 0.55 : 0.6;                   // each half tilted down off flat
+            const Vec3 nrm = normalize(d * 0.7 + up * 0.8);
+            const Vec3 c = sp.tint * (r.in(0.85, 1.1) * (1.0 - 0.25 * age) * (j == 0 ? 0.85 : 1.0));
+            for (int half : {-1, 1}) {
+                // each half: a card from the rib outward, so the V hinges on the midrib
+                const Vec3 sh = rotateAbout(side * double(half), along, -half * vee);
+                card(t.foliage, p + sh * (0.25 * wid), along, sh, len, 0.5 * wid, nrm, c, r.below(kTiles * kTiles));
+            }
+            p = p + along * len;
+            reach = std::max(reach, std::sqrt((p.x - head.x) * (p.x - head.x) + (p.z - head.z) * (p.z - head.z)));
+            topMost = std::max(topMost, p.y);
+        }
+        // the rib's first metre, bare (the petiole), as bark
+        const double rl = royal ? 0.07 : 0.06;
+        tubeInto(t.bark, {crown, rib0 + normalize(d * std::cos(el0) + up * std::sin(el0)) * 0.6}, {rl, rl * 0.6}, 4,
+                 {sp.bloom * 0.8 + sp.tint * 0.6, sp.tint * 1.4});
+    }
+    t.height = std::max(h, topMost);
+    t.crownRadius = reach + std::sqrt(head.x * head.x + head.z * head.z);
+    t.crownBase = crown.y - 2.5;
+    t.trunkRadius = r0 * 1.3;
 }
 
 // ---- the foliage textures ---------------------------------------------------------------------------
@@ -417,19 +568,65 @@ void paintTile(Canvas& cv, RealSpecies s, ProcRng& r, int tx, int ty) {
         }
         return;
     }
+    if (realSpeciesIsPalm(s)) {
+        // a stretch of FEATHER FROND: the midrib up the middle (v 0 at the frond's base end), narrow leaflets off both
+        // sides angled toward the tip -- the royal's stiffer and more even, the coconut's longer and looser
+        const bool royal = s == RealSpecies::RoyalPalm;
+        cv.stroke(X(0.5), Y(0.0), X(0.5), Y(1.0), 3.0 * pw, 0.6f);
+        for (double v = 0.0; v < 1.02; v += royal ? 0.034 : 0.04) {
+            for (int sgn : {-1, 1}) {
+                const double ang = (sgn > 0 ? 0.0 : kPi) + sgn * r.in(0.5, 0.75) * (sgn > 0 ? 1.0 : -1.0);
+                const double len = (royal ? r.in(0.40, 0.48) : r.in(0.44, 0.52));
+                const double bx = 0.5, by = v + r.in(-0.008, 0.008);
+                // a leaflet: a long narrow leaf from the rib, its tip toward the frond's tip
+                const double dx = std::cos(ang) * len, dy = std::abs(std::sin(ang)) * len;
+                cv.leaf(X(bx + 0.5 * dx), Y(by + 0.5 * dy), std::atan2(dy, dx), len * s0, (royal ? 0.07 : 0.06) * s0, 0, 0.0,
+                        static_cast<float>(r.in(0.72, 1.0)));
+            }
+        }
+        return;
+    }
+    const bool flowering = s == RealSpecies::Poinciana || s == RealSpecies::Jacaranda || s == RealSpecies::Plumeria;
+    if (flowering && tx == kTiles - 1 && ty == kTiles - 1) {
+        // the FLOWER tile (the atlas' last; a bloom card wears it in its species' colour): clusters of five-petalled
+        // flowers -- the poinciana's broad and crowded, the jacaranda's small trumpets in loose panicles, the
+        // plumeria's pinwheels in a few heads
+        const int heads = s == RealSpecies::Plumeria ? 3 : s == RealSpecies::Jacaranda ? 7 : 6;
+        const double fr = s == RealSpecies::Plumeria ? 0.075 : s == RealSpecies::Jacaranda ? 0.035 : 0.05;
+        const int per = s == RealSpecies::Plumeria ? 6 : s == RealSpecies::Jacaranda ? 14 : 9;
+        for (int hd = 0; hd < heads; ++hd) {
+            const double hx = r.in(0.22, 0.78), hy = r.in(0.25, 0.8);
+            cv.stroke(X(0.5), Y(0.02), X(hx), Y(hy), 1.4 * pw, 0.45f);
+            for (int k = 0; k < per; ++k) {
+                const double cx = hx + r.in(-1, 1) * 0.13, cy = hy + r.in(-1, 1) * 0.11;
+                const double rot = r.in(0, 2 * kPi);
+                const float lum = static_cast<float>(r.in(0.78, 1.0));
+                for (int pt = 0; pt < 5; ++pt) {
+                    const double a = rot + pt * 2.0 * kPi / 5.0 + (s == RealSpecies::Plumeria ? 0.35 : 0.0);
+                    cv.leaf(X(cx + 0.5 * fr * std::cos(a)), Y(cy + 0.5 * fr * std::sin(a)), a, fr * s0,
+                            fr * (s == RealSpecies::Jacaranda ? 0.75 : 0.8) * s0, 0, 0.0, lum * static_cast<float>(0.9 + 0.1 * pt / 4.0));
+                }
+            }
+        }
+        return;
+    }
     // broadleaf: a twig forking into three or four, leaves along them and clustered at the ends
     const int forks = 3 + r.below(2);
     cv.stroke(X(0.5), Y(0.02), X(0.5), Y(0.35), 2.5 * pw, 0.5f);
     struct Leaf { double x, y, ang, len, wid; float lum; };
     std::vector<Leaf> leaves;
-    const double sizeK = s == RealSpecies::Birch || s == RealSpecies::Aspen ? 0.75 : (s == RealSpecies::Willow ? 1.25 : (s == RealSpecies::Oak || s == RealSpecies::Maple ? 1.0 : 0.95));
+    double sizeK = s == RealSpecies::Birch || s == RealSpecies::Aspen ? 0.75 : (s == RealSpecies::Willow ? 1.25 : (s == RealSpecies::Oak || s == RealSpecies::Maple ? 1.0 : 0.95));
+    // the rain tree's and the flame tree's fine pinnate leaflets; the frangipani's long paddles
+    if (s == RealSpecies::Monkeypod || s == RealSpecies::Poinciana || s == RealSpecies::Jacaranda) sizeK = 0.5;
+    if (s == RealSpecies::Plumeria) sizeK = 1.7;
     const bool hanging = s == RealSpecies::Birch || s == RealSpecies::Willow;
     for (int f = 0; f < forks; ++f) {
         const double ang = kPi * 0.5 + (f - (forks - 1) * 0.5) * r.in(0.35, 0.55);
         const double len = r.in(0.4, 0.58);
         const double ex = 0.5 + len * std::cos(ang), ey = 0.35 + len * std::sin(ang) * (hanging ? 0.8 : 1.0);
         cv.stroke(X(0.5), Y(0.35), X(ex), Y(ey), 1.6 * pw, 0.5f);
-        const int nl = static_cast<int>((s == RealSpecies::Willow ? 11 : (hanging ? 7 : 6)) + r.below(4));
+        const bool fine = s == RealSpecies::Monkeypod || s == RealSpecies::Poinciana || s == RealSpecies::Jacaranda;
+        const int nl = static_cast<int>((s == RealSpecies::Willow ? 11 : (hanging ? 7 : 6)) + r.below(4)) * (fine ? 3 : 1);
         for (int k = 0; k < nl; ++k) {
             const double f2 = 0.2 + 0.8 * (k + r.next()) / nl;
             const double px = 0.5 + (ex - 0.5) * f2, py = 0.35 + (ey - 0.35) * f2;
@@ -444,6 +641,8 @@ void paintTile(Canvas& cv, RealSpecies s, ProcRng& r, int tx, int ty) {
                 case RealSpecies::Willow: ratio = 0.16; break;
                 case RealSpecies::Alder: ratio = 0.8; break;
                 case RealSpecies::Shrub: ratio = 0.78; break;
+                case RealSpecies::Monkeypod: case RealSpecies::Poinciana: case RealSpecies::Jacaranda: ratio = 0.5; break;
+                case RealSpecies::Plumeria: ratio = 0.32; break;
                 default: break;
             }
             leaves.push_back({px + 0.5 * L * std::cos(la), py + 0.5 * L * std::sin(la), la, L, L * ratio,
@@ -491,7 +690,15 @@ RealTree realTree(RealSpecies species, uint32_t seed, double height) {
     const Species sp = speciesOf(species);
     const double h = height > 0 ? height : r.in(sp.hLo, sp.hHi);
     if (species == RealSpecies::Spruce || species == RealSpecies::Fir) conifer(t, species, r, h);
+    else if (realSpeciesIsPalm(species)) palm(t, species, r, h);
     else shellCrown(t, species, r, h);
+    // the street trees measure what they grew (a frangipani's tip rosettes and a rain tree's outer sprays stand past
+    // the shell's nominal size): the impostor frames the whole tree. (The forest species keep their numbers as cached.)
+    if (species >= RealSpecies::RoyalPalm)
+        for (const Vertex& v : t.foliage.vertices) {
+            t.height = std::max(t.height, static_cast<double>(v.position.y));
+            t.crownRadius = std::max(t.crownRadius, std::sqrt(static_cast<double>(v.position.x * v.position.x + v.position.z * v.position.z)));
+        }
     t.foliage.materialIndex = 0;
     t.bark.materialIndex = 0;
     return t;
@@ -529,6 +736,50 @@ TextureData realFoliageTexture(RealSpecies species, int size, uint32_t seed) {
 
 void renderImpostor(const RealTree& tree, const TextureData& fol, bool top, int w, int h, double colourScale,
                     uint8_t* out, int stride, uint8_t* normalOut) {
+    const double halfW = tree.crownRadius * 1.18 + 0.5;
+    const double Ht = tree.height * 1.03;
+    renderCardView(tree.bark, tree.foliage, fol, top, -halfW, halfW, top ? -halfW : 0.0, top ? halfW : Ht, w, h, colourScale,
+                   out, stride, normalOut);
+}
+
+void renderImpostorView(const RealTree& tree, const TextureData& fol, double azimuth, double elevation, double centreY,
+                        double Rb, double Hh, int w, int h, double colourScale, uint8_t* out, int stride, uint8_t* normalOut,
+                        const TextureData* barkAlbedo) {
+    // the tree turned so the view looks down -z: (r, u, d) -> (x, y, z), about its centre
+    const Vec3 d(std::sin(azimuth) * std::cos(elevation), std::sin(elevation), std::cos(azimuth) * std::cos(elevation));
+    const Vec3 r(std::cos(azimuth), 0.0, -std::sin(azimuth));
+    const Vec3 u = cross(d, r);
+    const Vec3 c(0.0, centreY, 0.0);
+    RenderMesh bark = tree.bark, foliage = tree.foliage;
+    for (RenderMesh* m : {&bark, &foliage})
+        for (Vertex& v : m->vertices) {
+            const Vec3 p = v.position - c;
+            v.position = Vec3(dot(p, r), dot(p, u), dot(p, d));
+            v.normal = Vec3(dot(v.normal, r), dot(v.normal, u), dot(v.normal, d));
+            v.tangent = Vec3(dot(v.tangent, r), dot(v.tangent, u), dot(v.tangent, d));
+        }
+    CardViewExtras ex;
+    ex.depthToAlpha = Rb + Hh;   // (the sun's view of the crown, for its self-shadow)
+    ex.barkAlbedo = barkAlbedo;
+    renderCardView(bark, foliage, fol, false, -Rb, Rb, -Hh, Hh, w, h, colourScale, out, stride, normalOut, &ex);
+}
+
+double impostorViewHalfHeight(const RealTree& tree, double centreY, double maxElevation) {
+    double hh = 0.1;
+    for (const RenderMesh* m : {&tree.bark, &tree.foliage})
+        for (const Vertex& v : m->vertices) {
+            const double dy = std::fabs(v.position.y - centreY), rr = std::hypot(v.position.x, v.position.z);
+            // (|dy| cos e + r sin e, its greatest over 0..maxElevation: at the ends or where tan e = r / |dy|)
+            const double eStar = std::atan2(rr, std::max(1e-9, dy));
+            const double e = std::clamp(eStar, 0.0, maxElevation);
+            hh = std::max({hh, dy, dy * std::cos(maxElevation) + rr * std::sin(maxElevation), dy * std::cos(e) + rr * std::sin(e)});
+        }
+    return hh;
+}
+
+void renderCardView(const RenderMesh& bark, const RenderMesh& foliage, const TextureData& fol, bool top, double x0, double x1,
+                    double y0, double y1, int w, int h, double colourScale, uint8_t* out, int stride, uint8_t* normalOut,
+                    const CardViewExtras* ex) {
     const int S = 2, W = w * S, H = h * S;   // supersampled
     std::vector<float> depth(static_cast<std::size_t>(W) * H, -1e30f);
     std::vector<float> rgb(static_cast<std::size_t>(W) * H * 3, 0.0f);
@@ -536,19 +787,33 @@ void renderImpostor(const RealTree& tree, const TextureData& fol, bool top, int 
     std::vector<float> nrm(normalOut ? static_cast<std::size_t>(W) * H * 3 : 0, 0.0f);
     // the tree's normal in the card's tangent frame (see real_tree.h): side card T = +x, B = +y, N = +z;
     // top card T = +x, N = +y, B = N x T = -z
-    auto toCard = [top](const Vec3& n) {
+    auto toCard = [top, ex](const Vec3& n) {
+        if (ex && ex->trueNormals) {   // (a sprite is seen from its face: a part facing away is lit as its front)
+            const Vec3 c = top ? Vec3(n.x, -n.z, n.y) : n;
+            return Vec3(c.x, c.y, std::fabs(c.z));
+        }
         const double tx = n.x, ty = top ? -n.z : n.y, along = top ? n.y : n.z;
         // tilted at most ~50 deg off the card: steeper, the one-pixel rims of a far crown catch the sun
         // at full strength and read as glitter, not volume
         return Vec3(tx, ty, 0.85 + 0.5 * std::fabs(along));
     };
-    const double halfW = tree.crownRadius * 1.18 + 0.5;
-    const double Ht = tree.height * 1.03;
     // world -> image (x right, y down), and depth (larger = nearer the viewer)
     auto proj = [&](const Vec3& p, double& ix, double& iy, double& dz) {
-        if (!top) { ix = (p.x + halfW) / (2 * halfW) * W; iy = (1.0 - p.y / Ht) * H; dz = p.z; }
-        else { ix = (p.x + halfW) / (2 * halfW) * W; iy = (p.z + halfW) / (2 * halfW) * H; dz = p.y; }
+        ix = (p.x - x0) / (x1 - x0) * W;
+        if (!top) { iy = (1.0 - (p.y - y0) / (y1 - y0)) * H; dz = p.z; }
+        else { iy = (p.z - y0) / (y1 - y0) * H; dz = p.y; }
     };
+    // a wrapping bilinear-free lookup of any RGBA map at (u, v)
+    auto texel = [](const TextureData& t, double u, double v) {
+        const double fu = u - std::floor(u), fv = v - std::floor(v);
+        const int x = std::clamp(static_cast<int>(fu * t.width), 0, t.width - 1), y = std::clamp(static_cast<int>(fv * t.height), 0, t.height - 1);
+        const uint8_t* p = &t.pixels[(static_cast<std::size_t>(y) * t.width + x) * static_cast<std::size_t>(std::max(1, t.channels))];
+        return t.channels >= 3 ? Vec3(p[0], p[1], p[2]) / 255.0 : Vec3(p[0], p[0], p[0]) / 255.0;
+    };
+    double zLo = 1e30, zHi = -1e30;   // (the picture's depth range: the depth shade)
+    if (ex && ex->depthShade > 0.0)
+        for (const RenderMesh* m : {&bark, &foliage})
+            for (const Vertex& v : m->vertices) { const double z = top ? v.position.y : v.position.z; zLo = std::min(zLo, z); zHi = std::max(zHi, z); }
     auto sampleFol = [&](double u, double v, float& a, Vec3& c) {
         const int x = std::clamp(static_cast<int>(u * fol.width), 0, fol.width - 1), y = std::clamp(static_cast<int>(v * fol.height), 0, fol.height - 1);
         const uint8_t* p = &fol.pixels[(static_cast<std::size_t>(y) * fol.width + x) * 4];
@@ -575,26 +840,47 @@ void renderImpostor(const RealTree& tree, const TextureData& fol, bool top, int 
                     const std::size_t i = static_cast<std::size_t>(py) * W + px;
                     if (dz <= depth[i]) continue;
                     Vec3 col = v[0]->color * w0 + v[1]->color * w1 + v[2]->color * w2;
+                    const double u = w0 * v[0]->u + w1 * v[1]->u + w2 * v[2]->u, vv = w0 * v[0]->v + w1 * v[1]->v + w2 * v[2]->v;
                     if (leaves) {
-                        const double u = w0 * v[0]->u + w1 * v[1]->u + w2 * v[2]->u, vv = w0 * v[0]->v + w1 * v[1]->v + w2 * v[2]->v;
                         float a;
                         Vec3 tc;
                         sampleFol(u, vv, a, tc);
                         if (a < 0.5f) continue;
                         col = col * tc;
+                    } else if (ex && ex->barkAlbedo && !ex->barkAlbedo->pixels.empty()) {
+                        col = col * texel(*ex->barkAlbedo, u, vv);
                     }
+                    if (ex && ex->depthShade > 0.0 && zHi > zLo)
+                        col = col * (1.0 - ex->depthShade * (1.0 - (dz - zLo) / (zHi - zLo)));
                     depth[i] = static_cast<float>(dz);
                     cov[i] = 1;
                     if (normalOut) {
-                        const Vec3 cn = toCard(normalize(v[0]->normal * w0 + v[1]->normal * w1 + v[2]->normal * w2));
+                        Vec3 nn = normalize(v[0]->normal * w0 + v[1]->normal * w1 + v[2]->normal * w2);
+                        // (the surface's own relief: the bark's map round and along the limb, the leaf's across and along it)
+                        const TextureData* nm = !ex ? nullptr : leaves ? ex->foliageNormal : ex->barkNormal;
+                        if (nm && !nm->pixels.empty()) {
+                            Vec3 tg = v[0]->tangent * w0 + v[1]->tangent * w1 + v[2]->tangent * w2;
+                            tg = tg - nn * dot(tg, nn);
+                            if (tg.length() > 1e-9) {
+                                tg = normalize(tg);
+                                // (bark: x round the limb, y along it -- the tangent is along it; a leaf: x across, y along --
+                                // the tangent is across)
+                                const Vec3 t2 = cross(nn, tg);
+                                const Vec3 m = texel(*nm, u, vv) * 2.0 - Vec3(1, 1, 1);
+                                const Vec3 X = leaves ? tg : t2, Y = leaves ? t2 * -1.0 : tg;
+                                const Vec3 pn = X * m.x + Y * m.y + nn * m.z;
+                                if (pn.length() > 1e-9) nn = normalize(pn);
+                            }
+                        }
+                        const Vec3 cn = toCard(nn);
                         nrm[i * 3] = static_cast<float>(cn.x); nrm[i * 3 + 1] = static_cast<float>(cn.y); nrm[i * 3 + 2] = static_cast<float>(cn.z);
                     }
                     rgb[i * 3] = static_cast<float>(col.x); rgb[i * 3 + 1] = static_cast<float>(col.y); rgb[i * 3 + 2] = static_cast<float>(col.z);
                 }
         }
     };
-    raster(tree.bark, false);
-    raster(tree.foliage, true);
+    raster(bark, false);
+    raster(foliage, true);
     std::vector<uint8_t> img(static_cast<std::size_t>(w) * h * 4, 0);
     for (int y = 0; y < h; ++y)
         for (int x = 0; x < w; ++x) {
@@ -613,19 +899,41 @@ void renderImpostor(const RealTree& tree, const TextureData& fol, bool top, int 
             }
             d[3] = static_cast<uint8_t>(255 * c / (S * S));
         }
+    for (int pass = 0; ex && pass < ex->alphaGrow; ++pass) {   // (a thin part widened: a neighbour's colour, most of its cover)
+        std::vector<uint8_t> prev = img;
+        for (int y = 0; y < h; ++y)
+            for (int x = 0; x < w; ++x) {
+                uint8_t* d = &img[(static_cast<std::size_t>(y) * w + x) * 4];
+                if (d[3] >= 128) continue;
+                int best = -1, bestA = 0;
+                const int nb[4][2] = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}};
+                for (const auto& o : nb) {
+                    const int xx = x + o[0], yy = y + o[1];
+                    if (xx < 0 || yy < 0 || xx >= w || yy >= h) continue;
+                    const int j = (yy * w + xx) * 4;
+                    if (prev[static_cast<std::size_t>(j) + 3] > bestA) { bestA = prev[static_cast<std::size_t>(j) + 3]; best = j; }
+                }
+                if (bestA < 128) continue;
+                for (int c = 0; c < 3; ++c) d[c] = d[3] ? static_cast<uint8_t>((d[c] + prev[static_cast<std::size_t>(best) + c]) / 2) : prev[static_cast<std::size_t>(best) + c];
+                d[3] = static_cast<uint8_t>(std::max<int>(d[3], 200));
+            }
+    }
     dilateRGB(img, w, h, w * 4, 6);
     for (std::size_t i = 3; i < img.size(); i += 4) if (img[i] == 1) img[i] = 0;
     for (int y = 0; y < h; ++y) std::memcpy(out + static_cast<std::size_t>(y) * stride, &img[static_cast<std::size_t>(y) * w * 4], static_cast<std::size_t>(w) * 4);
     if (normalOut) {
         std::vector<uint8_t> nimg(static_cast<std::size_t>(w) * h * 4, 0);
+        std::vector<uint8_t> zimg(ex && ex->depthToAlpha > 0.0 ? static_cast<std::size_t>(w) * h : 0, 128);
         for (int y = 0; y < h; ++y)
             for (int x = 0; x < w; ++x) {
                 Vec3 acc(0, 0, 0);
+                double z = 0.0;
                 int c = 0;
                 for (int k = 0; k < S * S; ++k) {
                     const std::size_t i = static_cast<std::size_t>(y * S + k / S) * W + x * S + k % S;
                     if (!cov[i]) continue;
                     acc = acc + Vec3(nrm[i * 3], nrm[i * 3 + 1], nrm[i * 3 + 2]);
+                    z += depth[i];
                     ++c;
                 }
                 const Vec3 n = c ? normalize(acc) : Vec3(0, 0, 1);
@@ -634,9 +942,21 @@ void renderImpostor(const RealTree& tree, const TextureData& fol, bool top, int 
                 d[1] = static_cast<uint8_t>(std::clamp((n.y * 0.5 + 0.5) * 255.0, 0.0, 255.0));
                 d[2] = static_cast<uint8_t>(std::clamp((n.z * 0.5 + 0.5) * 255.0, 0.0, 255.0));
                 d[3] = c ? 255 : 0;
+                if (ex && ex->depthToAlpha > 0.0)   // (kept aside: the dilation reads alpha as coverage)
+                    zimg[static_cast<std::size_t>(y) * w + x] =
+                        c ? static_cast<uint8_t>(std::clamp((0.5 + 0.5 * z / c / ex->depthToAlpha) * 255.0, 0.0, 255.0)) : 128;
             }
         dilateRGB(nimg, w, h, w * 4, 6);   // under the cut, so the mips at the silhouette keep crown normals
-        for (std::size_t i = 3; i < nimg.size(); i += 4) nimg[i] = 255;
+        if (ex && ex->depthToAlpha > 0.0) {   // ...and the depth (a far mip at the rim must not average toward the centre)
+            std::vector<uint8_t> zq(static_cast<std::size_t>(w) * h * 4, 0);
+            for (std::size_t i = 0, n = static_cast<std::size_t>(w) * h; i < n; ++i) {
+                zq[i * 4] = zimg[i];
+                zq[i * 4 + 3] = nimg[i * 4 + 3] >= 128 ? 255 : 0;   // (covered: not the normals' own dilation)
+            }
+            dilateRGB(zq, w, h, w * 4, 8);
+            for (std::size_t i = 0, n = static_cast<std::size_t>(w) * h; i < n; ++i) zimg[i] = zq[i * 4 + 3] ? zq[i * 4] : 128;
+        }
+        for (std::size_t i = 3; i < nimg.size(); i += 4) nimg[i] = ex && ex->depthToAlpha > 0.0 ? zimg[i / 4] : 255;
         for (int y = 0; y < h; ++y) std::memcpy(normalOut + static_cast<std::size_t>(y) * stride, &nimg[static_cast<std::size_t>(y) * w * 4], static_cast<std::size_t>(w) * 4);
     }
 }

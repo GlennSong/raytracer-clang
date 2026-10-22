@@ -15,6 +15,7 @@
 #include <miniaudio/miniaudio.h>
 
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 #include <vector>
 
@@ -32,17 +33,42 @@ struct ClipData {
 struct VoiceData {
     ma_audio_buffer buffer{};   // references the clip's pcm (no copy)
     ma_sound sound{};
+    // A spatial voice is heard through its own low-pass (air absorption, walls):
+    // sound -> lpf -> bus group.
+    ma_lpf_node lpf{};
     AudioClipHandle clip;
     bool loop = false;
     bool initialized = false;
+    bool haveLpf = false;
+
+    // --- how it is heard (spatial voices) ---
+    bool spatial = false;
+    Vec3 position;
+    Real range = 25.0;
+    float userVolume = 1.0f;   // what the caller asked for; the heard gain multiplies it
+    float gain = 1.0f;         // distance x barriers, eased
+    float cutoffHz = 20000.0f; // eased
+    float appliedCutoffHz = 20000.0f;   // the lpf's current setting
+    bool heard = false;        // false until the first hearing (snaps, no ease)
+    AudioEnclosure enclosure;
+    Vec3 enclosureAt;
+    bool enclosureKnown = false;
 
     ~VoiceData() {
         if (initialized) {
             ma_sound_uninit(&sound);
+            if (haveLpf) ma_lpf_node_uninit(&lpf, nullptr);
             ma_audio_buffer_uninit(&buffer);
         }
     }
 };
+
+bool insideBox(const Vec3& p, const Vec3& centre, const Quat& orientation,
+               const Vec3& halfExtent) {
+    const Vec3 local = orientation.conjugate().rotate(p - centre);
+    return std::fabs(local.x) <= halfExtent.x && std::fabs(local.y) <= halfExtent.y &&
+           std::fabs(local.z) <= halfExtent.z;
+}
 
 }  // namespace
 
@@ -57,6 +83,22 @@ struct AudioEngine::Impl {
     float master = 1.0f;
     float busVolumes[AUDIO_BUS_COUNT] = {1.0f, 1.0f, 1.0f};
 
+    // --- the listener and the walls ---
+    Vec3 listener;
+    AudioEnclosureQuery enclosureQuery;
+    AudioEnclosure listenerEnc;
+    Vec3 listenerEncAt;
+    bool listenerEncKnown = false;
+    struct Cabin {
+        uint64_t id = 0;
+        Vec3 centre, halfExtent;
+        Quat orientation;
+        AudioBarrier barrier;
+        int ttl = 0;   // update()s left before it lapses
+    } cabin;
+    ma_uint64 lastHeardFrame = 0;
+    bool haveLastHeard = false;
+
     // shared_ptr elements keep ma_* objects at stable heap addresses while
     // satisfying SlotMap's copyable-value requirement.
     SlotMap<std::shared_ptr<ClipData>, AudioClipTag> clips;
@@ -64,6 +106,69 @@ struct AudioEngine::Impl {
 
     ma_sound_group* group(AudioBus bus) {
         return haveGroups ? &groups[static_cast<int>(bus)] : nullptr;
+    }
+
+    float maxCutoff() const {
+        return 0.45f * static_cast<float>(ma_engine_get_sample_rate(&engine));
+    }
+
+    AudioEnclosure enclosureOf(const Vec3& p) const {
+        if (cabin.ttl > 0 && insideBox(p, cabin.centre, cabin.orientation, cabin.halfExtent))
+            return AudioEnclosure{cabin.id, cabin.barrier};
+        return enclosureQuery ? enclosureQuery(p) : AudioEnclosure{};
+    }
+
+    void refreshListenerEnclosure() {
+        if (cabin.ttl > 0) {   // in a cabin wherever the ear hangs
+            listenerEnc = AudioEnclosure{cabin.id, cabin.barrier};
+            listenerEncKnown = false;   // re-ask the query once the cabin lapses
+            return;
+        }
+        if (!listenerEncKnown || (listener - listenerEncAt).lengthSquared() > 0.25 * 0.25) {
+            listenerEnc = enclosureQuery ? enclosureQuery(listener) : AudioEnclosure{};
+            listenerEncAt = listener;
+            listenerEncKnown = true;
+        }
+    }
+
+    // Set a spatial voice's gain and low-pass from where it is, where the
+    // listener is, and what lies between; `ease` 1 snaps, smaller eases.
+    void hear(VoiceData& v, float ease) {
+        const bool inCabin = cabin.ttl > 0 &&
+            insideBox(v.position, cabin.centre, cabin.orientation, cabin.halfExtent);
+        if (inCabin) {
+            v.enclosure = AudioEnclosure{cabin.id, cabin.barrier};
+            v.enclosureKnown = false;
+        } else if (!v.enclosureKnown || (v.position - v.enclosureAt).lengthSquared() > 1.0) {
+            v.enclosure = enclosureQuery ? enclosureQuery(v.position) : AudioEnclosure{};
+            v.enclosureAt = v.position;
+            v.enclosureKnown = true;
+        }
+        const Real d = (v.position - listener).length();
+        float gain = audioDistanceGain(d, 0, v.range);
+        float cutoff = std::min(audioAirCutoffHz(d), maxCutoff());
+        if (v.enclosure.id != listenerEnc.id) {
+            gain *= v.enclosure.barrier.gain * listenerEnc.barrier.gain;
+            cutoff = std::min(cutoff, std::min(v.enclosure.barrier.cutoffHz,
+                                               listenerEnc.barrier.cutoffHz));
+        }
+        if (!v.heard || ease >= 1.0f) {
+            v.gain = gain;
+            v.cutoffHz = cutoff;
+            v.heard = true;
+        } else {
+            v.gain += (gain - v.gain) * ease;
+            // the cutoff eases in log space: an octave is an octave
+            v.cutoffHz = std::exp(std::log(v.cutoffHz) +
+                                  (std::log(cutoff) - std::log(v.cutoffHz)) * ease);
+        }
+        ma_sound_set_volume(&v.sound, v.userVolume * v.gain);
+        if (v.haveLpf && std::fabs(v.cutoffHz - v.appliedCutoffHz) > 0.03f * v.appliedCutoffHz) {
+            ma_lpf_config c = ma_lpf_config_init(
+                ma_format_f32, ma_node_get_output_channels(&v.lpf, 0),
+                ma_engine_get_sample_rate(&engine), v.cutoffHz, 2);
+            if (ma_lpf_node_reinit(&c, &v.lpf) == MA_SUCCESS) v.appliedCutoffHz = v.cutoffHz;
+        }
     }
 
     AudioVoiceHandle start(AudioClipHandle clipHandle,
@@ -92,19 +197,41 @@ struct AudioEngine::Impl {
         }
         voice->initialized = true;
 
-        ma_sound_set_volume(&voice->sound, params.volume);
+        ma_sound_set_volume(&voice->sound, params.volume);   // (a spatial voice's hear() rescales it)
         ma_sound_set_pitch(&voice->sound, std::max(params.pitch, 0.01f));
         ma_sound_set_looping(&voice->sound, params.loop ? MA_TRUE : MA_FALSE);
         if (spatial) {
             ma_sound_set_position(&voice->sound, static_cast<float>(position.x),
                                   static_cast<float>(position.y),
                                   static_cast<float>(position.z));
-            // Linear falloff to silence at `range`: predictable and testable.
-            ma_sound_set_attenuation_model(&voice->sound,
-                                           ma_attenuation_model_linear);
+            // miniaudio pans; WE attenuate (hear()), so the curve, the air and
+            // the walls are ours and testable. (Not ma_attenuation_model_none:
+            // that skips the spatializer outright -- no pan, no volume. An
+            // inverse model with no rolloff is a flat 1.)
+            ma_sound_set_attenuation_model(&voice->sound, ma_attenuation_model_inverse);
+            ma_sound_set_rolloff(&voice->sound, 0.0f);
             ma_sound_set_min_distance(&voice->sound, 1.0f);
-            ma_sound_set_max_distance(&voice->sound,
-                                      std::max(static_cast<float>(range), 1.0f));
+            ma_sound_set_max_distance(&voice->sound, 1e6f);
+            voice->spatial = true;
+            voice->position = position;
+            voice->range = std::max(range, Real(1));
+            voice->userVolume = params.volume;
+            const ma_uint32 channels = ma_node_get_output_channels(&voice->sound, 0);
+            const ma_uint32 rate = ma_engine_get_sample_rate(&engine);
+            ma_lpf_node_config lpfConfig =
+                ma_lpf_node_config_init(channels, rate, maxCutoff(), 2);
+            if (ma_lpf_node_init(ma_engine_get_node_graph(&engine), &lpfConfig,
+                                 nullptr, &voice->lpf) == MA_SUCCESS) {
+                voice->haveLpf = true;
+                voice->appliedCutoffHz = maxCutoff();
+                ma_node* out = group(params.bus)
+                                   ? reinterpret_cast<ma_node*>(group(params.bus))
+                                   : ma_engine_get_endpoint(&engine);
+                ma_node_attach_output_bus(&voice->lpf, 0, out, 0);
+                ma_node_attach_output_bus(&voice->sound, 0, &voice->lpf, 0);
+            }
+            refreshListenerEnclosure();
+            hear(*voice, 1.0f);   // heard from the first sample: a one-shot behind a wall starts muffled
         } else {
             ma_sound_set_pan(&voice->sound,
                              std::max(-1.0f, std::min(params.pan, 1.0f)));
@@ -295,6 +422,7 @@ bool AudioEngine::isPlaying(AudioVoiceHandle voice) const {
 void AudioEngine::setVoicePosition(AudioVoiceHandle voice, const Vec3& position) {
     auto* v = impl->voices.get(voice);
     if (!v) return;
+    (*v)->position = position;
     ma_sound_set_position(&(*v)->sound, static_cast<float>(position.x),
                           static_cast<float>(position.y),
                           static_cast<float>(position.z));
@@ -302,7 +430,9 @@ void AudioEngine::setVoicePosition(AudioVoiceHandle voice, const Vec3& position)
 
 void AudioEngine::setVoiceVolume(AudioVoiceHandle voice, float volume) {
     auto* v = impl->voices.get(voice);
-    if (v) ma_sound_set_volume(&(*v)->sound, volume);
+    if (!v) return;
+    (*v)->userVolume = volume;
+    ma_sound_set_volume(&(*v)->sound, (*v)->spatial ? volume * (*v)->gain : volume);
 }
 
 void AudioEngine::setVoicePitch(AudioVoiceHandle voice, float pitch) {
@@ -313,6 +443,7 @@ void AudioEngine::setVoicePitch(AudioVoiceHandle voice, float pitch) {
 void AudioEngine::setListener(const Vec3& position, const Vec3& forward,
                               const Vec3& up, const Vec3& velocity) {
     if (!impl->haveEngine) return;
+    impl->listener = position;
     ma_engine_listener_set_position(&impl->engine, 0,
                                     static_cast<float>(position.x),
                                     static_cast<float>(position.y),
@@ -328,6 +459,34 @@ void AudioEngine::setListener(const Vec3& position, const Vec3& forward,
                                     static_cast<float>(velocity.x),
                                     static_cast<float>(velocity.y),
                                     static_cast<float>(velocity.z));
+}
+
+void AudioEngine::setEnclosureQuery(AudioEnclosureQuery query) {
+    impl->enclosureQuery = std::move(query);
+    impl->listenerEncKnown = false;
+    impl->voices.forEach([](AudioVoiceHandle, std::shared_ptr<VoiceData>& v) {
+        v->enclosureKnown = false;
+    });
+}
+
+void AudioEngine::setListenerCabin(uint64_t id, const Vec3& centre,
+                                   const Quat& orientation,
+                                   const Vec3& halfExtent, AudioBarrier barrier) {
+    impl->cabin.id = id;
+    impl->cabin.centre = centre;
+    impl->cabin.orientation = orientation;
+    impl->cabin.halfExtent = halfExtent;
+    impl->cabin.barrier = barrier;
+    impl->cabin.ttl = 2;
+}
+
+uint64_t AudioEngine::listenerEnclosure() const { return impl->listenerEnc.id; }
+bool AudioEngine::listenerCabin(Vec3& centre, Quat& orientation, Vec3& halfExtent) const {
+    if (impl->cabin.ttl <= 0) return false;
+    centre = impl->cabin.centre;
+    orientation = impl->cabin.orientation;
+    halfExtent = impl->cabin.halfExtent;
+    return true;
 }
 
 void AudioEngine::setMasterVolume(float volume) {
@@ -350,6 +509,23 @@ float AudioEngine::busVolume(AudioBus bus) const {
 
 void AudioEngine::update() {
     if (!impl->haveEngine) return;
+    // Re-hear the spatial voices, eased by the mix time since the last
+    // update (engine time, so a Manual-mode test eases by the frames it read).
+    const ma_uint64 now = ma_engine_get_time_in_pcm_frames(&impl->engine);
+    float ease = 1.0f;
+    if (impl->haveLastHeard) {
+        const double dt = static_cast<double>(now - impl->lastHeardFrame) /
+                          std::max<ma_uint32>(1, ma_engine_get_sample_rate(&impl->engine));
+        ease = static_cast<float>(1.0 - std::exp(-dt / 0.1));
+    }
+    impl->lastHeardFrame = now;
+    impl->haveLastHeard = true;
+    impl->refreshListenerEnclosure();
+    impl->voices.forEach([&](AudioVoiceHandle, std::shared_ptr<VoiceData>& v) {
+        if (v->spatial) impl->hear(*v, ease);
+    });
+    if (impl->cabin.ttl > 0) --impl->cabin.ttl;
+
     std::vector<AudioVoiceHandle> finished;
     impl->voices.forEach([&](AudioVoiceHandle h, std::shared_ptr<VoiceData>& v) {
         if (!v->loop && ma_sound_at_end(&v->sound) == MA_TRUE)
@@ -415,6 +591,11 @@ void AudioEngine::setVoiceVolume(AudioVoiceHandle, float) {}
 void AudioEngine::setVoicePitch(AudioVoiceHandle, float) {}
 void AudioEngine::setListener(const Vec3&, const Vec3&, const Vec3&,
                               const Vec3&) {}
+void AudioEngine::setEnclosureQuery(AudioEnclosureQuery) {}
+void AudioEngine::setListenerCabin(uint64_t, const Vec3&, const Quat&, const Vec3&,
+                                   AudioBarrier) {}
+uint64_t AudioEngine::listenerEnclosure() const { return 0; }
+bool AudioEngine::listenerCabin(Vec3&, Quat&, Vec3&) const { return false; }
 void AudioEngine::setMasterVolume(float) {}
 float AudioEngine::masterVolume() const { return 1.0f; }
 void AudioEngine::setBusVolume(AudioBus, float) {}

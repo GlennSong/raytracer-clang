@@ -37,6 +37,7 @@
 #include "shape_grammar.h"
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <vector>
 
 namespace engine {
@@ -54,14 +55,38 @@ enum class PlateTopology : uint8_t {
 // it has no walls of its own and overlaps the rooms set into it (the corner offices, the meeting rooms).
 // Shop: a ground-floor shop unit (Room::style its trade: 0 cafe, 1 grocery, 2 boutique, 3 bookshop, 4 electronics,
 // 5 pharmacy, 6 bakery).
+// Classroom .. Dorm: the university campus (campusPlan): a classroom, a tiered lecture hall, a teaching lab, the
+// library's reading room and its stacks, a residence hall's two-bed room.
+// DeskRow: an office floor too shallow for rooms (a setback tier round its base's core): desks along the glass.
+// Lounge: the same strip in a residential tower: the residents' lounge, sofas along the glass; on an office floor, its
+// breakout space against the corridor.
+// Reception: an office floor's front desk, facing the lifts across the corridor, a screen behind it.
+// Gallery: a museum's room: pictures round its walls, display cases down the middle, a bench.
+// Ward .. Waiting: the hospital (hospitalPlan): a patients' room (one bed or two), an examination room, the nurses'
+// station facing the lifts, the entrance lobby's waiting area with its information desk.
+// Nave .. Chamber: the civic halls (hallPlan, campusPlan): a church's nave, a cinema's foyer and its auditoriums, a
+// market hall's floor of stalls, a police cell, a courtroom, a council chamber, a fire station's engine bay and the
+// floor one engine stands on (Apparatus: kept clear, furnished by nothing -- a loading bay's strip and a stair's flight
+// too), a factory's shop floor, a warehouse's racked floor; a hotel's lobby (its reception, its lounge).
+// CopyRoom .. WaterCooler: the zoned office floor's points (floor_zones.h): a copy room by the core, a row of phone
+// booths, a water cooler's corner with a high table to stand at.
 enum class RoomKind : uint8_t { Office, Flat, Hall, Living, Kitchen, Bath, Bed, Closet, OpenPlan, Meeting, Kitchenette,
-                                Shop };
+                                Shop, Classroom, Lecture, Lab, Reading, Stacks, Dorm, DeskRow, Lounge, Reception, Gallery,
+                                Ward, Exam, NurseStation, Waiting,
+                                Nave, Foyer, Auditorium, Market, Cell, Courtroom, Chamber, EngineBay, Apparatus,
+                                ShopFloor, Warehouse, HotelLobby,
+                                CopyRoom, PhoneBooths, WaterCooler };
+constexpr RoomKind kLastRoomKind = RoomKind::WaterCooler;
 
 struct RoomWall {
     Vec2 a, b;           // world XZ, the wall's centre line
     Real doorAt = -1;    // parameter along a->b of a doorway's centre; < 0 = none
     bool glass = false;  // an office front: clear glass instead of drywall
     bool accent = false; // this wall wears the building's interior finish
+    // A FACE OF ITS OWN (a shop's room, trades.h tradeInterior): its paint and a panelled band up to dadoH, on side
+    // A (right of a->b) or B; unset faces take the floor's paint.
+    struct Face { bool set = false; Vec3 paint; Real dadoH = 0; Vec3 dado; };
+    Face faceA, faceB;
 };
 
 // WALL FINISHES (Glenn, 2026-09-15: "do something more interesting with the
@@ -102,10 +127,23 @@ struct WallFinish {
 WallFinish interiorFinishFor(const BuildingParams& params);
 
 struct Room {
-    Poly2 rect;          // world XZ, CCW
+    Poly2 rect;          // world XZ, CCW -- four corners, or a CURVED room's polygon (the chords of an arc outside, the
+                         // offset arc inside; the ring's corner office on a rounded plan)
     std::size_t edge = 0;   // the plan edge it sits against (ring only)
     RoomKind kind = RoomKind::Office;
     uint8_t style = 0;      // a shop's trade
+    Poly2 frame;         // a curved room's rectangle for the furniture: inside the polygon, along the arc's chord
+};
+
+// AN OPENING IN AN OUTSIDE WALL (Glenn, 2026-10-13: "a tv sitting in front of the front doorway ... a shelf in a store
+// blocking the front entrance"; "a picture or mirror shouldn't be placed over a window but a desk or sofa could"): a
+// window or a door the facade cuts, as its span a->b along the inner face of the wall (world XZ) and its sill and head
+// above the storey floor. The facade's own layout fills these in (growInterior), so the furniture sees the same doors
+// and windows the walls are cut with; the room planner never makes them.
+struct WallOpening {
+    Vec2 a, b;
+    Real sill = 0, head = 0;
+    bool door = false;   // the street door, a shop's own door, the back door: kept clear to walk in through
 };
 
 struct RoomPlan {
@@ -114,6 +152,7 @@ struct RoomPlan {
     WallFinish finish;              // what an accent wall on this storey wears
     std::vector<Room> rooms;
     std::vector<RoomWall> walls;
+    std::vector<WallOpening> openings;   // the outside walls' doors and windows (empty: none known)
 };
 
 // Which topology a plate takes. A plate with a core, or behind a curtain
@@ -131,7 +170,34 @@ PlateTopology plateTopologyFor(const Poly2& storeyPlan, const BuildingParams& pa
 RoomPlan roomPlan(const Poly2& storeyPlan, const BuildingParams& params, const CorePlan& core,
                   std::size_t blankEdge, Real inset, int storey,
                   const Poly2& stairWell = Poly2{},
-                  std::size_t entranceEdge = static_cast<std::size_t>(-1));
+                  std::size_t entranceEdge = static_cast<std::size_t>(-1),
+                  const Vec2& stairFoot = Vec2(1e30, 1e30));
+
+// ONE STOREY'S ROOMS as growInterior plans them, and the SPACE GRAPH reads them (space_graph.h, issue #105): a
+// mall's levels, a big box's floor, the ground storey's shops, else the room planner's ring / flats / apartments
+// (roomPlan above), a tower's department-store and restaurant floors re-dressed as shops. Empty on a mechanical storey
+// (no partitions). With the storey's own circulation where its plan has it: a mall's atria (the slab's holes, the
+// upper level), its escalators (feet on the lower level, rising `escalatorRun` along `dir` one storey) and its glass
+// lift. `plan` is the building's CCW plan; `storeys` its storey stack; `core` its core (invalid: none); `runs` the
+// straight stair's runs (stairRuns); the entrance edge as entranceEdgeFor gives it.
+struct StoreyRooms {
+    RoomPlan rp;
+    std::vector<Poly2> holes;
+    struct Escalator { Vec2 foot, dir; bool up; };
+    std::vector<Escalator> escalators;
+    Real escalatorRun = 0;
+    bool lift = false;
+    Vec2 liftAt, liftDir;
+};
+StoreyRooms storeyRooms(const Poly2& plan, const BuildingParams& params, Real baseY,
+                        const std::vector<StoreyPlan>& storeys, int storey, const CorePlan& core,
+                        const std::vector<StairRun>& runs, std::size_t entranceEdge);
+
+// A TRANSFER FLOOR'S LOUNGE (issue #105, the stair runs): the open storey between the stair that came up and the
+// stair that goes on, furnished as a lounge -- sofas along the glass on every edge but the two the stairs hug,
+// every strip clear of both wells (`keepOut`). No walls: the floor stays open.
+RoomPlan transferLoungePlan(const Poly2& storeyPlan, const BuildingParams& params, Real inset, int storey,
+                            const std::vector<Poly2>& keepOut, const std::vector<std::size_t>& blankEdges);
 
 // WALKABILITY (Glenn, 2026-09-15: "it might help if there's an algorithm to
 // determine if the entire floor is walkable which could be used for
@@ -141,6 +207,13 @@ RoomPlan roomPlan(const Poly2& storeyPlan, const BuildingParams& params, const C
 // inflated by the player's radius, so a doorway that a capsule cannot fit
 // through counts as closed. roomPlan runs this and simplifies the floor
 // until it passes, so a blocked interior is never grown.
+// ONE APARTMENT laid out into rooms and walls: the unit x0..x1 along its window wall, from the glass (depth vIn) to
+// its front (vFront; D the depth), its front door at xd along it. P maps (along, depth in) to the plan. The front
+// wall with its door (frontWall) and a party wall at x1 (partyWallRight) are emitted when asked; a zoned flat
+// (floor_zones.cpp) walls its own outline.
+void layoutApartment(RoomPlan& rp, std::size_t e, const std::function<Vec2(Real, Real)>& P, Real x0, Real x1,
+                     Real vIn, Real vFront, Real D, Real xd, bool partyWallRight, bool frontWall = true);
+
 bool floorIsWalkable(const RoomPlan& rp, const Poly2& storeyPlan, const Vec2& entry,
                      const Poly2& stairWell = Poly2{});
 

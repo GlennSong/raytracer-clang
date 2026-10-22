@@ -23,7 +23,7 @@ layout(set = 0, binding = 0) uniform Globals {
     mat4  invViewProjection;
     mat4  cascadeVP[4];
     vec4  cameraPosition;
-    vec4  ambient;            // rgb = ambient tint * multiplier (IBL strength)
+    vec4  ambient;            // rgb = ambient tint * multiplier (IBL strength), w = facade glass reflectance scale
     vec4  cascadeSplit;       // far view-space depth of cascades 0..3
     ivec4 counts;             // x lightCount, y cascadeCount, z envMode, w debugView
     vec4  shadowParams;       // x normalBias, y pcfRadius, z mapSize, w strength
@@ -46,13 +46,26 @@ layout(set = 0, binding = 0) uniform Globals {
     vec4  skyStars;
     vec4  skyCity;
     vec4  terrainHorizon;     // xy world origin, z 1/extent, w enabled
-    vec4  terrainHorizon2;    // x encodeLo, y encodeHi - encodeLo
+    vec4  terrainHorizon2;    // x encodeLo, y encodeHi - encodeLo, z 1: no impostor self-shadow (RT_IMPOSTOR_SELF_SHADOW=0),
+                              // w 1: grass bent to the sky, not its ground (RT_GRASS_GROUND=0)
+    vec4  viewerBoxA;         // the viewer's enclosure (SceneLighting::viewerBox*): xyz centre, w half along u (0: none)
+    vec4  viewerBoxB;         // xy its axis u (x, z), z half across it, w half up
+    vec4  glassMode;          // x 1: glass as a filter (0: the old glass, RT_GLASS=old; 2: none, RT_GLASS=none),
+                              // y the ceiling over the viewer (0: none)
+    vec4  terrainNormal;      // the terrain normal map (binding 5, ADR-0205): xy world origin, z 1/extent, w enabled
+    vec4  terrainNormal2;     // x the camera distance it blends in from, y 1/(the blend's length),
+                              // z 1: no surface relief (RT_TERRAIN_DETAIL=0, ADR-0207)
+    vec4  terrainSurface;     // the cover + macro maps (bindings 6, 7, ADR-0208): xy world origin, z 1/extent, w enabled
+    vec4  terrainSurface2;    // x the camera distance the cover map blends in from, y 1/(the blend's length)
 } g;
 
 layout(set = 0, binding = 1) uniform sampler2DArrayShadow shadowMap;
 layout(set = 0, binding = 2) uniform sampler2D envEquirect;   // HDR env (counts.z==1)
 layout(set = 0, binding = 3) uniform sampler2D brdfLut;       // split-sum BRDF LUT
 layout(set = 0, binding = 4) uniform sampler2D terrainHorizonMap;   // mountain shadows
+layout(set = 0, binding = 5) uniform sampler2D terrainNormalMap;    // the ground's slope per texel (ADR-0205)
+layout(set = 0, binding = 6) uniform sampler2D terrainCoverMap;     // its cover weights per texel (ADR-0208)
+layout(set = 0, binding = 7) uniform sampler2D terrainMacroMap;     // its convexity, wetness, rock tone, hardness (ADR-0208, -0209)
 
 const float ENV_PI = 3.14159265359;
 vec3 sampleEquirect(vec3 dir) {
@@ -83,6 +96,9 @@ layout(location = 2) in vec2 inTexcoord;
 layout(location = 3) in vec3 inColor;
 layout(location = 4) in vec3 inWorldTangent;
 layout(location = 5) flat in vec3 inInstanceOrigin;   // per-instance variation (ADR-0098)
+layout(location = 6) in vec3 inUvBlend;   // FLAG_UV_BLEND (bit 23): a second UV and its weight
+layout(location = 7) flat in vec4 inImpA;   // FLAG_IMPOSTOR_VIEWS (bit 24): the tree's centre and yaw; FLAG_GRASS: its ground's normal xz
+layout(location = 8) flat in vec4 inImpB;   // ...its window half extents Rb, Hh and its block's corner in the atlas
 
 layout(location = 0) out vec4 outColor;
 layout(location = 1) out vec4 outNormal;   // world normal *0.5+0.5 (SSAO G-buffer)
@@ -127,6 +143,20 @@ vec3 sampleEnvironment(vec3 dir) {
     col += sc * pow(sunDot, 256.0) * 8.0 * disc;
     col += sc * pow(sunDot, 32.0) * 1.0 * disc;
     col += sc * pow(sunDot, 4.0) * 0.15 * disc;
+    return col;
+}
+
+// THE SKY AS AMBIENT LIGHT: the dome and the broad brightening round the sun -- NOT the disc and its tight glow. The sun
+// is lit directly (evaluateLighting); taking it again through the irradiance gave a surface facing the sun ~9x the
+// sky's light, ~3.6x the direct sun, and a white sheen: sunlit leaf cards, bent sky-ward and facing every way, blew
+// out (Glenn: "when they get light cast on them the lighting seems to blow out the leaves").
+vec3 sampleSkyDome(vec3 dir) {
+    float skyBlend = clamp(dir.y, 0.0, 1.0);
+    vec3 sky = mix(g.skyHorizon.rgb, g.skyZenith.rgb, pow(skyBlend, 0.5));
+    vec3 lowerHaze = mix(g.skyHorizon.rgb, g.skyGround.rgb, smoothstep(0.0, -0.4, dir.y));
+    vec3 col = mix(lowerHaze, sky, smoothstep(-0.05, 0.05, dir.y));
+    float sunDot = max(dot(dir, g.skySunDir.xyz), 0.0);
+    col += g.skySunColor.rgb * pow(sunDot, 4.0) * 0.15 * g.skySunDir.w;
     return col;
 }
 
@@ -361,23 +391,118 @@ vec3 surfWater(vec3 base, float depth, float shore, vec3 worldPos, float time) {
 // only layers near the top survive -- so edges are crisp and natural (sand between pebbles,
 // rock through grass) rather than a smear. The ground lights smooth: no bump noise.
 const float kLayerTile = 4.0;   // kGroundLayerTileMetres
-// One layer, world-planar. `mixB` (the anti-tiling blend, computed once a pixel) mixes in a
-// second, rotated sample at another scale, so the tile never visibly repeats.
-vec4 layerPlanar(sampler2D t, vec2 p, float mixB) {
-    vec4 a = texture(t, p / kLayerTile);
-    if (mixB < 0.01) return a;
-    vec2 q = mat2(0.8, -0.6, 0.6, 0.8) * p / (kLayerTile * 2.37) + vec2(0.37, 0.61);
-    return mix(a, texture(t, q), mixB);
+// HEX TILING (ADR-0210; Mikkelsen 2022, "Practical Real-Time Hex-Tiling", after Heitz & Neyret 2018; Glenn: the
+// mountains' surface "a regular repeating pattern"): the plane cut into a triangle grid, each vertex its own random
+// offset into the texture, a pixel the blend of its triangle's three (weights sharpened, so the blend keeps the
+// texture's contrast) -- the 4 m tile never lines up with itself again. The gradients are the unshifted UV's, so the
+// mips agree across the triangles' seams.
+vec4 texHex(sampler2D t, vec2 uv) {
+    const vec2 dx = dFdx(uv), dy = dFdy(uv);
+    const vec2 st = vec2(uv.x - 0.57735027 * uv.y, 1.15470054 * uv.y) * 1.6;   // skewed: a triangle grid, ~0.6 tile
+    const vec2 b = floor(st), f = fract(st);
+    const float z = 1.0 - f.x - f.y;
+    vec2 v0, v1, v2;
+    vec3 w;
+    if (z > 0.0) { v0 = b; v1 = b + vec2(0.0, 1.0); v2 = b + vec2(1.0, 0.0); w = vec3(z, f.y, f.x); }
+    else { v0 = b + vec2(1.0); v1 = b + vec2(1.0, 0.0); v2 = b + vec2(0.0, 1.0); w = vec3(-z, 1.0 - f.y, 1.0 - f.x); }
+    w = pow(max(w, 0.0), vec3(6.0));
+    w /= w.x + w.y + w.z;
+    vec4 c = vec4(0.0);
+    vec2 vs[3] = vec2[3](v0, v1, v2);
+    for (int k = 0; k < 3; ++k) {
+        const vec2 off = vec2(hash21(vs[k].x, vs[k].y), hash21(vs[k].y + 17.3, vs[k].x - 5.1));
+        c += textureGrad(t, uv + off * 7.0, dx, dy) * w[k];
+    }
+    return c;
 }
-// Rock: triplanar where the ground is steep (cliffs don't stretch), planar where it is not.
-vec4 layerRock(sampler2D t, vec3 wp, vec3 n, float mixB) {
-    if (abs(n.y) > 0.85) return layerPlanar(t, wp.xz, mixB);
+// One layer, world-planar, hex-tiled (the old anti-tiling, a second rotated sample at another scale mixed in by
+// `mixB`, still left the 4 m repeat in a grid across a mountainside)
+// TWO SCALES (ADR-0210): one 4 m texture carried a mountainside alone -- uniform from afar however it tiled. Each layer
+// is also read on a ~24 m hex grid of its own (an odd ratio: the two never line up), and that sample's brightness
+// varies the near one by up to ~30%: tens-of-metres patches of lighter and darker ground over the same fine detail
+// (only the brightness: a stone stays a stone's size).
+// (against the texture's MEAN -- its last mip -- not the near sample's: that brightened every dark crack)
+vec4 withMacro(vec4 near, vec4 far, vec4 mean) {
+    const vec3 lw = vec3(0.3, 0.5, 0.2);
+    const float ratio = dot(far.rgb, lw) / max(dot(mean.rgb, lw), 1e-3);
+    return vec4(near.rgb * clamp(1.0 + 0.7 * (ratio - 1.0), 0.65, 1.35), near.a);
+}
+vec4 layerPlanar(sampler2D t, vec2 p, float mixB) {
+    return withMacro(texHex(t, p / kLayerTile), texHex(t, p / (kLayerTile * 5.93) + vec2(0.31, 0.77)), textureLod(t, vec2(0.5), 12.0));
+}
+// THE ROCK ATLAS (ADR-0210, ground_layers.h): the rock slot holds four sub-layers, 2 x 2 -- face (0, 0), broken (1, 0),
+// scree (0, 1), lichen (1, 1). One of them hex-tiled inside its quadrant (each tap wrapped into it, kept a texel off
+// its edges; the gradients halved with it).
+vec4 texHexQuad(sampler2D t, vec2 uv, vec2 q) {
+    const vec2 dx = dFdx(uv) * 0.5, dy = dFdy(uv) * 0.5;
+    const vec2 st = vec2(uv.x - 0.57735027 * uv.y, 1.15470054 * uv.y) * 1.6;
+    const vec2 b = floor(st), f = fract(st);
+    const float z = 1.0 - f.x - f.y;
+    vec2 v0, v1, v2;
+    vec3 w;
+    if (z > 0.0) { v0 = b; v1 = b + vec2(0.0, 1.0); v2 = b + vec2(1.0, 0.0); w = vec3(z, f.y, f.x); }
+    else { v0 = b + vec2(1.0); v1 = b + vec2(1.0, 0.0); v2 = b + vec2(0.0, 1.0); w = vec3(-z, 1.0 - f.y, 1.0 - f.x); }
+    w = pow(max(w, 0.0), vec3(6.0));
+    w /= w.x + w.y + w.z;
+    // (kept clear of the quadrant's edge by a texel of the mip it reads: a fixed texel let the coarser mips bleed the
+    // neighbouring quadrant in as dotted seams)
+    const float lod = max(0.0, log2(max(length(dx), length(dy)) * 1024.0));
+    const float inset = min(0.25, exp2(lod) / 1024.0);
+    vec4 c = vec4(0.0);
+    vec2 vs[3] = vec2[3](v0, v1, v2);
+    for (int k = 0; k < 3; ++k) {
+        const vec2 off = vec2(hash21(vs[k].x, vs[k].y), hash21(vs[k].y + 17.3, vs[k].x - 5.1));
+        const vec2 a = clamp(fract(uv + off * 7.0), vec2(inset), vec2(1.0 - inset)) * 0.5 + q * 0.5;
+        c += textureGrad(t, a, dx, dy) * w[k];
+    }
+    return c;
+}
+// Rock (one sub-layer): triplanar where the ground is steep (cliffs don't stretch), planar where it is not.
+vec4 rockPlane(sampler2D t, vec2 p, vec2 q) {   // (one projection, at both scales; the quadrant's mean from mip 9, 2 x 2)
+    return withMacro(texHexQuad(t, p / kLayerTile, q), texHexQuad(t, p / (kLayerTile * 5.93) + vec2(0.31, 0.77), q),
+                     textureLod(t, q * 0.5 + 0.25, 9.0));
+}
+vec4 layerRockSub(sampler2D t, vec3 wp, vec3 n, vec2 q) {
+    if (abs(n.y) > 0.85) return rockPlane(t, wp.xz, q);
     vec3 w = pow(abs(n), vec3(4.0));
     w /= (w.x + w.y + w.z);
-    return layerPlanar(t, wp.zy, mixB) * w.x + layerPlanar(t, wp.xz, mixB) * w.y + layerPlanar(t, wp.xy, mixB) * w.z;
+    return rockPlane(t, wp.zy, q) * w.x + rockPlane(t, wp.xz, q) * w.y + rockPlane(t, wp.xy, q) * w.z;
 }
-// The rock and snow shares terrainLayers settled on, for the relief below (ADR-0120).
-float gTerrainRock = 0.0, gTerrainSnow = 0.0;
+// The macro map's sample here (convexity, wetness, tone, hardness), set before terrainLayers (the rock's sub-layers
+// read it)
+vec4 gMacro = vec4(0.5, 0.0, 0.5, 0.0);
+// The rock: its sub-layers chosen by the ground -- the FACE on steep rock (over ~50 deg), SCREE in the hollows of
+// moderate slopes, LICHEN where it is wet or turned north, BROKEN rock elsewhere -- height-blended as the layers are
+vec4 layerRock(sampler2D t, vec3 wp, vec3 n, float mixB) {
+    const float steep = 1.0 - n.y;
+    const float face = smoothstep(0.3, 0.45, steep);
+    const float scree = (1.0 - face) * smoothstep(0.48, 0.3, gMacro.x) * smoothstep(0.08, 0.2, steep);
+    const float lichen = (1.0 - scree) * clamp(gMacro.y * 1.6 + max(0.0, -n.z) * 0.45 - 0.25, 0.0, 0.8);
+    const float broken = max(0.0, 1.0 - face - scree - lichen * (1.0 - face));
+    float wf = face * (1.0 - lichen), wb = broken, ws = scree, wl = lichen;
+    const float sum0 = max(wf + wb + ws + wl, 1e-4);
+    wf /= sum0; wb /= sum0; ws /= sum0; wl /= sum0;
+    const vec4 none = vec4(0.0);
+    const vec4 f = wf > 0.02 ? layerRockSub(t, wp, n, vec2(0.0, 0.0)) : none;
+    const vec4 b = wb > 0.02 ? layerRockSub(t, wp, n, vec2(1.0, 0.0)) : none;
+    const vec4 s = ws > 0.02 ? layerRockSub(t, wp, n, vec2(0.0, 1.0)) : none;
+    const vec4 l = wl > 0.02 ? layerRockSub(t, wp, n, vec2(1.0, 1.0)) : none;
+    const float bf = wf > 0.02 ? wf + f.a * 0.5 : -1.0, bb = wb > 0.02 ? wb + b.a * 0.5 : -1.0;
+    const float bs = ws > 0.02 ? ws + s.a * 0.5 : -1.0, bl = wl > 0.02 ? wl + l.a * 0.5 : -1.0;
+    const float top = max(max(bf, bb), max(bs, bl)) - 0.2;
+    const float kf = max(bf - top, 0.0), kb = max(bb - top, 0.0), ks = max(bs - top, 0.0), kl = max(bl - top, 0.0);
+    return (f * kf + b * kb + s * ks + l * kl) / max(kf + kb + ks + kl, 1e-5);
+}
+// The rock's BAND TONE from the macro map (ADR-0209: 0 dark .. 1 pale, 0.5 where the ground has no rock layers), set
+// before terrainLayers: a face's beds in light and dark (Banded Peak)
+float gRockTone = 0.5;
+// The rock and snow shares terrainLayers settled on, for the relief below (ADR-0120); and the blended layers' HEIGHT
+// in metres (each layer's alpha by its relief), the surface relief's bump (ADR-0207)
+float gTerrainRock = 0.0, gTerrainSnow = 0.0, gTerrainH = 0.0;
+// each layer's relief, metres for its alpha 0..1: a grass sward's clumps, a pebble, a ripple, a slab's crack
+// (rock none: its texture bump outlined the sub-layers' block edges and the hex tiling's blend seams into a net of
+// stair-stepped lines over every face -- Glenn, 2026-10-20; the rock's shape is the ground's own, ADR-0213)
+const float kReliefGrass = 0.05, kReliefDirt = 0.035, kReliefSand = 0.025, kReliefRock = 0.0;
 // ROCK AT MOUNTAIN SCALE (ADR-0120, Glenn: "bordering on realism, so better procedural texturing/
 // materials for the rock surfaces and snow"). The 4 m rock texture averages to one grey past a few
 // hundred metres; what reads on a mountain is structure at 5-200 m: STRATA (bedding bands along the
@@ -432,11 +557,20 @@ vec3 terrainLayers(vec3 cover, float wsn, vec3 wp, vec3 n) {
           kn = max(bn - top, 0.0);
     float sum = max(kg + kd + ks + kr + kn, 1e-5);
     vec3 rock = kr > 0.0 ? rockStructure(pow(r.rgb, vec3(2.2)), wp, n) : vec3(0.0);
+    // (its bed's tone: darker and cooler or paler and warmer, as limestone, shale and sandstone beds alternate)
+    rock *= mix(vec3(0.55, 0.58, 0.64), vec3(1.45, 1.42, 1.36), gRockTone);   // (exactly 1 at 0.5: no layers, no change)
     // snow: brighter on the flats, a faint cold blue where it sits steep or in a hollow of the rock
     snow *= mix(vec3(0.93, 0.96, 1.02), vec3(1.0), smoothstep(0.75, 0.95, n.y));
     vec3 c = (pow(g.rgb, vec3(2.2)) * kg + pow(d.rgb, vec3(2.2)) * kd + pow(s.rgb, vec3(2.2)) * ks +
               rock * kr + snow * kn) / sum;
     gTerrainRock = kr / sum; gTerrainSnow = kn / sum;
+    // (each layer also stands at its own height over the rock -- Glenn: grass patches and snow "seem painted onto the
+    // surface": the soil and turf a layer over the stone, the snow a blanket on top -- so where one meets another the
+    // relief shows a LIP, lit one side and shaded the other, not a line of paint)
+    // (the lip from the SMOOTH cover weights, ramping over the metre they blend across: from the crisp height-blend
+    // shares it jumped within a pixel and drew a dark outline round every snowfield)
+    gTerrainH = (g.a * kReliefGrass * kg + d.a * kReliefDirt * kd + s.a * kReliefSand * ks + r.a * kReliefRock * kr +
+                 (1.0 - r.a) * 0.01 * kn) / sum + 0.16 * wg + 0.10 * wd + 0.04 * ws + 0.35 * wsn;
     // a broad macro tint so kilometres of ground aren't one tone (one cheap octave)
     c *= 0.88 + 0.24 * vnoise2(wp.x * 0.008 + 3.1, wp.z * 0.008 - 1.7);
     return c;
@@ -641,6 +775,20 @@ float terrainShadow(vec3 worldPos, vec3 L) {
     return smoothstep(h - 0.012, h + 0.012, L.y);
 }
 
+// THE TERRAIN NORMAL MAP (ADR-0205, engine/procgen/terrain_normal_map.h): beyond the distance where the CDLOD mesh
+// grows coarser than a texel, the ground lights by the baked slope of what it covers rather than its vertices' (16-64
+// m apart on a far tile) -- the erosion's gullies and spurs on the far mountains. Blended in over one level's range,
+// so no tile edge shows; outside the map's square, the vertex normal.
+vec3 terrainMapNormal(vec3 worldPos, vec3 vertexN) {
+    if (g.terrainNormal.w < 0.5) return vertexN;
+    const vec2 uv = (worldPos.xz - g.terrainNormal.xy) * g.terrainNormal.z;
+    const vec2 t = texture(terrainNormalMap, uv).rg * 2.0 - 1.0;   // (uniform flow: a draw is terrain or not)
+    if (uv.x < 0.0 || uv.y < 0.0 || uv.x > 1.0 || uv.y > 1.0) return vertexN;
+    const vec3 mapN = vec3(t.x, sqrt(max(1.0 - dot(t, t), 0.0)), t.y);
+    const float w = clamp((distance(worldPos, g.cameraPosition.xyz) - g.terrainNormal2.x) * g.terrainNormal2.y, 0.0, 1.0);
+    return normalize(mix(vertexN, mapN, w));
+}
+
 float computeShadow(vec3 worldPos, vec3 N, float viewDepth) {
     int count = g.counts.y;
     if (count <= 0) return 1.0;
@@ -712,6 +860,155 @@ vec3 evaluateLighting(vec3 worldPos, vec3 N, vec3 V, vec3 albedo,
     return directLight;
 }
 
+// THE ROOM A WINDOW REFLECTS (the viewer's own glass, at night a dark mirror of the lit room): the light the
+// point lights near it throw (a floor's ceiling panels, staged as interiorPoints), as the radiance of the room's
+// surfaces they light -- irradiance times a room's average reflectance (0.6) over pi, half of it facing the glass.
+vec3 roomRadiance(vec3 worldPos) {
+    vec3 e = vec3(0.0);
+    int count = min(g.counts.x, 32);
+    for (int i = 0; i < count; ++i) {
+        Light light = g.lights[i];
+        if (int(light.typeRange.x) != 0) continue;   // point lights only (the sun and spots are not the room)
+        float dist = length(light.positionIntensity.xyz - worldPos);
+        e += light.colorOuter.rgb * light.positionIntensity.w * distanceAttenuation(dist, light.typeRange.y);
+    }
+    return e * (0.6 / PI) * 0.5;
+}
+
+// THE CEILING'S PANELS IN A WINDOW (the viewer's own glass): the reflected ray out to the ceiling over them, and a
+// lit 600 x 1200 panel wherever it lands on the office grid -- every 2.4 m, square to the building (the viewer box's
+// axis), as furniture.cpp hangs them. A cheap interior map of the room behind the viewer: at night the panels shine
+// in the black glass, by day they are lost in the light coming through.
+vec3 ceilingPanels(vec3 P, vec3 R) {
+    float ceilY = g.glassMode.y;
+    if (ceilY <= 0.0 || R.y < 0.02) return vec3(0.0);
+    float t = (ceilY - 0.02 - P.y) / R.y;
+    if (t <= 0.0 || t > 40.0) return vec3(0.0);
+    vec3 H = P + R * t;
+    vec2 u = g.viewerBoxB.xy, w = vec2(-u.y, u.x);
+    vec2 d = H.xz - g.viewerBoxA.xz;
+    vec2 q = vec2(dot(d, u), dot(d, w));
+    if (abs(q.x) > g.viewerBoxA.w || abs(q.y) > g.viewerBoxB.z) return vec3(0.0);   // past the building's walls
+    vec2 c = abs(fract(q / 2.4) - 0.5) * 2.4;                                         // from the cell's centre
+    vec2 fw = max(fwidth(q), vec2(1e-3));
+    float on = (1.0 - smoothstep(0.6 - fw.x, 0.6 + fw.x, c.x)) * (1.0 - smoothstep(0.3 - fw.y, 0.3 + fw.y, c.y));
+    return vec3(2.2, 2.1, 1.9) * on;   // the panel's own emission (furniture_draw.cpp)
+}
+
+// FLAG_UV_BLEND: a normal map's tangent frame from the screen-space derivatives of position and `uv` (the cotangent
+// frame: the mesh's tangent slot carries the second UV, not a tangent) -- T along u, B = N x T as the tangent path's
+vec3 derivedNormal(vec3 N, vec2 uv, vec3 tsN) {
+    vec3 dp1 = dFdx(inWorldPos), dp2 = dFdy(inWorldPos);
+    vec2 duv1 = dFdx(uv), duv2 = dFdy(uv);
+    vec3 T = cross(dp2, N) * duv1.x + cross(N, dp1) * duv2.x;
+    T = T - N * dot(N, T);
+    if (dot(T, T) < 1e-20) return N;
+    T = normalize(T);
+    vec3 B = cross(N, T);
+    return normalize(T * tsN.x + B * tsN.y + N * tsN.z);
+}
+
+// MANY-VIEW IMPOSTOR (FLAG_IMPOSTOR_VIEWS, bit 24; forest.h, real_tree.h renderImpostorView): the camera's direction
+// in the tree's own frame picks the baked views about it -- 8 azimuths x 3 elevations 35 deg apart -- and the four
+// nearest are blended (bilinearly in azimuth and elevation, weighted by their coverage). Each is read where THIS
+// fragment's point falls in that view's window (its offset from the centre on the view's r and u axes), so the
+// silhouettes line up as the views change. Returns colour and coverage; `nWorld` the blended normal, `front` the
+// tree's nearest part under this fragment (in the tree's frame, from its centre: the normal map's alpha is each view's
+// depth, real_tree.h renderImpostorView).
+const int kImpAz = 8, kImpEl = 3;
+const float kImpElStep = 0.6108652;   // 35 deg
+const float kImpDepthLod = 2.0;
+vec4 impostorSample(out vec3 nWorld, out float lod, out vec3 front) {
+    const vec3 c = inImpA.xyz;
+    const float yaw = inImpA.w, rb = inImpB.x, hh = inImpB.y;
+    const vec2 base = inImpB.zw, cell = inUvBlend.xy;
+    // world -> the tree's frame (forest.h: local x -> (cos, 0, sin), local z -> (-sin, 0, cos))
+    const float cy = cos(yaw), sy = sin(yaw);
+    const vec3 wv = g.cameraPosition.xyz - c, wp = inWorldPos - c;
+    const vec3 v = normalize(vec3(wv.x * cy + wv.z * sy, wv.y, -wv.x * sy + wv.z * cy));
+    const vec3 p = vec3(wp.x * cy + wp.z * sy, wp.y, -wp.x * sy + wp.z * cy);
+    float fa = atan(v.x, v.z) / 6.2831853 * float(kImpAz);
+    fa = fa < 0.0 ? fa + float(kImpAz) : fa;
+    const int a0 = int(floor(fa)) % kImpAz, a1 = (a0 + 1) % kImpAz;
+    const float wa = fract(fa);
+    const float fe = clamp(asin(clamp(v.y, -1.0, 1.0)) / kImpElStep, 0.0, float(kImpEl - 1));
+    const int e0 = min(int(floor(fe)), kImpEl - 1), e1 = min(e0 + 1, kImpEl - 1);
+    const float we = fe - float(e0);
+    vec3 rgb = vec3(0.0), n = vec3(0.0);
+    float cover = 0.0;
+    lod = 0.0;
+    front = vec3(0.0);
+    for (int k = 0; k < 4; ++k) {
+        const int ai = (k & 1) == 0 ? a0 : a1, ei = (k & 2) == 0 ? e0 : e1;
+        const float w = ((k & 1) == 0 ? 1.0 - wa : wa) * ((k & 2) == 0 ? 1.0 - we : we);
+        const float az = float(ai) * 6.2831853 / float(kImpAz), el = float(ei) * kImpElStep;
+        const vec3 d = vec3(sin(az) * cos(el), sin(el), cos(az) * cos(el));
+        const vec3 r = vec3(cos(az), 0.0, -sin(az));
+        const vec3 u = cross(d, r);
+        const vec2 xy = vec2(dot(p, r) / rb, dot(p, u) / hh);
+        const vec2 uv = base + (vec2(float(ai), float(ei)) + vec2(xy.x * 0.5 + 0.5, 0.5 - xy.y * 0.5)) * cell;
+        const bool inside = all(lessThan(abs(xy), vec2(1.0)));
+        if (k == 0) lod = textureQueryLod(albedoMap, uv).x;
+        // (a view's window is its cell: outside it, nothing -- not the next cell's tree)
+        const vec4 t = inside ? textureGrad(albedoMap, uv, dFdx(uv), dFdy(uv)) : vec4(0.0);
+        const vec4 tm = textureGrad(normalMap, uv, dFdx(uv), dFdy(uv));
+        const vec3 tn = tm.xyz * 2.0 - 1.0;
+        const float wc = w * t.a;
+        rgb += t.rgb * wc;
+        cover += wc;
+        n += (r * tn.x + u * tn.y + d * tn.z) * wc;
+        // (the depth from a mip no coarser than 20 x 40 a view: further down a cell blurs into its neighbours and the
+        // crown's depth averages away -- every far tree read as lit through)
+        const float z = textureLod(normalMap, uv, min(textureQueryLod(normalMap, uv).x, kImpDepthLod)).a;
+        front += (r * dot(p, r) + u * dot(p, u) + d * ((z * 2.0 - 1.0) * (rb + hh))) * wc;
+    }
+    rgb /= max(cover, 1e-4);
+    front /= max(cover, 1e-4);
+    n = dot(n, n) > 1e-8 ? normalize(n) : v;
+    nWorld = vec3(n.x * cy - n.z * sy, n.y, n.x * sy + n.z * cy);   // the tree's frame -> world
+    return vec4(rgb, cover);
+}
+
+// ...and the crown's shadow on itself (Glenn, 2026-10-19: far trees against the sun "look entirely bright and it makes
+// them flat"): a near crown is shaded by its own leaves in the shadow map -- seen against the sun, only its rim glows --
+// but a billboard is one plane and the map sees nothing of that. So the views nearest the SUN are its shadow map:
+// `front` (impostorSample's, the tree's frame) is projected into them, and the deeper it lies under the leaves the
+// sun sees first, the less sun (soft: light runs a metre or two into a crown). 1 lit .. 0 under the whole crown.
+float impostorSelfShadow(vec3 front, vec3 Lw, float lod) {
+    const float yaw = inImpA.w, rb = inImpB.x, hh = inImpB.y;
+    const vec2 base = inImpB.zw, cell = inUvBlend.xy;
+    const float cy = cos(yaw), sy = sin(yaw);
+    const vec3 L = vec3(Lw.x * cy + Lw.z * sy, Lw.y, -Lw.x * sy + Lw.z * cy);
+    float fa = atan(L.x, L.z) / 6.2831853 * float(kImpAz);
+    fa = fa < 0.0 ? fa + float(kImpAz) : fa;
+    const int a0 = int(floor(fa)) % kImpAz, a1 = (a0 + 1) % kImpAz;
+    const float wa = fract(fa);
+    const float fe = clamp(asin(clamp(L.y, -1.0, 1.0)) / kImpElStep, 0.0, float(kImpEl - 1));
+    const int e0 = min(int(floor(fe)), kImpEl - 1), e1 = min(e0 + 1, kImpEl - 1);
+    const float we = fe - float(e0);
+    const float fall = 0.15 * rb + 0.5, bias = 0.25 + 0.05 * rb;
+    float lit = 0.0;
+    for (int k = 0; k < 4; ++k) {
+        const int ai = (k & 1) == 0 ? a0 : a1, ei = (k & 2) == 0 ? e0 : e1;
+        const float w = ((k & 1) == 0 ? 1.0 - wa : wa) * ((k & 2) == 0 ? 1.0 - we : we);
+        const float az = float(ai) * 6.2831853 / float(kImpAz), el = float(ei) * kImpElStep;
+        const vec3 d = vec3(sin(az) * cos(el), sin(el), cos(az) * cos(el));
+        const vec3 r = vec3(cos(az), 0.0, -sin(az));
+        const vec3 u = cross(d, r);
+        const vec2 xy = vec2(dot(front, r) / rb, dot(front, u) / hh);
+        float l = 1.0;
+        if (all(lessThan(abs(xy), vec2(1.0)))) {
+            const vec2 uv = base + (vec2(float(ai), float(ei)) + vec2(xy.x * 0.5 + 0.5, 0.5 - xy.y * 0.5)) * cell;
+            const float sl = min(lod + 1.0, kImpDepthLod);   // (a mip softer than the picture, but not past the crown's depth)
+            const float a = textureLod(albedoMap, uv, sl).a;
+            const float under = (textureLod(normalMap, uv, sl).a * 2.0 - 1.0) * (rb + hh) - dot(front, d);
+            l = mix(1.0, exp(-max(under - bias, 0.0) / fall), clamp(a * 2.0, 0.0, 1.0));
+        }
+        lit += l * w;
+    }
+    return lit;
+}
+
 void main() {
     // FLAG_LOD_BAND (bit 19, ADR-0129): drawn only inside a distance band, dithered at its edges, so a
     // near model and its far impostor crossfade per pixel (features[3] = in0, in1, out0, out1)
@@ -732,9 +1029,15 @@ void main() {
     // FLAG_EMISSIVE_VERTEX_TINT (32): the vertex colour tints the emission, not the albedo.
     const bool emissiveTint = (pc.surfaceFlags.y & 32u) != 0u;
     vec3 albedo = pc.albedoMetallic.rgb * (emissiveTint ? vec3(1.0) : inColor);
+    // FLAG_SIGNAL_STATE (bit 20): mesh.vert marks the lit lamp by pushing its colour past 1 -- it glows
+    const bool signalLamp = (pc.surfaceFlags.y & (1u << 20)) != 0u && max(inColor.r, max(inColor.g, inColor.b)) > 1.5;
+    if (signalLamp) albedo = pc.albedoMetallic.rgb * inColor / 8.0;
     float metallic = clamp(pc.albedoMetallic.a, 0.0, 1.0);
     float roughness = clamp(pc.emissionRough.a, 0.04, 1.0);
-    vec3 emission = pc.emissionRough.rgb * (emissiveTint ? inColor : vec3(1.0));
+    // FLAG_EMISSION_FOLLOWS_PAINT (bit 21): the self-light scales with the paint, as the albedo does
+    const bool emissionPaint = (pc.surfaceFlags.y & (1u << 21)) != 0u;
+    vec3 emission = pc.emissionRough.rgb * (emissiveTint || emissionPaint ? inColor : vec3(1.0));
+    if (signalLamp) emission = inColor / 8.0 * 6.0;
     // A LIT PANE (the interior-mapped, emissive-tinted part) PACKS its glass and its lit tint in the vertex
     // colour (shape_grammar litPaneColour): the glass in the top 7 bits of each channel is the day albedo,
     // the low bits (r bit 0, g bit 1, b bit 2) index the lit palette (litTintOf -- keep in step). Index 0 is
@@ -754,11 +1057,39 @@ void main() {
     }
     uint texFlags = pc.surfaceFlags.z;
     float ao = 1.0;
+    // the surface's normal: the vertices', or on the CDLOD ground (FLAG_TERRAIN, bit 25) far off, its normal map's
+    const vec3 geomN = (pc.surfaceFlags.y & (1u << 25)) != 0u ? terrainMapNormal(inWorldPos, normalize(inWorldNormal))
+                                                               : normalize(inWorldNormal);
     // TERRAIN LAYERS: the texture slots are the ground's layers, not the usual maps.
     const bool layered = pc.surfaceFlags.x == 19u;
     if (layered) {
-        albedo = terrainLayers(inColor, inTexcoord.x, inWorldPos, normalize(inWorldNormal));
-        roughness = 0.95;
+        // THE COVER MAP (ADR-0208): far off, where a vertex's weights spread over a triangle tens of metres wide, the
+        // weights per texel instead (blended in over the band where the mesh grows coarser than a texel)
+        vec3 cover = inColor;
+        float snowW = inTexcoord.x;
+        vec4 macro = vec4(0.5, 0.0, 0.5, 0.0);
+        if (g.terrainSurface.w > 0.5 && (pc.surfaceFlags.y & (1u << 25)) != 0u) {
+            const vec2 suv = (inWorldPos.xz - g.terrainSurface.xy) * g.terrainSurface.z;
+            const vec4 cm = texture(terrainCoverMap, suv);
+            const vec4 mm = texture(terrainMacroMap, suv);
+            if (suv.x >= 0.0 && suv.y >= 0.0 && suv.x <= 1.0 && suv.y <= 1.0) {
+                const float w = clamp((distance(inWorldPos, g.cameraPosition.xyz) - g.terrainSurface2.x) * g.terrainSurface2.y, 0.0, 1.0);
+                cover = mix(cover, cm.rgb, w);
+                snowW = mix(snowW, cm.a, w);
+                macro = mm;
+            }
+        }
+        gRockTone = macro.z;
+        gMacro = macro;
+        albedo = terrainLayers(cover, snowW, inWorldPos, geomN);
+        // THE MACRO SHADING (ADR-0208): the ground's own processes, at the scale the eye reads a hillside by -- gullies
+        // and hollows darker (shade, damp, deeper soil), ridges and spurs a touch paler (worn, dry), the ground where
+        // water gathers darker and less rough
+        const float gully = clamp((0.5 - macro.x) * 2.0, 0.0, 1.0), ridge = clamp((macro.x - 0.5) * 2.0, 0.0, 1.0);
+        albedo *= (1.0 - 0.22 * gully) * (1.0 + 0.07 * ridge) * (1.0 - 0.22 * macro.y * (1.0 - gTerrainSnow));
+        // THE STAINS (ADR-0213): streaks down a face below its ledges, the creases darker -- on the rock, under no snow
+        albedo *= 1.0 - 0.45 * macro.w * gTerrainRock;
+        roughness = 0.95 - 0.3 * macro.y * (1.0 - gTerrainSnow);   // (wet ground is less rough)
         texFlags = 0u;   // nothing below reads the slots as albedo / MR / normal / AO
     }
     // WATER (Surface::River, id 20; ADR-0099): one polygon for rivers and lakes. Per vertex: the
@@ -902,21 +1233,38 @@ void main() {
     // Alpha-cut foliage (FLAG_ALPHA_TEST = bit 1): drop fragments under the leaf
     // mask (the albedo map's alpha) before any shading. Ports lighting.metal.
     float mapAlpha = 1.0;   // FLAG_ALPHA_FROM_MAP (64): the albedo map's alpha shapes the fragment
+    const bool impViews = (pc.surfaceFlags.y & (1u << 24)) != 0u;   // FLAG_IMPOSTOR_VIEWS: its own sampling
+    vec3 impN = vec3(0.0, 1.0, 0.0), impFront = vec3(0.0);
+    float impLod = 0.0;
+    // (the triangle's own face, from the screen derivatives -- taken here, in uniform control flow: a tree card's
+    // normals are bent out of the crown and cannot say when the card itself is edge-on)
+    const vec3 faceN = cross(dFdx(inWorldPos), dFdy(inWorldPos));
     if (!interiorMap && ((texFlags & 1u) != 0u || (pc.surfaceFlags.y & 2u) != 0u)) {
-        vec4 albedoTex = texture(albedoMap, inTexcoord);
+        vec4 albedoTex = impViews ? impostorSample(impN, impLod, impFront) : texture(albedoMap, inTexcoord);
+        if ((pc.surfaceFlags.y & (1u << 23)) != 0u)   // FLAG_UV_BLEND: the second mapping's, mixed in by its weight
+            albedoTex = mix(albedoTex, texture(albedoMap, inUvBlend.xy), clamp(inUvBlend.z, 0.0, 1.0));
         if ((texFlags & 1u) != 0u) albedo *= albedoTex.rgb;
         float cut = albedoTex.a;
         // grass cards: keep the cut-out's coverage down the mips (Golus) -- a thin blade's alpha
         // averages toward nothing, and a far card would vanish
         // (and tree cards, FLAG_LOD_BAND: a far crown's needles average away the same way)
-        if ((pc.surfaceFlags.y & ((1u << 17) | (1u << 19))) != 0u)
-            cut *= 1.0 + max(textureQueryLod(albedoMap, inTexcoord).x, 0.0) * 0.3;
+        if ((pc.surfaceFlags.y & ((1u << 17) | (1u << 19) | (1u << 22))) != 0u)
+            cut *= 1.0 + max(impViews ? impLod : textureQueryLod(albedoMap, inTexcoord).x, 0.0) * 0.3;
         // an impostor's TOP card seen edge-on is a bright dash through the crown (Glenn: "the tree cards in the
         // distance are still pretty visibly tree cards" -- a far forest striped with them): it thins away as
         // the view grazes it, gone under ~7 deg, whole from ~25 deg up; the side cards carry the crown there
-        if ((pc.surfaceFlags.y & (1u << 19)) != 0u && (texFlags & 4u) != 0u && abs(inWorldNormal.y) > 0.9) {
+        if (impViews) {
+        } else if ((pc.surfaceFlags.y & (1u << 19)) != 0u && (texFlags & 4u) != 0u && abs(inWorldNormal.y) > 0.9) {
             const float s = abs(normalize(g.cameraPosition.xyz - inWorldPos).y);
             cut *= smoothstep(0.12, 0.42, s);
+        }
+        // A TREE CARD EDGE-ON (Glenn, 2026-10-18: "when I get close to the tree branches disappear"): a card seen
+        // edge-on is a sliver -- a blade across the crown, or nothing -- so it thins away as the view grazes it (gone
+        // under ~5 deg, whole from ~17 deg), and its partner in the V, turned off it, carries the clump there.
+        // (Not the impostors' top card, above, nor grass; the shadow pass keeps every card.)
+        else if ((pc.surfaceFlags.y & ((1u << 19) | (1u << 22))) != 0u && dot(faceN, faceN) > 1e-20) {
+            const float s = abs(dot(normalize(faceN), normalize(g.cameraPosition.xyz - inWorldPos)));
+            cut *= smoothstep(0.08, 0.3, s);
         }
         if ((pc.surfaceFlags.y & 2u) != 0u && cut < 0.5) discard;
         if ((pc.surfaceFlags.y & 64u) != 0u) mapAlpha = albedoTex.a;
@@ -929,7 +1277,7 @@ void main() {
     if ((texFlags & 8u) != 0u) ao = texture(aoMap, inTexcoord).r;
     if ((texFlags & 16u) != 0u) emission *= texture(emissiveMap, inTexcoord).rgb;
 
-    vec3 N = normalize(inWorldNormal);
+    vec3 N = geomN;
     if (featNormal) N = featN;
     // FOLIAGE CARDS (Glenn, 2026-10-02: "grass and tree cards are noticeable as cards ... the lighting on them is
     // off"): a card lit by its own flat normal shows its orientation -- each blade or leaf plane a different shade,
@@ -941,14 +1289,56 @@ void main() {
     bool impostorCard = false, cardBack = false;
     vec3 cardN = N;
     {
-        const bool grassCard = (pc.surfaceFlags.y & (1u << 17)) != 0u;
-        const bool leafCard = (pc.surfaceFlags.y & ((1u << 19) | 2u)) == ((1u << 19) | 2u);
+        // (clutter, FLAG_CLUTTER bit 26, is planted as grass but lit as the solid it is)
+        const bool grassCard = (pc.surfaceFlags.y & (1u << 17)) != 0u && (pc.surfaceFlags.y & (1u << 26)) == 0u;
+        // (a tree card: alpha-cut, and banded (the forest) or foliage (FLAG_FOLIAGE, a crown with no band))
+        const bool leafCard = (pc.surfaceFlags.y & 2u) != 0u && (pc.surfaceFlags.y & ((1u << 19) | (1u << 22))) != 0u;
         if (leafCard && (texFlags & 4u) != 0u) {
             impostorCard = true;
             cardBack = dot(N, g.cameraPosition.xyz - inWorldPos) < 0.0;
         } else if (grassCard || leafCard) {
-            if (dot(N, g.cameraPosition.xyz - inWorldPos) < 0.0) N = -N;
-            N = normalize(mix(N, vec3(0.0, 1.0, 0.0), grassCard ? 0.7 : 0.45));
+            // (a grass blade faces the viewer by its HORIZONTAL facing only: with the vertical in the test, the leaning
+            // blades at the camera's own height flipped from up to down as the eye passed them, and a meadow at eye
+            // level split along a straight line across the screen; Glenn, 2026-10-19: "a straight line ... some kind
+            // of overlying filter over part of the image")
+            const vec3 toEye = g.cameraPosition.xyz - inWorldPos;
+            if (grassCard ? dot(N.xz, toEye.xz) < 0.0 : dot(N, toEye) < 0.0) N = -N;
+            // (grass to its GROUND's normal, GrassSystem's: on a slope turned from the sun the field shades with the
+            // ground under it -- Glenn, 2026-10-19: the far grass "appear bright and don't blend with the landscape"
+            // when it bent to the sky, lit as a flat field while the hillside darkened)
+            const vec3 up = grassCard && g.terrainHorizon2.w < 0.5 ? vec3(inImpA.x, sqrt(max(1.0 - dot(inImpA.xy, inImpA.xy), 0.0)), inImpA.y) : vec3(0.0, 1.0, 0.0);
+            N = normalize(mix(N, up, grassCard ? 0.7 : 0.45));
+        }
+    }
+    // SURFACE RELIEF (ADR-0207; Glenn, 2026-10-19: the ground "doesn't look high resolution" -- every layer lit as a
+    // smooth sheet). Two scales the mesh can't carry: (1) each layer's own texture height -- grass clumps, pebbles,
+    // ripples, a slab's cracks -- bumped through the screen-space derivatives of the blended height (Mikkelsen's
+    // surface gradient: no tangent frame, so the triplanar rock bumps too, and the mips fade it with distance); and
+    // (2) on the soft ground a hummock field at ~5 m and ~1.6 m, the turf and soil a slope is never planed flat by,
+    // each octave faded once a pixel covers too much of it (as the crags below).
+    if (layered && g.terrainNormal2.z < 0.5) {
+        const vec3 dpx = dFdx(inWorldPos), dpy = dFdy(inWorldPos);
+        const vec3 r1 = cross(dpy, N), r2 = cross(N, dpx);
+        const float det = dot(dpx, r1);
+        // (faded as a pixel grows past a few centimetres: at a grazing angle the derivatives of a sharp height
+        // stair-stepped across the screen)
+        const float bumpFade = 1.0 - smoothstep(0.04, 0.2, length(fwidth(inWorldPos)));
+        const vec3 surfGrad = sign(det) * (dFdx(gTerrainH) * r1 + dFdy(gTerrainH) * r2) * bumpFade;
+        if (abs(det) > 1e-12) N = normalize(abs(det) * N - surfGrad);
+        const float soft = clamp(1.0 - gTerrainRock - gTerrainSnow, 0.0, 1.0);
+        if (soft > 0.01) {
+            const float pix = length(fwidth(inWorldPos));
+            vec2 grad = vec2(0.0);
+            for (int o = 0; o < 2; ++o) {
+                const float L = o == 0 ? 5.0 : 1.6, amp = o == 0 ? 0.22 : 0.06;
+                const float fade = clamp(1.0 - pix * 6.0 / L, 0.0, 1.0);
+                if (fade <= 0.0) continue;
+                const float f = 1.0 / L, e = 0.15 * L, sx = o == 0 ? 7.3 : -2.9;
+                const float a = fbm2(inWorldPos.x * f + sx, inWorldPos.z * f);
+                grad += vec2(fbm2((inWorldPos.x + e) * f + sx, inWorldPos.z * f) - a,
+                             fbm2(inWorldPos.x * f + sx, (inWorldPos.z + e) * f) - a) / e * amp * fade;
+            }
+            N = normalize(N - vec3(grad.x, 0.0, grad.y) * soft);
         }
     }
     // CRAGS (ADR-0120): the mesh's triangles are the only relief a distant mountain had ("the mountains
@@ -996,7 +1386,14 @@ void main() {
     if ((pc.surfaceFlags.y & 128u) != 0u && dot(N, g.cameraPosition.xyz - inWorldPos) < 0.0) discard;
     // Normal map (bit 2): perturb N in tangent space. Gram-Schmidt the tangent
     // against N, then T,B,N form the TBN basis (ported from lighting.metal).
-    if ((texFlags & 4u) != 0u) {
+    if ((texFlags & 4u) != 0u && (pc.surfaceFlags.y & (1u << 23)) != 0u) {
+        // FLAG_UV_BLEND: each mapping's relief in its own derived frame, mixed by the second's weight
+        vec3 n1 = derivedNormal(N, inTexcoord, texture(normalMap, inTexcoord).xyz * 2.0 - 1.0);
+        vec3 n2 = derivedNormal(N, inUvBlend.xy, texture(normalMap, inUvBlend.xy).xyz * 2.0 - 1.0);
+        N = normalize(mix(n1, n2, clamp(inUvBlend.z, 0.0, 1.0)));
+    } else if (impViews) {
+        N = normalize(mix(impN, vec3(0.0, 1.0, 0.0), 0.2));   // (the views' own normals; a little sky, as the crowns get)
+    } else if ((texFlags & 4u) != 0u) {
         vec3 T = normalize(inWorldTangent - N * dot(N, inWorldTangent));
         vec3 B = cross(N, T);
         vec3 tsN = texture(normalMap, inTexcoord).xyz * 2.0 - 1.0;
@@ -1043,6 +1440,13 @@ void main() {
 
     vec3 V = normalize(g.cameraPosition.xyz - inWorldPos);
     vec3 f0 = mix(vec3(0.04), albedo, metallic);
+    // FACADE GLASS REFLECTS LIKE COATED CURTAIN-WALL GLASS (Glenn, 2026-10-16: the towers read dark and "a little
+    // more matte rather than shiny"; he chose the 3x look from an A/B). The glass tints (curtainGlassColour,
+    // glassGrey) are reflectances of 3-12% for the default pane; real office glass is 15-40%. Scaled here, not in
+    // the baked tints, so it rolls back without regrowing a city: RT_GLASS_REFLECT (default 3, 1 = the old glass)
+    // rides g.ambient.w. Only PartId::Glass/GlassLit are metallic 0.9 at roughness 0.08 (shape_grammar
+    // materialFor); car, train, water and interior glass are not metallic.
+    if (metallic > 0.85 && roughness < 0.1) f0 = clamp(f0 * g.ambient.w, 0.0, 0.9);
 
     // Sun shadow (cascaded). viewDepth is the positive view-space depth; camera
     // looks down -z, so -(view * worldPos).z.
@@ -1055,6 +1459,8 @@ void main() {
     // day, the moon by night; the horizon map was marched toward it).
     if (g.counts.x > 0)
         sunVis *= terrainShadow(inWorldPos, normalize(g.lights[0].directionInner.xyz));
+    if (impViews && g.counts.x > 0 && g.terrainHorizon2.z < 0.5)   // (a far tree's own crown: its sun-side views, above)
+        sunVis *= impostorSelfShadow(impFront, normalize(g.lights[0].directionInner.xyz), impLod);
     float strength = g.shadowParams.w;
     float sunShadow = mix(1.0, sunVis, strength);   // scalar form for the shadow debug view (5)
     // Artistic shadow tint (ADR-0017): occluded direct light + ambient lerp toward
@@ -1070,7 +1476,7 @@ void main() {
     // through thin blades. Strongest looking toward the sun (the backlit glow of a field at
     // dawn and dusk), a little from any angle, more at the thin tips (inTexcoord.y runs 0 root
     // .. 1 tip, procgen/grass.cpp), warmer than the blade, and only where the sun reaches.
-    if ((pc.surfaceFlags.y & (1u << 17)) != 0u) {
+    if ((pc.surfaceFlags.y & (1u << 17)) != 0u && (pc.surfaceFlags.y & (1u << 26)) == 0u) {
         for (int i = 0; i < min(g.counts.x, 32); ++i) {
             if (int(g.lights[i].typeRange.x) != 1) continue;   // the sun
             vec3 L = normalize(g.lights[i].directionInner.xyz);
@@ -1088,12 +1494,14 @@ void main() {
     // LEAF TRANSMISSION (ADR-0129): tree foliage -- alpha-cut cards in a LOD band -- lets the sun through
     // as grass does, so a crown seen against the sun glows at its sunlit rim instead of going black.
     // The shadow map already keeps it to the leaves the sun reaches (the crown's outside).
-    if ((pc.surfaceFlags.y & ((1u << 19) | 2u)) == ((1u << 19) | 2u)) {
+    if ((pc.surfaceFlags.y & 2u) != 0u && (pc.surfaceFlags.y & ((1u << 19) | (1u << 22))) != 0u) {
         for (int i = 0; i < min(g.counts.x, 32); ++i) {
             if (int(g.lights[i].typeRange.x) != 1) continue;   // the sun
             vec3 L = normalize(g.lights[i].directionInner.xyz);
             float toward = pow(max(dot(-V, L), 0.0), 4.0);
-            vec3 transColor = albedo * vec3(1.7, 2.1, 0.9);
+            // (green leaves glow yellow-green; any other colour -- a blossom, a red maple -- glows its own hue)
+            float greenness = clamp((albedo.g - max(albedo.r, albedo.b)) * 10.0, 0.0, 1.0);
+            vec3 transColor = albedo * mix(vec3(1.8), vec3(1.7, 2.1, 0.9), greenness);
             direct += transColor * g.lights[i].colorOuter.rgb * g.lights[i].positionIntensity.w
                     * (0.06 + 0.75 * toward) * sunVis / PI;
             break;
@@ -1112,8 +1520,8 @@ void main() {
         irradiance = sampleEquirect(N);
         prefiltered = mix(sampleEquirect(R), irradiance, roughness);
     } else {
-        irradiance = sampleEnvironment(N);
-        prefiltered = mix(sampleEnvironment(R), irradiance, roughness);  // crude roughness blur
+        irradiance = sampleSkyDome(N);   // (no second sun: see sampleSkyDome)
+        prefiltered = mix(sampleEnvironment(R), irradiance, roughness);  // crude roughness blur; a mirror keeps the sun
     }
     vec3 Famb = fresnelSchlickRoughness(NdotV, f0, roughness);
     vec3 kd = (1.0 - Famb) * (1.0 - metallic);
@@ -1122,7 +1530,11 @@ void main() {
     // envSpecular = prefiltered * (F0 * scale + bias) — matches Metal's IBL.
     vec2 brdf = texture(brdfLut, vec2(NdotV, roughness)).rg;
     vec3 envSpecular = prefiltered * (f0 * brdf.x + brdf.y);
-    vec3 ambient = (envDiffuse + envSpecular) * g.ambient.rgb * ambientShadow;
+    // The ambient strength scales the sky's LIGHT (the diffuse fill), not its REFLECTION: a mirror shows the sky at
+    // the sky's own brightness, as Metal's lighting_surface and the water composite do. Scaling both made every glass
+    // tower reflect the sky at ~a quarter of it -- dark and matte (Glenn, 2026-10-16: "a little more matte rather
+    // than shiny").
+    vec3 ambient = (envDiffuse * g.ambient.rgb + envSpecular) * ambientShadow;
 
     // Debug views that need lit-pass data write display-ready values into the HDR
     // target; the composite shows them raw (counts.w carries the selector — see
@@ -1203,10 +1615,41 @@ void main() {
         // Opacity (float bits in the spare push slot) → output alpha for the
         // transparent blend pass; ignored by the opaque pipeline (blend off).
         float opacity = uintBitsToFloat(pc.surfaceFlags.w) * mapAlpha;
+        // (the transparent pass blends PREMULTIPLIED: colour * alpha out, the destination times 1 - alpha)
         if (isWater) {
-            outColor = vec4(color, waterA);   // composited above
+            outColor = vec4(color * waterA, waterA);   // composited above
+        } else if (opacity < 0.999 && g.glassMode.x > 1.5 && !isWater) {
+            outColor = vec4(0.0);   // RT_GLASS=none: the pane is not there (the A/B's reference)
+        } else if (opacity < 0.999 && g.glassMode.x > 0.5) {
+            // GLASS AS A FILTER (Glenn, 2026-10-16: "glass on trains and buildings makes the outside color appear
+            // duller and less saturated"). Clear glass has no colour of its own to lay over the view: it lets
+            // through all but a little (the pane's opacity read as absorption, 0.4 of it: a 0.24 pane passes 90%)
+            // less what it reflects, and ADDS that reflection. Before, a quarter of the view was the pane's own lit
+            // blue-grey and the sky's reflection laid over the rest -- a grey veil. And a window of the viewer's
+            // own (the building they stand in, the train they ride: SceneLighting::viewerBox) reflects the dim
+            // room behind them at clear glass's 4 %, not the bright sky outside.
+            bool own = false;
+            if (g.viewerBoxA.w > 0.0) {
+                vec3 d = inWorldPos - g.viewerBoxA.xyz;
+                vec2 u = g.viewerBoxB.xy;
+                own = abs(dot(d.xz, u)) <= g.viewerBoxA.w && abs(dot(d.xz, vec2(-u.y, u.x))) <= g.viewerBoxB.z &&
+                      abs(d.y) <= g.viewerBoxB.w;
+            }
+            // (an office window is DOUBLE GLAZED: four faces at 4 % each reflect about 15 % head-on -- what makes a
+            // window read as glass from inside: the bright room and its lights faint in it; Glenn: "it just seems
+            // like there's no glass there" at one face's 4 %)
+            vec3 fs = own ? vec3(0.15) * brdf.x + brdf.y : f0 * brdf.x + brdf.y;   // the split-sum reflectance
+            vec3 Rv = reflect(-V, dot(N, V) < 0.0 ? -N : N);
+            vec3 reflected = own ? fs * (g.ambient.rgb * 0.35 + roomRadiance(inWorldPos) + ceilingPanels(inWorldPos, Rv))
+                                 // (the room: by day its walls lit by the daylight through these windows -- the sky's
+                                 // light on a 0.7 wall, half of it; at night its lamps, the ceiling's panels in it)
+                                 : prefiltered * fs * g.ambient.rgb * ambientShadow;
+            float F = clamp(max(fs.r, max(fs.g, fs.b)), 0.0, 1.0);
+            float T = 1.0 - 0.4 * opacity;
+            float a = 1.0 - T * (1.0 - F);
+            outColor = vec4(reflected, a);
         } else if (opacity < 0.999) {
-            // GLASS (Glenn's walk, 2026-09-14: "the glass has no reflectivity"):
+            // THE OLD GLASS (RT_GLASS=old; Glenn's walk, 2026-09-14: "the glass has no reflectivity"):
             // a plain alpha blend scales the reflection by the opacity, so an
             // 18 % pane showed 18 % of its sky. Real glass ADDS its Fresnel
             // reflection over what comes through: the blend's alpha becomes
@@ -1217,9 +1660,9 @@ void main() {
             vec3 reflected = prefiltered * fs * g.ambient.rgb * ambientShadow;
             float a = opacity + (1.0 - opacity) * F;
             vec3 c = (color * opacity + reflected * (1.0 - opacity)) / max(a, 1e-4);
-            outColor = vec4(c, a);
+            outColor = vec4(c * a, a);
         } else {
-            outColor = vec4(color, opacity);
+            outColor = vec4(color * opacity, opacity);
         }
     }
     outNormal = vec4(N * 0.5 + 0.5, roughness);   // world normal (SSAO) + roughness (SSR gate)

@@ -36,6 +36,25 @@ struct ForestSpecies {
     double weight = 1.0;
     double wet = 0.0;                  // affinity for wet ground (the maps' drainage): 1 = willow, alder
     bool understory = false;           // a bush under and around the canopy, in its own pass
+    // A RECIPE species (tree_recipes.lua, tree_lods.h; Glenn, 2026-10-17: "can we try a forest?"): grown from the
+    // recipe -- hero, mid and light levels near, impostors of the light level far -- instead of real_tree.h's `kind`
+    std::string recipe;
+    std::string age;   // ...at this age (tree_recipe.h TreeAge: "young", "old", ...; empty: the recipe as it is)
+    std::string form;  // ...in this form (TreeRecipe::forms: "stand", a forest-grown tree; empty: open-grown)
+    // ...where it grows thick only (Glenn's island: a lone tree in a meadow grown as in a stand read as a lollipop, a
+    // bare pole under a small crown): the variants twice over, the first half open-grown, the second in `form`, and a
+    // tree takes the second half as the stand thickens round it (placeForest)
+    bool formByDensity = false;
+    // ...or a MIX of ages (Glenn, 2026-10-18: the island's forests -- a stand is not one age): the variants dealt out
+    // by these weights (a variant is an age; the trees pick variants evenly), "age" then unused
+    std::vector<std::pair<std::string, double>> ageMix;
+    double scale = 1.0;                // its trees' size on top of the placement's spread
+    std::string kind;                  // its name in the level ("spruce"; a region names species by it)
+    // A KIND GROWN BOTH WAYS ("recipes": a share, Glenn 2026-10-20): the kind's `twin` (its recipe, listed after every
+    // kind) takes `twinShare` of its trees; a twin is never picked for itself (`twinOnly`)
+    int twin = -1;
+    double twinShare = 0.0;
+    bool twinOnly = false;
 };
 
 // ROCKS (ADR-0131, Glenn: "scattered rocks"): layers placed by the same fast grid, each by what the
@@ -52,8 +71,22 @@ struct RockLayer {
     double drawM = 600.0;
 };
 
+// A REGION with its own mix (Glenn, 2026-10-19: "one of the forests near the mountains should be spruce/pine trees"):
+// inside a ragged disc round `centre`, each species' weight is multiplied by its entry in `weight` (one per species,
+// `others` for those the region doesn't name), fading to the island's mix over the last `edge` metres; and the
+// species it names grow down to `altLo` there (a spruce wood at a mountain's foot, below the spruce's own band)
+// (the first 8 regions; a level holds a few)
+struct ForestRegion {
+    std::string name;
+    double cx = 0.0, cz = 0.0, radius = 1000.0, edge = 300.0;
+    double altLo = 0.0;
+    std::vector<double> weight;   // per species, filled from the region's "species" { kind: weight } and `others`
+    std::vector<bool> named;
+};
+
 struct ForestParams {
     std::vector<ForestSpecies> species;
+    std::vector<ForestRegion> regions;
     double spacing = 7.5;          // metres between trees in a full stand
     double coverage = 0.55;        // share of the eligible land that is forest
     double standScaleM = 650.0;    // stands and clearings
@@ -63,14 +96,26 @@ struct ForestParams {
     double cellM = 256.0;          // cull cells (near groups, far merged meshes)
     double nearM = 150.0;          // full models to here, crossfading over the last nearFadeM
     double nearFadeM = 40.0;
+    // the recipe species' own levels near (tree_lods.h): the hero to heroM, the mid to midM, each crossfading into
+    // the next over its last fade metres; the light level from there to nearM
+    double heroM = 22.0, heroFadeM = 6.0;
+    double midM = 70.0, midFadeM = 12.0;
+    double lightM = 0.0, lightFadeM = 20.0;   // ...and the light to lightM, the far level from there (0: none)
     double farM = 7000.0;          // impostors to here
+    double litter = 0.78;          // the forest floor: the ground cover's share of litter under a full canopy (the
+                                   // rest stays grass: 0.78 the island's dark floor, less for a grassy wood)
     double understorySpacing = 5.0;  // the understory pass's grid
     double understoryDensity = 0.35; // its share where the canopy is, doubled along the edges
+    double understoryM = 0.0;        // a RECIPE understory's draw distance, fading out over its last 10 m (a bush is
+                                     // small: it has no impostor, and 150 m of 30k-triangle bushes was half the
+                                     // recipe forest's frame); 0 = nearM
     uint32_t seed = 1;
     std::vector<RockLayer> rocks;
 };
 
 ForestParams forestFromJson(const nlohmann::json& j);
+// how far inside a region a point is: 1 inside, 0 outside, smooth over its ragged edge
+double forestRegionAt(const ForestRegion& r, uint32_t seed, double x, double z);
 
 struct ForestTree {
     Vec3 pos;
@@ -82,6 +127,11 @@ struct ForestTree {
 // leaf and needle litter under the trees): the density's stands, soil, shore, treeline and slope.
 double forestCanopy(const ForestParams& p, double seaLevel, const TerrainMaps* maps, double x, double z, double y,
                     double slopeDeg);
+
+// WHY a point has no forest (the census, RT_FOREST_WHY): each factor of the density, 1 = no cut
+struct ForestWhy { double stand = 0, soil = 1, scree = 1, shore = 1, treeline = 1, slope = 1, cover = 1; };
+ForestWhy forestWhy(const ForestParams& p, double seaLevel, const GroundCover* cover, const TerrainMaps* maps, double x,
+                    double z, double y, double slopeDeg);
 
 // Place the forest over the square [-half, half]^2. `ground` is the drawn ground (thread-safe),
 // `exclude` true where no tree may stand (roads, pads, water). Variant `v` of species `s` is global
@@ -113,11 +163,26 @@ struct ImpostorSlot {
     double sv0 = -1, sv1 = -1;                  // the SECOND side picture's rows (the tree turned 90 deg); < 0: none
     double tu0 = 0, tv0 = 0, tu1 = 1, tv1 = 1; // top picture
     double halfW = 1.0, height = 1.0, crownBase = 0.0;
+    // MANY VIEWS (real_tree.h renderImpostorView): the variant's block of kImpostorAzimuths x kImpostorElevations
+    // cells from (vu0, vv0), each cellU x cellV; the window half extents Rb, Hh about the centre centreY up its axis
+    // (unit scale). vu0 < 0: no views (the crossed cards above).
+    double vu0 = -1, vv0 = 0, cellU = 0, cellV = 0;
+    double Rb = 1.0, Hh = 1.0, centreY = 0.5;
 };
+// the view grid: azimuths round the tree, elevations kImpostorElevationStep apart from the horizon (radians)
+constexpr int kImpostorAzimuths = 8, kImpostorElevations = 3;
+constexpr double kImpostorElevationStep = 35.0 * 3.14159265358979323846 / 180.0;
 
 // Append `t`'s impostor (two crossed side cards + a top card) to `mesh`, world space. `colour` is the
 // vertex colour (1 / the atlas's colour scale).
 void appendImpostor(RenderMesh& mesh, const ForestTree& t, const ImpostorSlot& slot, double colour);
+// ...or its MANY-VIEW impostor: ONE card, turned to the camera by mesh.vert (RenderMaterial::FLAG_IMPOSTOR_VIEWS),
+// mesh.frag picking and blending the views nearest the camera's direction round the tree. Each corner carries the
+// tree's centre plus its offset (so the mesh's bounds hold the trees), the window and yaw in its tangent slot, the
+// variant's block in its normal, and `colour` and cellV in its colour: the mesh is tangentIsData. It casts no
+// shadow (a card turned to the camera cannot): appendImpostorShadow's crossed cards do, FLAG_SHADOW_ONLY.
+void appendImpostorViews(RenderMesh& mesh, const ForestTree& t, const ImpostorSlot& slot, double colour);
+void appendImpostorShadow(RenderMesh& mesh, const ForestTree& t, const ImpostorSlot& slot);
 
 }  // namespace engine
 

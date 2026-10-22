@@ -44,6 +44,10 @@ enum class PlaceType : uint8_t {
     Cafe,         // morning coffee, a stroller's stop, a quick lunch
     Restaurant,   // lunch and dinner
     Supermarket,  // the errand on the way home
+    // THE NIGHT (Glenn, 2026-10-06: "we would want restaurants and clubs and such for a night life"): at 23:00 the
+    // island had two residents out. Hours wrap midnight (Place::openAt).
+    Bar,          // after work and into the night, 16:00-02:00
+    Club,         // late, 21:00-03:00
     Count
 };
 
@@ -57,8 +61,9 @@ bool parsePlaceType(const std::string& tag, PlaceType& out);
 
 // What a generic "shop" lot is, and its hours: a deterministic draw from the
 // site (so a city always has the same cafe on the same corner). About a
-// quarter cafes, a fifth restaurants, one in ten supermarkets, the rest
-// stores (PlaceType::Shop), each with the hours that kind keeps.
+// fifth cafes, a fifth restaurants, one in ten supermarkets, one in twelve
+// bars, three in a hundred clubs, the rest stores (PlaceType::Shop), each with
+// the hours that kind keeps.
 struct RetailKind {
     PlaceType type = PlaceType::Shop;
     Real openHour = 9, closeHour = 20;
@@ -79,6 +84,7 @@ struct Place {
     Vec2 entrance;         // door on the pedestrian network (sidewalk point)
     int entranceLink = -1; // NavGraph link the entrance sits on (-1 = unsnapped)
     Real entranceT = 0;    // parameter along that link, [0,1]
+    Vec2 door;             // the real door it was snapped from (the site when none was given)
     // Light metadata (surface-level ⟨A6⟩). Hours are in-world 0..24; the default
     // window [0,24) is "always open". `capacity` 0 means unlimited.
     Real openHour = 0;
@@ -89,6 +95,11 @@ struct Place {
     // cafe's 6:30-19:00 is when customers come, not a 13-hour day for staff.
     bool authoredHours = true;
     std::string name;      // optional authored label ("Al's Diner"); may be empty
+    // The university (campus milestone 4): 1 teaching hall, 2 library, 3 residence
+    // hall, 4 quad, 5 sports field; 0 = not campus. Students live, study and sit here.
+    uint8_t campus = 0;
+    // Floor area, m2 (AuthoredPlace::floorArea): the weight of this place in the draw of homes and jobs. 0 = unknown.
+    Real floorArea = 0;
 
     // Is this place open at in-world hour `clock` (0..24)? Handles a window that
     // wraps midnight (openHour > closeHour, e.g. a 20→4 late shop).
@@ -110,6 +121,10 @@ public:
     PlaceId add(PlaceType type, Vec2 site, const engine::NavGraph& graph,
                 Real openHour = 0, Real closeHour = 24, int capacity = 0,
                 std::string name = {}, const Vec2* entranceHint = nullptr);
+    // THE WALKS, once they join the network (NavGraph::appendFootpaths): a place whose door stands beside a walk --
+    // a paseo's shop, its door on the walk, not the street -- but far from the street point it was snapped to, takes
+    // its entrance on the walk. Returns how many moved.
+    int snapToWalks(const engine::NavGraph& graph, Real reach = 4.0, Real farFromStreet = 6.0);
 
     int size() const { return static_cast<int>(places_.size()); }
     bool empty() const { return places_.empty(); }
@@ -119,6 +134,12 @@ public:
     const Place& operator[](PlaceId id) const { return places_[id]; }
     void setAuthoredHours(PlaceId id, bool on) {
         if (id < places_.size()) places_[id].authoredHours = on;
+    }
+    void setCampus(PlaceId id, uint8_t role) {
+        if (id < places_.size()) places_[id].campus = role;
+    }
+    void setFloorArea(PlaceId id, Real m2) {
+        if (id < places_.size()) places_[id].floorArea = m2;
     }
 
     // All place ids of a given type, in insertion order. Empty if none.

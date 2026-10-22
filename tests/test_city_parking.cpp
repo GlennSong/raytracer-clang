@@ -13,6 +13,7 @@
 #include "../src/engine/procgen/city/roads/road_entity.h"
 #include "../src/engine/procgen/city/road_spec.h"
 #include "city_test_util.h"
+#include "../src/engine/procgen/city/city_lots.h"
 
 #include <algorithm>
 #include <cmath>
@@ -392,4 +393,69 @@ TEST_CASE(parking_bay_hit_rate_is_reported) {
                 parkedInBay, parkedOnVerge,
                 total ? 100.0 * double(parkedInBay) / double(total) : 0.0);
     CHECK(total > 0);
+}
+
+// THE GARAGES (~/.claude/plans/nightlife-and-malls.md stage 4b): a garage's stalls are bays anchored on the street in
+// front of its portal. In a crossroads with no kerbside parking at all, drivers park up a garage: in its bays, the car
+// left on its deck (at the stall, at the deck's height), and they drive out again.
+TEST_CASE(drivers_park_up_a_garage_and_drive_out_again) {
+    const RoadSpec spec = roadSpecStreetParking(12.0, 1, 3.5, 0.25);
+    RoadGraph g;
+    g.nodes = { { Vec2(0, 0) }, { Vec2(0, 100) }, { Vec2(0, -100) }, { Vec2(100, 0) }, { Vec2(-100, 0) } };
+    for (int arm = 1; arm <= 4; ++arm)
+        g.edges.push_back(RoadEdge{ 0, arm, static_cast<Real>(spec.carriagewayWidth()), RoadClass::Local, 0 });
+    NavGraph nav = buildNavGraph(g);
+    CitySim sim;
+    sim.build(nav, 10, 0, 9);
+    const std::size_t kerb = sim.parkingBays().size();
+    std::vector<CitySim::GarageStallIn> stalls;
+    for (int lvl = 0; lvl < 3; ++lvl)
+        for (int i = 0; i < 10; ++i) stalls.push_back({Vec2(14.0 + i * 2.5, 40.0), Vec2(0, -1), 0.03 + lvl * 3.0});
+    const int added = sim.addGarageBays(Vec2(10, 50), Vec2(-1, 0), stalls);
+    std::printf("    [garage bays] kerbside %zu, garage %d\n", kerb, added);
+    CHECK(kerb == 0);
+    CHECK(added == 30);
+    int parkedUp = 0, wrongHeight = 0, departures = 0;
+    std::vector<int> last(sim.parkingBays().size(), -1);
+    for (int i = 0; i < 6000; ++i) {
+        sim.step(0.1, 0.5);
+        const auto& bays = sim.parkingBays();
+        for (const Agent& a : sim.agents()) {
+            if (a.parkedBay < 0 || bays[a.parkedBay].garage < 0 || a.car < 0) continue;
+            ++parkedUp;
+            const SimVehicle& v = sim.vehicles()[static_cast<std::size_t>(a.car)];
+            if (std::fabs(v.parkedY - bays[a.parkedBay].y) > 1e-6 || (v.pos - bays[a.parkedBay].pos).length() > 0.5) ++wrongHeight;
+        }
+        for (std::size_t bi = 0; bi < bays.size(); ++bi) {
+            if (last[bi] >= 0 && bays[bi].occupant == -1) ++departures;
+            last[bi] = bays[bi].occupant;
+        }
+    }
+    std::printf("    [garage bays] parked-up ticks %d, wrong height %d, departures %d\n", parkedUp, wrongHeight, departures);
+    CHECK(parkedUp > 0);
+    CHECK(wrongHeight == 0);
+    CHECK(departures > 0);
+}
+
+// A BIG BOX'S OR A MALL'S PARKING LOT is stalls for the drivers (engine::surfaceStallsOf): every stall on the lot, none
+// on another, nose-in off the aisles, and its way in on the street edge. A shallow lot runs its rows along the store
+// (more stalls than rows running in toward it), a deep one in toward it.
+TEST_CASE(a_parking_lot_is_stalls_for_the_drivers) {
+    using engine::Vec2;
+    const engine::Poly2 lot{{0, 0}, {80, 0}, {80, 44}, {0, 44}};   // the street along y = 0, the store beyond y = 44
+    Vec2 portal, out;
+    const std::vector<engine::ParkingStall> st = engine::surfaceStallsOf(lot, Vec2(0, -1), &portal, &out);
+    std::printf("  %zu stalls; portal %.1f %.1f out %.1f %.1f\n", st.size(), portal.x, portal.y, out.x, out.y);
+    CHECK(st.size() >= 60);
+    CHECK(std::fabs(st.front().face.y) > 0.99);   // 44 m deep: rows along the store
+    const std::vector<engine::ParkingStall> deep = engine::surfaceStallsOf(engine::Poly2{{0, 0}, {80, 0}, {80, 70}, {0, 70}}, Vec2(0, -1));
+    std::printf("  70 m deep: %zu stalls, the first facing %.0f %.0f\n", deep.size(), deep.front().face.x, deep.front().face.y);
+    CHECK(deep.size() > st.size());
+    CHECK(std::fabs(portal.y) < 1e-6 && std::fabs(portal.x - 40) < 1e-6);
+    CHECK(out.y < -0.99);
+    for (std::size_t i = 0; i < st.size(); ++i) {
+        CHECK(st[i].at.x > 1.5 && st[i].at.x < 78.5 && st[i].at.y > 8.0 && st[i].at.y < 36.0);   // clear of the lanes
+        CHECK(std::fabs(std::fabs(st[i].face.x) + std::fabs(st[i].face.y) - 1.0) < 1e-6);   // along a row's axis
+        for (std::size_t j = i + 1; j < st.size(); ++j) CHECK((st[i].at - st[j].at).length() > 2.6);
+    }
 }

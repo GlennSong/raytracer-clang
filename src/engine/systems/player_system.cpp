@@ -3,6 +3,7 @@
 #include "physics_system.h"
 #include "../components.h"
 #include "../interaction.h"   // Seated
+#include "../ladder.h"        // Climbing
 #include "../camera/scene_camera.h"
 #include "../../log.h"
 
@@ -83,6 +84,41 @@ void PlayerSystem::fixedUpdate(FrameContext& ctx) {
                 standHalfHeight = cc.halfHeight;
                 standRadius = cc.radius;
                 standCaptured = true;
+            }
+            // CLIMBING (engine/ladder.h; Glenn, 2026-10-13: "Can we make ladders as interactable?"): forward climbs,
+            // back climbs down, no gravity; at the top the body steps off onto what the ladder lands on, at the foot
+            // onto the ground in front of it; jump lets go.
+            if (Climbing* cl = ctx.world.get<Climbing>(e)) {
+                const LadderSpec L = cl->ladder;
+                const Real feetOff = cc.halfHeight + cc.radius;
+                const Real up = camera.positionLocked ? ctx.actions.axis("cam_forward") : Real(0);
+                const Real speed = ctx.actions.held("player_run") ? ClimbSpeed::kRun : ClimbSpeed::kClimb;
+                const Vec3 out(L.out.x, 0, L.out.y);
+                auto off = [&](const Vec3& feetAt) {
+                    physicsSys.physicsWorld().setCharacterPosition(cc.characterId, feetAt + Vec3(0, feetOff + 0.05, 0));
+                    t.position = physicsSys.physicsWorld().characterPosition(cc.characterId);
+                    fall.onGrounded(t.position.y);
+                    airVel_ = Vec3(0, 0, 0);
+                    ctx.world.remove<Climbing>(e);   // (another type's pool: safe inside this walk)
+                };
+                if (jumpRequested) {   // let go: a step back off the rungs, and down
+                    jumpRequested = false;
+                    off(Vec3(L.foot.x, cl->feetY, L.foot.z) + out * (cc.radius + 0.6));
+                } else if (cl->feetY >= L.landY - 0.02 && up > 0.3) {
+                    off(L.exit);                                                   // over the top
+                } else if (cl->feetY <= L.foot.y + 0.01 && up < -0.3) {
+                    off(L.foot + out * (cc.radius + 0.45));                      // down at the foot
+                } else {
+                    cl->feetY = std::clamp(cl->feetY + up * speed * dt, L.foot.y, L.landY);
+                    const Vec3 target = Vec3(L.foot.x, cl->feetY + feetOff, L.foot.z) + out * (cc.radius + 0.14);
+                    const Vec3 v = (target - t.position) * (1.0 / std::max(dt, Real(1e-4)));
+                    physicsSys.physicsWorld().moveCharacterFree(cc.characterId, v, dt);
+                    t.position = physicsSys.physicsWorld().characterPosition(cc.characterId);
+                    fall.onGrounded(t.position.y);   // a rung is footing: never a fall
+                }
+                lastBodyPos_ = t.position;
+                haveLastBodyPos_ = true;
+                return;
             }
             // SWIMMING (#43): water deep enough at the feet floats the player (UnderwaterSystem knows
             // whose water is where). While afloat, crouch means dive, not a smaller capsule.

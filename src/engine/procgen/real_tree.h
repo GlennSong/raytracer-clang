@@ -27,7 +27,18 @@
 
 namespace engine {
 
-enum class RealSpecies : uint8_t { Spruce = 0, Fir, Pine, Oak, Beech, Birch, Maple, Aspen, Willow, Alder, Shrub, Count };
+// The STREET TREES of a tropical island town (Glenn, 2026-10-10: "a variety of trees for the city beyond the ones
+// seen along the island's forests"), after Shrub so the forest species keep their numbers:
+//   royal_palm    a smooth pale-grey column, a green crownshaft, a head of arching feather fronds
+//   coconut_palm  a slim ringed trunk that leans and bows, drooping fronds, a bunch of nuts
+//   monkeypod     the rain tree: a short trunk forking low into a vast flat umbrella of fine leaves
+//   poinciana     the flame tree: a smaller umbrella, a good share of it in red-orange flower
+//   jacaranda     an open rounded crown, mostly lilac-purple in bloom
+//   plumeria      frangipani: a short candelabra of thick pale limbs, paddle leaves and cream flowers at the tips
+enum class RealSpecies : uint8_t { Spruce = 0, Fir, Pine, Oak, Beech, Birch, Maple, Aspen, Willow, Alder, Shrub,
+                                   RoyalPalm, CoconutPalm, Monkeypod, Poinciana, Jacaranda, Plumeria, Count };
+// a palm: a column and a head of fronds, no limbs (its trunk collider is its column)
+inline bool realSpeciesIsPalm(RealSpecies s) { return s == RealSpecies::RoyalPalm || s == RealSpecies::CoconutPalm; }
 bool realSpeciesFromName(const std::string& name, RealSpecies& out);
 const char* realSpeciesName(RealSpecies s);
 
@@ -56,6 +67,41 @@ TextureData realFoliageTexture(RealSpecies species, int size, uint32_t seed);
 // its back must not light as its front). Encoded n * 0.5 + 0.5; uncovered texels (0.5, 0.5, 1).
 void renderImpostor(const RealTree& tree, const TextureData& foliage, bool top, int w, int h,
                     double colourScale, uint8_t* rgbaOut, int strideBytes, uint8_t* normalOut = nullptr);
+
+// MANY-VIEW IMPOSTORS (Glenn, 2026-10-18: "So can we make multi angle imposter cards"): the tree seen from any
+// direction -- `azimuth` round it (0: from +z, toward +x as it grows) and `elevation` above the horizon (radians) --
+// an orthographic picture framed on its centre (`centreY` up its axis): x -Rb..Rb across (Rb: its reach from the axis),
+// y -Hh..Hh up the view (Hh: impostorViewHalfHeight, the same for every view, so one window fits them all). The
+// view's frame (the normal map's): T = r = (cos az, 0, -sin az), N = d = toward the viewer, B = u = d x r.
+// Colour, alpha and normals as renderImpostor's; the normal map's alpha is the depth of the tree's nearest part at
+// each texel, 0.5 + 0.5 z / (Rb + Hh) (z along d, toward the viewer; uncovered 0.5): the far trees' self-shadow (mesh.frag).
+// `barkAlbedo`: the map the near bark wears (a recipe's), so the far trunk is its colour, not the vertex tint alone.
+void renderImpostorView(const RealTree& tree, const TextureData& foliage, double azimuth, double elevation, double centreY,
+                        double Rb, double Hh, int w, int h, double colourScale, uint8_t* rgbaOut, int strideBytes,
+                        uint8_t* normalOut = nullptr, const TextureData* barkAlbedo = nullptr);
+// ...the window's half height for views up to `maxElevation` (radians): every part of the tree inside it from any of them
+double impostorViewHalfHeight(const RealTree& tree, double centreY, double maxElevation);
+
+// The same picture of any bark and foliage, framed by the caller: the side view (along -z) spans x0..x1 across and
+// y0..y1 up the image; the top view (`top`, down -y) x0..x1 across and z y0..y1 down it. (renderImpostor frames a
+// whole tree; branch_cards.h a sprig in its own frame.)
+// The extras a close-up picture wants (branch_cards.h's twig and leaf sprites; Glenn, 2026-10-18: "these sprites will
+// need some kind of normal map to give them dimension"): the bark's own maps on the bark (its u round the limb, v
+// along it, the vertex tangent along it), the leaves' normal map perturbing theirs (the vertex tangent across the
+// leaf), and the parts deeper in the picture shaded darker by `depthShade` (0 none .. 1 black at the back).
+struct CardViewExtras {
+    const TextureData* barkAlbedo = nullptr;
+    const TextureData* barkNormal = nullptr;
+    const TextureData* foliageNormal = nullptr;
+    double depthShade = 0.0;
+    bool trueNormals = false;   // the normal map in the card's frame as it is, no fold (a sprite seen from its face)
+    int alphaGrow = 0;          // the cut-out widened this many pixels (thin needles: they thin away further down the mips)
+    double depthToAlpha = 0.0;  // > 0: the normal map's alpha is each texel's front depth, 0.5 + 0.5 z / depthToAlpha
+                                //       (z toward the viewer; uncovered 0.5), not 255
+};
+void renderCardView(const RenderMesh& bark, const RenderMesh& foliage, const TextureData& fol, bool top, double x0, double x1,
+                    double y0, double y1, int w, int h, double colourScale, uint8_t* rgbaOut, int strideBytes,
+                    uint8_t* normalOut = nullptr, const CardViewExtras* extras = nullptr);
 
 }  // namespace engine
 

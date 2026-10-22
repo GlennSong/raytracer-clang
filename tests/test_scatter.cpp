@@ -7,6 +7,7 @@
 #include "../src/engine/procgen/ground_layers.h"
 #include "../src/engine/procgen/stylized_rock.h"
 #include "../src/engine/procgen/hydrology.h"
+#include "../src/engine/drawn_road.h"
 #include "test_framework.h"
 
 #include "../src/engine/procgen/scatter.h"
@@ -274,6 +275,18 @@ TEST_CASE(ground_layer_textures_tile_without_a_seam) {
         if (sx > worstCol || sy > worstRow) std::printf("    layer %d: x seam %.0f (worst inner %.0f), y seam %.0f (worst inner %.0f)\n", L, sx, worstCol, sy, worstRow);
         CHECK(sx <= worstCol && sy <= worstRow);
     }
+    // RT_GROUND_LAYER_DUMP=dir: each layer at 512^2 in the default palette, raw RGBA (rgb gamma-encoded, a the height)
+    if (const char* dir = std::getenv("RT_GROUND_LAYER_DUMP")) {
+        const engine::GroundCoverParams gp;
+        const engine::Vec3 base[4] = {gp.grass, gp.dirt, gp.sand, gp.rock};
+        for (int L = 0; L < 7; ++L) {
+            const engine::TextureData t = engine::groundLayerTexture(static_cast<engine::GroundLayer>(L), base[std::min(L, 3)], 512, 3);
+            if (std::FILE* f = std::fopen((std::string(dir) + "/layer" + std::to_string(L) + ".rgba").c_str(), "wb")) {
+                std::fwrite(t.pixels.data(), 1, t.pixels.size(), f);
+                std::fclose(f);
+            }
+        }
+    }
 }
 
 // The rock library (procgen/stylized_rock.h): every family and stone grows a closed-ish, small
@@ -342,6 +355,53 @@ TEST_CASE(real_trees_stay_in_budget_repeat_and_fill_their_impostor) {
     }
 }
 
+// The street trees (real_tree.h, Glenn 2026-10-10: "a variety of trees for the city"): each grows to its kind -- the
+// palms a tall bare column under a head of fronds (no foliage low down, the crown about a frond's length across),
+// the rain tree wider than it is tall, the frangipani a small tree, the flowering ones partly in their bloom colour
+// (redder for the flame tree, bluer for the jacaranda) -- and the forest species are untouched by them.
+TEST_CASE(street_tree_species_grow_to_their_kind) {
+    using engine::RealSpecies;
+    auto lowestLeaf = [](const engine::RealTree& t) {
+        double lo = 1e30;
+        for (const auto& v : t.foliage.vertices) lo = std::min(lo, static_cast<double>(v.position.y));
+        return lo;
+    };
+    for (uint32_t seed : {11u, 222u, 3333u}) {
+        for (RealSpecies sp : {RealSpecies::RoyalPalm, RealSpecies::CoconutPalm}) {
+            const engine::RealTree t = engine::realTree(sp, seed, 0.0);
+            CHECK(engine::realSpeciesIsPalm(sp));
+            CHECK(t.height > 9.0 && t.height < 27.0);
+            CHECK(lowestLeaf(t) > 0.45 * t.height);                 // a bare column under the head (old fronds hang)
+            CHECK(t.crownRadius > 2.5 && t.crownRadius < 9.0);      // fronds of 3.4-5.4 m
+            CHECK(t.trunkRadius > 0.15 && t.trunkRadius < 0.6);
+        }
+        const engine::RealTree mp = engine::realTree(RealSpecies::Monkeypod, seed, 0.0);
+        CHECK(2.0 * mp.crownRadius > mp.height);                     // an umbrella wider than the tree is tall
+        const engine::RealTree pl = engine::realTree(RealSpecies::Plumeria, seed, 0.0);
+        CHECK(pl.height > 3.0 && pl.height < 9.5);
+        CHECK(!engine::realSpeciesIsPalm(RealSpecies::Plumeria) && !engine::realSpeciesIsPalm(RealSpecies::Oak));
+    }
+    // in flower: some leaf cards wear the bloom colour
+    auto bloomShare = [](RealSpecies sp, bool red) {
+        const engine::RealTree t = engine::realTree(sp, 7u, 0.0);
+        int n = 0, bloom = 0;
+        for (std::size_t i = 0; i < t.foliage.vertices.size(); i += 4, ++n) {
+            const engine::Vec3 c = t.foliage.vertices[i].color;
+            bloom += red ? (c.x > 2.0 * c.y) : (c.z > c.y);
+        }
+        return n ? double(bloom) / n : 0.0;
+    };
+    CHECK(bloomShare(RealSpecies::Poinciana, true) > 0.2);
+    CHECK(bloomShare(RealSpecies::Jacaranda, false) > 0.3);
+    CHECK(bloomShare(RealSpecies::Oak, true) == 0.0);
+    // names round-trip
+    for (RealSpecies sp : {RealSpecies::RoyalPalm, RealSpecies::CoconutPalm, RealSpecies::Monkeypod, RealSpecies::Poinciana,
+                           RealSpecies::Jacaranda, RealSpecies::Plumeria}) {
+        RealSpecies back = RealSpecies::Spruce;
+        CHECK(engine::realSpeciesFromName(engine::realSpeciesName(sp), back) && back == sp);
+    }
+}
+
 // Trails (procgen/trails.h, ADR-0134): the distance to a path is the distance to its nearest segment,
 // capped, from any side.
 TEST_CASE(trail_network_measures_distance_to_the_nearest_path) {
@@ -406,7 +466,10 @@ TEST_CASE(quay_wall_has_a_top_and_a_back_and_faces_the_way_it_is_wound) {
         const engine::Vertex& A = q.vertices[q.indices[i]];
         const engine::Vertex& B = q.vertices[q.indices[i + 1]];
         const engine::Vertex& C = q.vertices[q.indices[i + 2]];
-        const engine::Vec3 w = engine::cross(B.position - A.position, C.position - A.position);
+        // the ENGINE's front: cross(c - a, b - a) along the normal (clockwise seen from the front; mesh_builder.h). This
+        // test once counted the counter-clockwise rule, and the quay was wound to match it -- every face inside out
+        // to the renderer, until the quay moved onto MeshBuilder::quadFacing.
+        const engine::Vec3 w = engine::cross(C.position - A.position, B.position - A.position);
         if (w.length() < 1e-9) continue;
         ++tris;
         if (engine::dot(w, A.normal) <= 0) ++misWound;
@@ -457,4 +520,206 @@ TEST_CASE(impostor_normals_carry_the_crown_shape) {
     std::vector<uint8_t> col2(col.size());
     renderImpostor(tree, fol, false, w, h, 3.0, col2.data(), w * 4);
     CHECK(col2 == col);
+}
+
+// MANY-VIEW IMPOSTORS (Glenn, 2026-10-18: "So can we make multi angle imposter cards"): every view's window holds
+// the whole tree; the view from behind is the view from the front mirrored (the frames agree with mesh.frag's);
+// a far tree is one card carrying its centre, window and yaw, and its shadow two crossed cards on its views.
+TEST_CASE(impostor_views_frame_the_tree_from_every_side) {
+    const RealTree tree = realTree(RealSpecies::Oak, 7, 12.0);
+    const TextureData fol = realFoliageTexture(RealSpecies::Oak, 128, 7);
+    const double cy = 0.5 * tree.height, maxEl = (kImpostorElevations - 1) * kImpostorElevationStep;
+    double rb = 0.1;
+    for (const RenderMesh* m : {&tree.bark, &tree.foliage})
+        for (const Vertex& v : m->vertices) rb = std::max(rb, std::hypot(v.position.x, v.position.z));
+    const double hh = impostorViewHalfHeight(tree, cy, maxEl);
+    CHECK(hh >= 0.5 * tree.height - 1e-6);
+    int outside = 0;
+    for (int e = 0; e < kImpostorElevations; ++e)
+        for (int a = 0; a < kImpostorAzimuths; ++a) {
+            const double az = a * 2.0 * 3.14159265358979 / kImpostorAzimuths, el = e * kImpostorElevationStep;
+            const Vec3 d(std::sin(az) * std::cos(el), std::sin(el), std::cos(az) * std::cos(el)), r(std::cos(az), 0, -std::sin(az));
+            const Vec3 u = cross(d, r);
+            for (const RenderMesh* m : {&tree.bark, &tree.foliage})
+                for (const Vertex& v : m->vertices) {
+                    const Vec3 p = v.position - Vec3(0, cy, 0);
+                    outside += std::fabs(dot(p, r)) > rb + 1e-6 || std::fabs(dot(p, u)) > hh + 1e-6;
+                }
+        }
+    CHECK(outside == 0);
+    const int w = 64, h = 128;
+    std::vector<uint8_t> nrm[2];
+    auto view = [&](double az, std::vector<uint8_t>& n) {
+        std::vector<uint8_t> col(static_cast<std::size_t>(w) * h * 4);
+        n.assign(col.size(), 0);
+        renderImpostorView(tree, fol, az, 0.0, cy, rb, hh, w, h, 3.0, col.data(), w * 4, n.data());
+        return col;
+    };
+    auto view2 = [&](double az, double el, std::vector<uint8_t>& n) {
+        std::vector<uint8_t> col(static_cast<std::size_t>(w) * h * 4);
+        n.assign(col.size(), 0);
+        renderImpostorView(tree, fol, az, el, cy, rb, hh, w, h, 3.0, col.data(), w * 4, n.data());
+        return col;
+    };
+    const std::vector<uint8_t> front = view(0.0, nrm[0]), back = view(3.14159265358979, nrm[1]);
+    int cover = 0, both = 0;
+    double thick = 0.0;   // (the normal map's alpha is the nearest part's depth: front and back, the crown between)
+    for (int y = 0; y < h; ++y)
+        for (int x = 0; x < w; ++x) {
+            const std::size_t i = (static_cast<std::size_t>(y) * w + x) * 4 + 3, j = (static_cast<std::size_t>(y) * w + (w - 1 - x)) * 4 + 3;
+            const bool f = front[i] >= 128;
+            const bool b = back[j] >= 128;
+            cover += f;
+            both += f && b;
+            if (f && b) thick += ((nrm[0][i] + nrm[1][j]) * 2.0 / 255.0 - 2.0) * (rb + hh);
+        }
+    thick /= std::max(1, both);
+    // ...and the views as the crown's shadow map (mesh.frag impostorSelfShadow): the tree's nearest part under each
+    // pixel seen from the front, looked up in the view toward the sun -- against a sun 35 deg up only the crown's top
+    // catches it (about a third of what the viewer sees), with the sun behind the viewer nearly all of it
+    auto selfLit = [&](double sunAz, double sunEl) {
+        const double el = sunEl;
+        const Vec3 d(std::sin(sunAz) * std::cos(el), std::sin(el), std::cos(sunAz) * std::cos(el)), r(std::cos(sunAz), 0, -std::sin(sunAz));
+        const Vec3 u = cross(d, r);
+        std::vector<uint8_t> sn;
+        const std::vector<uint8_t> sc = view2(sunAz, sunEl, sn);
+        const double D = rb + hh, fall = 0.15 * rb + 0.5, bias = 0.25 + 0.05 * rb;
+        double lit = 0.0;
+        int n = 0;
+        for (int y = 0; y < h; ++y)
+            for (int x = 0; x < w; ++x) {
+                const std::size_t i = (static_cast<std::size_t>(y) * w + x) * 4 + 3;
+                if (front[i] < 128) continue;
+                const Vec3 p(((x + 0.5) / w * 2 - 1) * rb, (1 - (y + 0.5) / h * 2) * hh, (nrm[0][i] * 2.0 / 255.0 - 1.0) * D);
+                const double sx = dot(p, r) / rb, sy = dot(p, u) / hh;
+                double l = 1.0;
+                if (std::fabs(sx) < 1 && std::fabs(sy) < 1) {
+                    const int px = std::clamp(static_cast<int>((sx * 0.5 + 0.5) * w), 0, w - 1), py = std::clamp(static_cast<int>((0.5 - sy * 0.5) * h), 0, h - 1);
+                    const std::size_t j = (static_cast<std::size_t>(py) * w + px) * 4 + 3;
+                    const double under = (sn[j] * 2.0 / 255.0 - 1.0) * D - dot(p, d);
+                    if (sc[j] >= 128) l = std::exp(-std::max(under - bias, 0.0) / fall);
+                }
+                lit += l;
+                ++n;
+            }
+        return lit / std::max(1, n);
+    };
+    const double against = selfLit(3.14159265358979, kImpostorElevationStep), behind = selfLit(0.0, kImpostorElevationStep);
+    std::printf("    [impostor views] window %.1f x %.1f m; front covers %d px, %d of them in the back view mirrored, "
+                "%.2f m thick there; %.0f%% of it sunlit against the sun, %.0f%% with it behind\n",
+                2 * rb, 2 * hh, cover, both, thick, 100 * against, 100 * behind);
+    CHECK(cover > 300);
+    CHECK(both > cover * 8 / 10);
+    CHECK(thick > 0.3 * rb);
+    CHECK(against < 0.65);
+    CHECK(behind > 0.8);
+    CHECK(behind - against > 0.25);
+    // the far card: one quad whose corners give back the tree's centre; its shadow, two quads inside its block
+    ImpostorSlot sl;
+    sl.vu0 = 0.25; sl.vv0 = 0.5; sl.cellU = 0.01; sl.cellV = 0.02; sl.Rb = rb; sl.Hh = hh; sl.centreY = cy;
+    ForestTree t;
+    t.pos = Vec3(10, 2, -5); t.yaw = 0.7f; t.scale = 1.3f;
+    RenderMesh card, shadow;
+    appendImpostorViews(card, t, sl, 0.2);
+    appendImpostorShadow(shadow, t, sl);
+    CHECK(card.tangentIsData && card.vertices.size() == 4 && card.indices.size() == 6);
+    for (const Vertex& v : card.vertices) {
+        const Vec3 c = v.position - Vec3(v.u * v.tangent.x, v.v * v.tangent.y, v.u * v.tangent.x);
+        CHECK((c - (t.pos + Vec3(0, (cy - 0.15) * t.scale, 0))).length() < 1e-4);
+        CHECK(std::fabs(v.tangent.z - t.yaw) < 1e-6 && std::fabs(v.normal.x - 0.25) < 1e-9);
+    }
+    CHECK(shadow.vertices.size() == 8 && shadow.indices.size() == 12);
+    for (const Vertex& v : shadow.vertices)
+        CHECK(v.u >= 0.25 - 1e-6 && v.u <= 0.25 + kImpostorAzimuths * 0.01 + 1e-6 && v.v >= 0.5 - 1e-6 && v.v <= 0.52 + 1e-6);
+}
+
+// A FOREST REGION (Glenn, 2026-10-19: "one of the forests near the mountains should be spruce/pine trees"): on flat
+// ground at 100 m, below the spruce's own band, a region naming spruce makes its middle a spruce wood, and outside it
+// the island's mix is as before (no spruce at all at this height)
+TEST_CASE(a_forest_region_grows_its_own_mix_below_the_species_band) {
+    const nlohmann::json j = nlohmann::json::parse(R"({
+        "seed": 3, "spacing": 7.5, "coverage": 1.0,
+        "species": [{"kind": "oak", "altLo": 0, "altHi": 200}, {"kind": "spruce", "altLo": 220, "altHi": 720}],
+        "regions": [{"name": "pinewood", "at": [0, 0], "radius": 300, "edge": 60, "altLo": 0,
+                     "species": {"spruce": 6}, "others": 0.08}]})");
+    const ForestParams p = forestFromJson(j);
+    CHECK(p.regions.size() == 1 && p.regions[0].named.size() == 2 && !p.regions[0].named[0] && p.regions[0].named[1]);
+    CHECK(std::fabs(p.regions[0].weight[0] - 0.08) < 1e-12 && std::fabs(p.regions[0].weight[1] - 6.0) < 1e-12);
+    const auto trees = placeForest(p, 700.0, 0.0, nullptr, nullptr, [](double, double) { return 100.0; }, {}, 4);
+    int in = 0, inSpruce = 0, out = 0, outSpruce = 0;
+    for (const ForestTree& t : trees) {
+        const double r = std::hypot(t.pos.x, t.pos.z);
+        const bool spruce = t.variant / 4 == 1;   // (4 variants a species)
+        if (r < 150) { ++in; inSpruce += spruce; }
+        if (r > 500) { ++out; outSpruce += spruce; }
+    }
+    std::printf("    [forest region] inside %d trees, %d spruce; outside %d trees, %d spruce\n", in, inSpruce, out, outSpruce);
+    CHECK(in > 300 && out > 3000);
+    CHECK(inSpruce > in * 9 / 10);
+    CHECK(outSpruce == 0);
+}
+
+// A FOREST MIXED WITH THE RECIPE TREES (Glenn, 2026-10-20: "we should mix the new trees in there as well"): with
+// "recipes": 0.4 every tree stands where it stood and stays its kind, about 0.4 of each kind's trees grow as its recipe
+// (its twin, listed after the kinds), and the twin is never a kind's tree for itself
+TEST_CASE(a_forest_mixed_with_recipe_trees_keeps_its_trees_and_grows_the_share_as_recipes) {
+    const char* kForest = R"({
+        "seed": 3, "spacing": 7.5, "coverage": 1.0,
+        "species": [{"kind": "oak", "altLo": 0, "altHi": 400}, {"kind": "spruce", "altLo": 0, "altHi": 400},
+                    {"kind": "shrub", "understory": true}]})";
+    nlohmann::json j = nlohmann::json::parse(kForest);
+    const ForestParams real = forestFromJson(j);
+    j["recipes"] = 0.4;
+    const ForestParams mixed = forestFromJson(j);
+    CHECK(real.species.size() == 3 && mixed.species.size() == 6);
+    for (int s = 0; s < 3; ++s) {
+        CHECK(mixed.species[s].recipe.empty() && mixed.species[s].twin == 3 + s);
+        CHECK(mixed.species[3 + s].twinOnly && !mixed.species[3 + s].recipe.empty());
+        CHECK(mixed.species[3 + s].kind == mixed.species[s].kind);
+    }
+    CHECK(mixed.species[5].recipe == "hawthorn" && mixed.species[5].understory);
+    auto vpsOf = [](const ForestParams& p) { int v = 1; for (const ForestSpecies& s : p.species) v = std::max(v, s.variants); return v; };
+    const int vr = vpsOf(real), vm = vpsOf(mixed);
+    auto flat = [](double, double) { return 100.0; };
+    const auto a = placeForest(real, 700.0, 0.0, nullptr, nullptr, flat, {}, vr);
+    const auto b = placeForest(mixed, 700.0, 0.0, nullptr, nullptr, flat, {}, vm);
+    CHECK(a.size() == b.size() && a.size() > 3000);
+    if (a.size() != b.size()) return;
+    int moved = 0, changedKind = 0, n[3] = {}, asRecipe[3] = {};
+    for (std::size_t i = 0; i < a.size(); ++i) {
+        moved += (a[i].pos - b[i].pos).length() > 1e-9;
+        const int ka = a[i].variant / vr, sb = b[i].variant / vm, kb = sb >= 3 ? sb - 3 : sb;
+        changedKind += ka != kb;
+        ++n[ka];
+        asRecipe[ka] += sb >= 3;
+    }
+    for (int k = 0; k < 3; ++k)
+        std::printf("    [forest mix] %s: %d trees, %d as the recipe (%.2f)\n", mixed.species[k].kind.c_str(), n[k], asRecipe[k],
+                    n[k] ? double(asRecipe[k]) / n[k] : 0.0);
+    CHECK(moved == 0 && changedKind == 0);
+    for (int k = 0; k < 3; ++k) {
+        CHECK(n[k] > 200);
+        CHECK(std::fabs(double(asRecipe[k]) / n[k] - 0.4) < 0.05);
+    }
+}
+
+// THE TRAIN'S ROOM (Glenn, 2026-10-20: trees "go through the elevated train platform and trains as they go by"): a tree
+// whose crown reaches the swept train beside an at-grade track is blocked, one standing clear of it with its crown is
+// not; under an elevated track a short tree that stays below the rails is fine and a tall one is not; and a tree whose
+// foot is above the train (on a cutting's lip high over the line) is clear.
+TEST_CASE(a_tree_keeps_out_of_the_trains_room) {
+    DrawnRoad dr;
+    dr.addRail(Vec2(0, 0), Vec2(100, 0), 10.0, 10.0, 1.6);        // at grade, rails at 10 m
+    dr.addRail(Vec2(0, 50), Vec2(100, 50), 20.0, 20.0, 1.6);      // on a viaduct, rails at 20 m over ground at 10
+    const double envelope = 1.6 + DrawnRoad::kTrainHalfWidth + DrawnRoad::kRailClearance;   // 4.35 m off the centreline
+    // beside the at-grade track: a 10 m tree with a 3 m crown
+    CHECK(dr.blocksTree(50, envelope + 2.0, 10.0, 10.0, 3.0));    // its crown reaches over the train
+    CHECK(!dr.blocksTree(50, envelope + 3.5, 10.0, 10.0, 3.0));   // it stands back by more than its crown
+    CHECK(!dr.blocksTree(50, 2.0, 16.5, 10.0, 3.0));              // its foot above the train's roof (a cutting's lip)
+    // under the viaduct
+    CHECK(!dr.blocksTree(50, 50, 10.0, 6.0, 1.8));                // a 6 m tree stays under the rails at 20
+    CHECK(dr.blocksTree(50, 50, 10.0, 15.0, 4.5));                // a 15 m one grows up through the train
+    // far off every track
+    CHECK(!dr.blocksTree(50, 25, 10.0, 20.0, 6.0));
+    CHECK(!dr.inTrainEnvelope(200, 0, -1e30, 1e30, 3.0));         // past the track's end
 }

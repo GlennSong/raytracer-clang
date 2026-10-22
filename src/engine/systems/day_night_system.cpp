@@ -868,7 +868,7 @@ void DayNightSystem::render(FrameContext& ctx) {
             if (enabled) applyLighting(ctx);
         }
         ImGui::SameLine();
-        ImGui::Checkbox("Pause", &cycle.paused);
+        ImGui::Checkbox("Pause##daynight", &cycle.paused);   // (the clock's own Pause button shares the Debug window)
         float minutes = static_cast<float>(cycle.dayMinutes);
         if (ImGui::SliderFloat("Day length (real min)", &minutes, 0.0f, 120.0f,
                                "%.1f", ImGuiSliderFlags_Logarithmic)) {

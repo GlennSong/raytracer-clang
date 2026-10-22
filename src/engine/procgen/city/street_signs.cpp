@@ -363,7 +363,7 @@ StreetSignMeshes buildStreetSignMeshes(const std::vector<StreetSignPost>& posts,
                 vtx(cc + right * hw + U * hh, sb.u1, sb.v0);   // TR
                 vtx(cc + right * hw - U * hh, sb.u1, sb.v1);   // BR
                 vtx(cc - right * hw - U * hh, sb.u0, sb.v1);   // BL
-                for (uint32_t k : {0u, 2u, 1u, 0u, 3u, 2u}) m.indices.push_back(base + k);
+                MeshBuilder::quadFacing(m, base, base + 1, base + 2, base + 3, n);
             }
         }
     }

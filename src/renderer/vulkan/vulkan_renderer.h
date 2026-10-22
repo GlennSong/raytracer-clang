@@ -36,6 +36,10 @@ public:
     void setEnvironmentMap(TextureHandle equirect) override;
     void setTerrainHorizon(TextureHandle map, float originX, float originZ, float extent,
                            float encodeLo, float encodeHi) override;
+    void setTerrainNormalMap(TextureHandle map, float originX, float originZ, float extent, float fadeStart,
+                             float fadeEnd) override;
+    void setTerrainSurfaceMaps(TextureHandle cover, TextureHandle macro, float originX, float originZ, float extent,
+                               float fadeStart, float fadeEnd) override;
     void removeTexture(TextureHandle handle) override;
     void submitUi(const std::vector<UiQuad>& quads) override;
     RenderStats getRenderStats() const override;
@@ -52,6 +56,15 @@ public:
     void drawTerrain(MeshHandle handle, const RenderMaterial& material,
                      float morphStart, float morphEnd) override;
     void endFrame() override;
+    // the GPU crowd (crowd.comp)
+    bool supportsGpuCrowd() const override;
+    void setCrowdKinds(const std::vector<CrowdKind>& kinds) override;
+    void setCrowdLinks(const std::vector<float>& sixPerLink) override;
+    void setCrowdRoutes(const std::vector<uint32_t>& pairs, std::size_t firstChanged) override;
+    void setCrowdAgents(const std::vector<CrowdAgent>& agents, const std::vector<uint32_t>& dirty, bool all) override;
+    void setCrowdClock(float simSeconds) override;
+    uint32_t crowdTravellers() const override;
+    uint32_t crowdDrawn() const override;
 
     // Headless frame capture: arm a one-shot PNG of the next composited frame
     // (the control channel's `shot`). Same seam as the Metal backend.

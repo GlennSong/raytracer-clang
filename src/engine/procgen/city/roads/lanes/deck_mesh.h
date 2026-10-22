@@ -7,6 +7,7 @@
 
 #include "engine/procgen/city/roads/lanes/lanes.h"
 #include "renderer/renderer.h"
+#include "engine/procgen/city/rail_track.h"
 #include <string>
 #include <vector>
 
@@ -22,6 +23,9 @@ struct NamedMesh { std::string name; RenderMesh mesh; Vec3 color; };
 // One mesh per material: asphalt (deck tops and bottoms), concrete (walls, piers), sidewalk,
 // shoulder, median, paint white, paint yellow, terrain. Empty meshes are omitted.
 std::vector<NamedMesh> buildMeshes(const Result& r);
+
+// Every track lane's railhead line, in running order, with the platforms beside it (rail_track.h).
+std::vector<RailTrack> railTracks(const Result& r);
 
 // LANE ARROWS: what each of an approach's lanes may do at a junction, given the moves the junction
 // offers (hasLeft/Straight/Right, in plan terms) and whether its leftmost / rightmost lane is a turn

@@ -59,6 +59,18 @@ private:
         long reversals = 0, steps = 0;
         engine::Real window = 0;
     } tel_;
+    // THE POPULATION SCAN behind `walkers?` / `activities?`: one pass over every agent, a slice of it each step
+    // so the whole pass spans the 2 s window (it was four whole-population loops on one step: a 10 ms hitch on
+    // the island every 2 s). `last` is the latest finished pass, what the telemetry publishes.
+    struct PopScan {
+        std::size_t next = 0;
+        int seated = 0, joggers = 0, onWalks = 0, studentsOnWalks = 0;
+        engine::Vec2 seatAt{0, 0};
+        engine::Real seatD = 1e30;
+        std::vector<int> at, going;
+        std::vector<engine::Real> nearD;
+        std::vector<engine::Vec2> nearAt;
+    } scan_, lastScan_;
 
     struct Walker {
         engine::Entity entity;             // the character-capsule entity
@@ -74,7 +86,26 @@ private:
         engine::Real heldFor = 0;          // seconds its plan has been leashed
                                            // to a body that is not CLOSING on it
         engine::Real lastLead = -1;        // last distance body -> ghost
+        engine::Vec2 drawnLast{0, 0};      // where it was DRAWN last step (the speed watchdog)
+        bool drawnValid = false;
+        int drawnPath = -1;                // how: 0 resting (seat/grass), 1 bodyless (posed from the plan), 2 body
+        engine::Vec2 handoff{0, 0};        // a body given up: where it was against its plan, eased away (bodyless)
     };
+    // THE SPEED WATCHDOG (`speeders?`; Glenn: "npcs going superspeed across the street ... some way to debug what
+    // some agents are doing when they're flickering around the world"): every drawn person, whichever way it is
+    // drawn, against how fast a person can go. A step past that is recorded with the agent's whole state.
+    struct SpeedEvent {
+        double at = 0;          // seconds since start
+        int agent = -1;
+        engine::Vec2 from, to;
+        engine::Real speed = 0;
+        int pathFrom = -1, pathTo = -1;
+        std::string state;
+    };
+    std::vector<SpeedEvent> speedEvents_;   // ring, newest last
+    long speedEventCount_ = 0;
+    double clockSec_ = 0;
+    void watchDrawn(Walker& w, engine::Vec2 p, int path, engine::Real dt, const CitySim& sim);
 
     // PHYSICAL-BODY BUDGET. A walker's Jolt capsule is stepped every tick and
     // separated against every other body, so the per-step cost is
@@ -109,7 +140,16 @@ private:
     engine::MeshHandle poseMesh(engine::AssetManager& assets, int outfit, int pose);
     std::unordered_map<int, engine::MeshHandle> poseMeshes_;
     std::unordered_map<int, engine::MeshHandle> seatedMeshes_;   // by outfit: the walker sitting (M5)
+    std::unordered_map<int, engine::MeshHandle> groundSitMeshes_;   // by outfit: sitting on the grass
     std::vector<char> haveWalker_;   // agentId -> has a body (reconcile scratch)
+    std::vector<int> haveSet_;       // ...the ids marked (cleared next step, not the whole array)
+    // THE FLICKER WATCH (Glenn: "agents flickering into view and then out"): a body removed and given back to the
+    // same agent within 1.5 s is a flicker -- counted, with why it went and what it was doing when it came back
+    // (`flicker?` on the control channel). Real seconds: what the eye sees.
+    struct Gone { double at; const char* why; engine::Vec2 pos; };
+    std::unordered_map<int, Gone> gone_;
+    long flickers_ = 0;
+    std::vector<std::string> flickerLog_;   // the latest few
 };
 
 }  // namespace citysim

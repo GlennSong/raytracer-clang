@@ -20,7 +20,6 @@ std::vector<std::unique_ptr<RoadBuilder>>& registry() {
 // registrar) because engine_core is a STATIC library: a translation unit nothing
 // references is dropped at link time, and a self-registering builder would
 // simply vanish from a linked binary.
-void registerLatticeRoadBuilder();
 #ifdef RT_ROADS_LANES
 void registerLanesRoadBuilder();
 #endif
@@ -30,7 +29,6 @@ namespace {
 void ensureBuiltins() {
     static std::once_flag once;
     std::call_once(once, [] {
-        registerLatticeRoadBuilder();
 #ifdef RT_ROADS_LANES
         registerLanesRoadBuilder();
 #endif

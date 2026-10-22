@@ -3,7 +3,6 @@
 #include "../src/engine/procgen/city/surface_field.h"
 #include "../src/engine/procgen/city/block_grade.h"
 #include "../src/engine/procgen/city/roads/road_entity.h"
-#include "../src/engine/procgen/deprecated/roads/road_net_mesh.h"   // DEPRECATED lattice mesher (roads module)
 #include "../src/engine/procgen/city/road_constraints.h"
 #include "../src/engine/procgen/city/road_network.h"
 #include "../src/engine/procgen/terrain.h"
@@ -236,64 +235,6 @@ TEST_CASE(flatten_priority_pad_beats_block_grade) {
                  block.planeY(20, 0), 1e-9);                          // -> block grade applies
 }
 
-// StructureSet walls (ADR-0075 Phase 1b): a steep sidehill cut that can't daylight
-// within reach gets a retaining wall; flat ground gets none.
-TEST_CASE(road_walls_only_where_cuts_are_steep) {
-    RoadEntity net;
-    net.look.defaultWidth = 12.0; net.look.sidewalk = 3.5;
-    net.graph.nodes = {RoadNode{Vec2(0, -100)}, RoadNode{Vec2(0, 100)}};
-    net.graph.addEdge(0, 1, 12.0);
-
-    const RoadGroundFn flatGround = [](double, double) { return 5.0; };   // flat: batter daylights at once
-    StructureSet flat = buildRoadWalls(net, flatGround);
-    CHECK(flat.walls.empty());
-    CHECK(flat.mesh.vertices.empty());
-
-    const RoadGroundFn steepGround = [](double x, double) { return 2.0 * x; };  // steep sidehill (grade 2.0)
-    StructureSet steep = buildRoadWalls(net, steepGround);
-    CHECK(!steep.walls.empty());
-    CHECK(!steep.mesh.vertices.empty());
-    CHECK(steep.mesh.indices.size() % 3 == 0);
-    CHECK(steep.colliderEdges.size() == steep.walls.size());
-    bool anyRetain = false; double maxDrop = 0;
-    for (const WallSegment& w : steep.walls) {
-        if (w.retaining) anyRetain = true;
-        maxDrop = std::max(maxDrop, std::max(w.dropA, w.dropB));
-    }
-    CHECK(anyRetain);          // the uphill cut needs holding back
-    CHECK(maxDrop > 0.5);      // and it's a real wall, not a sliver
-}
-
-// The autoRoundabout policy on a net is honoured by the conform/mesh graph pass
-// (ADR-0075 Phase 0): a degree-5 star is promoted to a roundabout ring only when
-// the net asks for it — the generator's autoRoundabout=false must survive into
-// constrainedNetGraph (it used to be overridden by default rules).
-TEST_CASE(net_autoroundabout_policy_is_honoured) {
-    RoadEntity star;
-    star.look.defaultWidth = 10.0;
-    star.look.sidewalk = 2.5;
-    star.graph.nodes = {RoadNode{Vec2(0, 0)}, RoadNode{Vec2(30, 0)}, RoadNode{Vec2(9, 28)},
-                        RoadNode{Vec2(-24, 17)}, RoadNode{Vec2(-24, -17)}, RoadNode{Vec2(9, -28)}};
-    star.graph.addEdge(0, 1, 10.0);  // centre is degree 5
-    star.graph.addEdge(0, 2, 10.0);
-    star.graph.addEdge(0, 3, 10.0);
-    star.graph.addEdge(0, 4, 10.0);
-    star.graph.addEdge(0, 5, 10.0);
-
-    // navRoadGraph wraps constrainedNetGraph — the shared mesh+conform graph pass.
-    // With autoRoundabout on, the degree-5 centre is promoted to a ring.
-    RoadGraph rawish = navRoadGraph(
-        [&] { RoadEntity n = star; n.look.autoRoundabout = true; return n; }(), nullptr);
-    CHECK(maxDegree(rawish) <= 4);   // promoted: every survivor is degree <= 3 (ring) or <= 4
-
-    star.look.autoRoundabout = false;
-    RoadGraph kept = navRoadGraph(star, nullptr);
-    CHECK(maxDegree(kept) >= 5);     // NOT promoted: the busy centre survives intact
-
-    // And the mesher runs on the unpromoted net without crashing.
-    RenderMesh m = buildRoadNetMesh(star, nullptr);
-    CHECK(!m.vertices.empty());
-}
 
 
 // The overlap CONTRACT, pinned directly (it was only exercised indirectly

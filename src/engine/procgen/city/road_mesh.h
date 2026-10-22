@@ -136,6 +136,12 @@ struct UnionSpine {
     // ground up to. Only these two flags make a chain a bridge.
     bool authoredDeck = false;
     int  layer = 0;
+    // WHAT RUNS ON IT: a road (traffic, parked cars, the street a walker is on), a TRACK or a FOOTWAY (a station's
+    // way in). The last two are drawn decks with their own profile, but nothing on a street ever stands on them: the
+    // deck field's queries skip them (they are not indexed), so a car under a viaduct never reads the rail above it
+    // (Glenn, 2026-10-12: "cars weirdly stuck in the tracks"). The earthwork still rides them -- they are structure.
+    enum class Use : uint8_t { Road = 0, Track = 1, Footway = 2 };
+    Use use = Use::Road;
     // Where the TRAVEL lanes end, as a fraction of the half-width (1.0 = at
     // the kerb, no kerbside parking). A 12 m street with 2.5 m parking bays
     // carries travel lanes only out to 3.5 m of its 6 m half-width, so this is
@@ -163,7 +169,7 @@ struct UnionSpine {
 // 0.08 "lift") inside the asphalt — every sim car, parked car, painted bay
 // and signal lens (device: "the simulated cars ... sometimes they are below
 // the road"). This field is the road surface itself, exported by
-// buildRoadNetMesh from the very chains it swept, so a consumer that asks it
+// the road builder from the very surface it built, so a consumer that asks it
 // stands where the mesh is by construction.
 struct RoadDeckField {
     std::vector<UnionSpine> spines;   // yAbs filled: the per-point deck Y the lattice rode
@@ -196,7 +202,10 @@ struct RoadDeckField {
     // 0 = not on the deck. The city map's "sidewalk cuts across the road"
     // census measures the band against THIS, not the graph.
     double depthInside(double x, double z, int* spineOut = nullptr) const;   // spineOut: -1 = a pad
-    // Spatial hash of pad triangles and spine segments; buildRoadNetMesh
+    // Any drawn deck within half-width + margin of (x, z) -- tracks and footways included, which heightAt, heightOn
+    // and depthInside leave out (they answer for things on a street): what a tree or a rock stays off.
+    bool coversAny(double x, double z, double margin) const;
+    // Spatial hash of pad triangles and spine segments; the builder
     // calls it after filling both (call again after editing by hand).
     void buildIndex();
     bool empty() const { return spines.empty() && pads.empty(); }
@@ -204,8 +213,10 @@ struct RoadDeckField {
 private:
     // Every drawn surface over (x, z): pad triangles (pad = true) and spines within half-width + margin
     // (their layer, centreline distance d, half-width hw and road class). heightAt and heightNear choose among these.
+    // (`anyUse`: tracks and footways too; otherwise roads only)
     void surfacesAt(double x, double z, double margin,
-                    const std::function<void(double y, bool pad, int layer, double d, double hw, RoadClass klass)>& fn) const;
+                    const std::function<void(double y, bool pad, int layer, double d, double hw, RoadClass klass)>& fn,
+                    bool anyUse = false) const;
     struct Seg { int spine; int i; };        // spine segment (i, i+1)
     std::unordered_map<long long, std::vector<Seg>> cells_;
     std::unordered_map<long long, std::vector<int>> padCells_;

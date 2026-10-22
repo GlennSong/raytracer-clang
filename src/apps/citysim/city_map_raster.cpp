@@ -1,6 +1,7 @@
 #include "city_map_raster.h"
 
 #include <algorithm>
+#include <cstdlib>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -146,8 +147,10 @@ void CityMapRaster::rasterize(const View& v, std::vector<uint8_t>& rgba, float l
     }
     if (!transit_) return;
     // Lines a constant few pixels wide: the width in image units is px x mpp.
-    for (NSVGshape* s = transit_->shapes; s; s = s->next)
-        s->strokeWidth = static_cast<float>(linePx * mpp);
+    for (NSVGshape* s = transit_->shapes; s; s = s->next) {
+        const float k = s->id[0] == 'w' ? static_cast<float>(std::atof(s->id + 1)) : 1.0f;
+        s->strokeWidth = static_cast<float>(linePx * (k > 0 ? k : 1.0f) * mpp);
+    }
     overlay_.assign(rgba.size(), 0);
     {
         Culled c(transit_, ix0, iy0, ix1, iy1);
@@ -176,7 +179,8 @@ std::string transitSvg(const std::vector<TransitLine>& lines, double minX, doubl
                       static_cast<int>(std::clamp(l.r, 0.0f, 1.0f) * 255.0f + 0.5f),
                       static_cast<int>(std::clamp(l.g, 0.0f, 1.0f) * 255.0f + 0.5f),
                       static_cast<int>(std::clamp(l.b, 0.0f, 1.0f) * 255.0f + 0.5f));
-        out << "<polygon fill='none' stroke='" << col
+        // the id carries the width, read back per rasterize (strokes are scaled to pixels there)
+        out << (l.closed ? "<polygon" : "<polyline") << " id='w" << l.width << "' fill='none' stroke='" << col
             << "' stroke-width='4' stroke-linejoin='round' stroke-opacity='0.9' points='";
         for (const auto& p : l.path) out << p.first << "," << p.second << " ";
         out << "'/>\n";

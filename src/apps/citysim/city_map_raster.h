@@ -76,6 +76,8 @@ private:
 struct TransitLine {
     std::vector<std::pair<double, double>> path;
     float r = 1, g = 0, b = 0;
+    float width = 1.0f;     // times the overlay's line width (a rail line's casing is wider than a bus line)
+    bool closed = true;     // a loop (a bus route is one); an open line ends where it ends
 };
 std::string transitSvg(const std::vector<TransitLine>& lines, double minX, double minZ,
                        double w, double h);

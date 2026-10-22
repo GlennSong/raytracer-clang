@@ -37,13 +37,29 @@ double crossingConsistency(RoadLabGraph& g, double maxDz, double rampMaxDz, doub
 // street 2.8 m off was lifted to overpass clearance, and the agree loop diverged to 10 m)
 // sep: with Rules::freewaySeparates, a FREEWAY's centreline crossing another road's (not a ramp) -- always a grade separation,
 // never levelled, whatever the two heights (island 8's pass rose to the freeway and met it at grade).
-struct CrossingMeet { std::size_t hi = 0, lo = 0; Vec2 p; double sHi = 0, sLo = 0; bool ramp = false, tee = false, sep = false; };
+// `declared`: the graph planned this crossing (CrossingSpec); then `sep` is its kind (a bridge, `hi` over) and `level` an
+// at-grade meeting the heights are made to agree at however far apart they stand -- no kind read off the heights
+struct CrossingMeet { std::size_t hi = 0, lo = 0; Vec2 p; double sHi = 0, sLo = 0; bool ramp = false, tee = false, sep = false, level = false, declared = false; };
+// THE CROSSINGS A GRAPH THAT DECLARES THEM DID NOT (ADR-0215): every meet of two roads away from a shared node -- a
+// crossing, or an end on the other's interior -- with no planned kind, "a / b at (x, y)". Empty for a graph that
+// declares none (its kinds are inferred, as they always were).
+std::vector<std::string> undeclaredCrossings(const RoadLabGraph& g, const std::vector<CrossingMeet>& meets);
+// crossingConsistency's worst level-crossing mismatch, measured only (a designed graph is checked, not corrected)
+double crossingMismatch(const RoadLabGraph& g, const std::vector<CrossingMeet>& meets, double maxDz, double rampMaxDz, const CrossingMeet** worstAt = nullptr);
 // Two roads that may never meet at grade where their centrelines cross: a freeway and any road but a ramp.
 bool mustSeparate(const EdgeSpec& a, const EdgeSpec& b);
+// A TRACK crossing anything (a road, a ramp, the freeway) is a grade separation, whatever the scene's rules: there are
+// no level crossings yet (the island loop, 2026-10-11). Two of the graph's crossings that must be structure.
+bool separates(const RoadLabGraph& g, const EdgeSpec& a, const EdgeSpec& b);
+bool anyTrack(const RoadLabGraph& g, const EdgeSpec& a, const EdgeSpec& b);   // a track is structure where a road ends under it too
 std::vector<CrossingMeet> crossingMeets(const RoadLabGraph& g);
 // crossingConsistency over the cached meets: the same pairs, in the same order, the same result.
 double crossingConsistency(RoadLabGraph& g, const std::vector<CrossingMeet>& meets, double maxDz, double rampMaxDz, double radius = 100.0);
 void applyFloors(EdgeSpec& e, const RoadClassSpec& c);   // re-impose a through road's floor holds after other passes moved it
+// A LINE IN SECTIONS (a city's light rail, cut between stations): each track section's holds, carried onto the section
+// joined to it end to start (as chainFloors), one joint on. A lift's approach ran out over the joint on its own section
+// only, and the next section met it 4 m lower (Saltwood). Recompute whenever a track's floorPts change.
+void chainTrackFloors(RoadLabGraph& g, double tol);
 void rampProfile(RoadLabGraph& g, EdgeSpec& e, const HeightField& terrain);
 double projectZ(const EdgeSpec& e, const Vec2& p);
 double maxGrade(const EdgeSpec& e);

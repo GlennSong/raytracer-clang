@@ -42,6 +42,8 @@ does not require it. "Measured against" counts too.
 | What | Where | Author / source | Licence |
 |---|---|---|---|
 | Overpass Bold (road signs) | `assets/fonts/Overpass-Bold.ttf` | The Overpass Project Authors (Red Hat), github.com/RedHatOfficial/Overpass | SIL OFL 1.1, text in `assets/fonts/OFL.txt` |
+| Pacifico (bars' neon script signs) | `assets/fonts/Pacifico-Regular.ttf` | The Pacifico Project Authors (Vernon Adams et al.), github.com/googlefonts/Pacifico via github.com/google/fonts | SIL OFL 1.1, text in `assets/fonts/OFL-Pacifico.txt` |
+| Tilt Neon (clubs' neon signs, OPEN signs) | `assets/fonts/TiltNeon.ttf` | The Tilt Project Authors (Andy Clymer), github.com/googlefonts/Tilt-Fonts via github.com/google/fonts | SIL OFL 1.1, text in `assets/fonts/OFL-TiltNeon.txt` |
 | SDL_GameControllerDB (gamepad mappings) | `gamecontrollerdb.txt` | Gabriel Jacobo and contributors, github.com/mdqinc/SDL_GameControllerDB | zlib |
 
 ## Measured against, not shipped
@@ -51,6 +53,13 @@ Outside material used to tune the procedural output by measurement. None of it i
 | What | Used for | Author / source | Licence |
 |---|---|---|---|
 | "Impact Sounds" 1.0: footstep_concrete_000-004 | the spectrum and length of a shoe on pavement (`src/engine/audio/sfx_ground.cpp`, test `a_pavement_step_is_a_low_thud`), 2026-10-02 | Kenney, kenney.nl/assets/impact-sounds | CC0 1.0 |
+| "Impact Sounds" 1.0: footstep_grass_000-004, footstep_snow_000-004 | the spectrum and length of steps on grass and snow, the measure for every natural ground's step (`src/engine/audio/sfx_ground.cpp`, test `steps_off_the_pavement_are_low_too`), 2026-10-09; measured, not shipped | Kenney, kenney.nl/assets/impact-sounds | CC0 1.0 |
+| UF/IFAS Extension fact sheet, *Roystonea regia*: Cuban Royal Palm | royal_palm size: 15-25 m on a ~60 cm smooth grey column, a green crownshaft, 3-4 m feather fronds (`src/engine/procgen/real_tree.cpp`), 2026-10-10; measured, not shipped | University of Florida IFAS Extension, edis.ifas.ufl.edu | public extension publication |
+| UF/IFAS Extension fact sheet, *Cocos nucifera*: Coconut Palm | coconut_palm size: a slim leaning ringed trunk, 4-6 m drooping fronds (`real_tree.cpp`), 2026-10-10; measured, not shipped | University of Florida IFAS Extension, edis.ifas.ufl.edu | public extension publication |
+| UF/IFAS Extension fact sheet, *Samanea saman*: Raintree (monkeypod) | monkeypod: 15-25 m, a short trunk under an umbrella wider than the tree is tall, fine bipinnate leaves (`real_tree.cpp`), 2026-10-10; measured, not shipped | University of Florida IFAS Extension, edis.ifas.ufl.edu | public extension publication |
+| UF/IFAS Extension fact sheet, *Delonix regia*: Royal Poinciana | poinciana: 5-12 m, a flat umbrella crown, red-orange bloom (`real_tree.cpp`), 2026-10-10; measured, not shipped | University of Florida IFAS Extension, edis.ifas.ufl.edu | public extension publication |
+| UF/IFAS Extension fact sheet, *Jacaranda mimosifolia*: Jacaranda | jacaranda: 8-15 m, an open rounded crown, lilac bloom (`real_tree.cpp`), 2026-10-10; measured, not shipped | University of Florida IFAS Extension, edis.ifas.ufl.edu | public extension publication |
+| UF/IFAS Extension fact sheet, *Plumeria rubra*: Frangipani | plumeria: 3-8 m, thick pale candelabra limbs, paddle leaves and flowers at the tips (`real_tree.cpp`), 2026-10-10; measured, not shipped | University of Florida IFAS Extension, edis.ifas.ufl.edu | public extension publication |
 | Four landscape reference photos (Alaska, Colorado aspens, Maroon Bells, Lauterbrunnen) | the realism colour palette (ADR-0102) | supplied by Glenn | his own reference; not distributed |
 
 ## Methods named in the code

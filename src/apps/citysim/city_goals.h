@@ -45,8 +45,12 @@ enum class GoalAction : uint8_t {
 // who brought lunch: the trip does not start and NoRoute fires).
 // Outing: somewhere near to go next -- a park, a cafe, a store, a supermarket,
 // a civic building, or just a walk round the block (CitySim::pickOuting).
+// Campus: a student's break between classes -- the library, a bench on the quad
+// or a bleacher by the pitch, a walk across the quad, lunch (CitySim::pickCampusBreak).
+// Activity: a free ACTIVITY SPOT of the state's kinds and tags (activities.h) -- a bench, a stand, a track -- reserved
+// and walked to; what the body does there is the spot's kind.
 enum class GoalTarget : uint8_t { None, Work, Home, Random, Shop, Fare, Drop, Stop, Depot,
-                                  Lunch, Outing };
+                                  Lunch, Outing, Campus, Activity };
 
 // The events CitySim EMITS at fixed points — the full trigger vocabulary a
 // table may transition on. Emission lives in C++ (clock windows, arrival,
@@ -61,6 +65,8 @@ enum class GoalEvent : uint8_t {
     GotFare,      // a free driver was just matched to a waiting hail
     ServiceEnd,   // the clock left the service window: finish up and go home
     ServiceStart, // the clock entered it: back on the road
+    Evening,      // resting, and tonight is a night out for this agent and its evening has begun (CitySim::eveningPlan)
+    EveningOver,  // resting, and its evening is over (or it is not going out tonight)
     Count
 };
 const char* goalEventName(GoalEvent e);
@@ -78,6 +84,10 @@ struct GoalState {
     GoalTarget target = GoalTarget::None;
     Activity activity = Activity::AtHome;
     double dwellHours = 0;   // 0 = rest forever (only events can end it)
+    // GoalTarget::Activity: the spot kinds it takes (spotKindBit) and the tags the spot must carry (spot_tag) -- or,
+    // when `menu` names one, a pick from that menu of the activity catalog (activities.h)
+    uint32_t spotKinds = 0, spotTags = 0;
+    std::string menu;
 };
 
 // The table itself: states + transitions over an engine::StateMachine, shared
@@ -95,6 +105,10 @@ public:
     bool addTransition(const std::string& from, GoalEvent event,
                        const std::string& to);
     bool setEntry(const std::string& name);   // false when unknown
+    // An Activity state's ask: which spot kinds, carrying which tags. False when the state is unknown.
+    bool setActivity(const std::string& name, uint32_t spotKinds, uint32_t spotTags);
+    // An Activity state that picks from a MENU of the activity catalog. False when the state is unknown.
+    bool setMenu(const std::string& name, const std::string& menu);
 
     int entry() const { return entry_; }
     int stateCount() const { return static_cast<int>(states_.size()); }
@@ -121,18 +135,11 @@ private:
     int entry_ = 0;
 };
 
-// The built-in defaults — bit-exact mirrors of the pre-table control flow.
-// The daily schedule: AtHome -> CommuteToWork -> AtWork -> ReturnHome -> ...
-GoalTable defaultScheduleGoals();
+// The residents' days are built from their ROLES (city_roles.h: buildDayTable). The tables below are the rest:
 // Wander (the agent lab): one perpetual GoTo(Random) loop. A driver CHAINS
 // straight through the arrival node (Arrived self-loop onto a GoTo state); a
 // walker rests one tick at the kerb first (Arrived -> RoamRest -Idle-> Roam).
 GoalTable wanderGoals(bool driver);
-// A day OUT (Glenn, 2026-09-19: "non workers and pedestrians who are out for a
-// stroll or going to public spaces"): from home, a chain of nearby stops --
-// park, cafe, store, a walk round the block -- each with a pause, until the
-// outing window closes and they head home. The Stroller role's table.
-GoalTable strollerGoals();
 // A TAXI's day: cruise until dispatched, collect, deliver, cruise again.
 GoalTable taxiGoals();
 // A BUS's day: drive the loop, for ever. One state.

@@ -5,6 +5,7 @@
 // `furniture_library` a chunk like assets/scripts/furniture_library.lua leaves behind, keyed by kit piece name.
 
 #include "../procgen/furniture_library.h"
+#include "../procgen/city/floor_zones.h"
 #include <string>
 
 namespace engine {
@@ -15,10 +16,20 @@ class ScriptVM;
 // verbs or spot ids are errors, so a typo cannot silently drop a seat.
 bool readFurnitureLibrary(ScriptVM& vm, FurnitureLibrary& out, std::string* err = nullptr);
 
-// Run Lua `source` (the library file's text) in a fresh sandboxed VM and read it.
+// The room programs (the VM's `furniture_rooms` global, furniture_rooms.lua) into `out`; absent is not an error.
+bool readRoomPrograms(ScriptVM& vm, FurnitureLibrary& out, std::string* err = nullptr);
+
+// Run Lua `source` (the library file's text, optionally followed by the room programs') in a fresh sandboxed VM and
+// read both.
 bool loadFurnitureLibrarySource(const std::string& source, FurnitureLibrary& out, std::string* err = nullptr);
 
-// FurnitureLibrary::global() from assets/scripts/furniture_library.lua, once per process (later calls return the
+// THE FLOOR PROGRAMS (floor_zones.h): the VM's `floor_programs` global (assets/scripts/floor_programs.lua) into
+// `out`. Unknown kinds, sites, walls or `near` values are errors.
+bool readFloorPrograms(ScriptVM& vm, FloorProgramBook& out, std::string* err = nullptr);
+bool loadFloorProgramsSource(const std::string& source, FloorProgramBook& out, std::string* err = nullptr);
+
+// FurnitureLibrary::global() from assets/scripts/furniture_library.lua -- and FloorProgramBook::global() from
+// floor_programs.lua -- once per process (later calls return the
 // first result). Logs what it loaded.
 bool ensureFurnitureLibraryLoaded();
 

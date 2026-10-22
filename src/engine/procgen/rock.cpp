@@ -76,23 +76,7 @@ RenderMesh generateRockSdf(const RockSdfParams& params, uint32_t seed) {
     // polygonization resolution the rock reads as a hand-cut low-poly prop
     // (matching the city's look) instead of a smooth blob.
     if (params.faceted) {
-        RenderMesh flat;
-        flat.vertices.reserve(mesh.indices.size());
-        flat.indices.reserve(mesh.indices.size());
-        for (std::size_t i = 0; i + 2 < mesh.indices.size(); i += 3) {
-            Vertex a = mesh.vertices[mesh.indices[i]];
-            Vertex b = mesh.vertices[mesh.indices[i + 1]];
-            Vertex c = mesh.vertices[mesh.indices[i + 2]];
-            Vec3 n = cross(c.position - a.position, b.position - a.position);
-            if (n.lengthSquared() < 1e-14) continue;   // degenerate sliver
-            n = normalize(n);
-            a.normal = b.normal = c.normal = n;
-            for (const Vertex& v : {a, b, c}) {
-                flat.indices.push_back(static_cast<uint32_t>(flat.vertices.size()));
-                flat.vertices.push_back(v);
-            }
-        }
-        mesh = std::move(flat);
+        MeshBuilder::flatShade(mesh);
     }
 
     // Bake a grayscale brightness variation into the vertex color so the rock

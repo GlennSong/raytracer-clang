@@ -186,7 +186,9 @@ uint32_t MeshBuilder::vertex(RenderMesh& mesh, const Vec3& p, const Vec3& n, con
 
 void MeshBuilder::triFacing(RenderMesh& mesh, uint32_t a, uint32_t b, uint32_t c, const Vec3& out) {
     const Vec3 &A = mesh.vertices[a].position, &B = mesh.vertices[b].position, &C = mesh.vertices[c].position;
-    if (dot(cross(C - A, B - A), out) >= 0) mesh.indices.insert(mesh.indices.end(), {a, b, c});
+    const Vec3 f = cross(C - A, B - A);
+    if (f.lengthSquared() < kNoArea2) return;   // no area (a collapsed corner, three points on a line): nothing to draw
+    if (dot(f, out) >= 0) mesh.indices.insert(mesh.indices.end(), {a, b, c});
     else mesh.indices.insert(mesh.indices.end(), {a, c, b});
 }
 
@@ -196,11 +198,22 @@ RenderMesh MeshBuilder::tube(const std::vector<Vec3>& pts, const std::vector<dou
     const std::size_t n = pts.size();
     sides = std::max(3, sides);
     if (n < 2 || radii.size() < n) return m;
+    // Each ring lies across the BISECTOR of the bend at its point (the mean of the segment in and the segment out),
+    // and its frame is CARRIED from the ring before (parallel transport: the last u with its component along the new
+    // direction removed). A frame picked afresh at each ring from a fixed up -- as this did -- swaps axes where the
+    // tube passes near vertical, twists one ring against the next and folds the quad between them inside out (the
+    // mesh audit, test_winding: tree bark).
     std::vector<uint32_t> base(n);
+    Vec3 u;
     for (std::size_t i = 0; i < n; ++i) {
-        const Vec3 d = normalize(i + 1 < n ? pts[i + 1] - pts[i] : pts[i] - pts[i - 1]);
-        const Vec3 a = std::fabs(d.y) < 0.9 ? Vec3(0, 1, 0) : Vec3(1, 0, 0);
-        const Vec3 u = normalize(cross(d, a)), w = cross(d, u);
+        const Vec3 din = i > 0 ? normalize(pts[i] - pts[i - 1]) : Vec3(0, 0, 0);
+        const Vec3 dout = i + 1 < n ? normalize(pts[i + 1] - pts[i]) : Vec3(0, 0, 0);
+        Vec3 d = din + dout;
+        d = d.lengthSquared() > 1e-12 ? normalize(d) : (dout.lengthSquared() > 0 ? dout : din);
+        if (i > 0) u = u - d * dot(u, d);
+        if (i == 0 || u.lengthSquared() < 1e-10) u = cross(d, std::fabs(d.y) < 0.9 ? Vec3(0, 1, 0) : Vec3(1, 0, 0));
+        u = normalize(u);
+        const Vec3 w = cross(d, u);
         base[i] = static_cast<uint32_t>(m.vertices.size());
         for (int k = 0; k < sides; ++k) {
             const double t = 6.283185307179586 * k / sides;
@@ -220,6 +233,7 @@ RenderMesh MeshBuilder::tube(const std::vector<Vec3>& pts, const std::vector<dou
                 else m.indices.insert(m.indices.end(), {t3[0], t3[2], t3[1]});
             }
         }
+    dropDegenerate(m);
     return m;
 }
 
@@ -274,44 +288,95 @@ RenderMesh MeshBuilder::roundedBox(const Vec3& size, double radius, int segs, do
                 triFacing(m, a, d, c, outN);
             }
     }
+    dropDegenerate(m);
     return m;
 }
 
 RenderMesh MeshBuilder::lathe(const std::vector<std::pair<double, double>>& prof, int segs) {
+    // Each profile SEGMENT has its own outward normal in (r, y): its direction turned a right angle (the profile runs
+    // up the outside, so a segment going out along the bottom faces down). A point where two segments meet at less
+    // than kSmooth is smooth -- one ring of vertices, the two normals averaged; a sharper turn (a bowl's rim, a plate's
+    // edge) is a CREASE -- two rings, each with its own segment's normal. Each band is wound by its segment's normal,
+    // so a rim can never come out drawn from inside (the mesh audit, test_winding: it did, by an averaged normal).
     RenderMesh m;
     const std::size_t n = prof.size();
-    struct P2 { double x, y; };
-    std::vector<P2> profile(n);
-    for (std::size_t i = 0; i < n; ++i) profile[i] = {prof[i].first, prof[i].second};
-    auto len = [](const P2& a, const P2& b) { return std::hypot(b.x - a.x, b.y - a.y); };
     segs = std::max(3, segs);
     if (n < 2) return m;
-    std::vector<double> vlen(n, 0.0);
-    for (std::size_t i = 1; i < n; ++i) vlen[i] = vlen[i - 1] + len(profile[i - 1], profile[i]);
-    std::vector<uint32_t> base(n);
-    for (std::size_t i = 0; i < n; ++i) {
-        // The profile's outward normal in (r, y): its tangent turned a right angle, averaged over both neighbours.
-        const P2& t1 = profile[std::min(i + 1, n - 1)];
-        const P2& t0 = profile[i > 0 ? i - 1 : 0];
-        double pnx = t1.y - t0.y, pny = -(t1.x - t0.x);
-        const double pl = std::hypot(pnx, pny);
-        if (pl > 1e-12) { pnx /= pl; pny /= pl; } else { pnx = 1; pny = 0; }
-        base[i] = static_cast<uint32_t>(m.vertices.size());
+    constexpr double kSmooth = 0.766;   // cos 40 deg
+    std::vector<double> snx(n - 1), sny(n - 1), vlen(n, 0.0);
+    for (std::size_t i = 0; i + 1 < n; ++i) {
+        const double dx = prof[i + 1].first - prof[i].first, dy = prof[i + 1].second - prof[i].second;
+        const double l = std::hypot(dx, dy);
+        snx[i] = l > 1e-12 ? dy / l : 1.0;
+        sny[i] = l > 1e-12 ? -dx / l : 0.0;
+        vlen[i + 1] = vlen[i] + l;
+    }
+    auto ring = [&](std::size_t i, double nx, double ny) {
+        const uint32_t base = static_cast<uint32_t>(m.vertices.size());
         for (int k = 0; k <= segs; ++k) {
             const double a = 6.283185307179586 * k / segs, ca = std::cos(a), sa = std::sin(a);
-            Vertex vx(Vec3(profile[i].x * ca, profile[i].y, profile[i].x * sa), normalize(Vec3(pnx * ca, pny, pnx * sa)),
+            Vertex vx(Vec3(prof[i].first * ca, prof[i].second, prof[i].first * sa), normalize(Vec3(nx * ca, ny, nx * sa)),
                       Vec3(-sa, 0, ca), static_cast<float>(static_cast<double>(k) / segs), static_cast<float>(vlen[i]));
             vx.color = Vec3(1, 1, 1);
             m.vertices.push_back(vx);
         }
+        return base;
+    };
+    // the ring each segment starts on and ends on (shared where the point is smooth)
+    std::vector<uint32_t> startRing(n - 1), endRing(n - 1);
+    for (std::size_t i = 0; i < n; ++i) {
+        const bool hasIn = i > 0, hasOut = i + 1 < n;
+        if (hasIn && hasOut && snx[i - 1] * snx[i] + sny[i - 1] * sny[i] >= kSmooth) {
+            double nx = snx[i - 1] + snx[i], ny = sny[i - 1] + sny[i];
+            const double l = std::hypot(nx, ny);
+            const uint32_t r = ring(i, nx / l, ny / l);
+            endRing[i - 1] = r;
+            startRing[i] = r;
+            continue;
+        }
+        if (hasIn) endRing[i - 1] = ring(i, snx[i - 1], sny[i - 1]);
+        if (hasOut) startRing[i] = ring(i, snx[i], sny[i]);
     }
     for (std::size_t i = 0; i + 1 < n; ++i)
         for (int k = 0; k < segs; ++k) {
-            const uint32_t a = base[i] + k, b = a + 1, c = base[i + 1] + k, d = c + 1;
-            const Vec3 out = normalize(m.vertices[a].normal + m.vertices[d].normal);
+            const uint32_t a = startRing[i] + k, b = a + 1, c = endRing[i] + k, d = c + 1;
+            const double mid = 6.283185307179586 * (k + 0.5) / segs;
+            const Vec3 out = normalize(Vec3(snx[i] * std::cos(mid), sny[i], snx[i] * std::sin(mid)));
             if ((m.vertices[a].position - m.vertices[b].position).length() > 1e-9) triFacing(m, a, b, d, out);
             if ((m.vertices[c].position - m.vertices[d].position).length() > 1e-9) triFacing(m, a, d, c, out);
         }
+    return m;
+}
+
+RenderMesh MeshBuilder::lathe(const std::vector<std::pair<double, double>>& prof, int segs, const LatheStyle& st) {
+    if (!st.faceted) {
+        RenderMesh m = lathe(prof, segs);
+        for (Vertex& v : m.vertices) { v.position = v.position + st.centre; v.color = st.color; }
+        return m;
+    }
+    // FACETED: every quad flat, its normal the segment's (r, y) normal turned to the quad's middle angle
+    RenderMesh m;
+    const std::size_t n = prof.size();
+    segs = std::max(3, segs);
+    if (n < 2) return m;
+    double vlen = 0;
+    for (std::size_t i = 0; i + 1 < n; ++i) {
+        const double r0 = prof[i].first, y0 = prof[i].second, r1 = prof[i + 1].first, y1 = prof[i + 1].second;
+        const double dl = std::hypot(r1 - r0, y1 - y0);
+        if (dl < 1e-12) continue;
+        const double nr = (y1 - y0) / dl, ny = -(r1 - r0) / dl;   // the profile runs up the outside: its right is out
+        for (int k = 0; k < segs; ++k) {
+            const double a0 = 6.283185307179586 * k / segs, a1 = 6.283185307179586 * (k + 1) / segs, am = (a0 + a1) / 2;
+            const Vec3 d0(std::cos(a0), 0, std::sin(a0)), d1(std::cos(a1), 0, std::sin(a1));
+            auto P = [&](const Vec3& d, double r, double y) { return st.centre + d * r + Vec3(0, y, 0); };
+            emitQuadUV(m, P(d0, r0, y0), P(d1, r0, y0), P(d1, r1, y1), P(d0, r1, y1), Vec3(std::cos(am) * nr, ny, std::sin(am) * nr),
+                       st.color, static_cast<float>(static_cast<double>(k) / segs), static_cast<float>(vlen),
+                       static_cast<float>(static_cast<double>(k + 1) / segs), static_cast<float>(vlen),
+                       static_cast<float>(static_cast<double>(k + 1) / segs), static_cast<float>(vlen + dl),
+                       static_cast<float>(static_cast<double>(k) / segs), static_cast<float>(vlen + dl));
+        }
+        vlen += dl;
+    }
     return m;
 }
 

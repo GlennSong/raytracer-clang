@@ -40,9 +40,14 @@ public:
     // A layer (sidewalk, shoulder, median) follows the PAVEMENT it borders: the nearest lane's deck. The
     // old rule — the nearest road SPINE's profile — gave a corner sidewalk beside a wide arterial the
     // height of the narrow climbing local next to it, a metre proud, kerb faces showing (Glenn's raised
-    // slab in the 4-way). Falls back to the nearest spine when no lane is within reach.
+    // slab in the 4-way). Falls back to the nearest spine when no lane is within reach. A lane whose
+    // footprint holds the point well inside its edge is at ANOTHER level (the layers were cut at their own
+    // level), so it and every lane at its height there are passed over: a deck overhead is not the pavement
+    // a sidewalk under it borders.
     double layerHeight(const std::vector<int>& roads, const Vec2& p) const;
-    double layerHeight(const std::vector<char>& wantEdge, const std::vector<int>& roads, const Vec2& p) const;
+    // `band`: the layer's width per edge (pavement.h layerBands). With it, the level is the one of the nearest lane
+    // whose road's band of THIS layer reaches p: a sidewalk 30 cm beside a freeway deck overhead is the street's.
+    double layerHeight(const std::vector<char>& wantEdge, const std::vector<int>& roads, const Vec2& p, const std::vector<double>* band = nullptr) const;
     std::vector<char> edgeFlags(const std::vector<int>& roads) const;
 
 private:
@@ -54,6 +59,7 @@ private:
     struct Boundary { std::vector<SegmentGrid> outers, holes; std::vector<Ring> outerRings, holeRings; std::vector<Box2> outerBoxes; };
     std::vector<Boundary> boundaries_;
     double blendTo(double z, const std::vector<int>& partners, const Vec2& p) const;
+    bool deepInside(int lane, const Vec2& p, double margin) const;   // inside the footprint, over `margin` from its edge
     // NEAR-LANE INDEX: every lane in the cells its footprint's box, grown by kIndexReach, overlaps -- so a
     // nearestLane within that radius tests the lanes of one cell, in lane order, not all of them
     static constexpr double kIndexReach = 60.0, kIndexCell = 64.0;

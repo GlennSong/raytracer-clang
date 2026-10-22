@@ -12,6 +12,7 @@
 #include "../engine/systems/teleport_system.h"
 #include "../engine/systems/building_interior_system.h"
 #include "../engine/systems/door_system.h"
+#include "../engine/systems/ladder_system.h"
 #include "../engine/systems/elevator_system.h"
 #include "../engine/systems/interaction_system.h"
 #include "../engine/systems/interact_broker_system.h"
@@ -31,6 +32,7 @@
 #include "../apps/citysim/city_walkers.h"
 #include "../apps/citysim/city_player_body.h"
 #include "../apps/citysim/city_player_transit.h"
+#include "../apps/citysim/train_system.h"
 #include "../apps/citysim/city_map_tool.h"
 #include "../apps/citysim/city_possess.h"
 #endif
@@ -202,6 +204,7 @@ ArenaState::ArenaState(Window& window, Renderer& renderer,
     addSystem<citysim::CityPlayerBodySystem>();
     // The passenger seat: `ride bus|taxi|any` / `ride off` (city_player_transit).
     addSystem<citysim::CityPlayerTransitSystem>(citySys, physSys, camSys.flyController());
+    addSystem<citysim::TrainSystem>(physSys, camSys.flyController(), &citySys);   // trains on the level's tracks, and the player aboard
     // The map: tool slot 3 (city_map_tool) -- the city SVG through the game UI
     // layer; drag pans, the wheel zooms, C centres on you.
     addSystem<citysim::CityMapToolSystem>(citySys, camSys.flyController());
@@ -225,6 +228,7 @@ ArenaState::ArenaState(Window& window, Renderer& renderer,
     addSystem<NatureColliderSystem>(physSys);   // trunk + rock colliders round the player (#55)
     addSystem<BuildingInteriorSystem>(&physSys);  // streamed interiors (ADR-0080)
     addSystem<DoorSystem>();  // visual double-acting leaves (ADR-0080)
+    addSystem<LadderSystem>(&physSys);  // roof ladders + vehicles' ladders: climb; fire escapes' colliders (engine/ladder.h)
     addSystem<ElevatorSystem>(&physSys);  // kinematic cabs + hoistway doors (skyscrapers v2 M5/M6)
     addSystem<InteractionSystem>();       // sit / lie on furniture (the furniture library, M1)
     // THE INTERACTION BROKER owns E: AFTER every provider (transit, the lifts, furniture) so a frame's offers are

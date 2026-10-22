@@ -325,7 +325,8 @@ void CityVehicleSystem::update(engine::FrameContext& ctx) {
     }
     world.add<Vehicle>(e, v);   // VehicleSystem builds the Jolt car + wheels + lamps
 
-    city_.simMutable().releaseDriver(bestAgent);
+    // the driver gets out onto the pavement and stands there (no longer vanishing with the car)
+    if (!city_.simMutable().ejectDriver(bestAgent)) city_.simMutable().releaseDriver(bestAgent);
     promoted_.push_back(PromotedCar{e, bestAgent});
 }
 

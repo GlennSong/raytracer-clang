@@ -417,14 +417,127 @@ TEST_CASE(dormant_agents_do_not_move_their_parked_cars) {
         sim.step(0.1, 0.05);
     }
 
-    int held = 0;
+    // A dormant owner still keeps its day (the dormant schedule events): one
+    // that left for work took its car. So a car either held its pose, or went
+    // WITH its owner -- driven (owner under way) or parked where the owner now
+    // rests. Never moved without them: that is the parked-heap bug.
+    int held = 0, went = 0;
     for (std::size_t k = 0; k < watch.size(); ++k) {
         const int v = watch[k];
-        if (sim.agents()[ownerOf[v]].tier != Agent::Tier::D) continue;  // woke: fair game
-        ++held;
-        CHECK((sim.vehicles()[v].pos - before[k]).length() < 1e-9);
+        const Agent& o = sim.agents()[ownerOf[v]];
+        if (o.tier != Agent::Tier::D) continue;  // woke: fair game
+        if ((sim.vehicles()[v].pos - before[k]).length() < 1e-9) { ++held; continue; }
+        ++went;
+        CHECK(o.moving || (sim.vehicles()[v].pos - o.pos).length() < 1e-6);
     }
-    std::printf("    [dormancy] %d cars of still-dormant owners held their pose\n",
-                held);
+    std::printf("    [dormancy] %d cars of still-dormant owners held their pose, "
+                "%d went with their owner (%ld schedule events)\n",
+                held, went, sim.dormantEvents());
     CHECK(held > 0);   // the invariant must actually have been exercised
+}
+
+// CONTINUITY (the 100k plan; Glenn: "I'd definitely want it so I could follow someone around the city ... I don't want
+// it so that if you turn around and turn back that person disappears"). Someone near you stays FAR on their exact
+// trip for rememberSeconds after you go -- not dormant, not rebuilt from a schedule -- and then may sleep; someone
+// you follow (pinAgent) stays in the full sim however far you go.
+TEST_CASE(near_agents_are_remembered_and_a_pinned_one_is_followed) {
+    const NavGraph nav = citytest::cityNav(1600, 120, 3);
+    CitySim sim;
+    sim.build(nav, 200, 100, 11);
+    sim.tieringEnabled = true;
+    sim.dormancyEnabled = true;
+    sim.dormantRadius = 600.0;
+    sim.dormantResumeRadius = 500.0;
+    sim.rememberSeconds = 30.0;
+    const Real dt = 1.0 / 60.0;
+    auto run = [&](Vec2 c, Real seconds) {
+        for (int i = 0; i < static_cast<int>(seconds / dt); ++i) { sim.setTierCenter(c); sim.step(dt, 0.05); }
+    };
+    run(Vec2(-700, -700), 10.0);
+    std::vector<int> near;
+    for (int i = 0; i < static_cast<int>(sim.agents().size()); ++i)
+        if (sim.agents()[static_cast<std::size_t>(i)].tier == Agent::Tier::K) near.push_back(i);
+    CHECK(near.size() >= 2);
+    const int followed = near.empty() ? -1 : near.front();
+    sim.pinAgent(followed, true);
+    auto dormantOf = [&](const std::vector<int>& ids) {
+        int n = 0;
+        for (int i : ids) n += sim.agents()[static_cast<std::size_t>(i)].tier == Agent::Tier::D ? 1 : 0;
+        return n;
+    };
+    // over to the far corner for 20 s: inside the 30 s memory, none of them sleeps, and the followed one stays in full
+    run(Vec2(700, 700), 20.0);
+    const int dormantInside = dormantOf(near);
+    const bool followedFull1 = sim.agents()[static_cast<std::size_t>(followed)].tier == Agent::Tier::K;
+    // 40 s more: the memory has run out -- the far ones may sleep now; the followed one is still in full
+    run(Vec2(700, 700), 40.0);
+    const int dormantAfter = dormantOf(near);
+    const bool followedFull2 = sim.agents()[static_cast<std::size_t>(followed)].tier == Agent::Tier::K;
+    std::printf("    [continuity] %zu near; dormant 20 s after leaving %d, 60 s after %d; followed agent in full %d/%d; %d dormant city-wide\n",
+                near.size(), dormantInside, dormantAfter, followedFull1 ? 1 : 0, followedFull2 ? 1 : 0, sim.dormantAgents());
+    CHECK(dormantInside == 0);
+    CHECK(dormantAfter > 0);
+    CHECK(followedFull1 && followedFull2);
+    sim.pinAgent(followed, false);
+    CHECK(sim.pinnedCount() == 0);
+}
+
+// A TRAVELLER WAKES WHERE THE CLOCK SAYS IT IS (the GPU crowd draws dormant travellers moving along their routes):
+// someone who went dormant mid-trip and is woken before that trip could be over resumes it, advanced by the time it
+// slept, instead of being rebuilt from its schedule.
+TEST_CASE(a_dormant_traveller_wakes_further_along_its_trip) {
+    const NavGraph nav = citytest::cityNav(1600, 120, 3);
+    CitySim sim;
+    sim.build(nav, 200, 100, 11);
+    sim.tieringEnabled = true;
+    sim.dormancyEnabled = true;
+    sim.dormantRadius = 600.0;
+    sim.dormantResumeRadius = 500.0;
+    sim.rememberSeconds = 0;   // (no memory: let them sleep at once)
+    sim.seedFromSchedule(8.5);   // the morning commute: plenty mid-trip
+    const Real dt = 1.0 / 60.0;
+    auto run = [&](Vec2 c, Real seconds) {
+        for (int i = 0; i < static_cast<int>(seconds / dt); ++i) { sim.setTierCenter(c); sim.step(dt, 0.05); }
+    };
+    run(Vec2(-700, -700), 5.0);    // the far corner goes dormant, some of it mid-trip
+    run(Vec2(700, 700), 3.0);      // back: they wake a few seconds later
+    std::printf("    [resume] %d wakes, %ld resumed their trip\n", sim.wakes(), sim.resumedTrips());
+    CHECK(sim.wakes() > 0);
+    CHECK(sim.resumedTrips() > 0);
+}
+
+// THROUGH TRAFFIC (the busy streets): a sleeper under way is moved along its trip as it goes -- it used to keep the
+// pose it set off from until it arrived, so a car driving past the player from across the island never woke.
+TEST_CASE(a_dormant_traveller_moves_on_and_wakes_where_it_has_got_to) {
+    const NavGraph nav = citytest::cityNav(1600, 120, 3);
+    CitySim sim;
+    sim.build(nav, 200, 100, 11);
+    sim.tieringEnabled = true;
+    sim.dormancyEnabled = true;
+    sim.dormantRadius = 600.0;
+    sim.dormantResumeRadius = 500.0;
+    sim.rememberSeconds = 0;
+    sim.seedFromSchedule(8.5);
+    const Real dt = 1.0 / 60.0;
+    auto run = [&](Vec2 c, Real seconds) {
+        for (int i = 0; i < static_cast<int>(seconds / dt); ++i) { sim.setTierCenter(c); sim.step(dt, 0.05); }
+    };
+    run(Vec2(-700, -700), 3.0);
+    std::vector<std::pair<int, Vec2>> movers;
+    for (std::size_t i = 0; i < sim.agents().size(); ++i) {
+        const Agent& a = sim.agents()[i];
+        if (a.tier == Agent::Tier::D && a.moving && !sim.isBus(static_cast<int>(i))) movers.push_back({static_cast<int>(i), a.pos});
+    }
+    run(Vec2(-700, -700), 20.0);
+    int moved = 0, still = 0;
+    for (const auto& [i, p0] : movers) {
+        const Agent& a = sim.agents()[static_cast<std::size_t>(i)];
+        if (a.tier != Agent::Tier::D || !a.moving) continue;   // woke, or got there
+        ((a.pos - p0).length() > 30.0 ? moved : still) += 1;
+    }
+    std::printf("    [through] %zu sleepers under way; 20 s on: %d moved on, %d where they were; %ld waypoints\n",
+                movers.size(), moved, still, sim.dormantWaypoints());
+    CHECK(!movers.empty());
+    CHECK(sim.dormantWaypoints() > 0);
+    CHECK(moved > still);
 }

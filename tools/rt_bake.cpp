@@ -4,6 +4,7 @@
 //   rt_bake --inspect <bundle-dir>
 //   rt_bake --prune [--yes] [--out <root>] [level.json ...]
 //   rt_bake --status <level.json> [--out <root>]
+//   rt_bake --audit <bundle-dir>      every baked mesh through the mesh audit (engine/mesh_audit.h)
 //
 // Runs every registered producer that applies to the level (the procedural city, then its lots), copying unchanged
 // producers' sections forward from earlier bundles, and writes <root>/<key>/level.bundle + manifest.json.
@@ -11,17 +12,22 @@
 // name their graphs relative to it, like the viewer.
 
 #include "engine/bundle/bake.h"
-#include "engine/procgen/city/citylots_producer.h"
 #include "engine/bundle/bundle_glb.h"
+#include "engine/bundle/codecs.h"
+#include "engine/mesh_audit.h"
+#include "engine/procgen/city/lot_cache.h"
 #ifdef RT_ROADS_LANES
 #include "engine/procgen/city/roads/lanes/city_producer.h"
 #include "engine/procgen/city/roads/lanes/lots_producer.h"
 #endif
 
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <map>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -36,6 +42,8 @@ int usage() {
     std::fprintf(stderr,
         "usage: rt_bake <level.json> [--out <root>] [--producer a,b] [--glb] [--glb-split cell] [--force] [--threads N] [--require]\n"
         "       rt_bake --inspect <bundle-dir>\n"
+        "       rt_bake --sections <bundle-dir>   every section: name, bytes, fnv (diff two bakes section by section)\n"
+        "       rt_bake --audit <bundle-dir>   every baked mesh through the mesh audit (inward, degenerate, non-finite)\n"
         "       rt_bake --prune [--yes] [--out <root>] [level.json ...]   list stale bundles under the root; --yes deletes them\n"
         "                    (stale = not the newest for its level path, and not the current bundle of a listed level)\n"
         "       rt_bake --status <level.json> [--out <root>]   is the level baked, is the bake current, its size (the editor's Level cache panel)\n"
@@ -81,16 +89,205 @@ int inspect(const std::string& dir) {
     std::printf("%zu cell mesh sections\n", cells);
     return 0;
 }
+// EVERY SECTION with its size and content hash, sorted by name: `diff` two of these and a refactor that should change
+// nothing is proved to (or the sections it did change are named).
+int sections(const std::string& dir) {
+    std::string err; std::unique_ptr<Bundle> b = Bundle::open(dir + "/" + kBundleFile, &err);
+    if (!b) { std::fprintf(stderr, "rt_bake: %s\n", err.c_str()); return 1; }
+    std::vector<std::string> names = b->sections("");
+    std::sort(names.begin(), names.end());
+    for (const std::string& n : names) {
+        const Bundle::View v = b->section(n);
+        std::printf("%s %zu %016llx\n", n.c_str(), static_cast<size_t>(v.size), static_cast<unsigned long long>(fnv1a(v.data, v.size)));
+    }
+    return 0;
+}
+// THE MESH AUDIT over a bake (Glenn, 2026-10-13: "this way we know that every polygon ends up being right"): every
+// section that is a mesh, through engine::auditMesh -- by material, then the sections with inward or degenerate
+// triangles, worst first, each with where its first one is (world coordinates).
+int audit(const std::string& dir) {
+    std::string err; std::unique_ptr<Bundle> b = Bundle::open(dir + "/" + kBundleFile, &err);
+    if (!b) { std::fprintf(stderr, "rt_bake: %s\n", err.c_str()); return 1; }
+    std::map<std::string, engine::MeshAudit> byMaterial;
+    std::vector<std::pair<std::string, engine::MeshAudit>> bad;
+    engine::MeshAudit total;
+    size_t meshes = 0;
+    for (const std::string& s : b->sections("")) {
+        const Bundle::View v = b->section(s);
+        PackedMesh p; BinReader r(v.data, v.size);
+        if (!getPackedMesh(r, p)) continue;
+        ++meshes;
+        const engine::MeshAudit a = engine::auditMesh(unpackMesh(p));
+        const size_t slash = s.rfind('/');
+        byMaterial[(slash == std::string::npos ? s : s.substr(slash + 1)) + (p.name.empty() ? "" : " (" + p.name + ")")].add(a);
+        total.add(a);
+        if (a.inward > 0 || a.degenerate > 0 || a.nonFinite > 0) bad.push_back({s, a});
+    }
+    // THE LOTS' BUILDINGS: their parts live in per-cell lot sections (lot_cache.h), not as plain mesh sections
+    std::map<int, engine::MeshAudit> byPart;
+    size_t lotParts = 0;
+    for (const std::string& s : b->sections("")) {
+        if (s.size() < 5 || s.compare(s.size() - 5, 5, "/meta") != 0) continue;
+        const std::string prefix = s.substr(0, s.size() - 4);
+        std::vector<engine::lotcache::LotCellPart> parts; std::string perr;
+        if (!engine::lotcache::listLotCellParts(*b, prefix, parts, &perr)) continue;
+        for (const engine::lotcache::LotCellPart& lp : parts) {
+            engine::RenderMesh m;
+            if (!engine::lotcache::readLotPart(*b, lp.section, m)) continue;
+            ++lotParts;
+            const engine::MeshAudit a = engine::auditMesh(m);
+            byPart[lp.part].add(a);
+            total.add(a);
+            if (a.inward > a.inwardSliver || a.nonFinite > 0) bad.push_back({lp.section, a});
+        }
+    }
+    for (const auto& [part, a] : byPart) engine::printMeshAudit(("lot part " + std::to_string(part)).c_str(), a);
+    std::printf("%zu mesh sections, %zu lot part sections\n", meshes, lotParts);
+    for (const auto& [m, a] : byMaterial) engine::printMeshAudit(m.c_str(), a);
+    std::sort(bad.begin(), bad.end(), [](const auto& x, const auto& y) { return x.second.inward + x.second.nonFinite > y.second.inward + y.second.nonFinite; });
+    for (size_t i = 0; i < bad.size() && i < 40; ++i) engine::printMeshAudit(bad[i].first.c_str(), bad[i].second);
+    engine::printMeshAudit("TOTAL", total);
+
+    // UNDERSIDES (engine::auditUndersides): the walkable surfaces that hang over the baked terrain, and the ones with
+    // nothing facing down under them. RT_AUDIT_PROBE="x,z" lists every face within 1.5 m of that point, by height.
+    std::vector<engine::RenderMesh> meshesHeld;
+    std::vector<std::string> names;
+    for (const std::string& s : b->sections("")) {
+        const Bundle::View v = b->section(s);
+        PackedMesh p; BinReader r(v.data, v.size);
+        if (!getPackedMesh(r, p)) continue;
+        meshesHeld.push_back(unpackMesh(p));
+        names.push_back(p.name);
+    }
+    std::vector<engine::NamedMeshRef> refs;
+    for (size_t i = 0; i < meshesHeld.size(); ++i) refs.push_back({names[i], &meshesHeld[i]});
+    // the ground: the baked terrain's up-facing triangles, by 4 m bucket
+    struct GTri { engine::Vec3 a, b, c; };
+    std::map<std::pair<int, int>, std::vector<GTri>> ground;
+    for (const engine::NamedMeshRef& nm : refs) {
+        if (nm.name != "terrain") continue;
+        const engine::RenderMesh& m = *nm.mesh;
+        for (size_t t = 0; t + 2 < m.indices.size(); t += 3) {
+            const GTri g{m.vertices[m.indices[t]].position, m.vertices[m.indices[t + 1]].position, m.vertices[m.indices[t + 2]].position};
+            const engine::Vec3 f = engine::cross(g.c - g.a, g.b - g.a);
+            if (f.lengthSquared() < 1e-10 || f.y / f.length() < 0.2) continue;
+            for (int i = static_cast<int>(std::floor(std::min({g.a.x, g.b.x, g.c.x}) / 4)); i <= static_cast<int>(std::floor(std::max({g.a.x, g.b.x, g.c.x}) / 4)); ++i)
+                for (int k = static_cast<int>(std::floor(std::min({g.a.z, g.b.z, g.c.z}) / 4)); k <= static_cast<int>(std::floor(std::max({g.a.z, g.b.z, g.c.z}) / 4)); ++k)
+                    ground[{i, k}].push_back(g);
+        }
+    }
+    auto groundAt = [&](double x, double z) {
+        auto it = ground.find({static_cast<int>(std::floor(x / 4)), static_cast<int>(std::floor(z / 4))});
+        if (it == ground.end()) return std::nan("");
+        for (const GTri& t : it->second) {
+            const double d = (t.b.z - t.c.z) * (t.a.x - t.c.x) + (t.c.x - t.b.x) * (t.a.z - t.c.z);
+            if (std::fabs(d) < 1e-12) continue;
+            const double l1 = ((t.b.z - t.c.z) * (x - t.c.x) + (t.c.x - t.b.x) * (z - t.c.z)) / d;
+            const double l2 = ((t.c.z - t.a.z) * (x - t.c.x) + (t.a.x - t.c.x) * (z - t.c.z)) / d;
+            if (l1 < -1e-6 || l2 < -1e-6 || 1 - l1 - l2 < -1e-6) continue;
+            return l1 * t.a.y + l2 * t.b.y + (1 - l1 - l2) * t.c.y;
+        }
+        return std::nan("");
+    };
+    // RT_AUDIT_PROBE="x,z[;x,z...]", RT_AUDIT_SECTION="x0,z0,x1,z1,step[;...]": several, ';' between
+    auto each = [](const char* env, const std::function<void(const char*)>& f) {
+        if (const char* v = std::getenv(env))
+            for (std::string all = v; !all.empty();) {
+                const size_t semi = all.find(';');
+                f(all.substr(0, semi).c_str());
+                all = semi == std::string::npos ? std::string() : all.substr(semi + 1);
+            }
+    };
+    each("RT_AUDIT_PROBE", [&](const char* p) {
+        double x, z;
+        if (std::sscanf(p, "%lf,%lf", &x, &z) == 2) { std::printf("    [column] at %.1f %.1f (ground %.2f)\n", x, z, groundAt(x, z)); engine::printColumn(refs, x, z, std::getenv("RT_AUDIT_PROBE_R") ? std::atof(std::getenv("RT_AUDIT_PROBE_R")) : 1.5); }
+    });
+    each("RT_AUDIT_RAY", [&](const char* p) {   // "ox,oy,oz,dx,dy,dz": every face along that ray
+        double v[6];
+        if (std::sscanf(p, "%lf,%lf,%lf,%lf,%lf,%lf", &v[0], &v[1], &v[2], &v[3], &v[4], &v[5]) == 6) {
+            std::printf("    [ray] from %.2f %.2f %.2f along %.2f %.2f %.2f\n", v[0], v[1], v[2], v[3], v[4], v[5]);
+            engine::printRay(refs, engine::Vec3(v[0], v[1], v[2]), engine::Vec3(v[3], v[4], v[5]));
+        }
+    });
+    each("RT_AUDIT_SECTION", [&](const char* p) {   // what stands over each point of a line
+        double sx0, sz0, sx1, sz1, sstep;
+        if (std::sscanf(p, "%lf,%lf,%lf,%lf,%lf", &sx0, &sz0, &sx1, &sz1, &sstep) == 5) engine::printSection(refs, sx0, sz0, sx1, sz1, sstep);
+    });
+    const engine::UndersideAudit u = engine::auditUndersides(
+        refs, [](const std::string& n) { return n == "asphalt" || n == "shoulder" || n == "sidewalk" || n == "median" || n == "ballast" || n == "platform" || n == "concrete"; },
+        groundAt);
+    engine::printUndersideAudit(u, 20);
+    // RT_UNDERSIDE_SAMPLES=N: N open tops in each of the five worst squares
+    if (const char* ns = std::getenv("RT_UNDERSIDE_SAMPLES")) {
+        const size_t n = std::strtoul(ns, nullptr, 10);
+        std::vector<std::pair<size_t, std::pair<int, int>>> w;
+        for (const auto& [k, c] : u.openBySquare) w.push_back({c, k});
+        std::sort(w.rbegin(), w.rend());
+        for (size_t i = 0; i < w.size() && i < 5; ++i) {
+            std::printf("    [undersides] samples around x %d, z %d\n", w[i].second.first * 100 + 50, w[i].second.second * 100 + 50);
+            size_t k = 0;
+            for (const auto& o : u.all)
+                if (k < n && static_cast<int>(std::floor(o.at.x / 100)) == w[i].second.first &&
+                    static_cast<int>(std::floor(o.at.z / 100)) == w[i].second.second) {
+                    std::printf("      %s top at %.2f %.2f %.2f, %.1f m over the ground; corners", o.mesh.c_str(), o.at.x, o.at.y, o.at.z, o.at.y - o.ground);
+                    for (const engine::Vec3& q : {o.a, o.b, o.c}) std::printf(" (%.2f %.2f %.2f | ground %.2f)", q.x, q.y, q.z, groundAt(q.x, q.z));
+                    std::printf("\n");
+                    ++k;
+                }
+        }
+    }
+    // SEE-THROUGH FROM AN ANGLE: from a person standing under each deck, looking up at 45 deg all round
+    const engine::SeeThroughAudit st = engine::auditSeeThrough(
+        refs, [](const std::string& n) { return n == "asphalt" || n == "shoulder" || n == "sidewalk" || n == "median" || n == "ballast" || n == "platform"; },
+        groundAt);
+    std::printf("    [see-through] %zu eyes under decks (%zu inside solids skipped), %zu of %zu looks see through\n", st.eyes,
+                st.insideSolid, st.through, st.looks);
+    for (const auto& [m, n] : st.byHitMesh) std::printf("    [see-through]   backs of %-12s %zu\n", m.c_str(), n);
+    {
+        std::vector<std::pair<size_t, std::pair<int, int>>> w;
+        for (const auto& [k, n] : st.bySquare) w.push_back({n, k});
+        std::sort(w.rbegin(), w.rend());
+        for (size_t i = 0; i < w.size() && i < 12; ++i)
+            std::printf("    [see-through]   %5zu around x %d, z %d\n", w[i].first, w[i].second.first * 100 + 50, w[i].second.second * 100 + 50);
+    }
+    // RT_SEE_THROUGH_SAMPLES=N: N looks per mesh seen from behind, and N in each of the worst squares
+    if (const char* ns = std::getenv("RT_SEE_THROUGH_SAMPLES")) {
+        const size_t n = std::strtoul(ns, nullptr, 10);
+        auto show = [](const engine::SeeThroughAudit::Look& l) {
+            std::printf("      eye %.3f %.3f %.3f (deck top %.1f) dir %.2f %.2f %.2f -> back of %s at %.2f %.2f %.2f (%.2f m), facing %.2f %.2f %.2f\n",
+                        l.eye.x, l.eye.y, l.eye.z, l.deckTop, l.dir.x, l.dir.y, l.dir.z, l.mesh.c_str(), l.hit.x, l.hit.y, l.hit.z,
+                        (l.hit - l.eye).length(), l.facing.x, l.facing.y, l.facing.z);
+        };
+        for (const auto& [m, cnt] : st.byHitMesh) {
+            std::printf("    [see-through] samples, backs of %s\n", m.c_str());
+            size_t k = 0, stride = std::max<size_t>(1, cnt / std::max<size_t>(n, 1));
+            for (size_t i = 0, j = 0; i < st.all.size() && k < n; ++i)
+                if (st.all[i].mesh == m && j++ % stride == 0) { show(st.all[i]); ++k; }
+        }
+        std::vector<std::pair<size_t, std::pair<int, int>>> w;
+        for (const auto& [k, c] : st.bySquare) w.push_back({c, k});
+        std::sort(w.rbegin(), w.rend());
+        for (size_t i = 0; i < w.size() && i < 3; ++i) {
+            std::printf("    [see-through] samples around x %d, z %d\n", w[i].second.first * 100 + 50, w[i].second.second * 100 + 50);
+            size_t k = 0;
+            for (const auto& l : st.all)
+                if (k < n && static_cast<int>(std::floor(l.eye.x / 100)) == w[i].second.first && static_cast<int>(std::floor(l.eye.z / 100)) == w[i].second.second) { show(l); ++k; }
+        }
+    }
+    const size_t open = u.open;
+    return total.inward - total.inwardSliver == 0 && total.nonFinite == 0 && open == 0 ? 0 : 2;
+}
 }  // namespace
 
 int main(int argc, char** argv) {
     if (argc < 2) return usage();
-    engine::registerCityLotsProducer();
 #ifdef RT_ROADS_LANES
     engine::roads::lanes::registerCityProducer();
     engine::roads::lanes::registerLotsProducer();
 #endif
     if (std::strcmp(argv[1], "--inspect") == 0) { if (argc < 3) return usage(); return inspect(argv[2]); }
+    if (std::strcmp(argv[1], "--sections") == 0) { if (argc < 3) return usage(); return sections(argv[2]); }
+    if (std::strcmp(argv[1], "--audit") == 0) { if (argc < 3) return usage(); return audit(argv[2]); }
     if (std::strcmp(argv[1], "--status") == 0) {
         if (argc < 3) return usage();
         std::string outRoot; for (int i = 3; i < argc; ++i) { if (std::string(argv[i]) == "--out" && i + 1 < argc) outRoot = argv[++i]; else return usage(); }
@@ -166,6 +363,10 @@ int main(int argc, char** argv) {
         uint64_t bytes = 0; std::error_code ec; bytes = std::filesystem::file_size(rep.dir + "/" + kBundleFile, ec);
         std::string built; for (const std::string& n : rep.built) built += (built.empty() ? "" : ", ") + n; std::string reused; for (const std::string& n : rep.reused) reused += (reused.empty() ? "" : ", ") + n;
         std::printf("wrote %s (%s, %.1f s; built %s%s%s)\n", rep.dir.c_str(), humanBytes(bytes).c_str(), rep.seconds, built.empty() ? "nothing" : built.c_str(), reused.empty() ? "" : "; reused ", reused.c_str());
+        if (!rep.cloneFrom.empty())
+            std::printf("  shared %s of it with %s (%.0f%%; new on disk %s)\n", humanBytes(rep.bytesCloned).c_str(),
+                        rep.cloneFrom.front().c_str(), rep.bytes ? 100.0 * rep.bytesCloned / rep.bytes : 0.0,
+                        humanBytes(rep.bytes > rep.bytesCloned ? rep.bytes - rep.bytesCloned : 0).c_str());
     }
     if (glb || split) {
         std::string err; std::unique_ptr<Bundle> b = Bundle::open(rep.dir + "/" + kBundleFile, &err);

@@ -677,7 +677,7 @@ RenderMesh Hydrology::quayMesh(const std::function<bool(double, double)>& where,
                 v.color = Vec3(1, 1, 1);
                 m.vertices.push_back(v);
             }
-            m.indices.insert(m.indices.end(), {q0, q0 + 1, q0 + 2, q0, q0 + 2, q0 + 3});
+            MeshBuilder::quadFacing(m, q0, q0 + 1, q0 + 2, q0 + 3, nrm);
         };
         // a horizontal quad facing up (or down), as its two triangles: at a sharp inside bend the two samples'
         // offsets cross and a triangle would fold over -- that one is left out rather than drawn inside out
@@ -687,13 +687,13 @@ RenderMesh Hydrology::quayMesh(const std::function<bool(double, double)>& where,
                 const Vec3 w = cross(P[tri[1]] - P[tri[0]], P[tri[2]] - P[tri[0]]);
                 if (w.y <= 0.0) continue;
                 const uint32_t q0 = static_cast<uint32_t>(m.vertices.size());
-                const int order[3] = {tri[0], up ? tri[1] : tri[2], up ? tri[2] : tri[1]};
-                for (int c : order) {
-                    Vertex v(P[c], Vec3(0, up ? 1.0 : -1.0, 0), tt, static_cast<float>(u), 0.0f);
+                const Vec3 nrm(0, up ? 1.0 : -1.0, 0);
+                for (int c : tri) {
+                    Vertex v(P[c], nrm, tt, static_cast<float>(u), 0.0f);
                     v.color = Vec3(1, 1, 1);
                     m.vertices.push_back(v);
                 }
-                m.indices.insert(m.indices.end(), {q0, q0 + 1, q0 + 2});
+                MeshBuilder::triFacing(m, q0, q0 + 1, q0 + 2, nrm);
             }
         };
         for (std::size_t i = 0; i < n; ++i) {

@@ -16,6 +16,7 @@
 #include "engine/bundle/codecs.h"
 #include "engine/procgen/city/roads/lanes/lanes.h"
 #include "engine/procgen/city/roads/lanes/road_graph_spec.h"
+#include "engine/procgen/city/rail_track.h"
 
 #include <string>
 #include <vector>
@@ -26,6 +27,7 @@ namespace roads::lanes {
 constexpr int kCityFormatVersion = 1;
 constexpr const char* kCityProducerName = "city";
 extern const char* const kLanesBuildTag;
+extern const char* const kRailBuildTag;   // keyed only by graphs that use a track class
 
 void registerCityProducer();   // idempotent
 
@@ -73,6 +75,7 @@ struct CityProducts {
     // falls back to the terrain beside the asphalt (metro_lanes: cars 0.53 m under the deck).
     RoadDeckField deck;
     CurbBandAudit bands;
+    std::vector<RailTrack> rails;    // every track lane, railhead line + platforms (rail_track.h)
     double cell = 250;
     std::vector<CityCellMesh> cells; // one per (render cell, material), material name inside
     nlohmann::json report;           // summary, invariants, timings, counts

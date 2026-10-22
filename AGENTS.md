@@ -332,6 +332,26 @@ and its licence. That includes libraries, fonts, data files, CC0 assets, and rec
 datasets used only to measure against. CC0 is no exception: it doesn't require attribution, but we
 record it anyway.
 
+## Bakes (Agent Rule)
+
+A level's city is baked once into `cache/levels/` and reused while its key matches. The key does NOT
+see code changes — only tags, the lot format, the level's blocks and a few listed files — so a stale
+bake looks exactly like a current one. Full guide: [docs/bakes.md](docs/bakes.md).
+
+- **Changed what the lot / city pass outputs** (sculpting, recipes, lot selection, grading, anything in
+  a `LotBuilding` or a part mesh)? Bump `kLotsBuildTag` AND `kCityLotsBuildTag`, noting why in the tag's
+  comment. Road output: `kLanesBuildTag`.
+- **Changed the lot record's fields?** Bump `kLotsFormatVersion` / `kLotsVersion` and add the field to
+  `tests/test_lot_cache.cpp`.
+- **The lots stage reads a new file?** Add it to the producer's `identity()`, or edits to it never rebake.
+- **No bump** for interiors, furniture placement, the citysim or rendering: they are computed at load.
+- **Iterate on looks with `RT_NOCACHE=1`**; bump the tag once, when the change is settled — every bump
+  rebakes every level in the suite.
+- **Before the level suite after a bump**, pre-bake island_8 and island_8_nature with `rt_bake` (inside
+  the test they run out of memory).
+- **"My change doesn't show"**: check with `RT_NOCACHE=1`, then `rt_bake <level> --force`, then find the
+  missing bump. The recovery ladder is in docs/bakes.md ("When it all goes butts up").
+
 ## Branches and Worktrees (Agent Rule)
 
 **Glenn, 2026-09-20: "If we close a branch, even if we haven't deleted it yet, it should

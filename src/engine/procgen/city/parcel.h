@@ -32,6 +32,13 @@ struct Lot {
     // block, each as its outward normal and offset dot(normal, point) -- the lot pass may build up to them and
     // blank the wall there (BuildingParams::partyWalls). Filled by the lot pass in dense districts only.
     bool  bigBox = false;   // a whole-block BIG-BOX store site (the lot pass picks these; Massing::BigBox)
+    bool  mall = false;     // ...and the box is an INDOOR MALL (architectMall)
+    bool  mallWings = false;   // ...the AMERICAN mall: wings off a court, two storeys (architectMallWings, bigBox 6)
+    uint8_t campus = 0;     // a UNIVERSITY CAMPUS lot: 1 teaching hall, 2 library, 3 residence hall, 4 the quad,
+                            // 5 the sports field (a block of its own near the campus), 6 the dorm block's courtyard
+    bool  depot = false;    // a BUS DEPOT's yard: bus bays, a maintenance shed, a fence (sculptBusDepot)
+    uint8_t paseo = 0;      // an OPEN-AIR MALL lot (~/.claude/plans/nightlife-and-malls.md stage 3): 1 a shop building
+                            // fronting the paseo, 2 the paseo itself (the car-free walk between the rows)
     uint8_t partyCount = 0;
     Vec2  partyN[2] = {Vec2(0, 0), Vec2(0, 0)};
     Real  partyAt[2] = {0, 0};

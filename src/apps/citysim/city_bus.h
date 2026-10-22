@@ -25,6 +25,7 @@
 #include "../../engine/ai/nav_graph.h"   // routes FOLLOW STREETS, so the graph
 #include "../../engine/procgen/city/polygon.h"   // engine::Vec2, engine::Real
 
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <unordered_map>
@@ -71,6 +72,10 @@ struct BusRoute {
     int network = -1;
     bool regional = false;
     engine::Real pace = 0;   // 0 = a city bus's (kBusPace)
+    // BOTH WAYS (Glenn: "Buses should probably go in both directions"): every loop has a twin driving it the
+    // other way round, its stops in reverse, its legs re-found by car (one-way streets differ). The twin's route
+    // index; -1 for none.
+    int twin = -1;
     bool valid() const { return stops.size() >= 2; }
 };
 
@@ -106,14 +111,42 @@ public:
     // Deterministic in (graph, counts, seed): hub choice is farthest-point with
     // ties on the lower node index, and the legs come from the deterministic
     // A* the agents themselves use (ADR-0002).
+    // `anchors`: places a loop must stop at -- the island's stations, where each one's footway leaves the street
+    // (Glenn, 2026-10-10: "each station a bus line"). Each becomes a corner of one loop in its street network.
     void build(const engine::NavGraph& nav, int routeCount, int stopsPerRoute,
-               uint32_t seed);
+               uint32_t seed, const std::vector<engine::Vec2>& anchors = {});
+    // How many of the anchors a built route stops at (of how many there were).
+    int anchorsServed() const { return anchorsServed_; }
+    int anchorCount() const { return anchorCount_; }
+    // Why each anchor is or isn't served: "" served, else a reason (no street near it, a network too small for buses,
+    // not a stop on any route).
+    const std::vector<const char*>& anchorMisses() const { return anchorMisses_; }
 
     // The street network a nav node belongs to (junctions joined by walkable
     // streets; the city is one, each town out along the freeway another), or
     // -1. Two nodes in different networks can be joined only by a vehicle.
     int networkOf(int node) const {
         return node >= 0 && node < static_cast<int>(comp_.size()) ? comp_[static_cast<std::size_t>(node)] : -1;
+    }
+    // Any stop within maxWalk of p. Without one at either end planTrip has nothing to plan (an exact pre-check).
+    bool servesNear(engine::Vec2 p, engine::Real maxWalk) const {
+        for (const BusRoute& r : routes_)
+            for (const BusStop& st : r.stops)
+                if (std::sqrt((st.pos.x - p.x) * (st.pos.x - p.x) + (st.pos.y - p.y) * (st.pos.y - p.y)) <= maxWalk)
+                    return true;   // (planTrip's own test, to the bit)
+        return false;
+    }
+    // A route's LINE: a twin is the same line the other way round, so it wears its loop's colour and number
+    // (the map, the stop flags, the HUD).
+    int lineOf(int r) const {
+        if (r < 0 || r >= routeCount()) return r;
+        const int t = routes_[static_cast<std::size_t>(r)].twin;
+        return t >= 0 && t < r ? t : r;
+    }
+    // Routes driven both ways round (each loop and its twin).
+    bool twoWay() const {
+        for (const BusRoute& r : routes_) if (r.twin >= 0) return true;
+        return false;
     }
     bool hasRegional() const {
         for (const BusRoute& r : routes_) if (r.regional) return true;
@@ -163,7 +196,11 @@ public:
     // do at both ends. Returns an invalid trip when no route helps — which is
     // the common case for a short hop, and the caller should simply walk.
     // `maxWalk` bounds how far a rider will walk to or from a stop.
-    BusTrip planTrip(engine::Vec2 from, engine::Vec2 to, engine::Real maxWalk) const;
+    // count = false: leave planStats() alone (and so safe to call from several threads at once -- the population's
+    // decisions at load ask it in parallel). walkable = false: the two ends are in different street networks, so
+    // there is no walk to beat and any trip is taken.
+    BusTrip planTrip(engine::Vec2 from, engine::Vec2 to, engine::Real maxWalk, bool count = true,
+                     bool walkable = true) const;
 
     // WHY a trip was refused, counted. Ridership was zero in the shipped city
     // while the mechanism provably worked in a test one, and the difference has
@@ -194,6 +231,9 @@ public:
 
 private:
     void buildRegional(const engine::NavGraph& nav);
+    int anchorsServed_ = 0, anchorCount_ = 0;
+    std::vector<const char*> anchorMisses_;
+    BusRoute reverseOf(const BusRoute& f, const engine::NavGraph& nav) const;
     std::vector<int> comp_;   // street network per nav node
     std::vector<BusRoute> routes_;
     std::vector<engine::Vec2> hubs_;
@@ -205,6 +245,10 @@ private:
         engine::Real walk;   // metres between the two stops
     };
     std::vector<Transfer> transfers_;
+    // planTrip's index: the transfers out of each (route, stop), in transfers_ order; stopBase_[r] + stop
+    std::vector<int> stopBase_;
+    std::vector<std::vector<int>> transfersFrom_;
+    void indexTransfers();
 };
 
 }  // namespace citysim

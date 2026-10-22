@@ -94,7 +94,7 @@ void describeProperties(Velocity& vel, PropertyVisitor& v) {
 void describeProperties(RoadEntity& r, PropertyVisitor& v) {
     // The editable look of a road. "Width" is the widen control; the node
     // positions are dragged in the viewport, not typed here. An edit to any of
-    // these fires the editor's regen hook (buildRoadNetMesh -> re-upload).
+    // these fires the editor's regen hook (graph + saved recipe; the geometry follows on the next bake, #103).
     //
     // Widths are RESOLVED on the graph now (unification rule 1), so "edges at
     // the default follow the default" is enforced at the EDIT, not by a read

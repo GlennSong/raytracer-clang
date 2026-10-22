@@ -1,6 +1,8 @@
 #include "engine/procgen/city/roads/lanes/lanes.h"
 #include "engine/procgen/city/roads/lanes/polyline_ops.h"
+#include "engine/procgen/city/roads/lanes/road_design.h"
 #include "engine/procgen/city/roads/lanes/vertical_profile.h"
+#include "engine/procgen/city/rail_track.h"   // kPlatformGap: piers keep off the platforms
 
 #include <algorithm>
 #include <chrono>
@@ -18,6 +20,32 @@ namespace {
 double secondsSince(const std::chrono::steady_clock::time_point& t) { return std::chrono::duration<double>(std::chrono::steady_clock::now() - t).count(); }
 }
 
+nlohmann::json designedGraph(const nlohmann::json& spec, const std::string& baseDir, DesignReport* report) {
+    RoadLabGraph g = RoadLabGraph::fromJson(spec, baseDir);
+    const HeightField terrain = makeTerrain(g.terrain, g.bounds());
+    (void)expand(g);   // the ramps compose from their anchors (their spines and gores)
+    const DesignReport dr = designRoads(g, terrain);
+    if (report) *report = dr;
+    nlohmann::json out = spec;
+    for (nlohmann::json& ej : out["edges"]) {
+        const EdgeSpec* e = g.find(ej.value("id", std::string()));
+        if (!e || e->z.size() < 2) continue;
+        // one height a sample of the resampled spine (rules.step apart), as the stage left it -- built again, exactly these
+        ej["profile"] = {{"step", g.rules.step}, {"z", e->z}};
+    }
+    // a planned bridge that left its upper road to the design: named now, as designed (the higher there)
+    if (out.contains("crossings"))
+        for (nlohmann::json& c : out["crossings"]) {
+            if (c.value("kind", std::string()) != "bridge" || !c.value("over", std::string()).empty()) continue;
+            const EdgeSpec* a = g.find(c.value("a", std::string()));
+            const EdgeSpec* b = g.find(c.value("b", std::string()));
+            if (!a || !b || a->z.size() < 2 || b->z.size() < 2) continue;
+            const Vec2 p(c["at"][0].get<double>(), c["at"][1].get<double>());
+            c["over"] = projectZ(*a, p) >= projectZ(*b, p) ? a->id : b->id;
+        }
+    return out;
+}
+
 std::unique_ptr<Result> build(RoadLabGraph graph, const BuildOptions& opts) {
     // stage weights = measured metro seconds (lanes 0.1, profiles 13.5, footprints 5.4, surfaces 14.7, terrain 2.8)
     constexpr double kW[5] = {0.01, 0.36, 0.15, 0.40, 0.08}; double cum = 0;
@@ -32,151 +60,14 @@ std::unique_ptr<Result> build(RoadLabGraph graph, const BuildOptions& opts) {
     // 1. lanes (ramps compose from anchors)
     stage(0, "lanes", 0.0); r.lanes = expand(g); r.timings["lanes"] = secondsSince(t1); t1 = std::chrono::steady_clock::now(); stage(1, "profiles", 0.0);
     // 2. profiles: through roads, agree at nodes and crossings (iterated), then ramps, then connector ends
-    // Which ends are open: nothing else ends there, and no other road's paved band
-    // covers them. A road that meets the world only at its middle has to come down to
-    // the ground at both tips.
-    for (EdgeSpec& e : g.edges) {
-        if (e.xy.size() < 2) continue;
-        for (int k = 0; k < 2; ++k) {
-            const Vec2 q = k ? e.xy.back() : e.xy.front();
-            bool met = false;
-            for (const EdgeSpec& o : g.edges) {
-                if (&o == &e || o.xy.size() < 2) continue;
-                if (std::min(distance(o.xy.front(), q), distance(o.xy.back(), q)) <= R.endpointTol) { met = true; break; }
-                if (project(o.xy, o.s, q).distance <= g.hw(o) + g.hw(e)) { met = true; break; }
-            }
-            e.openEnd[k] = !met;
-        }
-    }
-    for (EdgeSpec& e : g.edges) if (!e.isRamp()) throughProfile(e, terrain, g.cls(e));
-    for (EdgeSpec& e : g.edges) if (e.isRamp()) rampProfile(g, e, terrain);   // ramps need heights to take part in crossing consistency
-    // where the roads meet, found once (only the heights move from here on)
-    const std::vector<CrossingMeet> meets = crossingMeets(g);
-    auto agree = [&](bool first) {
-        // Iterate to the BEST state, not the last one. Each pass only partially
-        // resolves (a correction is smoothed over a radius), so a city whose
-        // crossings all have to agree needs many more rounds than a lab scene:
-        // metro_hills reads 35 cm at 12 iterations, 19 at 30, 5.5 at 60, 0.5 at 120.
-        // But some inputs DIVERGE — a freeway traced off a city's outline with 9 m
-        // hairpins cannot be satisfied — and there a longer run simply travels
-        // further from the answer: living_city went 410 cm at 12 and 710 at 120.
-        // So: keep the profiles from the best round, stop once it stops improving,
-        // and restore them. Convergent scenes are unaffected; divergent ones end at
-        // their best instead of their worst.
-        double best = 1e300;
-        int stalls = 0;
-        std::vector<std::vector<double>> keep;
-        for (int it = 0; it < 120; ++it) {
-            double mm = nodeConsistency(g, R.endpointTol, R.bridgeH), xm = crossingConsistency(g, meets, R.bridgeH, R.rampLevelDz);
-            for (EdgeSpec& e : g.edges) if (!e.isRamp()) applyFloors(e, g.cls(e));   // lifts survive the blends
-            for (EdgeSpec& e : g.edges) if (e.isRamp()) rampProfile(g, e, terrain);   // hosts moved
-            const double cur = std::max(mm, xm);
-            if (first && it == 0) r.nodeMismatchBefore = cur;
-            if (cur < best - 1e-4) {
-                best = cur; stalls = 0;
-                keep.clear(); keep.reserve(g.edges.size());
-                for (const EdgeSpec& e : g.edges) keep.push_back(e.z);
-            } else if (++stalls >= 4) {
-                break;
-            }
-            if (cur < 0.005) break;
-        }
-        if (stalls >= 4 && keep.size() == g.edges.size()) {
-            for (std::size_t i = 0; i < g.edges.size(); ++i) g.edges[i].z = keep[i];
-            for (EdgeSpec& e : g.edges) if (e.isRamp()) rampProfile(g, e, terrain);
-        }
-    };
-    agree(true);
-    // Grade-separated crossings clear their structure (Glenn: "roads that go underneath collide with the
-    // bottom of the freeway's undercarriage"): wherever two roads cross with the upper one already a bridge
-    // (dz >= bridge_h), the upper deck's TOP must be at least under_clearance + its slab + the girders above
-    // the lower road's surface. Short crossings get a floor tent on the upper road and its profile is
-    // re-run — through roads via their tents, ramps by lifting under the same design-grade cone.
-    {
-        std::vector<EdgeSpec*> paved; for (EdgeSpec& e : g.edges) if (e.z.size() > 1 && e.laneCount() > 0) paved.push_back(&e);
-        // Crossings including a road END lying on the other road's interior: the ring's freeway arcs meet at
-        // a node straight above the arterial, and the exact-bounds segment test finds the arc that starts
-        // there but misses the one that ends a hair short of the line, leaving that side of the node low.
-        auto crossingsInclusive = [&](const EdgeSpec& a, const EdgeSpec& b) {
-            std::vector<Vec2> out = crossings(a.xy, b.xy);
-            auto addEnd = [&](const EdgeSpec& e, const EdgeSpec& o) {
-                // a street ending on a street is a junction (levelled by crossingConsistency), never an
-                // overpass to lift -- ends count here only where a freeway or a ramp is one of the two
-                if (!e.isRamp() && !o.isRamp() && e.cls != "freeway" && o.cls != "freeway") return;
-                for (const Vec2& q : {e.xy.front(), e.xy.back()}) {
-                    // a road ending anywhere under the other's paved band counts (streets the importer clipped at a
-                    // frontage road's edge end 5 m from its centreline); at-grade tees are excluded by the bridge test
-                    const Projection pr = project(o.xy, o.s, q); if (pr.distance > g.hw(o) + g.hw(e)) continue;
-                    if (std::min(distance(o.xy.front(), q), distance(o.xy.back(), q)) <= R.endpointTol) continue;   // a shared node: a junction
-                    bool dup = false; for (const Vec2& c : out) if (distance(c, q) < 1.0) dup = true; if (!dup) out.push_back(q);
-                }
-            };
-            addEnd(a, b); addEnd(b, a); return out;
-        };
-        int lifted = 0;
-        for (int pass = 0; pass < 3; ++pass) {
-            bool any = false;
-            for (size_t i = 0; i < paved.size(); ++i) for (size_t j = i + 1; j < paved.size(); ++j) {
-                EdgeSpec& a = *paved[i]; EdgeSpec& b = *paved[j];
-                if (a.isRamp() && (a.from.edge == b.id || a.to.edge == b.id)) continue;   // a ramp and its own host: the gore, not a crossing
-                if (b.isRamp() && (b.from.edge == a.id || b.to.edge == a.id)) continue;
-                const std::vector<Vec2> meetsAB = crossingsInclusive(a, b);
-                const std::size_t crossedAB = crossings(a.xy, b.xy).size();   // crossingsInclusive lists the true crossings first
-                for (std::size_t mi = 0; mi < meetsAB.size(); ++mi) {
-                    const Vec2& p = meetsAB[mi];
-                    const bool sep = mi < crossedAB && R.freewaySeparates && mustSeparate(a, b);   // a freeway crossing is structure at any height
-                    const double za = projectZ(a, p), zb = projectZ(b, p); if (!sep && std::fabs(za - zb) < ((a.isRamp() || b.isRamp()) ? R.rampLevelDz : R.bridgeH)) continue;   // below: a level crossing the street meets
-                    // which goes over: the higher; for a forced separation, the one the scene asked to (a floor
-                    // point over the crossing), else the freeway
-                    bool aHi = za > zb;
-                    if (sep) {
-                        auto floored = [&](const EdgeSpec& e) { for (const auto& fp : e.floorPts) if (std::hypot(fp[0] - p.x, fp[1] - p.y) < 40.0) return true; return false; };
-                        const bool fa = floored(a), fb = floored(b);
-                        if (fa != fb) aHi = fa;
-                        else if (std::fabs(za - zb) < R.bridgeH && (a.cls == "freeway") != (b.cls == "freeway")) aHi = a.cls == "freeway";
-                    }
-                    EdgeSpec& hi = aHi ? a : b; EdgeSpec& lo = aHi ? b : a;
-                    // The hold must span the whole crossing, not the centreline point: a tent peaks at its station
-                    // and falls away at design grade, so the deck over the far kerb of a 20 m road sat half a
-                    // metre low. The floor point holds flat over a half-span covering the lower road's paved band
-                    // plus the upper road's own width, measured along the upper road (over the crossing sine).
-                    auto pavedW = [&](const EdgeSpec& e) { const RoadClassSpec& c = g.cls(e); return e.laneCount() * e.lanes.w + e.lanes.gap + 2.0 * c.shoulder; };
-                    const double sHi = project(hi.xy, hi.s, p).station, sLo = project(lo.xy, lo.s, p).station;
-                    auto tangent = [](const EdgeSpec& e, double st) { const Vec2 q0 = pointAt(e.xy, e.s, std::max(0.0, st - 0.5)), q1 = pointAt(e.xy, e.s, std::min(e.s.back(), st + 0.5)); const Vec2 d = q1 - q0; const double L = std::hypot(d.x, d.y); return L > 1e-9 ? d / L : Vec2(1, 0); };
-                    const Vec2 th = tangent(hi, sHi), tl = tangent(lo, sLo); const double sinT = std::max(0.25, std::fabs(cross(th, tl)));
-                    const double span = (0.5 * pavedW(lo) + 0.5 * pavedW(hi) + 1.0) / sinT;
-                    // clear the lower road's HIGHEST point under the upper deck, not its height at the centreline:
-                    // the pass climbs 12% under the island freeway, a metre across its 20 m carriageway
-                    const double spanLo = (0.5 * pavedW(hi) + 1.0) / sinT;
-                    double zLo = aHi ? zb : za;
-                    for (int k = -4; k <= 4; ++k) zLo = std::max(zLo, interp(lo.s, lo.z, std::clamp(sLo + spanLo * k / 4.0, 0.0, lo.s.back())));
-                    const double need = zLo + R.underClearance + g.cls(hi).thick + R.structureDepth;
-                    const double sts[3] = {std::max(0.0, sHi - span), sHi, std::min(hi.s.back(), sHi + span)};
-                    bool low = false; for (double st : sts) if (interp(hi.s, hi.z, st) < need - 0.02) low = true;
-                    if (!low) continue;
-                    static const bool trace = std::getenv("LANELAB_TRACE_CLEARANCE") != nullptr;
-                    if (trace) std::fprintf(stderr, "clearance: %s over %s at (%.0f, %.0f) need %.2f, z before %.2f %.2f %.2f (span %.1f)", hi.id.c_str(), lo.id.c_str(), p.x, p.y, need, interp(hi.s, hi.z, sts[0]), interp(hi.s, hi.z, sts[1]), interp(hi.s, hi.z, sts[2]), span);
-                    { bool have = false; for (auto& fp : hi.floorPts) if (std::hypot(fp[0] - p.x, fp[1] - p.y) < 0.5) { fp[2] = std::max(fp[2], need); fp[3] = std::max(fp[3], span); have = true; } if (!have) hi.floorPts.push_back({p.x, p.y, need, span}); }
-                    any = true; ++lifted;
-                    if (hi.isRamp()) rampProfile(g, hi, terrain); else throughProfile(hi, terrain, g.cls(hi));
-                    if (trace) std::fprintf(stderr, " -> after %.2f %.2f %.2f\n", interp(hi.s, hi.z, sts[0]), interp(hi.s, hi.z, sts[1]), interp(hi.s, hi.z, sts[2]));
-                }
-            }
-            if (!any) break;
-            agree(false);   // lifted decks must still agree at their nodes and level crossings
-        }
-        if (lifted) std::fprintf(stderr, "lanelab: %d grade-separated crossings lifted to clear their structure\n", lifted);
-    }
-    { NodeMismatchWhere w; const double nm = nodeMismatch(g, R.endpointTol, R.bridgeH, &w), xm = crossingConsistency(g, meets, R.bridgeH, R.rampLevelDz); for (EdgeSpec& e : g.edges) if (!e.isRamp()) applyFloors(e, g.cls(e)); r.nodeMismatchAfter = std::max(nm, xm);
-      if (nm >= xm && nm > 0.02) r.nodeMismatchWhere = w.a + (w.atEnd ? " meets " : " ends on ") + w.b + " at (" + std::to_string(static_cast<int>(w.at.x)) + ", " + std::to_string(static_cast<int>(w.at.y)) + ")"; }
-    for (EdgeSpec& e : g.edges) if (e.isRamp()) rampProfile(g, e, terrain);
+    { const DesignReport dr = designRoads(g, terrain); r.nodeMismatchBefore = dr.nodeMismatchBefore; r.nodeMismatchAfter = dr.nodeMismatchAfter; r.nodeMismatchWhere = dr.nodeMismatchWhere; r.undeclaredCrossings = dr.undeclared; }
     for (Lane& l : r.lanes.lanes) if (l.isConnector()) {
         l.z0 = laneHeightAt(r.lanes.lanes[static_cast<size_t>(l.srcLane)], g, l.xy.front()); l.z1 = laneHeightAt(r.lanes.lanes[static_cast<size_t>(l.dstLane)], g, l.xy.back());
     }
-    // LANELAB_DUMP_EDGE=<id>: an edge's solved profile against its ground, every 50 m (why a road floats)
+    // LANELAB_DUMP_EDGE=<id>[,<id>...]: an edge's solved profile against its ground, every 50 m (why a road floats)
     if (const char* dumpId = std::getenv("LANELAB_DUMP_EDGE"))
         for (const EdgeSpec& e : g.edges)
-            if (e.id == dumpId && e.s.size() == e.z.size() && e.t.size() == e.z.size()) {
+            if (("," + std::string(dumpId) + ",").find("," + e.id + ",") != std::string::npos && e.s.size() == e.z.size() && e.t.size() == e.z.size()) {   // (a comma list)
                 std::fprintf(stderr, "[dump] %s: station, deck z, ground, floors %zu\n", e.id.c_str(), e.floorPts.size());
                 double next = 0;
                 const char* stepEnv = std::getenv("LANELAB_DUMP_STEP");   // metres between rows (default 50)
@@ -208,6 +99,14 @@ std::unique_ptr<Result> build(RoadLabGraph graph, const BuildOptions& opts) {
             constexpr double kReach = 1.3 + 1.5;
             if (p.x < b.minX - kReach || p.x > b.maxX + kReach || p.y < b.minY - kReach || p.y > b.maxY + kReach) continue;
             for (double dx : {-kReach, 0.0, kReach}) for (double dy : {-kReach, 0.0, kReach}) if (contains(fp, p + Vec2(dx, dy))) return true;
+        }
+        // ...nor on a station's platforms: the track's footprint stops at its rails, the platforms stand beyond it
+        for (const EdgeSpec& t : g.edges) {
+            if (&t == &own || t.platforms.empty() || t.xy.size() < 2) continue;
+            const Projection pr = project(t.xy, t.s, p);
+            const double trackOff = g.hw(t) - t.lanes.w / 2;
+            for (const PlatformSpec& P : t.platforms)
+                if (pr.station > P.s0 - 3.0 && pr.station < P.s1 + 3.0 && pr.distance < trackOff + kPlatformGap + P.w + 2.8) return true;
         }
         return false;
     };
@@ -295,13 +194,13 @@ std::vector<SurfaceStep> surfaceSteps(const Result& r, double kerb) {
         }
     }
     // Layers: a sidewalk, shoulder or median edge must sit within kerb height of the lane deck beside it.
-    struct LayerSpec { const PolySet* set; const char* name; double lift; bool anyRoad; };
-    const LayerSpec layers[] = {{&r.pavement.sidewalk, "sidewalk", 0.12, false}, {&r.pavement.shoulder, "shoulder", 0.0, false}, {&r.pavement.median, "median", 0.10, true}};
+    struct LayerSpec { const PolySet* set; const char* name; double lift; bool anyRoad; LayerKind kind; };
+    const LayerSpec layers[] = {{&r.pavement.sidewalk, "sidewalk", 0.12, false, kSidewalkLayer}, {&r.pavement.shoulder, "shoulder", 0.0, false, kShoulderLayer}, {&r.pavement.median, "median", 0.10, true, kMedianLayer}};
     for (const LayerSpec& ls : layers) {
         const std::vector<int> roads = layerRoads(g, ls.anyRoad); if (roads.empty()) continue;
-        const std::vector<char> want = r.heights->edgeFlags(roads);
+        const std::vector<char> want = r.heights->edgeFlags(roads); const std::vector<double> band = layerBands(g, ls.kind);
         {   // triangles the mesher drops for bridging two levels: the condition is worth naming even though the mesh no longer shows it
-            std::vector<Vec2> spanning; (void)layerMeshes(g, *r.heights, *ls.set, roads, &spanning);
+            std::vector<Vec2> spanning; (void)layerMeshes(g, *r.heights, *ls.set, roads, &spanning, &band);
             for (const Vec2& c : spanning) { SurfaceStep st2; st2.at = c; st2.a = ls.name; st2.kind = 2; st2.length = 1.0; out.push_back(st2); }
         }
         auto walk = [&](const Ring& ring, bool hole) {
@@ -317,7 +216,7 @@ std::vector<SurfaceStep> surfaceSteps(const Result& r, double kerb) {
                     const Vec2 m = a + d * (st / L);
                     {
                         const Vec2 q = m + nrm * (0.35 * away);
-                        const double layerZ = r.heights->layerHeight(want, roads, m);   // once per sample, not once per candidate lane
+                        const double layerZ = r.heights->layerHeight(want, roads, m, &band);   // once per sample, not once per candidate lane
                         int other = -1; double bestZ = 0, bd = 1e300;
                         for (int liI : grid.at(q)) {
                             const size_t li = static_cast<size_t>(liI);
@@ -403,8 +302,19 @@ std::vector<Check> invariants(const Result& r) {
         if (dist > 0.05) { dove = false; d << " " << e.id << " " << kv.first << " " << kv.second << ": " << dist << " m off"; }
     }
     add("ramps dovetail into their hosts' outer lanes", dove, dove ? "every anchored ramp end sits on the host lane's centreline" : d.str());
-    d.str(""); d << "largest node mismatch " << 100 * r.nodeMismatchAfter << " cm (was " << 100 * r.nodeMismatchBefore << " cm before correction)" << (r.nodeMismatchWhere.empty() ? "" : ": " + r.nodeMismatchWhere);
+    d.str(""); d << "largest node mismatch " << 100 * r.nodeMismatchAfter << " cm";
+    if (r.graph.designed()) d << " (as planned: the heights are the graph's own)";   // ADR-0215: measured, never corrected
+    else d << " (was " << 100 * r.nodeMismatchBefore << " cm before correction)";
+    d << (r.nodeMismatchWhere.empty() ? "" : ": " + r.nodeMismatchWhere);
     add("junction heights consistent", r.nodeMismatchAfter < 0.02, d.str());
+    // A GRAPH THAT DECLARES ITS CROSSINGS (ADR-0215): every meeting of two roads away from a shared node is on its list,
+    // so no kind was read off the heights
+    if (r.graph.declaresCrossings) {
+        d.str("");
+        d << r.undeclaredCrossings.size() << " of the crossings found are not in the plan";
+        for (std::size_t i = 0; i < r.undeclaredCrossings.size() && i < 8; ++i) d << (i ? "; " : ": ") << r.undeclaredCrossings[i];
+        add("crossings are as planned", r.undeclaredCrossings.empty(), r.undeclaredCrossings.empty() ? "every crossing declared (" + std::to_string(r.graph.crossings.size()) + ")" : d.str());
+    }
     d.str(""); bool adj = true; std::set<std::string> touched; for (const auto& p : r.adjacent) { touched.insert(r.lanes.roadOf(p.first, g)); touched.insert(r.lanes.roadOf(p.second, g)); }
     for (const EdgeSpec* e : g.paved()) if (std::max(e->lanes.fwd, e->lanes.back) >= 2 && !touched.count(e->id)) { adj = false; d << " " << e->id; }
     add("multilane roads have derived lane adjacency", adj, std::to_string(r.adjacent.size()) + " adjacent pairs" + (adj ? "" : ", none found for" + d.str()));

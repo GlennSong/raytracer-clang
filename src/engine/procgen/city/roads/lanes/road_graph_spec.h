@@ -47,6 +47,21 @@ struct RampAnchor {
 
 struct ConnectorSpec { std::string from, to; double toS = 0; };
 
+// A CROSSING AS PLANNED (ADR-0215, Glenn: "the planner and builder should know the intent of the roads so it's not
+// guessing"): where two roads cross or one ends on the other away from a shared node, what the plan means there --
+//   "bridge"    grade-separated: `over` goes over the other, clearing it by the rules' clearance (or `clearance` m);
+//               `over` left empty: the design stage chooses by its own rule, and the designed graph names it
+//   "at_grade"  the two meet level: their heights are made to agree there, however far apart they stand
+// Authored at the graph's top level: "crossings": [{"a": "link9", "b": "p0_s191", "at": [x, y], "kind": "bridge",
+// "over": "link9"}]. A graph that carries the list DECLARES its crossings: one the design stage finds that is not on
+// it is a design error, reported with its place, not a kind guessed from the heights. Without the list the stage
+// infers the kind as it always did (hand-made lab scenes).
+struct CrossingSpec {
+    std::string a, b, kind, over;
+    Vec2 at;
+    double clearance = -1;   // < 0: the rules' under_clearance
+};
+
 // What a class builds at a deck edge, by what that edge faces (EdgeRole in deck_mesh.h). Authored per class
 // in the graph JSON: "edges": { "median": {"kind": "wall", "h": 1.05}, "at_grade": {"kind": "guardrail"} }.
 // kind: "none" | "wall" (solid slab, the parapet) | "guardrail" (beam on posts). Only freeway and ramp
@@ -74,6 +89,27 @@ struct RoadClassSpec {
     double balance = 0.0;
     // indexed by EdgeRole: seam, median, vs street, elevated, at grade
     std::array<BarrierSpec, 5> edges{};
+    // RAIL (Glenn, 2026-10-10: "it should define rail lines and we should probably build them like we build lanes of
+    // the freeway"): a TRACK class is a road class whose lanes are tracks -- the same lanes, profiles, decks, bridges
+    // and terrain conform, but the deck is a ballast bed with sleepers and rails on each lane's centreline, no paint,
+    // and nothing in the road twin (no car, walker or lot ever routes onto it). Its lanes leave as rail tracks.
+    bool track = false;
+    // A FOOTWAY (Glenn, 2026-10-11, the stations: "make it accessible"): a paved path for people on foot -- a
+    // station's way in from the nearest street, ramping up into the footbridge over the tracks. Built like any road
+    // (profile, deck, bridge, piers, ground), paved as a sidewalk, never painted, and left out of the road twin: no
+    // car routes onto it. An end held by the edge's own floor point stays up (a footbridge ends over a platform).
+    // Steeper than kFootwayStairGrade, its deck is built as steps.
+    bool footway = false;
+};
+
+// A station platform beside a track edge, authored on the edge: "platforms": [{"name": "Central", "s0": 300,
+// "s1": 420, "side": "both", "w": 4.5}]. Built on the OUTSIDE of the edge's outermost track on that side, its
+// edge `kPlatformGap` off the train body, its top at the height a carriage floor stands (railhead + h).
+struct PlatformSpec {
+    std::string name;
+    double s0 = 0, s1 = 0;    // stations along the edge's spine
+    int side = 0;             // 0 both, +1 the spine's left (plan), -1 its right
+    double w = 4.5, h = 1.05; // width, and the top above the railhead
 };
 
 struct Rules {
@@ -83,6 +119,8 @@ struct Rules {
     bool freewaySeparates = false;             // a freeway is never met at grade by a road crossing it (not a ramp): structure at any height. Off by default -- authored scenes (freeway_cross, ring_city) cross streets over freeways at grade -- and on for the island (ADR-0114)
     double rampLevelDz = 1.5;                  // a ramp within this of a street it crosses is at grade with it (the street meets it); above, it is structure (the ramp clears it)
 };
+
+constexpr double kFootwayStairGrade = 0.15;
 
 struct TerrainSpec {
     std::string type = "flat", file;
@@ -119,8 +157,16 @@ struct EdgeSpec {
     bool hasZMin = false; double zMin = 0;
     double lotsFrom = -1, lotsTo = -1;   // station range where the city may build lots along this edge (-1: all of it); the rest is right-of-way
     std::vector<std::array<double, 4>> floorPts;   // (x, y, z, half-span): the profile must clear z within half-span of that station, approached at design grade beyond
+    // a TRACK's holds that belong to the section joined to one of its ends (chainTrackFloors): (station, z, half-span)
+    // in this edge's stations -- before 0 or past its end -- so a lift's approach runs on across the joint
+    std::vector<std::array<double, 3>> chainFloors;
     LaneLayout lanes;
     std::vector<PocketSpec> pockets;
+    std::vector<PlatformSpec> platforms;   // track classes only
+    // THE PLANNED ELEVATION (ADR-0215): the deck height along the resolved spine, every `profileStep` m from its start,
+    // as the design stage made it ("profile": {"step": 1, "z": [...]}). A graph whose roads all carry one is DESIGNED:
+    // the builder takes the heights as given and checks them, never re-designs them.
+    std::vector<double> profile; double profileStep = 0.0;
     // resolved geometry and profile
     std::vector<Vec2> xy;                // spine, resampled at rules.step
     std::vector<double> s, z, t;         // station, deck height, terrain height along the spine
@@ -144,7 +190,12 @@ struct RoadLabGraph {
     TerrainSpec terrain;
     std::vector<EdgeSpec> edges;
     std::vector<ConnectorSpec> connectors;
+    std::vector<CrossingSpec> crossings;  // as planned (see CrossingSpec)
+    bool declaresCrossings = false;       // the graph carried a "crossings" list: every crossing is on it
+    bool designed() const;                // every road with a spine carries its planned profile
     std::map<std::string, int> index;    // edge id -> position in edges
+    // the planned crossing of edges a and b nearest p (within `within` m), or null
+    const CrossingSpec* declaredCrossing(const std::string& a, const std::string& b, const Vec2& p, double within = 12.0) const;
 
     const EdgeSpec* find(const std::string& id) const;
     EdgeSpec* find(const std::string& id);

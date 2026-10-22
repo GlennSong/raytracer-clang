@@ -1,0 +1,361 @@
+{
+  "version": 1,
+  "name": "recipe_forest",
+  "_note": "RECIPE FOREST (Glenn, 2026-10-17: \"can we try a forest?\"): the tree lab's recipe species (assets/scripts/tree_recipes.lua) as a forest (procgen/forest.h with \"recipe\" species): the hero trees to 22 m, the mid to 70 m, the light trees to 150 m, impostors of the light trees beyond. Edit the recipes and the level reloads.",
+  "watch_scripts": true,
+  "environment": {
+    "skyColor": [
+      0.55,
+      0.68,
+      0.86
+    ]
+  },
+  "lighting": {
+    "sun": {
+      "direction": [
+        0.45,
+        0.62,
+        -0.4
+      ],
+      "color": [
+        1.0,
+        0.96,
+        0.88
+      ],
+      "intensity": 7.0,
+      "castsShadow": true
+    },
+    "exposure": 0.6,
+    "ambientMultiplier": 0.7
+  },
+  "player": {
+    "position": [
+      0,
+      3,
+      0
+    ],
+    "collider": {
+      "shape": "capsule",
+      "radius": 0.3,
+      "halfHeight": 0.6
+    }
+  },
+  "terrain": {
+    "size": 1200,
+    "resolution": 384,
+    "heightScale": 0.35,
+    "noiseScale": 0.003,
+    "octaves": 3,
+    "seed": 11,
+    "material": {
+      "albedo": [
+        1,
+        1,
+        1
+      ],
+      "roughness": 1.0,
+      "surface": "terrain"
+    },
+    "groundCover": {
+      "dirtPatches": 0.32,
+      "seed": 5
+    },
+    "forest": {
+      "seed": 5,
+      "spacing": 7.0,
+      "coverage": 0.55,
+      "standScale": 220,
+      "treeline": 5000,
+      "shoreClear": -1000,
+      "maxSlopeDeg": 40,
+      "cell": 128,
+      "near": 150,
+      "nearFade": 20,
+      "far": 1200,
+      "hero": 22,
+      "heroFade": 6,
+      "mid": 70,
+      "midFade": 12,
+      "understorySpacing": 4.0,
+      "understoryDensity": 0.35,
+      "species": [
+        {
+          "recipe": "oak",
+          "variants": 3,
+          "weight": 1.0
+        },
+        {
+          "recipe": "birch",
+          "variants": 3,
+          "weight": 0.8
+        },
+        {
+          "recipe": "maple",
+          "variants": 2,
+          "weight": 0.5
+        },
+        {
+          "recipe": "river_birch",
+          "variants": 2,
+          "weight": 0.5
+        },
+        {
+          "recipe": "spruce",
+          "variants": 3,
+          "weight": 0.9
+        },
+        {
+          "recipe": "pine",
+          "variants": 2,
+          "weight": 0.5
+        },
+        {
+          "recipe": "magnolia",
+          "variants": 2,
+          "weight": 0.2
+        },
+        {
+          "recipe": "sakura",
+          "variants": 2,
+          "weight": 0.2
+        },
+        {
+          "recipe": "hawthorn",
+          "variants": 3,
+          "weight": 1.0,
+          "understory": true
+        },
+        {
+          "recipe": "euryops",
+          "variants": 2,
+          "weight": 0.3,
+          "understory": true
+        },
+        {
+          "recipe": "fescue",
+          "variants": 2,
+          "weight": 0.6,
+          "understory": true
+        }
+      ],
+      "litter": 0.4,
+      "rocks": [
+        {
+          "family": "boulder",
+          "stone": "granite",
+          "size": 3.2,
+          "variants": 4,
+          "ground": "field",
+          "spacing": 60,
+          "density": 0.35,
+          "draw": 900,
+          "moss": 0.25
+        },
+        {
+          "family": "boulder",
+          "stone": "mossy",
+          "size": 1.6,
+          "variants": 4,
+          "ground": "field",
+          "spacing": 30,
+          "density": 0.35,
+          "draw": 400
+        },
+        {
+          "family": "slab",
+          "stone": "granite",
+          "size": 2.6,
+          "variants": 3,
+          "ground": "field",
+          "spacing": 70,
+          "density": 0.3,
+          "draw": 700,
+          "moss": 0.3
+        },
+        {
+          "family": "boulder",
+          "stone": "mossy",
+          "size": 3.8,
+          "variants": 4,
+          "ground": "forest",
+          "spacing": 45,
+          "density": 0.45,
+          "draw": 600,
+          "moss": 0.85
+        },
+        {
+          "family": "boulder",
+          "stone": "mossy",
+          "size": 1.6,
+          "variants": 4,
+          "ground": "forest",
+          "spacing": 16,
+          "density": 0.5,
+          "draw": 300,
+          "moss": 0.8
+        },
+        {
+          "family": "slab",
+          "stone": "mossy",
+          "size": 2.8,
+          "variants": 3,
+          "ground": "forest",
+          "spacing": 35,
+          "density": 0.4,
+          "draw": 450,
+          "moss": 0.8
+        },
+        {
+          "family": "boulder",
+          "stone": "granite",
+          "size": 2.2,
+          "variants": 3,
+          "ground": "forest",
+          "spacing": 40,
+          "density": 0.35,
+          "draw": 450,
+          "moss": 0.5
+        },
+        {
+          "family": "pebbles",
+          "stone": "mossy",
+          "size": 1.0,
+          "variants": 3,
+          "ground": "forest",
+          "spacing": 9,
+          "density": 0.4,
+          "draw": 150,
+          "moss": 0.7
+        }
+      ],
+      "understoryDraw": 60,
+      "light": 110,
+      "lightFade": 15
+    }
+  },
+  "grass": {
+    "blades": 18,
+    "clumpRadius": 0.22,
+    "fadeEnd": 60,
+    "fadeStart": 44,
+    "height": 0.35,
+    "lean": 0.35,
+    "maxSlopeDeg": 32,
+    "nearRadius": 24,
+    "patchiness": 0.35,
+    "radius": 62,
+    "rootColor": [
+      0.018,
+      0.032,
+      0.008
+    ],
+    "seed": 7,
+    "spacing": 0.3,
+    "tipColor": [
+      0.1,
+      0.14,
+      0.03
+    ],
+    "variantTint": 0.18,
+    "width": 0.045,
+    "cardRadius": 320,
+    "cardSpacing": 1.6
+  },
+  "grassLayers": [
+    {
+      "clumpRadius": 0.28,
+      "lean": 0.25,
+      "width": 0.03,
+      "rootColor": [
+        0.02,
+        0.035,
+        0.01
+      ],
+      "tipColor": [
+        0.09,
+        0.13,
+        0.035
+      ],
+      "variantTint": 0.1,
+      "radius": 80,
+      "nearRadius": 30,
+      "fadeStart": 60,
+      "fadeEnd": 80,
+      "cards": false,
+      "where": "flowers",
+      "seed": 51,
+      "blades": 6,
+      "height": 0.78,
+      "flowers": 10,
+      "flowerSize": 0.1,
+      "spacing": 0.45,
+      "variants": 7,
+      "clumpScale": 0.02,
+      "clumpCut": 0.0,
+      "flowerColors": [
+        [
+          0.75,
+          0.74,
+          0.68
+        ],
+        [
+          0.8,
+          0.6,
+          0.04
+        ],
+        [
+          0.3,
+          0.09,
+          0.55
+        ],
+        [
+          0.14,
+          0.24,
+          0.7
+        ],
+        [
+          0.8,
+          0.24,
+          0.38
+        ],
+        [
+          0.7,
+          0.05,
+          0.03
+        ],
+        [
+          0.85,
+          0.32,
+          0.05
+        ]
+      ]
+    },
+    {
+      "where": "tall",
+      "seed": 21,
+      "blades": 24,
+      "height": 1.05,
+      "width": 0.03,
+      "clumpRadius": 0.3,
+      "lean": 0.45,
+      "spacing": 0.55,
+      "rootColor": [
+        0.03,
+        0.04,
+        0.012
+      ],
+      "tipColor": [
+        0.16,
+        0.16,
+        0.05
+      ],
+      "variantTint": 0.22,
+      "radius": 55,
+      "nearRadius": 22,
+      "fadeStart": 40,
+      "fadeEnd": 55,
+      "cardRadius": 220,
+      "cardSpacing": 1.8
+    }
+  ]
+}

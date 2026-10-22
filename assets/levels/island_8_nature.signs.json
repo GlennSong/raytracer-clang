@@ -1,0 +1,2787 @@
+{
+ "signs": [
+  {
+   "at": [
+    325.9872710009686,
+    -6127.55272510476
+   ],
+   "facing": [
+    0.8364611295797534,
+    -0.5480262573108731
+   ],
+   "kind": "advance",
+   "legend": {
+    "dests": [
+     "Canal Blvd",
+     "Brookcliff"
+    ],
+    "dist": "2 km",
+    "exit": "34"
+   },
+   "mount": "roadside"
+  },
+  {
+   "at": [
+    1195.7817419725532,
+    -6625.506371224083
+   ],
+   "facing": [
+    0.9138115486202684,
+    -0.4061384660534223
+   ],
+   "kind": "advance",
+   "legend": {
+    "dests": [
+     "Canal Blvd",
+     "Brookcliff"
+    ],
+    "dist": "1 km",
+    "exit": "34"
+   },
+   "mount": "roadside"
+  },
+  {
+   "at": [
+    1978.7572122561132,
+    -6956.92838819772
+   ],
+   "facing": [
+    0.9170180340888953,
+    -0.3988457410525249
+   ],
+   "kind": "exit",
+   "legend": {
+    "arrow": "up-left",
+    "dests": [
+     "Canal Blvd",
+     "Brookcliff"
+    ],
+    "exit": "34"
+   },
+   "mount": "overhead"
+  },
+  {
+   "at": [
+    2141.2019147249443,
+    -7038.538380051576
+   ],
+   "facing": [
+    0.9811448394279533,
+    -0.19327390942363581
+   ],
+   "kind": "gore",
+   "legend": {
+    "arrow": "up-left",
+    "exit": "34"
+   },
+   "mount": "roadside"
+  },
+  {
+   "at": [
+    2975.981361574394,
+    -7068.368448366437
+   ],
+   "facing": [
+    0.9379348097492921,
+    -0.3468116097545748
+   ],
+   "kind": "route",
+   "legend": {
+    "dir": "Outer Loop",
+    "route": "1"
+   },
+   "mount": "roadside"
+  },
+  {
+   "at": [
+    3335.6909702607377,
+    -6911.035333109024
+   ],
+   "facing": [
+    0.3741677087676871,
+    0.9273610546683204
+   ],
+   "kind": "distance",
+   "legend": {
+    "rows": [
+     [
+      "Dunwyn Harbor",
+      "3"
+     ],
+     [
+      "Weyby",
+      "7"
+     ],
+     [
+      "Port Penwood",
+      "15"
+     ]
+    ],
+    "unit": "km"
+   },
+   "mount": "roadside"
+  },
+  {
+   "at": [
+    3857.797567764661,
+    -5688.819668542308
+   ],
+   "facing": [
+    -0.44764361388993207,
+    -0.8942120525599963
+   ],
+   "kind": "advance",
+   "legend": {
+    "dests": [
+     "Canal Blvd",
+     "Brookcliff"
+    ],
+    "dist": "2 km",
+    "exit": "34"
+   },
+   "mount": "roadside"
+  },
+  {
+   "at": [
+    3411.2685306418466,
+    -6584.87333316613
+   ],
+   "facing": [
+    -0.40852248362989574,
+    -0.9127482568424119
+   ],
+   "kind": "advance",
+   "legend": {
+    "dests": [
+     "Canal Blvd",
+     "Brookcliff"
+    ],
+    "dist": "1 km",
+    "exit": "34"
+   },
+   "mount": "roadside"
+  },
+  {
+   "at": [
+    2876.0738938297513,
+    -6989.633442533001
+   ],
+   "facing": [
+    -0.962233759775929,
+    0.2722245241477702
+   ],
+   "kind": "exit",
+   "legend": {
+    "arrow": "up-left",
+    "dests": [
+     "Canal Blvd",
+     "Brookcliff"
+    ],
+    "exit": "34"
+   },
+   "mount": "overhead"
+  },
+  {
+   "at": [
+    2691.2194665518527,
+    -6951.653690868992
+   ],
+   "facing": [
+    -0.9940902847843879,
+    -0.10855646317605736
+   ],
+   "kind": "gore",
+   "legend": {
+    "arrow": "up-left",
+    "exit": "34"
+   },
+   "mount": "roadside"
+  },
+  {
+   "at": [
+    2105.754137914759,
+    -6965.393631189369
+   ],
+   "facing": [
+    -0.9461214065089606,
+    0.3238121124132116
+   ],
+   "kind": "route",
+   "legend": {
+    "dir": "Inner Loop",
+    "route": "1"
+   },
+   "mount": "roadside"
+  },
+  {
+   "at": [
+    1740.5090271143943,
+    -6808.514240031906
+   ],
+   "facing": [
+    -0.9138115486202836,
+    0.40613846605338866
+   ],
+   "kind": "distance",
+   "legend": {
+    "rows": [
+     [
+      "Coldwell",
+      "4"
+     ],
+     [
+      "Saltwood",
+      "8"
+     ],
+     [
+      "Carrcombe Harbor",
+      "11"
+     ]
+    ],
+    "unit": "km"
+   },
+   "mount": "roadside"
+  },
+  {
+   "at": [
+    2606.0529435336075,
+    -7065.475082300168
+   ],
+   "facing": [
+    -0.1364985948031743,
+    0.9906402644839138
+   ],
+   "kind": "entrance",
+   "legend": {
+    "arrow": "left",
+    "city": "Weyby",
+    "dir": "Outer Loop",
+    "route": "1"
+   },
+   "mount": "roadside"
+  },
+  {
+   "at": [
+    2574.7039560787393,
+    -6999.1332328719645
+   ],
+   "facing": [
+    0.1364985948031743,
+    -0.9906402644839138
+   ],
+   "kind": "entrance",
+   "legend": {
+    "arrow": "right",
+    "city": "Weyby",
+    "dir": "Outer Loop",
+    "route": "1"
+   },
+   "mount": "roadside"
+  },
+  {
+   "at": [
+    2706.605306398523,
+    -6952.585716481251
+   ],
+   "facing": [
+    0.9909054809549721,
+    0.13455975554895863
+   ],
+   "kind": "wrong-way",
+   "legend": {},
+   "mount": "roadside"
+  },
+  {
+   "at": [
+    2599.6383454207066,
+    -7018.921056009382
+   ],
+   "facing": [
+    -0.13649859480315835,
+    0.9906402644839162
+   ],
+   "kind": "entrance",
+   "legend": {
+    "arrow": "right",
+    "city": "Saltwood",
+    "dir": "Inner Loop",
+    "route": "1"
+   },
+   "mount": "roadside"
+  },
+  {
+   "at": [
+    2564.8768930957604,
+    -6927.813199969079
+   ],
+   "facing": [
+    0.13649859480315835,
+    -0.9906402644839162
+   ],
+   "kind": "entrance",
+   "legend": {
+    "arrow": "left",
+    "city": "Saltwood",
+    "dir": "Inner Loop",
+    "route": "1"
+   },
+   "mount": "roadside"
+  },
+  {
+   "at": [
+    3759.674799854059,
+    -6005.771101409699
+   ],
+   "facing": [
+    0.44721359549990336,
+    0.8944271909999432
+   ],
+   "kind": "advance",
+   "legend": {
+    "dests": [
+     "Beech Ave",
+     "Dunwyn Harbor"
+    ],
+    "dist": "2 km",
+    "exit": "30"
+   },
+   "mount": "roadside"
+  },
+  {
+   "at": [
+    4209.67065470763,
+    -5112.946106572565
+   ],
+   "facing": [
+    0.4531568033962328,
+    0.8914308226305103
+   ],
+   "kind": "advance",
+   "legend": {
+    "dests": [
+     "Beech Ave",
+     "Dunwyn Harbor"
+    ],
+    "dist": "1 km",
+    "exit": "30"
+   },
+   "mount": "roadside"
+  },
+  {
+   "at": [
+    4497.6349722226405,
+    -4315.230373305622
+   ],
+   "facing": [
+    0.016235795151865427,
+    0.9998681907910596
+   ],
+   "kind": "exit",
+   "legend": {
+    "arrow": "up-left",
+    "dests": [
+     "Beech Ave",
+     "Dunwyn Harbor"
+    ],
+    "exit": "30"
+   },
+   "mount": "overhead"
+  },
+  {
+   "at": [
+    4516.903347228689,
+    -4139.539616230869
+   ],
+   "facing": [
+    -0.015466856042667624,
+    0.9998803810277286
+   ],
+   "kind": "gore",
+   "legend": {
+    "arrow": "up-left",
+    "exit": "30"
+   },
+   "mount": "roadside"
+  },
+  {
+   "at": [
+    4498.0009879518275,
+    -3305.699582044152
+   ],
+   "facing": [
+    -0.015890825098393926,
+    0.9998737328671518
+   ],
+   "kind": "route",
+   "legend": {
+    "dir": "Outer Loop",
+    "route": "1"
+   },
+   "mount": "roadside"
+  },
+  {
+   "at": [
+    4475.27892131572,
+    -2903.8045339027976
+   ],
+   "facing": [
+    -0.11751336947175291,
+    0.9930713005597309
+   ],
+   "kind": "distance",
+   "legend": {
+    "rows": [
+     [
+      "Weyby",
+      "3"
+     ],
+     [
+      "Port Penwood",
+      "11"
+     ],
+     [
+      "Ivycombe",
+      "14"
+     ]
+    ],
+    "unit": "km"
+   },
+   "mount": "roadside"
+  },
+  {
+   "at": [
+    4252.376479984977,
+    -1841.2820816340802
+   ],
+   "facing": [
+    0.36823732390068503,
+    -0.9297318286938777
+   ],
+   "kind": "advance",
+   "legend": {
+    "dests": [
+     "Beech Ave",
+     "Dunwyn Harbor"
+    ],
+    "dist": "2 km",
+    "exit": "30"
+   },
+   "mount": "roadside"
+  },
+  {
+   "at": [
+    4410.143058982493,
+    -2820.3828777775034
+   ],
+   "facing": [
+    0.13497688260019852,
+    -0.9908487478740297
+   ],
+   "kind": "advance",
+   "legend": {
+    "dests": [
+     "Beech Ave",
+     "Dunwyn Harbor"
+    ],
+    "dist": "1 km",
+    "exit": "30"
+   },
+   "mount": "roadside"
+  },
+  {
+   "at": [
+    4464.561973462205,
+    -3665.29244376463
+   ],
+   "facing": [
+    0.015466856042666918,
+    -0.9998803810277285
+   ],
+   "kind": "exit",
+   "legend": {
+    "arrow": "up-left",
+    "dests": [
+     "Beech Ave",
+     "Dunwyn Harbor"
+    ],
+    "exit": "30"
+   },
+   "mount": "overhead"
+  },
+  {
+   "at": [
+    4446.271185268079,
+    -3840.5963144213724
+   ],
+   "facing": [
+    0.015466856042530877,
+    -0.9998803810277306
+   ],
+   "kind": "gore",
+   "legend": {
+    "arrow": "up-left",
+    "exit": "30"
+   },
+   "mount": "roadside"
+  },
+  {
+   "at": [
+    4458.819610237904,
+    -4294.951624092189
+   ],
+   "facing": [
+    -0.0031435686418471312,
+    -0.9999950589758901
+   ],
+   "kind": "route",
+   "legend": {
+    "dir": "Inner Loop",
+    "route": "1"
+   },
+   "mount": "roadside"
+  },
+  {
+   "at": [
+    4373.672868606912,
+    -4669.771304716037
+   ],
+   "facing": [
+    -0.43265142432677806,
+    -0.9015612819037929
+   ],
+   "kind": "distance",
+   "legend": {
+    "rows": [
+     [
+      "Brookcliff",
+      "3"
+     ],
+     [
+      "Coldwell",
+      "8"
+     ],
+     [
+      "Saltwood",
+      "12"
+     ]
+    ],
+    "unit": "km"
+   },
+   "mount": "roadside"
+  },
+  {
+   "at": [
+    4550.945667485305,
+    -3942.98957745048
+   ],
+   "facing": [
+    -0.9998803810277309,
+    -0.015466856042506014
+   ],
+   "kind": "entrance",
+   "legend": {
+    "arrow": "left",
+    "city": "Weyby",
+    "dir": "Outer Loop",
+    "route": "1"
+   },
+   "mount": "roadside"
+  },
+  {
+   "at": [
+    4481.294311646299,
+    -3966.0696257560635
+   ],
+   "facing": [
+    0.9998803810277309,
+    0.015466856042506014
+   ],
+   "kind": "entrance",
+   "legend": {
+    "arrow": "right",
+    "city": "Weyby",
+    "dir": "Outer Loop",
+    "route": "1"
+   },
+   "mount": "roadside"
+  },
+  {
+   "at": [
+    4449.828723302007,
+    -3821.540479305265
+   ],
+   "facing": [
+    -0.015623093000542114,
+    0.9998779520346953
+   ],
+   "kind": "wrong-way",
+   "legend": {},
+   "mount": "roadside"
+  },
+  {
+   "at": [
+    4503.973027672164,
+    -3943.7161834242647
+   ],
+   "facing": [
+    -0.9998803810277311,
+    -0.015466856042499639
+   ],
+   "kind": "entrance",
+   "legend": {
+    "arrow": "right",
+    "city": "Saltwood",
+    "dir": "Inner Loop",
+    "route": "1"
+   },
+   "mount": "roadside"
+  },
+  {
+   "at": [
+    4409.324662307465,
+    -3967.1829031309103
+   ],
+   "facing": [
+    0.9998803810277311,
+    0.015466856042499639
+   ],
+   "kind": "entrance",
+   "legend": {
+    "arrow": "left",
+    "city": "Saltwood",
+    "dir": "Inner Loop",
+    "route": "1"
+   },
+   "mount": "roadside"
+  },
+  {
+   "at": [
+    4433.133996402156,
+    -2598.2759762525197
+   ],
+   "facing": [
+    -0.14167820475636175,
+    0.9899127670138488
+   ],
+   "kind": "advance",
+   "legend": {
+    "dests": [
+     "#2",
+     "Saltwood",
+     "Weyby"
+    ],
+    "dist": "2 km",
+    "exit": "26"
+   },
+   "mount": "roadside"
+  },
+  {
+   "at": [
+    4222.7509837580965,
+    -1619.838568197669
+   ],
+   "facing": [
+    -0.36823732390064967,
+    0.9297318286938919
+   ],
+   "kind": "advance",
+   "legend": {
+    "dests": [
+     "#2",
+     "Saltwood",
+     "Weyby"
+    ],
+    "dist": "1 km",
+    "exit": "26"
+   },
+   "mount": "roadside"
+  },
+  {
+   "at": [
+    3892.8898291111946,
+    -836.0760762883864
+   ],
+   "facing": [
+    -0.38148116166989515,
+    0.9243766133405733
+   ],
+   "kind": "exit",
+   "legend": {
+    "arrow": "up-left",
+    "dests": [
+     "#2",
+     "Saltwood",
+     "Weyby"
+    ],
+    "exit": "26"
+   },
+   "mount": "overhead"
+  },
+  {
+   "at": [
+    3845.4093977522875,
+    -666.3204382690327
+   ],
+   "facing": [
+    -0.38235179272629094,
+    0.9240168324218945
+   ],
+   "kind": "gore",
+   "legend": {
+    "arrow": "up-left",
+    "exit": "26"
+   },
+   "mount": "roadside"
+  },
+  {
+   "at": [
+    3384.5838952501754,
+    218.36878820416058
+   ],
+   "facing": [
+    -0.5499905695155102,
+    0.8351708648198912
+   ],
+   "kind": "route",
+   "legend": {
+    "dir": "Outer Loop",
+    "route": "1"
+   },
+   "mount": "roadside"
+  },
+  {
+   "at": [
+    3164.587667443969,
+    552.4371341321042
+   ],
+   "facing": [
+    -0.549990569515507,
+    0.8351708648198934
+   ],
+   "kind": "distance",
+   "legend": {
+    "rows": [
+     [
+      "Port Penwood",
+      "7"
+     ],
+     [
+      "Ivycombe",
+      "10"
+     ],
+     [
+      "Carrcombe Harbor",
+      "15"
+     ]
+    ],
+    "unit": "km"
+   },
+   "mount": "roadside"
+  },
+  {
+   "at": [
+    2804.8625718127755,
+    1720.0232692959316
+   ],
+   "facing": [
+    -0.07598324899035674,
+    -0.9971090942684604
+   ],
+   "kind": "advance",
+   "legend": {
+    "dests": [
+     "#2",
+     "Saltwood",
+     "Weyby"
+    ],
+    "dist": "2 km",
+    "exit": "26"
+   },
+   "mount": "roadside"
+  },
+  {
+   "at": [
+    2959.284280263582,
+    766.010627811031
+   ],
+   "facing": [
+    0.5499905695155413,
+    -0.8351708648198707
+   ],
+   "kind": "advance",
+   "legend": {
+    "dests": [
+     "#2",
+     "Saltwood",
+     "Weyby"
+    ],
+    "dist": "1 km",
+    "exit": "26"
+   },
+   "mount": "roadside"
+  },
+  {
+   "at": [
+    3439.279813662621,
+    64.37016039372148
+   ],
+   "facing": [
+    0.5487859791667741,
+    -0.8359628873759678
+   ],
+   "kind": "exit",
+   "legend": {
+    "arrow": "up-left",
+    "dests": [
+     "#2",
+     "Saltwood",
+     "Weyby"
+    ],
+    "exit": "26"
+   },
+   "mount": "overhead"
+  },
+  {
+   "at": [
+    3514.608265225413,
+    -92.94106747254159
+   ],
+   "facing": [
+    0.4933056514114379,
+    -0.8698560422768454
+   ],
+   "kind": "gore",
+   "legend": {
+    "arrow": "up-left",
+    "exit": "26"
+   },
+   "mount": "roadside"
+  },
+  {
+   "at": [
+    3714.919775057547,
+    -507.8940650214944
+   ],
+   "facing": [
+    0.3823517927263265,
+    -0.9240168324218799
+   ],
+   "kind": "route",
+   "legend": {
+    "dir": "Inner Loop",
+    "route": "1"
+   },
+   "mount": "roadside"
+  },
+  {
+   "at": [
+    3867.7815686791473,
+    -877.4892786615546
+   ],
+   "facing": [
+    0.380955425493335,
+    -0.9245934045769482
+   ],
+   "kind": "distance",
+   "legend": {
+    "rows": [
+     [
+      "Dunwyn Harbor",
+      "3"
+     ],
+     [
+      "Brookcliff",
+      "7"
+     ],
+     [
+      "Coldwell",
+      "12"
+     ]
+    ],
+    "unit": "km"
+   },
+   "mount": "roadside"
+  },
+  {
+   "at": [
+    3664.0347662999093,
+    -155.46095016697922
+   ],
+   "facing": [
+    -0.9629069130578358,
+    -0.269833794743041
+   ],
+   "kind": "entrance",
+   "legend": {
+    "arrow": "left",
+    "city": "Port Penwood",
+    "dir": "Outer Loop",
+    "route": "1"
+   },
+   "mount": "roadside"
+  },
+  {
+   "at": [
+    3582.3854130579066,
+    -197.58577795513273
+   ],
+   "facing": [
+    0.9629069130578358,
+    0.269833794743041
+   ],
+   "kind": "entrance",
+   "legend": {
+    "arrow": "right",
+    "city": "Port Penwood",
+    "dir": "Outer Loop",
+    "route": "1"
+   },
+   "mount": "roadside"
+  },
+  {
+   "at": [
+    3597.3305291295082,
+    -173.5549471509757
+   ],
+   "facing": [
+    -0.9694981881993766,
+    -0.24509847628683076
+   ],
+   "kind": "entrance",
+   "legend": {
+    "arrow": "right",
+    "city": "Dunwyn Harbor",
+    "dir": "Inner Loop",
+    "route": "1"
+   },
+   "mount": "roadside"
+  },
+  {
+   "at": [
+    3538.449921323331,
+    -201.18606120890556
+   ],
+   "facing": [
+    0.9694981881993766,
+    0.24509847628683076
+   ],
+   "kind": "entrance",
+   "legend": {
+    "arrow": "left",
+    "city": "Dunwyn Harbor",
+    "dir": "Inner Loop",
+    "route": "1"
+   },
+   "mount": "roadside"
+  },
+  {
+   "at": [
+    1371.2105413883235,
+    4617.831168565414
+   ],
+   "facing": [
+    -0.824855235733045,
+    0.5653440015457692
+   ],
+   "kind": "advance",
+   "legend": {
+    "dests": [
+     "Howard Ave",
+     "Port Penwood"
+    ],
+    "dist": "2 km",
+    "exit": "19"
+   },
+   "mount": "roadside"
+  },
+  {
+   "at": [
+    547.6573659980827,
+    5171.8279043855055
+   ],
+   "facing": [
+    -0.6989536120907307,
+    0.7151670071705772
+   ],
+   "kind": "advance",
+   "legend": {
+    "dests": [
+     "Howard Ave",
+     "Port Penwood"
+    ],
+    "dist": "1 km",
+    "exit": "19"
+   },
+   "mount": "roadside"
+  },
+  {
+   "at": [
+    -18.883622231970005,
+    5803.307242933229
+   ],
+   "facing": [
+    -0.6507913734559676,
+    0.7592566023652975
+   ],
+   "kind": "exit",
+   "legend": {
+    "arrow": "up-left",
+    "dests": [
+     "Howard Ave",
+     "Port Penwood"
+    ],
+    "exit": "19"
+   },
+   "mount": "overhead"
+  },
+  {
+   "at": [
+    -115.13575547736882,
+    5944.8987291490985
+   ],
+   "facing": [
+    -0.6543117148786357,
+    0.7562249531538743
+   ],
+   "kind": "gore",
+   "legend": {
+    "arrow": "up-left",
+    "exit": "19"
+   },
+   "mount": "roadside"
+  },
+  {
+   "at": [
+    -585.7569801348387,
+    6438.047407928462
+   ],
+   "facing": [
+    -0.7013044983928924,
+    0.712861838320648
+   ],
+   "kind": "route",
+   "legend": {
+    "dir": "Outer Loop",
+    "route": "1"
+   },
+   "mount": "roadside"
+  },
+  {
+   "at": [
+    -939.3879468423434,
+    6642.445199206368
+   ],
+   "facing": [
+    -0.9928548007672601,
+    0.11932872492993721
+   ],
+   "kind": "distance",
+   "legend": {
+    "rows": [
+     [
+      "Ivycombe",
+      "2"
+     ],
+     [
+      "Carrcombe Harbor",
+      "7"
+     ],
+     [
+      "Saltwood",
+      "11"
+     ]
+    ],
+    "unit": "km"
+   },
+   "mount": "roadside"
+  },
+  {
+   "at": [
+    -2242.3983881047934,
+    6601.970804854036
+   ],
+   "facing": [
+    0.9999999584852481,
+    -0.000288148403154551
+   ],
+   "kind": "advance",
+   "legend": {
+    "dests": [
+     "Howard Ave",
+     "Port Penwood"
+    ],
+    "dist": "2 km",
+    "exit": "19"
+   },
+   "mount": "roadside"
+  },
+  {
+   "at": [
+    -1242.6348039102315,
+    6595.663456419792
+   ],
+   "facing": [
+    0.9999665668826703,
+    -0.008177109323378453
+   ],
+   "kind": "advance",
+   "legend": {
+    "dests": [
+     "Howard Ave",
+     "Port Penwood"
+    ],
+    "dist": "1 km",
+    "exit": "19"
+   },
+   "mount": "roadside"
+  },
+  {
+   "at": [
+    -507.90546182770476,
+    6304.087450801374
+   ],
+   "facing": [
+    0.7068821976498143,
+    -0.7073312934161538
+   ],
+   "kind": "exit",
+   "legend": {
+    "arrow": "up-left",
+    "dests": [
+     "Howard Ave",
+     "Port Penwood"
+    ],
+    "exit": "19"
+   },
+   "mount": "overhead"
+  },
+  {
+   "at": [
+    -400.2477035720554,
+    6165.423311175712
+   ],
+   "facing": [
+    0.6891743024906875,
+    -0.7245955981003986
+   ],
+   "kind": "gore",
+   "legend": {
+    "arrow": "up-left",
+    "exit": "19"
+   },
+   "mount": "roadside"
+  },
+  {
+   "at": [
+    -94.05002586614067,
+    5831.074341534024
+   ],
+   "facing": [
+    0.6507913734559445,
+    -0.7592566023653174
+   ],
+   "kind": "route",
+   "legend": {
+    "dir": "Inner Loop",
+    "route": "1"
+   },
+   "mount": "roadside"
+  },
+  {
+   "at": [
+    166.2665235162776,
+    5527.371700587869
+   ],
+   "facing": [
+    0.6507913734559674,
+    -0.7592566023652977
+   ],
+   "kind": "distance",
+   "legend": {
+    "rows": [
+     [
+      "Weyby",
+      "7"
+     ],
+     [
+      "Dunwyn Harbor",
+      "11"
+     ],
+     [
+      "Brookcliff",
+      "15"
+     ]
+    ],
+    "unit": "km"
+   },
+   "mount": "roadside"
+  },
+  {
+   "at": [
+    -253.381214482464,
+    6159.934893558352
+   ],
+   "facing": [
+    -0.7362526707995343,
+    -0.676706734664694
+   ],
+   "kind": "entrance",
+   "legend": {
+    "arrow": "left",
+    "city": "Saltwood",
+    "dir": "Outer Loop",
+    "route": "1"
+   },
+   "mount": "roadside"
+  },
+  {
+   "at": [
+    -290.031353275808,
+    6096.367863374235
+   ],
+   "facing": [
+    0.7362526707995343,
+    0.676706734664694
+   ],
+   "kind": "entrance",
+   "legend": {
+    "arrow": "right",
+    "city": "Saltwood",
+    "dir": "Outer Loop",
+    "route": "1"
+   },
+   "mount": "roadside"
+  },
+  {
+   "at": [
+    -416.77308176464874,
+    6189.580837287504
+   ],
+   "facing": [
+    -0.6791185068498834,
+    0.7340286463442588
+   ],
+   "kind": "wrong-way",
+   "legend": {},
+   "mount": "roadside"
+  },
+  {
+   "at": [
+    -304.91837461438826,
+    6112.565906347898
+   ],
+   "facing": [
+    -0.7362526707995114,
+    -0.676706734664719
+   ],
+   "kind": "entrance",
+   "legend": {
+    "arrow": "right",
+    "city": "Weyby",
+    "dir": "Inner Loop",
+    "route": "1"
+   },
+   "mount": "roadside"
+  },
+  {
+   "at": [
+    -341.56851340773113,
+    6048.998876163781
+   ],
+   "facing": [
+    0.7362526707995114,
+    0.676706734664719
+   ],
+   "kind": "entrance",
+   "legend": {
+    "arrow": "left",
+    "city": "Weyby",
+    "dir": "Inner Loop",
+    "route": "1"
+   },
+   "mount": "roadside"
+  },
+  {
+   "at": [
+    -939.1993456629456,
+    6642.42249293442
+   ],
+   "facing": [
+    -0.9928105721620959,
+    0.11969614782093878
+   ],
+   "kind": "advance",
+   "legend": {
+    "dests": [
+     "Twentieth Pkwy",
+     "Ivycombe"
+    ],
+    "dist": "2 km",
+    "exit": "15"
+   },
+   "mount": "roadside"
+  },
+  {
+   "at": [
+    -1942.0560026675114,
+    6655.196289811869
+   ],
+   "facing": [
+    -0.9999832966578237,
+    0.005779827449939272
+   ],
+   "kind": "advance",
+   "legend": {
+    "dests": [
+     "Twentieth Pkwy",
+     "Ivycombe"
+    ],
+    "dist": "1 km",
+    "exit": "15"
+   },
+   "mount": "roadside"
+  },
+  {
+   "at": [
+    -2792.210636347831,
+    6640.9786455096355
+   ],
+   "facing": [
+    -1.0,
+    0.0
+   ],
+   "kind": "exit",
+   "legend": {
+    "arrow": "up-left",
+    "dests": [
+     "Twentieth Pkwy",
+     "Ivycombe"
+    ],
+    "exit": "15"
+   },
+   "mount": "overhead"
+  },
+  {
+   "at": [
+    -2966.846017275947,
+    6661.759750286066
+   ],
+   "facing": [
+    -0.9999383437487553,
+    0.011104445100778557
+   ],
+   "kind": "gore",
+   "legend": {
+    "arrow": "up-left",
+    "exit": "15"
+   },
+   "mount": "roadside"
+  },
+  {
+   "at": [
+    -3693.866647720755,
+    6762.310148539258
+   ],
+   "facing": [
+    -0.8870289635378477,
+    -0.4617137834686894
+   ],
+   "kind": "route",
+   "legend": {
+    "dir": "Outer Loop",
+    "route": "1"
+   },
+   "mount": "roadside"
+  },
+  {
+   "at": [
+    -3913.780479430488,
+    6416.660556359435
+   ],
+   "facing": [
+    -0.4128254139896155,
+    -0.9108101764716416
+   ],
+   "kind": "distance",
+   "legend": {
+    "rows": [
+     [
+      "Carrcombe Harbor",
+      "4"
+     ],
+     [
+      "Saltwood",
+      "8"
+     ],
+     [
+      "Coldwell",
+      "12"
+     ]
+    ],
+    "unit": "km"
+   },
+   "mount": "roadside"
+  },
+  {
+   "at": [
+    -4360.5043979724205,
+    5123.914114690631
+   ],
+   "facing": [
+    0.31622776601685165,
+    0.9486832980505094
+   ],
+   "kind": "advance",
+   "legend": {
+    "dests": [
+     "Twentieth Pkwy",
+     "Ivycombe"
+    ],
+    "dist": "2 km",
+    "exit": "15"
+   },
+   "mount": "roadside"
+  },
+  {
+   "at": [
+    -4016.5419669568473,
+    6059.133083393716
+   ],
+   "facing": [
+    0.41274574828489785,
+    0.910846280814024
+   ],
+   "kind": "advance",
+   "legend": {
+    "dests": [
+     "Twentieth Pkwy",
+     "Ivycombe"
+    ],
+    "dist": "1 km",
+    "exit": "15"
+   },
+   "mount": "roadside"
+  },
+  {
+   "at": [
+    -3601.9184895516305,
+    6750.81602814948
+   ],
+   "facing": [
+    0.9901742071971795,
+    0.13983933424268438
+   ],
+   "kind": "exit",
+   "legend": {
+    "arrow": "up-left",
+    "dests": [
+     "Twentieth Pkwy",
+     "Ivycombe"
+    ],
+    "exit": "15"
+   },
+   "mount": "overhead"
+  },
+  {
+   "at": [
+    -3453.2931889940837,
+    6701.143730871121
+   ],
+   "facing": [
+    0.9019156570341644,
+    -0.4319121989439886
+   ],
+   "kind": "gore",
+   "legend": {
+    "arrow": "up-left",
+    "exit": "15"
+   },
+   "mount": "roadside"
+  },
+  {
+   "at": [
+    -2824.4641160588367,
+    6601.9786455096355
+   ],
+   "facing": [
+    1.0,
+    -0.0
+   ],
+   "kind": "route",
+   "legend": {
+    "dir": "Inner Loop",
+    "route": "1"
+   },
+   "mount": "roadside"
+  },
+  {
+   "at": [
+    -2424.4641160588385,
+    6601.9786455096355
+   ],
+   "facing": [
+    1.0,
+    -0.0
+   ],
+   "kind": "distance",
+   "legend": {
+    "rows": [
+     [
+      "Port Penwood",
+      "2"
+     ],
+     [
+      "Weyby",
+      "10"
+     ],
+     [
+      "Dunwyn Harbor",
+      "14"
+     ]
+    ],
+    "unit": "km"
+   },
+   "mount": "roadside"
+  },
+  {
+   "at": [
+    -3308.6022187540725,
+    6746.0090794499165
+   ],
+   "facing": [
+    -0.3418954128443955,
+    -0.9397380095941423
+   ],
+   "kind": "entrance",
+   "legend": {
+    "arrow": "left",
+    "city": "Saltwood",
+    "dir": "Outer Loop",
+    "route": "1"
+   },
+   "mount": "roadside"
+  },
+  {
+   "at": [
+    -3320.408046763219,
+    6649.212269455897
+   ],
+   "facing": [
+    0.3418954128443955,
+    0.9397380095941423
+   ],
+   "kind": "entrance",
+   "legend": {
+    "arrow": "right",
+    "city": "Saltwood",
+    "dir": "Outer Loop",
+    "route": "1"
+   },
+   "mount": "roadside"
+  },
+  {
+   "at": [
+    -3451.94962637078,
+    6699.261253329317
+   ],
+   "facing": [
+    -0.9251829555650943,
+    0.3795214074750417
+   ],
+   "kind": "wrong-way",
+   "legend": {},
+   "mount": "roadside"
+  },
+  {
+   "at": [
+    -3324.9290021576444,
+    6701.133078303535
+   ],
+   "facing": [
+    -0.3418954128444151,
+    -0.9397380095941353
+   ],
+   "kind": "entrance",
+   "legend": {
+    "arrow": "right",
+    "city": "Weyby",
+    "dir": "Inner Loop",
+    "route": "1"
+   },
+   "mount": "roadside"
+  },
+  {
+   "at": [
+    -3335.0253531025696,
+    6609.034958357487
+   ],
+   "facing": [
+    0.3418954128444151,
+    0.9397380095941353
+   ],
+   "kind": "entrance",
+   "legend": {
+    "arrow": "left",
+    "city": "Weyby",
+    "dir": "Inner Loop",
+    "route": "1"
+   },
+   "mount": "roadside"
+  },
+  {
+   "at": [
+    -4589.810437275635,
+    4548.025013916842
+   ],
+   "facing": [
+    -0.1368454388116986,
+    -0.9905924115782604
+   ],
+   "kind": "advance",
+   "legend": {
+    "dests": [
+     "Sherman Pkwy",
+     "Carrcombe Harbor"
+    ],
+    "dist": "2 km",
+    "exit": "10"
+   },
+   "mount": "roadside"
+  },
+  {
+   "at": [
+    -4523.862678327352,
+    3542.6490625938186
+   ],
+   "facing": [
+    0.23106250093707448,
+    -0.9729389090075001
+   ],
+   "kind": "advance",
+   "legend": {
+    "dests": [
+     "Sherman Pkwy",
+     "Carrcombe Harbor"
+    ],
+    "dist": "1 km",
+    "exit": "10"
+   },
+   "mount": "roadside"
+  },
+  {
+   "at": [
+    -4256.7345296143585,
+    2733.6696396947455
+   ],
+   "facing": [
+    0.3036357919383122,
+    -0.9527881747030629
+   ],
+   "kind": "exit",
+   "legend": {
+    "arrow": "up-left",
+    "dests": [
+     "Sherman Pkwy",
+     "Carrcombe Harbor"
+    ],
+    "exit": "10"
+   },
+   "mount": "overhead"
+  },
+  {
+   "at": [
+    -4204.703602433716,
+    2563.1547402402143
+   ],
+   "facing": [
+    0.4302083584780361,
+    -0.9027296208143575
+   ],
+   "kind": "gore",
+   "legend": {
+    "arrow": "up-left",
+    "exit": "10"
+   },
+   "mount": "roadside"
+  },
+  {
+   "at": [
+    -3951.9174185839793,
+    2046.6664584228424
+   ],
+   "facing": [
+    0.43020835847804584,
+    -0.9027296208143529
+   ],
+   "kind": "route",
+   "legend": {
+    "dir": "Outer Loop",
+    "route": "1"
+   },
+   "mount": "roadside"
+  },
+  {
+   "at": [
+    -3779.834048169469,
+    1685.5745533927943
+   ],
+   "facing": [
+    0.43021045863796037,
+    -0.9027286199509328
+   ],
+   "kind": "distance",
+   "legend": {
+    "rows": [
+     [
+      "Saltwood",
+      "3"
+     ],
+     [
+      "Coldwell",
+      "7"
+     ],
+     [
+      "Brookcliff",
+      "11"
+     ]
+    ],
+    "unit": "km"
+   },
+   "mount": "roadside"
+  },
+  {
+   "at": [
+    -3139.7044011604985,
+    493.22890836398545
+   ],
+   "facing": [
+    -0.36061536552691614,
+    0.9327146177400077
+   ],
+   "kind": "advance",
+   "legend": {
+    "dests": [
+     "Sherman Pkwy",
+     "Carrcombe Harbor"
+    ],
+    "dist": "2 km",
+    "exit": "10"
+   },
+   "mount": "roadside"
+  },
+  {
+   "at": [
+    -3579.5445451076152,
+    1393.615550031973
+   ],
+   "facing": [
+    -0.43921341615298015,
+    0.8983827553282783
+   ],
+   "kind": "advance",
+   "legend": {
+    "dests": [
+     "Sherman Pkwy",
+     "Carrcombe Harbor"
+    ],
+    "dist": "1 km",
+    "exit": "10"
+   },
+   "mount": "roadside"
+  },
+  {
+   "at": [
+    -3959.7317992200187,
+    2153.7175464849192
+   ],
+   "facing": [
+    -0.430208358478,
+    0.9027296208143748
+   ],
+   "kind": "exit",
+   "legend": {
+    "arrow": "up-left",
+    "dests": [
+     "Sherman Pkwy",
+     "Carrcombe Harbor"
+    ],
+    "exit": "10"
+   },
+   "mount": "overhead"
+  },
+  {
+   "at": [
+    -4016.0609399165655,
+    2320.729605655462
+   ],
+   "facing": [
+    -0.43020835847800964,
+    0.9027296208143701
+   ],
+   "kind": "gore",
+   "legend": {
+    "arrow": "up-left",
+    "exit": "10"
+   },
+   "mount": "roadside"
+  },
+  {
+   "at": [
+    -4219.575790800939,
+    2745.51143558034
+   ],
+   "facing": [
+    -0.3036357919383122,
+    0.9527881747030629
+   ],
+   "kind": "route",
+   "legend": {
+    "dir": "Inner Loop",
+    "route": "1"
+   },
+   "mount": "roadside"
+  },
+  {
+   "at": [
+    -4341.030107576282,
+    3126.6267054615946
+   ],
+   "facing": [
+    -0.3036357919383122,
+    0.9527881747030629
+   ],
+   "kind": "distance",
+   "legend": {
+    "rows": [
+     [
+      "Ivycombe",
+      "4"
+     ],
+     [
+      "Port Penwood",
+      "7"
+     ],
+     [
+      "Weyby",
+      "15"
+     ]
+    ],
+    "unit": "km"
+   },
+   "mount": "roadside"
+  },
+  {
+   "at": [
+    -4158.06971339534,
+    2379.337008638968
+   ],
+   "facing": [
+    0.9027296208143839,
+    0.43020835847798067
+   ],
+   "kind": "entrance",
+   "legend": {
+    "arrow": "left",
+    "city": "Saltwood",
+    "dir": "Outer Loop",
+    "route": "1"
+   },
+   "mount": "roadside"
+  },
+  {
+   "at": [
+    -4104.343223824848,
+    2429.3116453903426
+   ],
+   "facing": [
+    -0.9027296208143839,
+    -0.43020835847798067
+   ],
+   "kind": "entrance",
+   "legend": {
+    "arrow": "right",
+    "city": "Saltwood",
+    "dir": "Outer Loop",
+    "route": "1"
+   },
+   "mount": "roadside"
+  },
+  {
+   "at": [
+    -4012.1416288912455,
+    2303.760813960914
+   ],
+   "facing": [
+    0.43001984242275687,
+    -0.9028194366110576
+   ],
+   "kind": "wrong-way",
+   "legend": {},
+   "mount": "roadside"
+  },
+  {
+   "at": [
+    -4128.295766240063,
+    2393.5261973348333
+   ],
+   "facing": [
+    0.9027296208143986,
+    0.4302083584779501
+   ],
+   "kind": "entrance",
+   "legend": {
+    "arrow": "right",
+    "city": "Weyby",
+    "dir": "Inner Loop",
+    "route": "1"
+   },
+   "mount": "roadside"
+  },
+  {
+   "at": [
+    -4042.973739941067,
+    2458.5581266329364
+   ],
+   "facing": [
+    -0.9027296208143986,
+    -0.4302083584779501
+   ],
+   "kind": "entrance",
+   "legend": {
+    "arrow": "left",
+    "city": "Weyby",
+    "dir": "Inner Loop",
+    "route": "1"
+   },
+   "mount": "roadside"
+  },
+  {
+   "at": [
+    -3617.483564761231,
+    1348.2983680546681
+   ],
+   "facing": [
+    0.4401258068725352,
+    -0.8979361191781964
+   ],
+   "kind": "advance",
+   "legend": {
+    "dests": [
+     "Sycamore Pkwy",
+     "Saltwood"
+    ],
+    "dist": "2 km",
+    "exit": "7"
+   },
+   "mount": "roadside"
+  },
+  {
+   "at": [
+    -3181.408495572662,
+    451.3505444176827
+   ],
+   "facing": [
+    0.36061536552693496,
+    -0.9327146177400005
+   ],
+   "kind": "advance",
+   "legend": {
+    "dests": [
+     "Sycamore Pkwy",
+     "Saltwood"
+    ],
+    "dist": "1 km",
+    "exit": "7"
+   },
+   "mount": "roadside"
+  },
+  {
+   "at": [
+    -2864.1163510180318,
+    -336.9518528885659
+   ],
+   "facing": [
+    0.33775357517146826,
+    -0.9412345735569277
+   ],
+   "kind": "exit",
+   "legend": {
+    "arrow": "up-left",
+    "dests": [
+     "Sycamore Pkwy",
+     "Saltwood"
+    ],
+    "exit": "7"
+   },
+   "mount": "overhead"
+  },
+  {
+   "at": [
+    -2825.7830033307505,
+    -508.7767499485573
+   ],
+   "facing": [
+    0.32855219489742143,
+    -0.9444858152603918
+   ],
+   "kind": "gore",
+   "legend": {
+    "arrow": "up-left",
+    "exit": "7"
+   },
+   "mount": "roadside"
+  },
+  {
+   "at": [
+    -2578.652208478675,
+    -1201.0092022441581
+   ],
+   "facing": [
+    0.32852062494124806,
+    -0.9444967967061677
+   ],
+   "kind": "route",
+   "legend": {
+    "dir": "Outer Loop",
+    "route": "1"
+   },
+   "mount": "roadside"
+  },
+  {
+   "at": [
+    -2444.2256480152546,
+    -1578.775596906812
+   ],
+   "facing": [
+    0.36301572017445216,
+    -0.9317830149268786
+   ],
+   "kind": "distance",
+   "legend": {
+    "rows": [
+     [
+      "Coldwell",
+      "3"
+     ],
+     [
+      "Brookcliff",
+      "8"
+     ],
+     [
+      "Dunwyn Harbor",
+      "12"
+     ]
+    ],
+    "unit": "km"
+   },
+   "mount": "roadside"
+  },
+  {
+   "at": [
+    -1824.9411722656555,
+    -2724.946772101386
+   ],
+   "facing": [
+    -0.4472135954999488,
+    0.8944271909999204
+   ],
+   "kind": "advance",
+   "legend": {
+    "dests": [
+     "Sycamore Pkwy",
+     "Saltwood"
+    ],
+    "dist": "2 km",
+    "exit": "7"
+   },
+   "mount": "roadside"
+  },
+  {
+   "at": [
+    -2271.9769271054647,
+    -1830.5757707085936
+   ],
+   "facing": [
+    -0.4429153679926716,
+    0.8965634259749372
+   ],
+   "kind": "advance",
+   "legend": {
+    "dests": [
+     "Sycamore Pkwy",
+     "Saltwood"
+    ],
+    "dist": "1 km",
+    "exit": "7"
+   },
+   "mount": "roadside"
+  },
+  {
+   "at": [
+    -2591.094927148321,
+    -1046.5223783655404
+   ],
+   "facing": [
+    -0.3285206249413089,
+    0.9444967967061466
+   ],
+   "kind": "exit",
+   "legend": {
+    "arrow": "up-left",
+    "dests": [
+     "Sycamore Pkwy",
+     "Saltwood"
+    ],
+    "exit": "7"
+   },
+   "mount": "overhead"
+  },
+  {
+   "at": [
+    -2628.7516037822056,
+    -874.3365058182188
+   ],
+   "facing": [
+    -0.3285206249412701,
+    0.94449679670616
+   ],
+   "kind": "gore",
+   "legend": {
+    "arrow": "up-left",
+    "exit": "7"
+   },
+   "mount": "roadside"
+  },
+  {
+   "at": [
+    -2783.9742176078207,
+    -446.5342274465567
+   ],
+   "facing": [
+    -0.3303302885754306,
+    0.9438654037783527
+   ],
+   "kind": "route",
+   "legend": {
+    "dir": "Inner Loop",
+    "route": "1"
+   },
+   "mount": "roadside"
+  },
+  {
+   "at": [
+    -2921.9460852606985,
+    -70.24237773467226
+   ],
+   "facing": [
+    -0.35841941884038797,
+    0.9335606676580364
+   ],
+   "kind": "distance",
+   "legend": {
+    "rows": [
+     [
+      "Carrcombe Harbor",
+      "3"
+     ],
+     [
+      "Ivycombe",
+      "8"
+     ],
+     [
+      "Port Penwood",
+      "11"
+     ]
+    ],
+    "unit": "km"
+   },
+   "mount": "roadside"
+  },
+  {
+   "at": [
+    -2764.299896734653,
+    -811.3721947724525
+   ],
+   "facing": [
+    0.944496796706187,
+    0.3285206249411925
+   ],
+   "kind": "entrance",
+   "legend": {
+    "arrow": "left",
+    "city": "Coldwell",
+    "dir": "Outer Loop",
+    "route": "1"
+   },
+   "mount": "roadside"
+  },
+  {
+   "at": [
+    -2700.690090730395,
+    -765.9542183743262
+   ],
+   "facing": [
+    -0.944496796706187,
+    -0.3285206249411925
+   ],
+   "kind": "entrance",
+   "legend": {
+    "arrow": "right",
+    "city": "Coldwell",
+    "dir": "Outer Loop",
+    "route": "1"
+   },
+   "mount": "roadside"
+  },
+  {
+   "at": [
+    -2626.146260685266,
+    -893.5493852962062
+   ],
+   "facing": [
+    0.32876303519908306,
+    -0.9444124452201413
+   ],
+   "kind": "wrong-way",
+   "legend": {},
+   "mount": "roadside"
+  },
+  {
+   "at": [
+    -2694.0861430674004,
+    -786.9500195838485
+   ],
+   "facing": [
+    0.9444967967061831,
+    0.32852062494120354
+   ],
+   "kind": "entrance",
+   "legend": {
+    "arrow": "right",
+    "city": "Carrcombe Harbor",
+    "dir": "Inner Loop",
+    "route": "1"
+   },
+   "mount": "roadside"
+  },
+  {
+   "at": [
+    -2635.198821046674,
+    -743.1746463104281
+   ],
+   "facing": [
+    -0.9444967967061831,
+    -0.32852062494120354
+   ],
+   "kind": "entrance",
+   "legend": {
+    "arrow": "left",
+    "city": "Carrcombe Harbor",
+    "dir": "Inner Loop",
+    "route": "1"
+   },
+   "mount": "roadside"
+  },
+  {
+   "at": [
+    -2117.5784124644742,
+    -2260.4199624887383
+   ],
+   "facing": [
+    0.4472135954999397,
+    -0.894427190999925
+   ],
+   "kind": "advance",
+   "legend": {
+    "dests": [
+     "Ninth Ave",
+     "Coldwell"
+    ],
+    "dist": "2 km",
+    "exit": "3"
+   },
+   "mount": "roadside"
+  },
+  {
+   "at": [
+    -1670.364816964535,
+    -3154.8471534886166
+   ],
+   "facing": [
+    0.44721359549995804,
+    -0.8944271909999161
+   ],
+   "kind": "advance",
+   "legend": {
+    "dests": [
+     "Ninth Ave",
+     "Coldwell"
+    ],
+    "dist": "1 km",
+    "exit": "3"
+   },
+   "mount": "roadside"
+  },
+  {
+   "at": [
+    -1277.093792106061,
+    -3908.5243117524165
+   ],
+   "facing": [
+    0.4461417629727355,
+    -0.8949623049780251
+   ],
+   "kind": "exit",
+   "legend": {
+    "arrow": "up-left",
+    "dests": [
+     "Ninth Ave",
+     "Coldwell"
+    ],
+    "exit": "3"
+   },
+   "mount": "overhead"
+  },
+  {
+   "at": [
+    -1217.8164860005697,
+    -4074.512549798399
+   ],
+   "facing": [
+    0.4461227247129598,
+    -0.8949717953626722
+   ],
+   "kind": "gore",
+   "legend": {
+    "arrow": "up-left",
+    "exit": "3"
+   },
+   "mount": "roadside"
+  },
+  {
+   "at": [
+    -906.6821718772624,
+    -4709.1805370735765
+   ],
+   "facing": [
+    0.4313377900763713,
+    -0.9021905069618236
+   ],
+   "kind": "route",
+   "legend": {
+    "dir": "Outer Loop",
+    "route": "1"
+   },
+   "mount": "roadside"
+  },
+  {
+   "at": [
+    -732.7436114098747,
+    -5070.202424811109
+   ],
+   "facing": [
+    0.4561223073831011,
+    -0.8899170976599539
+   ],
+   "kind": "distance",
+   "legend": {
+    "rows": [
+     [
+      "Brookcliff",
+      "4"
+     ],
+     [
+      "Dunwyn Harbor",
+      "8"
+     ],
+     [
+      "Weyby",
+      "12"
+     ]
+    ],
+    "unit": "km"
+   },
+   "mount": "roadside"
+  },
+  {
+   "at": [
+    235.0951442879262,
+    -6003.413839362203
+   ],
+   "facing": [
+    -0.8353530773111808,
+    0.5497137766390255
+   ],
+   "kind": "advance",
+   "legend": {
+    "dests": [
+     "Ninth Ave",
+     "Coldwell"
+    ],
+    "dist": "2 km",
+    "exit": "3"
+   },
+   "mount": "roadside"
+  },
+  {
+   "at": [
+    -489.45166996671486,
+    -5329.0503365073055
+   ],
+   "facing": [
+    -0.6696027797181766,
+    0.7427194069052532
+   ],
+   "kind": "advance",
+   "legend": {
+    "dests": [
+     "Ninth Ave",
+     "Coldwell"
+    ],
+    "dist": "1 km",
+    "exit": "3"
+   },
+   "mount": "roadside"
+  },
+  {
+   "at": [
+    -913.5845506752509,
+    -4604.32707496679
+   ],
+   "facing": [
+    -0.4313377900763844,
+    0.9021905069618175
+   ],
+   "kind": "exit",
+   "legend": {
+    "arrow": "up-left",
+    "dests": [
+     "Ninth Ave",
+     "Coldwell"
+    ],
+    "exit": "3"
+   },
+   "mount": "overhead"
+  },
+  {
+   "at": [
+    -970.1226632924116,
+    -4437.3856426568855
+   ],
+   "facing": [
+    -0.4313377900763936,
+    0.9021905069618129
+   ],
+   "kind": "gore",
+   "legend": {
+    "arrow": "up-left",
+    "exit": "3"
+   },
+   "mount": "roadside"
+  },
+  {
+   "at": [
+    -1255.5752086269256,
+    -3864.2753993157075
+   ],
+   "facing": [
+    -0.4461672825003511,
+    0.8949495829521638
+   ],
+   "kind": "route",
+   "legend": {
+    "dir": "Inner Loop",
+    "route": "1"
+   },
+   "mount": "roadside"
+  },
+  {
+   "at": [
+    -1434.2385793319306,
+    -3506.3613449580503
+   ],
+   "facing": [
+    -0.44712366278360705,
+    0.8944721517067883
+   ],
+   "kind": "distance",
+   "legend": {
+    "rows": [
+     [
+      "Saltwood",
+      "3"
+     ],
+     [
+      "Carrcombe Harbor",
+      "7"
+     ],
+     [
+      "Ivycombe",
+      "12"
+     ]
+    ],
+    "unit": "km"
+   },
+   "mount": "roadside"
+  },
+  {
+   "at": [
+    -1183.2857084523941,
+    -4230.305384760684
+   ],
+   "facing": [
+    0.9021905069618096,
+    0.4313377900764005
+   ],
+   "kind": "entrance",
+   "legend": {
+    "arrow": "left",
+    "city": "Weyby",
+    "dir": "Outer Loop",
+    "route": "1"
+   },
+   "mount": "roadside"
+  },
+  {
+   "at": [
+    -1129.6218043467486,
+    -4180.263548302176
+   ],
+   "facing": [
+    -0.9021905069618096,
+    -0.4313377900764005
+   ],
+   "kind": "entrance",
+   "legend": {
+    "arrow": "right",
+    "city": "Weyby",
+    "dir": "Outer Loop",
+    "route": "1"
+   },
+   "mount": "roadside"
+  },
+  {
+   "at": [
+    -1120.2296877720562,
+    -4200.158265719427
+   ],
+   "facing": [
+    0.9021905069617888,
+    0.43133779007644424
+   ],
+   "kind": "entrance",
+   "legend": {
+    "arrow": "right",
+    "city": "Saltwood",
+    "dir": "Inner Loop",
+    "route": "1"
+   },
+   "mount": "roadside"
+  },
+  {
+   "at": [
+    -1066.5657836664113,
+    -4150.11642926092
+   ],
+   "facing": [
+    -0.9021905069617888,
+    -0.43133779007644424
+   ],
+   "kind": "entrance",
+   "legend": {
+    "arrow": "left",
+    "city": "Saltwood",
+    "dir": "Inner Loop",
+    "route": "1"
+   },
+   "mount": "roadside"
+  },
+  {
+   "at": [
+    -3142.646421625695,
+    201.44177151820827
+   ],
+   "facing": [
+    -0.11975985102944044,
+    -0.9928028898434001
+   ],
+   "kind": "limit",
+   "legend": {
+    "kind": "city",
+    "name": "Saltwood",
+    "pop": 18000
+   },
+   "mount": "roadside"
+  },
+  {
+   "at": [
+    -2852.0524143736025,
+    -817.5432182796134
+   ],
+   "facing": [
+    -0.9444967967061727,
+    -0.32852062494123363
+   ],
+   "kind": "limit",
+   "legend": {
+    "kind": "city",
+    "name": "Saltwood",
+    "pop": 18000
+   },
+   "mount": "roadside"
+  },
+  {
+   "at": [
+    3751.065691860048,
+    -149.47943394778486
+   ],
+   "facing": [
+    0.9651592398085606,
+    0.2616632221237091
+   ],
+   "kind": "limit",
+   "legend": {
+    "kind": "city",
+    "name": "Weyby",
+    "pop": 15000
+   },
+   "mount": "roadside"
+  },
+  {
+   "at": [
+    -1210.718106041494,
+    -4217.927322520784
+   ],
+   "facing": [
+    -0.9021905069617979,
+    -0.431337790076425
+   ],
+   "kind": "limit",
+   "legend": {
+    "kind": "town",
+    "name": "Coldwell",
+    "pop": 6100
+   },
+   "mount": "roadside"
+  },
+  {
+   "at": [
+    2585.9218512734774,
+    -7087.873330747224
+   ],
+   "facing": [
+    0.13649859480314916,
+    -0.9906402644839174
+   ],
+   "kind": "limit",
+   "legend": {
+    "kind": "town",
+    "name": "Brookcliff",
+    "pop": 6300
+   },
+   "mount": "roadside"
+  },
+  {
+   "at": [
+    -4210.697567272995,
+    2379.7347549461647
+   ],
+   "facing": [
+    -0.9027296208144118,
+    -0.4302083584779221
+   ],
+   "kind": "limit",
+   "legend": {
+    "kind": "town",
+    "name": "Carrcombe Harbor",
+    "pop": 6500
+   },
+   "mount": "roadside"
+  },
+  {
+   "at": [
+    4560.048101902951,
+    -3965.8515261305115
+   ],
+   "facing": [
+    0.9998803810277322,
+    0.015466856042422494
+   ],
+   "kind": "limit",
+   "legend": {
+    "kind": "town",
+    "name": "Dunwyn Harbor",
+    "pop": 4900
+   },
+   "mount": "roadside"
+  },
+  {
+   "at": [
+    -171.68539840012377,
+    6203.784118447126
+   ],
+   "facing": [
+    0.7362526707995194,
+    0.6767067346647103
+   ],
+   "kind": "limit",
+   "legend": {
+    "kind": "town",
+    "name": "Port Penwood",
+    "pop": 2600
+   },
+   "mount": "roadside"
+  },
+  {
+   "at": [
+    -3291.8017932603725,
+    6724.914904695666
+   ],
+   "facing": [
+    0.34189541284442737,
+    0.9397380095941308
+   ],
+   "kind": "limit",
+   "legend": {
+    "kind": "town",
+    "name": "Ivycombe",
+    "pop": 2000
+   },
+   "mount": "roadside"
+  },
+  {
+   "at": [
+    -3117.203944676968,
+    270.4078279091616
+   ],
+   "facing": [
+    0.11975985102950312,
+    0.9928028898433926
+   ],
+   "kind": "trailblazer",
+   "legend": {
+    "dest": "Weyby",
+    "dist": "15 km",
+    "route": "2"
+   },
+   "mount": "roadside"
+  },
+  {
+   "at": [
+    3768.6740590581053,
+    -127.09197578941234
+   ],
+   "facing": [
+    -0.9651592398085695,
+    -0.26166322212367615
+   ],
+   "kind": "trailblazer",
+   "legend": {
+    "dest": "Saltwood",
+    "dist": "15 km",
+    "route": "2"
+   },
+   "mount": "roadside"
+  }
+ ]
+}

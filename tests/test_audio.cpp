@@ -659,6 +659,49 @@ TEST_CASE(a_pavement_step_is_a_low_thud) {
     }
 }
 
+TEST_CASE(steps_off_the_pavement_are_low_too) {
+    // Glenn, 2026-10-09: "the mountain terrain still has that spindly walking noise (too high pitched)". Rock was
+    // centred at 5.8 kHz, grass 9.4, sand 8.2, snow 9.9. The CC0 Kenney footsteps on grass and snow (measured, not
+    // shipped) centre at 240-500 Hz; by this test's one-pole split they put 3-11% over 1.25 kHz (ours were ~90%).
+    // Gate: every natural ground under 15%.
+    const uint32_t rate = 48000;
+    for (sfx::Ground g : {sfx::Ground::Grass, sfx::Ground::Dirt, sfx::Ground::Sand, sfx::Ground::Rock, sfx::Ground::Snow}) {
+        for (uint32_t seed : {1u, 2u, 3u, 4u}) {
+            const auto f = sfx::footstep(g, rate, seed);
+            double hi = 0, total = 0, yh = 0;
+            const double ah = 1 - std::exp(-6.283185307 * 1250.0 / rate);
+            for (float x : f) { yh += ah * (x - yh); hi += (x - yh) * (x - yh); total += double(x) * x; }
+            std::printf("    [ground] %-5s seed %u  over 1.25 kHz %.1f%%\n", sfx::groundName(g), seed, 100 * hi / total);
+            CHECK(hi / total < 0.15);
+        }
+    }
+}
+
+TEST_CASE(a_stride_through_grass_swishes_and_then_stops) {
+    // Glenn, 2026-10-09: walking on the city's grass was "a constant low roar" -- a 2 s rustle LOOP whose
+    // flicker averaged out to steady noise, played at full on mown lawns. Now one swish per stride: it swells,
+    // dies, and is silent well before the next step (a brisk walk is ~0.5 s a step); no low rumble in it.
+    const uint32_t rate = 48000;
+    for (uint32_t seed : {1u, 2u, 3u}) {
+        const auto f = sfx::grassSwish(rate, seed);
+        CHECK(!f.empty() && f.size() < rate / 2);
+        const size_t win = rate / 50;   // 20 ms windows
+        double loud = 0, tail = 0;
+        for (size_t i = 0; i + win <= f.size(); i += win) {
+            double e = 0;
+            for (size_t k = i; k < i + win; ++k) e += double(f[k]) * f[k];
+            loud = std::max(loud, e);
+            if (i + 2 * win > f.size()) tail = e;
+        }
+        double lo = 0, total = 0, yl = 0;
+        const double al = 1 - std::exp(-6.283185307 * 300.0 / rate);
+        for (float x : f) { yl += al * (x - yl); lo += yl * yl; total += double(x) * x; }
+        std::printf("    [swish] seed %u  peak/tail %.0fx  under 300 Hz %.1f%%\n", seed, loud / std::max(tail, 1e-12), 100 * lo / total);
+        CHECK(loud > 100 * tail);      // it ends
+        CHECK(lo / total < 0.10);      // a brush, not a rumble
+    }
+}
+
 TEST_CASE(a_drop_lands_heavier_and_lower_than_a_hop) {
     // #63's gate: "a 1 m hop and a 5 m drop sound different; landing on grass vs rock differs".
     const uint32_t rate = 48000;
@@ -680,7 +723,7 @@ TEST_CASE(ambience_loops_are_seamless_and_audible) {
         return std::fabs(f.front() - f.back()) <= maxStep * 1.5f + 1e-4f;
     };
     struct L { const char* name; std::vector<float> f; };
-    for (const L& l : {L{"grass_rustle", sfx::grassRustle(rate, 1)}, L{"surf", sfx::surf(rate, 1)}, L{"river", sfx::river(rate, 1)}}) {
+    for (const L& l : {L{"surf", sfx::surf(rate, 1)}, L{"river", sfx::river(rate, 1)}}) {
         CHECK(!l.f.empty());
         double energy = 0;
         for (float x : l.f) { CHECK(std::fabs(x) <= 1.0f); energy += std::fabs(x); }
@@ -911,4 +954,128 @@ TEST_CASE(splashes_and_a_lake_shore) {
     std::printf("    [lap] swing %.1fx\n", swing);
     CHECK(swing > 3.0);   // wavelets come and go
     maybeDump("loop_lake_lap", lap, rate);
+}
+
+// ---- THE TRAINS' SOUNDS (Glenn: "No train track clacking. No whistle or bell when it stops or when the doors open") ----
+TEST_CASE(train_sounds_clack_roll_sound_the_horn_and_chime) {
+    const uint32_t rate = 48000;
+    const auto clack = sfx::railClack(rate, 11), rumble = sfx::railRumble(rate, 5), horn = sfx::trainHorn(rate, 1);
+    const auto open = sfx::trainDoorChime(true, rate, 1), shut = sfx::trainDoorChime(false, rate, 1);
+    maybeDump("rail_clack", clack, rate);
+    maybeDump("rail_rumble", rumble, rate);
+    maybeDump("train_horn", horn, rate);
+    maybeDump("door_chime_open", open, rate);
+    maybeDump("door_chime_shut", shut, rate);
+    for (const auto* f : {&clack, &rumble, &horn, &open, &shut}) {
+        CHECK(!f->empty());
+        for (float x : *f) CHECK(std::fabs(x) <= 1.0f);
+    }
+    const Voiceprint vc = voiceprint(clack, rate), vr = voiceprint(rumble, rate), vh = voiceprint(horn, rate);
+    const Voiceprint vo = voiceprint(open, rate), vs = voiceprint(shut, rate);
+    std::printf("    [train] clack bands %.2f %.2f %.2f %.2f len %.3f | rumble %.2f %.2f %.2f %.2f | horn %.2f %.2f %.2f %.2f len %.2f"
+                " | open %.2f %.2f len %.2f | shut %.2f %.2f len %.2f\n",
+                vc.band[0], vc.band[1], vc.band[2], vc.band[3], vc.length, vr.band[0], vr.band[1], vr.band[2], vr.band[3],
+                vh.band[0], vh.band[1], vh.band[2], vh.band[3], vh.length, vo.band[1], vo.band[2], vo.length, vs.band[1], vs.band[2], vs.length);
+    CHECK(vc.length < 0.12);                       // a clack is a knock, over in a moment: the beat comes from the axles
+    CHECK(vc.band[0] > 0.2 && vc.band[1] + vc.band[2] > 0.1);   // a thump with a steel ring on it
+    CHECK(vr.band[0] > 0.7);                       // the roll is a low roar
+    CHECK(vh.length > 1.0);                        // the horn is held
+    CHECK(vh.band[1] > vh.band[0]);                // a brassy note, not a rumble
+    CHECK(vo.length > 0.5 && vs.length < vo.length);   // a ringing chime; the beeps are clipped short
+    CHECK(vo.band[1] + vo.band[2] > 0.7);          // tonal, in the bell's range (a one-pole split leaks some low)
+    // the roll loops: its seam no worse than its own sample steps
+    float maxStep = 0.0f;
+    for (size_t i = 1; i < rumble.size(); ++i) maxStep = std::max(maxStep, std::fabs(rumble[i] - rumble[i - 1]));
+    CHECK(std::fabs(rumble.front() - rumble.back()) <= maxStep * 1.5f + 1e-4f);
+}
+
+// Glenn: "The train horn sounds the same inside a building and pretty much anywhere you are in the world."
+// A 600 m horn heard from 300 m off was at half volume on the old straight-line falloff; the free-field law
+// puts it a tenth of the way (-20 dB) and the air dulls it.
+TEST_CASE(a_far_horn_is_quiet_and_dull_not_half_volume) {
+    CHECK(std::fabs(audioDistanceGain(30, 0, 600) - 1.0f) < 1e-4f);     // full out to the reference (range/20)
+    CHECK(std::fabs(audioDistanceGain(300, 0, 600) - 0.1f) < 1e-3f);    // -6 dB per doubling past it
+    CHECK(audioDistanceGain(550, 0, 600) < 0.03f);                       // fading out near the range
+    CHECK(audioDistanceGain(600, 0, 600) == 0.0f);
+    CHECK(audioDistanceGain(1.5, 0, 20) == 1.0f);                        // your own feet: full
+    CHECK(audioAirCutoffHz(300) < 6000.0f && audioAirCutoffHz(5) > 19000.0f);
+
+    AudioEngine audio;
+    audio.initialize(AudioBackendMode::Manual);
+    audio.setListener(Vec3(0, 0, 0), Vec3(0, 0, -1));
+    auto lo = sineClip(48000, 0.5, 300.0), hi = sineClip(48000, 0.5, 6000.0);
+    AudioClipHandle low = audio.createClip(lo.data(), lo.size(), 1, 48000);
+    AudioClipHandle high = audio.createClip(hi.data(), hi.size(), 1, 48000);
+    auto heard = [&](AudioClipHandle c, Real d) {
+        audio.playAt(c, Vec3(0, 0, -d), 600.0);
+        pump(audio, 4096);   // past the filter's settle
+        const double e = pump(audio, 4096).total();
+        audio.stopAll();
+        return e;
+    };
+    const double near = heard(low, 20), far = heard(low, 300);
+    std::printf("    [falloff] 300 Hz at 300 m / at 20 m = %.3f\n", far / near);
+    CHECK(far / near > 0.06 && far / near < 0.14);
+    // the bright note loses more than the low one with distance: the air took its top
+    const double hiRatio = heard(high, 300) / heard(high, 20);
+    std::printf("    [air] 6 kHz at 300 m / at 20 m = %.3f\n", hiRatio);
+    CHECK(hiRatio < (far / near) * 0.85);
+}
+
+// "You shouldn't hear them that loud inside a building": a sound outside the listener's enclosure crosses
+// its walls -- quieter and dull -- and one inside the same enclosure doesn't.
+TEST_CASE(walls_muffle_the_street_and_a_cabin_keeps_its_own_engine) {
+    AudioEngine audio;
+    audio.initialize(AudioBackendMode::Manual);
+    auto pcm = sineClip(48000, 0.5, 2000.0);
+    AudioClipHandle clip = audio.createClip(pcm.data(), pcm.size(), 1, 48000);
+    const AudioBarrier walls{0.12f, 600.0f};
+    // a building covers x > 50
+    audio.setEnclosureQuery([&](const Vec3& p) {
+        return p.x > 50 ? AudioEnclosure{7, walls} : AudioEnclosure{};
+    });
+    auto heard = [&](const Vec3& ear, const Vec3& src) {
+        audio.setListener(ear, Vec3(0, 0, -1));
+        audio.update();
+        audio.playAt(clip, src, 200.0);
+        pump(audio, 4096);
+        const double e = pump(audio, 4096).total();
+        audio.stopAll();
+        return e;
+    };
+    const double open = heard(Vec3(40, 0, 0), Vec3(30, 0, 0));      // both outdoors, 10 m apart
+    const double throughWall = heard(Vec3(60, 0, 0), Vec3(50, 0, 0));   // ear in, street out, 10 m apart
+    CHECK(audio.listenerEnclosure() == 7);
+    const double sameRoom = heard(Vec3(60, 0, 0), Vec3(70, 0, 0));       // both in, 10 m apart
+    std::printf("    [walls] street heard indoors %.3f of outdoors; same room %.3f\n", throughWall / open,
+                sameRoom / open);
+    CHECK(throughWall < open * 0.08);    // -18 dB of walls, and 2 kHz is past their 600 Hz cutoff
+    CHECK(sameRoom > open * 0.9);
+
+    // a cabin: the listener rides in a car parked in the open, the ear hanging behind it (a chase camera)
+    audio.setEnclosureQuery({});
+    auto cab = [&] {
+        audio.setListenerCabin(99, Vec3(0, 0, 0), Quat(), Vec3(1, 0.7, 2.2), AudioBarrier{0.3f, 1500.0f});
+    };
+    auto heardFromCar = [&](const Vec3& src) {
+        audio.setListener(Vec3(0, 1.5, 6), Vec3(0, 0, -1));
+        cab();
+        audio.update();
+        audio.playAt(clip, src, 200.0);
+        cab();
+        audio.update();
+        pump(audio, 4096);
+        const double e = pump(audio, 4096).total();
+        audio.stopAll();
+        return e;
+    };
+    const double engine = heardFromCar(Vec3(0, 0, 1.5));     // under the bonnet: in the cabin
+    CHECK(audio.listenerEnclosure() == 99);
+    const double passing = heardFromCar(Vec3(0, 1.5, 12));   // a car outside, the same 6 m from the ear
+    std::printf("    [cabin] own engine %.4f, a car outside %.4f\n", engine, passing);
+    CHECK(passing < engine * 0.25);
+    // the cabin lapses when nobody renews it
+    audio.update();
+    audio.update();
+    CHECK(audio.listenerEnclosure() == 0);
 }

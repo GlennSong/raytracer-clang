@@ -9,8 +9,10 @@
 #include "procgen/city/polygon.h"   // Poly2 (city-plan debug outlines, ADR-0066)
 #include "procgen/city/road_network.h"   // RoadGraph (ExtraNavGraph, plan §8 P8.4)
 #include "procgen/city/road_mesh.h"      // RoadDeckField (RoadDeck)
+#include "procgen/city/rail_track.h"     // RailTrack (RailTracks)
 #include "procgen/terrain.h"
 #include "procgen/height_pyramid.h"   // TerrainLodConfig::baked (ADR-0095)
+#include "procgen/terrain_world_map.h"   // TerrainLodConfig's world maps (ADR-0205, ADR-0208)
 #include "world.h"
 #include <array>
 #include <unordered_map>
@@ -171,6 +173,9 @@ struct InstanceGroup {
     // L-system trees/rocks dominate the triangle budget, so a finite radius is
     // the cheapest large fps win in a big world.
     Real drawDistance = 0;
+    // ...and nearer than this they are not drawn either: a far level of detail, a nearer one drawing them there
+    // (the recipe forest's mid and light trees, tree_lods.h; 0 = none)
+    Real minDistance = 0;
     uint32_t renderLayer = 0;   // debug layer bits (0 = always visible)
     DrawClass drawClass = DrawClass::Unset;   // see DrawClass above
 };
@@ -186,6 +191,11 @@ struct GrassField {
     // slope (the caller has both from its own ground samples: density must not re-sample the ground).
     // Called from worker threads: it must be a pure function.
     std::function<double(double x, double z, double y, double slopeCos)> density;
+    // MANAGED GROUND (Glenn: "a supplemental map ... to shorten grass in some places where we want vegetation but
+    // it's mostly still city"): how tall the grass stands at (x, z), 0..1 of its authored height -- mown in the
+    // city's blocks, wild outside. Empty: full height everywhere. A pure function too (worker threads).
+    std::function<double(double x, double z)> height;
+    double bladeHeight = 0.5;   // the authored clump height (m), before `height` mows it: what a leg wades through
     std::vector<MeshHandle> clumps;                   // the clump variants
     RenderMaterial material;
     double spacing = 0.3;       // grid step inside nearRadius (m); 1.6x beyond
@@ -203,6 +213,10 @@ struct GrassField {
     double cardRadius = 150.0;
     double cardFadeIn = 38.0, cardFadeOut = 40.0;
     double cardTile = 32.0;
+    // CLUTTER LAID ON THE GROUND (ground clutter, ADR-0212): each instance tilted to the ground's normal under it (its
+    // yaw kept), so a stone on a slope rests on it instead of standing upright with its downhill side in the air;
+    // false: upright, as grass
+    bool alignToGround = false;
 };
 
 // THE OCEAN a level draws (its "water" block): the OPEN-sea cells the water mesh covers, at `level`.
@@ -310,6 +324,10 @@ struct TerrainLodConfig {
     // gridRes are the pyramid's grid (bakedCdlodGeometry) and TerrainLodSystem draws its
     // stored tiles instead of evaluating `params` per vertex.
     std::shared_ptr<const pyramid::Pyramid> baked;
+    // ...and its slope per texel (ADR-0205): the far ground lights by it; what covers it per texel and its gullies
+    // and wet ground (ADR-0208): the far ground's layers, and the macro shading everywhere (TerrainLodSystem uploads
+    // them)
+    std::shared_ptr<const TerrainWorldMap> normalMap, coverMap, macroMap;
 };
 
 // The ears of the scene (ADR-0069): AudioSystem drives the AudioEngine
@@ -517,7 +535,13 @@ struct InVehicle {
 // leaves the character alone while this is present -- no walking, no gravity,
 // no ground snapping -- because the carrier owns the position every step, and
 // the character's own motion between its pins was what jittered the view.
-struct Passenger {};
+struct Passenger {
+    // Where the rider stands IN THE CARRIER'S OWN FRAME, and whether on their feet: the footsteps pace by this,
+    // not by how far the world moved them (Glenn, seated on a bus: "it sounds like I'm running"). A rider
+    // system that never sets them (a cab, a car's seat) leaves a seated passenger: silent.
+    Vec3 local{0, 0, 0};
+    bool onFoot = false;
+};
 
 // Marks a Vehicle as driven by an AI brain rather than the player (ADR-0062): the
 // SAME physics Vehicle, but its {throttle, steer, brake} come from
@@ -652,6 +676,15 @@ struct AuthoredPlace {
     // keeps the legacy centroid snap.
     bool hasEntrance = false;
     float ex = 0, ez = 0;
+    // The university (Lot::campus): 1 teaching hall, 2 library, 3 residence hall, 4 quad,
+    // 5 sports field; 0 = not campus. `capacity` is how many live there (the residence
+    // hall's beds); 0 = no limit.
+    uint8_t campus = 0;
+    int capacity = 0;
+    // Its FLOOR AREA, m2 (the busy streets): every storey of the building, so a tower draws the residents or the staff
+    // a tower holds and a corner shop a corner shop's -- the citysim weights who lives and works where by it. 0: unknown
+    // (an authored marker), weighed as one ordinary house.
+    float floorArea = 0;
     // Optional building (Living City Phase 4): when width/depth/height are all > 0
     // the loader spawns a static box STRUCTURE of this footprint at the site, so
     // the place IS a building you can walk up to (its door snaps to the sidewalk).
@@ -718,6 +751,10 @@ struct CitySimConfig {
     // metro_v2_density_target_prints). Kept at 400 so no existing level
     // changes; a level that wants its full density raises it.
     int maxAmbient = 400;
+    // About this many agents in the full sim round the player (the K ring's radii adapt; the GPU crowd shows the
+    // rest). 0: the radii as authored. For a level whose population is past what a full ring carries.
+    int nearTarget = 0;
+    int farTarget = 0;    // the far (V) ring held to about this many agents (0: the radii as set)
     uint32_t seed = 1;
     float hoursPerSecond = 0.05f;        // sim-clock hours per real second
     // The in-world hour the level OPENS at. Agents are placed straight from
@@ -759,6 +796,9 @@ struct CitySimConfig {
     int busStops = 8;
     int buses = 0;
     float busMaxWalk = 120.0f;
+    // THE SERVICE DAY (hours): outside it the buses go back to their depot. Used only where the city has a depot
+    // (a bus depot lot); end <= start is around the clock.
+    float busServiceStart = 5.5f, busServiceEnd = 23.5f;
     // PHYSICAL TRAFFIC (R5): how many of the moving cars nearest the player are
     // handed to real Jolt vehicles that chase the sim's plan. 0 = none: every
     // car is drawn on the sim's own motion, which keeps its wheels on the road
@@ -819,6 +859,32 @@ struct CitySimConfig {
     // park/civic) the citysim bridge turns into a routable PlaceMap at build.
     // Empty for levels that don't author any (the generator emits them later).
     std::vector<AuthoredPlace> places;
+    // THE WALKS (parks' paths, the campus quad's): ax, az, bx, bz, width -- a negative width keeps the walk's loose
+    // ends off the streets (NavGraph::appendFootpaths). The citysim joins them into its walking network.
+    std::vector<std::array<double, 5>> footpaths;
+    // LOOPS to run (a sports field's track), closed polylines world XZ: the citysim's jog spots.
+    std::vector<std::vector<std::array<double, 2>>> jogLoops;
+    // AREAS an activity happens on (a pitch): kind, centre x z, long axis x z, half length, half width.
+    struct ActivityAreaSpec { std::string kind; double cx = 0, cz = 0, ax = 1, az = 0, halfL = 0, halfW = 0; };
+    std::vector<ActivityAreaSpec> activityAreas;
+    // PLACES TO SIT that are not furniture (a fountain's rim): x, z, face x, face z, hip (above the ground).
+    std::vector<std::array<double, 5>> sitSpots;
+    // THE PARKING GARAGES you can drive into (shape_grammar buildGarage): the portal on the street (x z, the way out)
+    // and every stall -- x, z, face x, face z, the deck's height (world y).
+    // buses: a BUS DEPOT's bays (sculptBusDepot) -- only buses park there, and buses park nowhere else
+    struct GarageSpec { double px = 0, pz = 0, ox = 0, oz = 1; std::vector<std::array<double, 5>> stalls; bool buses = false; };
+    std::vector<GarageSpec> garages;
+};
+
+// THE OPEN SIGNS in shop windows (storefronts stage 3), one 200 m cell's: the loader makes two InstanceGroups of the
+// one sign mesh -- this entity's, lit, and `dark`'s, unlit -- and the citysim deals each sign (its world matrix, the
+// place it belongs to as an index into CitySimConfig::places) into one or the other: lit while someone is on shift
+// there and it is open. Runtime-only.
+struct OpenSigns {
+    Entity dark;
+    std::vector<Mat4> at;
+    std::vector<int> place;
+    std::vector<uint8_t> lit;   // as last dealt (0xFF: not yet)
 };
 
 // Build-time street furniture (device: "place the stop lights when we build
@@ -846,14 +912,21 @@ struct RoadDeck {
     RoadDeckField field;
 };
 
+// The RAIL TRACKS a road entity's builder laid (rail_track.h), stored beside its RoadDeck: what the trains run on.
+struct RailTracks {
+    std::vector<RailTrack> tracks;
+};
+
 struct StreetFurniture {
     struct Signal {
         Vec3 base;      // pole foot (on the road deck)
         Vec3 face;      // head faces this way (toward its approaching traffic)
         int link = -1;  // NavGraph link the signal governs
+        bool shared = false;   // an earlier signal's pole and head (two links on one approach): no head of its own
     };
     std::vector<Signal> signalPoles;   // ("signals" is a Qt macro — editor includes this)
     std::vector<Vec3> lampHeads;  // street-lamp bulb positions (night lights)
+    std::vector<Vec3> streetTrees;   // street-tree trunk feet, in their pits on the sidewalk (Scenery instances)
     int navLinkCount = 0;         // consumer sanity check: same nav build?
     Entity postGroup{};           // the loader's signal-post InstanceGroup
 };

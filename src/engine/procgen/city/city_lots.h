@@ -51,6 +51,7 @@ struct DoorSpec {
     Real width = 0;
     Real height = 0;
     bool back = false;   // the rear service door (attached buildings): it faces the yard, not the street
+    bool open = false;   // an OPEN BAY (a fire station's, its roller door up): a gap in the wall, no leaf to swing
 };
 
 // One GROWN MASSING and its verbatim regen key (ADR-0080): growPlanBuilding
@@ -64,6 +65,7 @@ struct BuildingUnit {
     std::vector<DoorSpec> doors;
     bool enterable = false;   // grown with openDoorway (LotParams::enterableAt)
     std::vector<Vec3> beacons;   // aviation lamp centres (world), from the grammar's "beacon" attaches
+    std::vector<RoofItem> roof;  // what stands on the roof (BuildingMesh::roof): walled by the collider
 };
 
 struct LotBuilding {
@@ -118,6 +120,26 @@ struct LotBuilding {
     // loader turns them into thin wall colliders (drive feedback: "Parks
     // also have no collision detection").
     std::vector<std::pair<Vec2, Vec2>> fenceSegs;
+    // SEALED GROUND on a park (the quad, a park's walks): its paths and plazas, world XZ -- the host keeps grass off
+    // them (a meadow grew over every path once the grass came to the city).
+    std::vector<Poly2> sealed;
+    // ITS WALKS as lines (a park's paths, the quad's walks): centre a -> b and width, world XZ. The citysim joins
+    // them into its walking network (NavGraph::appendFootpaths), so people cross the parks and the quad.
+    // streetEnds false: its loose ends are not joined to a street (a walk to a hall's quad door: the nearest street is
+    // through the hall)
+    struct Walk { Vec2 a, b; Real width = 2.0; bool streetEnds = true; };
+    std::vector<Walk> walks;
+    // LOOPS to run (a sports field's track: the middle of its first lane), closed polylines, world XZ: the citysim's
+    // jog spots (activities.h)
+    std::vector<Poly2> loops;
+    // AREAS an activity happens on (a sports field's pitch): its kind, its centre, its long axis (unit), and its half
+    // length and width, world XZ -- the citysim's activity areas (a kickabout's two halves)
+    struct Area { std::string kind; Vec2 center, axis{1, 0}; Real halfL = 0, halfW = 0; };
+    std::vector<Area> areas;
+    // PLACES TO SIT that are not furniture (a fountain's rim): point, the way it faces, seat height, world XZ / Y
+    // above the ground -- the citysim's seats like the benches'
+    struct SitSpot { Vec2 at, face{0, 1}; Real hip = 0.45; };
+    std::vector<SitSpot> sitSpots;
     // The grown massings + regen keys + doors (ADR-0080). Parks/greens: empty.
     std::vector<BuildingUnit> units;
     // SITE PLAN (skyscrapers v2, ADR-0086): the lot's ground around the
@@ -156,6 +178,8 @@ struct LotParams {
     // Within the freeway clearance of a freeway or ramp (a lane city's decks: lanesNearFreeway). Set, it replaces
     // the lot graph's own test.
     std::function<bool(Real, Real)> nearFreeway;
+    // Within a rail line's clearance, a whole footprint (lanesTrackKeepOut): no building there, as near a freeway.
+    std::function<bool(const std::vector<Vec2>&)> trackKeepOut;
     Real roadMargin = 11.0;   // inset from the block edge to the buildable interior
                               // (road half-width + sidewalk) — wider = more sidewalk
     Real lotSetback = 1.4;    // building inset from its own lot lines
@@ -165,6 +189,7 @@ struct LotParams {
     Real maxAspect = 3.5;     // ...or whose long/short exceeds this (no knife blades)
     Real minLotArea = 90.0;   // skip tiny leftover lots
     Real buildChance = 0.92;  // per-lot occupancy (rest become plazas/gaps)
+    bool openLots = true;     // a lot that does not build gets a use (car park, playground, garden, pocket park)
     // SIDEWALK RISE (site plans, ADR-0086): how far the adjoining sidewalk's
     // top stands above the ground the lot samples 2 m out from its frontage —
     // the road carve step plus the kerb (kRoadConformStep + RoadLook::curb on
@@ -234,6 +259,15 @@ struct LotParams {
     // shell + ceiling) and is marked BuildingUnit::enterable. The loader
     // passes the player spawn; a level can name more later.
     std::vector<Vec2> enterableAt;
+    // A LAB'S LOT (toolkit_lab, issue #105 -- Glenn, 2026-10-15: "a building in a lot. No town just one
+    // building in a lot"): every block is ONE site, no parcel walk (citysim.wholeBlocks), and `recipe` (when
+    // set) is the architect recipe every such site grows, by name, the way a lineup grows it -- not the
+    // district's roll or the block landmark (citysim.recipe). `recipeCoreness` (0..1) stands in for the
+    // lot's own coreness when >= 0 (citysim.coreness), so a lab can ask for a 20-storey tower rather
+    // than the 56 a downtown centre rolls.
+    bool wholeBlocks = false;
+    std::string recipe;
+    Real recipeCoreness = -1;
     uint32_t seed = 1;
     // TERRAIN sampler (world y at x,z): buildings grow from their graded pad
     // plane (the ENTRANCE-side grade, so the front door sits level with the
@@ -253,6 +287,10 @@ struct LotParams {
     // hillside neighbourhoods that the skirt drape had just made viable —
     // Glenn: "the buildings are gone, which seems incorrect".)
     Real maxPadRelief = 8.0;
+    // A BIG-BOX STORE's site is ONE flat floor and its parking lot: the streets round its block may climb at most this
+    // much (measured on the streets themselves where streetHeight is set). maxPadRelief let 8 m through and six of the
+    // island's ten stores sat 3-5.6 m below a street on some side (Glenn: "a massive sunken building").
+    Real maxBigBoxRelief = 2.0;
     // Host hook (floorplan-conformance round): rebuild the ground sampler
     // with EXTRA flatten regions folded in priority-correctly (one region
     // set, one applyFlatten). The in-pass block-grade fold uses this so
@@ -298,7 +336,20 @@ struct LotPlanDebug {
     int attachedBuilt = 0;   // buildings grown with at least one party wall
     std::vector<Vec2> attachedAt;   // a few of them, for the log's teleport hint
     int bigBoxBlocks = 0;            // whole blocks given to a big-box store and its parking lot
+    int mallBlocks = 0;              // big-box blocks given to an indoor mall
+    std::vector<Vec2> mallAt;
+    int paseoBlocks = 0;             // open-air malls: a paseo between two rows of shops
+    std::vector<Vec2> paseoAt;
+    int nightlifeBuildings = 0;
+    int towerVenues = 0;             // towers with a department store over the lobby or restaurant floors on top      // low-rise bars/clubs/restaurants round each town's nightlife strip
+    int campusBlocks = 0;            // blocks given to a university campus (its halls round a quad)
+    int sportsBlocks = 0;            // the campus's sports field (a block of its own, near it)
+    int dormBlocks = 0;              // the campus's dorm block (residence halls round a courtyard, near it)
+    std::vector<Vec2> campusAt;      // where (the block's centre)
+    std::vector<std::string> campusWhat;   // what each campusAt is ("campus", "sports field", "dorms")
     std::vector<Vec2> bigBoxAt;
+    int depotBlocks = 0;             // blocks given to a bus depot (its yard, bays and shed)
+    std::vector<Vec2> depotAt;
     int rejPlan = 0;     // finished plan too pinched (inradius gauge) — was
                          // double-counted into rejFill
     int rejClear = 0;    // no inset of the plan cleared the road corridors
@@ -313,6 +364,8 @@ struct LotPlanDebug {
     int pEscaped = 0, pTiny = 0, pThin = 0, pPlaced = 0;
     int pClips = 0, pLeftOverlapping = 0, pSameEdge = 0, pAtInsert = 0, pConcave = 0, pClipFailed = 0;
     int rejRelief = 0;   // ground range across the lot exceeds maxPadRelief
+    // THE OPEN-LOT PROGRAM: what the lots that did not build became instead of a bare green
+    int openCarParks = 0, openPlaygrounds = 0, openGardens = 0, openParks = 0;
 };
 
 // The SKYLINE CENSUS (skyscrapers v2, M0): what the lot pass actually BUILT, as
@@ -512,6 +565,11 @@ constexpr int kMassBoxTile = 8;
 void appendLotMassBox(RenderMesh& out, const LotBuilding& lot,
                       const Vec3& sideColor, const Vec3& roofColor,
                       Real bottomY = std::numeric_limits<Real>::quiet_NaN());
+
+// THE PARKING LOT'S STALLS (a big box's or a mall's lot, as sculptParking stripes it): each stall's centre and the
+// way a car parked nose-in faces, height left 0 (the lot's plate). `facing`: the store's faceDir (the lot's frame
+// is v = -facing, inward from the street). `portal` / `out`: the lot's way in, the middle of its street edge.
+std::vector<ParkingStall> surfaceStallsOf(const Poly2& lotP, Vec2 facing, Vec2* portal = nullptr, Vec2* out = nullptr);
 
 }  // namespace engine
 

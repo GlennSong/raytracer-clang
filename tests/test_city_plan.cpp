@@ -147,3 +147,43 @@ TEST_CASE(city_shape_grows_over_the_plain_not_up_the_range) {
     CHECK(line.size() > 3);
     CHECK(s.depthAt(line.back()) < 45.0);
 }
+
+TEST_CASE(a_shaped_city_meets_its_boulevard_in_junctions_not_stars) {
+    // Glenn, 2026-10-09: "some streets look like a mess... like there are many roads that merged together". A city
+    // laid by its land's depth (world.land.shape, the island's cities) lays its grid, its boulevard and rings, its
+    // spokes and its wedge streets separately; they used to MISS each other by a few metres -- a grid street short of
+    // the boulevard, a wedge street starting 20 m along it -- and collapseShortLinks chained those near-misses into
+    // stars (17 streets at one junction on island 8). Now the grid ends on the boulevard, the streets beyond start
+    // where it arrives, and a merge can't move a junction further than the link it removes is long.
+    // Then the triangles (Glenn: "can you look at the small triangles?"): grid streets meeting the boulevard at a
+    // glance or as a corner just inside it, stubs left by the cuts, junctions 30-45 m apart on a contour (which the
+    // merge then kinked together), a contour loop too thin to hold a block.
+    // Measured: worst junction 4 streets, no pair leaving one under 15 degrees apart; before all this, 9 and 36.
+    Brief b = testBrief();
+    b.world = {{"base", {{"heightScale", 0.0}, {"mountainHeight", 0.0}}},
+               {"seaLevel", -50.0},
+               {"land", {{"shape", true}, {"area", 2.4e6}}}};
+    CityPlan plan = generatePlan(b);
+    CHECK(!plan.limits.empty());
+    const PlanScore s = evaluatePlan(plan);
+    std::printf("    [shaped] %.0f m paved into another, worst junction %d streets, %d pairs under 15 degrees\n",
+                static_cast<double>(s.pavedOverlapM), s.worstJunction, s.tightTurns);
+    CHECK(s.worstJunction <= 5);
+    CHECK(s.tightTurns == 0);
+    CHECK(s.pavedOverlapM < 60);
+}
+
+TEST_CASE(the_plan_score_measures_streets_merging) {
+    // The score's merged-street numbers (PlanScore: worstJunction / crowdedJunctions / tightTurns / pavedOverlapM),
+    // on the round test city -- which lays its grid, ring and spokes the older way and was never shaped. Pinned as
+    // measured (799 m, worst junction 4, none under 15 degrees), so a change that merges its streets shows up here,
+    // not first in a walk-through. The 799 m is real and older than this measure: where the round layout's ring
+    // meets its grid and spokes -- owed, like metro_planned's 1.9 km and metro_rivers' 3.1 km.
+    CityPlan plan = generatePlan(testBrief());
+    const PlanScore s = evaluatePlan(plan);
+    std::printf("    [round] %.0f m paved into another, worst junction %d streets (%d of 5+), %d pairs under 15 degrees\n",
+                static_cast<double>(s.pavedOverlapM), s.worstJunction, s.crowdedJunctions, s.tightTurns);
+    CHECK(s.worstJunction <= 5);
+    CHECK(s.tightTurns == 0);
+    CHECK(s.pavedOverlapM < 900);
+}

@@ -23,6 +23,11 @@ struct GroundGrid {
     double& at(int i, int j) { return z[static_cast<std::size_t>(j) * nx + i]; }
     double at(int i, int j) const { return z[static_cast<std::size_t>(j) * nx + i]; }
     double sample(double x, double y) const;            // bilinear, clamped to the grid
+    // THE SURFACE AS DRAWN: the grid's mesh splits each cell on its (i, j)-(i+1, j+1) diagonal
+    // (MeshBuilder::gridCell), two flat triangles -- not the bilinear patch. On a cell twisted between a
+    // deck-pinned node and the ground held down beside it the two differ by metres; anything decided
+    // against the ground a player sees (a deck's underside, a slab side) asks this.
+    double sampleDrawn(double x, double y) const;
     bool inside(double x, double y) const {
         return x >= x0 && x <= x0 + res * (nx - 1) && y >= y0 && y <= y0 + res * (ny - 1);
     }

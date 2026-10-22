@@ -45,28 +45,13 @@
         0.0
       ],
       "road": {
-        "color": [
-          0.09,
-          0.09,
-          0.1
-        ],
-        "corner_radius": 3.0,
-        "crosswalks": true,
-        "curb": 0.16,
-        "generate": {
-          "arterials": 3,
-          "artery_width": 13,
-          "block_size": 90,
-          "curviness": 0.22,
-          "kind": "district",
-          "radius": 200,
-          "seed": 5,
-          "street_width": 7
-        },
-        "lift": 0.08,
-        "markings": true,
-        "sidewalk": 1.8,
-        "width": 7.0
+        "builder": "lanes",
+        "graph": "assets/lanelab/converted/grown_lanelab.json",
+        "sidewalks": {
+          "arterial": 1.8,
+          "collector": 1.8,
+          "local": 1.8
+        }
       },
       "shape": "road"
     }

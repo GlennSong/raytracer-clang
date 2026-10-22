@@ -125,13 +125,15 @@ TEST_CASE(a_bus_passenger_rides_in_the_bus_frame) {
     CHECK(transit.riding() == bus);
     CHECK(world.has<Passenger>(player));
 
-    // STANDING STILL FOR 30 s: fixed in the bus's drawn frame.
+    // STANDING STILL FOR 60 s: fixed in the bus's drawn frame. (60, not 30: since the loops' buses are split over both
+    // directions -- 2026-10-06, one bus a direction here -- the bus found first serves a stop just short of a signalled
+    // junction and waits out its red, ~25 s, before it pulls away; 30 s saw it travel 1 m.)
     Mat4 pose;
     CHECK(city.busFrame(bus, &pose));
     const Vec3 start = inFrame(pose, world.get<Transform>(player)->position);
     const Vec3 busStart = pose.transformPoint(Vec3(0, 0, 0));
     Real drift = 0, travel = 0;
-    for (int i = 0; i < 60 * 30; ++i) {
+    for (int i = 0; i < 60 * 60; ++i) {
         tick({});
         if (transit.riding() != bus) break;
         CHECK(city.busFrame(bus, &pose));
@@ -148,7 +150,11 @@ TEST_CASE(a_bus_passenger_rides_in_the_bus_frame) {
     // WALKING the aisle: forward for 2 s moves you along the saloon and keeps
     // you inside it.
     const Vec3 before = transit.aboardAt();
-    fly.yaw = 0;
+    // ...facing down the aisle: the walk is taken in the bus's frame from the view's heading, so look along the bus
+    // (a world heading walked a bus parked across it sideways into the door zone, nowhere near a seat -- once two-way
+    // buses changed which bus stops first, 2026-10-06)
+    CHECK(city.busFrame(bus, &pose));
+    fly.yaw = std::atan2(pose.m[0][2], -pose.m[2][2]) * Real(57.29577951308232);
     for (int i = 0; i < 120; ++i) {
         CityPlayerTransitSystem::RideInput walk;
         walk.forward = 1.0;

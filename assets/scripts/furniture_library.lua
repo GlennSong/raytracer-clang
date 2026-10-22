@@ -96,6 +96,24 @@ furniture_library = {
         exit = { 0, 0, 1.0 } },
     },
   },
+  -- A BAR STOOL faces back to its counter (-z: the bar runs place them in front of it, turned out into the room).
+  bar_stool = {
+    family = "seating", tags = { "bar" },
+    spots = { { id = "seat", at = seat(0, 0.80, 0.21) } },
+    verbs = { { verb = "sit", spots = { "seat" }, eye = { 0, 1.50, 0.26 }, look = { 0, -0.10, -1 }, exit = { 0, 0, 0.75 } } },
+  },
+  -- A BOOTH: two benches facing across the table (its end to the wall, +z the aisle).
+  booth = {
+    family = "seating", tags = { "bar", "restaurant" },
+    spots = {
+      { id = "l", at = seat(-0.68, 0.56, 0.75) },
+      { id = "r", at = seat(0.68, 0.56, 0.75) },
+    },
+    verbs = {
+      { verb = "sit", spots = { "l" }, eye = { -0.72, 1.24, 0.75 }, look = { 1, -0.10, 0 }, exit = { -0.55, 0, 1.75 } },
+      { verb = "sit", spots = { "r" }, eye = { 0.72, 1.24, 0.75 }, look = { -1, -0.10, 0 }, exit = { 0.55, 0, 1.75 } },
+    },
+  },
   bistro_chair = {
     family = "seating", tags = { "outdoor", "cafe", "kitchen" },
     spots = { { id = "seat", at = seat(0, 0.48, 0.26) } },
@@ -140,9 +158,186 @@ furniture_library = {
     clearance = { front = 0.9 },
     anchors = { { id = "worktop", at = { 0.0, 0.90, 0.32 }, w = 0.45, d = 0.4, accepts = { "kitchen", "bowl", "plant" }, chance = 0.35 } },
   },
-  wardrobe = { family = "storage", tags = { "bedroom" }, clearance = { front = 0.7 } },
+  wardrobe = { family = "storage", tags = { "bedroom", "dorm" }, clearance = { front = 0.7 } },
   kitchen_tall = { family = "storage", tags = { "kitchen" }, clearance = { front = 0.9 } },
   filing_cabinet = { family = "storage", tags = { "office" }, clearance = { front = 0.6 } },
+  -- WHAT THE ROOM PROGRAMS PICK BY (furniture_rooms.lua, M3b): every other piece a room holds, its family and tags.
+  -- A program asks for "seating tagged office" or "storage tagged bedroom", and the slot's size settles which.
+  monitor = { family = "appliance", tags = { "office", "study" } },
+  rug = { family = "decor", tags = { "living", "floor" } },
+  planter = { family = "decor", tags = { "plant", "office", "lobby" } },
+  picture = { family = "decor", tags = { "art" } },
+  kitchen_sink = { family = "fixture", tags = { "kitchen" } },
+  kitchen_hob = { family = "appliance", tags = { "kitchen" } },
+  kitchen_wall = { family = "storage", tags = { "kitchen", "wall" } },
+  bathtub = { family = "fixture", tags = { "bathroom" } },
+  vanity = { family = "fixture", tags = { "bathroom" } },
+  shelving = { family = "storage", tags = { "closet" } },
+  -- A MEETING TABLE's six chairs, three a side, each facing the table (Glenn, 2026-10-16: "I can't sit in the
+  -- meeting room chairs")
+  meeting_table = {
+    family = "surface", tags = { "meeting" },
+    spots = {
+      { id = "n0", at = seat(-0.85, 0.52, 0.35) },
+      { id = "n1", at = seat(0.0, 0.52, 0.35) },
+      { id = "n2", at = seat(0.85, 0.52, 0.35) },
+      { id = "s0", at = seat(-0.85, 0.52, 2.05) },
+      { id = "s1", at = seat(0.0, 0.52, 2.05) },
+      { id = "s2", at = seat(0.85, 0.52, 2.05) },
+    },
+    verbs = {
+      { verb = "sit", spots = { "n0" }, eye = { -0.85, 1.22, 0.42 }, look = { 0, -0.10, 1 }, exit = { -0.85, 0, -0.60 } },
+      { verb = "sit", spots = { "n1" }, eye = { 0.0, 1.22, 0.42 }, look = { 0, -0.10, 1 }, exit = { 0.0, 0, -0.60 } },
+      { verb = "sit", spots = { "n2" }, eye = { 0.85, 1.22, 0.42 }, look = { 0, -0.10, 1 }, exit = { 0.85, 0, -0.60 } },
+      { verb = "sit", spots = { "s0" }, eye = { -0.85, 1.22, 1.98 }, look = { 0, -0.10, -1 }, exit = { -0.85, 0, 3.00 } },
+      { verb = "sit", spots = { "s1" }, eye = { 0.0, 1.22, 1.98 }, look = { 0, -0.10, -1 }, exit = { 0.0, 0, 3.00 } },
+      { verb = "sit", spots = { "s2" }, eye = { 0.85, 1.22, 1.98 }, look = { 0, -0.10, -1 }, exit = { 0.85, 0, 3.00 } },
+    },
+  },
+  whiteboard = { family = "fixture", tags = { "meeting", "classroom" } },
+  -- A CUBICLE's chair, facing its desk at the back (-z); you walk in at its open front ("I still can't enter the
+  -- cubes and sit in the chairs")
+  cubicle = {
+    family = "surface", tags = { "office", "open_plan" },
+    spots = { { id = "seat", at = seat(0, 0.52, 1.2) } },
+    verbs = { { verb = "sit", spots = { "seat" }, eye = { 0, 1.22, 1.12 }, look = { 0, -0.10, -1 }, exit = { 0, 0, 2.7 } } },
+  },
+  water_cooler = { family = "appliance", tags = { "office", "drink" }, clearance = { front = 0.7 } },
+  copier = { family = "appliance", tags = { "office", "print" }, clearance = { front = 0.9 } },
+  -- a phone booth's stool, facing its shelf at the back (-z)
+  phone_booth = {
+    family = "fixture", tags = { "office", "booth" }, clearance = { front = 0.9 },
+    spots = { { id = "seat", at = seat(0, 0.69, 0.62) } },
+    verbs = { { verb = "sit", spots = { "seat" }, eye = { 0, 1.38, 0.58 }, look = { 0, -0.10, -1 }, exit = { 0, 0, 1.4 } } },
+  },
+  -- BENCHING's chairs either side of the desks, facing in (a bench for four has no seats at z 4.0: verbOnPiece)
+  desk_pod = {
+    family = "surface", tags = { "office", "open_plan" },
+    spots = {
+      { id = "l8", at = seat(-1.15, 0.52, 0.8) },
+      { id = "r8", at = seat(1.15, 0.52, 0.8) },
+      { id = "l24", at = seat(-1.15, 0.52, 2.4) },
+      { id = "r24", at = seat(1.15, 0.52, 2.4) },
+      { id = "l40", at = seat(-1.15, 0.52, 4.0) },
+      { id = "r40", at = seat(1.15, 0.52, 4.0) },
+    },
+    verbs = {
+      { verb = "sit", spots = { "l8" }, eye = { -1.08, 1.22, 0.8 }, look = { 1, -0.10, 0 }, exit = { -1.85, 0, 0.8 } },
+      { verb = "sit", spots = { "r8" }, eye = { 1.08, 1.22, 0.8 }, look = { -1, -0.10, 0 }, exit = { 1.85, 0, 0.8 } },
+      { verb = "sit", spots = { "l24" }, eye = { -1.08, 1.22, 2.4 }, look = { 1, -0.10, 0 }, exit = { -1.85, 0, 2.4 } },
+      { verb = "sit", spots = { "r24" }, eye = { 1.08, 1.22, 2.4 }, look = { -1, -0.10, 0 }, exit = { 1.85, 0, 2.4 } },
+      { verb = "sit", spots = { "l40" }, eye = { -1.08, 1.22, 4.0 }, look = { 1, -0.10, 0 }, exit = { -1.85, 0, 4.0 } },
+      { verb = "sit", spots = { "r40" }, eye = { 1.08, 1.22, 4.0 }, look = { -1, -0.10, 0 }, exit = { 1.85, 0, 4.0 } },
+    },
+  },
+  -- THE UNIVERSITY
+  single_bed = {
+    family = "sleeping", tags = { "dorm", "bedroom_single" },
+    spots = {
+      { id = "bed", at = seat(0, 0.50, 1.02) },
+      { id = "edge", at = seat(0.30, 0.50, 1.20) },
+    },
+    verbs = {
+      { verb = "lie", label = "lie down", spots = { "bed", "edge" }, eye = { 0, 0.74, 0.36 }, look = { 0, 1.6, 1 }, exit = { 0.85, 0, 1.0 } },
+      { verb = "sit", spots = { "edge" }, eye = { 0.30, 1.18, 1.10 }, look = { 1, -0.1, 0 }, exit = { 0.85, 0, 1.2 } },
+    },
+  },
+  school_desk = { family = "surface", tags = { "classroom", "study" } },
+  school_chair = {
+    family = "seating", tags = { "classroom", "study" },
+    spots = { { id = "seat", at = seat(0, 0.47, 0.26) } },
+    verbs = { { verb = "sit", spots = { "seat" }, eye = { 0, 1.19, 0.22 }, look = { 0, -0.08, 1 }, exit = { 0, 0, 0.9 } } },
+  },
+  -- six tip-up seats on the row's riser (rise: the spots climb 0.18 m a tier with the style bits); built below
+  lecture_row = { family = "seating", tags = { "lecture" }, rise = 0.18, spots = {}, verbs = {} },
+  aisle_step = { family = "fixture", tags = { "lecture", "stair" } },
+  -- THE CIVIC HALLS' AND THE HOSPITAL'S SEATS (Glenn, 2026-10-13: "you can't interact with the chairs" -- every piece
+  -- added that day was scenery: no entry, no spots). Rows are built in a loop below.
+  pew = { family = "seating", tags = { "church", "public" }, spots = {}, verbs = {} },
+  waiting_seats = { family = "seating", tags = { "lobby", "public" }, spots = {}, verbs = {} },
+  cinema_row = { family = "seating", tags = { "cinema" }, rise = 0.25, spots = {}, verbs = {} },
+  jury_box = { family = "seating", tags = { "court" }, spots = {}, verbs = {} },
+  judge_bench = {
+    family = "seating", tags = { "court" },
+    spots = { { id = "chair", at = seat(0, 0.86, 0.55) } },
+    verbs = { { verb = "sit", label = "take the bench", spots = { "chair" }, eye = { 0, 1.56, 0.55 }, look = { 0, -0.12, 1 },
+                exit = { 2.25, 0, 0.6 } } },   -- (down off the dais, past the witness box's end)
+  },
+  hospital_bed = {
+    family = "sleeping", tags = { "hospital" },
+    spots = { { id = "bed", at = seat(0, 0.64, 1.15) }, { id = "edge", at = seat(0.40, 0.64, 1.25) } },
+    verbs = {
+      { verb = "lie", label = "lie down", spots = { "bed", "edge" }, eye = { 0, 1.02, 0.45 }, look = { 0, 0.35, 1 },
+        exit = { 0.95, 0, 1.15 } },
+      { verb = "sit", label = "sit on the bed", spots = { "edge" }, eye = { 0.40, 1.34, 1.25 }, look = { 1, -0.1, 0 },
+        exit = { 0.95, 0, 1.25 } },
+    },
+  },
+  exam_couch = {
+    family = "sleeping", tags = { "hospital" },
+    spots = { { id = "couch", at = seat(0, 0.72, 1.10) }, { id = "edge", at = seat(0.25, 0.72, 1.20) } },
+    verbs = {
+      { verb = "sit", label = "sit on the couch", spots = { "edge" }, eye = { 0.25, 1.42, 1.20 }, look = { 1, -0.1, 0 },
+        exit = { 0.75, 0, 1.20 } },
+      { verb = "lie", label = "lie down", spots = { "couch", "edge" }, eye = { 0, 1.05, 0.35 }, look = { 0, 0.4, 1 },
+        exit = { 0.75, 0, 1.10 } },
+    },
+  },
+  -- the sports field's stand: three tiers of four seats, each its own place to sit (built in a loop, below)
+  bleacher = { family = "seating", tags = { "outdoor", "sports" }, spots = {}, verbs = {} },
+  -- STAFF PLACES (the people who work there, behind what they serve across; Glenn, 2026-10-09: "Ulu Coffee has the
+  -- open sign lit up but nobody is there manning the restaurant"). Family "counter", tag "staff": the occupants plan
+  -- puts a place's staff here first and never its customers. Each faces +z, the customer; staff stand at -z.
+  shop_counter = {   -- (furniture.cpp sets it 0.85 m off the back wall: the server's aisle)
+    family = "counter", tags = { "shop", "staff" },
+    spots = { { id = "till", at = { 0.40, 0, -0.42 } }, { id = "side", at = { -0.45, 0, -0.42 } } },
+    verbs = {
+      { verb = "stand", label = "stand behind the counter", spots = { "till" }, eye = { 0.40, 1.62, -0.42 }, look = { 0, -0.2, 1 }, exit = { 0.40, 0, -0.42 } },
+      { verb = "stand", label = "stand behind the counter", spots = { "side" }, eye = { -0.45, 1.62, -0.42 }, look = { 0, -0.2, 1 }, exit = { -0.45, 0, -0.42 } },
+    },
+  },
+  bar_counter = {    -- (the bartender's 0.95 m aisle between it and the back bar)
+    family = "counter", tags = { "bar", "staff" },
+    spots = { { id = "l", at = { -0.45, 0, -0.45 } }, { id = "r", at = { 0.45, 0, -0.45 } } },
+    verbs = {
+      { verb = "stand", label = "stand behind the bar", spots = { "l" }, eye = { -0.45, 1.62, -0.45 }, look = { 0, -0.2, 1 }, exit = { -0.45, 0, -0.45 } },
+      { verb = "stand", label = "stand behind the bar", spots = { "r" }, eye = { 0.45, 1.62, -0.45 }, look = { 0, -0.2, 1 }, exit = { 0.45, 0, -0.45 } },
+    },
+  },
+  kitchen_pass = {   -- (the cooks' 1.1 m aisle between it and the line)
+    family = "counter", tags = { "restaurant", "staff" },
+    spots = { { id = "l", at = { -0.6, 0, -0.55 } }, { id = "r", at = { 0.6, 0, -0.55 } } },
+    verbs = {
+      { verb = "stand", label = "stand at the pass", spots = { "l" }, eye = { -0.6, 1.62, -0.55 }, look = { 0, -0.2, 1 }, exit = { -0.6, 0, -0.55 } },
+      { verb = "stand", label = "stand at the pass", spots = { "r" }, eye = { 0.6, 1.62, -0.55 }, look = { 0, -0.2, 1 }, exit = { 0.6, 0, -0.55 } },
+    },
+  },
+  checkout = {       -- the cashier beside the register, facing across the belt (-x)
+    family = "counter", tags = { "shop", "staff" },
+    spots = { { id = "cashier", at = { 0.80, 0, 2.30 } } },
+    verbs = { { verb = "stand", label = "work the till", spots = { "cashier" }, eye = { 0.80, 1.62, 2.30 },
+                look = { -1, -0.2, 0 }, exit = { 0.80, 0, 2.30 } } },
+  },
+  -- the lecturer's place: behind it, between it and the board, facing the hall
+  lectern = {
+    family = "fixture", tags = { "lecture" },
+    spots = { { id = "stand", at = { 0, 0, -0.32 } } },
+    verbs = { { verb = "stand", label = "stand at the lectern", spots = { "stand" }, eye = { 0, 1.62, -0.30 },
+                look = { 0, -0.15, 1 }, exit = { 0, 0, -0.75 } } },
+  },
+  -- three places to stand and work at its front (its drawers' side, +z), facing it
+  lab_bench = {
+    family = "surface", tags = { "lab" },
+    spots = { { id = "l", at = { -0.8, 0, 1.05 } }, { id = "m", at = { 0, 0, 1.05 } }, { id = "r", at = { 0.8, 0, 1.05 } } },
+    verbs = {
+      { verb = "stand", label = "stand at the bench", spots = { "l" }, eye = { -0.8, 1.62, 1.0 }, look = { 0, -0.45, -1 }, exit = { -0.8, 0, 1.45 } },
+      { verb = "stand", label = "stand at the bench", spots = { "m" }, eye = { 0, 1.62, 1.0 }, look = { 0, -0.45, -1 }, exit = { 0, 0, 1.45 } },
+      { verb = "stand", label = "stand at the bench", spots = { "r" }, eye = { 0.8, 1.62, 1.0 }, look = { 0, -0.45, -1 }, exit = { 0.8, 0, 1.45 } },
+    },
+  },
+  -- eight chairs, four a side, part of the piece; built below
+  reading_table = { family = "surface", tags = { "library" }, spots = {}, verbs = {} },
+  bookcase = { family = "storage", tags = { "books", "library" }, variety = 8 },
   -- THE GOODS: small things the dressing pass stands on anchors, by their tags
   desk_lamp = { family = "goods", tags = { "desk", "lamp" } },
   potted_plant = { family = "goods", tags = { "plant" } },
@@ -157,3 +352,82 @@ furniture_library = {
     verbs = { { verb = "sit", spots = { "seat" }, eye = { 0, 1.12, 0.36 }, look = { 0, -0.1, 1 }, exit = { 0, 0, 1.05 } } },
   },
 }
+
+-- THE LECTURE ROW's seats: six along the row, each its own place to sit, facing the board (+z); you get up into the
+-- row's own aisle stair beside it (-x), at the riser's height
+do
+  local r = furniture_library.lecture_row
+  for i = 0, 5 do
+    local x = -1.4 + i * 0.56
+    local id = "s" .. i
+    r.spots[#r.spots + 1] = { id = id, at = { x, 0.48, 0.40 } }
+    r.verbs[#r.verbs + 1] = { verb = "sit", spots = { id }, eye = { x, 1.20, 0.36 }, look = { 0, -0.12, 1 },
+                             exit = { -1.95, 0, 0.6 } }
+  end
+end
+
+-- THE PEW: four to a pew, each its own seat, getting out into the gap in front of it; THE WAITING SEATS: four on
+-- their beam; THE CINEMA ROW: six on its riser (its tier's rise folded into the placement), out onto the aisle stair
+-- at its left like a lecture row; THE JURY BOX: two rows of six, the back row up its step, out at the box's side
+do
+  local p = furniture_library.pew
+  for i = 0, 3 do
+    local x, id = -1.05 + i * 0.70, "s" .. i
+    p.spots[#p.spots + 1] = { id = id, at = { x, 0.47, 0.42 } }
+    p.verbs[#p.verbs + 1] = { verb = "sit", spots = { id }, eye = { x, 1.17, 0.36 }, look = { 0, -0.06, 1 }, exit = { x, 0, 0.92 } }
+  end
+  local w = furniture_library.waiting_seats
+  for i = 0, 3 do
+    local x, id = -0.79 + i * 0.527, "s" .. i
+    w.spots[#w.spots + 1] = { id = id, at = { x, 0.47, 0.34 } }
+    w.verbs[#w.verbs + 1] = { verb = "sit", spots = { id }, eye = { x, 1.17, 0.30 }, look = { 0, -0.05, 1 }, exit = { x, 0, 1.0 } }
+  end
+  local c = furniture_library.cinema_row
+  for i = 0, 5 do
+    local x, id = -1.4 + i * 0.56, "s" .. i
+    c.spots[#c.spots + 1] = { id = id, at = { x, 0.48, 0.42 } }
+    c.verbs[#c.verbs + 1] = { verb = "sit", spots = { id }, eye = { x, 1.16, 0.38 }, look = { 0, -0.04, 1 }, exit = { -1.95, 0, 0.6 } }
+  end
+  local j = furniture_library.jury_box
+  for r = 0, 1 do
+    for i = 0, 5 do
+      local x, id = -1.45 + i * 0.58, "r" .. r .. "s" .. i
+      local y, z = r == 0 and 0.70 or 0.50, r == 0 and 0.55 or 1.45
+      j.spots[#j.spots + 1] = { id = id, at = { x, y, z } }
+      j.verbs[#j.verbs + 1] = { verb = "sit", spots = { id }, eye = { x, y + 0.70, z - 0.04 }, look = { 0, -0.08, 1 },
+                               exit = { 2.2, 0, 1.0 } }
+    end
+  end
+end
+
+-- THE READING TABLE's chairs: four a side at x = -0.9 .. 0.9, the near side (z 0.28) facing +z across the table,
+-- the far side (z 1.72) facing back
+do
+  local r = furniture_library.reading_table
+  for side = 0, 1 do
+    local z = side == 0 and 0.28 or 1.72
+    local f = side == 0 and 1 or -1
+    for i = 0, 3 do
+      local x = -0.9 + 0.6 * i
+      local id = (side == 0 and "n" or "f") .. i
+      r.spots[#r.spots + 1] = { id = id, at = { x, 0.49, z } }
+      r.verbs[#r.verbs + 1] = { verb = "sit", spots = { id }, eye = { x, 1.20, z + f * 0.06 }, look = { 0, -0.25, f },
+                               exit = { x - 0.32, 0, z - f * 0.30 } }
+    end
+  end
+end
+
+-- THE BLEACHER's seats: tier t (0 front), four seats along the plank, each a spot with its own sit verb
+do
+  local b = furniture_library.bleacher
+  for t = 0, 2 do
+    local y, z = 0.45 + 0.42 * t, 2.05 - 0.72 * t
+    for i = 0, 3 do
+      local x = -2.1 + 1.4 * i
+      local id = "t" .. t .. "s" .. i
+      b.spots[#b.spots + 1] = { id = id, at = { x, y + 0.02, z } }
+      b.verbs[#b.verbs + 1] = { verb = "sit", spots = { id }, eye = { x, y + 0.72, z - 0.05 }, look = { 0, -0.1, 1 },
+                               exit = { x, 0, 2.9 } }   -- down to the ground in front of the stand
+    end
+  end
+end

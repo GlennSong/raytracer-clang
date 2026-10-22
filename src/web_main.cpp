@@ -46,12 +46,12 @@ void frame() {
 // Resolve the level path from ?level=<name> (default: a self-contained scene).
 std::string levelFromUrl() {
     char* c = static_cast<char*>(EM_ASM_PTR({
-        var p = new URLSearchParams(location.search).get('level') || 'showcase';
+        var p = new URLSearchParams(location.search).get('level') || 'arena';
         if (!p.endsWith('.json')) p += '.json';
         if (p.indexOf('/') < 0) p = 'assets/levels/' + p;
         return stringToNewUTF8(p);
     }));
-    std::string path = c ? c : "assets/levels/showcase.json";
+    std::string path = c ? c : "assets/levels/arena.json";
     std::free(c);
     return path;
 }

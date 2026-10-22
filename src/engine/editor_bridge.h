@@ -2,7 +2,6 @@
 #define RAYTRACER_ENGINE_EDITOR_BRIDGE_H
 
 #include "component_registry.h"
-#include "city_planner.h"
 #include "world.h"
 #include <string>
 #include <vector>
@@ -116,8 +115,7 @@ public:
     // Bumped on every attach(): opening a level from the asset browser swaps
     // editor states within a single engine frame, so a shell panel polling
     // editable() never observes the detached gap. Panels that cache document
-    // state (the City Planner's recipe) compare this instead of watching for
-    // an editable() dip. 0 is never a live session.
+    // state compare this instead of watching for an editable() dip. 0 is never a live session.
     uint64_t attachGeneration() const { return attachGen; }
 
     // The level's HDR environment is DOCUMENT state, not an entity: these
@@ -137,41 +135,6 @@ public:
         return out;
     }
 
-    // --- City Planner (P7.3 phase 1) ---------------------------------------
-    // The planner dock's API. The engine side wires the services the bridge
-    // otherwise never sees (asset manager for overlay/bake meshes, camera
-    // system for the Top/Iso/Free presets) via attachPlanner — called by
-    // EditorSystem::onStart right after attach(). While detached or observing
-    // a playtest, every planner call no-ops / returns empty, so the dock can
-    // simply gray out. Same-thread by construction, like the whole bridge.
-    void attachPlanner(AssetManager* assets, Renderer* renderer,
-                       CameraSystem* cameras) {
-        planner_.attach(worldPtr, assets, renderer, cameras);
-    }
-    // The road entity's generate-block JSON ("" if the level has none).
-    std::string plannerRecipe() {
-        return editable() ? planner_.recipe() : std::string();
-    }
-    // Write the WHOLE generate block back into SourceSpec.recipe (round-trip
-    // preserved), regenerate the graph ONLY (no carriageway mesh — that is
-    // plannerBakeMesh's job), rebuild the overlay layers, return the counts.
-    CityPlannerStats plannerApplyRecipe(const std::string& generateJson) {
-        return editable() ? planner_.applyRecipe(generateJson)
-                          : CityPlannerStats{};
-    }
-    // The one explicit full mesh build (buildRoadNetMesh), on demand.
-    bool plannerBakeMesh() { return editable() && planner_.bakeMesh(); }
-    // Start fresh: empty the road graph + release the baked mesh + drop the
-    // overlays; the recipe survives for the next Regenerate.
-    bool plannerClearRoads() { return editable() && planner_.clearRoads(); }
-    // Layer visibility: "footprint" | "hubs" | "arterials" | "nodes".
-    void plannerSetLayer(const std::string& layer, bool on) {
-        if (editable()) planner_.setLayer(layer, on);
-    }
-    // 0 = Top, 1 = Iso, 2 = Free.
-    void plannerCameraPreset(int preset) {
-        if (editable()) planner_.cameraPreset(preset);
-    }
 
     // Component menu actions, routed through the registry's thunks; both are
     // recorded on the editor's command log.
@@ -196,7 +159,6 @@ private:
     uint64_t attachGen = 0;       // see attachGeneration()
     uint64_t savedRevision = 0;   // command-log revision at the last save
     std::vector<EditorNotice> notices;
-    CityPlanner planner_;         // City Planner engine side (P7.3 phase 1)
 };
 
 }  // namespace engine

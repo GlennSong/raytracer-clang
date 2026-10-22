@@ -5,13 +5,14 @@
 #include <cstdint>
 #include <functional>
 #include <queue>
+#include <thread>
 #include <utility>
 #include <vector>
 
 namespace engine {
 
 int streamPowerErode(Heightmap& hm, const std::vector<float>& uplift, const StreamPowerParams& p,
-                     const std::vector<float>* erodibility, std::vector<float>* areaOut) {
+                     const std::vector<float>* erodibility, std::vector<float>* areaOut, std::vector<int32_t>* receiversOut) {
     if (erodibility && erodibility->size() != hm.h.size()) erodibility = nullptr;
     const int n = hm.n;
     if (n < 3 || uplift.size() != hm.h.size()) return 0;
@@ -36,6 +37,7 @@ int streamPowerErode(Heightmap& hm, const std::vector<float>& uplift, const Stre
     std::vector<int32_t> rec(N), order;
     std::vector<double> area(N), rlen(N);
     std::vector<uint8_t> seen(N);
+    std::vector<float> hard(p.layers ? N : 0);   // the rock's hardness per cell this iteration (ROCK LAYERS)
     order.reserve(N);
     using Item = std::pair<double, int32_t>;
 
@@ -70,17 +72,33 @@ int streamPowerErode(Heightmap& hm, const std::vector<float>& uplift, const Stre
             }
         }
         // ...but a cell drains to its STEEPEST downhill neighbour on the filled surface where it has one (the
-        // flood's tree otherwise follows the queue's order across open slopes)
+        // flood's tree otherwise follows the queue's order across open slopes) -- or, stochastic, to one drawn in
+        // proportion to the slope toward it
         for (std::size_t i = 0; i < N; ++i) {
             if (outlet[i]) continue;
             const int cx = static_cast<int>(i % n), cz = static_cast<int>(i / n);
-            double best = 0.0;
+            double best = 0.0, sum = 0.0, s8[8] = {};
             for (int k = 0; k < 8; ++k) {
                 const int nx = cx + dx[k], nz = cz + dz[k];
                 if (nx < 0 || nz < 0 || nx >= n || nz >= n) continue;
                 const std::size_t nb = static_cast<std::size_t>(nz) * n + nx;
                 const double s = (hf[i] - hf[nb]) / dl[k];
+                if (s > 0.0) { s8[k] = s; sum += s; }
                 if (s > best) { best = s; rec[i] = static_cast<int32_t>(nb); rlen[i] = dl[k]; }
+            }
+            if (p.stochastic && sum > 0.0) {
+                uint32_t hsh = static_cast<uint32_t>(i) * 0x9E3779B1u ^ static_cast<uint32_t>(it) * 0x85EBCA77u ^ p.seed * 0xC2B2AE3Du;
+                hsh ^= hsh >> 16; hsh *= 0x7FEB352Du; hsh ^= hsh >> 15; hsh *= 0x846CA68Bu; hsh ^= hsh >> 16;
+                double roll = (hsh & 0xFFFFFFu) / 16777216.0 * sum;
+                for (int k = 0; k < 8; ++k) {
+                    if (s8[k] <= 0.0) continue;
+                    roll -= s8[k];
+                    if (roll <= 0.0 || k == 7) {
+                        rec[i] = static_cast<int32_t>(static_cast<std::size_t>(cz + dz[k]) * n + (cx + dx[k]));
+                        rlen[i] = dl[k];
+                        break;
+                    }
+                }
             }
         }
         // the order must put every receiver before its donors: rebuild it from the tree (donor lists, outlets
@@ -94,6 +112,20 @@ int streamPowerErode(Heightmap& hm, const std::vector<float>& uplift, const Stre
             for (std::size_t o = 0; o < order.size(); ++o)
                 for (int32_t d = head[static_cast<std::size_t>(order[o])]; d >= 0; d = next[static_cast<std::size_t>(d)]) order.push_back(d);
         }
+        // (the rock under each cell at its height now, every hardware thread a band of rows)
+        if (p.layers) {
+            const int T = std::max(1u, std::min(32u, std::thread::hardware_concurrency()));
+            std::vector<std::thread> th;
+            for (int t = 0; t < T; ++t)
+                th.emplace_back([&, t] {
+                    for (int z = t; z < n; z += T)
+                        for (int x = 0; x < n; ++x) {
+                            const std::size_t i = static_cast<std::size_t>(z) * n + x;
+                            hard[i] = outlet[i] ? 0.0f : static_cast<float>(p.layers->hardness(p.layerOriginX + x * cell, p.layerOriginZ + z * cell, h[i]));
+                        }
+                });
+            for (auto& t : th) t.join();
+        }
         // 3. drainage area, accumulated down the tree (donors before receivers: the order reversed)
         std::fill(area.begin(), area.end(), cellArea);
         for (std::size_t o = order.size(); o-- > 0;) {
@@ -105,7 +137,8 @@ int streamPowerErode(Heightmap& hm, const std::vector<float>& uplift, const Stre
             const std::size_t i = static_cast<std::size_t>(c);
             if (outlet[i] || rec[i] < 0) continue;
             const double hr = h[static_cast<std::size_t>(rec[i])];
-            const double f = p.K * (erodibility ? (*erodibility)[i] : 1.0) * p.dt * std::pow(area[i], p.m) / rlen[i];
+            const double layerK = p.layers ? 1.0 + (p.layers->params().hardK - 1.0) * hard[i] : 1.0;
+            const double f = p.K * (erodibility ? (*erodibility)[i] : 1.0) * layerK * p.dt * std::pow(area[i], p.m) / rlen[i];
             h[i] = (h[i] + f * hr) / (1.0 + f);   // between h and h_r: a hollow below its outlet silts up toward it
         }
         // 5. hillslope diffusion (explicit, sub-stepped for stability)
@@ -120,7 +153,11 @@ int streamPowerErode(Heightmap& hm, const std::vector<float>& uplift, const Stre
                         const std::size_t i = static_cast<std::size_t>(z) * n + x;
                         lap[i] = (h[i - 1] + h[i + 1] + h[i - static_cast<std::size_t>(n)] + h[i + static_cast<std::size_t>(n)] - 4.0 * h[i]) / cellArea;
                     }
-                for (std::size_t i = 0; i < N; ++i) if (!outlet[i]) h[i] += p.diffusion * sdt * lap[i];
+                for (std::size_t i = 0; i < N; ++i)
+                    if (!outlet[i]) {
+                        const double layerD = p.layers ? 1.0 + (p.layers->params().hardDiffusion - 1.0) * hard[i] : 1.0;
+                        h[i] += p.diffusion * layerD * sdt * lap[i];
+                    }
             }
         }
     }
@@ -135,6 +172,7 @@ int streamPowerErode(Heightmap& hm, const std::vector<float>& uplift, const Stre
     }
     for (std::size_t i = 0; i < N; ++i) hm.h[i] = static_cast<float>(h[i]);
     if (areaOut) areaOut->assign(area.begin(), area.end());
+    if (receiversOut) *receiversOut = rec;
     return it;
 }
 

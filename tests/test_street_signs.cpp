@@ -188,3 +188,76 @@ TEST_CASE(street_sign_blades_fit_and_are_legible) {
     CHECK(quads == blades * 2);
     CHECK(m.posts.size() == posts.size());
 }
+
+// NEON (storefronts stage 3): a bar's name in script tube, a club's in tube letters -- pale glass on a dark plate by
+// day, by night (the glow page) a hot core with its colour's halo round it and the plate black; and the window's OPEN
+// sign, red letters in a blue border. RT_SIGN_PNG=<prefix> writes the pages to look at.
+#include "../src/engine/procgen/city/shop_signs.h"
+#include "../src/engine/procgen/city/trades.h"
+#include <tinygltf/stb_image_write.h>
+#include <cstdlib>
+
+TEST_CASE(neon_signs_glow_their_colour_and_the_open_sign_is_red_in_blue) {
+    const engine::Font* script = engine::neonFont();
+    const engine::Font* tube = engine::tubeFont();
+    CHECK(script != nullptr);
+    CHECK(tube != nullptr);
+    if (!script || !tube) return;
+    std::vector<engine::ShopSign> signs(2);
+    signs[0].text = "The Copper Fox"; signs[0].trade = 14; signs[0].style = 1; signs[0].neon = engine::Vec3(1.0, 0.18, 0.55);
+    signs[1].text = "Velvet Room";    signs[1].trade = 15; signs[1].style = 2; signs[1].neon = engine::Vec3(0.2, 0.9, 1.0);
+    for (engine::ShopSign& s : signs) { s.width = 6.0; s.height = 0.7; }
+    const engine::ShopSignAtlas atlas = engine::buildShopSignAtlas(*script, signs, 2048, tube);
+    CHECK((atlas.pages.size()) == (std::size_t(1)));
+    CHECK((atlas.glow.size()) == (atlas.pages.size()));
+    if (atlas.glow.empty()) return;
+    const engine::TextImage& day = atlas.pages[0];
+    const engine::TextImage& night = atlas.glow[0];
+    CHECK((day.w) == (night.w));
+    CHECK((day.h) == (night.h));
+    // per board: its tube pixels (the night's brightest), its halo (lit, not tube) and its dark plate
+    for (std::size_t i = 0; i < signs.size(); ++i) {
+        const engine::ShopSignAtlas::Board& b = atlas.boards[i];
+        const int x0 = static_cast<int>(b.u0 * day.w), x1 = static_cast<int>(b.u1 * day.w);
+        const int y0 = static_cast<int>(b.v0 * day.h), y1 = static_cast<int>(b.v1 * day.h);
+        int core = 0, haloPx = 0, dark = 0;
+        double hue[3] = {0, 0, 0};
+        for (int y = y0; y < y1; ++y)
+            for (int x = x0; x < x1; ++x) {
+                const uint8_t* n = &night.rgba[(static_cast<std::size_t>(y) * night.w + x) * 4];
+                const int m = std::max({n[0], n[1], n[2]});
+                if (m > 200) ++core;
+                else if (m > 30) { ++haloPx; for (int k = 0; k < 3; ++k) hue[k] += n[k]; }
+                else ++dark;
+            }
+        const engine::Vec3 c = signs[i].neon;
+        std::printf("  neon \"%s\": %d tube px, %d halo px, %d dark; halo rgb %.0f %.0f %.0f\n", signs[i].text.c_str(), core, haloPx, dark,
+                    hue[0] / std::max(1, haloPx), hue[1] / std::max(1, haloPx), hue[2] / std::max(1, haloPx));
+        CHECK(core > 300);
+        CHECK(haloPx > core);          // the halo spreads wider than the tube
+        CHECK(dark > haloPx);          // ...and the plate is mostly dark
+        // the halo is the sign's colour: its strongest channel is the colour's
+        const int want = c.x >= c.y && c.x >= c.z ? 0 : c.y >= c.z ? 1 : 2;
+        const int got = hue[0] >= hue[1] && hue[0] >= hue[2] ? 0 : hue[1] >= hue[2] ? 1 : 2;
+        CHECK((got) == (want));
+    }
+    engine::TextImage openDay, openNight;
+    engine::openSignImages(*tube, openDay, openNight);
+    CHECK(openDay.w > 0 && openNight.w == openDay.w);
+    long red = 0, blue = 0;
+    for (std::size_t p = 0; p + 3 < openNight.rgba.size(); p += 4) {
+        const uint8_t* n = &openNight.rgba[p];
+        if (n[0] > 150 && n[0] > n[2] + 60) ++red;
+        if (n[2] > 150 && n[2] > n[0] + 60) ++blue;
+    }
+    std::printf("  OPEN sign: %ld red px, %ld blue px of %d\n", red, blue, openNight.w * openNight.h);
+    CHECK(red > 600);
+    CHECK(blue > 600);
+    if (const char* png = std::getenv("RT_SIGN_PNG")) {
+        const std::string pre = png;
+        stbi_write_png((pre + "_neon_day.png").c_str(), day.w, day.h, 4, day.rgba.data(), day.w * 4);
+        stbi_write_png((pre + "_neon_night.png").c_str(), night.w, night.h, 4, night.rgba.data(), night.w * 4);
+        stbi_write_png((pre + "_open_day.png").c_str(), openDay.w, openDay.h, 4, openDay.rgba.data(), openDay.w * 4);
+        stbi_write_png((pre + "_open_night.png").c_str(), openNight.w, openNight.h, 4, openNight.rgba.data(), openNight.w * 4);
+    }
+}

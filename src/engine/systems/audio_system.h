@@ -34,6 +34,18 @@ public:
     // Listener from the AudioListener entity's Transform, else from `camera`.
     void syncListener(World& world, AudioEngine& audio,
                       const CameraState& camera);
+    // WHERE THE WALLS ARE (Glenn: "You shouldn't hear them that loud inside a building"): the enclosure
+    // query over the city's building records (a point in a plan, inside its storey band, is in that
+    // building) and, while the player sits in a car (InVehicle), that car's chassis box as the listener's
+    // cabin. Call once a frame after syncListener.
+    void syncEnclosures(World& world, AudioEngine& audio);
+    void publishViewerBox(FrameContext& ctx);
+    // What the walls take: a building's (glass, masonry, closed windows) and a vehicle's cabin. citysim's
+    // bus and train riders use kCabin too.
+    static constexpr AudioBarrier kBuildingWalls{0.12f, 600.0f};
+    static constexpr AudioBarrier kCabin{0.3f, 1500.0f};
+    static uint64_t buildingEnclosureId(std::size_t record) { return (uint64_t(1) << 40) | record; }
+    static uint64_t cabinEnclosureId(uint64_t vehicle) { return (uint64_t(2) << 40) | vehicle; }
     // The PlaySound handler (public so tests can invoke it directly).
     void onPlaySound(const PlaySound& event, AudioEngine& audio);
 
@@ -45,6 +57,7 @@ public:
     std::size_t cachedClipCount() const { return clipCache.size(); }
 
 private:
+    World* queryWorld_ = nullptr;   // the World the enclosure query reads
     AudioClipHandle resolveClip(AudioEngine& audio, const std::string& path);
 
     // Path -> decoded clip, shared by every source/event using the file.

@@ -12,7 +12,6 @@
 
 #include "../src/engine/procgen/city/block_grade.h"
 #include "../src/engine/procgen/city/roads/road_entity.h"
-#include "../src/engine/procgen/deprecated/roads/road_net_mesh.h"   // DEPRECATED lattice mesher (roads module)
 #include "../src/engine/procgen/city/structure_set.h"
 #include "../src/engine/procgen/terrain.h"
 #include <cmath>
@@ -78,87 +77,6 @@ int trappedCells(F&& ground, double lo, double hi) {
 
 }  // namespace
 
-TEST_CASE(block_grading_leaves_no_pits_between_roads) {
-    // A closed ring of streets around a naturally-low interior — the exact
-    // corral geometry from the drive. Conform carves the roads; the block
-    // grade must lift/blend the interior to the boundary plane.
-    RoadEntity net;
-    net.look.defaultWidth = 8.0;
-    net.look.sidewalk = 2.0;
-    net.look.autoRoundabout = false;
-    // The interior is a real BOWL: 20 m down (deeper than the hills' ~15 m swing, so it is sealed on every
-    // side) with walls no walker climbs, just inside the ring's conform band -- the pit the block grade
-    // exists to fill.
-    auto bowlHills = [](double x, double z) {
-        const double d = std::max(std::fabs(x), std::fabs(z));
-        const double dip = d <= 40.0 ? 20.0 : (d >= 48.0 ? 0.0 : 20.0 * (48.0 - d) / 8.0);
-        return hills(x, z) - dip;
-    };
-    const RoadGroundFn ground = bowlHills;
-    // The corners are JUNCTIONS (a spur leaves each, away from the block), as a real block's are: a bare
-    // four-node ring is a through-road at every corner, and streets are splines (ADR-0049) -- Catmull-Rom
-    // bowed the "square" into a loop whose deck ran 14 m outside z = -60, so the riser probe below sampled a
-    // hillside instead of the road and failed on the fixture, not the grading.
-    net.graph.nodes = { RoadNode{Vec2(-60, -60)}, RoadNode{Vec2(60, -60)},
-                        RoadNode{Vec2(60, 60)},   RoadNode{Vec2(-60, 60)},
-                        RoadNode{Vec2(-80, -80)}, RoadNode{Vec2(80, -80)},
-                        RoadNode{Vec2(80, 80)},   RoadNode{Vec2(-80, 80)} };
-    net.graph.edges = { RoadEdge{ 0, 1, 8.0 }, RoadEdge{ 1, 2, 8.0 },
-                        RoadEdge{ 2, 3, 8.0 }, RoadEdge{ 3, 0, 8.0 },
-                        RoadEdge{ 0, 4, 8.0 }, RoadEdge{ 1, 5, 8.0 },
-                        RoadEdge{ 2, 6, 8.0 }, RoadEdge{ 3, 7, 8.0 } };
-
-    std::vector<TerrainFlatten> flatten = roadNetConformRegions(net, ground);
-    // The block: the ring interior, inset off the road (as the lot plan's
-    // blocks are).
-    // The grade polygon OVERLAPS the road conform band on purpose: the
-    // road's higher priority wins inside its own footprint, and everywhere
-    // else the block plane owns the ground — no raw-terrain notch can
-    // survive between the two systems (the seam gap was the pit).
-    Poly2 block{ Vec2(-58, -58), Vec2(58, -58), Vec2(58, 58), Vec2(-58, 58) };
-    auto roadCarved = [&](double x, double z) {
-        return applyFlatten(flatten, x, z, bowlHills(x, z));
-    };
-    // CONTROL: without grading, the ring's interior holds pits -- cells a walker cannot climb out of to a road
-    // (the 'can't get back up' mechanism from the drive). If this stops failing, the fixture lost its teeth.
-    // (It used to probe a sidewalk-edge wall 7 m off the road line; with the ring's road where the road really
-    // is, that point is inside the road's own conform band.)
-    {
-        const int trappedUngraded = trappedCells(roadCarved, -58.0, 58.0);
-        std::printf("[pit] control trappedUngraded=%d\n", trappedUngraded);
-        CHECK(trappedUngraded > 0);
-    }
-    std::vector<TerrainFlatten> graded = gradeBlocks({ block }, roadCarved);
-    CHECK(!graded.empty());
-    std::vector<TerrainFlatten> all = flatten;
-    all.insert(all.end(), graded.begin(), graded.end());
-    auto finalGround = [&](double x, double z) {
-        return applyFlatten(all, x, z, bowlHills(x, z));
-    };
-
-    if (std::getenv("RT_PIT_DEBUG"))
-        for (double z = 50; z <= 60; z += 2)
-            std::printf("[pit]   col x=-38 z=%.0f h=%.2f\n", z,
-                        finalGround(-38, z));
-    // PIT PROBE: with grading, every cell is reachable on foot from a road.
-    const int basins = trappedCells(finalGround, -58.0, 58.0);
-    std::printf("[pit] trapped=%d\n", basins);
-    CHECK(basins == 0);
-
-    // RISER PROBE:    // RISER PROBE: just outside each road's sidewalk line, the ground sits
-    // within a stepable 0.35 m of the road deck (the sidewalk outer face is
-    // a curb-step, not a wall).
-    double worstRiser = 0;
-    for (double t = -50; t <= 50; t += 5.0) {
-        // north edge road runs z=-60; sample the block-side sidewalk outer line
-        const double deckY = finalGround(t, -60.0);
-        const double insideY = finalGround(t, -60.0 + net.look.defaultWidth * 0.5 +
-                                                  net.look.sidewalk + 1.0);
-        worstRiser = std::max(worstRiser, deckY + 0.15 - insideY);
-    }
-    std::printf("[pit] worstRiser=%.2f\n", worstRiser);
-    CHECK(worstRiser < 0.35 + 0.20);   // curb + small tolerance
-}
 
 #include "../src/engine/procgen/city/city_lots.h"
 
@@ -243,50 +161,6 @@ TEST_CASE(park_pads_and_fences_stay_out_of_carriageways) {
     CHECK(violations == 0);
 }
 
-TEST_CASE(retaining_walls_front_deep_cut_faces) {
-    // R6a (hillcity finding): the smoothstep conform leaves a near-vertical
-    // face where a road cuts DEEP into a hill. buildRoadWalls (co-designed
-    // with that feather) fronts each deep face with a retaining wall just
-    // outside the graded corridor; shallow cuts and flats stay open ground.
-    auto ridge = [](double x, double z) {
-        (void)x;   // a steep ridge north of the road line
-        return z > 0 ? std::min(24.0, z * 0.8) : 0.0;
-    };
-    RoadEntity net;
-    net.look.defaultWidth = 8.0;
-    net.look.sidewalk = 2.0;
-    net.look.autoRoundabout = false;
-    const RoadGroundFn ground = ridge;
-    net.graph.nodes = { RoadNode{Vec2(-120, 6)}, RoadNode{Vec2(120, 6)} };   // hugs the ridge foot
-    net.graph.edges = { RoadEdge{ 0, 1, 8.0 } };
-
-    StructureParams p;
-    p.minWall = 3.5;
-    StructureSet ws = buildRoadWalls(net, ground, p);
-    std::printf("[walls] segments=%zu\n", ws.walls.size());
-    CHECK(!ws.walls.empty());          // the deep cut face gets its wall
-    CHECK(!ws.mesh.vertices.empty());
-
-    const double flatHalf = 4.0 + 2.0 + 2.0;   // halfWidth + sidewalk + 2
-    double worstTopGap = 0;
-    for (const WallSegment& w : ws.walls) {
-        // Walls only on the CUT (ridge) side, outside the graded corridor,
-        // never in the walkway.
-        CHECK(w.topA.z > 6.0 + flatHalf - 0.5);
-        CHECK(w.retaining);
-        // The top edge meets the hill line at the feather's end (the wall
-        // FRONTS the steep feather face; terrain behind it climbs on).
-        const double natural = ridge(w.topA.x, 6.0 + flatHalf + 8.0);
-        worstTopGap = std::max(worstTopGap, std::fabs(w.topA.y - natural));
-        CHECK(w.dropA > 0 || w.dropB > 0);
-    }
-    std::printf("[walls] worstTopGap=%.2f\n", worstTopGap);
-    CHECK(worstTopGap < 1.5);   // top tracks the hill line (grade-limited deck)
-
-    // Control: a flat site grows no walls at all.
-    const RoadGroundFn flatGround = [](double, double) { return 2.0; };
-    CHECK(buildRoadWalls(net, flatGround, p).walls.empty());
-}
 
 #include "../src/engine/procgen/city/corridor_plan.h"
 #include "../src/engine/procgen/city/road_semantics.h"

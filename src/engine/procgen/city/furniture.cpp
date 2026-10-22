@@ -1,4 +1,5 @@
 #include "furniture.h"
+#include "trades.h"
 #include "../furniture_library.h"   // descriptions: anchors to dress, clearances to keep (M3)
 #include "../furniture_kit.h"
 #include "../../mesh_builder.h"
@@ -59,6 +60,103 @@ struct Furnisher {
     std::vector<Box2> taken;   // door swings and placed footprints
     std::vector<Box2> doorways;   // the door swings alone (a picture keeps clear of them)
     std::vector<Box2> tall;       // footprints of pieces that stand up the wall (no picture over them)
+    // THE ROOM'S REAL WALLS, per side, in that side's own coordinate (the Placement t): the stretches an interior
+    // wall actually runs along, and its doorways. A picture hangs only on a wall (Glenn, 2026-10-03: "they need to
+    // be hung in places on the wall that have room. Some ... were hung in doorways or over windows"): the window wall
+    // is the facade, not a partition, and an open plan's side has no wall at all.
+    std::vector<std::pair<Real, Real>> wallSpan[4], doorGap[4];
+    // THE OUTSIDE WALLS' WINDOWS, per side in the same t: a span and its sill (RoomPlan::openings). Their doors are
+    // floor kept clear, in `taken` and `doorways`.
+    // `zone`: the strip of floor in front of the glass, where a tall piece would stand in its way.
+    struct Window { Real t0, t1, sill; Box2 zone; };
+    std::vector<Window> windows[4];
+
+    // Side `sd`'s line (within `tol`) and its t coordinate (left end seen from inside), as Placement::roomAt lays it.
+    bool onSide(int sd, const Vec2& q, Real tol) const {
+        switch (sd) {
+            case 0: return std::fabs(q.y) < tol;
+            case 1: return std::fabs(q.x - f.W) < tol;
+            case 2: return std::fabs(q.y - f.D) < tol;
+            default: return std::fabs(q.x) < tol;
+        }
+    }
+    Real tOf(int sd, const Vec2& q) const {
+        switch (sd) {
+            case 0: return q.x;
+            case 1: return q.y;
+            case 2: return f.W - q.x;
+            default: return f.D - q.y;
+        }
+    }
+    Real sideLen(int sd) const { return (sd == 0 || sd == 2) ? f.W : f.D; }
+
+    // THE DOORS AND WINDOWS of the outside walls this room stands against. A door keeps the floor clear in front of
+    // it, a way in kEntryDepth deep and a little wider than the leaf -- nothing stands in the street door or a shop's
+    // door; a window is remembered for what may stand before it (blocksWindow) and what may hang over it (hang).
+    void learnOpenings(const std::vector<WallOpening>& ops) {
+        constexpr Real kEntryDepth = 1.6, kEntrySide = 0.3, kGlassZone = 0.35;
+        // A room's side lies on the wall's inner face (the opening is put there) -- or, a shop's, on its outer face,
+        // the wall's thickness out: the strips below reach in from the opening, wherever the side is.
+        const Real tol = 0.9;
+        for (const WallOpening& o : ops) {
+            const Vec2 a = f.local(o.a), b = f.local(o.b);
+            for (int sd = 0; sd < 4; ++sd) {
+                if (!onSide(sd, a, tol) || !onSide(sd, b, tol)) continue;
+                const Real t0 = std::max(Real(0), std::min(tOf(sd, a), tOf(sd, b)));
+                const Real t1 = std::min(sideLen(sd), std::max(tOf(sd, a), tOf(sd, b)));
+                if (t1 - t0 < 0.05) continue;
+                const Vec2 m = (a + b) * 0.5;   // how far in from the side the opening's face is
+                const Real in = std::max(Real(0), sd == 0 ? m.y : sd == 1 ? f.W - m.x : sd == 2 ? f.D - m.y : m.x);
+                if (o.door) {
+                    const Placement way{&f, sd, t0 - kEntrySide, t1 - t0 + 2 * kEntrySide, in + kEntryDepth};
+                    taken.push_back(way.footprint());
+                    doorways.push_back(taken.back());
+                } else {
+                    windows[sd].push_back({t0, t1, o.sill, Placement{&f, sd, t0, t1 - t0, in + kGlassZone}.footprint()});
+                }
+            }
+        }
+    }
+    // Does a piece `top` metres tall on footprint `fp` stand in front of a window -- backed onto it, or against the
+    // wall beside it with its side across the glass? Low furniture -- a desk, a sofa, a bed's headboard, a sink -- may
+    // sit under one (Glenn: "a desk or sofa could be placed by the window"): it may rise 0.3 m past the sill, and a
+    // floor-to-ceiling pane counts as a 0.9 m sill. A TV, a wardrobe, a bookcase, a cupboard may not.
+    bool blocksWindow(const Box2& fp, Real top) const {
+        if (top <= 0) return false;
+        for (const auto& side : windows)
+            for (const Window& w : side)
+                if (overlaps(fp, w.zone, -0.02) && top > std::max(w.sill, Real(0.9)) + 0.3) return true;
+        return false;
+    }
+    bool overWindow(int sd, Real t0, Real t1) const {
+        for (const Window& w : windows[sd]) if (w.t0 < t1 && t0 < w.t1) return true;
+        return false;
+    }
+    Real heightOf(Piece pc) const { return pc == Piece::Count ? 0 : furniturePiece(pc, variant).size.y; }
+
+    void learnWalls(const std::vector<RoomWall>& walls) {
+        const Real tol = 0.25;
+        for (const RoomWall& w : walls) {
+            const Vec2 a = f.local(w.a), b = f.local(w.b);
+            for (int sd = 0; sd < 4; ++sd) {
+                if (!onSide(sd, a, tol) || !onSide(sd, b, tol)) continue;
+                const Real ta = tOf(sd, a), tb = tOf(sd, b);
+                wallSpan[sd].push_back({std::min(ta, tb), std::max(ta, tb)});
+                if (w.doorAt >= 0) {
+                    const Real td = ta + (tb - ta) * w.doorAt;
+                    doorGap[sd].push_back({td - kRoomDoorW * 0.5 - 0.25, td + kRoomDoorW * 0.5 + 0.25});
+                }
+            }
+        }
+    }
+    // Is [t0, t1] on side `sd` solid wall, clear of every doorway?
+    bool onWall(int sd, Real t0, Real t1) const {
+        bool covered = false;
+        for (const auto& sp : wallSpan[sd]) covered = covered || (sp.first <= t0 + 1e-6 && sp.second >= t1 - 1e-6);
+        if (!covered) return false;
+        for (const auto& g : doorGap[sd]) if (g.first < t1 && t0 < g.second) return false;
+        return true;
+    }
 
     // A kit piece in the footprint's frame: its centre `x` along the wall, `z` out, turned to face +z (into the
     // room) or, with `facing` false, back toward the wall (a chair at its desk).
@@ -73,6 +171,11 @@ struct Furnisher {
         PlacedPiece pp;
         pp.piece = static_cast<uint8_t>(pc);
         pp.variant = variant;
+        if (const FurnitureAsset* fa = FurnitureLibrary::global().find(pc); fa && fa->variety > 0) {
+            const uint32_t h = static_cast<uint32_t>(std::lround(a.x * 13.0)) * 73856093u ^
+                               static_cast<uint32_t>(std::lround(a.y * 13.0)) * 19349663u;
+            pp.variant = (variant & 31u) | ((mix32(h) % static_cast<uint32_t>(fa->variety)) << 5);
+        }
         Mat4& M = pp.xform;
         M.m[0][0] = X.x; M.m[1][0] = 0; M.m[2][0] = X.z;
         M.m[0][1] = 0;   M.m[1][1] = 1; M.m[2][1] = 0;
@@ -80,23 +183,32 @@ struct Furnisher {
         M.m[0][3] = a.x; M.m[1][3] = y0 + yOff; M.m[2][3] = a.y;
         out.push_back(pp);
         dress(pc, M);
-        const FurniturePiece& kit = furniturePiece(pc, variant);
+        const FurniturePiece& kit = furniturePiece(pc, pp.variant);
         if (!kit.solid || !collider) return;
-        // The footprint box, the piece's height.
-        const Real hw = kit.size.x * 0.5;
         auto W = [&](Real px, Real pz) {
             return Vec3(a.x + X.x * px + Z.x * pz, 0, a.y + X.z * px + Z.z * pz);
         };
-        const Vec3 c[4] = {W(-hw, 0), W(hw, 0), W(hw, kit.size.z), W(-hw, kit.size.z)};
-        const Real ya = y0 + yOff, yb = y0 + yOff + (kit.colliderH > 0 ? kit.colliderH : kit.size.y);
-        auto V = [&](int i, Real y) { return Vec3(c[i].x, y, c[i].z); };
         auto q = [&](const Vec3& p0, const Vec3& p1, const Vec3& p2, const Vec3& p3) {
             MeshBuilder::emitTri(*collider, p0, p1, p2, normalize(cross(p1 - p0, p2 - p0)), Vec3(1, 1, 1));
             MeshBuilder::emitTri(*collider, p0, p2, p3, normalize(cross(p2 - p0, p3 - p0)), Vec3(1, 1, 1));
         };
-        q(V(0, ya), V(1, ya), V(1, yb), V(0, yb)); q(V(1, ya), V(2, ya), V(2, yb), V(1, yb));
-        q(V(2, ya), V(3, ya), V(3, yb), V(2, yb)); q(V(3, ya), V(0, ya), V(0, yb), V(3, yb));
-        q(V(0, yb), V(1, yb), V(2, yb), V(3, yb));
+        // a box x0..x1 by z0..z1 (piece space), from the floor + ya to + yb: its four sides and its top
+        auto block = [&](Real x0, Real x1, Real z0, Real z1, Real ya, Real yb) {
+            const Vec3 c[4] = {W(x0, z0), W(x1, z0), W(x1, z1), W(x0, z1)};
+            auto V = [&](int i, Real y) { return Vec3(c[i].x, y0 + yOff + y, c[i].z); };
+            q(V(0, ya), V(1, ya), V(1, yb), V(0, yb)); q(V(1, ya), V(2, ya), V(2, yb), V(1, yb));
+            q(V(2, ya), V(3, ya), V(3, yb), V(2, yb)); q(V(3, ya), V(0, ya), V(0, yb), V(3, yb));
+            q(V(0, yb), V(1, yb), V(2, yb), V(3, yb));
+        };
+        if (!kit.colliders.empty()) {   // the parts that block (a cubicle's panels, a table's top)
+            for (const auto& b : kit.colliders)
+                block(b[0].x - b[1].x * 0.5, b[0].x + b[1].x * 0.5, b[0].z - b[1].z * 0.5, b[0].z + b[1].z * 0.5,
+                      std::max(Real(0), b[0].y - b[1].y * 0.5), b[0].y + b[1].y * 0.5);
+            return;
+        }
+        // The footprint box, the piece's height.
+        const Real hw = kit.size.x * 0.5;
+        block(-hw, hw, 0, kit.size.z, 0, kit.colliderH > 0 ? kit.colliderH : kit.size.y);
     }
 
     // THE DRESSING (the furniture library, M3): every anchor the placed piece's description carries -- a desk's
@@ -146,8 +258,10 @@ struct Furnisher {
 
     // Find a spot against a wall for a w x d footprint: the preferred sides in order, each tried centred, then
     // at its ends and quarters. False when it fits nowhere. `clear`: floor to keep free in front of it too (the
-    // piece's CLEARANCE: a wardrobe's doors, a counter's standing room) -- reserved, never furnished.
-    bool place(Real w, Real d, const std::vector<int>& sides, Placement& p, bool isTall = false, Real clear = 0) {
+    // piece's CLEARANCE: a wardrobe's doors, a counter's standing room) -- reserved, never furnished. `top`: how tall
+    // what stands against the wall there is, for the windows (blocksWindow); 0 = no matter.
+    bool place(Real w, Real d, const std::vector<int>& sides, Placement& p, bool isTall = false, Real clear = 0,
+               Real top = 0) {
         for (int s : sides) {
             const Real len = (s == 0 || s == 2) ? f.W : f.D;
             const Real depth = (s == 0 || s == 2) ? f.D : f.W;
@@ -156,6 +270,7 @@ struct Furnisher {
             const Real free = len - w - 0.1;
             for (Real k : {0.5, 0.0, 1.0, 0.25, 0.75}) {
                 Placement c{&f, s, 0.05 + free * k, w, d};
+                if (blocksWindow(c.footprint(), top)) continue;
                 Placement zone{&f, s, 0.05 + free * k, w, reach};
                 const Box2 fp = c.footprint(), zp = zone.footprint();
                 bool clearOk = true;
@@ -174,9 +289,14 @@ struct Furnisher {
     // THE OPEN PLAN's grid (buildings C): `pc` footprints (w across x, d out from the window wall, side 0) in rows
     // from the windows, aisles between, every one clear of the rooms set into the zone and of the doorways.
     // `d2` > 0: a shorter fallback footprint (variant `variant2`) tried where the full one does not fit.
+    // Rows of a piece too tall to stand before glass start behind the window wall's glass strip, an aisle back (a
+    // shop's gondolas a metre in from its shopfront) -- the first row moved back, not lost.
     int fill(Piece pc, Real w, Real d, Real aisleX, Real aisleZ, Real d2 = 0, uint32_t variant2 = 0) {
         int placed = 0;
-        for (Real z = 0.6; z + std::min(d, d2 > 0 ? d2 : d) <= f.D - 0.8 + 1e-6; z += d + aisleZ)
+        Real zStart = 0.6;
+        for (const Window& win : windows[0])
+            if (blocksWindow(win.zone, heightOf(pc))) zStart = std::max(zStart, win.zone.b1 + 0.6);
+        for (Real z = zStart; z + std::min(d, d2 > 0 ? d2 : d) <= f.D - 0.8 + 1e-6; z += d + aisleZ)
             for (Real x = 0.6; x + w <= f.W - 0.6 + 1e-6; x += w + aisleX) {
                 for (int attempt = 0; attempt < 2; ++attempt) {
                     const Real dd = attempt == 0 ? d : d2;
@@ -184,7 +304,7 @@ struct Furnisher {
                     // the row's offset from the window wall (it used to be dropped: every row landed in the first)
                     Placement c{&f, 0, x, w, dd, z};
                     const Box2 fp = c.footprint();
-                    bool clear = true;
+                    bool clear = !blocksWindow(fp, heightOf(pc));   // (a shop's gondola row ends short of a side window)
                     for (const Box2& b : taken)
                         if (overlaps(fp, b, 0.1)) { clear = false; break; }
                     if (!clear) continue;
@@ -203,15 +323,16 @@ struct Furnisher {
     // WALL ART (Glenn: "the walls are bare. So some pictures hanging on there would be nice"): a picture on the
     // first of `sides` with a clear stretch -- not over a doorway or a tall piece (a wardrobe, a TV, a cupboard);
     // over a sofa or a bed is where pictures go.
-    bool hang(const std::vector<int>& sides, uint32_t artVariant, Piece what = Piece::Picture) {
+    bool hang(const std::vector<int>& sides, uint32_t artVariant, Piece what = Piece::Picture, bool anyWall = false) {
         const FurniturePiece& kit = furniturePiece(what, artVariant);
         const Real w = kit.size.x;
         for (int s : sides) {
             const Real len = (s == 0 || s == 2) ? f.W : f.D;
             if (w > len - 0.6) continue;
             const Real free = len - w - 0.2;
-            for (Real k : {0.5, 0.3, 0.7}) {
+            for (Real k : {0.5, 0.3, 0.7, 0.15, 0.85}) {
                 Placement c{&f, s, 0.1 + free * k, w, 0.3};
+                if (!anyWall && (!onWall(s, c.t - 0.1, c.t + w + 0.1) || overWindow(s, c.t - 0.1, c.t + w + 0.1))) continue;
                 const Box2 fp = c.footprint();
                 bool clear = true;
                 for (const Box2& b : doorways) if (overlaps(fp, b, 0.05)) clear = false;
@@ -219,12 +340,226 @@ struct Furnisher {
                 if (!clear) continue;
                 const uint32_t keep = variant;
                 variant = artVariant;
-                put(c, what, w * 0.5, 0.0);
+                // on the wall's FACE, not its centre line (a whiteboard was hung inside the partition)
+                put(c, what, w * 0.5, kRoomWallT * 0.5 + 0.005);
                 variant = keep;
                 return true;
             }
         }
         return false;
+    }
+};
+
+// The program a room of `kind` runs (furniture_rooms.lua); "" for the kinds still furnished in code (shops: by trade).
+const char* programFor(RoomKind kind) {
+    switch (kind) {
+        case RoomKind::Office: return "office";
+        case RoomKind::Bed: return "bedroom";
+        case RoomKind::Flat: return "flat";
+        case RoomKind::Living: return "living";
+        case RoomKind::Kitchen: return "kitchen";
+        case RoomKind::OpenPlan: return "open_plan";
+        case RoomKind::Meeting: return "meeting";
+        case RoomKind::Kitchenette: return "kitchenette";
+        case RoomKind::Closet: return "closet";
+        case RoomKind::Bath: return "bath";
+        case RoomKind::Classroom: return "classroom";
+        case RoomKind::Lecture: return "lecture_hall";
+        case RoomKind::Lab: return "lab";
+        case RoomKind::Reading: return "reading_room";
+        case RoomKind::Stacks: return "stacks";
+        case RoomKind::Dorm: return "dorm";
+        case RoomKind::DeskRow: return "desk_row";
+        case RoomKind::Lounge: return "lounge";
+        case RoomKind::Reception: return "reception";
+        case RoomKind::Gallery: return "gallery";
+        case RoomKind::Ward: return "ward";
+        case RoomKind::Exam: return "exam";
+        case RoomKind::NurseStation: return "nurses_station";
+        case RoomKind::Waiting: return "waiting";
+        case RoomKind::Nave: return "nave";
+        case RoomKind::Foyer: return "foyer";
+        case RoomKind::Auditorium: return "auditorium";
+        case RoomKind::Market: return "market";
+        case RoomKind::Cell: return "cell";
+        case RoomKind::Courtroom: return "courtroom";
+        case RoomKind::Chamber: return "council_chamber";
+        case RoomKind::EngineBay: return "engine_bay";
+        case RoomKind::ShopFloor: return "shop_floor";
+        case RoomKind::Warehouse: return "warehouse";
+        case RoomKind::HotelLobby: return "hotel_lobby";
+        case RoomKind::CopyRoom: return "copy_room";
+        case RoomKind::PhoneBooths: return "phone_booths";
+        case RoomKind::WaterCooler: return "water_cooler";
+        default: return "";
+    }
+}
+
+// RUN A ROOM PROGRAM (M3b): each step in order, every piece picked from the library by name or by family + tags.
+struct ProgramRun {
+    Furnisher& F;
+    const FurnitureLibrary& lib;
+    bool ring;
+    std::vector<int> longFirst;
+    uint32_t hb, hr;
+    bool prevPlaced = false;
+    int prevSide = 0;
+
+    std::vector<int> sidesOf(const FurnStep& st) const {
+        if (st.opposite) return {(prevSide + 2) % 4};
+        if (ring && !st.ringSides.empty()) return st.ringSides;
+        if (st.longFirst) return longFirst;
+        if (!st.sides.empty()) return st.sides;
+        return {0, 1, 2, 3};
+    }
+    Piece pickOf(const FurnPick& p, Real w, Real d) const { return lib.pick(p, w, d, hr); }
+
+    // A GRID whose cells hold a SET (a classroom's desk and its chair) or step up in TIERS (a lecture hall's rows):
+    // rows out from the window wall, every cell clear of what is already placed; a row's tier counted from the
+    // front, the side away from the windows, where the lectern stands.
+    void gridOfSets(const FurnStep& st) {
+        const Real zStart = st.from, zEnd = F.f.D - st.to, xEnd = F.f.W - 0.6;
+        int rows = 0;
+        for (Real z = zStart; z + st.d <= zEnd + 1e-6; z += st.d + st.aisleZ) ++rows;
+        if (st.rows > 0) rows = std::min(rows, st.rows);
+        // how tall a cell stands, for the windows (ADR-0160): its pick, or its set's floor-standing pieces. A tiered
+        // grid's rows rise past a sill by design (a lecture hall's back rows), so it is let be.
+        Real top = 0;
+        if (st.set.empty()) top = F.heightOf(pickOf(st.pick, st.w, st.d));
+        else for (const FurnMember& m : st.set) if (m.y <= 0) top = std::max(top, F.heightOf(pickOf(m.pick, st.w, st.d)));
+        int r = 0, placed = 0;
+        // the clearance kept to what is already placed -- but a grid's own cells may touch (a stack row's bookcases
+        // end to end, aisle 0): the margin is never wider than the grid's own aisles, or every other cell drops
+        const Real gap = std::min(Real(0.1), std::max(Real(0), std::min(st.aisleX, st.aisleZ) - Real(0.01)));
+        const std::size_t ownFrom = F.taken.size();
+        for (Real z = zStart; z + st.d <= zEnd + 1e-6 && r < rows; z += st.d + st.aisleZ, ++r) {
+            int inRun = 0;
+            for (Real x = 0.6; x + st.w <= xEnd + 1e-6; x += st.w + st.aisleX) {
+                if (st.runN > 0 && inRun == st.runN) { x += st.crossW; inRun = 0; if (x + st.w > xEnd + 1e-6) break; }
+                ++inRun;
+                Placement c{&F.f, 0, x, st.w, st.d, z};
+                const Box2 fp = c.footprint();
+                bool clear = st.tiers || !F.blocksWindow(fp, top);
+                for (std::size_t bi = 0; clear && bi < F.taken.size(); ++bi)
+                    if (overlaps(fp, F.taken[bi], bi >= ownFrom ? gap : Real(0.1))) { clear = false; break; }
+                if (!clear) continue;
+                F.taken.push_back(fp);
+                const uint32_t keep = F.variant;
+                if (st.tiers) F.variant = (F.variant & ~(7u << 5)) | (static_cast<uint32_t>(std::min(rows - 1 - r, 7)) << 5);
+                if (st.set.empty()) {
+                    const Piece pc = pickOf(st.pick, st.w, st.d);
+                    if (pc != Piece::Count) F.put(c, pc, st.w * 0.5, 0.0);
+                } else {
+                    for (const FurnMember& m : st.set) {
+                        const Piece pc = pickOf(m.pick, m.fitW > 0 ? m.fitW : st.w, m.fitD > 0 ? m.fitD : st.d);
+                        if (pc != Piece::Count) F.put(c, pc, m.x, m.z, m.facing, m.y);
+                    }
+                }
+                F.variant = keep;
+                ++placed;
+            }
+        }
+        prevPlaced = placed > 0;
+    }
+
+    void run(const FurnStep& st) {
+        Placement p;
+        switch (st.kind) {
+            case FurnStep::Kind::OneOf: {
+                // the building's choice -- and where it fits nothing (desk pods in a shallow zone), the other choices
+                // in turn, then the fallback
+                const std::size_t n = st.choices, first = (hb >> 13) % n;
+                for (std::size_t k = 0; k < st.alternatives.size(); ++k) {
+                    run(st.alternatives[k < n ? (first + k) % n : k]);
+                    if (prevPlaced) return;
+                }
+                return;
+            }
+            case FurnStep::Kind::Wall: {
+                if (st.opposite && !prevPlaced) return;
+                if (st.minW > 0 && !(F.f.W > st.minW)) { prevPlaced = false; return; }
+                const Piece single = st.set.empty() ? pickOf(st.pick, st.w, st.d) : Piece::Count;
+                if (st.set.empty() && single == Piece::Count) { prevPlaced = false; return; }
+                const Piece lead = st.set.empty() ? single : pickOf(st.set.front().pick,
+                    st.set.front().fitW > 0 ? st.set.front().fitW : st.w, st.set.front().fitD > 0 ? st.set.front().fitD : st.d);
+                const Real clear = st.clear > 0 ? Furnisher::clearOf(lead, st.clear) : 0;
+                // what stands against the wall, for the windows: the floor pieces near it (a desk's monitor sits on
+                // the desk, its chair out in the room -- neither stands in front of the glass)
+                Real top = F.heightOf(single);
+                for (const FurnMember& m : st.set)
+                    if (m.y <= 0 && m.z < 0.5)
+                        top = std::max(top, F.heightOf(pickOf(m.pick, m.fitW > 0 ? m.fitW : st.w, m.fitD > 0 ? m.fitD : st.d)));
+                int n = st.countMin;
+                if (st.countPer > 0)
+                    n = std::clamp(static_cast<int>(std::floor((F.f.W - 1e-6) / st.countPer)), st.countMin, st.countMax);
+                const std::vector<int> sides = sidesOf(st);
+                bool any = false;
+                for (int k = 0; k < n; ++k) {
+                    if (!F.place(st.w, st.d, sides, p, st.tall, clear, top)) break;
+                    any = true;
+                    prevSide = p.side;
+                    if (st.set.empty()) { F.put(p, single, st.w * 0.5, 0.0); continue; }
+                    for (const FurnMember& m : st.set) {
+                        const Piece pc = pickOf(m.pick, m.fitW > 0 ? m.fitW : st.w, m.fitD > 0 ? m.fitD : st.d);
+                        if (pc != Piece::Count) F.put(p, pc, m.x, m.z, m.facing, m.y);
+                    }
+                }
+                prevPlaced = any;
+                return;
+            }
+            case FurnStep::Kind::Grid: {
+                prevPlaced = false;
+                if (!st.set.empty() || st.tiers || st.rows > 0 || st.to != Real(0.8)) { gridOfSets(st); return; }
+                const Piece pc = pickOf(st.pick, st.w, std::max(st.d, st.d2));
+                if (pc == Piece::Count) return;
+                const uint32_t v2 = st.style2 >= 0 ? (F.variant & ~(7u << 5)) | (static_cast<uint32_t>(st.style2) << 5) : 0u;
+                prevPlaced = F.fill(pc, st.w, st.d, st.aisleX, st.aisleZ, st.d2, v2) > 0;
+                return;
+            }
+            case FurnStep::Kind::Hang: {
+                const Piece pc = pickOf(st.pick, 0, 0);
+                const uint32_t v = st.style2 >= 0 ? (F.variant & ~(7u << 5)) | (static_cast<uint32_t>(st.style2) << 5) : F.variant;
+                if (pc != Piece::Count) prevPlaced = F.hang(sidesOf(st), v, pc, st.anyWall);
+                return;
+            }
+            case FurnStep::Kind::Counter: {
+                const bool kitchen = st.pattern == "kitchen";
+                const Real wall = kitchen ? std::max(F.f.W, F.f.D) : F.f.W;
+                const int mods = std::clamp(static_cast<int>((wall - (kitchen ? 1.0 : 0.6)) / 0.6), 2, 6);
+                const Piece base = pickOf(st.base, 0.6, st.d), sink = pickOf(st.sink, 0.6, st.d);
+                const Piece hob = st.hob.valid() ? pickOf(st.hob, 0.6, st.d) : Piece::Count;
+                const Piece tallU = st.tallUnit.valid() ? pickOf(st.tallUnit, 0.6, st.d) : Piece::Count;
+                const Piece wallU = st.wallUnit.valid() ? pickOf(st.wallUnit, 0.6, st.d) : Piece::Count;
+                const Real clear = st.clear > 0 ? Furnisher::clearOf(base, st.clear) : 0;
+                prevPlaced = false;
+                // the run's base units may stand under a window (a sink under the kitchen window); the fridge tower
+                // and the wall cupboards keep off the glass, module by module
+                if (!F.place(mods * 0.6, st.d, sidesOf(st), p, st.tall, clear,
+                             std::max({F.heightOf(base), F.heightOf(sink), F.heightOf(hob)}))) return;
+                prevPlaced = true;
+                prevSide = p.side;
+                for (int i = 0; i < mods; ++i) {
+                    const Real x = 0.3 + i * 0.6;
+                    auto glassBehind = [&](Piece q) {
+                        return F.blocksWindow(Placement{&F.f, p.side, p.t + x - 0.3, 0.6, st.d}.footprint(), F.heightOf(q));
+                    };
+                    Piece pc = base;
+                    if (kitchen) {
+                        // the fridge tower at one end, the sink mid-run, the hob at the far end; a wall cupboard over
+                        // every base
+                        if (i == 0 && mods >= 4 && tallU != Piece::Count) pc = tallU;
+                        else if (i == mods / 2) pc = sink;
+                        else if ((i == mods - 1 || (mods == 2 && i == 0)) && hob != Piece::Count) pc = hob;
+                    } else {
+                        pc = i == 0 && tallU != Piece::Count ? tallU : i == 1 ? sink : base;
+                    }
+                    if (pc == tallU && glassBehind(tallU)) pc = base;
+                    F.put(p, pc, x, 0.0);
+                    if (wallU != Piece::Count && pc != tallU && !glassBehind(wallU)) F.put(p, wallU, x, 0.0);
+                }
+                return;
+            }
+        }
     }
 };
 
@@ -240,17 +575,22 @@ void emitFurniture(std::vector<PlacedPiece>& out, RenderMesh* colliderOut, const
     const uint32_t wood = (hb >> 3) & 3u, style = (hb >> 9) & 3u;
 
     for (const Room& room : rp.rooms) {
-        if (room.rect.size() != 4 || room.kind == RoomKind::Hall) continue;
-        const Vec2 rc = (room.rect[0] + room.rect[2]) * 0.5;
+        // (a room with a FRAME is furnished inside it: the ring's curved corner office, every lot of a zoned office
+        // floor -- whose outline may be a trapezoid or an L even with four corners)
+        const Poly2& rr = room.frame.size() == 4 ? room.frame : room.rect;
+        if (rr.size() != 4 || room.kind == RoomKind::Hall) continue;
+        const Vec2 rc = (rr[0] + rr[2]) * 0.5;
         const uint32_t hr = mix32(hb ^ static_cast<uint32_t>(std::lround(rc.x * 7.0)) ^
                                   (static_cast<uint32_t>(std::lround(rc.y * 13.0)) << 8));
         const uint32_t fabric = (hb + ((hr >> 5) % 3u)) & 7u;
         Furnisher F{out, colliderOut, {}, y0, fabric | (wood << 3) | (style << 5), {}};
-        F.f.o = room.rect[0];
-        const Vec2 du = room.rect[1] - room.rect[0], dv = room.rect[3] - room.rect[0];
+        F.f.o = rr[0];
+        const Vec2 du = rr[1] - rr[0], dv = rr[3] - rr[0];
         F.f.W = du.length(); F.f.D = dv.length();
         if (F.f.W < 1.8 || F.f.D < 1.8) continue;
         F.f.u = du * (1.0 / F.f.W); F.f.v = dv * (1.0 / F.f.D);
+        F.learnWalls(rp.walls);
+        F.learnOpenings(rp.openings);
         for (const Vec2& dp : doors) {
             const Vec2 l = F.f.local(dp);
             if (l.x < -0.4 || l.x > F.f.W + 0.4 || l.y < -0.4 || l.y > F.f.D + 0.4) continue;
@@ -259,9 +599,15 @@ void emitFurniture(std::vector<PlacedPiece>& out, RenderMesh* colliderOut, const
         }
         // An OPEN PLAN zone has rooms set into it (corner offices, meeting rooms, the kitchenette): they are
         // obstacles here, with a clear margin round them.
-        if (room.kind == RoomKind::OpenPlan)
+        // ...and so has a fire station's ENGINE BAY: the floor each engine stands on (Apparatus)
+        // (the halls whose whole floor is one room: what is set into them -- a parked engine's floor, a loading strip,
+        // a stair's flight -- is taken)
+        const bool hall = room.kind == RoomKind::EngineBay || room.kind == RoomKind::ShopFloor || room.kind == RoomKind::Warehouse ||
+                          room.kind == RoomKind::Nave || room.kind == RoomKind::Market || room.kind == RoomKind::Foyer;
+        if (room.kind == RoomKind::OpenPlan || hall)
             for (const Room& other : rp.rooms) {
-                if (&other == &room || other.kind == RoomKind::OpenPlan) continue;
+                if (&other == &room || other.kind == RoomKind::OpenPlan || other.kind == RoomKind::EngineBay ||
+                    other.kind == RoomKind::ShopFloor || other.kind == RoomKind::Warehouse) continue;
                 Real a0 = 1e9, b0 = 1e9, a1 = -1e9, b1 = -1e9;
                 for (const Vec2& v : other.rect) {
                     const Vec2 l = F.f.local(v);
@@ -275,105 +621,22 @@ void emitFurniture(std::vector<PlacedPiece>& out, RenderMesh* colliderOut, const
         const bool ring = rp.topology == PlateTopology::Ring;
         const std::vector<int> longFirst = F.f.W >= F.f.D ? std::vector<int>{0, 2, 1, 3} : std::vector<int>{1, 3, 0, 2};
         Placement p;
-        switch (room.kind) {
-            case RoomKind::Office: {
-                // The DESK backs onto the window with its chair in front, facing it, and the monitor on top.
-                const int desks = F.f.W > 6.8 ? 2 : 1;
-                for (int k = 0; k < desks; ++k) {
-                    if (!F.place(1.6, 1.6, ring ? std::vector<int>{0, 1, 3} : longFirst, p)) break;
-                    F.put(p, Piece::Desk, 0.8, 0.0);
-                    F.put(p, Piece::Monitor, 0.8, 0.12, true, 0.75);
-                    F.put(p, Piece::OfficeChair, 0.8, 1.55, false);
-                }
-                if (F.place(0.46, 0.6, {1, 3, 2}, p, true, Furnisher::clearOf(Piece::FilingCabinet, 0.6))) F.put(p, Piece::FilingCabinet, 0.23, 0.0);
-                if (F.f.W > 5.5 && F.place(0.9, 0.9, {2, 1, 3}, p)) F.put(p, Piece::Planter, 0.45, 0.0);
-                break;
-            }
-            case RoomKind::Flat:
-            case RoomKind::Bed: {
-                // The BED, head to a wall, between two nightstands.
-                if (F.place(2.6, 2.12, ring ? std::vector<int>{1, 3, 0} : longFirst, p)) {
-                    F.put(p, Piece::Nightstand, 0.25, 0.0);
-                    F.put(p, Piece::Bed, 1.3, 0.0);
-                    F.put(p, Piece::Nightstand, 2.35, 0.0);
-                }
-                if (room.kind == RoomKind::Flat) {
-                    if (F.place(2.16, 1.75, {2, 0, 1, 3}, p)) {
-                        F.put(p, Piece::Sofa, 1.08, 0.0);
-                        F.put(p, Piece::CoffeeTable, 1.08, 1.15);
-                    }
-                } else if (F.place(1.2, 0.6, {1, 3, 0, 2}, p, true, Furnisher::clearOf(Piece::Wardrobe, 0.7))) {
-                    F.put(p, Piece::Wardrobe, 0.6, 0.0);
-                }
-                break;
-            }
-            case RoomKind::Living: {
-                Placement sofa;
-                if (F.place(2.16, 1.75, longFirst, sofa)) {
-                    F.put(sofa, Piece::Sofa, 1.08, 0.0);
-                    F.put(sofa, Piece::Rug, 1.08, 0.75);
-                    F.put(sofa, Piece::CoffeeTable, 1.08, 1.15);
-                    const int opp = (sofa.side + 2) % 4;
-                    if (F.place(1.6, 0.42, {opp}, p, true, Furnisher::clearOf(Piece::TvUnit, 0.8))) F.put(p, Piece::TvUnit, 0.8, 0.0);
-                }
-                if (F.place(0.84, 0.84, {1, 3, 0, 2}, p)) F.put(p, Piece::LoungeChair, 0.42, 0.0);
-                break;
-            }
-            case RoomKind::Kitchen: {
-                // The COUNTER RUN: as many 0.6 m modules as the longest free wall takes (2 to 6), the fridge tower
-                // at one end, the sink and the hob among the base units, a wall cupboard over each base.
-                const Real wall = std::max(F.f.W, F.f.D);
-                const int mods = std::clamp(static_cast<int>((wall - 1.0) / 0.6), 2, 6);
-                if (F.place(mods * 0.6, 0.64, longFirst, p, true, Furnisher::clearOf(Piece::KitchenBase, 0.9))) {
-                    for (int i = 0; i < mods; ++i) {
-                        const Real x = 0.3 + i * 0.6;
-                        Piece pc = Piece::KitchenBase;
-                        if (i == 0 && mods >= 4) pc = Piece::KitchenTall;
-                        else if (i == mods / 2) pc = Piece::KitchenSink;
-                        else if (i == mods - 1 || (mods == 2 && i == 0)) pc = Piece::KitchenHob;
-                        F.put(p, pc, x, 0.0);
-                        if (pc != Piece::KitchenTall) F.put(p, Piece::KitchenWall, x, 0.0);
-                    }
-                }
-                if (F.place(1.4, 1.85, {0, 1, 2, 3}, p)) {
-                    F.put(p, Piece::DiningTable, 0.7, 0.5);
-                    F.put(p, Piece::DiningChair, 0.7, 0.0 + 0.0, true);
-                    F.put(p, Piece::DiningChair, 0.7, 1.85, false);
-                }
-                break;
-            }
-            case RoomKind::OpenPlan: {
-                // Benching pods or cubicles, by the building (one style a building).
-                if ((hb >> 13) & 1u) F.fill(Piece::Cubicle, 2.4, 2.4, 0.2, 1.6);
-                else F.fill(Piece::DeskPod, 3.1, 4.8, 1.3, 1.6, 3.2, (F.variant & ~(7u << 5)) | (4u << 5));   // six, else four
-                break;
-            }
-            case RoomKind::Meeting: {
-                Placement m;
-                if (F.place(3.0, 2.4, {0, 2}, m)) F.put(m, Piece::MeetingTable, 1.5, 0.0);
-                F.hang({1, 3}, F.variant, Piece::Whiteboard);
-                break;
-            }
-            case RoomKind::Kitchenette: {
-                const int mods = std::clamp(static_cast<int>((F.f.W - 0.6) / 0.6), 2, 6);
-                if (F.place(mods * 0.6, 0.64, {2, 0}, p, true))
-                    for (int i = 0; i < mods; ++i) {
-                        const Piece pc = i == 0 ? Piece::KitchenTall : i == 1 ? Piece::KitchenSink : Piece::KitchenBase;
-                        F.put(p, pc, 0.3 + i * 0.6, 0.0);
-                    }
-                if (F.place(1.4, 1.85, {0, 1, 3}, p)) {
-                    F.put(p, Piece::DiningTable, 0.7, 0.5);
-                    F.put(p, Piece::DiningChair, 0.7, 0.0, true);
-                    F.put(p, Piece::DiningChair, 0.7, 1.85, false);
-                }
-                break;
-            }
+        // a bath room where people do not live (a school's, a museum's, an office's) is a restroom: toilets, basins
+        const bool restroom = room.kind == RoomKind::Bath && rp.office;
+        const RoomProgram* prog = FurnitureLibrary::global().program(restroom ? "restroom" : programFor(room.kind));
+        if (prog) {
+            ProgramRun run{F, FurnitureLibrary::global(), ring, longFirst, hb, hr};
+            for (const FurnStep& st : prog->steps) run.run(st);
+        } else if (room.kind == RoomKind::Shop) {
+            // SHOPS are furnished by their trade, still in code (the program steps cannot yet say "runs of gondolas
+            // with cross aisles" or "checkout lanes either side of the doors"). Every other kind is a room program.
+            switch (room.kind) {
             case RoomKind::Shop: {
                 // A SHOP by its trade (Glenn: "these small shops"); side 0 is the shopfront.
                 auto along = [&](Piece pc, Real w, Real d, const std::vector<int>& sides, int count) {
                     int n = 0;
                     for (int c = 0; c < count; ++c)
-                        if (F.place(w, d, sides, p, true)) { F.put(p, pc, w * 0.5, 0.0); ++n; }
+                        if (F.place(w, d, sides, p, true, 0, F.heightOf(pc))) { F.put(p, pc, w * 0.5, 0.0); ++n; }
                     return n;
                 };
                 // BISTRO SETS (the furniture library, M2): a table and two chairs facing across it, in a grid of
@@ -395,7 +658,8 @@ void emitFurniture(std::vector<PlacedPiece>& out, RenderMesh* colliderOut, const
                         }
                 };
                 auto counterAtBack = [&]() {
-                    if (F.place(1.8, 1.6, {2, 1, 3}, p)) F.put(p, Piece::ShopCounter, 0.9, 0.0, true);
+                    // 0.85 m off the wall: someone serves from behind it (its "till" spot, furniture_library.lua)
+                    if (F.place(1.8, 1.6, {2, 1, 3}, p, false, 0, F.heightOf(Piece::ShopCounter))) F.put(p, Piece::ShopCounter, 0.9, 0.85, true);
                 };
                 // BIG-BOX floors (Glenn, 2026-10-01): RUNS of a piece along x, `runN` bays to a run, a cross aisle
                 // between runs, `aisleZ` between rows -- long aisles you can walk down, not one solid field.
@@ -406,7 +670,7 @@ void emitFurniture(std::vector<PlacedPiece>& out, RenderMesh* colliderOut, const
                             for (int k = 0; k < runN && x + w <= xb + 1e-6; ++k, x += w) {
                                 Placement c{&F.f, 0, x, w, d, z};
                                 const Box2 fp = c.footprint();
-                                bool clear = true;
+                                bool clear = !F.blocksWindow(fp, F.heightOf(pc));
                                 for (const Box2& b : F.taken)
                                     if (overlaps(fp, b, 0.05)) { clear = false; break; }
                                 if (!clear) continue;
@@ -418,8 +682,55 @@ void emitFurniture(std::vector<PlacedPiece>& out, RenderMesh* colliderOut, const
                         }
                     return n;
                 };
+                // THE BAR (storefronts stage 5): a run of `n` 1.8 m bays (fewer where the wall is short) -- the back
+                // bar on the wall, the bartender's 0.95 m aisle, the counter, a stool every 0.6 m in front of it.
+                auto barRun = [&](const std::vector<int>& sides, int n) {
+                    for (int k = n; k >= 1; --k) {
+                        const Real w = 1.8 * k, d = 0.5 + 0.95 + 0.75 + 0.5;
+                        if (!F.place(w, d, sides, p, true, 0.6, F.heightOf(Piece::BackBar))) continue;
+                        for (int i = 0; i < k; ++i) {
+                            F.put(p, Piece::BackBar, 0.9 + 1.8 * i, 0.0);
+                            F.put(p, Piece::BarCounter, 0.9 + 1.8 * i, 1.45);
+                        }
+                        for (Real x = 0.45; x + 0.3 <= w; x += 0.6) F.put(p, Piece::BarStool, x, 2.26);
+                        return true;
+                    }
+                    return false;
+                };
+                auto booth = [&](const std::vector<int>& sides) {
+                    if (F.place(1.9, 1.3, sides, p, true, 0.5, F.heightOf(Piece::Booth))) F.put(p, Piece::Booth, 0.95, 0.0);
+                };
+                // POSEUR TABLES: a high table and two stools to a 1.6 x 0.8 cell, the cells 1.2 m apart.
+                auto highTables = [&]() {
+                    for (Real z = 0.9; z + 0.8 <= F.f.D - 0.8 + 1e-6; z += 0.8 + 1.2)
+                        for (Real x = 0.6; x + 1.6 <= F.f.W - 0.6 + 1e-6; x += 1.6 + 1.2) {
+                            Placement c{&F.f, 0, x, 1.6, 0.8, z};
+                            const Box2 fp = c.footprint();
+                            bool clear = true;
+                            for (const Box2& b : F.taken)
+                                if (overlaps(fp, b, 0.3)) { clear = false; break; }
+                            if (!clear) continue;
+                            F.taken.push_back(fp);
+                            F.put(c, Piece::HighTable, 0.8, 0.05);
+                            F.put(c, Piece::BarStool, 0.21, 0.19);
+                            F.put(c, Piece::BarStool, 1.39, 0.19);
+                        }
+                };
+                // THE KITCHEN (a restaurant's back): the line on the back wall -- tall unit, hobs, a sink, worktops --
+                // a 1.1 m cooks' aisle, the pass facing the dining room.
+                auto kitchenAndPass = [&]() {
+                    const Real w = std::min(F.f.W - 0.2, Real(6.0));
+                    if (w < 2.6 || !F.place(w, 0.6 + 1.1 + 0.8, {2}, p, true, 0.4, F.heightOf(Piece::KitchenTall))) { counterAtBack(); return; }
+                    // tall units at the two ends only (a run of hobs, worktops and sinks between)
+                    static const Piece kLine[5] = {Piece::KitchenHob, Piece::KitchenHob, Piece::KitchenBase,
+                                                   Piece::KitchenSink, Piece::KitchenBase};
+                    const int n = static_cast<int>(w / 0.6);
+                    for (int i = 0; i < n; ++i)
+                        F.put(p, i == 0 || i == n - 1 ? Piece::KitchenTall : kLine[(i - 1) % 5], 0.3 + 0.6 * i, 0.0);
+                    F.put(p, Piece::KitchenPass, w * 0.5, 1.7);
+                };
                 const Real xa = 1.0, xb = F.f.W - 1.0, xm = F.f.W * 0.5;
-                if (room.style >= 7) {
+                if (room.style >= 7 && room.style <= 12) {   // (the big-box store's rooms; 13+ are trades: trades.h)
                     switch (room.style) {
                         case 7:   // WAREHOUSE CLUB: pallet racking, wide aisles for the forklifts
                         case 9:   // HOME IMPROVEMENT: the same racking, wider aisles
@@ -453,71 +764,130 @@ void emitFurniture(std::vector<PlacedPiece>& out, RenderMesh* colliderOut, const
                     }
                     break;
                 }
-                switch (room.style % 7) {
+                switch (room.style) {   // the unit's TRADE (trades.h)
                     case 0:   // CAFE
                         counterAtBack();
                         along(Piece::DrinksFridge, 0.8, 0.75, {2, 1, 3}, 1);
                         bistro(0.5);
                         break;
                     case 1:   // GROCERY
-                        if (F.place(1.8, 1.4, {1, 3}, p)) F.put(p, Piece::ShopCounter, 0.9, 0.0);
+                        if (F.place(1.8, 1.4, {1, 3}, p, false, 0, F.heightOf(Piece::ShopCounter))) F.put(p, Piece::ShopCounter, 0.9, 0.0);
                         along(Piece::DrinksFridge, 0.8, 0.75, {2}, 4);
                         F.fill(Piece::Gondola, 2.4, 1.0, 1.0, 1.4);
                         break;
+                    case 16:  // KONBINI: the counter by the door (the till, the hot-food case beside it), the drinks
+                              // fridges across the back wall, shelves down a side, short gondola rows between
+                        if (F.place(1.8, 1.4, {1, 3}, p, false, 0, F.heightOf(Piece::ShopCounter))) F.put(p, Piece::ShopCounter, 0.9, 0.0);
+                        along(Piece::DisplayCase, 1.6, 0.7, {1, 3}, 1);
+                        along(Piece::DrinksFridge, 0.8, 0.75, {2}, 6);
+                        along(Piece::WallShelf, 2.0, 0.45, {3, 1}, 2);
+                        F.fill(Piece::Gondola, 2.4, 1.0, 1.0, 1.2);
+                        break;
                     case 2:   // BOUTIQUE
+                        counterAtBack();   // (the till first: the shelves take the walls it leaves)
                         along(Piece::WallShelf, 2.0, 0.45, {1, 3}, 4);
-                        counterAtBack();
                         F.fill(Piece::ClothesRack, 1.6, 0.6, 1.0, 1.2);
                         break;
                     case 3:   // BOOKSHOP
-                        along(Piece::Bookcase, 1.2, 0.35, {1, 3, 2}, 10);
                         counterAtBack();
+                        along(Piece::Bookcase, 1.2, 0.35, {1, 3, 2}, 10);
                         if (F.place(1.4, 1.85, {0, 1, 3}, p)) F.put(p, Piece::DiningTable, 0.7, 0.5);
                         break;
                     case 4:   // ELECTRONICS
+                        counterAtBack();
                         along(Piece::TvUnit, 1.6, 0.42, {2}, 3);
                         along(Piece::WallShelf, 2.0, 0.45, {1, 3}, 2);
-                        counterAtBack();
                         F.fill(Piece::DiningTable, 1.4, 0.85, 1.2, 1.4);
                         break;
                     case 5:   // PHARMACY
-                        along(Piece::WallShelf, 2.0, 0.45, {1, 3}, 4);
                         counterAtBack();
+                        along(Piece::WallShelf, 2.0, 0.45, {1, 3}, 4);
                         F.fill(Piece::Gondola, 2.4, 1.0, 1.2, 1.6);
                         break;
-                    default:  // BAKERY
+                    case 6:   // BAKERY
                         along(Piece::DisplayCase, 1.6, 0.7, {2}, 2);
                         counterAtBack();
                         bistro(0.6);
                         break;
+                    case 13: {  // RESTAURANT: the kitchen line and the pass across the back, a host's stand by the
+                                // door, booths down the side walls, the dining room's tables in the rest
+                        kitchenAndPass();
+                        if (F.place(0.7, 0.55, {0}, p)) F.put(p, Piece::Lectern, 0.35, 0.0);
+                        for (int k = 0; k < 2; ++k) booth({1, 3});
+                        bistro(0.8);
+                        break;
+                    }
+                    case 14:    // BAR: the bar down a long wall (back bar, the bartender's aisle, the counter, stools),
+                                // booths along the other, poseur tables between
+                        if (!barRun({1, 3, 2}, 4)) counterAtBack();
+                        for (int k = 0; k < 3; ++k) booth({3, 1, 2});
+                        highTables();
+                        break;
+                    case 15: {  // CLUB: the DJ at the back, the lit floor in front of the booth, the bar down a side,
+                                // booths and sofas round the edge
+                        if (F.place(3.0, 1.0, {2}, p, true, 0.6, F.heightOf(Piece::DjBooth))) F.put(p, Piece::DjBooth, 1.5, 0.0);
+                        if (F.f.W >= 5.2 && F.f.D >= 6.5) {
+                            const Real fw = 4.0, z = std::max(Real(1.2), F.f.D - 1.0 - 0.6 - fw - 0.2);
+                            Placement c{&F.f, 0, (F.f.W - fw) * 0.5, fw, fw, z};
+                            const Box2 fp = c.footprint();
+                            bool clear = true;
+                            for (const Box2& b : F.taken) if (overlaps(fp, b, 0.0)) clear = false;
+                            if (clear) { F.taken.push_back(fp); F.put(c, Piece::DanceFloor, fw * 0.5, 0.0); }
+                        }
+                        if (!barRun({1, 3}, 3)) counterAtBack();
+                        for (int k = 0; k < 2; ++k) booth({3, 1});
+                        along(Piece::Sofa, 2.0, 0.9, {3, 1}, 1);
+                        highTables();
+                        break;
+                    }
+                    case 22:    // THE AMERICAN MALL'S UPPER CONCOURSE: its middle is the atrium -- nothing on it
+                    case 23:    // ...and its COURT's floor: the escalators and the lift stand there
+                        break;
+                    case 21:    // ...its LOWER concourse and court: as the box mall's (lit through the atrium, unlit itself)
+                    case 20: {  // AN INDOOR MALL'S CONCOURSE (mallLayout; its rect runs along side 0): down its
+                                // middle, planters and pairs of benches by turns, the benches back to back facing the shops
+                        const Real mid = F.f.D * 0.5;
+                        int k = 0;
+                        for (Real t = 6.0; t + 2.0 <= F.f.W - 4.0; t += 7.0, ++k) {
+                            if (k % 2 == 0) {
+                                Placement c{&F.f, 0, t, 0.9, 0.9, mid - 0.45};
+                                F.taken.push_back(c.footprint());
+                                F.put(c, Piece::Planter, 0.45, 0.0);
+                            } else {
+                                Placement a{&F.f, 0, t, 1.8, 0.55, mid - 0.55}, b{&F.f, 0, t, 1.8, 0.55, mid};
+                                F.taken.push_back(a.footprint());
+                                F.taken.push_back(b.footprint());
+                                F.put(a, Piece::PlazaBench, 0.9, 0.55, false);   // facing the side-0 row
+                                F.put(b, Piece::PlazaBench, 0.9, 0.0, true);     // facing the far row
+                            }
+                        }
+                        break;
+                    }
+                    default:  // a trade with no fit-out yet: a counter
+                        counterAtBack();
+                        break;
                 }
                 break;
             }
-            case RoomKind::Closet: {
-                if (F.place(1.2, 0.5, longFirst, p, true)) F.put(p, Piece::Shelving, 0.6, 0.0);
-                break;
+                default: break;
             }
-            case RoomKind::Bath: {
-                if (F.place(1.7, 0.75, longFirst, p, false, 0.6)) F.put(p, Piece::Bathtub, 0.85, 0.0);
-                if (F.place(0.4, 0.7, {1, 3, 0, 2}, p, false, 0.6)) F.put(p, Piece::Toilet, 0.2, 0.0);
-                if (F.place(0.8, 0.5, {0, 1, 2, 3}, p, false, 0.6)) F.put(p, Piece::Vanity, 0.4, 0.0);
-                break;
-            }
-            default: break;
         }
+        // (no program and not a shop: the library is not loaded, and the room stays empty -- the furniture is data)
         // THE LIGHTS (Glenn, 2026-10-02: "actual ceiling light fixtures for where the ambient light comes from"):
         // a working room -- office, open plan, meeting room, kitchenette, shop -- a grid of panels every 2.4 m
         // along its long side; a home's room, a round fitting in its middle (a long hall, one every 4 m).
-        if (ceilingY > y0 + 2.0) {
-            auto hangAt = [&](Real a, Real b, bool panel) {
+        // (an Apparatus floor is a keep-clear strip inside its room, furnished by nothing: the room lights it)
+        if (ceilingY > y0 + 2.0 && room.kind != RoomKind::Apparatus) {
+            // kind: 0 an office panel, 1 a round flush fitting, 2 a bar's pendant (on a cord, 0.9 m down)
+            auto hangAt = [&](Real a, Real b, int kind) {
                 const bool alongV = F.f.D > F.f.W;
                 const Vec2 Zd = alongV ? F.f.v : F.f.u;
                 const Vec2 Xd(Zd.y, -Zd.x);
-                const Real half = panel ? 0.61 : 0.21, h = panel ? 0.05 : 0.08;
+                const Real half = kind == 0 ? 0.61 : kind == 1 ? 0.21 : 0.18, h = kind == 0 ? 0.05 : kind == 1 ? 0.08 : 0.90;
                 const Vec2 c = F.f.world(a, b) - Zd * half;
                 PlacedPiece pp;
                 pp.piece = static_cast<uint8_t>(Piece::CeilingLight);
-                pp.variant = panel ? 0u : 32u;
+                pp.variant = kind == 0 ? 0u : kind == 1 ? 32u : 32u | 64u | ((hr & 1u) ? 128u : 0u);   // brass or black
                 Mat4& M = pp.xform;
                 // right-handed: X = Z x up
                 Vec3 X(Xd.x, 0, Xd.y), Z(Zd.x, 0, Zd.y);
@@ -527,21 +897,61 @@ void emitFurniture(std::vector<PlacedPiece>& out, RenderMesh* colliderOut, const
                 M.m[0][2] = Z.x; M.m[1][2] = 0; M.m[2][2] = Z.z;
                 M.m[0][3] = c.x; M.m[1][3] = ceilingY - h; M.m[2][3] = c.y;
                 out.push_back(pp);
+                // RT_LIGHTS_WHY="x,z": which room hangs each light within 2 m of there
+                static const char* why = std::getenv("RT_LIGHTS_WHY");
+                if (why) {
+                    double wx = 0, wz = 0;
+                    if (std::sscanf(why, "%lf,%lf", &wx, &wz) == 2 && (c - Vec2(wx, wz)).length() < 2.0)
+                        std::fprintf(stderr, "[lights] %.2f %.2f %.2f kind %d hung by room %d of %zu, kind %d (%.1f x %.1f)\n", c.x,
+                                     ceilingY - h, c.y, kind, static_cast<int>(&room - rp.rooms.data()), rp.rooms.size(),
+                                     static_cast<int>(room.kind), F.f.W, F.f.D);
+                }
             };
-            const bool working = room.kind == RoomKind::Office || room.kind == RoomKind::OpenPlan ||
+            const bool working = room.kind == RoomKind::Office || room.kind == RoomKind::OpenPlan || room.kind == RoomKind::DeskRow ||
                                  room.kind == RoomKind::Meeting || room.kind == RoomKind::Kitchenette ||
+                                 room.kind == RoomKind::Reception || room.kind == RoomKind::Gallery ||
+                                 room.kind == RoomKind::Exam || room.kind == RoomKind::NurseStation ||
+                                 room.kind == RoomKind::Waiting || room.kind == RoomKind::Ward ||
+                                 room.kind == RoomKind::Nave || room.kind == RoomKind::Foyer ||
+                                 room.kind == RoomKind::Market || room.kind == RoomKind::Courtroom ||
+                                 room.kind == RoomKind::Chamber || room.kind == RoomKind::EngineBay ||
+                                 room.kind == RoomKind::ShopFloor || room.kind == RoomKind::Warehouse ||
+                                 room.kind == RoomKind::HotelLobby || room.kind == RoomKind::CopyRoom ||
+                                 room.kind == RoomKind::PhoneBooths || room.kind == RoomKind::WaterCooler ||
                                  room.kind == RoomKind::Shop;
-            if (working) {
-                const int nx = std::max(1, static_cast<int>(F.f.W / 2.4)), nz = std::max(1, static_cast<int>(F.f.D / 2.4));
+            // a shop is lit as its trade (trades.h): office panels, round fittings in a warm room, a few in a bar
+            const int shopLights = room.kind == RoomKind::Shop ? tradeInterior(room.style).lights : 0;
+            if (working && shopLights == 3) {   // (no lights of its own: under an atrium)
+            } else if (working) {
+                const Real pitch = shopLights == 2 ? 3.6 : 2.4;
+                const int nx = std::max(1, static_cast<int>(F.f.W / pitch)), nz = std::max(1, static_cast<int>(F.f.D / pitch));
+                // An open plan is a zone over the rooms set into it (corner offices, meeting rooms): they light
+                // their own ceilings, so its grid leaves them out (Glenn: "the lights in some places overlap"). Two
+                // bands of open plan meet over a corner no office takes: the band laid first lights it.
+                auto ownedByARoomIn = [&](const Vec2& w) {
+                    if (room.kind != RoomKind::OpenPlan) return false;
+                    for (const Room& o : rp.rooms) {
+                        if (&o == &room || o.rect.size() < 3) continue;
+                        if (o.kind == RoomKind::OpenPlan && &o > &room) continue;
+                        if (pointInPolygon(o.rect, w)) return true;
+                    }
+                    return false;
+                };
                 for (int i = 0; i < nx; ++i)
-                    for (int j = 0; j < nz; ++j)
-                        hangAt(F.f.W * (i + 0.5) / nx, F.f.D * (j + 0.5) / nz, true);
+                    for (int j = 0; j < nz; ++j) {
+                        const Real a = F.f.W * (i + 0.5) / nx, b = F.f.D * (j + 0.5) / nz;
+                        bool owned = false;   // the panel's footprint (1.2 m), not just its centre
+                        for (const Vec2& k : {Vec2(0, 0), Vec2(-0.65, -0.65), Vec2(0.65, -0.65), Vec2(0.65, 0.65), Vec2(-0.65, 0.65)})
+                            owned = owned || ownedByARoomIn(F.f.world(a + k.x, b + k.y));
+                        if (owned) continue;
+                        hangAt(a, b, shopLights);
+                    }
             } else {
                 const Real L = std::max(F.f.W, F.f.D);
                 const int n = L > 6.0 ? static_cast<int>(L / 4.0) : 1;
                 for (int i = 0; i < n; ++i)
                     hangAt(F.f.W >= F.f.D ? F.f.W * (i + 0.5) / n : F.f.W * 0.5,
-                           F.f.W >= F.f.D ? F.f.D * 0.5 : F.f.D * (i + 0.5) / n, false);
+                           F.f.W >= F.f.D ? F.f.D * 0.5 : F.f.D * (i + 0.5) / n, 1);
             }
         }
         // The pictures: on the side walls (never the window wall of a room that has one), two in a long living

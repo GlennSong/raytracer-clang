@@ -25,6 +25,53 @@ struct SignalSpot {
     int link = -1;
 };
 
+// WHAT A STREET IS LIKE, for its planting (Glenn: "some have trees, some don't, some have them spaced differently ...
+// a way to denote suburbs vs downtown, poor vs wealthy areas, newly developed areas vs old areas"). The city build
+// answers it from its lots and the ground; planStreetFurniture picks each street's planting from it.
+struct StreetCharacter {
+    enum Kind : uint8_t { Residential, Downtown, Commercial, Industrial, OldTown, Rural };
+    Kind kind = Residential;
+    Real wealth = 0.5;     // 0 poor .. 1 well off
+    Real age = 0.5;        // 0 just built .. 1 the oldest streets in town
+    bool coastal = false;  // low ground by the sea
+};
+
+// The street trees' kinds (the loader models each from real_tree.h): the forest's broadleaves and the island's own.
+enum class StreetSpecies : uint8_t { Maple, Oak, Beech, RoyalPalm, CoconutPalm, Monkeypod, Poinciana, Jacaranda, Plumeria, Count };
+const char* streetSpeciesName(StreetSpecies s);   // its real_tree.h name ("royal_palm", ...)
+
+// ONE STREET'S PLANTING: nothing; an avenue of one kind at a close even spacing; a mix; a few survivors with gaps; a
+// row of young saplings; palms. Spacing, size and gaps by the scheme.
+struct StreetPlanting {
+    enum Scheme : uint8_t { None, Avenue, Mixed, Sparse, Saplings, Palms, Flowering };
+    Scheme scheme = Mixed;
+    StreetSpecies species[3] = {StreetSpecies::Maple, StreetSpecies::Oak, StreetSpecies::Beech};
+    int kinds = 3;           // how many of species[] it draws from
+    Real spacing = 9.0;      // metres along one kerb
+    Real scaleLo = 0.75, scaleHi = 1.1;   // of each kind's street height
+    Real gaps = 0.0;         // the share of pits left empty (a tree lost, never replaced)
+    bool oneSide = false;    // only the one kerb
+};
+const char* plantingSchemeName(StreetPlanting::Scheme s);
+// The planting a street of this character and class gets; `u`, `v` its own draws in [0,1) (the same street, the same
+// planting along its length).
+StreetPlanting choosePlanting(const StreetCharacter& c, RoadClass klass, Real u, Real v);
+
+// THE KERB LINE as a query: how deep a point stands inside the drawn driving surface (RoadBandDebug::loops,
+// outers and holes alike, even-odd), 0 outside; distances are found within `reach` of the point. The furniture
+// planner walks its placements off it, and the level gates measure them against it -- one surface, not a model.
+class KerbLine {
+public:
+    explicit KerbLine(const std::vector<Poly2>* loops, Real reach = 40);
+    bool empty() const { return !loops_ || loops_->empty(); }
+    Real depth(const Vec2& at) const;
+private:
+    struct Box { Real x0, z0, x1, z1; };
+    const std::vector<Poly2>* loops_ = nullptr;
+    std::vector<Box> box_;
+    Real reach_ = 40;
+};
+
 struct StreetFurnitureParams {
     // Sidewalk band width (RoadLook::sidewalk): the junction PAD spans
     // verge-to-verge, i.e. carriageway half-width + THIS, so a pole placed
@@ -42,6 +89,12 @@ struct StreetFurnitureParams {
     // be wrong about where the road is: given it, a placement that lands on asphalt is
     // walked out along its own kerb normal. Null = width-only, as before.
     const RoadDeckField* deck = nullptr;
+    // ...and its KERB LINE (RoadBandDebug::loops, even-odd): the boundary of the whole driving surface. A lane
+    // city's deck field holds each road at its carriageway width, so the asphalt FILLING A JUNCTION'S CORNERS --
+    // no one road's carriageway -- read as clear, and a corner pole stood on it, past the end of the sidewalk
+    // (metro_v2_test, 2026-10-20: 7 of 280 poles, the worst 3.75 m in, at a wedge between two streets). Given
+    // the loops, a placement is walked off them too. Null = the deck alone.
+    const std::vector<Poly2>* kerbLoops = nullptr;
     // 26 m between lamps: close enough that the 34 m pools OVERLAP rather
     // than leaving a dark gap between every pair (device: "it's pretty dark
     // in the city at night").
@@ -59,7 +112,24 @@ struct StreetFurnitureParams {
     // 10 m, not 12: junction corners are exactly where a pedestrian wants
     // light. Still clear of the signal poles, which stand ~9.6 m out.
     Real junctionClear = 10.0;     // no lamps this close to a junction corner
+    // KERB LIFE (the city's next ten #3): street trees in pits along every city street with a pavement, a litter
+    // bin at each corner, bike racks and newspaper boxes along the main streets. Off = lamps and signals only.
+    bool kerbLife = true;
+    Real treeSpacing = 9.0;        // metres between street trees along one kerb
+    Real treeVerge = 1.5;          // the pit's centre beyond the kerb
+    Real treeJunctionClear = 13.0; // sightlines: no tree this close to a junction
+    Real propSpacing = 55.0;       // a bike rack or a pair of news boxes every this many metres of main-street kerb
+    // The character of the street at a point (null: every street planted the one way, the three broadleaves at
+    // treeSpacing, as before)
+    std::function<StreetCharacter(Vec2)> character;
 };
+
+// A street tree (its pit's centre, on the pavement), its size and which of the tree kit's varieties it is.
+struct StreetTree { Vec3 base; Real scale = 1; uint32_t variety = 0; StreetSpecies species = StreetSpecies::Maple; };
+// A small kerb piece: where it stands, the street's direction there (+X of the prototype), and what it is.
+// `toPavement`: from the street's centre out to the piece (the prototype's +Z), so it faces the right way whichever
+// side of its link the pavement is.
+struct KerbProp { enum Kind : uint8_t { Bin, BikeRack, NewsBoxes }; Vec3 base; Vec2 toPavement{0, 1}; uint8_t kind = Bin; };
 
 struct StreetFurniturePlan {
     std::vector<SignalSpot> signals;
@@ -70,6 +140,9 @@ struct StreetFurniturePlan {
     std::vector<Vec2> unpoledApproaches;
     std::vector<Vec3> lampBases;   // pole feet (instance translations)
     std::vector<Vec3> lampHeads;   // bulb positions (night point lights)
+    std::vector<StreetTree> trees; // kerb life (StreetFurnitureParams::kerbLife)
+    std::vector<KerbProp> props;
+    int planted[8] = {0};          // street links by StreetPlanting::Scheme (with a character)
 };
 
 // Plan every pole from the nav graph: a signal per junction-entering link

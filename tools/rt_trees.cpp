@@ -7,13 +7,18 @@
 
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <string>
 #include <vector>
 
 int main(int argc, char** argv) {
-    if (argc < 2) { std::fprintf(stderr, "usage: rt_trees OUT [variants]\n"); return 2; }
+    const char* usage = "usage: rt_trees OUT [variants]\n"
+                        "  every real_tree species' impostor pictures and foliage texture, raw RGBA, into the folder OUT\n";
+    // A flag is never the folder: `rt_trees --help` once wrote 18 species into ./--help (2026-10-21)
+    if (argc >= 2 && (std::strcmp(argv[1], "-h") == 0 || std::strcmp(argv[1], "--help") == 0)) { std::fputs(usage, stdout); return 0; }
+    if (argc < 2 || argv[1][0] == '-') { std::fputs(usage, stderr); return 2; }
     const std::string out = argv[1];
     const int variants = argc > 2 ? std::atoi(argv[2]) : 3;
     std::filesystem::create_directories(out);

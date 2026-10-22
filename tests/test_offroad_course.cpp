@@ -363,3 +363,28 @@ TEST_CASE(drivable_cars_probe_brakes_and_turning_prints) {
     }
 }
 
+
+// THE INDICATORS ON THE RIGHT SIDE (Glenn, 2026-10-20: "cars also signal the wrong light when you try to turn left and
+// right. It uses the opposite light"): every drivable recipe, kit bodies and the generated cars alike, names its lamps
+// by the PHYSICAL side -- forward +Z, the driver's left +X (car_mesh.cpp, measured in the driving lab) -- so a lamp
+// tagged "_l" stands at +X and one tagged "_r" at -X, and each of the four is there.
+TEST_CASE(every_drivable_car_names_its_lamps_by_their_side) {
+    VehiclesVM v;
+    for (const char* recipe : {"offroad", "kit_jeep", "kit_pickup", "kit_suv", "kit_sedan", "kit_hatchback", "kit_taxi",
+                               "kit_convertible", "kit_step_van", "kit_small_truck", "sedan", "pickup", "van"}) {
+        VehicleSpec spec;
+        std::string err;
+        CHECK(loadVehicleSpec(v.vm, std::string("return vehicle.") + recipe + "(seed, {})", 3u, spec, &err));
+        int l = 0, r = 0, wrong = 0;
+        for (const auto& m : spec.lights) {
+            if (m.name.rfind("headlight", 0) != 0 && m.name.rfind("taillight", 0) != 0) continue;
+            const bool left = m.name.size() > 2 && m.name.compare(m.name.size() - 2, 2, "_l") == 0;
+            const bool right = m.name.size() > 2 && m.name.compare(m.name.size() - 2, 2, "_r") == 0;
+            l += left; r += right;
+            if ((left && m.pos.x <= 0) || (right && m.pos.x >= 0)) ++wrong;
+        }
+        if (wrong || l != 2 || r != 2) std::printf("    %-16s %d left, %d right lamps, %d on the wrong side\n", recipe, l, r, wrong);
+        CHECK(l == 2 && r == 2);
+        CHECK(wrong == 0);
+    }
+}

@@ -2,6 +2,9 @@
 #define RAYTRACER_ENGINE_MESH_BUILDER_H
 
 #include "../renderer/renderer.h"
+#include "procgen/city/polygon.h"   // Vec2
+#include <array>
+#include <cmath>
 #include <cstdint>
 #include <functional>
 #include <string>
@@ -9,6 +12,60 @@
 #include <vector>
 
 namespace engine {
+
+// THE MESH LIBRARY (ADR-0172, Glenn 2026-10-13: "a common library of triangulation techniques ... how to represent
+// triangles in this engine, and then code to handle all the different cases for building vehicles, buildings,
+// furniture, etc. And then lua should be able to access it"). Every procedural mesh in the engine is built from the
+// words below; a producer that needs a shape they lack ADDS a word here rather than a private helper.
+//
+//   THE CONVENTION  A RenderMesh is an indexed triangle list. A triangle (a, b, c) faces the way cross(c - a, b - a)
+//                   points -- CLOCKWISE seen from its front (VK_FRONT_FACE_CLOCKWISE; back faces are culled) -- and
+//                   that way must agree with its vertex normals. Nobody writes index order by hand: every triangle
+//                   goes through triFacing (emitTri, emitQuad, emitBox, emitBlock, emitPolygon, emitPlanPrism,
+//                   emitCylinder and the shape words all do), which winds it to the outward normal it is given and
+//                   drops it when it has no area (kNoArea2).
+//   SOLIDS ARE CLOSED  A box, block or prism has every face unless the caller masks one off because something
+//                   covers it (a sleeper on its ballast): an open bottom is a hole when the solid stands over air.
+//   ONE TRIANGULATOR  Polygons (with holes) fill through triangulate (earcut, procgen/city/triangulate.h).
+//   CHECKED  engine/mesh_audit.h judges any mesh by these rules: the unit tests run it over every producer
+//                   (tests/test_winding.cpp), rt_bake --audit over every bake.
+
+// AN ORIENTED FRAME: a box spans origin + [0,1] x + [0,1] y + [0,1] z -- the axes carry the size and need not be unit
+// or square (a sheared scope, a pitched part). `aabb` / `centred` build the common ones.
+struct MeshFrame {
+    Vec3 o{0, 0, 0}, x{1, 0, 0}, y{0, 1, 0}, z{0, 0, 1};
+    Vec3 at(double u, double v, double w) const { return o + x * u + y * v + z * w; }
+    static MeshFrame aabb(const Vec3& lo, const Vec3& hi) {
+        return {lo, Vec3(hi.x - lo.x, 0, 0), Vec3(0, hi.y - lo.y, 0), Vec3(0, 0, hi.z - lo.z)};
+    }
+    // `size` along unit axes `right`, `up`, `fwd` (default the world's), centred on `c`
+    static MeshFrame centred(const Vec3& c, const Vec3& size, const Vec3& right = Vec3(1, 0, 0), const Vec3& up = Vec3(0, 1, 0),
+                             const Vec3& fwd = Vec3(0, 0, 1)) {
+        const Vec3 X = right * size.x, Y = up * size.y, Z = fwd * size.z;
+        return {c - X * 0.5 - Y * 0.5 - Z * 0.5, X, Y, Z};
+    }
+    // The frame turned by `angle` (radians, right-handed) about the line through `pivot` along unit `axis`: a limb
+    // pitched at its hip, a door on its hinge.
+    MeshFrame rotatedAbout(const Vec3& pivot, const Vec3& axis, double angle) const {
+        const double c = std::cos(angle), s = std::sin(angle);
+        auto rot = [&](const Vec3& v) { return v * c + cross(axis, v) * s + axis * (dot(axis, v) * (1 - c)); };
+        return {pivot + rot(o - pivot), rot(x), rot(y), rot(z)};
+    }
+};
+
+// Which faces of a box (its frame's axes) or a block (foot/head and the sides in ring order) to emit.
+enum MeshFaces : uint8_t {
+    kFaceNegX = 1, kFacePosX = 2, kFaceNegY = 4, kFacePosY = 8, kFaceNegZ = 16, kFacePosZ = 32, kFacesAll = 63,
+    kFaceBottom = kFaceNegY, kFaceTop = kFacePosY, kFaceSides = kFaceNegX | kFacePosX | kFaceNegZ | kFacePosZ,
+};
+
+// A LATHE's look (MeshBuilder::lathe): smooth (normals averaged through gentle bends) or faceted (every quad flat,
+// the shape grammar's columns and finials); turned about +y through `centre`; vertex colour `color`.
+struct LatheStyle {
+    bool faceted = false;
+    Vec3 centre{0, 0, 0};
+    Vec3 color{1, 1, 1};
+};
 
 struct MeshBuilder {
     // Level-format shape names ("box", "sphere", ...) -> mesh, with the same
@@ -62,6 +119,45 @@ struct MeshBuilder {
     // Recompute smooth vertex normals from face geometry (area-weighted by the
     // face cross product), e.g. after displacing vertices (noise terrain).
     static void recomputeNormals(RenderMesh& mesh);
+    // recomputeNormals with CREASES (PolyMesh toParts' autosmooth, for a RenderMesh): a corner's normal averages only
+    // the faces round its vertex within `creaseDeg` of its own face; where they part by more, the vertex is split, so
+    // a hard edge stays hard and no face is shaded from behind (smoothing across a fold turns a small face's normals
+    // away from it -- the mesh audit's "inward" triangles on the car shell's nose).
+    static void autosmooth(RenderMesh& mesh, double creaseDeg = 50.0);
+    // A triangle whose |cross(c - a, b - a)|^2 is under this (area under 0.1 mm^2) has NO AREA: the emitters skip it,
+    // dropDegenerate removes it, and the mesh audit (tests/mesh_invariants.h) counts by the same number.
+    static constexpr double kNoArea2 = 4e-14;
+    // Drop the triangles of no area (a sphere's pole row, a rounded box's collapsed corner): the vertices stay, so
+    // indices into them hold. The grid primitives end with it.
+    static void dropDegenerate(RenderMesh& mesh);
+    // FLAT SHADING: every triangle its own three vertices, their normal the triangle's own facing (cross(c-a, b-a)),
+    // its winding kept; no-area triangles dropped. Low-poly rocks, faceted gems.
+    static void flatShade(RenderMesh& mesh);
+    // SIMPLIFY (quadric error edge collapse, Garland & Heckbert 1997): collapse the edge that moves the surface least
+    // -- each vertex carries the sum of its faces' plane quadrics (and its open edges', weighted heavy, so a border
+    // keeps its line), an edge collapses to the point that minimises their sum -- until `targetTris` triangles are left
+    // or the next collapse would move the surface more than `maxError` (squared distance, m^2). A collapse that would
+    // turn a face over or make the surface non-manifold (the edge's ends sharing more neighbours than faces) is skipped.
+    // Winding is kept. POSITIONS ONLY: a kept vertex keeps its other attributes as they were, so the caller re-derives
+    // normals, UVs and colours (an implicit surface's from its field). Returns the triangles left.
+    static std::size_t simplify(RenderMesh& mesh, std::size_t targetTris, double maxError = 1e30);
+    // MANIFOLD BY SPLITTING: where two sheets of a mesh touch at a vertex (an isosurface's pinch where a feature is
+    // thinner than its cell -- an edge then sits on four faces), the vertex is split, one copy for each fan of faces
+    // round it that are joined through edges of exactly two faces. Positions are kept (the sheets still touch); the
+    // mesh is then manifold by index. Returns the vertices added.
+    static std::size_t splitNonManifold(RenderMesh& mesh);
+    // FILL SMALL HOLES: every loop of open edges (an edge on one face, followed head to tail) of at most `maxEdges`
+    // edges is closed by a fan round a new vertex at its middle (put on the surface by `project`), wound with the
+    // faces round it. (splitNonManifold can open a few where two sheets crossed at an edge.) Returns the holes filled.
+    static std::size_t fillHoles(RenderMesh& mesh, std::size_t maxEdges, const std::function<Vec3(const Vec3&)>& project);
+    // ISOTROPIC REMESHING (Botsch & Kobbelt 2004): even, near-equilateral triangles of about `edgeAt(p)` metres --
+    // `iterations` rounds of: split every edge over 4/3 of its target, collapse every edge under 4/5 (where no edge
+    // it makes would be over 4/3, no face turns over and the surface stays manifold), flip edges toward valence six,
+    // and move each vertex toward its neighbours' middle within its tangent plane -- every new or moved vertex put
+    // back on the surface by `project` (an implicit surface's Newton step; identity for a mesh with none). The mesh
+    // must be manifold (splitNonManifold first). Positions only, as simplify: the caller re-derives the rest.
+    static void remesh(RenderMesh& mesh, const std::function<double(const Vec3&)>& edgeAt,
+                       const std::function<Vec3(const Vec3&)>& project, int iterations = 6);
 
     // Split a WORLD-SPACE mesh into grid-cell chunks by triangle centroid (cell key = floor(x / cell),
     // floor(z / cell)), in first-seen order; vertices are duplicated per chunk (a vertex is shared by few
@@ -112,6 +208,10 @@ struct MeshBuilder {
     // already pushed row-major: vertex (i,j) lives at `base + j*cols + i`,
     // with +i = +X and +j = +Z. The shared triangulation for terrain grids
     // (heightfield bake + noise terrain), so the top always faces up.
+    // One cell of an up-facing lattice: corners (i, j) a00, (i+1, j) a10, (i+1, j+1) a11, (i, j+1) a01, split on the
+    // a00-a11 diagonal (the CDLOD leaf layout drapeOnGround follows), clockwise-front facing +Y. gridIndices is this
+    // over every cell; a sparse grid (the sea, a ring of terrain) calls it per cell.
+    static void gridCell(RenderMesh& mesh, uint32_t a00, uint32_t a10, uint32_t a11, uint32_t a01);
     static void gridIndices(RenderMesh& mesh, int cols, int rows,
                             uint32_t base = 0);
 
@@ -173,14 +273,25 @@ struct MeshBuilder {
     static RenderMesh ribbon(const std::vector<Vec3>& points, const std::vector<double>& halfWidths,
                              const Vec3& up = Vec3(0, 1, 0), const std::vector<Vec3>& colours = {});
     // Indexed building blocks for custom topology (cone tiers, fronds): append one vertex (normal
-    // normalised) and return its index; append a triangle wound to face `out`.
+    // normalised) and return its index; append a triangle wound to face `out` -- or nothing, when it has no area.
+    // Every emitter here (emitTri, emitQuad and their UV forms) winds through triFacing.
     static uint32_t vertex(RenderMesh& mesh, const Vec3& p, const Vec3& n, const Vec3& color);
     static void triFacing(RenderMesh& mesh, uint32_t a, uint32_t b, uint32_t c, const Vec3& out);
+    // A quad over four vertices already placed (a b c d round it): two triFacing, split on a-c.
+    static void quadFacing(RenderMesh& mesh, uint32_t a, uint32_t b, uint32_t c, uint32_t d, const Vec3& out) {
+        triFacing(mesh, a, b, c, out);
+        triFacing(mesh, a, c, d, out);
+    }
     // CROSSED CARDS: `planes` vertical quads `width` x `height` through the origin, evenly turned
     // about +y, standing on y = 0. u runs 0..1 across a card, v 0 at the foot .. 1 at the top;
     // every normal is `normal` (straight up for ground cover, so it lights like the ground it
     // stands on). White. Grass cards, flowers, reeds, distant-tree impostors.
     static RenderMesh crossCards(double width, double height, int planes, const Vec3& normal = Vec3(0, 1, 0));
+    // THE CONVEX HULL of `points` as triangles (indices into `points`), each wound counter-clockwise seen from
+    // outside (its right-hand normal points out). Points inside, or on a face within a hair of it, are left out.
+    // Fewer than four non-coplanar points: empty. Incremental (O(n^2)) -- for the small sets of a joint, a cap, a
+    // rock (the tree's branch junctions: the hull of the limbs' end rings, ADR-0181).
+    static std::vector<std::array<uint32_t, 3>> convexHull(const std::vector<Vec3>& points);
     // A tapered generalized cylinder through `points` (a `sides`-gon ring at each, radial
     // normals), colour per ring (`colours` may be empty: white).
     static RenderMesh tube(const std::vector<Vec3>& points, const std::vector<double>& radii, int sides,
@@ -191,9 +302,40 @@ struct MeshBuilder {
     // `uvPerMetre` (u along the face's first in-plane axis), so a baked surface tiles at its real scale.
     static RenderMesh roundedBox(const Vec3& size, double radius, int segs = 2, double uvPerMetre = 1.0);
     // A LATHE: the profile (r, y) pairs, bottom to top, turned `segs` times about +y. Radial normals from the
-    // profile's slope; a point on the axis (r = 0) closes the shape there. u round the turn 0..1, v the profile's
+    // profile's slope, smooth through a gentle bend and split at a corner sharper than 40 deg (a bowl's rim, a
+    // plate's edge), each band wound by its own segment; a point on the axis (r = 0) closes the shape there. u round the turn 0..1, v the profile's
     // length in metres. Lamp bases, gas lifts, basins, bowls, finials.
     static RenderMesh lathe(const std::vector<std::pair<double, double>>& profile, int segs);
+    static RenderMesh lathe(const std::vector<std::pair<double, double>>& profile, int segs, const LatheStyle& style);
+
+    // --- THE SOLIDS AND FILLS (mesh_words.cpp) ---------------------------------------------------------------
+    // A BOX on a frame, every face flat with its own normal, closed unless `faces` masks some off.
+    static void emitBox(RenderMesh& mesh, const MeshFrame& f, const Vec3& color, uint8_t faces = kFacesAll);
+    // An axis-aligned box from its two corners.
+    static void emitBox(RenderMesh& mesh, const Vec3& lo, const Vec3& hi, const Vec3& color, uint8_t faces = kFacesAll);
+    // A BLOCK: any six-sided solid from its foot ring a, b, c, d and the head ring over it (head[k] above foot[k]).
+    // Faces: kFaceBottom the foot, kFaceTop the head; the side from corner k to k+1 is bit kFaceNegZ (k = 0),
+    // kFacePosX (1), kFacePosZ (2), kFaceNegX (3) -- a box's own faces when the foot runs (x0 z0, x1 z0, x1 z1, x0 z1).
+    // Each face faces away from the block's centre, whichever way round the corners come.
+    static void emitBlock(RenderMesh& mesh, const Vec3 (&foot)[4], const Vec3 (&head)[4], const Vec3& color,
+                          uint8_t faces = kFacesAll);
+    // A PLANAR POLYGON with holes, any plane, any winding: triangulated by the one triangulator in its own plane and
+    // wound to `normal`. `uvPerMetre` > 0 maps uv from the plane in metres.
+    static void emitPolygon(RenderMesh& mesh, const std::vector<Vec3>& ring, const std::vector<std::vector<Vec3>>& holes,
+                            const Vec3& normal, const Vec3& color, double uvPerMetre = 0.0);
+    // A PLAN PRISM: an outline in plan (x, z) with holes, extruded from y0 to y1 -- the top facing up, the bottom
+    // down, a wall along every edge of the outline facing out and of every hole facing into it. A slab, a pad, a
+    // lip, a slab with a stair well. `faces`: kFaceTop, kFaceBottom, kFaceSides.
+    static void emitPlanPrism(RenderMesh& mesh, const std::vector<Vec2>& outline, const std::vector<std::vector<Vec2>>& holes,
+                              double y0, double y1, const Vec3& color, uint8_t faces = kFacesAll);
+    // A CYLINDER standing on `base`: `sides` faces round, flat-faceted or smooth, capped top and bottom by `faces`
+    // (kFaceTop, kFaceBottom; the side always).
+    static void emitCylinder(RenderMesh& mesh, const Vec3& base, double radius, double height, int sides, const Vec3& color,
+                             bool faceted = true, uint8_t faces = kFacesAll);
+    // THE ONE TRIANGULATOR: index triples into the outline's points followed by each hole's, any winding in, the
+    // triples' order unspecified (wind them with triFacing). Earcut (procgen/city/triangulate.h).
+    static std::vector<std::array<int, 3>> triangulate(const std::vector<Vec2>& outline,
+                                                       const std::vector<std::vector<Vec2>>& holes = {});
 };
 
 }  // namespace engine

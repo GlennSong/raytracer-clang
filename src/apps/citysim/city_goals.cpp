@@ -7,7 +7,8 @@ namespace citysim {
 namespace {
 const char* kEventNames[] = {"departWork", "departHome", "arrived",
                              "noRoute",    "idle",       "dwellDone",
-                             "gotFare",    "serviceEnd", "serviceStart"};
+                             "gotFare",    "serviceEnd", "serviceStart",
+                             "evening",    "eveningOver"};
 static_assert(sizeof(kEventNames) / sizeof(kEventNames[0]) ==
                   static_cast<std::size_t>(GoalEvent::Count),
               "goal event names out of sync with GoalEvent");
@@ -28,6 +29,8 @@ const char* targetName(GoalTarget t) {
         case GoalTarget::Depot: return "depot";
         case GoalTarget::Lunch: return "lunch";
         case GoalTarget::Outing: return "outing";
+        case GoalTarget::Campus: return "campus";
+        case GoalTarget::Activity: return "activity";
         default: return "none";
     }
 }
@@ -68,6 +71,21 @@ int GoalTable::addState(const std::string& name, GoalAction action,
     return id;
 }
 
+bool GoalTable::setMenu(const std::string& name, const std::string& menu) {
+    const int id = machine_.findState(name);
+    if (id < 0 || id >= static_cast<int>(states_.size())) return false;
+    states_[static_cast<std::size_t>(id)].menu = menu;
+    return true;
+}
+
+bool GoalTable::setActivity(const std::string& name, uint32_t spotKinds, uint32_t spotTags) {
+    const int id = machine_.findState(name);
+    if (id < 0 || id >= static_cast<int>(states_.size())) return false;
+    states_[static_cast<std::size_t>(id)].spotKinds = spotKinds;
+    states_[static_cast<std::size_t>(id)].spotTags = spotTags;
+    return true;
+}
+
 bool GoalTable::addTransition(const std::string& from, GoalEvent event,
                               const std::string& to) {
     int f = machine_.findState(from);
@@ -103,6 +121,12 @@ std::string GoalTable::describe() const {
         if (s.action == GoalAction::GoTo)
             out += std::string(" ") + targetName(s.target);
         out += std::string(" activity=") + activityName(s.activity);
+        if (s.target == GoalTarget::Activity) {
+            char buf[48];
+            std::snprintf(buf, sizeof(buf), " spots=%x/%x", s.spotKinds, s.spotTags);
+            out += buf;
+            if (!s.menu.empty()) out += " menu=" + s.menu;
+        }
         if (s.dwellHours > 0) {
             char buf[32];
             std::snprintf(buf, sizeof(buf), " dwell=%g", s.dwellHours);
@@ -114,74 +138,6 @@ std::string GoalTable::describe() const {
         out += states_[r.from].name + " " + goalEventName(r.event) + " -> " +
                states_[r.to].name + "\n";
     return out;
-}
-
-GoalTable defaultScheduleGoals() {
-    GoalTable t;
-    t.addState("AtHome", GoalAction::Rest, GoalTarget::None, Activity::AtHome);
-    t.addState("CommuteToWork", GoalAction::GoTo, GoalTarget::Work,
-               Activity::Commuting);
-    // The morning at work, then lunch: about four hours after arriving
-    // (arrivals are spread over the commute, so lunches are too). Walking out
-    // to a cafe or restaurant and back is the midday street life a real-time
-    // day otherwise lacks. Someone who brought lunch (or a car commuter, or a
-    // shift with nothing open) gets NoRoute and simply carries on working.
-    t.addState("AtWork", GoalAction::Rest, GoalTarget::None, Activity::AtWork, 4.0);
-    t.addState("GoLunch", GoalAction::GoTo, GoalTarget::Lunch, Activity::Lunch);
-    t.addState("AtLunch", GoalAction::Rest, GoalTarget::None, Activity::Lunch, 0.6);
-    t.addState("BackToWork", GoalAction::GoTo, GoalTarget::Work, Activity::Commuting);
-    t.addState("AtWorkPM", GoalAction::Rest, GoalTarget::None, Activity::AtWork);
-    t.addState("GoShopping", GoalAction::GoTo, GoalTarget::Shop,
-               Activity::Shopping);
-    t.addState("AtShop", GoalAction::Rest, GoalTarget::None, Activity::Shopping,
-               0.5);   // half an in-world hour of errand
-    t.addState("ReturnHome", GoalAction::GoTo, GoalTarget::Home,
-               Activity::Returning);
-    t.addTransition("AtHome", GoalEvent::DepartWork, "CommuteToWork");
-    t.addTransition("CommuteToWork", GoalEvent::Arrived, "AtWork");
-    t.addTransition("CommuteToWork", GoalEvent::NoRoute, "AtHome");
-    // AN ERRAND ON THE WAY HOME (Glenn, 2026-09-17: "go to work / work till
-    // 5pm / go shopping / go home"). A third trip per day is also what keeps
-    // pavements busy once the day lengthens: a fixed-length walk is a SMALLER
-    // share of a longer day, so street life comes from more trips, not longer
-    // ones. An agent with no shop, or none routable, falls straight through to
-    // ReturnHome.
-    t.addTransition("AtWork", GoalEvent::DepartHome, "GoShopping");
-    t.addTransition("AtWork", GoalEvent::DwellDone, "GoLunch");
-    t.addTransition("GoLunch", GoalEvent::Arrived, "AtLunch");
-    t.addTransition("GoLunch", GoalEvent::NoRoute, "AtWorkPM");
-    t.addTransition("AtLunch", GoalEvent::DwellDone, "BackToWork");
-    t.addTransition("BackToWork", GoalEvent::Arrived, "AtWorkPM");
-    t.addTransition("BackToWork", GoalEvent::NoRoute, "AtWorkPM");
-    t.addTransition("AtWorkPM", GoalEvent::DepartHome, "GoShopping");
-    t.addTransition("GoShopping", GoalEvent::Arrived, "AtShop");
-    t.addTransition("GoShopping", GoalEvent::NoRoute, "ReturnHome");
-    t.addTransition("AtShop", GoalEvent::DwellDone, "ReturnHome");
-    t.addTransition("ReturnHome", GoalEvent::Arrived, "AtHome");
-    t.addTransition("ReturnHome", GoalEvent::NoRoute, "AtWorkPM");
-    t.setEntry("AtHome");
-    return t;
-}
-
-GoalTable strollerGoals() {
-    GoalTable t;
-    t.addState("AtHome", GoalAction::Rest, GoalTarget::None, Activity::AtHome);
-    t.addState("Outing", GoalAction::GoTo, GoalTarget::Outing, Activity::Outing);
-    // The pause at each stop. Its length is the stop's (a coffee is longer
-    // than a look in a window -- see CitySim::pickOuting); this is only the
-    // fallback.
-    t.addState("OutAndAbout", GoalAction::Rest, GoalTarget::None, Activity::Outing, 0.05);
-    t.addState("ReturnHome", GoalAction::GoTo, GoalTarget::Home, Activity::Returning);
-    t.addTransition("AtHome", GoalEvent::DepartWork, "Outing");
-    t.addTransition("Outing", GoalEvent::Arrived, "OutAndAbout");
-    t.addTransition("Outing", GoalEvent::NoRoute, "ReturnHome");
-    // The window closes -> home (checked before the pause: see goalThink).
-    t.addTransition("OutAndAbout", GoalEvent::DepartHome, "ReturnHome");
-    t.addTransition("OutAndAbout", GoalEvent::DwellDone, "Outing");
-    t.addTransition("ReturnHome", GoalEvent::Arrived, "AtHome");
-    t.addTransition("ReturnHome", GoalEvent::NoRoute, "OutAndAbout");
-    t.setEntry("AtHome");
-    return t;
 }
 
 GoalTable wanderGoals(bool driver) {
@@ -226,6 +182,8 @@ GoalTable busGoals() {
     // A yard it cannot reach must not strand the bus mid-road for the night.
     t.addTransition("ToDepot", GoalEvent::NoRoute, "OffDuty");
     t.addTransition("OffDuty", GoalEvent::ServiceStart, "Drive");
+    // ...and one still on its way in when the morning service starts turns back to its route
+    t.addTransition("ToDepot", GoalEvent::ServiceStart, "Drive");
     t.setEntry("Drive");
     return t;
 }

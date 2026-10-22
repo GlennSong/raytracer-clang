@@ -46,7 +46,7 @@ GrassSystem::Built buildTile(const GrassField& f, const GrassSystem::Key& key, i
         for (int i = 0; i < g; ++i)
             hgt[static_cast<std::size_t>(j) * g + i] = f.ground(x0 + (i - 1) * kGroundStep, z0 + (j - 1) * kGroundStep);
     auto H = [&](int i, int j) { return hgt[static_cast<std::size_t>(std::clamp(j, 0, g - 1)) * g + std::clamp(i, 0, g - 1)]; };
-    auto sample = [&](double x, double z, double& y, double& slopeCos) {
+    auto sample = [&](double x, double z, double& y, double& slopeCos, Vec3& groundN) {
         const double fx = (x - x0) / kGroundStep + 1.0, fz = (z - z0) / kGroundStep + 1.0;
         const int i = static_cast<int>(std::floor(fx)), j = static_cast<int>(std::floor(fz));
         const double u = fx - i, v = fz - j;
@@ -55,6 +55,7 @@ GrassSystem::Built buildTile(const GrassField& f, const GrassSystem::Key& key, i
         const double gx = ((h10 - h00) * (1 - v) + (h11 - h01) * v) / kGroundStep;
         const double gz = ((h01 - h00) * (1 - u) + (h11 - h10) * u) / kGroundStep;
         slopeCos = 1.0 / std::sqrt(1.0 + gx * gx + gz * gz);
+        groundN = Vec3(-gx, 1.0, -gz) * slopeCos;
     };
     const double step = cards ? f.cardSpacing : f.spacing;
     const int n = std::max(1, static_cast<int>(std::floor(T / step)));
@@ -70,14 +71,26 @@ GrassSystem::Built buildTile(const GrassField& f, const GrassSystem::Key& key, i
             const double rank = unit(mix(h ^ 0x77ull));
             if (lod == 1 && rank >= kKeepFar) continue;
             double y, slopeCos;
-            sample(x, z, y, slopeCos);
+            Vec3 groundN;
+            sample(x, z, y, slopeCos, groundN);
             const double dens = f.density ? f.density(x, z, y, slopeCos) : 1.0;
             if (dens <= 0.0 || unit(mix(h ^ 0x51ull)) >= dens) continue;
             const double yaw = unit(mix(h ^ 0xA7ull)) * 6.283185307;
             const double s = cards ? (0.8 + 0.5 * unit(mix(h ^ 0x3Dull))) * (0.7 + 0.3 * dens)
                                    : (0.8 + 0.45 * unit(mix(h ^ 0x3Dull))) * (0.75 + 0.25 * dens);   // thinner grass is shorter
-            Mat4 m = Mat4::trs(Vec3(x, y, z), Quat::fromAxisAngle(Vec3(0, 1, 0), yaw), Vec3(s, s, s));
-            m.m[3][0] = static_cast<Real>(rank);   // the rank rides in the bottom row (mesh.vert reads it)
+            const double hs = f.height ? f.height(x, z) : 1.0;   // mown here, wild there
+            if (hs < 0.04) continue;
+            Mat4 m = Mat4::trs(Vec3(x, y, z), Quat::fromAxisAngle(Vec3(0, 1, 0), yaw), Vec3(s, s * hs, s));
+            if (f.alignToGround) {   // (clutter) tilted to the ground under it, about cross(up, n)
+                const Vec3 n = groundN * (1.0 / std::max(1e-9, groundN.length()));
+                const Vec3 axis = cross(Vec3(0, 1, 0), n);
+                const double al = axis.length();
+                const Quat toGround = al > 1e-6 ? Quat::fromAxisAngle(axis * (1.0 / al), std::acos(std::clamp(n.y, -1.0, 1.0))) : Quat();
+                m = Mat4::trs(Vec3(x, y, z), toGround * Quat::fromAxisAngle(Vec3(0, 1, 0), yaw), Vec3(s, s, s));
+            }
+            m.m[3][0] = static_cast<Real>(rank);   // the rank rides in the bottom row (mesh.vert reads it)...
+            m.m[3][1] = static_cast<Real>(groundN.x);   // ...and the ground's normal (its x and z: it looks up), the
+            m.m[3][2] = static_cast<Real>(groundN.z);   // field shaded as the slope it grows on (mesh.frag)
             b.perVariant[cards ? 0 : mix(h ^ 0xC3ull) % nv].push_back(m);
             ySum += y;
             ++yCount;

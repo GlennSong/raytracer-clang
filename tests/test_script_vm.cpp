@@ -873,11 +873,14 @@ archetype_book = {
     {"glass_tower", 14}, {"podium_tower", 8}, {"tower_on_base", 7},
     {"tapered_glass_tower", 6}, {"glass_slab", 5}, {"pencil_tower", 4},
     {"sky_exposure_tower", 8}, {"art_deco_tower", 6}, {"stepped_tower", 5},
-    {"drum_tower", 4}, {"office_slab", 12}, {"commercial_block", 10},
+    {"drum_tower", 4}, {"office_slab", 8},
+    {"twisted_tower", 2}, {"lens_tower", 2}, {"leaning_tower", 1.5}, {"twisted_taper", 1.5},
+    {"wavy_tower", 1.5}, {"stacked_modules", 1.5}, {"rounded_tower", 1.0}, {"sculpted_tower", 0.5}, {"veil_tower", 0.5},
+    {"commercial_block", 2.0},
     {"parking_garage", 4.5}, {"plaza", 3.5}, {"civic_hall", 3},
   },
   commercial = {
-    {"pocket_park", 4}, {"plaza", 3}, {"brick_shop", 18}, {"mixed_use", 13},
+    {"pocket_park", 4}, {"plaza", 3}, {"brick_shop", 16}, {"courtyard_block", 2}, {"mixed_use", 13},
     {"office_midrise", 8}, {"podium_tower", 3}, {"condo_tower", 6},
     {"terrace_condo", 6}, {"loft_block", 6}, {"hotel", 6}, {"bank", 5},
     {"cinema", 4}, {"strip_mall", 4}, {"supermarket", 4}, {"office_park", 3},
@@ -891,7 +894,7 @@ archetype_book = {
   residential = {
     {"pocket_park", 7}, {"yard_house", 18}, {"modern_house", 6},
     {"bungalow", 7}, {"craftsman_house", 7}, {"cottage", 6}, {"villa", 6},
-    {"ranch_house", 7}, {"duplex", 8}, {"rowhouses", 12}, {"garden_condo", 5},
+    {"ranch_house", 7}, {"duplex", 8}, {"rowhouses", 9}, {"courtyard_block", 3}, {"garden_condo", 5},
     {"apartments", 7}, {"corner_shop", 4},
   },
 }
@@ -974,4 +977,133 @@ TEST_CASE(archetype_book_reweights_the_city) {
     }
     CHECK(glass == 200);
     CHECK(defaultMatches == 200);
+}
+
+TEST_CASE(procgen_script_reads_a_space_graph) {
+    // THE SPACE GRAPH from Lua (space_graph.h, issue #105): a recipe's tower on a lot, its cells and portals, and its
+    // gate -- the same adapter the C++ tests and the blueprint sheets use.
+    ScriptVM vm;
+    openProcgenLibrary(vm);
+    CHECK(vm.doString(R"LUA(
+        g = building.space_graph{ plan = {{-20,-20},{20,-20},{20,20},{-20,20}}, recipe = 'glass_tower', seed = 5, coreness = 0.8 }
+        n_cells, n_portals, n_bad, storeys, roof = #g.cells, #g.portals, #g.unreachable, g.storeys, g.roof
+        stairs, lifts, street = 0, 0, 0
+        for _, c in ipairs(g.cells) do if c.kind == 'stair' then stairs = stairs + 1 elseif c.kind == 'lift' then lifts = lifts + 1 end end
+        for _, p in ipairs(g.portals) do if p.b == 0 then street = street + 1 end end
+        entrance_is_hall = (g.cells[g.entrance].kind == 'hall') and 1 or 0
+    )LUA"));
+    double v = 0;
+    CHECK(vm.getGlobalNumber("storeys", v)); CHECK(v >= 8);
+    CHECK(vm.getGlobalNumber("n_cells", v)); CHECK(v > 20);
+    CHECK(vm.getGlobalNumber("n_portals", v)); CHECK(v > 20);
+    CHECK(vm.getGlobalNumber("stairs", v)); CHECK(v == 2);
+    CHECK(vm.getGlobalNumber("lifts", v)); CHECK(v >= 1);
+    CHECK(vm.getGlobalNumber("street", v)); CHECK(v >= 1);
+    CHECK(vm.getGlobalNumber("n_bad", v)); CHECK(v == 0);
+    CHECK(vm.getGlobalNumber("roof", v)); CHECK(v > 0);
+    CHECK(vm.getGlobalNumber("entrance_is_hall", v)); CHECK(v == 1);
+}
+
+TEST_CASE(procgen_script_reads_a_circulation_plan) {
+    // THE CIRCULATION from Lua (circulation.h, issue #105 step 3): a tower's shafts, its one bank and one zone as
+    // the core preset lays them out -- the same plan the elevator and the space graph read.
+    ScriptVM vm;
+    openProcgenLibrary(vm);
+    CHECK(vm.doString(R"LUA(
+        c = building.circulation{ plan = {{-20,-20},{20,-20},{20,20},{-20,20}}, recipe = 'glass_tower', seed = 5, coreness = 0.8 }
+        valid = c.valid and 1 or 0
+        n_shafts, n_banks, n_zones, sky = #c.shafts, #c.banks, #c.zones, c.sky_lobby
+        stairs, lifts, service, doors = 0, 0, 0, 0
+        for _, s in ipairs(c.shafts) do
+            if s.kind == 'stair' then stairs = stairs + 1 elseif s.kind == 'hoistway' then lifts = lifts + 1 elseif s.kind == 'service' then service = service + 1 end
+            if s.door_w > 0 then doors = doors + 1 end
+        end
+        bank_lifts = #c.banks[1].shafts
+        zone_top = c.zones[1].top
+        inside = (c.shafts[1].x0 >= c.x0 - 1e-6 and c.shafts[1].x1 <= c.x1 + 1e-6) and 1 or 0
+    )LUA"));
+    double v = 0;
+    CHECK(vm.getGlobalNumber("valid", v)); CHECK(v == 1);
+    CHECK(vm.getGlobalNumber("stairs", v)); CHECK(v == 2);
+    CHECK(vm.getGlobalNumber("lifts", v)); CHECK(v >= 1);
+    double lifts = v;
+    CHECK(vm.getGlobalNumber("service", v)); CHECK(v == 1);
+    CHECK(vm.getGlobalNumber("doors", v)); CHECK(v == 2 + lifts);
+    CHECK(vm.getGlobalNumber("n_banks", v)); CHECK(v == 1);
+    CHECK(vm.getGlobalNumber("bank_lifts", v)); CHECK(v == lifts);
+    CHECK(vm.getGlobalNumber("n_zones", v)); CHECK(v == 1);
+    CHECK(vm.getGlobalNumber("zone_top", v)); CHECK(v >= 7);
+    CHECK(vm.getGlobalNumber("sky", v)); CHECK(v == 0);
+    CHECK(vm.getGlobalNumber("inside", v)); CHECK(v == 1);
+}
+
+TEST_CASE(procgen_script_reads_a_mass_and_its_slices) {
+    // THE MASS from Lua (mass_stack.h, issue #105 step 4): a twisted tower's stack -- the base entry and the turning
+    // one -- and its storey slices, each turned on from the last.
+    ScriptVM vm;
+    openProcgenLibrary(vm);
+    CHECK(vm.doString(R"LUA(
+        m = building.mass{ plan = {{-20,-16},{20,-16},{20,16},{-20,16}}, floors = 20, envelope = 'twist', twist_deg = 90,
+                           base_floors = 1, curtain_wall = true, slices = true }
+        n_entries, storeys, height = #m.entries, m.storeys, m.height
+        base_nests = (m.entries[1].relation == 'nest') and 1 or 0
+        twist_supported = (m.entries[2].relation == 'support') and 1 or 0
+        twist_varies = m.entries[2].varies and 1 or 0
+        twist_from = m.entries[2].storey
+        local function dir(pl) return pl[2][1] - pl[1][1], pl[2][2] - pl[1][2] end
+        turning = 1
+        for k = 4, #m.slices do
+            local ax, az = dir(m.slices[k-1].plan)
+            local bx, bz = dir(m.slices[k].plan)
+            if ax * bz - az * bx <= 0 then turning = 0 end   -- each storey's first edge turned on from the last
+        end
+        top_tier = m.slices[#m.slices].tier
+    )LUA"));
+    double v = 0;
+    CHECK(vm.getGlobalNumber("n_entries", v)); CHECK(v == 2);
+    CHECK(vm.getGlobalNumber("storeys", v)); CHECK(v == 21);
+    CHECK(vm.getGlobalNumber("twist_varies", v)); CHECK(v == 1);
+    CHECK(vm.getGlobalNumber("twist_from", v)); CHECK(v == 2);
+    CHECK(vm.getGlobalNumber("turning", v)); CHECK(v == 1);
+    CHECK(vm.getGlobalNumber("top_tier", v)); CHECK(v == 1);
+    CHECK(vm.getGlobalNumber("height", v)); CHECK(v > 60);
+    CHECK(vm.getGlobalNumber("twist_supported", v)); CHECK(v == 1);
+    CHECK(vm.getGlobalNumber("base_nests", v)); CHECK(v == 1);
+}
+
+TEST_CASE(procgen_script_draws_a_section) {
+    // THE SECTION from Lua (section.h, issue #105 step 2a): a rectangle, the drum's n-gon, a lot, an inset.
+    ScriptVM vm;
+    openProcgenLibrary(vm);
+    CHECK(vm.doString(R"LUA(
+        r = building.section{ rect = {24, 20} }
+        g = building.section{ ngon = {16, 11}, centre = {3.5, -2} }
+        l = building.section{ lot = {{-14,-12},{14,-12},{14,0},{0,0},{0,12},{-14,12}}, inset = 0.55 }
+        rn, gn, ln = #r.plan, #g.plan, #l.plan
+        rx, lx = r.plan[1][1], l.plan[1][1]
+        h = building.space_graph{ plan = l.plan, recipe = 'glass_tower', seed = 5, coreness = 0.8 }
+        hb = #h.unreachable
+    )LUA"));
+    double v = 0;
+    CHECK(vm.getGlobalNumber("rn", v)); CHECK(v == 4);
+    CHECK(vm.getGlobalNumber("gn", v)); CHECK(v == 16);
+    CHECK(vm.getGlobalNumber("ln", v)); CHECK(v == 6);
+    CHECK(vm.getGlobalNumber("rx", v)); CHECK_APPROX(v, -12.0, 1e-9);
+    CHECK(vm.getGlobalNumber("lx", v)); CHECK_APPROX(v, -13.45, 1e-6);
+    CHECK(vm.getGlobalNumber("hb", v)); CHECK(v == 0);
+}
+
+TEST_CASE(procgen_script_cuts_a_section) {
+    ScriptVM vm;
+    openProcgenLibrary(vm);
+    CHECK(vm.doString(R"LUA(
+        l = building.section{ rect = {24, 20}, notch = {0, 0, 8, 6} }
+        c = building.section{ rect = {24, 20}, chamfer = {2, 3} }
+        s = building.section{ rect = {40, 24}, subtract = { rect = {6, 4}, centre = {0, -10} }, rounded = 0 }
+        ln, cn, sn = #l.plan, #c.plan, #s.plan
+    )LUA"));
+    double v = 0;
+    CHECK(vm.getGlobalNumber("ln", v)); CHECK(v == 7);
+    CHECK(vm.getGlobalNumber("cn", v)); CHECK(v == 5);
+    CHECK(vm.getGlobalNumber("sn", v)); CHECK(v == 8);
 }

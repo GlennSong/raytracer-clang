@@ -35,7 +35,7 @@ TEST_CASE(bus_network_lays_out_the_routes_it_was_asked_for) {
     BusNetwork net;
     CHECK(net.empty());
     net.build(gridCity(), 3, 6, 11);
-    CHECK(net.routeCount() == 3);
+    CHECK(net.routeCount() == 6);   // three loops, each driven both ways round
     for (int r = 0; r < net.routeCount(); ++r) {
         const BusRoute& route = net.route(r);
         CHECK(route.valid());
@@ -175,11 +175,11 @@ TEST_CASE(buses_drive_their_loop_and_carry_riders) {
     sim.setBuses(2, 12, 8, 260.0);
 
     CHECK(!sim.buses().empty());
-    CHECK(sim.buses().routeCount() == 2);
+    CHECK(sim.buses().routeCount() == 4);   // two loops, both ways
     int busCount = 0;
     for (std::size_t i = 0; i < sim.agents().size(); ++i)
         if (sim.isBus(static_cast<int>(i))) ++busCount;
-    CHECK(busCount == 8);
+    CHECK(busCount == 8);   // the fleet asked for, split over both directions
 
     // Where every bus starts, so we can prove they went somewhere.
     std::vector<Vec2> busStart(sim.agents().size(), Vec2(0, 0));
@@ -269,7 +269,7 @@ TEST_CASE(bus_routes_spread_across_streets_instead_of_sharing_them) {
     const NavGraph nav = gridCity(600.0, 100.0, 6);
     BusNetwork net;
     net.build(nav, 3, 10, 21);
-    CHECK(net.routeCount() == 3);
+    CHECK(net.routeCount() == 6);
     auto key = [&](int a, int b) {
         const long long n = nav.nodeCount();
         return a < b ? a * n + b : b * n + a;
@@ -287,7 +287,7 @@ TEST_CASE(bus_routes_spread_across_streets_instead_of_sharing_them) {
         for (long long st : streets[static_cast<std::size_t>(r)]) {
             bool other = false;
             for (int q = 0; q < net.routeCount() && !other; ++q) {
-                if (q == r) continue;
+                if (q == r || q == net.route(r).twin) continue;   // a twin drives its own loop's streets, by design
                 for (long long s2 : streets[static_cast<std::size_t>(q)])
                     if (s2 == st) { other = true; break; }
             }
@@ -312,7 +312,7 @@ TEST_CASE(buses_start_at_their_own_stops_evenly_spaced) {
     sim.build(nav, 24, 60, 17);
     sim.setBuses(2, 12, 8, 260.0);
     const BusNetwork& net = sim.buses();
-    CHECK(net.routeCount() == 2);
+    CHECK(net.routeCount() == 4);
     int dealt = 0;
     for (int r = 0; r < net.routeCount(); ++r) {
         const BusRoute& route = net.route(r);
@@ -338,6 +338,29 @@ TEST_CASE(buses_start_at_their_own_stops_evenly_spaced) {
             CHECK(starts[k] - starts[k - 1] >= n / m - 1);
     }
     CHECK(dealt == 8);
+}
+
+// BOTH WAYS ROUND (Glenn: "Buses should probably go in both directions"). Every loop has a twin over the same
+// stops in reverse, so the stop just behind you is one stop away on the twin, not a whole lap on the loop.
+TEST_CASE(every_bus_loop_has_a_twin_the_other_way_round) {
+    const NavGraph nav = gridCity(600.0, 100.0, 6);
+    BusNetwork net;
+    net.build(nav, 3, 10, 21);
+    CHECK(net.twoWay());
+    for (int r = 0; r < net.routeCount(); ++r) {
+        const BusRoute& f = net.route(r);
+        CHECK(f.twin >= 0);
+        if (f.twin < r) continue;   // check each pair once, from its forward loop
+        const BusRoute& b = net.route(f.twin);
+        CHECK(b.twin == r);
+        const std::size_t n = f.stops.size();
+        CHECK(b.stops.size() == n);
+        for (std::size_t k = 0; k < n && b.stops.size() == n; ++k)
+            CHECK(b.stops[k].node == f.stops[(n - k) % n].node);
+        // stop 1 -> stop 0 is nearly a lap one way round and one leg the other
+        CHECK(net.rideMetres(r, 1, 0) > 0.5 * f.loopLength);
+        CHECK(net.rideMetres(f.twin, static_cast<int>(n - 1), 0) < 0.5 * b.loopLength);
+    }
 }
 
 
@@ -468,4 +491,163 @@ TEST_CASE(bus_trip_is_chosen_by_door_to_door_time) {
     // One bus a route: waiting half a lap is not worth it.
     net.setFleet({1, 1});
     CHECK(!net.planTrip(from, to, 250.0).valid());
+}
+
+// THE BUS DEPOT (Glenn, 2026-10-08: "There should probably be a dedicated bus depot they return to at end of day").
+// With a depot and a service day, every bus goes in when the day ends -- setting its riders down at its next stop --
+// parks in one of the depot's bays, and nothing else ever parks there; when the service starts again they leave.
+TEST_CASE(buses_go_back_to_their_depot_after_hours) {
+    NavGraph nav = citytest::cityNav(900.0, 120.0, 4);
+    CitySim sim;
+    sim.build(nav, 24, 60, 17);
+    // the depot: 12 bays off a street link near the middle, its gate on that street
+    int gateLink = -1;
+    for (int li = 0; li < nav.linkCount() && gateLink < 0; ++li) {
+        const NavLink& L = nav.links[static_cast<std::size_t>(li)];
+        if (!L.footpath && L.layer == 0 && L.length > 60 && (L.access & road_access::kFrontage) &&
+            (nav.nodes[static_cast<std::size_t>(L.from)] - Vec2(0, 0)).length() < 300)
+            gateLink = li;
+    }
+    CHECK(gateLink >= 0);
+    if (gateLink < 0) return;
+    const NavLink& G = nav.links[static_cast<std::size_t>(gateLink)];
+    const Vec2 a = nav.nodes[static_cast<std::size_t>(G.from)], b = nav.nodes[static_cast<std::size_t>(G.to)];
+    const Vec2 d = normalize(b - a), right(d.y, -d.x), mid = (a + b) * 0.5;
+    const Vec2 gate = mid + right * 9.0;
+    std::vector<CitySim::GarageStallIn> stalls;
+    for (int i = 0; i < 12; ++i) stalls.push_back({gate + right * 20.0 + d * ((i - 5.5) * 4.2), right, 0.05});
+    const int added = sim.addGarageBays(gate, right * -1.0, stalls, /*buses=*/true);
+    sim.setBuses(2, 12, 8, 260.0);
+    sim.setBusService(6.0, 6.1);   // a six-minute day (the clock starts at 6)
+    std::printf("    [depot] %d bays, %d depot(s); routes' depots %d %d\n", added, sim.depotCount(), sim.depotOfRoute(0), sim.depotOfRoute(1));
+    CHECK(added == 12);
+    CHECK(sim.depotCount() == 1);
+    for (int r = 0; r < sim.buses().routeCount(); ++r) CHECK(sim.depotOfRoute(r) == 0);
+    auto inBays = [&](int& buses, int& others) {
+        buses = others = 0;
+        for (const CitySim::ParkingBay& bay : sim.parkingBays()) {
+            if (!bay.busOnly || bay.occupant < 0) continue;
+            if (sim.isBus(bay.occupant)) { if (!sim.agents()[static_cast<std::size_t>(bay.occupant)].moving) ++buses; }
+            else ++others;
+        }
+    };
+    int parked = 0, intruders = 0, worstIntruders = 0, riders = 0, riderTicks = 0;
+    for (int i = 0; i < 9000; ++i) {   // 15 minutes: the day ends at 6.1 h
+        sim.step(0.1, 0.1 / 60.0);   // (the day's last 0.1 h in a minute)
+        inBays(parked, intruders);
+        worstIntruders = std::max(worstIntruders, intruders);
+        if (!sim.busesInService()) {
+            for (int k = 0; k < static_cast<int>(sim.agents().size()); ++k)
+                if (sim.isBus(k) && sim.agents()[static_cast<std::size_t>(k)].activity == Agent::Activity::AtHome) riders += sim.rides().load(k);
+            ++riderTicks;
+        }
+    }
+    std::printf("    [depot] after hours (%.2f h): %d of 8 buses parked in depot bays, %d intruders at worst, %d riders aboard parked buses\n",
+                sim.clockHours(), parked, worstIntruders, riders);
+    CHECK(!sim.busesInService());
+    CHECK(parked == 8);
+    CHECK(worstIntruders == 0);
+    CHECK(riders == 0);
+    // ...and the morning: they leave
+    sim.setBusService(5.0, 23.0);
+    for (int i = 0; i < 3000; ++i) sim.step(0.1, 0.1 / 3600.0);
+    inBays(parked, intruders);
+    int moving = 0;
+    for (int k = 0; k < static_cast<int>(sim.agents().size()); ++k)
+        if (sim.isBus(k) && sim.agents()[static_cast<std::size_t>(k)].moving) ++moving;
+    std::printf("    [depot] in service again: %d still in the depot, %d buses moving\n", parked, moving);
+    CHECK(parked == 0);
+    CHECK(moving >= 6);
+}
+
+// A STATIONED VEHICLE (Glenn, 2026-10-13: "a fire truck should be an actual truck"): the fire engine is a fleet body
+// like any other, parked in its fire station's bay by addStationedVehicle -- driverless, its own type and size, where it
+// was put -- and never dealt to ordinary traffic, as the bus is not.
+TEST_CASE(a_fire_engine_is_stationed_and_never_dealt_to_traffic) {
+    NavGraph nav = citytest::cityNav(600.0, 120.0, 4);
+    CitySim sim;
+    std::vector<VehicleBody> fleet = {{4.6, 1.8, 1.45, VehicleType::Sedan}, {4.2, 1.75, 1.5, VehicleType::Hatchback},
+                                      {9.2, 2.52, 3.21, VehicleType::FireEngine}, {11.3, 2.55, 3.2, VehicleType::Bus}};
+    sim.setFleet(fleet);
+    sim.build(nav, 40, 20, 5);
+    for (int i = 0; i < 400; ++i) {
+        const int s = sim.ambientSlotFor(i);
+        CHECK(s == 0 || s == 1);   // only the cars
+    }
+    const std::size_t before = sim.vehicles().size();
+    const int vi = sim.addStationedVehicle(VehicleType::FireEngine, Vec2(10, 20), Vec2(0, 1), 3.5);
+    CHECK(vi == static_cast<int>(before));
+    CHECK(sim.vehicles().size() == before + 1);
+    const SimVehicle& v = sim.vehicles()[static_cast<std::size_t>(vi)];
+    CHECK(v.type == VehicleType::FireEngine && v.driver < 0);
+    CHECK(std::fabs(v.length - 9.2) < 1e-9 && std::fabs(v.parkedY - 3.5) < 1e-9);
+    std::vector<int> near;
+    sim.parkedNear(Vec2(10, 20), 3.0, near);   // the parked index finds it
+    CHECK(std::find(near.begin(), near.end(), vi) != near.end());
+    CHECK(sim.addStationedVehicle(VehicleType::Van, Vec2(0, 0), Vec2(1, 0), 0) == -1);   // no body of that type
+    for (int t = 0; t < 600; ++t) sim.step(0.05);
+    CHECK(sim.vehicles()[static_cast<std::size_t>(vi)].pos.x == 10.0);   // nobody drove it off
+}
+
+#include "../src/apps/citysim/station_entrance.h"
+
+// THE STATION ENTRANCE (Glenn, 2026-10-13: station buildings). A pavilion over a station's way in: the roof 3.6 m
+// over the ground with the name board on it facing the street, the walls and machines solid, and a line of ticket
+// gates across the way up with passages a walker fits through -- on a slope, every piece standing on its own ground.
+TEST_CASE(a_station_entrance_stands_over_its_way_in) {
+    citysim::StationEntrance e;
+    e.name = "Saltwood";
+    e.cls = "rail";
+    e.foot = Vec3(100, 5, 200);
+    e.along = Vec3(0, 0, 1);
+    auto slope = [](double, double z) { return 5.0 + (z - 200.0) * 0.05; };   // rising 5% toward the platforms
+    const citysim::EntranceMeshes m = citysim::stationEntranceMeshes(e, slope);
+    CHECK(!m.body.indices.empty() && !m.glass.indices.empty() && !m.collider.indices.empty());
+    // the roof over the highest column's ground (z 7: 5.35) by 3.6 m; nothing in the collider above head height but
+    // the columns
+    double top = -1e9, colTop = -1e9;
+    for (const engine::Vertex& v : m.body.vertices) top = std::max(top, static_cast<double>(v.position.y));
+    for (const engine::Vertex& v : m.collider.vertices) colTop = std::max(colTop, static_cast<double>(v.position.y));
+    CHECK(top > 5.35 + 3.6 && top < 5.35 + 4.2);
+    CHECK(std::fabs(colTop - (5.35 + 3.6)) < 0.05);
+    // the gate line (z 4.4-5.9): the collider's boxes (24 vertices each), and the runs of floor across the line at
+    // knee height that a 0.6 m capsule fits through
+    struct Box { Vec3 lo, hi; };
+    std::vector<Box> boxes;
+    for (std::size_t i = 0; i + 24 <= m.collider.vertices.size(); i += 24) {
+        Box b{Vec3(1e9, 1e9, 1e9), Vec3(-1e9, -1e9, -1e9)};
+        for (std::size_t k = i; k < i + 24; ++k) {
+            const Vec3 q = m.collider.vertices[k].position;
+            b.lo = Vec3(std::min(b.lo.x, q.x), std::min(b.lo.y, q.y), std::min(b.lo.z, q.z));
+            b.hi = Vec3(std::max(b.hi.x, q.x), std::max(b.hi.y, q.y), std::max(b.hi.z, q.z));
+        }
+        boxes.push_back(b);
+    }
+    const double zg = 205.1, yg = slope(100, zg) + 0.6;
+    int passages = 0;
+    bool wasBlocked = true;
+    for (double x = 96.2; x < 103.8; x += 0.05) {
+        bool blocked = false;
+        for (const Box& b : boxes)
+            blocked = blocked || (x + 0.3 > b.lo.x && x - 0.3 < b.hi.x && zg > b.lo.z && zg < b.hi.z && yg > b.lo.y && yg < b.hi.y);
+        if (!blocked && wasBlocked) ++passages;
+        wasBlocked = blocked;
+    }
+    CHECK(passages >= 4);
+    // EVERY FACE OUTWARD (Glenn: "the geometry for the turnstyles ... have their normals inverted"): the engine's front
+    // face is clockwise seen from the normal's side, so each triangle (a, b, c) has cross(c - a, b - a) along its normal
+    int inward = 0, tris = 0;
+    for (const engine::RenderMesh* mm : {&m.body, &m.glass}) {
+        for (std::size_t i = 0; i + 2 < mm->indices.size(); i += 3) {
+            const engine::Vertex& a = mm->vertices[mm->indices[i]];
+            const Vec3 b = mm->vertices[mm->indices[i + 1]].position, c = mm->vertices[mm->indices[i + 2]].position;
+            ++tris;
+            if (engine::dot(engine::cross(c - a.position, b - a.position), a.normal) < 0) ++inward;
+        }
+    }
+    CHECK(tris > 100);
+    CHECK(inward == 0);
+    // the board on the roof, facing back toward the street (-along)
+    CHECK(m.board.m[2][2] < -0.99);
+    CHECK(m.board.m[1][3] > 5.0 + 3.6 - 1.7);
 }

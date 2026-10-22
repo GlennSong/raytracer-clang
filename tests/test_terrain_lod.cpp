@@ -2,8 +2,12 @@
 
 #include "../src/engine/procgen/terrain_lod.h"
 #include "../src/engine/procgen/noise.h"
+#include "../src/engine/procgen/terrain_world_map.h"
 
 #include <algorithm>
+#include <chrono>
+#include <cstdio>
+#include <string>
 #include <cmath>
 #include <vector>
 
@@ -163,10 +167,11 @@ TEST_CASE(morph_target_is_identity_on_flat_terrain) {
     LodNode node{-50.0f, -50.0f, 100.0f, 1};
     LodNodeMesh out = generateLodNodeMesh(p, noise, node, 8);
     for (const Vertex& v : out.mesh.vertices) {
-        // tangent holds the morph-target position; on flat ground it equals position.
-        CHECK_APPROX(v.tangent.x, v.position.x, 1e-4);
+        // tangent holds the morph target (packMorphTarget): its height, and the normal it blends to in x and z;
+        // on flat ground the height is the vertex's own and the normal straight up.
+        CHECK_APPROX(v.tangent.x, 0.0, 1e-4);
         CHECK_APPROX(v.tangent.y, v.position.y, 1e-4);
-        CHECK_APPROX(v.tangent.z, v.position.z, 1e-4);
+        CHECK_APPROX(v.tangent.z, 0.0, 1e-4);
     }
 }
 
@@ -185,9 +190,9 @@ TEST_CASE(morph_target_collapses_odd_vertices_to_coarse_height) {
     for (int j = 0; j < n; j++) {
         for (int i = 0; i < n; i++) {
             const Vertex& v = V(i, j);
-            // XZ never moves under the collapse.
-            CHECK_APPROX(v.tangent.x, v.position.x, 1e-4);
-            CHECK_APPROX(v.tangent.z, v.position.z, 1e-4);
+            // the formula's levels share one normal eps: the morph's normal is the vertex's own
+            CHECK_APPROX(v.tangent.x, v.normal.x, 1e-6);
+            CHECK_APPROX(v.tangent.z, v.normal.z, 1e-6);
             bool ei = (i % 2 == 0), ej = (j % 2 == 0);
             if (ei && ej) {
                 CHECK_APPROX(v.tangent.y, v.position.y, 1e-4);   // survives coarsening
@@ -249,4 +254,104 @@ TEST_CASE(node_surface_matches_height_field) {
         double h = terrainHeight(p, noise, v.position.x, v.position.z);
         CHECK_APPROX(v.position.y, h, 1e-3);
     }
+}
+
+// NORMALS BY LEVEL (ADR-0204; Glenn: the far grassland "looks faceted"): a baked tile's vertex normals take the slope
+// over the tile's own cell, so a far tile's 8 m vertices follow the hills rather than whatever 1 m bump each one
+// stands on; and a tile's morph target carries its parent's normals, so the two shade alike where they meet.
+TEST_CASE(baked_tile_normals_follow_their_level_and_morph_to_the_parents) {
+    const pyramid::PyramidSpec s = pyramid::PyramidSpec::covering(0, 0, 1024, 1024, 1.0, 0.001);
+    auto hills = [](double x, double z) { return 40.0 * std::sin(x * 0.004) * std::cos(z * 0.003); };
+    auto h = [&](double x, double z, double) { return hills(x, z) + 0.6 * std::sin(x * 1.3 + 0.4) * std::sin(z * 1.1); };
+    const pyramid::Pyramid p = pyramid::buildPyramid(s, h);
+    const pyramid::HeightTile* child = p.find({2, 0, 0});
+    const pyramid::HeightTile* parent = p.find({3, 0, 0});
+    CHECK(child && parent);
+    if (!child || !parent) return;
+    TerrainParams params;
+    Noise noise(1);
+    const LodNodeMesh pm = generateBakedTileMesh(p, *parent, params, noise, 2.0);
+    const auto t0 = std::chrono::steady_clock::now();
+    const LodNodeMesh cm = generateBakedTileMesh(p, *child, params, noise, 2.0);
+    const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+    // the parent's (8 m) normals against the hills' own, and what a 2 m span would have given
+    double offLevel = 0, off2m = 0;
+    int count = 0;
+    for (int j = 4; j < pyramid::kTileSamples - 4; j += 4)   // (inside: the border's spans reach past the pyramid)
+        for (int i = 4; i < pyramid::kTileSamples - 4; i += 4) {
+            const Vertex& v = pm.mesh.vertices[static_cast<std::size_t>(j) * pyramid::kTileSamples + i];
+            const double x = v.position.x, z = v.position.z, e = 0.5;
+            const Vec3 truth = normalize(Vec3(-(hills(x + e, z) - hills(x - e, z)) / (2 * e), 1.0, -(hills(x, z + e) - hills(x, z - e)) / (2 * e)));
+            offLevel += std::acos(std::min(1.0, dot(v.normal, truth)));
+            off2m += std::acos(std::min(1.0, dot(bakedTileNormal(p, x, z, 2.0), truth)));
+            ++count;
+        }
+    offLevel /= count;
+    off2m /= count;
+    std::printf("    [baked normals] off the hills: %.2f deg over the 8 m cell, %.2f deg over 2 m; a tile in %.1f ms\n", offLevel * 57.2958,
+                off2m * 57.2958, ms);
+    CHECK(offLevel < 0.5 * off2m);
+    // the child's even vertices morph to the parent's normals exactly
+    double worst = 0;
+    for (int j = 0; j < pyramid::kTileSamples; j += 2)
+        for (int i = 0; i < pyramid::kTileSamples; i += 2) {
+            const Vertex& c = cm.mesh.vertices[static_cast<std::size_t>(j) * pyramid::kTileSamples + i];
+            const Vertex& q = pm.mesh.vertices[static_cast<std::size_t>(j / 2) * pyramid::kTileSamples + i / 2];
+            worst = std::max({worst, std::fabs(c.tangent.x - q.normal.x), std::fabs(c.tangent.z - q.normal.z)});
+        }
+    CHECK(worst < 1e-9);
+}
+
+// THE TERRAIN NORMAL MAP (ADR-0205): a tilted plane comes back as its own normal; bumps finer than a texel (but above
+// the bake's half-texel samples) average away -- the far ground shows the hills, not noise; the disk cache round-trips
+// and refuses another key.
+TEST_CASE(terrain_world_map_holds_the_mean_slope_per_texel) {
+    auto plane = [](double x, double z) { return 0.2 * x - 0.1 * z; };
+    const TerrainWorldMap pm = bakeTerrainNormalMap(plane, -256, -256, 512, 64);
+    const Vec3 want = normalize(Vec3(-0.2, 1.0, 0.1));
+    double worst = 0;
+    for (double z = -200; z <= 200; z += 37)
+        for (double x = -200; x <= 200; x += 41) worst = std::max(worst, std::acos(std::min(1.0, dot(pm.normalAt(x, z), want))));
+    CHECK(worst < 0.01);   // (8-bit: ~0.5 deg)
+    auto hills = [](double x, double z) { return 30.0 * std::sin(x * 0.006) * std::cos(z * 0.005); };
+    auto bumpy = [&](double x, double z) { return hills(x, z) + 0.5 * std::sin(x * 1.0 + 1.0) * std::sin(z * 0.9); };   // (6-7 m)
+    const TerrainWorldMap bm = bakeTerrainNormalMap(bumpy, -512, -512, 1024, 128);   // 8 m texels
+    double off = 0;
+    int n = 0;
+    for (double z = -400; z <= 400; z += 23)
+        for (double x = -400; x <= 400; x += 29) {
+            const double cx = bm.originX + (std::floor((x - bm.originX) / bm.texel()) + 0.5) * bm.texel();
+            const double cz = bm.originZ + (std::floor((z - bm.originZ) / bm.texel()) + 0.5) * bm.texel(), e = 0.5;
+            const Vec3 truth = normalize(Vec3(-(hills(cx + e, cz) - hills(cx - e, cz)) / (2 * e), 1.0, -(hills(cx, cz + e) - hills(cx, cz - e)) / (2 * e)));
+            off += std::acos(std::min(1.0, dot(bm.normalAt(x, z), truth)));
+            ++n;
+        }
+    off /= n;
+    std::printf("    [terrain normal map] bumps under an 8 m texel: %.2f deg off the hills\n", off * 57.2958);
+    CHECK(off < 1.0 / 57.2958);
+    const std::string path = "/tmp/rt_test_terrain_world_map.nmap";
+    CHECK(writeTerrainWorldMap(bm, 0x1234u, path));
+    TerrainWorldMap back;
+    CHECK(readTerrainWorldMap(path, 0x1234u, back));
+    CHECK(back.size == bm.size && back.texels == bm.texels && back.channels == 2 && back.extent == bm.extent && back.originX == bm.originX);
+    TerrainWorldMap other;
+    CHECK(!readTerrainWorldMap(path, 0x9999u, other));
+    std::remove(path.c_str());
+}
+
+// A WORLD MAP of any channels (ADR-0208, the cover map's): each texel is the function at its centre, and the cache
+// keeps the channel count.
+TEST_CASE(terrain_world_map_bakes_each_texel_at_its_centre) {
+    const TerrainWorldMap m = bakeTerrainWorldMap(4, [](double x, double z, uint8_t* out) {
+        out[0] = static_cast<uint8_t>(std::lround(x)); out[1] = static_cast<uint8_t>(std::lround(z));
+        out[2] = 7; out[3] = 200;
+    }, 0.0, 0.0, 64.0, 16);   // 4 m texels, centres at 2, 6, 10 ...
+    CHECK(m.channels == 4 && m.texels.size() == 16u * 16u * 4u);
+    CHECK(std::fabs(m.at(5.0, 9.0, 0) * 255.0 - 6.0) < 1e-6 && std::fabs(m.at(5.0, 9.0, 1) * 255.0 - 10.0) < 1e-6);
+    CHECK(std::fabs(m.at(63.0, 1.0, 3) * 255.0 - 200.0) < 1e-6);
+    const std::string path = "/tmp/rt_test_terrain_world_map4.wmap";
+    CHECK(writeTerrainWorldMap(m, 0x77u, path));
+    TerrainWorldMap back;
+    CHECK(readTerrainWorldMap(path, 0x77u, back) && back.channels == 4 && back.texels == m.texels);
+    std::remove(path.c_str());
 }

@@ -6,11 +6,15 @@
 #include "test_framework.h"
 #include "../src/engine/procgen/city/city_lots.h"
 #include "../src/engine/procgen/city/shape_grammar.h"
+#include "../src/engine/procgen/city/architect.h"   // the every-recipe census
+#include "../src/engine/mesh_audit.h"                // facade cracks
 
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <map>
+#include <string>
 #include <tuple>
 
 using namespace engine;
@@ -227,6 +231,142 @@ TEST_CASE(interior_layout_fits_the_plan_and_repeats) {
 // extraction, ADR-0080 Phase 2): prints a positional hash + tri count for a
 // spread of param variants. Always passes — run it before and after the
 // refactor and DIFF the two prints; a moved vertex changes the hash.
+// THE CENSUS OVER EVERY RECIPE (the architectural toolkit's byte-identity proof, issue #105 / ADR-0174): one line
+// per recipe, seed and plan with a positional hash of the exterior parts and one of the interior's. The first act
+// of every refactor step is to run this into a file; the last is to diff. Only the lines a step means to change may
+// change.
+// NO FACADE CRACKS, EVERY RECIPE (Glenn, 2026-10-16: "some of the twisting buildings have cracks along the edges"):
+// engine::auditFacadeCracks over each recipe's exterior on two lots, two seeds -- a level ray from outside that meets
+// the BACK of a face first came in through a gap. Above the ground storey (its doors are open by design).
+// RT_CRACKS_ONLY=<recipe> narrows it; RT_CRACKS_SHOW=<n> prints n samples a building.
+TEST_CASE(building_facades_have_no_cracks_every_recipe) {
+    // an instrument for now (~8 min over every recipe): RT_CRACKS=1 runs it
+    if (!std::getenv("RT_CRACKS") && !std::getenv("RT_CRACKS_ONLY")) { std::printf("    [cracks] skipped (RT_CRACKS=1 runs it)\n"); return; }
+    const Poly2 rect24 = {{-12, -10}, {12, -10}, {12, 10}, {-12, 10}};
+    const Poly2 rect40 = {{-20, -20}, {20, -20}, {20, 20}, {-20, 20}};
+    const char* only = std::getenv("RT_CRACKS_ONLY");
+    const int show = std::getenv("RT_CRACKS_SHOW") ? std::atoi(std::getenv("RT_CRACKS_SHOW")) : 2;
+    size_t leaking = 0, total = 0;
+    for (int i = 0; i < architectRecipeCount(); ++i) {
+        const char* name = architectRecipeName(i);
+        if (only && std::string(only) != name) continue;
+        for (uint32_t seed : {3u, 17u}) {
+            BuildingRecipe r;
+            if (!architectRecipeByName(name, seed, 0.6, 24, 600, r)) continue;
+            if (r.massing == BuildingRecipe::Massing::Park || r.massing == BuildingRecipe::Massing::Plaza) continue;
+            const char* planNames[2] = {"rect24", "rect40"};
+            const Poly2* plans[2] = {&rect24, &rect40};
+            for (int pi = 0; pi < 2; ++pi) {
+                const BuildingMesh bm = growPlanBuilding(*plans[pi], r.params, 1.5);
+                std::vector<std::string> names; names.reserve(bm.parts.size());
+                for (const RenderMesh& part : bm.parts) names.push_back("part " + std::to_string(part.materialIndex));
+                std::vector<NamedMeshRef> refs;
+                double top = 1.5;
+                for (size_t k = 0; k < bm.parts.size(); ++k) {
+                    refs.push_back({names[k], &bm.parts[k]});
+                    for (const Vertex& v : bm.parts[k].vertices) top = std::max(top, static_cast<double>(v.position.y));
+                }
+                const FacadeCrackAudit a = auditFacadeCracks(refs, 0.0, 0.0, 60.0, 1.5 + 6.0, top - 0.3);
+                ++total;
+                if (a.cracks == 0) continue;
+                ++leaking;
+                std::map<std::string, size_t> byPart; for (const auto& c : a.all) ++byPart[c.mesh];
+                std::string parts; for (const auto& [n, c] : byPart) parts += " " + n + ":" + std::to_string(c);
+                std::printf("    [cracks] %-22s seed %2u %-6s %zu of %zu rays leak (%zu storeys; %zu over the roof) via%s\n", name, seed, planNames[pi], a.cracks, a.hits, a.byStorey.size(), a.overRoof, parts.c_str());
+                for (int k = 0; k < show && k < static_cast<int>(a.all.size()); ++k) {
+                    const auto& c = a.all[static_cast<size_t>(k) * (a.all.size() / static_cast<size_t>(std::max(show, 1)))];
+                    std::printf("        in at %.2f %.2f %.2f bearing %.0f deg, sees the back of %s %.1f m on\n", c.from.x + c.dir.x * 50, c.from.y, c.from.z + c.dir.z * 50,
+                                std::atan2(-c.dir.z, -c.dir.x) * 57.29578, c.mesh.c_str(), c.t - 50.0);
+                    if (std::getenv("RT_CRACKS_TRI"))
+                        std::printf("          triangle (%.2f %.2f %.2f) (%.2f %.2f %.2f) (%.2f %.2f %.2f)\n", c.tri[0].x, c.tri[0].y, c.tri[0].z,
+                                    c.tri[1].x, c.tri[1].y, c.tri[1].z, c.tri[2].x, c.tri[2].y, c.tri[2].z);
+                }
+            }
+        }
+    }
+    std::printf("    [cracks] %zu of %zu buildings leak\n", leaking, total);
+}
+
+TEST_CASE(building_mesh_hash_census_every_recipe) {
+    auto hashOf = [](const BuildingMesh& bm, std::size_t& nv, std::size_t& nt) {
+        uint64_t h = 1469598103934665603ull;
+        nv = nt = 0;
+        for (const RenderMesh& part : bm.parts) {
+            nt += part.indices.size() / 3;
+            nv += part.vertices.size();
+            for (const Vertex& vx : part.vertices) {
+                const double q[3] = {vx.position.x, vx.position.y, vx.position.z};
+                for (double d : q) {
+                    const int64_t k = static_cast<int64_t>(std::llround(d * 4096.0));
+                    h ^= static_cast<uint64_t>(k);
+                    h *= 1099511628211ull;
+                }
+            }
+        }
+        return h;
+    };
+    const Poly2 rect24 = {{-12, -10}, {12, -10}, {12, 10}, {-12, 10}};
+    const Poly2 lPlan = {{-14, -12}, {14, -12}, {14, 0}, {0, 0}, {0, 12}, {-14, 12}};
+    const Poly2 rect40 = {{-20, -20}, {20, -20}, {20, 20}, {-20, 20}};
+    int lines = 0;
+    const char* only = std::getenv("RT_CENSUS_ONLY");   // one recipe (a hunt under valgrind)
+    for (int i = 0; i < architectRecipeCount(); ++i) {
+        const char* name = architectRecipeName(i);
+        if (only && std::string(only) != name) continue;
+        for (uint32_t seed : {3u, 17u}) {
+            BuildingRecipe r;
+            if (!architectRecipeByName(name, seed, 0.6, 24, 600, r)) continue;
+            if (r.massing == BuildingRecipe::Massing::Park || r.massing == BuildingRecipe::Massing::Plaza) continue;
+            r.params.openDoorway = true;
+            const char* planNames[3] = {"rect24", "L", "rect40"};
+            const Poly2* plans[3] = {&rect24, &lPlan, &rect40};
+            for (int pi = 0; pi < 3; ++pi) {
+                std::size_t ev, et, iv, it;
+                const uint64_t he = hashOf(growPlanBuilding(*plans[pi], r.params, 1.5), ev, et);
+                const uint64_t hi = hashOf(growInterior(*plans[pi], r.params, 1.5), iv, it);
+                std::printf("    [census] %-22s seed %2u %-6s ext=%016llx tris=%zu  int=%016llx tris=%zu\n", name, seed, planNames[pi],
+                            static_cast<unsigned long long>(he), et, static_cast<unsigned long long>(hi), it);
+                ++lines;
+                // RT_CENSUS_PARTS=<recipe>: that recipe's exterior, part by part (hunting a run-to-run difference)
+                if (const char* want = std::getenv("RT_CENSUS_PARTS"); want && std::string(want) == name) {
+                    const BuildingMesh bm = growPlanBuilding(*plans[pi], r.params, 1.5);
+                    for (const RenderMesh& part : bm.parts) {
+                        BuildingMesh one;
+                        one.parts.push_back(part);
+                        std::size_t pv, pt;
+                        const uint64_t ph = hashOf(one, pv, pt);
+                        // ...and the same positions sorted: equal here but not above means the ORDER varies
+                        std::vector<std::tuple<double, double, double>> ps;
+                        for (const Vertex& vx : part.vertices) ps.emplace_back(vx.position.x, vx.position.y, vx.position.z);
+                        std::sort(ps.begin(), ps.end());
+                        uint64_t sh = 1469598103934665603ull;
+                        for (const auto& [x, y, z] : ps)
+                            for (double d : {x, y, z}) { sh ^= static_cast<uint64_t>(static_cast<int64_t>(std::llround(d * 4096.0))); sh *= 1099511628211ull; }
+                        std::printf("    [census-part] %s seed %u %s part %d hash=%016llx sorted=%016llx verts=%zu tris=%zu\n", name, seed, planNames[pi],
+                                    part.materialIndex, static_cast<unsigned long long>(ph), static_cast<unsigned long long>(sh), pv, pt);
+                        // RT_CENSUS_DUMP=<file>: that part's triangles (part RT_CENSUS_DUMP_PART, default 20), sorted, one a line
+                        if (const char* dumpTo = std::getenv("RT_CENSUS_DUMP"); dumpTo && part.materialIndex == (std::getenv("RT_CENSUS_DUMP_PART") ? std::atoi(std::getenv("RT_CENSUS_DUMP_PART")) : 20)) {
+                            std::vector<std::string> tris;
+                            for (std::size_t t = 0; t + 2 < part.indices.size(); t += 3) {
+                                char line[256];
+                                const Vec3& a = part.vertices[part.indices[t]].position;
+                                const Vec3& b = part.vertices[part.indices[t + 1]].position;
+                                const Vec3& c = part.vertices[part.indices[t + 2]].position;
+                                std::snprintf(line, sizeof line, "%s %u %s (%.3f %.3f %.3f) (%.3f %.3f %.3f) (%.3f %.3f %.3f)", name, seed, planNames[pi],
+                                              a.x, a.y, a.z, b.x, b.y, b.z, c.x, c.y, c.z);
+                                tris.emplace_back(line);
+                            }
+                            std::sort(tris.begin(), tris.end());
+                            if (FILE* f = std::fopen(dumpTo, "a")) { for (const std::string& l : tris) std::fprintf(f, "%s\n", l.c_str()); std::fclose(f); }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    CHECK(lines > 0);
+}
+
 TEST_CASE(building_mesh_hash_census) {
     Poly2 plan = {{0, 0}, {22, 0}, {26, 14}, {11, 20}, {0, 14}};
     for (int v = 0; v < 6; ++v) {

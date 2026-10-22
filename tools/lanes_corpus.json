@@ -72,43 +72,43 @@
   {
    "name": "coast_city",
    "kind": "imported",
-   "source": "assets/levels/coast_city.json",
+   "source": "assets/lanelab/sources/coast_city.json",
    "tests": "a metro recipe on a coastline"
   },
   {
    "name": "living_city",
    "kind": "imported",
-   "source": "assets/levels/living_city.json",
+   "source": "assets/lanelab/sources/living_city.json",
    "tests": "a district recipe, compact"
   },
   {
    "name": "freeway_lab",
    "kind": "imported",
-   "source": "assets/levels/freeway_lab.json",
+   "source": "assets/lanelab/sources/freeway_lab.json",
    "tests": "a metro recipe built around its freeway"
   },
   {
    "name": "hillcity",
    "kind": "imported",
-   "source": "assets/levels/hillcity.json",
+   "source": "assets/lanelab/sources/hillcity.json",
    "tests": "a metro recipe on real relief"
   },
   {
    "name": "metro_hills",
    "kind": "imported",
-   "source": "assets/levels/metro_hills.json",
+   "source": "assets/lanelab/sources/metro_hills.json",
    "tests": "too compact for a perimeter ring: no freeway is built"
   },
   {
    "name": "piedmont_mini",
    "kind": "imported",
-   "source": "assets/levels/piedmont_mini.json",
+   "source": "assets/lanelab/sources/piedmont_mini.json",
    "tests": "the smallest metro recipe: no perimeter ring either"
   },
   {
    "name": "metro_v2",
    "kind": "imported",
-   "source": "assets/levels/metro_v2_test.json",
+   "source": "assets/lanelab/sources/metro_v2_test.json",
    "slow": true,
    "quick": true,
    "tests": "the level the importer was tuned on \u2014 the reference, not a sample"

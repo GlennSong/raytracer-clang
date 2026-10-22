@@ -203,15 +203,7 @@ RenderMesh generateTerrainMesh(const Heightmap& hm) {
             mesh.vertices.push_back(
                 Vertex(Vec3(-half + x * step, hm.get(x, z), -half + z * step),
                        Vec3(0, 1, 0)));
-    for (int j = 0; j < n - 1; j++) {
-        for (int i = 0; i < n - 1; i++) {
-            uint32_t a = static_cast<uint32_t>(j * n + i);
-            uint32_t b = a + 1;
-            uint32_t c = a + static_cast<uint32_t>(n);
-            uint32_t d = c + 1;
-            mesh.indices.insert(mesh.indices.end(), {a, b, d, a, d, c});
-        }
-    }
+    MeshBuilder::gridIndices(mesh, n, n);
     MeshBuilder::recomputeNormals(mesh);
     MeshBuilder::generatePlanarUVs(mesh, 1, 1.0f / hm.worldSize);
     Noise tint(1234);

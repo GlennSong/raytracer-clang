@@ -1,4 +1,5 @@
 #include "shooting_system.h"
+#include "../mesh_builder.h"
 #include "physics_system.h"
 #include "../components.h"
 #include "../../renderer/event.h"
@@ -13,22 +14,7 @@ void ShootingSystem::onStart(FrameContext& ctx) {
     {
         float h = static_cast<float>(bulletSize * 0.5);
         RenderMesh box;
-        struct Face { Vec3 normal; Vec3 verts[4]; };
-        Face faces[] = {
-            {Vec3(0,0,-1), {Vec3(-h,-h,-h), Vec3(h,-h,-h), Vec3(h,h,-h), Vec3(-h,h,-h)}},
-            {Vec3(0,0,1),  {Vec3(h,-h,h), Vec3(-h,-h,h), Vec3(-h,h,h), Vec3(h,h,h)}},
-            {Vec3(-1,0,0), {Vec3(-h,-h,h), Vec3(-h,-h,-h), Vec3(-h,h,-h), Vec3(-h,h,h)}},
-            {Vec3(1,0,0),  {Vec3(h,-h,-h), Vec3(h,-h,h), Vec3(h,h,h), Vec3(h,h,-h)}},
-            {Vec3(0,-1,0), {Vec3(-h,-h,h), Vec3(h,-h,h), Vec3(h,-h,-h), Vec3(-h,-h,-h)}},
-            {Vec3(0,1,0),  {Vec3(-h,h,-h), Vec3(h,h,-h), Vec3(h,h,h), Vec3(-h,h,h)}}
-        };
-        for (auto& f : faces) {
-            uint32_t base = static_cast<uint32_t>(box.vertices.size());
-            for (int i = 0; i < 4; i++)
-                box.vertices.push_back(Vertex(f.verts[i], f.normal));
-            box.indices.insert(box.indices.end(),
-                {base, base+1, base+2, base, base+2, base+3});
-        }
+        MeshBuilder::emitBox(box, Vec3(-h, -h, -h), Vec3(h, h, h), Vec3(1, 1, 1));
         bulletMesh = rendererRef.uploadMesh(box);
     }
 
@@ -37,20 +23,7 @@ void ShootingSystem::onStart(FrameContext& ctx) {
         float gunRadius = 0.03f;
         float gunLength = 0.4f;
         RenderMesh cyl;
-        int slices = 12;
-        float halfH = gunLength * 0.5f;
-        for (int i = 0; i <= slices; i++) {
-            float phi = 2.0f * static_cast<float>(PI) * i / slices;
-            float x = gunRadius * std::cos(phi);
-            float z = gunRadius * std::sin(phi);
-            Vec3 normal = normalize(Vec3(x, 0, z));
-            cyl.vertices.push_back(Vertex(Vec3(x, -halfH, z), normal));
-            cyl.vertices.push_back(Vertex(Vec3(x, halfH, z), normal));
-        }
-        for (int i = 0; i < slices; i++) {
-            uint32_t a = i * 2, b = a + 1, c = a + 2, d = a + 3;
-            cyl.indices.insert(cyl.indices.end(), {a, c, b, b, c, d});
-        }
+        MeshBuilder::emitCylinder(cyl, Vec3(0, -gunLength * 0.5f, 0), gunRadius, gunLength, 12, Vec3(1, 1, 1), false, 0);
         gunMesh = rendererRef.uploadMesh(cyl);
 
         gunEntity = ctx.world.create();

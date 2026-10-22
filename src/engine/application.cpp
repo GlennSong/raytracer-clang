@@ -589,6 +589,12 @@ std::string Application::handleControlCommand(const std::string& line) {
     };
 
     if (cmd.name == "ping") return "ok pong";
+    // A QUESTION WAS ASKED (any `name?`): the systems that keep island-wide debug counts for those answers count
+    // only while someone is asking (telemetry.askedAt, steady seconds) -- counted every half second regardless,
+    // they were a 65-130 ms frame twice a second (Glenn on a bus: "a lot of frame stutter")
+    if (!cmd.name.empty() && cmd.name.back() == '?')
+        settingsStore.setDouble("telemetry.askedAt",
+                                std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count());
 
     if (cmd.name == "info") {
         char buf[512];
@@ -913,6 +919,65 @@ std::string Application::handleControlCommand(const std::string& line) {
         return "ok staged";
     }
     if (cmd.name == "walkers?") return "ok " + settingsStore.getString("walkers.telemetry", "none");
+    if (cmd.name == "flicker?") return "ok " + settingsStore.getString("walkers.flicker", "none");
+    // what the city's people are out doing (citysim activities): per activity, at it / coming, groups, the nearest
+    if (cmd.name == "activities?") return "ok " + settingsStore.getString("activities.telemetry", "none");
+    // people drawn moving faster than a sprint (citysim walkers): how many, and the latest with their state
+    if (cmd.name == "speeders?") return "ok " + settingsStore.getString("speeders.telemetry", "none");
+    if (cmd.name == "parking?") return "ok " + settingsStore.getString("parking.telemetry", "none");
+    if (cmd.name == "traffic?") return "ok " + settingsStore.getString("traffic.telemetry", "none");
+    if (cmd.name == "opensigns?") return "ok " + settingsStore.getString("opensigns.telemetry", "none");
+    // the trains (citysim train_system): lines, stops, every train's place, speed and doors, and whether you are aboard
+    if (cmd.name == "trains?") return "ok " + settingsStore.getString("trains.telemetry", "none");
+    if (cmd.name == "train_board") {   // `train_board <train> [car]`: aboard, standing mid-carriage
+        settingsStore.setString("train.board", (cmd.args.empty() ? std::string("0") : cmd.args[0]) + " " + (cmd.args.size() > 1 ? cmd.args[1] : std::string("1")));
+        return "ok staged";
+    }
+    if (cmd.name == "depots?") return "ok " + settingsStore.getString("depots.telemetry", "none") + "; stalled heading in:" + settingsStore.getString("depots.stalled", "");
+    // `pin <agent>` / `unpin <agent>`: FOLLOW an agent -- it stays in the full sim however far it goes
+    if (cmd.name == "pin" || cmd.name == "unpin") {
+        if (cmd.args.empty()) return "err usage: pin|unpin <agent id>";
+        settingsStore.setString("pin.request", cmd.args[0] + (cmd.name == "pin" ? " 1" : " 0"));
+        return "ok staged (`pin?` for the count)";
+    }
+    if (cmd.name == "pin?") return "ok " + settingsStore.getString("pin.status", "none followed");
+    // `findplace <name...>`: where a named place is (a shop by its sign), its type, hours and who is in; `findplace?` reads it
+    if (cmd.name == "findplace") {
+        std::string q;
+        for (const std::string& w : cmd.args) q += (q.empty() ? "" : " ") + w;
+        settingsStore.setString("findplace.request", q);
+        return "ok";
+    }
+    if (cmd.name == "findplace?") return "ok " + settingsStore.getString("findplace.result", "none");
+    // `recipes?`: the level's buildings counted by architect recipe, each with its tallest one's centre, base and
+    // height -- whether a recipe the tables roll actually stands in this city, and where to go and look at it
+    if (cmd.name == "recipes?") {
+        const CityBuildings* cb = nullptr;
+        worldState.each<CityBuildings>([&](Entity, CityBuildings& b) { if (!cb) cb = &b; });
+        if (!cb) return "ok none (no city buildings on this level)";
+        struct Tally { int n = 0; const BuildingRecord* tallest = nullptr; };
+        std::map<std::string, Tally> by;
+        for (const BuildingRecord& r : cb->records) {
+            Tally& t = by[r.recipe.empty() ? "?" : r.recipe]; ++t.n;
+            if (!t.tallest || r.height > t.tallest->height) t.tallest = &r;
+        }
+        std::string out = "ok " + std::to_string(cb->records.size()) + " buildings, " + std::to_string(by.size()) + " recipes";
+        char buf[160];
+        for (const auto& [name, t] : by) {
+            const engine::Vec2 c = t.tallest->plan.size() >= 3 ? centroid(t.tallest->plan) : engine::Vec2(0, 0);
+            std::snprintf(buf, sizeof buf, " | %s %d tallest (%.0f, %.0f) base %.1f h %.0f", name.c_str(), t.n, c.x, c.y, t.tallest->baseY, t.tallest->height);
+            out += buf;
+        }
+        return out;
+    }
+    // `who? <agent>`: stage a question about any agent; `who?` alone: the answer (refreshed every step)
+    if (cmd.name == "who?") {
+        if (!cmd.args.empty()) {
+            settingsStore.setString("who.query", cmd.args[0]);
+            return "ok staged (poll `who?`)";
+        }
+        return "ok " + settingsStore.getString("who.result", "none");
+    }
     if (cmd.name == "interact?") return "ok " + settingsStore.getString("interact.status", "none");
 
     if (cmd.name == "keys?") {
@@ -1332,7 +1397,7 @@ std::string Application::handleControlCommand(const std::string& line) {
     return "err unknown command: " + cmd.name +
            " (ping|info|camera|camera?|shot|interact|interact?|overlay|sim|reload|set|get|"
            "daynight|daynight?|citymap|teleport|teleport?|where?|person|clip|clip?|sun|sun?|fog|fog?|weather|weather?|render|view|ledger|"
-           "possess|drive_to|walk_to|direct|possess_stop|release|possess?|agent?|ground?|bundle?)";
+           "possess|drive_to|walk_to|direct|possess_stop|release|possess?|agent?|ground?|bundle?|walkers?|flicker?|speeders?|parking?|traffic?|opensigns?|findplace|findplace?|recipes?|depots?|activities?|who?|pin)";
 }
 
 }  // namespace engine

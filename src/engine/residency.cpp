@@ -34,6 +34,17 @@ void Residency::update(const Vec3& camera, double budgetMs, JobSystem* jobs) {
         jump = dx * dx + dy * dy + dz * dz > kJumpDistance * kJumpDistance;
     }
     if (jump) budgetMs = 0.0;
+    // AHEAD OF A MOVING CAMERA (the city's next ten #10, a fly-around): where it will be in ~0.75 s at this frame's
+    // step (45 frames), so a cell starts streaming before the camera is on it; an item counts as near when it is near
+    // either point. And when moving fast (over ~90 m/s at 60 fps) twice the prepare jobs.
+    Vec3 ahead = camera;
+    double step = 0.0;
+    if (haveLast_ && !jump) {
+        const Vec3 d = camera - last_;
+        step = std::sqrt(d.x * d.x + d.y * d.y + d.z * d.z);
+        ahead = camera + d * 45.0;
+    }
+    const int maxPreparing = step > 1.5 ? 2 * kMaxPreparing : kMaxPreparing;
     last_ = camera;
     haveLast_ = true;
     // Hand over what the workers finished since the last update.
@@ -48,8 +59,11 @@ void Residency::update(const Vec3& camera, double budgetMs, JobSystem* jobs) {
         inbox_->done.clear();
     }
     auto distanceTo = [&](const Item& it) {
-        const double dx = it.center.x - camera.x, dy = it.center.y - camera.y, dz = it.center.z - camera.z;
-        return std::max(0.0, std::sqrt(dx * dx + dy * dy + dz * dz) - it.radius);
+        auto from = [&](const Vec3& c) {
+            const double dx = it.center.x - c.x, dy = it.center.y - c.y, dz = it.center.z - c.z;
+            return std::max(0.0, std::sqrt(dx * dx + dy * dy + dz * dz) - it.radius);
+        };
+        return std::min(from(camera), from(ahead));
     };
     // 1. Let go of what is out of range (retired by the renderer, never a stall), and of
     //    prepared results nobody wants any more.
@@ -83,7 +97,10 @@ void Residency::update(const Vec3& camera, double budgetMs, JobSystem* jobs) {
     for (const auto& [d, i] : wanted) {
         Item& it = items_[i];
         const bool twoPhase = it.prepare && it.commit;
-        const bool canNow = !twoPhase || it.phase == Item::Phase::Ready || jump || !jobs;
+        // a jump loads in place only what it lands in (kJumpNear): the rest streams through the workers like any
+        // movement -- every cell keeps a stand-in, so the far ring arriving over a second is no hole, and a teleport
+        // across the island stopped freezing the viewer for seconds (3.8 s measured)
+        const bool canNow = !twoPhase || it.phase == Item::Phase::Ready || (jump && d <= kJumpNear) || !jobs;
         if (!canNow) continue;
         if (it.phase == Item::Phase::Preparing) continue;   // a jump does not wait on a worker
         if (budgetMs > 0 && done > 0 &&
@@ -103,9 +120,9 @@ void Residency::update(const Vec3& camera, double budgetMs, JobSystem* jobs) {
         ++done;
     }
     // 3. Start preparing the nearest wanted items that are not yet, a few at a time.
-    if (jobs && !jump) {
+    if (jobs) {
         for (const auto& [d, i] : wanted) {
-            if (preparing_ >= kMaxPreparing) break;
+            if (preparing_ >= maxPreparing) break;
             Item& it = items_[i];
             if (it.resident || !it.prepare || !it.commit || it.phase != Item::Phase::Idle) continue;
             it.phase = Item::Phase::Preparing;

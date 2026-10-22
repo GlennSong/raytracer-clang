@@ -505,3 +505,105 @@ TEST_CASE(stairwell_faces_point_into_the_stairwell) {
     CHECK(checked > 0);
     CHECK(wrong == 0);
 }
+
+// THE ROOF EXIT (architectural toolkit, issue #105, step 1; Glenn, 2026-10-15: "be able to exit out on the
+// roof"): the top storey's flights climb to the roof deck; the bulkhead over the core has a shell, a lid, the
+// stair doors open onto the deck, and each stair lands on the deck inside it; the roof slab the grammar draws is
+// cut through over the stair shafts.
+TEST_CASE(core_stairs_reach_the_roof_through_a_bulkhead) {
+    const Poly2 plan = {{0, 0}, {40, 0}, {40, 40}, {0, 40}};
+    const BuildingParams p = towerParams(12, true);
+    CHECK(coreReachesRoof(p));
+    const CorePlan core = coreFor(plan, p, entranceEdgeFor(plan, p));
+    CHECK(core.valid);
+    CHECK(coreRoofHoles(core).size() == 2);
+    const std::vector<StoreyPlan> storeys = storeyPlans(plan, p);
+    const Real baseY = 10.0;
+    const StoreyPlan& top = storeys.back();
+    const Real deckY = baseY + top.y0 + top.h + 0.05;
+    // The top storey, flights up: the highest tread IS the deck.
+    {
+        CoreMeshes cm;
+        RenderMesh col;
+        emitCoreStorey(cm, &col, core, top, baseY, p, true, true);
+        Real hi = -1e9;
+        for (const Vertex& v : cm.stair.vertices) hi = std::max(hi, (Real)v.position.y);
+        CHECK(std::fabs(hi - deckY) < 1e-6);
+    }
+    // The bulkhead's walls (the exterior's half): a shell whose lid tops out at kBulkheadH + 0.15 over the deck,
+    // and no shell face across a stair door's opening.
+    {
+        CoreMeshes bk;
+        emitCoreBulkhead(bk, nullptr, core, deckY, p, true);
+        CHECK(!bk.shell.vertices.empty());
+        CHECK(!bk.drywall.vertices.empty());
+        CHECK(bk.floor.vertices.empty());
+        Real lidTop = -1e9;
+        for (const Vertex& v : bk.shell.vertices) lidTop = std::max(lidTop, (Real)v.position.y);
+        CHECK(std::fabs(lidTop - (deckY + kBulkheadH + 0.15)) < 1e-6);
+        for (const CoreStair& st : core.stairs) {
+            // a probe inside the ring's front wall (a wall thickness out of the shaft), at the door's centre, 1 m up
+            const Vec2 probe = st.shaft.doorFoot() + st.shaft.doorNormal() * 0.075;
+            const Real py = deckY + 1.0;
+            bool covered = false;
+            for (std::size_t i = 0; i + 3 < bk.shell.vertices.size(); i += 4) {
+                Real ylo = 1e9, yhi = -1e9;
+                Vec2 a(1e9, 1e9), b(-1e9, -1e9);
+                for (std::size_t j = 0; j < 4; ++j) {
+                    const Vertex& v = bk.shell.vertices[i + j];
+                    ylo = std::min(ylo, (Real)v.position.y);
+                    yhi = std::max(yhi, (Real)v.position.y);
+                    a.x = std::min(a.x, (Real)v.position.x); a.y = std::min(a.y, (Real)v.position.z);
+                    b.x = std::max(b.x, (Real)v.position.x); b.y = std::max(b.y, (Real)v.position.z);
+                }
+                if (yhi - ylo < 0.2) continue;   // the lid
+                if (py < ylo || py > yhi) continue;
+                // the quad's XZ footprint is a segment: the probe within 3 cm of it (and inside its extent)
+                if (probe.x < a.x - 0.03 || probe.x > b.x + 0.03 || probe.y < a.y - 0.03 || probe.y > b.y + 0.03) continue;
+                covered = true;
+            }
+            CHECK(!covered);
+        }
+    }
+    // The streamed half: colliders for the walls, and each stair's roof landing at the deck.
+    {
+        CoreMeshes land;
+        RenderMesh col;
+        emitCoreBulkhead(land, &col, core, deckY, p, false);
+        CHECK(land.shell.vertices.empty());
+        CHECK(!col.indices.empty());
+        Real landTop = -1e9;
+        for (const Vertex& v : land.floor.vertices) landTop = std::max(landTop, (Real)v.position.y);
+        CHECK(std::fabs(landTop - deckY) < 1e-6);
+    }
+    // The grammar's roof slab: no Roof-part triangle at the deck contains a stair shaft's centre (the hole), and
+    // the Trim part carries the bulkhead's shell (something stands above the deck).
+    {
+        const BuildingMesh bm = growPlanBuilding(plan, p, baseY);
+        const std::vector<StoreyPlan> sps = storeyPlans(plan, p);
+        const Real deck = baseY + sps.back().y0 + sps.back().h + 0.05;
+        for (const CoreStair& st : core.stairs) {
+            const Vec2 c = st.shaft.frame.toWorld({st.shaft.width * 0.5, st.shaft.depth * 0.5});
+            bool covered = false;
+            for (const RenderMesh& part : bm.parts) {
+                if (part.materialIndex != static_cast<int>(PartId::Roof)) continue;
+                for (std::size_t i = 0; i + 2 < part.indices.size(); i += 3) {
+                    Poly2 tri;
+                    bool atDeck = true;
+                    for (int k = 0; k < 3; ++k) {
+                        const Vertex& v = part.vertices[part.indices[i + k]];
+                        if (std::fabs(v.position.y - deck) > 1e-4) atDeck = false;
+                        tri.push_back(Vec2(v.position.x, v.position.z));
+                    }
+                    if (atDeck && pointInPolygon(tri, c)) covered = true;
+                }
+            }
+            CHECK(!covered);
+        }
+        bool shellAbove = false;
+        for (const RenderMesh& part : bm.parts)
+            if (part.materialIndex == static_cast<int>(PartId::Trim))
+                for (const Vertex& v : part.vertices) if (v.position.y > deck + kBulkheadH - 1e-3) shellAbove = true;
+        CHECK(shellAbove);
+    }
+}

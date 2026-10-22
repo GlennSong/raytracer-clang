@@ -555,8 +555,8 @@ TEST_CASE(population_read_from_the_cache_is_the_population_decided) {
     CHECK(sa.driversWithJobs == sc.driversWithJobs && sa.crossTownDrivers == sc.crossTownDrivers);
     CHECK(sa.meanDriverCommute == sc.meanDriverCommute);
     CHECK(A.commuteSecondsMedian() == C.commuteSecondsMedian());
-    int roles[3] = {0, 0, 0};
-    for (const Agent& a : A.agents()) roles[static_cast<int>(a.role)]++;
+    int roles[16] = {};   // by role id: the first three, then students and the staff roles
+    for (const Agent& a : A.agents()) roles[std::min(15, static_cast<int>(a.role))]++;
     std::printf("    roles: %d commuters, %d shopkeepers, %d strollers\n", roles[0], roles[1], roles[2]);
     CHECK((roles[0] > 0) + (roles[1] > 0) + (roles[2] > 0) >= 2);   // more than one branch of the role choice ran
 

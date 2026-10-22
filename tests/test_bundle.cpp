@@ -356,3 +356,91 @@ TEST_CASE(list_bakes_says_which_level_and_whether_current) {
     for (const BakeListing& b : listBakes(out, false)) CHECK(b.state == BakeListing::State::Unknown);   // manifests only
     fs::remove_all(root, ec);
 }
+
+// SHARED BLOCKS (Glenn: "can we do partial bakes on top of other bakes because we know that that data hasn't
+// changed?"): a bundle written with an earlier one as its clone source reads back byte for byte -- the sections it
+// shared and the ones it wrote alike -- and on a copy-on-write filesystem (btrfs here) the unchanged sections were
+// cloned, not written. Elsewhere (tmpfs) nothing is cloned and the bundle is still whole.
+#ifdef __linux__
+#include <sys/vfs.h>
+#endif
+TEST_CASE(a_rebake_shares_its_unchanged_sections_with_the_last_one) {
+    // under the build tree (the home disk), not /tmp (tmpfs cannot share blocks)
+    std::string dir = "build-viewer/test_bundle_clone";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    if (!fs::create_directories(dir, ec)) dir = tempDir("clone");
+    std::vector<uint32_t> cellA(300000), cellB(200000), cellC(5000);
+    for (size_t i = 0; i < cellA.size(); ++i) cellA[i] = static_cast<uint32_t>(i * 2654435761u);
+    for (size_t i = 0; i < cellB.size(); ++i) cellB[i] = static_cast<uint32_t>(i * 40503u + 7);
+    for (size_t i = 0; i < cellC.size(); ++i) cellC[i] = static_cast<uint32_t>(i ^ 0x5bd1e995u);
+    std::string err;
+    {
+        BundleWriter w; CHECK(w.openFile(dir + "/a.bundle", &err));
+        CHECK(w.add("lots/cell/0_0/parts/2", cellA.data(), cellA.size() * 4));
+        CHECK(w.add("lots/cell/1_0/parts/2", cellB.data(), cellB.size() * 4));
+        CHECK(w.add("lots/cell/2_0/parts/2", cellC.data(), cellC.size() * 4));
+        CHECK(w.addJson("lots/meta", nlohmann::json{{"n", 3}}));
+        nlohmann::json m{{"kind", "test"}}; CHECK(w.finish(m, &err));
+    }
+    cellB[123] ^= 1u;   // one cell changed
+    BundleWriter w; CHECK(w.openFile(dir + "/b.bundle", &err));
+    // (block cloning is Linux's FICLONERANGE: elsewhere a clone source is refused and every section is written)
+    const bool canClone = w.addCloneSource(dir + "/a.bundle");
+#ifdef __linux__
+    CHECK(canClone);
+#else
+    CHECK(!canClone);
+#endif
+    CHECK(w.add("lots/cell/0_0/parts/2", cellA.data(), cellA.size() * 4));
+    CHECK(w.add("lots/cell/1_0/parts/2", cellB.data(), cellB.size() * 4));
+    CHECK(w.add("lots/cell/2_0/parts/2", cellC.data(), cellC.size() * 4));
+    CHECK(w.addJson("lots/meta", nlohmann::json{{"n", 3}}));
+    const uint64_t cloned = w.bytesCloned();
+    nlohmann::json m{{"kind", "test"}}; CHECK(w.finish(m, &err));
+    std::unique_ptr<Bundle> b = Bundle::open(dir + "/b.bundle", &err);
+    CHECK(b != nullptr);
+    if (!b) return;
+    const Bundle::View a = b->section("lots/cell/0_0/parts/2"), bb = b->section("lots/cell/1_0/parts/2"), c = b->section("lots/cell/2_0/parts/2");
+    CHECK(a.size == cellA.size() * 4 && std::memcmp(a.data, cellA.data(), a.size) == 0);
+    CHECK(bb.size == cellB.size() * 4 && std::memcmp(bb.data, cellB.data(), bb.size) == 0);   // the changed one, written
+    CHECK(c.size == cellC.size() * 4 && std::memcmp(c.data, cellC.data(), c.size) == 0);
+    for (const std::string& s : b->sections("")) CHECK(b->checkSection(s));
+    CHECK(b->json("lots/meta").value("n", 0) == 3);
+    for (const SectionInfo& s : b->sectionTable()) CHECK(s.offset % kFileSectionAlign == 0);
+    bool cow = false;
+#ifdef __linux__
+    struct statfs sf{};
+    cow = statfs(dir.c_str(), &sf) == 0 && static_cast<unsigned long>(sf.f_type) == 0x9123683EUL;   // BTRFS_SUPER_MAGIC
+#endif
+    std::printf("    [clone] %s: %llu of %llu section bytes shared (%s)\n", dir.c_str(), static_cast<unsigned long long>(cloned),
+                static_cast<unsigned long long>((cellA.size() + cellB.size() + cellC.size()) * 4), cow ? "btrfs" : "no block sharing here");
+    if (cow) CHECK(cloned == (cellA.size() + cellC.size()) * 4 + std::string(nlohmann::json{{"n", 3}}.dump()).size());
+    CHECK(w.clonesRefused() == 0);
+
+    // A SOURCE THAT ROTTED ON DISK: its bytes changed after it was written, its table still names the old hash. A
+    // rebake with the true bytes matches that hash -- and must write them, not clone the rot.
+    if (cow) {
+        std::unique_ptr<Bundle> src = Bundle::open(dir + "/a.bundle", &err);
+        uint64_t off = 0;
+        for (const SectionInfo& s : src->sectionTable()) if (s.name == "lots/cell/2_0/parts/2") off = s.offset;
+        src.reset();
+        {
+            std::fstream f(dir + "/a.bundle", std::ios::in | std::ios::out | std::ios::binary);
+            f.seekp(static_cast<std::streamoff>(off + 40)); const char x = 0x55; f.write(&x, 1);
+        }
+        BundleWriter w2; CHECK(w2.openFile(dir + "/c.bundle", &err));
+        CHECK(w2.addCloneSource(dir + "/a.bundle"));
+        CHECK(w2.add("lots/cell/2_0/parts/2", cellC.data(), cellC.size() * 4));
+        CHECK(w2.clonesRefused() == 1);
+        CHECK(w2.bytesCloned() == 0);
+        nlohmann::json m2{{"kind", "test"}}; CHECK(w2.finish(m2, &err));
+        std::unique_ptr<Bundle> c2 = Bundle::open(dir + "/c.bundle", &err);
+        CHECK(c2 && c2->checkSection("lots/cell/2_0/parts/2"));
+        const Bundle::View v = c2 ? c2->section("lots/cell/2_0/parts/2") : Bundle::View{};
+        CHECK(v.size == cellC.size() * 4 && std::memcmp(v.data, cellC.data(), v.size) == 0);
+        std::printf("    [clone] a rotted source: %llu refused, %llu cloned\n", static_cast<unsigned long long>(w2.clonesRefused()),
+                    static_cast<unsigned long long>(w2.bytesCloned()));
+    }
+    fs::remove_all(dir, ec);
+}

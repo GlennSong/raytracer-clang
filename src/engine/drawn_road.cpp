@@ -40,6 +40,98 @@ void DrawnRoad::add(const Vec2& a, const Vec2& b, const Vec2& c) {
             cells[cellKey(cx, cz)].push_back(i);
 }
 
+void DrawnRoad::add(const Vec3& a, const Vec3& b, const Vec3& c) {
+    add(Vec2(a.x, a.z), Vec2(b.x, b.z), Vec2(c.x, c.z));
+    heights.resize(tris.size());
+    heights.back() = {static_cast<float>(a.y), static_cast<float>(b.y), static_cast<float>(c.y)};
+}
+
+bool DrawnRoad::topAt(double x, double z, double* y, double ceiling) const {
+    auto it = cells.find(cellKey(static_cast<int>(std::floor(x / kCell)), static_cast<int>(std::floor(z / kCell))));
+    if (it == cells.end()) return false;
+    bool found = false;
+    double best = -1e30;
+    for (int ti : it->second) {
+        if (static_cast<std::size_t>(ti) >= heights.size()) continue;   // added plan-only
+        const Tri& t = tris[static_cast<std::size_t>(ti)];
+        const double d = (t.b.y - t.c.y) * (t.a.x - t.c.x) + (t.c.x - t.b.x) * (t.a.y - t.c.y);
+        if (std::fabs(d) < 1e-9) continue;   // a wall: no area in plan
+        const double l1 = ((t.b.y - t.c.y) * (x - t.c.x) + (t.c.x - t.b.x) * (z - t.c.y)) / d;
+        const double l2 = ((t.c.y - t.a.y) * (x - t.c.x) + (t.a.x - t.c.x) * (z - t.c.y)) / d;
+        const double l3 = 1.0 - l1 - l2;
+        if (l1 < -1e-6 || l2 < -1e-6 || l3 < -1e-6) continue;
+        const std::array<float, 3>& h = heights[static_cast<std::size_t>(ti)];
+        const double at = l1 * h[0] + l2 * h[1] + l3 * h[2];
+        if (at > ceiling || at <= best) continue;
+        best = at;
+        found = true;
+    }
+    if (found && y) *y = best;
+    return found;
+}
+
+bool DrawnRoad::overhead(double x, double z, double footY, double topY, double radius) const {
+    const Vec2 p(x, z);
+    const int cx0 = static_cast<int>(std::floor((x - radius) / kCell)), cx1 = static_cast<int>(std::floor((x + radius) / kCell));
+    const int cz0 = static_cast<int>(std::floor((z - radius) / kCell)), cz1 = static_cast<int>(std::floor((z + radius) / kCell));
+    for (int cx = cx0; cx <= cx1; ++cx)
+        for (int cz = cz0; cz <= cz1; ++cz) {
+            auto it = cells.find(cellKey(cx, cz));
+            if (it == cells.end()) continue;
+            for (int ti : it->second) {
+                if (static_cast<std::size_t>(ti) >= heights.size()) continue;
+                const std::array<float, 3>& h = heights[static_cast<std::size_t>(ti)];
+                const double lo = std::min({h[0], h[1], h[2]}), hi = std::max({h[0], h[1], h[2]});
+                if (hi < footY + 0.5 || lo > topY) continue;   // under the foot (its own pavement), or clear above
+                const Tri& t = tris[static_cast<std::size_t>(ti)];
+                if (inTri(t, x, z) || segDist(p, t.a, t.b) < radius || segDist(p, t.b, t.c) < radius || segDist(p, t.c, t.a) < radius)
+                    return true;
+            }
+        }
+    return false;
+}
+
+void DrawnRoad::addRail(const Vec2& a, const Vec2& b, double ya, double yb, double half) {
+    RailRun r;
+    r.a = a; r.b = b;
+    r.ya = static_cast<float>(ya); r.yb = static_cast<float>(yb);
+    r.half = static_cast<float>(std::min(4.0, half));   // (a track's own width; a wide spine is bounded by the query's reach)
+    const int idx = static_cast<int>(rails.size());
+    rails.push_back(r);
+    const int x0 = static_cast<int>(std::floor(std::min(a.x, b.x) / kCell)), x1 = static_cast<int>(std::floor(std::max(a.x, b.x) / kCell));
+    const int z0 = static_cast<int>(std::floor(std::min(a.y, b.y) / kCell)), z1 = static_cast<int>(std::floor(std::max(a.y, b.y) / kCell));
+    for (int cx = x0; cx <= x1; ++cx)
+        for (int cz = z0; cz <= z1; ++cz) railCells[cellKey(cx, cz)].push_back(idx);
+}
+
+bool DrawnRoad::inTrainEnvelope(double x, double z, double footY, double topY, double radius) const {
+    if (rails.empty()) return false;
+    const Vec2 p(x, z);
+    const double reach = radius + kTrainHalfWidth + kRailClearance + 4.0;   // (+ a track's own half-width, bounded)
+    const int cx0 = static_cast<int>(std::floor((x - reach) / kCell)), cx1 = static_cast<int>(std::floor((x + reach) / kCell));
+    const int cz0 = static_cast<int>(std::floor((z - reach) / kCell)), cz1 = static_cast<int>(std::floor((z + reach) / kCell));
+    for (int cx = cx0; cx <= cx1; ++cx)
+        for (int cz = cz0; cz <= cz1; ++cz) {
+            auto it = railCells.find(cellKey(cx, cz));
+            if (it == railCells.end()) continue;
+            for (int ri : it->second) {
+                const RailRun& r = rails[static_cast<std::size_t>(ri)];
+                const Vec2 ab = r.b - r.a;
+                const double l2 = ab.lengthSquared();
+                const double t = l2 > 1e-12 ? std::clamp(dot(p - r.a, ab) / l2, 0.0, 1.0) : 0.0;
+                if ((p - (r.a + ab * t)).length() >= r.half + kTrainHalfWidth + kRailClearance + radius) continue;
+                const double y = r.ya + (r.yb - r.ya) * t;
+                if (topY < y || footY > y + kTrainHeight) continue;   // wholly under the rails (a viaduct's) or over the train
+                return true;
+            }
+        }
+    return false;
+}
+
+bool DrawnRoad::blocksTree(double x, double z, double footY, double height, double crown) const {
+    return overhead(x, z, footY, footY + height, crown) || inTrainEnvelope(x, z, footY, footY + height, crown);
+}
+
 bool DrawnRoad::covers(double x, double z) const {
     auto it = cells.find(cellKey(static_cast<int>(std::floor(x / kCell)), static_cast<int>(std::floor(z / kCell))));
     if (it == cells.end()) return false;
@@ -69,8 +161,16 @@ bool DrawnRoad::near(double x, double z, double margin) const {
     return false;
 }
 
-DrawnRoad gatherDrawnRoad(World& world) {
+DrawnRoad gatherDrawnRoad(World& world, bool withHeights) {
     DrawnRoad rp;
+    // the tracks the city published, for the train's room (always: a few hundred segments)
+    world.each<RoadDeck>([&](Entity, RoadDeck& d) {
+        for (const UnionSpine& sp : d.field.spines) {
+            if (sp.use != UnionSpine::Use::Track || sp.points.size() < 2 || sp.yAbs.size() != sp.points.size()) continue;
+            for (std::size_t i = 0; i + 1 < sp.points.size(); ++i)
+                rp.addRail(sp.points[i], sp.points[i + 1], sp.yAbs[i], sp.yAbs[i + 1], sp.halfWidth);
+        }
+    });
     world.each<Renderable>([&](Entity e, Renderable& r) {
         if (!(r.renderLayer & LayerRoads)) return;
         const MeshCollider* mc = world.get<MeshCollider>(e);
@@ -79,7 +179,10 @@ DrawnRoad gatherDrawnRoad(World& world) {
             const Vec3& a = mc->vertices[mc->indices[i]];
             const Vec3& b = mc->vertices[mc->indices[i + 1]];
             const Vec3& c = mc->vertices[mc->indices[i + 2]];
-            rp.add(Vec2(a.x, a.z), Vec2(b.x, b.z), Vec2(c.x, c.z));
+            if (withHeights)
+                rp.add(a, b, c);
+            else
+                rp.add(Vec2(a.x, a.z), Vec2(b.x, b.z), Vec2(c.x, c.z));
         }
     });
     return rp;

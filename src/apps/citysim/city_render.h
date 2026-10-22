@@ -40,6 +40,8 @@ struct CityRenderParams {
     // bridge used to clamp at a literal 400, which halved metro v2: its own
     // network asks for 769 cars and 788 walkers.
     int maxAmbient = 400;
+    int nearTarget = 0;                    // CitySimConfig::nearTarget
+    int farTarget = 0;                     // CitySimConfig::farTarget
     uint32_t seed = 1;
     Real hoursPerSecond = 0.05;            // sim-clock hours advanced per real second
     // The in-world hour the level OPENS at. The population is placed directly
@@ -50,7 +52,7 @@ struct CityRenderParams {
     Real perceptionReliability = 0.97;     // <1 -> agents occasionally err (ADR-0060)
     engine::Vec3 carSize{1.8, 1.3, 4.2};   // matches the player sedan (W,H,L); +Z = travel
     engine::Vec3 pedSize{0.5, 1.8, 0.5};
-    Real signalLensSize = 0.34;            // lit emissive lens cube edge (m)
+    Real signalLensSize = 0.28;            // lit emissive lens: a plate this wide, over the head's own lamp (m)
     // How far from the player a PARKED scenery car still draws (m). A city-wide
     // instance group cannot be partially frustum-culled, so without this every
     // parked car in the city is submitted every frame, in both the colour and
@@ -75,6 +77,7 @@ struct CityRenderParams {
     int busStops = 8;
     int buses = 0;
     Real busMaxWalk = 120.0;
+    Real busServiceStart = 5.5, busServiceEnd = 23.5;   // CitySimConfig: with a depot, the buses' day
     // Cars handed to real physics near the player (CitySimConfig::physicalCars).
     // 0 = none, the shipping default; the physics soaks opt in.
     int physicalCars = 0;
@@ -290,6 +293,20 @@ public:
         return pedAgentIds_;
     }
     Real groundHeightAt(Real x, Real z) const { return groundAt(x, z); }
+    // What agent `i` stands on at (x, z): the ground, or -- waiting for a train -- its platform's top (the platform is
+    // not ground: a walker posed on the ground under it stood inside the embankment, out of sight)
+    Real floorAt(int i, Real x, Real z) const {
+        if (const RailTrip* t = sim_.railRiders().tripOf(i))
+            if (t->phase == RailTrip::Phase::Waiting && (Vec2(x, z) - t->spot).length() < 12.0) return t->top;
+        return groundAt(x, z);
+    }
+    // Where an agent is DRAWN this step: one tick behind, interpolated through the sim's tick (the same rule the
+    // crowd's instances follow -- agentPose). Between ticks the raw position holds still and then hops; at a slowed
+    // tick (the adaptive rate, down to 7.5 Hz) a walker posed from it read as flickering at superspeed.
+    engine::Vec2 drawnAgentPos(int agentIndex, engine::Vec2* heading = nullptr) const;
+    // Is anyone in this driver's car? Only while it is on a trip (moving; a bus or a cab on duty; the car you ride)
+    bool carOccupied(int agentIndex) const;
+    int loadMultiplier() const { return loadMul_; }
     // The stop-bar + lane-arrow paint mesh (R6c), rebuilt from the graph;
     // public so the gate can assert paint never leaves the carriageway.
     engine::RenderMesh buildRoadMarkings() const;
@@ -470,6 +487,7 @@ private:
     // rather than stacking a second pole on every stop.
     std::vector<engine::Entity> busStopProps_;
     int busVariant_ = -1;   // fleet slot that draws as a bus (-1 = none)
+    int fireVariant_ = -1;  // ...and as a fire engine (a fire station's, stationed in its bays)
     Real busPrintAcc_ = 0;  // RT_PRINT_BUSES cadence
     CitySim sim_;
     std::vector<engine::Entity> carGroups_;   // one per car variant (body + colour)
@@ -490,6 +508,60 @@ private:
     std::vector<std::vector<int>> pedAgentIds_;           // ditto, ped group (P4)
     engine::Entity pedGroup_;
     engine::Entity pedSeatedGroup_;   // the drawn crowd's people sitting on benches and chairs (M5)
+    engine::Entity pedGroundGroup_;   // ... sitting on the grass (a picnic)
+    engine::Entity pedLieGroup_;      // ... lying on it (in the sun)
+    // THE MID-RANGE BAND (the 100k plan's M band; Glenn: "increase the number of people throughout the island"):
+    // far (V) agents within farCarRadius / farPedRadius, drawn from CitySim::farDrawPose as cheap stand-ins -- a
+    // two-box car per body slot, the box person -- in groups of their own (no physics proxy, no lamps)
+    std::vector<engine::Entity> farCarGroups_;
+    engine::Entity farPedGroup_;
+    // (far band ground heights: in the agent's draw cache below)
+    int farDrawn_ = 0;
+    // THE GPU CROWD'S FEED (crowd.comp; when the renderer has it, it replaces the CPU band above): one record per far
+    // traveller (V or D, on a trip), its remaining route in an append-only arena compacted when the garbage
+    // outweighs the live. Each frame re-reads only the agents the sim says changed (CitySim::takeCrowdChanges).
+    void feedGpuCrowd(engine::FrameContext& ctx);
+    bool crowdInit_ = false, gpuCrowd_ = false;
+    std::vector<engine::Renderer::CrowdAgent> crowdRec_;
+    std::vector<int> crowdSlot_, crowdOwner_, crowdFree_, crowdChanges_;
+    // per slot: the route its arena span was laid for (size, first and last link) and the leg the span starts at --
+    // the same route next tick reuses the span (only its distance and clock change)
+    struct CrowdSpan { uint32_t size = 0; int first = -1, last = -1, baseLeg = 0; };
+    std::vector<CrowdSpan> crowdSpan_;
+    std::vector<uint32_t> crowdArena_, crowdDirtySlots_;
+    std::size_t crowdGarbage_ = 0;
+    std::vector<float> crowdLinkLen_;   // per link: its length as the shader measures it (xz, end to end)
+    Real farCarDistance = 4000.0, farPedDistance = 1500.0;
+    int crowdLive_ = 0, crowdDrawnSeen_ = 0;
+    long lastDormantEvents_ = 0;      // the stats line's sleepers' events since the last line
+    double lastDormantMs_ = 0;
+    Real farCarRadius = 900.0, farPedRadius = 700.0;
+    // PEOPLE INSIDE (campus M4): a streamed interior shows the agents the sim has indoors there -- sitting, and
+    // standing (a lecturer) or lying (asleep) on the standing body. stepIndoors refreshes them once a second.
+    engine::Entity indoorSitGroup_, indoorBodyGroup_;
+    void stepIndoors(engine::World& world, Real dt);
+    Real indoorAcc_ = 1.0;
+    // record index -> whose people are drawn inside: the building's own place (kNoPlace: none) and each furnished shop
+    // unit's (Interactables::units; kNoPlace: no place found -- its pieces go with the building's)
+    struct BuildingPeople { PlaceId whole = kNoPlace; std::vector<PlaceId> unit; };
+    std::unordered_map<int, BuildingPeople> buildingPlace_;
+    std::vector<std::array<double, 5>> footpaths_;          // the parks' and the quad's walks (CitySimConfig)
+    std::vector<std::vector<std::array<double, 2>>> jogLoops_;   // the tracks to run (CitySimConfig)
+    std::vector<engine::CitySimConfig::ActivityAreaSpec> activityAreas_;   // the pitches, the lawns (CitySimConfig)
+    std::vector<std::array<double, 5>> sitSpots_;
+    std::vector<engine::CitySimConfig::GarageSpec> garages_;
+    // THE OPEN SIGNS: each authored place's PlaceId (kNoPlace: skipped), and who is on shift where (dealOpenSigns)
+    std::vector<PlaceId> placeOfAuthored_;
+    std::vector<uint16_t> onShift_;
+    PlaceId signWatch_ = kNoPlace;       // the nearest lit sign's place: opensigns? lists its staff
+    std::vector<uint8_t> signedPlace_;   // places with an OPEN sign (by PlaceId): the only ones staffOnShift counts
+    void dealOpenSigns(engine::World& world, engine::Settings& settings, engine::Vec3 cam);
+    int parkingTick_ = 0;   // (parking? telemetry every 60 frames)   // the drivable parking garages (CitySimConfig)   // seats that are not furniture: a fountain's rim (CitySimConfig)
+    std::unordered_map<int, std::vector<uint32_t>> indoorHeld_;   // record index -> spots our occupants hold, per piece
+    int indoorDrawn_ = 0;
+public:
+    int indoorDrawn() const { return indoorDrawn_; }
+private:
     engine::Entity signalGroups_[3];   // lit lens, indexed by SignalState (Green/Yellow/Red)
     engine::Entity signalPostGroup_;   // the static pole+arm+head assemblies
     engine::Entity parkBayGroup_;      // curbside bay outline markings (R6b)
@@ -547,8 +619,27 @@ private:
     // car bodies the frame actually pays for. This was computed and discarded,
     // which left the car share of the frame a guess with a 2.7x spread.
     int parkedDrawn_ = 0;
-    std::vector<Real> prevCarSpeed_;
-    mutable std::vector<engine::Vec3> smoothUp_;   // per-agent tilt low-pass
+    // THE DRAW CACHE (bytes per agent; Glenn: "Why do you keep putting off this work?"): what the drawers keep per
+    // agent -- its last car pose, its tilt low-pass, its speed for the brake-light test, its far-band ground height
+    // -- for the agents actually DRAWN (the near and mid-range ~2,000), not five arrays sized for all 100,000
+    // (~230 bytes each). Entries not touched for a while are swept.
+    struct PoseCache { Real x = 0, z = 0, hx = 0, hz = 0; int slot = -1; bool valid = false; engine::Mat4 m; };
+    struct AgentDrawCache {
+        PoseCache pose;
+        engine::Vec3 smoothUp{0, 0, 0};
+        Real prevSpeed = 0;
+        bool fresh = true;              // prevSpeed not yet seeded (the first look sees no deceleration)
+        Real farY = 0;
+        engine::Vec2 farYAt{1e30, 1e30};
+        uint32_t used = 0;
+    };
+    mutable std::unordered_map<int, AgentDrawCache> drawCache_;
+    mutable uint32_t drawBake_ = 0;
+    AgentDrawCache& drawCache(int ai) const {
+        AgentDrawCache& c = drawCache_[ai];
+        c.used = drawBake_;
+        return c;
+    }
     Real bakeDt_ = 1.0 / 60.0;                     // last step's dt (filter gain)   // last step's per-agent speed (brake decel)
     // debug ground rings, one per Agent::State (indexed by it)
     engine::Entity footprintGroups_[static_cast<int>(Agent::State::Count)]{};
@@ -565,11 +656,29 @@ private:
     std::vector<engine::Mat4> blockBake_;    // cached block-outline transforms
     std::vector<engine::Mat4> lotBake_;      // cached lot-outline transforms
     engine::AssetManager* assets_ = nullptr; // for bakes made after build() (bakePlanOutlines)
+    // THE BUSES' DESTINATION SIGNS (engine::busSignImages): one group per label (each route's, then NOT IN SERVICE),
+    // made on the first frame the renderer is at hand (the atlas is a texture); filled per step in syncCarLamps
+    std::vector<engine::Entity> busSignGroups_;
+    std::vector<int> busSignRow_;   // per route: its label's row
+    int busSignOff_ = -1;           // the NOT IN SERVICE row
+    int busSignsDrawn_ = 0;         // signs pushed this step (depots?)
+    engine::Vec3 busSignAt_{0, 0, 0};   // ...the last one's world position
+    bool busSignsTried_ = false;
+    engine::Mat4 busSignLocal_;     // the board on the bus, in its body's frame
+    void makeBusSigns(engine::FrameContext& ctx);
+    int busSignRowFor(int agent) const;
     bool planBaked_ = false;                 // the plan outlines bake on first show
     void bakePlanOutlines(engine::World& world);
     std::vector<engine::Mat4> colliderStripBake_;  // prism rims (base + top loops)
     std::vector<engine::Mat4> colliderPostBake_;   // prism vertical corner posts
     std::vector<int> signalLinks_;     // approach links that carry a signal (cached)
+    std::vector<uint8_t> siteShared_;  // by link: its signal shares an earlier one's pole and head (draws no lens)
+    std::vector<int> postLinkOf_;      // per signal-post instance: the link whose state its head shows
+
+    std::vector<int> parkedScratch_;   // the vehicles near the player (syncGroups)
+    // Each signal's three lens poses (red, amber, green), parallel to signalLinks_: the poles never move, and
+    // working them out every bake (a ground sample apiece) was 10.6 ms of the island's 13 ms sync for 4,727 signals
+    std::vector<std::array<engine::Mat4, 3>> signalLensCache_;
     // BUILD-TIME furniture adoption (device: the city places poles, the sim
     // reacts): per-link SignalSite overrides published by the level loader's
     // StreetFurniture component. Empty when the level placed none — then this

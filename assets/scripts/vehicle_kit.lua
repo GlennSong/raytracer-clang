@@ -317,12 +317,14 @@ function kit.lamps(P, car, S)
   local hy, ty = P.lamp_y, P.tail_y
   local hx = (lens.head_x or 0.70) * P.half_width(half - 0.25)
   local hwid, hhei = lens.head_w or 0.34, math.min(hy[2] - hy[1], 0.14)
+  -- SIDE NAMES ARE PHYSICAL (car_mesh.cpp): forward +Z, up +Y, the driver's LEFT is +X. These were swapped (+X
+  -- tagged "_r"), so every kit body blinked the opposite indicator (Glenn, 2026-10-20: "It uses the opposite light").
   for _, sx in ipairs({ 1, -1 }) do
     local part, at = kit.attach(S, { from = { sx * hx, hy[2] - hhei * 0.5, half + 1.0 }, dir = { 0, 0, -1 },
                                      size = { hwid, hhei, 0.045 }, embed = 0.012, mat = "lamp" })
     if part then
       car.polys[#car.polys + 1] = part
-      car.markers[#car.markers + 1] = { name = sx > 0 and "headlight_r" or "headlight_l", pos = at }
+      car.markers[#car.markers + 1] = { name = sx > 0 and "headlight_l" or "headlight_r", pos = at }
     end
   end
   if ty[1] < P.height then
@@ -333,7 +335,7 @@ function kit.lamps(P, car, S)
                                        size = { twid, thei, 0.045 }, embed = 0.012, mat = "lamp_red" })
       if part then
         car.polys[#car.polys + 1] = part
-        car.markers[#car.markers + 1] = { name = sx > 0 and "taillight_r" or "taillight_l", pos = at }
+        car.markers[#car.markers + 1] = { name = sx > 0 and "taillight_l" or "taillight_r", pos = at }
       end
     end
   end
@@ -583,10 +585,81 @@ S.small_truck = function()
       car.markers = car.markers or {}
       for _, sx in ipairs({ 1, -1 }) do
         car.polys[#car.polys + 1] = kit.box_part({ 0.22, 0.14, 0.05 }, { sx * 0.90, 1.05, boxBack + 0.005 }, 2.5, "lamp_red")
-        car.markers[#car.markers + 1] = { name = sx > 0 and "taillight_r" or "taillight_l", pos = { sx * 0.90, 1.05, boxBack + 0.01 } }
+        car.markers[#car.markers + 1] = { name = sx > 0 and "taillight_l" or "taillight_r", pos = { sx * 0.90, 1.05, boxBack + 0.01 } }
       end
       car.polys[#car.polys + 1] = kit.box_part({ 1.0, 0.25, boxL + 1.2 }, { 0, 0.72, -1.15 - boxL * 0.5 + 0.4 }, 1.0, "trim")
     end }
+end
+
+-- THE FIRE ENGINE (Glenn, 2026-10-13: "a fire truck should be an actual truck"): a pumper on a custom chassis,
+-- ~9.4 x 2.5 x 3.3 m (references: a US Type 1 engine, ~9-10 m long, 2.5 m wide, a 2.9-3.1 m crew cab). A tall crew
+-- cab over the front axle; behind it the red body of equipment COMPARTMENTS, each shut by a chrome roller door, a
+-- white stripe down the side; a ladder racked on top; a red light bar on the cab's roof; dual rear wheels.
+S.fire_engine = function()
+  local bodyL, bodyH, bodyY = 5.85, 2.05, 0.95      -- the body: length, height, its floor above the road
+  local zB0 = -1.55                                 -- the body's front, just behind the cab
+  local zB1 = zB0 - bodyL                           -- ...and its back
+  local zR = -4.85                                  -- the rear axle (duals)
+  local P = truck_cab{
+    name = "fire_engine", L = 3.1, W = 2.48, H = 3.05, clear = 0.40, r = 0.50, fo = 0.75, ro = 0.0,
+    axles = { zR, 0.80 },
+    glass = { cowl = 1.45, a_top = 1.05, c_top = -1.40, deck = -1.47, a_side = 1.00, c_side = -1.20, pillars = { 0.05 } },
+    belt = { { -1, 1.80 }, { 0.3, 1.80 }, { 0.8, 1.62 }, { 1, 1.38 } },
+    lamp_y = { 0.82, 1.00 }, grille_y = { 0.55, 1.25 }, color = { 0.70, 0.05, 0.05 },
+    extras = function(car)
+      local add = function(x) car.polys[#car.polys + 1] = x end
+      local zc = (zB0 + zB1) * 0.5
+      add(kit.box_part({ 2.46, bodyH, bodyL }, { 0, bodyY + bodyH * 0.5, zc }, 1.0, "body"))
+      -- the COMPARTMENTS: three a side, each a chrome roller door, the stripe below them
+      for _, sx in ipairs({ 1, -1 }) do
+        for i = 0, 2 do
+          local z = zB0 - 0.25 - 1.7 * i - 0.75
+          if i == 1 then z = z - 0.25 end            -- (the middle one stands clear of the rear wheels)
+          add(kit.box_part({ 0.03, 1.30, 1.45 }, { sx * 1.235, bodyY + 1.25, z }, 3, "chrome"))
+        end
+        add(kit.box_part({ 0.03, 0.14, bodyL - 0.1 }, { sx * 1.236, bodyY + 0.40, zc }, 3, "box"))   -- the stripe
+        add(kit.box_part({ 0.03, 0.14, 2.6 }, { sx * 1.245, 1.25, 0.0 }, 3, "box"))                   -- ...on the cab
+        add(kit.box_part({ 0.50, 0.55, 0.02 }, { sx * 0.95, 0.58, zR - 0.70 }, 3, "trim"))            -- mudflap
+        add(kit.box_part({ 0.22, 0.05, 0.45 }, { sx * 1.12, 0.62, 0.15 }, 3, "chrome"))               -- cab step
+      end
+      -- the LADDER racked on the body's roof: two rails and their rungs, forward over the cab's back
+      local lz0, lz1 = zB1 + 0.2, -0.3
+      for _, sx in ipairs({ 1, -1 }) do
+        add(kit.box_part({ 0.06, 0.10, lz1 - lz0 }, { sx * 0.42, bodyY + bodyH + 0.16, (lz0 + lz1) * 0.5 }, 3, "chrome"))
+        add(kit.box_part({ 0.08, 0.12, 0.08 }, { sx * 0.42, bodyY + bodyH + 0.06, lz0 + 0.6 }, 3, "chassis"))   -- its brackets
+        add(kit.box_part({ 0.08, 0.12, 0.08 }, { sx * 0.42, bodyY + bodyH + 0.06, lz1 - 1.6 }, 3, "chassis"))
+      end
+      local n = math.floor((lz1 - lz0) / 0.36)
+      for i = 1, n - 1 do
+        add(kit.box_part({ 0.80, 0.04, 0.04 }, { 0, bodyY + bodyH + 0.16, lz0 + i * (lz1 - lz0) / n }, 3, "chrome"))
+      end
+      -- the LIGHT BAR on the cab roof, the front bumper and the pump panel's gauges behind the cab
+      add(kit.box_part({ 1.70, 0.13, 0.30 }, { 0, 3.10, 0.75 }, 2.5, "lamp_red"))
+      add(kit.box_part({ 2.44, 0.32, 0.22 }, { 0, 0.62, 1.55 + 0.11 }, 3, "chrome"))
+      -- the rear: tail lamps on the body's back, the chassis rails under it
+      car.markers = car.markers or {}
+      for _, sx in ipairs({ 1, -1 }) do
+        add(kit.box_part({ 0.22, 0.16, 0.05 }, { sx * 0.95, bodyY + 0.30, zB1 - 0.005 }, 2.5, "lamp_red"))
+        car.markers[#car.markers + 1] = { name = sx > 0 and "taillight_l" or "taillight_r", pos = { sx * 0.95, bodyY + 0.30, zB1 - 0.01 } }
+        add(kit.box_part({ 0.10, 0.26, bodyL + 0.6 }, { sx * 0.45, 0.80, zc + 0.3 }, 3, "chassis"))
+      end
+      add(kit.box_part({ 2.30, 0.14, 0.12 }, { 0, 0.62, zB1 + 0.10 }, 3, "chrome"))   -- rear step
+      -- the LADDER UP THE BACK (the LadderSystem's: you climb it to the top, engine/ladder.h): two rails off the
+      -- body's back on stand-offs, a rung every 0.3 m, from the step to over the roof
+      local top = bodyY + bodyH + 0.35
+      for _, sx in ipairs({ 1, -1 }) do
+        add(kit.box_part({ 0.05, top - 0.55, 0.05 }, { sx * 0.22, 0.55 + (top - 0.55) * 0.5, zB1 - 0.10 }, 3, "chrome"))
+        add(kit.box_part({ 0.04, 0.04, 0.10 }, { sx * 0.22, bodyY + 0.6, zB1 - 0.05 }, 3, "chrome"))
+        add(kit.box_part({ 0.04, 0.04, 0.10 }, { sx * 0.22, bodyY + bodyH - 0.2, zB1 - 0.05 }, 3, "chrome"))
+      end
+      for y = 0.85, top - 0.1, 0.3 do
+        add(kit.box_part({ 0.44, 0.03, 0.03 }, { 0, y, zB1 - 0.10 }, 3, "chrome"))
+      end
+      car.duals = { [zR] = true }
+    end }
+  P.wheel_w = 0.30
+  P.track_half = 0.98
+  return P
 end
 
 -- THE SEMI (Class 8 conventional sleeper; references: ~4.1 m tall, 2.6 m wide, a 53 ft / 16.15 m trailer,

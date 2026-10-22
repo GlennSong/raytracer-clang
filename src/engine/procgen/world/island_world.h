@@ -125,7 +125,11 @@ struct IslandWorld {
 // the range, all drawn from the seed within sensible bounds.
 nlohmann::json islandTerrainBlock(uint32_t seed, double half = 10000.0);
 
-IslandWorld planIsland(const nlohmann::json& terrainBlock, double half = 10000.0, double cell = 20.0);
+// `keep` (optional; Glenn, 2026-10-20, re-planning the island on new ground): the places to keep -- each its name and
+// kind ("city" / "town" / "mountain town") and where it was; it is re-sited on the best flat ground within 900 m of
+// there (the new ground's), and keeps its name. No other place is added. Empty: the sites found and named afresh.
+IslandWorld planIsland(const nlohmann::json& terrainBlock, double half = 10000.0, double cell = 20.0,
+                       const std::vector<IslandSite>& keep = {});
 
 // HIKING TRAILS (ADR-0134): footpaths routed on the ground (gentle where they can, switchbacking where
 // they must, never over water) from each place's TRAILHEAD -- the edge of its limits facing the range --
@@ -158,9 +162,13 @@ void routeFreewayRoundCities(IslandWorld& w, const std::vector<std::pair<int, st
 
 // LINK ROADS from a city's arterials to the freeway (an interchange at each): the arterial ends nearest
 // the freeway, up to `maxLinks`, their freeway ends at least `spacing` apart, none longer than maxLength.
-// `streets` names each node's street (parallel to arterialNodes; empty: unnamed).
+// `streets` names each node's street (parallel to arterialNodes; empty: unnamed). `maxGrade` > 0: a candidate whose
+// ground climbs steeper than that over 150 m is passed over (the link's class limit: it could only be cut into the hill).
+// `cityStreets`: the city's street segments; a candidate that runs within 15 m of one it is within 30 deg of (past its
+// first 20 m) is passed over (the two would lie on top of each other: the builder reads that as an overpass).
 void linkCityToFreeway(IslandWorld& w, int site, const std::vector<Vec2>& arterialNodes, int maxLinks, double spacing, double maxLength = 700.0,
-                       const std::vector<std::string>& streets = {});
+                       const std::vector<std::string>& streets = {}, double maxGrade = 0.0,
+                       const std::vector<std::pair<Vec2, Vec2>>& cityStreets = {});
 
 // THE INTERCHANGES: every road that meets the freeway (a city's links, the pass, the mountain road)
 // CROSSES it -- carried on past, to a T on the first street it meets if there is one within 500 m, else
@@ -189,6 +197,8 @@ struct IslandMapLayer {
     float rgb[3] = {0.1f, 0.1f, 0.1f};
     double widthM = 10.0, minPx = 1.0;
     bool casing = false;                   // a dark edge round each line
+    std::string dash;                      // an SVG stroke-dasharray over the line in white (a railway's ties); empty: solid
+    std::string label;                     // its row in the map's legend; empty: none
 };
 struct IslandMapView {
     Vec2 centre{0, 0};
@@ -203,7 +213,9 @@ bool writeIslandMap(const IslandWorld& w, const std::string& pngPath, int px = 1
 // widths, the freeway and its ramps, the pass, links, rivers at their widths, city limits, labels --
 // and so is the terrain's line work: contours every 20 m (100 m heavier) and the coastline. The
 // shaded relief under it is one embedded image at the terrain's own resolution (a 20 m grid: vectors
-// would add nothing). Each layer is a group (<g id=...>), to toggle in Inkscape or a browser.
+// would add nothing). Each layer is a group (<g id=...>), to toggle in Inkscape or a browser. The freeway is
+// drawn as built (w.freewayRoute, the line the diamonds and the graph were laid on) once there is one, and a
+// LEGEND names everything drawn: the island's own roads, rivers, bus lines and signs, and each labelled layer.
 bool writeIslandSvg(const IslandWorld& w, const std::string& svgPath, const IslandMapView& view = {}, int reliefPx = 2000);
 
 }  // namespace engine

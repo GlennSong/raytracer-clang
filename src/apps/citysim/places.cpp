@@ -15,6 +15,8 @@ const char* placeTypeName(PlaceType type) {
         case PlaceType::Cafe:        return "cafe";
         case PlaceType::Restaurant:  return "restaurant";
         case PlaceType::Supermarket: return "supermarket";
+        case PlaceType::Bar:         return "bar";
+        case PlaceType::Club:        return "club";
         default:                return "?";
     }
 }
@@ -38,9 +40,11 @@ RetailKind retailKindFor(Vec2 site) {
     h ^= h >> 16; h *= 0x7feb352dU; h ^= h >> 15; h *= 0x846ca68bU; h ^= h >> 16;
     const uint32_t roll = h % 100u;
     RetailKind k;
-    if (roll < 25)      { k.type = PlaceType::Cafe;        k.openHour = 6.5; k.closeHour = 19.0; }
-    else if (roll < 45) { k.type = PlaceType::Restaurant;  k.openHour = 11.0; k.closeHour = 23.0; }
-    else if (roll < 55) { k.type = PlaceType::Supermarket; k.openHour = 7.0; k.closeHour = 22.0; }
+    if (roll < 22)      { k.type = PlaceType::Cafe;        k.openHour = 6.5; k.closeHour = 19.0; }
+    else if (roll < 40) { k.type = PlaceType::Restaurant;  k.openHour = 11.0; k.closeHour = 23.5; }
+    else if (roll < 49) { k.type = PlaceType::Supermarket; k.openHour = 7.0; k.closeHour = 22.0; }
+    else if (roll < 57) { k.type = PlaceType::Bar;         k.openHour = 16.0; k.closeHour = 2.0; }
+    else if (roll < 60) { k.type = PlaceType::Club;        k.openHour = 21.0; k.closeHour = 3.0; }
     else                { k.type = PlaceType::Shop;        k.openHour = 9.0; k.closeHour = 20.0; }
     return k;
 }
@@ -97,8 +101,8 @@ PlaceId PlaceMap::add(PlaceType type, Vec2 site, const engine::NavGraph& graph,
     // ADR-0080: when the caller knows the real door, snap from IT -- the
     // entrance lands on the sidewalk in front of the door, not wherever is
     // nearest the footprint centroid (which can be around a corner).
-    p.entrance = snapToSidewalk(graph, entranceHint ? *entranceHint : site,
-                                p.entranceLink, p.entranceT);
+    p.door = entranceHint ? *entranceHint : site;
+    p.entrance = snapToSidewalk(graph, p.door, p.entranceLink, p.entranceT);
     p.openHour = openHour;
     p.closeHour = closeHour;
     p.capacity = capacity;
@@ -116,6 +120,33 @@ const std::vector<PlaceId>& PlaceMap::ofType(PlaceType type) const {
     static const std::vector<PlaceId> kEmpty;
     if (ti < 0 || ti >= static_cast<int>(PlaceType::Count)) return kEmpty;
     return byType_[ti];
+}
+
+int PlaceMap::snapToWalks(const engine::NavGraph& graph, Real reach, Real farFromStreet) {
+    int moved = 0;
+    std::vector<int> walks;
+    for (int li = 0; li < graph.linkCount(); ++li) if (graph.links[li].footpath) walks.push_back(li);
+    if (walks.empty()) return 0;
+    for (Place& p : places_) {
+        if ((p.entrance - p.door).length() < farFromStreet) continue;   // the street is at its door already
+        Real best = reach;
+        int bl = -1;
+        Real bt = 0;
+        for (int li : walks) {
+            const engine::NavLink& L = graph.links[li];
+            const Vec2 ab = L.footB - L.footA;
+            const Real len2 = ab.lengthSquared();
+            const Real t = len2 > 1e-9 ? std::clamp(dot(p.door - L.footA, ab) / len2, Real(0), Real(1)) : 0;
+            const Real d = (L.footA + ab * t - p.door).length();
+            if (d < best) { best = d; bl = li; bt = t; }
+        }
+        if (bl < 0) continue;
+        p.entranceLink = bl;
+        p.entranceT = bt;
+        p.entrance = graph.sidewalkPoint(bl, bt, 0);
+        ++moved;
+    }
+    return moved;
 }
 
 PlaceId PlaceMap::nearest(PlaceType type, Vec2 from) const {

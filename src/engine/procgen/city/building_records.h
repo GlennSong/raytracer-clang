@@ -29,6 +29,7 @@ struct BuildingRecord {
     bool enterable = false;
     std::string recipe, type, district;
     std::vector<Vec3> beacons;   // aviation lamp centres (BeaconLightSystem's sprites and lights)
+    std::vector<RoofItem> roof;  // what stands on the roof: the collider's walls, the roof cell's holes
 };
 
 struct CityBuildings {

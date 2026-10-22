@@ -108,12 +108,6 @@ std::vector<Vec2> fairHermite(const Vec2& p0, const Vec2& m0, const Vec2& p1, co
 }
 
 namespace {
-bool pointInTriangle(const Vec2& p, const Vec2& a, const Vec2& b, const Vec2& c) {
-    double d1 = cross(b - a, p - a), d2 = cross(c - b, p - b), d3 = cross(a - c, p - c);
-    bool neg = (d1 < 0) || (d2 < 0) || (d3 < 0);
-    bool pos = (d1 > 0) || (d2 > 0) || (d3 > 0);
-    return !(neg && pos);                        // inside (or on edge) of CCW/CW triangle
-}
 }  // namespace
 
 std::vector<double> roadProfile(const std::vector<double>& ground,
@@ -195,118 +189,11 @@ std::vector<TerrainFlatten> roadConformRegions(const std::vector<Vec2>& centerli
 }
 
 std::vector<std::array<int, 3>> triangulatePolygon(const std::vector<Vec2>& poly) {
-    std::vector<std::array<int, 3>> tris;
-    int n = static_cast<int>(poly.size());
-    if (n < 3) return tris;
-    // Drop consecutive duplicate vertices (incl. the wrap): coincident mouths at a sharp
-    // junction give the ring degenerate zero-length edges that would stall ear finding.
-    std::vector<int> v;
-    for (int i = 0; i < n; ++i)
-        if (v.empty() || (poly[i] - poly[v.back()]).length() > 1e-6) v.push_back(i);
-    while (v.size() >= 2 && (poly[v.front()] - poly[v.back()]).length() < 1e-6) v.pop_back();
-    if (v.size() < 3) return tris;
-    double area2 = 0.0;                                  // signed area of the cleaned ring
-    for (std::size_t i = 0; i < v.size(); ++i)
-        area2 += cross(poly[v[i]], poly[v[(i + 1) % v.size()]]);
-    if (area2 < 0.0) std::reverse(v.begin(), v.end());   // work CCW
-    int guard = 3 * n;                           // bound the search so a bad ring can't spin
-    while (static_cast<int>(v.size()) > 2 && guard-- > 0) {
-        int m = static_cast<int>(v.size());
-        bool clipped = false;
-        for (int i = 0; i < m; ++i) {
-            int ia = v[(i + m - 1) % m], ib = v[i], ic = v[(i + 1) % m];
-            const Vec2 &a = poly[ia], &b = poly[ib], &c = poly[ic];
-            if (cross(b - a, c - a) <= 1e-12) continue;   // reflex or collinear: not an ear
-            bool ear = true;                              // no other vertex inside the ear
-            for (int j = 0; j < m && ear; ++j) {
-                int ij = v[j];
-                if (ij == ia || ij == ib || ij == ic) continue;
-                const Vec2& q = poly[ij];                 // a zero-width hole bridge revisits a
-                if ((q - a).length() < 1e-6 ||            // corner under a different index; that
-                    (q - b).length() < 1e-6 ||            // coincident vertex isn't really "inside"
-                    (q - c).length() < 1e-6) continue;
-                if (pointInTriangle(q, a, b, c)) ear = false;
-            }
-            if (!ear) continue;
-            tris.push_back({ia, ib, ic});
-            v.erase(v.begin() + i);
-            clipped = true;
-            break;
-        }
-        if (!clipped) {
-            // No ear found (a near-degenerate ring from many bridged holes can stall the strict
-            // test). Rather than break and leave the rest of the deck as a hole, force-clip the
-            // sharpest convex corner to make progress — a tiny overlap beats a missing patch.
-            int best = -1; double bestCross = 1e-9; int mm = static_cast<int>(v.size());
-            for (int i = 0; i < mm; ++i) {
-                const Vec2 &a = poly[v[(i + mm - 1) % mm]], &b = poly[v[i]], &c = poly[v[(i + 1) % mm]];
-                double cr = cross(b - a, c - a);
-                if (cr > bestCross) { bestCross = cr; best = i; }
-            }
-            if (best < 0) break;                 // truly degenerate: nothing convex left
-            int i = best, mm2 = static_cast<int>(v.size());
-            tris.push_back({v[(i + mm2 - 1) % mm2], v[i], v[(i + 1) % mm2]});
-            v.erase(v.begin() + i);
-        }
-    }
-    return tris;
+    // the engine's one triangulator (triangulate.h); this was a second ear-clipper of its own
+    return triangulateIndices(poly, {});
 }
 
 namespace {
-// Weld coincident vertices into one shared, indexed mesh: collapse vertices that agree in position
-// (within posTol), normal, colour and UV into a single index, dropping triangles that go degenerate.
-// The independently-emitted ribbons and junction pads meet at the same coordinates but as SEPARATE
-// vertices (float drift -> hairline cracks / z-fight at the seam); welding fuses them into one
-// continuous surface, and turns the non-indexed soup into a compact indexed mesh. Crease edges
-// (different normals) and material seams (different colour) keep their own vertices, so nothing is
-// rounded over or smeared. (road-network-v2-plan T3.1)
-RenderMesh weldMesh(const RenderMesh& in, double posTol = 1e-3) {
-    RenderMesh out;
-    out.vertices.reserve(in.vertices.size());
-    out.indices.reserve(in.indices.size());
-    const double inv = 1.0 / posTol;
-    auto cell = [inv](double x) { return static_cast<long long>(std::floor(x * inv)); };
-    auto hash3 = [](long long x, long long y, long long z) {
-        std::uint64_t h = 1469598103934665603ull;
-        for (long long c : {x, y, z}) h = (h ^ static_cast<std::uint64_t>(c)) * 1099511628211ull;
-        return h;
-    };
-    std::unordered_map<std::uint64_t, std::vector<uint32_t>> grid;   // spatial hash -> welded indices
-    auto match = [posTol](const Vertex& a, const Vertex& b) {
-        auto c = [posTol](double x, double y) { return std::fabs(x - y) <= posTol; };
-        return c(a.position.x, b.position.x) && c(a.position.y, b.position.y) && c(a.position.z, b.position.z)
-            && c(a.normal.x, b.normal.x) && c(a.normal.y, b.normal.y) && c(a.normal.z, b.normal.z)
-            && c(a.color.x, b.color.x) && c(a.color.y, b.color.y) && c(a.color.z, b.color.z)
-            && c(a.u, b.u) && c(a.v, b.v);
-    };
-    std::vector<uint32_t> remap(in.vertices.size());
-    for (uint32_t i = 0; i < in.vertices.size(); ++i) {
-        const Vertex& v = in.vertices[i];
-        long long cx = cell(v.position.x), cy = cell(v.position.y), cz = cell(v.position.z);
-        uint32_t found = UINT32_MAX;
-        for (long long dx = -1; dx <= 1 && found == UINT32_MAX; ++dx)         // search the 27 neighbour
-            for (long long dy = -1; dy <= 1 && found == UINT32_MAX; ++dy)     // cells so a vertex pair
-                for (long long dz = -1; dz <= 1 && found == UINT32_MAX; ++dz) {  // straddling a cell edge
-                    auto it = grid.find(hash3(cx + dx, cy + dy, cz + dz));   // still welds
-                    if (it == grid.end()) continue;
-                    for (uint32_t cand : it->second)
-                        if (match(out.vertices[cand], v)) { found = cand; break; }
-                }
-        if (found == UINT32_MAX) {
-            found = static_cast<uint32_t>(out.vertices.size());
-            out.vertices.push_back(v);
-            grid[hash3(cx, cy, cz)].push_back(found);
-        }
-        remap[i] = found;
-    }
-    for (std::size_t t = 0; t + 2 < in.indices.size(); t += 3) {
-        uint32_t a = remap[in.indices[t]], b = remap[in.indices[t + 1]], c = remap[in.indices[t + 2]];
-        if (a != b && b != c && a != c) {            // drop triangles welding collapsed to a sliver
-            out.indices.push_back(a); out.indices.push_back(b); out.indices.push_back(c);
-        }
-    }
-    return out;
-}
 }  // namespace
 
 
@@ -867,6 +754,7 @@ double RoadDeckField::depthInside(double x, double z, int* spineOut) const {
     const Vec2 q(x, z);
     for (const Seg& sg : it->second) {
         const UnionSpine& sp = spines[sg.spine];
+        if (sp.use != UnionSpine::Use::Road) continue;   // the asphalt: not a viaduct's track or a way in
         const Vec2& a = sp.points[sg.i];
         const Vec2& b = sp.points[sg.i + 1];
         const Vec2 ab = b - a;
@@ -886,8 +774,15 @@ double RoadDeckField::depthInside(double x, double z, int* spineOut) const {
     return depth;
 }
 
+bool RoadDeckField::coversAny(double x, double z, double margin) const {
+    bool hit = false;
+    surfacesAt(x, z, margin, [&](double, bool, int, double, double, RoadClass) { hit = true; }, true);
+    return hit;
+}
+
 void RoadDeckField::surfacesAt(double x, double z, double margin,
-                               const std::function<void(double y, bool pad, int layer, double d, double hw, RoadClass klass)>& fn) const {
+                               const std::function<void(double y, bool pad, int layer, double d, double hw, RoadClass klass)>& fn,
+                               bool anyUse) const {
     const long long k = (static_cast<long long>(static_cast<int>(std::floor(x / cell_))) << 32) ^
                         (static_cast<long long>(static_cast<int>(std::floor(z / cell_))) & 0xffffffffLL);
     if (auto pit = padCells_.find(k); pit != padCells_.end()) {
@@ -911,6 +806,7 @@ void RoadDeckField::surfacesAt(double x, double z, double margin,
     const Vec2 q(x, z);
     for (const Seg& sg : it->second) {
         const UnionSpine& sp = spines[sg.spine];
+        if (sp.use != UnionSpine::Use::Road && !anyUse) continue;   // nothing on a street stands on a track or a way in
         const Vec2& a = sp.points[sg.i];
         const Vec2& b = sp.points[sg.i + 1];
         const Vec2 ab = b - a;

@@ -2,6 +2,7 @@
 #include "../../engine/procgen/vehicle/occupant.h"   // the seated manikin (M5)
 
 #include "../../engine/mesh_builder.h"
+#include "../../engine/procgen/person.h"
 
 #include <cmath>
 
@@ -13,73 +14,17 @@ using engine::MeshBuilder;
 
 namespace {
 
-// Append a coloured box (centred at `c`, dimensions `size`) into `out`.
-void addBox(engine::RenderMesh& out, Vec3 size, Vec3 c, Vec3 color) {
-    engine::RenderMesh b = MeshBuilder::box(size);
-    uint32_t base = static_cast<uint32_t>(out.vertices.size());
-    for (engine::Vertex v : b.vertices) {
-        v.position = v.position + c;
-        v.color = color;
-        out.vertices.push_back(v);
-    }
-    for (uint32_t i : b.indices) out.indices.push_back(base + i);
-}
-
-// Append a coloured box PITCHED about an X-axis pivot (for limbs: the hip or
-// shoulder line). `center` is the box centre before rotation; the whole box
-// rotates by `angle` around the line y = pivotY (z = 0 plane of the body).
-void addBoxPitched(engine::RenderMesh& out, Vec3 size, Vec3 c, Vec3 color,
-                   Real pivotY, Real angle) {
-    engine::RenderMesh b = MeshBuilder::box(size);
-    Real ca = std::cos(angle), sa = std::sin(angle);
-    uint32_t base = static_cast<uint32_t>(out.vertices.size());
-    for (engine::Vertex v : b.vertices) {
-        Vec3 p = v.position + c;
-        Real ry = p.y - pivotY, rz = p.z;
-        p.y = pivotY + ry * ca - rz * sa;
-        p.z = ry * sa + rz * ca;
-        v.position = p;
-        Vec3 n = v.normal;
-        v.normal = Vec3(n.x, n.y * ca - n.z * sa, n.y * sa + n.z * ca);
-        v.color = color;
-        out.vertices.push_back(v);
-    }
-    for (uint32_t i : b.indices) out.indices.push_back(base + i);
-}
-
-// Deterministic outfits for the person mesh: shirt / pants / skin triples.
-struct PersonOutfit { Vec3 shirt, pants, skin; };
-const PersonOutfit kOutfits[] = {
-    {{0.62, 0.35, 0.25}, {0.22, 0.24, 0.30}, {0.87, 0.68, 0.55}},
-    {{0.30, 0.42, 0.58}, {0.16, 0.16, 0.18}, {0.55, 0.38, 0.28}},
-    {{0.38, 0.50, 0.32}, {0.30, 0.26, 0.22}, {0.76, 0.56, 0.42}},
-    {{0.55, 0.48, 0.30}, {0.24, 0.28, 0.36}, {0.42, 0.29, 0.22}},
-    {{0.45, 0.32, 0.48}, {0.20, 0.20, 0.24}, {0.87, 0.68, 0.55}},
-    {{0.60, 0.58, 0.55}, {0.28, 0.22, 0.20}, {0.64, 0.46, 0.34}},
-    {{0.72, 0.62, 0.28}, {0.18, 0.22, 0.28}, {0.55, 0.38, 0.28}},
-    {{0.35, 0.55, 0.55}, {0.26, 0.24, 0.22}, {0.76, 0.56, 0.42}},
-    {{0.66, 0.30, 0.34}, {0.22, 0.26, 0.24}, {0.87, 0.68, 0.55}},
-    {{0.42, 0.38, 0.60}, {0.20, 0.18, 0.16}, {0.64, 0.46, 0.34}},
-    {{0.52, 0.56, 0.62}, {0.30, 0.30, 0.34}, {0.42, 0.29, 0.22}},
-    {{0.58, 0.44, 0.36}, {0.24, 0.20, 0.26}, {0.76, 0.56, 0.42}},
-    // LAST SLOT: the PLAYER's outfit (playerOutfit()) — a vivid red jacket over
-    // near-black trousers, deliberately absent from the muted walker palette
-    // above so the player reads instantly in a crowd. personOutfitCount()
-    // excludes it, so it is never dealt to a walker.
-    {{0.88, 0.12, 0.10}, {0.10, 0.10, 0.12}, {0.87, 0.68, 0.55}},
-};
-constexpr int kNumOutfits = static_cast<int>(sizeof(kOutfits) / sizeof(kOutfits[0]));
+// The outfits and the standing body are the engine's (procgen/person.h): the walkers wear them, and so can anything
+// else that stands a person (the scale lab).
+using engine::PersonOutfit;
+const int kNumOutfits = engine::personOutfitTotal();
 
 // Append a flat white quad (two triangles, +Y normal) — the building block of
 // the ground-projected debug meshes (strips, wedge edges/arc).
+// A flat quad on the ground, facing up whichever way round its corners come (the wedge's arc runs them the other
+// way): MeshBuilder::emitQuad winds it.
 void addQuadXZ(engine::RenderMesh& m, Vec3 a, Vec3 b, Vec3 c, Vec3 d) {
-    uint32_t base = static_cast<uint32_t>(m.vertices.size());
-    for (const Vec3& p : { a, b, c, d }) {
-        engine::Vertex v; v.position = p; v.normal = Vec3(0, 1, 0); v.color = Vec3(1, 1, 1);
-        m.vertices.push_back(v);
-    }
-    m.indices.push_back(base + 0); m.indices.push_back(base + 1); m.indices.push_back(base + 2);
-    m.indices.push_back(base + 0); m.indices.push_back(base + 2); m.indices.push_back(base + 3);
+    engine::MeshBuilder::emitQuad(m, a, b, c, d, Vec3(0, 1, 0), Vec3(1, 1, 1));
 }
 
 }  // namespace
@@ -87,12 +32,27 @@ void addQuadXZ(engine::RenderMesh& m, Vec3 a, Vec3 b, Vec3 c, Vec3 d) {
 int personOutfitCount() { return kNumOutfits - 1; }   // last slot = the player's
 
 engine::RenderMesh buildSeatedPersonMesh(int outfit) {
-    const PersonOutfit& o = kOutfits[((outfit % kNumOutfits) + kNumOutfits) % kNumOutfits];
+    const PersonOutfit& o = engine::personOutfit(outfit);
     engine::OccupantParams op;
     op.hipToHeel = 0.45;       // a bench or a chair
     op.sittingHeight = 0.86;
     op.backAngle = 8.0;        // sitting up
     op.armReach = 20.0;        // hands in the lap
+    op.shirt = o.shirt;
+    op.trousers = o.pants;
+    op.skin = o.skin;
+    return engine::buildSeatedOccupant(op);
+}
+// SITTING ON THE GRASS (a picnic): the seated body with its hip a hand off the ground, knees drawn up, feet flat in
+// front, leaning back a touch, hands round the knees. Origin at the hip, like the bench sitter's.
+engine::RenderMesh buildGroundSittingPersonMesh(int outfit) {
+    const PersonOutfit& o = engine::personOutfit(outfit);
+    engine::OccupantParams op;
+    op.hipToHeel = kGroundSitHip - 0.02;
+    op.thighRise = 38.0;
+    op.sittingHeight = 0.86;
+    op.backAngle = 14.0;
+    op.armReach = 42.0;
     op.shirt = o.shirt;
     op.trousers = o.pants;
     op.skin = o.skin;
@@ -111,25 +71,7 @@ int walkPoseIndex(Real& stridePhase, Real speed, Real dt) {
     return static_cast<int>(stridePhase * kWalkPoses) % kWalkPoses;
 }
 
-engine::RenderMesh buildPersonMesh(Real swing, int outfit) {
-    const PersonOutfit& o = kOutfits[((outfit % kNumOutfits) + kNumOutfits) % kNumOutfits];
-    engine::RenderMesh m;
-    // Proportions of a 1.8 m body, centred at mid-height (y in [-0.9, 0.9]) so it
-    // drops in wherever the old walker box went. Facing +Z; hips at y = -0.05,
-    // shoulders at y = 0.50. Legs swing opposed; arms counter-swing at ~70%.
-    const Real hipY = -0.05, shoulderY = 0.50;
-    addBoxPitched(m, Vec3(0.17, 0.85, 0.22), Vec3(-0.115, -0.475, 0), o.pants,
-                  hipY, swing);                                        // left leg
-    addBoxPitched(m, Vec3(0.17, 0.85, 0.22), Vec3(0.115, -0.475, 0), o.pants,
-                  hipY, -swing);                                       // right leg
-    addBox(m, Vec3(0.44, 0.60, 0.26), Vec3(0, 0.25, 0), o.shirt);      // torso
-    addBoxPitched(m, Vec3(0.12, 0.62, 0.16), Vec3(-0.29, 0.19, 0), o.shirt,
-                  shoulderY, -swing * 0.7);                            // left arm
-    addBoxPitched(m, Vec3(0.12, 0.62, 0.16), Vec3(0.29, 0.19, 0), o.shirt,
-                  shoulderY, swing * 0.7);                             // right arm
-    addBox(m, Vec3(0.26, 0.26, 0.26), Vec3(0, 0.70, 0), o.skin);       // head
-    return m;
-}
+engine::RenderMesh buildPersonMesh(Real swing, int outfit) { return engine::buildStandingPerson(swing, outfit); }
 
 engine::RenderMesh ringXZ(Real innerFrac, int segs) {
     engine::RenderMesh m;
@@ -139,13 +81,7 @@ engine::RenderMesh ringXZ(Real innerFrac, int segs) {
         Real t1 = (Real(i + 1) / segs) * 6.28318530718;
         Vec3 o0(std::cos(t0), 0, std::sin(t0)), o1(std::cos(t1), 0, std::sin(t1));
         Vec3 i0 = o0 * innerFrac, i1 = o1 * innerFrac;
-        uint32_t b = static_cast<uint32_t>(m.vertices.size());
-        for (const Vec3& p : { o0, o1, i1, i0 }) {
-            engine::Vertex v; v.position = p; v.normal = Vec3(0, 1, 0); v.color = white;
-            m.vertices.push_back(v);
-        }
-        m.indices.push_back(b + 0); m.indices.push_back(b + 1); m.indices.push_back(b + 2);
-        m.indices.push_back(b + 0); m.indices.push_back(b + 2); m.indices.push_back(b + 3);
+        addQuadXZ(m, o0, o1, i1, i0);
     }
     return m;
 }
@@ -153,23 +89,9 @@ engine::RenderMesh ringXZ(Real innerFrac, int segs) {
 engine::RenderMesh arrowXZ() {
     engine::RenderMesh m;
     const Vec3 white(1, 1, 1);
-    auto quad = [&](Vec3 a, Vec3 b, Vec3 c, Vec3 d) {
-        uint32_t base = static_cast<uint32_t>(m.vertices.size());
-        for (const Vec3& p : { a, b, c, d }) {
-            engine::Vertex v; v.position = p; v.normal = Vec3(0, 1, 0); v.color = white;
-            m.vertices.push_back(v);
-        }
-        m.indices.push_back(base + 0); m.indices.push_back(base + 1); m.indices.push_back(base + 2);
-        m.indices.push_back(base + 0); m.indices.push_back(base + 2); m.indices.push_back(base + 3);
-    };
-    quad(Vec3(-0.5, 0, 0), Vec3(0.5, 0, 0), Vec3(0.5, 0, 0.7), Vec3(-0.5, 0, 0.7));   // shaft
+    addQuadXZ(m, Vec3(-0.5, 0, 0), Vec3(0.5, 0, 0), Vec3(0.5, 0, 0.7), Vec3(-0.5, 0, 0.7));   // shaft
     // Arrow head (triangle) from z=0.6 to z=1.0.
-    uint32_t b = static_cast<uint32_t>(m.vertices.size());
-    for (const Vec3& p : { Vec3(-1.1, 0, 0.6), Vec3(1.1, 0, 0.6), Vec3(0, 0, 1.0) }) {
-        engine::Vertex v; v.position = p; v.normal = Vec3(0, 1, 0); v.color = white;
-        m.vertices.push_back(v);
-    }
-    m.indices.push_back(b + 0); m.indices.push_back(b + 1); m.indices.push_back(b + 2);
+    MeshBuilder::emitTri(m, Vec3(-1.1, 0, 0.6), Vec3(1.1, 0, 0.6), Vec3(0, 0, 1.0), Vec3(0, 1, 0), white);
     return m;
 }
 

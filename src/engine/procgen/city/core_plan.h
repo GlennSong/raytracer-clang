@@ -107,10 +107,33 @@ struct CoreMeshes {
     RenderMesh drywall;
     RenderMesh floor;
     RenderMesh stair;
+    RenderMesh shell;   // the bulkhead's outside faces and lid (the Trim part): what the roof sees
 };
 void emitCoreStorey(CoreMeshes& out, RenderMesh* colliderOut, const CorePlan& core,
                     const StoreyPlan& sp, Real baseY, const BuildingParams& params,
                     bool flightsUp, bool landing, bool walls = true);
+
+// THE ROOF EXIT (architectural toolkit, issue #105, step 1 -- Glenn, 2026-10-15: "a real building that is fully
+// accessible ... be able to exit out on the roof"): both stairs climb one more storey, from the top floor through
+// the roof slab onto the deck, inside a BULKHEAD -- the core's overrun standing on the roof over the whole core
+// rectangle, `kBulkheadH` tall and lidded, each stair's door in its front wall opening straight onto the deck. The
+// hoistways stay capped by the roof slab (their overrun is the empty room behind the stairs). The crown's painted
+// "roof access" box is gone where a core stands: the bulkhead IS the roof access.
+constexpr Real kBulkheadH = 2.9;
+// Whether this building's core reaches the roof: a flat roof, an open doorway (the building is enterable) and a
+// core that fits. The exterior grow, the streamed interior and the collider all ask this one question.
+bool coreReachesRoof(const BuildingParams& params);
+// The roof slab's holes: the stairs' shafts (the top flights rise through them).
+std::vector<Poly2> coreRoofHoles(const CorePlan& core);
+// A setback deck's holes: every shaft of the core -- the stairs AND the hoistways -- where the core climbs on
+// through the deck. A collider that caps a deck across the whole plan puts a plane through the shafts (Glenn's
+// walk of toolkit_lab, 2026-10-15: "the elevator threw me off before it got to my floor").
+std::vector<Poly2> coreDeckHoles(const CorePlan& core);
+// The bulkhead on the deck at `deckY` (world): the outer ring with the stair doors only, the lid, the stairs' shaft
+// skins inside it, and each stair's roof landing with the well guarded. `walls` false emits colliders only (the
+// exterior mesh carries the walls, as emitCoreShaftWalls does for the storeys).
+void emitCoreBulkhead(CoreMeshes& out, RenderMesh* colliderOut, const CorePlan& core, Real deckY,
+                      const BuildingParams& params, bool walls);
 
 // The shaft WALLS alone (inner and outer skins, the doors with their reveals)
 // for one storey: the PERMANENT half of the core. The exterior grow emits

@@ -65,10 +65,14 @@ struct BuildingRecipe {
                      // round: "more varied building shapes")
         BigBox,      // a BIG-BOX store on a whole block: the box at the back,
                      // a striped parking lot in front (Glenn, 2026-10-01)
-        TowerInPlaza // the 1961 New York model (Seagram): the tower pulled
+        TowerInPlaza,// the 1961 New York model (Seagram): the tower pulled
                      // 12-30 m back from the avenue, the front of the lot a
                      // paved PLAZA with pools, planters and benches
                      // (skyscrapers v2, ADR-0086 point 5)
+        Section,     // THE TOOLKIT'S SECTION (section.h, issue #105): the plan is `section` fitted to the lot's
+                     // rectangle, shrink-to-fit like the drum -- rounded corners, a stadium, and the shapes to come
+        Complex      // THE TOOLKIT'S COMPLEX (cells.h, issue #105 step 5): cells on one frame sharing faces --
+                     // `complex` says which (a bundle of tubes); each cell is grown as its own unit
     };
     Massing massing = Massing::LotPlan;
     BuildingParams params;      // style/windows/roof/floors, ready to grow
@@ -81,6 +85,25 @@ struct BuildingRecipe {
     // PodiumTower massing: how many of params.floors belong to the full-lot
     // podium (the rest rise in the tower). 0 elsewhere.
     int podiumFloors = 0;
+    // Section massing: the outline, as a DESCRIPTOR the lot pass fits to the site (never geometry: the record keeps
+    // the fitted plan). Rounded: a rectangle with corners of `radius`; Stadium: semicircular ends.
+    struct SectionSpec {
+        enum class Kind : uint8_t { None, Rounded, Stadium } kind = Kind::None;
+        Real radius = 0;        // Rounded: the corner radius (m), clamped to what the site can give
+    } section;
+    // Complex massing (cells.h): BundledTubes -- nx by ny tubes on the lot's box, each its own height (the Sears
+    // Tower's nine), fewer where a tube would be too narrow for a core.
+    // Courtyard -- four wings `depth` deep round an open court, the corners their own cells (a perimeter block).
+    // Ring -- `sides` cells `depth` deep round a court on a regular polygon that fills the lot (a round block).
+    struct ComplexSpec {
+        enum class Kind : uint8_t { None, BundledTubes, Courtyard, Ring, Twins, Mall } kind = Kind::None;
+        int nx = 3, ny = 3;
+        Real depth = 15.0;
+        int sides = 12;
+        Real gap = 12.0;         // Twins: the gap the sky bridge spans
+        int bridgeStorey = 0;    // Twins: 0 = two thirds of the way up (cells.h twinTowers)
+        Real bridgeW = 4.5;
+    } complex;
 };
 
 // LANDMARK archetypes: placed by the PLANNER (best-lot picks with quotas —
@@ -170,6 +193,15 @@ const char* architectRecipeName(int index);   // nullptr out of range
 bool architectRecipeByName(const std::string& name, uint32_t seed, Real coreness, Real shortSide, Real area,
                            BuildingRecipe& out);
 
+// Whether a recipe's upper floors are offices (BuildingParams::officeUse): a workplace, civic or commercial building
+// that is not a home, and not one with rooms of its own kind -- a hotel, a hospital, a school, a library, a museum, a
+// university, a church.
+bool officeUseFor(const std::string& recipe, const std::string& placeType, bool residential);
+// The civic building's own rooms (BuildingParams::civicRooms): university 1, library 2, museum 4, school 5,
+// hospital 6, church 7, cinema 8, fire station 9, police 10, courthouse 11, capitol 12, market hall 14, factory 15,
+// warehouse (brick warehouse, metal shed) 16, hotel 17 (its lobby), else 0.
+uint8_t civicRoomsFor(const std::string& recipe);
+
 // Pick a recipe for a lot in `tag`'s district. `shortSide`/`area` describe the
 // buildable footprint (the table filters recipes the lot can't carry — no
 // tower on a cottage lot). `coreness` is how deep into the city centre the
@@ -192,6 +224,20 @@ BuildingRecipe architectBlockLandmark(DistrictTag tag, Real shortSide, Real area
 // lot in front). BuildingParams::bigBox names the chain: 1 warehouse club, 2 electronics, 3 home improvement,
 // 4 discount store.
 BuildingRecipe architectBigBox(uint32_t seed);
+// THE CAMPUS's buildings by role (Lot::campus): 1 a teaching hall, 2 the library, 3 a residence hall, 4 the QUAD (a
+// green with paths, trees and benches; Massing::Park), 5 the SPORTS FIELD (a pitch, goals, bleachers).
+BuildingRecipe architectCampus(int role, uint32_t seed);
+// THE OPEN-AIR MALL (Santana Row; Glenn: "outdoor pedestrian walkways like they do at these upscale malls"): role 1 a
+// two- or three-storey building of shops fronting the paseo (stucco or stone, awnings, the mall's trade mix), role 2
+// the paseo -- Park massing, sculpted by the lot pass (sculptPaseo).
+BuildingRecipe architectPaseo(int role, uint32_t seed);
+// THE INDOOR MALL: a big-box site's box (bigBox 5) -- a concourse of shop units, an anchor, a food court (mallLayout).
+BuildingRecipe architectMall(uint32_t seed);
+// THE AMERICAN MALL (bigBox 6; ~/.claude/plans/malls-v2-and-managed-ground.md): wings off a skylit court, two 5.5 m
+// storeys round atria, anchors and entrances at the wing ends. The lot pass shapes its plan (mallArms, mallCourt).
+BuildingRecipe architectMallWings(uint32_t seed);
+// A BUS DEPOT's yard (Massing::Park, place type "depot"): sculpted by the lot pass (sculptBusDepot).
+BuildingRecipe architectBusDepot();
 // The chain's look on `p` (walls, cladding, the band's colour) and p.bigBox = chain.
 void dressBigBox(BuildingParams& p, int chain, uint32_t seed);
 

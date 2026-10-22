@@ -3,6 +3,7 @@
 #include "engine/procgen/city/roads/lanes/polyline_ops.h"
 
 #include <algorithm>
+#include <functional>
 #include <atomic>
 #include <cstdio>
 #include <cstdlib>
@@ -159,8 +160,76 @@ void buildFootprints(const RoadLabGraph& g, const LaneSet& L, const DeckHeight& 
         }
         if (!isl.empty()) out.median = unionSets(out.median, unionRings(isl));
     }
-    out.shoulder = shoulders.empty() ? PolySet{} : differenceSets(differenceSets(differenceSets(unionAll(shoulders), hull), out.surface), out.median);
-    out.sidewalk = sidewalks.empty() ? PolySet{} : differenceSets(differenceSets(differenceSets(differenceSets(unionAll(sidewalks), hull), out.surface), out.median), out.shoulder);
+    // SHOULDERS AND SIDEWALKS ARE CUT ONLY AT THEIR OWN LEVEL (Glenn, 2026-10-15: "where the elevated train deck goes
+    // over the sidewalk it removes that part of the sidewalk underneath it"). They were the union of every band minus
+    // the union of every lane, hull, median and shoulder -- in PLAN, so a track or freeway passing overhead cut the
+    // street's sidewalk away under it. Now each road's band is cut piece by piece: an overlap with a lane, another
+    // road's carriageway or shoulder, or a median, is taken out only where that cutter stands within sameLevelDz of
+    // this road there.
+    struct Cutter { PolySet set; Box2 box; int edge; int lane; };   // height: the edge's envelope, else the lane's own
+    std::vector<Cutter> laneCuts, hullCuts, shoulderCuts;
+    for (size_t li = 0; li < L.lanes.size(); ++li)
+        if (!out.footprints[li].empty()) laneCuts.push_back({out.footprints[li], bounds(out.footprints[li]), L.lanes[li].parent, static_cast<int>(li)});
+    for (size_t ei = 0; ei < g.edges.size(); ++ei) {
+        const EdgeSpec& e = g.edges[ei]; if (e.laneCount() == 0) continue;
+        const RoadClassSpec& c = g.cls(e); const double hw = g.hw(e);
+        PolySet in = fromRing(spineRing(e.xy, hw)); hullCuts.push_back({in, bounds(in), static_cast<int>(ei), -1});
+        if (c.shoulder > 0) { PolySet sh = fromRing(spineRing(e.xy, hw + c.shoulder)); shoulderCuts.push_back({sh, bounds(sh), static_cast<int>(ei), -1}); }
+    }
+    auto overlaps = [](const Box2& a, const Box2& b) { return a.maxX >= b.minX && b.maxX >= a.minX && a.maxY >= b.minY && b.maxY >= a.minY; };
+    auto heightOf = [&](const Cutter& c, const Vec2& q) { return c.edge >= 0 ? H.ownRoad(c.edge, q) : H.own(c.lane, q); };
+    // a median lies between lanes: it stands at the level of the nearest road's carriageway
+    auto medianHeight = [&](const Vec2& q) {
+        double best = 1e300, h = 0.0; const Box2 qb{q.x - 30, q.y - 30, q.x + 30, q.y + 30};
+        for (const Cutter& c : hullCuts) {
+            if (!overlaps(c.box, qb)) continue;
+            const EdgeSpec& e = g.edges[static_cast<size_t>(c.edge)];
+            const double d = project(e.xy, e.s, q).distance; if (d < best) { best = d; h = H.ownRoad(c.edge, q); }
+        }
+        return h;
+    };
+    // a point INSIDE a piece (a centroid can fall outside a bent one): its largest triangle's centre
+    auto inside = [&](const Polygon2& piece) {
+        const FlatMesh m = triangulatePolygon(piece); double bestA = -1; Vec2 best = piece.outer.empty() ? Vec2() : piece.outer[0];
+        for (const auto& t : m.tris) {
+            const Vec2 &A = m.verts[static_cast<size_t>(t[0])].xy, &B = m.verts[static_cast<size_t>(t[1])].xy, &C = m.verts[static_cast<size_t>(t[2])].xy;
+            const double a = std::fabs(cross(B - A, C - A)); if (a > bestA) { bestA = a; best = (A + B + C) / 3.0; }
+        }
+        return best;
+    };
+    auto cutAtLevel = [&](const Ring& bandRing, int owner, bool byShoulders) {
+        const PolySet band = fromRing(bandRing); const Box2 bb = bounds(band);
+        std::vector<PolySet> cuts;
+        auto consider = [&](const PolySet& X, const std::function<double(const Vec2&)>& heightAt) {
+            for (const Polygon2& piece : intersectSets(band, X)) {
+                if (piece.outer.size() < 3) continue;
+                const Vec2 q = inside(piece);
+                if (std::fabs(heightAt(q) - H.ownRoad(owner, q)) < g.rules.sameLevelDz) cuts.push_back(PolySet{piece});
+            }
+        };
+        for (const std::vector<Cutter>* set : {&laneCuts, &hullCuts})
+            for (const Cutter& c : *set) if (overlaps(c.box, bb)) consider(c.set, [&](const Vec2& q) { return heightOf(c, q); });
+        if (byShoulders)
+            for (const Cutter& c : shoulderCuts) if (overlaps(c.box, bb)) consider(c.set, [&](const Vec2& q) { return heightOf(c, q); });
+        for (const Polygon2& m : out.median)
+            if (overlaps(bounds(m), bb)) consider(PolySet{m}, medianHeight);
+        return cuts.empty() ? band : differenceSets(band, unionAll(cuts));
+    };
+    static const bool layersFlat = std::getenv("RT_LAYERS_FLAT") != nullptr;   // A/B: the old plan-only cut
+    if (layersFlat) {
+        out.shoulder = shoulders.empty() ? PolySet{} : differenceSets(differenceSets(differenceSets(unionAll(shoulders), hull), out.surface), out.median);
+        out.sidewalk = sidewalks.empty() ? PolySet{} : differenceSets(differenceSets(differenceSets(differenceSets(unionAll(sidewalks), hull), out.surface), out.median), out.shoulder);
+    } else {
+        std::vector<PolySet> sh, sw;
+        for (size_t ei = 0; ei < g.edges.size(); ++ei) {
+            const EdgeSpec& e = g.edges[ei]; if (e.laneCount() == 0) continue;
+            const RoadClassSpec& c = g.cls(e); const double hw = g.hw(e);
+            if (c.shoulder > 0) sh.push_back(cutAtLevel(spineRing(e.xy, hw + c.shoulder), static_cast<int>(ei), false));
+            if (c.sidewalk > 0) sw.push_back(cutAtLevel(spineRing(e.xy, hw + c.sidewalk), static_cast<int>(ei), true));
+        }
+        out.shoulder = sh.empty() ? PolySet{} : unionAll(sh);
+        out.sidewalk = sw.empty() ? PolySet{} : unionAll(sw);
+    }
     out.islands.clear(); out.enclosedBlocks = 0;
     for (const Polygon2& p : out.surface) for (const Ring& h : p.holes) { double a = std::fabs(ringArea(h)); if (a > 1.0 && a < 2000.0) out.islands.push_back(a); else if (a >= 2000.0) ++out.enclosedBlocks; }
 }
@@ -343,19 +412,24 @@ void buildSurfaces(const RoadLabGraph& g, const LaneSet& L, DeckHeight& H, Pavem
     std::fprintf(stderr, "lanelab: surfaces %zu tris: cdt %.1f s, cover %.1f s, heights %.1f s (%u threads), weld %.1f s, decks %.1f s\n", T.tris.size(), sCdt, sCover, sHeights, nThreads, sWeld, std::chrono::duration<double>(std::chrono::steady_clock::now() - tD0).count());
 }
 
-std::vector<FlatMesh> layerMeshes(const RoadLabGraph& g, const DeckHeight& H, const PolySet& layer, const std::vector<int>& roads, std::vector<Vec2>* spanning) {
-    std::vector<FlatMesh> out;
+std::vector<FlatMesh> layerMeshes(const RoadLabGraph& g, const DeckHeight& H, const PolySet& layer, const std::vector<int>& roads, std::vector<Vec2>* spanning, const std::vector<double>* band) {
+    std::vector<FlatMesh> out; const std::vector<char> want = H.edgeFlags(roads);
     for (const Polygon2& p : layer) {
         FlatMesh m = triangulatePolygon(p); if (m.tris.empty() || roads.empty()) continue;
-        for (DeckVertex& v : m.verts) v.z = H.layerHeight(roads, v.xy);
-        // a triangle steeper than any road can be (rise over its longest edge > 0.35, and more than a metre
-        // of it) joins two levels: drop it and rebuild the boundary so the slab's side faces follow the cut
+        for (DeckVertex& v : m.verts) v.z = H.layerHeight(want, roads, v.xy, band);
+        // a triangle steeper than any road can be (its plane's slope over 0.35, and a quarter metre or more of rise)
+        // joins two levels: drop it and rebuild the boundary so the slab's side faces follow the cut. The SLOPE, not
+        // rise over the longest edge: a sliver 10 m long and a centimetre wide climbing 1.2 m across its width read
+        // 12% and stayed -- a fin standing up beside the deck, its 0.3 m underside dropped straight down under it,
+        // so its top 0.3 m showed its back from one side (the island's see-through audit, 2026-10-14).
         std::vector<std::array<int, 3>> keep; keep.reserve(m.tris.size());
         for (const auto& t : m.tris) {
             const DeckVertex& a = m.verts[static_cast<size_t>(t[0])]; const DeckVertex& b = m.verts[static_cast<size_t>(t[1])]; const DeckVertex& c = m.verts[static_cast<size_t>(t[2])];
             const double rise = std::max({a.z, b.z, c.z}) - std::min({a.z, b.z, c.z});
-            const double run = std::max({distance(a.xy, b.xy), distance(b.xy, c.xy), distance(c.xy, a.xy)});
-            if (rise > 1.0 && rise > 0.35 * run) { if (spanning) spanning->push_back((a.xy + b.xy + c.xy) / 3.0); continue; }
+            const Vec2 ab = b.xy - a.xy, ac = c.xy - a.xy;
+            const double plan = std::fabs(cross(ab, ac));   // |n_up|, twice the plan area
+            const double nx = ab.y * (c.z - a.z) - (b.z - a.z) * ac.y, ny = (b.z - a.z) * ac.x - ab.x * (c.z - a.z);
+            if (rise > 0.25 && std::hypot(nx, ny) > 0.35 * plan) { if (spanning) spanning->push_back((a.xy + b.xy + c.xy) / 3.0); continue; }
             keep.push_back(t);
         }
         if (keep.size() != m.tris.size()) {
@@ -374,6 +448,15 @@ std::vector<int> layerRoads(const RoadLabGraph& g, bool anyRoad) {
     std::vector<int> roads;
     for (size_t i = 0; i < g.edges.size(); ++i) { const RoadClassSpec& c = g.cls(g.edges[i]); if (g.edges[i].laneCount() > 0 && (anyRoad || c.sidewalk > 0 || c.shoulder > 0 || c.median > 0)) roads.push_back(static_cast<int>(i)); }
     return roads;
+}
+
+std::vector<double> layerBands(const RoadLabGraph& g, LayerKind kind) {
+    std::vector<double> w(g.edges.size(), 0.0);
+    for (size_t i = 0; i < g.edges.size(); ++i) {
+        if (g.edges[i].laneCount() == 0) continue; const RoadClassSpec& c = g.cls(g.edges[i]);
+        w[i] = kind == kSidewalkLayer ? c.sidewalk : kind == kShoulderLayer ? c.shoulder : c.median;
+    }
+    return w;
 }
 
 }  // namespace roads::lanes

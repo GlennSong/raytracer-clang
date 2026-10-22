@@ -8,6 +8,7 @@
 #include "../../engine/world.h"
 #include "city_sim.h"
 
+#include <chrono>
 #include <cmath>
 
 namespace citysim {
@@ -44,6 +45,34 @@ constexpr Real kBackoffTime = 0.8;      // blocked -> stand still this long, re-
 // The walk cycle (kWalkPoses / walkPoseSwing / walkPoseIndex, city_meshes.h) is
 // SHARED with the third-person player body — one set of constants, one phase
 // rule, so the player and the crowd stride identically.
+void CityWalkerSystem::watchDrawn(Walker& w, Vec2 p, int path, Real dt, const CitySim& sim) {
+    constexpr Real kFastest = 5.0;   // m/s: past a sprint (the kickabout's runners top out at 4)
+    if (w.drawnValid && dt > 1e-6) {
+        const Real d = (p - w.drawnLast).length();
+        const Real sp = d / dt;
+        if (sp > kFastest && d > 0.2) {
+            SpeedEvent e;
+            e.at = clockSec_;
+            e.agent = w.agentId;
+            e.from = w.drawnLast;
+            e.to = p;
+            e.speed = sp;
+            e.pathFrom = w.drawnPath;
+            e.pathTo = path;
+            e.state = sim.describeAgent(w.agentId);
+            ++speedEventCount_;
+            if (std::getenv("RT_SPEED_LOG"))
+                std::fprintf(stderr, "[speeder] %.1f s: %.1f m/s, %.2f m (%.1f %.1f -> %.1f %.1f) drawn %d -> %d | %s\n", e.at, sp, d,
+                             e.from.x, e.from.y, e.to.x, e.to.y, e.pathFrom, e.pathTo, e.state.c_str());
+            speedEvents_.push_back(std::move(e));
+            if (speedEvents_.size() > 64) speedEvents_.erase(speedEvents_.begin());
+        }
+    }
+    w.drawnLast = p;
+    w.drawnValid = true;
+    w.drawnPath = path;
+}
+
 engine::MeshHandle CityWalkerSystem::poseMesh(engine::AssetManager& assets,
                                               int outfit, int pose) {
     int key = outfit * kWalkPoses + pose;
@@ -83,6 +112,16 @@ void CityWalkerSystem::spawnWalkers(engine::FrameContext& ctx) {
             w.agentId < 0 || w.agentId >= static_cast<int>(agents.size()) ||
             !sim.pedVisible(w.agentId);
         if (!stale) { ++wi; continue; }
+        if (w.agentId >= 0 && w.agentId < static_cast<int>(agents.size())) {
+            const Agent& ga = agents[static_cast<std::size_t>(w.agentId)];
+            const char* why = ga.mode != Agent::Mode::Pedestrian ? "got in a car"
+                              : ga.far()                          ? "left the near tier"
+                              : sim.riding(w.agentId)             ? "boarded a ride"
+                              : ga.indoors                        ? "went indoors"
+                                                                  : "stopped (not moving, not indoors?)";
+            gone_[w.agentId] = Gone{std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count(),
+                                    why, ga.pos};
+        }
         if (world.alive(w.entity)) {
             if (CharacterController* cc = world.get<CharacterController>(w.entity))
                 if (cc->characterId != engine::INVALID_CHARACTER)
@@ -100,14 +139,31 @@ void CityWalkerSystem::spawnWalkers(engine::FrameContext& ctx) {
         walkers_.pop_back();
     }
     // Membership of the CURRENT walker set, then grow the missing K peds.
-    haveWalker_.assign(agents.size(), 0);
+    if (haveWalker_.size() != agents.size()) haveWalker_.assign(agents.size(), 0);
+    else for (int id : haveSet_) haveWalker_[static_cast<std::size_t>(id)] = 0;   // (last step's marks only)
+    haveSet_.clear();
+    for (const Walker& w : walkers_) if (w.agentId >= 0 && w.agentId < static_cast<int>(agents.size())) haveSet_.push_back(w.agentId);
     for (const Walker& w : walkers_)
         if (w.agentId >= 0 && w.agentId < static_cast<int>(agents.size()))
             haveWalker_[w.agentId] = 1;
-    for (int i = 0; i < static_cast<int>(agents.size()); ++i) {
-        const Agent& a = agents[i];
+    // (a visible pedestrian is never far: the near list, in the same order -- not all 100k agents every step)
+    for (int i : sim.nearAgents()) {
+        const Agent& a = agents[static_cast<std::size_t>(i)];
         if (!sim.pedVisible(i)) continue;
         if (haveWalker_[i]) continue;
+        if (auto g = gone_.find(i); g != gone_.end()) {
+            const double now = std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+            if (now - g->second.at < 1.5) {
+                ++flickers_;
+                char b[600];
+                std::snprintf(b, sizeof b, "agent %d gone %.2f s (%s) at %.1f %.1f, back at %.1f %.1f: %s", i,
+                              now - g->second.at, g->second.why, g->second.pos.x, g->second.pos.y, a.pos.x, a.pos.y,
+                              sim.describeAgent(i).substr(0, 300).c_str());
+                flickerLog_.push_back(b);
+                if (flickerLog_.size() > 12) flickerLog_.erase(flickerLog_.begin());
+            }
+            gone_.erase(g);
+        }
 
         Entity e = world.create();
         // Spawn a little above the ghost's spot; the character settles under
@@ -220,6 +276,7 @@ void CityWalkerSystem::driveWalkers(engine::FrameContext& ctx) {
     const CitySim& sim = city_.sim();
     PhysicsWorld& pw = physics_.physicsWorld();
     Real dt = ctx.clock.fixedStep();
+    clockSec_ += dt;
 
     // Vehicle poses + speeds once for all walkers (the knockdown trigger): the
     // REAL vehicles (player's / promoted), plus the ambient planner cars — with
@@ -235,7 +292,8 @@ void CityWalkerSystem::driveWalkers(engine::FrameContext& ctx) {
         }
         carSpeed.push_back(s);
     });
-    for (const Agent& a : sim.agents()) {
+    for (int ni : sim.nearAgents()) {   // (the near list: a far car has no body -- see below)
+        const Agent& a = sim.agents()[static_cast<std::size_t>(ni)];
         if (a.mode != Agent::Mode::Driver || a.released || !a.moving) continue;
         // FAR CARS CANNOT RUN ANYONE OVER. This was the only place in citysim
         // that iterated far-tier agents: it gathered every moving driver in the
@@ -269,20 +327,48 @@ void CityWalkerSystem::driveWalkers(engine::FrameContext& ctx) {
 
         // SITTING (the furniture library, M5): the walker is drawn seated on its bench or chair -- hip on the seat,
         // facing out -- and its capsule parks inside the seat, out of everyone's way, until it gets up.
-        if (const CitySim::SeatSpot* st = sim.seatedOn(w.agentId)) {
+        // ...and on the grass (a picnic), or lying on it (in the sun): the same, on the ground under it
+        CitySim::RestPose rp;
+        bool restNow = sim.restPose(w.agentId, rp);
+        // A BODY sits down only once it has got there: its plan reaches the seat first, and drawing it on the seat
+        // at once snapped it the last metres (the watchdog: body -> resting at 40-170 m/s). Until then it walks on.
+        if (restNow && cc && cc->characterId != engine::INVALID_CHARACTER) {
+            const Vec3 bp = pw.characterPosition(cc->characterId);
+            if ((Vec2(bp.x, bp.z) - rp.pos).length() > 0.6 && w.drawnPath == 2) restNow = false;
+        }
+        if (restNow) {
             city_.simMutable().clearAgentTether(w.agentId);
+            const Real gy = rp.kind == CitySim::RestPose::Kind::Seat ? rp.hip - 0.45 : city_.floorAt(w.agentId, rp.pos.x, rp.pos.y);
             if (cc && cc->characterId != engine::INVALID_CHARACTER)
-                pw.setCharacterPosition(cc->characterId, Vec3(st->pos.x, st->hip - 0.45 + kCapsuleHalf + kCapsuleRadius, st->pos.y));
-            auto it = seatedMeshes_.find(w.outfit);
-            if (it == seatedMeshes_.end())
-                it = seatedMeshes_.emplace(w.outfit, ctx.assets.acquireMesh(buildSeatedPersonMesh(w.outfit),
-                                                                           "citywalk:seated" + std::to_string(w.outfit))).first;
-            if (Renderable* r = world.get<Renderable>(w.entity)) r->mesh = it->second;
-            w.facing = st->face;
-            t->position = Vec3(st->pos.x, st->hip, st->pos.y);
-            t->orientation = Quat::fromAxisAngle(Vec3(0, 1, 0), std::atan2(st->face.x, st->face.y));
+                pw.setCharacterPosition(cc->characterId, Vec3(rp.pos.x, gy + kCapsuleHalf + kCapsuleRadius, rp.pos.y));
+            const Quat yaw = Quat::fromAxisAngle(Vec3(0, 1, 0), std::atan2(rp.face.x, rp.face.y));
+            engine::MeshHandle mesh;
+            if (rp.kind == CitySim::RestPose::Kind::Seat) {
+                auto it = seatedMeshes_.find(w.outfit);
+                if (it == seatedMeshes_.end())
+                    it = seatedMeshes_.emplace(w.outfit, ctx.assets.acquireMesh(buildSeatedPersonMesh(w.outfit),
+                                                                               "citywalk:seated" + std::to_string(w.outfit))).first;
+                mesh = it->second;
+                t->position = Vec3(rp.pos.x, rp.hip, rp.pos.y);
+                t->orientation = yaw;
+            } else if (rp.kind == CitySim::RestPose::Kind::SitGround) {
+                auto it = groundSitMeshes_.find(w.outfit);
+                if (it == groundSitMeshes_.end())
+                    it = groundSitMeshes_.emplace(w.outfit, ctx.assets.acquireMesh(buildGroundSittingPersonMesh(w.outfit),
+                                                                                  "citywalk:groundsit" + std::to_string(w.outfit))).first;
+                mesh = it->second;
+                t->position = Vec3(rp.pos.x, gy + kGroundSitHip, rp.pos.y);
+                t->orientation = yaw;
+            } else {   // lying on its back, feet the way it faces
+                mesh = poseMesh(ctx.assets, w.outfit, 0);
+                t->position = Vec3(rp.pos.x, gy + kLieHalfDepth, rp.pos.y);
+                t->orientation = yaw * Quat::fromAxisAngle(Vec3(1, 0, 0), -engine::PI * 0.5);
+            }
+            if (Renderable* r = world.get<Renderable>(w.entity)) r->mesh = mesh;
+            w.facing = rp.face;
             if (PrevTransform* pt = world.get<PrevTransform>(w.entity)) pt->value = *t;
             w.haveLast = false;
+            watchDrawn(w, Vec2(t->position.x, t->position.z), 0, dt, sim);
             continue;
         }
 
@@ -300,15 +386,25 @@ void CityWalkerSystem::driveWalkers(engine::FrameContext& ctx) {
             // it queued at minGap. That is what "a bunch of guys stuck on a
             // fence" actually was: not the fence, the budget.
             city_.simMutable().clearAgentTether(w.agentId);
-            t->position = Vec3(g.pos.x, city_.groundHeightAt(g.pos.x, g.pos.y) +
-                                            kCapsuleHalf + kCapsuleRadius,
-                               g.pos.y);
-            if (g.speed > 0.05) w.facing = g.heading;
+            Vec2 hd;
+            Vec2 dp = city_.drawnAgentPos(w.agentId, &hd);   // through the tick, not hopping at it
+            // A BODY JUST GIVEN UP (the nearest-bodies budget): it was a metre or two behind its plan; ease that away
+            // over half a second instead of jumping to the plan (the watchdog: body -> posed at ~90 m/s)
+            if (w.drawnPath == 2 && w.drawnValid) w.handoff = w.drawnLast - dp;
+            if (w.drawnPath != 2 && w.drawnPath != 1) w.handoff = Vec2(0, 0);
+            {
+                const Real L = w.handoff.length(), ease = 3.0 * dt;
+                w.handoff = L > ease ? w.handoff * ((L - ease) / L) : Vec2(0, 0);
+                dp = dp + w.handoff;
+            }
+            t->position = Vec3(dp.x, city_.floorAt(w.agentId, dp.x, dp.y) + kCapsuleHalf + kCapsuleRadius, dp.y);
+            if (g.speed > 0.05) w.facing = hd;
             t->orientation = Quat::fromAxisAngle(
                 Vec3(0, 1, 0), std::atan2(w.facing.x, w.facing.y));
             const int pose = walkPoseIndex(w.stride, g.speed, dt);
             if (Renderable* r = world.get<Renderable>(w.entity))
                 r->mesh = poseMesh(ctx.assets, w.outfit, pose);
+            watchDrawn(w, Vec2(t->position.x, t->position.z), 1, dt, sim);
             continue;
         }
 
@@ -442,7 +538,7 @@ void CityWalkerSystem::driveWalkers(engine::FrameContext& ctx) {
                 pw.setCharacterPosition(
                     cc->characterId,
                     Vec3(g.pos.x,
-                         city_.groundHeightAt(g.pos.x, g.pos.y) + kCapsuleHalf +
+                         city_.floorAt(w.agentId, g.pos.x, g.pos.y) + kCapsuleHalf +
                              kCapsuleRadius,
                          g.pos.y));
                 pos = pw.characterPosition(cc->characterId);
@@ -464,6 +560,7 @@ void CityWalkerSystem::driveWalkers(engine::FrameContext& ctx) {
             w.heldFor = 0;
         }
         w.lastLead = lead;
+        watchDrawn(w, posXZ, 2, dt, sim);
 
         // The plan waits for the body (never outruns a blocked/downed walker),
         // and the debug widgets ring the REAL walker.
@@ -481,25 +578,152 @@ void CityWalkerSystem::driveWalkers(engine::FrameContext& ctx) {
 void CityWalkerSystem::fixedUpdate(engine::FrameContext& ctx) {
     spawnWalkers(ctx);
     driveWalkers(ctx);
+    // `who? <id>`: one agent's whole state, answered every step while asked (poll `who?`); its drawn body too
+    {
+        const std::string q = ctx.settings.getString("who.query", "");
+        if (!q.empty()) {
+            const int id = std::atoi(q.c_str());
+            std::string r = city_.sim().describeAgent(id);
+            for (const Walker& w : walkers_)
+                if (w.agentId == id) {
+                    char b[160];
+                    std::snprintf(b, sizeof b, " | drawn at %.1f %.1f as %s", w.drawnLast.x, w.drawnLast.y,
+                                  w.drawnPath == 0 ? "resting" : w.drawnPath == 1 ? "posed from the plan" : w.drawnPath == 2 ? "a body" : "?");
+                    r += b;
+                }
+            ctx.settings.setString("who.result", q + ": " + r);
+        }
+    }
+    // The population scan: this step's slice of it (the whole pass spans the 2 s window).
+    {
+        const CitySim& sm = city_.sim();
+        const std::size_t n = sm.agents().size();
+        const ActivityCatalog& cat = sm.activityCatalog();
+        const engine::NavGraph& ng = sm.nav();
+        PopScan& S = scan_;
+        if (S.at.size() != cat.defs.size()) {
+            S.at.assign(cat.defs.size(), 0); S.going.assign(cat.defs.size(), 0);
+            S.nearD.assign(cat.defs.size(), 1e30); S.nearAt.assign(cat.defs.size(), Vec2(0, 0));
+        }
+        const std::size_t perStep = std::max<std::size_t>(1, n / std::max(1, static_cast<int>(1.9 / ctx.clock.fixedStep())) + 1);
+        const std::size_t end = std::min(n, S.next + perStep);
+        for (std::size_t i = S.next; i < end; ++i) {
+            const Agent& a = sm.agents()[i];
+            if (const CitySim::ActivitySpot* sp = sm.usingSpot(static_cast<int>(i))) {
+                S.joggers += sp->kind == SpotKind::Jog ? 1 : 0;
+                if (sp->kind == SpotKind::Sit || sp->kind == SpotKind::Lie) {   // seatedOn()
+                    ++S.seated;
+                    const Real d = (sp->pos - sm.tierCenter()).length();
+                    if (d < S.seatD) { S.seatD = d; S.seatAt = sp->pos; }
+                }
+            }
+            if (a.moving) {
+                if (a.tripActivity >= 0 && a.tripActivity < static_cast<int>(cat.defs.size()))
+                    ++S.going[static_cast<std::size_t>(a.tripActivity)];
+            } else if (a.atActivity >= 0 && a.atActivity < static_cast<int>(cat.defs.size())) {
+                const std::size_t d = static_cast<std::size_t>(a.atActivity);
+                ++S.at[d];
+                const Real dd = (a.pos - sm.tierCenter()).lengthSquared();
+                if (dd < S.nearD[d]) { S.nearD[d] = dd; S.nearAt[d] = a.pos; }
+            }
+            if (!a.moving || a.leg < 0 || a.leg >= static_cast<int>(a.route.links.size())) continue;
+            const int li = a.route.links[static_cast<std::size_t>(a.leg)];
+            if (li < 0 || li >= ng.linkCount() || !ng.links[static_cast<std::size_t>(li)].footpath) continue;
+            ++S.onWalks;
+            S.studentsOnWalks += a.role == Agent::Role::Student ? 1 : 0;
+            if (S.onWalks == 1 && std::getenv("RT_WALK_DEBUG")) {
+                const engine::NavLink& L0 = ng.links[static_cast<std::size_t>(li)];
+                const int ai = static_cast<int>(i);
+                std::fprintf(stderr, "[walk debug] agent %d at %.1f %.1f link %d leg %d/%zu dist %.2f of %.2f speed %.2f far %d tier %d\n",
+                             ai, a.pos.x, a.pos.y, li, a.leg, a.route.links.size(), a.distOnLeg,
+                             L0.length, a.speed, a.far() ? 1 : 0, static_cast<int>(a.tier));
+                std::fprintf(stderr, "[walk debug]   gap %.2f minGap %.2f bodyLag %.2f tethered %d\n", sm.debugGap(ai), sm.debugMinGap(ai), a.bodyLag, a.tethered ? 1 : 0);
+                std::fprintf(stderr, "[walk debug]   state %d hold %.1f riding %d awaiting %d seatPhase %d playerControlled %d | link %d: %.1f %.1f -> %.1f %.1f (nodes %d -> %d, street nodes < %d); next:",
+                             static_cast<int>(a.state), a.holdTimer, sm.riding(ai) ? 1 : 0,
+                             sm.awaitingRide(ai) ? 1 : 0, a.seatPhase, a.playerControlled ? 1 : 0,
+                             li, L0.footA.x, L0.footA.y, L0.footB.x, L0.footB.y, L0.from, L0.to, ng.streetNodeCount());
+                for (std::size_t q = 1; q < std::min<std::size_t>(5, a.route.links.size()); ++q) {
+                    const engine::NavLink& Lq = ng.links[static_cast<std::size_t>(a.route.links[q])];
+                    std::fprintf(stderr, " [%s %.1f %.1f]", Lq.footpath ? "walk" : "street", Lq.footB.x, Lq.footB.y);
+                }
+                std::fprintf(stderr, "\n");
+            }
+        }
+        S.next = end;
+        if (S.next >= n) {   // the pass is done: it becomes what the telemetry reads, and the next one starts
+            lastScan_ = std::move(S);
+            S = PopScan{};
+        }
+    }
     // Publish the jitter telemetry every 2 s of sim, then start a fresh window.
     tel_.window += ctx.clock.fixedStep();
     if (tel_.window >= 2.0) {
-        // ...and who is sitting (M5): how many, and the one nearest the player's bubble centre
         const CitySim& sm = city_.sim();
-        int seated = 0;
-        Vec2 seatAt(0, 0);
-        Real bestD = 1e30;
-        for (int i = 0; i < static_cast<int>(sm.agents().size()); ++i)
-            if (const CitySim::SeatSpot* st = sm.seatedOn(i)) {
-                ++seated;
-                const Real d = (st->pos - sm.tierCenter()).length();
-                if (d < bestD) { bestD = d; seatAt = st->pos; }
-            }
-        char b[320];
-        std::snprintf(b, sizeof b, "walkers %zu max %.1f m/s (agent %d at %.0f %.0f) reversals %ld of %ld steps (last at %.0f %.0f) | seated %d (nearest at %.1f %.1f)",
+        const PopScan& P = lastScan_;   // seated / footpaths / jogging: the latest whole pass
+        const int seated = P.seated, onWalks = P.onWalks, studentsOnWalks = P.studentsOnWalks, joggers = P.joggers;
+        const Vec2 seatAt = P.seatAt;
+        int playing = 0, games = 0, gathering = 0, signedUp = 0;   // a group's players on its area, and the games on
+        for (const CitySim::Session& se : sm.sessions()) {
+            if (se.state == CitySim::Session::State::Gathering) { ++gathering; signedUp += static_cast<int>(se.members.size()); }
+            if (se.state != CitySim::Session::State::Running) continue;
+            ++games;
+            for (int m : se.members) playing += sm.agents()[static_cast<std::size_t>(m)].seatPhase == 2 ? 1 : 0;
+        }
+        int jogBooked = 0;   // runners on their way: jog spots held
+        for (const CitySim::ActivitySpot& sp : sm.spots()) jogBooked += sp.kind == SpotKind::Jog && sp.occupant >= 0 ? 1 : 0;
+        char b[480];
+        std::snprintf(b, sizeof b, "walkers %zu max %.1f m/s (agent %d at %.0f %.0f) reversals %ld of %ld steps (last at %.0f %.0f) | seated %d (nearest at %.1f %.1f) | indoors drawn %d | students %d | on walks %d (students %d) | jogging %d (booked %d) | games %d (playing %d) gathering %d (%d coming)",
                       walkers_.size(), tel_.maxSpeed, tel_.maxAgent, tel_.maxAt.x, tel_.maxAt.y, tel_.reversals,
-                      tel_.steps, tel_.revAt.x, tel_.revAt.y, seated, seatAt.x, seatAt.y);
+                      tel_.steps, tel_.revAt.x, tel_.revAt.y, seated, seatAt.x, seatAt.y, city_.indoorDrawn(), sm.studentCount(),
+                      onWalks, studentsOnWalks, joggers, jogBooked, games, playing, gathering, signedUp);
         ctx.settings.setString("walkers.telemetry", b);
+        {   // the flicker watch: the count, the latest few (newest last); old departures forgotten
+            std::string f = std::to_string(flickers_) + " flickers (a body gone and back within 1.5 s)";
+            for (const std::string& e : flickerLog_) f += " || " + e;
+            ctx.settings.setString("walkers.flicker", f);
+            const double now = std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+            for (auto it = gone_.begin(); it != gone_.end();) it = now - it->second.at > 2.0 ? gone_.erase(it) : std::next(it);
+        }
+        // WHAT EVERYONE IS DOING (`activities?`): per activity in the catalog, how many are at it and how many on the
+        // way; its groups going and the nearest one to the bubble's centre (where to go and look)
+        {
+            const ActivityCatalog& cat = sm.activityCatalog();
+            std::vector<int> groups(cat.defs.size(), 0);
+            const bool scanned = P.at.size() == cat.defs.size();   // false until the first pass finishes
+            auto atOf = [&](std::size_t d) { return scanned ? P.at[d] : 0; };
+            auto goingOf = [&](std::size_t d) { return scanned ? P.going[d] : 0; };
+            for (const CitySim::Session& se : sm.sessions())
+                if (se.state != CitySim::Session::State::Dead && se.def >= 0 && se.def < static_cast<int>(cat.defs.size()))
+                    ++groups[static_cast<std::size_t>(se.def)];
+            std::string out;
+            char line[200];
+            for (std::size_t d = 0; d < cat.defs.size(); ++d) {
+                if (!atOf(d) && !goingOf(d) && !groups[d]) continue;
+                std::snprintf(line, sizeof line, "%s%s %d (+%d coming)", out.empty() ? "" : " | ", cat.defs[d].name.c_str(), atOf(d), goingOf(d));
+                out += line;
+                if (groups[d]) { std::snprintf(line, sizeof line, " %d groups", groups[d]); out += line; }
+                if (atOf(d)) { std::snprintf(line, sizeof line, " nearest %.0f %.0f", P.nearAt[d].x, P.nearAt[d].y); out += line; }
+            }
+            ctx.settings.setString("activities.telemetry", out.empty() ? "nobody out" : out);
+        }
+        // THE SPEEDERS (`speeders?`): how many drawn steps went past a sprint, and the latest few, each with the
+        // agent's state at that moment and how it was drawn before and after (0 resting, 1 posed from the plan, 2 body)
+        {
+            std::string out;
+            char line[200];
+            std::snprintf(line, sizeof line, "%ld steps past 5 m/s since start; sim ticking at 1/%d of its rate (adaptive load)",
+                          speedEventCount_, city_.loadMultiplier());
+            out += line;
+            const std::size_t n = speedEvents_.size();
+            for (std::size_t k = n > 6 ? n - 6 : 0; k < n; ++k) {
+                const SpeedEvent& e = speedEvents_[k];
+                std::snprintf(line, sizeof line, " || %.1f s: %.1f m/s %.1f %.1f -> %.1f %.1f drawn %d->%d: ", e.at, e.speed, e.from.x,
+                              e.from.y, e.to.x, e.to.y, e.pathFrom, e.pathTo);
+                out += line;
+                out += e.state;
+            }
+            ctx.settings.setString("speeders.telemetry", out);
+        }
         tel_ = Telemetry{};
     }
 }
@@ -509,6 +733,8 @@ void CityWalkerSystem::onStop(engine::FrameContext&) {
     // same no-removal-hook note as the vehicle bridge — fine at level teardown).
     walkers_.clear();
     poseMeshes_.clear();
+    seatedMeshes_.clear();
+    groundSitMeshes_.clear();
 }
 
 }  // namespace citysim

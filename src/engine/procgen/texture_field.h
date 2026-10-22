@@ -49,6 +49,7 @@ Field2 fieldCellEdges(uint32_t seed, int period);   // distance to the nearest c
 Field2 fieldCellId(uint32_t seed, int period);      // a random value per cell (plates, pebbles, tones)
 // Sine bands across v, `count` a tile (ripples, strata): 0.5 + 0.5 sin(2 pi count v).
 Field2 fieldBands(double count);
+Field2 fieldStripes(double count);   // as fieldBands, across u: stripes running along v (a blade's veins, a grain)
 // BLADES: `count` tapered blades rooted along v = 0, growing up v, each its own height (minHeight..1
 // of the tile), root width (`width`, a fraction of the tile) and curving lean (up to `lean` of its
 // height, either way). Tiles across u, not v. The mask is 1 inside a blade; the tone is a random
@@ -66,6 +67,9 @@ Field2 fieldPow(Field2 a, double e);
 // Domain warp: sample `a` at (u, v) displaced by (du, dv) (fields in [0, 1], centred on 0.5)
 // times `amount`, wrapped to the unit square -- tile-preserving when du, dv tile.
 Field2 fieldWarp(Field2 a, Field2 du, Field2 dv, double amount);
+// `a` repeated ku times across u and kv times along v: still tileable (whole repeats), and the way to stretch a
+// pattern one way -- cells squeezed across u read as bark's vertical furrows, across v as a birch's dashes.
+Field2 fieldRepeat(Field2 a, int ku, int kv);
 
 // --- colour fields: an RGB value over (u, v), LINEAR albedo ---
 using ColorField2 = std::function<Vec3(double u, double v)>;

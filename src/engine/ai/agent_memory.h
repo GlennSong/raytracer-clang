@@ -90,6 +90,8 @@ public:
         return nullptr;
     }
     void clear() { tracks_.clear(); }
+    // ...and give back the storage (an agent going dormant: rebuilt on waking, nothing to keep)
+    void release() { std::vector<TrackedBody>().swap(tracks_); }
 
 private:
     TrackedBody* find(int id) {

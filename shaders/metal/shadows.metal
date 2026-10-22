@@ -42,7 +42,7 @@ vertex float4 terrainVertexShadow(
     float dist = distance(lightCamera.cameraPosition, pos);
     float k = saturate((dist - terrain.morphStart) /
                        max(terrain.morphEnd - terrain.morphStart, 1e-3));
-    float3 worldPos = mix(pos, morphTarget, k);
+    float3 worldPos = float3(pos.x, mix(pos.y, morphTarget.y, k), pos.z);   // (the target's x, z: its normal)
     return lightCamera.viewProjection * float4(worldPos, 1.0);
 }
 

@@ -136,6 +136,9 @@ RoadEntity roadTwin(const Result& r, double nodeSpacing, bool forLots, bool forN
     }
     for (const EdgeSpec& e : split) {
         if (e.xy.size() < 2) continue;
+        // a TRACK is not a road: nothing that routes on the twin (cars, walkers, lots, signs) may find it
+        // ...nor a FOOTWAY yet: no car may take it, and the walkers' station legs are owed
+        if (const auto tc = r.graph.classes.find(e.cls); tc != r.graph.classes.end() && (tc->second.track || tc->second.footway)) continue;
         const bool atGradeRamp = e.cls == "__ramp_at_grade";
         Line L; L.k = atGradeRamp ? RoadClass::Local : classOf(e); L.deck = L.k == RoadClass::Freeway || L.k == RoadClass::Ramp;
         L.edgeId = e.id;

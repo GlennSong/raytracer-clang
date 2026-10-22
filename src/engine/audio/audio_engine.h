@@ -4,7 +4,9 @@
 #include "../../handle.h"
 #include "../../rt_math.h"
 
+#include <algorithm>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <string>
 
@@ -64,6 +66,45 @@ struct PlaySound {
     AudioBus bus = AudioBus::Sfx;
 };
 
+// HOW LOUD A SPATIAL SOUND IS AT DISTANCE d (Glenn: "the train horn sounds the same inside a building and
+// pretty much anywhere you are in the world"). It used to be a straight line from full at 1 m to silence at
+// `range`, so a 600 m horn was still at half volume 300 m away. Now it is the free-field law: full out to the
+// reference distance, then -6 dB per doubling (ref / d), faded to silence over the last third of `range` so
+// a voice still ends at its range and can be culled there. `ref` <= 0 takes audioRefDistance(range): a
+// source that carries far is a loud one, heard at full volume from further off.
+inline Real audioRefDistance(Real range) { return std::max(Real(2), range * Real(0.05)); }
+inline float audioDistanceGain(Real d, Real ref, Real range) {
+    if (ref <= 0) ref = audioRefDistance(range);
+    if (d >= range) return 0.0f;
+    Real g = d <= ref ? Real(1) : ref / d;
+    const Real fadeFrom = range * (Real(2) / Real(3));
+    if (d > fadeFrom) {
+        const Real t = (range - d) / (range - fadeFrom);   // 1 at the fade's start, 0 at range
+        g *= t * t * (Real(3) - Real(2) * t);
+    }
+    return static_cast<float>(g);
+}
+// AIR ABSORPTION: air soaks up the high end with distance (a horn a few hundred metres off is a dull note,
+// not a bright one). The cutoff of the low-pass a voice is heard through at distance d.
+inline float audioAirCutoffHz(Real d) {
+    return static_cast<float>(Real(20000) / (Real(1) + std::max(Real(0), d) / Real(120)));
+}
+
+// WHAT A SOUND CROSSES to reach the ear: a building's walls, a car's cabin. A sound from one enclosure heard
+// in another passes the barriers of both (out of its own, into the listener's): the gains multiply, the
+// lower cutoff wins. The open air is enclosure 0 with no barrier.
+struct AudioBarrier {
+    float gain = 1.0f;
+    float cutoffHz = 20000.0f;
+};
+struct AudioEnclosure {
+    uint64_t id = 0;   // 0 = the open air
+    AudioBarrier barrier;
+};
+// Which enclosure a world point is in. Asked for the listener and for each spatial voice (again only when
+// it has moved a metre), so it should be a cheap lookup (a building index, not a ray).
+using AudioEnclosureQuery = std::function<AudioEnclosure(const Vec3&)>;
+
 class AudioEngine {
 public:
     AudioEngine();
@@ -93,7 +134,9 @@ public:
     // 2D playback (UI, music): no spatialization, pan honored.
     AudioVoiceHandle play(AudioClipHandle clip,
                           const AudioPlayParams& params = {});
-    // 3D playback at a world position: linear falloff to silence at `range`.
+    // 3D playback at a world position: audioDistanceGain to silence at
+    // `range`, air absorption, and the barriers between its enclosure and
+    // the listener's.
     AudioVoiceHandle playAt(AudioClipHandle clip, const Vec3& position,
                             Real range = 25.0,
                             const AudioPlayParams& params = {});
@@ -108,12 +151,26 @@ public:
     void setListener(const Vec3& position, const Vec3& forward,
                      const Vec3& up = Vec3(0, 1, 0),
                      const Vec3& velocity = Vec3());
+    // Where the walls are (see AudioEnclosureQuery). Unset = everything is in the open air.
+    void setEnclosureQuery(AudioEnclosureQuery query);
+    // The listener rides in a CABIN (a car, a bus, a train car): the listener's enclosure is `id` wherever
+    // the ear is (a chase camera hangs outside the car, but the player is in it), and any voice inside the
+    // box -- the car's own engine -- is in it too. Renewed every frame by whoever knows the vehicle; it
+    // lapses two update()s after the last call.
+    void setListenerCabin(uint64_t id, const Vec3& centre, const Quat& orientation,
+                          const Vec3& halfExtent, AudioBarrier barrier);
+    // The listener's enclosure as of the last update() (0 = open air): for tests and the debug readout.
+    uint64_t listenerEnclosure() const;
+    // The cabin the listener rides in, while it lasts (the renderer's "your own glass" box: AudioSystem).
+    bool listenerCabin(Vec3& centre, Quat& orientation, Vec3& halfExtent) const;
     void setMasterVolume(float volume);
     float masterVolume() const;
     void setBusVolume(AudioBus bus, float volume);
     float busVolume(AudioBus bus) const;
 
-    // Reclaim finished one-shot voices. Called once per frame (AudioSystem).
+    // Reclaim finished one-shot voices, and re-hear every spatial voice
+    // (distance, air, barriers -- eased over ~0.1 s so stepping through a
+    // door doesn't click). Called once per frame (AudioSystem).
     void update();
 
     // Manual mode only: mix the next `frameCount` stereo frames into `out`

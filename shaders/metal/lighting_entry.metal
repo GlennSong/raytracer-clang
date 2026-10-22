@@ -18,8 +18,8 @@ vertex VertexOut vertexMain(
 }
 
 // CDLOD terrain (ADR-0036). The node mesh is world-space (identity model); its
-// `tangent` holds the morph-target position — the height this vertex collapses to
-// on the next-coarser grid. Morph by camera distance so a node has already matched
+// `tangent` holds the morph target — y the height this vertex collapses to on the next-coarser grid, x and z that
+// grid's normal (ADR-0204). Morph by camera distance so a node has already matched
 // the coarser silhouette by the time its parent takes over (no pop, no crack). The
 // output is the same VertexOut as vertexMain, so it feeds the shared lit fragment.
 vertex VertexOut terrainVertexMain(
@@ -33,12 +33,13 @@ vertex VertexOut terrainVertexMain(
     float dist = distance(camera.cameraPosition, pos);
     float k = saturate((dist - terrain.morphStart) /
                        max(terrain.morphEnd - terrain.morphStart, 1e-3));
-    float3 worldPos = mix(pos, morphTarget, k);
+    float3 worldPos = float3(pos.x, mix(pos.y, morphTarget.y, k), pos.z);
+    float3 coarseN = float3(morphTarget.x, sqrt(max(0.0, 1.0 - morphTarget.x * morphTarget.x - morphTarget.z * morphTarget.z)), morphTarget.z);
 
     VertexOut out;
     out.position = camera.viewProjection * float4(worldPos, 1.0);
     out.worldPosition = worldPos;
-    out.worldNormal = normalize(float3(vertices[vid].normal));
+    out.worldNormal = normalize(mix(normalize(float3(vertices[vid].normal)), coarseN, k));
     out.worldTangent = float3(1.0, 0.0, 0.0);   // unused: terrain has no normal map
     out.texcoord = vertices[vid].texcoord;
     out.vertexColor = vertices[vid].color;

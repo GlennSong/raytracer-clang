@@ -83,7 +83,9 @@ void PlayingState::fixedUpdate(FrameContext& ctx) {
         systems[i]->fixedUpdate(ctx);
         const double one = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
         ms[i] += one;
-        if (one > 16.0) {   // a SPIKE: named now, not averaged away
+        // RT_SPIKE_MS=<ms> lowers the bar (default 16): a 10 ms bump every 2 s hides under 16
+        static const double spikeMs = std::getenv("RT_SPIKE_MS") ? std::atof(std::getenv("RT_SPIKE_MS")) : 16.0;
+        if (one > spikeMs) {   // a SPIKE: named now, not averaged away
             const System& sys = *systems[i];
             LOG_INFO << "[stats] SPIKE fixed " << one << " ms  " << typeid(sys).name();
         }

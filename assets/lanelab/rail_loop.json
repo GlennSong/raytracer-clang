@@ -1,0 +1,20 @@
+{
+  "name": "rail_loop",
+  "_note": "RAIL LAB (Glenn, 2026-10-10): one closed double-track loop (one track per direction, no switches), two stations, a valley the north straight bridges and a rise the south curve cuts through; a street beside Central for the bus line to come.",
+  "terrain": {"type": "procedural", "bounds": [-800, 800, -520, 520], "res": 4.0, "seed": 21,
+              "octaves": [[2.5, 180], [0.8, 60]],
+              "valleys": [{"x": 120, "width": 90, "depth": 14.0}],
+              "hills": [{"x": -560, "y": -60, "r": 160, "h": 10.0}]},
+  "rules": {"closing": 3.0, "bridge_h": 4.0, "pier_spacing": 24.0, "conform_w": 14.0},
+  "edges": [
+    {"id": "south", "class": "rail", "path": {"type": "polyline", "points": [[-400, -200], [400, -200]]},
+     "platforms": [{"name": "Central", "s0": 330, "s1": 470, "side": "both", "w": 4.5}]},
+    {"id": "east", "class": "rail", "path": {"type": "arc", "center": [400, 0], "r": 200, "a0": -90, "a1": 90}},
+    {"id": "north", "class": "rail", "path": {"type": "polyline", "points": [[400, 200], [-400, 200]]},
+     "platforms": [{"name": "Harbour", "s0": 600, "s1": 740, "side": "both", "w": 4.5}]},
+    {"id": "west", "class": "rail", "path": {"type": "arc", "center": [-400, 0], "r": 200, "a0": 90, "a1": 270}},
+    {"id": "station_road", "class": "local", "path": {"type": "polyline", "points": [[-260, -245], [260, -245]]}},
+    {"id": "central_way", "class": "footway", "path": {"type": "polyline", "points": [[-60, -240.5], [-60, -214], [-3, -214], [0, -211], [0, -189.95]]},
+     "floor": [[0, -200, -1000, 11]]}
+  ]
+}

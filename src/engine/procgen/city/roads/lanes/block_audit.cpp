@@ -81,11 +81,51 @@ std::vector<Poly2> blocksFromHoles(const std::vector<Ring>& holes, double simpli
     for (const Ring& h : rings) {
         Ring closed = h; closed.push_back(h.front());   // DP wants an open run: split the loop at its first point
         std::vector<size_t> keep = dpKeep(closed, simplify);
-        Poly2 poly; for (size_t i : keep) if (i + 1 < closed.size()) poly.push_back(closed[i]);
-        if (poly.size() < 3) continue;
-        double a = 0; for (size_t i = 0; i < poly.size(); ++i) { const Vec2& u = poly[i]; const Vec2& v = poly[(i + 1) % poly.size()]; a += u.x * v.y - v.x * u.y; }
-        if (a < 0) std::reverse(poly.begin(), poly.end());   // CCW, as extractBlocks would hand them
-        blocks.push_back(std::move(poly));
+        Poly2 simple; for (size_t i : keep) if (i + 1 < closed.size()) simple.push_back(closed[i]);
+        if (simple.size() < 3) continue;
+        // ...SIMPLIFIED ONLY INWARD. On the outside of a bend the simplified chord cuts back across the sidewalk
+        // (up to the tolerance, 1.5 m), and every pad laid to the block, with its feather, lifted the ground over
+        // the sidewalk and the ramps' shoulders -- the island's green patches (Glenn: "there are green patches so
+        // the road is not conforming right"; 34-169 m2 of block over the drawn pavement on the lab cities). So each
+        // chord moves inward by the most its run of the hole bulged out past it: across a curve it becomes the
+        // tangent behind the sidewalk, not the chord over it, and stays one long frontage. (Clipping the chords
+        // to the hole instead gave the curve back as ~5 m pieces the lots could not front: 9% of the island's
+        // buildings, 12237 -> 11128.)
+        const size_t m = simple.size();
+        double area2 = 0; for (size_t k = 0; k < m; ++k) { const Vec2& u = simple[k]; const Vec2& v = simple[(k + 1) % m]; area2 += u.x * v.y - v.x * u.y; }
+        const double side = area2 >= 0 ? 1.0 : -1.0;   // +1: CCW, the block on each edge's left
+        std::vector<Vec2> dirs(m), ins(m); std::vector<double> shift(m, 0.0);
+        for (size_t k = 0; k < m; ++k) {
+            const Vec2 a = closed[keep[k]], e = closed[keep[k + 1]] - a; const double L = std::hypot(e.x, e.y);
+            dirs[k] = L > 1e-9 ? Vec2{e.x / L, e.y / L} : Vec2{1, 0};
+            ins[k] = Vec2{-dirs[k].y * side, dirs[k].x * side};
+            for (size_t i = keep[k] + 1; i < keep[k + 1]; ++i) {
+                const Vec2 v = closed[i] - a;
+                shift[k] = std::max(shift[k], v.x * ins[k].x + v.y * ins[k].y);   // how far the hole's edge runs inside the chord
+            }
+        }
+        Poly2 tucked(m);
+        for (size_t k = 0; k < m; ++k) {
+            const size_t j = (k + m - 1) % m;   // corner k joins edge j to edge k: meet the two moved lines
+            const Vec2 pj{simple[k].x + ins[j].x * shift[j], simple[k].y + ins[j].y * shift[j]};
+            const Vec2 pk{simple[k].x + ins[k].x * shift[k], simple[k].y + ins[k].y * shift[k]};
+            const double den = dirs[j].x * dirs[k].y - dirs[j].y * dirs[k].x;
+            Vec2 c{(pj.x + pk.x) * 0.5, (pj.y + pk.y) * 0.5};
+            if (std::fabs(den) > 0.05) {
+                const double t = ((pk.x - pj.x) * dirs[k].y - (pk.y - pj.y) * dirs[k].x) / den;
+                const Vec2 q{pj.x + dirs[j].x * t, pj.y + dirs[j].y * t};
+                if (std::hypot(q.x - simple[k].x, q.y - simple[k].y) < 4.0 * std::max(simplify, 0.5)) c = q;   // a sharp corner's miter runs away
+            }
+            tucked[k] = c;
+        }
+        // The hole stays the last word: whatever a sharp corner left over the pavement is clipped off.
+        for (const Polygon2& pg : intersectSets(fromRing(tucked), fromRing(h))) {
+            if (pg.outer.size() < 3 || std::fabs(ringArea(pg.outer)) < 135.0) continue;
+            Poly2 poly(pg.outer.begin(), pg.outer.end());
+            double a = 0; for (size_t i = 0; i < poly.size(); ++i) { const Vec2& u = poly[i]; const Vec2& v = poly[(i + 1) % poly.size()]; a += u.x * v.y - v.x * u.y; }
+            if (a < 0) std::reverse(poly.begin(), poly.end());   // CCW, as extractBlocks would hand them
+            blocks.push_back(std::move(poly));
+        }
     }
     return blocks;
 }
@@ -192,11 +232,75 @@ std::function<bool(double, double)> lanesNearFreeway(const RoadDeckField& deck, 
     };
 }
 
+std::function<bool(const std::vector<Vec2>&)> lanesTrackKeepOut(const RoadDeckField& deck, const std::vector<RailTrack>& tracks) {
+    struct Cap { Vec2 a, b; double r; };
+    auto caps = std::make_shared<std::vector<Cap>>();
+    for (const RailTrack& t : tracks) {
+        if (t.pts.size() < 2) continue;
+        double s = 0;
+        for (std::size_t i = 0; i + 1 < t.pts.size(); ++i) {
+            const Vec2 a(t.pts[i].x, t.pts[i].z), b(t.pts[i + 1].x, t.pts[i + 1].z);
+            const double l = (b - a).length();
+            bool atStop = false;   // either side: the line's other track stands its own stop opposite
+            for (const RailStop& st : t.stops) atStop = atStop || (s + l >= st.s0 - 5.0 && s <= st.s1 + 5.0);
+            caps->push_back({a, b, atStop ? kStationClear : kTrackClear});
+            s += l;
+        }
+    }
+    for (const UnionSpine& sp : deck.spines) {
+        if (sp.use != UnionSpine::Use::Footway) continue;
+        for (std::size_t i = 0; i + 1 < sp.points.size(); ++i)
+            caps->push_back({sp.points[i], sp.points[i + 1], (i < sp.hw.size() ? sp.hw[i] : sp.halfWidth) + kFootwayClear});
+    }
+    if (caps->empty()) return {};
+    constexpr double kCell = 32;
+    auto key = [](int cx, int cz) { return (static_cast<long long>(cx) << 32) ^ static_cast<uint32_t>(cz); };
+    auto grid = std::make_shared<std::unordered_map<long long, std::vector<int>>>();
+    for (std::size_t k = 0; k < caps->size(); ++k) {
+        const Cap& c = (*caps)[k];
+        for (int cx = static_cast<int>(std::floor((std::min(c.a.x, c.b.x) - c.r) / kCell)); cx <= static_cast<int>(std::floor((std::max(c.a.x, c.b.x) + c.r) / kCell)); ++cx)
+            for (int cz = static_cast<int>(std::floor((std::min(c.a.y, c.b.y) - c.r) / kCell)); cz <= static_cast<int>(std::floor((std::max(c.a.y, c.b.y) + c.r) / kCell)); ++cz)
+                (*grid)[key(cx, cz)].push_back(static_cast<int>(k));
+    }
+    auto ptSeg = [](Vec2 q, Vec2 a, Vec2 b) {
+        const Vec2 ab = b - a; const double l2 = dot(ab, ab);
+        double t = l2 > 1e-12 ? dot(q - a, ab) / l2 : 0.0; t = std::clamp(t, 0.0, 1.0);
+        return (q - (a + ab * t)).length();
+    };
+    auto cross2 = [](Vec2 u, Vec2 v) { return u.x * v.y - u.y * v.x; };
+    auto segSeg = [ptSeg, cross2](Vec2 a, Vec2 b, Vec2 c, Vec2 d) {
+        const double d1 = cross2(b - a, c - a), d2 = cross2(b - a, d - a), d3 = cross2(d - c, a - c), d4 = cross2(d - c, b - c);
+        if (((d1 > 0) != (d2 > 0)) && ((d3 > 0) != (d4 > 0))) return 0.0;
+        return std::min({ptSeg(a, c, d), ptSeg(b, c, d), ptSeg(c, a, b), ptSeg(d, a, b)});
+    };
+    return [caps, grid, key, segSeg](const std::vector<Vec2>& foot) {
+        if (foot.size() < 3) return false;
+        double x0 = 1e30, x1 = -1e30, z0 = 1e30, z1 = -1e30;
+        for (const Vec2& v : foot) { x0 = std::min(x0, v.x); x1 = std::max(x1, v.x); z0 = std::min(z0, v.y); z1 = std::max(z1, v.y); }
+        std::vector<int> seen;
+        for (int cx = static_cast<int>(std::floor(x0 / kCell)); cx <= static_cast<int>(std::floor(x1 / kCell)); ++cx)
+            for (int cz = static_cast<int>(std::floor(z0 / kCell)); cz <= static_cast<int>(std::floor(z1 / kCell)); ++cz) {
+                auto it = grid->find(key(cx, cz));
+                if (it == grid->end()) continue;
+                for (int k : it->second) {
+                    if (std::find(seen.begin(), seen.end(), k) != seen.end()) continue;
+                    seen.push_back(k);
+                    const Cap& c = (*caps)[static_cast<std::size_t>(k)];
+                    if (pointInPolygon(foot, c.a)) return true;   // inside it altogether
+                    for (std::size_t i = 0; i < foot.size(); ++i)
+                        if (segSeg(c.a, c.b, foot[i], foot[(i + 1) % foot.size()]) < c.r) return true;
+                }
+            }
+        return false;
+    };
+}
+
 std::function<bool(double, double, double*)> lanesStreetHeight(const RoadDeckField& deck, double reach) {
     struct Seg { Vec2 a, b; double ya, yb, hw; };
     auto segs = std::make_shared<std::vector<Seg>>();
     for (const UnionSpine& sp : deck.spines) {
         if (sp.authoredDeck || sp.layer != 0 || sp.klass == RoadClass::Freeway || sp.klass == RoadClass::Ramp) continue;
+        if (sp.use != UnionSpine::Use::Road) continue;   // a pad faces a street, never the track over it
         if (sp.points.size() < 2 || sp.yAbs.size() != sp.points.size()) continue;
         for (std::size_t i = 0; i + 1 < sp.points.size(); ++i)
             segs->push_back({sp.points[i], sp.points[i + 1], sp.yAbs[i], sp.yAbs[i + 1], i < sp.hw.size() ? sp.hw[i] : sp.halfWidth});
@@ -299,7 +403,7 @@ std::vector<std::vector<Vec3>> insideBlock(const std::vector<Vec3>& polygon, con
 std::vector<TerrainFlatten> clipPadsToBlocks(const std::vector<LotBuilding>& lots, const std::vector<Poly2>& blocks, double sidewalk) {
     std::vector<TerrainFlatten> out; const double falloff = lanesPadFalloff(sidewalk); const BlockInset inside = blocksInset(blocks, falloff);
     for (const LotBuilding& lb : lots) {
-        if (lb.type == "park" || lb.type == "green" || lb.plan.size() < 3) continue;
+        if (lb.type == "park" || lb.type == "green" || (lb.plan.size() < 3 && lb.type != "depot")) continue;   // (a bus depot's yard is paved)
         // THE PAD HOLDS ITS WHOLE PARCEL; only the BLOCK EDGE gives up the feather. Shrinking the pad
         // by its feather on every side (it was) left a 4 m strip at every party line that neither
         // neighbour's pad owned — the outer 2 m of every plate and plaza stood on a ramp, and a
@@ -307,7 +411,28 @@ std::vector<TerrainFlatten> clipPadsToBlocks(const std::vector<LotBuilding>& lot
         // their blocks). Clipped to the block inset by the feather, the ramp still ends at the
         // block line — behind the sidewalk, never in the road — and neighbours meet at their lot line.
         const TerrainFlatten raw = lotPadFlatten(lb, 2.2 + falloff, falloff);
-        for (std::vector<Vec3>& poly : insideBlock(raw.polygon, inside, falloff, /*shrinkSelf=*/false)) out.push_back(makeFlattenPad(std::move(poly), lb.groundY, falloff));
+        std::vector<std::vector<Vec3>> pieces = insideBlock(raw.polygon, inside, falloff, /*shrinkSelf=*/false);
+        // ...BUT THE PAD HOLDS ITS WALLS. A building standing within a feather of its block line had that wall
+        // on the ramp, and where the street side is higher the ramp climbed it (floorplan census, measured on
+        // the drawn mesh 2026-10-14: 34 walls buried up to 1.3 m on six levels). Where the plan leaves the
+        // clipped pad, the plan is a pad too, at the same plane; inside a road's own footprint the road's plane
+        // still rules (applyFlatten: an inside beats any feather), so nothing rises through the pavement.
+        if (lb.plan.size() >= 3 && !pieces.empty()) {   // (a lot with no pad in any block raises nothing)
+            bool held = true;
+            for (const Vec2& v : lb.plan) {
+                bool in = false;
+                for (const std::vector<Vec3>& pc : pieces) {
+                    Poly2 ring; for (const Vec3& q : pc) ring.push_back(Vec2(q.x, q.z));
+                    if (pointInPolygon(ring, v)) { in = true; break; }
+                }
+                if (!in) { held = false; break; }
+            }
+            if (!held) {
+                std::vector<Vec3> walls; for (const Vec2& v : lb.plan) walls.push_back(Vec3(v.x, 0, v.y));
+                pieces.push_back(std::move(walls));
+            }
+        }
+        for (std::vector<Vec3>& poly : pieces) out.push_back(makeFlattenPad(std::move(poly), lb.groundY, falloff));
     }
     return out;
 }

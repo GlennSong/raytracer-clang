@@ -6424,6 +6424,21 @@ Open: piedmont's bundle is 5.2 GB, almost all of it grammar part meshes stored a
 soup — welding the parts is the size lever. `rt_bake --prune` keeps the newest bundle per level *path*
 without checking the key is still current, so a stale-tag bundle survives when it is the only one for its
 spelling of the path (`rt_bake` writes relative paths, `level_tests` absolute ones).
+
+**Addendum, 2026-10-05: shared blocks.** A day of lots-tag bumps wrote ~270 GB of near-identical bundles
+(each rebake a whole new file; the island's is 8 GB). Measured: bakes are deterministic (a from-scratch
+metro_v2_test rebake matched the cached bundle in 1643 of 1643 sections) and a campus change alters a few
+cells. So file bundles now align sections to 4 KB (`kFileSectionAlign`; memory bundles keep 64 B and old
+bundles still read), and `BundleWriter::addCloneSource` lets a new bundle clone a section from an earlier
+one with `FICLONERANGE` when its size, FNV **and bytes** match — the files share blocks on btrfs/XFS;
+elsewhere the bytes are written. `bakeLevel` clones from the level's newest previous bundle (relative and
+absolute paths alike, the one being replaced included) and from any copied-forward donor. A one-line
+campus change's rebake of metro_v2_test wrote 3.4 MB of 1.07 GB. Correctness does not rest on the hash:
+every section is still computed fresh, and a clone is confirmed byte for byte (a rotted or colliding
+source is refused and written instead). Rejected: a content-addressed section store (portable, and GC by
+refcount, but a new format and reader — kept for the housekeeping work) and incremental lots computation
+(the lots pass is global: one campus per city, distance rules, grading — weeks, and time is not the
+bottleneck). Operating guide: [docs/bakes.md](bakes.md).
 ## ADR-0085 — Two road generators, selected per entity: `shape:"lanelab"` beside `shape:"road"`
 
 **Status:** Accepted · **Date:** 2026-09-09
@@ -7193,6 +7208,25 @@ What is still open is phase 4, and it is not plumbing: a lanes city planned from
 `generate` **recipe** (`graphFromLevel` is file-oriented, and the producer's identity key would have
 to fold in the recipe and the terrain params or an edited recipe loads a stale city). Glenn on
 2026-09-20: "I want metro_v2 as it was" — so metro stays on the lattice until he asks.
+
+**Note (2026-10-14): the lattice retired.** Glenn: "deprecate that old lattice builder ... update those old scenes to
+use the new system and kill it off" (and: island_8 is the one that matters, metro_v2_test a useful test bed). Done:
+- **Levels.** metro_v2_test, piedmont, piedmont_mini, piedmont_roads (sharing piedmont's graph), coast_city, grown and
+  agent_lab are lane-built: `lanes_tool from-level` graphs in assets/lanelab/converted (agent_lab's theta loop by hand),
+  no perimeter freeway where a city never had one, metro_lanes' sidewalks (6 / 5.5 / 5 m): a paved sidewalk narrower
+  than the lot clearance (citysim sidewalk + 0.6 m) makes the lot pass read every block edge as carriageway --
+  metro_v2_test grew 3 buildings at 3.5 m and 1547 at these, piedmont 325 at 4 m and 4625 at these.
+  Retired: 11 unused labs; metropolis, hillcity, metro_hills, living_city (on lanes they showed what the lattice's plan
+  union and terrain drape hid -- near-parallel 24 m arterials overlapping, streets steeper than any class allows) and
+  freeway_lab, their recipes kept in assets/lanelab/sources for tools/lanes_corpus.py; weld_freeway_lab (a proof of the
+  lattice's welder) and city (the citylots producer's level); the Lua road cities (city_radial, city_lua, showcase,
+  twin_cities, lua_city_terrain) with city.road_mesh / city.solid. The web build opens arena.
+- **Code.** procgen/deprecated/roads, lattice_builder.cpp, the citylots producer, the editor's City Planner panel, its
+  Conform-terrain action (G) and its road re-mesh on edit -- interactive road building is shelved as GitHub #103: the
+  lanes builder makes a whole city at a time through the bundle (0.05 s for a lab, ~25 min for the island). The
+  lattice's plan union is also why a road drawn over or under another in the editor cut the other away. Lanes is the
+  default and only builder; the Clipper2/CDT submodules are required; the city pre-pass and the city producer ask the
+  builder (ownsNavGraph) rather than compare a name with the default. About 110 lattice-only test cases went with it.
 
 ## ADR-0090 — A level authors its own districts, and metro_lanes is the first city that needs it
 
@@ -9148,9 +9182,2161 @@ Lua exposes it as `poly.*` (section, resample, loft, box) with methods on the po
 **Decision.** Profile by stack sampling (eu-stack / gdb on the main thread), then take the largest cost, and check each step gives the same answers:
 - **"There and back?" is a component test.** `CitySim::assignPlaces` and `CitySim::build` ran two A* searches per candidate home/work pair (up to 24 candidates for each of 28,000 agents). Each failed search on an island of separate street networks floods everything reachable. `engine::stronglyConnected` (iterative Tarjan, findRoute's link rules) answers every pair from one linear pass; the errand stop (work → shop → home, with home ↔ work) closes a cycle, so it is a component test too. Place nodes are looked up once. Verified: 33,012 random pairs agree with findRoute; the island's startup report is identical. Playable 634 s → 117 s.
 - **Pads clipped to the blocks they touch.** `clipPadsToBlocks` cut all 12,856 lot pads against the union of every inset block (built block by block, quadratically): about half of the level load. The inset blocks are now kept as pieces with bounds (disjoint and hole-free, so Clipper's NonZero clip treats the list as their union), and each pad is cut against the pieces its bounds touch. A test compares it with the old algorithm: 245 pads each way, the same heights and areas. Level 103 → 40 s; playable → 61 s.
+- **...but a pad holds its walls (2026-10-14).** Clipped to the block inset by its feather, a pad stopped a metre short of the block line, and a building standing within that metre had its wall on the ramp -- climbing it where the street side is higher. Seen only once the floorplan census measured the DRAWN mesh (lodSurfaceHeight) instead of its model of it (the field dilated a cell, min'd with any road plane near): 33 walls buried up to 1.33 m across island_8, metro_planned/mountain/rivers and river_town. Where the plan leaves the clipped pad, the plan is a pad too, at the same plane; a road's own footprint still holds its plane (an inside beats any feather), and the deck-poke gates pass. The pyramid key hashes every flatten: no re-bake, the ground rebuilds on first load. Left: metro_v2_test (lattice) has one villa 6.8 m above its neighbour's pad across a shared parcel line; the 1 m mesh smears that step over the boundary cell, 9.16 m under a corner against the 9 m foundation reach -- a question for the lot pass's neighbour relief, not the pad.
 - **The population cache.** What `assignPlaces` decides for every agent (home, job, errand stop, doors, role, archetype, hours, commute, starting pose) and its commute statistics, written to `cache/population/<key>.pop`. The key is an FNV hash of everything `assignPlaces` reads: the nav graph (nodes, links with width, class, walkability), every place (with its hours), each agent's state before assignment (uid, brain, archetype, mode, speed, jittered hours, bus and taxi), the bus network, the shares, and a format number. Venues and relationships are cheap derivations, recomputed on every load. `RT_NOCACHE` turns it off, and `RT_POPULATION_VERIFY=1` decides anyway and compares. `assignPlaces` 5.5 s → 0.14 s; island playable in 53 s.
 - **It is a cache, not a bake stage.** A bundle producer runs over the level's input files, but the population needs the nav graph, the places and the fleet, which exist only after the level has loaded. Like the terrain pyramid and the sign atlas, it is built on the first load after a change and read after that; the first load pays about 5 s once.
 
 **Verified.** `population_read_from_the_cache_is_the_population_decided`: 500 agents, 0 fields differ, identical statistics, identical positions after 30 simulated seconds; a changed shop's hours misses; VERIFY finds 0 differences. On island_8_nature: VERIFY reports 0 of 28,000 records differ.
 
 **Consequences.** A save game (persistent people who can change job or home in play) layers over this baseline. It needs stable agent identity across regeneration, which a hash-keyed cache does not give. What remains of the ~53 s: forest rock placement (~7 s), blocks from road holes (~7 s), physics mesh shapes (~6 s), the rest of the city sim start (~7 s), drawn roads (~4 s); each is deterministic and cacheable the same way.
+
+## ADR-0144 — Open lots: a lot that does not build gets a use
+
+**Context.** Glenn gave free rein on the city's next ten things; the first was the empty blocks. On island_8_nature 2,223 of 13,156 lots were bare grass: lots that lost the occupancy roll, were too thin or oddly shaped for a building, or sat inside a block. From the air they read as holes in the city.
+
+**Decision.** `emitGreen` (city_lots.cpp) offers every unbuilt lot the OPEN-LOT PROGRAM before it falls back to grass. The program tries uses in an order set by district (downtown and commercial lean to car parks, residential to playgrounds and gardens, industrial to car parks), and about 15% stay vacant on purpose:
+- **Car park** (`sculptCarPark`): a cross aisle along the street with the gate in it, aisles running in, 2.5 x 5 m stalls (single-loaded on a narrow lot, at least 6), hedges, lamp poles, a pay machine and a P sign. Type `depot` with recipe `car_park`, so the host's paved-yard path flattens and seals it. Its stalls are `car_bay` areas and its gate a `car_gate` area, which the loader turns into a garage for the citysim's drivers, as it does a depot's bus bays.
+- **Playground** (`sculptPlayground`): a rubber surface, swings, a slide tower, a climbing frame, a seesaw and a sandpit packed in rows, a railing with a gate, benches with sit spots, and trees outside the fence.
+- **Community garden** (`sculptCommunityGarden`): raised beds with crops (rows, bean canes, flowers, squash), gravel paths, a shed, a water butt, compost bins, a picket fence and a bench.
+- **Pocket park**: `sculptPark`, which is also what triangular wedge lots get.
+
+Each sculptor works on the largest rectangle that fits the lot square to its street edge (`largestFrameRect`). A lot's frontage points at the nearest street point, which is diagonal on a corner lot, so the frame takes the outward normal of the lot edge that faces it best. Hillside (relief) and road-locked lots stay natural green; interior lots get no car park.
+
+The forest scatter now also stays off the lots' sealed ground (`loadForest(..., sealedLots)`). It had only avoided flattened pads, so island trees grew through the playgrounds and park paths.
+
+**Consequences.** On island_8_nature: 17 car parks (22 surface lots with 437 stalls for the drivers, counting the big boxes), 180 playgrounds, 293 community gardens and 1,356 pocket parks. 377 lots stay green. Lots tag `2026-10-09.2`. Test: `lots_that_do_not_build_get_a_use`. The skyline census reports `car_park` open space too.
+
+## ADR-0145 — Bigger downtown blocks for the island's cities
+
+**Context.** Glenn, on the first island walk-through: "Saltwood downtown blocks should be bigger". The island brief gave every place the same 94 x 64 m core grid (street centre to centre), which leaves about a 72 x 42 m site once the streets and pavements are taken out. That is small for towers, and from the air the downtown read as towers crammed onto small blocks.
+
+**Decision.** `islandSiteBrief` gives a CITY a 128 x 96 m core block and a 165 x 118 m midtown block; a town keeps 94 x 64 and 158 x 108, its walkable grid. Of the sizes tried (112 x 84 up to 128 x 96), 128 x 96 merged the fewest streets by the plan's own check (ADR from a954c161): Saltwood plus Weyby 203 m of roadway in another, against 242 m on the old grid and 355 m at 120 x 90.
+
+**Consequences.** island_8_nature re-planned and re-baked: the financial districts' footprint grows from 257,000 to 327,000 m2, towers over 20 storeys from 122 to 132, Weyby gets a real downtown. Blocks 1207 -> 991 (bigger blocks, fewer of them), lots 13,156 -> 13,884.
+
+## ADR-0146 — Kerb life: street trees, litter bins, bike racks, news boxes
+
+**Context.** The city's next ten, #3. Downtown streets had lamps, signals and nothing else: bare 5 m pavements, no street trees anywhere on the island.
+
+**Decision.** `planStreetFurniture` (street_furniture.cpp), after the lamps, walks every city street with a pavement that fronts lots (local, collector, arterial; at grade; walkable; frontage) with the lamps' rules and adds:
+- **Street trees** in 1.4 m pits, 9 m apart along each kerb, 1.5 m beyond it, at least 13 m from a junction (sightlines), 3.2 m from lamps and 3.5 m from signal poles. They are three of the forest's real species (maple, oak, beech, 9 m; `realTree`), instanced in 280 m cells.
+- **A litter bin** at each corner, just past the junction's clear zone.
+- **Bike racks and pairs of news boxes** every 55 m of collector and arterial kerb, mid-block.
+
+The kerb is found ON THE DECK: a nav link's width is its travel lanes, and a street with parking bands has its kerb a band further out, so the planner walks out from the centreline until `depthInside` is 0. Each piece is oriented by the vector from the street's centre to it (+Z of the prototype), because "right of the link" is mirrored in this world. `RT_NO_KERB_LIFE=1` turns it off (A/B).
+
+**Consequences.** island_8_nature: 40,378 street trees, 1,916 bins, 2,554 bike racks, 1,294 news boxes. Downtown Saltwood with RT_VSYNC=0: 64-68 fps against 69-71 without, at a 700 m draw distance (+4.6 M triangles), so the trees draw to 450 m (`citysim.kerbLifeDistance`). Test: `kerb_life_lines_the_pavements_and_keeps_off_the_road`. Owed: trunk colliders (you walk through a street tree), bins at corners the deck check still rejects.
+
+## ADR-0147 — A place with staff is open only while one of them is on shift
+
+**Context.** The city's next ten, #4 (owed from ADR stage 3b, the OPEN signs): a shop's sign lit only when someone who works there was at work, but the sim still sent customers to it whatever the sign said.
+
+**Decision.** `CitySim::Venue` carries `place` and `staffed`, a 24-bit mask: bit h is set when someone hired there is AtWork at h:30 by `scheduleSnapshot`, the same rule the OPEN signs and a dormant agent's wake-up use. `Venue::openAt` requires the bit, so every customer chooser (outings, lunch, the evening's venue, activities) respects it with no change of its own. `indexVenueStaffing` runs after places are assigned, and again when the clock rate changes, because a commute is seconds and its share of the day moves with the rate. It costs one pass over the shops' staff, 24 snapshots each.
+
+Two kinds of place keep their posted hours: one nobody was hired at (a lab town, a population capped below its jobs) and one whose staff the schedule never has at work (a commute longer than the shift on the game clock). Shutting those for good would be the sim's arithmetic, not a shop.
+
+**Consequences.** island_8_nature: 2,585 shops, cafes, restaurants, bars and clubs gated; 1,315 staffed at 10:00 and 742 at 22:00. On the game clock staff reach work late in the morning, so half the shops open late; that is the sim's commute model, and the OPEN signs already showed it. The host logs `[citysim] staffed places`. Test: `a_shop_is_open_to_customers_only_while_someone_works_there`.
+
+## ADR-0148 — Shopfronts dressed by trade
+
+**Context.** The city's next ten, #4: the shops were named and signed and fitted out inside, but the pavement in front of a grocer looked like the pavement in front of a bar.
+
+**Decision.** After the café terraces, the lot pass dresses every street-side shop front that has at least 1.6 m of paving in front of its glass, by trade:
+- grocer: tiered produce stands, two each side of the door;
+- boutique, bookshop, electronics: an A-frame board by the door, plus a cart of books for a bookshop;
+- restaurant: planters flanking the door and a menu stand (its terrace as before);
+- bar: high tables with bar stools along the window (library pieces, so they can be sat on) and a chalk board;
+- club: a velvet rope on brass posts running from the door along the front.
+
+The club's line is recorded as an area `club_queue` for the host. Everything is kept on the paving, clear of the door and the road, at the paving's height. `RT_FRONT_DEBUG=1` prints each dressed front.
+
+**Consequences.** island_8_nature: 284 fronts dressed (61 boutiques, 58 restaurants, 49 cafés, 27 bars, 24 electronics, 21 bookshops, 16 grocers, 2 clubs). Most shop fronts have less paving than that in front of them and are not dressed. Lots tag `2026-10-09.3`. Owed: the sim lining the night's crowd up in `club_queue` with a bouncer at the door; projecting blade signs.
+
+## ADR-0149 — Streaming ahead of a flying camera: stand-ins that cover, a look-ahead, jumps that stream
+
+**Context.** The city's next ten, #10. Every aerial shot after a camera jump showed bare blocks, and a fast free camera outran the building cells. Each cell has a mass-box proxy that is always resident, but it drew only past `facadeDistance`. Inside that ring, a cell whose facade and detail tiers had not arrived drew nothing at all, despite residency.h's promise of "a brief loss of detail, never a hole".
+
+**Decision.**
+- **Stand-ins cover.** The detail and facade tiers' `commit` and `unload` keep a count per render cell (`CellCover`, level_loader). While a cell has no tier resident, its proxies' `minDistance` is 0 and they draw at every distance; when a tier lands they return to the far ring. `RT_NO_STANDIN=1` restores the old rule for A/B.
+- **A look-ahead.** `Residency::update` also measures distance from where the camera will be in about 0.75 s (45 frames at this frame's step), and runs twice the prepare jobs (6) when the camera moves over about 1.5 m a frame.
+- **Jumps stream.** A jump loads in place only what lies within `kJumpNear` (150 m); the rest prepares on the workers as in movement. The stand-ins keep the far ring whole meanwhile. A level's first frame (`update` with no jobs) still loads everything.
+
+**Consequences.** A scripted fly across Saltwood at 200 m/s (`fly_probe.py`): before, empty blocks beyond the first streets; with the stand-ins, boxes hold the shape; with the look-ahead, full detail throughout. At 60 m/s it was already complete. After a 9 km jump the first frame shows the stand-ins and detail follows within a few seconds. Tests unchanged (1545/1545).
+
+---
+
+## ADR-0150 — Busy streets: people where the floors are, through traffic, more cars, a capped far ring
+
+**Context.** Glenn: "I would take a look at the empty street problem next." Measured at 17:30 on island_8_nature with the clock running (the island runs a real-time day, `dayMinutes` 1440, and `daynight hold` sets the sim's rate to 0 and so freezes every departure; earlier "empty" numbers were taken held). Within 300 m of downtown Saltwood: 6–11 cars moving, about 80 people outdoors, 572 indoors. Island-wide, about 830 of 17,000 cars were moving (5%, a realistic share). The deficits were elsewhere:
+- **Headcount.** 17k cars against 204k walkers.
+- **Placement.** Homes and jobs were drawn one per building, so a 30-storey block of flats housed as many people as a bungalow. Downtown held no more people than a suburb.
+- **Trip length.** Drivers took the nearest of 24 random jobs, giving a median drive to work of 76 s.
+- **Through traffic.** A dormant agent under way kept the pose it set off from until it arrived, so a car crossing the island never woke as it passed the player.
+
+**Decision.**
+- **Floor area.** `AuthoredPlace::floorArea` / `Place::floorArea` is every storey of every unit, less the shop fronts, which are places of their own. `assignPlaces` draws homes, drivers' and bus commuters' job candidates, and walkers' jobs within walking range in proportion to it, using cumulative weights per pool. A place with no area weighs as a house. Population cache format 7.
+- **Drivers.** A driver takes the nearest of 8 draws, not 24.
+- **Through traffic.** A dormant traveller gets a waypoint event every 4 s (`kDormantWaypointSeconds`). `dormantGlide` moves it along its route at the pace its arrival was timed by and re-places it in the dormant grid, so the D→V wake finds it where it is. The GPU crowd record is left alone, so there is no pop.
+- **Level.** island_8_nature sets `carsPerLaneKm` 90 (was 35), so 43.6k cars. `taxiFraction` 0.05 keeps the cab count about the same.
+- **Far ring.** A new level knob `farTarget` (6000) scales the dormancy radii to hold about that many V agents. Downtown's towers put tens of thousands of people inside the old 1.2 km ring, and the V tick and `tierPass` took a frame to 130 ms. `nearTarget` still counts every K agent: counting only the awake ones let K reach 8,000 and cost 16 ms per fixed step.
+- **Measuring.** `traffic?` reports car owners under way and at rest by tier, plus sleeper waypoints. `RT_CARS_SCALE=k` and `RT_TRAFFIC_DEBUG=1` (schedule histograms) are for A/B runs.
+
+**Consequences.** At 17:30, within 300 m of downtown Saltwood: 58–70 cars and cabs moving (was 6–11), 270–400 people outdoors (was 50–100), and about 5,900 indoors (was 572). Frame time is p50 13 ms / p90 21 ms with `farTarget` (`RT_VSYNC=0`, standing downtown). Shots: tr8_busy/salt_play.png, a royal-palm boulevard with traffic both ways.
+
+Still open:
+- Cabs gather downtown (20 → 43 in two minutes), because demand is there and nothing sends them elsewhere.
+- The median drive is still short; real commuter trips run 15–25 minutes against this island's 1–2.
+- Through traffic is drawn but simplified: no queueing until it wakes.
+- Pedestrians past the shrunken K ring rely on the GPU crowd.
+
+## ADR-0151 — Each street its own planting; the island's street trees
+
+**Context.** Glenn: "some have trees, some don't, some have them spaced differently ... a way to denote suburbs vs downtown, poor vs wealthy areas, newly developed areas vs old areas. It would be nice to have a variety of trees for the city beyond the ones seen along the island's forests." Kerb life (ADR-0146) planted every street with the same three broadleaves at 9 m.
+
+**Decision.**
+- **Species.** real_tree gains `RoyalPalm`, `CoconutPalm`, `Monkeypod`, `Poinciana`, `Jacaranda` and `Plumeria`. The palms have a new `palm()` builder: a column, a crownshaft, and arching fronds as chained cards on a frond tile. The others are shell crowns with a bloom colour and share, worn by a painted flower tile. The forest species are byte-identical; extra draws are taken only by the new ones. Sizes are measured against UF/IFAS fact sheets (CREDITS).
+- **Character.** `StreetCharacter` (kind, wealth, age, coastal) comes from the loader:
+  - **Kind:** the lots' districts and heights in 80 m cells (avg ≥ 7 storeys is Downtown; oldtown, industrial, commercial).
+  - **Wealth:** ground height (the hills) plus value noise.
+  - **Age:** distance to the town's hub plus noise.
+  - **Coastal:** ground under 5 m.
+- **Planting.** `choosePlanting` picks a `StreetPlanting` (none / avenue / mixed / sparse / saplings / palms / flowering; species, spacing, size, gaps, one side):
+  - **Downtown:** palms or a formal avenue on the boulevards, young trees or bare on the side streets.
+  - **Industrial:** mostly bare.
+  - **Wealthy:** close canopy or a blossom street.
+  - **Poor:** often bare, otherwise sparse with half the row gone.
+  - **New estates:** small saplings.
+  - **Old town:** big trees with gaps.
+  - **By the sea:** coconut palms.
+
+  The draw is keyed on the street's line (bearing to 10°, offset to 30 m, 700 m stretches, class), so a street keeps one planting along its length and on both kerbs. `RT_ONE_PLANTING=1` restores the old planting.
+- **Loader.** Two models per species, each at its own street height (royal palm 15 m, plumeria 5.5 m), built only for the kinds some street planted.
+
+**Consequences.** island_8_nature has 18,656 street trees, against 40,378 before:
+- **By kind:** royal palm 4,118; monkeypod 2,817; plumeria 2,375; maple 2,363; poinciana 2,235; beech 1,717; jacaranda 1,108; coconut palm 1,025; oak 917.
+- **Street links by planting:** 4,032 bare, 272 avenue, 2,646 mixed, 3,070 sparse, 1,388 saplings, 2,180 palms, 196 flowering.
+
+Tests: `streets_are_planted_by_their_character`, `street_tree_species_grow_to_their_kind`. Owed: trunk colliders (still); tuning the wealth field against what reads on the ground.
+
+**Note (2026-10-14): on the sidewalk as drawn.** Two level gates had been red since the street trees landed, and
+both were measuring them as scatter. `scenery_is_planted_on_the_ground` judged them against the terrain under the
+sidewalk (6,080 of metro_v2_test's 7,674 instances "floating"); `city_furniture_never_stands_in_a_road` found every
+pit on a drawn road triangle (the "1 cm into the road" thousands). Now `StreetFurniture::streetTrees` lists the trunk
+feet; the furniture gate judges them like lamps (off the carriageway), the scenery gate against the drawn road's top
+(`DrawnRoad::topAt`, heights opt-in: `gatherDrawnRoad(world, true)`). That exposed a real fault: ~450 trees stood
+0.3-0.9 m up, because the furniture ground was the deck + curb RULE, not the band as drawn (lanes sidewalks sit lower)
+and past the drawn pavement it held trees over the grass. The furniture ground (trees, lamps, poles, sign posts) is
+now the drawn road's top under the foot (no more than 1 m over the rule: not the viaduct overhead), else the drawn
+terrain (`cdlodDrawnGround`, shared with the lot dressing; entityGround is dilated, 0.4 m high on a slope). Both
+gates pass on metro_v2_test and metro_lanes.
+
+## ADR-0152 — Cars off the pavement, the bus slot, walkers in files, and a crowd that doesn't stop the frame
+
+**Context.** Glenn, downtown Saltwood at 07:48 after the busy-streets change (ADR-0150) had three reports:
+- "cars driving on the sidewalk ... spawning on the sidewalk and then sliding out into the street";
+- "several buses piled up on one another ... no bus body, only the NOT IN SERVICE sign";
+- "all the agents and vehicles are starting in one place ... like it's some spawn point. That's killing the frame rate."
+
+The near-ring census in `traffic?` shows where cars sit across their link, cars parked past the kerb (with `RT_TRAFFIC_DEBUG`, who they are), and the biggest 1.5 m piles of drawn agents. It found five separate causes.
+
+**Decision.**
+- **The bus slot.** The scripted fleet names slot 24 "bus", but the slot's type came from the built-in 12-entry table by slot number (24 wraps to a sedan). `ambientSlotFor`, which skips Bus slots, therefore dealt 1 in 25 ordinary cars the bus slot: a 12 m "sedan" wearing NOT IN SERVICE. The slot named "bus" is now a Bus, and the sign draws only for real buses. Every car's model draw shifts with it.
+- **Cabs without a bay wait off the street.** That applies both when placed from the schedule and at a fare's end. Before, they stood on the verge fallback 2.8 m past the kerb, eight setback slots per node, and every cab whose "home" was one tower's node made a heap of 40 on the pavement.
+- **Out of a garage.** A car parked off-street keeps idlePose's verge spot as its stored pose, so `startTrip` drew it pulling out from the pavement into its lane. Off-street cars now appear in their lane with no pull-out, and a trip that finds no route leaves the car in the garage.
+- **Seated goal clocks** start somewhere in the state's dwell (agent bits and the day), not at 0. At 0, everyone resting in one state ended the dwell on the same tick. `RT_SEAT_AT_ZERO` restores the old behaviour.
+- **Walkers in files.** Up to three files, 0.9 m apart and as wide as the pavement allows (`junctionPad_`), each with its own following chain. Before, a tower door's strollers walked the one line in single file, 0.4 m apart, at a third of walking pace (`holdWhyOf`: their leader). `RT_ONE_FILE` restores the old behaviour.
+- **The step.** Three changes, each with an A/B or measured:
+  - The overlap solver gathers each walker's neighbours once per tick instead of querying the grid six times (`RT_SOLVER_REQUERY` restores the old behaviour).
+  - The gather uses a per-tick grid of the K tier's street walkers (`pedGrid_`).
+  - The walkers' car checks (body ahead, kerb inbound traffic, footprint squeeze, the cars in view) use a per-tick grid of the K tier's cars (`carGrid_`).
+
+  All of these previously queried `grid_`, which holds the hundreds of residents INDOORS at a tower's door, and kept only the few that mattered.
+
+**Tried and dropped.**
+- **Lanes from each street's own band spec.** The edges' spec indices are not rebased when nets are combined: "3 travel lanes" in a 7 m street. Worth fixing on its own.
+- **Narrowing every link with a parking band.** 0 cars over the bay line before and after.
+- **Per-walker kerb stand-backs and impatient walkers passing crawling cars.** No change to the piles, and 2 contacts in `walkers_gap_accept_at_unsignalled_junctions`.
+
+**Consequences.** Glenn's spot (-3853, -590) at 07:48:
+
+| Measure | Before | After |
+|---|---|---|
+| Cars parked past the kerb | 41 → 17 | 0 |
+| NOT IN SERVICE signs drawn with no bus near | 15 | 0 |
+| Walkers piled 4+ to a 1.5 m spot | 169 / 135 / 116 / 120 | 134 / 82 / 84 / 79 |
+| Worst pile | 17, standing | 6–11, walking |
+| City step | 112 ms (solver 72, tail 15, move 11) | 11–14 ms (solver 0.7–1.0, tail 3, move 1.6) |
+| Frame p50 / p90 / p99 | 138 / 164 / 260 ms | 21.5 / 26 / 120 ms (fixed 15 / 18 / 57) |
+
+Tests: `walkers_keep_files_across_a_wide_pavement`; 1550/1550, lanes 29/29.
+
+Owed:
+- The near ring holds ~4,500 K agents against nearTarget 1500 downtown.
+- Cabs still crowd downtown (53 of 61 drivers near).
+- Spec lane counts (above).
+- The p99 hitches (120 ms).
+
+## ADR-0153 — Rail: a track class in the lanes builder, trains on its lanes, a carriage you walk through
+
+Glenn, 2026-10-10: "it makes sense if it follows the highway in a loop and there's a station. There should be trains
+going in each direction ... the train system should piggy back off our other algorithms and systems of construction --
+it should define rail lines and we should probably build them like we build lanes of the freeway ... closed loop
+tracks for the island-wide rail ... run 24 hours a day at an interval ... carriages ... like the bus where you can move
+around the carriages and between them and they shouldn't be jittery ... Building an isolated testbed scene for a train
+would be a good idea."
+
+Decision (stage 1, the test bed):
+- **Track is a road class** (ADR-0055's extensibility invariant): `RoadClassSpec::track`, built-in class `rail`
+  (4 m track centres, one track per direction, 2.5 % grade, 400 m profile window, parapets on structure). The lanes
+  builder does everything it does for a road -- profile, decks, bridges and piers, terrain conform -- and the mesher
+  makes the deck a ballast bed with sleepers (0.65 m) and two rails at standard gauge on each lane, no paint, no
+  junction boxes. Platforms are authored on the edge (`"platforms": [{name, s0, s1, side, w}]`), built outside the
+  outer track at floor height with a canopy. Tracks are left out of the road twin, so no car, walker, lot or sign ever
+  routes onto one.
+- **Tracks leave the builder as data**: `RailTrack` (rail_track.h) per track lane -- the railhead line in running
+  order and the platforms beside it -- through the city bundle (`rail/tracks`, optional) to a `RailTracks` component.
+  A graph with a track class keys `kRailBuildTag` too, so the track kit can change without re-baking road-only levels.
+- **RailSim** (rail_sim.h) joins tracks end to start into LINES (a double-track loop is two lines, one each way;
+  nothing switches or crosses), spreads trains evenly (the timetable is the spacing), and runs them around the clock:
+  line speed, curve speed (v^2/r <= 1 m/s^2, braked for ahead), braking for the next platform and the train ahead,
+  a dwell with the doors open on the platform's side. Kinds: intercity (locomotive + 3 coaches), subway, light rail.
+- **A carriage's pose is a function of the head's station** (each body between two bogie points on the rail), so the
+  renderer draws the head between its last two steps and every car -- and the rider -- moves along the rails' own
+  curve at the frame's moment. Aboard is the bus's answer: a floor point in one car's frame, walked within the aisle,
+  vestibules and doorways; through the gangway it is re-expressed in the next car's frame; out of an open door onto
+  the platform. The eye is placed on the carriage as drawn in render(); the view turns with the car.
+
+Test bed: `assets/levels/rail_lab.json` (`assets/lanelab/rail_loop.json`): a 2.9 km loop, two stations, a bridge each
+side, a street by Central. `trains?` reports lines, stops, trains; `train_board <train> [car]` puts the player aboard.
+Measured: lines 2844 / 2869 m, 4 trains, stops at both platforms, ~95 s between stations at up to 22 m/s;
+lanes_tool: every lanes invariant passes.
+
+Owed: shuttles (open lines reverse at the ends), sitting (E on a seat), interior lighting, sound, NPC riders and
+rail legs in planTrip, the station bus line, level crossings, the island loop along the freeway, light rail in the
+cities, tunnels.
+
+## ADR-0154 — The island loop: a double track beside the freeway, a station at every town
+
+Glenn, 2026-10-11: "should we try and get trains into the city?" ... "yes, go ahead with the island loop".
+
+Decision:
+- **The line is derived, not drawn** (`engine::islandRailLoop`, island_rail.h): the freeway's outer closed chain,
+  resampled at 10 m and offset 45 m outward on a tangent read over +-30 m. On island 8 that clears every ramp on the
+  seaward side by 26 m, never touches water, and crosses 10 roads. The freeway's WATER floors (holds over 35 m) carry
+  over to the nearest point of the line, so the track bridges each river where the freeway does.
+- **A station per town** (the level's `citysim.districts.hubs`): the point of the line nearest the hub where a 140 m
+  platform stands on a straight (radius >= 900 m over the platform and 40 m either side), at least 150 m beyond its
+  ends from any road crossing and clear of the bridges. Two-sided, one platform per track. Island 8: all eight towns,
+  333-1168 m from their hubs.
+- **Cut between stations into edges** (a closed edge cannot close on itself), each holding its station's platform.
+- **The island's rail class**: 3.5 % and cut-and-fill (balance 0.5) over the built-in 2.5 % fill-only class, which rode
+  28 of 37 km of coastal hills on viaducts.
+- **Added to a graph already written**: `city_plan island-rail GRAPH LEVEL [--write]` -- the island is not re-grown
+  for it (the graph is backed up first; island_8_nature's in ~/Claude/backups/island_8_nature_2026-10-11/).
+
+The builder, for tracks:
+- **A track is never met at grade** (`separates`): any crossing with a track is a grade separation, whatever the
+  scene's rules -- there are no level crossings yet.
+- **The track moves, not the road**: it rises over the road at its own grade unless the road already clears it.
+  Lifting the higher of the two raised Saltwood's streets over the line at 18 % and the links under the diamonds.
+- **A shared end is a node, not an overpass**: the lift pass skipped nothing at a joint, so two sections of one line
+  "crossed" there and lifted each other 7 m at every joint (23 km of viaduct).
+
+Island 8 with the line, against the same graph without it: the same checks fail with the same roads, except link28
+(10.9 % against 10 %: it rises 2.5 m to clear the track) and link35 clearing the track by 7.33 m of 7.40.
+Track: 37.0 km, 11.1 km of it on structure (the freeway on the same ground: 37 %).
+Cost: 1.75 M triangles in the bundle (sleepers 1.14 M, rails 0.44 M, ballast 0.16 M) over 191 cells. Three views over the
+line at Saltwood, RT_VSYNC=0, with and without the sleepers and rails (RT_NO_TRACK_KIT): frame p50 17.2/17.3,
+18.4/18.2, 13.3/13.0 ms -- no measurable cost, so no track LOD yet. Owed: a way onto the platforms (Saltwood's stands
+on an embankment a few metres up), a bus stop at each station, people choosing the train, level crossings.
+
+## ADR-0155 — A way onto every platform: footways, station stairs, steps, and the bus at the door
+
+Glenn, 2026-10-11, on ADR-0154's owed list (stairs off the platform, a path to the nearest street, a bus stop there):
+"Yeah make it accessible".
+
+Decision:
+- **A footway class** (built-in "footway", `RoadClassSpec::footway`): 3 m, one lane, rank 0, paved as sidewalk, never
+  painted, left out of the road twin (nothing drives it). Elevated it carries a 1.1 m parapet wall; at grade nothing.
+- **Steps where it is steep**: footway grade runs to 0.6 (a stair's pitch) and wherever it passes
+  `kFootwayStairGrade` (0.15) the deck is built as treads at ~0.175 m risers. The first island bake held footways to a
+  ramp's grade: too short for 11-24 m climbs to a track on the hillside, they floated whole and pulled 26 lifts and a
+  13 m node mismatch through the diamonds. At stair pitch they follow the ground and climb only the last 20-30 m.
+- **Station stairs**: where a footway crosses a track over a platform, a flight runs down from the deck onto each
+  platform along its back edge (1.9 m with walls, opposite ways on the two platforms); the canopy is gapped under the
+  bridge and the stair, and the parapet opens at each stair top.
+- **The lift and profile rules it needed**:
+  - a footway END covered by its own floor point stays up (it ends on the bridge over the far platform), footways only;
+  - an authored heightless hold (z < -100) merges with the lift's crossing floor within 2 m, any other within 0.5 m;
+  - over a track the lift uses the thicker of the two slabs, which is what the clearance check measures (it was 0.37 m
+    short at the rail lab with the upper slab's thickness);
+  - piers keep off the platforms.
+- **Footways get their own parapet ring**: in a plan union with the tracks the footbridge's edges over the line
+  vanished, and with them its walls.
+- **A way in per station** (`island_rail` `wayIn`): from the nearest street behind the line, a leg 60 m along the line
+  14 m off it, a chamfered corner, then over both tracks to 10 m past the far platform, held over the line.
+  `city_plan island-rail ... --no-ways` leaves them out.
+- **The bus at the door**: each `RailStop` exports its footway's street end as `access`; citysim hands those to
+  `BusNetwork::build` as anchors, and each becomes a ring corner (so a hub stop) of one loop in its network.
+
+Island 8: eight ways in, 106-163 m. Against the rail-only graph the full lanes check fails the same items, link28
+11.26 % (was 10.90); diamonds back to their rail-only grades, node mismatch 0.27 cm.
+Baked and seen from above at all eight: street, ground-level path, walled steps, bridge, a stair down onto each
+platform. Walked at all eight: from the street end 22-24 m up the path, and from the bridge down the steps toward
+town. Buses stop at all eight ways in -- Coldwell's at first took the node of a scrap of street nearer than the
+boulevard it leaves from (a network too small for buses) and got none; anchors now look only in networks buses run
+in, and the log names any way in left without a bus and why. Owed: lifts for anyone who can't take stairs.
+
+## ADR-0156 — People take the train; the trains sound; the stations say their names
+
+Glenn, 2026-10-11: "Okay" to people choosing the train next; then, watching it: "I don't see anyone on the train
+though ... there's no sound on the train. No train track clacking. No whistle or bell when it stops or when the doors
+open. Train stations could use the name of the station so you know what station it is."
+
+Decision:
+- **Riders** (`citysim::RailRiders`, city_rail_riders.h): the stations pinned to street nodes (nearest walkable node to
+  the way in, in a network buses run in -- the anchors' rule), each node's street network, the stop each line makes
+  there. A walker's trip into another network goes by train when both have a station: `startGoalTrip` plans it first
+  and aims the street leg (bus if it beats walking, else on foot) at the station's way in. Then: in along the footway
+  (a timed absence: the footway is not in the nav graph), waiting on the platform (a spread of spots in a band clear of
+  the edge and the stair, drawn at the platform's top -- `CityRenderSystem::floorAt`), aboard (not drawn on foot;
+  follows the train for tiers; never dormant), out along the far footway, and on from the far way in. RailSim is only
+  read: a train standing with its doors open sets down whoever this stop is for, then takes on whoever waits for its
+  line here. `sendAgentByTrain` for scripts and tests. `trains?` reports the riders.
+- **Seated in the coaches**: each rider aboard gets a coach (a hash of who they are) and the next seat in a stride
+  through it; three outfits of the bus's seated occupant. Seats now carry their facing (`TrainBodyMesh::seatYaw`).
+- **The timetable**: a train per ~9 km of the longest line, two at least -- the island's 37 km loop ran two each way
+  (a train every ~14 minutes) and its platforms filled; now four.
+- **Sounds** (sfx.h): `railClack` per axle as it crosses a joint (every 18 m of its own travel, so a car's two bogies
+  give the beat and it quickens with speed), `railRumble` (a seamless loop on the nearest car, by speed), `trainHorn`
+  (high then low, ~300 m before each platform), `trainDoorChime` (a falling ding-dong as the doors open, three beeps a
+  little before they shut). Heard from the camera, so aboard they are simply near.
+- **Name boards** (station_boards.h): white on blue, 4.2 x 0.7 m on two posts, 3.6 m in from the platform edge, 16 m
+  from each end of every platform, lettered at load with the road signs' font (Overpass), both faces readable.
+
+Measured: headless, 24 sent across two towns all walked in, waited, rode, got off on the far town's streets, and took
+the train home (48 trips). Island 8 (real time): ~50 commuters choose the train at load, most walk a median 1.3 km to
+their station (none chose a bus for it); the first reach a platform ~7 min in; with four trains a way, 9 of the first
+20 in had boarded ~20 min in. Owed: seeing a platform crowd and a full coach on the island in pictures; the walk along
+the footway drawn (it is an absence); lifts; trains that are not intercity (light rail, subways).
+
+## ADR-0157 — Light rail: a track class, a city loop generator, stock by class, journeys door to door
+
+Glenn, 2026-10-12: "How about other trains in the meantime" (his 2026-10-10 answers: "Bigger cities: light rail ...
+shuttle back and forth or run a loop (Yamanote). Start simple."; no street running yet).
+
+Decision:
+- **`light_rail`, a built-in track class**: a double track at 3.6 m centres, 5 % over a 120 m window -- it climbs over
+  a cross street and back within a block; every crossing is a grade separation (a track is never met at grade), so in
+  a town it runs elevated.
+- **`cityRailLoop`** (island_rail.h; `city_plan city-rail GRAPH LEVEL [--write]`): round each "financial" hub, a loop
+  along its arterials and collectors -- through the main line's way in and the most built-up street node in each of
+  eight sectors 350-950 m out, shortest paths between, spurs cut -- set in 21 m beside the street (the lots grow
+  round it), corners Chaikin-cut and filleted, then relaxed until no curve is under 24 m; stations on its straights
+  550-900 m apart where the streets are densest, the first at the interchange; cut into edges between stations.
+- **Stock by class**: RailSim lines keep their track class and never join across classes; each line runs its class's
+  stock (rail: intercity, light_rail: light rail, metro: subway) and its own count (an intercity per ~9 km, a city
+  train per ~1.5 km). TrainSystem keeps one model set per kind.
+- **Journeys door to door** (RailRiders::plan): every station pair across the two ends' networks, the walks at both
+  ends and the ways in counted; between towns any train is taken, within a town only when it saves a minute and a
+  sixth of the walk (the bus's rule) on trips over ~900 m.
+- **The lab**: assets/levels/light_rail_lab.json, a 600 m town with a loop beside its ring of streets, two elevated
+  stations over its arterials; every lanes check passes.
+
+On island 8 (written, checked, NOT kept): Saltwood 4.0 km / 5 stations / 32 street crossings, Weyby 4.0 km / 6 / 25.
+The full check failed, for two reasons it named: (1) section joints near street crossings -- the lift's hold belongs to
+one section, joint levelling pulls the other, steps of 1.6-4 m and a crossing 2.6 m short; (2) an elevated line's way
+in is not the main line's: a footbridge OVER a track already ~8 m up came out under it (1.3 m). Owed before the island
+gets its city lines: joints cut clear of crossings, and elevated stations reached from below (a passage under the
+viaduct, flights UP to each platform -- station stairs only build down from a footbridge today).
+
+## ADR-0158 — A city's light rail on the island: holds that cross joints, stations reached from below
+
+Glenn, 2026-10-12: "Okay keep going" (after ADR-0157's island attempt failed its check for the two reasons it named).
+
+Decision:
+- **A track's holds run on across its joints** (`chainTrackFloors`, vertical_profile.h). A hold (a lift over a street,
+  a station's level) is a floor point of one edge; its approach at design grade ran out over the joint on that edge
+  alone, and the next section met it lower -- 4 m at Saltwood. Placing joints clear of crossings was not enough: in a
+  town a lift every ~125 m, each with a ~200 m approach, leaves no joint clear of all of them. Each track section now
+  takes its neighbours' holds (same class, shared end, one joint on) as `chainFloors` in its own stations, applied
+  wherever its own floors are. Joints are still cut as far from crossings as the gap allows (`jointClear` 60 m).
+- **A road that ends under a track is structure** (`anyTrack`): a tee was always forced level, so a dead end under the
+  light rail (Saltwood's p0_s42) held the line 7.3 m off its profile. A track is never met at grade, end or crossing.
+- **Raised stations are reached from below** (`IslandRailOptions::wayUnder`, the city loop's ways). The way runs from
+  the nearest sidewalk straight to just outside the platforms and on under the line -- no hold of its own, so the track
+  always goes over -- and the track gets a hold the platforms' length: the lift code sets it LEVEL, at the highest the
+  track stands along it. `stationStairs` builds a flight UP from the way to each platform where the footway is below
+  it (`up`): behind the platform's back edge, a solid stair from the way's level, a landing level with the platform,
+  walled at its far end; the platform's back railing opens beside the top. A platform standing clear of the ground
+  gets an underside, a back railing and columns under its middle (none on a street or the way).
+- **Stations stand clear of the streets** the loop crosses (`platformClear`, 8 m past each end): a flight cannot land
+  on a street. Where the 550-900 m window has no such place the search runs 400 m further rather than leave a gap.
+- **The loop keeps clear of the streets it runs beside.** The set-in is the graph's own (`setIn` 0): the widest arterial
+  or collector to the back of its sidewalk, plus a station's platforms and flights and a metre -- island 8's arterials
+  are 3+3 lanes and a 5 m sidewalk, so a fixed 21 m left 1.4 m, and rounding the corners took that away (Weyby's deck
+  edge stood over the sidewalk, 2.4-4 m up on a lift's approach). After rounding, any point running along a street
+  (within 30 degrees) inside its back of sidewalk and the pair's half width is pushed out and the curve relaxed again:
+  Saltwood 179 points short -> 7, Weyby 316 -> 2 (the rest by under 2 m, beside oblique crossings).
+- **The cache key** carries the rail tag for `light_rail` graphs too (it keyed only class `rail`: the lab kept loading
+  its old bake after a rail tag bump).
+
+The light-rail lab: its loop moved 18 m inside the streets (14 m left a flight on the sidewalk), a way under each
+station; the player walks from the street up the flight onto the platform. Tests: a lift 30 m short of a joint carries
+on across it (no step); the lab's platforms level, its ways under; the city loop's joints >= 45 m from a crossing and
+every station held over its way.
+
+## ADR-0159 — What stands on a track, buildings clear of the line, station canopies and lamps, rail on the map and the platform board
+
+Glenn, 2026-10-12, after the island's light rail: "It seems to run really close to buildings and there are cars weirdly
+stuck in the tracks LOL. It would be nice if the stations had lights and also the overhangs are thin and need dimension.
+Maybe they should be the corrugated metal?", then "it would be nice to see the trains on the map and have a similar
+thing to the buses when you're on a station platform".
+
+Decision:
+- **A deck spine says what runs on it** (`UnionSpine::use`: Road, Track, Footway; deck codec v2, v1 still read as all
+  roads). Tracks and footways went into the deck field as `Local` streets, so a street car under a viaduct, closer to
+  the track's centreline than its own street's, took the rail's height (`heightOn`), and a parked car or a walker
+  could too (`heightAt`). `heightAt`, `heightOn` and `depthInside` answer for things on a street and now skip tracks and
+  footways; `coversAny` sees every deck and is what trees, rocks and the scatter stay off. The earthwork still rides
+  every spine (a track is structure), and a building's pad never takes a track's height (`lanesStreetHeight`).
+- **Buildings stand clear of the line** (`lanesTrackKeepOut`, LotParams::trackKeepOut): no footprint within 4.5 m of a
+  railhead, 10.5 m beside a stop (platform and the flight up behind it), or a footway's half-width + 1.5 m. A whole
+  footprint, not its corners -- a track crosses a big building's middle with every corner metres off. Lots, whole-block
+  landmarks, big boxes and depots all ask it; a lot that fails is open ground, as near a freeway. Set only where the
+  city has a track, so road-only levels grow as before.
+- **A platform's canopy has depth**: a ribbed steel sheet (trapezoidal ribs every 0.2 m, running the way it drains,
+  falling 8 % away from the track; drawn above and below) on a steel frame -- a post down the middle every 12 m carrying
+  a tapered beam across, a 0.4 m fascia along both edges -- and a linear lamp every 6 m under it. New meshes `canopy`,
+  `station_steel`, `station_lamp` (sheet and lamps not collidable). Geometry, not the CorrugatedMetal surface: that
+  one is world-planar and its stripes would run across a curved platform.
+- **Stations light up at night**: `station_lamp` glows on the dusk ramp (NightGlow, as street lamps' heads), and every
+  other fitting is a point light (`RailStop::lamps`, carried in `rail/tracks`) that joins the street lamps' nearest-N
+  pool -- cool white, range 16 m -- so a station never takes more light slots than the lamps already had.
+- **The map shows the rail**: each line a dark casing with its colour inside, drawn under the bus lines in the
+  picture's overlay (`TransitLine::width`, `closed`), redrawn once the trains exist if the map opened first; stations
+  as ringed squares, live trains as a dot per car (the locomotive white). `lineColour`: the main line charcoal, each
+  ring its own colour.
+- **The platform board** (`rail_board.h`): standing on a platform, the transit HUD names the station and lists every
+  line calling there -- this platform's first, the rest "across the tracks" -- each with the next two trains, the
+  station they run toward and the minutes until they stand there. Minutes, not stops, because a train runs on its own
+  track: the distance along the line at an average pace (min(25, 0.75 vmax) m/s) plus a dwell for each stop between.
+
+Tests: on the light-rail lab, the streets under the line answer their own height to parked cars and traffic while the
+track still keeps out trees; the field round-trips its uses; a footprint the track crosses is kept out and one 20 m off
+is not; every platform has its canopy, frame and lamps and every stop its lights. A board finds its platform (not past
+its back, not under it), lists both lines toward the other station, and its minutes come true within a third.
+
+## ADR-0160 — Furniture keeps out of the outside doors and off the windows; setback floors are furnished
+
+Glenn, 2026-10-13: "some of the interiors have furniture weirdly placed like a tv sitting in front of the front doorway
+or a shelf in a store blocking the front entrance ... some floors in skyscrapers are still empty. They don't have walls
+for full apartments or they don't have furniture for full office floors", then "A picture or mirror shouldn't be placed
+over a window but a desk or sofa could be placed by the window."
+
+Decision:
+- **The room plan carries the outside walls' doors and windows** (`RoomPlan::openings`, `WallOpening`), filled by
+  `storeyOpenings` from the same facade layout the walls are cut with: the ground storey's modes as its collider gaps
+  read them, the upper storeys' as the inner wall reads them, a curtain wall's glass above its spandrel. The furnisher
+  only knew the partitions' doors, so the street door, a shop's door and the back door were plain wall to it. The room
+  planner never makes them; it keeps one source for where a door is.
+- **A door keeps a way in clear**: the leaf plus 0.3 m a side, 1.6 m deep, reserved before anything is placed.
+- **A window takes low furniture only**: nothing may stand in the 0.35 m strip in front of the glass (backed onto it,
+  or against the wall beside it with its side across it) if it rises more than 0.3 m past the sill, a floor-to-ceiling
+  pane counting as a 0.9 m sill. A desk, a sofa, a bed's headboard, a sink go under a window; a TV, a wardrobe, a
+  bookcase, a mirrored vanity, a fridge tower and wall cupboards do not (a counter run keeps its base units and drops
+  the wall cupboard over a window module). What sits on a desk (the monitor) does not count. Nothing hangs over glass.
+  A shop's tall rows start an aisle behind its shopfront strip rather than being dropped, and a shop places its till
+  before its shelving, so the doors' clear ways push shelves along the walls and not onto the till's spot.
+- **Setback floors are furnished**: a tower keeps the core it was sized for at its base, so a setback tier's floor
+  narrows round it below the ring's rooms (3 m past a 2.2 m corridor) and the office floor's 4 m bands, and grew empty
+  -- 62% of tower_on_base's floors and a fifth of the art deco, stepped and sky-exposure towers'. A band 2.55-6 m from
+  glass to core is now a DESK ROW (desks at the windows, chairs facing out, the walk behind), in the office plan beside
+  its rooms or as the whole floor (`deskRowPlan`, any plate of four corners or more); a residential tower's is the
+  residents' LOUNGE (sofas and tables along the glass, from 2.85 m). Rooms with no partitions (an office's open
+  zones) are furnished; a grid step may start `from` its window wall; `one_of` tries the building's other choices,
+  then its `fallback`, where its choice fits nothing (office zones: pods or cubicles, then rows of desks).
+
+Not done: a 14 m crown on a 24 m lot keeps the base's 8 x 8 m core, leaving 2.3-2.5 m a side -- a corridor. The fix is
+the core stepping in as lift banks end, not more furniture rules. The shop rooms' rects start at the wall's outer face,
+not its inner skin (the furnisher matches openings to within 0.9 m to allow for it).
+
+Interiors are grown at run time from the building records, so this needs no re-bake.
+
+Tests: across 30 recipes x 3 seeds x 5 plans, the ground and first floors: 1793 doors and 26735 windows, no piece in a
+door's way in, none tall before a window, none hung over one (before, with RT_FURNITURE_BLIND_OPENINGS=1: 1099, 1554,
+330). Across 11 tower recipes up every other floor: 28 of 1525 bare (the 24 m lots' crowns), no tower kind over 10%.
+
+## ADR-0161 — Offices along the glass get partitions; slim residential crowns are flats round the core
+
+Glenn, 2026-10-13, on ADR-0160's setback floors: "No office partitions in the office? If you're showing me apartments
+then we need more walls for the separate apartments and then separate rooms."
+
+Measured first: desk rows were on 22% of tower floors (2306 of 10546 in an 11-recipe spread), their strips 2.5-6 m from
+glass to core, a third of them 5 m or deeper. Residential towers were already apartments on 1865 of 1890 floors; the
+lounge was a crown fallback. ADR-0160's "the core should step in up the tower" was wrong: the core is already sized to
+the TOP tier (`corePlan` fits it inside the smallest plan with its corridor), and on a slim crown it is the smallest
+core there is (one lift, two stairs). Nothing to shrink.
+
+- **Private offices along the glass** (`officeRow`): a desk-row strip deep enough for a 2.8 m office AND the 2.2 m
+  corridor ring behind it is a row of offices about two curtain bays wide (3.2 m, partitions on mullions), glass
+  fronts with a door onto the corridor, drywall between, end walls where the row stops short of the exterior. An even
+  strip's row runs on into a square corner no band owns, so the corner is an office too (ringPlan's corner rule).
+  Both the office floor's thin bands and `deskRowPlan`'s whole-floor strips use it.
+- **Desk screens**: the rows that stay rows (strips under 5 m, the open plan's fallback rows) carry a low fabric
+  screen between desks -- a new piece, `desk_screen`, 1.12 m tall so it stands under a window by ADR-0160's rule.
+- **Flats round the core** (`wrapFlatsPlan`): a residential plate too slim for apartmentPlan's corridor and 5 m bands
+  has no corridor. The lift lobby is the strip in front of the core's doors; two flats wrap the rest, each a CHAIN of
+  rooms with partitions running ACROSS its strip -- the column beside the core (corners included), then its half of
+  the strip behind, a party wall between. Hall at the front door, kitchen, living room (open into each other), then a
+  door to the bedroom and the bath en suite at the end. Where the strip behind is too short for bed and bath, the
+  bedroom ends the column and the strip behind is its dressing room and bath; too short for a living room, a studio.
+  A column narrower than a room (1.3-2.4 m) is the flat's own entrance hall to its rooms behind the core. Rooms are
+  rectangles, so no cut falls beside the strip behind. Walked from the lobby like apartmentPlan; roomPlan tries it
+  before the ring and the lounge. `RT_NO_WRAP_FLATS=1` is the A/B switch.
+- A residential tower's fallback ring named its rooms offices behind a curtain wall; they are studios behind drywall.
+
+Interiors are grown at run time, so no re-bake.
+
+Tests: tower floors (11 recipes, every other floor): desk rows deep enough for offices 174 -> 0, desk-row floors 328 ->
+256. Residential tower floors (pencil + condo, 6 seeds x 5 plans, every floor): lounge floors 109 -> 0, floors with
+office rooms 28 -> 0; 2302 floors, every apartment floor walkable with a kitchen and a bath. Upper tower floors keep
+ADR-0160's window rule (65285 pieces, none tall before glass).
+
+## ADR-0162 — Workplaces are office floors: perimeter offices, reception, meeting rooms, kitchenette, lounge
+
+Glenn, 2026-10-13: "Yeah we should fill that space too. Offices can have meeting rooms, small kitchens, lounge space,
+reception desk, offices and cubes and open floor plans."
+
+The empty middle was a symptom. Only a CURTAIN WALL marked a floor as offices (ringPlan's `office = curtainWall`), so
+every masonry workplace -- the art deco, stepped and sky-exposure towers, office slabs and midrises, banks, civic halls,
+courthouses, the floors over a commercial block -- was a ring of studio flats round an empty middle: a bed, two
+nightstands and a sofa in every room. Measured on 177 such buildings (852 upper floors): 7690 beds.
+
+- **`BuildingParams::officeUse`**, RUNTIME ONLY: the architect sets it from the recipe and its place type
+  (`officeUseFor`: office, civic, shop or park, not a home, and not a hotel, hospital, school, library, museum,
+  university or church, which have rooms of their own kind), and the interior system sets it again from the building
+  record's recipe and type, because the lot cache does not carry it. An island baked before this needs no re-bake.
+  `RT_NO_OFFICE_FLOORS=1` is the A/B switch.
+- **Workplaces take the office floor** (`officePlan`), masonry or glass. A building with only a stair lays it round the
+  stair's well, which stands in for the core (no lifts, no reception); the plan must leave the well clear and walk
+  from the stair's foot, else a ring of offices. A ring in a workplace names its rooms offices (glass fronts only
+  behind a curtain wall), and a workplace never takes a house plan.
+- **What the floor holds**: a masonry office (and a third of the glass ones, by the building's seed) lines its windows
+  with PRIVATE OFFICES (`officeRowAt`, 3.2 m deep, about two bays wide) off a 1.6 m aisle, the open plan inside; a glass
+  one keeps the windows for the open plan and puts glass-fronted offices in the corners. Each band's strip against the
+  corridor (3.2-4 m deep, keeping a row of desks in front) holds the shared rooms, packed out from the band's middle
+  while they fit: on the band the lifts face, a RECEPTION centred on the core (a new `reception_desk` piece, the
+  receptionist's chair, chairs for visitors, a glass screen behind with a staff door) with glass MEETING rooms either
+  side; on the band opposite, the KITCHENETTE, a breakout LOUNGE and the big meeting room; on the others a lounge and a
+  small meeting room. The open plan is pods or cubicles, a building at a time, as before.
+
+Not done: a CHAMFERED glass plate (eight corners: the tapered glass tower's upper floors, 105 of 488 floors under 60%
+covered) is still a ring of offices round an open middle -- officePlan is rectangles only. Schools, libraries,
+museums and universities outside the campus still grow the ring of studios (beds), and want plans of their own.
+
+Interiors grow at run time: no re-bake.
+
+Tests: `workplaces_are_furnished_as_offices` (every recipe with officeUse, 3 plans x 2 seeds, up to 8 upper floors):
+beds 7690 -> 0, desks 4595 -> 16775, meeting tables 142 -> 1024, reception desks 32 -> 213, the hotel keeps its 592
+beds. Rooms cover ~92% of a cored masonry office floor (was ~73%). Window rule (ADR-0160) holds: 83321 pieces on office
+floors, none tall before glass.
+
+## ADR-0163 — Schools, libraries, museums and universities have their own rooms; restrooms
+
+Glenn, 2026-10-13: "Yeah keep going" (after ADR-0162 left them as studio rings).
+
+Off the campus, a school, a library, a museum and a university were rings of studio flats like the workplaces were:
+1015 beds across 36 of them in the test spread. They are campusPlan's corridor floors now, the campus field's layouts
+reached through a runtime field like officeUse:
+
+- **`BuildingParams::civicRooms`**, RUNTIME ONLY (architect `civicRoomsFor`, set again from the building record by the
+  interior system): university 1 (the teaching hall: lecture hall, classrooms, labs), library 2 (reading room, stacks),
+  museum 4, school 5 (classrooms and labs, no lecture hall). `RT_NO_CIVIC_ROOMS=1` is the A/B switch. Their ground
+  floor is their own rooms, not shopfronts.
+- **GALLERY** (new RoomKind, program `gallery`): ~10 m rooms off the corridor, display cases down the middle, a bench,
+  six pictures round the walls (never over a window, ADR-0160).
+- **RESTROOMS**: a bath room where nobody lives (`RoomPlan::office`: a school, museum, office) runs the `restroom`
+  program -- a row of toilets down a long wall, basins across from them -- instead of the home bath's tub. Campus
+  teaching halls had a bathtub in their restroom since the campus landed.
+
+No re-bake. Test `civic_buildings_have_their_own_rooms`: beds 1015 -> 0, no bathtubs; schools 6229 school desks and
+420 lab benches, the university 159 lecture rows, the library 8514 bookcases and 420 reading tables, the museum 1949
+display cases and 960 pictures.
+
+## ADR-0164 — Chamfered office plates take the office floor
+
+ADR-0162's leftover: the tapered glass tower's upper plates cut their corners on the diagonal (eight corners), and
+officePlan was rectangles only, so they were a ring of offices round an empty middle (105 of 488 floors under 60%
+covered). `chamferedRect` recognises a plate whose every corner lies on the four long walls of its bounding rectangle
+(each cut at most a third of its wall); officePlan lays the floor in that rectangle with every band, desk row and
+private-office row starting past its cut corners (and the chamfer's wall), so each corner is a nook of open floor at
+the diagonal glass. A corner office short of the exterior closes its outer side in glass.
+
+Tests `chamfered_office_floors_take_the_office_floor`: 164 of 181 chamfered office floors laid as the office floor
+(none before), no room corner outside its plate; the tapered tower's floors under 60% covered 105 -> 21. No re-bake.
+
+## ADR-0165 — The hospital: wards, a nurses' station, the lobby and examination rooms
+
+Glenn, 2026-10-13: "Do hospitals. I didn't even know we had them."
+
+The hospital is a landmark (one a city with six commercial blocks or more), four to six storeys round a core. Its
+upper floors were a ring of studio flats -- across 12 in the test spread, 1050 double beds and 987 sofas -- over an
+empty ground floor. `civicRooms` 6 routes it to `hospitalPlan`, on the office floor's bands (chamfered plates too):
+
+- **Upper floors (a ward)**: patients' rooms along the windows, about 4 m wide and 5 m deep, off a 2.4 m ward corridor
+  (`officeRowAt` with the Ward kind): a hospital bed head to a side wall with its bedside cabinet, a second in a room
+  4.4 m wide or more, a visitor's chair by the window. Behind the corridor, against the core's, the SUPPORT STRIP: the
+  NURSES' STATION on the band the lifts face (a counter open to the ward corridor, two nurses' chairs, records
+  cabinets) between a supply room and the utility room; opposite it the staff room (a kitchenette), a restroom and a
+  supply room; restrooms and stores on the other bands. The strip's ends stay open, so the ward corridor meets the
+  core's round every band's ends. Where a floor has no room for the strip, the station takes the middle of the ward
+  row on the lifts' side.
+- **The ground floor**: the entrance band is the LOBBY (an information desk facing the doors, rows of waiting seats
+  behind the doors' clear way, plants); the other bands EXAMINATION rooms (a couch, the doctor's desk, a basin) off a
+  corridor, restrooms and a supply room in their strip.
+- New pieces: `hospital_bed` (castors, raised head, rails), `exam_couch`, `waiting_seats` (four on a beam).
+- A hospital floor the plan cannot lay (or walk from the lifts) falls through to the ring, its rooms named wards.
+
+Interiors grow at run time: no re-bake. `RT_NO_CIVIC_ROOMS=1` is the A/B switch (with ADR-0163's).
+
+Test `the_hospital_has_wards_a_lobby_and_examination_rooms` (12 hospitals): every one a lobby, every ward floor (63) a
+nurses' station, every floor walkable; 1617 hospital beds, 198 examination couches, 476 waiting seats; no double bed,
+sofa or bathtub (before: 1050 beds, 987 sofas, no lobby). Window rule (ADR-0160) on every civic and office floor:
+346204 pieces, none tall before glass.
+
+## ADR-0166 — Civic halls: the church, the cinema, the market hall, the police station, the courthouse, the capitol
+
+Glenn, 2026-10-13, on a survey of what stood inside the buildings we have: "I like your idea. Do that." A church was
+empty (a one-storey building without shops never reached the room pass); a cinema and a market hall were fitted out
+as a cafe-bar by the shop pass; a police station's, a courthouse's and a capitol's ground floors were empty.
+
+- `civicRooms` (runtime, from the recipe) gains church 7, cinema 8, police 10, courthouse 11, capitol 12, market hall
+  14. `RT_NO_CIVIC_ROOMS=1` is still the A/B switch.
+- **hallPlan** (church, cinema, market hall: the ground floor, rectangular plans; growInterior now lets a one-storey
+  civic hall through): every room's side 0 its street side. A church is its NAVE: the altar and lectern on the far
+  wall, pews in blocks with aisles between them, clear of the door's way in and 4.5 m short of the altar. A market
+  hall is its floor of MARKET STALLS in rows. A cinema is its FOYER along the street (the ticket desk, the concession
+  counter and fridge, waiting seats, posters) and two to four AUDITORIUMS behind it, each with its screen high on the
+  far wall and raked rows (CinemaRow, 0.25 m a tier, aisle stairs) climbing toward its door; an auditorium its stair
+  would stand in is left out, open to the foyer.
+- **campusPlan, the ground floor of a police station, a courthouse, a capitol** (offices above, as ADR-0162): a police
+  station's runs are CELLS (a bunk, a toilet) with an interview room every third; a courthouse's COURTROOMS; a
+  capitol's first run its COUNCIL CHAMBER, committee rooms after. A courtroom or chamber runs along its band (its rect
+  turned so side 0 is the public end by the door, side 2 the bench's): the bench (judge, witness box, clerk), the jury
+  box on a side wall, counsel's tables facing the bench, public pews at the back. The LOBBY is carved where the front
+  door opens: 7 m of that run, the rooms either side giving way (a courtroom cut short of 8 m becomes a meeting room).
+- A one-storey building's stair well is no longer passed to the room planner: there is no stair in it.
+- Room programs gain `rows` (at most so many), `to` (the last row's gap from the far wall) and `any_wall` for a hang
+  (an outside wall, over its windows: a cinema's screen blacks them out -- the window test exempts it). A grid of sets
+  now keeps off the windows like a grid of single pieces (a tiered grid excepted: its back rows rise by design).
+- New pieces: pew, altar, cinema_row, cinema_screen, market_stall, judge_bench, jury_box.
+
+Not done: fire stations, factories, warehouses and sheds are not enterable -- their street face is roller doors, and
+the lot pass opens no doorway in a bay front (`wantsDoorway`), so their insides are never seen. That needs a door of
+their own and a re-bake: the next batch.
+
+No re-bake. Test `civic_halls_are_furnished_for_what_they_are` (9 of each): 891 pews and an altar in every church,
+458 cinema rows and 26 screens, 431 market stalls, 93 cell bunks and a front desk in every police station, a bench in
+every courtroom, a dais in every capitol; no bar counter in a cinema or a market (46 before).
+
+## ADR-0167 — The fire station: open bays, a real fire engine in each, the engine bay and the crew's quarters
+
+Glenn, 2026-10-13: "I like your idea. Do that" (the fire station on the list of buildings standing wrong inside), then
+"Btw a fire truck should be an actual truck."
+
+The fire station was shut: its street face was a row of roller doors (emitBayFront), the lot pass opens no doorway in
+a bay front (`wantsDoorway`), and inside were offices nobody could reach.
+
+- **The fire engine is a vehicle**, not furniture: a vehicle-kit spec (`vehicle_kit.lua` S.fire_engine: a crew cab on
+  the truck cab profile, a red body of equipment compartments shut by chrome roller doors, a white stripe, a ladder
+  racked on top, a red light bar, dual rear wheels; 9.20 x 2.52 x 3.21 m, a US Type 1 pumper's size) in the fleet
+  before the bus (`vehicles.lua`, the kit and mixed fleets). The sim types it `VehicleType::FireEngine` by its class
+  name and, like the bus, never deals it to ordinary traffic (`serviceVehicle`, `ambientSlotFor`).
+- **Stationed**: `CitySim::addStationedVehicle` adds a driverless vehicle of a type at a pose (the parked index
+  grown to hold it). After the sim is built, the citysim parks one fire engine behind each bay door of every fire
+  station (`vehicleBayDoors`: the doors emitBayFront draws -- its layout now one shared `bayRowFor`), its nose a metre
+  in from the door, on the station's floor; a bay too shallow keeps none. Drawn as the fleet's fire-engine body,
+  parked or driven.
+- **The bays stand open**: a fire station's (civicRooms 9) roller doors are drawn rolled up on their drums, and each
+  bay is a "baydoor" attach -> a DoorSpec with the new `open` flag: the building prism cuts its gap, the DoorSystem
+  hangs no leaf, the furniture keeps its way in clear (storeyOpenings gives a bay front's ground floor its bays). The
+  lot pass opens a fire station through them. Lots format 5; kCityLotsBuildTag / kLotsBuildTag 2026-10-13.1: a
+  re-bake.
+- **Inside**: the ground floor is the ENGINE BAY (hallPlan), the floor each engine stands on an APPARATUS room the
+  furniture treats as taken (as an open plan treats the rooms set into it); the crew's turnout gear in GEAR LOCKERS
+  (a new piece), in groups of six in a row behind the engines; a workbench and a locker at the back. The floor above is
+  the crew's QUARTERS: campusPlan's residence hall -- bunk rooms, a bath -- with the day room and the kitchen in its
+  first run with the rooms for them.
+
+Owed (Glenn, the same day): LADDERS to climb -- a climbing mode, roof-access ladders on buildings, the fire escape's
+drop ladder, a ladder up the fire engine, and its racked ladder taken down and stood against a wall. And the semis
+into traffic, once their trailers articulate in the sim.
+
+Tests: `the_fire_station_opens_its_bays_on_its_engines` (9 stations: 27 bays, 27 open bay doors drawn, 27 engine
+spots kept clear, 219 gear lockers, 224 bunks, a day room and a kitchen each, no office furniture);
+`a_fire_engine_is_stationed_and_never_dealt_to_traffic`; `the_fire_engine_is_fire_engine_sized`.
+
+## ADR-0168 — Ladders you can climb: roof-access ladders and the fire engine's
+
+Glenn, 2026-10-13: "We don't have ladders as interactable objects? Can we make ladders as interactable? And then use
+it on the fire engine and on buildings like auxiliary access ways to roofs?"
+
+There was no climbing: furniture offered sit, lie and stand; the player walked and swam.
+
+- **A ladder is data** (`engine/ladder.h` LadderSpec: its foot, the normal off its wall, the rails' top, the surface it
+  lands on and where you stand once off). The world's list (`Ladders`) holds the buildings' (`fixed`, built once a
+  city loads) and the vehicles' (`moving`, rewritten every frame by their owner).
+- **The LadderSystem** (an interaction provider, like furniture): offers the broker "climb" standing in front of a
+  ladder's foot and "climb down" standing where it lets you off at the top (`ladderEndWithinReach`); on the command
+  it puts `Climbing` on the player. It draws the buildings' ladders within 140 m (let go beyond 180 m).
+- **Climbing** (PlayerSystem, like swimming: `moveCharacterFree`, no gravity): forward climbs at 1.1 m/s (1.7 with
+  run), back climbs down; over the top the body steps off onto the landing, down at the foot onto the ground in front;
+  jump lets go. A rung is footing, never a fall.
+- **Roof-access ladders** (`procgen/city/ladders.h` roofLadderFor, pure in the building record, nothing baked): low
+  flat-roofed buildings (one to four storeys over the ground floor; no curtain wall, big box or campus hall), two in
+  three, on the REAR face, clear of every window the facade cuts on every storey (the first stretch a caged ladder's
+  width clear, from the end away from the fire escape's); a ladder of rails, rungs and wall brackets from the ground
+  to 1.1 m over the roof, bent back over the parapet, caged above 2.4 m where the roof is over 4.5 m up. The island:
+  3115 before the window rule.
+- **The fire engine's**: a ladder up the back of its body (in the kit spec, vehicle_kit.lua), published by the citysim
+  for every parked engine within 40 m: from the floor behind it to its roof (its collider box's top), stepping off
+  between the racked ladder's rails.
+
+Probed on island_8_nature: the fire engine's ladder offered and climbed (eye 13.65 -> 16.40 m), the player stood on its
+roof; a building's roof ladder offered, climbed and stepped off onto its roof 12 m up.
+
+Owed: the fire engine's racked ladder taken down, carried and stood against a wall (a carry-and-place mechanic); a
+climbing pose for the third-person body; ladders on the fire escapes' top landings to the roof.
+
+Tests: `low_flat_roofed_buildings_carry_a_roof_ladder_on_their_back_wall` (144 buildings: 26 ladders, all on the rear
+wall, letting off on the roof, over the parapet, the tall ones caged, none where none belongs, none across a window);
+`a_ladder_is_reached_from_its_foot_or_its_top`.
+
+## ADR-0169 — Factories and warehouses open onto their floors
+
+Glenn, 2026-10-13: "Okay do that" (factories and warehouses first, then the hotel lobby, station halls and the
+konbini). A factory, a brick warehouse and a metal shed were shut the way the fire station was -- the street face a
+row of roller doors, no doorway opened in it -- with offices over an empty ground floor.
+
+- `civicRooms` factory 15, warehouse (brick warehouse, metal shed) 16; `baysStandOpen` (9, 15, 16): the facade rolls
+  their doors up and marks each bay an open door, and the lot pass opens them (ADR-0167's machinery). Build tags
+  2026-10-13.2: a re-bake.
+- hallPlan: the ground floor is a factory's SHOP FLOOR or a warehouse's racked floor; inside each open bay a 5 m
+  LOADING STRIP (a truck's length) is kept clear (Apparatus), and so is the stair's well and its flight's foot --
+  now in every hall with a floor above it (the fire station's engine bay too). The hall's walkability check leaves
+  the kept-clear floor out (the stair's sits over its hole).
+- Programs: shop_floor -- a forklift, pallets of stock and workbenches along the walls, machine tools (a CNC mill or a
+  lathe) in rows with cross aisles; warehouse -- double-sided pallet racking in runs of four, 3.2 m aisles for the
+  forklift, pallets by the walls, a workbench. New pieces: machine, workbench, pallet_stack, forklift (a prop: not
+  drivable).
+- The floors above stay offices (officeUse).
+
+Test `factories_and_warehouses_open_onto_their_floors` (27 buildings): 60 bays, all drawn open; 234 machines, 345
+pallet racks, 27 forklifts; no piece on the kept-clear floor; offices upstairs.
+
+## ADR-0170 — A hotel's lobby
+
+Glenn, 2026-10-13: "Okay do that." A hotel's ground floor was shop units round an open middle by the lifts -- no
+reception anywhere. `civicRooms` 17 (the hotel, runtime) makes its ENTRANCE FACE all lobby: facadeLayout cuts no
+shop unit there (no shopfront sign, no shop door; build tags 2026-10-13.3, a re-bake), and shopRoomPlan adds a
+HOTEL LOBBY room along that face -- from the glass to 1 m short of the core (else 45% of the plate, at most 10 m), as
+wide as the face less the corner shops of the faces either side -- after its walk-through check (it has no walls of
+its own). Program hotel_lobby: the reception desk on the back wall facing the doors, two clerks behind it, a sofa and
+its table on each side wall, an armchair, plants, pictures; the middle kept for the walk to the lifts. The other faces
+keep their shops: a hotel's bar and cafe.
+
+Test `a_hotel_has_a_lobby_with_its_reception` (12 hotels): a reception desk and lobby sofas in every one; 126 shop
+doors, none on the entrance face.
+
+## ADR-0171 — Station entrances and the konbini
+
+Glenn, 2026-10-13: "Okay do that" (station buildings and the konbini, after the factories and the hotel lobby).
+
+- **The station entrance** (apps/citysim/station_entrance.*): a station's platforms stand up on the line and its
+  footway climbs to them from a street; the way in (RailStop::access) had nothing to say a station was there. A
+  PAVILION now stands over the footway 2.5 m up from the street (clear of the kerb's lamps and signs), 7.5 m along it and 8.6 m across: a roof on columns 3.6 m over the highest ground
+  under them, its fascia in the line's colour (rail green, light rail teal), the station's NAME on a lettered board
+  on the roof facing the street (station_boards.h's board, its frame placed there), glass side walls on a steel kerb,
+  three TICKET MACHINES down one side, a KIOSK (its counter, shelves of goods, a red sign) and a BENCH down the other,
+  and a GATE LINE of five cabinets across the way up with a passage a walker fits through between each. Built at load
+  by the TrainSystem from the rail lines, every piece on the ground the city reports under it (CityRenderSystem::
+  groundHeightAt); walls, machines, gates, kiosk and bench into a static collider. Nothing baked: 18 on the island.
+  A ticket hall up at the platforms waits on the rail builder (a 23 min island bake a change).
+- **The konbini**: trade 16 (trades.h), a "supermarket" place for the citysim, open 0-24; two in three grocers become
+  one, read off the facade's own hash without drawing from it, so no other unit on any street changes trade (giving
+  it a weight would have dealt every shop on the island again). Invented chain names only (shop_signs.cpp), a bright
+  white room, its fit-out the counter by the door with a hot-food case, a wall of drinks fridges, shelves and short
+  gondola rows. Build tags 2026-10-13.4: a re-bake.
+
+Tests: `a_station_entrance_stands_over_its_way_in` (on a 5% slope: the roof 3.6 m over the highest column's ground,
+nothing solid above but the columns, four or more passages a walker fits through the gate line, the board facing the
+street); `small_grocers_are_konbini_round_the_clock` (995 shop units: 48 konbini, 16 grocers left, every other unit
+unchanged in trade; the konbini fitted with their fridges).
+
+## ADR-0172 — The mesh audit: one rule set over every producer and every bake
+
+Glenn, 2026-10-13: "the entire procedural generation sits on this ... Everything, and I mean everything in this engine
+should use the same tooling ... this way we know that every polygon ends up being right when it's created." After the
+station turnstiles came out inside-out and the elevated decks could be seen through from below.
+
+- **The rule** (engine/mesh_audit.h): the front face is CLOCKWISE seen from the normal's side
+  (cross(c - a, b - a) along the vertex normals; VK_FRONT_FACE_CLOCKWISE, back faces culled). A triangle is INWARD when
+  its face and its normals are more than 107 deg apart (test_winding's angle rule: a smoothed crease or a surface-nets
+  sliver sits near 90 and is not one), FLIPPED past 154 deg, a SLIVER under 1 cm across (float32 rounding at
+  kilometres from the origin flips those on its own), DEGENERATE under MeshBuilder::kNoArea2 (what the emitters
+  themselves skip). `auditUndersides`: every walkable surface more than 2 m over the ground has something facing down
+  within 3 m under it, or the bottom of the solid it tops at the ground. `printColumn` reads a miss.
+- **Where it runs**: test_winding over every building recipe (outside and in, two plans), furniture piece, street-kit
+  piece, sign, ladder, tree species, rock, grass, terrain node, planet, the C++ and Lua vehicles, trains, people and
+  widgets; lanes_tests over every lab graph's decks and undersides; `rt_bake --audit <bundle>` over every mesh a level
+  ships (RT_AUDIT_PROBE="x,z" prints a column).
+- **Fixed at the shared tool**: every MeshBuilder emitter winds through triFacing, which drops a no-area triangle;
+  grid primitives end with dropDegenerate; earcut never returns a zero-area triangle; `lathe` splits normals at a
+  corner sharper than 40 deg and winds each band by its own segment (bowls and plates drew from inside); `tube`
+  carries its ring frame by parallel transport on the bend's bisector (bark quads twisted inside out where a branch
+  passed vertical); `autosmooth` gives a RenderMesh creases (the car shell's nose). wedgeXZ, the station boards and
+  the two neon signs were hand-indexed backwards; they go through MeshBuilder.
+- **The see-through undercarriage**: not a winding bug. The island bake's 2303 flipped deck triangles were all
+  float slivers; the hole was missing faces. `sweepWall` had no bottom ("it sits on the slab") and a median wall
+  stands on the seam between twin carriageways' slabs: from under the viaduct the slit looked up through the wall
+  (8512 open on the island, 1424 on rail_loop, 3959 on light_rail_lab). Walls are closed now, `trackBox` too (a
+  stair block, a column; a sleeper opts out), and a platform not held up is a slab from the ground up. Every lab
+  graph: 110,739 hanging triangles, 0 open. Tags: lanes and rail 2026-10-13.1, lots 2026-10-13.5 -- a re-bake.
+- **The one-way side strip** (Glenn, 2026-10-14: "on the freeway it's a big seam and it looks to be missing faces
+  entirely ... from the deck you can't see through to the ground so the hole is clearly one way"): the lanes `slab()`
+  dropped a side whenever a neighbour's TOP was level, so the 1.2 m carriageway beside a 0.3 m shoulder left a 0.9 m
+  step open; from below at an angle you looked into the slab and out through the back of the asphalt. The hidden
+  test now returns the neighbour's underside and the side is built up to it. Straight-up checks cannot see this, so
+  `auditSeeThrough`: a person stands under every elevated walkable surface and looks up at 45 deg in 8 directions;
+  a first hit on a back face is see-through (eyes inside a solid are skipped). Lanes test per lab scene with known
+  residuals; rt_bake --audit prints it. Freeway labs 336/145 -> 0, system_interchange 1046 -> 58; island_8
+  34,009 -> 2,968 of 1.21 M looks. Lanes tag 2026-10-14.1. Left: a shoulder strip cut off from its deck at
+  interchange ramp junctions (a lane footprint hides its side where no deck is drawn), station canopy ribs, valley
+  ramp ends.
+- **Where people stand** (the same day, the island read after the side-step fix): the angle audit's eyes stood inside
+  ramp slabs 1.3 m off the ground and inside piers longer than its 3 m enclosure test, and counted their own slabs'
+  backs (2,968 -> 808 once headroom is measured from the ground and "inside" is parity: the first face met is a back,
+  level or straight down). What was left was real: layer slivers standing up as fins beside the deck (a steepness
+  test by rise over the longest edge; now the plane's slope) and slab sides hidden by a footprint where nothing is
+  drawn (the side rule now tests the drawn triangles). Lanes 2026-10-14.2.
+- **Not gated**: stylized canopies (normals leaned toward the crown's centre on purpose) and leaf cards (two-sided).
+
+Owed (the mesh library): one triangulator (the road ear-clipper beside earcut), latheMesh folded into
+MeshBuilder::lathe, a box-in-a-frame primitive for trackBox and the shape grammar's emitBox, the Lua mesh.* as a thin
+face over the same API, the lot cache's building meshes under rt_bake --audit.
+
+- **Where the decks judge the ground, and what "inside" means (2026-10-14, lanes 10-14.4).** The island's biggest
+  open-underside clusters were asphalt 2-3 m over the grass with no soffit: the slab's underside rule asked the grid
+  BILINEARLY, and on cells twisted between a deck-pinned node and the earthwork hold dug beside it that stood a metre
+  and more above the two triangles the terrain draws -- the deck read "at grade". `GroundGrid::sampleDrawn` (the
+  gridCell diagonal) is what the deck mesher and the lanes audits now ask. And the see-through audit's inside test
+  became a winding count along each level look (+1 a back crossed, -1 a front): a pier standing up into a twin-web
+  girder meets a web's front first from inside the pier, so "the first face is a back" had the eye outside -- 89 of
+  the island's 579 looks. rt_bake --audit: RT_UNDERSIDE_SAMPLES=N prints open tops (with corners and the ground under
+  each) in the worst squares. The rebake took the island's open undersides 265 -> 12 (asphalt 253 -> 0) and left the
+  see-through looks where they were: those were the one-way strip again, at a SEAM -- the carriageway's lane footprint
+  takes in its shoulder, so the seam test ("the pavement continues at this level") skipped the side before the side
+  rule could build the 0.9 m step under the shoulder. A seam now skips only where what is drawn beyond reaches as deep
+  (lanes 10-14.5).
+
+- **Layers cut at their own level; nothing grows through a deck (2026-10-15, lanes 10-15.1).** Glenn on island_8_nature:
+  a palm "going through the elevated train deck", and "where the elevated train deck goes over the sidewalk it removes
+  that part of the sidewalk underneath it". The second was the lattice's mistake in the lanes pavement: shoulders and
+  sidewalks were every band minus every lane, hull and median IN PLAN. Each road's band is now cut piece by piece, only
+  by what stands within sameLevelDz of it there (lanes_a_sidewalk_runs_on_under_a_bridge: 150 m2 of sidewalk under the
+  light-rail lab's track, 450 under the ring city's ring; 0 under RT_LAYERS_FLAT=1, the old cut). The first: street
+  trees kept their trunks off the carriageway and never looked up. DrawnRoad::overhead (heights) asks whether anything
+  drawn stands over a tree's canopy (0.3 of its height round the trunk, half a metre over the foot to its top); a street
+  tree's pit stays empty and a lot tree is not planted there. Both at load: the trees need no re-bake.
+
+## ADR-0173 — The mesh library v1: every producer on one set of words
+
+Glenn, 2026-10-13: "Mesh library is priority one" — "a common library of triangulation techniques, tristrips, how to
+represent triangles in this engine, and then code to handle all the different cases ... And then lua should be able
+to access it ... other c++ mesh builders would then call into the common library."
+
+- **The convention**, written once at the top of mesh_builder.h: a RenderMesh is an indexed triangle list; the front
+  is clockwise seen from it (cross(c - a, b - a) along the normal); nobody writes index order by hand -- every
+  triangle goes through `triFacing`, which winds it to the outward normal it is given and drops it when it has no
+  area (kNoArea2); solids are closed unless a face is masked because something covers it; one triangulator.
+- **The words** (MeshBuilder): emitTri/emitQuad (+UV), triFacing, quadFacing, vertex; gridIndices/gridCell (the CDLOD
+  lattice); emitBox on a MeshFrame (any frame, sheared or mirrored; `rotatedAbout` a pivot line; Scope::frame),
+  emitBlock (any eight corners), emitPolygon (planar, holes, any plane), emitPlanPrism (a plan outline with holes,
+  walls round every ring), emitCylinder; triangulate (earcut, index triples); lathe (smooth or faceted, LatheStyle);
+  tube, ribbon, roundedBox, icosphere, crossCards; the shape operators (displace, cut, facet, lean, deform, colorBy);
+  flatShade, autosmooth, recomputeNormals, dropDegenerate; append/appendTransformed/transform.
+- **One of each**: the road ear-clipper and the shape grammar's latheMesh now forward to the library's; the boxes
+  copied across station_boards, train_mesh, occupant, citysim, the Lua fleet, deck_mesh (trackBox, box8), the fire
+  escape and the shape grammar are emitBox/emitBlock; the shape grammar's emitTube/Disc/PlanSlab/PlanRing are
+  adapters onto emitCylinder/emitPolygon/emitPlanPrism (a ring slab now walls its hole).
+- **No hand-written index lists** outside the library but three, each saying why: the SDF dual contour (its winding
+  is topological; per-quad winding breaks it), physics colliders (not render meshes), and the terrain drape's clipped
+  pieces (they keep their source triangle's order).
+- **Lua**: mesh.block, box_frame, polygon, prism, column, flat_shade, autosmooth, lathe{smooth=}, and mesh.audit so a
+  script checks what it built (mesh_library_from_lua_is_clean).
+- **Found on the way**: the river quay was wound counter-clockwise -- and test_scatter's quay check counted that rule,
+  so it passed while every quay face was inside out to the renderer. The street-sign and shop-sign boards used the
+  same backwards index list as the OPEN sign.
+
+- **The lots, reworked** (Glenn, 2026-10-14: "city lots should be reworked and we should rebake everything after"):
+  the open-lot sculptors each carried their own box and rectangle adapters over the same plan frame. Now ONE frame,
+  SiteFrame (W, P), which OpenFrame and the depot's yard are; and three words for it in shape_grammar.h --
+  Scope::inFrame (a box at a frame point), Scope::standing (a box centred on a plan point, turned along a direction)
+  and emitPlanRect. The change was proved byte-identical first (rt_bake --sections on river_town and
+  island_8_saltwood: 2 depot yards, 108 playgrounds, 201 gardens, ~930 parks), then the two behaviour fixes went in:
+  the drape's pieces fan through triFacing, and a utility lot's cabinets, its posts and the fence/shed colliders are
+  closed blocks. (The 22 no-area triangles the island audit found in the lot parts were NOT the drape: the rebake kept
+  every one. Each had two equal corners -- a sub-millimetre edge 4.6 km out, sound in double, collapsed by float32
+  storage. packMesh now drops a triangle with no area in float, for every baked mesh; lanes 10-14.3, lots 10-14.2.) Of the three exceptions
+  above, only the SDF mesher's is left; the drape and that collider now go through the library. Lots 2026-10-14.1.
+- **The drape cuts every small triangle** (level_tests lot_dressing_is_planted_on_the_ground, red since the community
+  gardens of 10-09): a triangle a cell or smaller was kept whole and lifted at its corners, so across a cell's diagonal
+  it was a chord over the crease -- and a garden bed's soil and the crop standing on it chorded it differently, the
+  crops sunk 0.15-0.4 m into their beds on steep cells. Now it is cut along the cell lines and diagonals it crosses,
+  as walking surfaces already were, and follows its terrain triangle exactly (cuts on a shared edge land at the same
+  points: a solid stays closed). Draped triangles 644k -> 1.23M on metro_v2_test + metro_lanes, but the ground is
+  asked once per place (the triangles' shared corners were each asking): the drape 16.8 -> 5.0 s, the part-chunk
+  load 13.5 -> 5.1 s and 4.0 -> 1.5 s. Drapes at load: no re-bake. The test also lets a planter stand on any lot
+  part (its list of "planter" parts never had the beds' Wood and Detail -- 1,000 of its 1,100 floats).
+
+Tags: lanes + rail 2026-10-13.2, lots 2026-10-13.6 (a re-bake). Tests: mesh_library_solids_are_clean_and_closed
+(sheared and left-handed frames, clockwise blocks, either outline winding, holes, tilted planes, both lathes), the
+mesh_audit_* cases, the lanes deck and underside checks; the full suite.
+
+## ADR-0174 — The architectural toolkit on two foundations: the space graph and the exterior model
+
+Glenn, 2026-10-14 and 15 (issue #105): "what are the architectural tools we need in our toolkit to express a wide
+variety of buildings ... Boxy skyscrapers, art deco ones, the sears tower, westfield mall, curved buildings, stadiums";
+"buildings that function inside and out, fully traversable with stairs, escalators, elevators"; "What about buildings
+that have 3D cells and not just 2D floorplan cells?"; "entirely build buildings with interior and exterior using
+cells"; "it needs to be done using the building shape grammar and not a one off function or chunk of code"; "this isn't
+to replace or retire the current building looks ... we want more variety".
+
+- **Two foundations.** A: the SPACE GRAPH (`procgen/city/space_graph.h`). A building is CELLS -- the volumes a person
+  can be in: rooms, a storey's hall, stair shafts, hoistways, the roof deck, later atria, ramps, raked bowls -- with a
+  floor surface (level, sloped, stepped, helical) and a height, joined by PORTALS -- door, passage, void, stair,
+  escalator, lift, ramp, vomitory. A cell is three-dimensional (a stair shaft spans every storey it serves); a storey
+  plan is a VIEW of the graph (`storeyView`), not the model. B: the EXTERIOR MODEL -- `Section` (edges line / arc /
+  spline, holes, booleans by Clipper2), `Face` (flat / cylindrical / ruled), `Mass` sources behind `slice(y)` /
+  `shell()` (`Stack`, `Sweep`, `Implicit` on the SDF kit, `Mesh`, `Complex` of cells in frames) -- and the SLICE
+  BRIDGE that turns any mass into storey outlines for A. Clipper2 and the SDF kit, already in the tree, enter the
+  building grammar by this ADR. Plan and brief: issue #105; the record: `docs/building-toolkit-plan.md`.
+- **The gate.** A style ships only as a real building, fully accessible inside and out, base to top: reachability
+  over the space graph from the street to every cell with the walker's means (`unreachableCells`, `WalkerCaps`),
+  plus one physics walk per portal emitter (the door walk, the stairwell, the cab ride, the deck ride, the bulkhead).
+  `graph_gate_every_recipe` runs the graph gate over every architect recipe on three plans at two seeds;
+  `level_blueprints_and_graph_gate` over a level's records, drawing each building's BLUEPRINT SHEET (`blueprintSvg`).
+- **Migration, not replacement.** Today's buildings stay as presets, byte-identical through every refactor step (the
+  mesh-hash census and `rt_bake --sections` are the proof). The graph is first built FROM today's growers by an
+  adapter -- `spaceGraphOf` over `storeyPlans`, `storeyRooms` (the one storey plan `growInterior` and the graph both
+  read), `CorePlan` and the facade's doors -- and later steps grow from it. The order is by dependency: the space
+  graph and its gate (this step), `Section` + `Face`, circulation, `Mass` + the slice bridge + `Stack`, `Complex`,
+  `Sweep` / `Implicit` / `Mesh` / `Envelope` / rakes, then books and the variety census. No schedule.
+- **What the gate found on day one, all fixed the same day.** Apartment end units whose entry hall faced a bedroom
+  across a solid divider -- the flat was a dead end past its bath (an end unit keeps one bedroom at its far end,
+  `layoutApartment`). Coreless setback towers whose straight stair ended at the first shrunken tier, leaving every
+  storey above with no way up -- ten recipes (`stairRuns`: the stair moves inboard, a new layout on the shrunken
+  tier whose first flight leaves the storey the last run arrived at; that transfer storey is an open floor, the sky
+  lobby between the two stairs). A ring office on an L's narrow arm that spanned the arm and opened its door on the
+  exterior wall (`ringPlan` measures its depth into a concave plan, not across its box). The gate test keeps a FIX
+  LIST by name for whatever it finds next; it is empty.
+- **Rules.** Non-prismatic masses are always glass. Every word lands in C++ and Lua together (ADR-0042:
+  `building.space_graph`). A ledger row before each module. No one-off functions: a new shape is grammar words.
+
+## ADR-0175 — The stack is the source of the storey stack; turned storeys are facets with slab bands
+
+Glenn, 2026-10-15: "Can we work on the building grammar, that's more important" -- step 4 of the toolkit plan
+(issue #105, ADR-0174) ahead of the circulation's zones. The grammar's massing words: a MASS gives its outline at a
+height (a slice) and its skin; a STACK is sections over storey ranges under keyed transforms.
+
+- **The stack is the source.** `massStack` and `storeyPlans` are the stack's tiers and slices (`stackOf`, then
+  `Stack::tiers` / `sliceStoreys`); the code that was `massStack` is `envelopeTiers`, the preset's input. With
+  identity transforms the slices are the old storeys point for point and tier for tier (the every-recipe census is
+  identical; `the_stack_preset_slices_to_todays_storeys_bit_for_bit`). A new form is a transform or a relation on an
+  entry, never new tier code; a new mass source (a sweep, an implicit form, a mesh) is a `Mass` whose slices feed
+  every planner, facade, collider and census untouched.
+- **A turned or scaled storey's glass is RULED to the storey above** (revised the same evening -- Glenn, walking
+  the lab: "the twisting ... should be continuous and look like one curve"; "they look like layered cakes"). Where
+  the storey above continues the tier on an outline with the same corners, each edge's curtain wall is a ruled face
+  (`FaceRect::ruled`, `planEdgeRuled`): its bottom edge on this storey's floor outline, its top on the ceiling's,
+  the panes and mullions ruled between them, so a twist or a bulge is one surface with the spandrel as the only
+  slab line. The collider's walls rule the same way. Where the corners do not correspond (an implicit form's own
+  contours) the first cut stands: flat facets and a SLAB BAND -- the union of the two outlines -- closing the
+  seam. A turned storey is NOT a setback: `tier` stays the entry's, so the cap-and-parapet rule fires only where
+  the entry changes. The inner inset skin is still vertical (the glass leans by well under the inset per storey);
+  ruling it too is owed.
+- **Support is an overhang.** A `Relation::Support` entry (the Stack envelope's slid modules) hangs past the one
+  below. Its floor plate is drawn whole, the underside the soffit; the deck below keeps its parapet only on the runs
+  outside the plate (`runsOutside`; the collider clips the same way) -- a ring would wall the room above.
+- **The core fits every storey it climbs through.** `massStack` lists one tier per turned storey (a constant slide
+  is one tier), so `corePreset`'s fit tests the core's corridor ring against each outline; where none fits, the
+  building keeps the straight stair runs, as before.
+- **The lot bounds the transform.** A twist turns the plan itself (a stadium turns as a stadium), scaled down about
+  its centre until every storey lies inside the lot; the box inside an L or a notched lot when the plan cannot turn
+  inside itself. Modules shrink along the long axis by the shift so every slid module stays inside the lot.
+- **A scale curve is the same machinery.** The Bulge envelope scales the plan about its centre storey by storey
+  (0.8 at the foot, full at `bulge` of the height, `taperTop` at the top): the lens tower on the drum massing, drawn
+  with the same facets and slab bands, the core fitted to every storey.
+- **The curves compose.** Rotation, scale and slide are three curves on one entry, so the Curves envelope takes
+  all of a recipe's `twistDeg`, `bulge` / `taperTop` and `lean` at once -- a leaning tower, a twisted taper, a
+  leaning twist -- where Twist and Bulge stay as the single-curve presets they were proven as. A lean keeps the
+  top on the lot by squeezing the section along the lean's axis by the lean, then the twist's shrink-to-fit.
+- **Owed.** Today's stepped taper as a scale curve (its steps stay as the preset), `emitCap` kinds (spire, dome,
+  vault, aperture, flared), the drum and the pagoda as presets (`growCylinder`, `growPagoda` retired), ruled curtain
+  walls.
+
+## ADR-0176 — The complex: cells that share faces, each grown as its own building
+
+Step 5 of the toolkit plan (issue #105, ADR-0174): buildings made of several masses -- the Sears Tower's bundled
+tubes, courtyards, wings -- without a mesh boolean.
+
+- **A complex is cells side by side; its slice is their slices.** `Complex : Mass` holds `CellFrame`s (a mass in a
+  frame with its own params) and the `Adjacency` list `resolve` finds: two cells' edges on one line, facing each
+  other, overlapping by two metres or more. Nothing is cut out of anything: each cell is grown as the plan building
+  it is, by the lot pass as a unit (the rowhouses' path), and the shared faces are its party walls.
+- **The party walls carry the complex.** `BuildingParams` takes up to four (a tube in a bundle touches four), each
+  with `partyTop` -- the last storey it is blank on, so the taller cell keeps its windows above the lower one's
+  roof -- and `partyDoors`, a doorway through the wall's middle bay on the ground storey. `partyEdge(plan, params,
+  edge, storey)` answers per storey; every reader that knows its storey asks with it. With two walls, no tops and
+  no doors this is exactly the attached-buildings model of before: the census is identical.
+- **Every cell has a way in.** `connectLobbies`: a cell with an outer face enters from it (its `faceDir` turned to
+  that face, the one nearest the street); one with none is entered through a connected neighbour on the ground
+  storey -- its entrance faces the shared wall, and the neighbour's wall takes the doorway (`FacadeMode::PartyDoor`:
+  blank but for the middle bay, the same bay the entrance cuts, since one layout rule lays both). Two coincident
+  doorways in two coincident walls: each unit's facade, collider, interior and graph keep their own door, and the
+  gate holds per cell.
+- **The bundle is the first preset.** `bundledTubes`: nx by ny rectangles on the lot's box, each a stack of its own
+  floors -- the Sears pattern, a rank per tube by the seed, one tube at the full height -- fewer tubes where one
+  would be narrower than its core. The lab grew six on its lot, all enterable, all gated.
+- **The courtyard block is the second preset, and it taught the model's one rule.** A party wall is a WHOLE edge
+  (the plane test takes both ends), so four wings round a court cannot share half an edge with each other: the
+  corners are cells of their own, eight cells in all, each with its own street face. A cell of a complex opens
+  whatever its height -- the lot pass's walk-up limit (three storeys without a core) predates the stair runs that
+  climb every storey, and the gate proves each cell.
+- **The ring is the third preset.** One trapezoid cell per edge of a convex outline, between the edge and the
+  outline offset inward by the depth; neighbours share their radial faces whole. A round block round a court on
+  a twelve-gon; four mitred cells on a rectangle. It fixed the street-face rule: a face on the complex's convex
+  hull (a ring's outer chords are on no box).
+- **Owed.** The rowhouse strip and the mall as presets of the complex (byte-identical), a courtyard as a section
+  hole (one ring plan, one building), bridges between cells above the ground, a `growComplex` that grows the cells
+  as one, openings between cells above the lobby (sky bridges inside a bundle), the heights as a recipe descriptor.
+
+## ADR-0177 — The implicit mass: a building as a field, its storeys the field's contours
+
+Step 6 of the toolkit plan (issue #105, ADR-0174) opens with the mass source the stack cannot be: a form whose
+storey outlines are not affine images of one section.
+
+- **The field is the engine's own SDF kit**, with the words a building needs on top: a plan extruded
+  (`sdfPlan` the 2D distance to a CCW polygon, `sdfExtrude` its slab), and warps of the space the field is read
+  in (`sdfWave`: the query point displaced along a plan direction by a sine of the coordinate across it and of
+  the height). Spheres, boxes, capsules, unions and blends compose as they always did.
+- **A storey is the field's zero contour at its height.** `sliceSdf` samples the field on a half-metre grid at
+  the storey's mid height -- the grid set off the field's own lines by an odd fraction of a cell, so a plan's edge
+  never lies on a grid line -- traces the contour by marching squares, keeps the largest loop, simplifies it by
+  Douglas-Peucker within 0.3 m and folds the corner chamfers the grid cuts back into corners. The storey view
+  reads that polygon like any other: the facade per edge, the planners, the collider, the census. The seams
+  between storeys are the slab bands of ADR-0175.
+- **The Wave envelope is the first implicit form -- and the wave is in the floor plates.** Glenn, on the first
+  cut (wavy storeys, wavy offices): "the interior of those offices should just be a straight edge versus the
+  exterior which can be wavy". So the storeys are the plan as drawn, the glass straight on it, the interiors
+  partitioned on the rectangle; each floor plate's edge is the field's contour at its floor line, a slab running
+  past the glass by up to `wave` metres (`wavePlates`). That is Aqua Tower as built: straight glass, waving
+  balcony slabs. The implicit mass still slices the field; the grammar reads its contours as plates, not plans.
+- **What the wave taught the planners** (found while its storeys were still wavy, and kept: any non-straight
+  outline meets them). Three defects, each in a planner that assumed straight edges meeting at right angles: the
+  ring planner laid a room per short chord, so a gently turning run of edges (under 35 degrees at every vertex,
+  either way) is now one curved band whose pieces are a room's width along the run with radial, mitred sides, and
+  a straight band beside a curved one measures where its strip is clear instead of assuming the neighbour's depth;
+  the office plate laid its rows the full side of the rectangle inside the plate, past where the skin dipped
+  between the rectangle's samples; the desk rows the same. Each trims to the outline as drawn. An arc's piece is
+  now no longer than two rooms along the glass (a drum's quarter was one office with one desk -- Glenn: "really
+  wide and only had a tiny desk"); a rounded corner's quarter stays one corner office. No straight-edged plan
+  changed (the census over every old recipe is identical).
+- **The mesh mass is the artist's hatch.** A closed glTF (Blender's, or `tools/make_mass.py`'s: the first mass
+  is scripted, the script the record), fitted to the box inside the lot and the storeys' height, is sliced per
+  storey the way the field is -- every triangle's crossing segment linked into loops, the largest kept -- and
+  each slice is RESAMPLED to one corner count by arc length from a fixed bearing, so the storeys correspond
+  corner for corner and the glass rules between them. `massMesh` names the file by its place in the sorted
+  folder, a number the lot cache stores; a form nobody drew falls back to the plan. The core's two rules hold
+  it to the gate: no storey narrower than the core needs (the footprint is pushed toward the box -- a point on
+  the box stays, a point inside moves out by a share of the way -- until the narrowest slice is `kCoreTierMin`
+  + 3 m, the bulge's floor), and a lot with no box inside it that wide (the gate's L, centred on its inner
+  corner) stands as the plan, as the taper and the slab do. `massStack` reports one tier per differing storey,
+  so the core is asked of every slice, not the first.
+- **Owed.** The horizontal sweep (`SweepMass`: a vertical sweep is the stack's slide curves), `sdfRevolve`,
+  the twist / bend / taper warps as SDF words where the stack's curves do not reach, the `Envelope` (a skin that
+  is not the floors), rakes as stepped cells.
+
+## ADR-0178 — The envelope: a form worn as a skin round straight floors
+
+Glenn's lab note on the wavy tower (2026-10-15: "the interior of those offices should just be a straight edge
+versus the exterior which can be wavy") was answered first for one form, by putting the wave in the floor plates.
+This makes that answer a word every form can use (`envelope.{h,cpp}`, issue #105 step 6).
+
+- **A form is the floors, or it is a skin.** `BuildingParams::skin` says which: 0, the form is the floors (every
+  storey its slice, as ADR-0175 and ADR-0177 give them); 1, a DOUBLE SKIN -- the storeys are straight, the plan's
+  prism nested above the base storeys, and the form is a second glass skin a gap (`skinGap`) outside them; 2,
+  PLATES -- straight storeys, and each floor's plate runs out to the form's contour (Aqua Tower; the Wave's
+  default, so `wavy_tower` is unchanged); 3, both. The rooms inside are rectangular whatever the skin does, and
+  every planner is untroubled.
+- **The floors inside a skin are the plan scaled about its centre** until, pushed out by the gap, they lie inside
+  the form at every storey above the base (a bisection on the scale; the Wave's floors are the plan itself, its
+  wave running past the plan, or the plan inset by the wave and the gap for a wavy veil). Floors narrower than
+  the core needs (`kCoreTierMin`) cannot stand: the form is then the floors, as if `skin` were 0 -- a twist
+  turning inside a 30 x 24 lot leaves no such floors, a 44 x 40 lot does. `massStack` and `storeyPlans` consult
+  the skin first, so the core, the graph, the collider and the census all see the straight floors.
+- **The veil is drawn from the form's own storeys** (`formStoreys`: what the form would be as floors), each
+  storey's edges ruled up to the next outline's, floor-to-ceiling glass in the building's curtain style (a
+  diagrid when the recipe asks), a trim band at its foot on the base storeys' roof and a parapet at its top.
+  Outlines whose corner counts differ (a field's contours) are resampled to one count by arc length, so the veil
+  rules; outlines that already correspond (a twist's rectangles, a mesh's slices) are used as they are. The veil
+  is scenery: no collider, the floors' glass bounds the walkable space.
+- **A plate's edge past the glass carries a railing** (`emitRailingRun`, `emitPlateRailings`: a top rail, a mid
+  rail, a post every 1.5 m, on every plate edge whose middle lies more than a hand's width outside the storey's
+  outline). This is the railing the wave owed since ADR-0177, and the bridges of the complex will use the same run.
+- **Two recipes wear it.** `veil_tower`: a straight tower in a sculpted glass skin, the form by the seed (a
+  twist, a lens, the curves, the sculpted mass), half of them diagrids; and half of the `sculpted_tower`s are
+  veiled. Both in the financial table and the archetype book; `building.envelope{}` in Lua gives the floors,
+  the veil's outlines and the plates per storey.
+- **The caps the stack owed since ADR-0175 land with it** (`emitGlassCap`, `Cap::Kind` on `mass_stack.h`): the
+  dome's loft -- the top outline ring by ring in glass with a rib up every corner, on a trim band -- is one
+  emitter with a profile per kind. `top` 11 SPIRE: a concave taper to a point, twice the half-width tall. 12
+  VAULT: a barrel over the long axis, the short axis alone scaled by cos, the ridge the last ring, the gables
+  the loft's own ends. 13 APERTURE: the dome stopped at two thirds, open to the sky, a rim at the opening. 14
+  FLARED: the outline swelling out by an eighth under a flat glass lid. The deck under every one stays the roof
+  the stairs reach; the twisted taper, the leaning tower, the sculpted tower and the stacked modules wear them
+  by their seeds. Lua names them as the dome is named.
+- **Owed.** The sweep, `sdfRevolve` and the SDF warps, rakes; the veil's top closed over the gap (a ring roof)
+  where a recipe wants it; a door onto a plate (today no plate is walked).
+
+## ADR-0179 — Openings between cells: shared lobbies, a sky bridge, one crown
+
+The complex of ADR-0176 stood its cells against one another and gave every one a way in; the cells never opened
+to each other except where an inner tube had to be entered. This is the first set of openings BETWEEN cells.
+
+- **A shared wall that is a whole edge of both cells opens both ways on the ground.** `connectLobbies` puts a
+  doorway in the middle bay on both sides of every such adjacency (the two cut the same bay: one layout, one bay
+  width, the edges one segment), so a bundle's, a courtyard block's or a ring's ground floors are one lobby. The
+  doorway is the party wall's `backdoor` bay, which the lot layer already turns into a door the collider notches
+  and a leaf; nothing new reaches the graph (a cell's own gate is unchanged) -- the lobbies join physically, as
+  the inner tube's entrance always did.
+- **A sky bridge is a LINK on both faces.** `Bridge{a, b, storey, width}` on the complex is resolved
+  (`resolveBridges`) to the two faces that face each other across a gap, overlapping along their run; both cells'
+  params take a link (`links`, `linkN`, `linkC`, `linkStorey`, `linkLen`, `linkW`: the face's line, the door's
+  centre, the storey, the span to draw -- on one side only -- and the width). Through the grammar a link is: a
+  doorway in the curtain wall at that storey framed in the mullion metal (`emitLinkDoorway`); the bridge from the
+  side that carries the span -- a floor slab, glass sides floor to ceiling, a roof slab -- recorded as roof items
+  of two new kinds, `Bridge` (a prism walked on top) and `BridgeWall` (a ring, as a screen is), which the roof
+  cell ignores; the storey laid as the LOUNGE (the sky lobby: open floor, so the door opens onto nothing walled);
+  in the collider the wall cut round the doorway at its storey -- in a tier's walls, or in the one-tier tower's
+  ground prism, whose door notches now carry a sill; and in the graph a `Link` cell past the face (the bridge's
+  footprint, or a stub when the cells touch) joined by a Passage to whatever stands at the door. The neighbour's
+  graph has the same from its side; the gate on each cell is unchanged.
+- **Twin towers are the preset** (`twinTowers`: two towers along a box's long axis a gap apart, each the box's
+  full depth, a bridge two thirds of the way up the lower one), `recipeTwinTowers` ("twin_towers", a whole-block
+  landmark of the financial and commercial quarters, 4% of them; a third wear glass spires). Lua:
+  `building.cells{ twins = gap, bridge = storey, bridge_w = w }` returns the bridges placed.
+- **One crown per bundle.** The tallest tube wears the top; every lower tube's deck stays bare (`top = 9`), as a
+  courtyard block crowns its tallest wing and a ring none. Thirteen penthouses on one block were a skyline of
+  bulkheads.
+- **Owed.** Openings between cells above the ground where they touch (an office suite across tubes); bridges
+  between cells of different presets; the rowhouse strip and the mall as complex presets; the ring's one crown.
+
+## ADR-0180 — Wide openings between cells, and the mall as cells
+
+Glenn, 2026-10-15: "does this mean you could build something like the Westfield mall now that we have cells?"
+Almost: the one opening the complex lacked was a shared wall simply ABSENT along a run.
+
+- **A wide opening is a party wall with a hole floor to ceiling.** `Complex::openWall(adjacency, u0, u1, k0, k1)`
+  writes it onto both cells' params (`partyOpen0/1[k]`: the run's ends as positions along the wall's tangent,
+  world; `partyOpenK0/K1[k]`: the storeys) and records the Opening. Through the grammar: the facade draws the
+  blank wall in two pieces either side of the run (`emitBlankWallPieces`); the furniture keeps the run clear
+  (`storeyOpenings` lists it as a doorway); the collider leaves it out of its walls -- `wallCuts` gathers the
+  link doorways of ADR-0179 and the wide openings into one list of cuts the ground prism and the tier walls both
+  honour, each a sill below and a header above; and the graph has a Link cell past the wall on every storey the
+  opening spans, joined by a Passage. A ground opening across a wall's middle bay drops the party door it covers.
+- **The mall as cells** (`mallCells`): the American mall of bigBox 6 is the SPINE -- its wings now able to END
+  OPEN (`mallOpenEnds`: no anchor inside, the concourse and its shops to the end wall, an open wing content with
+  20 m past the court where an anchored one needs 30) -- with an ANCHOR cell at each end of the long wings, a
+  big-box store given the spine's floors and storey heights so the levels meet and a department store's upper
+  floor, wider than the wing it closes and the two unequal (64 and 52 m), the concourse open into it on every
+  level through 12 m. Where the block is deep the spine is a CROSS (Glenn: "that mall is kind of a boring
+  shape"): an entrance wing to the street with the food court over its vestibule, a back wing ending open into
+  the GARAGE cell -- parking decks, 8 m open at the ground, ramps on the back street -- and a round cafe
+  PAVILION beside the entrance; a shallow block sets the garage against the court's back and drops the wings it
+  cannot fit. Every cell is its own building with its own way in from the street; the spine keeps its court,
+  escalators and glass lift.
+  `recipeMallComplex` ("mall_complex") is a whole-block landmark of the commercial quarter (6% of its block
+  picks), sized by the lot pass to blocks at least 142 m long and 40 m deep; `building.cells{ mall = true }`.
+- **Owed.** The true bend (a second spine cell at an angle, the court as the hinge); a court cell spanning
+  levels; the parking lot in front where the block allows it (the American mall's lot pass does this, the cells
+  mall does not yet).
+
+## ADR-0181 — Tree joints: limbs cut back, joined by their hull, shaped on their smooth union
+
+Glenn, 2026-10-17: "I don't think the trunks work... I can see the seams between the branches and looking at them in
+wireframe it's obviously not one continuous structure." Each limb was its own swept tube, a side branch welded on by
+a flared collar pushed into its parent. He asked whether the road lanes' way of merging would do (it is: a junction
+cut back and filled).
+
+- **The cut-back** (`TreeParams::joints = 1`, forks of wood at least `jointMinRadius`): every limb meeting at a fork
+  -- the one coming in and the ones going out -- ends short of it, planned so each end ring clears the other limbs'
+  tubes and lies on the near side of every other ring's plane. The plan's limbs are ideal; the swept ones are
+  gnarled, so the joint is checked on the REAL rings and a ring another limb reaches past RETREATS one ring further
+  along its own tube (its band dropped), as a road is cut back until its end is clear -- the measured fix that
+  took the oak from 26 fallbacks to 11 of 237.
+- **The fill**: the convex hull (`MeshBuilder::convexHull`, a new mesh word) of the end rings -- each taken as the
+  circle it would be at its vertices' own bearings, with an apex 3% of its radius out along its limb so its cap
+  is a cone the hull cannot cut across -- less the apexes' faces. WHOLE when every ring edge lies on exactly one
+  face left; else the plain hull of the rings less their caps (same shape step, at worst a crack where a knotty ring
+  dents in).
+- **The shape**: the hull is only topology (straight spans, bulging to every ring). Refined (each edge but the rings'
+  split to the ring spacing of the nearest limb, easing to the joint's own away from a thin one, never finer than a
+  third of it) and the new vertices projected (Newton) onto the limbs' SMOOTH UNION -- capsules from the fork to
+  each ring, blended by a fillet a fifth of each one's radius -- it becomes a crotch's saddle. Edges flip toward
+  fatter triangles and the new vertices relax and re-project, three rounds: slivers (least angle under 8 deg)
+  1-4% of a broadleaf's joint triangles.
+- **Not joined**: a limb under 30% of the fork's radius (a spruce's whorl branch off its trunk) is welded with its
+  collar as before -- the joint's triangles cannot resolve a collar that small without thousands of them.
+- **The leader** at a fork is now the best-aligned of the THICK children (a twig lined up with the limb no longer
+  takes over from the limb going on the other way).
+- **Cost**: bark triangles about doubled on the hero tree (oak 34k to 80k, sakura 43k to 90k); the joints are a
+  hero-LOD feature (Glenn: "hero trees have everything welded ... mid level doesn't have to weld them all").
+- **Tests**: `limbs_meet_in_one_surface_at_their_joints` (joints whole, end rings in one piece, slivers; RT_TREE_WIRE
+  renders the bark round the lowest forks, joints tinted, slivers red); RT_JOINT_DEBUG / RT_JOINT_DUMP trace them.
+
+## ADR-0182 — Branch cards: the wood to sprigs, a card baked from the tree's own sprigs
+
+Glenn, 2026-10-18: "It's a first good stab but it makes a lot of triangles and some trees look like branching
+messes"; then "for a hero tree ... the upper budget to be about 8000 triangles and no more ... When we get to small
+enough branches that we instead just use some kind of card to stand in for those branches and clusters of leaves".
+Measured first: the oak's joints were half its bark (54k of 106k, a joint at every fork down to 2 cm twigs), every
+tube had the same 8-10 sides and three rings an internode, and the "mess" was crowded forks (140 of the maple's 187
+forks had four or more limbs of wood) and limbs crossing (the new `a_trees_skeleton_is_tidy` counts both). The island's
+real_tree.h trees are 3-8k: a modelled trunk and limbs and ~900 painted spray cards -- how production trees are built.
+
+- **Sprigs** (`TreeParams::sprigSize`): a node whose whole subtree is within reach of sprigSize of where it leaves its
+  parent, and whose parent is not, starts a SPRIG. Cut by spread, not thickness: at one radius the oak's sprigs were
+  0.4 m and the sakura's 1.3 m. A sprig's wood and leaves are not built; it is recorded (`TreeMesh::sprigs`: a frame
+  out along its nodes' middle, across their widest spread, the face skyward, and its reach). The wood into a sprig
+  ends in a point; with cards, the wood's own leaves go too (a limb longer than a card is bare inside).
+- **The donor** (`sprigDonor`): the same tree builds every sprig whole, each triangle owned by its first vertex's
+  sprig and split into the sprig's own meshes.
+- **The pictures** (`branch_cards.h bakeBranchCards`): `pictures` sprigs across the sizes, each seen from `views`
+  sides round its axis (3: one picture a crown reads flat and thin), drawn by `renderCardView` (renderImpostor
+  generalised to any framing: colour x colourScale and the card-frame normal map).
+- **The cards** (`wearBranchCards`, foliage 5): each sprig wears the nearest picture in size (of the two nearest, one
+  at random), a card per view turned about a spine along the sprig, its halves folded up `fold`, normals bent `bend`
+  out of the crown, darker toward the crown's middle. Four triangles a card.
+- **The wood by need** (`woodEdge`, `ringAngle`, `ringSpacing`): sides by girth (about woodEdge apart, 4 to
+  ringSegments); a ring where the limb has turned ringAngle, gone ringSpacing radii or thinned a quarter (a collar's
+  first three radii still every 0.7). Joint refinement spans 3.5 ring arcs instead of 1.7 when the wood is by need:
+  the joint as coarse as the tubes beside it (oak joints 11k to 3.6k, slivers down). Tried and dropped: splitting
+  only where the projected midpoint bows past the ring's chord error -- the hull starts far off the surface
+  everywhere, so it split more (15% slivers).
+- **Crowded forks staggered** (joints = 1): past two limbs of wood out of a node, the leader and thickest side keep it
+  and each further side moves up the leader three times their radii apart -- unless the internode has no room (then
+  crowded beats overlapping: the first try at 1.2 radii doubled the maple's plain-hull joints). Maple crowded forks
+  140 to 28, pine 34 to 0.
+- **Levels** (`tree_lods.h`): a recipe with `branch_cards` wears them at every level (hero; mid coarser wood, joints
+  only on the trunk and main limbs; light no joints or roots; far four sides), the atlas baked once and shared by a
+  forest species' variants (`cardCache`).
+- **Numbers**: every card tree's hero wood under 8000 (oak 6.8k, spruce 0.7k, sakura 7.1k; 0.4-3k card triangles)
+  against 106-197k before; the recipe forest 8.3-9.5 ms GPU at eye level and from 40 m, against 15.6-17.4 ms for
+  this morning's recipe forest and 10.1-11.8 ms for the island's own trees in the same level.
+- **Tests**: `a_card_trees_wood_is_held_to_budget_and_wears_its_sprigs` (wood <= 8000, a card per sprig and view,
+  every picture drawn, every card on a limb), `a_trees_skeleton_is_tidy` (prints the mess; RT_TIDY_SET tries knobs,
+  RT_TIDY_DUMP the skeletons), the levels test per kind.
+- **Owed**: the spruce's leader-top card is pale and stretched; spruce cards read stiff from above; the bark tile
+  shows a chevron across coarse joints; crossings of wood (oak 90) are untouched.
+
+## ADR-0183 — The trunk zone: trunk, first limbs and roots as one implicit surface, even triangles, blended bark
+
+Glenn, 2026-10-18, after the hull joins kept webbing narrow forks ("there are a lot of bad joins ... probably the way
+I suggested is not right"): research says production game trees do NOT weld branches (SpeedTree overlaps them and
+hides the seam with a blend ring and bent normals; hero trunks are sculpted). His call: no hull joins, blend seams;
+and for the trunk "a full on interconnected trunk structure" -- the implicit surface (Bloomenthal's) where it matters.
+
+- **The zone** (`TreeParams::trunkZone`, m): the wood at least that thick joined to the foot through wood as thick,
+  plus the roots. Hull joins are off with it (ADR-0181 stays for trees without one); thinner limbs are tubes, those
+  leaving the zone start buried in it (no collar: the zone is no cylinder). Crowded forks stagger as before.
+- **The field**: each limb a CHAIN of tapered capsules that meet HARD (a fillet between a limb's own stretches bulged a
+  ring at every node), the chains smooth-unioned thickest first with a fillet 0.3 of each one's radius; the trunk's
+  flare, lobes and twist and the bark's knots displace it; the ground cut softly 3 cm under the foot.
+- **The roots** (Glenn: "very tepid ... bigger roots so we can sink the tree into the ground"): rootCount flares sized
+  from the FLARED foot (beside the flare a root of the bare radius is a spike), broad humps (wider than high) running
+  out six trunk radii, thinning, sinking and diving under, and a smaller root between each two. Their distances are
+  scaled so the field never says more than the true distance (the sparse mesher's skipping relies on it).
+- **The mesh**: `polygonizeSdfSparse` (sdf.h, new: blocks of cells near the surface only, every block beside one too,
+  a cell made as a quad asks for it -- a dense grid of the trunk is ~18M samples), `MeshBuilder::splitNonManifold` and
+  `fillHoles` (Surface Nets pinches where two limbs touch inside a cell), a quadric `simplify` to twice the budget,
+  then ISOTROPIC `remesh` (Botsch & Kobbelt: split / collapse / flip to valence 6 / tangential relax, every vertex put
+  back on the field) at an edge length k times the local limb radius, k from the budget (Glenn: "those triangles look
+  really stretched" -- the quadric simplification alone left long slivers on the straight trunk). New mesh words.
+- **The bark**: each vertex mapped round and along its nearest limb, the frame carried node to node and interpolated
+  along a stretch (per-stretch frames jumped at every node), one tile count and one shade a limb. BLENDED (Glenn: "we
+  need to blend those textures better"): each triangle also carries the mapping of the nearest limb of ANOTHER chain
+  and each vertex a logistic weight for it (half at the crease, gone a fifth of the thinner radius out -- a linear
+  band either cut as a line or saw-toothed where neighbours chose another second limb). It rides the tangent slot:
+  `RenderMaterial::FLAG_UV_BLEND` (bit 23), `RenderMesh::tangentIsData`; mesh.frag samples albedo and normal at both
+  UVs, the tangent frames from screen-space derivatives. A tube's slot is its own UV, weight 0. Vulkan only.
+- **Levels**: the hero's whole zone, the mid's a third of the triangles on a 1.5x cell, none past (tubes).
+- **Numbers**: oak zone 2.2-3.1k triangles (budget 2800), 0% slivers, closed; hero wood 5.1-7.4k with the card-tree
+  tubes. ~1-2.5 s a zone (17-limb oak) -- the lab's load went to ~100 s: OWED, profile it.
+- **Owed**: a few blocky bark patches low on the trunk where triangles' second limbs differ near three-way meetings;
+  roots on slopes (Glenn: "the roots probably have to undulate") -- the ground as a function (a hero on its real
+  terrain; slope variants or a terrain-conform pass for instanced trees); seam blending for tube welds (the same
+  FLAG_UV_BLEND); Metal and WebGPU.
+- **Tests**: `a_trees_trunk_zone_is_one_closed_surface` (closed by position, outward, no slivers, budget, wood <= 8000;
+  RT_TREE_WIRE renders the zone, RT_JOINT_TREES picks name:seed); the card test renders each hero's zone.
+- **Addendum (2026-10-18, "let's get up to the thin limbs")**: every limb welded into a tube or the trunk zone takes
+  its PARENT's bark where it meets it -- each tube keeps its mapping (`BarkMap`: ring centres, frames, radii, v), the
+  zone its stretches'; a welded limb's vertices carry the parent's UV in the second slot, weight 1 on the parent's
+  surface falling away exponentially over the limb's radius, and their normals and colour ease to the parent's (the
+  SpeedTree seam ring, on FLAG_UV_BLEND). Limbs out of the zone now flare into it on a collar too (buried, they met it
+  at a hard notch); a collar's first rings every 0.7 radius. Every card species has a trunk zone (0.06-0.10 m; the
+  pine's budget 2000 to keep its wood under 8000). The zone's field is grid-accelerated (pieces per 25 cm cell):
+  polygonizing went 2.0 s -> 0.3-0.5 s, a hero zone ~0.6-0.8 s.
+
+## ADR-0184 — Three foliage tiers: leaves one by one near, twig segment cards mid, impostors far
+
+Glenn, 2026-10-18, of the sprig-picture cards ("Those look like small trees ... It needs to be a branch without leaves
+and with leaves or maybe a Y branch ... smaller segments that can then be planted along") and then of the twig sheets
+("The Y shaped branches aren't connected together ... very flat colored ... some kind of normal map to give them
+dimension ... For up close you'd want to make individual leaves and branches ... the twigs look like they're solid like
+the 3D trunks ... For a mid-range tree I think we can do what your current spritesheet does ... in the distance ...
+many views").
+
+- **Near** (the hero; `wearNearLeaves`): along the fine branching the sprigs stood for (`TreeMesh::twigs`), each twig a
+  three-sided bark tube in the trunk's own mesh and material (it lights and shadows as the trunk does -- a twig sprite
+  in the leaf material would glow with the leaves' transmission), each leafy twig putting out the leaf kit's shoots,
+  and the leaves ONE BY ONE along twigs and shoots (folded blades of the species' normal-mapped leaf, the foliage
+  material's sun-through), about `near_leaves` (6000) over the crown, larger as they are fewer, faced out of the crown
+  and darker inside it; cupped blossoms at twig ends (~800). Twig bark capped at `near_twig_tris` (9000). Fully
+  modelled instead (every twig a tube, every leaf the kit's) measured 40-120k bark and 80-230k leaf triangles.
+- **Mid** (`bakeTwigCards` / `wearTwigCards`): leafy and bare, straight and Y twig segments -- the Y's side twig grows
+  FROM the main twig; the twigs wear the species' bark maps (u mirrored round them), the leaves their normal map, the
+  picture's back shaded down; a few blossoms only (packed, they read flat). `renderCardView` takes `CardViewExtras`
+  for it; sprites seen from their face fold no normal behind them.
+- **Far**: the impostors as they are; many-view impostors next.
+- Numbers: a near hero ~45-50k leaf + ~15k wood triangles; the recipe forest 9.3-11.6 ms GPU (was 8.3-9.5).
+
+## ADR-0185 — Conifer needles from needle geometry; tree textures uploaded once
+
+Glenn, 2026-10-18, with a photo of fir, pine and spruce sprigs: "the spruce leaves look pretty bad"; and "I see floating
+leaves on the trees" (fixed before this: near leaves ride only wood that is built, ADR-0184's wearNearLeaves).
+
+- **`needles = { kind = brush | flat | tuft, ... }`** (TreeRecipe::needles). `bakeNeedleCards` draws needle shoots from
+  geometry -- each needle a tapered blade off its shoot, turned round it, its normal out from the shoot (the normal
+  map rounds the shoot), this year's growth lighter at the end: a main shoot, a side shoot that is a small SPRAY (its
+  own pairs of sub-shoots, as the photo's spruce and fir sprigs), and a pine's TUFT (bundles of two or three long
+  needles crowded round a twig's end). `wearNeedles` plants them along the fine branching and, for a spruce, along the
+  modelled limbs up to `limb_radius` (its whole branches clothed; the first try left them bare): two crossed cards
+  along each (a fir's one plane in a shallow V), side shoots from points ON it in the branch's plane, a pine's tuft
+  as five planes round a twig's end; twig bark the thickest first to a cap per level. Every level wears them, fewer
+  side shoots further out.
+- **Tree textures by content** (`g_treeTextures`, cleared per load): Glenn's lab held 2197 textures, 4.9 GB -- every
+  tree uploaded its species' atlas and bark maps for every level -- and a second viewer beside it crashed in the
+  driver (ImGui's texture update, out of VRAM). Now 128 textures, 304 MB.
+- **Owed**: pine tufts still read a little fan-like; a fir recipe (`flat` is ready).
+
+## ADR-0186 — Tree ages: a recipe grown young, mature, old, ancient
+
+Glenn, 2026-10-18: "They all look like young trees ... Where's the 300 year old hero tree that could sit on a hill ...
+we need height and oldness in our variety"; of the first ancient oak: "The trunk should be thicker shouldn't it?"
+
+- **`ages = { young = {...}, mature = {...}, old = {...}, ancient = {...} }`** (TreeRecipe::ages, TreeAge): an age's
+  axiom, iterations, params and vars laid over the recipe's (its names win), and its branch-card budgets (sprig,
+  near_leaves, near_twig_tris). `agedRecipe(recipe, age)`; a tree entity's `"age"`, a forest species' `"age"`.
+- **Size without an explosion**: the oak's branching stops at a `$tip` length and its crown starts at `$crown` of the
+  trunk's stretch -- an older oak a longer first stretch AND a longer tip, so it is bigger by a few more orders, not
+  thousands more twigs (a longer first stretch alone: 17000 twigs and a 5 m trunk by the pipe model). The iterations
+  must reach the tip (13 stopped the ancient short: no change at all). The girth is set apart (radiusScale): the pipe
+  model ties it to the twig count.
+- **Age's marks** (`TreeParams::deadChance`): side limbs 1.5 cm to two fifths of the trunk snapped one or two
+  internodes out, bare, grey; no needles or sprouts on them.
+- **Oak**: young 4 m x 5 m (r 0.14 m), mature 6 x 10 (0.21), old 10 x 12 (0.58), ancient 18 x 23 m, a trunk ~2.9 m
+  across, 7 roots, deep lobes, 12% dead limbs. **Spruce**: young 5 m, mature 13.5, old 16.5 x 13.6, ancient 19 x 18.
+- **Cost**: an ancient hero ~31k bark + ~160k foliage triangles (a showpiece, near only); the lab's age rows at
+  z -110 (oak) and -150 (spruce). Needle levels further out keep more side shoots (0.9 / 0.6 / 0.35).
+- **Owed**: the ancient crown's interior tangle; 4-sided limbs reading as planks up close; ages for the other species;
+  a hill for the ancient oak; forests mixing ages.
+
+## ADR-0187 — Old crowns grown to their shape (space colonization), worn as leafy clusters
+
+Glenn, 2026-10-18, of the ancient oak: "we should skip the tangle of branches for an ancient oak. I would expect more
+plumage and foliage". An old open-grown tree is a few massive limbs under a dense outer shell of foliage, its inside
+open; more of the grammar's branching only made more crossing limbs.
+
+- **`colonize = 1`** (TreeParams; Runions, Lane & Prusinkiewicz 2007): the grammar grows only the SCAFFOLD (a long
+  `$tip`: the trunk and a few big limbs), then `colonizeCrown` grows the rest toward `colonizePoints` points in a dome
+  round it (`crownWiden`, `crownHeighten`; its underside flatter), most within `colonizeShell` of its surface. Each
+  step every node nearest to live points grows `colonizeStep` toward their mean, lifted to the light; points within two
+  steps of a node are spent. Branches compete for room -- they spread, they do not cross -- and end in the shell. The
+  attraction reach is 0.3 of the crown's radius (at seven steps most of a 30 m dome was never reached).
+- **Worn as clusters**: a crown grown to its shape wears the twig segment cards even at the hero (leaves one by one
+  cannot fill a shell that size), several to a leafy twig fanned round it, each scaled to the crown (the colonize step
+  is the spacing they fill: up to 3x a twig's segment).
+- Oak old (iterations 12, 9000 points, step 0.32) 12.5 x 14 m; ancient (18000 points, step 0.4) 19 x 32 m, trunk r 1.45
+  m; ~30k bark + ~40k foliage triangles. Grown in ~25 s for the four ages (the test).
+
+## ADR-0188 — Old crowns: an authored shape, lobes over it, a guided limb and a fan per lobe
+
+Glenn, 2026-10-18, of the space-colonized ancient oak: "Those tree tops look too sparse and they don't really appear
+to have any kind of definable shape"; "how do we develop the lobes ... What's the best way to harness both of these
+algorithms"; of the per-lobe colonization: "Those look messy"; of guided limbs: "that's better"; of the bases: "I'm not
+a huge fan of the massive base".
+
+- **The crown's shape is authored** (crownRadius, crownBottom, crownTop): measured from the scaffold, a coarse
+  scaffold shrank the whole crown.
+- **Lobes over its surface** (lobeSize of its radius, ~0.8 of its area covered: more and they merge into a hairball),
+  relaxed apart (lobeOverlap) and toward the light, inside the dome.
+- **colonize = 2** (kept): each lobe colonized only from its own branches, anchored at the scaffold's nearest node.
+  Messy: jagged steps, no hierarchy, any angle, long paths through other lobes.
+- **colonize = 3** (the oak's): each lobe ONE smooth cubic limb from the scaffold node best aimed at it, sagging with
+  droop, kept off the ground, small fans along its outer reach, and a FAN in the lobe (leading shoot + alternate side
+  shoots at branchAngle, each order shorter, kept to the lobe). Grown AFTER the scaffold is bent (bending ran down the
+  grown chains and twisted them off their clumps), radii by the pipe model after.
+- Dead limbs in grown crowns only where they carry little (a snapped limb took its clump). Root reach 3-4 trunk radii,
+  thinner, diving sooner.
+- Test `a_crowns_lobes_are_grown_into` (RT_TREE_WIRE: bare branching from the side and above with the lobes).
+
+## ADR-0189 — Sprays: the lobes of a grown crown covered with big fanned cards
+
+Glenn, 2026-10-18, of the guided-limb oaks: "those clumps need to be made puffier ... Can we make a set of cards that
+are longer with wider attachment points and cover more space?"
+
+- **A fifth card kind, the SPRAY** (BranchCardSet::Picture kind 4), baked beside the twig segments in bakeTwigCards
+  (`variants + 1` of them, cells two columns wide): a short stem and 5..7 leafy twigs fanned off its end like a hand,
+  the middle ones longest, each with a side twig or two -- 4x the twig length (1.2..2.2 m) of foliage with the leaves
+  at their own size, the twigs tilted in and out of the picture for its depth shading.
+- **Laid over each lobe's outer face** (wearTwigCards, when the tree has TreeMesh::lobes -- colonize >= 2): directions
+  kept by how much they face out of the crown (the underside thinner), enough to cover the face about twice, a spray
+  half the lobe's radius (0.9..2.6 m). Each leans 25..50 degrees out of the surface, its face and normals out of the lobe,
+  its foot on the nearest leafy twig end within reach (it grows from wood); points deep inside a neighbouring lobe are
+  skipped. The twig segments stay as the inner layer.
+- The lobes now read as rounded masses of leaves instead of the twigs' scatter; the limbs show under the crown, not
+  through it. A crown without lobes is unchanged.
+
+## ADR-0190 — Tree cards: edge-on fade and domed sprays
+
+Glenn, 2026-10-18: "when I get close to the tree branches disappear, Is there some middle ground where we can build
+volume and thickness?"; of a third crossed plane per card: "I don't know if I want to add 50% more foliage triangles".
+
+- Measured first: the hero has no fewer cards than the mid (spruce 64k vs 58k foliage tris). Close up, the flat cards
+  seen edge-on read as blades across the crown or as nothing.
+- **Edge-on fade** (mesh.frag): a tree card (FLAG_LOD_BAND or FLAG_FOLIAGE, not the impostors' top card, which has its
+  own) thins away as the view grazes its TRUE face -- the triangle's normal from the screen derivatives, since the
+  vertex normals are bent out of the crown -- gone under ~5 degrees, whole from ~17; its V partner carries the clump.
+  Free; the shadow pass keeps every card.
+- **Domed sprays** (wearTwigCards): each spray plane's middle lifted a fifth of its size out of the lobe, four
+  triangles about it, the rim's normals leaning off it. Old oak foliage 72k -> 82k tris, ancient 137k -> 149k.
+- Not done: a third plane per card (+50% foliage triangles).
+
+## ADR-0191 — Conifer fronds: big needled sub-branch cards along the branches
+
+Glenn, 2026-10-18, of the spruce and pine: "I feel like they need more volume in the middle because you can see
+through them and that doesn't seem right."
+
+- Measured: the spruce's branches are all thin enough to wear needles already (limbRadius 0.035 covered them; a
+  first cut that put fronds only on thicker limbs placed none). What one sees through is the space BETWEEN branches:
+  four flat fishbones a whorl, the sky between.
+- **Fronds** (NeedleSpec frond_spacing, frond_length; bakeNeedleCards kind 3, two rows): a whole needled sub-branch,
+  ~0.55 m -- a spruce's main shoot with sprayed side shoots, a pine's bare twig with tufts on side twigs. Worn along
+  every branch but the trunk and the finest, a frond each side every frond_spacing, forward and out in the branch's
+  plane or (0.6 x hang of them) hanging: the curtain. Two planes in a shallow V.
+- At most a third of the level's card planes; the shoots wear the rest, so a tree at its budget keeps its triangle
+  count (spruce hero 64k foliage tris, 1144 fronds). The umbrella pine had headroom: 24k -> 30k.
+
+## ADR-0192 — The maple as a tree; one leaf palette a tree at every level
+
+Glenn, 2026-10-18: "What about the maple tree? It looks pretty bad".
+
+- The maple forked at half a metre and its limbs sagged (droop 0.12-0.20): a heap of leaves to the ground. Now a clear
+  trunk (T(0.75,2)), four limbs each with a bare first stretch, rising into a vase (s0 44-56, a central one 10-18),
+  droop 0.04-0.08, a slimmer trunk (radiusScale 0.95, pipeExponent 2.6).
+- Its first bigger crown grew 15k twigs; the twig budget went on the branching and the hero wore NO leaves (the card
+  test caught it). The branching stops at 0.3 m (2.9k twigs) and sprig 2.2 holds the hero wood to budget.
+- **A tree's palette** (TreeMesh::palette, seed % palettes, set by growRecipeLevels): the hero's leaves wore one palette
+  a tree, but the twig cards were baked in only `variants` palettes and picked at random -- the mid turned a tree to
+  patches of crimson and orange as one walked away. bakeTwigCards now bakes a variant per palette
+  (Picture::palette) and wearTwigCards wears only the tree's own.
+
+## ADR-0193 — Many-view impostors for the forests' far trees
+
+Glenn, 2026-10-18: "So can we make multi angle imposter cards".
+
+- **The bake** (real_tree.h renderImpostorView): each variant seen from kImpostorAzimuths (8) round it at
+  kImpostorElevations (3: 0, 35, 70 degrees), orthographic, colour + normals (the view's frame: r, u, d), all framed
+  in ONE window about the tree's centre (half extents Rb, Hh; impostorViewHalfHeight bounds every view). 64 x 128
+  cells, a block a variant, the blocks in a grid (loadForest; RT_IMPOSTOR_DUMP writes it).
+- **The card** (forest.h appendImpostorViews, FLAG_IMPOSTOR_VIEWS bit 24): one quad a tree; each corner carries the
+  centre plus its reach (the mesh's bounds hold the crowns), the window and yaw in the tangent slot (tangentIsData),
+  the block in the normal, the cell size in the colour. mesh.vert turns it to the camera about the centre; mesh.frag
+  takes the camera's direction in the tree's frame, blends the four nearest views (bilinear in azimuth and elevation,
+  weighted by coverage), reading each where the fragment's point falls in that view's window, so the silhouettes
+  stay registered; the blended view normals light it; the mip coverage boost as the other cards.
+- **Shadows**: a card turned to the camera cannot cast one; the shadow pass skips FLAG_IMPOSTOR_VIEWS and two
+  FLAG_SHADOW_ONLY crossed cards (the 0 and 90 degree horizon views) cast it.
+- RT_IMPOSTOR_VIEWS=0: the crossed cards (the A/B). Vulkan only, as FLAG_LOD_BAND.
+- Seen: spruces stay cones from the ground and from the air (the old top card made starfish); the oak impostors are
+  as thin as the oak's light level, which they are baked from -- that level's foliage is owed, not the impostor.
+- Test `impostor_views_frame_the_tree_from_every_side`.
+
+## ADR-0194 — Sakura sizes: a size a seed, and ages
+
+Glenn, 2026-10-18: "sakura trees should have different sizes right?"
+
+- Each seed its own size: the trunk ($trunk 0.50-0.72) and the scaffold's reach ($reach 1.4-1.8) are rolled per seed;
+  the branching stops at $tip, so ages can lengthen the twig with the tree (sprig 1.6 holds the hero's wood).
+- Ages: young 2.8 m (a slim sapling), mature 5 x 8 m, old 9 x 16 m (a broad umbrella on a crooked trunk, its limbs
+  sagging), ancient 12.5 x 26 m (a massive fluted bole; some dead limbs). Lab row sakura_age_* at z -195.
+- Blossoms scale with the hero's leaf budget (800 at 6000 leaves): the old crown wore the young one's 800 and read
+  bare. Old/ancient raise near_leaves (12k/18k): foliage 107k/161k tris, as the ancient oak's.
+- The ages test checks every age wears leaves (the maple's 0-leaf hero, ADR-0192, as a check).
+- Owed: the ancient reads lopsided and sparse for its 26 m -- an authored crown (colonize 3, as the old oak) is next.
+
+## ADR-0195 — The forest's weight: impostors from 150 m, the conifers' far levels thinned
+
+Glenn, 2026-10-18, of recipe_forest: "the forest seems pretty heavy. The fps is around 27".
+
+- Measured (test `a_forests_levels_lighten_with_distance`, the forest's bands): the rings hold ~50 hero trees,
+  ~460 mid, ~1840 light, ~5800 far; the spruce's levels 82k / 72k / 48k / 23k triangles, the pine's alike -- about
+  120M triangles a frame, and the shadow pass again. The many-view impostors themselves cost ~1 ms.
+- The impostors hold up near now (ADR-0193): recipe_forest's impostors from 150 m (fade 20), the light level to 110 m.
+  Their cells 80 x 160 (bushes, which never wear one, no longer baked).
+- The needle cards' share by level: mid 0.9 -> 0.55, light 0.6 -> 0.25, far 0.35 -> 0.12 (the fronds carry a far
+  crown's mass in few planes): spruce 72k/48k/23k -> 50k/26k/8k.
+- GPU frame (RT_GPU_TIMES, RT_VSYNC=0, each pose held): Treetops 36.7 -> 10.8 ms, Across the ridge 18.2 -> 7.0 ms.
+- Owed: the conifers' modelled branches at the mid and light levels (spruce mid bark 15k) and the oak's thin far
+  levels (the impostors inherit them).
+
+## ADR-0196 — Real scale: the scale lab, and the oak and spruce at real sizes
+
+Glenn, 2026-10-18: "the trees need to be 2x to 4x taller than me. It doesn't quite feel like they're scaled right";
+"they also need to fit with [the buildings] so everything needs to be in proportion"; "Let's get the scale right";
+of the lab's box figure: "why not use one of the agent models?".
+
+- Measured: the player 1.8 m (eye 1.6); the city true to scale (storey 3.2 m, ground floor 4.5, door 2.7, lanes
+  3.2-3.6, sedan 1.45 m high, lamp 4.6, signal 5.6); the recipe trees at their default 6-10 m -- a real oak or spruce
+  is about three times that.
+- **scale_lab.json** (scale_block.lua): a street of the city's own things -- a house, a 4-, 6- and 8-storey building
+  grown by the architect (seeds rolled to those storeys), a sedan, a street lamp, the city's walkers, a 30 m pole banded
+  every metre -- and across it the trees, a row a species, an age a column.
+- **The standing person moved to the engine** (procgen/person.h buildStandingPerson + the outfits; citysim's
+  buildPersonMesh forwards to it) and Lua `mesh.person{swing, outfit}` (origin at the feet).
+- **The oak's ages re-based on real sizes**: young 10 m, mature 21 m (now a grown crown, colonize 3), old 25 x 31 m,
+  ancient 28 x 38 m. **The spruce's**: young 9.5, mature 25.6, old 34, ancient 40 m (iterations raised: the grammar's
+  38 had capped the whorls), trunks girthier.
+- Not yet: the default (no age) still grows the base recipe, the young size -- the forests and the lab rows use it;
+  the other species; forest-grown forms (tall clear boles in a stand).
+
+## ADR-0197 — The recipe trees on the island (A/B)
+
+Glenn, 2026-10-18: "I guess the next step is to bring these trees to the island".
+
+- A real_tree forest block's `"recipes": true` -- or RT_FOREST_RECIPES=1 (=0 off) -- grows each `kind` as its recipe
+  at `"recipeAge"` (default mature, real sizes; RT_FOREST_RECIPE_AGE): oak, maple, birch, pine, spruce as themselves;
+  beech an oak and fir a spruce (no recipes of their own yet), aspen a river birch, willow a weeping willow, alder a
+  multistem, the shrub understory a hawthorn. A switch, not an edit: the island levels are generated (untracked).
+- island_8_nature, from above a forest stand (RT_GPU_TIMES, RT_VSYNC=0): 10.9 ms against the real_tree forest's
+  10.7 ms. The forest's build 121 s against 42 s (44 variants grown four levels each, the mature oak's crown grown to
+  its shape); the level 178 s against 96 s. Near groups 31k (three levels a tree) against 10k.
+- Owed: the load (cache the grown levels per recipe+seed, as the bakes are cached); beech, fir, aspen, alder recipes;
+  forest-grown forms; an age mix in a stand; the city's street trees.
+
+## ADR-0198 — The tree cache, and the grown crowns thinned with distance
+
+Glenn, 2026-10-18: "Can you do those things next" (the island's recipe forest built in 121 s; its load first).
+
+- Measured (test `a_forests_levels_lighten_with_distance`, now timed and with each species' mature age): the mature
+  oak grows in ~7.5 s a variant, and its mid, light and far levels each wore 85k leaf triangles -- a grown crown's
+  clusters (per twig) and lobe sprays did not thin with the level. Now clusters 4 / 2 / 1 / 1 and sprays
+  1 / 0.55 / 0.3 / 0.15 by level (wearTwigCards sprayShare): 105k / 56k / 31k / 28k.
+- **procgen/tree_cache.h**: a forest's recipe species -- every variant's levels (meshes as the bundle codecs pack them,
+  the atlases, bands, limbs) -- in one file under cache/trees, keyed by the recipe file's bytes, recipe, age, seeds,
+  bands, kTreeCacheVersion and the build's git describe (a commit is a new key). A read touches its file; a write
+  prunes the least recently used past RT_TREE_CACHE_MAX_GB (default 4). RT_TREE_CACHE=0 grows every load.
+- island_8_nature with RT_FOREST_RECIPES=1: forest 107 s grown (and written, 1.1 GB) -> 46 s from the cache; the level
+  162 -> 100 s (the real_tree forest's: 42 s, 96 s).
+- Test `a_species_grown_once_reads_back_the_same`.
+
+## ADR-0199 — Stands: forest-grown forms, a mix of ages, and beech, fir, aspen and alder
+
+Glenn, 2026-10-18: "Can you do those things next" (an age mix in a stand, forest-grown forms, the island's missing
+species).
+
+- **Forms** (TreeRecipe::forms, formedRecipe): laid over a recipe after its age, as an age is -- and able to SCALE
+  numbers (`scale = { params = {...}, vars = {...} }`), so one form fits every age. `stand`, a forest-grown tree:
+  - TreeParams::pruneBelow: a side limb leaving its parent below that share of the height and staying low (all of it
+    under 1.35 x the cut -- the stand's shade) is snapped to a stub; a scaffold limb climbing into the crown is not.
+  - a clear bole: the form's `axiom_prefix` ("F(3)") goes before whatever axiom the age grows (oak 3 m, beech 4.5),
+    so an open-grown tree's draw is untouched.
+  - the oak's grown crowns narrower (crownRadius x 0.6) and higher (crownBottom x 2.2); the spruce's reach x 0.8.
+  Test `a_stand_grown_tree_has_a_clear_bole`: lowest leaves oak 3.1 -> 5.9 m, birch 3.3 -> 6.4, spruce 0 -> 3.4.
+- **A mix of ages** (ForestSpecies::ageMix): a species' variants dealt out by weight (largest remainder); a recipes
+  forest defaults to young 1 : mature 2 : old 1, in the stand form ("recipeForm", "ageMix", RT_FOREST_RECIPE_AGE pins
+  one age). The tree cache keys every variant's age and the form.
+- **Derived species** (tree_recipes.lua `derive`: a copy of the kin, a table merged key by key, a list replaced):
+  beech (the oak grown straight, smooth grey, oval leaves; its seeds vary in size), silver fir (the spruce's whorls
+  level, flat needles, smooth grey bark), aspen (the birch's leader, climbing branches, grey-green bark, round leaves),
+  alder (a dark cone, fissured bark, dark round leaves). The island's kinds now map to them. Scale lab row z 200.
+
+## ADR-0200 — Stands only where the forest is thick; the city's street and park trees from recipes (A/B)
+
+Glenn, 2026-10-19: "keep going" (the island's stands; the city's street and park trees).
+
+- The island with stands everywhere: a lone tree in a meadow grown as in a stand read as a lollipop, a bare pole under
+  a small crown. **ForestSpecies::formByDensity**: a recipes forest's species grown both ways -- its variants twice
+  over, the first half open-grown, the second in its form (each half the same age mix) -- and placeForest takes the
+  stand-grown half as the stand thickens (smooth 0.30 -> 0.65 of the local density). island_8_nature: 66 variants,
+  the forest grown in 215 s (cached after: tree_cache.h), 16.8 ms a frame above a slope (14.8 with one form).
+- **recipeTreeParts** (level_loader.cpp): a recipe tree's levels as banded bark and leaf parts -- the forest's near
+  trees and the city's now one code path.
+- **The city's recipe trees** (RT_STREET_RECIPES=1; cityRecipeKits: a recipe at an age, the city's bands -- hero 24 m,
+  mid 60, light 130 -- the last level out to the draw distance, in the tree cache):
+  - street trees: the oak and the beech young (~10 m: three storeys), the maple, the coconut palm; the kinds with no
+    recipe (royal palm, monkeypod, poinciana, jacaranda, plumeria) stay real_tree.h's. Instanced per kerb cell, a group
+    a level part.
+  - the parks' and yards' trees (the lot pass's growTree kit, an entity a tree): a park mix -- oaks young and grown, a
+    maple, a sakura, a birch, a young beech -- instanced per 280 m cell, drawn to 600 m.
+  - river_town: 518 lot trees in 992 groups; 7.8 ms a frame against 7.0; the first load 35 s against 15 (grown, then
+    cached).
+- Owed: young broadleaves read thin as street trees (the near leaf budget over a 10 m crown); recipes for the island's
+  palms and flowering trees; the switches on by default once Glenn has walked them.
+
+## ADR-0201 — Young broadleaves fuller (street trees)
+
+The young oak and beech as street trees (ADR-0200) read as tufts at the ends of bare forks. The oak's (and so the
+beech's) leafy shoots now sprout along limbs to 7 cm through (fill_radius 0.07, every 0.22 m; the mid level's cards
+3.7k -> 6.6k tris), and the young age's twig ends shorter (tip 0.17) with a larger hero leaf budget (near_leaves
+10000, near_twig_tris 12000; hero foliage 47k -> 79k tris). Fuller, but the young oak's few big forks remain its
+character -- its branching inside the crown is a recipe change owed in the lab with Glenn.
+
+## ADR-0202 — Far trees shade themselves; grass shades with its slope
+
+Glenn (2026-10-19, island_8_nature at 07:50, looking toward the sun): "far away tree cards don't seem to render well
+against the sunlight. They look entirely bright and it makes them flat"; and "the same issue with distant grass cards.
+They appear bright and don't blend with the landscape."
+
+- **Cause, trees.** A near crown is shaded by its own leaves in the shadow map: against the sun only its rim takes the
+  sun and the leaf transmission (ADR-0129). A many-view impostor (ADR-0193) is one billboard; the shadow map sees
+  nothing of the crown behind it, so all of it took the sun and the glow -- trunk included.
+- **The impostor's own views as its shadow map.** Each baked view now stores the depth of the tree's nearest part in
+  its normal map's alpha (0.5 + 0.5 z / (Rb + Hh), dilated under the cut like the normals). mesh.frag rebuilds the
+  fragment's front point from the camera's views, projects it into the views nearest the sun, and takes the sun by
+  how deep it lies under the leaves the sun sees first (soft: exp over 0.15 Rb + 0.5 m). The depth reads stop at mip
+  2 (20 x 40 a view): further down a view's cell blurs into its neighbours and every far tree read as lit -- which is
+  why the first island try changed nothing at 500-900 m though the lab, nearer, looked right.
+- **Measured** (test_scatter impostor_views): an oak's front with a 35 deg sun behind it is 56% sunlit (its top), 86%
+  with the sun behind the viewer. On the island the far crowns now shade on their camera side with lit tops.
+- **The far trunks wear the recipe's bark map** (renderImpostorView's barkAlbedo), not the vertex tint alone.
+- **Cause, grass.** Grass normals bent 70% to the SKY: on a slope turned from the sun the field lit as flat ground
+  while the hillside under it darkened -- pale flecks over every shaded slope. GrassSystem now puts each clump's
+  ground normal (x, z) in the instance's bottom row beside its rank, and mesh.frag bends the blades to it. Every
+  path that reads instance matrices clears all three data slots (both shadow shaders, WebGPU, the non-instanced
+  fallback).
+- **A/B:** RT_IMPOSTOR_SELF_SHADOW=0 and RT_GRASS_GROUND=0 (renderer globals terrainHorizon2.z / .w).
+- Owed: the Metal and WebGPU impostor shaders (with the views themselves, ADR-0193).
+
+## ADR-0203 — A spruce and pine wood in the foothills; forest regions; the census
+
+Glenn (2026-10-19): "we don't plant a lot of spruces. I feel like one of the forests near the mountains should be
+spruce/pine trees."
+
+- **Measured first.** The loader now logs a census after placing the forest (`[forest] census:` each species' count,
+  share and 10th-90th percentile altitude), and RT_FOREST_DUMP=path writes every tree as `x z alt species`.
+  RT_FOREST_WHY=1 adds each density factor's mean per 100 m of altitude (`forestWhy`). island_8_weathered (the
+  island's forest block, headless through level_tests): of ~200k canopy trees, oak, maple and beech were 97%; spruce
+  2,635, pine 2,701, fir 259.
+- **Why so few.** Spruce's band starts at 220 m, and above 200 m the island is steep crag: at 300-400 m the slope
+  factor is 0.22, the soil 0.06 and the rock cover 0.21, for a density of 0.004 (0.17 below 100 m). The conifer
+  bands lie on ground the density already clears; the forests "near the mountains" are the foothill woods at
+  100-250 m, which the band gave to the broadleaves.
+- **Forest regions** (forest.h ForestRegion, `"regions"` in the forest block): a ragged disc (radius +-25% by angle,
+  faded over `edge`) in which each named species' weight is multiplied (`others` for the rest) and the named
+  species grow down to the region's `altLo`. The island's first: the foothill woods east of Saltwood, at
+  (-1500, -2300), radius 900 m, spruce 6, pine 4, fir 1.5, others 0.08, altLo 40. Spruce 2,635 -> 7,177 and pine
+  2,701 -> 4,743 island-wide; the pines take the lower western lobe, the spruce the slopes above.
+- **The lots bake no longer keys on the forest.** The lots producer hashed the whole terrain block, so a forest tweak
+  marked the island's 8.8 GB city bundle out of date though the forest is placed at load and the lots never read
+  it. The terrain minus `forest` now goes into the key (as the ground cache key already did, ADR-0113); a level
+  without a forest keys exactly as before.
+- Test: test_scatter `a_forest_region_grows_its_own_mix_below_the_species_band`.
+
+## ADR-0204 — Terrain normals by level, morphed to the parent's
+
+Glenn (2026-10-19): the grassland "looks faceted"; and more rocky detail on the mountains.
+
+- **Cause found in a model, smaller in the game.** Baked CDLOD tiles took every vertex normal over +-2 m whatever the
+  level (ADR-0095: one span so the levels shade alike). On a far tile (16-64 m cells) each vertex took the tilt of
+  the bump it stood on and Gouraud spread it over the triangle: blotchy blocks in a hillshade model of the island's
+  ground (32 m mesh, 2 m normals). In the viewer the difference is small at the distances measured: tiles out to
+  ~2.5 km are 1-4 m, where 2 m was already the cell. It is a correctness fix for the far tiles, not the answer to the
+  faceting Glenn sees (still to locate).
+- **A vertex's normal is the drawn ground's MEAN slope over its own cell** (never under 2 m): exactly, the mean
+  heights along the square's edges, nine samples an edge (`bakedTileNormal`; per tile the edge samples are read once
+  along every grid column and row). Test: an 8 m tile's normals sit 0.07 deg off the hills under 1 m bumps (1.77 deg
+  over 2 m); a tile builds in 33 ms on a worker.
+- **The levels meet in the morph.** The morph target in the tangent slot only ever moved y (x, z were the vertex's
+  own): its x and z now carry the coarser level's normal (`packMorphTarget`), and terrain.vert (and the Metal and
+  WebGPU ports) blends the normal toward it with the height. A child's even vertices morph to exactly its parent's
+  normals (tested).
+- A/B: RT_TERRAIN_NORMALS=fixed (the 2 m span on every level).
+
+## ADR-0205 — The terrain normal map
+
+- **The far ground lights by a baked map of its own slope.** `bakeTerrainNormalMap` (procgen/terrain_normal_map.h)
+  samples the baked pyramid's drawn ground every half texel and stores each texel's mean slope over a two-texel
+  square (x, z of the normal in RG8). Texel max(2 m, world / 8192): the island's is 8192^2 at 2.44 m, 128 MB, baked in
+  2.3 s and cached beside the tiles (cache/terrain/<key>.nmap, keyed on the pyramid).
+- **Uploaded once, mipped** (`uploadTexture` with 2 channels is RG8 on Vulkan), at set 0 binding 5 with its origin,
+  scale and blend band in the globals (`setTerrainNormalMap`). mesh.frag blends from the vertex normal to the map's
+  over the half range before the first CDLOD level whose cell is a texel or more, for FLAG_TERRAIN
+  (bit 25, set by drawTerrain) -- world-space, so no tile edge shows.
+- **Seen:** the far mountains gain their gullies and ribs (island_8_weathered from Glenn's Weyby spot, 120 m up).
+- A/B: RT_TERRAIN_NORMAL_MAP=0. Owed: Metal and WebGPU (no binding there yet).
+
+## ADR-0206 — The island's ground at 8192, drained by stochastic routing
+
+Glenn (2026-10-19): "let's do the order you suggest so we can do an 8k bake of the terrain and get some more detail."
+
+- **Measured first** (cold bakes of island_8_weathered): 4096 -> 8192 is a fourth refine level (2.44 m cells, 12.9 m of
+  detail at 19.5 m) -- ribbed gullies and sharp crests on the steep ground, 3-4 m rms on a 51 deg mountainside, the
+  plains nearly untouched (no detail there, the drain at 8%). Cost: the weather grid 67 -> 268 MB, the ground maps
+  17 -> 67 MB, the tiles 302 -> 309 MB, a cold bake 4 -> 16 min at 5.1 GB peak; a warm load as before.
+- **The steepest-neighbour drain cut parallel diagonal gullies** at 8192: on an even slope between two of the grid's
+  eight directions every cell's steepest neighbour is the same one. Stream power's STOCHASTIC ROUTING draws the
+  receiver among the downhill neighbours in proportion to slope (seeded per cell and iteration: the same ground every
+  bake). Test: flow lines on a slope falling 15 deg off the grid run 0.0 deg steepest, 17.7 deg drawn.
+- **Only on the new level** (weather.refine.stochasticFrom 8192): the grown range and the coarser refine levels --
+  the ground the island's cities were planned on -- are bit for bit what they were.
+- island_8_weathered and (Glenn's local) island_8_nature both carry it; their weather caches are one bake (the key
+  leaves out the cities, trails and forest).
+
+## ADR-0207 — The ground's surface relief; stones, tussocks and slabs in its layers
+
+Glenn (2026-10-19): the terrain "still doesn't look high resolution"; the plan, step 1: surface detail on each ground
+type.
+
+- **Measured why.** The 8192 ground (ADR-0206) reshaped the hills by 1-4 m in 20 m gullies, but under that it is
+  smooth (relief at 2.4 m: 0.1-0.3 m rms), and every layer lit as a smooth sheet ("the ground lights smooth": the
+  layers' heights only ever chose which layer showed).
+- **Texture-scale relief.** terrainLayers now also returns the blended layers' HEIGHT in metres (each layer's alpha by
+  its relief: grass 5 cm, dirt 3.5, sand 2.5, rock 9), and mesh.frag bumps the normal by its screen-space
+  derivatives -- Mikkelsen's surface gradient: no tangent frame, so the triplanar rock bumps too, and the layers' mips
+  fade it with distance.
+- **Mid-scale relief** on the soft ground (grass, dirt, sand): a hummock field at ~5 m and ~1.6 m (22 and 6 cm), each
+  octave faded once a pixel covers too much of it, as the rock's crags (ADR-0120) are.
+- **The layers' recipes** (ground_layers.cpp, kRecipeVersion 4), since the relief shows what they hold: dirt's one
+  size of pale pebble in every cell read as polka dots -- now stones of two sizes in some cells only, warped out of
+  round, gathered in patches, each its own shade, over soil crumbs; grass's height was the strokes' value noise (it
+  bumped as square grain) -- now round tussocks on a smooth roll; rock gained slabs at their own heights (eased to
+  nothing at their edges: a hard step bumped as a dotted seam), grain down to ~4 cm, mineral flecks and pale lichen.
+  RT_GROUND_LAYER_DUMP=dir (test ground_layer_textures) writes the four at 512^2.
+- **Seen** (island_8_weathered, eye level at 07:47): a path reads as gravelly soil with stones in relief, an outcrop's
+  cracks cut in. Nothing changes past a few hundred metres (by design: that is ADR-0208's).
+- A/B: RT_TERRAIN_DETAIL=0 (globals terrainNormal2.z).
+
+## ADR-0208 — The terrain's cover and macro maps; terrain world maps
+
+- **The far ground's layers per texel.** A far tile's cover weights were its vertices', 16-64 m apart: rock, scree
+  and meadow smeared across its triangles. The COVER MAP bakes the same weights (terrainColor's and
+  terrainSnowWeight's: grass, dirt, sand, snow; rock the rest) per texel at twice the normal map's texel (the island:
+  4096^2 at 4.9 m, 64 MB, 2.4 s), and mesh.frag takes it over from the vertices where the mesh grows coarser than a
+  texel. Keyed on the whole terrain block and a code tag (its palette, the forest's litter, the trails and the rivers'
+  shores all paint it).
+- **The MACRO MAP:** the ground maps' convexity and wetness (ADR-0128) at the same texels (0.1 s), read at every
+  distance: gullies and hollows up to 22% darker, ridges 7% paler, wet ground up to 22% darker and less rough. The far
+  slopes show their drainage.
+- **Terrain world maps** (procgen/terrain_world_map.h, was terrain_normal_map.h): one struct and cache format
+  (cache/terrain/<key>.wmap) for any channel count; the normal map is one of them. Set 0 bindings 6 and 7, their square
+  and blend band in the globals (setTerrainSurfaceMaps); four-channel textures upload as RGBA8.
+- A/B: RT_TERRAIN_COVER_MAP=0. Owed: Metal and WebGPU; the 4 m rock texture's repeat shows on mid-distance slopes.
+
+## ADR-0209 — Rock layers in the mountains' growth; the terrain lab
+
+Glenn (2026-10-19): the mountains should look "more rocky"; "I would imagine we'd have slabs or sheets of stone making
+ridges"; then, with reference photos (the Flatirons, Mount Yamnuska, Banded Peak): "Can we do it proper but in
+another test level ... This code would live next to the old one".
+
+- **What failed first, and why.** Instanced cliff pieces (a "cliff" rock family on steep faces) read as rocks stuck
+  on the face. Strata stamped onto the finished ground (9 m, then 22 m sheets, bench + riser) read as nothing, and
+  weathering those by the rock's angle of repose made the mountains SMOOTHER (soft rock slumping fills the gullies).
+  The reference photos showed why: the structure that reads as rock is 50-500 m -- a cliff band, a slab hundreds of
+  metres long -- the scale of the shapes the mountains are GROWN from. All three were removed.
+- **Rock layers** (procgen/rock_layers.h): beds dipping at `dip` toward a direction that wanders over kilometres,
+  warped, `thickness` thick on average; a share `hard` hard, softened at their contacts and in patches along their
+  outcrop. In the GROW (stream power, ADR-0125), each cell's erodibility and creep are its rock's at its height,
+  re-read every iteration (StreamPowerParams::layers): hard beds erode at `hardK`, creep at `hardDiffusion`. The
+  erosion itself leaves the hard beds as walls, buttresses and ledges. Test: a relief grown with 60 m beds stands
+  1.8x steeper on hard rock (1.40 against 0.79).
+- **Banding.** The macro map (ADR-0208) carries the rock's band tone (beds `toneThickness`, default 25 m, each pushed
+  pale or dark) and hardness; mesh.frag tints rock by the tone (x0.55..x1.45, exactly neutral where a level has no
+  layers): the light and dark strata of Banded Peak, following the same beds.
+- **The terrain lab** (terrain_lab.json, terrain_lab_layers.json): the island's pipeline on a 4.4 km mountain island,
+  37 s cold, 9 s cached (the island: 16 min). Variants tried there: 120 m / 25 deg (slabs, ledge bands), 180 m / 45 deg
+  (smooth tilted slabs), 250 m / 10 deg (Yamnuska: a cliff wall and buttress, a jagged crest -- Glenn's pick, D, now
+  terrain_lab_layers.json: hard 0.3, hardK 0.06, hardDiffusion 0.1).
+- **Opt-in:** "weather": { "grow": { "layers": {...} } }. Without it every level grows as before; the island is
+  unchanged until Glenn says. Owed: bedding in the refine stages (the walls are smooth), crisper band edges up close
+  (the 4 m macro map blurs them), then an island trial; the old path is deprecated if it holds.
+
+## ADR-0210 — Facets, rock sub-layers, hex tiling, lips and snow depth, two scales, darker dirt
+
+Glenn (2026-10-19), with reference photos (a faceted limestone peak; stratified cliffs): the mountains' surface has "a
+regular repeating pattern"; grass patches and snow "seem painted onto the surface"; dirt "too light"; "break it up
+into sublayers"; "I'll let you cook".
+
+- **Painted crack lines were wrong** (a joint-set shader drawing cracks, facets and worn edges into the colour read
+  as graph paper, then as "super weird" lines): cracks show as SHAPE -- recesses that catch shadow, edges where planes
+  meet. Removed.
+- **Facets in the heights** (terrain_weather facetRock, opt-in "facets"): steep mountain rock cut into jittered
+  Voronoi cells, each one plane (its slope over the cell plus a random tilt); where neighbours disagree, real edges and
+  steps. Varied round a mountain (Glenn: "different levels of this result"): coarse (30 m) and fine (14 m) cells blended
+  by region, strength and tilt by region (~1.2 km). In terrain_lab_layers; the island waits on Glenn.
+- **Hex tiling** (Mikkelsen 2022 after Heitz & Neyret 2018): every ground layer sampled on a triangle grid of random
+  offsets, sharpened weights, the unshifted UV's gradients -- the 4 m tile no longer lines up across a mountainside.
+- **Rock sub-layers** (ground_layers.h): face (broad planes, sparse fractures, streaks down), broken (blocks of two
+  sizes, gaps of varied width), scree (packed stones of two sizes), lichen (muted crusts, moss in the low places), as
+  one 2 x 2 atlas in the rock slot; mesh.frag chooses by slope, the macro map's hollows and wetness, and aspect, and
+  height-blends them. The old rock's metre-wide polygon cracks read as dried mud under the relief.
+- **Lips and snow depth:** each layer stands at its own height in the relief (turf 0.16 m over rock, soil 0.10, sand
+  0.04, snow 0.35) -- an edge lit one side and shaded the other where one meets another; and terrain.vert raises the
+  layered ground with the snow's weight (up to 0.6 m), so a snowfield has an edge and buries the rock (RT_TERRAIN_DETAIL=0
+  turns both off).
+- **Two scales:** each layer also read on a ~24 m hex grid, its brightness against the texture's mean (its last mip)
+  varying the near sample +-35%.
+- **Palette:** dirt (0.12, 0.085, 0.05) -> (0.078, 0.056, 0.036), damp topsoil, in the island levels and the labs.
+
+## ADR-0211 — The island trial: rock layers in the high ground; island_8_rocky
+
+- **Rock layers over the whole island moved the drainage** the cities stand on: a hilly town's ground by up to 95 m.
+  RockLayersParams gains `fromHeight` / `fullHeight`: no hard beds below the first, all from the second (the island:
+  300 and 550 m). With it the towns move 0.1-2 m on average (Weyby, Port Penwood and Ivycombe up to 13-16 m at their
+  edges), but the inland streams still re-route: 27% of the old channels kept within ~80 m (the same measure on
+  unchanged ground with 10 cm of noise keeps 84%); the coast mouths mostly hold.
+- **So it is its own level**, island_8_rocky.json (island_8_weathered + the lab's D layers, faded, and the facets),
+  terrain only; island_8_weathered and Glenn's island_8_nature are unchanged until the cities are re-planned on it
+  (city_plan island-cities on the new ground). Seen from the mountains: snow-capped crests, cliff walls and broken
+  ridges where the island has rounded grey ridges.
+- The layers' lip in the relief now comes from the smooth cover weights (from the crisp height-blend shares it drew a
+  dark outline round every snowfield). level_tests' water report takes RT_WATER_LEVEL (river mouths of any level).
+
+## ADR-0212 — Ground clutter: stones and twigs planted like grass
+
+Glenn's terrain plan, step 5 (and: "some of the pebbling you did earlier also helps").
+
+- **Planted by GrassSystem** from a "grassLayers" entry with "clutter": "stones" or "twigs" -- the same streamed tiles,
+  ranks and fades as the grass, so it costs what a sparse grass layer costs and never swims. FLAG_CLUTTER (bit 26, with
+  FLAG_GRASS) keeps the grass's planting in mesh.vert but lights it as a solid in mesh.frag: no turning to the viewer,
+  no bend to the sky, no light through it; no wind; bladeHeight 0 (no swish underfoot).
+- **The meshes** (procgen/ground_clutter.h, from the shape kit): stones are the rock library's pebbles, sunk a third
+  into the ground, in the cover palette's rock (or "color"); twigs are one to three crooked tapered tubes lying on the
+  ground with a side shoot, bark in the vertex colour.
+- **Where:** stones by the cover's bare ground (dirt, rock, sand, a little in grass), the maps' scree and the shores,
+  never on snow, in clumps; twigs under the canopy (forestCanopy), thickest where it closes. Both off the city's
+  managed blocks, roads and pads.
+- In the island levels and the labs: stones size 0.9 (stones ~10-20 cm), every 0.75 m, out to ~32 m; twigs every 1.1 m
+  out to ~26 m. The grass layers are outside the terrain block: no re-bake.
+
+## ADR-0213 — Stains from the shape; block relief baked into steep rock (tested on island_8_rocky)
+
+Glenn (2026-10-19): "Do those things and let's test with island 8 rocky" -- weathering from the shape, displacement
+near the camera, the cliff blocks of Paris et al. 2020.
+
+- **Stains** (the macro map's fourth channel, was the rock's hardness, unused): on a steep face, walk up the fall line
+  from each texel; the nearest convex break above (a ledge, a facet's lip) darkens it with distance, broken into
+  streaks across the face by noise along the contour; every crease (concave) a little dark too. mesh.frag darkens the
+  rock by it, up to 45%. Baked with the macro map (1 s on the island).
+- **Rock relief** ("rockRelief" in the terrain block, read where the weathered grid becomes the ground, so the 1 m
+  tiles, their colliders, the normal map and everything placed on the ground carry it alike -- displacement, baked).
+  Two forms: ridged noise (amplitude, scale), and BLOCKS ("blockCell" > 0, after Paris et al. 2020): the steep rock
+  cut into Voronoi cells, each a flat block -- the ground's slope over it tilted its own way and stepped out or in by
+  up to the amplitude -- a crack sunk along its edges. Masked by slope (slopeLo..slopeHi) and height above the sea.
+  The ridged noise at 0.7 and 1.8 m read as nothing from 50 m; blocks of 5 m barely; blocks of 9 m with 1.5 m steps,
+  20 deg tilt and 1.2 m cracks break a face into angular planes and give the crests a jagged line. island_8_rocky
+  carries that; the ground cache key leaves it out of the weathered grid (it is laid on as read).
+- **Instanced cliff blocks failed again** (slabs planted like clutter on the face, in the terrain's own material): at
+  every density they read as boulders lying on a smooth slope. Removed; the blocks live in the ground.
+
+## ADR-0214 — island_8_nature re-planned on the rocky ground; link roads kept to their class and off the streets; the map as built
+
+Glenn (2026-10-20): "yeah do it" -- rebuild island_8_nature on island_8_rocky's ground, re-plan the cities, keep his
+citysim edits.
+
+- **Keep the sites** (`city_plan island-cities ... --keep-sites LEVEL`): the places, names, kinds and hubs come from a
+  level already built, so the re-plan on new ground keeps the island Glenn knows; only the streets, links and
+  interchanges are laid again to fit it.
+- **A link is a collector, and the planner checks it climbs like one.** Weyby's link on the rocky ground ran straight
+  up 11.7 % over its last 330 m. The builder graded it at 10 % and could only cut: 16 m into the hill at the freeway,
+  where the diamond's ramps land -- they came out 16.7 % (9 % allowed) and 110 m short of the length their climb
+  needed. A town node 1 m off the link and 11.5 m below it made it worse: the builder spreads a tee's correction over
+  R = 1.5 |dz| / (0.2 g/4), here 3.4 km, which pulled the whole link down. `linkCityToFreeway` now samples each
+  candidate's ground and passes over one steeper than `maxGrade` over 150 m (or 90 % of a short one). city_plan
+  passes 9 %: 10 % less the climb onto a freeway on a bridge (Brookcliff's 9.3 % ground built 10.6 % up to a 73 m
+  bridge; at 9 % it takes a 6 % candidate, no bridge).
+- **...and keeps off the city's streets.** With the steep links gone, Saltwood's nearest candidate left its arterial
+  14 deg off it; started from the next node over it still ran 5 m beside it, and the builder read the 100 m where they
+  overlap as an overpass 2.7 m clear (23 clearance fails, 4 m steps, a 3.2 m node mismatch). A candidate that runs
+  within 15 m of a street it is within 30 deg of, past its first 20 m, is passed over (`cityStreets`).
+- **Weyby has no link** on this ground: all 428 candidates climb 12-17.5 %, and the one flat one has no room beside
+  the pass's diamond. Its interchange is the pass's; the island ring (X1) falls back to a place's pass interchange
+  when it has no link, so it keeps its 8 stops.
+- **A skewed crossing clears the lower road's outer lane** (lanes.cpp, the clearance lift). The lift clears the lower
+  road's highest point under the upper deck, sampled along it for the upper's half width over the crossing sine. At a
+  skew the lower road's own half width runs on along it too (over the tangent): the island loop crossed the pass at
+  28 deg with the pass 13.9 % up, and the pass's outer lane, 6 m further on, came 21 cm short of the clearance. Now
+  sampled over both.
+- Tests: `a_link_too_steep_for_its_class_is_passed_over`, `a_link_leaving_along_a_street_is_passed_over`
+  (test_island_links.cpp), `lanes_a_track_over_a_steep_road_at_a_skew_clears_its_outer_lane` (test_lanes.cpp; 0.2 m
+  short without the fix).
+- **The island map** (writeIslandSvg) draws the freeway AS BUILT (w.freewayRoute, the route the diamonds and the graph
+  were laid on), not the legs as first routed: Glenn saw sharp corners and a spike to the coast at Brookcliff that the
+  road doesn't have (built radii there 192-429 m). `island-cities --rail` lays the island loop and the cities' light
+  rail in the same run (the `island-rail` / `city-rail` verbs and it share addIslandRail / addCityRail; the graph it
+  writes is identical to the two verbs'), so the map draws the railway, light rail and station footways from the
+  finished graph. A LEGEND in a panel beside the map names every layer, each swatch drawn the way the map draws it, each
+  intercity bus line by name (Glenn: "so we can see trails, rails, freeways etc.").
+- **Owed:** the diamond planner sizes its ramps from the ground at the terminal, not the landing street's built
+  profile; the builder's tee correction radius (kilometres for a big tee) should be bounded by the street it moves;
+  freeway curves against a design speed (Ivycombe's and Brookcliff's are 192-197 m: about 70 km/h, not 100).
+- **Next (Glenn, 2026-10-20: "neither system is guessing"):** every fix above is the planner guessing what the builder
+  will do, or the builder inferring what the planner meant. The vertical design (class rules, profiles, junction
+  levels, crossing kinds and clearances) moves out of the builder into one shared stage; the planner runs it and writes
+  each road's profile and every crossing's kind into the graph; the builder meshes and checks against it.
+
+## ADR-0215 — One road design stage (step 1: out of the builder, unchanged)
+
+Glenn (2026-10-20): "We should make it so that neither system is guessing. We should be able to plan out the road and
+elevations. The planner and builder should know the intent of the roads so it's not guessing and use the same models."
+ADR-0214's fixes were each one side guessing the other: the planner sizing ramps from bare ground while the builder cut
+the link 16 m in; the builder reading two overlapping roads 2.7 m apart as an overpass the plan never meant.
+
+- **The design stage** (`road_design.{h,cpp}`, `designRoads(graph, ground)`): the vertical design that lived inside
+  `lanes::build` -- open ends, through profiles at each class's grade, track holds chained across joints, ramps from
+  their hosts, node and level-crossing agreement (to the best round), clearance lifts, the final settle. build() calls
+  it between expanding the lanes and the footprints; nothing else moved. It reads only the graph and the ground, so the
+  planner can run exactly what the builder runs.
+- **Proof:** lanes_tool on the 12 lab scenes, river_town, the Saltwood island window and metro_planned, before and
+  after: every glb byte-identical, every stats.json identical but its timings, every check line identical.
+- **Measured:** the stage is cheap -- 2-3 min of a 95-min full island build (~11 min building, ~85 min invariants and
+  output). The planner can afford to run it on what it writes.
+- **Next** (plan: ~/.claude/plans/roads-shared-design-stage.md): the graph carries intent -- every crossing declared
+  (junction / bridge, which over, clearance / at grade) and each road's designed profile; the stage uses the declared
+  kind where today it infers one from heights (`crossingConsistency` skips any crossing already `bridge_h` apart), and a
+  crossing the plan did not declare is a design error with its place. Then the planner runs the stage and writes the
+  result, and the builder checks a designed graph instead of re-designing it.
+- **Step 2: the graph carries intent.**
+  - **Crossings as planned.** A top-level `"crossings": [{"a", "b", "at", "kind": "bridge" | "at_grade", "over",
+    "clearance"}]` list (CrossingSpec). A graph that carries it *declares* its crossings. A planned bridge is
+    separated with its named road over, lifted to its clearance even where the two stood level. A planned level
+    meeting is made to agree however far apart the two stood; before, `crossingConsistency` and `nodeConsistency`
+    took any pair already `bridge_h` apart for a bridge. A crossing the design stage finds that is not on the list
+    fails a new check, "crossings are as planned", named with its place. A graph without the list infers kinds as
+    before (the hand-made lab scenes).
+  - **Elevations as planned.** `lanes_tool design GRAPH OUT` (`designedGraph`) writes each road's designed
+    profile into the graph (`"profile": {"step", "z"}`, one height a spine sample) without meshing. A graph whose
+    roads all carry one is DESIGNED: `designRoads` takes the heights as given (ramps still measure their free
+    length from their hosts) and only measures the junctions and level crossings. The builder checks, never
+    re-designs, and names the worst fault ("a crosses b at (0, 0)").
+  - **Proof.** The 15 scenes without plans: byte-identical again. Four lab scenes (relief, a system interchange,
+    the light rail lab, a viaduct) built through `design` and back: byte-identical meshes.
+  - **Tests** (test_lanes.cpp):
+    - `lanes_a_planned_level_crossing_is_levelled_however_far_apart_it_stood`
+    - `lanes_a_planned_bridge_clears_a_road_it_stood_level_with`
+    - `lanes_a_crossing_the_plan_left_out_is_reported_with_its_place`
+    - `lanes_a_designed_graph_builds_the_heights_it_was_designed_with`
+    - `lanes_a_planned_profile_is_built_as_given_and_its_faults_are_named`
+- **Step 3: the planner designs.**
+  - **Crossing policy** (`planCrossings(graph)`, shared, in road_design): every meeting of two roads the design
+    stage would find gets a kind from what meets. Track and anything: bridge. The freeway and anything but its own
+    ramps: bridge. A footway across a road: bridge; a footway ending on one: at grade. Streets: at grade. A bridge
+    may leave `over` empty, meaning "the design chooses"; `designedGraph` then writes in whichever road it set
+    higher, so a designed graph names every upper road.
+  - **The island planner writes a designed scene.** `city_plan island-cities` (and `island-rail` / `city-rail`
+    with `--write`) plans the crossings, runs the design stage and writes the profiles before the scene goes out
+    (`designScene`). `lanes_tool design --plan-crossings` does the same for any graph.
+  - **Island 8:** 182 crossings planned (116 bridges, 66 at grade), none left out; 96 roads lifted to clear (99 when
+    inferred); 224 s. The full build of the designed graph fails the same four checks with the same numbers as the
+    last inferred build (24 town deck cracks, p1_s83/p1_s99 at 9 % against 8 %, the 13.6 cm tee at p7_s0/p7_s71,
+    22 thin lanes) and passes the new "crossings are as planned"; 754 grade-separated pairs against 761.
+  - **Not yet:** the link and ramp choices still use their own margins (9 % links, ramp length from bare ground,
+    the along-a-street rule) and the planner's grade constants are still its own; both are to read the design stage
+    and the class table.
+  - **Proof.** The 15 scenes without plans: every glb and stats.json identical to step 2.
+  - **Test:** `lanes_the_crossing_policy_plans_each_meeting_by_what_meets`.
+
+## ADR-0216 — A forest mixed with the recipe trees
+
+Glenn, 2026-10-20, walking the designed island: "I notice that it's using the old trees?" ... "we should mix the new
+trees in there as well." ADR-0197's switch was all or nothing.
+
+- A real_tree forest block's `"recipes"` may be a share (or RT_FOREST_RECIPES=0.5): that share of each kind's trees
+  grows as its recipe, the rest as real_tree. `true` / 1 is ADR-0197's swap, 0 or absent the real_tree forest.
+- The kind keeps its one place in the pick -- band, weight, its stand field, the regions that name it -- so every tree
+  stands where it stood and stays its kind. Its recipe twin (ForestSpecies `twin` / `twinOnly`) is listed after every
+  kind, so the kinds' indices and stand fields are unchanged, and is never picked for itself: it takes a tree where its
+  clumps fall (2-octave noise at 50 m, ragged by a per-tree jitter, put through its measured CDF -- near normal, sd
+  0.19 -- so the share is exact). Groves of tens of metres, not a salad.
+- island_8_nature takes `"recipes": 0.5`. No re-bake: the forest grows at load (the recipe levels from the tree cache).
+- Test `a_forest_mixed_with_recipe_trees_keeps_its_trees_and_grows_the_share_as_recipes`: 0 trees moved, 0 changed
+  kind, shares 0.41 / 0.40 / 0.39 asked 0.4 (oak, spruce, the shrub as hawthorn).
+
+## ADR-0217 — The metro gates measure the lane-built city (poke report, signal poles)
+
+Glenn, 2026-10-20: "I'll let you figure that stuff out first" -- five metro level cases red since metro_v2_test moved
+to the lanes builder (87a8da93, 10-14); each was written against the lattice's model of the road.
+
+- **The poke gate was blind.** `metro_road_decks_are_never_poked_by_the_drawn_terrain` read 0 of 0 samples: the
+  city's own `shape: road` entity (builder lanes) still parses as a lattice net, welds to nothing, and its empty set
+  kept the report from reading the published deck. A net that welds to nothing is skipped. On a published deck the
+  deck at a point is the carriageway it is nearest to (distance past the half-width), not the nearest centreline --
+  that took a ramp in the cut 2 m off its edge for the freeway terrace above and called the slope between them a 5 m
+  poke (shot at (-857, -456): clean) -- and a sidewalk band is sampled beside streets only. RT_POKE_DUMP also writes
+  the lateral offset, half-width, class, deck and the ground without its flattens.
+  Measured now (LOD0): 12536 of 1.43 M samples, worst 3.11 m. Still red: the lot pads' feather lies ON the sidewalk
+  (the office lot at (-201, -208) stands 3.1 m over its street; its grass bank buries the sidewalk to the parking
+  lane, shot). That is a grading fix (a wall at the back of the sidewalk), owed.
+- **Poles and lamps off the kerb line.** A lane city's deck field holds each road at its carriageway width, so the
+  asphalt filling a junction's corners read as clear and corner poles stood on it (7 of 280, the worst 3.75 m in, at
+  a wedge between two streets; shots). `KerbLine` (street_furniture.h) answers how deep a point is inside the drawn
+  driving surface (RoadBandDebug::loops, even-odd); the planner walks poles off it and drops lamp samples on it, and
+  `metro_signal_poles_stand_off_the_asphalt` measures against it where a city publishes one (the graph's straight
+  chords put a pole on a sidewalk tip 0.37 m "inside"). Now 280 poles and 459 lamps, none on the asphalt; the
+  lamp fixture bound 500 -> 400 (the lattice metro planted 1739, the lane metro 464).
+- **The grass blobs on metro's streets: cause confirmed, not fixed** (Glenn: confirm only). Shots show flat grass
+  patches across lanes, bays and sidewalks near junctions, the markings running over them. In places the lanes
+  builder DRAWS the pavement 0.1-0.3 m below the heights the city PUBLISHES as its deck (RoadDeckField, each edge's
+  `deckRoad` at its centreline). The ground finish holds the ground 0.10 m under the published deck, so where the
+  drawn road is lower the ground stands over it; cars ride the published deck and float. Measured at three of the
+  traffic gate's offenders (published deck / ground / drawn road collider): (-491.2, -73.6) 21.74 / 21.64 / 21.43;
+  (-545.9, 158.7) 21.80 / 21.70 / 21.63; (-128.1, 201.6) 0.99 / 0.89 / 0.87. Not the junction corners (a probe of the
+  ground function over the drawn surface found nothing there) and not a stale ground pyramid (metro draws the
+  formula). Why the drawn and published heights part -- a lane pulled by its partner, a tee's blend -- is the next
+  question; the fix is to publish what was drawn, a city bake change (every lanes level re-bakes).
+- The parking census names its first heaps and junction cars: metro's are one pair of bays on two converging
+  streets 2.7 m apart at (-482, -707), and one bay 8.7 m from a junction's node at (15, 365). The bus share (36 % of
+  streets with a bus, against 50 %) is not yet looked at.
+
+## ADR-0218 — The royal palm, and the city's recipe trees as a level setting
+
+Glenn, 2026-10-20, on island_8_nature: "The old palm tree needs to get the leaves fixed. Maybe it's better to replace
+them with the new palms?"
+
+- **The crownshaft** (FrondSpec `crownshaft`, `crownshaft_radius`, `crownshaft_color`; foliage_kit addFrondCrown): the
+  sheathing frond bases under a palm's crown, a smooth sleeve swelling from the trunk's radius and narrowing into the
+  fronds. 0 (the default) draws none, so the coconut and the fan palm are unchanged.
+- **`royal_palm`** (tree_recipes.lua): a straight smooth pale-grey column swollen at the foot, a 1.9 m green
+  crownshaft, 16 long arching feather fronds with hanging leaflets; ~13 m of trunk, ~16 m to the crown's top. In the
+  tree lab beside the coconut and fan palms (tree_lab.json, royal_palm_1..3).
+- **The city's recipe trees are a level setting**: `citysim.recipeTrees` (cityRecipeTrees), with RT_STREET_RECIPES=1/0
+  over it for the A/B; both readers (the street trees and the parks' and yards' trees) ask it. The street royal palm
+  now maps to the recipe, so a city with recipe trees has no real_tree palms left. island_8_nature (untracked) sets
+  it. No re-bake: street and lot trees are planted at load.
+- Test: `a_palm_wears_its_crown_at_the_top` takes the royal palm: its crownshaft lies within its length under the
+  trunk's top and its top stands within 1.5 m of its foot (0.30 m).
+
+## ADR-0219 — The trains' room, and the indicators on their own side
+
+Glenn, 2026-10-20, on island_8_nature: "some trees that are close to the train line and go through the elevated train
+platform and trains as they go by"; "cars also signal the wrong light when you try to turn left and right".
+
+- **The trains' room** (DrawnRoad::inTrainEnvelope): a passing train is drawn nowhere, so the overhead check could not
+  see it. Every track the city publishes (deck spines of use Track: centreline and rail height) carries the swept
+  train -- 1.75 m each side of the track's own half-width plus 1 m for branches, 5.5 m over the rails.
+  `DrawnRoad::blocksTree(x, z, foot, height, crown)` (overhead || the trains' room) is every tree placer's one
+  question: the street trees and the lot trees (were overhead only), the forest (was a plan margin only; now each
+  tree at its variant's height, crown 0.3 of it), and the old scatter layer (any height, its 3 m margin as the crown).
+  island_8_nature: 1063 forest trees and 182 street trees left out under decks and in the trains' room.
+- **The indicators**: fleet v2's kit bodies (vehicle_kit.lua, 09-27) tagged the +X lamps "_r"; the driver's left is
+  +X (car_mesh.cpp, measured in the driving lab), so every kit car -- the player's and the traffic -- blinked the
+  opposite side. Head, tail and both truck tails swapped back.
+- Tests: `a_tree_keeps_out_of_the_trains_room` (beside a track, under a viaduct, on a cutting's lip);
+  `every_drivable_car_names_its_lamps_by_their_side` (all 13 drivable recipes; it caught the truck tails too).
+
+## ADR-0220 — Guardrails along the freeway, blocks behind the sidewalk
+
+Glenn, 2026-10-20, on island_8_nature: "freeways don't have railguards anymore. Neither do the onramps"; "there are
+green patches so the road is not conforming right".
+
+- **The guardrails were never built.** `lanes_tool build … --walls` now prints the census per edge role and the
+  barrier metres per class: of 109.6 km of at-grade freeway, ramp and mountain edge, 1.4 km carried a rail -- 990 m
+  on the freeway, 29 m on every ramp. The island scene had given the freeway and its ramps the open roads' drop rule
+  (10-09: a rail only where the ground 5 m out falls 2.5 m), and the grading holds the ground beside them at the
+  deck, so the rule never fired. The freeway and its ramps keep the class default now, a guardrail the whole way
+  along at grade; the rural roads keep the drop rule. (The graph asset carries the classes: its freeway and ramp
+  `at_grade` entries were taken out with it.)
+- **The green patches were blocks over the sidewalk.** A block is the hole in the drawn pavement, inset 0.3 m and
+  simplified at 1.5 m; on the outside of a bend the simplified chord cut back across the sidewalk (and a ramp's
+  shoulder), and the pads clipped to the block, with their feathers, lifted the ground over it. The lab cities had
+  34-169 m2 of block over the drawn pavement. `blocksFromHoles` now clips the simplified outline to its own hole: a
+  block is simplified only inward (0 m2 over the pavement, 0.1-0.2% of block area given up). Lots tag 2026-10-21.1.
+- **...by tucking the chord, not clipping it.** The clip gave every curve back as the hole's own ~1 m pieces, which
+  the lots' frontage merge (0.75 m) could not join into frontages: 9% of the island's buildings (12237 -> 11128),
+  2% on ring_city. Each chord now moves inward by the most its run of the hole bulged inside it -- across a curve it
+  becomes the tangent behind the sidewalk -- and the hole clips only what a sharp corner leaves. Lots: ring_city 355
+  -> 353, grid_city 178 -> 178, still 0 m2 over the pavement; the test also holds the outline to under 3% in pieces
+  shorter than 4 m (the clip: 12.2% on curve_blocks). Lots tag 2026-10-21.2.
+- Diagnostics: `RT_POKE_SITE` takes several sites ("x,z;x,z") and lists every flatten reaching a sample -- its
+  priority, plane, falloff, and whether the sample is inside it or in its feather.
+- Tests: `lanes_a_freeway_at_grade_wears_its_guardrails` (the default rails a flat freeway on both sides; the drop
+  rule builds none); `lanes_a_city_block_stays_behind_its_sidewalk` (curve_blocks, ring_city, grid_city).
+
+## ADR-0221 — The road builder's ground is a corridor, not the island
+
+Glenn, 2026-10-21, on island_8_nature: "the hills aren't smooth even after all this work to increase the terrain
+detail ... I saw it improves on the other island 8"; then, "We should catalog this information so we know that the
+road builder doesn't run at the highest resolution ... it feels like most of the terrain is untouched by the road
+builder".
+
+- **The road builder does not run at the ground's resolution.** The lanes build conforms its own copy of the ground,
+  the graph's `terrain.res` grid: 20 m on the island (`island_scene.h` `gridRes`, ADR-0112, chosen when the island's
+  terrain was itself ~19.5 m). The weathered ground is 2.44 m (ADR-0126 onward: refine detail, facets, rock relief).
+  Road decisions -- cut and fill, elevations, piers, the build's own checks -- see the 20 m ground.
+- **The loader drew that copy as the ground.** `laneErodedBase` (ADR-0095, from the lane lab) put the conformed grid
+  in place of the level's terrain over the grid's whole extent -- 630 x 863 nodes, 12.6 x 17.2 km, nearly the whole
+  island -- so on any level with lane cities the 2.44 m ground never reached the screen. island_8_rocky (no cities)
+  showed it; island_8_nature did not: the heights agree at the 20 m nodes and nowhere between, the cover map (rock,
+  grass, dirt by slope) came out in 20 m axis-aligned blocks, and the baked pyramid refined less (L0 5688 tiles vs
+  6600). Rebuilding rocky's ground with today's code gave byte-identical files: no regression, an old path.
+- **Most of the island is untouched by the roads.** 6.9% of the grid's nodes differ from the natural ground by more
+  than 5 cm, along the roads and in the cities. Four blobs by the mountain road differ by up to 349 m: the build's
+  copy was sampled before the weathering grew those peaks, and the mountain road was designed on it.
+- **Measured, not guessed: the whole natural ground under the roads pokes through them.** Laying the grid as a change
+  over the full ground everywhere raised the island's poke census from 3713 to 120203 samples (worst 20.5 m).
+- **So the grid is the ground in a corridor, the natural ground everywhere else.** The corridor is every node a deck
+  reaches (`RoadDeckField::coversAny`) or the build changed by > 5 cm (the cities' graded ground among them), plus
+  40 m; the natural ground's detail (natural minus its own bilinear at the nodes) fades in over the next 60 m. The
+  roads stand on exactly the ground they were built on. On the island: corridor 8.0% of the nodes, full detail on
+  84.5%, no node off the build's ground by > 1 m where detail shows; the poke census 4486 samples (worst 2.71 m, the
+  old mountain-road site), against 5428 before today's block fix and 3713 on the clipped blocks, which grew 1130 fewer
+  buildings and so fewer pad stamps. Holding every city block to the grid as well took 43% of the island out of the
+  detail and moved the census not one sample.
+- What is owed: the build itself at fidelity where it matters -- fine ground in the road corridors only (corridor
+  tiles, or sampling the full ground along each road), not a 2.44 m whole-island grid (67x the cells). The
+  `[lanelab] road ground:` log line counts the corridor, the changed nodes and any node off the build's ground by
+  more than 1 m where detail shows.
+- Test: `lanes_the_road_grid_keeps_a_corridor_and_the_hills_their_detail` (the grid exactly in a road's corridor; the
+  natural ground to 1 mm away from it, where the grid alone was 8 m off). Ground code tag 2026-10-21.2, lots tag
+  2026-10-21.4.
+
+## ADR-0222 — The sky bridge is walked
+
+Glenn, 2026-10-21, at the top of a twin tower on island_8_nature: "I'm standing in front of a skybridge and I can't
+cross it!" ADR-0179 drew the bridge, cut the exterior collider at its door and laid its floor and sides, and its test
+counted those parts; nothing ever walked a body across.
+
+- **The interior's inner-wall collider sealed the door.** `growInterior` stands a plane 0.55 m inside every facade
+  (so a walker never stands in the wall band) and gapped it only at the ground storey's entrances. It now gaps it on
+  every storey where a `wallCuts` cut crosses it -- the link doorways and the wide openings between cells -- matched to
+  the edge by its line, not its index.
+- **The far tower was not there to step into.** `BuildingInteriorSystem` grows a building the walker is inside or
+  stands within 6 m in front of a street door, a tall one round its lobby while they approach. A link door at the
+  walker's own storey now counts as a door (within 6 m plus the bridge's span), and that tower grows round the
+  walker's storey; one already resident round its lobby is regrown.
+- Tests: `a_walker_crosses_the_sky_bridge_between_twin_towers` (the two interiors, the bridge and a capsule from one
+  sky lobby into the other: stopped 0.87 m short of the face before, 16.2 m across after);
+  `interior_system_builds_the_far_tower_from_its_sky_bridge` (storeys [14, 19) for the bridge's 16). Runtime only: no
+  bake.

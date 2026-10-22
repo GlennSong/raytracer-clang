@@ -62,6 +62,7 @@ add_library(engine_core STATIC
     src/engine/states/editor_state.cpp
     src/engine/screenshot.cpp
     src/engine/mesh_shapes.cpp
+    src/engine/mesh_words.cpp
     src/engine/mesh_builder.cpp
     src/engine/bundle/bundle.cpp
     src/engine/bundle/bake.cpp
@@ -72,7 +73,6 @@ add_library(engine_core STATIC
     src/engine/lot_grow_setup.cpp
     src/engine/city_grow.cpp
     src/engine/city_prepass.cpp
-    src/engine/procgen/city/citylots_producer.cpp
     src/engine/editable_curve.cpp
     src/engine/curve_edit.cpp
     src/engine/animation_path.cpp
@@ -82,16 +82,27 @@ add_library(engine_core STATIC
     src/engine/procgen/noise.cpp
     src/engine/procgen/terrain.cpp
     src/engine/procgen/terrain_horizon.cpp
+    src/engine/procgen/rock_layers.cpp
+    src/engine/procgen/ground_clutter.cpp
+    src/engine/procgen/terrain_world_map.cpp
     src/engine/procgen/terrain_lod.cpp
     src/engine/procgen/height_pyramid.cpp
     src/engine/procgen/lsystem.cpp
     src/engine/procgen/skeleton.cpp
     src/engine/procgen/tree.cpp
+    src/engine/procgen/tree_recipe.cpp
+    src/engine/procgen/tree_lods.cpp
+    src/engine/procgen/branch_cards.cpp
+    src/engine/procgen/leaf_card.cpp
+    src/engine/procgen/foliage_kit.cpp
     src/engine/procgen/surface_maps.cpp
     src/engine/procgen/vehicle_mesh.cpp
     src/engine/procgen/vehicle/car_mesh.cpp
     src/engine/procgen/vehicle/car_interior.cpp
     src/engine/procgen/vehicle/occupant.cpp
+    src/engine/procgen/person.cpp
+    src/engine/procgen/tree_cache.cpp
+    src/engine/procgen/vehicle/train_mesh.cpp
     src/engine/procgen/texture_field.cpp
     src/engine/procgen/terrain_field.cpp
     src/engine/procgen/earthwork.cpp
@@ -118,6 +129,8 @@ add_library(engine_core STATIC
     src/engine/procgen/sdf.cpp
     src/engine/procgen/city/polygon.cpp
     src/engine/procgen/city/shape_grammar.cpp
+    src/engine/procgen/city/trades.cpp
+    src/engine/procgen/city/shop_signs.cpp
     src/engine/procgen/city/city_svg.cpp
     src/engine/procgen/city/parcel.cpp
     src/engine/procgen/city/plan/city_plan.cpp
@@ -127,13 +140,27 @@ add_library(engine_core STATIC
     src/engine/procgen/world/road_signs.cpp
     src/engine/procgen/world/road_sign_build.cpp
     src/engine/procgen/world/island_scene.cpp
+    src/engine/procgen/world/island_rail.cpp
     src/engine/procgen/city/site_plan.cpp
     src/engine/procgen/city/core_plan.cpp
+    src/engine/procgen/city/space_graph.cpp
+    src/engine/procgen/city/circulation.cpp
+    src/engine/procgen/city/mass.cpp
+    src/engine/procgen/city/mass_stack.cpp
+    src/engine/procgen/city/cells.cpp
+    src/engine/procgen/city/implicit.cpp
+    src/engine/procgen/city/mesh_mass.cpp
+    src/engine/procgen/city/envelope.cpp
+    src/engine/procgen/city/section.cpp
+    src/engine/procgen/city/face.cpp
     src/engine/procgen/city/room_plan.cpp
+    src/engine/procgen/city/floor_zones.cpp
+    src/engine/procgen/city/ladders.cpp
     src/engine/procgen/city/furniture.cpp
     src/engine/procgen/furniture_kit.cpp
     src/engine/procgen/furniture_library.cpp
     src/engine/interaction.cpp
+    src/engine/interior_occupants.cpp
     src/engine/interact_broker.cpp
     src/engine/furniture_draw.cpp
     src/engine/procgen/city/patch_fabric.cpp
@@ -163,9 +190,6 @@ add_library(engine_core STATIC
     src/engine/procgen/city/roads/road_entity.cpp
     src/engine/procgen/city/roads/road_builder.cpp
     src/engine/procgen/city/roads/ground_grid.cpp
-    src/engine/procgen/city/roads/lattice_builder.cpp
-    src/engine/procgen/deprecated/roads/road_net_mesh.cpp
-    src/engine/procgen/deprecated/roads/road_lattice.cpp
     src/engine/procgen/city/road_constraints.cpp
     src/engine/procgen/city/road_semantics.cpp
     src/engine/procgen/city/road_rules.cpp
@@ -190,7 +214,6 @@ add_library(engine_core STATIC
     src/engine/model_importer.cpp
     src/engine/camera_store.cpp
     src/engine/editor_bridge.cpp
-    src/engine/city_planner.cpp
     src/engine/properties.cpp
     src/engine/component_registry.cpp
     src/engine/property_json.cpp
@@ -226,6 +249,7 @@ add_library(engine_core STATIC
     src/engine/systems/teleport_pose.cpp
     src/engine/systems/building_interior_system.cpp
     src/engine/systems/door_system.cpp
+    src/engine/systems/ladder_system.cpp
     src/engine/systems/elevator_system.cpp
     src/engine/systems/interaction_system.cpp
     src/engine/systems/interact_broker_system.cpp
@@ -398,6 +422,7 @@ if(RT_ENABLE_SCRIPTING)
         src/engine/scripting/script_system.cpp
         src/engine/scripting/vehicle_spec.cpp
         src/engine/scripting/furniture_library_lua.cpp
+        src/engine/scripting/tree_recipes_lua.cpp
     )
     target_link_libraries(engine_core PUBLIC lua_static)
     target_compile_definitions(engine_core PUBLIC RT_ENABLE_SCRIPTING=1)
@@ -417,9 +442,16 @@ add_library(citysim STATIC
     src/apps/citysim/traffic_signal.cpp
     src/apps/citysim/traffic_rules.cpp
     src/apps/citysim/city_goals.cpp
+    src/apps/citysim/city_roles.cpp
+    src/apps/citysim/activities.cpp
     src/apps/citysim/city_transit.cpp   # carrying people: the shared ride primitive
     src/apps/citysim/city_dispatch.cpp   # hailing a ride: the matching policy
     src/apps/citysim/city_bus.cpp   # fixed-loop transit: derived routes and stops
+    src/apps/citysim/rail_sim.cpp   # trains on the road builder's tracks: lines, timetable, carriage poses
+    src/apps/citysim/city_rail_riders.cpp   # people taking the train: stations on the streets, who is where
+    src/apps/citysim/station_boards.cpp   # the stations' names on their platforms
+    src/apps/citysim/station_entrance.cpp   # the pavilion over each station's way in
+    src/apps/citysim/rail_board.cpp   # a platform's departure board: next trains, minutes away
     src/apps/citysim/bus_stop_props.cpp   # the pole, sign and bench you can see
     src/apps/citysim/city_map_raster.cpp  # the map tool's picture: the city SVG, rasterized (nanosvg)
     src/apps/citysim/places.cpp          # places layer: buildings → routable POIs (ADR-0066)
@@ -438,6 +470,8 @@ if(RT_ENABLE_SCRIPTING)
     # goal/fleet tables into citysim types, so they belong to the app, not the core.
     target_sources(citysim PRIVATE
         src/apps/citysim/scripting/agent_goals.cpp
+        src/apps/citysim/scripting/activities_lua.cpp
+        src/apps/citysim/scripting/roles_lua.cpp
         src/apps/citysim/scripting/vehicle_body.cpp
     )
 endif()
@@ -446,10 +480,10 @@ endif()
 # The LANES road builder (ADR-0083, folded into the roads module by ADR-0089):
 # lanes as the atomic paved object, footprints by polygon union, one constrained
 # Delaunay over every lane outline, heights by projection onto the owning spine.
-# There is no lab and no separate library any more — it builds inside engine_core
-# beside the lattice — but it still has two geometry deps (Clipper2, CDT: pinned
-# submodules, reached only through roads/lanes/geom2d.cpp), so a checkout without
-# them builds an engine that simply does not know the lanes builder.
+# There is no lab and no separate library any more — it builds inside engine_core,
+# the only road builder since the lattice retired (2026-10-14). Its two geometry deps
+# (Clipper2, CDT: pinned submodules, reached only through roads/lanes/geom2d.cpp)
+# are required.
 # ============================================================
 option(RT_BUILD_ROADS_LANES "Build the lanes road builder (needs the Clipper2 and CDT submodules)" ON)
 # The city planner: design a city as data (a road graph and blocks with a use),
@@ -487,6 +521,7 @@ if(RT_BUILD_ROADS_LANES)
             src/engine/procgen/city/roads/lanes/polyline_ops.cpp
             src/engine/procgen/city/roads/lanes/lane_expand.cpp
             src/engine/procgen/city/roads/lanes/vertical_profile.cpp
+            src/engine/procgen/city/roads/lanes/road_design.cpp
             src/engine/procgen/city/roads/lanes/deck_height.cpp
             src/engine/procgen/city/roads/lanes/pavement.cpp
             src/engine/procgen/city/roads/lanes/terrain_conform.cpp
@@ -518,7 +553,8 @@ if(RT_BUILD_ROADS_LANES)
         target_link_libraries(lanes_tests PRIVATE engine_core citysim CDT::CDT)
         add_test(NAME lanes_tests COMMAND lanes_tests WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
     else()
-        message(WARNING "roads/lanes: Clipper2/CDT submodules missing — the lanes builder is not in this build")
+        # The lanes builder is the ONLY road builder (the lattice retired 2026-10-14): no submodules, no roads.
+        message(FATAL_ERROR "roads/lanes: Clipper2/CDT submodules missing (git submodule update --init) -- the lanes builder is the engine's only road builder")
     endif()
 endif()
 
@@ -656,7 +692,6 @@ add_executable(run_tests
     tests/main.cpp
     tests/test_bundle.cpp
     tests/test_lot_cache.cpp
-    tests/test_citylots.cpp
     tests/test_math.cpp
     tests/test_slot_map.cpp
     tests/test_sparse_set.cpp
@@ -666,7 +701,6 @@ add_executable(run_tests
     tests/test_weather_cycle.cpp
     tests/test_editor_home_view.cpp
     tests/test_vehicle_audio.cpp
-    tests/test_lot_conformance.cpp
     tests/test_frame_stats.cpp
     tests/test_event_bus.cpp
     tests/test_debug_draw.cpp
@@ -741,19 +775,11 @@ add_executable(run_tests
     tests/test_road_graph_order.cpp
     tests/test_road_rules.cpp
     tests/test_road_weld.cpp
-    tests/test_junction_surface.cpp
-    tests/test_drive_freeway.cpp
-    tests/test_piedmont_drive.cpp
-    tests/test_mesh_quality.cpp
-    tests/test_mesh_lattice.cpp
-    tests/test_road_lattice.cpp
-    tests/test_road_join.cpp
     tests/test_road_spec.cpp
     tests/test_freeway_graph.cpp
     tests/test_idm.cpp
     tests/test_street_furniture.cpp
     tests/test_street_signs.cpp
-    tests/test_junction_zoo.cpp
     tests/test_ground_truth.cpp
     tests/test_handle_source.cpp
     tests/test_path_edit_tool.cpp
@@ -781,6 +807,9 @@ add_executable(run_tests
     tests/test_city_dispatch.cpp
     tests/test_city_taxi.cpp
     tests/test_city_bus.cpp
+    tests/test_rail_sim.cpp
+    tests/test_rail_riders.cpp
+    tests/test_island_rail.cpp
     tests/test_city_signals.cpp
     tests/test_city_perception.cpp
     tests/test_driver_agent.cpp
@@ -806,7 +835,18 @@ add_executable(run_tests
     tests/test_city_lots.cpp
     tests/test_site_plan.cpp
     tests/test_core_plan.cpp
+    tests/test_space_graph.cpp
+    tests/test_circulation.cpp
+    tests/test_mass_stack.cpp
+    tests/test_cells.cpp
+    tests/test_implicit.cpp
+    tests/test_mesh_mass.cpp
+    tests/test_envelope.cpp
+    tests/test_section.cpp
+    tests/test_floor_zones.cpp
+    tests/test_tree_recipe.cpp
     tests/test_room_plan.cpp
+    tests/test_ladders.cpp
     tests/test_furniture.cpp
     tests/test_alignment.cpp
     tests/test_surface_field.cpp
@@ -815,6 +855,7 @@ add_executable(run_tests
     tests/test_lot_road_clearance.cpp
     tests/test_city_plan.cpp
     tests/test_road_signs.cpp
+    tests/test_island_links.cpp
     ${CORE_SOURCES}
 )
 target_compile_options(run_tests PRIVATE -Wall -Wextra -Wpedantic)
@@ -890,15 +931,6 @@ if(RT_BUILD_DEMOS)
     target_include_directories(pose_demo PRIVATE src)
     target_compile_options(pose_demo PRIVATE -Wall -Wextra)
     target_link_libraries(pose_demo PRIVATE engine_core)
-
-    # Curb-weld diagnostic: measures the curb/sidewalk band the real mesher
-    # emitted, at every junction of a shipped level (rounding / overlap /
-    # continuity). Device report: "overlapping curbs ... not properly
-    # dovetailed and rounded".
-    add_executable(curb_weld_probe tools/diagnostics/curb_weld_probe.cpp ${CORE_SOURCES})
-    target_include_directories(curb_weld_probe PRIVATE src)
-    target_compile_options(curb_weld_probe PRIVATE -Wall -Wextra)
-    target_link_libraries(curb_weld_probe PRIVATE engine_core)
 
     # What a road BUILDER hands the engine for a real level (ADR-0089): the
     # carve, the surface, the deck, the kerb band and the nav graph, by the
@@ -1018,6 +1050,7 @@ if(RT_ENABLE_PHYSICS)
         src/apps/citysim/city_walkers.cpp   # NPC walkers as physics characters (ADR-0062)
         src/apps/citysim/city_player_body.cpp  # player renders as a person in third person (ADR-0064)
         src/apps/citysim/city_player_transit.cpp  # the player's passenger seat on a bus or cab
+        src/apps/citysim/train_system.cpp   # trains drawn, and the player aboard one
         src/apps/citysim/city_map_tool.cpp  # the map: tool slot 3, drawn with the game UI layer
         src/apps/citysim/city_possess.cpp   # the control channel's avatar (ADR-0079)
     )
@@ -1093,7 +1126,7 @@ function(rt_build_vulkan_shaders)
                    sky.vert sky.frag composite.vert composite.frag bloom.frag
                    ssao.frag ssao_blur.frag ssr.frag dof.frag brdf_lut.frag
                    atmosphere.frag clouds.frag clouds_composite.frag water.vert water.frag star.frag
-                   ui.vert ui.frag occlusion_reduce.comp)
+                   ui.vert ui.frag occlusion_reduce.comp crowd.comp)
     set(VK_SPV_FILES "")
     foreach(shader ${VK_SHADERS})
         add_custom_command(
@@ -1440,7 +1473,6 @@ if(Qt6_FOUND)
     add_executable(editor_app
         src/editor_app/editor_main.cpp
         src/editor_app/property_inspector.cpp
-        src/editor_app/city_planner_panel.cpp
         src/editor_app/bake_dialog.cpp
         src/editor_app/level_cache_panel.cpp
         src/game/arena_state.cpp
@@ -1529,15 +1561,13 @@ if(Qt6_FOUND)
     endif()
 
     # Headless widget-interaction tests for the generated inspector (the
-    # path that once crashed via a dangling visitor capture) and the City
-    # Planner bridge + panel (P7.3). Offscreen Qt.
+    # path that once crashed via a dangling visitor capture), the bake dialog and
+    # the level cache panel. Offscreen Qt.
     add_executable(editor_qt_tests
         tests/test_property_inspector_qt.cpp
-        tests/test_city_planner_qt.cpp
         tests/test_bake_dialog_qt.cpp
         tests/test_level_cache_panel_qt.cpp
         src/editor_app/property_inspector.cpp
-        src/editor_app/city_planner_panel.cpp
         src/editor_app/bake_dialog.cpp
         src/editor_app/level_cache_panel.cpp
         src/renderer/null_renderer.cpp   # satisfies Renderer::create; never renders

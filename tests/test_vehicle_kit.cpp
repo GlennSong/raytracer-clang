@@ -33,7 +33,7 @@ TEST_CASE(fleet_v2_every_body_is_closed_lean_and_sliver_free) {
     std::string err;
     const bool ran = k.vm.doString(R"LUA(
       report = {}
-      local names = { "sedan", "taxi", "hatchback", "suv", "jeep", "convertible", "pickup", "step_van", "small_truck", "semi", "semi_tanker" }
+      local names = { "sedan", "taxi", "hatchback", "suv", "jeep", "convertible", "pickup", "step_van", "small_truck", "fire_engine", "semi", "semi_tanker" }
       for _, name in ipairs(names) do
         local P = kit.SPECS[name]()
         local cage, s1 = kit.poly(P, 0)   -- the faceted fleet (level 0)
@@ -67,4 +67,25 @@ TEST_CASE(fleet_v2_every_body_is_closed_lean_and_sliver_free) {
     )LUA", &err);
     if (!checked) std::printf("    %s\n", err.c_str());
     CHECK(checked);
+}
+
+// THE FIRE ENGINE (Glenn, 2026-10-13: "a fire truck should be an actual truck"): a kit vehicle like the rest of the
+// fleet, so the sim parks it in the fire station's bays and a player can drive it. A US Type 1 pumper's size: 9-10 m
+// long, about 2.5 m wide, 3.1-3.4 m to the light bar; dual wheels on its rear axle.
+TEST_CASE(the_fire_engine_is_fire_engine_sized) {
+    KitVM k;
+    CHECK(k.ok);
+    std::string err;
+    const bool ran = k.vm.doString(R"LUA(
+      local car = kit.build(kit.SPECS.fire_engine(), 0)
+      fe = { L = car.size[3], W = car.size[1], H = car.size[2], wheels = #car.wheels, duals = 0 }
+      for _, w in ipairs(car.wheels) do if w.dual then fe.duals = fe.duals + 1 end end
+      print(string.format("    [fire engine] %.2f x %.2f x %.2f m, %d wheel stations, %d dual", fe.L, fe.W, fe.H, fe.wheels, fe.duals))
+      assert(fe.L > 9.0 and fe.L < 10.0, "length")
+      assert(fe.W > 2.4 and fe.W < 2.62, "width")
+      assert(fe.H > 3.1 and fe.H < 3.4, "height")
+      assert(fe.wheels == 4 and fe.duals == 2, "wheels")
+    )LUA", &err);
+    if (!ran) std::printf("    %s\n", err.c_str());
+    CHECK(ran);
 }

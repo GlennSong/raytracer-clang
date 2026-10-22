@@ -17,6 +17,7 @@
 #include <array>
 #include <cstdint>
 #include <string>
+#include <vector>
 
 namespace engine {
 
@@ -39,6 +40,17 @@ enum class Piece : uint8_t {
     Bench, PlazaBench, BistroTable, BistroChair,   // outdoor seating (the furniture library, M2)
     CeilingLight,   // the room's light: a recessed panel, or (style bit 5) a round flush fitting
     DeskLamp, PottedPlant, BookStack, Kettle, FruitBowl, Vase, Mug,   // GOODS: dressing on the furniture's anchors (M3)
+    SingleBed, SchoolDesk, SchoolChair, LectureRow, Lectern, LabBench, ReadingTable,   // the university campus
+    AisleStep,   // a lecture hall's aisle stair: two steps up to the tier beside it
+    Bleacher,    // a sports field's stand: three tiers of aluminium benches, 6 m long
+    BarCounter, BackBar, BarStool, Booth, HighTable, DjBooth, DanceFloor, KitchenPass,   // restaurants, bars, clubs
+    DeskScreen,  // a low fabric screen between two desks in a row (the office floor, 2026-10-13)
+    ReceptionDesk,   // an office floor's front desk
+    HospitalBed, ExamCouch, WaitingSeats,   // the hospital (2026-10-13)
+    Pew, Altar, CinemaRow, CinemaScreen, MarketStall, JudgeBench, JuryBox,   // church, cinema, market, courts
+    GearLocker,   // a fire station's: a firefighter's turnout gear on its open rack
+    Machine, Workbench, PalletStack, Forklift,   // the factory floor, the warehouse (2026-10-13)
+    WaterCooler, Copier, PhoneBooth,   // the zoned office floor's points (2026-10-16)
     Count
 };
 constexpr int kPieceCount = static_cast<int>(Piece::Count);
@@ -48,6 +60,9 @@ struct FurniturePiece {
     Vec3 size{1, 1, 1};                           // the footprint box: x width, y height, z depth
     bool solid = true;                            // the placer adds its box to the collider
     Real colliderH = 0;                           // the collider's height when not size.y (a tap is not a wall)
+    // THE PARTS THAT BLOCK, when not the whole footprint: boxes {centre, size} in piece space -- a cubicle's panels
+    // and worktops, a meeting table's top -- so the floor round the chairs in it stays walkable
+    std::vector<std::array<Vec3, 2>> colliders;
 };
 
 // The piece, modelled once per (piece, variant) and cached (thread-safe). Variant: bits 0-2 the fabric, 3-4 the

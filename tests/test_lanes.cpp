@@ -5,6 +5,7 @@
 #include <fstream>
 #include "engine/procgen/city/roads/lanes/geom2d.h"
 #include "engine/procgen/city/roads/lanes/deck_mesh.h"
+#include "engine/mesh_audit.h"
 
 using namespace engine;
 using namespace engine::roads::lanes;
@@ -46,6 +47,8 @@ TEST_CASE(lanes_constrained_triangulation_splits_crossing_constraints_and_keeps_
 
 #include "engine/procgen/city/roads/lanes/lane_expand.h"
 #include "engine/procgen/city/roads/lanes/terrain_recipe.h"
+#include "engine/level_params.h"
+#include "engine/procgen/terrain.h"
 #include "engine/procgen/city/roads/lanes/vertical_profile.h"
 #include "engine/procgen/city/roads/lanes/polyline_ops.h"
 
@@ -95,6 +98,7 @@ TEST_CASE(lanes_graph_loads_and_expands_the_valley_scene) {
 #include "engine/procgen/city/polygon.h"
 #include <algorithm>
 #include <cstdio>
+#include <set>
 
 namespace {
 std::map<std::string, std::unique_ptr<Result>>& resultCache() { static std::map<std::string, std::unique_ptr<Result>> c; return c; }
@@ -170,7 +174,8 @@ TEST_CASE(lanes_two_lane_ramps_die_into_one_over_their_dovetail) {
     CHECK(r.graph.find("ramp_one")->anchorLanes.count("to") == 1);   // the control still merges
 }
 
-// NOTE: this scene fails the no-steps invariant, and that is the scene's point (#82). With
+// NOTE: this scene USED TO fail the no-steps invariant, and that was the scene's point (#82). It holds now (seen
+// 2026-10-13: the suite said "KNOWN FAILURE NOW HOLDS"), so it is asserted like every other. The history: with
 // its open ends pinned the road answers 114 m of ground rise with a 53 m CUTTING at
 // the top, and the terrain conform does not fully clear a cutting that deep: the
 // cutting's lip leaves step edges. Before the pin it passed -- by floating 65 m in the
@@ -179,7 +184,7 @@ TEST_CASE(lanes_two_lane_ramps_die_into_one_over_their_dovetail) {
 // kept main's CI red for weeks, hiding every other regression.
 TEST_CASE(lanes_a_freeway_climbs_sustained_relief_within_its_grade) {
     const Result& r = scene("steep_climb");
-    checkInvariantsExcept(r, {"driving surface has no steps (> kerb, < bridge_h)"}, "#82");
+    checkInvariants(r);
     const EdgeSpec* climb = r.graph.find("climb");
     CHECK(climb != nullptr);
     if (!climb) return;
@@ -396,11 +401,12 @@ TEST_CASE(lanes_a_road_entity_that_names_the_builder_is_the_same_city) {
     CHECK(cityOrdinalForEntity(road.level, idx + 1) == -1);   // nothing else in the level is a city
     CHECK(cp->applies(road) && cp->identity(road).key == cp->identity(lab).key);   // no rebake to migrate
 
-    // A road entity that does NOT name the builder is not a city, and the default still stands.
+    // A road entity that does NOT name the builder gets the default -- lanes, the only builder since the
+    // lattice retired (2026-10-14) -- and so is the same city.
     LevelInputs plain = road; plain.level["entities"][static_cast<std::size_t>(idx)]["road"].erase("builder");
-    CHECK(cityEntities(plain.level).empty());
+    CHECK(cityEntities(plain.level).size() == 1);
     CHECK(engine::roads::roadBuilderName(block) == "lanes");
-    CHECK(engine::roads::roadBuilderName(plain.level["entities"][static_cast<std::size_t>(idx)]["road"]) == "lattice");
+    CHECK(engine::roads::roadBuilderName(plain.level["entities"][static_cast<std::size_t>(idx)]["road"]) == "lanes");
 
     // The OTHER producers must read the level the same way, or the migration would move the
     // bundle DIRECTORY (keyed by the whole applicable set) and silently rebake the city. A
@@ -417,7 +423,7 @@ TEST_CASE(lanes_a_road_entity_that_names_the_builder_is_the_same_city) {
     engine::roads::RoadBuilder* b = engine::roads::roadBuilder("lanes");
     CHECK(b != nullptr); if (!b) return;
     CHECK(b->ownsNavGraph());
-    CHECK(!engine::roads::roadBuilderFor(plain.level["entities"][static_cast<std::size_t>(idx)]["road"]).ownsNavGraph());
+    CHECK(engine::roads::roadBuilderFor(plain.level["entities"][static_cast<std::size_t>(idx)]["road"]).ownsNavGraph());
 }
 
 TEST_CASE(lanes_bundle_glb_view_reads_back_through_the_engine_importer) {
@@ -523,6 +529,38 @@ TEST_CASE(lanes_lots_bake_reads_the_city_products_back_and_is_deterministic) {
     const nlohmann::json lotsEntry = manifestProducer(b->manifest(), kLotsProducerName);
     CHECK(!lotsEntry.is_null() && lotsEntry.value("key", std::string()) == hex16(findProducer(kLotsProducerName)->identity(in).key));
     std::printf("    %s; %zu cell parts (grow %.1f s, write %.1f s)\n", rep.reports.at(kLotsProducerName).report.value("summary", std::string()).c_str(), cps.size(), rep.reports.at(kLotsProducerName).timings.at("grow"), rep.reports.at(kLotsProducerName).timings.at("write"));
+}
+
+// EVERY LOT MESH THROUGH THE MESH AUDIT (Glenn, 2026-10-14: "city lots should be reworked"): the grown lots of a lab
+// city -- buildings, parks, gardens, playgrounds, car parks, yards, walks, the draped pads -- part by part, no triangle
+// wound against its normals (bar float slivers), none without area, nothing non-finite. Before this only the bake
+// audit (rt_bake --audit) looked at a lot's open ground. (Its 22 zero-area triangles on the island were float32
+// storage collapsing sub-millimetre edges far from the origin -- packMesh drops those now; this lab is near the origin.)
+TEST_CASE(lanes_every_lot_mesh_passes_the_mesh_audit) {
+    using namespace engine::bundle; using namespace engine::lotcache;
+    registerCityProducer(); registerLotsProducer();
+    const std::filesystem::path before = std::filesystem::current_path(); std::filesystem::current_path(RT_SOURCE_DIR);
+    struct Restore { std::filesystem::path p; ~Restore() { std::error_code ec; std::filesystem::current_path(p, ec); } } restore{before};
+    LevelInputs in; std::string err; CHECK(loadLevelInputs("assets/lanelab/levels/ring.json", in, &err));
+    const CityProducts p = cityProductsFromResult(scene("ring_city"), cityRenderCell(in.level));
+    LotsCityInputs city; city.hasTerrain = p.hasTerrain; city.ground = p.ground; city.holes = p.holes; city.nav = p.lotNav; city.pavedSidewalk = p.bands.sidewalkWidth;
+    city.deck = p.deck;
+    const NetLotResult g = growLotsForLevel(in, city, nullptr);
+    MeshAudit total;
+    auto look = [&](const char* kind, size_t part, const RenderMesh& m) {
+        if (m.indices.empty()) return;
+        const MeshAudit a = auditMesh(m);
+        if (a.inward - a.inwardSliver > 0 || a.degenerate > 0 || a.nonFinite > 0)
+            printMeshAudit((std::string(kind) + " part " + std::to_string(part)).c_str(), a);
+        total.add(a);
+    };
+    for (size_t i = 0; i < g.parts.size(); ++i) look("lot", i, g.parts[i]);
+    for (size_t i = 0; i < g.flatParts.size(); ++i) look("lot flat", i, g.flatParts[i]);
+    printMeshAudit("ALL LOTS (ring_city)", total);
+    CHECK(total.tris > 100000);
+    CHECK(total.inward - total.inwardSliver == 0);
+    CHECK(total.degenerate == 0);
+    CHECK(total.nonFinite == 0);
 }
 
 // ADR-0104: a river through a block leaves TWO blocks, one each side, and none of either is wet.
@@ -682,10 +720,23 @@ TEST_CASE(lanes_pads_clip_to_their_blocks_same_as_the_full_union) {
     for (const engine::LotBuilding& lb : lots) {
         const engine::TerrainFlatten raw = engine::lotPadFlatten(lb, 2.2 + falloff, falloff);
         Ring ring; for (const engine::Vec3& v : raw.polygon) ring.emplace_back(v.x, v.z);
+        std::vector<Ring> mine;
         for (const Polygon2& pg : intersectSets(fromRing(ring), all)) {
             if (pg.outer.size() < 3 || std::fabs(ringArea(pg.outer)) < 1.0) continue;
+            mine.push_back(pg.outer);
             std::vector<engine::Vec3> poly; for (const engine::Vec2& q : pg.outer) poly.push_back(engine::Vec3(q.x, 0, q.y));
             slow.push_back(engine::makeFlattenPad(std::move(poly), lb.groundY, falloff));
+        }
+        // ...and the pad holds its walls: a plan corner off the clipped pad makes the plan a pad too
+        bool held = true;
+        for (const engine::Vec2& v : lb.plan) {
+            bool in = false;
+            for (const Ring& r : mine) in = in || pointInRing(r, v);
+            held = held && in;
+        }
+        if (!mine.empty() && !held) {
+            std::vector<engine::Vec3> walls; for (const engine::Vec2& v : lb.plan) walls.push_back(engine::Vec3(v.x, 0, v.y));
+            slow.push_back(engine::makeFlattenPad(std::move(walls), lb.groundY, falloff));
         }
     }
     auto signature = [](const std::vector<engine::TerrainFlatten>& v) {
@@ -706,4 +757,523 @@ TEST_CASE(lanes_pads_clip_to_their_blocks_same_as_the_full_union) {
     CHECK(fast.size() == slow.size());
     CHECK(sf == ss);
     CHECK(!fast.empty() && fast.size() < lots.size() * 2);
+}
+
+// A LINE IN SECTIONS: a lift's approach runs on across the joint (chainTrackFloors). Two light-rail sections end to
+// start, a street under the first 30 m short of the joint: the second section takes up the descent where the first
+// leaves it, no step at the joint (Saltwood's joints stepped 4 m).
+TEST_CASE(lanes_a_track_lift_runs_on_across_a_joint_between_sections) {
+    nlohmann::json g;
+    g["name"] = "joint";
+    g["edges"] = nlohmann::json::array({
+        {{"id", "a"}, {"class", "light_rail"}, {"path", {{"type", "polyline"}, {"points", {{-400, 0}, {0, 0}}}}}},
+        {{"id", "b"}, {"class", "light_rail"}, {"path", {{"type", "polyline"}, {"points", {{0, 0}, {400, 0}}}}}},
+        {{"id", "st"}, {"class", "local"}, {"path", {{"type", "polyline"}, {"points", {{-30, -150}, {-30, 150}}}}}}});
+    const std::unique_ptr<Result> r = build(RoadLabGraph::fromJson(g));
+    const EdgeSpec& a = *r->graph.find("a"); const EdgeSpec& b = *r->graph.find("b");
+    const double zA = a.z.back(), zB = b.z.front(), lift = zA - a.t.back();
+    std::printf("    [joint] a ends %.2f m, b starts %.2f m (%.1f m over the ground)\n", zA, zB, lift);
+    CHECK(lift > 3.0);                    // still on its way down from the street when it reaches the joint
+    CHECK(std::fabs(zA - zB) < 0.05);     // and the next section takes it up there
+    checkInvariants(*r);
+}
+
+// A SKEWED CROSSING OVER A CLIMB: the lift clears the lower road's highest point under the upper band, and along the
+// lower road that band runs on for the lower's own half width over the tangent -- the island loop crossed the pass at
+// 28 deg with the pass 13.9 % up, and the pass's outer lane, 6 m on, came 21 cm short of the clearance.
+TEST_CASE(lanes_a_track_over_a_steep_road_at_a_skew_clears_its_outer_lane) {
+    const double c = std::cos(28.0 * 3.14159265358979 / 180.0), s = std::sin(28.0 * 3.14159265358979 / 180.0);
+    nlohmann::json g;
+    g["name"] = "skew";
+    g["classes"]["mountain"] = {{"w", 3.5}, {"fwd", 1}, {"back", 1}, {"shoulder", 1.0}, {"g_max", 0.15}, {"window", 60}, {"thick", 0.5}};
+    g["edges"] = nlohmann::json::array({
+        {{"id", "rail"}, {"class", "rail"}, {"path", {{"type", "polyline"}, {"points", {{-600, 0}, {600, 0}}}}}},
+        // up 14 % through the crossing: held at 21 m 150 m on, 0 m 150 m back
+        {{"id", "climb"}, {"class", "mountain"}, {"path", {{"type", "polyline"}, {"points", {{-300 * c, -300 * s}, {300 * c, 300 * s}}}}},
+         {"floor", {{150 * c, 150 * s, 21.0, 20.0}}}}});
+    const std::unique_ptr<Result> r = build(RoadLabGraph::fromJson(g));
+    const EdgeSpec& cl = *r->graph.find("climb");
+    std::printf("    [skew] climb %.1f m at the crossing, %.1f m 20 m on\n", interp(cl.s, cl.z, 300.0), interp(cl.s, cl.z, 320.0));
+    checkInvariants(*r);
+}
+
+// CROSSINGS AS PLANNED (ADR-0215, Glenn: "neither system is guessing"): a graph that declares its crossings gets the
+// kind it planned, not one read off the heights. Two local streets cross at (0, 0); "a" is held 5 m up there.
+namespace {
+nlohmann::json crossingGraph(const nlohmann::json& crossings, bool holdA) {
+    nlohmann::json g;
+    g["name"] = "planned_crossing";
+    nlohmann::json a = {{"id", "a"}, {"class", "local"}, {"path", {{"type", "polyline"}, {"points", {{-300, 0}, {300, 0}}}}}};
+    if (holdA) a["floor"] = {{0.0, 0.0, 5.0, 20.0}};
+    g["edges"] = nlohmann::json::array({a, {{"id", "b"}, {"class", "local"}, {"path", {{"type", "polyline"}, {"points", {{0, -300}, {0, 300}}}}}}});
+    if (!crossings.is_null()) g["crossings"] = crossings;
+    return g;
+}
+double zAt(const Result& r, const char* id, double s) { const EdgeSpec& e = *r.graph.find(id); return interp(e.s, e.z, s); }
+const Check* checkNamed(const std::vector<Check>& cs, const std::string& n) { for (const Check& c : cs) if (c.name == n) return &c; return nullptr; }
+}
+
+TEST_CASE(lanes_a_planned_level_crossing_is_levelled_however_far_apart_it_stood) {
+    // unplanned, 5 m apart reads as a bridge (>= bridge_h): the streets are left apart
+    const std::unique_ptr<Result> guessed = build(RoadLabGraph::fromJson(crossingGraph(nullptr, true)));
+    const double dzGuessed = std::fabs(zAt(*guessed, "a", 300.0) - zAt(*guessed, "b", 300.0));
+    // planned at grade: they meet
+    const std::unique_ptr<Result> planned = build(RoadLabGraph::fromJson(crossingGraph(
+        nlohmann::json::array({{{"a", "a"}, {"b", "b"}, {"at", {0, 0}}, {"kind", "at_grade"}}}), true)));
+    const double dzPlanned = std::fabs(zAt(*planned, "a", 300.0) - zAt(*planned, "b", 300.0));
+    std::printf("    [planned level] dz unplanned %.2f m, planned %.3f m\n", dzGuessed, dzPlanned);
+    CHECK(dzGuessed > 4.0);
+    CHECK(dzPlanned < 0.05);
+    const std::vector<Check> checks = invariants(*planned);
+    const Check* asPlanned = checkNamed(checks, "crossings are as planned");
+    CHECK(asPlanned != nullptr && asPlanned->ok);
+}
+
+TEST_CASE(lanes_a_planned_bridge_clears_a_road_it_stood_level_with) {
+    const std::unique_ptr<Result> guessed = build(RoadLabGraph::fromJson(crossingGraph(nullptr, false)));
+    const std::unique_ptr<Result> planned = build(RoadLabGraph::fromJson(crossingGraph(
+        nlohmann::json::array({{{"a", "a"}, {"b", "b"}, {"at", {0, 0}}, {"kind", "bridge"}, {"over", "b"}}}), false)));
+    const double dzGuessed = zAt(*guessed, "b", 300.0) - zAt(*guessed, "a", 300.0);
+    const double dzPlanned = zAt(*planned, "b", 300.0) - zAt(*planned, "a", 300.0);
+    std::printf("    [planned bridge] b over a: unplanned %.2f m, planned %.2f m\n", dzGuessed, dzPlanned);
+    CHECK(std::fabs(dzGuessed) < 0.05);   // flat ground, no plan: a level crossing
+    const Rules R;
+    CHECK(dzPlanned >= R.underClearance + 0.5 + R.structureDepth - 0.05);   // b over a, its slab and girders clear
+}
+
+TEST_CASE(lanes_a_crossing_the_plan_left_out_is_reported_with_its_place) {
+    // the graph declares its crossings, but the list is empty: (0, 0) is found and named
+    const std::unique_ptr<Result> r = build(RoadLabGraph::fromJson(crossingGraph(nlohmann::json::array(), false)));
+    const std::vector<Check> checks = invariants(*r);
+    const Check* c = checkNamed(checks, "crossings are as planned");
+    CHECK(c != nullptr);
+    if (!c) return;
+    std::printf("    [unplanned] %s\n", c->detail.c_str());
+    CHECK(!c->ok);
+    CHECK(c->detail.find("1 of the crossings found") != std::string::npos && c->detail.find("a / b at (0, 0)") != std::string::npos);
+}
+
+// PLANNED ELEVATIONS (ADR-0215): designedGraph writes every road's profile into the graph; built again, the builder
+// takes the heights as given -- the same decks as building it straight -- and checks them, never re-designs them.
+TEST_CASE(lanes_a_designed_graph_builds_the_heights_it_was_designed_with) {
+    nlohmann::json spec;
+    { std::ifstream f(std::string(RT_SOURCE_DIR) + "/assets/lanelab/freeway_cross_relief.json"); f >> spec; }
+    const std::unique_ptr<Result> straight = build(RoadLabGraph::fromJson(spec, std::string(RT_SOURCE_DIR) + "/assets/lanelab"));
+    const nlohmann::json designed = designedGraph(spec, std::string(RT_SOURCE_DIR) + "/assets/lanelab");
+    const std::unique_ptr<Result> planned = build(RoadLabGraph::fromJson(designed, std::string(RT_SOURCE_DIR) + "/assets/lanelab"));
+    CHECK(planned->graph.designed() && !straight->graph.designed());
+    double worst = 0;
+    for (const EdgeSpec& e : straight->graph.edges) {
+        const EdgeSpec* o = planned->graph.find(e.id);
+        CHECK(o != nullptr && o->z.size() == e.z.size());
+        if (!o || o->z.size() != e.z.size()) continue;
+        for (std::size_t i = 0; i < e.z.size(); ++i) worst = std::max(worst, std::fabs(o->z[i] - e.z[i]));
+    }
+    std::printf("    [designed] %zu edges, worst height difference %.6f m\n", straight->graph.edges.size(), worst);
+    CHECK(worst == 0.0);
+    CHECK(planned->pavement.decks.size() == straight->pavement.decks.size());
+}
+
+TEST_CASE(lanes_a_planned_profile_is_built_as_given_and_its_faults_are_named) {
+    nlohmann::json designed = designedGraph(crossingGraph(nullptr, false));
+    // a 3 m hump in "a" over the crossing at its middle: the builder keeps it, and the checks say what is wrong
+    for (nlohmann::json& e : designed["edges"])
+        if (e["id"] == "a") {
+            std::vector<double> z = e["profile"]["z"].get<std::vector<double>>();
+            for (std::size_t i = 0; i < z.size(); ++i) if (std::fabs(static_cast<double>(i) - 300.0) <= 20.0) z[i] += 3.0;
+            e["profile"]["z"] = z;
+        }
+    const std::unique_ptr<Result> r = build(RoadLabGraph::fromJson(designed));
+    const double hump = zAt(*r, "a", 300.0) - zAt(*r, "a", 250.0);
+    std::printf("    [as given] a's hump %.2f m at the crossing\n", hump);
+    CHECK(hump > 2.9);   // not re-designed away
+    const std::vector<Check> checks = invariants(*r);
+    const Check* junctions = checkNamed(checks, "junction heights consistent");
+    const Check* grades = checkNamed(checks, "grades within class limits");
+    CHECK(junctions != nullptr && !junctions->ok);   // a and b no longer meet at the crossing
+    CHECK(grades != nullptr && !grades->ok);         // and a climbs 3 m in a metre
+    if (junctions) std::printf("    [as given] %s\n", junctions->detail.c_str());
+    CHECK(junctions != nullptr && junctions->detail.find("at (0, 0)") != std::string::npos);   // named where
+}
+
+// THE PLANNER'S CROSSING POLICY (ADR-0215 step 3): each meeting of two roads gets its kind from what the two are --
+// a freeway or a track is crossed on a bridge, a footway crosses on one but meets the street it starts from at grade,
+// two streets meet at grade -- and designing the graph names each bridge's upper road.
+TEST_CASE(lanes_the_crossing_policy_plans_each_meeting_by_what_meets) {
+    nlohmann::json g;
+    g["name"] = "policy";
+    g["rules"] = {{"freeway_separates", true}};
+    auto line = [](const char* id, const char* cls, std::vector<std::array<double, 2>> pts) {
+        nlohmann::json p = nlohmann::json::array();
+        for (const auto& q : pts) p.push_back({q[0], q[1]});
+        return nlohmann::json{{"id", id}, {"class", cls}, {"path", {{"type", "polyline"}, {"points", p}}}};
+    };
+    g["edges"] = nlohmann::json::array({
+        line("fwy", "freeway", {{-600, 0}, {600, 0}}),
+        line("main", "arterial", {{0, -400}, {0, 400}}),                 // crosses the freeway
+        line("side", "local", {{-300, 200}, {0, 200}}),                  // ends on main's interior: a tee
+        line("rail", "rail", {{-400, -200}, {400, -200}}),               // crosses main
+        line("way", "footway", {{0, -150}, {150, -150}, {150, -260}})});  // starts on main, crosses the rail
+    const nlohmann::json planned = planCrossings(RoadLabGraph::fromJson(g));
+    std::map<std::string, std::string> kind;
+    for (const auto& c : planned) {
+        std::string a = c["a"], b = c["b"];
+        if (b < a) std::swap(a, b);
+        kind[a + "/" + b] = c["kind"];
+        std::printf("    [policy] %s / %s at (%.0f, %.0f): %s\n", a.c_str(), b.c_str(), c["at"][0].get<double>(), c["at"][1].get<double>(), c["kind"].get<std::string>().c_str());
+    }
+    CHECK(kind["fwy/main"] == "bridge");
+    CHECK(kind["main/side"] == "at_grade");
+    CHECK(kind["main/rail"] == "bridge");
+    CHECK(kind["main/way"] == "at_grade");   // the footway's way in starts at the street
+    CHECK(kind["rail/way"] == "bridge");     // and crosses the track on a footbridge
+    // designed: every bridge names its upper road, and nothing is left out of the plan
+    g["crossings"] = planned;
+    DesignReport rep;
+    const nlohmann::json designed = designedGraph(g, ".", &rep);
+    CHECK(rep.undeclared.empty());
+    for (const auto& c : designed["crossings"])
+        if (c["kind"] == "bridge") CHECK(!c.value("over", std::string()).empty());
+}
+
+// A FREEWAY AT GRADE WEARS ITS GUARDRAILS (2026-10-21, Glenn: "freeways don't have railguards anymore. Neither do
+// the onramps"): left to the class defaults, a freeway on flat ground carries a guardrail down both outer edges;
+// the drop rule the island's open roads author (a rail only where the ground 5 m out falls 2.5 m) builds none.
+TEST_CASE(lanes_a_freeway_at_grade_wears_its_guardrails) {
+    auto railMetres = [](const nlohmann::json& g) {
+        const std::unique_ptr<Result> r = build(RoadLabGraph::fromJson(g));
+        ParapetCensus census;
+        double rail = 0;
+        for (const ParapetRun& run : parapetRuns(*r, &census))
+            if (run.kind == BarrierKind::Guardrail)
+                for (size_t i = 0; i + 1 < run.pts.size(); ++i) rail += distance(run.pts[i], run.pts[i + 1]);
+        std::printf("    [rails] at grade %.0f of %.0f m built, guardrail %.0f m\n", census.built[static_cast<size_t>(EdgeRole::AtGrade)],
+                    census.metres[static_cast<size_t>(EdgeRole::AtGrade)], rail);
+        return rail;
+    };
+    nlohmann::json g;
+    g["name"] = "rails";
+    g["edges"] = nlohmann::json::array({{{"id", "fwy"}, {"class", "freeway"}, {"path", {{"type", "polyline"}, {"points", {{-300, 0}, {300, 0}}}}}}});
+    CHECK(railMetres(g) > 2 * 600 * 0.9);   // both sides, nearly end to end
+    g["classes"]["freeway"]["edges"]["at_grade"] = {{"kind", "guardrail"}, {"min_drop", 2.5}};
+    CHECK(railMetres(g) < 1.0);             // flat ground: nowhere to fall
+}
+
+// A CITY BLOCK STAYS BEHIND ITS SIDEWALK (2026-10-21, Glenn: "there are green patches so the road is not conforming
+// right"): a block is the hole in the drawn pavement, inset a little and simplified -- and the simplified outline may
+// not cut back across the sidewalk on the outside of a bend, or every pad and its feather laid to it lifts the ground
+// over the sidewalk.
+TEST_CASE(lanes_a_city_block_stays_behind_its_sidewalk) {
+    for (const char* name : {"curve_blocks", "ring_city", "grid_city"}) {
+        const Result& r = scene(name);
+        const PolySet paved = unionSets(unionSets(r.pavement.surface, r.pavement.shoulder), r.pavement.sidewalk);
+        const std::vector<Ring> holes = pavementHoles(r, 2000.0);
+        const std::vector<Poly2> blocks = blocksFromHoles(holes, 1.5, kBlockMarginBehindSidewalk, kMinBlockWidth);
+        PolySet all;
+        for (const Poly2& b : blocks) { for (Polygon2& pg : fromRing(b)) all.push_back(std::move(pg)); }
+        const double over = setArea(intersectSets(unionSets(all, PolySet{}), paved)), area = setArea(unionSets(all, PolySet{}));
+        // ...and a curve stays a few long frontages: clipping the chords to the hole gave every curve back as
+        // ~1 m pieces no lot could front (9% of the island's buildings).
+        double perim = 0, shortRun = 0;
+        for (const Poly2& b : blocks)
+            for (size_t i = 0; i < b.size(); ++i) {
+                const double L = std::hypot(b[(i + 1) % b.size()].x - b[i].x, b[(i + 1) % b.size()].y - b[i].y);
+                perim += L; if (L < 4.0) shortRun += L;
+            }
+        std::printf("    [blocks] %s: %zu blocks, %.0f m2, %.1f m2 of it over the drawn pavement, %.1f%% of the outline in pieces under 4 m\n",
+                    name, blocks.size(), area, over, 100.0 * shortRun / std::max(perim, 1.0));
+        CHECK(over < 1.0);
+        CHECK(shortRun < 0.03 * perim);
+    }
+}
+
+// THE ROADS KEEP THEIR GROUND, THE HILLS GET THEIRS (ADR-0221, Glenn: "the hills aren't smooth even after all this
+// work to increase the terrain detail"): the road build conforms its own copy of the ground at its grid's cell (20 m
+// on the island), and the terrain drawn from that copy lost everything finer. The ground a lane city stands on is the
+// build's grid in a corridor along the roads (the nodes it changed, or a deck reaches) and the natural ground's full
+// detail away from them.
+TEST_CASE(lanes_the_road_grid_keeps_a_corridor_and_the_hills_their_detail) {
+    nlohmann::json root;
+    root["terrain"] = {{"seed", 3}, {"heightScale", 40.0}, {"noiseScale", 0.02}, {"octaves", 6}};
+    const TerrainParams tp = readTerrainParams(root["terrain"]);
+    const Noise nz(3);
+    auto natural = [&](double x, double z) { return terrainHeight(tp, nz, x, z); };
+    auto grid = std::make_shared<HeightGrid>();
+    grid->x0 = 0; grid->y0 = 0; grid->res = 20; grid->nx = 31; grid->ny = 31;
+    grid->z.resize(static_cast<std::size_t>(grid->nx) * grid->ny);
+    for (int j = 0; j < grid->ny; ++j)
+        for (int i = 0; i < grid->nx; ++i) grid->at(i, j) = natural(i * 20.0, j * 20.0);
+    grid->at(15, 15) += 3.0;   // a road's fill at one node
+    const auto base = laneErodedBase(root, grid, nullptr);
+    CHECK(std::fabs((*base)(300, 300) - grid->at(15, 15)) < 1e-3);           // the road's node: the grid exactly
+    CHECK(std::fabs((*base)(305.3, 296.1) - grid->sample(305.3, 296.1)) < 1e-3);   // in its corridor: the build's ground
+    double lost = 0, kept = 0;   // far from the road (and the edge band): the natural ground, not the grid's blur
+    for (double z = 61.3; z < 160; z += 7.1)
+        for (double x = 62.9; x < 160; x += 6.7) {
+            lost = std::max(lost, std::fabs(grid->sample(x, z) - natural(x, z)));
+            kept = std::max(kept, std::fabs((*base)(x, z) - natural(x, z)));
+        }
+    std::printf("    [road grid] away from the road: the grid alone was off the natural ground by up to %.3f m, now %.5f m\n", lost, kept);
+    CHECK(lost > 0.05);   // the terrain has detail finer than the grid...
+    CHECK(kept < 1e-3);   // ...and keeps it
+}
+
+// THE LIGHT RAIL LAB: held up over its streets, its stations reached from below -- the way passes under the line at
+// the street's level, and each platform stands level along its length.
+TEST_CASE(lanes_light_rail_lab_reaches_its_stations_from_below) {
+    const Result& r = scene("light_rail_lab"); checkInvariants(r);
+    for (const char* id : {"lr_s", "lr_n"}) {
+        const EdgeSpec& e = *r.graph.find(id);
+        double zMin = 1e9, zMax = -1e9;
+        for (std::size_t i = 0; i < e.s.size(); ++i)
+            if (e.s[i] >= 62 && e.s[i] <= 142) { zMin = std::min(zMin, e.z[i]); zMax = std::max(zMax, e.z[i]); }
+        CHECK(zMax - zMin < 0.05);        // level along the platforms
+        const EdgeSpec& w = *r.graph.find(std::string(id) == "lr_s" ? "lr_way_s" : "lr_way_n");
+        double wMax = -1e9;
+        for (double z : w.z) wMax = std::max(wMax, z);
+        CHECK(zMin - wMax > 5.0);         // the way under it, on the street's level
+    }
+}
+
+// THE STATION KIT AND WHAT STANDS ON A TRACK (Glenn, 2026-10-12: "cars weirdly stuck in the tracks", the light rail
+// "really close to buildings", stations want lights and canopies with dimension). On the light-rail lab:
+// - a street under the line answers ITS height, not the rail's -- for parked cars (heightAt) and traffic (heightOn);
+//   a tree or a rock still stays off the track (coversAny); the deck field carries the difference through the bundle;
+// - a footprint the track crosses is kept out, even with every corner well off the line; one 20 m off is not;
+// - each platform has a ribbed canopy, a steel frame and lamps, and each stop the night lights under them.
+TEST_CASE(lanes_light_rail_lab_tracks_carry_no_street_and_stations_have_canopies_and_lamps) {
+    const Result& r = scene("light_rail_lab");
+    const CityProducts p = cityProductsFromResult(r, 64.0);
+    int tracks = 0, footways = 0;
+    for (const UnionSpine& sp : p.deck.spines) { tracks += sp.use == UnionSpine::Use::Track; footways += sp.use == UnionSpine::Use::Footway; }
+    CHECK(tracks >= 2 && footways >= 2);
+    // where the line passes over a street
+    int checked = 0;
+    for (const EdgeSpec& t : r.graph.edges) {
+        if (t.cls != "light_rail") continue;
+        for (const EdgeSpec& s : r.graph.edges) {
+            if (s.cls == "light_rail" || s.cls == "footway") continue;
+            for (const Vec2& X : crossings(t.xy, s.xy)) {
+                auto zAt = [&X](const EdgeSpec& e) {
+                    const double st = project(e.xy, e.s, X).station;
+                    const std::size_t j = std::min<std::size_t>(e.s.size() - 1, std::max<std::size_t>(1, static_cast<std::size_t>(std::lower_bound(e.s.begin(), e.s.end(), st) - e.s.begin())));
+                    const double u = std::clamp((st - e.s[j - 1]) / std::max(1e-9, e.s[j] - e.s[j - 1]), 0.0, 1.0);
+                    return e.z[j - 1] + (e.z[j] - e.z[j - 1]) * u;
+                };
+                const double trackZ = zAt(t), streetZ = zAt(s);
+                if (trackZ - streetZ < 4.0) continue;
+                double y = 0;
+                CHECK(p.deck.heightAt(X.x, X.y, 1.0, &y));
+                CHECK(std::fabs(y - streetZ) < 1.0);
+                const RoadClass local = classOf(s);
+                CHECK(p.deck.heightOn(X.x, X.y, 0.5, &local, 0.0, 1e9, &y));
+                CHECK(std::fabs(y - streetZ) < 1.0);
+                CHECK(p.deck.coversAny(X.x, X.y, 0.5));
+                ++checked;
+            }
+        }
+    }
+    std::printf("    [lr] %d crossings under the line checked\n", checked);
+    CHECK(checked >= 2);
+    {   // through the bundle
+        bundle::BinWriter w; bundle::putDeckField(w, p.deck);
+        RoadDeckField back; bundle::BinReader rd(w.bytes.data(), w.bytes.size());
+        CHECK(bundle::getDeckField(rd, back));
+        int t2 = 0; for (const UnionSpine& sp : back.spines) t2 += sp.use == UnionSpine::Use::Track;
+        CHECK(t2 == tracks);
+    }
+    // buildings clear of the line
+    const auto keepOut = lanesTrackKeepOut(p.deck, p.rails);
+    CHECK(static_cast<bool>(keepOut));
+    if (keepOut) {
+        const RailTrack& t = p.rails.front();
+        const Vec3 a = t.pts[t.pts.size() / 4], b = t.pts[t.pts.size() / 4 + 3];
+        Vec2 d(b.x - a.x, b.z - a.z); d = d / d.length(); const Vec2 n(-d.y, d.x), c(a.x, a.z);
+        auto square = [&](Vec2 m, double h) { return std::vector<Vec2>{m + (d + n) * h, m + (n - d) * h, m - (d + n) * h, m + (d - n) * h}; };
+        CHECK(keepOut(square(c, 14.0)));             // the line through its middle, corners ~20 m off
+        CHECK(!keepOut(square(c + n * 40.0, 10.0)));  // 20 m clear of it
+    }
+    // the kit
+    std::set<std::string> names;
+    for (const CityCellMesh& cm : p.cells) names.insert(cm.mesh.name);
+    CHECK(names.count("canopy") && names.count("station_steel") && names.count("station_lamp"));
+    int stops = 0;
+    for (const RailTrack& t : p.rails)
+        for (const RailStop& st : t.stops) {
+            ++stops;
+            CHECK(st.lamps.size() >= 4);
+            for (const Vec3& l : st.lamps) CHECK(l.y > st.top + 2.5 && l.y < st.top + 3.6);
+        }
+    CHECK(stops >= 2);
+}
+
+// EVERY DECK FACE OUTWARD (Glenn, 2026-10-13: "the elevated freeway/rail undercarriage when viewed from below can be
+// seen through, the normals are wound wrong there as well"). The engine draws CLOCKWISE triangles (seen from the side
+// their normal points to) and culls the rest in the opaque pass: a triangle (a, b, c) faces its normal when
+// cross(c - a, b - a) points along it. Every mesh the decks build, on the freeway, viaduct and rail labs.
+TEST_CASE(lanes_every_deck_triangle_faces_its_normal) {
+    // Every lab graph through the mesh audit (engine/mesh_audit.h), by named mesh, with where its first inward triangle
+    // is. The island's bake had 2303 flipped deck triangles on its elevated freeway (rt_bake --audit) while the four
+    // lab decks this tested passed -- so every lab graph, not a chosen four.
+    MeshAudit total;
+    for (const char* scn : {"curve_blocks", "freeway_cross", "freeway_cross_relief", "grid_city", "hill_junction",
+                            "light_rail_lab", "merge_taper", "rail_loop", "ring_city", "steep_climb",
+                            "system_interchange", "valley_viaduct"}) {
+        const Result& r = scene(scn);
+        for (const NamedMesh& nm : buildMeshes(r)) {
+            const MeshAudit a = auditMesh(nm.mesh);
+            total.add(a);
+            if (a.inward > 0) printMeshAudit((std::string(scn) + " " + nm.name).c_str(), a);
+        }
+    }
+    printMeshAudit("decks", total);
+    CHECK(total.tris > 10000);
+    CHECK(total.inward == 0);
+}
+
+// A STREET'S SIDEWALK RUNS ON UNDER A BRIDGE (Glenn, 2026-10-15: "where the elevated train deck goes over the sidewalk
+// it removes that part of the sidewalk underneath it"). Shoulders and sidewalks were cut by every lane in PLAN; now
+// only by what stands at their level. Under the light-rail lab's raised track and the ring city's ring, a street's
+// sidewalk must lie inside the bridge lanes' footprints, metres under them (none did with the plan-only cut, which
+// RT_LAYERS_FLAT=1 still gives: 0, 0 and 0; 150, 450 and 301 m2 at the interchange now).
+TEST_CASE(lanes_a_sidewalk_runs_on_under_a_bridge) {
+  for (const char* scn : {"light_rail_lab", "ring_city"}) {
+    const Result& r = scene(scn);
+    double under = 0;
+    for (size_t li = 0; li < r.lanes.lanes.size(); ++li) {
+        for (const Polygon2& piece : intersectSets(r.pavement.sidewalk, r.pavement.footprints[li])) {
+            if (piece.outer.size() < 3) continue;
+            Vec2 c; for (const Vec2& q : piece.outer) c += q; c = c / static_cast<double>(piece.outer.size());
+            int street = -1;
+            for (size_t ei = 0; ei < r.graph.edges.size(); ++ei)
+                if (r.graph.cls(r.graph.edges[ei]).sidewalk > 0 && project(r.graph.edges[ei].xy, r.graph.edges[ei].s, c).distance < 20) street = static_cast<int>(ei);
+            if (street < 0) continue;
+            if (r.heights->own(static_cast<int>(li), c) - r.heights->ownRoad(street, c) > 3.0) under += setArea(PolySet{piece});
+        }
+    }
+    // ...and its MESH is there too, at street level (Glenn, 2026-10-15: "there's a cut in the sidewalk because of the
+    // lane above it"): the outline ran on under the deck, but each vertex took the height of the nearest lane in
+    // plan -- the deck overhead -- and the triangles spanning the two levels were dropped as too steep
+    double meshed = 0;
+    const std::vector<double> band = layerBands(r.graph, kSidewalkLayer);
+    for (const FlatMesh& m : layerMeshes(r.graph, *r.heights, r.pavement.sidewalk, layerRoads(r.graph, false), nullptr, &band)) {
+        for (const auto& t : m.tris) {
+            const DeckVertex &a = m.verts[static_cast<size_t>(t[0])], &b = m.verts[static_cast<size_t>(t[1])], &c = m.verts[static_cast<size_t>(t[2])];
+            const Vec2 q = (a.xy + b.xy + c.xy) / 3.0; const double z = (a.z + b.z + c.z) / 3.0;
+            bool overhead = false, atStreet = false;
+            for (size_t li = 0; li < r.lanes.lanes.size() && !overhead; ++li) {
+                if (r.pavement.footprints[li].empty() || !contains(r.pavement.footprints[li], q)) continue;
+                overhead = r.heights->own(static_cast<int>(li), q) - z > 3.0;
+            }
+            for (size_t ei = 0; ei < r.graph.edges.size() && overhead && !atStreet; ++ei)
+                atStreet = r.graph.cls(r.graph.edges[ei]).sidewalk > 0 && project(r.graph.edges[ei].xy, r.graph.edges[ei].s, q).distance < 20 && std::fabs(z - r.heights->ownRoad(static_cast<int>(ei), q)) < 0.5;
+            if (overhead && atStreet) meshed += 0.5 * std::fabs(cross(b.xy - a.xy, c.xy - a.xy));
+        }
+    }
+    std::printf("    [layers] %s sidewalk under the bridges: %.0f m2 outlined, %.0f m2 meshed at street level\n", scn, under, meshed);
+    CHECK(under > 100.0);
+    CHECK(meshed > 0.9 * under);
+  }
+}
+
+// NOTHING ELEVATED IS SEE-THROUGH FROM BELOW (Glenn, 2026-10-13: "the elevated freeway/rail undercarriage when viewed
+// from below can be seen through"). engine::auditUndersides over every lab graph with a deck: every walkable surface
+// more than 2 m over the ground has something facing down within 3 m under it. The island's bake had 8512 open (rt_bake
+// --audit), most of them the median wall's top over the seam between twin carriageways -- the wall had no bottom.
+TEST_CASE(lanes_no_elevated_surface_is_see_through_from_below) {
+    size_t hanging = 0, open = 0;
+    for (const char* scn : {"freeway_cross", "freeway_cross_relief", "light_rail_lab", "rail_loop", "system_interchange",
+                            "valley_viaduct", "steep_climb", "hill_junction"}) {
+        const Result& r = scene(scn);
+        const std::vector<NamedMesh> meshes = buildMeshes(r);
+        std::vector<NamedMeshRef> refs;
+        for (const NamedMesh& nm : meshes) refs.push_back({nm.name, &nm.mesh});
+        const UndersideAudit u = auditUndersides(
+            refs,
+            [](const std::string& n) {
+                return n == "asphalt" || n == "shoulder" || n == "sidewalk" || n == "median" || n == "ballast" || n == "platform" || n == "concrete";
+            },
+            [&r](double x, double z) { return r.hasTerrain ? r.terrain.sampleDrawn(x, z) : 0.0; });
+        if (u.open > 0) {
+            std::printf("    %s:\n", scn);
+            printUndersideAudit(u, 6);
+            std::printf("    [undersides]   first at %.1f %.2f %.1f\n", u.firstOpen.x, u.firstOpen.y, u.firstOpen.z);
+            if (std::getenv("RT_UNDERSIDE_COLUMN")) printColumn(refs, u.firstOpen.x, u.firstOpen.z, 1.0);
+        }
+        hanging += u.hanging;
+        open += u.open;
+    }
+    std::printf("    [undersides] labs: %zu hanging, %zu open\n", hanging, open);
+    CHECK(hanging > 1000);
+    CHECK(open == 0);
+}
+
+// NOTHING ELEVATED IS SEE-THROUGH FROM AN ANGLE (Glenn, 2026-10-14: "a strip of polygons missing along the side ... the
+// hole is clearly one way"): engine::auditSeeThrough -- from half a metre under every deck's soffit, looking up and at
+// 45 deg all round, no ray meets the back of a face. The 1.2 m carriageway slab beside a 0.3 m shoulder left its 0.9 m
+// step open (slab()'s side rule hid the whole side behind the neighbour's top).
+TEST_CASE(lanes_no_elevated_deck_is_see_through_from_an_angle) {
+    size_t eyes = 0, through = 0;
+    // KNOWN, small (a regression past them fails): 4 at the interchange, 5 at the valley's ramp ends. They were 27 and
+    // 10 while the slab's sides merged within a centimetre of their edge: a look up at a slab's corner went through the
+    // crack between the step face and the soffit (2026-10-14: merged within 2 mm now). Shoulders and sidewalks cut per
+    // road at their own level (2026-10-15) tessellate differently, which moves the eyes (one per walkable top): the same
+    // slab-corner ties sample as 1 on the relief crossing and 6 at the interchange -- the geometry along each new look is
+    // identical under RT_LAYERS_FLAT=1 (RT_SEE_THROUGH_RAY).
+    const std::map<std::string, size_t> known = {{"freeway_cross", 0}, {"freeway_cross_relief", 1}, {"light_rail_lab", 0},
+                                                 {"rail_loop", 0}, {"system_interchange", 6}, {"valley_viaduct", 5}};
+    for (const char* scn : {"freeway_cross", "freeway_cross_relief", "light_rail_lab", "rail_loop", "system_interchange", "valley_viaduct"}) {
+        const Result& r = scene(scn);
+        const std::vector<NamedMesh> meshes = buildMeshes(r);
+        std::vector<NamedMeshRef> refs;
+        for (const NamedMesh& nm : meshes) refs.push_back({nm.name, &nm.mesh});
+        const SeeThroughAudit u = auditSeeThrough(
+            refs, [](const std::string& n) { return n == "asphalt" || n == "shoulder" || n == "sidewalk" || n == "median" || n == "ballast" || n == "platform"; },
+            [&r](double x, double z) { return r.hasTerrain ? r.terrain.sampleDrawn(x, z) : 0.0; });
+        std::printf("    [see-through] %-20s %6zu eyes (%zu inside solids), %6zu of %6zu looks see through", scn, u.eyes, u.insideSolid, u.through, u.looks);
+        if (u.through) std::printf(" -- first from %.1f %.1f %.1f looking %.2f %.2f %.2f", u.firstEye.x, u.firstEye.y, u.firstEye.z, u.firstDir.x, u.firstDir.y, u.firstDir.z);
+        std::printf("\n");
+        for (const auto& [m, n] : u.byHitMesh) std::printf("      backs of %-12s %6zu\n", m.c_str(), n);
+        if (std::getenv("RT_SEE_THROUGH_SAMPLES")) for (const std::string& smp : u.samples) std::printf("      %s\n", smp.c_str());
+        // RT_SEE_THROUGH_RAY="scene,ox,oy,oz,dx,dy,dz": every face along one look in that scene (mesh_audit printRay)
+        if (const char* ray = std::getenv("RT_SEE_THROUGH_RAY")) {
+            char name[64]; double v[6];
+            if (std::sscanf(ray, "%63[^,],%lf,%lf,%lf,%lf,%lf,%lf", name, &v[0], &v[1], &v[2], &v[3], &v[4], &v[5]) == 7 && std::string(name) == scn)
+                printRay(refs, Vec3(v[0], v[1], v[2]), Vec3(v[3], v[4], v[5]));
+        }
+        // RT_SEE_THROUGH_SECTION="scene,x0,z0,x1,z1,step": what stands over each point of a line in that scene
+        if (const char* sec = std::getenv("RT_SEE_THROUGH_SECTION")) {
+            char name[64]; double a0, b0, a1, b1, st;
+            if (std::sscanf(sec, "%63[^,],%lf,%lf,%lf,%lf,%lf", name, &a0, &b0, &a1, &b1, &st) == 6 && std::string(name) == scn)
+                printSection(refs, a0, b0, a1, b1, st);
+        }
+        eyes += u.eyes;
+        through += u.through;
+        CHECK(u.through <= known.at(scn));
+    }
+    CHECK(eyes > 1000);
+}
+
+// THE DECKS' UNDERSIDES face DOWN (Glenn: "the elevated freeway/rail undercarriage when viewed from below can be seen
+// through"): over an elevated deck's top, as many square metres face down as face up -- its soffit.
+TEST_CASE(lanes_an_elevated_deck_has_a_soffit_facing_down) {
+    for (const char* scn : {"valley_viaduct", "light_rail_lab", "freeway_cross"}) {
+        const Result& r = scene(scn);
+        double up = 0, down = 0;
+        for (const NamedMesh& nm : buildMeshes(r)) {
+            const RenderMesh& m = nm.mesh;
+            for (std::size_t i = 0; i + 2 < m.indices.size(); i += 3) {
+                const Vec3 a = m.vertices[m.indices[i]].position, b = m.vertices[m.indices[i + 1]].position,
+                           c = m.vertices[m.indices[i + 2]].position;
+                const Vec3 f = cross(c - a, b - a);   // (the engine's front: clockwise from outside)
+                const double area = 0.5 * f.length();
+                if (area < 1e-9) continue;
+                const double ny = f.y / (2 * area);
+                if (ny > 0.9) up += area; else if (ny < -0.9) down += area;
+                (void)nm;
+            }
+            std::printf("    [soffit] %s %-14s up %10.0f m2, down %10.0f m2\n", scn, nm.name.c_str(), up, down);
+            up = down = 0;
+        }
+    }
 }

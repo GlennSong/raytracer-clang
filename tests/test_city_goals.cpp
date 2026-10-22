@@ -22,12 +22,12 @@ using namespace citysim;
 // / work till 5pm / go shopping / go home"). It no longer mirrors the
 // pre-table control flow, which had no errand leg.
 TEST_CASE(goal_default_table_is_the_daily_round) {
-    GoalTable t = defaultScheduleGoals();
+    GoalTable t = builtinDayTable("commuter");
     int home = t.findState("AtHome");
-    int commute = t.findState("CommuteToWork");
+    int commute = t.findState("ToWork");
     int work = t.findState("AtWork");
     int ret = t.findState("ReturnHome");
-    CHECK(t.stateCount() == 10);
+    CHECK(t.stateCount() == 14);   // the day's ten, and a night out's four (addNightOut)
     CHECK(t.entry() == home);
     CHECK(t.state(home).action == GoalAction::Rest);
     CHECK(t.state(commute).action == GoalAction::GoTo);
@@ -47,8 +47,8 @@ TEST_CASE(goal_default_table_is_the_daily_round) {
     CHECK(t.onEvent(ret, GoalEvent::Arrived) == home);
     // Lunch OUT, about four hours into the shift; no lunch (brought one, car
     // commuter, nothing open) carries straight on into the afternoon.
-    const int lunchGo = t.findState("GoLunch");
-    const int lunchAt = t.findState("AtLunch");
+    const int lunchGo = t.findState("GoBreak");
+    const int lunchAt = t.findState("OnBreak");
     const int back = t.findState("BackToWork");
     const int pm = t.findState("AtWorkPM");
     CHECK(t.state(work).dwellHours > 3.0);
@@ -69,7 +69,7 @@ TEST_CASE(goal_default_table_is_the_daily_round) {
 
 TEST_CASE(goal_stroller_table_is_an_outing) {
     // A day OUT: from home, stop after stop until the window closes.
-    GoalTable t = strollerGoals();
+    GoalTable t = builtinDayTable("stroller");
     const int home = t.findState("AtHome");
     const int go = t.findState("Outing");
     const int pause = t.findState("OutAndAbout");
@@ -122,7 +122,7 @@ TEST_CASE(installing_the_default_tables_changes_nothing) {
     CitySim a, b;
     a.build(nav, 16, 8, 17);
     b.build(nav, 16, 8, 17);
-    b.setGoalTables(defaultScheduleGoals(), defaultScheduleGoals());
+    b.setGoalTables(builtinDayTable("commuter"), builtinDayTable("commuter"));
     bool same = true;
     for (int i = 0; i < 6000; ++i) {
         a.step(0.1, 0.5);
@@ -246,4 +246,750 @@ TEST_CASE(outings_sometimes_sit_on_a_bench_and_get_up_again) {
         if (s.occupant < 0) continue;
         CHECK(sim.agents()[static_cast<std::size_t>(s.occupant)].tripSeat == static_cast<int>(&s - sim.seats().data()));
     }
+}
+
+// CAMPUS LIFE (campus milestone 4): a city with a university houses students in its residence hall -- as many as
+// it has beds -- and runs their day on the student table: to class in the teaching hall, a break (the library, a
+// bench on the quad, lunch), back to class, and home to the hall in the evening.
+TEST_CASE(students_live_in_the_hall_and_spend_the_day_on_campus) {
+    NavGraph nav = citytest::cityNav(800.0, 80.0, 5);
+    CitySim sim;
+    sim.build(nav, 20, 400, 21);
+    PlaceMap places;
+    for (int i = 0; i < 10; ++i) places.add(PlaceType::Home, Vec2(-350 + i * 70.0, -330), nav);
+    for (int i = 0; i < 4; ++i) places.add(PlaceType::Office, Vec2(-300 + i * 160.0, 330), nav, 9, 17);
+    places.add(PlaceType::Cafe, Vec2(120, -40), nav, 7, 19);
+    const PlaceId hall = places.add(PlaceType::Home, Vec2(-120, 60), nav, 0, 24, 60);
+    const PlaceId teach = places.add(PlaceType::Civic, Vec2(60, 120), nav);
+    const PlaceId lib = places.add(PlaceType::Civic, Vec2(-40, 200), nav);
+    const PlaceId quad = places.add(PlaceType::Park, Vec2(0, 130), nav);
+    places.setCampus(hall, 3); places.setCampus(teach, 1); places.setCampus(lib, 2); places.setCampus(quad, 4);
+    std::vector<CitySim::SeatSpot> seats;
+    for (int i = 0; i < 8; ++i) {   // benches round the quad
+        CitySim::SeatSpot s;
+        s.pos = places[quad].site + Vec2(-21.0 + i * 6.0, (i % 2) ? 12.0 : -12.0);
+        s.face = Vec2(0, (i % 2) ? -1.0 : 1.0);
+        s.hip = 0.47;
+        seats.push_back(s);
+    }
+    sim.setSeats(seats);
+    sim.assignPlaces(places, nav);
+    sim.seedFromSchedule(6.0);
+
+    CHECK(sim.studentCount() == 60);   // the hall's beds (fewer than a quarter of the 400 walkers)
+    const int hallNode = nav.nearestNode(places[hall].entrance);
+    int homeless = 0, othersInHall = 0;
+    for (const Agent& a : sim.agents()) {
+        if (a.role == Agent::Role::Student) homeless += a.home != hallNode || a.homePlace != hall;
+        else othersInHall += a.homePlace == hall;
+    }
+    CHECK(homeless == 0);
+    CHECK(othersInHall == 0);   // the hall is the students' alone
+
+    int inClass = 0, onBench = 0, inLibrary = 0, backHome = 0, nightOut = 0, peakOut = 0;
+    std::vector<uint8_t> sawClass(sim.agents().size(), 0), sawBreak(sim.agents().size(), 0);
+    const int teachNode = nav.nearestNode(places[teach].entrance), libNode = nav.nearestNode(places[lib].entrance);
+    for (int i = 0; i < 30000 && sim.timeOfDay() < 22.5; ++i) {
+        sim.step(0.5, 0.002);
+        const auto& ag = sim.agents();
+        int out = 0;
+        for (std::size_t k = 0; k < ag.size(); ++k) {
+            const Agent& a = ag[k];
+            if (a.role != Agent::Role::Student) continue;
+            if (a.indoors && a.restNode == teachNode && a.activity == Activity::AtWork) sawClass[k] = 1;
+            if (sim.seatedOn(static_cast<int>(k))) { sawBreak[k] |= 1; }
+            if (a.indoors && a.restNode == libNode) sawBreak[k] |= 2;
+            out += a.moving ? 1 : 0;
+        }
+        peakOut = std::max(peakOut, out);
+    }
+    for (std::size_t k = 0; k < sim.agents().size(); ++k) {
+        const Agent& a = sim.agents()[k];
+        if (a.role != Agent::Role::Student) continue;
+        inClass += sawClass[k];
+        onBench += (sawBreak[k] & 1) ? 1 : 0;
+        inLibrary += (sawBreak[k] & 2) ? 1 : 0;
+        backHome += a.indoors && a.restNode == hallNode;
+        nightOut += a.activity == Activity::Outing;   // a college club, a bar (eveningPlan): out, not lost
+    }
+    std::printf("    [students] %d students: %d went to class, %d sat on the quad, %d studied in the library, %d home by "
+                "%.1f h (%d out for the evening); at most %d walking at once\n",
+                sim.studentCount(), inClass, onBench, inLibrary, backHome, sim.timeOfDay(), nightOut, peakOut);
+    CHECK(inClass >= 50);
+    CHECK(onBench >= 5);
+    CHECK(inLibrary >= 10);
+    CHECK(backHome + nightOut >= 50);   // home, or on a night out -- nobody stranded on campus
+}
+
+// THE DORM BLOCK (campus gap pass): with two residence halls the students fill both, in proportion to their beds, and
+// their courses are spread over every teaching hall.
+TEST_CASE(students_fill_every_hall_and_take_classes_in_every_teaching_hall) {
+    NavGraph nav = citytest::cityNav(800.0, 80.0, 5);
+    CitySim sim;
+    sim.build(nav, 20, 400, 21);
+    PlaceMap places;
+    for (int i = 0; i < 10; ++i) places.add(PlaceType::Home, Vec2(-350 + i * 70.0, -330), nav);
+    places.add(PlaceType::Office, Vec2(0, 330), nav, 9, 17);
+    const PlaceId h1 = places.add(PlaceType::Home, Vec2(-120, 60), nav, 0, 24, 30);
+    const PlaceId h2 = places.add(PlaceType::Home, Vec2(200, -150), nav, 0, 24, 20);
+    const PlaceId t1 = places.add(PlaceType::Civic, Vec2(60, 120), nav);
+    const PlaceId t2 = places.add(PlaceType::Civic, Vec2(-60, 200), nav);
+    places.setCampus(h1, 3); places.setCampus(h2, 3); places.setCampus(t1, 1); places.setCampus(t2, 1);
+    sim.assignPlaces(places, nav);
+    int in1 = 0, in2 = 0, at1 = 0, at2 = 0;
+    for (const Agent& a : sim.agents()) {
+        if (a.role != Agent::Role::Student) continue;
+        in1 += a.homePlace == h1; in2 += a.homePlace == h2;
+        at1 += a.workPlace == t1; at2 += a.workPlace == t2;
+    }
+    std::printf("    [halls] %d students: %d + %d in the halls, %d + %d in the teaching halls\n", sim.studentCount(), in1, in2,
+                at1, at2);
+    CHECK(sim.studentCount() == 50);
+    CHECK(in1 + in2 == 50);
+    CHECK(std::abs(in1 - 30) <= 1 && std::abs(in2 - 20) <= 1);
+    CHECK(at1 >= 15 && at2 >= 15);
+}
+
+// THE WALKS IN THE WALKING NETWORK (Glenn: students should cross the quad; and every park's paths): footpaths join the
+// nav graph as walker-only links. A walker's route takes the diagonal across a block when it is shorter; a car's never
+// does; nearestNode never answers with a walk node; a walk's end joins the street at its pavement, not its middle; a
+// tee joins a walk to another's middle; a walk marked off-street (a quad door's) stays off the streets.
+#include "../src/engine/ai/pathfind.h"
+TEST_CASE(footpaths_are_walked_across_a_block_and_never_driven) {
+    NavGraph nav = citytest::cityNav(600.0, 100.0, 4);
+    const int c00 = nav.nearestNode(Vec2(0, 0)), c11 = nav.nearestNode(Vec2(100, 100));
+    CHECK(c00 >= 0 && c11 >= 0 && c00 != c11);
+    const Vec2 p00 = nav.nodes[static_cast<std::size_t>(c00)], p11 = nav.nodes[static_cast<std::size_t>(c11)];
+    const Route before = findRoute(nav, c00, c11, true);
+    Real walkBefore = 0;
+    for (int li : before.links) walkBefore += nav.links[static_cast<std::size_t>(li)].length;
+    const int streetLinks = nav.linkCount(), streetNodes = nav.nodeCount();
+    const Vec2 d = normalize(p11 - p00);
+    std::vector<std::array<Real, 5>> segs = {
+        {p00.x + d.x * 8, p00.y + d.y * 8, p11.x - d.x * 8, p11.y - d.y * 8, 2.0},   // the diagonal, its ends short of the corners
+        // a spur off its middle, toward a door (its far end must not be joined to a street)
+        {(p00.x + p11.x) * 0.5 + 0.6, (p00.y + p11.y) * 0.5 - 0.6, (p00.x + p11.x) * 0.5 + 20.0, (p00.y + p11.y) * 0.5 - 20.0, -2.0}};
+    const NavGraph::FootpathReport rep = nav.appendFootpaths(segs);
+    std::printf("    [footpaths] %d nodes, %d links, %d tees, %d street joins; street walk %.0f m\n", rep.nodes, rep.links, rep.tees,
+                rep.streetJoins, walkBefore);
+    CHECK(rep.tees == 1);
+    CHECK(rep.streetJoins == 2);   // the diagonal's two ends; not the spur's
+    // a walker cuts across; the walk is shorter than the streets round the block
+    const Route after = findRoute(nav, c00, c11, true);
+    Real walkAfter = 0;
+    bool usedPath = false;
+    for (int li : after.links) {
+        walkAfter += nav.links[static_cast<std::size_t>(li)].length;
+        usedPath = usedPath || nav.links[static_cast<std::size_t>(li)].footpath;
+    }
+    CHECK(usedPath);
+    CHECK(walkAfter < walkBefore * 0.85);
+    // a car never takes a walk
+    const Route car = findRoute(nav, c00, c11, false);
+    CHECK(car.valid());
+    for (int li : car.links) CHECK(!nav.links[static_cast<std::size_t>(li)].footpath);
+    // and cannot get to a walk node at all
+    CHECK(!findRoute(nav, c00, streetNodes, false).valid());
+    // nearestNode keeps to the streets, even standing on the walk
+    CHECK(nav.nearestNode((p00 + p11) * 0.5) < streetNodes);
+    // the connector from the street starts on its pavement (a carriageway's half width + 1 m out), never in its middle
+    for (int li = streetLinks; li < nav.linkCount(); ++li) {
+        const NavLink& L = nav.links[static_cast<std::size_t>(li)];
+        CHECK(L.footpath && L.walkable && (L.access & road_access::kFootpath));
+        if (L.from < streetNodes) {
+            const Real off = (L.footA - nav.nodes[static_cast<std::size_t>(L.from)]).length();
+            CHECK(off > 1.0);
+            CHECK((nav.sidewalkPoint(li, 0.0) - L.footA).length() < 1e-9);
+        }
+    }
+}
+
+// AN ACTIVITY GOAL TAKES ONLY WHAT IT ASKS FOR (behaviour plan, step 2): a goal asking for a SIT on the CAMPUS uses the
+// campus's benches and never the town's, never a spot of another kind, and never one already held.
+TEST_CASE(an_activity_goal_takes_only_spots_of_its_kind_and_tags) {
+    GoalTable out;
+    out.addState("Find", GoalAction::GoTo, GoalTarget::Activity, Activity::Outing);
+    CHECK(out.setActivity("Find", spotKindBit(SpotKind::Sit), spot_tag::kCampus));
+    out.addState("Pause", GoalAction::Rest, GoalTarget::None, Activity::Outing, 0.05);
+    CHECK(out.addTransition("Find", GoalEvent::Arrived, "Pause"));
+    CHECK(out.addTransition("Find", GoalEvent::NoRoute, "Pause"));
+    CHECK(out.addTransition("Pause", GoalEvent::DwellDone, "Find"));
+    CHECK(out.setEntry("Pause"));
+    NavGraph nav = citytest::cityNav(600.0, 100.0, 4);
+    CitySim sim;
+    sim.build(nav, 0, 40, 21);
+    sim.setGoalTables(out, out);
+    PlaceMap places;
+    for (int i = 0; i < 6; ++i) places.add(PlaceType::Home, Vec2(-250 + i * 100.0, -250), nav);
+    const PlaceId quad = places.add(PlaceType::Park, Vec2(0, 0), nav);
+    places.setCampus(quad, 4);
+    std::vector<CitySim::ActivitySpot> spots;
+    auto spot = [&](Vec2 p, SpotKind k) { CitySim::ActivitySpot s; s.pos = p; s.face = Vec2(0, 1); s.kind = k; spots.push_back(s); };
+    for (int i = 0; i < 6; ++i) spot(Vec2(-15.0 + i * 6.0, 8.0), SpotKind::Sit);          // the quad's benches
+    for (int i = 0; i < 3; ++i) spot(Vec2(-12.0 + i * 8.0, -8.0), SpotKind::Watch);       // ...and somewhere to watch
+    for (int i = 0; i < 12; ++i) spot(Vec2(-250.0 + i * 40.0, 210.0), SpotKind::Sit);     // the town's benches, far off
+    sim.setSpots(spots);
+    sim.assignPlaces(places, nav);
+    int campusSits = 0, wrong = 0, shared = 0;
+    for (int i = 0; i < 40000; ++i) {
+        sim.step(0.1, 0.25);
+        std::vector<int> owner(sim.spots().size(), -1);
+        for (std::size_t k = 0; k < sim.agents().size(); ++k) {
+            const CitySim::ActivitySpot* st = sim.seatedOn(static_cast<int>(k));
+            if (!st) continue;
+            const std::size_t si = static_cast<std::size_t>(st - sim.spots().data());
+            if (owner[si] >= 0) ++shared;
+            owner[si] = static_cast<int>(k);
+            // the city's day-off strollers run their own outing table (any bench); judge only this table's agents
+            if (sim.agents()[k].role == Agent::Role::Stroller) continue;
+            if (st->kind != SpotKind::Sit || !(st->tags & spot_tag::kCampus)) ++wrong;
+            else ++campusSits;
+        }
+    }
+    std::printf("    [activity] %d campus sit-samples, %d on the wrong spot, %d shared\n", campusSits, wrong, shared);
+    CHECK(campusSits > 100);
+    CHECK(wrong == 0);
+    CHECK(shared == 0);
+}
+
+// JOGGERS (behaviour plan, step 3): an activity goal for a JOG spot walks onto the track, runs its loop at a jogger's
+// pace -- on the loop's line, laps and all -- and walks off when the run is done; a runner is never drawn seated, and
+// no start spot is ever two runners'.
+TEST_CASE(joggers_run_laps_of_the_track_and_come_off_it) {
+    GoalTable out;
+    out.addState("Run", GoalAction::GoTo, GoalTarget::Activity, Activity::Outing);
+    CHECK(out.setActivity("Run", spotKindBit(SpotKind::Jog), 0));
+    out.addState("Rest", GoalAction::Rest, GoalTarget::None, Activity::Outing, 0.2);
+    CHECK(out.addTransition("Run", GoalEvent::Arrived, "Rest"));
+    CHECK(out.addTransition("Run", GoalEvent::NoRoute, "Rest"));
+    CHECK(out.addTransition("Rest", GoalEvent::DwellDone, "Run"));
+    CHECK(out.setEntry("Rest"));
+    NavGraph nav = citytest::cityNav(600.0, 100.0, 4);
+    CitySim sim;
+    sim.build(nav, 0, 30, 21);
+    sim.setGoalTables(out, out);
+    // a track: a 40 x 30 m oval between the streets
+    std::vector<Vec2> loop;
+    for (int i = 0; i < 48; ++i) {
+        const Real a = 6.2831853 * i / 48;
+        loop.push_back(Vec2(50.0 + 20.0 * std::cos(a), 50.0 + 15.0 * std::sin(a)));
+    }
+    sim.setLoops({loop});
+    std::vector<CitySim::ActivitySpot> spots;
+    for (int k = 0; k < 8; ++k) {
+        CitySim::ActivitySpot s;
+        s.kind = SpotKind::Jog; s.loop = 0; s.loopS = sim.loopLength(0) * k / 8.0; s.hip = 0;
+        Vec2 tg;
+        s.pos = sim.loopPoint(0, s.loopS, &tg);
+        s.face = tg;
+        spots.push_back(s);
+    }
+    sim.setSpots(spots);
+    std::printf("    [jog] %zu of 8 spots reachable\n", sim.spots().size());
+    CHECK(sim.spots().size() == 8);
+    int runSamples = 0, offLoop = 0, seatedRunners = 0, shared = 0, finished = 0;
+    Real ran = 0, ranTime = 0;
+    std::vector<Vec2> last(sim.agents().size());
+    std::vector<uint8_t> was(sim.agents().size(), 0);
+    const Real dt = 0.1;
+    for (int i = 0; i < 30000; ++i) {
+        sim.step(dt, 0.002);   // a run is ~0.45 h: ~13 min of this clock, laps and laps
+        std::vector<int> owner(8, -1);
+        for (std::size_t k = 0; k < sim.agents().size(); ++k) {
+            const Agent& a = sim.agents()[k];
+            const CitySim::ActivitySpot* sp = sim.usingSpot(static_cast<int>(k));
+            if (a.seatPhase == 0 && was[k] == 3) ++finished;
+            if (sp && sp->kind == SpotKind::Jog) {
+                ++runSamples;
+                const std::size_t si = static_cast<std::size_t>(sp - sim.spots().data());
+                if (owner[si] >= 0) ++shared;
+                owner[si] = static_cast<int>(k);
+                if (sim.seatedOn(static_cast<int>(k))) ++seatedRunners;
+                // on the loop's line
+                Real best = 1e9;
+                for (std::size_t j = 0; j < loop.size(); ++j) {
+                    const Vec2 p = loop[j], q = loop[(j + 1) % loop.size()], d = q - p;
+                    const Real t = std::max(Real(0), std::min(Real(1), dot(a.pos - p, d) / d.lengthSquared()));
+                    best = std::min(best, (p + d * t - a.pos).length());
+                }
+                if (best > 0.05) ++offLoop;
+                if (was[k] == 2) { ran += (a.pos - last[k]).length(); ranTime += dt; }
+            }
+            last[k] = a.pos;
+            was[k] = a.seatPhase;
+        }
+    }
+    const Real pace = ranTime > 0 ? ran / ranTime : 0;
+    std::printf("    [jog] %d run-samples, %.0f m run (%.2f m/s), %d runs finished; off the loop %d, seated %d, shared %d\n",
+                runSamples, ran, pace, finished, offLoop, seatedRunners, shared);
+    CHECK(runSamples > 1000);
+    CHECK(ran > sim.loopLength(0) * 3);        // laps, not a lap
+    CHECK(pace > 2.4 && pace < 3.0);          // a jog (chords of the loop read a touch short of 2.8 m/s)
+    CHECK(finished >= 3);
+    CHECK(offLoop == 0);
+    CHECK(seatedRunners == 0);
+    CHECK(shared == 0);
+}
+
+// A CROWD ON A WALK (the island's stuck students: 32 of them held at the foot of a walk, speed 0): walkers whose
+// commute runs over a footpath -- many leaving the same door at once -- get to work.
+TEST_CASE(a_crowd_walks_a_footpath_to_work) {
+    NavGraph nav = citytest::cityNav(600.0, 100.0, 4);
+    const int c00 = nav.nearestNode(Vec2(0, 0)), c11 = nav.nearestNode(Vec2(100, 100));
+    const Vec2 p00 = nav.nodes[static_cast<std::size_t>(c00)], p11 = nav.nodes[static_cast<std::size_t>(c11)];
+    const Vec2 d = normalize(p11 - p00);
+    nav.appendFootpaths({{p00.x + d.x * 8, p00.y + d.y * 8, p11.x - d.x * 8, p11.y - d.y * 8, 2.0}});
+    CitySim sim;
+    sim.build(nav, 0, 60, 21);
+    PlaceMap places;
+    const PlaceId home = places.add(PlaceType::Home, p00 + Vec2(-6, -6), nav);
+    const PlaceId job = places.add(PlaceType::Office, p11 + Vec2(6, 6), nav, 8, 17);
+    (void)home; (void)job;
+    sim.assignPlaces(places, nav);
+    sim.seedFromSchedule(7.9);
+    int onWalk = 0, arrived = 0, maxStuck = 0;
+    std::vector<int> stuck(sim.agents().size(), 0);
+    std::vector<Real> lastD(sim.agents().size(), -1);
+    for (int i = 0; i < 6000; ++i) {
+        sim.step(0.1, 0.0005);
+        for (std::size_t k = 0; k < sim.agents().size(); ++k) {
+            const Agent& a = sim.agents()[k];
+            if (!a.moving || a.leg >= static_cast<int>(a.route.links.size())) continue;
+            const int li = a.route.links[static_cast<std::size_t>(a.leg)];
+            if (!nav.links[static_cast<std::size_t>(li)].footpath) { stuck[k] = 0; continue; }
+            ++onWalk;
+            if (std::fabs(a.distOnLeg - lastD[k]) < 1e-6) ++stuck[k]; else stuck[k] = 0;
+            lastD[k] = a.distOnLeg;
+            maxStuck = std::max(maxStuck, stuck[k]);
+        }
+    }
+    for (const Agent& a : sim.agents()) arrived += !a.moving && a.restNode == nav.nearestNode(places[job].entrance);
+    std::printf("    [crowd] %d walker-steps on the walk, %d at work, longest stall %.1f s\n", onWalk, arrived, maxStuck * 0.1);
+    CHECK(onWalk > 100);
+    CHECK(maxStuck < 100);   // nobody held on a walk for 10 s
+}
+
+// A KICKABOUT (activities framework, step B/C: the first GROUP activity, a session): players gather on the pitch, the
+// game starts once six are there, each side keeps to its half and they swap ends at half time, the game ends and
+// everyone walks off; with too few players it is given up after its gathering time, and nobody is left on the pitch.
+namespace {
+struct KickRun { int games = 0, started = 0, swapped = 0, givenUp = 0, outOfHalf = 0, offPitch = 0, maxOn = 0; };
+KickRun runKickabout(int walkers) {
+    NavGraph nav = citytest::cityNav(600.0, 100.0, 4);
+    CitySim sim;
+    sim.build(nav, 0, walkers, 21);
+    ActivityCatalog cat = defaultActivityCatalog();
+    Menu kick;
+    kick.name = "kick";
+    { MenuBand b; b.first = {{"kickabout", 1.0, 0}}; kick.bands.push_back(b); }
+    cat.menus.push_back(kick);
+    sim.setActivityCatalog(cat);
+    GoalTable t;
+    t.addState("Play", GoalAction::GoTo, GoalTarget::Activity, Activity::Outing);
+    CHECK(t.setMenu("Play", "kick"));
+    t.addState("Rest", GoalAction::Rest, GoalTarget::None, Activity::Outing, 0.3);
+    CHECK(t.addTransition("Play", GoalEvent::Arrived, "Rest"));
+    CHECK(t.addTransition("Play", GoalEvent::NoRoute, "Rest"));
+    CHECK(t.addTransition("Rest", GoalEvent::DwellDone, "Play"));
+    CHECK(t.setEntry("Rest"));
+    sim.setGoalTables(t, t);
+    PlaceMap places;
+    const PlaceId field = places.add(PlaceType::Park, Vec2(50, 50), nav);
+    places.setCampus(field, 5);
+    for (int i = 0; i < 4; ++i) places.add(PlaceType::Home, Vec2(-250 + i * 150.0, -250), nav);
+    CitySim::ActivityArea pitch;
+    pitch.kind = "pitch"; pitch.center = Vec2(50, 50); pitch.axis = Vec2(1, 0); pitch.halfL = 25; pitch.halfW = 15;
+    sim.setAreas({pitch});
+    sim.assignPlaces(places, nav);
+    KickRun r;
+    std::vector<int> seenState(64, -1);
+    std::vector<uint8_t> sawSwap(64, 0);
+    for (int i = 0; i < 40000; ++i) {
+        sim.step(0.5, 0.0005);   // ~2.8 game hours
+        const auto& ses = sim.sessions();
+        for (std::size_t k = 0; k < ses.size() && k < seenState.size(); ++k) {
+            const auto& se = ses[k];
+            const int st = static_cast<int>(se.state);
+            if (st != seenState[k]) {
+                if (se.state == CitySim::Session::State::Running) ++r.started;
+                if (se.state == CitySim::Session::State::Ending && seenState[k] == 0) ++r.givenUp;
+                if (se.state == CitySim::Session::State::Dead && seenState[k] >= 0) ++r.games;
+                seenState[k] = st;
+            }
+            if (se.swapped && !sawSwap[k]) { sawSwap[k] = 1; ++r.swapped; }
+            if (se.state == CitySim::Session::State::Dead) { sawSwap[k] = 0; continue; }
+            int on = 0;
+            for (std::size_t m = 0; m < se.members.size(); ++m) {
+                const Agent& a = sim.agents()[static_cast<std::size_t>(se.members[m])];
+                if (a.seatPhase != 2) continue;
+                ++on;
+                const Vec2 d = a.pos - pitch.center;
+                const Real u = d.x, v = d.y;
+                if (std::fabs(u) > pitch.halfL + 0.01 || std::fabs(v) > pitch.halfW + 0.01) ++r.offPitch;
+                if (se.state == CitySim::Session::State::Running) {
+                    int zone = se.roles[m];   // home 0, away 1
+                    if (se.swapped) zone = 1 - zone;
+                    // in its half -- or, just after the swap, on its way across (a few seconds' grace)
+                    const bool inHalf = zone == 0 ? u <= 0.01 : u >= -0.01;
+                    if (!inHalf && !se.swapped) ++r.outOfHalf;
+                }
+            }
+            r.maxOn = std::max(r.maxOn, on);
+        }
+    }
+    return r;
+}
+}  // namespace
+
+TEST_CASE(a_kickabout_gathers_plays_swaps_ends_and_lets_everyone_go) {
+    const KickRun r = runKickabout(40);
+    std::printf("    [kickabout] %d started, %d swapped ends, %d games over, %d given up; most on the pitch %d; out of their half %d, "
+                "off the pitch %d\n", r.started, r.swapped, r.games, r.givenUp, r.maxOn, r.outOfHalf, r.offPitch);
+    CHECK(r.started >= 2);
+    CHECK(r.swapped >= 2);
+    CHECK(r.games >= 2);
+    CHECK(r.maxOn >= 6 && r.maxOn <= 10);
+    CHECK(r.outOfHalf == 0);
+    CHECK(r.offPitch == 0);
+}
+
+TEST_CASE(a_kickabout_that_never_fills_is_given_up) {
+    const KickRun r = runKickabout(3);   // three walkers: never six
+    std::printf("    [kickabout, 3 players] %d started, %d given up, %d sessions over\n", r.started, r.givenUp, r.games);
+    CHECK(r.started == 0);
+    CHECK(r.givenUp >= 1);
+    CHECK(r.games >= 1);   // and the session is over: nobody left standing on the pitch
+}
+
+// EVERY ACTIVITY KEEPS THE RULES (activities framework: the generic invariant test). A town with a site of every kind
+// runs a crowd on a menu offering EVERY activity in assets/scripts/activities.lua at once, all day. Whatever is added
+// to the catalog is held to the same rules without a test of its own:
+//   - a held spot is held by someone on their way to it or using it (no leaked reservation);
+//   - nobody uses a spot much past its activity's longest stay (nobody stuck);
+//   - a session's players are its members, and a dead session has none;
+//   - and every activity the town can offer is actually taken up.
+#include "../src/apps/citysim/scripting/activities_lua.h"
+#include "../src/engine/scripting/script_vm.h"
+#include <fstream>
+#include <sstream>
+TEST_CASE(every_activity_in_the_catalog_keeps_the_rules) {
+    ActivityCatalog cat;
+    {
+        engine::ScriptVM vm;
+        std::string err;
+        std::ifstream f("assets/scripts/activities.lua");
+        std::stringstream ss;
+        ss << f.rdbuf();
+        CHECK(vm.doString(ss.str(), &err));
+        CHECK(engine::loadActivityCatalog(vm, cat, &err));
+    }
+    CHECK(cat.defs.size() >= 10);
+    Menu all;
+    all.name = "everything";
+    {
+        MenuBand b;
+        for (const ActivityDef& d : cat.defs) {
+            b.first.push_back({d.name, 0.12, 0});
+            b.pick.push_back({d.name, 0, 1.0});
+        }
+        all.bands.push_back(b);
+    }
+    cat.menus.push_back(all);
+    NavGraph nav = citytest::cityNav(1200.0, 100.0, 5);
+    CitySim sim;
+    sim.build(nav, 0, 300, 21);
+    sim.setActivityCatalog(cat);
+    GoalTable t;
+    t.addState("Go", GoalAction::GoTo, GoalTarget::Activity, Activity::Outing);
+    CHECK(t.setMenu("Go", "everything"));
+    t.addState("Be", GoalAction::Rest, GoalTarget::None, Activity::Outing, 0.2);
+    CHECK(t.addTransition("Go", GoalEvent::Arrived, "Be"));
+    CHECK(t.addTransition("Go", GoalEvent::NoRoute, "Be"));
+    CHECK(t.addTransition("Be", GoalEvent::DwellDone, "Go"));
+    CHECK(t.setEntry("Be"));
+    sim.setGoalTables(t, t);
+    // a site of every kind: places of each type (a campus among them), seats, a loop, a pitch with its stand
+    PlaceMap places;
+    const PlaceType types[] = {PlaceType::Home, PlaceType::Cafe, PlaceType::Restaurant, PlaceType::Shop, PlaceType::Supermarket,
+                               PlaceType::Civic, PlaceType::Park, PlaceType::Office};
+    int k = 0;
+    for (PlaceType ty : types)
+        for (int i = 0; i < 4; ++i, ++k) places.add(ty, Vec2(-450.0 + (k % 8) * 120.0, -450.0 + (k / 8) * 110.0), nav, 6, 23);
+    const PlaceId quad = places.add(PlaceType::Park, Vec2(0, 0), nav);
+    // a cafe out at the town's far corner: somewhere ACROSS town (1.2-3 km) from most of it
+    places.add(PlaceType::Cafe, Vec2(560, 560), nav, 6, 23);
+    places.add(PlaceType::Cafe, Vec2(-560, 560), nav, 6, 23);
+    const PlaceId lib = places.add(PlaceType::Civic, Vec2(60, 40), nav, 7, 23);
+    const PlaceId field = places.add(PlaceType::Park, Vec2(250, 50), nav);
+    // the night's places, with the night's hours (wrapping midnight)
+    for (int i = 0; i < 3; ++i) places.add(PlaceType::Bar, Vec2(-300.0 + i * 260.0, -200.0), nav, 16, 2);
+    for (int i = 0; i < 2; ++i) places.add(PlaceType::Club, Vec2(-200.0 + i * 380.0, 150.0), nav, 21, 3);
+    places.setCampus(quad, 4); places.setCampus(lib, 2); places.setCampus(field, 5);
+    std::vector<CitySim::ActivitySpot> spots;
+    auto spot = [&](Vec2 p, SpotKind kd) { CitySim::ActivitySpot sp; sp.pos = p; sp.face = Vec2(0, 1); sp.kind = kd; spots.push_back(sp); };
+    for (int i = 0; i < 10; ++i) spot(Vec2(-20.0 + i * 4.0, 12.0), SpotKind::Sit);              // the quad's benches
+    for (int i = 0; i < 12; ++i) spot(Vec2(225.0 + i * 4.0, 72.0), SpotKind::Sit);             // the stand
+    for (int i = 0; i < 20; ++i) spot(Vec2(-400.0 + i * 40.0, 330.0), SpotKind::Sit);          // the town's benches
+    std::vector<Vec2> loop;
+    for (int i = 0; i < 40; ++i) { const Real a = 6.2831853 * i / 40; loop.push_back(Vec2(250.0 + 40.0 * std::cos(a), 50.0 + 25.0 * std::sin(a))); }
+    sim.setLoops({loop});
+    for (int i = 0; i < 8; ++i) {
+        CitySim::ActivitySpot sp; sp.kind = SpotKind::Jog; sp.loop = 0; sp.loopS = sim.loopLength(0) * i / 8.0; sp.hip = 0;
+        Vec2 tg; sp.pos = sim.loopPoint(0, sp.loopS, &tg); sp.face = tg; spots.push_back(sp);
+    }
+    sim.setSpots(spots);
+    CitySim::ActivityArea pitch;
+    pitch.kind = "pitch"; pitch.center = Vec2(250, 50); pitch.axis = Vec2(1, 0); pitch.halfL = 25; pitch.halfW = 15;
+    CitySim::ActivityArea lawnQ;   // the quad's lawn
+    lawnQ.kind = "lawn"; lawnQ.center = Vec2(0, -30); lawnQ.axis = Vec2(1, 0); lawnQ.halfL = 18; lawnQ.halfW = 10;
+    CitySim::ActivityArea lawnP = lawnQ;   // a park's in town
+    lawnP.center = Vec2(-330, 300); lawnP.halfL = 25; lawnP.halfW = 14;
+    sim.setAreas({pitch, lawnQ, lawnP});
+    sim.assignPlaces(places, nav);
+    sim.seedFromSchedule(13.0);   // the afternoon into the night: the night's activities open from 16:30
+
+    // the longest any activity keeps someone at a spot or in a session, in hours, plus slack
+    double longest = 0;
+    for (const ActivityDef& d : cat.defs) {
+        double lo = d.minutesLo, hi = d.minutesHi;
+        for (const std::string& kd : d.sites) { double l2, h2; siteKindMinutes(kd, l2, h2); hi = std::max(hi, h2); }
+        longest = std::max(longest, hi / 60.0 + d.gatherMinutes / 60.0);
+    }
+    longest += 0.25;
+    int leaked = 0, stuck = 0, strayMember = 0, deadWithMembers = 0, runningSamples = 0, offArea = 0;
+    std::vector<double> usingSince(sim.agents().size(), -1);
+    std::vector<int> used(cat.defs.size(), 0);
+    const double dtH = 0.5 * 0.0004;
+    double clock = 0;
+    for (int i = 0; i < 50000; ++i) {
+        sim.step(0.5, 0.0004);   // ~10 game hours, at about real time's walking pace
+        clock += dtH;
+        const auto& ag = sim.agents();
+        for (std::size_t a = 0; a < ag.size(); ++a) {
+            if (ag[a].tripActivity >= 0 && ag[a].tripActivity < static_cast<int>(used.size())) used[static_cast<std::size_t>(ag[a].tripActivity)] = 1;
+            if (ag[a].seatPhase == 2) {
+                if (usingSince[a] < 0) usingSince[a] = clock;
+                else if (clock - usingSince[a] > longest) { ++stuck; usingSince[a] = clock; }
+            } else usingSince[a] = -1;
+            if (ag[a].session >= 0) {
+                const auto& se = sim.sessions()[static_cast<std::size_t>(ag[a].session)];
+                bool member = false;
+                for (int m : se.members) member = member || m == static_cast<int>(a);
+                if (!member) ++strayMember;
+            }
+        }
+        for (std::size_t si = 0; si < sim.spots().size(); ++si) {
+            const auto& sp = sim.spots()[si];
+            if (sp.occupant < 0) continue;
+            if (ag[static_cast<std::size_t>(sp.occupant)].tripSeat != static_cast<int>(si)) ++leaked;
+        }
+        for (const auto& se : sim.sessions()) {
+            if (se.state == CitySim::Session::State::Dead && !se.members.empty()) ++deadWithMembers;
+            if (se.state == CitySim::Session::State::Running) ++runningSamples;
+            if (se.state == CitySim::Session::State::Dead) continue;
+            // every member settled in its place is on its area (a ring, a pair, sunbathers alike)
+            const auto& ar = sim.areas()[static_cast<std::size_t>(se.area)];
+            for (int m : se.members) {
+                const Agent& p = ag[static_cast<std::size_t>(m)];
+                if (p.seatPhase != 2 || p.speed > 0) continue;
+                const Vec2 d = p.pos - ar.center, side(ar.axis.y, -ar.axis.x);
+                if (std::fabs(dot(d, ar.axis)) > ar.halfL + 0.5 || std::fabs(dot(d, side)) > ar.halfW + 0.5) ++offArea;
+            }
+        }
+    }
+    std::string unused;
+    for (std::size_t d = 0; d < cat.defs.size(); ++d)
+        if (!used[d]) unused += " " + cat.defs[d].name;
+    std::printf("    [every activity] %zu activities; leaked reservations %d, stuck %d, stray session members %d, dead sessions with "
+                "members %d; a group on in %d samples; settled off their area %d; never taken up:%s\n", cat.defs.size(), leaked, stuck,
+                strayMember, deadWithMembers, runningSamples, offArea, unused.empty() ? " none" : unused.c_str());
+    CHECK(leaked == 0);
+    CHECK(stuck == 0);
+    CHECK(strayMember == 0);
+    CHECK(deadWithMembers == 0);
+    CHECK(offArea == 0);
+    CHECK(unused.empty());
+}
+
+// THE LAWN GROUPS (settled formations): a chat is a ring standing round its middle, facing in, that grows as people
+// join it; a picnic's ring sits on the grass; sunbathers lie side by side; a game of catch is two, about ten metres
+// apart, facing. Several groups share a lawn, never on top of each other.
+namespace {
+struct LawnRun {
+    int sessions = 0, maxMembers = 0, maxConcurrent = 0;
+    int settledSamples = 0, notFacingIn = 0, tooClose = 0, sitGround = 0, lying = 0, standing = 0;
+    int groupsTooClose = 0;
+    double pairLo = 1e9, pairHi = 0;
+};
+LawnRun runLawn(const char* activity, int walkers, double startHour) {
+    NavGraph nav = citytest::cityNav(600.0, 100.0, 4);
+    CitySim sim;
+    sim.build(nav, 0, walkers, 33);
+    ActivityCatalog cat = defaultActivityCatalog();
+    Menu m;
+    m.name = "lawn";
+    { MenuBand b; b.first = {{activity, 1.0, 0}}; m.bands.push_back(b); }
+    cat.menus.push_back(m);
+    sim.setActivityCatalog(cat);
+    GoalTable t;
+    t.addState("Go", GoalAction::GoTo, GoalTarget::Activity, Activity::Outing);
+    CHECK(t.setMenu("Go", "lawn"));
+    t.addState("Be", GoalAction::Rest, GoalTarget::None, Activity::Outing, 0.3);
+    CHECK(t.addTransition("Go", GoalEvent::Arrived, "Be"));
+    CHECK(t.addTransition("Go", GoalEvent::NoRoute, "Be"));
+    CHECK(t.addTransition("Be", GoalEvent::DwellDone, "Go"));
+    CHECK(t.setEntry("Be"));
+    sim.setGoalTables(t, t);
+    PlaceMap places;
+    places.add(PlaceType::Park, Vec2(50, 50), nav);
+    for (int i = 0; i < 4; ++i) places.add(PlaceType::Home, Vec2(-250 + i * 150.0, -250), nav);
+    CitySim::ActivityArea lawn;
+    lawn.kind = "lawn"; lawn.center = Vec2(50, 50); lawn.axis = Vec2(1, 0); lawn.halfL = 22; lawn.halfW = 14;
+    sim.setAreas({lawn});
+    sim.assignPlaces(places, nav);
+    sim.seedFromSchedule(startHour);
+    LawnRun r;
+    std::vector<int> seen(128, 0);
+    for (int i = 0; i < 30000; ++i) {
+        sim.step(0.5, 0.0003);
+        const auto& ses = sim.sessions();
+        int live = 0;
+        for (std::size_t k = 0; k < ses.size(); ++k) {
+            const auto& se = ses[k];
+            if (se.state == CitySim::Session::State::Dead) { if (k < seen.size()) seen[k] = 0; continue; }
+            if (se.def != cat.find(activity)) continue;   // (a day off's own picnics and chats go on round it)
+            ++live;
+            if (k < seen.size() && !seen[k]) { seen[k] = 1; ++r.sessions; }
+            r.maxMembers = std::max(r.maxMembers, static_cast<int>(se.members.size()));
+            for (std::size_t o = k + 1; o < ses.size(); ++o)
+                if (ses[o].state != CitySim::Session::State::Dead && (ses[o].center - se.center).length() < 4.0) ++r.groupsTooClose;
+            std::vector<Vec2> settled;
+            for (int mi : se.members) {
+                const Agent& a = sim.agents()[static_cast<std::size_t>(mi)];
+                if (a.seatPhase != 2 || a.speed > 0) continue;
+                ++r.settledSamples;
+                settled.push_back(a.pos);
+                CitySim::RestPose rp;
+                if (!sim.restPose(mi, rp)) ++r.standing;
+                else if (rp.kind == CitySim::RestPose::Kind::SitGround) ++r.sitGround;
+                else if (rp.kind == CitySim::RestPose::Kind::Lie) ++r.lying;
+                if (se.formation == Formation::Circle && se.members.size() >= 2) {
+                    const Vec2 in = se.center - a.pos;
+                    if (in.length() > 0.1 && dot(normalize(in), a.heading) < 0.95) ++r.notFacingIn;
+                }
+            }
+            for (std::size_t x = 0; x < settled.size(); ++x)
+                for (std::size_t y = x + 1; y < settled.size(); ++y) {
+                    const Real dd = (settled[x] - settled[y]).length();
+                    if (se.formation == Formation::Pair) { r.pairLo = std::min(r.pairLo, dd); r.pairHi = std::max(r.pairHi, dd); }
+                    else if (dd < 0.6) ++r.tooClose;
+                }
+        }
+        r.maxConcurrent = std::max(r.maxConcurrent, live);
+    }
+    return r;
+}
+}  // namespace
+
+TEST_CASE(lawn_groups_take_their_formations_and_poses) {
+    const LawnRun chat = runLawn("chat", 40, 9.0);
+    std::printf("    [chat] %d circles, most in one %d, at once %d; settled %d (facing out %d, shoulder to shoulder %d), groups on "
+                "top of each other %d\n", chat.sessions, chat.maxMembers, chat.maxConcurrent, chat.settledSamples, chat.notFacingIn,
+                chat.tooClose, chat.groupsTooClose);
+    CHECK(chat.sessions >= 2);
+    CHECK(chat.maxMembers >= 3 && chat.maxMembers <= 6);   // joined, up to six
+    // (one step's lag when someone joins and the ring re-spaces: the rest turn on the next)
+    CHECK(chat.settledSamples > 0 && chat.notFacingIn * 1000 < chat.settledSamples && chat.tooClose == 0);
+    CHECK(chat.sitGround == 0 && chat.lying == 0);
+    CHECK(chat.groupsTooClose == 0);
+    const LawnRun pic = runLawn("picnic", 30, 11.5);
+    std::printf("    [picnic] %d picnics, most in one %d, at once %d; sitting on the grass %d of %d settled\n", pic.sessions, pic.maxMembers,
+                pic.maxConcurrent, pic.sitGround, pic.settledSamples);
+    CHECK(pic.sessions >= 2 && pic.maxConcurrent >= 2);
+    CHECK(pic.sitGround > 0 && pic.sitGround == pic.settledSamples);
+    CHECK(pic.groupsTooClose == 0);
+    const LawnRun sun = runLawn("sunbathe", 30, 11.0);
+    std::printf("    [sunbathe] %d groups, lying %d of %d settled\n", sun.sessions, sun.lying, sun.settledSamples);
+    CHECK(sun.lying > 0 && sun.lying == sun.settledSamples);
+    CHECK(sun.tooClose == 0);
+    const LawnRun cat = runLawn("catch", 30, 10.0);
+    std::printf("    [catch] %d games, %.1f-%.1f m apart\n", cat.sessions, cat.pairLo, cat.pairHi);
+    CHECK(cat.sessions >= 1 && cat.maxMembers == 2);
+    CHECK(cat.pairLo >= 6.0 && cat.pairHi <= 12.5);
+    CHECK(cat.standing == cat.settledSamples);
+}
+
+// PLACES CLOSE WHEN NOBODY IS ON SHIFT (the city's next ten #4; the OPEN signs made true): a shop, cafe, restaurant,
+// bar or club with staff is open to customers only in the hours somebody hired there is at work by their own
+// schedule -- so a customer is never sent to a dark shop, and the venues' hours agree with the staff's.
+TEST_CASE(a_shop_is_open_to_customers_only_while_someone_works_there) {
+    NavGraph nav = citytest::cityNav(800.0, 80.0, 5);
+    CitySim sim;
+    sim.build(nav, 40, 300, 23);
+    PlaceMap places;
+    for (int i = 0; i < 10; ++i) places.add(PlaceType::Home, Vec2(-350 + i * 70.0, -330), nav);
+    for (int i = 0; i < 4; ++i) places.add(PlaceType::Shop, Vec2(-300 + i * 160.0, 330), nav, 8, 22);
+    places.add(PlaceType::Cafe, Vec2(120, -40), nav, 6, 23);
+    places.add(PlaceType::Bar, Vec2(-120, 40), nav, 16, 2);
+    sim.assignPlaces(places, nav);
+    const CitySim::VenueStaffing at10 = sim.venueStaffing(10.0);
+    std::printf("    [staffed] %d places gated, %d staffed at 10:00, %d at 03:00\n", at10.gated, at10.staffedNow, sim.venueStaffing(3.0).staffedNow);
+    CHECK(at10.gated > 0);
+    int disagree = 0, closedInHours = 0;
+    for (const CitySim::Venue& v : sim.venues()) {
+        if (v.staffed == 0xFFFFFFu) continue;
+        for (int h = 0; h < 24; ++h) {
+            bool someone = false;
+            for (const Agent& a : sim.agents())
+                if (a.workPlace == v.place && sim.scheduleSnapshot(a, h + 0.5).where == CitySim::Snapshot::Where::AtWork) someone = true;
+            const bool posted = v.openHour == v.closeHour || (v.openHour < v.closeHour ? h + 0.5 >= v.openHour && h + 0.5 < v.closeHour
+                                                                                     : h + 0.5 >= v.openHour || h + 0.5 < v.closeHour);
+            if (v.openAt(h + 0.5) != (posted && someone)) ++disagree;
+            if (posted && !someone) ++closedInHours;
+        }
+    }
+    int openHours = 0;
+    for (const CitySim::Venue& v : sim.venues())
+        if (v.staffed != 0xFFFFFFu) for (int h = 0; h < 24; ++h) openHours += v.openAt(h + 0.5);
+    std::printf("    [staffed] %d place-hours inside the posted hours with nobody on shift: closed; %d open\n", closedInHours, openHours);
+    CHECK(disagree == 0);
+    CHECK(closedInHours > 0);   // the gate does something
+    CHECK(openHours > 0);       // ...and a staffed place does open
+}
+
+// THE BUSY STREETS: homes and jobs are drawn by floor area -- a block of flats houses a block of flats' people, a
+// tower holds a tower's staff -- not one share per building.
+TEST_CASE(people_live_and_work_where_the_floor_space_is) {
+    NavGraph nav = citytest::cityNav(800.0, 80.0, 5);
+    CitySim sim;
+    sim.build(nav, 200, 600, 31);
+    PlaceMap places;
+    std::vector<PlaceId> houses;
+    for (int i = 0; i < 10; ++i) {
+        const PlaceId h = places.add(PlaceType::Home, Vec2(-350 + i * 70.0, -330), nav);
+        places.setFloorArea(h, 180);   // a two-storey house
+        houses.push_back(h);
+    }
+    const PlaceId flats = places.add(PlaceType::Home, Vec2(-200, -170), nav);
+    places.setFloorArea(flats, 18000);   // twelve storeys of 1500 m2
+    std::vector<PlaceId> shops;
+    for (int i = 0; i < 6; ++i) {
+        const PlaceId s = places.add(PlaceType::Shop, Vec2(-300 + i * 120.0, 330), nav, 8, 22);
+        places.setFloorArea(s, 120);
+        shops.push_back(s);
+    }
+    const PlaceId tower = places.add(PlaceType::Office, Vec2(150, 170), nav);
+    places.setFloorArea(tower, 30000);
+    sim.assignPlaces(places, nav);
+    int inFlats = 0, inHouses = 0, atTower = 0, atShops = 0;
+    for (const Agent& a : sim.agents()) {
+        if (a.homePlace == flats) ++inFlats;
+        for (PlaceId h : houses) inHouses += a.homePlace == h;
+        if (a.workPlace == tower) ++atTower;
+        for (PlaceId s : shops) atShops += a.workPlace == s;
+    }
+    std::printf("    [floors] flats %d residents, 10 houses %d; tower %d staff, 6 shops %d\n", inFlats, inHouses, atTower, atShops);
+    CHECK(inFlats > 5 * inHouses);   // 18000 m2 against 1800: ten to one
+    CHECK(inHouses > 0);             // ...and the houses are still lived in
+    CHECK(atTower > 2 * atShops);    // the walkers' band and the drivers' draws both lean to the tower
 }

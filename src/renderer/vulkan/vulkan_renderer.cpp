@@ -187,6 +187,20 @@ struct GlobalsUBO {
     // w enabled; then x encodeLo, y (encodeHi - encodeLo). mesh.frag only.
     float    terrainHorizon[4];
     float    terrainHorizon2[4];
+    // The viewer's enclosure (SceneLighting::viewerBox*): A xyz centre, w half along u (0 = none); B xy the axis u
+    // (x, z), z half across it, w half up. glassMode: x 1 = glass as a filter, 0 = the old glass (RT_GLASS=old),
+    // 2 = no glass (RT_GLASS=none, the reference for an A/B); y the ceiling over the viewer (0: none).
+    float    viewerBoxA[4];
+    float    viewerBoxB[4];
+    float    glassMode[4];
+    // Terrain normal map (set 0 binding 5, ADR-0205): xy world origin, z 1/extent, w enabled; and x the camera distance
+    // it starts blending in at, y 1/(the blend's length), z 1: no surface relief (RT_TERRAIN_DETAIL=0, ADR-0207)
+    float    terrainNormal[4];
+    float    terrainNormal2[4];
+    // Terrain cover + macro maps (set 0 bindings 6, 7; ADR-0208): xy world origin, z 1/extent, w enabled; and x the
+    // camera distance the cover map blends in from, y 1/(the blend's length)
+    float    terrainSurface[4];
+    float    terrainSurface2[4];
 };
 
 // Volumetric-cloud uniforms (mirrors shader_types.h CloudUniforms; every
@@ -334,7 +348,28 @@ struct DrawItem {
     // frame's instance buffer, read by the vertex shader at instance rate. drawMesh is a
     // one-instance draw; drawMeshInstanced is one draw for the whole visible set.
     uint32_t firstInstance = 0, instanceCount = 1;
+    // WHERE IT IS: a world bounding sphere round every instance (radius < 0: unknown, always drawn). The shadow
+    // cascades cull against it -- each cascade used to draw the whole frame's queue (the island: 9.7 ms of GPU,
+    // three times the recording)
+    float worldCenter[3] = {0, 0, 0};
+    float worldRadius = -1.0f;
+    // a GPU crowd kind: its instances are crowd.comp's (crowdInst) and its count an indirect command (crowdCmds)
+    bool crowd = false;
+    uint32_t crowdCmd = 0;
 };
+
+// The sphere round a mesh's bounds under a transform (its largest axis scale), into an item's world bounds.
+static void sphereOf(const BoundingSphere& b, const Mat4& t, Vec3& c, Real& r) {
+    // AFFINE (no divide): the bottom row can carry per-instance data -- a grass rank, a signal's state
+    const Vec3& p = b.center;
+    c = Vec3(t.m[0][0] * p.x + t.m[0][1] * p.y + t.m[0][2] * p.z + t.m[0][3],
+             t.m[1][0] * p.x + t.m[1][1] * p.y + t.m[1][2] * p.z + t.m[1][3],
+             t.m[2][0] * p.x + t.m[2][1] * p.y + t.m[2][2] * p.z + t.m[2][3]);
+    Real sc = 0;
+    for (int col = 0; col < 3; ++col)
+        sc = std::max(sc, std::sqrt(t.m[0][col] * t.m[0][col] + t.m[1][col] * t.m[1][col] + t.m[2][col] * t.m[2][col]));
+    r = b.radius * sc;
+}
 
 bool hasValidationLayer() {
     uint32_t count = 0;
@@ -403,6 +438,7 @@ struct VulkanRenderer::Impl {
 
     VkPhysicalDevice physicalDevice = VK_NULL_HANDLE;
     VkPhysicalDeviceMemoryProperties memProps{};
+    bool depthClamp = false;   // the device clamps depth (shadow pancaking: createShadowPipeline)
     uint32_t graphicsFamily = 0;
     uint32_t presentFamily = 0;
     VkDevice device = VK_NULL_HANDLE;
@@ -640,6 +676,12 @@ struct VulkanRenderer::Impl {
     // enabled flag gates the lookup, so the default's content never matters.
     VkImageView horizonView = VK_NULL_HANDLE;
     void updateGlobalHorizonDescriptor();
+    // Terrain normal map (set 0 binding 5, ADR-0205; the mipped material sampler, repeat -- the shader keeps to the
+    // map's square). Default texture when none is bound, gated by the UBO's flag.
+    VkImageView terrainNormalView = VK_NULL_HANDLE;
+    void updateGlobalTerrainNormalDescriptor();
+    // ...and the cover and macro maps (bindings 6, 7; ADR-0208), the same way
+    VkImageView terrainCoverView = VK_NULL_HANDLE, terrainMacroView = VK_NULL_HANDLE;
 
     // Split-sum BRDF integration LUT (set 0 binding 3), baked once at init.
     VkImage brdfLutImage = VK_NULL_HANDLE;
@@ -657,6 +699,17 @@ struct VulkanRenderer::Impl {
 
     std::array<VkSemaphore, MAX_FRAMES_IN_FLIGHT> imageAvailable{};
     std::array<VkFence, MAX_FRAMES_IN_FLIGHT> inFlightFences{};
+    // GPU PASS TIMES (RT_GPU_TIMES=1; Glenn: "get a breakdown"): a timestamp after each stage of the frame, one
+    // query pool per frame slot, read when that slot's fence has passed (no stall). Logged every 120 frames.
+    static constexpr int kGpuMarks = 9;   // start, shadows, scene, clouds, bloom, ssao, ssr, occlusion+dof, composite+ui
+    std::array<VkQueryPool, MAX_FRAMES_IN_FLIGHT> gpuTimePool{};
+    std::array<bool, MAX_FRAMES_IN_FLIGHT> gpuTimeWritten{};
+    double gpuTickNs = 0, gpuAccumMs[kGpuMarks] = {};
+    int gpuFrames = 0;
+    double cpuWaitMs = 0, cpuRecordMs = 0, cpuQueueMs = 0;   // endFrame's CPU: fence wait, recording, submit + present
+    void gpuMark(VkCommandBuffer cmd, int k) {
+        if (gpuTimePool[currentFrame]) vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, gpuTimePool[currentFrame], static_cast<uint32_t>(k));
+    }
     std::vector<VkSemaphore> renderFinished;     // one per swapchain image
     std::vector<VkFence> imagesInFlight;
     uint32_t currentFrame = 0;
@@ -842,6 +895,63 @@ struct VulkanRenderer::Impl {
     uint32_t pushInstance(const Mat4& m);         // appends one model matrix, returns its row
     bool uploadInstances();                       // this frame's rows -> instanceBuffers[currentFrame]
     void destroyInstanceBuffers();
+
+    // ---- THE GPU CROWD (crowd.comp) ----
+    struct CrowdBuf {
+        VkBuffer buf = VK_NULL_HANDLE;
+        VmaAllocation alloc = nullptr;
+        void* mapped = nullptr;
+        VkDeviceSize cap = 0;
+    };
+    CrowdBuf crowdLinks, crowdRoutes, crowdAgents, crowdKindBuf, crowdCmds, crowdInst;
+    std::array<CrowdBuf, MAX_FRAMES_IN_FLIGHT> crowdReadback;   // this slot's indirect commands, copied back
+    std::array<uint32_t, MAX_FRAMES_IN_FLIGHT> crowdReadKinds{};
+    uint32_t crowdDrawnLast = 0;                                 // instances the compute emitted (a frame or two ago)
+    std::vector<Renderer::CrowdKind> crowdKinds;
+    std::vector<uint32_t> crowdKindCount, crowdKindBase;
+    uint32_t crowdAgentCount = 0, crowdLive = 0;
+    float crowdNow = 0;
+    VkDescriptorSetLayout crowdSetLayout = VK_NULL_HANDLE;
+    VkDescriptorPool crowdPool = VK_NULL_HANDLE;
+    VkDescriptorSet crowdSet = VK_NULL_HANDLE;
+    VkPipelineLayout crowdPipeLayout = VK_NULL_HANDLE;
+    VkPipeline crowdPipe = VK_NULL_HANDLE;
+    bool crowdFailed = false, crowdSetDirty = true;
+    // grow (doubling) a crowd buffer; host: mapped for the CPU to write. True if it was (re)made -- its contents gone,
+    // the descriptor set to rewrite. A buffer an in-flight frame may read is retired after a device idle (rare: growth).
+    bool crowdGrow(CrowdBuf& b, VkDeviceSize need, VkBufferUsageFlags usage, bool host) {
+        if (b.buf && b.cap >= need) return false;
+        if (b.buf) { vkDeviceWaitIdle(device); vmaDestroyBuffer(allocator, b.buf, b.alloc); b = CrowdBuf{}; }
+        VkDeviceSize cap = 64 * 1024;
+        while (cap < need) cap *= 2;
+        VkBufferCreateInfo info{};
+        info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+        info.size = cap;
+        info.usage = usage;
+        info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+        VmaAllocationCreateInfo ai{};
+        ai.usage = VMA_MEMORY_USAGE_AUTO;
+        if (host) ai.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT;
+        VmaAllocationInfo got{};
+        if (vmaCreateBuffer(allocator, &info, &ai, &b.buf, &b.alloc, &got) != VK_SUCCESS) {
+            LOG_ERROR("[vulkan] crowd buffer (%.1f MB) allocation failed", cap / 1048576.0);
+            b = CrowdBuf{};
+            crowdFailed = true;
+            return true;
+        }
+        b.mapped = host ? got.pMappedData : nullptr;
+        b.cap = cap;
+        crowdSetDirty = true;
+        return true;
+    }
+    void crowdWrite(CrowdBuf& b, VkDeviceSize off, const void* src, VkDeviceSize bytes) {
+        if (!b.mapped || bytes == 0) return;
+        std::memcpy(static_cast<char*>(b.mapped) + off, src, bytes);
+        vmaFlushAllocation(allocator, b.alloc, off, bytes);
+    }
+    bool ensureCrowdPipeline();
+    void recordCrowd(VkCommandBuffer cmd);
+    void destroyCrowd();
     VkDeviceSize meshBytes = 0, meshDataBytes = 0, texBytes = 0;
 
     // ---- memory + uploads (ADR-0094) --------------------------------------------
@@ -897,7 +1007,8 @@ struct VulkanRenderer::Impl {
     std::vector<RetiredTexture> retiredTextures;
     void collectRetired(bool all);
 
-    bool createImageRGBA8(const uint8_t* rgba, uint32_t w, uint32_t h, GpuTexture& out);
+    bool createImageRGBA8(const uint8_t* rgba, uint32_t w, uint32_t h, GpuTexture& out,
+                          VkFormat format = VK_FORMAT_R8G8B8A8_UNORM, uint32_t bytesPerPixel = 4);
     void transitionImageLayout(VkCommandBuffer cmd, VkImage image,
                                VkImageLayout from, VkImageLayout to);
     void destroyTexture(GpuTexture& t);
@@ -1097,6 +1208,15 @@ bool VulkanRenderer::Impl::createLogicalDevice() {
     // VK_POLYGON_MODE_LINE for the wireframe debug view (Renderer::wireframe).
     // Core-but-optional; effectively universal on desktop GPUs.
     features.fillModeNonSolid = VK_TRUE;
+    // DEPTH CLAMP for the shadow pass (shadow pancaking): a cascade's light eye stands only its radius + 50 m up the
+    // sun, so a tower's upper floors lay BEHIND the near cascades' near plane, were clipped, and their shadow on the
+    // street faded out as you walked toward it (Glenn: "As I get close to them the shadows fade away"). Clamped,
+    // they rasterise at depth 0 -- still in front of every receiver. Core-but-optional; universal on desktop GPUs.
+    {
+        VkPhysicalDeviceFeatures have{};
+        vkGetPhysicalDeviceFeatures(physicalDevice, &have);
+        if (have.depthClamp) { features.depthClamp = VK_TRUE; depthClamp = true; }
+    }
     VkDeviceCreateInfo info{};
     info.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
     info.queueCreateInfoCount = static_cast<uint32_t>(queueInfos.size());
@@ -3440,11 +3560,23 @@ bool VulkanRenderer::Impl::createSyncObjects() {
             LOG_ERROR("[vulkan] failed to create render-finished semaphore");
             return false;
         }
+    if (std::getenv("RT_GPU_TIMES") && !gpuTimePool[0]) {
+        VkPhysicalDeviceProperties props;
+        vkGetPhysicalDeviceProperties(physicalDevice, &props);
+        gpuTickNs = props.limits.timestampPeriod;
+        VkQueryPoolCreateInfo q{};
+        q.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO;
+        q.queryType = VK_QUERY_TYPE_TIMESTAMP;
+        q.queryCount = kGpuMarks;
+        for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
+            if (gpuTickNs <= 0 || vkCreateQueryPool(device, &q, nullptr, &gpuTimePool[i]) != VK_SUCCESS) gpuTimePool[i] = VK_NULL_HANDLE;
+        LOG_INFO("[vulkan] GPU pass timing on (tick %.2f ns)", gpuTickNs);
+    }
     return true;
 }
 
 bool VulkanRenderer::Impl::createDescriptorSetLayout() {
-    std::array<VkDescriptorSetLayoutBinding, 5> bindings{};
+    std::array<VkDescriptorSetLayoutBinding, 8> bindings{};
     bindings[0].binding = 0;   // global UBO
     bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     bindings[0].descriptorCount = 1;
@@ -3465,6 +3597,12 @@ bool VulkanRenderer::Impl::createDescriptorSetLayout() {
     bindings[4].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     bindings[4].descriptorCount = 1;
     bindings[4].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    for (uint32_t b = 5; b < 8; ++b) {   // terrain normal map (ADR-0205); cover and macro maps (ADR-0208)
+        bindings[b].binding = b;
+        bindings[b].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        bindings[b].descriptorCount = 1;
+        bindings[b].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    }
     VkDescriptorSetLayoutCreateInfo info{};
     info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
     info.bindingCount = static_cast<uint32_t>(bindings.size());
@@ -3491,8 +3629,8 @@ bool VulkanRenderer::Impl::createDescriptorPool() {
     std::array<VkDescriptorPoolSize, 2> sizes{};
     sizes[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     sizes[0].descriptorCount = MAX_FRAMES_IN_FLIGHT;
-    sizes[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;   // shadow map + env + BRDF LUT + horizon
-    sizes[1].descriptorCount = MAX_FRAMES_IN_FLIGHT * 4;
+    sizes[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;   // shadow map + env + BRDF LUT + horizon + 3 terrain maps
+    sizes[1].descriptorCount = MAX_FRAMES_IN_FLIGHT * 7;
     VkDescriptorPoolCreateInfo info{};
     info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
     info.poolSizeCount = static_cast<uint32_t>(sizes.size());
@@ -3595,6 +3733,27 @@ void VulkanRenderer::Impl::updateGlobalEnvDescriptor() {
         write.pImageInfo = &img;
         vkUpdateDescriptorSets(device, 1, &write, 0, nullptr);
     }
+}
+
+void VulkanRenderer::Impl::updateGlobalTerrainNormalDescriptor() {
+    // bindings 5, 6, 7: the terrain's normal, cover and macro maps (the default texture where none is bound)
+    if (!defaultTexture.view || !textureSampler) return;
+    const VkImageView views[3] = {terrainNormalView, terrainCoverView, terrainMacroView};
+    for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
+        for (uint32_t k = 0; k < 3; ++k) {
+            VkDescriptorImageInfo img{};
+            img.sampler = textureSampler;   // linear, mipped: a far slope reads its mips, not one aliased texel
+            img.imageView = views[k] ? views[k] : defaultTexture.view;
+            img.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            VkWriteDescriptorSet write{};
+            write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            write.dstSet = descriptorSets[i];
+            write.dstBinding = 5 + k;
+            write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            write.descriptorCount = 1;
+            write.pImageInfo = &img;
+            vkUpdateDescriptorSets(device, 1, &write, 0, nullptr);
+        }
 }
 
 void VulkanRenderer::Impl::updateGlobalHorizonDescriptor() {
@@ -3999,7 +4158,9 @@ bool VulkanRenderer::Impl::createPipeline() {
     raster.polygonMode = VK_POLYGON_MODE_FILL;
     depthStencil.depthWriteEnable = VK_FALSE;
     blendAttachments[0].blendEnable = VK_TRUE;
-    blendAttachments[0].srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+    // PREMULTIPLIED (mesh.frag writes colour * alpha): glass ADDS its reflection over what it lets through, which
+    // a straight alpha blend cannot say without a pane colour of its own greying the view
+    blendAttachments[0].srcColorBlendFactor = VK_BLEND_FACTOR_ONE;
     blendAttachments[0].dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
     blendAttachments[0].colorBlendOp = VK_BLEND_OP_ADD;
     blendAttachments[0].srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
@@ -4494,8 +4655,9 @@ void VulkanRenderer::Impl::transitionImageLayout(VkCommandBuffer cmd, VkImage im
 }
 
 bool VulkanRenderer::Impl::createImageRGBA8(const uint8_t* rgba, uint32_t w, uint32_t h,
-                                            GpuTexture& out) {
-    VkDeviceSize size = static_cast<VkDeviceSize>(w) * h * 4;
+                                            GpuTexture& out, VkFormat format, uint32_t bytesPerPixel) {
+    // (`format` another 8-bit UNORM layout of `bytesPerPixel` -- R8G8 for a two-channel map; every one blits)
+    VkDeviceSize size = static_cast<VkDeviceSize>(w) * h * bytesPerPixel;
     // Into the upload queue: staged now, copied and mip-blitted with the batch.
     VkBuffer staging = VK_NULL_HANDLE;
     VkDeviceSize stagingOffset = 0;
@@ -4512,7 +4674,7 @@ bool VulkanRenderer::Impl::createImageRGBA8(const uint8_t* rgba, uint32_t w, uin
     image.extent = {w, h, 1};
     image.mipLevels = mipLevels;
     image.arrayLayers = 1;
-    image.format = VK_FORMAT_R8G8B8A8_UNORM;   // matches Metal's RGBA8Unorm (no sRGB decode)
+    image.format = format;   // RGBA8: matches Metal's RGBA8Unorm (no sRGB decode)
     image.tiling = VK_IMAGE_TILING_OPTIMAL;
     image.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
     // TRANSFER_SRC too: each mip is the blit source for the next.
@@ -4610,7 +4772,7 @@ bool VulkanRenderer::Impl::createImageRGBA8(const uint8_t* rgba, uint32_t w, uin
     view.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
     view.image = out.image;
     view.viewType = VK_IMAGE_VIEW_TYPE_2D;
-    view.format = VK_FORMAT_R8G8B8A8_UNORM;
+    view.format = format;
     view.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
     view.subresourceRange.levelCount = mipLevels;
     view.subresourceRange.layerCount = 1;
@@ -4678,6 +4840,7 @@ bool VulkanRenderer::Impl::createMaterialResources() {
         LOG_ERROR("[vulkan] default texture creation failed");
         return false;
     }
+    updateGlobalTerrainNormalDescriptor();   // (binding 5 needs a view before the first frame: the default's)
     return true;
 }
 
@@ -4844,6 +5007,7 @@ bool VulkanRenderer::Impl::createShadowPipeline() {
     raster.cullMode = VK_CULL_MODE_NONE;
     raster.frontFace = VK_FRONT_FACE_CLOCKWISE;
     raster.depthBiasEnable = VK_TRUE;   // set dynamically per shadow pass
+    raster.depthClampEnable = depthClamp ? VK_TRUE : VK_FALSE;   // casters past the light's near plane still cast
     raster.lineWidth = 1.0f;
 
     VkPipelineMultisampleStateCreateInfo ms{};
@@ -4983,6 +5147,7 @@ VkDescriptorSet VulkanRenderer::Impl::allocMaterialSet(const DrawItem& item) {
 }
 
 void VulkanRenderer::Impl::recordShadowPass(VkCommandBuffer cmd) {
+    static const bool shadowCullOff = std::getenv("RT_NO_SHADOW_CULL") != nullptr;   // A/B
     // Render every cascade layer so all are in READ_ONLY layout for sampling;
     // inactive cascades are cleared only (no draws). cascadeCount==0 => sun casts
     // no shadow, but the clears still leave the array valid to sample (lit).
@@ -5005,11 +5170,39 @@ void VulkanRenderer::Impl::recordShadowPass(VkCommandBuffer cmd) {
             vkCmdSetScissor(cmd, 0, 1, &scissor);
             vkCmdSetDepthBias(cmd, shadowDepthBiasConst, 0.0f, shadowDepthBiasSlope);
             VkPipeline bound = VK_NULL_HANDLE;
+            // THIS CASCADE'S SIDES: the four planes of its light view-projection across the light (left, right,
+            // bottom, top). Not near/far: a caster up toward the sun, or beyond, still throws its shadow in.
+            float planes[4][4];
+            {
+                const float* M = cpuGlobals.cascadeVP[c];   // column-major: row r = M[r], M[4+r], M[8+r], M[12+r]
+                auto row = [&](int r, int k) { return M[k * 4 + r]; };
+                for (int pi = 0; pi < 4; ++pi) {
+                    const int r = pi / 2;
+                    const float sgn = (pi % 2 == 0) ? 1.0f : -1.0f;
+                    float len = 0;
+                    for (int k = 0; k < 4; ++k) {
+                        planes[pi][k] = row(3, k) + sgn * row(r, k);
+                        if (k < 3) len += planes[pi][k] * planes[pi][k];
+                    }
+                    len = std::sqrt(std::max(len, 1e-20f));
+                    for (int k = 0; k < 4; ++k) planes[pi][k] /= len;
+                }
+            }
             for (const DrawItem& item : drawQueue) {
                 GpuMesh* m = meshes.get(item.mesh);
                 if (!m || m->indexCount == 0) continue;
-                // Debug-gizmo overlays (FLAG_OVERLAY) and ground cover (FLAG_GRASS) cast no shadows.
-                if (item.push.surfaceFlags[1] & (RenderMaterial::FLAG_OVERLAY | RenderMaterial::FLAG_GRASS)) continue;
+                if (item.crowd) continue;   // far travellers: beyond the cascades' reach
+                if (item.worldRadius >= 0 && !shadowCullOff) {
+                    bool out = false;
+                    for (int pi = 0; pi < 4 && !out; ++pi)
+                        out = planes[pi][0] * item.worldCenter[0] + planes[pi][1] * item.worldCenter[1] +
+                                  planes[pi][2] * item.worldCenter[2] + planes[pi][3] < -item.worldRadius;
+                    if (out) continue;
+                }
+                // Debug-gizmo overlays (FLAG_OVERLAY), ground cover (FLAG_GRASS) and the camera-turned impostor cards
+                // (FLAG_IMPOSTOR_VIEWS: their shadow-only crossed cards cast theirs) cast no shadows.
+                if (item.push.surfaceFlags[1] & (RenderMaterial::FLAG_OVERLAY | RenderMaterial::FLAG_GRASS |
+                                                 RenderMaterial::FLAG_IMPOSTOR_VIEWS)) continue;
                 // alpha-cut surfaces (leaf cards) cut their shadow too, when their albedo map is bound
                 const bool cut = (item.push.surfaceFlags[1] & RenderMaterial::FLAG_ALPHA_TEST) && item.textures[0].valid() &&
                                  shadowAlphaPipeline && shadowAlphaPipelinePacked;
@@ -5282,9 +5475,16 @@ void VulkanRenderer::Impl::recordCommandBuffer(VkCommandBuffer cmd, uint32_t ima
     VkCommandBufferBeginInfo begin{};
     begin.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
     vkBeginCommandBuffer(cmd, &begin);
+    if (gpuTimePool[currentFrame]) {
+        vkCmdResetQueryPool(cmd, gpuTimePool[currentFrame], 0, kGpuMarks);
+        gpuTimeWritten[currentFrame] = true;
+    }
+    gpuMark(cmd, 0);
+    recordCrowd(cmd);   // the far travellers' instances, before any pass draws them
 
     // Cascaded shadow maps first (writes the depth array the lit pass samples).
     recordShadowPass(cmd);
+    gpuMark(cmd, 1);
 
     // Scene pass → offscreen HDR + world-normal G-buffer (sky + geometry).
     std::array<VkClearValue, 3> clears{};
@@ -5393,11 +5593,14 @@ void VulkanRenderer::Impl::recordCommandBuffer(VkCommandBuffer cmd, uint32_t ima
                                0, sizeof(MeshPush), &push);
             // binding 0 the mesh, binding 1 the frame's model matrices (terrain's pipeline has
             // no binding 1; binding it anyway is harmless)
-            const VkBuffer vbs[2] = {m->vertexBuffer, instanceBuffers[currentFrame]};
+            const VkBuffer vbs[2] = {m->vertexBuffer, item.crowd ? crowdInst.buf : instanceBuffers[currentFrame]};
             const VkDeviceSize offs[2] = {0, 0};
             vkCmdBindVertexBuffers(cmd, 0, 2, vbs, offs);
             vkCmdBindIndexBuffer(cmd, m->indexBuffer, 0, VK_INDEX_TYPE_UINT32);
-            vkCmdDrawIndexed(cmd, m->indexCount, item.instanceCount, 0, 0, item.firstInstance);
+            if (item.crowd)   // its count is crowd.comp's (VkDrawIndexedIndirectCommand: 20 bytes each)
+                vkCmdDrawIndexedIndirect(cmd, crowdCmds.buf, VkDeviceSize(item.crowdCmd) * 20u, 1, 20);
+            else
+                vkCmdDrawIndexed(cmd, m->indexCount, item.instanceCount, 0, 0, item.firstInstance);
             if (countStats) {
                 stats.drawCalls++;
                 stats.trianglesDrawn += static_cast<uint64_t>(m->indexCount / 3) * item.instanceCount;
@@ -5430,6 +5633,7 @@ void VulkanRenderer::Impl::recordCommandBuffer(VkCommandBuffer cmd, uint32_t ima
     }
 
     vkCmdEndRenderPass(cmd);
+    gpuMark(cmd, 2);
 
     // Volumetric clouds (port of the Metal cinematic-sky wiring): half-res
     // march, then the bilateral composite onto the HDR scene — BEFORE the post
@@ -5477,12 +5681,17 @@ void VulkanRenderer::Impl::recordCommandBuffer(VkCommandBuffer cmd, uint32_t ima
 
     // Bloom + SSAO read the scene outputs (always run so their views stay
     // sampleable; composite gates whether they're applied).
+    gpuMark(cmd, 3);
     recordBloom(cmd);
+    gpuMark(cmd, 4);
     recordSsao(cmd);
+    gpuMark(cmd, 5);
     recordSsr(cmd);
+    gpuMark(cmd, 6);
     recordOcclusion(cmd);
     // DOF (off by default) blurs the HDR scene; composite reads dofView when on.
     if (dofEnabledFrame) recordDof(cmd);
+    gpuMark(cmd, 7);
 
     // Composite pass → swapchain: tonemap (ACES/AgX) + grade + exposure of the
     // HDR scene target, plus bloom. (Phase 5b continues with SSAO/SSR/lens/DOF.)
@@ -5541,6 +5750,7 @@ void VulkanRenderer::Impl::recordCommandBuffer(VkCommandBuffer cmd, uint32_t ima
     }
 #endif
     vkCmdEndRenderPass(cmd);
+    gpuMark(cmd, 8);
 
     // Frame capture (armed this frame): copy the composited swapchain image
     // into the host-visible capture buffer — the same post-composite,
@@ -5588,7 +5798,37 @@ void VulkanRenderer::Impl::recordCommandBuffer(VkCommandBuffer cmd, uint32_t ima
 void VulkanRenderer::Impl::drawFrame() {
     if (!initialized || width == 0 || height == 0) return;
 
+    using GpuClock = std::chrono::steady_clock;
+    const auto cw0 = GpuClock::now();
     vkWaitForFences(device, 1, &inFlightFences[currentFrame], VK_TRUE, UINT64_MAX);
+    if (crowdReadback[currentFrame].mapped && crowdReadKinds[currentFrame] > 0) {   // the crowd's emitted counts
+        vmaInvalidateAllocation(allocator, crowdReadback[currentFrame].alloc, 0, VK_WHOLE_SIZE);
+        const uint32_t* c = static_cast<const uint32_t*>(crowdReadback[currentFrame].mapped);
+        uint32_t sum = 0;
+        for (uint32_t k = 0; k < crowdReadKinds[currentFrame]; ++k) sum += c[k * 5 + 1];
+        crowdDrawnLast = sum;
+    }
+    if (gpuTimePool[currentFrame]) cpuWaitMs += std::chrono::duration<double, std::milli>(GpuClock::now() - cw0).count();
+    // This slot's GPU pass times are in (its fence passed): read, accumulate, report every 120 frames
+    if (gpuTimePool[currentFrame] && gpuTimeWritten[currentFrame]) {
+        uint64_t ts[kGpuMarks] = {};
+        if (vkGetQueryPoolResults(device, gpuTimePool[currentFrame], 0, kGpuMarks, sizeof ts, ts, sizeof(uint64_t),
+                                  VK_QUERY_RESULT_64_BIT) == VK_SUCCESS) {
+            for (int k = 1; k < kGpuMarks; ++k) gpuAccumMs[k] += (ts[k] - ts[k - 1]) * gpuTickNs * 1e-6;
+            gpuAccumMs[0] += (ts[kGpuMarks - 1] - ts[0]) * gpuTickNs * 1e-6;
+            if (++gpuFrames == 120) {
+                const double n = gpuFrames;
+                LOG_INFO("[gpu] ms per frame: shadows %.2f scene %.2f clouds %.2f bloom %.2f ssao %.2f ssr %.2f occlusion+dof %.2f "
+                         "composite+ui %.2f | total %.2f || cpu in endFrame: fence wait %.2f record %.2f submit+present %.2f",
+                         gpuAccumMs[1] / n, gpuAccumMs[2] / n, gpuAccumMs[3] / n, gpuAccumMs[4] / n, gpuAccumMs[5] / n,
+                         gpuAccumMs[6] / n, gpuAccumMs[7] / n, gpuAccumMs[8] / n, gpuAccumMs[0] / n, cpuWaitMs / n,
+                         cpuRecordMs / n, cpuQueueMs / n);
+                for (double& m : gpuAccumMs) m = 0;
+                cpuWaitMs = cpuRecordMs = cpuQueueMs = 0;
+                gpuFrames = 0;
+            }
+        }
+    }
     // This slot's occlusion depth is finished: it becomes the snapshot the next culling reads.
     if (occPending[currentFrame].valid && occMapped[currentFrame]) {
         OcclusionDepth& o = occPending[currentFrame];
@@ -5684,7 +5924,10 @@ void VulkanRenderer::Impl::drawFrame() {
 
     VkCommandBuffer cmd = commandBuffers[currentFrame];
     vkResetCommandBuffer(cmd, 0);
+    const auto cr0 = GpuClock::now();
     recordCommandBuffer(cmd, imageIndex);
+    const auto cr1 = GpuClock::now();
+    if (gpuTimePool[currentFrame]) cpuRecordMs += std::chrono::duration<double, std::milli>(cr1 - cr0).count();
 
     VkPipelineStageFlags waitStage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
     VkSubmitInfo submit{};
@@ -5711,6 +5954,7 @@ void VulkanRenderer::Impl::drawFrame() {
     present.pSwapchains = &swapchain;
     present.pImageIndices = &imageIndex;
     VkResult result = vkQueuePresentKHR(presentQueue, &present);
+    if (gpuTimePool[currentFrame]) cpuQueueMs += std::chrono::duration<double, std::milli>(GpuClock::now() - cr1).count();
     if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR || framebufferResized)
         recreateSwapchain();
     else if (result != VK_SUCCESS)
@@ -5909,6 +6153,8 @@ void VulkanRenderer::shutdown() {
     for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
         if (impl->imageAvailable[i]) vkDestroySemaphore(impl->device, impl->imageAvailable[i], nullptr);
         if (impl->inFlightFences[i]) vkDestroyFence(impl->device, impl->inFlightFences[i], nullptr);
+        if (impl->gpuTimePool[i]) vkDestroyQueryPool(impl->device, impl->gpuTimePool[i], nullptr);
+        impl->gpuTimePool[i] = VK_NULL_HANDLE;
         impl->imageAvailable[i] = VK_NULL_HANDLE;
         impl->inFlightFences[i] = VK_NULL_HANDLE;
     }
@@ -6079,6 +6325,7 @@ void VulkanRenderer::shutdown() {
     impl->renderPass = VK_NULL_HANDLE;
 
     impl->destroyInstanceBuffers();
+    impl->destroyCrowd();
     impl->destroyUploads();
     if (impl->allocator) { vmaDestroyAllocator(impl->allocator); impl->allocator = nullptr; }
     vkDestroyDevice(impl->device, nullptr);
@@ -6266,7 +6513,14 @@ BoundingSphere VulkanRenderer::getMeshBounds(MeshHandle handle) const {
 TextureHandle VulkanRenderer::uploadTexture(int width, int height, int channels,
                                             const uint8_t* data) {
     GpuTexture tex;
-    if (impl->device && data && width > 0 && height > 0) {
+    if (impl->device && data && width > 0 && height > 0 && channels == 2) {
+        // two channels stay two (a normal's x and z: the terrain normal map, ADR-0205): half the memory of RGBA
+        if (!impl->createImageRGBA8(data, static_cast<uint32_t>(width), static_cast<uint32_t>(height), tex,
+                                    VK_FORMAT_R8G8_UNORM, 2)) {
+            LOG_ERROR("[vulkan] uploadTexture (RG8) failed");
+            tex = GpuTexture{};
+        }
+    } else if (impl->device && data && width > 0 && height > 0) {
         // Expand to RGBA8 (the engine hands us 1..4 channels; the GPU image is
         // always 4-channel to match the Metal backend's upload path).
         std::vector<uint8_t> rgba(static_cast<size_t>(width) * height * 4, 255);
@@ -6386,6 +6640,42 @@ void VulkanRenderer::setTerrainHorizon(TextureHandle map, float originX, float o
     impl->updateGlobalHorizonDescriptor();
 }
 
+void VulkanRenderer::setTerrainNormalMap(TextureHandle map, float originX, float originZ, float extent,
+                                         float fadeStart, float fadeEnd) {
+    GpuTexture* t = impl->textures.get(map);
+    const bool on = t && t->view && extent > 0.0f;
+    if ((on ? t->view : VK_NULL_HANDLE) != impl->terrainNormalView) {
+        if (impl->device) vkDeviceWaitIdle(impl->device);   // descriptor in-use safety
+        impl->terrainNormalView = on ? t->view : VK_NULL_HANDLE;
+        impl->updateGlobalTerrainNormalDescriptor();
+    }
+    impl->cpuGlobals.terrainNormal[0] = originX;
+    impl->cpuGlobals.terrainNormal[1] = originZ;
+    impl->cpuGlobals.terrainNormal[2] = on ? 1.0f / extent : 0.0f;
+    impl->cpuGlobals.terrainNormal[3] = on ? 1.0f : 0.0f;
+    impl->cpuGlobals.terrainNormal2[0] = fadeStart;
+    impl->cpuGlobals.terrainNormal2[1] = 1.0f / std::max(1.0f, fadeEnd - fadeStart);
+}
+
+void VulkanRenderer::setTerrainSurfaceMaps(TextureHandle cover, TextureHandle macro, float originX, float originZ, float extent,
+                                           float fadeStart, float fadeEnd) {
+    GpuTexture* c = impl->textures.get(cover);
+    GpuTexture* m = impl->textures.get(macro);
+    const bool on = c && c->view && m && m->view && extent > 0.0f;
+    if ((on ? c->view : VK_NULL_HANDLE) != impl->terrainCoverView || (on ? m->view : VK_NULL_HANDLE) != impl->terrainMacroView) {
+        if (impl->device) vkDeviceWaitIdle(impl->device);   // descriptor in-use safety
+        impl->terrainCoverView = on ? c->view : VK_NULL_HANDLE;
+        impl->terrainMacroView = on ? m->view : VK_NULL_HANDLE;
+        impl->updateGlobalTerrainNormalDescriptor();
+    }
+    impl->cpuGlobals.terrainSurface[0] = originX;
+    impl->cpuGlobals.terrainSurface[1] = originZ;
+    impl->cpuGlobals.terrainSurface[2] = on ? 1.0f / extent : 0.0f;
+    impl->cpuGlobals.terrainSurface[3] = on ? 1.0f : 0.0f;
+    impl->cpuGlobals.terrainSurface2[0] = fadeStart;
+    impl->cpuGlobals.terrainSurface2[1] = 1.0f / std::max(1.0f, fadeEnd - fadeStart);
+}
+
 void VulkanRenderer::removeTexture(TextureHandle handle) {
     GpuTexture* t = impl->textures.get(handle);
     if (!t) return;
@@ -6489,7 +6779,41 @@ void VulkanRenderer::setLights(const SceneLighting& lighting) {
     impl->cpuGlobals.ambient[0] = static_cast<float>(lighting.ambientTint.x) * amb;
     impl->cpuGlobals.ambient[1] = static_cast<float>(lighting.ambientTint.y) * amb;
     impl->cpuGlobals.ambient[2] = static_cast<float>(lighting.ambientTint.z) * amb;
-    impl->cpuGlobals.ambient[3] = 1.0f;
+    // facade glass reflectance scale (mesh.frag): 3 by default, RT_GLASS_REFLECT=1 for the old glass
+    static const float glassReflect = [] { const char* e = std::getenv("RT_GLASS_REFLECT"); const float v = e ? static_cast<float>(std::atof(e)) : 3.0f; return v > 0.0f ? v : 3.0f; }();
+    impl->cpuGlobals.ambient[3] = glassReflect;
+    // the far trees' self-shadow (mesh.frag impostorSelfShadow): RT_IMPOSTOR_SELF_SHADOW=0 for the A/B (z = 1: off)
+    static const bool impSelfOff = [] { const char* e = std::getenv("RT_IMPOSTOR_SELF_SHADOW"); return e && std::string(e) == "0"; }();
+    impl->cpuGlobals.terrainHorizon2[2] = impSelfOff ? 1.0f : 0.0f;
+    // the grass shaded to its ground's slope (mesh.frag): RT_GRASS_GROUND=0 for the old bend to the sky (w = 1: off)
+    static const bool grassGroundOff = [] { const char* e = std::getenv("RT_GRASS_GROUND"); return e && std::string(e) == "0"; }();
+    impl->cpuGlobals.terrainHorizon2[3] = grassGroundOff ? 1.0f : 0.0f;
+    // the ground's surface relief (mesh.frag, ADR-0207): RT_TERRAIN_DETAIL=0 for the smooth ground (z = 1: off)
+    static const bool terrainDetailOff = [] { const char* e = std::getenv("RT_TERRAIN_DETAIL"); return e && std::string(e) == "0"; }();
+    impl->cpuGlobals.terrainNormal2[2] = terrainDetailOff ? 1.0f : 0.0f;
+    {
+        // RT_GLASS=old: the old glass; RT_GLASS=none: panes drawn as nothing (the reference a pane is measured against)
+        static const float glassMode = [] {
+            const char* e = std::getenv("RT_GLASS");
+            return !e ? 1.0f : std::string(e) == "old" ? 0.0f : std::string(e) == "none" ? 2.0f : 1.0f;
+        }();
+        float* A = impl->cpuGlobals.viewerBoxA;
+        float* B = impl->cpuGlobals.viewerBoxB;
+        const Vec3 u = lighting.viewerBoxAxisU;
+        const Real ul = std::sqrt(u.x * u.x + u.z * u.z);
+        const bool box = lighting.viewerBoxValid && ul > 1e-6;
+        A[0] = static_cast<float>(lighting.viewerBoxCentre.x);
+        A[1] = static_cast<float>(lighting.viewerBoxCentre.y);
+        A[2] = static_cast<float>(lighting.viewerBoxCentre.z);
+        A[3] = box ? static_cast<float>(lighting.viewerBoxHalf.x) : 0.0f;
+        B[0] = box ? static_cast<float>(u.x / ul) : 1.0f;
+        B[1] = box ? static_cast<float>(u.z / ul) : 0.0f;
+        B[2] = static_cast<float>(lighting.viewerBoxHalf.z);
+        B[3] = static_cast<float>(lighting.viewerBoxHalf.y);
+        impl->cpuGlobals.glassMode[0] = glassMode;
+        impl->cpuGlobals.glassMode[1] = lighting.viewerCeilingY;   // (0: none)
+        impl->cpuGlobals.glassMode[2] = impl->cpuGlobals.glassMode[3] = 0.0f;
+    }
 
     // Procedural sky (ADR-0016) → skybox + analytic IBL. HDR equirect mode is a
     // later refinement, so envMode is always procedural (0) for now.
@@ -6701,6 +7025,13 @@ void VulkanRenderer::drawMesh(MeshHandle handle, const Mat4& transform,
     item.opacity = material.opacity;
     item.firstInstance = impl->pushInstance(transform);
     item.instanceCount = 1;
+    if (const GpuMesh* gm = impl->meshes.get(handle); gm && gm->bounds.radius > 0) {
+        Vec3 c; Real r;
+        sphereOf(gm->bounds, transform, c, r);
+        item.worldCenter[0] = static_cast<float>(c.x); item.worldCenter[1] = static_cast<float>(c.y);
+        item.worldCenter[2] = static_cast<float>(c.z);
+        item.worldRadius = static_cast<float>(r);
+    }
     impl->drawQueue.push_back(item);
     impl->stats.entitiesSubmitted++;
 }
@@ -6715,6 +7046,7 @@ bool VulkanRenderer::setPresentSync(bool enabled) {
 
 void VulkanRenderer::drawMeshInstanced(MeshHandle handle, const std::vector<Mat4>& transforms,
                                        const RenderMaterial& material) {
+    // (bounds: the box round every instance's sphere, then the sphere round that box)
     if (transforms.empty()) return;
     // RT_NO_INSTANCING=1: one draw per instance, as before ADR-0097 (A/B frames and timings).
     static const bool noInstancing = [] { const char* e = std::getenv("RT_NO_INSTANCING"); return e && e[0] == '1'; }();
@@ -6725,6 +7057,21 @@ void VulkanRenderer::drawMeshInstanced(MeshHandle handle, const std::vector<Mat4
     DrawItem& item = impl->drawQueue.back();
     for (std::size_t i = 1; i < transforms.size(); ++i) impl->pushInstance(transforms[i]);
     item.instanceCount = static_cast<uint32_t>(transforms.size());
+    if (const GpuMesh* gm = impl->meshes.get(handle); gm && gm->bounds.radius > 0) {
+        Vec3 lo(1e30, 1e30, 1e30), hi(-1e30, -1e30, -1e30);
+        for (const Mat4& t : transforms) {
+            Vec3 c; Real r;
+            sphereOf(gm->bounds, t, c, r);
+            lo = Vec3(std::min(lo.x, c.x - r), std::min(lo.y, c.y - r), std::min(lo.z, c.z - r));
+            hi = Vec3(std::max(hi.x, c.x + r), std::max(hi.y, c.y + r), std::max(hi.z, c.z + r));
+        }
+        const Vec3 mid = (lo + hi) * 0.5;
+        item.worldCenter[0] = static_cast<float>(mid.x); item.worldCenter[1] = static_cast<float>(mid.y);
+        item.worldCenter[2] = static_cast<float>(mid.z);
+        item.worldRadius = static_cast<float>((hi - lo).length() * 0.5);
+    } else {
+        item.worldRadius = -1.0f;
+    }
     impl->stats.entitiesSubmitted += transforms.size() - 1;
 }
 
@@ -6757,7 +7104,7 @@ void VulkanRenderer::drawTerrain(MeshHandle handle, const RenderMaterial& materi
     for (uint32_t k = 0; k < item.textures.size(); ++k)
         if (item.textures[k].valid()) textureFlags |= (1u << k);
     item.push.surfaceFlags[0] = static_cast<uint32_t>(material.surface());
-    item.push.surfaceFlags[1] = material.flags;
+    item.push.surfaceFlags[1] = material.flags | RenderMaterial::FLAG_TERRAIN;
     item.push.surfaceFlags[2] = textureFlags;
     float one = 1.0f;
     std::memcpy(&item.push.surfaceFlags[3], &one, sizeof(float));   // opaque
@@ -6769,7 +7116,233 @@ void VulkanRenderer::drawTerrain(MeshHandle handle, const RenderMaterial& materi
     impl->stats.entitiesSubmitted++;
 }
 
+
+// ---- THE GPU CROWD ------------------------------------------------------------------------------------------------
+bool VulkanRenderer::Impl::ensureCrowdPipeline() {
+    if (crowdPipe) return true;
+    if (crowdFailed) return false;
+    crowdFailed = true;
+    VkDescriptorSetLayoutBinding b[6]{};
+    for (int k = 0; k < 6; ++k) {
+        b[k].binding = static_cast<uint32_t>(k);
+        b[k].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        b[k].descriptorCount = 1;
+        b[k].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    }
+    VkDescriptorSetLayoutCreateInfo li{};
+    li.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    li.bindingCount = 6;
+    li.pBindings = b;
+    if (vkCreateDescriptorSetLayout(device, &li, nullptr, &crowdSetLayout) != VK_SUCCESS) return false;
+    VkDescriptorPoolSize size{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 6};
+    VkDescriptorPoolCreateInfo pi{};
+    pi.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    pi.maxSets = 1;
+    pi.poolSizeCount = 1;
+    pi.pPoolSizes = &size;
+    if (vkCreateDescriptorPool(device, &pi, nullptr, &crowdPool) != VK_SUCCESS) return false;
+    VkDescriptorSetAllocateInfo a{};
+    a.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    a.descriptorPool = crowdPool;
+    a.descriptorSetCount = 1;
+    a.pSetLayouts = &crowdSetLayout;
+    if (vkAllocateDescriptorSets(device, &a, &crowdSet) != VK_SUCCESS) return false;
+    VkPushConstantRange range{VK_SHADER_STAGE_COMPUTE_BIT, 0, 128};
+    VkPipelineLayoutCreateInfo pl{};
+    pl.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    pl.setLayoutCount = 1;
+    pl.pSetLayouts = &crowdSetLayout;
+    pl.pushConstantRangeCount = 1;
+    pl.pPushConstantRanges = &range;
+    if (vkCreatePipelineLayout(device, &pl, nullptr, &crowdPipeLayout) != VK_SUCCESS) return false;
+    VkShaderModule mod = loadShaderModule(std::string(RT_VULKAN_SHADER_DIR) + "/crowd.comp.spv");
+    if (!mod) return false;
+    VkComputePipelineCreateInfo ci{};
+    ci.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+    ci.stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    ci.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+    ci.stage.module = mod;
+    ci.stage.pName = "main";
+    ci.layout = crowdPipeLayout;
+    const VkResult r = vkCreateComputePipelines(device, VK_NULL_HANDLE, 1, &ci, nullptr, &crowdPipe);
+    vkDestroyShaderModule(device, mod, nullptr);
+    if (r != VK_SUCCESS) { crowdPipe = VK_NULL_HANDLE; return false; }
+    crowdFailed = false;
+    crowdSetDirty = true;
+    LOG_INFO("[vulkan] GPU crowd pipeline ready");
+    return true;
+}
+
+void VulkanRenderer::Impl::recordCrowd(VkCommandBuffer cmd) {
+    static const bool off = std::getenv("RT_NO_GPU_CROWD") != nullptr;
+    if (off || crowdAgentCount == 0 || crowdKinds.empty() || crowdLive == 0) return;
+    if (!crowdLinks.buf || !crowdRoutes.buf || !crowdAgents.buf || !crowdKindBuf.buf || !crowdCmds.buf || !crowdInst.buf) return;
+    if (!ensureCrowdPipeline()) return;
+    if (crowdSetDirty) {
+        CrowdBuf* bufs[6] = {&crowdLinks, &crowdRoutes, &crowdAgents, &crowdKindBuf, &crowdCmds, &crowdInst};
+        VkDescriptorBufferInfo info[6];
+        VkWriteDescriptorSet w[6]{};
+        for (int k = 0; k < 6; ++k) {
+            info[k] = {bufs[k]->buf, 0, VK_WHOLE_SIZE};
+            w[k].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            w[k].dstSet = crowdSet;
+            w[k].dstBinding = static_cast<uint32_t>(k);
+            w[k].descriptorCount = 1;
+            w[k].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            w[k].pBufferInfo = &info[k];
+        }
+        vkDeviceWaitIdle(device);   // (the set may be in use by a frame in flight: rare, when a buffer grew)
+        vkUpdateDescriptorSets(device, 6, w, 0, nullptr);
+        crowdSetDirty = false;
+    }
+    // this frame's indirect commands: every kind's count back to 0, its run's first row and its mesh's index count
+    std::vector<uint32_t> cmds(crowdKinds.size() * 5, 0);
+    for (std::size_t k = 0; k < crowdKinds.size(); ++k) {
+        const GpuMesh* m = meshes.get(crowdKinds[k].mesh);
+        cmds[k * 5 + 0] = m ? m->indexCount : 0;
+        cmds[k * 5 + 4] = k < crowdKindBase.size() ? crowdKindBase[k] : 0;
+    }
+    vkCmdUpdateBuffer(cmd, crowdCmds.buf, 0, cmds.size() * sizeof(uint32_t), cmds.data());
+    VkMemoryBarrier toCompute{};
+    toCompute.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+    toCompute.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT | VK_ACCESS_HOST_WRITE_BIT | VK_ACCESS_INDIRECT_COMMAND_READ_BIT |
+                              VK_ACCESS_VERTEX_ATTRIBUTE_READ_BIT;
+    toCompute.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_HOST_BIT | VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT |
+                             VK_PIPELINE_STAGE_VERTEX_INPUT_BIT,
+                         VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &toCompute, 0, nullptr, 0, nullptr);
+    // the view's planes from the frame's view-projection (column-major: row r = M[r], M[4+r], M[8+r], M[12+r]):
+    // left, right, bottom, top, near (Vulkan's z >= 0), far
+    struct Push { float planes[6][4]; float camNow[4]; uint32_t counts[4]; } push{};
+    const float* M = cpuGlobals.viewProjection;
+    auto row = [&](int r, int c) { return M[c * 4 + r]; };
+    const int combo[6][2] = {{0, 1}, {0, -1}, {1, 1}, {1, -1}, {2, 0}, {2, -1}};
+    for (int pIdx = 0; pIdx < 6; ++pIdx) {
+        const int r = combo[pIdx][0], sgn = combo[pIdx][1];
+        float len = 0;
+        for (int c = 0; c < 4; ++c) {
+            push.planes[pIdx][c] = sgn == 0 ? row(r, c) : row(3, c) + float(sgn) * row(r, c);
+            if (c < 3) len += push.planes[pIdx][c] * push.planes[pIdx][c];
+        }
+        len = std::sqrt(std::max(len, 1e-20f));
+        for (int c = 0; c < 4; ++c) push.planes[pIdx][c] /= len;
+    }
+    push.camNow[0] = static_cast<float>(frameEye.x);
+    push.camNow[1] = static_cast<float>(frameEye.y);
+    push.camNow[2] = static_cast<float>(frameEye.z);
+    push.camNow[3] = crowdNow;
+    push.counts[0] = crowdAgentCount;
+    static const bool debugBig = std::getenv("RT_CROWD_DEBUG") != nullptr;
+    push.counts[1] = debugBig ? 1u : 0u;
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, crowdPipe);
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, crowdPipeLayout, 0, 1, &crowdSet, 0, nullptr);
+    vkCmdPushConstants(cmd, crowdPipeLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push), &push);
+    vkCmdDispatch(cmd, (crowdAgentCount + 63) / 64, 1, 1);
+    VkMemoryBarrier toDraw{};
+    toDraw.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+    toDraw.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+    toDraw.dstAccessMask = VK_ACCESS_INDIRECT_COMMAND_READ_BIT | VK_ACCESS_VERTEX_ATTRIBUTE_READ_BIT;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                         VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT | VK_PIPELINE_STAGE_VERTEX_INPUT_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT,
+                         0, 1, &toDraw, 0, nullptr, 0, nullptr);
+    // the counts it emitted, back to the host (read when this slot's fence has passed): telemetry
+    const VkDeviceSize cmdBytes = crowdKinds.size() * 20;
+    crowdGrow(crowdReadback[currentFrame], cmdBytes + 20, VK_BUFFER_USAGE_TRANSFER_DST_BIT, true);
+    if (crowdReadback[currentFrame].buf) {
+        VkMemoryBarrier toCopy{};
+        toCopy.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+        toCopy.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+        toCopy.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 1, &toCopy, 0, nullptr, 0, nullptr);
+        VkBufferCopy cp{0, 0, cmdBytes};
+        vkCmdCopyBuffer(cmd, crowdCmds.buf, crowdReadback[currentFrame].buf, 1, &cp);
+        crowdReadKinds[currentFrame] = static_cast<uint32_t>(crowdKinds.size());
+    }
+}
+
+void VulkanRenderer::Impl::destroyCrowd() {
+    for (CrowdBuf* b : {&crowdLinks, &crowdRoutes, &crowdAgents, &crowdKindBuf, &crowdCmds, &crowdInst})
+        if (b->buf) { vmaDestroyBuffer(allocator, b->buf, b->alloc); *b = CrowdBuf{}; }
+    for (CrowdBuf& b : crowdReadback)
+        if (b.buf) { vmaDestroyBuffer(allocator, b.buf, b.alloc); b = CrowdBuf{}; }
+    if (crowdPipe) vkDestroyPipeline(device, crowdPipe, nullptr);
+    if (crowdPipeLayout) vkDestroyPipelineLayout(device, crowdPipeLayout, nullptr);
+    if (crowdPool) vkDestroyDescriptorPool(device, crowdPool, nullptr);
+    if (crowdSetLayout) vkDestroyDescriptorSetLayout(device, crowdSetLayout, nullptr);
+    crowdPipe = VK_NULL_HANDLE;
+    crowdPipeLayout = VK_NULL_HANDLE;
+    crowdPool = VK_NULL_HANDLE;
+    crowdSetLayout = VK_NULL_HANDLE;
+    crowdSet = VK_NULL_HANDLE;
+}
+
+bool VulkanRenderer::supportsGpuCrowd() const { return !std::getenv("RT_NO_GPU_CROWD"); }
+
+void VulkanRenderer::setCrowdKinds(const std::vector<CrowdKind>& kinds) {
+    impl->crowdKinds = kinds;
+    impl->crowdGrow(impl->crowdCmds, kinds.size() * 20 + 20,
+                    VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, false);
+    impl->crowdGrow(impl->crowdKindBuf, kinds.size() * 16 + 16, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true);
+}
+
+void VulkanRenderer::setCrowdLinks(const std::vector<float>& sixPerLink) {
+    impl->crowdGrow(impl->crowdLinks, sixPerLink.size() * sizeof(float) + 64, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true);
+    impl->crowdWrite(impl->crowdLinks, 0, sixPerLink.data(), sixPerLink.size() * sizeof(float));
+}
+
+void VulkanRenderer::setCrowdRoutes(const std::vector<uint32_t>& pairs, std::size_t firstChanged) {
+    const bool remade = impl->crowdGrow(impl->crowdRoutes, pairs.size() * sizeof(uint32_t) + 64, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true);
+    const std::size_t from = remade ? 0 : std::min(firstChanged * 2, pairs.size());
+    impl->crowdWrite(impl->crowdRoutes, from * sizeof(uint32_t), pairs.data() + from, (pairs.size() - from) * sizeof(uint32_t));
+}
+
+void VulkanRenderer::setCrowdAgents(const std::vector<CrowdAgent>& agents, const std::vector<uint32_t>& dirty, bool all) {
+    static_assert(sizeof(CrowdAgent) == 32, "crowd.comp reads 32-byte agents");
+    const bool remade = impl->crowdGrow(impl->crowdAgents, agents.size() * sizeof(CrowdAgent) + 64, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true);
+    if (remade || all) {
+        impl->crowdWrite(impl->crowdAgents, 0, agents.data(), agents.size() * sizeof(CrowdAgent));
+    } else {
+        for (uint32_t i : dirty)
+            if (i < agents.size()) impl->crowdWrite(impl->crowdAgents, VkDeviceSize(i) * sizeof(CrowdAgent), &agents[i], sizeof(CrowdAgent));
+    }
+    impl->crowdAgentCount = static_cast<uint32_t>(agents.size());
+    // each kind's run: as many rows as it has live travellers (an upper bound on what survives the cull)
+    const std::size_t nk = impl->crowdKinds.size();
+    impl->crowdKindCount.assign(nk, 0);
+    uint32_t live = 0;
+    for (const CrowdAgent& a : agents)
+        if (a.live && a.kind < nk) { ++impl->crowdKindCount[a.kind]; ++live; }
+    impl->crowdLive = live;
+    impl->crowdKindBase.assign(nk, 0);
+    uint32_t run = 0;
+    std::vector<float> kinds(nk * 4, 0.0f);
+    for (std::size_t k = 0; k < nk; ++k) {
+        impl->crowdKindBase[k] = run;
+        run += impl->crowdKindCount[k];
+        std::memcpy(&kinds[k * 4], &impl->crowdKindBase[k], sizeof(uint32_t));
+        kinds[k * 4 + 1] = impl->crowdKinds[k].yOffset;
+        kinds[k * 4 + 2] = impl->crowdKinds[k].maxDistance;
+        kinds[k * 4 + 3] = impl->crowdKinds[k].minDistance;
+    }
+    impl->crowdWrite(impl->crowdKindBuf, 0, kinds.data(), kinds.size() * sizeof(float));
+    impl->crowdGrow(impl->crowdInst, VkDeviceSize(std::max<uint32_t>(run, 1)) * 64, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, false);
+}
+
+void VulkanRenderer::setCrowdClock(float simSeconds) { impl->crowdNow = simSeconds; }
+uint32_t VulkanRenderer::crowdTravellers() const { return impl->crowdLive; }
+uint32_t VulkanRenderer::crowdDrawn() const { return impl->crowdDrawnLast; }
+
 void VulkanRenderer::endFrame() {
+    // the GPU crowd's draws: one per kind with travellers, its instances and count crowd.comp's
+    if (impl->crowdLive > 0 && !std::getenv("RT_NO_GPU_CROWD"))
+        for (std::size_t k = 0; k < impl->crowdKinds.size(); ++k) {
+            if (k >= impl->crowdKindCount.size() || impl->crowdKindCount[k] == 0) continue;
+            drawMesh(impl->crowdKinds[k].mesh, Mat4(), impl->crowdKinds[k].material);
+            DrawItem& it = impl->drawQueue.back();
+            it.crowd = true;
+            it.crowdCmd = static_cast<uint32_t>(k);
+            it.worldRadius = -1.0f;
+        }
     // Mirror the live tonemap/grade/bloom knobs (Renderer base members).
     impl->tonemapOp = tonemapOperator;
     impl->gradeContrast = gradeParams.contrast;

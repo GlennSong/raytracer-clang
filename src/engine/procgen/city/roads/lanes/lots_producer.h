@@ -47,19 +47,22 @@ struct LotsCityInputs {
     // The drawn road decks: the earthwork field is pinned to them (lanesEarthworkField), so the lots grow
     // on the ground the terrain will show -- the streets setting it, not natural ground under a skirt.
     RoadDeckField deck;
+    std::vector<RailTrack> rails;   // the rail lines (none: no track) -- buildings stand clear of them (lanesTrackKeepOut)
 };
 
 // ONE derivation: what the producer runs, exposed for tests. `report` (optional) receives the counts.
 NetLotResult growLotsForLevel(const bundle::LevelInputs& in, const LotsCityInputs& city, nlohmann::json* report = nullptr);
 
-// THE ERODED BASE A LANE-BUILT CITY'S TERRAIN READS (ADR-0095): the city's conformed grid
-// inside its extent, blended over its last 60 m into the level's own terrain (which keeps
-// its own eroded base, `levelEroded`) outside -- or the grid's edge value would smear over
-// the whole world. The loader draws the ground from it, the lot pass and the lots producer
-// grow on it: one definition, so a baked city stands on the loader's ground.
+// THE ERODED BASE A LANE-BUILT CITY'S TERRAIN READS (ADR-0095, ADR-0221): the city's conformed grid in a
+// corridor along its roads (every node a `deck` reaches or the build changed, plus 40 m), the level's own
+// terrain's finer detail (its own eroded base, `levelEroded`) faded in over the next 60 m, all of it beyond;
+// blended over the grid's last 60 m into the level's terrain outside. The road build runs at the grid's
+// cell (20 m on the island), not the ground's (2.44 m): the roads keep the ground they were built on, and
+// the rest of the island gets the full ground. The loader draws the ground from it, the lot pass and the
+// lots producer grow on it: one definition, so a baked city stands on the loader's ground.
 std::shared_ptr<const std::function<double(double, double)>> laneErodedBase(
     const nlohmann::json& root, std::shared_ptr<const HeightGrid> grid,
-    std::shared_ptr<const std::function<double(double, double)>> levelEroded);
+    std::shared_ptr<const std::function<double(double, double)>> levelEroded, const RoadDeckField* deck = nullptr);
 
 }  // namespace roads::lanes
 }  // namespace engine

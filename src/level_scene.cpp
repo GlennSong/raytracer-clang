@@ -10,7 +10,6 @@
 #include "engine/procgen/city/city_lots.h"   // living-city lots (offline parity)
 #include "engine/procgen/city/roads/road_entity.h"
 #include "engine/procgen/city/roads/road_builder.h"   // ONE road builder interface — the level picks (ADR-0089)
-#include "engine/procgen/deprecated/roads/road_net_mesh.h"   // roadNetConformRegions (the terrain carve; not yet through the module)
 #include "engine/procgen/noise.h"
 #include "engine/procgen/terrain_field.h"   // HeightField (level ground sampler)
 #include "engine/procgen/earthwork.h"       // the earthwork field (device parity)
@@ -574,10 +573,7 @@ bool LevelScene::load(const std::string& levelPath, Scene& scene,
 #endif
 
     // Procedural terrain (top-level block, regenerated from its recipe), graded
-    // flat under the city/script cut-fill footprints — and CARVED to every
-    // shape:"road" net (mirroring the viewer's road pre-pass; without this the
-    // offline ground buries the draped roads — device: "the road is being
-    // buried by the terrain").
+    // flat under the city/script cut-fill footprints.
     if (root.contains("terrain")) {
         std::vector<TerrainFlatten> allFlatten;
         allFlatten.insert(allFlatten.end(), scriptFlatten.begin(), scriptFlatten.end());
@@ -599,9 +595,7 @@ bool LevelScene::load(const std::string& levelPath, Scene& scene,
                 // levelGround (natural) gates terrain-aware recipes (metro).
                 if (roadBlock.contains("generate"))
                     applyGenerateRecipe(net, roadBlock["generate"], levelGround);
-                std::vector<TerrainFlatten> r =
-                    roadNetConformRegions(net, levelGround);
-                allFlatten.insert(allFlatten.end(), r.begin(), r.end());
+                // (the ground a lane-built city stands on comes from its builder: GroundPlan)
                 roads::RoadBuilder& rb = roads::roadBuilderFor(roadBlock);
                 if (rb.ownsNavGraph()) {   // a builder that paves a whole city knows its blocks
                     roads::RoadBuildInput in;

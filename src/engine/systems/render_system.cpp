@@ -4,6 +4,7 @@
 #include "../../profile.h"
 #include "../occlusion.h"
 
+#include <chrono>
 #include <algorithm>
 #include <cstdio>
 #include <cstdlib>
@@ -20,9 +21,10 @@ void frustumCullInstances(const std::vector<Mat4>& transforms,
                           const Frustum& frustum,
                           const Vec3& meshCenter, Real meshRadius,
                           const Vec3& cameraPos, Real maxDistance,
-                          std::vector<Mat4>& out) {
+                          std::vector<Mat4>& out, Real minDistance) {
     out.clear();
     Real maxDistSq = maxDistance * maxDistance;
+    const Real minDistSq = minDistance * minDistance;
     for (const Mat4& m : transforms) {
         // AFFINE, no perspective divide: an instance matrix's bottom row can carry DATA -- the grass
         // clump's thinning rank (GrassSystem) -- and transformPoint divided the world position by
@@ -32,7 +34,10 @@ void frustumCullInstances(const std::vector<Mat4>& transforms,
         const Vec3 center(m.m[0][0] * meshCenter.x + m.m[0][1] * meshCenter.y + m.m[0][2] * meshCenter.z + m.m[0][3],
                           m.m[1][0] * meshCenter.x + m.m[1][1] * meshCenter.y + m.m[1][2] * meshCenter.z + m.m[1][3],
                           m.m[2][0] * meshCenter.x + m.m[2][1] * meshCenter.y + m.m[2][2] * meshCenter.z + m.m[2][3]);
-        if (maxDistance > 0 && (center - cameraPos).lengthSquared() > maxDistSq)
+        const Real d2 = (center - cameraPos).lengthSquared();
+        if (maxDistance > 0 && d2 > maxDistSq)
+            continue;
+        if (minDistance > 0 && d2 < minDistSq)   // (a nearer level of detail draws it there)
             continue;
         Vec3 cx(m.m[0][0], m.m[1][0], m.m[2][0]);
         Vec3 cy(m.m[0][1], m.m[1][1], m.m[2][1]);
@@ -108,22 +113,36 @@ void RenderSystem::render(FrameContext& ctx) {
                 lampRadius = std::max(Real(10), Real(c.lampLightRadius));
                 lampRange = std::max(Real(2), Real(c.lampLightRange));
             });
+            // the candidates: every street lamp's bulb (the first StreetFurniture's), and every station's canopy
+            // lights (RailStop::lamps -- cooler, a shorter pool under a roof)
+            struct Bulb { Real d2; Vec3 at; bool station; };
+            std::vector<Bulb> nearBulbs;
+            const Vec3 eye = ctx.view.camera.position;
+            const Real maxDist2 = lampRadius * lampRadius;   // beyond this a bulb is the sprite tier's
+            bool streetSeen = false;
             ctx.world.each<StreetFurniture>([&](Entity, StreetFurniture& f) {
-                if (f.lampHeads.empty() || lit) return;
-                const Vec3 eye = ctx.view.camera.position;
-                const Real maxDist2 = lampRadius * lampRadius;   // beyond this a bulb is the sprite tier's
-                std::vector<std::pair<Real, const Vec3*>> nearBulbs;
+                if (f.lampHeads.empty() || streetSeen) return;
+                streetSeen = true;
                 for (const Vec3& h : f.lampHeads) {
                     const Real d2 = (h - eye).lengthSquared();
-                    if (d2 < maxDist2) nearBulbs.emplace_back(d2, &h);
+                    if (d2 < maxDist2) nearBulbs.push_back({d2, h, false});
                 }
-                if (nearBulbs.empty()) return;
+            });
+            ctx.world.each<RailTracks>([&](Entity, RailTracks& rt) {
+                for (const RailTrack& t : rt.tracks)
+                    for (const RailStop& st : t.stops)
+                        for (const Vec3& h : st.lamps) {
+                            const Real d2 = (h - eye).lengthSquared();
+                            if (d2 < maxDist2) nearBulbs.push_back({d2, h, true});
+                        }
+            });
+            if (!nearBulbs.empty()) {
                 if (static_cast<int>(nearBulbs.size()) > kMaxLampLights) {
                     std::nth_element(nearBulbs.begin(),
                                      nearBulbs.begin() + kMaxLampLights,
                                      nearBulbs.end(),
-                                     [](const auto& a, const auto& b) {
-                                         return a.first < b.first;
+                                     [](const Bulb& a, const Bulb& b) {
+                                         return a.d2 < b.d2;
                                      });
                     nearBulbs.resize(kMaxLampLights);
                 }
@@ -138,8 +157,8 @@ void RenderSystem::render(FrameContext& ctx) {
                 Real cutoff = lampRadius;
                 if (static_cast<int>(nearBulbs.size()) >= kMaxLampLights) {
                     Real farthest = 0;
-                    for (const auto& [d2, h] : nearBulbs)
-                        farthest = std::max(farthest, d2);
+                    for (const Bulb& bl : nearBulbs)
+                        farthest = std::max(farthest, bl.d2);
                     cutoff = std::min(cutoff, std::sqrt(farthest));
                 }
                 withLamps = ctx.view.lighting;
@@ -147,23 +166,29 @@ void RenderSystem::render(FrameContext& ctx) {
                 // at 30/34 they fell short and the pavement went dark between
                 // every pair of lamps. Intensity rides the dusk ramp so lamps
                 // warm up through twilight instead of popping.
-                for (const auto& [d2, h] : nearBulbs) {
+                for (const Bulb& bl : nearBulbs) {
                     // 1 at the near end, easing to 0 across the last quarter
                     // of the reach, so a lamp joins and leaves the set
                     // invisibly instead of popping.
-                    const Real d = std::sqrt(d2);
+                    const Real d = std::sqrt(bl.d2);
                     const Real edge = std::max(Real(1), cutoff);
                     Real fade = (edge - d) / (0.25 * edge);
                     fade = std::min(Real(1), std::max(Real(0), fade));
                     fade = fade * fade * (3.0 - 2.0 * fade);   // smoothstep
-                    PointLight lamp(*h - Vec3(0, 0.35, 0),
+                    if (bl.station) {   // a canopy fitting: cool white, a pool down the platform (12 m apart)
+                        PointLight lamp(bl.at, Vec3(0.92, 0.96, 1.0), 26.0f * static_cast<float>(dusk * fade));
+                        lamp.range = 16.0f;
+                        withLamps.pointLights.push_back(lamp);
+                        continue;
+                    }
+                    PointLight lamp(bl.at - Vec3(0, 0.35, 0),
                                     Vec3(1.0, 0.82, 0.55),
                                     48.0f * static_cast<float>(dusk * fade));
                     lamp.range = static_cast<float>(lampRange);
                     withLamps.pointLights.push_back(lamp);
                 }
                 lit = true;
-            });
+            }
         }
         if (!coneSpots.empty()) {
             if (!lit) { withLamps = ctx.view.lighting; lit = true; }
@@ -260,15 +285,26 @@ void RenderSystem::render(FrameContext& ctx) {
                      cam.fovDegrees, cam.farPlane);
 
     Real alpha = ctx.interpolation;
-    ctx.world.each<Transform, PrevTransform, Renderable>(
-        [&](Entity entity, Transform& t, PrevTransform& prev, Renderable& r) {
-            if (entity == ctx.view.activeCameraEntity) return;
+    SparseSet<SourceSpec>* sourceSpecs = ctx.world.componentPool<SourceSpec>();   // (once, not per entity)
+    // RT_DUMP_STATS: the encode walk's two halves timed and counted (entities visited / drawn, groups and instances
+    // visited / drawn), every 120 frames
+    static const bool encStats = std::getenv("RT_DUMP_STATS") != nullptr;
+    static double encEntMs = 0, encGrpMs = 0;
+    static long encEnt = 0, encEntDrawn = 0, encGrp = 0, encGrpIn = 0, encInst = 0, encInstDrawn = 0, encFrames = 0;
+    const auto encT0 = std::chrono::steady_clock::now();
+    // One drawable's cull + draw (reached through the draw index's visible cells, or the ECS walk with
+    // RT_NO_DRAW_INDEX=1): the same tests whichever way it is found.
+    auto drawEntity = [&](uint32_t entityIndex, Transform& t, PrevTransform& prev, Renderable& r) {
+            // (the camera's own body is not drawn -- but only when there IS a camera entity: an empty handle's index is
+            // 0, the first entity a level makes, and skipping that hid every lab's ground in play since 28fc0763)
+            if (ctx.view.activeCameraEntity.valid() && entityIndex == ctx.view.activeCameraEntity.index) return;
+            ++encEnt;
             if (audit) {
                 BoundingSphere ab = ctx.renderer.getMeshBounds(r.mesh);
                 std::fprintf(stderr,
                              "[draw-audit] e%u mesh %u layer %u hidden %d aabb "
                              "(%.0f,%.0f,%.0f)-(%.0f,%.0f,%.0f)\n",
-                             entity.index, r.mesh.index, r.renderLayer,
+                             entityIndex, r.mesh.index, r.renderLayer,
                              (r.renderLayer & ctx.renderer.hiddenLayers) ? 1 : 0,
                              ab.boxMin.x, ab.boxMin.y, ab.boxMin.z, ab.boxMax.x,
                              ab.boxMax.y, ab.boxMax.z);
@@ -278,7 +314,7 @@ void RenderSystem::render(FrameContext& ctx) {
             // chain (editor only — PLAY flattens parenting at load, so there
             // parentId is 0 and this is just the interpolated local).
             Mat4 model = lerp(prev.value, t, alpha).matrix();
-            SourceSpec* s = ctx.world.get<SourceSpec>(entity);
+            SourceSpec* s = sourceSpecs ? sourceSpecs->get(entityIndex) : nullptr;
             if (s && s->parentId != 0) {
                 Entity parent = findByDocumentId(ctx.world, s->parentId);
                 if (parent.valid())
@@ -294,14 +330,14 @@ void RenderSystem::render(FrameContext& ctx) {
                 if (audit)
                     std::fprintf(stderr, "[draw-audit] e%u FRUSTUM-CULLED world "
                                  "(%.0f,%.0f,%.0f)-(%.0f,%.0f,%.0f)\n",
-                                 entity.index, worldMin.x, worldMin.y, worldMin.z,
+                                 entityIndex, worldMin.x, worldMin.y, worldMin.z,
                                  worldMax.x, worldMax.y, worldMax.z);
                 return;
             }
             if (audit)
                 std::fprintf(stderr, "[draw-audit] e%u DRAWN world "
                              "(%.0f,%.0f,%.0f)-(%.0f,%.0f,%.0f)\n",
-                             entity.index, worldMin.x, worldMin.y, worldMin.z,
+                             entityIndex, worldMin.x, worldMin.y, worldMin.z,
                              worldMax.x, worldMax.y, worldMax.z);
             if (occ && !(r.material.flags & RenderMaterial::FLAG_OVERLAY)) {
                 ++occTested;
@@ -333,13 +369,14 @@ void RenderSystem::render(FrameContext& ctx) {
                 if (r.minDistance > 0 && dist <= r.minDistance) return;
             }
             ctx.renderer.drawMesh(r.mesh, model, r.material);
-        });
+            ++encEntDrawn;
+        };
 
     // Instanced groups (static scatter — the forest). Cheap coarse reject on the
     // group's bounds, then PER-INSTANCE frustum cull so only the on-screen plants
     // draw (not the whole region) — then one instanced draw of the visible subset.
-    ctx.world.each<InstanceGroup>(
-        [&](Entity, InstanceGroup& g) {
+    auto drawGroup = [&](InstanceGroup& g) {
+
             if (g.transforms.empty()) return;
             if (g.renderLayer & ctx.renderer.hiddenLayers) return;   // debug layer hidden
             if (!frustum.containsSphere(g.boundsCenter, g.boundsRadius)) return;
@@ -365,8 +402,11 @@ void RenderSystem::render(FrameContext& ctx) {
                 }
             }
             BoundingSphere mb = ctx.renderer.getMeshBounds(g.mesh);
+            ++encGrpIn;
+            encInst += static_cast<long>(g.transforms.size());
             frustumCullInstances(g.transforms, frustum, mb.center, mb.radius,
-                                 cam.position, drawDist, instanceScratch_);
+                                 cam.position, drawDist, instanceScratch_, g.minDistance);
+            encInstDrawn += static_cast<long>(instanceScratch_.size());
             if (instanceScratch_.empty()) return;
             if (hidden) {   // hidden from the camera, but its shadow may fall where the camera sees
                 RenderMaterial shadowOnly = g.material;
@@ -375,7 +415,61 @@ void RenderSystem::render(FrameContext& ctx) {
             } else {
                 ctx.renderer.drawMeshInstanced(g.mesh, instanceScratch_, g.material);
             }
-        });
+        };
+    // THE DRAW INDEX (Glenn: "see what kind of performance you can eke out"): the island visited ~27,000 entities
+    // and ~50,000 instance groups a frame to draw ~340 and ~410 -- 6 ms of encode. Static drawables (terrain,
+    // structure, scenery, furniture, ground paint) live in 200 m cells; a frame tests the cells and visits only
+    // the members of the visible ones, plus a short list of the rest (bodies, effects, the unclassed). It keeps
+    // itself right without help: each frame re-classifies a slice of the pools (new, moved, gone, reclassed), so
+    // anything changes cell within a few frames; a member whose index no longer holds a drawable is dropped.
+    static const bool noIndex = std::getenv("RT_NO_DRAW_INDEX") != nullptr;
+    SparseSet<Transform>* tPool = ctx.world.componentPool<Transform>();
+    SparseSet<PrevTransform>* pPool = ctx.world.componentPool<PrevTransform>();
+    SparseSet<Renderable>* rPool = ctx.world.componentPool<Renderable>();
+    SparseSet<InstanceGroup>* gPool = ctx.world.componentPool<InstanceGroup>();
+    std::chrono::steady_clock::time_point encT1;
+    if (noIndex || !tPool || !pPool || !rPool) {
+        ctx.world.each<Transform, PrevTransform, Renderable>(
+            [&](Entity e, Transform& t, PrevTransform& prev, Renderable& r) { drawEntity(e.index, t, prev, r); });
+        encT1 = std::chrono::steady_clock::now();
+        ctx.world.each<InstanceGroup>([&](Entity, InstanceGroup& g) { ++encGrp; drawGroup(g); });
+    } else {
+        drawIndex_.refresh(*tPool, *rPool, gPool, ctx.renderer, policy);
+        auto entityAt = [&](uint32_t i) {
+            Transform* t = tPool->get(i);
+            PrevTransform* pv = t ? pPool->get(i) : nullptr;
+            Renderable* r = pv ? rPool->get(i) : nullptr;
+            if (r) drawEntity(i, *t, *pv, *r);
+            return r != nullptr;
+        };
+        auto groupAt = [&](uint32_t i) {
+            InstanceGroup* g = gPool ? gPool->get(i) : nullptr;
+            if (g) { ++encGrp; drawGroup(*g); }
+            return g != nullptr;
+        };
+        // a cell hidden whole behind nearer geometry (the occlusion depth), and too far for its members' shadows to
+        // reach the cascades (150 m of view depth; 400 m leaves room for a tall building's evening shadow), is
+        // skipped whole -- its members would only have drawn shadow-only
+        auto cellOk = [&](const Vec3& lo, const Vec3& hi, Real dist) {
+            if (!occ || dist < 400.0) return true;
+            return !occludedBox(*occ, lo, hi, occSlack);
+        };
+        drawIndex_.visit(frustum, cam.position, static_cast<Real>(ctx.renderer.vegetationDrawDistance), entityAt, groupAt,
+                         cellOk, encT1);
+    }
+
+    if (encStats) {
+        const auto encT2 = std::chrono::steady_clock::now();
+        encEntMs += std::chrono::duration<double, std::milli>(encT1 - encT0).count();
+        encGrpMs += std::chrono::duration<double, std::milli>(encT2 - encT1).count();
+        if (++encFrames == 120) {
+            std::fprintf(stderr, "[encode] per frame: entities %.2f ms (%ld visited, %ld drawn) | instance groups %.2f ms (%ld groups, "
+                         "%ld in view; %ld instances tested, %ld drawn)\n", encEntMs / 120, encEnt / 120, encEntDrawn / 120,
+                         encGrpMs / 120, encGrp / 120, encGrpIn / 120, encInst / 120, encInstDrawn / 120);
+            encEntMs = encGrpMs = 0;
+            encEnt = encEntDrawn = encGrp = encGrpIn = encInst = encInstDrawn = encFrames = 0;
+        }
+    }
     // RT_OCC_STATS=1: what the occlusion test saved, every 120 frames
     if (occStats) {
         static long frames = 0, t = 0, c = 0, gt = 0, gc = 0, used = 0;

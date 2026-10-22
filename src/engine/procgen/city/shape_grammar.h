@@ -2,6 +2,8 @@
 #define RAYTRACER_ENGINE_PROCGEN_CITY_SHAPE_GRAMMAR_H
 
 #include "polygon.h"
+#include "site_plan.h"
+#include "../../mesh_builder.h"
 #include "../../../renderer/renderer.h"   // RenderMesh, RenderMaterial
 #include <cstdint>
 #include <functional>
@@ -171,7 +173,33 @@ struct Scope {
                axis[2] * (size.z * w);
     }
     Vec3 center() const { return corner(0.5, 0.5, 0.5); }
+    // the same box as the mesh library's frame (MeshBuilder::emitBox)
+    MeshFrame frame() const {
+        MeshFrame f;
+        f.o = origin; f.x = axis[0] * size.x; f.y = axis[1] * size.y; f.z = axis[2] * size.z;
+        return f;
+    }
+    // A BOX IN A PLAN FRAME: its corner at (x, y) in `f` at height h, `size` along the frame's u, up, along its v (a
+    // depot's shed wall, a playground's post, a car park's lamp)
+    static Scope inFrame(const SiteFrame& f, Real x, Real y, Real h, const Vec3& size) {
+        return Scope{f.P(x, y, h), {Vec3(f.u.x, 0, f.u.y), Vec3(0, 1, 0), Vec3(f.v.x, 0, f.v.y)}, size};
+    }
+    // A BOX STANDING at plan point `at` on height y, centred there: `size` its length along the unit plan direction
+    // `along`, its height, its depth along `across` (default: `along` turned left) -- a basin's rim stone, an A-board
+    static Scope standing(const Vec2& at, Real y, const Vec2& along, const Vec2& across, const Vec3& size) {
+        const Vec3 t(along.x, 0, along.y), n(across.x, 0, across.y);
+        return Scope{Vec3(at.x, y, at.y) - t * (size.x * 0.5) - n * (size.z * 0.5), {t, Vec3(0, 1, 0), n}, size};
+    }
+    static Scope standing(const Vec2& at, Real y, const Vec2& along, const Vec3& size) {
+        return standing(at, y, along, Vec2(-along.y, along.x), size);
+    }
 };
+
+// A FLAT RECTANGLE IN A PLAN FRAME: [a0, a1] x [b0, b1] in `f`, at height h, facing up (a yard's asphalt, a
+// playground's rubber, a garden's gravel)
+inline void emitPlanRect(RenderMesh& m, const SiteFrame& f, Real a0, Real b0, Real a1, Real b1, Real h, const Vec3& col) {
+    MeshBuilder::emitQuad(m, f.P(a0, b0, h), f.P(a0, b1, h), f.P(a1, b1, h), f.P(a1, b0, h), Vec3(0, 1, 0), col);
+}
 
 // Build a ground-plane scope from a footprint polygon: its oriented bounding box
 // becomes the box footprint, raised to `height` along +Y, sitting at ground
@@ -202,12 +230,39 @@ struct PlacedPiece {
     uint8_t piece = 0;
     uint32_t variant = 0;
     Mat4 xform;   // piece space -> world
+    int16_t unit = -1;   // the shop unit it furnishes (BuildingMesh::units), -1: the building's own rooms
+};
+
+// A SHOP UNIT's room as furnished (growInterior): the citysim finds the place whose site is inside it, so that shop's
+// own staff and customers are the people drawn on its pieces, not the building's.
+struct FurnishedUnit {
+    std::vector<Vec2> rect;   // world XZ
+    Real y0 = 0;              // its floor
+};
+
+// WHAT STANDS ON THE ROOF (the roof cell's contents, issue #105): every piece the crown and the tower top set on the
+// deck -- the access box, the water tanks, the HVAC units, a mast's base, a lantern, a glass screen's ring -- with
+// its footprint on the deck (world XZ, CCW) and its height, so the collider walls it, the space graph keeps the
+// deck's free floor round it and the blueprint draws it. Recorded by the grow (the crown rolls its own dice from
+// the building's stream, so nothing can re-plan it later), carried by the building unit and its record, cached
+// with the lot. A Screen or a Frame is a ring of wall along its footprint's edges, not a solid.
+struct RoofItem {
+    enum class Kind : uint8_t { Access, Tank, Hvac, Mast, Lantern, Screen, Frame, Pyramid, Sloped, Helipad, Ramp, Bridge, BridgeWall };
+    // A Helipad is a raised pad (its top a floor `h` over the deck); a Ramp climbs onto it: its footprint's first
+    // edge is the foot on the deck, its third edge the top, `h` up. A Bridge is a sky bridge's floor slab (a prism,
+    // walked on top; cells.h, ADR-0179) and a BridgeWall one of its sides (a ring, open above, as a Screen is):
+    // not on the roof at all, so the roof cell ignores them.
+    Kind kind = Kind::Hvac;
+    Poly2 footprint;
+    Real y0 = 0, h = 0;
 };
 
 struct BuildingMesh {
     std::vector<RenderMesh> parts;     // one per non-empty PartId, materialIndex set
     std::vector<PlacedPiece> furniture;   // the interior's pieces (growInterior only)
+    std::vector<FurnishedUnit> units;     // the shop rooms among them (PlacedPiece::unit)
     std::vector<AttachPoint> attaches;
+    std::vector<RoofItem> roof;        // what stands on the roof (growPlanBuilding / growBuilding)
     RenderMesh proxy;                  // coarse single-material mass (LOD/impostor bake)
     Real height = 0;
 
@@ -238,6 +293,7 @@ struct InteriorLayout {
 InteriorLayout interiorLayout(const Poly2& plan, const BuildingParams& params,
                               std::size_t entranceEdge);
 
+
 // The storey stack (ADR-0080): every storey's plan, base height (relative to
 // baseY) and height, with the setback/inset validation the exterior tier
 // loop applies. Extracted so the EXTERIOR massing and the streamed INTERIOR
@@ -252,6 +308,44 @@ struct StoreyPlan {
 std::vector<StoreyPlan> storeyPlans(const Poly2& plan,
                                     const BuildingParams& params);
 
+// THE STRAIGHT STAIR'S RUNS (issue #105, step 1c): a coreless building climbs by straight flights hugging a wall
+// (interiorLayout); where a setback shrinks the plan past the well, the stair moves inboard -- a new layout on the
+// shrunken tier's plan, its first flight leaving the last storey of the run below. Run r climbs storeys k0..k1
+// (a flight leaves every storey k in [k0, k1)); its well is cut in slabs k0+1..k1. The runs end where no stair
+// fits a tier; the storeys above are unreachable, and the space graph's gate says so. Every consumer -- the
+// flights, the slab holes, the room planner's keep-outs, the facade's blank wall, the space graph -- reads these
+// same runs. (Before them the one ground layout ended at the first shrunken tier, and ten recipes' towers had
+// storeys no one could reach: the gate's day-one fix list.)
+struct StairRun {
+    InteriorLayout il;
+    int k0 = 0, k1 = 0;
+    std::size_t sides = 0;   // the vertex count of the plan the layout was made on (il.edge indexes it)
+};
+std::vector<StairRun> stairRuns(const Poly2& plan, const BuildingParams& params, std::size_t entranceEdge,
+                                const std::vector<StoreyPlan>& storeys);
+const StairRun* runLeaving(const std::vector<StairRun>& runs, int storey);    // a flight's foot stands on `storey`
+const StairRun* runArriving(const std::vector<StairRun>& runs, int storey);   // its well is cut in `storey`'s slab
+// The run that owns `storey` (leaving, else arriving, else the ground layout of a building too low to climb).
+const StairRun* runOn(const std::vector<StairRun>& runs, int storey);
+
+// THE COLLIDER'S TIERS (architectural toolkit, issue #105, step 1): the storey stack grouped by tier, each a
+// prism the walker meets -- walls from `y0` to `y1`, a walkable cap at `y1` (the tier's roof deck: a setback's
+// slab top 5 cm under the next tier's floor, the main roof's slab top 5 cm over the last ceiling), a parapet
+// `parapet` tall on that deck. Relative to baseY. ONE prism from the ground to the parapet (the old collider)
+// buried a podium tower's podium roof under an invisible box 90 m tall and put "the roof" a parapet above the
+// deck; the decks are where the exterior draws them, so a walker stands on what they see. Flat roofs only
+// (empty otherwise: the caller keeps the old prism).
+struct ColliderTier {
+    Poly2 plan;
+    Real y0 = 0, y1 = 0;
+    Real parapet = 0;
+    // Its top is a DECK (a setback's, or the roof): capped, the parapet on it. False where the storey above
+    // continues the same entry on a turned or scaled outline (mass_stack.h): walls only, the slab band is the
+    // exterior's.
+    bool deck = true;
+};
+std::vector<ColliderTier> colliderTiers(const Poly2& plan, const BuildingParams& params);
+
 // The MASS STACK (ADR-0086 point 5): the tiers a building is built from — one
 // plan per tier and the floor it starts at, the base first — derived from the
 // plan and the params alone, so the exterior massing, the interior and any
@@ -262,6 +356,21 @@ struct MassTier {
     int floor0 = 0;   // the first floor (above the ground storey) this tier serves
 };
 std::vector<MassTier> massStack(const Poly2& plan, const BuildingParams& params);
+// THE ENVELOPES' TIERS (skyscrapers v2 / NYC variety): what massStack was until the stack (mass_stack.h) took it
+// as its first preset -- the uniform setbacks, the street wall and its steps, the sky exposure plane, the taper,
+// the slab, the feathered pencil. massStack and storeyPlans read the stack; this is the stack's input.
+std::vector<MassTier> envelopeTiers(const Poly2& plan, const BuildingParams& params);
+// THE WAVE'S FLOOR PLATES (Envelope::Wave, implicit.h): per storey, the field's contour at its floor line, the slab
+// that runs past the straight glass; empty on other envelopes and below the base storeys.
+std::vector<Poly2> wavePlates(const Poly2& plan, const BuildingParams& params);
+// The tiers' plan vocabulary: a box on an OBB's axes (half extents, a corner cut, a shift along the axes), the
+// biggest such box inside a plan, whether a tier stands on the one below, a plan's short side, and the narrowest
+// a tier may be for the core to fit (14 m).
+Poly2 tierBox(const OBB2& ob, Real hw, Real hd, Real cut = 0, Vec2 shift = Vec2(0, 0));
+bool tierBoxInside(const Poly2& plan, const OBB2& ob, Real& hw, Real& hd);
+bool tierNestedIn(const Poly2& outer, const Poly2& inner);
+Real tierShortSide(const Poly2& p);
+constexpr Real kCoreTierMin = 14.0;
 
 // The street-facing edge index of a CCW plan — the edge the door lands on.
 // Shared by growPlanBuilding, interiorLayout callers and growInterior so no
@@ -318,6 +427,18 @@ struct LobbyPiece {
 };
 struct CorePlan;
 std::vector<LobbyPiece> lobbyDressing(const Poly2& plan, std::size_t entranceEdge, const CorePlan& core);
+
+struct WallOpening;   // room_plan.h
+// The doors and windows of one storey's outside walls (`splan`, floor at y0, h tall), as the facade cuts them, on the
+// walls' inner face: what the furniture keeps clear of (room_plan.h WallOpening).
+// A VEHICLE-BAY front's doors (a fire station's, a depot's; params.groundBays on the entrance edge): each bay's two
+// ends on the plan edge, world XZ, and the edge's outward normal. The layout emitBayFront draws. Empty: none.
+std::vector<std::pair<Vec2, Vec2>> vehicleBayDoors(const Poly2& plan, const BuildingParams& params, Vec2& outward);
+std::vector<WallOpening> storeyOpenings(const Poly2& splan, const BuildingParams& params, int storey, Real y0, Real h,
+                                        std::size_t entranceEdge);
+
+// The interior wall inset: the inner face of the exterior wall, where the room planner's rooms stop.
+Real interiorWallInset(const BuildingParams& p);
 
 BuildingMesh growInterior(const Poly2& plan, const BuildingParams& params,
                           Real baseY, RenderMesh* colliderOut = nullptr,
@@ -467,9 +588,23 @@ struct BuildingParams {
     //                      Lever House) -- its width `towerFrac` of the short side, never under a core's 14 m.
     //   Feathered          a pencil tower (432 Park, 111 W 57th): the lot's rectangle full height, stepping back
     //                      on ONE face every two floors from `featherFrom` of its height, then a second face.
-    //   Twist, Stack       overhanging forms (milestone 3): each tier rotated `twistDeg` over the height /
-    //                      shifted `stackShift` metres from the one below, with a soffit under the overhang.
-    enum class Envelope : uint8_t { None, StreetWallSetback, SkyExposure, Taper, Slab, Feathered, Twist, Stack };
+    //   Twist, Stack       overhanging forms (milestone 3, built with the stack, issue #105 step 4): the plan
+    //                      turning `twistDeg` over its height, every storey its own facet with a slab band between
+    //                      / modules of `stepFloors` storeys slid `stackShift` metres alternately along the long
+    //                      axis, a soffit under each overhang.
+    //   Bulge              the plan scaled storey by storey about its centre (mass_stack.h, a scale curve): 0.8 of
+    //                      itself at `baseFloors`, widest (1.0) at `bulge` of the height, `taperTop` of itself at
+    //                      the top -- the lens tower (30 St Mary Axe, Torre Glories) on a drum.
+    //   Curves             the three composed (mass_stack.h): the plan turning `twistDeg`, scaled by the bulge
+    //                      curve where `bulge` > 0 (else straight to `taperTop`), and LEANING `lean` of its height
+    //                      along the plan's long axis (Gate of Europe), the whole kept inside the lot.
+    //   Wave               an IMPLICIT form (implicit.h): the plan extruded and waved `wave` metres across its
+    //                      long axis over `waveLen` along the facade, the wave climbing a cycle per `waveLen` of
+    //                      height -- an undulating skin (Aqua Tower), each storey the field's own outline.
+    //   Mesh               THE ARTIST'S HATCH (mesh_mass.h): a glTF form from `assets/masses` (`massMesh`, 1 + its
+    //                      index in the sorted folder) fitted to the lot and the height, every storey its slice,
+    //                      resampled corner for corner so the glass rules between them.
+    enum class Envelope : uint8_t { None, StreetWallSetback, SkyExposure, Taper, Slab, Feathered, Twist, Stack, Bulge, Curves, Wave, Mesh };
     Envelope envelope = Envelope::None;
     int   baseFloors = 5;
     Real  setback1 = 6.0;
@@ -483,6 +618,17 @@ struct BuildingParams {
     Real  featherFrom = 0.7;     // Feathered: where the one-sided steps begin, fraction of floors
     Real  twistDeg = 0.0;        // Twist: total rotation over the height (degrees)
     Real  stackShift = 0.0;      // Stack: each tier's offset from the one below (m)
+    Real  bulge = 0.45;          // Bulge: where the mass is widest, as a fraction of its height above the base
+    Real  lean = 0.0;            // Curves: the top's offset along the plan's long axis, as a fraction of the height (signed)
+    Real  wave = 0.0;            // Wave: the skin's amplitude (m)
+    Real  waveLen = 20.0;        // Wave: its wavelength along the facade and up the building (m)
+    uint8_t massMesh = 0;        // Mesh: 1 + the index of the glTF in assets/masses (0 = none)
+    // THE SKIN (envelope.h, ADR-0178): whether the form above is the floors or a skin round straight floors.
+    // 0 the form is the floors; 1 a DOUBLE SKIN (straight floors `skinGap` inside the form, the form a glass veil
+    // round them); 2 PLATES (straight floors, every floor plate running out to the form's contour -- the Wave's
+    // default); 3 both. Lua: skin = "floors" | "double" | "plates" | "both", skin_gap = 1.2.
+    uint8_t skin = 0;
+    Real skinGap = 1.2;
     // THE CURTAIN STYLE (skyscrapers NYC variety M2): glassTint 0 auto grey, 1 blue, 2 green, 3 bronze, 4 smoke,
     // 5 silver (reflective), 6 clear; mullionTone 0 steel, 1 bronze, 2 black, 3 silver, 4 white; fins: a vertical
     // fin every `fins` bays (0 none); curtainBay the mullion spacing (m); spandrelFrac the opaque band's share of
@@ -490,6 +636,9 @@ struct BuildingParams {
     uint8_t glassTint = 0;
     uint8_t mullionTone = 0;
     uint8_t fins = 0;
+    // A DIAGRID (issue #105; 30 St Mary Axe, Hearst Tower): diagonal members crossing every `diagrid` bays in place of
+    // the vertical mullions, the transoms kept. 0 = none. Lua: diagrid = 2.
+    uint8_t diagrid = 0;
     Real  curtainBay = 1.6;
     Real  spandrelFrac = 0.30;
     // THE CORE (skyscrapers v2 M5, core_plan.h): 0 = auto (four floors and
@@ -506,9 +655,19 @@ struct BuildingParams {
     uint8_t signage = 0;
     uint8_t uplights = 0;
     // THE TOP (buildings M2): what stands on a flat roof against the sky -- 0/1 the mechanical penthouse, 2 screen,
-    // 3 sloped, 4 faceted, 5 lantern, 6 frame, 7 twin antennas, 8 mast (emitTowerTop). spire/dome win over it.
-    // Lua: top = "screen" | "sloped" | "faceted" | "lantern" | "frame" | "antennas" | "mast" | "penthouse".
+    // 3 sloped, 4 faceted, 5 lantern, 6 frame, 7 twin antennas, 8 mast (emitTowerTop), 9 NONE -- the deck bare,
+    // no plant, for the cells of a complex that share one crown (cells.h), 10-14 a GLASS CAP over the whole deck
+    // (emitGlassCap, mass_stack.h Cap::Kind: the top outline lofted ring by ring in glass with a rib up every
+    // corner, the deck a lantern room under it): 10 DOME (the Gherkin's), 11 SPIRE (a concave taper to a point),
+    // 12 VAULT (a barrel over the long axis), 13 APERTURE (the dome open at two thirds, a rim at the opening),
+    // 14 FLARED (swelling out by an eighth under a flat glass lid). spire/dome win over it.
+    // Lua: top = "screen" | "sloped" | "faceted" | "lantern" | "frame" | "antennas" | "mast" | "penthouse" | "none"
+    //            | "dome" | "spire" | "vault" | "aperture" | "flared".
     uint8_t top = 0;
+    // THE HELIPAD (issue #105, the roof cell's contents): a raised pad with a ramp on a tall tower's open roof --
+    // 0 auto (18 floors and up, half of them by the seed, where the roof has the room), 1 never, 2 always.
+    // Lua: helipad = true | false.
+    uint8_t helipad = 0;
     // MASONRY DEPTH (buildings M3): windowGroup 1-3 -- windows in pairs or triples, a slim mullion between them and
     // a broad pier between groups; verticals -- full-height piers proud of the wall at every group, the spandrel
     // panels between storeys recessed and darker (Rockefeller Center, the Empire State). Lua: window_group = 2,
@@ -518,21 +677,84 @@ struct BuildingParams {
     // WHAT IT IS FOR (buildings B): a residential building's typical floors are whole apartments off a corridor
     // (room_plan.h, PlateTopology::Apartments); anything else keeps its office ring. Set from the recipe's use.
     bool  residential = false;
+    // OFFICES INSIDE (Glenn, 2026-10-13: "offices can have meeting rooms, small kitchens, lounge space, reception desk,
+    // offices and cubes and open floor plans"): a workplace's upper floors are the office floor (room_plan.cpp
+    // officePlan), masonry or glass, core or stair -- not the ring of studios a hotel keeps. RUNTIME ONLY, never in the
+    // lot cache: set from the recipe and its use (architect.h officeUseFor) by the architect and again by the interior
+    // system from the building record, so an island baked before it still gets it without a re-bake.
+    bool  officeUse = false;
+    // A CIVIC BUILDING'S OWN ROOMS (Glenn, the same day): off the campus, a university is a teaching hall (1), a library
+    // its reading room and stacks (2), a museum its galleries (4), a school its classrooms (5) -- campusPlan's corridor
+    // floor, by these numbers (the campus field's, plus 4 and 5) -- and a hospital its wards (6, hospitalPlan); a
+    // church its nave (7), a cinema its foyer and auditoriums (8), a market hall its stalls (14) -- hallPlan, the
+    // ground floor; a police station its lobby, cells and interview rooms (10), a courthouse its courtrooms (11), a
+    // capitol its council chamber (12) -- campusPlan, the ground floor only, offices above; a fire station its engine
+    // bay (9, hallPlan; its bays stand open, the engines parked in them) and the crew's quarters above (campusPlan's
+    // residence hall); a factory its shop floor (15), a warehouse its racks (16) -- hallPlan, bays open, offices above.
+    // Runtime only like officeUse (architect.h civicRoomsFor).
+    uint8_t civicRooms = 0;
     // ATTACHED BUILDINGS (Glenn, 2026-10-01: "in the dense part of town ... buildings right next to each other ...
     // windows aren't made on the sides and we have back doors and different ways up to the second floor"). Up to
     // two PARTY WALLS, each the world line it stands on: outward normal (x, z) and offset dot(normal, point). A
     // plan edge lying on one is a blank wall, ground to roof, inside and out. backDoor: the rear edge's middle bay
     // is a plain service door. fireEscape: a steel fire escape climbs the rear face -- a landing at every floor,
     // a flight between landings, a drop ladder over the yard. Set by the lot pass (city_lots), never by recipes.
+    // ...up to FOUR since the complex (cells.h, issue #105 step 5: a tube in a bundle touches four neighbours):
+    // `partyTop[k]` is the last storey the wall is blank on (0 = to the roof: an attached building; a taller cell
+    // keeps its windows above a lower neighbour's roof), and bit k of `partyDoors` puts a doorway in the wall's
+    // middle bay on the ground storey, through to the cell behind it (a bundle's inner tube is entered that way).
     uint8_t partyWalls = 0;
-    Vec2  partyN[2] = {Vec2(0, 0), Vec2(0, 0)};
-    Real  partyAt[2] = {0, 0};
+    Vec2  partyN[4] = {Vec2(0, 0), Vec2(0, 0), Vec2(0, 0), Vec2(0, 0)};
+    Real  partyAt[4] = {0, 0, 0, 0};
+    int16_t partyTop[4] = {0, 0, 0, 0};
+    uint8_t partyDoors = 0;
+    // A WIDE OPENING in party wall k (cells.h Complex::openWall; ADR-0180): the wall ABSENT along the run from
+    // `partyOpen0[k]` to `partyOpen1[k]` -- positions along the wall's tangent (-n.y, n.x), world -- on storeys
+    // partyOpenK0[k]..partyOpenK1[k] inclusive (K1 < K0: none). An anchor store's front onto a mall's concourse,
+    // a garage onto its court. Set by the complex, never by recipes.
+    Real  partyOpen0[4] = {0, 0, 0, 0};
+    Real  partyOpen1[4] = {0, 0, 0, 0};
+    int16_t partyOpenK0[4] = {0, 0, 0, 0};
+    int16_t partyOpenK1[4] = {-1, -1, -1, -1};
+    // A LINK (cells.h, ADR-0179: openings between cells above the ground): a doorway `linkW` wide in the face on
+    // the world line (outward normal `linkN`, through `linkC`) at storey `linkStorey`, `linkC` its centre -- and,
+    // when `linkLen` > 0, a SKY BRIDGE drawn from it `linkLen` out to the neighbour's matching door: a floor, glass
+    // sides and a roof, walked (the collider's) and in the graph (a Link cell off the storey). The storey is laid
+    // as a lounge, so the door opens onto open floor. Set by the complex's resolveBridges, never by recipes.
+    uint8_t links = 0;
+    Vec2  linkN[2] = {Vec2(0, 0), Vec2(0, 0)};
+    Vec2  linkC[2] = {Vec2(0, 0), Vec2(0, 0)};
+    int16_t linkStorey[2] = {0, 0};
+    Real  linkLen[2] = {0, 0};
+    Real  linkW[2] = {0, 0};
     bool  backDoor = false;
     bool  fireEscape = false;
     // A BIG-BOX STORE (architectBigBox): 0 none, else the chain -- 1 warehouse club, 2 electronics, 3 home
-    // improvement, 4 discount store. The front edge wears the chain's sign and canopy, the rear its loading docks,
+    // improvement, 4 discount store -- or 5, an INDOOR MALL (architectMall: a concourse of shop units, an anchor store,
+    // a food court; mallLayout). The front edge wears the chain's sign and canopy, the rear its loading docks,
     // a band in the chain's colour (trimColor) rings the top; inside, one store floor (bigBoxRoomPlan).
     uint8_t bigBox = 0;
+    // A UNIVERSITY building (the campus): 0 none, 1 a teaching hall (lecture halls, classrooms, labs), 2 the library
+    // (a reading room, the stacks), 3 a residence hall (dorm rooms, a lounge, shared baths). A stair building
+    // (core = 1): its floors are rooms either side of a corridor from the stair (campusPlan, room_plan.cpp).
+    uint8_t campus = 0;
+    // THE SHOP MIX of its ground floor (trades.h, ~/.claude/plans/nightlife-and-malls.md): 0 everyday (a residential
+    // street's cafes, grocers, pharmacies), 1 high street, 2 nightlife (bars, clubs, restaurants), 3 a mall's. Set
+    // by the lot pass from the district; the trades draw their weights from it.
+    uint8_t shopMix = 1;
+    // THE AMERICAN MALL (bigBox 6; ~/.claude/plans/malls-v2-and-managed-ground.md): its WINGS off the centre court --
+    // bits 0..3 = +u, -u, +v, -v of the plan's own frame (u its long axis, v toward the back) -- and the court's centre
+    // (world XZ). The plan is the wings' outline; mallLayout2 reads the rest from these.
+    uint8_t mallArms = 0;
+    // ...and which of those wings END OPEN (bits as mallArms; cells.h mallCells, ADR-0180): no anchor inside the wing,
+    // the concourse and its shops run to the end wall, which is a party wall with a wide opening onto the anchor
+    // cell beyond. An open wing needs only 20 m past the court, an anchored one 30.
+    uint8_t mallOpenEnds = 0;
+    Vec2 mallCourt{0, 0};
+    // A TOWER'S SHOPS AND RESTAURANTS (Glenn: "malls like this in the skyscrapers like in Japan. Also in Japan there are
+    // restaurants at the top of skyscrapers"): the first `storeFloors` floors over the ground are a DEPARTMENT STORE
+    // (a department a floor), the top `dineFloors` RESTAURANT FLOORS (restaurants and bars round the core).
+    uint8_t storeFloors = 0, dineFloors = 0;
 };
 
 // THE SHOPFRONTS of a building's ground storey (buildings: shops; the facade's own ShopUnits): each shop's stretch
@@ -541,14 +763,87 @@ struct BuildingParams {
 struct ShopFront {
     Vec2 a, b, n, door;
     uint8_t trade = 0;
+    // its FASCIA (the sign band over the glazing), metres above the storey's base, standing `fasciaProud` proud of
+    // the wall; fasciaY1 <= fasciaY0 when the storey is too low to carry one
+    Real fasciaY0 = 0, fasciaY1 = 0, fasciaProud = 0.16;
+    // INDOORS: a unit of an indoor mall (bigBox 5), its front on the concourse -- no terrace, and the sim's way in is
+    // the mall's own street door (`entry`), not this one
+    bool indoor = false;
+    Vec2 entry;
 };
 std::vector<ShopFront> shopFrontsOf(const Poly2& plan, const BuildingParams& params);
+// The SHOP ROOMS growInterior fits out behind those fronts (a unit too shallow, or squeezed out at a corner, has
+// none): each room's floor rectangle and its trade.
+struct ShopRoomRect { Poly2 rect; uint8_t trade = 0; };
+std::vector<ShopRoomRect> shopRoomsOf(const Poly2& plan, const BuildingParams& params, Real baseY);
+// An indoor mall's name board over its doors (emitBigBoxDress): its face's centre (XZ), outward normal, its band
+// (y0..y1 above the base) and width. False for anything else.
+bool mallSignOf(const Poly2& plan, const BuildingParams& params, Vec2& centre, Vec2& n, Real& y0, Real& y1, Real& width);
+// The American mall's name boards (bigBox 6): one over every entrance (the mall's name) and every anchor (the store's).
+struct MallSign { Vec2 centre, n; Real y0 = 0, y1 = 0, width = 0; bool anchor = false, vertical = false, sky = false; };
+bool mallSignsOf(const Poly2& plan, const BuildingParams& params, std::vector<MallSign>& out);
+// A Japanese tower's (storeFloors / dineFloors): the store's name down a vertical board, the restaurant floors' across
+// the top. False when it has neither.
+bool towerSignsOf(const Poly2& plan, const BuildingParams& params, std::vector<MallSign>& out);
+// THE PARKING GARAGE you can drive into (parkingDecks; buildGarage): its collider -- every deck, ramp and rail -- in
+// world space (false: not a drivable garage, keep the prism); its stalls (centre, the way a parked car faces, height
+// above the base); and its portal (the middle of the opening on the street, and the way out).
+struct ParkingStall { Vec2 at, face; Real y = 0; };
+// Offset a CCW plan polygon: d > 0 shrinks (inset), d < 0 grows (outset) -- the grammar's own offsetPlan.
+Poly2 offsetPlanPublic(const Poly2& poly, Real d);
+bool garageColliderOf(const Poly2& plan, const BuildingParams& params, Real baseY, std::vector<Vec3>& vertices,
+                      std::vector<uint32_t>& indices);
+std::vector<ParkingStall> garageStallsOf(const Poly2& plan, const BuildingParams& params);
+bool garagePortalOf(const Poly2& plan, const BuildingParams& params, Vec2& at, Vec2& out);
 
 // Is plan edge `e` a party wall (it lies on one of params' party lines, facing out across it)?
-bool partyEdge(const Poly2& plan, const BuildingParams& params, std::size_t e);
+// ...on `storey` (-1: on any storey): a wall that stops at a lower neighbour's top is no party wall above it.
+bool partyEdge(const Poly2& plan, const BuildingParams& params, std::size_t e, int storey = -1);
+// Edge `e` is a party wall with a doorway through it (partyDoors): the facade cuts the door, blank otherwise.
+bool partyDoorEdge(const Poly2& plan, const BuildingParams& params, std::size_t e);
+// A LINK DOOR (params.links; cells.h, ADR-0179): the doorway on a storey's face through to a neighbouring cell, and
+// the bridge it opens onto when the cells stand apart. World XZ; `y0` the storey's floor, absolute when the caller
+// gives `baseY`, relative to the building's base otherwise.
+struct LinkDoor {
+    std::size_t edge = 0;     // the plan edge it is on
+    Vec2 a, b;                // the doorway on that edge, a -> b along the edge
+    Vec2 n;                   // the edge's outward normal
+    int storey = 0;
+    Real y0 = 0, h = 0;       // the storey's floor and height
+    Real len = 0, w = 0;      // the bridge's length out from the face (0: a door only) and the doorway's width
+    Poly2 bridge;             // the bridge's footprint, CCW (empty when len is 0)
+};
+// The link doors of `plan` at `storey` (every storey when `storey` < 0), the edge found by the link's line.
+std::vector<LinkDoor> linkDoors(const Poly2& plan, const BuildingParams& params, int storey = -1, Real baseY = 0);
+// The link on edge `e` at `storey`, or -1.
+int linkEdge(const Poly2& plan, const BuildingParams& params, std::size_t e, int storey);
+// THE WIDE OPENING on party wall edge `e` at `storey` (params.partyOpen*, ADR-0180): true with the run's ends `o0`,
+// `o1` along the edge (world XZ, in the edge's direction) when the wall is absent there on that storey.
+bool partyOpenAt(const Poly2& plan, const BuildingParams& params, std::size_t e, int storey, Vec2& o0, Vec2& o1);
+// EVERY CUT through the outside walls above the ground floor's doors: the link doorways (a door's height at their
+// storey) and the wide openings (floor to ceiling over their storeys) -- what the collider leaves out of its walls.
+// World XZ; y absolute when `baseY` is the building's base.
+struct WallCut {
+    std::size_t edge = 0;
+    Vec2 a, b;          // along the edge
+    Real y0 = 0, y1 = 0;
+    bool link = false;  // a link doorway (else a wide opening)
+};
+std::vector<WallCut> wallCuts(const Poly2& plan, const BuildingParams& params, Real baseY);
 // The REAR edge: the longest edge facing away from the street (normal . faceDir < -0.7) that is not a party wall;
 // plan.size() when there is none.
+// A building whose bay doors stand OPEN (rolled up, each bay a way in): a fire station's (its engines), a factory's
+// and a warehouse's (their loading bays) -- civicRooms 9, 15, 16.
+inline bool baysStandOpen(const BuildingParams& p) { return p.civicRooms == 9 || p.civicRooms == 15 || p.civicRooms == 16; }
 std::size_t rearEdgeOf(const Poly2& plan, const BuildingParams& params);
+// A building's FIRE ESCAPE as a walker meets it: its treads, landings and rails, world space (empty: none). The
+// LadderSystem keeps it round the player, so the stair climbs whether the building's interior is streamed or not.
+RenderMesh fireEscapeCollider(const Poly2& plan, const BuildingParams& params, Real baseY);
+// A campus hall's door onto its quad (params.backDoor): the rear face's middle bay, or -- when the stair hugs that wall,
+// as it does in campus halls -- the bay a metre short of the flight's foot. Its centre on the wall and the wall's
+// outward normal; false when there is none. The facade and the floor plan both place it by this.
+bool campusQuadDoor(const Poly2& plan, const BuildingParams& params, std::size_t entranceEdge, Vec2& centre, Vec2& outward);
+Real stairWallDoorX(Real wallLen, const BuildingParams& params);
 
 // Facade DETAIL level (city-render-perf R2): the same grammar, two emissions.
 // Full is today's facades — reveals, frames, muntins, sills, cornices, trim.
@@ -565,7 +860,7 @@ enum class FacadeDetail : uint8_t { Full, Flat };
 // glassTint, mullionTone, fins, curtainBay, spandrelFrac). The defaults are the curtain wall as it always was:
 // grey glass from the wall colour, steel mullions every 1.6 m, a 30% spandrel band (at most 0.9 m), no fins.
 struct CurtainStyle {
-    uint8_t glassTint = 0, mullionTone = 0, fins = 0;
+    uint8_t glassTint = 0, mullionTone = 0, fins = 0, diagrid = 0;
     Real bay = 1.6, spandrelFrac = 0.30;
     Real spandrelH(Real storey) const {   // the opaque band: 0 = floor-to-ceiling glass (a slim slab edge stays)
         return spandrelFrac <= 0.02 ? std::min(Real(0.14), storey * 0.05) : std::min(Real(1.4), storey * spandrelFrac);
@@ -596,6 +891,11 @@ BuildingMesh growBuilding(const Scope& scope, const BuildingParams& params,
 BuildingMesh growPlanBuilding(const Poly2& plan, const BuildingParams& params,
                               Real baseY = 0.0,
                               FacadeDetail detail = FacadeDetail::Full);
+// THE SECTION ENTRY (section.h, issue #105 step 2a): the building a section outlines -- its tessellation is the plan
+// growPlanBuilding reads, corner for corner, so a section of lines grows byte for byte what its plan grows.
+struct Section;
+BuildingMesh growSectionBuilding(const Section& section, const BuildingParams& params, Real baseY = 0.0,
+                                 FacadeDetail detail = FacadeDetail::Full);
 
 // The default material for a part class (PBR; ADR-0017/0032). Recipes may override.
 RenderMaterial materialFor(PartId id, const Vec3& wallColor);
@@ -627,9 +927,6 @@ void emitShell(BuildingMesh& out, const Scope& s, PartId part, const Vec3& color
 void emitParapet(BuildingMesh& out, const Vec3& footOrigin, Real width, Real depth,
                  const Vec3& r, const Vec3& f, Real y, Real height, Real thick,
                  PartId part, const Vec3& color);
-// Emit a quad (one facade panel / window / sign) from four corners + a normal.
-void emitQuad(RenderMesh& mesh, const Vec3& a, const Vec3& b, const Vec3& c,
-              const Vec3& d, const Vec3& normal, const Vec3& color);
 // Split a scope along a local axis (0=right,1=up,2=forward) into child scopes of
 // the given sizes; a negative size means "repeat to fill" with |size| as target.
 std::vector<Scope> splitScope(const Scope& s, int axis,

@@ -1,3 +1,4 @@
+#include <cstdlib>
 #include "architect.h"
 
 #include <algorithm>
@@ -152,12 +153,48 @@ void capFloors(BuildingParams& p, Real shortSide, Real slender = 1.8) {
         std::max(1, static_cast<int>(shortSide * slender / fh) - 1);
     p.floors = std::min(p.floors, maxFloors);
 }
+}  // namespace (reopened below)
+
+bool officeUseFor(const std::string& recipe, const std::string& placeType, bool residential) {
+    static const bool off = std::getenv("RT_NO_OFFICE_FLOORS") != nullptr;   // A/B: workplaces as before
+    if (off || residential || placeType == "home" || placeType == "depot") return false;
+    static const char* kOwnRooms[] = {"hotel", "hospital", "school", "library", "museum", "university", "church",
+                                      "teaching_hall", "campus_library", "residence_hall"};
+    for (const char* n : kOwnRooms) if (recipe == n) return false;
+    return placeType == "office" || placeType == "civic" || placeType == "shop" || placeType == "park";
+}
+
+uint8_t civicRoomsFor(const std::string& recipe) {
+    static const bool off = std::getenv("RT_NO_CIVIC_ROOMS") != nullptr;   // A/B: the ring of studios as before
+    if (off) return 0;
+    if (recipe == "university") return 1;
+    if (recipe == "library") return 2;
+    if (recipe == "museum") return 4;
+    if (recipe == "school") return 5;
+    if (recipe == "hospital") return 6;
+    if (recipe == "church") return 7;
+    if (recipe == "cinema") return 8;
+    if (recipe == "fire_station") return 9;
+    if (recipe == "police") return 10;
+    if (recipe == "courthouse") return 11;
+    if (recipe == "capitol") return 12;
+    if (recipe == "market_hall") return 14;
+    if (recipe == "factory") return 15;
+    if (recipe == "brick_warehouse" || recipe == "metal_shed") return 16;
+    if (recipe == "hotel") return 17;
+    return 0;
+}
+
+namespace {
+
 void capFloors(BuildingRecipe& out, Real shortSide, Real slender) {
     // Homes, and the buildings that are flats over a shop (their upper floors are apartments). A hotel keeps its
     // ring of rooms -- that is a hotel.
     static const char* kFlatsOverShops[] = {"mixed_use", "oldtown_house", "oldtown_grand", "brick_shop", "corner_shop"};
     out.params.residential = out.placeType == "home";
     for (const char* n : kFlatsOverShops) if (out.name == n) out.params.residential = true;
+    out.params.officeUse = officeUseFor(out.name, out.placeType, out.params.residential);
+    out.params.civicRooms = civicRoomsFor(out.name);
     storeyHeightsByUse(out);
     capFloors(out.params, shortSide, slender);
     if (out.params.floors < 15) out.params.top = 0;   // a top is a tower's: the short ones keep the penthouse
@@ -531,6 +568,27 @@ void recipePodiumTower(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
     out.name = "podium_tower";
 }
 
+// THE ROUNDED TOWER (the toolkit's first section building, issue #105): a glass office tower on a rounded-corner
+// plan -- the rectangle the lot gives with its four corners turned into quarter arcs of 5-8 m -- shops in its lobby
+// ring, a core, a flat roof the stairs reach. The long straight sides keep today's room ring and its furniture; the
+// arcs are the section's, tessellated to chords the facade lays glass on.
+void recipeRoundedTower(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
+    BuildingParams& p = out.params;
+    const int lift = static_cast<int>(cx.coreness * 30);
+    p.floors = rng.irange(cx.roomy ? 12 : 9, cx.roomy ? 18 : 12) + lift;
+    p.groundRetail = true;
+    dress(p, FacadeStyle::GlassCurtain, rng);
+    cx.slender = 3.0 + cx.coreness * 3.0;
+    out.massing = BuildingRecipe::Massing::Section;
+    out.section.kind = BuildingRecipe::SectionSpec::Kind::Rounded;
+    out.section.radius = 5.0 + 3.0 * rng.unit();
+    p.helipad = 2;   // the pad on its roof, the ramp up to it: the roof cell's first contents of its own
+    out.placeType = "office";
+    if (p.curtainWall) glassStyle(p, rng, true);
+    towerTop(p, {{1, 50}, {2, 30}, {3, 20}});   // a flat top: the roof is walked (the bulkhead's doors)
+    out.name = "rounded_tower";
+}
+
 // The PARKING GARAGE: open concrete decks over a bay-door entry.
 void recipeParkingGarage(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
     BuildingParams& p = out.params;
@@ -539,6 +597,8 @@ void recipeParkingGarage(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
     dress(p, FacadeStyle::Concrete, rng);
     p.parkingDecks = true;
     p.groundBays = 2;              // the entry/exit ramps on the street face
+    p.groundHeight = 3.1;          // decks a garage's height apart (the ramps are ~6.5 x this long)
+    p.floorHeight = 3.0;
     p.awning = false;
     cx.slender = 2.0;
     out.placeType = "office";
@@ -644,6 +704,296 @@ void recipeTaperedGlassTower(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
     out.placeType = "office";
     towerTop(p, {{8, 40}, {4, 20}, {2, 25}, {5, 15}});   // buildings M2
     out.name = "tapered_glass_tower";
+}
+
+// The TWISTED TOWER (issue #105 step 4, the stack's first transform; Turning Torso, Cayan Tower): a stadium or a
+// rounded slab turning up to a quarter turn over its height about its own centre, glass, every storey its own facet
+// with a slab band between -- the plan itself turns, scaled down only as far as the lot makes it.
+void recipeTwistedTower(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
+    BuildingParams& p = out.params;
+    p.floors = rng.irange(10, 16) + static_cast<int>(cx.coreness * 44);   // (the district rim keeps to 16; coreness lifts the core)
+    p.groundRetail = true;
+    dress(p, FacadeStyle::GlassCurtain, rng);
+    glassStyle(p, rng, true);
+    out.massing = BuildingRecipe::Massing::Section;
+    out.section.kind = rng.unit() < 0.5 ? BuildingRecipe::SectionSpec::Kind::Stadium : BuildingRecipe::SectionSpec::Kind::Rounded;
+    out.section.radius = 4.0 + 3.0 * rng.unit();
+    p.envelope = BuildingParams::Envelope::Twist;
+    p.baseFloors = 1;
+    p.twistDeg = rng.range(45.0, 90.0);
+    p.setbackFloors = 0;
+    p.setbackEvery = 0;
+    cx.slender = 4.0 + cx.coreness * 4.0;
+    out.placeType = "office";
+    towerTop(p, {{1, 60}, {2, 40}});   // a flat top: the roof is walked
+    out.name = "twisted_tower";
+}
+
+// The STACKED MODULES (issue #105 step 4, Relation::Support; 56 Leonard, the Jenga tower): a rectangular tower in
+// modules of a few storeys, every other one slid along the long axis past the one below -- terraces on the ledges,
+// soffits under the overhangs.
+void recipeStackedModules(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
+    BuildingParams& p = out.params;
+    p.floors = rng.irange(9, 14) + static_cast<int>(cx.coreness * 28);
+    p.groundRetail = true;
+    dress(p, FacadeStyle::GlassCurtain, rng);
+    glassStyle(p, rng, true);
+    p.envelope = BuildingParams::Envelope::Stack;
+    p.baseFloors = rng.irange(1, 2);
+    p.stepFloors = rng.irange(3, 5);
+    p.stackShift = rng.range(2.5, 4.5);
+    p.setbackFloors = 0;
+    p.setbackEvery = 0;
+    cx.slender = 3.5 + cx.coreness * 3.0;
+    out.placeType = "office";
+    towerTop(p, {{1, 50}, {2, 25}, {14, 25}});   // a quarter of them flared: a lid swelling over the top module
+    out.name = "stacked_modules";
+}
+
+// The LENS TOWER (issue #105 step 4, the stack's scale curve; 30 St Mary Axe, Torre Glories): a drum that widens
+// to its waist and narrows to its top, glass, every storey its own facet with a slab band between.
+void recipeLensTower(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
+    BuildingParams& p = out.params;
+    p.floors = rng.irange(10, 15) + static_cast<int>(cx.coreness * 34);
+    p.groundRetail = true;
+    dress(p, FacadeStyle::GlassCurtain, rng);
+    glassStyle(p, rng, true);
+    out.massing = BuildingRecipe::Massing::Circle;
+    p.envelope = BuildingParams::Envelope::Bulge;
+    p.baseFloors = 1;
+    p.bulge = rng.range(0.38, 0.55);
+    p.taperTop = rng.range(0.45, 0.6);   // (never below what the core needs: the stack raises it on a small drum)
+    p.setbackFloors = 0;
+    p.setbackEvery = 0;
+    cx.slender = 4.0 + cx.coreness * 3.0;
+    out.placeType = "office";
+    p.top = 10;      // the glass dome: the lens closes in a cap, the deck a lantern room under it
+    p.diagrid = 2;   // the Gherkin's diagrid, a crossing every two bays
+    out.name = "lens_tower";
+}
+
+// The BUNDLED TUBES (issue #105 step 5, the first complex; the Sears Tower): glass tubes on one frame, nine on a
+// roomy lot, each its own height, the taller keeping their windows above the lower ones' roofs, an inner tube
+// entered through a neighbour's lobby.
+void recipeBundledTubes(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
+    BuildingParams& p = out.params;
+    p.floors = rng.irange(12, 16) + static_cast<int>(cx.coreness * 50);
+    p.groundRetail = true;
+    dress(p, FacadeStyle::GlassCurtain, rng);
+    glassStyle(p, rng, true);
+    out.massing = BuildingRecipe::Massing::Complex;
+    out.complex.kind = BuildingRecipe::ComplexSpec::Kind::BundledTubes;
+    out.complex.nx = cx.roomy ? 3 : 2;
+    out.complex.ny = cx.roomy ? 3 : 2;
+    p.setbackFloors = 0;
+    p.setbackEvery = 0;
+    cx.slender = 5.0 + cx.coreness * 4.0;
+    out.placeType = "office";
+    towerTop(p, {{1, 50}, {7, 30}, {8, 20}});   // a flat top: the tubes' roofs are walked
+    out.name = "bundled_tubes";
+}
+
+// The COURTYARD BLOCK (issue #105 step 5, the complex's second preset; the European perimeter block): brick or
+// stucco wings round an open court, the corners their own houses, every cell its own door on the street.
+void recipeCourtyardBlock(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
+    BuildingParams& p = out.params;
+    p.floors = rng.irange(4, 6) + (cx.roomy ? 1 : 0);
+    p.groundRetail = rng.unit() < 0.5;
+    dress(p, rng.unit() < 0.6 ? FacadeStyle::Brick : FacadeStyle::Stucco, rng);
+    out.massing = BuildingRecipe::Massing::Complex;
+    out.complex.kind = BuildingRecipe::ComplexSpec::Kind::Courtyard;
+    out.complex.depth = rng.range(14.5, 16.5);
+    p.setbackFloors = 0;
+    p.setbackEvery = 0;
+    cx.slender = 1.2;
+    out.placeType = "home";
+    masonryDepth(p, 0.1, {{1, 70}, {2, 30}});
+    out.name = "courtyard_block";
+}
+
+// The LEANING TOWER (issue #105 step 4, the curves composed; Gate of Europe, Capital Gate): a glass slab leaning
+// a sixth of its height along the lot, now and then with a turn in it as well.
+void recipeLeaningTower(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
+    BuildingParams& p = out.params;
+    p.floors = rng.irange(10, 15) + static_cast<int>(cx.coreness * 30);
+    p.groundRetail = true;
+    dress(p, FacadeStyle::GlassCurtain, rng);
+    glassStyle(p, rng, true);
+    p.envelope = BuildingParams::Envelope::Curves;
+    p.baseFloors = 1;
+    p.lean = (rng.unit() < 0.5 ? 1.0 : -1.0) * rng.range(0.12, 0.2);
+    p.twistDeg = rng.unit() < 0.3 ? rng.range(20.0, 40.0) : 0.0;
+    p.taperTop = 1.0;
+    p.bulge = 0.0;
+    p.setbackFloors = 0;
+    p.setbackEvery = 0;
+    cx.slender = 4.0 + cx.coreness * 3.0;
+    out.placeType = "office";
+    towerTop(p, {{1, 40}, {2, 20}, {6, 15}, {12, 25}});   // a quarter vaulted: a barrel over the long axis
+    out.name = "leaning_tower";
+}
+
+// The TWISTED TAPER (the curves composed): a rounded tower turning a quarter and narrowing to two thirds at the top.
+void recipeTwistedTaper(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
+    BuildingParams& p = out.params;
+    p.floors = rng.irange(10, 16) + static_cast<int>(cx.coreness * 40);
+    p.groundRetail = true;
+    dress(p, FacadeStyle::GlassCurtain, rng);
+    glassStyle(p, rng, true);
+    out.massing = BuildingRecipe::Massing::Section;
+    out.section.kind = BuildingRecipe::SectionSpec::Kind::Rounded;
+    out.section.radius = 5.0 + 3.0 * rng.unit();
+    p.envelope = BuildingParams::Envelope::Curves;
+    p.baseFloors = 1;
+    p.twistDeg = rng.range(60.0, 90.0);
+    p.taperTop = rng.range(0.6, 0.75);
+    p.bulge = 0.0;
+    p.lean = 0.0;
+    p.setbackFloors = 0;
+    p.setbackEvery = 0;
+    cx.slender = 4.5 + cx.coreness * 4.0;
+    out.placeType = "office";
+    towerTop(p, {{1, 35}, {5, 20}, {8, 15}, {11, 30}});   // three in ten a glass spire
+    if (rng.unit() < 0.5) p.diagrid = 2;   // half of them a diagrid
+    out.name = "twisted_taper";
+}
+
+// The RING BLOCK (issue #105 step 5, the complex's third preset; Apple Park): a low glass ring of cells round a
+// court, a dozen segments or so, each with its door on the outside.
+void recipeRingBlock(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
+    BuildingParams& p = out.params;
+    p.floors = rng.irange(3, 5) + (cx.roomy ? 1 : 0);
+    p.groundRetail = false;
+    dress(p, FacadeStyle::GlassCurtain, rng);
+    glassStyle(p, rng, true);
+    out.massing = BuildingRecipe::Massing::Complex;
+    out.complex.kind = BuildingRecipe::ComplexSpec::Kind::Ring;
+    out.complex.sides = rng.irange(10, 16);
+    out.complex.depth = rng.range(12.0, 14.0);
+    p.setbackFloors = 0;
+    p.setbackEvery = 0;
+    cx.slender = 1.0;
+    out.placeType = "office";
+    towerTop(p, {{1, 100}});
+    out.name = "ring_block";
+}
+
+// The WAVY TOWER (issue #105 step 6, the first implicit form; Aqua Tower): a glass slab whose skin undulates a
+// metre or two across its long axis, the waves climbing the building, every storey its own outline.
+void recipeWavyTower(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
+    BuildingParams& p = out.params;
+    p.floors = rng.irange(10, 15) + static_cast<int>(cx.coreness * 38);
+    p.groundRetail = true;
+    dress(p, FacadeStyle::GlassCurtain, rng);
+    glassStyle(p, rng, true);
+    p.envelope = BuildingParams::Envelope::Wave;
+    p.baseFloors = 1;
+    p.wave = rng.range(1.2, 2.0);
+    p.waveLen = rng.range(16.0, 24.0);
+    p.setbackFloors = 0;
+    p.setbackEvery = 0;
+    cx.slender = 4.0 + cx.coreness * 3.0;
+    out.placeType = "office";
+    towerTop(p, {{1, 60}, {2, 40}});
+    out.name = "wavy_tower";
+}
+
+// THE MALL AS CELLS (cells.h mallCells; ADR-0180; the plan's Westfield): the American mall as the spine, an anchor
+// store at each end of it and a parking garage behind its court, every one its own building, the concourse open
+// into the anchors on both levels. A whole-block landmark of the commercial quarter; the lot pass sizes it.
+void recipeMallComplex(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
+    out = architectMallWings(rng.next());
+    out.massing = BuildingRecipe::Massing::Complex;
+    out.complex.kind = BuildingRecipe::ComplexSpec::Kind::Mall;
+    out.complex.depth = 30.0;   // the anchors' depth
+    cx.slender = 1.0;
+    out.placeType = "shop";
+    out.name = "mall_complex";
+}
+
+// THE TWIN TOWERS (cells.h twinTowers; ADR-0179): two glass towers on one block a gap apart, a sky bridge between
+// them two thirds of the way up, both lobbies on the street -- Petronas. A whole-block landmark.
+void recipeTwinTowers(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
+    BuildingParams& p = out.params;
+    p.floors = rng.irange(12, 16) + static_cast<int>(cx.coreness * 44);
+    p.groundRetail = true;
+    dress(p, FacadeStyle::GlassCurtain, rng);
+    glassStyle(p, rng, true);
+    p.envelope = BuildingParams::Envelope::None;
+    p.setbackFloors = 0;
+    p.setbackEvery = 0;
+    p.baseFloors = 0;
+    out.massing = BuildingRecipe::Massing::Complex;
+    out.complex.kind = BuildingRecipe::ComplexSpec::Kind::Twins;
+    out.complex.gap = rng.range(10.0, 16.0);
+    out.complex.bridgeStorey = 0;
+    out.complex.bridgeW = rng.range(4.0, 6.0);
+    cx.slender = 4.0 + cx.coreness * 3.0;
+    out.placeType = "office";
+    towerTop(p, {{1, 40}, {11, 35}, {2, 25}});   // a glass spire on a third of them: the pair reads as a pair
+    out.name = "twin_towers";
+}
+
+// The SCULPTED TOWER (issue #105 step 6, the mesh mass): the first form in assets/masses -- modelled, not
+// composed -- fitted to its lot and dressed in glass, every storey its slice.
+void recipeSculptedTower(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
+    BuildingParams& p = out.params;
+    p.floors = rng.irange(10, 16) + static_cast<int>(cx.coreness * 40);
+    p.groundRetail = true;
+    dress(p, FacadeStyle::GlassCurtain, rng);
+    glassStyle(p, rng, true);
+    p.envelope = BuildingParams::Envelope::Mesh;
+    p.massMesh = 1;
+    p.baseFloors = 1;
+    p.setbackFloors = 0;
+    p.setbackEvery = 0;
+    if (rng.unit() < 0.5) { p.skin = 1; p.skinGap = rng.range(1.0, 1.6); }   // half of them a veil round straight floors
+    cx.slender = 4.0 + cx.coreness * 4.0;
+    out.placeType = "office";
+    towerTop(p, {{1, 45}, {2, 25}, {13, 30}});   // three in ten an aperture: the form open to the sky
+    out.name = "sculpted_tower";
+}
+
+// THE VEIL (issue #105 step 6, the Envelope word; ADR-0178): a straight tower inside a sculpted glass skin -- the
+// form the seed picks (a twist, a lens, the curves, the sculpted mass), straight floors and rectangular rooms a gap
+// inside it, the skin ruled storey to storey, a diagrid on half of them.
+void recipeVeilTower(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
+    BuildingParams& p = out.params;
+    p.floors = rng.irange(10, 16) + static_cast<int>(cx.coreness * 40);
+    p.groundRetail = true;
+    dress(p, FacadeStyle::GlassCurtain, rng);
+    glassStyle(p, rng, true);
+    switch (rng.irange(0, 3)) {
+    case 0:
+        p.envelope = BuildingParams::Envelope::Twist;
+        p.twistDeg = rng.range(40.0, 90.0);
+        break;
+    case 1:
+        p.envelope = BuildingParams::Envelope::Bulge;
+        p.bulge = rng.range(0.35, 0.6);
+        p.taperTop = rng.range(0.6, 0.8);
+        break;
+    case 2:
+        p.envelope = BuildingParams::Envelope::Curves;
+        p.twistDeg = rng.range(30.0, 60.0);
+        p.taperTop = rng.range(0.7, 0.85);
+        p.lean = rng.range(0.06, 0.14);
+        break;
+    default:
+        p.envelope = BuildingParams::Envelope::Mesh;
+        p.massMesh = 1;
+        break;
+    }
+    p.skin = 1;
+    p.skinGap = rng.range(1.0, 1.8);
+    if (rng.unit() < 0.5) p.diagrid = 2;
+    p.baseFloors = rng.unit() < 0.5 ? 1 : 2;
+    p.setbackFloors = 0;
+    p.setbackEvery = 0;
+    cx.slender = 4.0 + cx.coreness * 4.0;
+    out.placeType = "office";
+    towerTop(p, {{1, 50}, {2, 30}, {9, 20}});
+    out.name = "veil_tower";
 }
 
 // The GLASS SLAB (UN Secretariat, Lever House): a thin slab on the lot's long axis, sometimes over a low
@@ -1167,6 +1517,82 @@ void recipeUniversity(BuildingRecipe& out, Hash& rng, RecipeCtx&) {
     out.name = "university";
 }
 
+// THE CAMPUS's three buildings (the university campus, milestone 2). All stair buildings (core 1): their floors
+// are rooms either side of a corridor (campusPlan), and none has shops.
+// The TEACHING HALL: collegiate red brick, tall storeys (4.2 m: lecture halls want the height), wide multi-pane
+// windows under band hoods, quoined corners, a portico over steps, a hipped slate roof.
+void recipeTeachingHall(BuildingRecipe& out, Hash& rng, RecipeCtx&) {
+    BuildingParams& p = out.params;
+    p.campus = 1;
+    p.core = 1;
+    p.floors = rng.irange(2, 3);
+    p.groundHeight = 4.6;
+    p.floorHeight = 4.2;
+    p.groundRetail = false;
+    p.pilasters = false;
+    dress(p, FacadeStyle::Brick, rng);
+    p.window.head = OpeningStyle::Head::Flat;
+    p.window.hood = OpeningStyle::Hood::Band;
+    p.window.lightsX = 3;
+    p.window.lightsY = 3;
+    p.quoins = true;
+    p.portico = 4;
+    p.entranceSteps = true;
+    p.roofStyle = BuildingParams::RoofStyle::Hip;
+    p.roofPitch = 0.45;
+    out.placeType = "civic";
+    out.name = "teaching_hall";
+}
+
+// The LIBRARY: warm sandstone, a tall reading-room storey whose round-headed windows rise under arches, pilasters
+// between the bays, a broad six-column portico over steps, and a dome over the reading room.
+void recipeCampusLibrary(BuildingRecipe& out, Hash& rng, RecipeCtx&) {
+    BuildingParams& p = out.params;
+    p.campus = 2;
+    p.core = 1;
+    p.floors = 2;
+    p.groundHeight = 7.0;
+    p.floorHeight = 4.0;
+    p.groundRetail = false;
+    p.pilasters = true;
+    dress(p, FacadeStyle::Sandstone, rng);
+    // warm buff stone, always (the style's palette can roll a painted colour; a library is stone)
+    p.wallColor = Vec3(0.80, 0.72, 0.57) * static_cast<Real>(rng.range(0.94, 1.04));
+    p.trimColor = Vec3(0.90, 0.86, 0.76);
+    p.window.head = OpeningStyle::Head::Round;
+    p.window.hood = OpeningStyle::Hood::Arch;
+    p.window.lightsX = 2;
+    p.window.lightsY = 4;
+    p.quoins = true;
+    p.portico = 6;
+    p.entranceSteps = true;
+    p.dome = rng.unit() < 0.6;
+    out.placeType = "civic";
+    out.name = "campus_library";
+}
+
+// The RESIDENCE HALL: plainer -- darker brick, four or five storeys of ordinary bedroom windows (one to a dorm
+// room), a gabled roof, a simple entrance without a portico.
+void recipeResidenceHall(BuildingRecipe& out, Hash& rng, RecipeCtx&) {
+    BuildingParams& p = out.params;
+    p.campus = 3;
+    p.core = 1;
+    p.floors = rng.irange(4, 5);
+    p.groundRetail = false;
+    p.pilasters = false;
+    p.residential = true;
+    dress(p, rng.unit() < 0.5 ? FacadeStyle::DarkBrick : FacadeStyle::Brick, rng);
+    p.window.head = OpeningStyle::Head::Flat;
+    p.window.hood = OpeningStyle::Hood::None;
+    p.window.lightsX = 1;
+    p.window.lightsY = 2;
+    p.entranceSteps = true;
+    p.roofStyle = BuildingParams::RoofStyle::Gable;
+    p.roofPitch = 0.5;
+    out.placeType = "home";
+    out.name = "residence_hall";
+}
+
 // The CHURCH: one tall gabled nave, arched windows, and the BELL TOWER
 // steeple rising through the roof — the neighbourhood's vertical accent.
 void recipeChurch(BuildingRecipe& out, Hash& rng, RecipeCtx&) {
@@ -1299,12 +1725,26 @@ const NamedRecipe kRecipeRegistry[] = {
     {"stepped_tower", recipeSteppedTower},
     {"drum_tower", recipeDrumTower},
     {"podium_tower", recipePodiumTower},
+    {"rounded_tower", recipeRoundedTower},
     {"parking_garage", recipeParkingGarage},
     {"pagoda_tower", recipePagodaTower},
     {"condo_tower", recipeCondoTower},
     {"sky_exposure_tower", recipeSkyExposureTower},
     {"tower_on_base", recipeTowerOnBase},
     {"tapered_glass_tower", recipeTaperedGlassTower},
+    {"twisted_tower", recipeTwistedTower},
+    {"stacked_modules", recipeStackedModules},
+    {"lens_tower", recipeLensTower},
+    {"bundled_tubes", recipeBundledTubes},
+    {"courtyard_block", recipeCourtyardBlock},
+    {"leaning_tower", recipeLeaningTower},
+    {"twisted_taper", recipeTwistedTaper},
+    {"ring_block", recipeRingBlock},
+    {"wavy_tower", recipeWavyTower},
+    {"sculpted_tower", recipeSculptedTower},
+    {"veil_tower", recipeVeilTower},
+    {"twin_towers", recipeTwinTowers},
+    {"mall_complex", recipeMallComplex},
     {"glass_slab", recipeGlassSlab},
     {"pencil_tower", recipePencilTower},
     {"terrace_condo", recipeTerraceCondo},
@@ -1334,6 +1774,9 @@ const NamedRecipe kRecipeRegistry[] = {
     {"market_hall", recipeMarketHall},
     {"capitol", recipeCapitol},
     {"university", recipeUniversity},
+    {"teaching_hall", recipeTeachingHall},
+    {"campus_library", recipeCampusLibrary},
+    {"residence_hall", recipeResidenceHall},
     {"church", recipeChurch},
     {"library", recipeLibrary},
     {"museum", recipeMuseum},
@@ -1459,18 +1902,30 @@ BuildingRecipe architectBlockLandmark(DistrictTag tag, Real shortSide, Real area
         case DistrictTag::Financial:
         case DistrictTag::Commercial: {
             const Real r = rng.unit();
-            if (r < 0.30) {
+            if (tag == DistrictTag::Commercial && r < 0.06) {
+                recipeMallComplex(out, rng, cx);                      // the mall as cells (ADR-0180): a whole commercial block
+            } else if (r < 0.22) {
                 recipeGlassTower(out, rng, cx);
                 out.massing = BuildingRecipe::Massing::TowerInPlaza;   // falls back to the block plan when too shallow
+            } else if (r < 0.30) {
+                recipeBundledTubes(out, rng, cx);                      // the toolkit's complex: a whole block of tubes (issue #105)
+            } else if (r < 0.34) {
+                recipeTwinTowers(out, rng, cx);                        // two towers and a sky bridge (ADR-0179)
             } else if (r < 0.50) {
                 recipePodiumTower(out, rng, cx);
-            } else if (r < 0.65) {
+            } else if (r < 0.60) {
                 recipeSkyExposureTower(out, rng, cx);                  // the whole block cut by the plane
                 out.massing = BuildingRecipe::Massing::LotPlan;
-            } else if (r < 0.78) {
+            } else if (r < 0.65) {
+                recipeRingBlock(out, rng, cx);                         // a round block round a court
+            } else if (r < 0.74) {
                 recipeTaperedGlassTower(out, rng, cx);
-            } else if (r < 0.88) {
+            } else if (r < 0.78) {
+                recipeTwistedTower(out, rng, cx);
+            } else if (r < 0.85) {
                 recipeGlassSlab(out, rng, cx);
+            } else if (r < 0.88) {
+                recipeLensTower(out, rng, cx);
             } else {
                 recipeSteppedTower(out, rng, cx);
                 out.massing = BuildingRecipe::Massing::LotPlan;       // the block's own polygon, stepped
@@ -1478,10 +1933,14 @@ BuildingRecipe architectBlockLandmark(DistrictTag tag, Real shortSide, Real area
             break;
         }
         case DistrictTag::Residential:
-            recipeApartments(out, rng, cx);
-            out.params.floors = rng.irange(5, 9);
-            out.massing = BuildingRecipe::Massing::LotPlan;
-            cx.slender = std::max(cx.slender, Real(2.5));
+            if (rng.unit() < 0.45) {
+                recipeCourtyardBlock(out, rng, cx);                    // the perimeter block round its court (issue #105)
+            } else {
+                recipeApartments(out, rng, cx);
+                out.params.floors = rng.irange(5, 9);
+                out.massing = BuildingRecipe::Massing::LotPlan;
+                cx.slender = std::max(cx.slender, Real(2.5));
+            }
             break;
         case DistrictTag::OldTown:
             recipeOldTownGrand(out, rng, cx);
@@ -1541,7 +2000,18 @@ BuildingRecipe architectPick(DistrictTag tag, Real shortSide, Real area,
             else if (roll < 0.58) recipeArtDecoTower(out, rng, cx);
             else if (roll < 0.63) recipeSteppedTower(out, rng, cx);
             else if (roll < 0.67) recipeDrumTower(out, rng, cx);
-            else if (roll < 0.79) recipeOfficeSlab(out, rng, cx);
+            else if (roll < 0.75) recipeOfficeSlab(out, rng, cx);
+            // THE TOOLKIT'S FORMS (issue #105; Glenn, 2026-10-15: "will these show up in island 8?"): accents,
+            // a few per district, carved from the office slab's and the commercial block's shares
+            else if (roll < 0.77) recipeTwistedTower(out, rng, cx);
+            else if (roll < 0.79) recipeLensTower(out, rng, cx);
+            else if (roll < 0.805) recipeLeaningTower(out, rng, cx);
+            else if (roll < 0.82) recipeTwistedTaper(out, rng, cx);
+            else if (roll < 0.835) recipeWavyTower(out, rng, cx);
+            else if (roll < 0.85) recipeStackedModules(out, rng, cx);
+            else if (roll < 0.86) recipeRoundedTower(out, rng, cx);
+            else if (roll < 0.865) recipeSculptedTower(out, rng, cx);
+            else if (roll < 0.87) recipeVeilTower(out, rng, cx);
             else if (roll < 0.89) recipeCommercialBlock(out, rng, cx);
             else if (roll < 0.935) recipeParkingGarage(out, rng, cx);
             else if (roll < 0.97) recipePlaza(out, rng, cx);
@@ -1550,7 +2020,8 @@ BuildingRecipe architectPick(DistrictTag tag, Real shortSide, Real area,
         case DistrictTag::Commercial:
             if (roll < 0.04)      recipePocketPark(out, rng, cx);
             else if (roll < 0.07) recipePlaza(out, rng, cx);
-            else if (roll < 0.25) recipeBrickShop(out, rng, cx);
+            else if (roll < 0.23) recipeBrickShop(out, rng, cx);
+            else if (roll < 0.25) recipeCourtyardBlock(out, rng, cx);   // (the toolkit's complex: on a lot too small for its court, a plan building)
             else if (roll < 0.38) recipeMixedUse(out, rng, cx);
             else if (roll < 0.46) recipeOfficeMidrise(out, rng, cx);
             else if (roll < 0.49) recipePodiumTower(out, rng, cx);
@@ -1588,7 +2059,8 @@ BuildingRecipe architectPick(DistrictTag tag, Real shortSide, Real area,
             else if (roll < 0.57) recipeVilla(out, rng, cx);
             else if (roll < 0.64) recipeRanchHouse(out, rng, cx);
             else if (roll < 0.72) recipeDuplex(out, rng, cx);
-            else if (roll < 0.84) recipeRowhouses(out, rng, cx);
+            else if (roll < 0.81) recipeRowhouses(out, rng, cx);
+            else if (roll < 0.84) recipeCourtyardBlock(out, rng, cx);
             else if (roll < 0.89) recipeGardenCondo(out, rng, cx);
             else if (roll < 0.96) recipeApartments(out, rng, cx);
             else                  recipeCornerShop(out, rng, cx);
@@ -1792,8 +2264,14 @@ BuildingParams architectRowUnit(uint32_t seed, int floors) {
 
 void dressBigBox(BuildingParams& p, int chain, uint32_t seed) {
     Hash rng(seed | 1u);
-    p.bigBox = static_cast<uint8_t>(std::clamp(chain, 1, 4));
+    p.bigBox = static_cast<uint8_t>(std::clamp(chain, 1, 6));
     switch (p.bigBox) {
+        case 5:   // the indoor mall: warm stone, a deep teal band
+        case 6:
+            dress(p, FacadeStyle::Sandstone, rng);
+            p.wallColor = Vec3(0.80, 0.72, 0.60);
+            p.trimColor = Vec3(0.08, 0.36, 0.38);
+            break;
         case 1:   // warehouse club: grey corrugated steel, a red band
             dress(p, FacadeStyle::Metal, rng);
             p.wallColor = Vec3(0.62, 0.63, 0.64);
@@ -1824,6 +2302,89 @@ BuildingRecipe architectBigBox(uint32_t seed) {
     out.params.retailStreetOnly = true;
     RecipeCtx cx;
     recipeBigBox(out, rng, cx);
+    return out;
+}
+
+BuildingRecipe architectMall(uint32_t seed) {
+    BuildingRecipe out = architectBigBox(seed);
+    Hash rng(seed * 40503u ^ 0x3a11u);
+    dressBigBox(out.params, 5, rng.next());
+    out.params.groundHeight = rng.range(9.0, 10.5);   // one tall storey: a skylit concourse
+    out.params.shopMix = 3;
+    out.name = "indoor_mall";
+    return out;
+}
+
+BuildingRecipe architectMallWings(uint32_t seed) {
+    BuildingRecipe out = architectMall(seed);
+    out.params.bigBox = 6;
+    out.params.floors = 1;            // the upper mall level
+    out.params.groundHeight = 5.5;
+    out.params.floorHeight = 5.5;
+    out.params.core = 1;              // its own circulation: escalators, a glass lift
+    out.name = "mall_wings";
+    return out;
+}
+
+BuildingRecipe architectBusDepot() {
+    BuildingRecipe out;
+    out.massing = BuildingRecipe::Massing::Park;
+    out.placeType = "depot";
+    out.name = "bus_depot";
+    return out;
+}
+
+BuildingRecipe architectCampus(int role, uint32_t seed) {
+    Hash rng(seed * 2654435761u ^ 0x5eed0c47u);
+    BuildingRecipe out;
+    out.params.seed = rng.next();
+    RecipeCtx cx;
+    switch (role) {
+        case 1: recipeTeachingHall(out, rng, cx); out.params.backDoor = true; break;   // a door onto the quad too
+        case 2: recipeCampusLibrary(out, rng, cx); out.params.backDoor = true; break;  // (the front stays on the street)
+        case 3: recipeResidenceHall(out, rng, cx); out.params.backDoor = true; break;
+        case 5:
+            out.massing = BuildingRecipe::Massing::Park;
+            out.placeType = "park";
+            out.name = "sports_field";
+            break;
+        case 6:   // the dorm block's courtyard: a quad without walks across (its halls run its whole length)
+            out.massing = BuildingRecipe::Massing::Park;
+            out.placeType = "park";
+            out.name = "dorm_courtyard";
+            break;
+        default:
+            out.massing = BuildingRecipe::Massing::Park;
+            out.placeType = "park";
+            out.name = "campus_quad";
+            break;
+    }
+    return out;
+}
+
+BuildingRecipe architectPaseo(int role, uint32_t seed) {
+    Hash rng(seed * 2246822519u ^ 0x9a5e0u);
+    BuildingRecipe out;
+    out.params.seed = rng.next();
+    if (role == 2) {
+        out.massing = BuildingRecipe::Massing::Park;
+        out.placeType = "park";
+        out.name = "paseo";
+        return out;
+    }
+    BuildingParams& p = out.params;
+    p.floors = rng.unit() < 0.7 ? 1 : 2;   // over the shops: one storey (flats, offices) or two
+    p.groundRetail = true;
+    const Real r = rng.unit();
+    dress(p, r < 0.45 ? FacadeStyle::Stucco : r < 0.8 ? FacadeStyle::Sandstone : FacadeStyle::Brick, rng);
+    p.groundHeight = 5.2;   // tall shopfronts
+    p.awning = true;
+    if (rng.unit() < 0.5) { p.window.head = OpeningStyle::Head::Round; p.window.hood = OpeningStyle::Hood::Arch; }
+    p.curtainWall = false;
+    p.retailStreetOnly = false;   // shopfronts on the street behind it as well as on the paseo
+    p.shopMix = 3;
+    out.placeType = "shop";
+    out.name = "paseo_shops";
     return out;
 }
 

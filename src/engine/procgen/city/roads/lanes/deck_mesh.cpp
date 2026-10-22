@@ -3,6 +3,7 @@
 #include "log.h"
 #include "engine/procgen/city/roads/lanes/polyline_ops.h"
 #include "engine/procgen/city/roads/lanes/geom2d.h"
+#include "engine/procgen/city/rail_track.h"
 
 #include <algorithm>
 #include <cstdlib>
@@ -27,6 +28,8 @@ Vec3 world(const Vec2& p, double h) { return Vec3(static_cast<Real>(p.x), static
 // environment to reflect just renders black, which is what a first pass at 0.65 did.
 const Vec3 kAsphalt(0.085f, 0.085f, 0.090f), kConcrete(0.80f, 0.79f, 0.75f), kSidewalk(0.62f, 0.60f, 0.55f), kShoulder(0.115f, 0.115f, 0.120f),
            kGuardrail(0.66f, 0.68f, 0.70f),
+           kBallast(0.30f, 0.28f, 0.25f), kSleeper(0.55f, 0.53f, 0.49f), kRailSteel(0.42f, 0.40f, 0.38f), kPlatform(0.70f, 0.69f, 0.66f),
+           kCanopySheet(0.60f, 0.62f, 0.64f), kStationSteel(0.20f, 0.27f, 0.29f), kStationLamp(0.92f, 0.94f, 0.95f),
            kMedian(0.22f, 0.34f, 0.14f), kPaintWhite(0.9f, 0.9f, 0.85f), kPaintYellow(0.95f, 0.75f, 0.15f), kGrass(0.20f, 0.30f, 0.13f);
 
 // WELDED, AND NO UNDERSIDE WHERE NOBODY CAN SEE ONE (ADR-0095). Every deck triangle used to be
@@ -35,11 +38,15 @@ const Vec3 kAsphalt(0.085f, 0.085f, 0.090f), kConcrete(0.80f, 0.79f, 0.75f), kSi
 // UV (one lane's triangles; two lanes' UVs differ and keep their own), and the underside is
 // emitted only where it stands clear of the ground (`groundAt`, 0.3 m) -- a bridge, a viaduct,
 // a ramp; a street lies on the ground. Null groundAt: every underside, as before.
+// the layers' slab thicknesses (sidewalk, shoulder, median): what they are built with, and how far down each one
+// covers a neighbour's side (slab's side rule)
+constexpr double kSidewalkThick = 0.42, kShoulderThick = 0.3, kMedianThick = 0.40;
+
 void slab(RenderMesh& top, RenderMesh& side, const std::vector<DeckVertex>& verts, const std::vector<std::array<int, 3>>& tris,
           const std::vector<std::pair<int, int>>& boundary, double thick, double lift, const Vec3& color, const Vec3& sideColor,
           const std::vector<std::array<float, 6>>* uv, const std::function<bool(const Vec2&, const Vec2&, double)>* seam = nullptr,
           const std::function<double(const Vec2&)>* groundAt = nullptr,
-          const std::function<bool(const Vec2&, double)>* hidden = nullptr) {
+          const std::function<double(const Vec2&, double)>* hidden = nullptr) {
     std::map<std::tuple<int, float, float, int>, uint32_t> shared;   // (deck vertex, u, v, face) -> mesh vertex
     auto vertexFor = [&](int vi, const Vec3& p, float u, float v, const Vec3& normal, const Vec3& tan, int face) {
         auto [it, fresh] = shared.try_emplace(std::make_tuple(vi, u, v, face), static_cast<uint32_t>(top.vertices.size()));
@@ -57,8 +64,7 @@ void slab(RenderMesh& top, RenderMesh& side, const std::vector<DeckVertex>& vert
         const uint32_t b = vertexFor(vi[1], P[1], u[2], u[3], normal, tan, face);
         const uint32_t c = vertexFor(vi[2], P[2], u[4], u[5], normal, tan, face);
         // the front face points the way the shading normal does (as MeshBuilder::emitTri)
-        if (dot(cross(P[2] - P[0], P[1] - P[0]), normal) >= 0) top.indices.insert(top.indices.end(), {a, b, c});
-        else top.indices.insert(top.indices.end(), {a, c, b});
+        MeshBuilder::triFacing(top, a, b, c, normal);
     };
     static const float kNoUV[6] = {0, 0, 0, 0, 0, 0};
     for (size_t ti = 0; ti < tris.size(); ++ti) {
@@ -83,13 +89,15 @@ void slab(RenderMesh& top, RenderMesh& side, const std::vector<DeckVertex>& vert
             const uint32_t base = static_cast<uint32_t>(side.vertices.size());
             const Vec3 down(0, -1, 0), tan = normalize(Q[1] - Q[0]).lengthSquared() > 0 ? normalize(Q[1] - Q[0]) : Vec3(1, 0, 0);
             for (const Vec3& q : Q) { Vertex vx(q, down, tan, 0.0f, 0.0f); vx.color = sideColor; side.vertices.push_back(vx); }
-            if (dot(cross(Q[2] - Q[0], Q[1] - Q[0]), down) >= 0) side.indices.insert(side.indices.end(), {base, base + 1, base + 2});
-            else side.indices.insert(side.indices.end(), {base, base + 2, base + 1});
+            MeshBuilder::triFacing(side, base, base + 1, base + 2, down);
         }
     }
-    // THE SIDE ONLY WHERE IT SHOWS (ADR-0095). A side is dropped where the surface beyond the edge
+    // THE SIDE ONLY WHERE IT SHOWS (ADR-0095). A side is covered where the surface beyond the edge
     // stands at or above its top (`hidden`: asphalt under a sidewalk, a shoulder against the lane it
-    // continues), and where it does not rise above the ground outside it (`groundAt`); one that shows
+    // continues) -- but only DOWN TO THAT SURFACE'S OWN UNDERSIDE, which `hidden` returns: a 1.2 m
+    // carriageway slab beside a 0.3 m shoulder hangs 0.9 m below it, and that step is a face (Glenn,
+    // 2026-10-14: "a strip of polygons missing along the side ... the hole is clearly one way": from
+    // below you looked into the slab, through the road's culled back, at the sky). And it is dropped where it does not rise above the ground outside it (`groundAt`); one that shows
     // stops 5 cm below that ground instead of the slab's full thickness. Then consecutive sides along
     // one straight line become ONE quad: a kerb is a polyline tessellated for its curves, and on the
     // straights every one of those vertices was a quad of its own. Null groundAt/hidden: every side,
@@ -99,17 +107,35 @@ void slab(RenderMesh& top, RenderMesh& side, const std::vector<DeckVertex>& vert
     for (const auto& e : boundary) {
         const DeckVertex& a = verts[static_cast<size_t>(e.first)]; const DeckVertex& b = verts[static_cast<size_t>(e.second)];
         Vec2 d = b.xy - a.xy; if (d.length() < 1e-9) continue; Vec2 out = Vec2(d.y, -d.x) / d.length();   // interior on the left => outward is the right normal
-        if (seam && (*seam)(a.xy, b.xy, 0.5 * (a.z + b.z) + lift)) continue;                          // an internal seam: the asphalt continues at this level, no side face
+        // an internal seam: the pavement continues at this level, no side face -- UNLESS what is drawn beyond is a
+        // thinner slab (a carriageway's 1.2 m against its shoulder's 0.3): the lane's footprint takes in its
+        // shoulder, so the seam test skipped the 0.9 m step under it, and from below you looked up into the
+        // carriageway slab and out through the road's culled top (the island's see-through audit, 2026-10-14)
+        const bool seamed = seam && (*seam)(a.xy, b.xy, 0.5 * (a.z + b.z) + lift);
         const double topA = a.z + lift, topB = b.z + lift;
-        if (hidden && (*hidden)((a.xy + b.xy) * 0.5 + out * 0.15, 0.5 * (topA + topB))) continue;
+        // A STEP UNDER A NEIGHBOUR OVERLAPS IT by kSeal, up into the neighbour's slab: butted exactly against its soffit,
+        // the two met in a hairline (Glenn's island shot, 2026-10-14). (Its bottom meets its own soffit's edge exactly;
+        // a lip below that is a back face to anyone under the slab.)
+        constexpr double kSeal = 0.02;
         double botA = topA - thick, botB = topB - thick;
+        double coverTopA = topA, coverTopB = topB;   // where this side's exposed part ends, up
+        if (seamed && !hidden) continue;
+        if (hidden) {
+            const double under = (*hidden)((a.xy + b.xy) * 0.5 + out * 0.15, 0.5 * (topA + topB));
+            if (seamed && (std::isnan(under) || 0.5 * (topA + topB) - under >= thick - 0.02)) continue;
+            if (!std::isnan(under)) {   // a neighbour stands at the top: only the step below its underside shows
+                const double drop = 0.5 * (topA + topB) - under;   // how deep the neighbour reaches
+                if (drop >= thick - 0.02) continue;
+                coverTopA = topA - drop + kSeal; coverTopB = topB - drop + kSeal;
+            }
+        }
         if (groundAt) {
             const double gA = (*groundAt)(a.xy + out * 0.3), gB = (*groundAt)(b.xy + out * 0.3);
-            if (topA - gA < 0.03 && topB - gB < 0.03) continue;
-            botA = std::max(botA, std::min(topA, gA) - 0.05);
-            botB = std::max(botB, std::min(topB, gB) - 0.05);
+            if (coverTopA - gA < 0.03 && coverTopB - gB < 0.03) continue;
+            botA = std::max(botA, std::min(coverTopA, gA) - 0.05);
+            botB = std::max(botB, std::min(coverTopB, gB) - 0.05);
         }
-        sides.push_back({e.first, e.second, topA, topB, botA, botB});
+        sides.push_back({e.first, e.second, coverTopA, coverTopB, botA, botB});
     }
     // chain: side i continues at the side that starts where it ends (only where that is unambiguous)
     std::unordered_map<int, int> startsAt; startsAt.reserve(sides.size());
@@ -137,9 +163,11 @@ void slab(RenderMesh& top, RenderMesh& side, const std::vector<DeckVertex>& vert
             bool ok = true;
             auto check = [&](int vi, double top, double bot) {
                 const Vec2 q = verts[static_cast<size_t>(vi)].xy - A; const double t = dot(q, u) / len;
-                if (t <= 0.0 || t >= 1.0 || std::fabs(cross(u, q)) > 0.01) return false;
+                // within 2 mm of the edge it stands on: at 1 cm a merged run left a crack along its soffit's edge that a
+                // look up at the slab's corner went through (the island's see-through audit, 2026-10-14)
+                if (t <= 0.0 || t >= 1.0 || std::fabs(cross(u, q)) > 0.002) return false;
                 const double topL = f.topA + (nx.topB - f.topA) * t, botL = f.botA + (nx.botB - f.botA) * t;
-                return std::fabs(topL - top) < 0.01 && botL <= bot + 0.01 && botL >= bot - 0.5;   // the top exact, the bottom no shallower
+                return std::fabs(topL - top) < 0.002 && botL <= bot + 0.002 && botL >= bot - 0.5;   // the top exact, the bottom no shallower
             };
             for (size_t k = 0; k < run.size() && ok; ++k) {
                 const Side& s0 = sides[static_cast<size_t>(run[k])];
@@ -156,7 +184,7 @@ void slab(RenderMesh& top, RenderMesh& side, const std::vector<DeckVertex>& vert
 // A WALL swept along a chain of points: mitred corners (clamped at 2x for sharp ones), closed end caps,
 // per-point lateral offsets (positive = the chain's right normal = outward on a CCW deck boundary) so a
 // run can pass from a freeway edge (2.5 m shoulder) onto a ramp edge (1 m) without a step. Outer face,
-// inner face, top and caps; the bottom sits on the slab. Every wall in the lab should come through here
+// inner face, top, caps and bottom (it may stand on the seam between two slabs). Every wall in the lab should come through here
 // (Glenn: "missing end caps and there are cracks between the walls").
 // `taperStart` / `taperEnd`: that end ramps down to nothing over this many metres instead of stopping in a
 // full-height vertical face. A parapet stops where its deck drops under the 1.5 m rule, which lands
@@ -197,6 +225,11 @@ void sweepWall(RenderMesh& mesh, const std::vector<Vec2>& pts, const std::vector
         MeshBuilder::emitQuad(mesh, P(i, offOuter[i], 0), P(j, offOuter[j], 0), P(j, offOuter[j], hv[j]), P(i, offOuter[i], hv[i]), nOut, color);
         MeshBuilder::emitQuad(mesh, P(j, offInner[j], 0), P(i, offInner[i], 0), P(i, offInner[i], hv[i]), P(j, offInner[j], hv[j]), nOut * -1.0f, color);
         MeshBuilder::emitQuad(mesh, P(i, offOuter[i], hv[i]), P(i, offInner[i], hv[i]), P(j, offInner[j], hv[j]), P(j, offOuter[j], hv[j]), Vec3(0, 1, 0), color);
+        // and its BOTTOM: a median wall stands on the seam between two carriageways' slabs, and from under the
+        // viaduct the slit between their soffits looked up through the wall to the sky (rt_bake --audit, undersides;
+        // Glenn: "the elevated freeway undercarriage when viewed from below can be seen through"). On a slab the
+        // bottom faces the slab's top and is culled.
+        MeshBuilder::emitQuad(mesh, P(i, offOuter[i], 0), P(j, offOuter[j], 0), P(j, offInner[j], 0), P(i, offInner[i], 0), Vec3(0, -1, 0), color);
     }
     if (!closed && (hv.front() > 1e-4 || hv.back() > 1e-4)) {
         const Vec2 t0 = unit(pts[1] - pts[0]), t1 = unit(pts[n - 1] - pts[n - 2]);
@@ -261,14 +294,481 @@ void strip(RenderMesh& mesh, const std::vector<Vec2>& pts, const std::vector<dou
     }
 }
 
+bool trackClass(const RoadLabGraph& g, const std::string& cls) {
+    const auto it = g.classes.find(cls);
+    return it != g.classes.end() && it->second.track;
+}
+
+bool trackLane(const Result& r, int li) {
+    if (li < 0 || li >= static_cast<int>(r.lanes.lanes.size())) return false;
+    const Lane& l = r.lanes.lanes[static_cast<size_t>(li)];
+    return !l.isConnector() && l.parent >= 0 && trackClass(r.graph, r.graph.edges[static_cast<size_t>(l.parent)].cls);
+}
+
+// A lane's left-normal offset from its parent spine (laneSlots' convention), measured where it starts.
+double laneOffset(const Result& r, const Lane& l) {
+    const EdgeSpec& e = r.graph.edges[static_cast<size_t>(l.parent)];
+    if (e.xy.size() < 2 || l.xy.empty()) return 0;
+    return dot(l.xy.front() - e.xy.front(), perp(tangentAtStation(e.xy, e.s, 0.0)));
+}
+
+// One closed box of a track kit, standing on the deck: centre `c`, `t` along the track, `hx` half its length
+// ACROSS the track and `ht` half along it, from y0 to y1. No bottom face: it lies on the formation.
+// A box on the track's frame, closed: a stair's block, a column, a railing -- each may stand over air (rt_bake --audit,
+// undersides). `bottom` false only where it lies on something (a sleeper on its ballast).
+void trackBox(RenderMesh& m, const Vec2& c, const Vec2& t, double hx, double ht, double y0, double y1, const Vec3& color, bool bottom = true) {
+    // the mesh library's box on the track's frame: across (n), up, along (t)
+    const Vec2 n = perp(t), corner = c - n * hx - t * ht;
+    MeshFrame f;
+    f.o = world(corner, y0);
+    f.x = Vec3(static_cast<Real>(n.x * 2 * hx), 0, static_cast<Real>(n.y * 2 * hx));
+    f.y = Vec3(0, static_cast<Real>(y1 - y0), 0);
+    f.z = Vec3(static_cast<Real>(t.x * 2 * ht), 0, static_cast<Real>(t.y * 2 * ht));
+    MeshBuilder::emitBox(m, f, color, bottom ? kFacesAll : static_cast<uint8_t>(kFacesAll & ~kFaceBottom));
+}
+
+// THE TRACK on one lane: a sleeper every 0.65 m and two rails swept along the lane's centreline at gauge.
+void trackKit(RenderMesh& sleepers, RenderMesh& rails, const Result& r, int li) {
+    const Lane& l = r.lanes.lanes[static_cast<size_t>(li)]; const DeckHeight& H = *r.heights;
+    if (l.s.size() < 2 || l.s.back() < 1.0) return;
+    const double len = l.s.back();
+    for (double st = 0.3; st < len; st += 0.65) {
+        const Vec2 p = pointAt(l.xy, l.s, st), t = tangentAtStation(l.xy, l.s, st); const double z = H.deck(li, p);
+        trackBox(sleepers, p, t, 1.3, 0.13, z - 0.04, z + kSleeperTop, kSleeper, false);
+    }
+    const int n = std::max(2, static_cast<int>(std::ceil(len / 2.0)) + 1);
+    const double half = kRailGauge / 2 + 0.035, hw = 0.035;
+    for (int side = -1; side <= 1; side += 2) {
+        std::vector<Vec2> c(static_cast<size_t>(n)), nr(static_cast<size_t>(n)); std::vector<double> z(static_cast<size_t>(n));
+        for (int k = 0; k < n; ++k) {
+            const double st = len * k / (n - 1); const Vec2 p = pointAt(l.xy, l.s, st);
+            nr[static_cast<size_t>(k)] = perp(tangentAtStation(l.xy, l.s, st)); c[static_cast<size_t>(k)] = p + nr[static_cast<size_t>(k)] * (half * side);
+            z[static_cast<size_t>(k)] = H.deck(li, p);
+        }
+        for (int k = 0; k + 1 < n; ++k) {
+            const size_t i = static_cast<size_t>(k), j = i + 1;
+            const Vec2 ai = c[i] - nr[i] * hw, bi = c[i] + nr[i] * hw, aj = c[j] - nr[j] * hw, bj = c[j] + nr[j] * hw;
+            const double ti = z[i] + kRailHeadAbove, tj = z[j] + kRailHeadAbove, fi = z[i] + kSleeperTop, fj = z[j] + kSleeperTop;
+            MeshBuilder::emitQuad(rails, world(ai, ti), world(aj, tj), world(bj, tj), world(bi, ti), Vec3(0, 1, 0), kRailSteel);
+            const Vec3 nn(static_cast<Real>(nr[i].x), 0, static_cast<Real>(nr[i].y));
+            MeshBuilder::emitQuad(rails, world(bi, fi), world(bj, fj), world(bj, tj), world(bi, ti), nn, kRailSteel);
+            MeshBuilder::emitQuad(rails, world(ai, fi), world(aj, fj), world(aj, tj), world(ai, ti), nn * Real(-1), kRailSteel);
+        }
+    }
+}
+
+// The outermost track lane of edge `ei` on spine side `side` (+1 left, -1 right), or -1.
+int outerTrack(const Result& r, int ei, int side, double* offOut) {
+    int best = -1; double bestOff = 0;
+    for (size_t li = 0; li < r.lanes.lanes.size(); ++li) {
+        const Lane& l = r.lanes.lanes[li];
+        if (l.parent != ei || l.isConnector()) continue;
+        const double off = laneOffset(r, l);
+        if (off * side <= 0 && !(off == 0 && side > 0)) continue;   // a centred single track serves both sides
+        if (best < 0 || off * side > bestOff * side) { best = static_cast<int>(li); bestOff = off; }
+    }
+    if (offOut) *offOut = bestOff;
+    return best;
+}
+
+bool footwayClass(const RoadLabGraph& g, const std::string& cls) {
+    const auto it = g.classes.find(cls);
+    return it != g.classes.end() && it->second.footway;
+}
+
+bool footwayLane(const Result& r, int li) {
+    if (li < 0 || li >= static_cast<int>(r.lanes.lanes.size())) return false;
+    const Lane& l = r.lanes.lanes[static_cast<size_t>(li)];
+    return !l.isConnector() && l.parent >= 0 && footwayClass(r.graph, r.graph.edges[static_cast<size_t>(l.parent)].cls);
+}
+
+// A STATION STAIR (Glenn, 2026-10-11: "make it accessible"): where a footway crosses a track over its platforms
+// (a footbridge), a flight from the footway's deck down onto each platform -- along the platform, against its back
+// edge, the two flights running opposite ways. The parapet opens where a flight leaves the deck, and the canopy
+// stops over the flight and under the bridge.
+// UP, where the footway passes UNDER the track (a city's light rail, held up over its streets): a flight from the
+// footway's edge up onto each platform, behind its back edge, landing level with it at the top. `top` is then the
+// landing beside the platform and `dir` runs down toward the footway, as on a footbridge's flight.
+struct StationStair {
+    int edge = -1; const PlatformSpec* platform = nullptr; int side = 0;
+    Vec2 top, dir, across;        // the top of the flight on the deck's edge (its middle); down the flight; across it
+    double zTop = 0, sTop = 0;    // the deck there; the top's station along the track edge
+    double width = 1.9;           // walls included
+    int steps = 0; double riser = 0, tread = 0.28;
+    double bridge0 = 0, bridge1 = 0;   // the bridge over this platform, as track-edge stations
+    bool up = false; double zFoot = 0; // a flight up from a footway under the track; the footway's height at its foot
+    double length() const { return (steps - 1) * tread; }
+};
+
+std::vector<StationStair> stationStairs(const Result& r) {
+    std::vector<StationStair> out;
+    const RoadLabGraph& g = r.graph;
+    for (size_t fi = 0; fi < g.edges.size(); ++fi) {
+        const EdgeSpec& f = g.edges[fi];
+        if (!footwayClass(g, f.cls) || f.xy.size() < 2) continue;
+        int fl = -1;
+        for (size_t li = 0; li < r.lanes.lanes.size(); ++li)
+            if (r.lanes.lanes[li].parent == static_cast<int>(fi) && !r.lanes.lanes[li].isConnector()) { fl = static_cast<int>(li); break; }
+        if (fl < 0) continue;
+        const double hwF = g.hw(f);
+        for (size_t ei = 0; ei < g.edges.size(); ++ei) {
+            const EdgeSpec& e = g.edges[ei];
+            if (!trackClass(g, e.cls) || e.platforms.empty() || e.xy.size() < 2) continue;
+            std::vector<Vec2> xs;   // (a spine vertex on the other line is found by both its segments: once each)
+            for (const Vec2& X : crossings(e.xy, f.xy)) { bool dup = false; for (const Vec2& q : xs) if (distance(q, X) < 1.0) dup = true; if (!dup) xs.push_back(X); }
+            for (const Vec2& X : xs) {
+                const double sX = project(e.xy, e.s, X).station;
+                const Vec2 te = tangentAtStation(e.xy, e.s, sX), ne = perp(te);
+                const Vec2 tf = tangentAtStation(f.xy, f.s, project(f.xy, f.s, X).station);
+                const double sinT = std::fabs(cross(te, tf));
+                if (sinT < 0.5) continue;   // a flight beside a badly skewed bridge would not meet its edge
+                const double cotT = dot(tf, te) / dot(tf, ne), halfDeck = hwF / sinT;
+                for (const PlatformSpec& P : e.platforms) {
+                    if (sX < P.s0 + 4 || sX > P.s1 - 4) continue;
+                    for (int side = -1; side <= 1; side += 2) {
+                        if (P.side != 0 && P.side != side) continue;
+                        double off = 0; const int li = outerTrack(r, static_cast<int>(ei), side, &off); if (li < 0) continue;
+                        StationStair st; st.edge = static_cast<int>(ei); st.platform = &P; st.side = side;
+                        const double platTop = r.heights->deck(li, pointAt(e.xy, e.s, sX) + ne * off) + kRailHeadAbove + P.h;
+                        st.up = r.heights->deck(fl, X) < platTop - 0.4;   // the footway under the track, not over it
+                        const double lateral = off + side * (kPlatformGap + P.w) + side * (st.up ? 0.02 + st.width / 2 : -(0.15 + st.width / 2));
+                        const double alongC = lateral * cotT;
+                        st.bridge0 = sX + alongC - halfDeck - 0.6; st.bridge1 = sX + alongC + halfDeck + 0.6;
+                        const Vec2 onWay = pointAt(e.xy, e.s, sX + alongC) + ne * lateral;
+                        if (st.up) {
+                            st.zFoot = r.heights->deck(fl, onWay); st.zTop = platTop;
+                            const double rise = platTop - st.zFoot; if (rise < 0.4) continue;
+                            st.steps = static_cast<int>(std::ceil(rise / 0.175)); st.riser = rise / st.steps;
+                            // the flight climbs away from the footway, its landing (one tread) on the platform's level
+                            int d = side;
+                            auto fits = [&](int dd) { const double s1 = sX + alongC + dd * (halfDeck + st.length() + st.tread); return s1 > P.s0 + 2 && s1 < P.s1 - 2; };
+                            if (!fits(d)) d = -d;
+                            if (!fits(d)) continue;
+                            st.sTop = sX + alongC + d * (halfDeck + st.length());
+                            st.dir = te * static_cast<double>(-d); st.across = ne * static_cast<double>(side);
+                            st.top = pointAt(e.xy, e.s, st.sTop) + ne * lateral;
+                            out.push_back(st);
+                            continue;
+                        }
+                        st.zTop = r.heights->deck(fl, onWay);
+                        const double rise = st.zTop - platTop; if (rise < 0.4) continue;
+                        st.steps = static_cast<int>(std::ceil(rise / 0.175)); st.riser = rise / st.steps;
+                        int d = side;   // the two flights run opposite ways; either turns round if its end would leave the platform
+                        auto fits = [&](int dd) { const double s1 = sX + alongC + dd * (halfDeck + st.length()); return s1 > P.s0 + 2 && s1 < P.s1 - 2; };
+                        if (!fits(d)) d = -d;
+                        if (!fits(d)) continue;
+                        st.sTop = sX + alongC + d * halfDeck;
+                        st.dir = te * static_cast<double>(d); st.across = ne * static_cast<double>(side);
+                        st.top = pointAt(e.xy, e.s, st.sTop) + ne * lateral;
+                        out.push_back(st);
+                    }
+                }
+            }
+        }
+    }
+    return out;
+}
+
+// FOOTWAY STAIRS: wherever a footway lane climbs steeper than kFootwayStairGrade, steps on its deck -- a riser each
+// ~0.17 m of height, each tread a solid block standing on the slope (its top the slope's height at the tread's upper
+// end), the lane's width less a hand's breadth each side. The gentle stretches stay the paved ramp under them.
+void footwayStairs(RenderMesh& steps, const Result& r, int li) {
+    const Lane& l = r.lanes.lanes[static_cast<size_t>(li)];
+    if (l.s.size() < 2 || l.s.back() < 2.0) return;
+    const double len = l.s.back(), ds = 0.05, hx = std::max(0.5, l.w / 2 - 0.1);
+    auto zAt = [&](double st) { return r.heights->deck(li, pointAt(l.xy, l.s, std::clamp(st, 0.0, len))); };
+    // the steep stretches, on a 1 m grade read
+    std::vector<std::pair<double, double>> runs;
+    double runFrom = -1;
+    for (double st = 0; st <= len; st += 0.5) {
+        const bool steep = std::fabs(zAt(st + 0.5) - zAt(st - 0.5)) > kFootwayStairGrade * 1.0;
+        if (steep && runFrom < 0) runFrom = st;
+        if (!steep && runFrom >= 0) { if (st - runFrom >= 1.0) runs.push_back({runFrom, st}); runFrom = -1; }
+    }
+    if (runFrom >= 0 && len - runFrom >= 1.0) runs.push_back({runFrom, len});
+    for (const auto& [a, b] : runs) {
+        const double z0 = zAt(a), z1 = zAt(b);
+        const int n = std::max(1, static_cast<int>(std::lround(std::fabs(z1 - z0) / 0.17)));
+        const double riser = (z1 - z0) / n;
+        // the step edges: where the deck reaches each riser's height
+        std::vector<double> edge{a};
+        double st = a;
+        for (int k = 1; k < n; ++k) {
+            const double target = z0 + riser * k;
+            while (st < b && (zAt(st) - target) * (riser > 0 ? 1 : -1) < 0) st += ds;
+            edge.push_back(st);
+        }
+        edge.push_back(b);
+        for (std::size_t k = 0; k + 1 < edge.size(); ++k) {
+            const double s0 = edge[k], s1 = edge[k + 1]; if (s1 - s0 < 0.05) continue;
+            const double top = std::max(zAt(s0), zAt(s1)), foot = std::min(zAt(s0), zAt(s1)) - 0.05;
+            const Vec2 c = pointAt(l.xy, l.s, (s0 + s1) / 2), t = tangentAtStation(l.xy, l.s, (s0 + s1) / 2);
+            trackBox(steps, c, t, hx, (s1 - s0) / 2, foot, top, kSidewalk);
+        }
+    }
+}
+
+// One flight: a solid block per step from the platform up, a wall each side a metre over the treads. Up from a
+// footway: the blocks stand on the footway's level, the landing is a tread too, and the wall on the platform's side
+// stops at the platform's level (stepped over onto it at the top).
+void stairKit(RenderMesh& treads, RenderMesh& concrete, const Result& r, const StationStair& st) {
+    const EdgeSpec& e = r.graph.edges[static_cast<size_t>(st.edge)];
+    double off = 0; const int li = outerTrack(r, st.edge, st.side, &off); if (li < 0) return;
+    if (st.up) {
+        for (int i = 0; i < st.steps; ++i) {
+            const Vec2 c = st.top + st.dir * (i * st.tread);
+            const double y = st.zTop - i * st.riser, floor = st.zFoot - 0.3;
+            trackBox(treads, c, st.dir, st.width / 2 - 0.15, st.tread / 2, floor, y, kPlatform);
+            for (int w = -1; w <= 1; w += 2)
+                trackBox(concrete, c + st.across * (w * (st.width / 2 - 0.075)), st.dir, 0.075, st.tread / 2, floor, w < 0 ? std::min(y + 1.0, st.zTop) : y + 1.0, kConcrete);
+        }
+        // the landing's far end walled (walked straight on, the flight's top led off it into the air)
+        trackBox(concrete, st.top - st.dir * (st.tread / 2 + 0.075), st.dir, st.width / 2, 0.075, st.zFoot - 0.3, st.zTop + 1.0, kConcrete);
+        return;
+    }
+    for (int i = 1; i < st.steps; ++i) {
+        const double a = (i - 0.5) * st.tread; const Vec2 c = st.top + st.dir * a;
+        const double sAt = project(e.xy, e.s, c).station; const Vec2 q = pointAt(e.xy, e.s, sAt), nr = perp(tangentAtStation(e.xy, e.s, sAt));
+        const double floor = r.heights->deck(li, q + nr * off) + kRailHeadAbove + st.platform->h - 0.05, y = st.zTop - i * st.riser;
+        trackBox(treads, c, st.dir, st.width / 2 - 0.15, st.tread / 2, floor, y, kPlatform);
+        for (int w = -1; w <= 1; w += 2) trackBox(concrete, c + st.across * (w * (st.width / 2 - 0.075)), st.dir, 0.075, st.tread / 2, floor, y + 1.0, kConcrete);
+    }
+}
+
+// Where a platform's canopy lamps hang: every 6 m down its middle, the first 3 m in. A stop's night lights stand
+// under every other one (railTracks: RailStop::lamps).
+std::vector<double> canopyLampStations(double s0, double s1) {
+    std::vector<double> out;
+    for (double st = s0 + 3.0; st <= s1 - 2.0; st += 6.0) out.push_back(st);
+    return out;
+}
+
+// A STATION PLATFORM: a slab from the ground up to `h` over the railhead, its edge kPlatformGap off the outer
+// track, `w` wide, with a canopy down its middle (posts every 12 m, a roof 3.4 m over the platform) -- stopped
+// under a footbridge and over its stair, which `stairs` holds.
+// HELD UP (a light rail's, over its streets): an underside, a railing along its back edge -- open beside the top of a
+// flight up to it -- and columns under its middle every 12 m, clear of the footway under it and any street.
+void platformKit(RenderMesh& plat, RenderMesh& concrete, RenderMesh& canopy, RenderMesh& steel, RenderMesh& lamp, const Result& r, const EdgeSpec& e, int ei, const PlatformSpec& P,
+                 const std::vector<StationStair>& stairs, const std::function<double(const Vec2&)>& groundUnder,
+                 const std::function<bool(const Vec2&)>& pavedAt) {
+    for (int side = -1; side <= 1; side += 2) {
+        if (P.side != 0 && P.side != side) continue;
+        double off = 0; const int li = outerTrack(r, ei, side, &off); if (li < 0) continue;
+        const double inner = off + side * kPlatformGap, outer = inner + side * P.w;
+        std::vector<std::pair<double, double>> gaps;   // track-edge stations the canopy keeps out of
+        std::vector<std::pair<double, double>> railGaps, colGaps;   // held up: the railing's openings; no columns
+        for (const StationStair& st : stairs) {
+            if (st.edge != ei || st.platform != &P || st.side != side) continue;
+            const double sEnd = st.sTop + dot(st.dir, tangentAtStation(e.xy, e.s, st.sTop)) * st.length();
+            if (st.up) {
+                // open where the treads are within a metre of the platform (their wall is no higher than it), and the landing
+                const double ds = dot(st.dir, tangentAtStation(e.xy, e.s, st.sTop)), k = std::ceil(1.0 / st.riser) + 0.5;
+                const double a = st.sTop - ds * 0.5 * st.tread, b = st.sTop + ds * k * st.tread;
+                railGaps.push_back({std::min(a, b), std::max(a, b)});
+                colGaps.push_back({st.bridge0 - 1.0, st.bridge1 + 1.0});
+                colGaps.push_back({std::min(st.sTop, sEnd) - 1.0, std::max(st.sTop, sEnd) + 1.0});
+                stairKit(plat, concrete, r, st);
+                continue;
+            }
+            gaps.push_back({st.bridge0, st.bridge1}); gaps.push_back({std::min(st.sTop, sEnd) - 0.4, std::max(st.sTop, sEnd) + 0.4});
+            stairKit(plat, concrete, r, st);
+        }
+        auto inGap = [&](double a, double b) { for (const auto& gp : gaps) if (b > gp.first && a < gp.second) return true; return false; };
+        const double s0 = std::max(0.0, P.s0), s1 = std::min(e.s.back(), P.s1); if (s1 - s0 < 2) continue;
+        const int n = std::max(2, static_cast<int>(std::ceil((s1 - s0) / 2.0)) + 1);
+        std::vector<Vec2> a(static_cast<size_t>(n)), b(static_cast<size_t>(n)); std::vector<double> top(static_cast<size_t>(n)), foot(static_cast<size_t>(n));
+        const Lane& l = r.lanes.lanes[static_cast<size_t>(li)];
+        for (int k = 0; k < n; ++k) {
+            const double st = s0 + (s1 - s0) * k / (n - 1); const Vec2 q = pointAt(e.xy, e.s, st), nr = perp(tangentAtStation(e.xy, e.s, st));
+            a[static_cast<size_t>(k)] = q + nr * inner; b[static_cast<size_t>(k)] = q + nr * outer;
+            const double rail = r.heights->deck(li, q + nr * off) + kRailHeadAbove;
+            top[static_cast<size_t>(k)] = rail + P.h; foot[static_cast<size_t>(k)] = rail - kRailHeadAbove - 0.3;
+        }
+        (void)l;
+        // HELD UP (over a street: an underside, a railing, columns) where its foot stands 2 m clear of the ground;
+        // anywhere else it is a slab from the GROUND up, its sides taken down to the ground -- it was a box from
+        // under the track ballast, so a platform on a low embankment floated over an open bottom (rt_bake --audit).
+        bool heldUp = false;
+        for (int k = 0; k < n; ++k) if (foot[static_cast<size_t>(k)] - groundUnder(b[static_cast<size_t>(k)]) > 2.0) heldUp = true;
+        if (!heldUp)
+            for (int k = 0; k < n; ++k) {
+                const size_t i = static_cast<size_t>(k);
+                foot[i] = std::min(foot[i], std::min(groundUnder(a[i]), groundUnder(b[i])) - 0.3);
+            }
+        for (int k = 0; k + 1 < n; ++k) {
+            const size_t i = static_cast<size_t>(k), j = i + 1;
+            MeshBuilder::emitQuad(plat, world(a[i], top[i]), world(a[j], top[j]), world(b[j], top[j]), world(b[i], top[i]), Vec3(0, 1, 0), kPlatform);
+            Vec2 d = a[j] - a[i]; const double dl = d.length(); if (dl < 1e-9) continue; d = d / dl;
+            const Vec2 toTrack = perp(d) * (side > 0 ? -1.0 : 1.0);   // the platform edge faces its track
+            const Vec3 fn(static_cast<Real>(toTrack.x), 0, static_cast<Real>(toTrack.y));
+            MeshBuilder::emitQuad(concrete, world(a[i], foot[i]), world(a[j], foot[j]), world(a[j], top[j]), world(a[i], top[i]), fn, kConcrete);
+            MeshBuilder::emitQuad(concrete, world(b[i], foot[i]), world(b[j], foot[j]), world(b[j], top[j]), world(b[i], top[i]), fn * Real(-1), kConcrete);
+        }
+        for (int end = 0; end < 2; ++end) {
+            const size_t i = end == 0 ? 0 : static_cast<size_t>(n - 1);
+            const Vec2 d = end == 0 ? a[1] - a[0] : a[i] - a[i - 1]; const double dl = d.length(); if (dl < 1e-9) continue;
+            const Vec3 en(static_cast<Real>(d.x / dl * (end == 0 ? -1 : 1)), 0, static_cast<Real>(d.y / dl * (end == 0 ? -1 : 1)));
+            MeshBuilder::emitQuad(concrete, world(a[i], foot[i]), world(b[i], foot[i]), world(b[i], top[i]), world(a[i], top[i]), en, kConcrete);
+        }
+        if (heldUp) {
+            auto inSpans = [](const std::vector<std::pair<double, double>>& sp, double a0, double b0) { for (const auto& g0 : sp) if (b0 > g0.first && a0 < g0.second) return true; return false; };
+            for (int k = 0; k + 1 < n; ++k) {
+                const size_t i = static_cast<size_t>(k), j = i + 1;
+                MeshBuilder::emitQuad(concrete, world(a[i], foot[i]), world(b[i], foot[i]), world(b[j], foot[j]), world(a[j], foot[j]), Vec3(0, -1, 0), kConcrete);
+                const double st0 = s0 + (s1 - s0) * k / (n - 1), st1 = s0 + (s1 - s0) * (k + 1) / (n - 1);
+                if (inSpans(railGaps, st0, st1)) continue;
+                const Vec2 mid2 = (b[i] + b[j]) * 0.5, d = b[j] - b[i]; const double dl = d.length(); if (dl < 1e-9) continue;
+                const Vec2 inward = (a[i] - b[i]) * (1.0 / std::max(1e-9, (a[i] - b[i]).length()));
+                trackBox(concrete, mid2 + inward * 0.08, d / dl, 0.08, dl / 2, 0.5 * (top[i] + top[j]) - 0.05, 0.5 * (top[i] + top[j]) + 1.1, kConcrete);
+            }
+            const double mid = (inner + outer) / 2;
+            for (double st = s0 + 6; st <= s1 - 6; st += 12) {
+                if (inSpans(colGaps, st - 0.5, st + 0.5)) continue;
+                const Vec2 q = pointAt(e.xy, e.s, st), t = tangentAtStation(e.xy, e.s, st), c = q + perp(t) * mid;
+                bool paved = false;
+                for (double dx : {-0.6, 0.6}) for (double dy : {-0.6, 0.6}) if (pavedAt(c + Vec2(dx, dy))) paved = true;
+                if (paved) continue;
+                const double y = r.heights->deck(li, q + perp(t) * off) - 0.3;
+                trackBox(concrete, c, t, 0.3, 0.3, groundUnder(c) - 0.5, y, kConcrete);
+            }
+        }
+        // THE CANOPY (Glenn, 2026-10-12: "the overhangs are thin and need dimension. Maybe they should be the
+        // corrugated metal?"): a ribbed steel sheet falling 8 % away from the track, on a steel frame -- a post down
+        // the middle every 12 m carrying a beam across, a deep fascia along both edges -- and a lamp every 6 m under it.
+        const double mid = (inner + outer) / 2, roofHalf = std::max(1.0, P.w / 2 - 0.4);
+        constexpr double kRoof = 3.3, kFall = 0.08, kBeam = 0.3, kRib = 0.2, kRibH = 0.04;
+        auto platTop = [&](double st) { const Vec2 q = pointAt(e.xy, e.s, st); return r.heights->deck(li, q + perp(tangentAtStation(e.xy, e.s, st)) * off) + kRailHeadAbove + P.h; };
+        // a point under the roof: station st, `u` across from the middle (- toward the track), height over the beams' foot
+        auto roofPt = [&](double st, double u, double dy) {
+            const Vec2 q = pointAt(e.xy, e.s, st), nr = perp(tangentAtStation(e.xy, e.s, st));
+            return world(q + nr * (mid + side * u), platTop(st) + kRoof - kFall * u + dy);
+        };
+        // a box from four corners at its foot and four at its head: the mesh library's block
+        auto box8 = [](RenderMesh& m, const Vec3 (&lo)[4], const Vec3 (&hi)[4], const Vec3& col) { MeshBuilder::emitBlock(m, lo, hi, col); };
+        const double ss0 = s0 + 0.3, ss1 = s1 - 0.3;
+        // posts and beams
+        for (double st = s0 + 6; st <= s1 - 6; st += 12) {
+            if (inGap(st - 0.3, st + 0.3)) continue;
+            const Vec2 q = pointAt(e.xy, e.s, st), t = tangentAtStation(e.xy, e.s, st), nr = perp(t);
+            const double y = platTop(st);
+            trackBox(steel, q + nr * mid, t, 0.11, 0.11, y, y + kRoof + 0.05, kStationSteel);
+            const Vec3 lo[4] = {roofPt(st - 0.08, -roofHalf, 0), roofPt(st + 0.08, -roofHalf, 0), roofPt(st + 0.08, roofHalf, 0), roofPt(st - 0.08, roofHalf, 0)};
+            const Vec3 hi[4] = {roofPt(st - 0.08, -roofHalf, kBeam), roofPt(st + 0.08, -roofHalf, kBeam), roofPt(st + 0.08, roofHalf, kBeam), roofPt(st - 0.08, roofHalf, kBeam)};
+            // the beam tapers to its tips: deep over the post, a third of it at the edges
+            Vec3 lo2[4]; for (int i = 0; i < 4; ++i) lo2[i] = lo[i] + Vec3(0, static_cast<Real>(kBeam * 0.65), 0);
+            const Vec3 midLo[4] = {roofPt(st - 0.08, -0.15, 0), roofPt(st + 0.08, -0.15, 0), roofPt(st + 0.08, 0.15, 0), roofPt(st - 0.08, 0.15, 0)};
+            const Vec3 midHi[4] = {roofPt(st - 0.08, -0.15, kBeam), roofPt(st + 0.08, -0.15, kBeam), roofPt(st + 0.08, 0.15, kBeam), roofPt(st - 0.08, 0.15, kBeam)};
+            box8(steel, midLo, midHi, kStationSteel);
+            const Vec3 aLo[4] = {lo2[0], lo2[1], midLo[1], midLo[0]}, aHi[4] = {hi[0], hi[1], midHi[1], midHi[0]};
+            const Vec3 bLo[4] = {midLo[3], midLo[2], lo2[2], lo2[3]}, bHi[4] = {midHi[3], midHi[2], hi[2], hi[3]};
+            box8(steel, aLo, aHi, kStationSteel); box8(steel, bLo, bHi, kStationSteel);
+        }
+        // the sheet: ribs across the roof (they run the way it drains), a trapezoid every kRib along the platform,
+        // seen from above and below
+        const double prof[5][2] = {{0.0, 0.0}, {0.3, 0.0}, {0.4, kRibH}, {0.9, kRibH}, {1.0, 0.0}};
+        for (double st = ss0; st + kRib <= ss1 + 1e-6; st += kRib) {
+            if (inGap(st, st + kRib)) continue;
+            for (int k = 0; k < 4; ++k) {
+                const double a = st + prof[k][0] * kRib, b = st + prof[k + 1][0] * kRib;
+                const double ya = kBeam + prof[k][1], yb = kBeam + prof[k + 1][1];
+                const Vec3 A = roofPt(a, -roofHalf - 0.15, ya), B = roofPt(b, -roofHalf - 0.15, yb), C = roofPt(b, roofHalf + 0.15, yb), D = roofPt(a, roofHalf + 0.15, ya);
+                const bool up = cross(B - A, D - A).y > 0;
+                const Vec3 sheetUp = normalize(cross(B - A, D - A)) * (up ? Real(1) : Real(-1));
+                MeshBuilder::emitQuad(canopy, A, B, C, D, sheetUp, kCanopySheet);           // the top
+                MeshBuilder::emitQuad(canopy, A, B, C, D, sheetUp * Real(-1), kCanopySheet);   // and its underside
+            }
+        }
+        // the fascias, 0.4 deep, hiding the sheet's ribbed edge; and the lamps
+        for (int k = 0; k + 1 < n; ++k) {
+            const double st0 = std::max(ss0, s0 + (s1 - s0) * k / (n - 1)), st1 = std::min(ss1, s0 + (s1 - s0) * (k + 1) / (n - 1));
+            if (st1 - st0 < 0.05 || inGap(st0, st1)) continue;
+            for (int edge = -1; edge <= 1; edge += 2) {
+                const double u0 = edge * (roofHalf + 0.15), u1 = u0 + edge * 0.05;
+                const Vec3 lo[4] = {roofPt(st0, u0, kBeam - 0.3), roofPt(st1, u0, kBeam - 0.3), roofPt(st1, u1, kBeam - 0.3), roofPt(st0, u1, kBeam - 0.3)};
+                const Vec3 hi[4] = {roofPt(st0, u0, kBeam + 0.1), roofPt(st1, u0, kBeam + 0.1), roofPt(st1, u1, kBeam + 0.1), roofPt(st0, u1, kBeam + 0.1)};
+                box8(steel, lo, hi, kStationSteel);
+            }
+        }
+        for (double st : canopyLampStations(s0, s1)) {
+            if (inGap(st - 0.7, st + 0.7)) continue;
+            // a linear fitting under the sheet between the beams: its housing, and the diffuser under it that lights
+            const Vec3 hLo[4] = {roofPt(st - 0.6, -0.08, kBeam - 0.08), roofPt(st + 0.6, -0.08, kBeam - 0.08), roofPt(st + 0.6, 0.08, kBeam - 0.08), roofPt(st - 0.6, 0.08, kBeam - 0.08)};
+            const Vec3 hHi[4] = {roofPt(st - 0.6, -0.08, kBeam), roofPt(st + 0.6, -0.08, kBeam), roofPt(st + 0.6, 0.08, kBeam), roofPt(st - 0.6, 0.08, kBeam)};
+            box8(steel, hLo, hHi, kStationSteel);
+            const Vec3 dLo[4] = {roofPt(st - 0.57, -0.06, kBeam - 0.12), roofPt(st + 0.57, -0.06, kBeam - 0.12), roofPt(st + 0.57, 0.06, kBeam - 0.12), roofPt(st - 0.57, 0.06, kBeam - 0.12)};
+            const Vec3 dHi[4] = {roofPt(st - 0.57, -0.06, kBeam - 0.08), roofPt(st + 0.57, -0.06, kBeam - 0.08), roofPt(st + 0.57, 0.06, kBeam - 0.08), roofPt(st - 0.57, 0.06, kBeam - 0.08)};
+            box8(lamp, dLo, dHi, kStationLamp);
+        }
+    }
+}
+
 }  // namespace
+
+std::vector<RailTrack> railTracks(const Result& r) {
+    std::vector<RailTrack> out;
+    for (size_t li = 0; li < r.lanes.lanes.size(); ++li) {
+        if (!trackLane(r, static_cast<int>(li))) continue;
+        const Lane& l = r.lanes.lanes[li]; if (l.s.size() < 2) continue;
+        const EdgeSpec& e = r.graph.edges[static_cast<size_t>(l.parent)];
+        RailTrack t; t.edge = e.id; t.cls = e.cls; t.dir = l.dir >= 0 ? +1 : -1;
+        const double len = l.s.back(); const int n = std::max(2, static_cast<int>(std::ceil(len / 2.0)) + 1);
+        for (int k = 0; k < n; ++k) {
+            const double st = len * k / (n - 1); const Vec2 p = pointAt(l.xy, l.s, st);
+            t.pts.push_back(world(p, r.heights->deck(static_cast<int>(li), p) + kRailHeadAbove));
+        }
+        if (t.dir < 0) std::reverse(t.pts.begin(), t.pts.end());
+        // the platforms beside it: on the side it is outermost on, in its own running stations
+        for (const PlatformSpec& P : e.platforms)
+            for (int side = -1; side <= 1; side += 2) {
+                if (P.side != 0 && P.side != side) continue;
+                if (outerTrack(r, l.parent, side, nullptr) != static_cast<int>(li)) continue;
+                const Vec2 q = pointAt(e.xy, e.s, std::clamp((P.s0 + P.s1) / 2, 0.0, e.s.back()));
+                RailStop st; st.name = P.name;
+                const double a = project(l.xy, l.s, pointAt(e.xy, e.s, std::clamp(P.s0, 0.0, e.s.back()))).station;
+                const double b = project(l.xy, l.s, pointAt(e.xy, e.s, std::clamp(P.s1, 0.0, e.s.back()))).station;
+                st.s0 = t.dir > 0 ? std::min(a, b) : len - std::max(a, b);
+                st.s1 = t.dir > 0 ? std::max(a, b) : len - std::min(a, b);
+                // The train's left is its body's +x (rail_sim CarPose: cross(up, forward)). The plan's left normal,
+                // perp(), is the OTHER side once plan y is world z -- the doors opened away from the platform
+                // (Glenn, 2026-10-10: "the doors did not slide open for me ... It may have opened on the wrong side").
+                st.side = -side * t.dir;
+                st.top = r.heights->deck(static_cast<int>(li), pointAt(l.xy, l.s, project(l.xy, l.s, q).station)) + kRailHeadAbove + P.h;
+                // its night lights: under every other canopy lamp, a little below the fitting
+                {
+                    double off = 0; outerTrack(r, l.parent, side, &off);
+                    const double midLat = off + side * (kPlatformGap + P.w / 2);
+                    const std::vector<double> ls = canopyLampStations(std::max(0.0, P.s0), std::min(e.s.back(), P.s1));
+                    for (std::size_t k = 0; k < ls.size(); k += 2) {
+                        const Vec2 pq = pointAt(e.xy, e.s, ls[k]), nr = perp(tangentAtStation(e.xy, e.s, ls[k]));
+                        st.lamps.push_back(world(pq + nr * midLat, r.heights->deck(static_cast<int>(li), pq + nr * off) + kRailHeadAbove + P.h + 3.1));
+                    }
+                }
+                // the way in: a footway over this platform, at its end away from the line
+                for (const EdgeSpec& f : r.graph.edges) {
+                    if (!footwayClass(r.graph, f.cls) || f.xy.size() < 2) continue;
+                    bool over = false;
+                    for (const Vec2& X : crossings(e.xy, f.xy)) { const double sx = project(e.xy, e.s, X).station; if (sx >= P.s0 && sx <= P.s1) over = true; }
+                    if (!over) continue;
+                    const bool frontFar = project(e.xy, e.s, f.xy.front()).distance >= project(e.xy, e.s, f.xy.back()).distance;
+                    st.hasAccess = true; st.access = frontFar ? f.xy.front() : f.xy.back();
+                }
+                t.stops.push_back(st);
+            }
+        out.push_back(std::move(t));
+    }
+    return out;
+}
 
 std::vector<NamedMesh> buildMeshes(const Result& r) {
     const RoadLabGraph& g = r.graph; const LaneSet& L = r.lanes; const DeckHeight& H = *r.heights;
-    RenderMesh asphalt, concrete, sidewalk, shoulder, median, paintW, paintY, terrain, guardrail;
-    // The ground under a deck, for the underside rule (slab): the conformed grid, or 0 on a flat level.
+    RenderMesh asphalt, concrete, sidewalk, shoulder, median, paintW, paintY, terrain, guardrail, ballast, sleepers, rails, platform;
+    RenderMesh canopy, stationSteel, stationLamp;
+    // The ground under a deck, for the underside rule (slab): the conformed grid AS DRAWN (its two triangles a
+    // cell, not the bilinear patch), or 0 on a flat level. Bilinear stood a metre and more above the drawn ground
+    // on cells twisted between a deck-pinned node and the hold dug beside it, so a deck 2.3 m over the grass was
+    // judged "at grade" and built with no underside (the island audit's open undersides, 2026-10-14).
     const std::function<double(const Vec2&)> groundUnder = [&r](const Vec2& q) {
-        return r.hasTerrain ? r.terrain.sample(q.x, q.y) : 0.0;
+        return r.hasTerrain ? r.terrain.sampleDrawn(q.x, q.y) : 0.0;
     };
     // decks with lane-local UVs
     // A boundary edge is only a deck EDGE if the pavement ends there. A weld crack is also "used by one
@@ -293,33 +793,50 @@ std::vector<NamedMesh> buildMeshes(const Result& r) {
         return sameLevelPavedAt((a + b) * 0.5 + out * 0.35, z);
     };
     const std::function<bool(const Vec2&, const Vec2&, double)> seamFn = internalSeam;
-    // What stands beyond a slab's edge, for slab()'s side rule: a surface whose top at q is at or up to
-    // half a metre above `top` hides the side (asphalt under a sidewalk's edge, a shoulder's edge against
-    // the lane it continues). One much higher is a bridge over it and hides nothing. Each layer is split
-    // into its polygons so a point tests only the few whose box covers it.
-    struct Cover { std::vector<PolySet> polys; std::vector<Box2> box; std::vector<PreparedSet> prep; std::vector<int> roads; double lift; };
-    auto coverOf = [&](const PolySet& set, double lift, bool anyRoad) {
-        Cover c; for (const Polygon2& p : set) c.polys.push_back(PolySet{p});
-        c.box = laneBoxes(c.polys); c.prep = prepareAll(c.polys); c.roads = layerRoads(g, anyRoad); c.lift = lift; return c;
+    // What stands beyond a slab's edge, for slab()'s side rule: a DRAWN surface whose top at q is at or up to half a
+    // metre above `top` hides the side (asphalt under a sidewalk's edge, a shoulder's edge against the lane it
+    // continues). One much higher is a bridge over it and hides nothing. It returns how far down that surface reaches
+    // (its underside), NaN when nothing covers: the side is a face below that.
+    // What is DRAWN, not the footprints: a lane's footprint or a layer's polygon covers ground where no triangle
+    // stands (a layer triangle dropped for joining two levels, a deck split from its shoulder at an interchange), and a
+    // side "hidden" by a surface that is not there left the slab open -- the island's see-through audit, 2026-10-14.
+    const std::vector<int> layerRoadsOf[3] = {layerRoads(g, false), layerRoads(g, false), layerRoads(g, true)};
+    const PolySet* layerSet[3] = {&r.pavement.sidewalk, &r.pavement.shoulder, &r.pavement.median};
+    const double layerLift[3] = {kSidewalkLift, 0.0, 0.10}, layerThick[3] = {kSidewalkThick, kShoulderThick, kMedianThick};
+    std::vector<FlatMesh> layerMesh[3];
+    for (int k = 0; k < 3; ++k) if (!layerRoadsOf[k].empty()) { const std::vector<double> band = layerBands(g, static_cast<LayerKind>(k)); layerMesh[k] = layerMeshes(g, H, *layerSet[k], layerRoadsOf[k], nullptr, &band); }
+    struct Drawn { Vec2 a, b, c; double za, zb, zc, thick; };
+    std::vector<Drawn> drawn;
+    auto addDrawn = [&](const std::vector<DeckVertex>& v, const std::vector<std::array<int, 3>>& tris, double lift, double thick) {
+        for (const auto& t : tris) {
+            const DeckVertex &A = v[static_cast<size_t>(t[0])], &B = v[static_cast<size_t>(t[1])], &C = v[static_cast<size_t>(t[2])];
+            drawn.push_back({A.xy, B.xy, C.xy, A.z + lift, B.z + lift, C.z + lift, thick});
+        }
     };
-    const Cover covers[3] = {coverOf(r.pavement.sidewalk, kSidewalkLift, false), coverOf(r.pavement.shoulder, 0.0, false), coverOf(r.pavement.median, 0.10, true)};
-    const LaneGrid coverGrid[3] = {LaneGrid(covers[0].box, covers[0].polys), LaneGrid(covers[1].box, covers[1].polys), LaneGrid(covers[2].box, covers[2].polys)};
-    const std::function<bool(const Vec2&, double)> hiddenFn = [&](const Vec2& q, double top) {
-        auto hides = [&](double z) { return z >= top - 0.02 && z <= top + 0.5; };
-        for (int li : laneGrid.at(q)) {
-            const Box2& bb = laneBox[static_cast<size_t>(li)];
-            if (q.x < bb.minX || q.x > bb.maxX || q.y < bb.minY || q.y > bb.maxY || !footprint[static_cast<size_t>(li)].contains(q)) continue;
-            if (hides(H.deck(li, q))) return true;
+    for (const Surface& s : r.pavement.decks) addDrawn(s.verts, s.tris, 0.0, s.thick);
+    for (int k = 0; k < 3; ++k) for (const FlatMesh& m : layerMesh[k]) addDrawn(m.verts, m.tris, layerLift[k], layerThick[k]);
+    constexpr double kDrawnCell = 4.0;
+    auto drawnKey = [](long i, long j) { return (static_cast<long long>(i) << 32) ^ static_cast<long long>(static_cast<uint32_t>(j)); };
+    std::unordered_map<long long, std::vector<uint32_t>> drawnGrid;
+    for (size_t i = 0; i < drawn.size(); ++i) {
+        const Drawn& d = drawn[i];
+        const long i0 = std::lround(std::floor(std::min({d.a.x, d.b.x, d.c.x}) / kDrawnCell)), i1 = std::lround(std::floor(std::max({d.a.x, d.b.x, d.c.x}) / kDrawnCell));
+        const long j0 = std::lround(std::floor(std::min({d.a.y, d.b.y, d.c.y}) / kDrawnCell)), j1 = std::lround(std::floor(std::max({d.a.y, d.b.y, d.c.y}) / kDrawnCell));
+        for (long ii = i0; ii <= i1; ++ii) for (long jj = j0; jj <= j1; ++jj) drawnGrid[drawnKey(ii, jj)].push_back(static_cast<uint32_t>(i));
+    }
+    const std::function<double(const Vec2&, double)> hiddenFn = [&](const Vec2& q, double top) {
+        double under = std::nan("");   // the deepest underside among the surfaces covering the side
+        auto it = drawnGrid.find(drawnKey(std::lround(std::floor(q.x / kDrawnCell)), std::lround(std::floor(q.y / kDrawnCell))));
+        if (it == drawnGrid.end()) return under;
+        for (uint32_t i : it->second) {
+            const Drawn& d = drawn[i];
+            const double det = cross(d.b - d.a, d.c - d.a); if (std::fabs(det) < 1e-12) continue;
+            const double u = cross(q - d.a, d.c - d.a) / det, v = cross(d.b - d.a, q - d.a) / det;
+            if (u < -1e-9 || v < -1e-9 || u + v > 1 + 1e-9) continue;
+            const double z = d.za + u * (d.zb - d.za) + v * (d.zc - d.za);
+            if (z >= top - 0.02 && z <= top + 0.5 && (std::isnan(under) || z - d.thick < under)) under = z - d.thick;
         }
-        for (int k = 0; k < 3; ++k) {
-            const Cover& c = covers[k];
-            for (int pi : coverGrid[k].at(q)) {
-                const Box2& bb = c.box[static_cast<size_t>(pi)];
-                if (q.x < bb.minX || q.x > bb.maxX || q.y < bb.minY || q.y > bb.maxY || !c.prep[static_cast<size_t>(pi)].contains(q)) continue;
-                if (hides(H.layerHeight(c.roads, q) + c.lift)) return true;
-            }
-        }
-        return false;
+        return under;
     };
     // RT_DECK_STATS=1: what each stage adds to the concrete mesh (triangles), to see where it goes.
     static const bool deckStats = std::getenv("RT_DECK_STATS") != nullptr;
@@ -337,17 +854,20 @@ std::vector<NamedMesh> buildMeshes(const Result& r) {
                 uv[ti][static_cast<size_t>(2 * k)] = static_cast<float>(lateral); uv[ti][static_cast<size_t>(2 * k + 1)] = static_cast<float>(pr.station);
             }
         }
-        slab(asphalt, concrete, s.verts, s.tris, s.boundary, s.thick, 0.0, kAsphalt, kConcrete, &uv, &seamFn, &groundUnder, &hiddenFn);
+        // a deck all of whose lanes are track is a ballast bed, not asphalt
+        bool track = !s.triOwner.empty(), foot = !s.triOwner.empty();
+        for (int o : s.triOwner) if (!trackLane(r, o)) { track = false; break; }
+        for (int o : s.triOwner) if (!footwayLane(r, o)) { foot = false; break; }   // ...and one all of footway is paved like a sidewalk
+        slab(track ? ballast : foot ? sidewalk : asphalt, concrete, s.verts, s.tris, s.boundary, s.thick, 0.0, track ? kBallast : foot ? kSidewalk : kAsphalt, kConcrete, &uv, &seamFn, &groundUnder, &hiddenFn);
     }
     // layers
-    auto layer = [&](const PolySet& poly, RenderMesh& top, const Vec3& color, double lift, double thick, bool anyRoad) {
-        const std::vector<int> roads = layerRoads(g, anyRoad);
-        for (const FlatMesh& m : layerMeshes(g, H, poly, roads)) slab(top, concrete, m.verts, m.tris, m.boundary, thick, lift, color, kConcrete, nullptr, nullptr, &groundUnder, &hiddenFn);
+    auto layer = [&](int k, RenderMesh& top, const Vec3& color) {
+        for (const FlatMesh& m : layerMesh[k]) slab(top, concrete, m.verts, m.tris, m.boundary, layerThick[k], layerLift[k], color, kConcrete, nullptr, nullptr, &groundUnder, &hiddenFn);
     };
     mark("deck sides");
-    layer(r.pavement.sidewalk, sidewalk, kSidewalk, kSidewalkLift, 0.42, false); mark("sidewalk sides");
-    layer(r.pavement.shoulder, shoulder, kShoulder, 0.0, 0.3, false); mark("shoulder sides");
-    layer(r.pavement.median, median, kMedian, 0.10, 0.40, true); mark("median sides");
+    layer(0, sidewalk, kSidewalk); mark("sidewalk sides");
+    layer(1, shoulder, kShoulder); mark("shoulder sides");
+    layer(2, median, kMedian); mark("median sides");
     // Parapets and girders on elevated decks (Glenn: "the elevated ones need walls so you don't drive
     // off", "an undercarriage"). The runs come from parapetRuns() so a diagnostic sees exactly what is swept;
     // every elevated freeway/ramp lane also gets a box girder hung from the slab.
@@ -392,6 +912,22 @@ std::vector<NamedMesh> buildMeshes(const Result& r) {
         MeshBuilder::appendTransformed(concrete, box, Mat4::translate(static_cast<Real>(p.xy.x), static_cast<Real>(p.z0 + h / 2), static_cast<Real>(p.xy.y)));
     }
     mark("piers");
+    // RAIL: sleepers and rails on every track lane, platforms where the graph puts a station
+    for (size_t li = 0; li < L.lanes.size(); ++li)
+        if (trackLane(r, static_cast<int>(li))) trackKit(sleepers, rails, r, static_cast<int>(li));
+    for (size_t li = 0; li < L.lanes.size(); ++li)
+        if (footwayLane(r, static_cast<int>(li))) footwayStairs(sidewalk, r, static_cast<int>(li));
+    const std::vector<StationStair> stairs = stationStairs(r);
+    const std::function<bool(const Vec2&)> anyPavedAt = [&](const Vec2& q) {
+        for (int ojI : laneGrid.at(q)) {
+            const size_t oj = static_cast<size_t>(ojI); const Box2& bb = laneBox[oj];
+            if (q.x >= bb.minX && q.x <= bb.maxX && q.y >= bb.minY && q.y <= bb.maxY && footprint[oj].contains(q)) return true;
+        }
+        return false;
+    };
+    for (size_t ei = 0; ei < g.edges.size(); ++ei)
+        if (trackClass(g, g.edges[ei].cls))
+            for (const PlatformSpec& P : g.edges[ei].platforms) platformKit(platform, concrete, canopy, stationSteel, stationLamp, r, g.edges[ei], static_cast<int>(ei), P, stairs, groundUnder, anyPavedAt);
     if (deckStats) {
         std::string o;
         for (std::size_t k = 1; k < concreteBy.size(); ++k)
@@ -424,7 +960,7 @@ std::vector<NamedMesh> buildMeshes(const Result& r) {
     std::map<int, std::vector<Span>> spans;
     for (size_t li = 0; li < L.lanes.size(); ++li) {
         const Lane& l = L.lanes[li]; if (l.isConnector() || l.parent < 0 || l.s.size() < 2) continue;
-        const EdgeSpec& e = r.graph.edges[static_cast<size_t>(l.parent)]; if (e.isRamp() || e.cls == "freeway" || r.graph.cls(e).rank < 1) continue;
+        const EdgeSpec& e = r.graph.edges[static_cast<size_t>(l.parent)]; if (e.isRamp() || e.cls == "freeway" || r.graph.cls(e).rank < 1 || trackClass(r.graph, e.cls)) continue;
         int n = std::max(2, static_cast<int>(l.s.back() / 2.0) + 1); double in0 = -1, inLast = 0; int rankMax = -1;
         for (int k = 0; k <= n; ++k) {
             int cr = -1; double st = 0;
@@ -449,6 +985,7 @@ std::vector<NamedMesh> buildMeshes(const Result& r) {
     // markings: each lane edge classified by what lies just outside it
     for (size_t li = 0; li < L.lanes.size(); ++li) {
         const Lane& l = L.lanes[li];
+        if (trackLane(r, static_cast<int>(li)) || footwayLane(r, static_cast<int>(li))) continue;   // a track is not painted, nor a path
         for (int side = 0; side < 2; ++side) {
             const std::vector<Vec2>& E = side == 0 ? l.left : l.right; std::vector<Vec2> pts; std::vector<double> z; std::vector<int> style;   // 0 edge, 1 lane, 2 centre
             std::vector<double> Es = stations(E); int n = std::max(2, static_cast<int>(Es.back() / 4.0) + 1);
@@ -608,6 +1145,8 @@ std::vector<NamedMesh> buildMeshes(const Result& r) {
     auto add = [&](const char* n, RenderMesh& m, const Vec3& c) { if (!m.indices.empty()) out.push_back({n, std::move(m), c}); };
     add("asphalt", asphalt, kAsphalt); add("concrete", concrete, kConcrete); add("guardrail", guardrail, kGuardrail); add("sidewalk", sidewalk, kSidewalk); add("shoulder", shoulder, kShoulder); add("median", median, kMedian);
     add("paint_white", paintW, kPaintWhite); add("paint_yellow", paintY, kPaintYellow); add("terrain", terrain, kGrass);
+    add("ballast", ballast, kBallast); add("sleeper", sleepers, kSleeper); add("rail", rails, kRailSteel); add("platform", platform, kPlatform);
+    add("canopy", canopy, kCanopySheet); add("station_steel", stationSteel, kStationSteel); add("station_lamp", stationLamp, kStationLamp);
     return out;
 }
 
@@ -683,16 +1222,28 @@ std::vector<ParapetRun> parapetRuns(const Result& r, ParapetCensus* census) {
         return -1;
     };
     // which deck lane's footprint covers q, height irrelevant: used to find the road the outline belongs to
+    int ringFoot = 0;   // the ring being walked is a footway's (1) or the other decks' (0): its owner is one of those
     auto deckLaneAt = [&](const Vec2& q) {
         for (int ojI : laneGrid.at(q)) {
             const size_t oj = static_cast<size_t>(ojI); const Box2& bb = laneBox[oj];
-            if (!isDeckLane(ojI)) continue;
+            if (!isDeckLane(ojI) || static_cast<int>(footwayLane(r, ojI)) != ringFoot) continue;
             if (q.x < bb.minX || q.x > bb.maxX || q.y < bb.minY || q.y > bb.maxY || !footprint[oj].contains(q)) continue;
             return ojI;
         }
         return -1;
     };
     auto groundAt = [&](const Vec2& p) { return r.hasTerrain ? r.terrain.sample(p.x, p.y) : 0.0; };
+    // where a station stair leaves a footbridge: no parapet across its top
+    const std::vector<StationStair> stairs = stationStairs(r);
+    auto stairTop = [&](const Vec2& q) {
+        for (const StationStair& st : stairs) {
+            if (st.up) continue;   // (its top is on the platform, not the footway)
+            const Vec2 a = st.top - st.across * (st.width / 2), b = st.top + st.across * (st.width / 2), ab = b - a;
+            const double u = std::clamp(dot(q - a, ab) / std::max(1e-9, dot(ab, ab)), 0.0, 1.0);
+            if (distance(q, a + ab * u) < 0.4) return true;
+        }
+        return false;
+    };
 
     // THE BARRIER LINE IS THE ROAD'S OWN OUTLINE (2026-09-08, Glenn: "it's like sidewalks but they're walls").
     // A sidewalk is a ribbon offset from the road, unioned and clipped by Clipper, which is why it never
@@ -700,16 +1251,29 @@ std::vector<ParapetRun> parapetRuns(const Result& r, ParapetCensus* census) {
     // chained by vertex index: any edge that failed a test ended the chain (775 runs over 25 km), and a sharp
     // joint had to be mitred by hand. Offsetting the freeway and ramp pavement gives the same line as one
     // polygon, already mitred and closed, and its boundary rings are the ordered curves a sweep wants.
-    PolySet deckPaved;
-    for (size_t li = 0; li < L.lanes.size(); ++li) if (isDeckLane(static_cast<int>(li)) && !r.pavement.footprints[li].empty()) deckPaved = unionSets(deckPaved, r.pavement.footprints[li]);
-    if (deckPaved.empty()) return out;
+    // A FOOTWAY's outline is its own: a footbridge crosses the tracks it clears, and in one plan union with them its
+    // edges over the line vanished inside theirs -- no parapet the whole way across (the rail lab's first bridge)
+    PolySet deckPaved, footPaved;
+    for (size_t li = 0; li < L.lanes.size(); ++li)
+        if (isDeckLane(static_cast<int>(li)) && !r.pavement.footprints[li].empty()) {
+            PolySet& into = footwayLane(r, static_cast<int>(li)) ? footPaved : deckPaved;
+            into = unionSets(into, r.pavement.footprints[li]);
+        }
+    if (deckPaved.empty() && footPaved.empty()) return out;
     const double standOff = 0.05;                    // the barrier hugs the pavement edge; its body lies outside it
-    const PolySet band = offsetSet(deckPaved, standOff);
-    std::vector<Ring> rings;
-    for (const Polygon2& pg : band) { if (pg.outer.size() >= 8) rings.push_back(pg.outer); for (const Ring& h : pg.holes) if (h.size() >= 8) rings.push_back(h); }
+    std::vector<Ring> rings; std::vector<int> ringIsFoot;
+    for (const PolySet* set : {&deckPaved, &footPaved}) {
+        if (set->empty()) continue;
+        const int foot = set == &footPaved ? 1 : 0;
+        for (const Polygon2& pg : offsetSet(*set, standOff)) {
+            if (pg.outer.size() >= 8) { rings.push_back(pg.outer); ringIsFoot.push_back(foot); }
+            for (const Ring& h : pg.holes) if (h.size() >= 8) { rings.push_back(h); ringIsFoot.push_back(foot); }
+        }
+    }
 
     int walled = 0; double bandM = 0;
-    for (const Ring& ring : rings) {
+    for (size_t ri = 0; ri < rings.size(); ++ri) {
+        const Ring& ring = rings[ri]; ringFoot = ringIsFoot[ri];
         std::vector<Vec2> pts = resample(ring, 1.0); if (pts.size() < 8) continue;
         const size_t n = pts.size();
         // Per point: which deck lane owns it, its height, what the edge faces, and so what to build.
@@ -745,7 +1309,8 @@ std::vector<ParapetRun> parapetRuns(const Result& r, ParapetCensus* census) {
                 return false;
             }();
             if (onOtherPavement) role[i] = EdgeRole::Seam;
-            else if (ne && nd <= 1.2) role[i] = EdgeRole::Seam;          // pavement right there: the outline runs through a junction
+            else if (ne && nd <= 1.2) role[i] = EdgeRole::Seam;
+            else if (footwayClass(r.graph, me.cls)) role[i] = stairTop(pts[i]) ? EdgeRole::Seam : hAbove >= 1.0 ? EdgeRole::Elevated : EdgeRole::AtGrade;   // a path: walled where it can be fallen off          // pavement right there: the outline runs through a junction
             else if (ne && ne->cls == "freeway" && me.cls == "freeway" && ne != &me && nd <= 14.0) role[i] = EdgeRole::Median;
             else if (ne && ne->cls != "freeway" && !ne->isRamp() && nd <= 32.0) role[i] = EdgeRole::VsStreet;
             else role[i] = hAbove >= 1.5 ? EdgeRole::Elevated : EdgeRole::AtGrade;

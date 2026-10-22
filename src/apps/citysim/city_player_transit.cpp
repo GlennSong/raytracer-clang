@@ -7,6 +7,7 @@
 
 #include "../../engine/camera/fly_camera_controller.h"
 #include "../../engine/components.h"
+#include "../../engine/systems/audio_system.h"   // the cabin's barrier
 #include "../../engine/input/input_map.h"
 #include "../../engine/systems/physics_system.h"
 #include "../../engine/procgen/city/building_records.h"
@@ -201,6 +202,7 @@ void CityPlayerTransitSystem::step(World& world, Real dt, const RideInput& in) {
             const bool isBus = sim.isBus(ai);
             const bool isTaxi = sim.isTaxi(ai);
             if (!((isBus && wantBus) || (isTaxi && wantTaxi))) continue;
+            if (isBus && !sim.busInService(ai)) continue;   // NOT IN SERVICE: its doors stay shut
             // You board at a STOP, not by touching a moving bus.
             if (agents[i].speed > 2.0) continue;
             const Real dx = agents[i].pos.x - pt->position.x;
@@ -440,6 +442,7 @@ void CityPlayerTransitSystem::rideBus(World& world, Real dt, const RideInput& in
 
     const Vec3 at = seatIdx_ >= 0 ? seats[static_cast<std::size_t>(seatIdx_)] : local_;
     const Real eyeAbove = seatIdx_ >= 0 ? kSeatedEye : kStandingEye;
+    if (auto* ps = world.get<engine::Passenger>(player)) { ps->local = at; ps->onFoot = seatIdx_ < 0; }   // (the footsteps)
     const Vec3 w = pose.transformPoint(at);
     pin(world, player, t, cc, Vec3(w.x, w.y + eyeAbove - kEyeAboveTransform, w.z));
 
@@ -451,6 +454,19 @@ void CityPlayerTransitSystem::rideBus(World& world, Real dt, const RideInput& in
 }
 
 void CityPlayerTransitSystem::update(engine::FrameContext& ctx) {
+    // ABOARD, the street is heard through the bus's (the cab's) body; its own engine is in here with us.
+    if (riding_ >= 0 && ctx.audio.ready()) {
+        engine::Vec3 at;
+        engine::Vec2 heading;
+        if (city_.agentWorldPose(riding_, at, heading)) {
+            const bool bus = city_.sim().isBus(riding_);
+            const engine::Vec3 half = bus ? engine::Vec3(1.3, 1.7, 6.0) : engine::Vec3(1.0, 0.9, 2.4);
+            ctx.audio.setListenerCabin(engine::AudioSystem::cabinEnclosureId((uint64_t(1) << 32) | uint64_t(riding_)),
+                                       at + engine::Vec3(0, half.y, 0),
+                                       engine::Quat::fromAxisAngle(engine::Vec3(0, 1, 0), std::atan2(heading.x, heading.y)),
+                                       half, engine::AudioSystem::kCabin);
+        }
+    }
     {
         Entity player;
         ctx.world.each<Transform, engine::ControlledBy>([&](Entity e, Transform&, engine::ControlledBy&) {
@@ -521,9 +537,12 @@ void CityPlayerTransitSystem::update(engine::FrameContext& ctx) {
                     if (!indoors) {
                         const std::vector<Agent>& ag = sim0.agents();
                         Real bestD = kBoardRadius;
-                        for (std::size_t i = 0; i < ag.size(); ++i) {
-                            const int ai = static_cast<int>(i);
+                        // (a bus or cab a few metres off is near: the near list, not all 100k agents 4 times a second)
+                        for (int ni : sim0.nearAgents()) {
+                            const std::size_t i = static_cast<std::size_t>(ni);
+                            const int ai = ni;
                             if (!(sim0.isBus(ai) || sim0.isTaxi(ai)) || ag[i].speed > 2.0) continue;
+                            if (sim0.isBus(ai) && !sim0.busInService(ai)) continue;   // (NOT IN SERVICE)
                             const Real dx = ag[i].pos.x - pt->position.x, dz = ag[i].pos.y - pt->position.z;
                             const Real d = std::sqrt(dx * dx + dz * dz);
                             if (d < bestD) {
@@ -542,9 +561,10 @@ void CityPlayerTransitSystem::update(engine::FrameContext& ctx) {
                     const std::vector<Agent>& ag = sim0.agents();
                     Real bestD = kCarRideReach + 1.0;
                     int best = -1;
-                    for (std::size_t i = 0; i < ag.size(); ++i) {
+                    for (int ni : sim0.nearAgents()) {
+                        const std::size_t i = static_cast<std::size_t>(ni);
                         const Agent& a = ag[i];
-                        const int ai = static_cast<int>(i);
+                        const int ai = ni;
                         if (a.mode != Agent::Mode::Driver || a.vehicle < 0 || a.released || a.playerControlled) continue;
                         if (sim0.isBus(ai) || sim0.isTaxi(ai)) continue;
                         const Real dx = a.pos.x - pt->position.x, dz = a.pos.y - pt->position.z;
@@ -586,8 +606,24 @@ void CityPlayerTransitSystem::update(engine::FrameContext& ctx) {
     city_.setPlayerRidingAgent(riding_);
     hud_ = Hud{};
     const CitySim& sim = city_.sim();
+    // ON A PLATFORM: its departure board instead of the nearest bus stop
+    if (riding_ < 0 && sim.railRiders().rail()) {
+        const Transform* body = nullptr;
+        ctx.world.each<Transform, engine::CharacterController, engine::ControlledBy>(
+            [&](Entity, Transform& t, engine::CharacterController&, engine::ControlledBy&) { if (!body) body = &t; });
+        int line = -1, stop = -1;
+        if (body && platformAt(*sim.railRiders().rail(), body->position, line, stop)) {
+            hud_.mode = Hud::Mode::Platform;
+            hud_.board = platformBoard(*sim.railRiders().rail(), line, stop);
+            return;
+        }
+    }
     const BusNetwork& net = sim.buses();
     if (net.routeCount() == 0) return;              // no buses on this level
+    for (int r = 0; r < net.routeCount(); ++r) {
+        hud_.lineOf.push_back(net.lineOf(r));
+        hud_.reversed.push_back(net.lineOf(r) != r ? 1 : 0);
+    }
     // Driving a car of your own: the bus is not your problem.
     if (riding_ < 0 && ctx.actions.context() == engine::InputContext::InVehicle) return;
 
@@ -683,10 +719,12 @@ void CityPlayerTransitSystem::update(engine::FrameContext& ctx) {
 
     // What E would do right now: the same test the boarding code applies.
     Real nearest = kBoardRadius;
-    for (std::size_t i = 0; i < agents.size(); ++i) {
-        const int ai = static_cast<int>(i);
+    for (int ni : sim.nearAgents()) {   // (a bus or cab you could board is near)
+        const std::size_t i = static_cast<std::size_t>(ni);
+        const int ai = ni;
         const bool isBus = sim.isBus(ai), isTaxi = sim.isTaxi(ai);
         if (!isBus && !isTaxi) continue;
+        if (isBus && !sim.busInService(ai)) continue;   // (NOT IN SERVICE)
         if (agents[i].speed > 2.0) continue;
         const Vec2 d = agents[i].pos - me;
         const Real dd = std::sqrt(d.x * d.x + d.y * d.y);
@@ -733,15 +771,35 @@ void CityPlayerTransitSystem::render(engine::FrameContext& ctx) {
                  ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_AlwaysAutoResize |
                      ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoNav |
                      ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoSavedSettings);
-    auto routeText = [](int route) {
+    auto routeText = [this](int route) {
         // Lifted toward white: the sign colours are for paint in daylight, and
         // dark red or blue text on a dark panel was hard to read.
-        const engine::Vec3 c = routeColour(route);
+        const bool known = route >= 0 && route < static_cast<int>(hud_.lineOf.size());
+        const int line = known ? hud_.lineOf[static_cast<std::size_t>(route)] : route;
+        const bool back = known && hud_.reversed[static_cast<std::size_t>(route)];
+        const engine::Vec3 c = routeColour(line);
         auto lift = [](Real v) { return static_cast<float>(v + (1.0 - v) * 0.4); };
         ImGui::TextColored(ImVec4(lift(c.x), lift(c.y), lift(c.z), 1.0f),
-                           "route %d (%s)", route, routeColourName(route));
+                           "line %d (%s)%s", line + 1, routeColourName(line), back ? " the other way" : "");   // (numbered from 1, as the bus's sign)
     };
-    if (hud_.mode == Hud::Mode::Riding) {
+    if (hud_.mode == Hud::Mode::Platform) {
+        const RailSim* rs = city_.sim().railRiders().rail();
+        ImGui::Text("%s", hud_.board.station.c_str());
+        bool across = false;
+        for (const PlatformBoard::Departure& d : hud_.board.departures) {
+            if (!d.thisPlatform && !across) { ImGui::TextDisabled("across the tracks"); across = true; }
+            const engine::Vec3 c = rs && d.line >= 0 ? lineColour(rs->lines()[static_cast<std::size_t>(d.line)]) : engine::Vec3(1, 1, 1);
+            auto lift = [](Real v) { return static_cast<float>(v + (1.0 - v) * 0.4); };
+            ImGui::TextColored(ImVec4(lift(c.x), lift(c.y), lift(c.z), 1.0f), "%s",
+                               !rs ? "train" : rs->lines()[static_cast<std::size_t>(d.line)].cls == "light_rail" ? "light rail" : rs->lines()[static_cast<std::size_t>(d.line)].cls == "metro" ? "metro" : "train");
+            ImGui::SameLine();
+            const int mins = static_cast<int>(std::ceil(d.eta / 60.0));
+            if (d.here) ImGui::Text("to %s   at the platform now", d.toward.c_str());
+            else if (d.eta < 45.0) ImGui::Text("to %s   arriving", d.toward.c_str());
+            else ImGui::Text("to %s   %d min", d.toward.c_str(), mins);
+        }
+        if (hud_.board.departures.empty()) ImGui::Text("no trains running");
+    } else if (hud_.mode == Hud::Mode::Riding) {
         if (hud_.ridingRoute >= 0) {
             ImGui::Text("ON THE BUS");
             ImGui::SameLine();

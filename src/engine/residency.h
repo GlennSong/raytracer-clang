@@ -74,6 +74,8 @@ public:
 
     // A camera move longer than this in one update is a jump: everything in range loads at once.
     static constexpr double kJumpDistance = 200.0;
+    // ...and of what is in range then, only items this near load in place; the rest stream as in movement.
+    static constexpr double kJumpNear = 150.0;
     // At most this many prepare() jobs at once: enough to keep ahead of a car, few enough that
     // the thread pool still serves physics and terrain.
     static constexpr int kMaxPreparing = 3;

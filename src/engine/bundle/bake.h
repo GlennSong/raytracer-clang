@@ -86,6 +86,10 @@ struct BakeReport {
     std::map<std::string, ProducerReport> reports;       // per producer built this run
     std::shared_ptr<std::vector<uint8_t>> memory;        // toMemory only
     bool upToDate = false;                               // nothing had to be built or copied
+    // SHARED BLOCKS: the earlier bundles this one could clone from, and how many of its section bytes it did share
+    // with them (the rest were written); 0 cloned where the filesystem cannot share blocks.
+    std::vector<std::string> cloneFrom;
+    uint64_t bytes = 0, bytesCloned = 0;
 };
 BakeReport bakeLevel(const BakeRequest& req, const ProgressFn* progress = nullptr);
 

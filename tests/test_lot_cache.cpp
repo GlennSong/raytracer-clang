@@ -24,9 +24,9 @@ BuildingParams everyFieldSet() {
     p.balconies = true; p.porch = true; p.chimney = true; p.spire = true; p.steeple = true; p.parkingDecks = true; p.sideBays = 5; p.trimColor = Vec3(0.7, 0.8, 0.9);
     p.shape = BuildingShape::Cylinder; p.tiers = 9; p.sides = 48; p.seed = 0xDEADBEEFu;
     p.envelope = BuildingParams::Envelope::StreetWallSetback; p.baseFloors = 6; p.setback1 = 7.5; p.stepFloors = 9; p.stepDepth = 2.25; p.towerFrac = 0.4; p.towerFloor = 24; p.core = 2; p.crown = 5; p.signage = 1; p.uplights = 2;
-    p.skyRatio = 5.6; p.taperTop = 0.62; p.chamferTop = 0.18; p.featherFrom = 0.66; p.twistDeg = 45; p.stackShift = 3.5;
-    p.top = 7; p.windowGroup = 3; p.verticals = true; p.residential = true; p.glassTint = 3; p.mullionTone = 1; p.fins = 2; p.curtainBay = 2.4; p.spandrelFrac = 0.45;
-    p.partyWalls = 2; p.partyN[0] = Vec2(0.6, 0.8); p.partyN[1] = Vec2(-0.6, -0.8); p.partyAt[0] = 12.5; p.partyAt[1] = -3.25; p.backDoor = true; p.fireEscape = true; p.bigBox = 3;
+    p.skyRatio = 5.6; p.taperTop = 0.62; p.chamferTop = 0.18; p.featherFrom = 0.66; p.twistDeg = 45; p.stackShift = 3.5; p.bulge = 0.4; p.lean = 0.15; p.wave = 1.4; p.waveLen = 18; p.massMesh = 2; p.skin = 3; p.skinGap = 1.5; p.partyOpen0[1] = -3.5; p.partyOpen1[1] = 8.5; p.partyOpenK0[1] = 0; p.partyOpenK1[1] = 1; p.mallOpenEnds = 3; p.links = 2; p.linkN[0] = Vec2(1, 0); p.linkC[0] = Vec2(12, 3); p.linkStorey[0] = 7; p.linkLen[0] = 11.5; p.linkW[0] = 4.5; p.linkN[1] = Vec2(0, -1); p.linkC[1] = Vec2(2, -9); p.linkStorey[1] = 3; p.linkLen[1] = 0; p.linkW[1] = 3;
+    p.top = 7; p.windowGroup = 3; p.verticals = true; p.residential = true; p.glassTint = 3; p.mullionTone = 1; p.fins = 2; p.diagrid = 3; p.curtainBay = 2.4; p.spandrelFrac = 0.45;
+    p.partyWalls = 4; p.partyN[0] = Vec2(0.6, 0.8); p.partyN[1] = Vec2(-0.6, -0.8); p.partyN[2] = Vec2(1, 0); p.partyN[3] = Vec2(0, -1); p.partyAt[0] = 12.5; p.partyAt[1] = -3.25; p.partyAt[2] = 7.5; p.partyAt[3] = -40; p.partyTop[0] = 12; p.partyTop[2] = 3; p.partyDoors = 5; p.backDoor = true; p.fireEscape = true; p.bigBox = 3; p.campus = 2;
     return p;
 }
 bool sameVec3(const Vec3& a, const Vec3& b) { return a.x == b.x && a.y == b.y && a.z == b.z; }
@@ -40,9 +40,9 @@ bool sameParams(const BuildingParams& a, const BuildingParams& b) {
         && a.balconies == b.balconies && a.porch == b.porch && a.chimney == b.chimney && a.spire == b.spire && a.steeple == b.steeple && a.parkingDecks == b.parkingDecks && a.sideBays == b.sideBays && sameVec3(a.trimColor, b.trimColor)
         && a.shape == b.shape && a.tiers == b.tiers && a.sides == b.sides && a.seed == b.seed
         && a.envelope == b.envelope && a.baseFloors == b.baseFloors && a.setback1 == b.setback1 && a.stepFloors == b.stepFloors && a.stepDepth == b.stepDepth && a.towerFrac == b.towerFrac && a.towerFloor == b.towerFloor && a.core == b.core && a.crown == b.crown && a.signage == b.signage && a.uplights == b.uplights
-        && a.skyRatio == b.skyRatio && a.taperTop == b.taperTop && a.chamferTop == b.chamferTop && a.featherFrom == b.featherFrom && a.twistDeg == b.twistDeg && a.stackShift == b.stackShift
-        && a.top == b.top && a.windowGroup == b.windowGroup && a.verticals == b.verticals && a.residential == b.residential && a.glassTint == b.glassTint && a.mullionTone == b.mullionTone && a.fins == b.fins && a.curtainBay == b.curtainBay && a.spandrelFrac == b.spandrelFrac
-        && a.partyWalls == b.partyWalls && a.partyN[0].x == b.partyN[0].x && a.partyN[0].y == b.partyN[0].y && a.partyN[1].x == b.partyN[1].x && a.partyN[1].y == b.partyN[1].y && a.partyAt[0] == b.partyAt[0] && a.partyAt[1] == b.partyAt[1] && a.backDoor == b.backDoor && a.fireEscape == b.fireEscape && a.bigBox == b.bigBox;
+        && a.skyRatio == b.skyRatio && a.taperTop == b.taperTop && a.chamferTop == b.chamferTop && a.featherFrom == b.featherFrom && a.twistDeg == b.twistDeg && a.stackShift == b.stackShift && a.bulge == b.bulge && a.lean == b.lean && a.wave == b.wave && a.waveLen == b.waveLen && a.massMesh == b.massMesh && a.skin == b.skin && a.skinGap == b.skinGap && a.partyOpen0[1] == b.partyOpen0[1] && a.partyOpen1[1] == b.partyOpen1[1] && a.partyOpenK0[1] == b.partyOpenK0[1] && a.partyOpenK1[1] == b.partyOpenK1[1] && a.partyOpenK1[0] == b.partyOpenK1[0] && a.mallOpenEnds == b.mallOpenEnds && a.links == b.links && a.linkN[0].x == b.linkN[0].x && a.linkN[0].y == b.linkN[0].y && a.linkC[0].x == b.linkC[0].x && a.linkC[0].y == b.linkC[0].y && a.linkStorey[0] == b.linkStorey[0] && a.linkLen[0] == b.linkLen[0] && a.linkW[0] == b.linkW[0] && a.linkN[1].x == b.linkN[1].x && a.linkN[1].y == b.linkN[1].y && a.linkC[1].x == b.linkC[1].x && a.linkC[1].y == b.linkC[1].y && a.linkStorey[1] == b.linkStorey[1] && a.linkLen[1] == b.linkLen[1] && a.linkW[1] == b.linkW[1]
+        && a.top == b.top && a.windowGroup == b.windowGroup && a.verticals == b.verticals && a.residential == b.residential && a.glassTint == b.glassTint && a.mullionTone == b.mullionTone && a.fins == b.fins && a.diagrid == b.diagrid && a.curtainBay == b.curtainBay && a.spandrelFrac == b.spandrelFrac
+        && a.partyWalls == b.partyWalls && a.partyDoors == b.partyDoors && a.partyN[0].x == b.partyN[0].x && a.partyN[0].y == b.partyN[0].y && a.partyN[1].x == b.partyN[1].x && a.partyN[1].y == b.partyN[1].y && a.partyN[2].x == b.partyN[2].x && a.partyN[3].y == b.partyN[3].y && a.partyAt[0] == b.partyAt[0] && a.partyAt[1] == b.partyAt[1] && a.partyAt[2] == b.partyAt[2] && a.partyAt[3] == b.partyAt[3] && a.partyTop[0] == b.partyTop[0] && a.partyTop[2] == b.partyTop[2] && a.backDoor == b.backDoor && a.fireEscape == b.fireEscape && a.bigBox == b.bigBox && a.campus == b.campus;
 }
 bool samePoly(const Poly2& a, const Poly2& b) { if (a.size() != b.size()) return false; for (size_t i = 0; i < a.size(); ++i) if (a[i].x != b[i].x || a[i].y != b[i].y) return false; return true; }
 }  // namespace
@@ -62,6 +62,11 @@ TEST_CASE(lot_cache_round_trips_a_lot_result_with_every_part_of_it_populated) {
     a.plan = {Vec2(0, 0), Vec2(12, 0), Vec2(12, 8), Vec2(0, 8)}; a.color = Vec3(0.3, 0.2, 0.1); a.pad = {Vec2(-1, -1), Vec2(13, -1), Vec2(13, 9), Vec2(-1, 9)};
     a.padMesh = MeshBuilder::box(Vec3(3, 0.2, 2)); a.padMesh.vertices[0].color = Vec3(0.9, 0.1, 0.1);   // a varying vertex colour survives
     a.treeSpots = {Vec3(1, 2, 3), Vec3(4, 5, 6)}; a.fenceSegs = {{Vec2(0, 0), Vec2(5, 0)}, {Vec2(5, 0), Vec2(5, 5)}};
+    a.sealed = {{Vec2(0, 0), Vec2(2, 0), Vec2(2, 1)}};
+    a.walks = {{Vec2(1, 2), Vec2(3, 4), 2.5}};
+    a.loops = {{Vec2(0, 0), Vec2(5, 0), Vec2(5, 5), Vec2(0, 5)}};
+    a.areas = {{"pitch", Vec2(1, 2), Vec2(0, 1), 25.0, 17.0}};
+    a.sitSpots = {{Vec2(3, 4), Vec2(0, -1), 0.53}};
     a.open = {{{Vec2(-1, -1), Vec2(13, -1), Vec2(13, 0), Vec2(-1, 0)}, OpenKind::Forecourt}, {{Vec2(12, 0), Vec2(13, 0), Vec2(13, 9)}, OpenKind::SideYard}};
     a.pavedLot = a.pad; a.paveY = 4.8; a.lot = {Vec2(-2, -2), Vec2(14, -2), Vec2(14, 10), Vec2(-2, 10)}; a.padBound = {Vec2(-1, -2), Vec2(13, -2), Vec2(13, 9)};
     BuildingUnit u; u.plan = {Vec2(1, 1), Vec2(11, 1), Vec2(11, 7), Vec2(1, 7)}; u.baseY = 4.6; u.params = everyFieldSet(); DoorSpec d; d.foot = Vec2(6, 1); d.normal = Vec2(0, -1); d.width = 1.2; d.height = 2.4; u.doors = {d}; u.enterable = true;
@@ -89,6 +94,11 @@ TEST_CASE(lot_cache_round_trips_a_lot_result_with_every_part_of_it_populated) {
         CHECK(x.padMesh.vertices.size() == a.padMesh.vertices.size() && x.padMesh.indices == a.padMesh.indices);
         CHECK_APPROX(x.padMesh.vertices[0].color.x, 0.9, 1e-6); CHECK_APPROX(x.padMesh.vertices[3].position.x, static_cast<float>(a.padMesh.vertices[3].position.x), 0.0);
         CHECK(x.treeSpots.size() == 2 && x.treeSpots[1].z == 6 && x.fenceSegs.size() == 2 && x.fenceSegs[1].second.y == 5);
+        CHECK(x.sealed.size() == 1 && x.sealed[0].size() == 3 && x.sealed[0][2].y == 1);
+        CHECK(x.walks.size() == 1 && x.walks[0].b.y == 4 && x.walks[0].width == 2.5);
+        CHECK(x.loops.size() == 1 && x.loops[0].size() == 4 && x.loops[0][2].x == 5);
+        CHECK(x.areas.size() == 1 && x.areas[0].kind == "pitch" && x.areas[0].axis.y == 1 && x.areas[0].halfW == 17.0);
+        CHECK(x.sitSpots.size() == 1 && x.sitSpots[0].face.y == -1 && x.sitSpots[0].hip == 0.53);
         CHECK(x.open.size() == 2 && x.open[0].kind == OpenKind::Forecourt && samePoly(x.open[0].poly, a.open[0].poly) && x.open[1].kind == OpenKind::SideYard && x.open[1].poly.size() == 3);
         CHECK(samePoly(x.pavedLot, a.pad) && x.paveY == 4.8 && samePoly(x.lot, a.lot) && samePoly(x.padBound, a.padBound));
         CHECK(x.units.size() == 2 && x.units[0].enterable && !x.units[1].enterable && x.units[0].baseY == 4.6 && samePoly(x.units[0].plan, u.plan) && samePoly(x.units[1].plan, u2.plan));

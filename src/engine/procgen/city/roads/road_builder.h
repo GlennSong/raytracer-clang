@@ -4,6 +4,7 @@
 #include "ground_grid.h"
 #include "road_entity.h"
 #include "../polygon.h"
+#include "../rail_track.h"
 #include <string>
 #include <memory>
 #include <nlohmann/json.hpp>
@@ -21,11 +22,10 @@
 //
 //   recipe ──applyGenerateRecipe──► RoadEntity ──RoadBuilder──► RoadProducts
 //
-// Which builder is DATA, not a build flag: a road entity says
-// `"builder": "lattice"` (the default, and what every shipped level builds
-// today) or `"builder": "lanes"`. The lattice's code lives in
-// procgen/deprecated/roads — still compiled, still selectable, deleted when no
-// level selects it.
+// Which builder is DATA, not a build flag: a road entity says `"builder": "lanes"`,
+// the one builder there is (the default). The lattice -- the swept, plan-unioned
+// mesher every level used to build with -- retired 2026-10-14 (its union cut away a
+// road drawn over or under another, and hid overlapping and over-steep streets).
 
 namespace engine::roads {
 
@@ -76,6 +76,7 @@ struct RoadProducts {
     // graph's faces and has no freeway right-of-way to keep them out of.
     RoadGraph row;                  // freeway + ramp right-of-way: the lot pass's keep-out
     std::vector<Poly2> holes;       // un-inset pavement holes: the city's blocks
+    std::vector<RailTrack> rails;   // track lanes, for whatever runs trains (empty from the lattice)
 };
 
 // WHAT A BUILDER DOES TO THE GROUND — asked BEFORE anything is built, because a
@@ -119,7 +120,7 @@ public:
     virtual bool ownsNavGraph() const { return false; }
 };
 
-inline constexpr const char* kDefaultRoadBuilder = "lattice";
+inline constexpr const char* kDefaultRoadBuilder = "lanes";
 
 void registerRoadBuilder(std::unique_ptr<RoadBuilder> builder);
 // The builder by name, or nullptr (warned once per unknown name).

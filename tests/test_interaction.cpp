@@ -21,8 +21,9 @@ namespace {
 
 FurnitureLibrary shippedLibrary() {
     std::ifstream f(std::string(RT_SOURCE_DIR) + "/assets/scripts/furniture_library.lua");
+    std::ifstream r(std::string(RT_SOURCE_DIR) + "/assets/scripts/furniture_rooms.lua");   // and the room programs
     std::stringstream ss;
-    ss << f.rdbuf();
+    ss << f.rdbuf() << "\n" << r.rdbuf();
     FurnitureLibrary lib;
     std::string err;
     const bool ok = loadFurnitureLibrarySource(ss.str(), lib, &err);
@@ -46,7 +47,12 @@ TEST_CASE(the_furniture_library_describes_its_pieces_sanely) {
         const FurnitureAsset* a = lib.find(static_cast<Piece>(i));
         if (!a) continue;
         const Vec3 sz = furniturePiece(static_cast<Piece>(i), 0).size;
-        for (const FurnSpot& s : a->spots) {
+        uint32_t standOnly = 0;   // a STAND spot is on the floor beside the piece (behind a lectern), not on it
+        for (const FurnVerb& v : a->verbs) if (v.verb == Verb::Stand) standOnly |= v.spots;
+        for (const FurnVerb& v : a->verbs) if (v.verb != Verb::Stand) standOnly &= ~v.spots;
+        for (std::size_t si = 0; si < a->spots.size(); ++si) {
+            const FurnSpot& s = a->spots[si];
+            if (standOnly & (1u << si)) { CHECK(std::fabs(s.at.y) < 1e-6); continue; }
             CHECK(std::fabs(s.at.x) <= sz.x * 0.5 + 0.05);
             CHECK(s.at.z >= 0 && s.at.z <= sz.z + 0.05);
             CHECK(s.at.y > 0.3 && s.at.y <= sz.y);
@@ -54,9 +60,9 @@ TEST_CASE(the_furniture_library_describes_its_pieces_sanely) {
         for (const FurnVerb& v : a->verbs) {
             Real top = 0;
             for (std::size_t k = 0; k < a->spots.size(); ++k) if (v.spots & (1u << k)) top = std::max(top, a->spots[k].at.y);
-            CHECK(v.eye.y > top + (v.verb == Verb::Sit ? 0.5 : 0.15));
+            CHECK(v.eye.y > top + (v.verb == Verb::Sit ? 0.5 : v.verb == Verb::Stand ? 1.4 : 0.15));
             CHECK(std::fabs(v.exit.y) < 1e-6);
-            CHECK(std::fabs(v.exit.x) > sz.x * 0.5 || v.exit.z > sz.z);   // off the piece
+            CHECK(std::fabs(v.exit.x) > sz.x * 0.5 || v.exit.z > sz.z || v.exit.z < 0);   // off the piece
         }
     }
 }
@@ -178,6 +184,8 @@ TEST_CASE(the_interaction_marker_projects_onto_the_screen) {
 // looking at it, the offer is to sit.
 TEST_CASE(you_can_sit_on_the_toilet) {
     const FurnitureLibrary lib = shippedLibrary();
+    const FurnitureLibrary keep = FurnitureLibrary::global();
+    FurnitureLibrary::global() = lib;   // the rooms are furnished from its programs
     const Poly2 plan = {{0, 0}, {44, 0}, {44, 32}, {0, 32}};
     BuildingParams p;
     p.floors = 24; p.curtainWall = false; p.walkableGround = true; p.openDoorway = true; p.seed = 33;
@@ -185,7 +193,7 @@ TEST_CASE(you_can_sit_on_the_toilet) {
     const BuildingMesh bm = growInterior(plan, p, 0.0, nullptr, 6, 7);
     Interactables set;
     for (const PlacedPiece& pp : bm.furniture)
-        if (lib.interactive(static_cast<Piece>(pp.piece))) set.pieces.push_back({pp.piece, pp.xform, 0});
+        if (lib.interactive(static_cast<Piece>(pp.piece))) set.pieces.push_back({pp.piece, pp.xform, 0, -1, pp.variant});
     set.refreshBounds();
     int toilets = 0, offered = 0;
     for (std::size_t i = 0; i < set.pieces.size(); ++i) {
@@ -204,6 +212,7 @@ TEST_CASE(you_can_sit_on_the_toilet) {
     std::printf("    [toilet] %d toilets on the floor, %d offer a seat\n", toilets, offered);
     CHECK(toilets > 0);
     CHECK(offered == toilets);
+    FurnitureLibrary::global() = keep;
 }
 
 // OUTDOOR PIECES (M2): the lot pass places a bench by its back's centre and the way it faces; the transform must
@@ -259,4 +268,63 @@ TEST_CASE(furniture_surfaces_are_dressed_with_goods_on_their_anchors) {
     CHECK(goods >= 10);
     CHECK(onAnchor == goods);
     lib = keep;
+}
+
+// EVERY SEAT CAN BE SAT ON (Glenn, 2026-10-13: "you can't interact with the chairs" -- the pews, waiting seats,
+// cinema rows, jury box and the judge's chair, the hospital beds and couches were added that day with no entry in the
+// library, so they were scenery). A piece whose name says it is for sitting or lying on carries a sit or lie verb.
+TEST_CASE(every_seat_in_the_kit_can_be_used) {
+    const FurnitureLibrary lib = shippedLibrary();
+    const char* seatWords[] = {"chair", "seat", "sofa", "bench", "pew", "_row", "bed", "couch", "stool", "booth", "bleacher", "jury"};
+    int seats = 0, unusable = 0;
+    for (int i = 0; i < kPieceCount; ++i) {
+        const std::string name = furniturePieceName(static_cast<Piece>(i));
+        bool seatLike = false;
+        for (const char* w : seatWords) seatLike = seatLike || name.find(w) != std::string::npos;
+        if (!seatLike || name == "workbench" || name == "lab_bench" || name == "dj_booth") continue;   // (not seats)
+        ++seats;
+        const FurnitureAsset* a = lib.find(static_cast<Piece>(i));
+        bool usable = false;
+        if (a) for (const FurnVerb& v : a->verbs) usable = usable || v.verb == Verb::Sit || v.verb == Verb::Lie;
+        if (!usable) { ++unusable; std::printf("      not usable: %s\n", name.c_str()); }
+    }
+    std::printf("    [seats] %d seat-like pieces, %d with no sit or lie\n", seats, unusable);
+    CHECK(seats >= 20);
+    CHECK(unusable == 0);
+}
+
+// SEATS IN THE OFFICE'S FURNITURE (Glenn, 2026-10-16: "I still can't enter the cubes and sit in the chairs ... I can't
+// sit in the meeting room chairs"). The cubicle, the benching and the meeting table carry their chairs in their own
+// meshes: each chair is a seat now, and only the parts that block collide (the panels, the desks, the table's top),
+// so no seat and no place to stand up sits inside a collider -- and a bench built for four offers four seats, not six.
+TEST_CASE(office_furniture_chairs_are_seats_you_can_reach) {
+    const FurnitureLibrary lib = shippedLibrary();
+    struct Case { Piece piece; uint32_t variant; int seats; };
+    const Case cases[] = {{Piece::Cubicle, 0, 1}, {Piece::DeskPod, 0, 6}, {Piece::DeskPod, 4u << 5, 4}, {Piece::MeetingTable, 0, 6}};
+    for (const Case& c : cases) {
+        const FurnitureAsset* a = lib.find(c.piece);
+        CHECK(a != nullptr);
+        if (!a) continue;
+        const FurniturePiece& fp = furniturePiece(c.piece, c.variant);
+        CHECK(!fp.colliders.empty());
+        auto blocked = [&](Real x, Real z) {
+            for (const auto& b : fp.colliders)
+                if (std::fabs(x - b[0].x) < b[1].x * 0.5 && std::fabs(z - b[0].z) < b[1].z * 0.5) return true;
+            return false;
+        };
+        int seats = 0;
+        for (const FurnVerb& v : a->verbs) {
+            if (v.verb != Verb::Sit || !verbOnPiece(*a, v, c.variant)) continue;
+            ++seats;
+            for (std::size_t k = 0; k < a->spots.size(); ++k)
+                if (v.spots & (1u << k)) CHECK(!blocked(a->spots[k].at.x, a->spots[k].at.z));
+            CHECK(!blocked(v.exit.x, v.exit.z));
+        }
+        std::printf("    [office seats] %s v%u: %d seats\n", furniturePieceName(c.piece), c.variant, seats);
+        CHECK(seats == c.seats);
+    }
+    // the cubicle is open at its front: nothing blocks the walk in from there to its chair
+    const FurniturePiece& cube = furniturePiece(Piece::Cubicle, 0);
+    for (Real z = 1.2; z <= 2.4; z += 0.1)
+        for (const auto& b : cube.colliders) CHECK(!(std::fabs(0.0 - b[0].x) < b[1].x * 0.5 + 0.3 && std::fabs(z - b[0].z) < b[1].z * 0.5));
 }

@@ -48,6 +48,7 @@ public:
         out.deck = p->deck;                            // the surface everything stands ON
         out.bands = p->bands;                          // and the kerb line it stands clear of
         out.row = p->row;                              // the lot pass keeps out of the freeway
+        out.rails = p->rails;                          // the tracks, for the trains
         for (const lanes::Ring& h : p->holes) out.holes.push_back(h);   // un-inset: the caller insets by its own sidewalk
         for (const lanes::CityCellMesh& c : p->cells) {
             const bundle::PackedMesh& pm = c.mesh;
@@ -61,6 +62,7 @@ public:
             m.albedo = Vec3(pm.albedo[0], pm.albedo[1], pm.albedo[2]);
             m.roughness = pm.roughness;
             if (pm.name == "guardrail") m.metallic = 0.18f;   // weathered galvanising, not a mirror
+            if (pm.name == "canopy") m.metallic = 0.3f;       // a station's ribbed steel roof, galvanised
             m.collidable = !pm.paint() && pm.collidable();
             m.friction = pm.friction;
             m.cx = c.cx; m.cz = c.cz;

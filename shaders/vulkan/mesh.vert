@@ -71,14 +71,35 @@ layout(location = 2) out vec2 outTexcoord;
 layout(location = 3) out vec3 outColor;
 layout(location = 4) out vec3 outWorldTangent;
 layout(location = 5) flat out vec3 outInstanceOrigin;   // per-instance variation (ADR-0098)
+layout(location = 6) out vec3 outUvBlend;   // FLAG_UV_BLEND (bit 23): the tangent slot's data -- a second UV and its weight
+layout(location = 7) flat out vec4 outImpA;   // FLAG_IMPOSTOR_VIEWS (bit 24): the tree's centre and yaw; FLAG_GRASS: its ground's normal xz
+layout(location = 8) flat out vec4 outImpB;   // ...its window half extents Rb, Hh and its block's corner in the atlas
 
 void main() {
     const bool grass = (pc.surfaceFlags.y & (1u << 17)) != 0u;   // FLAG_GRASS
-    // Grass clumps carry their random rank in the transform's bottom row (GrassSystem); every
-    // other mesh's is (0, 0, 0, 1).
+    // Grass clumps carry their random rank in the transform's bottom row (GrassSystem), and their ground's normal
+    // (its x and z); every other mesh's is (0, 0, 0, 1).
     mat4 M = inModel;
     float rank = 0.0;
-    if (grass) { rank = M[0][3]; M[0][3] = 0.0; }
+    vec2 groundXZ = vec2(0.0);
+    if (grass) { rank = M[0][3]; groundXZ = vec2(M[1][3], M[2][3]); M[0][3] = 0.0; M[1][3] = 0.0; M[2][3] = 0.0; }
+    // FLAG_SIGNAL_STATE (bit 20): a traffic signal whose STATE rides the bottom row (0 none, 1 green, 2 amber,
+    // 3 red): the lamp of that colour glows (outColor pushed past 1: mesh.frag reads it as emission). One static
+    // model per signal -- nothing about it is rebuilt but that number.
+    const bool signalState = (pc.surfaceFlags.y & (1u << 20)) != 0u;
+    float signalLit = 0.0;
+    if (signalState) {
+        const int st = int(M[0][3] + 0.5);
+        M[0][3] = 0.0;
+        // the lamp colours street_kit::emitTrafficSignal paints (8-bit in the packed layout: a tolerance)
+        const vec3 lamp = st == 1 ? vec3(0.12, 0.72, 0.28) : st == 2 ? vec3(0.85, 0.62, 0.10) : vec3(0.85, 0.12, 0.10);
+        if (st > 0 && all(lessThan(abs(inColor.rgb - lamp), vec3(0.03)))) signalLit = 1.0;
+        // the other two lamps are dark lenses, not painted ones (in daylight they read as lit too)
+        else if (all(lessThan(abs(inColor.rgb - vec3(0.12, 0.72, 0.28)), vec3(0.03))) ||
+                 all(lessThan(abs(inColor.rgb - vec3(0.85, 0.62, 0.10)), vec3(0.03))) ||
+                 all(lessThan(abs(inColor.rgb - vec3(0.85, 0.12, 0.10)), vec3(0.03))))
+            signalLit = -1.0;
+    }
     vec4 world = M * vec4(inPosition, 1.0);
     vec3 normal = kPackedVertex ? octDecode(inNormal.xy) : inNormal.xyz;
     vec3 tangent = kPackedVertex ? octDecode(inTangent.xy) : inTangent.xyz;
@@ -115,6 +136,26 @@ void main() {
         world.xz += g.wind1.xz * (g.wind2.z * weight * gust);
     }
 
+    // FLAG_IMPOSTOR_VIEWS (bit 24, forest.h appendImpostorViews): ONE card a tree, turned to the camera about the
+    // tree's centre -- upright while the camera is near the horizon, tipping back as it climbs (its up stays in the
+    // plane of the world's up and the view); mesh.frag works out which baked views it shows
+    outImpA = vec4(groundXZ, 0.0, 0.0);   // (grass: its ground's normal, x and z -- mesh.frag bends the blades to it)
+    outImpB = vec4(0.0);
+    if ((pc.surfaceFlags.y & (1u << 24)) != 0u) {
+        const vec2 corner = inTexcoord;
+        const float rb = inTangent.x, hh = inTangent.y;
+        const vec3 c = (M * vec4(inPosition - vec3(corner.x * rb, corner.y * hh, corner.x * rb), 1.0)).xyz;
+        const vec3 toCam = normalize(g.cameraPosition.xyz - c);
+        vec3 right = cross(vec3(0.0, 1.0, 0.0), toCam);
+        right = dot(right, right) > 1e-6 ? normalize(right) : vec3(g.view[0][0], g.view[1][0], g.view[2][0]);
+        const vec3 up = cross(toCam, right);
+        world = vec4(c + right * (corner.x * rb) + up * (corner.y * hh), 1.0);
+        outImpA = vec4(c, inTangent.z);
+        outImpB = vec4(rb, hh, inNormal.x, inNormal.y);
+        normal = toCam;
+        tangent = right;
+    }
+
     outWorldPos = world.xyz;
     outInstanceOrigin = M[3].xyz;
     // Inverse-transpose so non-uniform scale keeps normals perpendicular.
@@ -123,6 +164,9 @@ void main() {
     // Tangent in world space for normal mapping (matches Metal's model*tangent).
     outWorldTangent = normalize((M * vec4(tangent, 0.0)).xyz);
     outTexcoord = inTexcoord;
-    outColor = inColor.rgb;
+    outUvBlend = (pc.surfaceFlags.y & (1u << 23)) != 0u ? inTangent.xyz : vec3(0.0);
+    if ((pc.surfaceFlags.y & (1u << 24)) != 0u) outUvBlend = vec3(inNormal.z, inColor.g, 0.0);   // (the cell's size)
+    outColor = signalLit > 0.5 ? inColor.rgb * 8.0 : signalLit < -0.5 ? inColor.rgb * 0.06 : inColor.rgb;   // (a lit signal lamp: see mesh.frag)
+    if ((pc.surfaceFlags.y & (1u << 24)) != 0u) outColor = vec3(inColor.r);   // (an impostor's shade; g carries its cell)
     gl_Position = g.viewProjection * world;
 }

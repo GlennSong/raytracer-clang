@@ -5,11 +5,13 @@
 #include "../../log.h"
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <memory>
 #include <filesystem>
 #include <thread>
 
@@ -35,6 +37,82 @@ void parallelRows(int n, F&& f) {
 // wavelength damped where the ground is already steep (clean faces, busy crests and floors), then runs a few
 // stream-power steps without uplift so the new detail drains -- gullies, not pits (the old breach + water pass
 // filled every noise hollow and combed the rest along the grid).
+// FACETS (WeatherParams::facet*): each cell of a jittered lattice (a Voronoi site a cell) carries a plane through the
+// ground at its site with the ground's slope over the cell plus a random tilt; a mountain point on steep rock takes
+// its nearest site's plane, by the mask of its slope and its height above the plains.
+void facetRock(Heightmap& g, float base0, float sea, const WeatherParams& w, uint32_t seed) {
+    const int n = g.n;
+    const double cell = g.worldSize / (n - 1), half = 0.5 * g.worldSize;
+    const Noise vn(seed * 40503u + 7u);   // the regions' variety
+    const std::vector<float> src = g.h;
+    auto H = [&](double x, double z) {   // bilinear on the source grid, world metres
+        const double gx = std::clamp((x + half) / cell, 0.0, n - 1.001), gz = std::clamp((z + half) / cell, 0.0, n - 1.001);
+        const int i = static_cast<int>(gx), j = static_cast<int>(gz);
+        const double u = gx - i, v = gz - j;
+        auto at = [&](int a, int b) { return static_cast<double>(src[static_cast<std::size_t>(b) * n + a]); };
+        return (at(i, j) * (1 - u) + at(i + 1, j) * u) * (1 - v) + (at(i, j + 1) * (1 - u) + at(i + 1, j + 1) * u) * v;
+    };
+    auto hsh = [&](int64_t a, int64_t b, uint32_t salt) {
+        uint32_t h = static_cast<uint32_t>(a) * 0x9E3779B1u ^ static_cast<uint32_t>(b) * 0x85EBCA77u ^ (seed + salt) * 0xC2B2AE3Du;
+        h ^= h >> 16; h *= 0x7FEB352Du; h ^= h >> 15; h *= 0x846CA68Bu; h ^= h >> 16;
+        return (h & 0xFFFFFFu) / 16777216.0;
+    };
+    std::atomic<long> faceted{0};
+    parallelRows(n, [&](int z) {
+        long mine = 0;
+        for (int x = 0; x < n; ++x) {
+            const std::size_t i = static_cast<std::size_t>(z) * n + x;
+            const double h = src[i];
+            if (h <= sea || h <= base0 + w.plainHeightM) continue;
+            const int xa = std::max(0, x - 1), xb = std::min(n - 1, x + 1), za = std::max(0, z - 1), zb = std::min(n - 1, z + 1);
+            const double gx0 = (src[static_cast<std::size_t>(z) * n + xb] - src[static_cast<std::size_t>(z) * n + xa]) / ((xb - xa) * cell);
+            const double gz0 = (src[static_cast<std::size_t>(zb) * n + x] - src[static_cast<std::size_t>(za) * n + x]) / ((zb - za) * cell);
+            const double slopeDeg = std::atan(std::sqrt(gx0 * gx0 + gz0 * gz0)) * 57.2957795;
+            const double s = std::clamp((slopeDeg - w.facetSlopeLoDeg) / std::max(1.0, w.facetSlopeHiDeg - w.facetSlopeLoDeg), 0.0, 1.0);
+            const double up = std::clamp((h - base0 - w.plainHeightM) / (2.5 * w.reliefRampM), 0.0, 1.0);
+            const double wx = -half + x * cell, wz = -half + z * cell;
+            // THE REGION's variety: how strongly faceted, how coarse (the coarse cells or the fine), how wild the tilt
+            auto field = [&](double ox, double oz) {
+                return std::clamp(0.5 + 0.9 * vn.fbm2(wx / w.facetVaryM + ox, wz / w.facetVaryM + oz, 3), 0.0, 1.0);
+            };
+            const double fs = field(3.1, -1.7), fc = field(-5.3, 2.9), ft = field(7.7, 4.4);
+            const double strength = w.facetStrengthLo + (1.0 - w.facetStrengthLo) * fs * fs * (3.0 - 2.0 * fs);
+            const double mask = w.facetStrength * strength * s * s * (3.0 - 2.0 * s) * up * up * (3.0 - 2.0 * up);
+            if (mask <= 0.001) continue;
+            const double tiltDeg = w.facetTiltLoDeg >= 0.0 ? w.facetTiltLoDeg + (w.facetTiltDeg - w.facetTiltLoDeg) * ft : w.facetTiltDeg;
+            const double tanTilt = std::tan(tiltDeg * 3.14159265358979 / 180.0);
+            // the plane of the nearest site of a set of cells C across (a jittered lattice: one site a cell, anywhere
+            // in its middle 80%): the ground's slope over the cell, tilted its own way
+            auto planeAt = [&](double C, uint32_t salt) {
+                const int64_t cx = static_cast<int64_t>(std::floor(wx / C)), cz = static_cast<int64_t>(std::floor(wz / C));
+                double best = 1e30, sx = 0, sz = 0;
+                int64_t bx = 0, bz = 0;
+                for (int64_t dz = -1; dz <= 1; ++dz)
+                    for (int64_t dx = -1; dx <= 1; ++dx) {
+                        const double px = (cx + dx + 0.1 + 0.8 * hsh(cx + dx, cz + dz, 1 + salt)) * C, pz = (cz + dz + 0.1 + 0.8 * hsh(cx + dx, cz + dz, 2 + salt)) * C;
+                        const double d2 = (px - wx) * (px - wx) + (pz - wz) * (pz - wz);
+                        if (d2 < best) { best = d2; sx = px; sz = pz; bx = cx + dx; bz = cz + dz; }
+                    }
+                const double e = 0.5 * C;
+                const double pgx = (H(sx + e, sz) - H(sx - e, sz)) / (2 * e) + tanTilt * (2.0 * hsh(bx, bz, 3 + salt) - 1.0);
+                const double pgz = (H(sx, sz + e) - H(sx, sz - e)) / (2 * e) + tanTilt * (2.0 * hsh(bx, bz, 4 + salt) - 1.0);
+                return H(sx, sz) + pgx * (wx - sx) + pgz * (wz - sz);
+            };
+            double plane = planeAt(w.facetCellM, 0);
+            if (w.facetCellFineM > 0.0) {
+                const double k = fc * fc * (3.0 - 2.0 * fc);   // 0: the fine cells, 1: the coarse
+                if (k < 0.999) { const double fine = planeAt(w.facetCellFineM, 100); plane = fine + (plane - fine) * k; }
+            }
+            g.h[i] = static_cast<float>(h + mask * (plane - h));
+            ++mine;
+        }
+        faceted += mine;
+    });
+    LOG_INFO << "[weather] facets: " << w.facetCellM << " m cells (fine " << w.facetCellFineM << "), tilt " << w.facetTiltLoDeg << ".." << w.facetTiltDeg
+             << " deg, strength from " << w.facetStrengthLo << ", regions ~" << w.facetVaryM << " m, on " << faceted.load() << " cells ("
+             << 100.0 * faceted.load() / (static_cast<double>(n) * n) << "% of the grid)";
+}
+
 Heightmap refineGrown(const Heightmap& grown, float base0, float sea, const WeatherParams& w, uint32_t seed, std::vector<float>* areaOut) {
     Heightmap g = grown;
     const Noise dn(seed * 2246822519u + 3u);
@@ -115,6 +193,8 @@ Heightmap refineGrown(const Heightmap& grown, float base0, float sea, const Weat
             sp.diffusion = 0.0;
             sp.rescale = false;
             sp.seaLevel = sea;
+            sp.stochastic = w.refineStochasticFrom > 0 && n - 1 >= w.refineStochasticFrom;
+            sp.seed = seed + static_cast<uint32_t>(level);
             const std::vector<float> zero(u.h.size(), 0.0f);
             // the drain cuts hard in the mountains and hardly at all on the low ground: at full strength
             // everywhere it sawed smooth-walled slot canyons into the foothills
@@ -130,13 +210,15 @@ Heightmap refineGrown(const Heightmap& grown, float base0, float sea, const Weat
         LOG_INFO << "[weather] refine level " << level << ": " << n << "^2 (" << cell << " m), detail " << amp << " m at " << lambda << " m";
         g = std::move(u);
     }
+    if (w.facetCellM > 0.0) facetRock(g, base0, sea, w, seed);
     return g;
 }
 }  // namespace
 
 nlohmann::json groundShapingBlock(const nlohmann::json& tjIn) {
     nlohmann::json tj = tjIn;
-    for (const char* k : {"rivers", "groundCover", "cdlod", "material", "forest", "trails"}) tj.erase(k);
+    // ("rockRelief" too: it is laid on the weathered grid as it is read, ADR-0213 -- the grid itself is the same)
+    for (const char* k : {"rivers", "groundCover", "cdlod", "material", "forest", "trails", "rockRelief"}) tj.erase(k);
     return tj;
 }
 
@@ -191,6 +273,19 @@ WeatherParams weatherFromJson(const nlohmann::json& w, const nlohmann::json& tj)
         p.refineSlopeDamp = r.value("slopeDamp", p.refineSlopeDamp);
         p.refineIncise = r.value("incise", p.refineIncise);
         p.refineInciseIterations = r.value("iterations", p.refineInciseIterations);
+        p.refineStochasticFrom = r.value("stochasticFrom", p.refineStochasticFrom);
+    }
+    if (w.contains("facets") && w["facets"].is_object()) {
+        const auto& f = w["facets"];
+        p.facetCellM = f.value("cell", 18.0);
+        p.facetTiltDeg = f.value("tilt", p.facetTiltDeg);
+        p.facetSlopeLoDeg = f.value("slopeLo", p.facetSlopeLoDeg);
+        p.facetSlopeHiDeg = f.value("slopeHi", p.facetSlopeHiDeg);
+        p.facetStrength = f.value("strength", p.facetStrength);
+        p.facetCellFineM = f.value("cellFine", p.facetCellFineM);
+        p.facetVaryM = f.value("vary", p.facetVaryM);
+        p.facetStrengthLo = f.value("strengthLo", p.facetStrengthLo);
+        p.facetTiltLoDeg = f.value("tiltLo", p.facetTiltLoDeg);
     }
     const nlohmann::json g = w.value("grow", nlohmann::json::object());
     p.growRes = g.value("res", p.growRes);
@@ -198,6 +293,10 @@ WeatherParams weatherFromJson(const nlohmann::json& w, const nlohmann::json& tj)
     p.growBlurM = g.value("blur", p.growBlurM);
     p.grow.K = g.value("K", p.grow.K);
     p.grow.diffusion = g.value("diffusion", p.grow.diffusion);
+    if (g.contains("layers") && g["layers"].is_object()) {
+        p.growLayers = true;
+        p.layers = rockLayersFromJson(g["layers"]);
+    }
     const nlohmann::json wa = w.value("water", nlohmann::json::object());
     ErosionParams& e = p.water;
     e.vulkan = true;
@@ -308,6 +407,14 @@ Heightmap weatherTerrain(const TerrainParams& tpIn, uint32_t seed, const Weather
         for (float v : coarse0.h) if (v >= base0) { lo = std::min(lo, v); hi = std::max(hi, v); }
         sp.targetLo = lo;
         sp.targetHi = hi;
+    }
+    // (the rock layers, when the level asks: in the grid's own frame, from its corner)
+    std::unique_ptr<RockLayers> layers;
+    if (w.growLayers) {
+        layers = std::make_unique<RockLayers>(w.layers, seed);
+        sp.layers = layers.get();
+        LOG_INFO << "[weather] rock layers: " << w.layers.thicknessM << " m beds dipping " << w.layers.dipDeg << " deg, " << 100.0 * w.layers.hard
+                 << "% hard (erodibility x" << w.layers.hardK << ", creep x" << w.layers.hardDiffusion << ")";
     }
     auto t0 = std::chrono::steady_clock::now();
     streamPowerErode(coarse, upl, sp, &erod);

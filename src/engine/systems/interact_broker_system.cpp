@@ -1,6 +1,9 @@
 #include "interact_broker_system.h"
+
+#include <cstdlib>
 #include "physics_system.h"
 #include "../components.h"
+#include "../../log.h"
 #include "../input/input_map.h"
 #ifdef RT_ENABLE_IMGUI
 #include <imgui.h>
@@ -118,6 +121,9 @@ void InteractBrokerSystem::update(FrameContext& ctx) {
     show_ = true;
     marker_ = !f.exclusive;
     anchor_ = f.anchor;
+    carried_ = f.carried;
+    local_ = f.local;
+    player_ = player;
     name_ = f.name;
     others_ = static_cast<int>(ranked.size()) - 1;
     // THE BUTTON, on the device in use: E on the keyboard, X on a controller (InputMap::gamepadInUse).
@@ -168,7 +174,13 @@ void InteractBrokerSystem::render(FrameContext& ctx) {
     if (marker_) {
         Real sx = 0, sy = 0;
         const CameraState& cam = ctx.view.camera;
+        static const bool uncarried = std::getenv("RT_MARKER_UNCARRIED") != nullptr;   // A/B: the update-time anchor
+        if (carried_ && !uncarried)
+            if (const InteractCarrier* ic = player_.valid() ? ctx.world.get<InteractCarrier>(player_) : nullptr)
+                anchor_ = ic->drawn.transformPoint(local_);
         if (projectToScreen(anchor_, cam.position, cam.target, cam.up, cam.fovDegrees, cam.aspectRatio, W, H, sx, sy)) {
+            static const bool logMarker = std::getenv("RT_MARKER_LOG") != nullptr;   // the marker's screen point, each frame
+            if (logMarker) LOG_INFO << "[marker] " << sx << " " << sy;
             const float r = 9.0f + 2.0f * static_cast<float>(std::sin(pulse_ * 4.0));
             dl->AddCircle(ImVec2(static_cast<float>(sx), static_cast<float>(sy)), r + 2.0f, IM_COL32(0, 0, 0, 140), 24, 4.0f);
             dl->AddCircle(ImVec2(static_cast<float>(sx), static_cast<float>(sy)), r, IM_COL32(255, 236, 160, 235), 24, 2.5f);
