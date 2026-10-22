@@ -138,6 +138,7 @@ void BuildingInteriorSystem::step(World& world, PhysicsWorld* phys,
     std::vector<const BuildingRecord*> nearby;
     cb->near(xz, RELEASE_M, nearby);
     std::vector<std::size_t> desired;   // record indices
+    std::vector<std::size_t> aloft;     // approached by a link door: grown round the walker's storey
     std::size_t insideKey = static_cast<std::size_t>(-1);
     for (const BuildingRecord* r : nearby) {
         if (!r->enterable) continue;
@@ -155,6 +156,19 @@ void BuildingInteriorSystem::step(World& world, PhysicsWorld* phys,
                 break;
             }
         }
+        // ...or a LINK door at the walker's own storey (a sky bridge's, ADR-0179): approached from the bridge, the
+        // tower is grown round that storey, not round its lobby (Glenn, 2026-10-21: "I'm standing in front of a
+        // skybridge and I can't cross it!" -- the far tower's floor was not there to step onto)
+        if (!inside && r->params.links > 0)
+            for (const LinkDoor& ld : linkDoors(r->plan, r->params, -1, r->baseY)) {
+                const Vec2 toP = xz - (ld.a + ld.b) * 0.5;
+                const Real feet = player.y - 0.7;
+                if (toP.length() < APPROACH_M + ld.len && dot(toP, ld.n) > 0 && feet > ld.y0 - 1.0 && feet < ld.y0 + ld.h) {
+                    approaching = true;
+                    aloft.push_back(key);
+                    break;
+                }
+            }
         if (inside) insideKey = key;
         if (inside || approaching) desired.push_back(key);
     }
@@ -165,7 +179,7 @@ void BuildingInteriorSystem::step(World& world, PhysicsWorld* phys,
     auto windowFor = [&](const BuildingRecord& r, bool inside, int& k0, int& k1) {
         const int n = r.params.floors + 1;
         if (n <= WHOLE_UP_TO) { k0 = 0; k1 = -1; return; }
-        if (!inside) { k0 = 0; k1 = std::min(n, 3); return; }
+        if (!inside) { k0 = 0; k1 = std::min(n, 3); return; }   // (`inside`: or approached aloft, by a link door)
         const int f = storeyOf(r, player.y);
         k0 = std::max(0, f - WINDOW_BELOW);
         k1 = std::min(n, f + WINDOW_ABOVE);
@@ -199,6 +213,15 @@ void BuildingInteriorSystem::step(World& world, PhysicsWorld* phys,
         }
     }
 
+    // A tower approached by its link door but resident with a window that misses the walker's storey (its lobby,
+    // grown when they passed its street door) is regrown round that storey.
+    for (std::size_t key : aloft) {
+        auto it = resident_.find(key);
+        if (it == resident_.end() || it->second.k1 < 0) continue;
+        const int f = storeyOf(cb->records[key], player.y);
+        if (f < it->second.k0 || f >= it->second.k1) release(world, phys, key);
+    }
+
     // ONE build per step; the record the player is inside builds regardless.
     bool builtThisStep = false;
     for (std::size_t key : desired) {
@@ -206,7 +229,7 @@ void BuildingInteriorSystem::step(World& world, PhysicsWorld* phys,
         if (resident_.size() >= MAX_RESIDENT && key != insideKey) continue;
         if (builtThisStep && key != insideKey) continue;
         int k0 = 0, k1 = -1;
-        windowFor(cb->records[key], key == insideKey, k0, k1);
+        windowFor(cb->records[key], key == insideKey || std::find(aloft.begin(), aloft.end(), key) != aloft.end(), k0, k1);
         build(world, phys, assets, renderer, cb->records[key], key, k0, k1);
         builtThisStep = true;
     }

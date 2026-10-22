@@ -13,7 +13,11 @@
 #include "../src/engine/world.h"
 
 #include <cmath>
+#include <utility>
 #include <vector>
+
+// Twin towers 12 m apart joined by a sky bridge, as (plan, params) per tower; returns the bridge storey.
+int twinTowerCellsForTest(const engine::BuildingParams& base, std::vector<std::pair<engine::Poly2, engine::BuildingParams>>& out);
 
 using namespace engine;
 
@@ -382,6 +386,50 @@ TEST_CASE(interior_system_builds_on_approach_and_releases_on_leave) {
     phys.shutdown();
 }
 
+
+// A TOWER IS APPROACHED BY ITS SKY BRIDGE TOO (ADR-0179; Glenn, 2026-10-21: "I'm standing in front of a skybridge
+// and I can't cross it!"): on the bridge, a few metres short of the far tower's link door, that tower is grown -- and
+// round the bridge's storey, not its lobby, so there is a floor to step onto.
+TEST_CASE(interior_system_builds_the_far_tower_from_its_sky_bridge) {
+    World world;
+    PhysicsWorld phys;
+    phys.initialize();
+    StubUploader uploader;
+    AssetManager assets(uploader);
+    std::vector<std::pair<Poly2, BuildingParams>> cells;
+    const int k = twinTowerCellsForTest(interiorParams(), cells);   // test_building_collider.cpp (cells.h's Transform
+                                                                   // and components.h's cannot share a file)
+    CHECK(cells.size() == 2 && k > 0);
+    if (cells.size() != 2) { phys.shutdown(); return; }
+    CityBuildings cb;
+    for (const auto& [plan, params] : cells) {
+        BuildingRecord r;
+        r.plan = plan;
+        r.baseY = 0;
+        r.groundY = -0.45;
+        r.height = params.groundHeight + params.floors * params.floorHeight;
+        r.params = params;
+        r.enterable = true;
+        r.recipe = "twin_towers";
+        r.type = "commercial";
+        r.district = "test";
+        cb.records.push_back(r);
+    }
+    cb.buildIndex();
+    const std::vector<LinkDoor> db = linkDoors(cells[1].first, cells[1].second, k, 0);
+    CHECK(db.size() == 1);
+    if (db.empty()) { phys.shutdown(); return; }
+    world.add<CityBuildings>(world.create(), std::move(cb));
+    BuildingInteriorSystem sys(nullptr);
+    const Vec2 at = (db[0].a + db[0].b) * 0.5 + db[0].n * 3.0;   // on the bridge, 3 m short of b's door
+    for (int i = 0; i < 3; ++i) sys.step(world, &phys, assets, nullptr, Vec3(at.x, db[0].y0 + 1.1, at.y));
+    int k0 = 0, k1 = 0;
+    sys.residentWindow(1, k0, k1);
+    std::printf("    [sky bridge] the far tower resident with storeys [%d, %d) for the bridge's storey %d\n", k0, k1, k);
+    CHECK(k1 != 0);                                // resident
+    CHECK(k0 <= k && (k1 < 0 || k < k1));          // round the bridge's storey
+    phys.shutdown();
+}
 
 TEST_CASE(jolt_mesh_cost_scales_sanely) {
     // ADR-0080 2c: the unowned number — what a MeshShape build costs at

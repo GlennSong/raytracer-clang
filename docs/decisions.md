@@ -11321,3 +11321,22 @@ builder".
 - Test: `lanes_the_road_grid_keeps_a_corridor_and_the_hills_their_detail` (the grid exactly in a road's corridor; the
   natural ground to 1 mm away from it, where the grid alone was 8 m off). Ground code tag 2026-10-21.2, lots tag
   2026-10-21.4.
+
+## ADR-0222 — The sky bridge is walked
+
+Glenn, 2026-10-21, at the top of a twin tower on island_8_nature: "I'm standing in front of a skybridge and I can't
+cross it!" ADR-0179 drew the bridge, cut the exterior collider at its door and laid its floor and sides, and its test
+counted those parts; nothing ever walked a body across.
+
+- **The interior's inner-wall collider sealed the door.** `growInterior` stands a plane 0.55 m inside every facade
+  (so a walker never stands in the wall band) and gapped it only at the ground storey's entrances. It now gaps it on
+  every storey where a `wallCuts` cut crosses it -- the link doorways and the wide openings between cells -- matched to
+  the edge by its line, not its index.
+- **The far tower was not there to step into.** `BuildingInteriorSystem` grows a building the walker is inside or
+  stands within 6 m in front of a street door, a tall one round its lobby while they approach. A link door at the
+  walker's own storey now counts as a door (within 6 m plus the bridge's span), and that tower grows round the
+  walker's storey; one already resident round its lobby is regrown.
+- Tests: `a_walker_crosses_the_sky_bridge_between_twin_towers` (the two interiors, the bridge and a capsule from one
+  sky lobby into the other: stopped 0.87 m short of the face before, 16.2 m across after);
+  `interior_system_builds_the_far_tower_from_its_sky_bridge` (storeys [14, 19) for the bridge's 16). Runtime only: no
+  bake.

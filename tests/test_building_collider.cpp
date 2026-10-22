@@ -7,10 +7,12 @@
 #include "test_framework.h"
 #include "../src/engine/physics/physics_world.h"
 #include "../src/engine/procgen/city/building_collider.h"
+#include "../src/engine/procgen/city/cells.h"
 #include "../src/engine/procgen/city/core_plan.h"
 #include "../src/engine/procgen/city/shape_grammar.h"
 
 #include <cmath>
+#include <utility>
 #include <vector>
 
 using namespace engine;
@@ -278,4 +280,76 @@ TEST_CASE(tiered_collider_caps_every_deck_and_opens_over_the_stairs) {
     BuildingParams g = p;
     g.roofStyle = BuildingParams::RoofStyle::Gable;
     CHECK(colliderTiers(plan, g).empty());
+}
+
+// Twin towers 12 m apart joined by a sky bridge, as (plan, params) per tower (test_building_interior.cpp streams
+// them; it cannot include cells.h); returns the bridge storey.
+int twinTowerCellsForTest(const BuildingParams& base, std::vector<std::pair<Poly2, BuildingParams>>& out) {
+    const Poly2 box = {{-34, -14}, {34, -14}, {34, 14}, {-34, 14}};
+    BuildingParams p = base;
+    p.floors = 24;
+    p.curtainWall = true;
+    p.faceDir = Vec3(0, 0, -1);
+    const Complex cx = twinTowers(box, p, 12.0, {24, 24}, 0, 4.5);
+    out.clear();
+    for (const CellFrame& c : cx.cells) out.push_back({c.plan, c.params});
+    return cx.bridges.empty() ? -1 : cx.bridges[0].storey;
+}
+
+// THE SKY BRIDGE IS WALKED (ADR-0179; Glenn, 2026-10-21, on island_8_nature: "I'm standing in front of a skybridge
+// and I can't cross it!"): twin towers as the level composes them -- each tower's interior collider round the bridge
+// storey (the resident interiors), the bridge's floor and glass sides (roof items of the tower that carries it) and
+// the lot's own prism -- and a walker from the sky lobby of one, out through the link door, across, into the other.
+TEST_CASE(a_walker_crosses_the_sky_bridge_between_twin_towers) {
+    const Poly2 box = {{-34, -14}, {34, -14}, {34, 14}, {-34, 14}};
+    BuildingParams p;
+    p.floors = 24;
+    p.curtainWall = true;
+    p.walkableGround = true;
+    p.openDoorway = true;
+    p.seed = 77;
+    p.faceDir = Vec3(0, 0, -1);
+    const Complex cx = twinTowers(box, p, 12.0, {24, 24}, 0, 4.5);
+    CHECK(cx.bridges.size() == 1 && cx.bridges[0].placed);
+    if (cx.bridges.empty()) return;
+    const int k = cx.bridges[0].storey;
+    const CellFrame& a = cx.cells[0];
+    const CellFrame& b = cx.cells[1];
+    const std::vector<LinkDoor> da = linkDoors(a.plan, a.params, k, 0);
+    CHECK(da.size() == 1);
+    if (da.empty()) return;
+    const LinkDoor& ld = da[0];
+    PhysicsWorld world;
+    world.initialize();
+    std::vector<Vec3> V;
+    std::vector<uint32_t> I;
+    for (const CellFrame* c : {&a, &b}) {   // the resident interiors, a storey either side of the bridge's
+        RenderMesh col;
+        growInterior(c->plan, c->params, 0.0, &col, k - 1, k + 1);
+        const uint32_t s = static_cast<uint32_t>(V.size());
+        for (const Vertex& v : col.vertices) V.push_back(v.position);
+        for (uint32_t i : col.indices) I.push_back(s + i);
+    }
+    appendRoofItems(V, I, growPlanBuilding(a.plan, a.params, 0.0).roof);   // the bridge: floor and sides
+    mirrorTriangles(I);
+    world.addMesh(V, I, Vec3(), 0.85);
+    const Vec2 mid = (ld.a + ld.b) * 0.5;
+    const Vec2 start = mid - ld.n * 3.0;   // in a's sky lobby, 3 m short of the door
+    CharacterId c = world.addCharacter(0.8, 0.3, Vec3(start.x, ld.y0 + 1.25, start.y));
+    world.optimizeBroadPhase();
+    walk(world, c, Vec3(), 60);
+    const Vec3 p0 = world.characterPosition(c);
+    std::printf("    [sky bridge] storey %d, floor y %.2f; the walker settles at y %.2f\n", k, ld.y0, p0.y);
+    CHECK_APPROX(p0.y, ld.y0 + 1.1, 0.2);   // standing on a's lounge floor
+    double far = -1e9, lastY = p0.y;
+    for (int step = 0; step < 24; ++step) {   // 1.6 m/s along the bridge's normal, 12 s
+        walk(world, c, Vec3(ld.n.x * 1.6, 0, ld.n.y * 1.6), 30);
+        const Vec3 q = world.characterPosition(c);
+        far = dot(Vec2(q.x, q.z) - mid, ld.n);
+        lastY = q.y;
+    }
+    std::printf("    [sky bridge] the walker got %.2f m past a's face (the bridge is %.1f m), at y %.2f\n", far, ld.len, lastY);
+    CHECK(far > ld.len + 1.0);              // across, and into b
+    CHECK_APPROX(lastY, ld.y0 + 1.1, 0.3);  // still on the storey's floor
+    world.shutdown();
 }

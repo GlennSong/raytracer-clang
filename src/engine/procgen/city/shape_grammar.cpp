@@ -5512,9 +5512,13 @@ BuildingMesh growInterior(const Poly2& planIn, const BuildingParams& params,
     // the inset so a player can never stand inside the visible wall band
     // (device: "I can sometimes slip in between walls" -- the skins were
     // visual-only, so the capsule sank into them against the exterior
-    // prism plane). The ground entrance edge keeps a gap at the door bay.
+    // prism plane). The ground entrance edge keeps a gap at the door bay; every storey keeps one where a wall cut
+    // opens the facade -- a sky bridge's link doorway, a wide opening into the next cell (ADR-0179/0180; Glenn,
+    // 2026-10-21: "I'm standing in front of a skybridge and I can't cross it!" -- the plane stood 0.55 m inside the
+    // bridge's door).
     if (colliderOut) {
         const Real inset = interiorInset(params);
+        const std::vector<WallCut> cuts = wallCuts(plan, params, baseY);
         for (int ki = kA; ki < kB; ++ki) {
             const std::size_t k = static_cast<std::size_t>(ki);
             const StoreyPlan& spk = storeys[k];
@@ -5530,6 +5534,19 @@ BuildingMesh growInterior(const Poly2& planIn, const BuildingParams& params,
                     const FacadeLayout L = facadeLayout(fr, groundModeFor(spk.plan, params, e, entranceEdge), params);
                     for (const BayOpening& o : L.open)
                         if (o.entrance) gaps.push_back({o.wx0, o.wx1});
+                }
+                {   // the wall cuts on this edge (found by the line, not the index) that this storey's height meets
+                    const Vec2 bl2(fr.bl.x, fr.bl.z), h2(fr.h.x, fr.h.z), n2(fr.n.x, fr.n.z);
+                    for (const WallCut& c : cuts) {
+                        if (c.y1 <= wy0 + 0.05 || c.y0 >= wy0 + spk.h - 0.05) continue;
+                        if (std::fabs(dot(c.a - bl2, n2)) > 0.3 || std::fabs(dot(c.b - bl2, n2)) > 0.3) continue;
+                        Real x0 = dot(c.a - bl2, h2), x1 = dot(c.b - bl2, h2);
+                        if (x0 > x1) std::swap(x0, x1);
+                        x0 = std::max(Real(0), x0);
+                        x1 = std::min(fr.width, x1);
+                        if (x1 - x0 > 0.3) gaps.push_back({x0, x1});
+                    }
+                    std::sort(gaps.begin(), gaps.end());
                 }
                 const Vec3 off = fr.n * -inset;
                 // Along the INSET edge (mitred ends), parametrised by the
@@ -5551,7 +5568,7 @@ BuildingMesh growInterior(const Poly2& planIn, const BuildingParams& params,
                     (void)ih;
                 };
                 Real at = 0;
-                for (const auto& [g0, g1] : gaps) { wallQuad(at, g0); at = g1; }
+                for (const auto& [g0, g1] : gaps) { wallQuad(at, g0); at = std::max(at, g1); }
                 wallQuad(at, fr.width);
             }
         }
