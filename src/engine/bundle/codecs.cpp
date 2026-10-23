@@ -12,6 +12,7 @@ namespace engine {
 namespace bundle {
 
 namespace {
+constexpr uint32_t kMeshCompactVersion = 2;   // MESH v2: the header, then a compact mesh (ADR-0224)
 constexpr uint32_t kMeshVersion = 1, kGridVersion = 1, kRoadGraphVersion = 1, kRoadEntityVersion = 1, kRingsVersion = 1;
 constexpr uint32_t kDeckVersion = 3, kBandVersion = 1;   // DECK v3: the drawn section (yLeft, yRight)
 inline float f(double v) { return static_cast<float>(v); }
@@ -184,18 +185,39 @@ bool getCompactMesh(BinReader& r, RenderMesh& m) {
     return r.ok();
 }
 
-void putPackedMesh(BinWriter& w, const PackedMesh& p) {
-    w.magic("MESH", kMeshVersion); w.putStr(p.name); w.put<uint32_t>(p.flags);
+void putPackedMesh(BinWriter& w, const PackedMesh& p, bool compact) {
+    w.magic("MESH", compact ? kMeshCompactVersion : kMeshVersion); w.putStr(p.name); w.put<uint32_t>(p.flags);
     for (float c : p.albedo) w.put<float>(c); for (float c : p.vertexColor) w.put<float>(c);
     w.put<float>(p.roughness); w.put<double>(p.friction);
+    if (compact) {
+        putCompactMesh(w, unpackMesh(p));
+        return;
+    }
     w.putVec(p.pos); w.putVec(p.nrm); w.putVec(p.tan); w.putVec(p.uv); w.putVec(p.col); w.putVec(p.idx);
 }
 
 bool getPackedMesh(BinReader& r, PackedMesh& p) {
-    uint32_t v = 0; if (!r.magic("MESH", &v) || v != kMeshVersion) return false;
+    uint32_t v = 0; if (!r.magic("MESH", &v) || (v != kMeshVersion && v != kMeshCompactVersion)) return false;
     if (!r.getStr(p.name) || !r.get(p.flags)) return false;
     for (float& c : p.albedo) if (!r.get(c)) return false; for (float& c : p.vertexColor) if (!r.get(c)) return false;
     if (!r.get(p.roughness) || !r.get(p.friction)) return false;
+    if (v == kMeshCompactVersion) {   // the planes back from the compact mesh (a uniform colour stays in the header)
+        RenderMesh m;
+        if (!getCompactMesh(r, m)) return false;
+        const size_t n = m.vertices.size();
+        p.pos.resize(3 * n); p.nrm.resize(3 * n); p.tan.resize(3 * n); p.uv.resize(2 * n);
+        p.col.assign(p.colorUniform() ? 0 : 3 * n, 0.0f);
+        for (size_t i = 0; i < n; ++i) {
+            const Vertex& x = m.vertices[i];
+            p.pos[3 * i] = f(x.position.x); p.pos[3 * i + 1] = f(x.position.y); p.pos[3 * i + 2] = f(x.position.z);
+            p.nrm[3 * i] = f(x.normal.x); p.nrm[3 * i + 1] = f(x.normal.y); p.nrm[3 * i + 2] = f(x.normal.z);
+            p.tan[3 * i] = f(x.tangent.x); p.tan[3 * i + 1] = f(x.tangent.y); p.tan[3 * i + 2] = f(x.tangent.z);
+            p.uv[2 * i] = x.u; p.uv[2 * i + 1] = x.v;
+            if (!p.colorUniform()) { p.col[3 * i] = f(x.color.x); p.col[3 * i + 1] = f(x.color.y); p.col[3 * i + 2] = f(x.color.z); }
+        }
+        p.idx = std::move(m.indices);
+        return r.ok();
+    }
     if (!r.getVec(p.pos) || !r.getVec(p.nrm) || !r.getVec(p.tan) || !r.getVec(p.uv) || !r.getVec(p.col) || !r.getVec(p.idx)) return false;
     const size_t n = p.pos.size() / 3;
     if (p.pos.size() != 3 * n || p.nrm.size() != 3 * n || p.tan.size() != 3 * n || p.uv.size() != 2 * n || (!p.col.empty() && p.col.size() != 3 * n)) return false;

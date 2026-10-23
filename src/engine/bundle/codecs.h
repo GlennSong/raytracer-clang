@@ -44,7 +44,9 @@ struct PackedMesh {
 PackedMesh packMesh(const RenderMesh& m, const std::string& name, const Vec3& albedo, uint32_t flags, float roughness, double friction);
 RenderMesh unpackMesh(const PackedMesh& p);
 void colliderFromPacked(const PackedMesh& p, MeshCollider& mc);   // positions + indices only, no Vertex materialised
-void putPackedMesh(BinWriter& w, const PackedMesh& p);
+// compact: the geometry as a compact mesh (putCompactMesh, ADR-0224) behind the same header -- MESH v2; v1 stores
+// the float planes. getPackedMesh reads either.
+void putPackedMesh(BinWriter& w, const PackedMesh& p, bool compact = false);
 bool getPackedMesh(BinReader& r, PackedMesh& p);
 
 // COMPACT MESH (ADR-0224): a RenderMesh as the GPU's standard vertex takes it (ADR-0096) -- float32 position, the

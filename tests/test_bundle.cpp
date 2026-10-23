@@ -164,6 +164,38 @@ TEST_CASE(compact_mesh_gives_the_gpu_exactly_what_the_full_mesh_gives_it) {
     BinReader cut(w.bytes.data(), w.bytes.size() / 2); RenderMesh r2; CHECK(!getCompactMesh(cut, r2));
 }
 
+TEST_CASE(a_compact_packed_mesh_reads_back_as_the_same_city_mesh) {
+    // MESH v2 (the city's cell meshes): the header as v1, the geometry as a compact mesh -- positions, normals and UVs
+    // exact, tints as the GPU's unorm8, the collider's triangles the same (each may start at another corner), a uniform colour kept
+    // in the header
+    RenderMesh kerb = facadeBlock();
+    RenderMesh pier = MeshBuilder::box(Vec3(2.6, 4.8, 2.6));
+    for (Vertex& v : pier.vertices) v.position += Vec3(-4010.0, 0.0, -400.0);
+    MeshBuilder::append(kerb, pier);
+    for (const PackedMesh& p : {packMesh(kerb, "concrete", Vec3(0.5, 0.5, 0.5), PackedMesh::kCollidable, 0.93f, 0.85),
+                                packMesh(MeshBuilder::box(Vec3(3, 0.2, 9)), "asphalt", Vec3(0.1, 0.1, 0.1), PackedMesh::kCollidable, 0.9f, 0.8)}) {
+        BinWriter w; putPackedMesh(w, p, /*compact=*/true);
+        BinWriter planes; putPackedMesh(planes, p);
+        PackedMesh r; BinReader rd(w.bytes.data(), w.bytes.size());
+        CHECK(getPackedMesh(rd, r));
+        CHECK(r.name == p.name && r.flags == p.flags && r.friction == p.friction && r.roughness == p.roughness &&
+              r.vertexColor[0] == p.vertexColor[0] && r.albedo[2] == p.albedo[2]);
+        CHECK(sameFloats(r.pos, p.pos) && sameFloats(r.nrm, p.nrm) && sameFloats(r.uv, p.uv));
+        CHECK(r.col.size() == p.col.size());   // a tint in [0, 1] as the GPU's unorm8 (nothing reads one exactly)
+        bool sameTint = true;
+        for (size_t i = 0; i < r.col.size() && i < p.col.size(); ++i) sameTint = sameTint && engine::unorm8(r.col[i]) == engine::unorm8(p.col[i]);
+        CHECK(sameTint);
+        CHECK(r.idx.size() == p.idx.size() && r.tan.size() == p.tan.size());
+        int same = 0;
+        for (size_t t = 0; t + 2 < p.idx.size() && t + 2 < r.idx.size(); t += 3)
+            for (int k = 0; k < 3; ++k)
+                if (r.idx[t] == p.idx[t + k] && r.idx[t + 1] == p.idx[t + (k + 1) % 3] && r.idx[t + 2] == p.idx[t + (k + 2) % 3]) { ++same; break; }
+        CHECK(same == static_cast<int>(p.idx.size() / 3));
+        CHECK(w.bytes.size() * 2 < planes.bytes.size());
+        BinReader cut(w.bytes.data(), w.bytes.size() / 2); PackedMesh r2; CHECK(!getPackedMesh(cut, r2));
+    }
+}
+
 TEST_CASE(compact_mesh_keeps_what_the_standard_vertex_cannot_hold_exact) {
     // a tint above 1 (lit panes), a tangent that carries data (a morph target), a mesh with no tangents, one tint
     RenderMesh hdr = MeshBuilder::box(Vec3(2, 2, 2));

@@ -11395,7 +11395,9 @@ normal, tangent, UV and colour, and u32 indices. Glenn asked to shrink the data 
   - a unorm8 tint.
 
   The tangent and tint are what Vulkan's `GpuVertexPacked` already uploads (ADR-0096). The encoders are shared
-  with the renderer (`engine/vertex_pack.h`), so the GPU receives the same bits as before.
+  with the renderer (`engine/vertex_pack.h`), so the GPU reads the same tangent and tint as before. On the oct
+  map's fold edge a re-encoded tangent can take the other of two codes that decode to the same direction (a
+  component of −6e-7 comes back as −0).
 - **The normal stays float** because the loader re-derives world-planar UVs from it (`applyWorldPlanarUVs`). At
   island coordinates, an oct normal's ~5e-5 rad would move a wall's u by ~0.25 m. On a round tower each vertex
   moves differently, so the brick joints would zigzag. The test block includes a cylinder at island coordinates.
@@ -11424,10 +11426,18 @@ normal, tangent, UV and colour, and u32 indices. Glenn asked to shrink the data 
   - lots/flat 0.59 → 0.12 GB;
   - bundle 8.59 → 2.50 GB;
   - lots re-bake 145 s, peak RSS 19.1 GB.
-- **Revisit** when:
-  - the city's own meshes (concrete, asphalt, sleepers, guardrails: ~1.3 GB, still `packMesh`) are worth the
-    same treatment;
-  - a CPU consumer needs a part's tint or tangent exact.
+- **The city's cell meshes too** (2026-10-23, lanes tag 2026-10-23.1): MESH v2 is the v1 header (material name,
+  flags, colours, roughness, friction), then a compact mesh. `getPackedMesh` reads either version. Colliders are
+  built from the positions, which stay exact. Nothing reads a city tint exactly: the shaders' signal-colour tests
+  allow 0.03.
+  - concrete 0.485 → 0.092 GB;
+  - asphalt 0.185 → 0.066 GB;
+  - sleepers 0.136 → 0.034 GB;
+  - guardrails 0.117 → 0.020 GB;
+  - bundle 2.50 → 1.62 GB.
+
+  A lanes tag bump rebuilds the city: island re-bake 36 min, peak RSS 19.8 GB. Trees and lot pads keep v1.
+- **Revisit** when a CPU consumer needs a part's or a city mesh's tint or tangent exact.
 
 ## ADR-0225 — Grass streams in 3D, from half the pool, ahead of the camera
 
@@ -11454,8 +11464,16 @@ bare at once, the nearest 14 m away. RT_GRASS_LOG measured why:
   - the main thread's time by phase;
   - ground cells sampled;
   - want and built counts per layer.
-- **Owed:** over the city a card tile takes 40–110 ms to build, off the main thread. It samples the drawn ground
-  ~1,200 times at ~50 µs a sample. That limits how fast grass fills in over towns.
+- **Over the city a card tile took 40–110 ms** (~1,200 drawn-ground samples at ~50 µs: `lodSurfaceHeight`
+  evaluates the field with its pads and earthwork). On a baked level the drawn ground is now read off the height
+  pyramid (ADR-0095), in ~9 hash lookups, falling back to the field past its edge. This covers grass, vegetation,
+  foliage and rocks: they all take the loader's one `drawn` ground. RT_GROUND_FIELD=1 evaluates the field as
+  before. The two agree to the pyramid's 2 cm tolerance; the island's forest moved by 3 of 416,608 trees.
+  Measured on flight 2 (120 m up, 80 m/s, across towns):
+  - tiles 0.6 ms;
+  - bare 230 → 0;
+  - load 187 → 169 s;
+  - p50 / p99 14.5 / 26.8 → 13.1 / 22.8 ms.
 
 ## ADR-0226 — A city cell crossfades between its tiers
 
