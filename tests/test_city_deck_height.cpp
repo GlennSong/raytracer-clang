@@ -18,6 +18,8 @@
 #include "drive_probe.h"
 
 #include "../src/apps/citysim/city_render.h"
+#include "../src/engine/procgen/city/roads/lanes/block_audit.h"
+#include "../src/engine/procgen/terrain.h"
 #include "../src/engine/components.h"
 #include "../src/engine/procgen/city/roads/road_entity.h"
 #include "../src/engine/procgen/city/road_spec.h"
@@ -145,6 +147,52 @@ TEST_CASE(deck_field_height_near_finds_the_ramp_curve_not_the_street_under_it) {
     // heightAt is unchanged: the lower layer (the street) wins
     CHECK(d.heightAt(50.0, 0.0, 0.5, &y));
     CHECK_APPROX(y, 0.0, 1e-6);
+}
+
+// ADR-0223: a lane-built carriageway is drawn tilted -- each lane at its own blend toward the roads it meets -- and the
+// field carries the drawn edges (yLeft, yRight). Centre to edge it lerps on the query's side, and holds the edge past it.
+TEST_CASE(deck_field_answers_the_drawn_section_across_the_carriageway) {
+    using namespace engine;
+    RoadDeckField d;
+    UnionSpine s;
+    for (int i = 0; i <= 10; ++i) {
+        s.points.push_back(Vec2(i * 10.0, 0.0));   // along +x: left (fwd rotated +90 in XZ) is +z
+        s.yAbs.push_back(1.0);
+        s.yLeft.push_back(1.4);                     // the left edge drawn 0.4 m up
+        s.yRight.push_back(0.9);                    // the right edge 0.1 m down
+    }
+    s.halfWidth = 4.0;
+    d.spines.push_back(s);
+    d.buildIndex();
+    double y = -1;
+    CHECK(d.heightAt(50.0, 0.0, 0.5, &y));
+    CHECK_APPROX(y, 1.0, 1e-9);                     // the centreline is the profile
+    CHECK(d.heightAt(50.0, 2.0, 0.5, &y));
+    CHECK_APPROX(y, 1.2, 1e-9);                     // half-way to the left edge
+    CHECK(d.heightAt(50.0, -4.0, 0.5, &y));
+    CHECK_APPROX(y, 0.9, 1e-9);                     // the right edge
+    CHECK(d.heightAt(50.0, 4.3, 0.5, &y));
+    CHECK_APPROX(y, 1.4, 1e-9);                     // past the edge: held there
+    // the sectionless spine is level across, as before
+    s.yLeft.clear(); s.yRight.clear();
+    CHECK_APPROX(s.sectionY(5, 0.0, 3.0), 1.0, 1e-9);
+}
+
+// AND THE GROUND FINISH FOLLOWS IT (ADR-0223): one level strip at the centre stood over the low edge (metro's grass
+// blobs). A spine with a section is finished as two halves, each banked to its own edge.
+TEST_CASE(lanes_earthwork_pins_bank_each_half_to_its_drawn_edge) {
+    using namespace engine;
+    RoadDeckField d;
+    UnionSpine s;
+    for (int i = 0; i <= 4; ++i) { s.points.push_back(Vec2(i * 10.0, 0.0)); s.yAbs.push_back(2.0); s.yLeft.push_back(2.4); s.yRight.push_back(1.8); }
+    s.halfWidth = 4.0;
+    d.spines.push_back(s);
+    d.buildIndex();
+    const std::vector<TerrainFlatten> pins = roads::lanes::lanesEarthworkPins(d, 2.0);
+    CHECK(pins.size() == 8);                        // four segments, two halves each
+    CHECK_APPROX(applyFlatten(pins, 15.0, 0.0, -50.0), 2.0 - 0.10, 1e-6);    // 0.10 m under the centreline
+    CHECK_APPROX(applyFlatten(pins, 15.0, 4.0, -50.0), 2.4 - 0.10, 1e-6);    // under the high (left) edge
+    CHECK_APPROX(applyFlatten(pins, 15.0, -4.0, -50.0), 1.8 - 0.10, 1e-6);   // under the low (right) edge
 }
 
 // #35, measured on island 8: a ramp runs alongside the freeway and their drawn decks overlap at the edge.

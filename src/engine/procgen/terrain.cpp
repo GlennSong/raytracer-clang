@@ -448,6 +448,26 @@ TerrainFlatten makeFlattenRamp(const Vec3& a, const Vec3& b, double yA, double y
     return f;
 }
 
+TerrainFlatten makeFlattenRampSide(const Vec3& a, const Vec3& b, double yA, double yB, double width, int side,
+                                   double bank, double falloff) {
+    const double ex = b.x - a.x, ez = b.z - a.z, len = std::sqrt(ex * ex + ez * ez);
+    if (len < 1e-6) return makeFlattenRamp(a, b, yA, yB, width, falloff);
+    const double ux = ex / len, uz = ez / len;
+    const double sx = -uz * side, sz = ux * side;   // outward, this side
+    TerrainFlatten f;
+    f.falloff = falloff;
+    // y = yA + k * (u . (p - a)) + bank * (s . (p - a)), as a plane in world XZ
+    const double k = (yB - yA) / len;
+    f.dx = k * ux + bank * sx;
+    f.dz = k * uz + bank * sz;
+    f.c = yA - (f.dx * a.x + f.dz * a.z);
+    f.polygon = {Vec3(a.x, 0, a.z), Vec3(b.x, 0, b.z), Vec3(b.x + sx * width, 0, b.z + sz * width),
+                 Vec3(a.x + sx * width, 0, a.z + sz * width)};
+    if (side > 0) std::reverse(f.polygon.begin(), f.polygon.end());   // the same winding as makeFlattenRamp's (interior on the right)
+    footprintBounds(f);
+    return f;
+}
+
 namespace {
 // The shared band logic. Takes explicit noise scalars (each ~[-1,1]) so both the
 // simple test entry (one value for all) and the rich per-position entry (a value

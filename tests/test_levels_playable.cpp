@@ -981,10 +981,13 @@ TEST_CASE(metro_road_decks_are_never_poked_by_the_drawn_terrain) {
     // 126 / 1424 / 2433 / 3.6 m above were the lattice city's): 12533-12582 / 32657-32800 / 68896-69079, worst
     // 4.67 m at (-599, -746), the same on Linux GCC, macOS and local clang. The cause is owed (ADR-0217): lot pads'
     // feathers lie ON the sidewalk -- a wall at the back of the sidewalk. A RATCHET until then: tighten, never loosen.
-    CHECK(r.pokes[0] <= 12700);
-    CHECK(r.pokes[1] <= 33000);
-    CHECK(r.pokes[2] <= 69500);
-    CHECK(r.worst[0] <= 4.8);
+    // THE DRAWN SECTION (ADR-0223): the report measures against the tilted deck and the finish follows it -- 8953 /
+    // 30677 / 69911, worst 4.03 m. LOD 2 reads ~800 more than the ratchet's 69079 because the level-across measure
+    // hid the pokes on every street's LOW edge (the level finish under the same measure: 14998 / 31021 / 70049).
+    CHECK(r.pokes[0] <= 9100);
+    CHECK(r.pokes[1] <= 31000);
+    CHECK(r.pokes[2] <= 70200);
+    CHECK(r.worst[0] <= 4.1);
 }
 
 // THE SIGNAL CENSUS (device: "why do stoplights show up in the middle of the
@@ -1381,17 +1384,137 @@ TEST_CASE(metro_traffic_drives_on_the_road_deck) {
     // geometry question, not a placement one; the bound holds it at its
     // current size and the mean/max bounds keep placement honest.
     CHECK(checked > 200);                                  // the fixture must bite
-    // THE LANE-BUILT METRO (2026-10-22, a RATCHET): the lanes builder draws the pavement 0.1-0.3 m below the deck
-    // it publishes (ADR-0217, "publish what was drawn", owed), and the worst sample swings with the build's chaos:
-    // min -0.51 m (local clang) / -0.34 (Linux GCC) / -0.25 (macOS); lowest tyre +0.21 / +0.88 / +0.35; body max
-    // +0.30 / +0.97 / +0.38. Was -0.30 / 0.10 / 0.45; back to those once the drawn deck is the published one.
-    CHECK(lo > -0.60);                                     // never IN the road
+    // THE LANE-BUILT METRO: the lanes builder drew the pavement tilted, up to 0.8 m off the centreline height it
+    // published (ADR-0217), and the gate was ratcheted to -0.60 / 1.0 / 1.1 on 2026-10-22. With the drawn section
+    // published (ADR-0223), local clang: min -0.12 m, lowest tyre +0.09, body max +0.19, none past 25 cm.
+    CHECK(lo > -0.30);                                     // never IN the road
     // NEVER HOVERING, asked of the tyres: a car rests its lowest tyre on the road (four-wheel
     // placement), so its body's centre may stand above the surface under it on a crest or a twist
     // -- 2026-09-29, metro_lanes: one sample of 1200, body +0.28 m, tyres +0.00..+0.40.
-    CHECK(lowestTyreHi < 1.0);
-    CHECK(hi < 1.1);                                       // and the body no further than a twist's residual
+    CHECK(lowestTyreHi < 0.10);
+    CHECK(hi < 0.45);                                      // and the body no further than a twist's residual
     CHECK(std::fabs(checked ? sum / checked : 0.0) < 0.03);   // no systematic term
+}
+
+// THE PUBLISHED DECK AGAINST THE DRAWN ONE (ADR-0217's owed question: why the field cars ride and the pavement the
+// lanes builder drew part by 0.1-0.3 m). Every published road spine, every 2 m, at five offsets across its
+// carriageway: the spine's own profile and the field's answer, each against the drawn collider surface nearest it.
+// Split by where on the road the gap is (near a node or mid-edge, centre or edge of the carriageway) and printed
+// with the worst spots. RT_PRINT_DECK=1 runs it; RT_CITYSIM_LEVEL picks another city. Measured on metro, 2026-10-22:
+// the field 25 cm off at 3364 of 151k samples with the centreline alone, 471 with the drawn section (ADR-0223); the
+// worst left are ramps, drawn ~0.45 m over their published profile even at the centreline (owed).
+TEST_CASE(level_print_published_deck_against_the_drawn_road) {
+    if (!std::getenv("RT_PRINT_DECK")) return;
+    std::unique_ptr<Renderer> renderer = Renderer::create();
+    RendererMeshUploader uploader(*renderer);
+    AssetManager assets(uploader);
+    World world;
+    RenderView view;
+    const bool loaded = LevelLoader::load(simLevelPath(), world, *renderer, view, assets, /*editorMode=*/false);
+    CHECK(loaded);
+    if (!loaded) return;
+    ColliderGrid grid;
+    world.each<MeshCollider>([&](Entity, MeshCollider& mc) { grid.add(mc); });
+    std::vector<const engine::RoadDeckField*> decks;
+    world.each<engine::RoadDeck>([&](Entity, engine::RoadDeck& d) { decks.push_back(&d.field); });
+    struct Bucket { int n = 0, over10 = 0, over25 = 0; double sum = 0, lo = 1e9, hi = -1e9; };
+    // [near node, mid-edge] x [centre, mid, edge]
+    Bucket own[2][3], field, threeHeight, oneSlope, ownSection;
+    int otherSpine = 0;   // the field answered from another road where this one's own section was right
+    int none = 0;
+    struct Spot { double d, x, z, pub, drawn; int spine; double lat, fromEnd; int klass; };
+    std::vector<Spot> spots;
+    auto add = [](Bucket& b, double d) {
+        ++b.n; b.sum += d; b.lo = std::min(b.lo, d); b.hi = std::max(b.hi, d);
+        if (std::fabs(d) > 0.10) ++b.over10;
+        if (std::fabs(d) > 0.25) ++b.over25;
+    };
+    for (const engine::RoadDeckField* f : decks) {
+        for (std::size_t si = 0; si < f->spines.size(); ++si) {
+            const engine::UnionSpine& s = f->spines[si];
+            if (s.use != engine::UnionSpine::Use::Road || s.layer != 0 || s.yAbs.size() != s.points.size()) continue;
+            double total = 0;
+            for (std::size_t k = 1; k < s.points.size(); ++k) total += (s.points[k] - s.points[k - 1]).length();
+            double base = 0;
+            for (std::size_t k = 1; k < s.points.size(); ++k) {
+                const Vec2 a = s.points[k - 1], b = s.points[k];
+                const double len = (b - a).length();
+                if (len < 1e-6) continue;
+                const Vec2 t = (b - a) * (1.0 / len), nrm(-t.y, t.x);
+                for (double u = 0; u < len; u += 2.0) {
+                    const double pub = s.yAbs[k - 1] + (s.yAbs[k] - s.yAbs[k - 1]) * (u / len);
+                    const double fromEnd = std::min(base + u, total - base - u);
+                    // a three-height section (left edge, centre, right edge) of the DRAWN surface, lerped across
+                    auto drawnAt = [&](double fr, double ref) {
+                        const Vec2 q = a + t * u + nrm * (fr * s.halfWidth);
+                        double best = 1e9;
+                        for (double h : grid.surfacesAt(q.x, q.y))
+                            if (std::fabs(h - ref) < std::fabs(best - ref)) best = h;
+                        return best;
+                    };
+                    const double sl = drawnAt(-0.98, pub), sc = drawnAt(0.0, pub), sr = drawnAt(0.98, pub);
+                    const bool section = std::fabs(sl - pub) < 1.5 && std::fabs(sc - pub) < 1.5 && std::fabs(sr - pub) < 1.5;
+                    for (const double frac : {-0.9, -0.5, 0.0, 0.5, 0.9}) {
+                        const double lat = frac * s.halfWidth;
+                        const Vec2 q = a + t * u + nrm * lat;
+                        double best = 1e9;
+                        for (double h : grid.surfacesAt(q.x, q.y))
+                            if (std::fabs(h - pub) < std::fabs(best - pub)) best = h;
+                        if (std::fabs(best - pub) > 1.5) { ++none; continue; }
+                        const double d = pub - best;   // + : the published deck stands over the drawn road
+                        add(own[fromEnd < 25.0 ? 0 : 1][std::fabs(frac) < 0.1 ? 0 : std::fabs(frac) < 0.7 ? 1 : 2], d);
+                        add(ownSection, s.sectionY(k - 1, u / len, lat) - best);
+                        double fy;
+                        if (f->heightAt(q.x, q.y, 0.0, &fy) && std::fabs(fy - best) < 1.5) {
+                            add(field, fy - best);
+                            if (std::fabs(fy - best) > 0.25 && std::fabs(s.sectionY(k - 1, u / len, lat) - best) <= 0.25) ++otherSpine;
+                        }
+                        if (section) {
+                            const double ys = frac < 0 ? sc + (sl - sc) * (-frac / 0.98) : sc + (sr - sc) * (frac / 0.98);
+                            add(threeHeight, ys - best);
+                            add(oneSlope, sc + (sr - sl) * 0.5 * (frac / 0.98) - best);
+                        }
+                        const double ds = s.sectionY(k - 1, u / len, lat) - best;   // the published section's miss
+                        if (std::fabs(ds) > 0.10)
+                            spots.push_back({ds, q.x, q.y, s.sectionY(k - 1, u / len, lat), best, static_cast<int>(si), lat, fromEnd, static_cast<int>(s.klass)});
+                    }
+                }
+                base += len;
+            }
+        }
+    }
+    const char* where[2] = {"within 25 m of a spine end", "mid-edge"};
+    const char* across[3] = {"centreline", "half-way out", "carriageway edge"};
+    for (int i = 0; i < 2; ++i)
+        for (int j = 0; j < 3; ++j) {
+            const Bucket& b = own[i][j];
+            std::printf("    [deck] own profile, %s, %s: %d samples, mean %+.3f, %+.2f..%+.2f m, %d over 10 cm, %d over 25 cm\n",
+                        where[i], across[j], b.n, b.n ? b.sum / b.n : 0.0, b.lo, b.hi, b.over10, b.over25);
+        }
+    std::printf("    [deck] the field's answer: %d samples, mean %+.3f, %+.2f..%+.2f m, %d over 10 cm, %d over 25 cm; "
+                "%d samples with no drawn surface within 1.5 m\n",
+                field.n, field.n ? field.sum / field.n : 0.0, field.lo, field.hi, field.over10, field.over25, none);
+    std::printf("    [deck] the spine's own published section: %d samples, mean %+.3f, %+.2f..%+.2f m, %d over 10 cm, %d over 25 cm; "
+                "the field off by 25 cm where the spine's own section was not: %d\n", ownSection.n,
+                ownSection.n ? ownSection.sum / ownSection.n : 0.0, ownSection.lo, ownSection.hi, ownSection.over10,
+                ownSection.over25, otherSpine);
+    std::printf("    [deck] a three-height section (the drawn left edge, centre and right edge, lerped): %d samples, mean %+.3f, "
+                "%+.2f..%+.2f m, %d over 10 cm, %d over 25 cm\n", threeHeight.n, threeHeight.n ? threeHeight.sum / threeHeight.n : 0.0,
+                threeHeight.lo, threeHeight.hi, threeHeight.over10, threeHeight.over25);
+    std::printf("    [deck] one cross-slope through the centre (the drawn edges' difference): %d samples, mean %+.3f, "
+                "%+.2f..%+.2f m, %d over 10 cm, %d over 25 cm\n", oneSlope.n, oneSlope.n ? oneSlope.sum / oneSlope.n : 0.0,
+                oneSlope.lo, oneSlope.hi, oneSlope.over10, oneSlope.over25);
+    std::sort(spots.begin(), spots.end(), [](const Spot& a, const Spot& b) { return std::fabs(a.d) > std::fabs(b.d); });
+    std::vector<std::pair<int, int>> shown;
+    int printed = 0;
+    for (const Spot& o : spots) {
+        const std::pair<int, int> c{static_cast<int>(std::floor(o.x / 10.0)), static_cast<int>(std::floor(o.z / 10.0))};
+        if (std::find(shown.begin(), shown.end(), c) != shown.end()) continue;
+        shown.push_back(c);
+        std::printf("      d=%+.2f at (%.1f, %.1f) published %.2f drawn %.2f spine %d class %d lateral %+.1f, %.1f m from its end\n",
+                    o.d, o.x, o.z, o.pub, o.drawn, o.spine, o.klass, o.lat, o.fromEnd);
+        if (++printed >= 20) break;
+    }
 }
 
 

@@ -158,6 +158,14 @@ struct UnionSpine {
     // Banks the deck through a curve (one-mesher P6): the height sampler adds
     // signedLateral * crossSlope so the whole deck/wall/underside tilts.
     std::vector<double> crossSlope;
+    // THE DRAWN SECTION (a lane-built deck, ADR-0223): absolute deck Y at the carriageway's LEFT and RIGHT edges
+    // (left = fwd rotated +90 in XZ, as crossSlope's; parallel to `points`; EMPTY = level across, yAbs alone). The
+    // lanes builder draws each lane at its own blend toward the roads it meets, so a carriageway is not level
+    // across: one centreline height left 3364 of 151k metro samples 25 cm off the drawn pavement, this 139.
+    std::vector<double> yLeft, yRight;
+    // Deck Y on segment (i, i + 1) at parameter t, `lateral` metres to the left of the centreline: the profile,
+    // the superelevation, and the drawn section lerped centre -> edge on that side (held at the edge beyond it).
+    double sectionY(std::size_t i, double t, double lateral) const;
 };
 // (WeldSolidParams / weldSolid deleted — roads-v2 S6, one mesher.)
 
