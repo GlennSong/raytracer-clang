@@ -3528,6 +3528,22 @@ void CityRenderSystem::feedGpuCrowd(engine::FrameContext& ctx) {
     crowdDrawnSeen_ = static_cast<int>(ctx.renderer.crowdDrawn());
 }
 
+void CityRenderSystem::listSignedStaff() {
+    if (signedStaffOf_ == sim_.agents().size() && !signedStaff_.empty()) return;
+    const auto& ag = sim_.agents();
+    signedStaff_.clear();
+    for (std::size_t i = 0; i < ag.size(); ++i) {
+        const PlaceId w = ag[i].workPlace;
+        if (w != kNoPlace && w < static_cast<PlaceId>(signedPlace_.size()) && w < static_cast<PlaceId>(places_.size()) && signedPlace_[w])
+            signedStaff_.push_back(static_cast<int>(i));
+    }
+    signedAtWork_.resize(signedStaff_.size());
+    for (std::size_t k = 0; k < signedStaff_.size(); ++k)   // all of them once, so the first count is whole
+        signedAtWork_[k] = sim_.atWorkNow(ag[static_cast<std::size_t>(signedStaff_[k])]) ? 1 : 0;
+    shiftCursor_ = 0;
+    signedStaffOf_ = ag.size();
+}
+
 void CityRenderSystem::dealOpenSigns(World& world, engine::Settings& settings, Vec3 cam) {
     Real nearD = 1e30;
     Vec3 nearAt, nearN;
@@ -3541,8 +3557,20 @@ void CityRenderSystem::dealOpenSigns(World& world, engine::Settings& settings, V
             }
         });
     }
+    // WHO IS ON SHIFT, from the signed places' staff (listed once per population: places are assigned at build) and
+    // their at-work flags, which update() refreshes a thirtieth at a time -- walking the island's 238k agents and
+    // taking 7k schedule snapshots here, every half second, was an 8 ms frame twice a second (a stutter)
+    listSignedStaff();
     std::vector<int> staff;
-    sim_.staffOnShift(onShift_, places_.size(), &hired, &signedPlace_, signWatch_, &staff);
+    hired.assign(places_.size(), 0);
+    onShift_.assign(places_.size(), 0);
+    for (std::size_t k = 0; k < signedStaff_.size(); ++k) {
+        const int ai = signedStaff_[k];
+        const PlaceId w = sim_.agents()[static_cast<std::size_t>(ai)].workPlace;
+        if (hired[w] < 0xFFFF) ++hired[w];
+        if (signedAtWork_[k] && onShift_[w] < 0xFFFF) ++onShift_[w];
+        if (w == signWatch_) staff.push_back(ai);
+    }
     PlaceId nearPid = kNoPlace;
     const Real clock = sim_.clockHours();
     int signs = 0, lit = 0, closed = 0, unstaffed = 0, noHire = 0;
@@ -3609,6 +3637,15 @@ void CityRenderSystem::dealOpenSigns(World& world, engine::Settings& settings, V
 
 void CityRenderSystem::update(engine::FrameContext& ctx) {
     feedGpuCrowd(ctx);
+    // the OPEN signs' staff: a thirtieth of them asked "at work?" each frame (dealOpenSigns counts the flags)
+    if (built_ && !signedStaff_.empty()) {
+        const std::size_t n = (signedStaff_.size() + 29) / 30;
+        for (std::size_t j = 0; j < n; ++j) {
+            if (shiftCursor_ >= signedStaff_.size()) shiftCursor_ = 0;
+            signedAtWork_[shiftCursor_] = sim_.atWorkNow(sim_.agents()[static_cast<std::size_t>(signedStaff_[shiftCursor_])]) ? 1 : 0;
+            ++shiftCursor_;
+        }
+    }
     // Stage the sun for the bake's car lamps (see solarElevation_).
     solarElevation_ = ctx.view.lighting.solarElevation;
     solarStaged_ = true;

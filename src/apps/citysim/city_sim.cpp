@@ -1868,9 +1868,7 @@ void CitySim::staffOnShift(std::vector<uint16_t>& out, int placeCount, std::vect
         if (watchers && a.workPlace == watch) watchers->push_back(static_cast<int>(&a - agents_.data()));
         if (only && (a.workPlace >= static_cast<PlaceId>(only->size()) || !(*only)[a.workPlace])) continue;
         if (hired && (*hired)[a.workPlace] < 0xFFFF) ++(*hired)[a.workPlace];
-        const bool there = a.tier == Agent::Tier::D ? scheduleSnapshot(a, clockHours_).where == Snapshot::Where::AtWork
-                                                    : a.activity == Agent::Activity::AtWork;
-        if (there) {
+        if (atWorkNow(a)) {
             uint16_t& n = out[static_cast<std::size_t>(a.workPlace)];
             if (n < 0xFFFF) ++n;
         }

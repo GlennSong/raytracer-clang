@@ -26,6 +26,12 @@ from lanelab_shots import send   # the control-socket helper
 from walk_probe import eye_at
 
 
+def frame_now(sock):
+    # `info`, not `camera?`: any question (`name?`) switches the island-wide debug counts on for 60 s
+    # (telemetry.askedAt), a 20-70 ms frame every 30-60 frames -- the probe would measure itself
+    return re.search(r"frame=(\d+)", send(sock, "info")).group(1)
+
+
 def pct(q, p):
     return q[min(len(q) - 1, int(p * len(q)))] if q else float("nan")
 
@@ -71,7 +77,7 @@ def main():
         while not os.path.exists(sock):
             if proc.poll() is not None or time.time() - t0 > 60: sys.exit("viewer did not open its control socket")
             time.sleep(0.2)
-        send(sock, "camera?", timeout=a.load_timeout)
+        send(sock, "info", timeout=a.load_timeout)
         print(f"loaded in {time.time() - t0:.0f} s", flush=True)
         # the path every 10 m; the ground every 100 m
         samples = []
@@ -109,7 +115,7 @@ def main():
         x, y, z, yaw = pose(0.0)
         send(sock, f"camera {x:.2f} {y:.2f} {z:.2f} {a.pitch:.1f} {yaw:.2f}")
         time.sleep(a.settle)   # the jump onto the path loads and settles here
-        start_mark = send(sock, "camera?").split("frame=")[-1]
+        start_mark = frame_now(sock)
         with open(log_path, "rb") as f: log_from = len(f.read())
         arrivals_from = sum(1 for _ in open(arrivals_csv)) if os.path.exists(arrivals_csv) else 0
         print(f"flying {total:.0f} m at {a.speed:g} m/s, {a.agl:g} m up, from frame {start_mark}", flush=True)
@@ -123,10 +129,10 @@ def main():
             send(sock, f"camera {x:.2f} {y:.2f} {z:.2f} {a.pitch:.1f} {yaw:.2f}")
             if shot_at and s >= shot_at[0]:
                 send(sock, f"shot {os.path.join(out, f'shot_{a.shots - len(shot_at):02d}_{int(x)}_{int(z)}.png')}")
-                shot_frames.append(int(send(sock, "camera?").split("frame=")[-1]))
+                shot_frames.append(int(frame_now(sock)))
                 shot_at.pop(0)
             time.sleep(1 / 60)
-        end_mark = send(sock, "camera?").split("frame=")[-1]
+        end_mark = frame_now(sock)
         time.sleep(1.5)   # the last log lines
     finally:
         proc.terminate()

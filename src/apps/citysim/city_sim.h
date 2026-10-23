@@ -517,6 +517,12 @@ public:
     // there are at work now -- a simulated agent by its own state, a dormant one by its schedule. `out` is resized to
     // `placeCount`. `only` (by PlaceId, non-zero = wanted) limits the count to those places: a dormant worker's
     // schedule costs a snapshot, and the island's few hundred thousand of them took ~180 ms a call.
+    // Is this worker at work now? A simulated agent by its own state, a dormant one by its schedule (a snapshot,
+    // ~0.75 us): the one test staffOnShift makes, for callers that spread it over frames.
+    bool atWorkNow(const Agent& a) const {
+        return a.tier == Agent::Tier::D ? scheduleSnapshot(a, clockHours_).where == Snapshot::Where::AtWork
+                                        : a.activity == Agent::Activity::AtWork;
+    }
     void staffOnShift(std::vector<uint16_t>& out, int placeCount, std::vector<uint16_t>* hired = nullptr,
                       const std::vector<uint8_t>* only = nullptr, PlaceId watch = kNoPlace,
                       std::vector<int>* watchers = nullptr) const;   // + who works at `watch` (opensigns? telemetry)
