@@ -5249,6 +5249,16 @@ bool LevelLoader::load(const std::string& path,
                     return lodSurfaceHeight(cfgp->params, nz, x, z, cfgp->worldHalf, cfgp->numLods,
                                             cfgp->gridRes);
                 };
+                // BAKED (ADR-0095): the pyramid IS the drawn ground, read in ~9 hash lookups where the field is
+                // evaluated in ~50 us over a city (its pads and earthwork) -- the grass's tiles over a town took
+                // 40-110 ms each (ADR-0225). RT_GROUND_FIELD=1 evaluates the field as before (A/B).
+                if (c.baked && !std::getenv("RT_GROUND_FIELD")) {
+                    std::shared_ptr<const pyramid::Pyramid> pyr = c.baked;
+                    drawn = [pyr, cfgp, nz](double x, double z) {
+                        if (pyr->finestAt(x, z)) return pyr->height(x, z);
+                        return lodSurfaceHeight(cfgp->params, nz, x, z, cfgp->worldHalf, cfgp->numLods, cfgp->gridRes);   // past its edge
+                    };
+                }
             });
             // No CDLOD: the drawn surface is the static grid terrain's (one tile, or chunks),
             // which on a rounded hill sits below the smooth field (floating trees).
