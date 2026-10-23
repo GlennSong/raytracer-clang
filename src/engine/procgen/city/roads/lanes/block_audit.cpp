@@ -181,7 +181,22 @@ std::vector<TerrainFlatten> lanesEarthworkPins(const RoadDeckField& deck, double
                 hw = std::min({hw, reachAllowed(a, y) - falloff, reachAllowed(b, y) - falloff, reachAllowed((a + b) * 0.5, y) - falloff});
                 if (hw < 1.0) continue;   // a lower structure runs right beside or under this piece: no strip here
             }
-            TerrainFlatten f = makeFlattenRamp(Vec3(a.x, 0, a.y), Vec3(b.x, 0, b.y), sp.yAbs[i] - below, sp.yAbs[i + 1] - below, hw, falloff);
+            // THE DRAWN SECTION (ADR-0223): a carriageway drawn higher at one edge than the other is finished as two
+            // halves, each banked to its own edge -- one level strip at the centreline's height stood over the low
+            // edge (metro's grass blobs: ground 0.10 m under the centre, the drawn edge 0.3 m under that)
+            const Vec3 a3(a.x, 0, a.y), b3(b.x, 0, b.y);
+            static const bool levelFinish = [] { const char* e = std::getenv("RT_FINISH_LEVEL"); return e && e[0] == '1'; }();   // A/B: level strips, as before ADR-0223
+            if (!levelFinish && sp.yLeft.size() == sp.points.size() && sp.yRight.size() == sp.points.size() && sp.halfWidth > 1e-6) {
+                for (const int side : {1, -1}) {
+                    const std::vector<double>& edge = side > 0 ? sp.yLeft : sp.yRight;
+                    const double bank = ((edge[i] - sp.yAbs[i]) + (edge[i + 1] - sp.yAbs[i + 1])) * 0.5 / sp.halfWidth;
+                    TerrainFlatten f = makeFlattenRampSide(a3, b3, sp.yAbs[i] - below, sp.yAbs[i + 1] - below, hw, side, bank, falloff);
+                    f.priority = kRoadFlattenPriority;
+                    out.push_back(std::move(f));
+                }
+                continue;
+            }
+            TerrainFlatten f = makeFlattenRamp(a3, b3, sp.yAbs[i] - below, sp.yAbs[i + 1] - below, hw, falloff);
             f.priority = kRoadFlattenPriority;
             out.push_back(std::move(f));
         }
@@ -296,15 +311,20 @@ std::function<bool(const std::vector<Vec2>&)> lanesTrackKeepOut(const RoadDeckFi
 }
 
 std::function<bool(double, double, double*)> lanesStreetHeight(const RoadDeckField& deck, double reach) {
-    struct Seg { Vec2 a, b; double ya, yb, hw; };
+    // the street a pad faces is read at ITS kerb on the pad's side (UnionSpine::sectionY), not at its centreline:
+    // a lane-built street is drawn tilted (ADR-0223)
+    struct Seg { Vec2 a, b; double ya, yb, hw; const UnionSpine* sp; std::size_t i; };
     auto segs = std::make_shared<std::vector<Seg>>();
+    auto spines = std::make_shared<std::vector<UnionSpine>>();
     for (const UnionSpine& sp : deck.spines) {
         if (sp.authoredDeck || sp.layer != 0 || sp.klass == RoadClass::Freeway || sp.klass == RoadClass::Ramp) continue;
         if (sp.use != UnionSpine::Use::Road) continue;   // a pad faces a street, never the track over it
         if (sp.points.size() < 2 || sp.yAbs.size() != sp.points.size()) continue;
-        for (std::size_t i = 0; i + 1 < sp.points.size(); ++i)
-            segs->push_back({sp.points[i], sp.points[i + 1], sp.yAbs[i], sp.yAbs[i + 1], i < sp.hw.size() ? sp.hw[i] : sp.halfWidth});
+        spines->push_back(sp);
     }
+    for (const UnionSpine& sp : *spines)
+        for (std::size_t i = 0; i + 1 < sp.points.size(); ++i)
+            segs->push_back({sp.points[i], sp.points[i + 1], sp.yAbs[i], sp.yAbs[i + 1], i < sp.hw.size() ? sp.hw[i] : sp.halfWidth, &sp, i});
     if (segs->empty()) return {};
     constexpr double kCell = 32;
     auto key = [](int cx, int cz) { return (static_cast<long long>(cx) << 32) ^ static_cast<uint32_t>(cz); };
@@ -316,7 +336,7 @@ std::function<bool(double, double, double*)> lanesStreetHeight(const RoadDeckFie
         const int z0 = static_cast<int>(std::floor((std::min(g.a.y, g.b.y) - pad) / kCell)), z1 = static_cast<int>(std::floor((std::max(g.a.y, g.b.y) + pad) / kCell));
         for (int cx = x0; cx <= x1; ++cx) for (int cz = z0; cz <= z1; ++cz) (*grid)[key(cx, cz)].push_back(static_cast<int>(k));
     }
-    return [segs, grid, key, reach](double x, double z, double* out) {
+    return [spines, segs, grid, key, reach](double x, double z, double* out) {
         auto it = grid->find(key(static_cast<int>(std::floor(x / kCell)), static_cast<int>(std::floor(z / kCell))));
         if (it == grid->end()) return false;
         double best = reach; bool found = false;
@@ -325,7 +345,12 @@ std::function<bool(double, double, double*)> lanesStreetHeight(const RoadDeckFie
             const Vec2 ab = g.b - g.a; const double l2 = dot(ab, ab);
             double t = l2 > 1e-12 ? dot(Vec2(x, z) - g.a, ab) / l2 : 0.0; t = std::clamp(t, 0.0, 1.0);
             const double d = (Vec2(x, z) - (g.a + ab * t)).length() - g.hw;
-            if (d < best) { best = d; *out = g.ya + (g.yb - g.ya) * t; found = true; }
+            if (d < best) {
+                best = d;
+                const double lateral = l2 > 1e-12 ? dot(Vec2(x, z) - g.a, Vec2(-ab.y, ab.x)) / std::sqrt(l2) : 0.0;
+                *out = g.sp->sectionY(g.i, t, lateral);
+                found = true;
+            }
         }
         return found;
     };

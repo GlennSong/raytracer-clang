@@ -10,7 +10,7 @@ namespace bundle {
 
 namespace {
 constexpr uint32_t kMeshVersion = 1, kGridVersion = 1, kRoadGraphVersion = 1, kRoadEntityVersion = 1, kRingsVersion = 1;
-constexpr uint32_t kDeckVersion = 2, kBandVersion = 1;
+constexpr uint32_t kDeckVersion = 3, kBandVersion = 1;   // DECK v3: the drawn section (yLeft, yRight)
 inline float f(double v) { return static_cast<float>(v); }
 }  // namespace
 
@@ -224,6 +224,8 @@ void putDeckField(BinWriter& w, const RoadDeckField& d) {
         w.put<uint8_t>(static_cast<uint8_t>(s.authoredDeck));
         w.put<int32_t>(static_cast<int32_t>(s.layer));
         w.put<uint8_t>(static_cast<uint8_t>(s.use));   // v2
+        putDoubles(w, s.yLeft);                         // v3
+        putDoubles(w, s.yRight);
     }
     w.put<uint32_t>(static_cast<uint32_t>(d.pads.size()));
     for (const RoadDeckField::Tri& t : d.pads) {
@@ -255,6 +257,7 @@ bool getDeckField(BinReader& r, RoadDeckField& d) {
             if (!r.get(use) || use > 2) return false;
             s.use = static_cast<UnionSpine::Use>(use);
         }
+        if (v >= 3 && (!getDoubles(r, s.yLeft) || !getDoubles(r, s.yRight))) return false;
     }
     if (!r.get(n)) return false; d.pads.assign(n, RoadDeckField::Tri{});
     for (RoadDeckField::Tri& t : d.pads) {

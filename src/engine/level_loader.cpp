@@ -5720,6 +5720,14 @@ bool LevelLoader::load(const std::string& path,
                                     bestD2 = d2;
                                     h = profs[sr.si][sr.i] +
                                         (profs[sr.si][sr.i + 1] - profs[sr.si][sr.i]) * tt;
+                                    // a published DRAWN SECTION (ADR-0223): the deck is not level across, and the
+                                    // ground finish follows it -- measured against the centreline, the high edge of
+                                    // every tilted street read as a poke (metro 12.5k -> 32k)
+                                    const UnionSpine& sp = spines[sr.si];
+                                    if (pokeSet.published && sp.yLeft.size() == pp.size() && sp.yAbs.size() == pp.size() && L2 > 1e-12) {
+                                        const double lateral = dot(q - pp[sr.i], Vec2(-ab.y, ab.x)) / std::sqrt(L2);
+                                        h += sp.sectionY(sr.i, tt, lateral) - (sp.yAbs[sr.i] + (sp.yAbs[sr.i + 1] - sp.yAbs[sr.i]) * tt);
+                                    }
                                 }
                             }
                         }

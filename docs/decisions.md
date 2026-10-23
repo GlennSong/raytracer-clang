@@ -11340,3 +11340,43 @@ counted those parts; nothing ever walked a body across.
   sky lobby into the other: stopped 0.87 m short of the face before, 16.2 m across after);
   `interior_system_builds_the_far_tower_from_its_sky_bridge` (storeys [14, 19) for the bridge's 16). Runtime only: no
   bake.
+
+## ADR-0223 — The deck field publishes the drawn section
+
+ADR-0217 confirmed the cause of metro's grass blobs and of its traffic gate's misses, and left one question open.
+In places the lanes builder draws the pavement 0.1–0.3 m off the deck the city publishes. Why?
+Glenn: "publish the drawn deck".
+
+- **It is the section, not the profile.** `level_print_published_deck_against_the_drawn_road` (RT_PRINT_DECK=1)
+  walks every published road spine every 2 m. At five offsets across the carriageway it compares the field with
+  the drawn collider. At the centreline the published profile matched (8444 + 21818 samples, 62 past 25 cm). The
+  misses grew toward the edges, to ±0.8 m. Each lane is drawn at its own blend toward the roads it meets
+  (`DeckHeight::deck`, weighted by distance to the partner's footprint), so a carriageway is not level across.
+  The spine carried one height per point.
+- **The spine carries its drawn edges.** `UnionSpine::yLeft` / `yRight` hold the absolute deck Y at the
+  carriageway's left and right edges. The lanes producer fills them with the same `deckRoad` blend at
+  ±halfWidth. `UnionSpine::sectionY` lerps centre → edge on the query's side and holds the edge beyond it. It is
+  the one reading of the section, used by:
+  - the field's queries;
+  - the ground finish;
+  - the lot pads' street height (`lanesStreetHeight`, now read at the kerb on the pad's side);
+  - the poke report.
+
+  Empty means level across, so every lattice or authored deck is unchanged. DECK codec v3; lanes tag 2026-10-22.1.
+  Measured: one linear cross-slope (the existing `crossSlope` channel) left 6207 samples past 10 cm. The
+  three-height section left 525. The field now reads 471 past 25 cm, against 3364 before.
+- **The finish banks each half** (`makeFlattenRampSide`): two strips per segment, each tilted to its own drawn
+  edge, where one level strip at the centre's height stood over the low edge. RT_FINISH_LEVEL=1 restores the
+  level strips (A/B).
+- **Measured on metro (local clang):**
+  - traffic: min −0.51 → −0.12 m; lowest tyre +0.21 → +0.09; body max +0.30 → +0.19; 3 → 0 samples past 25 cm.
+    The gate is back to its pre-ratchet −0.30 / 0.10 / 0.45.
+  - pokes, LOD 0 / 1 / 2: 12541 / ~32700 / ~69000 → 8953 / 30677 / 69911, worst 4.67 → 4.03 m.
+
+  The poke report measured the ground against the centreline height at every offset. Against that measure, the
+  high edge of every tilted street read as a poke (32k at LOD 0), and the low edge's pokes were hidden. LOD 2's
+  ~800 extra are those, now seen: the level finish under the same measure reads 70049.
+- **Owed:**
+  - Ramps are drawn ~0.45 m over their published profile even at the centreline (spines 175, 176, 180 on metro).
+    That is a separate question.
+  - The lot pads' feather on the sidewalk is still the bulk of the pokes (ADR-0217).

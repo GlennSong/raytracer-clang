@@ -70,6 +70,11 @@ TerrainFlatten makeFlattenPad(std::vector<Vec3> polygon, double targetY,
 // rectangle of the given half-width (so the terrain follows the road's grade).
 TerrainFlatten makeFlattenRamp(const Vec3& a, const Vec3& b, double yA, double yB,
                                double halfWidth, double falloff = 6.0);
+// ONE SIDE of a banked ramp: the strip from the centreline a -> b out `width` metres to its left (side = +1, left =
+// the direction rotated +90 in XZ) or right (side = -1), its plane rising `bank` metres per metre OUTWARD from the
+// centreline. Two of them, each with its own side's bank, follow a road drawn higher at one edge than the other.
+TerrainFlatten makeFlattenRampSide(const Vec3& a, const Vec3& b, double yA, double yB, double width, int side,
+                                   double bank, double falloff = 6.0);
 
 // Blend a set of flatten footprints over a natural height at one point: the
 // strongest (closest) footprint wins, levelling to its plane inside and easing

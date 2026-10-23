@@ -137,6 +137,8 @@ TEST_CASE(the_deck_field_and_kerb_bands_round_trip_and_arrive_queryable) {
         for (int i = 0; i <= 10; ++i) {
             s.points.push_back(Vec2(i * 10.0, 0.0));
             s.yAbs.push_back(i * 0.1);
+            s.yLeft.push_back(i * 0.1 + 0.4);    // the drawn section (ADR-0223)
+            s.yRight.push_back(i * 0.1 - 0.5);
             s.hw.push_back(4.0);
         }
         s.halfWidth = 4.0;
@@ -161,6 +163,7 @@ TEST_CASE(the_deck_field_and_kerb_bands_round_trip_and_arrive_queryable) {
     CHECK(b.halfWidth == 4.0 && b.klass == RoadClass::Arterial && b.authoredDeck && b.layer == 1);
     CHECK(b.travelEdgeFrac == 0.75);
     CHECK(b.points[10].x == 100.0 && b.yAbs[10] == 1.0);
+    CHECK(b.yLeft.size() == 11 && b.yRight.size() == 11 && std::fabs(b.yLeft[3] - 0.7) < 1e-12 && std::fabs(b.yRight[3] + 0.2) < 1e-12);   // DECK v3
     // getDeckField rebuilds the index, so the field answers immediately — the whole point.
     double y = -1;
     CHECK(back.heightAt(50.0, 0.0, 1.0, &y));

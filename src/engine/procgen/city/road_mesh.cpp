@@ -818,18 +818,30 @@ void RoadDeckField::surfacesAt(double x, double z, double margin,
                               ? sp.hw[sg.i] + (sp.hw[sg.i + 1] - sp.hw[sg.i]) * t
                               : sp.halfWidth;
         if (d > hw + margin) continue;
-        double y = sp.yAbs[sg.i] + (sp.yAbs[sg.i + 1] - sp.yAbs[sg.i]) * t;
-        // Superelevation: the lattice banks the deck by signedLateral *
-        // crossSlope, lateral measured along `left` = fwd rotated +90 in XZ
-        // (road_lattice.cpp, rings[i].left), + rising to the left.
-        if (sp.crossSlope.size() == sp.points.size() && L2 > 1e-12) {
-            const double cs = sp.crossSlope[sg.i] + (sp.crossSlope[sg.i + 1] - sp.crossSlope[sg.i]) * t;
+        double lateral = 0.0;
+        if (L2 > 1e-12) {
             const Vec2 fwd = ab * (1.0 / std::sqrt(L2));
-            const Vec2 left(-fwd.y, fwd.x);
-            y += dot(q - a, left) * cs;
+            lateral = dot(q - a, Vec2(-fwd.y, fwd.x));
         }
-        fn(y, false, sp.layer, d, hw, sp.klass);
+        fn(sp.sectionY(sg.i, t, lateral), false, sp.layer, d, hw, sp.klass);
     }
+}
+
+double UnionSpine::sectionY(std::size_t i, double t, double lateral) const {
+    const std::size_t j = std::min(i + 1, points.size() - 1);
+    double y = yAbs[i] + (yAbs[j] - yAbs[i]) * t;
+    // Superelevation: the lattice banks the deck by signedLateral *
+    // crossSlope, lateral measured along `left` = fwd rotated +90 in XZ
+    // (road_lattice.cpp, rings[i].left), + rising to the left.
+    if (crossSlope.size() == points.size()) y += lateral * (crossSlope[i] + (crossSlope[j] - crossSlope[i]) * t);
+    if (yLeft.size() == points.size() && yRight.size() == points.size()) {
+        const double h = hw.size() == points.size() ? hw[i] + (hw[j] - hw[i]) * t : halfWidth;
+        const std::vector<double>& edge = lateral >= 0.0 ? yLeft : yRight;
+        const double ye = edge[i] + (edge[j] - edge[i]) * t;
+        const double centre = yAbs[i] + (yAbs[j] - yAbs[i]) * t;
+        y += (ye - centre) * (h > 1e-9 ? std::min(1.0, std::fabs(lateral) / h) : 0.0);
+    }
+    return y;
 }
 
 bool RoadDeckField::heightAt(double x, double z, double margin, double* outY) const {
