@@ -288,6 +288,20 @@ target_include_directories(engine_core PUBLIC ${CMAKE_BINARY_DIR}/generated)
 target_compile_options(engine_core PRIVATE -Wall -Wextra -Wpedantic)
 target_link_libraries(engine_core PUBLIC Threads::Threads)
 
+# meshoptimizer (MIT, third_party/meshoptimizer): only its lossless vertex and index codecs, for the bundle's
+# compact meshes (ADR-0224). Built as its own small library so the engine's warnings stay the engine's.
+find_package(Git QUIET)
+if(NOT EXISTS "${CMAKE_SOURCE_DIR}/third_party/meshoptimizer/src/meshoptimizer.h" AND Git_FOUND)
+    execute_process(COMMAND ${GIT_EXECUTABLE} submodule update --init -- third_party/meshoptimizer
+                    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+endif()
+add_library(meshopt_codecs STATIC
+    third_party/meshoptimizer/src/vertexcodec.cpp
+    third_party/meshoptimizer/src/indexcodec.cpp
+)
+target_include_directories(meshopt_codecs SYSTEM PUBLIC ${CMAKE_SOURCE_DIR}/third_party/meshoptimizer/src)
+target_link_libraries(engine_core PUBLIC meshopt_codecs)
+
 # GPU erosion bake (metropolis-scale-plan P0.5), Apple only: a self-contained
 # Metal compute host for the droplet/thermal sim — its own device + queue, no
 # renderer dependency — so every engine_core host (viewer, editor, headless

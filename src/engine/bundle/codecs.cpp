@@ -2,6 +2,9 @@
 
 #include "engine/procgen/city/road_spec.h"
 #include "engine/mesh_builder.h"
+#include "engine/vertex_pack.h"
+
+#include "meshoptimizer.h"
 
 #include <cmath>
 
@@ -65,6 +68,120 @@ void colliderFromPacked(const PackedMesh& p, MeshCollider& mc) {
     const size_t n = p.vertexCount(); mc.vertices.resize(n);
     for (size_t i = 0; i < n; ++i) mc.vertices[i] = Vec3(p.pos[3 * i], p.pos[3 * i + 1], p.pos[3 * i + 2]);
     mc.indices = p.idx; mc.friction = p.friction;
+}
+
+namespace {
+constexpr uint32_t kCompactVersion = 1;
+enum : uint32_t { kCompactFloatColor = 1u, kCompactFloatTangent = 2u, kCompactUniformColor = 4u, kCompactNoTangent = 8u };
+// The Vulkan GpuVertexPacked, but for the normal: that stays exact, because the loader re-derives world-planar UVs
+// from it (applyWorldPlanarUVs) and at island coordinates an oct normal's 5e-5 rad would move u by ~0.25 m
+struct CompactVertex {
+    float position[3];
+    float normal[3];
+    int16_t tangent[2];
+    float texcoord[2];
+    uint8_t color[4];
+};
+static_assert(sizeof(CompactVertex) == 40, "the standard vertex with an exact normal");
+
+void putEncoded(BinWriter& w, const void* data, size_t count, size_t stride) {
+    std::vector<uint8_t> buf(meshopt_encodeVertexBufferBound(count, stride));
+    buf.resize(meshopt_encodeVertexBufferLevel(buf.data(), buf.size(), data, count, stride, 3, 1));
+    w.putVec(buf);
+}
+bool getEncoded(BinReader& r, void* data, size_t count, size_t stride) {
+    std::vector<uint8_t> buf;
+    return r.getVec(buf) && meshopt_decodeVertexBuffer(data, count, stride, buf.data(), buf.size()) == 0;
+}
+}  // namespace
+
+void putCompactMesh(BinWriter& w, const RenderMesh& m) {
+    const size_t n = m.vertices.size();
+    bool floatColor = false, uniform = true, noTangent = !m.tangentIsData;
+    const Vec3 c0 = n ? m.vertices[0].color : Vec3(1, 1, 1);
+    for (const Vertex& v : m.vertices) {
+        if (v.tangent.x != 0 || v.tangent.y != 0 || v.tangent.z != 0) noTangent = false;
+        const Vec3& c = v.color;
+        if (c.x < 0 || c.y < 0 || c.z < 0 || c.x > 1.0001 || c.y > 1.0001 || c.z > 1.0001) floatColor = true;
+        if (c.x != c0.x || c.y != c0.y || c.z != c0.z) uniform = false;
+    }
+    // the triangles packMesh keeps (no area in float dropped), so a compact mesh and a packed one draw the same
+    std::vector<uint32_t> idx;
+    idx.reserve(m.indices.size());
+    auto at = [&](uint32_t i) { const Vec3& p = m.vertices[i].position; return Vec3(f(p.x), f(p.y), f(p.z)); };
+    for (size_t t = 0; t + 2 < m.indices.size(); t += 3) {
+        const uint32_t ia = m.indices[t], ib = m.indices[t + 1], ic = m.indices[t + 2];
+        const Vec3 a = at(ia), b = at(ib), c = at(ic);
+        if (cross(c - a, b - a).lengthSquared() < MeshBuilder::kNoArea2) continue;
+        idx.insert(idx.end(), {ia, ib, ic});
+    }
+    const uint32_t flags = (floatColor && !uniform ? kCompactFloatColor : 0u) | (m.tangentIsData ? kCompactFloatTangent : 0u) |
+                           (uniform ? kCompactUniformColor : 0u) | (noTangent ? kCompactNoTangent : 0u);
+    w.magic("CMSH", kCompactVersion);
+    w.put<uint32_t>(flags);
+    w.put<uint64_t>(n);
+    w.put<uint64_t>(idx.size());
+    if (uniform) { w.put<float>(f(c0.x)); w.put<float>(f(c0.y)); w.put<float>(f(c0.z)); }
+    std::vector<CompactVertex> cv(n);
+    for (size_t i = 0; i < n; ++i) {
+        const Vertex& v = m.vertices[i];
+        CompactVertex& g = cv[i];
+        g.position[0] = f(v.position.x); g.position[1] = f(v.position.y); g.position[2] = f(v.position.z);
+        g.normal[0] = f(v.normal.x); g.normal[1] = f(v.normal.y); g.normal[2] = f(v.normal.z);
+        if (m.tangentIsData) { g.tangent[0] = g.tangent[1] = 0; }
+        else octEncode(v.tangent.x, v.tangent.y, v.tangent.z, g.tangent);
+        g.texcoord[0] = v.u; g.texcoord[1] = v.v;
+        if (uniform || (flags & kCompactFloatColor)) { g.color[0] = g.color[1] = g.color[2] = 0; }
+        else { g.color[0] = unorm8(v.color.x); g.color[1] = unorm8(v.color.y); g.color[2] = unorm8(v.color.z); }
+        g.color[3] = 255;
+    }
+    putEncoded(w, cv.data(), n, sizeof(CompactVertex));
+    auto putPlane = [&](auto get) {   // an exact float3 plane beside the vertices
+        std::vector<float> p(3 * n);
+        for (size_t i = 0; i < n; ++i) { const Vec3 c = get(m.vertices[i]); p[3 * i] = f(c.x); p[3 * i + 1] = f(c.y); p[3 * i + 2] = f(c.z); }
+        putEncoded(w, p.data(), n, 12);
+    };
+    if (flags & kCompactFloatColor) putPlane([](const Vertex& v) { return v.color; });
+    if (flags & kCompactFloatTangent) putPlane([](const Vertex& v) { return v.tangent; });
+    std::vector<uint8_t> ib(meshopt_encodeIndexBufferBound(idx.size(), n));
+    ib.resize(meshopt_encodeIndexBuffer(ib.data(), ib.size(), idx.data(), idx.size()));
+    w.putVec(ib);
+}
+
+bool getCompactMesh(BinReader& r, RenderMesh& m) {
+    uint32_t v = 0, flags = 0;
+    uint64_t n = 0, ni = 0;
+    if (!r.magic("CMSH", &v) || v != kCompactVersion || !r.get(flags) || !r.get(n) || !r.get(ni)) return false;
+    if (n > (1ull << 31) || ni > (1ull << 33) || ni % 3) return false;
+    float uc[3] = {1, 1, 1};
+    if ((flags & kCompactUniformColor) && (!r.get(uc[0]) || !r.get(uc[1]) || !r.get(uc[2]))) return false;
+    std::vector<CompactVertex> cv(n);
+    if (!getEncoded(r, cv.data(), n, sizeof(CompactVertex))) return false;
+    std::vector<float> col, tan;
+    if (flags & kCompactFloatColor) { col.resize(3 * n); if (!getEncoded(r, col.data(), n, 12)) return false; }
+    if (flags & kCompactFloatTangent) { tan.resize(3 * n); if (!getEncoded(r, tan.data(), n, 12)) return false; }
+    std::vector<uint8_t> ib;
+    if (!r.getVec(ib)) return false;
+    m.indices.resize(ni);
+    if (meshopt_decodeIndexBuffer(m.indices.data(), ni, sizeof(uint32_t), ib.data(), ib.size()) != 0) return false;
+    for (uint32_t i : m.indices) if (i >= n) return false;
+    m.vertices.resize(n);
+    m.tangentIsData = (flags & kCompactFloatTangent) != 0;
+    for (size_t i = 0; i < n; ++i) {
+        const CompactVertex& g = cv[i];
+        Vertex& out = m.vertices[i];
+        out.position = Vec3(g.position[0], g.position[1], g.position[2]);
+        out.normal = Vec3(g.normal[0], g.normal[1], g.normal[2]);
+        double x, y, z;
+        if (m.tangentIsData) out.tangent = Vec3(tan[3 * i], tan[3 * i + 1], tan[3 * i + 2]);
+        else if (flags & kCompactNoTangent) out.tangent = Vec3(0, 0, 0);   // a mesh with no tangents keeps none
+        else { octDecode(g.tangent, x, y, z); out.tangent = Vec3(x, y, z); }
+        out.u = g.texcoord[0]; out.v = g.texcoord[1];
+        if (flags & kCompactUniformColor) out.color = Vec3(uc[0], uc[1], uc[2]);
+        else if (flags & kCompactFloatColor) out.color = Vec3(col[3 * i], col[3 * i + 1], col[3 * i + 2]);
+        else out.color = Vec3(g.color[0] / 255.0, g.color[1] / 255.0, g.color[2] / 255.0);
+    }
+    return r.ok();
 }
 
 void putPackedMesh(BinWriter& w, const PackedMesh& p) {

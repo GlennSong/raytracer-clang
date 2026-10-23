@@ -5,6 +5,7 @@
 #include "../src/engine/bundle/bake.h"
 #include "../src/engine/bundle/codecs.h"
 #include "../src/engine/mesh_builder.h"
+#include "../src/engine/vertex_pack.h"
 
 #include <cmath>
 #include <cstdio>
@@ -98,6 +99,91 @@ TEST_CASE(packed_mesh_is_exact_under_float32_and_detects_a_varying_vertex_colour
     BinWriter w; putPackedMesh(w, q); PackedMesh r; BinReader rd(w.bytes.data(), w.bytes.size()); CHECK(getPackedMesh(rd, r));
     CHECK(r.name == "concrete" && r.flags == q.flags && sameFloats(r.pos, q.pos) && sameFloats(r.col, q.col) && r.idx == q.idx && r.friction == q.friction);
     BinReader bad(w.bytes.data(), w.bytes.size() / 2); PackedMesh r2; CHECK(!getPackedMesh(bad, r2));
+}
+
+namespace {
+// A block of facades at the island's coordinates: boxes kilometres from the origin, a tint per box (glass in [0, 1]),
+// tangents as the raw edge vectors generators emit, and a round tower (smooth normals: its walls' world-planar UVs
+// follow the normal at every vertex).
+RenderMesh facadeBlock() {
+    RenderMesh m;
+    for (int i = 0; i < 40; ++i) {
+        RenderMesh b = MeshBuilder::box(Vec3(6 + i % 5, 9 + 3 * (i % 7), 8));
+        for (Vertex& v : b.vertices) {
+            v.position += Vec3(-4057.9 + 14.0 * (i % 8), 12.0, -439.6 + 13.0 * (i / 8));
+            v.color = Vec3(0.18 + 0.01 * i, 0.4, 0.62);
+            v.tangent = v.tangent * (3.0 + i % 3);
+        }
+        MeshBuilder::append(m, b);
+    }
+    RenderMesh tower = MeshBuilder::cylinder(9.0f, 60.0f, 48);
+    for (Vertex& v : tower.vertices) { v.position += Vec3(-3990.3, 30.0, -380.7); v.color = Vec3(0.55, 0.52, 0.47); }
+    MeshBuilder::append(m, tower);
+    return m;
+}
+}  // namespace
+
+TEST_CASE(compact_mesh_gives_the_gpu_exactly_what_the_full_mesh_gives_it) {
+    using engine::octEncode;
+    using engine::unorm8;
+    const RenderMesh m = facadeBlock();
+    BinWriter w; putCompactMesh(w, m);
+    RenderMesh back; BinReader r(w.bytes.data(), w.bytes.size());
+    CHECK(getCompactMesh(r, back));
+    const PackedMesh packed = packMesh(m, "part", Vec3(1, 1, 1), 0u, 1.0f, 0.0);
+    CHECK(back.vertices.size() == m.vertices.size() && back.indices.size() == packed.idx.size() && !back.tangentIsData);
+    // its triangles, in order, each wound the same way (the index codec may start one at another corner)
+    int sameTriangle = 0;
+    for (size_t t = 0; t + 2 < packed.idx.size() && t + 2 < back.indices.size(); t += 3)
+        for (int k = 0; k < 3; ++k)
+            if (back.indices[t] == packed.idx[t + k] && back.indices[t + 1] == packed.idx[t + (k + 1) % 3] &&
+                back.indices[t + 2] == packed.idx[t + (k + 2) % 3]) { ++sameTriangle; break; }
+    CHECK(sameTriangle == static_cast<int>(packed.idx.size() / 3));
+    int sameNormal = 0, sameTangent = 0, sameColour = 0;
+    for (size_t i = 0; i < m.vertices.size(); ++i) {
+        const Vertex &a = m.vertices[i], &b = back.vertices[i];
+        CHECK(static_cast<float>(a.position.x) == b.position.x && static_cast<float>(a.position.y) == b.position.y &&
+              static_cast<float>(a.position.z) == b.position.z);   // exact: neighbouring cells still meet
+        CHECK(a.u == b.u && a.v == b.v);
+        CHECK(static_cast<float>(a.normal.x) == b.normal.x && static_cast<float>(a.normal.y) == b.normal.y &&
+              static_cast<float>(a.normal.z) == b.normal.z);   // exact: the loader's world-planar UVs read it
+        int16_t qa[2], qb[2];
+        octEncode(a.normal.x, a.normal.y, a.normal.z, qa); octEncode(b.normal.x, b.normal.y, b.normal.z, qb);
+        sameNormal += qa[0] == qb[0] && qa[1] == qb[1];
+        octEncode(a.tangent.x, a.tangent.y, a.tangent.z, qa); octEncode(b.tangent.x, b.tangent.y, b.tangent.z, qb);
+        sameTangent += qa[0] == qb[0] && qa[1] == qb[1];
+        sameColour += unorm8(a.color.x) == unorm8(b.color.x) && unorm8(a.color.y) == unorm8(b.color.y) && unorm8(a.color.z) == unorm8(b.color.z);
+    }
+    const int n = static_cast<int>(m.vertices.size());
+    CHECK(sameNormal == n && sameTangent == n && sameColour == n);   // the uploaded vertex, bit for bit
+    // ...in a fraction of the packed float planes
+    BinWriter pw; putPackedMesh(pw, packed);
+    std::printf("    [compact] %d vertices, %zu triangles: packed %zu bytes, compact %zu (%.0f%%)\n", n, m.indices.size() / 3,
+                pw.bytes.size(), w.bytes.size(), 100.0 * w.bytes.size() / pw.bytes.size());
+    CHECK(w.bytes.size() * 2 < pw.bytes.size());
+    BinReader cut(w.bytes.data(), w.bytes.size() / 2); RenderMesh r2; CHECK(!getCompactMesh(cut, r2));
+}
+
+TEST_CASE(compact_mesh_keeps_what_the_standard_vertex_cannot_hold_exact) {
+    // a tint above 1 (lit panes), a tangent that carries data (a morph target), a mesh with no tangents, one tint
+    RenderMesh hdr = MeshBuilder::box(Vec3(2, 2, 2));
+    for (size_t i = 0; i < hdr.vertices.size(); ++i) hdr.vertices[i].color = Vec3(1.7 + 0.1 * i, 0.25, 3.0);
+    RenderMesh data = MeshBuilder::box(Vec3(2, 2, 2)); data.tangentIsData = true;
+    for (size_t i = 0; i < data.vertices.size(); ++i) data.vertices[i].tangent = Vec3(12.5 + i, -3.25, 0.0);
+    RenderMesh bare = MeshBuilder::box(Vec3(2, 2, 2)); for (Vertex& v : bare.vertices) { v.tangent = Vec3(0, 0, 0); v.color = Vec3(0.3, 0.3, 0.3); }
+    for (const RenderMesh* m : {&hdr, &data, &bare}) {
+        BinWriter w; putCompactMesh(w, *m);
+        RenderMesh b; BinReader r(w.bytes.data(), w.bytes.size());
+        CHECK(getCompactMesh(r, b));
+        CHECK(b.vertices.size() == m->vertices.size() && b.tangentIsData == m->tangentIsData);
+        for (size_t i = 0; i < b.vertices.size(); ++i) {
+            const Vertex &x = m->vertices[i], &y = b.vertices[i];
+            CHECK(static_cast<float>(x.color.x) == y.color.x && static_cast<float>(x.color.z) == y.color.z);
+            if (m->tangentIsData || m == &bare)
+                CHECK(static_cast<float>(x.tangent.x) == y.tangent.x && static_cast<float>(x.tangent.y) == y.tangent.y &&
+                      static_cast<float>(x.tangent.z) == y.tangent.z);
+        }
+    }
 }
 
 TEST_CASE(height_grid_road_entity_and_rings_round_trip_field_for_field) {

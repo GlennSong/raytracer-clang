@@ -21,6 +21,7 @@ does not require it. "Measured against" counts too.
 | miniaudio 0.11 | audio output | `third_party/miniaudio` | David Reid, github.com/mackron/miniaudio | Public domain (Unlicense) or MIT-0 |
 | Clipper2 1.5.4 | polygon clipping | `third_party/Clipper2` | Angus Johnson, github.com/AngusJohnson/Clipper2 | Boost 1.0 |
 | CDT 1.4.5 | constrained Delaunay triangulation | `third_party/CDT` | Artem Amirkhanov, github.com/artem-ogre/CDT | MPL 2.0 (file-level copyleft: changes to CDT's files stay MPL and public) |
+| meshoptimizer 1.2 | lossless vertex and index codecs for baked building meshes (ADR-0224) | `third_party/meshoptimizer` (submodule) | Arseny Kapoulkine, github.com/zeux/meshoptimizer | MIT |
 | nanosvg | SVG rasterising (city map) | `third_party/nanosvg` | Mikko Mononen, github.com/memononen/nanosvg | zlib |
 | nlohmann/json 3.11.3 | JSON | `third_party/nlohmann` | Niels Lohmann, github.com/nlohmann/json | MIT |
 | stb_truetype, stb_image, stb_image_write | fonts, images | `third_party/stb`, `third_party/tinygltf` | Sean Barrett, github.com/nothings/stb | Public domain or MIT |

@@ -47,6 +47,15 @@ void colliderFromPacked(const PackedMesh& p, MeshCollider& mc);   // positions +
 void putPackedMesh(BinWriter& w, const PackedMesh& p);
 bool getPackedMesh(BinReader& r, PackedMesh& p);
 
+// COMPACT MESH (ADR-0224): a RenderMesh as the GPU's standard vertex takes it (ADR-0096) -- float32 position, the
+// normal and tangent as octahedral snorm16 pairs, float32 UV, the tint as unorm8 -- then meshoptimizer's lossless
+// vertex and index codecs over that. What it drops is what the upload drops anyway: the tangent's length (mesh.vert
+// normalises) and tint precision past 8 bits. A mesh the standard vertex does not fit keeps those planes exact: a
+// tint outside [0, 1] stores float colour, a tangent that carries data (RenderMesh::tangentIsData) a float tangent.
+// Positions and UVs are exact, so the pieces of neighbouring cells still meet bit for bit.
+void putCompactMesh(BinWriter& w, const RenderMesh& m);
+bool getCompactMesh(BinReader& r, RenderMesh& m);
+
 // A regular height grid over the plan (x, y = world z), doubles, row-major ny rows of nx.
 struct HeightGridBlob { double x0 = 0, y0 = 0, res = 1; int32_t nx = 0, ny = 0; std::vector<double> z; };
 void putHeightGrid(BinWriter& w, const HeightGridBlob& g);

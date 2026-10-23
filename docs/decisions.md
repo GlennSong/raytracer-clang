@@ -11380,3 +11380,51 @@ Glenn: "publish the drawn deck".
   - Ramps are drawn ~0.45 m over their published profile even at the centreline (spines 175, 176, 180 on metro).
     That is a separate question.
   - The lot pads' feather on the sidewalk is still the bulk of the pokes (ADR-0217).
+
+## ADR-0224 — Baked building parts are stored as the GPU's vertex, compressed
+
+**Accepted.** island_8_nature's bundle was 8.59 GB, of which 6.64 GB was building parts (9,199 sections) and
+0.59 GB the far facade tier. `putPart` stored each part through `packMesh`: raw float32 planes for position,
+normal, tangent, UV and colour, and u32 indices. Glenn asked to shrink the data without losing the island's look.
+
+- **The stored vertex is the uploaded one, with an exact normal.** `bundle::putCompactMesh` / `getCompactMesh`
+  (CMSH v1) write a 40-byte vertex:
+  - float position and UV;
+  - float normal;
+  - an octahedral snorm16 tangent;
+  - a unorm8 tint.
+
+  The tangent and tint are what Vulkan's `GpuVertexPacked` already uploads (ADR-0096). The encoders are shared
+  with the renderer (`engine/vertex_pack.h`), so the GPU receives the same bits as before.
+- **The normal stays float** because the loader re-derives world-planar UVs from it (`applyWorldPlanarUVs`). At
+  island coordinates, an oct normal's ~5e-5 rad would move a wall's u by ~0.25 m. On a round tower each vertex
+  moves differently, so the brick joints would zigzag. The test block includes a cylinder at island coordinates.
+- **What stays exact:**
+  - positions, so cells still meet;
+  - UVs and normals;
+  - any tint outside [0, 1] (`kCompactFloatColor`, a float plane);
+  - a tangent that carries data (`tangentIsData`, a float plane);
+  - a mesh with no tangents;
+  - a single uniform tint.
+
+  Lit panes pack glass and a lit-tint index into 8-bit channels (`shape_grammar.h`), so unorm8 is their native
+  form.
+- **What changes:**
+  - the tangent's length (shaders normalise it);
+  - a tint's precision past 1/255, which Metal and WebGPU will now see too (≤ 1/510 per channel);
+  - the corner each triangle starts at (meshoptimizer's index codec rotates triangles, keeping winding and
+    order). Every `flat` input in the mesh shaders is per instance, so this draws the same pixels.
+- **meshoptimizer 1.2** (zeux, MIT; a submodule, only `vertexcodec.cpp` and `indexcodec.cpp` built) compresses
+  the vertex and index streams losslessly: `meshopt_encodeVertexBufferLevel(level 3, version 1)` and
+  `meshopt_encodeIndexBuffer`. It runs only at bake write and stream read. In the engine a part is a
+  `RenderMesh` as before.
+- **Part version 2**, lots tag 2026-10-23.1. `getPart` still reads version 1.
+- **Measured (island_8_nature, local clang):**
+  - lots/parts 6.64 → 1.21 GB;
+  - lots/flat 0.59 → 0.12 GB;
+  - bundle 8.59 → 2.50 GB;
+  - lots re-bake 145 s, peak RSS 19.1 GB.
+- **Revisit** when:
+  - the city's own meshes (concrete, asphalt, sleepers, guardrails: ~1.3 GB, still `packMesh`) are worth the
+    same treatment;
+  - a CPU consumer needs a part's tint or tangent exact.
