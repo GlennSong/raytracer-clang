@@ -7,6 +7,8 @@
 #include "../src/renderer/renderer.h"
 #include "../src/rt_math.h"
 
+#include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <vector>
 
@@ -165,4 +167,31 @@ TEST_CASE(instance_cull_is_affine_bottom_row_data_does_not_move_the_sphere) {
     std::vector<Mat4> out;
     frustumCullInstances({m}, f, Vec3(0.05, 0.3, 0.0), 0.4, eye, 0, out);   // bounds centre a little off x = 0
     CHECK(out.size() == 1);
+}
+
+TEST_CASE(a_tier_crossfade_splits_every_pixel_between_the_two_tiers) {
+    // mesh.frag's FLAG_LOD_BAND test, at each of the 4x4 Bayer thresholds: kept or discarded
+    auto smooth = [](float e0, float e1, float x) { const float t = std::clamp((x - e0) / (e1 - e0), 0.0f, 1.0f); return t * t * (3.0f - 2.0f * t); };
+    auto kept = [&](const RenderMaterial& m, float d, float thr) {
+        if (m.lodIn1 > m.lodIn0 && smooth(m.lodIn0, m.lodIn1, d) <= 1.0f - thr) return false;
+        if (m.lodOut1 > m.lodOut0 && 1.0f - smooth(m.lodOut0, m.lodOut1, d) <= thr) return false;
+        return true;
+    };
+    for (double dist : {80.0, 300.0, 950.0, 2400.0})
+        for (float a : {0.03f, 0.25f, 0.5f, 0.71f, 0.97f}) {
+            RenderMaterial in, out;
+            tierFadeBand(in, dist, a, true);
+            tierFadeBand(out, dist, 1.0f - a, false);
+            CHECK((in.flags & RenderMaterial::FLAG_LOD_BAND) && (out.flags & RenderMaterial::FLAG_LOD_BAND));
+            for (float dd : {-170.0f, 0.0f, 170.0f}) {   // the whole of a 250 m cell reads the same share
+                int keptIn = 0, both = 0, neither = 0;
+                for (int q = 0; q < 16; ++q) {
+                    const float thr = (q + 0.5f) / 16.0f;
+                    const bool i = kept(in, static_cast<float>(dist) + dd, thr), o = kept(out, static_cast<float>(dist) + dd, thr);
+                    keptIn += i; both += i && o; neither += !i && !o;
+                }
+                CHECK(both == 0 && neither == 0);   // each pixel one tier's
+                CHECK(std::abs(keptIn - a * 16.0f) <= 1.0f);   // the incoming tier's share is the fade's
+            }
+        }
 }

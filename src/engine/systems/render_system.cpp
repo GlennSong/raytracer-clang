@@ -6,6 +6,7 @@
 
 #include <chrono>
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <vector>
@@ -62,6 +63,19 @@ void RenderSystem::onStart(FrameContext& ctx) {
     // Adopt the level's exposure (set by the level loader from JSON) rather than
     // forcing our own value — other owners (level JSON, the ImGui slider) drive it.
     exposure = ctx.view.lighting.exposure;
+}
+
+void tierFadeBand(RenderMaterial& m, double dist, float share, bool coming) {
+    // the dither's share as a band so wide (kBand) that it reads the same at every pixel of a cell: smoothstep(e0,
+    // e0 + kBand, d) = s at d = dist when e0 = dist - t kBand, t = smoothstep^-1(s). Coming in keeps the pixels the
+    // band's fade-in keeps (a share `share`), going out those its fade-out keeps: complementary thresholds
+    // (mesh.frag), so a pair at shares a and 1 - a covers every pixel once.
+    constexpr double kBand = 1.0e5;
+    auto inv = [](double s) { return 0.5 - std::sin(std::asin(1.0 - 2.0 * s) / 3.0); };
+    m.flags |= RenderMaterial::FLAG_LOD_BAND;
+    const double e0 = dist - inv(coming ? share : 1.0 - share) * kBand;
+    if (coming) { m.lodIn0 = static_cast<float>(e0); m.lodIn1 = static_cast<float>(e0 + kBand); m.lodOut0 = m.lodOut1 = 0.0f; }
+    else { m.lodOut0 = static_cast<float>(e0); m.lodOut1 = static_cast<float>(e0 + kBand); m.lodIn0 = m.lodIn1 = 0.0f; }
 }
 
 void RenderSystem::update(FrameContext& ctx) {
@@ -285,12 +299,22 @@ void RenderSystem::render(FrameContext& ctx) {
                      cam.fovDegrees, cam.farPlane);
 
     Real alpha = ctx.interpolation;
+    // the tier crossfade (TierFade): a fade's step this frame; RT_NO_TIER_FADE=1 pops as before (A/B)
+    static const bool noTierFade = std::getenv("RT_NO_TIER_FADE") != nullptr;
+    // s; RT_TIER_FADE_S=<s> to look at one (a slow fade shows in a screenshot)
+    static const double kTierFade = std::getenv("RT_TIER_FADE_S") ? std::max(0.01, std::atof(std::getenv("RT_TIER_FADE_S"))) : 0.35;
+    const bool tierFades = !noTierFade && ctx.renderer.supportsLodBand();
+    const auto now = std::chrono::steady_clock::now();   // (frameDelta is update()'s: render keeps its own clock)
+    const double renderDt = frameNo_ ? std::chrono::duration<double>(now - lastRender_).count() : 0.0;
+    lastRender_ = now;
+    const float fadeStep = static_cast<float>(std::clamp(renderDt / kTierFade, 0.0, 1.0));
+    ++frameNo_;
     SparseSet<SourceSpec>* sourceSpecs = ctx.world.componentPool<SourceSpec>();   // (once, not per entity)
     // RT_DUMP_STATS: the encode walk's two halves timed and counted (entities visited / drawn, groups and instances
     // visited / drawn), every 120 frames
     static const bool encStats = std::getenv("RT_DUMP_STATS") != nullptr;
     static double encEntMs = 0, encGrpMs = 0;
-    static long encEnt = 0, encEntDrawn = 0, encGrp = 0, encGrpIn = 0, encInst = 0, encInstDrawn = 0, encFrames = 0;
+    static long encEnt = 0, encEntDrawn = 0, encGrp = 0, encGrpIn = 0, encInst = 0, encInstDrawn = 0, encFrames = 0, encFading = 0;
     const auto encT0 = std::chrono::steady_clock::now();
     // One drawable's cull + draw (reached through the draw index's visible cells, or the ECS walk with
     // RT_NO_DRAW_INDEX=1): the same tests whichever way it is found.
@@ -365,8 +389,28 @@ void RenderSystem::render(FrameContext& ctx) {
                     c.y = std::clamp(cam.position.y, worldMin.y, worldMax.y);
                 }
                 const Real dist = (c - cam.position).length();
-                if (drawDist > 0 && dist > drawDist) return;
-                if (r.minDistance > 0 && dist <= r.minDistance) return;
+                const bool want = !(drawDist > 0 && dist > drawDist) && !(r.minDistance > 0 && dist <= r.minDistance);
+                const bool fades = r.lodCell > 0 && tierFades && !(r.material.flags & (RenderMaterial::FLAG_LOD_BAND | RenderMaterial::FLAG_GRASS));
+                if (!fades) {
+                    if (!want) return;
+                } else {
+                    if (tierFade_.size() <= entityIndex) tierFade_.resize(entityIndex + 1);
+                    TierFade& f = tierFade_[entityIndex];
+                    // off screen last frame, or another drawable in this slot: no fade, it is simply what it is now
+                    if (f.mesh != r.mesh.index || f.seen + 1 != frameNo_) f.a = want ? 1.0f : 0.0f;
+                    else f.a = std::clamp(f.a + (want ? 1.0f : -1.0f) * fadeStep, 0.0f, 1.0f);
+                    f.mesh = r.mesh.index;
+                    f.seen = frameNo_;
+                    if (f.a <= 0.0f) return;
+                    if (f.a < 1.0f) {
+                        RenderMaterial m = r.material;
+                        tierFadeBand(m, dist, f.a, want);
+                        ctx.renderer.drawMesh(r.mesh, model, m);
+                        ++encEntDrawn;
+                        ++encFading;
+                        return;
+                    }
+                }
             }
             ctx.renderer.drawMesh(r.mesh, model, r.material);
             ++encEntDrawn;
@@ -464,10 +508,10 @@ void RenderSystem::render(FrameContext& ctx) {
         encGrpMs += std::chrono::duration<double, std::milli>(encT2 - encT1).count();
         if (++encFrames == 120) {
             std::fprintf(stderr, "[encode] per frame: entities %.2f ms (%ld visited, %ld drawn) | instance groups %.2f ms (%ld groups, "
-                         "%ld in view; %ld instances tested, %ld drawn)\n", encEntMs / 120, encEnt / 120, encEntDrawn / 120,
-                         encGrpMs / 120, encGrp / 120, encGrpIn / 120, encInst / 120, encInstDrawn / 120);
+                         "%ld in view; %ld instances tested, %ld drawn); tier fades: %ld draws over the 120 frames\n", encEntMs / 120,
+                         encEnt / 120, encEntDrawn / 120, encGrpMs / 120, encGrp / 120, encGrpIn / 120, encInst / 120, encInstDrawn / 120, encFading);
             encEntMs = encGrpMs = 0;
-            encEnt = encEntDrawn = encGrp = encGrpIn = encInst = encInstDrawn = encFrames = 0;
+            encEnt = encEntDrawn = encGrp = encGrpIn = encInst = encInstDrawn = encFrames = encFading = 0;
         }
     }
     // RT_OCC_STATS=1: what the occlusion test saved, every 120 frames

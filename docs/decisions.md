@@ -11456,3 +11456,32 @@ bare at once, the nearest 14 m away. RT_GRASS_LOG measured why:
   - want and built counts per layer.
 - **Owed:** over the city a card tile takes 40–110 ms to build, off the main thread. It samples the drawn ground
   ~1,200 times at ~50 µs a sample. That limits how fast grass fills in over towns.
+
+## ADR-0226 — A city cell crossfades between its tiers
+
+**Accepted.** A building cell switches tier at a hard distance, measured to the 250 m cell's centre (`lodCell`):
+- detail to facades at 300 m;
+- facades to the mass-box stand-in at 950 m;
+- the stand-in to whichever tier lands, when a streamed tier arrives (the stand-in rule).
+
+The switch happened in one frame, a whole cell at a time.
+
+- **A fade over time, not distance.** A spatial band would draw a cell's detail out to ~480 m and discard most of
+  its pixels: ~2.5× the detail cells. Instead, when a lodCell drawable's distance test flips while it is on screen,
+  it fades over 0.35 s (`RenderSystem::tierFade_`, per entity index). The tier going out keeps a falling share of
+  its pixels and the tier coming in takes the rest.
+- **The existing dither, no shader change.** `tierFadeBand` sets the drawable's FLAG_LOD_BAND (ADR-0129) edges
+  1e5 m wide around its distance, so the band's share is uniform across the cell. Coming in uses the fade-in
+  edge and going out uses the fade-out edge. Their thresholds are complementary, so a pair at shares a and 1 − a
+  splits every pixel between them: no hole and no double draw (test: `a_tier_crossfade_splits_every_pixel_…`).
+- **What does not fade:**
+  - a drawable off screen last frame, or a new one in a recycled slot, simply is what it is now;
+  - a newly committed chunk appears whole while its stand-in dissolves away over it;
+  - geometry only one tier has (a crown, a spire) dissolves in or out on its own.
+- **Vulkan only.** `Renderer::supportsLodBand()`: without the band both tiers would draw whole at once.
+- **Switches:**
+  - `RT_NO_TIER_FADE=1` pops as before;
+  - `RT_TIER_FADE_S=<s>` sets the length (6 s shows a fade in a screenshot);
+  - `RT_DUMP_STATS` counts the fading draws.
+- **Measured** on island_8_nature flight 1 (40 m up, 30 m/s, local clang): p50 13.9 / p99 24.6 ms with the fades,
+  14.0 / 24.8 ms without.
