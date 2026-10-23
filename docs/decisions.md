@@ -11428,3 +11428,31 @@ normal, tangent, UV and colour, and u32 indices. Glenn asked to shrink the data 
   - the city's own meshes (concrete, asphalt, sleepers, guardrails: ~1.3 GB, still `packMesh`) are worth the
     same treatment;
   - a CPU consumer needs a part's tint or tangent exact.
+
+## ADR-0225 — Grass streams in 3D, from half the pool, ahead of the camera
+
+**Accepted.** On island_8_nature's flights, grass was the pop-in. Flying 40 m up at 30 m/s, up to 921 tiles were
+bare at once, the nearest 14 m away. RT_GRASS_LOG measured why:
+- 160 tiles a second were built, at 6–12 ms each, with at most 4 in flight out of 23 workers;
+- the 8 fields' far cards (to 320 m, in 32 m tiles) got 2 a second behind the nearer clumps;
+- distance was measured on the map, so 300 m up the clumps meant for 60 m were still built.
+
+- **3D distance**, as the shader fades the grass (mesh.vert measures the distance to the planted origin). A tile's
+  ground range comes from a coarse grid: 64 m cells, 3×3 samples each, ±6 m of slack, filled once and shared by
+  every layer, because every field grows on the level's one drawn ground. A first version sampled 5 points per
+  tile per layer. Over the city a drawn-ground sample costs ~50 µs, so at 200 m/s that was 0.4 s a second on the
+  main thread. Error in the coarse range only makes a tile nearer: built early, never late.
+- **Half the pool in flight**: at least 4.
+- **Look-ahead**: a tile starts by its distance from the camera now or 0.75 s ahead (the residency's horizon),
+  whichever is nearer.
+- **Measured (local clang, same legs):**
+  - 40 m up at 30 m/s: bare 921 → 0 tiles. Grass costs 0.6 ms a frame on the main thread.
+  - 300 m up at 200 m/s over Port Penwood: bare 0. Main thread 0.25 ms a frame; the per-tile sampling had cost
+    8–15 ms.
+- **RT_GRASS_LOG** reports, once a second:
+  - tiles started and built, with build ms;
+  - the main thread's time by phase;
+  - ground cells sampled;
+  - want and built counts per layer.
+- **Owed:** over the city a card tile takes 40–110 ms to build, off the main thread. It samples the drawn ground
+  ~1,200 times at ~50 µs a sample. That limits how fast grass fills in over towns.
