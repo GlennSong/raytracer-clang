@@ -7535,6 +7535,8 @@ bool LevelLoader::load(const std::string& path,
                         it.radius = cell * 0.72;   // the cell's half-diagonal
                         // A cell of margin: loaded before it is drawn, in ordinary movement.
                         const double reach = flat ? facadeDistance : detailDistance;
+                        it.dueWithin = reach;      // drawn inside here (a facade from the detail ring out): the proxy showing there is a pop
+                        it.drawnFrom = flat ? detailDistance : 0.0;
                         it.loadWithin = reach + cell;
                         it.dropBeyond = reach + cell * 1.5;
                         if (flat) it.dropWithin = std::max(0.0, detailDistance - cell);   // not drawn inside the detail ring

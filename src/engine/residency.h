@@ -18,6 +18,7 @@
 #include "../rt_math.h"
 
 #include <cstddef>
+#include <cstdio>
 #include <functional>
 #include <map>
 #include <memory>
@@ -38,6 +39,9 @@ public:
         double loadWithin = 0.0;        // wanted once the camera is this close...
         double dropBeyond = 0.0;        // ...and let go past this (> loadWithin: hysteresis)
         double dropWithin = -1.0;       // an OUTER tier's inner edge: let go closer than this
+        double dueWithin = -1.0;        // DRAWN from this close (< 0: loadWithin)...
+        double drawnFrom = 0.0;         // ...out from here (an outer tier: the inner tier draws closer). Not resident
+                                        // between the two is LATE -- the stand-in shows, and arriving there is a pop
         std::function<std::size_t()> load;
         std::function<void()> unload;
         // TWO-PHASE loading (preferred): prepare() runs on a worker thread -- read, decode,
@@ -50,7 +54,13 @@ public:
         // two-phase state, render thread only
         enum class Phase : uint8_t { Idle, Preparing, Ready } phase = Phase::Idle;
         std::shared_ptr<void> prepared;
+        double wantedSince = -1.0;      // seconds (the service's clock) it has been wanted and not resident; < 0: not
     };
+
+    Residency() = default;
+    Residency(const Residency&) = delete;
+    Residency& operator=(const Residency&) = delete;
+    ~Residency();
 
     std::size_t add(Item item);
     std::size_t size() const { return items_.size(); }
@@ -69,6 +79,13 @@ public:
         double loadMs = 0.0, maxLoadMs = 0.0;   // on the render thread: a synchronous load (a jump), total and slowest
         long commits = 0;                        // two-phase items that arrived prepared...
         double commitMs = 0.0, maxCommitMs = 0.0;   // ...and what committing them cost the render thread
+        // LATENESS (the camera's own distance, not the look-ahead): after the last update, how many items are
+        // inside their dueWithin and not resident, and the nearest of them; over the run, how many arrived late
+        // and the seconds items spent late in all
+        std::size_t late = 0;
+        double nearestLate = -1.0;
+        long lateArrivals = 0;
+        double lateSeconds = 0.0;
     };
     const std::map<std::string, Stats>& stats() const { return stats_; }
 
@@ -83,6 +100,8 @@ public:
 private:
     Vec3 last_{0, 0, 0};
     bool haveLast_ = false;
+    double clock_ = -1.0, lastClock_ = -1.0;   // seconds since the first update
+    std::FILE* arrivals_ = nullptr;            // RT_RESIDENCY_CSV: one line per arrival
     int preparing_ = 0;
     // Finished prepare() results, handed from the workers to the render thread. Shared with the
     // jobs, so one still running when the level unloads writes into a live inbox, not freed memory.

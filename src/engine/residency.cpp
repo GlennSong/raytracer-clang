@@ -4,8 +4,13 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstdlib>
 
 namespace engine {
+
+Residency::~Residency() {
+    if (arrivals_) std::fclose(arrivals_);
+}
 
 std::size_t Residency::add(Item item) {
     Stats& s = stats_[item.client];
@@ -34,6 +39,17 @@ void Residency::update(const Vec3& camera, double budgetMs, JobSystem* jobs) {
         jump = dx * dx + dy * dy + dz * dz > kJumpDistance * kJumpDistance;
     }
     if (jump) budgetMs = 0.0;
+    // the service's clock, for how long an item waits (wantedSince) and is late (lateSeconds)
+    static const auto epoch = std::chrono::steady_clock::now();
+    lastClock_ = clock_;
+    clock_ = std::chrono::duration<double>(t0 - epoch).count();
+    const double dt = lastClock_ >= 0.0 ? clock_ - lastClock_ : 0.0;
+    if (!haveLast_) {
+        // RT_RESIDENCY_CSV=path: every arrival, for a fly-through to measure what arrived late and by how much
+        if (const char* p = std::getenv("RT_RESIDENCY_CSV"); p && *p && (arrivals_ = std::fopen(p, "w")))
+            std::fprintf(arrivals_, "t,client,x,z,due,dist,waited_ms,how,late\n");
+    }
+    const Vec3 eye = camera;
     // AHEAD OF A MOVING CAMERA (the city's next ten #10, a fly-around): where it will be in ~0.75 s at this frame's
     // step (45 frames), so a cell starts streaming before the camera is on it; an item counts as near when it is near
     // either point. And when moving fast (over ~90 m/s at 60 fps) twice the prepare jobs.
@@ -58,12 +74,15 @@ void Residency::update(const Vec3& camera, double budgetMs, JobSystem* jobs) {
         }
         inbox_->done.clear();
     }
-    auto distanceTo = [&](const Item& it) {
-        auto from = [&](const Vec3& c) {
-            const double dx = it.center.x - c.x, dy = it.center.y - c.y, dz = it.center.z - c.z;
-            return std::max(0.0, std::sqrt(dx * dx + dy * dy + dz * dz) - it.radius);
-        };
-        return std::min(from(camera), from(ahead));
+    auto from = [](const Item& it, const Vec3& c) {
+        const double dx = it.center.x - c.x, dy = it.center.y - c.y, dz = it.center.z - c.z;
+        return std::max(0.0, std::sqrt(dx * dx + dy * dy + dz * dz) - it.radius);
+    };
+    auto distanceTo = [&](const Item& it) { return std::min(from(it, camera), from(it, ahead)); };
+    // DUE: the item is drawn at the camera's own distance (the look-ahead only starts loading early)
+    auto dueOf = [](const Item& it) { return it.dueWithin >= 0.0 ? it.dueWithin : it.loadWithin; };
+    auto isLate = [&](const Item& it, double dc) {
+        return !it.resident && dc <= dueOf(it) && dc >= it.drawnFrom;
     };
     // 1. Let go of what is out of range (retired by the renderer, never a stall), and of
     //    prepared results nobody wants any more.
@@ -88,7 +107,11 @@ void Residency::update(const Vec3& camera, double budgetMs, JobSystem* jobs) {
             it.prepared.reset();
             it.phase = Item::Phase::Idle;
         }
-        if (!it.resident && inRange) wanted.push_back({d, i});
+        if (!it.resident && !inRange) it.wantedSince = -1.0;
+        if (!it.resident && inRange) {
+            if (it.wantedSince < 0.0) it.wantedSince = clock_;
+            wanted.push_back({d, i});
+        }
     }
     std::sort(wanted.begin(), wanted.end());
     // 2. Make resident, nearest first: a prepared item commits (cheap), a jump or a
@@ -118,6 +141,14 @@ void Residency::update(const Vec3& camera, double budgetMs, JobSystem* jobs) {
         s.bytes += it.bytes;
         ++s.loads;
         ++done;
+        const double dc = from(it, eye);
+        const bool lateHere = dc <= dueOf(it) && dc >= it.drawnFrom;
+        if (lateHere && !jump) ++s.lateArrivals;
+        if (arrivals_)
+            std::fprintf(arrivals_, "%.3f,%s,%.0f,%.0f,%.0f,%.1f,%.1f,%s,%d\n", clock_, it.client.c_str(), it.center.x,
+                         it.center.z, dueOf(it), dc, it.wantedSince >= 0.0 ? (clock_ - it.wantedSince) * 1000.0 : 0.0,
+                         jump ? "jump" : wasPrepared ? "prepared" : "in-place", lateHere ? 1 : 0);
+        it.wantedSince = -1.0;
     }
     // 3. Start preparing the nearest wanted items that are not yet, a few at a time.
     if (jobs) {
@@ -137,8 +168,19 @@ void Residency::update(const Vec3& camera, double budgetMs, JobSystem* jobs) {
             });
         }
     }
-    for (auto& kv : stats_) kv.second.waiting = 0;
+    for (auto& kv : stats_) { kv.second.waiting = 0; kv.second.late = 0; kv.second.nearestLate = -1.0; }
     for (const auto& [d, i] : wanted) if (!items_[i].resident) ++stats_[items_[i].client].waiting;
+    // 4. LATENESS, at the camera itself: what should be drawn and is still a stand-in
+    for (const Item& it : items_) {
+        if (it.resident) continue;
+        const double dc = from(it, eye);
+        if (!isLate(it, dc)) continue;
+        Stats& s = stats_[it.client];
+        ++s.late;
+        if (s.nearestLate < 0.0 || dc < s.nearestLate) s.nearestLate = dc;
+        if (!jump) s.lateSeconds += dt;
+    }
+    if (arrivals_) std::fflush(arrivals_);
 }
 
 void Residency::unloadAll() {

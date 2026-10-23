@@ -59,6 +59,7 @@ private:
     int inFlight_ = 0;
     bool first_ = true;
     bool commitAll_ = false;         // the first frame's commit: no budget
+    double bareSeconds_ = 0.0, logClock_ = 0.0;   // RT_GRASS_LOG
     void drop(World& world, Tile& t);
 };
 

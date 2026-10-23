@@ -1,6 +1,7 @@
 #include "grass_system.h"
 #include "../components.h"
 #include "../../job_system.h"
+#include "../../log.h"
 
 #include <algorithm>
 #include <chrono>
@@ -223,6 +224,27 @@ void GrassSystem::update(FrameContext& ctx) {
             }
     }
     std::sort(want.begin(), want.end());
+    // RT_GRASS_LOG=1: once a second, the tiles that should be drawn and have nothing yet (bare ground where grass
+    // belongs: a pop when they arrive), the nearest of them, and the tile-seconds bare over the run
+    static const bool grassLog = [] { const char* e = std::getenv("RT_GRASS_LOG"); return e && e[0] == '1'; }();
+    if (grassLog && !first_) {
+        int bare = 0;
+        double nearest = -1.0;
+        for (const auto& [d, what] : want) {
+            const Layer& L = layers[std::get<0>(what.first)];
+            auto t = tiles_.find(what.first);
+            if (d > L.reach - L.T || (t != tiles_.end() && t->second.lod >= 0)) continue;   // the margin tile, or covered
+            ++bare;
+            if (nearest < 0.0 || d < nearest) nearest = d;
+        }
+        bareSeconds_ += bare * ctx.frameDelta;
+        logClock_ += ctx.frameDelta;
+        if (logClock_ >= 1.0) {
+            logClock_ = 0.0;
+            LOG_INFO << "[grass] bare " << bare << " tiles, nearest " << nearest << " m, " << bareSeconds_
+                     << " tile-s bare in all, " << inFlight_ << " building";
+        }
+    }
     if (first_) {   // the first frame: everything, here and now (in parallel)
         std::vector<Built> built(want.size());
         ctx.jobs.parallelFor(0, want.size(), [&](std::size_t k) {
