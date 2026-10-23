@@ -115,7 +115,7 @@ fragment GBufferOut fragmentMain(
         wf.viewNormal = float4(0.0, 0.0, 1.0, 0.0); return wf;
     }
     SurfaceGeometry geom = {in.worldPosition, in.worldNormal,
-                            in.worldTangent, in.texcoord};
+                            in.worldTangent, in.texcoord, in.vertexColor};
     // Per-vertex tint (default white) modulates the material albedo — this is
     // the procedural coloration channel (e.g. terrain grass/rock by height/slope).
     SurfaceMaterial mat = {((int(material.flags) & 32) ? material.albedo : material.albedo * in.vertexColor), material.metallic,
@@ -157,7 +157,7 @@ fragment GBufferOut fragmentMainInstanced(
         wf.viewNormal = float4(0.0, 0.0, 1.0, 0.0); return wf;
     }
     SurfaceGeometry geom = {in.worldPosition, in.worldNormal,
-                            in.worldTangent, in.texcoord};
+                            in.worldTangent, in.texcoord, in.vertexColor};
     SurfaceMaterial mat = {((int(in.flags) & 32) ? in.albedo : in.albedo * in.vertexColor), in.metallic, in.roughness,
                            in.opacity, in.flags, in.emission, in.textureFlags};
     return shadeSurface(geom, mat, camera, lightData, shadowData,
@@ -220,7 +220,7 @@ fragment GBufferOut fragmentMainInstancedFoliage(
         wf.viewNormal = float4(0.0, 0.0, 1.0, 0.0); return wf;
     }
     SurfaceGeometry geom = {in.worldPosition, in.worldNormal,
-                            in.worldTangent, in.texcoord};
+                            in.worldTangent, in.texcoord, in.vertexColor};
     SurfaceMaterial mat = {((int(in.flags) & 32) ? in.albedo : in.albedo * in.vertexColor), in.metallic, in.roughness,
                            in.opacity, in.flags, in.emission, in.textureFlags};
     return shadeSurface(geom, mat, camera, lightData, shadowData,

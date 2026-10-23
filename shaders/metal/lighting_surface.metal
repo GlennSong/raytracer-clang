@@ -17,6 +17,7 @@ struct SurfaceGeometry {
     float3 worldNormal;
     float3 worldTangent;
     float2 texcoord;
+    float3 vertexColor;   // the emission tint, and a lit pane's packed glass + lit tint
 };
 
 GBufferOut shadeSurface(SurfaceGeometry geom, SurfaceMaterial mat,
