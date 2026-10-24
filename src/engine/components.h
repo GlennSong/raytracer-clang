@@ -178,6 +178,25 @@ struct InstanceGroup {
     Real minDistance = 0;
     uint32_t renderLayer = 0;   // debug layer bits (0 = always visible)
     DrawClass drawClass = DrawClass::Unset;   // see DrawClass above
+    // MOVING INSTANCES (the city's traffic, its riders, their lamps): the owner bakes `transforms` in the fixed step
+    // and names each one in `ids`; beginStep() keeps the last step's beside them. The renderer then draws each
+    // instance between its last pose and this one by the frame's interpolation -- what PrevTransform does for an
+    // entity. Without it a car moved only on frames that ran a fixed step: at 75 fps a fifth of frames froze every
+    // car (Glenn: "buses and cars sometimes shake ... Trains actually appear very stable"). Empty `ids`: static.
+    std::vector<uint64_t> ids;
+    std::vector<Mat4> prevTransforms;
+    std::vector<uint64_t> prevIds;
+    // This step's bake begins: last step's poses kept, this one's emptied.
+    void beginStep() {
+        prevTransforms.swap(transforms);
+        prevIds.swap(ids);
+        transforms.clear();
+        ids.clear();
+    }
+    void push(const Mat4& m, uint64_t id) {
+        transforms.push_back(m);
+        ids.push_back(id);
+    }
 };
 
 // A GRASS FIELD around the camera (GrassSystem, the flora plan): clumps of geometry blades

@@ -754,20 +754,50 @@ void CityPlayerTransitSystem::render(engine::FrameContext& ctx) {
     // 8 m/s), on a frame that ran none they agreed -- and at a high frame rate half the frames run none, so
     // the saloon shook round the rider. Here, after the steps, the eye is moved onto the seat in the bus's
     // fresh pose; the view's direction is kept.
-    if (riding_ >= 0 && seated_ && city_.sim().isBus(riding_)) {
+    // ...and now the bus is DRAWN between its last two bakes by the frame's interpolation (InstanceGroup::ids), so
+    // the rider follows that drawn pose, not the step's: the body and the camera, first person or third, are moved
+    // onto the seat (or the aisle spot) in the saloon as it is drawn this frame. The physics keeps its step pin.
+    // (Glenn, riding in third person: "I'm still shaking around on the bus" -- the eye fix was first person only,
+    // and stood on the step's pose while the bus now glides.)
+    if (riding_ >= 0 && seated_) {
         engine::Mat4 pose;
-        if (city_.busFrame(riding_, &pose)) {
+        Vec3 at;
+        Real eyeAbove = kSeatedEye;
+        bool have = city_.rideFrameDrawn(riding_, ctx.interpolation, &pose);
+        if (have && city_.sim().isBus(riding_)) {
             const std::vector<Vec3>& seats = city_.busSeats();
             const bool sat = seatIdx_ >= 0 && seatIdx_ < static_cast<int>(seats.size());
-            const Vec3 at = sat ? seats[static_cast<std::size_t>(seatIdx_)] : local_;
+            at = sat ? seats[static_cast<std::size_t>(seatIdx_)] : local_;
+            eyeAbove = sat ? kSeatedEye : kStandingEye;
+        } else if (have && carSeat_ >= 0) {
+            std::vector<Vec3> seats;
+            have = city_.carSeatsOf(riding_, nullptr, &seats) && carSeat_ < static_cast<int>(seats.size());
+            if (have) at = seats[static_cast<std::size_t>(carSeat_)];
+        } else {
+            have = false;
+        }
+        Entity player;
+        ctx.world.each<Transform, engine::CharacterController, engine::ControlledBy>(
+            [&](Entity e, Transform&, engine::CharacterController&, engine::ControlledBy&) {
+                if (!player.valid()) player = e;
+            });
+        Transform* pt = player.valid() ? ctx.world.get<Transform>(player) : nullptr;
+        if (have && pt) {
             const Vec3 w = pose.transformPoint(at);
-            const Vec3 eye(w.x, w.y + (sat ? kSeatedEye : kStandingEye), w.z);
-            engine::CameraState& cam = ctx.view.camera;
-            const Vec3 shift = eye - cam.position;
-            // only the first-person eye (a detached or third-person view has its own offset)
-            if (shift.length() < 1.0) {
-                cam.position = cam.position + shift;
-                cam.target = cam.target + shift;
+            const Vec3 drawnAt(w.x, w.y + eyeAbove - kEyeAboveTransform, w.z);
+            const Vec3 shift = drawnAt - pt->position;
+            if (shift.length() < 2.0) {   // (a boarding or a step off is a jump: left to the pin)
+                pt->position = drawnAt;
+                if (auto* prev = ctx.world.get<engine::PrevTransform>(player)) prev->value = *pt;
+                engine::CameraState& cam = ctx.view.camera;
+                const Vec3 eye(w.x, w.y + eyeAbove, w.z);
+                const Vec3 look = cam.target - cam.position;
+                if ((eye - cam.position).length() < 1.0) {
+                    cam.position = eye;   // FIRST PERSON: the eye on the seat exactly (the view came from last frame's)
+                } else {
+                    cam.position = cam.position + shift;   // THIRD: the shoulder rig rides with the body
+                }
+                cam.target = cam.position + look;
             }
         }
     }

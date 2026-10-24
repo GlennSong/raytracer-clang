@@ -11885,3 +11885,47 @@ It was reshaped before it landed.
   `Vehicle::slide` is the drift's slip angle while the drift holds the car, or the brake/handbrake pressed past
   half at speed (more as the wheels lock). Volume 0.3, down from 0.45. Wheelspin and brisk cornering are silent.
   The tyre smoke follows the same measure.
+
+## ADR-0240 — Moving instances drawn between steps; riders follow the vehicle as drawn
+
+**Context.** Glenn: "buses and cars sometimes shake. Their position is not stable. Trains actually appear very
+stable in contrast", then "I'm still shaking around on the bus". Measured on river_town at 75 fps with
+`set jitter.request "<agent|-1> <frames>"` / `get jitter.result` (a new diagnostic in CityRenderSystem): every car's
+drawn position froze on 60 of 300 frames. The city bakes its instance groups in the fixed step (60 Hz). An instance
+group had no interpolation, so a frame that ran no step drew last frame's poses: 1 − 60/75 = 20 %. Trains are placed
+per frame with the frame's alpha, which is why they glided. A rider was worse: the ride's `pin()` overwrote
+PrevTransform every step, and the camera reads the player's raw step position.
+
+**Decision.**
+- **`InstanceGroup` can name its instances** (`ids`). `beginStep()` keeps the last bake (`prevTransforms`,
+  `prevIds`) beside this one, and `push(m, id)` adds one. RenderSystem draws a named instance between its last pose
+  and this one by `ctx.interpolation`, the alpha entities use. Matching is by index when the order holds, else by
+  id. A jump over 5 m, a new instance, or a size mismatch draws as baked. `RT_NO_INSTANCE_LERP=1` is the A/B.
+- **The city names its moving instances:** a car body is keyed `uid << 8`. Its glass, cabin, driver, riders (16 +
+  seat), lamps (64 + marker) and bus sign take the body's id plus a part number. Walkers are keyed too. Parked cars
+  are keyed on the vehicle.
+- **The bake runs on the last two fixed steps of a frame** (it ran on the last only), so "last bake" is always one
+  step back. That is one more bake on catch-up frames only.
+- **Riders follow the vehicle as drawn.** CityRenderSystem keeps the ridden vehicle's last two bakes
+  (`rideFrameDrawn`). In its update the transit system moves the rider's drawn Transform and the camera onto the seat
+  or aisle spot in that blended pose: the eye exactly in first person, a rigid shift of the shoulder rig in third.
+  The physics still pins at the step's pose.
+
+**Measured** (bus 41, 600 frames, camera jerk in the bus's own frame; "before" is the A/B switch):
+
+| | before | after |
+|---|---|---|
+| third person | 65.1 mm | 1.5 mm |
+| first person | 128.3 mm | 14.8 mm |
+
+Frozen frames for vehicles and the camera: 60 → 0. Frame-to-frame speed cv: 0.65 → 0.37 (the rest is the
+vehicles' own speed changes).
+
+**Open.**
+- First person keeps 15 mm with the eye exactly on the drawn seat (checked to 0.05 mm against the transit
+  system's eye). Adding the eye height in the bus's frame made it worse: its matrix is not a pure rotation. The
+  likely cause is a difference between `rideFrameDrawn`'s blend and the group's, or the smoothed tilt. Not yet
+  chased.
+- Trains already place per frame; the shared riding component (planned) should take this rider logic over for
+  every carrier.
+- `audio?` (socket) reports the mixer's state and voice count. river_town plays 8 voices standing at the spawn.

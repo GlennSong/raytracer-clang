@@ -2264,11 +2264,11 @@ void CityRenderSystem::syncCarLamps(World& world) {
     InstanceGroup* head = world.get<InstanceGroup>(headlightGroup_);
     InstanceGroup* brake = world.get<InstanceGroup>(brakeLightGroup_);
     InstanceGroup* turn = world.get<InstanceGroup>(turnSignalGroup_);
-    if (head) head->transforms.clear();
-    if (brake) brake->transforms.clear();
-    if (turn) turn->transforms.clear();
+    if (head) head->beginStep();   // (moving with their cars: InstanceGroup::ids)
+    if (brake) brake->beginStep();
+    if (turn) turn->beginStep();
     for (Entity e : busSignGroups_)
-        if (InstanceGroup* sg = world.get<InstanceGroup>(e)) sg->transforms.clear();
+        if (InstanceGroup* sg = world.get<InstanceGroup>(e)) sg->beginStep();
     busSignsDrawn_ = 0;
 
     const std::vector<Agent>& agents = sim_.agents();
@@ -2313,7 +2313,7 @@ void CityRenderSystem::syncCarLamps(World& world) {
                 const auto drawn = busDrawnPose_.find(static_cast<int>(ai));
                 const auto po = physPose_.find(static_cast<int>(ai));
                 const Mat4 body = drawn != busDrawnPose_.end() ? drawn->second : po != physPose_.end() ? po->second : agentPose(a);
-                sg->transforms.push_back(body * busSignLocal_);
+                sg->push(body * busSignLocal_, movingId(a, 4));
                 ++busSignsDrawn_;
                 busSignAt_ = sg->transforms.back().transformPoint(Vec3(0, 0, 0));
             }
@@ -2361,7 +2361,9 @@ void CityRenderSystem::syncCarLamps(World& world) {
         // through into the saloon -- tail lights glowing inside the bus
         // (Glenn). Out by half the lens depth, it sits flush on the outside.
         const bool seeInto = v < static_cast<int>(carSeeInto_.size()) && carSeeInto_[static_cast<std::size_t>(v)] != 0;
+        uint32_t lampNo = 0;
         for (const LampMarker& m : markers) {
+            const uint64_t lampId = movingId(a, 64 + (lampNo++ & 127));
             const bool isHead = m.name.rfind("headlight", 0) == 0;
             const bool isTail = m.name.rfind("taillight", 0) == 0;
             const bool leftSide = !m.name.empty() && m.name.back() == 'l';
@@ -2370,13 +2372,13 @@ void CityRenderSystem::syncCarLamps(World& world) {
             if (seeInto) local.z += (local.z >= 0 ? Real(1) : Real(-1)) * Real(0.061);
             const Vec3 wpos = pose.transformPoint(local);
             const Mat4 xf = Mat4::trs(wpos, rot, Vec3(1, 1, 1));
-            if (isHead && lamps.head && head) head->transforms.push_back(xf);
-            if (isTail && lamps.brake && brake) brake->transforms.push_back(xf);
+            if (isHead && lamps.head && head) head->push(xf, lampId);
+            if (isTail && lamps.brake && brake) brake->push(xf, lampId);
             // The turn indicator on the signalling side flashes on BOTH the front
             // and rear corner markers of that side.
             const bool signalling =
                 (leftSide && lamps.left) || (rightSide && lamps.right);
-            if (signalling && blinkOn && turn) turn->transforms.push_back(xf);
+            if (signalling && blinkOn && turn) turn->push(xf, lampId);
         }
     }
     refreshBounds(head);
@@ -2513,8 +2515,9 @@ void CityRenderSystem::syncGroups(World& world) {
     InstanceGroup* sig[3];
     for (int s = 0; s < 3; ++s) sig[s] = world.get<InstanceGroup>(signalGroups_[s]);
 
-    for (InstanceGroup* c : cars) if (c) c->transforms.clear();
-    if (ped) ped->transforms.clear();
+    // (moving: each instance named, so the renderer draws it between its last step and this one -- InstanceGroup::ids)
+    for (InstanceGroup* c : cars) if (c) c->beginStep();
+    if (ped) ped->beginStep();
     for (int s = 0; s < 3; ++s) if (sig[s]) sig[s]->transforms.clear();
 
     carAgentIds_.assign(cars.size(), {});
@@ -2569,9 +2572,7 @@ void CityRenderSystem::syncGroups(World& world) {
             // real suspension, pitch and roll — while the sim's kinematic
             // plan stays the brains' truth.
             const auto po = physPose_.find(static_cast<int>(ai));
-            cars[v]->transforms.push_back(
-                po != physPose_.end() ? po->second
-                                      : agentPose(a, static_cast<int>(ai)));
+            cars[v]->push(po != physPose_.end() ? po->second : agentPose(a, static_cast<int>(ai)), movingId(a, 0));
             carAgentIds_[v].push_back(static_cast<int>(ai));
         } else if (ped && !pedsExternallyOwned_) {   // walkers owned externally: no bake
             if (!sim_.pedVisible(static_cast<int>(ai))) continue;   // indoors / riding
@@ -2589,7 +2590,7 @@ void CityRenderSystem::syncGroups(World& world) {
                 }
                 continue;
             }
-            ped->transforms.push_back(agentPose(a));
+            ped->push(agentPose(a), movingId(a, 0));
             pedAgentIds_[0].push_back(static_cast<int>(ai));
         }
     }
@@ -2671,10 +2672,8 @@ void CityRenderSystem::syncGroups(World& world) {
             const Real y = (sv.parkedY > -1e29 ? sv.parkedY : groundAt(sv.pos.x, sv.pos.y)) +
                            (v < static_cast<int>(he.size()) ? he[v].y : 0.65);
             const Real yaw = std::atan2(sv.heading.x, sv.heading.y);
-            cars[v]->transforms.push_back(
-                Mat4::trs(Vec3(sv.pos.x, y, sv.pos.y),
-                          Quat::fromAxisAngle(Vec3(0, 1, 0), yaw),
-                          Vec3(1, 1, 1)));
+            cars[v]->push(Mat4::trs(Vec3(sv.pos.x, y, sv.pos.y), Quat::fromAxisAngle(Vec3(0, 1, 0), yaw), Vec3(1, 1, 1)),
+                          (uint64_t(1) << 62) | static_cast<uint64_t>(vi));   // parked: keyed on the vehicle
             // NEGATIVE-but-stable id keyed on the VEHICLE: the physics proxy key
             // must not shuffle when the cull changes bake order (-1 stays
             // "unknown"). Vehicle indices are fixed for the run, exactly as bay
@@ -2783,8 +2782,8 @@ void CityRenderSystem::syncGroups(World& world) {
         InstanceGroup* drv = world.get<InstanceGroup>(busDriverGroup_);
         InstanceGroup* rid[3];
         for (int k = 0; k < 3; ++k) rid[k] = world.get<InstanceGroup>(busRiderGroups_[k]);
-        if (drv) drv->transforms.clear();
-        for (InstanceGroup* r : rid) if (r) r->transforms.clear();
+        if (drv) drv->beginStep();
+        for (InstanceGroup* r : rid) if (r) r->beginStep();
         busDrawnPose_.clear();
         // THE NEAR SWAP (fleet v2): the kNearCount moving cars nearest the player, within kNearIn m (kept
         // until kNearOut, so a car at the edge does not flicker), draw clear glass, their cabin and driver.
@@ -2816,22 +2815,23 @@ void CityRenderSystem::syncGroups(World& world) {
             InstanceGroup* clear = carGlassGroups_[v].valid() ? world.get<InstanceGroup>(carGlassGroups_[v]) : nullptr;
             InstanceGroup* opaque = carGlassOpaqueGroups_[v].valid() ? world.get<InstanceGroup>(carGlassOpaqueGroups_[v]) : nullptr;
             InstanceGroup* cabin = carInteriorGroups_[v].valid() ? world.get<InstanceGroup>(carInteriorGroups_[v]) : nullptr;
-            if (clear) clear->transforms.clear();
-            if (opaque) opaque->transforms.clear();
-            if (cabin) cabin->transforms.clear();
+            if (clear) clear->beginStep();
+            if (opaque) opaque->beginStep();
+            if (cabin) cabin->beginStep();
             for (std::size_t k = 0; k < cars[v]->transforms.size(); ++k) {
                 const Mat4& xf = cars[v]->transforms[k];
+                const uint64_t body = k < cars[v]->ids.size() ? cars[v]->ids[k] : 0;   // its parts ride its name
                 const int ai = k < ids.size() ? ids[k] : -1;
                 // near-swapped only when the slot HAS a cabin to show (a kit body without one keeps its glass
                 // opaque rather than showing an empty shell through clear glass)
                 const bool seen = always || (ai >= 0 && nearSwap_.count(ai) && cabin);
                 if (seen) {
-                    if (clear) clear->transforms.push_back(xf);
-                    if (cabin) cabin->transforms.push_back(xf);
+                    if (clear) clear->push(xf, body | 1);
+                    if (cabin) cabin->push(xf, body | 2);
                 } else if (opaque) {
-                    opaque->transforms.push_back(xf);
+                    opaque->push(xf, body | 1);
                 } else if (clear) {
-                    clear->transforms.push_back(xf);   // a slot with no opaque form keeps its clear glass
+                    clear->push(xf, body | 1);   // a slot with no opaque form keeps its clear glass
                 }
             }
             refreshBounds(clear);
@@ -2845,7 +2845,12 @@ void CityRenderSystem::syncGroups(World& world) {
                 const int ai = ids[k];
                 if (ai < 0) continue;   // a parked scenery body: nobody aboard
                 // the car the player RIDES in: its drawn matrix, every step, so the passenger sits still in it
-                if (ai == playerRidingAgent_) busDrawnPose_[ai] = cars[v]->transforms[k];
+                if (ai == playerRidingAgent_) {
+                    busDrawnPose_[ai] = cars[v]->transforms[k];
+                    ridePrev_ = rideAgent_ == ai ? rideCur_ : cars[v]->transforms[k];
+                    rideCur_ = cars[v]->transforms[k];
+                    rideAgent_ = ai;
+                }
                 if (!always && (!nearSwap_.count(ai) || !carInteriorGroups_[v].valid())) continue;   // behind opaque glass: nobody to see
                 const Mat4& xf = cars[v]->transforms[k];
                 busDrawnPose_[ai] = xf;
@@ -2853,9 +2858,8 @@ void CityRenderSystem::syncGroups(World& world) {
                 // either be in a house dormant or disappeared"): a driver is in the seat only while the car is on a
                 // trip -- moving, or a bus or a cab on duty; at rest the person is indoors and the car stands empty
                 if (!carOccupied(ai)) continue;
-                if (hasDriver && drv)
-                    drv->transforms.push_back(
-                        xf * Mat4::trs(carDriverSeat_[v], Quat(), Vec3(1, 1, 1)));
+                const uint64_t body = k < cars[v]->ids.size() ? cars[v]->ids[k] : 0;
+                if (hasDriver && drv) drv->push(xf * Mat4::trs(carDriverSeat_[v], Quat(), Vec3(1, 1, 1)), body | 3);
                 const int load = std::min(sim_.rides().load(ai), n);
                 int placed = 0;
                 for (int j = 0; j < n && placed < load; ++j) {
@@ -2863,9 +2867,8 @@ void CityRenderSystem::syncGroups(World& world) {
                     if (ai == playerSeatAgent_ && seat == playerSeat_) continue;
                     InstanceGroup* r = rid[(ai + placed) % 3];
                     if (r)
-                        r->transforms.push_back(
-                            xf * Mat4::trs(seats[static_cast<std::size_t>(seat)], Quat(),
-                                           Vec3(1, 1, 1)));
+                        r->push(xf * Mat4::trs(seats[static_cast<std::size_t>(seat)], Quat(), Vec3(1, 1, 1)),
+                                body | static_cast<uint64_t>(16 + seat));
                     ++placed;
                 }
             }
@@ -3660,15 +3663,44 @@ void CityRenderSystem::measureJitter(engine::FrameContext& ctx) {
     }
     if (jitterAgent_ < 0 || jitterAgent_ >= static_cast<int>(sim_.agents().size())) return;
     const Agent& a = sim_.agents()[static_cast<std::size_t>(jitterAgent_)];
-    // where agentPose draws it in x/z this frame: one tick behind, interpolated by the time into the tick
-    Vec2 p = a.pos;
-    const Real period = sim_.tickPeriod();
-    if (period > 0.0 && !a.released) {
-        const Vec2 d = a.pos - a.tickFromPos;
-        if (d.x * d.x + d.y * d.y < 64.0)
-            p = a.tickFromPos + d * std::clamp(sim_.secondsSinceTick() / period, Real(0), Real(1));
+    // where the RENDERER draws its body this frame: the baked instance, between its last step and this one by the
+    // frame's interpolation when the group names its instances (InstanceGroup::ids), else as baked
+    const uint64_t want = movingId(a, 0);
+    bool found = false;
+    Mat4 drawnM;
+    Vec3 p(a.pos.x, 0, a.pos.y);
+    for (Entity e : carGroups_) {
+        const InstanceGroup* g = ctx.world.get<InstanceGroup>(e);
+        if (!g) continue;
+        for (std::size_t i = 0; i < g->ids.size() && i < g->transforms.size(); ++i) {
+            if (g->ids[i] != want) continue;
+            const Mat4& cur = g->transforms[i];
+            p = Vec3(cur.m[0][3], 0, cur.m[2][3]);
+            drawnM = cur;
+            static const bool noLerp = std::getenv("RT_NO_INSTANCE_LERP") != nullptr;   // (as the renderer draws it)
+            for (std::size_t j = 0; !noLerp && j < g->prevIds.size() && j < g->prevTransforms.size(); ++j)
+                if (g->prevIds[j] == want) {
+                    const Mat4& pr = g->prevTransforms[j];
+                    const Real al = ctx.interpolation;
+                    p = Vec3(pr.m[0][3] + (cur.m[0][3] - pr.m[0][3]) * al, 0, pr.m[2][3] + (cur.m[2][3] - pr.m[2][3]) * al);
+                    for (int r = 0; r < 3; ++r)
+                        for (int c = 0; c < 4; ++c) drawnM.m[r][c] = pr.m[r][c] + (cur.m[r][c] - pr.m[r][c]) * al;
+                    break;
+                }
+            found = true;
+            break;
+        }
+        if (found) break;
     }
-    jitter_.push_back({Vec3(p.x, 0, p.y), ctx.view.camera.position, ctx.frameDelta});
+    // the camera in the vehicle's own drawn frame (the rotation's columns are its axes): what a rider sees move
+    const Vec3 rel = ctx.view.camera.position - Vec3(drawnM.m[0][3], drawnM.m[1][3], drawnM.m[2][3]);
+    Vec3 inV;
+    for (int c = 0; c < 3; ++c) {
+        const Vec3 axis(drawnM.m[0][c], drawnM.m[1][c], drawnM.m[2][c]);
+        const Real len2 = std::max(axis.lengthSquared(), Real(1e-12));
+        (c == 0 ? inV.x : c == 1 ? inV.y : inV.z) = dot(rel, axis) / len2;
+    }
+    jitter_.push_back({p, ctx.view.camera.position, ctx.frameDelta, inV});
     if (static_cast<int>(jitter_.size()) < jitterFrames_) return;
     // per frame: how far it moved over how long the frame was -- an even glide is a steady speed every frame;
     // a shake is speeds jumping about (a frame that moved it nothing, then one that moved it double)
@@ -3692,14 +3724,36 @@ void CityRenderSystem::measureJitter(engine::FrameContext& ctx) {
     stats([](const JitterSample& s) { return s.at; }, vm, vcv, vs);
     stats([](const JitterSample& s) { return s.cam; }, cm, ccv, cs);
     stats([](const JitterSample& s) { return s.cam - s.at; }, rm, rcv, rs);   // the camera against the vehicle
+    // THE SHAKE ITSELF: frame-to-frame jerk of the camera against the vehicle -- the second difference of their
+    // offset, which a steady ride (however it turns or brakes, a frame at a time) keeps near zero, mm
+    Real jerk = 0, vjerk = 0;
+    for (std::size_t i = 2; i < jitter_.size(); ++i) {
+        const Vec3 r0 = jitter_[i - 2].cam - jitter_[i - 2].at, r1 = jitter_[i - 1].cam - jitter_[i - 1].at,
+                   r2 = jitter_[i].cam - jitter_[i].at;
+        const Vec3 j = r2 - r1 * 2.0 + r0;
+        jerk += j.x * j.x + j.z * j.z;
+        const Vec3 vj = jitter_[i].at - jitter_[i - 1].at * 2.0 + jitter_[i - 2].at;
+        vjerk += vj.x * vj.x + vj.z * vj.z;
+    }
+    Real inJerk = 0;   // the camera's jerk in the vehicle's own frame: the shake a rider sees, mm
+    for (std::size_t i = 2; i < jitter_.size(); ++i) {
+        const Vec3 j = jitter_[i].inVehicle - jitter_[i - 1].inVehicle * 2.0 + jitter_[i - 2].inVehicle;
+        inJerk += j.lengthSquared();
+    }
+    const Real nj = static_cast<Real>(std::max<std::size_t>(1, jitter_.size() - 2));
+    inJerk = std::sqrt(inJerk / nj) * 1000.0;
+    jerk = std::sqrt(jerk / nj) * 1000.0;
+    vjerk = std::sqrt(vjerk / nj) * 1000.0;
     Real dtMean = 0;
     for (const JitterSample& s : jitter_) dtMean += s.dt;
     dtMean /= static_cast<Real>(jitter_.size());
-    char b[400];
+    char b[512];
     std::snprintf(b, sizeof b,
                   "agent %d over %zu frames (%.1f ms/frame, sim tick %.1f ms): vehicle %.2f m/s cv %.2f still %d | "
-                  "camera %.2f m/s cv %.2f still %d | camera-vs-vehicle %.3f m/s",
-                  jitterAgent_, jitter_.size(), dtMean * 1000.0, sim_.tickPeriod() * 1000.0, vm, vcv, vs, cm, ccv, cs, rm);
+                  "camera %.2f m/s cv %.2f still %d | camera-vs-vehicle %.3f m/s, jerk %.1f mm (vehicle's own %.1f mm), "
+                  "in the vehicle's frame %.2f mm",
+                  jitterAgent_, jitter_.size(), dtMean * 1000.0, sim_.tickPeriod() * 1000.0, vm, vcv, vs, cm, ccv, cs, rm,
+                  jerk, vjerk, inJerk);
     ctx.settings.setString("jitter.result", b);
     jitterAgent_ = -1;
     jitter_.clear();
@@ -3707,7 +3761,6 @@ void CityRenderSystem::measureJitter(engine::FrameContext& ctx) {
 
 void CityRenderSystem::update(engine::FrameContext& ctx) {
     feedGpuCrowd(ctx);
-    measureJitter(ctx);
     // the OPEN signs' staff: a thirtieth of them asked "at work?" each frame (dealOpenSigns counts the flags)
     if (built_ && !signedStaff_.empty()) {
         const std::size_t n = (signedStaff_.size() + 29) / 30;
@@ -4356,6 +4409,7 @@ const char* agentStateName(Agent::State s) {
 #endif
 
 void CityRenderSystem::render(engine::FrameContext& ctx) {
+    measureJitter(ctx);   // (here: after every system's update has placed the camera and the rider)
 #ifdef RT_ENABLE_IMGUI
     // No ImGui context (a backend without the debug UI): stay inert — same guard
     // the engine's DebugOverlaySystem uses.
@@ -4579,7 +4633,10 @@ void CityRenderSystem::fixedUpdate(engine::FrameContext& ctx) {
     // steps in one frame (catching up), only the last bake is ever drawn — the
     // rest are pure waste, and at piedmont scale that was ~4.5 bakes a frame.
     // Physics proxies read the bake too, so they track the freshest step.
-    bakeThisStep_ = (ctx.fixedStepIndex + 1 >= ctx.fixedStepCount);
+    // ...and the step BEFORE it: the renderer draws a moving instance between its last bake and this one by the
+    // frame's interpolation (InstanceGroup::ids), which is a fixed step apart only if the step before was baked too.
+    // On a catch-up frame that is one bake more; on most frames (one step) nothing changes.
+    bakeThisStep_ = (ctx.fixedStepIndex + 2 >= ctx.fixedStepCount);
 
     // ADAPTIVE DIP. When the clock is behind it runs MORE fixed steps to catch
     // up — and if the sim is what made us late, that deepens the hole (the
@@ -4647,6 +4704,18 @@ bool CityRenderSystem::carSeatsOf(int agent, Mat4* pose, std::vector<Vec3>* seat
             seats->push_back(Vec3(-d.x, d.y, d.z - 0.85));
         }
     }
+    return true;
+}
+
+bool CityRenderSystem::rideFrameDrawn(int agent, Real alpha, Mat4* pose) const {
+    if (!pose || agent < 0 || agent != rideAgent_ || agent != playerRidingAgent_) return false;
+    static const bool noLerp = std::getenv("RT_NO_INSTANCE_LERP") != nullptr;   // (as the renderer draws it)
+    *pose = rideCur_;
+    if (noLerp) return true;
+    const Real jx = rideCur_.m[0][3] - ridePrev_.m[0][3], jz = rideCur_.m[2][3] - ridePrev_.m[2][3];
+    if (jx * jx + jz * jz > 25.0) return true;   // a jump: where it landed (as the renderer does)
+    for (int r = 0; r < 3; ++r)
+        for (int c = 0; c < 4; ++c) pose->m[r][c] = ridePrev_.m[r][c] + (rideCur_.m[r][c] - ridePrev_.m[r][c]) * alpha;
     return true;
 }
 

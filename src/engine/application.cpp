@@ -741,6 +741,13 @@ std::string Application::handleControlCommand(const std::string& line) {
         return "ok set " + cmd.args[0];
     }
 
+    // WHAT IS PLAYING (Glenn: "how come river town has no audio?"): the mixer's state and its voices now
+    if (cmd.name == "audio?") {
+        char b[160];
+        std::snprintf(b, sizeof b, "ok ready %d voices %zu", audioEngine.ready() ? 1 : 0, audioEngine.activeVoiceCount());
+        return b;
+    }
+
     if (cmd.name == "get") {
         if (cmd.args.empty()) return "err usage: get <key>";
         const std::string v = settingsStore.getString(cmd.args[0], "");

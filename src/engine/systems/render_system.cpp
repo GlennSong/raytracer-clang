@@ -448,7 +448,43 @@ void RenderSystem::render(FrameContext& ctx) {
             BoundingSphere mb = ctx.renderer.getMeshBounds(g.mesh);
             ++encGrpIn;
             encInst += static_cast<long>(g.transforms.size());
-            frustumCullInstances(g.transforms, frustum, mb.center, mb.radius,
+            // MOVING: each instance drawn between its last step's pose and this one's (InstanceGroup::ids), as an
+            // entity is between PrevTransform and Transform -- the same `alpha`, so a bus and the rider pinned in it
+            // move together
+            const std::vector<Mat4>* drawn = &g.transforms;
+            static const bool noLerp = std::getenv("RT_NO_INSTANCE_LERP") != nullptr;   // the A/B: as baked
+            if (!noLerp && !g.ids.empty() && g.ids.size() == g.transforms.size() && !g.prevTransforms.empty() &&
+                g.prevIds.size() == g.prevTransforms.size() && alpha < 1.0) {
+                lerpScratch_.resize(g.transforms.size());
+                bool mapped = false;
+                for (std::size_t i = 0; i < g.transforms.size(); ++i) {
+                    const Mat4* from = nullptr;
+                    if (i < g.prevIds.size() && g.prevIds[i] == g.ids[i]) {
+                        from = &g.prevTransforms[i];
+                    } else {
+                        if (!mapped) {
+                            prevById_.clear();
+                            for (std::size_t j = 0; j < g.prevIds.size(); ++j) prevById_[g.prevIds[j]] = j;
+                            mapped = true;
+                        }
+                        const auto it = prevById_.find(g.ids[i]);
+                        if (it != prevById_.end()) from = &g.prevTransforms[it->second];
+                    }
+                    Mat4& out = lerpScratch_[i];
+                    out = g.transforms[i];
+                    if (!from) continue;   // new this step: where it is
+                    // a step apart is a few centimetres and a degree or two: blending the matrix is the blend of
+                    // the poses (the columns stay a rotation to well within a pixel); a jump (a placement, a
+                    // teleport) is drawn where it landed
+                    const Real jx = out.m[0][3] - from->m[0][3], jz = out.m[2][3] - from->m[2][3];
+                    if (jx * jx + jz * jz > 25.0) continue;
+                    for (int r = 0; r < 3; ++r)
+                        for (int c = 0; c < 4; ++c)
+                            out.m[r][c] = from->m[r][c] + (out.m[r][c] - from->m[r][c]) * alpha;
+                }
+                drawn = &lerpScratch_;
+            }
+            frustumCullInstances(*drawn, frustum, mb.center, mb.radius,
                                  cam.position, drawDist, instanceScratch_, g.minDistance);
             encInstDrawn += static_cast<long>(instanceScratch_.size());
             if (instanceScratch_.empty()) return;

@@ -254,6 +254,10 @@ public:
     // exact matrix its body is drawn with this step -- and its saloon layout
     // in that body frame: seat hip points, door floor points, floor height.
     // False when the agent is not a see-into vehicle.
+    // THE RIDDEN VEHICLE AS DRAWN THIS FRAME: its last two bakes blended by the frame's interpolation, as the renderer
+    // draws its body (InstanceGroup::ids) -- what a rider's eye and body follow so the saloon holds still round them
+    // (Glenn: "I'm still shaking around on the bus"). False when it is not the one ridden or not baked yet.
+    bool rideFrameDrawn(int agent, engine::Real alpha, engine::Mat4* pose) const;
     bool busFrame(int agent, engine::Mat4* pose) const;
     // A CAR'S SEATS (Glenn, 2026-10-02: "a way to detect which part of the car you get into so you can be a
     // passenger (backseat, frontseat passenger) or the driver ... we'd have to be pointing at the seat that we
@@ -451,6 +455,9 @@ private:
     }
 
     void syncGroups(engine::World& world);
+    // A moving instance's name across bakes (InstanceGroup::ids): the agent's uid, and which of its parts (0 the body;
+    // glass, cabin, lamps, a rider... their own small numbers)
+    static uint64_t movingId(const Agent& a, uint32_t part) { return (static_cast<uint64_t>(a.uid) << 8) | part; }
     void syncCarLamps(engine::World& world);   // bake the emissive lamp instances
     int carTurnDir(const Agent& a) const;      // route-bend turn side (-1/0/+1)
     // Box sized by a.mode (car/ped). `agentIdx` >= 0 enables the per-agent
@@ -732,9 +739,11 @@ private:
     // evenly each moved -- Glenn: "buses and cars sometimes shake. Their position is not stable. Trains actually
     // appear very stable in contrast". -1: the bus or cab you ride, else the nearest moving vehicle.
     void measureJitter(engine::FrameContext& ctx);
-    struct JitterSample { engine::Vec3 at, cam; engine::Real dt; };
+    struct JitterSample { engine::Vec3 at, cam; engine::Real dt; engine::Vec3 inVehicle; };
     std::vector<JitterSample> jitter_;
     int jitterAgent_ = -1, jitterFrames_ = 0;
+    int rideAgent_ = -1;                    // the ridden vehicle's last two bakes (rideFrameDrawn)
+    engine::Mat4 ridePrev_, rideCur_;
     PlaceMap places_;
     bool showPlaces_ = true;         // draw place markers + labels (ImGui overlay)
     // The SUN's elevation, staged each frame from the render view so the bake

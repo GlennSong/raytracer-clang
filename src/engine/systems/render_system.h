@@ -6,6 +6,7 @@
 
 #include <chrono>
 #include <cstdint>
+#include <unordered_map>
 #include <vector>
 
 namespace engine {
@@ -47,6 +48,10 @@ private:
     // Reused across groups and frames so per-instance culling stops heap-
     // allocating the full instance count every group every frame.
     std::vector<Mat4> instanceScratch_;
+    // a moving group's instances between their last step and this one (InstanceGroup::ids), and the lookup by id when
+    // the order changed between bakes
+    std::vector<Mat4> lerpScratch_;
+    std::unordered_map<uint64_t, std::size_t> prevById_;
     DrawIndex drawIndex_;   // static drawables by world cell (draw_index.h)
     // THE TIER CROSSFADE (ADR-0226): a lodCell drawable whose distance test flips while it is on screen fades over
     // kTierFade instead of popping -- a cell's detail out as its facades come in, a stand-in box out as a streamed
