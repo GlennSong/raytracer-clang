@@ -105,6 +105,9 @@ namespace {
 // A block of facades at the island's coordinates: boxes kilometres from the origin, a tint per box (glass in [0, 1]),
 // tangents as the raw edge vectors generators emit, and a round tower (smooth normals: its walls' world-planar UVs
 // follow the normal at every vertex).
+// The offsets are not a place: (-4058, -440) is about 4 km out, where island_8_nature's towers stand. The distance is
+// the test. A normal rounded by 5e-5 rad moves a world-planar UV by ~0.25 m this far out; at the origin it wouldn't
+// show, and the block would pass with the bug in it.
 RenderMesh facadeBlock() {
     RenderMesh m;
     for (int i = 0; i < 40; ++i) {
