@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <string>
 
 namespace engine {
 
@@ -104,6 +105,9 @@ void PlayerArmsSystem::update(FrameContext& ctx) {
     }
     shown_ = true;
 
+    for (int k = 1; k <= 4; ++k)   // (only reached in first person, where the gun script takes the keys too)
+        if (ctx.actions.pressed("slot_" + std::to_string(k))) slot_ = k;
+
     const CameraState& cam = ctx.view.camera;
     const Vec3 eye = cam.position;
     const Vec3 fwd = normalize(cam.target - cam.position);
@@ -119,6 +123,19 @@ void PlayerArmsSystem::update(FrameContext& ctx) {
     const Real dt = std::clamp(static_cast<Real>(ctx.frameDelta), Real(0), Real(0.1));
     const bool held = pose->mode == PlayerPose::Mode::Mantle || pose->mode == PlayerPose::Mode::Climb ||
                       pose->mode == PlayerPose::Mode::Ladder;
+    // THE GUN, where gun.lua's viewmodel puts it: 0.35 ahead of the eye, 0.18 right, 0.18 down, barrel along
+    // the view. The hands go on it: the right on the grip, the left under the barrel.
+    const bool gun = slot_ == 2 && (pose->mode == PlayerPose::Mode::Walk || pose->mode == PlayerPose::Mode::Air);
+    Vec3 gunGrip[2];
+    if (gun) {
+        const Vec3 at = eye + fwd * 0.35 + right * 0.18 + Vec3(0, -0.18, 0);
+        const Vec3 gf = fwd;
+        Vec3 gr = cross(Vec3(0, 1, 0), gf);
+        gr = gr.length() < 1e-4 ? Vec3(1, 0, 0) : normalize(gr);
+        const Vec3 gu = cross(gf, gr);
+        gunGrip[0] = toLocal(at + gu * -0.03 + gf * 0.3 + gr * -0.02);    // left: cupping the barrel, past the receiver
+        gunGrip[1] = toLocal(at + gu * -0.15 + gf * -0.11);                 // right: on the grip
+    }
     for (int k = 0; k < 2; ++k) {
         const Real s = k == 0 ? -1.0 : 1.0;   // left, right
         Vec3 want;
@@ -161,9 +178,10 @@ void PlayerArmsSystem::update(FrameContext& ctx) {
                 break;
             }
         }
+        if (gun) want = gunGrip[k];
         if (!haveLocal_) local_[k] = want;
         // planted hands follow the grip fast (they hold the wall while the view moves); free ones ease
-        const Real rate = held ? 30.0 : 14.0;
+        const Real rate = held || gun ? 30.0 : 14.0;
         local_[k] = local_[k] + (want - local_[k]) * (1.0 - std::exp(-dt * rate));
 
         const Vec3 hand = toWorld(local_[k]);

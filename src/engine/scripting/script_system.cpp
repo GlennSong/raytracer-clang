@@ -1,4 +1,5 @@
 #include "script_system.h"
+#include "../player_pose.h"
 
 #include "lua_state.h"
 #include "lua_helpers.h"     // packEntity (scripts see self.entity as this)
@@ -81,10 +82,15 @@ void ScriptSystem::update(FrameContext& ctx) {
     // vehicle (the chase camera). The gun script gates its viewmodel and fire
     // on this — a first-person viewmodel makes no sense floating beside a
     // third-person camera.
-    bool inVehicle = false;
+    bool inVehicle = false, handsFree = true;
     ctx.world.each<ControlledBy>([&](Entity e, ControlledBy&) {
         if (ctx.world.has<InVehicle>(e)) inVehicle = true;
+        // hands on a ledge, a wall, a ladder, or swimming: no gun in them (engine/player_pose.h)
+        if (const PlayerPose* p = ctx.world.get<PlayerPose>(e))
+            handsFree = p->mode == PlayerPose::Mode::Walk || p->mode == PlayerPose::Mode::Air ||
+                        p->mode == PlayerPose::Mode::Hidden;
     });
+    setHandsFree(handsFree);
     setFirstPersonView(!ctx.settings.getBool("playerThirdPerson", false) &&
                        !inVehicle);
     tick(ctx.world, ctx.frameDelta);
@@ -102,6 +108,7 @@ void ScriptSystem::tick(World& world, double dt) {
     gctx.spawns = &spawns;
     gctx.events = events_;
     gctx.firstPersonView = firstPersonView_;
+    gctx.handsFree = handsFree_;
     setGameplayContext(vm_, &gctx);
 
     // Mutating ScriptBehaviour's own fields (refs/flags) is allowed inside each;

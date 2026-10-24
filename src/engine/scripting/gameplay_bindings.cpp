@@ -169,6 +169,11 @@ int l_camera_right(lua_State* L) {
     pushVec3(L, normalize(cross(fwd, c.up)));
     return 1;
 }
+int l_camera_hands_free(lua_State* L) {
+    GameplayContext* g = gameplayCtx(L);
+    lua_pushboolean(L, g == nullptr || g->handsFree);
+    return 1;
+}
 int l_camera_first_person(lua_State* L) {
     // True when the view is the player's own eyes (see GameplayContext) — the
     // gun viewmodel/fire gate. Without a context (headless), report first
@@ -308,6 +313,7 @@ void openGameplayLibrary(ScriptVM& vm) {
         {"forward", l_camera_forward},
         {"right", l_camera_right},
         {"first_person", l_camera_first_person},
+        {"hands_free", l_camera_hands_free},
         {nullptr, nullptr},
     };
     luaL_newlib(L, kCameraFns);

@@ -9,7 +9,8 @@ namespace engine {
 // and thus when I pull myself up I'd see the arms do that"). Two sleeves and two hands, boxes in the player's
 // own outfit, drawn from the shoulders to where the hands are: swinging with the stride, pumping on a run, out
 // for balance in the air, crawling through the water, and HELD where they grip -- the ledge being pulled up onto,
-// the wall being climbed, a ladder's rails. Reads PlayerPose (engine/player_pose.h); runs after every camera
+// the wall being climbed, a ladder's rails -- and the gun when it's drawn (slot 2: right hand on the grip, left
+// under the barrel; assets/scripts/gun.lua puts the gun away while the hands are busy). Reads PlayerPose (engine/player_pose.h); runs after every camera
 // writer so the hands sit on this frame's view.
 class PlayerArmsSystem : public System {
 public:
@@ -21,6 +22,7 @@ private:
     bool shown_ = false;
     Vec3 local_[2];        // each hand in camera space (right, up, forward), eased
     bool haveLocal_ = false;
+    int slot_ = 1;         // the tool in hand, tracked like the gun script does: 1 bare hands, 2 the gun
 };
 
 }  // namespace engine
