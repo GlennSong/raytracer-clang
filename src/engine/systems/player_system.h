@@ -5,13 +5,17 @@
 #include "../camera/fly_camera_controller.h"
 #include "../camera/follow_camera_controller.h"
 #include "../physics/physics_world.h"
+#include "../locomotion.h"
 
 #include <algorithm>
 #include <cmath>
+#include <string>
 
 namespace engine {
 
 class PhysicsSystem;
+struct Transform;
+struct CharacterController;
 
 // Decides when a falling character should snap back to spawn. Pure logic,
 // extracted from PlayerSystem so it is testable without Jolt or a renderer.
@@ -112,6 +116,7 @@ public:
     void onStart(FrameContext& ctx) override;
     void fixedUpdate(FrameContext& ctx) override;
     void update(FrameContext& ctx) override;
+    void render(FrameContext& ctx) override;   // Debug > Movement: the tuning, live
 
     bool thirdPersonActive() const { return thirdPerson; }
 
@@ -161,8 +166,33 @@ private:
     SwimState swim_;              // afloat in deep water (#43)
     Real swimClock_ = 0;
     Real swimLevel_ = 0;          // the surface of the water the player is in
+    Real swimVy_ = 0;             // vertical speed in the water: a plunge carries in, buoyancy brings it up
+
+    // PAST WALKING (engine/locomotion.h): the jump gate, the pull-up onto a ledge, climbing a wall.
+    MovementTuning tune_;
+    JumpGate gate_;
+    enum class Move : uint8_t { Walk, Mantle, Climb };
+    Move move_ = Move::Walk;
+    MantleMove mantle_;
+    Vec3 climbNormal_{0, 0, 1};   // the wall held, facing the body
+    Vec3 lungeDir_{0, 1, 0};
+    Real lunge_ = 0;              // s left on a lunge up the wall
+    Real stamina_ = 12;           // s of climbing left
+    Real regrab_ = 0;             // s before a wall can be grabbed again (after letting go)
+    Real stride_ = 0;             // walk cycles, for the arms
+    Real climbCycle_ = 0;
+    Real strokePhase_ = 0;        // swim strokes
+    Real landed_ = 0;
+    std::string lastEvent_ = "none";
+    void event(const std::string& what);
+    bool tryMantle(Transform& t, CharacterController& cc, const Vec3& facing, Real maxHeight);
+    bool tryGrab(Transform& t, CharacterController& cc, const Vec3& facing);
+    void stepMantle(Transform& t, CharacterController& cc, Real dt);
+    void stepClimb(FrameContext& ctx, Transform& t, CharacterController& cc, Real dt);
+    void publishPose(FrameContext& ctx, Entity e, const Transform& t, const CharacterController& cc);
 public:
     bool swimming() const { return swim_.swimming; }
+    const MovementTuning& tuning() const { return tune_; }
 private:
 };
 

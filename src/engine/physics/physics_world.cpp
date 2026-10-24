@@ -16,6 +16,9 @@
 #include <Jolt/Physics/Collision/Shape/MeshShape.h>
 #include <Jolt/Physics/Collision/RayCast.h>
 #include <Jolt/Physics/Collision/CastResult.h>
+#include <Jolt/Physics/Collision/CollideShape.h>
+#include <Jolt/Physics/Collision/CollisionCollectorImpl.h>
+#include <Jolt/Physics/Body/BodyLock.h>
 #include <Jolt/Physics/Collision/Shape/OffsetCenterOfMassShape.h>
 #include <Jolt/Physics/Collision/Shape/RotatedTranslatedShape.h>
 #include <Jolt/Physics/Body/AllowedDOFs.h>
@@ -598,6 +601,39 @@ bool PhysicsWorld::jumpCharacter(CharacterId id, Real speed) {
     return true;
 }
 
+void PhysicsWorld::launchCharacter(CharacterId id, Real upSpeed) {
+    if (!impl || id >= impl->characters.size() || upSpeed <= 0.0) return;
+    if (!impl->characters[id].controller) return;
+    impl->characters[id].pendingJump = static_cast<float>(upSpeed);
+}
+
+Vec3 PhysicsWorld::characterGroundNormal(CharacterId id) const {
+    if (!impl || id >= impl->characters.size()) return Vec3(0, 1, 0);
+    const JPH::CharacterVirtual* ch = impl->characters[id].controller.GetPtr();
+    if (!ch || ch->GetGroundState() == JPH::CharacterBase::EGroundState::InAir) return Vec3(0, 1, 0);
+    const JPH::Vec3 n = ch->GetGroundNormal();
+    return Vec3(n.GetX(), n.GetY(), n.GetZ());
+}
+
+bool PhysicsWorld::characterFitsAt(CharacterId id, const Vec3& centre) const {
+    if (!impl || id >= impl->characters.size()) return false;
+    const Impl::Character& rec = impl->characters[id];
+    if (!rec.controller) return false;
+    // The capsule a hair slimmer than the character's own: a body standing on a ledge touches it, and
+    // touching is fitting (the same slop the crouch test allows, as a margin instead of a tolerance).
+    JPH::CapsuleShape shape(rec.halfHeight, std::max(rec.radius - 0.03f, 0.05f));
+    shape.SetEmbedded();
+    JPH::CollideShapeSettings settings;
+    settings.mMaxSeparationDistance = 0.0f;
+    JPH::AnyHitCollisionCollector<JPH::CollideShapeCollector> hits;
+    const JPH::RVec3 at = toJoltR(centre + Vec3(0, 0.03, 0));   // lifted by the trim, so the soles stay put
+    impl->physicsSystem.GetNarrowPhaseQuery().CollideShape(
+        &shape, JPH::Vec3::sReplicate(1.0f), JPH::RMat44::sTranslation(at), settings, at, hits,
+        impl->physicsSystem.GetDefaultBroadPhaseLayerFilter(Layers::MOVING),
+        impl->physicsSystem.GetDefaultLayerFilter(Layers::MOVING));
+    return !hits.HadHit();
+}
+
 bool PhysicsWorld::setCharacterHeight(CharacterId id, Real halfHeight,
                                       Real radius) {
     if (!impl || id >= impl->characters.size()) return false;
@@ -658,6 +694,29 @@ bool PhysicsWorld::castRay(const Vec3& origin, const Vec3& dirAndLength,
         return false;
     JPH::RVec3 p = ray.GetPointOnRay(hit.mFraction);
     hitPoint = Vec3(p.GetX(), p.GetY(), p.GetZ());
+    return true;
+}
+
+bool PhysicsWorld::castRayHit(const Vec3& origin, const Vec3& dirAndLength, RayHit& out) const {
+    if (!impl) return false;
+    JPH::RRayCast ray{JPH::RVec3(origin.x, origin.y, origin.z),
+                      JPH::Vec3(static_cast<float>(dirAndLength.x), static_cast<float>(dirAndLength.y),
+                                static_cast<float>(dirAndLength.z))};
+    JPH::RayCastResult hit;
+    if (!impl->physicsSystem.GetNarrowPhaseQuery().CastRay(ray, hit)) return false;
+    const JPH::RVec3 p = ray.GetPointOnRay(hit.mFraction);
+    out.point = Vec3(p.GetX(), p.GetY(), p.GetZ());
+    out.body = hit.mBodyID.GetIndexAndSequenceNumber();
+    out.normal = Vec3(0, 1, 0);
+    out.dynamic = false;
+    JPH::BodyLockRead lock(impl->physicsSystem.GetBodyLockInterface(), hit.mBodyID);
+    if (lock.Succeeded()) {
+        const JPH::Body& b = lock.GetBody();
+        JPH::Vec3 n = b.GetWorldSpaceSurfaceNormal(hit.mSubShapeID2, p);
+        if (n.Dot(ray.mDirection) > 0.0f) n = -n;   // a mesh's back face: the side the ray came from
+        out.normal = Vec3(n.GetX(), n.GetY(), n.GetZ());
+        out.dynamic = b.GetMotionType() == JPH::EMotionType::Dynamic;
+    }
     return true;
 }
 

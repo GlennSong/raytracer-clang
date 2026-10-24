@@ -6110,6 +6110,40 @@ bool LevelLoader::load(const std::string& path,
 
     }
 
+    // POOLS (the movement lab's): still water in a box, in a level with no terrain -- the surface drawn as the
+    // sea's is (depth and edge baked into the mesh for the Water shader), and a WaterPool for the swimmer.
+    if (root.contains("pools") && root["pools"].is_array()) {
+        for (const json& pj : root["pools"]) {
+            if (!pj.contains("min") || !pj.contains("max")) continue;
+            const double x0 = pj["min"][0], z0 = pj["min"][1], x1 = pj["max"][0], z1 = pj["max"][1];
+            const double level = pj.value("level", 0.0), depth = pj.value("depth", 2.0);
+            engine::WaterMeshParams wp;
+            wp.seaLevel = level;
+            wp.lo = Vec2(x0, z0);
+            wp.hi = Vec2(x1, z1);
+            wp.cell = 0.5;
+            wp.foamBand = 0.6;
+            const HeightSampler floorAt = [=](double x, double z) {
+                return x >= x0 - 1e-6 && x <= x1 + 1e-6 && z >= z0 - 1e-6 && z <= z1 + 1e-6 ? level - depth
+                                                                                             : level + 1.0;
+            };
+            const RenderMesh m = engine::buildWaterMesh(floorAt, wp);
+            if (!m.vertices.empty()) {
+                const Entity we = world.create();
+                world.add<Transform>(we, Transform{});
+                world.add<PrevTransform>(we, PrevTransform{Transform{}});
+                Renderable wr;
+                wr.material.albedo = Vec3(0.05, 0.3, 0.38);   // a tiled pool's blue
+                wr.material.roughness = 0.04f;
+                wr.material.opacity = 0.6f;
+                wr.material.setSurface(RenderMaterial::Surface::Water);
+                wr.mesh = assets.acquireMesh(m, "pool:" + std::to_string(x0) + "," + std::to_string(z0));
+                world.add<Renderable>(we, wr);
+            }
+            world.add<WaterPool>(world.create(), WaterPool{x0, z0, x1, z1, level});
+        }
+    }
+
     // Drivable vehicles (ADR-0059) — play mode only (runtime actors, like the
     // player; not editor document entities).
 #ifdef RT_ENABLE_SCRIPTING

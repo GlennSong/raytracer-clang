@@ -53,6 +53,7 @@
 #ifdef RT_ENABLE_PHYSICS
 #include "../engine/systems/physics_system.h"
 #include "../engine/systems/player_system.h"
+#include "../engine/systems/player_arms_system.h"
 #include "../engine/systems/shooting_system.h"
 #ifdef RT_ENABLE_SCRIPTING
 #include "../engine/scripting/script_system.h"
@@ -243,6 +244,9 @@ ArenaState::ArenaState(Window& window, Renderer& renderer,
     // follow the head (culling/lamps/audio/Lua) and hand the gameplay camera
     // to the renderer as the locomotion-base hint. Must stay after every
     // other camera writer and before RenderSystem. Inert without a headset.
+#ifdef RT_ENABLE_PHYSICS
+    addSystem<PlayerArmsSystem>();   // the block arms on this frame's first-person view (after the camera writers)
+#endif
     addSystem<XrCameraSystem>();
     addSystem<UnderwaterSystem>();   // the camera under a water surface -> the composite's underwater look (#58)
     addSystem<RenderSystem>();

@@ -1054,6 +1054,8 @@ if(RT_ENABLE_PHYSICS)
         src/engine/physics/jolt_job_adapter.cpp
         src/engine/systems/physics_system.cpp
         src/engine/systems/player_system.cpp
+        src/engine/locomotion.cpp            # jump gate, ledges, mantle, climbing probes (tests/test_locomotion)
+        src/engine/systems/player_arms_system.cpp   # the block arms in first person
         src/engine/systems/teleport_system.cpp
         src/engine/systems/shooting_system.cpp
         src/engine/systems/vehicle_system.cpp
@@ -1075,6 +1077,7 @@ if(RT_ENABLE_PHYSICS)
     add_executable(physics_tests
         tests/main.cpp
         tests/test_physics.cpp
+        tests/test_locomotion.cpp
         tests/test_driving_lab.cpp
         tests/test_vehicle_handling.cpp
         tests/test_vehicle_drivetrain.cpp
@@ -1089,6 +1092,7 @@ if(RT_ENABLE_PHYSICS)
         src/engine/physics/physics_world.cpp
         src/engine/physics/jolt_job_adapter.cpp
         src/engine/systems/physics_system.cpp
+        src/engine/locomotion.cpp
         src/apps/citysim/city_physics.cpp
         src/apps/citysim/city_player_transit.cpp
         src/apps/citysim/city_map_tool.cpp

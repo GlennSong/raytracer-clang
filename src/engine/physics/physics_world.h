@@ -134,6 +134,15 @@ public:
     // Refused (returns false) unless the character is on the ground: no
     // mid-air jumps, no double jumps, without the caller tracking state.
     bool jumpCharacter(CharacterId id, Real speed);
+    // The UNGATED half of a jump: stage `upSpeed` for the next moveCharacter whatever the ground state. The
+    // player's JumpGate (engine/locomotion.h) decides when it may -- a moment after running off an edge, off
+    // steep ground, out of a wedge -- so those rules are tunable and tested there, not buried here.
+    void launchCharacter(CharacterId id, Real upSpeed);
+    // The ground contact's normal (unit, world); straight up when nothing is under the character.
+    Vec3 characterGroundNormal(CharacterId id) const;
+    // Would this character's capsule fit with its centre at `centre`? A ledge you can't stand on, a gap
+    // you can't rise through, is refused before the move is started (engine/locomotion.h).
+    bool characterFitsAt(CharacterId id, const Vec3& centre) const;
     // Resize the capsule (crouch / stand), keeping the FEET planted rather
     // than the centre — a crouch settles down, it doesn't sink into the floor.
     // Returns false when the new capsule would not fit where the character is
@@ -146,6 +155,15 @@ public:
     // and immediately jump there") and any future picking.
     bool castRay(const Vec3& origin, const Vec3& dirAndLength,
                  Vec3& hitPoint) const;
+    // ...and what it hit: the surface normal there (unit, facing the ray), the body, and whether that body
+    // is a simulated one (a crate, a car) -- what a climber can't hold on to.
+    struct RayHit {
+        Vec3 point;
+        Vec3 normal{0, 1, 0};
+        PhysicsBodyId body = INVALID_PHYSICS_BODY;
+        bool dynamic = false;
+    };
+    bool castRayHit(const Vec3& origin, const Vec3& dirAndLength, RayHit& hit) const;
     Vec3 characterVelocity(CharacterId id) const;
     GroundState characterGroundState(CharacterId id) const;
     // The body the character stands on (INVALID_PHYSICS_BODY in the air): what a footstep lands on.

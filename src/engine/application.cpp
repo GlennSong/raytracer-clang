@@ -919,6 +919,9 @@ std::string Application::handleControlCommand(const std::string& line) {
         return "ok staged";
     }
     if (cmd.name == "walkers?") return "ok " + settingsStore.getString("walkers.telemetry", "none");
+    // THE PLAYER'S MOVEMENT (engine/locomotion.h): mode (walk|mantle|climb|swim|ladder), ground, position,
+    // velocity, stamina and the last change ("jump (off steep ground)", "pull up onto a ledge 1.20 m ...").
+    if (cmd.name == "move?") return "ok " + settingsStore.getString("player.telemetry", "none");
     if (cmd.name == "flicker?") return "ok " + settingsStore.getString("walkers.flicker", "none");
     // what the city's people are out doing (citysim activities): per activity, at it / coming, groups, the nearest
     if (cmd.name == "activities?") return "ok " + settingsStore.getString("activities.telemetry", "none");
@@ -1407,7 +1410,7 @@ std::string Application::handleControlCommand(const std::string& line) {
     }
 
     return "err unknown command: " + cmd.name +
-           " (ping|info|camera|camera?|shot|interact|interact?|overlay|sim|reload|set|get|"
+           " (ping|info|camera|camera?|move?|shot|interact|interact?|overlay|sim|reload|set|get|"
            "daynight|daynight?|citymap|teleport|teleport?|where?|person|clip|clip?|sun|sun?|fog|fog?|weather|weather?|render|view|ledger|"
            "possess|drive_to|walk_to|direct|possess_stop|release|possess?|agent?|ground?|bundle?|walkers?|flicker?|speeders?|parking?|traffic?|opensigns?|findplace|findplace?|recipes?|depots?|activities?|who?|pin)";
 }

@@ -11537,3 +11537,41 @@ only the complex's cells (cells.cpp `Complex::resolve`) used it.
 - **`lot? x z`** prints each building's party walls (line and top), for checking one in the running game.
 - **Test:** `a_party_wall_is_blank_only_as_high_as_its_neighbour` (test_city_lots): no glass in the wall up to its
   top, glass above it, the count matches the log's, every parts index still in its mesh.
+
+## ADR-0228 — Movement past walking: a jump gate, ledges, climbing, buoyancy, block arms
+
+Glenn (2026-10-24): jump "sometimes gets me stuck on geometry"; pull yourself up a ledge slightly above; climb
+rock "like breath of the wild"; see your block arms; feel speed swimming; and a movement lab to tune it in.
+
+- **The stuck jump, measured:** `jumpCharacter` refused unless Jolt said OnGround. On anything steeper than the
+  50° walkable limit it says OnSteepGround, so every press was refused while sliding on a rock face
+  (`the_physics_jump_is_refused_on_steep_ground`). Narrow gaps and V crevices settle OnGround and were fine.
+- **JumpGate (engine/locomotion.h)** decides instead, over the ungated `launchCharacter`: OnGround, a moment after
+  leaving it (coyote 0.12 s), a press 0.15 s before landing (buffer), off steep ground (pushed away from it), out
+  of a wedge (touching, unsupported, not falling for 0.15 s). `jumpCharacter` keeps its strict gate for others.
+- **Ledges:** `findLedge` casts level rays for a wall within reach, a ray down behind its face for the top, a ray
+  for floor a body's width in, and `characterFitsAt` (a capsule overlap test) for room standing there and rising
+  to it. Jump at one up to 1.45 m from standing, or push into one up to 2.1 m over the feet in the air, and
+  `MantleMove` hauls the capsule up level with the top, then over (moveCharacterFree along the path; blocked
+  -> let go).
+- **Climbing** any surface too steep to walk (normal y < 0.64, down to a slight overhang), not a dynamic body:
+  grab it in the air by pushing at it (from the ground too, if `grabFromGround`), move along its basis, stick at
+  the chest, turn inside corners, reach round outside ones, pull up at the top, step off at the foot, lunge on
+  jump, kick off on jump + back, let go on crouch or when stamina (12 s, back on the ground) runs out.
+- **Swimming:** buoyancy is a damped spring with quadratic drag (`swimVerticalStep`), so a body that falls in
+  keeps its speed, goes under (off the 6 m board the centre went to 0.9 m below its float line), comes up past
+  the float line once and settles; the horizontal way carries in and the stroke takes over at 3/s. The pace
+  surges on each arm's pull.
+- **PlayerPose** (engine/player_pose.h) is what the body is doing, written by PlayerSystem; **PlayerArmsSystem**
+  draws two sleeves and two hands (boxes, the player's outfit) from the shoulders to the hands: swinging with the
+  stride, pumping on a run, out in the air, a front crawl whose seen half is the reach (Glenn: the pull alone
+  "look[s] like you're going backwards"), and gripping the ledge, the wall or the ladder's rails.
+- **MovementTuning** holds every number: Debug > Movement (sliders, live, Save to settings.json `movement.*`);
+  `set movement.<key> <v>` on the socket; `move?` reports mode, ground, position, velocity, stamina and the last
+  change ("pull up onto a ledge 1.24 m above the feet").
+- **The lab:** `assets/levels/movement_lab.json`, written by `tools/movement_lab.py`: ledges 0.3-3.5 m coloured
+  by how you get up them, gaps 1-5 m, climbing walls (4/8/15 m, ledged, 70°, overhang, corners), slopes 30-70°
+  with a V and a rock gap, a stair of ledges to rooftop gaps, and a tiled pool with steps and 3/6 m boards.
+  Level `"pools"` (a WaterPool + the sea's water mesh) is how a level without terrain gets water.
+- **Not yet:** the third-person body doesn't pose for climbing or swimming; no splash or wake; no building
+  handholds (sills and ledges as climb points) -- the free climb works on facades meanwhile.

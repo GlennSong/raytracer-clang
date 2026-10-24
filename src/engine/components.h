@@ -223,6 +223,13 @@ struct GrassField {
 // What "is this point sea?" means -- a river channel carved below sea level is not sea, and neither is
 // a pond the water plane fills in a basin (openSeaCells keeps the water that reaches the edge of the
 // map or is big enough to have waves; #65's surf).
+// A POOL: still water in a box, for a level with no terrain (the movement lab's). The loader draws its surface;
+// UnderwaterSystem::surfaceAt finds it, so the swimmer floats in it and the camera sees under it.
+struct WaterPool {
+    double x0 = 0, z0 = 0, x1 = 0, z1 = 0;   // the water's extent
+    double level = 0;                        // its surface
+};
+
 struct Sea {
     double level = 0.0;
     std::vector<std::array<double, 4>> boxes;             // each cell: minX, minZ, maxX, maxZ
