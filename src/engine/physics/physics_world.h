@@ -375,6 +375,21 @@ public:
     // speed (m/s along the nose), engine rpm, gear, and per wheel: spin (rad/s) and whether it touches ground
     struct VehicleTelemetry { Real speed = 0, rpm = 0; int gear = 0; std::vector<Real> wheelSpin; std::vector<char> wheelContact; std::vector<Real> wheelSlip; };
     VehicleTelemetry vehicleTelemetry(VehicleId id) const;
+    // DRIFT (ADR-0236; Glenn: "how hard is it to make a car drift? Something like burnout"): an arcade slide the
+    // player's car can be thrown into -- a handbrake tap while steering above 40 km/h. In the slide the rear
+    // tyres keep a third of their sideways grip, the yaw assist stands aside, and a controller holds the slip
+    // angle the steering asks for (up to 32°) and the speed the slide began with while the throttle is on;
+    // straightened up, it hands back to grip. Drift time fills a boost (`boostVehicle` spends it).
+    struct DriftState {
+        bool drifting = false;
+        Real slipDeg = 0;        // the heading off the way it travels (+ is anticlockwise from above)
+        Real time = 0;           // this slide's length
+        Real boost = 0;          // 0..1 banked
+        Real boosting = 0;       // s of burst left
+    };
+    void setVehicleDriftEnabled(VehicleId id, bool on);
+    DriftState vehicleDrift(VehicleId id) const;
+    void boostVehicle(VehicleId id);
 
     // Create a vehicle at the given pose; returns INVALID_VEHICLE on failure.
     VehicleId addVehicle(const VehicleConfig& config, const Vec3& position,
@@ -412,9 +427,11 @@ public:
 private:
     struct Impl;
     std::unique_ptr<Impl> impl;
+
     // The per-step stability torque of VehicleConfig::yawAssist, for the
     // vehicle in slot `index` (called from update, before the Jolt step).
     void applyYawAssist(std::size_t index);
+    void applyDrift(std::size_t index, float dt);
     void applyAeroDrag(std::size_t index);
     void applyTractionSplit(std::size_t index);
 };

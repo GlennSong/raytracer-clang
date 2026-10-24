@@ -258,6 +258,15 @@ struct PhysicsWorld::Impl {
         float centerLimitedSlip = 1.4f; // the coupling between axles in 4WD (open in 2WD)
         bool tractionSplit = false;     // VehicleConfig::tractionSplit
         float appliedShare = -1.0f;     // the front share the differentials carry this step
+        // drift (ADR-0236)
+        float throttle = 0.0f, handBrake = 0.0f;
+        bool driftEnabled = false;
+        std::vector<char> wheelRear;    // per wheel: behind the middle?
+        float rearGrip = 1.0f, frontGrip = 1.0f;   // the tyres' sideways grip scale this step
+        bool drifting = false;
+        float driftTime = 0.0f, boost = 0.0f, boosting = 0.0f, holdSpeed = 0.0f;
+        float slip = 0.0f, lastTravelYaw = 0.0f;
+        bool haveTravel = false;
     };
     std::vector<Vehicle> vehicles;
 
@@ -1120,6 +1129,7 @@ PhysicsWorld::VehicleId PhysicsWorld::addVehicle(const VehicleConfig& cfg,
     v.dragArea = static_cast<float>(std::max(Real(0), cfg.dragArea));
     v.tractionSplit = cfg.tractionSplit;
     v.appliedShare = share;
+    for (const VehicleWheel& w : cfg.wheels) v.wheelRear.push_back(w.position.z < zMid ? 1 : 0);   // (the drift's)
     // The assist's yaw-rate cap: the grip on a 0.85 road (the city's), with
     // 10 % in hand so it only ever trims a slide, never a cornering car.
     v.gripAccel = static_cast<float>(1.1 * cfg.lateralGrip * std::sqrt(0.85) * 9.81);
@@ -1159,9 +1169,121 @@ void PhysicsWorld::setVehicleInput(VehicleId id, Real forward, Real right,
     wc->SetDriverInput(static_cast<float>(forward), static_cast<float>(right),
                        static_cast<float>(brake), static_cast<float>(handBrake));
     impl->vehicles[id].steer = static_cast<float>(std::clamp(right, Real(-1), Real(1)));
+    impl->vehicles[id].throttle = static_cast<float>(forward);
+    impl->vehicles[id].handBrake = static_cast<float>(handBrake);
     // Throttle/steer is meaningless on a sleeping body — wake it.
     if (forward != 0.0 || right != 0.0 || brake != 0.0 || handBrake != 0.0)
         impl->bodies().ActivateBody(impl->vehicles[id].body);
+}
+
+// --- drift (ADR-0236) --------------------------------------------------------
+
+void PhysicsWorld::setVehicleDriftEnabled(VehicleId id, bool on) {
+    if (!impl || id >= impl->vehicles.size()) return;
+    Impl::Vehicle& v = impl->vehicles[id];
+    if (!v.constraint) return;
+    v.driftEnabled = on;
+    if (!on) { v.drifting = false; v.rearGrip = v.frontGrip = 1.0f; }
+    // the tyres' grip, scaled per wheel each step (front / rear) -- Jolt's own rule otherwise
+    auto* wc = static_cast<JPH::WheeledVehicleController*>(v.constraint->GetController());
+    Impl* im = impl.get();
+    const std::size_t index = id;
+    wc->SetTireMaxImpulseCallback([im, index](JPH::uint wheel, float& outLong, float& outLat, float suspension,
+                                              float longFriction, float latFriction, float, float, float) {
+        const Impl::Vehicle& veh = im->vehicles[index];
+        const bool rear = wheel < veh.wheelRear.size() && veh.wheelRear[wheel];
+        outLong = longFriction * suspension;
+        outLat = latFriction * suspension * (rear ? veh.rearGrip : veh.frontGrip);
+    });
+}
+
+PhysicsWorld::DriftState PhysicsWorld::vehicleDrift(VehicleId id) const {
+    DriftState d;
+    if (!impl || id >= impl->vehicles.size()) return d;
+    const Impl::Vehicle& v = impl->vehicles[id];
+    d.drifting = v.drifting;
+    d.slipDeg = JPH::RadiansToDegrees(v.slip);
+    d.time = v.driftTime;
+    d.boost = v.boost;
+    d.boosting = v.boosting;
+    return d;
+}
+
+void PhysicsWorld::boostVehicle(VehicleId id) {
+    if (!impl || id >= impl->vehicles.size()) return;
+    Impl::Vehicle& v = impl->vehicles[id];
+    if (v.boost < 0.1f || v.boosting > 0) return;
+    v.boosting = 2.5f * v.boost;   // a full bank is 2.5 s of burst
+    v.boost = 0;
+}
+
+void PhysicsWorld::applyDrift(std::size_t index, float dt) {
+    Impl::Vehicle& v = impl->vehicles[index];
+    if (!v.driftEnabled || !v.constraint) return;
+    JPH::BodyInterface& bi = impl->bodies();
+    const JPH::Quat q = bi.GetRotation(v.body);
+    const JPH::Vec3 fwd = q * JPH::Vec3(0, 0, 1);
+    JPH::Vec3 vel = bi.GetLinearVelocity(v.body);
+    const JPH::Vec3 flatV(vel.GetX(), 0, vel.GetZ());
+    const float speed = flatV.Length();
+    const float headYaw = std::atan2(fwd.GetX(), fwd.GetZ());
+    const float travelYaw = speed > 0.5f ? std::atan2(flatV.GetX(), flatV.GetZ()) : headYaw;
+    auto wrap = [](float a) { return std::remainder(a, 2.0f * JPH::JPH_PI); };
+    v.slip = speed > 2.0f ? wrap(headYaw - travelYaw) : 0.0f;
+    const float travelRate = v.haveTravel ? wrap(travelYaw - v.lastTravelYaw) / std::max(dt, 1e-4f) : 0.0f;
+    v.lastTravelYaw = travelYaw;
+    v.haveTravel = true;
+    float m = 1500.0f;
+    {
+        JPH::BodyLockRead lock(impl->physicsSystem.GetBodyLockInterface(), v.body);
+        if (lock.Succeeded() && lock.GetBody().GetMotionProperties())
+            m = 1.0f / std::max(lock.GetBody().GetMotionProperties()->GetInverseMass(), 1e-6f);
+    }
+    // the boost: a push along the nose for as long as it lasts
+    if (v.boosting > 0) {
+        v.boosting = std::max(0.0f, v.boosting - dt);
+        bi.AddForce(v.body, fwd * (m * 7.0f));
+    }
+    // INTO A SLIDE: a handbrake tap while steering at speed
+    if (!v.drifting && v.handBrake > 0.5f && std::fabs(v.steer) > 0.3f && speed > 11.0f) {
+        v.drifting = true;
+        v.driftTime = 0;
+        v.holdSpeed = speed;
+    }
+    if (!v.drifting) { v.rearGrip = v.frontGrip = 1.0f; return; }
+    v.driftTime += dt;
+    v.boost = std::min(1.0f, v.boost + dt * 0.25f);
+    // OUT: straightened up and nearly straight again, too slow, or spun past saving
+    if ((std::fabs(v.steer) < 0.15f && std::fabs(v.slip) < JPH::DegreesToRadians(10.0f)) || speed < 6.0f ||
+        std::fabs(v.slip) > JPH::DegreesToRadians(100.0f)) {
+        v.drifting = false;
+        v.rearGrip = v.frontGrip = 1.0f;
+        return;
+    }
+    v.rearGrip = 0.35f;
+    v.frontGrip = 0.9f;
+    // hold the slip the steering asks for: the body yaws at the travel's rate plus a pull toward the target
+    const float target = -v.steer * JPH::DegreesToRadians(32.0f);
+    const float wantRate = travelRate + 3.0f * wrap(target - v.slip);
+    const JPH::Vec3 up(0, 1, 0);
+    const float yawRate = bi.GetAngularVelocity(v.body).Dot(up);
+    const JPH::Mat44 invI = bi.GetInverseInertia(v.body);
+    const float invIup = (invI * up).Dot(up);
+    if (invIup > 1e-9f) bi.AddTorque(v.body, up * (6.0f * (wantRate - yawRate) / invIup));
+    // THE CARVE: a slide is turning, not just sliding -- the travel swings toward where the nose points, harder the
+    // further round it is (an arcade drift's tight line; the tyres alone left a 55 m arc at 30 degrees)
+    if (speed > 0.5f) {
+        const JPH::Vec3 dir = flatV / speed;
+        const JPH::Vec3 side = JPH::Vec3(0, 1, 0).Cross(dir);   // the travel's left
+        const float toward = std::sin(v.slip);                   // + : the nose is round to the left
+        bi.AddForce(v.body, side * (m * 14.0f * toward));
+    }
+    // keep the slide's speed on the throttle (it bleeds slowly), let it go off it
+    v.holdSpeed *= 1.0f - 0.04f * dt;
+    if (v.throttle > 0.3f && speed < v.holdSpeed && speed > 0.5f) {
+        const float push = std::min(8.0f, 4.0f * (v.holdSpeed - speed));
+        bi.AddForce(v.body, flatV.Normalized() * (m * push));
+    }
 }
 
 void PhysicsWorld::resetVehicleUpright(VehicleId id) {
@@ -1343,7 +1465,12 @@ void PhysicsWorld::applyAeroDrag(std::size_t index) {
 
 void PhysicsWorld::update(Real deltaTime, int collisionSteps) {
     if (impl) {
-        for (std::size_t i = 0; i < impl->vehicles.size(); ++i) { applyYawAssist(i); applyAeroDrag(i); applyTractionSplit(i); }
+        for (std::size_t i = 0; i < impl->vehicles.size(); ++i) {
+            applyDrift(i, static_cast<float>(deltaTime));
+            if (!impl->vehicles[i].drifting) applyYawAssist(i);   // the slide is the drift's to hold
+            applyAeroDrag(i);
+            applyTractionSplit(i);
+        }
         impl->physicsSystem.Update(static_cast<float>(deltaTime), collisionSteps,
                                    &impl->tempAllocator, impl->jobSystem.get());
     }

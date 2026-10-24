@@ -10,6 +10,7 @@
 #include "../vehicle_audio.h"
 #include "../audio/sfx.h"
 #include "../procgen/vehicle/occupant.h"
+#include "../procgen/person.h"
 
 #include "../components.h"
 #include "../asset_manager.h"
@@ -65,6 +66,10 @@ void VehicleSystem::onStart(FrameContext& ctx) {
     // Recover a rolled car (keep heading, level it, lift it).
     ctx.actions.bindButton("vehicle_flip", KeyCode::T);
     ctx.actions.setActionContext("vehicle_flip", engine::InputContext::InVehicle);
+    // DRIFT BOOST (ADR-0236): spend what the slides banked.
+    ctx.actions.bindButton("vehicle_boost", KeyCode::LeftShift);
+    ctx.actions.bindButton("vehicle_boost", GamepadButton::Y);
+    ctx.actions.setActionContext("vehicle_boost", engine::InputContext::InVehicle);
     // Toggle the head/taillights.
     ctx.actions.bindButton("vehicle_lights", KeyCode::L);
     ctx.actions.setActionContext("vehicle_lights", engine::InputContext::InVehicle);
@@ -231,6 +236,14 @@ void VehicleSystem::createVehicles(FrameContext& ctx) {
         // the interior is packaged around so it fits the seat it sits in.
         if (!driverMesh.valid())
             driverMesh = ctx.assets.acquireMesh(buildSeatedOccupant(), "vehicle:driver");
+        if (!playerDriverMesh.valid()) {
+            const PersonOutfit& o = personOutfit(personOutfitTotal() - 1);
+            OccupantParams op;
+            op.shirt = o.shirt;
+            op.trousers = o.pants;
+            op.skin = o.skin;
+            playerDriverMesh = ctx.assets.acquireMesh(buildSeatedOccupant(op), "vehicle:player_driver");
+        }
         auto makeLens = [&](Vec3 albedo) {
             Entity le = ctx.world.create();
             Transform lt;
@@ -471,6 +484,13 @@ void VehicleSystem::writeBack(FrameContext& ctx) {
             // capsule is the proof that an agent is IN the car, not that the car
             // moves on its own (ADR-0062).
             bool occupied = v.driver.valid() || ctx.world.has<AgentDriver>(e);
+            if (v.driverModel.valid() && ctx.world.alive(v.driverModel))
+                if (Renderable* dr = ctx.world.get<Renderable>(v.driverModel)) {
+                    // the player in its own clothes; an AI driver the shared, tinted one
+                    const bool me = v.driver.valid() && playerDriverMesh.valid();
+                    dr->mesh = me ? playerDriverMesh : driverMesh;
+                    dr->material.albedo = me ? Vec3(1, 1, 1) : Vec3(0.30, 0.34, 0.48);
+                }
             if (v.driverModel.valid() && ctx.world.alive(v.driverModel)) {
                 if (Transform* dt = ctx.world.get<Transform>(v.driverModel)) {
                     if (PrevTransform* dp = ctx.world.get<PrevTransform>(v.driverModel))
@@ -602,6 +622,9 @@ void VehicleSystem::handleEnterExit(FrameContext& ctx) {
             if (ctx.world.has<AgentDriver>(best)) ctx.world.remove<AgentDriver>(best);
             ctx.world.get<Vehicle>(best)->driver = player;
             cameras.setFollowTarget(best);
+            // a bike's chase sits closer than a car's (the car's 8 m left a motorcycle a speck)
+            if (ctx.world.get<Vehicle>(best)->config.twoWheeler) cameras.setFollowFraming(4.0, 1.0);
+            else cameras.setFollowFraming(8.0, 1.2);
             ctx.world.add<InVehicle>(player, InVehicle{best});   // structural
         }
     }
@@ -711,6 +734,29 @@ void VehicleSystem::update(FrameContext& ctx) {
         spawnInFront(ctx);
     }
 
+    // THE DRIFT is the player's car's (ADR-0236): on while driven by the player, off for everyone else; Shift
+    // spends the boost a slide banked.
+    {
+        PhysicsWorld& pw = physicsSys.physicsWorld();
+        PhysicsWorld::VehicleId mine = PhysicsWorld::INVALID_VEHICLE;
+        ctx.world.each<ControlledBy, InVehicle>([&](Entity, ControlledBy&, InVehicle& iv) {
+            if (const Vehicle* v = iv.vehicle.valid() ? ctx.world.get<Vehicle>(iv.vehicle) : nullptr)
+                if (!v->config.twoWheeler) mine = v->vehicleId;
+        });
+        if (mine != driftCar_) {
+            if (driftCar_ != PhysicsWorld::INVALID_VEHICLE) pw.setVehicleDriftEnabled(driftCar_, false);
+            if (mine != PhysicsWorld::INVALID_VEHICLE) pw.setVehicleDriftEnabled(mine, true);
+            driftCar_ = mine;
+        }
+        if (mine != PhysicsWorld::INVALID_VEHICLE) {
+            if (ctx.actions.pressed("vehicle_boost")) pw.boostVehicle(mine);
+            const PhysicsWorld::DriftState d = pw.vehicleDrift(mine);
+            if (d.drifting && !wasDrifting_) LOG_INFO << "[vehicle] drift";
+            if (!d.drifting && wasDrifting_) LOG_INFO << "[vehicle] drift held " << lastDriftTime_ << " s";
+            wasDrifting_ = d.drifting;
+            if (d.drifting) lastDriftTime_ = d.time;
+        }
+    }
     // The player's car for the control channel's `vehicle?`.
     std::string telem = "none";
     ctx.world.each<ControlledBy, InVehicle>([&](Entity, ControlledBy&, InVehicle& iv) {
@@ -727,6 +773,11 @@ void VehicleSystem::update(FrameContext& ctx) {
                       tel.speed * 3.6, tel.rpm, tel.gear, v->partTime4wd ? (v->fourWheel ? "4wd" : "2wd") : "fixed",
                       t->position.x, t->position.y, t->position.z, roll, pitch, yaw);
         telem = b;
+        const PhysicsWorld::DriftState d = physicsSys.physicsWorld().vehicleDrift(v->vehicleId);
+        char dr[96];
+        std::snprintf(dr, sizeof(dr), " drift %d slip %.0f boost %.2f%s", d.drifting ? 1 : 0, d.slipDeg, d.boost,
+                      d.boosting > 0 ? " BOOSTING" : "");
+        telem += dr;
     });
     ctx.settings.setString("vehicle.telemetry", telem);
 

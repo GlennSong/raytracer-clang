@@ -49,6 +49,9 @@ private:
     bool catalogueTried_ = false;
     int pick_ = 0;
     void crashOffBikes(FrameContext& ctx);
+    uint32_t driftCar_ = 0xFFFFFFFFu;   // the car with the drift switched on (a PhysicsWorld::VehicleId)
+    bool wasDrifting_ = false;
+    Real lastDriftTime_ = 0;
     std::vector<std::pair<double, Real>> bikeSpeeds_;   // the ridden bike's recent speeds (time, m/s): a crash
                                                         // is speed lost over a moment, not one step
     std::string wantRecipe_;   // `vehicle_spawn <recipe>`: picked once the catalogue is loaded
@@ -58,6 +61,7 @@ private:
     MeshHandle wheelMesh;            // shared wheel cylinder, uploaded on first use
     MeshHandle lensMesh;             // shared head/taillight lens box
     MeshHandle driverMesh;          // shared driver capsule
+    MeshHandle playerDriverMesh;    // ...and the player at the wheel, in the player's own red jacket
     Real enterRadius = 4.0;          // how close the player must be to board (m)
     int spawnCount_ = 0;             // debug-spawn seed counter
     // Horn: one looping procedural voice (sfx::horn) held while the key is

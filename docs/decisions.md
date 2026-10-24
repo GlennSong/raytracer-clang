@@ -11726,3 +11726,23 @@ in ragdolling."
   0.8 x the speed it had, plus a lift. Measured: into a 1.2 m rock at 50 km/h, thrown ~8 m over it, up again.
 - Not yet: the rider is the car's seated occupant (not posed on the bike); the chase camera is the car's (far
   behind a bike); pedalling isn't drawn.
+
+## ADR-0236 — Drift: a handbrake flick into a held slide, Burnout-style, for the player's car
+
+Glenn (2026-10-24): "how hard is it to make a car drift? Something like burnout (the videogame)."
+
+- **Into it**: the handbrake (Ctrl) while steering past 30% above 40 km/h. **Out**: steering under 15% with the
+  slip under 10°, below 22 km/h, or spun past 100°. Only the player's car (VehicleSystem switches it on while
+  driven; traffic and the handling tests never see it); not two-wheelers.
+- **In the slide** (`PhysicsWorld::applyDrift`, before the Jolt step): Jolt's per-wheel tyre-impulse callback
+  scales the sideways grip -- rear to 35%, front 90% -- the yaw assist that exists to stop slides stands aside,
+  a yaw torque holds the slip the steering asks for (32° at full lock: the body yaws at the travel's rate plus
+  3/s toward the target), a carve pulls the travel round toward the nose (14 m/s² x sin slip: without it the
+  slide drew a 55 m arc), and on the throttle a push holds the speed the slide began with (bleeding 4%/s).
+- **Boost**: a slide banks 25% a second (full in 4 s); Shift / pad Y spends it as up to 2.5 s of 7 m/s² along
+  the nose. `vehicle?` reports `drift`, `slip`, `boost`, `BOOSTING`.
+- **Measured** (tests/test_drift: a kit sedan at 76 km/h, flick, 3 s at 80% lock on the throttle): slip 30°
+  average, 66 km/h held, 116° turned, 0.8 boost banked; straightened, it grips (slip < 12°). In the viewer: 57
+  km/h, held 3.4 s through ~190°, then the boost back to 75 km/h.
+- Not yet: tyre smoke and skid marks, a drift score / HUD meter, and tuning per car (a pickup slides like a
+  sedan).

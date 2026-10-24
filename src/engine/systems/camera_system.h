@@ -47,6 +47,11 @@ public:
     // by VehicleSystem on vehicle enter/exit.
     void setFollowTarget(Entity target) { followTarget = target; }
     void clearFollowTarget() { followTarget = Entity{}; }
+    // How far behind and how high the chase sits: a car's 8 m / 1.2 m, a bike's closer (ADR-0235).
+    void setFollowFraming(Real distance, Real aimHeight) {
+        follow.distance = distance;
+        follow.targetHeight = aimHeight;
+    }
     Entity followingEntity() const { return followTarget; }
 
     // For the camera panel (and future pose sources): request a view switch

@@ -1082,6 +1082,7 @@ if(RT_ENABLE_PHYSICS)
         tests/test_physics.cpp
         tests/test_locomotion.cpp
         tests/test_two_wheelers.cpp
+        tests/test_drift.cpp
         tests/test_driving_lab.cpp
         tests/test_vehicle_handling.cpp
         tests/test_vehicle_drivetrain.cpp
