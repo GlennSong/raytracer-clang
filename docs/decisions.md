@@ -11603,8 +11603,10 @@ wingsuit"; "I imagine you'd have to select it from your inventory".
   shoulders in third), the hands up on the toggles, spread wide in the suit with orange wings; the view widens
   up to 14° from 20 to 60 m/s.
 - **The lab** has a 72 m tower with a walkable spiral ramp (24°) and 600 m of ground to land on. The wingsuit
-  wants more height than that: `teleport x 400 z` or a peak on the island. Not measured yet: whether the island's
-  streaming keeps up with a 50 m/s suit (`tools/fly_probe.py` along a flight line).
+  wants more height than that: `teleport x 400 z` or a peak on the island.
+- **Streaming keeps up** (`tools/fly_probe.py`, island_8_nature, 2.3 km over the towns at 50 m/s, 80 m up,
+  pitched 20° down): 0 of 88 facades and 0 of 43 buildings arrived late, no bare grass; frames p50 19.8 ms,
+  p99 28.2 ms, one 41 ms hitch.
 
 ## ADR-0230 — The grapple: a hook that snaps near the aim, a rope that only pulls
 
@@ -11746,3 +11748,24 @@ Glenn (2026-10-24): "how hard is it to make a car drift? Something like burnout 
   km/h, held 3.4 s through ~190°, then the boost back to 75 km/h.
 - Not yet: tyre smoke and skid marks, a drift score / HUD meter, and tuning per car (a pickup slides like a
   sedan).
+
+## ADR-0237 — Playground equipment the player can use: swings and monkey bars (the lab first)
+
+Glenn (2026-10-23): "It would be fun if you could also interact with the swings, monkey bars, and gymnasium stuff
+in the park".
+
+- **engine/playground.h**: `PlaySwing` (the beam's pivot, chain length, the way it swings, the seat entity it
+  turns) and `MonkeyBars` (the bar line). A level lists them under `"playground"`; the frames are its own blocks.
+  The movement lab has a swing set (two seats) and 6 m of bars south of the spawn.
+- **The swing** (`swingStep`): a pendulum on its chains with a little damping; W/S pump -- pushing the way it is
+  going adds, against it brakes -- held to 75° (the chains go slack). Tested: pumped from still past 45° in
+  10 s; left alone it dies down; back-pumping brakes it at least twice as fast. Sat on it (E), the capsule rides
+  the seat; jump flies off at the seat's speed, crouch gets down. Empty swings swing on and settle.
+- **The bars**: E under them hangs from the bar line, the eye 0.45 m below it; W/S (along the camera's way,
+  projected onto the bars) hand over hand at 1.1 m/s; jump, crouch or past an end drops off with the speed you
+  had along them.
+- Drawn: the hands on the chains or the bar in first person; sat swinging (legs out forward, tucked back) or
+  hanging in third person.
+- **The city's playgrounds aren't wired yet**: their equipment is baked into the lots' meshes
+  (`sculptPlayground`), so making those swings usable means the lots recording their pivots and bar lines -- a
+  lots-tag bump and every level re-baked. Owed, on Glenn's word. Townspeople on swings would follow from that.

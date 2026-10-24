@@ -190,6 +190,7 @@ void PlayerArmsSystem::update(FrameContext& ctx) {
     const Real dt = std::clamp(static_cast<Real>(ctx.frameDelta), Real(0), Real(0.1));
     const bool held = pose->mode == PlayerPose::Mode::Mantle || pose->mode == PlayerPose::Mode::Climb ||
                       pose->mode == PlayerPose::Mode::Ladder || pose->mode == PlayerPose::Mode::Grapple ||
+                      pose->mode == PlayerPose::Mode::PlaySwing || pose->mode == PlayerPose::Mode::Bars ||
                       (pose->mode == PlayerPose::Mode::Board && pose->board == 1);
     // THE GUN, where gun.lua's viewmodel puts it: 0.35 ahead of the eye, 0.18 right, 0.18 down, barrel along
     // the view. The hands go on it: the right on the grip, the left under the barrel.
@@ -210,6 +211,8 @@ void PlayerArmsSystem::update(FrameContext& ctx) {
         switch (pose->mode) {
             case PlayerPose::Mode::Mantle:
             case PlayerPose::Mode::Climb:
+            case PlayerPose::Mode::PlaySwing:
+            case PlayerPose::Mode::Bars:
             case PlayerPose::Mode::Ladder: {
                 Vec3 grip = toLocal(k == 0 ? pose->handL : pose->handR);
                 if (pose->mode == PlayerPose::Mode::Mantle && pose->progress > 0.75) {

@@ -11,7 +11,7 @@ namespace engine {
 // by PlayerSystem on the player entity every fixed step; read-only everywhere else.
 struct PlayerPose {
     enum class Mode : uint8_t { Walk, Air, Mantle, Climb, Swim, Ladder, Parachute, Wingsuit, Grapple, Ragdoll, Board,
-                                Hidden };
+                                PlaySwing, Bars, Hidden };
     Mode mode = Mode::Walk;
     Real speed = 0;           // horizontal m/s
     Real stride = 0;          // walk cycles so far (the fraction is the phase)

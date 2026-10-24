@@ -171,7 +171,7 @@ private:
     // PAST WALKING (engine/locomotion.h): the jump gate, the pull-up onto a ledge, climbing a wall.
     MovementTuning tune_;
     JumpGate gate_;
-    enum class Move : uint8_t { Walk, Mantle, Climb, Parachute, Wingsuit, Grapple, Ragdoll, Board };
+    enum class Move : uint8_t { Walk, Mantle, Climb, Parachute, Wingsuit, Grapple, Ragdoll, Board, Swing, Bars };
     Move move_ = Move::Walk;
     MantleMove mantle_;
     Vec3 climbNormal_{0, 0, 1};   // the wall held, facing the body
@@ -210,6 +210,14 @@ private:
     Vec3 boardHeading_{0, 0, -1};
     Real boardSpeed_ = 0, kickClock_ = 0;
     void stepBoard(FrameContext& ctx, Transform& t, CharacterController& cc, Real dt);
+    // the playground (engine/playground.h): a swing, monkey bars
+    Entity playTarget_;           // what E chose (the broker's command), taken up at the next step
+    uint64_t playKind_ = 0;       // 1 a swing, 2 the bars
+    Entity swingEnt_, barsEnt_;
+    Real barsAt_ = 0, barsCycle_ = 0;   // along the bars (m from a), hand-over-hand cycles
+    Vec3 barsFacing_{0, 0, 1};
+    void stepSwing(FrameContext& ctx, Transform& t, CharacterController& cc, Real dt);
+    void stepBars(FrameContext& ctx, Transform& t, CharacterController& cc, Real dt);
     void stepGrapple(FrameContext& ctx, Transform& t, CharacterController& cc, Real dt);
     std::string lastEvent_ = "none";
     void event(const std::string& what);

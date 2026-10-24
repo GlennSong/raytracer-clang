@@ -19,6 +19,7 @@ edit of the JSON.
   NE      a stair of ledges up to a 6 m roof, and rooftop gaps
   SE      the jump tower: a spiral ramp (walkable, 24 deg) up to a 72 m top -- 5 the parachute, 6 the wingsuit,
           then jump off and jump again in the air
+  S       the playground: a swing set (E on a seat; W/S pump) and monkey bars (E under them; W/S along)
   FAR W   the skate run: a 4 m deck with a 40 m ramp down off it (6 deg) onto the flat, and two kickers --
           8 the skateboard, 9 the scooter
   FAR S   the swing park: gantries (two 18 m pillars, a beam across) every 14 m heading south -- 7 the grapple,
@@ -185,6 +186,26 @@ for z in (-3.5, 3.5):                                                      # kic
     box((-52.0, 0.0, z), (2.0, 0.5, 2.0), YELLOW)
     ENTITIES[-1]["shape"] = "wedge"
 
+# --- south: the playground (engine/playground.h: the seats and the bars are the level's "playground" list) ------
+PLAY = []
+SX, SZ = -4.0, 26.0           # the swing set: a beam along x at 2.5 m, two seats, swinging along z
+for ex in (SX - 2.6, SX + 2.6):
+    for dz in (-1.0, 1.0):
+        box((ex, 1.25, SZ + dz * 0.55), (0.1, 2.7, 0.1), RED, rot=(dz * 22.0, (1, 0, 0)))
+block(SX - 2.7, SX + 2.7, SZ - 0.06, SZ + 0.06, 2.45, 2.57, RED)
+for sx in (SX - 1.1, SX + 1.1):
+    PLAY.append({"kind": "swing", "pivot": [sx, 2.45, SZ], "length": 1.95, "forward": [0, 0, 1]})
+BX0, BX1, BZ, BH = 4.0, 10.0, 26.0, 2.2   # the monkey bars: rungs across z every 0.4 m along x, 2.2 m up
+for x in (BX0 - 0.1, BX1 + 0.1):
+    for dz in (-0.35, 0.35):
+        block(x - 0.05, x + 0.05, BZ + dz - 0.05, BZ + dz + 0.05, 0.0, BH + 0.05, YELLOW)
+for k in range(int((BX1 - BX0) / 0.4) + 1):
+    x = BX0 + k * 0.4
+    block(x - 0.025, x + 0.025, BZ - 0.35, BZ + 0.35, BH - 0.025, BH + 0.025, WHITE)
+for dz in (-0.35, 0.35):
+    block(BX0 - 0.1, BX1 + 0.1, BZ + dz - 0.03, BZ + dz + 0.03, BH - 0.03, BH + 0.03, YELLOW)
+PLAY.append({"kind": "bars", "a": [BX0, BH, BZ], "b": [BX1, BH, BZ]})
+
 level = {
     "version": 1,
     "entities": ENTITIES,
@@ -196,6 +217,7 @@ level = {
     },
     "player": {"collider": {"halfHeight": 0.4, "radius": 0.3, "shape": "capsule"}, "friction": 0.5,
                "position": [0.0, 1.0, 0.0]},
+    "playground": PLAY,
     "pools": [{"min": [px0 + L, pz0 + L], "max": [px1 - L, pz1 - L], "level": -0.25, "depth": POOL_DEPTH - 0.25}],
 }
 

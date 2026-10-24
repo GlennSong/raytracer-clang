@@ -91,6 +91,10 @@ const std::vector<MovementTuning::Field>& MovementTuning::fields() {
         {"boardTurnMax", &T::boardTurnMax, 20, 400, "Board"},
         {"boardOllie", &T::boardOllie, 0, 8, "Board"},
         {"boardCrash", &T::boardCrash, 2, 20, "Board"},
+        {"swingPump", &T::swingPump, 0, 6, "Playground"},
+        {"swingDamping", &T::swingDamping, 0, 1, "Playground"},
+        {"swingMaxDeg", &T::swingMaxDeg, 20, 89, "Playground"},
+        {"barsSpeed", &T::barsSpeed, 0.2, 4, "Playground"},
         {"limpFallSpeed", &T::limpFallSpeed, 5, 60, "Ragdoll"},
         {"limpImpact", &T::limpImpact, 3, 60, "Ragdoll"},
         {"getUpAfter", &T::getUpAfter, 0.2, 10, "Ragdoll"},
@@ -390,6 +394,21 @@ Real boardStep(Real speed, Vec3& heading, Real& kickClock, Real inF, Real inR, c
     if (inF < -0.3) speed -= t.boardBrake * dt;
     speed -= t.boardRoll * dt;
     return std::max(Real(0), speed);
+}
+
+void swingStep(Real& theta, Real& omega, Real length, Real pump, Real dt, const MovementTuning& t) {
+    constexpr Real kDeg = 3.14159265358979 / 180.0;
+    Real a = -9.81 / std::max(length, Real(0.3)) * std::sin(theta) - t.swingDamping * omega;
+    // pumping: pushing the way it swings adds, against it brakes (a kid leaning back and kicking out)
+    const Real dir = std::fabs(omega) > 0.05 ? (omega > 0 ? 1.0 : -1.0) : 1.0;
+    a += t.swingPump * std::clamp(pump, Real(-1), Real(1)) * dir;
+    omega += a * dt;
+    theta += omega * dt;
+    const Real lim = t.swingMaxDeg * kDeg;
+    if (std::fabs(theta) > lim) {   // the chains go slack: it stops there and comes back
+        theta = theta > 0 ? lim : -lim;
+        if (omega * theta > 0) omega = 0;
+    }
 }
 
 Real strokeSurgePhase(Real strokes) {

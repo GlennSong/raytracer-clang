@@ -97,6 +97,11 @@ struct MovementTuning {
     Real boardTurnMax = 150.0;     // deg/s: how fast it turns when slow
     Real boardOllie = 3.8;         // m/s up off the board, jump
     Real boardCrash = 6.5;         // m/s into something that stops it: off and limp
+    // the playground: a swing pumped like a pendulum, monkey bars hand over hand
+    Real swingPump = 1.6;          // rad/s^2 a pump adds, W/S in time with the swing
+    Real swingDamping = 0.08;      // 1/s: how soon an unpumped swing dies down
+    Real swingMaxDeg = 75.0;       // the highest it goes (the chains go slack past this)
+    Real barsSpeed = 1.1;          // m/s hand over hand
     // going limp (the ragdoll)
     Real limpFallSpeed = 15.0;     // m/s down at touchdown that drops you in a heap (an ~11 m fall)
     Real limpImpact = 14.0;        // m/s lost in one step on the rope or in the suit: a slam
@@ -200,6 +205,11 @@ Vec3 ropeStep(Vec3& pos, const Vec3& vel, const Vec3& anchor, Real length, const
 // Returns the new speed (>= 0) along the new heading.
 Real boardStep(Real speed, Vec3& heading, Real& kickClock, Real inF, Real inR, const Vec3& groundNormal,
                Real pushMax, Real dt, const MovementTuning& t);
+
+// A SWING: one step of the seat's angle off the vertical (theta, rad; + toward `forward`) and its rate. Gravity
+// on a pendulum of `length`, a little damping, and the pump -- W/S pushing the way it is already going adds
+// energy, against it takes energy away -- held to swingMaxDeg.
+void swingStep(Real& theta, Real& omega, Real length, Real pump, Real dt, const MovementTuning& t);
 
 // The swimmer's speed at a point in the stroke (phase 0..1): a pull that surges, a glide that eases off; the
 // average over a stroke is 1.

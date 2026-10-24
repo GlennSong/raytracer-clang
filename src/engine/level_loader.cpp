@@ -4,6 +4,7 @@
 #include "scripting/tree_recipes_lua.h"
 #endif
 #include "interaction.h"
+#include "playground.h"
 #include "furniture_draw.h"
 
 #include "../profile.h"
@@ -6112,6 +6113,52 @@ bool LevelLoader::load(const std::string& path,
 
     // POOLS (the movement lab's): still water in a box, in a level with no terrain -- the surface drawn as the
     // sea's is (depth and edge baked into the mesh for the Water shader), and a WaterPool for the swimmer.
+    // THE PLAYGROUND (engine/playground.h): the swings and monkey bars the player can use. The frames are the
+    // level's own blocks; a swing's chains and seat are drawn here, hanging from its pivot, turned as it swings.
+    if (root.contains("playground") && root["playground"].is_array()) {
+        auto v3 = [](const json& a, Vec3 d) {
+            return a.is_array() && a.size() == 3 ? Vec3(a[0].get<double>(), a[1].get<double>(), a[2].get<double>()) : d;
+        };
+        for (const json& pj : root["playground"]) {
+            const std::string kind = pj.value("kind", std::string());
+            if (kind == "swing") {
+                PlaySwing sw;
+                sw.pivot = v3(pj.value("pivot", json()), Vec3(0, 2.5, 0));
+                sw.length = pj.value("length", 2.0);
+                Vec3 fwd = v3(pj.value("forward", json()), Vec3(0, 0, 1));
+                fwd.y = 0;
+                sw.forward = fwd.lengthSquared() > 1e-8 ? normalize(fwd) : Vec3(0, 0, 1);
+                // the chains and the seat, along -y from the origin (the pivot), across the swing's side axis
+                RenderMesh seat;
+                const Vec3 side = normalize(cross(Vec3(0, 1, 0), sw.forward));
+                for (Real s : {-0.22, 0.22})
+                    MeshBuilder::emitBox(seat, MeshFrame::centred(side * s + Vec3(0, -sw.length * 0.5, 0),
+                                                                  Vec3(0.025, sw.length, 0.025), side, Vec3(0, 1, 0),
+                                                                  sw.forward),
+                                         Vec3(0.6, 0.62, 0.65));
+                MeshBuilder::emitBox(seat, MeshFrame::centred(Vec3(0, -sw.length, 0), Vec3(0.5, 0.05, 0.22), side,
+                                                              Vec3(0, 1, 0), sw.forward),
+                                     Vec3(0.08, 0.08, 0.09));
+                const Entity se = world.create();
+                Transform st;
+                st.position = sw.pivot;
+                world.add<Transform>(se, st);
+                world.add<PrevTransform>(se, PrevTransform{st});
+                Renderable r;
+                r.mesh = assets.acquireMesh(seat, "playground:swing_seat:" + std::to_string(sw.length));
+                r.material.albedo = Vec3(1, 1, 1);
+                r.material.roughness = 0.6f;
+                world.add<Renderable>(se, r);
+                sw.seat = se;
+                world.add<PlaySwing>(world.create(), sw);
+            } else if (kind == "bars") {
+                MonkeyBars mb;
+                mb.a = v3(pj.value("a", json()), Vec3(0, 2.2, 0));
+                mb.b = v3(pj.value("b", json()), Vec3(4, 2.2, 0));
+                world.add<MonkeyBars>(world.create(), mb);
+            }
+        }
+    }
     if (root.contains("pools") && root["pools"].is_array()) {
         for (const json& pj : root["pools"]) {
             if (!pj.contains("min") || !pj.contains("max")) continue;

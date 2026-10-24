@@ -7,6 +7,7 @@
 #include "../player_pose.h"
 #include "../interact_broker.h"   // projectToScreen
 #include "../block_body.h"
+#include "../playground.h"
 #include "../procgen/person.h"
 #include "../camera/scene_camera.h"
 #include "../../log.h"
@@ -231,6 +232,41 @@ void PlayerSystem::fixedUpdate(FrameContext& ctx) {
             }
             if (move_ == Move::Parachute || move_ == Move::Wingsuit) {
                 stepGlide(ctx, t, cc, dt);
+                publishPose(ctx, e, t, cc);
+                lastBodyPos_ = t.position;
+                haveLastBodyPos_ = true;
+                return;
+            }
+            // ONTO THE PLAYGROUND: the swing or the bars E chose
+            if (playTarget_.valid() && move_ == Move::Walk) {
+                if (playKind_ == 1 && ctx.world.has<PlaySwing>(playTarget_)) {
+                    swingEnt_ = playTarget_;
+                    PlaySwing& s = *ctx.world.get<PlaySwing>(swingEnt_);
+                    s.ridden = true;
+                    move_ = Move::Swing;
+                    event("on the swing");
+                } else if (playKind_ == 2 && ctx.world.has<MonkeyBars>(playTarget_)) {
+                    barsEnt_ = playTarget_;
+                    const MonkeyBars& b = *ctx.world.get<MonkeyBars>(barsEnt_);
+                    const Vec3 ab = b.b - b.a;
+                    const Real len = std::max(ab.length(), Real(1e-3));
+                    barsAt_ = std::clamp(dot(t.position - b.a, ab) / len, Real(0), len);
+                    barsFacing_ = normalize(Vec3(ab.x, 0, ab.z));
+                    if (dot(barsFacing_, camera.forward()) < 0) barsFacing_ = barsFacing_ * -1.0;
+                    move_ = Move::Bars;
+                    event("on the monkey bars");
+                }
+                playTarget_ = Entity{};
+            }
+            if (move_ == Move::Swing) {
+                stepSwing(ctx, t, cc, dt);
+                publishPose(ctx, e, t, cc);
+                lastBodyPos_ = t.position;
+                haveLastBodyPos_ = true;
+                return;
+            }
+            if (move_ == Move::Bars) {
+                stepBars(ctx, t, cc, dt);
                 publishPose(ctx, e, t, cc);
                 lastBodyPos_ = t.position;
                 haveLastBodyPos_ = true;
@@ -694,6 +730,85 @@ void PlayerSystem::stepRagdoll(FrameContext& ctx, Transform& t, CharacterControl
     event(inWater ? "came up in the water" : "got up");
 }
 
+// --- the playground ------------------------------------------------------------
+
+void PlayerSystem::stepSwing(FrameContext& ctx, Transform& t, CharacterController& cc, Real dt) {
+    PhysicsWorld& pw = physicsSys.physicsWorld();
+    PlaySwing* s = ctx.world.alive(swingEnt_) ? ctx.world.get<PlaySwing>(swingEnt_) : nullptr;
+    if (!s) { move_ = Move::Walk; return; }
+    const Real inF = camera.positionLocked ? ctx.actions.axis("cam_forward") : Real(0);
+    swingStep(s->theta, s->omega, s->length, inF, dt, tune_);
+    const Vec3 up(0, 1, 0);
+    const Vec3 hang = s->forward * std::sin(s->theta) - up * std::cos(s->theta);
+    const Vec3 seat = s->pivot + hang * s->length;
+    // sat on it: the hip on the seat, the capsule over it
+    const Vec3 centre = seat + up * (cc.halfHeight + cc.radius - 0.45);
+    pw.setCharacterPosition(cc.characterId, centre);
+    t.position = centre;
+    fall.onGrounded(t.position.y);
+    gate_.observe(GroundState::OnGround, 0, dt);
+    // off: a jump flies off with the seat's speed; crouch gets down
+    if (gate_.buffered > 0) {
+        gate_.buffered = -1;
+        const Vec3 along = s->forward * std::cos(s->theta) + up * std::sin(s->theta);   // the seat's way of travel
+        const Vec3 v = along * (s->omega * s->length);
+        s->ridden = false;
+        move_ = Move::Walk;
+        airVel_ = Vec3(v.x, 0, v.z);
+        pw.setCharacterPosition(cc.characterId, centre + up * 0.3);
+        pw.launchCharacter(cc.characterId, std::max(Real(2.0), v.y + 2.0));
+        gate_.sinceLaunch = 0;
+        char buf[64];
+        std::snprintf(buf, sizeof(buf), "jumped off the swing at %.1f m/s", v.length());
+        event(buf);
+        return;
+    }
+    if (camera.positionLocked && ctx.actions.held("player_crouch")) {
+        s->ridden = false;
+        move_ = Move::Walk;
+        PhysicsWorld::RayHit g;
+        Vec3 stand = s->pivot - up * s->length + s->forward * 0.6;
+        if (pw.castRayHit(stand + up * 1.0, Vec3(0, -3, 0), g)) stand.y = g.point.y;
+        pw.setCharacterPosition(cc.characterId, stand + up * (cc.halfHeight + cc.radius + 0.05));
+        event("off the swing");
+    }
+}
+
+void PlayerSystem::stepBars(FrameContext& ctx, Transform& t, CharacterController& cc, Real dt) {
+    PhysicsWorld& pw = physicsSys.physicsWorld();
+    const MonkeyBars* b = ctx.world.alive(barsEnt_) ? ctx.world.get<MonkeyBars>(barsEnt_) : nullptr;
+    if (!b) { move_ = Move::Walk; return; }
+    const Vec3 ab = b->b - b->a;
+    const Real len = std::max(ab.length(), Real(1e-3));
+    const Vec3 dir = ab * (1.0 / len);
+    // hand over hand the way the keys point along the bars
+    Vec3 camF = camera.forward(), camR = camera.right();
+    camF.y = 0;
+    camR.y = 0;
+    const Real inF = camera.positionLocked ? ctx.actions.axis("cam_forward") : Real(0);
+    const Real inR = camera.positionLocked ? ctx.actions.axis("cam_right") : Real(0);
+    const Real along = dot(normalize(camF) * inF + normalize(camR) * inR, dir);
+    const Real was = barsAt_;
+    barsAt_ += std::clamp(along, Real(-1), Real(1)) * tune_.barsSpeed * dt;
+    if (std::fabs(along) > 0.2) barsFacing_ = dir * (along > 0 ? 1.0 : -1.0);
+    barsCycle_ += std::fabs(barsAt_ - was) / 0.4;
+    const bool offEnd = barsAt_ < -0.05 || barsAt_ > len + 0.05;
+    barsAt_ = std::clamp(barsAt_, Real(0), len);
+    const Vec3 grip = b->a + dir * barsAt_;
+    const Vec3 centre = grip - Vec3(0, 0.45 + eyeHeight, 0);
+    pw.setCharacterPosition(cc.characterId, centre);
+    t.position = centre;
+    fall.onGrounded(t.position.y);
+    gate_.observe(GroundState::OnGround, 0, dt);
+    const bool drop = gate_.buffered > 0 || (camera.positionLocked && ctx.actions.held("player_crouch")) || offEnd;
+    if (drop) {
+        gate_.buffered = -1;
+        move_ = Move::Walk;
+        airVel_ = barsFacing_ * (std::fabs(along) * tune_.barsSpeed);
+        event(offEnd ? "off the end of the bars" : "dropped off the bars");
+    }
+}
+
 // --- boards ------------------------------------------------------------------
 
 void PlayerSystem::stepBoard(FrameContext& ctx, Transform& t, CharacterController& cc, Real dt) {
@@ -954,6 +1069,32 @@ void PlayerSystem::publishPose(FrameContext& ctx, Entity e, const Transform& t, 
     p->velocity = v;
     p->airspeed = v.length();
     p->anchor = anchor_;
+    if (move_ == Move::Swing) {
+        if (const PlaySwing* s = ctx.world.alive(swingEnt_) ? ctx.world.get<PlaySwing>(swingEnt_) : nullptr) {
+            const Vec3 up(0, 1, 0), side = normalize(cross(up, s->forward));
+            const Vec3 hang = s->forward * std::sin(s->theta) - up * std::cos(s->theta);
+            p->mode = PlayerPose::Mode::PlaySwing;
+            p->handL = s->pivot + hang * (s->length * 0.62) + side * 0.22;
+            p->handR = s->pivot + hang * (s->length * 0.62) - side * 0.22;
+            p->wallNormal = s->forward;
+            p->progress = s->theta;   // (the swing's angle, for the legs)
+            return;
+        }
+    }
+    if (move_ == Move::Bars) {
+        if (const MonkeyBars* b = ctx.world.alive(barsEnt_) ? ctx.world.get<MonkeyBars>(barsEnt_) : nullptr) {
+            const Vec3 ab = b->b - b->a;
+            const Vec3 dir = ab * (1.0 / std::max(ab.length(), Real(1e-3)));
+            const Vec3 side = normalize(cross(Vec3(0, 1, 0), barsFacing_));
+            const Vec3 grip = b->a + dir * barsAt_;
+            const Real reach = 0.22 * std::sin(barsCycle_ * 3.14159265358979);
+            p->mode = PlayerPose::Mode::Bars;
+            p->handL = grip + barsFacing_ * reach + side * 0.16;
+            p->handR = grip - barsFacing_ * reach - side * 0.16;
+            p->wallNormal = barsFacing_;
+            return;
+        }
+    }
     if (move_ == Move::Board) {
         p->mode = PlayerPose::Mode::Board;
         p->board = gear_ == 9 ? 1 : 0;
@@ -1034,6 +1175,13 @@ void PlayerSystem::drawGearHud(FrameContext& ctx) {
             x += widths[k] + 14.0f;
         }
     }
+    if (move_ == Move::Swing || move_ == Move::Bars) {
+        label(W * 0.5f, H - (hotbarShow_ > 0 ? 100.0f : 56.0f),
+              move_ == Move::Swing ? "W / S  pump in time with the swing     Space  jump off     Ctrl  get off"
+                                   : "W / S  hand over hand     Space or Ctrl  drop",
+              IM_COL32(255, 255, 255, 235), IM_COL32(0, 0, 0, 150));
+        return;
+    }
     // THE GRAPPLE: a ring where a shot would hook, and what the trigger does
     if (gear_ == 7) {
         const CameraState& cam = ctx.view.camera;
@@ -1109,6 +1257,7 @@ void PlayerSystem::render(FrameContext& ctx) {
                          : move_ == Move::Parachute ? "parachute" : move_ == Move::Wingsuit ? "wingsuit"
                          : move_ == Move::Grapple   ? "grapple"   : move_ == Move::Ragdoll  ? "ragdoll"
                          : move_ == Move::Board     ? (gear_ == 9 ? "scooter" : "skateboard")
+                         : move_ == Move::Swing     ? "swing"     : move_ == Move::Bars     ? "monkey bars"
                          : swim_.swimming           ? "swim"      : "walk";
         Vec3 p, v;
         const char* ground = "none";
@@ -1270,6 +1419,58 @@ void PlayerSystem::update(FrameContext& ctx) {
     // catch-up frame that runs two steps).
     // ...but NOT while seated: Space is the brake in a car, and staging a
     // jump on every brake press would fire it the moment the player got out.
+    // THE PLAYGROUND: the swing seat or the bars in reach are offered (E); the broker's command is taken up at the
+    // next step. Empty swings swing on and settle meanwhile.
+    ctx.world.each<PlaySwing>([&](Entity, PlaySwing& s) {
+        if (!s.ridden) swingStep(s.theta, s.omega, s.length, 0, std::clamp(ctx.frameDelta, 0.0, 0.1), tune_);
+        if (Transform* st = ctx.world.get<Transform>(s.seat)) {
+            if (PrevTransform* sp = ctx.world.get<PrevTransform>(s.seat)) sp->value = *st;
+            st->orientation = Quat::fromAxisAngle(normalize(cross(Vec3(0, 1, 0), s.forward)), -s.theta);
+            if (PrevTransform* sp = ctx.world.get<PrevTransform>(s.seat)) sp->value = *st;
+        }
+    });
+    if (ctx.world.alive(playerEntity) && move_ == Move::Walk && camera.positionLocked &&
+        !ctx.world.has<InVehicle>(playerEntity) && !ctx.world.has<Seated>(playerEntity))
+        if (const Transform* pt = ctx.world.get<Transform>(playerEntity)) {
+            const Vec3 p = pt->position;
+            Entity best;
+            uint64_t kind = 0;
+            Vec3 at;
+            Real bestD = 1e9;
+            ctx.world.each<PlaySwing>([&](Entity e, PlaySwing& s) {
+                const Vec3 seat = s.pivot - Vec3(0, s.length, 0);
+                const Real d = std::hypot(seat.x - p.x, seat.z - p.z);
+                if (d < 1.6 && d < bestD) { bestD = d; best = e; kind = 1; at = seat; }
+            });
+            ctx.world.each<MonkeyBars>([&](Entity e, MonkeyBars& b) {
+                const Vec3 ab = b.b - b.a;
+                const Real len2 = std::max(ab.lengthSquared(), Real(1e-6));
+                const Real u = std::clamp(dot(p - b.a, ab) / len2, Real(0), Real(1));
+                const Vec3 q = b.a + ab * u;
+                const Real d = std::hypot(q.x - p.x, q.z - p.z);
+                // (the marker at reaching height: the bar itself is on the broker's "another floor" line)
+                if (d < 1.2 && q.y > p.y && d < bestD) { bestD = d; best = e; kind = 2; at = q - Vec3(0, 0.8, 0); }
+            });
+            if (best.valid()) {
+                InteractOffer o;
+                o.provider = "playground";
+                o.entity = best;
+                o.key = kind;
+                o.anchor = at;
+                o.name = kind == 1 ? "swing" : "monkey bars";
+                o.tap = kind == 1 ? "sit on it" : "grab the bars";
+                o.reach = 1.8;
+                o.needsSight = false;
+                offerInteraction(ctx.world, playerEntity, o);
+            }
+        }
+    {
+        InteractCommand pc;
+        if (ctx.world.alive(playerEntity) && takeInteractCommand(ctx.world, playerEntity, "playground", pc)) {
+            playTarget_ = pc.entity;
+            playKind_ = pc.key;
+        }
+    }
     // GO LIMP on purpose: G, or `ragdoll` on the socket (player.limp)
     if (camera.positionLocked && ctx.actions.pressed("player_limp")) limpRequested_ = true;
     if (ctx.settings.getDouble("player.limp", 0.0) > 0.5) {

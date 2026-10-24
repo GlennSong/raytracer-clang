@@ -181,6 +181,10 @@ void PlayerBodySystem::fixedUpdate(FrameContext& ctx) {
             case PlayerPose::Mode::Board:
                 face = flat(p->boardHeading);
                 break;
+            case PlayerPose::Mode::PlaySwing:
+            case PlayerPose::Mode::Bars:
+                if (flat(p->wallNormal).lengthSquared() > 0.5) face = flat(p->wallNormal);
+                break;
             default:
                 if (hspeed > 0.5) face = moving;
                 break;
@@ -241,6 +245,27 @@ void PlayerBodySystem::fixedUpdate(FrameContext& ctx) {
                 pose.armR = normalize(Vec3(-1, 0.2, 0));
                 pose.legL = normalize(Vec3(0.35, -1, 0));
                 pose.legR = normalize(Vec3(-0.35, -1, 0));
+                break;
+            }
+            case PlayerPose::Mode::PlaySwing: {
+                // sat on the seat, hands up on the chains, the legs out on the swing forward and tucked on the back
+                const Real th = p->progress;
+                pose.orientation = yawTo(face) * Quat::fromAxisAngle(Vec3(1, 0, 0), -0.6 * th - 0.1);
+                pose.armL = reachToward(pose, BlockBody::ArmL, p->handL);
+                pose.armR = reachToward(pose, BlockBody::ArmR, p->handR);
+                const Vec3 legs = normalize(Vec3(0, -0.45 + 0.4 * std::max(Real(0), th), 1.0 - 0.6 * std::max(Real(0), -th)));
+                pose.legL = normalize(legs + Vec3(0.05, 0, 0));
+                pose.legR = normalize(legs - Vec3(0.05, 0, 0));
+                break;
+            }
+            case PlayerPose::Mode::Bars: {
+                // hanging off the bar, the legs swinging a little with each reach
+                pose.orientation = yawTo(face);
+                pose.armL = reachToward(pose, BlockBody::ArmL, p->handL);
+                pose.armR = reachToward(pose, BlockBody::ArmR, p->handR);
+                const Real sw = 0.25 * std::sin(clock_ * 3.0);
+                pose.legL = normalize(Vec3(0.04, -1, sw));
+                pose.legR = normalize(Vec3(-0.04, -1, sw));
                 break;
             }
             case PlayerPose::Mode::Board: {

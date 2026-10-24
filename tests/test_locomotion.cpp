@@ -477,3 +477,32 @@ TEST_CASE(a_board_kicks_up_to_speed_carves_rolls_downhill_and_stops) {
     while (brake > 0 && brakeT < 6000) { brake = boardStep(brake, hb, kb, -1, 0, flatGround, 99, kDt, t); ++brakeT; }
     CHECK(brakeT < coastT / 4);
 }
+
+TEST_CASE(a_swing_pumped_in_time_goes_higher_and_dies_down_left_alone) {
+    MovementTuning t;
+    constexpr Real kDeg = 3.14159265358979 / 180.0;
+    // pumped from nearly still, W held: in 10 s it swings high
+    Real th = 0.05, om = 0, top = 0;
+    for (int i = 0; i < 10 * 60; i++) {
+        swingStep(th, om, 2.0, 1.0, kDt, t);
+        top = std::max(top, std::fabs(th));
+    }
+    CHECK(top > 45 * kDeg);
+    CHECK(top <= t.swingMaxDeg * kDeg + 1e-9);
+    // left alone it dies down
+    Real late = 0;
+    for (int i = 0; i < 40 * 60; i++) {
+        swingStep(th, om, 2.0, 0.0, kDt, t);
+        if (i > 35 * 60) late = std::max(late, std::fabs(th));
+    }
+    CHECK(late < top * 0.3);
+    // pumping against it (S held) brakes it sooner than coasting
+    Real a1 = 0.6, w1 = 0, a2 = 0.6, w2 = 0;
+    Real m1 = 0, m2 = 0;
+    for (int i = 0; i < 6 * 60; i++) {
+        swingStep(a1, w1, 2.0, 0.0, kDt, t);
+        swingStep(a2, w2, 2.0, -1.0, kDt, t);
+        if (i > 4 * 60) { m1 = std::max(m1, std::fabs(a1)); m2 = std::max(m2, std::fabs(a2)); }
+    }
+    CHECK(m2 < m1 * 0.5);
+}
