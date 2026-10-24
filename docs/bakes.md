@@ -25,9 +25,9 @@ A bundle is built by **producers**, in order, each writing named sections:
 
 1. `city` (lanes levels): the road network — decks, junctions, the nav graph. Tag `kLanesBuildTag` in
    `procgen/city/roads/lanes/city_producer.cpp`.
-2. `lots` (lanes levels) / `citylots` (lattice levels): lots, buildings, parks, the campus, every part
-   mesh, split per 160 m render cell (`citylots/cell/<cx>_<cz>/parts/<n>`). Tags `kLotsBuildTag`
-   (`lots_producer.cpp`) and `kCityLotsBuildTag` (`citylots_producer.cpp`).
+2. `lots`: lots, buildings, parks, the campus, every part mesh, split per 160 m render cell
+   (`lots/cell/<cx>_<cz>/parts/<n>`). Tag `kLotsBuildTag` (`lots_producer.cpp`). (The lattice's `citylots`
+   and its tag retired with the lattice.)
 
 A producer's **key** is a hash of: its tag, the lot format version (`lotcache::kLotsFormatVersion`), the
 Real width, scripting on/off, the level JSON blocks it reads (`terrain`, `water`, `citysim`, road
@@ -95,10 +95,13 @@ stage reads against its key.
 
 ## When to bump what
 
-- **`kLotsBuildTag` and `kCityLotsBuildTag`** (both, same value): any change to what the lot / city pass
-  OUTPUTS — sculpting (parks, quad, sports field), recipes and massing, lot selection (campus, big box),
-  grading, anything stored in a `LotBuilding` or a part mesh. Note the change in the tag's comment.
-- **`kLanesBuildTag`**: any change to the roads the lanes builder produces.
+- **`kLotsBuildTag`**: any change to what the lot pass OUTPUTS — sculpting (parks, quad, sports field),
+  recipes and massing, lot selection (campus, big box), grading, anything stored in a `LotBuilding` or a
+  part mesh.
+- **`kLanesBuildTag`**: any change to the roads the lanes builder produces. **`kRailBuildTag`**: any change
+  to the track and stations (keyed only by graphs with a track class).
+- **A bump replaces the tag's comment** with the reason for this bump; it doesn't add to a list. The
+  history is the commits: `git log -G kLotsBuildTag`.
 - **`kLotsFormatVersion`** (and `kLotsVersion` in lot_cache.cpp) **plus a field in
   `tests/test_lot_cache.cpp`**: any change to the lot RECORD's fields.
 - **No bump**: building interiors and their furniture (grown at runtime from `BuildingParams`), the
