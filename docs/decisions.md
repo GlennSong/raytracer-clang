@@ -11519,6 +11519,9 @@ only the complex's cells (cells.cpp `Complex::resolve`) used it.
 - **The neighbour's height on the line.** The neighbour is an attached building on the same block, with a party
   wall on the same line facing the other way, overlapping it by at least 1 m. Its height is the top of its highest
   storey whose plan still stands on that line, so a tower set back on a podium counts as the podium.
+- **A detached neighbour counts too.** Where no attached building stands on the line, any building on the block
+  within 6 m of it (its plan pulled off the line by a setback or its own massing) counts at its full height. The
+  first cut missed these: tower #4840 on the island kept a blank side to the roof beside a 19 m pagoda tower.
 - **The wall's top.** It is the last of the building's own storeys (not the roof exit's bulkhead) whose floor is
   under the neighbour's top plus a 1 m sill, and at least storey 1, as a complex's are. A wall the neighbour reaches
   to the top storey is unchanged.
@@ -11529,7 +11532,8 @@ only the complex's cells (cells.cpp `Complex::resolve`) used it.
   them, so the streamed interior paints the same storeys. Its first growth is cut out of the parts meshes (each
   run is a whole append, so indices past it shift down by the vertices cut). Heights don't depend on the tops, so
   one pass settles it.
-- **Measured (island_8_nature):** 940 of 3,446 attached buildings take windows above a lower neighbour; the
-  lots stage 145 → 159 s; bundle 1.65 GB. Lots tag 2026-10-23.2.
+- **Measured (island_8_nature):** 1,005 of 3,446 attached buildings take windows above a lower neighbour (940
+  before detached neighbours counted); the lots stage 145 → 160 s; bundle 1.65 GB. Lots tag 2026-10-23.3.
+- **`lot? x z`** prints each building's party walls (line and top), for checking one in the running game.
 - **Test:** `a_party_wall_is_blank_only_as_high_as_its_neighbour` (test_city_lots): no glass in the wall up to its
   top, glass above it, the count matches the log's, every parts index still in its mesh.

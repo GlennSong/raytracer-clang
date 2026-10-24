@@ -6861,8 +6861,12 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
     // with no building against it stays blank to the roof: the bare party wall by a vacant lot.
     {
         constexpr Real kSill = 1.0;   // a storey keeps its windows only once it clears the neighbour's roof by a sill
+        constexpr Real kNearGap = 6.0;   // a detached neighbour this close to the line still stands against the wall
         std::map<int, std::vector<std::size_t>> byBlock;
         for (std::size_t i = 0; i < attached.size(); ++i) byBlock[attached[i].block].push_back(i);
+        std::map<int, std::vector<std::size_t>> builtByBlock;   // every building in `out`, attached or not
+        for (std::size_t i = 0; i < out.size(); ++i)
+            if (out[i].block >= 0 && out[i].plan.size() >= 3 && !out[i].units.empty()) builtByBlock[out[i].block].push_back(i);
         std::vector<std::vector<StoreyPlan>> storeys(attached.size());
         auto storeysOf = [&](std::size_t i) -> const std::vector<StoreyPlan>& {
             if (storeys[i].empty()) storeys[i] = storeyPlans(attached[i].plan, attached[i].bp);
@@ -6910,7 +6914,20 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                         }
                     }
                 }
-                if (against < -1e29) continue;   // nothing against it
+                // no attached neighbour on the line: a DETACHED one beside it (its plan pulled off the line by a setback
+                // or its own massing: the pagoda tower by #4840 on the island) is as high as it stands
+                if (against < -1e29)
+                    for (std::size_t oi : builtByBlock[A.block]) {
+                        if (oi == A.outAt) continue;
+                        const LotBuilding& o = out[oi];
+                        Real dmin = 1e30;
+                        for (const Vec2& v : o.plan) dmin = std::min(dmin, dot(v, n) - at);
+                        if (dmin < -0.35 || dmin > kNearGap) continue;
+                        Real b0, b1;
+                        if (!runOn(o.plan, n, at + dmin, b0, b1) || std::min(a1, b1) - std::max(a0, b0) < 1.0) continue;
+                        against = std::max(against, o.baseY + o.height);
+                    }
+                if (against < -1e29) continue;   // nothing against it: a vacant lot
                 // the building's own storeys (the plans run on past them: a roof exit's bulkhead)
                 const int floors = std::min(static_cast<int>(stA.size()), np.floors);
                 int top = 1;
