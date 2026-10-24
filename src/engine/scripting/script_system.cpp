@@ -88,7 +88,7 @@ void ScriptSystem::update(FrameContext& ctx) {
         // hands on a ledge, a wall, a ladder, or swimming: no gun in them (engine/player_pose.h)
         if (const PlayerPose* p = ctx.world.get<PlayerPose>(e))
             handsFree = p->mode == PlayerPose::Mode::Walk || p->mode == PlayerPose::Mode::Air ||
-                        p->mode == PlayerPose::Mode::Hidden;
+                        p->mode == PlayerPose::Mode::Hidden;   // (not on the toggles of a chute, nor spread in a suit)
     });
     setHandsFree(handsFree);
     setFirstPersonView(!ctx.settings.getBool("playerThirdPerson", false) &&

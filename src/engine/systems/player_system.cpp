@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <string>
 
 #ifdef RT_ENABLE_IMGUI
 #include <imgui.h>
@@ -60,6 +61,8 @@ void PlayerSystem::onStart(FrameContext& ctx) {
     ctx.actions.setActionContext("player_run", engine::InputContext::OnFoot);
     ctx.actions.setActionContext("player_crouch", engine::InputContext::OnFoot);
     tune_.load(ctx.settings);   // Debug > Movement's saved numbers (movement.* in settings.json)
+    ctx.actions.bindButton("slot_5", KeyCode::Num5);   // the parachute (jump in the air opens it)
+    ctx.actions.bindButton("slot_6", KeyCode::Num6);   // the wingsuit (jump in the air opens it; jump again: the chute)
     stamina_ = tune_.staminaMax;
 }
 
@@ -160,10 +163,24 @@ void PlayerSystem::fixedUpdate(FrameContext& ctx) {
                 jumpRequested = false;
                 if (camera.positionLocked) gate_.wantJump(tune_);
             }
+            // a TELEPORT (further than any step goes) ends whatever the body was doing: no canopy, wall or ledge
+            // comes along to the new place
+            if (haveLastBodyPos_ && move_ != Move::Walk && (t.position - lastBodyPos_).length() > 4.0) {
+                move_ = Move::Walk;
+                airVel_ = Vec3(0, 0, 0);
+                event("teleported");
+            }
             regrab_ = std::max(Real(0), regrab_ - dt);
             landed_ = std::max(Real(0), landed_ - dt * 3.0);
             if (move_ == Move::Mantle) {
                 stepMantle(t, cc, dt);
+                publishPose(ctx, e, t, cc);
+                lastBodyPos_ = t.position;
+                haveLastBodyPos_ = true;
+                return;
+            }
+            if (move_ == Move::Parachute || move_ == Move::Wingsuit) {
+                stepGlide(ctx, t, cc, dt);
                 publishPose(ctx, e, t, cc);
                 lastBodyPos_ = t.position;
                 haveLastBodyPos_ = true;
@@ -301,6 +318,13 @@ void PlayerSystem::fixedUpdate(FrameContext& ctx) {
                                                           : "jump (off steep ground)");
                 }
             }
+            if (!launched && before == GroundState::InAir && gate_.buffered > 0 && tryDeploy(t, cc)) {
+                gate_.buffered = -1;
+                publishPose(ctx, e, t, cc);
+                lastBodyPos_ = t.position;
+                haveLastBodyPos_ = true;
+                return;
+            }
             if (!launched && before != GroundState::OnGround) {
                 // in the air (or sliding): a ledge in reach is grabbed and pulled up onto, a climbable wall held
                 if (camera.positionLocked && pushing && tryMantle(t, cc, facing, tune_.mantleMaxHeight)) {
@@ -357,7 +381,11 @@ void PlayerSystem::fixedUpdate(FrameContext& ctx) {
                 const Real hd = std::sqrt(hx * hx + hz * hz);
                 if (hd < 1.0 && gs == GroundState::OnGround) stride_ += hd / 1.6;
             }
-            if (spawnCaptured && fall.shouldRespawn(t.position.y)) {
+            // ...but only when there is nothing below to land on: a jump off a tower with a chute to open is a
+            // fall of 40 m and more, and the net is for falling through the world, not off it
+            PhysicsWorld::RayHit below;
+            if (spawnCaptured && fall.shouldRespawn(t.position.y) &&
+                !pw.castRayHit(t.position, Vec3(0, -5000, 0), below)) {
                 respawn(cc.characterId, /*manual=*/false);
                 t.position = spawnPos;
             }
@@ -506,6 +534,80 @@ void PlayerSystem::stepClimb(FrameContext& ctx, Transform& t, CharacterControlle
     climbCycle_ += (moved - at.normal * dot(moved, at.normal)).length() / 0.6;
 }
 
+bool PlayerSystem::tryDeploy(Transform& t, CharacterController& cc) {
+    if (gear_ != 5 && gear_ != 6) return false;
+    PhysicsWorld& pw = physicsSys.physicsWorld();
+    const Real feet = cc.halfHeight + cc.radius;
+    PhysicsWorld::RayHit ground;
+    if (pw.castRayHit(t.position, Vec3(0, -(feet + tune_.deployMinHeight), 0), ground)) {
+        event("too low to open");
+        return false;
+    }
+    glideVel_ = pw.characterVelocity(cc.characterId);
+    const Vec3 h(glideVel_.x, 0, glideVel_.z);
+    Vec3 look = camera.forward();
+    look.y = 0;
+    chuteHeading_ = h.length() > 0.5 ? normalize(h) : look.lengthSquared() > 1e-6 ? normalize(look) : Vec3(0, 0, -1);
+    chuteOpen_ = 0;
+    move_ = gear_ == 5 ? Move::Parachute : Move::Wingsuit;
+    event(gear_ == 5 ? "parachute open" : "wingsuit spread");
+    return true;
+}
+
+void PlayerSystem::stepGlide(FrameContext& ctx, Transform& t, CharacterController& cc, Real dt) {
+    PhysicsWorld& pw = physicsSys.physicsWorld();
+    const Real inF = camera.positionLocked ? ctx.actions.axis("cam_forward") : Real(0);
+    const Vec3 look = camera.forward();
+    auto stop = [&](const std::string& why) {
+        move_ = Move::Walk;
+        airVel_ = Vec3(glideVel_.x, 0, glideVel_.z);
+        event(why);
+    };
+    if (camera.positionLocked && ctx.actions.held("player_crouch")) {   // cut away: freefall
+        regrab_ = 0.5;
+        return stop(move_ == Move::Parachute ? "cut away the canopy" : "folded the wingsuit");
+    }
+    if (gate_.buffered > 0) {
+        gate_.buffered = -1;
+        if (move_ == Move::Wingsuit) {   // the suit's own chute
+            move_ = Move::Parachute;
+            chuteOpen_ = 0;
+            const Vec3 h(glideVel_.x, 0, glideVel_.z);
+            if (h.length() > 0.5) chuteHeading_ = normalize(h);
+            event("parachute open (off the wingsuit)");
+        }
+    }
+    if (move_ == Move::Parachute) {
+        chuteOpen_ = std::min(Real(1), chuteOpen_ + dt / std::max(tune_.chuteOpenTime, Real(0.05)));
+        glideVel_ = parachuteStep(glideVel_, chuteHeading_, look, inF, chuteOpen_, dt, tune_);
+    } else {
+        glideVel_ = wingsuitStep(glideVel_, look, dt, tune_);
+    }
+    const Vec3 was = t.position;
+    pw.moveCharacterFree(cc.characterId, glideVel_, dt);
+    t.position = pw.characterPosition(cc.characterId);
+    fall.onGrounded(t.position.y);   // flying is not falling
+    // DOWN: on the ground, or into something hard enough to stop the way
+    const Vec3 moved = t.position - was;
+    const Real want = glideVel_.length() * dt;
+    const GroundState g = pw.characterGroundState(cc.characterId);
+    const bool blocked = want > 0.05 && moved.length() < want * 0.4;
+    if (g == GroundState::OnGround || g == GroundState::OnSteepGround || blocked) {
+        const Real impact = glideVel_.length();
+        landed_ = std::min(Real(1), impact / 8.0);
+        char buf[96];
+        if (move_ == Move::Wingsuit && impact > 20.0) {
+            std::snprintf(buf, sizeof(buf), "crashed the wingsuit at %.0f m/s", impact);
+            glideVel_ = Vec3(0, 0, 0);
+        } else {
+            std::snprintf(buf, sizeof(buf), "%s at %.1f m/s", move_ == Move::Parachute ? "landed the chute" : "landed",
+                          impact);
+            glideVel_ = glideVel_ * 0.4;
+        }
+        stop(buf);
+    }
+}
+
 void PlayerSystem::publishPose(FrameContext& ctx, Entity e, const Transform& t, const CharacterController& cc) {
     PlayerPose* p = ctx.world.get<PlayerPose>(e);
     if (!p) {
@@ -565,6 +667,14 @@ void PlayerSystem::publishPose(FrameContext& ctx, Entity e, const Transform& t, 
         p->wallNormal = climbNormal_;
         return;
     }
+    p->velocity = v;
+    p->airspeed = v.length();
+    if (move_ == Move::Parachute || move_ == Move::Wingsuit) {
+        p->mode = move_ == Move::Parachute ? PlayerPose::Mode::Parachute : PlayerPose::Mode::Wingsuit;
+        p->canopyHeading = chuteHeading_;
+        p->canopyOpen = move_ == Move::Parachute ? chuteOpen_ : 0;
+        return;
+    }
     if (swim_.swimming) {
         p->mode = PlayerPose::Mode::Swim;
         return;
@@ -576,8 +686,9 @@ void PlayerSystem::publishPose(FrameContext& ctx, Entity e, const Transform& t, 
 void PlayerSystem::render(FrameContext& ctx) {
     // TELEMETRY for `move?` (the socket): what the body is doing and why it last changed.
     {
-        const char* mode = move_ == Move::Mantle ? "mantle" : move_ == Move::Climb ? "climb"
-                         : swim_.swimming        ? "swim"   : "walk";
+        const char* mode = move_ == Move::Mantle    ? "mantle"    : move_ == Move::Climb    ? "climb"
+                         : move_ == Move::Parachute ? "parachute" : move_ == Move::Wingsuit ? "wingsuit"
+                         : swim_.swimming           ? "swim"      : "walk";
         Vec3 p, v;
         const char* ground = "none";
         if (ctx.world.alive(playerEntity))
@@ -596,8 +707,10 @@ void PlayerSystem::render(FrameContext& ctx) {
         if (ctx.world.alive(playerEntity) && ctx.world.has<Climbing>(playerEntity)) mode = "ladder";
         char buf[320];
         std::snprintf(buf, sizeof(buf),
-                      "mode %s ground %s pos %.2f %.2f %.2f vel %.2f %.2f %.2f stamina %.1f/%.0f last \"%s\"", mode,
-                      ground, p.x, p.y, p.z, v.x, v.y, v.z, stamina_, tune_.staminaMax, lastEvent_.c_str());
+                      "mode %s ground %s pos %.2f %.2f %.2f vel %.2f %.2f %.2f speed %.1f stamina %.1f/%.0f gear %d "
+                      "last \"%s\"",
+                      mode, ground, p.x, p.y, p.z, v.x, v.y, v.z, v.length(), stamina_, tune_.staminaMax, gear_,
+                      lastEvent_.c_str());
         ctx.settings.setString("player.telemetry", buf);
     }
 #ifdef RT_ENABLE_IMGUI
@@ -734,6 +847,13 @@ void PlayerSystem::update(FrameContext& ctx) {
     // catch-up frame that runs two steps).
     // ...but NOT while seated: Space is the brake in a car, and staging a
     // jump on every brake press would fire it the moment the player got out.
+    // THE GEAR IN HAND (tool slots, like the gun script tracks them): 5 the parachute, 6 the wingsuit
+    for (int k = 1; k <= 6; ++k)
+        if (ctx.actions.pressed("slot_" + std::to_string(k)) &&
+            !(ctx.world.alive(playerEntity) && ctx.world.has<InVehicle>(playerEntity))) {
+            if (k != gear_ && (k == 5 || k == 6)) event(k == 5 ? "parachute on your back" : "wingsuit on");
+            gear_ = k;
+        }
     if (ctx.actions.pressed("player_jump") &&
         !(ctx.world.alive(playerEntity) &&
           (ctx.world.has<InVehicle>(playerEntity) || ctx.world.has<Seated>(playerEntity))))
@@ -848,6 +968,16 @@ void PlayerSystem::update(FrameContext& ctx) {
         ctx.view.camera = shoulder.cameraState(aspect);
     } else {
         ctx.view.camera = camera.cameraState(aspect);
+    }
+    // SPEED widens the view (a wingsuit dive, a long fall): up to 14 degrees from 20 to 60 m/s, eased
+    {
+        Real speed = 0;
+        if (const CharacterController* cc = ctx.world.get<CharacterController>(playerEntity))
+            if (cc->characterId != INVALID_CHARACTER)
+                speed = physicsSys.physicsWorld().characterVelocity(cc->characterId).length();
+        const Real want = 14.0 * std::clamp((speed - 20.0) / 40.0, Real(0), Real(1));
+        fovBoost_ += (want - fovBoost_) * (1.0 - std::exp(-ctx.frameDelta * 2.0));
+        ctx.view.camera.fovDegrees += static_cast<float>(fovBoost_);
     }
 }
 

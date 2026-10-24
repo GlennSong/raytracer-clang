@@ -60,6 +60,23 @@ struct MovementTuning {
     Real buoyancy = 10.0;          // 1/s^2: the spring back to floating height (a plunge comes back up)
     Real waterDamping = 2.0;       // 1/s: how soon the bob settles (low = bobs longer)
     Real waterDrag = 0.2;          // 1/m: drag on a fast plunge (v*|v|): how deep a dive off the board goes
+    // gliding (slot 5 the parachute, slot 6 the wingsuit; jump in the air opens them)
+    Real deployMinHeight = 4.0;    // m of air under the feet needed to open either
+    Real chuteOpenTime = 0.7;      // s from the pull to a full canopy
+    Real chuteSpeed = 8.0;         // m/s ahead under a full canopy, hands up
+    Real chuteSink = 4.5;          // m/s down, hands up
+    Real chuteDiveSpeed = 12.0;    // W: toggles down a little, quicker and steeper
+    Real chuteDiveSink = 7.0;
+    Real chuteFlareSpeed = 4.0;    // S: a flare, slow and soft
+    Real chuteFlareSink = 2.0;
+    Real chuteTurnRate = 70.0;     // deg/s the canopy turns toward where you look
+    Real chuteResponse = 1.6;      // 1/s: how soon the canopy settles to a new speed
+    Real suitDrag = 0.0016;        // 1/m: v*|v| along the body: 48 m/s pitched 20 deg down, 60 at 35
+    Real suitInducedDrag = 5.0;    // m: what lift costs (k * lift^2 / v^2), worst when slow: no hanging in the air
+    Real suitStallSpeed = 14.0;    // m/s: slower than this the suit stops flying and you drop
+    Real suitTurn = 3.5;           // 1/s: how quickly the suit swings the way into where you look
+    Real suitPitchDown = 60.0;     // deg the dive is held to
+    Real suitPitchUp = 25.0;       // deg the pull-up is held to
 
     struct Field { const char* key; Real MovementTuning::*value; Real lo, hi; const char* group; };
     static const std::vector<Field>& fields();
@@ -127,6 +144,18 @@ void wallBasis(const Vec3& normal, Vec3& right, Vec3& up);
 // water (drag on a fast plunge, damping on a slow one) while the buoyant spring pulls it back to floatY -- so it
 // goes under, comes up past the float line, and bobs to rest. rise/dive (jump/crouch held) push against it.
 Real swimVerticalStep(Real vy, Real centreY, Real floatY, bool rise, bool dive, Real dt, const MovementTuning& t);
+
+// GLIDING. One step of a canopy's velocity: it turns `heading` (horizontal unit) toward `look` at the turn rate and
+// settles the velocity toward ahead-and-down speeds set by the toggles (inF: +1 dive, -1 flare). `open` 0..1 is
+// how far the canopy is out (an opening one still mostly falls).
+Vec3 parachuteStep(const Vec3& v, Vec3& heading, const Vec3& look, Real inF, Real open, Real dt,
+                   const MovementTuning& t);
+// One step of a wingsuit's velocity, flown by where you look (`look`, unit; its pitch held to the suit's range):
+// gravity, lift that swings the way into the facing (fading out below the stall), and drag along it. Pitched
+// down it settles at a glide (~2.7:1 at 20 deg); pulled up it trades speed for height until it stalls.
+Vec3 wingsuitStep(const Vec3& v, const Vec3& look, Real dt, const MovementTuning& t);
+// The look direction with its pitch held to [-suitPitchDown, suitPitchUp].
+Vec3 wingsuitFacing(const Vec3& look, const MovementTuning& t);
 
 // The swimmer's speed at a point in the stroke (phase 0..1): a pull that surges, a glide that eases off; the
 // average over a stroke is 1.

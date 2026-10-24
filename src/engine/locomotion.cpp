@@ -57,6 +57,22 @@ const std::vector<MovementTuning::Field>& MovementTuning::fields() {
         {"buoyancy", &T::buoyancy, 1, 60, "Swim"},
         {"waterDamping", &T::waterDamping, 0, 12, "Swim"},
         {"waterDrag", &T::waterDrag, 0, 3, "Swim"},
+        {"deployMinHeight", &T::deployMinHeight, 0, 30, "Glide"},
+        {"chuteOpenTime", &T::chuteOpenTime, 0.1, 3, "Glide"},
+        {"chuteSpeed", &T::chuteSpeed, 1, 25, "Glide"},
+        {"chuteSink", &T::chuteSink, 0.5, 15, "Glide"},
+        {"chuteDiveSpeed", &T::chuteDiveSpeed, 1, 30, "Glide"},
+        {"chuteDiveSink", &T::chuteDiveSink, 0.5, 20, "Glide"},
+        {"chuteFlareSpeed", &T::chuteFlareSpeed, 0, 15, "Glide"},
+        {"chuteFlareSink", &T::chuteFlareSink, 0.2, 10, "Glide"},
+        {"chuteTurnRate", &T::chuteTurnRate, 5, 240, "Glide"},
+        {"chuteResponse", &T::chuteResponse, 0.2, 8, "Glide"},
+        {"suitDrag", &T::suitDrag, 0.0003, 0.01, "Glide"},
+        {"suitInducedDrag", &T::suitInducedDrag, 0, 100, "Glide"},
+        {"suitStallSpeed", &T::suitStallSpeed, 2, 40, "Glide"},
+        {"suitTurn", &T::suitTurn, 0.2, 10, "Glide"},
+        {"suitPitchDown", &T::suitPitchDown, 10, 89, "Glide"},
+        {"suitPitchUp", &T::suitPitchUp, 0, 60, "Glide"},
     };
     return f;
 }
@@ -213,6 +229,71 @@ Real swimVerticalStep(Real vy, Real centreY, Real floatY, bool rise, bool dive, 
     else if (rise) a += 6.0;                  // kick up: out past the float line, to look over a pool's edge
     const Real v = vy + a * dt;
     return dive ? std::max(v, Real(-2.0)) : v;
+}
+
+Vec3 parachuteStep(const Vec3& v, Vec3& heading, const Vec3& look, Real inF, Real open, Real dt,
+                   const MovementTuning& t) {
+    constexpr Real kDeg = 3.14159265358979 / 180.0;
+    // turn toward the look, at most the turn rate
+    const Vec3 want = flat(look);
+    if (want.lengthSquared() > 0.5) {
+        const Real cur = std::atan2(heading.x, heading.z), tgt = std::atan2(want.x, want.z);
+        Real d = std::remainder(tgt - cur, 2 * 3.14159265358979);
+        const Real step = t.chuteTurnRate * kDeg * dt;
+        d = std::clamp(d, -step, step);
+        heading = Vec3(std::sin(cur + d), 0, std::cos(cur + d));
+    }
+    const Real f = std::clamp(inF, Real(-1), Real(1));
+    const Real speed = f >= 0 ? t.chuteSpeed + (t.chuteDiveSpeed - t.chuteSpeed) * f
+                              : t.chuteSpeed + (t.chuteFlareSpeed - t.chuteSpeed) * -f;
+    const Real sink = f >= 0 ? t.chuteSink + (t.chuteDiveSink - t.chuteSink) * f
+                             : t.chuteSink + (t.chuteFlareSink - t.chuteSink) * -f;
+    const Vec3 target = heading * speed + Vec3(0, -sink, 0);
+    // an opening canopy: mostly still falling, the drag coming on as it fills
+    const Real o = std::clamp(open, Real(0), Real(1));
+    const Real k = 1.0 - std::exp(-dt * (t.chuteResponse + 6.0 * o * o) * o);
+    Vec3 out = v + Vec3(0, -9.81 * dt * (1 - o), 0);
+    out = out + (target - out) * k;
+    return out;
+}
+
+Vec3 wingsuitFacing(const Vec3& look, const MovementTuning& t) {
+    constexpr Real kDeg = 3.14159265358979 / 180.0;
+    const Vec3 h = flat(look);
+    if (h.lengthSquared() < 0.5) return Vec3(0, -1, 0);
+    Real pitch = std::asin(std::clamp(look.y, Real(-1), Real(1)));
+    pitch = std::clamp(pitch, -t.suitPitchDown * kDeg, t.suitPitchUp * kDeg);
+    return h * std::cos(pitch) + Vec3(0, std::sin(pitch), 0);
+}
+
+Vec3 wingsuitStep(const Vec3& v, const Vec3& look, Real dt, const MovementTuning& t) {
+    const Vec3 f = wingsuitFacing(look, t);
+    Vec3 out = v + Vec3(0, -9.81 * dt, 0);
+    const Real speed = out.length();
+    if (speed > 1e-4) {
+        // LIFT turns the way toward the facing without doing work, but it grows with the square of the speed:
+        // at the stall speed it can just hold the body up (g), slower it can't, so a slow suit falls and a
+        // fast one carves. What turning costs (induced drag) follows from how hard it turns.
+        const Vec3 dir = out * (1.0 / speed);
+        const Real c = std::clamp(dot(dir, f), Real(-1), Real(1));
+        const Real angle = std::acos(c);
+        if (angle > 1e-5 && c > -0.3) {
+            const Real liftMax = 9.81 * (speed / t.suitStallSpeed) * (speed / t.suitStallSpeed);
+            const Real phi = std::min(angle * (1.0 - std::exp(-dt * t.suitTurn)), liftMax * dt / speed);
+            const Vec3 perp = normalize(f - dir * c);
+            out = (dir * std::cos(phi) + perp * std::sin(phi)) * speed;
+            const Real lift = speed * phi / dt;   // the acceleration it took
+            const Real induced = t.suitInducedDrag * lift * lift / (speed * speed);
+            out = out * std::max(Real(0), 1.0 - induced * dt / speed);
+        }
+    }
+    // drag: light along the body, heavy broadside (a suit flat to the air is a sail)
+    Real along = dot(out, f);
+    Vec3 across = out - f * along;
+    along -= t.suitDrag * along * std::fabs(along) * dt;
+    const Real side = across.length();
+    if (side > 1e-6) across = across * std::max(Real(0), 1.0 - 8.0 * t.suitDrag * side * dt);
+    return f * along + across;
 }
 
 Real strokeSurgePhase(Real strokes) {

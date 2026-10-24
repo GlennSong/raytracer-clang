@@ -171,7 +171,7 @@ private:
     // PAST WALKING (engine/locomotion.h): the jump gate, the pull-up onto a ledge, climbing a wall.
     MovementTuning tune_;
     JumpGate gate_;
-    enum class Move : uint8_t { Walk, Mantle, Climb };
+    enum class Move : uint8_t { Walk, Mantle, Climb, Parachute, Wingsuit };
     Move move_ = Move::Walk;
     MantleMove mantle_;
     Vec3 climbNormal_{0, 0, 1};   // the wall held, facing the body
@@ -183,12 +183,19 @@ private:
     Real climbCycle_ = 0;
     Real strokePhase_ = 0;        // swim strokes
     Real landed_ = 0;
+    int gear_ = 1;                // the tool slot in hand: 5 the parachute, 6 the wingsuit (jump in the air opens it)
+    Vec3 glideVel_;               // gliding: the body's velocity, integrated here (engine/locomotion.h)
+    Vec3 chuteHeading_{0, 0, -1};
+    Real chuteOpen_ = 0;
+    Real fovBoost_ = 0;           // degrees added to the view at speed (eased)
     std::string lastEvent_ = "none";
     void event(const std::string& what);
     bool tryMantle(Transform& t, CharacterController& cc, const Vec3& facing, Real maxHeight);
     bool tryGrab(Transform& t, CharacterController& cc, const Vec3& facing);
     void stepMantle(Transform& t, CharacterController& cc, Real dt);
     void stepClimb(FrameContext& ctx, Transform& t, CharacterController& cc, Real dt);
+    bool tryDeploy(Transform& t, CharacterController& cc);
+    void stepGlide(FrameContext& ctx, Transform& t, CharacterController& cc, Real dt);
     void publishPose(FrameContext& ctx, Entity e, const Transform& t, const CharacterController& cc);
 public:
     bool swimming() const { return swim_.swimming; }

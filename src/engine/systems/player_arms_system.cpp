@@ -32,6 +32,24 @@ Quat facing(const Vec3& dir, const Vec3& up) {
     return Quat::fromRotationMatrix(m);
 }
 
+// THE CANOPY: seven cells on an arc, red and white, 4.2 m span, 1.6 m chord; local +z ahead, +x right, the
+// top of the arc at the origin.
+RenderMesh buildCanopy() {
+    RenderMesh m;
+    constexpr int kCells = 7;
+    constexpr Real kRadius = 3.0, kSpread = 1.4;   // the arc's radius and the angle (rad) it spans
+    for (int i = 0; i < kCells; ++i) {
+        const Real a = -kSpread / 2 + kSpread * (i + 0.5) / kCells;
+        RenderMesh cell = MeshBuilder::box(Vec3(kRadius * kSpread / kCells * 1.02, 0.22, 1.6));
+        for (Vertex& v : cell.vertices) v.color = i % 2 ? Vec3(0.92, 0.92, 0.9) : Vec3(0.85, 0.12, 0.1);
+        Transform tf;
+        tf.position = Vec3(kRadius * std::sin(a), kRadius * std::cos(a) - kRadius, 0);
+        tf.orientation = Quat::fromAxisAngle(Vec3(0, 0, 1), -a);
+        MeshBuilder::appendTransformed(m, cell, tf.matrix());
+    }
+    return m;
+}
+
 // One arm's front crawl at phase 0..1, camera space with +x outward: keyframes eased between.
 Vec3 crawl(Real phase) {
     struct Key { Real at; Vec3 p; };
@@ -70,16 +88,20 @@ void PlayerArmsSystem::update(FrameContext& ctx) {
                          !world.has<Seated>(player) && !ctx.view.activeCameraEntity.valid();
 
     if (!made_) {
-        if (!visible) return;
+        if (!pose) return;
         const MeshHandle box = ctx.assets.acquireMesh(MeshBuilder::box(Vec3(1, 1, 1)), "player:arm_block");
+        const MeshHandle canopy = ctx.assets.acquireMesh(buildCanopy(), "player:canopy");
         const PersonOutfit& outfit = personOutfit(personOutfitTotal() - 1);   // the player's red jacket
-        for (int i = 0; i < 4; ++i) {
+        for (int i = 0; i < kParts; ++i) {
             parts_[i] = world.create();
-            world.add<Transform>(parts_[i], Transform{});
-            world.add<PrevTransform>(parts_[i], PrevTransform{Transform{}});
+            Transform away;
+            away.position = Vec3(0, kOut, 0);
+            world.add<Transform>(parts_[i], away);
+            world.add<PrevTransform>(parts_[i], PrevTransform{away});
             Renderable r;
-            r.mesh = box;
-            r.material.albedo = i < 2 ? outfit.shirt : outfit.skin;
+            r.mesh = i == 6 ? canopy : box;
+            r.material.albedo = i < 2 ? outfit.shirt : i < 4 ? outfit.skin : i < 6 ? Vec3(0.95, 0.45, 0.08)
+                              : i == 6 ? Vec3(1, 1, 1) : Vec3(0.15, 0.15, 0.17);
             r.material.roughness = 0.85f;
             r.material.metallic = 0.0f;
             r.material.opacity = 1.0f;
@@ -96,16 +118,48 @@ void PlayerArmsSystem::update(FrameContext& ctx) {
         t->scale = scale;
         if (p) p->value = *t;   // glued to the view: no interpolation smear
     };
+    // THE CANOPY and its lines, in either view: over the body along its heading, the lines down to the hands
+    // (first person, on the toggles) or the shoulders
+    auto drawCanopy = [&](bool armsDrawn) {
+        const bool on = pose && body && pose->mode == PlayerPose::Mode::Parachute;
+        if (!on) {
+            if (canopyShown_)
+                for (int i = 6; i < kParts; ++i) place(i, Vec3(0, kOut, 0), Quat::identity(), Vec3(1, 1, 1));
+            canopyShown_ = false;
+            return;
+        }
+        canopyShown_ = true;
+        const Real open = std::clamp(pose->canopyOpen, Real(0), Real(1));
+        const Vec3 h = pose->canopyHeading;
+        const Vec3 side(-h.z, 0, h.x);   // the canopy's right
+        const Vec3 top = body->position + Vec3(0, 1.2 + 2.6 * open, 0);
+        const Quat q = facing(h, Vec3(0, 1, 0));
+        place(6, top, q, Vec3(0.15 + 0.85 * open, 0.4 + 0.6 * open, 0.3 + 0.7 * open));
+        const Vec3 shoulderL = body->position + Vec3(0, 0.5, 0) - side * 0.2;
+        const Vec3 shoulderR = body->position + Vec3(0, 0.5, 0) + side * 0.2;
+        const Vec3 from[2] = {armsDrawn ? handWorld_[0] : shoulderL, armsDrawn ? handWorld_[1] : shoulderR};
+        const Real span = 2.0 * open + 0.2, droop = -0.75 * open;
+        for (int j = 0; j < 4; ++j) {
+            const int k = j < 2 ? 0 : 1;
+            const Real sx = k == 0 ? -1.0 : 1.0;
+            const Vec3 end = top + side * (sx * span) + Vec3(0, droop, 0) + h * ((j % 2 ? -0.6 : 0.6) * open);
+            Vec3 d = end - from[k];
+            const Real len = std::max(d.length(), Real(0.01));
+            d = d * (1.0 / len);
+            place(7 + j, from[k] + d * (len * 0.5), facing(d, Vec3(0, 1, 0)), Vec3(0.012, 0.012, len));
+        }
+    };
     if (!visible) {
         if (shown_)
-            for (int i = 0; i < 4; ++i) place(i, Vec3(0, kOut, 0), Quat::identity(), Vec3(1, 1, 1));
+            for (int i = 0; i < 6; ++i) place(i, Vec3(0, kOut, 0), Quat::identity(), Vec3(1, 1, 1));
         shown_ = false;
         haveLocal_ = false;
+        drawCanopy(false);
         return;
     }
     shown_ = true;
 
-    for (int k = 1; k <= 4; ++k)   // (only reached in first person, where the gun script takes the keys too)
+    for (int k = 1; k <= 6; ++k)   // (only reached in first person, where the gun script takes the keys too)
         if (ctx.actions.pressed("slot_" + std::to_string(k))) slot_ = k;
 
     const CameraState& cam = ctx.view.camera;
@@ -164,6 +218,14 @@ void PlayerArmsSystem::update(FrameContext& ctx) {
             case PlayerPose::Mode::Air:
                 want = Vec3(s * 0.3, -0.16, 0.45);   // out for balance
                 break;
+            case PlayerPose::Mode::Parachute:
+                // up on the toggles, at the top corners of the view; W pulls them down a touch... S flares them
+                want = Vec3(s * 0.3, 0.13, 0.32);
+                break;
+            case PlayerPose::Mode::Wingsuit:
+                // spread wide, the wings between arm and body: the hands at the edges of the view
+                want = Vec3(s * 0.43, -0.1, 0.38);
+                break;
             default: {
                 // walking: the hands swing opposite the legs, low at the edge of the view; running pumps them
                 const Real amp = std::clamp(pose->speed / 6.0, Real(0), Real(1));
@@ -193,8 +255,14 @@ void PlayerArmsSystem::update(FrameContext& ctx) {
         const Real sleeve = std::max(len - 0.07, Real(0.02));
         place(k, shoulder + along * (sleeve * 0.5), q, Vec3(kSleeve, kSleeve, sleeve));
         place(2 + k, hand, q, Vec3(0.07, 0.05, 0.1));
+        handWorld_[k] = hand;
+        if (pose->mode == PlayerPose::Mode::Wingsuit)   // the wing: a sheet hanging from the arm toward the body
+            place(4 + k, shoulder + along * (sleeve * 0.5) - up * 0.16, q, Vec3(0.012, 0.3, sleeve));
+        else
+            place(4 + k, Vec3(0, kOut, 0), Quat::identity(), Vec3(1, 1, 1));
     }
     haveLocal_ = true;
+    drawCanopy(true);
 }
 
 }  // namespace engine

@@ -11575,3 +11575,33 @@ rock "like breath of the wild"; see your block arms; feel speed swimming; and a 
   Level `"pools"` (a WaterPool + the sea's water mesh) is how a level without terrain gets water.
 - **Not yet:** the third-person body doesn't pose for climbing or swimming; no splash or wake; no building
   handholds (sills and ledges as climb points) -- the free climb works on facades meanwhile.
+
+## ADR-0229 — Parachute and wingsuit: gear in the tool slots, flown by where you look
+
+Glenn (2026-10-24): "jumping from the top of a mountain or skyscraper could open some kind of parachute or
+wingsuit"; "I imagine you'd have to select it from your inventory".
+
+- **Gear:** tool slot 5 is the parachute, 6 the wingsuit (Num5/Num6; the bumpers cycle 1-6). The gun stows and
+  the map closes on either. With one on, jump in the air -- at least `deployMinHeight` (4 m) above the ground --
+  opens it. In the wingsuit, jump opens its parachute; crouch cuts a canopy away or folds the suit (freefall).
+- **Parachute (`parachuteStep`):** the canopy turns toward where you look at up to 70°/s and settles the
+  velocity toward 8 m/s ahead, 4.5 down (W: 12 / 7, S flares to 4 / 2). It fills over 0.7 s, mostly still
+  falling until it does. Measured off the 72 m tower: 4.50 down, 8.00 ahead.
+- **Wingsuit (`wingsuitStep`):** flown by the look (pitch held to -60..+25°). Lift turns the velocity toward the
+  facing without doing work, and grows with speed² (just holds you up at the 14 m/s stall); turning costs
+  induced drag (k·lift²/v²); drag is light along the body, 8× broadside. Three wrong models first: lift that
+  converted gravity into forward speed (83 m/s, energy from nothing), constant induced drag (stuck at 6 m/s
+  from rest), and no induced drag (hung in the air at 12 m/s pitched up). Measured: 48 m/s at a 2.35:1 glide
+  pitched 20° down, 60 m/s at 35°; a pull-up from the glide gains ~40 m; slow and pitched up it sinks ~20 m in
+  6 s instead of hovering.
+- **Landing:** touching ground or being stopped short ends the glide; a wingsuit into anything over 20 m/s is
+  "crashed" (`move?`), the hook for the ragdoll to come. Water ends it in a plunge (the buoyancy of ADR-0228).
+- **The fall net** (FallRespawnTracker, 40 m below the last footing) now fires only when there is nothing below
+  at all: it was for falling through the world, and it cut every tower jump short. A teleport ends any glide,
+  climb or pull-up.
+- **Seen:** the canopy (seven red/white cells on an arc, its four lines to the hands in first person or the
+  shoulders in third), the hands up on the toggles, spread wide in the suit with orange wings; the view widens
+  up to 14° from 20 to 60 m/s.
+- **The lab** has a 72 m tower with a walkable spiral ramp (24°) and 600 m of ground to land on. The wingsuit
+  wants more height than that: `teleport x 400 z` or a peak on the island. Not measured yet: whether the island's
+  streaming keeps up with a 50 m/s suit (`tools/fly_probe.py` along a flight line).

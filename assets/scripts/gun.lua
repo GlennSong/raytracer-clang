@@ -48,6 +48,7 @@ function G:update(e, dt)
         if input.pressed("slot_2") then self.equipped = true end
         if input.pressed("slot_1") then self.equipped = false end
         if input.pressed("slot_3") then self.equipped = false end   -- the map
+        if input.pressed("slot_5") or input.pressed("slot_6") then self.equipped = false end   -- the chute, the suit
     end
     if not (self.equipped and fp and camera.hands_free()) then   -- holstered, or the hands are busy: stow it
         entity.set_position(e, { 0.0, -100000.0, 0.0 })
@@ -87,6 +88,7 @@ function M:update(e, dt)
         if input.pressed("slot_2") then self.equipped = true end
         if input.pressed("slot_1") then self.equipped = false end
         if input.pressed("slot_3") then self.equipped = false end   -- the map
+        if input.pressed("slot_5") or input.pressed("slot_6") then self.equipped = false end   -- the chute, the suit
     end
     if not (self.equipped and fp and camera.hands_free()) then return end   -- bare hands / third person / climbing
     if self.fired >= MAX then return end

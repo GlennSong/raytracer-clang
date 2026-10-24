@@ -17,6 +17,8 @@ edit of the JSON.
   SOUTH   slopes 30 .. 70 degrees (walkable to 50), a V between two slabs, rocks with a gap between them
   EAST    the pool: 14 x 10 m, 2.6 m deep, steps down at the west end, diving boards 3 and 6 m up its east end
   NE      a stair of ledges up to a 6 m roof, and rooftop gaps
+  SE      the jump tower: a spiral ramp (walkable, 24 deg) up to a 72 m top -- 5 the parachute, 6 the wingsuit,
+          then jump off and jump again in the air
 """
 import json
 import math
@@ -60,7 +62,7 @@ def reach_colour(h):
 
 
 # --- the ground, with the pool cut out of it ----------------------------------
-G = 50.0
+G = 300.0   # room to land a wingsuit
 POOL = (18.0, 32.0, -5.0, 5.0)   # x0, x1, z0, z1
 POOL_DEPTH = 2.6
 px0, px1, pz0, pz1 = POOL
@@ -137,6 +139,30 @@ block(14.0, 22.0, -46.0, -38.0, 0.0, 6.0, CONCRETE)
 for k, gap in enumerate([1.5, 2.5, 3.5]):
     x0 = 22.0 + gap + sum(6.0 + g for g in [1.5, 2.5, 3.5][:k])
     block(x0, x0 + 6.0, -46.0, -38.0, 0.0, 6.0 - 0.5 * (k + 1), CONCRETE)
+
+# --- south-east: the jump tower ---------------------------------------------------------
+# a core with a ramp spiralling round it: corner landings, ramps between them rising RISE each
+CORNERS = [(32.0, 39.0), (42.0, 39.0), (42.0, 29.0), (32.0, 29.0)]   # ring corner centres, anticlockwise from above
+SEGMENTS, RISE = 20, 3.6
+TOP = SEGMENTS * RISE
+block(33.0, 41.0, 30.0, 38.0, 0.0, TOP, CONCRETE)                       # the core
+for k in range(SEGMENTS + 1):
+    cx, cz = CORNERS[k % 4]
+    h = k * RISE
+    if k == SEGMENTS:   # the top landing reaches over onto the core
+        block(cx - 1.0, cx + 2.0, cz - 2.0, cz + 1.0, h - 0.4, h, YELLOW)
+    elif k:
+        block(cx - 1.0, cx + 1.0, cz - 1.0, cz + 1.0, h - 0.4, h, YELLOW)
+    if k == SEGMENTS:
+        break
+    (ax, az), (bx, bz) = CORNERS[k % 4], CORNERS[(k + 1) % 4]
+    ang = math.degrees(math.atan2(RISE, 8.0))
+    length = math.hypot(8.0, RISE) + 0.1
+    mid = ((ax + bx) / 2, h + RISE / 2 - 0.2, (az + bz) / 2)
+    if az == bz:   # along x: rotate about z, the far end up
+        box(mid, (length, 0.4, 2.0), WHITE, rot=(ang if bx > ax else -ang, (0, 0, 1)))
+    else:          # along z: rotate about x (a positive turn lowers +z)
+        box(mid, (2.0, 0.4, length), WHITE, rot=(-ang if bz > az else ang, (1, 0, 0)))
 
 level = {
     "version": 1,

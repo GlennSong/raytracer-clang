@@ -277,3 +277,67 @@ TEST_CASE(a_plunge_goes_under_and_bobs_back_up) {
     }
     CHECK(deepest > -0.4);
 }
+
+TEST_CASE(a_wingsuit_glides_pitched_down_and_stalls_pulled_up) {
+    MovementTuning t;
+    constexpr Real kDeg = 3.14159265358979 / 180.0;
+    // pitched 20 degrees down from a standing start: it picks up speed and settles at a glide
+    const Vec3 down20(0, -std::sin(20 * kDeg), -std::cos(20 * kDeg));
+    Vec3 v(0, 0, 0), p(0, 1000, 0);
+    for (int i = 0; i < 40 * 60; i++) {
+        v = wingsuitStep(v, down20, kDt, t);
+        p = p + v * kDt;
+    }
+    const Real speed = v.length();
+    const Real ratio = std::hypot(v.x, v.z) / -v.y;
+    CHECK(speed > 40 && speed < 56);   // ~48 m/s, about 170 km/h
+    CHECK(ratio > 2.1 && ratio < 3.3); // a wingsuit's 2.5-3 : 1 (2.35 measured)
+    // pulled up from that: it climbs for a while, then runs out of speed and drops
+    const Vec3 up20(0, std::sin(20 * kDeg), -std::cos(20 * kDeg));
+    const Real y0 = p.y, v0 = v.length();
+    Real top = y0, slowest = 1e9;
+    for (int i = 0; i < 20 * 60; i++) {
+        v = wingsuitStep(v, up20, kDt, t);
+        p = p + v * kDt;
+        top = std::max(top, p.y);
+        slowest = std::min(slowest, v.length());
+    }
+    CHECK(top > y0 + 5.0);                 // the swoop trades speed for height
+    CHECK(slowest < v0 * 0.5);             // ...paid for in speed
+    CHECK(p.y < top - 1.0);                // and then it mushes and sinks again
+    // slow and pulled up, it can't hang there: the nose drops and it dives for speed
+    Vec3 slow(0, 0, -12), q(0, 1000, 0);
+    Real minY = 1e9;
+    for (int i = 0; i < 6 * 60; i++) {
+        slow = wingsuitStep(slow, up20, kDt, t);
+        q = q + slow * kDt;
+    }
+    minY = q.y;
+    CHECK(minY < 1000 - 15.0);   // (measured ~20 m in 6 s, where it used to hover)
+    // the look's pitch is held to the suit's range
+    const Vec3 straightDown = wingsuitFacing(Vec3(0.001, -1, 0), t);
+    CHECK(straightDown.y > -std::sin(t.suitPitchDown * kDeg) - 1e-6);
+}
+
+TEST_CASE(a_parachute_settles_to_its_glide_and_answers_the_toggles) {
+    MovementTuning t;
+    auto settle = [&](Real inF) {
+        Vec3 v(0, -25, 0), heading(0, 0, -1);
+        for (int i = 0; i < 12 * 60; i++) v = parachuteStep(v, heading, Vec3(0, 0, -1), inF, 1.0, kDt, t);
+        return v;
+    };
+    const Vec3 hands = settle(0), dive = settle(1), flare = settle(-1);
+    CHECK_APPROX(-hands.y, t.chuteSink, 0.1);
+    CHECK_APPROX(std::hypot(hands.x, hands.z), t.chuteSpeed, 0.1);
+    CHECK(-dive.y > -hands.y + 1.0);
+    CHECK(-flare.y < 2.5);
+    // it turns toward the look at no more than its turn rate
+    Vec3 v(0, -4.5, -8), heading(0, 0, -1);
+    for (int i = 0; i < 30; i++) v = parachuteStep(v, heading, Vec3(1, 0, 0), 0, 1.0, kDt, t);
+    const Real turned = std::atan2(heading.x, -heading.z) * 180.0 / 3.14159265358979;
+    CHECK_APPROX(turned, t.chuteTurnRate * 0.5, 1.5);
+    // an opening canopy is still mostly a fall
+    Vec3 opening(0, -10, 0), h2(0, 0, -1);
+    opening = parachuteStep(opening, h2, Vec3(0, 0, -1), 0, 0.05, kDt, t);
+    CHECK(opening.y < -10.0);
+}
