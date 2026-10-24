@@ -188,6 +188,9 @@ private:
     Vec3 chuteHeading_{0, 0, -1};
     Real chuteOpen_ = 0;
     Real fovBoost_ = 0;           // degrees added to the view at speed (eased)
+    Real hotbarShow_ = 0;         // s left showing the tool row after a slot change
+    Real hudClock_ = 0;           // for the prompt's pulse
+    void drawGearHud(FrameContext& ctx);
     std::string lastEvent_ = "none";
     void event(const std::string& what);
     bool tryMantle(Transform& t, CharacterController& cc, const Vec3& facing, Real maxHeight);

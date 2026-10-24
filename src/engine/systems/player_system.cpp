@@ -683,6 +683,88 @@ void PlayerSystem::publishPose(FrameContext& ctx, Entity e, const Transform& t, 
                                                                            : PlayerPose::Mode::Walk;
 }
 
+// THE GEAR HUD (Glenn: "when I click 5 nothing happens. How do I know I will deploy a parachute?"): the tool row
+// for a few seconds after a slot change, and while the chute or the suit is on, what to press now -- drawn like
+// the interaction prompt (InteractBrokerSystem), on ImGui's foreground list until the game UI layer has text.
+void PlayerSystem::drawGearHud(FrameContext& ctx) {
+#ifdef RT_ENABLE_IMGUI
+    const Real dt = std::clamp(static_cast<Real>(ctx.frameDelta), Real(0), Real(0.1));
+    hotbarShow_ = std::max(Real(0), hotbarShow_ - dt);
+    hudClock_ += dt;
+    if (!camera.positionLocked || !ctx.world.alive(playerEntity) || ctx.world.has<InVehicle>(playerEntity)) return;
+    const float W = static_cast<float>(ctx.windowWidth), H = static_cast<float>(ctx.windowHeight);
+    ImDrawList* dl = ImGui::GetForegroundDrawList();
+    ImFont* font = ImGui::GetFont();
+    const float fs = ImGui::GetFontSize() * 1.4f;
+    auto label = [&](float cx, float y, const std::string& text, ImU32 colour, ImU32 back) {
+        const ImVec2 ts = font->CalcTextSizeA(fs, 1e9f, 0.0f, text.c_str());
+        const float x = cx - ts.x * 0.5f;
+        dl->AddRectFilled(ImVec2(x - 8, y - 4), ImVec2(x + ts.x + 8, y + ts.y + 4), back, 4.0f);
+        dl->AddText(font, fs, ImVec2(x, y), colour, text.c_str());
+        return ts;
+    };
+    // the tool row
+    if (hotbarShow_ > 0) {
+        static const char* names[6] = {"hands", "gun", "map", "light", "parachute", "wingsuit"};
+        const float alpha = static_cast<float>(std::min(Real(1), hotbarShow_ / 0.4));
+        // each box as wide as its words, 14 px apart, the row centred
+        std::string words[6];
+        float widths[6], total = 0;
+        for (int k = 0; k < 6; ++k) {
+            words[k] = std::to_string(k + 1) + "  " + names[k];
+            widths[k] = font->CalcTextSizeA(fs, 1e9f, 0.0f, words[k].c_str()).x + 16.0f;
+            total += widths[k] + (k ? 14.0f : 0.0f);
+        }
+        const float y = H - 52.0f;
+        float x = W * 0.5f - total * 0.5f;
+        for (int k = 0; k < 6; ++k) {
+            const bool on = gear_ == k + 1;
+            const std::string& t = words[k];
+            const ImU32 fg = on ? IM_COL32(20, 20, 20, static_cast<int>(255 * alpha))
+                                : IM_COL32(235, 235, 235, static_cast<int>(220 * alpha));
+            const ImU32 bg = on ? IM_COL32(255, 220, 110, static_cast<int>(235 * alpha))
+                                : IM_COL32(0, 0, 0, static_cast<int>(140 * alpha));
+            label(x + widths[k] * 0.5f, y, t, fg, bg);
+            x += widths[k] + 14.0f;
+        }
+    }
+    // what to press now
+    if (gear_ != 5 && gear_ != 6) return;
+    const bool chute = gear_ == 5;
+    std::string text;
+    ImU32 colour = IM_COL32(255, 255, 255, 235);
+    const CharacterController* cc = ctx.world.get<CharacterController>(playerEntity);
+    const Transform* t = ctx.world.get<Transform>(playerEntity);
+    if (!cc || !t || cc->characterId == INVALID_CHARACTER) return;
+    PhysicsWorld& pw = physicsSys.physicsWorld();
+    if (move_ == Move::Parachute) {
+        text = "look to steer     W dive     S flare     Ctrl cut away";
+    } else if (move_ == Move::Wingsuit) {
+        char buf[128];
+        std::snprintf(buf, sizeof(buf), "%.0f km/h     look down to dive, up to climb     Space parachute     Ctrl fold",
+                      pw.characterVelocity(cc->characterId).length() * 3.6);
+        text = buf;
+    } else if (pw.characterGroundState(cc->characterId) == GroundState::InAir && !swim_.swimming) {
+        PhysicsWorld::RayHit g;
+        const bool low = pw.castRayHit(t->position, Vec3(0, -(cc->halfHeight + cc->radius + tune_.deployMinHeight), 0), g);
+        if (low) {
+            text = "too low to open";
+            colour = IM_COL32(200, 200, 200, 200);
+        } else {
+            text = chute ? "Space   open the parachute" : "Space   spread the wingsuit";
+            const int a = 180 + static_cast<int>(75 * std::sin(hudClock_ * 6.0));
+            colour = IM_COL32(255, 225, 120, a);
+        }
+    } else {
+        text = chute ? "parachute on     jump off something high, then Space in the air"
+                     : "wingsuit on     jump off something high, then Space in the air";
+    }
+    label(W * 0.5f, H - (hotbarShow_ > 0 ? 100.0f : 56.0f), text, colour, IM_COL32(0, 0, 0, 150));
+#else
+    (void)ctx;
+#endif
+}
+
 void PlayerSystem::render(FrameContext& ctx) {
     // TELEMETRY for `move?` (the socket): what the body is doing and why it last changed.
     {
@@ -714,7 +796,9 @@ void PlayerSystem::render(FrameContext& ctx) {
         ctx.settings.setString("player.telemetry", buf);
     }
 #ifdef RT_ENABLE_IMGUI
-    if (ImGui::GetCurrentContext() == nullptr || !ctx.debugOverlayActive) return;
+    if (ImGui::GetCurrentContext() == nullptr) return;
+    drawGearHud(ctx);
+    if (!ctx.debugOverlayActive) return;
     ImGui::Begin("Debug");
     if (ImGui::CollapsingHeader("Movement")) {
         ImGui::TextDisabled("live; Save keeps them in settings.json (movement.*)");
@@ -853,6 +937,7 @@ void PlayerSystem::update(FrameContext& ctx) {
             !(ctx.world.alive(playerEntity) && ctx.world.has<InVehicle>(playerEntity))) {
             if (k != gear_ && (k == 5 || k == 6)) event(k == 5 ? "parachute on your back" : "wingsuit on");
             gear_ = k;
+            hotbarShow_ = 3.0;
         }
     if (ctx.actions.pressed("player_jump") &&
         !(ctx.world.alive(playerEntity) &&
