@@ -53,6 +53,8 @@ void VehicleSystem::onStart(FrameContext& ctx) {
     ctx.actions.bindButton("drive_brake", GamepadButton::B);
     ctx.actions.setActionContext("drive_brake", engine::InputContext::InVehicle);
     ctx.actions.bindButton("drive_handbrake", KeyCode::LeftControl);
+    // RB on the pad: the drift's handbrake had no button there (LB / RB cycle the tools only on foot)
+    ctx.actions.bindButton("drive_handbrake", GamepadButton::RightBumper);
     ctx.actions.setActionContext("drive_handbrake", engine::InputContext::InVehicle);
 
     // GETTING IN is the interaction broker's E like everything else (Glenn, 2026-10-02: "move getting into the
@@ -65,6 +67,7 @@ void VehicleSystem::onStart(FrameContext& ctx) {
 
     // Recover a rolled car (keep heading, level it, lift it).
     ctx.actions.bindButton("vehicle_flip", KeyCode::T);
+    ctx.actions.bindButton("vehicle_flip", GamepadButton::LeftBumper);
     ctx.actions.setActionContext("vehicle_flip", engine::InputContext::InVehicle);
     // DRIFT BOOST (ADR-0236): spend what the slides banked.
     ctx.actions.bindButton("vehicle_boost", KeyCode::LeftShift);
@@ -620,7 +623,16 @@ void VehicleSystem::handleEnterExit(FrameContext& ctx) {
             // car (the CitySim bridge sees the component gone and frees the agent),
             // so there's ever only ONE driver — now the player.
             if (ctx.world.has<AgentDriver>(best)) ctx.world.remove<AgentDriver>(best);
-            ctx.world.get<Vehicle>(best)->driver = player;
+            Vehicle& v = *ctx.world.get<Vehicle>(best);
+            // A BIKE LYING ON ITS SIDE is picked up as you get on (Glenn, 2026-10-24: "if you ramp off the bike and
+            // it falls over and you try and get onto it you just ragdoll"): it read as going down the moment you sat.
+            const Transform& bt = *ctx.world.get<Transform>(best);
+            if (v.config.twoWheeler && v.vehicleId != PhysicsWorld::INVALID_VEHICLE &&
+                bt.orientation.rotate(Vec3(0, 1, 0)).y < std::cos(v.config.maxLeanDegrees * 0.0174533))
+                physicsSys.physicsWorld().resetVehicleUpright(v.vehicleId, 0.3);
+            bikeUpright_ = false;
+            bikeSpeeds_.clear();
+            v.driver = player;
             cameras.setFollowTarget(best);
             // a bike's chase sits closer than a car's (the car's 8 m left a motorcycle a speck)
             if (ctx.world.get<Vehicle>(best)->config.twoWheeler) cameras.setFollowFraming(4.0, 1.0);
@@ -650,7 +662,8 @@ void VehicleSystem::crashOffBikes(FrameContext& ctx) {
     Real recent = v->speed;
     for (const auto& s : bikeSpeeds_) recent = std::max(recent, s.second);
     const Real tilt = std::acos(std::clamp(bt->orientation.rotate(Vec3(0, 1, 0)).y, Real(-1), Real(1))) * 57.29578;
-    const bool down = tilt > v->config.maxLeanDegrees + 10.0 && v->speed < 25.0;
+    if (tilt < v->config.maxLeanDegrees) bikeUpright_ = true;
+    const bool down = bikeUpright_ && tilt > v->config.maxLeanDegrees + 10.0 && v->speed < 25.0;
     const bool hit = recent - v->speed > 7.0;   // 25 km/h gone in 0.3 s
     if (!down && !hit) return;
     const Vec3 ahead = bt->orientation.rotate(Vec3(0, 0, 1));
@@ -783,6 +796,7 @@ void VehicleSystem::update(FrameContext& ctx) {
 
     updateHorn(ctx);
     updateEngines(ctx);
+    updateTyres(ctx);
 }
 
 void VehicleSystem::updateEngines(FrameContext& ctx) {
@@ -802,7 +816,7 @@ void VehicleSystem::updateEngines(FrameContext& ctx) {
     const Vec3 ear = ctx.view.camera.position;
     ctx.world.each<Transform, Vehicle>([&](Entity e, Transform& t, Vehicle& v) {
         const bool running = v.driver.valid() || ctx.world.has<AgentDriver>(e);
-        if (!running) return;
+        if (!running || v.pedalled) return;   // a bicycle has legs, not an engine
         const Real d2 = (t.position - ear).lengthSquared();
         if (d2 > kEngineAudibleRange * kEngineAudibleRange) return;
         heard.push_back({e, t.position,
@@ -883,6 +897,81 @@ void VehicleSystem::updateEngines(FrameContext& ctx) {
             ctx.audio.setVoiceVolume(ev.voice, ev.gain);
         }
     }
+}
+
+void VehicleSystem::updateTyres(FrameContext& ctx) {
+    if (!ctx.audio.ready()) return;
+    if (!tyreClips_) {
+        const uint32_t r = ctx.audio.sampleRate();
+        auto make = [&](const std::vector<float>& pcm) { return ctx.audio.createClip(pcm.data(), pcm.size(), 1, r); };
+        squeal_.clip = make(sfx::tyreSqueal(r, 1));
+        freewheel_.clip = make(sfx::freewheel(r, 1));
+        roll_.clip = make(sfx::tyreRoll(r, 1));
+        tyreClips_ = true;
+    }
+    const float dt = static_cast<float>(std::min(ctx.frameDelta, 0.1));
+    auto drive = [&](TyreLoop& l, float target, float pitch, const Vec3& at, float rate) {
+        l.gain += (target - l.gain) * std::min(1.0f, rate * dt);
+        if (!l.voice.valid() || !ctx.audio.isPlaying(l.voice)) {
+            l.voice = AudioVoiceHandle{};
+            if (l.gain < 0.005f || !l.clip.valid()) return;
+            AudioPlayParams p;
+            p.loop = true;
+            p.volume = 0.0f;
+            p.pitch = pitch;
+            l.voice = ctx.audio.playAt(l.clip, at, 70.0, p);
+            if (!l.voice.valid()) return;
+        }
+        if (l.gain < 0.003f && target <= 0.0f) {
+            ctx.audio.stop(l.voice);
+            l.voice = AudioVoiceHandle{};
+            l.gain = 0.0f;
+            return;
+        }
+        ctx.audio.setVoiceVolume(l.voice, l.gain);
+        ctx.audio.setVoicePitch(l.voice, std::max(0.05f, pitch));
+        ctx.audio.setVoicePosition(l.voice, at);
+    };
+    // the player's ride, if any
+    Entity car;
+    ctx.world.each<ControlledBy, InVehicle>([&](Entity, ControlledBy&, InVehicle& iv) {
+        if (!car.valid()) car = iv.vehicle;
+    });
+    const Vehicle* v = car.valid() && ctx.world.alive(car) ? ctx.world.get<Vehicle>(car) : nullptr;
+    const Transform* t = v ? ctx.world.get<Transform>(car) : nullptr;
+    if (!v || !t || v->vehicleId == PhysicsWorld::INVALID_VEHICLE) {
+        const Vec3 ear = ctx.view.camera.position;
+        drive(squeal_, 0, 1, ear, 10);
+        drive(freewheel_, 0, 1, ear, 10);
+        drive(roll_, 0, 1, ear, 10);
+        return;
+    }
+    PhysicsWorld& pw = physicsSys.physicsWorld();
+    const Real speed = std::fabs(v->speed);
+    // SQUEAL: the tyres sliding sideways (the slip angle -- a drift) or spinning / locked along (a burnout, a stop)
+    const PhysicsWorld::VehicleTelemetry tel = pw.vehicleTelemetry(v->vehicleId);
+    auto smooth = [](Real a, Real b, Real x) {
+        const Real u = std::clamp((x - a) / (b - a), Real(0), Real(1));
+        return u * u * (3 - 2 * u);
+    };
+    Real along = 0;
+    for (std::size_t i = 0; i < tel.wheelSlip.size(); ++i)
+        if (i < tel.wheelContact.size() && tel.wheelContact[i]) along = std::max(along, std::fabs(tel.wheelSlip[i]));
+    const Real side = std::fabs(pw.vehicleDrift(v->vehicleId).slipDeg);
+    // (Glenn, 2026-10-24: "a little too much": from 7 deg it squealed through every brisk corner, at 0.8 -- now only
+    // a real slide, and quieter)
+    const Real slide = std::max(smooth(12.0, 32.0, side), smooth(0.35, 0.9, along)) * smooth(3.0, 9.0, speed);
+    drive(squeal_, static_cast<float>(0.45 * slide), static_cast<float>(0.9 + 0.15 * slide + speed / 150.0),
+          t->position, 9);
+    // A BICYCLE: the freewheel's pawls ticking while it coasts (as fast as the back wheel turns), the tyres' hum
+    const bool bike = v->pedalled;
+    const Real r = v->config.wheels.empty() ? 0.34 : v->config.wheels.back().radius;
+    const Real clicks = 24.0 * speed / (6.283185307179586 * r);   // 24 pawl engagements a turn
+    const bool coasting = bike && speed > 0.8 && std::fabs(v->throttle) < 0.05;
+    drive(freewheel_, coasting ? static_cast<float>(0.3 * smooth(0.8, 3.0, speed)) : 0.0f,
+          static_cast<float>(std::clamp(clicks / 40.0, 0.25, 3.0)), t->position, 12);
+    drive(roll_, bike ? static_cast<float>(0.45 * std::pow(std::clamp(speed / 9.0, 0.0, 1.0), 0.8)) : 0.0f,
+          static_cast<float>(0.7 + speed / 14.0), t->position, 8);
 }
 
 void VehicleSystem::updateHorn(FrameContext& ctx) {

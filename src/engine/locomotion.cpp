@@ -33,6 +33,10 @@ const std::vector<MovementTuning::Field>& MovementTuning::fields() {
         {"steepPush", &T::steepPush, 0, 6, "Jump"},
         {"wedgedTime", &T::wedgedTime, 0, 1, "Jump"},
         {"airAccel", &T::airAccel, 0, 20, "Jump"},
+        {"jumpCut", &T::jumpCut, 0, 1, "Jump"},
+        {"runJumpScale", &T::runJumpScale, 1, 2, "Jump"},
+        {"wallJumpUp", &T::wallJumpUp, 0, 10, "Jump"},
+        {"wallJumpOut", &T::wallJumpOut, 0, 10, "Jump"},
         {"mantleReach", &T::mantleReach, 0.1, 1.2, "Mantle"},
         {"mantleMinHeight", &T::mantleMinHeight, 0.2, 1.5, "Mantle"},
         {"mantleMaxHeight", &T::mantleMaxHeight, 0.8, 3.0, "Mantle"},
@@ -81,6 +85,9 @@ const std::vector<MovementTuning::Field>& MovementTuning::fields() {
         {"grappleMinRope", &T::grappleMinRope, 0.5, 10, "Grapple"},
         {"grapplePump", &T::grapplePump, 0, 15, "Grapple"},
         {"grappleSteer", &T::grappleSteer, 0, 10, "Grapple"},
+        {"grappleHookSpeed", &T::grappleHookSpeed, 20, 600, "Grapple"},
+        {"grappleStretch", &T::grappleStretch, 0, 0.2, "Grapple"},
+        {"grappleBounce", &T::grappleBounce, 0.05, 1.5, "Grapple"},
         {"boardPush", &T::boardPush, 0.2, 6, "Board"},
         {"boardPushMax", &T::boardPushMax, 2, 20, "Board"},
         {"scooterPushMax", &T::scooterPushMax, 2, 20, "Board"},
@@ -358,8 +365,35 @@ GrappleAnchor findGrappleAnchor(const PhysicsWorld& world, const Vec3& eye, cons
     return best;
 }
 
-Vec3 ropeStep(Vec3& pos, const Vec3& vel, const Vec3& anchor, Real length, const Vec3& accel, Real dt) {
+Vec3 ropeStep(Vec3& pos, const Vec3& vel, const Vec3& anchor, Real length, const Vec3& accel, Real dt, Real stretch,
+              Real bounce) {
     Vec3 v = vel + (Vec3(0, -9.81, 0) + accel) * dt;
+    if (stretch > 0 && length > 1e-6) {
+        // the give: a spring past the length (stiffness per kg from the weight it stretches under), damped along
+        // the rope only, stepped implicitly so a short stiff rope can't ring itself apart
+        const Vec3 out = pos - anchor;
+        const Real d = out.length();
+        if (d > length) {
+            const Vec3 n = out * (1.0 / d);
+            const Real k = 9.81 / (stretch * length);
+            const Real c = 2.0 * bounce * std::sqrt(k);
+            const Real radial = dot(v, n);
+            const Real pulled = (radial - k * (d - length) * dt) / (1.0 + c * dt + k * dt * dt);
+            v = v + n * (pulled - radial);
+        }
+        Vec3 next = pos + v * dt;
+        const Vec3 o2 = next - anchor;
+        const Real d2 = o2.length();
+        const Real most = length * (1.0 + 4.0 * stretch);
+        if (d2 > most && d2 > 1e-6) {
+            const Vec3 n = o2 * (1.0 / d2);
+            next = anchor + n * most;
+            const Real away = dot(v, n);
+            if (away > 0) v = v - n * away;
+        }
+        pos = next;
+        return v;
+    }
     Vec3 next = pos + v * dt;
     Vec3 out = next - anchor;
     const Real d = out.length();

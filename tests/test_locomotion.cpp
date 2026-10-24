@@ -5,6 +5,7 @@
 #include "../src/engine/block_body.h"
 #include "../src/engine/locomotion.h"
 #include "../src/engine/physics/physics_world.h"
+#include "../src/engine/rope_line.h"
 
 #include <cmath>
 #include <cstdio>
@@ -362,6 +363,94 @@ TEST_CASE(a_rope_swings_like_a_pendulum_without_gaining_height) {
     Vec3 q(0, 15, 0), w(0, 0, 0);
     w = ropeStep(q, w, anchor, L, Vec3(0, 0, 0), kDt);
     CHECK_APPROX(w.y, -9.81 * kDt, 1e-9);
+}
+
+TEST_CASE(a_rope_that_gives_catches_a_fall_with_a_bounce_and_no_energy_from_nothing) {
+    // Glenn, 2026-10-24: "make the grapple a little more rope like". 5 m of slack, then the rope catches: it gives a
+    // little, bounces the body back up, and settles where the weight stretches it -- never back up to the start.
+    const Vec3 anchor(0, 20, 0);
+    const Real L = 10.0, stretch = 0.02;
+    Vec3 p(0, 15, 0), v(0, 0, 0);
+    Real lowest = 1e9, highestAfter = -1e9;
+    bool caught = false, bounced = false;
+    for (int i = 0; i < 8 * 60; i++) {
+        v = ropeStep(p, v, anchor, L, Vec3(0, 0, 0), kDt, stretch, 0.4);
+        lowest = std::min(lowest, p.y);
+        if (p.y < 10.0) caught = true;
+        if (caught && v.y > 0.5) bounced = true;
+        if (caught) highestAfter = std::max(highestAfter, p.y);
+    }
+    std::printf("    [rope give] lowest %.2f m below the anchor, settled at %.3f\n", 20 - lowest, 20 - p.y);
+    CHECK(bounced);
+    CHECK(20 - lowest > L * (1 + stretch));           // it gave more than the weight alone stretches it
+    CHECK(20 - lowest <= L * (1 + 4 * stretch) + 1e-6);   // ...but never past its limit
+    CHECK(highestAfter < 15.0);                        // the bounce never gets back to where it fell from
+    CHECK_APPROX(20 - p.y, L * (1 + stretch), 0.03);   // hanging still: the weight's stretch
+    CHECK(v.length() < 0.1);
+    // a swing on it gains nothing either
+    Vec3 q(10, 20, 0), w(0, 0, 0);
+    Real top = -1e9;
+    for (int i = 0; i < 6 * 60; i++) {
+        w = ropeStep(q, w, anchor, L, Vec3(0, 0, 0), kDt, stretch, 0.4);
+        if (i > 60) top = std::max(top, q.y);
+    }
+    CHECK(top <= 20.0 + 0.05);
+}
+
+TEST_CASE(the_drawn_rope_hangs_slack_runs_straight_taut_and_lies_over_a_ledge) {
+    RopeLine r;
+    const Vec3 hand(0, 0, 0), hook(10, 0, 0);
+    // slack (12 m between ends 10 m apart): it sags in the middle
+    r.reset(hand);
+    for (int i = 0; i < 300; i++) r.step(hand, hook, false, 12.0, kDt, nullptr);
+    Real sag = 0;
+    for (const Vec3& q : r.points()) sag = std::min(sag, q.y);
+    // taut (rope as long as the span): straight
+    RopeLine t;
+    t.reset(hand);
+    for (int i = 0; i < 300; i++) t.step(hand, hook, false, 10.0, kDt, nullptr);
+    Real bow = 0;
+    for (const Vec3& q : t.points()) bow = std::max(bow, std::fabs(q.y));
+    std::printf("    [rope line] slack sags %.2f m, taut bows %.3f m\n", -sag, bow);
+    CHECK(sag < -1.5);
+    CHECK(bow < 0.05);
+    // the ends are where they were pinned
+    CHECK((t.points().front() - hand).length() < 1e-9);
+    CHECK((t.points().back() - hook).length() < 1e-9);
+    // a slack rope from a hand on a roof (a building x < 2, y < 0) to a hook down past the edge: it lies on the
+    // roof and over the edge, never through it
+    const RopeLine::Sweep roof = [](const Vec3& a, const Vec3& b, Vec3& hit, Vec3& n) {
+        if (a.y >= 0 && b.y < 0) {   // down through the roof
+            const Vec3 at = a + (b - a) * (a.y / (a.y - b.y));
+            if (at.x <= 2.0) { hit = at; n = Vec3(0, 1, 0); return true; }
+        }
+        if (a.x >= 2 && b.x < 2) {   // in through the wall
+            const Vec3 at = a + (b - a) * ((a.x - 2) / (a.x - b.x));
+            if (at.y <= 0) { hit = at; n = Vec3(1, 0, 0); return true; }
+        }
+        return false;
+    };
+    RopeLine e;
+    e.reset(Vec3(0, 0.5, 0));
+    for (int i = 0; i < 400; i++) e.step(Vec3(0, 0.5, 0), Vec3(4, -4, 0), false, 9.0, kDt, roof);
+    int onRoof = 0, through = 0;
+    for (const Vec3& q : e.points()) {
+        if (q.x < 2.0 && q.y < -0.01) ++through;
+        if (q.x > 0.2 && q.x < 2.0 && q.y < 0.1) ++onRoof;
+    }
+    std::printf("    [rope line] %d points lying on the roof, %d through it\n", onRoof, through);
+    CHECK(onRoof >= 2);
+    CHECK(through == 0);
+    // let go: the free end comes back as the rope is reeled in
+    RopeLine l;
+    l.reset(hand);
+    for (int i = 0; i < 60; i++) l.step(hand, hook, false, 10.0, kDt, nullptr);
+    Real len = 10.0;
+    for (int i = 0; i < 40; i++) {
+        len = std::max(Real(0.2), len - 35.0 * kDt);
+        l.step(hand, Vec3(), true, len, kDt, nullptr);
+    }
+    CHECK((l.points().back() - hand).length() < 0.5);
 }
 
 TEST_CASE(the_grapple_hook_snaps_to_a_beam_just_off_the_aim) {

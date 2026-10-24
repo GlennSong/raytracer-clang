@@ -49,6 +49,7 @@ void PlayerSystem::onStart(FrameContext& ctx) {
     // First <-> third person on foot. V is also CameraSystem's viewport-cycle
     // key; see the placed-camera guard in update().
     ctx.actions.bindButton("player_camera_toggle", KeyCode::V);
+    ctx.actions.bindButton("player_camera_toggle", GamepadButton::Back);   // View / Select / Share
     // JUMP and CROUCH. Both keys are shared with driving actions (Space is the
     // brake, LeftControl the handbrake) — the same context gating T already
     // uses: these fire only on foot, those only while seated. The debug
@@ -221,7 +222,8 @@ void PlayerSystem::fixedUpdate(FrameContext& ctx) {
             else aim_.ok = false;
             if (grappleFire_) {
                 grappleFire_ = false;
-                if (gear_ == 7 && !swim_.swimming && move_ != Move::Grapple) tryGrapple(t, cc);
+                if (gear_ == 7 && !swim_.swimming && move_ != Move::Grapple && (hook_ == Hook::None || hook_ == Hook::Loose))
+                    fireHook(t, cc);
             }
             if (move_ == Move::Grapple) {
                 stepGrapple(ctx, t, cc, dt);
@@ -375,13 +377,20 @@ void PlayerSystem::fixedUpdate(FrameContext& ctx) {
                 const Real stroking = std::min(Real(1), desired.length() / std::max(moveSpeed, Real(0.1)));
                 if (stroking > 0.1)
                     strokePhase_ += dt / std::max(tune_.strokePeriod, Real(0.1)) * (run ? 1.35 : 1.0);
+                // STILL, YOU TREAD WATER upright; going somewhere you tip forward into the crawl (Glenn, 2026-10-24:
+                // "if you're not moving in a direction you should bobble in the water and maybe he should kick his
+                // legs to float. On when you go in a direction should you dive forward and swim")
+                swimStroke_ += ((stroking > 0.1 ? Real(1) : Real(0)) - swimStroke_) * (1.0 - std::exp(-dt * 4.0));
                 const Real pace = tune_.swimSpeed * (run ? tune_.swimRunScale : Real(1)) *
                                   strokeSpeedScale(strokeSurgePhase(strokePhase_), tune_.strokeSurge);
                 // the water takes the way on gradually: a dive carries in, a stroke builds speed
                 const Vec3 stroke = desired * (pace / std::max(moveSpeed, Real(0.1)));
                 const Real take = 1.0 - std::exp(-dt * 3.0);
                 Vec3 v(airVel_.x + (stroke.x - airVel_.x) * take, 0, airVel_.z + (stroke.z - airVel_.z) * take);
-                const Real bob = 0.04 * std::sin(swimClock_ * 1.7);
+                // the bob: a slow swell, and treading, a lift with each kick (two a second, one per leg)
+                const Real treading = 1.0 - swimStroke_;
+                const Real bob = (0.04 + 0.03 * treading) * std::sin(swimClock_ * 1.7) +
+                                 0.025 * treading * std::sin(swimClock_ * 12.566370614359172);   // 2 Hz
                 swimVy_ = swimVerticalStep(swimVy_, t.position.y, floatY + bob, rise, dive, dt, tune_);
                 v.y = swimVy_;
                 airVel_ = Vec3(v.x, 0, v.z);   // leaving the water keeps the stroke's speed
@@ -421,7 +430,9 @@ void PlayerSystem::fixedUpdate(FrameContext& ctx) {
                 const JumpGate::Launch l =
                     gate_.take(before, pw.characterGroundNormal(cc.characterId), tune_, dt);
                 if (l.go) {
-                    pw.launchCharacter(cc.characterId, tune_.jumpSpeed);
+                    const bool running = run && Vec3(desired.x, 0, desired.z).length() > moveSpeed * 1.2;
+                    pw.launchCharacter(cc.characterId, tune_.jumpSpeed * (running ? tune_.runJumpScale : Real(1)));
+                    jumpRising_ = true;
                     airVel_ = Vec3(desired.x, 0, desired.z) + l.push;
                     desired = airVel_;
                     launched = true;
@@ -430,6 +441,25 @@ void PlayerSystem::fixedUpdate(FrameContext& ctx) {
                                                           : "jump (off steep ground)");
                 }
             }
+            if (!launched && before == GroundState::InAir && gate_.buffered > 0 && camera.positionLocked &&
+                tryWallJump(t, cc, facing, dt)) {
+                gate_.buffered = -1;
+                publishPose(ctx, e, t, cc);
+                lastBodyPos_ = t.position;
+                haveLastBodyPos_ = true;
+                return;
+            }
+            // let go of jump on the way up: the rest of the rise is cut (a tap hops, held jumps)
+            if (!launched && jumpRising_) {
+                const Real vy = pw.characterVelocity(cc.characterId).y;
+                if (before != GroundState::InAir || vy <= 0) {
+                    jumpRising_ = false;
+                } else if (!ctx.actions.held("player_jump")) {
+                    pw.launchCharacter(cc.characterId, vy * tune_.jumpCut);
+                    jumpRising_ = false;
+                }
+            }
+            if (before == GroundState::OnGround) wallJumped_ = false;
             if (!launched && before == GroundState::InAir && gate_.buffered > 0 && tryDeploy(t, cc)) {
                 gate_.buffered = -1;
                 publishPose(ctx, e, t, cc);
@@ -548,6 +578,37 @@ bool PlayerSystem::tryGrab(Transform& t, CharacterController& cc, const Vec3& fa
     move_ = Move::Climb;
     airVel_ = Vec3(0, 0, 0);
     event("grab the wall");
+    return true;
+}
+
+bool PlayerSystem::tryWallJump(Transform& t, CharacterController& cc, const Vec3& facing, Real dt) {
+    PhysicsWorld& pw = physicsSys.physicsWorld();
+    // look for the wall the way the body is going, the way it faces, and to either side: the nearest close one
+    const Vec3 going = Vec3(airVel_.x, 0, airVel_.z).lengthSquared() > 0.25 ? normalize(Vec3(airVel_.x, 0, airVel_.z))
+                                                                             : facing;
+    const Vec3 dirs[] = {going, facing, Vec3(-going.z, 0, going.x), Vec3(going.z, 0, -going.x)};
+    const Vec3 from = t.position + Vec3(0, cc.halfHeight * 0.3, 0);
+    WallHit best;
+    for (const Vec3& d : dirs) {
+        const WallHit w = probeWall(pw, from, d, cc.radius + 0.45, tune_);
+        if (!w.hit || std::fabs(w.normal.y) > 0.5) continue;   // a wall, not a floor or a ceiling
+        if (!best.hit || w.distance < best.distance) best = w;
+    }
+    if (!best.hit) return false;
+    const Vec3 n = normalize(Vec3(best.normal.x, 0, best.normal.z));
+    if (wallJumped_ && dot(n, wallJumpNormal_) > 0.7) return false;   // the same wall again: no climbing it by kicks
+    const Vec3 h(airVel_.x, 0, airVel_.z);
+    const Vec3 along = h - n * dot(h, n);   // keep the run along the wall, lose the speed into it
+    airVel_ = along + n * tune_.wallJumpOut;
+    pw.launchCharacter(cc.characterId, tune_.wallJumpUp);
+    gate_.sinceLaunch = 0;
+    jumpRising_ = false;   // the kick is a tap: always the whole of it
+    wallJumped_ = true;
+    wallJumpNormal_ = n;
+    regrab_ = std::max(regrab_, Real(0.4));   // a moment before reaching for the next wall grabs it
+    pw.moveCharacter(cc.characterId, airVel_, dt);
+    t.position = pw.characterPosition(cc.characterId);
+    event("jump off the wall");
     return true;
 }
 
@@ -827,6 +888,7 @@ void PlayerSystem::stepBoard(FrameContext& ctx, Transform& t, CharacterControlle
         gate_.buffered = -1;
         gate_.sinceLaunch = 0;
         pw.launchCharacter(cc.characterId, tune_.boardOllie);
+        ++ollies_;
         event(gear_ == 8 ? "ollie" : "hop");
     }
     const Vec3 want = boardHeading_ * boardSpeed_;
@@ -836,6 +898,10 @@ void PlayerSystem::stepBoard(FrameContext& ctx, Transform& t, CharacterControlle
     t.position = pw.characterPosition(cc.characterId);
     const GroundState after = pw.characterGroundState(cc.characterId);
     if (after == GroundState::OnGround || after == GroundState::OnSteepGround) fall.onGrounded(t.position.y);
+    if (!grounded && after == GroundState::OnGround && vyBefore < -1.0) {   // the wheels back down
+        ++boardLands_;
+        landSpeed_ = -vyBefore;
+    }
     // into something: a wall takes the speed; hard enough and you're off and limp
     const Vec3 moved(t.position.x - was.x, 0, t.position.z - was.z);
     const Real got = dot(moved, boardHeading_) / std::max(dt, Real(1e-4));
@@ -857,23 +923,100 @@ void PlayerSystem::stepBoard(FrameContext& ctx, Transform& t, CharacterControlle
 
 // --- the grapple -------------------------------------------------------------
 
-bool PlayerSystem::tryGrapple(Transform& t, CharacterController& cc) {
-    if (!aim_.ok) {
-        event("nothing to hook");
-        return false;
-    }
+void PlayerSystem::fireHook(Transform& t, CharacterController& cc) {
+    // at what it was aimed at, or (nothing in reach) out to the end of the line, to come back loose
+    const Vec3 hand = t.position + Vec3(0, cc.halfHeight + cc.radius * 0.5, 0);
+    hookWillHold_ = aim_.ok;
+    hookTarget_ = aim_.ok ? aim_.point : t.position + Vec3(0, eyeHeight, 0) + camera.forward() * tune_.grappleRange;
+    hookTip_ = hand;
+    hook_ = Hook::Flying;
+    ropeLine_.reset(hand);
+    ++hookShots_;
+    event(aim_.ok ? "hook out" : "nothing to hook");
+}
+
+bool PlayerSystem::attachRope(Transform& t, CharacterController& cc, const Vec3& at) {
     PhysicsWorld& pw = physicsSys.physicsWorld();
-    anchor_ = aim_.point;
+    anchor_ = at;
     const Vec3 hand = t.position + Vec3(0, cc.halfHeight + cc.radius * 0.5, 0);
     ropeLen_ = std::max(tune_.grappleMinRope, (anchor_ - hand).length());
     ropeVel_ = pw.characterVelocity(cc.characterId);
-    // hooked from the ground: a hard pull for a moment, so the body leaves it and swings
-    yank_ = pw.characterGroundState(cc.characterId) == GroundState::OnGround ? 0.5 : 0.0;
-    if (move_ == Move::Walk || move_ == Move::Parachute || move_ == Move::Wingsuit) move_ = Move::Grapple;
+    if (move_ != Move::Walk && move_ != Move::Parachute && move_ != Move::Wingsuit) return false;
+    // HOOKED FROM THE GROUND: a hop and a hard pull, reeling until the swing would clear the ground under the anchor;
+    // then the reel takes up the slack as the body flies in, so the rope catches it into a swing (Glenn, 2026-10-24:
+    // "If you grapple from the ground without any jump or anything you will fall over immediately" -- the pull threw
+    // the body in faster than the rope shortened, the rope went slack and it came down in an arc with no swing).
+    yank_ = 0;
+    takeUp_ = false;
+    if (pw.characterGroundState(cc.characterId) == GroundState::OnGround) {
+        PhysicsWorld::RayHit below;
+        const Real under = pw.castRayHit(anchor_ - Vec3(0, 0.3, 0), Vec3(0, -200, 0), below)
+                               ? anchor_.y - below.point.y : Real(200);
+        yankTo_ = std::max(tune_.grappleMinRope, under - (2 * (cc.halfHeight + cc.radius) + 0.5));
+        yank_ = 4.0;   // at most: it ends when the rope is down to yankTo_
+        takeUp_ = true;
+        ropeVel_.y = std::max(ropeVel_.y, tune_.jumpSpeed);
+    }
+    move_ = Move::Grapple;
     char buf[96];
-    std::snprintf(buf, sizeof(buf), "hooked %.0f m away", aim_.distance);
+    std::snprintf(buf, sizeof(buf), "hooked %.0f m away", (anchor_ - hand).length());
     event(buf);
     return true;
+}
+
+// THE HOOK AND THE ROPE YOU SEE, every step whatever the body is doing (publishPose, which every branch calls, runs it)
+void PlayerSystem::stepHook(Transform& t, CharacterController& cc, Real dt) {
+    constexpr Real kReelBack = 35.0;   // m/s a let-go rope comes back in
+    const Vec3 hand = t.position + Vec3(0, cc.halfHeight + cc.radius * 0.5, 0);
+    if (hook_ == Hook::Flying) {
+        const Vec3 to = hookTarget_ - hookTip_;
+        const Real d = to.length(), stepLen = tune_.grappleHookSpeed * dt;
+        if (!grappleHeld_) {
+            hook_ = Hook::Loose;   // let go before it got there: it comes back
+            looseLen_ = (hookTip_ - hand).length();
+        } else if (d <= stepLen) {
+            hookTip_ = hookTarget_;
+            if (hookWillHold_) ++hookBites_;
+            if (hookWillHold_ && attachRope(t, cc, hookTarget_)) {
+                hook_ = Hook::Hooked;
+            } else {
+                hook_ = Hook::Loose;
+                looseLen_ = (hookTip_ - hand).length();
+            }
+        } else {
+            hookTip_ = hookTip_ + to * (stepLen / d);
+        }
+    }
+    if (hook_ == Hook::Hooked && move_ != Move::Grapple) {   // let go, pulled up over the edge, gone limp...
+        hook_ = Hook::Loose;
+        looseLen_ = std::max(ropeLen_, (anchor_ - hand).length());
+    }
+    if (hook_ == Hook::Loose) {
+        looseLen_ -= kReelBack * dt;
+        if (looseLen_ <= 0.2) {
+            hook_ = Hook::None;
+            ropeLine_.clear();
+        }
+    }
+    if (hook_ == Hook::None) return;
+    const PhysicsWorld& pw = physicsSys.physicsWorld();
+    const RopeLine::Sweep sweep = [&pw](const Vec3& from, const Vec3& to, Vec3& hit, Vec3& normal) {
+        const Vec3 d = to - from;
+        if (d.lengthSquared() < 1e-8) return false;
+        PhysicsWorld::RayHit h;
+        if (!pw.castRayHit(from, d, h)) return false;
+        hit = h.point;
+        normal = h.normal;
+        return true;
+    };
+    if (hook_ == Hook::Flying) {
+        // paying out behind the hook, a little slack in it so it snakes
+        ropeLine_.step(hand, hookTip_, false, (hookTip_ - hand).length() * 1.05 + 0.3, dt, sweep);
+    } else if (hook_ == Hook::Hooked) {
+        ropeLine_.step(hand, anchor_, false, ropeLen_, dt, sweep);
+    } else {
+        ropeLine_.step(hand, Vec3(0, 0, 0), true, looseLen_, dt, sweep);
+    }
 }
 
 void PlayerSystem::stepGrapple(FrameContext& ctx, Transform& t, CharacterController& cc, Real dt) {
@@ -888,9 +1031,13 @@ void PlayerSystem::stepGrapple(FrameContext& ctx, Transform& t, CharacterControl
     const bool reelIn = camera.positionLocked && ctx.actions.held("player_jump");
     const bool reelOut = camera.positionLocked && ctx.actions.held("player_crouch");
     gate_.buffered = -1;   // jump is the reel here, not a leap
+    const Real lenWas = ropeLen_;
     if (yank_ > 0) {
         yank_ -= dt;
-        ropeLen_ = std::max(tune_.grappleMinRope, ropeLen_ - 2.0 * tune_.grappleReelIn * dt);
+        // full speed, easing off over the last few metres so it doesn't fling the body into what it hooked
+        const Real ease = std::clamp((ropeLen_ - yankTo_) / 6.0, Real(0.35), Real(1));
+        ropeLen_ = std::max(yankTo_, ropeLen_ - 2.0 * tune_.grappleReelIn * ease * dt);
+        if (ropeLen_ <= yankTo_ + 1e-6) yank_ = 0;
     }
     if (reelIn) ropeLen_ = std::max(tune_.grappleMinRope, ropeLen_ - tune_.grappleReelIn * dt);
     if (reelOut) ropeLen_ = std::min(tune_.grappleRange, ropeLen_ + tune_.grappleReelOut * dt);
@@ -904,16 +1051,34 @@ void PlayerSystem::stepGrapple(FrameContext& ctx, Transform& t, CharacterControl
     }
     along = along.lengthSquared() > 1e-8 ? normalize(along) : Vec3(0, 0, -1);
     const Vec3 across(-along.z, 0, along.x);
-    const Vec3 accel = along * (inF * tune_.grapplePump) + across * (inR * tune_.grappleSteer);
+    Vec3 accel = along * (inF * tune_.grapplePump) + across * (inR * tune_.grappleSteer);
+    if (yank_ > 0) accel.y += 9.81;   // the pull runs the body up the line, not sagging under it into the ground
     const Vec3 handWas = t.position + Vec3(0, handUp, 0);
     Vec3 hand = handWas;
-    ropeVel_ = ropeStep(hand, ropeVel_, anchor_, ropeLen_, accel, dt);
+    Vec3 fromAnchor = handWas - anchor_;
+    if (takeUp_) {   // the reel takes in what the body gives it: the rope only shortens to the hand, never pulls
+        ropeLen_ = std::max(tune_.grappleMinRope, std::min(ropeLen_, fromAnchor.length()));
+        const Real out = fromAnchor.length() > 1e-6 ? dot(ropeVel_, normalize(fromAnchor)) : Real(0);
+        if (yank_ <= 0 && out > 0) takeUp_ = false;   // swinging away from the anchor: the rope has the body now
+    }
+    reel_ = (lenWas - ropeLen_) / std::max(dt, Real(1e-4));
+    const bool slackWas = fromAnchor.length() < ropeLen_ * 0.995;
+    const Real outWas = fromAnchor.length() > 1e-6 ? dot(ropeVel_, normalize(fromAnchor)) : Real(0);
+    ropeVel_ = ropeStep(hand, ropeVel_, anchor_, ropeLen_, accel, dt, tune_.grappleStretch, tune_.grappleBounce);
+    if (slackWas && (hand - anchor_).length() >= ropeLen_ * 0.995 && outWas > 2.5) {   // a slack rope caught the body
+        ++ropeSnaps_;
+        snapSpeed_ = outWas;
+    }
     pw.moveCharacterFree(cc.characterId, (hand - handWas) * (1.0 / std::max(dt, Real(1e-4))), dt);
     const Vec3 was = t.position;
     t.position = pw.characterPosition(cc.characterId);
     const Vec3 meant = ropeVel_;
     ropeVel_ = (t.position - was) * (1.0 / std::max(dt, Real(1e-4)));   // what walls and the ground let it do
-    if ((meant - ropeVel_).length() > tune_.limpImpact) {   // swung into something, hard
+    // swung into something, hard: the speed LOST along the way it was going (a sideways shove off a corner, or
+    // the capsule pushed out of a surface, is not a slam: it was read as one at 7 m/s)
+    const Real meantSpeed = meant.length();
+    const Real kept = meantSpeed > 1e-6 ? std::max(Real(0), dot(ropeVel_, meant * (1.0 / meantSpeed))) : Real(0);
+    if (meantSpeed - kept > tune_.limpImpact) {
         char buf[64];
         std::snprintf(buf, sizeof(buf), "slammed into it at %.0f m/s", meant.length());
         return goLimp(t, cc, meant * 0.4, buf);
@@ -927,7 +1092,7 @@ void PlayerSystem::stepGrapple(FrameContext& ctx, Transform& t, CharacterControl
     }
     // down on the ground with the rope slack: walking again
     const GroundState g = pw.characterGroundState(cc.characterId);
-    if (g == GroundState::OnGround && toAnchor.length() < ropeLen_ - 0.15 && !reelIn && yank_ <= 0)
+    if (g == GroundState::OnGround && (toAnchor.length() < ropeLen_ - 0.15 || takeUp_) && !reelIn && yank_ <= 0)
         return release("down off the rope");
 }
 
@@ -947,6 +1112,7 @@ bool PlayerSystem::tryDeploy(Transform& t, CharacterController& cc) {
     chuteHeading_ = h.length() > 0.5 ? normalize(h) : look.lengthSquared() > 1e-6 ? normalize(look) : Vec3(0, 0, -1);
     chuteOpen_ = 0;
     move_ = gear_ == 5 ? Move::Parachute : Move::Wingsuit;
+    if (gear_ == 5) ++chuteOpens_;
     event(gear_ == 5 ? "parachute open" : "wingsuit spread");
     return true;
 }
@@ -1007,19 +1173,38 @@ void PlayerSystem::stepGlide(FrameContext& ctx, Transform& t, CharacterControlle
     }
 }
 
-void PlayerSystem::publishPose(FrameContext& ctx, Entity e, const Transform& t, const CharacterController& cc) {
+void PlayerSystem::publishPose(FrameContext& ctx, Entity e, Transform& t, CharacterController& cc) {
     PlayerPose* p = ctx.world.get<PlayerPose>(e);
     if (!p) {
         ctx.world.add<PlayerPose>(e, PlayerPose{});   // (another type's pool: safe inside this walk)
         p = ctx.world.get<PlayerPose>(e);
         if (!p) return;
     }
+    stepHook(t, cc, ctx.clock.fixedStep());
+    static_assert(PlayerPose::kRopePoints == RopeLine::kPoints, "the pose carries the whole rope");
+    p->ropePoints = 0;
+    if (ropeLine_.active())
+        for (const Vec3& q : ropeLine_.points()) p->rope[p->ropePoints++] = q;
+    p->hookFlying = hook_ == Hook::Flying;
+    p->reel = move_ == Move::Grapple ? reel_ : 0;
+    p->hookShots = hookShots_;
+    p->hookBites = hookBites_;
+    p->ropeSnaps = ropeSnaps_;
+    p->snapSpeed = snapSpeed_;
+    p->chuteOpens = chuteOpens_;
+    p->ollies = ollies_;
+    p->boardLands = boardLands_;
+    p->landSpeed = landSpeed_;
     if (!camera.positionLocked) {   // the freecam: nobody's eye, no arms
         p->mode = PlayerPose::Mode::Hidden;
         return;
     }
     PhysicsWorld& pw = physicsSys.physicsWorld();
     const Vec3 v = pw.characterVelocity(cc.characterId);
+    {
+        const GroundState gs = pw.characterGroundState(cc.characterId);
+        p->grounded = gs == GroundState::OnGround || gs == GroundState::OnSteepGround;
+    }
     p->speed = std::sqrt(v.x * v.x + v.z * v.z);
     p->stride = stride_;
     p->run = camera.positionLocked && ctx.actions.held("player_run");
@@ -1028,6 +1213,8 @@ void PlayerSystem::publishPose(FrameContext& ctx, Entity e, const Transform& t, 
     p->landed = landed_;
     p->climbCycle = climbCycle_;
     p->swimPhase = strokePhase_;
+    p->swimStroke = swimStroke_;
+    p->swimClock = swimClock_;
     p->underwater = swim_.swimming && camera.eye.y < swimLevel_ - 0.05;
     p->progress = 0;
     if (const Climbing* cl = ctx.world.get<Climbing>(e)) {
@@ -1275,11 +1462,24 @@ void PlayerSystem::render(FrameContext& ctx) {
                     }
                 }
         if (ctx.world.alive(playerEntity) && ctx.world.has<Climbing>(playerEntity)) mode = "ladder";
-        char buf[320];
+        // the rope as drawn: its state, how long it is, its lowest point under the straight line hand-to-hook (sag)
+        const char* hook = hook_ == Hook::Flying ? "flying" : hook_ == Hook::Hooked ? "hooked"
+                         : hook_ == Hook::Loose  ? "loose"  : "none";
+        Real sag = 0;
+        if (ropeLine_.active()) {
+            const std::vector<Vec3>& r = ropeLine_.points();
+            for (std::size_t i = 1; i + 1 < r.size(); ++i) {
+                const Real f = static_cast<Real>(i) / (r.size() - 1);
+                sag = std::max(sag, (r.front() + (r.back() - r.front()) * f).y - r[i].y);
+            }
+        }
+        const Real span = ropeLine_.active() ? (ropeLine_.points().back() - ropeLine_.points().front()).length() : 0;
+        char buf[400];
         std::snprintf(buf, sizeof(buf),
                       "mode %s ground %s pos %.2f %.2f %.2f vel %.2f %.2f %.2f speed %.1f stamina %.1f/%.0f gear %d "
-                      "last \"%s\"",
+                      "hook %s rope %.2f span %.2f sag %.2f last \"%s\"",
                       mode, ground, p.x, p.y, p.z, v.x, v.y, v.z, v.length(), stamina_, tune_.staminaMax, gear_,
+                      hook, hook_ == Hook::Hooked ? ropeLen_ : hook_ == Hook::Loose ? looseLen_ : Real(0), span, sag,
                       lastEvent_.c_str());
         ctx.settings.setString("player.telemetry", buf);
     }

@@ -100,8 +100,10 @@ bool Application::initialize(const Config& config,
 
     // Audio is best-effort: a build without RT_ENABLE_AUDIO, or a machine
     // with no device, degrades to silence (ADR-0069) — never a failed boot.
-    // The host picks the mode (see Config::audio); Auto is the desktop default.
-    audioEngine.initialize(config.audio);
+    // The host picks the mode (see Config::audio); Auto is the desktop default. RT_AUDIO=null runs the mixer on the
+    // null device: a probe viewer makes every sound without playing them through the speakers of whoever is at the box.
+    const char* audioEnv = std::getenv("RT_AUDIO");
+    audioEngine.initialize(audioEnv && std::string(audioEnv) == "null" ? AudioBackendMode::Null : config.audio);
 
     clock.setFixedStep(settingsStore.getDouble("fixedTimestep", 1.0 / 60.0));
 

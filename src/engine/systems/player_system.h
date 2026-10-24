@@ -6,6 +6,7 @@
 #include "../camera/follow_camera_controller.h"
 #include "../physics/physics_world.h"
 #include "../locomotion.h"
+#include "../rope_line.h"
 
 #include <algorithm>
 #include <cmath>
@@ -177,11 +178,15 @@ private:
     Vec3 climbNormal_{0, 0, 1};   // the wall held, facing the body
     Vec3 lungeDir_{0, 1, 0};
     Real lunge_ = 0;              // s left on a lunge up the wall
+    bool jumpRising_ = false;     // a jump on its way up that letting go of jump can still cut short
+    bool wallJumped_ = false;     // jumped off a wall since last on the ground...
+    Vec3 wallJumpNormal_;         // ...this one: the next kick must be off another (no running up one wall)
     Real stamina_ = 12;           // s of climbing left
     Real regrab_ = 0;             // s before a wall can be grabbed again (after letting go)
     Real stride_ = 0;             // walk cycles, for the arms
     Real climbCycle_ = 0;
     Real strokePhase_ = 0;        // swim strokes
+    Real swimStroke_ = 0;         // treading (0) to the crawl (1), eased
     Real landed_ = 0;
     int gear_ = 1;                // the tool slot in hand: 5 the parachute, 6 the wingsuit (jump in the air opens it)
     Vec3 glideVel_;               // gliding: the body's velocity, integrated here (engine/locomotion.h)
@@ -199,7 +204,22 @@ private:
     bool grappleFire_ = false;    // the trigger's press, staged for the step
     bool grappleHeld_ = false;    // ...and held: let go and the rope goes
     Real yank_ = 0;               // s left of the pull that lifts a body hooked from the ground into the swing
-    bool tryGrapple(Transform& t, CharacterController& cc);
+    Real yankTo_ = 0;             // m: the rope the pull reels down to, short enough that the swing clears the ground
+    bool takeUp_ = false;         // after a pull from the ground the reel takes up the slack until the rope catches
+    Real reel_ = 0;               // m/s reeling this step (+ in), for the winch's sound
+    // THE HOOK: fired, it flies to where it was aimed and hooks when it gets there (if the trigger is still held);
+    // let go of the rope and it pops out and whips back to the hand
+    enum class Hook { None, Flying, Hooked, Loose };
+    Hook hook_ = Hook::None;
+    Vec3 hookTip_, hookTarget_;
+    bool hookWillHold_ = false;   // the shot was at something it can hook
+    Real looseLen_ = 0;           // the rope still out while it comes back in
+    RopeLine ropeLine_;
+    uint32_t hookShots_ = 0, hookBites_ = 0, ropeSnaps_ = 0, chuteOpens_ = 0, ollies_ = 0, boardLands_ = 0;
+    Real snapSpeed_ = 0, landSpeed_ = 0;
+    void fireHook(Transform& t, CharacterController& cc);
+    void stepHook(Transform& t, CharacterController& cc, Real dt);
+    bool attachRope(Transform& t, CharacterController& cc, const Vec3& at);
     // gone limp (engine/block_body.h's ragdoll)
     PhysicsWorld::RagdollId ragdoll_ = PhysicsWorld::INVALID_RAGDOLL;
     Real limpFor_ = 0, stillFor_ = 0;
@@ -223,11 +243,13 @@ private:
     void event(const std::string& what);
     bool tryMantle(Transform& t, CharacterController& cc, const Vec3& facing, Real maxHeight);
     bool tryGrab(Transform& t, CharacterController& cc, const Vec3& facing);
+    // jump in the air beside a wall: off it (tuning wallJumpUp / wallJumpOut)
+    bool tryWallJump(Transform& t, CharacterController& cc, const Vec3& facing, Real dt);
     void stepMantle(Transform& t, CharacterController& cc, Real dt);
     void stepClimb(FrameContext& ctx, Transform& t, CharacterController& cc, Real dt);
     bool tryDeploy(Transform& t, CharacterController& cc);
     void stepGlide(FrameContext& ctx, Transform& t, CharacterController& cc, Real dt);
-    void publishPose(FrameContext& ctx, Entity e, const Transform& t, const CharacterController& cc);
+    void publishPose(FrameContext& ctx, Entity e, Transform& t, CharacterController& cc);
 public:
     bool swimming() const { return swim_.swimming; }
     const MovementTuning& tuning() const { return tune_; }

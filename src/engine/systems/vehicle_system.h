@@ -38,6 +38,7 @@ private:
     void spawnInFront(FrameContext& ctx);   // debug: drop a car ahead of the player
     void updateHorn(FrameContext& ctx);     // hold-to-honk (H / L3) while driving
     void updateEngines(FrameContext& ctx);  // per-car engine note (idle -> revs)
+    void updateTyres(FrameContext& ctx);    // the player's ride: tyre squeal; a bicycle's freewheel and tyre hum
 
     PhysicsSystem& physicsSys;
     CameraSystem& cameras;
@@ -54,6 +55,7 @@ private:
     Real lastDriftTime_ = 0;
     std::vector<std::pair<double, Real>> bikeSpeeds_;   // the ridden bike's recent speeds (time, m/s): a crash
                                                         // is speed lost over a moment, not one step
+    bool bikeUpright_ = false;   // the ridden bike has stood up since you got on: only then can it go down
     std::string wantRecipe_;   // `vehicle_spawn <recipe>`: picked once the catalogue is loaded
     double clock_ = 0.0, panelUntil_ = 0.0;
     std::string panelText_;
@@ -86,6 +88,15 @@ private:
     std::vector<EngineVoice> engineVoices;
     static constexpr int kMaxEngineVoices = 6;
     static constexpr Real kEngineAudibleRange = 90.0;
+    // Tyres (Glenn, 2026-10-24: "The bike sounds motorized and it shouldn't. The drifting needs some tire squeal"):
+    // looping voices on the player's ride, eased by gain
+    struct TyreLoop {
+        AudioClipHandle clip;
+        AudioVoiceHandle voice;
+        float gain = 0.0f;
+    };
+    TyreLoop squeal_, freewheel_, roll_;
+    bool tyreClips_ = false;
 };
 
 }  // namespace engine

@@ -101,6 +101,25 @@ std::vector<float> trainHorn(uint32_t sampleRate = 48000, uint32_t seed = 1);
 // The doors: opening, a falling two-note chime (~1.3 s); closing, three short warning beeps (~0.9 s).
 std::vector<float> trainDoorChime(bool opening, uint32_t sampleRate = 48000, uint32_t seed = 1);
 
+// THE BODY'S MOVES (Glenn, 2026-10-24: "different sfx would help sell these types of motions too. Like skateboarding,
+// parachuting, grapple, etc. The bike sounds motorized and it shouldn't. The drifting needs some tire squeal").
+// sfx_motion.cpp. LOOPS (seamless; the caller drives gain and pitch):
+std::vector<float> windRush(uint32_t sampleRate = 48000, uint32_t seed = 1);      // air past the ears, ~4 s: by airspeed
+std::vector<float> clothFlutter(double flapsHz, uint32_t sampleRate = 48000, uint32_t seed = 1);   // canopy ~9, wingsuit ~24
+std::vector<float> reelWinch(uint32_t sampleRate = 48000, uint32_t seed = 1);     // the grapple reeling: ratchet + motor, 1 s
+std::vector<float> boardRoll(uint32_t sampleRate = 48000, uint32_t seed = 1);     // skateboard wheels on concrete, 2 s
+std::vector<float> freewheel(uint32_t sampleRate = 48000, uint32_t seed = 1);     // a coasting bicycle's pawls, 40 clicks/s at 1.0
+std::vector<float> tyreRoll(uint32_t sampleRate = 48000, uint32_t seed = 1);      // a pneumatic tyre's hum, 2 s
+std::vector<float> tyreSqueal(uint32_t sampleRate = 48000, uint32_t seed = 1);    // rubber sliding: a drift, a lock-up, 2 s
+// ONE-SHOTS:
+std::vector<float> canopyOpen(uint32_t sampleRate = 48000, uint32_t seed = 1);    // rustle, WHUMP, lines snapping taut, ~1.5 s
+std::vector<float> hookFire(uint32_t sampleRate = 48000, uint32_t seed = 1);      // the launcher's thunk + the line zipping out
+std::vector<float> hookBite(uint32_t sampleRate = 48000, uint32_t seed = 1);      // the hook's clank as it bites
+std::vector<float> ropeTwang(uint32_t sampleRate = 48000, uint32_t seed = 1);     // a slack rope snapping taut
+std::vector<float> boardClack(uint32_t sampleRate = 48000, uint32_t seed = 1);    // one truck over a pavement joint
+std::vector<float> ollie(uint32_t sampleRate = 48000, uint32_t seed = 1);         // the tail's pop + the grip-tape drag
+std::vector<float> boardLand(uint32_t sampleRate = 48000, uint32_t seed = 1);     // both trucks back down, a rattle
+
 // The firing rate the clip is baked at: pitch 1.0 sounds like this many
 // combustion events per second (~1700 rpm on a four-cylinder four-stroke, two
 // firings per revolution). Callers multiply it; the mapping core owns the band.

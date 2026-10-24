@@ -479,6 +479,7 @@ struct Vehicle {
     // `drive_4wd`); fourWheel is the current mode.
     bool partTime4wd = false;
     bool fourWheel = false;
+    bool pedalled = false;         // legs, not an engine (a bicycle): no engine note (VehicleSystem's tyre sounds)
     PhysicsWorld::VehicleId vehicleId = PhysicsWorld::INVALID_VEHICLE;
     Entity driver;                 // invalid = unoccupied; set on enter, cleared on exit
     // Live driver input, written by VehicleSystem each step (for inspection/debug).

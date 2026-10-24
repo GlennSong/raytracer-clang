@@ -23,6 +23,8 @@ struct PlayerPose {
     Real progress = 0;        // a mantle's 0..1
     Real climbCycle = 0;      // climbing: hand-over-hand cycles so far
     Real swimPhase = 0;       // swimming: strokes so far
+    Real swimStroke = 0;      // 0 treading water upright (still), 1 flat out in the crawl (going somewhere), eased
+    Real swimClock = 0;       // s afloat: the treading kick and the hands sculling run on it
     bool underwater = false;
     Real stamina = 1;         // 0..1
     Real landed = 0;          // a landing's jolt, 1 on touchdown easing to 0
@@ -33,6 +35,23 @@ struct PlayerPose {
     Vec3 velocity;
     // THE GRAPPLE: where the hook is (the rope runs from the right hand to it)
     Vec3 anchor;
+    // THE ROPE AS DRAWN (engine/rope_line.h), the hand's end first; ropePoints 0 = no rope out. Drawn in any mode:
+    // it flies out ahead of the hook, hangs from it, and whips back in after letting go.
+    static constexpr int kRopePoints = 24;
+    Vec3 rope[kRopePoints];
+    int ropePoints = 0;
+    bool hookFlying = false;
+    Real reel = 0;            // m/s the rope is being reeled: + in, - out
+    // THINGS THAT HAPPENED, counted, for whatever plays their sounds (MotionAudioSystem edge-detects them)
+    uint32_t hookShots = 0;   // the hook fired
+    uint32_t hookBites = 0;   // ...and bit into something
+    uint32_t ropeSnaps = 0;   // a slack rope came taut under the body
+    Real snapSpeed = 0;       // ...this fast along the rope (m/s)
+    uint32_t chuteOpens = 0;
+    uint32_t ollies = 0;
+    uint32_t boardLands = 0;  // the wheels back down after air
+    Real landSpeed = 0;       // ...this fast down (m/s)
+    bool grounded = false;
     // ON A BOARD: which (0 skateboard, 1 scooter), which way it points, how far through a kick (0..1, 0 = none)
     int board = 0;
     Vec3 boardHeading{0, 0, -1};

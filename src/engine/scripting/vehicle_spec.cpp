@@ -86,6 +86,9 @@ bool loadVehicleSpec(ScriptVM& vm, const std::string& recipe, uint32_t seed,
     c.antiRollStiffness = numField(L, t, "anti_roll", c.antiRollStiffness);
     c.yawAssist = numField(L, t, "yaw_assist", c.yawAssist);
     c.lateralGrip = numField(L, t, "grip", c.lateralGrip);
+    lua_getfield(L, t, "pedals");   // true: pedalled (a bicycle) -- heard as a freewheel and tyres, not an engine
+    if (lua_isboolean(L, -1)) out.pedalled = lua_toboolean(L, -1) != 0;
+    lua_pop(L, 1);
     lua_getfield(L, t, "two_wheeler");   // true: a motorcycle, moped or bicycle (Jolt's MotorcycleController)
     if (lua_isboolean(L, -1)) c.twoWheeler = lua_toboolean(L, -1) != 0;
     lua_pop(L, 1);
@@ -249,6 +252,7 @@ Entity spawnVehicle(World& world, AssetManager& assets, const VehicleSpec& spec,
     Vehicle v;
     v.config = spec.config;
     v.partTime4wd = spec.partTime4wd;
+    v.pedalled = spec.pedalled;
     v.driverSeat = spec.driverSeat;
     v.hasDriverSeat = spec.hasDriverSeat;
 

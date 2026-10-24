@@ -400,8 +400,8 @@ public:
     void setVehicleInput(VehicleId id, Real forward, Real right, Real brake,
                          Real handBrake = 0.0);
     // Un-flip a rolled vehicle: keep its heading, level out pitch/roll, lift it a
-    // little, and zero its velocity. Drives a "recover" button.
-    void resetVehicleUpright(VehicleId id);
+    // little (`lift` m), and zero its velocity. Drives a "recover" button, and stands a fallen bike back up.
+    void resetVehicleUpright(VehicleId id, Real lift = 1.5);
     Vec3 vehiclePosition(VehicleId id) const;
     Quat vehicleOrientation(VehicleId id) const;
     Vec3 vehicleVelocity(VehicleId id) const;

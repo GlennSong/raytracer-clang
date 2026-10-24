@@ -55,6 +55,8 @@ struct VehicleSpec {
     // "not supplied", which would otherwise put the driver in the boot.
     Vec3 driverSeat{0, 0, 0};
     bool hasDriverSeat = false;
+    // `pedals = true`: legs, not an engine (a bicycle) -- no engine note; the freewheel and the tyres instead
+    bool pedalled = false;
 
     // The suspension the wheels get (the street rig unless the recipe's `suspension` says otherwise) and
     // whether the drivetrain is a part-time 4x4 the driver switches (`drive = "4wd"`).

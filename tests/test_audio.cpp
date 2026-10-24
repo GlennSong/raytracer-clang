@@ -1079,3 +1079,76 @@ TEST_CASE(walls_muffle_the_street_and_a_cabin_keeps_its_own_engine) {
     audio.update();
     CHECK(audio.listenerEnclosure() == 0);
 }
+
+// ---- THE BODY'S MOVES (sfx_motion.cpp; Glenn, 2026-10-24: "different sfx would help sell these types of motions") --
+TEST_CASE(the_moves_sounds_are_deterministic_bounded_and_the_loops_seamless) {
+    const uint32_t rate = 48000;
+    struct Clip { const char* name; std::vector<float> (*make)(uint32_t, uint32_t); bool loop; };
+    const Clip clips[] = {
+        {"wind_rush", sfx::windRush, true},       {"reel_winch", sfx::reelWinch, true},
+        {"board_roll", sfx::boardRoll, true},     {"freewheel", sfx::freewheel, true},
+        {"tyre_roll", sfx::tyreRoll, true},       {"tyre_squeal", sfx::tyreSqueal, true},
+        {"canopy_open", sfx::canopyOpen, false},  {"hook_fire", sfx::hookFire, false},
+        {"hook_bite", sfx::hookBite, false},      {"rope_twang", sfx::ropeTwang, false},
+        {"board_clack", sfx::boardClack, false},  {"ollie", sfx::ollie, false},
+        {"board_land", sfx::boardLand, false},
+    };
+    for (const Clip& c : clips) {
+        const auto a = c.make(rate, 1), b = c.make(rate, 1);
+        CHECK(!a.empty() && a == b);
+        double energy = 0, maxStep = 0, stepSq = 0;
+        for (std::size_t i = 0; i < a.size(); ++i) {
+            CHECK(std::fabs(a[i]) <= 1.0f);
+            energy += double(a[i]) * a[i];
+            if (i + 1 < a.size()) {
+                const double d = std::fabs(double(a[i + 1]) - a[i]);
+                maxStep = std::max(maxStep, d);
+                stepSq += d * d;
+            }
+        }
+        CHECK(std::sqrt(energy / a.size()) > 0.02);
+        if (c.loop) {
+            // the wrap is just another sample: no bigger a step than the clip takes anywhere else
+            const double seam = std::fabs(double(a.front()) - a.back());
+            const double typical = std::sqrt(stepSq / (a.size() - 1));
+            std::printf("    [moves] %-12s loop %.2f s  seam %.4f  typical step %.4f  largest %.4f\n", c.name,
+                        a.size() / double(rate), seam, typical, maxStep);
+            CHECK(seam <= maxStep);
+            CHECK(seam < 6.0 * typical);
+        }
+        maybeDump(std::string("move_") + c.name, a, rate);
+    }
+    for (double flaps : {9.0, 24.0}) {
+        const auto f = sfx::clothFlutter(flaps, rate, 2);
+        CHECK(f == sfx::clothFlutter(flaps, rate, 2));
+        double maxStep = 0;
+        for (std::size_t i = 0; i + 1 < f.size(); ++i) maxStep = std::max(maxStep, double(std::fabs(f[i + 1] - f[i])));
+        CHECK(std::fabs(double(f.front()) - f.back()) <= maxStep);
+        maybeDump(flaps < 10 ? "move_canopy_flutter" : "move_wingsuit_flutter", f, rate);
+    }
+}
+
+TEST_CASE(a_tyre_squeals_high_and_rolls_low) {
+    // A squeal is the one that cuts through an engine: most of its energy over 500 Hz. A rolling tyre and a
+    // skateboard's wheels are the opposite, a hum: most of it under 600 Hz. (One-pole splits, so the edges are soft.)
+    const uint32_t rate = 48000;
+    auto bandShare = [&](const std::vector<float>& f, double lo, double hi) {
+        const double al = 1 - std::exp(-6.283185307 * lo / rate), ah = 1 - std::exp(-6.283185307 * hi / rate);
+        double yl = 0, yh = 0, in = 0, total = 0;
+        for (float x : f) {
+            yl += al * (x - yl);
+            yh += ah * (x - yh);
+            in += (yh - yl) * (yh - yl);
+            total += double(x) * x;
+        }
+        return in / total;
+    };
+    const double squeal = bandShare(sfx::tyreSqueal(rate, 1), 500, 24000);
+    const double roll = bandShare(sfx::tyreRoll(rate, 1), 20, 600);
+    const double board = bandShare(sfx::boardRoll(rate, 1), 20, 600);
+    std::printf("    [tyres] squeal %.0f%% over 500 Hz; tyre roll %.0f%%, board roll %.0f%% under 600 Hz\n", 100 * squeal,
+                100 * roll, 100 * board);
+    CHECK(squeal > 0.7);
+    CHECK(roll > 0.5);
+    CHECK(board > 0.5);
+}

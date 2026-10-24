@@ -1286,7 +1286,7 @@ void PhysicsWorld::applyDrift(std::size_t index, float dt) {
     }
 }
 
-void PhysicsWorld::resetVehicleUpright(VehicleId id) {
+void PhysicsWorld::resetVehicleUpright(VehicleId id, Real lift) {
     if (!impl || id >= impl->vehicles.size()) return;
     JPH::BodyID b = impl->vehicles[id].body;
     if (b.IsInvalid()) return;
@@ -1296,7 +1296,7 @@ void PhysicsWorld::resetVehicleUpright(VehicleId id) {
     float yaw = std::atan2(fwd.GetX(), fwd.GetZ());
     JPH::Quat upright = JPH::Quat::sRotation(JPH::Vec3::sAxisY(), yaw);
     JPH::RVec3 pos = bi.GetPosition(b);
-    bi.SetPositionAndRotation(b, pos + JPH::RVec3(0, 1.5f, 0), upright,
+    bi.SetPositionAndRotation(b, pos + JPH::RVec3(0, static_cast<float>(lift), 0), upright,
                               JPH::EActivation::Activate);
     bi.SetLinearVelocity(b, JPH::Vec3::sZero());
     bi.SetAngularVelocity(b, JPH::Vec3::sZero());

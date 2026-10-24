@@ -330,7 +330,7 @@ local function two_wheeler(kind, opts)
     engine_torque = K.torque, max_rpm = K.rpm, gear_ratios = K.gears,
     max_steer_deg = K.steer,
     brake_torque = math.floor(K.mass * 1.4), hand_brake_torque = math.floor(K.mass * 2.0),
-    two_wheeler = true, max_lean_deg = K.lean,
+    two_wheeler = true, max_lean_deg = K.lean, pedals = kind == "bicycle",
     engine_damping = kind == "bicycle" and 0.0 or nil, engine_inertia = kind == "bicycle" and 0.05 or nil,
     yaw_assist = 0, anti_roll = 0, max_roll_deg = K.lean + 15,
     drive = "rwd", drag_area = kind == "bicycle" and 0.5 or 0.7,

@@ -101,11 +101,25 @@ void PlayerArmsSystem::update(FrameContext& ctx) {
             Renderable r;
             r.mesh = i == 6 ? canopy : box;
             r.material.albedo = i < 2 ? outfit.shirt : i < 4 ? outfit.skin : i < 6 ? Vec3(0.95, 0.45, 0.08)
-                              : i == 6 ? Vec3(1, 1, 1) : i == 11 ? Vec3(0.9, 0.85, 0.7) : Vec3(0.15, 0.15, 0.17);
+                              : i == 6 ? Vec3(1, 1, 1) : i == 11 ? Vec3(0.25, 0.25, 0.27) : Vec3(0.15, 0.15, 0.17);
             r.material.roughness = 0.85f;
             r.material.metallic = 0.0f;
             r.material.opacity = 1.0f;
             world.add<Renderable>(parts_[i], r);
+        }
+        for (Entity& seg : rope_) {
+            seg = world.create();
+            Transform away;
+            away.position = Vec3(0, kOut, 0);
+            world.add<Transform>(seg, away);
+            world.add<PrevTransform>(seg, PrevTransform{away});
+            Renderable r;
+            r.mesh = box;
+            r.material.albedo = Vec3(0.9, 0.85, 0.7);   // a pale braided line
+            r.material.roughness = 0.9f;
+            r.material.metallic = 0.0f;
+            r.material.opacity = 1.0f;
+            world.add<Renderable>(seg, r);
         }
         made_ = true;
     }
@@ -149,17 +163,51 @@ void PlayerArmsSystem::update(FrameContext& ctx) {
             place(7 + j, from[k] + d * (len * 0.5), facing(d, Vec3(0, 1, 0)), Vec3(0.012, 0.012, len));
         }
     };
-    // THE ROPE, in either view: from the right hand (first person) or the raised hand over the body to the hook
+    // THE ROPE, in either view: the chain PlayerSystem steps (engine/rope_line.h), its hand end moved onto the hand as
+    // drawn -- the right hand in first person, the raised hand over the body in third -- the move fading out along
+    // it so the far end stays where the hook is. The hook itself is a dark block on the end.
     auto drawRope = [&](bool armsDrawn) {
-        if (!(pose && body && pose->mode == PlayerPose::Mode::Grapple)) {
-            place(11, Vec3(0, kOut, 0), Quat::identity(), Vec3(1, 1, 1));
+        const int n = pose ? pose->ropePoints : 0;
+        const bool on = pose && body && n >= 2 && !world.has<InVehicle>(player);
+        if (!on) {
+            if (ropeShown_) {
+                place(11, Vec3(0, kOut, 0), Quat::identity(), Vec3(1, 1, 1));
+                for (Entity seg : rope_)
+                    if (Transform* st = world.get<Transform>(seg)) {
+                        st->position = Vec3(0, kOut, 0);
+                        if (PrevTransform* sp = world.get<PrevTransform>(seg)) sp->value = *st;
+                    }
+            }
+            ropeShown_ = false;
             return;
         }
+        ropeShown_ = true;
         const Vec3 from = armsDrawn ? handWorld_[1] : body->position + Vec3(0, 0.9, 0);
-        Vec3 d = pose->anchor - from;
-        const Real len = std::max(d.length(), Real(0.01));
-        d = d * (1.0 / len);
-        place(11, from + d * (len * 0.5), facing(d, Vec3(0, 1, 0)), Vec3(0.02, 0.02, len));
+        const Vec3 shift = from - pose->rope[0];
+        Vec3 pts[PlayerPose::kRopePoints];
+        for (int i = 0; i < n; ++i) {
+            const Real w = 1.0 - static_cast<Real>(i) / (n - 1);
+            pts[i] = pose->rope[i] + shift * (w * w);
+        }
+        for (int i = 0; i + 1 < PlayerPose::kRopePoints; ++i) {
+            Transform* st = world.get<Transform>(rope_[i]);
+            PrevTransform* sp = world.get<PrevTransform>(rope_[i]);
+            if (!st) continue;
+            if (i + 1 >= n) {
+                st->position = Vec3(0, kOut, 0);
+            } else {
+                Vec3 d = pts[i + 1] - pts[i];
+                const Real len = d.length();
+                d = len > 1e-5 ? d * (1.0 / len) : Vec3(0, 1, 0);
+                st->position = (pts[i] + pts[i + 1]) * 0.5;
+                st->orientation = facing(d, std::fabs(d.y) > 0.95 ? Vec3(1, 0, 0) : Vec3(0, 1, 0));
+                st->scale = Vec3(0.02, 0.02, len + 0.01);   // a hair long, so the joints don't gap
+            }
+            if (sp) sp->value = *st;
+        }
+        const Vec3 tip = pts[n - 1], before = pts[n - 2];
+        const Vec3 td = tip - before;
+        place(11, tip, facing(td.length() > 1e-5 ? td : Vec3(0, 0, 1), Vec3(0, 1, 0)), Vec3(0.07, 0.07, 0.12));
     };
     if (!visible) {
         if (shown_)
@@ -227,9 +275,14 @@ void PlayerArmsSystem::update(FrameContext& ctx) {
                 // THE CRAWL, half a stroke apart (Glenn: "those arms make it look like you're going backwards ...
                 // the arm should extend out"): what you see is the arm coming over from the side, going in ahead
                 // and stretching out straight in front; the pull that drives you happens below the view.
+                // Treading water (still), the hands scull low in front instead, sweeping out and in.
                 const Real p = pose->swimPhase + (k == 0 ? 0.0 : 0.5);
-                want = crawl(p - std::floor(p));
-                want.x *= s;
+                Vec3 stroke = crawl(p - std::floor(p));
+                stroke.x *= s;
+                const Real sc = std::sin(pose->swimClock * 6.2831853 * 1.1 + (k ? 3.14159 : 0.0));
+                const Vec3 scull(s * (0.26 + 0.07 * sc), -0.34, 0.36 + 0.04 * std::cos(pose->swimClock * 6.9115));
+                const Real L = std::clamp(pose->swimStroke, Real(0), Real(1));
+                want = scull + (stroke - scull) * L;
                 break;
             }
             case PlayerPose::Mode::Air:
@@ -247,7 +300,8 @@ void PlayerArmsSystem::update(FrameContext& ctx) {
                 // the right arm up along the rope, the left out for balance
                 if (k == 1) {
                     const Vec3 sh = Vec3(0.21, -0.26, -0.04);
-                    Vec3 d = toLocal(pose->anchor) - sh;
+                    const Vec3 along = pose->ropePoints > 4 ? pose->rope[4] : pose->anchor;   // where the rope leaves the hand
+                    Vec3 d = toLocal(along) - sh;
                     d = d.length() > 1e-4 ? normalize(d) : Vec3(0, 1, 0);
                     want = sh + d * 0.62;
                 } else {
@@ -272,6 +326,12 @@ void PlayerArmsSystem::update(FrameContext& ctx) {
                 want.y -= 0.1 * pose->landed;   // a landing's jolt
                 break;
             }
+        }
+        if (k == 1 && !gun && pose->ropePoints >= 2 && pose->mode != PlayerPose::Mode::Grapple) {
+            // the hook thrown, or the rope coming back: the right arm out along it
+            const Vec3 sh = Vec3(0.21, -0.26, -0.04);
+            Vec3 d = toLocal(pose->rope[std::min(4, pose->ropePoints - 1)]) - sh;
+            if (d.length() > 0.05) want = sh + normalize(d) * 0.6;
         }
         if (gun) want = gunGrip[k];
         if (!haveLocal_) local_[k] = want;

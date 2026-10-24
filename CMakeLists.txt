@@ -238,6 +238,7 @@ add_library(engine_core STATIC
     src/engine/audio/audio_engine.cpp
     src/engine/audio/sfx.cpp
     src/engine/audio/sfx_ground.cpp
+    src/engine/audio/sfx_motion.cpp
     src/engine/systems/audio_system.cpp
     src/engine/systems/render_system.cpp
     src/engine/systems/xr_camera_system.cpp
@@ -1055,6 +1056,7 @@ if(RT_ENABLE_PHYSICS)
         src/engine/systems/physics_system.cpp
         src/engine/systems/player_system.cpp
         src/engine/locomotion.cpp            # jump gate, ledges, mantle, climbing probes (tests/test_locomotion)
+        src/engine/rope_line.cpp             # the grapple's rope as drawn: a Verlet chain that lies over things
         src/engine/systems/player_arms_system.cpp   # the block arms in first person
         src/engine/systems/player_body_system.cpp   # the body posed in third person, and limp
         src/engine/block_body.cpp            # the person as six blocks: poses, the ragdoll's parts
@@ -1063,6 +1065,7 @@ if(RT_ENABLE_PHYSICS)
         src/engine/systems/vehicle_system.cpp
         src/engine/systems/nature_collider_system.cpp   # trunk + rock colliders round the player (#55)
         src/engine/systems/footstep_system.cpp   # the player's feet, heard (#62/#63/#64)
+        src/engine/systems/motion_audio_system.cpp   # the player's moves, heard: wind, grapple, canopy, boards
         src/apps/citysim/city_physics.cpp   # kinematic colliders for AI cars (needs Jolt)
         src/apps/citysim/city_vehicles.cpp  # NPC cars as real engine Vehicles (ADR-0062)
         src/apps/citysim/city_walkers.cpp   # NPC walkers as physics characters (ADR-0062)
@@ -1098,6 +1101,7 @@ if(RT_ENABLE_PHYSICS)
         src/engine/physics/jolt_job_adapter.cpp
         src/engine/systems/physics_system.cpp
         src/engine/locomotion.cpp
+        src/engine/rope_line.cpp
         src/engine/block_body.cpp
         src/apps/citysim/city_physics.cpp
         src/apps/citysim/city_player_transit.cpp

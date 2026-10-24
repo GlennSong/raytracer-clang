@@ -30,7 +30,16 @@ struct MovementTuning {
     Real jumpBuffer = 0.15;        // s a press made in the air waits for the landing
     Real steepPush = 2.5;          // m/s away from steep ground when jumping off it
     Real wedgedTime = 0.15;        // s touching but unsupported, not falling, before it counts as standing
-    Real airAccel = 4.0;           // m/s^2 the keys steer in the air
+    Real airAccel = 8.0;           // m/s^2 the keys steer in the air (4 until 2026-10-24: "some control when jumping")
+    // HOW HIGH (Glenn, 2026-10-24: "hop if it's a short tap and a longer press gives you more jump power. Of course
+    // running jump would give you the most"): every jump leaves at full speed; let go of jump on the way up and the
+    // rise is cut to this fraction -- a tap is a hop, held is the whole jump, with no wind-up to wait through.
+    Real jumpCut = 0.4;            // of the upward speed kept when jump is let go while rising
+    Real runJumpScale = 1.2;       // a running jump's take-off speed (run held, moving): ~1.4 m against 0.95
+    // OFF A WALL in the air ("if we land on a surface we could jump off of it"): jump with a wall at your side or
+    // brushed at an angle kicks off it. Pushing straight into a climbable wall still grabs it (grabInAir).
+    Real wallJumpUp = 5.0;         // m/s up off the wall
+    Real wallJumpOut = 5.0;        // m/s away from it (the speed along it is kept)
     // mantling
     Real mantleReach = 0.7;        // m past the capsule's front a wall counts as "in front"
     Real mantleMinHeight = 0.5;    // m above the feet: lower is a step, the controller walks it
@@ -86,6 +95,9 @@ struct MovementTuning {
     Real grappleMinRope = 2.0;     // m: reeled all the way in
     Real grapplePump = 4.0;        // m/s^2 along the swing, W held
     Real grappleSteer = 2.5;       // m/s^2 sideways, A/D
+    Real grappleHookSpeed = 140.0; // m/s the hook flies out (it hooks when it gets there, not on the click)
+    Real grappleStretch = 0.02;    // how far the rope gives under the body's weight (a fraction of its length; 0 = a rod)
+    Real grappleBounce = 0.4;      // the stretch's damping ratio: low bounces at the bottom, 1 doesn't
     // boards (slot 8 the skateboard, slot 9 the scooter): ridden whenever on the ground with one in hand
     Real boardPush = 1.8;          // m/s a kick adds (less as the speed nears the most a kick reaches)
     Real boardPushMax = 8.5;       // m/s: kicking stops helping here (downhill goes faster)
@@ -194,10 +206,13 @@ struct GrappleAnchor {
     Real distance = 0;
 };
 GrappleAnchor findGrappleAnchor(const PhysicsWorld& world, const Vec3& eye, const Vec3& look, const MovementTuning& t);
-// ONE STEP ON THE ROPE: the body point `pos` moves under gravity and `accel` (pumping, steering); where that would
-// take it further from `anchor` than `length`, it is held on the rope's sphere and the outward speed is taken out
-// (a rope pulls, it never pushes). Returns the new velocity; `pos` is updated.
-Vec3 ropeStep(Vec3& pos, const Vec3& vel, const Vec3& anchor, Real length, const Vec3& accel, Real dt);
+// ONE STEP ON THE ROPE: the body point `pos` moves under gravity and `accel` (pumping, steering). Inside `length`
+// the rope is slack and the body falls freely; past it the rope pulls (it never pushes). `stretch` 0: a rod -- held
+// on the rope's sphere, the outward speed taken out. `stretch` > 0: a rope that gives -- a damped spring past the
+// length, stiff enough that the body's own weight stretches it by `stretch` x length, `bounce` its damping ratio (it
+// can only lose energy), and never past 4 x that stretch. Returns the new velocity; `pos` is updated.
+Vec3 ropeStep(Vec3& pos, const Vec3& vel, const Vec3& anchor, Real length, const Vec3& accel, Real dt,
+              Real stretch = 0, Real bounce = 1);
 
 // ONE STEP ON A BOARD: `heading` (horizontal unit) turns with A/D at the tighter of the turn rate and what the
 // grip allows at this speed; W kicks (one kick per boardKickTime, up to pushMax), S brakes; the slope under the

@@ -2,6 +2,7 @@
 #define RAYTRACER_ENGINE_PLAYER_ARMS_SYSTEM_H
 
 #include "../system.h"
+#include "../player_pose.h"
 
 namespace engine {
 
@@ -17,9 +18,11 @@ public:
     void update(FrameContext& ctx) override;
 
 private:
-    // sleeve L, sleeve R, hand L, hand R, wing L, wing R (the wingsuit's), the canopy, its four lines, the rope
+    // sleeve L, sleeve R, hand L, hand R, wing L, wing R (the wingsuit's), the canopy, its four lines, the hook
     static constexpr int kParts = 12;
     Entity parts_[kParts];
+    Entity rope_[PlayerPose::kRopePoints - 1];   // the rope's links, one block each
+    bool ropeShown_ = false;
     Vec3 handWorld_[2];    // where the hands were drawn this frame (the chute's lines run to them)
     bool made_ = false;
     bool shown_ = false;

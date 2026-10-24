@@ -213,19 +213,29 @@ void PlayerBodySystem::fixedUpdate(FrameContext& ctx) {
                 break;
             }
             case PlayerPose::Mode::Swim: {
-                // prone, the crawl's arms round over the back, the feet fluttering; lifted so the back is at the
-                // waterline (the capsule floats with its centre under the surface, the eye just over it)
-                pose.orientation = yawTo(face) * Quat::fromAxisAngle(Vec3(1, 0, 0), 78 * kDeg);
-                pose.position = pose.position + Vec3(0, 0.38 * pose.scale / 0.78, 0);
+                // GOING SOMEWHERE (swimStroke 1): prone, the crawl's arms round over the back, the feet fluttering;
+                // lifted so the back is at the waterline (the capsule floats with its centre under the surface, the
+                // eye just over it). STILL (0): upright treading water, the hands sculling out low at the sides, the
+                // legs kicking in turn. Between, the body tips forward into the dive (a dip at the middle of it).
+                const Real L = std::clamp(p->swimStroke, Real(0), Real(1));
+                pose.orientation = yawTo(face) * Quat::fromAxisAngle(Vec3(1, 0, 0), (10 + 68 * L) * kDeg);
+                pose.position = pose.position + Vec3(0, 0.38 * pose.scale / 0.78 * L - 0.12 * std::sin(L * 3.14159), 0);
+                const Real tc = p->swimClock;
                 for (int k = 0; k < 2; ++k) {
+                    const Real s = k ? -1.0 : 1.0;
                     const Real ph = p->swimPhase + (k ? 0.5 : 0.0);
                     const Real a = kTau * (ph - std::floor(ph));
-                    const Vec3 d(k ? -0.12 : 0.12, std::cos(a), std::sin(a));
-                    (k ? pose.armR : pose.armL) = normalize(d);
+                    const Vec3 crawl(s * 0.12, std::cos(a), std::sin(a));
+                    const Real sc = std::sin(tc * kTau * 1.1 + (k ? 3.14159 : 0.0));
+                    const Vec3 scull(s * (0.85 + 0.2 * sc), -0.12, 0.45 + 0.25 * sc);   // out flat at the surface
+                    (k ? pose.armR : pose.armL) = normalize(scull + (normalize(crawl) - normalize(scull)) * L);
                 }
                 const Real kick = std::sin(clock_ * 9.0);
-                pose.legL = normalize(Vec3(0.04, -1, 0.15 * kick));
-                pose.legR = normalize(Vec3(-0.04, -1, -0.15 * kick));
+                const Real tread = std::sin(tc * kTau * 1.0);   // a leg a beat: the lift that holds the head up
+                const Vec3 trL(0.12, -1, 0.45 * tread), trR(-0.12, -1, -0.45 * tread);
+                const Vec3 flL(0.04, -1, 0.15 * kick), flR(-0.04, -1, -0.15 * kick);
+                pose.legL = normalize(normalize(trL) + (normalize(flL) - normalize(trL)) * L);
+                pose.legR = normalize(normalize(trR) + (normalize(flR) - normalize(trR)) * L);
                 break;
             }
             case PlayerPose::Mode::Parachute:

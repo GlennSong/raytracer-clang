@@ -11769,3 +11769,64 @@ in the park".
 - **The city's playgrounds aren't wired yet**: their equipment is baked into the lots' meshes
   (`sculptPlayground`), so making those swings usable means the lots recording their pivots and bar lines -- a
   lots-tag bump and every level re-baked. Owed, on Glenn's word. Townspeople on swings would follow from that.
+
+## ADR-0238 — The grapple's rope you can see, a rope that gives, the hook in flight; the moves' sounds
+
+Glenn (2026-10-24): "Is there a way to make the grapple a little more rope like? Is there a good way to do a physics
+based rope in jolt?" then "do 1-3. Also I think different sfx would help sell these types of motions too. Like
+skateboarding, parachuting, grapple, etc. The bike sounds motorized and it shouldn't. The drifting needs some tire
+squeal."
+
+- **The swing stays one exact constraint** (`ropeStep`): a body on a chain of light links stretches and jitters,
+  and the player is a CharacterVirtual, not a rigid body. Jolt 5.5's soft bodies could be a rope (edge + LRA
+  constraints, vertex radius, the Cosserat rod sample), but their edge lengths are fixed when made and a grapple
+  reels every step -- so the rope you SEE is ours.
+- **engine/rope_line.h** `RopeLine`: 24 Verlet points, links that pull but never push, long-range limits from each
+  pinned end, near-taut points drawn onto the line (the passes alone left a 15 cm bow), every point swept against
+  the world (a ray from where it was) so a slack rope lies over a ledge. PlayerSystem steps it each fixed step
+  (from `publishPose`, which every move calls) and the pose carries the points; PlayerArmsSystem draws them as 23
+  links and a dark hook block, the hand end moved onto the drawn hand with the shift fading along the rope.
+  Tested: 12 m over a 10 m span sags 2.95 m, taut it is straight, slack over a roof edge 0 points through it.
+- **The hook flies** (`grappleHookSpeed` 140 m/s) and hooks when it gets there if the trigger is still held; at
+  nothing it flies to full range and comes back. Let go, and the rope pops out and whips back in at 35 m/s.
+  The right arm points along the rope while it is out.
+- **The rope gives**: past its length a damped spring (implicit step) stiff enough that hanging still stretches it
+  `grappleStretch` (2%), damping ratio `grappleBounce` (0.4), never past 4x that. Tested: 5 m of slack caught
+  with a bounce, never back up to where it fell from, settled at 10.20 m on a 10 m rope; swinging gains nothing.
+- **Sounds** (sfx_motion.cpp; the shared DSP pieces moved to sfx_dsp.h): wind by airspeed (every mode on foot),
+  the canopy's flutter and opening WHUMP, the wingsuit's buzz, the hook's shot (thunk + line zipping off the
+  spool), its bite (steel clank), the rope snapping taut, the winch reeling; a skateboard's roll, its trucks over
+  pavement joints every 1.6 m, the kick, the ollie's pop and the landing (the scooter pitched up). The pose
+  carries counters for the one-shots; MotionAudioSystem plays them. FootstepSystem is silent in those modes.
+- **Vehicles**: `pedals = true` (the bicycle) has no engine note -- a freewheel ticking while it coasts, 24 clicks a
+  wheel turn, and the tyres' hum. The player's ride squeals from 7° of slip angle (a drift) or 0.2 of wheel slip
+  along (a burnout, a lock-up). Loops are seamless by construction and tested so; RT_SFX_DUMP writes them.
+- `RT_AUDIO=null`: a probe viewer runs the mixer on the null device instead of the speakers.
+- Not yet: the rope wrapping round corners for the swing itself (item 4: the drawn rope already lies round an
+  edge while the physics goes straight through), a bicycle bell.
+- Follow-ups (Glenn, same day):
+  - **Hooked from the ground:** a hop, then a straight pull (gravity cancelled while it runs) reeling down to the
+    length whose swing clears the ground under the anchor (`yankTo_`), easing off over the last 6 m. Then the reel
+    takes in slack as the body flies in (`takeUp_`) until it swings outward, so the rope catches it into a swing.
+    Before this, the pull outran the rope and the body came down in an arc without swinging.
+  - **The rope's slam check** counts only speed lost along the way the body was going. A capsule pushed out
+    sideways read as a 14 m/s slam at 7 m/s.
+  - **A fallen bike is stood up as you get on**, and it can't count as "gone down" until it has been upright
+    since you mounted. It used to throw you off the moment you sat.
+  - **Treading water:** still, the body is upright, the hands scull flat at the surface, and the legs kick in turn,
+    with a stronger bob. Moving, it tips forward into the crawl (`PlayerPose::swimStroke`, eased).
+  - **Pad:** RB is the handbrake and LB recovers a flipped car, both in a vehicle (on foot they cycle tools).
+    Back toggles the view.
+  - **The jump** (Glenn: "hop if it's a short tap... running jump would give you the most... some control when
+    jumping in the air... if we land on a surface we could jump off of it"):
+    - Every jump leaves at full speed. Letting go while rising cuts the upward speed to `jumpCut` (0.4): a
+      one-frame tap rises 0.19 m, 0.12 s 0.45 m, 0.25 s 0.77 m, held 0.91 m. A cut, not a charge, so the take-off
+      never waits on the press.
+    - A running jump leaves `runJumpScale` (1.2) faster.
+    - `airAccel` went from 4 to 8.
+    - **Wall kick:** jump in the air with a wall within reach (looked for along the way you're moving, the way you
+      face, and either side) kicks off it: `wallJumpOut` away, `wallJumpUp` up, the speed along the wall kept.
+      Not the same wall twice before touching the ground, and no grabbing for 0.4 s after. It shares the button
+      with climbing by angle: pushing straight at a climbable wall (within ~53°) still grabs it in the air; a
+      glancing pass plus jump kicks off it.
+  - **Tyre squeal** starts at a 12° slide (was 7°) and plays at 0.45 volume (was 0.8).
