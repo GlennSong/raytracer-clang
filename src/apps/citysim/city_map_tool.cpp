@@ -247,7 +247,9 @@ void CityMapToolSystem::update(engine::FrameContext& ctx) {
         open_ = !open_;
         if (open_) follow_ = true;
     } else if (open_ && (ctx.actions.pressed("slot_1") || ctx.actions.pressed("slot_2") || ctx.actions.pressed("slot_4") ||
-                         ctx.actions.pressed("slot_5") || ctx.actions.pressed("slot_6"))) {
+                         ctx.actions.pressed("slot_5") || ctx.actions.pressed("slot_6") ||
+                         ctx.actions.pressed("slot_7") || ctx.actions.pressed("slot_8") ||
+                         ctx.actions.pressed("slot_9"))) {
         open_ = false;
     }
     fly_.inputSuspended = open_;

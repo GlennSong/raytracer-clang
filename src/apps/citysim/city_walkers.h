@@ -6,6 +6,7 @@
 #include "../../engine/systems/physics_system.h"
 #include "../../renderer/renderer.h"         // engine::MeshHandle
 #include "city_render.h"
+#include "walker_ragdolls.h"
 
 #include <unordered_map>
 #include <vector>
@@ -52,6 +53,8 @@ public:
 
 private:
     long unwedged_ = 0;
+    WalkerRagdolls ragdolls_;   // the few knocked flying right now (walker_ragdolls.h)
+    int knocks_ = 0;            // since start, for `walkers?`
     struct Telemetry {
         engine::Real maxSpeed = 0;
         engine::Vec2 maxAt{0, 0}, revAt{0, 0};

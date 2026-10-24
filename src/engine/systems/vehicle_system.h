@@ -48,6 +48,10 @@ private:
     std::vector<Pick> catalogue_;
     bool catalogueTried_ = false;
     int pick_ = 0;
+    void crashOffBikes(FrameContext& ctx);
+    std::vector<std::pair<double, Real>> bikeSpeeds_;   // the ridden bike's recent speeds (time, m/s): a crash
+                                                        // is speed lost over a moment, not one step
+    std::string wantRecipe_;   // `vehicle_spawn <recipe>`: picked once the catalogue is loaded
     double clock_ = 0.0, panelUntil_ = 0.0;
     std::string panelText_;
     void loadCatalogue();

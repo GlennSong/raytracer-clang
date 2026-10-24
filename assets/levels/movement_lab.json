@@ -4405,6 +4405,1029 @@
     0.4,
     3.0
    ]
+  },
+  {
+   "id": 120,
+   "material": {
+    "albedo": [
+     0.55,
+     0.55,
+     0.58
+    ],
+    "checkerboard": false,
+    "emission": [
+     0,
+     0,
+     0
+    ],
+    "metallic": 0.0,
+    "opacity": 1.0,
+    "roughness": 0.75
+   },
+   "physics": {
+    "friction": 0.6,
+    "motion": "static",
+    "restitution": 0.0
+   },
+   "position": [
+    -8.0,
+    9.0,
+    60.0
+   ],
+   "shape": "box",
+   "size": [
+    1.2,
+    18.0,
+    1.2
+   ]
+  },
+  {
+   "id": 121,
+   "material": {
+    "albedo": [
+     0.55,
+     0.55,
+     0.58
+    ],
+    "checkerboard": false,
+    "emission": [
+     0,
+     0,
+     0
+    ],
+    "metallic": 0.0,
+    "opacity": 1.0,
+    "roughness": 0.75
+   },
+   "physics": {
+    "friction": 0.6,
+    "motion": "static",
+    "restitution": 0.0
+   },
+   "position": [
+    8.0,
+    9.0,
+    60.0
+   ],
+   "shape": "box",
+   "size": [
+    1.2,
+    18.0,
+    1.2
+   ]
+  },
+  {
+   "id": 122,
+   "material": {
+    "albedo": [
+     0.9,
+     0.75,
+     0.2
+    ],
+    "checkerboard": false,
+    "emission": [
+     0,
+     0,
+     0
+    ],
+    "metallic": 0.0,
+    "opacity": 1.0,
+    "roughness": 0.75
+   },
+   "physics": {
+    "friction": 0.6,
+    "motion": "static",
+    "restitution": 0.0
+   },
+   "position": [
+    0.0,
+    17.5,
+    60.0
+   ],
+   "shape": "box",
+   "size": [
+    17.2,
+    1.0,
+    0.8
+   ]
+  },
+  {
+   "id": 123,
+   "material": {
+    "albedo": [
+     0.55,
+     0.55,
+     0.58
+    ],
+    "checkerboard": false,
+    "emission": [
+     0,
+     0,
+     0
+    ],
+    "metallic": 0.0,
+    "opacity": 1.0,
+    "roughness": 0.75
+   },
+   "physics": {
+    "friction": 0.6,
+    "motion": "static",
+    "restitution": 0.0
+   },
+   "position": [
+    -8.0,
+    9.0,
+    74.0
+   ],
+   "shape": "box",
+   "size": [
+    1.2,
+    18.0,
+    1.2
+   ]
+  },
+  {
+   "id": 124,
+   "material": {
+    "albedo": [
+     0.55,
+     0.55,
+     0.58
+    ],
+    "checkerboard": false,
+    "emission": [
+     0,
+     0,
+     0
+    ],
+    "metallic": 0.0,
+    "opacity": 1.0,
+    "roughness": 0.75
+   },
+   "physics": {
+    "friction": 0.6,
+    "motion": "static",
+    "restitution": 0.0
+   },
+   "position": [
+    8.0,
+    9.0,
+    74.0
+   ],
+   "shape": "box",
+   "size": [
+    1.2,
+    18.0,
+    1.2
+   ]
+  },
+  {
+   "id": 125,
+   "material": {
+    "albedo": [
+     0.9,
+     0.75,
+     0.2
+    ],
+    "checkerboard": false,
+    "emission": [
+     0,
+     0,
+     0
+    ],
+    "metallic": 0.0,
+    "opacity": 1.0,
+    "roughness": 0.75
+   },
+   "physics": {
+    "friction": 0.6,
+    "motion": "static",
+    "restitution": 0.0
+   },
+   "position": [
+    0.0,
+    17.5,
+    74.0
+   ],
+   "shape": "box",
+   "size": [
+    17.2,
+    1.0,
+    0.8
+   ]
+  },
+  {
+   "id": 126,
+   "material": {
+    "albedo": [
+     0.55,
+     0.55,
+     0.58
+    ],
+    "checkerboard": false,
+    "emission": [
+     0,
+     0,
+     0
+    ],
+    "metallic": 0.0,
+    "opacity": 1.0,
+    "roughness": 0.75
+   },
+   "physics": {
+    "friction": 0.6,
+    "motion": "static",
+    "restitution": 0.0
+   },
+   "position": [
+    -8.0,
+    9.0,
+    88.0
+   ],
+   "shape": "box",
+   "size": [
+    1.2,
+    18.0,
+    1.2
+   ]
+  },
+  {
+   "id": 127,
+   "material": {
+    "albedo": [
+     0.55,
+     0.55,
+     0.58
+    ],
+    "checkerboard": false,
+    "emission": [
+     0,
+     0,
+     0
+    ],
+    "metallic": 0.0,
+    "opacity": 1.0,
+    "roughness": 0.75
+   },
+   "physics": {
+    "friction": 0.6,
+    "motion": "static",
+    "restitution": 0.0
+   },
+   "position": [
+    8.0,
+    9.0,
+    88.0
+   ],
+   "shape": "box",
+   "size": [
+    1.2,
+    18.0,
+    1.2
+   ]
+  },
+  {
+   "id": 128,
+   "material": {
+    "albedo": [
+     0.9,
+     0.75,
+     0.2
+    ],
+    "checkerboard": false,
+    "emission": [
+     0,
+     0,
+     0
+    ],
+    "metallic": 0.0,
+    "opacity": 1.0,
+    "roughness": 0.75
+   },
+   "physics": {
+    "friction": 0.6,
+    "motion": "static",
+    "restitution": 0.0
+   },
+   "position": [
+    0.0,
+    17.5,
+    88.0
+   ],
+   "shape": "box",
+   "size": [
+    17.2,
+    1.0,
+    0.8
+   ]
+  },
+  {
+   "id": 129,
+   "material": {
+    "albedo": [
+     0.55,
+     0.55,
+     0.58
+    ],
+    "checkerboard": false,
+    "emission": [
+     0,
+     0,
+     0
+    ],
+    "metallic": 0.0,
+    "opacity": 1.0,
+    "roughness": 0.75
+   },
+   "physics": {
+    "friction": 0.6,
+    "motion": "static",
+    "restitution": 0.0
+   },
+   "position": [
+    -8.0,
+    9.0,
+    102.0
+   ],
+   "shape": "box",
+   "size": [
+    1.2,
+    18.0,
+    1.2
+   ]
+  },
+  {
+   "id": 130,
+   "material": {
+    "albedo": [
+     0.55,
+     0.55,
+     0.58
+    ],
+    "checkerboard": false,
+    "emission": [
+     0,
+     0,
+     0
+    ],
+    "metallic": 0.0,
+    "opacity": 1.0,
+    "roughness": 0.75
+   },
+   "physics": {
+    "friction": 0.6,
+    "motion": "static",
+    "restitution": 0.0
+   },
+   "position": [
+    8.0,
+    9.0,
+    102.0
+   ],
+   "shape": "box",
+   "size": [
+    1.2,
+    18.0,
+    1.2
+   ]
+  },
+  {
+   "id": 131,
+   "material": {
+    "albedo": [
+     0.9,
+     0.75,
+     0.2
+    ],
+    "checkerboard": false,
+    "emission": [
+     0,
+     0,
+     0
+    ],
+    "metallic": 0.0,
+    "opacity": 1.0,
+    "roughness": 0.75
+   },
+   "physics": {
+    "friction": 0.6,
+    "motion": "static",
+    "restitution": 0.0
+   },
+   "position": [
+    0.0,
+    17.5,
+    102.0
+   ],
+   "shape": "box",
+   "size": [
+    17.2,
+    1.0,
+    0.8
+   ]
+  },
+  {
+   "id": 132,
+   "material": {
+    "albedo": [
+     0.55,
+     0.55,
+     0.58
+    ],
+    "checkerboard": false,
+    "emission": [
+     0,
+     0,
+     0
+    ],
+    "metallic": 0.0,
+    "opacity": 1.0,
+    "roughness": 0.75
+   },
+   "physics": {
+    "friction": 0.6,
+    "motion": "static",
+    "restitution": 0.0
+   },
+   "position": [
+    -8.0,
+    9.0,
+    116.0
+   ],
+   "shape": "box",
+   "size": [
+    1.2,
+    18.0,
+    1.2
+   ]
+  },
+  {
+   "id": 133,
+   "material": {
+    "albedo": [
+     0.55,
+     0.55,
+     0.58
+    ],
+    "checkerboard": false,
+    "emission": [
+     0,
+     0,
+     0
+    ],
+    "metallic": 0.0,
+    "opacity": 1.0,
+    "roughness": 0.75
+   },
+   "physics": {
+    "friction": 0.6,
+    "motion": "static",
+    "restitution": 0.0
+   },
+   "position": [
+    8.0,
+    9.0,
+    116.0
+   ],
+   "shape": "box",
+   "size": [
+    1.2,
+    18.0,
+    1.2
+   ]
+  },
+  {
+   "id": 134,
+   "material": {
+    "albedo": [
+     0.9,
+     0.75,
+     0.2
+    ],
+    "checkerboard": false,
+    "emission": [
+     0,
+     0,
+     0
+    ],
+    "metallic": 0.0,
+    "opacity": 1.0,
+    "roughness": 0.75
+   },
+   "physics": {
+    "friction": 0.6,
+    "motion": "static",
+    "restitution": 0.0
+   },
+   "position": [
+    0.0,
+    17.5,
+    116.0
+   ],
+   "shape": "box",
+   "size": [
+    17.2,
+    1.0,
+    0.8
+   ]
+  },
+  {
+   "id": 135,
+   "material": {
+    "albedo": [
+     0.55,
+     0.55,
+     0.58
+    ],
+    "checkerboard": false,
+    "emission": [
+     0,
+     0,
+     0
+    ],
+    "metallic": 0.0,
+    "opacity": 1.0,
+    "roughness": 0.75
+   },
+   "physics": {
+    "friction": 0.6,
+    "motion": "static",
+    "restitution": 0.0
+   },
+   "position": [
+    -8.0,
+    9.0,
+    130.0
+   ],
+   "shape": "box",
+   "size": [
+    1.2,
+    18.0,
+    1.2
+   ]
+  },
+  {
+   "id": 136,
+   "material": {
+    "albedo": [
+     0.55,
+     0.55,
+     0.58
+    ],
+    "checkerboard": false,
+    "emission": [
+     0,
+     0,
+     0
+    ],
+    "metallic": 0.0,
+    "opacity": 1.0,
+    "roughness": 0.75
+   },
+   "physics": {
+    "friction": 0.6,
+    "motion": "static",
+    "restitution": 0.0
+   },
+   "position": [
+    8.0,
+    9.0,
+    130.0
+   ],
+   "shape": "box",
+   "size": [
+    1.2,
+    18.0,
+    1.2
+   ]
+  },
+  {
+   "id": 137,
+   "material": {
+    "albedo": [
+     0.9,
+     0.75,
+     0.2
+    ],
+    "checkerboard": false,
+    "emission": [
+     0,
+     0,
+     0
+    ],
+    "metallic": 0.0,
+    "opacity": 1.0,
+    "roughness": 0.75
+   },
+   "physics": {
+    "friction": 0.6,
+    "motion": "static",
+    "restitution": 0.0
+   },
+   "position": [
+    0.0,
+    17.5,
+    130.0
+   ],
+   "shape": "box",
+   "size": [
+    17.2,
+    1.0,
+    0.8
+   ]
+  },
+  {
+   "id": 138,
+   "material": {
+    "albedo": [
+     0.55,
+     0.55,
+     0.58
+    ],
+    "checkerboard": false,
+    "emission": [
+     0,
+     0,
+     0
+    ],
+    "metallic": 0.0,
+    "opacity": 1.0,
+    "roughness": 0.75
+   },
+   "physics": {
+    "friction": 0.6,
+    "motion": "static",
+    "restitution": 0.0
+   },
+   "position": [
+    -8.0,
+    9.0,
+    144.0
+   ],
+   "shape": "box",
+   "size": [
+    1.2,
+    18.0,
+    1.2
+   ]
+  },
+  {
+   "id": 139,
+   "material": {
+    "albedo": [
+     0.55,
+     0.55,
+     0.58
+    ],
+    "checkerboard": false,
+    "emission": [
+     0,
+     0,
+     0
+    ],
+    "metallic": 0.0,
+    "opacity": 1.0,
+    "roughness": 0.75
+   },
+   "physics": {
+    "friction": 0.6,
+    "motion": "static",
+    "restitution": 0.0
+   },
+   "position": [
+    8.0,
+    9.0,
+    144.0
+   ],
+   "shape": "box",
+   "size": [
+    1.2,
+    18.0,
+    1.2
+   ]
+  },
+  {
+   "id": 140,
+   "material": {
+    "albedo": [
+     0.9,
+     0.75,
+     0.2
+    ],
+    "checkerboard": false,
+    "emission": [
+     0,
+     0,
+     0
+    ],
+    "metallic": 0.0,
+    "opacity": 1.0,
+    "roughness": 0.75
+   },
+   "physics": {
+    "friction": 0.6,
+    "motion": "static",
+    "restitution": 0.0
+   },
+   "position": [
+    0.0,
+    17.5,
+    144.0
+   ],
+   "shape": "box",
+   "size": [
+    17.2,
+    1.0,
+    0.8
+   ]
+  },
+  {
+   "id": 141,
+   "material": {
+    "albedo": [
+     0.55,
+     0.55,
+     0.58
+    ],
+    "checkerboard": false,
+    "emission": [
+     0,
+     0,
+     0
+    ],
+    "metallic": 0.0,
+    "opacity": 1.0,
+    "roughness": 0.75
+   },
+   "physics": {
+    "friction": 0.6,
+    "motion": "static",
+    "restitution": 0.0
+   },
+   "position": [
+    -8.0,
+    9.0,
+    158.0
+   ],
+   "shape": "box",
+   "size": [
+    1.2,
+    18.0,
+    1.2
+   ]
+  },
+  {
+   "id": 142,
+   "material": {
+    "albedo": [
+     0.55,
+     0.55,
+     0.58
+    ],
+    "checkerboard": false,
+    "emission": [
+     0,
+     0,
+     0
+    ],
+    "metallic": 0.0,
+    "opacity": 1.0,
+    "roughness": 0.75
+   },
+   "physics": {
+    "friction": 0.6,
+    "motion": "static",
+    "restitution": 0.0
+   },
+   "position": [
+    8.0,
+    9.0,
+    158.0
+   ],
+   "shape": "box",
+   "size": [
+    1.2,
+    18.0,
+    1.2
+   ]
+  },
+  {
+   "id": 143,
+   "material": {
+    "albedo": [
+     0.9,
+     0.75,
+     0.2
+    ],
+    "checkerboard": false,
+    "emission": [
+     0,
+     0,
+     0
+    ],
+    "metallic": 0.0,
+    "opacity": 1.0,
+    "roughness": 0.75
+   },
+   "physics": {
+    "friction": 0.6,
+    "motion": "static",
+    "restitution": 0.0
+   },
+   "position": [
+    0.0,
+    17.5,
+    158.0
+   ],
+   "shape": "box",
+   "size": [
+    17.2,
+    1.0,
+    0.8
+   ]
+  },
+  {
+   "id": 144,
+   "material": {
+    "albedo": [
+     0.55,
+     0.55,
+     0.58
+    ],
+    "checkerboard": false,
+    "emission": [
+     0,
+     0,
+     0
+    ],
+    "metallic": 0.0,
+    "opacity": 1.0,
+    "roughness": 0.75
+   },
+   "physics": {
+    "friction": 0.6,
+    "motion": "static",
+    "restitution": 0.0
+   },
+   "position": [
+    0.0,
+    5.0,
+    172.0
+   ],
+   "shape": "box",
+   "size": [
+    12.0,
+    10.0,
+    8.0
+   ]
+  },
+  {
+   "id": 145,
+   "material": {
+    "albedo": [
+     0.55,
+     0.55,
+     0.58
+    ],
+    "checkerboard": false,
+    "emission": [
+     0,
+     0,
+     0
+    ],
+    "metallic": 0.0,
+    "opacity": 1.0,
+    "roughness": 0.75
+   },
+   "physics": {
+    "friction": 0.6,
+    "motion": "static",
+    "restitution": 0.0
+   },
+   "position": [
+    -106.0,
+    2.0,
+    0.0
+   ],
+   "shape": "box",
+   "size": [
+    12.0,
+    4.0,
+    12.0
+   ]
+  },
+  {
+   "id": 146,
+   "material": {
+    "albedo": [
+     0.85,
+     0.85,
+     0.82
+    ],
+    "checkerboard": false,
+    "emission": [
+     0,
+     0,
+     0
+    ],
+    "metallic": 0.0,
+    "opacity": 1.0,
+    "roughness": 0.75
+   },
+   "physics": {
+    "friction": 0.6,
+    "motion": "static",
+    "restitution": 0.0
+   },
+   "position": [
+    -80.0,
+    1.801,
+    0.0
+   ],
+   "shape": "box",
+   "size": [
+    40.3995,
+    0.4,
+    12.0
+   ],
+   "orientation": {
+    "angleDeg": -5.710593137499642,
+    "axis": [
+     0,
+     0,
+     1
+    ]
+   }
+  },
+  {
+   "id": 147,
+   "material": {
+    "albedo": [
+     0.9,
+     0.75,
+     0.2
+    ],
+    "checkerboard": false,
+    "emission": [
+     0,
+     0,
+     0
+    ],
+    "metallic": 0.0,
+    "opacity": 1.0,
+    "roughness": 0.75
+   },
+   "physics": {
+    "friction": 0.6,
+    "motion": "static",
+    "restitution": 0.0
+   },
+   "position": [
+    -52.0,
+    0.0,
+    -3.5
+   ],
+   "shape": "wedge",
+   "size": [
+    2.0,
+    0.5,
+    2.0
+   ]
+  },
+  {
+   "id": 148,
+   "material": {
+    "albedo": [
+     0.9,
+     0.75,
+     0.2
+    ],
+    "checkerboard": false,
+    "emission": [
+     0,
+     0,
+     0
+    ],
+    "metallic": 0.0,
+    "opacity": 1.0,
+    "roughness": 0.75
+   },
+   "physics": {
+    "friction": 0.6,
+    "motion": "static",
+    "restitution": 0.0
+   },
+   "position": [
+    -52.0,
+    0.0,
+    3.5
+   ],
+   "shape": "wedge",
+   "size": [
+    2.0,
+    0.5,
+    2.0
+   ]
   }
  ],
  "environment": {

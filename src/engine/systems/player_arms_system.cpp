@@ -101,7 +101,7 @@ void PlayerArmsSystem::update(FrameContext& ctx) {
             Renderable r;
             r.mesh = i == 6 ? canopy : box;
             r.material.albedo = i < 2 ? outfit.shirt : i < 4 ? outfit.skin : i < 6 ? Vec3(0.95, 0.45, 0.08)
-                              : i == 6 ? Vec3(1, 1, 1) : Vec3(0.15, 0.15, 0.17);
+                              : i == 6 ? Vec3(1, 1, 1) : i == 11 ? Vec3(0.9, 0.85, 0.7) : Vec3(0.15, 0.15, 0.17);
             r.material.roughness = 0.85f;
             r.material.metallic = 0.0f;
             r.material.opacity = 1.0f;
@@ -149,17 +149,30 @@ void PlayerArmsSystem::update(FrameContext& ctx) {
             place(7 + j, from[k] + d * (len * 0.5), facing(d, Vec3(0, 1, 0)), Vec3(0.012, 0.012, len));
         }
     };
+    // THE ROPE, in either view: from the right hand (first person) or the raised hand over the body to the hook
+    auto drawRope = [&](bool armsDrawn) {
+        if (!(pose && body && pose->mode == PlayerPose::Mode::Grapple)) {
+            place(11, Vec3(0, kOut, 0), Quat::identity(), Vec3(1, 1, 1));
+            return;
+        }
+        const Vec3 from = armsDrawn ? handWorld_[1] : body->position + Vec3(0, 0.9, 0);
+        Vec3 d = pose->anchor - from;
+        const Real len = std::max(d.length(), Real(0.01));
+        d = d * (1.0 / len);
+        place(11, from + d * (len * 0.5), facing(d, Vec3(0, 1, 0)), Vec3(0.02, 0.02, len));
+    };
     if (!visible) {
         if (shown_)
             for (int i = 0; i < 6; ++i) place(i, Vec3(0, kOut, 0), Quat::identity(), Vec3(1, 1, 1));
         shown_ = false;
         haveLocal_ = false;
         drawCanopy(false);
+        drawRope(false);
         return;
     }
     shown_ = true;
 
-    for (int k = 1; k <= 6; ++k)   // (only reached in first person, where the gun script takes the keys too)
+    for (int k = 1; k <= 9; ++k)   // (only reached in first person, where the gun script takes the keys too)
         if (ctx.actions.pressed("slot_" + std::to_string(k))) slot_ = k;
 
     const CameraState& cam = ctx.view.camera;
@@ -176,7 +189,8 @@ void PlayerArmsSystem::update(FrameContext& ctx) {
 
     const Real dt = std::clamp(static_cast<Real>(ctx.frameDelta), Real(0), Real(0.1));
     const bool held = pose->mode == PlayerPose::Mode::Mantle || pose->mode == PlayerPose::Mode::Climb ||
-                      pose->mode == PlayerPose::Mode::Ladder;
+                      pose->mode == PlayerPose::Mode::Ladder || pose->mode == PlayerPose::Mode::Grapple ||
+                      (pose->mode == PlayerPose::Mode::Board && pose->board == 1);
     // THE GUN, where gun.lua's viewmodel puts it: 0.35 ahead of the eye, 0.18 right, 0.18 down, barrel along
     // the view. The hands go on it: the right on the grip, the left under the barrel.
     const bool gun = slot_ == 2 && (pose->mode == PlayerPose::Mode::Walk || pose->mode == PlayerPose::Mode::Air);
@@ -222,6 +236,22 @@ void PlayerArmsSystem::update(FrameContext& ctx) {
                 // up on the toggles, at the top corners of the view; W pulls them down a touch... S flares them
                 want = Vec3(s * 0.3, 0.13, 0.32);
                 break;
+            case PlayerPose::Mode::Board:
+                if (pose->board == 1) want = toLocal(k == 0 ? pose->handL : pose->handR);   // on the scooter's grips
+                else want = Vec3(s * 0.34, -0.3, 0.32);   // the skateboard: out for balance
+                break;
+            case PlayerPose::Mode::Grapple: {
+                // the right arm up along the rope, the left out for balance
+                if (k == 1) {
+                    const Vec3 sh = Vec3(0.21, -0.26, -0.04);
+                    Vec3 d = toLocal(pose->anchor) - sh;
+                    d = d.length() > 1e-4 ? normalize(d) : Vec3(0, 1, 0);
+                    want = sh + d * 0.62;
+                } else {
+                    want = Vec3(-0.3, -0.2, 0.38);
+                }
+                break;
+            }
             case PlayerPose::Mode::Wingsuit:
                 // spread wide, the wings between arm and body: the hands at the edges of the view
                 want = Vec3(s * 0.43, -0.1, 0.38);
@@ -263,6 +293,7 @@ void PlayerArmsSystem::update(FrameContext& ctx) {
     }
     haveLocal_ = true;
     drawCanopy(true);
+    drawRope(true);
 }
 
 }  // namespace engine

@@ -19,6 +19,10 @@ edit of the JSON.
   NE      a stair of ledges up to a 6 m roof, and rooftop gaps
   SE      the jump tower: a spiral ramp (walkable, 24 deg) up to a 72 m top -- 5 the parachute, 6 the wingsuit,
           then jump off and jump again in the air
+  FAR W   the skate run: a 4 m deck with a 40 m ramp down off it (6 deg) onto the flat, and two kickers --
+          8 the skateboard, 9 the scooter
+  FAR S   the swing park: gantries (two 18 m pillars, a beam across) every 14 m heading south -- 7 the grapple,
+          hold the click on a beam, let go at the bottom of the swing, hook the next
 """
 import json
 import math
@@ -163,6 +167,23 @@ for k in range(SEGMENTS + 1):
         box(mid, (length, 0.4, 2.0), WHITE, rot=(ang if bx > ax else -ang, (0, 0, 1)))
     else:          # along z: rotate about x (a positive turn lowers +z)
         box(mid, (2.0, 0.4, length), WHITE, rot=(-ang if bz > az else ang, (1, 0, 0)))
+
+# --- far south: the swing park -------------------------------------------------------------
+for k in range(8):
+    z = 60.0 + k * 14.0
+    for x in (-8.0, 8.0):
+        block(x - 0.6, x + 0.6, z - 0.6, z + 0.6, 0.0, 18.0, CONCRETE)
+    block(-8.6, 8.6, z - 0.4, z + 0.4, 17.0, 18.0, YELLOW)
+block(-6.0, 6.0, 168.0, 176.0, 0.0, 10.0, CONCRETE)   # a roof at the end to grapple up onto
+
+# --- far west: the skate run ----------------------------------------------------------------
+block(-112.0, -100.0, -6.0, 6.0, 0.0, 4.0, CONCRETE)                       # the deck
+a = math.atan2(4.0, 40.0)
+box((-80.0, 2.0 - 0.2 * math.cos(a), 0.0), (math.hypot(40.0, 4.0) + 0.2, 0.4, 12.0), WHITE,
+    rot=(-math.degrees(a), (0, 0, 1)))                                     # down to the east
+for z in (-3.5, 3.5):                                                      # kickers past its foot
+    box((-52.0, 0.0, z), (2.0, 0.5, 2.0), YELLOW)
+    ENTITIES[-1]["shape"] = "wedge"
 
 level = {
     "version": 1,

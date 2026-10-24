@@ -4,8 +4,9 @@
 
 namespace engine {
 
-// 1 hands, 2 the gun, 3 the map, 4 the flashlight, 5 the parachute, 6 the wingsuit (PlayerSystem)
-constexpr int kSlots = 6;
+// 1 hands, 2 the gun, 3 the map, 4 the flashlight, 5 the parachute, 6 the wingsuit, 7 the grapple, 8 the skateboard,
+// 9 the scooter (PlayerSystem)
+constexpr int kSlots = 9;
 
 void ToolCycleSystem::onStart(FrameContext& ctx) {
     ctx.actions.bindButton("tool_next", GamepadButton::RightBumper);

@@ -11605,3 +11605,124 @@ wingsuit"; "I imagine you'd have to select it from your inventory".
 - **The lab** has a 72 m tower with a walkable spiral ramp (24°) and 600 m of ground to land on. The wingsuit
   wants more height than that: `teleport x 400 z` or a peak on the island. Not measured yet: whether the island's
   streaming keeps up with a 50 m/s suit (`tools/fly_probe.py` along a flight line).
+
+## ADR-0230 — The grapple: a hook that snaps near the aim, a rope that only pulls
+
+Glenn (2026-10-24): "Grapple hook and swing mechanics (something like spiderman)".
+
+- **Slot 7** (Num7). A ring marks where a shot would hook; hold fire (the click / RT) to hook and hang, let go to
+  fly on with all the speed the swing gave. Jump held reels in, crouch lets out, W pumps along the swing, A/D
+  steer across it. Reeled right up to an edge, it pulls you up onto it (the mantle of ADR-0228).
+- **The hook (`findGrappleAnchor`)**: the aim itself if it meets something static in 3-60 m and above the eye,
+  else the best of two rings of eight rays within 9° -- near the aim first, above the eye preferred, below only
+  if nothing else. That snap is what makes swinging easy: aimed 5° over a beam, it still catches the beam.
+- **The rope (`ropeStep`)**: gravity and the pump move the hand point; past the rope's length it is put back on
+  the sphere and the outward speed removed -- a rope pulls, never pushes, and adds nothing: from level, the
+  bottom of the swing is √(2gL) and it never climbs above where it began (tested, after the wingsuit's lesson).
+  The capsule then moves there through the world (moveCharacterFree), so walls take the speed off honestly.
+- **From the ground** a hook is a hard reel for half a second (2× the reel-in): standing under a taut rope
+  gave nothing to swing, and the first step made it slack and let go. Measured: lifted into an 18 m/s swing.
+- **Seen**: the right arm up along the rope, the rope a pale line to the hook (from the raised hand in third
+  person); the HUD's ring on the hook and the controls.
+- **The lab**: a swing park far south, a gantry (two 18 m pillars, a beam) every 14 m, and a 10 m roof at its
+  end to reel up onto. `hold MouseLeft <s>` on the socket holds the fire button, for probes.
+
+## ADR-0231 — The body in third person, posed as six blocks
+
+Glenn (2026-10-24): "3rd person might be fun as well". In third person the player was the walker mesh with its
+walk cycle whatever it did -- climbing a wall looked like walking up it.
+
+- **engine/block_body.h**: the person as the six blocks `buildStandingPerson` welds into the walker mesh (two
+  legs, torso, two arms, head; tested to sit exactly where the mesh's do at rest). A `BodyPose` is where the body
+  is, its facing and lean, and a body-frame direction for each limb; `poseBlocks` places them; `reachToward`
+  points a limb at a world point (the hands' holds, the rope's hook).
+- **PlayerBodySystem** draws them, with the capsule (fixedUpdate, so they interpolate like it), when the body
+  is doing anything but walking or falling (`drawnAsBlocks`): flat to the wall reaching for the holds the arms
+  use in first person, a foot up in turn; prone at the waterline in a crawl, the feet fluttering; upright under
+  the canopy, hands on the toggles; flat to the air in the wingsuit, head down as it dives; off the right hand
+  on the rope, legs trailing. citysim's CityPlayerBodySystem (the walker mesh) stands down meanwhile.
+- **The same blocks are the ragdoll** (ADR-0232): one body, posed or limp.
+- Not yet: knees and elbows (each limb is one block, like the walkers'), and a walk/run/jump that blends into
+  these poses rather than switching.
+
+## ADR-0232 — Going limp: the player as a ragdoll of the same six blocks
+
+Glenn (2026-10-24): "crashing could result in ragdolling. How hard is it to do ragdolling for the player?"
+
+- **PhysicsWorld::addRagdoll** (Jolt's Ragdoll): boxes with masses, each joined to its parent by a swing-twist
+  joint at a world point (axis parent -> child, swing and twist limits); parents never collide with children.
+  `blockRagdoll(pose)` makes the six blocks of a pose into one: 67 kg, the torso 30; arms swing 85°, legs 60°,
+  the head 35°. Tested: thrown at a run it lands in a heap a metre on, comes to rest, every joint within 8 cm.
+- **What drops you**: a wingsuit into anything over 20 m/s, touching down faster than 15 m/s (an ~11 m fall:
+  the 72 m tower's 37 m/s), losing more than 14 m/s in one step on the rope; and G (or `ragdoll` on the socket)
+  on purpose. All in Debug > Movement (Ragdoll).
+- **While limp** the view goes outside (the shoulder rig on the torso) whichever view was set; the first-person
+  arms stand down (the eye isn't at the body). **Up**: by itself after 1.2 s lying still, on jump once it has
+  slowed, or at once into the water (swimming); the capsule stands over where the torso lies, lifted until it
+  fits. The fall net still catches a body falling off the world.
+- Not yet: townspeople (a pool of 6-8 for walkers the player hits, owed), being hit by a car, a get-up animation.
+
+## ADR-0233 — Townspeople knocked flying: a pool of six ragdolls
+
+Glenn (2026-10-24): "this might also go for agents you run into, but we wouldn't want them all to ragdoll
+because I'm sure that would be stupid expensive".
+
+- Walkers were already knocked down (KnockdownTimer: a vehicle centre within 1.5 m at over 2.5 m/s floors a
+  walker with a body, ADR-0062) and drawn lying flat. Now the hit throws them: `WalkerRagdolls`
+  (apps/citysim/walker_ragdolls.h) makes the six-block ragdoll (ADR-0232) at the walker's capsule, in its own
+  outfit, at 0.8 x the car's speed away from it plus a lift; the walker mesh shrinks to nothing meanwhile.
+- **The cost is bounded twice:** only the walkers with a physical body can be hit (the nearest few hundred,
+  ADR-0062's budget), and at most six are limp at once -- a seventh hit recycles the one down longest. Each is
+  six Jolt bodies and five joints while it lies there, nothing before or after.
+- **Up** after a second lying still (six at most): the capsule is stood over the torso, the knock timer cleared,
+  and the walk resumes toward its plan.
+- `knock` on the socket throws the walker nearest the player (the log says which and where), `knock?` reports
+  the limp ones (torso, speed, time down). Measured in agent_lab: thrown 7 m, at rest 0.13 m up after 2.4 s, up.
+
+## ADR-0234 — Skateboard and scooter: ridden whenever they are in hand on the ground
+
+Glenn (2026-10-24): "skateboards, scooters, mopeds, motorcycles, bikes". The two that need no engine.
+
+- **Slots 8 and 9.** With either in hand, standing on the ground is riding (`Move::Board`); another slot steps
+  off. `boardStep`: A/D carve at the tighter of 150°/s and the grip (7 m/s²) over the speed, so a fast board
+  turns wide; W kicks (+1.8 m/s a kick, one per 0.5 s, fading toward 8.5 m/s -- the scooter 7); S drags a heel;
+  the slope under the wheels pulls it downhill; rolling loss stops it in the end. Jump ollies (3.8 m/s up),
+  keeping the board.
+- **Bail**: stopped short above 6.5 m/s (a wall, a kerb's face, a kicker's blunt side) throws you off, limp, at
+  0.7 x the speed; a hard landing off a drop too.
+- **Seen**: the board under the feet in either view (a deck with nose and tail kicked up and four wheels; the
+  scooter's deck, stem, bar and grips); in third person side-on to a skateboard, the back foot kicking, arms out,
+  or square behind a scooter's bar with the hands on it; in first person, the hands on the scooter's grips.
+- **The lab**: a skate run far west -- a 4 m deck, 40 m of 6° ramp down onto the flat, two kickers. Measured:
+  kicked to 5.9 m/s on the deck, 9.1 m/s at the foot of the ramp.
+- Not yet: tricks and grinds, a kick that pushes in time with the leg, and wheels that roll.
+
+## ADR-0235 — Motorcycle, moped, bicycle: Jolt's MotorcycleController, with its lean spring sized to the bike
+
+Glenn (2026-10-24): "skateboards, scooters, mopeds, motorcycles, bikes. This could also mean crashing could result
+in ragdolling."
+
+- **`VehicleConfig::twoWheeler`** (Lua `two_wheeler = true`, `max_lean_deg`) builds Jolt's MotorcycleController
+  instead of the four-wheel one; the four-wheel helpers stand aside (recipes set `yaw_assist = 0`,
+  `anti_roll = 0`; a one-wheel axle's differential already took `mRightWheel = -1`). It leans the chassis into a
+  turn and limits steering by the lean at speed, so a fast bike turns wide.
+- **The lean spring, sized:** Jolt's defaults (5000 / 1000) suit its sample's heavy hull. On our narrow box (roll
+  inertia ~12 kg m² for a 220 kg motorcycle) one 60 Hz step of that damping overshot the roll rate and the bike
+  flipped on touchdown (measured: 40° in four frames, then on its side). Now from the bike's own mass and box:
+  stiffness 2.5 m g (h/2 + 0.3), damping 0.4 x roll inertia x 60 -- upright at rest and through a drop.
+- **vehicles.lua**: `vehicle.motorcycle`, `vehicle.moped`, `vehicle.bicycle`, boxes on the centre line (frame,
+  engine, tank or leg shield, seat, fork, bars, guards; a bicycle's tubes and saddle), headlight and taillight
+  markers and a driver seat; in the drivable catalogue (`, .` pick, N drops; `vehicle_spawn moped` on the socket).
+  Torques are small and ratios high because Jolt multiplies by the gear and a 3.42 final drive; the bicycle's
+  rpm and ratios are both x4 because Jolt's automatic shifts up at 4000 rpm and a 1500 rpm "engine" never left
+  first.
+- **Measured** (tests/test_two_wheelers, 12 s flat out then 4 s at 80% lock on a little throttle): motorcycle
+  79 km/h, leaning 28°; moped 47 km/h, 29°; bicycle 25 km/h, 27°; none below 0.86 of upright. In the viewer the
+  motorcycle rode 46 km/h and leaned 29-44° through a turn.
+- **The freewheel**: `engine_damping` / `engine_inertia` (Jolt's engine spin-down) near zero on the bicycle, which
+  coasts (33 -> 31 km/h over 3 s off the pedals) where an engine brakes.
+- **Off in a crash** (`VehicleSystem::crashOffBikes`): a two-wheeler that loses 25 km/h in 0.3 s (one step was
+  never enough: Jolt spreads a hit over several) or rolls 10° past its lean puts the rider off as a ragdoll at
+  0.8 x the speed it had, plus a lift. Measured: into a 1.2 m rock at 50 km/h, thrown ~8 m over it, up again.
+- Not yet: the rider is the car's seated occupant (not posed on the bike); the chase camera is the car's (far
+  behind a bike); pedalling isn't drawn.

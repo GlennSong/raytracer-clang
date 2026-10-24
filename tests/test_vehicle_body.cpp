@@ -555,7 +555,7 @@ TEST_CASE(car_picker_catalogue_builds_and_says_the_true_drivetrain) {
         std::printf("    %-16s %-18s %-4s share %+.2f part-time %d  %s\n", e.recipe.c_str(), e.label.c_str(), e.drive.c_str(),
                     share, spec.partTime4wd ? 1 : 0, matches ? "ok" : "MISMATCH");
         CHECK(matches);
-        CHECK(spec.config.wheels.size() >= 4);
+        CHECK(spec.config.wheels.size() >= (spec.config.twoWheeler ? 2u : 4u));   // (the bikes ride on two, ADR-0235);
         CHECK(spec.body != nullptr);
     }
     CHECK(driveLabel("4wd").find("4WD") != std::string::npos);

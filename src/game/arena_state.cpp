@@ -54,6 +54,7 @@
 #include "../engine/systems/physics_system.h"
 #include "../engine/systems/player_system.h"
 #include "../engine/systems/player_arms_system.h"
+#include "../engine/systems/player_body_system.h"
 #include "../engine/systems/shooting_system.h"
 #ifdef RT_ENABLE_SCRIPTING
 #include "../engine/scripting/script_system.h"
@@ -203,6 +204,7 @@ ArenaState::ArenaState(Window& window, Renderer& renderer,
     // over the on-foot shoulder camera, walk cycle shared with the crowd. After
     // PlayerSystem (line 60) so the capsule pose it reads is already this tick's.
     addSystem<citysim::CityPlayerBodySystem>();
+    addSystem<PlayerBodySystem>();   // ...and posed as blocks when climbing, swimming, flying, swinging, limp
     // The passenger seat: `ride bus|taxi|any` / `ride off` (city_player_transit).
     addSystem<citysim::CityPlayerTransitSystem>(citySys, physSys, camSys.flyController());
     addSystem<citysim::TrainSystem>(physSys, camSys.flyController(), &citySys);   // trains on the level's tracks, and the player aboard

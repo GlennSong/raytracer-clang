@@ -77,6 +77,30 @@ struct MovementTuning {
     Real suitTurn = 3.5;           // 1/s: how quickly the suit swings the way into where you look
     Real suitPitchDown = 60.0;     // deg the dive is held to
     Real suitPitchUp = 25.0;       // deg the pull-up is held to
+    // the grapple (slot 7): hold the trigger to hang on the rope, let go to fly on
+    Real grappleRange = 60.0;      // m to the farthest hook
+    Real grappleMinRange = 3.0;    // m: nearer than this is no swing
+    Real grappleCone = 9.0;        // deg off the aim the hook still finds a place (the snap that makes it easy)
+    Real grappleReelIn = 9.0;      // m/s the rope shortens, jump held
+    Real grappleReelOut = 5.0;     // m/s it lets out, crouch held
+    Real grappleMinRope = 2.0;     // m: reeled all the way in
+    Real grapplePump = 4.0;        // m/s^2 along the swing, W held
+    Real grappleSteer = 2.5;       // m/s^2 sideways, A/D
+    // boards (slot 8 the skateboard, slot 9 the scooter): ridden whenever on the ground with one in hand
+    Real boardPush = 1.8;          // m/s a kick adds (less as the speed nears the most a kick reaches)
+    Real boardPushMax = 8.5;       // m/s: kicking stops helping here (downhill goes faster)
+    Real scooterPushMax = 7.0;
+    Real boardKickTime = 0.5;      // s between kicks, W held
+    Real boardRoll = 0.3;          // m/s^2 rolling loss
+    Real boardBrake = 5.0;         // m/s^2, S held (a heel drag)
+    Real boardCarve = 7.0;         // m/s^2 sideways grip: how tight a turn is at speed
+    Real boardTurnMax = 150.0;     // deg/s: how fast it turns when slow
+    Real boardOllie = 3.8;         // m/s up off the board, jump
+    Real boardCrash = 6.5;         // m/s into something that stops it: off and limp
+    // going limp (the ragdoll)
+    Real limpFallSpeed = 15.0;     // m/s down at touchdown that drops you in a heap (an ~11 m fall)
+    Real limpImpact = 14.0;        // m/s lost in one step on the rope or in the suit: a slam
+    Real getUpAfter = 1.2;         // s lying still before standing up by itself
 
     struct Field { const char* key; Real MovementTuning::*value; Real lo, hi; const char* group; };
     static const std::vector<Field>& fields();
@@ -156,6 +180,26 @@ Vec3 parachuteStep(const Vec3& v, Vec3& heading, const Vec3& look, Real inF, Rea
 Vec3 wingsuitStep(const Vec3& v, const Vec3& look, Real dt, const MovementTuning& t);
 // The look direction with its pitch held to [-suitPitchDown, suitPitchUp].
 Vec3 wingsuitFacing(const Vec3& look, const MovementTuning& t);
+
+// THE GRAPPLE'S HOOK: where a shot along `look` from `eye` would catch -- the aim itself if it meets something
+// solid in range, else the best of a ring of rays within the cone, preferring near the aim and above the eye.
+struct GrappleAnchor {
+    bool ok = false;
+    Vec3 point, normal;
+    Real distance = 0;
+};
+GrappleAnchor findGrappleAnchor(const PhysicsWorld& world, const Vec3& eye, const Vec3& look, const MovementTuning& t);
+// ONE STEP ON THE ROPE: the body point `pos` moves under gravity and `accel` (pumping, steering); where that would
+// take it further from `anchor` than `length`, it is held on the rope's sphere and the outward speed is taken out
+// (a rope pulls, it never pushes). Returns the new velocity; `pos` is updated.
+Vec3 ropeStep(Vec3& pos, const Vec3& vel, const Vec3& anchor, Real length, const Vec3& accel, Real dt);
+
+// ONE STEP ON A BOARD: `heading` (horizontal unit) turns with A/D at the tighter of the turn rate and what the
+// grip allows at this speed; W kicks (one kick per boardKickTime, up to pushMax), S brakes; the slope under the
+// wheels (`groundNormal`) pulls it downhill; rolling loss slows it. `kickClock` counts down to the next kick.
+// Returns the new speed (>= 0) along the new heading.
+Real boardStep(Real speed, Vec3& heading, Real& kickClock, Real inF, Real inR, const Vec3& groundNormal,
+               Real pushMax, Real dt, const MovementTuning& t);
 
 // The swimmer's speed at a point in the stroke (phase 0..1): a pull that surges, a glide that eases off; the
 // average over a stroke is 1.

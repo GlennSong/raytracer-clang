@@ -73,6 +73,27 @@ const std::vector<MovementTuning::Field>& MovementTuning::fields() {
         {"suitTurn", &T::suitTurn, 0.2, 10, "Glide"},
         {"suitPitchDown", &T::suitPitchDown, 10, 89, "Glide"},
         {"suitPitchUp", &T::suitPitchUp, 0, 60, "Glide"},
+        {"grappleRange", &T::grappleRange, 5, 200, "Grapple"},
+        {"grappleMinRange", &T::grappleMinRange, 0.5, 10, "Grapple"},
+        {"grappleCone", &T::grappleCone, 0, 30, "Grapple"},
+        {"grappleReelIn", &T::grappleReelIn, 0, 30, "Grapple"},
+        {"grappleReelOut", &T::grappleReelOut, 0, 20, "Grapple"},
+        {"grappleMinRope", &T::grappleMinRope, 0.5, 10, "Grapple"},
+        {"grapplePump", &T::grapplePump, 0, 15, "Grapple"},
+        {"grappleSteer", &T::grappleSteer, 0, 10, "Grapple"},
+        {"boardPush", &T::boardPush, 0.2, 6, "Board"},
+        {"boardPushMax", &T::boardPushMax, 2, 20, "Board"},
+        {"scooterPushMax", &T::scooterPushMax, 2, 20, "Board"},
+        {"boardKickTime", &T::boardKickTime, 0.1, 2, "Board"},
+        {"boardRoll", &T::boardRoll, 0, 3, "Board"},
+        {"boardBrake", &T::boardBrake, 0.5, 15, "Board"},
+        {"boardCarve", &T::boardCarve, 1, 20, "Board"},
+        {"boardTurnMax", &T::boardTurnMax, 20, 400, "Board"},
+        {"boardOllie", &T::boardOllie, 0, 8, "Board"},
+        {"boardCrash", &T::boardCrash, 2, 20, "Board"},
+        {"limpFallSpeed", &T::limpFallSpeed, 5, 60, "Ragdoll"},
+        {"limpImpact", &T::limpImpact, 3, 60, "Ragdoll"},
+        {"getUpAfter", &T::getUpAfter, 0.2, 10, "Ragdoll"},
     };
     return f;
 }
@@ -294,6 +315,81 @@ Vec3 wingsuitStep(const Vec3& v, const Vec3& look, Real dt, const MovementTuning
     const Real side = across.length();
     if (side > 1e-6) across = across * std::max(Real(0), 1.0 - 8.0 * t.suitDrag * side * dt);
     return f * along + across;
+}
+
+GrappleAnchor findGrappleAnchor(const PhysicsWorld& world, const Vec3& eye, const Vec3& look, const MovementTuning& t) {
+    constexpr Real kDeg = 3.14159265358979 / 180.0;
+    GrappleAnchor best;
+    const Vec3 f = normalize(look);
+    Vec3 r = cross(f, Vec3(0, 1, 0));
+    r = r.length() < 1e-4 ? Vec3(1, 0, 0) : normalize(r);
+    const Vec3 u = cross(r, f);
+    Real bestScore = 1e9;
+    auto tryRay = [&](const Vec3& dir, Real offDeg) {
+        PhysicsWorld::RayHit hit;
+        if (!world.castRayHit(eye, dir * t.grappleRange, hit) || hit.dynamic) return;
+        const Real d = (hit.point - eye).length();
+        if (d < t.grappleMinRange) return;
+        // near the aim first; a hook above the eye swings, one below only drags
+        const Real above = hit.point.y - eye.y;
+        const Real score = offDeg / std::max(t.grappleCone, Real(0.1)) + (above < 0 ? 0.6 : -0.2 * std::min(Real(1), above / 10));
+        if (score < bestScore) {
+            bestScore = score;
+            best.ok = true;
+            best.point = hit.point;
+            best.normal = hit.normal;
+            best.distance = d;
+        }
+    };
+    tryRay(f, 0);
+    if (best.ok && best.point.y >= eye.y) return best;   // the aim itself found a place above: take it
+    for (Real ring : {0.5, 1.0}) {
+        const Real a = t.grappleCone * ring * kDeg;
+        for (int k = 0; k < 8; ++k) {
+            const Real phi = k * 3.14159265358979 / 4;
+            const Vec3 dir = normalize(f * std::cos(a) + (r * std::cos(phi) + u * std::sin(phi)) * std::sin(a));
+            tryRay(dir, t.grappleCone * ring);
+        }
+    }
+    return best;
+}
+
+Vec3 ropeStep(Vec3& pos, const Vec3& vel, const Vec3& anchor, Real length, const Vec3& accel, Real dt) {
+    Vec3 v = vel + (Vec3(0, -9.81, 0) + accel) * dt;
+    Vec3 next = pos + v * dt;
+    Vec3 out = next - anchor;
+    const Real d = out.length();
+    if (d > length && d > 1e-6) {
+        // held on the sphere: the position projected back, the speed away from the anchor removed
+        const Vec3 n = out * (1.0 / d);
+        next = anchor + n * length;
+        const Real away = dot(v, n);
+        if (away > 0) v = v - n * away;
+    }
+    pos = next;
+    return v;
+}
+
+Real boardStep(Real speed, Vec3& heading, Real& kickClock, Real inF, Real inR, const Vec3& groundNormal,
+               Real pushMax, Real dt, const MovementTuning& t) {
+    constexpr Real kDeg = 3.14159265358979 / 180.0;
+    // carve: the turn rate the grip allows at this speed, capped
+    const Real rate = std::min(t.boardTurnMax * kDeg, t.boardCarve / std::max(speed, Real(0.5)));
+    const Real turn = -std::clamp(inR, Real(-1), Real(1)) * rate * dt;   // right: clockwise from above
+    const Real c = std::cos(turn), s = std::sin(turn);
+    heading = flat(Vec3(heading.x * c + heading.z * s, 0, -heading.x * s + heading.z * c));
+    // downhill: gravity along the slope, the part along the board
+    const Vec3 n = groundNormal.lengthSquared() > 0.5 ? normalize(groundNormal) : Vec3(0, 1, 0);
+    const Vec3 downhill = Vec3(n.x, 0, n.z) * (9.81 * n.y);
+    speed += dot(downhill, heading) * dt;
+    kickClock = std::max(Real(0), kickClock - dt);
+    if (inF > 0.3 && kickClock <= 0 && speed < pushMax) {
+        speed = std::min(pushMax, speed + t.boardPush * (1.0 - 0.5 * speed / pushMax));
+        kickClock = t.boardKickTime;
+    }
+    if (inF < -0.3) speed -= t.boardBrake * dt;
+    speed -= t.boardRoll * dt;
+    return std::max(Real(0), speed);
 }
 
 Real strokeSurgePhase(Real strokes) {

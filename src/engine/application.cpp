@@ -310,7 +310,12 @@ void Application::runFrame() {
                 settingsStore.setString("input.hold", "");
                 char name[32] = {0};
                 double secs = 0.0;
-                if (std::sscanf(holdReq.c_str(), "%31s %lf", name, &secs) == 2) {
+                if (std::sscanf(holdReq.c_str(), "%31s %lf", name, &secs) == 2 && std::string(name) == "MouseLeft") {
+                    Event down(EventType::MouseButtonPressed);   // the fire button (the gun, the grapple)
+                    down.button = MouseButton::Left;
+                    inputMap.processEvent(down);
+                    heldMouseLeft_ = secs;
+                } else if (std::sscanf(holdReq.c_str(), "%31s %lf", name, &secs) == 2) {
                     const KeyCode k = keyCodeFromName(name);
                     if (k != KeyCode::Unknown) {
                         Event down(EventType::KeyPressed);
@@ -318,6 +323,14 @@ void Application::runFrame() {
                         inputMap.processEvent(down);
                         heldKeys_.push_back({k, secs});
                     }
+                }
+            }
+            if (heldMouseLeft_ > 0) {
+                heldMouseLeft_ -= frameDelta * clock.timeScale();
+                if (heldMouseLeft_ <= 0) {
+                    Event up(EventType::MouseButtonReleased);
+                    up.button = MouseButton::Left;
+                    inputMap.processEvent(up);
                 }
             }
             for (std::size_t i = 0; i < heldKeys_.size();) {
@@ -895,12 +908,13 @@ std::string Application::handleControlCommand(const std::string& line) {
         double secs = 0.0;
         if (cmd.args.size() < 2 || !num(cmd.args[1], secs) || secs <= 0.0)
             return "err usage: hold <KeyName> <seconds>";
-        if (keyCodeFromName(cmd.args[0]) == KeyCode::Unknown)
-            return "err unknown key: " + cmd.args[0];
+        if (keyCodeFromName(cmd.args[0]) == KeyCode::Unknown && cmd.args[0] != "MouseLeft")
+            return "err unknown key: " + cmd.args[0] + " (keys, or MouseLeft)";
         settingsStore.setString("input.hold", cmd.args[0] + " " + cmd.args[1]);
         return "ok hold " + cmd.args[0] + " staged";
     }
-    if (cmd.name == "vehicle_spawn") {   // drop a car in front of the player (the N key)
+    if (cmd.name == "vehicle_spawn") {   // drop a car in front of the player (the N key); `vehicle_spawn moped`
+        if (!cmd.args.empty()) settingsStore.setString("vehicle.spawnRecipe", cmd.args[0]);
         settingsStore.setDouble("vehicle.spawn", 1.0);
         return "ok staged";
     }
@@ -922,6 +936,15 @@ std::string Application::handleControlCommand(const std::string& line) {
     // THE PLAYER'S MOVEMENT (engine/locomotion.h): mode (walk|mantle|climb|swim|ladder), ground, position,
     // velocity, stamina and the last change ("jump (off steep ground)", "pull up onto a ledge 1.20 m ...").
     if (cmd.name == "move?") return "ok " + settingsStore.getString("player.telemetry", "none");
+    if (cmd.name == "knock") {   // throw the townsperson nearest the player as if a car hit it (the log says where)
+        settingsStore.setDouble("walkers.knockNearest", 1.0);
+        return "ok staged";
+    }
+    if (cmd.name == "knock?") return "ok " + settingsStore.getString("walkers.ragdolls", "none");
+    if (cmd.name == "ragdoll") {   // go limp (the G key); jump, or lying still a moment, gets up
+        settingsStore.setDouble("player.limp", 1.0);
+        return "ok staged";
+    }
     if (cmd.name == "flicker?") return "ok " + settingsStore.getString("walkers.flicker", "none");
     // what the city's people are out doing (citysim activities): per activity, at it / coming, groups, the nearest
     if (cmd.name == "activities?") return "ok " + settingsStore.getString("activities.telemetry", "none");

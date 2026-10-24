@@ -313,6 +313,32 @@ void CityWalkerSystem::driveWalkers(engine::FrameContext& ctx) {
         people.push_back(Vec2(t.position.x, t.position.z));
         peopleOwner.push_back(e);
     });
+    // the player, and the walker nearest it (the `knock` socket verb's victim)
+    Vec2 playerXZ(1e30, 1e30);
+    world.each<Transform, engine::ControlledBy>([&](Entity, Transform& t, engine::ControlledBy&) {
+        playerXZ = Vec2(t.position.x, t.position.z);
+    });
+    Entity nearestToPlayer;
+    Real nearestToPlayerD = 1e30;
+    for (const Walker& w : walkers_)
+        if (const Transform* t = world.get<Transform>(w.entity)) {
+            const Real d = (Vec2(t->position.x, t->position.z) - playerXZ).length();
+            if (d < nearestToPlayerD) { nearestToPlayerD = d; nearestToPlayer = w.entity; }
+        }
+    // THE THROWN GET UP where they landed: the capsule stood over the torso, the walk resumed
+    for (const WalkerRagdolls::Up& up : ragdolls_.step(world, pw, dt))
+        for (Walker& w : walkers_)
+            if (w.agentId == up.owner) {
+                if (CharacterController* c = world.get<CharacterController>(w.entity)) {
+                    Vec3 stand = up.torso + Vec3(0, kCapsuleHalf + kCapsuleRadius, 0);
+                    PhysicsWorld::RayHit g;
+                    if (pw.castRayHit(up.torso + Vec3(0, 1.0, 0), Vec3(0, -3.0, 0), g))
+                        stand = Vec3(up.torso.x, g.point.y + kCapsuleHalf + kCapsuleRadius + 0.05, up.torso.z);
+                    pw.setCharacterPosition(c->characterId, stand);
+                }
+                w.knock.timer = 0;
+                break;
+            }
 
     std::vector<CityRenderSystem::ExternalAgentPose> widgetPoses;
     widgetPoses.reserve(walkers_.size());
@@ -411,14 +437,35 @@ void CityWalkerSystem::driveWalkers(engine::FrameContext& ctx) {
         Vec3 pos = pw.characterPosition(cc->characterId);
         Vec2 posXZ(pos.x, pos.z);
 
-        // Knockdown: a vehicle moving through the walker's body floors it.
-        for (std::size_t c = 0; c < carPos.size(); ++c) {
-            Vec2 d = carPos[c] - posXZ;
-            if (d.length() < kKnockRadius && carSpeed[c] > kKnockSpeed) {
-                w.knock.knock();
-                break;
+        // Knockdown: a vehicle moving through the walker's body floors it -- thrown away from the car as a
+        // ragdoll of its six blocks (walker_ragdolls.h), up again where it lands. A hit while already down
+        // throws it again.
+        // (`knock` on the socket throws the walker nearest the player, for trying it without a car)
+        const bool knockNearest = ctx.settings.getDouble("walkers.knockNearest", 0.0) > 0.5;
+        for (std::size_t c = 0; c < carPos.size() + (knockNearest ? 1 : 0); ++c) {
+            Vec2 from;
+            Real speed;
+            if (c < carPos.size()) {
+                from = carPos[c];
+                speed = carSpeed[c];
+                if ((from - posXZ).length() >= kKnockRadius || speed <= kKnockSpeed) continue;
+            } else {
+                if (w.entity != nearestToPlayer) continue;
+                from = playerXZ;
+                speed = 9.0;
+                LOG_INFO << "[walkers] knocked agent " << w.agentId << " at (" << posXZ.x << ", " << posXZ.y << "), "
+                         << nearestToPlayerD << " m from the player";
             }
+            Vec2 away = posXZ - from;
+            away = away.length() > 1e-3 ? away * (1.0 / away.length()) : w.facing;
+            const Vec3 throwV(away.x * speed * 0.8, 2.0 + 0.15 * speed, away.y * speed * 0.8);
+            if (ragdolls_.knock(world, ctx.assets, pw, w.agentId, pos, w.facing,
+                                (kCapsuleHalf + kCapsuleRadius) / engine::BlockBody::kHalfHeight, w.outfit, throwV) >= 0)
+                ++knocks_;
+            w.knock.knock();
+            break;
         }
+        if (ragdolls_.down(w.agentId)) w.knock.timer = std::max(w.knock.timer, Real(0.5));   // down while limp
         bool down = w.knock.update(dt);
 
         // Body speed BEFORE this tick's move (the blocked watchdog's input).
@@ -505,12 +552,19 @@ void CityWalkerSystem::driveWalkers(engine::FrameContext& ctx) {
         if (PrevTransform* pt = world.get<PrevTransform>(w.entity)) pt->value = *t;
         Real yaw = std::atan2(w.facing.x, w.facing.y);
         Quat yawQ = Quat::fromAxisAngle(Vec3(0, 1, 0), yaw);
-        if (down) {
+        if (ragdolls_.down(w.agentId)) {
+            // limp: the ragdoll's blocks are the body; the walker mesh vanishes (scale 0) at its capsule
+            t->position = pos;
+            t->orientation = yawQ;
+            t->scale = Vec3(0, 0, 0);
+        } else if (down) {
             t->position = Vec3(pos.x, pos.y - kCapsuleHalf, pos.z);
             t->orientation = yawQ * Quat::fromAxisAngle(Vec3(1, 0, 0), engine::PI * 0.5);
+            t->scale = Vec3(1, 1, 1);
         } else {
             t->position = pos;
             t->orientation = yawQ;
+            t->scale = Vec3(1, 1, 1);
         }
 
         // THE LEASH NEEDS A WAY OUT. The tether holds the plan back until the
@@ -573,6 +627,8 @@ void CityWalkerSystem::driveWalkers(engine::FrameContext& ctx) {
             w.agentId, posXZ, w.facing, g.pos, stateOverride});
     }
     city_.setExternalPedPoses(std::move(widgetPoses));
+    ctx.settings.setDouble("walkers.knockNearest", 0.0);   // (one throw per request)
+    ctx.settings.setString("walkers.ragdolls", std::to_string(knocks_) + " thrown so far, " + ragdolls_.describe(pw));
 }
 
 void CityWalkerSystem::fixedUpdate(engine::FrameContext& ctx) {
@@ -728,7 +784,8 @@ void CityWalkerSystem::fixedUpdate(engine::FrameContext& ctx) {
     }
 }
 
-void CityWalkerSystem::onStop(engine::FrameContext&) {
+void CityWalkerSystem::onStop(engine::FrameContext& ctx) {
+    ragdolls_.clear(ctx.world, physics_.physicsWorld());
     // Tracking only; world/physics teardown reclaims entities + characters (the
     // same no-removal-hook note as the vehicle bridge — fine at level teardown).
     walkers_.clear();

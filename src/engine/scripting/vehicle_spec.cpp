@@ -86,6 +86,12 @@ bool loadVehicleSpec(ScriptVM& vm, const std::string& recipe, uint32_t seed,
     c.antiRollStiffness = numField(L, t, "anti_roll", c.antiRollStiffness);
     c.yawAssist = numField(L, t, "yaw_assist", c.yawAssist);
     c.lateralGrip = numField(L, t, "grip", c.lateralGrip);
+    lua_getfield(L, t, "two_wheeler");   // true: a motorcycle, moped or bicycle (Jolt's MotorcycleController)
+    if (lua_isboolean(L, -1)) c.twoWheeler = lua_toboolean(L, -1) != 0;
+    lua_pop(L, 1);
+    c.maxLeanDegrees = numField(L, t, "max_lean_deg", c.maxLeanDegrees);
+    c.engineDamping = numField(L, t, "engine_damping", c.engineDamping);
+    c.engineInertia = numField(L, t, "engine_inertia", c.engineInertia);
     // The collision's underside: floor_clearance (m off the body box's floor), approach / departure angles
     c.floorClearance = numField(L, t, "floor_clearance", c.floorClearance);
     c.approachDegrees = numField(L, t, "approach_deg", c.approachDegrees);

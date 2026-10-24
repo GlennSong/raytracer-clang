@@ -115,6 +115,9 @@ void VehicleSystem::spawnInFront(FrameContext& ctx) {
     std::string err;
     if (!vm.doString(lib, &err)) { LOG_WARN << "vehicles.lua: " << err; return; }
     loadCatalogue();
+    for (std::size_t i = 0; i < catalogue_.size() && !wantRecipe_.empty(); ++i)
+        if (catalogue_[i].recipe == wantRecipe_) pick_ = static_cast<int>(i);
+    wantRecipe_.clear();
     std::string recipe = "sedan", label = "Sedan", drive = "awd";
     if (!catalogue_.empty()) {
         const Pick& p = catalogue_[static_cast<std::size_t>(pick_)];
@@ -604,7 +607,50 @@ void VehicleSystem::handleEnterExit(FrameContext& ctx) {
     }
 }
 
+// OFF THE BIKE IN A CRASH (ADR-0235/0232): a two-wheeler rolled past its lean (it's going down) or stopped dead
+// from speed (it hit something) puts its rider off -- limp, carrying the speed it had. The rider's ragdoll is
+// PlayerSystem's: this hands it the velocity through Settings (player.limp, player.limpVelocity).
+void VehicleSystem::crashOffBikes(FrameContext& ctx) {
+    Entity player, bike;
+    ctx.world.each<ControlledBy, InVehicle>([&](Entity e, ControlledBy&, InVehicle& iv) {
+        if (!player.valid()) { player = e; bike = iv.vehicle; }
+    });
+    if (!player.valid() || !bike.valid() || !ctx.world.alive(bike)) return;
+    Vehicle* v = ctx.world.get<Vehicle>(bike);
+    const Transform* bt = ctx.world.get<Transform>(bike);
+    if (!v || !bt || !v->config.twoWheeler) {
+        bikeSpeeds_.clear();
+        return;
+    }
+    bikeSpeeds_.push_back({clock_, v->speed});
+    while (!bikeSpeeds_.empty() && bikeSpeeds_.front().first < clock_ - 0.3) bikeSpeeds_.erase(bikeSpeeds_.begin());
+    Real recent = v->speed;
+    for (const auto& s : bikeSpeeds_) recent = std::max(recent, s.second);
+    const Real tilt = std::acos(std::clamp(bt->orientation.rotate(Vec3(0, 1, 0)).y, Real(-1), Real(1))) * 57.29578;
+    const bool down = tilt > v->config.maxLeanDegrees + 10.0 && v->speed < 25.0;
+    const bool hit = recent - v->speed > 7.0;   // 25 km/h gone in 0.3 s
+    if (!down && !hit) return;
+    const Vec3 ahead = bt->orientation.rotate(Vec3(0, 0, 1));
+    const Vec3 thrown = ahead * recent * (hit ? 0.8 : 0.6) + Vec3(0, hit ? 3.0 : 1.0, 0);
+    bikeSpeeds_.clear();
+    v->driver = Entity{};
+    if (CharacterController* cc = ctx.world.get<CharacterController>(player)) {
+        const Vec3 at = bt->position + Vec3(0, 1.0, 0);
+        physicsSys.physicsWorld().setCharacterPosition(cc->characterId, at);
+        if (Transform* pt = ctx.world.get<Transform>(player)) pt->position = at;
+    }
+    cameras.clearFollowTarget();
+    ctx.world.remove<InVehicle>(player);
+    char buf[96];
+    std::snprintf(buf, sizeof(buf), "%.3f %.3f %.3f", thrown.x, thrown.y, thrown.z);
+    ctx.settings.setString("player.limpVelocity", buf);
+    ctx.settings.setDouble("player.limp", 1.0);
+    LOG_INFO << "[vehicle] off the bike: " << (hit ? "hit something" : "went down") << " at " << recent * 3.6
+             << " km/h";
+}
+
 void VehicleSystem::update(FrameContext& ctx) {
+    crashOffBikes(ctx);
     handleEnterExit(ctx);
 
     // Flip the car the player is currently driving back upright.
@@ -659,6 +705,9 @@ void VehicleSystem::update(FrameContext& ctx) {
     // Drop the picked car in front of the player.
     if (ctx.actions.pressed("spawn_vehicle") || ctx.settings.getDouble("vehicle.spawn", 0.0) > 0) {
         ctx.settings.setDouble("vehicle.spawn", 0.0);
+        // `vehicle_spawn <recipe>`: pick that one first (the catalogue's recipe names: motorcycle, moped, ...)
+        wantRecipe_ = ctx.settings.getString("vehicle.spawnRecipe", "");
+        ctx.settings.setString("vehicle.spawnRecipe", "");
         spawnInFront(ctx);
     }
 

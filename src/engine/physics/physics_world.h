@@ -175,6 +175,30 @@ public:
     uint8_t bodySurface(PhysicsBodyId id) const;
     void setCharacterPosition(CharacterId id, const Vec3& position);
 
+    // --- Ragdoll (Jolt Ragdoll) ---------------------------------------------
+    // A body gone limp: boxes joined by swing-twist joints (engine/block_body.h's six blocks, for a person),
+    // simulated with the world and colliding with it, never with itself at a joint. Parts are listed parents
+    // first; each joint is a world point with the axis from parent to child, limited to `swingDeg` off it and
+    // `twistDeg` round it.
+    using RagdollId = uint32_t;
+    static constexpr RagdollId INVALID_RAGDOLL = 0xFFFFFFFFu;
+    struct RagdollPart {
+        Vec3 halfExtent;
+        Vec3 position;
+        Quat orientation;
+        Real mass = 5;
+        int parent = -1;
+        Vec3 joint;                 // world, where it meets its parent
+        Vec3 twistAxis{0, -1, 0};   // world, parent -> child
+        Real swingDeg = 45, twistDeg = 20;
+    };
+    RagdollId addRagdoll(const std::vector<RagdollPart>& parts, const Vec3& velocity);
+    void removeRagdoll(RagdollId id);
+    // A part's pose now (false for a removed ragdoll or a bad index).
+    bool ragdollPart(RagdollId id, int part, Vec3& position, Quat& orientation) const;
+    // The fastest any of its parts moves (m/s): how settled it is.
+    Real ragdollSpeed(RagdollId id) const;
+
     // --- Wheeled vehicle (Jolt VehicleConstraint, ADR-0059) ------------------
     // A physics-driven car: a dynamic box chassis with raycast wheels, suspension,
     // steering, engine + brakes — Jolt's WheeledVehicleController, tuned arcade-
@@ -280,6 +304,15 @@ public:
         // 4 deg and 0.25 m without), and the street rig's cornering roll is
         // a few degrees without them.
         Real maxPitchRollDegrees = 180.0;
+        // TWO WHEELS (a motorcycle, a moped, a bicycle): Jolt's MotorcycleController, which leans the chassis
+        // into a turn and holds it up with a lean spring -- the four-wheel helpers (yaw assist, anti-roll,
+        // traction split) leave it alone. The wheels sit on the centre line, one ahead of the other.
+        bool twoWheeler = false;
+        Real maxLeanDegrees = 45.0;
+        // The engine's spin-down (Jolt: dw/dt = -c w) and inertia: what engine braking there is off the throttle.
+        // A bicycle's "engine" is legs and a freewheel: next to nothing.
+        Real engineDamping = 0.2;
+        Real engineInertia = 0.5;
         Real antiRollStiffness = 0.0;
         // YAW ASSIST (the fishtail, measured in tests/test_vehicle_handling.cpp):
         // Jolt's tyre is a per-step impulse cap, so past a degree or two of

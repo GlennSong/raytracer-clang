@@ -1056,6 +1056,8 @@ if(RT_ENABLE_PHYSICS)
         src/engine/systems/player_system.cpp
         src/engine/locomotion.cpp            # jump gate, ledges, mantle, climbing probes (tests/test_locomotion)
         src/engine/systems/player_arms_system.cpp   # the block arms in first person
+        src/engine/systems/player_body_system.cpp   # the body posed in third person, and limp
+        src/engine/block_body.cpp            # the person as six blocks: poses, the ragdoll's parts
         src/engine/systems/teleport_system.cpp
         src/engine/systems/shooting_system.cpp
         src/engine/systems/vehicle_system.cpp
@@ -1064,6 +1066,7 @@ if(RT_ENABLE_PHYSICS)
         src/apps/citysim/city_physics.cpp   # kinematic colliders for AI cars (needs Jolt)
         src/apps/citysim/city_vehicles.cpp  # NPC cars as real engine Vehicles (ADR-0062)
         src/apps/citysim/city_walkers.cpp   # NPC walkers as physics characters (ADR-0062)
+        src/apps/citysim/walker_ragdolls.cpp   # the few walkers knocked flying, as ragdolls
         src/apps/citysim/city_player_body.cpp  # player renders as a person in third person (ADR-0064)
         src/apps/citysim/city_player_transit.cpp  # the player's passenger seat on a bus or cab
         src/apps/citysim/train_system.cpp   # trains drawn, and the player aboard one
@@ -1078,6 +1081,7 @@ if(RT_ENABLE_PHYSICS)
         tests/main.cpp
         tests/test_physics.cpp
         tests/test_locomotion.cpp
+        tests/test_two_wheelers.cpp
         tests/test_driving_lab.cpp
         tests/test_vehicle_handling.cpp
         tests/test_vehicle_drivetrain.cpp
@@ -1093,6 +1097,7 @@ if(RT_ENABLE_PHYSICS)
         src/engine/physics/jolt_job_adapter.cpp
         src/engine/systems/physics_system.cpp
         src/engine/locomotion.cpp
+        src/engine/block_body.cpp
         src/apps/citysim/city_physics.cpp
         src/apps/citysim/city_player_transit.cpp
         src/apps/citysim/city_map_tool.cpp

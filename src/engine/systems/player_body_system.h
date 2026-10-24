@@ -1,0 +1,35 @@
+#ifndef RAYTRACER_ENGINE_PLAYER_BODY_SYSTEM_H
+#define RAYTRACER_ENGINE_PLAYER_BODY_SYSTEM_H
+
+#include "../system.h"
+#include "../block_body.h"
+
+namespace engine {
+
+struct PlayerPose;
+struct Transform;
+
+// THE PLAYER'S BODY POSED, in third person (Glenn, 2026-10-24: "3rd person might be fun as well"): the six blocks
+// of engine/block_body.h placed for what the body is doing -- against the wall reaching for the holds, prone in a
+// crawl, under the canopy with the hands on the toggles, spread in the wingsuit, hanging off the rope -- and, when
+// the body goes limp, wherever the ragdoll's bodies are. Walking and falling stay the walker mesh and its walk
+// cycle (citysim's CityPlayerBodySystem, which stands down while this draws).
+class PlayerBodySystem : public System {
+public:
+    void fixedUpdate(FrameContext& ctx) override;   // (with the capsule: drawn between ticks like it)
+
+private:
+    Entity parts_[BlockBody::kParts];
+    bool made_ = false;
+    bool shown_ = false;
+    Vec3 facing_{0, 0, 1};   // held while there is nothing better to face
+    Real clock_ = 0;
+    // THE BOARD under the feet (skateboard or scooter), drawn in either view
+    Entity board_[2];
+    bool boardsMade_ = false;
+    void drawBoards(FrameContext& ctx, const PlayerPose* p, const Transform* body, Real lift);
+};
+
+}  // namespace engine
+
+#endif

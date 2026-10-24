@@ -267,6 +267,87 @@ for name, h in pairs(KIT_HANDLING) do
 end
 function vehicle.offroad(seed, opts) return kit_drivable("offroad", opts, OFFROAD) end
 
+-- TWO WHEELS (ADR-0235; Glenn: "skateboards, scooters, mopeds, motorcycles, bikes"): Jolt's MotorcycleController
+-- leans these into a turn and holds them up (physics_world.h `two_wheeler`). Built from boxes on the centre line,
+-- +z ahead, the wheels' drawn centres at -H/2 + r. Engines are tiny in torque because Jolt multiplies them by the
+-- gear and a 3.42 final drive: the ratios set the top speed (rpm / 60 * 2 pi r / (gear * 3.42)).
+local function part(m, col) return mesh.bake_height_color(m, col, col) end
+local function at(m, x, y, z) return mesh.translate(m, { x, y, z }) end
+local function two_wheeler(kind, opts)
+  opts = opts or {}
+  local K = ({
+    motorcycle = { r = 0.32, w = 0.13, base = 1.45, H = 0.72, mass = 220, torque = 100, rpm = 9000, steer = 28,
+                   lean = 50, gears = { 5.0, 3.6, 2.8, 2.3, 2.0 }, color = { 0.75, 0.08, 0.06 } },
+    moped      = { r = 0.25, w = 0.10, base = 1.2, H = 0.62, mass = 130, torque = 80, rpm = 6000, steer = 32,
+                   lean = 42, gears = { 6.0, 4.5, 3.3 }, color = { 0.2, 0.55, 0.62 } },
+    -- (the legs as an engine: Jolt's automatic shifts up at 4000 rpm, so a 1500 rpm "engine" never left first;
+    -- rpm and ratios both x4 keep the top speed and let it change gear)
+    bicycle    = { r = 0.34, w = 0.04, base = 1.05, H = 0.75, mass = 90, torque = 60, rpm = 6000, steer = 35,
+                   lean = 40, gears = { 16.0, 11.2, 8.8, 7.0 }, color = { 0.15, 0.35, 0.75 } },
+  })[kind]
+  local col = opts.color or K.color
+  local dark, metal, black = { 0.12, 0.12, 0.13 }, { 0.65, 0.66, 0.68 }, { 0.05, 0.05, 0.05 }
+  local zf, zr, wy = K.base * 0.5, -K.base * 0.5, -K.H * 0.5 + K.r
+  local shell = {}
+  local function add(m, c) shell[#shell + 1] = part(m, c) end
+  if kind == "bicycle" then
+    -- a diamond frame of thin tubes: top tube, down tube, seat tube, stays, fork, bars, saddle
+    add(at(mesh.box({ 0.035, 0.035, 0.62 }), 0, wy + 0.42, 0.05), col)
+    add(at(mesh.rotate_x(mesh.box({ 0.035, 0.035, 0.7 }), 0.62), 0, wy + 0.2, 0.18), col)
+    add(at(mesh.box({ 0.035, 0.5, 0.035 }), 0, wy + 0.22, -0.22), col)
+    add(at(mesh.box({ 0.03, 0.03, 0.32 }), 0, wy + 0.02, zr + 0.16), col)
+    add(at(mesh.rotate_x(mesh.box({ 0.03, 0.62, 0.03 }), -0.3), 0, wy + 0.28, zf - 0.09), metal)
+    add(at(mesh.box({ 0.52, 0.03, 0.03 }), 0, wy + 0.6, zf - 0.18), metal)
+    add(at(mesh.box({ 0.12, 0.05, 0.24 }), 0, wy + 0.5, -0.24), black)
+  else
+    -- a motorcycle / moped: frame, engine, tank or leg shield, seat, fork, bars, mudguards
+    add(at(mesh.box({ 0.12, 0.12, K.base * 0.85 }), 0, wy + 0.18, 0), dark)
+    add(at(mesh.box({ 0.28, 0.26, 0.38 }), 0, wy + 0.05, 0.02), metal)                        -- engine
+    if kind == "moped" then
+      add(at(mesh.box({ 0.36, 0.5, 0.08 }), 0, wy + 0.32, zf - 0.32), col)                     -- leg shield
+      add(at(mesh.box({ 0.32, 0.22, 0.55 }), 0, wy + 0.3, -0.18), col)                         -- body under seat
+    else
+      add(at(mesh.box({ 0.3, 0.2, 0.46 }), 0, wy + 0.42, 0.18), col)                           -- tank
+      add(at(mesh.box({ 0.24, 0.12, 0.3 }), 0, wy + 0.32, -0.42), col)                         -- tail
+    end
+    add(at(mesh.box({ 0.28, 0.08, 0.5 }), 0, wy + 0.5, -0.2), black)                           -- seat
+    add(at(mesh.rotate_x(mesh.box({ 0.06, 0.7, 0.06 }), -0.42), 0, wy + 0.3, zf - 0.12), metal) -- fork
+    add(at(mesh.box({ 0.66, 0.04, 0.04 }), 0, wy + 0.66, zf - 0.27), metal)                    -- bars
+    add(at(mesh.box({ 0.16, 0.03, 0.42 }), 0, wy + K.r + 0.06, zf), col)                      -- front guard
+    add(at(mesh.box({ 0.16, 0.03, 0.42 }), 0, wy + K.r + 0.06, zr), dark)                     -- rear guard
+    add(at(mesh.rotate_x(mesh.cylinder(0.04, 0.6), math.pi * 0.5), 0.14, wy - 0.02, zr + 0.3), metal) -- exhaust
+  end
+  return {
+    body = mesh.recompute_normals(mesh.merge(shell)),
+    albedo = { 1, 1, 1 }, metallic = 0.3, roughness = 0.45,
+    lights = kind == "bicycle" and { { name = "driver_seat", pos = { 0, wy + 0.52, -0.26 } } } or {
+      { name = "headlight_l", pos = { 0, wy + 0.52, zf - 0.18 } },
+      { name = "taillight_l", pos = { 0, wy + 0.38, zr + 0.05 } },
+      { name = "driver_seat", pos = { 0, wy + 0.52, -0.22 } },
+    },
+    chassis = { half = { 0.2, K.H * 0.5, K.base * 0.5 + K.r * 0.6 } },
+    mass = K.mass, com_offset = -0.1,
+    engine_torque = K.torque, max_rpm = K.rpm, gear_ratios = K.gears,
+    max_steer_deg = K.steer,
+    brake_torque = math.floor(K.mass * 1.4), hand_brake_torque = math.floor(K.mass * 2.0),
+    two_wheeler = true, max_lean_deg = K.lean,
+    engine_damping = kind == "bicycle" and 0.0 or nil, engine_inertia = kind == "bicycle" and 0.05 or nil,
+    yaw_assist = 0, anti_roll = 0, max_roll_deg = K.lean + 15,
+    drive = "rwd", drag_area = kind == "bicycle" and 0.5 or 0.7,
+    floor_clearance = 0.12,
+    shift_time = 0.15, clutch_time = 0.1, shift_latency = 0.2,
+    suspension = { min = 0.0, max = 0.18, freq = 1.8, damp = 0.6, rest_drop = 0.13 },
+    wheel = { radius = K.r, width = K.w },
+    wheels = {
+      { x = 0, y = wy, z = zf, steered = true, driven = false },
+      { x = 0, y = wy, z = zr, steered = false, driven = true, hand_brake = true },
+    },
+  }
+end
+function vehicle.motorcycle(seed, opts) return two_wheeler("motorcycle", opts) end
+function vehicle.moped(seed, opts) return two_wheeler("moped", opts) end
+function vehicle.bicycle(seed, opts) return two_wheeler("bicycle", opts) end
+
 -- THE DRIVABLE CATALOGUE: what the player can drop (VehicleSystem: - and = pick, N drops). `drive` is the
 -- label the picker shows -- test_vehicle_body checks it matches the spec's drivetrain.
 vehicle.drivable = {
@@ -283,6 +364,9 @@ vehicle.drivable = {
   { recipe = "sedan",            label = "Sedan (classic)",      drive = "awd" },
   { recipe = "pickup",           label = "Pickup (classic)",     drive = "awd" },
   { recipe = "van",              label = "Van (classic)",        drive = "awd" },
+  { recipe = "motorcycle",       label = "Motorcycle",           drive = "rwd" },
+  { recipe = "moped",            label = "Moped",                drive = "rwd" },
+  { recipe = "bicycle",          label = "Bicycle",              drive = "rwd" },
 }
 
 -- ---------------------------------------------------------------------------

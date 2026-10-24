@@ -171,7 +171,7 @@ private:
     // PAST WALKING (engine/locomotion.h): the jump gate, the pull-up onto a ledge, climbing a wall.
     MovementTuning tune_;
     JumpGate gate_;
-    enum class Move : uint8_t { Walk, Mantle, Climb, Parachute, Wingsuit };
+    enum class Move : uint8_t { Walk, Mantle, Climb, Parachute, Wingsuit, Grapple, Ragdoll, Board };
     Move move_ = Move::Walk;
     MantleMove mantle_;
     Vec3 climbNormal_{0, 0, 1};   // the wall held, facing the body
@@ -191,6 +191,26 @@ private:
     Real hotbarShow_ = 0;         // s left showing the tool row after a slot change
     Real hudClock_ = 0;           // for the prompt's pulse
     void drawGearHud(FrameContext& ctx);
+    // the grapple (slot 7)
+    GrappleAnchor aim_;           // where a shot now would hook (gear 7, each step)
+    Vec3 anchor_;
+    Real ropeLen_ = 0;
+    Vec3 ropeVel_;
+    bool grappleFire_ = false;    // the trigger's press, staged for the step
+    bool grappleHeld_ = false;    // ...and held: let go and the rope goes
+    Real yank_ = 0;               // s left of the pull that lifts a body hooked from the ground into the swing
+    bool tryGrapple(Transform& t, CharacterController& cc);
+    // gone limp (engine/block_body.h's ragdoll)
+    PhysicsWorld::RagdollId ragdoll_ = PhysicsWorld::INVALID_RAGDOLL;
+    Real limpFor_ = 0, stillFor_ = 0;
+    bool limpRequested_ = false;  // G / `ragdoll`: go limp on purpose
+    void goLimp(Transform& t, CharacterController& cc, const Vec3& velocity, const std::string& why);
+    void stepRagdoll(FrameContext& ctx, Transform& t, CharacterController& cc, Real dt);
+    // on a board (slot 8 the skateboard, 9 the scooter)
+    Vec3 boardHeading_{0, 0, -1};
+    Real boardSpeed_ = 0, kickClock_ = 0;
+    void stepBoard(FrameContext& ctx, Transform& t, CharacterController& cc, Real dt);
+    void stepGrapple(FrameContext& ctx, Transform& t, CharacterController& cc, Real dt);
     std::string lastEvent_ = "none";
     void event(const std::string& what);
     bool tryMantle(Transform& t, CharacterController& cc, const Vec3& facing, Real maxHeight);

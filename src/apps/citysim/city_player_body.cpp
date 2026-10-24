@@ -1,4 +1,5 @@
 #include "city_player_body.h"
+#include "../../engine/player_pose.h"
 #include "../../engine/interaction.h"   // engine::Seated
 
 #include "../../engine/asset_manager.h"
@@ -63,7 +64,9 @@ void CityPlayerBodySystem::fixedUpdate(engine::FrameContext& ctx) {
     bool visible = player.valid() &&
                    ctx.settings.getBool("playerThirdPerson", false) &&
                    !world.has<engine::InVehicle>(player) &&
-                   !world.has<engine::Seated>(player);   // sitting/lying: the camera is first person at the pose
+                   !world.has<engine::Seated>(player) &&   // sitting/lying: the camera is first person at the pose
+                   !(world.has<engine::PlayerPose>(player) &&   // climbing, swimming, flying, limp: the posed blocks
+                     engine::drawnAsBlocks(world.get<engine::PlayerPose>(player)->mode));   // (PlayerBodySystem)
     if (!visible) {
         if (bodyOn_ && player.valid() && world.has<Renderable>(player))
             world.remove<Renderable>(player);

@@ -17,8 +17,8 @@ public:
     void update(FrameContext& ctx) override;
 
 private:
-    // sleeve L, sleeve R, hand L, hand R, wing L, wing R (the wingsuit's), the canopy, its four lines
-    static constexpr int kParts = 11;
+    // sleeve L, sleeve R, hand L, hand R, wing L, wing R (the wingsuit's), the canopy, its four lines, the rope
+    static constexpr int kParts = 12;
     Entity parts_[kParts];
     Vec3 handWorld_[2];    // where the hands were drawn this frame (the chute's lines run to them)
     bool made_ = false;

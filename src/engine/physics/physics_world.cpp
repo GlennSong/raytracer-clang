@@ -23,10 +23,14 @@
 #include <Jolt/Physics/Collision/Shape/RotatedTranslatedShape.h>
 #include <Jolt/Physics/Body/AllowedDOFs.h>
 #include <Jolt/Physics/Character/CharacterVirtual.h>
+#include <Jolt/Physics/Ragdoll/Ragdoll.h>
+#include <Jolt/Physics/Constraints/SwingTwistConstraint.h>
+#include <Jolt/Skeleton/Skeleton.h>
 #include <Jolt/Physics/PhysicsSettings.h>
 #include <Jolt/Physics/PhysicsSystem.h>
 #include <Jolt/Physics/Vehicle/VehicleConstraint.h>
 #include <Jolt/Physics/Vehicle/WheeledVehicleController.h>
+#include <Jolt/Physics/Vehicle/MotorcycleController.h>
 #include <Jolt/Physics/Vehicle/VehicleCollisionTester.h>
 #include <Jolt/Physics/Collision/ContactListener.h>
 #include <Jolt/RegisterTypes.h>
@@ -37,6 +41,7 @@
 #include <cstdarg>
 #include <cstdio>
 #include <mutex>
+#include <string>
 
 namespace engine {
 
@@ -231,6 +236,7 @@ struct PhysicsWorld::Impl {
         float radius = 0.3f;
     };
     std::vector<Character> characters;
+    std::vector<JPH::Ref<JPH::Ragdoll>> ragdolls;   // slots kept; a removed one is null
 
     // Wheeled vehicles (ADR-0059). Each owns a VehicleConstraint (also a step
     // listener) over a dynamic chassis body. Slots are never compacted so
@@ -298,6 +304,9 @@ std::vector<ContactEvent> PhysicsWorld::drainContactEvents() {
 
 void PhysicsWorld::shutdown() {
     if (!impl) return;
+    for (JPH::Ref<JPH::Ragdoll>& r : impl->ragdolls)   // out of the system before their bodies are destroyed
+        if (r) r->RemoveFromPhysicsSystem();
+    impl->ragdolls.clear();
     impl.reset();
     globalRelease();
 }
@@ -776,6 +785,81 @@ void PhysicsWorld::setCharacterPosition(CharacterId id, const Vec3& position) {
     }
 }
 
+// --- Ragdoll -----------------------------------------------------------------
+
+PhysicsWorld::RagdollId PhysicsWorld::addRagdoll(const std::vector<RagdollPart>& parts, const Vec3& velocity) {
+    if (!impl || parts.empty()) return INVALID_RAGDOLL;
+    JPH::Ref<JPH::Skeleton> skeleton = new JPH::Skeleton;
+    JPH::Ref<JPH::RagdollSettings> settings = new JPH::RagdollSettings;
+    settings->mSkeleton = skeleton;
+    settings->mParts.resize(parts.size());
+    for (std::size_t i = 0; i < parts.size(); ++i) {
+        const RagdollPart& p = parts[i];
+        skeleton->AddJoint("part" + std::to_string(i), p.parent);
+        JPH::RagdollSettings::Part& part = settings->mParts[i];
+        const JPH::Vec3 he = toJolt(p.halfExtent);
+        part.SetShape(new JPH::BoxShape(he, std::min(0.03f, 0.5f * he.ReduceMin())));
+        part.mPosition = toJoltR(p.position);
+        part.mRotation = toJolt(p.orientation).Normalized();
+        part.mMotionType = JPH::EMotionType::Dynamic;
+        part.mObjectLayer = Layers::MOVING;
+        part.mOverrideMassProperties = JPH::EOverrideMassProperties::CalculateInertia;
+        part.mMassPropertiesOverride.mMass = static_cast<float>(p.mass);
+        part.mLinearDamping = 0.1f;
+        part.mAngularDamping = 0.6f;   // a limp body, not a spinning top
+        if (p.parent >= 0) {
+            JPH::Ref<JPH::SwingTwistConstraintSettings> c = new JPH::SwingTwistConstraintSettings;
+            c->mSpace = JPH::EConstraintSpace::WorldSpace;
+            c->mPosition1 = c->mPosition2 = toJoltR(p.joint);
+            const JPH::Vec3 twist = toJolt(p.twistAxis).Normalized();
+            c->mTwistAxis1 = c->mTwistAxis2 = twist;
+            c->mPlaneAxis1 = c->mPlaneAxis2 = twist.GetNormalizedPerpendicular();
+            c->mNormalHalfConeAngle = c->mPlaneHalfConeAngle = JPH::DegreesToRadians(static_cast<float>(p.swingDeg));
+            c->mTwistMinAngle = -JPH::DegreesToRadians(static_cast<float>(p.twistDeg));
+            c->mTwistMaxAngle = JPH::DegreesToRadians(static_cast<float>(p.twistDeg));
+            part.mToParent = c;
+        }
+    }
+    settings->Stabilize();
+    settings->DisableParentChildCollisions();
+    settings->CalculateBodyIndexToConstraintIndex();
+    settings->CalculateConstraintIndexToBodyIdxPair();
+    JPH::Ref<JPH::Ragdoll> ragdoll =
+        settings->CreateRagdoll(static_cast<JPH::CollisionGroup::GroupID>(impl->ragdolls.size()), 0, &impl->physicsSystem);
+    if (!ragdoll) return INVALID_RAGDOLL;
+    ragdoll->AddToPhysicsSystem(JPH::EActivation::Activate);
+    ragdoll->SetLinearVelocity(toJolt(velocity));
+    impl->ragdolls.push_back(ragdoll);
+    return static_cast<RagdollId>(impl->ragdolls.size() - 1);
+}
+
+void PhysicsWorld::removeRagdoll(RagdollId id) {
+    if (!impl || id >= impl->ragdolls.size() || !impl->ragdolls[id]) return;
+    impl->ragdolls[id]->RemoveFromPhysicsSystem();
+    impl->ragdolls[id] = nullptr;
+}
+
+bool PhysicsWorld::ragdollPart(RagdollId id, int part, Vec3& position, Quat& orientation) const {
+    if (!impl || id >= impl->ragdolls.size() || !impl->ragdolls[id]) return false;
+    const JPH::Ragdoll& r = *impl->ragdolls[id];
+    if (part < 0 || static_cast<std::size_t>(part) >= r.GetBodyCount()) return false;
+    JPH::RVec3 p;
+    JPH::Quat q;
+    impl->bodies().GetPositionAndRotation(r.GetBodyID(part), p, q);
+    position = fromJolt(p);
+    orientation = fromJolt(q);
+    return true;
+}
+
+Real PhysicsWorld::ragdollSpeed(RagdollId id) const {
+    if (!impl || id >= impl->ragdolls.size() || !impl->ragdolls[id]) return 0;
+    const JPH::Ragdoll& r = *impl->ragdolls[id];
+    float fastest = 0;
+    for (std::size_t i = 0; i < r.GetBodyCount(); ++i)
+        fastest = std::max(fastest, impl->bodies().GetLinearVelocity(r.GetBodyID(static_cast<int>(i))).Length());
+    return fastest;
+}
+
 // --- Wheeled vehicle (ADR-0059) --------------------------------------------
 // Compiled against the vendored Jolt submodule and exercised headlessly by
 // tests/test_driving_lab.cpp (launch envelope, lane hold, kerb climb + its
@@ -925,10 +1009,28 @@ PhysicsWorld::VehicleId PhysicsWorld::addVehicle(const VehicleConfig& cfg,
         }
     }
 
-    JPH::WheeledVehicleControllerSettings* controller =
-        new JPH::WheeledVehicleControllerSettings();
+    JPH::WheeledVehicleControllerSettings* controller;
+    if (cfg.twoWheeler) {
+        JPH::MotorcycleControllerSettings* bike = new JPH::MotorcycleControllerSettings();
+        bike->mMaxLeanAngle = JPH::DegreesToRadians(static_cast<float>(cfg.maxLeanDegrees));
+        // THE LEAN SPRING, sized to this bike. Jolt's defaults (5000 / 1000) suit its sample's heavy hull; on a
+        // narrow box (roll inertia ~12 kg m^2 for a 220 kg motorcycle) one step of that damping overshot the roll
+        // rate and the bike flipped on touchdown. Stiff enough to beat gravity's pull at the centre of mass
+        // (m g h per radian, with margin); damped so a 60 Hz step takes at most ~40% of the roll rate off.
+        const float m = static_cast<float>(cfg.mass);
+        const float wx = 2.0f * static_cast<float>(cfg.chassisHalfExtent.x);
+        const float hy = 2.0f * static_cast<float>(cfg.chassisHalfExtent.y);
+        const float rollInertia = m / 12.0f * (wx * wx + hy * hy);
+        bike->mLeanSpringConstant = 2.5f * m * 9.81f * (0.5f * hy + 0.3f);
+        bike->mLeanSpringDamping = 0.4f * rollInertia * 60.0f;
+        controller = bike;
+    } else {
+        controller = new JPH::WheeledVehicleControllerSettings();
+    }
     controller->mEngine.mMaxTorque = static_cast<float>(cfg.engineTorque);
     controller->mEngine.mMaxRPM = static_cast<float>(cfg.maxRPM);
+    controller->mEngine.mAngularDamping = static_cast<float>(cfg.engineDamping);
+    controller->mEngine.mInertia = static_cast<float>(cfg.engineInertia);
 
     // ONE DIFFERENTIAL PER DRIVEN AXLE (VehicleConfig drivetrain): driven wheels grouped by their z, the
     // left one the larger x (as the anti-roll bars take it), front axles those ahead of the axles' middle.
