@@ -5,6 +5,7 @@
 #include "../src/engine/bundle/bake.h"
 #include "../src/engine/bundle/codecs.h"
 #include "../src/engine/mesh_builder.h"
+#include "../src/engine/vertex_pack.h"
 
 #include <cmath>
 #include <cstdio>
@@ -98,6 +99,126 @@ TEST_CASE(packed_mesh_is_exact_under_float32_and_detects_a_varying_vertex_colour
     BinWriter w; putPackedMesh(w, q); PackedMesh r; BinReader rd(w.bytes.data(), w.bytes.size()); CHECK(getPackedMesh(rd, r));
     CHECK(r.name == "concrete" && r.flags == q.flags && sameFloats(r.pos, q.pos) && sameFloats(r.col, q.col) && r.idx == q.idx && r.friction == q.friction);
     BinReader bad(w.bytes.data(), w.bytes.size() / 2); PackedMesh r2; CHECK(!getPackedMesh(bad, r2));
+}
+
+namespace {
+// A block of facades at the island's coordinates: boxes kilometres from the origin, a tint per box (glass in [0, 1]),
+// tangents as the raw edge vectors generators emit, and a round tower (smooth normals: its walls' world-planar UVs
+// follow the normal at every vertex).
+// The offsets are not a place: (-4058, -440) is about 4 km out, where island_8_nature's towers stand. The distance is
+// the test. A normal rounded by 5e-5 rad moves a world-planar UV by ~0.25 m this far out; at the origin it wouldn't
+// show, and the block would pass with the bug in it.
+RenderMesh facadeBlock() {
+    RenderMesh m;
+    for (int i = 0; i < 40; ++i) {
+        RenderMesh b = MeshBuilder::box(Vec3(6 + i % 5, 9 + 3 * (i % 7), 8));
+        for (Vertex& v : b.vertices) {
+            v.position += Vec3(-4057.9 + 14.0 * (i % 8), 12.0, -439.6 + 13.0 * (i / 8));
+            v.color = Vec3(0.18 + 0.01 * i, 0.4, 0.62);
+            v.tangent = v.tangent * (3.0 + i % 3);
+        }
+        MeshBuilder::append(m, b);
+    }
+    RenderMesh tower = MeshBuilder::cylinder(9.0f, 60.0f, 48);
+    for (Vertex& v : tower.vertices) { v.position += Vec3(-3990.3, 30.0, -380.7); v.color = Vec3(0.55, 0.52, 0.47); }
+    MeshBuilder::append(m, tower);
+    return m;
+}
+}  // namespace
+
+TEST_CASE(compact_mesh_gives_the_gpu_exactly_what_the_full_mesh_gives_it) {
+    using engine::octEncode;
+    using engine::unorm8;
+    const RenderMesh m = facadeBlock();
+    BinWriter w; putCompactMesh(w, m);
+    RenderMesh back; BinReader r(w.bytes.data(), w.bytes.size());
+    CHECK(getCompactMesh(r, back));
+    const PackedMesh packed = packMesh(m, "part", Vec3(1, 1, 1), 0u, 1.0f, 0.0);
+    CHECK(back.vertices.size() == m.vertices.size() && back.indices.size() == packed.idx.size() && !back.tangentIsData);
+    // its triangles, in order, each wound the same way (the index codec may start one at another corner)
+    int sameTriangle = 0;
+    for (size_t t = 0; t + 2 < packed.idx.size() && t + 2 < back.indices.size(); t += 3)
+        for (int k = 0; k < 3; ++k)
+            if (back.indices[t] == packed.idx[t + k] && back.indices[t + 1] == packed.idx[t + (k + 1) % 3] &&
+                back.indices[t + 2] == packed.idx[t + (k + 2) % 3]) { ++sameTriangle; break; }
+    CHECK(sameTriangle == static_cast<int>(packed.idx.size() / 3));
+    int sameNormal = 0, sameTangent = 0, sameColour = 0;
+    for (size_t i = 0; i < m.vertices.size(); ++i) {
+        const Vertex &a = m.vertices[i], &b = back.vertices[i];
+        CHECK(static_cast<float>(a.position.x) == b.position.x && static_cast<float>(a.position.y) == b.position.y &&
+              static_cast<float>(a.position.z) == b.position.z);   // exact: neighbouring cells still meet
+        CHECK(a.u == b.u && a.v == b.v);
+        CHECK(static_cast<float>(a.normal.x) == b.normal.x && static_cast<float>(a.normal.y) == b.normal.y &&
+              static_cast<float>(a.normal.z) == b.normal.z);   // exact: the loader's world-planar UVs read it
+        int16_t qa[2], qb[2];
+        octEncode(a.normal.x, a.normal.y, a.normal.z, qa); octEncode(b.normal.x, b.normal.y, b.normal.z, qb);
+        sameNormal += qa[0] == qb[0] && qa[1] == qb[1];
+        octEncode(a.tangent.x, a.tangent.y, a.tangent.z, qa); octEncode(b.tangent.x, b.tangent.y, b.tangent.z, qb);
+        sameTangent += qa[0] == qb[0] && qa[1] == qb[1];
+        sameColour += unorm8(a.color.x) == unorm8(b.color.x) && unorm8(a.color.y) == unorm8(b.color.y) && unorm8(a.color.z) == unorm8(b.color.z);
+    }
+    const int n = static_cast<int>(m.vertices.size());
+    CHECK(sameNormal == n && sameTangent == n && sameColour == n);   // the uploaded vertex, bit for bit
+    // ...in a fraction of the packed float planes
+    BinWriter pw; putPackedMesh(pw, packed);
+    std::printf("    [compact] %d vertices, %zu triangles: packed %zu bytes, compact %zu (%.0f%%)\n", n, m.indices.size() / 3,
+                pw.bytes.size(), w.bytes.size(), 100.0 * w.bytes.size() / pw.bytes.size());
+    CHECK(w.bytes.size() * 2 < pw.bytes.size());
+    BinReader cut(w.bytes.data(), w.bytes.size() / 2); RenderMesh r2; CHECK(!getCompactMesh(cut, r2));
+}
+
+TEST_CASE(a_compact_packed_mesh_reads_back_as_the_same_city_mesh) {
+    // MESH v2 (the city's cell meshes): the header as v1, the geometry as a compact mesh -- positions, normals and UVs
+    // exact, tints as the GPU's unorm8, the collider's triangles the same (each may start at another corner), a uniform colour kept
+    // in the header
+    RenderMesh kerb = facadeBlock();
+    RenderMesh pier = MeshBuilder::box(Vec3(2.6, 4.8, 2.6));
+    for (Vertex& v : pier.vertices) v.position += Vec3(-4010.0, 0.0, -400.0);
+    MeshBuilder::append(kerb, pier);
+    for (const PackedMesh& p : {packMesh(kerb, "concrete", Vec3(0.5, 0.5, 0.5), PackedMesh::kCollidable, 0.93f, 0.85),
+                                packMesh(MeshBuilder::box(Vec3(3, 0.2, 9)), "asphalt", Vec3(0.1, 0.1, 0.1), PackedMesh::kCollidable, 0.9f, 0.8)}) {
+        BinWriter w; putPackedMesh(w, p, /*compact=*/true);
+        BinWriter planes; putPackedMesh(planes, p);
+        PackedMesh r; BinReader rd(w.bytes.data(), w.bytes.size());
+        CHECK(getPackedMesh(rd, r));
+        CHECK(r.name == p.name && r.flags == p.flags && r.friction == p.friction && r.roughness == p.roughness &&
+              r.vertexColor[0] == p.vertexColor[0] && r.albedo[2] == p.albedo[2]);
+        CHECK(sameFloats(r.pos, p.pos) && sameFloats(r.nrm, p.nrm) && sameFloats(r.uv, p.uv));
+        CHECK(r.col.size() == p.col.size());   // a tint in [0, 1] as the GPU's unorm8 (nothing reads one exactly)
+        bool sameTint = true;
+        for (size_t i = 0; i < r.col.size() && i < p.col.size(); ++i) sameTint = sameTint && engine::unorm8(r.col[i]) == engine::unorm8(p.col[i]);
+        CHECK(sameTint);
+        CHECK(r.idx.size() == p.idx.size() && r.tan.size() == p.tan.size());
+        int same = 0;
+        for (size_t t = 0; t + 2 < p.idx.size() && t + 2 < r.idx.size(); t += 3)
+            for (int k = 0; k < 3; ++k)
+                if (r.idx[t] == p.idx[t + k] && r.idx[t + 1] == p.idx[t + (k + 1) % 3] && r.idx[t + 2] == p.idx[t + (k + 2) % 3]) { ++same; break; }
+        CHECK(same == static_cast<int>(p.idx.size() / 3));
+        CHECK(w.bytes.size() * 2 < planes.bytes.size());
+        BinReader cut(w.bytes.data(), w.bytes.size() / 2); PackedMesh r2; CHECK(!getPackedMesh(cut, r2));
+    }
+}
+
+TEST_CASE(compact_mesh_keeps_what_the_standard_vertex_cannot_hold_exact) {
+    // a tint above 1 (lit panes), a tangent that carries data (a morph target), a mesh with no tangents, one tint
+    RenderMesh hdr = MeshBuilder::box(Vec3(2, 2, 2));
+    for (size_t i = 0; i < hdr.vertices.size(); ++i) hdr.vertices[i].color = Vec3(1.7 + 0.1 * i, 0.25, 3.0);
+    RenderMesh data = MeshBuilder::box(Vec3(2, 2, 2)); data.tangentIsData = true;
+    for (size_t i = 0; i < data.vertices.size(); ++i) data.vertices[i].tangent = Vec3(12.5 + i, -3.25, 0.0);
+    RenderMesh bare = MeshBuilder::box(Vec3(2, 2, 2)); for (Vertex& v : bare.vertices) { v.tangent = Vec3(0, 0, 0); v.color = Vec3(0.3, 0.3, 0.3); }
+    for (const RenderMesh* m : {&hdr, &data, &bare}) {
+        BinWriter w; putCompactMesh(w, *m);
+        RenderMesh b; BinReader r(w.bytes.data(), w.bytes.size());
+        CHECK(getCompactMesh(r, b));
+        CHECK(b.vertices.size() == m->vertices.size() && b.tangentIsData == m->tangentIsData);
+        for (size_t i = 0; i < b.vertices.size(); ++i) {
+            const Vertex &x = m->vertices[i], &y = b.vertices[i];
+            CHECK(static_cast<float>(x.color.x) == y.color.x && static_cast<float>(x.color.z) == y.color.z);
+            if (m->tangentIsData || m == &bare)
+                CHECK(static_cast<float>(x.tangent.x) == y.tangent.x && static_cast<float>(x.tangent.y) == y.tangent.y &&
+                      static_cast<float>(x.tangent.z) == y.tangent.z);
+        }
+    }
 }
 
 TEST_CASE(height_grid_road_entity_and_rings_round_trip_field_for_field) {

@@ -26,7 +26,9 @@ void ResidencySystem::render(FrameContext& ctx) {
                          << s.bytes / 1048576 << " MB, " << s.waiting << " waiting, " << s.loads << " loads, "
                          << s.unloads << " unloads; " << s.commits << " prepared off-thread, committed in "
                          << (s.commits ? s.commitMs / s.commits : 0.0) << " ms (slowest " << s.maxCommitMs
-                         << "); " << (s.loads - s.commits) << " loaded in place (jumps), slowest " << s.maxLoadMs << " ms";
+                         << "); " << (s.loads - s.commits) << " loaded in place (jumps), slowest " << s.maxLoadMs << " ms; late "
+                         << s.late << " (nearest " << s.nearestLate << " m), " << s.lateArrivals << " arrived late, "
+                         << s.lateSeconds << " item-s late in all";
         }
     });
 }

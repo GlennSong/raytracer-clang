@@ -4,6 +4,10 @@
 #include "../system.h"
 #include "draw_index.h"
 
+#include <chrono>
+#include <cstdint>
+#include <vector>
+
 namespace engine {
 
 // Cull a group's instance transforms against the frustum (per instance), using
@@ -24,6 +28,10 @@ void frustumCullInstances(const std::vector<Mat4>& transforms,
                           const Vec3& cameraPos, Real maxDistance,
                           std::vector<Mat4>& out, Real minDistance = 0);
 
+// The tier crossfade's dither (FLAG_LOD_BAND, ADR-0226): `m` drawn at `share` of its pixels, uniformly over a
+// drawable `dist` metres away -- coming in, or going out on the complementary pixels.
+void tierFadeBand(RenderMaterial& m, double dist, float share, bool coming);
+
 // Draws the world each frame using the RenderView's camera and lights, with
 // per-entity interpolation for smooth motion. Also ramps exposure from input.
 // Application brackets render() with begin/endFrame, so this only emits draws.
@@ -40,6 +48,13 @@ private:
     // allocating the full instance count every group every frame.
     std::vector<Mat4> instanceScratch_;
     DrawIndex drawIndex_;   // static drawables by world cell (draw_index.h)
+    // THE TIER CROSSFADE (ADR-0226): a lodCell drawable whose distance test flips while it is on screen fades over
+    // kTierFade instead of popping -- a cell's detail out as its facades come in, a stand-in box out as a streamed
+    // tier lands. Per entity index: the fade (0 hidden .. 1 drawn), the mesh it was for, the frame last seen.
+    struct TierFade { float a = 0.0f; uint32_t mesh = ~0u; uint64_t seen = 0; };
+    std::vector<TierFade> tierFade_;
+    uint64_t frameNo_ = 0;
+    std::chrono::steady_clock::time_point lastRender_;
 };
 
 

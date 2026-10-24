@@ -3,6 +3,7 @@
 #include "../../renderer/window.h"
 #include "../../log.h"
 
+#include <algorithm>
 #include <chrono>
 #include <cstdlib>
 #include <typeinfo>
@@ -42,27 +43,35 @@ void PlayingState::update(FrameContext& ctx) {
         for (auto& system : systems) system->update(ctx);
         return;
     }
-    static std::vector<double> ms;
+    static std::vector<double> ms, worst;   // worst: one frame's, so a job every N frames shows past its mean
     static int calls = 0;
     ms.resize(systems.size(), 0.0);
+    worst.resize(systems.size(), 0.0);
     for (std::size_t i = 0; i < systems.size(); ++i) {
         const auto t0 = std::chrono::steady_clock::now();
         systems[i]->update(ctx);
-        ms[i] += std::chrono::duration<double, std::milli>(
-                     std::chrono::steady_clock::now() - t0).count();
+        const double t = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+        ms[i] += t;
+        worst[i] = std::max(worst[i], t);
+        static const double spikeMs = std::getenv("RT_SPIKE_MS") ? std::atof(std::getenv("RT_SPIKE_MS")) : 16.0;   // as fixedUpdate's
+        if (t > spikeMs) {
+            const System& sys = *systems[i];
+            LOG_INFO << "[stats] SPIKE update " << t << " ms  " << typeid(sys).name();
+        }
     }
     if (++calls % 300 == 0) {
         for (std::size_t i = 0; i < systems.size(); ++i)
-            if (ms[i] / calls > 0.05) {
+            if (ms[i] / calls > 0.05 || worst[i] > 2.0) {
                 // Name the system through a reference, not `*systems[i]`:
                 // typeid EVALUATES a polymorphic operand (it reads the vtable),
                 // and a unique_ptr deref inside it reads as a side-effecting
                 // expression. Same lookup, no warning.
                 const System& sys = *systems[i];
-                LOG_INFO << "[stats] update " << (ms[i] / calls) << " ms  "
+                LOG_INFO << "[stats] update " << (ms[i] / calls) << " ms (worst " << worst[i] << ")  "
                          << typeid(sys).name();
             }
         std::fill(ms.begin(), ms.end(), 0.0);
+        std::fill(worst.begin(), worst.end(), 0.0);
         calls = 0;
     }
 }

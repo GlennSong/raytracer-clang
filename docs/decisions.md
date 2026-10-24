@@ -11380,3 +11380,160 @@ Glenn: "publish the drawn deck".
   - Ramps are drawn ~0.45 m over their published profile even at the centreline (spines 175, 176, 180 on metro).
     That is a separate question.
   - The lot pads' feather on the sidewalk is still the bulk of the pokes (ADR-0217).
+
+## ADR-0224 — Baked building parts are stored as the GPU's vertex, compressed
+
+**Accepted.** island_8_nature's bundle was 8.59 GB, of which 6.64 GB was building parts (9,199 sections) and
+0.59 GB the far facade tier. `putPart` stored each part through `packMesh`: raw float32 planes for position,
+normal, tangent, UV and colour, and u32 indices. Glenn asked to shrink the data without losing the island's look.
+
+- **The stored vertex is the uploaded one, with an exact normal.** `bundle::putCompactMesh` / `getCompactMesh`
+  (CMSH v1) write a 40-byte vertex:
+  - float position and UV;
+  - float normal;
+  - an octahedral snorm16 tangent;
+  - a unorm8 tint.
+
+  The tangent and tint are what Vulkan's `GpuVertexPacked` already uploads (ADR-0096). The encoders are shared
+  with the renderer (`engine/vertex_pack.h`), so the GPU reads the same tangent and tint as before. On the oct
+  map's fold edge a re-encoded tangent can take the other of two codes that decode to the same direction (a
+  component of −6e-7 comes back as −0).
+- **The normal stays float** because the loader re-derives world-planar UVs from it (`applyWorldPlanarUVs`). At
+  island coordinates, an oct normal's ~5e-5 rad would move a wall's u by ~0.25 m. On a round tower each vertex
+  moves differently, so the brick joints would zigzag. The test block includes a cylinder at island coordinates.
+- **What stays exact:**
+  - positions, so cells still meet;
+  - UVs and normals;
+  - any tint outside [0, 1] (`kCompactFloatColor`, a float plane);
+  - a tangent that carries data (`tangentIsData`, a float plane);
+  - a mesh with no tangents;
+  - a single uniform tint.
+
+  Lit panes pack glass and a lit-tint index into 8-bit channels (`shape_grammar.h`), so unorm8 is their native
+  form.
+- **What changes:**
+  - the tangent's length (shaders normalise it);
+  - a tint's precision past 1/255, which Metal and WebGPU will now see too (≤ 1/510 per channel);
+  - the corner each triangle starts at (meshoptimizer's index codec rotates triangles, keeping winding and
+    order). Every `flat` input in the mesh shaders is per instance, so this draws the same pixels.
+- **meshoptimizer 1.2** (zeux, MIT; a submodule, only `vertexcodec.cpp` and `indexcodec.cpp` built) compresses
+  the vertex and index streams losslessly: `meshopt_encodeVertexBufferLevel(level 3, version 1)` and
+  `meshopt_encodeIndexBuffer`. It runs only at bake write and stream read. In the engine a part is a
+  `RenderMesh` as before.
+- **Part version 2**, lots tag 2026-10-23.1. `getPart` still reads version 1.
+- **Measured (island_8_nature, local clang):**
+  - lots/parts 6.64 → 1.21 GB;
+  - lots/flat 0.59 → 0.12 GB;
+  - bundle 8.59 → 2.50 GB;
+  - lots re-bake 145 s, peak RSS 19.1 GB.
+- **The city's cell meshes too** (2026-10-23, lanes tag 2026-10-23.1): MESH v2 is the v1 header (material name,
+  flags, colours, roughness, friction), then a compact mesh. `getPackedMesh` reads either version. Colliders are
+  built from the positions, which stay exact. Nothing reads a city tint exactly: the shaders' signal-colour tests
+  allow 0.03.
+  - concrete 0.485 → 0.092 GB;
+  - asphalt 0.185 → 0.066 GB;
+  - sleepers 0.136 → 0.034 GB;
+  - guardrails 0.117 → 0.020 GB;
+  - bundle 2.50 → 1.62 GB.
+
+  A lanes tag bump rebuilds the city: island re-bake 36 min, peak RSS 19.8 GB. Trees and lot pads keep v1.
+- **Revisit** when a CPU consumer needs a part's or a city mesh's tint or tangent exact.
+
+## ADR-0225 — Grass streams in 3D, from half the pool, ahead of the camera
+
+**Accepted.** On island_8_nature's flights, grass was the pop-in. Flying 40 m up at 30 m/s, up to 921 tiles were
+bare at once, the nearest 14 m away. RT_GRASS_LOG measured why:
+- 160 tiles a second were built, at 6–12 ms each, with at most 4 in flight out of 23 workers;
+- the 8 fields' far cards (to 320 m, in 32 m tiles) got 2 a second behind the nearer clumps;
+- distance was measured on the map, so 300 m up the clumps meant for 60 m were still built.
+
+- **3D distance**, as the shader fades the grass (mesh.vert measures the distance to the planted origin). A tile's
+  ground range comes from a coarse grid: 64 m cells, 3×3 samples each, ±6 m of slack, filled once and shared by
+  every layer, because every field grows on the level's one drawn ground. A first version sampled 5 points per
+  tile per layer. Over the city a drawn-ground sample costs ~50 µs, so at 200 m/s that was 0.4 s a second on the
+  main thread. Error in the coarse range only makes a tile nearer: built early, never late.
+- **Half the pool in flight**: at least 4.
+- **Look-ahead**: a tile starts by its distance from the camera now or 0.75 s ahead (the residency's horizon),
+  whichever is nearer.
+- **Measured (local clang, same legs):**
+  - 40 m up at 30 m/s: bare 921 → 0 tiles. Grass costs 0.6 ms a frame on the main thread.
+  - 300 m up at 200 m/s over Port Penwood: bare 0. Main thread 0.25 ms a frame; the per-tile sampling had cost
+    8–15 ms.
+- **RT_GRASS_LOG** reports, once a second:
+  - tiles started and built, with build ms;
+  - the main thread's time by phase;
+  - ground cells sampled;
+  - want and built counts per layer.
+- **Over the city a card tile took 40–110 ms** (~1,200 drawn-ground samples at ~50 µs: `lodSurfaceHeight`
+  evaluates the field with its pads and earthwork). On a baked level the drawn ground is now read off the height
+  pyramid (ADR-0095), in ~9 hash lookups, falling back to the field past its edge. This covers grass, vegetation,
+  foliage and rocks: they all take the loader's one `drawn` ground. RT_GROUND_FIELD=1 evaluates the field as
+  before. The two agree to the pyramid's 2 cm tolerance; the island's forest moved by 3 of 416,608 trees.
+  Measured on flight 2 (120 m up, 80 m/s, across towns):
+  - tiles 0.6 ms;
+  - bare 230 → 0;
+  - load 187 → 169 s;
+  - p50 / p99 14.5 / 26.8 → 13.1 / 22.8 ms.
+
+## ADR-0226 — A city cell crossfades between its tiers
+
+**Accepted.** A building cell switches tier at a hard distance, measured to the 250 m cell's centre (`lodCell`):
+- detail to facades at 300 m;
+- facades to the mass-box stand-in at 950 m;
+- the stand-in to whichever tier lands, when a streamed tier arrives (the stand-in rule).
+
+The switch happened in one frame, a whole cell at a time.
+
+- **A fade over time, not distance.** A spatial band would draw a cell's detail out to ~480 m and discard most of
+  its pixels: ~2.5× the detail cells. Instead, when a lodCell drawable's distance test flips while it is on screen,
+  it fades over 0.35 s (`RenderSystem::tierFade_`, per entity index). The tier going out keeps a falling share of
+  its pixels and the tier coming in takes the rest.
+- **The existing dither, no shader change.** `tierFadeBand` sets the drawable's FLAG_LOD_BAND (ADR-0129) edges
+  1e5 m wide around its distance, so the band's share is uniform across the cell. Coming in uses the fade-in
+  edge and going out uses the fade-out edge. Their thresholds are complementary, so a pair at shares a and 1 − a
+  splits every pixel between them: no hole and no double draw (test: `a_tier_crossfade_splits_every_pixel_…`).
+- **What does not fade:**
+  - a drawable off screen last frame, or a new one in a recycled slot, simply is what it is now;
+  - a newly committed chunk appears whole while its stand-in dissolves away over it;
+  - geometry only one tier has (a crown, a spire) dissolves in or out on its own.
+- **Vulkan only.** `Renderer::supportsLodBand()`: without the band both tiers would draw whole at once.
+- **Switches:**
+  - `RT_NO_TIER_FADE=1` pops as before;
+  - `RT_TIER_FADE_S=<s>` sets the length (6 s shows a fade in a screenshot);
+  - `RT_DUMP_STATS` counts the fading draws.
+- **Measured** on island_8_nature flight 1 (40 m up, 30 m/s, local clang): p50 13.9 / p99 24.6 ms with the fades,
+  14.0 / 24.8 ms without.
+
+## ADR-0227 — A party wall is blank only as high as its neighbour
+
+**Accepted.** On island_8_nature, glass towers showed a whole grey side: a blank party wall from the ground to
+the roof, against a walk-up a fraction of their height. The lot pass marks a lot's shared side line as a party
+wall (city_lots, "ATTACHED BUILDINGS") but never set `partyTop`, so every party wall stayed blank to the roof.
+`BuildingParams` already describes the fix ("a taller cell keeps its windows above a lower neighbour's roof"), and
+only the complex's cells (cells.cpp `Complex::resolve`) used it.
+
+- **After PASS C, not during it.** PASS C grows one lot at a time, and a lot's neighbour may not have been grown
+  yet; its floors are decided over a thousand lines of the loop (massing rescues, freeway caps), so they can't be
+  predicted ahead. PASS C now records every attached building it grows (plan, params, base, and the runs of the
+  parts meshes it was merged into). A pass after it sets each wall's top from what stands against it.
+- **The neighbour's height on the line.** The neighbour is an attached building on the same block, with a party
+  wall on the same line facing the other way, overlapping it by at least 1 m. Its height is the top of its highest
+  storey whose plan still stands on that line, so a tower set back on a podium counts as the podium.
+- **A detached neighbour counts too.** Where no attached building stands on the line, any building on the block
+  within 6 m of it (its plan pulled off the line by a setback or its own massing) counts at its full height. The
+  first cut missed these: tower #4840 on the island kept a blank side to the roof beside a 19 m pagoda tower.
+- **The wall's top.** It is the last of the building's own storeys (not the roof exit's bulkhead) whose floor is
+  under the neighbour's top plus a 1 m sill, and at least storey 1, as a complex's are. A wall the neighbour reaches
+  to the top storey is unchanged.
+- **No neighbour, no change.** A wall with nothing against it stays blank to the roof: the bare party wall by a
+  vacant lot. The ground storey is always blank (`partyEdge` without a storey), so doors, entrances and
+  shopfronts do not move.
+- **A building that changes is grown again**, full and flat tiers, with its new tops. Its unit's params take
+  them, so the streamed interior paints the same storeys. Its first growth is cut out of the parts meshes (each
+  run is a whole append, so indices past it shift down by the vertices cut). Heights don't depend on the tops, so
+  one pass settles it.
+- **Measured (island_8_nature):** 1,005 of 3,446 attached buildings take windows above a lower neighbour (940
+  before detached neighbours counted); the lots stage 145 → 160 s; bundle 1.65 GB. Lots tag 2026-10-23.3.
+- **`lot? x z`** prints each building's party walls (line and top), for checking one in the running game.
+- **Test:** `a_party_wall_is_blank_only_as_high_as_its_neighbour` (test_city_lots): no glass in the wall up to its
+  top, glass above it, the count matches the log's, every parts index still in its mesh.

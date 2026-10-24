@@ -6,6 +6,7 @@
 #include "engine/procgen/city/roads/lanes/geom2d.h"
 #include "engine/procgen/city/roads/lanes/deck_mesh.h"
 #include "engine/mesh_audit.h"
+#include "engine/vertex_pack.h"
 
 using namespace engine;
 using namespace engine::roads::lanes;
@@ -326,10 +327,30 @@ TEST_CASE(lanes_the_city_block_pass_yields_well_formed_blocks_on_the_clean_scene
 
 namespace {
 bool sameF(const std::vector<float>& a, const std::vector<float>& b) { return a.size() == b.size() && std::equal(a.begin(), a.end(), b.begin()); }
+// MESH v2 (ADR-0224): tangents and tints as the GPU reads them (the oct snorm16 pair's direction, unorm8), each triangle
+// the same, wound the same, though the index codec may start it at another corner
+bool sameAsUploaded(const engine::bundle::PackedMesh& a, const engine::bundle::PackedMesh& d) {
+    if (a.tan.size() != d.tan.size() || a.col.size() != d.col.size() || a.idx.size() != d.idx.size()) return false;
+    for (size_t i = 0; i + 2 < a.tan.size(); i += 3) {
+        int16_t qa[2], qd[2];
+        engine::octEncode(a.tan[i], a.tan[i + 1], a.tan[i + 2], qa); engine::octEncode(d.tan[i], d.tan[i + 1], d.tan[i + 2], qd);
+        double ax, ay, az, dx, dy, dz;   // the direction the GPU decodes (two codes on the fold edge decode alike)
+        engine::octDecode(qa, ax, ay, az); engine::octDecode(qd, dx, dy, dz);
+        if (std::abs(ax - dx) > 1e-12 || std::abs(ay - dy) > 1e-12 || std::abs(az - dz) > 1e-12) return false;
+    }
+    for (size_t i = 0; i < a.col.size(); ++i) if (engine::unorm8(a.col[i]) != engine::unorm8(d.col[i])) return false;
+    for (size_t t = 0; t + 2 < a.idx.size(); t += 3) {
+        bool one = false;
+        for (int k = 0; k < 3 && !one; ++k)
+            one = d.idx[t] == a.idx[t + k] && d.idx[t + 1] == a.idx[t + (k + 1) % 3] && d.idx[t + 2] == a.idx[t + (k + 2) % 3];
+        if (!one) return false;
+    }
+    return true;
+}
 bool sameRing(const std::vector<Vec2>& a, const std::vector<Vec2>& b) { if (a.size() != b.size()) return false; for (size_t i = 0; i < a.size(); ++i) if (a[i].x != b[i].x || a[i].y != b[i].y) return false; return true; }
 }  // namespace
 
-TEST_CASE(lanes_city_products_round_trip_through_a_bundle_to_the_byte) {
+TEST_CASE(lanes_city_products_round_trip_through_a_bundle) {   // to the byte, but for the meshes' GPU-only channels
     using namespace engine::bundle;
     const Result& r = scene("ring_city");
     CityProducts p = cityProductsFromResult(r, 250.0);
@@ -348,7 +369,7 @@ TEST_CASE(lanes_city_products_round_trip_through_a_bundle_to_the_byte) {
     for (const CityCellMesh& c : p.cells) {
         auto it = byKey.find({c.mesh.name, c.cx, c.cz}); CHECK(it != byKey.end()); if (it == byKey.end()) continue;
         const PackedMesh& a = c.mesh; const PackedMesh& d = it->second->mesh;
-        CHECK(a.flags == d.flags && a.friction == d.friction && a.roughness == d.roughness && sameF(a.pos, d.pos) && sameF(a.nrm, d.nrm) && sameF(a.tan, d.tan) && sameF(a.uv, d.uv) && sameF(a.col, d.col) && a.idx == d.idx);
+        CHECK(a.flags == d.flags && a.friction == d.friction && a.roughness == d.roughness && sameF(a.pos, d.pos) && sameF(a.nrm, d.nrm) && sameF(a.uv, d.uv) && sameAsUploaded(a, d));
         ++matched;
     }
     CHECK(matched == static_cast<int>(p.cells.size()));

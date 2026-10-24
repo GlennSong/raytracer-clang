@@ -1082,6 +1082,17 @@ std::string Application::handleControlCommand(const std::string& line) {
         if (!cb) return "ok " + out + " | no city buildings on this level";
         std::vector<const BuildingRecord*> hits;
         cb->near(q, rad, hits);
+        // its party walls (ADR-0227): the line each stands on, and the last storey it is blank to (0 = the roof)
+        auto partyOf = [](const BuildingParams& p) {
+            std::string s;
+            for (int k = 0; k < std::min<int>(p.partyWalls, 4); ++k) {
+                char buf[96];
+                std::snprintf(buf, sizeof buf, " party%d=(n %.2f,%.2f at %.1f top %d)", k, p.partyN[k].x, p.partyN[k].y,
+                              p.partyAt[k], p.partyTop[k]);
+                s += buf;
+            }
+            return s;
+        };
         out += " | " + std::to_string(hits.size()) + " record(s) within " +
                std::to_string(rad) + " m";
         int shown = 0;
@@ -1097,6 +1108,7 @@ std::string Application::handleControlCommand(const std::string& line) {
                    " baseY=" + std::to_string(r->baseY) +
                    " h=" + std::to_string(r->height) +
                    " floors=" + std::to_string(r->params.floors) +
+                   partyOf(r->params) +
                    (r->enterable ? " enterable" : "") +
                    " centroid=(" + std::to_string(c.x) + ", " + std::to_string(c.y) + ")" +
                    (inside ? " <-- YOU ARE INSIDE THIS PLAN" : "");

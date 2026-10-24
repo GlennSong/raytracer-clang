@@ -23,3 +23,6 @@
 [submodule "third_party/CDT"]
 	path = third_party/CDT
 	url = https://github.com/artem-ogre/CDT
+[submodule "third_party/meshoptimizer"]
+	path = third_party/meshoptimizer
+	url = https://github.com/zeux/meshoptimizer.git

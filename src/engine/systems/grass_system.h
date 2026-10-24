@@ -41,6 +41,7 @@ public:
         uint64_t generation = 0;
         std::vector<std::vector<Mat4>> perVariant;
         Vec3 centre{0, 0, 0};
+        double buildMs = 0.0;     // the job's time (RT_GRASS_LOG)
     };
 
 private:
@@ -59,6 +60,12 @@ private:
     int inFlight_ = 0;
     bool first_ = true;
     bool commitAll_ = false;         // the first frame's commit: no budget
+    double bareSeconds_ = 0.0, logClock_ = 0.0;   // RT_GRASS_LOG
+    struct LogWindow { int built = 0, started = 0; double buildMs = 0.0, maxMs = 0.0, copyMs = 0.0, selfMs = 0.0, selfMax = 0.0, setupMs = 0.0, commitMs = 0.0, dropMs = 0.0, scanMs = 0.0, spanMs = 0.0; int frames = 0, spans = 0; std::vector<int> builtByLayer; };
+    LogWindow window_;
+    std::map<std::pair<int, int>, std::pair<float, float>> span_;   // the ground's range per coarse cell: tiles' 3D distance
+    Vec3 lastCam_{0, 0, 0}, camVel_{0, 0, 0};       // the camera's velocity, for the look-ahead
+    bool haveLastCam_ = false;
     void drop(World& world, Tile& t);
 };
 

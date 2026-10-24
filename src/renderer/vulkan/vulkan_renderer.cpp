@@ -14,6 +14,7 @@
 #include "../window.h"
 #include "../../log.h"
 #include "../../slot_map.h"
+#include "../../engine/vertex_pack.h"
 
 #include <vulkan/vulkan.h>
 // GPU memory: AMD's Vulkan Memory Allocator (third_party/VulkanMemoryAllocator, compiled
@@ -97,25 +98,9 @@ struct GpuVertexPacked {
 };
 static_assert(sizeof(GpuVertexPacked) == 32, "the standard vertex is 32 bytes");
 
-// Unit vector -> octahedral snorm16 pair (the inverse is octDecode() in mesh.vert).
-void octEncode(double x, double y, double z, int16_t out[2]) {
-    const double l1 = std::fabs(x) + std::fabs(y) + std::fabs(z);
-    double u = 0.0, v = 0.0;
-    if (l1 > 1e-30) {
-        u = x / l1; v = y / l1;
-        if (z < 0.0) {
-            const double fu = (1.0 - std::fabs(v)) * (u >= 0.0 ? 1.0 : -1.0);
-            const double fv = (1.0 - std::fabs(u)) * (v >= 0.0 ? 1.0 : -1.0);
-            u = fu; v = fv;
-        }
-    }
-    auto snorm16 = [](double c) {
-        const double x = std::clamp(c, -1.0, 1.0) * 32767.0;
-        return static_cast<int16_t>(x >= 0.0 ? x + 0.5 : x - 0.5);   // round half away from zero
-    };
-    out[0] = snorm16(u);
-    out[1] = snorm16(v);
-}
+// Unit vector -> octahedral snorm16 pair: engine::octEncode (engine/vertex_pack.h), shared with the bundle's
+// compact meshes so a bake stores exactly what is uploaded (ADR-0224).
+using engine::octEncode;
 
 // Which layout a mesh can take. Full when its tangent slot carries data (the mesh says so:
 // RenderMesh::tangentIsData) or a tint leaves [0, 1] (8 bits would clamp it). A tangent of
@@ -6361,7 +6346,7 @@ VertexFit packVertices(const RenderMesh& mesh, std::vector<uint8_t>& out) {
     if (fit == VertexFit::Packed) {
         out.resize(n * sizeof(GpuVertexPacked));
         auto* gv = reinterpret_cast<GpuVertexPacked*>(out.data());
-        auto unorm8 = [](double c) { return static_cast<uint8_t>(std::clamp(c, 0.0, 1.0) * 255.0 + 0.5); };
+        using engine::unorm8;
         for (std::size_t i = 0; i < n; ++i) {
             const Vertex& v = mesh.vertices[i];
             GpuVertexPacked& g = gv[i];

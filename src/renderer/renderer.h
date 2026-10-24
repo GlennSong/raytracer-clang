@@ -934,6 +934,9 @@ public:
         uint32_t kind = 0, live = 0;
     };
     virtual bool supportsGpuCrowd() const { return false; }
+    // FLAG_LOD_BAND drawn (the dithered band): without it a surface draws whole, so a caller crossfading two
+    // models with it would draw both at once
+    virtual bool supportsLodBand() const { return false; }
     virtual void setCrowdKinds(const std::vector<CrowdKind>& /*kinds*/) {}
     virtual void setCrowdLinks(const std::vector<float>& /*sixPerLink*/) {}
     virtual void setCrowdRoutes(const std::vector<uint32_t>& /*pairs*/, std::size_t /*firstChanged*/) {}

@@ -17,7 +17,7 @@ constexpr std::size_t kBuildingParamsSize = 824;   // v23: partyOpen0/1/K0/K1, m
 static_assert(sizeof(BuildingParams) == kBuildingParamsSize, "BuildingParams layout changed: update lot_cache.cpp");
 
 namespace {
-constexpr uint32_t kParamsVersion = 23, kLotsVersion = 14, kPlanVersion = 1, kGradeVersion = 1, kPartVersion = 1;
+constexpr uint32_t kParamsVersion = 23, kLotsVersion = 14, kPlanVersion = 1, kGradeVersion = 1, kPartVersion = 2;
 
 void putVec2(BinWriter& w, const Vec2& v) { w.put<double>(v.x); w.put<double>(v.y); }
 bool getVec2(BinReader& r, Vec2& v) { return r.get(v.x) && r.get(v.y); }
@@ -217,9 +217,11 @@ bool getFlattens(BinReader& r, std::vector<TerrainFlatten>& fs) {
 // ---- the whole result as sections ------------------------------------------------------------------------
 
 namespace {
-void putPart(BinWriter& w, const RenderMesh& m) { w.magic("PART", kPartVersion); w.put<int32_t>(m.materialIndex); bundle::putPackedMesh(w, bundle::packMesh(m, "part", Vec3(1, 1, 1), 0u, 1.0f, 0.0)); }
+// v2: the compact mesh (ADR-0224); v1 (packed float planes) still reads
+void putPart(BinWriter& w, const RenderMesh& m) { w.magic("PART", kPartVersion); w.put<int32_t>(m.materialIndex); bundle::putCompactMesh(w, m); }
 bool getPart(BinReader& r, RenderMesh& m) {
-    uint32_t v = 0; if (!r.magic("PART", &v) || v != kPartVersion) return false; int32_t mat = 0; if (!r.get(mat)) return false;
+    uint32_t v = 0; if (!r.magic("PART", &v) || (v != kPartVersion && v != 1)) return false; int32_t mat = 0; if (!r.get(mat)) return false;
+    if (v >= 2) { if (!bundle::getCompactMesh(r, m)) return false; m.materialIndex = mat; return r.ok(); }
     bundle::PackedMesh pm; if (!bundle::getPackedMesh(r, pm)) return false; m = bundle::unpackMesh(pm); m.materialIndex = mat; return r.ok();
 }
 }  // namespace

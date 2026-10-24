@@ -334,6 +334,7 @@ struct LotPlanDebug {
     int rejFill = 0;     // polygon fills too little of its OBB
     int attachedSites = 0;   // sites run out to a shared side line (attached buildings)
     int attachedBuilt = 0;   // buildings grown with at least one party wall
+    int partyTopped = 0;     // ...of them, grown again with windows above a lower neighbour's roof (partyTop)
     std::vector<Vec2> attachedAt;   // a few of them, for the log's teleport hint
     int bigBoxBlocks = 0;            // whole blocks given to a big-box store and its parking lot
     int mallBlocks = 0;              // big-box blocks given to an indoor mall

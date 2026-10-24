@@ -555,6 +555,10 @@ private:
     std::vector<uint16_t> onShift_;
     PlaceId signWatch_ = kNoPlace;       // the nearest lit sign's place: opensigns? lists its staff
     std::vector<uint8_t> signedPlace_;   // places with an OPEN sign (by PlaceId): the only ones staffOnShift counts
+    std::vector<int> signedStaff_;       // ...and the agents who work at one (listed per population: places are set at build)
+    std::vector<uint8_t> signedAtWork_;  // ...each one at work, refreshed a thirtieth a frame from shiftCursor_
+    std::size_t signedStaffOf_ = 0, shiftCursor_ = 0;
+    void listSignedStaff();
     void dealOpenSigns(engine::World& world, engine::Settings& settings, engine::Vec3 cam);
     int parkingTick_ = 0;   // (parking? telemetry every 60 frames)   // the drivable parking garages (CitySimConfig)   // seats that are not furniture: a fountain's rim (CitySimConfig)
     std::unordered_map<int, std::vector<uint32_t>> indoorHeld_;   // record index -> spots our occupants hold, per piece
