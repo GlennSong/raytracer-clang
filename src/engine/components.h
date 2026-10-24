@@ -445,7 +445,7 @@ struct RigidBody {
 // Collider would, and `position` (the Transform) is the capsule centre.
 struct CharacterController {
     Real radius = 0.3;
-    Real halfHeight = 0.4;
+    Real halfHeight = 0.6;   // + the radius each end: 1.8 m, a walker's height (was 1.4 m: "I look like a child")
     Real stepHeight = 0.4;   // tallest ledge it can walk up in one step
     CharacterId characterId = INVALID_CHARACTER;
     bool swimming = false;   // afloat in deep water (PlayerSystem, #43): footsteps become strokes
@@ -487,6 +487,7 @@ struct Vehicle {
     // is what reached the wheels after the keyboard assist (vehicle_steering.h).
     Real throttle = 0, steer = 0, brake = 0, handBrake = 0;
     Real steerApplied = 0;
+    Real slide = 0;                // the player's ride: how hard its tyres slide, 0..1 (VehicleSystem::measureSlide)
     std::vector<Entity> wheelEntities;   // rendered wheels (optional)
     // Head/taillight glow toggle (ADR-0059) and the lens entities VehicleSystem
     // positions + lights each frame; `driverModel` is a capsule shown in the seat
@@ -549,6 +550,12 @@ struct Passenger {
     // system that never sets them (a cab, a car's seat) leaves a seated passenger: silent.
     Vec3 local{0, 0, 0};
     bool onFoot = false;
+    // SAT DOWN (a car's passenger seat, a bus seat): the body is drawn sitting, its hip `hipBelow` under the rider's
+    // Transform, facing `facing` (the carrier's forward). Glenn, beside an NPC driver: "I'm not in a seat" -- the
+    // standing walker was drawn at the hip, through the floor and the roof.
+    bool sitting = false;
+    Real hipBelow = 0;
+    Vec3 facing{0, 0, 1};
 };
 
 // Marks a Vehicle as driven by an AI brain rather than the player (ADR-0062): the

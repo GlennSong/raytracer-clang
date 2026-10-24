@@ -482,7 +482,8 @@ void TrainSystem::ride(engine::FrameContext& ctx, Real dt) {
         }
     } else {
         // ON FOOT: walking into an open doorway from the platform is boarding
-        const Vec3 feet = pt->position - Vec3(0, kEyeAboveTransform, 0);
+        // (the capsule's own centre-to-feet: it was the 0.7 eye offset, right only while the player was 1.4 m tall)
+        const Vec3 feet = pt->position - Vec3(0, cc ? cc->halfHeight + cc->radius : Real(0.9), 0);
         for (int ti = 0; ti < static_cast<int>(sim_.trains().size()) && train_ < 0; ++ti) {
             const Train& T = sim_.trains()[static_cast<std::size_t>(ti)];
             if (T.doorSide == 0) continue;
@@ -522,7 +523,16 @@ void TrainSystem::ride(engine::FrameContext& ctx, Real dt) {
         }
         sitRequest_ = -2;
     }
-    if (auto* ps = ctx.world.get<engine::Passenger>(player)) ps->onFoot = seat_ < 0;   // (the footsteps: seated, silent)
+    if (auto* ps = ctx.world.get<engine::Passenger>(player)) {
+        ps->onFoot = seat_ < 0;   // (the footsteps: seated, silent)
+        // (the body: seated, or walking only as fast as the feet go in the car -- Glenn: "when my guy is on the train
+        // he's walking when the train moves")
+        ps->sitting = seat_ >= 0;
+        ps->hipBelow = kSeatedEye - kEyeAboveTransform;
+        Vec3 f(P.m.m[0][2], 0, P.m.m[2][2]);
+        const Real fl = std::sqrt(f.x * f.x + f.z * f.z);
+        ps->facing = fl > 1e-6 ? f * (1 / fl) : Vec3(0, 0, 1);
+    }
     if (seat_ >= 0) {   // seated: pinned to the seat, the walk keys do nothing
         const Vec3 w = P.m.transformPoint(coachOf(train_).seats[static_cast<std::size_t>(seat_)]);
         pin(Vec3(w.x, w.y + kSeatedEye - kEyeAboveTransform, w.z));
@@ -563,7 +573,9 @@ void TrainSystem::ride(engine::FrameContext& ctx, Real dt) {
     // OUT OF THE DOOR: past the body's side where it is open
     if (T.doorSide != 0 && local_.x * T.doorSide > coachOf(train_).width / 2 + 0.3) {
         Vec3 out = P.m.transformPoint(Vec3(T.doorSide * static_cast<Real>(coachOf(train_).width / 2 + 0.5), static_cast<Real>(coachOf(train_).floor), local_.z));
-        out.y += kEyeAboveTransform + 0.05;
+        // the capsule's centre over the platform (its own height, not the 0.7 eye offset: that left a 1.8 m body
+        // standing 0.15 m into the platform)
+        out.y += (cc ? cc->halfHeight + cc->radius : Real(0.9)) + 0.05;
         leave(out);
         return;
     }

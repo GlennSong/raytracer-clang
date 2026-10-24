@@ -256,6 +256,8 @@ add_library(engine_core STATIC
     src/engine/systems/interact_broker_system.cpp
     src/engine/systems/tool_cycle_system.cpp
     src/engine/systems/beacon_light_system.cpp
+    src/engine/particles.cpp                    # dust, smoke, bubbles, streaks, sparks, splashes: the simulation
+    src/engine/systems/particle_system.cpp      # ...drawn as camera-facing quads, and what sets them off
     src/engine/systems/terrain_lod_system.cpp
     src/engine/systems/residency_system.cpp
     src/engine/systems/grass_system.cpp
@@ -438,6 +440,7 @@ if(RT_ENABLE_SCRIPTING)
         src/engine/scripting/vehicle_spec.cpp
         src/engine/scripting/furniture_library_lua.cpp
         src/engine/scripting/tree_recipes_lua.cpp
+        src/engine/scripting/particles_lua.cpp
     )
     target_link_libraries(engine_core PUBLIC lua_static)
     target_compile_definitions(engine_core PUBLIC RT_ENABLE_SCRIPTING=1)
@@ -716,6 +719,7 @@ add_executable(run_tests
     tests/test_weather_cycle.cpp
     tests/test_editor_home_view.cpp
     tests/test_vehicle_audio.cpp
+    tests/test_particles.cpp
     tests/test_frame_stats.cpp
     tests/test_event_bus.cpp
     tests/test_debug_draw.cpp

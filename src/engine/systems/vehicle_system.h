@@ -38,6 +38,8 @@ private:
     void spawnInFront(FrameContext& ctx);   // debug: drop a car ahead of the player
     void updateHorn(FrameContext& ctx);     // hold-to-honk (H / L3) while driving
     void updateEngines(FrameContext& ctx);  // per-car engine note (idle -> revs)
+    void measureSlide(FrameContext& ctx);
+    Entity smoke_[2];   // tyre smoke: an emitter (engine/particles.h) on each rear wheel of the player's ride
     void updateTyres(FrameContext& ctx);    // the player's ride: tyre squeal; a bicycle's freewheel and tyre hum
 
     PhysicsSystem& physicsSys;

@@ -8,6 +8,7 @@
 #include "../interact_broker.h"   // projectToScreen
 #include "../block_body.h"
 #include "../playground.h"
+#include "../particles.h"
 #include "../procgen/person.h"
 #include "../camera/scene_camera.h"
 #include "../../log.h"
@@ -164,6 +165,7 @@ void PlayerSystem::fixedUpdate(FrameContext& ctx) {
                     if (swim_.swimming) {
                         move_ = Move::Walk;   // into the water off a wall or a ledge: swim
                         swimVy_ = pw.characterVelocity(cc.characterId).y;   // the plunge carries on in
+                        splashVy_ = -swimVy_;
                     }
                 }
                 swimLevel_ = water.level;
@@ -1173,6 +1175,72 @@ void PlayerSystem::stepGlide(FrameContext& ctx, Transform& t, CharacterControlle
     }
 }
 
+// WHAT THE BODY KICKS UP (engine/particles.h): bursts as things happen, and the two steady flows turned up or off
+void PlayerSystem::effects(FrameContext& ctx, Entity e, Transform& t, CharacterController& cc) {
+    const Real dt = ctx.clock.fixedStep();
+    const Vec3 feet = t.position - Vec3(0, cc.halfHeight + cc.radius, 0);
+    // THE HANDS CATCHING HOLD (for MotionAudioSystem's grab): onto a wall, a ledge, the bars or a ladder, and each
+    // catch at the top of a lunge up a wall
+    const bool held = move_ == Move::Climb || move_ == Move::Mantle || move_ == Move::Bars || ctx.world.has<Climbing>(e);
+    if ((held && !heldWas_) || (move_ == Move::Climb && lungeWas_ > 0 && lunge_ <= 0)) ++grabs_;
+    heldWas_ = held;
+    lungeWas_ = lunge_;
+    if (!fxSeen_) {
+        fxOllies_ = ollies_; fxLands_ = boardLands_; fxBites_ = hookBites_;
+        fxSeen_ = true;
+    }
+    // a board: dust off the kicking foot, a ring of it at the wheels on an ollie and a landing
+    if (move_ == Move::Board && kickClock_ > 0 && fxKickWas_ <= 0)
+        requestParticles(ctx.world, "dust", feet - boardHeading_ * 0.25, boardHeading_ * -1.0, 6);
+    fxKickWas_ = move_ == Move::Board ? kickClock_ : 0;
+    if (ollies_ != fxOllies_) requestParticles(ctx.world, "dust", feet, Vec3(), 8, 1.2);
+    if (boardLands_ != fxLands_)
+        requestParticles(ctx.world, "dust", feet, Vec3(), 6 + static_cast<int>(landSpeed_ * 2), 1.0 + landSpeed_ * 0.25);
+    // the hook biting: sparks off what it hit, back toward the hand
+    if (hookBites_ != fxBites_) {
+        Vec3 back = t.position - hookTarget_;
+        back = back.lengthSquared() > 1e-6 ? normalize(back) : Vec3(0, -1, 0);
+        requestParticles(ctx.world, "spark", hookTarget_ + back * 0.1, back, 14);
+    }
+    fxOllies_ = ollies_; fxLands_ = boardLands_; fxBites_ = hookBites_;
+    // into the water: a splash, bigger the harder
+    if (splashVy_ > 2.0) {
+        ParticleRequest r;
+        r.effect = "splash";
+        r.at = Vec3(t.position.x, swimLevel_ + 0.05, t.position.z);
+        r.count = 10 + static_cast<int>(splashVy_ * 3);
+        r.scale = 1.0 + splashVy_ * 0.12;
+        requestParticles(ctx.world, r);
+    }
+    splashVy_ = 0;
+    // under it: a trickle of bubbles from the mouth, and a breath let out every few seconds
+    const bool under = swim_.swimming && camera.eye.y < swimLevel_ - 0.05;
+    const bool third = ctx.settings.getBool("playerThirdPerson", false);
+    const Vec3 look = camera.forward();
+    const Vec3 mouth = third ? t.position + Vec3(0, cc.halfHeight * 0.9, 0)
+                             : camera.eye + look * 0.35 - Vec3(0, 0.12, 0);
+    if (ParticleEmitter* b = bubbleEmitter_.valid() ? ctx.world.get<ParticleEmitter>(bubbleEmitter_) : nullptr) {
+        b->rate = under ? 2.5 : 0;
+        b->ceiling = swimLevel_;
+        if (Transform* bt = ctx.world.get<Transform>(bubbleEmitter_)) bt->position = mouth;
+    }
+    if (under && (breathIn_ -= dt) <= 0) {
+        breathIn_ = 3.0 + 3.0 * std::fmod(swimClock_ * 0.618, 1.0);
+        ParticleRequest r;
+        r.effect = "breath";
+        r.at = mouth;
+        r.ceiling = swimLevel_;
+        requestParticles(ctx.world, r);
+    }
+    // under a canopy, in a wingsuit: the air going past, hung ahead and stretched against the body's flight
+    if (ParticleEmitter* s = streakEmitter_.valid() ? ctx.world.get<ParticleEmitter>(streakEmitter_) : nullptr) {
+        const bool gliding = move_ == Move::Parachute || move_ == Move::Wingsuit;
+        s->rate = !gliding ? 0 : move_ == Move::Parachute ? 14.0 : 10.0 + glideVel_.length() * 1.2;
+        s->entityVelocity = glideVel_;
+        if (Transform* st = ctx.world.get<Transform>(streakEmitter_)) st->position = t.position;
+    }
+}
+
 void PlayerSystem::publishPose(FrameContext& ctx, Entity e, Transform& t, CharacterController& cc) {
     PlayerPose* p = ctx.world.get<PlayerPose>(e);
     if (!p) {
@@ -1181,6 +1249,7 @@ void PlayerSystem::publishPose(FrameContext& ctx, Entity e, Transform& t, Charac
         if (!p) return;
     }
     stepHook(t, cc, ctx.clock.fixedStep());
+    effects(ctx, e, t, cc);
     static_assert(PlayerPose::kRopePoints == RopeLine::kPoints, "the pose carries the whole rope");
     p->ropePoints = 0;
     if (ropeLine_.active())
@@ -1214,8 +1283,10 @@ void PlayerSystem::publishPose(FrameContext& ctx, Entity e, Transform& t, Charac
     p->climbCycle = climbCycle_;
     p->swimPhase = strokePhase_;
     p->swimStroke = swimStroke_;
+    p->waterLevel = swimLevel_;
     p->swimClock = swimClock_;
     p->underwater = swim_.swimming && camera.eye.y < swimLevel_ - 0.05;
+    p->grabs = grabs_;
     p->progress = 0;
     if (const Climbing* cl = ctx.world.get<Climbing>(e)) {
         // on the rails, a hand on each, alternating a rung apart as the body goes up
@@ -1525,6 +1596,20 @@ void PlayerSystem::respawn(CharacterId characterId, bool manual) {
 }
 
 void PlayerSystem::update(FrameContext& ctx) {
+    // the body's two steady particle flows (effects()): made here, outside any walk of the Transforms
+    auto emitter = [&](Entity& em, const char* effect, Real ahead, const Vec3& box, bool relative) {
+        if (em.valid() && ctx.world.alive(em)) return;
+        em = ctx.world.create();
+        ctx.world.add<Transform>(em, Transform{});
+        ParticleEmitter pe;
+        pe.effect = effect;
+        pe.ahead = ahead;
+        pe.halfExtent = box;
+        pe.relative = relative;
+        ctx.world.add<ParticleEmitter>(em, pe);
+    };
+    emitter(bubbleEmitter_, "bubble", 0, Vec3(0.03, 0.03, 0.03), false);
+    emitter(streakEmitter_, "streak", 0.45, Vec3(4, 3, 4), true);
     // Point-and-teleport: ray onto whatever physics surface it hits — deck,
     // rooftop, terrain — then stand the player there and re-attach the camera
     // so play continues in place. Two triggers, one landing:

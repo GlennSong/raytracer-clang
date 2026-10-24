@@ -1618,6 +1618,11 @@ void main() {
         // (the transparent pass blends PREMULTIPLIED: colour * alpha out, the destination times 1 - alpha)
         if (isWater) {
             outColor = vec4(color * waterA, waterA);   // composited above
+        } else if ((pc.surfaceFlags.y & 64u) != 0u) {
+            // A SPRITE (FLAG_ALPHA_FROM_MAP: a particle's puff, a beacon's glow) is not glass: its own lit colour,
+            // shaped by its map. Through the glass path below it kept only a reflection and a darkening -- a puff
+            // of steam came out a smoky pane (ADR-0239)
+            outColor = vec4(color * opacity, opacity);
         } else if (opacity < 0.999 && g.glassMode.x > 1.5 && !isWater) {
             outColor = vec4(0.0);   // RT_GLASS=none: the pane is not there (the A/B's reference)
         } else if (opacity < 0.999 && g.glassMode.x > 0.5) {

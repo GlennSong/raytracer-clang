@@ -3635,8 +3635,79 @@ void CityRenderSystem::dealOpenSigns(World& world, engine::Settings& settings, V
     settings.setString("opensigns.telemetry", buf + who);
 }
 
+void CityRenderSystem::measureJitter(engine::FrameContext& ctx) {
+    const std::string req = ctx.settings.getString("jitter.request", "");
+    if (!req.empty()) {
+        ctx.settings.setString("jitter.request", "");
+        int id = -1, frames = 300;
+        std::sscanf(req.c_str(), "%d %d", &id, &frames);
+        const Vec3 cam = ctx.view.camera.position;
+        if (id < 0) id = playerRidingAgent_;
+        if (id < 0) {   // the nearest moving vehicle
+            Real best = 80.0 * 80.0;
+            const auto& ag = sim_.agents();
+            for (std::size_t i = 0; i < ag.size(); ++i) {
+                const Agent& a = ag[i];
+                if (a.mode != Agent::Mode::Driver || a.speed < 3.0 || a.released) continue;
+                const Real dx = a.pos.x - cam.x, dz = a.pos.y - cam.z;
+                if (dx * dx + dz * dz < best) { best = dx * dx + dz * dz; id = static_cast<int>(i); }
+            }
+        }
+        jitterAgent_ = id;
+        jitterFrames_ = std::max(10, frames);
+        jitter_.clear();
+        ctx.settings.setString("jitter.result", id < 0 ? "no moving vehicle near" : "recording agent " + std::to_string(id));
+    }
+    if (jitterAgent_ < 0 || jitterAgent_ >= static_cast<int>(sim_.agents().size())) return;
+    const Agent& a = sim_.agents()[static_cast<std::size_t>(jitterAgent_)];
+    // where agentPose draws it in x/z this frame: one tick behind, interpolated by the time into the tick
+    Vec2 p = a.pos;
+    const Real period = sim_.tickPeriod();
+    if (period > 0.0 && !a.released) {
+        const Vec2 d = a.pos - a.tickFromPos;
+        if (d.x * d.x + d.y * d.y < 64.0)
+            p = a.tickFromPos + d * std::clamp(sim_.secondsSinceTick() / period, Real(0), Real(1));
+    }
+    jitter_.push_back({Vec3(p.x, 0, p.y), ctx.view.camera.position, ctx.frameDelta});
+    if (static_cast<int>(jitter_.size()) < jitterFrames_) return;
+    // per frame: how far it moved over how long the frame was -- an even glide is a steady speed every frame;
+    // a shake is speeds jumping about (a frame that moved it nothing, then one that moved it double)
+    auto stats = [&](auto pick, Real& mean, Real& cv, int& still) {
+        std::vector<Real> v;
+        for (std::size_t i = 1; i < jitter_.size(); ++i) {
+            const Real dt = std::max(jitter_[i].dt, Real(1e-4));
+            const Vec3 d = pick(jitter_[i]) - pick(jitter_[i - 1]);
+            v.push_back(std::sqrt(d.x * d.x + d.z * d.z) / dt);
+        }
+        mean = 0;
+        for (Real x : v) mean += x;
+        mean /= std::max<std::size_t>(1, v.size());
+        Real var = 0;
+        still = 0;
+        for (Real x : v) { var += (x - mean) * (x - mean); still += x < mean * 0.25 ? 1 : 0; }
+        cv = mean > 1e-6 ? std::sqrt(var / std::max<std::size_t>(1, v.size())) / mean : 0;
+    };
+    Real vm, vcv, cm, ccv, rm, rcv;
+    int vs, cs, rs;
+    stats([](const JitterSample& s) { return s.at; }, vm, vcv, vs);
+    stats([](const JitterSample& s) { return s.cam; }, cm, ccv, cs);
+    stats([](const JitterSample& s) { return s.cam - s.at; }, rm, rcv, rs);   // the camera against the vehicle
+    Real dtMean = 0;
+    for (const JitterSample& s : jitter_) dtMean += s.dt;
+    dtMean /= static_cast<Real>(jitter_.size());
+    char b[400];
+    std::snprintf(b, sizeof b,
+                  "agent %d over %zu frames (%.1f ms/frame, sim tick %.1f ms): vehicle %.2f m/s cv %.2f still %d | "
+                  "camera %.2f m/s cv %.2f still %d | camera-vs-vehicle %.3f m/s",
+                  jitterAgent_, jitter_.size(), dtMean * 1000.0, sim_.tickPeriod() * 1000.0, vm, vcv, vs, cm, ccv, cs, rm);
+    ctx.settings.setString("jitter.result", b);
+    jitterAgent_ = -1;
+    jitter_.clear();
+}
+
 void CityRenderSystem::update(engine::FrameContext& ctx) {
     feedGpuCrowd(ctx);
+    measureJitter(ctx);
     // the OPEN signs' staff: a thirtieth of them asked "at work?" each frame (dealOpenSigns counts the flags)
     if (built_ && !signedStaff_.empty()) {
         const std::size_t n = (signedStaff_.size() + 29) / 30;

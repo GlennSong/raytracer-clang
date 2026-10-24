@@ -103,7 +103,7 @@ level = {
     "environment": {"skyColor": [0.55, 0.68, 0.86]},
     "lighting": {"ambientMultiplier": 0.7, "exposure": 0.7,
                  "sun": {"castsShadow": True, "color": [1, 0.98, 0.94], "direction": [0.4, 0.72, -0.32], "intensity": 6.0}},
-    "player": {"collider": {"halfHeight": 0.4, "radius": 0.3, "shape": "capsule"}, "friction": 0.5,
+    "player": {"collider": {"halfHeight": 0.6, "radius": 0.3, "shape": "capsule"}, "friction": 0.5,
                "position": [0.0, 1.2, 26.0]},
     "vehicles": [
         {"recipe": "offroad", "seed": 1, "position": [4.0, 1.4, 22.0], "yaw": 180},

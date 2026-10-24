@@ -1091,7 +1091,8 @@ TEST_CASE(the_moves_sounds_are_deterministic_bounded_and_the_loops_seamless) {
         {"canopy_open", sfx::canopyOpen, false},  {"hook_fire", sfx::hookFire, false},
         {"hook_bite", sfx::hookBite, false},      {"rope_twang", sfx::ropeTwang, false},
         {"board_clack", sfx::boardClack, false},  {"ollie", sfx::ollie, false},
-        {"board_land", sfx::boardLand, false},
+        {"board_land", sfx::boardLand, false},    {"hand_grab", sfx::handGrab, false},
+        {"hand_hold", sfx::handHold, false},      {"metal_grab", sfx::metalGrab, false},
     };
     for (const Clip& c : clips) {
         const auto a = c.make(rate, 1), b = c.make(rate, 1);

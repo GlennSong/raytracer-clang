@@ -206,6 +206,10 @@ for dz in (-0.35, 0.35):
     block(BX0 - 0.1, BX1 + 0.1, BZ + dz - 0.03, BZ + dz + 0.03, BH - 0.03, BH + 0.03, YELLOW)
 PLAY.append({"kind": "bars", "a": [BX0, BH, BZ], "b": [BX1, BH, BZ]})
 
+# a steam vent by the start (engine/particles.h): a level's "emitters" -- an effect placed with no code
+VENT = (5.0, -4.0)
+block(VENT[0] - 0.4, VENT[0] + 0.4, VENT[1] - 0.4, VENT[1] + 0.4, 0.0, 0.04, ROCK, rough=0.9)
+
 level = {
     "version": 1,
     "entities": ENTITIES,
@@ -215,9 +219,10 @@ level = {
         "exposure": 0.35,
         "sun": {"castsShadow": True, "color": [1.0, 0.95, 0.85], "direction": [0.45, 0.75, -0.35], "intensity": 9.5},
     },
-    "player": {"collider": {"halfHeight": 0.4, "radius": 0.3, "shape": "capsule"}, "friction": 0.5,
+    "player": {"collider": {"halfHeight": 0.6, "radius": 0.3, "shape": "capsule"}, "friction": 0.5,
                "position": [0.0, 1.0, 0.0]},
     "playground": PLAY,
+    "emitters": [{"effect": "steam", "at": [VENT[0], 0.1, VENT[1]], "rate": 7, "box": [0.3, 0.02, 0.3]}],
     "pools": [{"min": [px0 + L, pz0 + L], "max": [px1 - L, pz1 - L], "level": -0.25, "depth": POOL_DEPTH - 0.25}],
 }
 

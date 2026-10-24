@@ -19,9 +19,9 @@ namespace engine {
 
 namespace {
 // The DEFAULT drop from the passed position to the feet (the lab capsule:
-// halfHeight 0.4 + radius 0.3). The real one comes from the player's own
+// halfHeight 0.6 + radius 0.3). The real one comes from the player's own
 // CharacterController — see ElevatorSystem::step's `feetDrop`.
-constexpr Real kFeet = 0.7;
+constexpr Real kFeet = 0.9;
 constexpr Real kLeafW = 0.55;        // one leaf of the 1.1 m hoistway door
 constexpr Real kLeafT = 0.04;
 constexpr Real kWallMid = -0.075;    // the leaf slides inside the 0.15 m wall

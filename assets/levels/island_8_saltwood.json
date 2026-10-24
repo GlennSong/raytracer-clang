@@ -196,7 +196,7 @@
  "name": "island_8_saltwood",
  "player": {
   "collider": {
-   "halfHeight": 0.4,
+   "halfHeight": 0.6,
    "radius": 0.3,
    "shape": "capsule"
   },

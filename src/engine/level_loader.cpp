@@ -1,4 +1,5 @@
 #include "level_loader.h"
+#include "particles.h"
 #ifdef RT_ENABLE_SCRIPTING
 #include "scripting/furniture_library_lua.h"
 #include "scripting/tree_recipes_lua.h"
@@ -1603,7 +1604,7 @@ static void loadPlayer(const json& player, World& world) {
     if (player.contains("collider")) {
         auto& col = player["collider"];
         cc.radius = col.value("radius", 0.3);
-        cc.halfHeight = col.value("halfHeight", 0.4);
+        cc.halfHeight = col.value("halfHeight", 0.6);   // 1.8 m tall with the radius, like the walkers
     }
     // 0.55 default (roads-v2.1 R4): belt-and-braces with block grading — a
     // curb+lift step tops ~0.5 on slopes; the player must always mount a
@@ -6157,6 +6158,26 @@ bool LevelLoader::load(const std::string& path,
                 mb.b = v3(pj.value("b", json()), Vec3(4, 2.2, 0));
                 world.add<MonkeyBars>(world.create(), mb);
             }
+        }
+    }
+    // PARTICLE EMITTERS placed in the level (engine/particles.h): a steam vent, a chimney, a waterfall's spray.
+    //   {"effect": "steam", "at": [x, y, z], "rate": 6, "box": [hx, hy, hz], "velocity": [x, y, z]}
+    if (root.contains("emitters") && root["emitters"].is_array()) {
+        auto v3 = [](const json& a, Vec3 d) {
+            return a.is_array() && a.size() == 3 ? Vec3(a[0].get<double>(), a[1].get<double>(), a[2].get<double>()) : d;
+        };
+        for (const json& ej : root["emitters"]) {
+            if (!ej.contains("effect") || !ej.contains("at")) continue;
+            const Entity ee = world.create();
+            Transform et;
+            et.position = v3(ej["at"], Vec3());
+            world.add<Transform>(ee, et);
+            ParticleEmitter pe;
+            pe.effect = ej["effect"].get<std::string>();
+            pe.rate = ej.value("rate", 4.0);
+            pe.halfExtent = v3(ej.value("box", json()), Vec3());
+            pe.velocity = v3(ej.value("velocity", json()), Vec3());
+            world.add<ParticleEmitter>(ee, pe);
         }
     }
     if (root.contains("pools") && root["pools"].is_array()) {

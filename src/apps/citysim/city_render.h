@@ -400,6 +400,16 @@ public:
     // shell's underside culls from inside), so without these the player sat in an empty frame over the road. The
     // cabin is invalid for a see-into body (bus, convertible), whose cabin is part of its chassis.
     engine::MeshHandle carGlassMesh(int slot) const { return slotOf(carGlassMesh_, slot); }
+    // That car's driver's hip point (the fleet recipe's `driver_seat`, its interior's own seat), for a commandeered
+    // car's driver: false when the slot publishes none.
+    bool carDriverSeat(int slot, engine::Vec3& out) const {
+        if (carDriverSeat_.empty()) return false;
+        const int n = static_cast<int>(carDriverSeat_.size());
+        const std::size_t v = static_cast<std::size_t>(((slot % n) + n) % n);
+        if (v >= carHasDriver_.size() || !carHasDriver_[v]) return false;
+        out = carDriverSeat_[v];
+        return true;
+    }
     engine::MeshHandle carCabinMesh(int slot) const { return slotOf(carCabinMesh_, slot); }
     // That car's lamp markers, for a promoted car's lenses. VehicleSystem falls
     // back to four lenses at GUESSED chassis corners when a Vehicle carries no
@@ -717,6 +727,14 @@ private:
     // PlaceMap built from them at build() (each entrance snapped to the sidewalk).
     // Drawn as projected ImGui labels + markers when showPlaces_ (needs no mesh).
     std::vector<engine::AuthoredPlace> authoredPlaces_;
+    // THE SHAKE, MEASURED (`set jitter.request "<agent|-1> <frames>"`, then `get jitter.result`): every drawn frame,
+    // where a vehicle is drawn (as agentPose places it, without its side effects) and where the camera is; then how
+    // evenly each moved -- Glenn: "buses and cars sometimes shake. Their position is not stable. Trains actually
+    // appear very stable in contrast". -1: the bus or cab you ride, else the nearest moving vehicle.
+    void measureJitter(engine::FrameContext& ctx);
+    struct JitterSample { engine::Vec3 at, cam; engine::Real dt; };
+    std::vector<JitterSample> jitter_;
+    int jitterAgent_ = -1, jitterFrames_ = 0;
     PlaceMap places_;
     bool showPlaces_ = true;         // draw place markers + labels (ImGui overlay)
     // The SUN's elevation, staged each frame from the render view so the bake

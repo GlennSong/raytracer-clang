@@ -289,6 +289,11 @@ void CityPlayerTransitSystem::rideCar(World& world, Entity player, Transform& t,
         return;
     }
     const Vec3 w = pose.transformPoint(seat);
+    if (auto* ps = world.get<engine::Passenger>(player)) {
+        ps->sitting = true;
+        ps->hipBelow = kSeatedEye - kEyeAboveTransform;
+        ps->facing = fwdAxis;
+    }
     pin(world, player, t, cc, Vec3(w.x, w.y + kSeatedEye - kEyeAboveTransform, w.z));
 }
 
@@ -442,7 +447,13 @@ void CityPlayerTransitSystem::rideBus(World& world, Real dt, const RideInput& in
 
     const Vec3 at = seatIdx_ >= 0 ? seats[static_cast<std::size_t>(seatIdx_)] : local_;
     const Real eyeAbove = seatIdx_ >= 0 ? kSeatedEye : kStandingEye;
-    if (auto* ps = world.get<engine::Passenger>(player)) { ps->local = at; ps->onFoot = seatIdx_ < 0; }   // (the footsteps)
+    if (auto* ps = world.get<engine::Passenger>(player)) {
+        ps->local = at;
+        ps->onFoot = seatIdx_ < 0;   // (the footsteps)
+        ps->sitting = seatIdx_ >= 0;
+        ps->hipBelow = kSeatedEye - kEyeAboveTransform;
+        ps->facing = fwdAxis;
+    }
     const Vec3 w = pose.transformPoint(at);
     pin(world, player, t, cc, Vec3(w.x, w.y + eyeAbove - kEyeAboveTransform, w.z));
 

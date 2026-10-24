@@ -6405,6 +6405,41 @@
     0.06,
     0.06
    ]
+  },
+  {
+   "id": 176,
+   "material": {
+    "albedo": [
+     0.45,
+     0.42,
+     0.38
+    ],
+    "checkerboard": false,
+    "emission": [
+     0,
+     0,
+     0
+    ],
+    "metallic": 0.0,
+    "opacity": 1.0,
+    "roughness": 0.9
+   },
+   "physics": {
+    "friction": 0.6,
+    "motion": "static",
+    "restitution": 0.0
+   },
+   "position": [
+    5.0,
+    0.02,
+    -4.0
+   ],
+   "shape": "box",
+   "size": [
+    0.8,
+    0.04,
+    0.8
+   ]
   }
  ],
  "environment": {
@@ -6435,7 +6470,7 @@
  },
  "player": {
   "collider": {
-   "halfHeight": 0.4,
+   "halfHeight": 0.6,
    "radius": 0.3,
    "shape": "capsule"
   },
@@ -6486,6 +6521,22 @@
     10.0,
     2.2,
     26.0
+   ]
+  }
+ ],
+ "emitters": [
+  {
+   "effect": "steam",
+   "at": [
+    5.0,
+    0.1,
+    -4.0
+   ],
+   "rate": 7,
+   "box": [
+    0.3,
+    0.02,
+    0.3
    ]
   }
  ],

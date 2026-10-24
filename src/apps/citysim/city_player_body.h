@@ -36,10 +36,17 @@ private:
                                 engine::Real scale);
 
     std::vector<engine::MeshHandle> poseMeshes_;   // player pose set, lazy
+    // SITTING as a passenger (engine::Passenger::sitting): the bus riders' seated manikin in the player's outfit, its
+    // hip `hipBelow` under the Transform; rebuilt if the scale or the drop changes
+    engine::MeshHandle seatedMesh(engine::FrameContext& ctx, engine::Real scale, engine::Real hipBelow);
+    engine::MeshHandle seated_;
+    engine::Real seatedScale_ = 0, seatedDrop_ = 0;
     bool bodyOn_ = false;                // we added the player's Renderable
     engine::Real stride_ = 0;            // walk-cycle phase (advances with speed)
     engine::Vec2 facing_{0, 1};          // last real travel direction (render yaw)
     engine::Vec3 lastPos_{0, 0, 0};      // capsule position last tick (speed src)
+    engine::Vec3 lastLocal_{0, 0, 0};    // ...and, aboard, the place in the carrier (a passenger's speed src)
+    bool aboard_ = false;
     engine::Transform prevPose_;         // last drawn pose (render interpolation)
 };
 

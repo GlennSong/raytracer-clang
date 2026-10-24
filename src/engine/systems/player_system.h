@@ -216,6 +216,18 @@ private:
     Real looseLen_ = 0;           // the rope still out while it comes back in
     RopeLine ropeLine_;
     uint32_t hookShots_ = 0, hookBites_ = 0, ropeSnaps_ = 0, chuteOpens_ = 0, ollies_ = 0, boardLands_ = 0;
+    uint32_t grabs_ = 0;
+    // THE PARTICLES the body sets off (engine/particles.h), from the counters above as they move: effects() in
+    // publishPose. The steady ones are two emitters of the player's own, made in update() (outside any walk).
+    void effects(FrameContext& ctx, Entity e, Transform& t, CharacterController& cc);
+    Entity bubbleEmitter_, streakEmitter_;
+    uint32_t fxOllies_ = 0, fxLands_ = 0, fxBites_ = 0;
+    bool fxSeen_ = false;
+    Real fxKickWas_ = 0;
+    Real splashVy_ = 0;           // into the water this fast (m/s down), a splash owed
+    Real breathIn_ = 3.0;         // s to the next breath let out under water
+    bool heldWas_ = false;        // the hands were on something last step (a grab is the step they catch)
+    Real lungeWas_ = 0;
     Real snapSpeed_ = 0, landSpeed_ = 0;
     void fireHook(Transform& t, CharacterController& cc);
     void stepHook(Transform& t, CharacterController& cc, Real dt);

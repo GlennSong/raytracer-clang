@@ -34,6 +34,9 @@ void MotionAudioSystem::onStart(FrameContext& ctx) {
     land_ = makeClip(ctx.audio, sfx::boardLand(r, 1));
     clack_ = makeClip(ctx.audio, sfx::boardClack(r, 1));
     kick_ = makeClip(ctx.audio, sfx::jumpPush(sfx::Ground::Concrete, r, 9));   // a shoe pushing off the pavement
+    grab_ = makeClip(ctx.audio, sfx::handGrab(r, 1));
+    hold_ = makeClip(ctx.audio, sfx::handHold(r, 1));
+    metal_ = makeClip(ctx.audio, sfx::metalGrab(r, 1));
 }
 
 void MotionAudioSystem::onStop(FrameContext& ctx) {
@@ -97,7 +100,7 @@ void MotionAudioSystem::update(FrameContext& ctx) {
         havePos_ = false;
         if (pose) {   // the counters move on without us: no burst of stale sounds on the way back out
             shots_ = pose->hookShots; bites_ = pose->hookBites; snaps_ = pose->ropeSnaps;
-            opens_ = pose->chuteOpens; ollies_ = pose->ollies; lands_ = pose->boardLands;
+            opens_ = pose->chuteOpens; ollies_ = pose->ollies; lands_ = pose->boardLands; grabs_ = pose->grabs;
             seen_ = true;
         }
         return;
@@ -149,7 +152,7 @@ void MotionAudioSystem::update(FrameContext& ctx) {
     // ONE-SHOTS, from the counters
     if (!seen_) {
         shots_ = pose->hookShots; bites_ = pose->hookBites; snaps_ = pose->ropeSnaps;
-        opens_ = pose->chuteOpens; ollies_ = pose->ollies; lands_ = pose->boardLands;
+        opens_ = pose->chuteOpens; ollies_ = pose->ollies; lands_ = pose->boardLands; grabs_ = pose->grabs;
         seen_ = true;
     }
     const Vec3 hand = at + Vec3(0, 0.75, 0);
@@ -161,8 +164,20 @@ void MotionAudioSystem::update(FrameContext& ctx) {
     if (pose->ollies != ollies_) oneShot(ctx, pop_, at - Vec3(0, 0.9, 0), 0.9f, pose->board == 1 ? 1.2f : 1.0f);
     if (pose->boardLands != lands_)
         oneShot(ctx, land_, at - Vec3(0, 0.9, 0), clamp01(0.3 + pose->landSpeed / 6.0), pose->board == 1 ? 1.2f : 1.0f);
+    // THE HANDS: catching hold (both, the weight coming on), and climbing, each hand set on the next hold
+    const bool metal = pose->mode == M::Ladder || pose->mode == M::Bars;
+    const Vec3 hands = (pose->handL + pose->handR) * 0.5;
+    const Vec3 handsAt = (hands - at).lengthSquared() < 9.0 ? hands : at + Vec3(0, 0.8, 0);
+    if (pose->grabs != grabs_) oneShot(ctx, metal ? metal_ : grab_, handsAt, metal ? 0.7f : 0.9f, 1.0f);
+    const bool climbing = pose->mode == M::Climb || pose->mode == M::Ladder;
+    if (climbing && std::floor(pose->climbCycle * 2.0) != std::floor(lastClimb_ * 2.0)) {
+        const bool left = static_cast<long>(std::floor(pose->climbCycle * 2.0)) % 2 == 0;
+        oneShot(ctx, pose->mode == M::Ladder ? metal_ : hold_, left ? pose->handL : pose->handR,
+                pose->mode == M::Ladder ? 0.35f : 0.55f, pose->mode == M::Ladder ? 1.1f : 1.0f);
+    }
+    lastClimb_ = pose->climbCycle;
     shots_ = pose->hookShots; bites_ = pose->hookBites; snaps_ = pose->ropeSnaps;
-    opens_ = pose->chuteOpens; ollies_ = pose->ollies; lands_ = pose->boardLands;
+    opens_ = pose->chuteOpens; ollies_ = pose->ollies; lands_ = pose->boardLands; grabs_ = pose->grabs;
 }
 
 }  // namespace engine

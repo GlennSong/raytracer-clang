@@ -16,7 +16,8 @@ namespace engine {
 //  - LOOPS held by gain and pitch: air rushing past (by speed through the air, in every mode on foot), the canopy's
 //    flutter, the wingsuit's buzz, the grapple's winch while reeling, a board's wheels rolling;
 //  - ONE-SHOTS from the pose's counters: the hook fired, biting, the rope snapping taut, the canopy opening, an
-//    ollie, a board landing; and a board's trucks over each pavement joint as it rolls.
+//    ollie, a board landing, the hands catching hold (a wall, a ledge, a rung, a bar); and a board's trucks over each
+//    pavement joint as it rolls, each hand set on the next hold as you climb.
 // FootstepSystem stays silent while these modes own the body. Vehicles' own sounds are VehicleSystem's.
 class MotionAudioSystem : public System {
 public:
@@ -37,9 +38,11 @@ private:
     bool ready_ = false;
     Loop wind_, chute_, wingsuit_, winch_, roll_;
     AudioClipHandle fire_, bite_, twang_, open_, pop_, land_, clack_, kick_;
+    AudioClipHandle grab_, hold_, metal_;   // the hands catching hold; each hand set climbing; on a rung or bar
     // what the pose's counters said last frame (a jump in a counter is a sound)
     bool seen_ = false;
-    uint32_t shots_ = 0, bites_ = 0, snaps_ = 0, opens_ = 0, ollies_ = 0, lands_ = 0;
+    uint32_t shots_ = 0, bites_ = 0, snaps_ = 0, opens_ = 0, ollies_ = 0, lands_ = 0, grabs_ = 0;
+    Real lastClimb_ = 0;   // the climb cycle last frame: each half cycle is a hand set on the next hold
     // the body's speed through the air, from where it went (smoothed)
     Vec3 lastPos_;
     bool havePos_ = false;

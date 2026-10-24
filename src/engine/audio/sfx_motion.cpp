@@ -329,6 +329,54 @@ std::vector<float> boardLand(uint32_t sampleRate, uint32_t seed) {
     return finish(acc, 0.9f, 1.2, 0.03, rate);
 }
 
+std::vector<float> handGrab(uint32_t sampleRate, uint32_t seed) {
+    // Catching hold: two palms slapping onto rock a hair apart (a dull flesh thud and a bright skin smack), the grit
+    // under them, the jacket's cloth swishing as the body's weight swings in. ~0.45 s; seeds vary it.
+    const double rate = sampleRate;
+    const auto count = static_cast<size_t>(rate * 0.45);
+    std::mt19937 rng(seed * 2246822519u + 7u);
+    std::uniform_real_distribution<double> jitter(0.9, 1.1);
+    std::vector<double> acc(count, 0.0);
+    for (int h = 0; h < 2; ++h) {
+        const double at = h * 0.028 * jitter(rng);
+        ring(acc, rate, at, 140.0 * jitter(rng), 0.025, 0.7);                 // the hand's weight
+        burst(acc, rate, rng, at, 900.0, 3500.0, 0.0004, 0.008, 0.55);        // the smack
+        burst(acc, rate, rng, at + 0.004, 2500.0, 8000.0, 0.001, 0.02, 0.12);   // grit
+    }
+    burst(acc, rate, rng, 0.05, 500.0, 2500.0, 0.06, 0.08, 0.16);             // the cloth as the body comes in
+    return finish(acc, 0.8f, 1.0, 0.03, rate);
+}
+
+std::vector<float> handHold(uint32_t sampleRate, uint32_t seed) {
+    // One hand set on the next hold, climbing: a soft pat and a little grit. ~0.2 s.
+    const double rate = sampleRate;
+    const auto count = static_cast<size_t>(rate * 0.2);
+    std::mt19937 rng(seed * 3266489917u + 41u);
+    std::uniform_real_distribution<double> jitter(0.88, 1.12);
+    std::vector<double> acc(count, 0.0);
+    ring(acc, rate, 0.0, 170.0 * jitter(rng), 0.018, 0.5);
+    burst(acc, rate, rng, 0.0, 1100.0, 3200.0, 0.0006, 0.006, 0.35);
+    burst(acc, rate, rng, 0.003, 3000.0, 9000.0, 0.001, 0.015, 0.08);
+    return finish(acc, 0.6f, 1.0, 0.02, rate);
+}
+
+std::vector<float> metalGrab(uint32_t sampleRate, uint32_t seed) {
+    // A hand closing on a steel rung or a bar: the palm's slap and the tube's dull ring (a hollow pipe, damped by the
+    // grip, so short and low), a faint rattle at its fixing. ~0.4 s.
+    const double rate = sampleRate;
+    const auto count = static_cast<size_t>(rate * 0.4);
+    std::mt19937 rng(seed * 2654435761u + 67u);
+    std::uniform_real_distribution<double> jitter(0.94, 1.06);
+    std::vector<double> acc(count, 0.0);
+    const double base = 610.0 * jitter(rng);
+    const double ratios[3] = {1.0, 2.76, 5.40}, gains[3] = {1.0, 0.45, 0.2};
+    for (int k = 0; k < 3; ++k) ring(acc, rate, 0.0, base * ratios[k], 0.06 / (1.0 + 0.5 * k), 0.3 * gains[k]);
+    ring(acc, rate, 0.0, 150.0, 0.02, 0.6);
+    burst(acc, rate, rng, 0.0, 900.0, 3500.0, 0.0004, 0.006, 0.45);
+    burst(acc, rate, rng, 0.012, 2000.0, 6000.0, 0.002, 0.02, 0.07);
+    return finish(acc, 0.75f, 1.0, 0.03, rate);
+}
+
 std::vector<float> freewheel(uint32_t sampleRate, uint32_t seed) {
     // A bicycle coasting: the freewheel's pawls clicking over the ratchet, 40 clicks a second at pitch 1 (the caller
     // sets pitch from the wheel's revs). A seamless 1 s loop.

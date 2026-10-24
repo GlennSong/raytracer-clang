@@ -48,7 +48,7 @@
   ],
   "player": {
     "position": [0, 2, 9],
-    "collider": { "shape": "capsule", "radius": 0.3, "halfHeight": 0.4 },
+    "collider": { "shape": "capsule", "radius": 0.3, "halfHeight": 0.6 },
     "friction": 0.5
   },
   "lighting": {

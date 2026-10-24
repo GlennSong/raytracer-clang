@@ -319,6 +319,11 @@ void CityVehicleSystem::update(engine::FrameContext& ctx) {
     for (const PromotedLamp& l :
          promotedLamps(city_.carLamps(a.vehicle), &seat, &hasSeat))
         v.lamps.push_back(Vehicle::Lamp{Entity{}, l.local, l.front, l.left});
+    // THE DRIVER'S SEAT: a marker if the recipe placed one, else the fleet recipe's own `driver_seat` (the Lua fleet
+    // publishes the seat apart from its lamps, so the marker was never there and VehicleSystem's guess -- the LEFT
+    // seat -- put the player in the passenger's place of a right-hand-drive car; Glenn: "when I'm driving a car I'm
+    // in the wrong seat")
+    if (!hasSeat) hasSeat = city_.carDriverSeat(a.vehicle, seat);
     if (hasSeat) {
         v.driverSeat = seat;
         v.hasDriverSeat = true;

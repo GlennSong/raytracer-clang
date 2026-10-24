@@ -119,6 +119,11 @@ std::vector<float> ropeTwang(uint32_t sampleRate = 48000, uint32_t seed = 1);   
 std::vector<float> boardClack(uint32_t sampleRate = 48000, uint32_t seed = 1);    // one truck over a pavement joint
 std::vector<float> ollie(uint32_t sampleRate = 48000, uint32_t seed = 1);         // the tail's pop + the grip-tape drag
 std::vector<float> boardLand(uint32_t sampleRate = 48000, uint32_t seed = 1);     // both trucks back down, a rattle
+// THE HANDS (Glenn, 2026-10-24: "some sfx when grabbing to reinforce the idea of climbing")
+std::vector<float> handGrab(uint32_t sampleRate = 48000, uint32_t seed = 1);      // palms slapping onto stone, the
+                                                                                  // body's weight coming on, cloth
+std::vector<float> handHold(uint32_t sampleRate = 48000, uint32_t seed = 1);      // one hand set on a hold: a pat, grit
+std::vector<float> metalGrab(uint32_t sampleRate = 48000, uint32_t seed = 1);     // a hand closing on a rung or a bar
 
 // The firing rate the clip is baked at: pitch 1.0 sounds like this many
 // combustion events per second (~1700 rpm on a four-cylinder four-stroke, two

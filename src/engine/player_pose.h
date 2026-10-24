@@ -26,6 +26,7 @@ struct PlayerPose {
     Real swimStroke = 0;      // 0 treading water upright (still), 1 flat out in the crawl (going somewhere), eased
     Real swimClock = 0;       // s afloat: the treading kick and the hands sculling run on it
     bool underwater = false;
+    Real waterLevel = 0;      // swimming: the surface's height (a bubble pops there)
     Real stamina = 1;         // 0..1
     Real landed = 0;          // a landing's jolt, 1 on touchdown easing to 0
     // GLIDING: the canopy's heading (horizontal unit) and how far out it is (0..1); the body's speed through the air
@@ -50,6 +51,7 @@ struct PlayerPose {
     uint32_t chuteOpens = 0;
     uint32_t ollies = 0;
     uint32_t boardLands = 0;  // the wheels back down after air
+    uint32_t grabs = 0;       // the hands caught hold: a wall, a ledge, a rung, a bar
     Real landSpeed = 0;       // ...this fast down (m/s)
     bool grounded = false;
     // ON A BOARD: which (0 skateboard, 1 scooter), which way it points, how far through a kick (0..1, 0 = none)

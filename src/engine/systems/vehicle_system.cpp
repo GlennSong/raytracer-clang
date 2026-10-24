@@ -9,6 +9,7 @@
 #include "../vehicle_lamps.h"
 #include "../vehicle_audio.h"
 #include "../audio/sfx.h"
+#include "../particles.h"
 #include "../procgen/vehicle/occupant.h"
 #include "../procgen/person.h"
 
@@ -501,12 +502,12 @@ void VehicleSystem::writeBack(FrameContext& ctx) {
                     // The recipe's own hip point when it has one — the occupant
                     // mesh's origin IS its hip, so this lines the two up exactly
                     // instead of guessing an offset off the chassis box.
-                    // Fallback seat on the car's LEFT (+X): left-hand drive,
-                    // like the interior recipe's driverOnLeft default.
+                    // Fallback seat on the driver's RIGHT (-X; +X is the driver's left, car_mesh.cpp): the world
+                    // drives on the left, so its cars are right-hand drive, as the fleet's interiors are built.
                     const Vec3 seat =
                         v.hasDriverSeat
                             ? v.driverSeat
-                            : Vec3(hx.x * 0.35, hx.y * 0.15, -hx.z * 0.05);
+                            : Vec3(-hx.x * 0.35, hx.y * 0.15, -hx.z * 0.05);
                     if (occupied)
                         dt->position = t.position + t.orientation.rotate(seat);
                     else
@@ -796,6 +797,7 @@ void VehicleSystem::update(FrameContext& ctx) {
 
     updateHorn(ctx);
     updateEngines(ctx);
+    measureSlide(ctx);
     updateTyres(ctx);
 }
 
@@ -899,6 +901,64 @@ void VehicleSystem::updateEngines(FrameContext& ctx) {
     }
 }
 
+// HOW HARD THE PLAYER'S TYRES SLIDE, 0..1, onto Vehicle::slide: sideways (the slip angle -- a drift) or spinning /
+// locked along (a burnout, a stop). The squeal's loudness and ParticleSystem's tyre smoke both read it.
+void VehicleSystem::measureSlide(FrameContext& ctx) {
+    for (Entity& s : smoke_)
+        if (!s.valid() || !ctx.world.alive(s)) {
+            s = ctx.world.create();
+            ctx.world.add<Transform>(s, Transform{});
+            ParticleEmitter pe;
+            pe.effect = "smoke";
+            pe.halfExtent = Vec3(0.15, 0.05, 0.15);
+            ctx.world.add<ParticleEmitter>(s, pe);
+        }
+    auto smokeOff = [&]() {
+        for (Entity s : smoke_)
+            if (ParticleEmitter* pe = ctx.world.get<ParticleEmitter>(s)) pe->rate = 0;
+    };
+    Entity car;
+    ctx.world.each<ControlledBy, InVehicle>([&](Entity, ControlledBy&, InVehicle& iv) {
+        if (!car.valid()) car = iv.vehicle;
+    });
+    Vehicle* v = car.valid() && ctx.world.alive(car) ? ctx.world.get<Vehicle>(car) : nullptr;
+    if (!v || v->vehicleId == PhysicsWorld::INVALID_VEHICLE) return smokeOff();
+    PhysicsWorld& pw = physicsSys.physicsWorld();
+    const PhysicsWorld::VehicleTelemetry tel = pw.vehicleTelemetry(v->vehicleId);
+    auto smooth = [](Real a, Real b, Real x) {
+        const Real u = std::clamp((x - a) / (b - a), Real(0), Real(1));
+        return u * u * (3 - 2 * u);
+    };
+    Real along = 0;
+    for (std::size_t i = 0; i < tel.wheelSlip.size(); ++i)
+        if (i < tel.wheelContact.size() && tel.wheelContact[i]) along = std::max(along, std::fabs(tel.wheelSlip[i]));
+    // ONLY A DRIFT OR A HARD STOP (Glenn, 2026-10-24: "still kinda loud. We should use it when we brake hard or
+    // drift"): a slide the drift has hold of, by its slip angle; or the brake pressed hard at speed, more as the wheels
+    // lock. A brisk corner, a wheelspin pull-away, a bump: silent.
+    const PhysicsWorld::DriftState drift = pw.vehicleDrift(v->vehicleId);
+    const Real speed = std::fabs(v->speed);
+    const Real drifting = drift.drifting ? smooth(6.0, 26.0, std::fabs(drift.slipDeg)) : Real(0);
+    const Real braking = smooth(0.55, 0.95, std::max(v->brake, v->handBrake)) * (0.6 + 0.4 * smooth(0.2, 0.7, along));
+    v->slide = v->pedalled ? Real(0) : std::max(drifting, braking) * smooth(4.0, 11.0, speed);
+    // SMOKE off the rear tyres while they slide (Glenn: "dust kick up when you ... drift around a corner")
+    const Transform* ct = ctx.world.get<Transform>(car);
+    if (!ct) return smokeOff();
+    const Vec3 ahead = ct->orientation.rotate(Vec3(0, 0, 1));
+    int k = 0;
+    for (const PhysicsWorld::VehicleWheel& w : v->config.wheels) {
+        if (w.position.z > 0 || k >= 2) continue;   // the rear ones
+        if (Transform* st = ctx.world.get<Transform>(smoke_[k]))
+            st->position = ct->position + ct->orientation.rotate(w.position) - Vec3(0, w.radius * 0.8, 0);
+        if (ParticleEmitter* pe = ctx.world.get<ParticleEmitter>(smoke_[k])) {
+            pe->rate = v->slide > 0.1 ? 40.0 * v->slide : 0.0;
+            pe->velocity = ahead * (v->speed * 0.2);
+        }
+        ++k;
+    }
+    for (; k < 2; ++k)
+        if (ParticleEmitter* pe = ctx.world.get<ParticleEmitter>(smoke_[k])) pe->rate = 0;
+}
+
 void VehicleSystem::updateTyres(FrameContext& ctx) {
     if (!ctx.audio.ready()) return;
     if (!tyreClips_) {
@@ -946,22 +1006,13 @@ void VehicleSystem::updateTyres(FrameContext& ctx) {
         drive(roll_, 0, 1, ear, 10);
         return;
     }
-    PhysicsWorld& pw = physicsSys.physicsWorld();
     const Real speed = std::fabs(v->speed);
-    // SQUEAL: the tyres sliding sideways (the slip angle -- a drift) or spinning / locked along (a burnout, a stop)
-    const PhysicsWorld::VehicleTelemetry tel = pw.vehicleTelemetry(v->vehicleId);
+    const Real slide = v->slide;   // (measureSlide)
     auto smooth = [](Real a, Real b, Real x) {
         const Real u = std::clamp((x - a) / (b - a), Real(0), Real(1));
         return u * u * (3 - 2 * u);
     };
-    Real along = 0;
-    for (std::size_t i = 0; i < tel.wheelSlip.size(); ++i)
-        if (i < tel.wheelContact.size() && tel.wheelContact[i]) along = std::max(along, std::fabs(tel.wheelSlip[i]));
-    const Real side = std::fabs(pw.vehicleDrift(v->vehicleId).slipDeg);
-    // (Glenn, 2026-10-24: "a little too much": from 7 deg it squealed through every brisk corner, at 0.8 -- now only
-    // a real slide, and quieter)
-    const Real slide = std::max(smooth(12.0, 32.0, side), smooth(0.35, 0.9, along)) * smooth(3.0, 9.0, speed);
-    drive(squeal_, static_cast<float>(0.45 * slide), static_cast<float>(0.9 + 0.15 * slide + speed / 150.0),
+    drive(squeal_, static_cast<float>(0.3 * slide), static_cast<float>(0.9 + 0.15 * slide + speed / 150.0),
           t->position, 9);
     // A BICYCLE: the freewheel's pawls ticking while it coasts (as fast as the back wheel turns), the tyres' hum
     const bool bike = v->pedalled;

@@ -45,6 +45,7 @@
 #include "../engine/systems/underwater_system.h"
 #ifdef RT_ENABLE_PHYSICS
 #include "../engine/systems/footstep_system.h"
+#include "../engine/systems/particle_system.h"
 #include "../engine/systems/motion_audio_system.h"
 #endif
 #include "../engine/audio/sfx.h"
@@ -261,6 +262,7 @@ ArenaState::ArenaState(Window& window, Renderer& renderer,
 #ifdef RT_ENABLE_PHYSICS
     addSystem<FootstepSystem>(physSys);    // footsteps by surface, jump + landing, grass swish (#62-#64)
     addSystem<MotionAudioSystem>();        // the moves heard: wind, the grapple, the canopy, boards
+    addSystem<ParticleSystem>();           // dust, smoke, bubbles, sparks: requested bursts + emitters, drawn
 #endif
     addSystem<WaterAmbienceSystem>();      // surf along the coast, rivers running (#65)
     addSystem<CameraPanelSystem>(camSys);

@@ -11830,3 +11830,58 @@ squeal."
       with climbing by angle: pushing straight at a climbable wall (within ~53°) still grabs it in the air; a
       glancing pass plus jump kicks off it.
   - **Tyre squeal** starts at a 12° slide (was 7°) and plays at 0.45 volume (was 0.8).
+
+## ADR-0239 — Particles as data, asked for by name; sprites leave the glass path; grab sounds
+
+**Context.** Glenn: "We don't have a particle system, but I wonder if we could introduce a rudimentary one to have
+some dust kick up when you kick for the skateboard, drift around a corner, or bubbles underwater. Maybe some wind
+currents when you're floating down with the parachute ... where the hook hits it has a little spark. Also grinding a
+rail could give you a little spark." Then, midway: "Is it very pointed to these asks or is it more generalized?"
+The first cut was pointed: six kinds fixed in C++, and one system watching the player's pose and car to decide when.
+It was reshaped before it landed.
+
+**Decision.**
+- **Effects are data** (`engine/particles.h`, `assets/scripts/particles.lua`, `scripting/particles_lua.cpp`). A
+  named effect sets how its particles move (gravity, drag, wobble), how long they live, how they look (puff, ring or
+  glow sprite; colour; glow; size and fade over the life; a stretch along the speed) and its default burst. The C++
+  built-ins mirror the file, and a test keeps the two alike. An unknown field is an error, and an entry naming a
+  built-in edits only the fields it gives. Shipped: dust, smoke, bubble, breath, streak, spark, splash, steam.
+- **Anything sets them off by name.** `requestParticles(world, "spark", at, dir)` queues a burst. A
+  `ParticleEmitter` on any entity with a Transform flows at a `rate` its owner sets; it can start ahead of a moving
+  body and stretch against its velocity. A level's `"emitters"` list places them (the lab's steam vent).
+  `ParticleSystem` spends the queue, runs the emitters, steps and draws; it decides nothing about when.
+- **The triggers live where things happen.** PlayerSystem::effects:
+  - board kick, ollie and landing: dust;
+  - hook biting: sparks;
+  - into the water: a splash;
+  - under it: a bubble emitter at the mouth and a breath let out every 3–6 s;
+  - under a canopy or in a wingsuit: a streak emitter.
+
+  VehicleSystem: a smoke emitter on each rear wheel at 40 × `Vehicle::slide` a second. The slide is now measured
+  once (`measureSlide`) and shared with the squeal.
+- **Drawn** as camera-facing quads in InstanceGroups, the beacon sprites' way. A group has one opacity, so each
+  effect draws in 4 opacity steps, each particle in the nearest, back to front within a group.
+  - The sprite's normal leans to its own up. A card facing the camera is lit only when the camera faces the sun;
+    steam came out black looking the other way.
+- **Sprites skip the glass path in mesh.frag.** Since glass-as-a-filter (2026-10-16), every transparent material
+  output only a reflection plus a darkening. A FLAG_ALPHA_FROM_MAP material (particles, beacon glows) now blends its
+  own lit colour, premultiplied. The beacon sprites were on the glass path too.
+- **Grab sounds** (Glenn: "some sfx when grabbing to reinforce the idea of climbing"):
+  - `PlayerPose::grabs` counts the hands catching hold: a wall, a ledge, the bars, a ladder, the top of a lunge.
+  - MotionAudioSystem plays `handGrab` (two palms on rock, grit, cloth) or `metalGrab` (a damped tube) on a rung or
+    bar, and `handHold` for each hand set while climbing (each half climb cycle; a quieter `metalGrab` on a ladder).
+
+**Not yet.**
+- Collision (dust and sparks pass through what they would bounce off).
+- A Lua binding to request effects from scripts.
+- Grind sparks (`requestParticles(world, "spark", ...)` is ready for when grinds exist).
+- Per-particle alpha in one draw (the 4 steps are the workaround).
+- **The player is 1.8 m** (Glenn: "I look like a child next to the other agents"): the capsule is half-height 0.6 +
+  radius 0.3 in every level, in the loader's default, in CharacterController's and in the generators (movement_lab,
+  offroad_course). It was 1.4 m, the walkers 1.8 m; the posed body is scaled to the capsule, so third person showed
+  it. The eye stays 0.7 above the capsule centre: 1.6 m. Everything else reads the capsule (mantle, climb, ladder,
+  lift, seat, swim); the lift's fallback constant was the one hard-coded 0.7.
+- **Tyre squeal only on a drift or a hard stop** ("still kinda loud. We should use it when we brake hard or drift"):
+  `Vehicle::slide` is the drift's slip angle while the drift holds the car, or the brake/handbrake pressed past
+  half at speed (more as the wheels lock). Volume 0.3, down from 0.45. Wheelspin and brisk cornering are silent.
+  The tyre smoke follows the same measure.
