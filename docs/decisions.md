@@ -11503,3 +11503,33 @@ The switch happened in one frame, a whole cell at a time.
   - `RT_DUMP_STATS` counts the fading draws.
 - **Measured** on island_8_nature flight 1 (40 m up, 30 m/s, local clang): p50 13.9 / p99 24.6 ms with the fades,
   14.0 / 24.8 ms without.
+
+## ADR-0227 — A party wall is blank only as high as its neighbour
+
+**Accepted.** On island_8_nature, glass towers showed a whole grey side: a blank party wall from the ground to
+the roof, against a walk-up a fraction of their height. The lot pass marks a lot's shared side line as a party
+wall (city_lots, "ATTACHED BUILDINGS") but never set `partyTop`, so every party wall stayed blank to the roof.
+`BuildingParams` already describes the fix ("a taller cell keeps its windows above a lower neighbour's roof"), and
+only the complex's cells (cells.cpp `Complex::resolve`) used it.
+
+- **After PASS C, not during it.** PASS C grows one lot at a time, and a lot's neighbour may not have been grown
+  yet; its floors are decided over a thousand lines of the loop (massing rescues, freeway caps), so they can't be
+  predicted ahead. PASS C now records every attached building it grows (plan, params, base, and the runs of the
+  parts meshes it was merged into). A pass after it sets each wall's top from what stands against it.
+- **The neighbour's height on the line.** The neighbour is an attached building on the same block, with a party
+  wall on the same line facing the other way, overlapping it by at least 1 m. Its height is the top of its highest
+  storey whose plan still stands on that line, so a tower set back on a podium counts as the podium.
+- **The wall's top.** It is the last of the building's own storeys (not the roof exit's bulkhead) whose floor is
+  under the neighbour's top plus a 1 m sill, and at least storey 1, as a complex's are. A wall the neighbour reaches
+  to the top storey is unchanged.
+- **No neighbour, no change.** A wall with nothing against it stays blank to the roof: the bare party wall by a
+  vacant lot. The ground storey is always blank (`partyEdge` without a storey), so doors, entrances and
+  shopfronts do not move.
+- **A building that changes is grown again**, full and flat tiers, with its new tops. Its unit's params take
+  them, so the streamed interior paints the same storeys. Its first growth is cut out of the parts meshes (each
+  run is a whole append, so indices past it shift down by the vertices cut). Heights don't depend on the tops, so
+  one pass settles it.
+- **Measured (island_8_nature):** 940 of 3,446 attached buildings take windows above a lower neighbour; the
+  lots stage 145 → 159 s; bundle 1.65 GB. Lots tag 2026-10-23.2.
+- **Test:** `a_party_wall_is_blank_only_as_high_as_its_neighbour` (test_city_lots): no glass in the wall up to its
+  top, glass above it, the count matches the log's, every parts index still in its mesh.

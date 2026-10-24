@@ -4879,6 +4879,34 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
             cands[ci].landmark = cands[ci].lot.bigBox || cands[ci].lot.campus || cands[ci].lot.depot ? -1 : placed[ci];   // a big-box block keeps its store, a campus its halls
     }
 
+    // Every ATTACHED building PASS C grows, for the pass after it that stops each party wall at its neighbour's roof:
+    // where it went in `out`, its unit, what it was grown from, and the runs of the parts meshes it was merged into.
+    struct PartRun { int mi = 0; std::size_t v0 = 0, v1 = 0, i0 = 0, i1 = 0; };
+    struct Attached {
+        std::size_t outAt = 0, unitAt = 0;
+        int block = -1;
+        Poly2 plan;
+        BuildingParams bp;
+        Real baseY = 0;
+        std::vector<PartRun> runs, flatRuns;
+    };
+    std::vector<Attached> attached;
+    auto mergePartsRuns = [](std::vector<RenderMesh>* dst, const BuildingMesh& bm) {
+        std::vector<PartRun> runs;
+        if (!dst) return runs;
+        for (const RenderMesh& part : bm.parts) {
+            const int mi = part.materialIndex;
+            if (mi < 0 || mi >= static_cast<int>(dst->size())) continue;
+            RenderMesh& m = (*dst)[mi];
+            PartRun r{mi, m.vertices.size(), 0, m.indices.size(), 0};
+            MeshBuilder::append(m, part);
+            r.v1 = m.vertices.size();
+            r.i1 = m.indices.size();
+            runs.push_back(r);
+        }
+        return runs;
+    };
+
     // ---- PASS C: grow every lot (landmarks use their PLACED recipes) --------
     for (const LotCand& cand : cands) {
         {
@@ -6624,9 +6652,15 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                           o2 + f2 * scope.size.z};
             }
             if (bm.parts.empty()) continue;
+            const std::size_t unitAt = b.units.size();
             collectUnit(b, b.plan, bp, b.baseY, bm);
-            mergeParts(outParts, bm);
-            mergeParts(outFlatParts, bmFlat);
+            if (planOk && bp.partyWalls > 0) {
+                attached.push_back({out.size(), unitAt, cand.block, plan, bp, b.baseY,
+                                    mergePartsRuns(outParts, bm), mergePartsRuns(outFlatParts, bmFlat)});
+            } else {
+                mergeParts(outParts, bm);
+                mergeParts(outFlatParts, bmFlat);
+            }
             b.height = bm.height > 0 ? bm.height : 8.0;
             if (!paved) emitFoundation(b.plan, b.groundY, b.baseY);   // the plate is the foundation of a paved lot
             else sculptPaving(b.pavedLot, b.paveY, meshGround, outParts, outFlatParts);
@@ -6819,6 +6853,123 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
             out.push_back(std::move(b));
         }
     }
+    // PARTY WALLS STOP AT THE NEIGHBOUR'S ROOF (Glenn's grey glass towers, 2026-10-23): PASS C grows a lot before
+    // its neighbour, so every party wall went up blank to the roof, and a tower against a walk-up showed a whole
+    // blank side. Now that every building on the block stands, each wall is blank only as high as the neighbour
+    // against it (its highest storey still on the line), and the storeys above take their windows (partyTop, as a
+    // complex's cells do). A building that changes is grown again and its first growth cut out of the parts. A wall
+    // with no building against it stays blank to the roof: the bare party wall by a vacant lot.
+    {
+        constexpr Real kSill = 1.0;   // a storey keeps its windows only once it clears the neighbour's roof by a sill
+        std::map<int, std::vector<std::size_t>> byBlock;
+        for (std::size_t i = 0; i < attached.size(); ++i) byBlock[attached[i].block].push_back(i);
+        std::vector<std::vector<StoreyPlan>> storeys(attached.size());
+        auto storeysOf = [&](std::size_t i) -> const std::vector<StoreyPlan>& {
+            if (storeys[i].empty()) storeys[i] = storeyPlans(attached[i].plan, attached[i].bp);
+            return storeys[i];
+        };
+        // along the line's tangent, the run a plan stands on it
+        auto runOn = [](const Poly2& plan, const Vec2& n, Real at, Real& t0, Real& t1) {
+            const Vec2 t(-n.y, n.x);
+            t0 = 1e30; t1 = -1e30;
+            for (const Vec2& v : plan)
+                if (std::fabs(dot(v, n) - at) < 0.35) { t0 = std::min(t0, dot(v, t)); t1 = std::max(t1, dot(v, t)); }
+            return t1 > t0;
+        };
+        std::vector<std::vector<PartRun>> drop(outParts ? outParts->size() : 0), dropFlat(outFlatParts ? outFlatParts->size() : 0);
+        int topped = 0;
+        for (std::size_t ai = 0; ai < attached.size(); ++ai) {
+            Attached& A = attached[ai];
+            const std::vector<StoreyPlan>& stA = storeysOf(ai);
+            BuildingParams np = A.bp;
+            bool changed = false;
+            for (int k = 0; k < std::min<int>(np.partyWalls, 4); ++k) {
+                if (np.partyTop[k] != 0) continue;
+                const Vec2 n = np.partyN[k];
+                const Real at = np.partyAt[k];
+                Real a0, a1;
+                if (!runOn(A.plan, n, at, a0, a1)) continue;
+                Real against = -1e30;   // world Y of the neighbours' highest storey top on the line
+                for (std::size_t bi : byBlock[A.block]) {
+                    if (bi == ai) continue;
+                    const Attached& B = attached[bi];
+                    for (int kb = 0; kb < std::min<int>(B.bp.partyWalls, 4); ++kb) {
+                        if (dot(B.bp.partyN[kb], n) > -0.98 || std::fabs(B.bp.partyAt[kb] + at) > 0.35) continue;
+                        Real b0, b1;
+                        if (!runOn(B.plan, n, at, b0, b1) || std::min(a1, b1) - std::max(a0, b0) < 1.0) continue;
+                        BuildingParams one = B.bp;
+                        one.partyWalls = 1;
+                        one.partyN[0] = B.bp.partyN[kb];
+                        one.partyAt[0] = B.bp.partyAt[kb];
+                        one.partyTop[0] = 0;
+                        for (const StoreyPlan& sp : storeysOf(bi)) {
+                            Poly2 cp = sp.plan;
+                            ensureCCW(cp);
+                            for (std::size_t e = 0; e < cp.size(); ++e)
+                                if (partyEdge(cp, one, e)) { against = std::max(against, B.baseY + sp.y0 + sp.h); break; }
+                        }
+                    }
+                }
+                if (against < -1e29) continue;   // nothing against it
+                // the building's own storeys (the plans run on past them: a roof exit's bulkhead)
+                const int floors = std::min(static_cast<int>(stA.size()), np.floors);
+                int top = 1;
+                for (int s = 1; s < floors; ++s)
+                    if (A.baseY + stA[s].y0 + kSill < against) top = s;
+                if (top + 1 >= floors) continue;   // the neighbour reaches the top storey
+                np.partyTop[k] = static_cast<int16_t>(top);
+                changed = true;
+            }
+            if (!changed) continue;
+            const BuildingMesh bm = growPlanBuilding(A.plan, np, A.baseY);
+            if (bm.parts.empty()) continue;
+            LotBuilding& b = out[A.outAt];
+            LotBuilding fresh;
+            collectUnit(fresh, A.plan, np, A.baseY, bm);
+            b.units[A.unitAt] = std::move(fresh.units.front());
+            for (const PartRun& r : A.runs) drop[r.mi].push_back(r);
+            mergeParts(outParts, bm);
+            if (outFlatParts) {
+                for (const PartRun& r : A.flatRuns) dropFlat[r.mi].push_back(r);
+                mergeParts(outFlatParts, growPlanBuilding(A.plan, np, A.baseY, FacadeDetail::Flat));
+            }
+            A.bp = np;
+            ++topped;
+        }
+        // cut the first growths out: the runs are whole appends, so an index outside a run moves down by the
+        // vertices cut below it
+        auto cut = [](RenderMesh& m, std::vector<PartRun>& runs) {
+            if (runs.empty()) return;
+            std::sort(runs.begin(), runs.end(), [](const PartRun& a, const PartRun& b) { return a.v0 < b.v0; });
+            std::vector<std::size_t> below(runs.size() + 1, 0);   // vertices cut before run r
+            for (std::size_t r = 0; r < runs.size(); ++r) below[r + 1] = below[r] + (runs[r].v1 - runs[r].v0);
+            std::vector<Vertex> vs;
+            vs.reserve(m.vertices.size() - below.back());
+            std::size_t v = 0;
+            for (const PartRun& r : runs) { vs.insert(vs.end(), m.vertices.begin() + v, m.vertices.begin() + r.v0); v = r.v1; }
+            vs.insert(vs.end(), m.vertices.begin() + v, m.vertices.end());
+            std::vector<uint32_t> is;
+            is.reserve(m.indices.size());
+            std::size_t i = 0;
+            auto keep = [&](std::size_t from, std::size_t to) {
+                for (std::size_t j = from; j < to; ++j) {
+                    const std::size_t x = m.indices[j];
+                    const std::size_t r = static_cast<std::size_t>(
+                        std::upper_bound(runs.begin(), runs.end(), x, [](std::size_t q, const PartRun& pr) { return q < pr.v0; }) - runs.begin());
+                    is.push_back(static_cast<uint32_t>(x - below[r]));
+                }
+            };
+            std::vector<PartRun> byI = runs;
+            std::sort(byI.begin(), byI.end(), [](const PartRun& a, const PartRun& b) { return a.i0 < b.i0; });
+            for (const PartRun& r : byI) { keep(i, r.i0); i = r.i1; }
+            keep(i, m.indices.size());
+            m.vertices = std::move(vs);
+            m.indices = std::move(is);
+        };
+        for (std::size_t mi = 0; mi < drop.size(); ++mi) cut((*outParts)[mi], drop[mi]);
+        for (std::size_t mi = 0; mi < dropFlat.size(); ++mi) cut((*outFlatParts)[mi], dropFlat[mi]);
+        dbg->partyTopped = topped;
+    }
     if (underFwCount > 0)
         LOG_INFO << "[citylots] under-freeway lots: " << underFwCount
                  << " re-zoned to fit beneath the deck (open space / parking / "
@@ -6868,7 +7019,7 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                      << static_cast<int>(a.y);
         LOG_INFO << "[citylots] " << dbg->blocks.size() << " blocks -> "
                  << dbg->lots.size() << " lots (" << dbg->wholeBlocks << " whole-block landmark sites), " << nBuilt << " built ("
-                 << dbg->attachedBuilt << " attached of " << dbg->attachedSites << " sites run to a party line, "
+                 << dbg->attachedBuilt << " attached (" << dbg->partyTopped << " with windows above a lower neighbour) of " << dbg->attachedSites << " sites run to a party line, "
                  << dbg->bigBoxBlocks << " big-box blocks, " << dbg->nightlifeBuildings << " nightlife buildings, " << dbg->towerVenues << " towers with stores or sky dining), "
                  << nGreen << " green, " << nCourt << " courts | open lots: "
                  << dbg->openCarParks << " car parks, " << dbg->openPlaygrounds << " playgrounds, "

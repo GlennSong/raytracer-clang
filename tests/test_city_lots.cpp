@@ -106,6 +106,56 @@ TEST_CASE(lot_buildings_are_deterministic) {
     CHECK(!d.empty());
 }
 
+// PARTY WALLS STOP AT THE NEIGHBOUR'S ROOF (Glenn's grey glass towers, 2026-10-23): an attached building taller
+// than the one against it keeps its windows above that roof. Every unit grown with a party top has no glass in that
+// wall up to it and glass above it; its first growth is cut out of the parts (every index still in its mesh).
+TEST_CASE(a_party_wall_is_blank_only_as_high_as_its_neighbour) {
+    int topped = 0, checked = 0;
+    for (uint32_t seed = 1; seed <= 6 && checked < 3; ++seed) {
+        LotParams p;
+        p.center = {-60, -60};
+        p.seed = seed;
+        LotPlanDebug dbg;
+        std::vector<RenderMesh> parts;
+        const std::vector<LotBuilding> b = growLotBuildings(squareBlocks(), p, &dbg, &parts);
+        for (const RenderMesh& m : parts)
+            for (uint32_t i : m.indices) CHECK(i < m.vertices.size());
+        int units = 0;
+        for (const LotBuilding& lb : b)
+            for (const BuildingUnit& u : lb.units) {
+                int k = -1;
+                for (int w = 0; w < std::min<int>(u.params.partyWalls, 4); ++w)
+                    if (u.params.partyTop[w] > 0) k = w;
+                if (k < 0) continue;
+                ++units;
+                const std::vector<StoreyPlan> st = storeyPlans(u.plan, u.params);
+                const Vec2 N = u.params.partyN[k];
+                const Real at = u.params.partyAt[k];
+                const BuildingMesh bm = growPlanBuilding(u.plan, u.params, u.baseY);
+                int below = 0, above = 0;
+                for (const RenderMesh& part : bm.parts) {
+                    if (part.materialIndex != static_cast<int>(PartId::Glass) &&
+                        part.materialIndex != static_cast<int>(PartId::GlassLit) &&
+                        part.materialIndex != static_cast<int>(PartId::GlassClear)) continue;
+                    for (const Vertex& v : part.vertices) {
+                        const Vec2 q(v.position.x, v.position.z);
+                        if (std::fabs(dot(q, N) - at) > 0.6 || v.normal.x * N.x + v.normal.z * N.y < 0.9) continue;
+                        for (std::size_t s = 0; s < st.size(); ++s)
+                            if (v.position.y > u.baseY + st[s].y0 + 0.05 && v.position.y < u.baseY + st[s].y0 + st[s].h - 0.05)
+                                ++(static_cast<int>(s) <= u.params.partyTop[k] ? below : above);
+                    }
+                }
+                if (below > 0) std::printf("    [party top] %d glass vertices at or under storey %d\n", below, u.params.partyTop[k]);
+                CHECK(below == 0);
+                CHECK(above > 0);
+                ++checked;
+            }
+        CHECK(units == dbg.partyTopped);
+        topped += dbg.partyTopped;
+    }
+    CHECK(topped > 0);
+}
+
 TEST_CASE(lot_buildings_zone_radially) {
     // Downtown (near the centre) should skew commercial/civic, not all houses.
     LotParams p;
