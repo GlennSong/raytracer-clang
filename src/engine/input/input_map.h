@@ -37,7 +37,10 @@ namespace engine {
 // own guards kept them apart. With a context, only the active mode's action
 // resolves, and a genuine clash (two actions, one key, SAME mode) is what gets
 // reported.
-enum class InputContext : uint8_t { Always, OnFoot, InVehicle };
+//
+// CAMERA is the view's own movement and look (the fly camera's axes, which also walk the player): like Always, except
+// that a LAYER over the top (below) takes it away.
+enum class InputContext : uint8_t { Always, OnFoot, InVehicle, Camera };
 const char* inputContextName(InputContext c);
 
 class InputMap {
@@ -87,9 +90,18 @@ public:
     // answer held/pressed/released.
     void setContext(InputContext c) { context_ = c; }
     InputContext context() const { return context_; }
+    // INPUT LAYERS (ADR-0248): a screen that takes the controls -- the map -- pushes a layer, and while one is up the
+    // body's actions (OnFoot, InVehicle) and the view's (Camera) go dead: the stick pans the map instead of walking
+    // the player under it. An action tagged with a layer answers only while that layer is the top one. Always
+    // actions (the tool slots, quit, the overlay) answer whatever is up.
+    void pushLayer(const std::string& layer);
+    void popLayer(const std::string& layer);   // (wherever it is in the stack)
+    bool layerUp() const { return !layers_.empty(); }
+    const std::string& topLayer() const;
+    void setActionLayer(const std::string& action, const std::string& layer);
     // Keys whose actions can fire TOGETHER: same context, or one of them
     // Always. Shared keys split across OnFoot/InVehicle are deliberate and
-    // are not listed.
+    // are not listed (nor are a layer's against the body's: never live at once).
     std::vector<std::string> collisions() const;
     // Every (key, actions) pair, sorted, for `keys?` and for tests.
     std::vector<std::pair<std::string, std::vector<std::string>>> bindingReport() const;
@@ -155,6 +167,8 @@ private:
     std::unordered_map<std::string, std::vector<int>> buttons;
     std::unordered_map<std::string, InputContext> actionContext_;
     InputContext context_ = InputContext::OnFoot;
+    std::vector<std::string> layers_;                              // the stack, top last
+    std::unordered_map<std::string, std::string> actionLayer_;     // action -> the layer it belongs to
     bool live(const std::string& action) const;
     std::unordered_map<std::string, std::vector<AxisContribution>> axes;
 

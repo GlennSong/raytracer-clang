@@ -18,8 +18,9 @@ public:
     void update(FrameContext& ctx) override;
 
 private:
-    // sleeve L, sleeve R, hand L, hand R, wing L, wing R (the wingsuit's), the canopy, its four lines, the hook
-    static constexpr int kParts = 12;
+    // sleeve L, sleeve R, hand L, hand R, wing L, wing R (the wingsuit's), the canopy, its four lines, the hook,
+    // the watch's case and its strap
+    static constexpr int kParts = 14;
     Entity parts_[kParts];
     Entity rope_[PlayerPose::kRopePoints - 1];   // the rope's links, one block each
     bool ropeShown_ = false;
@@ -29,7 +30,7 @@ private:
     Vec3 local_[2];        // each hand in camera space (right, up, forward), eased
     bool haveLocal_ = false;
     bool canopyShown_ = false;
-    int slot_ = 1;         // the tool in hand, tracked like the gun script does: 1 bare hands, 2 the gun
+    bool watchShown_ = false;
 };
 
 }  // namespace engine

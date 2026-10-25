@@ -55,8 +55,8 @@ public:
     virtual void step(PlayerBody& b, BodyStep& s) = 0;
     // What the pose says in this mode (the shared part is written first, by PlayerBody).
     virtual void pose(const PlayerBody& b, const BodyStep& s, PlayerPose& p) const = 0;
-    // Hands free for something else (the gun): 2 both, 1 one, 0 none.
-    virtual int handsFree() const { return 0; }
+    // Hands free for something else: 2 both (the gun), 1 one (the watch), 0 none.
+    virtual int handsFree(const PlayerBody&) const { return 0; }
     // Can the grapple be aimed and fired from here? (Not with both hands on a ledge, nor limp.)
     virtual bool canAim() const { return true; }
     // Is the velocity worth publishing? (Hanging on a wall or a ledge the pose keeps the last one.)
@@ -75,7 +75,7 @@ public:
     void leave(PlayerBody& b, BodyStep& s) override;
     void step(PlayerBody& b, BodyStep& s) override;
     void pose(const PlayerBody& b, const BodyStep& s, PlayerPose& p) const override;
-    int handsFree() const override { return 2; }
+    int handsFree(const PlayerBody&) const override { return 2; }
 };
 
 // --- afloat (#43) -----------------------------------------------------------------------------------------------
@@ -135,6 +135,7 @@ public:
     const bool canopy;   // the parachute (else the wingsuit)
     const char* name(const PlayerBody&) const override { return canopy ? "parachute" : "wingsuit"; }
     BodyGroup group() const override { return BodyGroup::Air; }
+    int handsFree(const PlayerBody&) const override { return canopy ? 1 : 0; }   // a hand off a toggle; the suit's arms are its wings
     void step(PlayerBody& b, BodyStep& s) override;
     void pose(const PlayerBody& b, const BodyStep& s, PlayerPose& p) const override;
 };
@@ -151,6 +152,7 @@ public:
     Real reel = 0;          // m/s reeling this step (+ in), for the winch's sound
     const char* name(const PlayerBody&) const override { return "grapple"; }
     BodyGroup group() const override { return BodyGroup::Air; }
+    int handsFree(const PlayerBody&) const override { return 1; }   // the rope in the right
     void step(PlayerBody& b, BodyStep& s) override;
     void pose(const PlayerBody& b, const BodyStep& s, PlayerPose& p) const override;
 };
@@ -162,6 +164,7 @@ public:
     Real speed = 0, kickClock = 0;
     const char* name(const PlayerBody& b) const override;
     BodyGroup group() const override { return BodyGroup::Riding; }
+    int handsFree(const PlayerBody& b) const override;   // the skateboard's both; the scooter's bar takes one
     void leave(PlayerBody& b, BodyStep& s) override;
     void step(PlayerBody& b, BodyStep& s) override;
     void pose(const PlayerBody& b, const BodyStep& s, PlayerPose& p) const override;

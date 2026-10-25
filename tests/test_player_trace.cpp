@@ -273,7 +273,7 @@ std::vector<Scenario> scenarios() {
     // THE PARACHUTE off the tower: walk off, open it, steer, dive, flare, land
     s.push_back({"parachute", 30.0, [](Rig& r) {
                      r.place(Vec3(32.5, 72.0, 38.5), 180);
-                     r.actions.injectPress("slot_5");
+                     r.actions.injectPress("slot_4");
                  },
                  [](Rig& r, Pad& p, Real t) {
                      p.stick(between(t, 0.3, 1.2) || between(t, 6.0, 8.0) ? 1.0 : between(t, 10.0, 11.0) ? -1.0 : 0.0, 0);
@@ -284,7 +284,7 @@ std::vector<Scenario> scenarios() {
     // THE WINGSUIT off the tower, then its chute
     s.push_back({"wingsuit", 30.0, [](Rig& r) {
                      r.place(Vec3(32.5, 72.0, 38.5), 180);
-                     r.actions.injectPress("slot_6");
+                     r.actions.injectPress("slot_5");
                  },
                  [](Rig& r, Pad& p, Real t) {
                      p.stick(between(t, 0.3, 1.2) ? 1.0 : 0.0, 0);
@@ -295,7 +295,7 @@ std::vector<Scenario> scenarios() {
     // THE WINGSUIT dived into the ground: the one impact rule (ADR-0247)
     s.push_back({"wingsuit_crash", 16.0, [](Rig& r) {
                      r.place(Vec3(32.5, 72.0, 38.5), 180);
-                     r.actions.injectPress("slot_6");
+                     r.actions.injectPress("slot_5");
                  },
                  [](Rig& r, Pad& p, Real t) {
                      p.stick(between(t, 0.3, 1.2) ? 1.0 : 0.0, 0);
@@ -313,7 +313,7 @@ std::vector<Scenario> scenarios() {
     // THE GRAPPLE: hooked on a gantry's beam from the ground, pumped, let go, hooked on the next
     s.push_back({"grapple", 14.0, [](Rig& r) {
                      r.place(Vec3(0, 0, 52.0), 180, 62.0);
-                     r.actions.injectPress("slot_7");
+                     r.actions.injectPress("slot_6");
                  },
                  [](Rig& r, Pad& p, Real t) {
                      p.fire(between(t, 0.5, 5.0) || between(t, 6.0, 11.0));
@@ -325,7 +325,7 @@ std::vector<Scenario> scenarios() {
     // THE SKATEBOARD down the skate run: kick, an ollie off the deck, carve, brake
     s.push_back({"skateboard", 16.0, [](Rig& r) {
                      r.place(Vec3(-106.0, 4.0, 0), 90);
-                     r.actions.injectPress("slot_8");
+                     r.actions.injectPress("slot_7");
                  },
                  [](Rig&, Pad& p, Real t) {
                      p.stick(between(t, 0.2, 3.0) ? 1.0 : between(t, 11.0, 13.0) ? -1.0 : 0.0,
@@ -336,7 +336,7 @@ std::vector<Scenario> scenarios() {
     // THE SCOOTER into the ledges, fast: off and limp
     s.push_back({"scooter_crash", 10.0, [](Rig& r) {
                      r.place(Vec3(-3.6, 0, 20.0), 0);
-                     r.actions.injectPress("slot_9");
+                     r.actions.injectPress("slot_8");
                  },
                  [](Rig&, Pad& p, Real t) {
                      p.stick(between(t, 0.2, 7.0) ? 1.0 : 0.0, 0);

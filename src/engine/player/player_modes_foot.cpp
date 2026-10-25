@@ -105,7 +105,7 @@ void OnFootMode::leave(PlayerBody& b, BodyStep& s) {
         m.heading = h.lengthSquared() > 1e-8 ? normalize(h) : Vec3(0, 0, -1);
         m.kickClock = 0;
         b.enter(b.board);
-        b.event(b.hands.gear == 8 ? "on the skateboard" : "on the scooter");
+        b.event(b.hands.tool == Tool::Skateboard ? "on the skateboard" : "on the scooter");
     }
 }
 

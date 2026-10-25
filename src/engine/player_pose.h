@@ -55,6 +55,7 @@ struct PlayerPose {
     Real landSpeed = 0;       // ...this fast down (m/s)
     bool grounded = false;
     int handsFree = 2;        // hands free for something else -- the gun (2 both, 1 one, 0 none), from the body's mode
+    int tool = 1;             // the tool slot in hand (engine/player/tools.h): where the light rides
     // ON A BOARD: which (0 skateboard, 1 scooter), which way it points, how far through a kick (0..1, 0 = none)
     int board = 0;
     Vec3 boardHeading{0, 0, -1};

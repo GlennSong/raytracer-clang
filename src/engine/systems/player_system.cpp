@@ -6,6 +6,7 @@
 #include "../particles.h"     // ParticleEmitter (the body's two steady flows)
 #include "../playground.h"
 #include "../camera/scene_camera.h"
+#include "../ui/ui_text.h"
 #include "../../log.h"
 
 #include <algorithm>
@@ -61,11 +62,12 @@ void PlayerSystem::onStart(FrameContext& ctx) {
     ctx.actions.setActionContext("player_run", engine::InputContext::OnFoot);
     ctx.actions.setActionContext("player_crouch", engine::InputContext::OnFoot);
     body_.tune.load(ctx.settings);   // Debug > Movement's saved numbers (movement.* in settings.json)
-    ctx.actions.bindButton("slot_5", KeyCode::Num5);   // the parachute (jump in the air opens it)
-    ctx.actions.bindButton("slot_6", KeyCode::Num6);   // the wingsuit (jump in the air opens it; jump again: the chute)
-    ctx.actions.bindButton("slot_7", KeyCode::Num7);   // the grapple (hold fire to hang on the rope)
-    ctx.actions.bindButton("slot_8", KeyCode::Num8);   // the skateboard (ridden on the ground; W kicks)
-    ctx.actions.bindButton("slot_9", KeyCode::Num9);   // the scooter
+    // THE TOOL SLOTS past the map (engine/player/tools.h): 4 the parachute, 5 the wingsuit (jump in the air opens
+    // either; jump again in the suit: its chute), 6 the grapple (hold fire to hang on the rope), 7 the skateboard
+    // (ridden on the ground; W kicks), 8 the scooter
+    const KeyCode keys[] = {KeyCode::Num4, KeyCode::Num5, KeyCode::Num6, KeyCode::Num7, KeyCode::Num8};
+    for (int k = slotOf(Tool::Parachute); k <= kToolSlots; ++k)
+        ctx.actions.bindButton(slotAction(k), keys[k - slotOf(Tool::Parachute)]);
     ctx.actions.bindButton("player_limp", KeyCode::G);  // go limp (the ragdoll); jump gets up
     ctx.actions.setActionContext("player_limp", engine::InputContext::OnFoot);
     body_.stamina = body_.tune.staminaMax;
@@ -119,127 +121,113 @@ void PlayerSystem::fixedUpdate(FrameContext& ctx) {
 }
 
 // THE GEAR HUD (Glenn: "when I click 5 nothing happens. How do I know I will deploy a parachute?"): the tool row
-// for a few seconds after a slot change, and while the chute or the suit is on, what to press now -- drawn like
-// the interaction prompt (InteractBrokerSystem), on ImGui's foreground list until the game UI layer has text.
+// for a few seconds after a slot change, and while the chute or the suit is on, what to press now -- the game UI
+// layer's words (engine/ui/ui_text.h, ADR-0250), not ImGui's.
 void PlayerSystem::drawGearHud(FrameContext& ctx) {
-#ifdef RT_ENABLE_IMGUI
     const Real dt = std::clamp(static_cast<Real>(ctx.frameDelta), Real(0), Real(0.1));
     hotbarShow_ = std::max(Real(0), hotbarShow_ - dt);
     hudClock_ += dt;
     if (!camera.positionLocked || !ctx.world.alive(playerEntity) || ctx.world.has<InVehicle>(playerEntity)) return;
-    const float W = static_cast<float>(ctx.windowWidth), H = static_cast<float>(ctx.windowHeight);
-    ImDrawList* dl = ImGui::GetForegroundDrawList();
-    ImFont* font = ImGui::GetFont();
-    const float fs = ImGui::GetFontSize() * 1.4f;
-    auto label = [&](float cx, float y, const std::string& text, ImU32 colour, ImU32 back) {
-        const ImVec2 ts = font->CalcTextSizeA(fs, 1e9f, 0.0f, text.c_str());
-        const float x = cx - ts.x * 0.5f;
-        dl->AddRectFilled(ImVec2(x - 8, y - 4), ImVec2(x + ts.x + 8, y + ts.y + 4), back, 4.0f);
-        dl->AddText(font, fs, ImVec2(x, y), colour, text.c_str());
-        return ts;
+    if (ctx.actions.layerUp()) return;   // a screen that has the controls (the map) is the HUD now
+    // framebuffer pixels; sizes in window points times the display's scale
+    const float W = static_cast<float>(ctx.framebufferWidth), H = static_cast<float>(ctx.framebufferHeight);
+    const float k = ctx.windowWidth > 0 ? W / static_cast<float>(ctx.windowWidth) : 1.0f;
+    const float fs = 18.0f * k;
+    std::vector<Renderer::UiQuad> q;
+    const float white[4] = {1, 1, 1, 0.92f}, grey[4] = {0.78f, 0.78f, 0.78f, 0.75f}, back[4] = {0, 0, 0, 0.59f};
+    const float promptY = H - (hotbarShow_ > 0 ? 100.0f : 56.0f) * k;
+    auto prompt = [&](const std::string& text, const float* colour) {
+        hud_.label(ctx.renderer, q, W * 0.5f, promptY, text, fs, colour, back, 8.0f * k);
     };
     // the tool row
     if (hotbarShow_ > 0) {
-        static const char* names[9] = {"hands", "gun", "map", "light", "parachute", "wingsuit", "grapple", "skateboard",
-                                       "scooter"};
         const float alpha = static_cast<float>(std::min(Real(1), hotbarShow_ / 0.4));
         // each box as wide as its words, 14 px apart, the row centred
-        std::string words[9];
-        float widths[9], total = 0;
-        for (int k = 0; k < 9; ++k) {
-            words[k] = std::to_string(k + 1) + "  " + names[k];
-            widths[k] = font->CalcTextSizeA(fs, 1e9f, 0.0f, words[k].c_str()).x + 16.0f;
-            total += widths[k] + (k ? 14.0f : 0.0f);
+        std::string words[kToolSlots];
+        float widths[kToolSlots], total = 0;
+        for (int i = 0; i < kToolSlots; ++i) {
+            words[i] = std::to_string(i + 1) + "  " + toolName(static_cast<Tool>(i + 1));
+            widths[i] = hud_.measure(words[i], fs) + 16.0f * k;
+            total += widths[i] + (i ? 14.0f * k : 0.0f);
         }
-        const float y = H - 52.0f;
         float x = W * 0.5f - total * 0.5f;
-        for (int k = 0; k < 9; ++k) {
-            const bool on = body_.hands.gear == k + 1;
-            const std::string& t = words[k];
-            const ImU32 fg = on ? IM_COL32(20, 20, 20, static_cast<int>(255 * alpha))
-                                : IM_COL32(235, 235, 235, static_cast<int>(220 * alpha));
-            const ImU32 bg = on ? IM_COL32(255, 220, 110, static_cast<int>(235 * alpha))
-                                : IM_COL32(0, 0, 0, static_cast<int>(140 * alpha));
-            label(x + widths[k] * 0.5f, y, t, fg, bg);
-            x += widths[k] + 14.0f;
+        for (int i = 0; i < kToolSlots; ++i) {
+            const bool on = slotOf(body_.hands.tool) == i + 1;
+            const float fg[4] = {on ? 0.08f : 0.92f, on ? 0.08f : 0.92f, on ? 0.08f : 0.92f, (on ? 1.0f : 0.86f) * alpha};
+            const float bg[4] = {on ? 1.0f : 0.0f, on ? 0.86f : 0.0f, on ? 0.43f : 0.0f, (on ? 0.92f : 0.55f) * alpha};
+            hud_.label(ctx.renderer, q, x + widths[i] * 0.5f, H - 52.0f * k, words[i], fs, fg, bg, 8.0f * k);
+            x += widths[i] + 14.0f * k;
         }
     }
-    if (body_.is(body_.swing) || body_.is(body_.bars)) {
-        label(W * 0.5f, H - (hotbarShow_ > 0 ? 100.0f : 56.0f),
-              body_.is(body_.swing) ? "W / S  pump in time with the swing     Space  jump off     Ctrl  get off"
-                                   : "W / S  hand over hand     Space or Ctrl  drop",
-              IM_COL32(255, 255, 255, 235), IM_COL32(0, 0, 0, 150));
-        return;
-    }
-    // THE GRAPPLE: a ring where a shot would hook, and what the trigger does
-    if (body_.hands.gear == 7) {
-        const CameraState& cam = ctx.view.camera;
-        const Vec3 at = body_.is(body_.grapple) ? body_.grapple.anchor : body_.hands.aim.point;
-        Real sx = 0, sy = 0;
-        if ((body_.is(body_.grapple) || body_.hands.aim.ok) &&
-            projectToScreen(at, cam.position, cam.target, cam.up, cam.fovDegrees, cam.aspectRatio, W, H, sx, sy)) {
-            const float r = 10.0f + 2.0f * static_cast<float>(std::sin(hudClock_ * 5.0));
-            const ImVec2 c(static_cast<float>(sx), static_cast<float>(sy));
-            dl->AddCircle(c, r + 2.0f, IM_COL32(0, 0, 0, 140), 24, 4.0f);
-            dl->AddCircle(c, r, IM_COL32(120, 230, 255, 235), 24, 2.5f);
-            dl->AddCircleFilled(c, 2.5f, IM_COL32(120, 230, 255, 235));
+    [&] {
+        if (body_.is(body_.swing) || body_.is(body_.bars)) {
+            prompt(body_.is(body_.swing) ? "W / S  pump in time with the swing     Space  jump off     Ctrl  get off"
+                                         : "W / S  hand over hand     Space or Ctrl  drop",
+                   white);
+            return;
         }
-        const std::string text = body_.is(body_.grapple)
-                                     ? "let go to fly     Space reel in     Ctrl let out     W pump"
-                                 : body_.hands.aim.ok ? "hold click   hook and swing"
-                                           : "nothing in reach to hook";
-        label(W * 0.5f, H - (hotbarShow_ > 0 ? 100.0f : 56.0f), text,
-              body_.hands.aim.ok || body_.is(body_.grapple) ? IM_COL32(255, 255, 255, 235)
-                                                            : IM_COL32(200, 200, 200, 190),
-              IM_COL32(0, 0, 0, 150));
-        return;
-    }
-    if (body_.hands.gear == 8 || body_.hands.gear == 9) {
-        char buf[128];
-        std::snprintf(buf, sizeof(buf), "%.0f km/h     W kick     S brake     A/D carve     Space %s",
-                      body_.board.speed * 3.6, body_.hands.gear == 8 ? "ollie" : "hop");
-        label(W * 0.5f, H - (hotbarShow_ > 0 ? 100.0f : 56.0f), body_.is(body_.board) ? std::string(buf)
-              : std::string(body_.hands.gear == 8 ? "skateboard: ride it on the ground"
-                                                  : "scooter: ride it on the ground"),
-              IM_COL32(255, 255, 255, 235), IM_COL32(0, 0, 0, 150));
-        return;
-    }
-    // what to press now
-    if (body_.hands.gear != 5 && body_.hands.gear != 6) return;
-    const bool chute = body_.hands.gear == 5;
-    std::string text;
-    ImU32 colour = IM_COL32(255, 255, 255, 235);
-    const CharacterController* cc = ctx.world.get<CharacterController>(playerEntity);
-    const Transform* t = ctx.world.get<Transform>(playerEntity);
-    if (!cc || !t || cc->characterId == INVALID_CHARACTER) return;
-    PhysicsWorld& pw = physicsSys.physicsWorld();
-    if (body_.is(body_.parachute)) {
-        text = "look to steer     W dive     S flare     Ctrl cut away";
-    } else if (body_.is(body_.wingsuit)) {
-        char buf[128];
-        std::snprintf(buf, sizeof(buf), "%.0f km/h     look down to dive, up to climb     Space parachute     Ctrl fold",
-                      pw.characterVelocity(cc->characterId).length() * 3.6);
-        text = buf;
-    } else if (pw.characterGroundState(cc->characterId) == GroundState::InAir && !body_.water.swimming) {
-        PhysicsWorld::RayHit g;
-        const Real reach = cc->halfHeight + cc->radius + body_.tune.deployMinHeight;
-        const bool low = pw.castRayHit(t->position, Vec3(0, -reach, 0), g);
-        if (low) {
-            text = "too low to open";
-            colour = IM_COL32(200, 200, 200, 200);
+        // THE GRAPPLE: a ring where a shot would hook, and what the trigger does
+        if (body_.hands.holdingGrapple()) {
+            const CameraState& cam = ctx.view.camera;
+            const Vec3 at = body_.is(body_.grapple) ? body_.grapple.anchor : body_.hands.aim.point;
+            Real sx = 0, sy = 0;
+            if ((body_.is(body_.grapple) || body_.hands.aim.ok) &&
+                projectToScreen(at, cam.position, cam.target, cam.up, cam.fovDegrees, cam.aspectRatio, W, H, sx, sy)) {
+                const float r = (10.0f + 2.0f * static_cast<float>(std::sin(hudClock_ * 5.0))) * k;
+                const float shade[4] = {0, 0, 0, 0.55f}, cyan[4] = {0.47f, 0.9f, 1.0f, 0.92f};
+                const float cx = static_cast<float>(sx), cy = static_cast<float>(sy);
+                hud_.ring(ctx.renderer, q, cx, cy, r + 4.0f * k, 4.0f * k, shade);
+                hud_.ring(ctx.renderer, q, cx, cy, r + 1.25f * k, 2.5f * k, cyan);
+                hud_.disc(ctx.renderer, q, cx, cy, 2.5f * k, cyan);
+            }
+            const bool live = body_.hands.aim.ok || body_.is(body_.grapple);
+            prompt(body_.is(body_.grapple) ? "let go to fly     Space reel in     Ctrl let out     W pump"
+                   : body_.hands.aim.ok    ? "hold click   hook and swing"
+                                           : "nothing in reach to hook",
+                   live ? white : grey);
+            return;
+        }
+        if (body_.hands.holdingBoard()) {
+            const bool skate = body_.hands.tool == Tool::Skateboard;
+            char buf[128];
+            std::snprintf(buf, sizeof(buf), "%.0f km/h     W kick     S brake     A/D carve     Space %s",
+                          body_.board.speed * 3.6, skate ? "ollie" : "hop");
+            prompt(body_.is(body_.board) ? std::string(buf)
+                   : std::string(skate ? "skateboard: ride it on the ground" : "scooter: ride it on the ground"),
+                   white);
+            return;
+        }
+        // what to press now
+        if (!body_.hands.holdingGlider()) return;
+        const bool chute = body_.hands.tool == Tool::Parachute;
+        const CharacterController* cc = ctx.world.get<CharacterController>(playerEntity);
+        const Transform* t = ctx.world.get<Transform>(playerEntity);
+        if (!cc || !t || cc->characterId == INVALID_CHARACTER) return;
+        PhysicsWorld& pw = physicsSys.physicsWorld();
+        if (body_.is(body_.parachute)) {
+            prompt("look to steer     W dive     S flare     Ctrl cut away", white);
+        } else if (body_.is(body_.wingsuit)) {
+            char buf[128];
+            std::snprintf(buf, sizeof(buf), "%.0f km/h     look down to dive, up to climb     Space parachute     Ctrl fold",
+                          pw.characterVelocity(cc->characterId).length() * 3.6);
+            prompt(buf, white);
+        } else if (pw.characterGroundState(cc->characterId) == GroundState::InAir && !body_.water.swimming) {
+            PhysicsWorld::RayHit g;
+            const Real reach = cc->halfHeight + cc->radius + body_.tune.deployMinHeight;
+            if (pw.castRayHit(t->position, Vec3(0, -reach, 0), g)) {
+                const float dim[4] = {0.78f, 0.78f, 0.78f, 0.78f};
+                prompt("too low to open", dim);
+            } else {
+                const float pulse[4] = {1.0f, 0.88f, 0.47f, static_cast<float>(0.7 + 0.29 * std::sin(hudClock_ * 6.0))};
+                prompt(chute ? "Space   open the parachute" : "Space   spread the wingsuit", pulse);
+            }
         } else {
-            text = chute ? "Space   open the parachute" : "Space   spread the wingsuit";
-            const int a = 180 + static_cast<int>(75 * std::sin(hudClock_ * 6.0));
-            colour = IM_COL32(255, 225, 120, a);
+            prompt(chute ? "parachute on     jump off something high, then Space in the air"
+                         : "wingsuit on     jump off something high, then Space in the air",
+                   white);
         }
-    } else {
-        text = chute ? "parachute on     jump off something high, then Space in the air"
-                     : "wingsuit on     jump off something high, then Space in the air";
-    }
-    label(W * 0.5f, H - (hotbarShow_ > 0 ? 100.0f : 56.0f), text, colour, IM_COL32(0, 0, 0, 150));
-#else
-    (void)ctx;
-#endif
+    }();
+    if (!q.empty()) ctx.renderer.submitUi(q);
 }
 
 void PlayerSystem::render(FrameContext& ctx) {
@@ -280,15 +268,15 @@ void PlayerSystem::render(FrameContext& ctx) {
                       "mode %s ground %s pos %.2f %.2f %.2f vel %.2f %.2f %.2f speed %.1f stamina %.1f/%.0f gear %d "
                       "hook %s rope %.2f span %.2f sag %.2f last \"%s\"",
                       mode, ground, p.x, p.y, p.z, v.x, v.y, v.z, v.length(), body_.stamina, body_.tune.staminaMax,
-                      body_.hands.gear, hook,
+                      slotOf(body_.hands.tool), hook,
                       hk == Hook::Hooked ? body_.grapple.ropeLen : hk == Hook::Loose ? body_.hands.looseLen : Real(0),
                       span, sag,
                       body_.lastEvent.c_str());
         ctx.settings.setString("player.telemetry", buf);
     }
+    drawGearHud(ctx);
 #ifdef RT_ENABLE_IMGUI
     if (ImGui::GetCurrentContext() == nullptr) return;
-    drawGearHud(ctx);
     if (!ctx.debugOverlayActive) return;
     ImGui::Begin("Debug");
     if (ImGui::CollapsingHeader("Movement")) {
@@ -494,14 +482,16 @@ void PlayerSystem::update(FrameContext& ctx) {
     grappleHeld_ = grapple && camera.positionLocked && ctx.actions.held("fire") && !ctx.input.uiWantsMouse;
     if (grapple && camera.positionLocked && ctx.actions.pressed("fire") && !ctx.input.uiWantsMouse)
         grappleFire_ = true;
-    // THE GEAR IN HAND (tool slots, like the gun script tracks them): 5 the parachute, 6 the wingsuit
-    for (int k = 1; k <= 9; ++k)
-        if (ctx.actions.pressed("slot_" + std::to_string(k)) &&
+    // THE TOOL IN HAND (the slots, as the gun script and the map track them too)
+    for (int k = 1; k <= kToolSlots; ++k)
+        if (ctx.actions.pressed(slotAction(k)) &&
             !(ctx.world.alive(playerEntity) && ctx.world.has<InVehicle>(playerEntity))) {
-            if (k != body_.hands.gear && k >= 5)
-                body_.event(k == 5 ? "parachute on your back" : k == 6 ? "wingsuit on" : k == 7 ? "grapple in hand"
-                            : k == 8 ? "skateboard under your feet" : "scooter out");
-            body_.hands.gear = k;
+            const Tool t = static_cast<Tool>(k);
+            if (t != body_.hands.tool && k >= slotOf(Tool::Parachute))
+                body_.event(t == Tool::Parachute ? "parachute on your back" : t == Tool::Wingsuit ? "wingsuit on"
+                            : t == Tool::Grapple ? "grapple in hand" : t == Tool::Skateboard ? "skateboard under your feet"
+                                                                    : "scooter out");
+            body_.hands.tool = t;
             hotbarShow_ = 3.0;
         }
     if (ctx.actions.pressed("player_jump") &&

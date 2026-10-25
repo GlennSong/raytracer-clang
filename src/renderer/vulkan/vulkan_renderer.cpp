@@ -49,6 +49,7 @@
 // CPU header the Metal backend uses (pure C++, disk-cached in cache/clouds/),
 // so both backends march identical noise fields.
 #include "../metal/cloud_noise.h"
+#include <map>
 #include <vector>
 
 #ifndef RT_VULKAN_SHADER_DIR
@@ -511,15 +512,17 @@ struct VulkanRenderer::Impl {
     VkPipeline compositePipeline = VK_NULL_HANDLE;
     UnderwaterParams underwater;   // this frame's (setLights), for the composite
     // THE GAME UI LAYER (Renderer::submitUi): textured quads drawn into the
-    // composite pass after the tonemap. One transient descriptor per quad from
-    // a per-frame pool, reset with the frame.
+    // composite pass after the tonemap. One transient descriptor per TEXTURE a
+    // frame uses (a line of text is many quads on one glyph atlas), from a
+    // per-frame pool reset with the frame; one push-constant draw per quad.
     VkDescriptorSetLayout uiSetLayout = VK_NULL_HANDLE;
     VkPipelineLayout uiPipelineLayout = VK_NULL_HANDLE;
     VkPipeline uiPipeline = VK_NULL_HANDLE;
     VkSampler uiSampler = VK_NULL_HANDLE;
     std::array<VkDescriptorPool, MAX_FRAMES_IN_FLIGHT> uiPools{};
     std::vector<Renderer::UiQuad> uiQuads;
-    static constexpr uint32_t kUiQuadsPerFrame = 256;
+    static constexpr uint32_t kUiQuadsPerFrame = 16384;
+    static constexpr uint32_t kUiTexturesPerFrame = 256;
     float sceneExposure = 1.0f;
     int   tonemapOp = 0;          // mirrored from Renderer::tonemapOperator each frame
     float gradeContrast = 1.0f;
@@ -3366,12 +3369,12 @@ bool VulkanRenderer::Impl::createUiResources() {
     if (vkCreateDescriptorSetLayout(device, &layout, nullptr, &uiSetLayout) != VK_SUCCESS)
         return false;
 
-    VkDescriptorPoolSize size{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, kUiQuadsPerFrame};
+    VkDescriptorPoolSize size{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, kUiTexturesPerFrame};
     VkDescriptorPoolCreateInfo pool{};
     pool.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
     pool.poolSizeCount = 1;
     pool.pPoolSizes = &size;
-    pool.maxSets = kUiQuadsPerFrame;
+    pool.maxSets = kUiTexturesPerFrame;
     for (VkDescriptorPool& p : uiPools)
         if (vkCreateDescriptorPool(device, &pool, nullptr, &p) != VK_SUCCESS) return false;
 
@@ -3463,39 +3466,50 @@ bool VulkanRenderer::Impl::createUiResources() {
     return true;
 }
 
-// Inside the composite pass, after the tonemap: each quad its own draw (the
-// map is a handful of quads, not a widget toolkit).
+// Inside the composite pass, after the tonemap: each quad its own draw, the
+// descriptor bound only when the texture changes (one set per texture a frame).
 void VulkanRenderer::Impl::recordUi(VkCommandBuffer cmd) {
     if (uiQuads.empty() || !uiPipeline) return;
     const float w = static_cast<float>(swapchainExtent.width);
     const float h = static_cast<float>(swapchainExtent.height);
     if (w <= 0 || h <= 0) return;
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, uiPipeline);
-    uint32_t used = 0;
+    std::map<TextureHandle, VkDescriptorSet> sets;   // this frame's, one per texture
+    VkDescriptorSet bound = VK_NULL_HANDLE;
+    uint32_t drawn = 0;
     for (const Renderer::UiQuad& q : uiQuads) {
-        if (used >= kUiQuadsPerFrame) break;
+        if (drawn >= kUiQuadsPerFrame) break;
         VkDescriptorSet set = VK_NULL_HANDLE;
-        VkDescriptorSetAllocateInfo dsa{};
-        dsa.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-        dsa.descriptorPool = uiPools[currentFrame];
-        dsa.descriptorSetCount = 1;
-        dsa.pSetLayouts = &uiSetLayout;
-        if (vkAllocateDescriptorSets(device, &dsa, &set) != VK_SUCCESS) break;
-        ++used;
-        VkDescriptorImageInfo img{};
-        img.sampler = uiSampler;
-        img.imageView = textureViewOr(q.texture);   // invalid: 1x1 white -> solid tint
-        img.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        VkWriteDescriptorSet write{};
-        write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        write.dstSet = set;
-        write.dstBinding = 0;
-        write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        write.descriptorCount = 1;
-        write.pImageInfo = &img;
-        vkUpdateDescriptorSets(device, 1, &write, 0, nullptr);
-        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, uiPipelineLayout, 0, 1,
-                                &set, 0, nullptr);
+        const auto have = sets.find(q.texture);
+        if (have != sets.end()) {
+            set = have->second;
+        } else {
+            VkDescriptorSetAllocateInfo dsa{};
+            dsa.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+            dsa.descriptorPool = uiPools[currentFrame];
+            dsa.descriptorSetCount = 1;
+            dsa.pSetLayouts = &uiSetLayout;
+            if (vkAllocateDescriptorSets(device, &dsa, &set) != VK_SUCCESS) break;
+            VkDescriptorImageInfo img{};
+            img.sampler = uiSampler;
+            img.imageView = textureViewOr(q.texture);   // invalid: 1x1 white -> solid tint
+            img.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            VkWriteDescriptorSet write{};
+            write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            write.dstSet = set;
+            write.dstBinding = 0;
+            write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            write.descriptorCount = 1;
+            write.pImageInfo = &img;
+            vkUpdateDescriptorSets(device, 1, &write, 0, nullptr);
+            sets[q.texture] = set;
+        }
+        ++drawn;
+        if (set != bound) {
+            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, uiPipelineLayout, 0, 1,
+                                    &set, 0, nullptr);
+            bound = set;
+        }
         float push[20];
         for (int k = 0; k < 4; ++k) {
             push[k * 2 + 0] = q.x[k] / w * 2.0f - 1.0f;   // Vulkan NDC: y down, like pixels
@@ -6525,7 +6539,7 @@ TextureHandle VulkanRenderer::uploadTexture(int width, int height, int channels,
 }
 
 void VulkanRenderer::submitUi(const std::vector<UiQuad>& quads) {
-    impl->uiQuads = quads;
+    impl->uiQuads.insert(impl->uiQuads.end(), quads.begin(), quads.end());   // every system's, in order
 }
 
 TextureHandle VulkanRenderer::uploadTextureHDR(int width, int height, int channels,
@@ -6676,6 +6690,7 @@ const OcclusionDepth* VulkanRenderer::occlusionDepth() const {
 void VulkanRenderer::beginFrame() {
     impl->stats = RenderStats{};
     impl->drawQueue.clear();
+    impl->uiQuads.clear();   // (the systems submit theirs in render, after this)
     impl->instanceData.clear();
 #ifdef RT_ENABLE_IMGUI
     // Backend new-frame here; the GLFW new-frame ran in Window::pollEvents, and

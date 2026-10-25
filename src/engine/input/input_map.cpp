@@ -341,6 +341,7 @@ const char* inputContextName(InputContext c) {
     switch (c) {
         case InputContext::OnFoot: return "on-foot";
         case InputContext::InVehicle: return "in-vehicle";
+        case InputContext::Camera: return "camera";
         default: return "always";
     }
 }
@@ -354,9 +355,29 @@ InputContext InputMap::actionContext(const std::string& action) const {
     return it == actionContext_.end() ? InputContext::Always : it->second;
 }
 
+void InputMap::pushLayer(const std::string& layer) {
+    popLayer(layer);   // (once in the stack, on top)
+    layers_.push_back(layer);
+}
+
+void InputMap::popLayer(const std::string& layer) {
+    layers_.erase(std::remove(layers_.begin(), layers_.end(), layer), layers_.end());
+}
+
+const std::string& InputMap::topLayer() const {
+    static const std::string none;
+    return layers_.empty() ? none : layers_.back();
+}
+
+void InputMap::setActionLayer(const std::string& action, const std::string& layer) { actionLayer_[action] = layer; }
+
 bool InputMap::live(const std::string& action) const {
+    const auto layer = actionLayer_.find(action);
+    if (layer != actionLayer_.end()) return !layers_.empty() && layers_.back() == layer->second;
     const InputContext c = actionContext(action);
-    return c == InputContext::Always || c == context_;
+    if (c == InputContext::Always) return true;
+    if (!layers_.empty()) return false;   // a layer has the controls
+    return c == InputContext::Camera || c == context_;
 }
 
 bool InputMap::held(const std::string& action) const {
@@ -379,8 +400,13 @@ std::vector<std::string> InputMap::collisions() const {
             for (std::size_t j = i + 1; j < acts.size(); ++j) {
                 const InputContext a = actionContext(acts[i]);
                 const InputContext b = actionContext(acts[j]);
-                const bool together = a == InputContext::Always ||
-                                      b == InputContext::Always || a == b;
+                const auto la = actionLayer_.find(acts[i]), lb = actionLayer_.find(acts[j]);
+                const bool layerA = la != actionLayer_.end(), layerB = lb != actionLayer_.end();
+                const bool together =
+                    layerA || layerB ? (layerA && layerB ? la->second == lb->second
+                                                         : (layerA ? b : a) == InputContext::Always)
+                                     : a == InputContext::Always || b == InputContext::Always ||
+                                           a == InputContext::Camera || b == InputContext::Camera || a == b;
                 if (!together) continue;   // foot vs vehicle: deliberate
                 out.push_back(std::string(entry.second) + ": '" + acts[i] +
                               "' and '" + acts[j] + "' both fire " +
@@ -392,7 +418,7 @@ std::vector<std::string> InputMap::collisions() const {
 
 Real InputMap::axis(const std::string& name) const {
     auto it = axes.find(name);
-    if (it == axes.end()) return 0.0;
+    if (it == axes.end() || !live(name)) return 0.0;
     Real value = 0.0;
     for (const auto& contribution : it->second) {
         if (contribution.kind == AxisContribution::Kind::Digital) {

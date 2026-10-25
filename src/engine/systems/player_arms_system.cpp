@@ -5,6 +5,8 @@
 #include "../interaction.h"   // Seated
 #include "../mesh_builder.h"
 #include "../player_pose.h"
+#include "../player/tools.h"
+#include "../wrist_watch.h"
 #include "../procgen/person.h"
 
 #include <algorithm>
@@ -101,9 +103,17 @@ void PlayerArmsSystem::update(FrameContext& ctx) {
             Renderable r;
             r.mesh = i == 6 ? canopy : box;
             r.material.albedo = i < 2 ? outfit.shirt : i < 4 ? outfit.skin : i < 6 ? Vec3(0.95, 0.45, 0.08)
-                              : i == 6 ? Vec3(1, 1, 1) : i == 11 ? Vec3(0.25, 0.25, 0.27) : Vec3(0.15, 0.15, 0.17);
-            r.material.roughness = 0.85f;
-            r.material.metallic = 0.0f;
+                              : i == 6 ? Vec3(1, 1, 1) : i == 11 ? Vec3(0.25, 0.25, 0.27)
+                              : i == 12 ? Vec3(0.06, 0.06, 0.07) : i == 13 ? Vec3(0.03, 0.03, 0.03)
+                                        : Vec3(0.15, 0.15, 0.17);
+            if (i == 12) {   // the watch's case: a little sheen
+                r.material.roughness = 0.35f;
+                r.material.metallic = 0.6f;
+            }
+            if (i != 12) {
+                r.material.roughness = 0.85f;
+                r.material.metallic = 0.0f;
+            }
             r.material.opacity = 1.0f;
             world.add<Renderable>(parts_[i], r);
         }
@@ -138,7 +148,7 @@ void PlayerArmsSystem::update(FrameContext& ctx) {
         const bool on = pose && body && pose->mode == PlayerPose::Mode::Parachute;
         if (!on) {
             if (canopyShown_)
-                for (int i = 6; i < kParts; ++i) place(i, Vec3(0, kOut, 0), Quat::identity(), Vec3(1, 1, 1));
+                for (int i = 6; i < 11; ++i) place(i, Vec3(0, kOut, 0), Quat::identity(), Vec3(1, 1, 1));
             canopyShown_ = false;
             return;
         }
@@ -209,7 +219,16 @@ void PlayerArmsSystem::update(FrameContext& ctx) {
         const Vec3 td = tip - before;
         place(11, tip, facing(td.length() > 1e-5 ? td : Vec3(0, 0, 1), Vec3(0, 1, 0)), Vec3(0.07, 0.07, 0.12));
     };
+    WristWatch* watch = player.valid() ? world.get<WristWatch>(player) : nullptr;
+    if (watch) watch->faceShown = false;
+    auto hideWatch = [&]() {
+        if (!watchShown_) return;
+        place(12, Vec3(0, kOut, 0), Quat::identity(), Vec3(1, 1, 1));
+        place(13, Vec3(0, kOut, 0), Quat::identity(), Vec3(1, 1, 1));
+        watchShown_ = false;
+    };
     if (!visible) {
+        hideWatch();
         if (shown_)
             for (int i = 0; i < 6; ++i) place(i, Vec3(0, kOut, 0), Quat::identity(), Vec3(1, 1, 1));
         shown_ = false;
@@ -220,8 +239,6 @@ void PlayerArmsSystem::update(FrameContext& ctx) {
     }
     shown_ = true;
 
-    for (int k = 1; k <= 9; ++k)   // (only reached in first person, where the gun script takes the keys too)
-        if (ctx.actions.pressed("slot_" + std::to_string(k))) slot_ = k;
 
     const CameraState& cam = ctx.view.camera;
     const Vec3 eye = cam.position;
@@ -242,7 +259,11 @@ void PlayerArmsSystem::update(FrameContext& ctx) {
                       (pose->mode == PlayerPose::Mode::Board && pose->board == 1);
     // THE GUN, where gun.lua's viewmodel puts it: 0.35 ahead of the eye, 0.18 right, 0.18 down, barrel along
     // the view. The hands go on it: the right on the grip, the left under the barrel.
-    const bool gun = slot_ == 2 && (pose->mode == PlayerPose::Mode::Walk || pose->mode == PlayerPose::Mode::Air);
+    const bool gun = pose->tool == slotOf(Tool::Gun) && pose->handsFree >= 2;
+    // THE WATCH RAISED: the left wrist brought up in front of the face, the back of it toward the eye (the gun's
+    // support hand comes off the barrel to look)
+    const Real raise = watch ? std::clamp(watch->raise, Real(0), Real(1)) : 0;
+    const Real lift = raise * raise * (3.0 - 2.0 * raise);
     Vec3 gunGrip[2];
     if (gun) {
         const Vec3 at = eye + fwd * 0.35 + right * 0.18 + Vec3(0, -0.18, 0);
@@ -334,6 +355,7 @@ void PlayerArmsSystem::update(FrameContext& ctx) {
             if (d.length() > 0.05) want = sh + normalize(d) * 0.6;
         }
         if (gun) want = gunGrip[k];
+        if (k == 0 && lift > 0) want = want + (Vec3(0.1, -0.06, 0.3) - want) * lift;   // across in front of the face
         if (!haveLocal_) local_[k] = want;
         // planted hands follow the grip fast (they hold the wall while the view moves); free ones ease
         const Real rate = held || gun ? 30.0 : 14.0;
@@ -349,6 +371,26 @@ void PlayerArmsSystem::update(FrameContext& ctx) {
         place(k, shoulder + along * (sleeve * 0.5), q, Vec3(kSleeve, kSleeve, sleeve));
         place(2 + k, hand, q, Vec3(0.07, 0.05, 0.1));
         handWorld_[k] = hand;
+        // THE WATCH, on the back of the left wrist: its face turned to the eye, 12 o'clock up the view
+        if (k == 0) {
+            const Vec3 wrist = hand - along * 0.06;   // between the cuff (0.07 back) and the hand's block (0.05)
+            Vec3 n = eye - wrist;
+            n = n.length() > 1e-5 ? normalize(n) : fwd * -1.0;
+            Vec3 fr = cross(up, n);
+            fr = fr.length() > 1e-5 ? normalize(fr) : right;
+            const Vec3 fu = cross(n, fr);
+            const Real r = watch ? watch->radius : 0.022;
+            const Quat fq = facing(n, fu);
+            place(12, wrist + n * 0.034, fq, Vec3(r * 2.3, r * 2.3, 0.012));      // the case, on the strap
+            place(13, wrist, facing(along, up), Vec3(0.074, 0.056, 0.026));        // the strap round the wrist
+            watchShown_ = true;
+            if (watch && lift > 0.6) {
+                watch->faceShown = true;
+                watch->centre = wrist + n * 0.0405;   // (just proud of the case's front)
+                watch->right = fr;
+                watch->up = fu;
+            }
+        }
         if (pose->mode == PlayerPose::Mode::Wingsuit)   // the wing: a sheet hanging from the arm toward the body
             place(4 + k, shoulder + along * (sleeve * 0.5) - up * 0.16, q, Vec3(0.012, 0.3, sleeve));
         else

@@ -6,6 +6,7 @@
 #include "../camera/follow_camera_controller.h"
 #include "../physics/physics_world.h"
 #include "../player/player_body.h"   // the body's modes (and body_rules.h: the fall net, the water, the air)
+#include "../ui/ui_text.h"
 
 #include <string>
 
@@ -61,6 +62,9 @@ private:
     Real hotbarShow_ = 0;         // s left showing the tool row after a slot change
     Real hudClock_ = 0;           // for the prompt's pulse
     void drawGearHud(FrameContext& ctx);
+    UiText hud_;                  // the tool row and the prompts' words (the game UI layer)
+public:
+    void onStop(FrameContext& ctx) override { hud_.release(ctx.renderer); }
 };
 
 }  // namespace engine

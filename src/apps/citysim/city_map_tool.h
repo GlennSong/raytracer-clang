@@ -78,6 +78,7 @@ private:
     engine::FlyCameraController& fly_;
 
     bool open_ = false;
+    bool layered_ = false;            // the map's input layer is pushed (open_, as the input map knows it)
     bool follow_ = true;              // the view tracks the player until panned
     double cx_ = 0, cz_ = 0;          // world point at the panel centre
     double mpp_ = 1.0;                // metres per framebuffer pixel

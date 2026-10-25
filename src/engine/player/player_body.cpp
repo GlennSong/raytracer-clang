@@ -204,7 +204,7 @@ bool PlayerBody::tryDeploy(BodyStep& s) {
     look.y = 0;
     glide.heading = h.length() > 0.5 ? normalize(h) : look.lengthSquared() > 1e-6 ? normalize(look) : Vec3(0, 0, -1);
     glide.open = 0;
-    const bool chute = hands.gear == 5;
+    const bool chute = hands.tool == Tool::Parachute;
     enter(chute ? static_cast<BodyMode&>(parachute) : wingsuit);
     if (chute) ++chuteOpens;
     event(chute ? "parachute open" : "wingsuit spread");
@@ -382,6 +382,7 @@ void PlayerBody::publish(BodyStep& s) {
     p->ollies = ollies;
     p->boardLands = boardLands;
     p->landSpeed = landSpeed;
+    p->tool = slotOf(hands.tool);
     if (!s.in.active) {   // the freecam: nobody's eye, no arms
         p->mode = PlayerPose::Mode::Hidden;
         p->handsFree = 2;
@@ -407,7 +408,7 @@ void PlayerBody::publish(BodyStep& s) {
     p->underwater = water.swimming && s.in.eye.y < swimLevel - 0.05;
     p->grabs = grabs;
     p->progress = 0;
-    p->handsFree = mode_->handsFree();
+    p->handsFree = mode_->handsFree(*this);
     if (mode_->movesFreely()) {
         p->velocity = v;
         p->airspeed = v.length();

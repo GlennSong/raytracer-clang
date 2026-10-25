@@ -22,6 +22,7 @@
 #include "../engine/systems/residency_system.h"
 #include "../engine/systems/grass_system.h"
 #include "../engine/systems/flashlight_system.h"
+#include "../engine/systems/watch_system.h"
 #include "../engine/systems/nature_collider_system.h"
 #include "../apps/citysim/city_render.h"
 #include "../apps/citysim/city_spectate.h"
@@ -226,7 +227,8 @@ ArenaState::ArenaState(Window& window, Renderer& renderer,
     // consumption) — and after PlayerSystem, so its chase-camera write wins.
     addSystem<citysim::CityPossessSystem>(citySys, physSys);
     addSystem<VehicleSystem>(physSys, camSys);   // drives real cars: player + promoted
-    addSystem<FlashlightSystem>();               // tool slot 4: its beam, staged in render() before RenderSystem
+    addSystem<FlashlightSystem>();               // the light (L / D-pad up): its beam, staged in render() before RenderSystem
+    addSystem<WatchSystem>();                    // the watch (Q / D-pad down): compass, waypoint, time on the wrist
 #else
     // physics-off build: no collider/vehicle/walker bridges; the spectate camera
     // above still follows the sim ghosts (citySys is consumed there).
@@ -246,7 +248,7 @@ ArenaState::ArenaState(Window& window, Renderer& renderer,
     // THE INTERACTION BROKER owns E: AFTER every provider (transit, the lifts, furniture) so a frame's offers are
     // all in when it picks the focus (engine/interact_broker.h).
     addSystem<InteractBrokerSystem>(&physSys);
-    addSystem<ToolCycleSystem>();   // LB / RB step through the tools (slot_1..4)
+    addSystem<ToolCycleSystem>();   // LB / RB step through the tools (slot_1..8)
 #else
     addSystem<ResidencySystem>();
     addSystem<TerrainLodSystem>();          // CDLOD draws only (no physics build)

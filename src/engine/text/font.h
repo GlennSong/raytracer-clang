@@ -30,6 +30,29 @@ struct TextImage {
     void fillRect(int x0, int y0, int x1, int y1, const uint8_t c[4]);
 };
 
+// A GLYPH ATLAS (the game UI's text, ADR-0250): printable ASCII and the degree sign, each glyph's coverage baked
+// once at one pixel height into a white image's alpha, with where it sits from the pen and the kerning between
+// them -- so a line of text is one quad per glyph on one texture, crisp at the height it was baked for.
+struct GlyphAtlas {
+    TextImage image;              // white; alpha = coverage
+    float pixelHeight = 0, ascent = 0, descent = 0;
+    struct Glyph {
+        float u0 = 0, v0 = 0, u1 = 0, v1 = 0;   // in the image (0..1)
+        float x0 = 0, y0 = 0, x1 = 0, y1 = 0;   // pixels from the pen at the baseline (y down)
+        float advance = 0;
+    };
+    // the glyph for a code point (nullptr: not in the atlas -- drawn as nothing, advanced as a space)
+    const Glyph* glyph(int codepoint) const;
+    float kern(int a, int b) const;
+    float measure(const std::string& text) const;
+    std::vector<int> codepoints;  // sorted, glyphs[i] is codepoints[i]'s
+    std::vector<Glyph> glyphs;
+    std::vector<float> kerning;   // n x n, pixels
+};
+
+// UTF-8 to code points (an accent is one glyph, not three).
+std::vector<int> utf8Codepoints(const std::string& s);
+
 class Font {
 public:
     Font();
@@ -57,6 +80,9 @@ public:
     // viewer, with no font to install or embed (a browser or Inkscape ignoring an embedded font laid
     // wider text over a panel sized for this one).
     std::string svgPath(const std::string& text, float x, float baselineY, float pixelHeight, float xScale = 1.0f) const;
+
+    // The glyph atlas at `pixelHeight` (false: no font loaded).
+    bool bakeAtlas(float pixelHeight, GlyphAtlas& out) const;
 
 private:
     std::vector<uint8_t> data_;

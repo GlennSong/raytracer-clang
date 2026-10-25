@@ -35,11 +35,8 @@
 
 namespace engine {
 
-namespace {
-
-// UTF-8 -> code points (street names are ASCII today; this keeps an accent
-// from becoming three garbage glyphs).
-std::vector<int> codepoints(const std::string& s) {
+// (street names are ASCII today; this keeps an accent from becoming three garbage glyphs)
+std::vector<int> utf8Codepoints(const std::string& s) {
     std::vector<int> out;
     for (std::size_t i = 0; i < s.size();) {
         const unsigned char c = static_cast<unsigned char>(s[i]);
@@ -54,8 +51,6 @@ std::vector<int> codepoints(const std::string& s) {
     }
     return out;
 }
-
-}  // namespace
 
 void TextImage::resize(int width, int height, const uint8_t fill[4]) {
     w = std::max(0, width);
@@ -121,7 +116,7 @@ float Font::capHeight(float pixelHeight) const {
 float Font::measure(const std::string& text, float pixelHeight, float xScale) const {
     if (!info_) return 0;
     const float s = stbtt_ScaleForPixelHeight(info_.get(), pixelHeight) * xScale;
-    const std::vector<int> cps = codepoints(text);
+    const std::vector<int> cps = utf8Codepoints(text);
     float x = 0;
     for (std::size_t i = 0; i < cps.size(); ++i) {
         int adv, lsb;
@@ -138,7 +133,7 @@ void Font::draw(TextImage& img, const std::string& text, float x, float baseline
     if (!info_ || img.w <= 0 || img.h <= 0) return;
     const float sy = stbtt_ScaleForPixelHeight(info_.get(), pixelHeight);
     const float sx = sy * xScale;
-    const std::vector<int> cps = codepoints(text);
+    const std::vector<int> cps = utf8Codepoints(text);
     std::vector<uint8_t> glyph;
     for (std::size_t i = 0; i < cps.size(); ++i) {
         const float fx = std::floor(x), shift = x - fx;
@@ -179,7 +174,7 @@ std::string Font::svgPath(const std::string& text, float x, float baselineY, flo
     if (!info_) return {};
     const float sy = stbtt_ScaleForPixelHeight(info_.get(), pixelHeight);
     const float sx = sy * xScale;
-    const std::vector<int> cps = codepoints(text);
+    const std::vector<int> cps = utf8Codepoints(text);
     char buf[96];
     std::string d;
     for (std::size_t i = 0; i < cps.size(); ++i) {
@@ -232,6 +227,101 @@ const Font* tubeFont() {
     static bool ok = false;
     std::call_once(once, [] { ok = font.loadFile(assetPath("assets/fonts/TiltNeon.ttf")); });
     return ok ? &font : nullptr;
+}
+
+// --- the glyph atlas ---------------------------------------------------------------------------------------------
+
+const GlyphAtlas::Glyph* GlyphAtlas::glyph(int codepoint) const {
+    const auto it = std::lower_bound(codepoints.begin(), codepoints.end(), codepoint);
+    if (it == codepoints.end() || *it != codepoint) return nullptr;
+    return &glyphs[static_cast<std::size_t>(it - codepoints.begin())];
+}
+
+float GlyphAtlas::kern(int a, int b) const {
+    const auto ia = std::lower_bound(codepoints.begin(), codepoints.end(), a);
+    const auto ib = std::lower_bound(codepoints.begin(), codepoints.end(), b);
+    if (ia == codepoints.end() || *ia != a || ib == codepoints.end() || *ib != b) return 0;
+    const std::size_t n = codepoints.size();
+    return kerning[static_cast<std::size_t>(ia - codepoints.begin()) * n + static_cast<std::size_t>(ib - codepoints.begin())];
+}
+
+float GlyphAtlas::measure(const std::string& text) const {
+    const std::vector<int> cps = utf8Codepoints(text);
+    const Glyph* space = glyph(' ');
+    float x = 0;
+    for (std::size_t i = 0; i < cps.size(); ++i) {
+        const Glyph* g = glyph(cps[i]);
+        x += g ? g->advance : space ? space->advance : 0;
+        if (i + 1 < cps.size()) x += kern(cps[i], cps[i + 1]);
+    }
+    return x;
+}
+
+bool Font::bakeAtlas(float pixelHeight, GlyphAtlas& out) const {
+    if (!info_ || pixelHeight <= 0) return false;
+    out = GlyphAtlas{};
+    out.pixelHeight = pixelHeight;
+    out.ascent = ascent(pixelHeight);
+    out.descent = descent(pixelHeight);
+    for (int c = 32; c <= 126; ++c) out.codepoints.push_back(c);
+    out.codepoints.push_back(0xB0);   // the degree sign (a compass, a bearing)
+    const float s = stbtt_ScaleForPixelHeight(info_.get(), pixelHeight);
+    // SHELF PACKING, a 2 px gutter so linear filtering never reaches a neighbour
+    constexpr int kPad = 2, kWidth = 512;
+    struct Box { int x0, y0, x1, y1, px, py; };
+    std::vector<Box> boxes;
+    int penX = kPad, penY = kPad, shelf = 0;
+    for (int cp : out.codepoints) {
+        Box b{};
+        stbtt_GetCodepointBitmapBox(info_.get(), cp, s, s, &b.x0, &b.y0, &b.x1, &b.y1);
+        const int w = std::max(0, b.x1 - b.x0), h = std::max(0, b.y1 - b.y0);
+        if (penX + w + kPad > kWidth) {
+            penX = kPad;
+            penY += shelf + kPad;
+            shelf = 0;
+        }
+        b.px = penX;
+        b.py = penY;
+        penX += w + kPad;
+        shelf = std::max(shelf, h);
+        boxes.push_back(b);
+    }
+    int height = 16;
+    while (height < penY + shelf + kPad) height *= 2;
+    const uint8_t clear[4] = {255, 255, 255, 0};
+    out.image.resize(kWidth, height, clear);
+    std::vector<uint8_t> cov;
+    for (std::size_t i = 0; i < out.codepoints.size(); ++i) {
+        const Box& b = boxes[i];
+        const int w = std::max(0, b.x1 - b.x0), h = std::max(0, b.y1 - b.y0);
+        GlyphAtlas::Glyph g;
+        int adv, lsb;
+        stbtt_GetCodepointHMetrics(info_.get(), out.codepoints[i], &adv, &lsb);
+        g.advance = adv * s;
+        if (w > 0 && h > 0) {
+            cov.assign(static_cast<std::size_t>(w) * h, 0);
+            stbtt_MakeCodepointBitmap(info_.get(), cov.data(), w, h, w, s, s, out.codepoints[i]);
+            for (int y = 0; y < h; ++y)
+                for (int x = 0; x < w; ++x)
+                    out.image.rgba[(static_cast<std::size_t>(b.py + y) * kWidth + b.px + x) * 4 + 3] =
+                        cov[static_cast<std::size_t>(y) * w + x];
+            g.x0 = static_cast<float>(b.x0);
+            g.y0 = static_cast<float>(b.y0);
+            g.x1 = static_cast<float>(b.x1);
+            g.y1 = static_cast<float>(b.y1);
+            g.u0 = static_cast<float>(b.px) / kWidth;
+            g.v0 = static_cast<float>(b.py) / height;
+            g.u1 = static_cast<float>(b.px + w) / kWidth;
+            g.v1 = static_cast<float>(b.py + h) / height;
+        }
+        out.glyphs.push_back(g);
+    }
+    const std::size_t n = out.codepoints.size();
+    out.kerning.assign(n * n, 0.0f);
+    for (std::size_t a = 0; a < n; ++a)
+        for (std::size_t b = 0; b < n; ++b)
+            out.kerning[a * n + b] = stbtt_GetCodepointKernAdvance(info_.get(), out.codepoints[a], out.codepoints[b]) * s;
+    return true;
 }
 
 }  // namespace engine

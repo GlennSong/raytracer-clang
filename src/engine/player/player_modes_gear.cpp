@@ -165,7 +165,9 @@ void GrappleMode::pose(const PlayerBody&, const BodyStep&, PlayerPose& p) const 
 
 // --- on a board ----------------------------------------------------------------------------------------------------
 
-const char* BoardMode::name(const PlayerBody& b) const { return b.hands.gear == 9 ? "scooter" : "skateboard"; }
+int BoardMode::handsFree(const PlayerBody& b) const { return b.hands.tool == Tool::Scooter ? 1 : 2; }
+
+const char* BoardMode::name(const PlayerBody& b) const { return b.hands.tool == Tool::Scooter ? "scooter" : "skateboard"; }
 
 void BoardMode::leave(PlayerBody& b, BodyStep&) {
     if (b.hands.holdingBoard()) return;
@@ -179,7 +181,7 @@ void BoardMode::step(PlayerBody& b, BodyStep& s) {
     CharacterController& cc = s.cc;
     const MovementTuning& tune = b.tune;
     const Real dt = s.dt;
-    const bool scooter = b.hands.gear == 9;
+    const bool scooter = b.hands.tool == Tool::Scooter;
     const GroundState g = pw.characterGroundState(cc.characterId);
     const bool grounded = g == GroundState::OnGround || g == GroundState::OnSteepGround;
     if (grounded) {
@@ -233,7 +235,7 @@ Vec3 BoardMode::thrown(const Vec3& meant, const Vec3& got, const Vec3& dir) cons
 
 void BoardMode::pose(const PlayerBody& b, const BodyStep& s, PlayerPose& p) const {
     p.mode = PlayerPose::Mode::Board;
-    p.board = b.hands.gear == 9 ? 1 : 0;
+    p.board = b.hands.tool == Tool::Scooter ? 1 : 0;
     p.boardHeading = heading;
     p.kick = kickClock > 0 ? 1.0 - kickClock / std::max(b.tune.boardKickTime, Real(0.05)) : 0;
     const Vec3 side(-heading.z, 0, heading.x);   // the board's left

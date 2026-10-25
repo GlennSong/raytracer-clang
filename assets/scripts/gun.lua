@@ -48,8 +48,8 @@ function G:update(e, dt)
         if input.pressed("slot_2") then self.equipped = true end
         if input.pressed("slot_1") then self.equipped = false end
         if input.pressed("slot_3") then self.equipped = false end   -- the map
-        if input.pressed("slot_5") or input.pressed("slot_6") or input.pressed("slot_7") or
-           input.pressed("slot_8") or input.pressed("slot_9") then
+        if input.pressed("slot_4") or input.pressed("slot_5") or input.pressed("slot_6") or
+           input.pressed("slot_7") or input.pressed("slot_8") then
             self.equipped = false   -- the chute, the suit, the grapple
         end
     end
@@ -91,8 +91,8 @@ function M:update(e, dt)
         if input.pressed("slot_2") then self.equipped = true end
         if input.pressed("slot_1") then self.equipped = false end
         if input.pressed("slot_3") then self.equipped = false end   -- the map
-        if input.pressed("slot_5") or input.pressed("slot_6") or input.pressed("slot_7") or
-           input.pressed("slot_8") or input.pressed("slot_9") then
+        if input.pressed("slot_4") or input.pressed("slot_5") or input.pressed("slot_6") or
+           input.pressed("slot_7") or input.pressed("slot_8") then
             self.equipped = false   -- the chute, the suit, the grapple
         end
     end

@@ -174,6 +174,7 @@ add_library(engine_core STATIC
     src/engine/procgen/city/street_names.cpp     # streets as named chains (tools/city_street_names.py, in C++)
     src/engine/procgen/city/street_signs.cpp     # street name signs: plan, lettered atlas, meshes
     src/engine/text/font.cpp                     # TrueType text into images (stb_truetype)
+    src/engine/ui/ui_text.cpp                    # the game UI's words: glyph atlases as UI quads (ADR-0250)
     src/engine/procgen/city/alignment.cpp
     src/engine/procgen/city/corridor_mesh.cpp
     src/engine/procgen/city/road_mesh.cpp
@@ -266,6 +267,7 @@ add_library(engine_core STATIC
     src/engine/systems/water_ambience_system.cpp
     src/engine/systems/underwater_system.cpp
     src/engine/systems/flashlight_system.cpp
+    src/engine/systems/watch_system.cpp      # the watch on the wrist: compass, waypoint, time (ADR-0251)
     src/engine/residency.cpp
     src/engine/occlusion.cpp
     # NOTE: the agent-based city simulation (ADR-0060…0066) is NOT here. It is an
@@ -728,6 +730,8 @@ add_executable(run_tests
     tests/test_skeleton.cpp
     tests/test_skin.cpp
     tests/test_input_map.cpp
+    tests/test_ui_text.cpp   # the game UI's words; the watch's readouts (ADR-0250/0251)
+    src/renderer/null_renderer.cpp   # Renderer::create (the UI kit's textures, uploaded nowhere)
     tests/test_player_input.cpp
     tests/test_camera.cpp
     tests/test_follow_camera.cpp

@@ -12209,3 +12209,109 @@ that every mode reports into.
 
 **Not yet.** Being hit (a car into the player on foot, on a board, under a canopy) isn't the body's own loss: it
 needs the hit's impulse from physics, which comes with plan step 4 (in-car hits, ejection from open vehicles).
+
+## ADR-0248 — Input layers; the map takes the controls and marks a waypoint
+
+**Context.** Glenn: "If you bring the map up, we should do something like push a new input frame of reference over
+top of the stack and have the gamepad and mouse controls only control the map so we can pan around, zoom in and
+out ... set a waypoint". The map suspended mouse look only, so the stick still walked the player under it, and the
+pad couldn't pan, zoom or mark anything.
+
+**Decision.**
+- **Input layers** (`InputMap::pushLayer` / `popLayer` / `setActionLayer`). An action tagged with a layer answers
+  only while that layer is the top one. While any layer is up, the body's actions (`OnFoot`, `InVehicle`) and the
+  view's go dead. `Always` actions still answer whatever is up: the tool slots, quit, pause, the overlay.
+- **A new context, `Camera`,** for the fly camera's movement and look axes (`cam_forward`, `cam_right`, `cam_up`,
+  `cam_look_x/y`), which also walk the player: live like `Always`, except under a layer.
+  - `axis()` now answers only for live axes. Before, it answered whatever the context.
+- The collision report knows layers. A layer's keys clash only with `Always` actions or with the same layer's.
+- **The map** (`city_map_tool`) pushes the `map` layer while it is up:
+  - pan with the left stick or WASD (half the panel a second at full tilt);
+  - zoom with the right stick, E/Q or the wheel;
+  - **mark** at the crosshair with A, Space or a right click, which sets the waypoint, or clears it when it's
+    already under the crosshair;
+  - Y or C goes back to you; B puts the map away (as does any slot key).
+- **`engine::Waypoint`** (`engine/waypoint.h`) on the player entity: absent means none. The map draws it, pinned to
+  the edge when off the panel, in the colour the watch will use.
+
+**Measured** (river_town, a probe): W held for 1 s walked 5.9 m with the map down, 0.0 m with it up, and 6.0 m
+again once it was put away.
+- The first key choices clashed with existing `Always` keys. `+`/`-` change the sim speed, and the probe found
+  that out by pausing the game. `Enter` is pause, and the startup clash report said so. Hence E/Q and Space, which
+  are the body's keys and dead under the map.
+
+Test: `input_a_layer_takes_the_controls_from_the_body_and_the_view`.
+
+## ADR-0249 — The light is a switch, not a tool; the tools on one list
+
+**Context.** Glenn: "fix the flashlight option to allow it to turn on and off. Right now when I LB over to it it
+turns on and I'd have to LB back to it to turn it off". The light was tool slot 4, toggled by its own slot press,
+and LB/RB cycle the tools by pressing the next slot. So stepping past it switched it on, and stepping back past it
+switched it off. It also couldn't be on with the gun out, which was one of Glenn's combinations.
+
+**Decision.**
+- **`light` is an action of its own:** L on foot (in a car L is the headlights, `vehicle_lights`, so the key means
+  "lights" either way) and D-pad up on the pad (Glenn's choice).
+  - It works whatever is in hand: held in the right hand with nothing else in it, under the barrel with the gun
+    out, a headlamp with anything else (the map, a chute, the grapple, a board).
+  - In third person it rides the body (the camera is behind it), aimed where the view looks.
+  - `PlayerPose::tool` says what is in hand.
+- **The tools are one enum** (`engine/player/tools.h`): 1 hands, 2 gun, 3 map, 4 parachute, 5 wingsuit, 6 grapple,
+  7 skateboard, 8 scooter. Every reader goes through it, where before each held its own numbers:
+  - PlayerHands, the tool row (`toolName`), ToolCycleSystem (8 slots), the map (put away by any other slot);
+  - the gun script, which stows on 4–8.
+- **The slots past the map moved down one.** Keyboard keys 5–9 are now 4–8.
+
+**Trace.** The scenarios' slot presses were renumbered; every trace is unchanged.
+
+## ADR-0250 — The game UI's words: glyph atlases over the UI layer; prompts off ImGui
+
+**Context.** The game UI layer (`Renderer::submitUi`, ADR-0088) drew textured quads but had no text. So the tool
+row, the chute prompts and the interaction prompt were drawn on ImGui's foreground list: the developer overlay,
+standing in for a game HUD. The watch needs words and numbers on its face, mapped onto a wrist in 3D, which ImGui
+can't do.
+
+**Decision.**
+- **`GlyphAtlas`** (`text/font.h`, `Font::bakeAtlas`): printable ASCII and the degree sign baked at one pixel
+  height. Coverage goes in a white image's alpha, packed on shelves with 2 px gutters, with each glyph's box from
+  the pen and the kerning table. Its `measure` matches `Font::measure` exactly (tested).
+- **`UiText`** (`engine/ui/ui_text.h`):
+  - the sign face (Overpass Bold, already credited), one atlas per pixel height, baked and uploaded on first use;
+  - `text` (one quad per glyph, pen on whole pixels so the glyphs stay crisp), `measure`, `label` (words on a
+    backing box), `rect`, and antialiased `disc` and `ring` sprites.
+- **The UI layer** (Vulkan):
+  - `submitUi` now ADDS to the frame's list (cleared at `beginFrame`), so the map, the HUD and the watch each submit
+    theirs;
+  - one descriptor per texture a frame, not per quad, so a line of text is one set;
+  - the cap went from 256 quads to 16384.
+- **Moved off ImGui:** the gear HUD (tool row, swing/bars/grapple/board/chute prompts, the grapple's aim ring) and
+  the interaction marker and prompt. Sizes are in window points times the display's scale. Both stand down while a
+  layer has the controls (the map).
+
+**Not yet:** the transit panel ("BUS STOP ... next bus") is still an ImGui window, owed.
+
+## ADR-0251 — The watch on the wrist: compass, waypoint, time
+
+**Context.** Glenn: "set a waypoint and then show an arrow in the hud that points you towards the way point. Not a
+minimap", then "Maybe it could be like a diegetic piece of UI ... you have a smart watch ... push a button to
+bring your arm closer up to your face". He chose hold Q or D-pad down, and the dial in both views.
+
+**Decision.**
+- **`WristWatch`** (on the player) and **`WatchSystem`**:
+  - hold `watch` (Q, D-pad down; on foot) and the wrist comes up, eased;
+  - only with a hand free, as the body's mode says. `handsFree` now differs by mode: 2 on foot and on the
+    skateboard; 1 under a canopy (a hand off a toggle), on the rope, on the scooter; 0 climbing, on a ladder, on the
+    bars or swing, swimming, in a wingsuit, limp.
+- **First person:** `PlayerArmsSystem` brings the left hand up in front of the face. A case and a strap sit on the
+  bare wrist between the cuff and the hand, and it records where the face is.
+  - The dial is drawn on the UI layer and mapped corner by corner through the camera onto that face. A smartwatch's
+    face is a lit screen, so unlit and after the tonemap is right, and it moves with the wrist.
+- **Third person:** the same dial as a panel by the character, kept on the screen.
+- **The dial:**
+  - the compass turns with the heading (ahead is up), with ticks every 30° and N (red) E S W;
+  - the waypoint (`engine::Waypoint`, set on the map) is a gold dot on the edge at its bearing, with the distance in
+    the middle ("340 m", "1.2 km", "here" within 12 m) and the time under it;
+  - with no waypoint, the time (the sky's clock, `lighting.clockHours`).
+
+Tests: `the_watch_reads_distance_and_time_as_a_person_would`,
+`the_watch_dial_turns_with_the_heading_and_puts_the_waypoint_on_its_edge`.

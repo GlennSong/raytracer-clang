@@ -380,3 +380,46 @@ TEST_CASE(input_triggers_injected_presses_and_the_device_in_use) {
     map.processEvent(keyDown(KeyCode::W));
     CHECK(!map.gamepadInUse());
 }
+
+// INPUT LAYERS (ADR-0248): the map up takes the stick and the keys; the body under it, and the view, go dead
+TEST_CASE(input_a_layer_takes_the_controls_from_the_body_and_the_view) {
+    InputMap m;
+    m.bindAxis("cam_forward", KeyCode::W, 1.0);
+    m.setActionContext("cam_forward", InputContext::Camera);
+    m.bindButton("player_jump", KeyCode::Space);
+    m.setActionContext("player_jump", InputContext::OnFoot);
+    m.bindButton("slot_1", KeyCode::Num1);   // Always
+    m.bindAxis("map_pan_y", KeyCode::W, -1.0);
+    m.bindButton("map_mark", KeyCode::Space);
+    m.setActionLayer("map_pan_y", "map");
+    m.setActionLayer("map_mark", "map");
+    m.beginFrame();
+    m.processEvent(keyDown(KeyCode::W));
+    m.processEvent(keyDown(KeyCode::Space));
+    m.processEvent(keyDown(KeyCode::Num1));
+    // nothing up: the body and the view have them, the map's are dead
+    CHECK_APPROX(m.axis("cam_forward"), 1.0, 1e-9);
+    CHECK(m.pressed("player_jump"));
+    CHECK_APPROX(m.axis("map_pan_y"), 0.0, 1e-9);
+    CHECK(!m.pressed("map_mark"));
+    // the map up: the other way round, and the tool slot still answers
+    m.pushLayer("map");
+    CHECK(m.layerUp());
+    CHECK(m.topLayer() == "map");
+    CHECK_APPROX(m.axis("cam_forward"), 0.0, 1e-9);
+    CHECK(!m.pressed("player_jump"));
+    CHECK(!m.held("player_jump"));
+    CHECK_APPROX(m.axis("map_pan_y"), -1.0, 1e-9);
+    CHECK(m.pressed("map_mark"));
+    CHECK(m.pressed("slot_1"));
+    // another layer over it: the map's go dead too (only the top one answers)
+    m.pushLayer("menu");
+    CHECK(!m.pressed("map_mark"));
+    m.popLayer("menu");
+    CHECK(m.pressed("map_mark"));
+    m.popLayer("map");
+    CHECK(!m.layerUp());
+    CHECK(m.pressed("player_jump"));
+    // a layer's keys are not a clash with the body's (never live at once)
+    for (const std::string& c : m.collisions()) CHECK(c.find("map_") == std::string::npos);
+}

@@ -7,6 +7,7 @@
 
 #include "../locomotion.h"
 #include "../rope_line.h"
+#include "tools.h"
 
 #include <cstdint>
 
@@ -16,12 +17,12 @@ class PlayerBody;
 struct BodyStep;
 
 struct PlayerHands {
-    // THE TOOL IN HAND (the slots the gun script tracks too): 1 hands, 2 the gun, 3 the map, 4 the light,
-    // 5 the parachute, 6 the wingsuit (jump in the air opens either), 7 the grapple, 8 the skateboard, 9 the scooter
-    int gear = 1;
-    bool holdingBoard() const { return gear == 8 || gear == 9; }
-    bool holdingGlider() const { return gear == 5 || gear == 6; }
-    bool holdingGrapple() const { return gear == 7; }
+    // THE TOOL IN HAND (engine/player/tools.h; the gun script tracks the slots too). A chute or a suit opens with a
+    // jump in the air; a board is ridden on the ground.
+    Tool tool = Tool::Hands;
+    bool holdingBoard() const { return tool == Tool::Skateboard || tool == Tool::Scooter; }
+    bool holdingGlider() const { return tool == Tool::Parachute || tool == Tool::Wingsuit; }
+    bool holdingGrapple() const { return tool == Tool::Grapple; }
 
     // THE GRAPPLE'S HOOK
     enum class Hook { None, Flying, Hooked, Loose };
