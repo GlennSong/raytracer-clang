@@ -8,6 +8,7 @@
 // hit at all (the nearest few hundred), and only a hit costs anything: six Jolt bodies a slot.
 
 #include "../../engine/block_body.h"
+#include "../../engine/body_draw.h"
 #include "../../engine/system.h"
 #include "../../engine/physics/physics_world.h"
 #include "../../engine/procgen/city/polygon.h"   // Vec2
@@ -45,6 +46,8 @@ private:
         engine::Real age = 0, still = 0, scale = 1;
     };
     std::array<Slot, kSlots> slots_;
+    engine::BodyMeshes meshes_;                 // the limbs' skinned tubes, by fold (as the player's)
+    engine::AssetManager* assets_ = nullptr;   // (from knock)
     void stow(engine::World& world, Slot& s);
 };
 

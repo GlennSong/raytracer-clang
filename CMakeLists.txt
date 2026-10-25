@@ -101,6 +101,8 @@ add_library(engine_core STATIC
     src/engine/procgen/vehicle/car_interior.cpp
     src/engine/procgen/vehicle/occupant.cpp
     src/engine/procgen/person.cpp
+    src/engine/block_body.cpp            # the person as ten blocks: poses, two-bone limbs, the ragdoll's parts
+    src/engine/body_draw.cpp             # the jointed body drawn: blocks + skinned limb tubes by fold
     src/engine/procgen/tree_cache.cpp
     src/engine/procgen/vehicle/train_mesh.cpp
     src/engine/procgen/texture_field.cpp
@@ -1064,7 +1066,6 @@ if(RT_ENABLE_PHYSICS)
         src/engine/riding.cpp                # a rider held in a carrier's frame: bus, car, cab, train (ADR-0243)
         src/engine/systems/player_arms_system.cpp   # the block arms in first person
         src/engine/systems/player_body_system.cpp   # the body posed in third person, and limp
-        src/engine/block_body.cpp            # the person as six blocks: poses, the ragdoll's parts
         src/engine/systems/teleport_system.cpp
         src/engine/systems/shooting_system.cpp
         src/engine/systems/vehicle_system.cpp
@@ -1108,7 +1109,6 @@ if(RT_ENABLE_PHYSICS)
         src/engine/locomotion.cpp
         src/engine/rope_line.cpp
         src/engine/riding.cpp
-        src/engine/block_body.cpp
         src/apps/citysim/city_physics.cpp
         src/apps/citysim/city_player_transit.cpp
         src/apps/citysim/city_map_tool.cpp

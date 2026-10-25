@@ -41,6 +41,7 @@ int WalkerRagdolls::knock(World& world, engine::AssetManager& assets, PhysicsWor
     if (pick < 0) return -1;
     Slot& s = slots_[static_cast<std::size_t>(pick)];
     if (s.body != PhysicsWorld::INVALID_RAGDOLL) pw.removeRagdoll(s.body);
+    assets_ = &assets;
     engine::BodyPose pose;
     pose.position = centre;
     pose.scale = scale;
@@ -67,7 +68,7 @@ int WalkerRagdolls::knock(World& world, engine::AssetManager& assets, PhysicsWor
     const engine::PersonOutfit& o = engine::personOutfit(outfit);
     for (int i = 0; i < engine::BlockBody::kParts; ++i)
         if (engine::Renderable* r = world.get<engine::Renderable>(s.parts[static_cast<std::size_t>(i)]))
-            r->material.albedo = i == engine::BlockBody::Head ? o.skin : i >= engine::BlockBody::LegL ? o.pants : o.shirt;
+            r->material.albedo = i == engine::BlockBody::Head ? o.skin : engine::BlockBody::isLeg(i) ? o.pants : o.shirt;
     s.owner = owner;
     s.age = 0;
     s.still = 0;
@@ -81,19 +82,35 @@ std::vector<WalkerRagdolls::Up> WalkerRagdolls::step(World& world, PhysicsWorld&
         if (s.owner < 0) continue;
         s.age += dt;
         s.still = pw.ragdollSpeed(s.body) < 0.4 ? s.still + dt : 0;
+        // the parts where physics has them, drawn as the player's are: blocks and skinned limbs (body_draw.h)
+        std::array<engine::PartTransform, engine::BlockBody::kParts> blocks;
+        bool all = true;
         for (int i = 0; i < engine::BlockBody::kParts; ++i) {
-            Vec3 p;
-            Quat q;
-            if (!pw.ragdollPart(s.body, i, p, q)) continue;
-            engine::Transform* t = world.get<engine::Transform>(s.parts[static_cast<std::size_t>(i)]);
-            engine::PrevTransform* pt = world.get<engine::PrevTransform>(s.parts[static_cast<std::size_t>(i)]);
-            if (!t) continue;
-            const bool first = t->position.y < kOut * 0.5;
-            if (pt) pt->value = *t;
-            t->position = p;
-            t->orientation = q;
-            t->scale = engine::BlockBody::parts()[static_cast<std::size_t>(i)].size * s.scale;
-            if (pt && first) pt->value = *t;   // no streak up from below the world
+            engine::PartTransform& b = blocks[static_cast<std::size_t>(i)];
+            all = pw.ragdollPart(s.body, i, b.position, b.orientation) && all;
+            b.size = engine::BlockBody::parts()[static_cast<std::size_t>(i)].size * s.scale;
+        }
+        if (all && assets_) {
+            const std::array<engine::BodyPiece, engine::BlockBody::kParts> pieces = meshes_.pieces(*assets_, blocks, s.scale);
+            for (int i = 0; i < engine::BlockBody::kParts; ++i) {
+                const engine::BodyPiece& b = pieces[static_cast<std::size_t>(i)];
+                engine::Transform* t = world.get<engine::Transform>(s.parts[static_cast<std::size_t>(i)]);
+                engine::PrevTransform* pt = world.get<engine::PrevTransform>(s.parts[static_cast<std::size_t>(i)]);
+                if (!t) continue;
+                const bool first = t->position.y < kOut * 0.5;
+                if (pt) pt->value = *t;
+                if (!b.drawn) {
+                    t->position = Vec3(0, kOut, 0);
+                    if (pt) pt->value = *t;
+                    continue;
+                }
+                if (engine::Renderable* r = world.get<engine::Renderable>(s.parts[static_cast<std::size_t>(i)]))
+                    r->mesh = b.mesh;
+                t->position = b.position;
+                t->orientation = b.orientation;
+                t->scale = b.scale;
+                if (pt && first) pt->value = *t;   // no streak up from below the world
+            }
         }
         if (s.still > kStillFor || s.age > kMaxDown) {
             Vec3 torso;

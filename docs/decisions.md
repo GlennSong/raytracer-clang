@@ -12059,3 +12059,56 @@ opening the chute.
   under" (depth −1). Test: `a_swimmer_lifted_clear_of_the_water_is_out_of_it`.
 
 **Not shot:** bubbles. The water's surface is opaque from above, so the third-person rig never sees them.
+
+## ADR-0245 — Knees and elbows: a ten-part body, two-bone limbs, hinged ragdolls, skinned limbs
+
+**Context.** Glenn: "should we have elbow and knee joints in the player and agent model so there's some knee bend
+and slightly more detailed ragdolling?", then "Can you skin the arms and legs though -- as a challenge!" The body
+was six blocks. A pose gave each limb one direction, so a sitting, kicking or climbing limb stayed a stiff plank,
+and a ragdoll's legs swung from the hip like table legs. This is step 1 of the player plan (the jointed body comes
+before the mode refactor, so the new modes and the skate stance are built on it).
+
+**Decision.**
+- **Ten parts** (`engine/block_body.h`). Each limb is its old block cut at the elbow (0.31 + 0.31 m) or knee
+  (0.43 + 0.42 m). The old part numbers are kept (ArmL..LegR are now the upper halves); lower halves are +4.
+  Straight, the two halves are exactly the old block (tested).
+- **A pose is a direction plus a fold.** `BodyPose` keeps each limb's direction, now meaning root to hand or foot,
+  and adds `elbowL/R`, `kneeL/R` (radians, 0 straight). Every existing pose is still valid and simply straight.
+  - `solveLimb` is the two-bone solve. The joint points toward a pole: kneecaps forward, the point of the elbow
+    back. A share of a second direction keeps a limb pointing along the first from having no bend plane: a thigh
+    out in front bends its knee up.
+  - `reachTo` is two-bone IK: the hand lands on the hold and the elbow bends to make the distance. Climb, bars,
+    swing, scooter and grapple use it.
+- **Limb frames are hinge frames.** An upper half's x is its hinge axis; the lower half is that frame turned about
+  x by the fold. A ragdoll's fold therefore reads straight back from physics (`foldOf`).
+- **Ragdoll hinges.** Elbows and knees are Jolt hinge constraints, from straight (−2°) to `kElbowMax` 143° /
+  `kKneeMax` 149°.
+  - Hinge friction (elbow 1.5, knee 5 N m, × scale) is required. Without it, every joint of a thrown body folded
+    fully shut, measured.
+  - Masses: upper arm 2.2, forearm 1.8, thigh 7.5, shin 4.5 kg (67 kg in all, as before).
+  - Test: thrown, the body stays joined and every fold is within its limits, folded only its own way.
+- **Skinned limbs** (`skinnedLimb`). Each limb is drawn as one continuous tube: the blocks' cross-section, eased
+  from the upper's to the lower's across the joint, with nine rings around the joint.
+  - Bent, each ring turns about the hinge by its smoothstepped share of the fold, over ±0.75 × the half width.
+  - For a one-axis joint this is dual-quaternion skinning. The rings rotate rather than blending their corners
+    (linear blending pinches a bent joint, the "candy wrapper"), so the joint keeps its thickness. Tested: the
+    outside of a 100° bend reaches the full half depth along the bisector.
+  - Topology is fixed for every fold, so walk poses still share a layout.
+- **Drawn** (`engine/body_draw.h`, `BodyMeshes`):
+  - The player in third person and walker ragdolls pose every step. Each limb picks a skinned tube made once per
+    2.5° of fold: up to 60 per arm or leg, made when first used. The torso and head stay blocks, and the forearm
+    and shin entities are hidden.
+  - Baked bodies weld their tubes at their exact folds: `procgen/person.h buildPosedPerson` and `walkBodyPose`.
+  - `buildPersonMesh` (near walkers and the player's walk cycle) now strides with knees and elbows: the trailing
+    knee folds up to 38°, the elbows soften as the arm comes forward.
+  - The far crowd and ambient people keep `buildStandingPerson`'s six blocks. That's 144 vertices, against the
+    jointed mesh's 48 + 4 × 168, so the 515k-agent crowd costs the same as before.
+- `block_body.cpp` moved into engine_core (the mesh builders need it; it uses only the physics header's types).
+
+**Measured / seen** (movement_lab, river_town at noon): bent knees in the air, on the swing seat, under the canopy
+and on the board; hands on the holds by IK; ragdolls landing with partial, varied folds; near walkers' trailing
+knees folding.
+
+**Later.** GPU skinning (bone matrices in mesh.vert, a weights stream) belongs with animation clips (plan step 6),
+where shoulders, hips and the spine twist in three axes and a per-fold mesh no longer covers it. The seated
+occupant (`procgen/vehicle/occupant`) is still its own manikin with its own knees; it should move onto this body.

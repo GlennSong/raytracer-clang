@@ -191,6 +191,12 @@ public:
         Vec3 joint;                 // world, where it meets its parent
         Vec3 twistAxis{0, -1, 0};   // world, parent -> child
         Real swingDeg = 45, twistDeg = 20;
+        // A HINGE instead (an elbow, a knee): turning only about hingeAxis (world), between the limits -- degrees
+        // from where it is made, + turning the child right-handed about the axis
+        bool hinge = false;
+        Vec3 hingeAxis{1, 0, 0};
+        Real hingeMinDeg = 0, hingeMaxDeg = 0;
+        Real hingeFriction = 0;   // N m it takes to turn it (a joint's own stiffness: a limp knee still holds a little)
     };
     RagdollId addRagdoll(const std::vector<RagdollPart>& parts, const Vec3& velocity);
     void removeRagdoll(RagdollId id);

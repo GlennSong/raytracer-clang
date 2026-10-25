@@ -1,4 +1,6 @@
 #include "city_render.h"
+
+#include "../../engine/procgen/person.h"   // buildStandingPerson (the far crowd)
 #include "../../engine/ladder.h"   // the fire engines' ladders
 #include "../../engine/interaction.h"           // Interactables: the outdoor seats (M5)
 #include "../../engine/procgen/furniture_library.h"
@@ -1108,7 +1110,7 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
 
     MeshHandle pedMesh{}, lensMesh{};
     if (assets) {
-        pedMesh = assets->acquireMesh(buildPersonMesh(0.0, 0), "city:ped");
+        pedMesh = assets->acquireMesh(engine::buildStandingPerson(0.0, 0), "city:ped");   // (the crowd far off: six blocks)
         Real e = params_.signalLensSize;
         // a thin plate, turned with the head (signalLensPose), a centimetre proud of the head's own lamp -- it was a
         // 0.34 m CUBE, unturned, poking crooked through the lamp it lit (Glenn: "the stoplights are doubled up ...

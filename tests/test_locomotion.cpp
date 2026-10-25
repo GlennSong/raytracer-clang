@@ -478,14 +478,20 @@ TEST_CASE(the_grapple_hook_snaps_to_a_beam_just_off_the_aim) {
 }
 
 TEST_CASE(the_block_body_at_rest_is_the_walker_mesh) {
-    // The six blocks posed standing sit where buildStandingPerson welds them (procgen/person.cpp).
+    // The ten blocks posed standing straight sit where buildStandingPerson welds its six (procgen/person.cpp): each
+    // limb's two halves end to end make its one block.
     BodyPose pose;
     const std::array<PartTransform, BlockBody::kParts> b = poseBlocks(pose);
     CHECK_APPROX(b[BlockBody::Torso].position.y, 0.25, 1e-9);
     CHECK_APPROX(b[BlockBody::Head].position.y, 0.70, 1e-9);
-    CHECK_APPROX(b[BlockBody::ArmL].position.y, 0.19, 1e-9);
+    CHECK_APPROX((b[BlockBody::ArmL].position.y + b[BlockBody::ForearmL].position.y) * 0.5, 0.19, 1e-9);
     CHECK_APPROX(std::fabs(b[BlockBody::ArmL].position.x), 0.29, 1e-9);
-    CHECK_APPROX(b[BlockBody::LegR].position.y, -0.475, 1e-9);
+    CHECK_APPROX(std::fabs(b[BlockBody::ForearmL].position.x), 0.29, 1e-9);
+    CHECK_APPROX(b[BlockBody::ShinR].position.y - b[BlockBody::ShinR].size.y * 0.5, -0.9, 1e-9);   // the sole
+    CHECK_APPROX(b[BlockBody::LegR].position.y + b[BlockBody::LegR].size.y * 0.5, -0.05, 1e-9);    // the hip
+    for (int k = 0; k < BlockBody::kLimbs; ++k)   // each lower half starts where its upper one ends
+        CHECK((endOf(BlockBody::upper(k), b[BlockBody::upper(k)], 1.0) -
+               jointOf(BlockBody::lower(k), b[BlockBody::lower(k)], 1.0)).length() < 1e-9);
     // a limb reached at a point points at it from its joint
     pose.position = Vec3(3, 1, 2);
     pose.orientation = Quat::fromAxisAngle(Vec3(0, 1, 0), 0.7);
@@ -495,6 +501,84 @@ TEST_CASE(the_block_body_at_rest_is_the_walker_mesh) {
     const Vec3 shoulder = jointOf(BlockBody::ArmR, c[BlockBody::ArmR], 1.0);
     const Vec3 toCentre = normalize(c[BlockBody::ArmR].position - shoulder);
     CHECK_APPROX(dot(toCentre, normalize(target - shoulder)), 1.0, 1e-6);
+}
+
+TEST_CASE(a_limb_reaches_a_hold_by_bending_and_folds_the_right_way) {
+    BodyPose pose;
+    pose.position = Vec3(1, 2, -3);
+    pose.orientation = Quat::fromAxisAngle(Vec3(0, 1, 0), -0.4);
+    const Vec3 fwd = pose.orientation.rotate(Vec3(0, 0, 1)), up(0, 1, 0);
+    // a hold in front of the right shoulder, closer than the straight arm: the hand lands on it, the elbow bends
+    const LimbSolve straight = solveLimb(pose, 1);
+    const Vec3 hold = straight.root + fwd * 0.3 + up * 0.25;
+    reachTo(pose, BlockBody::ArmR, hold);
+    CHECK(pose.elbowR > 0.5 && pose.elbowR < kElbowMax);
+    const std::array<PartTransform, BlockBody::kParts> b = poseBlocks(pose);
+    CHECK((endOf(BlockBody::ForearmR, b[BlockBody::ForearmR], 1.0) - hold).length() < 1e-6);
+    CHECK((endOf(BlockBody::ArmR, b[BlockBody::ArmR], 1.0) - jointOf(BlockBody::ForearmR, b[BlockBody::ForearmR], 1.0))
+              .length() < 1e-6);   // one limb: the forearm starts at the elbow
+    const LimbSolve arm = solveLimb(pose, 1);
+    CHECK(dot(arm.mid - (arm.root + arm.end) * 0.5, fwd) < 0);   // the point of the elbow is behind the line
+    // out of reach: straight at it, short of it
+    BodyPose far = pose;
+    reachTo(far, BlockBody::ArmL, solveLimb(far, 0).root + fwd * 3.0);
+    CHECK(far.elbowL < 1e-3);
+    // a knee bent: its kneecap out in front of the hip-to-foot line, the foot drawn up toward the hip
+    BodyPose sit;
+    sit.kneeL = 1.4;
+    const LimbSolve leg = solveLimb(sit, 2);
+    CHECK(dot(leg.mid - (leg.root + leg.end) * 0.5, Vec3(0, 0, 1)) > 0.1);
+    CHECK((leg.end - leg.root).length() < 0.85 * 0.8);
+    // a thigh straight out in front (sat down) bends its knee up, not sideways
+    sit.legL = Vec3(0, 0, 1);
+    const LimbSolve out = solveLimb(sit, 2);
+    CHECK(out.mid.y > out.root.y + 0.1);
+    // the hinge axis turns the lower half further round: the fold grows
+    const Real fold = std::acos(dot(out.upperDir, out.lowerDir));
+    const Vec3 turned = Quat::fromAxisAngle(out.hingeAxis, 0.1).rotate(out.lowerDir);
+    CHECK(std::acos(dot(out.upperDir, turned)) > fold);
+}
+
+TEST_CASE(a_skinned_limb_covers_its_blocks_and_keeps_its_thickness_round_the_bend) {
+    for (int limb : {1, 2}) {   // an arm and a leg
+        const BlockBody::Part up = BlockBody::upper(limb), lo = BlockBody::lower(limb);
+        const Vec3 su = BlockBody::parts()[up].size;
+        const Real a = su.y, b = BlockBody::parts()[lo].size.y;
+        // straight: the two blocks' box exactly
+        const RenderMesh s0 = skinnedLimb(limb, 0.0, Vec3(1, 1, 1));
+        Vec3 lo0(1e9, 1e9, 1e9), hi0(-1e9, -1e9, -1e9);
+        for (const Vertex& v : s0.vertices) {
+            lo0 = Vec3(std::min(lo0.x, v.position.x), std::min(lo0.y, v.position.y), std::min(lo0.z, v.position.z));
+            hi0 = Vec3(std::max(hi0.x, v.position.x), std::max(hi0.y, v.position.y), std::max(hi0.z, v.position.z));
+        }
+        CHECK_APPROX(hi0.y, 0.0, 1e-9);
+        CHECK_APPROX(lo0.y, -(a + b), 1e-9);
+        CHECK_APPROX(hi0.x - lo0.x, su.x, 1e-9);
+        CHECK_APPROX(hi0.z - lo0.z, su.z, 1e-9);
+        // bent 100 degrees: the far end lands where poseBlocks puts the hand or foot, and the outside of the bend keeps
+        // its thickness -- the skin's furthest reach out along the bend's bisector is the half depth (blending the
+        // corners would pull it in to half depth x cos(50 deg))
+        const Real th = 100.0 * 3.14159265358979 / 180.0;
+        const RenderMesh s1 = skinnedLimb(limb, th, Vec3(1, 1, 1));
+        const Vec3 joint(0, -a, 0);
+        const Vec3 upDir(0, 1, 0), downDir(0, -std::cos(th), -std::sin(th));   // to the root, to the end
+        const Vec3 outward = normalize((upDir + downDir) * -1.0);
+        Real reach = -1e9, endErr = 1e9;
+        const Vec3 end = joint + downDir * b;
+        for (const Vertex& v : s1.vertices) {
+            reach = std::max(reach, dot(v.position - joint, outward));
+            endErr = std::min(endErr, (v.position - end).length());
+        }
+        CHECK(reach > 0.97 * su.z * 0.5);
+        CHECK(endErr < std::max(su.x, su.z) * 0.75);   // a cap corner by the end's centre
+        // the same tube placed by a pose bent that far: the end at the pose's hand or foot
+        BodyPose pose;
+        pose.bend(limb) = th;
+        const std::array<PartTransform, BlockBody::kParts> blocks = poseBlocks(pose);
+        CHECK_APPROX(foldOf(blocks[up].orientation, blocks[lo].orientation), th, 1e-6);
+        const Vec3 placedEnd = jointOf(up, blocks[up], 1.0) + blocks[up].orientation.rotate(end);
+        CHECK((placedEnd - endOf(lo, blocks[lo], 1.0)).length() < 1e-6);
+    }
 }
 
 TEST_CASE(a_ragdoll_falls_in_a_heap_and_holds_together) {
@@ -521,13 +605,30 @@ TEST_CASE(a_ragdoll_falls_in_a_heap_and_holds_together) {
     CHECK(top < 0.6);                      // down on the ground, not standing
     CHECK(now[BlockBody::Torso].position.z > 1.0);   // it went the way it was thrown
     CHECK(w.ragdollSpeed(r) < 0.3);        // and has come to rest
-    // every joint still joined: the child's end meets the parent's socket
+    // every joint still joined: the child's end meets the parent's socket (on the torso; a forearm or shin at the
+    // end of its upper half)
     for (int i = 1; i < BlockBody::kParts; ++i) {
         const Vec3 childEnd = jointOf(static_cast<BlockBody::Part>(i), now[i], pose.scale);
         const BlockBody::PartSpec& spec = BlockBody::parts()[static_cast<std::size_t>(i)];
-        const Vec3 socket = now[BlockBody::Torso].position +
-                            now[BlockBody::Torso].orientation.rotate((spec.joint - Vec3(0, 0.25, 0)) * pose.scale);
+        const Vec3 socket =
+            BlockBody::isLower(i)
+                ? endOf(static_cast<BlockBody::Part>(spec.parent), now[static_cast<std::size_t>(spec.parent)], pose.scale)
+                : now[BlockBody::Torso].position +
+                      now[BlockBody::Torso].orientation.rotate((spec.joint - Vec3(0, 0.25, 0)) * pose.scale);
         CHECK((childEnd - socket).length() < 0.08);
+    }
+    // the knees and elbows folded only their own way, and no further than they go: the hinge's axis carried round
+    // by the upper half (from where the ragdoll was made) still turns the lower half further round
+    const std::array<PartTransform, BlockBody::kParts> made = poseBlocks(pose);
+    for (int k = 0; k < BlockBody::kLimbs; ++k) {
+        const PartTransform& u = now[BlockBody::upper(k)];
+        const PartTransform& l = now[BlockBody::lower(k)];
+        const Vec3 ud = u.orientation.rotate(Vec3(0, -1, 0)), ld = l.orientation.rotate(Vec3(0, -1, 0));
+        const Real fold = std::acos(std::clamp(dot(ud, ld), Real(-1), Real(1)));
+        CHECK(fold < (k >= 2 ? kKneeMax : kElbowMax) + 0.1);
+        const Quat carried = u.orientation * made[BlockBody::upper(k)].orientation.conjugate();
+        const Vec3 axis = carried.rotate(parts[BlockBody::lower(k)].hingeAxis);
+        if (fold > 0.1) CHECK(dot(cross(ud, ld), axis) > 0);   // folded forward of straight, never back past it
     }
     w.removeRagdoll(r);
     CHECK(!w.ragdollPart(r, 0, now[0].position, now[0].orientation));

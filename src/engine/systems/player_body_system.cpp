@@ -1,6 +1,7 @@
 #include "player_body_system.h"
 
 #include "../asset_manager.h"
+#include "../body_draw.h"
 #include "../components.h"
 #include "../interaction.h"   // Seated
 #include "../mesh_builder.h"
@@ -11,6 +12,8 @@
 #include <cmath>
 
 namespace engine {
+
+static_assert(sizeof(PlayerPose::ragdollPos) / sizeof(Vec3) == BlockBody::kParts, "a ragdoll pose per block");
 
 namespace {
 
@@ -123,7 +126,7 @@ void PlayerBodySystem::fixedUpdate(FrameContext& ctx) {
             world.add<PrevTransform>(parts_[i], PrevTransform{away});
             Renderable r;
             r.mesh = box;
-            r.material.albedo = i == BlockBody::Head ? o.skin : i >= BlockBody::LegL ? o.pants : o.shirt;
+            r.material.albedo = i == BlockBody::Head ? o.skin : BlockBody::isLeg(i) ? o.pants : o.shirt;
             r.material.roughness = 0.9f;
             r.material.metallic = 0.0f;
             r.material.opacity = 1.0f;
@@ -198,17 +201,21 @@ void PlayerBodySystem::fixedUpdate(FrameContext& ctx) {
             case PlayerPose::Mode::Ladder: {
                 lean = Quat::fromAxisAngle(Vec3(1, 0, 0), 8 * kDeg);
                 pose.orientation = yawTo(face) * lean;
-                pose.armL = reachToward(pose, BlockBody::ArmL, p->handL);
-                pose.armR = reachToward(pose, BlockBody::ArmR, p->handR);
+                reachTo(pose, BlockBody::ArmL, p->handL);
+                reachTo(pose, BlockBody::ArmR, p->handR);
                 if (p->mode == PlayerPose::Mode::Mantle) {
                     const Vec3 hang = normalize(Vec3(0, -1, 0.15)), knee = normalize(Vec3(0, -0.35, 1));
                     const Real e = std::clamp((p->progress - 0.55) / 0.3, Real(0), Real(1));
                     pose.legL = normalize(hang + (knee - hang) * e);
                     pose.legR = hang;
+                    pose.kneeL = 0.15 + 1.5 * e;   // the knee comes up onto the ledge
+                    pose.kneeR = 0.15;
                 } else {
                     // a foot up, a foot down, in turn as the hands go
                     pose.legL = normalize(Vec3(0, -1, 0.3 + 0.35 * std::max(Real(0), cyc)));
                     pose.legR = normalize(Vec3(0, -1, 0.3 + 0.35 * std::max(Real(0), -cyc)));
+                    pose.kneeL = 0.35 + 0.9 * std::max(Real(0), cyc);   // the raised foot's knee folds up
+                    pose.kneeR = 0.35 + 0.9 * std::max(Real(0), -cyc);
                 }
                 break;
             }
@@ -236,6 +243,10 @@ void PlayerBodySystem::fixedUpdate(FrameContext& ctx) {
                 const Vec3 flL(0.04, -1, 0.15 * kick), flR(-0.04, -1, -0.15 * kick);
                 pose.legL = normalize(normalize(trL) + (normalize(flL) - normalize(trL)) * L);
                 pose.legR = normalize(normalize(trR) + (normalize(flR) - normalize(trR)) * L);
+                // treading: the knees pump in turn; the crawl: a flutter from the hip, the knees nearly straight
+                pose.kneeL = (0.55 + 0.45 * tread) * (1 - L) + 0.15 * L;
+                pose.kneeR = (0.55 - 0.45 * tread) * (1 - L) + 0.15 * L;
+                pose.elbowL = pose.elbowR = 0.35 * (1 - L) + 0.25 * L;
                 break;
             }
             case PlayerPose::Mode::Parachute:
@@ -244,6 +255,9 @@ void PlayerBodySystem::fixedUpdate(FrameContext& ctx) {
                 pose.armR = normalize(Vec3(-0.3, 1, 0.25));
                 pose.legL = normalize(Vec3(0.05, -1, 0.25));
                 pose.legR = normalize(Vec3(-0.05, -1, 0.15));
+                pose.elbowL = pose.elbowR = 0.7;   // hands down on the toggles
+                pose.kneeL = 0.4;                  // sat in the harness
+                pose.kneeR = 0.55;
                 break;
             case PlayerPose::Mode::Wingsuit: {
                 // flat to the air along the way it flies: head first and down as it dives
@@ -261,32 +275,36 @@ void PlayerBodySystem::fixedUpdate(FrameContext& ctx) {
                 // sat on the seat, hands up on the chains, the legs out on the swing forward and tucked on the back
                 const Real th = p->progress;
                 pose.orientation = yawTo(face) * Quat::fromAxisAngle(Vec3(1, 0, 0), -0.6 * th - 0.1);
-                pose.armL = reachToward(pose, BlockBody::ArmL, p->handL);
-                pose.armR = reachToward(pose, BlockBody::ArmR, p->handR);
+                reachTo(pose, BlockBody::ArmL, p->handL);
+                reachTo(pose, BlockBody::ArmR, p->handR);
                 const Vec3 legs = normalize(Vec3(0, -0.45 + 0.4 * std::max(Real(0), th), 1.0 - 0.6 * std::max(Real(0), -th)));
                 pose.legL = normalize(legs + Vec3(0.05, 0, 0));
                 pose.legR = normalize(legs - Vec3(0.05, 0, 0));
+                pose.kneeL = pose.kneeR = std::clamp(1.4 - 1.6 * th, Real(0.15), Real(1.6));   // tucked back, out forward
                 break;
             }
             case PlayerPose::Mode::Bars: {
                 // hanging off the bar, the legs swinging a little with each reach
                 pose.orientation = yawTo(face);
-                pose.armL = reachToward(pose, BlockBody::ArmL, p->handL);
-                pose.armR = reachToward(pose, BlockBody::ArmR, p->handR);
+                reachTo(pose, BlockBody::ArmL, p->handL);
+                reachTo(pose, BlockBody::ArmR, p->handR);
                 const Real sw = 0.25 * std::sin(clock_ * 3.0);
                 pose.legL = normalize(Vec3(0.04, -1, sw));
                 pose.legR = normalize(Vec3(-0.04, -1, sw));
+                pose.kneeL = pose.kneeR = 0.25 + 0.6 * std::max(Real(0), sw * 4.0);   // the knees lift as they swing up
                 break;
             }
             case PlayerPose::Mode::Board: {
                 if (p->board == 1) {
                     // the scooter: facing ahead, hands on the bar, a foot kicking back off the ground
                     pose.orientation = yawTo(face) * Quat::fromAxisAngle(Vec3(1, 0, 0), 6 * kDeg);
-                    pose.armL = reachToward(pose, BlockBody::ArmL, p->handL);
-                    pose.armR = reachToward(pose, BlockBody::ArmR, p->handR);
+                    reachTo(pose, BlockBody::ArmL, p->handL);
+                    reachTo(pose, BlockBody::ArmR, p->handR);
                     const Real k = std::sin(p->kick * 3.14159265358979);
                     pose.legL = normalize(Vec3(0.05, -1, 0.05));
                     pose.legR = normalize(Vec3(-0.08, -1, -0.6 * k));
+                    pose.kneeL = 0.2;
+                    pose.kneeR = 0.2 + 0.5 * k;   // the kicking leg bends to push
                 } else {
                     // the skateboard: side-on to the way it rolls, knees soft, arms out; the back foot kicks
                     const Vec3 side(face.z, 0, -face.x);   // the stance: the body's front faces off the board's left
@@ -296,6 +314,11 @@ void PlayerBodySystem::fixedUpdate(FrameContext& ctx) {
                     pose.legR = normalize(Vec3(-0.28 - 0.4 * k, -1, 0.25 * k));   // the back foot, kicking
                     pose.armL = normalize(Vec3(1, -0.4, 0));
                     pose.armR = normalize(Vec3(-1, -0.4, 0));
+                    pose.elbowL = pose.elbowR = 0.3;
+                    // knees soft over the board (the kick folds the back one), the body down by what they took up
+                    pose.kneeL = 0.5;
+                    pose.kneeR = 0.5 + 0.4 * k;
+                    pose.position = pose.position - Vec3(0, 0.025 * pose.scale, 0);
                 }
                 break;
             }
@@ -306,21 +329,35 @@ void PlayerBodySystem::fixedUpdate(FrameContext& ctx) {
                                                                                     Real(-0.6), Real(0.6)))
                                                             : 0;
                 pose.orientation = yawTo(face) * Quat::fromAxisAngle(Vec3(1, 0, 0), swingLean);
-                pose.armR = reachToward(pose, BlockBody::ArmR, p->anchor);
+                reachTo(pose, BlockBody::ArmR, p->anchor);
                 pose.armL = normalize(Vec3(0.8, -0.4, 0.1));
                 pose.legL = normalize(Vec3(0.1, -1, -0.3));
                 pose.legR = normalize(Vec3(-0.1, -1, -0.15));
+                pose.elbowL = 0.5;
+                pose.kneeL = 0.3;
+                pose.kneeR = 0.55;
                 break;
             }
             default:
                 pose.orientation = yawTo(face);
+                pose.elbowL = pose.elbowR = 0.25;   // nothing rigid: soft knees and elbows
+                pose.kneeL = pose.kneeR = p->mode == PlayerPose::Mode::Air ? 0.45 : 0.1;
                 break;
         }
         blocks = poseBlocks(pose);
     }
+    // the blocks drawn: the torso and head as blocks, each limb one skinned tube (engine/body_draw.h)
+    const Real scale = (cc->halfHeight + cc->radius) / BlockBody::kHalfHeight;
+    const std::array<BodyPiece, BlockBody::kParts> pieces = meshes_.pieces(ctx.assets, blocks, scale);
     for (int i = 0; i < BlockBody::kParts; ++i) {
-        const PartTransform& b = blocks[static_cast<std::size_t>(i)];
-        place(i, b.position, b.orientation, b.size);
+        const BodyPiece& b = pieces[static_cast<std::size_t>(i)];
+        if (!b.drawn) {
+            place(i, Vec3(0, -100000, 0), Quat::identity(), Vec3(1, 1, 1));
+            if (PrevTransform* pt = world.get<PrevTransform>(parts_[i])) pt->value = *world.get<Transform>(parts_[i]);
+            continue;
+        }
+        if (Renderable* r = world.get<Renderable>(parts_[i])) r->mesh = b.mesh;
+        place(i, b.position, b.orientation, b.scale);
         if (firstShow)
             if (PrevTransform* pt = world.get<PrevTransform>(parts_[i])) pt->value = *world.get<Transform>(parts_[i]);
     }

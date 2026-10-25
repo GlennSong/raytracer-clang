@@ -24,6 +24,7 @@
 #include <Jolt/Physics/Body/AllowedDOFs.h>
 #include <Jolt/Physics/Character/CharacterVirtual.h>
 #include <Jolt/Physics/Ragdoll/Ragdoll.h>
+#include <Jolt/Physics/Constraints/HingeConstraint.h>
 #include <Jolt/Physics/Constraints/SwingTwistConstraint.h>
 #include <Jolt/Skeleton/Skeleton.h>
 #include <Jolt/Physics/PhysicsSettings.h>
@@ -816,7 +817,18 @@ PhysicsWorld::RagdollId PhysicsWorld::addRagdoll(const std::vector<RagdollPart>&
         part.mMassPropertiesOverride.mMass = static_cast<float>(p.mass);
         part.mLinearDamping = 0.1f;
         part.mAngularDamping = 0.6f;   // a limp body, not a spinning top
-        if (p.parent >= 0) {
+        if (p.parent >= 0 && p.hinge) {
+            JPH::Ref<JPH::HingeConstraintSettings> c = new JPH::HingeConstraintSettings;
+            c->mSpace = JPH::EConstraintSpace::WorldSpace;
+            c->mPoint1 = c->mPoint2 = toJoltR(p.joint);
+            const JPH::Vec3 axis = toJolt(p.hingeAxis).Normalized();
+            c->mHingeAxis1 = c->mHingeAxis2 = axis;
+            c->mNormalAxis1 = c->mNormalAxis2 = axis.GetNormalizedPerpendicular();
+            c->mLimitsMin = JPH::DegreesToRadians(static_cast<float>(std::min(Real(0), p.hingeMinDeg)));
+            c->mLimitsMax = JPH::DegreesToRadians(static_cast<float>(std::max(Real(0), p.hingeMaxDeg)));
+            c->mMaxFrictionTorque = static_cast<float>(p.hingeFriction);
+            part.mToParent = c;
+        } else if (p.parent >= 0) {
             JPH::Ref<JPH::SwingTwistConstraintSettings> c = new JPH::SwingTwistConstraintSettings;
             c->mSpace = JPH::EConstraintSpace::WorldSpace;
             c->mPosition1 = c->mPosition2 = toJoltR(p.joint);

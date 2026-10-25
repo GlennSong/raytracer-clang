@@ -59,8 +59,8 @@ struct PlayerPose {
     Vec3 boardHeading{0, 0, -1};
     Real kick = 0;
     // GONE LIMP: the six blocks where the ragdoll's bodies are (engine/block_body.h order)
-    Vec3 ragdollPos[6];
-    Quat ragdollRot[6];
+    Vec3 ragdollPos[10];   // (BlockBody::kParts)
+    Quat ragdollRot[10];
 };
 
 // Is the body drawn as posed blocks (PlayerBodySystem) rather than the walker mesh and its walk cycle?
