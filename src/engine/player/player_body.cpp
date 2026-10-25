@@ -84,8 +84,9 @@ void PlayerBody::step(BodyStep& s) {
         airVel = Vec3(0, 0, 0);
         event("teleported");
     }
-    // LIMP: nothing but getting up again
+    // LIMP: nothing but getting up again (G again does nothing: it waited, and dropped the body the moment it got up)
     if (is(ragdoll)) {
+        in.limp = false;
         ragdoll.step(*this, s);
         return finish();
     }

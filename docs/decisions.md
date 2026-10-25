@@ -12158,10 +12158,11 @@ is written down (position, the pose's numbers, mode, ground, hook, last event):
 - swimming is its own mode, so the swing and bars can no longer be taken from the water;
 - a teleport ends every mode but on foot and swimming (it used to spare "on foot", which included swimming).
 
-**Found, left as they were** (the trace keeps them; to fix separately):
-- the monkey bars' "off the end" never fires: the position is clamped every step, so it can't pass the end by
-  more than 5 cm (the scenario drops off with crouch);
-- a limp request made while limp waits, and drops the body again as soon as it gets up.
+**Found, left as they were** so the trace held, then fixed in the commit after ADR-0247:
+- the monkey bars' "off the end" never fired: the position is clamped every step, so it couldn't pass the end by
+  more than 5 cm. Now: at the last rung and still reaching on. The bars scenario goes off the end.
+- a limp request made while limp waited, and dropped the body again as soon as it got up. Now a press while limp
+  does nothing. The limp scenario presses G again while limp.
 
 ## ADR-0247 — One impact rule: speed lost along the way the body meant to go
 

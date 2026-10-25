@@ -320,7 +320,9 @@ void BarsMode::step(PlayerBody& b, BodyStep& s) {
     at += std::clamp(along, Real(-1), Real(1)) * b.tune.barsSpeed * dt;
     if (std::fabs(along) > 0.2) facing = dir * (along > 0 ? 1.0 : -1.0);
     cycle += std::fabs(at - was) / 0.4;
-    const bool offEnd = at < -0.05 || at > len + 0.05;
+    // OFF THE END: at the last rung and still reaching on (it was `past the end by 5 cm`, which the clamp below
+    // never let happen -- you could only drop off with crouch)
+    const bool offEnd = (at >= len && along > 0.2) || (at <= 0 && along < -0.2);
     at = std::clamp(at, Real(0), len);
     const Vec3 grip = mb->a + dir * at;
     const Vec3 centre = grip - Vec3(0, 0.45 + b.eyeHeight, 0);

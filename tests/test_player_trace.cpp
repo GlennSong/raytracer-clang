@@ -352,19 +352,21 @@ std::vector<Scenario> scenarios() {
                  },
                  {"on the swing"}});
     // THE MONKEY BARS: hand over hand along, off the end
-    s.push_back({"bars", 10.0, [](Rig& r) { r.place(Vec3(4.4, 0, 26.0), 90); },
+    s.push_back({"bars", 18.0, [](Rig& r) { r.place(Vec3(4.4, 0, 26.0), 90); },
                  [](Rig& r, Pad& p, Real t) {
                      if (tap(t, 0.5)) r.takePlaygroundOffer();
                      p.stick(between(t, 1.0, 5.0) ? 1.0 : between(t, 5.0, 7.0) ? -1.0 : 0.0, 0);
                      p.crouch(between(t, 8.0, 8.5));
+                     if (tap(t, 9.0)) r.takePlaygroundOffer();   // on again, and along to the far end and off it
+                     if (t > 9.5) p.stick(1.0, 0);
                  },
-                 {"on the monkey bars", "dropped off the bars"}});
+                 {"on the monkey bars", "dropped off the bars", "off the end of the bars"}});
     // LIMP on purpose, mid-run, and up again
     s.push_back({"limp", 8.0, [](Rig& r) { r.place(Vec3(0, 0, 0), 0); },
                  [](Rig& r, Pad& p, Real t) {
                      p.stick(between(t, 0.0, 1.0) ? 1.0 : 0.0, 0);
                      p.run(true);
-                     if (tap(t, 0.8)) r.actions.injectPress("player_limp");
+                     if (tap(t, 0.8) || tap(t, 2.0)) r.actions.injectPress("player_limp");   // (G again while limp)
                      p.jump(tap(t, 4.0));
                  },
                  {"went limp", "got up"}});
