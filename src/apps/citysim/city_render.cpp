@@ -2845,12 +2845,7 @@ void CityRenderSystem::syncGroups(World& world) {
                 const int ai = ids[k];
                 if (ai < 0) continue;   // a parked scenery body: nobody aboard
                 // the car the player RIDES in: its drawn matrix, every step, so the passenger sits still in it
-                if (ai == playerRidingAgent_) {
-                    busDrawnPose_[ai] = cars[v]->transforms[k];
-                    ridePrev_ = rideAgent_ == ai ? rideCur_ : cars[v]->transforms[k];
-                    rideCur_ = cars[v]->transforms[k];
-                    rideAgent_ = ai;
-                }
+                if (ai == playerRidingAgent_) busDrawnPose_[ai] = cars[v]->transforms[k];
                 if (!always && (!nearSwap_.count(ai) || !carInteriorGroups_[v].valid())) continue;   // behind opaque glass: nobody to see
                 const Mat4& xf = cars[v]->transforms[k];
                 busDrawnPose_[ai] = xf;
@@ -4718,18 +4713,6 @@ bool CityRenderSystem::carSeatsOf(int agent, Mat4* pose, std::vector<Vec3>* seat
             seats->push_back(Vec3(-d.x, d.y, d.z - 0.85));
         }
     }
-    return true;
-}
-
-bool CityRenderSystem::rideFrameDrawn(int agent, Real alpha, Mat4* pose) const {
-    if (!pose || agent < 0 || agent != rideAgent_ || agent != playerRidingAgent_) return false;
-    static const bool noLerp = std::getenv("RT_NO_INSTANCE_LERP") != nullptr;   // (as the renderer draws it)
-    *pose = rideCur_;
-    if (noLerp) return true;
-    const Real jx = rideCur_.m[0][3] - ridePrev_.m[0][3], jz = rideCur_.m[2][3] - ridePrev_.m[2][3];
-    if (jx * jx + jz * jz > 25.0) return true;   // a jump: where it landed (as the renderer does)
-    for (int r = 0; r < 3; ++r)
-        for (int c = 0; c < 4; ++c) pose->m[r][c] = ridePrev_.m[r][c] + (rideCur_.m[r][c] - ridePrev_.m[r][c]) * alpha;
     return true;
 }
 

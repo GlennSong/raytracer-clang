@@ -45,6 +45,7 @@
 #include "../engine/systems/underwater_system.h"
 #ifdef RT_ENABLE_PHYSICS
 #include "../engine/systems/footstep_system.h"
+#include "../engine/riding.h"
 #include "../engine/systems/particle_system.h"
 #include "../engine/systems/motion_audio_system.h"
 #endif
@@ -155,8 +156,14 @@ ArenaState::ArenaState(Window& window, Renderer& renderer,
 {
     // With an editor to return to, Esc stops the playtest instead of quitting.
     addSystem<DevControlSystem>(this->makeEditorState == nullptr);
+#ifdef RT_ENABLE_PHYSICS
+    // A RIDER drawn on its carrier between steps (ADR-0243), BEFORE the camera system builds this frame's view from the
+    // first-person eye (it sets that eye) and before the player's code places the third-person rig from the body
+    auto& riding = addSystem<RidingSystem>(nullptr);
+#endif
     auto& camSys = addSystem<CameraSystem>();
 #ifdef RT_ENABLE_PHYSICS
+    riding.setFly(&camSys.flyController());
     auto& physSys = addSystem<PhysicsSystem>();
     addSystem<PlayerSystem>(camSys.flyController(), physSys);
     addSystem<TeleportSystem>(camSys.flyController(), &physSys);   // Debug > Teleport, `teleport`

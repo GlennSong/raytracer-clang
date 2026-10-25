@@ -101,6 +101,8 @@ private:
     // car slows to a walk (a press while it is moving waits for that).
     void rideCar(engine::World& world, engine::Entity player, engine::Transform& t,
                  engine::CharacterController& cc, bool interact);
+    void hold(engine::World& world, engine::Entity player, engine::Transform& t, const engine::Mat4& pose,
+              const engine::Vec3& local, bool sitting);
     void pin(engine::World& world, engine::Entity player, engine::Transform& t,
              engine::CharacterController& cc, const engine::Vec3& pos);
     void leave(engine::World& world, engine::Entity player, const engine::Vec3& where);
@@ -113,8 +115,6 @@ private:
     // (so the view can turn with it).
     engine::Vec3 local_{0, 0, 0};
     int seatIdx_ = -1;
-    bool haveBusYaw_ = false;
-    engine::Real lastBusYaw_ = 0;
     const char* busPrompt_ = "";
     int riding_ = -1;          // agent index of the vehicle we are aboard, or -1
     engine::Vec3 seat_{0, 0, 0};   // where we put the player last step

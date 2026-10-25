@@ -11984,3 +11984,55 @@ body put its head through the roof.
 - a cab ride puts the player in the back seat, inside the body;
 - with the old code, the same spot offered "get in the cab" instead of the driver's seat, because the prompt sat
   where another model's driver's seat would be.
+
+## ADR-0243 — One way of riding: the rider in the carrier's frame, placed after the steps
+
+**Context.** Glenn: "How general of a thing should this component be made where we are going from one relative
+space to worldspace and back again? I suppose cars, trains, buses would use this. I was also thinking eventually
+ships and dare I say it some kind of spaceship." He approved level A (kinematic riding with a shared interface).
+The bus, the car seat, the cab and the train each had their own copy of: pin the capsule from the carrier's matrix,
+fill in Passenger, turn the view with the carrier, fix up the drawn eye. Their bugs differed: the train's
+third-person body stepped at 60 Hz while the train glided, and first person on a bus kept ~15 mm of shake.
+
+**The finding** that set the design: the engine runs each frame as **update, then the fixed steps, then render**.
+A camera framed in the update is framed from the last frame's step and the last frame's interpolation. Walking
+hides it. On a moving carrier it is a frame of travel. Placing the rider in the update (tried) used a stale
+fraction against fresh poses, and the first-person view jumped.
+
+**Decision** (`engine/riding.h`):
+- `Passenger` carries the carrier: `carrier` (its frame this step), `carrierPrev`, `local` (feet or hip in that
+  frame), `sitting`, `eyeAbove`.
+- **`rideStep()`**, called by the owner each fixed step after setting those:
+  - pins the capsule (keeping the previous pose for the blend; a jump over 5 m starts fresh);
+  - sets `onFoot` and `facing`;
+  - turns the view by the carrier's heading change.
+
+  It stays a function rather than a system so the transit system's testable `step()` still pins
+  (`test_city_ride`).
+- **`RidingSystem`:**
+  - **Update:** notes where the camera is framed from.
+  - **Render (after the steps):** puts the body on the carrier between its last two steps by this frame's
+    interpolation, the renderer's own blend of the vehicle. It turns the view the rest of the way with the drawn
+    carrier and carries the **first-person eye** rigidly with the body and the turn. The third-person rig is left
+    as framed: its spring leads by a frame already, and carrying it too overshot (71 mm).
+- The eye height is along the carrier's normalised up.
+- **The owners keep only their own rules.** The transit system (bus, car seat, cab) and TrainSystem handle
+  boarding, aisles, gangways, seats and doors. Their pins, yaw tracking and drawn-eye code are gone, and so is
+  `CityRenderSystem::rideFrameDrawn`.
+
+**Measured** (river_town, bus 41, 300 frames at 122 fps unthrottled; camera jerk in the bus's own frame):
+
+| | before (`dcf1bda4`) | after |
+|---|---|---|
+| third person | 2.10 mm | 2.12 mm |
+| first person | ~15 mm | 0.00 mm |
+
+The train (rail_lab, `train_board 0 2`) rides at the train's speed, the aisle walk works, and the first-person
+view inside the carriage is right.
+
+**Level B, when there's a ship:** the carrier publishes interior collision in its own frame and the rider collides
+in local space. Nothing here assumes the carrier's up is the world's.
+
+**Probe notes.** With the screen locked the desktop throttled the viewer to 20 fps; `RT_VSYNC=0` restores full rate
+for measurements. The jitter sampler (`set jitter.request`) reads the camera in CityRenderSystem's render, after
+RidingSystem's.

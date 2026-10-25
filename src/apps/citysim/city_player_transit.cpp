@@ -1,4 +1,5 @@
 #include "city_player_transit.h"
+#include "../../engine/riding.h"
 #include "../../engine/interact_broker.h"
 
 #include "bus_stop_props.h"   // routeColour / routeColourName
@@ -185,7 +186,6 @@ void CityPlayerTransitSystem::step(World& world, Real dt, const RideInput& in) {
             carSeat_ = pendingCarSeat_;
             city_.setPlayerSeat(riding_, carSeat_);   // (no drawn rider in it)
             exitWhenSlow_ = false;
-            haveBusYaw_ = false;
             if (!world.has<engine::Passenger>(player)) world.add<engine::Passenger>(player);
             LOG_INFO << "[transit] you got in agent " << riding_ << "'s car, seat " << carSeat_;
         }
@@ -217,7 +217,6 @@ void CityPlayerTransitSystem::step(World& world, Real dt, const RideInput& in) {
         } else {
             riding_ = best;
             seatIdx_ = -1;
-            haveBusYaw_ = false;
             // In through the MIDDLE DOOR, standing in the aisle beside it.
             const std::vector<Vec3>& doors = city_.busDoors();
             local_ = doors.size() >= 2 ? Vec3(0, city_.busFloorY(), doors[1].z)
@@ -251,7 +250,6 @@ void CityPlayerTransitSystem::step(World& world, Real dt, const RideInput& in) {
             carSeat_ = seats.size() >= 4 ? 3 : 1;   // the rear kerb-side seat; a two-seater's passenger seat
             city_.setPlayerSeat(riding_, carSeat_);   // (no drawn rider in it)
             exitWhenSlow_ = false;
-            haveBusYaw_ = false;
             rideCar(world, player, *pt, *cc, carInteract);
             return;
         }
@@ -277,18 +275,7 @@ void CityPlayerTransitSystem::rideCar(World& world, Entity player, Transform& t,
         const Real l = std::sqrt(v.x * v.x + v.z * v.z);
         return l > 1e-6 ? v * (1 / l) : Vec3(0, 0, 1);
     };
-    const Vec3 fwdAxis = flat(Vec3(pose.m[0][2], 0, pose.m[2][2]));
     const Vec3 rightAxis = flat(Vec3(pose.m[0][0], 0, pose.m[2][0]));
-    // the view turns WITH the car, as on the bus
-    const Real yaw = std::atan2(fwdAxis.x, -fwdAxis.z) * Real(57.29577951308232);
-    if (haveBusYaw_) {
-        Real d = yaw - lastBusYaw_;
-        while (d > 180) d -= 360;
-        while (d < -180) d += 360;
-        fly_.yaw += d;
-    }
-    lastBusYaw_ = yaw;
-    haveBusYaw_ = true;
     const Vec3 seat = seats[static_cast<std::size_t>(carSeat_)];
     if (interact) exitWhenSlow_ = true;
     const Real speed = city_.sim().agents()[static_cast<std::size_t>(riding_)].speed;
@@ -303,13 +290,24 @@ void CityPlayerTransitSystem::rideCar(World& world, Entity player, Transform& t,
         leave(world, player, out);
         return;
     }
-    const Vec3 w = pose.transformPoint(seat);
-    if (auto* ps = world.get<engine::Passenger>(player)) {
-        ps->sitting = true;
-        ps->hipBelow = kSeatedEye - kEyeAboveTransform;
-        ps->facing = fwdAxis;
-    }
-    pin(world, player, t, cc, Vec3(w.x, w.y + kSeatedEye - kEyeAboveTransform, w.z));
+    hold(world, player, t, pose, seat, true);
+    (void)cc;
+}
+
+// HELD IN THE CARRIER (engine/riding.h): at `local` in `pose` (the feet, standing; the hip, sitting), the rest --
+// the pin, the frame blend, the footsteps' and the body's state, the view turning -- rideStep's for every carrier
+void CityPlayerTransitSystem::hold(World& world, Entity player, Transform& t, const engine::Mat4& pose,
+                                   const Vec3& local, bool sitting) {
+    engine::Passenger* ps = world.get<engine::Passenger>(player);
+    if (!ps) return;
+    ps->carrier = pose;
+    ps->local = local;
+    ps->sitting = sitting;
+    ps->eyeAbove = sitting ? kSeatedEye : kStandingEye;
+    ps->hipBelow = kSeatedEye - kEyeAboveTransform;
+    engine::rideStep(world, &physics_.physicsWorld(), player, &fly_);
+    seat_ = t.position;
+    seated_ = true;
 }
 
 // Put the player at `pos` for this step: transform, no interpolation streak,
@@ -368,17 +366,6 @@ void CityPlayerTransitSystem::rideBus(World& world, Real dt, const RideInput& in
     };
     const Vec3 fwdAxis = flat(Vec3(pose.m[0][2], 0, pose.m[2][2]));
     const Vec3 rightAxis = flat(Vec3(pose.m[0][0], 0, pose.m[2][0]));
-
-    // The view turns WITH the bus: a corner swings the saloon, not the world.
-    const Real busYaw = std::atan2(fwdAxis.x, -fwdAxis.z) * Real(57.29577951308232);
-    if (haveBusYaw_) {
-        Real d = busYaw - lastBusYaw_;
-        while (d > 180) d -= 360;
-        while (d < -180) d += 360;
-        fly_.yaw += d;
-    }
-    lastBusYaw_ = busYaw;
-    haveBusYaw_ = true;
 
     auto dist2d = [](const Vec3& a, const Vec3& b) {
         const Real dx = a.x - b.x, dz = a.z - b.z;
@@ -461,16 +448,8 @@ void CityPlayerTransitSystem::rideBus(World& world, Real dt, const RideInput& in
     }
 
     const Vec3 at = seatIdx_ >= 0 ? seats[static_cast<std::size_t>(seatIdx_)] : local_;
-    const Real eyeAbove = seatIdx_ >= 0 ? kSeatedEye : kStandingEye;
-    if (auto* ps = world.get<engine::Passenger>(player)) {
-        ps->local = at;
-        ps->onFoot = seatIdx_ < 0;   // (the footsteps)
-        ps->sitting = seatIdx_ >= 0;
-        ps->hipBelow = kSeatedEye - kEyeAboveTransform;
-        ps->facing = fwdAxis;
-    }
-    const Vec3 w = pose.transformPoint(at);
-    pin(world, player, t, cc, Vec3(w.x, w.y + eyeAbove - kEyeAboveTransform, w.z));
+    hold(world, player, t, pose, at, seatIdx_ >= 0);
+    (void)cc;
 
     // What E would do now, for the on-screen line.
     busPrompt_ = seatIdx_ >= 0 ? "E: stand up"
@@ -769,53 +748,7 @@ void CityPlayerTransitSystem::render(engine::FrameContext& ctx) {
     // 8 m/s), on a frame that ran none they agreed -- and at a high frame rate half the frames run none, so
     // the saloon shook round the rider. Here, after the steps, the eye is moved onto the seat in the bus's
     // fresh pose; the view's direction is kept.
-    // ...and now the bus is DRAWN between its last two bakes by the frame's interpolation (InstanceGroup::ids), so
-    // the rider follows that drawn pose, not the step's: the body and the camera, first person or third, are moved
-    // onto the seat (or the aisle spot) in the saloon as it is drawn this frame. The physics keeps its step pin.
-    // (Glenn, riding in third person: "I'm still shaking around on the bus" -- the eye fix was first person only,
-    // and stood on the step's pose while the bus now glides.)
-    if (riding_ >= 0 && seated_) {
-        engine::Mat4 pose;
-        Vec3 at;
-        Real eyeAbove = kSeatedEye;
-        bool have = city_.rideFrameDrawn(riding_, ctx.interpolation, &pose);
-        if (have && city_.sim().isBus(riding_)) {
-            const std::vector<Vec3>& seats = city_.busSeats();
-            const bool sat = seatIdx_ >= 0 && seatIdx_ < static_cast<int>(seats.size());
-            at = sat ? seats[static_cast<std::size_t>(seatIdx_)] : local_;
-            eyeAbove = sat ? kSeatedEye : kStandingEye;
-        } else if (have && carSeat_ >= 0) {
-            std::vector<Vec3> seats;
-            have = city_.carSeatsOf(riding_, nullptr, &seats) && carSeat_ < static_cast<int>(seats.size());
-            if (have) at = seats[static_cast<std::size_t>(carSeat_)];
-        } else {
-            have = false;
-        }
-        Entity player;
-        ctx.world.each<Transform, engine::CharacterController, engine::ControlledBy>(
-            [&](Entity e, Transform&, engine::CharacterController&, engine::ControlledBy&) {
-                if (!player.valid()) player = e;
-            });
-        Transform* pt = player.valid() ? ctx.world.get<Transform>(player) : nullptr;
-        if (have && pt) {
-            const Vec3 w = pose.transformPoint(at);
-            const Vec3 drawnAt(w.x, w.y + eyeAbove - kEyeAboveTransform, w.z);
-            const Vec3 shift = drawnAt - pt->position;
-            if (shift.length() < 2.0) {   // (a boarding or a step off is a jump: left to the pin)
-                pt->position = drawnAt;
-                if (auto* prev = ctx.world.get<engine::PrevTransform>(player)) prev->value = *pt;
-                engine::CameraState& cam = ctx.view.camera;
-                const Vec3 eye(w.x, w.y + eyeAbove, w.z);
-                const Vec3 look = cam.target - cam.position;
-                if ((eye - cam.position).length() < 1.0) {
-                    cam.position = eye;   // FIRST PERSON: the eye on the seat exactly (the view came from last frame's)
-                } else {
-                    cam.position = cam.position + shift;   // THIRD: the shoulder rig rides with the body
-                }
-                cam.target = cam.position + look;
-            }
-        }
-    }
+    // (the rider drawn on the bus between its steps, and the view turning with it: RidingSystem, engine/riding.h)
 #ifdef RT_ENABLE_IMGUI
     if (hud_.mode == Hud::Mode::None) return;
     // Anchored by its BOTTOM-left corner: the line count varies (a hub lists

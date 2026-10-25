@@ -575,6 +575,23 @@ struct Passenger {
     bool sitting = false;
     Real hipBelow = 0;
     Vec3 facing{0, 0, 1};
+    // THE CARRIER (engine/riding.h, ADR-0243): one way of riding for the bus, the car, the cab and the train. The owner
+    // (the system that knows the vehicle) sets `carrier` -- its frame to world this fixed step -- `local`, `sitting`
+    // and `eyeAbove`, and calls rideStep(), which keeps the step before (`carrierPrev`). RidingSystem draws the rider
+    // between the two by the frame's interpolation, as the renderer draws the vehicle.
+    Mat4 carrier;
+    Mat4 carrierPrev;
+    Mat4 carrierLast;           // (rideStep's: the carrier as of the step before this one)
+    bool haveLast = false;
+    Real eyeAbove = 1.62;       // the eye above `local`: standing 1.62 over the feet, sitting 0.74 over the hip
+    bool haveYaw = false;       // the view turns with the carrier: its heading last step (rideStep) ...
+    Real lastYaw = 0;
+    Real yawShown = 0;          // ...and how far past it the drawn carrier had turned last frame (RidingSystem)
+    // where the camera was framed from this frame (RidingSystem's update: the body and the view heading then, before
+    // the frame's fixed steps), for its render to carry the camera on with the rider
+    Vec3 framedAt;
+    Real framedYaw = 0;
+    bool framed = false;
 };
 
 // Marks a Vehicle as driven by an AI brain rather than the player (ADR-0062): the

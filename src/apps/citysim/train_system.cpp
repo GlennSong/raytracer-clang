@@ -1,4 +1,5 @@
 #include "train_system.h"
+#include "../../engine/riding.h"
 #include "city_render.h"
 #include "station_boards.h"
 #include "station_entrance.h"
@@ -40,10 +41,6 @@ Vec3 col(const Mat4& m, int c) { return Vec3(m.m[0][c], m.m[1][c], m.m[2][c]); }
 Vec3 toLocal(const Mat4& m, const Vec3& p) {
     const Vec3 d = p - col(m, 3);
     return Vec3(engine::dot(d, col(m, 0)), engine::dot(d, col(m, 1)), engine::dot(d, col(m, 2)));
-}
-Real yawOf(const Mat4& m) {
-    const Vec3 f = col(m, 2);
-    return std::atan2(f.x, -f.z) * Real(57.29577951308232);
 }
 
 Entity makeGroup(engine::FrameContext& ctx, const engine::RenderMesh& mesh, const std::string& name, bool glass) {
@@ -405,7 +402,6 @@ void TrainSystem::fixedUpdate(engine::FrameContext& ctx) {
             train_ = t;
             car_ = std::clamp(c, 1, sim_.carCount(t) - 1);
             local_ = Vec3(0, static_cast<Real>(coachOf(train_).floor), 0);
-            haveYaw_ = false;
             LOG_INFO << "[trains] aboard train " << train_ << " car " << car_ << " (by request)";
         }
     }
@@ -499,7 +495,6 @@ void TrainSystem::ride(engine::FrameContext& ctx, Real dt) {
                 car_ = c;
                 local_ = Vec3(std::clamp(l.x, Real(-(coachOf(ti).width / 2 - kWallClear)), Real(coachOf(ti).width / 2 - kWallClear)),
                               static_cast<Real>(coachOf(ti).floor), l.z);
-                haveYaw_ = false;
                 if (!ctx.world.has<engine::Passenger>(player)) ctx.world.add<engine::Passenger>(player);
                 LOG_INFO << "[trains] you boarded train " << ti << ", car " << c << " (feet " << feet.x << " " << feet.y << " " << feet.z
                          << ", car-local " << l.x << " " << l.y << " " << l.z << ")";
@@ -523,19 +518,22 @@ void TrainSystem::ride(engine::FrameContext& ctx, Real dt) {
         }
         sitRequest_ = -2;
     }
-    if (auto* ps = ctx.world.get<engine::Passenger>(player)) {
-        ps->onFoot = seat_ < 0;   // (the footsteps: seated, silent)
-        // (the body: seated, or walking only as fast as the feet go in the car -- Glenn: "when my guy is on the train
-        // he's walking when the train moves")
-        ps->sitting = seat_ >= 0;
+    // HELD IN THE CARRIAGE (engine/riding.h): at `local` in this car's frame, the rest rideStep's -- the pin, the frame
+    // blend, the footsteps and the body (seated, or walking only as fast as the feet go in the car: Glenn, "when my
+    // guy is on the train he's walking when the train moves"), the view turning with the train
+    auto hold = [&](const CarPose& in, const Vec3& local, bool sitting) {
+        engine::Passenger* ps = ctx.world.get<engine::Passenger>(player);
+        if (!ps) return;
+        ps->carrier = in.m;
+        ps->local = local;
+        ps->sitting = sitting;
+        ps->eyeAbove = sitting ? kSeatedEye : kStandingEye;
         ps->hipBelow = kSeatedEye - kEyeAboveTransform;
-        Vec3 f(P.m.m[0][2], 0, P.m.m[2][2]);
-        const Real fl = std::sqrt(f.x * f.x + f.z * f.z);
-        ps->facing = fl > 1e-6 ? f * (1 / fl) : Vec3(0, 0, 1);
-    }
+        engine::rideStep(ctx.world, &physics_.physicsWorld(), player, &fly_);
+        pinned_ = pt->position;
+    };
     if (seat_ >= 0) {   // seated: pinned to the seat, the walk keys do nothing
-        const Vec3 w = P.m.transformPoint(coachOf(train_).seats[static_cast<std::size_t>(seat_)]);
-        pin(Vec3(w.x, w.y + kSeatedEye - kEyeAboveTransform, w.z));
+        hold(P, coachOf(train_).seats[static_cast<std::size_t>(seat_)], true);
         return;
     }
     // WALK the carriage in its own frame
@@ -579,9 +577,7 @@ void TrainSystem::ride(engine::FrameContext& ctx, Real dt) {
         leave(out);
         return;
     }
-    if (auto* ps = ctx.world.get<engine::Passenger>(player)) ps->local = local_;   // (a gangway's re-expression is a jump: no step)
-    const Vec3 w = P.m.transformPoint(local_);
-    pin(Vec3(w.x, w.y + kStandingEye - kEyeAboveTransform, w.z));
+    hold(P, local_, false);   // (a gangway's re-expression is a jump in `local`: the body's walk reads no step)
 }
 
 void TrainSystem::render(engine::FrameContext& ctx) {
@@ -671,23 +667,6 @@ void TrainSystem::render(engine::FrameContext& ctx) {
         if (player.valid()) {
             if (!ctx.world.has<engine::InteractCarrier>(player)) ctx.world.add<engine::InteractCarrier>(player);
             ctx.world.get<engine::InteractCarrier>(player)->drawn = P.m;
-        }
-        const Real yaw = yawOf(P.m);
-        if (haveYaw_) {
-            Real d = yaw - lastYaw_;
-            while (d > 180) d -= 360;
-            while (d < -180) d += 360;
-            fly_.yaw += d;
-        }
-        lastYaw_ = yaw;
-        haveYaw_ = true;
-        const bool sat = seat_ >= 0 && seat_ < static_cast<int>(coachOf(train_).seats.size());
-        const Vec3 w = P.m.transformPoint(sat ? coachOf(train_).seats[static_cast<std::size_t>(seat_)] : local_);
-        const Vec3 eye(w.x, w.y + (sat ? kSeatedEye : kStandingEye), w.z);
-        engine::CameraState& cam = ctx.view.camera;
-        if ((eye - cam.position).length() < 3.0) {   // only the first-person eye
-            cam.position = eye;
-            cam.target = eye + fly_.forward();
         }
     }
 }
