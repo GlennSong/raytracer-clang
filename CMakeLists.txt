@@ -1103,6 +1103,7 @@ if(RT_ENABLE_PHYSICS)
         tests/test_building_collider.cpp
         tests/test_building_interior.cpp
     tests/test_elevator.cpp
+        tests/test_player_trace.cpp   # the real PlayerSystem on movement_lab, scripted (ADR-0246)
         src/engine/physics/physics_world.cpp
         src/engine/physics/jolt_job_adapter.cpp
         src/engine/systems/physics_system.cpp
@@ -1112,6 +1113,8 @@ if(RT_ENABLE_PHYSICS)
         src/apps/citysim/city_physics.cpp
         src/apps/citysim/city_player_transit.cpp
         src/apps/citysim/city_map_tool.cpp
+        src/engine/systems/player_system.cpp
+        src/renderer/null_renderer.cpp   # Renderer::create for the level the trace loads
     )
     target_include_directories(physics_tests PRIVATE src)
     target_compile_options(physics_tests PRIVATE -Wall -Wextra)
