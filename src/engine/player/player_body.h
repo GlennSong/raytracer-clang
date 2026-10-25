@@ -61,6 +61,10 @@ public:
     virtual bool canAim() const { return true; }
     // Is the velocity worth publishing? (Hanging on a wall or a ledge the pose keeps the last one.)
     virtual bool movesFreely() const { return true; }
+    // THE IMPACT RULE's numbers for this mode (PlayerBody::impact): the speed it can lose in a step along `dir`
+    // (unit, the way it meant to go) and stay up, and how it is thrown when it can't.
+    virtual Real impactTolerance(const PlayerBody& b, const Vec3& dir) const;
+    virtual Vec3 thrown(const Vec3& meant, const Vec3& got, const Vec3& dir) const;
 };
 
 // --- on foot: walking, running, crouching, jumping, falling -----------------------------------------------------
@@ -161,6 +165,10 @@ public:
     void leave(PlayerBody& b, BodyStep& s) override;
     void step(PlayerBody& b, BodyStep& s) override;
     void pose(const PlayerBody& b, const BodyStep& s, PlayerPose& p) const override;
+    // stood on wheels: stopped dead going along, the feet stop and the body goes on over the front; a landing the
+    // legs take like anyone's
+    Real impactTolerance(const PlayerBody& b, const Vec3& dir) const override;
+    Vec3 thrown(const Vec3& meant, const Vec3& got, const Vec3& dir) const override;
 };
 
 // --- the playground (engine/playground.h) -----------------------------------------------------------------------
@@ -216,6 +224,9 @@ public:
     bool tryDeploy(BodyStep& s);                          // jump in the air with a chute or a suit on
     bool attachRope(BodyStep& s, const Vec3& at);         // the hook bit: onto the rope (from foot or a glide)
     void goLimp(BodyStep& s, const Vec3& velocity, const std::string& why);
+    // THE ONE IMPACT RULE: the mode meant `meant` (m/s) and the world let it `got`. Lost past the mode's tolerance
+    // (speedLost, body_rules.h), the body is thrown limp ("<what> at N m/s") and true comes back.
+    bool impact(BodyStep& s, const Vec3& meant, const Vec3& got, const char* what);
 
     // the modes
     OnFootMode onFoot;
@@ -277,6 +288,9 @@ public:
 
 private:
     BodyMode* mode_ = &onFoot;
+    uint64_t steps_ = 0;          // fixed steps so far
+    Real contactLoss_ = 0;        // m/s lost so far in the contact going on (impact)
+    uint64_t lastLossStep_ = 0;   // ...the step it last lost some
     void effects(BodyStep& s);
     uint32_t fxOllies_ = 0, fxLands_ = 0, fxBites_ = 0;
     bool fxSeen_ = false;

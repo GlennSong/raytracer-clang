@@ -17,6 +17,7 @@ namespace engine {
 // --- the machine ---------------------------------------------------------------------------------------------------
 
 void PlayerBody::step(BodyStep& s) {
+    ++steps_;
     Transform& t = s.t;
     CharacterController& cc = s.cc;
     PhysicsWorld& pw = s.pw;
@@ -262,6 +263,30 @@ void PlayerBody::goLimp(BodyStep& s, const Vec3& velocity, const std::string& wh
     ragdoll.stillFor = 0;
     gate.buffered = -1;
     event(why);
+}
+
+Real BodyMode::impactTolerance(const PlayerBody& b, const Vec3&) const { return b.tune.limpImpact; }
+
+// what the impact took away, mostly gone: the body goes on with what it kept and a little of the rest
+Vec3 BodyMode::thrown(const Vec3& meant, const Vec3& got, const Vec3&) const { return got + (meant - got) * 0.3; }
+
+bool PlayerBody::impact(BodyStep& s, const Vec3& meant, const Vec3& got, const char* what) {
+    const Real m = meant.length();
+    if (m < 1e-6) return false;
+    const Vec3 dir = meant * (1.0 / m);
+    // ONE CONTACT, NOT ONE STEP: a body that meets a wall part way through a step loses only that part, and the rest
+    // the step after (a scooter at 7 m/s: 4.6, then 2.3 -- neither past 6.5). Losses in consecutive steps add up.
+    constexpr Real kStillMoving = 0.5;   // m/s lost in a step that is not a contact
+    const Real lost = speedLost(meant, got);
+    contactLoss_ = lost > kStillMoving && lastLossStep_ + 1 == steps_ ? contactLoss_ + lost : lost;
+    lastLossStep_ = lost > kStillMoving ? steps_ : 0;
+    if (contactLoss_ <= mode_->impactTolerance(*this, dir)) return false;
+    const Real total = contactLoss_;
+    contactLoss_ = 0;
+    char buf[96];
+    std::snprintf(buf, sizeof(buf), "%s at %.0f m/s", what, std::max(m, total));
+    goLimp(s, mode_->thrown(meant, got, dir), buf);
+    return true;
 }
 
 // --- the pose ------------------------------------------------------------------------------------------------------

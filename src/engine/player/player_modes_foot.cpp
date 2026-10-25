@@ -200,11 +200,10 @@ void OnFootMode::step(PlayerBody& b, BodyStep& s) {
     if (gs == GroundState::OnGround) {
         b.stamina = std::min(tune.staminaMax, b.stamina + tune.staminaRegen * dt);
         if (before == GroundState::InAir && vyBefore < -2.0) b.landed = std::min(Real(1), -vyBefore / 7.0);
-        if (before == GroundState::InAir && vyBefore < -tune.limpFallSpeed) {
-            char buf[64];
-            std::snprintf(buf, sizeof(buf), "landed hard at %.0f m/s", -vyBefore);
-            return b.goLimp(s, Vec3(b.airVel.x, vyBefore * 0.3, b.airVel.z), buf);
-        }
+        // a landing stops the fall (the run along the ground goes on)
+        if (before == GroundState::InAir && b.impact(s, Vec3(b.airVel.x, vyBefore, b.airVel.z),
+                                                     Vec3(b.airVel.x, 0, b.airVel.z), "landed hard"))
+            return;
     }
     if (b.haveLastBodyPos) {
         const Real hx = t.position.x - b.lastBodyPos.x, hz = t.position.z - b.lastBodyPos.z;

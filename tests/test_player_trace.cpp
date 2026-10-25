@@ -292,13 +292,24 @@ std::vector<Scenario> scenarios() {
                      r.fly.pitch = between(t, 2.0, 4.5) ? -35.0 : between(t, 4.5, 7.0) ? -12.0 : 0.0;
                  },
                  {"wingsuit spread", "parachute open (off the wingsuit)"}});
+    // THE WINGSUIT dived into the ground: the one impact rule (ADR-0247)
+    s.push_back({"wingsuit_crash", 16.0, [](Rig& r) {
+                     r.place(Vec3(32.5, 72.0, 38.5), 180);
+                     r.actions.injectPress("slot_6");
+                 },
+                 [](Rig& r, Pad& p, Real t) {
+                     p.stick(between(t, 0.3, 1.2) ? 1.0 : 0.0, 0);
+                     p.jump(tap(t, 2.0));
+                     r.fly.pitch = t > 2.0 ? -60.0 : 0.0;
+                 },
+                 {"wingsuit spread", "crashed the wingsuit*"}});
     // A HARD FALL off the tower, nothing on your back: limp, then up
     s.push_back({"hard_fall", 14.0, [](Rig& r) { r.place(Vec3(32.5, 72.0, 38.5), 180); },
                  [](Rig&, Pad& p, Real t) {
                      p.stick(between(t, 0.3, 1.2) ? 1.0 : 0.0, 0);
                      p.jump(tap(t, 11.0));
                  },
-                 {}});
+                 {"landed hard*", "got up"}});
     // THE GRAPPLE: hooked on a gantry's beam from the ground, pumped, let go, hooked on the next
     s.push_back({"grapple", 14.0, [](Rig& r) {
                      r.place(Vec3(0, 0, 52.0), 180, 62.0);
@@ -331,7 +342,7 @@ std::vector<Scenario> scenarios() {
                      p.stick(between(t, 0.2, 7.0) ? 1.0 : 0.0, 0);
                      p.run(true);
                  },
-                 {"on the scooter"}});
+                 {"on the scooter", "bailed*"}});
     // THE SWING: on, pumped in time, jumped off at speed
     s.push_back({"swing", 12.0, [](Rig& r) { r.place(Vec3(-5.1, 0, 25.4), 180); },
                  [](Rig& r, Pad& p, Real t) {

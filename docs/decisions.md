@@ -12162,3 +12162,49 @@ is written down (position, the pose's numbers, mode, ground, hook, last event):
 - the monkey bars' "off the end" never fires: the position is clamped every step, so it can't pass the end by
   more than 5 cm (the scenario drops off with crouch);
 - a limp request made while limp waits, and drops the body again as soon as it gets up.
+
+## ADR-0247 — One impact rule: speed lost along the way the body meant to go
+
+**Context.** Four modes each had their own way of deciding a crash, with four numbers:
+- a landing: over 15 m/s down;
+- the grapple: over 14 m/s lost along the swing in a step;
+- a board: over 6.5 m/s when something stopped 60% of it;
+- the wingsuit: over 20 m/s at touchdown (a canopy never crashed).
+
+Glenn wants ragdolls from crashes everywhere (a scooter into a wall, a wingsuit into a tree), so this is one rule
+that every mode reports into.
+
+**Decision.**
+- **`speedLost(meant, got)`** (`player/body_rules.h`): the speed the body meant to have, minus what the world let it
+  keep along that same way. Speed turned aside (a skid, a shove off a corner) isn't lost.
+- **`PlayerBody::impact(s, meant, got, what)`.** A mode reports what it meant and what it got. Past the mode's
+  `impactTolerance(dir)`, the body goes limp, thrown by the mode's `thrown()`. By default:
+  - tolerance is `limpImpact` (14 m/s, about a 10 m fall);
+  - thrown is what was kept plus 0.3 of what was lost.
+- **One contact, not one step.** A body that meets a wall part way through a step loses only that part, and the
+  rest in the next step: the scooter at 7 m/s lost 4.6, then 2.3, so neither step alone passed 6.5. Losses in
+  consecutive steps (each over 0.5 m/s) add up.
+- **Reporters:**
+  - **On foot, landing:** the fall plus the run, against the run kept.
+  - **Grapple:** the swing meant, against what the walls let it do (the same as before).
+  - **Board, going along:** heading × speed, against what it got. Tolerance `boardCrash`: stood on wheels, the feet
+    stop and the body goes over the front (thrown 0.7 × meant, plus 2.5 m/s up).
+  - **Board, landing:** the legs take it like anyone's: `limpImpact`.
+  - **Glide touchdown, or into something:** the flight, against what the touchdown leaves the body with, which is
+    running on at 0.4 of the horizontal. It isn't the step's own motion, because the ground is met part way through
+    that step and the glide ends there. A canopy can now crash too.
+- `movement.limpFallSpeed` is gone (the landing is on the rule).
+
+**Traces against ADR-0246's recording** (17 scenarios now, `wingsuit_crash` added):
+- **Unchanged:** 14 scenarios, all identical.
+- **hard_fall:** the same numbers; the message is now "landed hard at 38" (the fall with the run), was 37 (the fall).
+- **scooter_crash:** still bails at 7 m/s, one step later (the second step of the contact).
+- **wingsuit:** its chute, opened a second before the ground, touched down at 26 m/s. That was "landed the chute"
+  and is now "crashed the chute".
+- **wingsuit_crash (new):** a 60° dive into the ground at 35 m/s crashes. Measured on the step's own motion it
+  read as a 35 m/s landing, which is what led to the touchdown rule above.
+- **Kept:** a flared chute landing at 9 m/s still lands.
+- Test: `an_impact_is_the_speed_lost_along_the_way_meant`.
+
+**Not yet.** Being hit (a car into the player on foot, on a board, under a canopy) isn't the body's own loss: it
+needs the hit's impulse from physics, which comes with plan step 4 (in-car hits, ejection from open vehicles).

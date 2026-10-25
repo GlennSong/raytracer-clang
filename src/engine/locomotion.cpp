@@ -102,7 +102,6 @@ const std::vector<MovementTuning::Field>& MovementTuning::fields() {
         {"swingDamping", &T::swingDamping, 0, 1, "Playground"},
         {"swingMaxDeg", &T::swingMaxDeg, 20, 89, "Playground"},
         {"barsSpeed", &T::barsSpeed, 0.2, 4, "Playground"},
-        {"limpFallSpeed", &T::limpFallSpeed, 5, 60, "Ragdoll"},
         {"limpImpact", &T::limpImpact, 3, 60, "Ragdoll"},
         {"getUpAfter", &T::getUpAfter, 0.2, 10, "Ragdoll"},
     };

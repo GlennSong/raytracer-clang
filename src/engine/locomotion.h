@@ -108,15 +108,16 @@ struct MovementTuning {
     Real boardCarve = 7.0;         // m/s^2 sideways grip: how tight a turn is at speed
     Real boardTurnMax = 150.0;     // deg/s: how fast it turns when slow
     Real boardOllie = 3.8;         // m/s up off the board, jump
-    Real boardCrash = 6.5;         // m/s into something that stops it: off and limp
+    Real boardCrash = 6.5;         // m/s lost going along: off the board and limp (the one impact rule, ADR-0247)
     // the playground: a swing pumped like a pendulum, monkey bars hand over hand
     Real swingPump = 1.6;          // rad/s^2 a pump adds, W/S in time with the swing
     Real swingDamping = 0.08;      // 1/s: how soon an unpumped swing dies down
     Real swingMaxDeg = 75.0;       // the highest it goes (the chains go slack past this)
     Real barsSpeed = 1.1;          // m/s hand over hand
     // going limp (the ragdoll)
-    Real limpFallSpeed = 15.0;     // m/s down at touchdown that drops you in a heap (an ~11 m fall)
-    Real limpImpact = 14.0;        // m/s lost in one step on the rope or in the suit: a slam
+    // THE ONE IMPACT RULE (ADR-0247): speed lost in one step along the way the body meant to go, past which it goes
+    // limp -- a landing (~10 m fall), a slam on the rope, a canopy or a suit into the ground or a tree
+    Real limpImpact = 14.0;
     Real getUpAfter = 1.2;         // s lying still before standing up by itself
 
     struct Field { const char* key; Real MovementTuning::*value; Real lo, hi; const char* group; };

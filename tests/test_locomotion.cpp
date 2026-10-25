@@ -1,5 +1,6 @@
 // The player's movement past walking (engine/locomotion.h), against a real Jolt world: the jump gate, ledges,
 // the pull-up, the climbing probes.
+#include "../src/engine/player/body_rules.h"
 #include "test_framework.h"
 
 #include "../src/engine/block_body.h"
@@ -695,4 +696,15 @@ TEST_CASE(a_swing_pumped_in_time_goes_higher_and_dies_down_left_alone) {
         if (i > 4 * 60) { m1 = std::max(m1, std::fabs(a1)); m2 = std::max(m2, std::fabs(a2)); }
     }
     CHECK(m2 < m1 * 0.5);
+}
+
+// THE ONE IMPACT RULE (ADR-0247): speed lost along the way the body meant to go -- not speed turned aside
+TEST_CASE(an_impact_is_the_speed_lost_along_the_way_meant) {
+    CHECK_APPROX(speedLost(Vec3(0, -15, 0), Vec3(0, 0, 0)), 15.0, 1e-9);              // a fall, stopped
+    CHECK_APPROX(speedLost(Vec3(5, -15, 0), Vec3(5, 0, 0)), std::sqrt(250.0) - 25.0 / std::sqrt(250.0), 1e-9);
+    CHECK_APPROX(speedLost(Vec3(7, 0, 0), Vec3(7, 0, 0)), 0.0, 1e-9);                  // nothing in the way
+    CHECK_APPROX(speedLost(Vec3(7, 0, 0), Vec3(0, 0, 7)), 7.0, 1e-9);                  // turned square: all of it
+    CHECK_APPROX(speedLost(Vec3(7, 0, 0), Vec3(-3, 0, 0)), 7.0, 1e-9);                 // a bounce back: no more than all
+    CHECK(speedLost(Vec3(24, -10, 0), Vec3(24, 0, 0)) < 4.0);                           // a skid onto the ground
+    CHECK_APPROX(speedLost(Vec3(0, 0, 0), Vec3(3, 0, 0)), 0.0, 1e-9);
 }

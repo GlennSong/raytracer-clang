@@ -62,13 +62,16 @@ void GlideMode::step(PlayerBody& b, BodyStep& s) {
     if (gs == GroundState::OnGround || gs == GroundState::OnSteepGround || blocked) {
         const Real impact = g.velocity.length();
         b.landed = std::min(Real(1), impact / 8.0);
-        char buf[96];
-        if (!chute && impact > 20.0) {
-            std::snprintf(buf, sizeof(buf), "crashed the wingsuit at %.0f m/s", impact);
-            const Vec3 hit = g.velocity * 0.5;
+        // down onto the ground or into a tree: the flight against what the touchdown leaves the body with (on its
+        // feet, running on at 0.4 of the way it was going), by the one rule -- a canopy flared onto its feet loses a
+        // few m/s; a suit into a slope, most of fifty. (Not the step's own motion: the ground is met part way
+        // through it, and the glide ends there.)
+        const Vec3 kept(g.velocity.x * 0.4, 0, g.velocity.z * 0.4);
+        if (b.impact(s, g.velocity, kept, chute ? "crashed the chute" : "crashed the wingsuit")) {
             g.velocity = Vec3(0, 0, 0);
-            return b.goLimp(s, hit, buf);
+            return;
         }
+        char buf[96];
         std::snprintf(buf, sizeof(buf), "%s at %.1f m/s", chute ? "landed the chute" : "landed", impact);
         g.velocity = g.velocity * 0.4;
         stop(buf);
@@ -144,13 +147,7 @@ void GrappleMode::step(PlayerBody& b, BodyStep& s) {
     ropeVel = (t.position - was) * (1.0 / std::max(dt, Real(1e-4)));   // what walls and the ground let it do
     // swung into something, hard: the speed LOST along the way it was going (a sideways shove off a corner, or the
     // capsule pushed out of a surface, is not a slam: it was read as one at 7 m/s)
-    const Real meantSpeed = meant.length();
-    const Real kept = meantSpeed > 1e-6 ? std::max(Real(0), dot(ropeVel, meant * (1.0 / meantSpeed))) : Real(0);
-    if (meantSpeed - kept > tune.limpImpact) {
-        char buf[64];
-        std::snprintf(buf, sizeof(buf), "slammed into it at %.0f m/s", meant.length());
-        return b.goLimp(s, meant * 0.4, buf);
-    }
+    if (b.impact(s, meant, ropeVel, "slammed into it")) return;
     b.fall.onGrounded(t.position.y);
     // reeled right up to an edge: pull up over it
     const Vec3 toAnchor = anchor - (t.position + Vec3(0, handUp, 0));
@@ -213,19 +210,25 @@ void BoardMode::step(PlayerBody& b, BodyStep& s) {
     const Vec3 moved(t.position.x - was.x, 0, t.position.z - was.z);
     const Real got = dot(moved, heading) / std::max(dt, Real(1e-4));
     if (speed > 0.5 && got < speed * 0.4) {
-        if (speed > tune.boardCrash) {
-            char buf[64];
-            std::snprintf(buf, sizeof(buf), "bailed at %.1f m/s", speed);
-            const Vec3 thrown = heading * (speed * 0.7) + Vec3(0, 2.5, 0);
+        if (b.impact(s, want, heading * got, "bailed")) {
             speed = 0;
-            return b.goLimp(s, thrown, buf);
+            return;
         }
         speed = std::max(Real(0), got);
     }
     // a hard landing off a drop still drops you
-    if (!grounded && after == GroundState::OnGround && vyBefore < -tune.limpFallSpeed)
-        return b.goLimp(s, want + Vec3(0, vyBefore * 0.3, 0), "landed hard on the board");
+    if (!grounded && after == GroundState::OnGround && b.impact(s, want + Vec3(0, vyBefore, 0), want, "landed hard on the board"))
+        return;
     b.airVel = want;
+}
+
+Real BoardMode::impactTolerance(const PlayerBody& b, const Vec3& dir) const {
+    return std::fabs(dir.y) < 0.7 ? b.tune.boardCrash : b.tune.limpImpact;
+}
+
+Vec3 BoardMode::thrown(const Vec3& meant, const Vec3& got, const Vec3& dir) const {
+    if (std::fabs(dir.y) >= 0.7) return BodyMode::thrown(meant, got, dir);
+    return meant * 0.7 + Vec3(0, 2.5, 0);   // over the front
 }
 
 void BoardMode::pose(const PlayerBody& b, const BodyStep& s, PlayerPose& p) const {
