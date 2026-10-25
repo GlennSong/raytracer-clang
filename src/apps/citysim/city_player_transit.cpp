@@ -183,6 +183,7 @@ void CityPlayerTransitSystem::step(World& world, Real dt, const RideInput& in) {
             pendingCarSeat_ < static_cast<int>(seats.size())) {
             riding_ = rideCarAgent_;
             carSeat_ = pendingCarSeat_;
+            city_.setPlayerSeat(riding_, carSeat_);   // (no drawn rider in it)
             exitWhenSlow_ = false;
             haveBusYaw_ = false;
             if (!world.has<engine::Passenger>(player)) world.add<engine::Passenger>(player);
@@ -241,7 +242,21 @@ void CityPlayerTransitSystem::step(World& world, Real dt, const RideInput& in) {
         return;
     }
 
-    // A cab (no saloon to walk in): pinned over its pose, as a passenger.
+    // A CAB: in its back seat on the kerb side (+X, the driver's left -- the world drives on the left), seated as any
+    // car's passenger is. It used to be pinned over the cab's middle 1.1 m up with no seat at all, and the standing
+    // body put its head through the roof (Glenn: "when I sit in a car next to a driver I'm not in a seat").
+    {
+        std::vector<Vec3> seats;
+        if (city_.carSeatsOf(riding_, nullptr, &seats) && seats.size() >= 2) {
+            carSeat_ = seats.size() >= 4 ? 3 : 1;   // the rear kerb-side seat; a two-seater's passenger seat
+            city_.setPlayerSeat(riding_, carSeat_);   // (no drawn rider in it)
+            exitWhenSlow_ = false;
+            haveBusYaw_ = false;
+            rideCar(world, player, *pt, *cc, carInteract);
+            return;
+        }
+    }
+    // (no seats known for it: pinned over its pose, as before)
     const Agent& veh = agents[static_cast<std::size_t>(riding_)];
     const Real gy = city_.groundHeightAt(veh.pos.x, veh.pos.y);
     pin(world, player, *pt, *cc, Vec3(veh.pos.x, gy + veh.elevation + kSeatLift, veh.pos.y));

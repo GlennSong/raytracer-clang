@@ -4978,7 +4978,9 @@ Real CitySim::senseAhead(Agent& a) {
     // person cone saw a stopped car only once it was too late to stop from 50 km/h, and its 26 deg width at range
     // would brake for the next lane. A corridor a lane wide, straight along where we are going.
     const Vec2 dir = cone.forward;
-    const Real ownHalf = a.vehicle >= 0 ? fleetBody(a.vehicle).length * 0.5 : Real(2.2);
+    // (its own length, as built: fleetBody(a.vehicle) was another model's whenever the fleet has service slots, #115)
+    const Real ownHalf = a.vehicle >= 0 && a.vehicle < static_cast<int>(vehicles_.size())
+                             ? vehicles_[static_cast<std::size_t>(a.vehicle)].length * 0.5 : Real(2.2);
     const Real carRange = std::max(Real(18), a.speed * a.speed / (2 * Real(4.5)) + ownHalf + 12);
     auto inLaneAhead = [&](const Vec2& p) {
         const Real dx = p.x - a.pos.x, dz = p.y - a.pos.y;

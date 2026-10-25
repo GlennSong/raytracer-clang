@@ -11955,3 +11955,32 @@ fix, the first such change wrote out of bounds.
 a register by the abort path's `pthread_kill`, not the pointer: freeing an address that small would have
 segfaulted. No test drives `stepIndoors` (it needs a built city with streamed interiors), so the probe is the
 regression check: `tools/asan_storey_probe.py` against `build-asan/viewer` (how to build it is in the script).
+
+## ADR-0242 — A car's model is its draw slot, not its vehicle index (#115); a cab passenger sits
+
+**Context.** Glenn: "when I take a car, why does the car change?" and "when I sit in a car next to a driver I'm not
+in a seat". When the sim makes a car it takes its body from `fleetBody(ambientSlotFor(index))`.
+`ambientSlotFor` deals ordinary cars past the fleet's service slots (the bus, the fire engine), so a car's model
+slot is not its vehicle index whenever a fleet has service vehicles, which every city fleet does. The renderer
+draws by that slot (`drawSlotFor`), but several places read `a.vehicle` as if it were one:
+- commandeering a car took the chassis, glass, cabin, lamps, wheels, driver seat and physics body of another model;
+- the driver's-seat prompt and a passenger's seats (`carSeatsOf`) came off another model's layout, so the prompt
+  sat where you weren't looking;
+- `CitySim`'s look-ahead used another model's length for a car's own.
+
+A cab boarded with E took a separate path: pinned over the cab's middle 1.1 m up, with no seat, so the standing
+body put its head through the roof.
+
+**Decision.**
+- `CityRenderSystem::carSlotOf(agent)` (public; `drawSlotFor`) is the one way to name an agent's model. The
+  commandeer, `carSeatsOf` and the driver's-seat offer use it. The sim uses the vehicle's own stored length.
+- A cab seats you in its rear kerb-side seat (`+X`, the driver's left: the world drives on the left), or a
+  two-seater's passenger seat. It rides through the same path as any car's passenger: seated, drawn sitting,
+  following the drawn car, with no drawn rider in your seat (`setPlayerSeat`, now set for car seats too).
+- `[cityveh] took agent N's car: vehicle V, model slot S` is logged on a commandeer.
+
+**Checked** on river_town with before and after shots:
+- taking a stopped car keeps the same teal hatchback, with the player in the right-hand driver's seat;
+- a cab ride puts the player in the back seat, inside the body;
+- with the old code, the same spot offered "get in the cab" instead of the driver's seat, because the prompt sat
+  where another model's driver's seat would be.

@@ -230,9 +230,13 @@ void CityVehicleSystem::update(engine::FrameContext& ctx) {
     // PROMOTE: release the agent (its instanced car + widget vanish this tick)
     // and spawn a real Vehicle with the same fleet body at the same pose.
     const Agent& a = agents[bestAgent];
+    // THE MODEL IT IS DRAWN AS (#115): every part below by the draw slot, not the vehicle index -- they differ
+    // whenever the fleet has service vehicles, and the car in the player's hands turned into another model.
+    const int slot = city_.carSlotOf(bestAgent);
+    if (slot < 0) return;
     // The ADOPTED fleet's body, so the promoted car's chassis, mass and CoG come
     // from the same catalogue entry its drawn shell was built from.
-    const VehicleBody& body = sim.fleetBody(a.vehicle);
+    const VehicleBody& body = sim.fleetBody(slot);
 
     // WHERE THE CAR ACTUALLY IS. agentWorldPose resolves the ghost's (x,z) onto
     // the terrain and adds its elevation (a bridge deck, a freeway ramp); the
@@ -263,13 +267,13 @@ void CityVehicleSystem::update(engine::FrameContext& ctx) {
     // fleetCarMesh unconditionally — so the whole city was mesh.car and the one
     // car in the player's hands turned into the retired box the moment they
     // pressed enter. Only a level with no fleet recipes falls back now.
-    r.mesh = city_.carChassisMesh(a.vehicle);
+    r.mesh = city_.carChassisMesh(slot);
     if (!r.mesh.valid()) {
         // No wheel-less body for this slot means the level shipped no vehicle
         // catalogue — in which case there was no ambient car to walk up to
         // either, so this is unreachable in a real city. There is deliberately
         // nothing to substitute: a C++ box car is what this whole round removed.
-        LOG_WARN << "[cityveh] slot " << a.vehicle
+        LOG_WARN << "[cityveh] slot " << slot
                  << " has no body to promote — not commandeering";
         world.destroy(e);
         return;
@@ -285,7 +289,7 @@ void CityVehicleSystem::update(engine::FrameContext& ctx) {
     world.add<Renderable>(e, r);
 
     Vehicle v;
-    v.config = configFromBody(body, city_.carWheels(a.vehicle));
+    v.config = configFromBody(body, city_.carWheels(slot));
 
     // GLASS AND CABIN as body parts pinned to the chassis (as vehicle_spec does for a spawned car). The ambient
     // car drew them as instance groups keyed to the agent, which stop drawing the moment it is released -- Glenn
@@ -305,8 +309,8 @@ void CityVehicleSystem::update(engine::FrameContext& ctx) {
         world.add<Renderable>(pe, pr);
         v.bodyParts.push_back(pe);
     };
-    addPart(city_.carGlassMesh(a.vehicle), 0.30f, 0.06f, 0.0f);
-    addPart(city_.carCabinMesh(a.vehicle), 1.0f, 0.9f, 0.0f);
+    addPart(city_.carGlassMesh(slot), 0.30f, 0.06f, 0.0f);
+    addPart(city_.carCabinMesh(slot), 1.0f, 0.9f, 0.0f);
 
     // LAMPS from the recipe's markers, for the same reason the wheels come from
     // its layout: without them VehicleSystem places four lenses at guessed
@@ -317,19 +321,20 @@ void CityVehicleSystem::update(engine::FrameContext& ctx) {
     Vec3 seat(0, 0, 0);
     bool hasSeat = false;
     for (const PromotedLamp& l :
-         promotedLamps(city_.carLamps(a.vehicle), &seat, &hasSeat))
+         promotedLamps(city_.carLamps(slot), &seat, &hasSeat))
         v.lamps.push_back(Vehicle::Lamp{Entity{}, l.local, l.front, l.left});
     // THE DRIVER'S SEAT: a marker if the recipe placed one, else the fleet recipe's own `driver_seat` (the Lua fleet
     // publishes the seat apart from its lamps, so the marker was never there and VehicleSystem's guess -- the LEFT
     // seat -- put the player in the passenger's place of a right-hand-drive car; Glenn: "when I'm driving a car I'm
     // in the wrong seat")
-    if (!hasSeat) hasSeat = city_.carDriverSeat(a.vehicle, seat);
+    if (!hasSeat) hasSeat = city_.carDriverSeat(slot, seat);
     if (hasSeat) {
         v.driverSeat = seat;
         v.hasDriverSeat = true;
     }
     world.add<Vehicle>(e, v);   // VehicleSystem builds the Jolt car + wheels + lamps
 
+    LOG_INFO << "[cityveh] took agent " << bestAgent << "'s car: vehicle " << a.vehicle << ", model slot " << slot;
     // the driver gets out onto the pavement and stands there (no longer vanishing with the car)
     if (!city_.simMutable().ejectDriver(bestAgent)) city_.simMutable().releaseDriver(bestAgent);
     promoted_.push_back(PromotedCar{e, bestAgent});

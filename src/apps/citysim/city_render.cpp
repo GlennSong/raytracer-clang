@@ -4698,7 +4698,9 @@ bool CityRenderSystem::carSeatsOf(int agent, Mat4* pose, std::vector<Vec3>* seat
     const Agent& a = ag[static_cast<std::size_t>(agent)];
     if (a.mode != Agent::Mode::Driver || a.vehicle < 0 || a.released || carDriverSeat_.empty()) return false;
     const int n = static_cast<int>(carDriverSeat_.size());
-    const std::size_t v = static_cast<std::size_t>(((a.vehicle % n) + n) % n);
+    const int slot = drawSlotFor(agent);   // the model it is drawn as (#115), not its vehicle index
+    if (slot < 0) return false;
+    const std::size_t v = static_cast<std::size_t>(slot % n);
     if (!carHasDriver_[v]) return false;
     if (pose) {
         const auto it = busDrawnPose_.find(agent);
@@ -4710,7 +4712,8 @@ bool CityRenderSystem::carSeatsOf(int agent, Mat4* pose, std::vector<Vec3>* seat
         seats->push_back(d);
         seats->push_back(Vec3(-d.x, d.y, d.z));
         // a rear bench needs ~0.85 m behind the front seats: a two-seater (under ~3.9 m) has none
-        if (sim_.fleetBody(a.vehicle).length >= 3.9) {
+        if (a.vehicle < static_cast<int>(sim_.vehicles().size()) &&
+            sim_.vehicles()[static_cast<std::size_t>(a.vehicle)].length >= 3.9) {
             seats->push_back(Vec3(d.x, d.y, d.z - 0.85));
             seats->push_back(Vec3(-d.x, d.y, d.z - 0.85));
         }

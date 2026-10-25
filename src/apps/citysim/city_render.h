@@ -404,6 +404,11 @@ public:
     // shell's underside culls from inside), so without these the player sat in an empty frame over the road. The
     // cabin is invalid for a see-into body (bus, convertible), whose cabin is part of its chassis.
     engine::MeshHandle carGlassMesh(int slot) const { return slotOf(carGlassMesh_, slot); }
+    // WHICH MODEL an agent's car is drawn as: the slot every car* accessor above and below takes. Not its vehicle
+    // index: the fleet deals ordinary cars past the service slots (CitySim::ambientSlotFor), and a bus or a fire
+    // engine has its own -- so `a.vehicle` named a different model (#115: "when I take a car, why does the car
+    // change?"; and a passenger's seats came off another model's layout). -1 when it draws as none.
+    int carSlotOf(int agent) const { return drawSlotFor(agent); }
     // That car's driver's hip point (the fleet recipe's `driver_seat`, its interior's own seat), for a commandeered
     // car's driver: false when the slot publishes none.
     bool carDriverSeat(int slot, engine::Vec3& out) const {
