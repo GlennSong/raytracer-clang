@@ -11929,3 +11929,29 @@ vehicles' own speed changes).
 - Trains already place per frame; the shared riding component (planned) should take this rider logic over for
   every carrier.
 - `audio?` (socket) reports the mixer's state and voice count. river_town plays 8 voices standing at the spawn.
+
+## ADR-0241 — An indoor cache keyed by what it describes (#114)
+
+**Context.** Swinging on the grapple among the island's towers crashed the viewer twice with `free(): invalid next
+size`, both times freeing `CitySim::computeGaps`'s per-lane map. An AddressSanitizer build (`build-asan/`, a probe
+swinging round downtown) named the real write: `CityRenderSystem::stepIndoors`, `whole.units[u + 1] = 1`, one byte
+past a 1-byte table. `buildingPlace_` cached each building's shop-unit-to-place list by building id, the first
+time its interior was seen. A tower streams its interior in storey windows. The street window has shop units, a
+window at storeys 32–37 has none. Seen low then rebuilt high, the cached list had N units and the table had room
+for 1. The grapple made it reachable: street level to the 40th storey of one tower in seconds.
+
+**Decision.**
+- `BuildingPeople` records which interior it describes: its shop units' floor heights (`units`). When a different
+  window streams in, the entry is matched afresh, and the log says so (`[indoors] building N: another interior
+  window (a -> b shop units), matched afresh`).
+- `towers? <x> <z> [radius] [min height]` (socket): the tall buildings round a point, tallest first, each
+  "cx cz groundY height", for probes to aim at.
+
+**Checked.** The same island under ASan, going inside the 12 tallest downtown towers at 2, 50, 90, 2 and 70 % of
+their height in turn: 320 visits, 340 interior windows built, 225 window changes rematched, no report. Before the
+fix, the first such change wrote out of bounds.
+
+**Note.** In the cores, gdb showed the freed pointer as the process ID both times. That was the thread ID left in
+a register by the abort path's `pthread_kill`, not the pointer: freeing an address that small would have
+segfaulted. No test drives `stepIndoors` (it needs a built city with streamed interiors), so the probe is the
+regression check: `tools/asan_storey_probe.py` against `build-asan/viewer` (how to build it is in the script).

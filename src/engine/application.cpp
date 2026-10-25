@@ -1059,6 +1059,36 @@ std::string Application::handleControlCommand(const std::string& line) {
         return "ok detach " + mode + " staged";
     }
 
+    // THE TALL BUILDINGS round a point, for a probe to aim at (#114: a swing probe that hooked empty sky never
+    // swept a tower's storeys): `towers? <x> <z> [radius] [min height]` -> up to 24, tallest first, each
+    // "cx cz groundY height" with its plan's centre.
+    if (cmd.name == "towers?") {
+        if (cmd.args.size() < 2) return "err usage: towers? <x> <z> [radius 300] [min height 40]";
+        double qx = 0, qz = 0, rad = 300.0, minH = 40.0;
+        if (!num(cmd.args[0], qx) || !num(cmd.args[1], qz)) return "err usage: towers? <x> <z> [radius] [min height]";
+        if (cmd.args.size() > 2) num(cmd.args[2], rad);
+        if (cmd.args.size() > 3) num(cmd.args[3], minH);
+        const CityBuildings* cb = nullptr;
+        worldState.each<CityBuildings>([&](Entity, CityBuildings& c) { if (!cb) cb = &c; });
+        if (!cb) return "ok no city";
+        std::vector<const BuildingRecord*> near;
+        cb->near(engine::Vec2(qx, qz), rad, near);
+        std::vector<std::pair<double, const BuildingRecord*>> tall;
+        for (const BuildingRecord* r : near)
+            if (r->height >= minH && r->plan.size() >= 3) tall.push_back({r->height, r});
+        std::sort(tall.begin(), tall.end(), [](const auto& a, const auto& b) { return a.first > b.first; });
+        std::string out = "ok " + std::to_string(tall.size());
+        for (std::size_t i = 0; i < tall.size() && i < 24; ++i) {
+            const BuildingRecord& r = *tall[i].second;
+            engine::Vec2 c(0, 0);
+            for (const engine::Vec2& v : r.plan) c = c + v * (1.0 / static_cast<double>(r.plan.size()));
+            char b[120];
+            std::snprintf(b, sizeof b, " | %.1f %.1f %.1f %.1f", c.x, c.y, r.groundY, r.height);
+            out += b;
+        }
+        return out;
+    }
+
     if (cmd.name == "lot?") {
         // WHAT IS ACTUALLY HERE (Glenn: "Are you able to pull the city block
         // and lot details while the game is running? If not that would be a

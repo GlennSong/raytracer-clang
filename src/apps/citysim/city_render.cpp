@@ -3050,7 +3050,17 @@ void CityRenderSystem::stepIndoors(World& world, Real dt) {
     std::vector<Inside> inside;
     world.each<engine::Interactables>([&](Entity, engine::Interactables& set) {
         if (set.building < 0 || !cb || set.building >= static_cast<int>(cb->records.size())) return;
+        // which interior this is: its shop units' floor heights (a storey window of a tower has its own, or none)
+        std::vector<double> unitsKey;
+        unitsKey.reserve(set.units.size());
+        for (const auto& un : set.units) unitsKey.push_back(un.y0);
         auto it = buildingPlace_.find(set.building);
+        if (it != buildingPlace_.end() && it->second.units != unitsKey) {
+            LOG_INFO << "[indoors] building " << set.building << ": another interior window (" << it->second.units.size()
+                     << " -> " << unitsKey.size() << " shop units), matched afresh";
+            buildingPlace_.erase(it);
+            it = buildingPlace_.end();
+        }
         if (it == buildingPlace_.end()) {
             // the places whose sites are inside this building's plan; each shop unit takes the one inside its room
             // (two storeys of a mall over the same rooms: the lower unit the lower id, as they were exported)
@@ -3060,6 +3070,7 @@ void CityRenderSystem::stepIndoors(World& world, Real dt) {
                 for (const Place& p : places_.places())
                     if (engine::pointInPolygon(r.plan, p.site)) cand.push_back(p.id);
             BuildingPeople bp;
+            bp.units = unitsKey;
             bp.unit.assign(set.units.size(), kNoPlace);
             std::vector<std::size_t> order(set.units.size());
             for (std::size_t u = 0; u < order.size(); ++u) order[u] = u;

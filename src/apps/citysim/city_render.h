@@ -560,7 +560,11 @@ private:
     Real indoorAcc_ = 1.0;
     // record index -> whose people are drawn inside: the building's own place (kNoPlace: none) and each furnished shop
     // unit's (Interactables::units; kNoPlace: no place found -- its pieces go with the building's)
-    struct BuildingPeople { PlaceId whole = kNoPlace; std::vector<PlaceId> unit; };
+    // `unit` is by the index of the interior's shop units, so it holds only for the interior it was made for: a tower
+    // streams its interior in storey windows, and the ground floor's (shops) and the 40th's (none) differ -- `units`
+    // says which one this is (their count and floor heights), and a different one is matched afresh (#114: a cached
+    // list of N units indexed a 1-entry table when the player swung from the street to the top floors)
+    struct BuildingPeople { PlaceId whole = kNoPlace; std::vector<PlaceId> unit; std::vector<double> units; };
     std::unordered_map<int, BuildingPeople> buildingPlace_;
     std::vector<std::array<double, 5>> footpaths_;          // the parks' and the quad's walks (CitySimConfig)
     std::vector<std::vector<std::array<double, 2>>> jogLoops_;   // the tracks to run (CitySimConfig)

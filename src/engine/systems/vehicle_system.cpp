@@ -939,7 +939,10 @@ void VehicleSystem::measureSlide(FrameContext& ctx) {
     const Real speed = std::fabs(v->speed);
     const Real drifting = drift.drifting ? smooth(6.0, 26.0, std::fabs(drift.slipDeg)) : Real(0);
     const Real braking = smooth(0.55, 0.95, std::max(v->brake, v->handBrake)) * (0.6 + 0.4 * smooth(0.2, 0.7, along));
-    v->slide = v->pedalled ? Real(0) : std::max(drifting, braking) * smooth(4.0, 11.0, speed);
+    const Real fast = smooth(4.0, 11.0, speed);
+    v->slide = v->pedalled ? Real(0) : std::max(drifting, braking) * fast;
+    // the smoke: a drift's in full, a hard stop's a wisp (Glenn: "The braking smoke is a little heavy")
+    const Real smoky = v->pedalled ? Real(0) : std::max(drifting, braking * Real(0.3)) * fast;
     // SMOKE off the rear tyres while they slide (Glenn: "dust kick up when you ... drift around a corner")
     const Transform* ct = ctx.world.get<Transform>(car);
     if (!ct) return smokeOff();
@@ -950,7 +953,7 @@ void VehicleSystem::measureSlide(FrameContext& ctx) {
         if (Transform* st = ctx.world.get<Transform>(smoke_[k]))
             st->position = ct->position + ct->orientation.rotate(w.position) - Vec3(0, w.radius * 0.8, 0);
         if (ParticleEmitter* pe = ctx.world.get<ParticleEmitter>(smoke_[k])) {
-            pe->rate = v->slide > 0.1 ? 40.0 * v->slide : 0.0;
+            pe->rate = smoky > 0.05 ? 40.0 * smoky : 0.0;
             pe->velocity = ahead * (v->speed * 0.2);
         }
         ++k;
