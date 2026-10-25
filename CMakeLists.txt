@@ -1061,6 +1061,10 @@ if(RT_ENABLE_PHYSICS)
         src/engine/physics/jolt_job_adapter.cpp
         src/engine/systems/physics_system.cpp
         src/engine/systems/player_system.cpp
+        src/engine/player/player_body.cpp    # the player's body as a state machine of modes (ADR-0246)
+        src/engine/player/player_modes_foot.cpp
+        src/engine/player/player_modes_gear.cpp
+        src/engine/player/player_hands.cpp
         src/engine/locomotion.cpp            # jump gate, ledges, mantle, climbing probes (tests/test_locomotion)
         src/engine/rope_line.cpp             # the grapple's rope as drawn: a Verlet chain that lies over things
         src/engine/riding.cpp                # a rider held in a carrier's frame: bus, car, cab, train (ADR-0243)
@@ -1114,6 +1118,10 @@ if(RT_ENABLE_PHYSICS)
         src/apps/citysim/city_player_transit.cpp
         src/apps/citysim/city_map_tool.cpp
         src/engine/systems/player_system.cpp
+        src/engine/player/player_body.cpp
+        src/engine/player/player_modes_foot.cpp
+        src/engine/player/player_modes_gear.cpp
+        src/engine/player/player_hands.cpp
         src/renderer/null_renderer.cpp   # Renderer::create for the level the trace loads
     )
     target_include_directories(physics_tests PRIVATE src)

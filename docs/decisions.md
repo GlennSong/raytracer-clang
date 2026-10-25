@@ -12112,3 +12112,53 @@ knees folding.
 **Later.** GPU skinning (bone matrices in mesh.vert, a weights stream) belongs with animation clips (plan step 6),
 where shoulders, hips and the spine twist in three axes and a per-fold mesh no longer covers it. The seated
 occupant (`procgen/vehicle/occupant`) is still its own manikin with its own knees; it should move onto this body.
+
+## ADR-0246 — The player's body as a state machine of modes, driven by an intent
+
+**Context.** Step 2 of the player plan. `PlayerSystem` had grown to 1906 lines: one `fixedUpdate` of ~470 lines
+running ten modes (a `Move` enum plus a swimming flag and the ladder component) in a fixed order, with ~100 members
+shared by all of them, and every mode reading the keys itself. Glenn's asks (the gun and the light together,
+shooting while hanging, skate tricks, a map that takes the controls) all need the modes apart, the hands apart
+from the body, and the keys apart from both.
+
+**Decision.**
+- **`PlayerIntent`** (`engine/player/player_intent.h`): the stick, the buttons held, the one-shots the frame staged
+  (jump, limp, the trigger, E on the playground) and the view. `PlayerSystem::intent` fills it from the input map
+  each fixed step. The modes never read keys. A one-shot a step does not spend waits for the next, as before.
+- **`PlayerBody`** (`engine/player/player_body.h`) runs the modes. Each is a `BodyMode` with its own state:
+  on foot, swim, ladder, mantle, climb, parachute and wingsuit (one `GlideMode`, sharing a `GlideFlight`), grapple,
+  board, swing, bars, ragdoll. A step is:
+  1. the interrupts, over every mode: a ladder taken, the water, a teleport, the ragdoll (nothing else applies),
+     going limp;
+  2. the hands: the grapple's aim and a shot, unless the mode says no (`canAim`: not mantling, not limp);
+  3. the mode's `leave()`, the ways out checked before it steps (on foot: into the water, onto the swing or bars,
+     onto a board; a board: off when the hand changes). The mode it leads to steps this same step;
+  4. the mode's `step()`, which may `enter()` another (let go, pull up, go limp);
+  5. the pose: shared fields, then the mode's `pose()`.
+- **Groups** (`BodyGroup`: ground, water, wall, air, riding, play, limp) are each mode's parent, for rules over a
+  family. None is used yet; the next change (one impact rule) is the first.
+- **`PlayerHands`** (`engine/player/player_hands.h`): the slot in hand and the grapple's hook and rope, which fly,
+  hold and come back whatever the body does. The pose now says `handsFree` (from the mode), and the gun script's
+  `camera.hands_free()` reads it instead of listing pose modes.
+- The small pure rules (the fall net, air momentum, `SwimState`, the ladder's pace) moved to
+  `engine/player/body_rules.h`. `PlayerSystem` keeps the keys, the camera, fast travel, the HUD and `move?`: 626 lines.
+
+**Checked by trace** (`tests/test_player_trace.cpp`, physics_tests). Sixteen scripted scenarios run the real
+`PlayerSystem` on movement_lab, headless: the NullRenderer, Jolt single-threaded, a scripted pad. Every fixed step
+is written down (position, the pose's numbers, mode, ground, hook, last event):
+- walk/run/hop/crouch, two pull-ups, a climb (grab, lunge, over the top, kick off), a wall jump, a swim (crawl,
+  dive, rise), a plunge, the parachute, the wingsuit and its chute, a hard fall, the grapple (two hooks), the
+  skateboard, a scooter crash, the swing, the bars, limp and up.
+- Recorded before the change (`RT_PLAYER_TRACE_OUT`), the refactor reproduces all 16 traces exactly
+  (`RT_PLAYER_TRACE_BASE`, 1e-6 relative). Runs are bit-identical run to run. Without either variable, each scenario
+  checks that its moves happened.
+- The ladder is not covered (movement_lab has none); its code moved line for line.
+
+**Changed on purpose** (both untraced edges):
+- swimming is its own mode, so the swing and bars can no longer be taken from the water;
+- a teleport ends every mode but on foot and swimming (it used to spare "on foot", which included swimming).
+
+**Found, left as they were** (the trace keeps them; to fix separately):
+- the monkey bars' "off the end" never fires: the position is clamped every step, so it can't pass the end by
+  more than 5 cm (the scenario drops off with crouch);
+- a limp request made while limp waits, and drops the body again as soon as it gets up.
