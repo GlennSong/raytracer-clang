@@ -41,8 +41,8 @@ particles = {
   -- the air going past under a canopy / in a wingsuit: a faint line where it was, stretched against the body
   streak = {
     life = {0.5, 0.9},
-    shape = "glow", colour = {1, 1, 1}, glow = {0.25, 0.25, 0.27}, size = 0.02, alpha = 0.22,
-    fade_in = 0.3, fade_out = 0.4, stretch = 0.1,
+    shape = "glow", colour = {1, 1, 1}, glow = {0.45, 0.45, 0.48}, size = 0.05, alpha = 0.38,
+    fade_in = 0.3, fade_out = 0.4, stretch = 0.16,
     count = 1, speed = 0, spread = 0,
   },
   -- a hook biting, a truck grinding: hot, quick, falling, a line along its flight
@@ -55,7 +55,7 @@ particles = {
   -- into the water: white drops thrown up and falling back
   splash = {
     gravity = 9.81, drag = 0.6, life = {0.5, 0.9},
-    shape = "puff", colour = {0.95, 0.97, 1.0}, glow = {0.1, 0.1, 0.1}, size = {0.09, 0.05}, alpha = 0.85,
+    shape = "glow", colour = {0.95, 0.97, 1.0}, glow = {0.35, 0.36, 0.38}, size = {0.09, 0.05}, alpha = 0.85,
     fade_in = 0.0, fade_out = 0.3, stretch = 0.02,
     count = 16, speed = 0, up = 2.5, spread = 1.4, jitter = 0.4,
   },

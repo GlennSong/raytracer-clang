@@ -28,7 +28,7 @@ std::vector<unsigned char> bake(ParticleShape s) {
                 switch (s) {
                     case ParticleShape::Puff: {
                         // soft, a little lumpy so overlapping puffs don't read as discs
-                        const double lump = 0.85 + 0.15 * std::sin(std::atan2(v, u) * 5.0 + r * 7.0);
+                        const double lump = 1.0 - 0.18 * r * r * (0.5 + 0.5 * std::sin(std::atan2(v, u) * 5.0));   // the edge only
                         a = std::min(1.0, 1.6 * std::pow(1.0 - r, 1.1)) * lump;   // a fuller middle: it reads
                         break;
                     }

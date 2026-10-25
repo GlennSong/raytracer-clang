@@ -12036,3 +12036,26 @@ in local space. Nothing here assumes the carrier's up is the world's.
 **Probe notes.** With the screen locked the desktop throttled the viewer to 20 fps; `RT_VSYNC=0` restores full rate
 for measurements. The jitter sampler (`set jitter.request`) reads the camera in CityRenderSystem's render, after
 RidingSystem's.
+
+## ADR-0244 — Particles tuned from in-game shots; out of the water when lifted clear
+
+**Context.** ADR-0239's effects were tuned by eye from the lab, without real screenshots of most of them. Shot in
+play (movement_lab at noon with `daynight 12` + `daynight hold`, and a car taken in river_town):
+- the splash drops drew as five-lobed pinwheels: the puff sprite's lump ran through its middle;
+- the air streaks under a canopy barely showed against the sky;
+- the brake and drift smoke (already lighter, ADR-0241) read well and needed nothing more.
+
+Shooting them also found a bug. A swimmer teleported up out of a pool stayed swimming, so Space rose instead of
+opening the chute.
+
+**Decision.**
+- **Puff sprite:** the lump is now `1 - 0.18 r² (0.5 + 0.5 sin 5θ)`. Only the edge wobbles, and the middle stays
+  round.
+- **Splash:** uses the glow shape, glow 0.35. The drops read as soft white glints.
+- **Streak:** glow 0.45, size 0.05, alpha 0.38, stretch 0.16. The canopy emitter's rate goes from 14 to 24 a
+  second.
+  - Changed in both `particles.lua` and the built-ins, and the alike-test holds.
+- **SwimState** leaves the swim when the water is a metre or more below (`depth <= -1`). That includes "no water
+  under" (depth −1). Test: `a_swimmer_lifted_clear_of_the_water_is_out_of_it`.
+
+**Not shot:** bubbles. The water's surface is opaque from above, so the third-person rig never sees them.

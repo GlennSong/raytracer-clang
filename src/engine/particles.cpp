@@ -45,8 +45,8 @@ std::vector<ParticleEffect> builtins() {
     {   // the air going past under a canopy / in a wingsuit: a faint line where it was, stretched against the body
         ParticleEffect& e = add("streak");
         e.lifeMin = 0.5; e.lifeMax = 0.9; e.shape = ParticleShape::Glow; e.colour = Vec3(1, 1, 1);
-        e.glow = Vec3(0.25, 0.25, 0.27); e.sizeStart = 0.02; e.sizeEnd = 0.02; e.alpha = 0.22;
-        e.fadeIn = 0.3; e.fadeOut = 0.4; e.stretch = 0.1;
+        e.glow = Vec3(0.45, 0.45, 0.48); e.sizeStart = 0.05; e.sizeEnd = 0.05; e.alpha = 0.38;
+        e.fadeIn = 0.3; e.fadeOut = 0.4; e.stretch = 0.16;
         e.count = 1; e.speed = 0; e.spread = 0;
     }
     {   // a hook biting, a truck grinding: hot, quick, falling, a line along its flight
@@ -58,8 +58,9 @@ std::vector<ParticleEffect> builtins() {
     }
     {   // into the water: white drops thrown up and falling back
         ParticleEffect& e = add("splash");
-        e.gravity = 9.81; e.drag = 0.6; e.lifeMin = 0.5; e.lifeMax = 0.9; e.colour = Vec3(0.95, 0.97, 1.0);
-        e.glow = Vec3(0.1, 0.1, 0.1); e.sizeStart = 0.09; e.sizeEnd = 0.05; e.alpha = 0.85;
+        e.gravity = 9.81; e.drag = 0.6; e.lifeMin = 0.5; e.lifeMax = 0.9; e.shape = ParticleShape::Glow;
+        e.colour = Vec3(0.95, 0.97, 1.0);
+        e.glow = Vec3(0.35, 0.36, 0.38); e.sizeStart = 0.09; e.sizeEnd = 0.05; e.alpha = 0.85;
         e.fadeIn = 0.0; e.fadeOut = 0.3; e.stretch = 0.02;
         e.count = 16; e.speed = 0; e.up = 2.5; e.spread = 1.4; e.jitter = 0.4;
     }

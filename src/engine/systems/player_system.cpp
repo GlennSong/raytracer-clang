@@ -1235,7 +1235,7 @@ void PlayerSystem::effects(FrameContext& ctx, Entity e, Transform& t, CharacterC
     // under a canopy, in a wingsuit: the air going past, hung ahead and stretched against the body's flight
     if (ParticleEmitter* s = streakEmitter_.valid() ? ctx.world.get<ParticleEmitter>(streakEmitter_) : nullptr) {
         const bool gliding = move_ == Move::Parachute || move_ == Move::Wingsuit;
-        s->rate = !gliding ? 0 : move_ == Move::Parachute ? 14.0 : 10.0 + glideVel_.length() * 1.2;
+        s->rate = !gliding ? 0 : move_ == Move::Parachute ? 24.0 : 10.0 + glideVel_.length() * 1.2;
         s->entityVelocity = glideVel_;
         if (Transform* st = ctx.world.get<Transform>(streakEmitter_)) st->position = t.position;
     }

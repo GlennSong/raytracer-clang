@@ -80,9 +80,14 @@ struct SwimState {
     static constexpr Real kEyeAbove = 0.25;    // eyes this far above the surface, afloat
     bool swimming = false;
     // depth: water surface minus the feet (<= 0 on dry land); touching: the capsule is on something.
+    // Out of it too with the feet well ABOVE the surface, touching nothing: teleported away, flung out on a rope
+    // (a swimmer's feet hang ~1.3 m below it). It was only ever left wading: teleported up from the pool, the player
+    // stayed "swimming" in the air, and jump rose instead of opening the chute.
+    static constexpr Real kLeftAbove = 1.0;
     bool update(Real depth, bool touching) {
         if (!swimming && depth > kSwimDepth) swimming = true;
         else if (swimming && depth < kWadeDepth && touching) swimming = false;
+        else if (swimming && depth <= -kLeftAbove) swimming = false;   // (no water under: depth -1)
         return swimming;
     }
     // Vertical speed: toward the floating height (a buoyant spring, bobbing), or up/down on request.
