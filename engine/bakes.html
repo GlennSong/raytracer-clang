@@ -1,0 +1,813 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>The Build Cache — How the Engine Works</title>
+  <link rel="stylesheet" href="engine.css">
+</head>
+<body>
+<div class="wrap">
+  <div class="nav"><a href="index.html">← How the engine works</a> · <a href="../index.html">scenes</a></div>
+  <h1>The build cache: bakes, bundles and streaming</h1>
+  <p class="lede">A city level takes minutes to generate, and the result is the same every time for the same inputs.
+    So the engine computes it once, saves it as a <b>bundle</b> named by a hash of everything that went into it, and
+    reads it back on every later load. This page explains that cache, the smaller caches beside it, how the GPU is
+    fed from it a cell at a time, and the measured steps that took the island from a 10.5-minute first frame to
+    under a minute.</p>
+
+  <h2>The problem</h2>
+  <p>Every level is generated from a small JSON file: a road graph, a terrain recipe, a few knobs for the city
+    simulation. Turning that into a playable world means meshing every road deck and junction, parcelling every
+    block into lots, growing every building from a grammar, grading the ground under it all, and handing the city
+    simulation tens of thousands of people with homes and jobs. Before ADR-0084 a lanelab level rebuilt its city
+    on every start: about 36 s of road building plus 30–40 s of lots and buildings, all recomputing a result that
+    was already known. On the island (<code>island_8_nature</code>) the cold build is 793 s for the city and 124 s
+    for the lots (ADR-0143) — the "28 minutes" Glenn asked about.</p>
+  <p>Three things make caching this harder than it sounds:</p>
+  <ul>
+    <li><b>Knowing when the cache is stale.</b> The output depends on input files and on the code. A hash can see
+      the files; it cannot see the code.</li>
+    <li><b>Size.</b> The island's bundle reached 8.59 GB, and every code change wrote another one. On 2026-10-04 the
+      bake folders on this machine held 517 GB.</li>
+    <li><b>Memory.</b> Reading the whole city into the 10 GB GPU does not fit. The cache had to become the format
+      the world <i>streams</i> from, a cell at a time.</li>
+  </ul>
+
+  <h2>Words used on this page</h2>
+  <table>
+    <tr><th>Term</th><th>Meaning here</th></tr>
+    <tr><td>bake</td><td>Running the slow, deterministic generation once and saving its output. Also the saved output.</td></tr>
+    <tr><td>bundle</td><td>One level's bake: a single file, <code>level.bundle</code>, of named binary sections, with a
+      <code>manifest.json</code> beside it (ADR-0084).</td></tr>
+    <tr><td>section</td><td>A named byte range inside a bundle, e.g. <code>lots/cell/12_-3/parts/7</code>. The bundle does
+      not know what is in it; a <i>codec</i> does.</td></tr>
+    <tr><td>producer</td><td>A piece of code that turns a level's inputs into sections. There are two today: <code>city</code> (roads,
+      and track when the graph has any) and <code>lots</code> (lots and buildings).</td></tr>
+    <tr><td>key</td><td>A 64-bit FNV-1a hash over the bytes of everything a producer reads, plus a hand-bumped code
+      <b>tag</b>. Same key, same output.</td></tr>
+    <tr><td>tag</td><td>A string constant (<code>kLotsBuildTag</code>, <code>kLanesBuildTag</code>) a developer changes
+      when the code's output changes. It is how the key "sees" code.</td></tr>
+    <tr><td>render cell</td><td>The square tile the city is split into for drawing and streaming. A bundle cell <i>is</i>
+      a render cell, so a cell's meshes come out of the bundle ready to upload.</td></tr>
+    <tr><td>residency</td><td>The service that decides which cells are on the GPU right now, by distance from the
+      camera (ADR-0095).</td></tr>
+  </table>
+
+  <h2>The pipeline: from level file to a loaded city</h2>
+  <p>The loader calls one function, <code>obtainForLevel</code>. It works out every producer's key, combines them into
+    the bundle's directory name, and either opens what is there or bakes it now. The command-line tool
+    <code>rt_bake</code> and the editor's "Bake level cache" button call the same <code>bakeLevel()</code>, so a bake
+    made by any of the three is the same file.</p>
+  <div class="diagram">
+    <svg viewBox="0 0 900 400" role="img" aria-label="Flow: level JSON to producer keys to a combined key; a hit opens the bundle by memory map, a miss bakes it into a temp folder and renames it into place; then the loader builds the terrain pyramid and population caches">
+      <defs><marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" fill="#6f8fb0"/></marker></defs>
+      <g font-family="system-ui, sans-serif" font-size="13" text-anchor="middle">
+        <rect x="20" y="30" width="160" height="64" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="100" y="56" fill="#cfe4ff">level JSON</text>
+        <text x="100" y="76" fill="#93a6ba" font-size="12">+ graph, Lua books</text>
+
+        <rect x="230" y="30" width="190" height="64" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="325" y="56" fill="#cfe4ff">each producer's key</text>
+        <text x="325" y="76" fill="#93a6ba" font-size="12">identity(): FNV of inputs + tag</text>
+
+        <rect x="470" y="30" width="190" height="64" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="565" y="56" fill="#cfe4ff">combined key</text>
+        <text x="565" y="76" fill="#93a6ba" font-size="12">cache/levels/&lt;hex16&gt;/</text>
+
+        <rect x="710" y="30" width="170" height="64" rx="9" fill="#131a24" stroke="#3b82f6"/>
+        <text x="795" y="56" fill="#cfe4ff">manifest there,</text>
+        <text x="795" y="76" fill="#cfe4ff">my key in it?</text>
+
+        <line x1="180" y1="62" x2="226" y2="62" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar)"/>
+        <line x1="420" y1="62" x2="466" y2="62" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar)"/>
+        <line x1="660" y1="62" x2="706" y2="62" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar)"/>
+
+        <!-- hit -->
+        <line x1="795" y1="94" x2="795" y2="146" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar)"/>
+        <text x="812" y="125" fill="#8ec5ff" font-size="12" text-anchor="start">hit</text>
+        <rect x="700" y="150" width="180" height="64" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="790" y="176" fill="#cfe4ff">Bundle::open</text>
+        <text x="790" y="196" fill="#93a6ba" font-size="12">mmap; views per section</text>
+
+        <!-- miss -->
+        <path d="M710,80 C640,120 640,160 620,170" fill="none" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar)"/>
+        <text x="668" y="128" fill="#e6c07b" font-size="12">miss</text>
+        <rect x="380" y="150" width="236" height="64" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="498" y="176" fill="#cfe4ff">bakeLevel → &lt;key&gt;.tmp-&lt;pid&gt;/</text>
+        <text x="498" y="196" fill="#93a6ba" font-size="12">per producer: copy forward or build</text>
+
+        <rect x="40" y="150" width="290" height="64" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="185" y="176" fill="#cfe4ff">manifest.json written LAST,</text>
+        <text x="185" y="196" fill="#93a6ba" font-size="12">then rename the temp dir into place</text>
+        <line x1="380" y1="182" x2="334" y2="182" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar)"/>
+        <path d="M185,214 C185,250 700,240 760,218" fill="none" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar)"/>
+
+        <!-- load-time caches -->
+        <line x1="790" y1="214" x2="790" y2="276" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar)"/>
+        <rect x="560" y="280" width="320" height="64" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="720" y="306" fill="#cfe4ff">loader instantiates the city</text>
+        <text x="720" y="326" fill="#93a6ba" font-size="12">one Renderable + collider per (cell, material)</text>
+        <line x1="560" y1="312" x2="514" y2="312" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar)"/>
+        <rect x="280" y="280" width="230" height="64" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="395" y="306" fill="#cfe4ff">terrain pyramid cache</text>
+        <text x="395" y="326" fill="#93a6ba" font-size="12">cache/terrain/&lt;key&gt;.pyramid</text>
+        <line x1="280" y1="312" x2="234" y2="312" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar)"/>
+        <rect x="20" y="280" width="210" height="64" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="125" y="306" fill="#cfe4ff">population cache</text>
+        <text x="125" y="326" fill="#93a6ba" font-size="12">cache/population/&lt;key&gt;.pop</text>
+        <text x="450" y="378" fill="#93a6ba" font-size="12">the last two are built at load from what the bundle produced, and cached by their own keys</text>
+      </g>
+    </svg>
+  </div>
+  <p class="cap">The path through <code>obtainForLevel</code> (src/engine/bundle/bake.cpp). <code>RT_NOCACHE=1</code>
+    skips every disk read and write and bakes in memory; <code>RT_BUNDLE_REQUIRE=1</code> turns a miss into an error.</p>
+
+  <p>Two details make this robust. First, a bake is written into <code>&lt;key&gt;.tmp-&lt;pid&gt;</code> and the
+    manifest is the last file written, so a crashed or half-finished bake never looks like a finished one; the rename
+    into place is the commit. Second, <b>the cold path packs and unpacks too</b>: when the loader builds a city
+    without a cache (say under <code>RT_NOCACHE</code>), it still goes through the bundle in memory, so a warm load and
+    a cold load are the same geometry to the byte.</p>
+
+  <h2>Inside a bundle</h2>
+  <p>A bundle is deliberately dumb: a header, then sections appended one after another as producers write them, then
+    the table of contents as JSON at the very end. Nothing in the container knows what a road or a building is. Why
+    not glTF? ADR-0084 weighed it: tinygltf parses and copies the whole buffer, is float-only, caps a file at 4 GB and
+    cannot memory-map or read part of a file — and partial reads are exactly what a streaming loader needs.</p>
+  <div class="diagram">
+    <svg viewBox="0 0 900 420" role="img" aria-label="On-disk layout: a folder named by the key holds level.bundle and manifest.json. The bundle is a 64-byte header, 4 KB aligned sections, and a JSON table of contents. The header's fields are shown byte by byte.">
+      <defs><marker id="ar2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" fill="#6f8fb0"/></marker></defs>
+      <g font-family="system-ui, sans-serif" font-size="13">
+        <text x="20" y="26" fill="#8ec5ff" font-family="ui-monospace, monospace">cache/levels/3f9a…c21e/</text>
+        <text x="40" y="48" fill="#cfe4ff" font-family="ui-monospace, monospace">level.bundle</text>
+        <text x="40" y="68" fill="#cfe4ff" font-family="ui-monospace, monospace">manifest.json</text>
+        <text x="190" y="68" fill="#93a6ba" font-size="12">same JSON as the TOC; written last = the commit</text>
+        <text x="40" y="88" fill="#93a6ba" font-family="ui-monospace, monospace" font-size="12">city.glb, cells/  (only with rt_bake --glb)</text>
+
+        <!-- file bar -->
+        <rect x="20" y="110" width="70" height="56" fill="#131a24" stroke="#3b82f6"/>
+        <text x="55" y="134" fill="#cfe4ff" text-anchor="middle">header</text>
+        <text x="55" y="152" fill="#93a6ba" font-size="11" text-anchor="middle">64 B</text>
+        <rect x="90" y="110" width="40" height="56" fill="#0d1219" stroke="#2c3d50" stroke-dasharray="3 3"/>
+        <text x="110" y="142" fill="#64768a" font-size="11" text-anchor="middle">pad</text>
+        <rect x="130" y="110" width="150" height="56" fill="#131a24" stroke="#2c3d50"/>
+        <text x="205" y="134" fill="#cfe4ff" font-size="12" text-anchor="middle">city/e0/meta</text>
+        <text x="205" y="152" fill="#93a6ba" font-size="11" text-anchor="middle">JSON</text>
+        <rect x="280" y="110" width="200" height="56" fill="#131a24" stroke="#2c3d50"/>
+        <text x="380" y="134" fill="#cfe4ff" font-size="12" text-anchor="middle">city/e0/cell/12_-3/mesh/asphalt</text>
+        <text x="380" y="152" fill="#93a6ba" font-size="11" text-anchor="middle">MESH v2 (compact)</text>
+        <rect x="480" y="110" width="70" height="56" fill="#131a24" stroke="#2c3d50"/>
+        <text x="515" y="142" fill="#93a6ba" text-anchor="middle">…</text>
+        <rect x="550" y="110" width="200" height="56" fill="#131a24" stroke="#2c3d50"/>
+        <text x="650" y="134" fill="#cfe4ff" font-size="12" text-anchor="middle">lots/cell/12_-3/parts/7</text>
+        <text x="650" y="152" fill="#93a6ba" font-size="11" text-anchor="middle">part v2 (CMSH)</text>
+        <rect x="750" y="110" width="130" height="56" fill="#131a24" stroke="#e6c07b"/>
+        <text x="815" y="134" fill="#cfe4ff" text-anchor="middle">TOC (JSON)</text>
+        <text x="815" y="152" fill="#93a6ba" font-size="11" text-anchor="middle">name, offset, size, fnv</text>
+        <text x="130" y="186" fill="#93a6ba" font-size="12">each section starts on a 4096-byte boundary in a file (64 in memory), so an identical one can be block-cloned</text>
+        <path d="M815,108 C815,72 620,64 486,64" fill="none" stroke="#6f8fb0" stroke-width="1.4" stroke-dasharray="4 3" marker-end="url(#ar2)"/>
+
+        <!-- header zoom -->
+        <line x1="20" y1="194" x2="20" y2="228" stroke="#3b82f6" stroke-width="1" stroke-dasharray="3 3"/>
+        <line x1="90" y1="194" x2="880" y2="228" stroke="#3b82f6" stroke-width="1" stroke-dasharray="3 3"/>
+        <line x1="20" y1="166" x2="20" y2="172" stroke="#3b82f6" stroke-width="1"/><line x1="90" y1="166" x2="90" y2="172" stroke="#3b82f6" stroke-width="1"/>
+        <g font-size="11" text-anchor="middle">
+          <rect x="20" y="230" width="60" height="50" fill="#131a24" stroke="#2c3d50"/><text x="50" y="251" fill="#cfe4ff" font-family="ui-monospace, monospace">"RTBN"</text><text x="50" y="268" fill="#93a6ba">0–3</text>
+          <rect x="80" y="230" width="60" height="50" fill="#131a24" stroke="#2c3d50"/><text x="110" y="251" fill="#cfe4ff">major</text><text x="110" y="268" fill="#93a6ba">u32 · 4</text>
+          <rect x="140" y="230" width="60" height="50" fill="#131a24" stroke="#2c3d50"/><text x="170" y="251" fill="#cfe4ff">minor</text><text x="170" y="268" fill="#93a6ba">u32 · 8</text>
+          <rect x="200" y="230" width="80" height="50" fill="#131a24" stroke="#2c3d50"/><text x="240" y="251" fill="#cfe4ff">endian</text><text x="240" y="268" fill="#93a6ba">u32 · 12</text>
+          <rect x="280" y="230" width="80" height="50" fill="#131a24" stroke="#2c3d50"/><text x="320" y="251" fill="#cfe4ff">realBytes</text><text x="320" y="268" fill="#93a6ba">u32 · 16</text>
+          <rect x="360" y="230" width="60" height="50" fill="#0d1219" stroke="#2c3d50"/><text x="390" y="251" fill="#93a6ba">reserved</text><text x="390" y="268" fill="#64768a">20</text>
+          <rect x="420" y="230" width="110" height="50" fill="#131a24" stroke="#e6c07b"/><text x="475" y="251" fill="#cfe4ff">tocOffset</text><text x="475" y="268" fill="#93a6ba">u64 · 24</text>
+          <rect x="530" y="230" width="110" height="50" fill="#131a24" stroke="#e6c07b"/><text x="585" y="251" fill="#cfe4ff">tocSize</text><text x="585" y="268" fill="#93a6ba">u64 · 32</text>
+          <rect x="640" y="230" width="110" height="50" fill="#131a24" stroke="#2c3d50"/><text x="695" y="251" fill="#cfe4ff">sectionCount</text><text x="695" y="268" fill="#93a6ba">u64 · 40</text>
+          <rect x="750" y="230" width="130" height="50" fill="#0d1219" stroke="#2c3d50"/><text x="815" y="251" fill="#93a6ba">reserved ×2</text><text x="815" y="268" fill="#64768a">48–63</text>
+        </g>
+        <text x="20" y="304" fill="#93a6ba" font-size="12">endian = 0x01020304, realBytes = sizeof(Real). Checked hard on open with magic and major: a mismatch is a miss, never a misread.</text>
+
+        <!-- naming -->
+        <text x="20" y="336" fill="#cfe4ff">Section names are a path convention, so a cell's data can be found without reading anything else:</text>
+        <g font-family="ui-monospace, monospace" font-size="12">
+          <text x="40" y="360" fill="#8ec5ff">&lt;producer&gt;/&lt;global&gt;</text>
+          <text x="330" y="360" fill="#93a6ba">city/e0/meta · city/e0/roads/nav · city/e0/blocks/holes</text>
+          <text x="40" y="384" fill="#8ec5ff">&lt;producer&gt;/cell/&lt;cx&gt;_&lt;cz&gt;/&lt;name&gt;</text>
+          <text x="330" y="384" fill="#93a6ba">city/e0/cell/12_-3/mesh/asphalt · lots/cell/4_7/parts/123</text>
+          <text x="40" y="408" fill="#8ec5ff">terrain/L&lt;level&gt;/&lt;tx&gt;_&lt;tz&gt;</text>
+          <text x="330" y="408" fill="#93a6ba">height tiles, in the pyramid's own bundle file</text>
+        </g>
+      </g>
+    </svg>
+  </div>
+  <p class="cap">One bundle on disk. The header is patched last with where the table of contents landed; the reader maps
+    the file once and hands out views into it.</p>
+
+  <div class="code">
+    <div class="hd"><span>The 64-byte header, written first and patched with the TOC's position at the end</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/engine/bundle/bundle.cpp#L29-L41">src/engine/bundle/bundle.cpp</a></div>
+<pre><span class="k">constexpr</span> <span class="t">char</span> kMagic[<span class="n">4</span>] = {<span class="s">'R'</span>, <span class="s">'T'</span>, <span class="s">'B'</span>, <span class="s">'N'</span>};
+<span class="k">constexpr</span> <span class="t">uint32_t</span> kEndianMarker = <span class="n">0x01020304u</span>;
+
+<span class="c">// Header (64 bytes, little-endian): magic[4] u32 major u32 minor u32 endian u32 realBytes u32 reserved</span>
+<span class="c">// u64 tocOffset u64 tocSize u64 sectionCount u64 reserved u64 reserved.</span>
+std::vector&lt;<span class="t">uint8_t</span>&gt; headerBytes(<span class="t">uint64_t</span> tocOffset, <span class="t">uint64_t</span> tocSize, <span class="t">uint64_t</span> sectionCount) {
+    BinWriter w;
+    w.append(kMagic, <span class="n">4</span>); w.put&lt;<span class="t">uint32_t</span>&gt;(kFormatMajor); w.put&lt;<span class="t">uint32_t</span>&gt;(kFormatMinor); w.put&lt;<span class="t">uint32_t</span>&gt;(kEndianMarker);
+    w.put&lt;<span class="t">uint32_t</span>&gt;(<span class="k">static_cast</span>&lt;<span class="t">uint32_t</span>&gt;(<span class="k">sizeof</span>(Real))); w.put&lt;<span class="t">uint32_t</span>&gt;(<span class="n">0</span>);
+    w.put&lt;<span class="t">uint64_t</span>&gt;(tocOffset); w.put&lt;<span class="t">uint64_t</span>&gt;(tocSize); w.put&lt;<span class="t">uint64_t</span>&gt;(sectionCount); w.put&lt;<span class="t">uint64_t</span>&gt;(<span class="n">0</span>); w.put&lt;<span class="t">uint64_t</span>&gt;(<span class="n">0</span>);
+    w.bytes.resize(kHeaderBytes, <span class="n">0</span>);
+    <span class="k">return</span> w.bytes;
+}</pre>
+  </div>
+
+  <div class="code">
+    <div class="hd"><span>The reader: a map of the file and views into it</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/engine/bundle/bundle.h#L112-L130">src/engine/bundle/bundle.h</a></div>
+<pre><span class="k">class</span> <span class="t">Bundle</span> {
+<span class="k">public</span>:
+    <span class="k">struct</span> <span class="t">View</span> { <span class="k">const</span> <span class="t">uint8_t</span>* data = <span class="k">nullptr</span>; <span class="t">size_t</span> size = <span class="n">0</span>; <span class="t">bool</span> empty() <span class="k">const</span> { <span class="k">return</span> data == <span class="k">nullptr</span>; } };
+    <span class="k">static</span> std::unique_ptr&lt;Bundle&gt; open(<span class="k">const</span> std::string&amp; path, std::string* err);
+    <span class="k">static</span> std::unique_ptr&lt;Bundle&gt; fromMemory(std::shared_ptr&lt;std::vector&lt;<span class="t">uint8_t</span>&gt;&gt; bytes, std::string* err);
+    <span class="c">// ...</span>
+    <span class="t">bool</span> has(<span class="k">const</span> std::string&amp; name) <span class="k">const</span>;
+    View section(<span class="k">const</span> std::string&amp; name) <span class="k">const</span>;                    <span class="c">// empty view when absent</span>
+    std::vector&lt;std::string&gt; sections(<span class="k">const</span> std::string&amp; prefix) <span class="k">const</span>;   <span class="c">// sorted</span>
+    nlohmann::json json(<span class="k">const</span> std::string&amp; name) <span class="k">const</span>;             <span class="c">// null when absent or malformed</span>
+    <span class="t">bool</span> checkSection(<span class="k">const</span> std::string&amp; name) <span class="k">const</span>;              <span class="c">// the bytes still hash to the TOC's fnv</span>
+    <span class="k">const</span> nlohmann::json&amp; manifest() <span class="k">const</span> { <span class="k">return</span> manifest_; }
+    <span class="c">// ...</span></pre>
+  </div>
+  <p>Each section's contents is the job of a <b>codec</b> in <code>bundle/codecs.cpp</code>, and every codec writes its
+    own magic and version first (<code>MESH</code>, <code>CMSH</code>, <code>RTHT</code> for height tiles…). A reader
+    that meets a version it does not know returns false, which the loader treats as a miss for that one producer. So
+    compatibility has four layers, all in the manifest: the container format (hard), each codec's version, each
+    producer's key, and the engine's own identity (a <code>git describe</code> string, compiler and build type),
+    which is recorded but only enforced with <code>RT_BUNDLE_REQUIRE_ENGINE=1</code>.</p>
+
+  <h2>Producers and keys</h2>
+  <p>A producer is a small interface. The bake runs every producer that <code>applies()</code> to the level, in name
+    order, and each one writes sections under its own name.</p>
+  <div class="code">
+    <div class="hd"><span>BundleProducer: what a stage of the bake has to say about itself</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/engine/bundle/bake.h#L51-L60">src/engine/bundle/bake.h</a></div>
+<pre><span class="k">class</span> <span class="t">BundleProducer</span> {
+<span class="k">public</span>:
+    <span class="k">virtual</span> ~BundleProducer() = <span class="k">default</span>;
+    <span class="k">virtual</span> std::string name() <span class="k">const</span> = <span class="n">0</span>;
+    <span class="k">virtual</span> <span class="t">bool</span> applies(<span class="k">const</span> LevelInputs&amp; in) <span class="k">const</span> = <span class="n">0</span>;
+    <span class="k">virtual</span> ProducerIdentity identity(<span class="k">const</span> LevelInputs&amp; in) <span class="k">const</span> = <span class="n">0</span>;
+    <span class="c">// Writes every section under "&lt;name()&gt;/...". The progress fraction it reports is LOCAL (0..1 of this producer).</span>
+    <span class="k">virtual</span> ProducerReport produce(<span class="k">const</span> LevelInputs&amp; in, BundleWriter&amp; out, <span class="k">const</span> ProgressFn* progress) <span class="k">const</span> = <span class="n">0</span>;
+    <span class="k">virtual</span> <span class="t">double</span> weight() <span class="k">const</span> { <span class="k">return</span> <span class="n">1.0</span>; }   <span class="c">// relative cost, for the overall progress fraction</span>
+};</pre>
+  </div>
+  <p>The interesting method is <code>identity()</code>. It must hash <i>every</i> input the producer reads, because
+    anything it leaves out can change without the bake noticing. Here is the lots producer's: its tag and record
+    format, then the city producer's own key (so new roads always mean new lots), then the level blocks and Lua files
+    it reads. Note what it deliberately leaves out: the forest, which the lots never read, so a tree-species tweak on
+    the island does not re-bake its city.</p>
+  <div class="code">
+    <div class="hd"><span>LotsProducer::identity: the key chains the city's key in</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/engine/procgen/city/roads/lanes/lots_producer.cpp#L71-L103">src/engine/procgen/city/roads/lanes/lots_producer.cpp</a></div>
+<pre>    bundle::ProducerIdentity identity(<span class="k">const</span> bundle::LevelInputs&amp; in) <span class="k">const</span> <span class="k">override</span> {
+        bundle::ProducerIdentity id; id.tag = kLotsBuildTag;
+<span class="k">#ifdef</span> RT_ENABLE_SCRIPTING
+        <span class="k">const</span> <span class="t">int</span> scripting = <span class="n">1</span>;
+<span class="k">#else</span>
+        <span class="k">const</span> <span class="t">int</span> scripting = <span class="n">0</span>;
+<span class="k">#endif</span>
+        <span class="t">uint64_t</span> k = bundle::fnv1aStr(std::string(kLotsProducerName) + <span class="s">"|"</span> + std::to_string(lotcache::kLotsFormatVersion) + <span class="s">"|"</span> + kLotsBuildTag + <span class="s">"|real"</span> + std::to_string(<span class="k">sizeof</span>(Real)) + <span class="s">"|scripting"</span> + std::to_string(scripting));
+        <span class="k">if</span> (<span class="k">const</span> bundle::BundleProducer* city = bundle::findProducer(kCityProducerName)) {
+            <span class="k">const</span> bundle::ProducerIdentity c = city-&gt;identity(in);
+            k = bundle::fnv1a(&amp;c.key, <span class="k">sizeof</span>(c.key), k); id.inputs = c.inputs;
+        } <span class="k">else</span> k = bundle::fnv1aStr(<span class="s">"nocity"</span>, k);
+        <span class="c">// ... the citysim block, the terrain block without its forest, water, the drawn-ground cell,</span>
+        <span class="c">//     the authored spawn, and the bytes of style_book.lua and archetype_book.lua</span>
+        id.key = k; <span class="k">return</span> id;</pre>
+  </div>
+  <p>The bundle's folder is named by all the producers' keys together, sorted by name so the order of registration
+    does not matter:</p>
+  <div class="code">
+    <div class="hd"><span>combinedKey: one directory name for the whole level</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/engine/bundle/bake.cpp#L103-L108">src/engine/bundle/bake.cpp</a></div>
+<pre><span class="t">uint64_t</span> combinedKey(<span class="k">const</span> std::vector&lt;std::pair&lt;std::string, <span class="t">uint64_t</span>&gt;&gt;&amp; producerKeys) {
+    std::vector&lt;std::pair&lt;std::string, <span class="t">uint64_t</span>&gt;&gt; ks = producerKeys; std::sort(ks.begin(), ks.end());
+    <span class="t">uint64_t</span> h = fnv1aStr(<span class="s">"rt-level-bundle"</span>); h = fnv1a(&amp;kFormatMajor, <span class="k">sizeof</span>(kFormatMajor), h);
+    <span class="k">for</span> (<span class="k">const</span> <span class="k">auto</span>&amp; k : ks) { h = fnv1aStr(k.first, h); h = fnv1a(&amp;k.second, <span class="k">sizeof</span>(k.second), h); }
+    <span class="k">return</span> h;
+}</pre>
+  </div>
+
+  <div class="diagram">
+    <svg viewBox="0 0 900 300" role="img" aria-label="Key chain: the city key feeds the lots key; both name the bundle. The lots' flattens feed the pyramid key; places and the street graph feed the population key.">
+      <defs><marker id="ar3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" fill="#6f8fb0"/></marker></defs>
+      <g font-family="system-ui, sans-serif" font-size="13" text-anchor="middle">
+        <rect x="20" y="20" width="200" height="74" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="120" y="44" fill="#cfe4ff">city key</text>
+        <text x="120" y="63" fill="#93a6ba" font-size="12">road graph, terrain grid,</text>
+        <text x="120" y="80" fill="#e6c07b" font-size="12">kLanesBuildTag</text>
+
+        <rect x="290" y="20" width="250" height="74" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="415" y="44" fill="#cfe4ff">lots key</text>
+        <text x="415" y="63" fill="#93a6ba" font-size="12">city key + citysim + books + spawn</text>
+        <text x="415" y="80" fill="#e6c07b" font-size="12">kLotsBuildTag, kLotsFormatVersion</text>
+
+        <rect x="610" y="20" width="270" height="74" rx="9" fill="#131a24" stroke="#3b82f6"/>
+        <text x="745" y="44" fill="#cfe4ff">combined key</text>
+        <text x="745" y="63" fill="#93a6ba" font-size="12">every producer's key, sorted</text>
+        <text x="745" y="80" fill="#93a6ba" font-size="12">= the bundle's folder name</text>
+
+        <line x1="220" y1="57" x2="286" y2="57" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar3)"/>
+        <line x1="540" y1="57" x2="606" y2="57" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar3)"/>
+        <path d="M120,94 C120,120 600,110 700,94" fill="none" stroke="#6f8fb0" stroke-width="1.4" stroke-dasharray="4 3" marker-end="url(#ar3)"/>
+
+        <text x="24" y="150" fill="#93a6ba" font-size="12" text-anchor="start">at load, from what</text><text x="24" y="166" fill="#93a6ba" font-size="12" text-anchor="start">the bundle produced:</text>
+
+        <rect x="80" y="176" width="330" height="90" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="245" y="200" fill="#cfe4ff">pyramid key</text>
+        <text x="245" y="219" fill="#93a6ba" font-size="12">ground key (terrain + every lot flatten)</text>
+        <text x="245" y="236" fill="#93a6ba" font-size="12">+ pyramid spec + trails refine tag</text>
+        <text x="245" y="254" fill="#8ec5ff" font-size="12" font-family="ui-monospace, monospace">cache/terrain/&lt;key&gt;.pyramid</text>
+
+        <rect x="490" y="176" width="330" height="90" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="655" y="200" fill="#cfe4ff">population key</text>
+        <text x="655" y="219" fill="#93a6ba" font-size="12">nav graph, places + hours, agents,</text>
+        <text x="655" y="236" fill="#93a6ba" font-size="12">bus routes, shares + kPopulationFormat</text>
+        <text x="655" y="254" fill="#8ec5ff" font-size="12" font-family="ui-monospace, monospace">cache/population/&lt;key&gt;.pop</text>
+
+        <line x1="415" y1="94" x2="290" y2="172" stroke="#6f8fb0" stroke-width="1.4" marker-end="url(#ar3)"/>
+        <line x1="440" y1="94" x2="610" y2="172" stroke="#6f8fb0" stroke-width="1.4" marker-end="url(#ar3)"/>
+        <text x="300" y="132" fill="#93a6ba" font-size="11" text-anchor="end">moved lots</text>
+        <text x="560" y="132" fill="#93a6ba" font-size="11" text-anchor="start">changed places</text>
+        <text x="450" y="290" fill="#93a6ba" font-size="12">a change upstream always reaches downstream: new roads → new lots → new ground → new population</text>
+      </g>
+    </svg>
+  </div>
+  <p class="cap">The keys chain. No stage has to remember to invalidate the next one: the next one hashes what came out of it.</p>
+
+  <h3>When to bump a tag</h3>
+  <p>The key cannot see code. When a change alters what a producer outputs for the same inputs, someone has to change
+    its tag by hand, or the old bundle keeps loading and looks current. That is the one failure the cache cannot catch
+    by itself (docs/bakes.md lists it, with "an input the lots stage reads that is not in its key", as the two
+    uncaught cases). The rules, from <code>docs/bakes.md</code>:</p>
+  <table>
+    <tr><th>Change</th><th>Bump</th></tr>
+    <tr><td>Anything the lot pass outputs: sculpting, massing, lot selection, grading, a part mesh</td><td><code>kLotsBuildTag</code> (lots_producer.cpp; now <code>"2026-10-23.3"</code>)</td></tr>
+    <tr><td>The roads the lanes builder makes</td><td><code>kLanesBuildTag</code> (city_producer.cpp; now <code>"2026-10-23.1"</code>)</td></tr>
+    <tr><td>Track and stations</td><td><code>kRailBuildTag</code> (folded into the city key only for graphs with track)</td></tr>
+    <tr><td>The lot record's fields</td><td><code>kLotsFormatVersion</code> + a field in tests/test_lot_cache.cpp</td></tr>
+    <tr><td>Interiors, furniture, the citysim, rendering — anything built at load, not read from the bundle</td><td>none</td></tr>
+  </table>
+  <p>A bump replaces the tag's comment with the reason for <i>this</i> bump; the history lives in the commits
+    (<code>git log -G kLotsBuildTag</code>). Because a bump makes every level's bundle stale and the level suite then
+    re-bakes everything it loads, the advice is to iterate with <code>RT_NOCACHE=1</code> and bump once the change has
+    settled.</p>
+
+  <h2>Copying forward and sharing blocks</h2>
+  <p>Changing one producer's inputs should not rebuild the others. When <code>bakeLevel</code> finds an existing bundle
+    whose manifest carries a producer's current key (a "donor"), it copies that producer's sections across instead of
+    running it. Producers can also read each other's output through the bundle under construction —
+    <code>BundleWriter::readBack</code> — which is how <code>lots</code> gets the city's ground and block holes without
+    a side channel, whether the city was rebuilt this run or copied.</p>
+  <p>That still wrote a whole new multi-gigabyte file each time. The 2026-10-05 addendum to ADR-0084 measured why it
+    hurt: a day of lots-tag bumps wrote about 270 GB of near-identical bundles. It also measured that a bake is
+    deterministic (a from-scratch rebake of metro_v2_test matched the cached bundle in 1643 of 1643 sections) and that
+    a typical change touches a few cells. So file bundles now align every section to 4 KB, and a new bundle
+    <b>clones</b> any section that comes out identical to one in the level's previous bundle, using the Linux
+    <code>FICLONERANGE</code> ioctl. On btrfs the two files then share those disk blocks.</p>
+  <div class="code">
+    <div class="hd"><span>BundleWriter::tryClone: a clone only after the bytes match, not just the hash</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/engine/bundle/bundle.cpp#L115-L138">src/engine/bundle/bundle.cpp</a></div>
+<pre><span class="t">bool</span> BundleWriter::tryClone(<span class="k">const</span> <span class="t">void</span>* data, <span class="t">uint64_t</span> size, <span class="t">uint64_t</span> fnv) {
+<span class="k">#ifdef</span> __linux__
+    <span class="k">if</span> (!f_ || cloneFailed_ || sources_.empty() || pos_ % kFileSectionAlign != <span class="n">0</span>) <span class="k">return</span> <span class="k">false</span>;
+    <span class="k">for</span> (<span class="k">const</span> CloneSrc&amp; s : sources_)
+        <span class="k">for</span> (<span class="k">const</span> SectionInfo&amp; si : s.sections) {
+            <span class="k">if</span> (si.size != size || si.fnv != fnv) <span class="k">continue</span>;
+            {   <span class="c">// THE BYTES, not just the hash: read the source's section and compare</span>
+                <span class="c">// ... pread the source's section into `have`</span>
+                <span class="k">if</span> (got != size || std::memcmp(have.data(), data, <span class="k">static_cast</span>&lt;<span class="t">size_t</span>&gt;(size)) != <span class="n">0</span>) { ++cloneRefused_; <span class="k">continue</span>; }
+            }
+            <span class="k">const</span> <span class="t">uint64_t</span> len = (size + kFileSectionAlign - <span class="n">1</span>) / kFileSectionAlign * kFileSectionAlign;
+            <span class="k">if</span> (std::fflush(f_) != <span class="n">0</span>) <span class="k">return</span> <span class="k">false</span>;
+            <span class="k">struct</span> <span class="t">file_clone_range</span> r{};
+            r.src_fd = s.fd;
+            r.src_offset = si.offset;
+            r.src_length = len;
+            r.dest_offset = pos_;
+            <span class="k">if</span> (::ioctl(fileno(f_), FICLONERANGE, &amp;r) != <span class="n">0</span>) {
+            <span class="c">// ...</span></pre>
+  </div>
+  <p>Correctness never rests on the cloning: every section is still computed fresh, and only bytes proven identical
+    are shared. On a filesystem that cannot share blocks (tmpfs, ext4, macOS) the bytes are simply written. Measured:
+    a rebake of metro_v2_test after a one-line campus change wrote 3.4 MB of 1.07 GB. The rejected alternatives were a
+    content-addressed section store (portable, but a new format and reader) and incremental lots computation (the lot
+    pass is global — one campus per city, distance rules, grading — so weeks of work for a problem that was disk, not
+    time).</p>
+
+  <h2>The caches beside the bundle</h2>
+  <p>Some things cannot be baked from the level file alone, because they need what the loader has built first. These
+    are cached the same way — named by a content hash of their inputs — but filled on the first load after a change
+    rather than by <code>rt_bake</code>.</p>
+  <table>
+    <tr><th>Folder</th><th>What</th><th>Keyed by</th><th>Size (docs/bakes.md)</th></tr>
+    <tr><td><code>cache/levels/&lt;key&gt;/</code></td><td>the bundle</td><td>the producers' keys</td><td>1 GB (metro) to 8 GB (island) before ADR-0224</td></tr>
+    <tr><td><code>cache/terrain/&lt;hash&gt;.pyramid</code></td><td>the baked ground, every lot flatten folded in</td><td>the ground's content</td><td>145–385 MB</td></tr>
+    <tr><td><code>cache/terrain/&lt;hash&gt;.bin</code>, <code>maps_*</code>, <code>weather_*</code></td><td>erosion, cover maps, weathered ground</td><td>terrain settings</td><td>~65 MB each, slow to remake</td></tr>
+    <tr><td><code>cache/population/&lt;hash&gt;.pop</code></td><td>who lives and works where</td><td>places, street graph, agents, buses</td><td>small</td></tr>
+  </table>
+
+  <h3>The terrain pyramid (ADR-0095)</h3>
+  <p>Before the pyramid, the ground's height was a formula evaluated per vertex at run time, and the CDLOD terrain's
+    finest cell was tied to a fixed level count, so when the world grew it coarsened to 11.7 m and buried streets
+    beside graded lots. The pyramid samples the <i>final</i> ground once — natural terrain, carved roads, terraces,
+    every lot pad — into a quadtree of 129 × 129 tiles of <code>uint16</code> heights. It is sparse: a tile's four
+    children are kept only where the parent, drawn as triangles, misses them by more than 2 cm. Plains stop early;
+    streets and pad edges go down to 1 m cells.</p>
+  <div class="code">
+    <div class="hd"><span>HeightTile: 33 KB of heights instead of ~1 MB of vertices</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/engine/procgen/height_pyramid.h#L69-L84">src/engine/procgen/height_pyramid.h</a></div>
+<pre><span class="k">struct</span> <span class="t">HeightTile</span> {
+    TileKey key;
+    <span class="t">float</span> minH = <span class="n">0.0f</span>, maxH = <span class="n">0.0f</span>;
+    <span class="t">float</span> step = <span class="n">0.0f</span>;         <span class="c">// quantization step (m)</span>
+    <span class="t">float</span> error = <span class="n">0.0f</span>;        <span class="c">// vs the level below, as drawn (0 at level 0)</span>
+    <span class="t">bool</span> hasChildren = <span class="k">false</span>;
+    std::vector&lt;<span class="t">uint16_t</span>&gt; q;   <span class="c">// kTileSamples^2, row-major (z rows, x columns)</span>
+
+    <span class="t">double</span> at(<span class="t">int</span> i, <span class="t">int</span> j) <span class="k">const</span> {
+        <span class="k">return</span> <span class="k">static_cast</span>&lt;<span class="t">double</span>&gt;(minH) + <span class="k">static_cast</span>&lt;<span class="t">double</span>&gt;(q[<span class="k">static_cast</span>&lt;std::size_t&gt;(j) * kTileSamples + i]) * step;
+    }
+    <span class="c">// Height at local cell coordinates (0..kTileCells), interpolated across the triangle</span>
+    <span class="c">// split the mesher emits: (a,b,d) when u &gt;= v, else (a,d,c) -- a the cell's min corner,</span>
+    <span class="c">// d the max (terrain_lod.cpp, lodSurfaceHeight).</span>
+    <span class="t">double</span> sampleLocal(<span class="t">double</span> gx, <span class="t">double</span> gz) <span class="k">const</span>;
+};</pre>
+  </div>
+  <p>The pyramid is written in the same bundle format (one <code>terrain/L&lt;level&gt;/&lt;tx&gt;_&lt;tz&gt;</code>
+    section per tile) and cached under <code>cache/terrain/</code>, keyed by the ground's content plus the pyramid's
+    spec. On metro_planned it is 4,501 tiles, 142 MB, built in 7.9 s on all cores when it misses (commit 463a6d8e). Since
+    ADR-0225 it is also the fast answer to "how high is the drawn ground here?": a baked level reads it in about nine
+    hash lookups instead of evaluating the field (about 50 µs a sample over the city), which is what made grass
+    streaming affordable.</p>
+
+  <h3>The population cache (ADR-0143)</h3>
+  <p>Assigning every agent a home, a job, an errand stop, doors, hours and a commute took 5.5 s on the island. It is
+    deterministic, so it is cached too. The key hashes everything <code>assignPlaces</code> reads; a hit restores each
+    agent from a fixed-size record.</p>
+  <div class="code">
+    <div class="hd"><span>CitySim: the population cache's key is everything the decisions read</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/apps/citysim/city_sim.cpp#L1007-L1043">src/apps/citysim/city_sim.cpp</a></div>
+<pre>    <span class="c">// THE POPULATION CACHE: the key is everything the decisions below read.</span>
+    popCache_ = PopulationCacheReport{};
+    std::string popPath;
+    std::vector&lt;PopRecord&gt; cached;
+    PopTail cachedTail{};
+    <span class="k">const</span> <span class="t">bool</span> verify = std::getenv(<span class="s">"RT_POPULATION_VERIFY"</span>) != <span class="k">nullptr</span>;
+    <span class="k">if</span> (!populationCacheDir_.empty()) {
+        Fnv k;
+        k.pod(kPopulationFormat);
+        k.pod(<span class="k">static_cast</span>&lt;<span class="t">int32_t</span>&gt;(graph.nodeCount()));
+        <span class="c">// ... every nav node and link, every place (site, door, hours, capacity, floor area),</span>
+        <span class="c">//     every agent's state before assignment, the bus routes and the trip shares</span>
+        popCache_.key = k.h;
+        <span class="t">char</span> name[<span class="n">40</span>];
+        std::snprintf(name, <span class="k">sizeof</span> name, <span class="s">"%016llx.pop"</span>, <span class="k">static_cast</span>&lt;<span class="t">unsigned long long</span>&gt;(k.h));
+        popPath = populationCacheDir_ + <span class="s">"/"</span> + name;</pre>
+  </div>
+  <p>It is a cache, not a bake stage: a producer only sees the level's input files, but the population needs the nav
+    graph, the places and the fleet, which exist only once the level has loaded. <code>RT_POPULATION_VERIFY=1</code>
+    decides anyway and compares; on the island it reported 0 of 28,000 records different. <code>assignPlaces</code>
+    went from 5.5 s to 0.14 s.</p>
+
+  <h2>How the load times fell</h2>
+  <p>The work came in a few concentrated pushes, each driven by a measurement. The timeline below is the centrepiece:
+    above the line, time to load; below it, bytes on disk and on the GPU.</p>
+  <div class="diagram">
+    <svg viewBox="0 0 900 480" role="img" aria-label="Timeline from September 9 to October 23, 2026. Load time: warm metro 1.2 s; piedmont 77 to 28 s; metro_planned 225 to 125 s; island first frame 634 to 53 s; streaming stand-ins; island load 187 to 169 s. Size: metro roads 655 to 320 MB; GPU peak 9.6 to 3.6 GB; shared blocks 3.4 MB of 1.07 GB; island bundle 8.59 to 1.62 GB.">
+      <g font-family="system-ui, sans-serif" font-size="12" text-anchor="middle">
+        <!-- axis -->
+        <line x1="40" y1="240" x2="870" y2="240" stroke="#2c3d50" stroke-width="2"/>
+        <text x="44" y="232" fill="#8ec5ff" font-size="11" text-anchor="start" font-weight="600">LOAD TIME ↑</text>
+        <text x="44" y="258" fill="#e6c07b" font-size="11" text-anchor="start" font-weight="600">SIZE ↓</text>
+        <g fill="#64768a" font-size="11">
+          <line x1="175.5" y1="236" x2="175.5" y2="244" stroke="#2c3d50"/><text x="175.5" y="258">Sep 14</text>
+          <line x1="291" y1="236" x2="291" y2="244" stroke="#2c3d50"/><text x="291" y="258">Sep 21</text>
+          <line x1="522" y1="236" x2="522" y2="244" stroke="#2c3d50"/><text x="522" y="258">Oct 5</text>
+          <line x1="637.5" y1="236" x2="637.5" y2="244" stroke="#2c3d50"/><text x="637.5" y="258">Oct 12</text>
+          <line x1="753" y1="236" x2="753" y2="244" stroke="#2c3d50"/><text x="753" y="258">Oct 19</text>
+        </g>
+        <!-- dots -->
+        <g fill="#8ec5ff">
+          <circle cx="93" cy="240" r="5"/><circle cx="159" cy="240" r="5"/><circle cx="340.5" cy="240" r="5"/>
+          <circle cx="406.5" cy="240" r="5"/><circle cx="505.5" cy="240" r="5"/><circle cx="588" cy="240" r="5"/><circle cx="819" cy="240" r="5"/>
+        </g>
+        <!-- connectors up -->
+        <g stroke="#6f8fb0" stroke-width="1.2">
+          <line x1="93" y1="92" x2="93" y2="235"/>
+          <line x1="159" y1="182" x2="159" y2="235"/>
+          <line x1="340.5" y1="92" x2="340.5" y2="235"/>
+          <line x1="406.5" y1="182" x2="406.5" y2="235"/>
+          <line x1="588" y1="92" x2="588" y2="235"/>
+          <line x1="819" y1="92" x2="819" y2="235"/>
+        </g>
+        <!-- connectors down -->
+        <g stroke="#b59a5e" stroke-width="1.2">
+          <line x1="93" y1="245" x2="93" y2="288"/>
+          <line x1="340.5" y1="245" x2="340.5" y2="378"/>
+          <line x1="505.5" y1="245" x2="505.5" y2="288"/>
+          <line x1="819" y1="245" x2="819" y2="378"/>
+        </g>
+        <!-- top row A -->
+        <rect x="20" y="20" width="160" height="72" rx="8" fill="#131a24" stroke="#3b82f6"/>
+        <text x="100" y="40" fill="#8ec5ff">Sep 9 · ADR-0084</text>
+        <text x="100" y="59" fill="#cfe4ff">bundles: a warm metro</text>
+        <text x="100" y="78" fill="#cfe4ff" font-weight="600">opens in 1.2 s</text>
+
+        <rect x="262" y="20" width="160" height="72" rx="8" fill="#131a24" stroke="#3b82f6"/>
+        <text x="342" y="40" fill="#8ec5ff">Sep 24 · ADR-0094/95</text>
+        <text x="342" y="59" fill="#cfe4ff">metro_planned load</text>
+        <text x="342" y="78" fill="#cfe4ff" font-weight="600">225 → 180 → 125 s</text>
+
+        <rect x="500" y="20" width="176" height="72" rx="8" fill="#131a24" stroke="#3b82f6"/>
+        <text x="588" y="40" fill="#8ec5ff">Oct 9 · ADR-0149</text>
+        <text x="588" y="59" fill="#cfe4ff">stand-ins + look-ahead:</text>
+        <text x="588" y="78" fill="#cfe4ff" font-weight="600">no holes at 200 m/s</text>
+
+        <rect x="712" y="20" width="168" height="72" rx="8" fill="#131a24" stroke="#3b82f6"/>
+        <text x="796" y="40" fill="#8ec5ff">Oct 23 · ADR-0225</text>
+        <text x="796" y="59" fill="#cfe4ff">ground off the pyramid:</text>
+        <text x="796" y="78" fill="#cfe4ff" font-weight="600">island 187 → 169 s</text>
+        <!-- top row B -->
+        <rect x="80" y="110" width="160" height="72" rx="8" fill="#131a24" stroke="#3b82f6"/>
+        <text x="160" y="130" fill="#8ec5ff">Sep 13 · milestone C</text>
+        <text x="160" y="149" fill="#cfe4ff">piedmont, warm</text>
+        <text x="160" y="168" fill="#cfe4ff" font-weight="600">77 → 28 s</text>
+
+        <rect x="322" y="110" width="200" height="72" rx="8" fill="#131a24" stroke="#3b82f6" stroke-width="2"/>
+        <text x="422" y="130" fill="#8ec5ff">Sep 28 · ADR-0143</text>
+        <text x="422" y="149" fill="#cfe4ff">island, first frame</text>
+        <text x="422" y="170" fill="#ffffff" font-weight="700" font-size="15">634 → 117 → 61 → 53 s</text>
+
+        <!-- bottom row C -->
+        <rect x="20" y="288" width="168" height="72" rx="8" fill="#131a24" stroke="#e6c07b"/>
+        <text x="104" y="308" fill="#e6c07b">Sep 9 · ADR-0084</text>
+        <text x="104" y="327" fill="#cfe4ff">metro roads, packed</text>
+        <text x="104" y="346" fill="#cfe4ff" font-weight="600">655 → ~320 MB</text>
+
+        <rect x="420" y="288" width="176" height="72" rx="8" fill="#131a24" stroke="#e6c07b"/>
+        <text x="508" y="308" fill="#e6c07b">Oct 4 · shared blocks</text>
+        <text x="508" y="327" fill="#cfe4ff">a rebake writes</text>
+        <text x="508" y="346" fill="#cfe4ff" font-weight="600">3.4 MB of 1.07 GB</text>
+        <!-- bottom row D -->
+        <rect x="250" y="378" width="184" height="72" rx="8" fill="#131a24" stroke="#e6c07b" stroke-width="2"/>
+        <text x="342" y="398" fill="#e6c07b">Sep 24 · ADR-0094..96</text>
+        <text x="342" y="417" fill="#cfe4ff">metro_planned GPU peak</text>
+        <text x="342" y="438" fill="#ffffff" font-weight="700" font-size="15">9.6 → 3.6 GB</text>
+
+        <rect x="700" y="378" width="184" height="72" rx="8" fill="#131a24" stroke="#e6c07b" stroke-width="2"/>
+        <text x="792" y="398" fill="#e6c07b">Oct 23 · ADR-0224</text>
+        <text x="792" y="417" fill="#cfe4ff">island bundle</text>
+        <text x="792" y="438" fill="#ffffff" font-weight="700" font-size="15">8.59 → 1.62 GB</text>
+        <text x="450" y="472" fill="#64768a" font-size="11">dates are the commits' author dates; figures from the ADRs and commit messages named in each box</text>
+      </g>
+    </svg>
+  </div>
+  <p class="cap">Load-time and size milestones, 2026-09-09 to 2026-10-23. Each figure is a before → after pair measured
+    on the same machine and level in its own ADR or commit; figures from different boxes were measured on different
+    levels and builds and are not directly comparable.</p>
+
+  <h3>The island: 634 s to 53 s (ADR-0143)</h3>
+  <p>Glenn's question was "is it going to take me 28 min to load that city?". The measurement split it in two: the
+    28 minutes was a <i>cold</i> cache (city build 793 s plus lots 124 s), paid once. But even with the bundle warm,
+    the level loaded in 103 s and the first frame came at 634 s. Profiling was by stack sampling (no perf on this box:
+    <code>eu-stack</code> in a loop against the viewer's PID, counting <code>engine::</code> frames), then the largest
+    cost first, each change checked to give identical answers:</p>
+  <ol>
+    <li><b>"There and back?" is a component test.</b> The city sim ran two A* searches per candidate home/work pair (up
+      to 24 candidates for each of 28,000 agents); every failed search on an island of separate street networks
+      flooded everything reachable. One strongly-connected-components pass (<code>engine::stronglyConnected</code>,
+      iterative Tarjan) answers every pair. 33,012 random pairs agreed with the route search. Playable 634 → 117 s.</li>
+    <li><b>Pads clipped against the blocks they touch.</b> All 12,856 lot pads were clipped against the union of every
+      block, built quadratically: about half of the level load. Now each pad is cut against the block pieces its bounds
+      touch. Level 103 → 40 s; playable → 61 s.</li>
+    <li><b>The population cache</b> (above). Playable → 53 s.</li>
+  </ol>
+  <div class="note history"><p><b>What was left, and a later number.</b> ADR-0143 lists the rest of the ~53 s, each part
+    deterministic and cacheable the same way: forest rock placement (~7 s), blocks from road holes (~7 s), physics mesh
+    shapes (~6 s), the rest of the city sim start (~7 s), drawn roads (~4 s). A month later ADR-0225 measured an island
+    load of 187 s, cut to 169 s by reading the ground from the pyramid. That figure came from the fly-probe harness on a
+    later state of the level, and the ADRs do not reconcile it with the 53 s; treat them as separate measurements.</p></div>
+
+  <h3>GPU memory: 9.6 GB to 3.6 GB in one day</h3>
+  <p>On 2026-09-24 a new control command, <code>mem?</code>, showed what the viewer held on metro_planned: 6.5 GB of
+    meshes in <b>25,394 separate <code>vkAllocateMemory</code> calls</b>, one per vertex buffer and one per index buffer,
+    with every vertex 56 bytes. Building part chunks were 4.9 GB of it; the CDLOD terrain was 3–4 MB. Near the 10 GB
+    card's limit uploads began failing from per-allocation overhead, not data. The same day's commits, in order:</p>
+  <table>
+    <tr><th>Step</th><th>What changed</th><th>Measured (metro_planned)</th></tr>
+    <tr><td>ADR-0094 (979a1f16)</td><td>One allocator (VMA), one 64 MB staging ring, deferred destruction instead of <code>vkDeviceWaitIdle</code></td><td>25,394 allocations → 28 blocks; peak 9.6 → 8.1 GB; load 225 → 180 s</td></tr>
+    <tr><td>ADR-0095 (463a6d8e)</td><td>The ground from a baked 1 m pyramid (fixes the buried streets; finer, so it costs)</td><td>peak 9.0 GB</td></tr>
+    <tr><td>Residency (b4d985ea)</td><td>Building cells streamed by camera distance, not all resident</td><td>part meshes 4,989 → ~1,170 MB; peak 9.0 → 5.2 GB; load 157 → 125 s</td></tr>
+    <tr><td>Deck welds (7eeb25ea)</td><td>Shared vertices on deck tops; no underside where a street lies on the ground</td><td>all meshes 2.7 → 1.9 GB; peak 5.2 → 4.2 GB</td></tr>
+    <tr><td>Kerb pass + ADR-0096 (4e1efe03, 04d4d5fb)</td><td>Hidden slab sides dropped; a 32-byte standard vertex (octahedral normal and tangent, RGBA8 tint), 56 bytes only where data needs it</td><td>641 MB saved; meshes 1,078 MB; peak 3.6 GB</td></tr>
+  </table>
+  <p>The peak includes about 1.6 GB the desktop holds. Each row's numbers come from that commit's message or ADR.</p>
+  <figure class="shot">
+    <img src="img/bakes/lane-city-2026-09-24.webp" alt="A lane-built city from above: rows of houses and apartment blocks, a multi-lane road in front, a downtown of towers and mountains on the horizon">
+    <figcaption>A lane-built city in a screenshot Glenn took on 2026-09-24, the day of the GPU-memory work. Everything
+      here — roads, lots, buildings — came out of a bundle.</figcaption>
+  </figure>
+
+  <h2>Smaller on disk: the stored vertex is the uploaded one</h2>
+  <p>By October the island's bundle was 8.59 GB, 6.64 GB of it building parts, each stored as raw float32 planes. ADR-0224
+    stores a mesh the way the GPU will take it anyway: the 32-byte standard vertex of ADR-0096, but with an <b>exact float
+    normal</b>, then compressed losslessly with meshoptimizer's vertex and index codecs.</p>
+  <div class="code">
+    <div class="hd"><span>CompactVertex: 40 bytes, then meshoptimizer over the stream</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/engine/bundle/codecs.cpp#L77-L92">src/engine/bundle/codecs.cpp</a></div>
+<pre><span class="c">// The Vulkan GpuVertexPacked, but for the normal: that stays exact, because the loader re-derives world-planar UVs</span>
+<span class="c">// from it (applyWorldPlanarUVs) and at island coordinates an oct normal's 5e-5 rad would move u by ~0.25 m</span>
+<span class="k">struct</span> <span class="t">CompactVertex</span> {
+    <span class="t">float</span> position[<span class="n">3</span>];
+    <span class="t">float</span> normal[<span class="n">3</span>];
+    <span class="t">int16_t</span> tangent[<span class="n">2</span>];
+    <span class="t">float</span> texcoord[<span class="n">2</span>];
+    <span class="t">uint8_t</span> color[<span class="n">4</span>];
+};
+<span class="k">static_assert</span>(<span class="k">sizeof</span>(CompactVertex) == <span class="n">40</span>, <span class="s">"the standard vertex with an exact normal"</span>);
+
+<span class="t">void</span> putEncoded(BinWriter&amp; w, <span class="k">const</span> <span class="t">void</span>* data, <span class="t">size_t</span> count, <span class="t">size_t</span> stride) {
+    std::vector&lt;<span class="t">uint8_t</span>&gt; buf(meshopt_encodeVertexBufferBound(count, stride));
+    buf.resize(meshopt_encodeVertexBufferLevel(buf.data(), buf.size(), data, count, stride, <span class="n">3</span>, <span class="n">1</span>));
+    w.putVec(buf);
+}</pre>
+  </div>
+  <p>Why keep the normal as floats? The loader re-derives world-planar texture coordinates from it; on a round tower far
+    from the origin an octahedral normal's tiny error would make the brick joints zigzag. Positions and UVs stay exact so
+    neighbouring cells still meet bit for bit; a tint outside [0, 1] or a tangent that carries data keeps a float plane.
+    What is lost is only what the upload drops anyway: the tangent's length and tint precision past 8 bits.</p>
+  <table>
+    <tr><th>Section (island_8_nature)</th><th>Before</th><th>After</th></tr>
+    <tr><td>lots/parts</td><td>6.64 GB</td><td>1.21 GB</td></tr>
+    <tr><td>lots/flat (far facades)</td><td>0.59 GB</td><td>0.12 GB</td></tr>
+    <tr><td>city concrete / asphalt</td><td>0.485 / 0.185 GB</td><td>0.092 / 0.066 GB</td></tr>
+    <tr><td><b>whole bundle</b></td><td><b>8.59 GB</b></td><td><b>2.50 GB</b> (parts) → <b>1.62 GB</b> (city too)</td></tr>
+  </table>
+  <figure class="shot">
+    <img src="img/bakes/island-from-compact-bundle.webp" alt="An island city seen from above a freeway: a downtown of glass towers, red-roofed houses, trees and a rail station, the sea beyond">
+    <figcaption>A check shot from the ADR-0224 work (folder <code>compact-bundle-2026-10-23</code>): the city drawn from
+      the compact bundle. The ADR's claim is "same pixels" at a fifth of the bytes.</figcaption>
+  </figure>
+
+  <h2>Streaming ahead of the camera</h2>
+  <p>A bundle cell is a render cell, which is what lets the world stream. <code>engine::Residency</code> (ADR-0095)
+    holds one <i>item</i> per cell and tier: where it is, the distances at which it is wanted, and a two-phase load —
+    <code>prepare()</code> on a worker thread (read from the bundle, decode, drape), then <code>commit()</code> on the
+    render thread (upload, create entities). Each building cell has three tiers: full detail near, flat facades
+    further out, and a mass-box stand-in that is always resident.</p>
+  <div class="diagram">
+    <svg viewBox="0 0 900 340" role="img" aria-label="Rings around the camera: detail out to 300 metres, facades to 950 metres, mass-box stand-ins beyond. A look-ahead point 0.75 seconds ahead along the velocity also counts as near.">
+      <defs><marker id="ar4" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" fill="#8ec5ff"/></marker></defs>
+      <g font-family="system-ui, sans-serif" font-size="12">
+        <circle cx="260" cy="170" r="150" fill="#0f1620" stroke="#2c3d50"/>
+        <circle cx="260" cy="170" r="95" fill="#121c29" stroke="#3b6a8a"/>
+        <circle cx="260" cy="170" r="40" fill="#16263a" stroke="#3b82f6"/>
+        <circle cx="330" cy="170" r="40" fill="none" stroke="#8ec5ff" stroke-dasharray="4 3"/>
+        <circle cx="260" cy="170" r="5" fill="#cfe4ff"/>
+        <line x1="262" y1="170" x2="326" y2="170" stroke="#8ec5ff" stroke-width="1.8" marker-end="url(#ar4)"/>
+        <circle cx="330" cy="170" r="4" fill="#8ec5ff"/>
+        <text x="260" y="196" fill="#cfe4ff" text-anchor="middle">camera</text>
+        <text x="342" y="158" fill="#8ec5ff">ahead</text>
+        <text x="260" y="114" fill="#93a6ba" text-anchor="middle">detail</text>
+        <text x="260" y="64" fill="#93a6ba" text-anchor="middle">facades</text>
+        <text x="260" y="34" fill="#64768a" text-anchor="middle">stand-ins (always resident)</text>
+        <g fill="#cfe4ff">
+          <text x="450" y="60">• <tspan fill="#8ec5ff">detail</tspan> → facades at 300 m, facades → stand-in at 950 m</text>
+          <text x="450" y="84" fill="#93a6ba">   (distance to the 250 m cell's centre, ADR-0226)</text>
+          <text x="450" y="114">• <tspan fill="#8ec5ff">ahead</tspan> = camera + this frame's step × 45 (~0.75 s);</text>
+          <text x="450" y="138" fill="#93a6ba">   a cell is "near" if near either point (ADR-0149)</text>
+          <text x="450" y="168">• moving over ~1.5 m a frame: 6 prepare jobs, not 3</text>
+          <text x="450" y="198">• a cell with no tier yet draws its stand-in at every distance</text>
+          <text x="450" y="222" fill="#93a6ba">   (CellCover: "a brief loss of detail, never a hole")</text>
+          <text x="450" y="252">• a jump (&gt; 200 m in one update) loads only what is</text>
+          <text x="450" y="276" fill="#93a6ba">   within 150 m in place; the rest streams on the workers</text>
+          <text x="450" y="306">• a tier switch on screen crossfades over 0.35 s (ADR-0226)</text>
+        </g>
+      </g>
+    </svg>
+  </div>
+  <p class="cap">The rings are schematic, not to scale. Figures are from residency.h/.cpp and ADR-0149/0226.</p>
+  <div class="code">
+    <div class="hd"><span>Residency::update: measure distance from where the camera will be</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/engine/residency.cpp#L53-L63">src/engine/residency.cpp</a></div>
+<pre>    <span class="c">// AHEAD OF A MOVING CAMERA (the city's next ten #10, a fly-around): where it will be in ~0.75 s at this frame's</span>
+    <span class="c">// step (45 frames), so a cell starts streaming before the camera is on it; an item counts as near when it is near</span>
+    <span class="c">// either point. And when moving fast (over ~90 m/s at 60 fps) twice the prepare jobs.</span>
+    Vec3 ahead = camera;
+    <span class="t">double</span> step = <span class="n">0.0</span>;
+    <span class="k">if</span> (haveLast_ &amp;&amp; !jump) {
+        <span class="k">const</span> Vec3 d = camera - last_;
+        step = std::sqrt(d.x * d.x + d.y * d.y + d.z * d.z);
+        ahead = camera + d * <span class="n">45.0</span>;
+    }
+    <span class="k">const</span> <span class="t">int</span> maxPreparing = step &gt; <span class="n">1.5</span> ? <span class="n">2</span> * kMaxPreparing : kMaxPreparing;</pre>
+  </div>
+  <div class="note history"><p><b>How it got here.</b> The first residency client (b4d985ea) promised "a brief loss of
+    detail, never a hole", but the stand-in proxies only drew beyond the facade distance, so inside that ring a cell
+    whose tiers had not arrived drew nothing. Every aerial shot after a camera jump showed bare blocks. ADR-0149 made the
+    stand-ins cover (a count per cell; while it is zero the proxies draw at every distance), added the look-ahead, and
+    made jumps stream. A scripted fly across Saltwood at 200 m/s went from empty blocks beyond the first streets to full
+    detail throughout. Two weeks later grass got the same treatment (ADR-0225: 3D distance, half the job pool, the same
+    0.75 s horizon; bare tiles 921 → 0), and tiers stopped popping (ADR-0226: a 0.35 s dither crossfade, p99 frame
+    time unchanged at 24.6 vs 24.8 ms).</p></div>
+
+  <h2>A cache keyed by what it describes (ADR-0241)</h2>
+  <p>Streaming exposes a classic caching bug, and the indoor cache is the worked example. A tower streams its interior
+    in storey windows: the street window has shop units, a window at storeys 32–37 has none. The city renderer cached
+    each building's shop-unit-to-place list by building id the first time its interior was seen. Swinging on the grapple
+    from the street to the 40th storey in seconds, the cached list had N units while the new interior's table had room
+    for one, and <code>stepIndoors</code> wrote one byte past it. The viewer crashed with <code>free(): invalid next size</code>
+    far away in unrelated code; an AddressSanitizer build named the real write.</p>
+  <div class="code">
+    <div class="hd"><span>The fix: the entry records which interior it was made for</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/apps/citysim/city_render.h#L570-L575">src/apps/citysim/city_render.h</a></div>
+<pre>    <span class="c">// `unit` is by the index of the interior's shop units, so it holds only for the interior it was made for: a tower</span>
+    <span class="c">// streams its interior in storey windows, and the ground floor's (shops) and the 40th's (none) differ -- `units`</span>
+    <span class="c">// says which one this is (their count and floor heights), and a different one is matched afresh (#114: a cached</span>
+    <span class="c">// list of N units indexed a 1-entry table when the player swung from the street to the top floors)</span>
+    <span class="k">struct</span> <span class="t">BuildingPeople</span> { PlaceId whole = kNoPlace; std::vector&lt;PlaceId&gt; unit; std::vector&lt;<span class="t">double</span>&gt; units; };
+    std::unordered_map&lt;<span class="t">int</span>, BuildingPeople&gt; buildingPlace_;</pre>
+  </div>
+  <p>It is the same rule the bundles follow, at a smaller scale: a cache's key must name everything its contents depend
+    on. "This building" was not enough; "this building's interior, with shop units at these heights" is. The check was 320
+    visits into the 12 tallest downtown towers under ASan, 225 window changes rematched, no report
+    (<code>tools/asan_storey_probe.py</code>).</p>
+
+  <h2>Housekeeping: pruning old bakes</h2>
+  <p>Nothing deletes an old bundle automatically. Every tag bump, engine change and level-suite run writes a fresh one,
+    and by 2026-10-04 the buildings worktree held 517 GB of level bundles and 39 GB of pyramids: 304 bundles, of which 22
+    were the newest for their level. Shared blocks made each new bundle cheap, but the old ones still pin blocks the
+    newest no longer uses.</p>
+  <table>
+    <tr><th>Command</th><th>What it does</th></tr>
+    <tr><td><code>rt_bake &lt;level.json&gt; [--force]</code></td><td>bake (or confirm current); <code>--force</code> rebuilds even when keys match</td></tr>
+    <tr><td><code>rt_bake --status &lt;level.json&gt;</code></td><td>is the level baked, is the bake current, its size (the editor's Level cache panel)</td></tr>
+    <tr><td><code>rt_bake --inspect &lt;dir&gt;</code> / <code>--sections &lt;dir&gt;</code></td><td>the manifest, producers and keys / every section's name, size and hash (diff two bakes)</td></tr>
+    <tr><td><code>rt_bake --audit &lt;dir&gt;</code></td><td>every baked mesh through the mesh audit (ADR-0172)</td></tr>
+    <tr><td><code>rt_bake --prune [--yes] [level.json …]</code></td><td>list (or delete) every bundle not the newest for its level and not the current bake of a listed level</td></tr>
+    <tr><td><code>rt_bake --glb</code> / <code>--glb-split cell</code></td><td>also export the city as glTF for Blender: an export view, not the cache</td></tr>
+  </table>
+  <p><code>rt_bake --prune</code> does not cover terrain files, because they are named by a content hash derived from the
+    flattens and do not record which level made them. Until that is fixed, Glenn's <code>rt-bake-cleanup</code> skill
+    (<code>~/.claude/skills/rt-bake-cleanup/prune_bakes.py</code>, outside the repo, dry run by default) prunes bundles
+    and ages pyramids out by date across every checkout.</p>
+  <div class="note"><p><b>The trap.</b> "Newest" is not "current". Running old code (a baseline checkout, then the level
+    tests) bakes newer bundles under old keys; a prune after that keeps those and deletes the current ones. On 2026-10-14
+    island_8, metro_lanes and river_town had to be rebaked for this reason. Prune before an old-code run, or check
+    <code>rt_bake --status</code> on each level first and pass the levels to keep.</p></div>
+  <p>When a change does not show, <code>docs/bakes.md</code> has a recovery ladder, least drastic first: run once with
+    <code>RT_NOCACHE=1</code> (if that fixes it, the bundle is stale); <code>rt_bake &lt;level&gt; --force</code> and then
+    find the missing tag bump or key input; drop that level's folders; and last, <code>rm -rf cache/levels cache/terrain
+    cache/population</code> — always safe, since every one of these is a cache.</p>
+  <p>Still owed (memory note <i>rt-bake-cache-housekeeping</i>, docs/bakes.md): <code>RT_BUNDLE_VERIFY</code> (rebuild in
+    memory and compare section hashes, nightly, to catch a forgotten tag bump); terrain sidecars recording which levels
+    use each file, so <code>--prune</code> can cover them; the level suite pruning after itself.</p>
+
+  <h2>Where to look</h2>
+  <ul class="files">
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/bundle/bundle.h">src/engine/bundle/bundle.h</a> / <a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/bundle/bundle.cpp">.cpp</a> — the container: writer, reader, header, block cloning</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/bundle/bake.h">src/engine/bundle/bake.h</a> / <a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/bundle/bake.cpp">.cpp</a> — producers, keys, <code>bakeLevel</code>, <code>obtainForLevel</code>, prune, the editor's cache status</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/bundle/codecs.h">src/engine/bundle/codecs.h</a> — PackedMesh, the compact mesh, height grids, road graphs</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/procgen/city/roads/lanes/city_producer.cpp">…/lanes/city_producer.cpp</a>, <a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/procgen/city/roads/lanes/lots_producer.cpp">lots_producer.cpp</a> — the two producers and their tags</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/procgen/height_pyramid.h">src/engine/procgen/height_pyramid.h</a> — the baked ground</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/residency.h">src/engine/residency.h</a> / <a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/residency.cpp">.cpp</a> — streaming by camera distance</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/apps/citysim/city_sim.cpp">src/apps/citysim/city_sim.cpp</a> — the population cache (search <code>THE POPULATION CACHE</code>)</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/tools/rt_bake.cpp">tools/rt_bake.cpp</a> — the command line; <a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/editor_app/bake_dialog.cpp">src/editor_app/bake_dialog.cpp</a> — the editor button</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/docs/bakes.md">docs/bakes.md</a> — the operating guide: cascades, edge cases, when to bump what, recovery</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/docs/world-streaming-plan.md">docs/world-streaming-plan.md</a> — the 100 km plan behind ADR-0095</li>
+    <li>Tests: <a href="https://github.com/GlennSong/raytracer-clang/blob/main/tests/test_bundle.cpp">tests/test_bundle.cpp</a>, <a href="https://github.com/GlennSong/raytracer-clang/blob/main/tests/test_height_pyramid.cpp">test_height_pyramid.cpp</a>, <a href="https://github.com/GlennSong/raytracer-clang/blob/main/tests/test_residency.cpp">test_residency.cpp</a>, <a href="https://github.com/GlennSong/raytracer-clang/blob/main/tests/test_lot_cache.cpp">test_lot_cache.cpp</a>; <code>population_read_from_the_cache_is_the_population_decided</code></li>
+    <li>Probes: <a href="https://github.com/GlennSong/raytracer-clang/blob/main/tools/fly_probe.py">tools/fly_probe.py</a> (streaming flights), <a href="https://github.com/GlennSong/raytracer-clang/blob/main/tools/asan_storey_probe.py">tools/asan_storey_probe.py</a> (the indoor cache)</li>
+  </ul>
+  <table>
+    <tr><th>Switch</th><th>Effect</th></tr>
+    <tr><td><code>RT_NOCACHE=1</code></td><td>bake in memory; read and write no cache (bundles, pyramids, population)</td></tr>
+    <tr><td><code>RT_BUNDLE_WRITE=0</code> / <code>RT_BUNDLE_REQUIRE=1</code> / <code>RT_BUNDLE_REQUIRE_ENGINE=1</code></td><td>read but never write / a miss is an error / another engine's bundle is a miss</td></tr>
+    <tr><td><code>RT_BUNDLE_DIR</code></td><td>the bundle root (default <code>cache/levels</code>)</td></tr>
+    <tr><td><code>RT_POPULATION_VERIFY=1</code></td><td>decide the population anyway and compare with the cache</td></tr>
+    <tr><td><code>RT_BAKED_TERRAIN=0</code>, <code>RT_GROUND_FIELD=1</code></td><td>draw the ground from the formula / read the drawn ground from the field, not the pyramid</td></tr>
+    <tr><td><code>RT_STREAM_BUILDINGS=0</code>, <code>RT_NO_STANDIN=1</code>, <code>RT_NO_TIER_FADE=1</code>, <code>RT_TIER_FADE_S</code></td><td>A/B switches for streaming, stand-ins and the crossfade</td></tr>
+    <tr><td><code>RT_VERTEX_FULL=1</code></td><td>every mesh in the 56-byte vertex (A/B for ADR-0096)</td></tr>
+    <tr><td><code>RT_RESIDENCY_CSV=path</code></td><td>one line per cell arrival, to measure what arrived late</td></tr>
+    <tr><td><code>mem?</code>, <code>bundle?</code></td><td>control-socket queries: GPU heaps by kind; the last bundle status line</td></tr>
+  </table>
+
+  <footer>Code excerpts from commit <code>47d587f3</code> (2026-10-26). Drawn from ADR-0084 (and its milestone C and
+    shared-blocks addenda), ADR-0094, 0095, 0096, 0143, 0149, 0224, 0225, 0226, 0241; docs/bakes.md; commits 463a6d8e,
+    b4d985ea, 7eeb25ea, 8362afec.</footer>
+</div>
+</body>
+</html>

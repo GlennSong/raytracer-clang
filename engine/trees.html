@@ -1,0 +1,759 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Growing Trees and Forests — How the Engine Works</title>
+  <link rel="stylesheet" href="engine.css">
+</head>
+<body>
+<div class="wrap">
+  <div class="nav"><a href="index.html">← How the engine works</a> · <a href="../index.html">scenes</a></div>
+  <h1>Growing trees and forests</h1>
+  <p class="lede">A tree species is a Lua recipe: a small grammar plus a table of numbers, each of which may be a range the
+    seed draws from. C++ grows the recipe into a skeleton, skins the skeleton into bark, and dresses it with leaves,
+    then grows the same tree again three or four times, each copy coarser, so a forest can draw a full tree nearby and
+    a picture of one far away.</p>
+
+  <figure class="shot">
+    <img src="img/trees/island-oaks.webp" alt="The player standing in tall grass beside two large recipe oaks with gnarled trunks and dense crowns, a grey mountain behind">
+    <figcaption>Recipe oaks on the island (island_8_nature, 2026-10-24), grown from the same Lua recipe as every oak in
+      the tree lab.</figcaption>
+  </figure>
+
+  <h2>The problem</h2>
+  <p>A tree has to work at three scales. Up close a player walks round it, so the trunk needs to look like one piece of
+    wood and the leaves need to look like leaves. In a forest there are hundreds of thousands of them: island 8 holds
+    about 430,000 trees (<a href="https://github.com/GlennSong/raytracer-clang/blob/main/docs/decisions.md">ADR-0129</a>),
+    and most of those are a few pixels tall. A tree also has to be the right size beside the city's buildings and
+    people.</p>
+  <p>The engine handles this the way production foliage tools do. It models the trunk and big limbs, replaces small
+    branches with cards (flat textured quads), keeps several levels of detail per tree, and draws a far tree as an
+    <b>impostor</b>: a single card showing a pre-rendered picture of that tree, chosen for the angle it is seen
+    from. The engine's own twist is that every one of those pieces is grown from the same recipe and seed, including
+    the card pictures, which are rendered from the species' own sprigs.</p>
+
+  <h2>Two growers, one forest</h2>
+  <p>There are currently two tree generators, and a forest can use both.</p>
+  <div class="grid">
+    <div class="b"><h3>real_tree (ADR-0129, 0130)</h3><p>Hand-written C++ growers for 17 species: 11 for the forest (spruce, fir,
+      pine, oak, beech, birch, maple, aspen, willow, alder, shrub) and 6 city trees (two palms, monkeypod, poinciana,
+      jacaranda, plumeria). The bark is tubes and the foliage is alpha-cut cards with a
+      painted spray texture. They are cheap and fast to place, and they were the island's first forest.</p></div>
+    <div class="b"><h3>Recipe trees (ADR-0181 onward)</h3><p>Species written as data in
+      <code>assets/scripts/tree_recipes.lua</code> and grown by <code>tree.cpp</code>. They have joints, a trunk zone,
+      branch cards, ages and forms. They are the subject of most of this page.</p></div>
+  </div>
+  <figure class="shot">
+    <img src="img/trees/real-tree-spruces.webp" alt="A cluster of dark real_tree spruces on a grey slope beside a road and a red car">
+    <figcaption>real_tree spruces on 2026-09-26, the day the forests were built (ADR-0129): tube bark and painted
+      spray cards.</figcaption>
+  </figure>
+  <p>A real_tree forest block can hand a share of each species to its recipe twin (<code>"recipes": 0.5</code>,
+    <a href="https://github.com/GlennSong/raytracer-clang/blob/main/docs/decisions.md">ADR-0216</a>), so the two kinds
+    stand side by side in groves. This is covered further down, under <a href="#forests">Forests</a>.</p>
+
+  <h2>The pipeline</h2>
+  <div class="diagram">
+    <svg viewBox="0 0 900 470" role="img" aria-label="Recipe to drawn tree: the Lua recipe is read into a TreeRecipe, aged and formed, its numbers drawn per seed, the grammar expanded, skinned into a TreeMesh, grown at several levels and drawn by distance">
+      <defs><marker id="ar1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" fill="#6f8fb0"/></marker></defs>
+      <g font-family="system-ui, sans-serif" font-size="13" text-anchor="middle">
+        <text x="20" y="22" fill="#e6c07b" font-size="12" text-anchor="start">1  THE RECIPE (Lua data, read once per file change)</text>
+        <rect x="20" y="34" width="190" height="58" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="115" y="58" fill="#cfe4ff">tree_recipes.lua</text>
+        <text x="115" y="77" fill="#93a6ba" font-size="12">axiom, rules, vars, params</text>
+        <rect x="245" y="34" width="190" height="58" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="340" y="58" fill="#cfe4ff">readTreeRecipes</text>
+        <text x="340" y="77" fill="#93a6ba" font-size="12">TreeRecipeBook, typos rejected</text>
+        <rect x="470" y="34" width="190" height="58" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="565" y="58" fill="#cfe4ff">agedRecipe / formedRecipe</text>
+        <text x="565" y="77" fill="#93a6ba" font-size="12">"old", "stand" laid over</text>
+        <rect x="695" y="34" width="185" height="58" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="787" y="58" fill="#cfe4ff">drawTreeParams(seed)</text>
+        <text x="787" y="77" fill="#93a6ba" font-size="12">every {lo, hi} drawn</text>
+        <line x1="210" y1="63" x2="241" y2="63" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar1)"/>
+        <line x1="435" y1="63" x2="466" y2="63" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar1)"/>
+        <line x1="660" y1="63" x2="691" y2="63" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar1)"/>
+
+        <text x="44" y="128" fill="#e6c07b" font-size="12" text-anchor="start">2  ONE TREE (growRecipeTree → skinTree, all C++)</text>
+        <rect x="20" y="140" width="150" height="58" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="95" y="164" fill="#cfe4ff">$vars substituted</text>
+        <text x="95" y="183" fill="#93a6ba" font-size="12">then expand()</text>
+        <rect x="195" y="140" width="150" height="58" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="270" y="164" fill="#cfe4ff">buildSkeleton</text>
+        <text x="270" y="183" fill="#93a6ba" font-size="12">3D turtle → nodes</text>
+        <rect x="370" y="140" width="150" height="58" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="445" y="164" fill="#cfe4ff">assignRadii</text>
+        <text x="445" y="183" fill="#93a6ba" font-size="12">pipe model</text>
+        <rect x="545" y="140" width="150" height="58" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="620" y="164" fill="#cfe4ff">shapeBranches</text>
+        <text x="620" y="183" fill="#93a6ba" font-size="12">droop, light, gnarl</text>
+        <rect x="720" y="140" width="160" height="58" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="800" y="164" fill="#cfe4ff">colonizeCrown</text>
+        <text x="800" y="183" fill="#93a6ba" font-size="12">old crowns only</text>
+        <line x1="170" y1="169" x2="191" y2="169" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar1)"/>
+        <line x1="345" y1="169" x2="366" y2="169" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar1)"/>
+        <line x1="520" y1="169" x2="541" y2="169" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar1)"/>
+        <line x1="695" y1="169" x2="716" y2="169" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar1)"/>
+        <path d="M787,92 L787,112 L30,112 L30,136" fill="none" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar1)"/>
+
+        <rect x="195" y="222" width="230" height="58" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="310" y="246" fill="#cfe4ff">wood</text>
+        <text x="310" y="265" fill="#93a6ba" font-size="12">trunk zone + tubes (or joints)</text>
+        <rect x="450" y="222" width="230" height="58" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="565" y="246" fill="#cfe4ff">foliage</text>
+        <text x="565" y="265" fill="#93a6ba" font-size="12">leaves, cards, needles, fronds</text>
+        <rect x="705" y="222" width="175" height="58" rx="9" fill="#131a24" stroke="#3b82f6"/>
+        <text x="792" y="246" fill="#cfe4ff">TreeMesh</text>
+        <text x="792" y="265" fill="#93a6ba" font-size="12">bark + leaves + limbs</text>
+        <path d="M800,198 L800,210 L310,210 L310,218" fill="none" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar1)"/>
+        <line x1="565" y1="210" x2="565" y2="218" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar1)"/>
+        <line x1="680" y1="251" x2="701" y2="251" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar1)"/>
+
+        <text x="44" y="318" fill="#e6c07b" font-size="12" text-anchor="start">3  A SPECIES IN A LEVEL (growRecipeLevels, the tree cache, the loader)</text>
+        <rect x="20" y="330" width="200" height="58" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="120" y="354" fill="#cfe4ff">growRecipeLevels</text>
+        <text x="120" y="373" fill="#93a6ba" font-size="12">hero, mid, light, far</text>
+        <rect x="245" y="330" width="190" height="58" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="340" y="354" fill="#cfe4ff">BranchCardSet</text>
+        <text x="340" y="373" fill="#93a6ba" font-size="12">one atlas a species</text>
+        <rect x="460" y="330" width="190" height="58" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="555" y="354" fill="#cfe4ff">cache/trees</text>
+        <text x="555" y="373" fill="#93a6ba" font-size="12">saveRecipeSpecies</text>
+        <rect x="675" y="330" width="205" height="58" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="777" y="354" fill="#cfe4ff">recipeTreeParts</text>
+        <text x="777" y="373" fill="#93a6ba" font-size="12">banded instanced draws</text>
+        <rect x="460" y="402" width="420" height="52" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="670" y="424" fill="#cfe4ff">impostor bake from the LAST level</text>
+        <text x="670" y="442" fill="#93a6ba" font-size="12">8 azimuths × 3 elevations, one camera-facing card a tree</text>
+        <path d="M792,280 L792,298 L30,298 L30,326" fill="none" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar1)"/>
+        <line x1="220" y1="359" x2="241" y2="359" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar1)"/>
+        <line x1="435" y1="359" x2="456" y2="359" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar1)"/>
+        <line x1="650" y1="359" x2="671" y2="359" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar1)"/>
+        <path d="M120,388 L120,428 L456,428" fill="none" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar1)"/>
+      </g>
+    </svg>
+  </div>
+  <p class="cap">From recipe to drawn tree. No Lua runs per branch: Lua only supplies the numbers and the rules, and the
+    grammar is expanded and interpreted in C++.</p>
+
+  <h2>The grammar and the skeleton</h2>
+  <p>The branching structure comes from a <b>parametric L-system</b>
+    (<a href="https://github.com/GlennSong/raytracer-clang/blob/main/docs/decisions.md">ADR-0030</a>), a set of rewrite
+    rules applied to a string of modules a fixed number of times. A module such as <code>B(1.2)</code> carries numbers,
+    and a rule's successor can do arithmetic on them, so each branch generation can shorten (<code>B(l*0.8)</code>).
+    Rules can carry a guard (<code>B(l):l&gt;0.22</code>), which lets one symbol behave differently as it shrinks.
+    Several rules for the same symbol are weighted random choices. The expanded string is read by a 3D
+    <b>turtle</b>: <code>F</code> moves forward, <code>+ - &amp; ^ / \</code> turn it, and <code>[ ]</code> push and
+    pop a branch.</p>
+  <p>The turtle produces a <code>Skeleton</code>
+    (<a href="https://github.com/GlennSong/raytracer-clang/blob/main/docs/decisions.md">ADR-0033</a>). It was pulled out
+    of <code>tree.cpp</code> as a domain-free value type so other generators can read it too. Mountain ridge networks
+    are its second consumer.</p>
+  <div class="code">
+    <div class="hd"><span>The shared skeleton: nodes in parent-before-child order</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/engine/procgen/skeleton.h#L16-L31">src/engine/procgen/skeleton.h</a></div>
+<pre><span class="k">struct</span> <span class="t">SkeletonNode</span> {
+    <span class="t">Vec3</span>  pos;
+    <span class="t">Vec3</span>  heading{<span class="n">0</span>, <span class="n">1</span>, <span class="n">0</span>};   <span class="c">// turtle forward at this node</span>
+    <span class="t">int</span>   parent = -<span class="n">1</span>;        <span class="c">// -1 = root</span>
+    <span class="t">int</span>   childCount = <span class="n">0</span>;
+    <span class="t">int</span>   depth = <span class="n">0</span>;          <span class="c">// branch order (bracket nesting; 0 = main axis)</span>
+    <span class="t">float</span> radius = <span class="n">0.0f</span>;      <span class="c">// filled by a consumer (e.g. the pipe model)</span>
+    <span class="t">float</span> distFromRoot = <span class="n">0.0f</span>;
+    <span class="t">bool</span>  isTip = <span class="k">false</span>;      <span class="c">// an unexpanded apex: leaf attach / ridge end / ...</span>
+};
+
+<span class="k">struct</span> <span class="t">Skeleton</span> {
+    <span class="t">std::vector</span>&lt;<span class="t">SkeletonNode</span>&gt; nodes;
+    <span class="c">// Child index lists per node (parent-before-child order).</span>
+    <span class="t">std::vector</span>&lt;<span class="t">std::vector</span>&lt;<span class="t">int</span>&gt;&gt; childLists() <span class="k">const</span>;
+};</pre>
+  </div>
+  <p>The tree code relies on the parent-before-child order. Several passes walk the array backwards, so every child is
+    visited before its parent. The pipe model below is one of them. ADR-0033 lists exposing <code>Skeleton</code> to Lua
+    as owed, and it is still owed: the Lua bindings have no skeleton type.</p>
+
+  <h2>A species is a recipe</h2>
+  <p>Glenn asked, on 2026-10-17: "Could lua be used to define recipes and then the C++ could ingest those recipes and
+    build out those trees?" This is the oak's recipe today, trimmed:</p>
+  <div class="code">
+    <div class="hd"><span>The oak: a sympodial fork, its numbers drawn per seed</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/assets/scripts/tree_recipes.lua#L67-L89">assets/scripts/tree_recipes.lua</a></div>
+<pre>  oak = {
+    <span class="c">-- FORM in a stand (forest.h ForestSpecies::form; the island's forests): the lower limbs shaded off, a clear bole</span>
+    forms = { stand = { axiom_prefix = <span class="s">"F(3.0)"</span>, scale = { params = { crownRadius = <span class="n">0.6</span>, crownBottom = <span class="n">2.2</span> } }, params = { pruneBelow = <span class="n">0.45</span> } } },
+    axiom = <span class="s">"T(1.3,2)"</span>,
+    iterations = <span class="n">13</span>,
+    rules = {
+      { <span class="s">"T(l,n):n&gt;0"</span>,   <span class="s">"F(l)/(97)T(l*0.95,n-1)"</span> },
+      { <span class="s">"T(l,n):n&lt;=0"</span>,  <span class="s">"B(l*$crown)"</span> },
+      { <span class="s">"B(l):l&gt;$tip"</span>,  <span class="s">"F(l)/($roll)[&amp;($pitch)B(l*$side)]/(180)[&amp;($pitch2)B(l*$side2)]"</span>, <span class="n">3</span> },
+      { <span class="s">"B(l):l&gt;$tip"</span>,  <span class="s">"F(l)/($roll)[&amp;($pitch)B(l*$side)]^(10)B(l*$lead)"</span>, <span class="n">2</span> },
+      { <span class="s">"B(l):l&lt;=$tip"</span>, <span class="s">"F(l)/(137.5)[&amp;(55)A(l)]/(137.5)[&amp;(55)A(l)]/(137.5)[&amp;(40)A(l)]A(l)"</span> },
+    },
+    vars = { roll = {<span class="n">70</span>, <span class="n">110</span>}, pitch = {<span class="n">42</span>, <span class="n">58</span>}, pitch2 = {<span class="n">30</span>, <span class="n">46</span>}, side = {<span class="n">0.80</span>, <span class="n">0.86</span>}, side2 = {<span class="n">0.76</span>, <span class="n">0.84</span>},
+             lead = {<span class="n">0.80</span>, <span class="n">0.86</span>}, tip = <span class="n">0.22</span>, crown = <span class="n">0.9</span> },
+    params = {
+      joints = <span class="n">1</span>, trunkZone = <span class="n">0.10</span>, trunkZoneTris = <span class="n">2800</span>,   <span class="c">-- (the trunk, its first limbs, its roots: one surface)</span>
+      droop = {<span class="n">0.10</span>, <span class="n">0.20</span>}, light = {<span class="n">0.15</span>, <span class="n">0.30</span>}, crookChance = {<span class="n">0.15</span>, <span class="n">0.30</span>}, crookAngle = {<span class="n">15</span>, <span class="n">30</span>},
+      meander = {<span class="n">0.08</span>, <span class="n">0.15</span>}, lean = {<span class="n">0</span>, <span class="n">6</span>}, angleJitter = {<span class="n">8</span>, <span class="n">14</span>},
+      <span class="c">-- ...</span>
+    },</pre>
+  </div>
+  <p>How to read it: <code>T</code> is the trunk, which grows two stretches and then becomes <code>B</code>, a limb.
+    While a limb is longer than <code>$tip</code> it forks, either into two sides (weight 3) or into one side plus a
+    continuing leader (weight 2). Once it is short enough it ends in four tips (<code>A</code>), and that is where
+    leaves go. <code>vars</code> are the grammar's own numbers, and each <code>$name</code> is substituted per seed
+    before the grammar is compiled. <code>params</code> are the grower's knobs (<code>TreeParams</code> fields, looked up
+    by name). Any number written as <code>{lo, hi}</code> is drawn per seed, so one recipe defines a species and each
+    seed gives a different tree of it.</p>
+  <p>The C++ side is short. Ages, forms and level overrides are applied first, and then it is the grammar and the
+    skin:</p>
+  <div class="code">
+    <div class="hd"><span>growRecipeTree: the numbers drawn, the vars substituted, the grammar expanded and skinned</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/engine/procgen/tree_recipe.cpp#L197-L227">src/engine/procgen/tree_recipe.cpp</a></div>
+<pre><span class="t">TreeMesh</span> growRecipeTree(<span class="k">const</span> <span class="t">TreeRecipe</span>&amp; r, <span class="t">uint32_t</span> seed, <span class="k">const</span> <span class="t">std::map</span>&lt;<span class="t">std::string</span>, <span class="t">double</span>&gt;&amp; overrides) {
+    <span class="c">// ...</span>
+    <span class="t">std::map</span>&lt;<span class="t">std::string</span>, <span class="t">double</span>&gt; vars;
+    <span class="t">TreeParams</span> p = drawTreeParams(r, seed, &amp;vars);
+    <span class="k">for</span> (<span class="k">const</span> <span class="k">auto</span>&amp; [name, v] : overrides)
+        <span class="k">if</span> (!setTreeParam(p, name, v)) vars[name] = v;   <span class="c">// (a var's name: the lab may pin a grammar number too)</span>
+    <span class="c">// ...</span>
+    <span class="k">if</span> (r.rules.empty()) <span class="k">return</span> growTree(p, seed);
+    <span class="t">ParametricLSystem</span> grammar;
+    <span class="k">for</span> (<span class="k">const</span> <span class="t">TreeRecipe::Rule</span>&amp; rule : r.rules)
+        grammar.rule(substituteVars(rule.predecessor, vars), substituteVars(rule.successor, vars), rule.weight);
+    <span class="k">const</span> <span class="t">ModuleString</span> axiom = parseModuleLiterals(substituteVars(r.axiom, vars));
+    <span class="k">const</span> <span class="t">ModuleString</span> s = grammar.expand(axiom, p.iterations, seed);
+    <span class="k">return</span> skinTree(s, p, seed);
+}</pre>
+  </div>
+  <p>The reader (<code>scripting/tree_recipes_lua.cpp</code>) rejects an unknown parameter name or a <code>$name</code>
+    with no value, so a typo cannot silently grow a default tree (test <code>tree_recipe_reader_rejects_typos</code>).
+    The file is re-parsed only when its text changes, and the tree lab watches it, so editing a recipe reloads the
+    lab.</p>
+  <p>The shipped book holds 22 species written out in full, among them oak, birch, spruce, sakura, maple, pine, three
+    palms, shrubs, flowering perennials, a hedge and blade plants (flax, rush, fescue). Four more are
+    <b>derived</b> with a small Lua <code>derive(kin, over)</code> helper: beech from the oak, silver fir from the
+    spruce, and aspen and alder from the birch (ADR-0199). A derived species is a copy of its kin with a table merged
+    over it, so it shares the kin's grammar, ages and forms.</p>
+
+  <h2>The structure</h2>
+  <div class="diagram">
+    <svg viewBox="0 0 900 360" role="img" aria-label="TreeRecipe holds ages and forms and is laid over into TreeParams per seed; skinTree produces a TreeMesh; growRecipeLevels wraps TreeMeshes in RecipeTreeLevels that share a BranchCardSet; a ForestSpecies names the recipe, age, form and twin">
+      <defs><marker id="ar2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" fill="#6f8fb0"/></marker></defs>
+      <g font-family="system-ui, sans-serif" font-size="13">
+        <rect x="20" y="20" width="250" height="150" rx="9" fill="#131a24" stroke="#3b82f6"/>
+        <text x="34" y="44" fill="#cfe4ff" font-weight="600">TreeRecipe</text>
+        <text x="34" y="66" fill="#93a6ba" font-size="12">axiom, iterations, rules</text>
+        <text x="34" y="84" fill="#93a6ba" font-size="12">vars, params  ({lo, hi} ranges)</text>
+        <text x="34" y="102" fill="#93a6ba" font-size="12">card, strand, leafKit, needles</text>
+        <text x="34" y="120" fill="#93a6ba" font-size="12">branchCards, fronds, blades</text>
+        <text x="34" y="138" fill="#e6c07b" font-size="12">ages: young / mature / old / ancient</text>
+        <text x="34" y="156" fill="#e6c07b" font-size="12">forms: stand</text>
+
+        <rect x="330" y="20" width="240" height="96" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="344" y="44" fill="#cfe4ff" font-weight="600">TreeParams</text>
+        <text x="344" y="66" fill="#93a6ba" font-size="12">one tree's knobs (~80 fields)</text>
+        <text x="344" y="84" fill="#93a6ba" font-size="12">gnarl, joints, trunkZone, sprigSize</text>
+        <text x="344" y="102" fill="#93a6ba" font-size="12">colonize, lobes, leafLod, foliage</text>
+
+        <rect x="630" y="20" width="250" height="150" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="644" y="44" fill="#cfe4ff" font-weight="600">TreeMesh</text>
+        <text x="644" y="66" fill="#93a6ba" font-size="12">branches (bark), leaves</text>
+        <text x="644" y="84" fill="#93a6ba" font-size="12">limbs: the skeleton, with radii</text>
+        <text x="644" y="102" fill="#93a6ba" font-size="12">sprigs, twigs (what cards stand for)</text>
+        <text x="644" y="120" fill="#93a6ba" font-size="12">lobes, palette, foliage mode</text>
+        <text x="644" y="138" fill="#93a6ba" font-size="12">barkBlend, zone ranges</text>
+        <text x="644" y="156" fill="#93a6ba" font-size="12">collision triangles (wood only)</text>
+
+        <line x1="270" y1="68" x2="326" y2="68" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar2)"/>
+        <text x="298" y="60" fill="#93a6ba" font-size="11" text-anchor="middle">draw</text>
+        <line x1="570" y1="68" x2="626" y2="68" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar2)"/>
+        <text x="598" y="60" fill="#93a6ba" font-size="11" text-anchor="middle">skin</text>
+
+        <rect x="330" y="210" width="240" height="120" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="344" y="234" fill="#cfe4ff" font-weight="600">RecipeTreeLevel  (× 2–4)</text>
+        <text x="344" y="256" fill="#93a6ba" font-size="12">tree: a TreeMesh at this coarseness</text>
+        <text x="344" y="274" fill="#93a6ba" font-size="12">atlas: its leaves' picture</text>
+        <text x="344" y="292" fill="#93a6ba" font-size="12">in0, in1, out0, out1: fades (m)</text>
+        <text x="344" y="310" fill="#93a6ba" font-size="12">minDistance, maxDistance: culls</text>
+
+        <rect x="630" y="210" width="250" height="120" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="644" y="234" fill="#cfe4ff" font-weight="600">BranchCardSet  (one a species)</text>
+        <text x="644" y="256" fill="#93a6ba" font-size="12">atlas: albedo × colourScale, normal</text>
+        <text x="644" y="274" fill="#93a6ba" font-size="12">pictures: views, length, palette</text>
+        <text x="644" y="292" fill="#93a6ba" font-size="12">kind: sprig, leafy, Y, bare, spray</text>
+        <text x="644" y="310" fill="#93a6ba" font-size="12">twigLength</text>
+
+        <rect x="20" y="210" width="250" height="120" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="34" y="234" fill="#cfe4ff" font-weight="600">ForestSpecies</text>
+        <text x="34" y="256" fill="#93a6ba" font-size="12">recipe, age, form, ageMix</text>
+        <text x="34" y="274" fill="#93a6ba" font-size="12">formByDensity, variants</text>
+        <text x="34" y="292" fill="#93a6ba" font-size="12">altLo / altHi, weight, wet</text>
+        <text x="34" y="310" fill="#93a6ba" font-size="12">twin, twinShare (ADR-0216)</text>
+
+        <line x1="755" y1="170" x2="512" y2="206" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar2)"/>
+        <line x1="570" y1="270" x2="626" y2="270" stroke="#6f8fb0" stroke-width="1.6" marker-start="url(#ar2)"/>
+        <text x="598" y="262" fill="#93a6ba" font-size="11" text-anchor="middle">wears</text>
+        <line x1="270" y1="270" x2="326" y2="270" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar2)"/>
+        <text x="298" y="262" fill="#93a6ba" font-size="11" text-anchor="middle">grows</text>
+        <line x1="145" y1="210" x2="145" y2="174" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar2)"/>
+        <text x="152" y="196" fill="#93a6ba" font-size="11">names</text>
+      </g>
+    </svg>
+  </div>
+  <p class="cap">The main types. A level never sees a <code>TreeRecipe</code> directly: it asks for a recipe at an age
+    and a form, and gets back its levels.</p>
+
+  <h2>From skeleton to wood</h2>
+  <h3>Radii by the pipe model</h3>
+  <p>Branch thickness is not authored. It follows the <b>pipe model</b> (da Vinci's rule, or Murray's law): a limb's
+    cross-section carries everything above it, so <i>r</i><sub>parent</sub><sup>n</sup> = Σ
+    <i>r</i><sub>child</sub><sup>n</sup> with <i>n</i> around 2.3
+    (<a href="https://github.com/GlennSong/raytracer-clang/blob/main/docs/decisions.md">ADR-0029</a>). Because tips
+    are thin and the trunk carries them all, the trunk's girth depends on how many twigs the tree has. That is why the
+    ages set girth separately with <code>radiusScale</code>.</p>
+  <div class="code">
+    <div class="hd"><span>assignRadii: one backward pass over the parent-before-child skeleton</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/engine/procgen/tree.cpp#L87-L100">src/engine/procgen/tree.cpp</a></div>
+<pre><span class="t">void</span> assignRadii(<span class="t">std::vector</span>&lt;<span class="t">SkeletonNode</span>&gt;&amp; nodes, <span class="k">const</span> <span class="t">TreeParams</span>&amp; p) {
+    <span class="t">std::vector</span>&lt;<span class="t">float</span>&gt; sumPow(nodes.size(), <span class="n">0.0f</span>);
+    <span class="k">const</span> <span class="t">float</span> n = p.pipeExponent;
+    <span class="k">for</span> (<span class="t">int</span> i = <span class="k">static_cast</span>&lt;<span class="t">int</span>&gt;(nodes.size()) - <span class="n">1</span>; i &gt;= <span class="n">0</span>; i--) {
+        <span class="t">float</span> r = nodes[i].childCount == <span class="n">0</span>
+                      ? p.tipRadius
+                      : std::pow(sumPow[i], <span class="n">1.0f</span> / n);
+        r *= p.radiusScale;
+        <span class="k">if</span> (r &lt; p.tipRadius * p.radiusScale) r = p.tipRadius * p.radiusScale;
+        nodes[i].radius = r;
+        <span class="k">if</span> (nodes[i].parent &gt;= <span class="n">0</span>)
+            sumPow[nodes[i].parent] += std::pow(r / p.radiusScale, n);
+    }
+}</pre>
+  </div>
+  <p><code>skinTree</code> runs the passes in a fixed order. The crown is grown after the scaffold has been bent,
+    because bending walks down whole chains of nodes, and when it ran after colonization it twisted the grown limbs off
+    their clumps:</p>
+  <div class="code">
+    <div class="hd"><span>skinTree: the order of the passes</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/engine/procgen/tree.cpp#L1378-L1392">src/engine/procgen/tree.cpp</a></div>
+<pre><span class="t">TreeMesh</span> skinTree(<span class="k">const</span> <span class="t">ModuleString</span>&amp; s, <span class="k">const</span> <span class="t">TreeParams</span>&amp; params, <span class="t">uint32_t</span> seed) {
+    <span class="t">std::mt19937</span> rng(seed);
+
+    <span class="t">Skeleton</span> skel = buildSkeleton(s, params.angleJitter, rng);
+    <span class="t">std::vector</span>&lt;<span class="t">SkeletonNode</span>&gt;&amp; nodes = skel.nodes;
+    <span class="c">// (the crown grown to its shape AFTER the scaffold is bent and gnarled -- bending runs down whole chains, and the</span>
+    <span class="c">// grown limbs and fans, bent again, sagged and twisted off their clumps -- then the radii, by the pipe model, over</span>
+    <span class="c">// all of it)</span>
+    <span class="t">std::vector</span>&lt;<span class="t">TreeMesh::Lobe</span>&gt; lobes;
+    assignRadii(nodes, params);
+    shapeBranches(nodes, params, rng, seed);
+    <span class="k">if</span> (params.colonize &gt;= <span class="n">1</span>) {
+        colonizeCrown(nodes, params, seed, &amp;lobes);
+        assignRadii(nodes, params);
+    }</pre>
+  </div>
+  <p>After these passes come the lean, the clip box (hedges), and the <b>crowded-fork stagger</b>. Where more than two
+    limbs of wood leave one node, every side limb after the first is moved up the leader, three radii apart, so each
+    fork has two limbs. This took the maple's crowded forks from 140 to 28 and the pine's from 34 to 0 (ADR-0182).</p>
+
+  <h3>The bark: tubes, then joints, then the trunk zone</h3>
+  <p>Each limb is a <b>generalized cylinder</b> (ADR-0029): a ring of vertices swept along a Catmull-Rom curve through
+    the limb's chain of nodes, using rotation-minimizing frames (the frame is carried along the curve with as little
+    twist as possible) so the bark texture does not spiral. The <b>gnarl</b> knobs then deform it: crooks, meander,
+    flare, flutes (lobes), node swell, knots and grain twist. They all default to 0, so older trees are unchanged.</p>
+  <p>Where limbs meet is the hard part, and it took three attempts.</p>
+  <table>
+    <tr><th>Attempt</th><th>What it did</th><th>Why it changed</th></tr>
+    <tr><td>Collar weld</td><td>A side branch starts on its parent's surface and flares into it
+      (<code>collar</code>).</td><td>Glenn, 2026-10-17: "I can see the seams between the branches and looking at them
+      in wireframe it's obviously not one continuous structure."</td></tr>
+    <tr><td>Hull joints (ADR-0181)</td><td>Every limb at a fork is cut back until its end ring is clear of the others.
+      The rings are joined by their convex hull, refined, and projected onto the limbs' smooth union. This is the
+      road-junction method: cut back, then fill.</td><td>Bark triangles doubled (the oak went from 34k to 80k), and
+      narrow forks still webbed. Glenn: "there are a lot of bad joins ... probably the way I suggested is not
+      right".</td></tr>
+    <tr><td>Trunk zone (ADR-0183)</td><td>The trunk, its first limbs and the roots become one implicit surface: tapered
+      capsules, smooth-unioned and polygonized, then simplified and remeshed into even triangles. Thinner limbs are
+      tubes that flare into it.</td><td>This is current. The oak's zone is 2.2-3.1k triangles with 0% slivers.</td></tr>
+  </table>
+  <div class="shots">
+    <figure class="shot">
+      <img src="img/trees/hull-joints.webp" alt="Looking up an oak's trunk into its forks, the limbs joined into one faceted mesh">
+      <figcaption>ADR-0181's hull joints in the tree lab on the afternoon they landed (2026-10-17): trunk and limbs in one
+        mesh, faceted at the forks.</figcaption>
+    </figure>
+    <figure class="shot">
+      <img src="img/trees/trunk-zone.webp" alt="An oak trunk rising smoothly from flared roots into its first limbs, among flowers">
+      <figcaption>The trunk zone of ADR-0183: the trunk, the first forks and the buttress roots as one surface.</figcaption>
+    </figure>
+  </div>
+  <p>The research note in ADR-0183 explains the turn. Production game trees do not weld branches. SpeedTree overlaps
+    them and hides the seam with a blend ring and bent normals. So the engine builds one true surface only where it
+    matters, at the trunk, and blends the bark across every seam. Each zone vertex carries a second UV (the bark mapping
+    of the nearest limb of another chain) and a blend weight, packed into the tangent slot. <code>mesh.frag</code>
+    samples the bark at both UVs when <code>RenderMaterial::FLAG_UV_BLEND</code> (bit 23) is set. This is Vulkan
+    only.</p>
+  <div class="note history"><p><b>The meshing chain is made of shared words.</b> The zone added
+    <code>polygonizeSdfSparse</code> (meshes only the blocks of cells near the surface; a dense grid of the trunk is
+    ~18M samples), plus <code>MeshBuilder::splitNonManifold</code>, <code>fillHoles</code>, <code>simplify</code>
+    (quadric edge collapse) and <code>remesh</code> (isotropic, after Botsch &amp; Kobbelt). Glenn's "those triangles
+    look really stretched" is why the remesh step exists. Grid-accelerating the field took polygonizing from 2.0 s to
+    0.3-0.5 s per zone (ADR-0183 addendum).</p></div>
+
+  <h2>Crowns: grown to a shape</h2>
+  <p>Young trees grow their whole crown from the grammar. Old trees could not. Grammar branching made an ancient oak a
+    tangle of crossing limbs, and Glenn's call was "we should skip the tangle of branches for an ancient oak. I would
+    expect more plumage and foliage". It took three crown modes (<code>TreeParams::colonize</code>) to settle it.</p>
+  <ol>
+    <li><b>colonize = 1, space colonization</b> (ADR-0187; Runions, Lane &amp; Prusinkiewicz 2007). The grammar grows
+      only a scaffold: the trunk and a few big limbs. Thousands of attraction points are scattered in a dome around it,
+      mostly in its outer shell. At each step, every node that is the nearest node to some live points grows one step
+      toward their mean, and any point a node comes close to is spent. Branches therefore compete for room and do not
+      cross. Glenn's verdict: shapeless.</li>
+    <li><b>colonize = 2, lobes</b> (ADR-0188). The crown's shape is authored (<code>crownRadius</code>,
+      <code>crownBottom</code>, <code>crownTop</code>) and covered with lobes. Each lobe is colonized only from its own
+      anchor limb. Glenn: "Those look messy."</li>
+    <li><b>colonize = 3, guided limbs</b> (the oak's mode now). Each lobe gets ONE smooth cubic limb from the scaffold
+      node best aimed at it, plus a fan of shoots inside the lobe. Glenn: "that's better".</li>
+  </ol>
+  <div class="code">
+    <div class="hd"><span>One colonization step (modes 1 and 2): every node pulled by its points grows one step toward their mean</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/engine/procgen/tree.cpp#L1349-L1364">src/engine/procgen/tree.cpp</a></div>
+<pre>        <span class="k">for</span> (<span class="k">const</span> <span class="k">auto</span>&amp; [key, sum] : pull) {
+            <span class="k">const</span> <span class="t">int</span> ni = key.first;
+            <span class="k">const</span> <span class="t">SkeletonNode</span>&amp; from = nodes[<span class="k">static_cast</span>&lt;<span class="t">std::size_t</span>&gt;(ni)];
+            <span class="t">Vec3</span> dir = sum * (<span class="n">1.0</span> / count[key]);
+            dir = dir + <span class="t">Vec3</span>(<span class="n">0</span>, <span class="n">0.12</span>, <span class="n">0</span>);   <span class="c">// (a lift to the light)</span>
+            <span class="k">if</span> (dir.length() &lt; <span class="n">1e-6</span>) <span class="k">continue</span>;
+            dir = normalize(dir);
+            <span class="t">SkeletonNode</span> n;
+            n.pos = from.pos + dir * D;
+            n.heading = dir;
+            n.parent = ni;
+            n.depth = from.depth + <span class="n">1</span>;
+            n.distFromRoot = from.distFromRoot + <span class="k">static_cast</span>&lt;<span class="t">float</span>&gt;(D);
+            n.isTip = <span class="k">true</span>;
+            nodes[<span class="k">static_cast</span>&lt;<span class="t">std::size_t</span>&gt;(ni)].isTip = <span class="k">false</span>;
+            nodes.push_back(n);</pre>
+  </div>
+  <p>Mode 3 returns before this loop. It builds its limbs and fans directly, which gives a clear hierarchy: trunk, big
+    limbs, one limb per clump, and that clump's twigs. A lobed crown is then covered with <b>sprays</b> (ADR-0189), big
+    fanned cards 1.2-2.2 m long laid over each lobe's outer face, so the lobes read as rounded masses of leaves.
+    Glenn's request was "those clumps need to be made puffier". ADR-0190 adds an edge-on fade in
+    <code>mesh.frag</code>: a card thins away as the view grazes its true face, which is computed from screen-space
+    derivatives because the vertex normals are bent out of the crown. Each spray plane is also domed. Glenn declined a
+    third crossed plane per card, which would have cost 50% more foliage triangles.</p>
+  <figure class="shot">
+    <img src="img/trees/grown-crown.webp" alt="An old oak in the tree lab with a dense rounded crown made of lobes on a short trunk">
+    <figcaption>An old oak with a grown crown (tree lab probe, 2026-10-18).</figcaption>
+  </figure>
+
+  <h2>Foliage</h2>
+  <h3>Leaf cards drawn by a grammar</h3>
+  <p>A recipe's <code>card</code> is a second, 2D L-system: <code>F</code> draws a stem, <code>L(s)</code> draws a leaf
+    of the recipe's shape (oval, lobed, serrate, needle, leaflet or palmate), and <code>W(s)</code> draws a flower
+    (blossom, daisy or floret). <code>leaf_card.cpp</code> rasterizes it into an albedo and normal atlas. The card
+    colour is brightness times tint, and the tree's vertex colour multiplies that, so one atlas can be worn by trees of
+    different colours.</p>
+  <figure class="shot">
+    <img src="img/trees/leaf-cards.webp" alt="An atlas of leaf cards: sakura twigs with pink blossoms and leaves, red palmate maple twigs, and dark green pine tufts">
+    <figcaption>Card atlases grown from the sakura, maple and pine card grammars (lab dump, 2026-10-17).</figcaption>
+  </figure>
+
+  <h3>Branch cards, and three foliage tiers</h3>
+  <p>Modelling every twig is expensive. Measured fully modelled, a tree came to 40-120k bark triangles and 80-230k leaf
+    triangles. Glenn set the budget: "for a hero tree ... the upper budget to be about 8000 triangles and no more". The
+    answer is <b>branch cards</b> (ADR-0182). A side shoot whose whole spread fits inside <code>sprigSize</code> metres
+    is a <b>sprig</b>, and its wood is not built. Note that this cuts by spread, not by thickness: at a fixed radius
+    the oak's sprigs were 0.4 m and the sakura's 1.3 m. The same tree is grown again as a <i>donor</i> with every
+    sprig built whole, a few of those sprigs are rendered into an atlas, and each sprig on the real tree wears the
+    nearest picture in size.</p>
+  <p>Glenn rejected pictures of whole sprigs ("Those look like small trees"), so species with near leaves now use
+    <b>three tiers</b> (ADR-0184):</p>
+  <table>
+    <tr><th>Tier</th><th>What a tree wears</th><th>Code</th></tr>
+    <tr><td>Near (hero)</td><td>Twigs as three-sided bark tubes in the trunk's own mesh. About 6000 normal-mapped leaves
+      placed one by one along twigs and shoots (<code>near_leaves</code>), plus cupped blossoms.</td>
+      <td><code>wearNearLeaves</code></td></tr>
+    <tr><td>Mid</td><td>Twig segment cards: leafy, leafy Y, bare and bare Y, wearing the species' bark and leaf maps,
+      laid along the fine branching.</td><td><code>bakeTwigCards</code>, <code>wearTwigCards</code></td></tr>
+    <tr><td>Far</td><td>Impostors (below).</td><td><code>renderImpostorView</code></td></tr>
+  </table>
+  <p>Conifers get their own kit (ADR-0185, 0191). <code>needles = {kind = brush | flat | tuft}</code> draws needle
+    shoots from actual needle geometry, and <b>fronds</b> (whole needled sub-branches about 0.55 m long) fill the space
+    between whorls that made the spruce look see-through. Palms use a frond crown, and since ADR-0218 a crownshaft.
+    The maple got one leaf <b>palette</b> per tree at every level (ADR-0192), so it no longer turns into patches of
+    crimson and orange as the player walks away. Tree textures are also uploaded once, keyed by content: the lab held
+    2197 textures (4.9 GB) before and 128 (304 MB) after.</p>
+
+  <h2>Ages, forms and real scale</h2>
+  <p>A recipe's <code>ages</code> table (ADR-0186) gives young, mature, old and ancient overrides: an axiom,
+    iterations, params, vars and branch-card budgets, laid over the base recipe by <code>agedRecipe</code>. An older
+    oak does not just get more iterations. Its branching stops at a longer <code>$tip</code> and its trunk's first
+    stretch is longer, so it is a few branching orders bigger rather than thousands of twigs bigger. A longer first
+    stretch alone gave 17,000 twigs and a 5 m trunk. <code>deadChance</code> adds snapped grey stubs.</p>
+  <p>Then Glenn checked the trees against the city: "the trees need to be 2x to 4x taller than me". The recipe trees
+    had defaulted to 6-10 m, while a real oak or spruce is about three times that. <code>scale_lab.json</code> puts a
+    street of the city's own things (a house, buildings of 4, 6 and 8 storeys, a sedan, a lamp, walkers and a pole
+    banded every metre) beside rows of trees, and the ages were rebased on real sizes (ADR-0196):</p>
+  <table>
+    <tr><th>Species</th><th>young</th><th>mature</th><th>old</th><th>ancient</th></tr>
+    <tr><td>Oak</td><td>10 m</td><td>21 m (grown crown)</td><td>25 × 31 m</td><td>28 × 38 m</td></tr>
+    <tr><td>Spruce</td><td>9.5 m</td><td>25.6 m</td><td>34 m</td><td>40 m</td></tr>
+  </table>
+  <p><b>Forms</b> (ADR-0199) are laid over after the age, and they can <i>scale</i> numbers as well as set them, so one
+    form fits every age. <code>stand</code> is a forest-grown tree: a clear bole (an <code>axiom_prefix</code> such as
+    <code>F(3.0)</code> before the trunk), lower side limbs shaded off (<code>pruneBelow</code>), and a narrower, higher
+    crown. Test <code>a_stand_grown_tree_has_a_clear_bole</code> measures it: the oak's lowest leaves go from 3.1 m to
+    5.9 m, and the spruce's from 0 to 3.4 m.</p>
+
+  <h2>Levels of detail</h2>
+  <p><code>growRecipeLevels</code> grows one recipe and seed as up to four trees with the same skeleton (same seed, same
+    draw), each coarser than the last. Each level is drawn over its own band of distance and crossfaded into the next
+    one per pixel, using a Bayer screen-door dither (<code>RenderMaterial::FLAG_LOD_BAND</code>, bit 19). Glenn's
+    spec, 2026-10-17: "hero trees have everything wielded. And then mid level doesn't have to wield them all and then
+    furthest would be cards".</p>
+  <div class="diagram">
+    <svg viewBox="0 0 900 300" role="img" aria-label="LOD bands in recipe_forest: hero to 22 m, mid to 70 m, light to 110 m, far to 150 m, impostors from 130 m to 1200 m, each fading into the next over a few metres">
+      <g font-family="system-ui, sans-serif" font-size="13">
+        <text x="20" y="22" fill="#e6c07b" font-size="12">recipe_forest.json (hero 22 / mid 70 / light 110 / near 150 / far 1200 m)</text>
+        <!-- axis: x = 120 + d * 4.6 for d in 0..150; break; 1200 at 850 -->
+        <line x1="120" y1="236" x2="830" y2="236" stroke="#2c3d50" stroke-width="1.5"/>
+        <g fill="#93a6ba" font-size="11" text-anchor="middle">
+          <text x="120" y="254">0</text><text x="212" y="254">20</text><text x="304" y="254">40</text>
+          <text x="396" y="254">60</text><text x="488" y="254">80</text><text x="580" y="254">100</text>
+          <text x="672" y="254">120</text><text x="764" y="254">140</text><text x="858" y="254">1200 m</text>
+        </g>
+        <text x="808" y="241" fill="#93a6ba" font-size="13" text-anchor="middle">//</text>
+        <!-- rows -->
+        <g text-anchor="end" fill="#cfe4ff"><text x="110" y="61">hero</text><text x="110" y="99">mid</text>
+          <text x="110" y="137">light</text><text x="110" y="175">far</text><text x="110" y="213">impostor</text></g>
+        <defs>
+          <linearGradient id="fo" x1="0" x2="1"><stop offset="0" stop-color="#3b82f6" stop-opacity="0.75"/><stop offset="1" stop-color="#3b82f6" stop-opacity="0.05"/></linearGradient>
+          <linearGradient id="fi" x1="0" x2="1"><stop offset="0" stop-color="#3b82f6" stop-opacity="0.05"/><stop offset="1" stop-color="#3b82f6" stop-opacity="0.75"/></linearGradient>
+          <linearGradient id="wfi" x1="0" x2="1"><stop offset="0" stop-color="#e6c07b" stop-opacity="0.05"/><stop offset="1" stop-color="#e6c07b" stop-opacity="0.75"/></linearGradient>
+        </defs>
+        <!-- hero 0..16 solid, 16..22 fade -->
+        <rect x="120" y="46" width="73.6" height="22" fill="#3b82f6" fill-opacity="0.75"/>
+        <rect x="193.6" y="46" width="27.6" height="22" fill="url(#fo)"/>
+        <!-- mid 16..22 in, 22..58 solid, 58..70 out -->
+        <rect x="193.6" y="84" width="27.6" height="22" fill="url(#fi)"/>
+        <rect x="221.2" y="84" width="165.6" height="22" fill="#3b82f6" fill-opacity="0.75"/>
+        <rect x="386.8" y="84" width="55.2" height="22" fill="url(#fo)"/>
+        <!-- light 58..70 in, 70..95, 95..110 out -->
+        <rect x="386.8" y="122" width="55.2" height="22" fill="url(#fi)"/>
+        <rect x="442" y="122" width="115" height="22" fill="#3b82f6" fill-opacity="0.75"/>
+        <rect x="557" y="122" width="69" height="22" fill="url(#fo)"/>
+        <!-- far 95..110 in, 110..130, 130..150 out -->
+        <rect x="557" y="160" width="69" height="22" fill="url(#fi)"/>
+        <rect x="626" y="160" width="92" height="22" fill="#3b82f6" fill-opacity="0.75"/>
+        <rect x="718" y="160" width="92" height="22" fill="url(#fo)"/>
+        <!-- impostor 130..150 in, then to 1200 -->
+        <rect x="718" y="198" width="92" height="22" fill="url(#wfi)"/>
+        <rect x="810" y="198" width="40" height="22" fill="#e6c07b" fill-opacity="0.75"/>
+        <g font-size="11" fill="#93a6ba">
+          <text x="228" y="62">joints, near leaves</text>
+          <text x="228" y="100" fill="#0c1016">zone 1/3, twig cards</text>
+          <text x="448" y="138" fill="#0c1016">no joints, no roots</text>
+          <text x="632" y="176" fill="#0c1016">4 sides, limbs ≥ 6 cm</text>
+          <text x="560" y="214">one camera-facing card →</text>
+        </g>
+      </g>
+    </svg>
+  </div>
+  <p class="cap">The bands one recipe species gets in recipe_forest. Gradients are the crossfades: each level fades out
+    over the same metres the next one fades in. The city's street trees use their own bands (hero 18-24 m, mid 50-60,
+    light 110-130), and the old real_tree forest draws models to 150 m and impostors to 7 km.</p>
+  <div class="code">
+    <div class="hd"><span>A level: a tree, its atlas, its fades and its culls</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/engine/procgen/tree_lods.h#L28-L39">src/engine/procgen/tree_lods.h</a></div>
+<pre><span class="k">struct</span> <span class="t">RecipeTreeLevel</span> {
+    <span class="t">TreeMesh</span> tree;
+    <span class="t">LeafCardAtlas</span> atlas;                         <span class="c">// its leaves' picture (recipeLeafAtlas)</span>
+    <span class="t">float</span> in0 = <span class="n">0</span>, in1 = <span class="n">0</span>, out0 = <span class="n">0</span>, out1 = <span class="n">0</span>;  <span class="c">// fade in over [in0, in1], out over [out0, out1] (0, 0: no fade)</span>
+    <span class="t">double</span> minDistance = <span class="n">0</span>, maxDistance = <span class="n">0</span>;     <span class="c">// culled nearer / farther (0: not)</span>
+};
+
+<span class="k">struct</span> <span class="t">RecipeLodBands</span> {
+    <span class="t">double</span> hero0 = <span class="n">24.0</span>, hero1 = <span class="n">30.0</span>;   <span class="c">// hero -&gt; mid (both 0: no hero level)</span>
+    <span class="t">double</span> mid0 = <span class="n">0.0</span>, mid1 = <span class="n">0.0</span>;       <span class="c">// mid -&gt; light (both 0: no light level, the mid is the last)</span>
+    <span class="t">double</span> light0 = <span class="n">0.0</span>, light1 = <span class="n">0.0</span>;   <span class="c">// light -&gt; far (leafLod 6, no limb under 7 cm, four sides; both 0: none)</span>
+};</pre>
+  </div>
+  <p>For a branch-card species, each level is the same recipe grown with different overrides: sides about
+    <code>woodEdge</code> apart, a ring every <code>ringAngle</code> of bend, with or without joints and roots, and a
+    minimum wood radius:</p>
+  <div class="code">
+    <div class="hd"><span>growRecipeLevels: the four levels of a branch-card species</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/engine/procgen/tree_lods.cpp#L138-L150">src/engine/procgen/tree_lods.cpp</a></div>
+<pre>            out.push_back(level(bc.woodEdge, bc.ringAngle, <span class="k">true</span>, <span class="k">true</span>, <span class="n">0.0</span>, <span class="n">1.0</span>, <span class="k">true</span>));            <span class="c">// hero</span>
+            <span class="k">if</span> (bands.hero1 &gt; bands.hero0) {
+                <span class="t">RecipeTreeLevel</span> M = level(bc.woodEdge * <span class="n">1.6</span>, bc.ringAngle * <span class="n">1.5</span>, <span class="k">true</span>, <span class="k">true</span>, <span class="n">0.0</span>, <span class="n">0.3</span>);   <span class="c">// mid</span>
+                fadeInto(M, bands.hero0, bands.hero1);
+            }
+            <span class="k">if</span> (bands.mid1 &gt; bands.mid0) {
+                <span class="t">RecipeTreeLevel</span> Lt = level(bc.woodEdge * <span class="n">2.5</span>, bc.ringAngle * <span class="n">2.0</span>, <span class="k">false</span>, <span class="k">false</span>, <span class="n">0.0</span>);   <span class="c">// light</span>
+                fadeInto(Lt, bands.mid0, bands.mid1);
+                <span class="k">if</span> (bands.light1 &gt; bands.light0) {
+                    <span class="t">RecipeTreeLevel</span> F = level(<span class="n">0.25</span>, <span class="n">30.0</span>, <span class="k">false</span>, <span class="k">false</span>, <span class="n">0.06</span>);                       <span class="c">// far</span>
+                    fadeInto(F, bands.light0, bands.light1);
+                }
+            }</pre>
+  </div>
+  <p>The loader turns each level into an instanced bark draw and an instanced leaf draw, each banded by its own
+    fades:</p>
+  <div class="code">
+    <div class="hd"><span>recipeTreeParts: every part of a level fades on its band; the last level fades out over the caller's range</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/engine/level_loader.cpp#L2147-L2152">src/engine/level_loader.cpp</a></div>
+<pre>        <span class="k">auto</span> band = [&amp;](<span class="t">RenderMaterial</span>&amp; m) {
+            m.flags |= <span class="t">RenderMaterial</span>::FLAG_LOD_BAND;
+            m.lodIn0 = L.in0; m.lodIn1 = L.in1;
+            m.lodOut0 = last ? <span class="k">static_cast</span>&lt;<span class="t">float</span>&gt;(lastOut0) : L.out0;
+            m.lodOut1 = last ? <span class="k">static_cast</span>&lt;<span class="t">float</span>&gt;(lastOut1) : L.out1;
+        };</pre>
+  </div>
+  <div class="note history"><p><b>The forest's weight</b> (ADR-0195). Glenn on recipe_forest: "the forest seems pretty
+    heavy. The fps is around 27". The test <code>a_forests_levels_lighten_with_distance</code> counted the rings: about
+    50 hero trees, 460 mid, 1840 light and 5800 far, which came to about 120M triangles a frame, mostly conifer needle
+    cards at the light and far levels. The fixes were to start the impostors at 150 m instead of 280 m, and to cut the
+    needle-card share by level from 0.9/0.6/0.35 to 0.55/0.25/0.12. The "Treetops" pose went from 36.7 ms to 10.8 ms
+    of GPU time. ADR-0198 did the same for grown crowns, whose mid, light and far levels had each worn 85k leaf
+    triangles: clusters now thin 4/2/1/1 and sprays 1/0.55/0.3/0.15 by level.</p></div>
+
+  <h2>Far trees: many-view impostors</h2>
+  <p>Past the last level, a tree is one quad. ADR-0193 renders each variant on the CPU from 8 azimuths × 3 elevations
+    (0°, 35°, 70°) into one atlas, with colour and normals, all framed in the same window around the tree's centre.
+    <code>mesh.vert</code> turns the card to face the camera. <code>mesh.frag</code> works out the camera's direction in
+    the tree's frame and blends the four nearest views, sampling each where the fragment would fall in that view, so the
+    silhouettes stay registered. A card that faces the camera cannot cast a sensible shadow, so two
+    <code>FLAG_SHADOW_ONLY</code> crossed cards cast it instead.</p>
+  <div class="shots">
+    <figure class="shot">
+      <img src="img/trees/impostor-views.webp" alt="A grid of small tree pictures: rows of oaks, birches, maples and spruces each seen from several angles">
+      <figcaption>Part of the many-view atlas (<code>RT_IMPOSTOR_DUMP</code>): one block per variant, with azimuths across
+        and elevations down.</figcaption>
+    </figure>
+    <figure class="shot">
+      <img src="img/trees/forest-far.webp" alt="A wide forest of conifers and broadleaves seen from above a ridge, fading into the distance">
+      <figcaption>A many-view impostor probe on a recipe forest (2026-10-18): the far woods are single camera-facing
+        cards.</figcaption>
+    </figure>
+  </div>
+  <p>Against a low sun the impostors read flat and bright. Glenn: "far away tree cards don't seem to render well against
+    the sunlight". ADR-0202 stores the depth of each view's nearest leaves in the normal atlas's alpha channel, and the
+    shader shades the card by how deep its point lies under the leaves the sun sees first. That makes the impostor its
+    own shadow map. Depth reads stop at mip 2, because below that the cells blur together and every far tree reads as
+    lit. A/B switches: <code>RT_IMPOSTOR_VIEWS=0</code> and <code>RT_IMPOSTOR_SELF_SHADOW=0</code>.</p>
+
+  <h2 id="forests">Forests</h2>
+  <p>A forest is a <code>"forest"</code> block inside the terrain block, because the ground cover reads it to lay leaf
+    litter under the canopy. <code>placeForest</code> evaluates a density field on a jittered grid at the stand
+    spacing. The density is a product of factors from the ground: stands and clearings (a slow noise), soil and scree
+    from the terrain maps, the shore, a wandering treeline, slope, and the cover's rock, sand and snow. The test that
+    rejects a point with no ground runs first, which is part of why 743k trees placed in 2.5 s (ADR-0129). The species
+    at each point is picked by altitude band and weight, with a patchy noise per species so stands form instead of a
+    random mix.</p>
+  <div class="grid">
+    <div class="b"><h3>Regions (ADR-0203)</h3><p>A ragged disc that reweights species and lets the ones it names grow
+      lower than their usual band. The first is a spruce and pine wood in the foothills east of Saltwood.</p></div>
+    <div class="b"><h3>The census (ADR-0203)</h3><p><code>[forest] census:</code> in the load log, plus
+      <code>RT_FOREST_DUMP</code> and <code>RT_FOREST_WHY</code>. Before regions, oak, maple and beech were 97% of about
+      200k canopy trees: above 200 m the island is crag.</p></div>
+    <div class="b"><h3>Stands by density (ADR-0200)</h3><p><code>formByDensity</code> grows each species both ways. A tree
+      takes the stand form as the forest thickens around it (0.30 → 0.65), so a lone tree in a meadow is not a
+      lollipop.</p></div>
+    <div class="b"><h3>Mixed with real_tree (ADR-0216)</h3><p><code>"recipes": 0.5</code>: each kind keeps every tree
+      where it stood, and a recipe twin takes that share in groves about 50 m across. The test measured 0 trees moved
+      and shares of 0.41/0.40/0.39 against 0.4 asked.</p></div>
+  </div>
+  <figure class="shot">
+    <img src="img/trees/island-recipe-trees.webp" alt="Recipe oaks and red maples in tall grass on the island, mountains behind, sun to the upper left">
+    <figcaption>Recipe oaks and maples on island_8_nature (2026-10-19).</figcaption>
+  </figure>
+
+  <h2>The tree cache</h2>
+  <p>Growing is slow. The mature oak takes about 7.5 s per variant, and the island's recipe forest took 107 s to grow.
+    <code>tree_cache.h</code> writes a species' variants, all their levels (meshes packed by the bundle codecs, atlases,
+    bands and limbs), to one file under <code>cache/trees</code>. With the cache the forest loads in 46 s
+    (ADR-0198).</p>
+  <div class="code">
+    <div class="hd"><span>The cache key covers everything that grows a species</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/engine/procgen/tree_cache.h#L20-L30">src/engine/procgen/tree_cache.h</a></div>
+<pre><span class="k">constexpr</span> <span class="t">uint32_t</span> kTreeCacheVersion = <span class="n">1</span>;   <span class="c">// bump when the growers change between commits</span>
+
+<span class="c">// The key: the recipe file (its path, hashed by content), what the loader asks for. 0: no cache (RT_TREE_CACHE=0, or</span>
+<span class="c">// the file unreadable).</span>
+<span class="t">uint64_t</span> recipeSpeciesKey(<span class="k">const</span> <span class="t">std::string</span>&amp; recipeFile, <span class="k">const</span> <span class="t">std::string</span>&amp; recipe, <span class="k">const</span> <span class="t">std::string</span>&amp; age,
+                          <span class="k">const</span> <span class="t">std::vector</span>&lt;<span class="t">uint32_t</span>&gt;&amp; seeds, <span class="k">const</span> <span class="t">RecipeLodBands</span>&amp; bands);
+<span class="t">std::string</span> treeCacheDir();   <span class="c">// cache/trees (RT_TREE_CACHE_DIR)</span>
+
+<span class="c">// Read / write a species' variants' levels. Read: false (and `out` untouched) on a miss or a file it cannot read.</span>
+<span class="t">bool</span> loadRecipeSpecies(<span class="t">uint64_t</span> key, <span class="t">std::vector</span>&lt;<span class="t">std::vector</span>&lt;<span class="t">RecipeTreeLevel</span>&gt;&gt;&amp; out);
+<span class="t">bool</span> saveRecipeSpecies(<span class="t">uint64_t</span> key, <span class="k">const</span> <span class="t">std::vector</span>&lt;<span class="t">std::vector</span>&lt;<span class="t">RecipeTreeLevel</span>&gt;&gt;&amp; variants);</pre>
+  </div>
+  <p>The key also folds in the engine's build identity (<code>bundle::engineIdentity().version</code>, which ADR-0198
+    describes as the build's git describe), so every commit is a new key and a changed grower never serves an
+    old tree. The trade-off is that any commit invalidates the whole cache. A write prunes the least recently used
+    files beyond <code>RT_TREE_CACHE_MAX_GB</code> (default 4). The forest's age and form for each variant go into the
+    <code>age</code> string.</p>
+
+  <h2>City trees</h2>
+  <p>Street trees and park trees can also be recipes (ADR-0200). <code>cityRecipeKits</code> grows a recipe at an age
+    with the city's bands, through the same <code>recipeTreeParts</code> path the forest uses, and from the same tree
+    cache. Street trees use the oak and beech at young age (about 10 m, three storeys), the maple and the coconut palm.
+    Parks get a mix. ADR-0201 filled out the young broadleaves, which had looked like tufts on bare forks, and
+    ADR-0218 added the royal palm and made the switch a level setting: <code>citysim.recipeTrees</code>, with
+    <code>RT_STREET_RECIPES=1/0</code> to override it for an A/B. Kinds with no recipe yet (monkeypod, poinciana,
+    jacaranda, plumeria) stay real_tree.</p>
+
+  <h2>Tools and labs</h2>
+  <ul>
+    <li><b>tree_lab.json</b>: rows of seeds per species, ages at z −110 (oak), −150 (spruce) and −195 (sakura). Entities
+      are <code>shape:"tree"</code> with <code>{"recipe", "seed", "age"}</code>. The recipe file hot-reloads.</li>
+    <li><b>recipe_forest.json</b>: a recipe-only forest for performance work. Measure with
+      <code>RT_GPU_TIMES=1 RT_VSYNC=0</code>, holding one pose.</li>
+    <li><b>scale_lab.json</b>: trees beside the city's buildings, cars and people.</li>
+    <li><b><code>tools/rt_trees OUT [variants]</code></b>: the real_tree gallery. It writes every real_tree species'
+      side and top impostor pictures and its foliage texture as raw RGBA, plus triangle counts in
+      <code>meta.txt</code>. It does not cover recipe trees.</li>
+  </ul>
+
+  <h2>Where to look</h2>
+  <ul class="files">
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/assets/scripts/tree_recipes.lua">assets/scripts/tree_recipes.lua</a> — every species, its ages, forms, cards and needles</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/procgen/tree_recipe.h">src/engine/procgen/tree_recipe.h</a> — TreeRecipe, TreeAge, agedRecipe, formedRecipe, growRecipeTree</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/scripting/tree_recipes_lua.cpp">src/engine/scripting/tree_recipes_lua.cpp</a> — the Lua reader</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/procgen/tree.h">src/engine/procgen/tree.h</a> / <a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/procgen/tree.cpp">tree.cpp</a> — TreeParams, TreeMesh, skinTree, the pipe model, gnarl, joints, trunk zone, colonizeCrown</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/procgen/skeleton.h">src/engine/procgen/skeleton.h</a>, <a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/procgen/lsystem.h">lsystem.h</a> — the turtle and the parametric L-system</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/procgen/branch_cards.h">src/engine/procgen/branch_cards.h</a> — sprig cards, twig segments, near leaves, needles</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/procgen/leaf_card.h">leaf_card.h</a>, <a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/procgen/foliage_kit.h">foliage_kit.h</a> — the card grammar; sprays, leaf kit, fronds, blades</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/procgen/tree_lods.h">src/engine/procgen/tree_lods.h</a> — growRecipeLevels and the bands</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/procgen/tree_cache.h">src/engine/procgen/tree_cache.h</a> — cache/trees</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/procgen/forest.h">src/engine/procgen/forest.h</a> — placement, species, regions, impostor cards</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/procgen/real_tree.h">src/engine/procgen/real_tree.h</a> — the hand-written growers, renderImpostorView, renderCardView</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/level_loader.cpp">src/engine/level_loader.cpp</a> — loadForest, recipeTreeParts, cityRecipeKits</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/tools/rt_trees.cpp">tools/rt_trees.cpp</a> — the real_tree gallery</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/tests/test_tree_recipe.cpp">tests/test_tree_recipe.cpp</a> — 24 cases, e.g. <code>a_card_trees_wood_is_held_to_budget_and_wears_its_sprigs</code>, <code>a_trees_trunk_zone_is_one_closed_surface</code>, <code>a_forests_levels_lighten_with_distance</code>; <a href="https://github.com/GlennSong/raytracer-clang/blob/main/tests/test_scatter.cpp">test_scatter.cpp</a> for impostor views, regions and the mixed forest</li>
+  </ul>
+  <table>
+    <tr><th>Switch</th><th>What it does</th></tr>
+    <tr><td><code>RT_FOREST_RECIPES=1 / 0.5 / 0</code></td><td>Grow a real_tree forest's kinds as recipes, a share of them, or none</td></tr>
+    <tr><td><code>RT_FOREST_RECIPE_AGE</code></td><td>Pin one age for a recipes forest</td></tr>
+    <tr><td><code>RT_STREET_RECIPES=1 / 0</code></td><td>City street and park trees as recipes (over <code>citysim.recipeTrees</code>)</td></tr>
+    <tr><td><code>RT_TREE_CACHE=0</code>, <code>RT_TREE_CACHE_MAX_GB</code>, <code>RT_TREE_CACHE_DIR</code></td><td>The tree cache</td></tr>
+    <tr><td><code>RT_IMPOSTOR_VIEWS=0</code>, <code>RT_IMPOSTOR_SELF_SHADOW=0</code>, <code>RT_IMPOSTOR_DUMP=path.png</code></td><td>Impostor A/Bs and the atlas dump</td></tr>
+    <tr><td><code>RT_FOREST_DUMP=path</code>, <code>RT_FOREST_WHY=1</code></td><td>Every tree as <code>x z alt species</code>; density factors per 100 m of altitude</td></tr>
+    <tr><td><code>RT_TREE_WIRE=dir</code>, <code>RT_JOINT_TREES=name:seed</code>, <code>RT_TIDY_DUMP</code></td><td>Test-side renders of joints, zones and skeletons</td></tr>
+    <tr><td><code>RT_CARD_ATLAS</code></td><td>Test-side: dump a branch-card atlas with a lit preview</td></tr>
+  </table>
+
+  <footer>Code excerpts from commit <code>47d587f3</code> (2026-10-26). Drawn from ADR-0029, 0030, 0033, 0129, 0130,
+    0181–0203, 0216, 0218.</footer>
+</div>
+</body>
+</html>

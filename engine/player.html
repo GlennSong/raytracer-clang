@@ -1,0 +1,1111 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Player Mobility — How the Engine Works</title>
+  <link rel="stylesheet" href="engine.css">
+</head>
+<body>
+<div class="wrap">
+  <div class="nav"><a href="index.html">← How the engine works</a> · <a href="../index.html">scenes</a></div>
+  <h1>Player mobility: the body, its modes and its moves</h1>
+  <p class="lede">The player is one Jolt capsule that walks, jumps, pulls up onto ledges, climbs, swims, glides, swings on a
+    rope, rides boards and bikes, and goes limp. Each of those is a <b>mode</b> in a small state machine that reads a
+    <b>PlayerIntent</b> (never the keys), moves the capsule through <code>PhysicsWorld</code>, and writes a
+    <b>PlayerPose</b>. Everything that draws, sounds or reacts to the body reads that pose.</p>
+
+  <figure class="shot">
+    <img src="img/player/climb_tower.webp" alt="Third-person view of the block-bodied player in a red shirt climbing the glass face of a downtown tower, the street far below">
+    <figcaption>Free-climbing a downtown tower in third person. The capsule holds the wall in ClimbMode, and the drawn
+      body is the ten-part block body reaching for the holds the mode puts in the pose. (Glenn's shot, 2026-10-24.)</figcaption>
+  </figure>
+
+  <h2>The problem</h2>
+  <p>A walking controller is easy: a capsule, a desired horizontal velocity, gravity. The trouble starts with everything
+    else Glenn asked for in October 2026: a jump that doesn't get stuck on rock, ledges you can pull up onto, walls you can
+    climb "like Breath of the Wild", water that holds you up, a parachute and a wingsuit, a Spider-Man grapple, boards,
+    bikes, ragdolls, a watch on your wrist. Each move has its own physics, its own way in and out, and its own look.
+    Each one also has to crash in a way that agrees with the others.</p>
+  <p>Until <a href="#history">late October</a> all of this lived in <code>PlayerSystem</code>: 1906 lines, one
+    ~470-line <code>fixedUpdate</code> running ten modes in a fixed order over ~100 shared members, with every mode
+    reading the keys itself (<a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/docs/decisions.md#L12116">ADR-0246</a>). The current shape separates four things:</p>
+  <ul>
+    <li><b>what the player wants</b> (<code>PlayerIntent</code>, filled from the input map once a fixed step);</li>
+    <li><b>what the body is doing</b> (<code>PlayerBody</code>: one <code>BodyMode</code> object per way of moving);</li>
+    <li><b>what the hands hold</b> (<code>PlayerHands</code>: the tool slot, the grapple's hook and rope);</li>
+    <li><b>what it looks like</b> (<code>PlayerPose</code>, read by the body, arms, sound, particle and watch systems).</li>
+  </ul>
+
+  <h2>One step, end to end</h2>
+  <div class="diagram">
+    <svg viewBox="0 0 890 410" role="img" aria-label="Input map to PlayerSystem to PlayerIntent to PlayerBody step: interrupts, hands, leave, step, publish; step moves PhysicsWorld; publish writes PlayerPose, read by body, arms, audio, watch and particles">
+      <defs><marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" fill="#6f8fb0"/></marker></defs>
+      <g font-family="system-ui, sans-serif" font-size="13" text-anchor="middle">
+        <rect x="20" y="20" width="160" height="60" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="100" y="46" fill="#cfe4ff">InputMap</text>
+        <text x="100" y="65" fill="#93a6ba" font-size="11">keys, pad, layers</text>
+        <rect x="230" y="20" width="160" height="60" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="310" y="46" fill="#cfe4ff">PlayerSystem</text>
+        <text x="310" y="65" fill="#93a6ba" font-size="11">intent(), each fixed step</text>
+        <rect x="440" y="20" width="170" height="60" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="525" y="46" fill="#cfe4ff">PlayerIntent</text>
+        <text x="525" y="65" fill="#93a6ba" font-size="11">stick, held, one-shots, view</text>
+        <rect x="660" y="20" width="200" height="60" rx="9" fill="#131a24" stroke="#3b82f6"/>
+        <text x="760" y="46" fill="#cfe4ff">PlayerBody::step</text>
+        <text x="760" y="65" fill="#93a6ba" font-size="11">the state machine</text>
+        <line x1="180" y1="50" x2="226" y2="50" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar)"/>
+        <line x1="390" y1="50" x2="436" y2="50" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar)"/>
+        <line x1="610" y1="50" x2="656" y2="50" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar)"/>
+        <line x1="760" y1="80" x2="760" y2="104" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar)"/>
+        <rect x="10" y="108" width="866" height="92" rx="10" fill="none" stroke="#2c3d50" stroke-dasharray="5 4"/>
+        <text x="20" y="124" fill="#93a6ba" font-size="11" text-anchor="start">one fixed step (60 Hz), in this order</text>
+        <rect x="20" y="132" width="156" height="56" rx="8" fill="#131a24" stroke="#2c3d50"/>
+        <text x="98" y="155" fill="#cfe4ff">1 interrupts</text>
+        <text x="98" y="174" fill="#93a6ba" font-size="11">ladder, water, teleport, limp</text>
+        <rect x="191" y="132" width="156" height="56" rx="8" fill="#131a24" stroke="#2c3d50"/>
+        <text x="269" y="155" fill="#cfe4ff">2 hands</text>
+        <text x="269" y="174" fill="#93a6ba" font-size="11">grapple aim + fire</text>
+        <rect x="362" y="132" width="156" height="56" rx="8" fill="#131a24" stroke="#e6c07b"/>
+        <text x="440" y="155" fill="#cfe4ff">3 mode.leave()</text>
+        <text x="440" y="174" fill="#93a6ba" font-size="11">ways out before the step</text>
+        <rect x="533" y="132" width="156" height="56" rx="8" fill="#131a24" stroke="#e6c07b"/>
+        <text x="611" y="155" fill="#cfe4ff">4 mode.step()</text>
+        <text x="611" y="174" fill="#93a6ba" font-size="11">move; may enter() another</text>
+        <rect x="704" y="132" width="156" height="56" rx="8" fill="#131a24" stroke="#2c3d50"/>
+        <text x="782" y="155" fill="#cfe4ff">5 publish()</text>
+        <text x="782" y="174" fill="#93a6ba" font-size="11">hook, effects, pose</text>
+        <line x1="176" y1="160" x2="189" y2="160" stroke="#6f8fb0" stroke-width="1.4" marker-end="url(#ar)"/>
+        <line x1="347" y1="160" x2="360" y2="160" stroke="#6f8fb0" stroke-width="1.4" marker-end="url(#ar)"/>
+        <line x1="518" y1="160" x2="531" y2="160" stroke="#6f8fb0" stroke-width="1.4" marker-end="url(#ar)"/>
+        <line x1="689" y1="160" x2="702" y2="160" stroke="#6f8fb0" stroke-width="1.4" marker-end="url(#ar)"/>
+        <rect x="533" y="232" width="156" height="58" rx="8" fill="#131a24" stroke="#2c3d50"/>
+        <text x="611" y="256" fill="#cfe4ff">PhysicsWorld</text>
+        <text x="611" y="275" fill="#93a6ba" font-size="11">Jolt CharacterVirtual</text>
+        <line x1="611" y1="190" x2="611" y2="228" stroke="#6f8fb0" stroke-width="1.6" marker-start="url(#ar)" marker-end="url(#ar)"/>
+        <rect x="704" y="232" width="156" height="58" rx="8" fill="#131a24" stroke="#3b82f6"/>
+        <text x="782" y="256" fill="#cfe4ff">PlayerPose</text>
+        <text x="782" y="275" fill="#93a6ba" font-size="11">component, read-only</text>
+        <line x1="782" y1="190" x2="782" y2="228" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar)"/>
+        <rect x="20" y="332" width="160" height="58" rx="8" fill="#131a24" stroke="#2c3d50"/>
+        <text x="100" y="356" fill="#cfe4ff">PlayerBodySystem</text>
+        <text x="100" y="375" fill="#93a6ba" font-size="11">third-person body</text>
+        <rect x="193" y="332" width="160" height="58" rx="8" fill="#131a24" stroke="#2c3d50"/>
+        <text x="273" y="356" fill="#cfe4ff">PlayerArmsSystem</text>
+        <text x="273" y="375" fill="#93a6ba" font-size="11">first-person arms, rope</text>
+        <rect x="366" y="332" width="160" height="58" rx="8" fill="#131a24" stroke="#2c3d50"/>
+        <text x="446" y="356" fill="#cfe4ff">MotionAudioSystem</text>
+        <text x="446" y="375" fill="#93a6ba" font-size="11">sounds by counters</text>
+        <rect x="539" y="332" width="160" height="58" rx="8" fill="#131a24" stroke="#2c3d50"/>
+        <text x="619" y="356" fill="#cfe4ff">Watch, light, gun</text>
+        <text x="619" y="375" fill="#93a6ba" font-size="11">handsFree, tool</text>
+        <rect x="712" y="332" width="160" height="58" rx="8" fill="#131a24" stroke="#2c3d50"/>
+        <text x="792" y="356" fill="#cfe4ff">ParticleSystem</text>
+        <text x="792" y="375" fill="#93a6ba" font-size="11">bursts by name</text>
+        <path d="M760,290 L100,328" stroke="#6f8fb0" stroke-width="1.3" fill="none" marker-end="url(#ar)"/>
+        <path d="M770,290 L273,328" stroke="#6f8fb0" stroke-width="1.3" fill="none" marker-end="url(#ar)"/>
+        <path d="M780,290 L446,328" stroke="#6f8fb0" stroke-width="1.3" fill="none" marker-end="url(#ar)"/>
+        <path d="M790,290 L619,328" stroke="#6f8fb0" stroke-width="1.3" fill="none" marker-end="url(#ar)"/>
+        <path d="M862,160 L880,160 L880,326" stroke="#e6c07b" stroke-width="1.3" stroke-dasharray="4 3" fill="none" marker-end="url(#ar)"/>
+        <text x="40" y="220" fill="#93a6ba" font-size="11" text-anchor="start">a seated, riding or driving player skips the body step:</text>
+        <text x="40" y="236" fill="#93a6ba" font-size="11" text-anchor="start">VehicleSystem or a carrier owns the capsule then</text>
+      </g>
+    </svg>
+  </div>
+  <p class="cap">The fixed step. The input map feeds an intent; <code>PlayerBody::step</code> runs the interrupts, the
+    hands, the current mode's ways out and its step, then publishes the pose. The modes move the capsule through
+    <code>PhysicsWorld</code>. Particles are requested by name from <code>PlayerBody::effects</code> inside
+    <code>publish()</code> (dashed); the rest read the pose.</p>
+
+  <h2>The capsule behind PhysicsWorld</h2>
+  <p>The body is a Jolt <b>CharacterVirtual</b>: a kinematic capsule moved by collide-and-slide, not a simulated rigid
+    body, so it steps up kerbs and stairs instead of bouncing off them. Since <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/docs/decisions.md#L457">ADR-0012</a> the engine never sees a
+    <code>JPH::</code> type; <code>PhysicsWorld</code> is a pimpl handing out opaque ids (<code>CharacterId</code>). The
+    player capsule is half-height 0.6 plus radius 0.3 (1.8 m), with the eye 0.7 above its centre (1.6 m)
+    (<a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/docs/decisions.md#L11834">ADR-0239</a>; it was 1.4 m before, and the third-person body made the player look like "a child next to the other
+    agents").</p>
+  <p>There are two ways to move it, and the modes pick one:</p>
+  <ul>
+    <li><code>moveCharacter</code>: the caller gives a <b>horizontal</b> velocity; physics owns the vertical axis
+      (gravity, sticking to the floor on the way down a kerb, the ground's own velocity in a lift). Walking and boarding.</li>
+    <li><code>moveCharacterFree</code>: the caller owns all three axes, no gravity, no floor-stick. Swimming, climbing,
+      ladders, the mantle path, gliding and the rope, where the mode computes the whole velocity itself.</li>
+  </ul>
+  <p>A jump can't be a velocity passed in, because <code>moveCharacter</code> zeroes vertical speed on the ground. It is
+    <i>staged</i> and spent by the next move:</p>
+  <div class="code">
+    <div class="hd"><span>jumpCharacter (strict) and launchCharacter (ungated): the player uses the second</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/engine/physics/physics_world.cpp#L611-L627">src/engine/physics/physics_world.cpp</a></div>
+<pre>bool PhysicsWorld::jumpCharacter(CharacterId id, Real speed) {
+    if (!impl || id &gt;= impl-&gt;characters.size()) return false;
+    JPH::CharacterVirtual* ch = impl-&gt;characters[id].controller.GetPtr();
+    if (!ch || speed &lt;= 0.0) return false;
+    <span class="c">// Grounded only: the ground state is the whole gate, so no caller has to</span>
+    <span class="c">// track "am I allowed to jump" (and none can get it wrong).</span>
+    if (ch-&gt;GetGroundState() != JPH::CharacterBase::EGroundState::OnGround)
+        return false;
+    impl-&gt;characters[id].pendingJump = static_cast&lt;float&gt;(speed);
+    return true;
+}
+
+void PhysicsWorld::launchCharacter(CharacterId id, Real upSpeed) {
+    if (!impl || id &gt;= impl-&gt;characters.size() || upSpeed &lt;= 0.0) return;
+    if (!impl-&gt;characters[id].controller) return;
+    impl-&gt;characters[id].pendingJump = static_cast&lt;float&gt;(upSpeed);
+}</pre>
+  </div>
+  <p><code>jumpCharacter</code> refuses anything but <code>OnGround</code>. That was the "jump sometimes gets me stuck"
+    bug: on a slope over the 50° walkable limit Jolt says <code>OnSteepGround</code>, so every press was refused while
+    sliding on a rock face (measured, and pinned by the test <code>the_physics_jump_is_refused_on_steep_ground</code>).
+    The player now decides when a jump may happen in its own <code>JumpGate</code> and calls the ungated
+    <code>launchCharacter</code> (<a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/docs/decisions.md#L11541">ADR-0228</a>).</p>
+  <p>Other queries the modes use: <code>characterGroundState</code> (OnGround / OnSteepGround / NotSupported / InAir),
+    <code>characterGroundNormal</code>, <code>characterFitsAt</code> (a capsule overlap test: is there room to stand
+    there?), <code>setCharacterHeight</code> (crouch; standing up can be refused under a ledge),
+    <code>castRayHit</code> (point, normal, and whether the body is dynamic: a crate can't be climbed), and the ragdoll
+    calls <code>addRagdoll</code> / <code>ragdollPart</code> / <code>ragdollSpeed</code>.</p>
+
+  <h2>The intent: what the player wants this step</h2>
+  <div class="code">
+    <div class="hd"><span>PlayerIntent: the only input a mode ever sees</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/engine/player/player_intent.h#L15-L34">src/engine/player/player_intent.h</a></div>
+<pre>struct PlayerIntent {
+    bool active = false;          <span class="c">// the body is the player's (the camera rides it); false: the freecam has the keys</span>
+    Real forward = 0;             <span class="c">// the stick: forward (+) / back, -1..1 -- 0 while not active</span>
+    Real right = 0;               <span class="c">// ...right (+) / left</span>
+    bool run = false;             <span class="c">// the buttons as held (raw: a mode asks for `active` as well where it matters)</span>
+    bool jumpHeld = false;
+    bool crouchHeld = false;
+    <span class="c">// ONE-SHOTS staged by the frame (a press read in a fixed step would fire twice on a two-step frame). A mode that</span>
+    <span class="c">// spends one clears it; one nobody spends waits for the next step.</span>
+    bool jump = false;
+    bool limp = false;            <span class="c">// go limp (G, `ragdoll`)</span>
+    bool fire = false;            <span class="c">// the trigger's press, with the grapple in hand...</span>
+    bool fireHeld = false;        <span class="c">// ...and held (let go and the rope goes)</span>
+    Entity playTarget;            <span class="c">// E on the swing (playKind 1) or the monkey bars (2)</span>
+    uint64_t playKind = 0;
+    <span class="c">// THE VIEW: its eye and which way it looks (the fly camera, which is the heading in either view)</span>
+    Vec3 eye{0, 0, 0};
+    Vec3 look{0, 0, -1};
+    Vec3 lookRight{1, 0, 0};
+};</pre>
+  </div>
+  <p>Two details matter. <b>One-shots</b> (a jump press, G for limp, the trigger) are caught on the per-frame press
+    edge and handed to exactly one fixed step: reading a press inside a fixed step would fire twice on a frame that runs
+    two steps (a double-height jump). And a one-shot that no mode spent is handed back and waits for the next step:</p>
+  <div class="code">
+    <div class="hd"><span>PlayerSystem::fixedUpdate: fill the intent, step the body, keep what wasn't spent</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/engine/systems/player_system.cpp#L97-L121">src/engine/systems/player_system.cpp</a></div>
+<pre>void PlayerSystem::fixedUpdate(FrameContext&amp; ctx) {
+    const Real dt = ctx.clock.fixedStep();
+    body_.tune.load(ctx.settings);   <span class="c">// live: the panel and `set movement.&lt;key&gt; &lt;value&gt;` both write the settings</span>
+
+    ctx.world.each&lt;Transform, CharacterController, ControlledBy&gt;(
+        [&amp;](Entity e, Transform&amp; t, CharacterController&amp; cc, ControlledBy&amp;) {
+            playerEntity = e;
+            <span class="c">// Seated in a vehicle (ADR-0059): VehicleSystem owns the pose and the</span>
+            <span class="c">// chase camera owns the view, so on-foot movement is suppressed.</span>
+            if (ctx.world.has&lt;InVehicle&gt;(e)) return;
+            <span class="c">// A PASSENGER (a bus): the carrier owns the position every step.</span>
+            if (ctx.world.has&lt;Passenger&gt;(e)) return;
+            <span class="c">// SEATED on a piece of furniture (InteractionSystem): the body stays where it stood; the camera sits.</span>
+            if (ctx.world.has&lt;Seated&gt;(e)) return;
+            if (cc.characterId == INVALID_CHARACTER) return;
+            PlayerIntent in = intent(ctx);
+            BodyStep s{ctx.world, ctx.settings, e, t, cc, physicsSys.physicsWorld(), in, dt};
+            body_.step(s);
+            <span class="c">// what the step did not spend waits for the next</span>
+            jumpRequested = in.jump;
+            limpRequested_ = in.limp;
+            grappleFire_ = in.fire;
+            playTarget_ = in.playTarget;
+        });
+}</pre>
+  </div>
+  <p>Because nothing below this reads keys, anything that can fill a <code>PlayerIntent</code> drives the same modes:
+    a rebinding, a probe, the trace harness's scripted pad, and potentially a possessed agent or a replay.</p>
+
+  <h2 id="machine">The state machine</h2>
+  <p>A <b>BodyMode</b> is one way of moving, holding its own state (the climb's wall normal, the rope's length, the
+    board's heading). <code>PlayerBody</code> owns one instance of each and a pointer to the current one; changing mode
+    is <code>enter(m)</code>, which only swaps the pointer.</p>
+  <div class="diagram">
+    <svg viewBox="0 0 900 560" role="img" aria-label="The body modes and their transitions, with on foot at the centre">
+      <defs><marker id="ar2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" fill="#6f8fb0"/></marker>
+        <marker id="aw" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" fill="#e6c07b"/></marker></defs>
+      <g font-family="system-ui, sans-serif" font-size="13" text-anchor="middle">
+        <!-- links to and from on foot -->
+        <g stroke="#6f8fb0" stroke-width="1.5" fill="none">
+          <line x1="420" y1="245" x2="290" y2="89" marker-start="url(#ar2)" marker-end="url(#ar2)"/>
+          <line x1="450" y1="245" x2="450" y2="89" marker-start="url(#ar2)" marker-end="url(#ar2)"/>
+          <line x1="480" y1="245" x2="610" y2="89" marker-start="url(#ar2)" marker-end="url(#ar2)"/>
+          <line x1="380" y1="258" x2="164" y2="200" marker-start="url(#ar2)" marker-end="url(#ar2)"/>
+          <line x1="380" y1="270" x2="164" y2="300" marker-start="url(#ar2)" marker-end="url(#ar2)"/>
+          <line x1="380" y1="284" x2="164" y2="400" marker-start="url(#ar2)" marker-end="url(#ar2)"/>
+          <line x1="520" y1="258" x2="736" y2="200" marker-start="url(#ar2)" marker-end="url(#ar2)"/>
+          <line x1="520" y1="270" x2="736" y2="300" marker-start="url(#ar2)" marker-end="url(#ar2)"/>
+          <line x1="520" y1="284" x2="736" y2="400" marker-start="url(#ar2)" marker-end="url(#ar2)"/>
+          <line x1="425" y1="295" x2="325" y2="461" marker-start="url(#ar2)" marker-end="url(#ar2)"/>
+          <line x1="475" y1="295" x2="575" y2="461" marker-start="url(#ar2)" marker-end="url(#ar2)"/>
+          <!-- among the others -->
+          <line x1="70" y1="275" x2="70" y2="219" marker-end="url(#ar2)"/>
+          <line x1="380" y1="60" x2="334" y2="60" marker-end="url(#ar2)"/>
+          <line x1="520" y1="60" x2="566" y2="60" marker-end="url(#ar2)"/>
+          <path d="M680,85 C700,150 300,140 140,166" stroke-dasharray="5 4" marker-end="url(#ar2)"/>
+        </g>
+        <g stroke="#e6c07b" stroke-width="1.4" fill="none" stroke-dasharray="4 3">
+          <path d="M710,60 C905,60 900,470 674,489" marker-end="url(#aw)"/>
+        </g>
+        <!-- edge labels -->
+        <g font-size="11" fill="#93a6ba">
+          <text x="330" y="180" text-anchor="end">jump in the air, 4 m clear</text>
+          <text x="444" y="192" text-anchor="end">suit in hand</text>
+          <text x="560" y="150" text-anchor="start">hook bites</text>
+          <text x="262" y="212">ledge in reach</text>
+          <text x="262" y="276">push at a steep wall</text>
+          <text x="268" y="335" transform="rotate(-28 268 335)">Climbing (interrupt)</text>
+          <text x="620" y="205">board in hand, grounded</text>
+          <text x="628" y="276">E on a seat</text>
+          <text x="632" y="335" transform="rotate(28 632 335)">E under the bars</text>
+          <text x="368" y="374" transform="rotate(-59 368 374)">deep water (interrupt)</text>
+          <text x="532" y="374" transform="rotate(59 532 374)">impact, or G</text>
+          <text x="96" y="252" text-anchor="start">the top</text>
+          <text x="357" y="48">jump</text>
+          <text x="543" y="48">hook</text>
+          <text x="215" y="143" text-anchor="middle">reeled up to an edge</text>
+          <text x="897" y="250" fill="#e6c07b" text-anchor="end">impact()</text>
+        </g>
+        <!-- boxes -->
+        <rect x="380" y="245" width="140" height="50" rx="9" fill="#131a24" stroke="#3b82f6" stroke-width="2"/>
+        <text x="450" y="267" fill="#cfe4ff">OnFoot "walk"</text>
+        <text x="450" y="284" fill="#93a6ba" font-size="11">Ground · hands 2</text>
+        <rect x="190" y="35" width="140" height="50" rx="9" fill="#131a24" stroke="#8ec5ff"/>
+        <text x="260" y="57" fill="#cfe4ff">Parachute</text>
+        <text x="260" y="74" fill="#93a6ba" font-size="11">Air · GlideMode · 1</text>
+        <rect x="380" y="35" width="140" height="50" rx="9" fill="#131a24" stroke="#8ec5ff"/>
+        <text x="450" y="57" fill="#cfe4ff">Wingsuit</text>
+        <text x="450" y="74" fill="#93a6ba" font-size="11">Air · GlideMode · 0</text>
+        <rect x="570" y="35" width="140" height="50" rx="9" fill="#131a24" stroke="#8ec5ff"/>
+        <text x="640" y="57" fill="#cfe4ff">Grapple</text>
+        <text x="640" y="74" fill="#93a6ba" font-size="11">Air · rope · 1</text>
+        <rect x="20" y="170" width="140" height="48" rx="9" fill="#131a24" stroke="#e6c07b"/>
+        <text x="90" y="191" fill="#cfe4ff">Mantle</text>
+        <text x="90" y="208" fill="#93a6ba" font-size="11">Wall · pull-up · 0</text>
+        <rect x="20" y="276" width="140" height="48" rx="9" fill="#131a24" stroke="#e6c07b"/>
+        <text x="90" y="297" fill="#cfe4ff">Climb</text>
+        <text x="90" y="314" fill="#93a6ba" font-size="11">Wall · stamina · 0</text>
+        <rect x="20" y="380" width="140" height="48" rx="9" fill="#131a24" stroke="#e6c07b"/>
+        <text x="90" y="401" fill="#cfe4ff">Ladder</text>
+        <text x="90" y="418" fill="#93a6ba" font-size="11">Wall · 0</text>
+        <rect x="740" y="170" width="140" height="48" rx="9" fill="#131a24" stroke="#8fd8c8"/>
+        <text x="810" y="191" fill="#cfe4ff">Board</text>
+        <text x="810" y="208" fill="#93a6ba" font-size="11">Riding · 2 or 1</text>
+        <rect x="740" y="276" width="140" height="48" rx="9" fill="#131a24" stroke="#8fd8c8"/>
+        <text x="810" y="297" fill="#cfe4ff">Swing</text>
+        <text x="810" y="314" fill="#93a6ba" font-size="11">Play · 0</text>
+        <rect x="740" y="380" width="140" height="48" rx="9" fill="#131a24" stroke="#8fd8c8"/>
+        <text x="810" y="401" fill="#cfe4ff">Bars</text>
+        <text x="810" y="418" fill="#93a6ba" font-size="11">Play · 0</text>
+        <rect x="230" y="465" width="140" height="48" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="300" y="486" fill="#cfe4ff">Swim</text>
+        <text x="300" y="503" fill="#93a6ba" font-size="11">Water · 0</text>
+        <rect x="530" y="465" width="140" height="48" rx="9" fill="#131a24" stroke="#d7b4ff"/>
+        <text x="600" y="486" fill="#cfe4ff">Ragdoll</text>
+        <text x="600" y="503" fill="#93a6ba" font-size="11">Limp · 0 · gets up</text>
+        <text x="450" y="548" fill="#93a6ba" font-size="11">box: mode · BodyGroup · hands free. Every mode returns to OnFoot (double arrows); a teleport sends any mode but Swim there.</text>
+      </g>
+    </svg>
+  </div>
+  <p class="cap">The twelve mode objects (parachute and wingsuit are two instances of one <code>GlideMode</code>). Blue:
+    the air group, gold: the wall group, teal: riding and play. Solid arrows are <code>enter()</code> calls found in
+    <code>player_modes_foot.cpp</code> and <code>player_modes_gear.cpp</code>; the gold dashed line is the impact rule
+    sending a mode limp (on foot, the glides, the grapple and the board report to it). A hook can also bite under a
+    canopy (parachute to grapple), and a rope reeled up to an edge pulls up onto it (grapple to mantle, dashed). Interrupts (ladder, water, limp, teleport) are
+    checked over every mode before the mode runs.</p>
+
+  <div class="code">
+    <div class="hd"><span>BodyMode: what a mode must answer</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/engine/player/player_body.h#L48-L68">src/engine/player/player_body.h</a></div>
+<pre>class BodyMode {
+public:
+    virtual ~BodyMode() = default;
+    virtual const char* name(const PlayerBody&amp; b) const = 0;   <span class="c">// for `move?`</span>
+    virtual BodyGroup group() const = 0;
+    <span class="c">// The ways out taken before the step: b.enter() another mode and that one is stepped (and asked) next.</span>
+    virtual void leave(PlayerBody&amp;, BodyStep&amp;) {}
+    virtual void step(PlayerBody&amp; b, BodyStep&amp; s) = 0;
+    <span class="c">// What the pose says in this mode (the shared part is written first, by PlayerBody).</span>
+    virtual void pose(const PlayerBody&amp; b, const BodyStep&amp; s, PlayerPose&amp; p) const = 0;
+    <span class="c">// Hands free for something else: 2 both (the gun), 1 one (the watch), 0 none.</span>
+    virtual int handsFree(const PlayerBody&amp;) const { return 0; }
+    <span class="c">// Can the grapple be aimed and fired from here? (Not with both hands on a ledge, nor limp.)</span>
+    virtual bool canAim() const { return true; }
+    <span class="c">// Is the velocity worth publishing? (Hanging on a wall or a ledge the pose keeps the last one.)</span>
+    virtual bool movesFreely() const { return true; }
+    <span class="c">// THE IMPACT RULE's numbers for this mode (PlayerBody::impact): the speed it can lose in a step along `dir`</span>
+    <span class="c">// (unit, the way it meant to go) and stay up, and how it is thrown when it can't.</span>
+    virtual Real impactTolerance(const PlayerBody&amp; b, const Vec3&amp; dir) const;
+    virtual Vec3 thrown(const Vec3&amp; meant, const Vec3&amp; got, const Vec3&amp; dir) const;
+};</pre>
+  </div>
+  <p>Besides <code>step</code> and <code>pose</code>, a mode answers questions other code would otherwise have asked
+    with a switch over modes: how many hands are free (the gun, the watch and the light read it), whether the grapple can
+    be aimed from here, and the mode's numbers for the <a href="#impact">impact rule</a>. Each mode also names a
+    <code>BodyGroup</code> (Ground, Water, Wall, Air, Riding, Play, Limp), the parent in a hierarchy meant for rules over
+    a family; at this commit the groups are declared but no rule reads them yet (<a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/docs/decisions.md#L12116">ADR-0246</a>).</p>
+  <div class="code">
+    <div class="hd"><span>PlayerBody::step, the end: the hands, the ways out (up to four hops), the step</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/engine/player/player_body.cpp#L108-L120">src/engine/player/player_body.cpp</a></div>
+<pre>    regrab = std::max(Real(0), regrab - s.dt);
+    landed = std::max(Real(0), landed - s.dt * 3.0);
+    <span class="c">// THE HANDS: the grapple's aim, and a shot (not with both hands on a ledge)</span>
+    if (mode_-&gt;canAim()) hands.aimAndFire(*this, s);
+    <span class="c">// THE MODE: its ways out first (the mode they lead to steps this same step), then its step</span>
+    for (int hop = 0; hop &lt; 4; ++hop) {
+        const BodyMode* was = mode_;
+        mode_-&gt;leave(*this, s);
+        if (mode_ == was) break;
+    }
+    mode_-&gt;step(*this, s);
+    finish();
+}</pre>
+  </div>
+  <p><b>Why <code>leave()</code> runs before <code>step()</code>:</b> some exits must happen before the old mode moves
+    the body. On foot, sinking into deep water, pressing E at a swing, or holding a board on the ground hand over to
+    the new mode, and <i>that</i> mode steps this same step, so there is no frame of walking on water or of a walk cycle
+    under a skateboard. Exits that are consequences of the move (let go of the wall, landed the chute, slammed into a
+    wall) happen inside <code>step()</code> and take effect on the next step.</p>
+  <table>
+    <tr><th>Mode</th><th>How it moves the capsule</th><th>Ways in</th><th>Ways out</th></tr>
+    <tr><td>OnFoot</td><td><code>moveCharacter</code>, JumpGate, air momentum</td><td>default; every exit</td><td>see the diagram</td></tr>
+    <tr><td>Swim</td><td><code>moveCharacterFree</code>, buoyant spring</td><td>water deeper than 1.3 m at the feet</td><td>shallower than 1.05 m and touching; or 1 m clear of it</td></tr>
+    <tr><td>Ladder</td><td>free, along the rails</td><td>LadderSystem adds <code>Climbing</code></td><td>top, foot, jump</td></tr>
+    <tr><td>Mantle</td><td>free, along a precomputed path</td><td><code>tryMantle</code> (ground, air, wall top, rope)</td><td>done, or blocked by 0.35 m</td></tr>
+    <tr><td>Climb</td><td>free, in the wall's basis</td><td><code>tryGrab</code></td><td>crouch, kick, tired, foot of the wall, lost wall, top</td></tr>
+    <tr><td>Parachute / Wingsuit</td><td>free, <code>parachuteStep</code> / <code>wingsuitStep</code></td><td><code>tryDeploy</code></td><td>crouch cuts away; landing; impact; hook</td></tr>
+    <tr><td>Grapple</td><td>free, <code>ropeStep</code></td><td><code>attachRope</code> when the hook bites</td><td>let go of fire; ground with slack rope; mantle; impact</td></tr>
+    <tr><td>Board</td><td><code>moveCharacter</code>, <code>boardStep</code></td><td>skateboard/scooter in hand, on the ground</td><td>hand changes; bail (impact)</td></tr>
+    <tr><td>Swing / Bars</td><td><code>setCharacterPosition</code> on the seat / under the bar</td><td>E (the interact broker)</td><td>jump, crouch, off the end</td></tr>
+    <tr><td>Ragdoll</td><td>Jolt Ragdoll; capsule parked</td><td><code>goLimp</code></td><td>still 1.2 s, jump once slowed, water, fall net</td></tr>
+  </table>
+
+  <h2>On foot: the jump gate, ledges and walls</h2>
+  <p><code>OnFootMode::step</code> is a priority list. With jump pressed on the ground, a ledge in front wins over a hop
+    (a pull-up). Otherwise the <b>JumpGate</b> decides whether a press launches:</p>
+  <div class="code">
+    <div class="hd"><span>JumpGate::take: coyote time, steep ground, the wedge</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/engine/locomotion.cpp#L141-L154">src/engine/locomotion.cpp</a></div>
+<pre>JumpGate::Launch JumpGate::take(GroundState g, const Vec3&amp; groundNormal, const MovementTuning&amp; t, Real) {
+    Launch l;
+    if (buffered &lt;= 0 || sinceLaunch &lt; 0.25) return l;
+    const bool walkable = g == GroundState::OnGround || sinceGround &lt;= t.coyoteTime;
+    const bool steep = g == GroundState::OnSteepGround;
+    const bool wedge = g == GroundState::NotSupported &amp;&amp; wedged &gt;= t.wedgedTime;
+    if (!walkable &amp;&amp; !steep &amp;&amp; !wedge) return l;
+    l.go = true;
+    if (!walkable) l.push = flat(groundNormal) * t.steepPush;   <span class="c">// off the slope, not up it</span>
+    buffered = -1;
+    sinceLaunch = 0;
+    sinceGround = 1e9;
+    return l;
+}</pre>
+  </div>
+  <p>The gate accepts walkable ground or a moment after leaving it (<b>coyote time</b>, 0.12 s), steep ground (pushed
+    off it at <code>steepPush</code> 2.5 m/s rather than up it), and a <b>wedge</b> (touching, unsupported, not falling
+    for 0.15 s). A press up to 0.15 s before landing is <b>buffered</b>. Every jump leaves at full speed (4.3 m/s, 1.2×
+    when running) and letting go while rising cuts the rise to 0.4: a one-frame tap rises 0.19 m, held 0.91 m. Glenn
+    asked for "hop if it's a short tap"; a cut means the take-off never waits on the press (<a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/docs/decisions.md#L11773">ADR-0238</a>).</p>
+  <p>In the air the order continues: a <b>wall kick</b> (a wall within reach along the way you move, the way you face,
+    or either side; not the same wall twice), then <b>deploying</b> a chute or suit, then grabbing a <b>ledge</b> or a
+    climbable <b>wall</b> you push at. In the air the keys only nudge what the body left the ground with
+    (<code>airborneVelocity</code>, 8 m/s²).</p>
+  <ul>
+    <li><b>Ledges</b> (<code>findLedge</code>): level rays for a wall in reach, a ray down behind its face for the top, a
+      ray for floor a body's width in, then <code>characterFitsAt</code> for room on top and on the way up. From standing
+      a jump takes ledges up to 1.45 m; in the air, pushing at one, up to 2.1 m over the feet. <code>MantleMove</code>
+      is a path: rise level with the top at 3.2 m/s, then 0.2 s over.</li>
+    <li><b>Climbing</b>: any surface too steep to walk (normal y below 0.64) down to a slight overhang (−0.35), not a
+      dynamic body. The mode moves in the wall's basis, sticks at the chest with a ray each step, turns into inside
+      corners and reaches round outside ones, pulls up at the top, and drains <b>stamina</b> (12 s; 2 per lunge;
+      recovered on the ground).</li>
+  </ul>
+  <div class="note history"><p><b>Measured.</b> The stuck jump was not crevices or gaps (those settle OnGround); it was
+    every slope over 50°. The fall net (<code>FallRespawnTracker</code>, 40 m below the last footing) used to cut every
+    tower jump short; it now fires only when a ray finds nothing below at all, since it exists for falling through the
+    world, not off it (<a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/docs/decisions.md#L11541">ADR-0228</a>, <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/docs/decisions.md#L11579">ADR-0229</a>).</p></div>
+
+  <h2>Water: buoyancy as a spring</h2>
+  <p><code>SwimState</code> floats the body when the water is more than 1.3 m over the feet and lets it stand again
+    under 1.05 m. Vertically the swimmer is a damped spring with quadratic drag, so a plunge keeps its speed, goes under
+    and bobs back:</p>
+  <div class="code">
+    <div class="hd"><span>swimVerticalStep: buoyancy, damping, drag on a fast plunge</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/engine/locomotion.cpp#L257-L263">src/engine/locomotion.cpp</a></div>
+<pre>Real swimVerticalStep(Real vy, Real centreY, Real floatY, bool rise, bool dive, Real dt, const MovementTuning&amp; t) {
+    Real a = t.buoyancy * (floatY - centreY) - t.waterDamping * vy - t.waterDrag * vy * std::fabs(vy);
+    if (dive) a -= t.buoyancy * 1.2 + 4.0;    <span class="c">// kick down, against the float</span>
+    else if (rise) a += 6.0;                  <span class="c">// kick up: out past the float line, to look over a pool's edge</span>
+    const Real v = vy + a * dt;
+    return dive ? std::max(v, Real(-2.0)) : v;
+}</pre>
+  </div>
+  <p>Off the 6 m board the body's centre went 0.9 m below its float line and came back up past it once before settling
+    (<a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/docs/decisions.md#L11541">ADR-0228</a>). Horizontally the stroke surges with each arm's pull (<code>strokeSpeedScale</code>, averaging 1);
+    still, the body treads water upright, moving it tips into the crawl (<code>swimStroke</code>, eased). In
+    <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/docs/decisions.md#L12040">ADR-0244</a> a swimmer teleported out of a pool stayed "swimming" in the air, so the rule now also leaves the water
+    when it is a metre or more below.</p>
+  <figure class="shot">
+    <img src="img/player/splash.webp" alt="A splash of soft white glints rising from the surface of the movement lab's pool">
+    <figcaption>Into the pool: a splash burst sized by how fast the body went in (<code>splashVy_</code>), the
+      "splash" effect drawn with the glow sprite after <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/docs/decisions.md#L12040">ADR-0244</a>.</figcaption>
+  </figure>
+
+  <h2>In the air: parachute and wingsuit</h2>
+  <p>Gear lives in tool slots (parachute 4, wingsuit 5). With either in hand, jump in the air with at least 4 m clear
+    under the feet opens it (<code>tryDeploy</code>); in the wingsuit, jump opens its parachute; crouch cuts away. Both
+    are one <code>GlideMode</code> class integrating a shared <code>GlideFlight</code>.</p>
+  <ul>
+    <li><b>Parachute</b> (<code>parachuteStep</code>): the canopy turns toward where you look at up to 70°/s and eases
+      the velocity toward 8 m/s ahead and 4.5 down (W: 12/7; S flares to 4/2), filling over 0.7 s. Measured off the
+      72 m tower: 4.50 down, 8.00 ahead.</li>
+    <li><b>Wingsuit</b> (<code>wingsuitStep</code>): flown by the look, pitch held to −60…+25°.</li>
+  </ul>
+  <div class="code">
+    <div class="hd"><span>wingsuitStep: lift turns the velocity and does no work; turning costs induced drag</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/engine/locomotion.cpp#L304-L320">src/engine/locomotion.cpp</a></div>
+<pre>    if (speed &gt; 1e-4) {
+        <span class="c">// LIFT turns the way toward the facing without doing work, but it grows with the square of the speed:</span>
+        <span class="c">// at the stall speed it can just hold the body up (g), slower it can't, so a slow suit falls and a</span>
+        <span class="c">// fast one carves. What turning costs (induced drag) follows from how hard it turns.</span>
+        const Vec3 dir = out * (1.0 / speed);
+        const Real c = std::clamp(dot(dir, f), Real(-1), Real(1));
+        const Real angle = std::acos(c);
+        if (angle &gt; 1e-5 &amp;&amp; c &gt; -0.3) {
+            const Real liftMax = 9.81 * (speed / t.suitStallSpeed) * (speed / t.suitStallSpeed);
+            const Real phi = std::min(angle * (1.0 - std::exp(-dt * t.suitTurn)), liftMax * dt / speed);
+            const Vec3 perp = normalize(f - dir * c);
+            out = (dir * std::cos(phi) + perp * std::sin(phi)) * speed;
+            const Real lift = speed * phi / dt;   <span class="c">// the acceleration it took</span>
+            const Real induced = t.suitInducedDrag * lift * lift / (speed * speed);
+            out = out * std::max(Real(0), 1.0 - induced * dt / speed);
+        }
+    }</pre>
+  </div>
+  <div class="note history"><p><b>Three wrong wingsuits first</b> (<a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/docs/decisions.md#L11579">ADR-0229</a>): lift that converted gravity into
+    forward speed (83 m/s, energy from nothing); a constant induced drag (stuck at 6 m/s from rest); no induced drag (hung
+    in the air at 12 m/s pitched up). The model that held: lift only <i>rotates</i> the velocity, is capped by speed²
+    (it just holds you up at the 14 m/s stall), and costs k·lift²/v². Measured: 48 m/s at a 2.35:1 glide pitched 20°
+    down, 60 m/s at 35°; a pull-up gains ~40 m. Streaming kept up at 50 m/s over the island's towns
+    (<code>tools/fly_probe.py</code>: 0 of 88 facades late).</p></div>
+  <div class="shots">
+    <figure class="shot"><img src="img/player/parachute_city.webp" alt="The player under a red and white parachute canopy over a city of tall towers, seen from below">
+      <figcaption>Under the canopy over downtown: hands up on the toggles, the four lines to the shoulders in third person.</figcaption></figure>
+    <figure class="shot"><img src="img/player/chute_streaks.webp" alt="The player hanging from parachute lines against a grey sky with faint air streaks">
+      <figcaption>The streak emitter: 24 a second under a canopy, stretched against the flight (movement lab).</figcaption></figure>
+  </div>
+
+  <h2>The grapple and the rope</h2>
+  <p>The grapple is slot 6. Hold fire: the hook flies at 140 m/s to where it was aimed and bites if the trigger is still
+    held; let go and you fly on with what the swing gave. <code>findGrappleAnchor</code> takes the aim itself if it meets
+    something static 3–60 m away above the eye, else the best of two rings of eight rays within 9°, near the aim first.
+    That snap is what makes swinging easy: aimed 5° over a beam, it still catches the beam (<a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/docs/decisions.md#L11611">ADR-0230</a>).</p>
+  <p>The swing is <b>one exact constraint</b>, not a chain of bodies:</p>
+  <div class="code">
+    <div class="hd"><span>ropeStep (as a rod): put back on the sphere, the outward speed removed</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/engine/locomotion.cpp#L396-L408">src/engine/locomotion.cpp</a></div>
+<pre>    Vec3 next = pos + v * dt;
+    Vec3 out = next - anchor;
+    const Real d = out.length();
+    if (d &gt; length &amp;&amp; d &gt; 1e-6) {
+        <span class="c">// held on the sphere: the position projected back, the speed away from the anchor removed</span>
+        const Vec3 n = out * (1.0 / d);
+        next = anchor + n * length;
+        const Real away = dot(v, n);
+        if (away &gt; 0) v = v - n * away;
+    }
+    pos = next;
+    return v;
+}</pre>
+  </div>
+  <p>A rope pulls and never pushes, and it adds no energy: from level, the bottom of the swing is √(2gL) and the body
+    never climbs above where it began (tested, after the wingsuit's lesson). The mode then moves the capsule there with
+    <code>moveCharacterFree</code>, so walls take the speed off honestly. With <code>grappleStretch</code> &gt; 0 (2% by
+    default) the same function first applies a damped spring past the length, stepped implicitly, damping ratio
+    <code>grappleBounce</code> 0.4, never past 4× the stretch (<a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/docs/decisions.md#L11773">ADR-0238</a>).</p>
+  <p>The rope you <i>see</i> is separate: <code>RopeLine</code>, 24 Verlet points whose links pull but never push, with
+    long-range limits from both pinned ends and each point swept against the world so a slack rope lies over a ledge.
+    Jolt 5.5's soft bodies were considered, but their edge lengths are fixed when made and a grapple reels every step.
+    The pose carries the points; <code>PlayerArmsSystem</code> draws them from the hand.</p>
+  <div class="shots">
+    <figure class="shot"><img src="img/player/grapple.webp" alt="Third-person player hanging from a grapple line under a gantry beam, legs trailing, in a row of gantries">
+      <figcaption>On the rope in the lab's swing park (gantries every 14 m). The right arm reaches along the rope by IK;
+        the HUD's ring marks the next hook.</figcaption></figure>
+    <figure class="shot"><img src="img/player/swing.webp" alt="Third-person player sitting on a playground swing, legs out, in the movement lab">
+      <figcaption>The playground's swing (<a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/docs/decisions.md#L11752">ADR-0237</a>): a pendulum pumped with W/S, the hands on the chains by IK.</figcaption></figure>
+  </div>
+  <p><b>Hooked from the ground</b> was the hard case: a taut rope from standing gave nothing to swing. Now a hop and a
+    straight pull reel down to the length whose swing clears the ground, then the reel takes up slack until the body
+    swings outward and the rope catches it.</p>
+
+  <h2>Boards and the playground</h2>
+  <p>Slots 7 and 8 hold a skateboard and a scooter. With one in hand, standing on the ground <i>is</i> riding
+    (<code>BoardMode</code>, entered from <code>OnFootMode::leave</code>). <code>boardStep</code> carves at the tighter of
+    150°/s and the grip (7 m/s²) over the speed, so a fast board turns wide; W kicks (+1.8 m/s, one per 0.5 s, toward
+    8.5 m/s, the scooter 7); the slope pulls it downhill. Jump ollies at 3.8 m/s up. Measured on the lab's skate run:
+    5.9 m/s kicked on the deck, 9.1 m/s at the foot of the ramp (<a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/docs/decisions.md#L11684">ADR-0234</a>). The swing and the monkey bars
+    (<a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/docs/decisions.md#L11752">ADR-0237</a>) pin the capsule to a pendulum's seat or a point under the bar line; the city's playgrounds aren't wired
+    yet because their equipment is baked into the lot meshes.</p>
+
+  <h2 id="impact">The one impact rule</h2>
+  <p>Four modes used to decide a crash four ways: a landing over 15 m/s down, the rope losing 14 m/s in a step, a board
+    stopped short above 6.5 m/s, a wingsuit touching down over 20 m/s (a canopy never crashed). <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/docs/decisions.md#L12167">ADR-0247</a> made it one
+    rule: a mode reports the velocity it <b>meant</b> and the one the world let it <b>get</b>, and only the speed lost
+    <i>along the way it meant to go</i> counts.</p>
+  <div class="diagram">
+    <svg viewBox="0 0 640 210" role="img" aria-label="Vector picture of meant, got, kept along the way, and the loss">
+      <defs><marker id="ar3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" fill="#8ec5ff"/></marker>
+        <marker id="ar4" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" fill="#cfe4ff"/></marker></defs>
+      <g font-family="system-ui, sans-serif" font-size="13">
+        <circle cx="60" cy="170" r="4" fill="#cfe4ff"/>
+        <line x1="60" y1="170" x2="431" y2="22" stroke="#8ec5ff" stroke-width="2" marker-end="url(#ar3)"/>
+        <line x1="60" y1="170" x2="240" y2="150" stroke="#cfe4ff" stroke-width="2" marker-end="url(#ar4)"/>
+        <line x1="240" y1="150" x2="222" y2="105" stroke="#6f8fb0" stroke-dasharray="4 3"/>
+        <line x1="60" y1="170" x2="222" y2="105" stroke="#8fd8c8" stroke-width="5" opacity="0.6"/>
+        <line x1="222" y1="105" x2="431" y2="22" stroke="#e6c07b" stroke-width="5" opacity="0.8"/>
+        <text x="442" y="26" fill="#8ec5ff">meant (asked for)</text>
+        <text x="250" y="160" fill="#cfe4ff">got (what the world allowed)</text>
+        <text x="96" y="118" fill="#8fd8c8" font-size="12">kept along the way</text>
+        <text x="335" y="90" fill="#e6c07b" font-size="12">lost = |meant| − max(0, kept)</text>
+        <text x="300" y="196" fill="#93a6ba" font-size="12">speed turned aside (a skid, a shove off a corner) is not lost</text>
+      </g>
+    </svg>
+  </div>
+  <p class="cap">The rule in one picture. Past the current mode's <code>impactTolerance</code> the body goes limp.</p>
+  <div class="code">
+    <div class="hd"><span>speedLost: the rule itself, pure and tested</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/engine/player/body_rules.h#L99-L104">src/engine/player/body_rules.h</a></div>
+<pre>inline Real speedLost(const Vec3&amp; meant, const Vec3&amp; got) {
+    const Real m = std::sqrt(meant.x * meant.x + meant.y * meant.y + meant.z * meant.z);
+    if (m &lt; 1e-6) return 0;
+    const Real kept = (got.x * meant.x + got.y * meant.y + got.z * meant.z) / m;
+    return m - std::max(Real(0), kept);
+}</pre>
+  </div>
+  <div class="code">
+    <div class="hd"><span>PlayerBody::impact: one contact, not one step</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/engine/player/player_body.cpp#L274-L291">src/engine/player/player_body.cpp</a></div>
+<pre>bool PlayerBody::impact(BodyStep&amp; s, const Vec3&amp; meant, const Vec3&amp; got, const char* what) {
+    const Real m = meant.length();
+    if (m &lt; 1e-6) return false;
+    const Vec3 dir = meant * (1.0 / m);
+    <span class="c">// ONE CONTACT, NOT ONE STEP: a body that meets a wall part way through a step loses only that part, and the rest</span>
+    <span class="c">// the step after (a scooter at 7 m/s: 4.6, then 2.3 -- neither past 6.5). Losses in consecutive steps add up.</span>
+    constexpr Real kStillMoving = 0.5;   <span class="c">// m/s lost in a step that is not a contact</span>
+    const Real lost = speedLost(meant, got);
+    contactLoss_ = lost &gt; kStillMoving &amp;&amp; lastLossStep_ + 1 == steps_ ? contactLoss_ + lost : lost;
+    lastLossStep_ = lost &gt; kStillMoving ? steps_ : 0;
+    if (contactLoss_ &lt;= mode_-&gt;impactTolerance(*this, dir)) return false;
+    const Real total = contactLoss_;
+    contactLoss_ = 0;
+    char buf[96];
+    std::snprintf(buf, sizeof(buf), "%s at %.0f m/s", what, std::max(m, total));
+    goLimp(s, mode_-&gt;thrown(meant, got, dir), buf);
+    return true;
+}</pre>
+  </div>
+  <p>The "one contact" sum came from a trace: a scooter at 7 m/s hit a wall part way through a step and lost 4.6 m/s,
+    then 2.3 the next, so neither step alone passed 6.5. The defaults: tolerance <code>limpImpact</code> 14 m/s (about a
+    10 m fall), thrown at what was kept plus 0.3 of what was lost. A board going along uses <code>boardCrash</code> and
+    throws you over the front (0.7 × meant, +2.5 m/s up). A glide is judged against what a touchdown leaves (running on at
+    0.4 of the horizontal), not against the step's own motion: measured on the step, a 60° dive into the ground at 35 m/s
+    read as a landing.</p>
+
+  <h2>The drawn body: PlayerPose, BodyPose, ten parts</h2>
+  <p>Three structures sit between "the body is climbing" and pixels. <b>PlayerPose</b> is a component written once a
+    step: the mode, where the hands hold, cycles and phases, the rope's points, counters of things that happened, and
+    the ragdoll's part transforms. <b>BodyPose</b> is a person's posture: a position, an orientation and scale, a
+    direction and a fold (radians) per limb, and a neck turn. <b>BlockBody</b> is the ten boxes those become.</p>
+  <div class="diagram">
+    <svg viewBox="0 0 900 430" role="img" aria-label="PlayerPose fields feed BodyPose, which poseBlocks turns into ten part transforms; figure of the ten parts with their numbers">
+      <defs><marker id="ar5" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" fill="#6f8fb0"/></marker></defs>
+      <g font-family="system-ui, sans-serif" font-size="12">
+        <rect x="15" y="15" width="270" height="395" rx="10" fill="#131a24" stroke="#3b82f6"/>
+        <text x="30" y="38" fill="#cfe4ff" font-size="14">PlayerPose (component)</text>
+        <g fill="#93a6ba">
+          <text x="30" y="62">mode: Walk Air Mantle Climb Swim</text>
+          <text x="30" y="78">  Ladder Parachute Wingsuit Grapple</text>
+          <text x="30" y="94">  Ragdoll Board PlaySwing Bars</text>
+          <text x="30" y="110">  Drive Hidden</text>
+          <text x="30" y="136" fill="#cfe4ff">handL, handR, wallNormal</text>
+          <text x="30" y="154">speed, stride, velocity, airspeed</text>
+          <text x="30" y="172">climbCycle, swimPhase, swimStroke</text>
+          <text x="30" y="190">canopyHeading, canopyOpen</text>
+          <text x="30" y="208">rope[24], ropePoints, anchor</text>
+          <text x="30" y="226">board, boardHeading, kick</text>
+          <text x="30" y="252" fill="#e6c07b">counters: grabs, ollies, hookBites,</text>
+          <text x="30" y="268" fill="#e6c07b">  ropeSnaps, chuteOpens, boardLands</text>
+          <text x="30" y="294" fill="#cfe4ff">handsFree (0-2), tool</text>
+          <text x="30" y="320">Drive: seatLean, seatNod, steer, crank</text>
+          <text x="30" y="346" fill="#d7b4ff">ragdollPos[10], ragdollRot[10]</text>
+          <text x="30" y="380" font-size="11">written by PlayerBody::publish</text>
+          <text x="30" y="396" font-size="11">(Drive: VehicleSystem::stepSeat)</text>
+        </g>
+        <line x1="285" y1="130" x2="326" y2="130" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar5)"/>
+        <text x="306" y="120" fill="#93a6ba" font-size="10" text-anchor="middle">face,</text>
+        <text x="306" y="150" fill="#93a6ba" font-size="10" text-anchor="middle">reachTo</text>
+        <rect x="330" y="60" width="230" height="150" rx="10" fill="#131a24" stroke="#2c3d50"/>
+        <text x="345" y="84" fill="#cfe4ff" font-size="14">BodyPose</text>
+        <g fill="#93a6ba">
+          <text x="345" y="108">position, orientation, scale</text>
+          <text x="345" y="128">armL armR legL legR: unit dirs,</text>
+          <text x="345" y="144">  root to hand or foot (body frame)</text>
+          <text x="345" y="164">elbowL elbowR kneeL kneeR (rad)</text>
+          <text x="345" y="184">neck (Quat)</text>
+        </g>
+        <line x1="445" y1="210" x2="445" y2="246" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar5)"/>
+        <text x="452" y="232" fill="#93a6ba" font-size="11">solveLimb per limb</text>
+        <rect x="330" y="250" width="230" height="50" rx="10" fill="#131a24" stroke="#2c3d50"/>
+        <text x="445" y="271" fill="#cfe4ff" text-anchor="middle">poseBlocks() → PartTransform[10]</text>
+        <text x="445" y="289" fill="#93a6ba" font-size="11" text-anchor="middle">upper frame x = the hinge axis</text>
+        <line x1="400" y1="300" x2="400" y2="336" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar5)"/>
+        <line x1="500" y1="300" x2="500" y2="336" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar5)"/>
+        <rect x="330" y="340" width="110" height="60" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="385" y="364" fill="#cfe4ff" text-anchor="middle">BodyMeshes</text>
+        <text x="385" y="382" fill="#93a6ba" font-size="10.5" text-anchor="middle">tube per 2.5° fold</text>
+        <rect x="450" y="340" width="110" height="60" rx="9" fill="#131a24" stroke="#d7b4ff"/>
+        <text x="505" y="364" fill="#cfe4ff" text-anchor="middle">blockRagdoll</text>
+        <text x="505" y="382" fill="#93a6ba" font-size="10.5" text-anchor="middle">Jolt parts, 67 kg</text>
+        <!-- the figure: body frame, facing you (+x, the body's left, on your right) -->
+        <g stroke-width="1.5">
+          <rect x="714" y="44" width="52" height="52" fill="#131a24" stroke="#8ec5ff"/>
+          <rect x="696" y="100" width="88" height="120" fill="#131a24" stroke="#8ec5ff"/>
+          <rect x="786" y="110" width="24" height="62" fill="#131a24" stroke="#8ec5ff"/>
+          <rect x="670" y="110" width="24" height="62" fill="#131a24" stroke="#8ec5ff"/>
+          <rect x="786" y="172" width="24" height="62" fill="#131a24" stroke="#e6c07b"/>
+          <rect x="670" y="172" width="24" height="62" fill="#131a24" stroke="#e6c07b"/>
+          <rect x="746" y="220" width="34" height="86" fill="#131a24" stroke="#8ec5ff"/>
+          <rect x="700" y="220" width="34" height="86" fill="#131a24" stroke="#8ec5ff"/>
+          <rect x="746" y="306" width="34" height="84" fill="#131a24" stroke="#e6c07b"/>
+          <rect x="700" y="306" width="34" height="84" fill="#131a24" stroke="#e6c07b"/>
+        </g>
+        <g fill="#cfe4ff">
+          <circle cx="740" cy="96" r="3"/><circle cx="798" cy="110" r="3"/><circle cx="682" cy="110" r="3"/>
+          <circle cx="798" cy="172" r="3"/><circle cx="682" cy="172" r="3"/><circle cx="763" cy="220" r="3"/>
+          <circle cx="717" cy="220" r="3"/><circle cx="763" cy="306" r="3"/><circle cx="717" cy="306" r="3"/>
+        </g>
+        <g font-size="11.5" fill="#cfe4ff">
+          <text x="740" y="74" text-anchor="middle">1 Head</text>
+          <text x="740" y="165" text-anchor="middle">0 Torso</text>
+          <text x="816" y="145">2 ArmL</text>
+          <text x="816" y="208">6 ForearmL</text>
+          <text x="664" y="145" text-anchor="end">3 ArmR</text>
+          <text x="664" y="208" text-anchor="end">7 ForearmR</text>
+          <text x="788" y="268">4 LegL</text>
+          <text x="788" y="352">8 ShinL</text>
+          <text x="692" y="268" text-anchor="end">5 LegR</text>
+          <text x="692" y="352" text-anchor="end">9 ShinR</text>
+        </g>
+        <text x="740" y="410" fill="#93a6ba" font-size="11" text-anchor="middle">body frame, facing you: +y up, +z toward you,</text>
+        <text x="740" y="425" fill="#93a6ba" font-size="11" text-anchor="middle">+x the body's left. Gold: lower halves (+4).</text>
+      </g>
+    </svg>
+  </div>
+  <p class="cap">From pose to blocks. <code>PlayerBodySystem</code> turns the PlayerPose into a BodyPose (which way to
+    face, a lean, hands put on holds by IK); <code>poseBlocks</code> solves each limb; the result is drawn (torso and
+    head as boxes, each limb one skinned tube) or handed to Jolt as a ragdoll. Dots are the joints; the figure is drawn
+    to scale from <code>BlockBody::parts()</code>.</p>
+  <div class="code">
+    <div class="hd"><span>BlockBody::parts(): the 1.8 m person, each limb cut at the elbow or knee</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/engine/block_body.cpp#L10-L27">src/engine/block_body.cpp</a></div>
+<pre>const std::array&lt;BlockBody::PartSpec, BlockBody::kParts&gt;&amp; BlockBody::parts() {
+    <span class="c">// procgen/person.cpp's blocks: legs from the hips (y -0.05), arms from the shoulders (y 0.50), the head on the</span>
+    <span class="c">// neck (y 0.57), the torso up from the pelvis. Each limb is its old block cut in two: the arm's 0.62 m at the</span>
+    <span class="c">// elbow (0.31 + 0.31), the leg's 0.85 m at the knee (0.43 thigh + 0.42 shin).</span>
+    static const std::array&lt;PartSpec, kParts&gt; p = {{
+        {Vec3(0.44, 0.60, 0.26), Vec3(0, -0.05, 0), Vec3(0, 0.30, 0), -1},             <span class="c">// torso</span>
+        {Vec3(0.26, 0.26, 0.26), Vec3(0, 0.57, 0), Vec3(0, 0.13, 0), Torso},           <span class="c">// head</span>
+        {Vec3(0.12, 0.31, 0.16), Vec3(0.29, 0.50, 0), Vec3(0, -0.155, 0), Torso},      <span class="c">// left upper arm (+x)</span>
+        {Vec3(0.12, 0.31, 0.16), Vec3(-0.29, 0.50, 0), Vec3(0, -0.155, 0), Torso},     <span class="c">// right upper arm</span>
+        {Vec3(0.17, 0.43, 0.22), Vec3(0.115, -0.05, 0), Vec3(0, -0.215, 0), Torso},    <span class="c">// left thigh</span>
+        {Vec3(0.17, 0.43, 0.22), Vec3(-0.115, -0.05, 0), Vec3(0, -0.215, 0), Torso},   <span class="c">// right thigh</span>
+        {Vec3(0.12, 0.31, 0.16), Vec3(0.29, 0.19, 0), Vec3(0, -0.155, 0), ArmL},       <span class="c">// left forearm, from the elbow</span>
+        {Vec3(0.12, 0.31, 0.16), Vec3(-0.29, 0.19, 0), Vec3(0, -0.155, 0), ArmR},      <span class="c">// right forearm</span>
+        {Vec3(0.17, 0.42, 0.22), Vec3(0.115, -0.48, 0), Vec3(0, -0.21, 0), LegL},      <span class="c">// left shin, from the knee</span>
+        {Vec3(0.17, 0.42, 0.22), Vec3(-0.115, -0.48, 0), Vec3(0, -0.21, 0), LegR},     <span class="c">// right shin</span>
+    }};
+    return p;
+}</pre>
+  </div>
+  <div class="code">
+    <div class="hd"><span>BodyPose: a direction and a fold per limb</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/engine/block_body.h#L48-L59">src/engine/block_body.h</a></div>
+<pre>struct BodyPose {
+    Vec3 position;                 <span class="c">// the capsule centre (world)</span>
+    Quat orientation;              <span class="c">// the body's facing and lean</span>
+    Real scale = 1;                <span class="c">// (capsule half height + radius) / 0.9</span>
+    Vec3 armL{0, -1, 0}, armR{0, -1, 0}, legL{0, -1, 0}, legR{0, -1, 0};
+    Real elbowL = 0, elbowR = 0, kneeL = 0, kneeR = 0;
+    Quat neck = Quat::identity();  <span class="c">// the head turned on the neck (body frame): a nod, a snap in a crash</span>
+    Vec3&amp; dir(int limb) { return limb == 0 ? armL : limb == 1 ? armR : limb == 2 ? legL : legR; }
+    const Vec3&amp; dir(int limb) const { return limb == 0 ? armL : limb == 1 ? armR : limb == 2 ? legL : legR; }
+    Real&amp; bend(int limb) { return limb == 0 ? elbowL : limb == 1 ? elbowR : limb == 2 ? kneeL : kneeR; }
+    Real bend(int limb) const { return limb == 0 ? elbowL : limb == 1 ? elbowR : limb == 2 ? kneeL : kneeR; }
+};</pre>
+  </div>
+  <p>A limb's direction is the way from its shoulder or hip to its hand or foot; the fold is the elbow's or knee's.
+    <code>solveLimb</code> is the two-bone solve (law of cosines at the root, the joint pointing toward a <b>pole</b>:
+    kneecaps forward, the point of the elbow back). <code>reachTo</code> is the inverse, two-bone IK:</p>
+  <div class="code">
+    <div class="hd"><span>reachTo: aim the limb at a world point and fold it to make the distance</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/engine/block_body.cpp#L186-L196">src/engine/block_body.cpp</a></div>
+<pre>void reachTo(BodyPose&amp; pose, BlockBody::Part limb, const Vec3&amp; world) {
+    const int k = limb - BlockBody::ArmL;
+    if (k &lt; 0 || k &gt;= BlockBody::kLimbs) return;
+    const BlockBody::PartSpec&amp; p = BlockBody::parts()[static_cast&lt;std::size_t&gt;(limb)];
+    const Vec3 joint = pose.position + pose.orientation.rotate(p.joint * pose.scale);
+    pose.dir(k) = reachToward(pose, limb, world);
+    const Real a = partLength(limb) * pose.scale, b = partLength(BlockBody::lower(k)) * pose.scale;
+    const Real c = std::clamp((world - joint).length(), std::fabs(a - b) + 1e-4, a + b);
+    <span class="c">// the fold that makes the halves span c: c^2 = a^2 + b^2 + 2ab cos(bend)</span>
+    pose.bend(k) = std::acos(std::clamp((c * c - a * a - b * b) / (2 * a * b), Real(-1), Real(1)));
+}</pre>
+  </div>
+  <p>Each upper half's frame has its x along the hinge axis and the lower half is that frame turned about x by the fold.
+    So a ragdoll's fold reads straight back from physics (<code>foldOf</code>), and the skin can bend about one axis.
+    <code>skinnedLimb</code> draws a limb as one tube with nine rings round the joint, each ring <i>rotated</i> about
+    the hinge by its smoothstepped share of the fold. For a one-axis joint that is what dual-quaternion skinning does:
+    rotating instead of blending corners keeps the joint's thickness instead of pinching it (the "candy wrapper").
+    Topology is fixed for every fold, and <code>BodyMeshes</code> keeps one tube per 2.5° of fold, made on first use
+    (<a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/docs/decisions.md#L12063">ADR-0245</a>).</p>
+  <div class="shots">
+    <figure class="shot"><img src="img/player/air_knees.webp" alt="The red-shirted player in the air in third person with knees bent, over the movement lab's checkered floor">
+      <figcaption>In the air in third person the player is still the walker mesh (<code>drawnAsBlocks</code> is false for Walk and Air), which since <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/docs/decisions.md#L12063">ADR-0245</a> strides and jumps with bent knees.</figcaption></figure>
+    <figure class="shot"><img src="img/player/limp.webp" alt="The player's ragdoll lying in a heap on the checkered floor between yellow blocks">
+      <figcaption>Limp: the same ten blocks as Jolt bodies, landing with partial folds.</figcaption></figure>
+  </div>
+  <p>Not everything uses this body. Walking and falling in third person are still the walker mesh and its walk cycle
+    (citysim's <code>CityPlayerBodySystem</code>; <code>drawnAsBlocks</code> decides), first person draws its own box
+    arms (<code>PlayerArmsSystem</code>), and the far crowd keeps the six-block <code>buildStandingPerson</code> (144
+    vertices, so the 515k-agent crowd costs what it did).</p>
+
+  <h2>Ragdolls</h2>
+  <p><code>goLimp</code> builds a BodyPose where the capsule is, calls <code>blockRagdoll</code> and
+    <code>PhysicsWorld::addRagdoll</code> (Jolt's Ragdoll), and enters RagdollMode. The parts are 67 kg (torso 30), joined
+    by swing-twist joints at the neck (35°), shoulders (85°) and hips (60°), and by <b>hinges</b> at the elbows and knees
+    that fold one way only, up to 143° and 149°. Hinge friction (elbow 1.5, knee 5 N·m) is required: without it every
+    joint of a thrown body folded fully shut, measured (<a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/docs/decisions.md#L11650">ADR-0232</a>, <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/docs/decisions.md#L12063">ADR-0245</a>). While limp the view goes outside;
+    the body gets up after 1.2 s lying still, on jump once slowed, or at once in water, with the capsule stood over the
+    torso and lifted until <code>characterFitsAt</code> says it fits.</p>
+  <p>Townspeople get the same ragdoll (<a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/docs/decisions.md#L11667">ADR-0233</a>): <code>WalkerRagdolls</code> in citysim throws a walker hit by a
+    car at 0.8× the car's speed plus a lift. The cost is bounded twice: only walkers with a physical body can be hit, and
+    at most six are limp at once (a seventh recycles the one down longest).</p>
+
+  <h2>Vehicles: bikes, drift, and the driver's seat</h2>
+  <p>Driving is outside the body machine: with <code>InVehicle</code> on the player, <code>PlayerSystem</code> skips the
+    body step and <code>VehicleSystem</code> owns the capsule. Three player-facing additions sit there:</p>
+  <ul>
+    <li><b>Two-wheelers</b> (<a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/docs/decisions.md#L11702">ADR-0235</a>): <code>two_wheeler = true</code> in a <code>vehicles.lua</code> recipe builds
+      Jolt's MotorcycleController. Its lean spring defaults (5000/1000) flipped our narrow bike on touchdown (40° in four
+      frames), so stiffness and damping are sized from the bike's own mass and box. The bicycle freewheels via near-zero
+      engine damping. Measured: motorcycle 79 km/h leaning 28°, bicycle 25 km/h.</li>
+    <li><b>Drift</b> (<a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/docs/decisions.md#L11732">ADR-0236</a>): handbrake while steering past 30% above 40 km/h; <code>PhysicsWorld::applyDrift</code>
+      scales the sideways tyre grip through Jolt's per-wheel impulse callback (rear 35%, front 90%), a yaw torque holds
+      the slip the steering asks for, and the slide banks boost. Player's car only.</li>
+    <li><b>The driver's seat</b> (<a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/docs/decisions.md#L12319">ADR-0252</a>): one crash measure for any vehicle, the seat's <b>jolt</b>.</li>
+  </ul>
+  <div class="code">
+    <div class="hd"><span>RideJolt::step and ejectTolerance: the impact rule for a body strapped to a vehicle</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/engine/player/driver_seat.cpp#L32-L51">src/engine/player/driver_seat.cpp</a></div>
+<pre>Real RideJolt::step(const Vec3&amp; velocity, Real dt, Vec3* before) {
+    clock += dt;
+    samples.push_back({clock, velocity});
+    while (!samples.empty() &amp;&amp; samples.front().t &lt; clock - kWindow) samples.erase(samples.begin());
+    Real most = 0;
+    Vec3 was = velocity;
+    for (const Sample&amp; s : samples) {
+        const Vec3 d = velocity - s.v;
+        const Real j = std::sqrt(d.x * d.x + 0.25 * d.y * d.y + d.z * d.z);
+        if (j &gt; most) { most = j; was = s.v; }
+    }
+    if (before) *before = was;
+    return most;
+}
+
+Real ejectTolerance(bool twoWheeler, bool openSeat, bool windscreen) {
+    if (twoWheeler) return 7.0;
+    if (openSeat) return 11.0;
+    return windscreen ? 22.0 : std::numeric_limits&lt;Real&gt;::infinity();
+}</pre>
+  </div>
+  <p>The jolt is the most the velocity <i>vector</i> changed over 0.3 s, vertical at half (a 2 m drop on a bike is a
+    ride). A two-wheeler throws you past 7 m/s, an open seat (a convertible) past 11, a closed car only through the
+    windscreen past 22 (on by default; <code>set vehicle.windscreen false</code>). Whatever stays in the seat sways in
+    it: <code>SeatSway</code> springs the shoulders (~0.8 s, stopped by the belt at 0.32 m) and, quicker, the head.
+    VehicleSystem writes <code>PlayerPose::Mode::Drive</code>, and <code>PlayerBodySystem::render</code> poses the
+    jointed body with <code>seatedPose</code> from the vehicle <i>as drawn</i> that frame, because VehicleSystem moves
+    the car after the body system's fixed step. Measured against the lab's jump tower: the convertible threw its driver
+    at 48 km/h (jolt 13.3), the motorcycle at 29 km/h (8.1), the sedan kept its driver.</p>
+  <div class="shots">
+    <figure class="shot"><img src="img/player/seat_motorcycle.webp" alt="Side view of the jointed player body seated on a red block motorcycle, hands on the bars, feet on the pegs">
+      <figcaption>On the motorcycle: hands on the bars and feet on the pegs from the recipe's <code>seat</code> table (<code>SeatGeometry</code>).</figcaption></figure>
+    <figure class="shot"><img src="img/player/seat_lurch.webp" alt="A sixteen-frame sheet of a grey convertible stopping at a pillar, the driver lurching forward and settling">
+      <figcaption>The convertible coasting into the tower under the limit: the driver lurches to the belt and settles (16 frames).</figcaption></figure>
+  </div>
+  <p>The hand-off to the ragdoll goes through Settings: VehicleSystem writes <code>player.limpVelocity</code> and
+    <code>player.limp</code>, and the next body step reads them as a limp intent.</p>
+  <div class="code">
+    <div class="hd"><span>VehicleSystem::stepSeat: thrown off, the velocity passed through Settings</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/engine/systems/vehicle_system.cpp#L670-L688">src/engine/systems/vehicle_system.cpp</a></div>
+<pre>    const bool hit = jolt &gt; ejectTolerance(v-&gt;config.twoWheeler, v-&gt;openSeat, ctx.settings.getBool("vehicle.windscreen", true));
+    if (!down &amp;&amp; !hit) return;
+    const Vec3 thrown = hit ? ejectThrow(before, true) : ejectThrow(vel, false);
+    jolt_.reset();
+    v-&gt;driver = Entity{};
+    if (CharacterController* cc = ctx.world.get&lt;CharacterController&gt;(player)) {
+        <span class="c">// off the seat and clear of the body: the capsule's feet just over its top (a convertible's doors are a</span>
+        <span class="c">// box round the seat)</span>
+        Vec3 at = rt-&gt;position + rt-&gt;orientation.rotate(v-&gt;hipPoint());
+        at.y = std::max(at.y + 0.9, rt-&gt;position.y + v-&gt;config.chassisHalfExtent.y + 0.95);
+        physicsSys.physicsWorld().setCharacterPosition(cc-&gt;characterId, at);
+        if (Transform* pt = ctx.world.get&lt;Transform&gt;(player)) pt-&gt;position = at;
+    }
+    cameras.clearFollowTarget();
+    ctx.world.remove&lt;InVehicle&gt;(player);
+    char buf[96];
+    std::snprintf(buf, sizeof(buf), "%.3f %.3f %.3f", thrown.x, thrown.y, thrown.z);
+    ctx.settings.setString("player.limpVelocity", buf);
+    ctx.settings.setDouble("player.limp", 1.0);</pre>
+  </div>
+
+  <h2>Riding a carrier</h2>
+  <p>A passenger on a bus, in a cab or on a train is a <code>Passenger</code>: a point in the carrier's own frame
+    (<a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/docs/decisions.md#L11988">ADR-0243</a>). The owning system keeps its rules (boarding, aisles, seats, doors) and calls <code>rideStep</code>
+    each fixed step to pin the capsule and turn the view with the carrier. The finding that shaped it is the frame's
+    order:</p>
+  <div class="diagram">
+    <svg viewBox="0 0 800 120" role="img" aria-label="Frame order: update frames the camera, fixed steps pin the rider, RidingSystem render places the body on the drawn carrier, the renderer blends the vehicle the same way">
+      <defs><marker id="ar6" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" fill="#6f8fb0"/></marker></defs>
+      <g font-family="system-ui, sans-serif" font-size="13" text-anchor="middle">
+        <rect x="15" y="20" width="175" height="76" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="102" y="44" fill="#cfe4ff">update</text>
+        <text x="102" y="64" fill="#93a6ba" font-size="11.5">camera framed from</text>
+        <text x="102" y="80" fill="#93a6ba" font-size="11.5">last frame's state</text>
+        <rect x="215" y="20" width="175" height="76" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="302" y="44" fill="#cfe4ff">fixed steps × n</text>
+        <text x="302" y="64" fill="#93a6ba" font-size="11.5">owner sets carrier;</text>
+        <text x="302" y="80" fill="#93a6ba" font-size="11.5">rideStep pins capsule</text>
+        <rect x="415" y="20" width="175" height="76" rx="9" fill="#131a24" stroke="#3b82f6"/>
+        <text x="502" y="44" fill="#cfe4ff">RidingSystem::render</text>
+        <text x="502" y="64" fill="#93a6ba" font-size="11.5">body on drawn carrier;</text>
+        <text x="502" y="80" fill="#93a6ba" font-size="11.5">1st-person eye carried</text>
+        <rect x="615" y="20" width="175" height="76" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="702" y="44" fill="#cfe4ff">renderer</text>
+        <text x="702" y="64" fill="#93a6ba" font-size="11.5">vehicle blended by</text>
+        <text x="702" y="80" fill="#93a6ba" font-size="11.5">the same interpolation</text>
+        <line x1="190" y1="58" x2="211" y2="58" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar6)"/>
+        <line x1="390" y1="58" x2="411" y2="58" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar6)"/>
+        <line x1="590" y1="58" x2="611" y2="58" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar6)"/>
+      </g>
+    </svg>
+  </div>
+  <p class="cap">A camera framed in the update is a frame of travel behind on a moving carrier. Placing the rider in
+    render, between the carrier's last two steps by this frame's interpolation, matches how the vehicle is drawn.</p>
+  <div class="code">
+    <div class="hd"><span>RidingSystem::render: the carrier as drawn, the rider on it</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/engine/riding.cpp#L108-L116">src/engine/riding.cpp</a></div>
+<pre>    <span class="c">// the carrier as drawn: between its last two steps by this frame's interpolation (the renderer's blend of the</span>
+    <span class="c">// vehicle's instances -- InstanceGroup::ids -- and of every entity's PrevTransform)</span>
+    const Real a = std::clamp(ctx.interpolation, 0.0, 1.0);
+    Mat4 drawn = p-&gt;carrier;
+    for (int r = 0; r &lt; 3; ++r)
+        for (int c = 0; c &lt; 4; ++c) drawn.m[r][c] = p-&gt;carrierPrev.m[r][c] + (p-&gt;carrier.m[r][c] - p-&gt;carrierPrev.m[r][c]) * a;
+    const Vec3 at = riderCentre(drawn, p-&gt;local, p-&gt;eyeAbove);
+    t-&gt;position = at;
+    if (PrevTransform* prev = ctx.world.get&lt;PrevTransform&gt;(rider)) prev-&gt;value = *t;   <span class="c">// drawn where it is put</span></pre>
+  </div>
+  <p>Measured on river_town's bus 41 (camera jerk in the bus's frame): first person ~15 mm before, 0.00 mm after; third
+    person 2.10 → 2.12 mm, because carrying the shoulder rig as well overshot (71 mm) and it is left as framed.</p>
+
+  <h2>Hands, tools, the light, input layers, the watch</h2>
+  <div class="code">
+    <div class="hd"><span>The tools: one enum, one per slot</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/engine/player/tools.h#L11-L12">src/engine/player/tools.h</a></div>
+<pre>enum class Tool : uint8_t { Hands = 1, Gun, Map, Parachute, Wingsuit, Grapple, Skateboard, Scooter };
+constexpr int kToolSlots = 8;</pre>
+  </div>
+  <p><code>PlayerHands</code> holds the tool in hand and the grapple's hook (None, Flying, Hooked, Loose), which flies and
+    comes back whatever the body is doing. The <b>light</b> is not a tool (<a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/docs/decisions.md#L12245">ADR-0249</a>): it used to be slot 4, and
+    cycling past it with LB switched it on. It is now its own action (L, D-pad up), held in the hand, under the gun's
+    barrel, or as a headlamp, whatever is in hand.</p>
+  <p><b>Input layers</b> (<a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/docs/decisions.md#L12213">ADR-0248</a>): a screen that takes the controls pushes a layer, and while one is up the body's
+    actions and the view's go dead:</p>
+  <div class="code">
+    <div class="hd"><span>InputMap::live: who answers while a layer is up</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/engine/input/input_map.cpp#L374-L381">src/engine/input/input_map.cpp</a></div>
+<pre>bool InputMap::live(const std::string&amp; action) const {
+    const auto layer = actionLayer_.find(action);
+    if (layer != actionLayer_.end()) return !layers_.empty() &amp;&amp; layers_.back() == layer-&gt;second;
+    const InputContext c = actionContext(action);
+    if (c == InputContext::Always) return true;
+    if (!layers_.empty()) return false;   <span class="c">// a layer has the controls</span>
+    return c == InputContext::Camera || c == context_;
+}</pre>
+  </div>
+  <p>The map is the first layer: the stick pans, E/Q zoom, A/Space marks an <code>engine::Waypoint</code>. Measured: W
+    held for 1 s walked 5.9 m with the map down and 0.0 m with it up. The first key choices clashed with
+    <code>Always</code> keys (<code>+</code>/<code>-</code> are sim speed, <code>Enter</code> pause), which the startup
+    clash report and a probe both caught.</p>
+  <p><b>UI text</b> (<a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/docs/decisions.md#L12267">ADR-0250</a>): <code>UiText</code> bakes glyph atlases (Overpass Bold, one per pixel height) and
+    emits quads on the game UI layer, so the tool row, prompts and the watch are no longer drawn by ImGui (the developer
+    overlay). <code>submitUi</code> now appends, up to 16384 quads. <b>The watch</b> (<a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/docs/decisions.md#L12293">ADR-0251</a>): hold Q / D-pad down
+    and, with a hand free, the left wrist comes up; the dial (compass turning with the heading, the waypoint as a gold
+    dot with its distance, else the sky's clock) is drawn on the UI layer and mapped corner by corner onto the drawn
+    watch face in first person, or as a panel by the character in third.</p>
+  <div class="shots">
+    <figure class="shot"><img src="img/player/watch_first.webp" alt="First-person view: the left arm raised with a smartwatch showing a compass and a distance to a waypoint">
+      <figcaption>First person: the dial mapped onto the wrist face, distance to the waypoint in the middle.</figcaption></figure>
+    <figure class="shot"><img src="img/player/watch_third.webp" alt="Third-person view of the player on a city street with a round watch dial panel beside them">
+      <figcaption>Third person: the same dial as a panel by the character.</figcaption></figure>
+    <figure class="shot"><img src="img/player/map_marked.webp" alt="The city map open with a gold waypoint dot marked">
+      <figcaption>The map layer up: the stick pans it and a press marks the waypoint.</figcaption></figure>
+    <figure class="shot"><img src="img/player/light_gun.webp" alt="First-person view of the gun with a light under the barrel lighting the road at night">
+      <figcaption>The light with the gun out, under the barrel.</figcaption></figure>
+  </div>
+  <table>
+    <tr><th>handsFree</th><th>Modes</th><th>What it allows</th></tr>
+    <tr><td>2</td><td>on foot, skateboard</td><td>the gun (the gun script's <code>camera.hands_free()</code>), the watch</td></tr>
+    <tr><td>1</td><td>parachute, grapple, scooter</td><td>the watch</td></tr>
+    <tr><td>0</td><td>climb, ladder, mantle, bars, swing, swim, wingsuit, limp, driving</td><td>neither</td></tr>
+  </table>
+
+  <h2>Particles and sounds: counters on the pose</h2>
+  <p>The body never plays a sound or spawns a particle by calling an audio or render system. It <b>counts</b> things
+    that happened (<code>grabs</code>, <code>ollies</code>, <code>boardLands</code>, <code>hookBites</code>,
+    <code>ropeSnaps</code>, <code>chuteOpens</code>) and publishes the counts; <code>MotionAudioSystem</code>
+    edge-detects them and plays the one-shots (the hook's shot and bite, the canopy's WHUMP, a hand grabbing rock or a
+    metal bar). Particles are effects named in <code>assets/scripts/particles.lua</code> and requested by name
+    (<code>requestParticles(world, "spark", at, dir)</code>) from <code>PlayerBody::effects</code>: dust off a board
+    kick, sparks where the hook bites, a splash, bubbles and breaths under water, streaks under a canopy
+    (<a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/docs/decisions.md#L11773">ADR-0238</a>, <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/docs/decisions.md#L11834">ADR-0239</a>, <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/docs/decisions.md#L12040">ADR-0244</a>). The car's tyre smoke comes from VehicleSystem's
+    <code>measureSlide</code> the same way.</p>
+  <figure class="shot">
+    <img src="img/player/drift_smoke.webp" alt="A teal hatchback drifting round a corner on a city street, white tyre smoke at its rear wheels">
+    <figcaption>Tyre smoke on a drift in river_town: an emitter on each rear wheel at 40 × <code>Vehicle::slide</code> a second.</figcaption>
+  </figure>
+
+  <h2>Tuning, the lab, and the trace harness</h2>
+  <p><b>MovementTuning</b> (<code>locomotion.h</code>) holds every number above: 79 sliders and 2 flags, each with a
+    slider range and a group. <code>PlayerSystem::fixedUpdate</code> reloads it from Settings every step, so the
+    Debug &gt; Movement panel, <code>set movement.&lt;key&gt; &lt;v&gt;</code> on the socket, and settings.json
+    (<code>movement.*</code>) all apply live:</p>
+  <div class="code">
+    <div class="hd"><span>MovementTuning::load: one table drives the sliders, the socket and the file</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/engine/locomotion.cpp#L120-L123">src/engine/locomotion.cpp</a></div>
+<pre>void MovementTuning::load(const Settings&amp; s) {
+    for (const Field&amp; f : fields()) this-&gt;*f.value = s.getDouble(std::string("movement.") + f.key, this-&gt;*f.value);
+    for (const Flag&amp; f : flags()) this-&gt;*f.value = s.getBool(std::string("movement.") + f.key, this-&gt;*f.value);
+}</pre>
+  </div>
+  <p><code>move?</code> on the socket returns the telemetry PlayerSystem writes each frame: mode name, ground state,
+    position, velocity, stamina, tool slot, hook state, rope length/span/sag, and the last event ("pull up onto a ledge
+    1.24 m above the feet").</p>
+  <p><b>movement_lab</b> (<code>assets/levels/movement_lab.json</code>, written by <code>tools/movement_lab.py</code>;
+    edit the script and re-run, never the JSON): ledges 0.3–3.0 m coloured by how you get up them, gaps 1–5 m, climbing
+    walls, slopes 30–70°, a tiled pool with 3 and 6 m boards, a 72 m jump tower with a spiral ramp, the playground, a
+    skate run, and a swing park of grapple gantries. Run it with
+    <code>./build-viewer/viewer assets/levels/movement_lab.json</code>.</p>
+  <p><b>The trace harness</b> (<code>tests/test_player_trace.cpp</code>, in physics_tests) runs the real
+    <code>PlayerSystem</code> on movement_lab headless (NullRenderer, Jolt single-threaded, a scripted pad) through 17
+    scenarios, writing every fixed step's position, pose numbers, mode, ground, hook and last event. Runs are
+    bit-identical, which is what let the 1906-line system be split into modes with all traces reproduced to 1e-6.</p>
+  <div class="code">
+    <div class="hd"><span>A scenario: start, a script for the pad, the events that must happen</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/tests/test_player_trace.cpp#L337-L345">tests/test_player_trace.cpp</a></div>
+<pre>    s.push_back({"scooter_crash", 10.0, [](Rig&amp; r) {
+                     r.place(Vec3(-3.6, 0, 20.0), 0);
+                     r.actions.injectPress("slot_8");
+                 },
+                 [](Rig&amp;, Pad&amp; p, Real t) {
+                     p.stick(between(t, 0.2, 7.0) ? 1.0 : 0.0, 0);
+                     p.run(true);
+                 },
+                 {"on the scooter", "bailed*"}});</pre>
+  </div>
+  <table>
+    <tr><th>Variable</th><th>Effect</th></tr>
+    <tr><td><code>RT_PLAYER_TRACE_OUT=&lt;dir&gt;</code></td><td>record each scenario's trace</td></tr>
+    <tr><td><code>RT_PLAYER_TRACE_BASE=&lt;dir&gt;</code></td><td>compare step by step against a recording</td></tr>
+    <tr><td><code>RT_PLAYER_TRACE_ONLY=&lt;name&gt;</code></td><td>run one scenario</td></tr>
+    <tr><td>(neither)</td><td>each scenario checks its expected events happened</td></tr>
+  </table>
+  <p>Scenarios: walk_jump, mantle_ground, mantle_air, climb, wall_jump, swim, plunge, parachute, wingsuit, wingsuit_crash,
+    hard_fall, grapple, skateboard, scooter_crash, swing, bars, limp. The ladder is not covered (the lab has none).</p>
+
+  <h2 id="history">How it got here</h2>
+  <div class="note history"><p>All of this was built on 24 and 25 October 2026, each step an ADR, and reached main as #116 at the pinned commit:</p></div>
+  <table>
+    <tr><th>ADR</th><th>What changed</th><th>Turning point</th></tr>
+    <tr><td><a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/docs/decisions.md#L11541">ADR-0228</a></td><td>JumpGate, ledges, climbing, buoyant swim, block arms, MovementTuning, movement_lab</td><td>the stuck jump measured as a steep-ground refusal</td></tr>
+    <tr><td><a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/docs/decisions.md#L11579">ADR-0229</a></td><td>parachute and wingsuit</td><td>three wrong lift models; fall net only with nothing below</td></tr>
+    <tr><td><a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/docs/decisions.md#L11611">ADR-0230</a>, <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/docs/decisions.md#L11773">ADR-0238</a></td><td>grapple; the drawn Verlet rope; a rope that gives; motion sounds</td><td>Jolt soft bodies can't reel</td></tr>
+    <tr><td><a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/docs/decisions.md#L11632">ADR-0231</a>–<a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/docs/decisions.md#L11667">ADR-0233</a></td><td>third-person six-block body; player and walker ragdolls</td><td>one body, posed or limp</td></tr>
+    <tr><td><a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/docs/decisions.md#L11684">ADR-0234</a>–<a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/docs/decisions.md#L11752">ADR-0237</a></td><td>boards, two-wheelers, drift, playground</td><td>Jolt's lean spring sized to our bikes</td></tr>
+    <tr><td><a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/docs/decisions.md#L11834">ADR-0239</a>, <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/docs/decisions.md#L12040">ADR-0244</a></td><td>particles as data; the 1.8 m player</td><td>the first cut was six hard-coded kinds, reshaped before landing</td></tr>
+    <tr><td><a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/docs/decisions.md#L11988">ADR-0243</a></td><td>one way of riding</td><td>update/steps/render order</td></tr>
+    <tr><td><a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/docs/decisions.md#L12063">ADR-0245</a></td><td>ten parts, two-bone IK, hinged ragdolls, skinned limbs</td><td>hinge friction, or every joint folds shut</td></tr>
+    <tr><td><a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/docs/decisions.md#L12116">ADR-0246</a></td><td>intent + modes; PlayerSystem 1906 → ~620 lines</td><td>16 traces reproduced exactly</td></tr>
+    <tr><td><a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/docs/decisions.md#L12167">ADR-0247</a></td><td>one impact rule</td><td>losses summed over one contact</td></tr>
+    <tr><td><a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/docs/decisions.md#L12213">ADR-0248</a>–<a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/docs/decisions.md#L12293">ADR-0251</a></td><td>input layers, tools enum and light switch, UiText, the watch</td><td>keys moved off ImGui</td></tr>
+    <tr><td><a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/docs/decisions.md#L12319">ADR-0252</a></td><td>driver's seat jolt, ejection, seat sway</td><td>a speed-only rule missed side hits</td></tr>
+  </table>
+  <p><b>Owed</b>, per the ADRs: the rope wrapping corners for the swing itself; building handholds; skate tricks and
+    grinds; the city's playgrounds; a walk/run that blends into the posed body instead of switching meshes; passengers
+    that sway or get thrown; a camera kick in crashes; GPU skinning with animation clips; the seated AI occupant moved
+    onto the jointed body.</p>
+
+  <h2>Where to look</h2>
+  <ul class="files">
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/player/player_body.h">src/engine/player/player_body.h</a> — BodyMode, the modes, PlayerBody (the machine)</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/player/player_body.cpp">src/engine/player/player_body.cpp</a> — step order, the ways into a mode, impact, effects, publish</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/player/player_modes_foot.cpp">src/engine/player/player_modes_foot.cpp</a> — on foot, swim, ladder, mantle, climb</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/player/player_modes_gear.cpp">src/engine/player/player_modes_gear.cpp</a> — glide, grapple, board, swing, bars, ragdoll</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/player/player_intent.h">src/engine/player/player_intent.h</a>, <a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/player/player_hands.h">src/engine/player/player_hands.h</a>, <a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/player/tools.h">src/engine/player/tools.h</a></li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/player/body_rules.h">src/engine/player/body_rules.h</a> — fall net, air momentum, SwimState, speedLost</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/player/driver_seat.h">src/engine/player/driver_seat.h</a>, <a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/player/seat_geometry.h">src/engine/player/seat_geometry.h</a> — RideJolt, SeatSway, seatedPose</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/locomotion.h">src/engine/locomotion.h</a> — MovementTuning, JumpGate, findLedge, MantleMove, glide, rope, board, swing steps</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/player_pose.h">src/engine/player_pose.h</a> — PlayerPose</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/block_body.h">src/engine/block_body.h</a>, <a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/body_draw.h">src/engine/body_draw.h</a> — ten parts, BodyPose, IK, skinned limbs, ragdoll</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/rope_line.h">src/engine/rope_line.h</a>, <a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/riding.h">src/engine/riding.h</a></li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/physics/physics_world.h">src/engine/physics/physics_world.h</a> — the character and ragdoll API</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/systems/player_system.cpp">src/engine/systems/player_system.cpp</a> — intent, camera, HUD, <code>move?</code>, Debug &gt; Movement</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/systems/player_body_system.cpp">src/engine/systems/player_body_system.cpp</a>, <a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/systems/player_arms_system.cpp">src/engine/systems/player_arms_system.cpp</a> — third- and first-person drawing</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/systems/vehicle_system.cpp">src/engine/systems/vehicle_system.cpp</a> — <code>stepSeat</code></li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/input/input_map.h">src/engine/input/input_map.h</a>, <a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/ui/ui_text.h">src/engine/ui/ui_text.h</a>, <a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/wrist_watch.h">src/engine/wrist_watch.h</a>, <a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/systems/watch_system.cpp">src/engine/systems/watch_system.cpp</a>, <a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/systems/flashlight_system.cpp">src/engine/systems/flashlight_system.cpp</a></li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/apps/citysim/walker_ragdolls.h">src/apps/citysim/walker_ragdolls.h</a> — the pool of six</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/tests/test_locomotion.cpp">tests/test_locomotion.cpp</a>, <a href="https://github.com/GlennSong/raytracer-clang/blob/main/tests/test_driver_seat.cpp">tests/test_driver_seat.cpp</a>, <a href="https://github.com/GlennSong/raytracer-clang/blob/main/tests/test_player_trace.cpp">tests/test_player_trace.cpp</a>, <a href="https://github.com/GlennSong/raytracer-clang/blob/main/tests/test_two_wheelers.cpp">tests/test_two_wheelers.cpp</a>, <a href="https://github.com/GlennSong/raytracer-clang/blob/main/tests/test_drift.cpp">tests/test_drift.cpp</a></li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/tools/movement_lab.py">tools/movement_lab.py</a> — the lab level's generator</li>
+  </ul>
+  <table>
+    <tr><th>Switch</th><th>What it does</th></tr>
+    <tr><td>Debug &gt; Movement</td><td>every MovementTuning slider, live; Save to settings.json</td></tr>
+    <tr><td><code>set movement.&lt;key&gt; &lt;v&gt;</code></td><td>the same over the socket</td></tr>
+    <tr><td><code>move?</code></td><td>body telemetry</td></tr>
+    <tr><td><code>ragdoll</code> / G</td><td>go limp</td></tr>
+    <tr><td><code>knock</code>, <code>knock?</code></td><td>throw the nearest walker; list the limp ones</td></tr>
+    <tr><td><code>hold MouseLeft &lt;s&gt;</code></td><td>hold fire for probes (the grapple)</td></tr>
+    <tr><td><code>vehicle_spawn &lt;recipe&gt;</code>, <code>vehicle?</code></td><td>spawn a bike or car; drift/slip/boost state</td></tr>
+    <tr><td><code>set vehicle.windscreen false</code></td><td>closed cars never eject</td></tr>
+    <tr><td><code>RT_AUDIO=null</code></td><td>a probe viewer without the speakers</td></tr>
+  </table>
+
+  <footer>Code excerpts from commit <code>47d587f3</code> (2026-10-26). Drawn from ADR-0012 and ADR-0228 to ADR-0252.</footer>
+</div>
+</body>
+</html>

@@ -1,0 +1,576 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>The Procedural Language — How the Engine Works</title>
+  <link rel="stylesheet" href="engine.css">
+</head>
+<body>
+<div class="wrap">
+  <div class="nav"><a href="index.html">← How the engine works</a> · <a href="../index.html">scenes</a></div>
+  <h1>The procedural language</h1>
+  <p class="lede">Every generator in the engine, whether it makes trees, rocks, buildings, cars or textures, is built from
+    one shared vocabulary of C++ words over a few value types, and Lua scripts can call all of them. The rule is that new
+    content is a recipe written in those words. When a recipe needs something the vocabulary lacks, the missing word is
+    added to the vocabulary, not written privately inside the recipe.</p>
+  <p>This page is about that vocabulary and the rules around it. The site's older
+    <a href="../procgen.html">Procedural Toolkit</a> page is the earlier overview of the individual tools (L-systems,
+    SDFs, noise, terrain), and parts of it predate the current code.</p>
+
+  <h2>The rule, in Glenn's words</h2>
+  <div class="grid">
+    <div class="b"><h3>2026-09-24</h3><p>"We should always look to expand the procedural capabilities of the engine and to
+      use what is there as a language for building things and only do one offs if absolutely necessary."
+      (<a href="https://github.com/GlennSong/raytracer-clang/blob/main/docs/decisions.md">ADR-0098</a>)</p></div>
+    <div class="b"><h3>2026-10-13</h3><p>"Everything, and I mean everything in this engine should use the same tooling ...
+      this way we know that every polygon ends up being right when it's created." (ADR-0172) And: "how many different
+      ways do we have to mesh something? There should be a common set of tools."</p></div>
+    <div class="b"><h3>2026-10-26</h3><p>"Build on what exists; one system per job" became a written rule in
+      <code>AGENTS.md</code> (commit <code>619d194a</code>): "Two systems doing one job is a bug to fix, not a style
+      choice."</p></div>
+  </div>
+  <p>Each quote came after the same kind of failure. A feature shipped with its own private random stream, icosphere,
+    noise or box function. It worked, but it added nothing the rest of the engine could reuse, and sometimes it was
+    simply wrong. The clearest case is a turnstile built from a copied box function whose fixed index list was wound
+    backwards. The turnstile rendered inside out, even though a shared function that winds faces correctly already
+    existed.</p>
+
+  <h2>The shape of it</h2>
+  <div class="diagram">
+    <svg viewBox="0 0 900 470" role="img" aria-label="Three layers: Lua recipes on top, bound through procgen_bindings to grammar interpreters and C++ words, all producing a few shared value types, which the mesh audit checks">
+      <defs><marker id="pa1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" fill="#6f8fb0"/></marker></defs>
+      <g font-family="system-ui, sans-serif" font-size="13">
+        <text x="20" y="24" fill="#e6c07b" font-size="12">L2  RECIPES (Lua, assets/scripts/*.lua): what a thing looks like and every number in it</text>
+        <g text-anchor="middle">
+          <rect x="20" y="34" width="150" height="40" rx="8" fill="#131a24" stroke="#3b82f6"/><text x="95" y="59" fill="#cfe4ff">brick.lua</text>
+          <rect x="185" y="34" width="150" height="40" rx="8" fill="#131a24" stroke="#3b82f6"/><text x="260" y="59" fill="#cfe4ff">tree_recipes.lua</text>
+          <rect x="350" y="34" width="150" height="40" rx="8" fill="#131a24" stroke="#3b82f6"/><text x="425" y="59" fill="#cfe4ff">vehicle_kit.lua</text>
+          <rect x="515" y="34" width="150" height="40" rx="8" fill="#131a24" stroke="#3b82f6"/><text x="590" y="59" fill="#cfe4ff">planter.lua</text>
+          <rect x="680" y="34" width="200" height="40" rx="8" fill="#131a24" stroke="#3b82f6"/><text x="780" y="59" fill="#cfe4ff">furniture, city, planets …</text>
+        </g>
+        <rect x="20" y="96" width="860" height="44" rx="8" fill="#0f1620" stroke="#2c3d50"/>
+        <text x="34" y="116" fill="#cfe4ff">scripting/procgen_bindings.cpp</text>
+        <text x="34" y="132" fill="#93a6ba" font-size="12">Lua globals: texture · mesh · poly · sdf · noise · lsystem · tree · scope · building · stylized · terrain · scatter · model · material …</text>
+        <line x1="450" y1="74" x2="450" y2="92" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#pa1)"/>
+
+        <text x="20" y="166" fill="#e6c07b" font-size="12">L1  GRAMMARS (C++ interpreters; rules are data fed from Lua)</text>
+        <g text-anchor="middle">
+          <rect x="20" y="176" width="270" height="44" rx="8" fill="#131a24" stroke="#2c3d50"/><text x="155" y="203" fill="#cfe4ff">ParametricLSystem + turtle</text>
+          <rect x="315" y="176" width="270" height="44" rx="8" fill="#131a24" stroke="#2c3d50"/><text x="450" y="203" fill="#cfe4ff">shape grammar (scope, split)</text>
+          <rect x="610" y="176" width="270" height="44" rx="8" fill="#131a24" stroke="#2c3d50"/><text x="745" y="203" fill="#cfe4ff">tree recipe grower</text>
+        </g>
+        <line x1="450" y1="140" x2="450" y2="172" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#pa1)"/>
+
+        <text x="20" y="246" fill="#e6c07b" font-size="12">L0  WORDS (C++, each one also reachable from Lua)</text>
+        <g text-anchor="middle">
+          <rect x="20" y="256" width="200" height="58" rx="8" fill="#131a24" stroke="#2c3d50"/><text x="120" y="280" fill="#cfe4ff">MeshBuilder</text><text x="120" y="299" fill="#93a6ba" font-size="12">emit*, triFacing, shape kit</text>
+          <rect x="235" y="256" width="200" height="58" rx="8" fill="#131a24" stroke="#2c3d50"/><text x="335" y="280" fill="#cfe4ff">texture_field</text><text x="335" y="299" fill="#93a6ba" font-size="12">Field2 words, bakes</text>
+          <rect x="450" y="256" width="130" height="58" rx="8" fill="#131a24" stroke="#2c3d50"/><text x="515" y="280" fill="#cfe4ff">PolyMesh</text><text x="515" y="299" fill="#93a6ba" font-size="12">loft, subdivide</text>
+          <rect x="595" y="256" width="130" height="58" rx="8" fill="#131a24" stroke="#2c3d50"/><text x="660" y="280" fill="#cfe4ff">sdf · noise</text><text x="660" y="299" fill="#93a6ba" font-size="12">fields, polygonize</text>
+          <rect x="740" y="256" width="140" height="58" rx="8" fill="#131a24" stroke="#2c3d50"/><text x="810" y="280" fill="#cfe4ff">Spline · ProcRng</text><text x="810" y="299" fill="#93a6ba" font-size="12">curves, one RNG</text>
+        </g>
+        <line x1="450" y1="220" x2="450" y2="252" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#pa1)"/>
+
+        <text x="20" y="342" fill="#e6c07b" font-size="12">VALUE TYPES (what every generator returns: (params, seed) → content)</text>
+        <g text-anchor="middle">
+          <rect x="20" y="352" width="200" height="44" rx="8" fill="#131a24" stroke="#2c3d50"/><text x="120" y="379" fill="#cfe4ff">RenderMesh</text>
+          <rect x="235" y="352" width="200" height="44" rx="8" fill="#131a24" stroke="#2c3d50"/><text x="335" y="379" fill="#cfe4ff">Field2 · Sdf · HeightField</text>
+          <rect x="450" y="352" width="200" height="44" rx="8" fill="#131a24" stroke="#2c3d50"/><text x="550" y="379" fill="#cfe4ff">TextureData</text>
+          <rect x="665" y="352" width="215" height="44" rx="8" fill="#131a24" stroke="#2c3d50"/><text x="772" y="379" fill="#cfe4ff">ProcModel (N parts)</text>
+        </g>
+        <line x1="442" y1="314" x2="442" y2="348" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#pa1)"/>
+        <rect x="20" y="416" width="415" height="40" rx="8" fill="#131a24" stroke="#e6c07b"/>
+        <text x="227" y="441" fill="#cfe4ff" text-anchor="middle">mesh_audit.h: every RenderMesh judged by one rule set</text>
+        <line x1="120" y1="396" x2="120" y2="412" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#pa1)"/>
+      </g>
+    </svg>
+  </div>
+  <p class="cap">The layers (ADR-0028). Lua decides what a thing looks like. The hot loops (grammar expansion, meshing,
+    baking) run in C++. Every mesh comes out as the same value type and is checked by the same audit.</p>
+
+  <h2>How it got this way</h2>
+  <table>
+    <tr><th>ADR</th><th>Decision</th></tr>
+    <tr><td>0021</td><td>Procgen is a C++ library of generators over shared <b>value types</b> (Mesh, Field, Texture,
+      Frame). Every generator is <code>(parameters, seed) → content</code> and deterministic. A "procgen language" would
+      only be distilled from the library once three generators existed, never designed first.</td></tr>
+    <tr><td>0022</td><td>The <b>realness spectrum</b>: one generator can be regenerated at every load, baked to a static
+      asset, or (later) an editable instance.</td></tr>
+    <tr><td>0023</td><td>Embed <b>Lua 5.4</b> behind a sealed <code>ScriptVM</code>. The procgen surface is pure: no
+      <code>io</code>/<code>os</code>, no clock, and randomness only from seeded streams, so scripts are reproducible and
+      can run on worker threads. Python was rejected because its GIL serializes exactly the fan-out procgen
+      needs.</td></tr>
+    <tr><td>0025</td><td>The <b>node graph was removed</b>. It had one consumer (a rock), a list editor and no bridge to
+      Lua. Lua is the one authoring path, and any future visual editor should emit Lua.</td></tr>
+    <tr><td>0026, 0032</td><td>A procedural object is a <b>multi-output asset</b>: N material parts (bark and leaves,
+      walls and glass) plus colliders. Every placement path takes any N.</td></tr>
+    <tr><td>0028</td><td>Three layers: L0 primitives, L1 grammar interpreters, L2 free Lua recipes. "A grammar is a tool
+      called from Lua, never a wall."</td></tr>
+    <tr><td>0042, 0043</td><td>The city's pieces and the textures become Lua recipes over bound C++ words. A Lua binding
+      calls the <i>same</i> C++ builder the engine uses, so geometry never forks. A brick texture is <i>built</i> from
+      field primitives, not requested as a preset.</td></tr>
+    <tr><td>0098</td><td><b>The vocabulary grows; content is recipes over it.</b> The flora work's private helpers were
+      folded into shared words: tileable fields, the shape kit, <code>ProcRng</code>, and <code>bakeCached</code>.</td></tr>
+    <tr><td>0139</td><td>The <b>polymesh kit</b>: box-modelling operations for hard surfaces, first used for
+      cars.</td></tr>
+    <tr><td>0172, 0173</td><td>The <b>mesh audit</b> and the <b>mesh library v1</b>: one winding convention, one
+      triangulator, one set of emit words, and every producer moved onto them.</td></tr>
+  </table>
+
+  <h2>A recipe and the word it calls</h2>
+  <p>The smallest complete example is a brick texture. The recipe is Lua:</p>
+  <div class="code">
+    <div class="hd"><span>brick.lua: a lattice times grit, two colours mixed by the mask, baked</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/assets/scripts/brick.lua#L6-L23">assets/scripts/brick.lua</a></div>
+<pre><span class="k">local function</span> brick(opts)
+  opts = opts <span class="k">or</span> {}
+  <span class="k">local</span> lattice = texture.brick{
+    cols = opts.cols <span class="k">or</span> <span class="n">6</span>, rows = opts.rows <span class="k">or</span> <span class="n">14</span>,
+    mortar = opts.mortar <span class="k">or</span> <span class="n">0.09</span>, variation = opts.variation <span class="k">or</span> <span class="n">0.4</span>,
+    seed = opts.seed <span class="k">or</span> <span class="n">7</span>,
+  }
+  <span class="c">-- Fine grit breaks up the flat brick faces (kept near 1 so bricks stay bright).</span>
+  <span class="k">local</span> grit = texture.fbm{ seed = <span class="n">9</span>, scale = <span class="n">40</span>, octaves = <span class="n">4</span> }:scale_bias(<span class="n">0.25</span>, <span class="n">0.78</span>)
+  <span class="k">local</span> mask = lattice:mul(grit)
+
+  <span class="k">return</span> texture.bake_color(mask,
+    opts.mortar_color <span class="k">or</span> {<span class="n">0.64</span>, <span class="n">0.62</span>, <span class="n">0.58</span>},   <span class="c">-- mortar (mask = 0)</span>
+    opts.brick_color  <span class="k">or</span> {<span class="n">0.58</span>, <span class="n">0.20</span>, <span class="n">0.14</span>},   <span class="c">-- brick  (mask = 1)</span>
+    opts.size <span class="k">or</span> <span class="n">256</span>)
+<span class="k">end</span>
+
+<span class="k">return</span> brick()</pre>
+  </div>
+  <p><code>texture.brick</code> is a hand-written binding. It reads the Lua table, calls the C++ word, and pushes the
+    result back to Lua as a userdata that owns a <code>Field2</code> closure:</p>
+  <div class="code">
+    <div class="hd"><span>The binding: texture.brick{...} → fieldBrick(...)</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/engine/scripting/procgen_bindings.cpp#L2484-L2490">src/engine/scripting/procgen_bindings.cpp</a></div>
+<pre><span class="t">int</span> l_tex_brick(<span class="t">lua_State</span>* L) {
+    pushField(L, fieldBrick(optField(L, <span class="n">1</span>, <span class="s">"cols"</span>, <span class="n">6</span>), optField(L, <span class="n">1</span>, <span class="s">"rows"</span>, <span class="n">12</span>),
+                            optField(L, <span class="n">1</span>, <span class="s">"mortar"</span>, <span class="n">0.1</span>),
+                            optField(L, <span class="n">1</span>, <span class="s">"variation"</span>, <span class="n">0.35</span>),
+                            <span class="k">static_cast</span>&lt;<span class="t">uint32_t</span>&gt;(optField(L, <span class="n">1</span>, <span class="s">"seed"</span>, <span class="n">0</span>))));
+    <span class="k">return</span> <span class="n">1</span>;
+}</pre>
+  </div>
+  <p>The word itself is a function that returns a function. A texture field is a closure over (u, v), the same way an
+    SDF is a closure over a 3D point, so combinators such as <code>fieldMul</code> simply wrap closures in another
+    closure:</p>
+  <div class="code">
+    <div class="hd"><span>The C++ word: a running-bond lattice as a closure</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/engine/procgen/texture_field.cpp#L267-L284">src/engine/procgen/texture_field.cpp</a></div>
+<pre><span class="t">Field2</span> fieldBrick(<span class="t">double</span> cols, <span class="t">double</span> rows, <span class="t">double</span> mortar, <span class="t">double</span> variation,
+                  <span class="t">uint32_t</span> seed) {
+    <span class="t">double</span> half = mortar * <span class="n">0.5</span>;
+    <span class="k">return</span> [=](<span class="t">double</span> u, <span class="t">double</span> v) -&gt; <span class="t">double</span> {
+        <span class="t">double</span> rf = v * rows;
+        <span class="t">int</span> row = <span class="k">static_cast</span>&lt;<span class="t">int</span>&gt;(std::floor(rf));
+        <span class="t">double</span> offset = (row &amp; <span class="n">1</span>) ? <span class="n">0.5</span> : <span class="n">0.0</span>;       <span class="c">// running bond</span>
+        <span class="t">double</span> uf = u * cols + offset;
+        <span class="t">int</span> col = <span class="k">static_cast</span>&lt;<span class="t">int</span>&gt;(std::floor(uf));
+        <span class="t">double</span> fu = uf - std::floor(uf);
+        <span class="t">double</span> fv = rf - row;
+        <span class="t">double</span> mu = std::min(fu, <span class="n">1.0</span> - fu);          <span class="c">// distance to column edge</span>
+        <span class="t">double</span> mv = std::min(fv, <span class="n">1.0</span> - fv);          <span class="c">// distance to row edge</span>
+        <span class="k">if</span> (mu &lt; half || mv &lt; half) <span class="k">return</span> <span class="n">0.0</span>;      <span class="c">// mortar gap</span>
+        <span class="t">double</span> t = (hash2i(col, row, seed) &amp; <span class="n">0xffffu</span>) / <span class="n">65535.0</span>;
+        <span class="k">return</span> <span class="n">1.0</span> - variation * t;                  <span class="c">// per-brick darkening</span>
+    };
+}</pre>
+  </div>
+  <div class="diagram">
+    <svg viewBox="0 0 900 236" role="img" aria-label="The brick recipe's journey: Lua calls bind to C++ closures, combinators compose them, a bake samples the final closure into texture data that a material uses">
+      <defs><marker id="pa2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" fill="#6f8fb0"/></marker></defs>
+      <g font-family="system-ui, sans-serif" font-size="13" text-anchor="middle">
+        <text x="20" y="22" fill="#e6c07b" font-size="12" text-anchor="start">LUA</text>
+        <rect x="20" y="30" width="190" height="52" rx="8" fill="#131a24" stroke="#3b82f6"/>
+        <text x="115" y="52" fill="#cfe4ff">texture.brick{…}</text><text x="115" y="70" fill="#93a6ba" font-size="12">a Field userdata</text>
+        <rect x="240" y="30" width="200" height="52" rx="8" fill="#131a24" stroke="#3b82f6"/>
+        <text x="340" y="52" fill="#cfe4ff">texture.fbm{…}:scale_bias</text><text x="340" y="70" fill="#93a6ba" font-size="12">another Field</text>
+        <rect x="470" y="30" width="170" height="52" rx="8" fill="#131a24" stroke="#3b82f6"/>
+        <text x="555" y="52" fill="#cfe4ff">lattice:mul(grit)</text><text x="555" y="70" fill="#93a6ba" font-size="12">a Field of Fields</text>
+        <rect x="670" y="30" width="210" height="52" rx="8" fill="#131a24" stroke="#3b82f6"/>
+        <text x="775" y="52" fill="#cfe4ff">texture.bake_color(…)</text><text x="775" y="70" fill="#93a6ba" font-size="12">an Image</text>
+
+        <text x="20" y="128" fill="#e6c07b" font-size="12" text-anchor="start">C++</text>
+        <rect x="20" y="136" width="190" height="52" rx="8" fill="#131a24" stroke="#2c3d50"/>
+        <text x="115" y="158" fill="#cfe4ff">fieldBrick</text><text x="115" y="176" fill="#93a6ba" font-size="12">closure (u, v) → 0..1</text>
+        <rect x="240" y="136" width="200" height="52" rx="8" fill="#131a24" stroke="#2c3d50"/>
+        <text x="340" y="158" fill="#cfe4ff">fieldFbm → fieldScaleBias</text><text x="340" y="176" fill="#93a6ba" font-size="12">closure wraps closure</text>
+        <rect x="470" y="136" width="170" height="52" rx="8" fill="#131a24" stroke="#2c3d50"/>
+        <text x="555" y="158" fill="#cfe4ff">fieldMul</text><text x="555" y="176" fill="#93a6ba" font-size="12">a(u,v) · b(u,v)</text>
+        <rect x="670" y="136" width="210" height="52" rx="8" fill="#131a24" stroke="#2c3d50"/>
+        <text x="775" y="158" fill="#cfe4ff">bakeFieldColor</text><text x="775" y="176" fill="#93a6ba" font-size="12">TextureData, size²</text>
+        <line x1="115" y1="82" x2="115" y2="132" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#pa2)"/>
+        <line x1="340" y1="82" x2="340" y2="132" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#pa2)"/>
+        <line x1="555" y1="82" x2="555" y2="132" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#pa2)"/>
+        <line x1="775" y1="82" x2="775" y2="132" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#pa2)"/>
+        <path d="M115,188 L115,198 L520,198 L520,192" fill="none" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#pa2)"/>
+        <line x1="440" y1="170" x2="466" y2="170" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#pa2)"/>
+        <line x1="640" y1="162" x2="666" y2="162" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#pa2)"/>
+        <text x="450" y="224" fill="#93a6ba" font-size="12">Nothing is sampled until the bake: the Lua calls only compose closures. The bake runs the whole chain once per texel.</text>
+      </g>
+    </svg>
+  </div>
+  <p class="cap">A recipe's journey through the layers. The same C++ words build the engine's own bark, stone and
+    terrain-layer textures (<code>procgen/material_recipes.h</code>), so a script and the engine share one
+    implementation.</p>
+
+  <h2>Value types, and the N-part model</h2>
+  <p>A generator returns one of a few value types: a <code>RenderMesh</code> (an indexed triangle list), a field (a 2D
+    <code>Field2</code>, an <code>Sdf</code> or a terrain <code>HeightField</code>, each a closure), a
+    <code>TextureData</code> (CPU pixels; the loader uploads it, and procgen never touches the GPU), or a whole
+    <code>ProcModel</code>. A model is the composable unit (ADR-0042): parts, instance groups, colliders and terrain
+    flattens. Models nest by <code>merge</code>, so a recipe can return a lamp, a block or a city in the same
+    shape.</p>
+  <div class="code">
+    <div class="hd"><span>ProcModel: what a recipe returns at any scale</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/engine/procgen/proc_model.h#L96-L114">src/engine/procgen/proc_model.h</a></div>
+<pre><span class="k">struct</span> <span class="t">ProcModel</span> {
+    <span class="t">std::vector</span>&lt;<span class="t">ProcPart</span>&gt; parts;
+    <span class="t">std::vector</span>&lt;<span class="t">ProcInstanceGroup</span>&gt; instances;
+    <span class="t">std::vector</span>&lt;<span class="t">ProcCollider</span>&gt; colliders;
+    <span class="c">// Cut/fill footprints (ADR-0044) the recipe wants graded into the *level*</span>
+    <span class="c">// ...</span>
+    <span class="t">std::vector</span>&lt;<span class="t">TerrainFlatten</span>&gt; flatten;
+
+    <span class="c">// Fold another model into this one (composition).</span>
+    <span class="t">void</span> merge(<span class="k">const</span> <span class="t">ProcModel</span>&amp; o) {
+        parts.insert(parts.end(), o.parts.begin(), o.parts.end());
+        instances.insert(instances.end(), o.instances.begin(), o.instances.end());
+        colliders.insert(colliders.end(), o.colliders.begin(), o.colliders.end());
+        flatten.insert(flatten.end(), o.flatten.begin(), o.flatten.end());
+    }</pre>
+  </div>
+  <p>A part is <code>{mesh, ProcMaterial}</code> (ADR-0032). The model holds an ordered list of them because a tree is
+    opaque bark plus alpha-cut leaves, and a building is walls plus glass. Neither can be drawn as one mesh with one
+    material. <code>proc_model.h</code> also records a lesson: <code>ProcMaterial</code> once lacked opacity, emission
+    and two-sidedness, so <code>material.new{opacity = 0.32}</code> parsed fine in Lua and was then dropped, and car
+    glass rendered opaque. The comment there sets the rule: "Anything a recipe can set must exist here or it does not
+    survive the trip."</p>
+
+  <h2>Lua: one authoring path</h2>
+  <p>The procgen surface is a single file of hand-written bindings over the raw Lua C API (ADR-0023 chose not to add a
+    binding library such as sol2). It registers these globals:</p>
+  <table>
+    <tr><th>Global</th><th>Words (examples)</th><th>C++ behind it</th></tr>
+    <tr><td><code>mesh</code></td><td>box, lathe, tube, icosphere, displace, facet, block, box_frame, polygon, prism,
+      column, autosmooth, audit</td><td><code>MeshBuilder</code>, <code>mesh_audit.h</code></td></tr>
+    <tr><td><code>poly</code></td><td>section, resample, loft, box; methods select, extrude, inset, crease_*, mirror_x,
+      subdivide, to_parts</td><td><code>procgen/polymesh.h</code></td></tr>
+    <tr><td><code>texture</code></td><td>brick, fbm, tile_fbm, cells, cell_edges, bands, bake_color, bake_normal,
+      bake_rgba</td><td><code>procgen/texture_field.h</code></td></tr>
+    <tr><td><code>sdf</code>, <code>noise</code>, <code>polygonize</code></td><td>sphere, capsule, smooth_union;
+      fbm</td><td><code>procgen/sdf.h</code>, <code>noise.h</code></td></tr>
+    <tr><td><code>lsystem</code>, <code>tree</code></td><td>create, parametric, turtle_mesh, segments; skin</td>
+      <td><code>lsystem.h</code>, <code>tree.h</code> (<code>skinTree</code>)</td></tr>
+    <tr><td><code>scope</code>, <code>building</code></td><td>box, inset, split; grow, mass, envelope, space_graph</td>
+      <td>the shape grammar, the architect</td></tr>
+    <tr><td><code>stylized</code>, <code>real</code></td><td>tree, rock, grass</td><td>the flora recipes</td></tr>
+    <tr><td><code>terrain</code>, <code>scatter</code>, <code>planet</code></td><td>fbm, ridged, warp, erode, route,
+      mesh; rocky, gas</td><td><code>terrain_field.h</code>, <code>planet.h</code></td></tr>
+    <tr><td><code>model</code>, <code>material</code>, <code>city</code>, <code>streetfurniture</code>,
+      <code>furniture</code></td><td>new; lamp, traffic_signal; piece</td><td><code>ProcModel</code>, the street and
+      furniture kits</td></tr>
+  </table>
+  <p>The scope words show the shape grammar driven from Lua. This planter is the whole recipe:</p>
+  <div class="code">
+    <div class="hd"><span>planter.lua: a prop made with the scope op-vocabulary</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/assets/scripts/planter.lua#L13-L17">assets/scripts/planter.lua</a></div>
+<pre>  <span class="c">-- The stone body, then a soil slab inset from the rim and capping the top.</span>
+  <span class="k">local</span> s    = scope{ origin = {-w / <span class="n">2</span>, <span class="n">0</span>, -d / <span class="n">2</span>}, size = {w, h, d} }
+  <span class="k">local</span> body = s:box(stone)
+  <span class="k">local</span> top  = s:inset(<span class="n">0.14</span>):split(<span class="s">'y'</span>, { h - <span class="n">0.1</span>, <span class="n">0.1</span> })[<span class="n">2</span>]   <span class="c">-- top 0.1 m</span>
+  <span class="k">return</span> mesh.merge({ body, top:box(soil) })</pre>
+  </div>
+  <p>Some recipes are data rather than code. <code>tree_recipes.lua</code> leaves behind a table that C++ reads once
+    (see <a href="trees.html">Growing trees and forests</a>), so no Lua runs per branch. ADR-0028 records the line
+    between the two: expansion and meshing are hot and stay in C++, while composition and every tunable number belong
+    to the script.</p>
+
+  <h2>Textures from a field vocabulary</h2>
+  <p>Textures were once named presets (<code>surface_maps.h</code>: brick, concrete, and so on). ADR-0039 baked them to
+    shared tiling texture sets so they mip-filter. ADR-0043 made them composable, and ADR-0098 grew the
+    vocabulary:</p>
+  <div class="code">
+    <div class="hd"><span>Field2, and the tileable words ADR-0098 added</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/engine/procgen/texture_field.h#L41-L49">src/engine/procgen/texture_field.h</a></div>
+<pre><span class="c">// --- TILEABLE primitives (the flora plan's terrain layers, rocks, leaves). Exactly periodic</span>
+<span class="c">// over the unit square: a lattice of `period` cells that wraps, so a baked tile repeats with no</span>
+<span class="c">// seam. (fieldNoise / fieldFbm above sample unbounded noise and do not tile.) All in [0, 1].</span>
+<span class="t">Field2</span> fieldTileNoise(<span class="t">uint32_t</span> seed, <span class="t">int</span> period);
+<span class="t">Field2</span> fieldTileFbm(<span class="t">uint32_t</span> seed, <span class="t">int</span> period, <span class="t">int</span> octaves);   <span class="c">// period doubles per octave</span>
+<span class="c">// Cellular (Worley) over a wrapping jittered grid of `period` cells a side:</span>
+<span class="t">Field2</span> fieldCells(<span class="t">uint32_t</span> seed, <span class="t">int</span> period);       <span class="c">// distance to the nearest cell point (0 at it, ~0.5-0.7 between)</span>
+<span class="t">Field2</span> fieldCellEdges(<span class="t">uint32_t</span> seed, <span class="t">int</span> period);   <span class="c">// distance to the nearest cell BOUNDARY (0 on a crack)</span>
+<span class="t">Field2</span> fieldCellId(<span class="t">uint32_t</span> seed, <span class="t">int</span> period);      <span class="c">// a random value per cell (plates, pebbles, tones)</span></pre>
+  </div>
+  <p>Note the warning in the comment: <code>fieldNoise</code> and <code>fieldFbm</code> do not tile, so anything baked
+    to a repeating texture uses the <code>Tile</code> forms. The bark recipes add one more caution (from the tree lab):
+    integer repeats of one noise make identical columns, so use co-prime counts. <code>bakeCached</code> is the one
+    content-keyed disk cache for any bake (<code>cache/fields</code>). A closure cannot be hashed, so the caller names
+    the recipe and every parameter in a key string, including a version. Shader-side looks follow the same rule as
+    <b>material features</b> any surface can switch on: <code>triplanarScale</code>, <code>variation</code> and a top
+    layer (moss, snow) in push constants (ADR-0098).</p>
+
+  <h2>Meshes: one convention, one library</h2>
+  <p>The engine's front face is <b>clockwise</b> seen from the side the normal points to: a triangle (a, b, c) faces
+    along cross(c − a, b − a), and Vulkan culls back faces with <code>VK_FRONT_FACE_CLOCKWISE</code>. The offline path
+    tracer draws both sides, so a mesh wound backwards looks fine there and only goes wrong in the viewer. That is how
+    inside-out meshes kept slipping through.</p>
+  <div class="diagram">
+    <svg viewBox="0 0 900 250" role="img" aria-label="triFacing: given three vertex indices and the outward normal, it computes the face normal, drops a triangle with no area, and orders the indices so the face points along the normal">
+      <defs><marker id="pa3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" fill="#6f8fb0"/></marker></defs>
+      <g font-family="system-ui, sans-serif" font-size="13">
+        <polygon points="80,190 150,50 230,170" fill="#16263a" stroke="#8ec5ff" stroke-width="1.6"/>
+        <text x="66" y="206" fill="#cfe4ff">a</text><text x="146" y="42" fill="#cfe4ff">b</text><text x="236" y="182" fill="#cfe4ff">c</text>
+        <path d="M118,150 A32,32 0 1 1 182,150" fill="none" stroke="#e6c07b" stroke-width="1.4" marker-end="url(#pa3)"/>
+        <circle cx="152" cy="140" r="7" fill="none" stroke="#e6c07b" stroke-width="1.4"/><circle cx="152" cy="140" r="2" fill="#e6c07b"/>
+        <text x="40" y="232" fill="#93a6ba" font-size="12">seen from the front: a → b → c runs clockwise,</text>
+        <text x="40" y="247" fill="#93a6ba" font-size="12">the normal points at the viewer</text>
+
+        <g text-anchor="middle">
+          <rect x="320" y="30" width="230" height="52" rx="8" fill="#131a24" stroke="#2c3d50"/>
+          <text x="435" y="52" fill="#cfe4ff">triFacing(mesh, a, b, c, out)</text><text x="435" y="70" fill="#93a6ba" font-size="12">every emit word ends here</text>
+          <rect x="320" y="108" width="230" height="52" rx="8" fill="#131a24" stroke="#3b82f6"/>
+          <text x="435" y="130" fill="#cfe4ff">f = cross(C − A, B − A)</text><text x="435" y="148" fill="#93a6ba" font-size="12">the face's own normal</text>
+          <rect x="600" y="30" width="270" height="52" rx="8" fill="#131a24" stroke="#2c3d50"/>
+          <text x="735" y="52" fill="#cfe4ff">|f|² &lt; kNoArea2 → dropped</text><text x="735" y="70" fill="#93a6ba" font-size="12">no area: nothing to draw</text>
+          <rect x="600" y="108" width="270" height="52" rx="8" fill="#131a24" stroke="#2c3d50"/>
+          <text x="735" y="130" fill="#cfe4ff">dot(f, out) ≥ 0 → {a, b, c}</text><text x="735" y="148" fill="#93a6ba" font-size="12">already faces out</text>
+          <rect x="600" y="186" width="270" height="52" rx="8" fill="#131a24" stroke="#2c3d50"/>
+          <text x="735" y="208" fill="#cfe4ff">else → {a, c, b}</text><text x="735" y="226" fill="#93a6ba" font-size="12">swapped to face out</text>
+        </g>
+        <line x1="435" y1="82" x2="435" y2="104" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#pa3)"/>
+        <path d="M550,122 L575,122 L575,56 L596,56" fill="none" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#pa3)"/>
+        <line x1="550" y1="134" x2="596" y2="134" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#pa3)"/>
+        <path d="M550,146 L575,146 L575,212 L596,212" fill="none" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#pa3)"/>
+      </g>
+    </svg>
+  </div>
+  <p class="cap">The winding rule, and the one function that applies it. A caller states which way a face should
+    point. It never writes the index order itself.</p>
+  <div class="code">
+    <div class="hd"><span>triFacing: winds a triangle to the outward normal it is given, or drops it</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/engine/mesh_shapes.cpp#L187-L193">src/engine/mesh_shapes.cpp</a></div>
+<pre><span class="t">void</span> MeshBuilder::triFacing(<span class="t">RenderMesh</span>&amp; mesh, <span class="t">uint32_t</span> a, <span class="t">uint32_t</span> b, <span class="t">uint32_t</span> c, <span class="k">const</span> <span class="t">Vec3</span>&amp; out) {
+    <span class="k">const</span> <span class="t">Vec3</span> &amp;A = mesh.vertices[a].position, &amp;B = mesh.vertices[b].position, &amp;C = mesh.vertices[c].position;
+    <span class="k">const</span> <span class="t">Vec3</span> f = cross(C - A, B - A);
+    <span class="k">if</span> (f.lengthSquared() &lt; kNoArea2) <span class="k">return</span>;   <span class="c">// no area (a collapsed corner, three points on a line): nothing to draw</span>
+    <span class="k">if</span> (dot(f, out) &gt;= <span class="n">0</span>) mesh.indices.insert(mesh.indices.end(), {a, b, c});
+    <span class="k">else</span> mesh.indices.insert(mesh.indices.end(), {a, c, b});
+}</pre>
+  </div>
+  <p>The convention and the library's rules are written once, at the top of the builder:</p>
+  <div class="code">
+    <div class="hd"><span>The mesh library's contract</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/engine/mesh_builder.h#L16-L31">src/engine/mesh_builder.h</a></div>
+<pre><span class="c">// THE MESH LIBRARY (ADR-0172, Glenn 2026-10-13: "a common library of triangulation techniques ... how to represent</span>
+<span class="c">// triangles in this engine, and then code to handle all the different cases for building vehicles, buildings,</span>
+<span class="c">// furniture, etc. And then lua should be able to access it"). Every procedural mesh in the engine is built from the</span>
+<span class="c">// words below; a producer that needs a shape they lack ADDS a word here rather than a private helper.</span>
+<span class="c">//</span>
+<span class="c">//   THE CONVENTION  A RenderMesh is an indexed triangle list. A triangle (a, b, c) faces the way cross(c - a, b - a)</span>
+<span class="c">//                   points -- CLOCKWISE seen from its front (VK_FRONT_FACE_CLOCKWISE; back faces are culled) -- and</span>
+<span class="c">//                   that way must agree with its vertex normals. Nobody writes index order by hand: every triangle</span>
+<span class="c">//                   goes through triFacing (emitTri, emitQuad, emitBox, emitBlock, emitPolygon, emitPlanPrism,</span>
+<span class="c">//                   emitCylinder and the shape words all do), which winds it to the outward normal it is given and</span>
+<span class="c">//                   drops it when it has no area (kNoArea2).</span>
+<span class="c">//   SOLIDS ARE CLOSED  A box, block or prism has every face unless the caller masks one off because something</span>
+<span class="c">//                   covers it (a sleeper on its ballast): an open bottom is a hole when the solid stands over air.</span>
+<span class="c">//   ONE TRIANGULATOR  Polygons (with holes) fill through triangulate (earcut, procgen/city/triangulate.h).</span>
+<span class="c">//   CHECKED  engine/mesh_audit.h judges any mesh by these rules: the unit tests run it over every producer</span>
+<span class="c">//                   (tests/test_winding.cpp), rt_bake --audit over every bake.</span></pre>
+  </div>
+  <p>The library's words (ADR-0173), grouped:</p>
+  <div class="grid">
+    <div class="b"><h3>Faces</h3><p><code>emitTri</code>, <code>emitQuad</code> (+UV forms), <code>triFacing</code>,
+      <code>quadFacing</code>, <code>vertex</code>, <code>gridCell</code>/<code>gridIndices</code> (the CDLOD lattice),
+      <code>emitLattice</code></p></div>
+    <div class="b"><h3>Solids</h3><p><code>emitBox</code> on a <code>MeshFrame</code> (any frame, sheared or mirrored),
+      <code>emitBlock</code> (any eight corners), <code>emitPolygon</code> (holes, any plane), <code>emitPlanPrism</code>,
+      <code>emitCylinder</code>, <code>lathe</code>, <code>tube</code>, <code>ribbon</code>,
+      <code>icosphere</code>, <code>crossCards</code></p></div>
+    <div class="b"><h3>Shape operators</h3><p><code>displaceNoise</code>, <code>cutByPlane</code>, <code>facet</code>,
+      <code>leanNormals</code>, <code>deform</code>, <code>colorBy</code> (ADR-0098's shape kit)</p></div>
+    <div class="b"><h3>Clean-up and repair</h3><p><code>flatShade</code>, <code>autosmooth</code>,
+      <code>recomputeNormals</code>, <code>dropDegenerate</code>, <code>simplify</code>, <code>remesh</code>,
+      <code>splitNonManifold</code>, <code>fillHoles</code> (the last four came with the tree trunk zone)</p></div>
+  </div>
+  <p>ADR-0173 kept only three places that write indices by hand, each with a stated reason: the SDF dual contour (its
+    winding is topological), physics colliders (not render meshes), and the terrain drape's clipped pieces. The drape
+    and the collider have since moved onto the library, so only the dual contour remains. The road ear-clipper and the
+    shape grammar's lathe now forward to the library's versions, and the boxes copied across eight or so producers (station boards, train meshes, occupants, the Lua fleet, decks,
+    the fire escape, the shape grammar) became
+    <code>emitBox</code>/<code>emitBlock</code>.</p>
+  <figure class="shot">
+    <img src="img/procgen/office-furniture.webp" alt="An open-plan office floor with rows of desks, chairs, partitions and monitors under ceiling lights">
+    <figcaption>An office floor furnished by the furniture kit (2026-10-16). The kit
+      (<code>procgen/furniture_kit.cpp</code>) builds its pieces on MeshBuilder.</figcaption>
+  </figure>
+
+  <h2>The mesh audit</h2>
+  <p>One rule set judges every mesh (ADR-0172), both in the unit tests (over every producer) and in
+    <code>rt_bake --audit</code> (over every mesh a level ships):</p>
+  <div class="code">
+    <div class="hd"><span>MeshAudit: what is counted, and where the first offender is</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/engine/mesh_audit.h#L33-L48">src/engine/mesh_audit.h</a></div>
+<pre><span class="k">struct</span> <span class="t">MeshAudit</span> {
+    <span class="t">long</span> tris = <span class="n">0</span>, inward = <span class="n">0</span>, degenerate = <span class="n">0</span>, nonFinite = <span class="n">0</span>, badNormals = <span class="n">0</span>;
+    <span class="t">long</span> flipped = <span class="n">0</span>;   <span class="c">// of `inward`, the ones wholly reversed (cos &lt; -0.9): a wrong index order, not a crease</span>
+    <span class="t">Vec3</span> where{<span class="n">0</span>, <span class="n">0</span>, <span class="n">0</span>};   <span class="c">// the first inward triangle's centroid (mesh space), to find it</span>
+    <span class="t">Vec3</span> whereN{<span class="n">0</span>, <span class="n">0</span>, <span class="n">0</span>}, whereSize{<span class="n">0</span>, <span class="n">0</span>, <span class="n">0</span>};   <span class="c">// its vertex normal (averaged) and its longest edge's vector</span>
+    <span class="t">double</span> whereArea = <span class="n">0</span>;                       <span class="c">// and its area (m^2): a sliver flips on float rounding alone</span>
+    <span class="t">long</span> inwardSliver = <span class="n">0</span>;                      <span class="c">// of `inward`, the ones thinner than 1 cm (area / longest edge)</span>
+    <span class="c">// ...</span>
+    <span class="t">bool</span> clean() <span class="k">const</span> { <span class="k">return</span> inward == <span class="n">0</span> &amp;&amp; degenerate == <span class="n">0</span> &amp;&amp; nonFinite == <span class="n">0</span> &amp;&amp; badNormals == <span class="n">0</span>; }</pre>
+  </div>
+  <p>"Inward" is judged by angle. A triangle counts as inward when its face normal and its vertex normals are more than
+    107° apart, and as flipped beyond 154°. A smoothed crease or a Surface Nets sliver sits near 90°, and a true flip
+    sits near 180°. Beyond winding, the audit checks <code>auditUndersides</code> (every walkable surface more than 2 m
+    up has something facing down beneath it), <code>auditSeeThrough</code> (a person standing under every deck looks up
+    at 45° in 8 directions), and <code>auditFacadeCracks</code>.</p>
+  <p>Lua scripts can call the audit on what they build, and the tests do:</p>
+  <div class="code">
+    <div class="hd"><span>The library from Lua, audited (test mesh_library_from_lua_is_clean)</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/tests/test_winding.cpp#L617-L627">tests/test_winding.cpp</a></div>
+<pre>        <span class="k">local function</span> ok(name, m, closed)
+            <span class="k">local</span> a = mesh.audit(m)
+            assert(a.tris &gt; <span class="n">0</span>, name .. <span class="s">": empty"</span>)
+            assert(a.inward == <span class="n">0</span> <span class="k">and</span> a.degenerate == <span class="n">0</span>, name .. <span class="s">": "</span> .. a.inward .. <span class="s">" inward, "</span> .. a.degenerate .. <span class="s">" degenerate"</span>)
+            <span class="k">if</span> closed <span class="k">then</span> assert(a.open_edges == <span class="n">0</span>, name .. <span class="s">": "</span> .. a.open_edges .. <span class="s">" open edges"</span>) <span class="k">end</span>
+        <span class="k">end</span>
+        ok(<span class="s">"block"</span>, mesh.block({{<span class="n">0</span>,<span class="n">0</span>,<span class="n">0</span>},{<span class="n">0</span>,<span class="n">0</span>,<span class="n">2</span>},{<span class="n">3</span>,<span class="n">0</span>,<span class="n">2</span>},{<span class="n">3</span>,<span class="n">0</span>,<span class="n">0</span>}}, {{<span class="n">0</span>,<span class="n">2</span>,<span class="n">0</span>},{<span class="n">0</span>,<span class="n">2</span>,<span class="n">2</span>},{<span class="n">3</span>,<span class="n">1.5</span>,<span class="n">2</span>},{<span class="n">3</span>,<span class="n">1.5</span>,<span class="n">0</span>}}, {<span class="n">0.5</span>,<span class="n">0.5</span>,<span class="n">0.5</span>}), <span class="k">true</span>)
+        ok(<span class="s">"box_frame"</span>, mesh.box_frame{origin={<span class="n">1</span>,<span class="n">0</span>,<span class="n">1</span>}, x={<span class="n">1</span>,<span class="n">0</span>,<span class="n">0.2</span>}, y={<span class="n">0</span>,<span class="n">2</span>,<span class="n">0</span>}, z={-<span class="n">0.1</span>,<span class="n">0</span>,<span class="n">1.5</span>}}, <span class="k">true</span>)
+        ok(<span class="s">"polygon"</span>, mesh.polygon({{<span class="n">0</span>,<span class="n">0</span>,<span class="n">0</span>},{<span class="n">2</span>,<span class="n">0</span>,<span class="n">0</span>},{<span class="n">2</span>,<span class="n">0</span>,<span class="n">2</span>},{<span class="n">1</span>,<span class="n">0</span>,<span class="n">1</span>},{<span class="n">0</span>,<span class="n">0</span>,<span class="n">2</span>}}, {}, {<span class="n">0</span>,<span class="n">1</span>,<span class="n">0</span>}), <span class="k">false</span>)
+        ok(<span class="s">"prism"</span>, mesh.prism({{-<span class="n">5</span>,-<span class="n">4</span>},{<span class="n">5</span>,-<span class="n">4</span>},{<span class="n">5</span>,<span class="n">4</span>},{-<span class="n">5</span>,<span class="n">4</span>}}, {{{-<span class="n">1</span>,-<span class="n">1</span>},{<span class="n">1</span>,-<span class="n">1</span>},{<span class="n">1</span>,<span class="n">1</span>},{-<span class="n">1</span>,<span class="n">1</span>}}}, <span class="n">0</span>, <span class="n">0.3</span>), <span class="k">true</span>)
+        ok(<span class="s">"column"</span>, mesh.column({<span class="n">0</span>,<span class="n">0</span>,<span class="n">0</span>}, <span class="n">0.3</span>, <span class="n">2</span>, <span class="n">10</span>), <span class="k">true</span>)</pre>
+  </div>
+  <div class="note history"><p><b>What the audit taught.</b> The island bake's 2303 "flipped" deck triangles were not
+    the see-through bug. They were float32 slivers, flipped by rounding alone kilometres from the origin. The actual
+    hole was <i>missing faces</i>: a median wall had no bottom where it stood on the seam between two carriageway
+    slabs, so from under the viaduct the slit looked up through the wall. A winding check alone would never have found
+    it. A second lesson: <code>test_scatter</code>'s quay check encoded the counter-clockwise rule, so the river quay
+    passed its test while every one of its faces was inside out to the renderer. A test can enshrine a bug, so check
+    tests against the convention, not just against the code (ADR-0173).</p></div>
+
+  <h2>The polymesh kit: hard surfaces</h2>
+  <p>Glenn asked: "how can we better generate car meshes that aren't just cubes on wheels? Are there meshing techniques
+    or operations ... some kind of geometry node set". The answer was <code>procgen/polymesh.h</code> (ADR-0139). It is
+    an editable polygon mesh whose faces carry a group, a material and a colour, and whose edges carry a crease
+    sharpness. On top of it are the operations a box-modeller uses: <code>loft</code> (a body from different rounded
+    cross-sections), <code>extrude</code>, <code>inset</code>, creases, <code>mirrorX</code>, Catmull-Clark
+    <code>subdivide</code> (the subdivision level doubles as the LOD), and <code>toParts</code> (one RenderMesh per
+    material, in the engine's winding). Nothing in it is car-specific.</p>
+  <div class="code">
+    <div class="hd"><span>vehicle_kit.lua: a body is one loft of corresponding sections</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/assets/scripts/vehicle_kit.lua#L67-L78">assets/scripts/vehicle_kit.lua</a></div>
+<pre><span class="k">function</span> kit.body(P)
+  <span class="k">local</span> stations = {}
+  <span class="k">local</span> zs = P.stations
+  <span class="k">for</span> i = <span class="n">1</span>, #zs <span class="k">do</span> stations[i] = zs[i] <span class="k">end</span>
+  <span class="k">local</span> sections, cabin = {}, {}
+  <span class="k">for</span> i, z <span class="k">in</span> ipairs(stations) <span class="k">do</span> sections[i], cabin[i] = section(P, z) <span class="k">end</span>
+  <span class="k">local</span> n = #sections[<span class="n">1</span>]
+  <span class="k">for</span> i = <span class="n">2</span>, #sections <span class="k">do</span>
+    assert(#sections[i] == n, <span class="s">"section "</span> .. i .. <span class="s">" has "</span> .. #sections[i] .. <span class="s">" points, not "</span> .. n)
+  <span class="k">end</span>
+  <span class="k">local</span> B = poly.loft{ sections = sections, stations = stations, cap_start = <span class="k">true</span>, cap_end = <span class="k">true</span>,
+                       cap_crease = P.cap_crease <span class="k">or</span> <span class="n">0.3</span> }</pre>
+  </div>
+  <p>The assert matters because a loft joins section <i>i</i>'s point <i>k</i> to section <i>i+1</i>'s point <i>k</i>.
+    <code>roundedPolygon</code> emits exactly <code>segs + 1</code> points per corner, so sections built from the same
+    corner list correspond point for point, and the recipe can find a face (a window, a door) by its corner index.
+    Inside the kit, faces are counter-clockwise seen from outside, which is the modelling convention.
+    <code>toParts</code> converts them to the engine's clockwise winding on the way out, so the rest of the engine
+    only ever sees one convention.</p>
+  <div class="shots">
+    <figure class="shot">
+      <img src="img/procgen/kit-sedan.webp" alt="A red sedan body built from the vehicle kit, seen side-on on a checkered test floor">
+      <figcaption>A kit sedan (vehicle_kit.lua over <code>poly.*</code>) on a test floor, 2026-10-25.</figcaption>
+    </figure>
+    <figure class="shot">
+      <img src="img/procgen/park-props.webp" alt="A small park with a fountain, benches, people and red cushions among tall grass">
+      <figcaption>A generated pocket park (2026-10-05): fountain, benches and planting.</figcaption>
+    </figure>
+  </div>
+
+  <h2>Curves</h2>
+  <p>ADR-0031 split the curve <i>kernel</i> from its <i>consumers</i>. The kernel is one templated cubic Hermite spline
+    (<code>Spline&lt;T&gt;</code>, T a float, Vec2 or Vec3) whose knots store a value and in/out tangents. Catmull-Rom,
+    Bezier and keyframes all lower to that form. Consumers add their own services on top, such as arc-length
+    parameters and rotation-minimizing frames.</p>
+  <div class="code">
+    <div class="hd"><span>The kernel</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/curve.h#L20-L54">src/curve.h</a></div>
+<pre><span class="k">template</span> &lt;<span class="k">typename</span> <span class="t">T</span>&gt;
+<span class="k">class</span> <span class="t">Spline</span> {
+<span class="k">public</span>:
+    <span class="k">struct</span> <span class="t">Knot</span> {
+        <span class="t">T</span> value{};
+        <span class="t">T</span> inTangent{};
+        <span class="t">T</span> outTangent{};
+    };
+    <span class="t">std::vector</span>&lt;<span class="t">Knot</span>&gt; knots;
+    <span class="c">// ...</span>
+    <span class="k">static</span> <span class="t">Spline</span> catmullRom(<span class="k">const</span> <span class="t">std::vector</span>&lt;<span class="t">T</span>&gt;&amp; points, <span class="t">double</span> tension = <span class="n">0.0</span>);
+    <span class="c">// ...</span>
+    <span class="t">T</span> eval(<span class="t">double</span> u) <span class="k">const</span>;
+    <span class="t">T</span> derivative(<span class="t">double</span> u) <span class="k">const</span>;   <span class="c">// d/du (an unnormalized tangent)</span>
+    <span class="c">// ...</span>
+    <span class="t">std::vector</span>&lt;<span class="t">double</span>&gt; uniformArcLengthParams(<span class="t">int</span> count, <span class="t">int</span> subdiv = <span class="n">16</span>) <span class="k">const</span>;
+    <span class="c">// ...</span>
+};</pre>
+  </div>
+  <p>Its users today are the tree skinner (branch centrelines, swept with rotation-minimizing frames) and the terrain.
+    Roads went further. ADR-0048 proposed one road model with a curve as the source of truth and the graph as a derived
+    view, and prototyped a centripetal Catmull-Rom smoother (<code>smoothCentripetalCatmullRom</code> in
+    <code>terrain_field</code>). ADR-0050 built an editable cubic-Bezier path (<code>EditableCurve</code>) with handle
+    modes and arc-length traversal, shared by the road editor and animation paths. Each of those carries its own cubic
+    evaluation instead of lowering to <code>Spline&lt;T&gt;</code>. That is noted below as a duplicate.</p>
+
+  <h2>One random stream</h2>
+  <p>A seed must always grow the same shape on every machine. ADR-0098 added <code>ProcRng</code>
+    (<code>procgen/proc_rng.h</code>), a 28-line xorshift stream that avoids <code>&lt;random&gt;</code> distributions,
+    because their output differs between standard libraries. Generators draw from it in a fixed order. The grass, ground
+    clutter, real_tree, stylized rocks and stylized trees use it. The older generators (the recipe trees in
+    <code>tree.cpp</code>, the L-system, scatter, the foliage kit) still draw from <code>std::mt19937</code> through
+    <code>std::uniform_real_distribution</code>. That is exactly the case the <code>ProcRng</code> header warns about.</p>
+
+  <h2>Where to look</h2>
+  <ul class="files">
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/mesh_builder.h">src/engine/mesh_builder.h</a> — the mesh library and its convention; <a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/mesh_shapes.cpp">mesh_shapes.cpp</a> for the shape kit and triFacing</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/mesh_audit.h">src/engine/mesh_audit.h</a> — auditMesh, auditUndersides, auditSeeThrough, auditFacadeCracks, printColumn; <a href="https://github.com/GlennSong/raytracer-clang/blob/main/tools/rt_bake.cpp">tools/rt_bake.cpp</a> runs them over bakes</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/procgen/texture_field.h">src/engine/procgen/texture_field.h</a> — Field2 words and bakes; <a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/procgen/material_recipes.h">material_recipes.h</a> for stone, bark and blade textures as recipes</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/procgen/polymesh.h">src/engine/procgen/polymesh.h</a> — the polymesh kit</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/procgen/proc_model.h">src/engine/procgen/proc_model.h</a> — ProcModel, parts, colliders, instance groups</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/procgen/proc_rng.h">src/engine/procgen/proc_rng.h</a> — the shared random stream</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/curve.h">src/curve.h</a> — Spline&lt;T&gt;; <a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/editable_curve.h">engine/editable_curve.h</a>, <a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/curve_edit.h">curve_edit.h</a> for the editing toolkit</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/scripting/procgen_bindings.cpp">src/engine/scripting/procgen_bindings.cpp</a> — every Lua word (about 4,500 lines)</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/docs/capabilities.md">docs/capabilities.md</a> — the capability ledger to check before building anything new</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/tree/main/assets/scripts">assets/scripts/</a> — the recipes: brick.lua, planter.lua, streetfurniture.lua, vehicle_kit.lua, tree_recipes.lua, flora.lua, furniture_library.lua</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/tests/test_winding.cpp">tests/test_winding.cpp</a> — the <code>mesh_audit_*</code> cases over every producer, and <code>mesh_library_from_lua_is_clean</code>; <a href="https://github.com/GlennSong/raytracer-clang/blob/main/tests/test_mesh_builder.cpp">test_mesh_builder.cpp</a>, <a href="https://github.com/GlennSong/raytracer-clang/blob/main/tests/test_polymesh.cpp">test_polymesh.cpp</a>, <a href="https://github.com/GlennSong/raytracer-clang/blob/main/tests/test_texture_field.cpp">test_texture_field.cpp</a>, <a href="https://github.com/GlennSong/raytracer-clang/blob/main/tests/test_curve.cpp">test_curve.cpp</a></li>
+  </ul>
+  <table>
+    <tr><th>Switch / tool</th><th>What it does</th></tr>
+    <tr><td><code>rt_bake --audit &lt;bundle&gt;</code></td><td>Run the mesh audit over every mesh a baked level ships</td></tr>
+    <tr><td><code>RT_AUDIT_PROBE="x,z"</code></td><td>Print every face in a column, to read a miss</td></tr>
+    <tr><td><code>RT_SEE_THROUGH_SAMPLES=N</code>, <code>RT_UNDERSIDE_SAMPLES=N</code></td><td>Print see-through looks and open undersides</td></tr>
+    <tr><td><code>RT_CRACKS=1</code>, <code>RT_CRACKS_ONLY=&lt;recipe&gt;</code></td><td>The gated facade-crack test</td></tr>
+    <tr><td><code>--bake-texture &lt;recipe.lua&gt;</code></td><td>Preview any texture recipe to PNG (ADR-0043)</td></tr>
+    <tr><td><code>RT_NOCACHE=1</code></td><td>Always re-bake instead of reading <code>bakeCached</code></td></tr>
+  </table>
+  <p>Related: <a href="trees.html">Growing trees and forests</a> (the largest recipe library), and the site's older
+    <a href="../procgen.html">Procedural Toolkit</a> overview and <a href="../buildings.html">buildings</a> page.</p>
+
+  <footer>Code excerpts from commit <code>47d587f3</code> (2026-10-26). Drawn from ADR-0021, 0022, 0023, 0025, 0026,
+    0028, 0031, 0032, 0039, 0042, 0043, 0048, 0050, 0098, 0139, 0172, 0173, and the AGENTS.md rule in
+    <code>619d194a</code>.</footer>
+</div>
+</body>
+</html>

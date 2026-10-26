@@ -1,0 +1,918 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>The Engine's Spine — How the Engine Works</title>
+  <link rel="stylesheet" href="engine.css">
+</head>
+<body>
+<div class="wrap">
+  <div class="nav"><a href="index.html">← How the engine works</a> · <a href="../index.html">scenes</a></div>
+  <h1>The engine's spine</h1>
+  <p class="lede">Everything the game does happens inside one function, <code>Application::runFrame</code>, which
+    polls the window, runs every system's <code>update</code>, runs the simulation in fixed 1/60 s steps, and
+    draws. The world those systems work on is a small sparse-set ECS: an entity is a recyclable number, and each
+    component type lives in its own packed array. This page walks the loop, the data, and the seams around them:
+    events, threads, Lua, the editor, the frame ledger and the control socket.</p>
+
+  <h2>The problem</h2>
+  <p>In June 2026 <code>main()</code> <em>was</em> the engine: one monolithic loop, and every new feature (physics,
+    audio, AI) meant editing it (<a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/docs/decisions.md?plain=1#L103">ADR-0004</a>).
+    The engine now runs a city of tens of thousands of entities, Jolt physics, a crowd simulation, a Lua gun and
+    about fifty systems, in four hosts (the standalone viewer, the Qt editor, visionOS and the web). The spine has
+    to do four things for all of them:</p>
+  <ul>
+    <li><b>Keep the simulation stable</b> while the frame rate swings, and let it be paused,
+      sped up and single-stepped.</li>
+    <li><b>Keep systems apart.</b> A system should not need to know which other systems exist, and the order they
+      run in should be stated in one place.</li>
+    <li><b>Keep platforms out.</b> No GLFW, Metal, Vulkan, Qt or socket type may leak into engine code.</li>
+    <li><b>Be observable.</b> When a frame is slow, say where the time went; when an agent or a script wants to
+      look at the running game, let it in.</li>
+  </ul>
+
+  <h2>The shape: one Application, a stack of states, a list of systems</h2>
+  <p>An <b>Application</b> owns every engine-wide service: the window, the renderer, the <code>World</code> (the
+    entities), the simulation clock, the thread pool, the event bus, the frame ledger, the settings store and the
+    control channel. It is "pure mechanism": no game rule lives in it. Behaviour lives in <b>systems</b>, and
+    systems live in <b>app states</b> on a stack. The game proper is <code>ArenaState</code>, a
+    <code>PlayingState</code> holding an ordered vector of systems. The editor is another state
+    (<code>EditorState</code>), and the backtick debug overlay is a third, pushed on top while it is open.</p>
+
+  <div class="diagram">
+    <svg viewBox="0 0 860 440" role="img" aria-label="Hosts drive the Application, which owns the services and a state stack; ArenaState holds the ordered systems">
+      <defs><marker id="ar1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" fill="#6f8fb0"/></marker></defs>
+      <g font-family="system-ui, sans-serif" font-size="13" text-anchor="middle">
+        <!-- hosts -->
+        <rect x="20" y="16" width="250" height="52" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="145" y="38" fill="#cfe4ff">viewer_main.cpp</text>
+        <text x="145" y="57" fill="#93a6ba" font-size="12">app.run(): the blocking loop</text>
+        <rect x="305" y="16" width="250" height="52" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="430" y="38" fill="#cfe4ff">editor_app (Qt)</text>
+        <text x="430" y="57" fill="#93a6ba" font-size="12">QTimer every 16 ms → runFrame()</text>
+        <rect x="590" y="16" width="250" height="52" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="715" y="38" fill="#cfe4ff">visionOS · web (WASM)</text>
+        <text x="715" y="57" fill="#93a6ba" font-size="12">their own loops → runFrame()</text>
+        <line x1="145" y1="68" x2="145" y2="98" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar1)"/>
+        <line x1="430" y1="68" x2="430" y2="98" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar1)"/>
+        <line x1="715" y1="68" x2="715" y2="98" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar1)"/>
+        <!-- application -->
+        <rect x="20" y="100" width="820" height="150" rx="11" fill="#0f151d" stroke="#3b82f6"/>
+        <text x="40" y="123" fill="#8ec5ff" text-anchor="start" font-size="14">Application (src/engine/application.h) owns the services</text>
+        <g font-size="12">
+          <rect x="40" y="136" width="122" height="38" rx="7" fill="#131a24" stroke="#2c3d50"/><text x="101" y="160" fill="#cfe4ff">Window</text>
+          <rect x="172" y="136" width="122" height="38" rx="7" fill="#131a24" stroke="#2c3d50"/><text x="233" y="160" fill="#cfe4ff">Renderer</text>
+          <rect x="304" y="136" width="122" height="38" rx="7" fill="#131a24" stroke="#2c3d50"/><text x="365" y="160" fill="#cfe4ff">World (ECS)</text>
+          <rect x="436" y="136" width="122" height="38" rx="7" fill="#131a24" stroke="#2c3d50"/><text x="497" y="160" fill="#cfe4ff">SimClock</text>
+          <rect x="568" y="136" width="122" height="38" rx="7" fill="#131a24" stroke="#2c3d50"/><text x="629" y="160" fill="#cfe4ff">FrameStats</text>
+          <rect x="700" y="136" width="122" height="38" rx="7" fill="#131a24" stroke="#2c3d50"/><text x="761" y="160" fill="#cfe4ff">Settings</text>
+          <rect x="40" y="190" width="122" height="38" rx="7" fill="#131a24" stroke="#2c3d50"/><text x="101" y="214" fill="#cfe4ff">JobSystem</text>
+          <rect x="172" y="190" width="122" height="38" rx="7" fill="#131a24" stroke="#2c3d50"/><text x="233" y="214" fill="#cfe4ff">EventBus</text>
+          <rect x="304" y="190" width="122" height="38" rx="7" fill="#131a24" stroke="#2c3d50"/><text x="365" y="214" fill="#cfe4ff">DebugDraw</text>
+          <rect x="436" y="190" width="122" height="38" rx="7" fill="#131a24" stroke="#2c3d50"/><text x="497" y="214" fill="#cfe4ff">AudioEngine</text>
+          <rect x="568" y="190" width="122" height="38" rx="7" fill="#131a24" stroke="#2c3d50"/><text x="629" y="214" fill="#cfe4ff">ControlChannel</text>
+          <rect x="700" y="190" width="122" height="38" rx="7" fill="#131a24" stroke="#e6c07b"/><text x="761" y="214" fill="#e6c07b">StateStack</text>
+        </g>
+        <!-- states -->
+        <path d="M761,228 L761,268 L245,268 L245,288" fill="none" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar1)"/>
+        <line x1="761" y1="268" x2="761" y2="288" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar1)"/>
+        <line x1="575" y1="268" x2="575" y2="288" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar1)"/>
+        <rect x="20" y="290" width="450" height="122" rx="10" fill="#131a24" stroke="#3b82f6"/>
+        <text x="245" y="311" fill="#cfe4ff">ArenaState : PlayingState — the game</text>
+        <g font-size="12">
+          <rect x="34" y="324" width="98" height="28" rx="6" fill="#0f151d" stroke="#2c3d50"/><text x="83" y="343" fill="#cfe4ff">DevControl</text>
+          <rect x="140" y="324" width="98" height="28" rx="6" fill="#0f151d" stroke="#2c3d50"/><text x="189" y="343" fill="#cfe4ff">Camera</text>
+          <rect x="246" y="324" width="98" height="28" rx="6" fill="#0f151d" stroke="#2c3d50"/><text x="295" y="343" fill="#cfe4ff">Physics</text>
+          <rect x="352" y="324" width="104" height="28" rx="6" fill="#0f151d" stroke="#2c3d50"/><text x="404" y="343" fill="#cfe4ff">Player</text>
+          <rect x="34" y="360" width="98" height="28" rx="6" fill="#0f151d" stroke="#2c3d50"/><text x="83" y="379" fill="#cfe4ff">Script (Lua)</text>
+          <rect x="140" y="360" width="98" height="28" rx="6" fill="#0f151d" stroke="#2c3d50"/><text x="189" y="379" fill="#cfe4ff">city sim …</text>
+          <rect x="246" y="360" width="98" height="28" rx="6" fill="#0f151d" stroke="#2c3d50"/><text x="295" y="379" fill="#cfe4ff">Render</text>
+          <rect x="352" y="360" width="104" height="28" rx="6" fill="#0f151d" stroke="#2c3d50"/><text x="404" y="379" fill="#cfe4ff">Audio …</text>
+          <text x="245" y="404" fill="#93a6ba">about 50, run in registration order, every hook</text>
+        </g>
+        <rect x="490" y="290" width="170" height="56" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="575" y="313" fill="#cfe4ff">EditorState</text>
+        <text x="575" y="332" fill="#93a6ba" font-size="12">edit mode (gizmos, picking)</text>
+        <rect x="676" y="290" width="164" height="56" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="758" y="313" fill="#cfe4ff">DebugOverlayState</text>
+        <text x="758" y="332" fill="#93a6ba" font-size="12">backtick, pushed on top</text>
+        <text x="665" y="378" fill="#93a6ba" font-size="12">Every hook receives one FrameContext:</text>
+        <text x="665" y="396" fill="#93a6ba" font-size="12">world, renderer, clock, jobs, events,</text>
+        <text x="665" y="414" fill="#93a6ba" font-size="12">debug, audio, stats, input, frameDelta …</text>
+      </g>
+    </svg>
+  </div>
+  <p class="cap">Structure. The host decides who calls <code>runFrame</code>; the Application owns the services;
+    the state stack decides which states tick; a PlayingState ticks its systems in the order they were added.</p>
+
+  <p>A <b>system</b> is a class with six optional hooks. The interface was written before the ECS existed and
+    deliberately does not mention entity storage, so it survived the move to an ECS unchanged (ADR-0006 says so in
+    its consequences):</p>
+  <div class="code">
+    <div class="hd"><span>System: a unit of engine behaviour, ticked every frame</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/engine/system.h#L111-L124">src/engine/system.h</a></div>
+<pre><span class="c">// A unit of engine behaviour, ticked by Application each frame. Override only</span>
+<span class="c">// the hooks you need; all default to no-ops. The interface is deliberately</span>
+<span class="c">// independent of the entity-storage model, so it survives the move to an ECS.</span>
+<span class="k">class</span> <span class="t">System</span> {
+<span class="k">public</span>:
+    <span class="k">virtual</span> ~System() = <span class="k">default</span>;
+
+    <span class="k">virtual</span> <span class="t">void</span> onStart(<span class="t">FrameContext</span>&amp;) {}
+    <span class="k">virtual</span> <span class="t">void</span> onEvent(<span class="k">const</span> <span class="t">Event</span>&amp;, <span class="t">FrameContext</span>&amp;) {}
+    <span class="k">virtual</span> <span class="t">void</span> update(<span class="t">FrameContext</span>&amp;) {}
+    <span class="k">virtual</span> <span class="t">void</span> fixedUpdate(<span class="t">FrameContext</span>&amp;) {}
+    <span class="k">virtual</span> <span class="t">void</span> render(<span class="t">FrameContext</span>&amp;) {}
+    <span class="k">virtual</span> <span class="t">void</span> onStop(<span class="t">FrameContext</span>&amp;) {}
+};</pre>
+  </div>
+  <p>There is no dependency graph and no parallel scheduler: <b>order is the order of <code>addSystem</code> calls</b>
+    in <code>ArenaState</code>'s constructor, and the comments there carry the reasons. That is the whole
+    "scheduler". It is simple to read and debug, and the price is that order constraints live in prose:</p>
+  <div class="code">
+    <div class="hd"><span>ArenaState: order is meaning (one of many such comments)</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/game/arena_state.cpp#L224-L229">src/game/arena_state.cpp</a></div>
+<pre>    <span class="c">// The control channel's avatar (ADR-0079): consumes possess.cmd one-shots,</span>
+    <span class="c">// produces AgentDriver commands. AFTER CityWalkerSystem (commandeered</span>
+    <span class="c">// pedestrians already have bodies), BEFORE VehicleSystem (same-tick command</span>
+    <span class="c">// consumption) — and after PlayerSystem, so its chase-camera write wins.</span>
+    addSystem&lt;citysim::<span class="t">CityPossessSystem</span>&gt;(citySys, physSys);
+    addSystem&lt;<span class="t">VehicleSystem</span>&gt;(physSys, camSys);   <span class="c">// drives real cars: player + promoted</span></pre>
+  </div>
+  <p>States add a second layer. <code>AppState</code> has <code>isTransparent()</code> and <code>blocksInput()</code>,
+    and the stack uses them to decide who updates and who renders: the debug overlay is drawn over the game, but
+    the game's <code>update</code> pauses beneath it. (That detail matters to probes: a one-shot staged for a game
+    system is not consumed while the overlay is up; <code>docs/control-channel.md</code> warns about it.) State
+    changes are never immediate. A state asks through <code>FrameContext::transition</code>, and the Application
+    applies it at the end of the frame, popping then pushing so <code>onExit</code>/<code>onEnter</code> bracket the
+    swap cleanly. A level load is an <code>onEnter</code>, so it happens there too.</p>
+
+  <h2>What one frame does</h2>
+  <div class="diagram">
+    <svg viewBox="0 0 860 260" role="img" aria-label="The ten stages of runFrame in order">
+      <defs><marker id="ar2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" fill="#6f8fb0"/></marker></defs>
+      <g font-family="system-ui, sans-serif" font-size="13" text-anchor="middle">
+        <rect x="20" y="20" width="140" height="70" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="90" y="44" fill="#cfe4ff">Poll</text>
+        <text x="90" y="62" fill="#93a6ba" font-size="12">OS events, delta,</text>
+        <text x="90" y="78" fill="#93a6ba" font-size="12">framebuffer size</text>
+        <rect x="190" y="20" width="140" height="70" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="260" y="44" fill="#cfe4ff">Control drain</text>
+        <text x="260" y="62" fill="#93a6ba" font-size="12">socket lines, run</text>
+        <text x="260" y="78" fill="#93a6ba" font-size="12">on the main thread</text>
+        <rect x="360" y="20" width="140" height="70" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="430" y="44" fill="#cfe4ff">update()</text>
+        <text x="430" y="62" fill="#93a6ba" font-size="12">input, events,</text>
+        <text x="430" y="78" fill="#93a6ba" font-size="12">once per frame</text>
+        <rect x="530" y="20" width="140" height="70" rx="9" fill="#131a24" stroke="#e6c07b"/>
+        <text x="600" y="44" fill="#e6c07b">clock.advance</text>
+        <text x="600" y="62" fill="#93a6ba" font-size="12">how many 1/60 s</text>
+        <text x="600" y="78" fill="#93a6ba" font-size="12">steps are owed</text>
+        <rect x="700" y="20" width="140" height="70" rx="9" fill="#131a24" stroke="#3b82f6"/>
+        <text x="770" y="44" fill="#cfe4ff">fixedUpdate() × N</text>
+        <text x="770" y="62" fill="#93a6ba" font-size="12">physics, sim, player;</text>
+        <text x="770" y="78" fill="#93a6ba" font-size="12">N = 0 … 8</text>
+        <line x1="160" y1="55" x2="186" y2="55" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar2)"/>
+        <line x1="330" y1="55" x2="356" y2="55" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar2)"/>
+        <line x1="500" y1="55" x2="526" y2="55" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar2)"/>
+        <line x1="670" y1="55" x2="696" y2="55" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar2)"/>
+        <path d="M770,90 L770,112 L90,112 L90,136" fill="none" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar2)"/>
+        <rect x="20" y="138" width="140" height="70" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="90" y="162" fill="#cfe4ff">Dispatch</text>
+        <text x="90" y="180" fill="#93a6ba" font-size="12">queued EventBus</text>
+        <text x="90" y="196" fill="#93a6ba" font-size="12">events delivered</text>
+        <rect x="190" y="138" width="140" height="70" rx="9" fill="#131a24" stroke="#3b82f6"/>
+        <text x="260" y="162" fill="#cfe4ff">Render</text>
+        <text x="260" y="180" fill="#93a6ba" font-size="12">acquire · encode ·</text>
+        <text x="260" y="196" fill="#93a6ba" font-size="12">submit</text>
+        <rect x="360" y="138" width="140" height="70" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="430" y="162" fill="#cfe4ff">Wait</text>
+        <text x="430" y="180" fill="#93a6ba" font-size="12">sleep to the FPS</text>
+        <text x="430" y="196" fill="#93a6ba" font-size="12">cap, if one is set</text>
+        <rect x="530" y="138" width="140" height="70" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="600" y="162" fill="#cfe4ff">State swap</text>
+        <text x="600" y="180" fill="#93a6ba" font-size="12">pending push/pop;</text>
+        <text x="600" y="196" fill="#93a6ba" font-size="12">level loads here</text>
+        <rect x="700" y="138" width="140" height="70" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="770" y="162" fill="#cfe4ff">Ledger row</text>
+        <text x="770" y="180" fill="#93a6ba" font-size="12">phase times + draw</text>
+        <text x="770" y="196" fill="#93a6ba" font-size="12">counts, uploads</text>
+        <line x1="160" y1="173" x2="186" y2="173" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar2)"/>
+        <line x1="330" y1="173" x2="356" y2="173" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar2)"/>
+        <line x1="500" y1="173" x2="526" y2="173" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar2)"/>
+        <line x1="670" y1="173" x2="696" y2="173" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar2)"/>
+        <text x="430" y="240" fill="#93a6ba" font-size="12">Every box is a FramePhase bracket in the frame ledger (Poll, Update, FixedUpdate, Dispatch, Render, Wait, StateSwap).</text>
+      </g>
+    </svg>
+  </div>
+  <p class="cap">Flow. <code>Application::runFrame</code>, top to bottom. Render interpolates between the last two
+    fixed steps, so motion is smooth even when no step ran this frame.</p>
+
+  <p>The heart of it, with the timing and logging lines elided:</p>
+  <div class="code">
+    <div class="hd"><span>runFrame: N fixed steps, then the event drain, then render</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/engine/application.cpp#L417-L465">src/engine/application.cpp</a></div>
+<pre>    <span class="t">int</span> steps = clock.advance(frameDelta);
+    interpolation = clock.interpolationAlpha();
+    <span class="c">// ...</span>
+    {
+        RT_PROFILE_ZONE_NAMED(<span class="s">"fixedUpdate"</span>);
+        frameStats.beginPhase(<span class="t">FramePhase</span>::FixedUpdate);
+        <span class="t">FrameContext</span> ctx = makeContext();
+        <span class="c">// ...</span>
+        ctx.fixedStepCount = steps;
+        <span class="k">for</span> (<span class="t">int</span> i = <span class="n">0</span>; i &lt; steps; i++) {
+            ctx.fixedStepIndex = i;
+            stateStack.forEachActive([&amp;](<span class="t">AppState</span>&amp; state) { state.fixedUpdate(ctx); });
+        }
+        frameStats.endPhase(<span class="t">FramePhase</span>::FixedUpdate);
+        <span class="c">// ...</span>
+    }
+
+    <span class="c">// Deliver everything enqueued during update/fixedUpdate before the frame</span>
+    <span class="c">// renders, so reactions land in the same frame as their cause (ADR-0066).</span>
+    frameStats.beginPhase(<span class="t">FramePhase</span>::Dispatch);
+    eventBus.dispatchQueued();
+    frameStats.endPhase(<span class="t">FramePhase</span>::Dispatch);
+
+    <span class="k">auto</span> frameStart = std::chrono::steady_clock::now();
+    frameStats.beginPhase(<span class="t">FramePhase</span>::Render);
+    renderFrame();
+    frameStats.endPhase(<span class="t">FramePhase</span>::Render);</pre>
+  </div>
+  <p>Two details are easy to miss. <code>FrameContext</code> carries <code>fixedStepIndex</code> and
+    <code>fixedStepCount</code>, so work whose only consumer is the renderer (pose bakes) can skip every step but the
+    last when the loop is catching up. And the update phase is also where <b>scripted input</b> enters: the control
+    channel's <code>tap</code> and <code>hold</code> verbs stage a key name in Settings, and <code>runFrame</code>
+    feeds it through the same <code>InputMap::processEvent</code> a real keyboard uses (the comment there explains
+    why: the F key had been "fixed four times" through side doors while the key itself went untested).</p>
+
+  <figure class="shot">
+    <img src="img/spine/bus_stop_frame.webp" alt="A street corner in the city: a crowd of block people waiting at a bus stop, a yellow bus, cars, an elevated rail line and towers behind">
+    <figcaption>One frame's work: the city simulation placed the crowd and the bus, physics moved the bodies, the
+      bus-stop panel (bottom left) and the tool prompt (bottom) are game UI written by their own systems, and the
+      render system drew it all. All of them are ticked by the same loop (Glenn's screenshot,
+      2026-10-24).</figcaption>
+  </figure>
+
+  <h2>Fixed timestep, interpolation, and time scale</h2>
+  <p>Physics and the city simulation must not depend on the frame rate: a car's suspension integrated at 30 fps
+    behaves differently from one at 144 fps. So the simulation runs in <b>fixed steps</b> of 1/60 s
+    (<a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/docs/decisions.md?plain=1#L49">ADR-0002</a>).
+    <code>SimClock</code> keeps an <b>accumulator</b> of real time not yet simulated; each frame it adds the frame's
+    time and runs as many whole steps as fit. What is left over, as a fraction of a step, is the
+    <b>interpolation alpha</b>: render draws each moving thing that fraction of the way from its previous step's
+    transform to its current one.</p>
+  <div class="diagram">
+    <svg viewBox="0 0 860 210" role="img" aria-label="Variable frames above, fixed steps below, and the interpolation alpha for one frame">
+      <defs><marker id="ar3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" fill="#6f8fb0"/></marker></defs>
+      <g font-family="system-ui, sans-serif" font-size="13">
+        <text x="20" y="34" fill="#cfe4ff">frames (variable)</text>
+        <line x1="40" y1="60" x2="830" y2="60" stroke="#2c3d50" stroke-width="2"/>
+        <g stroke="#8ec5ff" stroke-width="2">
+          <line x1="40" y1="50" x2="40" y2="70"/><line x1="150" y1="50" x2="150" y2="70"/>
+          <line x1="230" y1="50" x2="230" y2="70"/><line x1="370" y1="50" x2="370" y2="70"/>
+          <line x1="450" y1="50" x2="450" y2="70"/><line x1="610" y1="50" x2="610" y2="70"/>
+          <line x1="700" y1="50" x2="700" y2="70"/><line x1="820" y1="50" x2="820" y2="70"/>
+        </g>
+        <text x="20" y="128" fill="#cfe4ff">fixed steps (1/60 s)</text>
+        <line x1="40" y1="150" x2="830" y2="150" stroke="#2c3d50" stroke-width="2"/>
+        <g stroke="#e6c07b" stroke-width="2">
+          <line x1="40" y1="142" x2="40" y2="158"/><line x1="100" y1="142" x2="100" y2="158"/>
+          <line x1="160" y1="142" x2="160" y2="158"/><line x1="220" y1="142" x2="220" y2="158"/>
+          <line x1="280" y1="142" x2="280" y2="158"/><line x1="340" y1="142" x2="340" y2="158"/>
+          <line x1="400" y1="142" x2="400" y2="158"/><line x1="460" y1="142" x2="460" y2="158"/>
+          <line x1="520" y1="142" x2="520" y2="158"/><line x1="580" y1="142" x2="580" y2="158"/>
+          <line x1="640" y1="142" x2="640" y2="158"/><line x1="700" y1="142" x2="700" y2="158"/>
+          <line x1="760" y1="142" x2="760" y2="158"/><line x1="820" y1="142" x2="820" y2="158"/>
+        </g>
+        <line x1="450" y1="70" x2="450" y2="186" stroke="#8ec5ff" stroke-dasharray="4 4"/>
+        <rect x="400" y="160" width="50" height="10" fill="#3b82f6" opacity="0.6"/>
+        <text x="458" y="100" fill="#cfe4ff">this frame: one step ran (the one at 400)</text>
+        <text x="458" y="182" fill="#93a6ba" font-size="12">alpha = 50/60 ≈ 0.83: each mover is drawn 83% of the way</text>
+        <text x="458" y="200" fill="#93a6ba" font-size="12">from its previous step's transform to its current one</text>
+        <path d="M370,80 Q385,110 398,140" fill="none" stroke="#6f8fb0" stroke-width="1.4" marker-end="url(#ar3)"/>
+      </g>
+    </svg>
+  </div>
+  <p class="cap">Real frames (blue ticks) land anywhere; fixed steps (gold) are evenly spaced. The frame at the dashed
+    line ran one step and has 50 px of accumulated time left over, less than one step, so it renders with alpha ≈ 0.83 rather than
+    snapping to the last step.</p>
+  <div class="code">
+    <div class="hd"><span>SimClock::advance: the accumulator, the step cap, the alpha</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/engine/clock.cpp#L30-L49">src/engine/clock.cpp</a></div>
+<pre>    accumulator += realDeltaSeconds * scale;
+
+    <span class="t">int</span> steps = <span class="n">0</span>;
+    <span class="k">while</span> (accumulator &gt;= fixedStepSeconds &amp;&amp; steps &lt; MAX_STEPS_PER_ADVANCE) {
+        accumulator -= fixedStepSeconds;
+        simTime += fixedStepSeconds;
+        steps++;
+    }
+
+    <span class="c">// Hit the cap with work still pending: drop the backlog rather than carry</span>
+    <span class="c">// lag into the next frame forever.</span>
+    backlogDropped = <span class="k">false</span>;
+    <span class="k">if</span> (steps == MAX_STEPS_PER_ADVANCE &amp;&amp; accumulator &gt; fixedStepSeconds) {
+        accumulator = <span class="n">0.0</span>;
+        backlogDropped = <span class="k">true</span>;
+        backlogDrops++;
+    }
+
+    alpha = accumulator / fixedStepSeconds;
+    <span class="k">return</span> steps;</pre>
+  </div>
+  <ul>
+    <li><b>Speed changes the clock, not the step.</b> <code>timeScale</code> multiplies the real time fed in; the
+      step stays 1/60 s, so 8× speed runs more steps of the same size and integration is unchanged. Shrinking the
+      step to go faster was rejected: it changes accuracy and the cost per simulated second.</li>
+    <li><b>The spiral of death.</b> If a frame takes too long, the next frame owes more steps, which takes longer
+      still. The clock clamps one frame's real time to 0.25 s and runs at most 8 steps; beyond that it drops the
+      backlog and logs <code>SimClock dropped backlog</code> ("motion will visibly jump").</li>
+    <li><b>Pause is its own switch</b>, separate from <code>timeScale</code>, and <code>requestStep()</code> runs
+      exactly one step while paused (the <code>sim step</code> socket verb).</li>
+    <li><b>Interpolation needs the previous transform.</b> Every renderable carries a <code>PrevTransform</code>;
+      whoever moves an entity in a fixed step copies the current transform into it first, as
+      <code>MotionSystem</code> does (<a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/engine/systems/motion_system.cpp#L6-L21">motion_system.cpp</a>),
+      and <code>RenderSystem</code> lerps the two by <code>ctx.interpolation</code>. Instanced crowds got the same
+      treatment late: ADR-0240 added per-instance previous transforms to <code>InstanceGroup</code> to stop riders
+      shaking in a moving bus.</li>
+  </ul>
+
+  <h2>The ECS: handles, slot maps and sparse sets</h2>
+  <p>An <b>ECS</b> (entity-component-system) separates identity, data and behaviour. An <b>entity</b> is only an
+    identity. A <b>component</b> is a plain struct of data attached to an entity (<code>Transform</code>,
+    <code>Renderable</code>, <code>RigidBody</code>). A <b>system</b> runs over every entity that has a given set of
+    components. "Simulated" means "has a <code>Velocity</code>"; "drawn" means "has a <code>Renderable</code>". The
+    engine adopted a deliberately small one on 2026-06-04 (commit <code>09e7a217</code>,
+    <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/docs/decisions.md?plain=1#L167">ADR-0006</a>),
+    replacing a <code>std::vector</code> of fixed entity structs.</p>
+
+  <h3>The entity: an index and a generation</h3>
+  <div class="code">
+    <div class="hd"><span>Handle: 8 bytes, null when generation is 0</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/handle.h#L13-L28">src/handle.h</a></div>
+<pre><span class="k">template</span> &lt;<span class="k">typename</span> <span class="t">Tag</span>&gt;
+<span class="k">struct</span> <span class="t">Handle</span> {
+    <span class="t">uint32_t</span> index = <span class="n">0</span>;
+    <span class="t">uint32_t</span> generation = <span class="n">0</span>;
+
+    <span class="t">bool</span> valid() <span class="k">const</span> { <span class="k">return</span> generation != <span class="n">0</span>; }
+    <span class="c">// ...</span>
+};</pre>
+  </div>
+  <p><code>Entity</code> is <code>Handle&lt;EntityTag&gt;</code> (<a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/docs/decisions.md?plain=1#L202">ADR-0007</a>).
+    The <code>World</code> hands them out from a <code>SlotMap</code>: a vector of slots, each with a generation
+    counter and a free-list link. Destroying an entity bumps its slot's generation and puts the slot on the free list;
+    the next <code>create()</code> reuses the slot under the new generation. A handle kept past its entity's death
+    therefore no longer matches its slot, and <code>world.get&lt;T&gt;(stale)</code> returns null rather than
+    quietly reading whoever lives there now. The tag makes a mesh handle and an entity handle different types at
+    compile time; the renderer's <code>MeshHandle</code> is the same template.</p>
+
+  <h3>The components: one packed array per type</h3>
+  <p>Each component type gets a <code>SparseSet&lt;T&gt;</code>: three vectors. <code>sparse</code> is indexed by entity
+    index and holds a position in the dense arrays (or <code>INVALID</code>); <code>denseEntity</code> and
+    <code>denseData</code> hold, side by side, which entity and its component. Lookup is two array reads; iteration
+    is a straight walk of a packed array; removal moves the last element into the hole ("swap and pop") so the arrays
+    stay packed.</p>
+  <div class="diagram">
+    <svg viewBox="0 0 860 400" role="img" aria-label="Memory layout: an entity handle, the slot map, and the sparse sets for Transform and Velocity">
+      <defs><marker id="ar4" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" fill="#6f8fb0"/></marker></defs>
+      <g font-family="system-ui, sans-serif" font-size="12" text-anchor="middle">
+        <rect x="20" y="14" width="300" height="34" rx="8" fill="#131a24" stroke="#3b82f6"/>
+        <text x="170" y="36" fill="#cfe4ff" font-size="13">Entity { index 3, generation 2 }</text>
+        <!-- column indices -->
+        <g fill="#64768a">
+          <text x="235" y="132">0</text><text x="305" y="132">1</text><text x="375" y="132">2</text>
+          <text x="445" y="132">3</text><text x="515" y="132">4</text><text x="585" y="132">5</text>
+        </g>
+        <rect x="410" y="80" width="70" height="300" fill="#3b82f6" opacity="0.08"/>
+        <text x="20" y="102" fill="#cfe4ff" text-anchor="start">SlotMap slots</text>
+        <text x="20" y="118" fill="#93a6ba" text-anchor="start">(generation, live?)</text>
+        <g>
+          <rect x="200" y="86" width="70" height="30" fill="#131a24" stroke="#2c3d50"/><text x="235" y="106" fill="#cfe4ff">g1 live</text>
+          <rect x="270" y="86" width="70" height="30" fill="#131a24" stroke="#2c3d50"/><text x="305" y="106" fill="#cfe4ff">g1 live</text>
+          <rect x="340" y="86" width="70" height="30" fill="#131a24" stroke="#2c3d50"/><text x="375" y="106" fill="#64768a">g3 free</text>
+          <rect x="410" y="86" width="70" height="30" fill="#131a24" stroke="#3b82f6"/><text x="445" y="106" fill="#cfe4ff">g2 live</text>
+          <rect x="480" y="86" width="70" height="30" fill="#131a24" stroke="#2c3d50"/><text x="515" y="106" fill="#cfe4ff">g1 live</text>
+          <rect x="550" y="86" width="70" height="30" fill="#131a24" stroke="#2c3d50"/><text x="585" y="106" fill="#cfe4ff">g1 live</text>
+        </g>
+        <path d="M320,31 L445,31 L445,82" fill="none" stroke="#6f8fb0" stroke-width="1.5" marker-end="url(#ar4)"/>
+        <!-- Transform -->
+        <text x="20" y="152" fill="#8ec5ff" text-anchor="start" font-size="13">SparseSet&lt;Transform&gt;</text>
+        <text x="20" y="182" fill="#cfe4ff" text-anchor="start">sparse[entity]</text>
+        <g>
+          <rect x="200" y="166" width="70" height="28" fill="#131a24" stroke="#2c3d50"/><text x="235" y="185" fill="#cfe4ff">0</text>
+          <rect x="270" y="166" width="70" height="28" fill="#131a24" stroke="#2c3d50"/><text x="305" y="185" fill="#cfe4ff">1</text>
+          <rect x="340" y="166" width="70" height="28" fill="#131a24" stroke="#2c3d50"/><text x="375" y="185" fill="#64768a">INVALID</text>
+          <rect x="410" y="166" width="70" height="28" fill="#131a24" stroke="#3b82f6"/><text x="445" y="185" fill="#cfe4ff">3</text>
+          <rect x="480" y="166" width="70" height="28" fill="#131a24" stroke="#2c3d50"/><text x="515" y="185" fill="#cfe4ff">4</text>
+          <rect x="550" y="166" width="70" height="28" fill="#131a24" stroke="#2c3d50"/><text x="585" y="185" fill="#cfe4ff">2</text>
+        </g>
+        <text x="20" y="222" fill="#cfe4ff" text-anchor="start">denseEntity[i]</text>
+        <text x="20" y="256" fill="#cfe4ff" text-anchor="start">denseData[i]</text>
+        <g>
+          <rect x="200" y="206" width="70" height="28" fill="#131a24" stroke="#2c3d50"/><text x="235" y="225" fill="#cfe4ff">0</text>
+          <rect x="270" y="206" width="70" height="28" fill="#131a24" stroke="#2c3d50"/><text x="305" y="225" fill="#cfe4ff">1</text>
+          <rect x="340" y="206" width="70" height="28" fill="#131a24" stroke="#e6c07b"/><text x="375" y="225" fill="#e6c07b">5</text>
+          <rect x="410" y="206" width="70" height="28" fill="#131a24" stroke="#3b82f6"/><text x="445" y="225" fill="#cfe4ff">3</text>
+          <rect x="480" y="206" width="70" height="28" fill="#131a24" stroke="#2c3d50"/><text x="515" y="225" fill="#cfe4ff">4</text>
+          <rect x="200" y="240" width="70" height="28" fill="#131a24" stroke="#2c3d50"/><text x="235" y="259" fill="#cfe4ff">T(e0)</text>
+          <rect x="270" y="240" width="70" height="28" fill="#131a24" stroke="#2c3d50"/><text x="305" y="259" fill="#cfe4ff">T(e1)</text>
+          <rect x="340" y="240" width="70" height="28" fill="#131a24" stroke="#e6c07b"/><text x="375" y="259" fill="#e6c07b">T(e5)</text>
+          <rect x="410" y="240" width="70" height="28" fill="#131a24" stroke="#3b82f6"/><text x="445" y="259" fill="#cfe4ff">T(e3)</text>
+          <rect x="480" y="240" width="70" height="28" fill="#131a24" stroke="#2c3d50"/><text x="515" y="259" fill="#cfe4ff">T(e4)</text>
+        </g>
+        <text x="200" y="290" fill="#93a6ba" text-anchor="start">gold: e5 was swapped into entity 2's old place</text>
+        <!-- Velocity -->
+        <text x="20" y="322" fill="#8ec5ff" text-anchor="start" font-size="13">SparseSet&lt;Velocity&gt;</text>
+        <text x="20" y="350" fill="#cfe4ff" text-anchor="start">sparse[entity]</text>
+        <g>
+          <rect x="200" y="334" width="70" height="28" fill="#131a24" stroke="#2c3d50"/><text x="235" y="353" fill="#64768a">INVALID</text>
+          <rect x="270" y="334" width="70" height="28" fill="#131a24" stroke="#2c3d50"/><text x="305" y="353" fill="#64768a">INVALID</text>
+          <rect x="340" y="334" width="70" height="28" fill="#131a24" stroke="#2c3d50"/><text x="375" y="353" fill="#64768a">INVALID</text>
+          <rect x="410" y="334" width="70" height="28" fill="#131a24" stroke="#3b82f6"/><text x="445" y="353" fill="#cfe4ff">0</text>
+        </g>
+        <text x="20" y="384" fill="#cfe4ff" text-anchor="start">dense</text>
+        <rect x="200" y="368" width="140" height="28" fill="#131a24" stroke="#3b82f6"/><text x="270" y="387" fill="#cfe4ff">entity 3 · V(e3)</text>
+        <!-- notes -->
+        <g text-anchor="start" fill="#93a6ba">
+          <text x="650" y="150">get&lt;Transform&gt;(e):</text>
+          <text x="650" y="168">slot gen must match, then</text>
+          <text x="650" y="186">denseData[sparse[3]] = T(e3)</text>
+          <text x="650" y="222">remove: move the last</text>
+          <text x="650" y="240">element into the hole, pop</text>
+          <text x="650" y="276">each&lt;Transform, Velocity&gt;:</text>
+          <text x="650" y="294">walk Velocity's dense list</text>
+          <text x="650" y="312">(1 entry, the smallest) and</text>
+          <text x="650" y="330">ask Transform's sparse</text>
+          <text x="650" y="348">array for the rest</text>
+        </g>
+      </g>
+    </svg>
+  </div>
+  <p class="cap">Memory layout. Slot 2's entity was destroyed (every destroy bumps the slot's generation); Transform's arrays stayed
+    packed. The blue column is entity 3: a handle, a live slot, a Transform at dense position 3 and a Velocity at
+    dense position 0.</p>
+  <div class="code">
+    <div class="hd"><span>SparseSet&lt;T&gt;: insert and swap-and-pop remove</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/engine/sparse_set.h#L23-L71">src/engine/sparse_set.h</a></div>
+<pre><span class="k">template</span> &lt;<span class="k">typename</span> <span class="t">T</span>&gt;
+<span class="k">class</span> <span class="t">SparseSet</span> : <span class="k">public</span> <span class="t">ISparseSet</span> {
+<span class="k">public</span>:
+    <span class="k">static</span> <span class="k">constexpr</span> <span class="t">uint32_t</span> INVALID = <span class="n">0xFFFFFFFFu</span>;
+
+    <span class="t">T</span>&amp; insert(<span class="t">uint32_t</span> entityIndex, <span class="k">const</span> <span class="t">T</span>&amp; value) {
+        <span class="k">if</span> (entityIndex &gt;= sparse.size()) sparse.resize(entityIndex + <span class="n">1</span>, INVALID);
+        <span class="k">if</span> (sparse[entityIndex] != INVALID) {
+            denseData[sparse[entityIndex]] = value;        <span class="c">// overwrite existing</span>
+            <span class="k">return</span> denseData[sparse[entityIndex]];
+        }
+        sparse[entityIndex] = <span class="k">static_cast</span>&lt;<span class="t">uint32_t</span>&gt;(denseData.size());
+        denseEntity.push_back(entityIndex);
+        denseData.push_back(value);
+        <span class="k">return</span> denseData.back();
+    }
+    <span class="c">// ...</span>
+    <span class="t">void</span> removeIndex(<span class="t">uint32_t</span> entityIndex) <span class="k">override</span> {
+        <span class="k">if</span> (entityIndex &gt;= sparse.size() || sparse[entityIndex] == INVALID) <span class="k">return</span>;
+        <span class="t">uint32_t</span> dense = sparse[entityIndex];
+        <span class="t">uint32_t</span> lastDense = <span class="k">static_cast</span>&lt;<span class="t">uint32_t</span>&gt;(denseData.size() - <span class="n">1</span>);
+        <span class="t">uint32_t</span> lastEntity = denseEntity[lastDense];
+
+        denseData[dense] = denseData[lastDense];           <span class="c">// swap-and-pop</span>
+        denseEntity[dense] = lastEntity;
+        sparse[lastEntity] = dense;
+
+        denseData.pop_back();
+        denseEntity.pop_back();
+        sparse[entityIndex] = INVALID;
+    }
+    <span class="c">// ...</span>
+<span class="k">private</span>:
+    std::vector&lt;<span class="t">uint32_t</span>&gt; sparse;       <span class="c">// entityIndex -&gt; dense position (or INVALID)</span>
+    std::vector&lt;<span class="t">uint32_t</span>&gt; denseEntity;  <span class="c">// dense position -&gt; entityIndex</span>
+    std::vector&lt;<span class="t">T</span>&gt; denseData;           <span class="c">// dense position -&gt; component</span>
+};</pre>
+  </div>
+  <p>The sparse set keys only by index. Generation checking is the <code>World</code>'s job:
+    <code>World::destroy</code> strips the entity from every pool through the type-erased <code>ISparseSet</code>
+    base, so a recycled index always starts with no components. The <code>World</code> keeps one pool per type in an
+    <code>unordered_map</code> keyed by a per-type id (a function-local static counter), so asking for a pool is a
+    hash lookup. That cost turned out to matter.</p>
+
+  <h3>Queries: <code>World::each</code></h3>
+  <div class="code">
+    <div class="hd"><span>World::each: drive from the smallest pool, resolve pools once</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/engine/world.h#L64-L101">src/engine/world.h</a></div>
+<pre>    <span class="k">template</span> &lt;<span class="k">typename</span>... <span class="t">Ts</span>, <span class="k">typename</span> <span class="t">Fn</span>&gt;
+    <span class="t">void</span> each(<span class="t">Fn</span> fn) {
+        <span class="c">// ...</span>
+        <span class="c">// Drive the walk from the SMALLEST pool: each&lt;Transform, ControlledBy&gt; used to walk every</span>
+        <span class="c">// Transform in the city (tens of thousands) to find the one player -- ~0.2 ms in each of</span>
+        <span class="c">// the half-dozen systems that ask, every fixed step.</span>
+        <span class="k">const</span> std::vector&lt;<span class="t">uint32_t</span>&gt;* drive = &amp;firstPool-&gt;entityIndices();
+        <span class="t">bool</span> missing = <span class="k">false</span>;
+        <span class="k">auto</span> consider = [&amp;](<span class="k">const</span> <span class="k">auto</span>* p) {
+            <span class="k">if</span> (!p) { missing = <span class="k">true</span>; <span class="k">return</span>; }
+            <span class="k">if</span> (p-&gt;entityIndices().size() &lt; drive-&gt;size()) drive = &amp;p-&gt;entityIndices();
+        };
+        (consider(poolIfExists&lt;<span class="t">Ts</span>&gt;()), ...);
+        <span class="k">if</span> (missing) <span class="k">return</span>;
+        <span class="c">// The pools ONCE, not per entity: poolHas / poolIfExists are hash-map lookups, and the render walk paid</span>
+        <span class="c">// three of them (and three more to fetch) for each of ~27,000 entities a frame. A pool object outlives any</span>
+        <span class="c">// add or remove inside `fn` (only its storage moves; it is asked afresh per index).</span>
+        <span class="k">const</span> std::tuple&lt;<span class="t">SparseSet</span>&lt;<span class="t">Ts</span>&gt;*...&gt; ps(poolIfExists&lt;<span class="t">Ts</span>&gt;()...);
+        <span class="c">// ...</span>
+    }</pre>
+  </div>
+  <p>A system writes <code>world.each&lt;Transform, Velocity, PrevTransform&gt;([&amp;](Entity e, Transform&amp; t,
+    Velocity&amp; v, PrevTransform&amp; p) { ... })</code> and gets every entity having all three. The contract,
+    stated in the header: do not create or destroy entities, or add or remove the iterated component types, inside
+    the callback; collect and apply after. (When the driving pool is not the first type's, the walk is over a copy of
+    the index list, so adding or removing <em>that</em> component is safe.)</p>
+  <div class="note history"><p><b>How it got here.</b> ADR-0006 listed "iterates the first listed pool (no smallest
+    pool optimization)" as a known limit, with the revisit trigger "entity counts/iteration showing up in a
+    profile". It showed up on 2026-09-25: <code>each&lt;Transform, ControlledBy&gt;</code> walked every Transform in
+    the city to find the one player, about 0.2 ms in each of eight systems, every step. Driving from the smallest
+    pool was one of the four fixes in
+    <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/docs/decisions.md?plain=1#L7905">ADR-0101</a>
+    (commit <code>62bf7980</code>) that together took metro_planned's walk from p50 19.1 ms to 13.1 ms. On 2026-10-06
+    (commit <code>28fc0763</code>) the pools were resolved once per call instead of per entity, when the render walk was
+    found paying six hash lookups for each of ~27,000 entities a frame. Archetype storage (EnTT-style groups) was
+    considered in June and rejected as more machinery than the engine needed; nothing since has reopened it.</p></div>
+
+  <h2>Components, and the property layer</h2>
+  <p>Components are plain structs in <code>src/engine/components.h</code> (43 structs at the pinned commit), plus a
+    few that live with their module (<code>ScriptBehaviour</code> in scripting, so the core ECS stays
+    scripting-free). The core three:</p>
+  <div class="code">
+    <div class="hd"><span>Transform, PrevTransform, Velocity</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/engine/components.h#L29-L61">src/engine/components.h</a></div>
+<pre><span class="c">// Position / orientation / scale. Compose into a model matrix with matrix().</span>
+<span class="k">struct</span> <span class="t">Transform</span> {
+    <span class="t">Vec3</span> position;
+    <span class="t">Quat</span> orientation;
+    <span class="t">Vec3</span> scale;
+
+    Transform() : scale(<span class="n">1</span>, <span class="n">1</span>, <span class="n">1</span>) {}
+
+    <span class="t">Mat4</span> matrix() <span class="k">const</span>;
+};
+<span class="c">// ...</span>
+<span class="c">// Previous step's transform, kept so rendering can interpolate to the current</span>
+<span class="c">// step. Present on every renderable; only moving entities have it updated.</span>
+<span class="k">struct</span> <span class="t">PrevTransform</span> {
+    <span class="t">Transform</span> value;
+};
+
+<span class="c">// Linear + angular velocity. An entity's presence in this pool means it is</span>
+<span class="c">// simulated (integrated each fixed step).</span>
+<span class="k">struct</span> <span class="t">Velocity</span> {
+    <span class="t">Vec3</span> linear;
+    <span class="t">Vec3</span> angular;
+};</pre>
+  </div>
+  <p>World transforms are flat: there is no scene graph at runtime. Parenting exists only in the level document
+    (ADR-0020) and is flattened on load.</p>
+  <p>The editor's inspector, the in-viewport ImGui panels, JSON load and save, and undo all need to know a
+    component's editable fields. Writing each by hand is five places per field to drift (the inspector and
+    <code>LevelWriter</code> already disagreed on the material block). So
+    <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/docs/decisions.md?plain=1#L1092">ADR-0018</a>
+    made a component describe its fields <b>once</b>, to a visitor; each consumer is a different visitor:</p>
+  <div class="code">
+    <div class="hd"><span>describeProperties: one walk, many consumers</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/engine/properties.cpp#L13-L19">src/engine/properties.cpp</a></div>
+<pre><span class="t">void</span> describeProperties(<span class="t">Transform</span>&amp; t, <span class="t">PropertyVisitor</span>&amp; v) {
+    v.field(<span class="t">FieldMeta</span>(<span class="s">"Position"</span>).id(<span class="s">"position"</span>).increment(<span class="n">0.1</span>), t.position);
+    v.field(<span class="t">FieldMeta</span>(<span class="s">"Scale"</span>).id(<span class="s">"scale"</span>).range(<span class="n">0.01</span>, <span class="n">1000.0</span>).increment(<span class="n">0.05</span>),
+            t.scale);
+    <span class="c">// Orientation is deliberately absent: the gizmo and yaw/pitch tools own</span>
+    <span class="c">// rotation; a raw quaternion in a panel helps no one.</span>
+}</pre>
+  </div>
+  <p><code>FieldMeta</code> says what a field <em>is</em> (bounded, log-scaled, a colour, a unit, a closed set of
+    choices), never which widget draws it. Its <code>id</code> is the JSON key, so the ids are the file format: renaming
+    one is a format change. A <code>ComponentRegistry</code> (one line per type in
+    <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/engine/component_registry.cpp#L9-L54">component_registry.cpp</a>)
+    lets UI code ask "which components does this entity have" without naming any of them, with optional add/remove
+    thunks and a post-edit hook (Shape size → mesh rebuild).</p>
+  <p>Its reach is narrower than the ADR's wording suggests. Nine types are registered (Transform, Shape, Road,
+    Material, Camera, Player Spawn, and read-only Velocity, Rigid Body, Controlled By); the JSON visitors are used for
+    materials, camera lenses and undo snapshots. Most of the level format is still read by hand in
+    <code>level_loader.cpp</code> (8,898 lines).</p>
+
+  <h2>Events: the typed EventBus, and the other bus</h2>
+  <p><a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/docs/decisions.md?plain=1#L4796">ADR-0066</a>
+    (the first of two ADRs numbered 0066; the other, at
+    <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/docs/decisions.md?plain=1#L5239">line 5239</a>,
+    is the Living City) added a typed publish/subscribe bus so "system A announces, system B reacts" without either
+    knowing the other. An event is any copyable struct; the bus keys handlers by <code>std::type_index</code>.</p>
+  <div class="code">
+    <div class="hd"><span>EventBus: subscribe, publish now, or enqueue for the frame's drain</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/engine/event_bus.h#L37-L64">src/engine/event_bus.h</a></div>
+<pre>    <span class="k">template</span> &lt;<span class="k">typename</span> <span class="t">E</span>&gt;
+    <span class="t">SubscriptionId</span> subscribe(std::function&lt;<span class="t">void</span>(<span class="k">const</span> <span class="t">E</span>&amp;)&gt; handler) {
+        <span class="t">SubscriptionId</span> id = nextId++;
+        handlers[std::type_index(<span class="k">typeid</span>(<span class="t">E</span>))].push_back(
+            {id, [fn = std::move(handler)](<span class="k">const</span> <span class="t">void</span>* event) {
+                 fn(*<span class="k">static_cast</span>&lt;<span class="k">const</span> <span class="t">E</span>*&gt;(event));
+             }});
+        <span class="k">return</span> id;
+    }
+    <span class="c">// ...</span>
+    <span class="c">// Defer a publish to the next dispatchQueued(). The event is copied into</span>
+    <span class="c">// the queue, so the caller's instance can die immediately.</span>
+    <span class="k">template</span> &lt;<span class="k">typename</span> <span class="t">E</span>&gt;
+    <span class="t">void</span> enqueue(<span class="t">E</span> event) {
+        queued.push_back([e = std::move(event)](<span class="t">EventBus</span>&amp; bus) { bus.publish(e); });
+    }</pre>
+  </div>
+  <p><code>publish</code> runs handlers synchronously in subscription order (deterministic). <code>enqueue</code>
+    defers; the Application drains the queue once per frame after the fixed steps, so a reaction lands in the same
+    frame as its cause. Reentrancy is defined and tested in <code>tests/test_event_bus.cpp</code>: an unsubscribe
+    during dispatch nulls the slot and sweeps it after; an enqueue during the drain lands in next frame's batch, so a
+    chain of events cannot spin forever. The bus is main-thread only, like the World.</p>
+  <p>In practice the bus carries two event types: physics <code>Collision</code>s (published by
+    <code>PhysicsSystem</code>, turned into impact sounds by <code>ArenaState</code>) and <code>PlaySound</code> cues
+    (from the C++ shooting system, the Lua <code>sound.play</code> binding and the impact handler, consumed by
+    <code>AudioSystem</code>). Most cross-system signalling goes another way: through <b>Settings keys</b>. A system
+    writes a one-shot flag (<code>cameraApply</code>, <code>possess.cmd</code>, <code>vehicle.spawn</code>) that
+    another consumes and clears, or a telemetry string (<code>vehicle.telemetry</code>, <code>player.telemetry</code>)
+    that a control-channel <code>?</code> verb reads back. The code calls this "the <code>citysim.*</code> idiom"; it spread because Settings was what the control channel
+    and the web build could already reach. It
+    works, but it is untyped, it is a second bus, and a misspelled key fails silently: exactly the objection ADR-0066
+    raised against a string-keyed dispatcher.</p>
+
+  <h2>Platform seams</h2>
+  <p><a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/docs/decisions.md?plain=1#L17">ADR-0001</a>
+    put every platform detail behind two interfaces: <code>Window</code> (windowing and input) and <code>Renderer</code>
+    (the GPU). GLFW is sealed inside <code>window.cpp</code>; events arrive as the engine's own <code>Event</code> and
+    <code>KeyCode</code>; the native window crosses to the renderer as an opaque <code>void*</code>. The pattern (a
+    "seal": a pimpl'd header with no vendor types) was then reused for every dependency: Jolt behind
+    <code>PhysicsWorld</code>, Lua behind <code>ScriptVM</code>, miniaudio behind <code>AudioEngine</code>, Tracy
+    behind <code>profile.h</code> macros, POSIX sockets behind <code>ControlChannel</code>.</p>
+  <table>
+    <tr><th>Seam</th><th>Implementations</th><th>Chosen by</th></tr>
+    <tr><td><code>Renderer</code> (<code>renderer.h</code>, <code>Renderer::create()</code>)</td>
+      <td>Metal (macOS, visionOS) · Vulkan, <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/docs/decisions.md?plain=1#L3791">ADR-0057</a> (Linux, Windows) ·
+        WebGPU, <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/docs/decisions.md?plain=1#L3866">ADR-0058</a> (browser) · <code>NullRenderer</code> (tests)</td>
+      <td>CMake links exactly one <code>Renderer::create()</code> per target</td></tr>
+    <tr><td><code>Window</code> (<code>window.h</code>)</td>
+      <td>GLFW (<code>createPlatformWindow()</code>; Emscripten's GLFW shim on the web) · <code>HostedWindow</code> (the Qt editor)</td>
+      <td>the host, passed to <code>Application::initialize</code></td></tr>
+    <tr><td>The loop</td><td><code>run()</code> blocking · <code>begin()</code> / <code>runFrame()</code> / <code>end()</code> host-driven</td>
+      <td>the host</td></tr>
+  </table>
+  <p>The renderer seam grew with the engine: optional virtuals with no-op defaults (<code>lastGpuFrameMs</code>,
+    <code>requestFrameDump</code>, <code>occlusionDepth</code>, the GPU crowd) let one backend lead and the others
+    follow. Vulkan needed one new window method (<code>createVulkanSurface</code>) so GLFW stayed sealed; WebGPU
+    needed none, because its surface is the canvas. The web build also forces the job system synchronous, since
+    that build links without threads.</p>
+
+  <h2>The editor hosts the engine</h2>
+  <p><a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/docs/decisions.md?plain=1#L1139">ADR-0019</a>
+    decided that the editor is not a second program with its own renderer: it is the same <code>Application</code>,
+    hosted inside a Qt window through <code>HostedWindow</code> (ADR-0001 inverted: the host owns the OS window and
+    hands the engine a view to draw into, injecting input). <code>editor_main.cpp</code> calls
+    <code>app.begin()</code> and then a 16 ms <code>QTimer</code> calls <code>app.runFrame()</code>. The level JSON
+    is the document: <code>EditorState</code> loads it and edits mutate the live <code>World</code>; Play saves the
+    document and swaps to <code>ArenaState</code> through the same <code>requestState</code> transition.</p>
+  <p>All traffic between the Qt panels and the engine goes through one <code>EditorBridge</code>, attached in two
+    modes: <em>editable</em> while an <code>EditorState</code> is active, and <em>observer</em> during Play, where
+    the hierarchy and inspector watch the live world but cannot write. The bridge is same-thread by construction (the
+    Qt event loop and <code>runFrame</code> interleave), which is why the later control channel could not simply
+    reuse it. <code>AGENTS.md</code> makes <code>editor_app</code>, not the standalone viewer, the acceptance gate
+    for anything meant to be looked at.</p>
+
+  <h2>The job system</h2>
+  <p>One shared thread pool, owned by the Application and handed to systems as <code>ctx.jobs</code>
+    (<a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/docs/decisions.md?plain=1#L611">ADR-0014</a>).
+    It is deliberately minimal: a fixed set of workers (hardware threads minus one) draining one mutex-guarded queue,
+    no work stealing. Zero workers is a legal setting, "synchronous mode", where every task runs inline; tests use it
+    (the player trace below builds <code>JobSystem jobs{0}</code>) so results do not depend on scheduling.</p>
+  <div class="code">
+    <div class="hd"><span>parallelFor: chunks on the pool, the caller helps until done</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/job_system.cpp#L102-L130">src/job_system.cpp</a></div>
+<pre><span class="t">void</span> <span class="t">JobSystem</span>::parallelFor(std::<span class="t">size_t</span> begin, std::<span class="t">size_t</span> end,
+                            <span class="k">const</span> std::function&lt;<span class="t">void</span>(std::<span class="t">size_t</span>)&gt;&amp; body,
+                            std::<span class="t">size_t</span> grainSize) {
+    <span class="c">// ...</span>
+    <span class="k">if</span> (workers.empty() || end - begin &lt;= grainSize) {
+        <span class="k">for</span> (std::<span class="t">size_t</span> i = begin; i &lt; end; ++i) {
+            body(i);
+        }
+        <span class="k">return</span>;
+    }
+    <span class="c">// body outlives the call: we block in wait() before returning, so the</span>
+    <span class="c">// by-reference capture stays valid for every chunk.</span>
+    std::atomic&lt;<span class="t">int</span>&gt; counter{<span class="n">0</span>};
+    <span class="k">for</span> (std::<span class="t">size_t</span> chunkStart = begin; chunkStart &lt; end; chunkStart += grainSize) {
+        std::<span class="t">size_t</span> chunkEnd = std::min(chunkStart + grainSize, end);
+        run([&amp;body, chunkStart, chunkEnd] {
+            <span class="k">for</span> (std::<span class="t">size_t</span> i = chunkStart; i &lt; chunkEnd; ++i) {
+                body(i);
+            }
+        }, &amp;counter);
+    }
+    wait(&amp;counter);
+}</pre>
+  </div>
+  <p>Systems themselves still run one after another on the main thread; the pool is for work inside a system. Its
+    users: Jolt's physics step (through a <code>JPH::JobSystem</code> adapter), grass tiles (built off the render
+    thread after they caused hitches), the terrain LOD system's collider tiles, height pyramids, the day-night system
+    and the city sim. The contract (documented, not enforced): <code>parallelFor</code> is for independent work
+    only, and nothing on a worker may structurally change the ECS.</p>
+  <div class="note"><p><b>Not everything uses it.</b> About a dozen procgen and bake paths
+    (<code>terrain.cpp</code>, <code>forest.cpp</code>, <code>stream_power.cpp</code>, <code>terrain_maps.cpp</code>,
+    <code>island_world.cpp</code>, the lanes pavement and lots producers, Metal's cloud noise, …) spin up their own
+    <code>std::vector&lt;std::thread&gt;</code>. That is the hand-rolled threading ADR-0014 set out to replace.</p></div>
+
+  <h2>Lua scripting and ScriptBehaviour</h2>
+  <p><a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/docs/decisions.md?plain=1#L1355">ADR-0023</a>
+    embedded Lua 5.4 behind a sealed <code>ScriptVM</code>, with two binding surfaces over one interpreter: a pure,
+    seeded <b>procgen</b> surface (meshes, noise, SDFs; no <code>io</code>, <code>os</code> or clock, so a recipe is
+    <code>(params, seed) → content</code> and can run on any thread with its own VM), and an effectful
+    <b>gameplay</b> surface. Python was rejected for the runtime (the GIL serialises procgen fan-out; multi-MB to
+    ship). Today most Lua in the repo is procgen: building, tree, vehicle and particle recipes.</p>
+  <p><a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/docs/decisions.md?plain=1#L1468">ADR-0024</a>
+    added the gameplay half as a Unity-MonoBehaviour-style component:</p>
+  <div class="code">
+    <div class="hd"><span>ScriptBehaviour: a Lua chunk that returns its own instance table</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/engine/scripting/script_behaviour.h#L8-L32">src/engine/scripting/script_behaviour.h</a></div>
+<pre><span class="c">// The MonoBehaviour analog (ADR-0024): a script attached to an entity. The</span>
+<span class="c">// `source` is a Lua chunk that returns a behaviour table, e.g.</span>
+<span class="c">//</span>
+<span class="c">//   local M = {}</span>
+<span class="c">//   function M:start(e)        self.t = 0 end</span>
+<span class="c">//   function M:update(e, dt)   self.t = self.t + dt</span>
+<span class="c">//                              entity.set_position(e, {0, self.t, 0}) end</span>
+<span class="c">//   return M</span>
+<span class="c">//</span>
+<span class="c">// ...</span>
+<span class="k">struct</span> <span class="t">ScriptBehaviour</span> {
+    std::string source;
+
+    <span class="c">// ...</span>
+    <span class="t">int</span> instanceRef = -<span class="n">1</span>;
+    <span class="t">bool</span> started = <span class="k">false</span>;
+    <span class="t">bool</span> failed = <span class="k">false</span>;   <span class="c">// a load/start error was reported; don't retry forever</span>
+};</pre>
+  </div>
+  <p><code>ScriptSystem</code> owns one gameplay VM, lazily loads each behaviour's chunk into a registry-held
+    instance table, calls <code>start</code> once and <code>update(e, dt)</code> every frame. Scripts run in the
+    variable-rate <code>update</code>, never <code>fixedUpdate</code>: physics stays the deterministic authority.
+    Spawns from scripts are deferred until after the iteration, honouring the <code>each</code> contract. Its core is
+    a headless <code>tick(World&amp;, double)</code>, so <code>tests/test_gun_script.cpp</code> runs the shipped
+    <code>assets/scripts/gun.lua</code> with no window. The gun was the proving port: the C++
+    <code>ShootingSystem</code> rewritten as a Lua behaviour on the player.</p>
+
+  <h2>Measuring a frame: the ledger and Tracy</h2>
+  <p>Two instruments, with a deliberate boundary. <b>Tracy</b>
+    (<a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/docs/decisions.md?plain=1#L4892">ADR-0068</a>)
+    is the real profiler: zones, threads, plots. Its macros (<code>RT_PROFILE_ZONE_NAMED</code>,
+    <code>RT_PROFILE_FRAME</code>, <code>RT_PROFILE_PLOT</code>…) are written into the code permanently and compile
+    to nothing unless the build sets <code>RT_ENABLE_PROFILER</code>. The <b>frame ledger</b>
+    (<code>FrameStats</code>,
+    <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/docs/decisions.md?plain=1#L5646">ADR-0077</a>)
+    is always on: a ring of the last 240 frames, each a <code>FrameSample</code> of phase times plus the renderer's
+    counters, at the cost of a few clock reads a frame. It exists because Tracy needs a second machine with its UI
+    attached, which the wearer of a Vision Pro cannot glance at, and CI cannot attach at all. "Tracy answers why was
+    this frame slow; the ledger answers was it slow, where, and is it better than yesterday."</p>
+  <div class="note history"><p><b>How the phases got finer.</b> The first real capture (macOS, arena, 1,078 frames)
+    put 27.33 ms of a 27.87 ms frame in "render", which could not say work from waiting. Render was split into
+    <code>acquire</code> (blocked on the GPU or vsync), <code>encode</code> (walking the world) and
+    <code>submit</code>, and a real GPU time was added. Later a 307 ms frame whose brackets summed to 30 ms showed
+    that the OS event pump was unmeasured, so <code>Poll</code> got a bracket; then a 241 ms frame landed in the
+    combined drain-and-swap bracket and could not be pinned to either, so <code>Dispatch</code> and
+    <code>StateSwap</code> were split. The comments on <code>FramePhase</code> keep this history.</p></div>
+  <p>The ledger is read in four ways: the debug overlay's Performance panel, a CSV capture
+    (<code>RT_FRAME_STATS=&lt;path&gt;</code> from boot, or <code>ledger start &lt;csv&gt;</code> over the socket),
+    <code>tools/frame-report.py</code> which turns a CSV into an HTML report with a <code>--compare</code> mode, and
+    a periodic log line (<code>RT_FRAME_STATS_LOG=&lt;seconds&gt;</code>). How these are used to hunt hitches is on
+    the <a href="testing.html">testing page</a>.</p>
+
+  <h2>The control channel and possession</h2>
+  <p>Before August 2026, looking at a change meant patching <code>settings.json</code> with a camera, launching the
+    viewer, waiting for the bake, dumping frame 90 and killing it: a minute a glance, and Glenn's already-open viewer
+    was unreachable.
+    <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/docs/decisions.md?plain=1#L5744">ADR-0078</a>
+    gave every viewer (and the editor) a Unix socket at <code>/tmp/raytracer-viewer-&lt;pid&gt;.sock</code> speaking
+    a line protocol: one command in, one <code>ok …</code> or <code>err …</code> line out. It is on by default
+    (<code>RT_CONTROL=0</code> turns it off) so any running instance can be attached to; the newest client wins.</p>
+  <div class="diagram">
+    <svg viewBox="0 0 860 280" role="img" aria-label="Control channel threading: socket thread buffers, the main thread drains and stages Settings keys that systems consume">
+      <defs><marker id="ar5" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" fill="#6f8fb0"/></marker></defs>
+      <g font-family="system-ui, sans-serif" font-size="13" text-anchor="middle">
+        <rect x="20" y="30" width="170" height="64" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="105" y="56" fill="#cfe4ff">probe · MCP · nc</text>
+        <text x="105" y="76" fill="#93a6ba" font-size="12">"camera? \n"</text>
+        <rect x="230" y="30" width="190" height="64" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="325" y="56" fill="#cfe4ff">socket thread</text>
+        <text x="325" y="76" fill="#93a6ba" font-size="12">only buffers lines (mutex)</text>
+        <rect x="460" y="30" width="380" height="64" rx="9" fill="#131a24" stroke="#3b82f6"/>
+        <text x="650" y="56" fill="#cfe4ff">main thread, top of runFrame: drain()</text>
+        <text x="650" y="76" fill="#93a6ba" font-size="12">handleControlCommand(line) → reply line</text>
+        <line x1="190" y1="62" x2="226" y2="62" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar5)"/>
+        <line x1="420" y1="62" x2="456" y2="62" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar5)"/>
+        <path d="M560,94 L560,130" fill="none" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar5)"/>
+        <path d="M760,94 L760,130" fill="none" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar5)"/>
+        <rect x="460" y="132" width="200" height="64" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="560" y="156" fill="#cfe4ff">answered at once</text>
+        <text x="560" y="176" fill="#93a6ba" font-size="12">camera?, info, sim pause, shot</text>
+        <rect x="680" y="132" width="160" height="64" rx="9" fill="#131a24" stroke="#e6c07b"/>
+        <text x="760" y="156" fill="#e6c07b">staged in Settings</text>
+        <text x="760" y="176" fill="#93a6ba" font-size="12">input.tap, possess.cmd</text>
+        <path d="M760,196 L760,222" fill="none" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar5)"/>
+        <rect x="460" y="224" width="380" height="44" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="650" y="251" fill="#cfe4ff">a system consumes it; writes telemetry a `?` verb reads</text>
+        <path d="M470,110 L105,110 L105,98" fill="none" stroke="#8ec5ff" stroke-width="1.4" stroke-dasharray="5 4" marker-end="url(#ar5)"/>
+        <text x="280" y="128" fill="#8ec5ff" font-size="12">reply: "ok eye=… pitch=… yaw=… frame=…"</text>
+      </g>
+    </svg>
+  </div>
+  <p class="cap">Threading. Nothing touches engine state off the main thread: the socket thread only queues lines,
+    and the drain at the top of the next frame runs them where Settings, the renderer, the clock and the state stack
+    are safe to touch.</p>
+  <div class="code">
+    <div class="hd"><span>the `camera` verb: staged as Settings plus a one-shot flag</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/engine/application.cpp#L627-L643">src/engine/application.cpp</a></div>
+<pre>    <span class="k">if</span> (cmd.name == <span class="s">"camera"</span>) {
+        <span class="c">// Staged as Settings + a one-shot apply flag; CameraSystem consumes it</span>
+        <span class="c">// next update (the citysim.* idiom), seeds the fly pose, and detaches</span>
+        <span class="c">// so the pose wins even in play mode.</span>
+        <span class="t">double</span> v[<span class="n">5</span>];
+        <span class="k">if</span> (cmd.args.size() &lt; <span class="n">5</span> || !num(cmd.args[<span class="n">0</span>], v[<span class="n">0</span>]) ||
+            !num(cmd.args[<span class="n">1</span>], v[<span class="n">1</span>]) || !num(cmd.args[<span class="n">2</span>], v[<span class="n">2</span>]) ||
+            !num(cmd.args[<span class="n">3</span>], v[<span class="n">3</span>]) || !num(cmd.args[<span class="n">4</span>], v[<span class="n">4</span>]))
+            <span class="k">return</span> <span class="s">"err usage: camera &lt;x&gt; &lt;y&gt; &lt;z&gt; &lt;pitchDeg&gt; &lt;yawDeg&gt;"</span>;
+        settingsStore.setDouble(<span class="s">"flyEyeX"</span>, v[<span class="n">0</span>]);
+        settingsStore.setDouble(<span class="s">"flyEyeY"</span>, v[<span class="n">1</span>]);
+        settingsStore.setDouble(<span class="s">"flyEyeZ"</span>, v[<span class="n">2</span>]);
+        settingsStore.setDouble(<span class="s">"flyPitch"</span>, v[<span class="n">3</span>]);
+        settingsStore.setDouble(<span class="s">"flyYaw"</span>, v[<span class="n">4</span>]);
+        settingsStore.setDouble(<span class="s">"cameraApply"</span>, <span class="n">1.0</span>);
+        <span class="k">return</span> <span class="s">"ok camera staged"</span>;
+    }</pre>
+  </div>
+  <p>The charter started as "read-and-look": no world edits (the EditorBridge is the one write path), no input
+    injection. It widened the same day.
+    <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/docs/decisions.md?plain=1#L5802">ADR-0079</a>
+    split writes into two classes: <b>document writes</b> stay the bridge's monopoly, but <b>transient play acts</b>
+    (what the debug keys can do) are allowed. <code>possess car|walker</code> spawns a red sedan on the nearest
+    lane, or commandeers a pedestrian, and gives it to an agent brain: <code>drive_to x z</code> routes it and
+    drives with pursuit and traffic sensing, and <code>possess?</code> reports driving, arrived, stuck or
+    no-route. Nothing it spawns carries a <code>SourceSpec</code>, so none of it can ever be saved into a level.
+    Since then the verb list has grown to about 80 commands, among them <code>tap</code>/<code>hold</code> (real
+    keys), <code>teleport</code>, <code>ledger</code>, <code>mem?</code> and a family of telemetry questions. Any
+    command ending in <code>?</code> also stamps <code>telemetry.askedAt</code>, because the island-wide counts behind
+    those answers cost a 65-130 ms frame twice a second when computed for nobody; now they run only while someone is
+    asking.</p>
+
+  <h2>How it got here</h2>
+  <div class="note history"><p><b>June 2026, the first week.</b> In three days (2026-06-03 to 06-05) the monolithic <code>main()</code>
+    became the spine this page describes: platform seams (ADR-0001), the fixed-step clock (ADR-0002, commit
+    <code>558b0fd0</code>), <code>Application</code> + <code>System</code> (ADR-0004), the sparse-set ECS replacing
+    fixed entity structs (ADR-0006, commit <code>09e7a217</code>), <code>Handle</code>/<code>SlotMap</code>
+    (ADR-0007) and the job system (ADR-0014, pulled forward by Glenn as foundation before the asset system). The
+    <code>System</code> interface was written to survive the ECS swap, and did.</p>
+    <p style="margin-top:8px"><b>What has not moved.</b> ADR-0004's revisit trigger ("system ordering/dependencies
+    beyond registration order, parallel system execution") has not fired; ordering is still comments in
+    <code>ArenaState</code>. <code>RenderView</code> is still the "minimal stand-in for the resource concept a full
+    ECS will formalize later".</p>
+    <p style="margin-top:8px"><b>What was measured into shape.</b> The ECS query (ADR-0101, 2026-09-25; pools once,
+    2026-10-06), the ledger's phases (ADR-0077), and the control channel's telemetry gate (2026-10-11) were all
+    changed because a measurement named them, not on speculation, which is the project's "measure before optimizing"
+    rule (ADR-0008) at work.</p></div>
+
+  <h2>Where to look</h2>
+  <ul class="files">
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/application.h">src/engine/application.h</a> / <a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/application.cpp">.cpp</a> — the loop (<code>runFrame</code>), the control verbs (<code>handleControlCommand</code>)</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/system.h">src/engine/system.h</a> — <code>System</code>, <code>FrameContext</code>, <code>RenderView</code>, <code>StateTransition</code></li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/state_stack.h">src/engine/state_stack.h</a>, <a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/app_state.h">app_state.h</a>, <a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/states/playing_state.cpp">states/playing_state.cpp</a> — states and the system list</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/game/arena_state.cpp">src/game/arena_state.cpp</a> — the game's ~50 systems, in order, with reasons</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/clock.h">src/engine/clock.h</a> / <a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/clock.cpp">.cpp</a> — <code>SimClock</code></li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/world.h">src/engine/world.h</a>, <a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/sparse_set.h">sparse_set.h</a>, <a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/handle.h">src/handle.h</a>, <a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/slot_map.h">src/slot_map.h</a> — the ECS</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/components.h">src/engine/components.h</a>, <a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/properties.h">properties.h</a>, <a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/component_registry.h">component_registry.h</a> — components and the property layer</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/event_bus.h">src/engine/event_bus.h</a> — the EventBus</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/job_system.h">src/job_system.h</a> — the thread pool</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/scripting/script_system.h">src/engine/scripting/</a> — <code>ScriptVM</code>, <code>ScriptSystem</code>, bindings; <a href="https://github.com/GlennSong/raytracer-clang/blob/main/assets/scripts/gun.lua">assets/scripts/gun.lua</a></li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/frame_stats.h">src/engine/frame_stats.h</a>, <a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/profile.h">src/profile.h</a> — the ledger and the Tracy macros</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/control/control_channel.h">src/engine/control/control_channel.h</a>, <a href="https://github.com/GlennSong/raytracer-clang/blob/main/docs/control-channel.md">docs/control-channel.md</a>, <a href="https://github.com/GlennSong/raytracer-clang/blob/main/tools/viewer-mcp.py">tools/viewer-mcp.py</a> — the socket</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/editor_bridge.h">src/engine/editor_bridge.h</a>, <a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/editor_app/editor_main.cpp">src/editor_app/editor_main.cpp</a> — the editor host</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/renderer/renderer.h">src/renderer/renderer.h</a>, <a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/renderer/window.h">window.h</a> — the platform seams</li>
+    <li>Tests: <code>tests/test_world.cpp</code>, <code>test_sparse_set.cpp</code>, <code>test_slot_map.cpp</code>, <code>test_clock.cpp</code>, <code>test_event_bus.cpp</code>, <code>test_frame_stats.cpp</code>, <code>test_control_channel.cpp</code>, <code>test_script_system.cpp</code>, <code>test_gun_script.cpp</code></li>
+    <li>Switches: <code>RT_DUMP_STATS=1</code> (per-system update/fixed times every ~300 calls, plus <code>SPIKE</code> lines), <code>RT_SPIKE_MS</code>, <code>RT_FRAME_STATS=&lt;csv&gt;</code>, <code>RT_FRAME_STATS_LOG=&lt;s&gt;</code>, <code>RT_CONTROL=0</code>, CMake <code>RT_ENABLE_PROFILER</code>; in game, backtick for the debug overlay and Space to pause</li>
+  </ul>
+
+  <footer>Code excerpts from commit <code>47d587f3</code> (2026-10-26). Drawn from ADR-0001, 0002, 0004, 0006, 0007,
+    0014, 0018, 0019, 0020, 0023, 0024, 0057, 0058, 0066, 0068, 0077, 0078, 0079, 0101 and 0240.</footer>
+</div>
+</body>
+</html>
