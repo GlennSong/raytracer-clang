@@ -1,0 +1,648 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Procedural Audio — How the Engine Works</title>
+  <link rel="stylesheet" href="engine.css">
+</head>
+<body>
+<div class="wrap">
+  <div class="nav"><a href="index.html">← How the engine works</a> · <a href="../index.html">scenes</a></div>
+  <h1>Sound made from nothing</h1>
+  <p class="lede">The engine ships no sound files. Every footstep, engine note, river, train horn and grapple hook is
+    synthesized at start-up by a small pure function, <code>(parameters, seed) → PCM</code>, and played through
+    miniaudio sealed behind one class. What makes it sound right is not the samples but the rules that pick a sound:
+    which ground is under the foot, how fast the car is going, what walls stand between you and the horn.</p>
+
+  <h2>The problem</h2>
+  <p>A game that generates its world also has to make that world audible: a city of tens of thousands of cars, an
+    island with beaches, rivers and mountain rock, a player who walks, swims, skates and swings. Shipping a sample for
+    each case means a sound library, licences, and sounds that do not match what is actually happening (a recorded
+    footstep does not know whether the grass is mown). The engine's design principle is "procgen first", so audio
+    follows the mesh builders: a sound is a recipe, deterministic from a seed, and testable without speakers.</p>
+  <p>The hard parts turned out to be perceptual, not technical. Most of this page's history is Glenn listening and
+    saying what he heard ("spindly legs", "a pot of boiling water", "sounds like the sea"), and the code being changed,
+    or measured against a real recording, until the sound matched the thing.</p>
+
+  <h2>The instrument: AudioEngine (ADR-0069)</h2>
+  <p><b>miniaudio</b> (a single-header C library, public domain / MIT-0) is the mixer and device layer. It is sealed
+    behind <code>engine::AudioEngine</code> — no <code>ma_*</code> type appears in the header — the same way
+    <code>PhysicsWorld</code> seals Jolt. The decisive reason for miniaudio was that it runs <b>without a device</b>:
+    in <code>Manual</code> mode the caller pumps the mix into a buffer, so tests assert real pan, attenuation and loop
+    behaviour on rendered frames; <code>Auto</code> falls back to a silent null device on a headless machine, so boot
+    never fails.</p>
+  <table>
+    <tr><th>Concept</th><th>What it is</th></tr>
+    <tr><td>clip</td><td>decoded PCM shared by voices. <code>createClip(frames, …)</code> is the procedural path; <code>loadClip(path)</code> exists but nothing uses a file</td></tr>
+    <tr><td>voice</td><td>one playing instance. <code>play</code> (2D, panned) or <code>playAt(clip, position, range)</code> (3D). Handles are generational, so a stale handle reports "not playing", never a newer voice</td></tr>
+    <tr><td>bus</td><td><code>Sfx</code>, <code>Music</code>, <code>Ambient</code>, each with a volume under the master</td></tr>
+    <tr><td><code>PlaySound</code></td><td>a fire-and-forget cue on the EventBus: any system can ask for a sound without knowing audio exists</td></tr>
+  </table>
+  <p>The ECS side is <code>AudioSystem</code>: it moves the listener with the camera (or an <code>AudioListener</code>
+    entity), plays <code>PlaySound</code> cues, and keeps a name → clip table so procedural clips are addressed like
+    files (<code>"sfx/impact"</code>). <code>RT_ENABLE_AUDIO=OFF</code> compiles an inert stub with the same API, which
+    is how the web build goes without miniaudio.</p>
+
+  <h2>The reaction chain: contact to sound (ADR-0071)</h2>
+  <p>The first real use wired the whole chain once, as the pattern every later reaction reuses: physics notices
+    something happened, the event bus carries it, and a game-layer system decides what it sounds like.</p>
+  <div class="diagram">
+    <svg viewBox="0 0 900 250" role="img" aria-label="Jolt contact listener on worker threads buffers contacts; after the step the physics system maps bodies to entities and publishes Collision on the EventBus; the arena's sound system turns hard hits into PlaySound cues; AudioSystem plays them through AudioEngine and miniaudio.">
+      <defs><marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" fill="#6f8fb0"/></marker></defs>
+      <g font-family="system-ui, sans-serif" font-size="13" text-anchor="middle">
+        <rect x="20" y="30" width="190" height="74" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="115" y="54" fill="#cfe4ff">Jolt ContactListener</text>
+        <text x="115" y="73" fill="#93a6ba" font-size="12">OnContactAdded only</text>
+        <text x="115" y="90" fill="#93a6ba" font-size="12">worker threads → mutex buffer</text>
+
+        <rect x="250" y="30" width="190" height="74" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="345" y="54" fill="#cfe4ff">publishContacts</text>
+        <text x="345" y="73" fill="#93a6ba" font-size="12">after the step: body → entity</text>
+        <text x="345" y="90" fill="#93a6ba" font-size="12">Collision{a, b, pos, speed}</text>
+
+        <rect x="480" y="30" width="170" height="74" rx="9" fill="#131a24" stroke="#3b82f6"/>
+        <text x="565" y="54" fill="#cfe4ff">EventBus</text>
+        <text x="565" y="73" fill="#93a6ba" font-size="12">subscribers never see</text>
+        <text x="565" y="90" fill="#93a6ba" font-size="12">a physics type</text>
+
+        <rect x="690" y="30" width="190" height="74" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="785" y="54" fill="#cfe4ff">ArenaSoundSystem</text>
+        <text x="785" y="73" fill="#93a6ba" font-size="12">&lt; 2 m/s: silent; louder and</text>
+        <text x="785" y="90" fill="#93a6ba" font-size="12">brighter with closing speed</text>
+
+        <line x1="210" y1="67" x2="246" y2="67" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar)"/>
+        <line x1="440" y1="67" x2="476" y2="67" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar)"/>
+        <line x1="650" y1="67" x2="686" y2="67" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar)"/>
+
+        <rect x="690" y="150" width="190" height="64" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="785" y="176" fill="#cfe4ff">PlaySound cue</text>
+        <text x="785" y="196" fill="#93a6ba" font-size="12">"sfx/impact", spatial, 45 m</text>
+        <line x1="785" y1="104" x2="785" y2="146" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar)"/>
+
+        <rect x="420" y="150" width="230" height="64" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="535" y="176" fill="#cfe4ff">AudioSystem</text>
+        <text x="535" y="196" fill="#93a6ba" font-size="12">name → clip, then playAt</text>
+        <line x1="690" y1="182" x2="654" y2="182" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar)"/>
+
+        <rect x="150" y="150" width="230" height="64" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="265" y="176" fill="#cfe4ff">AudioEngine → miniaudio</text>
+        <text x="265" y="196" fill="#93a6ba" font-size="12">device, null, or Manual (tests)</text>
+        <line x1="420" y1="182" x2="384" y2="182" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar)"/>
+        <text x="450" y="240" fill="#93a6ba" font-size="12">the clips were synthesized once at start: sfx::impact(rate, seed), sfx::gunshot(rate, seed)</text>
+      </g>
+    </svg>
+  </div>
+  <p class="cap">The reaction chain. Policy (which clip, what threshold) lives in the game layer, not in an engine system.</p>
+  <div class="code">
+    <div class="hd"><span>ArenaSoundSystem: a Collision becomes a spatial impact cue</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/game/arena_state.cpp#L119-L136">src/game/arena_state.cpp</a></div>
+<pre><span class="k">#ifdef</span> RT_ENABLE_PHYSICS
+        EventBus* events = &amp;ctx.events;
+        collisionSub = ctx.events.subscribe&lt;Collision&gt;(
+            [events](<span class="k">const</span> Collision&amp; hit) {
+                <span class="c">// Gentle/resting touches stay silent; harder hits get louder</span>
+                <span class="c">// and slightly brighter. The cue is deferred to the frame</span>
+                <span class="c">// dispatch like every other reaction.</span>
+                <span class="k">if</span> (hit.speed &lt; <span class="n">2.0</span>) <span class="k">return</span>;
+                PlaySound cue;
+                cue.clip = <span class="s">"sfx/impact"</span>;
+                cue.spatial = <span class="k">true</span>;
+                cue.position = hit.position;
+                cue.range = <span class="n">45.0</span>;
+                <span class="t">double</span> severity = std::min(hit.speed / <span class="n">14.0</span>, <span class="n">1.0</span>);
+                cue.volume = <span class="k">static_cast</span>&lt;<span class="t">float</span>&gt;(<span class="n">0.25</span> + <span class="n">0.75</span> * severity);
+                cue.pitch = <span class="k">static_cast</span>&lt;<span class="t">float</span>&gt;(<span class="n">0.85</span> + <span class="n">0.35</span> * severity);
+                events-&gt;enqueue(cue);
+            });</pre>
+  </div>
+  <p>Only <code>OnContactAdded</code> is recorded, so a resting pile does not spam events; Jolt calls it on worker
+    threads mid-step, so contacts are buffered under a mutex and drained on the main thread after the step. Later
+    systems (footsteps, vehicles, trains) do not go through the bus: they own their clips and call
+    <code>playAt</code> directly, because they already know exactly what happened. The bus is for "something
+    happened, whoever cares".</p>
+
+  <h2>A sound is a recipe</h2>
+  <p>Every generator in <code>engine::sfx</code> has the same shape: parameters and a seed in, mono float32 in
+    [-1, 1] out, the same bytes for the same seed. Different seeds vary pitch and texture, so a walk is never the same
+    step twice and forty cars on a street are not one chord. They run once when a system starts — the footstep system
+    makes its whole bank (10 grounds × several variants, jumps, three landing weights, swishes, splashes) and logs
+    how long it took; the first version reported 73 clips in about 150 ms (8b411ac0).</p>
+  <p>The building blocks are few, and live in <code>sfx_dsp.h</code>: one-pole low/high/band-pass filters specified
+    in Hz (so a recipe sounds the same at any device rate), peak normalising, and the trick that makes loops
+    seamless.</p>
+  <div class="code">
+    <div class="hd"><span>circBox: a moving average that wraps round, so filtered noise is exactly periodic</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/engine/audio/sfx_dsp.h#L45-L59">src/engine/audio/sfx_dsp.h</a></div>
+<pre><span class="c">// Circular box filter and helpers for the LOOPS (same trick as sfx::engine: wrapped windows make the</span>
+<span class="c">// filtered noise exactly periodic, so the seam is just another sample).</span>
+<span class="k">inline</span> std::vector&lt;<span class="t">double</span>&gt; circBox(<span class="k">const</span> std::vector&lt;<span class="t">double</span>&gt;&amp; in, <span class="t">int</span> window) {
+    <span class="k">const</span> <span class="k">auto</span> n = <span class="k">static_cast</span>&lt;<span class="t">int</span>&gt;(in.size());
+    <span class="k">const</span> <span class="t">int</span> half = std::max(<span class="n">1</span>, std::min(window / <span class="n">2</span>, n / <span class="n">2</span> - <span class="n">1</span>));
+    std::vector&lt;<span class="t">double</span>&gt; out(in.size());
+    <span class="t">double</span> sum = <span class="n">0.0</span>;
+    <span class="k">for</span> (<span class="t">int</span> k = -half; k &lt;= half; k++) sum += in[<span class="k">static_cast</span>&lt;<span class="t">size_t</span>&gt;(((k % n) + n) % n)];
+    <span class="k">const</span> <span class="t">double</span> norm = <span class="n">1.0</span> / (<span class="n">2</span> * half + <span class="n">1</span>);
+    <span class="k">for</span> (<span class="t">int</span> i = <span class="n">0</span>; i &lt; n; i++) {
+        out[<span class="k">static_cast</span>&lt;<span class="t">size_t</span>&gt;(i)] = sum * norm;
+        sum += in[<span class="k">static_cast</span>&lt;<span class="t">size_t</span>&gt;((i + half + <span class="n">1</span>) % n)] - in[<span class="k">static_cast</span>&lt;<span class="t">size_t</span>&gt;(((i - half) % n + n) % n)];
+    }
+    <span class="k">return</span> out;
+}</pre>
+  </div>
+  <p>A looping ambience (surf, river, wind, an engine) must end exactly where it begins, or every loop clicks. An
+    ordinary filter has state that carries forward, so the last sample's filtered value does not match the first's.
+    Wrapping the window round the buffer makes the result periodic by construction; envelopes are built from sines with
+    a whole number of cycles per loop (<code>circEnvelope</code>) for the same reason. The test
+    <code>ambience_loops_are_seamless_and_audible</code> checks every loop's seam.</p>
+
+  <h2>Footsteps: how a step is chosen</h2>
+  <p>Footsteps (issues #62–#65, commit 8b411ac0) are the best example of the "rules pick the sound" idea. Three
+    questions are answered every fixed step: <i>is this a step, a jump or a landing?</i>, <i>what is under the
+    foot?</i>, and <i>which variant?</i></p>
+  <div class="diagram">
+    <svg viewBox="0 0 900 430" role="img" aria-label="Footstep choice: FootstepTracker turns ground state, pace and vertical speed into Step, Jump or Land. The ground body under the character has a surface tag; roads are tagged by material name; terrain asks the ground-cover map with the real slope. groundForSurface picks one of ten grounds, then a clip from the bank, played at the feet within 20 metres. Water over the feet overrides to wading; tall grass adds a swish.">
+      <defs><marker id="ar2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" fill="#6f8fb0"/></marker></defs>
+      <g font-family="system-ui, sans-serif" font-size="13" text-anchor="middle">
+        <!-- when -->
+        <text x="20" y="22" fill="#8ec5ff" font-size="12" text-anchor="start" font-weight="600">WHEN</text>
+        <rect x="20" y="32" width="230" height="74" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="135" y="56" fill="#cfe4ff">character state</text>
+        <text x="135" y="75" fill="#93a6ba" font-size="12">on ground? pace from where</text>
+        <text x="135" y="92" fill="#93a6ba" font-size="12">the feet MOVED; vertical speed</text>
+        <rect x="300" y="32" width="230" height="74" rx="9" fill="#131a24" stroke="#3b82f6"/>
+        <text x="415" y="56" fill="#cfe4ff">FootstepTracker</text>
+        <text x="415" y="75" fill="#93a6ba" font-size="12">a step per stride: 0.75 m walk</text>
+        <text x="415" y="92" fill="#93a6ba" font-size="12">→ 1.9 m run; land by fall speed</text>
+        <rect x="580" y="32" width="300" height="74" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="730" y="56" fill="#cfe4ff">Step · Jump · Land(heavy 0..1)</text>
+        <text x="730" y="75" fill="#93a6ba" font-size="12">+ volume: stroll &lt; run, crouch × 0.45</text>
+        <text x="730" y="92" fill="#93a6ba" font-size="12">bumps &lt; 0.12 s of air are not landings</text>
+        <line x1="250" y1="69" x2="296" y2="69" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar2)"/>
+        <line x1="530" y1="69" x2="576" y2="69" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar2)"/>
+
+        <!-- what -->
+        <text x="20" y="140" fill="#e6c07b" font-size="12" text-anchor="start" font-weight="600">WHAT IS UNDERFOOT</text>
+        <rect x="20" y="150" width="230" height="74" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="135" y="174" fill="#cfe4ff">characterGroundBody</text>
+        <text x="135" y="193" fill="#93a6ba" font-size="12">→ bodySurface: a tag kept in</text>
+        <text x="135" y="210" fill="#93a6ba" font-size="12">the Jolt body's user data</text>
+        <rect x="300" y="150" width="230" height="74" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="415" y="174" fill="#cfe4ff">ColliderSurface tag</text>
+        <text x="415" y="193" fill="#93a6ba" font-size="12">roads by material name: asphalt,</text>
+        <text x="415" y="210" fill="#93a6ba" font-size="12">sidewalk → concrete, guardrail → metal</text>
+        <line x1="250" y1="187" x2="296" y2="187" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar2)"/>
+
+        <rect x="300" y="262" width="230" height="74" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="415" y="286" fill="#cfe4ff">Terrain? ask GroundCover</text>
+        <text x="415" y="305" fill="#93a6ba" font-size="12">at (x, z, height, real slope):</text>
+        <text x="415" y="322" fill="#93a6ba" font-size="12">grass, dirt, sand, rock, snow weights</text>
+        <line x1="415" y1="224" x2="415" y2="258" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar2)"/>
+        <text x="428" y="245" fill="#93a6ba" font-size="11" text-anchor="start">tag 1</text>
+
+        <rect x="580" y="150" width="300" height="74" rx="9" fill="#131a24" stroke="#3b82f6"/>
+        <text x="730" y="174" fill="#cfe4ff">groundForSurface → sfx::Ground</text>
+        <text x="730" y="193" fill="#93a6ba" font-size="12">snow ≥ 0.5 wins; else the heaviest weight</text>
+        <text x="730" y="210" fill="#93a6ba" font-size="12">untagged floor, plinth, prop → concrete</text>
+        <line x1="530" y1="187" x2="576" y2="187" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar2)"/>
+        <path d="M530,299 C560,299 560,224 600,224" fill="none" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar2)"/>
+
+        <!-- play -->
+        <rect x="580" y="262" width="300" height="74" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="730" y="286" fill="#cfe4ff">steps_[ground][variant]</text>
+        <text x="730" y="305" fill="#93a6ba" font-size="12">never the same variant twice running;</text>
+        <text x="730" y="322" fill="#93a6ba" font-size="12">pitch ×0.94–1.06; playAt(feet, 20 m)</text>
+        <line x1="730" y1="224" x2="730" y2="258" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar2)"/>
+        <path d="M730,106 C860,120 890,240 880,262" fill="none" stroke="#6f8fb0" stroke-width="1.2" stroke-dasharray="4 3" marker-end="url(#ar2)"/>
+
+        <rect x="20" y="262" width="230" height="74" rx="9" fill="#131a24" stroke="#e6c07b"/>
+        <text x="135" y="286" fill="#cfe4ff">overrides</text>
+        <text x="135" y="305" fill="#93a6ba" font-size="12">water over the feet → wading slosh</text>
+        <text x="135" y="322" fill="#93a6ba" font-size="12">seated, board, rope, canopy → none</text>
+
+        <rect x="300" y="360" width="580" height="54" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="590" y="383" fill="#cfe4ff">+ a grass swish with the step, only on grass or dirt, scaled by density × how far</text>
+        <text x="590" y="401" fill="#93a6ba" font-size="12">the grass reaches up the shin (nothing under 0.25 m, all at 0.6 m): mown lawns are silent</text>
+        <line x1="730" y1="336" x2="730" y2="356" stroke="#6f8fb0" stroke-width="1.4" marker-end="url(#ar2)"/>
+      </g>
+    </svg>
+  </div>
+  <p class="cap">How a footstep is chosen, in <code>FootstepSystem::fixedUpdate</code> (src/engine/systems/footstep_system.cpp)
+    with the pure logic in <code>audio/footsteps.h</code>.</p>
+
+  <p>The ground tag is set where the collider is made. A road mesh is named by its material, and the loader maps names
+    to surfaces with the same names its renderer uses:</p>
+  <div class="code">
+    <div class="hd"><span>What a road mesh is underfoot</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/engine/level_loader.cpp#L614-L624">src/engine/level_loader.cpp</a></div>
+<pre><span class="c">// What a road mesh is underfoot (footsteps, engine/audio/footsteps.h), by the same names.</span>
+<span class="k">static</span> ColliderSurface colliderSurfaceForRoadMaterial(<span class="k">const</span> std::string&amp; name) {
+    <span class="k">if</span> (name == <span class="s">"asphalt"</span> || name == <span class="s">"shoulder"</span>) <span class="k">return</span> ColliderSurface::Asphalt;
+    <span class="k">if</span> (name == <span class="s">"concrete"</span> || name == <span class="s">"sidewalk"</span>) <span class="k">return</span> ColliderSurface::Concrete;
+    <span class="k">if</span> (name == <span class="s">"terrain"</span>) <span class="k">return</span> ColliderSurface::Terrain;
+    <span class="k">if</span> (name == <span class="s">"guardrail"</span> || name == <span class="s">"station_steel"</span>) <span class="k">return</span> ColliderSurface::Metal;
+    <span class="k">if</span> (name == <span class="s">"ballast"</span>) <span class="k">return</span> ColliderSurface::Rock;
+    <span class="k">if</span> (name == <span class="s">"platform"</span>) <span class="k">return</span> ColliderSurface::Concrete;
+    <span class="k">if</span> (name.find(<span class="s">"median"</span>) != std::string::npos || name.find(<span class="s">"grass"</span>) != std::string::npos) <span class="k">return</span> ColliderSurface::Grass;
+    <span class="k">return</span> ColliderSurface::Unknown;
+}</pre>
+  </div>
+  <p>Terrain is one big collider, so its tag only says "terrain"; the actual ground is read from the ground-cover map —
+    the same map that colours the terrain and plants its grass — at the foot, with the real slope:</p>
+  <div class="code">
+    <div class="hd"><span>FootstepSystem::groundAt: the cover map judges rock by the slope a step either side</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/engine/systems/footstep_system.cpp#L60-L75">src/engine/systems/footstep_system.cpp</a></div>
+<pre>sfx::Ground FootstepSystem::groundAt(World&amp; world, <span class="t">uint8_t</span> surface, <span class="t">double</span> x, <span class="t">double</span> y, <span class="t">double</span> z, <span class="t">double</span>* slopeCos) {
+    <span class="k">if</span> (slopeCos) *slopeCos = <span class="n">1.0</span>;
+    <span class="k">if</span> (surface != <span class="k">static_cast</span>&lt;<span class="t">uint8_t</span>&gt;(ColliderSurface::Terrain))
+        <span class="k">return</span> groundForSurface(surface, <span class="k">false</span>, <span class="n">0</span>, <span class="n">0</span>, <span class="n">0</span>, <span class="n">0</span>, <span class="n">0</span>);
+    <span class="k">const</span> TerrainLodConfig* cfg = <span class="k">nullptr</span>;
+    world.each&lt;TerrainLodConfig&gt;([&amp;](Entity, TerrainLodConfig&amp; c) { <span class="k">if</span> (!cfg) cfg = &amp;c; });
+    <span class="k">if</span> (!cfg || !cfg-&gt;params.cover) <span class="k">return</span> groundForSurface(surface, <span class="k">false</span>, <span class="n">0</span>, <span class="n">0</span>, <span class="n">0</span>, <span class="n">0</span>, <span class="n">0</span>);
+    <span class="c">// the slope the cover judges rock by, from the ground a step either side</span>
+    <span class="k">const</span> <span class="t">double</span> e = <span class="n">1.0</span>;
+    <span class="k">const</span> <span class="t">double</span> hx0 = groundHeight(*cfg, x - e, z), hx1 = groundHeight(*cfg, x + e, z);
+    <span class="k">const</span> <span class="t">double</span> hz0 = groundHeight(*cfg, x, z - e), hz1 = groundHeight(*cfg, x, z + e);
+    <span class="k">const</span> Vec3 n = normalize(Vec3(-(hx1 - hx0) / (<span class="n">2</span> * e), <span class="n">1.0</span>, -(hz1 - hz0) / (<span class="n">2</span> * e)));
+    <span class="k">if</span> (slopeCos) *slopeCos = n.y;
+    <span class="k">const</span> Cover c = cfg-&gt;params.cover-&gt;at(x, z, y, n.y, n.x, n.z);
+    <span class="k">return</span> groundForSurface(surface, <span class="k">true</span>, c.grass, c.dirt, c.sand, c.rock, c.snow);
+}</pre>
+  </div>
+  <div class="note history"><p><b>Why the real slope.</b> Play-testing found a rock face playing the grass rustle (#85):
+    the grass field was asked as if the ground were flat, and the grass field thins grass on slopes, so a cliff read as
+    a meadow. The fix asks with the real slope, and only plays grass where the ground under the foot is grass or dirt.
+    Two other early bugs are visible in the tracker: pace is measured from where the feet actually moved (pushing into
+    a wall asks for walking speed while going nowhere), and the stride grows with speed — at first it capped at 1.1 m,
+    so running at 6 m/s made 5.5 steps a second and "the footsteps feel sped up" (#98). A runner takes about three.</p></div>
+
+  <h2>The layers of a footstep recipe</h2>
+  <p>Every ground is one <code>Recipe</code> rendered by one function. The recipe is a list of levels, bands and
+    decay times for a handful of layers that are added together:</p>
+  <div class="diagram">
+    <svg viewBox="0 0 900 420" role="img" aria-label="Illustration of a footstep recipe's layers over about 0.2 seconds: a heel click, a toe click about 0.09 seconds later, a low thump, a texture of filtered noise, and grains; summed, then low-passed, soft-clipped with tanh, the tail faded and the peak normalised.">
+      <g font-family="system-ui, sans-serif" font-size="12">
+        <line x1="170" y1="20" x2="170" y2="330" stroke="#2c3d50"/>
+        <text x="170" y="350" fill="#64768a" text-anchor="middle">0</text>
+        <line x1="440" y1="20" x2="440" y2="330" stroke="#1f2a37" stroke-dasharray="3 4"/>
+        <text x="440" y="350" fill="#64768a" text-anchor="middle">~0.09 s (toe)</text>
+        <text x="860" y="350" fill="#64768a" text-anchor="end">~0.2 s</text>
+
+        <!-- heel -->
+        <text x="20" y="44" fill="#cfe4ff">heel click</text>
+        <text x="20" y="60" fill="#93a6ba" font-size="11">band noise, ms decay</text>
+        <path d="M170,50 l3,-22 l3,38 l3,-30 l3,24 l3,-14 l3,10 l3,-6 l3,4 l3,-2 l3,1 L860,50" fill="none" stroke="#8ec5ff" stroke-width="1.4"/>
+        <!-- toe -->
+        <text x="20" y="104" fill="#cfe4ff">toe click</text>
+        <text x="20" y="120" fill="#93a6ba" font-size="11">same, toeLevel × heel</text>
+        <path d="M170,110 L440,110 l3,-16 l3,28 l3,-22 l3,16 l3,-10 l3,7 l3,-4 l3,2 l3,-1 L860,110" fill="none" stroke="#8ec5ff" stroke-width="1.4"/>
+        <!-- thump -->
+        <text x="20" y="164" fill="#cfe4ff">thump</text>
+        <text x="20" y="180" fill="#93a6ba" font-size="11">low sine, the weight</text>
+        <path d="M170,170 C185,140 200,140 215,170 C230,196 245,196 260,170 C275,152 290,152 305,170 C320,182 335,182 350,170 C365,163 380,163 395,170 C410,175 425,175 440,170 L860,170" fill="none" stroke="#e6c07b" stroke-width="1.6"/>
+        <!-- texture -->
+        <text x="20" y="224" fill="#cfe4ff">texture</text>
+        <text x="20" y="240" fill="#93a6ba" font-size="11">noise, attack/decay</text>
+        <path d="M170,230 l4,-3 l4,6 l4,-9 l4,12 l4,-14 l4,15 l4,-13 l4,12 l4,-10 l4,11 l4,-9 l4,8 l4,-8 l4,7 l4,-6 l4,6 l4,-5 l4,4 l4,-4 l4,3 l4,-3 l4,3 l4,-2 l4,2 l4,-2 l4,1 l4,-1 L860,230" fill="none" stroke="#8fd8c8" stroke-width="1.2"/>
+        <!-- grains -->
+        <text x="20" y="284" fill="#cfe4ff">grains</text>
+        <text x="20" y="300" fill="#93a6ba" font-size="11">Poisson ticks, 2.5 ms each</text>
+        <path d="M170,290 L182,290 l2,-12 l2,18 l2,-8 l2,2 L210,290 l2,-10 l2,14 l2,-5 L230,290 L262,290 l2,-9 l2,12 l2,-4 L300,290 l2,-7 l2,9 L350,290 l2,-6 l2,8 L430,290 l2,-4 l2,5 L520,290 l2,-3 l2,4 L860,290" fill="none" stroke="#d7b4ff" stroke-width="1.2"/>
+        <!-- sum -->
+        <rect x="20" y="368" width="860" height="40" rx="8" fill="#131a24" stroke="#3b82f6"/>
+        <text x="450" y="393" fill="#cfe4ff" text-anchor="middle">sum → "dull" 3-pole low-pass on click and texture → tanh(1.4 v) → 8 ms tail fade → normalise to 0.85</text>
+      </g>
+    </svg>
+  </div>
+  <p class="cap">The layers, drawn by hand to show their shape, not measured. Which layers a ground uses, and their bands and
+    decays, are the numbers in <code>recipeFor</code>. Hard grounds (asphalt, concrete, rock, wood, metal) are two
+    contacts, heel then toe; soft grounds (grass, dirt, sand, snow) are one rolled contact carried by texture or grains.</p>
+  <div class="code">
+    <div class="hd"><span>Recipe: one struct describes every surface</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/engine/audio/sfx_ground.cpp#L24-L44">src/engine/audio/sfx_ground.cpp</a></div>
+<pre><span class="k">struct</span> <span class="t">Recipe</span> {
+    <span class="t">double</span> length = <span class="n">0.25</span>;
+    <span class="c">// heel: a click of band-limited noise at contact</span>
+    <span class="t">double</span> clickLevel = <span class="n">0</span>, clickLo = <span class="n">1000</span>, clickHi = <span class="n">6000</span>, clickDecay = <span class="n">0.003</span>;
+    <span class="c">// ring: a damped sinusoid pair at the contact (the shoe and the surface ringing together)</span>
+    <span class="t">double</span> ringLevel = <span class="n">0</span>, ringHz = <span class="n">1500</span>, ringHz2 = <span class="n">0</span>, ringDecay = <span class="n">0.006</span>;
+    <span class="c">// toe: the same click + ring again, `toeDelay` later at `toeLevel` of the heel (0 = one contact)</span>
+    <span class="t">double</span> toeDelay = <span class="n">0</span>, toeLevel = <span class="n">0</span>;
+    <span class="c">// body: a low sine thump (the weight arriving)</span>
+    <span class="t">double</span> thumpLevel = <span class="n">0</span>, thumpHz = <span class="n">90</span>, thumpDecay = <span class="n">0.03</span>;
+    <span class="c">// texture: continuous noise through a band, shaped by attack/decay</span>
+    <span class="t">double</span> texLevel = <span class="n">0</span>, texLo = <span class="n">1500</span>, texHi = <span class="n">6000</span>, texAttack = <span class="n">0.002</span>, texDecay = <span class="n">0.04</span>;
+    <span class="c">// grains: discrete micro-impacts (gravel, snow crystals, grass stems) at `grainRate` per second</span>
+    <span class="c">// over `grainSpan`, each a tiny ringing click in the band</span>
+    <span class="t">double</span> grainLevel = <span class="n">0</span>, grainRate = <span class="n">0</span>, grainSpan = <span class="n">0</span>, grainLo = <span class="n">2000</span>, grainHi = <span class="n">8000</span>;
+    <span class="c">// dull: a steep extra low-pass (Hz, three poles) on the click and texture -- a one-pole band leaks too much top</span>
+    <span class="c">// for a soft sole; the toe also gets its own share of the thump</span>
+    <span class="t">double</span> dull = <span class="n">0</span>;
+    <span class="c">// grainDull: the same three-pole low-pass on the grains (Hz; 0 = none) -- grit under a boot, not glass beads</span>
+    <span class="t">double</span> grainDull = <span class="n">0</span>;
+};</pre>
+  </div>
+  <p>Jumps and landings reuse the same recipe through the renderer's knobs rather than separate recipes: a push-off is
+    the recipe shorter, with little weight and a scrape in the surface's own band; a landing stretches it by up to 2.2×,
+    multiplies the thump by up to 3.6 and lowers its pitch, with heel and toe arriving together (flat-footed). Three
+    landing weights are pre-made per ground and the tracker's <code>heavy</code> picks one.</p>
+
+  <div class="note history"><p><b>"Spindly legs": measuring against a real recording.</b> The first recipes were tuned by
+    ear and built mostly from noise, so every surface read as grass (#84); hard grounds became a heel and a toe
+    (gate <code>hard_ground_steps_are_a_heel_and_a_toe</code>: two onsets 78–92 ms apart). Glenn still heard "some weird
+    creature walking on spindly long legs like a spider". On 2026-10-02 (b78e1749) the pavement steps were measured
+    against a CC0 recording of shoes on concrete (Kenney "Impact Sounds", used to measure, not shipped; listed in
+    CREDITS.md): one impact ~20 ms, energy centred at 160–360 Hz, about 2% over 1.25 kHz. Ours centred at 2.7–4.8 kHz
+    and rang 85 ms: four octaves too bright. Hence the <code>dull</code> three-pole low-pass and the thump an octave up.
+    A week later (b58f529b, "the mountain terrain still has that spindly walking noise") the natural grounds got the
+    same treatment against the Kenney grass and snow steps: rock had been centred at 5.8 kHz, grass 9.4, snow 9.9; now
+    100–530 Hz. Gates: <code>a_pavement_step_is_a_low_thud</code>, <code>steps_off_the_pavement_are_low_too</code>.</p></div>
+
+  <figure class="shot">
+    <img src="img/audio/meadow.webp" alt="A meadow of tall grass with a few yellow flowers, trees and mountains beyond">
+    <figcaption>Tall meadow grass (a screenshot from 2026-09-26). Walking here plays a swish with each step; on a mown
+      city lawn, nothing — the grass does not reach the shin.</figcaption>
+  </figure>
+  <div class="note history"><p><b>From a rustle loop to a swish per stride.</b> The first grass sound was a 2 s loop
+    whose level followed grass density × pace. Walking on the city's grass was "a constant low roar": the loop played
+    on mown lawns too (nothing asked how tall the grass was), and its per-stem flicker was a 25 ms average of noise,
+    which averages out to a steady hiss. Now the grass field carries its blade height, and each step through tall grass
+    plays a 0.42 s one-shot (<code>sfx::grassSwish</code>) that swells and dies, stems ticking off the leg (ddca9d6d).</p></div>
+
+  <h2>Water: surf, rivers, and Minnaert bubbles</h2>
+  <p><code>WaterAmbienceSystem</code> keeps a surf voice at the nearest open-sea cell (a <code>Sea</code> component from
+    the loader's water cells; basin ponds are dropped, because river channels are carved below sea level and are not
+    sea) and a river voice at the nearest bank. Both are positional loops that glide as you move.</p>
+  <p>The river is where the most listening happened (#87, eight rounds on 2026-09-28). It began as physics. An air
+    bubble in water rings at its <b>Minnaert resonance</b>, a frequency set by its radius: about 3.26 / r Hz for r in
+    metres, so a 7.5 mm bubble rings near 435 Hz and a 25 mm one near 130 Hz. A babbling brook is many such bubbles.
+    The generator draws radii from a power law (many small, few large), rings each one with a real bubble's damping and
+    a slight upward chirp, and scatters them in bursts:</p>
+  <div class="code">
+    <div class="hd"><span>bubbleLayer: each bubble rings at its Minnaert frequency</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/engine/audio/sfx_ground.cpp#L326-L347">src/engine/audio/sfx_ground.cpp</a></div>
+<pre>    <span class="k">for</span> (<span class="t">double</span> tb = gap(rng); tb &lt; seconds; tb += gap(rng)) {
+        <span class="k">const</span> <span class="t">int</span> n = std::max(<span class="n">1</span>, nOf(rng));
+        <span class="k">const</span> <span class="t">double</span> burstAmp = <span class="n">0.5</span> + <span class="n">0.5</span> * u01(rng);
+        <span class="k">for</span> (<span class="t">int</span> b = <span class="n">0</span>; b &lt; n; ++b) {
+            <span class="k">const</span> <span class="t">double</span> a = -<span class="n">1.5</span>, u = u01(rng);
+            <span class="k">const</span> <span class="t">double</span> r = std::pow(std::pow(rMin, a) + u * (std::pow(rMax, a) - std::pow(rMin, a)), <span class="n">1.0</span> / a);
+            <span class="k">const</span> <span class="t">double</span> f0 = <span class="n">3.26</span> / r;
+            <span class="k">const</span> <span class="t">double</span> d = <span class="n">0.043</span> * f0 + <span class="n">0.0014</span> * std::pow(f0, <span class="n">1.5</span>);
+            <span class="k">const</span> <span class="t">double</span> amp = burstAmp * std::sqrt(r / rMax) * (<span class="n">0.5</span> + <span class="n">0.5</span> * u01(rng));
+            <span class="k">const</span> <span class="t">double</span> rise = <span class="n">0.12</span> * d;
+            <span class="k">const</span> <span class="t">size_t</span> start = <span class="k">static_cast</span>&lt;<span class="t">size_t</span>&gt;((tb + <span class="n">0.08</span> * u01(rng)) * rate) % count;
+            <span class="k">const</span> <span class="t">size_t</span> len = <span class="k">static_cast</span>&lt;<span class="t">size_t</span>&gt;(std::min(<span class="n">0.15</span>, <span class="n">6.0</span> / d) * rate);
+            <span class="t">double</span> phase = <span class="n">0</span>;
+            <span class="k">for</span> (<span class="t">size_t</span> k = <span class="n">0</span>; k &lt; len; ++k) {
+                <span class="k">const</span> <span class="t">double</span> t = <span class="k">static_cast</span>&lt;<span class="t">double</span>&gt;(k) / rate;
+                <span class="c">// a soft onset (~2 ms): a bubble swells into its ring, it doesn't click</span>
+                <span class="k">const</span> <span class="t">double</span> on = std::min(<span class="n">1.0</span>, t / <span class="n">0.002</span>);
+                phase += <span class="n">6.283185307179586</span> * f0 * (<span class="n">1.0</span> + rise * t) / rate;
+                acc[(start + k) % count] += amp * on * std::sin(phase) * std::exp(-d * t);
+            }
+        }
+    }</pre>
+  </div>
+  <p>The damping term (0.043 f + 0.0014 f<sup>1.5</sup>) is van den Doel's, per the commit that introduced it
+    (2f208512). Note <code>% count</code> on the write index: a bubble that runs past the end wraps to the start, so the
+    loop is seamless.</p>
+  <figure class="shot">
+    <img src="img/audio/river-bank.webp" alt="A calm river between grassy banks, houses and trees on the far side, tall grass in the foreground">
+    <figcaption>A river bank (a screenshot from 2026-09-26). The river voice sits at the nearest bank point; a narrow and a
+      broad river loop are crossfaded by the river's width.</figcaption>
+  </figure>
+  <div class="note history"><p><b>Eight rounds by ear, and where the bubbles ended up.</b> In order, from the commits:
+    Minnaert bubbles (2f208512) — "sounds like a pot of boiling water", which is what an even rain of small independent
+    bubbles <i>is</i>; gurgle bursts over a rushing wash (36b99ead) — "too intense … very hissy and gluggy"; calmer,
+    darker, fewer bubbles (de7aaa87); three layers of bubbles over a faint bed (f6c916b3) — "too much static"; big low
+    bubbles, 7–25 mm (419c8654) — "works good for underwater … above water it wouldn't sound so muffled"; so the muffled
+    version became <code>sfx::underwaterRiver</code>, heard while the camera is under water (b01ab1c4); the in-air
+    bubbling then "sounds like something cooking … maybe it should just be a low static noise" (4ad7ab02). The river
+    you hear in the air today is a dark, steady band of noise (60–700 Hz for a wide river, thinner and quieter for a
+    narrow one; fd7b5fea). The bubbles were kept: as the underwater sound, as <code>sfx::simmer</code> (a pot, not yet
+    placed in a level), and as the droplets in a splash. The lesson the memory notes keep: when tuning stalls, ask for
+    a reference recording and measure it.</p></div>
+
+  <h2>Hearing at a distance (2026-10-16)</h2>
+  <p>Glenn: "The train horn sounds the same inside a building and pretty much anywhere you are in the world." Spatial
+    voices had been a straight line from full volume to silence at their range, so a 600 m horn was still at half volume
+    300 m away. Commit cd1c382f made <code>AudioEngine</code> do three things itself: the free-field law, air absorption,
+    and walls.</p>
+  <div class="code">
+    <div class="hd"><span>audioDistanceGain: full to a reference distance, then ref/d, faded over the last third</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/engine/audio/audio_engine.h#L75-L91">src/engine/audio/audio_engine.h</a></div>
+<pre><span class="k">inline</span> Real audioRefDistance(Real range) { <span class="k">return</span> std::max(Real(<span class="n">2</span>), range * Real(<span class="n">0.05</span>)); }
+<span class="k">inline</span> <span class="t">float</span> audioDistanceGain(Real d, Real ref, Real range) {
+    <span class="k">if</span> (ref &lt;= <span class="n">0</span>) ref = audioRefDistance(range);
+    <span class="k">if</span> (d &gt;= range) <span class="k">return</span> <span class="n">0.0f</span>;
+    Real g = d &lt;= ref ? Real(<span class="n">1</span>) : ref / d;
+    <span class="k">const</span> Real fadeFrom = range * (Real(<span class="n">2</span>) / Real(<span class="n">3</span>));
+    <span class="k">if</span> (d &gt; fadeFrom) {
+        <span class="k">const</span> Real t = (range - d) / (range - fadeFrom);   <span class="c">// 1 at the fade's start, 0 at range</span>
+        g *= t * t * (Real(<span class="n">3</span>) - Real(<span class="n">2</span>) * t);
+    }
+    <span class="k">return</span> <span class="k">static_cast</span>&lt;<span class="t">float</span>&gt;(g);
+}
+<span class="c">// AIR ABSORPTION: air soaks up the high end with distance (a horn a few hundred metres off is a dull note,</span>
+<span class="c">// not a bright one). The cutoff of the low-pass a voice is heard through at distance d.</span>
+<span class="k">inline</span> <span class="t">float</span> audioAirCutoffHz(Real d) {
+    <span class="k">return</span> <span class="k">static_cast</span>&lt;<span class="t">float</span>&gt;(Real(<span class="n">20000</span>) / (Real(<span class="n">1</span>) + std::max(Real(<span class="n">0</span>), d) / Real(<span class="n">120</span>)));
+}</pre>
+  </div>
+  <div class="diagram">
+    <svg viewBox="0 0 760 250" role="img" aria-label="Plot of gain against distance for a 600 metre horn: the old straight line is still 0.5 at 300 metres; the new curve is flat to 30 metres, then falls as 30 over d to about 0.1 at 300 metres, and fades to zero at 600 metres.">
+      <g font-family="system-ui, sans-serif" font-size="12">
+        <line x1="60" y1="200" x2="710" y2="200" stroke="#2c3d50"/>
+        <line x1="60" y1="30" x2="60" y2="200" stroke="#2c3d50"/>
+        <text x="52" y="44" fill="#64768a" text-anchor="end">1</text>
+        <text x="52" y="124" fill="#64768a" text-anchor="end">0.5</text>
+        <text x="52" y="204" fill="#64768a" text-anchor="end">0</text>
+        <line x1="60" y1="120" x2="700" y2="120" stroke="#1f2a37" stroke-dasharray="3 4"/>
+        <g fill="#64768a" text-anchor="middle">
+          <text x="60" y="218">0</text><text x="166.7" y="218">100</text><text x="273.3" y="218">200</text><text x="380" y="218">300</text>
+          <text x="486.7" y="218">400</text><text x="593.3" y="218">500</text><text x="700" y="218">600 m</text>
+        </g>
+        <polyline points="60,40 700,200" fill="none" stroke="#93a6ba" stroke-width="1.4" stroke-dasharray="6 4"/>
+        <polyline points="60.0,40.0 65.3,40.0 70.7,40.0 76.0,40.0 81.3,40.0 86.7,40.0 92.0,40.0 97.3,62.9 102.7,80.0 108.0,93.3 113.3,104.0 118.7,112.7 124.0,120.0 129.3,126.2 134.7,131.4 140.0,136.0 145.3,140.0 150.7,143.5 156.0,146.7 161.3,149.5 166.7,152.0 177.3,156.4 188.0,160.0 198.7,163.1 209.3,165.7 220.0,168.0 241.3,171.8 262.7,174.7 284.0,177.1 305.3,179.1 326.7,180.8 348.0,182.2 369.3,183.4 390.7,184.5 412.0,185.5 433.3,186.3 454.7,187.0 476.0,187.7 497.3,188.4 518.7,189.5 540.0,191.0 561.3,192.7 582.7,194.4 604.0,196.0 625.3,197.4 646.7,198.6 668.0,199.5 689.3,199.9 700.0,200.0" fill="none" stroke="#8ec5ff" stroke-width="2"/>
+        <circle cx="380" cy="120" r="4" fill="#93a6ba"/><circle cx="380" cy="184" r="4" fill="#8ec5ff"/>
+        <text x="390" y="114" fill="#93a6ba">old: 0.5 at 300 m</text>
+        <text x="390" y="176" fill="#8ec5ff">now: 0.1 at 300 m</text>
+        <text x="100" y="34" fill="#8ec5ff">full to ref = 600 × 0.05 = 30 m</text>
+        <text x="494" y="176" fill="#93a6ba">fade from 400 m</text>
+        <line x1="486.7" y1="168" x2="486.7" y2="198" stroke="#2c3d50" stroke-dasharray="2 3"/>
+        <text x="380" y="242" fill="#93a6ba" text-anchor="middle">gain of a 600 m-range voice (the train horn's kHornRange), plotted from audioDistanceGain</text>
+      </g>
+    </svg>
+  </div>
+  <p class="cap">Computed from the formula above, not measured. Before the change, a voice fell linearly to silence at its range.</p>
+  <p><b>Walls and cabins.</b> The engine asks an <i>enclosure query</i> which enclosure a point is in — for the city,
+    a lookup in the building records — and the listener can ride in a <i>cabin</i> (the player's car, a bus or cab, a
+    train car), renewed every frame. A sound from another enclosure crosses both barriers: a building wall is −18 dB
+    with a 600 Hz low-pass, a cabin −10 dB at 1.5 kHz, eased over 0.1 s so stepping through a door does not click. One
+    pitfall is recorded in the commit: miniaudio's <code>ma_attenuation_model_none</code> skips the spatializer outright,
+    pan and volume too, so the engine keeps an inverse model with zero rolloff and applies its own gain. Test:
+    <code>walls_muffle_the_street_and_a_cabin_keeps_its_own_engine</code>.</p>
+
+  <h2>Vehicles: one engine sample, every car</h2>
+  <p>Glenn asked for engine noise when moving vs idling, for the player's car and for all the city's traffic
+    (c374870c). The design copies the lamps': one pure decision core in <code>engine/vehicle_audio.h</code> maps
+    (speed, throttle, running) to a pitch and a gain; the player's <code>VehicleSystem</code> and the city's
+    <code>CityTrafficAudioSystem</code> are thin adapters, so both rev alike. The sound is <b>one loop-clean period</b>
+    from <code>sfx::engine</code>, pitch-shifted per car — no sample bank.</p>
+  <div class="code">
+    <div class="hd"><span>engineRevFraction: revs climb through a gear, drop at the shift</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/engine/vehicle_audio.h#L52-L68">src/engine/vehicle_audio.h</a></div>
+<pre><span class="c">// Revs as a fraction of redline, from road speed alone.</span>
+<span class="k">inline</span> Real engineRevFraction(Real speedMps) {
+    <span class="k">const</span> Real v = std::fabs(speedMps);
+    <span class="t">int</span> gear = kEngineGearCount - <span class="n">1</span>;
+    <span class="k">for</span> (<span class="t">int</span> g = <span class="n">0</span>; g &lt; kEngineGearCount; ++g) {
+        <span class="k">if</span> (v &lt; kEngineGearTops[g]) { gear = g; <span class="k">break</span>; }
+    }
+    <span class="k">const</span> Real low = gear == <span class="n">0</span> ? Real(<span class="n">0</span>) : kEngineGearTops[gear - <span class="n">1</span>];
+    <span class="k">const</span> Real span = std::max(Real(<span class="n">0.1</span>), kEngineGearTops[gear] - low);
+    <span class="k">const</span> Real through = std::min(Real(<span class="n">1</span>), (v - low) / span);
+    <span class="k">const</span> Real geared =
+        kEngineGearLowRev + (kEngineRedlineRev - kEngineGearLowRev) * through;
+    <span class="k">if</span> (v &gt;= kEngineCreepSpeed) <span class="k">return</span> geared;
+    <span class="c">// Creep: idle -&gt; the bottom of first gear.</span>
+    <span class="k">const</span> Real t = std::max(Real(<span class="n">0</span>), v) / kEngineCreepSpeed;
+    <span class="k">return</span> kEngineIdleRev + (geared - kEngineIdleRev) * t;
+}</pre>
+  </div>
+  <div class="diagram">
+    <svg viewBox="0 0 760 250" role="img" aria-label="Engine loop pitch against road speed: from 0.55 at idle it climbs through five gears, dropping back at 11, 20, 30 and 42 metres per second, reaching 2.35 at 60.">
+      <g font-family="system-ui, sans-serif" font-size="12">
+        <line x1="60" y1="200" x2="710" y2="200" stroke="#2c3d50"/>
+        <line x1="60" y1="30" x2="60" y2="200" stroke="#2c3d50"/>
+        <g fill="#64768a" text-anchor="end">
+          <text x="52" y="200">0.5</text><text x="52" y="162">1.0</text><text x="52" y="120">1.5</text><text x="52" y="78">2.0</text><text x="52" y="48">2.35</text>
+        </g>
+        <g fill="#64768a" text-anchor="middle">
+          <text x="60" y="218">0</text><text x="177.3" y="218">11</text><text x="273.3" y="218">20</text><text x="380" y="218">30</text>
+          <text x="508" y="218">42</text><text x="700" y="218">60 m/s</text>
+        </g>
+        <polyline points="60,171.5 65.3,164.3 70.7,154.7 76,142.8 81.3,128.5 177.3,44.2 177.3,147.3 273.3,44.2 273.3,147.3 380,44.2 380,147.3 508,44.2 508,147.3 700,44.2" fill="none" stroke="#e6c07b" stroke-width="2"/>
+        <line x1="60" y1="195.8" x2="80" y2="195.8" stroke="#93a6ba" stroke-dasharray="2 3"/>
+        <text x="86" y="192" fill="#93a6ba">idle 0.55 × 56 Hz ≈ 925 rpm (stopped, engine on)</text>
+        <text x="380" y="242" fill="#93a6ba" text-anchor="middle">playback-rate multiplier on sfx::engine, plotted from engineSoundFor (before engineWobble)</text>
+      </g>
+    </svg>
+  </div>
+  <p class="cap">The rev sawtooth. Without the gears, Glenn's word for it would have been a siren chasing the speedometer.</p>
+  <div class="note history"><p><b>A drone is not an engine.</b> The first <code>sfx::engine</code> was a stack of steady
+    sines, which Glenn correctly heard as "a constant hum". An engine is a train of combustion <i>pulses</i>, no two
+    alike, over broadband induction noise. The clip became a pressure pulse per firing with per-firing gain varying
+    74–126%, two circularly filtered noise beds, and a period grown from 0.25 to 0.75 s (42 firings) so the wrap stops
+    being audible. On top, <code>engineWobble</code> hunts the revs with two incommensurate sine rates phased by car id,
+    because "forty cars holding one exact note is a chord, not a street". A driverless parked car is silent, so a
+    parked street sounds different from traffic waiting at a light. Voices were budgeted in pools, nearest first (6
+    physical cars + 8 city cars at the time of c374870c).</p></div>
+  <p>Later additions follow the same pattern: the player's tyres squeal from a 12° slide or 0.2 wheel slip (ADR-0238;
+    it was 7° and 0.8 volume on the first day, then turned down), and a bicycle (<code>pedals = true</code>) has no
+    engine note at all — a freewheel ticking 24 clicks per wheel turn while it coasts, and the tyres' hum.</p>
+
+  <h2>Trains (ADR-0156)</h2>
+  <p>"There's no sound on the train. No train track clacking. No whistle or bell when it stops or when the doors open."
+    The answer is four clips and some arithmetic on the train's odometer. Rail has joints every 18 m (jointed track, the
+    clatter people expect); each axle near the ear clacks as it crosses one, so a car's two bogies give the
+    "ta-dum … ta-dum" and the beat quickens with speed on its own.</p>
+  <div class="code">
+    <div class="hd"><span>TrainSystem: every axle that passed a joint since last frame clacks</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/apps/citysim/train_system.cpp#L288-L306">src/apps/citysim/train_system.cpp</a></div>
+<pre>        <span class="c">// CLATTER: axles (two per bogie, 2.5 m apart; bogies at 0.18 and 0.82 of each body) past a joint since last frame</span>
+        <span class="k">if</span> (E.lastOdo &gt;= <span class="n">0</span> &amp;&amp; T.odometer &gt; E.lastOdo &amp;&amp; nearD &lt; kClackRange + <span class="n">30</span>) {
+            <span class="k">const</span> <span class="t">double</span> speed = std::min(<span class="n">1.0</span>, T.v / <span class="n">25.0</span>);
+            <span class="t">double</span> front = <span class="n">0</span>;   <span class="c">// metres behind the head</span>
+            <span class="k">for</span> (<span class="t">int</span> c = <span class="n">0</span>; c &lt; <span class="k">static_cast</span>&lt;<span class="t">int</span>&gt;(cars.size()); ++c) {
+                <span class="k">const</span> <span class="t">double</span> len = cars[<span class="k">static_cast</span>&lt;std::size_t&gt;(c)].length;
+                <span class="k">for</span> (<span class="t">double</span> b : {<span class="n">0.18</span>, <span class="n">0.82</span>})
+                    <span class="k">for</span> (<span class="t">double</span> ax : {-<span class="n">1.25</span>, <span class="n">1.25</span>}) {
+                        <span class="k">const</span> <span class="t">double</span> off = front + b * len + ax;
+                        <span class="k">if</span> (std::floor((T.odometer - off) / kJointSpacing) &lt;= std::floor((E.lastOdo - off) / kJointSpacing)) <span class="k">continue</span>;
+                        <span class="k">const</span> Vec3 at = L.at(T.s - off);
+                        <span class="k">if</span> ((at - ear).length() &gt; kClackRange) <span class="k">continue</span>;
+                        pp.volume = <span class="k">static_cast</span>&lt;<span class="t">float</span>&gt;(<span class="n">0.25</span> + <span class="n">0.6</span> * speed);
+                        pp.pitch = <span class="k">static_cast</span>&lt;<span class="t">float</span>&gt;(<span class="n">0.92</span> + <span class="n">0.16</span> * speed);
+                        ctx.audio.playAt(clack_[<span class="k">static_cast</span>&lt;std::size_t&gt;(c + (ax &gt; <span class="n">0</span> ? <span class="n">1</span> : <span class="n">0</span>)) % <span class="n">3</span>], Vec3(at.x, at.y + <span class="n">0.5</span>, at.z), <span class="k">static_cast</span>&lt;<span class="t">float</span>&gt;(kClackRange), pp);
+                    }
+                front += len + T.kind.gap;
+            }
+        }</pre>
+  </div>
+  <p>Under the clatter, <code>railRumble</code> loops on the nearest car with gain and pitch by speed; <code>trainHorn</code>
+    (high then low) sounds once about 300 m before each platform, heard to 600 m; <code>trainDoorChime</code> plays a
+    falling ding-dong as the doors open and three beeps a little before they shut. Aboard, all of it is heard through
+    the car's body as a cabin.</p>
+  <figure class="shot">
+    <img src="img/audio/train-platform.webp" alt="A white two-car train with a teal stripe at a covered station platform, trees and houses beside the line">
+    <figcaption>A train at a station (screenshot from 2026-10-11, the day before the rail sounds landed in ba55fd6d).</figcaption>
+  </figure>
+
+  <h2>The body's moves (ADR-0238, ADR-0239)</h2>
+  <p>"I think different sfx would help sell these types of motions too. Like skateboarding, parachuting, grapple, etc."
+    <code>sfx_motion.cpp</code> adds loops — wind by airspeed in every airborne mode, the canopy's flutter (about 9
+    flaps a second) and the wingsuit's buzz (about 24), the grapple's winch, a skateboard's roll — and one-shots: the
+    canopy opening (rustle, WHUMP, lines snapping taut), the hook's shot and bite, the rope snapping taut, a board's
+    trucks over pavement joints every 1.6 m, the ollie's pop and landing, and hands catching a hold
+    (<code>handGrab</code>, <code>handHold</code>, <code>metalGrab</code> on a rung). The player's pose carries counters
+    for the one-shots, and <code>MotionAudioSystem</code> plays them; <code>FootstepSystem</code> stays silent in those
+    modes, so the two never double up.</p>
+  <figure class="shot">
+    <img src="img/audio/canopy.webp" alt="The player hanging under a red and white parachute canopy above a downtown of skyscrapers">
+    <figcaption>Under the canopy (2026-10-24, the day ADR-0238 landed): wind by airspeed and the canopy's flutter loop.</figcaption>
+  </figure>
+  <p>Elevators have their own set too (Glenn, 2026-09-30: "a ding when it reaches the floor, noise when it opens,
+    clicking when selecting a floor and then a noise showing that it's moving"): <code>elevatorDing</code> rising or
+    falling by direction, <code>elevatorButton</code>, <code>elevatorDoors</code>, and the <code>elevatorHum</code> loop.</p>
+
+  <h2>Testing sound without ears</h2>
+  <p>Every generator is checked headless in <code>tests/test_audio.cpp</code>: deterministic for a seed and different
+    across seeds, bounded in [-1, 1], loops seamless at the wrap, and — the interesting part — <i>perceptual</i> gates
+    computed from the samples: a pavement step's spectral centroid and share of energy over 1.25 kHz, two onsets
+    78–92 ms apart for heel and toe, a broad river with more low-band energy than a stream, a far horn quiet <i>and</i>
+    dull. The whole engine-note chain is pumped through the real mixer in Manual mode, where pitching up must raise the
+    zero-crossing rate. To actually listen:</p>
+  <table>
+    <tr><th>Switch</th><th>Effect</th></tr>
+    <tr><td><code>RT_SFX_DUMP=&lt;dir&gt;</code></td><td>run_tests writes every tested clip as a 16-bit WAV into the folder</td></tr>
+    <tr><td><code>RT_FOOTSTEP_LOG=1</code></td><td>log every step, jump and landing: the ground, the surface tag, position, volume, grass level</td></tr>
+    <tr><td><code>RT_WATER_LOG=1</code></td><td>where each water voice sits, twice a second</td></tr>
+    <tr><td><code>RT_AUDIO=null</code></td><td>run the mixer on the null device (probe viewers stay silent)</td></tr>
+  </table>
+  <figure class="shot">
+    <svg viewBox="0 0 760 120" role="img" aria-label="A hand-drawn sketch of a footstep's waveform: two short bursts about 90 milliseconds apart, the second smaller, over a low decaying swell" style="display:block;width:100%;height:auto;background:#0a0e14;border:1px solid #1f2a37;border-radius:10px">
+      <g font-family="system-ui, sans-serif" font-size="12">
+        <line x1="30" y1="60" x2="730" y2="60" stroke="#1f2a37"/>
+        <path d="M30,60 L60,60 l2,-40 l2,72 l2,-60 l2,48 l2,-36 l3,28 l3,-22 l3,16 l3,-12 l4,9 l4,-7 l4,5 l5,-4 l5,3 l6,-2 l6,2 l8,-1 L250,60 l2,-30 l2,54 l2,-44 l2,34 l2,-26 l3,20 l3,-15 l3,11 l4,-8 l4,6 l5,-4 l5,3 l6,-2 l8,1 L730,60" fill="none" stroke="#8ec5ff" stroke-width="1.4"/>
+        <text x="66" y="112" fill="#93a6ba">heel</text><text x="256" y="112" fill="#93a6ba">toe</text>
+        <text x="720" y="20" fill="#64768a" text-anchor="end">sketch, not a recording</text>
+      </g>
+    </svg>
+    <figcaption>What a hard-ground step looks like in principle: two contacts, the toe softer. Dump the real ones with
+      <code>RT_SFX_DUMP</code> and open them in any editor.</figcaption>
+  </figure>
+
+  <h2>Where to look</h2>
+  <ul class="files">
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/audio/audio_engine.h">src/engine/audio/audio_engine.h</a> / <a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/audio/audio_engine.cpp">.cpp</a> — the sealed mixer: clips, voices, distance, air, enclosures</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/audio/sfx.h">src/engine/audio/sfx.h</a> — every generator's signature and a line on what it sounds like</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/audio/sfx.cpp">sfx.cpp</a> (gunshot, impact, horn, engine, elevators, trains), <a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/audio/sfx_ground.cpp">sfx_ground.cpp</a> (steps, grass, water), <a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/audio/sfx_motion.cpp">sfx_motion.cpp</a> (moves, tyres, hands), <a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/audio/sfx_dsp.h">sfx_dsp.h</a> (shared filters, circular loops)</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/audio/footsteps.h">src/engine/audio/footsteps.h</a> — FootstepTracker and groundForSurface (pure, tested)</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/systems/footstep_system.cpp">src/engine/systems/footstep_system.cpp</a>, <a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/systems/water_ambience_system.cpp">water_ambience_system.cpp</a>, <a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/systems/motion_audio_system.cpp">motion_audio_system.cpp</a>, <a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/systems/audio_system.cpp">audio_system.cpp</a></li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/vehicle_audio.h">src/engine/vehicle_audio.h</a> — the engine-note decision core; <a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/apps/citysim/city_traffic_audio.cpp">src/apps/citysim/city_traffic_audio.cpp</a> — the city's cars</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/apps/citysim/train_system.cpp">src/apps/citysim/train_system.cpp</a> — clatter, rumble, horn, chimes</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/systems/physics_system.cpp">src/engine/systems/physics_system.cpp</a> (<code>publishContacts</code>), <a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/game/arena_state.cpp">src/game/arena_state.cpp</a> (ArenaSoundSystem)</li>
+    <li>Tests: <a href="https://github.com/GlennSong/raytracer-clang/blob/main/tests/test_audio.cpp">tests/test_audio.cpp</a>, <a href="https://github.com/GlennSong/raytracer-clang/blob/main/tests/test_vehicle_audio.cpp">tests/test_vehicle_audio.cpp</a>; <a href="https://github.com/GlennSong/raytracer-clang/blob/main/tools/audio_demo.cpp">tools/audio_demo.cpp</a>, <a href="https://github.com/GlennSong/raytracer-clang/blob/main/tools/impact_demo.cpp">tools/impact_demo.cpp</a> (renders the reaction chain to a WAV)</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/CREDITS.md">CREDITS.md</a> — miniaudio, and the Kenney recordings the footsteps were measured against</li>
+    <li>Good test beds: river_valley's spawn (a rock face, then sand into the sea with surf on), a river bank, river_town's roads at a run</li>
+  </ul>
+
+  <footer>Code excerpts from commit <code>47d587f3</code> (2026-10-26). Drawn from ADR-0069, 0071, 0156, 0238, 0239;
+    commits 8b411ac0, 398b563a, 2f208512 … fd7b5fea (#87), b78e1749, b58f529b, ddca9d6d, cd899963, cd1c382f, c374870c.</footer>
+</div>
+</body>
+</html>

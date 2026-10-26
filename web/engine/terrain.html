@@ -1,0 +1,832 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Building the Ground — How the Engine Works</title>
+  <link rel="stylesheet" href="engine.css">
+</head>
+<body>
+<div class="wrap">
+  <div class="nav"><a href="index.html">← How the engine works</a> · <a href="../index.html">scenes</a></div>
+  <h1>Building the ground</h1>
+  <p class="lede">The terrain is one height function, <code>terrainHeight(x, z)</code>, that everything asks: the mesh, the
+    physics, the trees, the roads. Behind it, a level's few hundred numbers are grown into mountains by a river-erosion
+    simulation, drained into rivers and lakes, baked into a sparse pyramid of height tiles, and drawn as a CDLOD grid
+    whose detail falls off with distance.</p>
+
+  <h2>The problem</h2>
+  <p>The island level is 20 km across. Its ground has to read as real mountains from a beach several kilometres away and
+    as stones and gullies under the player's feet. It also has to stay one surface: if the car's collider, the grass, a
+    building's pad and the drawn triangles disagree by half a metre, things float or sink. And it has to fit on a 10 GB
+    card next to a city.</p>
+  <p>Three ideas carry the system:</p>
+  <ul>
+    <li><b>One field, many readers.</b> The world is a stack of 2D <i>fields</i> (height, slope, wetness, cover) and
+      <i>recipes</i> that read them (ADR-0027). Height is the root field, and it has exactly one definition.</li>
+    <li><b>Grow the shape, don't draw it.</b> Noise makes pyramids and combed stripes. The mountains are instead grown
+      by the <i>stream power law</i> (uplift against river incision), then refined level by level (ADR-0125, 0127).</li>
+    <li><b>Bake once, stream what's near.</b> The expensive ground is computed offline, cached by a content key, and
+      sampled into a height pyramid that the renderer and the physics both read (ADR-0095).</li>
+  </ul>
+
+  <h2>The pipeline</h2>
+  <p>From a level file to pixels. The dashed region is the <i>weather bake</i>: minutes of CPU work, done once per
+    terrain block and cached on disk as <code>cache/terrain/weather_&lt;key&gt;.bin</code>. Everything after it is
+    cheap enough to run at load, and the pyramid and world maps are cached too.</p>
+  <div class="diagram">
+    <svg viewBox="0 0 900 460" role="img" aria-label="Terrain pipeline: level JSON and seed, relief formula, uplift map, stream power grow, keep the shape, refine, facets, optional water pass, eroded base, hydrology, terrainHeight, ground maps, height pyramid, world maps, tile meshes, CDLOD draw">
+      <defs><marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" fill="#6f8fb0"/></marker></defs>
+      <path d="M455,26 H895 V234 H5 V128 H455 Z" fill="none" stroke="#e6c07b" stroke-dasharray="6 5" stroke-width="1.3"/>
+      <g font-family="system-ui, sans-serif" font-size="13" text-anchor="middle">
+        <text x="885" y="226" text-anchor="end" fill="#e6c07b" font-size="12">the weather bake (weatherTerrain), cached</text>
+        <!-- row 1 -->
+        <rect x="15" y="40" width="195" height="64" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="112" y="66" fill="#cfe4ff">Level JSON terrain block</text>
+        <text x="112" y="86" fill="#93a6ba" font-size="12">+ seed (island: 20 km)</text>
+        <rect x="240" y="40" width="195" height="64" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="337" y="66" fill="#cfe4ff">Relief formula</text>
+        <text x="337" y="86" fill="#93a6ba" font-size="12">terrainBaseHeight</text>
+        <rect x="465" y="40" width="195" height="64" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="562" y="66" fill="#cfe4ff">Uplift map</text>
+        <text x="562" y="86" fill="#93a6ba" font-size="12">relief blurred 600 m + peaks</text>
+        <rect x="690" y="40" width="195" height="64" rx="9" fill="#131a24" stroke="#3b82f6"/>
+        <text x="787" y="66" fill="#cfe4ff">Grow: stream power</text>
+        <text x="787" y="86" fill="#93a6ba" font-size="12">1024², 250 its, rock layers</text>
+        <line x1="210" y1="72" x2="236" y2="72" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar)"/>
+        <line x1="435" y1="72" x2="461" y2="72" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar)"/>
+        <line x1="660" y1="72" x2="686" y2="72" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar)"/>
+        <line x1="787" y1="104" x2="787" y2="141" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar)"/>
+        <!-- row 2, right to left -->
+        <rect x="690" y="145" width="195" height="64" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="787" y="171" fill="#cfe4ff">Keep the shape</text>
+        <text x="787" y="191" fill="#93a6ba" font-size="12">low(level) + high(grown)</text>
+        <rect x="465" y="145" width="195" height="64" rx="9" fill="#131a24" stroke="#3b82f6"/>
+        <text x="562" y="171" fill="#cfe4ff">Refine 1024 → 8192</text>
+        <text x="562" y="191" fill="#93a6ba" font-size="12">upscale, detail, drain, blur</text>
+        <rect x="240" y="145" width="195" height="64" rx="9" fill="#131a24" stroke="#2c3d50" stroke-dasharray="4 3"/>
+        <text x="337" y="171" fill="#cfe4ff">Facets (opt-in)</text>
+        <text x="337" y="191" fill="#93a6ba" font-size="12">steep rock cut into planes</text>
+        <rect x="15" y="145" width="195" height="64" rx="9" fill="#131a24" stroke="#2c3d50" stroke-dasharray="4 3"/>
+        <text x="112" y="171" fill="#cfe4ff">Water + sediment (GPU)</text>
+        <text x="112" y="191" fill="#93a6ba" font-size="12">0 steps on the island</text>
+        <line x1="690" y1="177" x2="664" y2="177" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar)"/>
+        <line x1="465" y1="177" x2="439" y2="177" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar)"/>
+        <line x1="240" y1="177" x2="214" y2="177" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar)"/>
+        <line x1="112" y1="209" x2="112" y2="266" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar)"/>
+        <!-- row 3 -->
+        <rect x="15" y="270" width="195" height="64" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="112" y="296" fill="#cfe4ff">erodedBase</text>
+        <text x="112" y="316" fill="#93a6ba" font-size="12">grid + rockRelief, per read</text>
+        <rect x="240" y="270" width="195" height="64" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="337" y="296" fill="#cfe4ff">Hydrology::build</text>
+        <text x="337" y="316" fill="#93a6ba" font-size="12">rivers + lakes on that ground</text>
+        <rect x="465" y="270" width="195" height="64" rx="9" fill="#131a24" stroke="#3b82f6"/>
+        <text x="562" y="296" fill="#cfe4ff">terrainHeight(x, z)</text>
+        <text x="562" y="316" fill="#93a6ba" font-size="12">carve · earthwork · flatten</text>
+        <rect x="690" y="270" width="195" height="64" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="787" y="296" fill="#cfe4ff">Ground maps + cover</text>
+        <text x="787" y="316" fill="#93a6ba" font-size="12">wet, scree, soil, convex</text>
+        <line x1="210" y1="302" x2="236" y2="302" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar)"/>
+        <line x1="435" y1="302" x2="461" y2="302" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar)"/>
+        <line x1="660" y1="302" x2="686" y2="302" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar)"/>
+        <line x1="787" y1="334" x2="787" y2="376" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar)"/>
+        <!-- row 4, right to left -->
+        <rect x="690" y="380" width="195" height="64" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="787" y="406" fill="#cfe4ff">Height pyramid</text>
+        <text x="787" y="426" fill="#93a6ba" font-size="12">1 m cells, 129² tiles, sparse</text>
+        <rect x="465" y="380" width="195" height="64" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="562" y="406" fill="#cfe4ff">World maps</text>
+        <text x="562" y="426" fill="#93a6ba" font-size="12">normal · cover · macro</text>
+        <rect x="240" y="380" width="195" height="64" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="337" y="406" fill="#cfe4ff">Tile meshes</text>
+        <text x="337" y="426" fill="#93a6ba" font-size="12">morph target, skirts</text>
+        <rect x="15" y="380" width="195" height="64" rx="9" fill="#131a24" stroke="#3b82f6"/>
+        <text x="112" y="406" fill="#cfe4ff">CDLOD draw</text>
+        <text x="112" y="426" fill="#93a6ba" font-size="12">gated quadtree, terrain.vert</text>
+        <line x1="690" y1="412" x2="664" y2="412" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar)"/>
+        <line x1="465" y1="412" x2="439" y2="412" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar)"/>
+        <line x1="240" y1="412" x2="214" y2="412" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar)"/>
+      </g>
+    </svg>
+  </div>
+  <p class="cap">Seed and level JSON to the drawn ground. Blue outlines are the stages that do the real work; dashed
+    boxes are optional. The ground maps are computed from the weathered grid itself; the pyramid samples
+    <code>terrainHeight</code> with every carve and flatten folded in. A level with no <code>"weather"</code> block skips
+    the bake (its base is the raw formula, or the older droplet erosion); one with no <code>"baked"</code> CDLOD
+    evaluates the formula per vertex instead of reading tiles.</p>
+
+  <h2>One field: terrainHeight</h2>
+  <p>ADR-0027 set the shape of the whole world system: <i>a world is a stack of fields plus recipes that read them</i>,
+    authored as data, regenerated identically from a seed. ADR-0055 stacked the city on top of it (suitability, then
+    settlements, highways, streets, blocks) with one rule worth remembering: <i>a new world system contributes fields,
+    rules or templates, never a new pipeline stage</i>. Rivers, roads and pads therefore don't own their own
+    ground. They edit the one field, and the edits are layered inside a single function:</p>
+  <div class="code">
+    <div class="hd"><span>terrainHeight: the base relief, then the layers that edit it</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/engine/procgen/terrain.cpp#L894-L918">src/engine/procgen/terrain.cpp#L894-L918</a></div>
+<pre>double terrainHeight(const TerrainParams&amp; params, const Noise&amp; noise,
+                     double worldX, double worldZ, double flattenDilate) {
+    <span class="c">// Base relief: the pre-baked ERODED field when present (so CDLOD, collider and</span>
+    <span class="c">// placement all get natural drainage), else the raw analytic relief.</span>
+    double h = params.erodedBase ? (*params.erodedBase)(worldX, worldZ)
+                                 : terrainBaseHeight(params, noise, worldX, worldZ);
+    <span class="c">// The rivers' channels (procgen/hydrology.h): cut, never raised.</span>
+    if (params.hydro) h = params.hydro-&gt;carve(worldX, worldZ, h);
+    <span class="c">// The earthwork field (procgen/earthwork.h): the ground reshaped to carry</span>
+    <span class="c">// the road network, ADDED to the relief so its detail survives. The stamps</span>
+    <span class="c">// below then have centimetres to absorb, not metres.</span>
+    if (params.earthwork) h += (*params.earthwork)(worldX, worldZ);
+    <span class="c">// City cut/fill: grade the ground flat under roads and blocks (applied last so</span>
+    <span class="c">// it overrides every relief layer there). Use the spatial index when the</span>
+    <span class="c">// recipe carries one (ADR-0075 Phase 0) — same height, far fewer footprints</span>
+    <span class="c">// tested per sample.</span>
+    if (!params.flatten.empty()) {
+        if (params.flattenIndex &amp;&amp; !params.flattenIndex-&gt;empty())
+            h = applyFlatten(*params.flattenIndex, params.flatten, worldX, worldZ, h,
+                             flattenDilate);
+        else
+            h = applyFlatten(params.flatten, worldX, worldZ, h, flattenDilate);
+    }
+    return h;
+}</pre>
+  </div>
+  <div class="diagram">
+    <svg viewBox="0 0 900 290" role="img" aria-label="terrainHeight layers: base relief, river carve, earthwork, flatten, feeding the drawn ground, colliders and placement; hydrology and the road solve read the base only">
+      <defs><marker id="ar2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" fill="#6f8fb0"/></marker></defs>
+      <g font-family="system-ui, sans-serif" font-size="13" text-anchor="middle">
+        <rect x="20" y="15" width="360" height="50" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="200" y="36" fill="#cfe4ff">1. Base: erodedBase or terrainBaseHeight</text>
+        <text x="200" y="54" fill="#93a6ba" font-size="12">the weathered grid, or noise + range + island</text>
+        <rect x="20" y="85" width="360" height="50" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="200" y="106" fill="#cfe4ff">2. River carve: min(h, channel)</text>
+        <text x="200" y="124" fill="#93a6ba" font-size="12">Hydrology::carve, only ever lowers</text>
+        <rect x="20" y="155" width="360" height="50" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="200" y="176" fill="#cfe4ff">3. Earthwork: h + D(x, z)</text>
+        <text x="200" y="194" fill="#93a6ba" font-size="12">smooth field that carries the road network</text>
+        <rect x="20" y="225" width="360" height="50" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="200" y="246" fill="#cfe4ff">4. Flatten: road and pad planes win</text>
+        <text x="200" y="264" fill="#93a6ba" font-size="12">TerrainFlatten, by priority, feathered</text>
+        <line x1="200" y1="65" x2="200" y2="81" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar2)"/>
+        <line x1="200" y1="135" x2="200" y2="151" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar2)"/>
+        <line x1="200" y1="205" x2="200" y2="221" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar2)"/>
+        <rect x="440" y="215" width="150" height="70" rx="9" fill="#131a24" stroke="#3b82f6"/>
+        <text x="515" y="245" fill="#cfe4ff">h(x, z)</text>
+        <text x="515" y="264" fill="#93a6ba" font-size="12">the one ground</text>
+        <line x1="380" y1="250" x2="436" y2="250" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar2)"/>
+        <rect x="650" y="145" width="235" height="38" rx="8" fill="#131a24" stroke="#2c3d50"/>
+        <text x="767" y="169" fill="#cfe4ff">pyramid, CDLOD tiles</text>
+        <rect x="650" y="196" width="235" height="38" rx="8" fill="#131a24" stroke="#2c3d50"/>
+        <text x="767" y="220" fill="#cfe4ff">physics colliders</text>
+        <rect x="650" y="247" width="235" height="38" rx="8" fill="#131a24" stroke="#2c3d50"/>
+        <text x="767" y="271" fill="#cfe4ff">trees, grass, lots, census</text>
+        <path d="M590,240 C620,240 620,164 646,164" fill="none" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar2)"/>
+        <line x1="590" y1="250" x2="646" y2="215" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar2)"/>
+        <line x1="590" y1="262" x2="646" y2="266" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar2)"/>
+        <rect x="650" y="20" width="235" height="60" rx="8" fill="#131a24" stroke="#e6c07b" stroke-dasharray="4 3"/>
+        <text x="767" y="45" fill="#e6c07b">hydrology, road solve</text>
+        <text x="767" y="64" fill="#93a6ba" font-size="12">read the base, not the edits</text>
+        <line x1="380" y1="40" x2="646" y2="47" stroke="#e6c07b" stroke-width="1.4" stroke-dasharray="5 4" marker-end="url(#ar2)"/>
+      </g>
+    </svg>
+  </div>
+  <p class="cap">The layers inside <code>terrainHeight</code>. The warm, dashed reader matters: the water network and the
+    road solve are computed on copies with <code>flatten</code>, <code>earthwork</code> and <code>hydro</code> cleared,
+    or they would measure ground already shaped by themselves (see <code>readTerrainParams</code>,
+    <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/engine/level_params.cpp#L225-L236">level_params.cpp#L225-L236</a>).</p>
+  <p>The function is pure and deterministic for a seed, so the offline tracer, the viewer, the editor and the bake tools
+    all agree on the ground without sharing state. It is also slow: an analytic sample walks noise octaves and a list of
+    flatten footprints. That is why it is never what the GPU draws on a big level; the pyramid (below) samples it once.</p>
+
+  <h2>The level's relief: noise and an island</h2>
+  <p><code>terrainBaseHeight</code> is the ground before any physics: domain-warped fBm (fractal noise), an optional
+    planar tilt, a ridged-multifractal mountain layer gated by a mask or by a range <i>spine</i> (a polyline the
+    mountains rise along), and an L-system ridge network. ADR-0105 added the island: an ellipse broken by warped noise
+    into bays, a peninsula lobe with its own shelf, a sector of cliff coast. The ordinary layers rise only on land; the
+    sea floor falls to <code>-shelfDepth</code>.</p>
+  <p>On a weathered level this formula is no longer the ground, it is the <i>brief</i>: the bake reads it to learn where
+    the ranges and plains are, and grows the real shape from that. ADR-0105 is also where "terrain first" was decided.
+    Glenn, after trying to fit a city into a river valley: "build the terrain first and then build the city around it
+    … We should look at a map construction before we build anything in 3d." The island is planned and judged as a 2D map
+    (<code>city_plan island</code>) before any city is laid on it.</p>
+
+  <figure class="shot">
+    <img src="img/terrain/noise-peaks-lake.webp" alt="A road running to a lake below steep grey mountains whose peaks are smooth cones with snow patches">
+    <figcaption>Shot early on 2026-09-26, the day ADR-0125 to 0127 landed: the mountains of the noise-and-droplet era.
+      The peaks are smooth pyramids. "Erosion sharpens what it is given" (ADR-0125), so no later pass could undo
+      them.</figcaption>
+  </figure>
+
+  <h2>Growing mountains: the stream power law</h2>
+  <p>The <i>stream power law</i> says a riverbed lowers at a rate proportional to the water's power: with uplift
+    <i>U</i>, drainage area <i>A</i> (how much land drains through a cell) and slope <i>S</i>,
+    <code>dh/dt = U − K·A<sup>m</sup>·S</code>. Push the crust up, let rivers cut down, run it until the two balance,
+    and you get what noise can't fake: a winding divide, spurs, valleys that branch toward the sea. The solver is
+    Braun &amp; Willett's 2013 "FastScape" scheme, as Cordonnier et al. used it for terrain in 2016 (ADR-0125).</p>
+  <div class="diagram">
+    <svg viewBox="0 0 900 205" role="img" aria-label="One stream power iteration: uplift, priority flood, drainage area, implicit incision, hillslope creep, repeated, then rescale">
+      <defs><marker id="ar3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" fill="#6f8fb0"/></marker></defs>
+      <g font-family="system-ui, sans-serif" font-size="13" text-anchor="middle">
+        <rect x="15" y="30" width="150" height="64" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="90" y="56" fill="#cfe4ff">1. Uplift</text>
+        <text x="90" y="76" fill="#93a6ba" font-size="12">h += U · dt</text>
+        <rect x="195" y="30" width="150" height="64" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="270" y="56" fill="#cfe4ff">2. Priority flood</text>
+        <text x="270" y="76" fill="#93a6ba" font-size="12">fill pits, receivers</text>
+        <rect x="375" y="30" width="150" height="64" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="450" y="56" fill="#cfe4ff">3. Drainage area</text>
+        <text x="450" y="76" fill="#93a6ba" font-size="12">summed down tree</text>
+        <rect x="555" y="30" width="150" height="64" rx="9" fill="#131a24" stroke="#3b82f6"/>
+        <text x="630" y="56" fill="#cfe4ff">4. Incision</text>
+        <text x="630" y="76" fill="#93a6ba" font-size="12">implicit sweep</text>
+        <rect x="735" y="30" width="150" height="64" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="810" y="56" fill="#cfe4ff">5. Creep</text>
+        <text x="810" y="76" fill="#93a6ba" font-size="12">hillslope diffusion</text>
+        <line x1="165" y1="62" x2="191" y2="62" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar3)"/>
+        <line x1="345" y1="62" x2="371" y2="62" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar3)"/>
+        <line x1="525" y1="62" x2="551" y2="62" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar3)"/>
+        <line x1="705" y1="62" x2="731" y2="62" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar3)"/>
+        <path d="M810,94 V130 H90 V98" fill="none" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar3)"/>
+        <text x="450" y="150" fill="#8ec5ff" font-size="12">repeat: 250 iterations for the grow, 20 per refine level on the island</text>
+        <text x="450" y="182" fill="#93a6ba" font-size="12">then rescale onto the level's land height range: the physics decides the shape, the level how high</text>
+      </g>
+    </svg>
+  </div>
+  <p class="cap">One iteration of <code>streamPowerErode</code>. Step 2 makes every cell drain: a priority flood from the
+    sea and the grid edge fills each hollow with a tiny rise and records each cell's <i>receiver</i>, the neighbour it
+    drains into, so the cells form a tree rooted at the outlets.</p>
+  <p>The heart of it is two loops over that tree. Area flows from donors to receivers; then incision runs the other way,
+    receivers first, with an implicit update that is stable at any time step:</p>
+  <div class="code">
+    <div class="hd"><span>streamPowerErode: drainage area, then implicit incision (n = 1)</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/engine/procgen/stream_power.cpp#L129-L143">src/engine/procgen/stream_power.cpp#L129-L143</a></div>
+<pre>        <span class="c">// 3. drainage area, accumulated down the tree (donors before receivers: the order reversed)</span>
+        std::fill(area.begin(), area.end(), cellArea);
+        for (std::size_t o = order.size(); o-- &gt; 0;) {
+            const int32_t c = order[o];
+            if (rec[static_cast&lt;std::size_t&gt;(c)] &gt;= 0) area[static_cast&lt;std::size_t&gt;(rec[static_cast&lt;std::size_t&gt;(c)])] += area[static_cast&lt;std::size_t&gt;(c)];
+        }
+        <span class="c">// 4. implicit incision, receivers first: h = (h + f h_r) / (1 + f), f = K dt A^m / L (n = 1)</span>
+        for (const int32_t c : order) {
+            const std::size_t i = static_cast&lt;std::size_t&gt;(c);
+            if (outlet[i] || rec[i] &lt; 0) continue;
+            const double hr = h[static_cast&lt;std::size_t&gt;(rec[i])];
+            const double layerK = p.layers ? 1.0 + (p.layers-&gt;params().hardK - 1.0) * hard[i] : 1.0;
+            const double f = p.K * (erodibility ? (*erodibility)[i] : 1.0) * layerK * p.dt * std::pow(area[i], p.m) / rlen[i];
+            h[i] = (h[i] + f * hr) / (1.0 + f);   <span class="c">// between h and h_r: a hollow below its outlet silts up toward it</span>
+        }</pre>
+  </div>
+  <p>Solving <code>h<sub>new</sub> = h − f·(h<sub>new</sub> − h<sub>r</sub>)</code> for <code>h<sub>new</sub></code> gives
+    the line with the comment. Because the receiver was updated first, a cell can never be cut below its outlet, which
+    is what lets the default <code>dt</code> be 50,000 "years" a step. <code>layerK</code> is the rock-layer hook (below); the
+    optional <code>erodibility</code> map gives soft and hard patches so the valleys don't all come out alike.</p>
+  <p>The grow doesn't start from the level's relief. <code>weatherTerrain</code> blurs that relief over
+    <code>growBlurM</code> (600 m on the island) into an <i>uplift map</i>, "where the ranges are, none of the noise",
+    breaks it with two scales of noise, lifts it under placed summits, and starts the grid low and rough "since a smooth
+    start drains straight downhill". The ADR records the dead end: a smooth, symmetric uplift grew spurs "as straight as
+    a fishbone". On the island the grow runs on 1024² cells (19.5 m) and took 53 s for 250 iterations when measured
+    (ADR-0125).</p>
+
+  <h3>Keeping the level's shape</h3>
+  <p>The first engine run lost the island. Stream power grew a narrow divide over wide, hilly foothills, and Glenn: "I
+    feel like we lose some of the shape?" ADR-0126 splits the result by scale at <code>shapeScaleM</code> (1.5 km): the
+    level keeps its broad masses and plains, the physics supplies ridges, spurs and valleys, and the grown detail fades
+    out on low ground so the coastal plains, where the cities stand, stay flat:</p>
+  <div class="code">
+    <div class="hd"><span>weatherTerrain: final = low(original) + (grown − low(grown)), land only</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/engine/procgen/terrain_weather.cpp#L445-L468">src/engine/procgen/terrain_weather.cpp#L445-L468</a></div>
+<pre>        const int rad = std::max(1, static_cast&lt;int&gt;(w.shapeScaleM / cellM / 2.0));
+        const std::vector&lt;float&gt; lowO = blur(coarse0.h, rad), lowG = blur(coarse.h, rad);
+        for (std::size_t i = 0; i &lt; coarse.h.size(); ++i) {
+            if (coarse0.h[i] &lt; base0 &amp;&amp; sea &gt; -1e29f) continue;   <span class="c">// the sea as it was</span>
+            <span class="c">// the grown structure fades out on the original's LOW ground: coastal plains stay the flat</span>
+            <span class="c">// alluvium they were (and where the cities stand), the mountains take all of it</span>
+            const float up = std::clamp((lowO[i] - base0 - static_cast&lt;float&gt;(w.plainHeightM)) / static_cast&lt;float&gt;(w.reliefRampM), 0.0f, 1.0f);
+            const float relief = up * up * (3.0f - 2.0f * up);
+            <span class="c">// ...</span>
+            const float form = lowO[i] + (coarse0.h[i] - lowO[i]) * (1.0f - relief);
+            const float shaped = base0 + (form - base0) * (1.0f + (massif - 1.0f) * relief);
+            <span class="c">// the summits stand on it, and the grown relief is fuller where they do (rugged high massifs,</span>
+            <span class="c">// softer saddles)</span>
+            const float lift = static_cast&lt;float&gt;(w.peakHeightM) * peak[i] * relief;
+            const float kept = shaped + lift + (coarse.h[i] - lowG[i]) * relief * (0.75f + 0.6f * peak[i]);
+            coarse.h[i] = static_cast&lt;float&gt;(coarse.h[i] + w.shapeKeep * (kept - coarse.h[i]));
+            if (sea &gt; -1e29f) coarse.h[i] = std::max(coarse.h[i], sea + 0.5f);   <span class="c">// land stays land</span>
+        }</pre>
+  </div>
+  <p><code>peak</code> is ADR-0127's answer to "the heights of those mountains look fairly regular": one candidate
+    summit per jittered 2.2 km cell where the range is high, each a pointed cone with heights skewed low (a few big
+    summits over many lesser ones). The cones lift both the uplift, so rivers radiate from the summits, and the kept
+    envelope. Island 8's high point went from 970 m to 1296 m.</p>
+
+  <figure class="shot">
+    <img src="img/terrain/grown-range.webp" alt="A grass plain with scattered trees in front of a long mountain range with sharp branching ridges and snow on the crests">
+    <figcaption>The grown range from the plain, 2026-09-26 afternoon: a branching divide with gullies down every face,
+      and the flat coastal plain kept in front of it.</figcaption>
+  </figure>
+
+  <h2>Refining level by level to 8192</h2>
+  <p>A 19.5 m grid can't hold a gully. ADR-0124 tried upsampling and running the water model at fine resolution, and
+    ADR-0127 found why the crags kept vanishing: the depression <i>breach</i> step filled or cut every closed hollow the
+    added noise made. "With 6 k steps, 20 k steps, and 7× harder rock the result was identical." The replacement,
+    after Josh's Channel's "Better Mountain Generators That Aren't Perlin Noise or Erosion" (which Glenn pointed at), is
+    <code>refineGrown</code>. Each level doubles the grid and does four things:</p>
+  <ol>
+    <li><b>Upscale</b> bilinearly, then a binomial [1 2 1] blur, so the ground is smooth at every scale.</li>
+    <li><b>Add detail</b> at 8 cells' wavelength, amplitude ∝ cell<sup>0.8</sup>: half ridged, half plain noise,
+      domain-warped, damped by <code>1/(1 + k|∇h|²)</code> (Inigo Quilez's derivative damping) and faded out on the
+      plains.</li>
+    <li><b>Drain</b> it: 20 stream-power steps with no uplift and no rescale, so the new bumps become gullies and spurs
+      that drain instead of pits. The drain is weak on low ground: "at full strength everywhere it sawed smooth-walled
+      slot canyons into the foothills".</li>
+    <li><b>Blur once more</b>, because single-cell channels follow the grid's eight directions.</li>
+  </ol>
+  <p>The island goes 1024 → 2048 → 4096 → 8192, ending at 2.44 m cells. The fourth level (ADR-0206) quadrupled the bake:
+    the weather grid from 67 to 268 MB, a cold bake from 4 to 16 minutes at a 5.1 GB peak. It also exposed an
+    artefact: on an even slope between two of the eight grid directions every cell's steepest neighbour is the same one,
+    and the drain cut parallel diagonal gullies. <b>Stochastic routing</b> fixes it: a cell drains to a downhill
+    neighbour drawn in proportion to the slope toward it, seeded per cell and iteration so every bake is identical. The
+    test measures flow lines on a slope falling 15° off the grid: 0.0° with steepest routing, 17.7° drawn. It is on only
+    for the 8192 level (<code>stochasticFrom</code>), so the coarser levels, the ground the island's cities were planned
+    on, stay bit for bit the same.</p>
+
+  <figure class="shot">
+    <img src="img/terrain/hills-8k-ground.webp" alt="A yellow off-road car in tall grass and flowers below a grassy hill, with rocky mountains behind">
+    <figcaption>The 8192 ground on 2026-10-19, the day of ADR-0204 to 0213: the near hill is the refined grid, the
+      ridged mountain faces behind are its gullies at 150, 80 and 40 m.</figcaption>
+  </figure>
+
+  <h2>Rock: layers, facets and blocks</h2>
+  <p>"I would imagine we'd have slabs or sheets of stone making ridges" (Glenn, with photos of the Flatirons, Mount
+    Yamnuska and Banded Peak). ADR-0209 records three failures first: instanced cliff pieces "read as rocks stuck on the
+    face"; strata stamped onto the finished ground read as nothing; weathering by the rock's angle of repose made the
+    mountains smoother. The photos explained it: the structure that reads as rock is 50 to 500 m, the scale the
+    mountains are grown at. So the beds went into the grow.</p>
+  <p><code>RockLayers</code> is a field: beds dipping at <code>dipDeg</code> toward a direction that wanders over
+    kilometres, warped, with a share of them hard. In the stream power loop each cell's erodibility and creep are its
+    rock's <i>at its current height</i>, re-read every iteration, so cutting down through a hard bed into a soft one
+    speeds up. Hard beds come out as walls, buttresses and ledges; a test grows a relief with 60 m beds and finds it
+    1.8× steeper on hard rock. The same beds tint the rock light and dark through the macro map.</p>
+  <p>Two finer layers followed. <b>Facets</b> (ADR-0210, opt-in): steep rock cut into jittered Voronoi cells of 14 to 30
+    m, each replaced by one plane, so faces break into flat planes with real edges. ("Painted crack lines were wrong";
+    cracks have to be shape that catches shadow.) <b>Rock relief</b> (ADR-0213): below the 2.44 m grid, steep faces are
+    cut into 9 m Voronoi <i>blocks</i>, each tilted and stepped by up to 1.5 m with a sunk crack along its edges, after
+    Paris et al. 2020. It is applied as the grid is read (<code>erodedForTerrain</code>), so the 1 m tiles, colliders and
+    everything placed on the ground carry it. Instanced cliff blocks were tried a second time and failed again ("read as
+    boulders lying on a smooth slope").</p>
+  <div class="note"><p><b>Opt-in, by level.</b> Rock layers over the whole island moved the drainage the cities stand on
+    (a hilly town by up to 95 m), so <code>fromHeight</code>/<code>fullHeight</code> confine them to the high ground
+    (300 to 550 m on the island) and the trial became its own level, <code>island_8_rocky</code> (ADR-0211). Even then
+    only 27% of inland channels kept within ~80 m. The memory notes record that Glenn's city level was later re-planned
+    on that ground (ADR-0214).</p></div>
+
+  <h2>The erosion bakes: droplets and the pipe model</h2>
+  <p>Before stream power, erosion was <i>droplets</i> (after Beyer's thesis and Sebastian Lague): simulated raindrops
+    that pick up and drop sediment as they run downhill. It still serves levels with <code>"erode": true</code> and no
+    <code>"weather"</code> block, through <code>bakeErodedTerrain</code>. ADR-0122 ported the Metal kernels to Vulkan
+    compute (<code>erosion_gpu_vk.cpp</code>, <code>erosion.comp</code>): 1024² with 500k droplets in 59 ms against
+    1137 ms on the CPU. It is opt-in per terrain (<code>"erodeGpu"</code>) because GPU and CPU agree only
+    statistically, and switching would "quietly move their ground under their road plans".</p>
+  <p>Droplets carve drainage but hold no water, so no lakes or floodplains. ADR-0123 added the shallow-water <i>pipe
+    model</i> of Mei, Decaudin &amp; Hu (2007): every cell holds a depth of water that flows to its neighbours through
+    virtual pipes, carrying sediment. Four kernels a step, each writing only its own cell (no atomics, deterministic).
+    The paper's semi-Lagrangian sediment transport "grew 500 m spikes", so sediment rides the pipes instead. ADR-0124's
+    second cut added a loose-sediment layer, breaching of shallow hollows, eight pipes instead of four (four drew every
+    rill along the grid's axes) and coarse-to-fine:</p>
+  <div class="code">
+    <div class="hd"><span>ERODE kernel: capacity, the loose layer, and the relief clamp</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/shaders/vulkan/erosion_water.comp#L143-L169">shaders/vulkan/erosion_water.comp#L143-L169</a></div>
+<pre>    float cap = u.capacity * max(tilt[i], u.minTilt) * length(v[i]);
+    <span class="c">// shallow sheet flow carries little: scale by depth up to a metre (Mei's model has no depth term; without</span>
+    <span class="c">// one, the film of rain on every hillside erodes as hard as a river)</span>
+    <span class="c">// and a THRESHOLD (ADR-0125): sheet flow a few centimetres deep does not cut at all -- on a smooth slope</span>
+    <span class="c">// every sheet cut its own one-cell rill, parallel and grid-aligned; only water that has gathered incises</span>
+    cap *= smoothstep(0.05, 0.6, d[i]);
+    if (b[i] &lt; u.seaLevel) cap = 0.0;
+    float db;
+    float loose = soil[i];
+    if (cap &gt; s) {
+        <span class="c">// cut the loose layer at the full rate, what is left of the step's appetite from bedrock at</span>
+        <span class="c">// rockHardness of it</span>
+        float want = u.dissolve * u.dt * (cap - s);
+        float fromSoil = min(want, loose);
+        db = -min(fromSoil + (want - fromSoil) * u.rockHardness, u.maxErodeDepth);
+    } else {
+        db = u.deposit * u.dt * (s - cap);
+    }
+    <span class="c">// NO SPIKES, NO PITS: a step never cuts the bed below its lowest neighbour nor piles it above its</span>
+    <span class="c">// highest (the droplets' clamp, per step): what cannot be cut stays in the bed, what cannot be laid</span>
+    <span class="c">// stays in the water. Without it deposits grew into 500 m spikes and cuts into 390 m pits.</span>
+    float bi = b[i];
+    vec4 r = relief[i];
+    <span class="c">// SOIL CREEP (ADR-0125): a slow relaxation toward the neighbours' mean damps cell-scale rills and leaves</span>
+    <span class="c">// real valleys (their curvature is gentle at this rate)</span>
+    if (bi &gt;= u.seaLevel) { float c = u.creep * (r.z - bi); bi += c; soil[i] = max(0.0, soil[i] + c); }
+    db = clamp(db, min(0.0, r.x - bi), max(0.0, r.y - bi));</pre>
+  </div>
+  <div class="note history"><p><b>Not on the island.</b> The pipe model built braided channels and a lake with a delta on
+    <code>river_valley</code> (1025², 20k steps, 8.8 s), but the refine stage replaced it for the weathered levels:
+    island 8 sets <code>"water": {"steps": 0, "breach": 0, "thermal": 0}</code>, and <code>weatherTerrain</code> returns
+    before the GPU stage when there is nothing to run. The kernels stay as the tool for <code>rt_erode</code>
+    experiments.</p></div>
+
+  <h2>Hydrology: rivers as the land's own drainage</h2>
+  <p>ADR-0099 decided that rivers aren't drawn, they're found. <code>Hydrology::build</code> samples the ground on a
+    drainage grid (20 m on the island), then:</p>
+  <ol>
+    <li><b>Priority-flood</b> depression filling (Barnes et al. 2014) from the map edge and the sea inward: filled
+      basins are lakes at their spill height, and each cell gets a receiver.</li>
+    <li><b>Flow accumulation:</b> each cell's area passed to its receiver, latest-flooded first.</li>
+    <li><b>Rivers</b> where the upstream area passes <code>riverArea</code> (2 km² on the island), traced to a
+      confluence, lake, sea or edge, Chaikin-smoothed, with width and depth from √area and a water level that only
+      falls downstream.</li>
+    <li><b>The carve</b>, applied inside <code>terrainHeight</code> so CDLOD, colliders and the pyramid all see it.</li>
+  </ol>
+  <p>The ground it runs on is the eroded one whenever the terrain erodes (ADR-0105: "before this, a level's rivers ignored
+    its own valleys"), and <code>erodedForTerrain</code> erases the <code>rivers</code> key from its cache key so the two
+    can't recurse. The carve is a profile around each binned river segment:</p>
+  <div class="code">
+    <div class="hd"><span>Hydrology::carve: channel, steep inner bank, outer bank, cut only</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/engine/procgen/hydrology.cpp#L410-L439">src/engine/procgen/hydrology.cpp#L410-L439</a></div>
+<pre>double Hydrology::carve(double x, double z, double h) const {
+    if (segs_.empty()) return h;
+    const int i = static_cast&lt;int&gt;((x + p_.half) / binSize_), j = static_cast&lt;int&gt;((z + p_.half) / binSize_);
+    if (i &lt; 0 || j &lt; 0 || i &gt;= bins_ || j &gt;= bins_) return h;
+    double out = h;
+    const Vec2 q(x, z);
+    for (int s : bin_[static_cast&lt;std::size_t&gt;(j) * bins_ + i]) {
+        const Seg&amp; g = segs_[static_cast&lt;std::size_t&gt;(s)];
+        const Vec2 ab = g.b - g.a;
+        const double L2 = dot(ab, ab);
+        const double t = L2 &gt; 1e-12 ? clampd(dot(q - g.a, ab) / L2, 0.0, 1.0) : 0.0;
+        const double d = (q - (g.a + ab * t)).length();
+        const double w = g.wa + (g.wb - g.wa) * t;
+        const double half = w * 0.5, reach = half + kBankReach;
+        if (d &gt;= reach) continue;
+        const double level = g.la + (g.lb - g.la) * t, depth = g.da + (g.db - g.da) * t;
+        <span class="c">// a rounded channel to the water's edge, then the steep inner bank up the incision height,</span>
+        <span class="c">// then the outer banks at bankSlope</span>
+        const double incision = clampd(p_.incisionMin + p_.incisionK * w, p_.incisionMin, p_.incisionMax);
+        const double past = d - half, steepRun = incision / p_.bankSteep;
+        const double profile = d &lt; half ? (level - depth) + depth * (d / half) * (d / half)
+                                        : level + (past &lt; steepRun ? past * p_.bankSteep : incision + (past - steepRun) * p_.bankSlope);
+        double cut = std::min(h, profile);
+        <span class="c">// fade out at the reach so a deep gorge does not end in a step</span>
+        const double fade = clampd((d - reach * 0.75) / (reach * 0.25), 0.0, 1.0);
+        cut = cut + (h - cut) * fade * fade * (3 - 2 * fade);
+        out = std::min(out, cut);
+    }
+    return out;
+}</pre>
+  </div>
+  <p>The <i>incision</i> is ADR-0099's "trench" fix. Glenn saw the water "floating above the surface… not cut into the
+    ground like a trench". Two causes: the level was checked only at the centreline, so on a slope the downhill bank
+    sat below the water; and the banks started flush with the water. Now each node's level is the lowest natural ground
+    across the corridor, minus 1 + 0.05·width m (capped at 3.5), and the bank climbs that height steeply first.</p>
+  <p>The water surface is one polygon mesh: every river corridor unioned with the lakes (Clipper2) and triangulated, each
+    vertex at its water level carrying flow direction and speed for a flow-map shader. The first surfaces were a ribbon
+    per river, and they "folded and overlapped wherever rivers widen, bend hard, join, or meet the sea". The sea is the
+    ocean mesh's, cell for cell, so the two never overlap.</p>
+  <p>Through a city (ADR-0104) the river is the <i>world's</i>: the city brief takes the same <code>rivers</code>
+    block, so the planner, the road builder's ground and the level compute one network. Streets wet for at most 180 m
+    become bridges, blocks stand back from <code>corridorRings</code> by 6 m, and quay walls line urban banks. River
+    width by reach (ADR-0121) is written but off: at 0.6 it re-cut a whole city's interchanges.</p>
+
+  <div class="shots">
+    <figure class="shot">
+      <img src="img/terrain/river-quay-town.webp" alt="A river with stone quay walls running past parks and brick buildings, a viaduct and mountains behind">
+      <figcaption>A river through a town, 2026-10-11: the carved channel, the quay walls of ADR-0104, and blocks set
+        back from the water.</figcaption>
+    </figure>
+    <figure class="shot">
+      <img src="img/terrain/alpine-valley-cover.webp" alt="An alpine valley with grass in the hollows, grey rock on steep ribs, brown scree patches and scattered stones">
+      <figcaption>The cover reading the maps, 2026-09-28: meadow in the hollows, bare rock on the ribs, dirt and stones
+        below steep ground (ADR-0128).</figcaption>
+    </figure>
+  </div>
+
+  <h2>The ground's maps drive its cover</h2>
+  <p>On the first grown ground the cover was height bands plus slope, so "the whole range read as bare dark rock"
+    (ADR-0128). <code>computeTerrainMaps</code> now reads four maps off the weathered grid once: <b>wet</b> (log
+    drainage area), <b>scree</b> (moderate slopes within ~35 m of ground steeper than 40°), <b>soil</b> (gentle and
+    concave ground holds it) and <b>convex</b> (curvature at ~15 m). Drainage area comes from the same solver, run once
+    with K = 0 so it routes water without touching the ground:</p>
+  <div class="code">
+    <div class="hd"><span>computeTerrainMaps: drainage area from one routing pass of stream power</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/engine/procgen/terrain_maps.cpp#L76-L89">src/engine/procgen/terrain_maps.cpp#L76-L89</a></div>
+<pre>    <span class="c">// drainage area: one routing pass of the stream-power solver (K = 0: the ground is not touched)</span>
+    std::vector&lt;float&gt; area;
+    {
+        Heightmap hm = hmIn;
+        StreamPowerParams sp;
+        sp.iterations = 1;
+        sp.K = 0.0;
+        sp.uplift = 0.0;
+        sp.diffusion = 0.0;
+        sp.rescale = false;
+        sp.seaLevel = seaLevel;
+        const std::vector&lt;float&gt; zero(N, 0.0f);
+        streamPowerErode(hm, zero, sp, nullptr, &amp;area);
+    }</pre>
+  </div>
+  <p><code>GroundCover::at</code> is the one answer to "what is the ground here?" for the terrain colour, the grass
+    density and which trees may grow. It returns weights for grass, dirt, sand, rock and snow. With maps it puts rock
+    where soil can't stay, dirt as scree below cliffs, meadow in the hollows, and moves the snowline down gullies and up
+    ridges. ADR-0118 had already broken the snowline's contour with noise lobes, aspect (lower on faces turned from the
+    island's sun) and tongues down the fall line ("the mountain snow line is very regular which makes it look odd").
+    ADR-0120 added rock colour and crag normals in <code>mesh.frag</code>; ADR-0207 to 0210 gave each layer a height,
+    so the shader bumps the normal by it and turf, soil and snow stand at their own levels with lit lips. Snow raises
+    the drawn ground by up to 0.6 m in <code>terrain.vert</code>.</p>
+  <p>One aside from ADR-0128 worth knowing: distant ground was striped with soft vertical columns, and the cause was SSAO,
+    whose ~1 m kernel is under a pixel past a few hundred metres. Occlusion now fades out between 120 and 350 m.</p>
+
+  <h2>Drawing it: chunks, then CDLOD</h2>
+  <p>The first terrain was one mesh plus concentric LOD rings. ADR-0034 listed what broke: terrain past ~99 m drawn as
+    sky (a fixed <code>depth &gt;= 0.999</code> test), culling misjudging one origin-centred mesh, and T-junction cracks
+    between rings. ADR-0035 replaced it with a grid of uniform chunks, each with a tight AABB, normals taken
+    analytically from the field so borders don't show. ADR-0036 then chose <b>CDLOD</b> (continuous distance-dependent
+    level of detail) over geometry clipmaps, which "discard the chunk/AABB/streaming substrate", and over discrete LOD
+    with skirts, which pops.</p>
+  <p>CDLOD has two parts. <b>Selection</b> cuts a quadtree over the square world: a node splits into four when the camera
+    is within the finer level's range of the node's <i>nearest point</i>. Using the nearest point means a shared edge
+    has one distance, so neighbours can never differ by more than one level, the invariant the morph needs:</p>
+  <div class="code">
+    <div class="hd"><span>selectRec: the restricted quadtree descent</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/engine/procgen/terrain_lod.cpp#L57-L75">src/engine/procgen/terrain_lod.cpp#L57-L75</a></div>
+<pre>void selectRec(float minX, float minZ, float size, int level,
+               const std::vector&lt;float&gt;&amp; ranges, float camX, float camZ,
+               std::vector&lt;LodNode&gt;&amp; out) {
+    if (level &lt;= 0) {
+        out.push_back(LodNode{minX, minZ, size, 0});
+        return;
+    }
+    int finer = level - 1;
+    float d = distanceToBoxXZ(camX, camZ, minX, minZ, size);
+    if (d &gt; ranges[finer]) {
+        out.push_back(LodNode{minX, minZ, size, level});
+        return;
+    }
+    float h = size * 0.5f;
+    selectRec(minX,     minZ,     h, finer, ranges, camX, camZ, out);
+    selectRec(minX + h, minZ,     h, finer, ranges, camX, camZ, out);
+    selectRec(minX,     minZ + h, h, finer, ranges, camX, camZ, out);
+    selectRec(minX + h, minZ + h, h, finer, ranges, camX, camZ, out);
+}</pre>
+  </div>
+  <p><b>Morphing</b> hides the seams. Every node is the same fixed grid with an even cell count, so the coarser level's
+    vertices are this one's even-indexed ones. Each vertex carries its <i>morph target</i>, the height it has on the
+    coarser grid, and slides to it as the camera distance crosses the node's morph band. By the time the parent takes
+    over, the child already has the parent's shape: no pop, no crack.</p>
+  <div class="diagram">
+    <svg viewBox="0 0 900 370" role="img" aria-label="Left: a CDLOD quadtree cut, fine nodes near the camera, coarse far away. Right: odd vertices sliding to the average of their even neighbours, and the morph factor ramping from 0 to 1 across the morph band">
+      <defs><marker id="ar4" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" fill="#e6c07b"/></marker></defs>
+      <g font-family="system-ui, sans-serif" font-size="13">
+        <text x="180" y="20" fill="#cfe4ff" text-anchor="middle">Selection: the quadtree cut</text>
+        <!-- level 2 nodes -->
+        <rect x="20" y="30" width="160" height="160" fill="#131a24" stroke="#2c3d50"/>
+        <rect x="180" y="30" width="160" height="160" fill="#131a24" stroke="#2c3d50"/>
+        <rect x="180" y="190" width="160" height="160" fill="#131a24" stroke="#2c3d50"/>
+        <text x="100" y="114" fill="#93a6ba" text-anchor="middle" font-size="12">L2</text>
+        <text x="260" y="114" fill="#93a6ba" text-anchor="middle" font-size="12">L2</text>
+        <text x="260" y="274" fill="#93a6ba" text-anchor="middle" font-size="12">L2</text>
+        <!-- level 1 -->
+        <rect x="20" y="190" width="80" height="80" fill="#152233" stroke="#3b6a99"/>
+        <rect x="100" y="190" width="80" height="80" fill="#152233" stroke="#3b6a99"/>
+        <rect x="100" y="270" width="80" height="80" fill="#152233" stroke="#3b6a99"/>
+        <text x="60" y="234" fill="#8ec5ff" text-anchor="middle" font-size="12">L1</text>
+        <text x="140" y="234" fill="#8ec5ff" text-anchor="middle" font-size="12">L1</text>
+        <text x="140" y="314" fill="#8ec5ff" text-anchor="middle" font-size="12">L1</text>
+        <!-- level 0 -->
+        <rect x="20" y="270" width="40" height="40" fill="#1a2d45" stroke="#3b82f6"/>
+        <rect x="60" y="270" width="40" height="40" fill="#1a2d45" stroke="#3b82f6"/>
+        <rect x="20" y="310" width="40" height="40" fill="#1a2d45" stroke="#3b82f6"/>
+        <rect x="60" y="310" width="40" height="40" fill="#1a2d45" stroke="#3b82f6"/>
+        <text x="40" y="294" fill="#cfe4ff" text-anchor="middle" font-size="11">L0</text>
+        <text x="80" y="294" fill="#cfe4ff" text-anchor="middle" font-size="11">L0</text>
+        <text x="40" y="334" fill="#cfe4ff" text-anchor="middle" font-size="11">L0</text>
+        <circle cx="72" cy="322" r="6" fill="#e6c07b"/>
+        <text x="72" y="364" fill="#e6c07b" text-anchor="middle" font-size="12">camera</text>
+        <!-- morph panel -->
+        <text x="640" y="20" fill="#cfe4ff" text-anchor="middle">Morph: odd vertices collapse to the coarse grid</text>
+        <polyline points="420,170 470,130 520,150 570,185 620,160 670,120 720,140 770,175 820,155" fill="none" stroke="#8ec5ff" stroke-width="2"/>
+        <polyline points="420,170 520,150 620,160 720,140 820,155" fill="none" stroke="#e6c07b" stroke-width="1.6" stroke-dasharray="6 4"/>
+        <g fill="#8ec5ff">
+          <circle cx="420" cy="170" r="4.5"/><circle cx="520" cy="150" r="4.5"/><circle cx="620" cy="160" r="4.5"/>
+          <circle cx="720" cy="140" r="4.5"/><circle cx="820" cy="155" r="4.5"/>
+        </g>
+        <g fill="#0a0e14" stroke="#8ec5ff" stroke-width="1.6">
+          <circle cx="470" cy="130" r="4.5"/><circle cx="570" cy="185" r="4.5"/><circle cx="670" cy="120" r="4.5"/><circle cx="770" cy="175" r="4.5"/>
+        </g>
+        <g stroke="#e6c07b" stroke-width="1.4" marker-end="url(#ar4)">
+          <line x1="470" y1="136" x2="470" y2="154"/><line x1="570" y1="179" x2="570" y2="161"/>
+          <line x1="670" y1="126" x2="670" y2="144"/><line x1="770" y1="169" x2="770" y2="153"/>
+        </g>
+        <text x="420" y="58" fill="#93a6ba" font-size="12">● even vertex: on the coarse grid, stays</text>
+        <text x="420" y="76" fill="#93a6ba" font-size="12">○ odd vertex: slides to its neighbours' mean</text>
+        <text x="420" y="94" fill="#e6c07b" font-size="12">- - the coarser level's surface (the morph target)</text>
+        <!-- ramp -->
+        <line x1="420" y1="320" x2="840" y2="320" stroke="#2c3d50" stroke-width="1.4"/>
+        <line x1="420" y1="320" x2="420" y2="240" stroke="#2c3d50" stroke-width="1.4"/>
+        <polyline points="420,318 560,318 720,250 840,250" fill="none" stroke="#3b82f6" stroke-width="2.2"/>
+        <line x1="560" y1="250" x2="560" y2="320" stroke="#2c3d50" stroke-dasharray="3 3"/>
+        <line x1="720" y1="250" x2="720" y2="320" stroke="#2c3d50" stroke-dasharray="3 3"/>
+        <text x="412" y="254" fill="#93a6ba" font-size="12" text-anchor="end">k=1</text>
+        <text x="412" y="322" fill="#93a6ba" font-size="12" text-anchor="end">0</text>
+        <text x="560" y="338" fill="#93a6ba" font-size="12" text-anchor="middle">ranges[L−1]</text>
+        <text x="720" y="338" fill="#93a6ba" font-size="12" text-anchor="middle">ranges[L]</text>
+        <text x="630" y="360" fill="#cfe4ff" font-size="12" text-anchor="middle">camera distance → morph factor k</text>
+        <text x="640" y="232" fill="#8ec5ff" font-size="12" text-anchor="middle">the morph band of a level-L node</text>
+      </g>
+    </svg>
+  </div>
+  <p class="cap">Left: a cut for one camera position (schematic). Nodes shrink toward the camera and no two neighbours
+    are more than one level apart. Right: the morph. A vertex's <code>k</code> is 0 at full detail and 1 at the end of
+    its band, where it lies exactly on the parent's surface.</p>
+  <p>The morph target rides in <code>Vertex::tangent</code>, which terrain didn't otherwise use, so no vertex layout
+    changed. Since ADR-0204 its x and z carry the coarser level's normal too, and the shader blends both:</p>
+  <div class="code">
+    <div class="hd"><span>terrain.vert: blend height and normal toward the coarser level</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/shaders/vulkan/terrain.vert#L79-L92">shaders/vulkan/terrain.vert#L79-L92</a></div>
+<pre>void main() {
+    float dist = distance(g.cameraPosition.xyz, inPosition);
+    float k = clamp((dist - pc.morphStart) / max(pc.morphEnd - pc.morphStart, 1e-3),
+                    0.0, 1.0);
+    vec3 worldPos = vec3(inPosition.x, mix(inPosition.y, inTangent.y, k), inPosition.z);
+    <span class="c">// SNOW HAS DEPTH (ADR-0210; Glenn: the snow "seems painted onto the surface"): on the layered ground (surface 19,</span>
+    <span class="c">// whose u is the snow's weight) the surface rises with it -- up to 0.6 m where it lies thick -- so a snowfield</span>
+    <span class="c">// has an edge and buries the rock under it; the player walks the ground beneath, as on real snow</span>
+    if (pc.surfaceFlags.x == 19u &amp;&amp; g.terrainNormal2.z &lt; 0.5) worldPos.y += 0.6 * smoothstep(0.25, 0.9, inTexcoord.x);
+    <span class="c">// ...and its normal toward the coarser level's (ADR-0204), so a tile meets its parent shading as the parent does</span>
+    vec3 coarseN = vec3(inTangent.x, sqrt(max(0.0, 1.0 - inTangent.x * inTangent.x - inTangent.z * inTangent.z)), inTangent.z);
+
+    outWorldPos = worldPos;
+    outWorldNormal = normalize(mix(normalize(inNormal), coarseN, k));</pre>
+  </div>
+  <p>Two details from the mesher. Vertices owned by a road flatten never morph: the blind neighbour average lifted
+    corridor vertices back up through the asphalt at distance ("pokes throughout the entire city"). And node meshes
+    stream in on the job system; <code>selectLodNodesGated</code> splits a node only when all four children are ready,
+    so streaming shows coarser ground, never holes. Colliders are separate: a window of leaf patches around the player,
+    built from the same drawn surface.</p>
+
+  <h2>The baked pyramid and the 100 km design</h2>
+  <p>ADR-0034 planned a bounded ~16 km world: at ±8 km single-precision floats are good to 1 to 2 mm, so no floating
+    origin. ADR-0095 then raised the target to 100 km after a 6 km city filled the 10 GB card, and set the rule:
+    <i>GPU and RAM are bounded by what is near the camera, never by world size</i>. For terrain that meant a baked
+    <b>height pyramid</b>: the final ground, every carve and flatten folded in, sampled once into a quadtree of square
+    tiles. A tile is 128 cells, 129 samples a side (the last row is the neighbour's first), stored as
+    <code>uint16</code> quantized per tile:</p>
+  <div class="code">
+    <div class="hd"><span>HeightTile: 129² quantized samples plus the numbers selection needs</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/engine/procgen/height_pyramid.h#L69-L84">src/engine/procgen/height_pyramid.h#L69-L84</a></div>
+<pre>struct HeightTile {
+    TileKey key;
+    float minH = 0.0f, maxH = 0.0f;
+    float step = 0.0f;         <span class="c">// quantization step (m)</span>
+    float error = 0.0f;        <span class="c">// vs the level below, as drawn (0 at level 0)</span>
+    bool hasChildren = false;
+    std::vector&lt;uint16_t&gt; q;   <span class="c">// kTileSamples^2, row-major (z rows, x columns)</span>
+
+    double at(int i, int j) const {
+        return static_cast&lt;double&gt;(minH) + static_cast&lt;double&gt;(q[static_cast&lt;std::size_t&gt;(j) * kTileSamples + i]) * step;
+    }
+    <span class="c">// Height at local cell coordinates (0..kTileCells), interpolated across the triangle</span>
+    <span class="c">// split the mesher emits: (a,b,d) when u &gt;= v, else (a,d,c) -- a the cell's min corner,</span>
+    <span class="c">// d the max (terrain_lod.cpp, lodSurfaceHeight).</span>
+    double sampleLocal(double gx, double gz) const;
+};</pre>
+  </div>
+  <p>Every level samples the same height function at its own grid points, so a parent's samples <i>are</i> its children's
+    even samples and the CDLOD morph target is always the true parent. The pyramid is <b>sparse</b>: the four children
+    of a tile are kept only where they'd change the drawn surface by more than the tolerance (5 cm in the engine).
+    Plains and sea stop at coarse levels; streets, pad edges and ridges go down to 1 m cells.</p>
+  <div class="code">
+    <div class="hd"><span>buildPyramid: a tile&#x27;s error against its children decides whether they exist</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/engine/procgen/height_pyramid.cpp#L129-L151">src/engine/procgen/height_pyramid.cpp#L129-L151</a></div>
+<pre>            if (level &gt; 0) {
+                for (int cz = 0; cz &lt; 2; ++cz)
+                    for (int cx = 0; cx &lt; 2; ++cx) {
+                        const TileKey ck{level - 1, node.key.tx * 2 + cx, node.key.tz * 2 + cz};
+                        Node kid{ck, sampleTile(spec, ck, h)};
+                        for (int j = 0; j &lt; kTileSamples; ++j)
+                            for (int i = 0; i &lt; kTileSamples; ++i) {
+                                const double d = std::fabs(kid.samples[static_cast&lt;std::size_t&gt;(j) * kTileSamples + i] -
+                                                           parentAtChild(node.samples, cx, cz, i, j));
+                                err = std::max(err, static_cast&lt;float&gt;(d));
+                            }
+                        kids.push_back(std::move(kid));
+                    }
+            }
+            HeightTile t = quantize(node.key, node.samples);
+            t.error = err;
+            bool force = false;
+            if (level &gt; 0 &amp;&amp; mustRefine) {
+                const double ts = spec.tileSize(level);
+                const double x0 = spec.originX + node.key.tx * ts, z0 = spec.originZ + node.key.tz * ts;
+                force = mustRefine(x0, z0, x0 + ts, z0 + ts, level);
+            }
+            t.hasChildren = level &gt; 0 &amp;&amp; (err &gt; spec.tolerance || force);</pre>
+  </div>
+  <p>The loader builds it with <code>lodVertexHeight</code>, the same sampler the per-vertex mesher uses (flatten
+    footprints dilated by 1.45 cells, road-plane corner clamp), and caches it as
+    <code>cache/terrain/&lt;key&gt;.pyramid</code> in the bundle format of ADR-0084. ADR-0095 puts the payoff at ~1 MB
+    of vertices per tile falling to ~33 KB of heights, "which pays for 0.5–1 m cells where there are streets". The
+    renderer then draws stored tiles only (a missing child leaves its parent drawn), with short skirts hanging from each
+    tile's edges, 1 m plus its error, to hide the crack where a stored leaf meets a finer neighbour.</p>
+
+  <h3>Normals and the world maps</h3>
+  <p>A far tile's vertices are 16 to 64 m apart, so whatever the ground does between them is lost per vertex. ADR-0204
+    makes each baked vertex's normal the drawn surface's <i>mean</i> slope over its own cell (nine samples an edge), never
+    under 2 m, and morphs it to the parent's. ADR-0205 and 0208 then bake three <b>world maps</b> over the whole terrain,
+    read per pixel by <code>mesh.frag</code> where the mesh is coarser than a texel:</p>
+  <table>
+    <tr><th>Map</th><th>Holds</th><th>Island size</th><th>A/B switch</th></tr>
+    <tr><td>normal</td><td>mean slope per texel, RG8</td><td>8192² at 2.44 m, 128 MB, 2.3 s</td><td><code>RT_TERRAIN_NORMAL_MAP=0</code></td></tr>
+    <tr><td>cover</td><td>grass, dirt, sand, snow weights (rock the rest)</td><td>4096² at 4.9 m, 64 MB, 2.4 s</td><td><code>RT_TERRAIN_COVER_MAP=0</code></td></tr>
+    <tr><td>macro</td><td>convexity, wetness, rock band tone, stains</td><td>at the cover map's texels</td><td>with the cover map</td></tr>
+  </table>
+  <p class="cap">Numbers from ADR-0205, 0208, 0209 and 0213. All three are cached beside the tiles as
+    <code>cache/terrain/&lt;key&gt;.wmap</code>; they are Vulkan only so far (Metal and WebGPU are owed).</p>
+
+  <h2>Roads and cities in the ground</h2>
+  <p>Roads, blocks and pads edit the field through the last two layers of <code>terrainHeight</code>. ADR-0075 framed it
+    as a <i>grading cascade</i>: terrain is ground truth, roads set the grades, blocks grade to their streets, pads
+    flatten locally. ADR-0082 replaced fixed 8 m feathers with one smooth <i>earthwork</i> displacement field, a screened
+    Poisson solve pinned at the decks (reach 100 m), added to the relief so its detail survives. The details belong to
+    <a href="roads.html">the roads page</a>; one fact belongs here.</p>
+  <p>The road builder does <b>not</b> see the 2.44 m ground. It conforms its own copy on a 20 m grid (ADR-0221), and
+    until 2026-10-21 the loader drew that copy as the ground over 12.6 × 17.2 km, nearly the whole island, so on Glenn's
+    city level the refined detail never reached the screen ("the hills aren't smooth even after all this work to
+    increase the terrain detail"). Laying the grid over the full ground everywhere made the natural detail poke through
+    the decks (120,203 census samples, worst 20.5 m). The fix: the grid is the ground only in a <i>corridor</i> (nodes a
+    deck reaches or the build changed by &gt; 5 cm, plus 40 m), with the natural detail fading in over 60 m beyond. On
+    the island the corridor is 8% of the nodes; 84.5% get full detail.</p>
+
+  <h2>The terrain lab</h2>
+  <p>A 16-minute cold bake is no way to try rock settings. <code>terrain_lab.json</code> and
+    <code>terrain_lab_layers.json</code> (ADR-0209) run the island's whole pipeline on a 4.4 km mountain island: 37 s
+    cold, 9 s cached. The rock-layer variants were compared there; Glenn picked "D" (250 m beds dipping 10°, 30% hard,
+    hard erodibility ×0.06), which became <code>terrain_lab_layers.json</code> and later the island trial. Probe poses
+    from the memory notes: <code>"0 350 1900 -8 0"</code> (south), <code>"1700 300 300 -6 270"</code> (east),
+    <code>"300 650 900 -14 0"</code> (close).</p>
+  <p>Offline, <code>tools/rt_erode</code> bakes a level's terrain with any settings, and
+    <code>tools/erosion_preview.py</code> renders the result as compare, water and wetness images, no viewer needed.</p>
+
+  <h2>How it got here</h2>
+  <table>
+    <tr><th>When</th><th>What changed</th><th>Why</th></tr>
+    <tr><td>2026-06-15/17</td><td>Fields + recipes (0027); bounded world, reverse-Z (0034); chunks (0035); CDLOD (0036)</td><td>one mesh + rings: sky-coloured far terrain, bad culling, cracks</td></tr>
+    <tr><td>2026-07-09</td><td>Grading cascade (0075)</td><td>decks proud of or buried in hillsides</td></tr>
+    <tr><td>2026-08-29</td><td>Earthwork field (0082)</td><td>fixed 8 m feathers made banks and staircases</td></tr>
+    <tr><td>2026-09-24</td><td>100 km design, baked pyramid (0095); rivers (0099)</td><td>a 6 km city filled the card; water was a flat plane</td></tr>
+    <tr><td>2026-09-25</td><td>Terrain first: the island (0105); rivers through cities (0104)</td><td>shoehorning a city into a valley</td></tr>
+    <tr><td>2026-09-26</td><td>GPU erosion, pipe model (0122–0124), stream power (0125), keep the shape (0126), peaks + refine (0127), maps (0128)</td><td>noise pyramids that erosion only sharpened</td></tr>
+    <tr><td>2026-10-19</td><td>Normals (0204, 0205), 8192 + stochastic routing (0206), relief and maps (0207, 0208), rock (0209–0213)</td><td>"faceted" grass, "more rocky", flat far slopes</td></tr>
+    <tr><td>2026-10-21</td><td>Road grid only in a corridor (0221)</td><td>city levels drew the 20 m road copy</td></tr>
+  </table>
+  <p class="cap">Dates from the ADR headers where they have one, otherwise from the commit or memory notes that land
+    them.</p>
+
+  <h2>Where to look</h2>
+  <ul class="files">
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/procgen/terrain.h">src/engine/procgen/terrain.h</a> — <code>TerrainParams</code>, <code>terrainHeight</code>, flatten footprints, the island</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/procgen/terrain_weather.cpp">src/engine/procgen/terrain_weather.cpp</a> — the weather bake: uplift, peaks, grow, keep shape, refine, facets</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/procgen/stream_power.cpp">src/engine/procgen/stream_power.cpp</a> — the FastScape solver, stochastic routing</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/procgen/rock_layers.h">src/engine/procgen/rock_layers.h</a> — the bed field: hardness and tone</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/procgen/erosion.h">src/engine/procgen/erosion.h</a>, <a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/procgen/erosion_gpu_vk.cpp">erosion_gpu_vk.cpp</a>, <a href="https://github.com/GlennSong/raytracer-clang/blob/main/shaders/vulkan/erosion_water.comp">shaders/vulkan/erosion_water.comp</a> — droplets and the pipe model</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/procgen/hydrology.h">src/engine/procgen/hydrology.h</a> — rivers, lakes, carve, water mesh, quays</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/procgen/terrain_maps.cpp">src/engine/procgen/terrain_maps.cpp</a>, <a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/procgen/ground_cover.h">ground_cover.h</a>, <a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/procgen/ground_layers.cpp">ground_layers.cpp</a> — maps, cover weights, layer textures</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/procgen/terrain_lod.cpp">src/engine/procgen/terrain_lod.cpp</a> — CDLOD selection, morph targets, baked tile meshes, skirts</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/procgen/height_pyramid.h">src/engine/procgen/height_pyramid.h</a> — tiles, sparse build, bundle codec</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/procgen/terrain_world_map.h">src/engine/procgen/terrain_world_map.h</a> — normal, cover and macro maps</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/systems/terrain_lod_system.cpp">src/engine/systems/terrain_lod_system.cpp</a> — per-frame cut, streaming, collider window</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/shaders/vulkan/terrain.vert">shaders/vulkan/terrain.vert</a> — the morph and snow depth</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/level_params.cpp">src/engine/level_params.cpp</a> — <code>readTerrainParams</code>, <code>erodedForTerrain</code> (rock relief), hydrology memo</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/level_loader.cpp">src/engine/level_loader.cpp</a> — the pyramid and world-map bake at load</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/tools/rt_erode.cpp">tools/rt_erode.cpp</a>, <a href="https://github.com/GlennSong/raytracer-clang/blob/main/tools/erosion_preview.py">tools/erosion_preview.py</a> — offline bakes and previews</li>
+  </ul>
+  <p><b>Tests:</b> <code>tests/test_terrain_lod.cpp</code> (selection covers the world, neighbours within one level,
+    morph targets, baked normals), <code>tests/test_height_pyramid.cpp</code> (shared borders, sparse refinement, codec),
+    <code>tests/test_erosion_gpu.cpp</code> (GPU determinism, the water model, <code style="word-break: break-all">stream_power_grows_a_drained_relief_from_uplift</code>,
+    <code style="word-break: break-all">stochastic_routing_follows_the_true_fall_not_the_grid</code>, <code style="word-break: break-all">rock_layers_grow_steeper_ground_on_hard_beds</code>,
+    the weather cache key), <code>tests/test_terrain.cpp</code> (flatten, chunks, the drawn-grid height).</p>
+  <p><b>Levels:</b> <code>island_8_weathered</code> (the island's ground, no cities), <code>island_8_rocky</code> (with
+    rock layers and facets), <code>terrain_lab</code> / <code>terrain_lab_layers</code>, <code>river_valley</code> (the
+    hydrology and water-model test bed), <code>river_town</code> (a river through a 1.6 km town).</p>
+  <p><b>Switches:</b> <code>RT_BAKED_TERRAIN=0</code> (draw the formula, not tiles), <code>RT_NOCACHE=1</code> (rebuild
+    every cache), <code>RT_SYNC_CDLOD=1</code> (synchronous node meshes), <code>RT_TERRAIN_NORMALS=fixed</code>,
+    <code>RT_TERRAIN_NORMAL_MAP=0</code>, <code>RT_TERRAIN_COVER_MAP=0</code>, <code>RT_TERRAIN_DETAIL=0</code> (no
+    surface relief, lips or snow depth), <code>RT_WATER_OBJ=&lt;path&gt;</code> (dump the water mesh),
+    <code>RT_GROUND_LAYER_DUMP=&lt;dir&gt;</code> (the layer textures). Older background:
+    <a href="../procgen.html">the procgen page</a>.</p>
+
+  <footer>Code excerpts from commit <code>47d587f3</code> (2026-10-26). Drawn from ADR-0027, 0034, 0035, 0036, 0055,
+    0075, 0082, 0095, 0099, 0104, 0105, 0118, 0120, 0121, 0122, 0123, 0124, 0125, 0126, 0127, 0128, 0204, 0205, 0206,
+    0207, 0208, 0209, 0210, 0211, 0212, 0213 and 0221 in
+    <a href="https://github.com/GlennSong/raytracer-clang/blob/main/docs/decisions.md">docs/decisions.md</a>.</footer>
+</div>
+</body>
+</html>

@@ -73,6 +73,9 @@ jobs:
             test -f "public/$page.html" || { echo "MISSING: $page.html"; exit 1; }
           done
           cp build-web/thumbs/*.webp public/thumbs/ 2>/dev/null || true
+          # "How the engine works": the whole section, pages and images
+          cp -r build-web/engine public/engine
+          test -f public/engine/index.html || { echo "MISSING: engine/index.html"; exit 1; }
           touch public/.nojekyll
           # Guard: the build-id must have been injected (never publish the raw
           # placeholder — it disables cache-busting for every visitor).

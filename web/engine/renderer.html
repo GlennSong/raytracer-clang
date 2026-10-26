@@ -1,0 +1,1232 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>A Frame on the GPU — How the Engine Works</title>
+  <link rel="stylesheet" href="engine.css">
+</head>
+<body>
+<div class="wrap">
+  <div class="nav"><a href="index.html">← How the engine works</a> · <a href="../index.html">scenes</a></div>
+  <h1>A frame on the GPU (and the path tracer)</h1>
+  <p class="lede">Every frame, the engine walks the world, decides what can be seen, and turns that into a list of
+    draws. One backend (Vulkan on Linux and Windows) then records the whole frame into one command buffer: shadow
+    maps, a lit HDR scene, clouds, a handful of screen-space passes, and a composite that tone-maps the result
+    onto the screen. The idea that holds it together is a small seam. The engine only ever says "draw this mesh with
+    this material here". Everything the GPU needs is the backend's business.</p>
+
+  <figure class="shot">
+    <img src="img/renderer/city-day.webp" alt="A wide daytime view over a planned city: rows of houses and streets, a freeway curving off, a downtown cluster of towers in the distance under volumetric clouds">
+    <figcaption>One finished frame (Vulkan, 2026-09-24): cascaded sun shadows on the houses, volumetric clouds
+      composited before the post passes, aerial haze over the far towers, then the tone map.</figcaption>
+  </figure>
+
+  <h2>Where it started: a CPU path tracer</h2>
+  <p>The repository's first commit (<code>d165c80b</code>, 2026-06-01) was not a game engine. It was an offline
+    <b>path tracer</b>: a program that makes a picture by firing many random rays per pixel, bouncing each one
+    around the scene and averaging the light the bounces collect. "Cornell box with path tracing, glass, mirror,
+    KD-tree, and bilateral denoising", standard library only. The interactive Metal renderer arrived the same day
+    (<code>3ba3ba60</code>, "Add interactive Metal renderer with RHI abstraction and PBR shading"). Everything
+    else on this page grew from that second commit, but the tracer is still in the tree and still builds: the
+    <code>raytracer</code> CLI and the editor's in-process render both call one function,
+    <code>renderImage</code>, which renders rows of the image as jobs on the job system.</p>
+  <p>The tracer is the reference the realtime renderer is held to. Its PBR material uses the same GGX
+    BRDF as the GPU shaders (ADR-0017), and it applies the same fitted ACES curve, so an offline render and a viewer frame
+    can be compared. Two pieces of it are worth knowing. First, the camera is a <b>thin lens</b>: each ray starts at a
+    random point on the aperture disk and aims at the point on the focal plane, so depth of field falls out of the
+    averaging for free.</p>
+<div class="code">
+    <div class="hd"><span>Camera::generateRay: a thin lens with Brown distortion; lensRadius 0 is an exact pinhole</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/camera.cpp#L45-L66">src/camera.cpp</a></div>
+<pre>Ray Camera::generateRay(double u, double v, double lensU, double lensV,
+                        double radialScale) const {
+<span class="c">    // Brown radial distortion (+ the caller's per-channel scale) on centered</span>
+<span class="c">    // image coordinates; k1 = k2 = 0 and radialScale = 1 is exact passthrough.</span>
+    double s = 2.0 * u - 1.0;
+    double t = 2.0 * v - 1.0;
+    double r2 = s * s + t * t;
+    double warp = radialScale *
+                  (1.0 + lens.distortionK1 * r2 + lens.distortionK2 * r2 * r2);
+    u = (s * warp + 1.0) / 2.0;
+    v = (t * warp + 1.0) / 2.0;
+
+    Vec3 target = lowerLeft + u * horizontal + v * vertical;
+
+    Vec3 origin = position;
+    if (lensRadius &gt; 0.0) {
+        double r = lensRadius * std::sqrt(lensU);
+        double phi = 2.0 * PI * lensV;
+        origin += r * std::cos(phi) * basisU + r * std::sin(phi) * basisV;
+    }
+    return {origin, normalize(target - origin)};
+}</pre>
+  </div>
+  <p>Second, the acceleration structures. The class is called <code>KdTree</code>, but it splits the
+    <i>triangles</i> into two halves at the median centroid of the longest axis, and each node keeps a box round its
+    triangles. That makes it a median-split bounding volume hierarchy (BVH), not a space-splitting k-d tree. ADR-0041
+    added a second level for instancing: a <code>MeshProto</code> (one mesh, its own tree, a "BLAS", bottom-level
+    acceleration structure) placed by many <code>SceneInstance</code>s, with an <code>InstanceBVH</code> (the
+    "TLAS", top level) over the instances' world boxes. A ray is moved into the instance's frame. The geometry is
+    never copied into the world, so 600 street trees cost one tree's triangles.</p>
+
+  <div class="diagram">
+    <svg viewBox="0 0 900 300" role="img" aria-label="Path tracer ray query: Scene::intersect tests spheres, the flat triangle tree, quads, then the TLAS; a TLAS leaf maps the ray into the proto's local frame and tests the proto's BLAS, then maps the hit back to world space">
+      <defs><marker id="a1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" fill="#6f8fb0"/></marker></defs>
+      <g font-family="system-ui, sans-serif" font-size="13" text-anchor="middle">
+        <rect x="20" y="115" width="150" height="70" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="95" y="143" fill="#cfe4ff">world ray</text>
+        <text x="95" y="163" fill="#93a6ba" font-size="12">origin, direction</text>
+        <rect x="230" y="20" width="250" height="260" rx="9" fill="#0f151e" stroke="#2c3d50"/>
+        <text x="355" y="44" fill="#cfe4ff">Scene::intersect</text>
+        <text x="355" y="62" fill="#93a6ba" font-size="12">nearest hit so far gates each test</text>
+        <rect x="250" y="76" width="210" height="34" rx="7" fill="#131a24" stroke="#2c3d50"/>
+        <text x="355" y="98" fill="#cfe4ff" font-size="12">analytic spheres</text>
+        <rect x="250" y="118" width="210" height="34" rx="7" fill="#131a24" stroke="#2c3d50"/>
+        <text x="355" y="140" fill="#cfe4ff" font-size="12">flat triangles: KdTree (BVH)</text>
+        <rect x="250" y="160" width="210" height="34" rx="7" fill="#131a24" stroke="#2c3d50"/>
+        <text x="355" y="182" fill="#cfe4ff" font-size="12">quads</text>
+        <rect x="250" y="202" width="210" height="58" rx="7" fill="#131a24" stroke="#3b82f6"/>
+        <text x="355" y="225" fill="#cfe4ff" font-size="12">TLAS: InstanceBVH</text>
+        <text x="355" y="245" fill="#93a6ba" font-size="12">over instance world boxes</text>
+        <rect x="560" y="150" width="150" height="110" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="635" y="175" fill="#cfe4ff">leaf instance</text>
+        <text x="635" y="197" fill="#93a6ba" font-size="12">ray × toLocal</text>
+        <text x="635" y="215" fill="#93a6ba" font-size="12">(not renormalised:</text>
+        <text x="635" y="233" fill="#93a6ba" font-size="12">same t in both)</text>
+        <rect x="740" y="150" width="145" height="110" rx="9" fill="#131a24" stroke="#3b82f6"/>
+        <text x="812" y="175" fill="#cfe4ff">MeshProto</text>
+        <text x="812" y="197" fill="#93a6ba" font-size="12">its own KdTree</text>
+        <text x="812" y="215" fill="#93a6ba" font-size="12">= the BLAS, built</text>
+        <text x="812" y="233" fill="#93a6ba" font-size="12">once per mesh</text>
+        <rect x="560" y="30" width="325" height="70" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="722" y="56" fill="#cfe4ff">hit back to world</text>
+        <text x="722" y="76" fill="#93a6ba" font-size="12">point × toWorld, normal × normalToWorld</text>
+        <line x1="170" y1="150" x2="226" y2="150" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#a1)"/>
+        <line x1="460" y1="231" x2="556" y2="215" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#a1)"/>
+        <line x1="710" y1="205" x2="736" y2="205" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#a1)"/>
+        <line x1="812" y1="150" x2="812" y2="104" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#a1)"/>
+      </g>
+    </svg>
+  </div>
+  <p class="cap">The tracer's two-level query (src/scene.cpp, src/instance.cpp). The flat triangle soup and the
+    instances live side by side, so scenes without instances render exactly as they did before ADR-0041.</p>
+<div class="code">
+    <div class="hd"><span>InstanceBVH::intersect: a TLAS leaf moves the ray into the proto's frame, not the proto into the world</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/instance.cpp#L125-L140">src/instance.cpp</a></div>
+<pre><span class="c">                // Map the world ray into the proto frame. Direction is NOT</span>
+<span class="c">                // renormalised, so `t` is identical in both frames.</span>
+                Ray localRay(inst.toLocal.transformPoint(ray.origin),
+                             inst.toLocal.transformDirection(ray.direction));
+                HitRecord tmp;
+                if (proto.intersectLocal(localRay, tMin, closest, tmp)) {
+                    hit = true;
+                    closest = tmp.t;
+                    rec = tmp;
+                    rec.point = inst.toWorld.transformPoint(tmp.point);
+                    rec.normal = normalize(inst.normalToWorld.transformDirection(tmp.normal));
+                    if (tmp.tangent.lengthSquared() &gt; 1e-12)
+                        rec.tangent =
+                            normalize(inst.toWorld.transformDirection(tmp.tangent));
+                    rec.t = tmp.t;
+                }</pre>
+  </div>
+
+  <div class="note history"><p><b>Two tone curves.</b> ADR-0037 gave the viewer a grade (contrast and saturation in
+    scene-linear light) and a choice of ACES or AgX. The offline tracer kept its own fitted ACES and gained neither,
+    so "viewer and offline tone now differ" (the ADR's own words). The per-channel ACES that came first washed colours
+    out; the fitted version with the input and output matrices replaced it in <code>b7a8db97</code>.</p></div>
+
+  <h2>One seam, four backends</h2>
+  <p>ADR-0001 (2026-06-03) made a rule before there was a second backend: platform details live behind two
+    seams, <code>Window</code> (windowing and input) and <code>Renderer</code> (the GPU). <code>Renderer</code> is a
+    pure virtual class in <code>src/renderer/renderer.h</code>. It is not a command-buffer abstraction. It uploads
+    resources and takes draw calls, and the backend builds and runs the whole pass graph inside
+    <code>endFrame()</code>. Engine code never sees a Vulkan or Metal type.</p>
+
+  <div class="diagram">
+    <svg viewBox="0 0 900 340" role="img" aria-label="Callers (Application, RenderSystem, TerrainLodSystem and the crowd, debug draw and the UI tools) call the Renderer interface, which four backends implement: Vulkan, Metal, WebGPU and Null">
+      <defs><marker id="a2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" fill="#6f8fb0"/></marker></defs>
+      <g font-family="system-ui, sans-serif" font-size="13" text-anchor="middle">
+        <rect x="12" y="14" width="200" height="72" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="112" y="40" fill="#cfe4ff">Application</text>
+        <text x="112" y="60" fill="#93a6ba" font-size="12">beginFrame · endFrame</text>
+        <rect x="237" y="14" width="200" height="72" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="337" y="40" fill="#cfe4ff">RenderSystem</text>
+        <text x="337" y="60" fill="#93a6ba" font-size="12">setCamera · setLights</text>
+        <text x="337" y="76" fill="#93a6ba" font-size="12">drawMesh(Instanced)</text>
+        <rect x="462" y="14" width="200" height="72" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="562" y="40" fill="#cfe4ff">terrain · city crowd</text>
+        <text x="562" y="60" fill="#93a6ba" font-size="12">drawTerrain</text>
+        <text x="562" y="76" fill="#93a6ba" font-size="12">setCrowdAgents …</text>
+        <rect x="687" y="14" width="200" height="72" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="787" y="40" fill="#cfe4ff">debug draw · map · HUD</text>
+        <text x="787" y="60" fill="#93a6ba" font-size="12">drawMesh(OVERLAY)</text>
+        <text x="787" y="76" fill="#93a6ba" font-size="12">submitUi</text>
+        <rect x="120" y="128" width="660" height="82" rx="9" fill="#131a24" stroke="#3b82f6"/>
+        <text x="450" y="152" fill="#cfe4ff">Renderer (renderer.h): a pure virtual interface</text>
+        <text x="450" y="174" fill="#93a6ba" font-size="12">resources: uploadMesh · prepareMesh / uploadPrepared · uploadTexture · remove…</text>
+        <text x="450" y="194" fill="#93a6ba" font-size="12">per frame: beginFrame → setCamera → setLights → draw… → endFrame (the pass graph runs here)</text>
+        <rect x="12" y="252" width="200" height="76" rx="9" fill="#131a24" stroke="#3b82f6"/>
+        <text x="112" y="276" fill="#cfe4ff">VulkanRenderer</text>
+        <text x="112" y="296" fill="#93a6ba" font-size="12">Linux · Windows (0057)</text>
+        <text x="112" y="314" fill="#93a6ba" font-size="12">7,501 lines · GLSL→SPIR-V</text>
+        <rect x="237" y="252" width="200" height="76" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="337" y="276" fill="#cfe4ff">MetalRenderer</text>
+        <text x="337" y="296" fill="#93a6ba" font-size="12">macOS · visionOS (the first)</text>
+        <text x="337" y="314" fill="#93a6ba" font-size="12">5,219 lines · MSL at runtime</text>
+        <rect x="462" y="252" width="200" height="76" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="562" y="276" fill="#cfe4ff">WebGPU renderer</text>
+        <text x="562" y="296" fill="#93a6ba" font-size="12">browser, Emscripten (0058)</text>
+        <text x="562" y="314" fill="#93a6ba" font-size="12">2,936 lines · WGSL strings</text>
+        <rect x="687" y="252" width="200" height="76" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="787" y="276" fill="#cfe4ff">NullRenderer</text>
+        <text x="787" y="296" fill="#93a6ba" font-size="12">headless tests and tools</text>
+        <text x="787" y="314" fill="#93a6ba" font-size="12">53 lines</text>
+        <line x1="112" y1="86" x2="200" y2="124" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#a2)"/>
+        <line x1="337" y1="86" x2="350" y2="124" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#a2)"/>
+        <line x1="562" y1="86" x2="550" y2="124" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#a2)"/>
+        <line x1="787" y1="86" x2="700" y2="124" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#a2)"/>
+        <g stroke="#6f8fb0" stroke-width="1.4" stroke-dasharray="5 4">
+          <line x1="112" y1="248" x2="200" y2="212"/><line x1="337" y1="248" x2="350" y2="212"/>
+          <line x1="562" y1="248" x2="550" y2="212"/><line x1="787" y1="248" x2="700" y2="212"/>
+        </g>
+        <text x="450" y="236" fill="#93a6ba" font-size="12">implements (CMake picks one per platform)</text>
+      </g>
+    </svg>
+  </div>
+  <p class="cap">Who talks to the seam, and who implements it. Line counts are the backend source files at the pinned
+    commit; each backend also has its own shader tree (shaders/vulkan, shaders/metal, WGSL embedded).</p>
+
+<div class="code">
+    <div class="hd"><span>Renderer: the per-frame half of the contract (resource upload and the knobs omitted)</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/renderer/renderer.h#L881-L966">src/renderer/renderer.h</a></div>
+<pre>    virtual void beginFrame() = 0;
+    virtual void setCamera(const CameraState&amp; camera) = 0;
+    <span class="c">// ...</span>
+    virtual void setLights(const SceneLighting&amp; lighting) = 0;
+    virtual void drawMesh(MeshHandle handle, const Mat4&amp; transform,
+                          const RenderMaterial&amp; material) = 0;
+<span class="c">    // Draw many instances of one mesh (world-space transforms, one material for</span>
+<span class="c">    // all). Default loops drawMesh: backends that batch by mesh handle (the Metal</span>
+<span class="c">    // backend) already coalesce these into a single instanced draw, so the win</span>
+<span class="c">    // here is CPU-side (one InstanceGroup vs. thousands of entities). A backend</span>
+<span class="c">    // may override for a more direct path. (std::span is C++20; we are C++17.)</span>
+    virtual void drawMeshInstanced(MeshHandle handle,
+                                   const std::vector&lt;Mat4&gt;&amp; transforms,
+                                   const RenderMaterial&amp; material) {
+<span class="c">        // (a backend without instancing: the bottom row's per-instance DATA -- a grass rank and its ground's</span>
+<span class="c">        // slope, a signal's state, read only by the Vulkan shaders -- must not reach its model matrix as a w)</span>
+        for (Mat4 m : transforms) { m.m[3][0] = m.m[3][1] = m.m[3][2] = 0; drawMesh(handle, m, material); }
+    }
+    <span class="c">// ...</span>
+    virtual void endFrame() = 0;</pre>
+  </div>
+  <p>Notice the default <code>drawMeshInstanced</code>: a backend without instancing gets a loop of single draws.
+    It also clears the matrix's bottom row first. That row is where the engine smuggles per-instance data (a grass
+    clump's rank, a traffic signal's colour) to the Vulkan shaders, and it must not reach another backend as a
+    perspective <code>w</code>.</p>
+
+  <h3>How the backends came in</h3>
+  <table>
+    <tr><th>Backend</th><th>When</th><th>What decided it</th></tr>
+    <tr><td>Metal</td><td>2026-06-01</td><td>The first interactive renderer, on Glenn's Mac. Compiles MSL from strings at runtime. The
+      engine's lighting (ADR-0017) was designed here first.</td></tr>
+    <tr><td>Vulkan</td><td>ADR-0057, 2026-06-27</td><td>"One backend covers both targets", Linux and Windows. GLSL compiled
+      offline to SPIR-V by <code>glslc</code> in CMake, so the runtime links no shader compiler. Vulkan's flipped Y and
+      [0, 1] depth are absorbed in the projection upload, so engine math stays shared. WebGPU (Dawn, wgpu) was rejected
+      on the desktop as a heavy native dependency; OpenGL as a dead end.</td></tr>
+    <tr><td>WebGPU</td><td>ADR-0058, 2026-06-29</td><td>The web build. Under Emscripten the dependency objection disappears:
+      the toolchain ships the bindings. WGSL embedded as strings; single-threaded.</td></tr>
+    <tr><td>Null</td><td>—</td><td>Draws nothing. Lets tests and tools run the engine with no GPU.</td></tr>
+  </table>
+  <p>The price is three shader trees kept in step by hand, which ADR-0057 and ADR-0058 both name as the dominant
+    long-term cost. In practice the Vulkan backend is the one Glenn runs (the Linux workstation with the RTX 3080), and
+    since September most new rendering lands there first and says so: "Vulkan only" is in the text of ADR-0088,
+    0094, 0096, 0100, 0193 and 0226. <a href="https://github.com/GlennSong/raytracer-clang/blob/main/docs/renderer-parity.md">docs/renderer-parity.md</a>
+    is the matrix of who has what. The rest of this page describes the Vulkan backend.</p>
+
+  <h2>From the world to a command buffer</h2>
+  <p><code>Application::renderFrame</code> brackets a frame in three timed phases, named so a slow frame can say
+    where it was slow (ADR-0077): <b>acquire</b> (<code>beginFrame</code>), <b>encode</b> (the systems'
+    <code>render</code> calls walk the world and submit draws) and <b>submit</b> (<code>endFrame</code>, which on
+    Vulkan records and submits the GPU's work).</p>
+<div class="code">
+    <div class="hd"><span>Application::renderFrame: the three brackets of a frame</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/engine/application.cpp#L169-L186">src/engine/application.cpp</a></div>
+<pre>    {
+        RT_PROFILE_ZONE_NAMED("acquire");
+        frameStats.beginPhase(FramePhase::RenderAcquire);
+        rendererPtr-&gt;beginFrame();
+        frameStats.endPhase(FramePhase::RenderAcquire);
+    }
+    {
+        RT_PROFILE_ZONE_NAMED("encode");
+        frameStats.beginPhase(FramePhase::RenderEncode);
+        stateStack.forEachRenderable([&amp;](AppState&amp; state) { state.render(ctx); });
+        frameStats.endPhase(FramePhase::RenderEncode);
+    }
+    {
+        RT_PROFILE_ZONE_NAMED("submit");
+        frameStats.beginPhase(FramePhase::RenderSubmit);
+        rendererPtr-&gt;endFrame();
+        frameStats.endPhase(FramePhase::RenderSubmit);
+    }</pre>
+  </div>
+
+  <div class="diagram">
+    <svg viewBox="0 0 900 270" role="img" aria-label="The CPU side of a frame: beginFrame clears the queues; RenderSystem culls and turns each visible thing into a draw item and instance rows; endFrame waits for this frame slot's fence, reads back timings and occlusion, flushes uploads, records the command buffer, submits and presents; the GPU then runs the pass graph">
+      <defs><marker id="a3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" fill="#6f8fb0"/></marker></defs>
+      <g font-family="system-ui, sans-serif" font-size="13" text-anchor="middle">
+        <rect x="10" y="20" width="170" height="230" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="95" y="46" fill="#cfe4ff">acquire</text>
+        <text x="95" y="66" fill="#8ec5ff" font-size="12">beginFrame()</text>
+        <text x="95" y="96" fill="#93a6ba" font-size="12">clear the draw queue,</text>
+        <text x="95" y="114" fill="#93a6ba" font-size="12">the UI quads and</text>
+        <text x="95" y="132" fill="#93a6ba" font-size="12">the instance rows</text>
+        <rect x="215" y="20" width="230" height="230" rx="9" fill="#131a24" stroke="#3b82f6"/>
+        <text x="330" y="46" fill="#cfe4ff">encode</text>
+        <text x="330" y="66" fill="#8ec5ff" font-size="12">RenderSystem::render</text>
+        <text x="330" y="96" fill="#93a6ba" font-size="12">lights: nearest lamps join</text>
+        <text x="330" y="114" fill="#93a6ba" font-size="12">draw index: visible 200 m cells</text>
+        <text x="330" y="132" fill="#93a6ba" font-size="12">frustum + occlusion cull</text>
+        <text x="330" y="150" fill="#93a6ba" font-size="12">draw distance, tier fade</text>
+        <text x="330" y="168" fill="#93a6ba" font-size="12">moving instances lerped</text>
+        <text x="330" y="194" fill="#cfe4ff" font-size="12">drawMesh → DrawItem</text>
+        <text x="330" y="212" fill="#cfe4ff" font-size="12">matrix → instance row</text>
+        <rect x="480" y="20" width="230" height="230" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="595" y="46" fill="#cfe4ff">submit</text>
+        <text x="595" y="66" fill="#8ec5ff" font-size="12">endFrame() → drawFrame()</text>
+        <text x="595" y="96" fill="#93a6ba" font-size="12">wait for this slot's fence</text>
+        <text x="595" y="114" fill="#93a6ba" font-size="12">read its GPU times</text>
+        <text x="595" y="132" fill="#93a6ba" font-size="12">and its occlusion depth</text>
+        <text x="595" y="150" fill="#93a6ba" font-size="12">flush uploads, retire old</text>
+        <text x="595" y="168" fill="#93a6ba" font-size="12">write the instance buffer</text>
+        <text x="595" y="194" fill="#cfe4ff" font-size="12">record the pass graph</text>
+        <text x="595" y="212" fill="#cfe4ff" font-size="12">submit + present</text>
+        <rect x="745" y="20" width="145" height="230" rx="9" fill="#0f151e" stroke="#2c3d50"/>
+        <text x="817" y="46" fill="#cfe4ff">GPU</text>
+        <text x="817" y="76" fill="#93a6ba" font-size="12">one command</text>
+        <text x="817" y="94" fill="#93a6ba" font-size="12">buffer a frame;</text>
+        <text x="817" y="112" fill="#93a6ba" font-size="12">2 frames in flight</text>
+        <text x="817" y="142" fill="#e6c07b" font-size="12">the pass graph</text>
+        <text x="817" y="160" fill="#e6c07b" font-size="12">(next section)</text>
+        <line x1="180" y1="135" x2="211" y2="135" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#a3)"/>
+        <line x1="445" y1="135" x2="476" y2="135" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#a3)"/>
+        <line x1="710" y1="135" x2="741" y2="135" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#a3)"/>
+      </g>
+    </svg>
+  </div>
+  <p class="cap">The CPU half of a frame on Vulkan. With <code>MAX_FRAMES_IN_FLIGHT = 2</code>, the fence wait in
+    endFrame is for the frame before last, so the CPU builds frame N while the GPU still draws N − 1.</p>
+
+  <p>The renderer is <b>immediate mode</b> for the draw list: nothing about a draw survives the frame. Every frame
+    the world is walked again, culled again, and every visible instance's matrix is written again into a per-frame,
+    host-visible instance buffer. Meshes and textures do stay on the GPU; only the list of what to draw is rebuilt.
+    That is simple and always correct, and it is also where the CPU's render time goes (see "What it costs"). The
+    unit of the list is the <code>DrawItem</code>:</p>
+<div class="code">
+    <div class="hd"><span>DrawItem: one queued draw, the backend's whole idea of "something to draw"</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/renderer/vulkan/vulkan_renderer.cpp#L326-L345">src/renderer/vulkan/vulkan_renderer.cpp</a></div>
+<pre>struct DrawItem {
+    MeshHandle mesh;
+    MeshPush push;
+    std::array&lt;TextureHandle, 5&gt; textures;   <span class="c">// albedo, MR, normal, AO, emissive</span>
+    float opacity = 1.0f;                     <span class="c">// &lt; 1 → transparent pass (back-to-front)</span>
+    float sortPos[3] = {0, 0, 0};             <span class="c">// where it stands, for the transparent sort</span>
+    bool  terrain = false;                    <span class="c">// → terrainPipeline (CDLOD morph in vert)</span>
+<span class="c">    // INSTANCED (ADR-0097): the model matrices are rows [firstInstance, +instanceCount) of the</span>
+<span class="c">    // frame's instance buffer, read by the vertex shader at instance rate. drawMesh is a</span>
+<span class="c">    // one-instance draw; drawMeshInstanced is one draw for the whole visible set.</span>
+    uint32_t firstInstance = 0, instanceCount = 1;
+<span class="c">    // WHERE IT IS: a world bounding sphere round every instance (radius &lt; 0: unknown, always drawn). The shadow</span>
+<span class="c">    // cascades cull against it -- each cascade used to draw the whole frame's queue (the island: 9.7 ms of GPU,</span>
+<span class="c">    // three times the recording)</span>
+    float worldCenter[3] = {0, 0, 0};
+    float worldRadius = -1.0f;
+<span class="c">    // a GPU crowd kind: its instances are crowd.comp's (crowdInst) and its count an indirect command (crowdCmds)</span>
+    bool crowd = false;
+    uint32_t crowdCmd = 0;
+};</pre>
+  </div>
+  <p><code>MeshPush</code> is the 120-byte push-constant block the shaders read: albedo, metallic, roughness,
+    emission, the material flags (a 32-bit word of switches like <code>FLAG_ALPHA_TEST</code>,
+    <code>FLAG_GRASS</code>, <code>FLAG_LOD_BAND</code>), the procedural surface id (brick, asphalt, water…) and
+    16 floats of material features. Textures are bound per draw from a descriptor pool that is reset every frame.</p>
+
+  <h2>The pass graph</h2>
+  <p>A <b>pass</b> is one trip through the GPU's pipeline that writes some images; later passes read them. The order
+    and the image formats are fixed in <code>recordCommandBuffer</code>. The matrix below is the whole frame: one row
+    per pass in the order they run, one column per image, <b>W</b> where a pass writes it and <b>R</b> where it reads it.
+    The brackets on the left are the <code>RT_GPU_TIMES</code> buckets the timings come back in.</p>
+
+  <div class="diagram">
+    <svg viewBox="0 0 930 640" role="img" aria-label="Access matrix of the Vulkan frame. Rows are passes in order: crowd compute, shadow cascades, scene pass, cloud march, cloud composite, bloom, SSAO and blur, SSR, occlusion reduce, depth of field, composite with UI. Columns are images: shadow maps, HDR colour, normal and roughness, depth, clouds, bloom, AO, SSR, DOF, occlusion buffer, swapchain. Each cell marks a read or a write.">
+      <g font-family="system-ui, sans-serif" font-size="12" text-anchor="middle">
+        <!-- column headers -->
+        <g fill="#cfe4ff">
+          <text x="390" y="30">shadow</text><text x="440" y="30">HDR</text><text x="490" y="30">normal</text>
+          <text x="540" y="30">depth</text><text x="590" y="30">clouds</text><text x="640" y="30">bloom</text>
+          <text x="690" y="30">AO</text><text x="740" y="30">SSR</text><text x="790" y="30">DOF</text>
+          <text x="840" y="30">occl.</text><text x="890" y="30">screen</text>
+        </g>
+        <g fill="#93a6ba" font-size="11">
+          <text x="390" y="46">4×2048²</text><text x="440" y="46">16F</text><text x="490" y="46">+rough</text>
+          <text x="540" y="46">rev-Z</text><text x="590" y="46">½ 16F</text><text x="640" y="46">½ ×2</text>
+          <text x="690" y="46">½ R8</text><text x="740" y="46">½</text><text x="790" y="46">full</text>
+          <text x="840" y="46">host</text><text x="890" y="46">UNORM</text>
+        </g>
+        <g stroke="#1f2a37" stroke-width="1">
+          <line x1="365" y1="56" x2="365" y2="590"/><line x1="415" y1="56" x2="415" y2="590"/>
+          <line x1="465" y1="56" x2="465" y2="590"/><line x1="515" y1="56" x2="515" y2="590"/>
+          <line x1="565" y1="56" x2="565" y2="590"/><line x1="615" y1="56" x2="615" y2="590"/>
+          <line x1="665" y1="56" x2="665" y2="590"/><line x1="715" y1="56" x2="715" y2="590"/>
+          <line x1="765" y1="56" x2="765" y2="590"/><line x1="815" y1="56" x2="815" y2="590"/>
+          <line x1="865" y1="56" x2="865" y2="590"/><line x1="915" y1="56" x2="915" y2="590"/>
+        </g>
+        <!-- rows: y centre = 80 + 46*i -->
+        <g>
+          <rect x="105" y="60" width="250" height="40" rx="7" fill="#131a24" stroke="#2c3d50"/>
+          <text x="230" y="77" fill="#cfe4ff">crowd.comp (compute)</text>
+          <text x="230" y="93" fill="#93a6ba" font-size="11">far travellers' instances + indirect counts</text>
+          <rect x="105" y="106" width="250" height="40" rx="7" fill="#131a24" stroke="#2c3d50"/>
+          <text x="230" y="123" fill="#cfe4ff">shadow cascades</text>
+          <text x="230" y="139" fill="#93a6ba" font-size="11">depth only, culled per cascade</text>
+          <rect x="105" y="152" width="250" height="40" rx="7" fill="#131a24" stroke="#3b82f6"/>
+          <text x="230" y="169" fill="#cfe4ff">scene pass (mesh.frag)</text>
+          <text x="230" y="185" fill="#93a6ba" font-size="11">sky, opaque, terrain, water, glass, overlay</text>
+          <rect x="105" y="198" width="250" height="40" rx="7" fill="#131a24" stroke="#2c3d50"/>
+          <text x="230" y="215" fill="#cfe4ff">cloud march (half res)</text>
+          <text x="230" y="231" fill="#93a6ba" font-size="11">volumetric, 3-D noise textures</text>
+          <rect x="105" y="244" width="250" height="40" rx="7" fill="#131a24" stroke="#2c3d50"/>
+          <text x="230" y="261" fill="#cfe4ff">cloud composite</text>
+          <text x="230" y="277" fill="#93a6ba" font-size="11">bilateral upsample onto the HDR</text>
+          <rect x="105" y="290" width="250" height="40" rx="7" fill="#131a24" stroke="#2c3d50"/>
+          <text x="230" y="307" fill="#cfe4ff">bloom</text>
+          <text x="230" y="323" fill="#93a6ba" font-size="11">bright pass, blur H, blur V</text>
+          <rect x="105" y="336" width="250" height="40" rx="7" fill="#131a24" stroke="#2c3d50"/>
+          <text x="230" y="353" fill="#cfe4ff">SSAO + blur</text>
+          <text x="230" y="369" fill="#93a6ba" font-size="11">world-space hemisphere kernel</text>
+          <rect x="105" y="382" width="250" height="40" rx="7" fill="#131a24" stroke="#2c3d50"/>
+          <text x="230" y="399" fill="#cfe4ff">SSR</text>
+          <text x="230" y="415" fill="#93a6ba" font-size="11">reflection rays marched in depth</text>
+          <rect x="105" y="428" width="250" height="40" rx="7" fill="#131a24" stroke="#2c3d50"/>
+          <text x="230" y="445" fill="#cfe4ff">occlusion reduce (compute)</text>
+          <text x="230" y="461" fill="#93a6ba" font-size="11">farthest depth per 16 px tile</text>
+          <rect x="105" y="474" width="250" height="40" rx="7" fill="#131a24" stroke="#2c3d50"/>
+          <text x="230" y="491" fill="#cfe4ff">depth of field</text>
+          <text x="230" y="507" fill="#93a6ba" font-size="11">only with a real aperture</text>
+          <rect x="105" y="520" width="250" height="56" rx="7" fill="#131a24" stroke="#3b82f6"/>
+          <text x="230" y="539" fill="#cfe4ff">composite → swapchain</text>
+          <text x="230" y="555" fill="#93a6ba" font-size="11">AO, SSR, bloom, exposure, grade, tonemap</text>
+          <text x="230" y="570" fill="#93a6ba" font-size="11">then UI quads, then ImGui</text>
+        </g>
+        <!-- RT_GPU_TIMES buckets -->
+        <g stroke="#e6c07b" stroke-width="2" fill="none">
+          <path d="M96,62 h-6 v82 h6"/><path d="M96,154 h-6 v36 h6"/><path d="M96,200 h-6 v82 h6"/>
+          <path d="M96,292 h-6 v36 h6"/><path d="M96,338 h-6 v36 h6"/><path d="M96,384 h-6 v36 h6"/>
+          <path d="M96,430 h-6 v82 h6"/><path d="M96,522 h-6 v52 h6"/>
+        </g>
+        <g fill="#e6c07b" font-size="11" text-anchor="end">
+          <text x="84" y="107">shadows</text><text x="84" y="176">scene</text><text x="84" y="245">clouds</text>
+          <text x="84" y="314">bloom</text><text x="84" y="360">ssao</text><text x="84" y="406">ssr</text>
+          <text x="84" y="469">occl+dof</text><text x="84" y="552">comp+ui</text>
+        </g>
+        <!-- cells -->
+        <defs>
+          <g id="cw"><circle r="10" fill="#e6c07b"/><text y="4" fill="#131a24" font-size="11" font-weight="700">W</text></g>
+          <g id="cr"><circle r="10" fill="#0a0e14" stroke="#8ec5ff" stroke-width="1.5"/><text y="4" fill="#8ec5ff" font-size="11" font-weight="700">R</text></g>
+        </defs>
+        <use href="#cw" x="390" y="126"/>
+        <use href="#cr" x="390" y="172"/><use href="#cw" x="440" y="172"/><use href="#cw" x="490" y="172"/><use href="#cw" x="540" y="172"/>
+        <use href="#cr" x="540" y="218"/><use href="#cw" x="590" y="218"/>
+        <use href="#cw" x="440" y="264"/><use href="#cr" x="540" y="264"/><use href="#cr" x="590" y="264"/>
+        <use href="#cr" x="440" y="310"/><use href="#cw" x="640" y="310"/>
+        <use href="#cr" x="490" y="356"/><use href="#cr" x="540" y="356"/><use href="#cw" x="690" y="356"/>
+        <use href="#cr" x="440" y="402"/><use href="#cr" x="490" y="402"/><use href="#cr" x="540" y="402"/><use href="#cw" x="740" y="402"/>
+        <use href="#cr" x="540" y="448"/><use href="#cw" x="840" y="448"/>
+        <use href="#cr" x="440" y="494"/><use href="#cr" x="540" y="494"/><use href="#cw" x="790" y="494"/>
+        <use href="#cr" x="440" y="548"/><use href="#cr" x="490" y="548"/><use href="#cr" x="540" y="548"/><use href="#cr" x="640" y="548"/>
+        <use href="#cr" x="690" y="548"/><use href="#cr" x="740" y="548"/><use href="#cr" x="790" y="548"/><use href="#cw" x="890" y="548"/>
+        <!-- legend -->
+        <g font-size="12" text-anchor="start">
+          <use href="#cw" x="120" y="614"/><text x="138" y="618" fill="#93a6ba">writes</text>
+          <use href="#cr" x="210" y="614"/><text x="228" y="618" fill="#93a6ba">reads</text>
+          <text x="300" y="618" fill="#93a6ba">½ = half resolution. Brackets: RT_GPU_TIMES buckets (the crowd falls in "shadows").</text>
+        </g>
+      </g>
+    </svg>
+  </div>
+  <p class="cap">The Vulkan frame at commit 47d587f3, from <code>recordCommandBuffer</code> and the descriptor
+    writes that feed each pass. The composite reads the DOF image instead of the HDR one when depth of field is on,
+    and reads depth and normals for the underwater view and the debug views.</p>
+
+  <p>Here is the same order in the code, with the timestamp marks between the stages:</p>
+<div class="code">
+    <div class="hd"><span>recordCommandBuffer: the frame in order, a GPU timestamp after each stage</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/renderer/vulkan/vulkan_renderer.cpp#L5481-L5752">src/renderer/vulkan/vulkan_renderer.cpp</a></div>
+<pre>    gpuMark(cmd, 0);
+    recordCrowd(cmd);   <span class="c">// the far travellers' instances, before any pass draws them</span>
+
+<span class="c">    // Cascaded shadow maps first (writes the depth array the lit pass samples).</span>
+    recordShadowPass(cmd);
+    gpuMark(cmd, 1);
+    <span class="c">// ...</span>
+    vkCmdEndRenderPass(cmd);
+    gpuMark(cmd, 2);
+
+<span class="c">    // Volumetric clouds (port of the Metal cinematic-sky wiring): half-res</span>
+<span class="c">    // march, then the bilateral composite onto the HDR scene — BEFORE the post</span>
+<span class="c">    // chain so SSR/bloom/DOF all see the clouded scene.</span>
+    if (cloudsActive &amp;&amp; cloudMarchPipeline &amp;&amp; cloudCompositePipeline &amp;&amp; cloudFramebuffer) {
+    <span class="c">// ...</span>
+<span class="c">    // Bloom + SSAO read the scene outputs (always run so their views stay</span>
+<span class="c">    // sampleable; composite gates whether they're applied).</span>
+    gpuMark(cmd, 3);
+    recordBloom(cmd);
+    gpuMark(cmd, 4);
+    recordSsao(cmd);
+    gpuMark(cmd, 5);
+    recordSsr(cmd);
+    gpuMark(cmd, 6);
+    recordOcclusion(cmd);
+<span class="c">    // DOF (off by default) blurs the HDR scene; composite reads dofView when on.</span>
+    if (dofEnabledFrame) recordDof(cmd);
+    gpuMark(cmd, 7);
+    <span class="c">// ...</span>
+    vkCmdEndRenderPass(cmd);
+    gpuMark(cmd, 8);</pre>
+  </div>
+
+  <h3>Each pass in a sentence or two</h3>
+  <table>
+    <tr><th>Pass</th><th>What it does, and why it is there</th></tr>
+    <tr><td>crowd.comp</td><td>The city's far travellers (the "GPU crowd") are placed by a compute shader from
+      their route and clock, writing their instance matrices and an indirect draw count. It runs first, so every later
+      pass can draw them.</td></tr>
+    <tr><td>Shadow cascades</td><td><b>Cascaded shadow maps</b>: the view is cut into up to four depth slices, and
+      each gets its own 2048² depth map rendered from the sun, so near shadows are sharp and far ones still exist.
+      The boxes are fitted round the camera (<code>cascade_fit.h</code>), not the view direction, so turning does not
+      make shadows shimmer. Each cascade draws only the items whose sphere overlaps its four sides; grass, overlays
+      and the camera-facing impostor cards cast nothing. Alpha-cut leaves use a second pipeline that cuts the shadow
+      by the leaf texture's alpha.</td></tr>
+    <tr><td>Scene pass</td><td>The sky (a full-screen triangle from <code>sky.frag</code>: the day/night palette and
+      the sun disc), then the geometry, sorted by kind into opaque (back-face culled, then two-sided), terrain
+      (its own vertex shader, which morphs CDLOD tiles), water, transparent (sorted back to front, premultiplied
+      alpha), and overlays (depth off). All lit by <code>mesh.frag</code>. It writes three images: HDR colour, a
+      "G-buffer" of world normal and roughness for the screen-space passes, and depth. Depth is <b>reverse-Z</b>:
+      near is 1 and far is 0, which with a float depth buffer keeps precision nearly even out to kilometres.</td></tr>
+    <tr><td>Clouds</td><td>Volumetric clouds marched at half resolution against the scene depth, then upsampled
+      bilaterally (edge-aware, so cloud does not bleed over a roof line) onto the HDR image. They go in before the
+      post chain, so bloom and SSR see the clouded sky.</td></tr>
+    <tr><td>Bloom</td><td>Three half-resolution draws: a soft-threshold bright pass, then a horizontal and a vertical
+      blur. The composite adds the result.</td></tr>
+    <tr><td>SSAO</td><td><b>Screen-space ambient occlusion</b>: darkening creases and contact points by testing a
+      hemisphere of samples round each pixel against the depth buffer. Half resolution, then a blur.</td></tr>
+    <tr><td>SSR</td><td><b>Screen-space reflections</b>: each pixel's reflection ray is marched against the depth
+      buffer; where it hits, the HDR colour there is the reflection, with a confidence that fades at screen edges and
+      on rough surfaces. This is what puts the mountains in the lake below.</td></tr>
+    <tr><td>Occlusion reduce</td><td>The renderer's first compute pass: depth reduced to 16 px tiles for the CPU's
+      occlusion culling (its own section below).</td></tr>
+    <tr><td>DOF</td><td>Depth of field, a thin-lens circle of confusion gathered at full resolution. Skipped unless the
+      camera has a real aperture.</td></tr>
+    <tr><td>Composite</td><td>One full-screen draw into the swapchain: lens distortion and chromatic aberration, then
+      AO (with a floor), SSR mixed in by its confidence, the underwater view, bloom, exposure, the grade and the tone
+      map (ACES or AgX). Then the game UI layer (ADR-0088) and the ImGui debug overlay, in the same render pass.</td></tr>
+  </table>
+
+  <div class="shots">
+    <figure class="shot">
+      <img src="img/renderer/lake-ssr.webp" alt="A car driving onto a causeway across a still lake; snowy mountains and clouds are mirrored in the water">
+      <figcaption>Water writes depth and the normal G-buffer (unlike glass), so SSR can find the mountains to
+        reflect in it.</figcaption>
+    </figure>
+    <figure class="shot">
+      <img src="img/renderer/night-towers.webp" alt="Towers at night with lit windows under a starry sky; red aviation beacons glow on the roofs">
+      <figcaption>Night: window panes lit by emission, red beacon lights (real point lights near the camera) blooming
+        in the composite.</figcaption>
+    </figure>
+  </div>
+
+  <div class="note"><p><b>Shaders compiled but not drawn.</b> CMake compiles <code>atmosphere.frag</code>,
+    <code>star.frag</code>, <code>water.vert</code> and <code>water.frag</code> (the procedural-planet passes) to
+    SPIR-V, but nothing in the Vulkan backend loads them at this commit. Water on Vulkan is drawn by
+    <code>mesh.frag</code> through the water pipeline (its <code>Surface::Water</code> and <code>River</code> code), and
+    the sky by <code>sky.frag</code>. The memory note on realism records the matching gotcha: the "scattering" sky
+    model is Metal only.</p></div>
+
+  <h2>Lighting: one BRDF, one set of units</h2>
+  <p>ADR-0017 (2026-06-10) found the lighting in two mismatched halves. Light from the sky (image-based lighting) was
+    proper GGX physically based shading, but the sun and lamps were Blinn-Phong with no 1/π, about three times too
+    hot, and shadows only darkened the direct term. Under a bright sky a fully shadowed pixel kept about 80% of its
+    brightness. The fix had two commitments. One BRDF for everything: <b>Cook-Torrance GGX</b> specular
+    (the GGX distribution, height-correlated Smith visibility, Schlick Fresnel), Lambert/π diffuse, and
+    inverse-square falloff with a windowed range for lamps. And artistic shadow controls that act on visibility, so
+    they hold whatever the shading model.</p>
+<div class="code">
+    <div class="hd"><span>mesh.frag: the BRDF the sun, lamps and the path tracer share</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/shaders/vulkan/mesh.frag#L106-L123">shaders/vulkan/mesh.frag</a></div>
+<pre><span class="c">// ---- BRDF (ported from lighting.metal) ------------------------------------</span>
+float distributionGGX(float NdotH, float a2) {
+    float d = NdotH * NdotH * (a2 - 1.0) + 1.0;
+    return a2 / max(PI * d * d, 1e-6);
+}
+float visibilitySmithGGX(float NdotV, float NdotL, float a2) {
+    float gv = NdotL * sqrt(NdotV * NdotV * (1.0 - a2) + a2);
+    float gl = NdotV * sqrt(NdotL * NdotL * (1.0 - a2) + a2);
+    return 0.5 / max(gv + gl, 1e-5);
+}
+vec3 fresnelSchlickVec(float cosTheta, vec3 f0) {
+    return f0 + (1.0 - f0) * pow(clamp(1.0 - cosTheta, 0.0, 1.0), 5.0);
+}
+float distanceAttenuation(float dist, float range) {
+    float ratio2 = (dist * dist) / max(range * range, 1e-4);
+    float window = clamp(1.0 - ratio2 * ratio2, 0.0, 1.0);
+    return window * window / max(dist * dist, 1e-4);
+}</pre>
+  </div>
+<div class="code">
+    <div class="hd"><span>evaluateLighting: every light, one loop (up to 32 lights); only the sun is shadowed</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/shaders/vulkan/mesh.frag#L820-L859">shaders/vulkan/mesh.frag</a></div>
+<pre>vec3 evaluateLighting(vec3 worldPos, vec3 N, vec3 V, vec3 albedo,
+                      float metallic, float roughness, vec3 f0, vec3 sunShadow) {
+    vec3 directLight = vec3(0.0);
+    float a = max(roughness * roughness, 0.002);
+    float a2 = a * a;
+    float NdotV = max(dot(N, V), 1e-4);
+        <span class="c">// ...</span>
+        float NdotL = max(dot(N, L), 0.0);
+        if (NdotL &lt;= 0.0 || attenuation &lt;= 0.0) continue;
+
+        vec3 H = normalize(L + V);
+        float NdotH = max(dot(N, H), 0.0);
+        float VdotH = max(dot(V, H), 0.0);
+        float D = distributionGGX(NdotH, a2);
+        float Vis = visibilitySmithGGX(NdotV, NdotL, a2);
+        vec3 F = fresnelSchlickVec(VdotH, f0);
+        vec3 specular = D * Vis * F;
+        vec3 diffuse = (1.0 - F) * (1.0 - metallic) * albedo / PI;
+        vec3 sh = (type == 1) ? sunShadow : vec3(1.0);   <span class="c">// only the sun casts shadows</span>
+        directLight += (diffuse + specular) * light.colorOuter.rgb * (attenuation * NdotL) * sh;
+    }</pre>
+  </div>
+  <p>The 32-light cap is real and shapes the city at night: <code>RenderSystem</code> picks the nearest street lamps
+    (20 by default within 160 m), station canopy lights, headlight cones, the flashlight, interior room lights and
+    roof beacons, and fades each lamp in and out as it crosses the edge of that set, so lights do not pop on as you
+    drive. The shader loops every light for every pixel, so this count is "the honest cost knob for night" (the
+    comment in <code>render_system.cpp</code>).</p>
+<div class="code">
+    <div class="hd"><span>The ADR-0017 shadow controls: a tint, and how far a shadow also darkens the sky's light</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/shaders/vulkan/mesh.frag#L1466-L1471">shaders/vulkan/mesh.frag</a></div>
+<pre><span class="c">    // Artistic shadow tint (ADR-0017): occluded direct light + ambient lerp toward</span>
+<span class="c">    // the tint; ambientStrength (shadowTint.w) controls how much the same shadow</span>
+<span class="c">    // darkens IBL (so a bright sky doesn't fill shadows back in). Tint 0 = plain</span>
+<span class="c">    // darkening, identical to the untinted scalar.</span>
+    vec3 directShadow  = mix(vec3(1.0), g.shadowTint.rgb, (1.0 - sunVis) * strength);
+    vec3 ambientShadow = mix(vec3(1.0), g.shadowTint.rgb, (1.0 - sunVis) * g.shadowTint.w);</pre>
+  </div>
+  <p>On Vulkan the sky's light is analytic: the shader evaluates the procedural sky (or an HDR equirect) by normal
+    for the diffuse fill and along the reflection for specular, then applies the split-sum BRDF lookup table baked at
+    start-up (<code>brdf_lut.frag</code>). The baked, prefiltered cubemaps ADR-0017 Phase 3 describes are the Metal
+    path.</p>
+  <figure class="shot">
+    <img src="img/renderer/trees-sun.webp" alt="Broadleaf trees and red maples in a meadow, backlit by a low bright sun with a soft glow round it; mountains in the haze">
+    <figcaption>Leaf and grass transmission (a cheap stand-in for light through thin leaves, ADR-0129) lights the crowns'
+      sunlit rims; the sun's glow is bloom.</figcaption>
+  </figure>
+
+  <h2>What it costs: RT_GPU_TIMES</h2>
+  <p>Profiling the GPU needs timestamps written by the GPU itself. With <code>RT_GPU_TIMES=1</code> the backend
+    writes a timestamp after each stage into a query pool per frame slot, reads it once that slot's fence has passed
+    (so it never stalls), and logs the average every 120 frames as a <code>[gpu]</code> line, together with the CPU
+    time inside <code>endFrame</code>: fence wait, recording, and submit + present.</p>
+<div class="code">
+    <div class="hd"><span>The GPU pass timer: nine marks, one query pool per frame in flight</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/renderer/vulkan/vulkan_renderer.cpp#L690-L700">src/renderer/vulkan/vulkan_renderer.cpp</a></div>
+<pre><span class="c">    // GPU PASS TIMES (RT_GPU_TIMES=1; Glenn: "get a breakdown"): a timestamp after each stage of the frame, one</span>
+<span class="c">    // query pool per frame slot, read when that slot's fence has passed (no stall). Logged every 120 frames.</span>
+    static constexpr int kGpuMarks = 9;   <span class="c">// start, shadows, scene, clouds, bloom, ssao, ssr, occlusion+dof, composite+ui</span>
+    std::array&lt;VkQueryPool, MAX_FRAMES_IN_FLIGHT&gt; gpuTimePool{};
+    std::array&lt;bool, MAX_FRAMES_IN_FLIGHT&gt; gpuTimeWritten{};
+    double gpuTickNs = 0, gpuAccumMs[kGpuMarks] = {};
+    int gpuFrames = 0;
+    double cpuWaitMs = 0, cpuRecordMs = 0, cpuQueueMs = 0;   <span class="c">// endFrame's CPU: fence wait, recording, submit + present</span>
+    void gpuMark(VkCommandBuffer cmd, int k) {
+        if (gpuTimePool[currentFrame]) vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, gpuTimePool[currentFrame], static_cast&lt;uint32_t&gt;(k));
+    }</pre>
+  </div>
+  <p>Two rules make the numbers mean something. Turn vsync off (<code>RT_VSYNC=0</code>): under FIFO presentation
+    every frame time is a multiple of the refresh interval, and ADR-0097 found both builds reading "exactly 50.0 ms" on
+    the test forest. And do not measure with the screen locked: the compositor throttles presentation and the GPU
+    idles (the render-profile memory note).</p>
+
+  <table>
+    <tr><th>Where</th><th>What was measured</th><th>Source</th></tr>
+    <tr><td>island_8_nature, the campus, 2560×1347, pinned eye</td><td>GPU 14.1 ms, of which <b>shadows 9.7</b>;
+      SSAO + SSR + bloom + occlusion together under 0.5. The CPU spent 13.5 ms recording about 700 draws, because every
+      cascade drew the whole queue. After the per-cascade cull: shadows 1.9, GPU 7.0, recording 0.95; frame
+      39 → 21.8 ms (about 26 → 46 fps).</td><td>commit <code>fcbdb2bf</code></td></tr>
+    <tr><td>the same view, after</td><td>scene 3.3 ms, clouds 1.2; CPU encode (the world walk) 8.3 ms</td><td>render-profile
+      memory note (session measurement, not in a commit)</td></tr>
+    <tr><td>recipe_forest, two held poses</td><td>GPU frame "Treetops" 36.7 → 10.8 ms, "Across the ridge" 18.2 → 7.0,
+      after impostors from 150 m and thinner far levels; the many-view impostors themselves about 1 ms</td><td>ADR-0195</td></tr>
+    <tr><td>island_8_nature, above a forest stand</td><td>10.9 ms with the recipe trees, 10.7 with the real_tree
+      forest</td><td>ADR-0197</td></tr>
+  </table>
+  <p>The lesson the memory note draws is the one to keep: profile before guessing. Glenn suspected the post effects;
+    they were nearly free. The cost was shadows, and the CPU rebuilding static things every frame.</p>
+<div class="code">
+    <div class="hd"><span>recordShadowPass: each cascade skips what lies outside its four sides (not near/far: a caster toward the sun still throws its shadow in)</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/renderer/vulkan/vulkan_renderer.cpp#L5190-L5204">src/renderer/vulkan/vulkan_renderer.cpp</a></div>
+<pre>            for (const DrawItem&amp; item : drawQueue) {
+                GpuMesh* m = meshes.get(item.mesh);
+                if (!m || m-&gt;indexCount == 0) continue;
+                if (item.crowd) continue;   <span class="c">// far travellers: beyond the cascades' reach</span>
+                if (item.worldRadius &gt;= 0 &amp;&amp; !shadowCullOff) {
+                    bool out = false;
+                    for (int pi = 0; pi &lt; 4 &amp;&amp; !out; ++pi)
+                        out = planes[pi][0] * item.worldCenter[0] + planes[pi][1] * item.worldCenter[1] +
+                                  planes[pi][2] * item.worldCenter[2] + planes[pi][3] &lt; -item.worldRadius;
+                    if (out) continue;
+                }
+<span class="c">                // Debug-gizmo overlays (FLAG_OVERLAY), ground cover (FLAG_GRASS) and the camera-turned impostor cards</span>
+<span class="c">                // (FLAG_IMPOSTOR_VIEWS: their shadow-only crossed cards cast theirs) cast no shadows.</span>
+                if (item.push.surfaceFlags[1] &amp; (RenderMaterial::FLAG_OVERLAY | RenderMaterial::FLAG_GRASS |
+                                                 RenderMaterial::FLAG_IMPOSTOR_VIEWS)) continue;</pre>
+  </div>
+
+  <h2>Instancing: one draw for a forest</h2>
+  <p>An <b>instanced draw</b> draws one mesh many times in one call, each copy with its own matrix. The engine's
+    <code>InstanceGroup</code> component (one mesh, one material, a list of world matrices) existed from early on, and
+    Metal batched it. Vulkan did not: it drew one <code>vkCmdDrawIndexed</code> per transform with the matrix in a push
+    constant, so every tree and grass patch cost a draw call. ADR-0097 made every Vulkan mesh draw read its model
+    matrix per instance from the frame's instance buffer (binding 1, locations 5 to 8 in <code>mesh.vert</code>).
+    A plain <code>drawMesh</code> is a one-instance draw: one path, not an instanced twin of every pipeline.</p>
+<div class="code">
+    <div class="hd"><span>VulkanRenderer::drawMeshInstanced: the first matrix makes the item, the rest become its instance rows</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/renderer/vulkan/vulkan_renderer.cpp#L7047-L7059">src/renderer/vulkan/vulkan_renderer.cpp</a></div>
+<pre>void VulkanRenderer::drawMeshInstanced(MeshHandle handle, const std::vector&lt;Mat4&gt;&amp; transforms,
+                                       const RenderMaterial&amp; material) {
+<span class="c">    // (bounds: the box round every instance's sphere, then the sphere round that box)</span>
+    if (transforms.empty()) return;
+<span class="c">    // RT_NO_INSTANCING=1: one draw per instance, as before ADR-0097 (A/B frames and timings).</span>
+    static const bool noInstancing = [] { const char* e = std::getenv("RT_NO_INSTANCING"); return e &amp;&amp; e[0] == '1'; }();
+    if (noInstancing) { for (const Mat4&amp; m : transforms) drawMesh(handle, m, material); return; }
+<span class="c">    // One draw for the whole set (ADR-0097): the material and the first transform (which the</span>
+<span class="c">    // transparent sort reads) as drawMesh makes them, then every matrix into the instance rows.</span>
+    drawMesh(handle, transforms.front(), material);
+    DrawItem&amp; item = impl-&gt;drawQueue.back();
+    for (std::size_t i = 1; i &lt; transforms.size(); ++i) impl-&gt;pushInstance(transforms[i]);
+    item.instanceCount = static_cast&lt;uint32_t&gt;(transforms.size());</pre>
+  </div>
+  <table>
+    <tr><th>Scene (vsync off)</th><th>Draws</th><th>Frame time</th></tr>
+    <tr><td>instancing_forest (~7,400 trees, ~18,600 grass patches)</td><td>9,750 → 178</td><td>11.0 → 2.95 ms</td></tr>
+    <tr><td>metro_planned downtown</td><td>10,185 → 4,441</td><td>26.0 → 19.8 ms</td></tr>
+  </table>
+  <p class="cap">ADR-0097. The draws left on metro are unique meshes (building chunks, road cells), which instancing
+    cannot merge. <code>RT_NO_INSTANCING=1</code> restores one draw per instance for A/B.</p>
+  <p>The instance matrix has a spare row. A world transform's bottom row is always (0, 0, 0, 1), so the engine uses
+    it to carry per-instance data to the shader, and the shader puts the row back before using the matrix:</p>
+<div class="code">
+    <div class="hd"><span>mesh.vert: data in the bottom row (grass rank and ground slope; a traffic signal's state)</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/shaders/vulkan/mesh.vert#L79-L93">shaders/vulkan/mesh.vert</a></div>
+<pre>    const bool grass = (pc.surfaceFlags.y &amp; (1u &lt;&lt; 17)) != 0u;   <span class="c">// FLAG_GRASS</span>
+<span class="c">    // Grass clumps carry their random rank in the transform's bottom row (GrassSystem), and their ground's normal</span>
+<span class="c">    // (its x and z); every other mesh's is (0, 0, 0, 1).</span>
+    mat4 M = inModel;
+    float rank = 0.0;
+    vec2 groundXZ = vec2(0.0);
+    if (grass) { rank = M[0][3]; groundXZ = vec2(M[1][3], M[2][3]); M[0][3] = 0.0; M[1][3] = 0.0; M[2][3] = 0.0; }
+<span class="c">    // FLAG_SIGNAL_STATE (bit 20): a traffic signal whose STATE rides the bottom row (0 none, 1 green, 2 amber,</span>
+<span class="c">    // 3 red): the lamp of that colour glows (outColor pushed past 1: mesh.frag reads it as emission). One static</span>
+<span class="c">    // model per signal -- nothing about it is rebuilt but that number.</span>
+    const bool signalState = (pc.surfaceFlags.y &amp; (1u &lt;&lt; 20)) != 0u;
+    float signalLit = 0.0;
+    if (signalState) {
+        const int st = int(M[0][3] + 0.5);
+        M[0][3] = 0.0;</pre>
+  </div>
+  <p>Every traffic signal on the island is therefore one static model plus a number. The price is a rule: any code
+    that reads an instance matrix (culling, bounds, every shader) must treat it as <i>affine</i> and never divide by
+    that row. <code>frustumCullInstances</code> learned that the hard way: dividing by a grass clump's rank moved its
+    culling sphere 4 to 140 m away, and looking down made the grass under you vanish (#50).</p>
+
+  <h3>The draw index</h3>
+  <p>Instancing cut the GPU's draw calls; the CPU still visited everything. The comment in
+    <code>render_system.cpp</code> records the island visiting ~27,000 entities and ~50,000 instance groups a frame to
+    draw ~340 and ~410, 6 ms of encode. <code>DrawIndex</code> (<code>systems/draw_index.h</code>) buckets static
+    drawables in 200 m cells; a frame tests the cells and visits only the members of visible ones, and a far cell
+    hidden whole behind nearer geometry is skipped (<code>RT_NO_DRAW_INDEX=1</code> for A/B).</p>
+
+  <h2>Two vertex layouts</h2>
+  <p>Every mesh used to pay 56 bytes a vertex: float3 position, normal, tangent and colour, and a float2 UV. On
+    metro_planned that was about 1.7 GB. ADR-0096 made a 32-byte <b>standard vertex</b> the default, kept the 56-byte
+    one where the data needs it, and chose per mesh at upload.</p>
+
+  <div class="diagram">
+    <svg viewBox="0 0 900 230" role="img" aria-label="Byte layouts. Full vertex, 56 bytes: position 12, normal 12, tangent 12, UV 8, colour 12. Standard vertex, 32 bytes: position 12, octahedral normal 4, octahedral tangent 4, UV 8, RGBA8 colour 4.">
+      <g font-family="system-ui, sans-serif" font-size="12" text-anchor="middle">
+        <text x="20" y="40" fill="#cfe4ff" text-anchor="start" font-size="13">GpuVertex (full)</text>
+        <text x="20" y="58" fill="#93a6ba" text-anchor="start">56 bytes</text>
+        <rect x="160" y="28" width="168" height="40" fill="#131a24" stroke="#2c3d50"/><text x="244" y="52" fill="#cfe4ff">position f32×3 · 12</text>
+        <rect x="328" y="28" width="168" height="40" fill="#131a24" stroke="#2c3d50"/><text x="412" y="52" fill="#cfe4ff">normal f32×3 · 12</text>
+        <rect x="496" y="28" width="168" height="40" fill="#131a24" stroke="#2c3d50"/><text x="580" y="52" fill="#cfe4ff">tangent f32×3 · 12</text>
+        <rect x="664" y="28" width="112" height="40" fill="#131a24" stroke="#2c3d50"/><text x="720" y="52" fill="#cfe4ff">UV f32×2 · 8</text>
+        <rect x="776" y="28" width="112" height="40" fill="#131a24" stroke="#2c3d50"/><text x="832" y="52" fill="#cfe4ff">colour ×3 · 12</text>
+        <text x="20" y="120" fill="#cfe4ff" text-anchor="start" font-size="13">GpuVertexPacked</text>
+        <text x="20" y="138" fill="#93a6ba" text-anchor="start">32 bytes (standard)</text>
+        <rect x="160" y="108" width="168" height="40" fill="#131a24" stroke="#3b82f6"/><text x="244" y="132" fill="#cfe4ff">position f32×3 · 12</text>
+        <rect x="328" y="108" width="56" height="40" fill="#131a24" stroke="#3b82f6"/><text x="356" y="126" fill="#cfe4ff">N oct</text><text x="356" y="141" fill="#93a6ba" font-size="11">4</text>
+        <rect x="384" y="108" width="56" height="40" fill="#131a24" stroke="#3b82f6"/><text x="412" y="126" fill="#cfe4ff">T oct</text><text x="412" y="141" fill="#93a6ba" font-size="11">4</text>
+        <rect x="440" y="108" width="112" height="40" fill="#131a24" stroke="#3b82f6"/><text x="496" y="132" fill="#cfe4ff">UV f32×2 · 8</text>
+        <rect x="552" y="108" width="56" height="40" fill="#131a24" stroke="#3b82f6"/><text x="580" y="126" fill="#cfe4ff">RGBA8</text><text x="580" y="141" fill="#93a6ba" font-size="11">4</text>
+        <text x="740" y="126" fill="#e6c07b">−24 bytes a vertex</text>
+        <g fill="#93a6ba" text-anchor="start">
+          <text x="160" y="178">position stays float: streets kilometres from the origin need it</text>
+          <text x="160" y="196">normal, tangent: octahedral snorm16 pairs, ~0.003° error</text>
+          <text x="160" y="214">UV stays float: world-planar UVs run to thousands. Tint 8-bit: [0, 1] only</text>
+        </g>
+      </g>
+    </svg>
+  </div>
+  <p class="cap">The two layouts, drawn to scale (one byte = 14 px). An <b>octahedral</b> encoding folds a unit
+    vector onto a square so two numbers hold it.</p>
+<div class="code">
+    <div class="hd"><span>The standard vertex, and the test that picks a layout per mesh</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/renderer/vulkan/vulkan_renderer.cpp#L93-L118">src/renderer/vulkan/vulkan_renderer.cpp</a></div>
+<pre>struct GpuVertexPacked {
+    float position[3];
+    int16_t normal[2];    <span class="c">// octahedral, snorm16</span>
+    int16_t tangent[2];   <span class="c">// octahedral, snorm16</span>
+    float texcoord[2];
+    uint8_t color[4];     <span class="c">// unorm8; alpha unused</span>
+};
+static_assert(sizeof(GpuVertexPacked) == 32, "the standard vertex is 32 bytes");
+<span class="c">// ...</span>
+enum class VertexFit { Packed, FullHdrColor, FullTangentData };
+VertexFit vertexFitFor(const RenderMesh&amp; mesh) {
+    if (mesh.tangentIsData) return VertexFit::FullTangentData;
+    for (const Vertex&amp; v : mesh.vertices) {
+        const Vec3&amp; c = v.color;
+        if (c.x &lt; 0 || c.y &lt; 0 || c.z &lt; 0 || c.x &gt; 1.0001 || c.y &gt; 1.0001 || c.z &gt; 1.0001) return VertexFit::FullHdrColor;
+    }
+    return VertexFit::Packed;
+}</pre>
+  </div>
+  <p>Two things decided the shape. Terrain's CDLOD tiles use the tangent slot for their morph target, a
+    <i>position</i>, so a mesh says so (<code>RenderMesh::tangentIsData</code>) and keeps the full layout. The ADR is
+    explicit that this is declared, not guessed from tangent length, because generators emit raw edge vectors 3 to 5 m
+    long. In the shader there is one <code>mesh.vert</code> with a <code>kPackedVertex</code> specialisation constant,
+    and every pipeline that reads mesh vertices has a packed twin; a draw binds the twin its mesh needs.</p>
+  <div class="note history"><p><b>Packing moved off the render thread.</b> The octahedral encode costs more than a
+    float copy, and packing on the render thread doubled a streamed detail cell's commit (11 → 24 ms). So
+    <code>Renderer::prepareMesh</code> packs on any thread with no device calls and <code>uploadPrepared</code> only
+    copies; the residency worker prepares building cells. A detail cell then committed in 1.7 ms (slowest 5.4). On
+    metro_planned the layout saved 641 MB; frames match the full layout to within 1/255 (ADR-0096). Later, ADR-0224
+    made the baked bundle store exactly this vertex, with the same encoders (<code>engine/vertex_pack.h</code>).</p></div>
+
+  <h2>GPU memory</h2>
+  <p>The RTX 3080 has 10 GB. On 2026-09-24 the new <code>mem?</code> command showed metro_planned holding 6.5 GB of
+    meshes in <b>25,394 separate allocations</b>, one per vertex buffer and one per index buffer, and uploads started
+    failing near 9.85 GB although the data was 6.6 GB. The overhead was in the allocations, not the data. Four changes
+    the same day took the peak from 9.6 GB to 3.6 GB.</p>
+  <table>
+    <tr><th>Change</th><th>What it did</th><th>metro_planned</th></tr>
+    <tr><td>ADR-0094 (<code>979a1f16</code>)</td><td>One allocator: AMD's Vulkan Memory Allocator suballocates meshes
+      and textures. One upload queue: a persistent 64 MB staging ring, one command buffer, submitted at the start of a
+      frame. Deferred destruction: a removed mesh is freed two frames later instead of
+      <code>vkDeviceWaitIdle</code>, which used to stall the GPU for every evicted terrain tile.</td><td>allocations 25,394 →
+      28 blocks; upload submits ~25,000 → 109; peak 9.6 → 8.1 GB (incl. ~1.6 GB of desktop); load 225 → 180 s</td></tr>
+    <tr><td>ADR-0095 residency (<code>b4d985ea</code>)</td><td>GPU memory bounded by the camera, not the world:
+      <code>engine::Residency</code> streams building cells near the camera and lets far ones go, keeping the coarse
+      stand-ins.</td><td>all meshes 6.5 → 2.7 GB; peak 9.0 → 5.2 GB</td></tr>
+    <tr><td>deck welds (<code>7eeb25ea</code>)</td><td>Road deck vertices shared between triangles; undersides only where
+      a deck stands clear of the ground.</td><td>meshes 2.7 → 1.9 GB; peak 5.2 → 4.2 GB</td></tr>
+    <tr><td>ADR-0096 (<code>04d4d5fb</code>)</td><td>The 32-byte standard vertex, plus the kerb pass that dropped
+      hidden slab sides.</td><td>641 MB saved; meshes 1,078 MB; peak 4.2 → 3.6 GB</td></tr>
+  </table>
+  <p class="cap">From the ADRs and commit messages. The peaks include the desktop's share of the card. Each row was measured on the
+    build of its moment, so the figures do not chain exactly: the residency commit starts from 9.0 GB, not 8.1.</p>
+  <p>ADR-0224 is the disk side of the same story: island_8_nature's bundle fell from 8.59 GB to 1.62 GB by storing
+    building parts and city cell meshes as the GPU's own vertex and compressing them with meshoptimizer, with the same
+    look. Streaming itself (what is resident, and when) is a separate system.</p>
+
+  <h2>Occlusion culling</h2>
+  <p><b>Occlusion culling</b> skips things hidden behind other things: the forest behind a hill, the city behind the
+    building in front of you. Frustum culling alone cannot do that. ADR-0100 does it on the CPU against a recent frame's
+    depth, with no waiting.</p>
+
+  <div class="diagram">
+    <svg viewBox="0 0 900 300" role="img" aria-label="Occlusion loop: frame N's scene depth is reduced by a compute shader to 16-pixel tiles holding the farthest depth, written to a host-visible buffer. Two to three frames later, when that frame's fence has passed, it becomes the occlusion snapshot. RenderSystem checks the camera has not moved more than 0.75 m or turned more than 2.5 degrees, then tests each box: hidden boxes draw shadow-only, hidden grass is dropped, others draw normally.">
+      <defs><marker id="a5" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" fill="#6f8fb0"/></marker></defs>
+      <g font-family="system-ui, sans-serif" font-size="13" text-anchor="middle">
+        <text x="20" y="22" fill="#e6c07b" text-anchor="start" font-size="12">GPU, frame N</text>
+        <rect x="20" y="34" width="180" height="64" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="110" y="60" fill="#cfe4ff">scene depth</text>
+        <text x="110" y="80" fill="#93a6ba" font-size="12">D32, reverse-Z</text>
+        <rect x="250" y="34" width="200" height="64" rx="9" fill="#131a24" stroke="#3b82f6"/>
+        <text x="350" y="60" fill="#cfe4ff">occlusion_reduce.comp</text>
+        <text x="350" y="80" fill="#93a6ba" font-size="12">farthest depth per 16 px tile</text>
+        <rect x="500" y="34" width="180" height="64" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="590" y="60" fill="#cfe4ff">host buffer [slot]</text>
+        <text x="590" y="80" fill="#93a6ba" font-size="12">+ that frame's viewProj</text>
+        <text x="20" y="118" fill="#e6c07b" text-anchor="start" font-size="12">CPU, frame N + 2 (its fence has passed)</text>
+        <rect x="700" y="128" width="185" height="64" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="792" y="154" fill="#cfe4ff">snapshot</text>
+        <text x="792" y="174" fill="#93a6ba" font-size="12">occlusionDepth()</text>
+        <rect x="450" y="128" width="210" height="64" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="555" y="154" fill="#cfe4ff">occlusionUsable?</text>
+        <text x="555" y="174" fill="#93a6ba" font-size="12">moved ≤ 0.75 m, turned ≤ 2.5°</text>
+        <rect x="190" y="128" width="220" height="64" rx="9" fill="#131a24" stroke="#3b82f6"/>
+        <text x="300" y="154" fill="#cfe4ff">occludedBox(box + slack)</text>
+        <text x="300" y="174" fill="#93a6ba" font-size="12">behind every tile it covers?</text>
+        <rect x="20" y="224" width="250" height="60" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="145" y="248" fill="#cfe4ff">hidden: FLAG_SHADOW_ONLY</text>
+        <text x="145" y="268" fill="#93a6ba" font-size="12">shadow pass draws it; grass dropped</text>
+        <rect x="320" y="224" width="200" height="60" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="420" y="248" fill="#cfe4ff">visible, or in doubt</text>
+        <text x="420" y="268" fill="#93a6ba" font-size="12">drawn as usual</text>
+        <line x1="200" y1="66" x2="246" y2="66" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#a5)"/>
+        <line x1="450" y1="66" x2="496" y2="66" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#a5)"/>
+        <path d="M680,66 C760,66 792,90 792,124" stroke="#6f8fb0" stroke-width="1.6" fill="none" marker-end="url(#a5)"/>
+        <line x1="700" y1="160" x2="664" y2="160" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#a5)"/>
+        <line x1="450" y1="160" x2="414" y2="160" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#a5)"/>
+        <line x1="260" y1="192" x2="190" y2="220" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#a5)"/>
+        <line x1="340" y1="192" x2="400" y2="220" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#a5)"/>
+        <text x="702" y="250" fill="#93a6ba" font-size="12" text-anchor="start">a snapshot that no longer</text>
+        <text x="702" y="268" fill="#93a6ba" font-size="12" text-anchor="start">stands: frustum culling only</text>
+      </g>
+    </svg>
+  </div>
+  <p class="cap">ADR-0100's loop. The depth is two to three frames old when it is read, so nothing ever waits on the
+    GPU for it; the test is built to be conservative about that age.</p>
+<div class="code">
+    <div class="hd"><span>occlusion_reduce.comp: one thread a tile; reverse-Z, so the farthest depth is the smallest</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/shaders/vulkan/occlusion_reduce.comp#L17-L28">shaders/vulkan/occlusion_reduce.comp</a></div>
+<pre>void main() {
+    ivec2 o = ivec2(gl_GlobalInvocationID.xy);
+    if (o.x &gt;= pc.outSize.x || o.y &gt;= pc.outSize.y) return;
+    ivec2 base = o * pc.tile;
+    float farthest = 1.0;
+    for (int y = 0; y &lt; pc.tile; ++y)
+        for (int x = 0; x &lt; pc.tile; ++x) {
+            ivec2 p = min(base + ivec2(x, y), pc.inSize - 1);
+            farthest = min(farthest, texelFetch(depthTex, p, 0).r);
+        }
+    outBuf.depth[o.y * pc.outSize.x + o.x] = farthest;
+}</pre>
+  </div>
+<div class="code">
+    <div class="hd"><span>occludedBox: project the box with that frame's transform; hidden only if it is behind every tile</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/engine/occlusion.cpp#L20-L51">src/engine/occlusion.cpp</a></div>
+<pre>bool occludedBox(const OcclusionDepth&amp; o, const Vec3&amp; loIn, const Vec3&amp; hiIn, double slack) {
+    const Vec3 lo = loIn - Vec3(slack, slack, slack), hi = hiIn + Vec3(slack, slack, slack);
+    const Mat4&amp; m = o.viewProj;
+    double x0 = 1e30, y0 = 1e30, x1 = -1e30, y1 = -1e30, nearest = -1e30;
+        <span class="c">// ...</span>
+        if (cw &lt;= 1e-4) return false;   <span class="c">// reaches behind the eye: visible</span>
+        const double iw = 1.0 / cw;
+        <span class="c">// ...</span>
+        nearest = std::max(nearest, cz * iw);   <span class="c">// reverse-Z: larger is nearer</span>
+    }
+    if (nearest &gt;= 1.0) return false;           <span class="c">// at the near plane</span>
+    <span class="c">// ...</span>
+    if ((tx1 - tx0 + 1) * (ty1 - ty0 + 1) &gt; kMaxTiles) return false;
+    for (int ty = ty0; ty &lt;= ty1; ++ty)
+        for (int tx = tx0; tx &lt;= tx1; ++tx)
+            if (nearest &gt;= o.depth[static_cast&lt;std::size_t&gt;(ty) * o.width + tx]) return false;   <span class="c">// not behind this tile</span>
+    return true;
+}</pre>
+  </div>
+  <p>"Anything in doubt is visible" is the design rule: a box reaching behind the eye, one covering more than 48×48
+    tiles, or a camera more than 0.75 m or 2.5° from where the depth was drawn. The box is grown first by how far the
+    camera has moved since (the slack), so parallax cannot uncover it. And a hidden thing still casts its shadow: a
+    tree behind a ridge still shades the ridge.</p>
+<div class="code">
+    <div class="hd"><span>RenderSystem: a hidden entity is still drawn, but only into the shadow maps</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/engine/systems/render_system.cpp#L366-L378">src/engine/systems/render_system.cpp</a></div>
+<pre>            if (occ &amp;&amp; !(r.material.flags &amp; RenderMaterial::FLAG_OVERLAY)) {
+                ++occTested;
+                if (occludedBox(*occ, worldMin, worldMax, occSlack)) {
+                    ++occCulled;
+<span class="c">                    // hidden from the camera, but its shadow may fall where the camera sees</span>
+                    if (r.material.opacity &gt;= 1.0f &amp;&amp; !(r.material.flags &amp; RenderMaterial::FLAG_GRASS)) {
+                        RenderMaterial shadowOnly = r.material;
+                        shadowOnly.flags |= RenderMaterial::FLAG_SHADOW_ONLY;
+                        ctx.renderer.drawMesh(r.mesh, model, shadowOnly);
+                    }
+                    return;
+                }
+            }</pre>
+  </div>
+  <table>
+    <tr><th>Walk (tools/walk_probe.py)</th><th>Result</th></tr>
+    <tr><td>river_valley at 5 m/s</td><td>~215 of 800 instance groups hidden a frame; median frame 4.6 → 4.1 ms
+      (3.5 without the shadow-only draws, but shadows would pop)</td></tr>
+    <tr><td>metro_planned from the centre</td><td>~10,000 of 10,500 entities hidden; main-pass draws 9,850 → 560; CPU
+      render phase 7.2 → 6.4 ms</td></tr>
+  </table>
+  <p class="cap">ADR-0100. Screenshots match with occlusion on and off. Metal has no readback, so it culls by frustum
+    only.</p>
+
+  <h2>Levels of detail: impostors and tier crossfades</h2>
+  <p>A <b>level of detail</b> (LOD) is a cheaper stand-in drawn when something is far away. The engine has two
+    families, and both swap without a visible pop using the same trick.</p>
+  <h3>Forests: models near, impostors far (ADR-0129, 0193, 0195)</h3>
+  <p>An <b>impostor</b> is a flat card carrying a picture of the real object. ADR-0129 drew far trees as two crossed
+    side cards and a top card, merged per 256 m cell (one draw per cell), with near trees instanced per 512 m cell.
+    ADR-0193 replaced the crossed cards with <b>many-view impostors</b>: each tree variant is baked from 8 directions
+    round it at 3 elevations (0°, 35°, 70°) into an atlas; the card turns to face the camera, and the fragment shader
+    blends the four nearest baked views by the camera's direction in the tree's frame. A card that turns to the camera
+    cannot cast a sensible shadow, so the shadow pass skips it and two shadow-only crossed cards cast it instead.
+    ADR-0195 then measured recipe_forest at about 27 fps and counted about 120 million triangles a frame, and
+    the shadow pass again; impostors from 150 m and thinner needle cards took the GPU frame from 36.7 to 10.8 ms.</p>
+  <figure class="shot">
+    <img src="img/renderer/forest-impostors.webp" alt="A conifer forest seen from above, rolling to the horizon">
+    <figcaption>A forest from the air (a tree-lab probe shot, October). In the forests, near trees are instanced
+      models and far ones impostor cards, crossfaded at the boundary.</figcaption>
+  </figure>
+
+  <h3>The dither band</h3>
+  <p>Crossfading two opaque models with alpha blending would need sorting and would double the cost. Instead
+    <code>FLAG_LOD_BAND</code> gives a draw a distance band and <b>dithers</b> it: across the band each pixel is kept
+    or discarded by a 4×4 Bayer threshold (a fixed pattern of 16 thresholds that reads as a fine screen door).
+    The outgoing model keeps pixels under its share, the incoming one pixels above; because the tests are
+    complementary, every pixel goes to exactly one of them.</p>
+
+  <div class="diagram">
+    <svg viewBox="0 0 900 250" role="img" aria-label="Left: a 4 by 4 Bayer matrix with values 0 to 15. At a share of one half, cells below 8 are drawn by the outgoing tier and cells 8 and above by the incoming one. Right: over 0.35 seconds the outgoing share falls from 1 to 0 while the incoming share rises from 0 to 1.">
+      <g font-family="system-ui, sans-serif" font-size="13" text-anchor="middle">
+        <text x="125" y="22" fill="#cfe4ff">4×4 Bayer thresholds, share ½</text>
+        <g font-size="14">
+          <rect x="45" y="36" width="40" height="40" fill="#1b3350" stroke="#2c3d50"/><text x="65" y="61" fill="#8ec5ff">0</text>
+          <rect x="85" y="36" width="40" height="40" fill="#3a3220" stroke="#2c3d50"/><text x="105" y="61" fill="#e6c07b">8</text>
+          <rect x="125" y="36" width="40" height="40" fill="#1b3350" stroke="#2c3d50"/><text x="145" y="61" fill="#8ec5ff">2</text>
+          <rect x="165" y="36" width="40" height="40" fill="#3a3220" stroke="#2c3d50"/><text x="185" y="61" fill="#e6c07b">10</text>
+          <rect x="45" y="76" width="40" height="40" fill="#3a3220" stroke="#2c3d50"/><text x="65" y="101" fill="#e6c07b">12</text>
+          <rect x="85" y="76" width="40" height="40" fill="#1b3350" stroke="#2c3d50"/><text x="105" y="101" fill="#8ec5ff">4</text>
+          <rect x="125" y="76" width="40" height="40" fill="#3a3220" stroke="#2c3d50"/><text x="145" y="101" fill="#e6c07b">14</text>
+          <rect x="165" y="76" width="40" height="40" fill="#1b3350" stroke="#2c3d50"/><text x="185" y="101" fill="#8ec5ff">6</text>
+          <rect x="45" y="116" width="40" height="40" fill="#1b3350" stroke="#2c3d50"/><text x="65" y="141" fill="#8ec5ff">3</text>
+          <rect x="85" y="116" width="40" height="40" fill="#3a3220" stroke="#2c3d50"/><text x="105" y="141" fill="#e6c07b">11</text>
+          <rect x="125" y="116" width="40" height="40" fill="#1b3350" stroke="#2c3d50"/><text x="145" y="141" fill="#8ec5ff">1</text>
+          <rect x="165" y="116" width="40" height="40" fill="#3a3220" stroke="#2c3d50"/><text x="185" y="141" fill="#e6c07b">9</text>
+          <rect x="45" y="156" width="40" height="40" fill="#3a3220" stroke="#2c3d50"/><text x="65" y="181" fill="#e6c07b">15</text>
+          <rect x="85" y="156" width="40" height="40" fill="#1b3350" stroke="#2c3d50"/><text x="105" y="181" fill="#8ec5ff">7</text>
+          <rect x="125" y="156" width="40" height="40" fill="#3a3220" stroke="#2c3d50"/><text x="145" y="181" fill="#e6c07b">13</text>
+          <rect x="165" y="156" width="40" height="40" fill="#1b3350" stroke="#2c3d50"/><text x="185" y="181" fill="#8ec5ff">5</text>
+        </g>
+        <rect x="45" y="212" width="14" height="14" fill="#1b3350" stroke="#2c3d50"/><text x="64" y="224" fill="#93a6ba" font-size="12" text-anchor="start">outgoing tier</text>
+        <rect x="150" y="212" width="14" height="14" fill="#3a3220" stroke="#2c3d50"/><text x="169" y="224" fill="#93a6ba" font-size="12" text-anchor="start">incoming</text>
+        <text x="600" y="22" fill="#cfe4ff">a tier switch, faded over time (ADR-0226)</text>
+        <line x1="360" y1="190" x2="860" y2="190" stroke="#2c3d50"/>
+        <line x1="360" y1="40" x2="360" y2="190" stroke="#2c3d50"/>
+        <text x="350" y="54" fill="#93a6ba" font-size="12" text-anchor="end">1</text>
+        <text x="350" y="194" fill="#93a6ba" font-size="12" text-anchor="end">0</text>
+        <path d="M360,50 L460,50 L760,180 L860,180" stroke="#8ec5ff" stroke-width="2.5" fill="none"/>
+        <path d="M360,180 L460,180 L760,50 L860,50" stroke="#e6c07b" stroke-width="2.5" fill="none"/>
+        <line x1="460" y1="196" x2="460" y2="40" stroke="#2c3d50" stroke-dasharray="4 4"/>
+        <line x1="760" y1="196" x2="760" y2="40" stroke="#2c3d50" stroke-dasharray="4 4"/>
+        <text x="460" y="214" fill="#93a6ba" font-size="12">distance test flips</text>
+        <text x="760" y="214" fill="#93a6ba" font-size="12">+0.35 s</text>
+        <text x="600" y="240" fill="#93a6ba" font-size="12">shares a and 1 − a at every moment: no hole, no double draw</text>
+        <text x="410" y="44" fill="#8ec5ff" font-size="12">out</text>
+        <text x="410" y="174" fill="#e6c07b" font-size="12">in</text>
+      </g>
+    </svg>
+  </div>
+  <p class="cap">Left: which pixels each tier keeps when each holds half. Right: the city tier crossfade drives the
+    share by time, not by distance.</p>
+<div class="code">
+    <div class="hd"><span>mesh.frag: the band test, complementary for the tier going out and the one coming in</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/shaders/vulkan/mesh.frag#L1013-L1028">shaders/vulkan/mesh.frag</a></div>
+<pre><span class="c">    // FLAG_LOD_BAND (bit 19, ADR-0129): drawn only inside a distance band, dithered at its edges, so a</span>
+<span class="c">    // near model and its far impostor crossfade per pixel (features[3] = in0, in1, out0, out1)</span>
+    if ((pc.surfaceFlags.y &amp; (1u &lt;&lt; 19)) != 0u) {
+        const vec4 b = pc.features[3];
+        const float d = distance(inWorldPos, g.cameraPosition.xyz);
+<span class="c">        // a 4x4 Bayer threshold: the band reads as a fine screen-door, not noise</span>
+        const float bayer[16] = float[16](0.0, 8.0, 2.0, 10.0, 12.0, 4.0, 14.0, 6.0, 3.0, 11.0, 1.0, 9.0, 15.0, 7.0, 13.0, 5.0);
+        const ivec2 q = ivec2(gl_FragCoord.xy) &amp; 3;
+        const float thr = (bayer[q.y * 4 + q.x] + 0.5) / 16.0;
+<span class="c">        // COMPLEMENTARY edges: a fade-OUT keeps the pixels under its threshold, a fade-IN those above</span>
+<span class="c">        // (1 - thr), so a model fading out and its impostor fading in over the same band split every</span>
+<span class="c">        // pixel between them. Both testing the same threshold kept the same pixels and dropped the rest:</span>
+<span class="c">        // mid-band half the pixels showed neither -- a see-through ring of trees (review, #rendering).</span>
+        if (b.y &gt; b.x &amp;&amp; smoothstep(b.x, b.y, d) &lt;= 1.0 - thr) discard;
+        if (b.w &gt; b.z &amp;&amp; 1.0 - smoothstep(b.z, b.w, d) &lt;= thr) discard;
+    }</pre>
+  </div>
+  <div class="note history"><p><b>A see-through ring.</b> The comment above records the bug that made the thresholds
+    complementary: both tiers first tested the same threshold, so mid-band they kept the same pixels and dropped the
+    rest, and half the pixels showed neither model. The test <code>a_tier_crossfade_splits_every_pixel_between_the_two_tiers</code>
+    guards it now.</p></div>
+
+  <h3>City tiers crossfade in time (ADR-0226)</h3>
+  <p>A building cell (250 m) has three tiers: full detail, flat facades from 300 m, a mass-box stand-in from 950 m.
+    The switch used to happen in one frame, a whole cell at a time. A spatial band would have drawn a cell's detail out
+    to ~480 m and discarded most of it, about 2.5× the detail cells. So the fade runs over <b>time</b>: when a cell's
+    distance test flips while it is on screen, <code>RenderSystem</code> fades it over 0.35 s and expresses the share
+    as a band so wide (100 km) that the same share holds at every pixel of the cell. No shader change.</p>
+<div class="code">
+    <div class="hd"><span>tierFadeBand: turn a share of pixels into the existing LOD band</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/engine/systems/render_system.cpp#L68-L79">src/engine/systems/render_system.cpp</a></div>
+<pre>void tierFadeBand(RenderMaterial&amp; m, double dist, float share, bool coming) {
+<span class="c">    // the dither's share as a band so wide (kBand) that it reads the same at every pixel of a cell: smoothstep(e0,</span>
+<span class="c">    // e0 + kBand, d) = s at d = dist when e0 = dist - t kBand, t = smoothstep^-1(s). Coming in keeps the pixels the</span>
+<span class="c">    // band's fade-in keeps (a share `share`), going out those its fade-out keeps: complementary thresholds</span>
+<span class="c">    // (mesh.frag), so a pair at shares a and 1 - a covers every pixel once.</span>
+    constexpr double kBand = 1.0e5;
+    auto inv = [](double s) { return 0.5 - std::sin(std::asin(1.0 - 2.0 * s) / 3.0); };
+    m.flags |= RenderMaterial::FLAG_LOD_BAND;
+    const double e0 = dist - inv(coming ? share : 1.0 - share) * kBand;
+    if (coming) { m.lodIn0 = static_cast&lt;float&gt;(e0); m.lodIn1 = static_cast&lt;float&gt;(e0 + kBand); m.lodOut0 = m.lodOut1 = 0.0f; }
+    else { m.lodOut0 = static_cast&lt;float&gt;(e0); m.lodOut1 = static_cast&lt;float&gt;(e0 + kBand); m.lodIn0 = m.lodIn1 = 0.0f; }
+}</pre>
+  </div>
+  <p>Measured on an island_8_nature flight (40 m up, 30 m/s): p50 13.9 / p99 24.6 ms with the fades, 14.0 / 24.8
+    without. <code>RT_NO_TIER_FADE=1</code> pops as before; <code>RT_TIER_FADE_S=6</code> slows a fade enough to see
+    it in a screenshot. Vulkan only: <code>Renderer::supportsLodBand()</code> is false elsewhere, and without the band
+    both tiers would draw whole at once.</p>
+
+  <h2>Moving instances drawn between steps (ADR-0240)</h2>
+  <p>The simulation runs at a fixed 60 Hz; the screen runs at whatever it runs. Entities are drawn between their last
+    two steps' poses by the frame's <code>interpolation</code> alpha. Instance groups had no such thing, so the city's
+    cars, baked into groups in the fixed step, froze on every frame that ran no step: at 75 fps, 60 of 300 frames
+    (Glenn: "buses and cars sometimes shake. Their position is not stable. Trains actually appear very stable in
+    contrast"). Trains were placed per frame, which is why they glided.</p>
+  <p>Now an <code>InstanceGroup</code> can name its instances (<code>ids</code>), keeps the last bake beside this one,
+    and <code>RenderSystem</code> blends each named instance between them. A car body is keyed by its id; its glass,
+    driver, riders and lamps take the body's id plus a part number, so they move as one.</p>
+<div class="code">
+    <div class="hd"><span>RenderSystem::drawGroup: each named instance between its last pose and this one</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/engine/systems/render_system.cpp#L454-L486">src/engine/systems/render_system.cpp</a></div>
+<pre>            const std::vector&lt;Mat4&gt;* drawn = &amp;g.transforms;
+            static const bool noLerp = std::getenv("RT_NO_INSTANCE_LERP") != nullptr;   <span class="c">// the A/B: as baked</span>
+            if (!noLerp &amp;&amp; !g.ids.empty() &amp;&amp; g.ids.size() == g.transforms.size() &amp;&amp; !g.prevTransforms.empty() &amp;&amp;
+                g.prevIds.size() == g.prevTransforms.size() &amp;&amp; alpha &lt; 1.0) {
+                lerpScratch_.resize(g.transforms.size());
+                    <span class="c">// ...</span>
+                    Mat4&amp; out = lerpScratch_[i];
+                    out = g.transforms[i];
+                    if (!from) continue;   <span class="c">// new this step: where it is</span>
+<span class="c">                    // a step apart is a few centimetres and a degree or two: blending the matrix is the blend of</span>
+<span class="c">                    // the poses (the columns stay a rotation to well within a pixel); a jump (a placement, a</span>
+<span class="c">                    // teleport) is drawn where it landed</span>
+                    const Real jx = out.m[0][3] - from-&gt;m[0][3], jz = out.m[2][3] - from-&gt;m[2][3];
+                    if (jx * jx + jz * jz &gt; 25.0) continue;
+                    for (int r = 0; r &lt; 3; ++r)
+                        for (int c = 0; c &lt; 4; ++c)
+                            out.m[r][c] = from-&gt;m[r][c] + (out.m[r][c] - from-&gt;m[r][c]) * alpha;
+                }
+                drawn = &amp;lerpScratch_;
+            }</pre>
+  </div>
+  <table>
+    <tr><th>Camera jerk in the bus's own frame (bus 41, 600 frames)</th><th>before</th><th>after</th></tr>
+    <tr><td>third person</td><td>65.1 mm</td><td>1.5 mm</td></tr>
+    <tr><td>first person</td><td>128.3 mm</td><td>14.8 mm</td></tr>
+  </table>
+  <p class="cap">ADR-0240. Frozen frames for vehicles and the camera: 60 → 0. <code>RT_NO_INSTANCE_LERP=1</code> is the
+    A/B. The remaining 15 mm in first person is open in the ADR.</p>
+
+  <h2>Debug lines and the game UI: two things drawn on top</h2>
+  <p><b>Debug draw</b> (ADR-0067) lets any system scribble lines, boxes, spheres and axes into
+    <code>FrameContext::debug</code>. Rather than writing a line pipeline for three backends,
+    <code>buildDebugLineMesh</code> bakes the list into camera-facing ribbon quads whose width grows with distance (so
+    they keep a roughly constant thickness on screen), and <code>DebugDrawSystem</code> draws that as one ordinary mesh
+    with <code>FLAG_OVERLAY</code>. It worked on every backend the day it landed, with zero backend code.</p>
+<div class="code">
+    <div class="hd"><span>DebugDraw: an immediate-mode line list, baked to ribbons</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/engine/debug_draw.h#L24-L80">src/engine/debug_draw.h</a></div>
+<pre>class DebugDraw {
+public:
+    struct Line {
+        Vec3 a, b;
+        Vec3 color;
+        Real ttl;   <span class="c">// seconds left; &lt;= 0 means "this frame only"</span>
+    };
+
+    void line(const Vec3&amp; a, const Vec3&amp; b, const Vec3&amp; color,
+              Real seconds = 0);
+<span class="c">// ...</span>
+<span class="c">// Bake a line list into camera-facing ribbon quads (two triangles per line),</span>
+<span class="c">// wound to front-face the camera per the engine's clockwise convention, line</span>
+<span class="c">// color in Vertex::color. Ribbon half-width scales with distance to the</span>
+<span class="c">// camera so lines keep a roughly constant on-screen thickness;</span>
+<span class="c">// `pixelScale` ~ halfWidth per meter of camera distance. Degenerate</span>
+<span class="c">// (zero-length) lines are skipped.</span>
+RenderMesh buildDebugLineMesh(const std::vector&lt;DebugDraw::Line&gt;&amp; lines,
+                              const Vec3&amp; cameraPosition,
+                              Real pixelScale = 0.002);</pre>
+  </div>
+  <p>The <b>game UI layer</b> (ADR-0088) is the opposite case. <code>FLAG_OVERLAY</code> meshes go through the lit HDR
+    pipeline, so exposure, bloom and fog would act on a map held up at dusk. <code>Renderer::submitUi</code> takes a
+    list of textured quads in screen pixels, and Vulkan draws them in the composite pass after the tone map and before
+    ImGui. The map, the HUD and the wrist watch's dial all submit through it. Metal and WebGPU draw nothing for it
+    yet.</p>
+
+  <h2>How it got here</h2>
+  <div class="note history"><p><b>June: Metal first, the seam before the second backend.</b> The path tracer and the
+    Metal viewer shared the first day; ADR-0001 set the seams two days later. ADR-0017 unified the lighting on Metal
+    and ADR-0037 found SSAO costing ~33 ms at full resolution (toggling it took the arena from 20 to 60 fps) and moved it
+    to half resolution, where SSR already ran. On Vulkan today AO, SSR, bloom and the cloud march all run at half
+    resolution. Vulkan (ADR-0057) and WebGPU
+    (ADR-0058) followed at the end of June, each built in slices: clear screen, lit mesh, forward, shadows, post,
+    instancing and terrain.</p></div>
+  <div class="note history"><p><b>September 24: memory and draw calls.</b> In one session: one allocator and upload
+    queue (ADR-0094), residency (ADR-0095), the standard vertex (ADR-0096), instancing on Vulkan with the test forest
+    that measures it (ADR-0097), and occlusion culling (ADR-0100). metro_planned's peak went from 9.6 to 3.6 GB. The
+    common thread: each fix came with a measuring tool first (<code>mem?</code>, <code>walk_probe.py</code>,
+    <code>instancing_forest.json</code>).</p></div>
+  <div class="note history"><p><b>October: measuring the GPU itself.</b> <code>RT_GPU_TIMES</code> (<code>fcbdb2bf</code>,
+    2026-10-05) showed shadows at 9.7 ms of a 14.1 ms GPU frame because every cascade drew everything; the per-cascade
+    cull fixed it. Then the forests (ADR-0193, 0195), the city tier crossfade (ADR-0226, during the island streaming work
+    of 2026-10-23) and moving instances (ADR-0240).</p></div>
+  <p>What is still open, from the notes and ADRs: the draw list is rebuilt every frame (the render-profile note names
+    retained static instance buffers and GPU-driven culling with indirect draws as the next lever); Metal and WebGPU
+    lack the Vulkan-only features above; camera-relative rendering (ADR-0095) is planned but not built, which is why
+    positions stay 32-bit floats in the vertex.</p>
+
+  <h2>Where to look</h2>
+  <ul class="files">
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/renderer/renderer.h">src/renderer/renderer.h</a> — the seam: <code>Renderer</code>, <code>RenderMaterial</code> and its flags, <code>RenderMesh</code>, <code>OcclusionDepth</code></li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/renderer/vulkan/vulkan_renderer.cpp">src/renderer/vulkan/vulkan_renderer.cpp</a> — the Vulkan backend; <code>recordCommandBuffer</code> is the pass graph, <code>drawFrame</code> the CPU side</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/tree/main/shaders/vulkan">shaders/vulkan/</a> — <code>mesh.vert</code>/<code>mesh.frag</code> (all lit surfaces), <code>terrain.vert</code>, <code>sky.frag</code>, <code>clouds*.frag</code>, <code>ssao*.frag</code>, <code>ssr.frag</code>, <code>bloom.frag</code>, <code>dof.frag</code>, <code>composite.frag</code>, <code>ui.*</code>, <code>occlusion_reduce.comp</code>, <code>crowd.comp</code></li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/systems/render_system.cpp">src/engine/systems/render_system.cpp</a> — culling, lamps, LOD distances, tier fades, instance interpolation</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/occlusion.cpp">src/engine/occlusion.h/.cpp</a> — the occlusion test</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/renderer/cascade_fit.h">src/renderer/cascade_fit.h</a> — the shadow cascade fit (test: <code>tests/test_cascade_fit.cpp</code>)</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/debug_draw.h">src/engine/debug_draw.h</a> — debug lines (test: <code>tests/test_debug_draw.cpp</code>)</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/path_tracer.cpp">src/path_tracer.cpp</a>, <a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/camera.cpp">src/camera.cpp</a>, <a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/kdtree.cpp">src/kdtree.cpp</a>, <a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/instance.cpp">src/instance.cpp</a> — the offline tracer (test: <code>tests/test_instance_tlas.cpp</code>)</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/tests/test_instancing.cpp">tests/test_instancing.cpp</a> — includes the tier crossfade pixel-split test; <code>tests/test_scatter.cpp</code> has <code>impostor_views_frame_the_tree_from_every_side</code></li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/docs/renderer-parity.md">docs/renderer-parity.md</a> — which backend has what; <a href="https://github.com/GlennSong/raytracer-clang/blob/main/docs/rendering.md">docs/rendering.md</a> (July; older) and <a href="https://github.com/GlennSong/raytracer-clang/blob/main/docs/world-streaming-plan.md">docs/world-streaming-plan.md</a></li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/docs/decisions.md">docs/decisions.md</a> — ADR-0001, 0017, 0037, 0041, 0057, 0058, 0067, 0088, 0094–0097, 0100, 0129, 0193, 0195, 0224, 0226, 0240</li>
+  </ul>
+  <h3>Test beds and switches</h3>
+  <table>
+    <tr><th>Switch or tool</th><th>What it does</th></tr>
+    <tr><td><code>RT_GPU_TIMES=1</code></td><td>the <code>[gpu]</code> pass-time line every 120 frames</td></tr>
+    <tr><td><code>RT_VSYNC=0</code></td><td>present without vsync (MAILBOX, else IMMEDIATE), for any timing</td></tr>
+    <tr><td><code>RT_DUMP_STATS=1</code></td><td>draws, instances, triangles, shadow casters; the <code>[encode]</code> walk; fading draws</td></tr>
+    <tr><td><code>RT_DUMP_DRAWS=1</code></td><td>one-shot audit of every renderable's bounds and cull verdict</td></tr>
+    <tr><td><code>RT_NO_SHADOW_CULL</code>, <code>RT_NO_INSTANCING=1</code>, <code>RT_NO_OCCLUSION=1</code>, <code>RT_NO_DRAW_INDEX</code>, <code>RT_NO_TIER_FADE</code>, <code>RT_NO_INSTANCE_LERP</code>, <code>RT_VERTEX_FULL=1</code>, <code>RT_IMPOSTOR_VIEWS=0</code></td><td>the A/B switches for each change on this page</td></tr>
+    <tr><td><code>RT_OCC_STATS=1</code></td><td>what occlusion culled, every 120 frames</td></tr>
+    <tr><td><code>RT_NO_ROADS</code> / <code>_BUILDINGS</code> / <code>_SIM</code> / <code>_FOLIAGE</code></td><td>hide a class of geometry and read the difference off the stats</td></tr>
+    <tr><td><code>mem?</code> (control channel)</td><td>GPU heaps, mesh bytes per vertex layout, upload totals</td></tr>
+    <tr><td><code>tools/walk_probe.py</code>, <code>tools/fly_probe.py</code></td><td>walk or fly the camera along a path and list the frames that hitch</td></tr>
+    <tr><td><code>assets/levels/instancing_forest.json</code>, <code>forest.json</code></td><td>many light instances (draw-call bound) vs a few heavy trees (GPU bound)</td></tr>
+  </table>
+
+  <footer>Code excerpts from commit <code>47d587f3</code> (2026-10-26). Drawn from ADR-0001, 0017, 0037, 0041, 0057,
+    0058, 0067, 0088, 0094, 0095, 0096, 0097, 0100, 0129, 0193, 0195, 0197, 0224, 0226, 0240; commits
+    <code>d165c80b</code>, <code>3ba3ba60</code>, <code>fcbdb2bf</code>, <code>979a1f16</code>, <code>b4d985ea</code>,
+    <code>7eeb25ea</code>, <code>04d4d5fb</code>, <code>a5e18463</code>; the memory notes on render profiling, GPU
+    memory and occlusion.</footer>
+</div>
+</body>
+</html>

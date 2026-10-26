@@ -1,0 +1,801 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Trains — How the Engine Works</title>
+  <link rel="stylesheet" href="engine.css">
+</head>
+<body>
+<div class="wrap">
+  <div class="nav"><a href="index.html">← How the engine works</a> · <a href="../index.html">scenes</a></div>
+  <h1>Trains</h1>
+  <p class="lede">An island-wide main line, a light-rail loop in each big city, stations you can walk onto, carriages
+    you can walk through, and people who take the train to the next town. The idea that makes it cheap: <b>a track is
+    a road class</b>. The road builder lays it like any lane, and the trains run on exactly the rails it drew.</p>
+
+  <figure class="shot">
+    <img src="img/trains/island-station.webp" alt="An island main-line station seen from the footbridge stairs: a white train with a teal stripe stands at a platform under a long canopy, double track with sleepers, houses and an elevated freeway beyond.">
+    <figcaption>An island loop station (2026-10-11): the double track, a platform each side with its canopy, and the
+      stairs down from the footbridge, all laid by the lanes builder.</figcaption>
+  </figure>
+
+  <h2>The problem</h2>
+  <p>Glenn (2026-10-10): <i>"it makes sense if it follows the highway in a loop and there's a station. There should be
+    trains going in each direction ... the train system should piggy back off our other algorithms and systems of
+    construction -- it should define rail lines and we should probably build them like we build lanes of the freeway
+    ... run 24 hours a day at an interval ... carriages ... like the bus where you can move around the carriages and
+    between them and they shouldn't be jittery."</i></p>
+  <p>That is four systems: <b>track</b> that climbs and bridges like a road and crosses roads without anyone driving
+    onto it; <b>train motion</b> that respects curves, platforms and the train ahead; <b>carriages</b> that bend round
+    curves and carry a walking player without jitter; and <b>riders</b>, so stations are used. Plus everything that
+    makes a station a place: a way in from the street, stairs, canopies, lamps, name boards, sounds.</p>
+
+  <h2>The pipeline</h2>
+  <div class="diagram">
+    <svg viewBox="0 0 860 420" role="img" aria-label="Rail pipeline: a track class in the lanes graph, built by the lanes builder, exported as RailTrack data in the bundle, read into RailSim which joins lines and runs trains; TrainSystem draws and carries the player; CitySim's riders board">
+      <defs><marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" fill="#6f8fb0"/></marker></defs>
+      <g font-family="system-ui, sans-serif" font-size="13" text-anchor="middle">
+        <rect x="20" y="20" width="190" height="70" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="115" y="44" fill="#cfe4ff">Plan the line</text>
+        <text x="115" y="63" fill="#93a6ba" font-size="12">city_plan island-rail /</text>
+        <text x="115" y="79" fill="#93a6ba" font-size="12">city-rail --write</text>
+        <rect x="250" y="20" width="190" height="70" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="345" y="44" fill="#cfe4ff">Lanes graph</text>
+        <text x="345" y="63" fill="#93a6ba" font-size="12">edges of class rail /</text>
+        <text x="345" y="79" fill="#93a6ba" font-size="12">light_rail + platforms</text>
+        <rect x="480" y="20" width="190" height="70" rx="9" fill="#131a24" stroke="#3b82f6"/>
+        <text x="575" y="44" fill="#cfe4ff">Lanes builder</text>
+        <text x="575" y="63" fill="#93a6ba" font-size="12">profile, bridges, piers,</text>
+        <text x="575" y="79" fill="#93a6ba" font-size="12">ballast, sleepers, rails</text>
+        <rect x="700" y="20" width="140" height="70" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="770" y="44" fill="#cfe4ff">Bundle</text>
+        <text x="770" y="63" fill="#93a6ba" font-size="12">city/e0/rail/tracks</text>
+        <text x="770" y="79" fill="#93a6ba" font-size="12">RailTrack[]</text>
+        <line x1="210" y1="55" x2="246" y2="55" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar)"/>
+        <line x1="440" y1="55" x2="476" y2="55" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar)"/>
+        <line x1="670" y1="55" x2="696" y2="55" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar)"/>
+        <line x1="770" y1="90" x2="770" y2="140" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar)"/>
+        <text x="760" y="120" fill="#93a6ba" font-size="12" text-anchor="end">RailTracks component</text>
+        <rect x="430" y="145" width="410" height="120" rx="10" fill="#131a24" stroke="#3b82f6"/>
+        <text x="635" y="168" fill="#cfe4ff">RailSim (rail_sim.cpp)</text>
+        <text x="635" y="190" fill="#93a6ba" font-size="12">build: join tracks end → start into LINES</text>
+        <text x="635" y="208" fill="#93a6ba" font-size="12">speed limit per point (curves, braked ahead)</text>
+        <text x="635" y="226" fill="#93a6ba" font-size="12">timetable = trains evenly spread</text>
+        <text x="635" y="244" fill="#93a6ba" font-size="12">step: accelerate / brake · dwell · doors</text>
+        <rect x="20" y="145" width="370" height="120" rx="10" fill="#131a24" stroke="#2c3d50"/>
+        <text x="205" y="168" fill="#cfe4ff">TrainSystem (train_system.cpp)</text>
+        <text x="205" y="190" fill="#93a6ba" font-size="12">stock per class · carPoses at the frame's alpha</text>
+        <text x="205" y="208" fill="#93a6ba" font-size="12">instanced bodies, glass, door leaves</text>
+        <text x="205" y="226" fill="#93a6ba" font-size="12">the player aboard: a floor point in a car</text>
+        <text x="205" y="244" fill="#93a6ba" font-size="12">sounds · station boards · lamps</text>
+        <line x1="430" y1="205" x2="394" y2="205" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar)"/>
+        <rect x="430" y="300" width="410" height="100" rx="10" fill="#131a24" stroke="#2c3d50"/>
+        <text x="635" y="323" fill="#cfe4ff">CitySim::railPass + RailRiders</text>
+        <text x="635" y="345" fill="#93a6ba" font-size="12">plan door to door · walk in · wait on the platform</text>
+        <text x="635" y="363" fill="#93a6ba" font-size="12">board a dwelling train with doors open · ride</text>
+        <text x="635" y="381" fill="#93a6ba" font-size="12">set down at their stop · walk out</text>
+        <line x1="635" y1="265" x2="635" y2="296" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar)"/>
+        <text x="645" y="286" fill="#93a6ba" font-size="12" text-anchor="start">read only</text>
+        <rect x="20" y="300" width="370" height="100" rx="10" fill="#131a24" stroke="#2c3d50"/>
+        <text x="205" y="323" fill="#cfe4ff">The transit HUD and the map</text>
+        <text x="205" y="345" fill="#93a6ba" font-size="12">platformBoard: next trains, minutes</text>
+        <text x="205" y="363" fill="#93a6ba" font-size="12">map: lines, stations, a dot per car</text>
+        <text x="205" y="381" fill="#93a6ba" font-size="12">seated riders drawn in the coaches</text>
+        <line x1="430" y1="350" x2="394" y2="350" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar)"/>
+      </g>
+    </svg>
+  </div>
+  <p class="cap">From plan to passengers. The builder (blue, top) is the same lanes builder that paves the roads; the
+    sim (blue, middle) knows nothing about how the track was made, only the railhead lines and platforms it was
+    handed.</p>
+
+  <h2>Track is a road class</h2>
+  <p>ADR-0055 had predicted it: a new world system should arrive as "fields, rules and crossing templates, never a new
+    pipeline stage", and named rail as "a class + level-crossing template". ADR-0153 did exactly that.
+    <code>RoadClassSpec</code> grew a <code>track</code> flag, and the built-in classes include two tracks:</p>
+
+  <div class="code">
+  <div class="hd"><span>The built-in track classes: a lane per direction, a railway&#x27;s grade over a long window</span>
+    <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/engine/procgen/city/roads/lanes/road_graph_spec.cpp#L25-L35">src/engine/procgen/city/roads/lanes/road_graph_spec.cpp</a></div>
+<pre>        <span class="c">// double track: one track per direction at 4 m centres, a railway's grade (2.5 %) over a long window</span>
+        add("rail", 4.0, 1, 1, 0.0, 0.0, 0.0, 3, 0.025, 400.0, 0.8);
+        m["rail"].track = true;
+        <span class="c">// a parapet where the track stands on structure; nothing at grade (the lab's own fence comes later)</span>
+        BarrierSpec wall; wall.kind = BarrierKind::Wall; wall.h = 1.0; wall.set = true;
+        m["rail"].edges[3] = wall;   <span class="c">// EdgeRole::Elevated</span>
+        <span class="c">// LIGHT RAIL in a town (Glenn: "Bigger cities: light rail ... a loop (Yamanote). Start simple."): a double track at</span>
+        <span class="c">// 3.6 m centres, a tram's grade (5 %) over a street's window, so it climbs over a cross street and back in a block</span>
+        add("light_rail", 3.6, 1, 1, 0.0, 0.0, 0.0, 2, 0.05, 120.0, 0.7);
+        m["light_rail"].track = true;
+        m["light_rail"].edges[3] = wall;</pre>
+</div>
+
+  <p>Everything the builder does for a road happens to a track: its profile is grade-limited over its window
+    (2.5 % over 400 m for the main line, so it rides long and level), it bridges valleys and gets piers, the ground is
+    conformed to it. Only the mesher differs: a deck whose lanes are all track is a <b>ballast bed</b>, not asphalt, and
+    each track lane gets sleepers every 0.65 m and two rails at standard gauge, with no paint and no junction boxes.</p>
+
+  <div class="code">
+  <div class="hd"><span>trackKit: sleepers on the lane&#x27;s own deck height</span>
+    <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/engine/procgen/city/roads/lanes/deck_mesh.cpp#L330-L338">src/engine/procgen/city/roads/lanes/deck_mesh.cpp</a></div>
+<pre><span class="c">// THE TRACK on one lane: a sleeper every 0.65 m and two rails swept along the lane's centreline at gauge.</span>
+void trackKit(RenderMesh&amp; sleepers, RenderMesh&amp; rails, const Result&amp; r, int li) {
+    const Lane&amp; l = r.lanes.lanes[static_cast&lt;size_t&gt;(li)]; const DeckHeight&amp; H = *r.heights;
+    if (l.s.size() &lt; 2 || l.s.back() &lt; 1.0) return;
+    const double len = l.s.back();
+    for (double st = 0.3; st &lt; len; st += 0.65) {
+        const Vec2 p = pointAt(l.xy, l.s, st), t = tangentAtStation(l.xy, l.s, st); const double z = H.deck(li, p);
+        trackBox(sleepers, p, t, 1.3, 0.13, z - 0.04, z + kSleeperTop, kSleeper, false);
+    }</pre>
+</div>
+
+  <p>Two rules keep cars off it. Tracks are left out of the road <b>twin</b>, so no car, walker, lot or sign ever routes
+    onto one. And since ADR-0159 the published deck field knows what runs on each spine (<code>UnionSpine::use</code>:
+    Road, Track or Footway); a street car under a viaduct no longer took the rail's height (Glenn: "cars weirdly stuck in
+    the tracks"). Lots keep 4.5 m off a railhead and 10.5 m beside a stop (<code>lanesTrackKeepOut</code>), and every tree
+    placer asks <code>DrawnRoad::blocksTree</code>, which includes the <b>trains' room</b>: 1.75 m each side of the track
+    plus 1 m, 5.5 m over the rails (ADR-0219, after trees grew through passing trains).</p>
+
+  <h3>Crossings: a track is never met at grade</h3>
+  <p>There are no level crossings. Any crossing with a track is a grade separation whatever the scene's rules, and the
+    builder lifts the <b>track</b> over the road at its own grade unless the road already clears it. Lifting the higher of
+    the two had raised Saltwood's streets over the line at 18 % (ADR-0154). The design stage's crossing policy says the
+    same thing in one line (<code>planCrossings</code>: "a track and anything: a bridge").</p>
+
+  <div class="code">
+  <div class="hd"><span>separates / anyTrack: the two crossings that must be structure</span>
+    <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/engine/procgen/city/roads/lanes/vertical_profile.h#L51-L54">src/engine/procgen/city/roads/lanes/vertical_profile.h</a></div>
+<pre><span class="c">// A TRACK crossing anything (a road, a ramp, the freeway) is a grade separation, whatever the scene's rules: there are</span>
+<span class="c">// no level crossings yet (the island loop, 2026-10-11). Two of the graph's crossings that must be structure.</span>
+bool separates(const RoadLabGraph&amp; g, const EdgeSpec&amp; a, const EdgeSpec&amp; b);
+bool anyTrack(const RoadLabGraph&amp; g, const EdgeSpec&amp; a, const EdgeSpec&amp; b);   <span class="c">// a track is structure where a road ends under it too</span></pre>
+</div>
+
+  <p>Two more vertical rules came from the light rail. A city loop crosses a side street every ~125 m, each lift
+    with a ~200 m approach, so no joint between track sections can be clear of all of them. So a track's <b>holds carry
+    across joints</b> (<code>chainTrackFloors</code>): each section takes its neighbours' holds into its own stations,
+    and the next section no longer meets a lift 4 m lower. And a road that <b>ends</b> under a track is structure too:
+    a dead end under the light rail had held the line 7.3 m off its profile (ADR-0158).</p>
+
+  <h2>What the builder hands on: RailTrack</h2>
+  <p>Each track lane leaves the builder as a <code>RailTrack</code>: the railhead line in the direction trains run on
+    it, about 2 m apart, and its platforms in its own stations. It rides in the city bundle as JSON
+    (<code>city/e&lt;n&gt;/rail/tracks</code>) beside the meshes, so a train stands on exactly the rails that were drawn.
+    A graph with a track class also keys <code>kRailBuildTag</code>, so the track kit can change without re-baking
+    road-only levels.</p>
+
+  <div class="code">
+  <div class="hd"><span>RailStop and RailTrack: the whole contract between the builder and the trains</span>
+    <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/engine/procgen/city/rail_track.h#L25-L42">src/engine/procgen/city/rail_track.h</a></div>
+<pre><span class="c">// A platform beside a track, in the track's own stations (metres along `pts`).</span>
+struct RailStop {
+    std::string name;
+    double s0 = 0, s1 = 0;
+    int side = +1;            <span class="c">// which side of the train it is on, looking the way the train runs: +1 left, -1 right</span>
+    double top = 0;           <span class="c">// platform top, world height</span>
+    <span class="c">// THE WAY IN: where the station's footway leaves the street (plan x, z) -- what a bus line serves</span>
+    bool hasAccess = false;
+    Vec2 access{0, 0};
+    std::vector&lt;Vec3&gt; lamps;  <span class="c">// its night lights (world), under the canopy's fittings</span>
+};
+
+struct RailTrack {
+    std::string edge, cls;    <span class="c">// the graph edge it was built on, and its class</span>
+    int dir = +1;             <span class="c">// +1 along the edge's spine, -1 against it</span>
+    std::vector&lt;Vec3&gt; pts;    <span class="c">// railhead centreline (world x, height, z), in running order, ~2 m apart</span>
+    std::vector&lt;RailStop&gt; stops;
+};</pre>
+</div>
+
+  <p>Platforms are authored on the edge, in its stations; the builder places each outside the outermost track on that
+    side, its edge <code>kPlatformGap</code> (1.55 m) from the track centre and its top level with a carriage floor:</p>
+
+  <div class="code">
+  <div class="hd"><span>PlatformSpec: a station is data on a track edge</span>
+    <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/engine/procgen/city/roads/lanes/road_graph_spec.h#L105-L113">src/engine/procgen/city/roads/lanes/road_graph_spec.h</a></div>
+<pre><span class="c">// A station platform beside a track edge, authored on the edge: "platforms": [{"name": "Central", "s0": 300,</span>
+<span class="c">// "s1": 420, "side": "both", "w": 4.5}]. Built on the OUTSIDE of the edge's outermost track on that side, its</span>
+<span class="c">// edge `kPlatformGap` off the train body, its top at the height a carriage floor stands (railhead + h).</span>
+struct PlatformSpec {
+    std::string name;
+    double s0 = 0, s1 = 0;    <span class="c">// stations along the edge's spine</span>
+    int side = 0;             <span class="c">// 0 both, +1 the spine's left (plan), -1 its right</span>
+    double w = 4.5, h = 1.05; <span class="c">// width, and the top above the railhead</span>
+};</pre>
+</div>
+
+  <h2>Stations: a way in, stairs, canopies, lights</h2>
+  <div class="diagram">
+    <svg viewBox="0 0 860 300" role="img" aria-label="Station cross-section: two tracks with platforms outside them, a footbridge over both with stairs down to each platform, and the way in from the street; a second panel shows the light-rail variant reached from below">
+      <g font-family="system-ui, sans-serif" font-size="12" text-anchor="middle">
+        <text x="215" y="20" fill="#8ec5ff" font-size="13">main line: footbridge over, stairs down</text>
+        <line x1="20" y1="240" x2="410" y2="240" stroke="#7a8f5a" stroke-width="2"/>
+        <rect x="70" y="210" width="70" height="30" fill="#1d2633" stroke="#2c3d50"/>
+        <text x="105" y="230" fill="#cfe4ff">platform</text>
+        <rect x="150" y="226" width="40" height="14" fill="#3a332a"/><text x="170" y="258" fill="#93a6ba">track</text>
+        <rect x="200" y="226" width="40" height="14" fill="#3a332a"/><text x="220" y="258" fill="#93a6ba">track</text>
+        <rect x="250" y="210" width="70" height="30" fill="#1d2633" stroke="#2c3d50"/>
+        <text x="285" y="230" fill="#cfe4ff">platform</text>
+        <rect x="60" y="110" width="270" height="10" fill="#131a24" stroke="#3b82f6"/>
+        <text x="195" y="102" fill="#cfe4ff">footbridge (footway class, held over the line)</text>
+        <path d="M80 120 L 80 140 L 120 205" fill="none" stroke="#e6c07b" stroke-width="2"/>
+        <path d="M310 120 L 310 140 L 270 205" fill="none" stroke="#e6c07b" stroke-width="2"/>
+        <text x="60" y="170" fill="#e6c07b" text-anchor="start">stairs</text>
+        <path d="M330 115 L 400 115 L 400 235" fill="none" stroke="#cfe4ff" stroke-width="1.5" stroke-dasharray="4 3"/>
+        <text x="215" y="294" fill="#93a6ba">dashed: the way in, a footway from the street</text>
+        <text x="215" y="276" fill="#93a6ba">canopy on each platform, gapped under the bridge</text>
+        <text x="645" y="20" fill="#8ec5ff" font-size="13">city light rail: line held up, way under</text>
+        <line x1="450" y1="240" x2="840" y2="240" stroke="#7a8f5a" stroke-width="2"/>
+        <rect x="560" y="120" width="170" height="14" fill="#131a24" stroke="#3b82f6"/>
+        <text x="645" y="112" fill="#cfe4ff">track hold, level over the platforms</text>
+        <rect x="500" y="122" width="56" height="12" fill="#1d2633" stroke="#2c3d50"/>
+        <rect x="734" y="122" width="56" height="12" fill="#1d2633" stroke="#2c3d50"/>
+        <line x1="600" y1="134" x2="600" y2="240" stroke="#2c3d50" stroke-width="6"/>
+        <line x1="690" y1="134" x2="690" y2="240" stroke="#2c3d50" stroke-width="6"/>
+        <path d="M470 236 L 820 236" fill="none" stroke="#cfe4ff" stroke-width="1.5" stroke-dasharray="4 3"/>
+        <text x="645" y="258" fill="#93a6ba">dashed: the way, at street level, under the line</text>
+        <path d="M480 236 L 528 134" fill="none" stroke="#e6c07b" stroke-width="2"/>
+        <path d="M810 236 L 762 134" fill="none" stroke="#e6c07b" stroke-width="2"/>
+        <text x="645" y="280" fill="#93a6ba">flights UP behind each platform's back edge (stationStairs `up`)</text>
+      </g>
+    </svg>
+  </div>
+  <p class="cap">Two kinds of station (schematic). The island loop runs near ground level, so its way in climbs onto a
+    footbridge and stairs lead down (ADR-0155). A city loop is lifted over every street it crosses, so its stations are
+    reached from below (ADR-0158).</p>
+  <p>A station's way in is just another class: <code>footway</code>, a 3 m path paved as sidewalk, never painted, left
+    out of the twin. Its grade may run to 60 %, and wherever it passes 15 % (<code>kFootwayStairGrade</code>) the deck is
+    built as treads with ~0.175 m risers. The first island bake held footways to a ramp's grade: too short for 11–24 m
+    climbs, they floated whole and dragged 26 lifts and a 13 m node mismatch through the nearby diamonds. At a stair's
+    pitch they follow the ground and climb only the last 20–30 m. Where a footway crosses a track over a platform,
+    <code>stationStairs</code> lays a flight down onto each platform along its back edge. Each station's way in also
+    becomes a bus anchor, so a bus line calls at every station's door (ADR-0155).</p>
+  <p>ADR-0159 gave stations depth and light: ribbed steel canopies on posts every 12 m with a fascia and a linear lamp
+    every 6 m, lamps that glow on the dusk ramp and join the street lamps' nearest-N point-light pool (so a station never
+    takes more light slots), white-on-blue name boards 16 m from each platform end (ADR-0156), and a <b>platform
+    board</b> in the HUD: every line calling here, the next two trains, and minutes until they stand at this platform.</p>
+
+  <div class="shots">
+    <figure class="shot">
+      <img src="img/trains/platform-doors-open.webp" alt="On a light-rail platform under a dark ribbed canopy with steel posts and a ceiling lamp; a white and teal train stands with its doors open, seats and yellow grab poles visible inside, towers beyond.">
+      <figcaption>A light-rail platform on the island: ribbed canopy, lamps, doors open on the platform side
+        (2026-10-24).</figcaption>
+    </figure>
+    <figure class="shot">
+      <img src="img/trains/light-rail-elevated.webp" alt="Looking down from atop a light-rail car running on a raised track beside a city street with palm trees and crowds of pedestrians; a seated passenger visible through a window.">
+      <figcaption>The city light rail runs raised beside its streets, set in from the back of the sidewalk; a
+        seated rider shows in the window (2026-10-24).</figcaption>
+    </figure>
+  </div>
+
+  <h2>Laying out a line</h2>
+  <p>Lines are <b>derived</b>, not drawn, and added to a graph already written, so the island is not re-grown for
+    them (<code>city_plan island-rail GRAPH LEVEL --write</code> and <code>city-rail</code>,
+    <code>world/island_rail.h</code>).</p>
+  <ul>
+    <li><b>The island loop</b> (ADR-0154): the freeway's outer closed chain, resampled at 10 m and offset 45 m outward.
+      On island 8 that clears every seaward ramp by 26 m, never touches water and crosses 10 roads. The freeway's water
+      floors carry over, so the track bridges each river where the freeway does. A station per town hub: the nearest
+      point of the line where a 140 m platform stands on a straight (radius ≥ 900 m), at least 150 m from any road
+      crossing. The loop is cut between stations into edges, since a closed edge cannot close on itself. 37.0 km of track,
+      11.1 km of it on structure.</li>
+    <li><b>The island's rail class</b> overrides the built-in: 3.5 % with <code>balance</code> 0.5 (cut as well as fill).
+      The built-in 2.5 % fill-only class rode 28 of 37 km of coastal hills on viaducts.</li>
+    <li><b>City light rail</b> (ADR-0157/0158): round each financial hub, a loop along its arterials and collectors
+      through the main-line station and the most built-up street node in each of eight sectors 350–950 m out; corners
+      cut, filleted and relaxed; set in beside the street by the graph's own widest arterial plus platforms and flights;
+      stations on straights 550–900 m apart where the streets are densest.</li>
+  </ul>
+
+  <div class="code">
+  <div class="hd"><span>IslandRailOptions: the loop&#x27;s numbers</span>
+    <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/engine/procgen/world/island_rail.h#L32-L44">src/engine/procgen/world/island_rail.h</a></div>
+<pre>struct IslandRailOptions {
+    double offset = 45.0;          <span class="c">// carriageway centreline -&gt; the track pair's centreline, outward</span>
+    double spacing = 10.0;         <span class="c">// the line's point spacing (m)</span>
+    double platformLength = 140.0; <span class="c">// a station's platform (an intercity train is ~95 m)</span>
+    double platformWidth = 4.5;
+    double straightRadius = 900.0; <span class="c">// the tightest curve a platform may stand on</span>
+    double crossingClear = 150.0;  <span class="c">// no road crossing (a bridge, with its approach) this near a platform's ends</span>
+    double maxTownDistance = 2500.0;   <span class="c">// a town farther than this from the line gets no station</span>
+    std::string idPrefix = "rail_loop";
+    <span class="c">// THE LINE'S CLASS on the island: the built-in rail (2.5%, fill only) rode 28 of 37 km of hills on viaducts.</span>
+    <span class="c">// A main line that cuts through what it cannot climb, at a mountain main line's grade.</span>
+    double gMax = 0.035;
+    double balance = 0.5;</pre>
+</div>
+
+  <figure class="shot">
+    <img src="img/trains/island-rail-plan.webp" alt="Map of island 8: a black-and-white dashed double track runs round the island beside the orange freeway, with a station circle at each of eight towns; purple light-rail loops in Saltwood and Weyby; relief shaded in the island's interior.">
+    <figcaption>Glenn's proposal map for the island's rail (<code>~/Claude/rail/island_rail_plan.svg</code>,
+      2026-10-10), drawn before anything was built. It is a plan, not the result: the built light-rail loops are shorter
+      than drawn here, and there are no level crossings (every track crossing is a bridge).</figcaption>
+  </figure>
+
+  <h2>RailSim: lines, a timetable, and motion</h2>
+  <p><code>RailSim</code> (<code>src/apps/citysim/rail_sim.h</code>) reads only the <code>RailTrack</code>s. Its data
+    is small:</p>
+
+  <div class="code">
+  <div class="hd"><span>TrainKind, RailLine and Train</span>
+    <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/apps/citysim/rail_sim.h#L31-L78">src/apps/citysim/rail_sim.h</a></div>
+<pre>struct TrainKind {
+    std::string name = "intercity";
+    double locoLength = 19.0;     <span class="c">// the locomotive (a modern electric: no steam)</span>
+    double carLength = 24.0;      <span class="c">// each passenger carriage</span>
+    int cars = 3;                 <span class="c">// carriages behind the locomotive</span>
+    double gap = 0.9;             <span class="c">// coupler to coupler, where the gangway bridges</span>
+    double width = 2.9, floor = 1.1;   <span class="c">// body width; floor above the railhead (a platform's top)</span>
+    double vmax = 33.0;           <span class="c">// m/s (120 km/h) on the straight</span>
+    double accel = 0.7, decel = 0.8;   <span class="c">// service rates, m/s^2</span>
+    double lateral = 1.0;         <span class="c">// the curve speed: v^2 / r &lt;= this</span>
+    double dwell = 30.0;          <span class="c">// seconds at a platform, doors open for all but the first and last few</span>
+    double length() const { return locoLength + cars * carLength + cars * gap; }
+};
+<span class="c">// ...</span>
+struct RailLine {
+    std::string name;
+    std::string cls;                  <span class="c">// its track class (rail, light_rail, metro): what stock runs it</span>
+    std::vector&lt;engine::Vec3&gt; pts;    <span class="c">// railhead centreline, running order</span>
+    std::vector&lt;double&gt; s;            <span class="c">// station of each point</span>
+    double length = 0;
+    bool loop = false;
+    std::vector&lt;engine::RailStop&gt; stops;   <span class="c">// in this line's stations, sorted</span>
+    std::vector&lt;double&gt; vlim;         <span class="c">// per point: the speed the track allows (curves, braking ahead of them)</span>
+    <span class="c">// the railhead point and the running direction at station `st` (wrapped on a loop, clamped otherwise)</span>
+    engine::Vec3 at(double st) const;
+    double wrap(double st) const;
+    double speedLimit(double st) const;
+};
+<span class="c">// ...</span>
+struct Train {
+    int line = -1;
+    TrainKind kind;
+    double s = 0;             <span class="c">// the head's front, along the line</span>
+    double prevS = 0;         <span class="c">// ...at the previous step, for drawing between steps</span>
+    double v = 0;
+    int nextStop = 0;         <span class="c">// index into the line's stops</span>
+    bool dwelling = false;
+    double dwellLeft = 0;
+    int doorSide = 0;         <span class="c">// while the doors are open: +1 the train's left, -1 its right; 0 shut</span>
+    double odometer = 0;
+};</pre>
+</div>
+
+  <div class="diagram">
+    <svg viewBox="0 0 860 250" role="img" aria-label="Structure: RailTracks join into RailLines; each line holds points, stations, stops and per-point speed limits; Trains reference a line by index and carry position, speed, next stop and door state; RailRiders reference lines and stops">
+      <defs><marker id="ar2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" fill="#6f8fb0"/></marker></defs>
+      <g font-family="system-ui, sans-serif" font-size="12">
+        <rect x="20" y="30" width="170" height="110" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="35" y="52" fill="#cfe4ff" font-size="13">RailTrack (per lane)</text>
+        <text x="35" y="74" fill="#93a6ba">edge, cls, dir</text>
+        <text x="35" y="92" fill="#93a6ba">pts: railhead (world)</text>
+        <text x="35" y="110" fill="#93a6ba">stops: RailStop[]</text>
+        <text x="35" y="128" fill="#93a6ba">  name, s0..s1, side</text>
+        <rect x="250" y="30" width="190" height="130" rx="9" fill="#131a24" stroke="#3b82f6"/>
+        <text x="265" y="52" fill="#cfe4ff" font-size="13">RailLine</text>
+        <text x="265" y="74" fill="#93a6ba">name, cls, loop</text>
+        <text x="265" y="92" fill="#93a6ba">pts[], s[] (stations)</text>
+        <text x="265" y="110" fill="#93a6ba">stops (in line stations)</text>
+        <text x="265" y="128" fill="#93a6ba">vlim[] per point</text>
+        <text x="265" y="146" fill="#93a6ba">at(s) · wrap(s)</text>
+        <rect x="500" y="30" width="170" height="130" rx="9" fill="#131a24" stroke="#3b82f6"/>
+        <text x="515" y="52" fill="#cfe4ff" font-size="13">Train</text>
+        <text x="515" y="74" fill="#93a6ba">line (index)</text>
+        <text x="515" y="92" fill="#93a6ba">kind: TrainKind</text>
+        <text x="515" y="110" fill="#93a6ba">s, prevS, v</text>
+        <text x="515" y="128" fill="#93a6ba">nextStop, dwelling</text>
+        <text x="515" y="146" fill="#93a6ba">doorSide</text>
+        <rect x="700" y="30" width="140" height="130" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="715" y="52" fill="#cfe4ff" font-size="13">CarPose</text>
+        <text x="715" y="74" fill="#93a6ba">Mat4: +z forward,</text>
+        <text x="715" y="92" fill="#93a6ba">+x the train's left</text>
+        <text x="715" y="110" fill="#93a6ba">length, loco</text>
+        <text x="715" y="128" fill="#93a6ba">a pure function of</text>
+        <text x="715" y="146" fill="#93a6ba">the head's station</text>
+        <line x1="190" y1="85" x2="246" y2="85" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar2)"/>
+        <text x="218" y="78" fill="#93a6ba" text-anchor="middle">join</text>
+        <line x1="496" y1="95" x2="444" y2="95" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar2)"/>
+        <line x1="670" y1="95" x2="696" y2="95" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar2)"/>
+        <rect x="250" y="190" width="420" height="50" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="460" y="212" fill="#cfe4ff" font-size="13" text-anchor="middle">RailRiders: stations (by name) → line + stop; trips per agent</text>
+        <text x="460" y="230" fill="#93a6ba" text-anchor="middle">reads the lines and the trains; never moves a train</text>
+        <line x1="345" y1="186" x2="345" y2="164" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar2)"/>
+        <line x1="585" y1="186" x2="585" y2="164" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar2)"/>
+      </g>
+    </svg>
+  </div>
+  <p class="cap">The rail data. A train is little more than a distance along a line; everything else is derived from
+    it.</p>
+
+  <h3>Lines: tracks joined end to start</h3>
+  <p>A track whose end lies within 3 m of another's start, heading on the same way (dot product of the directions
+    above 0.7) and of the same class, runs on into it. A chain that comes back to its start is a loop. A double-track
+    loop is therefore two lines, one each way, and nothing ever switches or crosses. Lines never join across classes: a
+    tram never runs on into the main line.</p>
+
+  <div class="code">
+  <div class="hd"><span>RailSim::build: which track runs on into which</span>
+    <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/apps/citysim/rail_sim.cpp#L83-L100">src/apps/citysim/rail_sim.cpp</a></div>
+<pre>    <span class="c">// which track each one runs on into: its end within joinTol of the other's start, heading on the same way</span>
+    std::vector&lt;int&gt; succ(static_cast&lt;std::size_t&gt;(n), -1), pred(static_cast&lt;std::size_t&gt;(n), -1);
+    for (int i = 0; i &lt; n; ++i) {
+        const auto&amp; A = tracks[static_cast&lt;std::size_t&gt;(i)].pts;
+        if (A.size() &lt; 2) continue;
+        const Vec3 endDir = flatDir(A[A.size() - 2], A.back());
+        double best = joinTol;
+        for (int j = 0; j &lt; n; ++j) {
+            const auto&amp; B = tracks[static_cast&lt;std::size_t&gt;(j)].pts;
+            if (j == i || B.size() &lt; 2 || tracks[static_cast&lt;std::size_t&gt;(j)].cls != tracks[static_cast&lt;std::size_t&gt;(i)].cls) continue;   <span class="c">// (a tram never runs on into the main line)</span>
+            const double d = dist(A.back(), B.front());
+            if (d &gt;= best) continue;
+            const Vec3 startDir = flatDir(B[0], B[1]);
+            if (endDir.x * startDir.x + endDir.z * startDir.z &lt; 0.7) continue;
+            best = d;
+            succ[static_cast&lt;std::size_t&gt;(i)] = j;
+        }
+    }</pre>
+</div>
+
+  <h3>The speed the track allows</h3>
+  <p>Each point gets a limit from the curve through its neighbours five points either side (v²/r ≤ the kind's
+    <code>lateral</code>, 1 m/s²), then a backward pass brakes for it ahead of time, so a train meets a curve already
+    slow enough:</p>
+
+  <div class="code">
+  <div class="hd"><span>The per-point speed limit: curvature, then braked for ahead</span>
+    <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/apps/citysim/rail_sim.cpp#L133-L152">src/apps/citysim/rail_sim.cpp</a></div>
+<pre>        <span class="c">// THE SPEED THE TRACK ALLOWS: the curve's (v^2 r &lt;= lateral, measured over 10 m either side), then braked</span>
+        <span class="c">// for ahead of time -- a train meets a curve already slow enough for it</span>
+        const TrainKind kind = kindOf(L.cls);
+        const std::size_t m = L.pts.size();
+        L.vlim.assign(m, kind.vmax);
+        for (std::size_t i = 0; i &lt; m; ++i) {
+            const std::size_t span = 5;
+            std::size_t a = i &gt;= span ? i - span : (L.loop ? i + m - 1 - span : 0);
+            std::size_t c = i + span &lt; m ? i + span : (L.loop ? i + span - (m - 1) : m - 1);
+            if (a &gt;= m) a = 0;
+            if (c &gt;= m) c = m - 1;
+            const double k = curvature(L.pts[a], L.pts[i], L.pts[c]);
+            if (k &gt; 1e-6) L.vlim[i] = std::min(kind.vmax, std::sqrt(kind.lateral / k));
+        }
+        for (int pass = 0; pass &lt; (L.loop ? 2 : 1); ++pass)
+            for (std::size_t i = m - 1; i-- &gt; 0;) {
+                const double ds = L.s[i + 1] - L.s[i];
+                const double next = (i + 1 == m - 1 &amp;&amp; L.loop) ? L.vlim[0] : L.vlim[i + 1];
+                L.vlim[i] = std::min(L.vlim[i], std::sqrt(next * next + 2.0 * kind.decel * ds));
+            }</pre>
+</div>
+
+  <h3>The timetable is the spacing</h3>
+  <p>There is no schedule. A line's trains start evenly spread round it, and since every train runs the same rules,
+    the spacing holds. How many: an intercity per ~9 km of line, a city train per ~1.5 km, two at least. The island's
+    37 km loop at first ran two each way, a train every ~14 minutes, and its platforms filled with people waiting (46
+    at 21 minutes), so it now runs four.</p>
+
+  <div class="code">
+  <div class="hd"><span>countOf: trains per line</span>
+    <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/apps/citysim/train_system.cpp#L78-L83">src/apps/citysim/train_system.cpp</a></div>
+<pre>    <span class="c">// THE TIMETABLE: an intercity train per ~9 km of line, a city train per ~1.5 km, two at least -- the island's 37 km</span>
+    <span class="c">// loop ran two each way, a train every ~14 minutes, and its platforms filled with people waiting (46 at 21 min)</span>
+    auto countOf = [](double length, const TrainKind&amp; k) {
+        if (const char* n = std::getenv("RT_TRAINS_PER_LINE")) return std::max(1, std::atoi(n));
+        return std::max(2, static_cast&lt;int&gt;(std::lround(length / (k.name == "intercity" ? 9000.0 : 1500.0))));
+    };</pre>
+</div>
+
+  <div class="code">
+  <div class="hd"><span>The timetable: evenly spread, each heading for the first platform ahead</span>
+    <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/apps/citysim/rail_sim.cpp#L159-L175">src/apps/citysim/rail_sim.cpp</a></div>
+<pre>    <span class="c">// THE TIMETABLE: evenly spread trains, each heading for the first platform ahead of it</span>
+    for (std::size_t li = 0; li &lt; lines_.size(); ++li) {
+        const RailLine&amp; L = lines_[li];
+        const TrainKind kind = kindOf(L.cls);
+        const int count = L.length &gt; kind.length() * 3 ? std::max(1, countOf(L.length, kind)) : 1;
+        for (int k = 0; k &lt; count; ++k) {
+            Train t;
+            t.line = static_cast&lt;int&gt;(li);
+            t.kind = kind;
+            t.s = L.loop ? L.wrap(L.length * k / count + kind.length()) : std::min(L.length, kind.length() + 5.0);
+            t.prevS = t.s;
+            t.nextStop = 0;
+            for (std::size_t si = 0; si &lt; L.stops.size(); ++si)
+                if (L.stops[si].s1 - 2.0 &gt; t.s) { t.nextStop = static_cast&lt;int&gt;(si); break; }
+            trains_.push_back(t);
+        }
+    }</pre>
+</div>
+
+  <h3>One step</h3>
+  <p>Each fixed step a running train picks a target speed, the smallest of four limits, and accelerates or brakes
+    toward it. There are no signal blocks: the train ahead is simply a fourth limit, braking to stop 40 m short of its
+    tail. Within reach of the platform at under 3 m/s it stops exactly there and dwells; the doors open two seconds after
+    it stops and shut four before it leaves, on the platform's side.</p>
+
+  <div class="diagram">
+    <svg viewBox="0 0 860 240" role="img" aria-label="Speed along a line: the line speed, a dip for a curve braked for in advance, a braking curve into a platform, a dwell at zero, then acceleration away">
+      <g font-family="system-ui, sans-serif" font-size="12">
+        <line x1="50" y1="200" x2="830" y2="200" stroke="#2c3d50"/>
+        <line x1="50" y1="30" x2="50" y2="200" stroke="#2c3d50"/>
+        <text x="40" y="60" fill="#93a6ba" text-anchor="end">vmax</text>
+        <text x="830" y="222" fill="#93a6ba" text-anchor="end">station along the line →</text>
+        <line x1="50" y1="60" x2="830" y2="60" stroke="#2c3d50" stroke-dasharray="3 4"/>
+        <path d="M60 180 C 100 70, 130 60, 170 60 L 240 60 C 280 60, 300 110, 330 110 L 360 110 C 380 110, 400 60, 430 60 L 520 60 C 580 60, 620 150, 640 200 L 690 200 C 720 140, 740 80, 800 62" fill="none" stroke="#e6c07b" stroke-width="2.2"/>
+        <rect x="320" y="150" width="60" height="22" rx="5" fill="#131a24" stroke="#2c3d50"/>
+        <text x="350" y="166" fill="#cfe4ff" text-anchor="middle">curve</text>
+        <text x="300" y="140" fill="#93a6ba" text-anchor="end">braked ahead</text>
+        <text x="596" y="166" fill="#93a6ba" text-anchor="end">√(2·decel·toStop)</text>
+        <rect x="638" y="174" width="56" height="22" rx="5" fill="#131a24" stroke="#3b82f6"/>
+        <text x="666" y="190" fill="#cfe4ff" text-anchor="middle">dwell</text>
+        <text x="760" y="126" fill="#93a6ba" text-anchor="middle">accel</text>
+        <text x="455" y="40" fill="#8ec5ff" text-anchor="middle">target = min(vmax, track limit, stop brake, gap to the train ahead − 40 m)</text>
+      </g>
+    </svg>
+  </div>
+  <p class="cap">One train's speed between two platforms (schematic): the line speed, a curve the train slowed for
+    before reaching it, the braking parabola into the platform, the dwell, and away.</p>
+
+  <div class="code">
+  <div class="hd"><span>RailSim::step: four limits and a platform stop</span>
+    <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/apps/citysim/rail_sim.cpp#L209-L227">src/apps/citysim/rail_sim.cpp</a></div>
+<pre>        double target = std::min(t.kind.vmax, L.speedLimit(t.s));
+        double toStop = 1e9;
+        if (!L.stops.empty()) {
+            const engine::RailStop&amp; st = L.stops[static_cast&lt;std::size_t&gt;(t.nextStop)];
+            toStop = st.s1 - kStopShort - t.s;
+            if (L.loop) toStop = L.wrap(toStop);
+            target = std::min(target, std::sqrt(2.0 * t.kind.decel * std::max(0.0, toStop)));
+        }
+        const double gap = gapAhead(static_cast&lt;int&gt;(ti));
+        target = std::min(target, std::sqrt(2.0 * t.kind.decel * std::max(0.0, gap - 40.0)));
+        if (t.v &lt; target) t.v = std::min(target, t.v + t.kind.accel * dt);
+        else t.v = std::max(target, t.v - 1.5 * t.kind.decel * dt);
+        double ds = t.v * dt;
+        if (!L.stops.empty() &amp;&amp; ds &gt;= toStop - 0.05 &amp;&amp; t.v &lt; 3.0) {   <span class="c">// at the platform: stop there exactly</span>
+            ds = std::max(0.0, toStop);
+            t.v = 0;
+            t.dwelling = true;
+            t.dwellLeft = t.kind.dwell;
+        }</pre>
+</div>
+
+  <h3>Carriages without jitter</h3>
+  <p>A carriage's pose is a function of the head's station alone. Each car's front is a fixed distance behind the
+    head; its body hangs between two bogie points at 18 % and 82 % of its length, each sampled on the railhead line.
+    The renderer interpolates only the <i>head</i> between its last two steps (<code>headAt(alpha)</code>), and every
+    carriage, and anyone in it, follows exactly the curve the rails draw at that moment. That is the whole anti-jitter
+    argument.</p>
+
+  <div class="code">
+  <div class="hd"><span>carPose: the body between its bogies</span>
+    <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/apps/citysim/rail_sim.cpp#L246-L261">src/apps/citysim/rail_sim.cpp</a></div>
+<pre>CarPose RailSim::carPose(int ti, int car, double alpha) const {
+    const Train&amp; t = trains_[static_cast&lt;std::size_t&gt;(ti)];
+    const RailLine&amp; L = lines_[static_cast&lt;std::size_t&gt;(t.line)];
+    double front = headAt(ti, alpha);
+    for (int k = 0; k &lt; car; ++k) front -= (k == 0 ? t.kind.locoLength : t.kind.carLength) + t.kind.gap;
+    const double len = car == 0 ? t.kind.locoLength : t.kind.carLength;
+    <span class="c">// the body hangs between its two bogies, each on the rail</span>
+    const Vec3 p1 = L.at(front - 0.18 * len), p2 = L.at(front - 0.82 * len);
+    Vec3 f = p1 - p2;
+    const double fl = f.length();
+    f = fl &gt; 1e-9 ? f * (1.0 / fl) : Vec3(0, 0, 1);
+    Vec3 left = engine::cross(Vec3(0, 1, 0), f);
+    const double ll = left.length();
+    left = ll &gt; 1e-9 ? left * (1.0 / ll) : Vec3(1, 0, 0);
+    const Vec3 up = engine::cross(f, left);
+    const Vec3 c = (p1 + p2) * 0.5;</pre>
+</div>
+
+  <div class="shots">
+    <figure class="shot">
+      <img src="img/trains/rail-lab-curve.webp" alt="Beside a train on a curve in the rail lab: white coaches with teal stripes and visible seats, the bogies sitting on curving double track with sleepers, flat green ground.">
+      <figcaption>The rail lab (<code>rail_lab.json</code>, 2026-10-10): coaches on a curve, each body laid between
+        its two bogie points.</figcaption>
+    </figure>
+    <figure class="shot">
+      <img src="img/trains/aboard-gangway.webp" alt="Inside a coach: blue bench seats, a yellow grab rail and pole, closed doors, and the open gangway through into the next carriage.">
+      <figcaption>Aboard: the gangway into the next carriage. Walking through it re-expresses the player's floor
+        point in the next car's frame (2026-10-24).</figcaption>
+    </figure>
+  </div>
+
+  <h2>Aboard: the player as a floor point</h2>
+  <p>The bus had already solved riding without jitter, and the train reuses its answer (ADR-0153). A player aboard is
+    not a physics body pushed along by the carriage; they are a <b>floor point in one car's frame</b>
+    (<code>local_</code>), walked by the ordinary move keys inside the aisle, vestibules and doorways
+    (<code>walkableAt</code>). The eye is placed on that point of the carriage <i>as drawn this frame</i>, in
+    <code>render()</code>, after the steps, so the view and the carriage cannot disagree. Two transitions:</p>
+
+  <div class="code">
+  <div class="hd"><span>ride(): through the gangway, and out of an open door</span>
+    <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/apps/citysim/train_system.cpp#L553-L579">src/apps/citysim/train_system.cpp</a></div>
+<pre>    <span class="c">// THROUGH THE GANGWAY: past the coupling's middle, the point belongs to the next car</span>
+    const Real hl = static_cast&lt;Real&gt;(coachOf(train_).length) / 2, half = static_cast&lt;Real&gt;(T.kind.gap) / 2;
+    if (local_.z &gt; hl + half - 0.05 || local_.z &lt; -hl - half + 0.05) {
+        const int to = local_.z &gt; 0 ? car_ - 1 : car_ + 1;
+        if (to &gt;= 1 &amp;&amp; to &lt; sim_.carCount(train_)) {
+            const Vec3 w = P.m.transformPoint(local_);
+            const CarPose Q = sim_.carPose(train_, to, 1.0);
+            Vec3 l = toLocal(Q.m, w);
+            l.y = static_cast&lt;Real&gt;(coachOf(train_).floor);
+            l.x = std::clamp(l.x, Real(-(coachOf(train_).gangwayHalf - 0.2)), Real(coachOf(train_).gangwayHalf - 0.2));
+            car_ = to;
+            local_ = l;
+            P = Q;
+        } else {
+            local_.z = std::clamp(local_.z, -hl - half + 0.06, hl + half - 0.06);   <span class="c">// the train's last end: a closed door</span>
+            local_.z = std::clamp(local_.z, -hl + 0.2, hl - 0.2);
+        }
+    }
+    <span class="c">// OUT OF THE DOOR: past the body's side where it is open</span>
+    if (T.doorSide != 0 &amp;&amp; local_.x * T.doorSide &gt; coachOf(train_).width / 2 + 0.3) {
+        Vec3 out = P.m.transformPoint(Vec3(T.doorSide * static_cast&lt;Real&gt;(coachOf(train_).width / 2 + 0.5), static_cast&lt;Real&gt;(coachOf(train_).floor), local_.z));
+        <span class="c">// the capsule's centre over the platform (its own height, not the 0.7 eye offset: that left a 1.8 m body</span>
+        <span class="c">// standing 0.15 m into the platform)</span>
+        out.y += (cc ? cc-&gt;halfHeight + cc-&gt;radius : Real(0.9)) + 0.05;
+        leave(out);
+        return;
+    }</pre>
+</div>
+
+  <p>Both ends of a coupling are the same place on the rail, so moving from one car's frame to the next is exact. Out of
+    the door, the capsule is placed over the platform at its own height (the first cut used the eye offset and stood a
+    1.8 m body 0.15 m into the platform). Debug: <code>trains?</code> over the control channel lists lines, stops and
+    every train; <code>train_board T C</code> puts the player aboard train T, car C.</p>
+
+  <h2>People take the train</h2>
+  <p>Glenn, watching the first trains: <i>"I don't see anyone on the train though ... there's no sound on the train ...
+    Train stations could use the name of the station."</i> ADR-0156 answered all three.</p>
+  <p><code>RailRiders</code> (<code>city_rail_riders.h</code>) pins each station's way in to the nearest walkable street
+    node, in a street network big enough for buses (the bus anchors' rule). A walker's trip into <b>another</b> street
+    network (another town: no street joins them) goes by train when both have a station: <code>startGoalTrip</code>
+    plans it first and aims the street leg (bus if it beats walking) at the station. Within a town, a train is taken
+    only when it saves a minute and a sixth of the walk on trips over ~900 m, the bus's rule (ADR-0157).</p>
+
+  <div class="code">
+  <div class="hd"><span>RailTrip: a rider&#x27;s phase, and what each phase needs</span>
+    <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/apps/citysim/city_rail_riders.h#L35-L44">src/apps/citysim/city_rail_riders.h</a></div>
+<pre>struct RailTrip {
+    enum class Phase : uint8_t { ToStation, Entering, Waiting, Aboard, Leaving };
+    int from = -1, to = -1;       <span class="c">// stations</span>
+    int line = -1, fromStop = -1, toStop = -1;
+    Phase phase = Phase::ToStation;
+    int train = -1;               <span class="c">// aboard: which train</span>
+    engine::Real timer = 0;       <span class="c">// Entering / Leaving: seconds left on the footway</span>
+    engine::Vec2 spot{0, 0};      <span class="c">// Waiting: where on the platform</span>
+    engine::Real top = 0;         <span class="c">// ...and its height</span>
+};</pre>
+</div>
+
+  <div class="diagram">
+    <svg viewBox="0 0 860 150" role="img" aria-label="Rider phases: to the station on the street, entering along the footway as a timed absence, waiting on a platform spot, aboard a train, leaving along the far footway, then back on the street">
+      <defs><marker id="ar3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" fill="#6f8fb0"/></marker></defs>
+      <g font-family="system-ui, sans-serif" font-size="12" text-anchor="middle">
+        <rect x="10" y="40" width="120" height="56" rx="8" fill="#131a24" stroke="#2c3d50"/>
+        <text x="70" y="63" fill="#cfe4ff" font-size="13">ToStation</text><text x="70" y="82" fill="#93a6ba">street leg (sim)</text>
+        <rect x="150" y="40" width="120" height="56" rx="8" fill="#131a24" stroke="#2c3d50"/>
+        <text x="210" y="63" fill="#cfe4ff" font-size="13">Entering</text><text x="210" y="82" fill="#93a6ba">timer: walkIn</text>
+        <rect x="290" y="40" width="130" height="56" rx="8" fill="#131a24" stroke="#3b82f6"/>
+        <text x="355" y="63" fill="#cfe4ff" font-size="13">Waiting</text><text x="355" y="82" fill="#93a6ba">a platform spot</text>
+        <rect x="440" y="40" width="130" height="56" rx="8" fill="#131a24" stroke="#3b82f6"/>
+        <text x="505" y="63" fill="#cfe4ff" font-size="13">Aboard</text><text x="505" y="82" fill="#93a6ba">follows the train</text>
+        <rect x="590" y="40" width="120" height="56" rx="8" fill="#131a24" stroke="#2c3d50"/>
+        <text x="650" y="63" fill="#cfe4ff" font-size="13">Leaving</text><text x="650" y="82" fill="#93a6ba">timer: walkIn</text>
+        <rect x="730" y="40" width="120" height="56" rx="8" fill="#131a24" stroke="#2c3d50"/>
+        <text x="790" y="63" fill="#cfe4ff" font-size="13">street</text><text x="790" y="82" fill="#93a6ba">trip goes on</text>
+        <line x1="130" y1="68" x2="146" y2="68" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar3)"/>
+        <line x1="270" y1="68" x2="286" y2="68" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar3)"/>
+        <line x1="420" y1="68" x2="436" y2="68" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar3)"/>
+        <line x1="570" y1="68" x2="586" y2="68" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar3)"/>
+        <line x1="710" y1="68" x2="726" y2="68" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar3)"/>
+        <text x="430" y="122" fill="#93a6ba">boarding: a train of the rider's line dwelling at their stop, doors open, a seat free</text>
+        <text x="430" y="140" fill="#93a6ba">setting down: the train they are on dwelling at their destination stop</text>
+      </g>
+    </svg>
+  </div>
+  <p class="cap">A rider's journey. The footway is not in the nav graph, so walking along it is a timed absence; the
+    wait is a real place on the platform, drawn at the platform's top (<code>CityRenderSystem::floorAt</code>).</p>
+
+  <div class="code">
+  <div class="hd"><span>CitySim::railPass: set down, then take on, at every open door</span>
+    <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/apps/citysim/city_sim.cpp#L3301-L3323">src/apps/citysim/city_sim.cpp</a></div>
+<pre>    for (std::size_t ti = 0; ti &lt; trains.size(); ++ti) {
+        const Train&amp; T = trains[ti];
+        if (!T.dwelling || T.doorSide == 0) continue;
+        const int stop = T.nextStop;
+        const int seats = T.kind.cars * kTrainSeatsPerCar;
+        for (int p : riders) {
+            RailTrip* t = rail_.tripOf(p);
+            if (!t) continue;
+            if (t-&gt;phase == RailTrip::Phase::Aboard &amp;&amp; t-&gt;train == static_cast&lt;int&gt;(ti) &amp;&amp; t-&gt;toStop == stop) {
+                t-&gt;phase = RailTrip::Phase::Leaving;
+                t-&gt;timer = rail_.stations()[static_cast&lt;std::size_t&gt;(t-&gt;to)].walkIn;
+                t-&gt;train = -1;
+                --aboard[ti];
+                ++rail_.stats.setDown;
+            } else if (t-&gt;phase == RailTrip::Phase::Waiting &amp;&amp; t-&gt;line == T.line &amp;&amp; t-&gt;fromStop == stop &amp;&amp;
+                       aboard[ti] &lt; seats) {
+                t-&gt;phase = RailTrip::Phase::Aboard;
+                t-&gt;train = static_cast&lt;int&gt;(ti);
+                ++aboard[ti];
+                ++rail_.stats.boarded;
+            }
+        }
+    }</pre>
+</div>
+
+  <p>The sim only <i>reads</i> the trains. Seats cap boarding (72 per coach, <code>kTrainSeatsPerCar</code>); the
+    renderer seats each rider in a coach picked by a hash of who they are, in three outfits. Measured headless
+    (ADR-0156): 24 agents sent across two towns all walked in, waited, rode, got off and took the train home, 48 trips.
+    On island 8, in real time, ~50 commuters choose the train at load and walk a median 1.3 km to their station; the
+    first reach a platform about 7 minutes in.</p>
+
+  <h3>Sounds</h3>
+  <p>All procedural (<code>sfx.h</code>): <code>railClack</code> per axle as it crosses a joint, every 18 m of its
+    own travel, so a car's two bogies give the beat and it quickens with speed; <code>railRumble</code>, a seamless
+    loop on the nearest car scaled by speed; <code>trainHorn</code>, high then low, ~300 m before each platform;
+    <code>trainDoorChime</code>, a falling ding-dong as the doors open and three beeps before they shut. Heard from the
+    camera, so aboard they are simply near.</p>
+
+  <h2>How it got here</h2>
+  <div class="note history"><p><b>Five days in October.</b> Stage 1 (2026-10-10, ADR-0153) was the test bed:
+    <code>rail_lab.json</code>, a 2.9 km loop with two stations and a bridge each side; lines of 2844 and 2869 m, four
+    trains, ~95 s between stations at up to 22 m/s, every lanes invariant passing. The island loop followed the next day
+    (ADR-0154), then platform access (ADR-0155), riders, sounds and boards (ADR-0156), light rail (ADR-0157/0158) and the
+    station kit (ADR-0159) by 2026-10-12. Most of the work was in the builder, not the trains: three vertical rules had
+    to be learned the hard way.</p></div>
+  <div class="note history"><p><b>Rules the builder learned.</b> (1) <i>A shared end is a node, not an overpass:</i> the
+    lift pass skipped nothing at a joint, so two sections of one line "crossed" there and lifted each other 7 m at every
+    joint, 23 km of viaduct. (2) <i>The track moves, not the road:</i> lifting the higher of the two raised Saltwood's
+    streets over the line at 18 %. (3) <i>Holds cross joints:</i> placing joints clear of crossings was not enough in a
+    town; the light rail's first island attempt failed its check with 1.6–4 m steps at joints and a footbridge that came
+    out under a track already 8 m up. That attempt was written, checked and not kept; ADR-0158 fixed both and the city
+    lines went in.</p></div>
+  <div class="note history"><p><b>Cost.</b> The island loop added 1.75 M triangles (sleepers 1.14 M, rails 0.44 M,
+    ballast 0.16 M) over 191 cells. Three views at Saltwood with and without the track kit (<code>RT_NO_TRACK_KIT</code>,
+    <code>RT_VSYNC=0</code>): frame p50 17.2/17.3, 18.4/18.2, 13.3/13.0 ms. No measurable cost, so no track LOD yet
+    (ADR-0154).</p></div>
+
+  <h2>Not yet</h2>
+  <ul>
+    <li><b>Shuttles.</b> An open line's train is put back at its start when it reaches the end (<code>step()</code>
+      says "shuttles owed"); only loops run properly.</li>
+    <li><b>Level crossings</b>, <b>subways</b> (the <code>subway</code> stock and a <code>metro</code> class name exist
+      in <code>TrainSystem</code>, but no built-in <code>metro</code> track class), <b>tunnels</b>, <b>lifts</b> at
+      stations.</li>
+    <li>Seeing a platform crowd and a full coach on the island in pictures; drawing the walk along the footway (today a
+      timed absence).</li>
+  </ul>
+
+  <h2>Where to look</h2>
+  <ul class="files" style="overflow-wrap: anywhere">
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/procgen/city/rail_track.h">src/engine/procgen/city/rail_track.h</a> — <code>RailTrack</code>, <code>RailStop</code>, gauge and platform constants</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/procgen/city/roads/lanes/road_graph_spec.cpp">…/roads/lanes/road_graph_spec.cpp</a> — the <code>rail</code>, <code>light_rail</code> and <code>footway</code> classes</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/procgen/city/roads/lanes/deck_mesh.cpp">…/roads/lanes/deck_mesh.cpp</a> — <code>trackKit</code>, platforms, canopies, <code>stationStairs</code>, footway steps, <code>railTracks()</code></li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/procgen/city/roads/lanes/vertical_profile.cpp">…/roads/lanes/vertical_profile.cpp</a> — <code>separates</code>, <code>anyTrack</code>, <code>chainTrackFloors</code></li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/procgen/world/island_rail.h">src/engine/procgen/world/island_rail.h</a> — <code>islandRailLoop</code>, <code>cityRailLoop</code></li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/apps/citysim/rail_sim.h">src/apps/citysim/rail_sim.h</a> — lines, trains, stock kinds, car poses</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/apps/citysim/train_system.h">src/apps/citysim/train_system.h</a> — drawing, riding, sounds; <a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/procgen/vehicle/train_mesh.h">src/engine/procgen/vehicle/train_mesh.h</a> — procedural locomotive and coach</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/apps/citysim/city_rail_riders.h">src/apps/citysim/city_rail_riders.h</a> — stations for the sim, trips; <code>CitySim::railPass</code> in <code>city_sim.cpp</code></li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/apps/citysim/rail_board.h">src/apps/citysim/rail_board.h</a> — the platform board</li>
+    <li>Tests: <a href="https://github.com/GlennSong/raytracer-clang/blob/main/tests/test_rail_sim.cpp">tests/test_rail_sim.cpp</a> (<code>rail_tracks_join_into_one_loop_each_way</code>, <code>trains_stop_at_every_platform_with_their_doors_open_there</code>, <code>carriages_couple_end_to_end_on_the_curve</code>, <code>a_platform_board_finds_its_platform_and_its_minutes_come_true</code>), <code>test_rail_riders.cpp</code>, <code>test_island_rail.cpp</code>, and in <code>test_lanes.cpp</code>: <code>lanes_a_track_lift_runs_on_across_a_joint_between_sections</code>, <code>lanes_light_rail_lab_reaches_its_stations_from_below</code></li>
+    <li>Labs: <code>assets/levels/rail_lab.json</code> (graph <code>assets/lanelab/rail_loop.json</code>), <code>assets/levels/light_rail_lab.json</code>; run with <code>build-viewer/viewer assets/levels/rail_lab.json --play</code></li>
+    <li>Tools: <code>city_plan island-rail GRAPH LEVEL [--write] [--no-ways]</code>, <code>city_plan city-rail GRAPH LEVEL [--write]</code></li>
+  </ul>
+  <p><b>Debug switches.</b> <code>trains?</code> and <code>train_board T C</code> on the control channel;
+    <code>RT_TRAIN_KIND</code> runs one stock on every line; <code>RT_TRAINS_PER_LINE</code> overrides the timetable;
+    <code>RT_NO_TRACK_KIT</code> drops sleepers and rails (cost A/B); <code>RT_CITY_RAIL_DEBUG</code> traces the
+    light-rail loop's stages; <code>RT_XC_TRACE</code> prints crossings that won't agree; <code>RT_SFX_DUMP=&lt;dir&gt;</code> on
+    <code>run_tests</code> writes the sounds to listen to. A change to the track kit needs a <code>kRailBuildTag</code> bump or the cached bundle is served.
+    See also <a href="roads.html">The road network</a>, which builds the track.</p>
+
+  <footer>Code excerpts from commit <code>47d587f3</code> (2026-10-26). Drawn from ADR-0055, 0153–0159 and 0219, and
+    Glenn's rail notes.</footer>
+</div>
+</body>
+</html>

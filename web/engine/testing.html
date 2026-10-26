@@ -1,0 +1,629 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Testing and Measuring — How the Engine Works</title>
+  <link rel="stylesheet" href="engine.css">
+</head>
+<body>
+<div class="wrap">
+  <div class="nav"><a href="index.html">← How the engine works</a> · <a href="../index.html">scenes</a></div>
+  <h1>How it's tested and measured</h1>
+  <p class="lede">A change is done when its gates pass: about 1,800 headless test cases in four binaries, the
+    levels themselves loaded and judged, a mesh audit over every producer, and a scripted player replayed step by
+    step. Beyond the tests, a running viewer answers a socket, so probe scripts can walk, fly, drive and photograph
+    the real game and read back where each frame's time went.</p>
+
+  <h2>The problem</h2>
+  <p>Most of what this engine makes is generated: cities, roads, buildings, trees, terrain. A bug in a generator
+    is rarely a crash. It is a lamp post standing in the road, a deck you can see through from below, a car that
+    flips lanes, a frame that hitches once every two seconds. None of these is visible to a unit test of one function,
+    and most are invisible from the overhead camera a programmer tends to check from. Three rules in
+    <code>AGENTS.md</code> shape the answer:</p>
+  <ul>
+    <li><b>"These two bullets are gates, not advice."</b> A rule that matters gets a test that fails, because rules
+      that were only written down were "read, and violated anyway" (<code>CLAUDE.md</code> on
+      <code>docs/knowledge-retention-plan.md</code>).</li>
+    <li><b>"A bug is evidence about the design."</b> The fix is not complete until something prevents the class
+      of bug: "a type that makes the bad state unrepresentable, an invariant, or a test gate".</li>
+    <li><b>"Verify from inside the world."</b> A scene that only looks right from a fly camera is unverified;
+      check it at player height. And look in <code>editor_app</code>, the acceptance gate, because the viewer is a
+      different host.</li>
+  </ul>
+  <p>In this project's vocabulary a <b>gate</b> is an automated test that must pass; "adding a gate" means adding a
+    test so a bug cannot silently come back. A commit's definition of done is "the gates are green": in practice
+    <code>run_tests</code> and <code>physics_tests</code> for every change (the memory notes call these the commit
+    gate), <code>lanes_tests</code> for road work, and <code>level_tests</code> when a change touches what levels
+    build.</p>
+
+  <h2>The test binaries</h2>
+  <div class="diagram">
+    <svg viewBox="0 0 860 330" role="img" aria-label="The five test binaries, what they link, how long they take, and which CI job runs them">
+      <defs><marker id="ta1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" fill="#6f8fb0"/></marker></defs>
+      <g font-family="system-ui, sans-serif" font-size="13" text-anchor="middle">
+        <rect x="20" y="20" width="156" height="120" rx="9" fill="#131a24" stroke="#3b82f6"/>
+        <text x="98" y="44" fill="#cfe4ff">run_tests</text>
+        <text x="98" y="66" fill="#93a6ba" font-size="12">~1,600 cases</text>
+        <text x="98" y="84" fill="#93a6ba" font-size="12">ECS, math, procgen,</text>
+        <text x="98" y="102" fill="#93a6ba" font-size="12">citysim, Lua, audio,</text>
+        <text x="98" y="120" fill="#93a6ba" font-size="12">mesh audit; no GPU</text>
+        <rect x="188" y="20" width="156" height="120" rx="9" fill="#131a24" stroke="#3b82f6"/>
+        <text x="266" y="44" fill="#cfe4ff">physics_tests</text>
+        <text x="266" y="66" fill="#93a6ba" font-size="12">140 cases</text>
+        <text x="266" y="84" fill="#93a6ba" font-size="12">real Jolt: vehicles,</text>
+        <text x="266" y="102" fill="#93a6ba" font-size="12">player, rides, lifts,</text>
+        <text x="266" y="120" fill="#93a6ba" font-size="12">the player trace</text>
+        <rect x="356" y="20" width="156" height="120" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="434" y="44" fill="#cfe4ff">lanes_tests</text>
+        <text x="434" y="66" fill="#93a6ba" font-size="12">48 cases</text>
+        <text x="434" y="84" fill="#93a6ba" font-size="12">the road builder</text>
+        <text x="434" y="102" fill="#93a6ba" font-size="12">over every lab graph:</text>
+        <text x="434" y="120" fill="#93a6ba" font-size="12">decks, undersides</text>
+        <rect x="524" y="20" width="156" height="120" rx="9" fill="#131a24" stroke="#e6c07b"/>
+        <text x="602" y="44" fill="#e6c07b">level_tests</text>
+        <text x="602" y="66" fill="#93a6ba" font-size="12">38 cases × levels</text>
+        <text x="602" y="84" fill="#93a6ba" font-size="12">real LevelLoader on</text>
+        <text x="602" y="102" fill="#93a6ba" font-size="12">NullRenderer; minutes</text>
+        <text x="602" y="120" fill="#93a6ba" font-size="12">heavy: 1.5-10 min each</text>
+        <rect x="692" y="20" width="148" height="120" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="766" y="44" fill="#cfe4ff">editor_qt_tests</text>
+        <text x="766" y="66" fill="#93a6ba" font-size="12">Qt panels headless:</text>
+        <text x="766" y="84" fill="#93a6ba" font-size="12">inspector, bake</text>
+        <text x="766" y="102" fill="#93a6ba" font-size="12">dialog, level cache</text>
+        <text x="766" y="120" fill="#93a6ba" font-size="12">only where Qt 6 is</text>
+        <line x1="98" y1="140" x2="98" y2="178" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ta1)"/>
+        <line x1="266" y1="140" x2="266" y2="178" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ta1)"/>
+        <line x1="434" y1="140" x2="434" y2="178" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ta1)"/>
+        <line x1="602" y1="140" x2="602" y2="178" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ta1)"/>
+        <rect x="20" y="180" width="820" height="58" rx="9" fill="#131a24" stroke="#3b82f6"/>
+        <text x="430" y="204" fill="#cfe4ff">Push CI (build.yml): Linux GCC + Vulkan shaders, macOS + Metal shader check; ctest</text>
+        <text x="430" y="224" fill="#93a6ba" font-size="12">RT_LEVEL_TESTS_SKIP_HEAVY=1 leaves out the ten heavy levels so it finishes inside ctest's 1800 s</text>
+        <line x1="602" y1="238" x2="602" y2="262" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ta1)"/>
+        <rect x="430" y="264" width="410" height="54" rx="9" fill="#131a24" stroke="#e6c07b"/>
+        <text x="635" y="287" fill="#e6c07b">Nightly (levels-nightly.yml), 09:17 UTC</text>
+        <text x="635" y="306" fill="#93a6ba" font-size="12">Linux, level_tests with every level, 180 min limit</text>
+        <rect x="20" y="264" width="390" height="54" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="215" y="287" fill="#cfe4ff">Not in CI: probes against a live viewer</text>
+        <text x="215" y="306" fill="#93a6ba" font-size="12">walk / fly / fall / drive, shots, ledger captures</text>
+      </g>
+    </svg>
+  </div>
+  <p class="cap">Structure. Case counts are <code>TEST_CASE</code> lines at the pinned commit (run_tests' count
+    includes the scripting and audio files compiled in when those modules are on). <code>editor_qt_tests</code> is built
+    only where CMake finds Qt 6, which the CI runners do not install, so push CI runs the other four; the nightly
+    reruns the level suite with the heavy levels in.</p>
+  <p>They are separate binaries for cost, not taste. <code>CMakeLists.txt</code> says it of <code>level_tests</code>:
+    it "runs the real procgen for all … levels in assets/levels, which costs minutes where the unit suite costs
+    seconds. Folding it into run_tests would make the fast loop slow enough that people stop running it — and a gate
+    nobody runs is the failure this whole file guards against." <code>physics_tests</code> is the one that links
+    Jolt; <code>level_tests</code> is deliberately Jolt-free and asks its ground questions of the collider components
+    the loader produced.</p>
+
+  <h3>The framework: 110 lines, no dependencies</h3>
+  <p>The project rule is standard library only, so the harness is home-made. A <code>TEST_CASE</code> registers a
+    function in a static list at start-up; <code>CHECK</code> counts a failure and carries on, so one run reports
+    every broken check rather than the first.</p>
+  <div class="code">
+    <div class="hd"><span>TEST_CASE and CHECK</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/tests/test_framework.h#L43-L56">tests/test_framework.h</a></div>
+<pre><span class="k">#define</span> TEST_CASE(name)                                                       \
+    <span class="k">static</span> <span class="t">void</span> name();                                                       \
+    <span class="k">static</span> <span class="t">TestRegistrar</span> registrar_##name(#name, name);                       \
+    <span class="k">static</span> <span class="t">void</span> name()
+
+<span class="k">#define</span> CHECK(cond)                                                           \
+    <span class="k">do</span> {                                                                      \
+        <span class="k">if</span> (!(cond)) {                                                        \
+            std::printf(<span class="s">"    FAIL %s:%d  CHECK(%s)\n"</span>, __FILE__, __LINE__,     \
+                        #cond);                                               \
+            ++totalFailedChecks();                                            \
+            ++currentCaseFailedChecks();                                      \
+        }                                                                     \
+    } <span class="k">while</span> (<span class="n">0</span>)</pre>
+  </div>
+  <p>The runner flushes <code>[ RUN  ] name</code> before each case so a crash names its culprit, catches exceptions
+    per case, and honours <code>RT_TEST_FILTER=&lt;substring&gt;</code>, because "the whole suite takes minutes;
+    iterating on one measurement should not". Test names are sentences
+    (<code style="word-break:break-all">every_shipped_level_has_collidable_ground_under_the_spawn</code>,
+    <code style="word-break:break-all">an_impact_is_the_speed_lost_along_the_way_meant</code>), so a red line reads as the broken promise.
+    Many tests read shipped assets, so run them from the repository root (CMake sets <code>RT_SOURCE_DIR</code> and the
+    ctest working directory for this).</p>
+  <p>Engine services were built to be testable without a device: <code>JobSystem{0}</code> runs inline,
+    <code>AudioBackendMode::Manual</code> mixes into a buffer a test can inspect, <code>ControlBackendMode::Manual</code>
+    takes pushed lines instead of a socket, <code>NullRenderer</code> satisfies <code>Renderer::create()</code>,
+    <code>FrameStats::record</code> accepts synthetic frames, and systems such as <code>ScriptSystem</code> and
+    <code>PhysicsSystem</code> expose a headless <code>tick</code>. This "Manual mode" idiom is why nearly the whole
+    engine, physics included, runs in CI on machines with no GPU.</p>
+
+  <h2>Gates over the levels themselves</h2>
+  <p><code>tests/test_levels_playable.cpp</code> (4,321 lines) loads every shipped level (64 JSON files in
+    <code>assets/levels</code> at the pinned commit, plus the lanelab levels) through the real
+    <code>LevelLoader</code> and holds each to the "Playable Scenes" rule: it loads, it has exactly one player, it has
+    a collider, there is collidable ground under the spawn and not a building on top of it.</p>
+  <div class="code">
+    <div class="hd"><span>a level gate: the rule, stated as a loop over every level</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/tests/test_levels_playable.cpp#L599-L608">tests/test_levels_playable.cpp</a></div>
+<pre>TEST_CASE(every_shipped_level_has_a_collider) {
+    <span class="k">for</span> (<span class="k">const</span> <span class="t">LevelFacts</span>&amp; f : allLevels()) {
+        <span class="k">if</span> (!f.loaded) <span class="k">continue</span>;
+        <span class="k">if</span> (f.weightless) <span class="k">continue</span>;                <span class="c">// nothing falls; see LevelFacts</span>
+        <span class="k">if</span> (f.streamsTerrainColliders) <span class="k">continue</span>;   <span class="c">// chunks arrive around the player</span>
+        <span class="k">if</span> (f.colliders == <span class="n">0</span>)
+            std::printf(<span class="s">"    level '%s' has NO colliders\n"</span>, f.name.c_str());
+        CHECK(f.colliders &gt; <span class="n">0</span>);
+    }
+}</pre>
+  </div>
+  <p>Past the five basic rules, the file holds the city's measured promises: road decks never poked by the drawn
+    terrain, traffic driving on the deck, buses serving the city, cars parking in bays not heaps, front doors facing
+    their street, furniture never in a road, lot dressing planted on the ground. Some cases only print
+    (<code>level_print_*</code>, the censuses) and exist to be read when diagnosing.</p>
+  <p>Where a measured problem is known but its fix is owed, the gate becomes a <b>ratchet</b>: the threshold is the
+    measured value, with the cause in a comment, and the rule is "tighten, never loosen".</p>
+  <div class="code">
+    <div class="hd"><span>a ratchet: the baseline, its history and its owed cause</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/tests/test_levels_playable.cpp#L979-L990">tests/test_levels_playable.cpp</a></div>
+<pre>    <span class="c">// The measured baseline (above). Tighten these, never loosen them.</span>
+    <span class="c">// RE-MEASURED on the LANE-BUILT metro (2026-10-22; metro_v2_test moved to the lanes builder on 10-14, and the</span>
+    <span class="c">// 126 / 1424 / 2433 / 3.6 m above were the lattice city's): 12533-12582 / 32657-32800 / 68896-69079, worst</span>
+    <span class="c">// 4.67 m at (-599, -746), the same on Linux GCC, macOS and local clang. The cause is owed (ADR-0217): lot pads'</span>
+    <span class="c">// feathers lie ON the sidewalk -- a wall at the back of the sidewalk. A RATCHET until then: tighten, never loosen.</span>
+    <span class="c">// THE DRAWN SECTION (ADR-0223): the report measures against the tilted deck and the finish follows it -- 8953 /</span>
+    <span class="c">// 30677 / 69911, worst 4.03 m. LOD 2 reads ~800 more than the ratchet's 69079 because the level-across measure</span>
+    <span class="c">// hid the pokes on every street's LOW edge (the level finish under the same measure: 14998 / 31021 / 70049).</span>
+    CHECK(r.pokes[<span class="n">0</span>] &lt;= <span class="n">9100</span>);
+    CHECK(r.pokes[<span class="n">1</span>] &lt;= <span class="n">31000</span>);
+    CHECK(r.pokes[<span class="n">2</span>] &lt;= <span class="n">70200</span>);
+    CHECK(r.worst[<span class="n">0</span>] &lt;= <span class="n">4.1</span>);</pre>
+  </div>
+  <p>Some levels take minutes to build cold. The file names them and gives the reason with measurements:</p>
+  <div class="code">
+    <div class="hd"><span>the heavy levels, and why they are skipped on push</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/tests/test_levels_playable.cpp#L102-L119">tests/test_levels_playable.cpp</a></div>
+<pre><span class="c">// THE HEAVY LEVELS: over a minute each to build cold on a CI runner (measured on the 2026-09-26 macOS run:</span>
+<span class="c">// metro_mountain 366 s, metro_planned 323 s, island_8_weathered 168 s, island_8_saltwood 159 s, piedmont 99 s --</span>
+<span class="c">// with them the gate never finished inside ctest's 30 minutes, so CI was red on a timeout, not on a finding).</span>
+<span class="c">// ...</span>
+<span class="c">// RT_LEVEL_TESTS_SKIP_HEAVY=1 (the push workflow) leaves them out; the nightly workflow runs everything.</span>
+<span class="t">bool</span> skipHeavy() {
+    <span class="k">const</span> <span class="t">char</span>* e = std::getenv(<span class="s">"RT_LEVEL_TESTS_SKIP_HEAVY"</span>);
+    <span class="k">return</span> e &amp;&amp; *e &amp;&amp; std::string(e) != <span class="s">"0"</span>;
+}
+<span class="t">bool</span> isHeavyLevel(<span class="k">const</span> std::string&amp; name) {
+    <span class="k">static</span> <span class="k">const</span> <span class="t">char</span>* kHeavy[] = {<span class="s">"metro_mountain.json"</span>, <span class="s">"metro_planned.json"</span>, <span class="s">"island_8_weathered.json"</span>, <span class="s">"island_8_saltwood.json"</span>,
+                                   <span class="s">"piedmont.json"</span>, <span class="s">"island_8_rocky.json"</span>, <span class="s">"island_8_nature.json"</span>, <span class="s">"piedmont_roads.json"</span>,
+                                   <span class="s">"tree_lab.json"</span>, <span class="s">"scale_lab.json"</span>};
+    <span class="c">// ...</span>
+}</pre>
+  </div>
+  <div class="note history"><p><b>The timeout that hid everything.</b> A newly tracked big level that is not added
+    to this list makes the push run time out, and a timeout hides every real failure behind it. That happened from
+    2026-10-19 to 10-22, when <code>island_8_rocky</code> and <code>island_8_nature</code> had been tracked; both
+    joined the list, along with <code>piedmont_roads</code> (578 s cold on Linux), <code>tree_lab</code> and
+    <code>scale_lab</code>. After that the Linux level suite ran 1,264 s of the 1,800 s limit on a green run
+    (CI run 39876769272). For iterating on one level or one case: <code>RT_LEVELS=river_town</code> and
+    <code>RT_TEST_FILTER=&lt;case&gt;</code>.</p></div>
+
+  <h2>The mesh audit</h2>
+  <p>Every triangle the engine generates should face outward, have area, be finite and have unit normals. After
+    the station turnstiles came out inside-out and the elevated decks could be seen through from below, Glenn asked
+    that "everything, and I mean everything in this engine should use the same tooling"
+    (<a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/docs/decisions.md?plain=1#L9977">ADR-0172</a>).
+    <code>engine/mesh_audit.h</code> is that one rule set, applied in three places: the unit tests over every producer
+    (<code>tests/test_winding.cpp</code>), <code>lanes_tests</code> over every lab road graph, and
+    <code>rt_bake --audit &lt;bundle&gt;</code> over every mesh a baked level ships.</p>
+  <div class="code">
+    <div class="hd"><span>auditMesh: winding judged by angle between face and normals</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/engine/mesh_audit.h#L66-L89">src/engine/mesh_audit.h</a></div>
+<pre>        <span class="k">const</span> <span class="t">Vec3</span> f = cross(c.position - a.position, b.position - a.position);
+        <span class="c">// ...</span>
+        <span class="k">const</span> <span class="t">Vec3</span> n = a.normal + b.normal + c.normal;
+        <span class="k">const</span> <span class="t">double</span> cs = n.lengthSquared() &gt; <span class="n">1e-12</span> ? dot(normalize(f), normalize(n)) : <span class="n">1.0</span>;
+        <span class="k">if</span> (cs &lt; -<span class="n">0.3</span>) {
+            <span class="c">// ...</span>
+        }
+        <span class="k">if</span> (cs &lt; -<span class="n">0.9</span>) ++r.flipped;</pre>
+  </div>
+  <p>The engine's front face is <b>clockwise</b> seen from the normal's side, so <code>cross(c − a, b − a)</code>
+    should point along the vertex normals. A triangle more than 107° away (cos &lt; −0.3) is <b>inward</b>; past
+    154° (cos &lt; −0.9) it is wholly <b>flipped</b>, a wrong index order rather than a smoothed crease. A test then
+    sweeps a producer:</p>
+  <div class="code">
+    <div class="hd"><span>every furniture piece, four variants each, must audit clean</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/tests/test_winding.cpp#L253-L267">tests/test_winding.cpp</a></div>
+<pre>TEST_CASE(mesh_audit_every_furniture_piece) {
+    <span class="t">Audit</span> total;
+    <span class="k">for</span> (<span class="t">int</span> i = <span class="n">0</span>; i &lt; kPieceCount; ++i) {
+        <span class="t">Audit</span> piece;
+        <span class="k">for</span> (<span class="t">uint32_t</span> variant : {<span class="n">0u</span>, <span class="n">9u</span>, <span class="n">42u</span>, <span class="n">101u</span>}) {
+            <span class="k">const</span> <span class="t">FurniturePiece</span>&amp; fp = furniturePiece(<span class="k">static_cast</span>&lt;<span class="t">Piece</span>&gt;(i), variant);
+            <span class="k">for</span> (<span class="k">const</span> <span class="t">RenderMesh</span>&amp; m : fp.mesh) piece.add(audit(m));
+        }
+        <span class="k">if</span> (!piece.clean()) printAudit(furniturePieceName(<span class="k">static_cast</span>&lt;<span class="t">Piece</span>&gt;(i)), piece);
+        total.add(piece);
+    }
+    printAudit(<span class="s">"ALL FURNITURE"</span>, total);
+    CHECK(total.tris &gt; <span class="n">1000</span>);
+    CHECK(total.clean());
+}</pre>
+  </div>
+  <p>Note <code>CHECK(total.tris &gt; 1000)</code>: a fixture must bite. An audit over an empty list would pass
+    forever. The level ratchet above opens with the same guard (<code>CHECK(r.samples[0] &gt; 100000)</code>).</p>
+  <div class="note history"><p><b>What a winding check could not find.</b> The island bake's 2,303 "flipped" deck
+    triangles were float32 slivers far from the origin, not the see-through bug. The hole under the viaducts was
+    <em>missing</em> faces: a median wall with no bottom standing on the seam between twin carriageways (8,512 open
+    on the island). So the audit grew other questions: <code>auditUndersides</code> (every walkable surface more
+    than 2 m up has something facing down beneath it), <code>auditSeeThrough</code> (a person stands under every
+    elevated surface and looks up at 45° in eight directions; first hit on a back face means see-through; island_8
+    went from 34,009 to 2,968 of 1.21 M looks, then lower once "inside a solid" was measured properly), and later
+    <code>auditFacadeCracks</code>. The fixes went into the shared <code>MeshBuilder</code> emitters, not the call
+    sites. One lesson recorded in the notes: a test had once encoded the wrong (counter-clockwise) rule, and the code
+    under test matched it. Check tests against the convention, not just the code.</p></div>
+
+  <h2>The scripted player: a trace harness</h2>
+  <p>In October 2026 <code>PlayerSystem</code> had grown to 1,906 lines, one ~470-line <code>fixedUpdate</code>
+    running ten movement modes. Before splitting it into a state machine of body modes
+    (<a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/docs/decisions.md?plain=1#L12116">ADR-0246</a>),
+    a safety net was built: <code>tests/test_player_trace.cpp</code> runs the <b>real</b> <code>PlayerSystem</code>
+    and <code>PhysicsSystem</code> on the real <code>movement_lab</code> level, headless, with a scripted gamepad,
+    and writes down every fixed step.</p>
+  <div class="diagram">
+    <svg viewBox="0 0 860 300" role="img" aria-label="The trace harness: a scenario script drives the pad, the rig steps the real systems, each step becomes a trace line that is written, compared or checked">
+      <defs><marker id="ta2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" fill="#6f8fb0"/></marker></defs>
+      <g font-family="system-ui, sans-serif" font-size="13" text-anchor="middle">
+        <rect x="20" y="30" width="190" height="96" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="115" y="54" fill="#cfe4ff">Scenario</text>
+        <text x="115" y="74" fill="#93a6ba" font-size="12">setup: place, slot in hand</text>
+        <text x="115" y="92" fill="#93a6ba" font-size="12">script(t): stick, buttons</text>
+        <text x="115" y="110" fill="#93a6ba" font-size="12">expect: events that must occur</text>
+        <rect x="250" y="20" width="270" height="116" rx="9" fill="#131a24" stroke="#3b82f6"/>
+        <text x="385" y="44" fill="#cfe4ff">Rig::frame() — one fixed step</text>
+        <text x="385" y="66" fill="#93a6ba" font-size="12">player.update → physics.fixedUpdate</text>
+        <text x="385" y="84" fill="#93a6ba" font-size="12">→ player.fixedUpdate → player.render</text>
+        <text x="385" y="106" fill="#93a6ba" font-size="12">movement_lab via LevelLoader,</text>
+        <text x="385" y="124" fill="#93a6ba" font-size="12">NullRenderer, JobSystem{0}</text>
+        <rect x="560" y="30" width="280" height="96" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="700" y="54" fill="#cfe4ff">trace line per step</text>
+        <text x="700" y="74" fill="#93a6ba" font-size="12">mode | ground | hook | last event |</text>
+        <text x="700" y="92" fill="#93a6ba" font-size="12">position, pose numbers, hands,</text>
+        <text x="700" y="110" fill="#93a6ba" font-size="12">rope end … at 9 significant digits</text>
+        <line x1="210" y1="78" x2="246" y2="78" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ta2)"/>
+        <line x1="520" y1="78" x2="556" y2="78" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ta2)"/>
+        <path d="M700,126 L700,160" fill="none" stroke="#6f8fb0" stroke-width="1.6"/>
+        <path d="M700,160 L160,160 L160,186" fill="none" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ta2)"/>
+        <path d="M700,160 L700,186" fill="none" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ta2)"/>
+        <path d="M430,160 L430,186" fill="none" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ta2)"/>
+        <rect x="20" y="188" width="280" height="90" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="160" y="212" fill="#cfe4ff">always</text>
+        <text x="160" y="232" fill="#93a6ba" font-size="12">every expected event happened</text>
+        <text x="160" y="250" fill="#93a6ba" font-size="12">("grab the wall", "lunge", "up" …)</text>
+        <rect x="320" y="188" width="220" height="90" rx="9" fill="#131a24" stroke="#e6c07b"/>
+        <text x="430" y="212" fill="#e6c07b">RT_PLAYER_TRACE_OUT</text>
+        <text x="430" y="232" fill="#93a6ba" font-size="12">record &lt;dir&gt;/&lt;name&gt;.trace</text>
+        <text x="430" y="250" fill="#93a6ba" font-size="12">before the change</text>
+        <rect x="560" y="188" width="280" height="90" rx="9" fill="#131a24" stroke="#3b82f6"/>
+        <text x="700" y="212" fill="#cfe4ff">RT_PLAYER_TRACE_BASE</text>
+        <text x="700" y="232" fill="#93a6ba" font-size="12">compare step by step after it,</text>
+        <text x="700" y="250" fill="#93a6ba" font-size="12">1e-6 relative; first diff printed</text>
+      </g>
+    </svg>
+  </div>
+  <p class="cap">Flow. Record the traces before a refactor, change the code, compare. Without either variable the
+    scenarios still run as ordinary tests that check their moves happened.</p>
+  <div class="code">
+    <div class="hd"><span>Rig::frame: one frame the way Application runs one</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/tests/test_player_trace.cpp#L132-L143">tests/test_player_trace.cpp</a></div>
+<pre>    <span class="c">// One frame the way Application runs one: input, update, a fixed step, render.</span>
+    <span class="t">void</span> frame() {
+        actions.beginFrame();
+        actions.updateGamepad(pad);
+        <span class="t">FrameContext</span> c = ctx();
+        <span class="k">if</span> (<span class="t">InteractOffers</span>* o = world.get&lt;<span class="t">InteractOffers</span>&gt;(body())) o-&gt;list.clear();   <span class="c">// (the broker clears them)</span>
+        player.update(c);
+        physics.fixedUpdate(c);
+        player.fixedUpdate(c);
+        player.render(c);
+        time += clock.fixedStep();
+    }</pre>
+  </div>
+  <div class="code">
+    <div class="hd"><span>the comparison against a recorded baseline</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/tests/test_player_trace.cpp#L441-L460">tests/test_player_trace.cpp</a></div>
+<pre>        <span class="k">if</span> (baseDir &amp;&amp; *baseDir) {
+            std::ifstream f(std::string(baseDir) + <span class="s">"/"</span> + sc.name + <span class="s">".trace"</span>);
+            CHECK(f.good());
+            std::string want;
+            <span class="t">int</span> i = <span class="n">0</span>;
+            <span class="t">bool</span> same = <span class="k">true</span>;
+            <span class="k">while</span> (same &amp;&amp; std::getline(f, want)) {
+                std::string why;
+                <span class="k">if</span> (i &gt;= <span class="k">static_cast</span>&lt;<span class="t">int</span>&gt;(lines.size())) {
+                    std::printf(<span class="s">"    %s: the trace ends at step %d\n"</span>, sc.name.c_str(), i);
+                    same = <span class="k">false</span>;
+                } <span class="k">else</span> <span class="k">if</span> (!sameLine(lines[i], want, <span class="n">1e-6</span>, why)) {
+                    std::printf(<span class="s">"    %s: step %d differs (%s)\n      was %s\n      now %s\n"</span>, sc.name.c_str(), i,
+                                why.c_str(), want.c_str(), lines[i].c_str());
+                    same = <span class="k">false</span>;
+                }
+                ++i;
+            }
+            CHECK(same);
+        }</pre>
+  </div>
+  <p>Determinism is what makes this work: the job system has no workers, Jolt runs single-threaded, the pad is
+    scripted, and the clock is stepped exactly, so the runs are bit-identical. The refactor reproduced all 16
+    recorded traces exactly. The next change,
+    <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/docs/decisions.md?plain=1#L12167">ADR-0247</a>
+    (one impact rule for every mode), was <em>meant</em> to change behaviour, and the traces said exactly how: 14 of
+    17 scenarios identical; <code>hard_fall</code> the same numbers with a new message; the scooter crash one step
+    later; the wingsuit's late chute now "crashed the chute" instead of "landed the chute". A new scenario,
+    <code>wingsuit_crash</code>, measured a 60° dive and is what led to judging a touchdown by what it leaves the body
+    with. Behaviour change becomes a reviewable diff rather than a feeling.</p>
+  <p>The trace also found two old bugs, left in place so the refactor's trace would hold and fixed in the commit
+    after: the monkey bars' "off the end" could never fire (the position was clamped every step), and a limp request
+    made while limp dropped the body again as soon as it stood. The ladder is the one mode not covered: movement_lab
+    has no ladder.</p>
+  <figure class="shot">
+    <img src="img/testing/movement_lab_limp.webp" alt="The movement lab: a checkerboard floor with grey, green and yellow blocks; the red-shirted player lies limp between two blocks">
+    <figcaption>movement_lab, the trace harness's level and the hand-test bed for movement: blocks of graded heights
+      to pull up onto, walls, a pool, ramps. Here the player has gone limp (a probe screenshot from the jointed-body
+      work, 2026-10-25).</figcaption>
+  </figure>
+
+  <h2>Probes: tests against the running game</h2>
+  <p>Some questions only the whole running game can answer. Does it hitch when you walk down this street? Does
+    anything pop in when you fly over the island at 30 m/s? Does the player fall through the floor here? For those,
+    a <b>probe</b> is a Python script (standard library only) that launches the real viewer, talks to it over the
+    <a href="spine.html">control channel</a> socket, and writes a summary. They run on Glenn's machine, never in CI.</p>
+  <div class="diagram">
+    <svg viewBox="0 0 860 290" role="img" aria-label="How walk_probe.py drives the viewer: launch with a frame capture, wait for the socket, sample the ground, stream camera poses, stop, summarise the CSV">
+      <defs><marker id="ta3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" fill="#6f8fb0"/></marker></defs>
+      <g font-family="system-ui, sans-serif" font-size="13" text-anchor="middle">
+        <rect x="20" y="20" width="250" height="96" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="145" y="44" fill="#cfe4ff">1. launch the viewer</text>
+        <text x="145" y="64" fill="#93a6ba" font-size="12">viewer &lt;level&gt; --play</text>
+        <text x="145" y="82" fill="#93a6ba" font-size="12">RT_FRAME_STATS=out/frames.csv</text>
+        <text x="145" y="100" fill="#93a6ba" font-size="12">RT_VSYNC=0</text>
+        <rect x="305" y="20" width="250" height="96" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="430" y="44" fill="#cfe4ff">2. wait for the level</text>
+        <text x="430" y="64" fill="#93a6ba" font-size="12">poll for the .sock file, then</text>
+        <text x="430" y="82" fill="#93a6ba" font-size="12">send `camera?` with a long timeout:</text>
+        <text x="430" y="100" fill="#93a6ba" font-size="12">no reply until the load's frame ends</text>
+        <rect x="590" y="20" width="250" height="96" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="715" y="44" fill="#cfe4ff">3. sample the ground</text>
+        <text x="715" y="64" fill="#93a6ba" font-size="12">teleport x z → poll teleport?</text>
+        <text x="715" y="82" fill="#93a6ba" font-size="12">→ where? gives the eye height</text>
+        <text x="715" y="100" fill="#93a6ba" font-size="12">(every 4th sample along the path)</text>
+        <line x1="270" y1="68" x2="301" y2="68" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ta3)"/>
+        <line x1="555" y1="68" x2="586" y2="68" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ta3)"/>
+        <path d="M715,116 L715,140 L145,140 L145,160" fill="none" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ta3)"/>
+        <rect x="20" y="162" width="250" height="96" rx="9" fill="#131a24" stroke="#3b82f6"/>
+        <text x="145" y="186" fill="#cfe4ff">4. walk</text>
+        <text x="145" y="206" fill="#93a6ba" font-size="12">stream `camera x y z -4 yaw`</text>
+        <text x="145" y="224" fill="#93a6ba" font-size="12">at ~60 Hz at --speed m/s;</text>
+        <text x="145" y="242" fill="#93a6ba" font-size="12">note frame= at start and end</text>
+        <rect x="305" y="162" width="250" height="96" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="430" y="186" fill="#cfe4ff">5. stop</text>
+        <text x="430" y="206" fill="#93a6ba" font-size="12">terminate the viewer (by its</text>
+        <text x="430" y="224" fill="#93a6ba" font-size="12">own process, never by name);</text>
+        <text x="430" y="242" fill="#93a6ba" font-size="12">the ledger CSV is complete</text>
+        <rect x="590" y="162" width="250" height="96" rx="9" fill="#131a24" stroke="#e6c07b"/>
+        <text x="715" y="186" fill="#e6c07b">6. summary.txt</text>
+        <text x="715" y="206" fill="#93a6ba" font-size="12">p50 / p95 / p99 / max, and each</text>
+        <text x="715" y="224" fill="#93a6ba" font-size="12">hitch (&gt; 2× median) with its phases,</text>
+        <text x="715" y="242" fill="#93a6ba" font-size="12">steps and upload counts</text>
+        <line x1="270" y1="210" x2="301" y2="210" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ta3)"/>
+        <line x1="555" y1="210" x2="586" y2="210" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ta3)"/>
+        <text x="430" y="282" fill="#93a6ba" font-size="12">--drive instead: `possess car` at the first point, `drive_to` the last, poll `possess?` until arrived / stuck / no-route</text>
+      </g>
+    </svg>
+  </div>
+  <p class="cap">Flow. <code>tools/walk_probe.py</code>, the hitch hunter. The other probes have the same skeleton:
+    <code>fly_probe.py</code> (what streams in late), <code>fall_probe.py</code> (does the player end up under the
+    ground), <code>elevator_ride.py</code>, <code>asan_storey_probe.py</code>.</p>
+  <div class="code">
+    <div class="hd"><span>walk_probe: launch with a ledger capture, then wait for the level through the socket</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/tools/walk_probe.py#L52-L64">tools/walk_probe.py</a></div>
+<pre>    csv_path = os.path.abspath(os.path.join(a.out, <span class="s">"frames.csv"</span>))
+    env = dict(os.environ, RT_FRAME_STATS=csv_path)
+    env.setdefault(<span class="s">"RT_VSYNC"</span>, <span class="s">"0"</span>)
+    log = open(os.path.join(a.out, <span class="s">"viewer.log"</span>), <span class="s">"wb"</span>)
+    proc = subprocess.Popen([a.viewer, a.level, <span class="s">"--play"</span>], stdout=log, stderr=subprocess.STDOUT,
+                            start_new_session=<span class="k">True</span>, env=env)
+    sock = <span class="s">f"/tmp/raytracer-viewer-{proc.pid}.sock"</span>
+    t0 = time.time()
+    <span class="k">try</span>:
+        <span class="k">while</span> <span class="k">not</span> os.path.exists(sock):
+            <span class="k">if</span> proc.poll() <span class="k">is not</span> <span class="k">None</span> <span class="k">or</span> time.time() - t0 &gt; <span class="n">60</span>: sys.exit(<span class="s">"viewer did not open its control socket"</span>)
+            time.sleep(<span class="n">0.2</span>)
+        send(sock, <span class="s">"camera?"</span>, timeout=a.load_timeout)</pre>
+  </div>
+  <p>That last line is a trick worth knowing. The socket is open from the start, but commands are only drained at
+    the top of a frame on the main thread, and the level loads inside one long frame (the state swap). So the first
+    <code>camera?</code> simply gets no reply until loading is over: the reply is the "level is ready" signal.</p>
+
+  <h3>The protocol, by hand</h3>
+  <p>Any running viewer or editor can be driven from a shell. <code>tools/viewer_ctl.py</code> sends each argument
+    as one command to the newest live viewer and prints the reply; <code>nc -U</code> works too. A short session
+    (reply formats as the code writes them; numbers elided):</p>
+  <div class="code">
+    <div class="hd"><span>a session over the control socket</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/docs/control-channel.md">docs/control-channel.md</a></div>
+<pre>$ tools/viewer_ctl.py <span class="s">"info"</span> <span class="s">"teleport -3960 -790"</span> <span class="s">"teleport?"</span> <span class="s">"where?"</span>
+info -&gt; ok level=assets/levels/… frame=… paused=0 overlay=0 hud=0 ui=0 engine=…
+teleport -3960 -790 -&gt; ok teleport staged (poll `teleport?`)
+teleport? -&gt; ok (pending)
+where? -&gt; ok &lt;x&gt; &lt;y&gt; &lt;z&gt; &lt;pitch&gt; &lt;yaw&gt;
+
+$ tools/viewer_ctl.py <span class="s">"hold W 2"</span> <span class="s">"tap Space"</span> <span class="s">"camera?"</span> <span class="s">"shot /tmp/look.png"</span>
+hold W 2 -&gt; ok hold W staged
+tap Space -&gt; ok tap Space staged
+camera? -&gt; ok eye=&lt;x&gt;,&lt;y&gt;,&lt;z&gt; pitch=… yaw=… frame=…
+shot /tmp/look.png -&gt; ok armed /tmp/look.png
+
+$ printf <span class="s">'ledger summary\n'</span> | nc -U /tmp/raytracer-viewer-*.sock</pre>
+  </div>
+  <ul>
+    <li><b>Staged, then polled.</b> Most verbs stage a Settings key for a system to consume on its next tick and
+      reply at once (<code>staged</code>, <code>armed</code>). The result arrives later: poll the matching
+      <code>?</code> verb (<code>teleport?</code>, <code>possess?</code>) or, for <code>shot</code>, wait for the file,
+      which lands a frame after.</li>
+    <li><b>Real keys.</b> <code>tap &lt;Key&gt;</code> and <code>hold &lt;Key&gt; &lt;seconds&gt;</code> go through the
+      same <code>InputMap::processEvent</code> as the keyboard, so a probe tests the key Glenn presses, not a side
+      door. <code>hold</code> counts sim seconds, so it survives a slowed clock.</li>
+    <li><b>Server time.</b> <code>camera?</code> carries <code>frame=</code>, the viewer's own frame counter, because
+      "socket round-trip jitter was masquerading as 39% camera noise" when a probe divided by its wall clock.
+      <code>shots &lt;prefix&gt; &lt;n&gt;</code> dumps n consecutive frames for artefacts that live between frames.</li>
+    <li><b>Don't measure yourself.</b> Any <code>?</code> question turns on island-wide debug counting for 60 s
+      (it cost 65-130 ms frames when always on), so <code>fly_probe.py</code> asks <code>info</code> for the frame
+      number instead of <code>camera?</code>: "the probe would measure itself".</li>
+  </ul>
+  <div class="code">
+    <div class="hd"><span>`tap`: the key itself, not an imitation of it</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/engine/application.cpp#L905-L913">src/engine/application.cpp</a></div>
+<pre>    <span class="k">if</span> (cmd.name == <span class="s">"tap"</span>) {
+        <span class="c">// Press and release a key through the real input path (see the frame</span>
+        <span class="c">// loop). Tests the KEY, not a verb that imitates what the key does.</span>
+        <span class="k">if</span> (cmd.args.empty()) <span class="k">return</span> <span class="s">"err usage: tap &lt;KeyName&gt;  (e.g. tap F)"</span>;
+        <span class="k">if</span> (keyCodeFromName(cmd.args[<span class="n">0</span>]) == <span class="t">KeyCode</span>::Unknown)
+            <span class="k">return</span> <span class="s">"err unknown key: "</span> + cmd.args[<span class="n">0</span>];
+        settingsStore.setString(<span class="s">"input.tap"</span>, cmd.args[<span class="n">0</span>]);
+        <span class="k">return</span> <span class="s">"ok tap "</span> + cmd.args[<span class="n">0</span>] + <span class="s">" staged"</span>;
+    }</pre>
+  </div>
+  <figure class="shot">
+    <img src="img/testing/crash_probe_sheet.webp" alt="Twelve frames in a grid: a rider on a motorcycle seen from behind drives across a checkerboard floor toward a parked red car beside a dark wall">
+    <figcaption>Probe screenshots of a motorcycle run at a parked car in the movement lab, laid out as a contact sheet,
+      from the work on being thrown from open seats (ADR-0252, 2026-10-25). A probe holds the throttle, stages the
+      camera beside or behind the vehicle, and takes shots on a schedule; the sheet is read for what the eye would
+      miss in play.</figcaption>
+  </figure>
+  <p>The MCP server <code>tools/viewer-mcp.py</code> wraps the same socket as tools for an agent session
+    (<code>screenshot</code>, <code>time_of_day</code>, <code>ledger</code>, <code>possess</code>, and a raw
+    <code>viewer_command</code> escape hatch), and <code>tools/citywalk.py</code> is the director for a possessed
+    pedestrian. The control channel itself is tested in CI without a socket:
+    <code>ControlBackendMode::Manual</code> takes <code>pushCommand</code> lines and returns replies from
+    <code>takeReplies</code> (<a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/tests/test_control_channel.cpp#L45-L70">test_control_channel.cpp</a>),
+    plus one real Unix-socket smoke pass on POSIX hosts.</p>
+
+  <h2>Measuring: from "it feels hitchy" to a named cause</h2>
+  <p>The rule (ADR-0008) is to measure before optimising, and the history shows why: the post-processing effects
+    Glenn suspected were nearly free, and the costs were somewhere nobody guessed. The instruments, roughly in the
+    order they are reached for:</p>
+  <table>
+    <tr><th>Question</th><th>Instrument</th><th>How</th></tr>
+    <tr><td>Was it slow, and in which phase?</td><td>The frame ledger (ADR-0077)</td>
+      <td><code>RT_FRAME_STATS=&lt;csv&gt;</code> or socket <code>ledger start &lt;csv&gt;</code>; <code>tools/frame-report.py</code> (with <code>--compare</code>); overlay Performance panel</td></tr>
+    <tr><td>Where along a path does it hitch?</td><td><code>walk_probe.py</code>, <code>fly_probe.py</code></td>
+      <td>a capture plus a scripted camera; <code>summary.txt</code> lists every hitch frame</td></tr>
+    <tr><td>Which <em>system</em> is it?</td><td><code>RT_DUMP_STATS=1</code></td>
+      <td>per-system update/fixed times every ~300 calls, a <code>SPIKE</code> line for any single call over <code>RT_SPIKE_MS</code> (default 16); render composition (draws, instances, triangles)</td></tr>
+    <tr><td>Which GPU pass?</td><td><code>RT_GPU_TIMES=1</code> (Vulkan)</td>
+      <td>timestamps after each stage (shadows, scene, clouds, bloom, SSAO, SSR, …) logged every 120 frames, no stall</td></tr>
+    <tr><td>Why, inside the function?</td><td>Tracy (ADR-0068)</td>
+      <td>build with <code>RT_ENABLE_PROFILER=ON</code>, attach the Tracy UI</td></tr>
+    <tr><td>Does this feature cost what I think?</td><td>A/B switches</td>
+      <td>turn one thing off and measure again (below)</td></tr>
+  </table>
+  <div class="code">
+    <div class="hd"><span>RT_DUMP_STATS: a spike is named the moment it happens, not averaged away</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/engine/states/playing_state.cpp#L95-L100">src/engine/states/playing_state.cpp</a></div>
+<pre>        <span class="c">// RT_SPIKE_MS=&lt;ms&gt; lowers the bar (default 16): a 10 ms bump every 2 s hides under 16</span>
+        <span class="k">static</span> <span class="k">const</span> <span class="t">double</span> spikeMs = std::getenv(<span class="s">"RT_SPIKE_MS"</span>) ? std::atof(std::getenv(<span class="s">"RT_SPIKE_MS"</span>)) : <span class="n">16.0</span>;
+        <span class="k">if</span> (one &gt; spikeMs) {   <span class="c">// a SPIKE: named now, not averaged away</span>
+            <span class="k">const</span> <span class="t">System</span>&amp; sys = *systems[i];
+            LOG_INFO &lt;&lt; <span class="s">"[stats] SPIKE fixed "</span> &lt;&lt; one &lt;&lt; <span class="s">" ms  "</span> &lt;&lt; <span class="k">typeid</span>(sys).name();
+        }</pre>
+  </div>
+  <div class="note history"><p><b>Three measured turning points.</b></p>
+    <p style="margin-top:6px"><b>Occlusion</b> (<a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/docs/decisions.md?plain=1#L7865">ADR-0100</a>,
+    September 2026). Measured with <code>walk_probe.py</code>: on metro_planned about 10,000 of 10,500 entities hidden
+    per frame and main-pass draw calls 9,850 → 560, the CPU render phase 7.2 → 6.4 ms at the median. The same walk
+    found the real cost: the fixed step was 11 ms at the median with spikes of 50-300 ms. "That, not drawing, is the
+    next target."</p>
+    <p style="margin-top:6px"><b>The city's hitches</b> (<a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/docs/decisions.md?plain=1#L7905">ADR-0101</a>).
+    <code>RT_DUMP_STATS</code> spike lines named one agent's wander-trip scan running 1,500-5,000 A* searches (up to
+    1 s) in a single step; collider tiles were built on the main thread (~55 ms each); and <code>World::each</code>
+    walked the wrong pool. After the fixes: frame p50/p95/p99 19.1/29.5/34.5 → 13.1/17.6/19.5 ms, worst frame about
+    1,000 → 27 ms, fixed step 9.5 ms × 1.6 a frame → 6.0 ms × 1.0. A cap on the scan was tried first and rejected
+    because a gate caught it: <code>city_drawn_traffic_rolls_on_its_wheels</code> saw cars flip lanes.</p>
+    <p style="margin-top:6px"><b>Shadows, not post</b> (commit <code>fcbdb2bf</code>, 2026-10-05). <code>RT_GPU_TIMES</code>
+    on island_8_nature: GPU 14.1 ms, of which shadows 9.7, with SSAO, SSR, bloom and occlusion together under 0.5;
+    every cascade drew every item. Culling per cascade took shadows to 1.9 ms and the frame from 39 to 21.8 ms
+    (~26 → ~46 fps), with <code>RT_NO_SHADOW_CULL=1</code> kept for A/B.</p></div>
+  <p>Two cautions from the notes: frame times taken with the screen locked are invalid (the compositor throttles
+    presentation and the GPU idles), so use per-system CPU timers then; and a probe's own <code>?</code> questions
+    can show up in the capture.</p>
+
+  <h3>A/B switches</h3>
+  <p>Every optimisation that changes what is drawn or simulated keeps an off switch, so "is it faster, and does it
+    look the same?" can be answered at any time. Each is an environment variable read once at start-up. At the
+    pinned commit there are 25 <code>RT_NO_*</code> switches among about 245 <code>RT_*</code> variables; some of the
+    useful ones:</p>
+  <table>
+    <tr><th>Switch</th><th>Turns off</th></tr>
+    <tr><td><code>RT_NO_OCCLUSION</code> (and <code>RT_OCC_STATS=1</code>)</td><td>CPU occlusion culling against the depth readback (ADR-0100)</td></tr>
+    <tr><td><code>RT_NO_SHADOW_CULL</code></td><td>per-cascade shadow culling</td></tr>
+    <tr><td><code>RT_NO_DRAW_INDEX</code></td><td>the 200 m cell index of static drawables in the render walk</td></tr>
+    <tr><td><code>RT_NO_INSTANCING</code>, <code>RT_NO_INSTANCE_LERP</code></td><td>instanced draws; between-step interpolation of instances (ADR-0240)</td></tr>
+    <tr><td><code>RT_NO_GPU_CROWD</code>, <code>RT_NO_TIER_FADE</code>, <code>RT_NO_FAR_BAND</code></td><td>the GPU crowd; tier crossfades; the far LOD band</td></tr>
+    <tr><td><code>RT_NO_SIM</code>, <code>RT_NO_ROADS</code>, <code>RT_NO_BUILDINGS</code>, <code>RT_NO_FOLIAGE</code></td><td>whole layers, to bisect a load or a frame</td></tr>
+    <tr><td><code>RT_NO_SSAO</code>, <code>RT_NO_SSR</code>, <code>RT_NO_CLOUDS</code></td><td>post and sky effects</td></tr>
+    <tr><td><code>RT_VSYNC=0</code></td><td>present sync, so frame times measure work rather than the display's refresh</td></tr>
+    <tr><td><code>RT_AUDIO=null</code></td><td>sound, for probes</td></tr>
+  </table>
+  <p>For refactors that should change nothing, the strongest check is a byte comparison: the notes record a lots
+    rework proved byte-identical by diffing <code>rt_bake --sections</code> output between two forced bakes.</p>
+
+  <h2>CI</h2>
+  <p>Two GitHub Actions workflows run the gates. <code>build.yml</code> runs on every push and pull request, on
+    Linux (GCC, with the Vulkan backend compiled and its shaders run through <code>glslc</code>) and macOS (Apple
+    clang, with the Metal shader library offline-compiled by <code>tools/check-metal-shaders.sh</code>, since Metal
+    otherwise compiles its shaders only when the app starts on someone's Mac). Each job asserts the backend was
+    actually built: without that check a missing SDK silently degrades the viewer to <code>NullRenderer</code>, and
+    the job passes while compiling no render code at all.</p>
+  <div class="code">
+    <div class="hd"><span>the push workflow's test step</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/.github/workflows/build.yml#L47-L52">.github/workflows/build.yml</a></div>
+<pre>      <span class="c"># The heavy levels (a minute+ each, cold) run nightly (levels-nightly.yml): with them level_tests never</span>
+      <span class="c"># finished inside ctest's 30 minutes, and CI was red on a timeout instead of a finding.</span>
+      - name: Tests
+        env:
+          RT_LEVEL_TESTS_SKIP_HEAVY: <span class="s">"1"</span>
+        run: ctest --test-dir build --output-on-failure</pre>
+  </div>
+  <p><code>levels-nightly.yml</code> builds only <code>level_tests</code> and runs it with every level, daily at
+    09:17 UTC or by hand, with a 180-minute limit. <code>deploy-web.yml</code> publishes the site these pages live
+    on.</p>
+  <div class="note history"><p><b>How CI got here.</b> <code>docs/ci-plan.md</code> opens "There is no CI today":
+    the Vulkan backend had shipped through three phases <em>never once compiled</em>, and its first compile found a
+    reserved GLSL keyword, a wrong uniform field and 43 logging calls against an API the project does not have.
+    Stages 0 (headless build and tests) and 1 (render-backend compile coverage) are what <code>build.yml</code> now
+    is. Stage 2, headless offscreen rendering with golden-image comparison across backends, has not been built. When
+    main was merged red (#108, 2026-10-22, on Glenn's "merge and then fix it"), the fix-forward took several runs, and one
+    lesson was to read the failed <em>step</em>, not only the test lines: macOS's tests were all green while the job
+    was red at the Metal shader check that runs after them.</p></div>
+
+  <h2>Where to look</h2>
+  <ul class="files">
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/tests/test_framework.h">tests/test_framework.h</a>, <a href="https://github.com/GlennSong/raytracer-clang/blob/main/tests/main.cpp">tests/main.cpp</a> — the harness</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/CMakeLists.txt">CMakeLists.txt</a> — <code>run_tests</code>, <code>physics_tests</code>, <code>lanes_tests</code>, <code>level_tests</code>, <code>editor_qt_tests</code> and what each links</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/tests/test_levels_playable.cpp">tests/test_levels_playable.cpp</a> — the level gates, ratchets and censuses</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/mesh_audit.h">src/engine/mesh_audit.h</a>, <a href="https://github.com/GlennSong/raytracer-clang/blob/main/tests/test_winding.cpp">tests/test_winding.cpp</a>, <code>rt_bake --audit</code> (<code>RT_AUDIT_PROBE="x,z"</code>) — the mesh audit</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/tests/test_player_trace.cpp">tests/test_player_trace.cpp</a> — the trace harness (<code>RT_PLAYER_TRACE_OUT</code> / <code>_BASE</code> / <code>_ONLY</code>); <code>tools/movement_lab.py</code> regenerates its level</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/tools/walk_probe.py">tools/walk_probe.py</a>, <a href="https://github.com/GlennSong/raytracer-clang/blob/main/tools/fly_probe.py">fly_probe.py</a>, <a href="https://github.com/GlennSong/raytracer-clang/blob/main/tools/fall_probe.py">fall_probe.py</a> — probes</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/tools/viewer_ctl.py">tools/viewer_ctl.py</a>, <a href="https://github.com/GlennSong/raytracer-clang/blob/main/tools/viewer-mcp.py">tools/viewer-mcp.py</a>, <a href="https://github.com/GlennSong/raytracer-clang/blob/main/docs/control-channel.md">docs/control-channel.md</a> — the socket from the outside</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/tools/frame-report.py">tools/frame-report.py</a>, <a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/frame_stats.h">src/engine/frame_stats.h</a> — ledger captures and reports; <code>tools/code-health.py</code> (<code>make health</code>) for duplicated and oversized code</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/.github/workflows/build.yml">.github/workflows/build.yml</a>, <a href="https://github.com/GlennSong/raytracer-clang/blob/main/.github/workflows/levels-nightly.yml">levels-nightly.yml</a>, <a href="https://github.com/GlennSong/raytracer-clang/blob/main/docs/ci-plan.md">docs/ci-plan.md</a> — CI</li>
+    <li>Variables: <code>RT_TEST_FILTER</code>, <code>RT_LEVELS</code>, <code>RT_LEVEL_TESTS_SKIP_HEAVY</code>, <code>RT_DUMP_STATS</code>, <code>RT_SPIKE_MS</code>, <code>RT_GPU_TIMES</code>, <code>RT_FRAME_STATS</code>, <code>RT_VSYNC</code>, <code>RT_CRACKS=1</code> (the slow facade-crack audit in <code>test_building_lod.cpp</code>), the <code>RT_NO_*</code> switches</li>
+  </ul>
+
+  <footer>Code excerpts from commit <code>47d587f3</code> (2026-10-26). Drawn from ADR-0008, 0068, 0077, 0078, 0100,
+    0101, 0172, 0246, 0247 and 0252, <code>AGENTS.md</code>, <code>docs/ci-plan.md</code>, and commit messages.</footer>
+</div>
+</body>
+</html>

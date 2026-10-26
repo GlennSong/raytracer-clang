@@ -1759,6 +1759,10 @@ if(EMSCRIPTEN)
         COMMAND ${CMAKE_COMMAND} -E copy_directory
                 ${CMAKE_SOURCE_DIR}/web/thumbs
                 $<TARGET_FILE_DIR:viewer_web>/thumbs
+        # "How the engine works" (web/engine/AUTHORING.md): copied whole, so a new page needs no edit here
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+                ${CMAKE_SOURCE_DIR}/web/engine
+                $<TARGET_FILE_DIR:viewer_web>/engine
         VERBATIM)
 
     message(STATUS "Emscripten toolchain — building the WebGPU/WASM viewer_web target")
