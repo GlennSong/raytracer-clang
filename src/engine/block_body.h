@@ -51,6 +51,7 @@ struct BodyPose {
     Real scale = 1;                // (capsule half height + radius) / 0.9
     Vec3 armL{0, -1, 0}, armR{0, -1, 0}, legL{0, -1, 0}, legR{0, -1, 0};
     Real elbowL = 0, elbowR = 0, kneeL = 0, kneeR = 0;
+    Quat neck = Quat::identity();  // the head turned on the neck (body frame): a nod, a snap in a crash
     Vec3& dir(int limb) { return limb == 0 ? armL : limb == 1 ? armR : limb == 2 ? legL : legR; }
     const Vec3& dir(int limb) const { return limb == 0 ? armL : limb == 1 ? armR : limb == 2 ? legL : legR; }
     Real& bend(int limb) { return limb == 0 ? elbowL : limb == 1 ? elbowR : limb == 2 ? kneeL : kneeR; }

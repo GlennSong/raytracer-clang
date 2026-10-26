@@ -106,8 +106,9 @@ std::array<PartTransform, BlockBody::kParts> poseBlocks(const BodyPose& pose) {
     for (int i : {BlockBody::Torso, BlockBody::Head}) {
         const BlockBody::PartSpec& p = parts[static_cast<std::size_t>(i)];
         PartTransform& t = out[static_cast<std::size_t>(i)];
-        t.position = pose.position + pose.orientation.rotate((p.joint + p.rest) * s);
-        t.orientation = pose.orientation;
+        const Quat turn = i == BlockBody::Head ? pose.neck : Quat::identity();   // (the head about its neck)
+        t.position = pose.position + pose.orientation.rotate(p.joint * s + turn.rotate(p.rest * s));
+        t.orientation = pose.orientation * turn;
         t.size = p.size * s;
     }
     for (int k = 0; k < BlockBody::kLimbs; ++k) {

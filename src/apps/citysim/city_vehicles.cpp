@@ -332,6 +332,7 @@ void CityVehicleSystem::update(engine::FrameContext& ctx) {
         v.driverSeat = seat;
         v.hasDriverSeat = true;
     }
+    v.openSeat = city_.carOpenSeat(slot);
     world.add<Vehicle>(e, v);   // VehicleSystem builds the Jolt car + wheels + lamps
 
     LOG_INFO << "[cityveh] took agent " << bestAgent << "'s car: vehicle " << a.vehicle << ", model slot " << slot;

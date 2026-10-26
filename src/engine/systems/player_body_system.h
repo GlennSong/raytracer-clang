@@ -18,12 +18,17 @@ struct Transform;
 class PlayerBodySystem : public System {
 public:
     void fixedUpdate(FrameContext& ctx) override;   // (with the capsule: drawn between ticks like it)
+    // AT THE WHEEL (ADR-0252): sat in the vehicle as it is DRAWN this frame (between its steps), so the body never
+    // lags the seat by a step -- VehicleSystem moves the car after this system's fixed step
+    void render(FrameContext& ctx) override;
 
 private:
     Entity parts_[BlockBody::kParts];
     BodyMeshes meshes_;   // the limbs' skinned tubes, by fold
     bool made_ = false;
     bool shown_ = false;
+    bool driving_ = false;   // the body is in the driver's seat: render() places it
+    void place(World& world, int part, const Vec3& at, const Quat& q, const Vec3& size);
     Vec3 facing_{0, 0, 1};   // held while there is nothing better to face
     Real clock_ = 0;
     // THE BOARD under the feet (skateboard or scooter), drawn in either view

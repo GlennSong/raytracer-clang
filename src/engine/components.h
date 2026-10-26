@@ -6,6 +6,7 @@
 #include "ai/driver_agent.h"   // DriverCommand / DriverTuning (AgentDriver)
 #include "audio/audio_engine.h"
 #include "physics/physics_world.h"
+#include "player/seat_geometry.h"   // SeatGeometry (Vehicle: where the rider's hands and feet go)
 #include "procgen/city/polygon.h"   // Poly2 (city-plan debug outlines, ADR-0066)
 #include "procgen/city/road_network.h"   // RoadGraph (ExtraNavGraph, plan §8 P8.4)
 #include "procgen/city/road_mesh.h"      // RoadDeckField (RoadDeck)
@@ -540,6 +541,16 @@ struct Vehicle {
     // driver falls back to a guess off the chassis half-extents.
     Vec3 driverSeat{0, 0, 0};
     bool hasDriverSeat = false;
+    // AN OPEN SEAT (a bike's, a convertible's: nothing round the rider) throws its rider in a crash; a closed car keeps
+    // them in (engine/player/driver_seat.h, ADR-0252). And where the rider's hands and feet go about the hip.
+    bool openSeat = false;
+    SeatGeometry seat;
+    // The driver's hip (chassis frame): the recipe's, else on the driver's RIGHT (-X; +X is the driver's left,
+    // car_mesh.cpp) -- the world drives on the left, so its cars are right-hand drive, as the fleet's interiors are.
+    Vec3 hipPoint() const {
+        const Vec3& hx = config.chassisHalfExtent;
+        return hasDriverSeat ? driverSeat : Vec3(-hx.x * 0.35, hx.y * 0.15, -hx.z * 0.05);
+    }
 
     // Extra body meshes rigidly fixed to the chassis, each its own Renderable so
     // it can carry its own material — the reason `mesh.car` returns separate

@@ -156,6 +156,7 @@ void CameraSystem::update(FrameContext& ctx) {
         fly.positionLocked = false;
         setActiveController(true);   // the fly camera, not orbit
         activeCamera = Entity{};     // a placed camera would override the pose
+        followTarget = Entity{};     // ...and so would the chase rig: the car drives on, watched from here
     }
 
     // Chase camera (ADR-0059): while following a vehicle, the view tracks it and

@@ -61,6 +61,7 @@ struct CarBodyRecipe {
     // vehicle has it in `mesh` and leaves this empty.
     RenderMesh interior;
     bool seeInto = false;
+    bool openSeat = false;   // `open_seat`: nothing round the driver (a convertible): a crash throws them (ADR-0252)
     // Seat hip points (body-local), for drawing people IN the vehicle: the
     // driver, and one per passenger seat. Empty when the recipe has none.
     std::vector<Vec3> seats;

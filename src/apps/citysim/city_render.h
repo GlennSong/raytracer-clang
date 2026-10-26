@@ -415,6 +415,12 @@ public:
         out = carDriverSeat_[v];
         return true;
     }
+    // Nothing round that car's driver (a convertible): a crash throws them (ADR-0252).
+    bool carOpenSeat(int slot) const {
+        if (carOpenSeat_.empty()) return false;
+        const int n = static_cast<int>(carOpenSeat_.size());
+        return carOpenSeat_[static_cast<std::size_t>(((slot % n) + n) % n)] != 0;
+    }
     engine::MeshHandle carCabinMesh(int slot) const { return slotOf(carCabinMesh_, slot); }
     // That car's lamp markers, for a promoted car's lenses. VehicleSystem falls
     // back to four lenses at GUESSED chassis corners when a Vehicle carries no
@@ -625,6 +631,7 @@ private:
     std::vector<engine::Entity> carInteriorGroups_;
     std::vector<engine::MeshHandle> carGlassMesh_, carCabinMesh_;
     std::vector<char> carSeeInto_;
+    std::vector<char> carOpenSeat_;   // nothing round the driver (a convertible), by slot
     // The agents drawn see-through this bake (nearest the player, with hysteresis).
     std::unordered_set<int> nearSwap_;
     std::vector<std::vector<engine::Vec3>> carSeats_;

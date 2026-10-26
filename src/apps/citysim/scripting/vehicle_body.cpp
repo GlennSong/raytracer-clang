@@ -271,6 +271,9 @@ bool loadFleetCarBody(ScriptVM& vm, int slot, CarBodyRecipe& out,
         lua_getfield(L, rec, "see_into");
         body.seeInto = lua_toboolean(L, -1) != 0;
         lua_pop(L, 1);
+        lua_getfield(L, rec, "open_seat");
+        body.openSeat = lua_toboolean(L, -1) != 0;
+        lua_pop(L, 1);
         auto readPoints = [&](const char* key, std::vector<Vec3>& out) {
             lua_getfield(L, rec, key);
             if (lua_istable(L, -1)) {

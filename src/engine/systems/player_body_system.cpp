@@ -6,6 +6,7 @@
 #include "../interaction.h"   // Seated
 #include "../mesh_builder.h"
 #include "../player_pose.h"
+#include "../player/driver_seat.h"   // seatedPose
 #include "../procgen/person.h"
 
 #include <algorithm>
@@ -111,9 +112,11 @@ void PlayerBodySystem::fixedUpdate(FrameContext& ctx) {
     const CharacterController* cc = player.valid() ? world.get<CharacterController>(player) : nullptr;
     const bool ragdoll = p && p->mode == PlayerPose::Mode::Ragdoll;
     drawBoards(ctx, p, body, cc ? cc->halfHeight + cc->radius : 0.7);
-    const bool visible = p && body && cc && drawnAsBlocks(p->mode) && !world.has<InVehicle>(player) &&
-                         !world.has<Seated>(player) &&
-                         (ragdoll || ctx.settings.getBool("playerThirdPerson", false));
+    // at the wheel: seen from the chase camera whichever view is set
+    driving_ = p && body && cc && p->mode == PlayerPose::Mode::Drive && world.has<InVehicle>(player);
+    const bool visible = driving_ ||
+                         (p && body && cc && drawnAsBlocks(p->mode) && !world.has<InVehicle>(player) &&
+                          !world.has<Seated>(player) && (ragdoll || ctx.settings.getBool("playerThirdPerson", false)));
     if (!made_) {
         if (!visible) return;
         const MeshHandle box = ctx.assets.acquireMesh(MeshBuilder::box(Vec3(1, 1, 1)), "player:arm_block");
@@ -134,15 +137,7 @@ void PlayerBodySystem::fixedUpdate(FrameContext& ctx) {
         }
         made_ = true;
     }
-    auto place = [&](int i, const Vec3& at, const Quat& q, const Vec3& size) {
-        Transform* t = world.get<Transform>(parts_[i]);
-        PrevTransform* pt = world.get<PrevTransform>(parts_[i]);
-        if (!t) return;
-        if (pt) pt->value = *t;   // (rendered between last update's pose and this one)
-        t->position = at;
-        t->orientation = q;
-        t->scale = size;
-    };
+    auto place = [&](int i, const Vec3& at, const Quat& q, const Vec3& size) { this->place(world, i, at, q, size); };
     if (!visible) {
         if (shown_)
             for (int i = 0; i < BlockBody::kParts; ++i) {
@@ -154,6 +149,7 @@ void PlayerBodySystem::fixedUpdate(FrameContext& ctx) {
     }
     const bool firstShow = !shown_;
     shown_ = true;
+    if (driving_) return;   // (render() sits it in the seat)
     clock_ += ctx.clock.fixedStep();
 
     std::array<PartTransform, BlockBody::kParts> blocks;
@@ -360,6 +356,62 @@ void PlayerBodySystem::fixedUpdate(FrameContext& ctx) {
         place(i, b.position, b.orientation, b.scale);
         if (firstShow)
             if (PrevTransform* pt = world.get<PrevTransform>(parts_[i])) pt->value = *world.get<Transform>(parts_[i]);
+    }
+}
+
+void PlayerBodySystem::place(World& world, int i, const Vec3& at, const Quat& q, const Vec3& size) {
+    Transform* t = world.get<Transform>(parts_[i]);
+    PrevTransform* pt = world.get<PrevTransform>(parts_[i]);
+    if (!t) return;
+    if (pt) pt->value = *t;   // (rendered between last update's pose and this one)
+    t->position = at;
+    t->orientation = q;
+    t->scale = size;
+}
+
+void PlayerBodySystem::render(FrameContext& ctx) {
+    if (!driving_ || !made_) return;
+    World& world = ctx.world;
+    Entity player;
+    world.each<Transform, CharacterController, ControlledBy>(
+        [&](Entity e, Transform&, CharacterController&, ControlledBy&) {
+            if (!player.valid()) player = e;
+        });
+    const PlayerPose* p = player.valid() ? world.get<PlayerPose>(player) : nullptr;
+    const InVehicle* iv = player.valid() ? world.get<InVehicle>(player) : nullptr;
+    const CharacterController* cc = player.valid() ? world.get<CharacterController>(player) : nullptr;
+    const Vehicle* v = iv && world.alive(iv->vehicle) ? world.get<Vehicle>(iv->vehicle) : nullptr;
+    const Transform* ct = v ? world.get<Transform>(iv->vehicle) : nullptr;
+    if (!p || !cc || !v || !ct) return;
+    // the vehicle as the renderer draws it this frame: between its last two steps
+    Transform drawn = *ct;
+    if (const PrevTransform* cp = world.get<PrevTransform>(iv->vehicle)) {
+        const Real a = std::clamp(ctx.interpolation, 0.0, 1.0);
+        drawn.position = cp->value.position + (ct->position - cp->value.position) * a;
+        drawn.orientation = Quat::slerp(cp->value.orientation, ct->orientation, a);
+    }
+    const Real scale = (cc->halfHeight + cc->radius) / BlockBody::kHalfHeight;
+    SeatSway sway;
+    sway.lean = p->seatLean;
+    sway.nod = p->seatNod;
+    const BodyPose pose = seatedPose(v->seat, sway, p->steer, p->crank, scale);
+    std::array<PartTransform, BlockBody::kParts> blocks = poseBlocks(pose);
+    const Vec3 hip = v->hipPoint();
+    for (PartTransform& b : blocks) {
+        b.position = drawn.position + drawn.orientation.rotate(hip + b.position);
+        b.orientation = drawn.orientation * b.orientation;
+    }
+    const std::array<BodyPiece, BlockBody::kParts> pieces = meshes_.pieces(ctx.assets, blocks, scale);
+    for (int i = 0; i < BlockBody::kParts; ++i) {
+        const BodyPiece& b = pieces[static_cast<std::size_t>(i)];
+        if (b.drawn) {
+            if (Renderable* r = world.get<Renderable>(parts_[i])) r->mesh = b.mesh;
+            place(world, i, b.position, b.orientation, b.scale);
+        } else {
+            place(world, i, Vec3(0, -100000, 0), Quat::identity(), Vec3(1, 1, 1));
+        }
+        // drawn where it is put: the interpolation is already in it
+        if (PrevTransform* pt = world.get<PrevTransform>(parts_[i])) pt->value = *world.get<Transform>(parts_[i]);
     }
 }
 

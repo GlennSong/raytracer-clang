@@ -14,6 +14,7 @@
 #include "../procgen/person.h"
 
 #include "../components.h"
+#include "../player_pose.h"
 #include "../asset_manager.h"
 #include "../mesh_builder.h"
 #include "physics_system.h"
@@ -240,14 +241,6 @@ void VehicleSystem::createVehicles(FrameContext& ctx) {
         // the interior is packaged around so it fits the seat it sits in.
         if (!driverMesh.valid())
             driverMesh = ctx.assets.acquireMesh(buildSeatedOccupant(), "vehicle:driver");
-        if (!playerDriverMesh.valid()) {
-            const PersonOutfit& o = personOutfit(personOutfitTotal() - 1);
-            OccupantParams op;
-            op.shirt = o.shirt;
-            op.trousers = o.pants;
-            op.skin = o.skin;
-            playerDriverMesh = ctx.assets.acquireMesh(buildSeatedOccupant(op), "vehicle:player_driver");
-        }
         auto makeLens = [&](Vec3 albedo) {
             Entity le = ctx.world.create();
             Transform lt;
@@ -395,7 +388,6 @@ void VehicleSystem::writeBack(FrameContext& ctx) {
             }
 
             // Place a child entity at a chassis-local offset (rigidly attached).
-            const Vec3& hx = v.config.chassisHalfExtent;
             auto place = [&](Entity child, const Vec3& local) {
                 if (!child.valid() || !ctx.world.alive(child)) return;
                 Transform* ct = ctx.world.get<Transform>(child);
@@ -487,14 +479,8 @@ void VehicleSystem::writeBack(FrameContext& ctx) {
             // an AI brain (AgentDriver) — stowed far below otherwise. Seeing the
             // capsule is the proof that an agent is IN the car, not that the car
             // moves on its own (ADR-0062).
-            bool occupied = v.driver.valid() || ctx.world.has<AgentDriver>(e);
-            if (v.driverModel.valid() && ctx.world.alive(v.driverModel))
-                if (Renderable* dr = ctx.world.get<Renderable>(v.driverModel)) {
-                    // the player in its own clothes; an AI driver the shared, tinted one
-                    const bool me = v.driver.valid() && playerDriverMesh.valid();
-                    dr->mesh = me ? playerDriverMesh : driverMesh;
-                    dr->material.albedo = me ? Vec3(1, 1, 1) : Vec3(0.30, 0.34, 0.48);
-                }
+            // (the PLAYER at the wheel is their own jointed body, posed in the seat: PlayerBodySystem, ADR-0252)
+            bool occupied = !v.driver.valid() && ctx.world.has<AgentDriver>(e);
             if (v.driverModel.valid() && ctx.world.alive(v.driverModel)) {
                 if (Transform* dt = ctx.world.get<Transform>(v.driverModel)) {
                     if (PrevTransform* dp = ctx.world.get<PrevTransform>(v.driverModel))
@@ -502,12 +488,7 @@ void VehicleSystem::writeBack(FrameContext& ctx) {
                     // The recipe's own hip point when it has one — the occupant
                     // mesh's origin IS its hip, so this lines the two up exactly
                     // instead of guessing an offset off the chassis box.
-                    // Fallback seat on the driver's RIGHT (-X; +X is the driver's left, car_mesh.cpp): the world
-                    // drives on the left, so its cars are right-hand drive, as the fleet's interiors are built.
-                    const Vec3 seat =
-                        v.hasDriverSeat
-                            ? v.driverSeat
-                            : Vec3(-hx.x * 0.35, hx.y * 0.15, -hx.z * 0.05);
+                    const Vec3 seat = v.hipPoint();
                     if (occupied)
                         dt->position = t.position + t.orientation.rotate(seat);
                     else
@@ -632,7 +613,9 @@ void VehicleSystem::handleEnterExit(FrameContext& ctx) {
                 bt.orientation.rotate(Vec3(0, 1, 0)).y < std::cos(v.config.maxLeanDegrees * 0.0174533))
                 physicsSys.physicsWorld().resetVehicleUpright(v.vehicleId, 0.3);
             bikeUpright_ = false;
-            bikeSpeeds_.clear();
+            jolt_.reset();
+            sway_.reset();
+            haveSeatVel_ = false;
             v.driver = player;
             cameras.setFollowTarget(best);
             // a bike's chase sits closer than a car's (the car's 8 m left a motorcycle a speck)
@@ -643,36 +626,57 @@ void VehicleSystem::handleEnterExit(FrameContext& ctx) {
     }
 }
 
-// OFF THE BIKE IN A CRASH (ADR-0235/0232): a two-wheeler rolled past its lean (it's going down) or stopped dead
-// from speed (it hit something) puts its rider off -- limp, carrying the speed it had. The rider's ragdoll is
-// PlayerSystem's: this hands it the velocity through Settings (player.limp, player.limpVelocity).
-void VehicleSystem::crashOffBikes(FrameContext& ctx) {
-    Entity player, bike;
+// THE PLAYER'S SEAT, each fixed step (ADR-0252). Its JOLT -- how far its velocity changed over a moment -- against what
+// the seat can take: an open one (a bike's, a moped's, a convertible's) past it throws the rider off, limp at the speed
+// the vehicle had; a closed car keeps them in. A two-wheeler rolled past its lean (it is going down) puts its rider off
+// too. Whatever stays in the seat sways in it: the torso and the head thrown against the change and pulled back, drawn
+// by PlayerBodySystem from the pose written here. The ragdoll is PlayerSystem's: this hands it the velocity through
+// Settings (player.limp, player.limpVelocity).
+void VehicleSystem::stepSeat(FrameContext& ctx) {
+    Entity player, ride;
     ctx.world.each<ControlledBy, InVehicle>([&](Entity e, ControlledBy&, InVehicle& iv) {
-        if (!player.valid()) { player = e; bike = iv.vehicle; }
+        if (!player.valid()) { player = e; ride = iv.vehicle; }
     });
-    if (!player.valid() || !bike.valid() || !ctx.world.alive(bike)) return;
-    Vehicle* v = ctx.world.get<Vehicle>(bike);
-    const Transform* bt = ctx.world.get<Transform>(bike);
-    if (!v || !bt || !v->config.twoWheeler) {
-        bikeSpeeds_.clear();
-        return;
+    Vehicle* v = player.valid() && ride.valid() && ctx.world.alive(ride) ? ctx.world.get<Vehicle>(ride) : nullptr;
+    const Transform* rt = v ? ctx.world.get<Transform>(ride) : nullptr;
+    if (!v || !rt || v->vehicleId == PhysicsWorld::INVALID_VEHICLE) return;
+    const Real dt = ctx.clock.fixedStep();
+    const Vec3 vel = physicsSys.physicsWorld().vehicleVelocity(v->vehicleId);
+    Vec3 before;
+    const Real jolt = jolt_.step(vel, dt, &before);
+    // the sway: thrown against this step's change, in the vehicle's own frame
+    const Vec3 dv = haveSeatVel_ ? rt->orientation.conjugate().rotate(vel - seatVel_) : Vec3(0, 0, 0);
+    seatVel_ = vel;
+    haveSeatVel_ = true;
+    sway_.step(dv, dt);
+    // a bicycle's cranks go round while it is pedalled (the wheel's turn, geared down)
+    if (v->seat.pedals && v->throttle > 0.05) crank_ += v->speed * dt / (6.2832 * 0.34 * 2.6);
+    if (PlayerPose* pose = ctx.world.get<PlayerPose>(player)) {
+        pose->mode = PlayerPose::Mode::Drive;
+        pose->handsFree = 0;
+        pose->seatLean = sway_.lean;
+        pose->seatNod = sway_.nod;
+        pose->steer = v->steerApplied;
+        pose->crank = crank_;
+        pose->velocity = vel;
     }
-    bikeSpeeds_.push_back({clock_, v->speed});
-    while (!bikeSpeeds_.empty() && bikeSpeeds_.front().first < clock_ - 0.3) bikeSpeeds_.erase(bikeSpeeds_.begin());
-    Real recent = v->speed;
-    for (const auto& s : bikeSpeeds_) recent = std::max(recent, s.second);
-    const Real tilt = std::acos(std::clamp(bt->orientation.rotate(Vec3(0, 1, 0)).y, Real(-1), Real(1))) * 57.29578;
-    if (tilt < v->config.maxLeanDegrees) bikeUpright_ = true;
-    const bool down = bikeUpright_ && tilt > v->config.maxLeanDegrees + 10.0 && v->speed < 25.0;
-    const bool hit = recent - v->speed > 7.0;   // 25 km/h gone in 0.3 s
+
+    const Real tilt = std::acos(std::clamp(rt->orientation.rotate(Vec3(0, 1, 0)).y, Real(-1), Real(1))) * 57.29578;
+    bool down = false;
+    if (v->config.twoWheeler) {
+        if (tilt < v->config.maxLeanDegrees) bikeUpright_ = true;
+        down = bikeUpright_ && tilt > v->config.maxLeanDegrees + 10.0 && v->speed < 25.0;
+    }
+    const bool hit = jolt > ejectTolerance(v->config.twoWheeler, v->openSeat, ctx.settings.getBool("vehicle.windscreen", false));
     if (!down && !hit) return;
-    const Vec3 ahead = bt->orientation.rotate(Vec3(0, 0, 1));
-    const Vec3 thrown = ahead * recent * (hit ? 0.8 : 0.6) + Vec3(0, hit ? 3.0 : 1.0, 0);
-    bikeSpeeds_.clear();
+    const Vec3 thrown = hit ? ejectThrow(before, true) : ejectThrow(vel, false);
+    jolt_.reset();
     v->driver = Entity{};
     if (CharacterController* cc = ctx.world.get<CharacterController>(player)) {
-        const Vec3 at = bt->position + Vec3(0, 1.0, 0);
+        // off the seat and clear of the body: the capsule's feet just over its top (a convertible's doors are a
+        // box round the seat)
+        Vec3 at = rt->position + rt->orientation.rotate(v->hipPoint());
+        at.y = std::max(at.y + 0.9, rt->position.y + v->config.chassisHalfExtent.y + 0.95);
         physicsSys.physicsWorld().setCharacterPosition(cc->characterId, at);
         if (Transform* pt = ctx.world.get<Transform>(player)) pt->position = at;
     }
@@ -682,12 +686,11 @@ void VehicleSystem::crashOffBikes(FrameContext& ctx) {
     std::snprintf(buf, sizeof(buf), "%.3f %.3f %.3f", thrown.x, thrown.y, thrown.z);
     ctx.settings.setString("player.limpVelocity", buf);
     ctx.settings.setDouble("player.limp", 1.0);
-    LOG_INFO << "[vehicle] off the bike: " << (hit ? "hit something" : "went down") << " at " << recent * 3.6
-             << " km/h";
+    LOG_INFO << "[vehicle] thrown off: " << (hit ? "a crash" : "went down") << ", jolt " << jolt << " m/s from "
+             << before.length() * 3.6 << " km/h";
 }
 
 void VehicleSystem::update(FrameContext& ctx) {
-    crashOffBikes(ctx);
     handleEnterExit(ctx);
 
     // Flip the car the player is currently driving back upright.
@@ -1081,6 +1084,7 @@ void VehicleSystem::fixedUpdate(FrameContext& ctx) {
     createVehicles(ctx);
     driveVehicles(ctx);
     writeBack(ctx);
+    stepSeat(ctx);
 }
 
 }  // namespace engine

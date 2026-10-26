@@ -1134,6 +1134,7 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
     carGlassOpaqueGroups_.clear();
     carInteriorGroups_.clear();
     carSeeInto_.clear();
+    carOpenSeat_.clear();
     nearSwap_.clear();
     carSeats_.clear();
     carDoors_.clear();
@@ -1154,6 +1155,7 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
             std::vector<CarWheel> wheels;
             engine::RenderMesh glassMesh, interiorMesh;
             bool seeInto = false;
+            bool openSeat = false;
             std::vector<Vec3> seats, doors;
             Vec3 driverSeat(0, 0, 0);
             bool hasDriver = false;
@@ -1190,6 +1192,7 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
                         glassMesh = std::move(recipe.glass);
                         interiorMesh = std::move(recipe.interior);
                         seeInto = recipe.seeInto;
+                        openSeat = recipe.openSeat;
                         seats = recipe.seats;
                         doors = recipe.doors;
                         driverSeat = recipe.driverSeat;
@@ -1275,6 +1278,7 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
                 carGlassMesh_.push_back(glassH);   // for a commandeered car (city_vehicles.cpp): its own glass + cabin
                 carCabinMesh_.push_back(cabinH);   // invalid for a see-into body, whose cabin is in its chassis
                 carSeeInto_.push_back(seeInto ? 1 : 0);
+                carOpenSeat_.push_back(openSeat ? 1 : 0);
                 carSeats_.push_back(std::move(seats));
                 carDoors_.push_back(std::move(doors));
                 carDriverSeat_.push_back(driverSeat);

@@ -2,6 +2,7 @@
 #define RAYTRACER_ENGINE_VEHICLE_SYSTEM_H
 
 #include "../system.h"   // System, FrameContext, and (via renderer.h) MeshHandle
+#include "../player/driver_seat.h"   // RideJolt, SeatSway
 
 #include <vector>
 
@@ -51,12 +52,17 @@ private:
     std::vector<Pick> catalogue_;
     bool catalogueTried_ = false;
     int pick_ = 0;
-    void crashOffBikes(FrameContext& ctx);
+    // THE PLAYER'S SEAT (ADR-0252): the jolt it takes (a crash throws the rider off an open one) and the body's sway
+    // in it, each fixed step
+    void stepSeat(FrameContext& ctx);
+    RideJolt jolt_;
+    SeatSway sway_;
+    Vec3 seatVel_;
+    bool haveSeatVel_ = false;
+    Real crank_ = 0;
     uint32_t driftCar_ = 0xFFFFFFFFu;   // the car with the drift switched on (a PhysicsWorld::VehicleId)
     bool wasDrifting_ = false;
     Real lastDriftTime_ = 0;
-    std::vector<std::pair<double, Real>> bikeSpeeds_;   // the ridden bike's recent speeds (time, m/s): a crash
-                                                        // is speed lost over a moment, not one step
     bool bikeUpright_ = false;   // the ridden bike has stood up since you got on: only then can it go down
     std::string wantRecipe_;   // `vehicle_spawn <recipe>`: picked once the catalogue is loaded
     double clock_ = 0.0, panelUntil_ = 0.0;
@@ -65,7 +71,6 @@ private:
     MeshHandle wheelMesh;            // shared wheel cylinder, uploaded on first use
     MeshHandle lensMesh;             // shared head/taillight lens box
     MeshHandle driverMesh;          // shared driver capsule
-    MeshHandle playerDriverMesh;    // ...and the player at the wheel, in the player's own red jacket
     Real enterRadius = 4.0;          // how close the player must be to board (m)
     int spawnCount_ = 0;             // debug-spawn seed counter
     // Horn: one looping procedural voice (sfx::horn) held while the key is

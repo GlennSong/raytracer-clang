@@ -230,6 +230,7 @@ local function kit_drivable(specName, opts, h)
     suspension = h.suspension,
     wheel = { radius = P.wheel_r, width = h.wheel_width or P.wheel_w },
     wheels = wheels,
+    open_seat = P.open_top or false,   -- a convertible: nothing over the driver, so a crash throws them (ADR-0252)
   }
 end
 vehicle.kit_drivable = kit_drivable
@@ -277,13 +278,16 @@ local function two_wheeler(kind, opts)
   opts = opts or {}
   local K = ({
     motorcycle = { r = 0.32, w = 0.13, base = 1.45, H = 0.72, mass = 220, torque = 100, rpm = 9000, steer = 28,
-                   lean = 50, gears = { 5.0, 3.6, 2.8, 2.3, 2.0 }, color = { 0.75, 0.08, 0.06 } },
+                   lean = 50, gears = { 5.0, 3.6, 2.8, 2.3, 2.0 }, color = { 0.75, 0.08, 0.06 },
+                   seat = { grip = { 0.30, 0.14, 0.67 }, foot = { 0.19, -0.44, 0.08 }, lean = 28, bars = true } },
     moped      = { r = 0.25, w = 0.10, base = 1.2, H = 0.62, mass = 130, torque = 80, rpm = 6000, steer = 32,
-                   lean = 42, gears = { 6.0, 4.5, 3.3 }, color = { 0.2, 0.55, 0.62 } },
+                   lean = 42, gears = { 6.0, 4.5, 3.3 }, color = { 0.2, 0.55, 0.62 },
+                   seat = { grip = { 0.30, 0.14, 0.55 }, foot = { 0.12, -0.42, 0.30 }, lean = 8, bars = true } },
     -- (the legs as an engine: Jolt's automatic shifts up at 4000 rpm, so a 1500 rpm "engine" never left first;
     -- rpm and ratios both x4 keep the top speed and let it change gear)
     bicycle    = { r = 0.34, w = 0.04, base = 1.05, H = 0.75, mass = 90, torque = 60, rpm = 6000, steer = 35,
-                   lean = 40, gears = { 16.0, 11.2, 8.8, 7.0 }, color = { 0.15, 0.35, 0.75 } },
+                   lean = 40, gears = { 16.0, 11.2, 8.8, 7.0 }, color = { 0.15, 0.35, 0.75 },
+                   seat = { grip = { 0.24, 0.08, 0.60 }, foot = { 0.10, -0.55, 0.04 }, lean = 35, bars = true, pedals = true, crank = 0.17 } },
   })[kind]
   local col = opts.color or K.color
   local dark, metal, black = { 0.12, 0.12, 0.13 }, { 0.65, 0.66, 0.68 }, { 0.05, 0.05, 0.05 }
@@ -331,6 +335,9 @@ local function two_wheeler(kind, opts)
     max_steer_deg = K.steer,
     brake_torque = math.floor(K.mass * 1.4), hand_brake_torque = math.floor(K.mass * 2.0),
     two_wheeler = true, max_lean_deg = K.lean, pedals = kind == "bicycle",
+    -- the rider about the seat's hip point (ADR-0252): the left grip on the bars, the left foot on its peg -- or on a
+    -- bicycle the crank's centre, the feet going round it
+    seat = K.seat,
     engine_damping = kind == "bicycle" and 0.0 or nil, engine_inertia = kind == "bicycle" and 0.05 or nil,
     yaw_assist = 0, anti_roll = 0, max_roll_deg = K.lean + 15,
     drive = "rwd", drag_area = kind == "bicycle" and 0.5 or 0.7,
@@ -603,6 +610,7 @@ local function kit_car(spec, color)
     class = spec,
     glass = glass,
     see_into = open,
+    open_seat = open,   -- (ADR-0252: a crash throws a commandeered convertible's driver)
     driver_seat = car.driver_seat,
   }
 end

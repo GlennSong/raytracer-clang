@@ -11,7 +11,7 @@ namespace engine {
 // by PlayerSystem on the player entity every fixed step; read-only everywhere else.
 struct PlayerPose {
     enum class Mode : uint8_t { Walk, Air, Mantle, Climb, Swim, Ladder, Parachute, Wingsuit, Grapple, Ragdoll, Board,
-                                PlaySwing, Bars, Hidden };
+                                PlaySwing, Bars, Drive, Hidden };
     Mode mode = Mode::Walk;
     Real speed = 0;           // horizontal m/s
     Real stride = 0;          // walk cycles so far (the fraction is the phase)
@@ -60,6 +60,12 @@ struct PlayerPose {
     int board = 0;
     Vec3 boardHeading{0, 0, -1};
     Real kick = 0;
+    // AT THE WHEEL (Mode::Drive; VehicleSystem writes these while you drive or ride, ADR-0252 -- the seat is the
+    // vehicle's): the body's sway in the seat (engine/player/driver_seat.h SeatSway, m in the vehicle's frame), the
+    // steering -1..1 and a bicycle's cranks (revolutions)
+    Vec3 seatLean, seatNod;
+    Real steer = 0;
+    Real crank = 0;
     // GONE LIMP: the six blocks where the ragdoll's bodies are (engine/block_body.h order)
     Vec3 ragdollPos[10];   // (BlockBody::kParts)
     Quat ragdollRot[10];

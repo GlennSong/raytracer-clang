@@ -12315,3 +12315,64 @@ bring your arm closer up to your face". He chose hold Q or D-pad down, and the d
 
 Tests: `the_watch_reads_distance_and_time_as_a_person_would`,
 `the_watch_dial_turns_with_the_heading_and_puts_the_waypoint_on_its_edge`.
+
+## ADR-0252 — In the driver's seat: thrown from open seats, a lurch in closed ones
+
+**Context.** Step 4 of the player plan (Glenn agreed it 2026-10-25): "Convertible, open vehicles: yes, eject"; a
+closed car should not ragdoll inside its cabin (a ragdoll among the seats jitters and clips) but take a hit reaction
+in the seat. Until now only bikes threw their rider (ADR-0235), on a speed-only rule: a side hit or being struck
+while stopped lost no "speed" and so did nothing. The player at the wheel was a rigid seated mesh.
+
+**Decision.**
+- **One crash measure for any vehicle, the seat's JOLT** (`engine/player/driver_seat.h` `RideJolt`): the most its
+  velocity *vector* changed over the last 0.3 s, with the vertical counted at half (the springs take a landing; a 2 m
+  drop on a bike is a ride, not a crash). This is the impact rule's speed lost (ADR-0247) for a body strapped to a
+  vehicle.
+- **Who it throws** (`ejectTolerance`):
+  - a two-wheeler past 7 m/s (the old bike rule's 25 km/h gone in a moment);
+  - an open seat past 11 m/s: `Vehicle::openSeat`, from the recipe's `open_seat` (the convertible, in the fleet and
+    the drivable kit) and every two-wheeler;
+  - a closed car never, unless `vehicle.windscreen` is switched on (22 m/s); off by default.
+  - Thrown at 0.8 of the velocity it had before the hit plus 3 m/s up, from just over the body. A bike rolled past
+    its lean still puts you off as before.
+- **What stays in the seat sways in it** (`SeatSway`): the shoulders and the head on two damped springs, thrown
+  against the vehicle's change of velocity in its own frame and pulled back:
+  - the torso ~0.8 s, stopped by the belt at 0.32 m;
+  - the head quicker, so it snaps and comes back past.
+  - The same springs lean you into hard braking (8 cm at 1 g).
+- **The player at the wheel is the jointed body** (PlayerPose `Mode::Drive`, written by VehicleSystem each step):
+  - `seatedPose`: the pelvis on the hip point, the hands on the wheel (turned round it with the steering) or the
+    bars, the feet on the pedals or the pegs;
+  - a bicycle's feet go round the cranks while it is pedalled;
+  - `BodyPose::neck` turns the head;
+  - where the hands and feet go is the recipe's `seat` table (`SeatGeometry`), and a car's default is a wheel in reach.
+  - It is drawn in `PlayerBodySystem::render` from the vehicle *as drawn* that frame, because VehicleSystem moves
+    the car after the body system's fixed step. AI drivers keep the rigid seated mesh.
+- **The `camera` socket command now drops the chase rig**, so a probe can watch a car from the side; it already
+  promised that the pose wins in play mode.
+
+Measured in movement_lab, against the jump tower:
+- the convertible threw its driver at 48 km/h (jolt 13.3 m/s);
+- the motorcycle threw its rider at 29 km/h (8.1 m/s);
+- the sedan kept its driver at the wall;
+- the convertible coasting in under the limit kept its driver, who lurched to the belt and settled.
+
+Tests (`tests/test_driver_seat.cpp`, physics_tests):
+- `hard_braking_leans_you_forward_and_throws_nobody`;
+- `a_wall_at_fifty_throws_the_open_seats_and_keeps_the_closed_car`;
+- `a_slow_bump_throws_nobody`;
+- `a_landing_is_not_a_crash`;
+- `the_body_comes_back_upright_after_a_crash`;
+- `struck_from_the_left_the_body_goes_left`;
+- `thrown_off_at_most_of_the_speed_it_had`;
+- `the_seated_body_holds_the_wheel_and_the_bars_and_reaches_the_pedals`;
+- `a_lurch_tips_the_torso_and_the_head_goes_further`.
+
+**Not yet:**
+- **No camera kick.** The chase camera's own spring is the only jolt the camera shows.
+- **Passengers are not covered.** A bus or car passenger (ADR-0243) neither sways nor gets thrown.
+- **Unchecked against real interiors:** the wheel position is the default and has not been measured against each
+  kit cabin.
+- **Two things I did not check:**
+  - whether the hands turn the right way round the wheel for left versus right steering;
+  - whether the sedan was at full speed when it reached the wall.
