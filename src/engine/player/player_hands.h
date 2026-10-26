@@ -41,6 +41,10 @@ struct PlayerHands {
 
 private:
     void fire(PlayerBody& b, BodyStep& s);
+    // THE RIGHT HAND the rope runs from, as the body is drawn: reaching from the right shoulder toward `toward`, the
+    // body facing it across the ground. Only the drawing: the swing itself hangs from a point on the body's centre
+    // line (GrappleMode) -- the capsule never turns, so where on it the rope is tied cannot tip it.
+    static Vec3 ropeHand(const BodyStep& s, const Vec3& toward);
 };
 
 }  // namespace engine

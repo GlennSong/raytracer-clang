@@ -80,7 +80,7 @@ Vec3 seatGrip(const SeatGeometry& seat, int side, Real steer) {
     const Real r = std::abs(seat.grip.x);
     const Real rake = 24.0 * kDeg;
     const Vec3 across(1, 0, 0), up(0, std::cos(rake), -std::sin(rake));
-    const Real a = (side == 0 ? 0.0 : 3.14159265358979) - std::clamp(steer, Real(-1), Real(1)) * 0.9;
+    const Real a = (side == 0 ? 0.0 : 3.14159265358979) + std::clamp(steer, Real(-1), Real(1)) * 0.9;   // right: the left hand rises
     return centre + across * (r * std::cos(a)) + up * (r * std::sin(a));
 }
 

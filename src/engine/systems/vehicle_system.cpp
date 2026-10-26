@@ -667,7 +667,7 @@ void VehicleSystem::stepSeat(FrameContext& ctx) {
         if (tilt < v->config.maxLeanDegrees) bikeUpright_ = true;
         down = bikeUpright_ && tilt > v->config.maxLeanDegrees + 10.0 && v->speed < 25.0;
     }
-    const bool hit = jolt > ejectTolerance(v->config.twoWheeler, v->openSeat, ctx.settings.getBool("vehicle.windscreen", false));
+    const bool hit = jolt > ejectTolerance(v->config.twoWheeler, v->openSeat, ctx.settings.getBool("vehicle.windscreen", true));
     if (!down && !hit) return;
     const Vec3 thrown = hit ? ejectThrow(before, true) : ejectThrow(vel, false);
     jolt_.reset();

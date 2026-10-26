@@ -180,6 +180,9 @@ void PlayerBodySystem::fixedUpdate(FrameContext& ctx) {
             case PlayerPose::Mode::Board:
                 face = flat(p->boardHeading);
                 break;
+            case PlayerPose::Mode::Grapple:   // turned to what it hangs from (the rope's hand is the right one: PlayerHands)
+                if (flat(p->anchor - body->position).lengthSquared() > 0.5) face = flat(p->anchor - body->position);
+                break;
             case PlayerPose::Mode::PlaySwing:
             case PlayerPose::Mode::Bars:
                 if (flat(p->wallNormal).lengthSquared() > 0.5) face = flat(p->wallNormal);
@@ -325,7 +328,7 @@ void PlayerBodySystem::fixedUpdate(FrameContext& ctx) {
                                                                                     Real(-0.6), Real(0.6)))
                                                             : 0;
                 pose.orientation = yawTo(face) * Quat::fromAxisAngle(Vec3(1, 0, 0), swingLean);
-                reachTo(pose, BlockBody::ArmR, p->anchor);
+                reachTo(pose, BlockBody::ArmR, p->ropePoints > 0 ? p->rope[0] : p->anchor);   // the hand on the rope
                 pose.armL = normalize(Vec3(0.8, -0.4, 0.1));
                 pose.legL = normalize(Vec3(0.1, -1, -0.3));
                 pose.legR = normalize(Vec3(-0.1, -1, -0.15));

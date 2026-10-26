@@ -5,8 +5,8 @@
 //
 // A crash is the seat's JOLT: how far its velocity changed over a moment (RideJolt), the impact rule's speed lost
 // (ADR-0247) for a body strapped to a vehicle. An OPEN seat -- a bike's, a moped's, a convertible's -- throws its
-// rider past what it can take (ejectTolerance), limp at the speed the vehicle had; a closed car keeps them in (unless
-// the windscreen rule is switched on) and the body takes the hit in the seat instead: SeatSway, a spring that lurches
+// rider past what it can take (ejectTolerance), limp at the speed the vehicle had; a closed car keeps them in (but for
+// the windscreen rule, on by default) and the body takes the hit in the seat instead: SeatSway, a spring that lurches
 // the torso and snaps the head against what the vehicle did, and settles. The same spring leans you into the brakes.
 //
 // seatedPose is the body in the seat, in the vehicle's frame (the hip at the origin, +z ahead, +x its left): the
@@ -36,7 +36,7 @@ struct RideJolt {
 
 // The jolt a seat takes before it throws its rider (m/s): a two-wheeler 7 (25 km/h gone in a moment, the bike rule
 // of ADR-0235), a convertible 11 (belted in, but nothing over the head), a closed car never -- or 22 through the
-// windscreen when that is switched on (vehicle.windscreen).
+// windscreen while that rule is on (vehicle.windscreen; on unless set false).
 Real ejectTolerance(bool twoWheeler, bool openSeat, bool windscreen);
 // How the rider leaves: on at most of the way the vehicle was going, up off the seat; a bike that went down (no hit)
 // slides you off slower.

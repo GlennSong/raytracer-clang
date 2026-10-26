@@ -12332,7 +12332,8 @@ while stopped lost no "speed" and so did nothing. The player at the wheel was a 
   - a two-wheeler past 7 m/s (the old bike rule's 25 km/h gone in a moment);
   - an open seat past 11 m/s: `Vehicle::openSeat`, from the recipe's `open_seat` (the convertible, in the fleet and
     the drivable kit) and every two-wheeler;
-  - a closed car never, unless `vehicle.windscreen` is switched on (22 m/s); off by default.
+  - a closed car through the windscreen past 22 m/s (about 90 km/h stopped dead); on by default (Glenn: "I'd keep
+    that turned on for now"), `set vehicle.windscreen false` turns it off.
   - Thrown at 0.8 of the velocity it had before the hit plus 3 m/s up, from just over the body. A bike rolled past
     its lean still puts you off as before.
 - **What stays in the seat sways in it** (`SeatSway`): the shoulders and the head on two damped springs, thrown
@@ -12376,3 +12377,12 @@ Tests (`tests/test_driver_seat.cpp`, physics_tests):
 - **Two things I did not check:**
   - whether the hands turn the right way round the wheel for left versus right steering;
   - whether the sedan was at full speed when it reached the wall.
+
+**Since (same day):**
+- **Through the windscreen is on by default.** Glenn: "I'd keep that turned on for now".
+- **The hands go round the wheel the right way.** Steering right lifts the left hand; Glenn saw them go backwards.
+- **The grapple's rope runs from the right hand** (`PlayerHands::ropeHand`): the drawn body faces what it hangs from,
+  and its right arm reaches up the rope to it.
+  - The swing still hangs from the body's centre line. The capsule never turns, so where the rope is tied cannot tip
+    it.
+  - The drawn rope's length is the swing's less the arm's reach, so it stays taut where the swing is.
