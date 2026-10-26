@@ -99,7 +99,7 @@
   "collider": {
    "shape": "capsule",
    "radius": 0.3,
-   "halfHeight": 0.4
+   "halfHeight": 0.6
   },
   "friction": 0.5
  },

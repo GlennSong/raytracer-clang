@@ -6,6 +6,7 @@
 #include "ai/driver_agent.h"   // DriverCommand / DriverTuning (AgentDriver)
 #include "audio/audio_engine.h"
 #include "physics/physics_world.h"
+#include "player/seat_geometry.h"   // SeatGeometry (Vehicle: where the rider's hands and feet go)
 #include "procgen/city/polygon.h"   // Poly2 (city-plan debug outlines, ADR-0066)
 #include "procgen/city/road_network.h"   // RoadGraph (ExtraNavGraph, plan §8 P8.4)
 #include "procgen/city/road_mesh.h"      // RoadDeckField (RoadDeck)
@@ -178,6 +179,25 @@ struct InstanceGroup {
     Real minDistance = 0;
     uint32_t renderLayer = 0;   // debug layer bits (0 = always visible)
     DrawClass drawClass = DrawClass::Unset;   // see DrawClass above
+    // MOVING INSTANCES (the city's traffic, its riders, their lamps): the owner bakes `transforms` in the fixed step
+    // and names each one in `ids`; beginStep() keeps the last step's beside them. The renderer then draws each
+    // instance between its last pose and this one by the frame's interpolation -- what PrevTransform does for an
+    // entity. Without it a car moved only on frames that ran a fixed step: at 75 fps a fifth of frames froze every
+    // car (Glenn: "buses and cars sometimes shake ... Trains actually appear very stable"). Empty `ids`: static.
+    std::vector<uint64_t> ids;
+    std::vector<Mat4> prevTransforms;
+    std::vector<uint64_t> prevIds;
+    // This step's bake begins: last step's poses kept, this one's emptied.
+    void beginStep() {
+        prevTransforms.swap(transforms);
+        prevIds.swap(ids);
+        transforms.clear();
+        ids.clear();
+    }
+    void push(const Mat4& m, uint64_t id) {
+        transforms.push_back(m);
+        ids.push_back(id);
+    }
 };
 
 // A GRASS FIELD around the camera (GrassSystem, the flora plan): clumps of geometry blades
@@ -223,6 +243,13 @@ struct GrassField {
 // What "is this point sea?" means -- a river channel carved below sea level is not sea, and neither is
 // a pond the water plane fills in a basin (openSeaCells keeps the water that reaches the edge of the
 // map or is big enough to have waves; #65's surf).
+// A POOL: still water in a box, for a level with no terrain (the movement lab's). The loader draws its surface;
+// UnderwaterSystem::surfaceAt finds it, so the swimmer floats in it and the camera sees under it.
+struct WaterPool {
+    double x0 = 0, z0 = 0, x1 = 0, z1 = 0;   // the water's extent
+    double level = 0;                        // its surface
+};
+
 struct Sea {
     double level = 0.0;
     std::vector<std::array<double, 4>> boxes;             // each cell: minX, minZ, maxX, maxZ
@@ -438,7 +465,7 @@ struct RigidBody {
 // Collider would, and `position` (the Transform) is the capsule centre.
 struct CharacterController {
     Real radius = 0.3;
-    Real halfHeight = 0.4;
+    Real halfHeight = 0.6;   // + the radius each end: 1.8 m, a walker's height (was 1.4 m: "I look like a child")
     Real stepHeight = 0.4;   // tallest ledge it can walk up in one step
     CharacterId characterId = INVALID_CHARACTER;
     bool swimming = false;   // afloat in deep water (PlayerSystem, #43): footsteps become strokes
@@ -472,6 +499,7 @@ struct Vehicle {
     // `drive_4wd`); fourWheel is the current mode.
     bool partTime4wd = false;
     bool fourWheel = false;
+    bool pedalled = false;         // legs, not an engine (a bicycle): no engine note (VehicleSystem's tyre sounds)
     PhysicsWorld::VehicleId vehicleId = PhysicsWorld::INVALID_VEHICLE;
     Entity driver;                 // invalid = unoccupied; set on enter, cleared on exit
     // Live driver input, written by VehicleSystem each step (for inspection/debug).
@@ -479,6 +507,7 @@ struct Vehicle {
     // is what reached the wheels after the keyboard assist (vehicle_steering.h).
     Real throttle = 0, steer = 0, brake = 0, handBrake = 0;
     Real steerApplied = 0;
+    Real slide = 0;                // the player's ride: how hard its tyres slide, 0..1 (VehicleSystem::measureSlide)
     std::vector<Entity> wheelEntities;   // rendered wheels (optional)
     // Head/taillight glow toggle (ADR-0059) and the lens entities VehicleSystem
     // positions + lights each frame; `driverModel` is a capsule shown in the seat
@@ -512,6 +541,16 @@ struct Vehicle {
     // driver falls back to a guess off the chassis half-extents.
     Vec3 driverSeat{0, 0, 0};
     bool hasDriverSeat = false;
+    // AN OPEN SEAT (a bike's, a convertible's: nothing round the rider) throws its rider in a crash; a closed car keeps
+    // them in (engine/player/driver_seat.h, ADR-0252). And where the rider's hands and feet go about the hip.
+    bool openSeat = false;
+    SeatGeometry seat;
+    // The driver's hip (chassis frame): the recipe's, else on the driver's RIGHT (-X; +X is the driver's left,
+    // car_mesh.cpp) -- the world drives on the left, so its cars are right-hand drive, as the fleet's interiors are.
+    Vec3 hipPoint() const {
+        const Vec3& hx = config.chassisHalfExtent;
+        return hasDriverSeat ? driverSeat : Vec3(-hx.x * 0.35, hx.y * 0.15, -hx.z * 0.05);
+    }
 
     // Extra body meshes rigidly fixed to the chassis, each its own Renderable so
     // it can carry its own material — the reason `mesh.car` returns separate
@@ -541,6 +580,29 @@ struct Passenger {
     // system that never sets them (a cab, a car's seat) leaves a seated passenger: silent.
     Vec3 local{0, 0, 0};
     bool onFoot = false;
+    // SAT DOWN (a car's passenger seat, a bus seat): the body is drawn sitting, its hip `hipBelow` under the rider's
+    // Transform, facing `facing` (the carrier's forward). Glenn, beside an NPC driver: "I'm not in a seat" -- the
+    // standing walker was drawn at the hip, through the floor and the roof.
+    bool sitting = false;
+    Real hipBelow = 0;
+    Vec3 facing{0, 0, 1};
+    // THE CARRIER (engine/riding.h, ADR-0243): one way of riding for the bus, the car, the cab and the train. The owner
+    // (the system that knows the vehicle) sets `carrier` -- its frame to world this fixed step -- `local`, `sitting`
+    // and `eyeAbove`, and calls rideStep(), which keeps the step before (`carrierPrev`). RidingSystem draws the rider
+    // between the two by the frame's interpolation, as the renderer draws the vehicle.
+    Mat4 carrier;
+    Mat4 carrierPrev;
+    Mat4 carrierLast;           // (rideStep's: the carrier as of the step before this one)
+    bool haveLast = false;
+    Real eyeAbove = 1.62;       // the eye above `local`: standing 1.62 over the feet, sitting 0.74 over the hip
+    bool haveYaw = false;       // the view turns with the carrier: its heading last step (rideStep) ...
+    Real lastYaw = 0;
+    Real yawShown = 0;          // ...and how far past it the drawn carrier had turned last frame (RidingSystem)
+    // where the camera was framed from this frame (RidingSystem's update: the body and the view heading then, before
+    // the frame's fixed steps), for its render to carry the camera on with the rider
+    Vec3 framedAt;
+    Real framedYaw = 0;
+    bool framed = false;
 };
 
 // Marks a Vehicle as driven by an AI brain rather than the player (ADR-0062): the

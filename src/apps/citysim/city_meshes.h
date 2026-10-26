@@ -12,9 +12,10 @@ namespace citysim {
 // constants) with no ECS or sim-state dependency.
 
 // A simple articulated PERSON (device ask: "people should look like people"):
-// six vertex-coloured boxes — head, torso, two legs, two arms — centred like the
-// old walker box (y in [-0.9, 0.9], facing +Z). `swing` pitches the limbs about
-// hip/shoulder pivots (radians; legs opposed, arms counter-swing), so a small
+// ten vertex-coloured boxes — head, torso, and each limb in two at the knee or
+// elbow (engine::buildPosedPerson / walkBodyPose) — centred like the old walker
+// box (y in [-0.9, 0.9], facing +Z). `swing` pitches the limbs about hip/shoulder
+// pivots (radians; legs opposed, arms counter-swing; the trailing knee folds), so a small
 // set of these meshes IS the walk cycle — walkers hop between shared pose
 // meshes by walk phase, no skeleton needed. `outfit` picks a deterministic
 // shirt/pants/skin combination.

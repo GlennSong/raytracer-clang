@@ -52,7 +52,7 @@
  "name": "Island 8 (rocky trial)",
  "player": {
   "collider": {
-   "halfHeight": 0.4,
+   "halfHeight": 0.6,
    "radius": 0.3,
    "shape": "capsule"
   },

@@ -1,5 +1,7 @@
 #include "footstep_system.h"
 
+#include "../player_pose.h"
+
 #include "physics_system.h"
 #include "underwater_system.h"
 #include "../audio/sfx.h"
@@ -95,6 +97,20 @@ void FootstepSystem::fixedUpdate(FrameContext& ctx) {
     // ABOARD A BUS OR A TRAIN the world moves you at its speed: the pace is the walk in the carrier's own frame
     // (Passenger::local), and a seated rider takes no steps at all (Glenn: "it sounds like I'm running when I'm
     // sitting on the bus").
+    // THE MOVES THAT AREN'T WALKING (MotionAudioSystem hears them): no steps on a board, on the rope, under a canopy,
+    // on a swing or the bars, or limp. Off the rope or the bars the feet come down to a landing.
+    if (const PlayerPose* pp = ctx.world.get<PlayerPose>(player)) {
+        using M = PlayerPose::Mode;
+        const M m = pp->mode;
+        if (m == M::Board || m == M::Ragdoll || m == M::Grapple || m == M::Parachute || m == M::Wingsuit ||
+            m == M::PlaySwing || m == M::Bars) {
+            swishLevel_ = 0;
+            tracker_ = FootstepTracker{};
+            tracker_.grounded = m == M::Board || m == M::Ragdoll;   // off the rope, a canopy, the bars: a landing
+            haveLastFeet_ = false;
+            return;
+        }
+    }
     const Passenger* aboard = ctx.world.get<Passenger>(player);
     if (aboard && !aboard->onFoot) { swishLevel_ = 0; tracker_ = FootstepTracker{}; haveLastFeet_ = false; return; }
     const Vec3 paceAt = aboard ? aboard->local : feet;

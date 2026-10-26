@@ -32,6 +32,9 @@ void CameraSystem::registerBindings(InputMap& actions) const {
     // pointer delta, since it is unbounded rather than a normalized axis).
     actions.bindAxis("cam_look_x", GamepadAxis::RightX, 1.0);
     actions.bindAxis("cam_look_y", GamepadAxis::RightY, -1.0);
+    // the view's own movement: a layer over the top (the map) takes it away (ADR-0248)
+    for (const char* a : {"cam_forward", "cam_right", "cam_up", "cam_look_x", "cam_look_y"})
+        actions.setActionContext(a, InputContext::Camera);
 
     actions.bindButton("cam_boost", KeyCode::LeftShift);
     actions.bindButton("cam_boost", GamepadButton::LeftBumper);
@@ -153,6 +156,7 @@ void CameraSystem::update(FrameContext& ctx) {
         fly.positionLocked = false;
         setActiveController(true);   // the fly camera, not orbit
         activeCamera = Entity{};     // a placed camera would override the pose
+        followTarget = Entity{};     // ...and so would the chase rig: the car drives on, watched from here
     }
 
     // Chase camera (ADR-0059): while following a vehicle, the view tracks it and

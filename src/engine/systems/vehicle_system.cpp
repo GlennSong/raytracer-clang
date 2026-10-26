@@ -9,9 +9,12 @@
 #include "../vehicle_lamps.h"
 #include "../vehicle_audio.h"
 #include "../audio/sfx.h"
+#include "../particles.h"
 #include "../procgen/vehicle/occupant.h"
+#include "../procgen/person.h"
 
 #include "../components.h"
+#include "../player_pose.h"
 #include "../asset_manager.h"
 #include "../mesh_builder.h"
 #include "physics_system.h"
@@ -52,6 +55,8 @@ void VehicleSystem::onStart(FrameContext& ctx) {
     ctx.actions.bindButton("drive_brake", GamepadButton::B);
     ctx.actions.setActionContext("drive_brake", engine::InputContext::InVehicle);
     ctx.actions.bindButton("drive_handbrake", KeyCode::LeftControl);
+    // RB on the pad: the drift's handbrake had no button there (LB / RB cycle the tools only on foot)
+    ctx.actions.bindButton("drive_handbrake", GamepadButton::RightBumper);
     ctx.actions.setActionContext("drive_handbrake", engine::InputContext::InVehicle);
 
     // GETTING IN is the interaction broker's E like everything else (Glenn, 2026-10-02: "move getting into the
@@ -64,7 +69,12 @@ void VehicleSystem::onStart(FrameContext& ctx) {
 
     // Recover a rolled car (keep heading, level it, lift it).
     ctx.actions.bindButton("vehicle_flip", KeyCode::T);
+    ctx.actions.bindButton("vehicle_flip", GamepadButton::LeftBumper);
     ctx.actions.setActionContext("vehicle_flip", engine::InputContext::InVehicle);
+    // DRIFT BOOST (ADR-0236): spend what the slides banked.
+    ctx.actions.bindButton("vehicle_boost", KeyCode::LeftShift);
+    ctx.actions.bindButton("vehicle_boost", GamepadButton::Y);
+    ctx.actions.setActionContext("vehicle_boost", engine::InputContext::InVehicle);
     // Toggle the head/taillights.
     ctx.actions.bindButton("vehicle_lights", KeyCode::L);
     ctx.actions.setActionContext("vehicle_lights", engine::InputContext::InVehicle);
@@ -115,6 +125,9 @@ void VehicleSystem::spawnInFront(FrameContext& ctx) {
     std::string err;
     if (!vm.doString(lib, &err)) { LOG_WARN << "vehicles.lua: " << err; return; }
     loadCatalogue();
+    for (std::size_t i = 0; i < catalogue_.size() && !wantRecipe_.empty(); ++i)
+        if (catalogue_[i].recipe == wantRecipe_) pick_ = static_cast<int>(i);
+    wantRecipe_.clear();
     std::string recipe = "sedan", label = "Sedan", drive = "awd";
     if (!catalogue_.empty()) {
         const Pick& p = catalogue_[static_cast<std::size_t>(pick_)];
@@ -375,7 +388,6 @@ void VehicleSystem::writeBack(FrameContext& ctx) {
             }
 
             // Place a child entity at a chassis-local offset (rigidly attached).
-            const Vec3& hx = v.config.chassisHalfExtent;
             auto place = [&](Entity child, const Vec3& local) {
                 if (!child.valid() || !ctx.world.alive(child)) return;
                 Transform* ct = ctx.world.get<Transform>(child);
@@ -467,7 +479,8 @@ void VehicleSystem::writeBack(FrameContext& ctx) {
             // an AI brain (AgentDriver) — stowed far below otherwise. Seeing the
             // capsule is the proof that an agent is IN the car, not that the car
             // moves on its own (ADR-0062).
-            bool occupied = v.driver.valid() || ctx.world.has<AgentDriver>(e);
+            // (the PLAYER at the wheel is their own jointed body, posed in the seat: PlayerBodySystem, ADR-0252)
+            bool occupied = !v.driver.valid() && ctx.world.has<AgentDriver>(e);
             if (v.driverModel.valid() && ctx.world.alive(v.driverModel)) {
                 if (Transform* dt = ctx.world.get<Transform>(v.driverModel)) {
                     if (PrevTransform* dp = ctx.world.get<PrevTransform>(v.driverModel))
@@ -475,12 +488,7 @@ void VehicleSystem::writeBack(FrameContext& ctx) {
                     // The recipe's own hip point when it has one — the occupant
                     // mesh's origin IS its hip, so this lines the two up exactly
                     // instead of guessing an offset off the chassis box.
-                    // Fallback seat on the car's LEFT (+X): left-hand drive,
-                    // like the interior recipe's driverOnLeft default.
-                    const Vec3 seat =
-                        v.hasDriverSeat
-                            ? v.driverSeat
-                            : Vec3(hx.x * 0.35, hx.y * 0.15, -hx.z * 0.05);
+                    const Vec3 seat = v.hipPoint();
                     if (occupied)
                         dt->position = t.position + t.orientation.rotate(seat);
                     else
@@ -597,11 +605,89 @@ void VehicleSystem::handleEnterExit(FrameContext& ctx) {
             // car (the CitySim bridge sees the component gone and frees the agent),
             // so there's ever only ONE driver — now the player.
             if (ctx.world.has<AgentDriver>(best)) ctx.world.remove<AgentDriver>(best);
-            ctx.world.get<Vehicle>(best)->driver = player;
+            Vehicle& v = *ctx.world.get<Vehicle>(best);
+            // A BIKE LYING ON ITS SIDE is picked up as you get on (Glenn, 2026-10-24: "if you ramp off the bike and
+            // it falls over and you try and get onto it you just ragdoll"): it read as going down the moment you sat.
+            const Transform& bt = *ctx.world.get<Transform>(best);
+            if (v.config.twoWheeler && v.vehicleId != PhysicsWorld::INVALID_VEHICLE &&
+                bt.orientation.rotate(Vec3(0, 1, 0)).y < std::cos(v.config.maxLeanDegrees * 0.0174533))
+                physicsSys.physicsWorld().resetVehicleUpright(v.vehicleId, 0.3);
+            bikeUpright_ = false;
+            jolt_.reset();
+            sway_.reset();
+            haveSeatVel_ = false;
+            v.driver = player;
             cameras.setFollowTarget(best);
+            // a bike's chase sits closer than a car's (the car's 8 m left a motorcycle a speck)
+            if (ctx.world.get<Vehicle>(best)->config.twoWheeler) cameras.setFollowFraming(4.0, 1.0);
+            else cameras.setFollowFraming(8.0, 1.2);
             ctx.world.add<InVehicle>(player, InVehicle{best});   // structural
         }
     }
+}
+
+// THE PLAYER'S SEAT, each fixed step (ADR-0252). Its JOLT -- how far its velocity changed over a moment -- against what
+// the seat can take: an open one (a bike's, a moped's, a convertible's) past it throws the rider off, limp at the speed
+// the vehicle had; a closed car keeps them in. A two-wheeler rolled past its lean (it is going down) puts its rider off
+// too. Whatever stays in the seat sways in it: the torso and the head thrown against the change and pulled back, drawn
+// by PlayerBodySystem from the pose written here. The ragdoll is PlayerSystem's: this hands it the velocity through
+// Settings (player.limp, player.limpVelocity).
+void VehicleSystem::stepSeat(FrameContext& ctx) {
+    Entity player, ride;
+    ctx.world.each<ControlledBy, InVehicle>([&](Entity e, ControlledBy&, InVehicle& iv) {
+        if (!player.valid()) { player = e; ride = iv.vehicle; }
+    });
+    Vehicle* v = player.valid() && ride.valid() && ctx.world.alive(ride) ? ctx.world.get<Vehicle>(ride) : nullptr;
+    const Transform* rt = v ? ctx.world.get<Transform>(ride) : nullptr;
+    if (!v || !rt || v->vehicleId == PhysicsWorld::INVALID_VEHICLE) return;
+    const Real dt = ctx.clock.fixedStep();
+    const Vec3 vel = physicsSys.physicsWorld().vehicleVelocity(v->vehicleId);
+    Vec3 before;
+    const Real jolt = jolt_.step(vel, dt, &before);
+    // the sway: thrown against this step's change, in the vehicle's own frame
+    const Vec3 dv = haveSeatVel_ ? rt->orientation.conjugate().rotate(vel - seatVel_) : Vec3(0, 0, 0);
+    seatVel_ = vel;
+    haveSeatVel_ = true;
+    sway_.step(dv, dt);
+    // a bicycle's cranks go round while it is pedalled (the wheel's turn, geared down)
+    if (v->seat.pedals && v->throttle > 0.05) crank_ += v->speed * dt / (6.2832 * 0.34 * 2.6);
+    if (PlayerPose* pose = ctx.world.get<PlayerPose>(player)) {
+        pose->mode = PlayerPose::Mode::Drive;
+        pose->handsFree = 0;
+        pose->seatLean = sway_.lean;
+        pose->seatNod = sway_.nod;
+        pose->steer = v->steerApplied;
+        pose->crank = crank_;
+        pose->velocity = vel;
+    }
+
+    const Real tilt = std::acos(std::clamp(rt->orientation.rotate(Vec3(0, 1, 0)).y, Real(-1), Real(1))) * 57.29578;
+    bool down = false;
+    if (v->config.twoWheeler) {
+        if (tilt < v->config.maxLeanDegrees) bikeUpright_ = true;
+        down = bikeUpright_ && tilt > v->config.maxLeanDegrees + 10.0 && v->speed < 25.0;
+    }
+    const bool hit = jolt > ejectTolerance(v->config.twoWheeler, v->openSeat, ctx.settings.getBool("vehicle.windscreen", true));
+    if (!down && !hit) return;
+    const Vec3 thrown = hit ? ejectThrow(before, true) : ejectThrow(vel, false);
+    jolt_.reset();
+    v->driver = Entity{};
+    if (CharacterController* cc = ctx.world.get<CharacterController>(player)) {
+        // off the seat and clear of the body: the capsule's feet just over its top (a convertible's doors are a
+        // box round the seat)
+        Vec3 at = rt->position + rt->orientation.rotate(v->hipPoint());
+        at.y = std::max(at.y + 0.9, rt->position.y + v->config.chassisHalfExtent.y + 0.95);
+        physicsSys.physicsWorld().setCharacterPosition(cc->characterId, at);
+        if (Transform* pt = ctx.world.get<Transform>(player)) pt->position = at;
+    }
+    cameras.clearFollowTarget();
+    ctx.world.remove<InVehicle>(player);
+    char buf[96];
+    std::snprintf(buf, sizeof(buf), "%.3f %.3f %.3f", thrown.x, thrown.y, thrown.z);
+    ctx.settings.setString("player.limpVelocity", buf);
+    ctx.settings.setDouble("player.limp", 1.0);
+    LOG_INFO << "[vehicle] thrown off: " << (hit ? "a crash" : "went down") << ", jolt " << jolt << " m/s from "
+             << before.length() * 3.6 << " km/h";
 }
 
 void VehicleSystem::update(FrameContext& ctx) {
@@ -659,9 +745,35 @@ void VehicleSystem::update(FrameContext& ctx) {
     // Drop the picked car in front of the player.
     if (ctx.actions.pressed("spawn_vehicle") || ctx.settings.getDouble("vehicle.spawn", 0.0) > 0) {
         ctx.settings.setDouble("vehicle.spawn", 0.0);
+        // `vehicle_spawn <recipe>`: pick that one first (the catalogue's recipe names: motorcycle, moped, ...)
+        wantRecipe_ = ctx.settings.getString("vehicle.spawnRecipe", "");
+        ctx.settings.setString("vehicle.spawnRecipe", "");
         spawnInFront(ctx);
     }
 
+    // THE DRIFT is the player's car's (ADR-0236): on while driven by the player, off for everyone else; Shift
+    // spends the boost a slide banked.
+    {
+        PhysicsWorld& pw = physicsSys.physicsWorld();
+        PhysicsWorld::VehicleId mine = PhysicsWorld::INVALID_VEHICLE;
+        ctx.world.each<ControlledBy, InVehicle>([&](Entity, ControlledBy&, InVehicle& iv) {
+            if (const Vehicle* v = iv.vehicle.valid() ? ctx.world.get<Vehicle>(iv.vehicle) : nullptr)
+                if (!v->config.twoWheeler) mine = v->vehicleId;
+        });
+        if (mine != driftCar_) {
+            if (driftCar_ != PhysicsWorld::INVALID_VEHICLE) pw.setVehicleDriftEnabled(driftCar_, false);
+            if (mine != PhysicsWorld::INVALID_VEHICLE) pw.setVehicleDriftEnabled(mine, true);
+            driftCar_ = mine;
+        }
+        if (mine != PhysicsWorld::INVALID_VEHICLE) {
+            if (ctx.actions.pressed("vehicle_boost")) pw.boostVehicle(mine);
+            const PhysicsWorld::DriftState d = pw.vehicleDrift(mine);
+            if (d.drifting && !wasDrifting_) LOG_INFO << "[vehicle] drift";
+            if (!d.drifting && wasDrifting_) LOG_INFO << "[vehicle] drift held " << lastDriftTime_ << " s";
+            wasDrifting_ = d.drifting;
+            if (d.drifting) lastDriftTime_ = d.time;
+        }
+    }
     // The player's car for the control channel's `vehicle?`.
     std::string telem = "none";
     ctx.world.each<ControlledBy, InVehicle>([&](Entity, ControlledBy&, InVehicle& iv) {
@@ -678,11 +790,18 @@ void VehicleSystem::update(FrameContext& ctx) {
                       tel.speed * 3.6, tel.rpm, tel.gear, v->partTime4wd ? (v->fourWheel ? "4wd" : "2wd") : "fixed",
                       t->position.x, t->position.y, t->position.z, roll, pitch, yaw);
         telem = b;
+        const PhysicsWorld::DriftState d = physicsSys.physicsWorld().vehicleDrift(v->vehicleId);
+        char dr[96];
+        std::snprintf(dr, sizeof(dr), " drift %d slip %.0f boost %.2f%s", d.drifting ? 1 : 0, d.slipDeg, d.boost,
+                      d.boosting > 0 ? " BOOSTING" : "");
+        telem += dr;
     });
     ctx.settings.setString("vehicle.telemetry", telem);
 
     updateHorn(ctx);
     updateEngines(ctx);
+    measureSlide(ctx);
+    updateTyres(ctx);
 }
 
 void VehicleSystem::updateEngines(FrameContext& ctx) {
@@ -702,7 +821,7 @@ void VehicleSystem::updateEngines(FrameContext& ctx) {
     const Vec3 ear = ctx.view.camera.position;
     ctx.world.each<Transform, Vehicle>([&](Entity e, Transform& t, Vehicle& v) {
         const bool running = v.driver.valid() || ctx.world.has<AgentDriver>(e);
-        if (!running) return;
+        if (!running || v.pedalled) return;   // a bicycle has legs, not an engine
         const Real d2 = (t.position - ear).lengthSquared();
         if (d2 > kEngineAudibleRange * kEngineAudibleRange) return;
         heard.push_back({e, t.position,
@@ -785,6 +904,133 @@ void VehicleSystem::updateEngines(FrameContext& ctx) {
     }
 }
 
+// HOW HARD THE PLAYER'S TYRES SLIDE, 0..1, onto Vehicle::slide: sideways (the slip angle -- a drift) or spinning /
+// locked along (a burnout, a stop). The squeal's loudness and ParticleSystem's tyre smoke both read it.
+void VehicleSystem::measureSlide(FrameContext& ctx) {
+    for (Entity& s : smoke_)
+        if (!s.valid() || !ctx.world.alive(s)) {
+            s = ctx.world.create();
+            ctx.world.add<Transform>(s, Transform{});
+            ParticleEmitter pe;
+            pe.effect = "smoke";
+            pe.halfExtent = Vec3(0.15, 0.05, 0.15);
+            ctx.world.add<ParticleEmitter>(s, pe);
+        }
+    auto smokeOff = [&]() {
+        for (Entity s : smoke_)
+            if (ParticleEmitter* pe = ctx.world.get<ParticleEmitter>(s)) pe->rate = 0;
+    };
+    Entity car;
+    ctx.world.each<ControlledBy, InVehicle>([&](Entity, ControlledBy&, InVehicle& iv) {
+        if (!car.valid()) car = iv.vehicle;
+    });
+    Vehicle* v = car.valid() && ctx.world.alive(car) ? ctx.world.get<Vehicle>(car) : nullptr;
+    if (!v || v->vehicleId == PhysicsWorld::INVALID_VEHICLE) return smokeOff();
+    PhysicsWorld& pw = physicsSys.physicsWorld();
+    const PhysicsWorld::VehicleTelemetry tel = pw.vehicleTelemetry(v->vehicleId);
+    auto smooth = [](Real a, Real b, Real x) {
+        const Real u = std::clamp((x - a) / (b - a), Real(0), Real(1));
+        return u * u * (3 - 2 * u);
+    };
+    Real along = 0;
+    for (std::size_t i = 0; i < tel.wheelSlip.size(); ++i)
+        if (i < tel.wheelContact.size() && tel.wheelContact[i]) along = std::max(along, std::fabs(tel.wheelSlip[i]));
+    // ONLY A DRIFT OR A HARD STOP (Glenn, 2026-10-24: "still kinda loud. We should use it when we brake hard or
+    // drift"): a slide the drift has hold of, by its slip angle; or the brake pressed hard at speed, more as the wheels
+    // lock. A brisk corner, a wheelspin pull-away, a bump: silent.
+    const PhysicsWorld::DriftState drift = pw.vehicleDrift(v->vehicleId);
+    const Real speed = std::fabs(v->speed);
+    const Real drifting = drift.drifting ? smooth(6.0, 26.0, std::fabs(drift.slipDeg)) : Real(0);
+    const Real braking = smooth(0.55, 0.95, std::max(v->brake, v->handBrake)) * (0.6 + 0.4 * smooth(0.2, 0.7, along));
+    const Real fast = smooth(4.0, 11.0, speed);
+    v->slide = v->pedalled ? Real(0) : std::max(drifting, braking) * fast;
+    // the smoke: a drift's in full, a hard stop's a wisp (Glenn: "The braking smoke is a little heavy")
+    const Real smoky = v->pedalled ? Real(0) : std::max(drifting, braking * Real(0.3)) * fast;
+    // SMOKE off the rear tyres while they slide (Glenn: "dust kick up when you ... drift around a corner")
+    const Transform* ct = ctx.world.get<Transform>(car);
+    if (!ct) return smokeOff();
+    const Vec3 ahead = ct->orientation.rotate(Vec3(0, 0, 1));
+    int k = 0;
+    for (const PhysicsWorld::VehicleWheel& w : v->config.wheels) {
+        if (w.position.z > 0 || k >= 2) continue;   // the rear ones
+        if (Transform* st = ctx.world.get<Transform>(smoke_[k]))
+            st->position = ct->position + ct->orientation.rotate(w.position) - Vec3(0, w.radius * 0.8, 0);
+        if (ParticleEmitter* pe = ctx.world.get<ParticleEmitter>(smoke_[k])) {
+            pe->rate = smoky > 0.05 ? 40.0 * smoky : 0.0;
+            pe->velocity = ahead * (v->speed * 0.2);
+        }
+        ++k;
+    }
+    for (; k < 2; ++k)
+        if (ParticleEmitter* pe = ctx.world.get<ParticleEmitter>(smoke_[k])) pe->rate = 0;
+}
+
+void VehicleSystem::updateTyres(FrameContext& ctx) {
+    if (!ctx.audio.ready()) return;
+    if (!tyreClips_) {
+        const uint32_t r = ctx.audio.sampleRate();
+        auto make = [&](const std::vector<float>& pcm) { return ctx.audio.createClip(pcm.data(), pcm.size(), 1, r); };
+        squeal_.clip = make(sfx::tyreSqueal(r, 1));
+        freewheel_.clip = make(sfx::freewheel(r, 1));
+        roll_.clip = make(sfx::tyreRoll(r, 1));
+        tyreClips_ = true;
+    }
+    const float dt = static_cast<float>(std::min(ctx.frameDelta, 0.1));
+    auto drive = [&](TyreLoop& l, float target, float pitch, const Vec3& at, float rate) {
+        l.gain += (target - l.gain) * std::min(1.0f, rate * dt);
+        if (!l.voice.valid() || !ctx.audio.isPlaying(l.voice)) {
+            l.voice = AudioVoiceHandle{};
+            if (l.gain < 0.005f || !l.clip.valid()) return;
+            AudioPlayParams p;
+            p.loop = true;
+            p.volume = 0.0f;
+            p.pitch = pitch;
+            l.voice = ctx.audio.playAt(l.clip, at, 70.0, p);
+            if (!l.voice.valid()) return;
+        }
+        if (l.gain < 0.003f && target <= 0.0f) {
+            ctx.audio.stop(l.voice);
+            l.voice = AudioVoiceHandle{};
+            l.gain = 0.0f;
+            return;
+        }
+        ctx.audio.setVoiceVolume(l.voice, l.gain);
+        ctx.audio.setVoicePitch(l.voice, std::max(0.05f, pitch));
+        ctx.audio.setVoicePosition(l.voice, at);
+    };
+    // the player's ride, if any
+    Entity car;
+    ctx.world.each<ControlledBy, InVehicle>([&](Entity, ControlledBy&, InVehicle& iv) {
+        if (!car.valid()) car = iv.vehicle;
+    });
+    const Vehicle* v = car.valid() && ctx.world.alive(car) ? ctx.world.get<Vehicle>(car) : nullptr;
+    const Transform* t = v ? ctx.world.get<Transform>(car) : nullptr;
+    if (!v || !t || v->vehicleId == PhysicsWorld::INVALID_VEHICLE) {
+        const Vec3 ear = ctx.view.camera.position;
+        drive(squeal_, 0, 1, ear, 10);
+        drive(freewheel_, 0, 1, ear, 10);
+        drive(roll_, 0, 1, ear, 10);
+        return;
+    }
+    const Real speed = std::fabs(v->speed);
+    const Real slide = v->slide;   // (measureSlide)
+    auto smooth = [](Real a, Real b, Real x) {
+        const Real u = std::clamp((x - a) / (b - a), Real(0), Real(1));
+        return u * u * (3 - 2 * u);
+    };
+    drive(squeal_, static_cast<float>(0.3 * slide), static_cast<float>(0.9 + 0.15 * slide + speed / 150.0),
+          t->position, 9);
+    // A BICYCLE: the freewheel's pawls ticking while it coasts (as fast as the back wheel turns), the tyres' hum
+    const bool bike = v->pedalled;
+    const Real r = v->config.wheels.empty() ? 0.34 : v->config.wheels.back().radius;
+    const Real clicks = 24.0 * speed / (6.283185307179586 * r);   // 24 pawl engagements a turn
+    const bool coasting = bike && speed > 0.8 && std::fabs(v->throttle) < 0.05;
+    drive(freewheel_, coasting ? static_cast<float>(0.3 * smooth(0.8, 3.0, speed)) : 0.0f,
+          static_cast<float>(std::clamp(clicks / 40.0, 0.25, 3.0)), t->position, 12);
+    drive(roll_, bike ? static_cast<float>(0.45 * std::pow(std::clamp(speed / 9.0, 0.0, 1.0), 0.8)) : 0.0f,
+          static_cast<float>(0.7 + speed / 14.0), t->position, 8);
+}
+
 void VehicleSystem::updateHorn(FrameContext& ctx) {
     if (!ctx.audio.ready()) return;
 
@@ -838,6 +1084,7 @@ void VehicleSystem::fixedUpdate(FrameContext& ctx) {
     createVehicles(ctx);
     driveVehicles(ctx);
     writeBack(ctx);
+    stepSeat(ctx);
 }
 
 }  // namespace engine

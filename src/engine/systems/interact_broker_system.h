@@ -3,6 +3,7 @@
 
 #include "../interact_broker.h"
 #include "../system.h"
+#include "../ui/ui_text.h"
 #include <string>
 
 namespace engine {
@@ -20,10 +21,12 @@ public:
     void onStart(FrameContext& ctx) override;
     void update(FrameContext& ctx) override;
     void render(FrameContext& ctx) override;
+    void onStop(FrameContext& ctx) override { ui_.release(ctx.renderer); }
 
     static constexpr double HOLD_S = 0.4;
 
 private:
+    UiText ui_;   // the marker and the prompt (the game UI layer, ADR-0250)
     PhysicsSystem* physics_;
     // the focus, by identity (offers are rebuilt every frame)
     bool haveFocus_ = false;

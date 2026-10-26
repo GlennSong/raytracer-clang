@@ -10,6 +10,10 @@ namespace engine {
 
 UnderwaterSystem::Surface UnderwaterSystem::surfaceAt(World& world, double x, double z) {
     Surface s;
+    world.each<WaterPool>([&](Entity, WaterPool& p) {
+        if (s.kind == Water::None && x >= p.x0 && x <= p.x1 && z >= p.z0 && z <= p.z1) s = {Water::Pool, p.level};
+    });
+    if (s.kind != Water::None) return s;
     world.each<TerrainLodConfig>([&](Entity, TerrainLodConfig& cfg) {
         if (s.kind != Water::None || !cfg.params.hydro) return;
         const Hydrology& h = *cfg.params.hydro;
@@ -36,6 +40,7 @@ void UnderwaterSystem::update(FrameContext& ctx) {
         case Water::Sea:   u.color = Vec3(0.03, 0.16, 0.18); u.visibility = 14.0f; break;   // clear blue-green
         case Water::Lake:  u.color = Vec3(0.04, 0.12, 0.08); u.visibility = 7.0f;  break;   // still, greener
         case Water::River: u.color = Vec3(0.06, 0.12, 0.08); u.visibility = 4.5f;  break;   // silty
+        case Water::Pool:  u.color = Vec3(0.04, 0.2, 0.26);  u.visibility = 30.0f; break;   // chlorinated, clear
         default: break;
     }
 }

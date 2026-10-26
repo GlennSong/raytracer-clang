@@ -22,6 +22,7 @@
 #include "../engine/systems/residency_system.h"
 #include "../engine/systems/grass_system.h"
 #include "../engine/systems/flashlight_system.h"
+#include "../engine/systems/watch_system.h"
 #include "../engine/systems/nature_collider_system.h"
 #include "../apps/citysim/city_render.h"
 #include "../apps/citysim/city_spectate.h"
@@ -45,6 +46,9 @@
 #include "../engine/systems/underwater_system.h"
 #ifdef RT_ENABLE_PHYSICS
 #include "../engine/systems/footstep_system.h"
+#include "../engine/riding.h"
+#include "../engine/systems/particle_system.h"
+#include "../engine/systems/motion_audio_system.h"
 #endif
 #include "../engine/audio/sfx.h"
 #include "../engine/systems/camera_panel_system.h"
@@ -53,6 +57,8 @@
 #ifdef RT_ENABLE_PHYSICS
 #include "../engine/systems/physics_system.h"
 #include "../engine/systems/player_system.h"
+#include "../engine/systems/player_arms_system.h"
+#include "../engine/systems/player_body_system.h"
 #include "../engine/systems/shooting_system.h"
 #ifdef RT_ENABLE_SCRIPTING
 #include "../engine/scripting/script_system.h"
@@ -151,8 +157,14 @@ ArenaState::ArenaState(Window& window, Renderer& renderer,
 {
     // With an editor to return to, Esc stops the playtest instead of quitting.
     addSystem<DevControlSystem>(this->makeEditorState == nullptr);
+#ifdef RT_ENABLE_PHYSICS
+    // A RIDER drawn on its carrier between steps (ADR-0243), BEFORE the camera system builds this frame's view from the
+    // first-person eye (it sets that eye) and before the player's code places the third-person rig from the body
+    auto& riding = addSystem<RidingSystem>(nullptr);
+#endif
     auto& camSys = addSystem<CameraSystem>();
 #ifdef RT_ENABLE_PHYSICS
+    riding.setFly(&camSys.flyController());
     auto& physSys = addSystem<PhysicsSystem>();
     addSystem<PlayerSystem>(camSys.flyController(), physSys);
     addSystem<TeleportSystem>(camSys.flyController(), &physSys);   // Debug > Teleport, `teleport`
@@ -202,6 +214,7 @@ ArenaState::ArenaState(Window& window, Renderer& renderer,
     // over the on-foot shoulder camera, walk cycle shared with the crowd. After
     // PlayerSystem (line 60) so the capsule pose it reads is already this tick's.
     addSystem<citysim::CityPlayerBodySystem>();
+    addSystem<PlayerBodySystem>();   // ...and posed as blocks when climbing, swimming, flying, swinging, limp
     // The passenger seat: `ride bus|taxi|any` / `ride off` (city_player_transit).
     addSystem<citysim::CityPlayerTransitSystem>(citySys, physSys, camSys.flyController());
     addSystem<citysim::TrainSystem>(physSys, camSys.flyController(), &citySys);   // trains on the level's tracks, and the player aboard
@@ -214,7 +227,8 @@ ArenaState::ArenaState(Window& window, Renderer& renderer,
     // consumption) — and after PlayerSystem, so its chase-camera write wins.
     addSystem<citysim::CityPossessSystem>(citySys, physSys);
     addSystem<VehicleSystem>(physSys, camSys);   // drives real cars: player + promoted
-    addSystem<FlashlightSystem>();               // tool slot 4: its beam, staged in render() before RenderSystem
+    addSystem<FlashlightSystem>();               // the light (L / D-pad up): its beam, staged in render() before RenderSystem
+    addSystem<WatchSystem>();                    // the watch (Q / D-pad down): compass, waypoint, time on the wrist
 #else
     // physics-off build: no collider/vehicle/walker bridges; the spectate camera
     // above still follows the sim ghosts (citySys is consumed there).
@@ -234,7 +248,7 @@ ArenaState::ArenaState(Window& window, Renderer& renderer,
     // THE INTERACTION BROKER owns E: AFTER every provider (transit, the lifts, furniture) so a frame's offers are
     // all in when it picks the focus (engine/interact_broker.h).
     addSystem<InteractBrokerSystem>(&physSys);
-    addSystem<ToolCycleSystem>();   // LB / RB step through the tools (slot_1..4)
+    addSystem<ToolCycleSystem>();   // LB / RB step through the tools (slot_1..8)
 #else
     addSystem<ResidencySystem>();
     addSystem<TerrainLodSystem>();          // CDLOD draws only (no physics build)
@@ -243,6 +257,9 @@ ArenaState::ArenaState(Window& window, Renderer& renderer,
     // follow the head (culling/lamps/audio/Lua) and hand the gameplay camera
     // to the renderer as the locomotion-base hint. Must stay after every
     // other camera writer and before RenderSystem. Inert without a headset.
+#ifdef RT_ENABLE_PHYSICS
+    addSystem<PlayerArmsSystem>();   // the block arms on this frame's first-person view (after the camera writers)
+#endif
     addSystem<XrCameraSystem>();
     addSystem<UnderwaterSystem>();   // the camera under a water surface -> the composite's underwater look (#58)
     addSystem<RenderSystem>();
@@ -253,6 +270,8 @@ ArenaState::ArenaState(Window& window, Renderer& renderer,
     addSystem<ArenaSoundSystem>(audioSys);
 #ifdef RT_ENABLE_PHYSICS
     addSystem<FootstepSystem>(physSys);    // footsteps by surface, jump + landing, grass swish (#62-#64)
+    addSystem<MotionAudioSystem>();        // the moves heard: wind, the grapple, the canopy, boards
+    addSystem<ParticleSystem>();           // dust, smoke, bubbles, sparks: requested bursts + emitters, drawn
 #endif
     addSystem<WaterAmbienceSystem>();      // surf along the coast, rivers running (#65)
     addSystem<CameraPanelSystem>(camSys);

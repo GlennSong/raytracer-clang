@@ -1,4 +1,5 @@
 #include "train_system.h"
+#include "../../engine/riding.h"
 #include "city_render.h"
 #include "station_boards.h"
 #include "station_entrance.h"
@@ -40,10 +41,6 @@ Vec3 col(const Mat4& m, int c) { return Vec3(m.m[0][c], m.m[1][c], m.m[2][c]); }
 Vec3 toLocal(const Mat4& m, const Vec3& p) {
     const Vec3 d = p - col(m, 3);
     return Vec3(engine::dot(d, col(m, 0)), engine::dot(d, col(m, 1)), engine::dot(d, col(m, 2)));
-}
-Real yawOf(const Mat4& m) {
-    const Vec3 f = col(m, 2);
-    return std::atan2(f.x, -f.z) * Real(57.29577951308232);
 }
 
 Entity makeGroup(engine::FrameContext& ctx, const engine::RenderMesh& mesh, const std::string& name, bool glass) {
@@ -405,7 +402,6 @@ void TrainSystem::fixedUpdate(engine::FrameContext& ctx) {
             train_ = t;
             car_ = std::clamp(c, 1, sim_.carCount(t) - 1);
             local_ = Vec3(0, static_cast<Real>(coachOf(train_).floor), 0);
-            haveYaw_ = false;
             LOG_INFO << "[trains] aboard train " << train_ << " car " << car_ << " (by request)";
         }
     }
@@ -482,7 +478,8 @@ void TrainSystem::ride(engine::FrameContext& ctx, Real dt) {
         }
     } else {
         // ON FOOT: walking into an open doorway from the platform is boarding
-        const Vec3 feet = pt->position - Vec3(0, kEyeAboveTransform, 0);
+        // (the capsule's own centre-to-feet: it was the 0.7 eye offset, right only while the player was 1.4 m tall)
+        const Vec3 feet = pt->position - Vec3(0, cc ? cc->halfHeight + cc->radius : Real(0.9), 0);
         for (int ti = 0; ti < static_cast<int>(sim_.trains().size()) && train_ < 0; ++ti) {
             const Train& T = sim_.trains()[static_cast<std::size_t>(ti)];
             if (T.doorSide == 0) continue;
@@ -498,7 +495,6 @@ void TrainSystem::ride(engine::FrameContext& ctx, Real dt) {
                 car_ = c;
                 local_ = Vec3(std::clamp(l.x, Real(-(coachOf(ti).width / 2 - kWallClear)), Real(coachOf(ti).width / 2 - kWallClear)),
                               static_cast<Real>(coachOf(ti).floor), l.z);
-                haveYaw_ = false;
                 if (!ctx.world.has<engine::Passenger>(player)) ctx.world.add<engine::Passenger>(player);
                 LOG_INFO << "[trains] you boarded train " << ti << ", car " << c << " (feet " << feet.x << " " << feet.y << " " << feet.z
                          << ", car-local " << l.x << " " << l.y << " " << l.z << ")";
@@ -522,10 +518,22 @@ void TrainSystem::ride(engine::FrameContext& ctx, Real dt) {
         }
         sitRequest_ = -2;
     }
-    if (auto* ps = ctx.world.get<engine::Passenger>(player)) ps->onFoot = seat_ < 0;   // (the footsteps: seated, silent)
+    // HELD IN THE CARRIAGE (engine/riding.h): at `local` in this car's frame, the rest rideStep's -- the pin, the frame
+    // blend, the footsteps and the body (seated, or walking only as fast as the feet go in the car: Glenn, "when my
+    // guy is on the train he's walking when the train moves"), the view turning with the train
+    auto hold = [&](const CarPose& in, const Vec3& local, bool sitting) {
+        engine::Passenger* ps = ctx.world.get<engine::Passenger>(player);
+        if (!ps) return;
+        ps->carrier = in.m;
+        ps->local = local;
+        ps->sitting = sitting;
+        ps->eyeAbove = sitting ? kSeatedEye : kStandingEye;
+        ps->hipBelow = kSeatedEye - kEyeAboveTransform;
+        engine::rideStep(ctx.world, &physics_.physicsWorld(), player, &fly_);
+        pinned_ = pt->position;
+    };
     if (seat_ >= 0) {   // seated: pinned to the seat, the walk keys do nothing
-        const Vec3 w = P.m.transformPoint(coachOf(train_).seats[static_cast<std::size_t>(seat_)]);
-        pin(Vec3(w.x, w.y + kSeatedEye - kEyeAboveTransform, w.z));
+        hold(P, coachOf(train_).seats[static_cast<std::size_t>(seat_)], true);
         return;
     }
     // WALK the carriage in its own frame
@@ -563,13 +571,13 @@ void TrainSystem::ride(engine::FrameContext& ctx, Real dt) {
     // OUT OF THE DOOR: past the body's side where it is open
     if (T.doorSide != 0 && local_.x * T.doorSide > coachOf(train_).width / 2 + 0.3) {
         Vec3 out = P.m.transformPoint(Vec3(T.doorSide * static_cast<Real>(coachOf(train_).width / 2 + 0.5), static_cast<Real>(coachOf(train_).floor), local_.z));
-        out.y += kEyeAboveTransform + 0.05;
+        // the capsule's centre over the platform (its own height, not the 0.7 eye offset: that left a 1.8 m body
+        // standing 0.15 m into the platform)
+        out.y += (cc ? cc->halfHeight + cc->radius : Real(0.9)) + 0.05;
         leave(out);
         return;
     }
-    if (auto* ps = ctx.world.get<engine::Passenger>(player)) ps->local = local_;   // (a gangway's re-expression is a jump: no step)
-    const Vec3 w = P.m.transformPoint(local_);
-    pin(Vec3(w.x, w.y + kStandingEye - kEyeAboveTransform, w.z));
+    hold(P, local_, false);   // (a gangway's re-expression is a jump in `local`: the body's walk reads no step)
 }
 
 void TrainSystem::render(engine::FrameContext& ctx) {
@@ -659,23 +667,6 @@ void TrainSystem::render(engine::FrameContext& ctx) {
         if (player.valid()) {
             if (!ctx.world.has<engine::InteractCarrier>(player)) ctx.world.add<engine::InteractCarrier>(player);
             ctx.world.get<engine::InteractCarrier>(player)->drawn = P.m;
-        }
-        const Real yaw = yawOf(P.m);
-        if (haveYaw_) {
-            Real d = yaw - lastYaw_;
-            while (d > 180) d -= 360;
-            while (d < -180) d += 360;
-            fly_.yaw += d;
-        }
-        lastYaw_ = yaw;
-        haveYaw_ = true;
-        const bool sat = seat_ >= 0 && seat_ < static_cast<int>(coachOf(train_).seats.size());
-        const Vec3 w = P.m.transformPoint(sat ? coachOf(train_).seats[static_cast<std::size_t>(seat_)] : local_);
-        const Vec3 eye(w.x, w.y + (sat ? kSeatedEye : kStandingEye), w.z);
-        engine::CameraState& cam = ctx.view.camera;
-        if ((eye - cam.position).length() < 3.0) {   // only the first-person eye
-            cam.position = eye;
-            cam.target = eye + fly_.forward();
         }
     }
 }

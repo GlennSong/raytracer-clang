@@ -101,6 +101,9 @@ add_library(engine_core STATIC
     src/engine/procgen/vehicle/car_interior.cpp
     src/engine/procgen/vehicle/occupant.cpp
     src/engine/procgen/person.cpp
+    src/engine/block_body.cpp            # the person as ten blocks: poses, two-bone limbs, the ragdoll's parts
+    src/engine/player/driver_seat.cpp    # the player at the wheel: the seat's jolt, the body's sway, the seated pose (ADR-0252)
+    src/engine/body_draw.cpp             # the jointed body drawn: blocks + skinned limb tubes by fold
     src/engine/procgen/tree_cache.cpp
     src/engine/procgen/vehicle/train_mesh.cpp
     src/engine/procgen/texture_field.cpp
@@ -172,6 +175,7 @@ add_library(engine_core STATIC
     src/engine/procgen/city/street_names.cpp     # streets as named chains (tools/city_street_names.py, in C++)
     src/engine/procgen/city/street_signs.cpp     # street name signs: plan, lettered atlas, meshes
     src/engine/text/font.cpp                     # TrueType text into images (stb_truetype)
+    src/engine/ui/ui_text.cpp                    # the game UI's words: glyph atlases as UI quads (ADR-0250)
     src/engine/procgen/city/alignment.cpp
     src/engine/procgen/city/corridor_mesh.cpp
     src/engine/procgen/city/road_mesh.cpp
@@ -238,6 +242,7 @@ add_library(engine_core STATIC
     src/engine/audio/audio_engine.cpp
     src/engine/audio/sfx.cpp
     src/engine/audio/sfx_ground.cpp
+    src/engine/audio/sfx_motion.cpp
     src/engine/systems/audio_system.cpp
     src/engine/systems/render_system.cpp
     src/engine/systems/xr_camera_system.cpp
@@ -255,12 +260,15 @@ add_library(engine_core STATIC
     src/engine/systems/interact_broker_system.cpp
     src/engine/systems/tool_cycle_system.cpp
     src/engine/systems/beacon_light_system.cpp
+    src/engine/particles.cpp                    # dust, smoke, bubbles, streaks, sparks, splashes: the simulation
+    src/engine/systems/particle_system.cpp      # ...drawn as camera-facing quads, and what sets them off
     src/engine/systems/terrain_lod_system.cpp
     src/engine/systems/residency_system.cpp
     src/engine/systems/grass_system.cpp
     src/engine/systems/water_ambience_system.cpp
     src/engine/systems/underwater_system.cpp
     src/engine/systems/flashlight_system.cpp
+    src/engine/systems/watch_system.cpp      # the watch on the wrist: compass, waypoint, time (ADR-0251)
     src/engine/residency.cpp
     src/engine/occlusion.cpp
     # NOTE: the agent-based city simulation (ADR-0060…0066) is NOT here. It is an
@@ -437,6 +445,7 @@ if(RT_ENABLE_SCRIPTING)
         src/engine/scripting/vehicle_spec.cpp
         src/engine/scripting/furniture_library_lua.cpp
         src/engine/scripting/tree_recipes_lua.cpp
+        src/engine/scripting/particles_lua.cpp
     )
     target_link_libraries(engine_core PUBLIC lua_static)
     target_compile_definitions(engine_core PUBLIC RT_ENABLE_SCRIPTING=1)
@@ -715,12 +724,15 @@ add_executable(run_tests
     tests/test_weather_cycle.cpp
     tests/test_editor_home_view.cpp
     tests/test_vehicle_audio.cpp
+    tests/test_particles.cpp
     tests/test_frame_stats.cpp
     tests/test_event_bus.cpp
     tests/test_debug_draw.cpp
     tests/test_skeleton.cpp
     tests/test_skin.cpp
     tests/test_input_map.cpp
+    tests/test_ui_text.cpp   # the game UI's words; the watch's readouts (ADR-0250/0251)
+    src/renderer/null_renderer.cpp   # Renderer::create (the UI kit's textures, uploaded nowhere)
     tests/test_player_input.cpp
     tests/test_camera.cpp
     tests/test_follow_camera.cpp
@@ -1054,14 +1066,25 @@ if(RT_ENABLE_PHYSICS)
         src/engine/physics/jolt_job_adapter.cpp
         src/engine/systems/physics_system.cpp
         src/engine/systems/player_system.cpp
+        src/engine/player/player_body.cpp    # the player's body as a state machine of modes (ADR-0246)
+        src/engine/player/player_modes_foot.cpp
+        src/engine/player/player_modes_gear.cpp
+        src/engine/player/player_hands.cpp
+        src/engine/locomotion.cpp            # jump gate, ledges, mantle, climbing probes (tests/test_locomotion)
+        src/engine/rope_line.cpp             # the grapple's rope as drawn: a Verlet chain that lies over things
+        src/engine/riding.cpp                # a rider held in a carrier's frame: bus, car, cab, train (ADR-0243)
+        src/engine/systems/player_arms_system.cpp   # the block arms in first person
+        src/engine/systems/player_body_system.cpp   # the body posed in third person, and limp
         src/engine/systems/teleport_system.cpp
         src/engine/systems/shooting_system.cpp
         src/engine/systems/vehicle_system.cpp
         src/engine/systems/nature_collider_system.cpp   # trunk + rock colliders round the player (#55)
         src/engine/systems/footstep_system.cpp   # the player's feet, heard (#62/#63/#64)
+        src/engine/systems/motion_audio_system.cpp   # the player's moves, heard: wind, grapple, canopy, boards
         src/apps/citysim/city_physics.cpp   # kinematic colliders for AI cars (needs Jolt)
         src/apps/citysim/city_vehicles.cpp  # NPC cars as real engine Vehicles (ADR-0062)
         src/apps/citysim/city_walkers.cpp   # NPC walkers as physics characters (ADR-0062)
+        src/apps/citysim/walker_ragdolls.cpp   # the few walkers knocked flying, as ragdolls
         src/apps/citysim/city_player_body.cpp  # player renders as a person in third person (ADR-0064)
         src/apps/citysim/city_player_transit.cpp  # the player's passenger seat on a bus or cab
         src/apps/citysim/train_system.cpp   # trains drawn, and the player aboard one
@@ -1075,6 +1098,10 @@ if(RT_ENABLE_PHYSICS)
     add_executable(physics_tests
         tests/main.cpp
         tests/test_physics.cpp
+        tests/test_locomotion.cpp
+        tests/test_driver_seat.cpp      # the player at the wheel: the jolt, the sway, the seated pose (ADR-0252)
+        tests/test_two_wheelers.cpp
+        tests/test_drift.cpp
         tests/test_driving_lab.cpp
         tests/test_vehicle_handling.cpp
         tests/test_vehicle_drivetrain.cpp
@@ -1086,12 +1113,22 @@ if(RT_ENABLE_PHYSICS)
         tests/test_building_collider.cpp
         tests/test_building_interior.cpp
     tests/test_elevator.cpp
+        tests/test_player_trace.cpp   # the real PlayerSystem on movement_lab, scripted (ADR-0246)
         src/engine/physics/physics_world.cpp
         src/engine/physics/jolt_job_adapter.cpp
         src/engine/systems/physics_system.cpp
+        src/engine/locomotion.cpp
+        src/engine/rope_line.cpp
+        src/engine/riding.cpp
         src/apps/citysim/city_physics.cpp
         src/apps/citysim/city_player_transit.cpp
         src/apps/citysim/city_map_tool.cpp
+        src/engine/systems/player_system.cpp
+        src/engine/player/player_body.cpp
+        src/engine/player/player_modes_foot.cpp
+        src/engine/player/player_modes_gear.cpp
+        src/engine/player/player_hands.cpp
+        src/renderer/null_renderer.cpp   # Renderer::create for the level the trace loads
     )
     target_include_directories(physics_tests PRIVATE src)
     target_compile_options(physics_tests PRIVATE -Wall -Wextra)

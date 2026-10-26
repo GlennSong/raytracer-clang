@@ -46,6 +46,7 @@ public:
     // update() derives it each frame from Settings + InVehicle; tests and
     // headless ticks keep the default (true) unless they set it.
     void setFirstPersonView(bool firstPerson) { firstPersonView_ = firstPerson; }
+    void setHandsFree(bool free) { handsFree_ = free; }
 
     // Headless-testable core: run start/update for every ScriptBehaviour in
     // `world`, advancing by `dt`, then apply any deferred spawns. update()
@@ -60,6 +61,7 @@ private:
     AssetManager* assets_ = nullptr;
     EventBus* events_ = nullptr;
     bool firstPersonView_ = true;
+    bool handsFree_ = true;
 };
 
 }  // namespace engine

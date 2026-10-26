@@ -987,7 +987,8 @@ public:
             return q;
         }
     };
-    // This frame's UI (drawn once, then cleared: submit every frame it shows).
+    // This frame's UI (drawn once, then cleared: submit every frame it shows). Each call ADDS to the frame's
+    // list -- the map, the HUD, the watch's dial all submit -- drawn in the order submitted.
     virtual void submitUi(const std::vector<UiQuad>& /*quads*/) {}
 
     // Debug-UI (Dear ImGui) backend hooks — see ADR-0011. No-ops unless a

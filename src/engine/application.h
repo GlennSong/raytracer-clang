@@ -154,6 +154,7 @@ private:
     InputMap inputMap;
     KeyCode pendingTapRelease_ = KeyCode::Unknown;   // `tap`: release next frame
     std::vector<std::pair<KeyCode, double>> heldKeys_;   // `hold`: sim seconds left
+    double heldMouseLeft_ = 0;                           // `hold MouseLeft <s>`: the fire button, sim seconds left
     std::string burstPrefix_;   // `shots`: every frame dumped to <prefix>_NNN.png
     int burstLeft_ = 0, burstIndex_ = 0;
     bool keyClashChecked_ = false;

@@ -282,6 +282,21 @@ TEST_CASE(a_running_jump_carries_its_momentum_through_the_air) {
 // #43 SWIMMING: "walk into a lake: float at the surface, swim, climb out on a bank". A beach: a ramp from
 // 6 m under the sea up to 1 m above it over 60 m, the sea at y = 0. The real Jolt character, driven by the
 // same SwimState rules PlayerSystem uses.
+// Teleported (or flung) up out of the pool, the player is out of the water: a swimmer whose feet are well above the
+// surface touching nothing is no longer swimming. It used to leave only by wading, so jump in the air rose instead of
+// opening the parachute.
+TEST_CASE(a_swimmer_lifted_clear_of_the_water_is_out_of_it) {
+    SwimState s;
+    CHECK(s.update(1.6, false));    // in, afloat
+    CHECK(s.update(1.2, false));    // bobbing, still in
+    CHECK(s.update(-0.5, false));   // a jump at the surface: still in
+    CHECK(!s.update(-1.5, false));  // 1.5 m clear of it, touching nothing: out
+    CHECK(!s.update(-40.0, false)); // and stays out
+    SwimState dry;                  // lifted over dry ground: no water under it reads -1
+    CHECK(dry.update(1.6, false));
+    CHECK(!dry.update(-1.0, false));
+}
+
 TEST_CASE(a_swimmer_floats_dives_and_walks_out_up_the_beach) {
     World world;
     {   // the beach ramp, x -20 (deep) .. 40 (dry)

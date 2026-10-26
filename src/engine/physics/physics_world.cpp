@@ -16,14 +16,22 @@
 #include <Jolt/Physics/Collision/Shape/MeshShape.h>
 #include <Jolt/Physics/Collision/RayCast.h>
 #include <Jolt/Physics/Collision/CastResult.h>
+#include <Jolt/Physics/Collision/CollideShape.h>
+#include <Jolt/Physics/Collision/CollisionCollectorImpl.h>
+#include <Jolt/Physics/Body/BodyLock.h>
 #include <Jolt/Physics/Collision/Shape/OffsetCenterOfMassShape.h>
 #include <Jolt/Physics/Collision/Shape/RotatedTranslatedShape.h>
 #include <Jolt/Physics/Body/AllowedDOFs.h>
 #include <Jolt/Physics/Character/CharacterVirtual.h>
+#include <Jolt/Physics/Ragdoll/Ragdoll.h>
+#include <Jolt/Physics/Constraints/HingeConstraint.h>
+#include <Jolt/Physics/Constraints/SwingTwistConstraint.h>
+#include <Jolt/Skeleton/Skeleton.h>
 #include <Jolt/Physics/PhysicsSettings.h>
 #include <Jolt/Physics/PhysicsSystem.h>
 #include <Jolt/Physics/Vehicle/VehicleConstraint.h>
 #include <Jolt/Physics/Vehicle/WheeledVehicleController.h>
+#include <Jolt/Physics/Vehicle/MotorcycleController.h>
 #include <Jolt/Physics/Vehicle/VehicleCollisionTester.h>
 #include <Jolt/Physics/Collision/ContactListener.h>
 #include <Jolt/RegisterTypes.h>
@@ -34,6 +42,7 @@
 #include <cstdarg>
 #include <cstdio>
 #include <mutex>
+#include <string>
 
 namespace engine {
 
@@ -228,6 +237,7 @@ struct PhysicsWorld::Impl {
         float radius = 0.3f;
     };
     std::vector<Character> characters;
+    std::vector<JPH::Ref<JPH::Ragdoll>> ragdolls;   // slots kept; a removed one is null
 
     // Wheeled vehicles (ADR-0059). Each owns a VehicleConstraint (also a step
     // listener) over a dynamic chassis body. Slots are never compacted so
@@ -249,6 +259,15 @@ struct PhysicsWorld::Impl {
         float centerLimitedSlip = 1.4f; // the coupling between axles in 4WD (open in 2WD)
         bool tractionSplit = false;     // VehicleConfig::tractionSplit
         float appliedShare = -1.0f;     // the front share the differentials carry this step
+        // drift (ADR-0236)
+        float throttle = 0.0f, handBrake = 0.0f;
+        bool driftEnabled = false;
+        std::vector<char> wheelRear;    // per wheel: behind the middle?
+        float rearGrip = 1.0f, frontGrip = 1.0f;   // the tyres' sideways grip scale this step
+        bool drifting = false;
+        float driftTime = 0.0f, boost = 0.0f, boosting = 0.0f, holdSpeed = 0.0f;
+        float slip = 0.0f, lastTravelYaw = 0.0f;
+        bool haveTravel = false;
     };
     std::vector<Vehicle> vehicles;
 
@@ -295,6 +314,9 @@ std::vector<ContactEvent> PhysicsWorld::drainContactEvents() {
 
 void PhysicsWorld::shutdown() {
     if (!impl) return;
+    for (JPH::Ref<JPH::Ragdoll>& r : impl->ragdolls)   // out of the system before their bodies are destroyed
+        if (r) r->RemoveFromPhysicsSystem();
+    impl->ragdolls.clear();
     impl.reset();
     globalRelease();
 }
@@ -598,6 +620,39 @@ bool PhysicsWorld::jumpCharacter(CharacterId id, Real speed) {
     return true;
 }
 
+void PhysicsWorld::launchCharacter(CharacterId id, Real upSpeed) {
+    if (!impl || id >= impl->characters.size() || upSpeed <= 0.0) return;
+    if (!impl->characters[id].controller) return;
+    impl->characters[id].pendingJump = static_cast<float>(upSpeed);
+}
+
+Vec3 PhysicsWorld::characterGroundNormal(CharacterId id) const {
+    if (!impl || id >= impl->characters.size()) return Vec3(0, 1, 0);
+    const JPH::CharacterVirtual* ch = impl->characters[id].controller.GetPtr();
+    if (!ch || ch->GetGroundState() == JPH::CharacterBase::EGroundState::InAir) return Vec3(0, 1, 0);
+    const JPH::Vec3 n = ch->GetGroundNormal();
+    return Vec3(n.GetX(), n.GetY(), n.GetZ());
+}
+
+bool PhysicsWorld::characterFitsAt(CharacterId id, const Vec3& centre) const {
+    if (!impl || id >= impl->characters.size()) return false;
+    const Impl::Character& rec = impl->characters[id];
+    if (!rec.controller) return false;
+    // The capsule a hair slimmer than the character's own: a body standing on a ledge touches it, and
+    // touching is fitting (the same slop the crouch test allows, as a margin instead of a tolerance).
+    JPH::CapsuleShape shape(rec.halfHeight, std::max(rec.radius - 0.03f, 0.05f));
+    shape.SetEmbedded();
+    JPH::CollideShapeSettings settings;
+    settings.mMaxSeparationDistance = 0.0f;
+    JPH::AnyHitCollisionCollector<JPH::CollideShapeCollector> hits;
+    const JPH::RVec3 at = toJoltR(centre + Vec3(0, 0.03, 0));   // lifted by the trim, so the soles stay put
+    impl->physicsSystem.GetNarrowPhaseQuery().CollideShape(
+        &shape, JPH::Vec3::sReplicate(1.0f), JPH::RMat44::sTranslation(at), settings, at, hits,
+        impl->physicsSystem.GetDefaultBroadPhaseLayerFilter(Layers::MOVING),
+        impl->physicsSystem.GetDefaultLayerFilter(Layers::MOVING));
+    return !hits.HadHit();
+}
+
 bool PhysicsWorld::setCharacterHeight(CharacterId id, Real halfHeight,
                                       Real radius) {
     if (!impl || id >= impl->characters.size()) return false;
@@ -661,6 +716,29 @@ bool PhysicsWorld::castRay(const Vec3& origin, const Vec3& dirAndLength,
     return true;
 }
 
+bool PhysicsWorld::castRayHit(const Vec3& origin, const Vec3& dirAndLength, RayHit& out) const {
+    if (!impl) return false;
+    JPH::RRayCast ray{JPH::RVec3(origin.x, origin.y, origin.z),
+                      JPH::Vec3(static_cast<float>(dirAndLength.x), static_cast<float>(dirAndLength.y),
+                                static_cast<float>(dirAndLength.z))};
+    JPH::RayCastResult hit;
+    if (!impl->physicsSystem.GetNarrowPhaseQuery().CastRay(ray, hit)) return false;
+    const JPH::RVec3 p = ray.GetPointOnRay(hit.mFraction);
+    out.point = Vec3(p.GetX(), p.GetY(), p.GetZ());
+    out.body = hit.mBodyID.GetIndexAndSequenceNumber();
+    out.normal = Vec3(0, 1, 0);
+    out.dynamic = false;
+    JPH::BodyLockRead lock(impl->physicsSystem.GetBodyLockInterface(), hit.mBodyID);
+    if (lock.Succeeded()) {
+        const JPH::Body& b = lock.GetBody();
+        JPH::Vec3 n = b.GetWorldSpaceSurfaceNormal(hit.mSubShapeID2, p);
+        if (n.Dot(ray.mDirection) > 0.0f) n = -n;   // a mesh's back face: the side the ray came from
+        out.normal = Vec3(n.GetX(), n.GetY(), n.GetZ());
+        out.dynamic = b.GetMotionType() == JPH::EMotionType::Dynamic;
+    }
+    return true;
+}
+
 PhysicsBodyId PhysicsWorld::characterGroundBody(CharacterId id) const {
     if (!impl || id >= impl->characters.size()) return INVALID_PHYSICS_BODY;
     const JPH::CharacterVirtual* ch = impl->characters[id].controller.GetPtr();
@@ -715,6 +793,92 @@ void PhysicsWorld::setCharacterPosition(CharacterId id, const Vec3& position) {
         // tunnels through) whatever it lands on.
         ch->SetLinearVelocity(JPH::Vec3::sZero());
     }
+}
+
+// --- Ragdoll -----------------------------------------------------------------
+
+PhysicsWorld::RagdollId PhysicsWorld::addRagdoll(const std::vector<RagdollPart>& parts, const Vec3& velocity) {
+    if (!impl || parts.empty()) return INVALID_RAGDOLL;
+    JPH::Ref<JPH::Skeleton> skeleton = new JPH::Skeleton;
+    JPH::Ref<JPH::RagdollSettings> settings = new JPH::RagdollSettings;
+    settings->mSkeleton = skeleton;
+    settings->mParts.resize(parts.size());
+    for (std::size_t i = 0; i < parts.size(); ++i) {
+        const RagdollPart& p = parts[i];
+        skeleton->AddJoint("part" + std::to_string(i), p.parent);
+        JPH::RagdollSettings::Part& part = settings->mParts[i];
+        const JPH::Vec3 he = toJolt(p.halfExtent);
+        part.SetShape(new JPH::BoxShape(he, std::min(0.03f, 0.5f * he.ReduceMin())));
+        part.mPosition = toJoltR(p.position);
+        part.mRotation = toJolt(p.orientation).Normalized();
+        part.mMotionType = JPH::EMotionType::Dynamic;
+        part.mObjectLayer = Layers::MOVING;
+        part.mOverrideMassProperties = JPH::EOverrideMassProperties::CalculateInertia;
+        part.mMassPropertiesOverride.mMass = static_cast<float>(p.mass);
+        part.mLinearDamping = 0.1f;
+        part.mAngularDamping = 0.6f;   // a limp body, not a spinning top
+        if (p.parent >= 0 && p.hinge) {
+            JPH::Ref<JPH::HingeConstraintSettings> c = new JPH::HingeConstraintSettings;
+            c->mSpace = JPH::EConstraintSpace::WorldSpace;
+            c->mPoint1 = c->mPoint2 = toJoltR(p.joint);
+            const JPH::Vec3 axis = toJolt(p.hingeAxis).Normalized();
+            c->mHingeAxis1 = c->mHingeAxis2 = axis;
+            c->mNormalAxis1 = c->mNormalAxis2 = axis.GetNormalizedPerpendicular();
+            c->mLimitsMin = JPH::DegreesToRadians(static_cast<float>(std::min(Real(0), p.hingeMinDeg)));
+            c->mLimitsMax = JPH::DegreesToRadians(static_cast<float>(std::max(Real(0), p.hingeMaxDeg)));
+            c->mMaxFrictionTorque = static_cast<float>(p.hingeFriction);
+            part.mToParent = c;
+        } else if (p.parent >= 0) {
+            JPH::Ref<JPH::SwingTwistConstraintSettings> c = new JPH::SwingTwistConstraintSettings;
+            c->mSpace = JPH::EConstraintSpace::WorldSpace;
+            c->mPosition1 = c->mPosition2 = toJoltR(p.joint);
+            const JPH::Vec3 twist = toJolt(p.twistAxis).Normalized();
+            c->mTwistAxis1 = c->mTwistAxis2 = twist;
+            c->mPlaneAxis1 = c->mPlaneAxis2 = twist.GetNormalizedPerpendicular();
+            c->mNormalHalfConeAngle = c->mPlaneHalfConeAngle = JPH::DegreesToRadians(static_cast<float>(p.swingDeg));
+            c->mTwistMinAngle = -JPH::DegreesToRadians(static_cast<float>(p.twistDeg));
+            c->mTwistMaxAngle = JPH::DegreesToRadians(static_cast<float>(p.twistDeg));
+            part.mToParent = c;
+        }
+    }
+    settings->Stabilize();
+    settings->DisableParentChildCollisions();
+    settings->CalculateBodyIndexToConstraintIndex();
+    settings->CalculateConstraintIndexToBodyIdxPair();
+    JPH::Ref<JPH::Ragdoll> ragdoll =
+        settings->CreateRagdoll(static_cast<JPH::CollisionGroup::GroupID>(impl->ragdolls.size()), 0, &impl->physicsSystem);
+    if (!ragdoll) return INVALID_RAGDOLL;
+    ragdoll->AddToPhysicsSystem(JPH::EActivation::Activate);
+    ragdoll->SetLinearVelocity(toJolt(velocity));
+    impl->ragdolls.push_back(ragdoll);
+    return static_cast<RagdollId>(impl->ragdolls.size() - 1);
+}
+
+void PhysicsWorld::removeRagdoll(RagdollId id) {
+    if (!impl || id >= impl->ragdolls.size() || !impl->ragdolls[id]) return;
+    impl->ragdolls[id]->RemoveFromPhysicsSystem();
+    impl->ragdolls[id] = nullptr;
+}
+
+bool PhysicsWorld::ragdollPart(RagdollId id, int part, Vec3& position, Quat& orientation) const {
+    if (!impl || id >= impl->ragdolls.size() || !impl->ragdolls[id]) return false;
+    const JPH::Ragdoll& r = *impl->ragdolls[id];
+    if (part < 0 || static_cast<std::size_t>(part) >= r.GetBodyCount()) return false;
+    JPH::RVec3 p;
+    JPH::Quat q;
+    impl->bodies().GetPositionAndRotation(r.GetBodyID(part), p, q);
+    position = fromJolt(p);
+    orientation = fromJolt(q);
+    return true;
+}
+
+Real PhysicsWorld::ragdollSpeed(RagdollId id) const {
+    if (!impl || id >= impl->ragdolls.size() || !impl->ragdolls[id]) return 0;
+    const JPH::Ragdoll& r = *impl->ragdolls[id];
+    float fastest = 0;
+    for (std::size_t i = 0; i < r.GetBodyCount(); ++i)
+        fastest = std::max(fastest, impl->bodies().GetLinearVelocity(r.GetBodyID(static_cast<int>(i))).Length());
+    return fastest;
 }
 
 // --- Wheeled vehicle (ADR-0059) --------------------------------------------
@@ -866,10 +1030,28 @@ PhysicsWorld::VehicleId PhysicsWorld::addVehicle(const VehicleConfig& cfg,
         }
     }
 
-    JPH::WheeledVehicleControllerSettings* controller =
-        new JPH::WheeledVehicleControllerSettings();
+    JPH::WheeledVehicleControllerSettings* controller;
+    if (cfg.twoWheeler) {
+        JPH::MotorcycleControllerSettings* bike = new JPH::MotorcycleControllerSettings();
+        bike->mMaxLeanAngle = JPH::DegreesToRadians(static_cast<float>(cfg.maxLeanDegrees));
+        // THE LEAN SPRING, sized to this bike. Jolt's defaults (5000 / 1000) suit its sample's heavy hull; on a
+        // narrow box (roll inertia ~12 kg m^2 for a 220 kg motorcycle) one step of that damping overshot the roll
+        // rate and the bike flipped on touchdown. Stiff enough to beat gravity's pull at the centre of mass
+        // (m g h per radian, with margin); damped so a 60 Hz step takes at most ~40% of the roll rate off.
+        const float m = static_cast<float>(cfg.mass);
+        const float wx = 2.0f * static_cast<float>(cfg.chassisHalfExtent.x);
+        const float hy = 2.0f * static_cast<float>(cfg.chassisHalfExtent.y);
+        const float rollInertia = m / 12.0f * (wx * wx + hy * hy);
+        bike->mLeanSpringConstant = 2.5f * m * 9.81f * (0.5f * hy + 0.3f);
+        bike->mLeanSpringDamping = 0.4f * rollInertia * 60.0f;
+        controller = bike;
+    } else {
+        controller = new JPH::WheeledVehicleControllerSettings();
+    }
     controller->mEngine.mMaxTorque = static_cast<float>(cfg.engineTorque);
     controller->mEngine.mMaxRPM = static_cast<float>(cfg.maxRPM);
+    controller->mEngine.mAngularDamping = static_cast<float>(cfg.engineDamping);
+    controller->mEngine.mInertia = static_cast<float>(cfg.engineInertia);
 
     // ONE DIFFERENTIAL PER DRIVEN AXLE (VehicleConfig drivetrain): driven wheels grouped by their z, the
     // left one the larger x (as the anti-roll bars take it), front axles those ahead of the axles' middle.
@@ -959,6 +1141,7 @@ PhysicsWorld::VehicleId PhysicsWorld::addVehicle(const VehicleConfig& cfg,
     v.dragArea = static_cast<float>(std::max(Real(0), cfg.dragArea));
     v.tractionSplit = cfg.tractionSplit;
     v.appliedShare = share;
+    for (const VehicleWheel& w : cfg.wheels) v.wheelRear.push_back(w.position.z < zMid ? 1 : 0);   // (the drift's)
     // The assist's yaw-rate cap: the grip on a 0.85 road (the city's), with
     // 10 % in hand so it only ever trims a slide, never a cornering car.
     v.gripAccel = static_cast<float>(1.1 * cfg.lateralGrip * std::sqrt(0.85) * 9.81);
@@ -998,12 +1181,124 @@ void PhysicsWorld::setVehicleInput(VehicleId id, Real forward, Real right,
     wc->SetDriverInput(static_cast<float>(forward), static_cast<float>(right),
                        static_cast<float>(brake), static_cast<float>(handBrake));
     impl->vehicles[id].steer = static_cast<float>(std::clamp(right, Real(-1), Real(1)));
+    impl->vehicles[id].throttle = static_cast<float>(forward);
+    impl->vehicles[id].handBrake = static_cast<float>(handBrake);
     // Throttle/steer is meaningless on a sleeping body — wake it.
     if (forward != 0.0 || right != 0.0 || brake != 0.0 || handBrake != 0.0)
         impl->bodies().ActivateBody(impl->vehicles[id].body);
 }
 
-void PhysicsWorld::resetVehicleUpright(VehicleId id) {
+// --- drift (ADR-0236) --------------------------------------------------------
+
+void PhysicsWorld::setVehicleDriftEnabled(VehicleId id, bool on) {
+    if (!impl || id >= impl->vehicles.size()) return;
+    Impl::Vehicle& v = impl->vehicles[id];
+    if (!v.constraint) return;
+    v.driftEnabled = on;
+    if (!on) { v.drifting = false; v.rearGrip = v.frontGrip = 1.0f; }
+    // the tyres' grip, scaled per wheel each step (front / rear) -- Jolt's own rule otherwise
+    auto* wc = static_cast<JPH::WheeledVehicleController*>(v.constraint->GetController());
+    Impl* im = impl.get();
+    const std::size_t index = id;
+    wc->SetTireMaxImpulseCallback([im, index](JPH::uint wheel, float& outLong, float& outLat, float suspension,
+                                              float longFriction, float latFriction, float, float, float) {
+        const Impl::Vehicle& veh = im->vehicles[index];
+        const bool rear = wheel < veh.wheelRear.size() && veh.wheelRear[wheel];
+        outLong = longFriction * suspension;
+        outLat = latFriction * suspension * (rear ? veh.rearGrip : veh.frontGrip);
+    });
+}
+
+PhysicsWorld::DriftState PhysicsWorld::vehicleDrift(VehicleId id) const {
+    DriftState d;
+    if (!impl || id >= impl->vehicles.size()) return d;
+    const Impl::Vehicle& v = impl->vehicles[id];
+    d.drifting = v.drifting;
+    d.slipDeg = JPH::RadiansToDegrees(v.slip);
+    d.time = v.driftTime;
+    d.boost = v.boost;
+    d.boosting = v.boosting;
+    return d;
+}
+
+void PhysicsWorld::boostVehicle(VehicleId id) {
+    if (!impl || id >= impl->vehicles.size()) return;
+    Impl::Vehicle& v = impl->vehicles[id];
+    if (v.boost < 0.1f || v.boosting > 0) return;
+    v.boosting = 2.5f * v.boost;   // a full bank is 2.5 s of burst
+    v.boost = 0;
+}
+
+void PhysicsWorld::applyDrift(std::size_t index, float dt) {
+    Impl::Vehicle& v = impl->vehicles[index];
+    if (!v.driftEnabled || !v.constraint) return;
+    JPH::BodyInterface& bi = impl->bodies();
+    const JPH::Quat q = bi.GetRotation(v.body);
+    const JPH::Vec3 fwd = q * JPH::Vec3(0, 0, 1);
+    JPH::Vec3 vel = bi.GetLinearVelocity(v.body);
+    const JPH::Vec3 flatV(vel.GetX(), 0, vel.GetZ());
+    const float speed = flatV.Length();
+    const float headYaw = std::atan2(fwd.GetX(), fwd.GetZ());
+    const float travelYaw = speed > 0.5f ? std::atan2(flatV.GetX(), flatV.GetZ()) : headYaw;
+    auto wrap = [](float a) { return std::remainder(a, 2.0f * JPH::JPH_PI); };
+    v.slip = speed > 2.0f ? wrap(headYaw - travelYaw) : 0.0f;
+    const float travelRate = v.haveTravel ? wrap(travelYaw - v.lastTravelYaw) / std::max(dt, 1e-4f) : 0.0f;
+    v.lastTravelYaw = travelYaw;
+    v.haveTravel = true;
+    float m = 1500.0f;
+    {
+        JPH::BodyLockRead lock(impl->physicsSystem.GetBodyLockInterface(), v.body);
+        if (lock.Succeeded() && lock.GetBody().GetMotionProperties())
+            m = 1.0f / std::max(lock.GetBody().GetMotionProperties()->GetInverseMass(), 1e-6f);
+    }
+    // the boost: a push along the nose for as long as it lasts
+    if (v.boosting > 0) {
+        v.boosting = std::max(0.0f, v.boosting - dt);
+        bi.AddForce(v.body, fwd * (m * 7.0f));
+    }
+    // INTO A SLIDE: a handbrake tap while steering at speed
+    if (!v.drifting && v.handBrake > 0.5f && std::fabs(v.steer) > 0.3f && speed > 11.0f) {
+        v.drifting = true;
+        v.driftTime = 0;
+        v.holdSpeed = speed;
+    }
+    if (!v.drifting) { v.rearGrip = v.frontGrip = 1.0f; return; }
+    v.driftTime += dt;
+    v.boost = std::min(1.0f, v.boost + dt * 0.25f);
+    // OUT: straightened up and nearly straight again, too slow, or spun past saving
+    if ((std::fabs(v.steer) < 0.15f && std::fabs(v.slip) < JPH::DegreesToRadians(10.0f)) || speed < 6.0f ||
+        std::fabs(v.slip) > JPH::DegreesToRadians(100.0f)) {
+        v.drifting = false;
+        v.rearGrip = v.frontGrip = 1.0f;
+        return;
+    }
+    v.rearGrip = 0.35f;
+    v.frontGrip = 0.9f;
+    // hold the slip the steering asks for: the body yaws at the travel's rate plus a pull toward the target
+    const float target = -v.steer * JPH::DegreesToRadians(32.0f);
+    const float wantRate = travelRate + 3.0f * wrap(target - v.slip);
+    const JPH::Vec3 up(0, 1, 0);
+    const float yawRate = bi.GetAngularVelocity(v.body).Dot(up);
+    const JPH::Mat44 invI = bi.GetInverseInertia(v.body);
+    const float invIup = (invI * up).Dot(up);
+    if (invIup > 1e-9f) bi.AddTorque(v.body, up * (6.0f * (wantRate - yawRate) / invIup));
+    // THE CARVE: a slide is turning, not just sliding -- the travel swings toward where the nose points, harder the
+    // further round it is (an arcade drift's tight line; the tyres alone left a 55 m arc at 30 degrees)
+    if (speed > 0.5f) {
+        const JPH::Vec3 dir = flatV / speed;
+        const JPH::Vec3 side = JPH::Vec3(0, 1, 0).Cross(dir);   // the travel's left
+        const float toward = std::sin(v.slip);                   // + : the nose is round to the left
+        bi.AddForce(v.body, side * (m * 14.0f * toward));
+    }
+    // keep the slide's speed on the throttle (it bleeds slowly), let it go off it
+    v.holdSpeed *= 1.0f - 0.04f * dt;
+    if (v.throttle > 0.3f && speed < v.holdSpeed && speed > 0.5f) {
+        const float push = std::min(8.0f, 4.0f * (v.holdSpeed - speed));
+        bi.AddForce(v.body, flatV.Normalized() * (m * push));
+    }
+}
+
+void PhysicsWorld::resetVehicleUpright(VehicleId id, Real lift) {
     if (!impl || id >= impl->vehicles.size()) return;
     JPH::BodyID b = impl->vehicles[id].body;
     if (b.IsInvalid()) return;
@@ -1013,7 +1308,7 @@ void PhysicsWorld::resetVehicleUpright(VehicleId id) {
     float yaw = std::atan2(fwd.GetX(), fwd.GetZ());
     JPH::Quat upright = JPH::Quat::sRotation(JPH::Vec3::sAxisY(), yaw);
     JPH::RVec3 pos = bi.GetPosition(b);
-    bi.SetPositionAndRotation(b, pos + JPH::RVec3(0, 1.5f, 0), upright,
+    bi.SetPositionAndRotation(b, pos + JPH::RVec3(0, static_cast<float>(lift), 0), upright,
                               JPH::EActivation::Activate);
     bi.SetLinearVelocity(b, JPH::Vec3::sZero());
     bi.SetAngularVelocity(b, JPH::Vec3::sZero());
@@ -1182,7 +1477,12 @@ void PhysicsWorld::applyAeroDrag(std::size_t index) {
 
 void PhysicsWorld::update(Real deltaTime, int collisionSteps) {
     if (impl) {
-        for (std::size_t i = 0; i < impl->vehicles.size(); ++i) { applyYawAssist(i); applyAeroDrag(i); applyTractionSplit(i); }
+        for (std::size_t i = 0; i < impl->vehicles.size(); ++i) {
+            applyDrift(i, static_cast<float>(deltaTime));
+            if (!impl->vehicles[i].drifting) applyYawAssist(i);   // the slide is the drift's to hold
+            applyAeroDrag(i);
+            applyTractionSplit(i);
+        }
         impl->physicsSystem.Update(static_cast<float>(deltaTime), collisionSteps,
                                    &impl->tempAllocator, impl->jobSystem.get());
     }

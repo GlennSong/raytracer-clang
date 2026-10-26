@@ -2,6 +2,7 @@
 #include "../../engine/procgen/vehicle/occupant.h"   // the seated manikin (M5)
 
 #include "../../engine/mesh_builder.h"
+#include "../../engine/block_body.h"
 #include "../../engine/procgen/person.h"
 
 #include <cmath>
@@ -71,7 +72,9 @@ int walkPoseIndex(Real& stridePhase, Real speed, Real dt) {
     return static_cast<int>(stridePhase * kWalkPoses) % kWalkPoses;
 }
 
-engine::RenderMesh buildPersonMesh(Real swing, int outfit) { return engine::buildStandingPerson(swing, outfit); }
+engine::RenderMesh buildPersonMesh(Real swing, int outfit) {
+    return engine::buildPosedPerson(engine::walkBodyPose(swing), outfit);   // knees and elbows (block_body.h)
+}
 
 engine::RenderMesh ringXZ(Real innerFrac, int segs) {
     engine::RenderMesh m;

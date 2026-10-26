@@ -100,8 +100,10 @@ bool Application::initialize(const Config& config,
 
     // Audio is best-effort: a build without RT_ENABLE_AUDIO, or a machine
     // with no device, degrades to silence (ADR-0069) — never a failed boot.
-    // The host picks the mode (see Config::audio); Auto is the desktop default.
-    audioEngine.initialize(config.audio);
+    // The host picks the mode (see Config::audio); Auto is the desktop default. RT_AUDIO=null runs the mixer on the
+    // null device: a probe viewer makes every sound without playing them through the speakers of whoever is at the box.
+    const char* audioEnv = std::getenv("RT_AUDIO");
+    audioEngine.initialize(audioEnv && std::string(audioEnv) == "null" ? AudioBackendMode::Null : config.audio);
 
     clock.setFixedStep(settingsStore.getDouble("fixedTimestep", 1.0 / 60.0));
 
@@ -310,7 +312,12 @@ void Application::runFrame() {
                 settingsStore.setString("input.hold", "");
                 char name[32] = {0};
                 double secs = 0.0;
-                if (std::sscanf(holdReq.c_str(), "%31s %lf", name, &secs) == 2) {
+                if (std::sscanf(holdReq.c_str(), "%31s %lf", name, &secs) == 2 && std::string(name) == "MouseLeft") {
+                    Event down(EventType::MouseButtonPressed);   // the fire button (the gun, the grapple)
+                    down.button = MouseButton::Left;
+                    inputMap.processEvent(down);
+                    heldMouseLeft_ = secs;
+                } else if (std::sscanf(holdReq.c_str(), "%31s %lf", name, &secs) == 2) {
                     const KeyCode k = keyCodeFromName(name);
                     if (k != KeyCode::Unknown) {
                         Event down(EventType::KeyPressed);
@@ -318,6 +325,14 @@ void Application::runFrame() {
                         inputMap.processEvent(down);
                         heldKeys_.push_back({k, secs});
                     }
+                }
+            }
+            if (heldMouseLeft_ > 0) {
+                heldMouseLeft_ -= frameDelta * clock.timeScale();
+                if (heldMouseLeft_ <= 0) {
+                    Event up(EventType::MouseButtonReleased);
+                    up.button = MouseButton::Left;
+                    inputMap.processEvent(up);
                 }
             }
             for (std::size_t i = 0; i < heldKeys_.size();) {
@@ -726,6 +741,13 @@ std::string Application::handleControlCommand(const std::string& line) {
         return "ok set " + cmd.args[0];
     }
 
+    // WHAT IS PLAYING (Glenn: "how come river town has no audio?"): the mixer's state and its voices now
+    if (cmd.name == "audio?") {
+        char b[160];
+        std::snprintf(b, sizeof b, "ok ready %d voices %zu", audioEngine.ready() ? 1 : 0, audioEngine.activeVoiceCount());
+        return b;
+    }
+
     if (cmd.name == "get") {
         if (cmd.args.empty()) return "err usage: get <key>";
         const std::string v = settingsStore.getString(cmd.args[0], "");
@@ -895,12 +917,13 @@ std::string Application::handleControlCommand(const std::string& line) {
         double secs = 0.0;
         if (cmd.args.size() < 2 || !num(cmd.args[1], secs) || secs <= 0.0)
             return "err usage: hold <KeyName> <seconds>";
-        if (keyCodeFromName(cmd.args[0]) == KeyCode::Unknown)
-            return "err unknown key: " + cmd.args[0];
+        if (keyCodeFromName(cmd.args[0]) == KeyCode::Unknown && cmd.args[0] != "MouseLeft")
+            return "err unknown key: " + cmd.args[0] + " (keys, or MouseLeft)";
         settingsStore.setString("input.hold", cmd.args[0] + " " + cmd.args[1]);
         return "ok hold " + cmd.args[0] + " staged";
     }
-    if (cmd.name == "vehicle_spawn") {   // drop a car in front of the player (the N key)
+    if (cmd.name == "vehicle_spawn") {   // drop a car in front of the player (the N key); `vehicle_spawn moped`
+        if (!cmd.args.empty()) settingsStore.setString("vehicle.spawnRecipe", cmd.args[0]);
         settingsStore.setDouble("vehicle.spawn", 1.0);
         return "ok staged";
     }
@@ -919,6 +942,18 @@ std::string Application::handleControlCommand(const std::string& line) {
         return "ok staged";
     }
     if (cmd.name == "walkers?") return "ok " + settingsStore.getString("walkers.telemetry", "none");
+    // THE PLAYER'S MOVEMENT (engine/locomotion.h): mode (walk|mantle|climb|swim|ladder), ground, position,
+    // velocity, stamina and the last change ("jump (off steep ground)", "pull up onto a ledge 1.20 m ...").
+    if (cmd.name == "move?") return "ok " + settingsStore.getString("player.telemetry", "none");
+    if (cmd.name == "knock") {   // throw the townsperson nearest the player as if a car hit it (the log says where)
+        settingsStore.setDouble("walkers.knockNearest", 1.0);
+        return "ok staged";
+    }
+    if (cmd.name == "knock?") return "ok " + settingsStore.getString("walkers.ragdolls", "none");
+    if (cmd.name == "ragdoll") {   // go limp (the G key); jump, or lying still a moment, gets up
+        settingsStore.setDouble("player.limp", 1.0);
+        return "ok staged";
+    }
     if (cmd.name == "flicker?") return "ok " + settingsStore.getString("walkers.flicker", "none");
     // what the city's people are out doing (citysim activities): per activity, at it / coming, groups, the nearest
     if (cmd.name == "activities?") return "ok " + settingsStore.getString("activities.telemetry", "none");
@@ -1022,6 +1057,36 @@ std::string Application::handleControlCommand(const std::string& line) {
         else if (mode != "toggle") return "err usage: detach on|off|toggle";
         settingsStore.setDouble("camera.setDetached", v);
         return "ok detach " + mode + " staged";
+    }
+
+    // THE TALL BUILDINGS round a point, for a probe to aim at (#114: a swing probe that hooked empty sky never
+    // swept a tower's storeys): `towers? <x> <z> [radius] [min height]` -> up to 24, tallest first, each
+    // "cx cz groundY height" with its plan's centre.
+    if (cmd.name == "towers?") {
+        if (cmd.args.size() < 2) return "err usage: towers? <x> <z> [radius 300] [min height 40]";
+        double qx = 0, qz = 0, rad = 300.0, minH = 40.0;
+        if (!num(cmd.args[0], qx) || !num(cmd.args[1], qz)) return "err usage: towers? <x> <z> [radius] [min height]";
+        if (cmd.args.size() > 2) num(cmd.args[2], rad);
+        if (cmd.args.size() > 3) num(cmd.args[3], minH);
+        const CityBuildings* cb = nullptr;
+        worldState.each<CityBuildings>([&](Entity, CityBuildings& c) { if (!cb) cb = &c; });
+        if (!cb) return "ok no city";
+        std::vector<const BuildingRecord*> near;
+        cb->near(engine::Vec2(qx, qz), rad, near);
+        std::vector<std::pair<double, const BuildingRecord*>> tall;
+        for (const BuildingRecord* r : near)
+            if (r->height >= minH && r->plan.size() >= 3) tall.push_back({r->height, r});
+        std::sort(tall.begin(), tall.end(), [](const auto& a, const auto& b) { return a.first > b.first; });
+        std::string out = "ok " + std::to_string(tall.size());
+        for (std::size_t i = 0; i < tall.size() && i < 24; ++i) {
+            const BuildingRecord& r = *tall[i].second;
+            engine::Vec2 c(0, 0);
+            for (const engine::Vec2& v : r.plan) c = c + v * (1.0 / static_cast<double>(r.plan.size()));
+            char b[120];
+            std::snprintf(b, sizeof b, " | %.1f %.1f %.1f %.1f", c.x, c.y, r.groundY, r.height);
+            out += b;
+        }
+        return out;
     }
 
     if (cmd.name == "lot?") {
@@ -1407,7 +1472,7 @@ std::string Application::handleControlCommand(const std::string& line) {
     }
 
     return "err unknown command: " + cmd.name +
-           " (ping|info|camera|camera?|shot|interact|interact?|overlay|sim|reload|set|get|"
+           " (ping|info|camera|camera?|move?|shot|interact|interact?|overlay|sim|reload|set|get|"
            "daynight|daynight?|citymap|teleport|teleport?|where?|person|clip|clip?|sun|sun?|fog|fog?|weather|weather?|render|view|ledger|"
            "possess|drive_to|walk_to|direct|possess_stop|release|possess?|agent?|ground?|bundle?|walkers?|flicker?|speeders?|parking?|traffic?|opensigns?|findplace|findplace?|recipes?|depots?|activities?|who?|pin)";
 }

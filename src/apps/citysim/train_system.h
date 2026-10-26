@@ -91,8 +91,6 @@ private:
     engine::Vec3 local_{0, 0, 0};
     int seat_ = -1;              // the seat held in car_ (its coach's seats), -1 standing
     int sitRequest_ = -2;        // from the broker: a seat to take, -1 stand up, -2 nothing
-    bool haveYaw_ = false;
-    engine::Real lastYaw_ = 0;
     engine::Vec3 pinned_{0, 0, 0};
 };
 

@@ -400,6 +400,27 @@ public:
     // shell's underside culls from inside), so without these the player sat in an empty frame over the road. The
     // cabin is invalid for a see-into body (bus, convertible), whose cabin is part of its chassis.
     engine::MeshHandle carGlassMesh(int slot) const { return slotOf(carGlassMesh_, slot); }
+    // WHICH MODEL an agent's car is drawn as: the slot every car* accessor above and below takes. Not its vehicle
+    // index: the fleet deals ordinary cars past the service slots (CitySim::ambientSlotFor), and a bus or a fire
+    // engine has its own -- so `a.vehicle` named a different model (#115: "when I take a car, why does the car
+    // change?"; and a passenger's seats came off another model's layout). -1 when it draws as none.
+    int carSlotOf(int agent) const { return drawSlotFor(agent); }
+    // That car's driver's hip point (the fleet recipe's `driver_seat`, its interior's own seat), for a commandeered
+    // car's driver: false when the slot publishes none.
+    bool carDriverSeat(int slot, engine::Vec3& out) const {
+        if (carDriverSeat_.empty()) return false;
+        const int n = static_cast<int>(carDriverSeat_.size());
+        const std::size_t v = static_cast<std::size_t>(((slot % n) + n) % n);
+        if (v >= carHasDriver_.size() || !carHasDriver_[v]) return false;
+        out = carDriverSeat_[v];
+        return true;
+    }
+    // Nothing round that car's driver (a convertible): a crash throws them (ADR-0252).
+    bool carOpenSeat(int slot) const {
+        if (carOpenSeat_.empty()) return false;
+        const int n = static_cast<int>(carOpenSeat_.size());
+        return carOpenSeat_[static_cast<std::size_t>(((slot % n) + n) % n)] != 0;
+    }
     engine::MeshHandle carCabinMesh(int slot) const { return slotOf(carCabinMesh_, slot); }
     // That car's lamp markers, for a promoted car's lenses. VehicleSystem falls
     // back to four lenses at GUESSED chassis corners when a Vehicle carries no
@@ -441,6 +462,9 @@ private:
     }
 
     void syncGroups(engine::World& world);
+    // A moving instance's name across bakes (InstanceGroup::ids): the agent's uid, and which of its parts (0 the body;
+    // glass, cabin, lamps, a rider... their own small numbers)
+    static uint64_t movingId(const Agent& a, uint32_t part) { return (static_cast<uint64_t>(a.uid) << 8) | part; }
     void syncCarLamps(engine::World& world);   // bake the emissive lamp instances
     int carTurnDir(const Agent& a) const;      // route-bend turn side (-1/0/+1)
     // Box sized by a.mode (car/ped). `agentIdx` >= 0 enables the per-agent
@@ -543,7 +567,11 @@ private:
     Real indoorAcc_ = 1.0;
     // record index -> whose people are drawn inside: the building's own place (kNoPlace: none) and each furnished shop
     // unit's (Interactables::units; kNoPlace: no place found -- its pieces go with the building's)
-    struct BuildingPeople { PlaceId whole = kNoPlace; std::vector<PlaceId> unit; };
+    // `unit` is by the index of the interior's shop units, so it holds only for the interior it was made for: a tower
+    // streams its interior in storey windows, and the ground floor's (shops) and the 40th's (none) differ -- `units`
+    // says which one this is (their count and floor heights), and a different one is matched afresh (#114: a cached
+    // list of N units indexed a 1-entry table when the player swung from the street to the top floors)
+    struct BuildingPeople { PlaceId whole = kNoPlace; std::vector<PlaceId> unit; std::vector<double> units; };
     std::unordered_map<int, BuildingPeople> buildingPlace_;
     std::vector<std::array<double, 5>> footpaths_;          // the parks' and the quad's walks (CitySimConfig)
     std::vector<std::vector<std::array<double, 2>>> jogLoops_;   // the tracks to run (CitySimConfig)
@@ -603,6 +631,7 @@ private:
     std::vector<engine::Entity> carInteriorGroups_;
     std::vector<engine::MeshHandle> carGlassMesh_, carCabinMesh_;
     std::vector<char> carSeeInto_;
+    std::vector<char> carOpenSeat_;   // nothing round the driver (a convertible), by slot
     // The agents drawn see-through this bake (nearest the player, with hysteresis).
     std::unordered_set<int> nearSwap_;
     std::vector<std::vector<engine::Vec3>> carSeats_;
@@ -717,6 +746,14 @@ private:
     // PlaceMap built from them at build() (each entrance snapped to the sidewalk).
     // Drawn as projected ImGui labels + markers when showPlaces_ (needs no mesh).
     std::vector<engine::AuthoredPlace> authoredPlaces_;
+    // THE SHAKE, MEASURED (`set jitter.request "<agent|-1> <frames>"`, then `get jitter.result`): every drawn frame,
+    // where a vehicle is drawn (as agentPose places it, without its side effects) and where the camera is; then how
+    // evenly each moved -- Glenn: "buses and cars sometimes shake. Their position is not stable. Trains actually
+    // appear very stable in contrast". -1: the bus or cab you ride, else the nearest moving vehicle.
+    void measureJitter(engine::FrameContext& ctx);
+    struct JitterSample { engine::Vec3 at, cam; engine::Real dt; engine::Vec3 inVehicle; };
+    std::vector<JitterSample> jitter_;
+    int jitterAgent_ = -1, jitterFrames_ = 0;
     PlaceMap places_;
     bool showPlaces_ = true;         // draw place markers + labels (ImGui overlay)
     // The SUN's elevation, staged each frame from the render view so the bake

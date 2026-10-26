@@ -1,13 +1,22 @@
 #include "player_system.h"
-#include "underwater_system.h"
 #include "physics_system.h"
 #include "../components.h"
 #include "../interaction.h"   // Seated
-#include "../ladder.h"        // Climbing
+#include "../interact_broker.h"   // projectToScreen
+#include "../particles.h"     // ParticleEmitter (the body's two steady flows)
+#include "../playground.h"
 #include "../camera/scene_camera.h"
+#include "../ui/ui_text.h"
 #include "../../log.h"
 
 #include <algorithm>
+#include <cmath>
+#include <cstdio>
+#include <string>
+
+#ifdef RT_ENABLE_IMGUI
+#include <imgui.h>
+#endif
 
 namespace engine {
 
@@ -37,6 +46,7 @@ void PlayerSystem::onStart(FrameContext& ctx) {
     // First <-> third person on foot. V is also CameraSystem's viewport-cycle
     // key; see the placed-camera guard in update().
     ctx.actions.bindButton("player_camera_toggle", KeyCode::V);
+    ctx.actions.bindButton("player_camera_toggle", GamepadButton::Back);   // View / Select / Share
     // JUMP and CROUCH. Both keys are shared with driving actions (Space is the
     // brake, LeftControl the handbrake) — the same context gating T already
     // uses: these fire only on foot, those only while seated. The debug
@@ -51,10 +61,42 @@ void PlayerSystem::onStart(FrameContext& ctx) {
     ctx.actions.bindButton("player_run", GamepadButton::LeftThumb);
     ctx.actions.setActionContext("player_run", engine::InputContext::OnFoot);
     ctx.actions.setActionContext("player_crouch", engine::InputContext::OnFoot);
+    body_.tune.load(ctx.settings);   // Debug > Movement's saved numbers (movement.* in settings.json)
+    // THE TOOL SLOTS past the map (engine/player/tools.h): 4 the parachute, 5 the wingsuit (jump in the air opens
+    // either; jump again in the suit: its chute), 6 the grapple (hold fire to hang on the rope), 7 the skateboard
+    // (ridden on the ground; W kicks), 8 the scooter
+    const KeyCode keys[] = {KeyCode::Num4, KeyCode::Num5, KeyCode::Num6, KeyCode::Num7, KeyCode::Num8};
+    for (int k = slotOf(Tool::Parachute); k <= kToolSlots; ++k)
+        ctx.actions.bindButton(slotAction(k), keys[k - slotOf(Tool::Parachute)]);
+    ctx.actions.bindButton("player_limp", KeyCode::G);  // go limp (the ragdoll); jump gets up
+    ctx.actions.setActionContext("player_limp", engine::InputContext::OnFoot);
+    body_.stamina = body_.tune.staminaMax;
+}
+
+// WHAT THE PLAYER WANTS this step, from the input map and the one-shots the frame staged
+PlayerIntent PlayerSystem::intent(FrameContext& ctx) const {
+    PlayerIntent in;
+    in.active = camera.positionLocked;
+    in.forward = in.active ? ctx.actions.axis("cam_forward") : Real(0);
+    in.right = in.active ? ctx.actions.axis("cam_right") : Real(0);
+    in.run = ctx.actions.held("player_run");
+    in.jumpHeld = ctx.actions.held("player_jump");
+    in.crouchHeld = ctx.actions.held("player_crouch");
+    in.jump = jumpRequested;
+    in.limp = limpRequested_;
+    in.fire = grappleFire_;
+    in.fireHeld = grappleHeld_;
+    in.playTarget = playTarget_;
+    in.playKind = playKind_;
+    in.eye = camera.eye;
+    in.look = camera.forward();
+    in.lookRight = camera.right();
+    return in;
 }
 
 void PlayerSystem::fixedUpdate(FrameContext& ctx) {
-    Real dt = ctx.clock.fixedStep();
+    const Real dt = ctx.clock.fixedStep();
+    body_.tune.load(ctx.settings);   // live: the panel and `set movement.<key> <value>` both write the settings
 
     ctx.world.each<Transform, CharacterController, ControlledBy>(
         [&](Entity e, Transform& t, CharacterController& cc, ControlledBy&) {
@@ -67,195 +109,222 @@ void PlayerSystem::fixedUpdate(FrameContext& ctx) {
             // SEATED on a piece of furniture (InteractionSystem): the body stays where it stood; the camera sits.
             if (ctx.world.has<Seated>(e)) return;
             if (cc.characterId == INVALID_CHARACTER) return;
-            if (!spawnCaptured) {                                  // authored spawn
-                spawnPos = t.position;
-                spawnCaptured = true;
-                fall.onSpawnCaptured(t.position.y);
-            }
-
-            // Detached freecam (cam_detach): the movement axes drive the fly
-            // camera, not the player — otherwise WASD would walk the player while
-            // you fly. Pass zero intent so the character still settles under
-            // gravity but holds its ground.
-            // CROUCH (held). The standing capsule is whatever the level
-            // authored; capture it once and derive the crouched one, so a
-            // level with a taller player crouches proportionally.
-            if (!standCaptured) {
-                standHalfHeight = cc.halfHeight;
-                standRadius = cc.radius;
-                standCaptured = true;
-            }
-            // CLIMBING (engine/ladder.h; Glenn, 2026-10-13: "Can we make ladders as interactable?"): forward climbs,
-            // back climbs down, no gravity; at the top the body steps off onto what the ladder lands on, at the foot
-            // onto the ground in front of it; jump lets go.
-            if (Climbing* cl = ctx.world.get<Climbing>(e)) {
-                const LadderSpec L = cl->ladder;
-                const Real feetOff = cc.halfHeight + cc.radius;
-                const Real up = camera.positionLocked ? ctx.actions.axis("cam_forward") : Real(0);
-                const Real speed = ctx.actions.held("player_run") ? ClimbSpeed::kRun : ClimbSpeed::kClimb;
-                const Vec3 out(L.out.x, 0, L.out.y);
-                auto off = [&](const Vec3& feetAt) {
-                    physicsSys.physicsWorld().setCharacterPosition(cc.characterId, feetAt + Vec3(0, feetOff + 0.05, 0));
-                    t.position = physicsSys.physicsWorld().characterPosition(cc.characterId);
-                    fall.onGrounded(t.position.y);
-                    airVel_ = Vec3(0, 0, 0);
-                    ctx.world.remove<Climbing>(e);   // (another type's pool: safe inside this walk)
-                };
-                if (jumpRequested) {   // let go: a step back off the rungs, and down
-                    jumpRequested = false;
-                    off(Vec3(L.foot.x, cl->feetY, L.foot.z) + out * (cc.radius + 0.6));
-                } else if (cl->feetY >= L.landY - 0.02 && up > 0.3) {
-                    off(L.exit);                                                   // over the top
-                } else if (cl->feetY <= L.foot.y + 0.01 && up < -0.3) {
-                    off(L.foot + out * (cc.radius + 0.45));                      // down at the foot
-                } else {
-                    cl->feetY = std::clamp(cl->feetY + up * speed * dt, L.foot.y, L.landY);
-                    const Vec3 target = Vec3(L.foot.x, cl->feetY + feetOff, L.foot.z) + out * (cc.radius + 0.14);
-                    const Vec3 v = (target - t.position) * (1.0 / std::max(dt, Real(1e-4)));
-                    physicsSys.physicsWorld().moveCharacterFree(cc.characterId, v, dt);
-                    t.position = physicsSys.physicsWorld().characterPosition(cc.characterId);
-                    fall.onGrounded(t.position.y);   // a rung is footing: never a fall
-                }
-                lastBodyPos_ = t.position;
-                haveLastBodyPos_ = true;
-                return;
-            }
-            // SWIMMING (#43): water deep enough at the feet floats the player (UnderwaterSystem knows
-            // whose water is where). While afloat, crouch means dive, not a smaller capsule.
-            {
-                const Real feetY = t.position.y - (cc.halfHeight + cc.radius);
-                const UnderwaterSystem::Surface water = UnderwaterSystem::surfaceAt(ctx.world, t.position.x, t.position.z);
-                const Real depth = water.kind != UnderwaterSystem::Water::None ? Real(water.level) - feetY : Real(-1);
-                const GroundState g = physicsSys.physicsWorld().characterGroundState(cc.characterId);
-                const bool was = swim_.swimming;
-                swim_.update(depth, g != GroundState::InAir);
-                cc.swimming = swim_.swimming;
-                if (swim_.swimming != was)
-                    LOG_INFO << (swim_.swimming ? "[swim] afloat" : "[swim] standing again") << " at (" << t.position.x << ", "
-                             << t.position.z << "), water depth " << depth << " m";
-                swimLevel_ = water.level;
-            }
-            const bool wantCrouch =
-                camera.positionLocked && ctx.actions.held("player_crouch") && !swim_.swimming;
-            if (wantCrouch != crouched) {
-                const Real targetHalf =
-                    wantCrouch ? standHalfHeight * kCrouchHalfScale
-                               : standHalfHeight;
-                // Standing up can FAIL (a ledge overhead) — the physics fit
-                // test is the authority, so the player stays crouched instead
-                // of popping through the ceiling.
-                if (physicsSys.physicsWorld().setCharacterHeight(
-                        cc.characterId, targetHalf, standRadius)) {
-                    crouched = wantCrouch;
-                    // Publish the live capsule: the third-person body mesh is
-                    // scaled from it (apps/citysim/city_player_body), so the
-                    // drawn person shrinks with the collider instead of
-                    // floating over a crouched capsule.
-                    cc.halfHeight = targetHalf;
-                    t.position = physicsSys.physicsWorld().characterPosition(
-                        cc.characterId);
-                }
-            }
-
-            // A TELEPORT IS NEVER A FALL. Something moved the player further
-            // than any physics step can -- a walker covers well under 1 m a
-            // frame even at terminal velocity -- so this was a teleport: F's
-            // fast travel, the `teleport` verb, the Teleport panel. The fall
-            // tracker's baseline is still the OLD height, and without this a
-            // teleport to lower ground read as a long drop, tripped the
-            // auto-respawn below, and put the player back at the spawn point
-            // (Glenn: "When I tap F again I go back to where I started").
-            //
-            // T's own teleport already did this reset (teleportAlong); the
-            // Teleport SYSTEM, which F uses, never did. Detecting the jump here
-            // covers every teleport path, including ones not written yet,
-            // instead of relying on each to remember.
-            if (haveLastBodyPos_) {
-                const Real jx = t.position.x - lastBodyPos_.x;
-                const Real jy = t.position.y - lastBodyPos_.y;
-                const Real jz = t.position.z - lastBodyPos_.z;
-                if (jx * jx + jy * jy + jz * jz > 4.0 * 4.0)
-                    fall.onGrounded(t.position.y);
-            }
-
-            // JUMP: one press, one leap. Refused mid-air and while crouched by
-            // the physics gate (grounded-only) and the crouch check here.
-            if (jumpRequested) {
-                jumpRequested = false;
-                if (camera.positionLocked && !crouched)
-                    physicsSys.physicsWorld().jumpCharacter(cc.characterId,
-                                                            kJumpSpeed);
-            }
-
-            Vec3 desired;
-            if (camera.positionLocked) {
-                Real forward = ctx.actions.axis("cam_forward");
-                Real right = ctx.actions.axis("cam_right");
-
-                Vec3 camForward = camera.forward();
-                camForward.y = 0;
-                camForward = normalize(camForward);
-                Vec3 camRight = camera.right();
-
-                Vec3 moveDir = camForward * forward + camRight * right;
-                Real len = moveDir.length();
-                if (len > 1.0) moveDir = moveDir / len;
-                desired = moveDir * moveSpeed *
-                          (crouched ? kCrouchSpeedScale : ctx.actions.held("player_run") ? kRunSpeedScale : Real(1));
-            }
-
-            if (swim_.swimming) {
-                // afloat: swim pace, the water holds you at the surface; jump rises, crouch dives
-                swimClock_ += dt;
-                const Real floatY = swimLevel_ + SwimState::kEyeAbove - eyeHeight;
-                const bool rise = camera.positionLocked && ctx.actions.held("player_jump");
-                const bool dive = camera.positionLocked && ctx.actions.held("player_crouch");
-                Vec3 v = desired * (SwimState::kSpeed / std::max(moveSpeed, Real(0.1)));
-                v.y = SwimState::verticalSpeed(t.position.y, floatY, rise, dive, swimClock_);
-                airVel_ = Vec3(v.x, 0, v.z);   // leaving the water keeps the stroke's speed
-                physicsSys.physicsWorld().moveCharacterFree(cc.characterId, v, dt);
-                t.position = physicsSys.physicsWorld().characterPosition(cc.characterId);
-                fall.onGrounded(t.position.y);   // floating is footing: never a fall
-                lastBodyPos_ = t.position;
-                haveLastBodyPos_ = true;
-                return;
-            }
-            // In the air the keys only nudge what the body left the ground with (#83); on the
-            // ground they set it, and that is what a jump or a step off a ledge carries.
-            const GroundState before = physicsSys.physicsWorld().characterGroundState(cc.characterId);
-            if (before == GroundState::InAir) {
-                airVel_ = airborneVelocity(airVel_, desired, dt);
-                desired = airVel_;
-            } else {
-                airVel_ = Vec3(desired.x, 0, desired.z);
-            }
-            physicsSys.physicsWorld().moveCharacter(cc.characterId, desired, dt);
-            t.position = physicsSys.physicsWorld().characterPosition(cc.characterId);
-
-            // Auto-respawn safety net: if the character falls far below solid
-            // ground — off a ledge, or straight through a level whose ground under
-            // the spawn has no collider — snap it back so starting a level never
-            // dead-ends in an endless fall. The decision logic (initial-drop vs
-            // after-footing thresholds, and giving up when respawning never finds
-            // ground) lives in FallRespawnTracker — see player_system.h.
-            GroundState gs = physicsSys.physicsWorld().characterGroundState(cc.characterId);
-            if (gs == GroundState::OnGround || gs == GroundState::OnSteepGround)
-                fall.onGrounded(t.position.y);
-            if (spawnCaptured && fall.shouldRespawn(t.position.y)) {
-                respawn(cc.characterId, /*manual=*/false);
-                t.position = spawnPos;
-            }
-            lastBodyPos_ = t.position;
-            haveLastBodyPos_ = true;
+            PlayerIntent in = intent(ctx);
+            BodyStep s{ctx.world, ctx.settings, e, t, cc, physicsSys.physicsWorld(), in, dt};
+            body_.step(s);
+            // what the step did not spend waits for the next
+            jumpRequested = in.jump;
+            limpRequested_ = in.limp;
+            grappleFire_ = in.fire;
+            playTarget_ = in.playTarget;
         });
 }
 
-void PlayerSystem::respawn(CharacterId characterId, bool manual) {
-    physicsSys.physicsWorld().setCharacterPosition(characterId, spawnPos);
-    fall.onRespawn(manual);
+// THE GEAR HUD (Glenn: "when I click 5 nothing happens. How do I know I will deploy a parachute?"): the tool row
+// for a few seconds after a slot change, and while the chute or the suit is on, what to press now -- the game UI
+// layer's words (engine/ui/ui_text.h, ADR-0250), not ImGui's.
+void PlayerSystem::drawGearHud(FrameContext& ctx) {
+    const Real dt = std::clamp(static_cast<Real>(ctx.frameDelta), Real(0), Real(0.1));
+    hotbarShow_ = std::max(Real(0), hotbarShow_ - dt);
+    hudClock_ += dt;
+    if (!camera.positionLocked || !ctx.world.alive(playerEntity) || ctx.world.has<InVehicle>(playerEntity)) return;
+    if (ctx.actions.layerUp()) return;   // a screen that has the controls (the map) is the HUD now
+    // framebuffer pixels; sizes in window points times the display's scale
+    const float W = static_cast<float>(ctx.framebufferWidth), H = static_cast<float>(ctx.framebufferHeight);
+    const float k = ctx.windowWidth > 0 ? W / static_cast<float>(ctx.windowWidth) : 1.0f;
+    const float fs = 18.0f * k;
+    std::vector<Renderer::UiQuad> q;
+    const float white[4] = {1, 1, 1, 0.92f}, grey[4] = {0.78f, 0.78f, 0.78f, 0.75f}, back[4] = {0, 0, 0, 0.59f};
+    const float promptY = H - (hotbarShow_ > 0 ? 100.0f : 56.0f) * k;
+    auto prompt = [&](const std::string& text, const float* colour) {
+        hud_.label(ctx.renderer, q, W * 0.5f, promptY, text, fs, colour, back, 8.0f * k);
+    };
+    // the tool row
+    if (hotbarShow_ > 0) {
+        const float alpha = static_cast<float>(std::min(Real(1), hotbarShow_ / 0.4));
+        // each box as wide as its words, 14 px apart, the row centred
+        std::string words[kToolSlots];
+        float widths[kToolSlots], total = 0;
+        for (int i = 0; i < kToolSlots; ++i) {
+            words[i] = std::to_string(i + 1) + "  " + toolName(static_cast<Tool>(i + 1));
+            widths[i] = hud_.measure(words[i], fs) + 16.0f * k;
+            total += widths[i] + (i ? 14.0f * k : 0.0f);
+        }
+        float x = W * 0.5f - total * 0.5f;
+        for (int i = 0; i < kToolSlots; ++i) {
+            const bool on = slotOf(body_.hands.tool) == i + 1;
+            const float fg[4] = {on ? 0.08f : 0.92f, on ? 0.08f : 0.92f, on ? 0.08f : 0.92f, (on ? 1.0f : 0.86f) * alpha};
+            const float bg[4] = {on ? 1.0f : 0.0f, on ? 0.86f : 0.0f, on ? 0.43f : 0.0f, (on ? 0.92f : 0.55f) * alpha};
+            hud_.label(ctx.renderer, q, x + widths[i] * 0.5f, H - 52.0f * k, words[i], fs, fg, bg, 8.0f * k);
+            x += widths[i] + 14.0f * k;
+        }
+    }
+    [&] {
+        if (body_.is(body_.swing) || body_.is(body_.bars)) {
+            prompt(body_.is(body_.swing) ? "W / S  pump in time with the swing     Space  jump off     Ctrl  get off"
+                                         : "W / S  hand over hand     Space or Ctrl  drop",
+                   white);
+            return;
+        }
+        // THE GRAPPLE: a ring where a shot would hook, and what the trigger does
+        if (body_.hands.holdingGrapple()) {
+            const CameraState& cam = ctx.view.camera;
+            const Vec3 at = body_.is(body_.grapple) ? body_.grapple.anchor : body_.hands.aim.point;
+            Real sx = 0, sy = 0;
+            if ((body_.is(body_.grapple) || body_.hands.aim.ok) &&
+                projectToScreen(at, cam.position, cam.target, cam.up, cam.fovDegrees, cam.aspectRatio, W, H, sx, sy)) {
+                const float r = (10.0f + 2.0f * static_cast<float>(std::sin(hudClock_ * 5.0))) * k;
+                const float shade[4] = {0, 0, 0, 0.55f}, cyan[4] = {0.47f, 0.9f, 1.0f, 0.92f};
+                const float cx = static_cast<float>(sx), cy = static_cast<float>(sy);
+                hud_.ring(ctx.renderer, q, cx, cy, r + 4.0f * k, 4.0f * k, shade);
+                hud_.ring(ctx.renderer, q, cx, cy, r + 1.25f * k, 2.5f * k, cyan);
+                hud_.disc(ctx.renderer, q, cx, cy, 2.5f * k, cyan);
+            }
+            const bool live = body_.hands.aim.ok || body_.is(body_.grapple);
+            prompt(body_.is(body_.grapple) ? "let go to fly     Space reel in     Ctrl let out     W pump"
+                   : body_.hands.aim.ok    ? "hold click   hook and swing"
+                                           : "nothing in reach to hook",
+                   live ? white : grey);
+            return;
+        }
+        if (body_.hands.holdingBoard()) {
+            const bool skate = body_.hands.tool == Tool::Skateboard;
+            char buf[128];
+            std::snprintf(buf, sizeof(buf), "%.0f km/h     W kick     S brake     A/D carve     Space %s",
+                          body_.board.speed * 3.6, skate ? "ollie" : "hop");
+            prompt(body_.is(body_.board) ? std::string(buf)
+                   : std::string(skate ? "skateboard: ride it on the ground" : "scooter: ride it on the ground"),
+                   white);
+            return;
+        }
+        // what to press now
+        if (!body_.hands.holdingGlider()) return;
+        const bool chute = body_.hands.tool == Tool::Parachute;
+        const CharacterController* cc = ctx.world.get<CharacterController>(playerEntity);
+        const Transform* t = ctx.world.get<Transform>(playerEntity);
+        if (!cc || !t || cc->characterId == INVALID_CHARACTER) return;
+        PhysicsWorld& pw = physicsSys.physicsWorld();
+        if (body_.is(body_.parachute)) {
+            prompt("look to steer     W dive     S flare     Ctrl cut away", white);
+        } else if (body_.is(body_.wingsuit)) {
+            char buf[128];
+            std::snprintf(buf, sizeof(buf), "%.0f km/h     look down to dive, up to climb     Space parachute     Ctrl fold",
+                          pw.characterVelocity(cc->characterId).length() * 3.6);
+            prompt(buf, white);
+        } else if (pw.characterGroundState(cc->characterId) == GroundState::InAir && !body_.water.swimming) {
+            PhysicsWorld::RayHit g;
+            const Real reach = cc->halfHeight + cc->radius + body_.tune.deployMinHeight;
+            if (pw.castRayHit(t->position, Vec3(0, -reach, 0), g)) {
+                const float dim[4] = {0.78f, 0.78f, 0.78f, 0.78f};
+                prompt("too low to open", dim);
+            } else {
+                const float pulse[4] = {1.0f, 0.88f, 0.47f, static_cast<float>(0.7 + 0.29 * std::sin(hudClock_ * 6.0))};
+                prompt(chute ? "Space   open the parachute" : "Space   spread the wingsuit", pulse);
+            }
+        } else {
+            prompt(chute ? "parachute on     jump off something high, then Space in the air"
+                         : "wingsuit on     jump off something high, then Space in the air",
+                   white);
+        }
+    }();
+    if (!q.empty()) ctx.renderer.submitUi(q);
+}
+
+void PlayerSystem::render(FrameContext& ctx) {
+    // TELEMETRY for `move?` (the socket): what the body is doing and why it last changed.
+    {
+        const char* mode = body_.mode().name(body_);
+        Vec3 p, v;
+        const char* ground = "none";
+        if (ctx.world.alive(playerEntity))
+            if (const CharacterController* cc = ctx.world.get<CharacterController>(playerEntity))
+                if (cc->characterId != INVALID_CHARACTER) {
+                    PhysicsWorld& pw = physicsSys.physicsWorld();
+                    p = pw.characterPosition(cc->characterId);
+                    v = pw.characterVelocity(cc->characterId);
+                    switch (pw.characterGroundState(cc->characterId)) {
+                        case GroundState::OnGround: ground = "ground"; break;
+                        case GroundState::OnSteepGround: ground = "steep"; break;
+                        case GroundState::NotSupported: ground = "unsupported"; break;
+                        default: ground = "air"; break;
+                    }
+                }
+        // the rope as drawn: its state, how long it is, its lowest point under the straight line hand-to-hook (sag)
+        using Hook = PlayerHands::Hook;
+        const Hook hk = body_.hands.hook;
+        const char* hook = hk == Hook::Flying ? "flying" : hk == Hook::Hooked ? "hooked" : hk == Hook::Loose ? "loose" : "none";
+        const RopeLine& rope = body_.hands.rope;
+        Real sag = 0;
+        if (rope.active()) {
+            const std::vector<Vec3>& r = rope.points();
+            for (std::size_t i = 1; i + 1 < r.size(); ++i) {
+                const Real f = static_cast<Real>(i) / (r.size() - 1);
+                sag = std::max(sag, (r.front() + (r.back() - r.front()) * f).y - r[i].y);
+            }
+        }
+        const Real span = rope.active() ? (rope.points().back() - rope.points().front()).length() : 0;
+        char buf[400];
+        std::snprintf(buf, sizeof(buf),
+                      "mode %s ground %s pos %.2f %.2f %.2f vel %.2f %.2f %.2f speed %.1f stamina %.1f/%.0f gear %d "
+                      "hook %s rope %.2f span %.2f sag %.2f last \"%s\"",
+                      mode, ground, p.x, p.y, p.z, v.x, v.y, v.z, v.length(), body_.stamina, body_.tune.staminaMax,
+                      slotOf(body_.hands.tool), hook,
+                      hk == Hook::Hooked ? body_.grapple.ropeLen : hk == Hook::Loose ? body_.hands.looseLen : Real(0),
+                      span, sag,
+                      body_.lastEvent.c_str());
+        ctx.settings.setString("player.telemetry", buf);
+    }
+    drawGearHud(ctx);
+#ifdef RT_ENABLE_IMGUI
+    if (ImGui::GetCurrentContext() == nullptr) return;
+    if (!ctx.debugOverlayActive) return;
+    ImGui::Begin("Debug");
+    if (ImGui::CollapsingHeader("Movement")) {
+        ImGui::TextDisabled("live; Save keeps them in settings.json (movement.*)");
+        ImGui::Text("%s", ctx.settings.getString("player.telemetry", "").c_str());
+        MovementTuning t = body_.tune;
+        bool changed = false;
+        const char* group = "";
+        for (const MovementTuning::Field& f : MovementTuning::fields()) {
+            if (std::string(group) != f.group) {
+                group = f.group;
+                ImGui::SeparatorText(group);
+                for (const MovementTuning::Flag& g : MovementTuning::flags())
+                    if (std::string(g.group) == group) changed |= ImGui::Checkbox(g.key, &(t.*g.value));
+            }
+            float x = static_cast<float>(t.*f.value);
+            if (ImGui::SliderFloat(f.key, &x, static_cast<float>(f.lo), static_cast<float>(f.hi))) {
+                t.*f.value = x;
+                changed = true;
+            }
+        }
+        if (changed) t.save(ctx.settings);
+        if (ImGui::Button("Save")) {
+            body_.tune.save(ctx.settings);
+            ctx.settings.save("settings.json");
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Defaults")) MovementTuning{}.save(ctx.settings);
+    }
+    ImGui::End();
+#endif
 }
 
 void PlayerSystem::update(FrameContext& ctx) {
+    // the body's two steady particle flows (effects()): made here, outside any walk of the Transforms
+    auto emitter = [&](Entity& em, const char* effect, Real ahead, const Vec3& box, bool relative) {
+        if (em.valid() && ctx.world.alive(em)) return;
+        em = ctx.world.create();
+        ctx.world.add<Transform>(em, Transform{});
+        ParticleEmitter pe;
+        pe.effect = effect;
+        pe.ahead = ahead;
+        pe.halfExtent = box;
+        pe.relative = relative;
+        ctx.world.add<ParticleEmitter>(em, pe);
+    };
+    emitter(body_.bubbleEmitter, "bubble", 0, Vec3(0.03, 0.03, 0.03), false);
+    emitter(body_.streakEmitter, "streak", 0.45, Vec3(4, 3, 4), true);
     // Point-and-teleport: ray onto whatever physics surface it hits — deck,
     // rooftop, terrain — then stand the player there and re-attach the camera
     // so play continues in place. Two triggers, one landing:
@@ -276,7 +345,7 @@ void PlayerSystem::update(FrameContext& ctx) {
             if (auto* pt = ctx.world.get<PrevTransform>(playerEntity))
                 pt->value = *t;   // no interpolation streak
         }
-        fall.onGrounded(stand.y);   // new baseline: a teleport is
+        body_.fall.onGrounded(stand.y);   // new baseline: a teleport is
                                     // never a "fall" to respawn from
         camera.positionLocked = true;   // re-attach: back to playing
         LOG_INFO << "Teleported to (" << hit.x << ", " << hit.y
@@ -333,11 +402,11 @@ void PlayerSystem::update(FrameContext& ctx) {
 
     // Respawn: snap the character back to its spawn (and re-settle under gravity). Works even when
     // detached/flying, so you can always recover a player that has fallen off or through the level.
-    if (ctx.actions.pressed("player_respawn") && spawnCaptured && ctx.world.alive(playerEntity)) {
+    if (ctx.actions.pressed("player_respawn") && body_.spawnCaptured && ctx.world.alive(playerEntity)) {
         if (auto* cc = ctx.world.get<CharacterController>(playerEntity))
             if (cc->characterId != INVALID_CHARACTER) {
-                respawn(cc->characterId, /*manual=*/true);
-                if (auto* t = ctx.world.get<Transform>(playerEntity)) t->position = spawnPos;
+                body_.respawn(physicsSys.physicsWorld(), cc->characterId, /*manual=*/true);
+                if (auto* t = ctx.world.get<Transform>(playerEntity)) t->position = body_.spawnPos;
             }
     }
 
@@ -350,6 +419,81 @@ void PlayerSystem::update(FrameContext& ctx) {
     // catch-up frame that runs two steps).
     // ...but NOT while seated: Space is the brake in a car, and staging a
     // jump on every brake press would fire it the moment the player got out.
+    // THE PLAYGROUND: the swing seat or the bars in reach are offered (E); the broker's command is taken up at the
+    // next step. Empty swings swing on and settle meanwhile.
+    ctx.world.each<PlaySwing>([&](Entity, PlaySwing& s) {
+        if (!s.ridden) swingStep(s.theta, s.omega, s.length, 0, std::clamp(ctx.frameDelta, 0.0, 0.1), body_.tune);
+        if (Transform* st = ctx.world.get<Transform>(s.seat)) {
+            if (PrevTransform* sp = ctx.world.get<PrevTransform>(s.seat)) sp->value = *st;
+            st->orientation = Quat::fromAxisAngle(normalize(cross(Vec3(0, 1, 0), s.forward)), -s.theta);
+            if (PrevTransform* sp = ctx.world.get<PrevTransform>(s.seat)) sp->value = *st;
+        }
+    });
+    if (ctx.world.alive(playerEntity) && body_.is(body_.onFoot) && camera.positionLocked &&
+        !ctx.world.has<InVehicle>(playerEntity) && !ctx.world.has<Seated>(playerEntity))
+        if (const Transform* pt = ctx.world.get<Transform>(playerEntity)) {
+            const Vec3 p = pt->position;
+            Entity best;
+            uint64_t kind = 0;
+            Vec3 at;
+            Real bestD = 1e9;
+            ctx.world.each<PlaySwing>([&](Entity e, PlaySwing& s) {
+                const Vec3 seat = s.pivot - Vec3(0, s.length, 0);
+                const Real d = std::hypot(seat.x - p.x, seat.z - p.z);
+                if (d < 1.6 && d < bestD) { bestD = d; best = e; kind = 1; at = seat; }
+            });
+            ctx.world.each<MonkeyBars>([&](Entity e, MonkeyBars& b) {
+                const Vec3 ab = b.b - b.a;
+                const Real len2 = std::max(ab.lengthSquared(), Real(1e-6));
+                const Real u = std::clamp(dot(p - b.a, ab) / len2, Real(0), Real(1));
+                const Vec3 q = b.a + ab * u;
+                const Real d = std::hypot(q.x - p.x, q.z - p.z);
+                // (the marker at reaching height: the bar itself is on the broker's "another floor" line)
+                if (d < 1.2 && q.y > p.y && d < bestD) { bestD = d; best = e; kind = 2; at = q - Vec3(0, 0.8, 0); }
+            });
+            if (best.valid()) {
+                InteractOffer o;
+                o.provider = "playground";
+                o.entity = best;
+                o.key = kind;
+                o.anchor = at;
+                o.name = kind == 1 ? "swing" : "monkey bars";
+                o.tap = kind == 1 ? "sit on it" : "grab the bars";
+                o.reach = 1.8;
+                o.needsSight = false;
+                offerInteraction(ctx.world, playerEntity, o);
+            }
+        }
+    {
+        InteractCommand pc;
+        if (ctx.world.alive(playerEntity) && takeInteractCommand(ctx.world, playerEntity, "playground", pc)) {
+            playTarget_ = pc.entity;
+            playKind_ = pc.key;
+        }
+    }
+    // GO LIMP on purpose: G, or `ragdoll` on the socket (player.limp)
+    if (camera.positionLocked && ctx.actions.pressed("player_limp")) limpRequested_ = true;
+    if (ctx.settings.getDouble("player.limp", 0.0) > 0.5) {
+        ctx.settings.setDouble("player.limp", 0.0);
+        limpRequested_ = true;
+    }
+    // THE GRAPPLE'S TRIGGER: the press is staged for the step, the hold keeps the rope
+    const bool grapple = body_.hands.holdingGrapple();
+    grappleHeld_ = grapple && camera.positionLocked && ctx.actions.held("fire") && !ctx.input.uiWantsMouse;
+    if (grapple && camera.positionLocked && ctx.actions.pressed("fire") && !ctx.input.uiWantsMouse)
+        grappleFire_ = true;
+    // THE TOOL IN HAND (the slots, as the gun script and the map track them too)
+    for (int k = 1; k <= kToolSlots; ++k)
+        if (ctx.actions.pressed(slotAction(k)) &&
+            !(ctx.world.alive(playerEntity) && ctx.world.has<InVehicle>(playerEntity))) {
+            const Tool t = static_cast<Tool>(k);
+            if (t != body_.hands.tool && k >= slotOf(Tool::Parachute))
+                body_.event(t == Tool::Parachute ? "parachute on your back" : t == Tool::Wingsuit ? "wingsuit on"
+                            : t == Tool::Grapple ? "grapple in hand" : t == Tool::Skateboard ? "skateboard under your feet"
+                                                                    : "scooter out");
+            body_.hands.tool = t;
+            hotbarShow_ = 3.0;
+        }
     if (ctx.actions.pressed("player_jump") &&
         !(ctx.world.alive(playerEntity) &&
           (ctx.world.has<InVehicle>(playerEntity) || ctx.world.has<Seated>(playerEntity))))
@@ -418,11 +562,11 @@ void PlayerSystem::update(FrameContext& ctx) {
     // it has to shrink by the same ratio or the view would float above a
     // crouched head.
     const Real eyeScale =
-        crouched && standCaptured
-            ? (standHalfHeight * kCrouchHalfScale + standRadius) /
-                  std::max(Real(1e-3), standHalfHeight + standRadius)
+        body_.crouched && body_.standCaptured
+            ? (body_.standHalfHeight * PlayerBody::kCrouchHalfScale + body_.standRadius) /
+                  std::max(Real(1e-3), body_.standHalfHeight + body_.standRadius)
             : Real(1);
-    camera.eye = t->position + Vec3(0, eyeHeight * eyeScale, 0);
+    camera.eye = t->position + Vec3(0, body_.eyeHeight * eyeScale, 0);
     // SEATED or LYING (InteractionSystem, engine/interaction.h): the eye is the pose's, turned once to face along
     // it -- after that the mouse looks round as usual. First person while there: the shoulder rig frames the
     // standing capsule, not the seat.
@@ -444,7 +588,7 @@ void PlayerSystem::update(FrameContext& ctx) {
     float aspect = (ctx.framebufferHeight > 0)
         ? static_cast<float>(ctx.framebufferWidth) / ctx.framebufferHeight
         : 1.0f;
-    if (thirdPerson && !seated) {
+    if ((thirdPerson || body_.is(body_.ragdoll)) && !seated) {   // limp: watched from outside, whichever view
         // Over the shoulder: mouse look still steers the player heading — the
         // fly controller owns yaw/pitch exactly as in first person (CameraSystem
         // feeds it look input); the shoulder rig just frames that heading from
@@ -464,6 +608,16 @@ void PlayerSystem::update(FrameContext& ctx) {
         ctx.view.camera = shoulder.cameraState(aspect);
     } else {
         ctx.view.camera = camera.cameraState(aspect);
+    }
+    // SPEED widens the view (a wingsuit dive, a long fall): up to 14 degrees from 20 to 60 m/s, eased
+    {
+        Real speed = 0;
+        if (const CharacterController* cc = ctx.world.get<CharacterController>(playerEntity))
+            if (cc->characterId != INVALID_CHARACTER)
+                speed = physicsSys.physicsWorld().characterVelocity(cc->characterId).length();
+        const Real want = 14.0 * std::clamp((speed - 20.0) / 40.0, Real(0), Real(1));
+        fovBoost_ += (want - fovBoost_) * (1.0 - std::exp(-ctx.frameDelta * 2.0));
+        ctx.view.camera.fovDegrees += static_cast<float>(fovBoost_);
     }
 }
 

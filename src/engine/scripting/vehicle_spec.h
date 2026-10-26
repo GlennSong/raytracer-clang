@@ -3,6 +3,7 @@
 
 #include "../../rt_math.h"
 #include "../physics/physics_world.h"   // PhysicsWorld::VehicleConfig
+#include "../player/seat_geometry.h"    // SeatGeometry
 #include "../world.h"                    // Entity, World
 #include <memory>
 #include <string>
@@ -55,6 +56,13 @@ struct VehicleSpec {
     // "not supplied", which would otherwise put the driver in the boot.
     Vec3 driverSeat{0, 0, 0};
     bool hasDriverSeat = false;
+    // `open_seat = true`: nothing round the rider (a convertible; every two-wheeler is): a crash throws them. `seat =
+    // { grip = {x,y,z}, foot = {x,y,z}, lean = deg, bars = true, pedals = true }`: the rider's hands and feet about the
+    // hip (the left ones; SeatGeometry's car by default)
+    bool openSeat = false;
+    SeatGeometry seat;
+    // `pedals = true`: legs, not an engine (a bicycle) -- no engine note; the freewheel and the tyres instead
+    bool pedalled = false;
 
     // The suspension the wheels get (the street rig unless the recipe's `suspension` says otherwise) and
     // whether the drivetrain is a part-time 4x4 the driver switches (`drive = "4wd"`).

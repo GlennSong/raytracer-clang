@@ -3,6 +3,7 @@
 #include "../src/apps/citysim/city_render.h"
 #include "../src/apps/citysim/city_vehicles.h"   // promotedLamps (pure mapping)
 #include "../src/engine/asset_manager.h"
+#include "../src/engine/block_body.h"   // skinnedLimb
 #include "../src/engine/components.h"
 #include "../src/engine/mesh_uploader.h"
 #include "../src/engine/procgen/city/roads/road_entity.h"
@@ -745,12 +746,14 @@ TEST_CASE(debug_navgraph_and_cones_vanish_when_the_hud_is_off) {
 
 TEST_CASE(person_mesh_stands_and_swings) {
     // The simple articulated person (device ask: "people should look like
-    // people"): six vertex-coloured boxes, 1.8 m tall, centred at mid-height
+    // people"): the head and torso as vertex-coloured boxes and each limb one
+    // skinned tube bent at the knee or elbow, 1.8 m tall, centred at mid-height
     // like the old walker box. A swing pose moves the limbs but never changes
     // topology — the walk cycle hops between shared pose meshes.
     RenderMesh stand = buildPersonMesh(0.0, 0);
     RenderMesh step = buildPersonMesh(0.5, 0);
-    CHECK(stand.vertices.size() == 6u * 24u);   // head/torso/2 legs/2 arms
+    const std::size_t tube = engine::skinnedLimb(0, 0.0, Vec3(1, 1, 1)).vertices.size();
+    CHECK(stand.vertices.size() == 2u * 24u + 4u * tube);   // head/torso + 2 arms/2 legs
     CHECK(step.vertices.size() == stand.vertices.size());
     CHECK(step.indices.size() == stand.indices.size());
 

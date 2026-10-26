@@ -15,10 +15,10 @@ class UnderwaterSystem : public System {
 public:
     void update(FrameContext& ctx) override;
 
-    enum class Water { None, Sea, Lake, River };
+    enum class Water { None, Sea, Lake, River, Pool };
     struct Surface { Water kind = Water::None; double level = 0.0; };
-    // The water surface at (x, z), if any: a lake before a river (a river mouth inside a lake is the lake),
-    // the sea last (rivers carve their channels below sea level near their mouths).
+    // The water surface at (x, z), if any: a pool first, then a lake before a river (a river mouth inside a
+    // lake is the lake), the sea last (rivers carve their channels below sea level near their mouths).
     static Surface surfaceAt(World& world, double x, double z);
 };
 

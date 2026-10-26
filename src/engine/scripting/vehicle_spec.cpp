@@ -86,6 +86,29 @@ bool loadVehicleSpec(ScriptVM& vm, const std::string& recipe, uint32_t seed,
     c.antiRollStiffness = numField(L, t, "anti_roll", c.antiRollStiffness);
     c.yawAssist = numField(L, t, "yaw_assist", c.yawAssist);
     c.lateralGrip = numField(L, t, "grip", c.lateralGrip);
+    lua_getfield(L, t, "pedals");   // true: pedalled (a bicycle) -- heard as a freewheel and tyres, not an engine
+    if (lua_isboolean(L, -1)) out.pedalled = lua_toboolean(L, -1) != 0;
+    lua_pop(L, 1);
+    lua_getfield(L, t, "two_wheeler");   // true: a motorcycle, moped or bicycle (Jolt's MotorcycleController)
+    if (lua_isboolean(L, -1)) c.twoWheeler = lua_toboolean(L, -1) != 0;
+    lua_pop(L, 1);
+    lua_getfield(L, t, "open_seat");
+    out.openSeat = c.twoWheeler || lua_toboolean(L, -1) != 0;
+    lua_pop(L, 1);
+    lua_getfield(L, t, "seat");
+    if (lua_istable(L, -1)) {
+        const int st = lua_gettop(L);
+        out.seat.grip = vec3Field(L, st, "grip", out.seat.grip);
+        out.seat.foot = vec3Field(L, st, "foot", out.seat.foot);
+        out.seat.lean = numField(L, st, "lean", out.seat.lean);
+        out.seat.crank = numField(L, st, "crank", out.seat.crank);
+        out.seat.wheel = !boolField(L, st, "bars", !out.seat.wheel);
+        out.seat.pedals = boolField(L, st, "pedals", out.seat.pedals);
+    }
+    lua_pop(L, 1);
+    c.maxLeanDegrees = numField(L, t, "max_lean_deg", c.maxLeanDegrees);
+    c.engineDamping = numField(L, t, "engine_damping", c.engineDamping);
+    c.engineInertia = numField(L, t, "engine_inertia", c.engineInertia);
     // The collision's underside: floor_clearance (m off the body box's floor), approach / departure angles
     c.floorClearance = numField(L, t, "floor_clearance", c.floorClearance);
     c.approachDegrees = numField(L, t, "approach_deg", c.approachDegrees);
@@ -243,8 +266,11 @@ Entity spawnVehicle(World& world, AssetManager& assets, const VehicleSpec& spec,
     Vehicle v;
     v.config = spec.config;
     v.partTime4wd = spec.partTime4wd;
+    v.pedalled = spec.pedalled;
     v.driverSeat = spec.driverSeat;
     v.hasDriverSeat = spec.hasDriverSeat;
+    v.openSeat = spec.openSeat;
+    v.seat = spec.seat;
 
     // One child entity per extra part, rigidly pinned to the chassis by
     // VehicleSystem::writeBack. Separate entities because each carries its own

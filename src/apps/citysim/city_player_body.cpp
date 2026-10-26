@@ -1,4 +1,5 @@
 #include "city_player_body.h"
+#include "../../engine/player_pose.h"
 #include "../../engine/interaction.h"   // engine::Seated
 
 #include "../../engine/asset_manager.h"
@@ -45,6 +46,17 @@ engine::MeshHandle CityPlayerBodySystem::poseMesh(engine::FrameContext& ctx,
     return poseMeshes_[pose];
 }
 
+engine::MeshHandle CityPlayerBodySystem::seatedMesh(engine::FrameContext& ctx, Real scale, Real hipBelow) {
+    if (seated_.valid() && seatedScale_ == scale && seatedDrop_ == hipBelow) return seated_;
+    engine::RenderMesh m = buildSeatedPersonMesh(playerOutfit());
+    for (engine::Vertex& v : m.vertices) v.position = v.position * scale - Vec3(0, hipBelow, 0);
+    seated_ = ctx.assets.acquireMesh(m, "citysim:playerbody:seated:" + std::to_string(scale) + ":" +
+                                            std::to_string(hipBelow));
+    seatedScale_ = scale;
+    seatedDrop_ = hipBelow;
+    return seated_;
+}
+
 void CityPlayerBodySystem::fixedUpdate(engine::FrameContext& ctx) {
     World& world = ctx.world;
 
@@ -63,7 +75,9 @@ void CityPlayerBodySystem::fixedUpdate(engine::FrameContext& ctx) {
     bool visible = player.valid() &&
                    ctx.settings.getBool("playerThirdPerson", false) &&
                    !world.has<engine::InVehicle>(player) &&
-                   !world.has<engine::Seated>(player);   // sitting/lying: the camera is first person at the pose
+                   !world.has<engine::Seated>(player) &&   // sitting/lying: the camera is first person at the pose
+                   !(world.has<engine::PlayerPose>(player) &&   // climbing, swimming, flying, limp: the posed blocks
+                     engine::drawnAsBlocks(world.get<engine::PlayerPose>(player)->mode));   // (PlayerBodySystem)
     if (!visible) {
         if (bodyOn_ && player.valid() && world.has<Renderable>(player))
             world.remove<Renderable>(player);
@@ -117,6 +131,28 @@ void CityPlayerBodySystem::fixedUpdate(engine::FrameContext& ctx) {
         return;
     }
 
+    // SAT DOWN as a passenger: seated, facing the way the car or the bus faces, riding with it
+    if (const engine::Passenger* ps = world.get<engine::Passenger>(player); ps && ps->sitting) {
+        if (Renderable* r = world.get<Renderable>(player)) r->mesh = seatedMesh(ctx, scale, ps->hipBelow);
+        if (PrevTransform* pt = world.get<PrevTransform>(player)) pt->value = prevPose_;
+        t->orientation = Quat::fromAxisAngle(Vec3(0, 1, 0), std::atan2(ps->facing.x, ps->facing.z));
+        prevPose_ = *t;
+        stride_ = 0;
+        return;
+    }
+    // ABOARD and on their feet (a bus aisle, a train's): walking is the feet's way through the carrier, not the
+    // carrier's way through the world -- standing still on a moving train stands still
+    const engine::Passenger* aboard = world.get<engine::Passenger>(player);
+    if (aboard) {
+        const Vec3 l = aboard->local - (aboard_ ? lastLocal_ : aboard->local);
+        lastLocal_ = aboard->local;
+        aboard_ = true;
+        const Vec3 f = aboard->facing;   // the carrier's forward; its right is (f.z, -f.x) (a yaw)
+        d = Vec3(f.z * l.x + f.x * l.z, 0, -f.x * l.x + f.z * l.z);
+        hDist = std::sqrt(d.x * d.x + d.z * d.z);
+    } else {
+        aboard_ = false;
+    }
     Real hSpeed = hDist / dt;
     int pose = walkPoseIndex(stride_, hSpeed, dt);
     if (Renderable* r = world.get<Renderable>(player))

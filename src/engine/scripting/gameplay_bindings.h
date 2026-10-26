@@ -66,6 +66,9 @@ struct GameplayContext {
     // stows its viewmodel and holds fire on that. Defaults true so headless
     // ticks (tests) behave as before.
     bool firstPersonView = true;
+    // camera.hands_free(): are the player's hands free to hold something? False while they grip a ledge, a wall
+    // or a ladder, or swim (engine/player_pose.h) -- the gun stows and holds fire then. Defaults true.
+    bool handsFree = true;
 };
 
 // The gameplay (effectful) binding surface (ADR-0024): the API a ScriptBehaviour
@@ -76,6 +79,7 @@ struct GameplayContext {
 //   input.pressed(name) / held(name) / axis(name)        -- bound actions
 //   camera.eye() / forward() / right()                   -- the active view
 //   camera.first_person()                                -- eyes, not a rig?
+//   camera.hands_free()                                  -- not climbing, pulling up, swimming?
 //   spawn.block{position=, velocity=, size=, restitution=, friction=,
 //               color=, emission=}                       -- a dynamic physics cube
 //   spawn.model{mesh=, position=, color=, metallic=, roughness=, script=}

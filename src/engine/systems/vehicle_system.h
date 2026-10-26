@@ -2,6 +2,7 @@
 #define RAYTRACER_ENGINE_VEHICLE_SYSTEM_H
 
 #include "../system.h"   // System, FrameContext, and (via renderer.h) MeshHandle
+#include "../player/driver_seat.h"   // RideJolt, SeatSway
 
 #include <vector>
 
@@ -38,6 +39,9 @@ private:
     void spawnInFront(FrameContext& ctx);   // debug: drop a car ahead of the player
     void updateHorn(FrameContext& ctx);     // hold-to-honk (H / L3) while driving
     void updateEngines(FrameContext& ctx);  // per-car engine note (idle -> revs)
+    void measureSlide(FrameContext& ctx);
+    Entity smoke_[2];   // tyre smoke: an emitter (engine/particles.h) on each rear wheel of the player's ride
+    void updateTyres(FrameContext& ctx);    // the player's ride: tyre squeal; a bicycle's freewheel and tyre hum
 
     PhysicsSystem& physicsSys;
     CameraSystem& cameras;
@@ -48,6 +52,19 @@ private:
     std::vector<Pick> catalogue_;
     bool catalogueTried_ = false;
     int pick_ = 0;
+    // THE PLAYER'S SEAT (ADR-0252): the jolt it takes (a crash throws the rider off an open one) and the body's sway
+    // in it, each fixed step
+    void stepSeat(FrameContext& ctx);
+    RideJolt jolt_;
+    SeatSway sway_;
+    Vec3 seatVel_;
+    bool haveSeatVel_ = false;
+    Real crank_ = 0;
+    uint32_t driftCar_ = 0xFFFFFFFFu;   // the car with the drift switched on (a PhysicsWorld::VehicleId)
+    bool wasDrifting_ = false;
+    Real lastDriftTime_ = 0;
+    bool bikeUpright_ = false;   // the ridden bike has stood up since you got on: only then can it go down
+    std::string wantRecipe_;   // `vehicle_spawn <recipe>`: picked once the catalogue is loaded
     double clock_ = 0.0, panelUntil_ = 0.0;
     std::string panelText_;
     void loadCatalogue();
@@ -78,6 +95,15 @@ private:
     std::vector<EngineVoice> engineVoices;
     static constexpr int kMaxEngineVoices = 6;
     static constexpr Real kEngineAudibleRange = 90.0;
+    // Tyres (Glenn, 2026-10-24: "The bike sounds motorized and it shouldn't. The drifting needs some tire squeal"):
+    // looping voices on the player's ride, eased by gain
+    struct TyreLoop {
+        AudioClipHandle clip;
+        AudioVoiceHandle voice;
+        float gain = 0.0f;
+    };
+    TyreLoop squeal_, freewheel_, roll_;
+    bool tyreClips_ = false;
 };
 
 }  // namespace engine

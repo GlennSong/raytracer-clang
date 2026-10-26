@@ -4,6 +4,8 @@
 #include "../../engine/components.h"
 #include "../../log.h"
 #include "../../engine/procgen/city/city_svg.h"
+#include "../../engine/player/tools.h"
+#include "../../engine/waypoint.h"
 #include "../../engine/world.h"
 #include "bus_stop_props.h"   // routeColour: the map wears the stop signs' colours
 #include "city_render.h"
@@ -29,6 +31,7 @@ constexpr double kMargin = 1.5;
 constexpr float kFrame[4] = {0.10f, 0.10f, 0.11f, 0.92f};
 constexpr float kPaper[4] = {0.84f, 0.82f, 0.77f, 1.0f};
 constexpr float kYou[4] = {0.90f, 0.20f, 0.16f, 1.0f};
+constexpr float kMark[4] = {1.00f, 0.78f, 0.16f, 1.0f};   // the waypoint: the watch's dot is this colour too
 
 // A soft round dot, white (tinted per use).
 std::vector<uint8_t> makeDot(int n) {
@@ -81,12 +84,37 @@ CityMapToolSystem::~CityMapToolSystem() { stopWorker(); }
 
 void CityMapToolSystem::onStart(engine::FrameContext& ctx) {
     ctx.actions.bindButton("slot_3", engine::KeyCode::Num3);   // the map (a tool)
-    ctx.actions.bindButton("map_centre", engine::KeyCode::C);
+    // THE MAP'S OWN CONTROLS, on its input layer (ADR-0248): up, it has the stick and the keys -- the player under
+    // it stands still. Pan with the left stick or WASD, zoom with the right stick, E/Q or the wheel; mark the
+    // waypoint at the crosshair with A, Space or a right click (again on it: cleared); Y or C back to you; B puts
+    // the map away.
+    using engine::KeyCode;
+    using engine::GamepadAxis;
+    using engine::GamepadButton;
+    engine::InputMap& a = ctx.actions;
+    a.bindAxis("map_pan_x", GamepadAxis::LeftX, 1.0);
+    a.bindAxis("map_pan_x", KeyCode::D, 1.0);
+    a.bindAxis("map_pan_x", KeyCode::A, -1.0);
+    a.bindAxis("map_pan_y", GamepadAxis::LeftY, 1.0);   // (screen down: south, +z)
+    a.bindAxis("map_pan_y", KeyCode::S, 1.0);
+    a.bindAxis("map_pan_y", KeyCode::W, -1.0);
+    a.bindAxis("map_zoom", GamepadAxis::RightY, -1.0);  // (stick up: closer)
+    a.bindAxis("map_zoom", KeyCode::E, 1.0);    // (E and Q: the body's and the freecam's keys, dead under the map;
+    a.bindAxis("map_zoom", KeyCode::Q, -1.0);   //  +/- are the sim's speed)
+    a.bindButton("map_centre", KeyCode::C);
+    a.bindButton("map_centre", GamepadButton::Y);
+    a.bindButton("map_mark", GamepadButton::A);
+    a.bindButton("map_mark", KeyCode::Space);   // (jump, dead under the map; Enter is pause)
+    a.bindButton("map_mark", engine::MouseButton::Right);
+    a.bindButton("map_close", GamepadButton::B);
+    for (const char* n : {"map_pan_x", "map_pan_y", "map_zoom", "map_centre", "map_mark", "map_close"})
+        a.setActionLayer(n, "map");
 }
 
 void CityMapToolSystem::onStop(engine::FrameContext& ctx) {
     stopWorker();
     fly_.inputSuspended = false;
+    ctx.actions.popLayer("map");
     if (tex_.valid()) ctx.renderer.removeTexture(tex_);
     if (dot_.valid()) ctx.renderer.removeTexture(dot_);
     if (arrow_.valid()) ctx.renderer.removeTexture(arrow_);
@@ -246,10 +274,21 @@ void CityMapToolSystem::update(engine::FrameContext& ctx) {
     if (ctx.actions.pressed("slot_3")) {
         open_ = !open_;
         if (open_) follow_ = true;
-    } else if (open_ && (ctx.actions.pressed("slot_1") || ctx.actions.pressed("slot_2") || ctx.actions.pressed("slot_4"))) {
+    } else if (open_ && [&] {
+                   for (int k = 1; k <= engine::kToolSlots; ++k)
+                       if (k != engine::slotOf(engine::Tool::Map) && ctx.actions.pressed(engine::slotAction(k))) return true;
+                   return false;
+               }()) {
+        open_ = false;
+    } else if (open_ && ctx.actions.pressed("map_close")) {
         open_ = false;
     }
     fly_.inputSuspended = open_;
+    if (open_ != layered_) {   // the map's controls over everything else while it is up
+        if (open_) ctx.actions.pushLayer("map");
+        else ctx.actions.popLayer("map");
+        layered_ = open_;
+    }
     if (!open_) return;
 
     startWorker(ctx);
@@ -293,10 +332,36 @@ void CityMapToolSystem::update(engine::FrameContext& ctx) {
         cz_ -= ctx.input.mouseDeltaY * fbPerPt * mpp_;
         follow_ = false;
     }
-    // The wheel zooms about the panel centre (up = closer).
-    if (ctx.input.scrollDelta != 0.0) {
-        mpp_ *= std::pow(0.82, ctx.input.scrollDelta);
+    // The wheel zooms about the panel centre (up = closer); so does the right stick, 4x a second at full tilt.
+    const double dt = std::clamp(ctx.frameDelta, 0.0, 0.1);
+    const double zoom = ctx.actions.axis("map_zoom");
+    if (ctx.input.scrollDelta != 0.0 || zoom != 0.0) {
+        mpp_ *= std::pow(0.82, ctx.input.scrollDelta) * std::pow(0.25, zoom * dt);
         mpp_ = std::clamp(mpp_, 0.12, 12.0);
+    }
+    // The stick (and WASD) pans: at full tilt, half the panel's width a second, at any zoom.
+    const double panX = ctx.actions.axis("map_pan_x"), panY = ctx.actions.axis("map_pan_y");
+    if (panX != 0.0 || panY != 0.0) {
+        cx_ += panX * 0.5 * pw * mpp_ * dt;
+        cz_ += panY * 0.5 * pw * mpp_ * dt;
+        follow_ = false;
+    }
+    // THE WAYPOINT at the crosshair (the panel centre): marked, or -- marked there already -- cleared
+    if (ctx.actions.pressed("map_mark")) {
+        engine::Entity player;
+        ctx.world.each<engine::Transform, engine::ControlledBy>(
+            [&](engine::Entity e, engine::Transform&, engine::ControlledBy&) { if (!player.valid()) player = e; });
+        if (player.valid()) {
+            const engine::Waypoint* w = ctx.world.get<engine::Waypoint>(player);
+            if (w && std::hypot(w->at.x - cx_, w->at.z - cz_) / mpp_ < 14.0) {
+                ctx.world.remove<engine::Waypoint>(player);
+            } else {
+                const engine::Waypoint mark{engine::Vec3(cx_, 0, cz_)};
+                if (w) *ctx.world.get<engine::Waypoint>(player) = mark;
+                else ctx.world.add<engine::Waypoint>(player, mark);
+            }
+            follow_ = false;
+        }
     }
     if (follow_ && haveMe) {
         cx_ = me.x;
@@ -485,6 +550,31 @@ std::vector<engine::Renderer::UiQuad> CityMapToolSystem::composeFrame(engine::Wo
                     }
             }
         }
+
+    // THE WAYPOINT, pinned to the panel's edge when it is off it; and the crosshair it is marked at
+    {
+        const engine::Waypoint* mark = nullptr;
+        world.each<engine::Transform, engine::ControlledBy>(
+            [&](engine::Entity e, engine::Transform&, engine::ControlledBy&) {
+                if (!mark) mark = world.get<engine::Waypoint>(e);
+            });
+        if (mark) {
+            Vec2 s = toPx(mark->at.x, mark->at.z);
+            s.x = std::clamp(s.x, static_cast<Real>(p.x0 + 14), static_cast<Real>(p.x1 - 14));
+            s.y = std::clamp(s.y, static_cast<Real>(p.y0 + 14), static_cast<Real>(p.y1 - 14));
+            dot(s, 13.0f, ink);
+            dot(s, 10.0f, kMark);
+            dot(s, 3.5f, ink);
+        }
+        const float hair[4] = {0.08f, 0.08f, 0.09f, 0.55f};
+        const float cxp = static_cast<float>(pcx), cyp = static_cast<float>(pcy);
+        for (const float side : {-1.0f, 1.0f}) {   // four ticks round an open centre
+            q.push_back(tinted(Quad::rect(cxp + side * 6.0f - (side < 0 ? 12.0f : 0.0f), cyp - 1.0f,
+                                          cxp + side * 6.0f + (side > 0 ? 12.0f : 0.0f), cyp + 1.0f), hair));
+            q.push_back(tinted(Quad::rect(cxp - 1.0f, cyp + side * 6.0f - (side < 0 ? 12.0f : 0.0f),
+                                          cxp + 1.0f, cyp + side * 6.0f + (side > 0 ? 12.0f : 0.0f)), hair));
+        }
+    }
 
     // YOU: the chevron at your position, pointing where you look.
     {

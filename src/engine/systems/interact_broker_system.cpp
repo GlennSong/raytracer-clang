@@ -5,9 +5,7 @@
 #include "../components.h"
 #include "../../log.h"
 #include "../input/input_map.h"
-#ifdef RT_ENABLE_IMGUI
-#include <imgui.h>
-#endif
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 
@@ -165,12 +163,13 @@ void InteractBrokerSystem::update(FrameContext& ctx) {
 }
 
 void InteractBrokerSystem::render(FrameContext& ctx) {
-#ifdef RT_ENABLE_IMGUI
-    if (!show_) return;
-    const float W = static_cast<float>(ctx.windowWidth), H = static_cast<float>(ctx.windowHeight);
-    ImDrawList* dl = ImGui::GetForegroundDrawList();
+    if (!show_ || ctx.actions.layerUp()) return;   // (a screen that has the controls is up: the map)
+    // framebuffer pixels; sizes in window points times the display's scale
+    const float W = static_cast<float>(ctx.framebufferWidth), H = static_cast<float>(ctx.framebufferHeight);
+    const float k = ctx.windowWidth > 0 ? W / static_cast<float>(ctx.windowWidth) : 1.0f;
+    std::vector<Renderer::UiQuad> q;
     // THE MARKER: a ring on the thing, softly pulsing, the prompt beside it.
-    float px = W * 0.5f, py = H - 120.0f;
+    float px = W * 0.5f, py = H - 120.0f * k;
     if (marker_) {
         Real sx = 0, sy = 0;
         const CameraState& cam = ctx.view.camera;
@@ -180,30 +179,36 @@ void InteractBrokerSystem::render(FrameContext& ctx) {
                 anchor_ = ic->drawn.transformPoint(local_);
         if (projectToScreen(anchor_, cam.position, cam.target, cam.up, cam.fovDegrees, cam.aspectRatio, W, H, sx, sy)) {
             static const bool logMarker = std::getenv("RT_MARKER_LOG") != nullptr;   // the marker's screen point, each frame
-            if (logMarker) LOG_INFO << "[marker] " << sx << " " << sy;
-            const float r = 9.0f + 2.0f * static_cast<float>(std::sin(pulse_ * 4.0));
-            dl->AddCircle(ImVec2(static_cast<float>(sx), static_cast<float>(sy)), r + 2.0f, IM_COL32(0, 0, 0, 140), 24, 4.0f);
-            dl->AddCircle(ImVec2(static_cast<float>(sx), static_cast<float>(sy)), r, IM_COL32(255, 236, 160, 235), 24, 2.5f);
-            dl->AddCircleFilled(ImVec2(static_cast<float>(sx), static_cast<float>(sy)), 2.5f, IM_COL32(255, 236, 160, 235));
-            px = static_cast<float>(sx) + 18.0f;
-            py = static_cast<float>(sy) - 10.0f;
+            if (logMarker) LOG_INFO << "[marker] " << sx / k << " " << sy / k;
+            const float r = (9.0f + 2.0f * static_cast<float>(std::sin(pulse_ * 4.0))) * k;
+            const float shade[4] = {0, 0, 0, 0.55f}, gold[4] = {1.0f, 0.93f, 0.63f, 0.92f};
+            const float cx = static_cast<float>(sx), cy = static_cast<float>(sy);
+            ui_.ring(ctx.renderer, q, cx, cy, r + 4.0f * k, 4.0f * k, shade);
+            ui_.ring(ctx.renderer, q, cx, cy, r + 1.25f * k, 2.5f * k, gold);
+            ui_.disc(ctx.renderer, q, cx, cy, 2.5f * k, gold);
+            px = cx + 18.0f * k;
+            py = cy - 10.0f * k;
         }
     }
     std::string nm = name_;
     for (char& c : nm) if (c == '_') c = ' ';
-    std::string text = nm.empty() ? prompt_ : nm + "\n" + prompt_;
-    if (others_ > 0) text += "\n+" + std::to_string(others_) + (pad_ ? " nearby   (Y) next" : " nearby   Tab / wheel");
-    ImFont* font = ImGui::GetFont();
-    const float fs = ImGui::GetFontSize() * 1.4f;   // readable at a glance, over a busy room
-    const ImVec2 ts = font->CalcTextSizeA(fs, 1e9f, 0.0f, text.c_str());
-    if (!marker_) px -= ts.x * 0.5f;
-    px = std::min(px, W - ts.x - 12.0f);
-    py = std::min(py, H - ts.y - 12.0f);
-    dl->AddRectFilled(ImVec2(px - 6, py - 4), ImVec2(px + ts.x + 6, py + ts.y + 4), IM_COL32(0, 0, 0, 150), 4.0f);
-    dl->AddText(font, fs, ImVec2(px, py), IM_COL32(255, 255, 255, 240), text.c_str());
-#else
-    (void)ctx;
-#endif
+    std::vector<std::string> lines;
+    if (!nm.empty()) lines.push_back(nm);
+    lines.push_back(prompt_);
+    if (others_ > 0) lines.push_back("+" + std::to_string(others_) + (pad_ ? " nearby   (Y) next" : " nearby   Tab / wheel"));
+    const float fs = 18.0f * k;   // readable at a glance, over a busy room
+    const float lineH = (ui_.ascent(fs) + ui_.descent(fs)) * 1.05f;
+    float w = 0;
+    for (const std::string& l : lines) w = std::max(w, ui_.measure(l, fs));
+    const float h = lineH * static_cast<float>(lines.size());
+    if (!marker_) px -= w * 0.5f;
+    px = std::min(px, W - w - 12.0f * k);
+    py = std::min(py, H - h - 12.0f * k);
+    const float back[4] = {0, 0, 0, 0.59f}, white[4] = {1, 1, 1, 0.94f};
+    UiText::rect(q, px - 6.0f * k, py - 4.0f * k, px + w + 6.0f * k, py + h + 4.0f * k, back);
+    for (std::size_t i = 0; i < lines.size(); ++i)
+        ui_.text(ctx.renderer, q, px, py + lineH * static_cast<float>(i) + ui_.ascent(fs), lines[i], fs, white);
+    ctx.renderer.submitUi(q);
 }
 
 }  // namespace engine

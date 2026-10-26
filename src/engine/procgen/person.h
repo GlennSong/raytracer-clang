@@ -17,6 +17,16 @@ int personOutfitTotal();
 const PersonOutfit& personOutfit(int outfit);   // (any int: wrapped round)
 RenderMesh buildStandingPerson(Real swing, int outfit);
 
+struct BodyPose;
+// THE JOINTED PERSON (engine/block_body.h): the same body with knees and elbows, posed -- the torso and head as
+// blocks, each limb one skinned tube bent at its fold. About the pose's position (give it the origin for a mesh
+// centred like the one above).
+RenderMesh buildPosedPerson(const BodyPose& pose, int outfit);
+// THE STRIDE with knees and elbows, for a walk cycle's `swing` (buildStandingPerson's: radians, + the L leg back):
+// legs opposed and arms counter-swinging as there, the trailing leg's knee folding as it pushes off, the arms'
+// elbows soft and bending as they come forward.
+BodyPose walkBodyPose(Real swing);
+
 }  // namespace engine
 
 #endif

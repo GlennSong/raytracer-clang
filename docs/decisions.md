@@ -11537,3 +11537,852 @@ only the complex's cells (cells.cpp `Complex::resolve`) used it.
 - **`lot? x z`** prints each building's party walls (line and top), for checking one in the running game.
 - **Test:** `a_party_wall_is_blank_only_as_high_as_its_neighbour` (test_city_lots): no glass in the wall up to its
   top, glass above it, the count matches the log's, every parts index still in its mesh.
+
+## ADR-0228 — Movement past walking: a jump gate, ledges, climbing, buoyancy, block arms
+
+Glenn (2026-10-24): jump "sometimes gets me stuck on geometry"; pull yourself up a ledge slightly above; climb
+rock "like breath of the wild"; see your block arms; feel speed swimming; and a movement lab to tune it in.
+
+- **The stuck jump, measured:** `jumpCharacter` refused unless Jolt said OnGround. On anything steeper than the
+  50° walkable limit it says OnSteepGround, so every press was refused while sliding on a rock face
+  (`the_physics_jump_is_refused_on_steep_ground`). Narrow gaps and V crevices settle OnGround and were fine.
+- **JumpGate (engine/locomotion.h)** decides instead, over the ungated `launchCharacter`: OnGround, a moment after
+  leaving it (coyote 0.12 s), a press 0.15 s before landing (buffer), off steep ground (pushed away from it), out
+  of a wedge (touching, unsupported, not falling for 0.15 s). `jumpCharacter` keeps its strict gate for others.
+- **Ledges:** `findLedge` casts level rays for a wall within reach, a ray down behind its face for the top, a ray
+  for floor a body's width in, and `characterFitsAt` (a capsule overlap test) for room standing there and rising
+  to it. Jump at one up to 1.45 m from standing, or push into one up to 2.1 m over the feet in the air, and
+  `MantleMove` hauls the capsule up level with the top, then over (moveCharacterFree along the path; blocked
+  -> let go).
+- **Climbing** any surface too steep to walk (normal y < 0.64, down to a slight overhang), not a dynamic body:
+  grab it in the air by pushing at it (from the ground too, if `grabFromGround`), move along its basis, stick at
+  the chest, turn inside corners, reach round outside ones, pull up at the top, step off at the foot, lunge on
+  jump, kick off on jump + back, let go on crouch or when stamina (12 s, back on the ground) runs out.
+- **Swimming:** buoyancy is a damped spring with quadratic drag (`swimVerticalStep`), so a body that falls in
+  keeps its speed, goes under (off the 6 m board the centre went to 0.9 m below its float line), comes up past
+  the float line once and settles; the horizontal way carries in and the stroke takes over at 3/s. The pace
+  surges on each arm's pull.
+- **PlayerPose** (engine/player_pose.h) is what the body is doing, written by PlayerSystem; **PlayerArmsSystem**
+  draws two sleeves and two hands (boxes, the player's outfit) from the shoulders to the hands: swinging with the
+  stride, pumping on a run, out in the air, a front crawl whose seen half is the reach (Glenn: the pull alone
+  "look[s] like you're going backwards"), and gripping the ledge, the wall or the ladder's rails.
+- **MovementTuning** holds every number: Debug > Movement (sliders, live, Save to settings.json `movement.*`);
+  `set movement.<key> <v>` on the socket; `move?` reports mode, ground, position, velocity, stamina and the last
+  change ("pull up onto a ledge 1.24 m above the feet").
+- **The lab:** `assets/levels/movement_lab.json`, written by `tools/movement_lab.py`: ledges 0.3-3.5 m coloured
+  by how you get up them, gaps 1-5 m, climbing walls (4/8/15 m, ledged, 70°, overhang, corners), slopes 30-70°
+  with a V and a rock gap, a stair of ledges to rooftop gaps, and a tiled pool with steps and 3/6 m boards.
+  Level `"pools"` (a WaterPool + the sea's water mesh) is how a level without terrain gets water.
+- **Not yet:** the third-person body doesn't pose for climbing or swimming; no splash or wake; no building
+  handholds (sills and ledges as climb points) -- the free climb works on facades meanwhile.
+
+## ADR-0229 — Parachute and wingsuit: gear in the tool slots, flown by where you look
+
+Glenn (2026-10-24): "jumping from the top of a mountain or skyscraper could open some kind of parachute or
+wingsuit"; "I imagine you'd have to select it from your inventory".
+
+- **Gear:** tool slot 5 is the parachute, 6 the wingsuit (Num5/Num6; the bumpers cycle 1-6). The gun stows and
+  the map closes on either. With one on, jump in the air -- at least `deployMinHeight` (4 m) above the ground --
+  opens it. In the wingsuit, jump opens its parachute; crouch cuts a canopy away or folds the suit (freefall).
+- **Parachute (`parachuteStep`):** the canopy turns toward where you look at up to 70°/s and settles the
+  velocity toward 8 m/s ahead, 4.5 down (W: 12 / 7, S flares to 4 / 2). It fills over 0.7 s, mostly still
+  falling until it does. Measured off the 72 m tower: 4.50 down, 8.00 ahead.
+- **Wingsuit (`wingsuitStep`):** flown by the look (pitch held to -60..+25°). Lift turns the velocity toward the
+  facing without doing work, and grows with speed² (just holds you up at the 14 m/s stall); turning costs
+  induced drag (k·lift²/v²); drag is light along the body, 8× broadside. Three wrong models first: lift that
+  converted gravity into forward speed (83 m/s, energy from nothing), constant induced drag (stuck at 6 m/s
+  from rest), and no induced drag (hung in the air at 12 m/s pitched up). Measured: 48 m/s at a 2.35:1 glide
+  pitched 20° down, 60 m/s at 35°; a pull-up from the glide gains ~40 m; slow and pitched up it sinks ~20 m in
+  6 s instead of hovering.
+- **Landing:** touching ground or being stopped short ends the glide; a wingsuit into anything over 20 m/s is
+  "crashed" (`move?`), the hook for the ragdoll to come. Water ends it in a plunge (the buoyancy of ADR-0228).
+- **The fall net** (FallRespawnTracker, 40 m below the last footing) now fires only when there is nothing below
+  at all: it was for falling through the world, and it cut every tower jump short. A teleport ends any glide,
+  climb or pull-up.
+- **Seen:** the canopy (seven red/white cells on an arc, its four lines to the hands in first person or the
+  shoulders in third), the hands up on the toggles, spread wide in the suit with orange wings; the view widens
+  up to 14° from 20 to 60 m/s.
+- **The lab** has a 72 m tower with a walkable spiral ramp (24°) and 600 m of ground to land on. The wingsuit
+  wants more height than that: `teleport x 400 z` or a peak on the island.
+- **Streaming keeps up** (`tools/fly_probe.py`, island_8_nature, 2.3 km over the towns at 50 m/s, 80 m up,
+  pitched 20° down): 0 of 88 facades and 0 of 43 buildings arrived late, no bare grass; frames p50 19.8 ms,
+  p99 28.2 ms, one 41 ms hitch.
+
+## ADR-0230 — The grapple: a hook that snaps near the aim, a rope that only pulls
+
+Glenn (2026-10-24): "Grapple hook and swing mechanics (something like spiderman)".
+
+- **Slot 7** (Num7). A ring marks where a shot would hook; hold fire (the click / RT) to hook and hang, let go to
+  fly on with all the speed the swing gave. Jump held reels in, crouch lets out, W pumps along the swing, A/D
+  steer across it. Reeled right up to an edge, it pulls you up onto it (the mantle of ADR-0228).
+- **The hook (`findGrappleAnchor`)**: the aim itself if it meets something static in 3-60 m and above the eye,
+  else the best of two rings of eight rays within 9° -- near the aim first, above the eye preferred, below only
+  if nothing else. That snap is what makes swinging easy: aimed 5° over a beam, it still catches the beam.
+- **The rope (`ropeStep`)**: gravity and the pump move the hand point; past the rope's length it is put back on
+  the sphere and the outward speed removed -- a rope pulls, never pushes, and adds nothing: from level, the
+  bottom of the swing is √(2gL) and it never climbs above where it began (tested, after the wingsuit's lesson).
+  The capsule then moves there through the world (moveCharacterFree), so walls take the speed off honestly.
+- **From the ground** a hook is a hard reel for half a second (2× the reel-in): standing under a taut rope
+  gave nothing to swing, and the first step made it slack and let go. Measured: lifted into an 18 m/s swing.
+- **Seen**: the right arm up along the rope, the rope a pale line to the hook (from the raised hand in third
+  person); the HUD's ring on the hook and the controls.
+- **The lab**: a swing park far south, a gantry (two 18 m pillars, a beam) every 14 m, and a 10 m roof at its
+  end to reel up onto. `hold MouseLeft <s>` on the socket holds the fire button, for probes.
+
+## ADR-0231 — The body in third person, posed as six blocks
+
+Glenn (2026-10-24): "3rd person might be fun as well". In third person the player was the walker mesh with its
+walk cycle whatever it did -- climbing a wall looked like walking up it.
+
+- **engine/block_body.h**: the person as the six blocks `buildStandingPerson` welds into the walker mesh (two
+  legs, torso, two arms, head; tested to sit exactly where the mesh's do at rest). A `BodyPose` is where the body
+  is, its facing and lean, and a body-frame direction for each limb; `poseBlocks` places them; `reachToward`
+  points a limb at a world point (the hands' holds, the rope's hook).
+- **PlayerBodySystem** draws them, with the capsule (fixedUpdate, so they interpolate like it), when the body
+  is doing anything but walking or falling (`drawnAsBlocks`): flat to the wall reaching for the holds the arms
+  use in first person, a foot up in turn; prone at the waterline in a crawl, the feet fluttering; upright under
+  the canopy, hands on the toggles; flat to the air in the wingsuit, head down as it dives; off the right hand
+  on the rope, legs trailing. citysim's CityPlayerBodySystem (the walker mesh) stands down meanwhile.
+- **The same blocks are the ragdoll** (ADR-0232): one body, posed or limp.
+- Not yet: knees and elbows (each limb is one block, like the walkers'), and a walk/run/jump that blends into
+  these poses rather than switching.
+
+## ADR-0232 — Going limp: the player as a ragdoll of the same six blocks
+
+Glenn (2026-10-24): "crashing could result in ragdolling. How hard is it to do ragdolling for the player?"
+
+- **PhysicsWorld::addRagdoll** (Jolt's Ragdoll): boxes with masses, each joined to its parent by a swing-twist
+  joint at a world point (axis parent -> child, swing and twist limits); parents never collide with children.
+  `blockRagdoll(pose)` makes the six blocks of a pose into one: 67 kg, the torso 30; arms swing 85°, legs 60°,
+  the head 35°. Tested: thrown at a run it lands in a heap a metre on, comes to rest, every joint within 8 cm.
+- **What drops you**: a wingsuit into anything over 20 m/s, touching down faster than 15 m/s (an ~11 m fall:
+  the 72 m tower's 37 m/s), losing more than 14 m/s in one step on the rope; and G (or `ragdoll` on the socket)
+  on purpose. All in Debug > Movement (Ragdoll).
+- **While limp** the view goes outside (the shoulder rig on the torso) whichever view was set; the first-person
+  arms stand down (the eye isn't at the body). **Up**: by itself after 1.2 s lying still, on jump once it has
+  slowed, or at once into the water (swimming); the capsule stands over where the torso lies, lifted until it
+  fits. The fall net still catches a body falling off the world.
+- Not yet: townspeople (a pool of 6-8 for walkers the player hits, owed), being hit by a car, a get-up animation.
+
+## ADR-0233 — Townspeople knocked flying: a pool of six ragdolls
+
+Glenn (2026-10-24): "this might also go for agents you run into, but we wouldn't want them all to ragdoll
+because I'm sure that would be stupid expensive".
+
+- Walkers were already knocked down (KnockdownTimer: a vehicle centre within 1.5 m at over 2.5 m/s floors a
+  walker with a body, ADR-0062) and drawn lying flat. Now the hit throws them: `WalkerRagdolls`
+  (apps/citysim/walker_ragdolls.h) makes the six-block ragdoll (ADR-0232) at the walker's capsule, in its own
+  outfit, at 0.8 x the car's speed away from it plus a lift; the walker mesh shrinks to nothing meanwhile.
+- **The cost is bounded twice:** only the walkers with a physical body can be hit (the nearest few hundred,
+  ADR-0062's budget), and at most six are limp at once -- a seventh hit recycles the one down longest. Each is
+  six Jolt bodies and five joints while it lies there, nothing before or after.
+- **Up** after a second lying still (six at most): the capsule is stood over the torso, the knock timer cleared,
+  and the walk resumes toward its plan.
+- `knock` on the socket throws the walker nearest the player (the log says which and where), `knock?` reports
+  the limp ones (torso, speed, time down). Measured in agent_lab: thrown 7 m, at rest 0.13 m up after 2.4 s, up.
+
+## ADR-0234 — Skateboard and scooter: ridden whenever they are in hand on the ground
+
+Glenn (2026-10-24): "skateboards, scooters, mopeds, motorcycles, bikes". The two that need no engine.
+
+- **Slots 8 and 9.** With either in hand, standing on the ground is riding (`Move::Board`); another slot steps
+  off. `boardStep`: A/D carve at the tighter of 150°/s and the grip (7 m/s²) over the speed, so a fast board
+  turns wide; W kicks (+1.8 m/s a kick, one per 0.5 s, fading toward 8.5 m/s -- the scooter 7); S drags a heel;
+  the slope under the wheels pulls it downhill; rolling loss stops it in the end. Jump ollies (3.8 m/s up),
+  keeping the board.
+- **Bail**: stopped short above 6.5 m/s (a wall, a kerb's face, a kicker's blunt side) throws you off, limp, at
+  0.7 x the speed; a hard landing off a drop too.
+- **Seen**: the board under the feet in either view (a deck with nose and tail kicked up and four wheels; the
+  scooter's deck, stem, bar and grips); in third person side-on to a skateboard, the back foot kicking, arms out,
+  or square behind a scooter's bar with the hands on it; in first person, the hands on the scooter's grips.
+- **The lab**: a skate run far west -- a 4 m deck, 40 m of 6° ramp down onto the flat, two kickers. Measured:
+  kicked to 5.9 m/s on the deck, 9.1 m/s at the foot of the ramp.
+- Not yet: tricks and grinds, a kick that pushes in time with the leg, and wheels that roll.
+
+## ADR-0235 — Motorcycle, moped, bicycle: Jolt's MotorcycleController, with its lean spring sized to the bike
+
+Glenn (2026-10-24): "skateboards, scooters, mopeds, motorcycles, bikes. This could also mean crashing could result
+in ragdolling."
+
+- **`VehicleConfig::twoWheeler`** (Lua `two_wheeler = true`, `max_lean_deg`) builds Jolt's MotorcycleController
+  instead of the four-wheel one; the four-wheel helpers stand aside (recipes set `yaw_assist = 0`,
+  `anti_roll = 0`; a one-wheel axle's differential already took `mRightWheel = -1`). It leans the chassis into a
+  turn and limits steering by the lean at speed, so a fast bike turns wide.
+- **The lean spring, sized:** Jolt's defaults (5000 / 1000) suit its sample's heavy hull. On our narrow box (roll
+  inertia ~12 kg m² for a 220 kg motorcycle) one 60 Hz step of that damping overshot the roll rate and the bike
+  flipped on touchdown (measured: 40° in four frames, then on its side). Now from the bike's own mass and box:
+  stiffness 2.5 m g (h/2 + 0.3), damping 0.4 x roll inertia x 60 -- upright at rest and through a drop.
+- **vehicles.lua**: `vehicle.motorcycle`, `vehicle.moped`, `vehicle.bicycle`, boxes on the centre line (frame,
+  engine, tank or leg shield, seat, fork, bars, guards; a bicycle's tubes and saddle), headlight and taillight
+  markers and a driver seat; in the drivable catalogue (`, .` pick, N drops; `vehicle_spawn moped` on the socket).
+  Torques are small and ratios high because Jolt multiplies by the gear and a 3.42 final drive; the bicycle's
+  rpm and ratios are both x4 because Jolt's automatic shifts up at 4000 rpm and a 1500 rpm "engine" never left
+  first.
+- **Measured** (tests/test_two_wheelers, 12 s flat out then 4 s at 80% lock on a little throttle): motorcycle
+  79 km/h, leaning 28°; moped 47 km/h, 29°; bicycle 25 km/h, 27°; none below 0.86 of upright. In the viewer the
+  motorcycle rode 46 km/h and leaned 29-44° through a turn.
+- **The freewheel**: `engine_damping` / `engine_inertia` (Jolt's engine spin-down) near zero on the bicycle, which
+  coasts (33 -> 31 km/h over 3 s off the pedals) where an engine brakes.
+- **Off in a crash** (`VehicleSystem::crashOffBikes`): a two-wheeler that loses 25 km/h in 0.3 s (one step was
+  never enough: Jolt spreads a hit over several) or rolls 10° past its lean puts the rider off as a ragdoll at
+  0.8 x the speed it had, plus a lift. Measured: into a 1.2 m rock at 50 km/h, thrown ~8 m over it, up again.
+- Not yet: the rider is the car's seated occupant (not posed on the bike); the chase camera is the car's (far
+  behind a bike); pedalling isn't drawn.
+
+## ADR-0236 — Drift: a handbrake flick into a held slide, Burnout-style, for the player's car
+
+Glenn (2026-10-24): "how hard is it to make a car drift? Something like burnout (the videogame)."
+
+- **Into it**: the handbrake (Ctrl) while steering past 30% above 40 km/h. **Out**: steering under 15% with the
+  slip under 10°, below 22 km/h, or spun past 100°. Only the player's car (VehicleSystem switches it on while
+  driven; traffic and the handling tests never see it); not two-wheelers.
+- **In the slide** (`PhysicsWorld::applyDrift`, before the Jolt step): Jolt's per-wheel tyre-impulse callback
+  scales the sideways grip -- rear to 35%, front 90% -- the yaw assist that exists to stop slides stands aside,
+  a yaw torque holds the slip the steering asks for (32° at full lock: the body yaws at the travel's rate plus
+  3/s toward the target), a carve pulls the travel round toward the nose (14 m/s² x sin slip: without it the
+  slide drew a 55 m arc), and on the throttle a push holds the speed the slide began with (bleeding 4%/s).
+- **Boost**: a slide banks 25% a second (full in 4 s); Shift / pad Y spends it as up to 2.5 s of 7 m/s² along
+  the nose. `vehicle?` reports `drift`, `slip`, `boost`, `BOOSTING`.
+- **Measured** (tests/test_drift: a kit sedan at 76 km/h, flick, 3 s at 80% lock on the throttle): slip 30°
+  average, 66 km/h held, 116° turned, 0.8 boost banked; straightened, it grips (slip < 12°). In the viewer: 57
+  km/h, held 3.4 s through ~190°, then the boost back to 75 km/h.
+- Not yet: tyre smoke and skid marks, a drift score / HUD meter, and tuning per car (a pickup slides like a
+  sedan).
+
+## ADR-0237 — Playground equipment the player can use: swings and monkey bars (the lab first)
+
+Glenn (2026-10-23): "It would be fun if you could also interact with the swings, monkey bars, and gymnasium stuff
+in the park".
+
+- **engine/playground.h**: `PlaySwing` (the beam's pivot, chain length, the way it swings, the seat entity it
+  turns) and `MonkeyBars` (the bar line). A level lists them under `"playground"`; the frames are its own blocks.
+  The movement lab has a swing set (two seats) and 6 m of bars south of the spawn.
+- **The swing** (`swingStep`): a pendulum on its chains with a little damping; W/S pump -- pushing the way it is
+  going adds, against it brakes -- held to 75° (the chains go slack). Tested: pumped from still past 45° in
+  10 s; left alone it dies down; back-pumping brakes it at least twice as fast. Sat on it (E), the capsule rides
+  the seat; jump flies off at the seat's speed, crouch gets down. Empty swings swing on and settle.
+- **The bars**: E under them hangs from the bar line, the eye 0.45 m below it; W/S (along the camera's way,
+  projected onto the bars) hand over hand at 1.1 m/s; jump, crouch or past an end drops off with the speed you
+  had along them.
+- Drawn: the hands on the chains or the bar in first person; sat swinging (legs out forward, tucked back) or
+  hanging in third person.
+- **The city's playgrounds aren't wired yet**: their equipment is baked into the lots' meshes
+  (`sculptPlayground`), so making those swings usable means the lots recording their pivots and bar lines -- a
+  lots-tag bump and every level re-baked. Owed, on Glenn's word. Townspeople on swings would follow from that.
+
+## ADR-0238 — The grapple's rope you can see, a rope that gives, the hook in flight; the moves' sounds
+
+Glenn (2026-10-24): "Is there a way to make the grapple a little more rope like? Is there a good way to do a physics
+based rope in jolt?" then "do 1-3. Also I think different sfx would help sell these types of motions too. Like
+skateboarding, parachuting, grapple, etc. The bike sounds motorized and it shouldn't. The drifting needs some tire
+squeal."
+
+- **The swing stays one exact constraint** (`ropeStep`): a body on a chain of light links stretches and jitters,
+  and the player is a CharacterVirtual, not a rigid body. Jolt 5.5's soft bodies could be a rope (edge + LRA
+  constraints, vertex radius, the Cosserat rod sample), but their edge lengths are fixed when made and a grapple
+  reels every step -- so the rope you SEE is ours.
+- **engine/rope_line.h** `RopeLine`: 24 Verlet points, links that pull but never push, long-range limits from each
+  pinned end, near-taut points drawn onto the line (the passes alone left a 15 cm bow), every point swept against
+  the world (a ray from where it was) so a slack rope lies over a ledge. PlayerSystem steps it each fixed step
+  (from `publishPose`, which every move calls) and the pose carries the points; PlayerArmsSystem draws them as 23
+  links and a dark hook block, the hand end moved onto the drawn hand with the shift fading along the rope.
+  Tested: 12 m over a 10 m span sags 2.95 m, taut it is straight, slack over a roof edge 0 points through it.
+- **The hook flies** (`grappleHookSpeed` 140 m/s) and hooks when it gets there if the trigger is still held; at
+  nothing it flies to full range and comes back. Let go, and the rope pops out and whips back in at 35 m/s.
+  The right arm points along the rope while it is out.
+- **The rope gives**: past its length a damped spring (implicit step) stiff enough that hanging still stretches it
+  `grappleStretch` (2%), damping ratio `grappleBounce` (0.4), never past 4x that. Tested: 5 m of slack caught
+  with a bounce, never back up to where it fell from, settled at 10.20 m on a 10 m rope; swinging gains nothing.
+- **Sounds** (sfx_motion.cpp; the shared DSP pieces moved to sfx_dsp.h): wind by airspeed (every mode on foot),
+  the canopy's flutter and opening WHUMP, the wingsuit's buzz, the hook's shot (thunk + line zipping off the
+  spool), its bite (steel clank), the rope snapping taut, the winch reeling; a skateboard's roll, its trucks over
+  pavement joints every 1.6 m, the kick, the ollie's pop and the landing (the scooter pitched up). The pose
+  carries counters for the one-shots; MotionAudioSystem plays them. FootstepSystem is silent in those modes.
+- **Vehicles**: `pedals = true` (the bicycle) has no engine note -- a freewheel ticking while it coasts, 24 clicks a
+  wheel turn, and the tyres' hum. The player's ride squeals from 7° of slip angle (a drift) or 0.2 of wheel slip
+  along (a burnout, a lock-up). Loops are seamless by construction and tested so; RT_SFX_DUMP writes them.
+- `RT_AUDIO=null`: a probe viewer runs the mixer on the null device instead of the speakers.
+- Not yet: the rope wrapping round corners for the swing itself (item 4: the drawn rope already lies round an
+  edge while the physics goes straight through), a bicycle bell.
+- Follow-ups (Glenn, same day):
+  - **Hooked from the ground:** a hop, then a straight pull (gravity cancelled while it runs) reeling down to the
+    length whose swing clears the ground under the anchor (`yankTo_`), easing off over the last 6 m. Then the reel
+    takes in slack as the body flies in (`takeUp_`) until it swings outward, so the rope catches it into a swing.
+    Before this, the pull outran the rope and the body came down in an arc without swinging.
+  - **The rope's slam check** counts only speed lost along the way the body was going. A capsule pushed out
+    sideways read as a 14 m/s slam at 7 m/s.
+  - **A fallen bike is stood up as you get on**, and it can't count as "gone down" until it has been upright
+    since you mounted. It used to throw you off the moment you sat.
+  - **Treading water:** still, the body is upright, the hands scull flat at the surface, and the legs kick in turn,
+    with a stronger bob. Moving, it tips forward into the crawl (`PlayerPose::swimStroke`, eased).
+  - **Pad:** RB is the handbrake and LB recovers a flipped car, both in a vehicle (on foot they cycle tools).
+    Back toggles the view.
+  - **The jump** (Glenn: "hop if it's a short tap... running jump would give you the most... some control when
+    jumping in the air... if we land on a surface we could jump off of it"):
+    - Every jump leaves at full speed. Letting go while rising cuts the upward speed to `jumpCut` (0.4): a
+      one-frame tap rises 0.19 m, 0.12 s 0.45 m, 0.25 s 0.77 m, held 0.91 m. A cut, not a charge, so the take-off
+      never waits on the press.
+    - A running jump leaves `runJumpScale` (1.2) faster.
+    - `airAccel` went from 4 to 8.
+    - **Wall kick:** jump in the air with a wall within reach (looked for along the way you're moving, the way you
+      face, and either side) kicks off it: `wallJumpOut` away, `wallJumpUp` up, the speed along the wall kept.
+      Not the same wall twice before touching the ground, and no grabbing for 0.4 s after. It shares the button
+      with climbing by angle: pushing straight at a climbable wall (within ~53°) still grabs it in the air; a
+      glancing pass plus jump kicks off it.
+  - **Tyre squeal** starts at a 12° slide (was 7°) and plays at 0.45 volume (was 0.8).
+
+## ADR-0239 — Particles as data, asked for by name; sprites leave the glass path; grab sounds
+
+**Context.** Glenn: "We don't have a particle system, but I wonder if we could introduce a rudimentary one to have
+some dust kick up when you kick for the skateboard, drift around a corner, or bubbles underwater. Maybe some wind
+currents when you're floating down with the parachute ... where the hook hits it has a little spark. Also grinding a
+rail could give you a little spark." Then, midway: "Is it very pointed to these asks or is it more generalized?"
+The first cut was pointed: six kinds fixed in C++, and one system watching the player's pose and car to decide when.
+It was reshaped before it landed.
+
+**Decision.**
+- **Effects are data** (`engine/particles.h`, `assets/scripts/particles.lua`, `scripting/particles_lua.cpp`). A
+  named effect sets how its particles move (gravity, drag, wobble), how long they live, how they look (puff, ring or
+  glow sprite; colour; glow; size and fade over the life; a stretch along the speed) and its default burst. The C++
+  built-ins mirror the file, and a test keeps the two alike. An unknown field is an error, and an entry naming a
+  built-in edits only the fields it gives. Shipped: dust, smoke, bubble, breath, streak, spark, splash, steam.
+- **Anything sets them off by name.** `requestParticles(world, "spark", at, dir)` queues a burst. A
+  `ParticleEmitter` on any entity with a Transform flows at a `rate` its owner sets; it can start ahead of a moving
+  body and stretch against its velocity. A level's `"emitters"` list places them (the lab's steam vent).
+  `ParticleSystem` spends the queue, runs the emitters, steps and draws; it decides nothing about when.
+- **The triggers live where things happen.** PlayerSystem::effects:
+  - board kick, ollie and landing: dust;
+  - hook biting: sparks;
+  - into the water: a splash;
+  - under it: a bubble emitter at the mouth and a breath let out every 3–6 s;
+  - under a canopy or in a wingsuit: a streak emitter.
+
+  VehicleSystem: a smoke emitter on each rear wheel at 40 × `Vehicle::slide` a second. The slide is now measured
+  once (`measureSlide`) and shared with the squeal.
+- **Drawn** as camera-facing quads in InstanceGroups, the beacon sprites' way. A group has one opacity, so each
+  effect draws in 4 opacity steps, each particle in the nearest, back to front within a group.
+  - The sprite's normal leans to its own up. A card facing the camera is lit only when the camera faces the sun;
+    steam came out black looking the other way.
+- **Sprites skip the glass path in mesh.frag.** Since glass-as-a-filter (2026-10-16), every transparent material
+  output only a reflection plus a darkening. A FLAG_ALPHA_FROM_MAP material (particles, beacon glows) now blends its
+  own lit colour, premultiplied. The beacon sprites were on the glass path too.
+- **Grab sounds** (Glenn: "some sfx when grabbing to reinforce the idea of climbing"):
+  - `PlayerPose::grabs` counts the hands catching hold: a wall, a ledge, the bars, a ladder, the top of a lunge.
+  - MotionAudioSystem plays `handGrab` (two palms on rock, grit, cloth) or `metalGrab` (a damped tube) on a rung or
+    bar, and `handHold` for each hand set while climbing (each half climb cycle; a quieter `metalGrab` on a ladder).
+
+**Not yet.**
+- Collision (dust and sparks pass through what they would bounce off).
+- A Lua binding to request effects from scripts.
+- Grind sparks (`requestParticles(world, "spark", ...)` is ready for when grinds exist).
+- Per-particle alpha in one draw (the 4 steps are the workaround).
+- **The player is 1.8 m** (Glenn: "I look like a child next to the other agents"): the capsule is half-height 0.6 +
+  radius 0.3 in every level, in the loader's default, in CharacterController's and in the generators (movement_lab,
+  offroad_course). It was 1.4 m, the walkers 1.8 m; the posed body is scaled to the capsule, so third person showed
+  it. The eye stays 0.7 above the capsule centre: 1.6 m. Everything else reads the capsule (mantle, climb, ladder,
+  lift, seat, swim); the lift's fallback constant was the one hard-coded 0.7.
+- **Tyre squeal only on a drift or a hard stop** ("still kinda loud. We should use it when we brake hard or drift"):
+  `Vehicle::slide` is the drift's slip angle while the drift holds the car, or the brake/handbrake pressed past
+  half at speed (more as the wheels lock). Volume 0.3, down from 0.45. Wheelspin and brisk cornering are silent.
+  The tyre smoke follows the same measure.
+
+## ADR-0240 — Moving instances drawn between steps; riders follow the vehicle as drawn
+
+**Context.** Glenn: "buses and cars sometimes shake. Their position is not stable. Trains actually appear very
+stable in contrast", then "I'm still shaking around on the bus". Measured on river_town at 75 fps with
+`set jitter.request "<agent|-1> <frames>"` / `get jitter.result` (a new diagnostic in CityRenderSystem): every car's
+drawn position froze on 60 of 300 frames. The city bakes its instance groups in the fixed step (60 Hz). An instance
+group had no interpolation, so a frame that ran no step drew last frame's poses: 1 − 60/75 = 20 %. Trains are placed
+per frame with the frame's alpha, which is why they glided. A rider was worse: the ride's `pin()` overwrote
+PrevTransform every step, and the camera reads the player's raw step position.
+
+**Decision.**
+- **`InstanceGroup` can name its instances** (`ids`). `beginStep()` keeps the last bake (`prevTransforms`,
+  `prevIds`) beside this one, and `push(m, id)` adds one. RenderSystem draws a named instance between its last pose
+  and this one by `ctx.interpolation`, the alpha entities use. Matching is by index when the order holds, else by
+  id. A jump over 5 m, a new instance, or a size mismatch draws as baked. `RT_NO_INSTANCE_LERP=1` is the A/B.
+- **The city names its moving instances:** a car body is keyed `uid << 8`. Its glass, cabin, driver, riders (16 +
+  seat), lamps (64 + marker) and bus sign take the body's id plus a part number. Walkers are keyed too. Parked cars
+  are keyed on the vehicle.
+- **The bake runs on the last two fixed steps of a frame** (it ran on the last only), so "last bake" is always one
+  step back. That is one more bake on catch-up frames only.
+- **Riders follow the vehicle as drawn.** CityRenderSystem keeps the ridden vehicle's last two bakes
+  (`rideFrameDrawn`). In its update the transit system moves the rider's drawn Transform and the camera onto the seat
+  or aisle spot in that blended pose: the eye exactly in first person, a rigid shift of the shoulder rig in third.
+  The physics still pins at the step's pose.
+
+**Measured** (bus 41, 600 frames, camera jerk in the bus's own frame; "before" is the A/B switch):
+
+| | before | after |
+|---|---|---|
+| third person | 65.1 mm | 1.5 mm |
+| first person | 128.3 mm | 14.8 mm |
+
+Frozen frames for vehicles and the camera: 60 → 0. Frame-to-frame speed cv: 0.65 → 0.37 (the rest is the
+vehicles' own speed changes).
+
+**Open.**
+- First person keeps 15 mm with the eye exactly on the drawn seat (checked to 0.05 mm against the transit
+  system's eye). Adding the eye height in the bus's frame made it worse: its matrix is not a pure rotation. The
+  likely cause is a difference between `rideFrameDrawn`'s blend and the group's, or the smoothed tilt. Not yet
+  chased.
+- Trains already place per frame; the shared riding component (planned) should take this rider logic over for
+  every carrier.
+- `audio?` (socket) reports the mixer's state and voice count. river_town plays 8 voices standing at the spawn.
+
+## ADR-0241 — An indoor cache keyed by what it describes (#114)
+
+**Context.** Swinging on the grapple among the island's towers crashed the viewer twice with `free(): invalid next
+size`, both times freeing `CitySim::computeGaps`'s per-lane map. An AddressSanitizer build (`build-asan/`, a probe
+swinging round downtown) named the real write: `CityRenderSystem::stepIndoors`, `whole.units[u + 1] = 1`, one byte
+past a 1-byte table. `buildingPlace_` cached each building's shop-unit-to-place list by building id, the first
+time its interior was seen. A tower streams its interior in storey windows. The street window has shop units, a
+window at storeys 32–37 has none. Seen low then rebuilt high, the cached list had N units and the table had room
+for 1. The grapple made it reachable: street level to the 40th storey of one tower in seconds.
+
+**Decision.**
+- `BuildingPeople` records which interior it describes: its shop units' floor heights (`units`). When a different
+  window streams in, the entry is matched afresh, and the log says so (`[indoors] building N: another interior
+  window (a -> b shop units), matched afresh`).
+- `towers? <x> <z> [radius] [min height]` (socket): the tall buildings round a point, tallest first, each
+  "cx cz groundY height", for probes to aim at.
+
+**Checked.** The same island under ASan, going inside the 12 tallest downtown towers at 2, 50, 90, 2 and 70 % of
+their height in turn: 320 visits, 340 interior windows built, 225 window changes rematched, no report. Before the
+fix, the first such change wrote out of bounds.
+
+**Note.** In the cores, gdb showed the freed pointer as the process ID both times. That was the thread ID left in
+a register by the abort path's `pthread_kill`, not the pointer: freeing an address that small would have
+segfaulted. No test drives `stepIndoors` (it needs a built city with streamed interiors), so the probe is the
+regression check: `tools/asan_storey_probe.py` against `build-asan/viewer` (how to build it is in the script).
+
+## ADR-0242 — A car's model is its draw slot, not its vehicle index (#115); a cab passenger sits
+
+**Context.** Glenn: "when I take a car, why does the car change?" and "when I sit in a car next to a driver I'm not
+in a seat". When the sim makes a car it takes its body from `fleetBody(ambientSlotFor(index))`.
+`ambientSlotFor` deals ordinary cars past the fleet's service slots (the bus, the fire engine), so a car's model
+slot is not its vehicle index whenever a fleet has service vehicles, which every city fleet does. The renderer
+draws by that slot (`drawSlotFor`), but several places read `a.vehicle` as if it were one:
+- commandeering a car took the chassis, glass, cabin, lamps, wheels, driver seat and physics body of another model;
+- the driver's-seat prompt and a passenger's seats (`carSeatsOf`) came off another model's layout, so the prompt
+  sat where you weren't looking;
+- `CitySim`'s look-ahead used another model's length for a car's own.
+
+A cab boarded with E took a separate path: pinned over the cab's middle 1.1 m up, with no seat, so the standing
+body put its head through the roof.
+
+**Decision.**
+- `CityRenderSystem::carSlotOf(agent)` (public; `drawSlotFor`) is the one way to name an agent's model. The
+  commandeer, `carSeatsOf` and the driver's-seat offer use it. The sim uses the vehicle's own stored length.
+- A cab seats you in its rear kerb-side seat (`+X`, the driver's left: the world drives on the left), or a
+  two-seater's passenger seat. It rides through the same path as any car's passenger: seated, drawn sitting,
+  following the drawn car, with no drawn rider in your seat (`setPlayerSeat`, now set for car seats too).
+- `[cityveh] took agent N's car: vehicle V, model slot S` is logged on a commandeer.
+
+**Checked** on river_town with before and after shots:
+- taking a stopped car keeps the same teal hatchback, with the player in the right-hand driver's seat;
+- a cab ride puts the player in the back seat, inside the body;
+- with the old code, the same spot offered "get in the cab" instead of the driver's seat, because the prompt sat
+  where another model's driver's seat would be.
+
+## ADR-0243 — One way of riding: the rider in the carrier's frame, placed after the steps
+
+**Context.** Glenn: "How general of a thing should this component be made where we are going from one relative
+space to worldspace and back again? I suppose cars, trains, buses would use this. I was also thinking eventually
+ships and dare I say it some kind of spaceship." He approved level A (kinematic riding with a shared interface).
+The bus, the car seat, the cab and the train each had their own copy of: pin the capsule from the carrier's matrix,
+fill in Passenger, turn the view with the carrier, fix up the drawn eye. Their bugs differed: the train's
+third-person body stepped at 60 Hz while the train glided, and first person on a bus kept ~15 mm of shake.
+
+**The finding** that set the design: the engine runs each frame as **update, then the fixed steps, then render**.
+A camera framed in the update is framed from the last frame's step and the last frame's interpolation. Walking
+hides it. On a moving carrier it is a frame of travel. Placing the rider in the update (tried) used a stale
+fraction against fresh poses, and the first-person view jumped.
+
+**Decision** (`engine/riding.h`):
+- `Passenger` carries the carrier: `carrier` (its frame this step), `carrierPrev`, `local` (feet or hip in that
+  frame), `sitting`, `eyeAbove`.
+- **`rideStep()`**, called by the owner each fixed step after setting those:
+  - pins the capsule (keeping the previous pose for the blend; a jump over 5 m starts fresh);
+  - sets `onFoot` and `facing`;
+  - turns the view by the carrier's heading change.
+
+  It stays a function rather than a system so the transit system's testable `step()` still pins
+  (`test_city_ride`).
+- **`RidingSystem`:**
+  - **Update:** notes where the camera is framed from.
+  - **Render (after the steps):** puts the body on the carrier between its last two steps by this frame's
+    interpolation, the renderer's own blend of the vehicle. It turns the view the rest of the way with the drawn
+    carrier and carries the **first-person eye** rigidly with the body and the turn. The third-person rig is left
+    as framed: its spring leads by a frame already, and carrying it too overshot (71 mm).
+- The eye height is along the carrier's normalised up.
+- **The owners keep only their own rules.** The transit system (bus, car seat, cab) and TrainSystem handle
+  boarding, aisles, gangways, seats and doors. Their pins, yaw tracking and drawn-eye code are gone, and so is
+  `CityRenderSystem::rideFrameDrawn`.
+
+**Measured** (river_town, bus 41, 300 frames at 122 fps unthrottled; camera jerk in the bus's own frame):
+
+| | before (`dcf1bda4`) | after |
+|---|---|---|
+| third person | 2.10 mm | 2.12 mm |
+| first person | ~15 mm | 0.00 mm |
+
+The train (rail_lab, `train_board 0 2`) rides at the train's speed, the aisle walk works, and the first-person
+view inside the carriage is right.
+
+**Level B, when there's a ship:** the carrier publishes interior collision in its own frame and the rider collides
+in local space. Nothing here assumes the carrier's up is the world's.
+
+**Probe notes.** With the screen locked the desktop throttled the viewer to 20 fps; `RT_VSYNC=0` restores full rate
+for measurements. The jitter sampler (`set jitter.request`) reads the camera in CityRenderSystem's render, after
+RidingSystem's.
+
+## ADR-0244 — Particles tuned from in-game shots; out of the water when lifted clear
+
+**Context.** ADR-0239's effects were tuned by eye from the lab, without real screenshots of most of them. Shot in
+play (movement_lab at noon with `daynight 12` + `daynight hold`, and a car taken in river_town):
+- the splash drops drew as five-lobed pinwheels: the puff sprite's lump ran through its middle;
+- the air streaks under a canopy barely showed against the sky;
+- the brake and drift smoke (already lighter, ADR-0241) read well and needed nothing more.
+
+Shooting them also found a bug. A swimmer teleported up out of a pool stayed swimming, so Space rose instead of
+opening the chute.
+
+**Decision.**
+- **Puff sprite:** the lump is now `1 - 0.18 r² (0.5 + 0.5 sin 5θ)`. Only the edge wobbles, and the middle stays
+  round.
+- **Splash:** uses the glow shape, glow 0.35. The drops read as soft white glints.
+- **Streak:** glow 0.45, size 0.05, alpha 0.38, stretch 0.16. The canopy emitter's rate goes from 14 to 24 a
+  second.
+  - Changed in both `particles.lua` and the built-ins, and the alike-test holds.
+- **SwimState** leaves the swim when the water is a metre or more below (`depth <= -1`). That includes "no water
+  under" (depth −1). Test: `a_swimmer_lifted_clear_of_the_water_is_out_of_it`.
+
+**Not shot:** bubbles. The water's surface is opaque from above, so the third-person rig never sees them.
+
+## ADR-0245 — Knees and elbows: a ten-part body, two-bone limbs, hinged ragdolls, skinned limbs
+
+**Context.** Glenn: "should we have elbow and knee joints in the player and agent model so there's some knee bend
+and slightly more detailed ragdolling?", then "Can you skin the arms and legs though -- as a challenge!" The body
+was six blocks. A pose gave each limb one direction, so a sitting, kicking or climbing limb stayed a stiff plank,
+and a ragdoll's legs swung from the hip like table legs. This is step 1 of the player plan (the jointed body comes
+before the mode refactor, so the new modes and the skate stance are built on it).
+
+**Decision.**
+- **Ten parts** (`engine/block_body.h`). Each limb is its old block cut at the elbow (0.31 + 0.31 m) or knee
+  (0.43 + 0.42 m). The old part numbers are kept (ArmL..LegR are now the upper halves); lower halves are +4.
+  Straight, the two halves are exactly the old block (tested).
+- **A pose is a direction plus a fold.** `BodyPose` keeps each limb's direction, now meaning root to hand or foot,
+  and adds `elbowL/R`, `kneeL/R` (radians, 0 straight). Every existing pose is still valid and simply straight.
+  - `solveLimb` is the two-bone solve. The joint points toward a pole: kneecaps forward, the point of the elbow
+    back. A share of a second direction keeps a limb pointing along the first from having no bend plane: a thigh
+    out in front bends its knee up.
+  - `reachTo` is two-bone IK: the hand lands on the hold and the elbow bends to make the distance. Climb, bars,
+    swing, scooter and grapple use it.
+- **Limb frames are hinge frames.** An upper half's x is its hinge axis; the lower half is that frame turned about
+  x by the fold. A ragdoll's fold therefore reads straight back from physics (`foldOf`).
+- **Ragdoll hinges.** Elbows and knees are Jolt hinge constraints, from straight (−2°) to `kElbowMax` 143° /
+  `kKneeMax` 149°.
+  - Hinge friction (elbow 1.5, knee 5 N m, × scale) is required. Without it, every joint of a thrown body folded
+    fully shut, measured.
+  - Masses: upper arm 2.2, forearm 1.8, thigh 7.5, shin 4.5 kg (67 kg in all, as before).
+  - Test: thrown, the body stays joined and every fold is within its limits, folded only its own way.
+- **Skinned limbs** (`skinnedLimb`). Each limb is drawn as one continuous tube: the blocks' cross-section, eased
+  from the upper's to the lower's across the joint, with nine rings around the joint.
+  - Bent, each ring turns about the hinge by its smoothstepped share of the fold, over ±0.75 × the half width.
+  - For a one-axis joint this is dual-quaternion skinning. The rings rotate rather than blending their corners
+    (linear blending pinches a bent joint, the "candy wrapper"), so the joint keeps its thickness. Tested: the
+    outside of a 100° bend reaches the full half depth along the bisector.
+  - Topology is fixed for every fold, so walk poses still share a layout.
+- **Drawn** (`engine/body_draw.h`, `BodyMeshes`):
+  - The player in third person and walker ragdolls pose every step. Each limb picks a skinned tube made once per
+    2.5° of fold: up to 60 per arm or leg, made when first used. The torso and head stay blocks, and the forearm
+    and shin entities are hidden.
+  - Baked bodies weld their tubes at their exact folds: `procgen/person.h buildPosedPerson` and `walkBodyPose`.
+  - `buildPersonMesh` (near walkers and the player's walk cycle) now strides with knees and elbows: the trailing
+    knee folds up to 38°, the elbows soften as the arm comes forward.
+  - The far crowd and ambient people keep `buildStandingPerson`'s six blocks. That's 144 vertices, against the
+    jointed mesh's 48 + 4 × 168, so the 515k-agent crowd costs the same as before.
+- `block_body.cpp` moved into engine_core (the mesh builders need it; it uses only the physics header's types).
+
+**Measured / seen** (movement_lab, river_town at noon): bent knees in the air, on the swing seat, under the canopy
+and on the board; hands on the holds by IK; ragdolls landing with partial, varied folds; near walkers' trailing
+knees folding.
+
+**Later.** GPU skinning (bone matrices in mesh.vert, a weights stream) belongs with animation clips (plan step 6),
+where shoulders, hips and the spine twist in three axes and a per-fold mesh no longer covers it. The seated
+occupant (`procgen/vehicle/occupant`) is still its own manikin with its own knees; it should move onto this body.
+
+## ADR-0246 — The player's body as a state machine of modes, driven by an intent
+
+**Context.** Step 2 of the player plan. `PlayerSystem` had grown to 1906 lines: one `fixedUpdate` of ~470 lines
+running ten modes (a `Move` enum plus a swimming flag and the ladder component) in a fixed order, with ~100 members
+shared by all of them, and every mode reading the keys itself. Glenn's asks (the gun and the light together,
+shooting while hanging, skate tricks, a map that takes the controls) all need the modes apart, the hands apart
+from the body, and the keys apart from both.
+
+**Decision.**
+- **`PlayerIntent`** (`engine/player/player_intent.h`): the stick, the buttons held, the one-shots the frame staged
+  (jump, limp, the trigger, E on the playground) and the view. `PlayerSystem::intent` fills it from the input map
+  each fixed step. The modes never read keys. A one-shot a step does not spend waits for the next, as before.
+- **`PlayerBody`** (`engine/player/player_body.h`) runs the modes. Each is a `BodyMode` with its own state:
+  on foot, swim, ladder, mantle, climb, parachute and wingsuit (one `GlideMode`, sharing a `GlideFlight`), grapple,
+  board, swing, bars, ragdoll. A step is:
+  1. the interrupts, over every mode: a ladder taken, the water, a teleport, the ragdoll (nothing else applies),
+     going limp;
+  2. the hands: the grapple's aim and a shot, unless the mode says no (`canAim`: not mantling, not limp);
+  3. the mode's `leave()`, the ways out checked before it steps (on foot: into the water, onto the swing or bars,
+     onto a board; a board: off when the hand changes). The mode it leads to steps this same step;
+  4. the mode's `step()`, which may `enter()` another (let go, pull up, go limp);
+  5. the pose: shared fields, then the mode's `pose()`.
+- **Groups** (`BodyGroup`: ground, water, wall, air, riding, play, limp) are each mode's parent, for rules over a
+  family. None is used yet; the next change (one impact rule) is the first.
+- **`PlayerHands`** (`engine/player/player_hands.h`): the slot in hand and the grapple's hook and rope, which fly,
+  hold and come back whatever the body does. The pose now says `handsFree` (from the mode), and the gun script's
+  `camera.hands_free()` reads it instead of listing pose modes.
+- The small pure rules (the fall net, air momentum, `SwimState`, the ladder's pace) moved to
+  `engine/player/body_rules.h`. `PlayerSystem` keeps the keys, the camera, fast travel, the HUD and `move?`: 626 lines.
+
+**Checked by trace** (`tests/test_player_trace.cpp`, physics_tests). Sixteen scripted scenarios run the real
+`PlayerSystem` on movement_lab, headless: the NullRenderer, Jolt single-threaded, a scripted pad. Every fixed step
+is written down (position, the pose's numbers, mode, ground, hook, last event):
+- walk/run/hop/crouch, two pull-ups, a climb (grab, lunge, over the top, kick off), a wall jump, a swim (crawl,
+  dive, rise), a plunge, the parachute, the wingsuit and its chute, a hard fall, the grapple (two hooks), the
+  skateboard, a scooter crash, the swing, the bars, limp and up.
+- Recorded before the change (`RT_PLAYER_TRACE_OUT`), the refactor reproduces all 16 traces exactly
+  (`RT_PLAYER_TRACE_BASE`, 1e-6 relative). Runs are bit-identical run to run. Without either variable, each scenario
+  checks that its moves happened.
+- The ladder is not covered (movement_lab has none); its code moved line for line.
+
+**Changed on purpose** (both untraced edges):
+- swimming is its own mode, so the swing and bars can no longer be taken from the water;
+- a teleport ends every mode but on foot and swimming (it used to spare "on foot", which included swimming).
+
+**Found, left as they were** so the trace held, then fixed in the commit after ADR-0247:
+- the monkey bars' "off the end" never fired: the position is clamped every step, so it couldn't pass the end by
+  more than 5 cm. Now: at the last rung and still reaching on. The bars scenario goes off the end.
+- a limp request made while limp waited, and dropped the body again as soon as it got up. Now a press while limp
+  does nothing. The limp scenario presses G again while limp.
+
+## ADR-0247 — One impact rule: speed lost along the way the body meant to go
+
+**Context.** Four modes each had their own way of deciding a crash, with four numbers:
+- a landing: over 15 m/s down;
+- the grapple: over 14 m/s lost along the swing in a step;
+- a board: over 6.5 m/s when something stopped 60% of it;
+- the wingsuit: over 20 m/s at touchdown (a canopy never crashed).
+
+Glenn wants ragdolls from crashes everywhere (a scooter into a wall, a wingsuit into a tree), so this is one rule
+that every mode reports into.
+
+**Decision.**
+- **`speedLost(meant, got)`** (`player/body_rules.h`): the speed the body meant to have, minus what the world let it
+  keep along that same way. Speed turned aside (a skid, a shove off a corner) isn't lost.
+- **`PlayerBody::impact(s, meant, got, what)`.** A mode reports what it meant and what it got. Past the mode's
+  `impactTolerance(dir)`, the body goes limp, thrown by the mode's `thrown()`. By default:
+  - tolerance is `limpImpact` (14 m/s, about a 10 m fall);
+  - thrown is what was kept plus 0.3 of what was lost.
+- **One contact, not one step.** A body that meets a wall part way through a step loses only that part, and the
+  rest in the next step: the scooter at 7 m/s lost 4.6, then 2.3, so neither step alone passed 6.5. Losses in
+  consecutive steps (each over 0.5 m/s) add up.
+- **Reporters:**
+  - **On foot, landing:** the fall plus the run, against the run kept.
+  - **Grapple:** the swing meant, against what the walls let it do (the same as before).
+  - **Board, going along:** heading × speed, against what it got. Tolerance `boardCrash`: stood on wheels, the feet
+    stop and the body goes over the front (thrown 0.7 × meant, plus 2.5 m/s up).
+  - **Board, landing:** the legs take it like anyone's: `limpImpact`.
+  - **Glide touchdown, or into something:** the flight, against what the touchdown leaves the body with, which is
+    running on at 0.4 of the horizontal. It isn't the step's own motion, because the ground is met part way through
+    that step and the glide ends there. A canopy can now crash too.
+- `movement.limpFallSpeed` is gone (the landing is on the rule).
+
+**Traces against ADR-0246's recording** (17 scenarios now, `wingsuit_crash` added):
+- **Unchanged:** 14 scenarios, all identical.
+- **hard_fall:** the same numbers; the message is now "landed hard at 38" (the fall with the run), was 37 (the fall).
+- **scooter_crash:** still bails at 7 m/s, one step later (the second step of the contact).
+- **wingsuit:** its chute, opened a second before the ground, touched down at 26 m/s. That was "landed the chute"
+  and is now "crashed the chute".
+- **wingsuit_crash (new):** a 60° dive into the ground at 35 m/s crashes. Measured on the step's own motion it
+  read as a 35 m/s landing, which is what led to the touchdown rule above.
+- **Kept:** a flared chute landing at 9 m/s still lands.
+- Test: `an_impact_is_the_speed_lost_along_the_way_meant`.
+
+**Not yet.** Being hit (a car into the player on foot, on a board, under a canopy) isn't the body's own loss: it
+needs the hit's impulse from physics, which comes with plan step 4 (in-car hits, ejection from open vehicles).
+
+## ADR-0248 — Input layers; the map takes the controls and marks a waypoint
+
+**Context.** Glenn: "If you bring the map up, we should do something like push a new input frame of reference over
+top of the stack and have the gamepad and mouse controls only control the map so we can pan around, zoom in and
+out ... set a waypoint". The map suspended mouse look only, so the stick still walked the player under it, and the
+pad couldn't pan, zoom or mark anything.
+
+**Decision.**
+- **Input layers** (`InputMap::pushLayer` / `popLayer` / `setActionLayer`). An action tagged with a layer answers
+  only while that layer is the top one. While any layer is up, the body's actions (`OnFoot`, `InVehicle`) and the
+  view's go dead. `Always` actions still answer whatever is up: the tool slots, quit, pause, the overlay.
+- **A new context, `Camera`,** for the fly camera's movement and look axes (`cam_forward`, `cam_right`, `cam_up`,
+  `cam_look_x/y`), which also walk the player: live like `Always`, except under a layer.
+  - `axis()` now answers only for live axes. Before, it answered whatever the context.
+- The collision report knows layers. A layer's keys clash only with `Always` actions or with the same layer's.
+- **The map** (`city_map_tool`) pushes the `map` layer while it is up:
+  - pan with the left stick or WASD (half the panel a second at full tilt);
+  - zoom with the right stick, E/Q or the wheel;
+  - **mark** at the crosshair with A, Space or a right click, which sets the waypoint, or clears it when it's
+    already under the crosshair;
+  - Y or C goes back to you; B puts the map away (as does any slot key).
+- **`engine::Waypoint`** (`engine/waypoint.h`) on the player entity: absent means none. The map draws it, pinned to
+  the edge when off the panel, in the colour the watch will use.
+
+**Measured** (river_town, a probe): W held for 1 s walked 5.9 m with the map down, 0.0 m with it up, and 6.0 m
+again once it was put away.
+- The first key choices clashed with existing `Always` keys. `+`/`-` change the sim speed, and the probe found
+  that out by pausing the game. `Enter` is pause, and the startup clash report said so. Hence E/Q and Space, which
+  are the body's keys and dead under the map.
+
+Test: `input_a_layer_takes_the_controls_from_the_body_and_the_view`.
+
+## ADR-0249 — The light is a switch, not a tool; the tools on one list
+
+**Context.** Glenn: "fix the flashlight option to allow it to turn on and off. Right now when I LB over to it it
+turns on and I'd have to LB back to it to turn it off". The light was tool slot 4, toggled by its own slot press,
+and LB/RB cycle the tools by pressing the next slot. So stepping past it switched it on, and stepping back past it
+switched it off. It also couldn't be on with the gun out, which was one of Glenn's combinations.
+
+**Decision.**
+- **`light` is an action of its own:** L on foot (in a car L is the headlights, `vehicle_lights`, so the key means
+  "lights" either way) and D-pad up on the pad (Glenn's choice).
+  - It works whatever is in hand: held in the right hand with nothing else in it, under the barrel with the gun
+    out, a headlamp with anything else (the map, a chute, the grapple, a board).
+  - In third person it rides the body (the camera is behind it), aimed where the view looks.
+  - `PlayerPose::tool` says what is in hand.
+- **The tools are one enum** (`engine/player/tools.h`): 1 hands, 2 gun, 3 map, 4 parachute, 5 wingsuit, 6 grapple,
+  7 skateboard, 8 scooter. Every reader goes through it, where before each held its own numbers:
+  - PlayerHands, the tool row (`toolName`), ToolCycleSystem (8 slots), the map (put away by any other slot);
+  - the gun script, which stows on 4–8.
+- **The slots past the map moved down one.** Keyboard keys 5–9 are now 4–8.
+
+**Trace.** The scenarios' slot presses were renumbered; every trace is unchanged.
+
+## ADR-0250 — The game UI's words: glyph atlases over the UI layer; prompts off ImGui
+
+**Context.** The game UI layer (`Renderer::submitUi`, ADR-0088) drew textured quads but had no text. So the tool
+row, the chute prompts and the interaction prompt were drawn on ImGui's foreground list: the developer overlay,
+standing in for a game HUD. The watch needs words and numbers on its face, mapped onto a wrist in 3D, which ImGui
+can't do.
+
+**Decision.**
+- **`GlyphAtlas`** (`text/font.h`, `Font::bakeAtlas`): printable ASCII and the degree sign baked at one pixel
+  height. Coverage goes in a white image's alpha, packed on shelves with 2 px gutters, with each glyph's box from
+  the pen and the kerning table. Its `measure` matches `Font::measure` exactly (tested).
+- **`UiText`** (`engine/ui/ui_text.h`):
+  - the sign face (Overpass Bold, already credited), one atlas per pixel height, baked and uploaded on first use;
+  - `text` (one quad per glyph, pen on whole pixels so the glyphs stay crisp), `measure`, `label` (words on a
+    backing box), `rect`, and antialiased `disc` and `ring` sprites.
+- **The UI layer** (Vulkan):
+  - `submitUi` now ADDS to the frame's list (cleared at `beginFrame`), so the map, the HUD and the watch each submit
+    theirs;
+  - one descriptor per texture a frame, not per quad, so a line of text is one set;
+  - the cap went from 256 quads to 16384.
+- **Moved off ImGui:** the gear HUD (tool row, swing/bars/grapple/board/chute prompts, the grapple's aim ring) and
+  the interaction marker and prompt. Sizes are in window points times the display's scale. Both stand down while a
+  layer has the controls (the map).
+
+**Not yet:** the transit panel ("BUS STOP ... next bus") is still an ImGui window, owed.
+
+## ADR-0251 — The watch on the wrist: compass, waypoint, time
+
+**Context.** Glenn: "set a waypoint and then show an arrow in the hud that points you towards the way point. Not a
+minimap", then "Maybe it could be like a diegetic piece of UI ... you have a smart watch ... push a button to
+bring your arm closer up to your face". He chose hold Q or D-pad down, and the dial in both views.
+
+**Decision.**
+- **`WristWatch`** (on the player) and **`WatchSystem`**:
+  - hold `watch` (Q, D-pad down; on foot) and the wrist comes up, eased;
+  - only with a hand free, as the body's mode says. `handsFree` now differs by mode: 2 on foot and on the
+    skateboard; 1 under a canopy (a hand off a toggle), on the rope, on the scooter; 0 climbing, on a ladder, on the
+    bars or swing, swimming, in a wingsuit, limp.
+- **First person:** `PlayerArmsSystem` brings the left hand up in front of the face. A case and a strap sit on the
+  bare wrist between the cuff and the hand, and it records where the face is.
+  - The dial is drawn on the UI layer and mapped corner by corner through the camera onto that face. A smartwatch's
+    face is a lit screen, so unlit and after the tonemap is right, and it moves with the wrist.
+- **Third person:** the same dial as a panel by the character, kept on the screen.
+- **The dial:**
+  - the compass turns with the heading (ahead is up), with ticks every 30° and N (red) E S W;
+  - the waypoint (`engine::Waypoint`, set on the map) is a gold dot on the edge at its bearing, with the distance in
+    the middle ("340 m", "1.2 km", "here" within 12 m) and the time under it;
+  - with no waypoint, the time (the sky's clock, `lighting.clockHours`).
+
+Tests: `the_watch_reads_distance_and_time_as_a_person_would`,
+`the_watch_dial_turns_with_the_heading_and_puts_the_waypoint_on_its_edge`.
+
+## ADR-0252 — In the driver's seat: thrown from open seats, a lurch in closed ones
+
+**Context.** Step 4 of the player plan (Glenn agreed it 2026-10-25): "Convertible, open vehicles: yes, eject"; a
+closed car should not ragdoll inside its cabin (a ragdoll among the seats jitters and clips) but take a hit reaction
+in the seat. Until now only bikes threw their rider (ADR-0235), on a speed-only rule: a side hit or being struck
+while stopped lost no "speed" and so did nothing. The player at the wheel was a rigid seated mesh.
+
+**Decision.**
+- **One crash measure for any vehicle, the seat's JOLT** (`engine/player/driver_seat.h` `RideJolt`): the most its
+  velocity *vector* changed over the last 0.3 s, with the vertical counted at half (the springs take a landing; a 2 m
+  drop on a bike is a ride, not a crash). This is the impact rule's speed lost (ADR-0247) for a body strapped to a
+  vehicle.
+- **Who it throws** (`ejectTolerance`):
+  - a two-wheeler past 7 m/s (the old bike rule's 25 km/h gone in a moment);
+  - an open seat past 11 m/s: `Vehicle::openSeat`, from the recipe's `open_seat` (the convertible, in the fleet and
+    the drivable kit) and every two-wheeler;
+  - a closed car through the windscreen past 22 m/s (about 90 km/h stopped dead); on by default (Glenn: "I'd keep
+    that turned on for now"), `set vehicle.windscreen false` turns it off.
+  - Thrown at 0.8 of the velocity it had before the hit plus 3 m/s up, from just over the body. A bike rolled past
+    its lean still puts you off as before.
+- **What stays in the seat sways in it** (`SeatSway`): the shoulders and the head on two damped springs, thrown
+  against the vehicle's change of velocity in its own frame and pulled back:
+  - the torso ~0.8 s, stopped by the belt at 0.32 m;
+  - the head quicker, so it snaps and comes back past.
+  - The same springs lean you into hard braking (8 cm at 1 g).
+- **The player at the wheel is the jointed body** (PlayerPose `Mode::Drive`, written by VehicleSystem each step):
+  - `seatedPose`: the pelvis on the hip point, the hands on the wheel (turned round it with the steering) or the
+    bars, the feet on the pedals or the pegs;
+  - a bicycle's feet go round the cranks while it is pedalled;
+  - `BodyPose::neck` turns the head;
+  - where the hands and feet go is the recipe's `seat` table (`SeatGeometry`), and a car's default is a wheel in reach.
+  - It is drawn in `PlayerBodySystem::render` from the vehicle *as drawn* that frame, because VehicleSystem moves
+    the car after the body system's fixed step. AI drivers keep the rigid seated mesh.
+- **The `camera` socket command now drops the chase rig**, so a probe can watch a car from the side; it already
+  promised that the pose wins in play mode.
+
+Measured in movement_lab, against the jump tower:
+- the convertible threw its driver at 48 km/h (jolt 13.3 m/s);
+- the motorcycle threw its rider at 29 km/h (8.1 m/s);
+- the sedan kept its driver at the wall;
+- the convertible coasting in under the limit kept its driver, who lurched to the belt and settled.
+
+Tests (`tests/test_driver_seat.cpp`, physics_tests):
+- `hard_braking_leans_you_forward_and_throws_nobody`;
+- `a_wall_at_fifty_throws_the_open_seats_and_keeps_the_closed_car`;
+- `a_slow_bump_throws_nobody`;
+- `a_landing_is_not_a_crash`;
+- `the_body_comes_back_upright_after_a_crash`;
+- `struck_from_the_left_the_body_goes_left`;
+- `thrown_off_at_most_of_the_speed_it_had`;
+- `the_seated_body_holds_the_wheel_and_the_bars_and_reaches_the_pedals`;
+- `a_lurch_tips_the_torso_and_the_head_goes_further`.
+
+**Not yet:**
+- **No camera kick.** The chase camera's own spring is the only jolt the camera shows.
+- **Passengers are not covered.** A bus or car passenger (ADR-0243) neither sways nor gets thrown.
+- **Unchecked against real interiors:** the wheel position is the default and has not been measured against each
+  kit cabin.
+- **Two things I did not check:**
+  - whether the hands turn the right way round the wheel for left versus right steering;
+  - whether the sedan was at full speed when it reached the wall.
+
+**Since (same day):**
+- **Through the windscreen is on by default.** Glenn: "I'd keep that turned on for now".
+- **The hands go round the wheel the right way.** Steering right lifts the left hand; Glenn saw them go backwards.
+- **The grapple's rope runs from the right hand** (`PlayerHands::ropeHand`): the drawn body faces what it hangs from,
+  and its right arm reaches up the rope to it.
+  - The swing still hangs from the body's centre line. The capsule never turns, so where the rope is tied cannot tip
+    it.
+  - The drawn rope's length is the swing's less the arm's reach, so it stays taut where the swing is.

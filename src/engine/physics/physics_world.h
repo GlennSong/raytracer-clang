@@ -134,6 +134,15 @@ public:
     // Refused (returns false) unless the character is on the ground: no
     // mid-air jumps, no double jumps, without the caller tracking state.
     bool jumpCharacter(CharacterId id, Real speed);
+    // The UNGATED half of a jump: stage `upSpeed` for the next moveCharacter whatever the ground state. The
+    // player's JumpGate (engine/locomotion.h) decides when it may -- a moment after running off an edge, off
+    // steep ground, out of a wedge -- so those rules are tunable and tested there, not buried here.
+    void launchCharacter(CharacterId id, Real upSpeed);
+    // The ground contact's normal (unit, world); straight up when nothing is under the character.
+    Vec3 characterGroundNormal(CharacterId id) const;
+    // Would this character's capsule fit with its centre at `centre`? A ledge you can't stand on, a gap
+    // you can't rise through, is refused before the move is started (engine/locomotion.h).
+    bool characterFitsAt(CharacterId id, const Vec3& centre) const;
     // Resize the capsule (crouch / stand), keeping the FEET planted rather
     // than the centre — a crouch settles down, it doesn't sink into the floor.
     // Returns false when the new capsule would not fit where the character is
@@ -146,6 +155,15 @@ public:
     // and immediately jump there") and any future picking.
     bool castRay(const Vec3& origin, const Vec3& dirAndLength,
                  Vec3& hitPoint) const;
+    // ...and what it hit: the surface normal there (unit, facing the ray), the body, and whether that body
+    // is a simulated one (a crate, a car) -- what a climber can't hold on to.
+    struct RayHit {
+        Vec3 point;
+        Vec3 normal{0, 1, 0};
+        PhysicsBodyId body = INVALID_PHYSICS_BODY;
+        bool dynamic = false;
+    };
+    bool castRayHit(const Vec3& origin, const Vec3& dirAndLength, RayHit& hit) const;
     Vec3 characterVelocity(CharacterId id) const;
     GroundState characterGroundState(CharacterId id) const;
     // The body the character stands on (INVALID_PHYSICS_BODY in the air): what a footstep lands on.
@@ -156,6 +174,36 @@ public:
     void setBodySurface(PhysicsBodyId id, uint8_t surface);
     uint8_t bodySurface(PhysicsBodyId id) const;
     void setCharacterPosition(CharacterId id, const Vec3& position);
+
+    // --- Ragdoll (Jolt Ragdoll) ---------------------------------------------
+    // A body gone limp: boxes joined by swing-twist joints (engine/block_body.h's six blocks, for a person),
+    // simulated with the world and colliding with it, never with itself at a joint. Parts are listed parents
+    // first; each joint is a world point with the axis from parent to child, limited to `swingDeg` off it and
+    // `twistDeg` round it.
+    using RagdollId = uint32_t;
+    static constexpr RagdollId INVALID_RAGDOLL = 0xFFFFFFFFu;
+    struct RagdollPart {
+        Vec3 halfExtent;
+        Vec3 position;
+        Quat orientation;
+        Real mass = 5;
+        int parent = -1;
+        Vec3 joint;                 // world, where it meets its parent
+        Vec3 twistAxis{0, -1, 0};   // world, parent -> child
+        Real swingDeg = 45, twistDeg = 20;
+        // A HINGE instead (an elbow, a knee): turning only about hingeAxis (world), between the limits -- degrees
+        // from where it is made, + turning the child right-handed about the axis
+        bool hinge = false;
+        Vec3 hingeAxis{1, 0, 0};
+        Real hingeMinDeg = 0, hingeMaxDeg = 0;
+        Real hingeFriction = 0;   // N m it takes to turn it (a joint's own stiffness: a limp knee still holds a little)
+    };
+    RagdollId addRagdoll(const std::vector<RagdollPart>& parts, const Vec3& velocity);
+    void removeRagdoll(RagdollId id);
+    // A part's pose now (false for a removed ragdoll or a bad index).
+    bool ragdollPart(RagdollId id, int part, Vec3& position, Quat& orientation) const;
+    // The fastest any of its parts moves (m/s): how settled it is.
+    Real ragdollSpeed(RagdollId id) const;
 
     // --- Wheeled vehicle (Jolt VehicleConstraint, ADR-0059) ------------------
     // A physics-driven car: a dynamic box chassis with raycast wheels, suspension,
@@ -262,6 +310,15 @@ public:
         // 4 deg and 0.25 m without), and the street rig's cornering roll is
         // a few degrees without them.
         Real maxPitchRollDegrees = 180.0;
+        // TWO WHEELS (a motorcycle, a moped, a bicycle): Jolt's MotorcycleController, which leans the chassis
+        // into a turn and holds it up with a lean spring -- the four-wheel helpers (yaw assist, anti-roll,
+        // traction split) leave it alone. The wheels sit on the centre line, one ahead of the other.
+        bool twoWheeler = false;
+        Real maxLeanDegrees = 45.0;
+        // The engine's spin-down (Jolt: dw/dt = -c w) and inertia: what engine braking there is off the throttle.
+        // A bicycle's "engine" is legs and a freewheel: next to nothing.
+        Real engineDamping = 0.2;
+        Real engineInertia = 0.5;
         Real antiRollStiffness = 0.0;
         // YAW ASSIST (the fishtail, measured in tests/test_vehicle_handling.cpp):
         // Jolt's tyre is a per-step impulse cap, so past a degree or two of
@@ -324,6 +381,21 @@ public:
     // speed (m/s along the nose), engine rpm, gear, and per wheel: spin (rad/s) and whether it touches ground
     struct VehicleTelemetry { Real speed = 0, rpm = 0; int gear = 0; std::vector<Real> wheelSpin; std::vector<char> wheelContact; std::vector<Real> wheelSlip; };
     VehicleTelemetry vehicleTelemetry(VehicleId id) const;
+    // DRIFT (ADR-0236; Glenn: "how hard is it to make a car drift? Something like burnout"): an arcade slide the
+    // player's car can be thrown into -- a handbrake tap while steering above 40 km/h. In the slide the rear
+    // tyres keep a third of their sideways grip, the yaw assist stands aside, and a controller holds the slip
+    // angle the steering asks for (up to 32°) and the speed the slide began with while the throttle is on;
+    // straightened up, it hands back to grip. Drift time fills a boost (`boostVehicle` spends it).
+    struct DriftState {
+        bool drifting = false;
+        Real slipDeg = 0;        // the heading off the way it travels (+ is anticlockwise from above)
+        Real time = 0;           // this slide's length
+        Real boost = 0;          // 0..1 banked
+        Real boosting = 0;       // s of burst left
+    };
+    void setVehicleDriftEnabled(VehicleId id, bool on);
+    DriftState vehicleDrift(VehicleId id) const;
+    void boostVehicle(VehicleId id);
 
     // Create a vehicle at the given pose; returns INVALID_VEHICLE on failure.
     VehicleId addVehicle(const VehicleConfig& config, const Vec3& position,
@@ -334,8 +406,8 @@ public:
     void setVehicleInput(VehicleId id, Real forward, Real right, Real brake,
                          Real handBrake = 0.0);
     // Un-flip a rolled vehicle: keep its heading, level out pitch/roll, lift it a
-    // little, and zero its velocity. Drives a "recover" button.
-    void resetVehicleUpright(VehicleId id);
+    // little (`lift` m), and zero its velocity. Drives a "recover" button, and stands a fallen bike back up.
+    void resetVehicleUpright(VehicleId id, Real lift = 1.5);
     Vec3 vehiclePosition(VehicleId id) const;
     Quat vehicleOrientation(VehicleId id) const;
     Vec3 vehicleVelocity(VehicleId id) const;
@@ -361,9 +433,11 @@ public:
 private:
     struct Impl;
     std::unique_ptr<Impl> impl;
+
     // The per-step stability torque of VehicleConfig::yawAssist, for the
     // vehicle in slot `index` (called from update, before the Jolt step).
     void applyYawAssist(std::size_t index);
+    void applyDrift(std::size_t index, float dt);
     void applyAeroDrag(std::size_t index);
     void applyTractionSplit(std::size_t index);
 };
