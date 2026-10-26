@@ -228,6 +228,16 @@ demo, not a screenshot prop. Build it to be used by everything that comes after.
   that already does it; the bar to add a *parallel* implementation is an explicit,
   justified decision (an ADR), not convenience. What's the point of having the tech if
   we route around it with something flimsier?
+- **Build on what exists; one system per job.** Glenn's standing preference
+  (2026-10-26): extend a system the engine already has rather than build a new
+  one, unless the existing one really cannot do the job, and then say why in an
+  ADR. Two systems doing one job is a bug to fix, not a style choice. Examples:
+  the grapple rope was written as our own Verlet solver (`ropeStep`, `RopeLine`)
+  while Jolt, which already runs every other body, has distance constraints and
+  soft bodies, so the rope belongs on Jolt (#118); and several separate 3D
+  meshing tools once grew up side by side when there should have been one (the
+  mesh library, ADR-0173, is the one). When you find a duplicate, add it to the
+  duplicate-systems sweep (#117) instead of building on either half.
 - **One source of truth, wired through.** A generated thing flows through the *same*
   pipeline and the *same* types the engine already uses (procgen recipe → real
   component/asset → real renderer/edit systems). The Lua binding wraps the *same* C++
