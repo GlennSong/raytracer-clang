@@ -1,0 +1,1085 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>The Road Network — How the Engine Works</title>
+  <link rel="stylesheet" href="engine.css">
+</head>
+<body>
+<div class="wrap">
+  <div class="nav"><a href="index.html">← How the engine works</a> · <a href="../index.html">scenes</a></div>
+  <h1>The road network</h1>
+  <p class="lede">How a city's roads go from a few numbers in a brief to painted, walled, drivable asphalt with a
+    nav graph on top. The one idea that makes it work: <b>the lane is the atom</b>. Every road is expanded into
+    constant-width lane ribbons, the ribbons are unioned into one pavement, and every height question is answered by
+    asking which lane owns that spot.</p>
+
+  <figure class="shot">
+    <img src="img/roads/freeway-and-city.webp" alt="An aerial view of a lane-built city: a multi-lane freeway with an exit ramp sweeping off it on the right, and on the left a street grid with zebra crossings, stop bars, painted lanes and buses.">
+    <figcaption>A lane-built city (September 2026): the freeway's carriageways and an exit ramp on the right, the
+      street grid with its crosswalks, stop bars and lane paint on the left. One builder made all of it, in one
+      pass, as one welded surface.</figcaption>
+  </figure>
+
+  <h2>The problem</h2>
+  <p>A road network has to satisfy several masters at once. It has to <b>look</b> right: lanes of the right width,
+    kerbs, medians, paint that stops at junctions. It has to <b>be</b> right in three dimensions: a freeway crossing
+    a street must clear it by a lorry's height, two streets meeting at a junction must meet at the same height, and
+    no road may be steeper than its class allows. It has to <b>sit on the ground</b>: the terrain must be cut and
+    filled to meet it, with no grass poking through the asphalt. And it has to <b>publish data</b> the rest of the
+    engine runs on: a nav graph cars and walkers route over, a deck field things stand on, the holes between roads
+    that become city blocks, and (since October) the tracks trains run on.</p>
+  <p>The hard part is that these interact. A junction's height depends on both roads' profiles; a profile depends
+    on which crossings are bridges; whether a crossing is a bridge depends on the heights. Most of this page is
+    about how the engine breaks that loop: first by solving heights per <i>spine</i> (a road's centreline) and
+    agreeing them iteratively, and more recently by having the <b>planner decide the intent up front</b> so the
+    builder only checks.</p>
+
+  <h2>The whole arc, in one picture</h2>
+  <p>Four programs touch a road before a player drives on it. The <b>planner</b> (<code>city_plan</code>) turns a
+    brief into a street and freeway layout. The <b>design stage</b> decides every road's height profile and every
+    crossing's kind. The <b>lanes builder</b> (<code>lanes::build</code>) turns the designed graph into lanes, a
+    pavement, meshes and a conformed ground. The <b>city producer</b> packs all of that into the level bundle, and
+    the loader reads it back through the <code>RoadBuilder</code> interface.</p>
+
+  <div class="diagram">
+    <svg viewBox="0 0 860 520" role="img" aria-label="Pipeline from the brief through the plan, the design stage, the lanes builder's six stages, the bundle, and the loader's consumers">
+      <defs><marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" fill="#6f8fb0"/></marker></defs>
+      <g font-family="system-ui, sans-serif" font-size="13" text-anchor="middle">
+        <!-- row 1: planning -->
+        <rect x="20" y="20" width="170" height="64" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="105" y="45" fill="#cfe4ff">Brief</text>
+        <text x="105" y="66" fill="#93a6ba" font-size="12">~30 numbers (JSON)</text>
+        <rect x="240" y="20" width="170" height="64" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="325" y="45" fill="#cfe4ff">CityPlan</text>
+        <text x="325" y="66" fill="#93a6ba" font-size="12">streets, freeway, blocks</text>
+        <rect x="460" y="20" width="170" height="64" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="545" y="45" fill="#cfe4ff">Lanes scene graph</text>
+        <text x="545" y="66" fill="#93a6ba" font-size="12">edges + classes (JSON)</text>
+        <rect x="680" y="20" width="160" height="64" rx="9" fill="#131a24" stroke="#3b82f6"/>
+        <text x="760" y="45" fill="#cfe4ff">Design stage</text>
+        <text x="760" y="66" fill="#93a6ba" font-size="12">crossings + profiles</text>
+        <line x1="190" y1="52" x2="236" y2="52" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar)"/>
+        <line x1="410" y1="52" x2="456" y2="52" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar)"/>
+        <line x1="630" y1="52" x2="676" y2="52" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar)"/>
+        <text x="215" y="104" fill="#93a6ba" font-size="12">generatePlan · evaluatePlan · score + SVG map</text>
+        <text x="600" y="104" fill="#93a6ba" font-size="12">planCrossings · designRoads · designedGraph</text>
+        <!-- row 2: the builder -->
+        <rect x="20" y="130" width="820" height="150" rx="12" fill="none" stroke="#2c3d50" stroke-dasharray="5 4"/>
+        <text x="430" y="152" fill="#8ec5ff">lanes::build (lanes.cpp) — one graph in, one Result out</text>
+        <rect x="40" y="168" width="120" height="58" rx="8" fill="#131a24" stroke="#2c3d50"/>
+        <text x="100" y="192" fill="#cfe4ff">1 · lanes</text>
+        <text x="100" y="211" fill="#93a6ba" font-size="12">expand()</text>
+        <rect x="172" y="168" width="120" height="58" rx="8" fill="#131a24" stroke="#3b82f6"/>
+        <text x="232" y="192" fill="#cfe4ff">2 · profiles</text>
+        <text x="232" y="211" fill="#93a6ba" font-size="12">designRoads()</text>
+        <rect x="304" y="168" width="120" height="58" rx="8" fill="#131a24" stroke="#2c3d50"/>
+        <text x="364" y="192" fill="#cfe4ff">3 · footprints</text>
+        <text x="364" y="211" fill="#93a6ba" font-size="12">closing, layers</text>
+        <rect x="436" y="168" width="120" height="58" rx="8" fill="#131a24" stroke="#3b82f6"/>
+        <text x="496" y="192" fill="#cfe4ff">4 · surfaces</text>
+        <text x="496" y="211" fill="#93a6ba" font-size="12">one CDT, levels</text>
+        <rect x="568" y="168" width="120" height="58" rx="8" fill="#131a24" stroke="#2c3d50"/>
+        <text x="628" y="192" fill="#cfe4ff">5 · structure</text>
+        <text x="628" y="211" fill="#93a6ba" font-size="12">bridges, piers</text>
+        <rect x="700" y="168" width="120" height="58" rx="8" fill="#131a24" stroke="#2c3d50"/>
+        <text x="760" y="192" fill="#cfe4ff">6 · terrain</text>
+        <text x="760" y="211" fill="#93a6ba" font-size="12">conformGrid()</text>
+        <line x1="160" y1="197" x2="170" y2="197" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar)"/>
+        <line x1="292" y1="197" x2="302" y2="197" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar)"/>
+        <line x1="424" y1="197" x2="434" y2="197" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar)"/>
+        <line x1="556" y1="197" x2="566" y2="197" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar)"/>
+        <line x1="688" y1="197" x2="698" y2="197" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar)"/>
+        <text x="430" y="258" fill="#93a6ba" font-size="12">then buildMeshes (paint, kerbs, walls, rails) · roadTwin (nav) · invariants</text>
+        <line x1="760" y1="84" x2="760" y2="128" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar)"/>
+        <!-- row 3: bundle -->
+        <rect x="200" y="310" width="460" height="70" rx="10" fill="#131a24" stroke="#3b82f6"/>
+        <text x="430" y="334" fill="#cfe4ff">City producer → level bundle  city/e&lt;n&gt;/…</text>
+        <text x="430" y="355" fill="#93a6ba" font-size="12">cell meshes · ground grid · deck field · kerb bands</text>
+        <text x="430" y="372" fill="#93a6ba" font-size="12">twin · nav · lotnav · right-of-way · block holes · rail/tracks</text>
+        <line x1="430" y1="280" x2="430" y2="306" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar)"/>
+        <!-- row 4: consumers -->
+        <rect x="20" y="420" width="150" height="70" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="95" y="446" fill="#cfe4ff">Renderables</text>
+        <text x="95" y="466" fill="#93a6ba" font-size="12">+ static colliders</text>
+        <rect x="190" y="420" width="150" height="70" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="265" y="446" fill="#cfe4ff">Ground</text>
+        <text x="265" y="466" fill="#93a6ba" font-size="12">GroundPlan::replace</text>
+        <rect x="360" y="420" width="150" height="70" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="435" y="446" fill="#cfe4ff">NavGraph</text>
+        <text x="435" y="466" fill="#93a6ba" font-size="12">cars, walkers, signals</text>
+        <rect x="530" y="420" width="150" height="70" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="605" y="446" fill="#cfe4ff">Lot pass</text>
+        <text x="605" y="466" fill="#93a6ba" font-size="12">blocks = holes</text>
+        <rect x="700" y="420" width="140" height="70" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="770" y="446" fill="#cfe4ff">Trains</text>
+        <text x="770" y="466" fill="#93a6ba" font-size="12">RailTracks</text>
+        <path d="M430 380 L430 400 L95 400 L95 416" fill="none" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar)"/>
+        <path d="M430 400 L265 400 L265 416" fill="none" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar)"/>
+        <line x1="435" y1="400" x2="435" y2="416" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar)"/>
+        <path d="M430 400 L605 400 L605 416" fill="none" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar)"/>
+        <path d="M605 400 L770 400 L770 416" fill="none" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar)"/>
+        <text x="430" y="512" fill="#93a6ba" font-size="12">all through LaneRoadBuilder (lanes_builder.cpp): build() · ground() · navGraph() · ownsNavGraph() = true</text>
+      </g>
+    </svg>
+  </div>
+  <p class="cap">The road pipeline. Blue outlines mark the two stages that carry the most design: the vertical
+    design (shared by planner and builder since ADR-0215) and the surface triangulation that welds every lane into one
+    deck. A hand-authored lab scene starts at the third box.</p>
+
+  <h2>The data: a graph of edges with classes</h2>
+  <p>The builder's input is a <b>lanes graph</b>: JSON with a list of edges, each a path plus a class name, a table
+    of classes, a few global rules and a terrain description. A path is a polyline, arc, Bézier or an
+    <i>offset</i> of another edge (that is how a freeway's two carriageways follow one axis). Nobody authors a lane:
+    the class says how many lanes a road has, and the builder generates them. A ramp names its <b>anchors</b>: the
+    host edge it leaves and the one it joins, and the station along the host where its gore is. Here is the
+    hand-made <code>grid_city</code> lab scene's freeway and its two ramps:</p>
+
+  <div class="code">
+  <div class="hd"><span>grid_city: classes, a freeway pair offset from one axis, and two anchored ramps</span>
+    <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/assets/lanelab/grid_city.json#L1-L35">assets/lanelab/grid_city.json</a></div>
+<pre>{
+  "name": "grid_city",
+  "terrain": {"type": "flat", "bounds": [-130, 730, -120, 260]},
+  "classes": {
+    "freeway":  {"w": 3.6, "fwd": 3, "back": 0, "shoulder": 2.5},
+    "ramp":     {"w": 3.6, "fwd": 1, "back": 0, "shoulder": 1.2},
+    "arterial": {"w": 3.0, "fwd": 2, "back": 2, "sidewalk": 2.6},
+    "local":    {"w": 3.5, "fwd": 1, "back": 1, "sidewalk": 1.8},
+    "divider":  {"median": 1.5}
+  },
+  "rules": {"closing": 3.0},
+    ...
+    {"id": "fw_axis", "class": "divider", "path": {"type": "bezier", "points": [[-120, -95], [150, -70], [450, -110], [720, -80]]}},
+    {"id": "fw_wb", "class": "freeway", "path": {"type": "offset", "edge": "fw_axis", "d": 7.0, "reverse": true}},
+    {"id": "fw_eb", "class": "freeway", "path": {"type": "offset", "edge": "fw_axis", "d": -7.0}},
+    {"id": "exit",  "class": "ramp",
+     "from": {"edge": "fw_wb", "x": 300, "side": "right", "decel": 80, "taper": 72, "approach": 90}, "to": "v2",
+     "path": {"type": "bezier", "points": [[0, 0], [0, 0], [160, -68], {"edge": "v2", "s": 0, "normal": -4.5}]}},
+    {"id": "entry", "class": "ramp",
+     "from": "v2", "to": {"edge": "fw_wb", "x": 80, "side": "right", "aux": 60, "taper": 72, "approach": 90},
+     "path": {"type": "bezier", "points": [{"edge": "v2", "s": 0, "normal": 4.5}, {"edge": "v2", "s": 0, "normal": 4.5, "along": -30}, [0, 0], [0, 0]]}}</pre>
+</div>
+
+  <p>Loaded, that becomes a <code>RoadLabGraph</code>. (The <code>Lab</code> in the name is history: the builder
+    was the quarantined "lanelab" experiment until ADR-0089 folded it into the roads module.) Its two key types are
+    the class and the edge:</p>
+
+  <div class="code">
+  <div class="hd"><span>RoadClassSpec and EdgeSpec: what a road IS, and what the builder resolves onto it</span>
+    <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/engine/procgen/city/roads/lanes/road_graph_spec.h#L79-L184">src/engine/procgen/city/roads/lanes/road_graph_spec.h</a></div>
+<pre>struct RoadClassSpec {
+    std::string name;
+    LaneLayout lanes;
+    double shoulder = 0, sidewalk = 0, median = 0;   <span class="c">// rings outside the lanes (median: divider axes)</span>
+    int rank = 1;
+    double gMax = 0.09, window = 40, thick = 0.5;
+    <span class="c">// CUT AND FILL (ADR-0116): 0 = the profile only fills (the grade-limited envelope from above, every</span>
+    <span class="c">// city's roads); 0.5 = halfway between that and the envelope from below -- a mountain road that cuts</span>
+    <span class="c">// through the rise it cannot climb instead of riding a viaduct off it (the island pass was 2.7 km of</span>
+    <span class="c">// bridge in 4.2). Both envelopes keep the grade, so any blend does.</span>
+    double balance = 0.0;
+    <span class="c">// indexed by EdgeRole: seam, median, vs street, elevated, at grade</span>
+    std::array&lt;BarrierSpec, 5&gt; edges{};
+    <span class="c">// ...</span>
+    bool track = false;
+    <span class="c">// ...</span>
+    bool footway = false;
+};
+<span class="c">// ...</span>
+struct EdgeSpec {
+    std::string id, cls;
+    nlohmann::json path;                 <span class="c">// kept for ramp recomposition</span>
+    RampAnchor from, to;
+    bool hasZMin = false; double zMin = 0;
+    double lotsFrom = -1, lotsTo = -1;   <span class="c">// station range where the city may build lots along this edge (-1: all of it); the rest is right-of-way</span>
+    std::vector&lt;std::array&lt;double, 4&gt;&gt; floorPts;   <span class="c">// (x, y, z, half-span): the profile must clear z within half-span of that station, approached at design grade beyond</span>
+    <span class="c">// a TRACK's holds that belong to the section joined to one of its ends (chainTrackFloors): (station, z, half-span)</span>
+    <span class="c">// in this edge's stations -- before 0 or past its end -- so a lift's approach runs on across the joint</span>
+    std::vector&lt;std::array&lt;double, 3&gt;&gt; chainFloors;
+    LaneLayout lanes;
+    <span class="c">// ...</span>
+    <span class="c">// THE PLANNED ELEVATION (ADR-0215): the deck height along the resolved spine, every `profileStep` m from its start,</span>
+    <span class="c">// as the design stage made it ("profile": {"step": 1, "z": [...]}). A graph whose roads all carry one is DESIGNED:</span>
+    <span class="c">// the builder takes the heights as given and checks them, never re-designs them.</span>
+    std::vector&lt;double&gt; profile; double profileStep = 0.0;
+    <span class="c">// resolved geometry and profile</span>
+    std::vector&lt;Vec2&gt; xy;                <span class="c">// spine, resampled at rules.step</span>
+    std::vector&lt;double&gt; s, z, t;         <span class="c">// station, deck height, terrain height along the spine</span>
+    RampInfo ramp;
+    <span class="c">// Does anything meet this end? An OPEN end is pinned to the ground by the profile</span>
+    <span class="c">// solve: gradeLimit only ever RAISES a profile, so a road that cannot follow its</span>
+    <span class="c">// terrain otherwise floats — steep_climb began 65 m in the air over a valley floor</span>
+    <span class="c">// it never came down to. Filled by build() before the profiles are solved.</span>
+    bool openEnd[2] = {false, false};
+    int anchorIdx[2] = {-1, -1};         <span class="c">// spine index of the from-gore and the to-gore, when anchored</span>
+    std::map&lt;std::string, std::string&gt; anchorLanes;   <span class="c">// "from"/"to" -&gt; host lane id</span>
+    bool isRamp() const { return !from.edge.empty() || !to.edge.empty(); }
+    int laneCount() const { return lanes.fwd + lanes.back; }
+    double length() const { return s.empty() ? 0.0 : s.back(); }
+};</pre>
+</div>
+
+  <p>Three fields in <code>EdgeSpec</code> carry most of the vertical story. <code>floorPts</code> are <b>holds</b>:
+    "at this point, the deck must be at least this high, flat over this half-span" (a bridge over a street, a river
+    crossing). <code>profile</code> is the <b>planned</b> elevation from the design stage; a graph whose roads all
+    carry one is "designed", and the builder takes those heights as given. <code>xy/s/z/t</code> are the resolved
+    spine: points every <code>rules.step</code> metres (1 m by default), their arc-length stations, the deck height
+    and the ground height under each.</p>
+
+  <p>The built-in class table (<code>defaultClasses()</code> in <code>road_graph_spec.cpp</code>) is the master knob,
+    as ADR-0051 asked: lane width and count, side bands, rank (who owns a shared spot), maximum grade, and the
+    smoothing window the profile is averaged over. A graph may override any of it.</p>
+  <table>
+    <tr><th>class</th><th>lanes</th><th>lane w</th><th>shoulder / sidewalk</th><th>rank</th><th>g<sub>max</sub></th><th>window</th></tr>
+    <tr><td>freeway</td><td>3 one way</td><td>3.6 m</td><td>2.5 m shoulder</td><td>3</td><td>3 %</td><td>440 m</td></tr>
+    <tr><td>arterial</td><td>2 + 2</td><td>3.0 m</td><td>2.6 m sidewalk</td><td>2</td><td>6 %</td><td>120 m</td></tr>
+    <tr><td>local</td><td>1 + 1</td><td>3.5 m</td><td>1.8 m sidewalk</td><td>1</td><td>9 %</td><td>40 m</td></tr>
+    <tr><td>ramp</td><td>1 one way</td><td>3.6 m</td><td>1.2 m shoulder</td><td>0</td><td>9 %</td><td>40 m</td></tr>
+    <tr><td>rail (track)</td><td>1 + 1</td><td>4.0 m centres</td><td>—</td><td>3</td><td>2.5 %</td><td>400 m</td></tr>
+    <tr><td>light_rail (track)</td><td>1 + 1</td><td>3.6 m</td><td>—</td><td>2</td><td>5 %</td><td>120 m</td></tr>
+    <tr><td>footway</td><td>1</td><td>3.0 m</td><td>—</td><td>0</td><td>60 % (stairs)</td><td>20 m</td></tr>
+  </table>
+  <p class="cap">Built-in classes. Planned cities add their own (<code>collector</code>, <code>rural</code>, the
+    island's <code>mountain</code> class at 15 % with <code>balance</code> 0.5) in the graph's <code>classes</code>
+    block.</p>
+
+  <h2>Lanes are the atom</h2>
+  <p><code>expand()</code> (<code>lane_expand.cpp</code>) turns every edge into <code>Lane</code>s. A class's lane
+    layout is written as the engine's own <code>RoadSpec</code> band list (sidewalk, shoulder, travel lanes per
+    direction, median), so a lane's lateral offset comes from the same cross-section model the rest of the engine
+    uses. Each lane is a constant-width ribbon: its centreline, its left and right edges, its stations. There are no
+    width tapers. A lane is <b>born</b> by sweeping its centreline out of a neighbour's and <b>dies</b> by converging
+    into one, so a turn pocket, a ramp's deceleration lane and a two-lane ramp's dovetail are all the same move.</p>
+
+  <div class="code">
+  <div class="hd"><span>Lane and LaneSet: the atoms</span>
+    <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/engine/procgen/city/roads/lanes/lane_expand.h#L19-L36">src/engine/procgen/city/roads/lanes/lane_expand.h</a></div>
+<pre>struct Lane {
+    std::string id, kind, cls;      <span class="c">// kind: through | turn | slip | aux | ramp | connector</span>
+    int parent = -1;                <span class="c">// index of the parent edge; -1 for connectors</span>
+    double w = 3.5; int dir = +1;   <span class="c">// dir: +1 along the parent spine, -1 against it</span>
+    std::vector&lt;Vec2&gt; xy, left, right;
+    std::vector&lt;double&gt; s;
+    int srcLane = -1, dstLane = -1; double z0 = 0, z1 = 0;   <span class="c">// connectors: the lanes joined and their end heights</span>
+    bool isConnector() const { return kind == "connector"; }
+};
+
+struct LaneSet {
+    std::vector&lt;Lane&gt; lanes;
+    std::map&lt;std::string, int&gt; byId;
+    int find(const std::string&amp; id) const { auto it = byId.find(id); return it == byId.end() ? -1 : it-&gt;second; }
+    <span class="c">// Ownership rank: connectors yield to every lane; otherwise the parent class rank.</span>
+    double rank(int lane, const RoadLabGraph&amp; g) const;
+    std::string roadOf(int lane, const RoadLabGraph&amp; g) const;
+};</pre>
+</div>
+
+  <div class="diagram">
+    <svg viewBox="0 0 860 330" role="img" aria-label="Cross-section of a two-way road as bands, and a ramp leaving a freeway's outer lane through a deceleration taper">
+      <defs><marker id="ar2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" fill="#6f8fb0"/></marker></defs>
+      <g font-family="system-ui, sans-serif" font-size="12" text-anchor="middle">
+        <text x="430" y="20" fill="#8ec5ff" font-size="13">An arterial's bands, left to right across the spine (plan view, travel direction up)</text>
+        <rect x="40" y="36" width="70" height="80" fill="#1d2633" stroke="#2c3d50"/>
+        <text x="75" y="70" fill="#cfe4ff">sidewalk</text><text x="75" y="88" fill="#93a6ba">2.6 m</text>
+        <rect x="110" y="36" width="110" height="80" fill="#131a24" stroke="#2c3d50"/>
+        <text x="165" y="70" fill="#cfe4ff">b1 ↓</text><text x="165" y="88" fill="#93a6ba">3.0 m</text>
+        <rect x="220" y="36" width="110" height="80" fill="#131a24" stroke="#2c3d50"/>
+        <text x="275" y="70" fill="#cfe4ff">b0 ↓</text><text x="275" y="88" fill="#93a6ba">offside</text>
+        <line x1="330" y1="36" x2="330" y2="116" stroke="#e6c07b" stroke-width="3"/>
+        <rect x="330" y="36" width="110" height="80" fill="#131a24" stroke="#2c3d50"/>
+        <text x="385" y="70" fill="#cfe4ff">f0 ↑</text><text x="385" y="88" fill="#93a6ba">offside</text>
+        <rect x="440" y="36" width="110" height="80" fill="#131a24" stroke="#3b82f6"/>
+        <text x="495" y="70" fill="#cfe4ff">f1 ↑</text><text x="495" y="88" fill="#93a6ba">kerb lane</text>
+        <rect x="550" y="36" width="70" height="80" fill="#1d2633" stroke="#2c3d50"/>
+        <text x="585" y="70" fill="#cfe4ff">sidewalk</text><text x="585" y="88" fill="#93a6ba">2.6 m</text>
+        <text x="330" y="134" fill="#e6c07b">spine</text>
+        <text x="740" y="60" fill="#93a6ba" text-anchor="middle">forward lanes lie on</text>
+        <text x="740" y="78" fill="#93a6ba">the spine's RIGHT in plan;</text>
+        <text x="740" y="96" fill="#93a6ba">the world mirrors it, so</text>
+        <text x="740" y="114" fill="#e6c07b">cars keep LEFT on screen</text>
+        <!-- ramp -->
+        <text x="430" y="172" fill="#8ec5ff" font-size="13">A ramp leaves the host's outer lane: decel lane born out of f2, then its own spine</text>
+        <rect x="40" y="190" width="780" height="36" fill="#131a24" stroke="#2c3d50"/>
+        <text x="90" y="213" fill="#93a6ba">f1</text>
+        <rect x="40" y="226" width="780" height="36" fill="#131a24" stroke="#3b82f6"/>
+        <text x="90" y="249" fill="#cfe4ff">f2 (host's outer lane)</text>
+        <path d="M200 262 C 300 262, 330 298, 430 298 L 560 298 C 640 298, 700 312, 820 322" fill="none" stroke="#e6c07b" stroke-width="2"/>
+        <path d="M200 244 C 300 244, 330 280, 430 280 L 560 280 C 640 280, 700 294, 820 304" fill="none" stroke="#e6c07b" stroke-width="1" stroke-dasharray="4 3"/>
+        <text x="300" y="316" fill="#93a6ba">taper (smoothstep, 30 lane widths)</text>
+        <text x="495" y="316" fill="#93a6ba">decel (100 m)</text>
+        <text x="700" y="282" fill="#cfe4ff">ramp spine →</text>
+        <line x1="560" y1="182" x2="560" y2="300" stroke="#6f8fb0" stroke-dasharray="3 3"/>
+        <text x="566" y="186" fill="#93a6ba" font-size="11" text-anchor="start">gore anchor (station s on the host)</text>
+      </g>
+    </svg>
+  </div>
+  <p class="cap">Top: lane ids come from the band slots (<code>f0</code> nearest the centre line, the last forward
+    lane at the kerb). Bottom: <code>composeRamp</code> builds a ramp's start by sliding a lane off the host's outer
+    lane with a smoothstep, then appends the authored path; an on-ramp mirrors it with an auxiliary lane.</p>
+
+  <p>Adjacency between lanes is <b>derived</b>, never authored: two lanes going the same way whose centrelines run
+    about one lane width apart for 20 m or more are neighbours (<code>adjacency()</code>). Connectors (lane end to a
+    point on another lane) are Hermite curves, generated from a one-line <code>{"from", "to"}</code>.</p>
+
+  <h2>The vertical design: profiles that agree</h2>
+  <p>Elevation lives on the spine, as <code>z(s)</code> per edge. For a through road it is built in three moves
+    (<code>throughProfile</code>): average the ground under the spine over the class's window, raise it to every
+    hold (a "tent" that falls away at design grade), then pass it through <code>gradeLimit</code>. Design grade is
+    80 % of the class maximum (<code>kDesignGrade</code>), so later corrections at junctions have headroom.</p>
+
+  <div class="code">
+  <div class="hd"><span>gradeLimit: the smallest grade-legal profile above z</span>
+    <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/engine/procgen/city/roads/lanes/vertical_profile.cpp#L25-L36">src/engine/procgen/city/roads/lanes/vertical_profile.cpp</a></div>
+<pre>std::vector&lt;double&gt; limitDescents(std::vector&lt;double&gt; z, const std::vector&lt;double&gt;&amp; s, double gmax) {
+    for (size_t i = 1; i &lt; z.size(); ++i) z[i] = std::min(z[i], z[i-1] + gmax * (s[i] - s[i-1]));
+    for (size_t i = z.size() - 1; i-- &gt; 0;) z[i] = std::min(z[i], z[i+1] + gmax * (s[i+1] - s[i]));
+    return z;
+}
+
+std::vector&lt;double&gt; gradeLimit(const std::vector&lt;double&gt;&amp; z, const std::vector&lt;double&gt;&amp; s, double gmax) {
+    std::vector&lt;double&gt; a = limitDescents(z, s, gmax), neg(z.size()); for (size_t i = 0; i &lt; z.size(); ++i) neg[i] = -z[i];
+    std::vector&lt;double&gt; b = limitDescents(neg, s, gmax);
+    for (size_t i = 0; i &lt; z.size(); ++i) a[i] = std::max(a[i], -b[i]);
+    return a;
+}</pre>
+</div>
+
+  <p><code>limitDescents</code> sweeps forward then backward, never letting a sample sit more than
+    <code>gmax · ds</code> below its neighbour; doing it to <code>z</code> and to <code>−z</code> and taking the max
+    gives the lowest profile that stays at or above the input and never exceeds the grade. It <b>only fills</b>:
+    every rise steeper than the grade lifts the deck, which then comes down at the grade. That is right for a city
+    street; on a mountain it put Saltwood's pass on 2.7 km of piers in 4.2 km. ADR-0116 added the class option
+    <code>balance</code>, which blends toward the mirror envelope from below (<code>−gradeLimit(−z)</code>, which
+    only cuts). Both keep the grade, so any blend does.</p>
+
+  <div class="diagram">
+    <svg viewBox="0 0 860 260" role="img" aria-label="A profile along a road: the ground, the fill-only envelope riding over a dip, the cut envelope, and a hold tent over a crossing street">
+      <g font-family="system-ui, sans-serif" font-size="12">
+        <line x1="40" y1="220" x2="820" y2="220" stroke="#2c3d50"/>
+        <text x="820" y="240" fill="#93a6ba" text-anchor="end">station s →</text>
+        <path d="M40 150 C 120 140, 160 120, 210 95 C 240 80, 260 170, 300 185 C 340 200, 370 120, 420 110 C 470 100, 520 150, 580 150 C 640 150, 700 140, 820 130" fill="none" stroke="#7a8f5a" stroke-width="2"/>
+        <text x="300" y="205" fill="#7a8f5a">ground t(s)</text>
+        <path d="M40 148 L 210 96 L 330 120 L 420 110 L 600 108 L 820 128" fill="none" stroke="#e6c07b" stroke-width="2"/>
+        <text x="250" y="88" fill="#e6c07b">fill envelope (balance 0)</text>
+        <path d="M40 152 L 180 120 L 300 180 L 420 140 L 580 152 L 820 132" fill="none" stroke="#8ec5ff" stroke-width="1.6" stroke-dasharray="6 4"/>
+        <text x="460" y="172" fill="#8ec5ff">cut envelope</text>
+        <path d="M560 150 L 620 80 L 660 80 L 720 150" fill="none" stroke="#cfe4ff" stroke-width="1.6"/>
+        <rect x="625" y="200" width="30" height="20" fill="#131a24" stroke="#2c3d50"/>
+        <text x="640" y="196" fill="#93a6ba" text-anchor="middle">street</text>
+        <line x1="640" y1="80" x2="640" y2="200" stroke="#6f8fb0" stroke-dasharray="3 3"/>
+        <text x="500" y="72" fill="#cfe4ff" text-anchor="end">hold tent over a street</text>
+        <text x="60" y="40" fill="#93a6ba">each line is grade-legal; the profile is the max of the blend and every tent,</text>
+        <text x="60" y="58" fill="#93a6ba">then pinned down to the ground at any open end</text>
+      </g>
+    </svg>
+  </div>
+  <p class="cap">Sketch of <code>throughProfile</code>'s ingredients (not to scale). A hold is a cone at design grade
+    with a flat top as wide as the road it clears, so the max of cones is still grade-legal.</p>
+
+  <p>Profiles solved one road at a time do not meet. So <code>designRoads</code> runs an <b>agree loop</b>: at every
+    shared node the ends take a common height; where one road ends on another's interior it takes the host's height;
+    where two roads cross at grade the higher-ranked road is authoritative and the other takes a smooth bump. Holds
+    and ramps are re-imposed after each round. Then grade-separated crossings are lifted until the upper deck clears
+    <code>under_clearance</code> (5 m) plus its slab and girders.</p>
+
+  <div class="code">
+  <div class="hd"><span>designRoads: the agree loop keeps the best round, not the last</span>
+    <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/engine/procgen/city/roads/lanes/road_design.cpp#L132-L173">src/engine/procgen/city/roads/lanes/road_design.cpp</a></div>
+<pre>    for (EdgeSpec&amp; e : g.edges) if (!e.isRamp()) throughProfile(e, terrain, g.cls(e));
+    chainTrackFloors(g, R.endpointTol);   <span class="c">// (needs every edge's stations) a track's holds run on across its joints</span>
+    for (EdgeSpec&amp; e : g.edges) if (!e.chainFloors.empty()) throughProfile(e, terrain, g.cls(e));
+    for (EdgeSpec&amp; e : g.edges) if (e.isRamp()) rampProfile(g, e, terrain);   <span class="c">// ramps need heights to take part in crossing consistency</span>
+    <span class="c">// where the roads meet, found once (only the heights move from here on)</span>
+    const std::vector&lt;CrossingMeet&gt; meets = crossingMeets(g);
+    auto agree = [&amp;](bool first) {
+        <span class="c">// ...</span>
+        double best = 1e300;
+        int stalls = 0;
+        std::vector&lt;std::vector&lt;double&gt;&gt; keep;
+        for (int it = 0; it &lt; 120; ++it) {
+            double mm = nodeConsistency(g, R.endpointTol, R.bridgeH), xm = crossingConsistency(g, meets, R.bridgeH, R.rampLevelDz);
+            chainTrackFloors(g, R.endpointTol);
+            for (EdgeSpec&amp; e : g.edges) if (!e.isRamp()) applyFloors(e, g.cls(e));   <span class="c">// lifts survive the blends</span>
+            for (EdgeSpec&amp; e : g.edges) if (e.isRamp()) rampProfile(g, e, terrain);   <span class="c">// hosts moved</span>
+            const double cur = std::max(mm, xm);
+            if (first &amp;&amp; it == 0) rep.nodeMismatchBefore = cur;
+            if (cur &lt; best - 1e-4) {
+                best = cur; stalls = 0;
+                keep.clear(); keep.reserve(g.edges.size());
+                for (const EdgeSpec&amp; e : g.edges) keep.push_back(e.z);
+            } else if (++stalls &gt;= 4) {
+                break;
+            }
+            if (cur &lt; 0.005) break;
+        }
+        if (stalls &gt;= 4 &amp;&amp; keep.size() == g.edges.size()) {
+            for (std::size_t i = 0; i &lt; g.edges.size(); ++i) g.edges[i].z = keep[i];
+            for (EdgeSpec&amp; e : g.edges) if (e.isRamp()) rampProfile(g, e, terrain);
+        }
+    };
+    agree(true);</pre>
+</div>
+
+  <p>The comment in that loop records a measured turning point: a city whose crossings all have to agree needs
+    many rounds (metro_hills: 35 cm of mismatch at 12 iterations, 0.5 cm at 120), but some inputs diverge
+    (living_city went from 410 cm to 710 cm). Keeping the best round makes both kinds end well. Finding where roads
+    meet is an all-pairs pass; on the island (3,866 edges) it cost 23 minutes when every round repeated it, so the
+    meets are found once (<code>crossingMeets</code>, ADR-0112) and only the heights move.</p>
+
+  <h2>Intent, not inference: the design stage</h2>
+  <p>Until October the builder <i>inferred</i> what each crossing was from the heights: two roads already
+    <code>bridge_h</code> (4 m) apart were a bridge, closer ones were made to agree. The island's rocky rebuild
+    took four 1.8-hour builds, each finding the planner and builder disagreeing: the planner sized ramps from bare
+    ground while the builder cut the link 16 m in; the builder read two overlapping roads 2.7 m apart as an
+    overpass nobody planned. Glenn's direction (2026-10-20): <i>"neither system is guessing. We should be able to
+    plan out the road and elevations. The planner and builder should know the intent of the roads so it's not
+    guessing and use the same models."</i></p>
+  <p>ADR-0215 did it in three steps. Step 1 lifted the vertical design out of <code>lanes::build</code> into
+    <code>designRoads(graph, ground)</code>, unchanged (proved byte-identical on 15 scenes). Step 2 let the graph
+    carry intent: a top-level <code>"crossings"</code> list (each a <code>CrossingSpec</code>: <i>bridge</i> with
+    which road is <code>over</code>, or <i>at_grade</i>) and a per-edge planned <code>"profile"</code>. A crossing the
+    stage finds that is not on the list fails a check, "crossings are as planned", named with its place. Step 3 made
+    the planner use it: one crossing policy, shared.</p>
+
+  <div class="code">
+  <div class="hd"><span>planCrossings: what each meeting of two roads means, by what meets</span>
+    <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/engine/procgen/city/roads/lanes/road_design.cpp#L71-L79">src/engine/procgen/city/roads/lanes/road_design.cpp</a></div>
+<pre>    auto kindOf = [&amp;](const EdgeSpec&amp; a, const EdgeSpec&amp; b, bool aEndsOnB, bool bEndsOnA) {
+        if (g.cls(a).track || g.cls(b).track) return "bridge";
+        if ((a.cls == "freeway" &amp;&amp; !b.isRamp()) || (b.cls == "freeway" &amp;&amp; !a.isRamp())) return "bridge";
+        if (g.cls(a).footway || g.cls(b).footway) {
+            const bool footEnds = (g.cls(a).footway &amp;&amp; aEndsOnB) || (g.cls(b).footway &amp;&amp; bEndsOnA);
+            return footEnds ? "at_grade" : "bridge";
+        }
+        return "at_grade";
+    };</pre>
+</div>
+
+  <p>The island planner (<code>city_plan island-cities</code>, <code>island-rail</code>, <code>city-rail</code>)
+    now plans the crossings, runs the design stage and writes the profiles into the scene before it goes out. On
+    island 8: 182 crossings planned (116 bridges, 66 at grade), none left out, the stage taking 224 s. The stage
+    itself is cheap, 2–3 minutes of a 95-minute full island build (ADR-0215).</p>
+  <div class="note"><p><b>Still owed (ADR-0215 "Not yet").</b> The island planner's link and ramp choices still use
+    their own grade constants (<code>island_world.cpp</code> sets <code>gRamp = 0.09</code>,
+    <code>rampPeak = 0.06</code>) instead of reading the class table and the design stage.</p></div>
+
+  <h2>One pavement, one triangulation, levels by height</h2>
+  <p>With heights known, the builder works in plan. Each lane's ribbon becomes a polygon (its <b>footprint</b>,
+    grown 1 cm so neighbours weld). <b>Closing</b> fills gores and kerb returns, but only where two footprints meet
+    at the same level. Shoulders, sidewalks and medians are ring differences around the roads, cut only at their own
+    level (so a sidewalk runs on under a bridge: a fix of 2026-10-15). All polygon booleans go through Clipper2,
+    reached only from <code>geom2d.cpp</code>.</p>
+  <p>Then the step that replaced three earlier mesher families: <b>one constrained Delaunay triangulation (CDT) over
+    every lane outline</b>. Each triangle asks which lanes cover its centroid, clusters those lanes by height, and
+    emits one triangle per cluster, owned by its highest-ranked lane. An overpass is two clusters (two levels); a merge
+    is one.</p>
+
+  <div class="code">
+  <div class="hd"><span>buildSurfaces: cover, cluster by height, pick the owner</span>
+    <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/engine/procgen/city/roads/lanes/pavement.cpp#L308-L327">src/engine/procgen/city/roads/lanes/pavement.cpp</a></div>
+<pre>            const auto&amp; tri = T.tris[ti]; Vec2 c = (T.verts[tri[0]] + T.verts[tri[1]] + T.verts[tri[2]]) / 3.0;
+            double area = 0.5 * std::fabs(cross(T.verts[tri[1]] - T.verts[tri[0]], T.verts[tri[2]] - T.verts[tri[0]])); if (area &lt; 1e-6) continue;
+            cover.clear();
+            for (int liI : grid.at(c)) {
+                const size_t li = static_cast&lt;size_t&gt;(liI); const Box2&amp; b = boxes[li];
+                if (c.x &lt; b.minX || c.x &gt; b.maxX || c.y &lt; b.minY || c.y &gt; b.maxY) continue;
+                if (!prepared[li].contains(c)) continue;
+                cover.emplace_back(H.own(liI, c), liI);
+            }
+            if (cover.empty()) continue;
+            std::sort(cover.begin(), cover.end()); clusters.clear(); clusterZ.clear();
+            for (const auto&amp; cz : cover) {
+                if (!clusters.empty() &amp;&amp; cz.first - clusterZ.back() &lt; g.rules.sameLevelDz) { clusters.back().push_back(cz.second); clusterZ.back() = cz.first; }
+                else { clusters.push_back({cz.second}); clusterZ.push_back(cz.first); }
+            }
+            for (const auto&amp; cl : clusters) {
+                int owner = cl[0]; for (int m : cl) if (rankKey(m) &gt; rankKey(owner) || (rankKey(m) == rankKey(owner) &amp;&amp; m &lt; owner)) owner = m;   <span class="c">// ties within a road: the lowest lane index</span>
+                lc.emit.push_back({static_cast&lt;int&gt;(ti), owner});
+                for (int m : cl) for (int q : cl) { if (q == m || L.roadOf(q, g) == L.roadOf(m, g)) continue; if (rankKey(q) &gt; rankKey(m)) lc.partners[static_cast&lt;size_t&gt;(m)].insert(q); }
+            }</pre>
+</div>
+
+  <div class="diagram">
+    <svg viewBox="0 0 860 270" role="img" aria-label="Left: a plan where a ramp crosses a street; one CDT triangle is covered by both. Right: their heights cluster into two levels, so the triangle is emitted twice, once per level.">
+      <g font-family="system-ui, sans-serif" font-size="12">
+        <text x="200" y="22" fill="#8ec5ff" font-size="13" text-anchor="middle">plan: one triangle, two covering lanes</text>
+        <rect x="40" y="110" width="320" height="50" fill="#131a24" stroke="#2c3d50"/>
+        <text x="60" y="140" fill="#93a6ba">street lane (z = 12.1)</text>
+        <path d="M120 250 L 260 30 L 300 30 L 160 250 Z" fill="#131a24" fill-opacity="0.7" stroke="#3b82f6"/>
+        <text x="306" y="44" fill="#cfe4ff">ramp lane (z = 18.4)</text>
+        <polygon points="200,118 222,118 211,140" fill="#e6c07b"/>
+        <text x="300" y="196" fill="#e6c07b" text-anchor="middle">centroid covered by both</text>
+        <text x="620" y="22" fill="#8ec5ff" font-size="13" text-anchor="middle">heights → clusters (gap ≥ sameLevelDz 1 m)</text>
+        <line x1="460" y1="230" x2="800" y2="230" stroke="#2c3d50"/>
+        <line x1="480" y1="60" x2="480" y2="230" stroke="#2c3d50"/>
+        <circle cx="540" cy="180" r="6" fill="#cfe4ff"/><text x="556" y="184" fill="#cfe4ff">street 12.1</text>
+        <circle cx="540" cy="90" r="6" fill="#3b82f6"/><text x="556" y="94" fill="#cfe4ff">ramp 18.4</text>
+        <rect x="660" y="160" width="140" height="40" rx="7" fill="#131a24" stroke="#2c3d50"/>
+        <text x="730" y="184" fill="#cfe4ff" text-anchor="middle">level 1 → street deck</text>
+        <rect x="660" y="70" width="140" height="40" rx="7" fill="#131a24" stroke="#3b82f6"/>
+        <text x="730" y="94" fill="#cfe4ff" text-anchor="middle">level 2 → ramp deck</text>
+        <text x="620" y="255" fill="#93a6ba" text-anchor="middle">two lanes within 1 m would be one level: a merge, owned by the higher rank</text>
+      </g>
+    </svg>
+  </div>
+  <p class="cap">Grade separation is a per-triangle height decision, not a 2-D planarisation, so an overpass stays an
+    overpass by construction. Same-level clusters also produce the <b>partner</b> relation used below.</p>
+
+  <p>Vertices are then welded by plan position and height into connected <code>Surface</code>s, and the checks run
+    on them: no cracks (an edge used by one triangle inside a surface), no non-manifold edges, closed boundary loops.</p>
+
+  <h3>Where two lanes meet, whose height wins?</h3>
+  <p>A deck vertex takes the height of its <b>owning</b> lane's spine by projection (<code>DeckHeight::own</code>:
+    continuous, never nearest-station). Near a higher-ranked partner at the same level, it blends toward that
+    partner's <i>blended</i> deck over <code>blendLen</code> (20 m), recursively up the rank chain, so a connector, a
+    local lane and an arterial lane agree exactly wherever they touch. This is the answer to the old union mesher's
+    "nearest-spine winner-take-all" heights, which produced 164 % grade steps on junction diagonals (ADR-0083).</p>
+
+  <div class="code">
+  <div class="hd"><span>DeckHeight::blendTo: the nearest partner pulls, and takes over exactly at the seam</span>
+    <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/engine/procgen/city/roads/lanes/deck_height.cpp#L185-L214">src/engine/procgen/city/roads/lanes/deck_height.cpp</a></div>
+<pre>double DeckHeight::blendTo(double z, const std::vector&lt;int&gt;&amp; partners, const Vec2&amp; p) const {
+    static thread_local int depth = 0; struct Guard { int&amp; d; explicit Guard(int&amp; x) : d(x) { ++d; } ~Guard() { --d; } } guard(depth);
+    if (depth &gt; 12) throw std::runtime_error("lanelab: partner chain too deep — the partner relation is not a strict order");
+    <span class="c">// The NEAREST partner within blendLen pulls with a smoothstep of distance and takes over exactly at</span>
+    <span class="c">// the seam (d = 0), using the partner's DECK height so chains agree. Nearest only: a weighted mix of</span>
+    <span class="c">// several partners is smoother inside a lane but is no longer exact where two surfaces meet.</span>
+    double Lb = g_.rules.blendLen; int best = -1; double bd = std::numeric_limits&lt;double&gt;::infinity();
+    for (int q : partners) { double d = distanceToLane(q, p, Lb); if (d &lt; bd) { bd = d; best = q; } }
+    if (best &lt; 0 || !(bd &lt; Lb)) return z;
+    double w = bd / Lb; w = w * w * (3 - 2 * w);
+    <span class="c">// A partner pulls only where the two are at the same level. Partnership is per ROAD pair (a ramp and</span>
+    <span class="c">// the street it lands on), but the blend radius is 2D, so a ramp 20 m from that street and 4 m above</span>
+    <span class="c">// it was dragged down to it — a 3.8 m dip in the deck with the pier, placed from the profile, standing</span>
+    <span class="c">// 2.8 m proud of the surface (Glenn's cube at the end of the on-ramp). Fade the pull to nothing between</span>
+    <span class="c">// same_level_dz and bridge_h of vertical separation.</span>
+    <span class="c">// At the seam itself the two surfaces must meet exactly whatever their profiles say (a slip lane two</span>
+    <span class="c">// metres off its cross street on a hill still lands on it), so the fade only applies away from the</span>
+    <span class="c">// partner: full pull within kSeam of it, the level fade beyond.</span>
+    const double zp = deck(best, p), gap = std::fabs(zp - z), lo = g_.rules.sameLevelDz, hi = std::max(lo + 0.5, g_.rules.bridgeH);
+    double f = gap &lt;= lo ? 1.0 : gap &gt;= hi ? 0.0 : 1.0 - (gap - lo) / (hi - lo); f = f * f * (3 - 2 * f);
+    <span class="c">// ...but only a seam the two can actually share: a road BRIDGING its partner (Glenn, 2026-10-02, Third and</span>
+    <span class="c">// Dogwood: pass8 partners the street where they meet at grade, then crosses 8 m over it -- and within 3 m of</span>
+    <span class="c">// the street in plan the seam rule dragged the bridge down to it, a vertical wall of asphalt) is</span>
+    <span class="c">// grade-separated there, not a seam. Past bridge_h of separation the seam rule stands down.</span>
+    constexpr double kSeam = 3.0; const double nearSeam = bd &gt;= kSeam || gap &gt;= hi ? 0.0 : 1.0 - bd / kSeam;
+    const double pull = (1 - w) * std::max(f, nearSeam);
+    return pull * zp + (1 - pull) * z;
+}
+
+double DeckHeight::deck(int lane, const Vec2&amp; p) const { return blendTo(own(lane, p), partners_[static_cast&lt;size_t&gt;(lane)], p); }</pre>
+</div>
+
+  <p>Every clause in that function is a bug Glenn hit while driving: the level fade is "the cube at the end of the
+    on-ramp" (a ramp 4 m above a street 20 m away was dragged down 3.8 m); the seam guard is "Third and Dogwood"
+    (a road that bridges its partner was pulled down into a vertical wall of asphalt).</p>
+
+  <h2>Junctions, paint and signs</h2>
+  <p>The lanes builder has no special junction mesh. A junction is simply where lane footprints overlap at one
+    level: the closing pass fills its corners, the CDT triangulates it, and ownership by rank decides whose height
+    it rides. What makes a junction <i>look</i> like one is paint, in <code>deck_mesh.cpp</code>:</p>
+  <ul>
+    <li><b>Junction boxes.</b> Lane paint stops inside any face a crossing street shares at the same level. Every
+      street approach gets a zebra crosswalk and a stop bar where the crossing road's rank is at least its own.</li>
+    <li><b>Lane arrows</b> (ADR-0108). The junction's <i>legs</i> are the street edges leaving its box at the
+      approach's level; each leg's angle makes it a left, straight or right (within 35° is straight). The moves go
+      to lanes by position, painted 7 m before the stop line and again at 30 m on long blocks. Glyphs are built in
+      plan coordinates, so the world's mirror flips them with the roads.</li>
+  </ul>
+
+  <div class="code">
+  <div class="hd"><span>assignLaneMoves: which lane may turn which way (pure, tested)</span>
+    <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/engine/procgen/city/roads/lanes/deck_mesh.h#L30-L37">src/engine/procgen/city/roads/lanes/deck_mesh.h</a></div>
+<pre><span class="c">// LANE ARROWS: what each of an approach's lanes may do at a junction, given the moves the junction</span>
+<span class="c">// offers (hasLeft/Straight/Right, in plan terms) and whether its leftmost / rightmost lane is a turn</span>
+<span class="c">// pocket. Lanes are listed plan-left first. The usual assignment: the leftmost lane turns left (and</span>
+<span class="c">// goes straight unless it is a pocket), the rightmost turns right (likewise), the middle ones go</span>
+<span class="c">// straight -- or, with no straight on offer, split left and right. buildMeshes paints these.</span>
+struct LaneMoves { bool left = false, straight = false, right = false; };
+std::vector&lt;LaneMoves&gt; assignLaneMoves(std::size_t lanes, bool hasLeft, bool hasStraight, bool hasRight,
+                                       bool leftPocket = false, bool rightPocket = false);</pre>
+</div>
+
+  <div class="shots">
+    <figure class="shot">
+      <img src="img/roads/lane-arrows.webp" alt="Seen from a bus seat: a two-lane street with a yellow centre line and white arrows painted on the lanes, houses and a forested hill beyond.">
+      <figcaption>Lane arrows as paint, seen from a bus seat (October 2026).</figcaption>
+    </figure>
+    <figure class="shot">
+      <img src="img/roads/freeway-guardrail.webp" alt="Driving on a freeway in traffic: a guardrail on the left, a concrete median barrier on the right, and a frontage road beyond it below a retaining wall.">
+      <figcaption>A freeway carriageway: guardrail at grade on the outside, a wall in the median, a frontage
+        road beyond (September 2026).</figcaption>
+    </figure>
+  </div>
+
+  <p><b>Signals</b> live in the city sim, not the builder: <code>SignalController</code> phases a junction from its
+    conflict graph. ADR-0109 added protected left turns: where opposing approaches share a green and an approach has
+    two or more lanes, the slot opens with a 7 s lead arrow plus 2.5 s yellow, during which only those lefts move.
+    Cars read their own movement (<code>CitySim::moveFor</code>), and the head gets a fourth lamp. The painted arrows
+    mark the lanes the protected left is taken from.</p>
+  <p><b>Road signs</b> are planned as data (ADR-0107: <code>planIslandSigns</code>; advance, exit, gore, route,
+    distance, entrance, wrong-way and limit signs; 221 on island 8) and drawn from one face layout: the same
+    <code>SignFace</code> renders the SVG sign sheet and is rasterised into atlas pages cached by content hash
+    (ADR-0110, <code>world/road_sign_build.h</code>), on posts or gantries 5.6 m over the road.</p>
+
+  <h2>Structure, walls and guardrails</h2>
+  <p>Where the deck stands more than <code>bridge_h</code> (4 m) over the ground, the builder places a pier every
+    <code>pier_spacing</code> (24 m), sliding it up to half a bay to keep its 2.6 m square and 1.5 m of clearance off
+    every other road and every platform (Glenn: "the pillars that hold up the freeway intersect with the road").
+    Elevated freeway and ramp lanes get a box girder underneath.</p>
+  <p>Barriers follow an <b>edge grammar</b>. Each freeway or ramp deck edge is classified by what it faces
+    (<code>EdgeRole</code>), and the class table says what to build for each role: nothing, a wall (parapet), or a
+    guardrail. Runs are found the way sidewalks are: offset the union of footprints, walk the resulting rings,
+    resample at 1 m, and split into arcs of one kind (2026-09-08: on metro 775 runs fell to 319, covering 98 % of 26.5 km).</p>
+
+  <div class="code">
+  <div class="hd"><span>EdgeRole: what a deck edge faces decides what stands on it</span>
+    <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/engine/procgen/city/roads/lanes/deck_mesh.h#L48-L55">src/engine/procgen/city/roads/lanes/deck_mesh.h</a></div>
+<pre>enum class EdgeRole : uint8_t {
+    Seam = 0,    <span class="c">// same-level pavement just beyond: not an edge of the structure at all, never walled</span>
+    Median,      <span class="c">// faces the other carriageway of the same freeway across the median</span>
+    VsStreet,    <span class="c">// faces a street, collector or arterial within reach — the freeway/city separation</span>
+    Elevated,    <span class="c">// outward edge of a deck standing clear of the ground: structure, needs a parapet</span>
+    AtGrade,     <span class="c">// outward edge sitting on the ground with nothing beyond: today gets nothing</span>
+    Count_
+};</pre>
+</div>
+
+  <p>ADR-0117 opened the grammar to any class that authors a barrier, with <code>min_drop</code>: build a rail only
+    where the ground 5 m out falls that far below the deck (a mountain road's guardrail stands where there is
+    somewhere to fall). ADR-0220 then found the island's freeway had inherited that drop rule and, because grading
+    holds the ground beside it at deck height, carried rails on only 1.4 km of 109.6 km of at-grade edge. The freeway
+    and ramps went back to the class default: a guardrail the whole way along at grade.</p>
+
+  <h2>Roads up mountains</h2>
+  <p>Glenn asked in September how roads get built "around and up and down mountains", and the honest answer was
+    that they did not. ADR-0103 added <code>routeOnTerrain</code> (<code>terrain_route.h</code>), after Galin et al.
+    2010: A* on an 8 m grid with moves in 32 directions (every coprime step up to three cells), the state being
+    (cell, incoming direction) so turns are priced exactly. Grade above the design limit is priced as
+    <b>earthwork</b>, not forbidden; only <code>hardGrade</code> is a wall. A route may not crowd itself: two
+    stretches more than 80 m apart along it must stay 20 m apart in plan, else the search reruns with that spot
+    blocked.</p>
+
+  <div class="code">
+  <div class="hd"><span>TerrainRouteParams: one road&#x27;s grade, turn and crowding rules</span>
+    <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/engine/procgen/city/terrain_route.h#L24-L39">src/engine/procgen/city/terrain_route.h</a></div>
+<pre>struct TerrainRouteParams {
+    double cell = 8.0;             <span class="c">// grid step (m)</span>
+    double maxGrade = 0.08;        <span class="c">// the road's grade: above this each move pays steeply...</span>
+    double hardGrade = 0.14;       <span class="c">// ...and above this it may not go at all</span>
+    double gradeWeight = 400.0;    <span class="c">// cost multiplier on (grade - maxGrade)^2 per metre</span>
+    double flatWeight = 2.0;       <span class="c">// a mild preference for flatter ground at any grade (x grade per metre)</span>
+    double turnWeight = 6.0;       <span class="c">// cost per radian^2 of turn between consecutive moves (x cell)</span>
+    <span class="c">// cost per (change of grade)^2 between consecutive moves, per metre: ground whose slope along the</span>
+    <span class="c">// route changes smoothly is ground a road's smoothed profile can HUG -- over jagged ground the</span>
+    <span class="c">// profile bridges the dips (decks on piers) and cuts the humps</span>
+    double bendWeight = 0.0;       <span class="c">// off by default: on metro's jagged range it traded switchbacks for grade (ADR-0103)</span>
+    double maxTurnDeg = 60.0;      <span class="c">// sharper than this between two moves is not allowed</span>
+    double margin = 500.0;         <span class="c">// the search box: the endpoints' bounds grown by this (m)</span>
+    <span class="c">// optional: where the road may not go (water, a city block); true = blocked</span>
+    std::function&lt;bool(double x, double y)&gt; blocked;
+};</pre>
+</div>
+
+  <p>The router only lays the line; the builder needed no change, because its profile, cut and fill, retaining
+    and decks on piers already are what a mountain road is. A brief's <code>world.mountainRoads</code> lists
+    <code>{from, to, class, maxGrade, hardGrade}</code>; <code>from</code> snaps to the nearest street end. What did
+    change was <i>how much it bridges</i>: <code>balance</code> (above) let the pass cut as well as fill (bridge
+    2.7 → 1.5 km, ADR-0116), and ADR-0119 added lookouts: lay-bys scored by the drop toward a town or a lake, built
+    as a 70 m <code>layby</code> pocket lane that carries the guardrail.</p>
+
+  <figure class="shot">
+    <img src="img/roads/mountain-road.webp" alt="A two-lane mountain road with a yellow centre line curving along a hillside, guardrails on both sides, street lamps, and the road visible winding further up the valley.">
+    <figcaption>A mountain road on the island, with the guardrails ADR-0117 added where there is somewhere to fall
+      (late September 2026).</figcaption>
+  </figure>
+
+  <div class="note history"><p><b>Two routers.</b> The first grade-limited router, <code>routeRoad</code> in
+    <code>terrain_field.cpp</code> (ADR-0045, earthwork dial ADR-0047), still exists behind the Lua binding
+    <code>terrain.route</code>. It searched 8 neighbours, which made switchbacks literal 45° staircases (ADR-0048's
+    "unnatural curves"). The planner and island use <code>routeOnTerrain</code>.</p></div>
+
+  <h2>Rivers and bridges</h2>
+  <p>ADR-0104 made the river the world's: the planner, the lanes ground grid and the level evaluate one hydrology.
+    In <code>planToLanesScene</code> every non-freeway street is sampled every 2 m and each wet run judged: inside a
+    street and at most 180 m long, a <b>bridge</b> (a hold at water level + 6 m, flat across the run + 14 m; the
+    builder raises a deck and sets piers, unchanged); a junction in the water pairs its straightest two streets into
+    one bridge; anything else is cut back to the banks. Blocks stand back from the water by the water mesh's outline
+    grown 6 m. Streets a ramp anchors to are never cut. ADR-0054's idea, that a water crossing is just a crossing
+    with water as the lower deck, is what made this need no new builder code.</p>
+
+  <h2>The ground: the builder grades a corridor</h2>
+  <p>A lane-built city answers <code>GroundPlan::replace</code>: the builder conforms its <b>own</b> copy of the
+    ground (a grid at the graph's <code>terrain.res</code>) while it paves, with one owner per grid node (lanes, then
+    road envelopes), a skirt and 1:2 slopes, and cut daylighting outward. Two later decisions shaped what the player
+    stands on:</p>
+  <ul>
+    <li><b>The streets set the ground</b> (Glenn approved 2026-09-29: "the terrain looks good ... smooth now").
+      An earthwork field pinned to at-grade decks and held at zero under elevated ones, each street's strip as a
+      flatten record, building pads at the front street's height, and no block terraces on lane cities. The level
+      tests <code>level_print_road_edges_meet_the_ground</code> measure it.</li>
+    <li><b>The builder's grid is a corridor, not the island</b> (ADR-0221). The island's grid is 20 m; the weathered
+      ground is 2.44 m. The loader used to draw the 20 m grid everywhere, erasing all finer detail. Now the grid is the
+      ground only where a deck reaches or the build changed it by more than 5 cm, plus 40 m, with natural detail
+      fading in over 60 m more: corridor 8 % of nodes, full detail on 84.5 %. Laying the full-detail ground
+      everywhere instead raised the poke census (terrain through a deck) from 3,713 to 120,203 samples.</li>
+  </ul>
+
+  <h2>One height convention, and the drawn section</h2>
+  <p>Downstream code needs "how high is the road here?" constantly. The answer is the <b>deck field</b>
+    (<code>RoadDeckField</code>), one <code>UnionSpine</code> per graph edge, published in the bundle. Two fixes
+    made it trustworthy:</p>
+  <ul>
+    <li><b>ADR-0136:</b> every <code>NavLink</code> carries both forms at both ends, the absolute deck Y
+      (<code>elevA/B</code>, to draw a car) and height above ground (<code>aboveA/B</code>, for every same-level
+      test), resolved once at load by the system that owns the ground. Before, a car at a ramp foot compared a deck Y
+      against street cars' heights above ground.</li>
+    <li><b>ADR-0223:</b> each lane is drawn at its own blend toward the roads it meets, so a carriageway is not level
+      across. The spine now carries the drawn heights at its left and right edges, and one function reads the
+      section.</li>
+  </ul>
+
+  <div class="code">
+  <div class="hd"><span>UnionSpine: what runs on it, and the drawn section (ADR-0159, ADR-0223)</span>
+    <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/engine/procgen/city/road_mesh.h#L139-L168">src/engine/procgen/city/road_mesh.h</a></div>
+<pre>    <span class="c">// WHAT RUNS ON IT: a road (traffic, parked cars, the street a walker is on), a TRACK or a FOOTWAY (a station's</span>
+    <span class="c">// way in). The last two are drawn decks with their own profile, but nothing on a street ever stands on them: the</span>
+    <span class="c">// deck field's queries skip them (they are not indexed), so a car under a viaduct never reads the rail above it</span>
+    <span class="c">// (Glenn, 2026-10-12: "cars weirdly stuck in the tracks"). The earthwork still rides them -- they are structure.</span>
+    enum class Use : uint8_t { Road = 0, Track = 1, Footway = 2 };
+    Use use = Use::Road;
+    <span class="c">// ...</span>
+    <span class="c">// THE DRAWN SECTION (a lane-built deck, ADR-0223): absolute deck Y at the carriageway's LEFT and RIGHT edges</span>
+    <span class="c">// (left = fwd rotated +90 in XZ, as crossSlope's; parallel to `points`; EMPTY = level across, yAbs alone). The</span>
+    <span class="c">// lanes builder draws each lane at its own blend toward the roads it meets, so a carriageway is not level</span>
+    <span class="c">// across: one centreline height left 3364 of 151k metro samples 25 cm off the drawn pavement, this 139.</span>
+    std::vector&lt;double&gt; yLeft, yRight;
+    <span class="c">// Deck Y on segment (i, i + 1) at parameter t, `lateral` metres to the left of the centreline: the profile,</span>
+    <span class="c">// the superelevation, and the drawn section lerped centre -&gt; edge on that side (held at the edge beyond it).</span>
+    double sectionY(std::size_t i, double t, double lateral) const;</pre>
+</div>
+
+  <p>Measured on metro: cars' worst sink went from −0.51 m to −0.12 m, and traffic samples past 25 cm from 3 to 0.
+    The <code>use</code> field is why a car under a light-rail viaduct no longer takes the rail's height
+    (ADR-0159).</p>
+
+  <h2>Driving on the left</h2>
+  <p>The lane model is right-handed in <b>plan</b> coordinates: forward lanes lie on the spine's right. But plan
+    (x, y) maps to world (x, z), which is a reflection, so on screen traffic keeps <b>left</b>, like the UK or Japan.
+    Glenn (2026-09-23): "Driving on the left is fine", and on 2026-10-02: "I want to keep it that way." Anything a
+    driver reads as left or right (turn arrows, an exit tab's side, signal lamps) is mirrored from the plan's
+    geometry. Lane 0 is next to the centre line (the offside), the last lane is the kerb lane.</p>
+
+  <div class="code">
+  <div class="hd"><span>rightOf: named for the maths, it points at the kerb, the driver&#x27;s LEFT</span>
+    <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/engine/ai/nav_graph.cpp#L13-L18">src/engine/ai/nav_graph.cpp</a></div>
+<pre><span class="c">// Right-hand normal of a (unit) travel direction: rotate -90 deg. With Vec2</span>
+<span class="c">// mapping to world XZ and +Y up, perp() = {-y, x} is the LEFT (+90) normal, so</span>
+<span class="c">// the right side is its negation: {y, -x}.</span>
+<span class="c">// The KERB side of travel. Named for the maths, not the road: in world x/z (y up) (dir.y, -dir.x) points to the</span>
+<span class="c">// driver's LEFT -- traffic keeps left, UK/Japan style (Glenn, 2026-10-02: "I want to keep it that way").</span>
+inline Vec2 rightOf(const Vec2&amp; dir) { return {dir.y, -dir.x}; }</pre>
+</div>
+
+  <div class="note"><p><b>Watch the comments.</b> Older comments still say "right" where they mean the kerb side
+    (the <code>parkOffset</code> note in <code>nav_graph.h</code>, and the first three lines above). The signal code
+    says "traffic keeps right" in the <i>nav</i> frame, which is the plan's handedness. Check lane offsets in the code,
+    not the prose.</p></div>
+
+  <h2>The planner: a city designed as data</h2>
+  <p>Before ADR-0092, nothing decided what a city was: <code>lanes_tool from-level</code> replayed the old lattice
+    recipe and kept what survived conversion (182 of 419 segments on metro v2), and blocks were whatever holes the
+    pavement left. Glenn: <i>"we need some way to design the city we want and build a road graph and block layout and
+    evaluate it as data before it gets built"</i>, and <i>"Can you build maps before trying to construct anything?"</i></p>
+  <p>The answer is three artefacts in <code>procgen/city/plan/</code>. A <b>Brief</b> (core grid block size and
+    angle, midtown warp, outskirts rings and spokes, freeway radius, widths, relief). A <b>CityPlan</b>: the planar
+    street graph, the freeway graph and interchanges, and every block as a face plus its buildable polygon, carrying
+    a district and a <b>use</b>. A <b>PlanScore</b> from the engine's own parcel walk and router, so a plan that scores
+    well builds the way it scored. Six candidate cities with maps come out of one <code>city_plan generate</code>
+    run in about seven seconds.</p>
+
+  <div class="code">
+  <div class="hd"><span>BlockUse and PlanBlock: a block&#x27;s use is decided in the plan, not by the lot pass</span>
+    <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/engine/procgen/city/plan/city_plan.h#L82-L97">src/engine/procgen/city/plan/city_plan.h</a></div>
+<pre>enum class BlockUse : uint8_t { Lots, Landmark, Park, RightOfWay };
+const char* blockUseName(BlockUse u);
+
+struct PlanBlock {
+    Poly2 face;              <span class="c">// the street-centreline face</span>
+    Poly2 buildable;         <span class="c">// inset by each street's half-width + sidewalk</span>
+    int district = 0;        <span class="c">// 0 core, 1 midtown, 2 outskirts</span>
+    BlockUse use = BlockUse::Lots;
+    <span class="c">// Scores (evaluatePlan).</span>
+    Real area = 0;           <span class="c">// buildable area (m²)</span>
+    Real rectangularity = 0; <span class="c">// area / oriented-box area (1 = a rectangle)</span>
+    Real narrow = 0;         <span class="c">// oriented-box short side (m)</span>
+    int edges = 0;           <span class="c">// corners of the simplified buildable polygon</span>
+    int lots = 0;            <span class="c">// a dry-run of the engine's parcel walk at the district grain</span>
+    int predictedBuildings = 0;
+};</pre>
+</div>
+
+  <figure class="shot">
+    <img src="img/roads/plan-variants.webp" alt="Six circular city plans side by side, each with a grid core, warped midtown, curving outskirts, a black freeway ring with orange interchange circles, and a scorecard of blocks, buildings, rectilinear share and freeway commute share.">
+    <figcaption><code>city_plan generate … --variants 6</code>: six variants of one brief, each with its scorecard
+      (out/plans, 2026-09-22). Glenn picked v4 (bottom middle), which became <code>metro_planned</code>.</figcaption>
+  </figure>
+  <figure class="shot">
+    <img src="img/roads/plan-metro-planned.webp" alt="The chosen plan at larger size: core lots and landmark blocks in the grid, midtown and outskirts lots, parks, freeway right-of-way in grey, twelve interchanges circled, and a scorecard reading 520 blocks, 4226 predicted buildings, 86 percent rectilinear, freeway share of commutes 24 percent.">
+    <figcaption>The chosen plan's map. Block colour is its use; the scorecard (top right) is
+      <code>evaluatePlan</code>. Rendered from the planner's SVG.</figcaption>
+  </figure>
+  <p><code>planToLanesScene</code> then writes the lanes graph: streets as chains (a curve the planner drew as forty
+    edges is one road), the freeway as two carriageways, diamond interchanges from the one diamond generator
+    (<code>interchange.cpp</code>). For the island, <code>islandLanesScene</code> stitches every place's scene with
+    the freeway, the pass and the mountain roads into one scene, with a <code>--window</code> to build one square of
+    it (Saltwood's 4.4 km window built in 80 s, ADR-0112).</p>
+  <p>The planner also scores the messes the builder used to discover: corridor overlaps, the worst junction, tight
+    turns and paved overlap (2026-10-09, after Glenn saw "many roads that merged together"; island overlap went from
+    15.9 km to 0.39 km).</p>
+
+  <h2>From builder to world: the interface</h2>
+  <p>The roads module's interface (<code>road_builder.h</code>, ADR-0089) is what makes the rest of the engine
+    indifferent to how roads were made. A builder answers four questions; the lanes builder answers them by reading
+    the city bundle, because a lane-built city is produced once per level (0.05 s for a lab, about 25 minutes for the
+    island) and the loader, <code>rt_bake</code> and the editor must all get the same city to the byte.</p>
+
+  <div class="code">
+  <div class="hd"><span>RoadProducts and RoadBuilder: what every builder owes the engine</span>
+    <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/engine/procgen/city/roads/road_builder.h#L69-L121">src/engine/procgen/city/roads/road_builder.h</a></div>
+<pre><span class="c">// What every builder owes.</span>
+struct RoadProducts {
+    std::vector&lt;RoadMesh&gt; meshes;   <span class="c">// the carriageway, kerbs, sidewalks, markings</span>
+    RoadDeckField deck;             <span class="c">// the surface things stand on</span>
+    CurbBandAudit bands;            <span class="c">// sidewalk loops — the city map draws these</span>
+    <span class="c">// The two things a builder that paves a whole CITY knows and a mesher does not.</span>
+    <span class="c">// Both empty from the lattice: a lattice level grows its lots from the road</span>
+    <span class="c">// graph's faces and has no freeway right-of-way to keep them out of.</span>
+    RoadGraph row;                  <span class="c">// freeway + ramp right-of-way: the lot pass's keep-out</span>
+    std::vector&lt;Poly2&gt; holes;       <span class="c">// un-inset pavement holes: the city's blocks</span>
+    std::vector&lt;RailTrack&gt; rails;   <span class="c">// track lanes, for whatever runs trains (empty from the lattice)</span>
+};
+<span class="c">// ...</span>
+class RoadBuilder {
+public:
+    virtual ~RoadBuilder() = default;
+    virtual const char* name() const = 0;
+    <span class="c">// The surface, built on `ground` (already carved/replaced).</span>
+    virtual RoadProducts build(const RoadBuildInput&amp; in) const = 0;
+    <span class="c">// What the ground must become before the surface exists — see GroundPlan.</span>
+    <span class="c">// The terrain pre-pass asks this against the NATURAL ground.</span>
+    virtual GroundPlan ground(const RoadBuildInput&amp; in) const = 0;
+    <span class="c">// The centrelines everything routes on: nav, traffic, furniture, signs, map.</span>
+    virtual RoadGraph navGraph(const RoadBuildInput&amp; in) const = 0;
+    <span class="c">// Is that graph THE level's road graph? The lattice says no: its navGraph is</span>
+    <span class="c">// navRoadGraph(), the same function the loader applies downstream to every</span>
+    <span class="c">// RoadEntity in the world, so publishing it here would only pre-empt that. A</span>
+    <span class="c">// builder that paves a city says yes — its graph is the twin of what it</span>
+    <span class="c">// actually built, and nothing downstream can re-derive that from the recipe.</span>
+    virtual bool ownsNavGraph() const { return false; }
+};</pre>
+</div>
+
+  <p>The nav graph is not the plan: it is a <b>twin</b> derived from what was actually built
+    (<code>roadTwin</code>): corner-only nodes, class and width per edge, deck heights as absolute elevations on
+    freeway and ramp nodes, tracks and footways left out. There are two of it on purpose: the sim's twin carries
+    each edge at its travel lanes' width (ADR-0115: cars were driving on the shoulder), and the lot pass keeps a
+    wider one at the clearance widths (<code>roads/lotnav</code>). City blocks are not extracted from any graph:
+    they are the <b>holes in the paved surface</b> (≥ 2000 m²), inset by the level's sidewalk, Glenn's "one
+    representation" rule of 2026-09-05.</p>
+
+  <div class="diagram">
+    <svg viewBox="0 0 860 300" role="img" aria-label="Structure: RoadLabGraph holds classes, rules, terrain, edges and crossings; expand makes a LaneSet; the pavement holds footprints, layers and deck surfaces; DeckHeight answers heights; the Result feeds CityProducts">
+      <defs><marker id="ar3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" fill="#6f8fb0"/></marker></defs>
+      <g font-family="system-ui, sans-serif" font-size="12">
+        <rect x="20" y="20" width="200" height="150" rx="9" fill="#131a24" stroke="#3b82f6"/>
+        <text x="35" y="42" fill="#cfe4ff" font-size="13">RoadLabGraph</text>
+        <text x="35" y="64" fill="#93a6ba">classes: RoadClassSpec</text>
+        <text x="35" y="82" fill="#93a6ba">rules: Rules</text>
+        <text x="35" y="100" fill="#93a6ba">terrain: TerrainSpec</text>
+        <text x="35" y="118" fill="#93a6ba">edges: EdgeSpec[]  (xy,s,z,t)</text>
+        <text x="35" y="136" fill="#93a6ba">connectors, crossings</text>
+        <text x="35" y="154" fill="#93a6ba">designed()</text>
+        <rect x="260" y="20" width="170" height="90" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="275" y="42" fill="#cfe4ff" font-size="13">LaneSet</text>
+        <text x="275" y="64" fill="#93a6ba">Lane[]: id, kind, parent</text>
+        <text x="275" y="82" fill="#93a6ba">w, dir, xy, left, right, s</text>
+        <text x="275" y="100" fill="#93a6ba">byId</text>
+        <rect x="260" y="140" width="170" height="70" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="275" y="162" fill="#cfe4ff" font-size="13">DeckHeight</text>
+        <text x="275" y="184" fill="#93a6ba">own() · deck() · deckRoad()</text>
+        <text x="275" y="200" fill="#93a6ba">partners by rank</text>
+        <rect x="470" y="20" width="170" height="110" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="485" y="42" fill="#cfe4ff" font-size="13">Pavement</text>
+        <text x="485" y="64" fill="#93a6ba">footprints (per lane)</text>
+        <text x="485" y="82" fill="#93a6ba">surface, shoulder,</text>
+        <text x="485" y="100" fill="#93a6ba">sidewalk, median</text>
+        <text x="485" y="118" fill="#93a6ba">decks: Surface[]</text>
+        <rect x="470" y="160" width="170" height="70" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="485" y="182" fill="#cfe4ff" font-size="13">Result</text>
+        <text x="485" y="202" fill="#93a6ba">+ piers, terrain grid,</text>
+        <text x="485" y="218" fill="#93a6ba">conform stats, timings</text>
+        <rect x="680" y="60" width="160" height="200" rx="9" fill="#131a24" stroke="#3b82f6"/>
+        <text x="695" y="82" fill="#cfe4ff" font-size="13">CityProducts</text>
+        <text x="695" y="104" fill="#93a6ba">cells: meshes per</text>
+        <text x="695" y="120" fill="#93a6ba">  (cell × material)</text>
+        <text x="695" y="140" fill="#93a6ba">ground grid</text>
+        <text x="695" y="158" fill="#93a6ba">twin, nav, lotNav, row</text>
+        <text x="695" y="176" fill="#93a6ba">holes → blocks</text>
+        <text x="695" y="194" fill="#93a6ba">deck (RoadDeckField)</text>
+        <text x="695" y="212" fill="#93a6ba">bands (kerb loops)</text>
+        <text x="695" y="230" fill="#93a6ba">rails (RailTrack[])</text>
+        <text x="695" y="248" fill="#93a6ba">report</text>
+        <line x1="220" y1="65" x2="256" y2="65" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar3)"/>
+        <text x="240" y="56" fill="#93a6ba" font-size="10" text-anchor="middle">expand</text>
+        <line x1="430" y1="65" x2="466" y2="65" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar3)"/>
+        <line x1="345" y1="110" x2="345" y2="136" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar3)"/>
+        <line x1="430" y1="175" x2="466" y2="175" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar3)"/>
+        <line x1="555" y1="130" x2="555" y2="156" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar3)"/>
+        <line x1="640" y1="195" x2="676" y2="195" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar3)"/>
+        <text x="20" y="200" fill="#93a6ba">the graph's z is written</text>
+        <text x="20" y="216" fill="#93a6ba">by designRoads (stage 2)</text>
+        <text x="430" y="285" fill="#93a6ba" text-anchor="middle">cityProductsFromResult → writeCityProducts (bundle) → readCityProducts → LaneRoadBuilder</text>
+      </g>
+    </svg>
+  </div>
+  <p class="cap">The builder's main types. Everything downstream reads the graph's resolved spines or the
+    pavement, never the JSON.</p>
+
+  <div class="code">
+  <div class="hd"><span>lanes::build: the six stages, in order</span>
+    <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/engine/procgen/city/roads/lanes/lanes.cpp#L58-L149">src/engine/procgen/city/roads/lanes/lanes.cpp</a></div>
+<pre>    auto rp = std::make_unique&lt;Result&gt;(); Result&amp; r = *rp; r.graph = std::move(graph); RoadLabGraph&amp; g = r.graph; const Rules&amp; R = g.rules;
+    std::array&lt;double, 4&gt; bounds = g.bounds(); HeightField terrain = makeTerrain(g.terrain, bounds); r.hasTerrain = g.terrain.type != "flat";
+    <span class="c">// 1. lanes (ramps compose from anchors)</span>
+    stage(0, "lanes", 0.0); r.lanes = expand(g); r.timings["lanes"] = secondsSince(t1); t1 = std::chrono::steady_clock::now(); stage(1, "profiles", 0.0);
+    <span class="c">// 2. profiles: through roads, agree at nodes and crossings (iterated), then ramps, then connector ends</span>
+    { const DesignReport dr = designRoads(g, terrain); r.nodeMismatchBefore = dr.nodeMismatchBefore; r.nodeMismatchAfter = dr.nodeMismatchAfter; r.nodeMismatchWhere = dr.nodeMismatchWhere; r.undeclaredCrossings = dr.undeclared; }
+    <span class="c">// ...</span>
+    r.timings["profiles"] = secondsSince(t1); t1 = std::chrono::steady_clock::now(); stage(2, "footprints", 0.0);
+    <span class="c">// 3. footprints, closing, layers; 4. arrangement and surfaces</span>
+    r.heights = std::make_unique&lt;DeckHeight&gt;(g, r.lanes);
+    buildFootprints(g, r.lanes, *r.heights, r.pavement); r.timings["footprints"] = secondsSince(t1); t1 = std::chrono::steady_clock::now();
+    { std::vector&lt;std::vector&lt;Ring&gt;&gt; outers(r.lanes.lanes.size()), holes(r.lanes.lanes.size());
+      for (size_t li = 0; li &lt; r.lanes.lanes.size(); ++li) for (const Polygon2&amp; p : r.pavement.footprints[li]) { outers[li].push_back(p.outer); for (const Ring&amp; h : p.holes) holes[li].push_back(h); }
+      r.heights-&gt;setFootprints(outers, holes); }
+    std::function&lt;bool(double)&gt; surf = [&amp;](double f) { stage(3, "surfaces", f); return true; };
+    buildSurfaces(g, r.lanes, *r.heights, r.pavement, opts.threads, opts.progress ? &amp;surf : nullptr); r.timings["surfaces"] = secondsSince(t1); t1 = std::chrono::steady_clock::now(); stage(4, "terrain", 0.0);
+    <span class="c">// ...</span>
+    <span class="c">// 6. terrain</span>
+    if (r.hasTerrain) {
+        const auto tb = std::chrono::steady_clock::now();
+        r.terrain = bakeGrid(terrain, g.terrain, bounds);
+        r.timings["terrain.sample"] = secondsSince(tb);
+        const auto tc = std::chrono::steady_clock::now();
+        conformGrid(g, r.lanes, *r.heights, r.terrain, r.conform, r.pavement.decks);
+        r.timings["terrain.conform"] = secondsSince(tc);
+        const auto tv = std::chrono::steady_clock::now();
+        terrainVsDeck(r.pavement.decks, r.terrain, r.conform);
+        r.timings["terrain.vsDeck"] = secondsSince(tv);
+    }
+    r.timings["terrain"] = secondsSince(t1); r.seconds = secondsSince(t0); stage(4, "done", 1.0);
+    return rp;</pre>
+</div>
+
+  <h2>How it got here</h2>
+  <div class="diagram">
+    <svg viewBox="0 0 860 330" role="img" aria-label="Timeline of the road system from June to October 2026">
+      <g font-family="system-ui, sans-serif" font-size="12">
+        <line x1="40" y1="40" x2="40" y2="315" stroke="#2c3d50" stroke-width="2"/>
+        <g fill="#cfe4ff">
+          <circle cx="40" cy="50" r="5" fill="#6f8fb0"/><text x="56" y="54">Jun · ADR-0044–0047  generators (grid, radial, tensor field), grade-limited A*, earthwork dial</text>
+          <circle cx="40" cy="80" r="5" fill="#6f8fb0"/><text x="56" y="84">Jun · ADR-0048/0056  one road model: spline is the source, the graph a derived view; one mesher</text>
+          <circle cx="40" cy="110" r="5" fill="#6f8fb0"/><text x="56" y="114">Jun · ADR-0051–0054  2.5D graph: layers, class as master knob, crossing templates, clearance solver</text>
+          <circle cx="40" cy="140" r="5" fill="#6f8fb0"/><text x="56" y="144">… the swept lattice becomes the mesher of record; the SDF and union meshers are retired</text>
+          <circle cx="40" cy="170" r="5" fill="#3b82f6"/><text x="56" y="174">Sep 4 · ADR-0083  lanelab: lane-atomic builder, quarantined, judged against the lattice</text>
+          <circle cx="40" cy="200" r="5" fill="#3b82f6"/><text x="56" y="204">Sep 9–20 · ADR-0085/0089  two builders by data, one roads module, lanes folded in</text>
+          <circle cx="40" cy="230" r="5" fill="#3b82f6"/><text x="56" y="234">Sep 22 · ADR-0092/0093  the city planned as data first; one grow</text>
+          <circle cx="40" cy="260" r="5" fill="#e6c07b"/><text x="56" y="264">Oct 14 · the lattice retires: lanes is the only builder (ADR-0089 note)</text>
+          <circle cx="40" cy="290" r="5" fill="#e6c07b"/><text x="56" y="294">Oct 20–22 · ADR-0215/0221/0223  one design stage; the builder grades a corridor; the drawn section</text>
+        </g>
+      </g>
+    </svg>
+  </div>
+  <p class="cap">The road system in nine steps. Blue: the lane builder's arrival. Amber: the lattice's retirement and
+    the design stage.</p>
+
+  <div class="note history"><p><b>Early generators (June 2026).</b> The first roads were a deformed grid, then radial
+    ring-and-spoke, then a tensor field (after Chen et al. 2008) that blends radial into grid with no seam, because a
+    tensor's eigenvectors have no head or tail. Terrain-awareness came three ways: contour coupling in the tensor
+    field, pruning streets steeper than the grade while keeping the network connected (a naive prune shattered it
+    into ~400 pieces), and a stitch backstop. On a hill study scene that took walkable streets from ~40 % to ~68 %
+    (ADR-0046). For single long roads, a grade-limited A* (ADR-0045), then a <code>cutFill</code> dial from "hug the
+    terrain" to "cut through it": length ×2.30 at 3.0 to ×1.01 at 0.02 on one test peak (ADR-0047).</p></div>
+
+  <div class="note history"><p><b>One road model, many meshers (June–August).</b> ADR-0048 observed that "a radial
+    pattern is splines, a grid is splines", and made the curve the source and the graph a derived view. The meshers
+    then went through four families: per-edge pads (self-overlapped at T-junctions), an SDF roadbed (welded by
+    rounding, but no lane parameterisation so lanes could never be textured), a polygon-union "weldSolid" (it
+    reconstructed heights per vertex from the nearest spine and produced 164 % grade steps), and the <b>swept
+    lattice</b>, which swept each chain and filled each junction with one patch. ADR-0051–0054 added layers, classes
+    with access policy, crossing templates and a clearance solver, the vocabulary the lanes builder still uses
+    (<code>Rules::underClearance</code>, <code>bridge_h</code>, the idea that a river is just a lower deck).</p></div>
+
+  <div class="note history"><p><b>Why lanes won (September–October).</b> lanelab began as a port of a Python
+    prototype (<code>~/Claude/roads/roadgen</code>, 47 invariant tests) of Glenn's framing that the lane is the atom.
+    It was built behind a link boundary with a gate: beat the lattice on a mesh-quality ratchet or be deleted
+    (ADR-0083). It needed two dependencies the repo had ruled out, Clipper2 and CDT, which Glenn signed off on
+    2026-09-09. Rather than a contest, the two ran side by side, chosen per entity (ADR-0085), then per data key
+    (<code>"builder": "lanes"</code>, ADR-0089). Glenn drove it, liked the freeway, and asked for more cities on it.
+    On 2026-10-14 he asked to "deprecate that old lattice builder ... and kill it off": every shipped city was
+    converted, four were retired because lanes exposed what the lattice's plan-union and terrain drape had hidden
+    (near-parallel 24 m arterials overlapping, streets steeper than any class allows), and about 110 lattice-only test
+    cases went with it. Interactive road editing in the editor was shelved as GitHub #103: the lanes builder makes a
+    whole city at a time.</p></div>
+
+  <div class="note history"><p><b>Measured turning points worth remembering.</b> A pass that prints "nothing to do"
+    is the one to instrument first (the cover pass dropped whole lanes because it boxed only a footprint's first
+    polygon). Holding three separate points flat sags 0.17 m between them; a hold needs a half-span. Using bridge
+    height as the line between "a ramp meets a street" and "a ramp clears it" made two rules see-saw a frontage road
+    3 m per iteration; the line is <code>ramp_level_dz</code>, 1.5 m. Prepared footprints took the island's cover
+    pass from 9.5 minutes to 1 s in the window (ADR-0112).</p></div>
+
+  <h2>Where to look</h2>
+  <ul class="files" style="overflow-wrap: anywhere">
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/procgen/city/roads/lanes/lanes.cpp">src/engine/procgen/city/roads/lanes/lanes.cpp</a> — <code>build()</code>, the six stages; invariants; <code>designedGraph</code></li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/procgen/city/roads/lanes/road_graph_spec.h">…/lanes/road_graph_spec.h</a> — the graph, classes, rules, crossings, platforms</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/procgen/city/roads/lanes/lane_expand.cpp">…/lanes/lane_expand.cpp</a> — roads to lanes, ramps from anchors, pockets, connectors</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/procgen/city/roads/lanes/road_design.cpp">…/lanes/road_design.cpp</a> — the design stage and the crossing policy</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/procgen/city/roads/lanes/vertical_profile.cpp">…/lanes/vertical_profile.cpp</a> — profiles, holds, node and crossing agreement, ramps</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/procgen/city/roads/lanes/pavement.cpp">…/lanes/pavement.cpp</a> and <a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/procgen/city/roads/lanes/deck_height.cpp">deck_height.cpp</a> — footprints, the CDT, levels, welding; heights and partner blends</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/procgen/city/roads/lanes/deck_mesh.cpp">…/lanes/deck_mesh.cpp</a> — render meshes: decks, kerbs, paint, arrows, walls, guardrails, piers, track kit</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/procgen/city/roads/lanes/terrain_conform.cpp">…/lanes/terrain_conform.cpp</a>, <a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/procgen/city/roads/lanes/block_audit.cpp">block_audit.cpp</a> — conforming the grid; blocks, pads, the earthwork field and street finish</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/procgen/city/roads/lanes/road_twin.cpp">…/lanes/road_twin.cpp</a> — the nav and lot twins</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/procgen/city/roads/lanes/city_producer.cpp">…/lanes/city_producer.cpp</a> — bundle sections, <code>kLanesBuildTag</code> (bump it when output changes)</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/procgen/city/roads/road_builder.h">src/engine/procgen/city/roads/road_builder.h</a>, <a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/procgen/city/roads/lanes_builder.cpp">lanes_builder.cpp</a> — the module interface and the lanes builder behind it</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/procgen/city/plan/city_plan.h">src/engine/procgen/city/plan/</a> — brief, plan, score; <code>plan_scene</code> writes the lanes scene</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/procgen/city/terrain_route.h">src/engine/procgen/city/terrain_route.h</a> — the mountain router</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/apps/citysim/traffic_signal.h">src/apps/citysim/traffic_signal.h</a> — signals and protected lefts; <a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/ai/nav_graph.h">src/engine/ai/nav_graph.h</a> — <code>NavLink</code></li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/tools/lanes_tool.cpp">tools/lanes_tool.cpp</a> — <code>build</code> (summary, PASS/FAIL invariants, .glb/.svg/stats; <code>--quick --probe x y r --holes --walls</code>), <code>design [--plan-crossings]</code>, <code>from-level</code>, <code>twin</code>, <code>blocks</code></li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/tools/city_plan.cpp">tools/city_plan.cpp</a> — <code>generate</code>, <code>scene</code>, <code>island-cities</code>, <code>heights</code>, <code>rivers</code>, <code>level-world</code></li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/tests/test_lanes.cpp">tests/test_lanes.cpp</a> — e.g. <code>lanes_a_planned_bridge_clears_a_road_it_stood_level_with</code>, <code>lanes_a_balanced_profile_cuts_as_well_as_fills</code>, <code>lanes_a_freeway_at_grade_wears_its_guardrails</code>, <code>lanes_the_road_grid_keeps_a_corridor_and_the_hills_their_detail</code>; also <code>test_city_plan.cpp</code>, <code>test_terrain_route.cpp</code>, <code>test_traffic_signal.cpp</code></li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/tree/main/assets/lanelab">assets/lanelab/</a> — lab scenes: <code>grid_city</code>, <code>ring_city</code>, <code>valley_viaduct</code>, <code>hill_junction</code>, <code>freeway_cross</code>, <code>steep_climb</code>, <code>merge_taper</code>, <code>system_interchange</code>; <code>tools/lanes_corpus.py --check</code> runs the corpus against a baseline</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/procgen/city/roads/lanes/README.md">…/lanes/README.md</a> — the builder's own log of every drive and fix since September</li>
+    <li>Docs: <a href="https://github.com/GlennSong/raytracer-clang/blob/main/docs/road-module-plan.md">docs/road-module-plan.md</a>, <a href="https://github.com/GlennSong/raytracer-clang/blob/main/docs/road-mesher-research.md">road-mesher-research.md</a>, <a href="https://github.com/GlennSong/raytracer-clang/blob/main/docs/freeway-rules.md">freeway-rules.md</a> (the legacy corridor freeway, marked as such)</li>
+  </ul>
+  <p><b>Debug switches.</b> <code>LANELAB_DUMP_EDGE=&lt;id&gt;</code> prints an edge's solved profile against its
+    ground; <code>LANELAB_THREADS</code> caps the parallel mesher; <code>RT_DIAMOND_WHY=1</code> and
+    <code>RT_PLAN_WHY=1</code> trace the planner; <code>RT_XC_TRACE</code> prints level crossings that won't agree;
+    <code>RT_POKE_DUMP</code> / <code>RT_POKE_SITE</code> explain terrain poking through a deck;
+    <code>RT_LANES_EARTHWORK=0</code>, <code>RT_LANES_FINISH=0</code>, <code>RT_FINISH_LEVEL=1</code> are grading A/B
+    switches; <code>RT_NOCACHE=1</code> builds the city in memory (use it for any before/after comparison: the bundle
+    key cannot see code). Older pages: <a href="../city-build.html">How the city is built</a>,
+    <a href="../city-plan.html">the city plan</a> (both predate parts of this).</p>
+
+  <footer>Code excerpts from commit <code>47d587f3</code> (2026-10-26). Drawn from ADR-0044–0054, 0056, 0083, 0085,
+    0089, 0092, 0093, 0103, 0104, 0107–0110, 0112, 0114–0117, 0119, 0136, 0153, 0159, 0215, 0220, 0221 and 0223, the
+    lanes README, and Glenn's notes on the road builder.</footer>
+</div>
+</body>
+</html>

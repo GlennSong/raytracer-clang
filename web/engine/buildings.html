@@ -1,0 +1,2128 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Buildings — How the Engine Works</title>
+  <link rel="stylesheet" href="engine.css">
+</head>
+<body>
+<div class="wrap">
+  <div class="nav"><a href="index.html">← How the engine works</a> · <a href="../index.html">scenes</a> · <a href="../buildings.html">the earlier buildings page</a></div>
+  <h1>Buildings: the shape grammar and the architectural toolkit</h1>
+  <p class="lede">Every building in a city is grown from three things: its lot's polygon, a few hundred bytes of
+    parameters, and the height of the ground. A lot becomes a rectangle on a site plan, a recipe fills in the
+    parameters, a <em>mass</em> gives an outline at every storey, a facade grammar splits each wall into bays and
+    openings, and the same storey outlines feed the interior, the colliders and a reachability gate. This page follows
+    one lot through all of it.</p>
+
+  <figure class="shot">
+    <img src="img/buildings/toolkit_towers.webp" alt="A downtown street of glass towers: a tapered glass tower on the left, a gold diagrid tower with a rounded crown, and straight curtain-wall towers behind">
+    <figcaption>Downtown on 2026-10-16. The gold diagrid tower is a lens tower, a form of the architectural toolkit
+      (the stack's scale curve under a glass dome); the stepped taper beside it and the straight towers are older
+      envelopes, now presets of the same stack, grown by the same code path.</figcaption>
+  </figure>
+
+  <h2>The problem</h2>
+  <p>A city has thousands of buildings, and none of them is modelled by hand. Each one has to look like a believable
+    building from across the river and from the pavement, stand on its lot without crossing a road, have a front door
+    on the street, and, since enterable buildings landed (<a href="https://github.com/GlennSong/raytracer-clang/blob/main/docs/decisions.md">ADR-0080</a>),
+    be a real place inside: a lobby, stairs and lifts to every floor, rooms with furniture, a way onto the roof. The
+    outside and the inside must agree to the centimetre, or the player walks through a window or into a wall.</p>
+  <p>Three ideas carry the whole system:</p>
+  <div class="grid">
+    <div class="b"><h3>Grow, don't store</h3><p>A building is a pure function of <code>(plan, params, baseY)</code>.
+      The city stores the inputs (the <em>regen key</em>) and regrows the meshes whenever it needs them: the interior
+      when the player walks up to a door, a wall again when its neighbour turns out to be shorter.</p></div>
+    <div class="b"><h3>One answer, many readers</h3><p>Where a door is, where a window is, what each storey's outline
+      is: each is decided once (<code>storeyPlans</code>, <code>facadeLayout</code>, the core) and read by the facade,
+      its far tier, the inner walls, the furniture, the collider and the graph.</p></div>
+    <div class="b"><h3>Words, not one-offs</h3><p>A new shape is a new word in the grammar (a transform on a stack, a
+      cell in a complex), never a private grower. Glenn, 2026-10-15: "it needs to be done using the building shape
+      grammar and not a one off function or chunk of code".</p></div>
+  </div>
+  <p>The older <a href="../buildings.html">buildings page</a> describes the grammar as it stood before the site plans
+    and the toolkit (recipes, tripartite composition, the facade grammar, roofs, the style book). It is still a good
+    picture of the facade vocabulary; this page is the current pipeline.</p>
+
+  <h2>The pipeline: from a lot to meshes</h2>
+  <p>The lot pass (<code>growLotBuildings</code> in <code>city_lots.cpp</code>, called through
+    <code>engine::growCity</code>) runs in passes: PASS A parcels every block into lots, PASS B places the landmarks
+    (one capitol, a school per quarter), PASS C grows every lot, and a pass after it fixes the party walls. Inside
+    PASS C each lot goes through the same stages:</p>
+  <div class="diagram">
+    <svg viewBox="0 0 780 330" role="img" aria-label="The building pipeline: lot, site plan, recipe, mass, storeys, facade words, meshes, record, then the interior at run time">
+      <defs><marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" fill="#6f8fb0"/></marker></defs>
+      <g font-family="system-ui, sans-serif" font-size="13" text-anchor="middle">
+        <rect x="20" y="20" width="170" height="62" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="105" y="46" fill="#cfe4ff">1 · Lot</text>
+        <text x="105" y="66" fill="#93a6ba" font-size="12">subdivideBlock (PASS A)</text>
+        <rect x="210" y="20" width="170" height="62" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="295" y="46" fill="#cfe4ff">2 · Site plan</text>
+        <text x="295" y="66" fill="#93a6ba" font-size="12">largestAlignedRect</text>
+        <rect x="400" y="20" width="170" height="62" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="485" y="46" fill="#cfe4ff">3 · Recipe</text>
+        <text x="485" y="66" fill="#93a6ba" font-size="12">architectPick (PASS C)</text>
+        <rect x="590" y="20" width="170" height="62" rx="9" fill="#131a24" stroke="#3b82f6"/>
+        <text x="675" y="46" fill="#cfe4ff">4 · Mass</text>
+        <text x="675" y="66" fill="#93a6ba" font-size="12">stackOf → Stack</text>
+        <rect x="590" y="130" width="170" height="62" rx="9" fill="#131a24" stroke="#3b82f6"/>
+        <text x="675" y="156" fill="#cfe4ff">5 · Storeys</text>
+        <text x="675" y="176" fill="#93a6ba" font-size="12">sliceStoreys</text>
+        <rect x="400" y="130" width="170" height="62" rx="9" fill="#131a24" stroke="#3b82f6"/>
+        <text x="485" y="156" fill="#cfe4ff">6 · Facade words</text>
+        <text x="485" y="176" fill="#93a6ba" font-size="12">facadeLayout per edge</text>
+        <rect x="210" y="130" width="170" height="62" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="295" y="156" fill="#cfe4ff">7 · Meshes</text>
+        <text x="295" y="176" fill="#93a6ba" font-size="12">growPlanBuilding</text>
+        <rect x="20" y="130" width="170" height="62" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="105" y="156" fill="#cfe4ff">8 · Record + cache</text>
+        <text x="105" y="176" fill="#93a6ba" font-size="12">BuildingRecord</text>
+        <rect x="20" y="240" width="740" height="70" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="390" y="266" fill="#cfe4ff">9 · At run time, by a door or inside: growInterior(plan, params, baseY, collider, k0, k1)</text>
+        <text x="390" y="290" fill="#93a6ba" font-size="12">the core (circulation) · rooms (roomPlan, zonedFloorPlan) · furniture · colliders — and offline, the space graph gate</text>
+        <line x1="190" y1="51" x2="206" y2="51" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar)"/>
+        <line x1="380" y1="51" x2="396" y2="51" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar)"/>
+        <line x1="570" y1="51" x2="586" y2="51" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar)"/>
+        <line x1="675" y1="82" x2="675" y2="126" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar)"/>
+        <line x1="590" y1="161" x2="574" y2="161" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar)"/>
+        <line x1="400" y1="161" x2="384" y2="161" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar)"/>
+        <line x1="210" y1="161" x2="194" y2="161" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar)"/>
+        <line x1="105" y1="192" x2="105" y2="236" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar)"/>
+        <text x="120" y="220" fill="#e6c07b" font-size="11" text-anchor="start">regen key: plan + params + baseY</text>
+      </g>
+    </svg>
+  </div>
+  <p class="cap">The stages a lot goes through. Blue boxes are the stages the architectural toolkit (ADR-0174) reworked:
+    the mass, the storeys it slices, and the facade words that read them; every form reaches the rest of the system as
+    storey outlines. Stages 1–8 run when the lots are baked; stage
+    9 runs in the game, on demand, from the record alone.</p>
+
+  <table>
+    <tr><th>stage</th><th>what it decides</th><th>where</th></tr>
+    <tr><td>Lot</td><td>a polygon with a frontage direction (toward its street), cut frontage-first from the block</td><td><code>parcel.h</code> <code>subdivideBlock</code></td></tr>
+    <tr><td>Site plan</td><td>the buildable rectangle square to the street, and the open ground round it</td><td><code>site_plan.h</code></td></tr>
+    <tr><td>Recipe</td><td>what stands here: a named recipe from the district's table fills a <code>BuildingRecipe</code></td><td><code>architect.h</code></td></tr>
+    <tr><td>Mass</td><td>the form: a stack of sections, a field, a mesh, or a complex of cells</td><td><code>mass.h</code>, <code>mass_stack.h</code>, <code>implicit.h</code>, <code>mesh_mass.h</code>, <code>cells.h</code></td></tr>
+    <tr><td>Storeys</td><td>one outline per storey, its floor height and tier</td><td><code>storeyPlans</code> (<code>shape_grammar.h</code>)</td></tr>
+    <tr><td>Facade words</td><td>per plan edge per storey: the bays, every opening's span, sill and head, the shops</td><td><code>facadeLayout</code> (<code>shape_grammar.cpp</code>)</td></tr>
+    <tr><td>Meshes</td><td>parts by material class (<code>PartId</code>), a far tier, a proxy, attach points, roof items</td><td><code>growPlanBuilding</code></td></tr>
+    <tr><td>Record</td><td>what the runtime needs to regrow and enter it</td><td><code>building_records.h</code>, <code>lot_cache.h</code></td></tr>
+  </table>
+
+  <h2>Lots and the site plan</h2>
+  <p>A <b>block</b> is a face of the road graph (see <a href="roads.html">roads</a>). The parceller walks the block's
+    edges and lays lots along each street (by default <code>frontWidth</code> 16 m wide and <code>lotDepth</code> 28 m deep),
+    mitred at the corners, with the leftover middle as one court; only a block the walk cannot fill falls back to
+    recursive bisection of its oriented bounding box (<code>parcel.h</code>). Every lot keeps a <code>frontage</code>
+    vector pointing at its street, which is how a building knows where its front door goes.</p>
+  <p>Lots beside a non-square corner come out as trapezoids, because the walk clips each strip by the corner's
+    bisector. Until September the grammar extruded that trapezoid verbatim, so every building filled its lot and many
+    had a slanted wall. <a href="https://github.com/GlennSong/raytracer-clang/blob/main/docs/decisions.md">ADR-0086</a>
+    put a blueprint layer in between, on the rule <em>buildings are rectilinear; lots are not; the difference is
+    paving, planting, a plaza or a yard</em>:</p>
+  <div class="diagram">
+    <svg viewBox="0 0 760 290" role="img" aria-label="A trapezoid lot with its frame on the street edge, the largest frame-aligned rectangle inside its yards, and the raster the search runs on">
+      <defs><marker id="sa" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" fill="#e6c07b"/></marker></defs>
+      <g font-family="system-ui, sans-serif">
+<rect x="10" y="252" width="350" height="26" fill="#1a2028" stroke="#2c3d50"/>
+<text x="185" y="270" fill="#93a6ba" font-size="12" text-anchor="middle">street (the lot's frontage)</text>
+<polygon points="40.0,240.0 346.0,240.0 301.0,51.0 85.0,42.0" fill="#16251a" stroke="#8ec5ff" stroke-width="1.4"/>
+<rect x="89.5" y="100.5" width="207.0" height="108.0" fill="#131a24" stroke="#3b82f6" stroke-width="2"/>
+<text x="193.0" y="152.5" fill="#cfe4ff" font-size="13" text-anchor="middle">the buildable</text>
+<text x="193.0" y="168.5" fill="#93a6ba" font-size="11" text-anchor="middle">23 × 12 m, square to u</text>
+<text x="193.0" y="228.2" fill="#e6c07b" font-size="11" text-anchor="middle">forecourt</text>
+<text x="193.0" y="77.5" fill="#e6c07b" font-size="11" text-anchor="middle">rear yard</text>
+<text x="313.6" y="159.0" fill="#e6c07b" font-size="11" text-anchor="middle">side</text>
+<text x="72.4" y="159.0" fill="#e6c07b" font-size="11" text-anchor="middle">side</text>
+<circle cx="40.0" cy="240.0" r="3.5" fill="#e6c07b"/>
+<line x1="40.0" y1="246.0" x2="100.0" y2="246.0" stroke="#e6c07b" stroke-width="1.6" marker-end="url(#sa)"/>
+<text x="104.0" y="250.0" fill="#e6c07b" font-size="12">u</text>
+<line x1="32.0" y1="240.0" x2="32.0" y2="185.0" stroke="#e6c07b" stroke-width="1.6" marker-end="url(#sa)"/>
+<text x="18.0" y="182.0" fill="#e6c07b" font-size="12">v</text>
+<rect x="410.0" y="233.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="417.0" y="233.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="424.0" y="233.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="431.0" y="233.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="438.0" y="233.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="445.0" y="233.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="452.0" y="233.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="459.0" y="233.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="466.0" y="233.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="473.0" y="233.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="480.0" y="233.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="487.0" y="233.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="494.0" y="233.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="501.0" y="233.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="508.0" y="233.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="515.0" y="233.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="522.0" y="233.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="529.0" y="233.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="536.0" y="233.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="543.0" y="233.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="550.0" y="233.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="557.0" y="233.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="564.0" y="233.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="571.0" y="233.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="578.0" y="233.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="585.0" y="233.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="592.0" y="233.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="599.0" y="233.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="606.0" y="233.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="613.0" y="233.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="620.0" y="233.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="627.0" y="233.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="634.0" y="233.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="641.0" y="233.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="410.0" y="226.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="417.0" y="226.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="424.0" y="226.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="431.0" y="226.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="438.0" y="226.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="445.0" y="226.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="452.0" y="226.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="459.0" y="226.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="466.0" y="226.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="473.0" y="226.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="480.0" y="226.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="487.0" y="226.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="494.0" y="226.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="501.0" y="226.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="508.0" y="226.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="515.0" y="226.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="522.0" y="226.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="529.0" y="226.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="536.0" y="226.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="543.0" y="226.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="550.0" y="226.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="557.0" y="226.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="564.0" y="226.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="571.0" y="226.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="578.0" y="226.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="585.0" y="226.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="592.0" y="226.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="599.0" y="226.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="606.0" y="226.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="613.0" y="226.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="620.0" y="226.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="627.0" y="226.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="634.0" y="226.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="641.0" y="226.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="410.0" y="219.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="417.0" y="219.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="424.0" y="219.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="431.0" y="219.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="438.0" y="219.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="445.0" y="219.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="452.0" y="219.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="459.0" y="219.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="466.0" y="219.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="473.0" y="219.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="480.0" y="219.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="487.0" y="219.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="494.0" y="219.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="501.0" y="219.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="508.0" y="219.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="515.0" y="219.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="522.0" y="219.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="529.0" y="219.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="536.0" y="219.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="543.0" y="219.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="550.0" y="219.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="557.0" y="219.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="564.0" y="219.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="571.0" y="219.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="578.0" y="219.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="585.0" y="219.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="592.0" y="219.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="599.0" y="219.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="606.0" y="219.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="613.0" y="219.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="620.0" y="219.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="627.0" y="219.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="634.0" y="219.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="641.0" y="219.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="410.0" y="212.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="417.0" y="212.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="424.0" y="212.0" width="6.0" height="6.0" fill="#2a4a33"/>
+<rect x="431.0" y="212.0" width="6.0" height="6.0" fill="#2a4a33"/>
+<rect x="438.0" y="212.0" width="6.0" height="6.0" fill="#2a4a33"/>
+<rect x="445.0" y="212.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="452.0" y="212.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="459.0" y="212.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="466.0" y="212.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="473.0" y="212.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="480.0" y="212.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="487.0" y="212.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="494.0" y="212.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="501.0" y="212.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="508.0" y="212.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="515.0" y="212.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="522.0" y="212.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="529.0" y="212.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="536.0" y="212.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="543.0" y="212.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="550.0" y="212.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="557.0" y="212.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="564.0" y="212.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="571.0" y="212.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="578.0" y="212.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="585.0" y="212.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="592.0" y="212.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="599.0" y="212.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="606.0" y="212.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="613.0" y="212.0" width="6.0" height="6.0" fill="#2a4a33"/>
+<rect x="620.0" y="212.0" width="6.0" height="6.0" fill="#2a4a33"/>
+<rect x="627.0" y="212.0" width="6.0" height="6.0" fill="#2a4a33"/>
+<rect x="634.0" y="212.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="641.0" y="212.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="410.0" y="205.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="417.0" y="205.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="424.0" y="205.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="431.0" y="205.0" width="6.0" height="6.0" fill="#2a4a33"/>
+<rect x="438.0" y="205.0" width="6.0" height="6.0" fill="#2a4a33"/>
+<rect x="445.0" y="205.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="452.0" y="205.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="459.0" y="205.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="466.0" y="205.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="473.0" y="205.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="480.0" y="205.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="487.0" y="205.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="494.0" y="205.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="501.0" y="205.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="508.0" y="205.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="515.0" y="205.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="522.0" y="205.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="529.0" y="205.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="536.0" y="205.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="543.0" y="205.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="550.0" y="205.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="557.0" y="205.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="564.0" y="205.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="571.0" y="205.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="578.0" y="205.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="585.0" y="205.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="592.0" y="205.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="599.0" y="205.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="606.0" y="205.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="613.0" y="205.0" width="6.0" height="6.0" fill="#2a4a33"/>
+<rect x="620.0" y="205.0" width="6.0" height="6.0" fill="#2a4a33"/>
+<rect x="627.0" y="205.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="634.0" y="205.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="641.0" y="205.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="410.0" y="198.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="417.0" y="198.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="424.0" y="198.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="431.0" y="198.0" width="6.0" height="6.0" fill="#2a4a33"/>
+<rect x="438.0" y="198.0" width="6.0" height="6.0" fill="#2a4a33"/>
+<rect x="445.0" y="198.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="452.0" y="198.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="459.0" y="198.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="466.0" y="198.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="473.0" y="198.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="480.0" y="198.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="487.0" y="198.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="494.0" y="198.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="501.0" y="198.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="508.0" y="198.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="515.0" y="198.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="522.0" y="198.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="529.0" y="198.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="536.0" y="198.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="543.0" y="198.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="550.0" y="198.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="557.0" y="198.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="564.0" y="198.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="571.0" y="198.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="578.0" y="198.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="585.0" y="198.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="592.0" y="198.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="599.0" y="198.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="606.0" y="198.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="613.0" y="198.0" width="6.0" height="6.0" fill="#2a4a33"/>
+<rect x="620.0" y="198.0" width="6.0" height="6.0" fill="#2a4a33"/>
+<rect x="627.0" y="198.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="634.0" y="198.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="641.0" y="198.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="410.0" y="191.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="417.0" y="191.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="424.0" y="191.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="431.0" y="191.0" width="6.0" height="6.0" fill="#2a4a33"/>
+<rect x="438.0" y="191.0" width="6.0" height="6.0" fill="#2a4a33"/>
+<rect x="445.0" y="191.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="452.0" y="191.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="459.0" y="191.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="466.0" y="191.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="473.0" y="191.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="480.0" y="191.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="487.0" y="191.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="494.0" y="191.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="501.0" y="191.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="508.0" y="191.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="515.0" y="191.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="522.0" y="191.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="529.0" y="191.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="536.0" y="191.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="543.0" y="191.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="550.0" y="191.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="557.0" y="191.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="564.0" y="191.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="571.0" y="191.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="578.0" y="191.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="585.0" y="191.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="592.0" y="191.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="599.0" y="191.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="606.0" y="191.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="613.0" y="191.0" width="6.0" height="6.0" fill="#2a4a33"/>
+<rect x="620.0" y="191.0" width="6.0" height="6.0" fill="#2a4a33"/>
+<rect x="627.0" y="191.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="634.0" y="191.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="641.0" y="191.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="410.0" y="184.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="417.0" y="184.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="424.0" y="184.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="431.0" y="184.0" width="6.0" height="6.0" fill="#2a4a33"/>
+<rect x="438.0" y="184.0" width="6.0" height="6.0" fill="#2a4a33"/>
+<rect x="445.0" y="184.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="452.0" y="184.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="459.0" y="184.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="466.0" y="184.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="473.0" y="184.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="480.0" y="184.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="487.0" y="184.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="494.0" y="184.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="501.0" y="184.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="508.0" y="184.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="515.0" y="184.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="522.0" y="184.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="529.0" y="184.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="536.0" y="184.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="543.0" y="184.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="550.0" y="184.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="557.0" y="184.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="564.0" y="184.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="571.0" y="184.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="578.0" y="184.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="585.0" y="184.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="592.0" y="184.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="599.0" y="184.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="606.0" y="184.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="613.0" y="184.0" width="6.0" height="6.0" fill="#2a4a33"/>
+<rect x="620.0" y="184.0" width="6.0" height="6.0" fill="#2a4a33"/>
+<rect x="627.0" y="184.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="634.0" y="184.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="641.0" y="184.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="410.0" y="177.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="417.0" y="177.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="424.0" y="177.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="431.0" y="177.0" width="6.0" height="6.0" fill="#2a4a33"/>
+<rect x="438.0" y="177.0" width="6.0" height="6.0" fill="#2a4a33"/>
+<rect x="445.0" y="177.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="452.0" y="177.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="459.0" y="177.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="466.0" y="177.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="473.0" y="177.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="480.0" y="177.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="487.0" y="177.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="494.0" y="177.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="501.0" y="177.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="508.0" y="177.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="515.0" y="177.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="522.0" y="177.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="529.0" y="177.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="536.0" y="177.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="543.0" y="177.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="550.0" y="177.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="557.0" y="177.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="564.0" y="177.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="571.0" y="177.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="578.0" y="177.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="585.0" y="177.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="592.0" y="177.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="599.0" y="177.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="606.0" y="177.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="613.0" y="177.0" width="6.0" height="6.0" fill="#2a4a33"/>
+<rect x="620.0" y="177.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="627.0" y="177.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="634.0" y="177.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="641.0" y="177.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="410.0" y="170.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="417.0" y="170.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="424.0" y="170.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="431.0" y="170.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="438.0" y="170.0" width="6.0" height="6.0" fill="#2a4a33"/>
+<rect x="445.0" y="170.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="452.0" y="170.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="459.0" y="170.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="466.0" y="170.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="473.0" y="170.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="480.0" y="170.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="487.0" y="170.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="494.0" y="170.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="501.0" y="170.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="508.0" y="170.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="515.0" y="170.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="522.0" y="170.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="529.0" y="170.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="536.0" y="170.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="543.0" y="170.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="550.0" y="170.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="557.0" y="170.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="564.0" y="170.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="571.0" y="170.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="578.0" y="170.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="585.0" y="170.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="592.0" y="170.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="599.0" y="170.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="606.0" y="170.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="613.0" y="170.0" width="6.0" height="6.0" fill="#2a4a33"/>
+<rect x="620.0" y="170.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="627.0" y="170.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="634.0" y="170.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="641.0" y="170.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="410.0" y="163.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="417.0" y="163.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="424.0" y="163.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="431.0" y="163.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="438.0" y="163.0" width="6.0" height="6.0" fill="#2a4a33"/>
+<rect x="445.0" y="163.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="452.0" y="163.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="459.0" y="163.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="466.0" y="163.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="473.0" y="163.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="480.0" y="163.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="487.0" y="163.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="494.0" y="163.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="501.0" y="163.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="508.0" y="163.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="515.0" y="163.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="522.0" y="163.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="529.0" y="163.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="536.0" y="163.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="543.0" y="163.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="550.0" y="163.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="557.0" y="163.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="564.0" y="163.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="571.0" y="163.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="578.0" y="163.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="585.0" y="163.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="592.0" y="163.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="599.0" y="163.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="606.0" y="163.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="613.0" y="163.0" width="6.0" height="6.0" fill="#2a4a33"/>
+<rect x="620.0" y="163.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="627.0" y="163.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="634.0" y="163.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="641.0" y="163.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="410.0" y="156.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="417.0" y="156.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="424.0" y="156.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="431.0" y="156.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="438.0" y="156.0" width="6.0" height="6.0" fill="#2a4a33"/>
+<rect x="445.0" y="156.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="452.0" y="156.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="459.0" y="156.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="466.0" y="156.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="473.0" y="156.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="480.0" y="156.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="487.0" y="156.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="494.0" y="156.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="501.0" y="156.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="508.0" y="156.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="515.0" y="156.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="522.0" y="156.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="529.0" y="156.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="536.0" y="156.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="543.0" y="156.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="550.0" y="156.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="557.0" y="156.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="564.0" y="156.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="571.0" y="156.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="578.0" y="156.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="585.0" y="156.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="592.0" y="156.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="599.0" y="156.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="606.0" y="156.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="613.0" y="156.0" width="6.0" height="6.0" fill="#2a4a33"/>
+<rect x="620.0" y="156.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="627.0" y="156.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="634.0" y="156.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="641.0" y="156.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="410.0" y="149.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="417.0" y="149.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="424.0" y="149.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="431.0" y="149.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="438.0" y="149.0" width="6.0" height="6.0" fill="#2a4a33"/>
+<rect x="445.0" y="149.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="452.0" y="149.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="459.0" y="149.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="466.0" y="149.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="473.0" y="149.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="480.0" y="149.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="487.0" y="149.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="494.0" y="149.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="501.0" y="149.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="508.0" y="149.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="515.0" y="149.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="522.0" y="149.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="529.0" y="149.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="536.0" y="149.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="543.0" y="149.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="550.0" y="149.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="557.0" y="149.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="564.0" y="149.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="571.0" y="149.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="578.0" y="149.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="585.0" y="149.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="592.0" y="149.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="599.0" y="149.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="606.0" y="149.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="613.0" y="149.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="620.0" y="149.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="627.0" y="149.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="634.0" y="149.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="641.0" y="149.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="410.0" y="142.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="417.0" y="142.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="424.0" y="142.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="431.0" y="142.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="438.0" y="142.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="445.0" y="142.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="452.0" y="142.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="459.0" y="142.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="466.0" y="142.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="473.0" y="142.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="480.0" y="142.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="487.0" y="142.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="494.0" y="142.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="501.0" y="142.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="508.0" y="142.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="515.0" y="142.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="522.0" y="142.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="529.0" y="142.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="536.0" y="142.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="543.0" y="142.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="550.0" y="142.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="557.0" y="142.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="564.0" y="142.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="571.0" y="142.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="578.0" y="142.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="585.0" y="142.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="592.0" y="142.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="599.0" y="142.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="606.0" y="142.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="613.0" y="142.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="620.0" y="142.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="627.0" y="142.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="634.0" y="142.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="641.0" y="142.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="410.0" y="135.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="417.0" y="135.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="424.0" y="135.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="431.0" y="135.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="438.0" y="135.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="445.0" y="135.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="452.0" y="135.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="459.0" y="135.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="466.0" y="135.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="473.0" y="135.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="480.0" y="135.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="487.0" y="135.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="494.0" y="135.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="501.0" y="135.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="508.0" y="135.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="515.0" y="135.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="522.0" y="135.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="529.0" y="135.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="536.0" y="135.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="543.0" y="135.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="550.0" y="135.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="557.0" y="135.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="564.0" y="135.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="571.0" y="135.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="578.0" y="135.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="585.0" y="135.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="592.0" y="135.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="599.0" y="135.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="606.0" y="135.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="613.0" y="135.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="620.0" y="135.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="627.0" y="135.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="634.0" y="135.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="641.0" y="135.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="410.0" y="128.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="417.0" y="128.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="424.0" y="128.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="431.0" y="128.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="438.0" y="128.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="445.0" y="128.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="452.0" y="128.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="459.0" y="128.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="466.0" y="128.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="473.0" y="128.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="480.0" y="128.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="487.0" y="128.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="494.0" y="128.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="501.0" y="128.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="508.0" y="128.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="515.0" y="128.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="522.0" y="128.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="529.0" y="128.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="536.0" y="128.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="543.0" y="128.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="550.0" y="128.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="557.0" y="128.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="564.0" y="128.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="571.0" y="128.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="578.0" y="128.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="585.0" y="128.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="592.0" y="128.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="599.0" y="128.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="606.0" y="128.0" width="6.0" height="6.0" fill="#24476e"/>
+<rect x="613.0" y="128.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="620.0" y="128.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="627.0" y="128.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="634.0" y="128.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="641.0" y="128.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="410.0" y="121.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="417.0" y="121.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="424.0" y="121.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="431.0" y="121.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="438.0" y="121.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="445.0" y="121.0" width="6.0" height="6.0" fill="#2a4a33"/>
+<rect x="452.0" y="121.0" width="6.0" height="6.0" fill="#2a4a33"/>
+<rect x="459.0" y="121.0" width="6.0" height="6.0" fill="#2a4a33"/>
+<rect x="466.0" y="121.0" width="6.0" height="6.0" fill="#2a4a33"/>
+<rect x="473.0" y="121.0" width="6.0" height="6.0" fill="#2a4a33"/>
+<rect x="480.0" y="121.0" width="6.0" height="6.0" fill="#2a4a33"/>
+<rect x="487.0" y="121.0" width="6.0" height="6.0" fill="#2a4a33"/>
+<rect x="494.0" y="121.0" width="6.0" height="6.0" fill="#2a4a33"/>
+<rect x="501.0" y="121.0" width="6.0" height="6.0" fill="#2a4a33"/>
+<rect x="508.0" y="121.0" width="6.0" height="6.0" fill="#2a4a33"/>
+<rect x="515.0" y="121.0" width="6.0" height="6.0" fill="#2a4a33"/>
+<rect x="522.0" y="121.0" width="6.0" height="6.0" fill="#2a4a33"/>
+<rect x="529.0" y="121.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="536.0" y="121.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="543.0" y="121.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="550.0" y="121.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="557.0" y="121.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="564.0" y="121.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="571.0" y="121.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="578.0" y="121.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="585.0" y="121.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="592.0" y="121.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="599.0" y="121.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="606.0" y="121.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="613.0" y="121.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="620.0" y="121.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="627.0" y="121.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="634.0" y="121.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="641.0" y="121.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="410.0" y="114.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="417.0" y="114.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="424.0" y="114.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="431.0" y="114.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="438.0" y="114.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="445.0" y="114.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="452.0" y="114.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="459.0" y="114.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="466.0" y="114.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="473.0" y="114.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="480.0" y="114.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="487.0" y="114.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="494.0" y="114.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="501.0" y="114.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="508.0" y="114.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="515.0" y="114.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="522.0" y="114.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="529.0" y="114.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="536.0" y="114.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="543.0" y="114.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="550.0" y="114.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="557.0" y="114.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="564.0" y="114.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="571.0" y="114.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="578.0" y="114.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="585.0" y="114.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="592.0" y="114.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="599.0" y="114.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="606.0" y="114.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="613.0" y="114.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="620.0" y="114.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="627.0" y="114.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="634.0" y="114.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="641.0" y="114.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="410.0" y="107.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="417.0" y="107.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="424.0" y="107.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="431.0" y="107.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="438.0" y="107.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="445.0" y="107.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="452.0" y="107.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="459.0" y="107.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="466.0" y="107.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="473.0" y="107.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="480.0" y="107.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="487.0" y="107.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="494.0" y="107.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="501.0" y="107.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="508.0" y="107.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="515.0" y="107.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="522.0" y="107.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="529.0" y="107.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="536.0" y="107.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="543.0" y="107.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="550.0" y="107.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="557.0" y="107.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="564.0" y="107.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="571.0" y="107.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="578.0" y="107.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="585.0" y="107.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="592.0" y="107.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="599.0" y="107.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="606.0" y="107.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="613.0" y="107.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="620.0" y="107.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="627.0" y="107.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="634.0" y="107.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="641.0" y="107.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="410.0" y="100.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="417.0" y="100.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="424.0" y="100.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="431.0" y="100.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="438.0" y="100.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="445.0" y="100.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="452.0" y="100.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="459.0" y="100.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="466.0" y="100.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="473.0" y="100.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="480.0" y="100.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="487.0" y="100.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="494.0" y="100.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="501.0" y="100.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="508.0" y="100.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="515.0" y="100.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="522.0" y="100.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="529.0" y="100.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="536.0" y="100.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="543.0" y="100.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="550.0" y="100.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="557.0" y="100.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="564.0" y="100.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="571.0" y="100.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="578.0" y="100.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="585.0" y="100.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="592.0" y="100.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="599.0" y="100.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="606.0" y="100.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="613.0" y="100.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="620.0" y="100.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="627.0" y="100.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="634.0" y="100.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="641.0" y="100.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="410.0" y="93.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="417.0" y="93.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="424.0" y="93.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="431.0" y="93.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="438.0" y="93.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="445.0" y="93.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="452.0" y="93.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="459.0" y="93.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="466.0" y="93.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="473.0" y="93.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="480.0" y="93.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="487.0" y="93.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="494.0" y="93.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="501.0" y="93.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="508.0" y="93.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="515.0" y="93.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="522.0" y="93.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="529.0" y="93.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="536.0" y="93.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="543.0" y="93.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="550.0" y="93.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="557.0" y="93.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="564.0" y="93.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="571.0" y="93.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="578.0" y="93.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="585.0" y="93.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="592.0" y="93.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="599.0" y="93.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="606.0" y="93.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="613.0" y="93.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="620.0" y="93.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="627.0" y="93.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="634.0" y="93.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="641.0" y="93.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="410.0" y="86.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="417.0" y="86.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="424.0" y="86.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="431.0" y="86.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="438.0" y="86.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="445.0" y="86.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="452.0" y="86.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="459.0" y="86.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="466.0" y="86.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="473.0" y="86.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="480.0" y="86.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="487.0" y="86.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="494.0" y="86.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="501.0" y="86.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="508.0" y="86.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="515.0" y="86.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="522.0" y="86.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="529.0" y="86.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="536.0" y="86.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="543.0" y="86.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="550.0" y="86.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="557.0" y="86.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="564.0" y="86.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="571.0" y="86.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="578.0" y="86.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="585.0" y="86.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="592.0" y="86.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="599.0" y="86.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="606.0" y="86.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="613.0" y="86.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="620.0" y="86.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="627.0" y="86.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="634.0" y="86.0" width="6.0" height="6.0" fill="#121820"/>
+<rect x="641.0" y="86.0" width="6.0" height="6.0" fill="#121820"/>
+<polygon points="410.0,240.0 648.0,240.0 613.0,93.0 445.0,86.0" fill="none" stroke="#8ec5ff" stroke-width="1.2"/>
+<text x="410" y="262" fill="#93a6ba" font-size="12">cells kept: inside the lot and a yard clear of every edge</text>
+<text x="410" y="278" fill="#93a6ba" font-size="12">blue: the largest all-kept rectangle (stack scan per row)</text>
+<!-- sides=['front', 'side', 'rear', 'side'] rect u 5.5-28.5 v 3.5-15.5 area 312 -->
+      </g>
+    </svg>
+  </div>
+  <p class="cap">Left: a 34 m lot whose side lines lean in, with residential yards (front 3 m, side 1.5 m, rear 5 m).
+    <code>SiteFrame</code> sits on the frontage edge: <code>u</code> along the street, <code>v</code> inward. Right:
+    the same lot rastered on the frame (drawn at 1 m; the code uses 0.5 m); a cell is kept when its centre is in the
+    lot and at least its edge's yard from every edge. The blue block is the largest rectangle of kept cells, here
+    23 × 12 m. The ground left over is cut by the rectangle's lines into a forecourt, side yards and a rear yard
+    (<code>openSpacePieces</code>). This diagram was computed with the same rules, not drawn by eye.</p>
+
+  <div class="code">
+    <div class="hd"><span>largestAlignedRect: the classic largest-rectangle-in-a-histogram scan over the kept cells</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/engine/procgen/city/site_plan.cpp#L105-L130">src/engine/procgen/city/site_plan.cpp</a></div>
+<pre><span class="c">    // Largest rectangle of 1s: per row, a histogram of consecutive usable</span>
+<span class="c">    // cells above, and the classic stack scan for the widest bar span.</span>
+    <span class="t">std::vector</span>&lt;<span class="t">int</span>&gt; height(nx, <span class="n">0</span>), stack;
+    <span class="t">int</span> bestArea = <span class="n">0</span>, bi0 = <span class="n">0</span>, bi1 = -<span class="n">1</span>, bj0 = <span class="n">0</span>, bj1 = -<span class="n">1</span>;
+    <span class="k">const</span> <span class="t">int</span> minCells = std::max(<span class="n">1</span>, <span class="k">static_cast</span>&lt;<span class="t">int</span>&gt;(std::ceil(minSide / cell)));
+    <span class="k">for</span> (<span class="t">int</span> j = <span class="n">0</span>; j &lt; ny; ++j) {
+        <span class="k">for</span> (<span class="t">int</span> i = <span class="n">0</span>; i &lt; nx; ++i)
+            height[i] = mask[<span class="k">static_cast</span>&lt;<span class="t">std::size_t</span>&gt;(j) * nx + i] ? height[i] + <span class="n">1</span> : <span class="n">0</span>;
+        stack.clear();
+        <span class="k">for</span> (<span class="t">int</span> i = <span class="n">0</span>; i &lt;= nx; ++i) {
+            <span class="k">const</span> <span class="t">int</span> h = i &lt; nx ? height[i] : <span class="n">0</span>;
+            <span class="k">while</span> (!stack.empty() &amp;&amp; height[stack.back()] &gt;= h) {
+                <span class="k">const</span> <span class="t">int</span> top = stack.back();
+                stack.pop_back();
+                <span class="k">const</span> <span class="t">int</span> hh = height[top];
+                <span class="k">const</span> <span class="t">int</span> left = stack.empty() ? <span class="n">0</span> : stack.back() + <span class="n">1</span>;
+                <span class="k">const</span> <span class="t">int</span> width = i - left;
+                <span class="k">if</span> (hh &gt;= minCells &amp;&amp; width &gt;= minCells &amp;&amp; hh * width &gt; bestArea) {
+                    bestArea = hh * width;
+                    bi0 = left; bi1 = i - <span class="n">1</span>;
+                    bj0 = j - hh + <span class="n">1</span>; bj1 = j;
+                }
+            }
+            stack.push_back(i);
+        }
+    }</pre>
+  </div>
+  <p>The raster never asks about roads (that check walks every road edge and is far too slow per cell). Instead the lot
+    pass searches the lot, then the lot inset by 0.8, 1.6, 2.6 and 3.6 m, until the rectangle's corners and edge
+    midpoints clear the road corridors (<code>city_lots.cpp</code>, the <code>SITE PLAN</code> block in PASS C). Yards
+    come per district from <code>BlockInfo::yards</code>: financial and commercial 0 / 0.3 / 3 m, old town 0 / 0.3 /
+    2, industrial 2 / 2 / 2, residential 3 / 1.5 / 5 (ADR-0086). Downtown, the leftover ground is not grass: an urban
+    lot is paved to its lot line at the pavement's height, and the building's base <em>is</em> that paving, so a
+    downtown door is flush with the street.</p>
+  <figure class="shot">
+    <img src="img/buildings/downtown_above.webp" alt="A downtown seen from above: towers on rectangular plates, plazas and paved forecourts between them and the streets">
+    <figcaption>A downtown from above (2026-10-16). Each tower stands on a rectangle square to its street; the paved
+      strips and plazas between towers and kerbs are the leftover ground of their lots.</figcaption>
+  </figure>
+  <div class="note history"><p><b>How it got here.</b> The first thing ADR-0086 built was a census, which put numbers
+    on the complaint: on piedmont_mini only 26.4 % of buildings had no oblique corner. After the site plan: 92.1 %
+    (lanelab metro 59.5 → 81.5 %, lattice metro 54.9 → 86.9 %). Coverage fell by about a quarter, and the lattice
+    metro's tallest tower lost ten floors (50 → 40), because the slenderness cap reads the plate's short side and the
+    honest rectangle is smaller than the trapezoid's bounding box had flattered it. Rejected: snapping the polygon's
+    corners inside the grammar (the grammar must stay pure in its inputs), and making the parceller emit rectangles
+    ("the lots <em>are</em> trapezoids in a real city; it is the building that is not"). Gate:
+    <code>grown_<wbr>buildings_<wbr>stand_<wbr>on_<wbr>rectilinear_<wbr>footprints</code> holds nine in ten buildings rectilinear. Glenn later
+    asked to keep the occasional trapezoid: a lot no rectangle fits keeps its shape rather than going green.</p></div>
+  <p><b>Open lots.</b> A lot that does not build still gets a use
+    (<a href="https://github.com/GlennSong/raytracer-clang/blob/main/docs/decisions.md">ADR-0144</a>): before it
+    falls back to grass, <code>emitGreen</code> offers it a car park, a playground, a community garden or a pocket park,
+    in an order set by district, with about 15 % left vacant on purpose. On island_8_nature 2,223 of 13,156 lots had
+    been bare grass; afterwards there were 17 car parks, 180 playgrounds, 293 gardens and 1,356 pocket parks. Each
+    sculptor works on the largest rectangle square to the lot's street edge (<code>largestFrameRect</code>), in the
+    same <code>SiteFrame</code> (since ADR-0173 the one plan frame every lot sculptor uses).</p>
+
+  <h2>The architect: recipes, districts and height</h2>
+  <p>The <b>architect</b> (<code>architect.h</code>) decides what stands on a lot. The city is zoned into five
+    <code>DistrictTag</code>s (Financial, Commercial, Residential, OldTown, Industrial); each district has a weighted
+    table of named recipes, and every lot asks <code>architectPick(tag, shortSide, area, seed, coreness)</code>.
+    <em>Coreness</em> is how deep downtown the lot sits (1 at the centre, 0 at the rim), and it is what peaks the
+    skyline. Landmarks (capitol, courthouse, hospital, a school per quarter) are not rolled per lot but placed on the
+    best-scoring lots by quota (<code>planLandmarks</code>), and a whole block the parceller could not fill becomes one
+    landmark site (<code>architectBlockLandmark</code>). The registry holds 79 named recipes, from
+    <code>cottage</code> and <code>rowhouses</code> to <code>bundled_tubes</code> and <code>mall_complex</code>.</p>
+  <div class="code">
+    <div class="hd"><span>recipeGlassTower: a recipe is a function that fills BuildingParams from its own dice</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/engine/procgen/city/architect.cpp#L254-L278">src/engine/procgen/city/architect.cpp</a></div>
+<pre><span class="t">void</span> recipeGlassTower(<span class="t">BuildingRecipe</span>&amp; out, <span class="t">Hash</span>&amp; rng, <span class="t">RecipeCtx</span>&amp; cx) {
+    <span class="t">BuildingParams</span>&amp; p = out.params;
+    <span class="c">// Density round ("taller than 40 stories"): dead-centre coreness lifts</span>
+    <span class="c">// the glass cluster to 55-62 floors; the rim keeps its 10-16.</span>
+    <span class="k">const</span> <span class="t">int</span> lift = <span class="k">static_cast</span>&lt;<span class="t">int</span>&gt;(cx.coreness * <span class="n">46</span>);
+    p.floors = rng.irange(cx.roomy ? <span class="n">10</span> : <span class="n">6</span>, cx.roomy ? <span class="n">16</span> : <span class="n">9</span>) + lift;
+    p.groundRetail = <span class="k">true</span>;
+    dress(p, <span class="t">FacadeStyle</span>::GlassCurtain, rng);
+    <span class="k">if</span> (p.floors &gt; <span class="n">8</span>) { p.setbackFloors = rng.irange(<span class="n">4</span>, <span class="n">6</span>);
+                        p.setbackEvery = rng.range(<span class="n">1.2</span>, <span class="n">1.8</span>); }
+    <span class="k">if</span> (p.floors &gt; <span class="n">16</span>) p.setbackFloors = rng.irange(<span class="n">5</span>, <span class="n">7</span>);
+    cx.slender = <span class="n">3.0</span> + cx.coreness * <span class="n">4.5</span>;
+    <span class="c">// ...</span>
+    <span class="k">if</span> (cx.roomy &amp;&amp; rng.unit() &lt; <span class="n">0.35</span>)
+        out.massing = <span class="t">BuildingRecipe</span>::<span class="t">Massing</span>::Circle;
+    <span class="k">else if</span> (cx.roomy &amp;&amp; cx.coreness &gt; <span class="n">0.4</span> &amp;&amp; rng.unit() &lt; <span class="n">0.5</span>)
+        out.massing = <span class="t">BuildingRecipe</span>::<span class="t">Massing</span>::TowerInPlaza;
+    out.placeType = <span class="s">"office"</span>;
+    <span class="k">if</span> (p.curtainWall) glassStyle(p, rng, <span class="k">true</span>);   <span class="c">// every glass tower its own glass (NYC variety M2)</span>
+    towerTop(p, {{<span class="n">2</span>, <span class="n">30</span>}, {<span class="n">4</span>, <span class="n">12</span>}, {<span class="n">3</span>, <span class="n">10</span>}, {<span class="n">5</span>, <span class="n">10</span>}, {<span class="n">6</span>, <span class="n">10</span>}, {<span class="n">8</span>, <span class="n">6</span>}, {<span class="n">7</span>, <span class="n">4</span>}, {<span class="n">1</span>, <span class="n">18</span>}});   <span class="c">// buildings M2</span>
+    out.name = <span class="s">"glass_tower"</span>;
+}</pre>
+  </div>
+  <p>Two rules keep recipes honest. <b>The slenderness cap</b>: after the recipe, <code>capFloors</code> limits the
+    floors so the building is no taller than its plate's short side times <code>slender</code> (1.8 for most recipes;
+    the tower recipes ask for more, rising with coreness). <b>Height drives structure and cladding</b>
+    (<a href="https://github.com/GlennSong/raytracer-clang/blob/main/docs/decisions.md">ADR-0040</a>): load-bearing
+    masonry does not scale (the Monadnock Building's six-foot brick base is the classic example), so from about 12
+    storeys a real wall becomes a curtain wall hung off a frame. In the code this is a property of the recipe tables
+    rather than one function: tall recipes dress <code>GlassCurtain</code>, the masonry recipes roll short floor
+    counts, and the architect's tests hold the tables coherent (<code>architect_<wbr>tables_<wbr>are_<wbr>coherent</code>: the rim
+    keeps to 16 floors). Storey heights follow use too: an office floor is 3.9–4.1 m floor to floor, a tower lobby
+    6–8 m, a flat 3.2 m (<code>storeyHeightsByUse</code>).</p>
+
+  <h3>What lives in Lua</h3>
+  <p><a href="https://github.com/GlennSong/raytracer-clang/blob/main/docs/decisions.md">ADR-0042</a> set the rule
+    for the whole city: a C++ vocabulary of fast primitives, with the recipes in Lua. For buildings the split landed
+    like this. The grammar, the solvers and the 79 recipe <em>bodies</em> are C++ (a recipe branches on coreness and
+    feeds the floor cap back through <code>RecipeCtx::slender</code>; porting the bodies is what an abandoned branch
+    tried and failed). What is data in Lua:</p>
+  <ul>
+    <li><code>assets/<wbr>scripts/<wbr>style_<wbr>book.lua</code>: how each named recipe <em>looks</em>, overlaid onto its params just before it grows.</li>
+    <li><code>archetype_book.lua.example</code>: the <em>selection</em> layer, each district's weighted table over named recipes (absent, the compiled ladders apply; a book with the same weights reproduces the same city exactly).</li>
+    <li><code>floor_programs.lua</code> and <code>furniture_rooms.lua</code>: how a floor is zoned and what each kind of room holds (below).</li>
+    <li>the <code>building.*</code> table: <code>grow</code>, <code>grow_plan_parts</code>, <code>section</code>, <code>mass</code>, <code>cells</code>, <code>envelope</code>, <code>circulation</code>, <code>space_graph</code>, <code>grow_floor</code>, so a lab script grows exactly what a lot grows.</li>
+  </ul>
+  <div class="code">
+    <div class="hd"><span>tower_lineup.lua: a lab grows a named recipe the way a downtown lot would</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/assets/scripts/tower_lineup.lua#L70-L74">assets/scripts/tower_lineup.lua</a></div>
+<pre>  <span class="k">for</span> i, name <span class="k">in</span> ipairs(LINE) <span class="k">do</span>
+    <span class="k">local</span> w, d = LOTS[name][<span class="n">1</span>], LOTS[name][<span class="n">2</span>]
+    <span class="k">local</span> cx = x + w / <span class="n">2</span>
+    <span class="k">local</span> req = { recipe = name, seed = seed0 * <span class="n">101</span> + row * <span class="n">1009</span> + i * <span class="n">7</span>, coreness = coreness, plan = rect(w, d) }
+    <span class="k">local</span> parts = building.grow_plan_parts(req)</pre>
+  </div>
+
+  <h2>The regen key and the records</h2>
+  <p>Everything the recipe decided lands in one plain struct, <code>BuildingParams</code> (<code>shape_grammar.h</code>):
+    floors and storey heights, bay width, cladding part and colours, window style, roof, the massing envelope and its
+    numbers, the curtain-wall style, the core switch, party walls, links to neighbouring cells, the shop mix. It is
+    deliberately a POD of numbers, not polygons, so it serialises byte for byte into the lot cache
+    (<code>kBuildingParamsSize = 824</code> in <code>lot_cache.cpp</code>, version 23) and so the exterior and the
+    interior derive the same tiers from it. A grown building's runtime identity is a record:</p>
+  <div class="code">
+    <div class="hd"><span>BuildingRecord: what the runtime keeps of a building</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/engine/procgen/city/building_records.h#L22-L33">src/engine/procgen/city/building_records.h</a></div>
+<pre><span class="k">struct</span> <span class="t">BuildingRecord</span> {
+    <span class="t">Poly2</span> plan;
+    <span class="t">Real</span> baseY = <span class="n">0</span>;    <span class="c">// wall base (pad + plinth)</span>
+    <span class="t">Real</span> groundY = <span class="n">0</span>;  <span class="c">// graded pad plane</span>
+    <span class="t">Real</span> height = <span class="n">0</span>;   <span class="c">// massing height above baseY</span>
+    <span class="t">BuildingParams</span> params;
+    <span class="t">std::vector</span>&lt;<span class="t">DoorSpec</span>&gt; doors;
+    <span class="t">bool</span> enterable = <span class="k">false</span>;
+    <span class="t">std::string</span> recipe, type, district;
+    <span class="t">std::vector</span>&lt;<span class="t">Vec3</span>&gt; beacons;   <span class="c">// aviation lamp centres (BeaconLightSystem's sprites and lights)</span>
+    <span class="t">std::vector</span>&lt;<span class="t">RoofItem</span>&gt; roof;  <span class="c">// what stands on the roof: the collider's walls, the roof cell's holes</span>
+};</pre>
+  </div>
+  <p>The records sit in a 24 m spatial hash (<code>CityBuildings</code>) so the interior system can ask "which
+    building contains this point" cheaply. Interiors are grown at run time from the record, so an interior change
+    needs no re-bake. Exteriors are baked into the lots bundle, so a change to the exterior grammar or the lot pass bumps
+    <code>kLotsBuildTag</code> (<code>lots_producer.cpp</code>) and every lots bundle rebuilds (see
+    <a href="bakes.html">bakes</a>).</p>
+  <div class="diagram">
+    <svg viewBox="0 0 780 320" role="img" aria-label="The main types: BuildingRecipe holds BuildingParams; params give a Stack; its slices are StoreyPlans read by FacadeLayout, CirculationPlan, RoomPlan and SpaceGraph; the emitters produce BuildingMesh; the record keeps params">
+      <defs><marker id="ar2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" fill="#6f8fb0"/></marker></defs>
+      <g font-family="system-ui, sans-serif" font-size="13" text-anchor="middle">
+        <rect x="20" y="20" width="210" height="66" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="125" y="42" fill="#cfe4ff">BuildingRecipe</text>
+        <text x="125" y="60" fill="#93a6ba" font-size="12">massing · name · placeType</text>
+        <text x="125" y="76" fill="#93a6ba" font-size="12">section / complex spec</text>
+        <rect x="20" y="130" width="210" height="66" rx="9" fill="#131a24" stroke="#3b82f6"/>
+        <text x="125" y="152" fill="#cfe4ff">BuildingParams</text>
+        <text x="125" y="170" fill="#93a6ba" font-size="12">the regen key, 824 bytes</text>
+        <text x="125" y="186" fill="#93a6ba" font-size="12">floors · envelope · party walls</text>
+        <rect x="20" y="240" width="210" height="66" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="125" y="262" fill="#cfe4ff">BuildingRecord</text>
+        <text x="125" y="280" fill="#93a6ba" font-size="12">plan · baseY · params</text>
+        <text x="125" y="296" fill="#93a6ba" font-size="12">doors · roof items</text>
+        <rect x="285" y="20" width="210" height="66" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="390" y="42" fill="#cfe4ff">Stack : Mass</text>
+        <text x="390" y="60" fill="#93a6ba" font-size="12">entries · cap</text>
+        <text x="390" y="76" fill="#93a6ba" font-size="12">slice(y) · shell(lod)</text>
+        <rect x="285" y="130" width="210" height="66" rx="9" fill="#131a24" stroke="#3b82f6"/>
+        <text x="390" y="152" fill="#cfe4ff">StoreyPlan[ ]</text>
+        <text x="390" y="170" fill="#93a6ba" font-size="12">plan · y0 · h · tier</text>
+        <text x="390" y="186" fill="#93a6ba" font-size="12">storeyPlans(plan, params)</text>
+        <rect x="285" y="240" width="210" height="66" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="390" y="262" fill="#cfe4ff">SpaceGraph</text>
+        <text x="390" y="280" fill="#93a6ba" font-size="12">cells · portals</text>
+        <text x="390" y="296" fill="#93a6ba" font-size="12">the reachability gate</text>
+        <rect x="550" y="14" width="210" height="52" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="655" y="35" fill="#cfe4ff">FacadeLayout</text>
+        <text x="655" y="54" fill="#93a6ba" font-size="12">bays · openings · shops</text>
+        <rect x="550" y="84" width="210" height="52" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="655" y="105" fill="#cfe4ff">CirculationPlan</text>
+        <text x="655" y="124" fill="#93a6ba" font-size="12">shafts · banks · zones</text>
+        <rect x="550" y="154" width="210" height="52" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="655" y="175" fill="#cfe4ff">RoomPlan</text>
+        <text x="655" y="194" fill="#93a6ba" font-size="12">rooms · walls · openings</text>
+        <rect x="550" y="240" width="210" height="66" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="655" y="262" fill="#cfe4ff">BuildingMesh</text>
+        <text x="655" y="280" fill="#93a6ba" font-size="12">parts by PartId · attaches</text>
+        <text x="655" y="296" fill="#93a6ba" font-size="12">roof items · proxy</text>
+        <line x1="125" y1="86" x2="125" y2="126" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar2)"/>
+        <line x1="125" y1="196" x2="125" y2="236" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar2)"/>
+        <line x1="230" y1="150" x2="282" y2="70" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar2)"/>
+        <line x1="390" y1="86" x2="390" y2="126" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar2)"/>
+        <line x1="390" y1="196" x2="390" y2="236" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar2)"/>
+        <line x1="495" y1="150" x2="547" y2="44" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar2)"/>
+        <line x1="495" y1="160" x2="547" y2="112" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar2)"/>
+        <line x1="495" y1="172" x2="547" y2="178" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar2)"/>
+        <line x1="550" y1="196" x2="498" y2="256" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar2)"/>
+        <line x1="655" y1="206" x2="655" y2="236" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar2)"/>
+        <text x="702" y="226" fill="#e6c07b" font-size="11">emitters</text>
+      </g>
+    </svg>
+  </div>
+  <p class="cap">How the main types relate. <code>StoreyPlan[]</code> is the hub: the facade, the core, the rooms and the
+    graph all read the same outlines, which is why the inside and the outside agree.</p>
+
+  <h2>The mass and the stack: a form becomes storeys</h2>
+  <p>Before the toolkit, a building was one straight-edged polygon in one frame, copied storey by storey in nested
+    tiers (the setbacks and envelopes of ADR-0086). The architectural toolkit (<a href="https://github.com/GlennSong/raytracer-clang/blob/main/docs/decisions.md">ADR-0174</a>,
+    issue #105) replaced that model with two foundations. Foundation B, the <b>exterior model</b>, starts from the
+    <b>mass</b>: anything that can give its outline at a height (a <em>slice</em>) and its skin as a mesh.</p>
+  <div class="code">
+    <div class="hd"><span>Mass: the one interface every form sits behind</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/engine/procgen/city/mass.h#L18-L43">src/engine/procgen/city/mass.h</a></div>
+<pre><span class="c">// One height's outline(s): disjoint pieces, each a section with its holes.</span>
+<span class="k">struct</span> <span class="t">Slice</span> {
+    <span class="t">std::vector</span>&lt;<span class="t">Section</span>&gt; pieces;
+    <span class="t">int</span> tier = <span class="n">0</span>;   <span class="c">// the mass's own tier at this height (a stack's entry): what the storey view calls `tier`</span>
+    <span class="c">// ...</span>
+};
+<span class="c">// ...</span>
+<span class="k">struct</span> <span class="t">Mass</span> {
+    <span class="k">virtual</span> ~Mass() = <span class="k">default</span>;
+    <span class="k">virtual</span> <span class="t">Slice</span> slice(<span class="t">Real</span> y) <span class="k">const</span> = <span class="n">0</span>;         <span class="c">// the outline at height y above the base (y &lt; 0: the base's)</span>
+    <span class="k">virtual</span> <span class="t">Real</span> height() <span class="k">const</span> = <span class="n">0</span>;               <span class="c">// to the top of the last storey</span>
+    <span class="k">virtual</span> <span class="t">MassBounds</span> bounds() <span class="k">const</span> = <span class="n">0</span>;
+    <span class="c">// The skin: lod 0 the loft of the storey slices (side faces between consecutive outlines), lod 1 the native</span>
+    <span class="c">// form where the source has one (a sweep's or an SDF's polygonised skin); a stack's is the loft either way.</span>
+    <span class="k">virtual</span> <span class="t">RenderMesh</span> shell(<span class="t">int</span> lod, <span class="k">const</span> <span class="t">Vec3</span>&amp; colour) <span class="k">const</span> = <span class="n">0</span>;
+};
+
+<span class="c">// THE BRIDGE into the storey view: storey 0 the ground (the base slice, `groundHeight` tall), then `floors`</span>
+<span class="c">// storeys of `floorHeight`, each the slice at its own floor height. The tier is the mass's own (a stack's entry).</span>
+<span class="t">std::vector</span>&lt;<span class="t">StoreyPlan</span>&gt; sliceStoreys(<span class="k">const</span> <span class="t">Mass</span>&amp; mass, <span class="k">const</span> <span class="t">BuildingParams</span>&amp; params);</pre>
+  </div>
+  <p><code>sliceStoreys</code> is the <b>slice bridge</b>: it asks the mass for its outline at the ground and then at
+    each floor height, and hands out <code>StoreyPlan</code>s. Everything downstream (the facade, the room planners,
+    the collider, the census) reads storey plans and does not care which kind of mass made them. The mass sources are:</p>
+  <table>
+    <tr><th>mass</th><th>what it is</th><th>ADR</th></tr>
+    <tr><td><b>Stack</b></td><td>sections over storey ranges, each under keyed transforms (rotate, scale, slide) and in a relation to the entry below</td><td>0175</td></tr>
+    <tr><td><b>Implicit</b></td><td>a signed distance field; each storey is the field's zero contour at its height</td><td>0177</td></tr>
+    <tr><td><b>Mesh</b></td><td>a closed glTF from <code>assets/masses</code>, fitted to the lot and sliced per storey: the artist's hatch</td><td>0177</td></tr>
+    <tr><td><b>Complex</b></td><td>cells standing against each other, each grown as its own building</td><td>0176</td></tr>
+  </table>
+  <p>The <b>stack</b> is the workhorse. Every older massing (the uniform setbacks, the 1916 street wall and its steps,
+    the sky exposure plane, the taper, the slab, the feathered pencil tower) is now a <em>preset</em>: a stack with
+    identity transforms, built by <code>stackOf</code>. It was proven byte-identical before anything new was added
+    (<code>the_<wbr>stack_<wbr>preset_<wbr>slices_<wbr>to_<wbr>todays_<wbr>storeys_<wbr>bit_<wbr>for_<wbr>bit</code>). A new form is a transform on an entry, never
+    new tier code.</p>
+  <div class="code">
+    <div class="hd"><span>StackEntry and Stack: a mass made of sections over storey ranges</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/engine/procgen/city/mass_stack.h#L38-L73">src/engine/procgen/city/mass_stack.h</a></div>
+<pre><span class="k">enum class</span> <span class="t">Relation</span> : <span class="t">uint8_t</span> { Nest, Flush, Support };
+
+<span class="k">struct</span> <span class="t">StackEntry</span> {
+    <span class="t">Section</span> section;
+    <span class="t">int</span> k0 = <span class="n">0</span>, k1 = <span class="n">0</span>;              <span class="c">// the storeys it covers, inclusive (0 = the ground storey)</span>
+    <span class="t">Relation</span> rel = <span class="t">Relation</span>::Nest;
+    <span class="t">Transform</span> xf;
+    <span class="t">Real</span> minOverlap = <span class="n">0.6</span>;           <span class="c">// Support: the fraction of a storey's area resting on the one below</span>
+    <span class="t">Real</span> maxOverhang = <span class="n">6.0</span>;          <span class="c">// Support: how far a storey may hang past the one below (m)</span>
+    <span class="t">bool</span> varies() <span class="k">const</span> { <span class="k">return</span> !xf.identity(); }
+};
+
+<span class="k">struct</span> <span class="t">Cap</span> {
+    <span class="k">enum class</span> <span class="t">Kind</span> : <span class="t">uint8_t</span> { Parapet, Flat, Spire, Dome, Vault, Sloped, Aperture, Flared };
+    <span class="t">Kind</span> kind = <span class="t">Kind</span>::Parapet;
+    <span class="t">Real</span> rise = <span class="n">0</span>;
+};
+
+<span class="k">struct</span> <span class="t">Stack</span> : <span class="t">Mass</span> {
+    <span class="t">std::vector</span>&lt;<span class="t">StackEntry</span>&gt; entries;   <span class="c">// the base first; a storey belongs to the LAST entry whose k0 it reaches</span>
+    <span class="t">Cap</span> cap;
+    <span class="t">Real</span> groundH = <span class="n">4.0</span>, floorH = <span class="n">3.4</span>;
+    <span class="t">int</span> floors = <span class="n">0</span>;                    <span class="c">// storeys above the ground</span>
+    <span class="c">// ...</span>
+    <span class="t">std::vector</span>&lt;<span class="t">MassTier</span>&gt; tiers() <span class="k">const</span>;
+    <span class="t">Slice</span> slice(<span class="t">Real</span> y) <span class="k">const override</span>;
+    <span class="c">// ...</span>
+};</pre>
+  </div>
+  <div class="diagram">
+    <svg viewBox="0 0 780 300" role="img" aria-label="Left: a stack in elevation, a base entry, a nested setback entry and a slid module that overhangs; right: a twisted entry's plan at three storeys, rotated by a curve">
+      <g font-family="system-ui, sans-serif" font-size="12">
+        <text x="20" y="22" fill="#cfe4ff" font-size="13">a stack, in elevation</text>
+        <line x1="20" y1="270" x2="360" y2="270" stroke="#6f8fb0"/>
+        <rect x="40" y="200" width="300" height="70" fill="#131a24" stroke="#2c3d50"/>
+        <rect x="80" y="110" width="220" height="90" fill="#131a24" stroke="#2c3d50"/>
+        <rect x="130" y="50" width="210" height="60" fill="#131a24" stroke="#3b82f6" stroke-width="1.6"/>
+        <g stroke="#2c3d50" stroke-width="0.8">
+          <line x1="40" y1="242" x2="340" y2="242"/><line x1="40" y1="221" x2="340" y2="221"/>
+          <line x1="80" y1="182" x2="300" y2="182"/><line x1="80" y1="164" x2="300" y2="164"/><line x1="80" y1="146" x2="300" y2="146"/><line x1="80" y1="128" x2="300" y2="128"/>
+          <line x1="130" y1="90" x2="340" y2="90"/><line x1="130" y1="70" x2="340" y2="70"/>
+        </g>
+        <rect x="300" y="104" width="40" height="6" fill="#e6c07b" opacity="0.8"/>
+        <text x="190" y="240" fill="#93a6ba" text-anchor="middle">entry 0 · storeys 0–2 · the lot plan</text>
+        <text x="190" y="160" fill="#93a6ba" text-anchor="middle">entry 1 · 3–7 · Nest</text>
+        <text x="235" y="84" fill="#93a6ba" text-anchor="middle">entry 2 · 8–10 · Support</text>
+        <text x="350" y="100" fill="#e6c07b" font-size="11">overhang:</text>
+        <text x="350" y="114" fill="#e6c07b" font-size="11">plate + soffit</text>
+        <line x1="440" y1="20" x2="440" y2="280" stroke="#1f2a37"/>
+        <text x="460" y="22" fill="#cfe4ff" font-size="13">a twisted entry, in plan</text>
+        <g transform="translate(520 150)">
+          <rect x="-45" y="-30" width="90" height="60" fill="none" stroke="#2c3d50" stroke-width="1.4"/>
+          <rect x="-45" y="-30" width="90" height="60" fill="none" stroke="#6f8fb0" stroke-width="1.4" transform="rotate(20)"/>
+          <rect x="-45" y="-30" width="90" height="60" fill="none" stroke="#3b82f6" stroke-width="1.6" transform="rotate(40)"/>
+          <circle cx="0" cy="0" r="3" fill="#e6c07b"/>
+        </g>
+        <text x="520" y="232" fill="#93a6ba" text-anchor="middle">pivot = the plan's centre</text>
+        <text x="600" y="70" fill="#93a6ba">t = 0: rot 0°</text>
+        <text x="600" y="90" fill="#93a6ba">t = 0.5: rot 20°</text>
+        <text x="600" y="110" fill="#8ec5ff">t = 1: rot twistDeg (40° here)</text>
+        <text x="600" y="150" fill="#93a6ba">xf.rot = Curve::linear(0, twistDeg)</text>
+        <text x="600" y="170" fill="#93a6ba">t = the storey's place in</text>
+        <text x="600" y="186" fill="#93a6ba">the entry, 0 to 1</text>
+        <text x="600" y="222" fill="#93a6ba">scaled down until every</text>
+        <text x="600" y="238" fill="#93a6ba">storey stays inside the lot</text>
+      </g>
+    </svg>
+  </div>
+  <p class="cap">Left: a storey belongs to the last entry whose <code>k0</code> it reaches. <code>Nest</code> is a
+    setback; <code>Support</code> lets a storey hang past the one below (the stacked-modules envelope), drawn with its
+    floor plate whole and a soffit underneath, the lower parapet clipped to outside it. Right: a <code>Transform</code>
+    holds five curves (rotation, scale along u and v, slide along u and v) keyed over the entry's storeys, applied
+    about a pivot.</p>
+  <div class="code">
+    <div class="hd"><span>sliceStoreys: the slice bridge from any mass to the storey view</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/engine/procgen/city/mass.cpp#L9-L22">src/engine/procgen/city/mass.cpp</a></div>
+<pre><span class="t">std::vector</span>&lt;<span class="t">StoreyPlan</span>&gt; sliceStoreys(<span class="k">const</span> <span class="t">Mass</span>&amp; mass, <span class="k">const</span> <span class="t">BuildingParams</span>&amp; params) {
+    <span class="t">std::vector</span>&lt;<span class="t">StoreyPlan</span>&gt; out;
+    <span class="k">const</span> <span class="t">Slice</span> base = mass.slice(-<span class="n">1.0</span>);
+    <span class="k">if</span> (base.empty()) <span class="k">return</span> out;
+    out.push_back({base.outline().tessellate(), <span class="n">0</span>, params.groundHeight, <span class="n">0</span>});
+    <span class="t">Real</span> y = params.groundHeight;
+    <span class="k">for</span> (<span class="t">int</span> i = <span class="n">0</span>; i &lt; params.floors; ++i) {
+        <span class="k">const</span> <span class="t">Slice</span> s = mass.slice(y);
+        <span class="k">if</span> (s.empty()) <span class="k">break</span>;
+        out.push_back({s.outline().tessellate(), y, params.floorHeight, s.tier});
+        y += params.floorHeight;
+    }
+    <span class="k">return</span> out;
+}</pre>
+  </div>
+  <p>The <code>Section</code> under each entry (<code>section.h</code>) is an outline made of <em>edges</em> (line,
+    arc, spline-owed) with holes, rather than a bare polygon. It knows its arcs, so a rounded corner's chords are each
+    one even facade bay (<code>tessellateForBays</code>), and it has exact rectilinear surgery
+    (<code>chamfer</code>, <code>notch</code>) and Clipper2 booleans (<code>unite</code>, <code>subtract</code>,
+    <code>intersect</code>) that re-tag chord runs as arcs afterwards. The <code>Envelope</code> field on the params
+    picks which preset or transform builds the stack:</p>
+  <table>
+    <tr><th>envelope</th><th>the form</th></tr>
+    <tr><td>None</td><td>today's uniform setbacks every <code>setbackFloors</code></td></tr>
+    <tr><td>StreetWallSetback</td><td>1916 New York: a base on the whole plan, one setback, steps every few floors, a centred shaft (Empire State, Chrysler)</td></tr>
+    <tr><td>SkyExposure</td><td>steps back along a plane rising <code>skyRatio</code> m per m, until the tower may rise straight</td></tr>
+    <tr><td>Taper, Slab, Feathered</td><td>One WTC's taper, the UN slab, the pencil tower stepping back on one face</td></tr>
+    <tr><td>Twist, Stack, Bulge, Curves</td><td>the transforms: rotation, slid modules, a scale curve (the lens tower), all three composed with a lean</td></tr>
+    <tr><td>Wave</td><td>an implicit form: the plan waved along its long axis, the wave climbing the height</td></tr>
+    <tr><td>Mesh</td><td>the artist's form from <code>assets/masses</code></td></tr>
+  </table>
+  <p><b>Ruled glass.</b> When a storey is turned or scaled against the one above and both outlines have the same
+    corners, each edge's curtain wall is a <em>ruled</em> face: its bottom edge on this storey's floor outline, its top
+    on the ceiling's, so a twist reads as one continuous surface (<code>FaceRect::ruled</code>,
+    <code>planEdgeRuled</code>). Where corners do not correspond (a field's contours), each storey is a flat facet and a
+    <em>slab band</em>, the union of the two outlines, closes the seam. Glenn, walking the first twisted tower: "they
+    look like layered cakes"; the ruled faces landed the same evening (ADR-0175).</p>
+  <figure class="shot">
+    <img src="img/buildings/rounded_towers.webp" alt="Two stadium-shaped glass towers seen from above, with rounded ends and a roof plant box on each">
+    <figcaption>Section towers from above (2026-10-16): stadium and rounded-corner outlines fitted to their sites. The
+      arc chords are each one facade bay, so the curtain wall's mullions run evenly round the curve.</figcaption>
+  </figure>
+
+  <h3>Implicit masses and envelopes</h3>
+  <p>Some forms are not any transform of one outline. The <b>implicit mass</b>
+    (<a href="https://github.com/GlennSong/raytracer-clang/blob/main/docs/decisions.md">ADR-0177</a>) is the
+    engine's SDF kit with building words on top: <code>sdfPlan</code> (2D distance to a polygon),
+    <code>sdfExtrude</code>, and <code>sdfWave</code>, a warp of the space the field is read in. A storey is the field's
+    zero contour at the storey's mid height: <code>sliceSdf</code> samples a half-metre grid offset off the field's
+    own lines, traces it by marching squares, keeps the largest loop and simplifies it by Douglas–Peucker within
+    0.3 m.</p>
+  <p>The first implicit form taught a design rule. Glenn, on the wavy tower's first cut: "the interior of those offices
+    should just be a straight edge versus the exterior which can be wavy". So the <b>envelope</b>
+    (<a href="https://github.com/GlennSong/raytracer-clang/blob/main/docs/decisions.md">ADR-0178</a>) lets any form
+    be either the floors or a skin round straight floors, by <code>BuildingParams::skin</code>: 0 the form is the
+    floors; 1 a double skin (straight floors a gap inside, the form a glass veil ruled storey to storey); 2 plates
+    (each floor plate runs out to the form's contour, Aqua Tower's waving balconies, with railings on the edges past the
+    glass); 3 both. The straight floors are the plan scaled about its centre until they fit inside the form at every
+    storey; if they would be narrower than the core needs, the form is the floors after all. The same ADR added the
+    glass caps: dome, spire, vault, aperture and flared, one lofted emitter with a profile per kind.</p>
+  <p>Two rules from Glenn govern every non-prismatic form (ADR-0174): it is always glass (brick and stone stay on
+    straight walls), and a style ships only as "a real building, fully accessible, inside and out, base to roof".</p>
+
+  <h2>The facade grammar, step by step</h2>
+  <p>The split grammar of <a href="https://github.com/GlennSong/raytracer-clang/blob/main/docs/decisions.md">ADR-0038</a>
+    is CityEngine's CGA idea: take a <em>scope</em> (an oriented box) and rewrite it by splitting, repeating and
+    insetting until each piece is a wall panel, a window or a door. In this engine the rule that does that for every
+    building is <code>facadeLayout</code>. It takes one <code>FaceRect</code> (one plan edge of one storey: a
+    bottom-left corner, a horizontal and vertical axis, a normal, a width and a height) and a <em>mode</em> (Entrance,
+    Retail, Residential, Solid, Rear, PartyDoor, StairDoor), and returns the bays and every opening's span, sill and
+    head. Here it is applied to one wall: the 17.5 m street edge of a three-floor walk-up with no shops
+    (<code>groundRetail = false</code>, <code>bayWidth</code> 3.5 m, ground storey 4.5 m, floors 3.2 m).</p>
+  <div class="diagram">
+    <svg viewBox="0 0 800 565" role="img" aria-label="Four panels: the face, split into storeys, repeated into five bays, each bay split into pier, window, pier, with the centre bay of the ground storey a door">
+      <defs><marker id="ar3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" fill="#6f8fb0"/></marker>
+        <marker id="fa" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" fill="#e6c07b"/></marker></defs>
+      <g font-family="system-ui, sans-serif">
+<g>
+<rect x="10.0" y="10.0" width="390.0" height="265.0" fill="#0e141d" stroke="#1f2a37" rx="8"/>
+<text x="22.0" y="30.0" fill="#cfe4ff" font-size="13">1 · the face: one plan edge, ground to roof</text>
+<rect x="80.0" y="58.7" width="227.5" height="183.3" fill="#131a24" stroke="#3b82f6" stroke-width="1.4"/>
+<rect x="80.0" y="44.4" width="227.5" height="14.3" fill="#18222f" stroke="#2c3d50"/>
+<line x1="67.0" y1="242.0" x2="320.5" y2="242.0" stroke="#6f8fb0" stroke-width="1.2"/>
+<line x1="80.0" y1="256.0" x2="307.5" y2="256.0" stroke="#e6c07b" marker-start="url(#fa)" marker-end="url(#fa)"/>
+<text x="193.8" y="268.0" fill="#e6c07b" font-size="12" text-anchor="middle">W = 17.5 m</text>
+<line x1="321.5" y1="242.0" x2="321.5" y2="58.7" stroke="#e6c07b" marker-start="url(#fa)" marker-end="url(#fa)"/>
+<text x="327.5" y="154.3" fill="#e6c07b" font-size="12">14.1 m</text>
+<text x="315.5" y="55.5" fill="#93a6ba" font-size="11">parapet</text>
+<text x="193.8" y="154.3" fill="#93a6ba" font-size="12" text-anchor="middle">FaceRect</text>
+<text x="193.8" y="170.3" fill="#93a6ba" font-size="11" text-anchor="middle">(the street edge)</text>
+</g>
+<g>
+<rect x="410.0" y="10.0" width="390.0" height="265.0" fill="#0e141d" stroke="#1f2a37" rx="8"/>
+<text x="422.0" y="30.0" fill="#cfe4ff" font-size="13">2 · split up: the storeys</text>
+<rect x="480.0" y="58.7" width="227.5" height="183.3" fill="#131a24" stroke="#2c3d50" stroke-width="1.4"/>
+<rect x="480.0" y="44.4" width="227.5" height="14.3" fill="#18222f" stroke="#2c3d50"/>
+<line x1="467.0" y1="242.0" x2="720.5" y2="242.0" stroke="#6f8fb0" stroke-width="1.2"/>
+<line x1="480.0" y1="183.5" x2="707.5" y2="183.5" stroke="#6f8fb0" stroke-width="1"/>
+<line x1="480.0" y1="141.9" x2="707.5" y2="141.9" stroke="#6f8fb0" stroke-width="1"/>
+<line x1="480.0" y1="100.3" x2="707.5" y2="100.3" stroke="#6f8fb0" stroke-width="1"/>
+<text x="715.5" y="216.8" fill="#93a6ba" font-size="11">storey 0 · 4.5</text>
+<text x="715.5" y="166.7" fill="#93a6ba" font-size="11">storey 1 · 3.2</text>
+<text x="715.5" y="125.1" fill="#93a6ba" font-size="11">storey 2 · 3.2</text>
+<text x="715.5" y="83.5" fill="#93a6ba" font-size="11">storey 3 · 3.2</text>
+<text x="593.8" y="216.8" fill="#8ec5ff" font-size="12" text-anchor="middle">Entrance mode</text>
+<text x="593.8" y="166.7" fill="#93a6ba" font-size="11" text-anchor="middle">Residential</text>
+<text x="593.8" y="125.1" fill="#93a6ba" font-size="11" text-anchor="middle">Residential</text>
+<text x="593.8" y="83.5" fill="#93a6ba" font-size="11" text-anchor="middle">Residential</text>
+</g>
+<g>
+<rect x="10.0" y="290.0" width="390.0" height="265.0" fill="#0e141d" stroke="#1f2a37" rx="8"/>
+<text x="22.0" y="310.0" fill="#cfe4ff" font-size="13">3 · repeat across: bays of the bay width</text>
+<rect x="80.0" y="338.7" width="227.5" height="183.3" fill="#131a24" stroke="#2c3d50" stroke-width="1.4"/>
+<rect x="80.0" y="324.4" width="227.5" height="14.3" fill="#18222f" stroke="#2c3d50"/>
+<line x1="67.0" y1="522.0" x2="320.5" y2="522.0" stroke="#6f8fb0" stroke-width="1.2"/>
+<line x1="80.0" y1="463.5" x2="307.5" y2="463.5" stroke="#6f8fb0" stroke-width="1"/>
+<line x1="80.0" y1="421.9" x2="307.5" y2="421.9" stroke="#6f8fb0" stroke-width="1"/>
+<line x1="80.0" y1="380.3" x2="307.5" y2="380.3" stroke="#6f8fb0" stroke-width="1"/>
+<line x1="125.5" y1="522.0" x2="125.5" y2="338.7" stroke="#6f8fb0" stroke-width="1" stroke-dasharray="0"/>
+<line x1="171.0" y1="522.0" x2="171.0" y2="338.7" stroke="#6f8fb0" stroke-width="1" stroke-dasharray="0"/>
+<line x1="216.5" y1="522.0" x2="216.5" y2="338.7" stroke="#6f8fb0" stroke-width="1" stroke-dasharray="0"/>
+<line x1="262.0" y1="522.0" x2="262.0" y2="338.7" stroke="#6f8fb0" stroke-width="1" stroke-dasharray="0"/>
+<text x="102.8" y="516.0" fill="#93a6ba" font-size="11" text-anchor="middle">bay 0</text>
+<text x="148.2" y="516.0" fill="#93a6ba" font-size="11" text-anchor="middle">bay 1</text>
+<text x="193.8" y="516.0" fill="#93a6ba" font-size="11" text-anchor="middle">bay 2</text>
+<text x="239.2" y="516.0" fill="#93a6ba" font-size="11" text-anchor="middle">bay 3</text>
+<text x="284.8" y="516.0" fill="#93a6ba" font-size="11" text-anchor="middle">bay 4</text>
+<text x="193.8" y="455.5" fill="#e6c07b" font-size="11" text-anchor="middle">centre</text>
+<line x1="80.0" y1="536.0" x2="125.5" y2="536.0" stroke="#e6c07b" marker-start="url(#fa)" marker-end="url(#fa)"/>
+<text x="102.8" y="549.0" fill="#e6c07b" font-size="11" text-anchor="middle">3.5 m</text>
+<text x="315.5" y="426.4" fill="#93a6ba" font-size="11">lround(17.5</text>
+<text x="315.5" y="440.4" fill="#93a6ba" font-size="11">/ 3.5) = 5</text>
+</g>
+<g>
+<rect x="410.0" y="290.0" width="390.0" height="265.0" fill="#0e141d" stroke="#1f2a37" rx="8"/>
+<text x="422.0" y="310.0" fill="#cfe4ff" font-size="13">4 · split each bay: pier | opening | pier</text>
+<rect x="480.0" y="338.7" width="227.5" height="183.3" fill="#131a24" stroke="#2c3d50" stroke-width="1.4"/>
+<rect x="480.0" y="324.4" width="227.5" height="14.3" fill="#18222f" stroke="#2c3d50"/>
+<line x1="467.0" y1="522.0" x2="720.5" y2="522.0" stroke="#6f8fb0" stroke-width="1.2"/>
+<line x1="480.0" y1="463.5" x2="707.5" y2="463.5" stroke="#6f8fb0" stroke-width="1"/>
+<line x1="480.0" y1="421.9" x2="707.5" y2="421.9" stroke="#6f8fb0" stroke-width="1"/>
+<line x1="480.0" y1="380.3" x2="707.5" y2="380.3" stroke="#6f8fb0" stroke-width="1"/>
+<line x1="525.5" y1="522.0" x2="525.5" y2="338.7" stroke="#6f8fb0" stroke-width="1" stroke-dasharray="3 3"/>
+<line x1="571.0" y1="522.0" x2="571.0" y2="338.7" stroke="#6f8fb0" stroke-width="1" stroke-dasharray="3 3"/>
+<line x1="616.5" y1="522.0" x2="616.5" y2="338.7" stroke="#6f8fb0" stroke-width="1" stroke-dasharray="3 3"/>
+<line x1="662.0" y1="522.0" x2="662.0" y2="338.7" stroke="#6f8fb0" stroke-width="1" stroke-dasharray="3 3"/>
+<rect x="494.6" y="490.8" width="16.2" height="19.5" fill="#1d3a5c" stroke="#8ec5ff" stroke-width="1"/>
+<rect x="540.1" y="490.8" width="16.2" height="19.5" fill="#1d3a5c" stroke="#8ec5ff" stroke-width="1"/>
+<rect x="580.8" y="486.9" width="26.0" height="35.1" fill="#0a0e14" stroke="#e6c07b" stroke-width="1.4"/>
+<rect x="631.1" y="490.8" width="16.2" height="19.5" fill="#1d3a5c" stroke="#8ec5ff" stroke-width="1"/>
+<rect x="676.6" y="490.8" width="16.2" height="19.5" fill="#1d3a5c" stroke="#8ec5ff" stroke-width="1"/>
+<rect x="494.6" y="432.3" width="16.2" height="19.5" fill="#1d3a5c" stroke="#8ec5ff" stroke-width="1"/>
+<rect x="540.1" y="432.3" width="16.2" height="19.5" fill="#1d3a5c" stroke="#8ec5ff" stroke-width="1"/>
+<rect x="585.6" y="432.3" width="16.2" height="19.5" fill="#1d3a5c" stroke="#8ec5ff" stroke-width="1"/>
+<rect x="631.1" y="432.3" width="16.2" height="19.5" fill="#1d3a5c" stroke="#8ec5ff" stroke-width="1"/>
+<rect x="676.6" y="432.3" width="16.2" height="19.5" fill="#1d3a5c" stroke="#8ec5ff" stroke-width="1"/>
+<rect x="494.6" y="390.7" width="16.2" height="19.5" fill="#1d3a5c" stroke="#8ec5ff" stroke-width="1"/>
+<rect x="540.1" y="390.7" width="16.2" height="19.5" fill="#1d3a5c" stroke="#8ec5ff" stroke-width="1"/>
+<rect x="585.6" y="390.7" width="16.2" height="19.5" fill="#1d3a5c" stroke="#8ec5ff" stroke-width="1"/>
+<rect x="631.1" y="390.7" width="16.2" height="19.5" fill="#1d3a5c" stroke="#8ec5ff" stroke-width="1"/>
+<rect x="676.6" y="390.7" width="16.2" height="19.5" fill="#1d3a5c" stroke="#8ec5ff" stroke-width="1"/>
+<rect x="494.6" y="349.1" width="16.2" height="19.5" fill="#1d3a5c" stroke="#8ec5ff" stroke-width="1"/>
+<rect x="540.1" y="349.1" width="16.2" height="19.5" fill="#1d3a5c" stroke="#8ec5ff" stroke-width="1"/>
+<rect x="585.6" y="349.1" width="16.2" height="19.5" fill="#1d3a5c" stroke="#8ec5ff" stroke-width="1"/>
+<rect x="631.1" y="349.1" width="16.2" height="19.5" fill="#1d3a5c" stroke="#8ec5ff" stroke-width="1"/>
+<rect x="676.6" y="349.1" width="16.2" height="19.5" fill="#1d3a5c" stroke="#8ec5ff" stroke-width="1"/>
+<text x="593.8" y="536.0" fill="#e6c07b" font-size="11" text-anchor="middle">door 2.0 × 2.7</text>
+<text x="715.5" y="455.8" fill="#93a6ba" font-size="11">sill 0.9</text>
+<text x="715.5" y="436.3" fill="#93a6ba" font-size="11">head 2.4</text>
+<line x1="709.5" y1="451.8" x2="713.5" y2="451.8" stroke="#93a6ba"/>
+<line x1="709.5" y1="432.3" x2="713.5" y2="432.3" stroke="#93a6ba"/>
+<text x="715.5" y="354.7" fill="#93a6ba" font-size="11">pier 1.125</text>
+<text x="715.5" y="368.7" fill="#93a6ba" font-size="11">window 1.25</text>
+</g>
+<line x1="402.0" y1="140.0" x2="418.0" y2="140.0" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar)"/>
+<path d="M 605 276 L 605 282 L 205 282 L 205 288" fill="none" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar)"/>
+<line x1="402.0" y1="420.0" x2="418.0" y2="420.0" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar)"/>
+<!-- bays=5 bw=3.5 winW=1.25 margin=1.125 door=2.0x2.7 H=14.100000000000001 -->
+
+      </g>
+    </svg>
+  </div>
+  <p class="cap">One rule, applied to one wall. (1) The plan edge, extruded from the ground to the roof, is the face;
+    the parapet sits above it. (2) The storey stack splits it vertically: storey 0 at 4.5 m, three storeys of 3.2 m,
+    14.1 m to the roof (these come from <code>sliceStoreys</code>, not from the facade). (3) Each storey's face is
+    repeated across into <code>lround(17.5 / 3.5) = 5</code> bays of 3.5 m: the bay count is rounded, so the bay
+    stretches a little to fill the wall exactly. (4) Each bay splits into pier, opening, pier: a window module of
+    1.25 m (the bay minus 0.8 m, capped portrait), the piers absorbing the rest (1.125 m each), the sill at 0.9 m and the
+    head at 2.4 m above the storey floor. On storey 0 the face is in Entrance mode, so the centre bay
+    (<code>bays / 2</code> = bay 2) is the door instead: 2.0 m wide, 2.7 m high. Numbers computed from the code below.</p>
+  <div class="code">
+    <div class="hd"><span>facadeLayout: the bay repeat and the opening module</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/engine/procgen/city/shape_grammar.cpp#L936-L979">src/engine/procgen/city/shape_grammar.cpp</a></div>
+<pre>    L.bays = std::max(<span class="n">1</span>, <span class="k">static_cast</span>&lt;<span class="t">int</span>&gt;(std::lround(fr.width / std::max(p.bayWidth, <span class="t">Real</span>(<span class="n">0.5</span>)))));
+    L.bw = fr.width / L.bays;
+    <span class="k">const</span> <span class="t">Real</span> bw = L.bw;
+    <span class="k">const</span> <span class="t">Real</span> fh = fr.height;
+    <span class="c">// ...</span>
+    <span class="k">if</span> (mode == <span class="t">FacadeMode</span>::Solid) {           <span class="c">// warehouse: small high clerestory</span>
+        sill = fh * <span class="n">0.66</span>; head = fh * <span class="n">0.84</span>; margin = std::min(bw * <span class="n">0.36</span>, <span class="t">Real</span>(<span class="n">1.4</span>));
+    } <span class="k">else</span> {
+        sill = L.retailish ? <span class="n">0.4</span> : human::WINDOW_SILL;
+        head = std::min(fh - <span class="n">0.4</span>, L.retailish ? fh - <span class="n">0.4</span> : human::WINDOW_HEAD);
+        <span class="c">// ...</span>
+        <span class="k">const</span> <span class="t">bool</span> arched = mode == <span class="t">FacadeMode</span>::Residential &amp;&amp;
+                            p.window.head != <span class="t">OpeningStyle</span>::<span class="t">Head</span>::Flat;
+        <span class="t">Real</span> winW = std::min(arched ? <span class="t">Real</span>(<span class="n">1.05</span>) : <span class="t">Real</span>(<span class="n">1.25</span>),
+                             std::max(<span class="t">Real</span>(<span class="n">0.8</span>), bw - <span class="n">0.8</span>));
+        <span class="c">// A STOREFRONT is glazed nearly bay to bay (slim piers), its head under the shop's fascia sign -- not a</span>
+        <span class="c">// flat's portrait window: on a tall lobby storey those read as slits (Glenn's first look at the shops).</span>
+        <span class="k">if</span> (L.retailish) {
+            winW = std::max(<span class="t">Real</span>(<span class="n">0.8</span>), bw - <span class="n">0.3</span>);
+            head = std::min(fh - <span class="n">0.4</span>, kShopHead);
+        }
+        margin = (bw - winW) * <span class="n">0.5</span>;
+    }
+    <span class="k">if</span> (head &lt;= sill) { head = fh * <span class="n">0.75</span>; sill = fh * <span class="n">0.2</span>; }
+
+    <span class="k">const</span> <span class="t">int</span> centreBay = L.bays / <span class="n">2</span>;</pre>
+  </div>
+  <div class="code">
+    <div class="hd"><span>facadeLayout: each bay split into its opening; the entrance bay becomes the door</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/engine/procgen/city/shape_grammar.cpp#L1027-L1063">src/engine/procgen/city/shape_grammar.cpp</a></div>
+<pre>    <span class="k">for</span> (<span class="t">int</span> b = <span class="n">0</span>; b &lt; L.bays; ++b) {
+        <span class="t">BayOpening</span> o;
+        o.x0 = b * bw; o.x1 = (b + <span class="n">1</span>) * bw;
+        o.entrance = (mode == <span class="t">FacadeMode</span>::Entrance &amp;&amp; b == centreBay);
+        <span class="k">if</span> (isShopDoor(b)) { o.entrance = <span class="k">true</span>; o.shopDoor = <span class="k">true</span>; }
+        <span class="c">// ...</span>
+        o.wx0 = o.x0 + margin; o.wx1 = o.x1 - margin;       <span class="c">// window/opening span</span>
+        <span class="c">// ...</span>
+        o.sill = o.entrance ? <span class="n">0.0</span> : sill;
+        o.head = o.entrance ? std::min(human::DOOR_HEIGHT, fh - <span class="n">0.3</span>) : head;
+        <span class="k">if</span> (o.entrance) {
+            <span class="t">Real</span> dw = std::min(human::DOOR_WIDTH, bw - <span class="n">0.4</span>);
+            <span class="t">Real</span> cx = (o.x0 + o.x1) * <span class="n">0.5</span>;
+            o.wx0 = cx - dw * <span class="n">0.5</span>; o.wx1 = cx + dw * <span class="n">0.5</span>;
+        }</pre>
+  </div>
+  <p>Why it is shaped this way:</p>
+  <ul>
+    <li><b>The layout is decided once.</b> <code>facadeLayout</code> returns data (<code>FacadeLayout</code>: bays, bay
+      width, a <code>BayOpening</code> per bay), not geometry. The full-detail facade, the flat far tier, the inner wall
+      of the streamed interior, the fire escape, the shop rooms and the furniture's list of windows
+      (<code>storeyOpenings</code>) all read it, so a window cannot be in two places. The arch's rise moved into it
+      for the same reason: an arched window used to be square from inside and from across the street (Glenn,
+      2026-09-15).</li>
+    <li><b>Constant window module.</b> The window stays 1.25 m on a wide face and a narrow one; the piers absorb the
+      slack (ADR-0040). A bay too narrow for 0.55 m of glass becomes a <em>blank</em> bay, encoded as a zero-height
+      opening so every reader fills it with wall.</li>
+    <li><b>Human scale is pinned.</b> The sill, head, door and parapet are named constants in
+      <code>namespace human</code> (<code>shape_grammar.h</code>), so a door the grammar cuts is one the player's
+      capsule fits through. ADR-0038 planned about 2.1 m; on 4.5 m lobby storeys that read as "front doors are very short", so it is 2.7 m.</li>
+    <li><b>Modes come from the plan.</b> <code>groundModeFor</code> picks each ground edge's mode: Entrance on the
+      edge facing the street, Retail on the others when the building has shops, Solid on a vehicle-bay front or a party
+      wall, Rear for the back door. Above the ground every storey is Residential (or Solid), and the curtain wall has its
+      own emitter on the same face.</li>
+  </ul>
+  <div class="note"><p><b>Where the CGA vocabulary went.</b> ADR-0038 describes an interpreter that rewrites scopes by
+    ops (<code>split</code>, <code>repeat</code>, <code>comp</code>, <code>inset</code> ...). Those ops exist
+    (<code>splitScope</code>, <code>repeatScope</code>, <code>insetScope</code> in <code>shape_grammar.h</code>, bound
+    to Lua as <code>Scope:split</code> / <code>:divide</code> / <code>:inset</code>), but at this commit no building
+    calls them; the only C++ caller is the car interior (<code>car_interior.cpp</code>). Buildings are grown by
+    <code>growPlanBuilding</code> walking the storey plans and calling <code>facadeLayout</code> per edge: the same
+    split/repeat logic, written as one function per rule rather than as a rule interpreter.</p></div>
+
+  <h2>The complex: buildings made of cells</h2>
+  <p>A Sears Tower, a perimeter block round a courtyard, twin towers with a sky bridge, a mall with anchor stores:
+    these are several masses standing against each other. The <b>complex</b>
+    (<a href="https://github.com/GlennSong/raytracer-clang/blob/main/docs/decisions.md">ADR-0176</a>,
+    <code>cells.h</code>) does them without a mesh boolean: each <b>cell</b> is a mass in its own frame with its own
+    params, grown as the ordinary plan building it is, and where two cells touch the shared faces become
+    <b>party walls</b>. <code>Complex::resolve</code> finds them: two edges on one line, facing each other, overlapping
+    by at least 2 m.</p>
+  <div class="code">
+    <div class="hd"><span>Complex::resolve: a shared face becomes a party wall on both cells, blank to the lower one's top</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/engine/procgen/city/cells.cpp#L94-L114">src/engine/procgen/city/cells.cpp</a></div>
+<pre>    <span class="k">if</span> (dot(da, db) &gt; -<span class="n">0.98</span>) <span class="k">continue</span>;                                   <span class="c">// facing each other</span>
+    <span class="k">if</span> (std::fabs(dot(b0 - a0, na)) &gt; tol || std::fabs(dot(b1 - a0, na)) &gt; tol) <span class="k">continue</span>;   <span class="c">// on one line</span>
+    <span class="k">const</span> <span class="t">Real</span> t0 = std::max(<span class="t">Real</span>(<span class="n">0</span>), std::min(dot(b0 - a0, da), dot(b1 - a0, da)));
+    <span class="k">const</span> <span class="t">Real</span> t1 = std::min(la, std::max(dot(b0 - a0, da), dot(b1 - a0, da)));
+    <span class="k">if</span> (t1 - t0 &lt; minRun) <span class="k">continue</span>;
+    <span class="c">// ...</span>
+    <span class="k">const</span> <span class="t">int</span> fi = cells[i].params.floors, fj = cells[j].params.floors;
+    party(cells[i], na, ad.at, fj &lt; fi ? fj : <span class="n">0</span>);
+    party(cells[j], na * -<span class="n">1.0</span>, -ad.at, fi &lt; fj ? fi : <span class="n">0</span>);</pre>
+  </div>
+  <p>A party wall is stored on the params as a world line (outward normal <code>partyN</code>, offset
+    <code>partyAt</code>), with <code>partyTop</code>, the last storey it is blank on (0 = to the roof). The taller
+    cell keeps its windows above the lower one's roof. Every reader that knows its storey asks
+    <code>partyEdge(plan, params, edge, storey)</code>:</p>
+  <div class="code">
+    <div class="hd"><span>partyEdge: is this edge a blank party wall on this storey?</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/engine/procgen/city/shape_grammar.cpp#L1119-L1124">src/engine/procgen/city/shape_grammar.cpp</a></div>
+<pre><span class="t">bool</span> partyEdge(<span class="k">const</span> <span class="t">Poly2</span>&amp; plan, <span class="k">const</span> <span class="t">BuildingParams</span>&amp; params, <span class="t">std::size_t</span> e, <span class="t">int</span> storey) {
+    <span class="k">const</span> <span class="t">int</span> k = partyWallOf(plan, params, e);
+    <span class="k">if</span> (k &lt; <span class="n">0</span>) <span class="k">return false</span>;
+    <span class="k">if</span> (storey &gt;= <span class="n">0</span> &amp;&amp; params.partyTop[k] &gt; <span class="n">0</span> &amp;&amp; storey &gt; params.partyTop[k]) <span class="k">return false</span>;   <span class="c">// above the neighbour's roof</span>
+    <span class="k">return true</span>;
+}</pre>
+  </div>
+  <div class="diagram">
+    <svg viewBox="0 0 780 312" role="img" aria-label="Three panels: a bundle of nine tubes in plan with party walls, twin towers joined by a sky bridge, and a party wall blank up to the lower neighbour's roof">
+      <g font-family="system-ui, sans-serif" font-size="12">
+        <text x="20" y="22" fill="#cfe4ff" font-size="13">the bundle, in plan</text>
+        <g transform="translate(30 40)">
+          <rect x="0" y="0" width="210" height="210" fill="#131a24" stroke="#2c3d50"/>
+          <g stroke="#e6c07b" stroke-width="3">
+            <line x1="70" y1="0" x2="70" y2="210"/><line x1="140" y1="0" x2="140" y2="210"/>
+            <line x1="0" y1="70" x2="210" y2="70"/><line x1="0" y1="140" x2="210" y2="140"/>
+          </g>
+          <rect x="70" y="70" width="70" height="70" fill="#14223a" stroke="#3b82f6" stroke-width="1.6"/>
+          <g fill="#93a6ba" text-anchor="middle">
+            <text x="35" y="40">tube</text><text x="105" y="40">tube</text><text x="175" y="40">tube</text>
+            <text x="35" y="110">tube</text><text x="175" y="110">tube</text>
+            <text x="35" y="180">tube</text><text x="105" y="180">tube</text><text x="175" y="180">tube</text>
+          </g>
+          <text x="105" y="102" fill="#8ec5ff" text-anchor="middle">inner</text>
+          <text x="105" y="118" fill="#8ec5ff" text-anchor="middle">tube</text>
+          <rect x="97" y="136" width="16" height="8" fill="#0a0e14" stroke="#e6c07b"/>
+          <text x="105" y="232" fill="#93a6ba" text-anchor="middle">party walls (gold); the inner tube</text>
+          <text x="105" y="248" fill="#93a6ba" text-anchor="middle">is entered by a PartyDoor</text>
+        </g>
+        <line x1="270" y1="20" x2="270" y2="305" stroke="#1f2a37"/>
+        <text x="290" y="22" fill="#cfe4ff" font-size="13">twin towers, elevation</text>
+        <line x1="290" y1="270" x2="510" y2="270" stroke="#6f8fb0"/>
+        <rect x="310" y="60" width="70" height="210" fill="#131a24" stroke="#2c3d50"/>
+        <rect x="430" y="80" width="70" height="190" fill="#131a24" stroke="#2c3d50"/>
+        <rect x="380" y="140" width="50" height="14" fill="#14223a" stroke="#3b82f6" stroke-width="1.6"/>
+        <rect x="374" y="140" width="6" height="14" fill="#e6c07b"/><rect x="430" y="140" width="6" height="14" fill="#e6c07b"/>
+        <text x="405" y="132" fill="#8ec5ff" text-anchor="middle">sky bridge</text>
+        <text x="400" y="288" fill="#93a6ba" text-anchor="middle">a LINK on both faces: a doorway</text>
+        <text x="400" y="303" fill="#93a6ba" text-anchor="middle">each side, the span drawn from one</text>
+        <line x1="530" y1="20" x2="530" y2="305" stroke="#1f2a37"/>
+        <text x="550" y="22" fill="#cfe4ff" font-size="13">a party wall, face on</text>
+        <line x1="550" y1="270" x2="770" y2="270" stroke="#6f8fb0"/>
+        <rect x="600" y="50" width="140" height="220" fill="#131a24" stroke="#2c3d50"/>
+        <g fill="#1d3a5c" stroke="#8ec5ff" stroke-width="0.8">
+          <rect x="612" y="62" width="20" height="12"/><rect x="646" y="62" width="20" height="12"/><rect x="680" y="62" width="20" height="12"/><rect x="714" y="62" width="20" height="12"/>
+          <rect x="612" y="88" width="20" height="12"/><rect x="646" y="88" width="20" height="12"/><rect x="680" y="88" width="20" height="12"/><rect x="714" y="88" width="20" height="12"/>
+          <rect x="612" y="114" width="20" height="12"/><rect x="646" y="114" width="20" height="12"/><rect x="680" y="114" width="20" height="12"/><rect x="714" y="114" width="20" height="12"/>
+          <rect x="612" y="140" width="20" height="12"/><rect x="646" y="140" width="20" height="12"/><rect x="680" y="140" width="20" height="12"/><rect x="714" y="140" width="20" height="12"/>
+        </g>
+        <rect x="600" y="166" width="140" height="104" fill="#e6c07b" opacity="0.18"/>
+        <rect x="575" y="190" width="190" height="80" fill="none" stroke="#93a6ba" stroke-dasharray="4 3"/>
+        <line x1="560" y1="166" x2="770" y2="166" stroke="#e6c07b" stroke-dasharray="2 3"/>
+        <text x="670" y="212" fill="#93a6ba" text-anchor="middle">the neighbour, 4 storeys,</text>
+        <text x="670" y="228" fill="#93a6ba" text-anchor="middle">standing against it</text>
+        <text x="670" y="182" fill="#e6c07b" text-anchor="middle">blank to partyTop</text>
+        <text x="670" y="44" fill="#93a6ba" text-anchor="middle">windows above its roof</text>
+      </g>
+    </svg>
+  </div>
+  <p class="cap">Left: <code>bundledTubes</code>, nx × ny tubes on the lot's box, each its own height by the seed.
+    A cell with no street face is entered through a doorway in the neighbour's party wall, in the middle bay that one
+    layout rule gives both sides (<code>FacadeMode::PartyDoor</code>). Middle: <code>twinTowers</code> and its
+    <code>Bridge</code>, resolved onto both cells' params as a link. Right: a shared wall blank only up to the lower
+    cell's roof (gold); the storeys above keep their windows.</p>
+  <p>The presets so far: <code>bundledTubes</code> (the Sears pattern), <code>courtyardWings</code> (eight cells: four
+    wings and four corners, because a party wall is a <em>whole</em> edge and four wings cannot share half an edge),
+    <code>ringCells</code> (one trapezoid cell per edge of a convex outline, round a court), <code>twinTowers</code> and
+    <code>mallCells</code>. <code>connectLobbies</code> gives every cell a way in, and opens a doorway both ways
+    through every whole shared wall on the ground, so a bundle's ground floors are one lobby
+    (<a href="https://github.com/GlennSong/raytracer-clang/blob/main/docs/decisions.md">ADR-0179</a>).
+    <code>openWall</code> removes a shared wall along a run, floor to ceiling, on chosen storeys: an anchor store open
+    onto a mall concourse
+    (<a href="https://github.com/GlennSong/raytracer-clang/blob/main/docs/decisions.md">ADR-0180</a>). The facade
+    draws the wall in two pieces either side, the collider leaves it out (<code>wallCuts</code> is the one list of cuts
+    both read), the furniture keeps it clear, and the space graph gets a link cell through it.</p>
+  <p>The sky bridge was drawn, cut and counted by its tests, and still could not be crossed: on 2026-10-21 Glenn, at
+    the top of a twin tower: "I'm standing in front of a skybridge and I can't cross it!" The streamed interior's own
+    inner-wall collider (a plane 0.55 m inside every facade) sealed the door, and the far tower was never grown
+    because the interior system only grew buildings near a <em>street</em> door
+    (<a href="https://github.com/GlennSong/raytracer-clang/blob/main/docs/decisions.md">ADR-0222</a>). Both were
+    fixed and the test now walks a capsule across: <code>a_<wbr>walker_<wbr>crosses_<wbr>the_<wbr>sky_<wbr>bridge_<wbr>between_<wbr>twin_<wbr>towers</code>
+    (stopped 0.87 m short before, 16.2 m across after).</p>
+  <figure class="shot">
+    <img src="img/buildings/sky_lounge.webp" alt="Inside a glass tower at height: white sofas along the curtain wall, mullions and a slab edge outside">
+    <figcaption>A lounge storey behind a curtain wall (Glenn's screenshot, 2026-10-21). A link storey is laid out as
+      the lounge, so a bridge door opens onto open floor.</figcaption>
+  </figure>
+
+  <h3>Party walls between ordinary buildings</h3>
+  <p>The same party-wall fields serve attached buildings on a dense street: the lot pass marks a lot's shared side
+    lines, pushes the rectangle out to them, and blanks the wall. But PASS C grows one lot at a time, so a building
+    does not know its neighbour's height when it grows, and every party wall went up blank to the roof: a glass tower
+    beside a walk-up showed a whole grey side. <a href="https://github.com/GlennSong/raytracer-clang/blob/main/docs/decisions.md">ADR-0227</a>
+    added a pass after PASS C that sets each wall's <code>partyTop</code> from what actually stands against it (the
+    neighbour's highest storey still on the line, or any building within 6 m) plus a 1 m sill, and regrows each
+    changed building, cutting its first growth out of the merged part meshes. On island_8_nature 1,005 of 3,446
+    attached buildings took windows above a lower neighbour; the lots stage went from 145 to 160 s.</p>
+  <figure class="shot">
+    <img src="img/buildings/party_walls_before_after.webp" alt="Before and after: a dark glass tower behind a row of brick walk-ups; on the left its side is blank grey to the roof, on the right glass continues down to just above the walk-up's roof">
+    <figcaption>ADR-0227 before (left) and after (right), 2026-10-23: the tower's side is blank only as high as the
+      walk-up against it.</figcaption>
+  </figure>
+
+  <h2>Inside: the space graph</h2>
+  <p>Foundation A of the toolkit is the interior model. A building is a set of <b>cells</b>, the volumes a person can
+    be in (a room, a storey's hall, a stair shaft, a hoistway, the roof deck, a helipad, a bridge), joined by
+    <b>portals</b>, the openings a person passes through. A cell is three-dimensional: a stair shaft is one cell that
+    spans every storey it serves. A storey plan is a <em>view</em> of the graph, not the model.</p>
+  <div class="code">
+    <div class="hd"><span>Cell, Portal, SpaceGraph</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/engine/procgen/city/space_graph.h#L23-L66">src/engine/procgen/city/space_graph.h</a></div>
+<pre><span class="k">struct</span> <span class="t">FloorSurface</span> {
+    <span class="k">enum class</span> <span class="t">Kind</span> : <span class="t">uint8_t</span> { Level, Sloped, Stepped, Helical };
+    <span class="t">Kind</span> kind = <span class="t">Kind</span>::Level;
+    <span class="t">Real</span> y0 = <span class="n">0</span>;              <span class="c">// world, at `origin`</span>
+    <span class="c">// ...</span>
+};
+<span class="c">// ...</span>
+<span class="k">enum class</span> <span class="t">CellKind</span> : <span class="t">uint8_t</span> { Hall, Room, Stair, Lift, Roof, Pad, Link };   <span class="c">// Pad: a helipad, a floor over the roof deck; Link: a bridge or doorway to the next cell (cells.h)</span>
+
+<span class="k">struct</span> <span class="t">Cell</span> {
+    <span class="t">CellKind</span> kind = <span class="t">CellKind</span>::Hall;
+    <span class="t">RoomKind</span> use = <span class="t">RoomKind</span>::Hall;    <span class="c">// a Room's use (every other kind: Hall)</span>
+    <span class="t">uint8_t</span> style = <span class="n">0</span>;                <span class="c">// a shop's trade</span>
+    <span class="t">Poly2</span> plan;                       <span class="c">// world XZ, the cell's outline</span>
+    <span class="t">std::vector</span>&lt;<span class="t">Poly2</span>&gt; holes;         <span class="c">// what is cut out of it (a hall's rooms and core; an upper mall level's atria)</span>
+    <span class="t">FloorSurface</span> floor;
+    <span class="t">Real</span> height = <span class="n">0</span>;                  <span class="c">// floor to ceiling</span>
+    <span class="t">Real</span> freeArea = <span class="n">0</span>;                <span class="c">// the plan's area less its holes: a hall its rooms cover whole has none</span>
+    <span class="t">int</span> k0 = <span class="n">0</span>, k1 = <span class="n">0</span>;               <span class="c">// the storeys it spans, inclusive (the roof deck: the storey count)</span>
+    <span class="t">int</span> tier = <span class="n">0</span>;                     <span class="c">// the massing tier of storey k0</span>
+};
+
+<span class="k">struct</span> <span class="t">Portal</span> {
+    <span class="k">enum class</span> <span class="t">Kind</span> : <span class="t">uint8_t</span> { Door, Passage, Void, Stair, Escalator, Lift, Ramp, Vomitory };
+    <span class="t">int</span> a = -<span class="n">1</span>, b = -<span class="n">1</span>;       <span class="c">// the cells it joins; b &lt; 0 = outside (the street)</span>
+    <span class="t">Kind</span> kind = <span class="t">Kind</span>::Door;
+    <span class="t">Vec2</span> p0, p1;              <span class="c">// the opening's span, world XZ</span>
+    <span class="t">Real</span> sill = <span class="n">0</span>, head = <span class="n">0</span>;  <span class="c">// above the storey's floor</span>
+    <span class="t">int</span> storey = <span class="n">0</span>;           <span class="c">// where a walker crosses it (a lift door's: its landing's storey)</span>
+};
+
+<span class="k">struct</span> <span class="t">SpaceGraph</span> {
+    <span class="t">std::vector</span>&lt;<span class="t">Cell</span>&gt; cells;
+    <span class="t">std::vector</span>&lt;<span class="t">Portal</span>&gt; portals;
+    <span class="t">int</span> entrance = -<span class="n">1</span>;      <span class="c">// the ground hall (what the street doors open into)</span>
+    <span class="t">int</span> roof = -<span class="n">1</span>;          <span class="c">// the roof deck cell, when the core reaches it</span>
+    <span class="t">int</span> storeys = <span class="n">0</span>;        <span class="c">// the storey count</span>
+    <span class="t">bool</span> modelled = <span class="k">true</span>;   <span class="c">// false: this building's inside is not a graph yet (a garage's decks and ramps)</span>
+};</pre>
+  </div>
+  <div class="diagram">
+    <svg viewBox="0 0 780 320" role="img" aria-label="Left: a three-storey building in section with halls, rooms, a stair shaft and a lift shaft spanning the storeys, and the roof deck. Right: the same as a graph from the street, with one room no portal reaches marked red">
+      <defs><marker id="ar4" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" fill="#6f8fb0"/></marker></defs>
+      <g font-family="system-ui, sans-serif" font-size="12">
+        <text x="20" y="22" fill="#cfe4ff" font-size="13">cells, in section</text>
+        <line x1="10" y1="290" x2="370" y2="290" stroke="#6f8fb0"/>
+        <rect x="40" y="230" width="300" height="60" fill="#131a24" stroke="#2c3d50"/>
+        <rect x="40" y="170" width="300" height="60" fill="#131a24" stroke="#2c3d50"/>
+        <rect x="40" y="110" width="300" height="60" fill="#131a24" stroke="#2c3d50"/>
+        <rect x="40" y="80" width="300" height="30" fill="none" stroke="#2c3d50" stroke-dasharray="4 3"/>
+        <rect x="46" y="176" width="70" height="48" fill="#16202c" stroke="#6f8fb0"/>
+        <rect x="46" y="116" width="70" height="48" fill="#16202c" stroke="#6f8fb0"/>
+        <rect x="122" y="116" width="70" height="48" fill="#2a1414" stroke="#e05a5a" stroke-width="1.4"/>
+        <rect x="220" y="80" width="36" height="210" fill="#14223a" stroke="#3b82f6" stroke-width="1.6"/>
+        <rect x="262" y="110" width="36" height="180" fill="#14223a" stroke="#3b82f6" stroke-width="1.6"/>
+        <text x="80" y="204" fill="#93a6ba" text-anchor="middle">room</text>
+        <text x="80" y="144" fill="#93a6ba" text-anchor="middle">room</text>
+        <text x="157" y="144" fill="#e05a5a" text-anchor="middle">room</text>
+        <text x="157" y="264" fill="#93a6ba" text-anchor="middle">hall 0 (lobby)</text>
+        <text x="160" y="204" fill="#93a6ba" text-anchor="middle">hall 1</text>
+        <text x="238" y="100" fill="#8ec5ff" text-anchor="middle" font-size="11">stair</text>
+        <text x="280" y="130" fill="#8ec5ff" text-anchor="middle" font-size="11">lift</text>
+        <text x="320" y="100" fill="#93a6ba" text-anchor="middle" font-size="11">roof</text>
+        <rect x="34" y="250" width="8" height="38" fill="#e6c07b"/>
+        <text x="20" y="246" fill="#e6c07b" font-size="11">door</text>
+        <line x1="390" y1="20" x2="390" y2="300" stroke="#1f2a37"/>
+        <text x="410" y="22" fill="#cfe4ff" font-size="13">the same, as a graph</text>
+        <g text-anchor="middle">
+          <rect x="410" y="268" width="70" height="26" rx="13" fill="#0a0e14" stroke="#e6c07b"/><text x="445" y="285" fill="#e6c07b">street</text>
+          <rect x="520" y="268" width="70" height="26" rx="13" fill="#131a24" stroke="#2c3d50"/><text x="555" y="285" fill="#cfe4ff">hall 0</text>
+          <rect x="520" y="188" width="70" height="26" rx="13" fill="#131a24" stroke="#2c3d50"/><text x="555" y="205" fill="#cfe4ff">hall 1</text>
+          <rect x="520" y="108" width="70" height="26" rx="13" fill="#131a24" stroke="#2c3d50"/><text x="555" y="125" fill="#cfe4ff">hall 2</text>
+          <rect x="650" y="148" width="70" height="26" rx="13" fill="#14223a" stroke="#3b82f6"/><text x="685" y="165" fill="#8ec5ff">stair</text>
+          <rect x="650" y="228" width="70" height="26" rx="13" fill="#14223a" stroke="#3b82f6"/><text x="685" y="245" fill="#8ec5ff">lift</text>
+          <rect x="650" y="48" width="70" height="26" rx="13" fill="#131a24" stroke="#2c3d50"/><text x="685" y="65" fill="#cfe4ff">roof</text>
+          <rect x="420" y="188" width="70" height="26" rx="13" fill="#131a24" stroke="#6f8fb0"/><text x="455" y="205" fill="#cfe4ff">room</text>
+          <rect x="420" y="108" width="70" height="26" rx="13" fill="#131a24" stroke="#6f8fb0"/><text x="455" y="125" fill="#cfe4ff">room</text>
+          <rect x="420" y="48" width="70" height="26" rx="13" fill="#2a1414" stroke="#e05a5a"/><text x="455" y="65" fill="#e05a5a">room</text>
+        </g>
+        <g stroke="#6f8fb0" stroke-width="1.4">
+          <line x1="480" y1="281" x2="520" y2="281"/>
+          <line x1="590" y1="275" x2="650" y2="165"/><line x1="590" y1="200" x2="650" y2="163"/><line x1="590" y1="121" x2="650" y2="159"/>
+          <line x1="590" y1="281" x2="650" y2="245"/><line x1="590" y1="205" x2="650" y2="240"/><line x1="590" y1="125" x2="650" y2="236"/>
+          <line x1="685" y1="148" x2="685" y2="74"/>
+          <line x1="520" y1="201" x2="490" y2="201"/><line x1="520" y1="121" x2="490" y2="121"/>
+        </g>
+        <text x="498" y="275" fill="#93a6ba" font-size="11" text-anchor="middle">Door</text>
+        <text x="608" y="100" fill="#93a6ba" font-size="11">Stair</text>
+        <text x="610" y="306" fill="#93a6ba" font-size="11">Lift</text>
+        <text x="498" y="65" fill="#e05a5a" font-size="11">no portal: unreachable</text>
+      </g>
+    </svg>
+  </div>
+  <p class="cap">One graph, two drawings. The stair and lift shafts are single cells spanning the storeys, with a Stair
+    or Lift portal from every hall they have a door on; the stair goes on into the roof cell through the bulkhead. A
+    breadth-first search from the street over passable portals marks what a walker can reach. The red room has no door:
+    the gate reports it, and the blueprint sheet hatches it red.</p>
+  <div class="code">
+    <div class="hd"><span>unreachableCells: the gate every building must pass</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/engine/procgen/city/space_graph.cpp#L153-L164">src/engine/procgen/city/space_graph.cpp</a></div>
+<pre><span class="t">std::vector</span>&lt;<span class="t">int</span>&gt; unreachableCells(<span class="k">const</span> <span class="t">SpaceGraph</span>&amp; g, <span class="k">const</span> <span class="t">WalkerCaps</span>&amp; caps) {
+    <span class="t">std::vector</span>&lt;<span class="t">int</span>&gt; out;
+    <span class="k">if</span> (!g.modelled) <span class="k">return</span> out;
+    <span class="k">const</span> <span class="t">std::vector</span>&lt;<span class="t">bool</span>&gt; seen = reachableFrom(g, -<span class="n">1</span>, caps);
+    <span class="k">for</span> (<span class="t">std::size_t</span> i = <span class="n">0</span>; i &lt; seen.size(); ++i) {
+        <span class="k">if</span> (seen[i]) <span class="k">continue</span>;
+        <span class="k">const</span> <span class="t">Cell</span>&amp; c = g.cells[i];
+        <span class="k">if</span> (c.kind == <span class="t">CellKind</span>::Hall &amp;&amp; c.freeArea &lt; kCoveredHall) <span class="k">continue</span>;
+        out.push_back(<span class="k">static_cast</span>&lt;<span class="t">int</span>&gt;(i));
+    }
+    <span class="k">return</span> out;
+}</pre>
+  </div>
+  <p><b>Migration, not replacement.</b> The graph is not yet what the interior is grown <em>from</em>. It is built
+    <em>from</em> today's growers by an adapter, <code>spaceGraphOf</code>, reading the storey plans,
+    <code>storeyRooms</code> (the one storey plan both <code>growInterior</code> and the graph read), the core and the
+    facade's doors; the guard <code>storey_<wbr>view_<wbr>equals_<wbr>storey_<wbr>plans_<wbr>every_<wbr>recipe</code> checks the derived view equals
+    the storey plans. Its first job is the <b>gate</b>: <code>graph_gate_every_recipe</code> runs it over every
+    architect recipe on three plans at two seeds, and <code>level_<wbr>blueprints_<wbr>and_<wbr>graph_<wbr>gate</code> over a level's
+    records, drawing each building's blueprint sheet (<code>blueprintSvg</code>; set <code>RT_BLUEPRINTS=&lt;dir&gt;</code>).
+    On its first day it found three real faults: apartment end units that were a dead end past the bath, coreless
+    setback towers whose straight stair ended at the first shrunken tier (every storey above had no way up), and a
+    ring office on an L's narrow arm whose door opened onto the outside wall. All were fixed the same day; the gate's
+    fix list in the test has been empty since (ADR-0174). By the envelope step it passed 444 of 444 buildings
+    (<code>docs/<wbr>building-toolkit-plan.md</code>).</p>
+  <p>A physics test backs each kind of portal, because a graph edge only says a walker <em>should</em> get through: a
+    door walk, the stairwell, the cab ride, the bridge, the straight stair through a setback
+    (<code>character_<wbr>climbs_<wbr>the_<wbr>straight_<wbr>stair_<wbr>through_<wbr>a_<wbr>setback</code>), and the acceptance ride
+    <code>character_<wbr>rides_<wbr>the_<wbr>cab_<wbr>to_<wbr>the_<wbr>twentieth_<wbr>floor_<wbr>and_<wbr>takes_<wbr>the_<wbr>stairs</code>, which walks a Jolt capsule in
+    from the street, round the lobby desk, up 20 floors standing on the moving cab and up a flight of stairs.</p>
+
+  <h2>Inside: cores and streamed interiors</h2>
+  <p>Interiors are not baked. <a href="https://github.com/GlennSong/raytracer-clang/blob/main/docs/decisions.md">ADR-0080</a>
+    made doorways real holes and put the enter/exit logic in a system: <code>BuildingInteriorSystem</code> grows a
+    building's interior with <code>growInterior</code> when the player comes within 6 m in front of a door, and frees
+    it past 40 m. The interior is pure in the record's regen key, so it is the same every time. Measured on a condo:
+    grow 0.25 ms plus 0.51 ms of Jolt body creation, synchronous on purpose.</p>
+  <p>A building of four floors and up gets a <b>core</b> when one fits (ADR-0086 point 11): two enclosed dog-leg
+    stairwells (two 1.2 m flights either side of a 0.2 m spine) at the ends of a bank of 2.4 × 2.6 m hoistways (one
+    up to eight floors, two to twenty, three to forty, four beyond), a closed service block behind, seated in the
+    centre of the <em>top</em> tier so every tier below contains it, with a 2.2 m corridor ring kept inside every tier.
+    Since the toolkit, the core is the first preset of a <code>CirculationPlan</code> of shafts, banks and zones
+    (<code>circulation.h</code>), and the shafts become stair and lift cells in the graph. A tall tower is not grown
+    whole:</p>
+  <div class="code">
+    <div class="hd"><span>BuildingInteriorSystem: the storey window</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/engine/systems/building_interior_system.h#L51-L63">src/engine/systems/building_interior_system.h</a></div>
+<pre>    <span class="k">static constexpr</span> <span class="t">double</span> APPROACH_M = <span class="n">6.0</span>;   <span class="c">// build when this near a door</span>
+    <span class="k">static constexpr</span> <span class="t">double</span> RELEASE_M = <span class="n">40.0</span>;   <span class="c">// free when this far from all</span>
+    <span class="k">static constexpr</span> <span class="t">std::size_t</span> MAX_RESIDENT = <span class="n">5</span>;
+    <span class="k">static constexpr</span> <span class="t">std::uint64_t</span> FREE_EVERY = <span class="n">120</span>;   <span class="c">// steps between GPU frees</span>
+    <span class="c">// The storey WINDOW (skyscrapers v2 M5): a building of up to WHOLE_UP_TO</span>
+    <span class="c">// storeys is grown whole; a taller one streams [f - WINDOW_BELOW,</span>
+    <span class="c">// f + WINDOW_ABOVE) around the player's storey f (the lobby's first</span>
+    <span class="c">// three storeys while they are still outside), regrown when f nears an</span>
+    <span class="c">// edge of the window — except while riding a cab, when the arrival is</span>
+    <span class="c">// the moment the window catches up.</span>
+    <span class="k">static constexpr</span> <span class="t">int</span> WHOLE_UP_TO = <span class="n">8</span>;
+    <span class="k">static constexpr</span> <span class="t">int</span> WINDOW_BELOW = <span class="n">2</span>;
+    <span class="k">static constexpr</span> <span class="t">int</span> WINDOW_ABOVE = <span class="n">3</span>;</pre>
+  </div>
+  <p>Geometry that must be visible from outside cannot live only in the streamed window. Glenn's first tower walk
+    (2026-09-14) found "sides of the stairwell disappear depending on the view" and "from outside you can see the holes
+    where the shafts are supposed to be": the shaft walls were streamed. Now the shaft enclosure of every storey is in
+    the exterior mesh of an enterable cored building, and the stream carries only the colliders, flights and landings.
+    Rejected along the way: cores in the merged city mesh (it cannot stream), one Jolt body per storey, per-storey door
+    leaves on every floor.</p>
+
+  <h2>Inside: floor plans and furniture</h2>
+  <p>A storey's rooms come from <code>roomPlan</code> / <code>storeyRooms</code> (<code>room_plan.h</code>), which picks
+    a topology by the plate: a <b>ring</b> of rooms along the outside walls round an open middle (offices behind a
+    curtain wall, flats behind masonry), a <b>whole floor</b> that is one dwelling (a masonry plate under 13 m on its
+    short side, no core: a house), or <b>apartments</b> off a corridor round the core. Room partitions land on the
+    facade's bay lines, so a wall meets a pier or a mullion, never a pane. Before a house floor ships,
+    <code>floorIsWalkable</code> floods a 0.15 m grid from the front door with the walls inflated by the capsule's
+    radius; a floor that fails is rebuilt without partitions, then as an open floor.</p>
+  <div class="code">
+    <div class="hd"><span>Room, WallOpening, RoomPlan: what every floor planner hands back</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/engine/procgen/city/room_plan.h#L129-L156">src/engine/procgen/city/room_plan.h</a></div>
+<pre><span class="k">struct</span> <span class="t">Room</span> {
+    <span class="t">Poly2</span> rect;          <span class="c">// world XZ, CCW -- four corners, or a CURVED room's polygon (the chords of an arc outside, the</span>
+                         <span class="c">// offset arc inside; the ring's corner office on a rounded plan)</span>
+    <span class="t">std::size_t</span> edge = <span class="n">0</span>;   <span class="c">// the plan edge it sits against (ring only)</span>
+    <span class="t">RoomKind</span> kind = <span class="t">RoomKind</span>::Office;
+    <span class="t">uint8_t</span> style = <span class="n">0</span>;      <span class="c">// a shop's trade</span>
+    <span class="t">Poly2</span> frame;         <span class="c">// a curved room's rectangle for the furniture: inside the polygon, along the arc's chord</span>
+};
+<span class="c">// ...</span>
+<span class="k">struct</span> <span class="t">WallOpening</span> {
+    <span class="t">Vec2</span> a, b;
+    <span class="t">Real</span> sill = <span class="n">0</span>, head = <span class="n">0</span>;
+    <span class="t">bool</span> door = <span class="k">false</span>;   <span class="c">// the street door, a shop's own door, the back door: kept clear to walk in through</span>
+};
+
+<span class="k">struct</span> <span class="t">RoomPlan</span> {
+    <span class="t">PlateTopology</span> topology = <span class="t">PlateTopology</span>::Ring;
+    <span class="t">bool</span> office = <span class="k">false</span>;
+    <span class="t">WallFinish</span> finish;              <span class="c">// what an accent wall on this storey wears</span>
+    <span class="t">std::vector</span>&lt;<span class="t">Room</span>&gt; rooms;
+    <span class="t">std::vector</span>&lt;<span class="t">RoomWall</span>&gt; walls;
+    <span class="t">std::vector</span>&lt;<span class="t">WallOpening</span>&gt; openings;   <span class="c">// the outside walls' doors and windows (empty: none known)</span>
+};</pre>
+  </div>
+  <h3>The floor as a block</h3>
+  <p>Office and apartment floors are now cut the way the lot pass cuts a block (<code>floor_zones.h</code>; Glenn,
+    2026-10-16: "similar to how we build lots out of city blocks we should come up with some scheme to partition the
+    open space of an office floor"). <code>partitionFloor</code> lays <b>window lots</b> along the glass at the
+    facade's bays, <b>corner lots</b> where it turns, an aisle inside them, and <b>interior lots</b> bisected out of the
+    court round the core; the corridor's long lanes run on to the aisle as the floor's streets, so every lot fronts
+    circulation. A <b>floor program</b> in Lua then tags each lot, the way the archetype book picks a lot's building.</p>
+  <div class="diagram">
+    <svg viewBox="0 0 780 330" role="img" aria-label="An office floor plate cut into window lots, corner lots, an aisle, interior lots round the core and its corridor, and streets running from the corridor to the aisle; lots tagged reception, corner office, meeting, pantry, open plan">
+      <g font-family="system-ui, sans-serif" font-size="12" text-anchor="middle">
+        <rect x="40" y="20" width="700" height="260" fill="#0e141d" stroke="#8ec5ff" stroke-width="1.4"/>
+        <g stroke="#2c3d50" fill="#131a24">
+          <rect x="40" y="20" width="45" height="45" fill="#2a2412"/><rect x="695" y="20" width="45" height="45" fill="#2a2412"/>
+          <rect x="40" y="235" width="45" height="45" fill="#2a2412"/><rect x="695" y="235" width="45" height="45" fill="#2a2412"/>
+          <rect x="85" y="20" width="101" height="45"/><rect x="186" y="20" width="101" height="45" fill="#14223a"/><rect x="287" y="20" width="102" height="45"/>
+          <rect x="389" y="20" width="102" height="45"/><rect x="491" y="20" width="102" height="45" fill="#14223a"/><rect x="593" y="20" width="102" height="45"/>
+          <rect x="85" y="235" width="101" height="45"/><rect x="186" y="235" width="101" height="45"/><rect x="287" y="235" width="102" height="45"/>
+          <rect x="389" y="235" width="102" height="45" fill="#14223a"/><rect x="491" y="235" width="102" height="45"/><rect x="593" y="235" width="102" height="45"/>
+          <rect x="40" y="65" width="45" height="85"/><rect x="40" y="150" width="45" height="85"/>
+          <rect x="695" y="65" width="45" height="85"/><rect x="695" y="150" width="45" height="85"/>
+          <rect x="101" y="81" width="108" height="61"/><rect x="209" y="81" width="109" height="61" fill="#14223a"/>
+          <rect x="101" y="158" width="108" height="61"/><rect x="209" y="158" width="109" height="61"/>
+          <rect x="462" y="81" width="108" height="61"/><rect x="570" y="81" width="109" height="61"/>
+          <rect x="462" y="158" width="108" height="61"/><rect x="570" y="158" width="109" height="61" fill="#1d2a16"/>
+          <rect x="318" y="81" width="144" height="27"/><rect x="318" y="192" width="144" height="27" fill="#2a1d2e"/>
+        </g>
+        <rect x="318" y="108" width="144" height="84" fill="#0a0e14" stroke="#6f8fb0" stroke-dasharray="4 3"/>
+        <rect x="340" y="130" width="100" height="40" fill="#1f2a37" stroke="#6f8fb0"/>
+        <text x="390" y="155" fill="#cfe4ff">core</text>
+        <text x="390" y="124" fill="#93a6ba" font-size="11">corridor ring</text>
+        <rect x="101" y="142" width="217" height="16" fill="#0a0e14"/><rect x="462" y="142" width="217" height="16" fill="#0a0e14"/>
+        <text x="210" y="154" fill="#93a6ba" font-size="11">street (corridor lane)</text>
+        <text x="570" y="154" fill="#93a6ba" font-size="11">street (corridor lane)</text>
+        <text x="390" y="78" fill="#6f8fb0" font-size="11">aisle</text>
+        <text x="62" y="47" fill="#e6c07b">C</text><text x="717" y="47" fill="#e6c07b">C</text><text x="62" y="262" fill="#e6c07b">C</text><text x="717" y="262" fill="#e6c07b">C</text>
+        <text x="236" y="47" fill="#8ec5ff">M</text><text x="542" y="47" fill="#8ec5ff">M</text><text x="440" y="262" fill="#8ec5ff">M</text><text x="263" y="116" fill="#8ec5ff">M</text>
+        <text x="390" y="210" fill="#d7b4ff">R</text>
+        <text x="624" y="193" fill="#a6d98a">P</text>
+        <text x="135" y="47" fill="#93a6ba">w</text><text x="155" y="116" fill="#93a6ba">i</text><text x="62" y="112" fill="#93a6ba">w</text>
+        <g text-anchor="start" font-size="12">
+          <text x="40" y="304" fill="#e6c07b">C corner office</text>
+          <text x="160" y="304" fill="#8ec5ff">M meeting (glass)</text>
+          <text x="300" y="304" fill="#d7b4ff">R reception, by the lift lobby</text>
+          <text x="500" y="304" fill="#a6d98a">P pantry, by the core</text>
+          <text x="640" y="304" fill="#93a6ba">rest: open plan</text>
+          <text x="40" y="322" fill="#93a6ba">w window lot · i interior lot · the lifts face the bottom band, so reception takes the strip there</text>
+        </g>
+      </g>
+    </svg>
+  </div>
+  <p class="cap">A cored office plate, cut and tagged (schematic). Lots are cut first, then the program's rules are
+    tried in order: one reception near the lift lobby (only on floors with lifts), every corner lot a corner office, a
+    pantry by the core, a copy room on floors over 700 m², glass meeting rooms one per 320 m², and whatever is left
+    is open plan, or a desk row where a lot is too shallow.</p>
+  <div class="code">
+    <div class="hd"><span>floor_programs.lua: the office program's first rules</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/assets/scripts/floor_programs.lua#L29-L43">assets/scripts/floor_programs.lua</a></div>
+<pre>floor_programs = {
+  office = {
+    lots = { window_depth = <span class="n">4.5</span>, aisle = <span class="n">1.6</span>, street = <span class="n">1.8</span>, lot_width = <span class="n">4.8</span>, interior_lot = <span class="n">24</span>, min_side = <span class="n">2.6</span> },
+    fill = <span class="s">"open_plan"</span>,
+    shallow = <span class="s">"desk_row"</span>, shallow_depth = <span class="n">3.2</span>,
+    zones = {
+      { tag = <span class="s">"reception"</span>, kind = <span class="s">"reception"</span>, sites = {<span class="s">"interior"</span>, <span class="s">"window"</span>}, count = <span class="n">1</span>, near = <span class="s">"lobby"</span>, lifts = <span class="k">true</span>,
+        area = {<span class="n">12</span>, <span class="n">60</span>} },
+      <span class="c">-- the corner office is the whole corner (a rounded corner's arc too)</span>
+      { tag = <span class="s">"corner_office"</span>, kind = <span class="s">"office"</span>, sites = {<span class="s">"corner"</span>}, share = <span class="n">1.0</span>, enclosed = <span class="k">true</span>, area = {<span class="n">8</span>, <span class="n">1e9</span>} },
+      { tag = <span class="s">"pantry"</span>, kind = <span class="s">"kitchenette"</span>, sites = {<span class="s">"interior"</span>}, count = <span class="n">1</span>, near = <span class="s">"core"</span>, area = {<span class="n">10</span>, <span class="n">50</span>} },
+      { tag = <span class="s">"copy"</span>, kind = <span class="s">"copy_room"</span>, sites = {<span class="s">"interior"</span>}, count = <span class="n">1</span>, near = <span class="s">"core"</span>, enclosed = <span class="k">true</span>,
+        walls = <span class="s">"drywall"</span>, area = {<span class="n">6</span>, <span class="n">28</span>}, min_depth = <span class="n">2.0</span>, min_floor = <span class="n">700</span> },
+      { tag = <span class="s">"meeting"</span>, kind = <span class="s">"meeting"</span>, sites = {<span class="s">"interior"</span>, <span class="s">"window"</span>}, per_m2 = <span class="n">320</span>, enclosed = <span class="k">true</span>, walls = <span class="s">"glass"</span>,
+        area = {<span class="n">10</span>, <span class="n">45</span>}, min_depth = <span class="n">3.0</span> },</pre>
+  </div>
+  <div class="shots">
+    <figure class="shot"><img src="img/buildings/office_floor.webp" alt="An office floor: cubicles, desks with monitors, drywall rooms and ceiling light panels">
+      <figcaption>A zoned office floor (2026-10-16): enclosed rooms, desk pods and cubicles.</figcaption></figure>
+    <figure class="shot"><img src="img/buildings/office_arched.webp" alt="An office in a masonry building with arched windows, a row of desks with seated workers and an armchair">
+      <figcaption>A masonry office: the same arched heads inside as out, one opening record.</figcaption></figure>
+  </div>
+  <h3>Every building its own kind of inside</h3>
+  <p>A run of ADRs on 2026-10-13 (0160–0171) followed Glenn's walks through the city's interiors. The pattern each
+    time: measure what the planner produced across every recipe, route the building to a plan of its own kind, and pin
+    it with a test that counts the pieces. Two runtime-only params carry the routing: <code>officeUse</code> and
+    <code>civicRooms</code>, set by the architect and again by the interior system from the record's recipe name, so a
+    new floor plan needs no re-bake. The ones that changed the outside (open vehicle bays, the hotel's all-lobby face,
+    the konbini's sign) bumped the lots tag.</p>
+  <table>
+    <tr><th>ADR</th><th>what changed</th><th>measured</th></tr>
+    <tr><td>0160</td><td>the furnisher knows the outside walls' doors and windows (<code>RoomPlan::openings</code>): a door keeps 1.6 m clear; only low pieces stand under a window; nothing hangs over glass; setback floors furnished</td><td>across 30 recipes: 1,793 doors and 26,735 windows, no piece in a door's way (1,099 before)</td></tr>
+    <tr><td>0161</td><td>private offices along the glass; slim residential crowns become two flats wrapped round the core</td><td>lounge floors 109 → 0</td></tr>
+    <tr><td>0162</td><td>workplaces get the office floor: perimeter offices, reception, meeting rooms, kitchenette, lounge</td><td>beds in workplaces 7,690 → 0; desks 4,595 → 16,775</td></tr>
+    <tr><td>0163, 0164</td><td>schools, libraries, museums, universities get their own rooms; restrooms; chamfered plates take the office floor</td><td>beds 1,015 → 0 in 36 civic buildings</td></tr>
+    <tr><td>0165</td><td>the hospital: wards, a nurses' station, a waiting lobby, examination rooms</td><td>1,617 hospital beds, no double beds</td></tr>
+    <tr><td>0166</td><td>civic halls: church nave, cinema foyer and raked auditoriums, market stalls, police cells, courtrooms, council chamber</td><td>891 pews, 458 cinema rows</td></tr>
+    <tr><td>0167, 0168</td><td>the fire station: open bays, a real fire-engine vehicle in each, crew quarters; climbable roof ladders</td><td>9 stations: 27 open bays, an engine spot kept clear in each</td></tr>
+    <tr><td>0169, 0170</td><td>factories and warehouses open onto shop floors and racking; a hotel's entrance face is all lobby</td><td>234 machines, 345 racks; a reception in all 12 hotels</td></tr>
+    <tr><td>0171</td><td>station entrances; two in three small grocers become a konbini (trade 16), read off the hash so no other shop re-deals</td><td>48 konbini of 995 shop units</td></tr>
+  </table>
+  <p>What a room holds is data: <code>furniture_rooms.lua</code> has a program per room kind, steps run in order
+    (<code>wall</code>, <code>grid</code>, <code>counter</code>, <code>hang</code>, <code>one_of</code>), and a pick
+    names a piece or a family and tags in <code>furniture_library.lua</code>, so describing a new piece puts it into
+    every room it suits. Pieces are drawn instanced, not merged into the parts.</p>
+  <div class="shots">
+    <figure class="shot"><img src="img/buildings/apartment.webp" alt="A bedroom in a flat: a double bed with two people sitting on it, a picture, a hall leading to the living room">
+      <figcaption>An apartment, people seated on the furniture (2026-10-16).</figcaption></figure>
+    <figure class="shot"><img src="img/buildings/lecture_hall.webp" alt="A raked lecture hall with rows of blue seats against a brick wall and tall windows">
+      <figcaption>A campus lecture hall's raked rows (2026-10-04).</figcaption></figure>
+  </div>
+
+  <h2>Shopfronts and malls</h2>
+  <p>Shops are part of the facade grammar, not stuck on afterwards. On a storefront face, <code>facadeLayout</code>
+    groups the ground bays into shop units: it picks the <b>trade</b> first, weighted by the building's shop mix
+    (everyday, high street, nightlife, mall), then the unit's width in bays from that trade's range, and seeds the
+    dice by the face's corner <em>in plan</em>, so the facade, its far tier, the shop's rooms, its sign and the
+    citysim's place all agree on what the shop is. (With the height in the hash, a pharmacy's sign once stood over a
+    bookshop's shelves.)</p>
+  <div class="code">
+    <div class="hd"><span>facadeLayout: a run of storefront bays cut into shop units by trade</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/engine/procgen/city/shape_grammar.cpp#L1001-L1017">src/engine/procgen/city/shape_grammar.cpp</a></div>
+<pre><span class="t">int</span> s = b;
+<span class="k">while</span> (s &lt; b + run) {
+    <span class="k">const</span> <span class="t">int</span> left = b + run - s;
+    <span class="k">if</span> (left &lt; <span class="n">2</span>) {   <span class="c">// a lone bay: grow the previous unit over it, else leave it to the lobby</span>
+        <span class="k">if</span> (!L.shops.empty() &amp;&amp; L.shops.back().b1 == s - <span class="n">1</span>) L.shops.back().b1 = s;
+        <span class="k">break</span>;
+    }
+    <span class="k">const</span> <span class="t">uint8_t</span> trade = pickTrade(next(), left, p.shopMix);
+    <span class="k">const</span> <span class="t">int</span> g = tradeBays(trade, left, next());
+    <span class="t">ShopUnit</span> u;
+    u.b0 = s; u.b1 = s + g - <span class="n">1</span>;
+    u.door = g &gt;= <span class="n">3</span> ? s + g / <span class="n">2</span> : s + <span class="k">static_cast</span>&lt;<span class="t">int</span>&gt;(next() % <span class="n">2u</span>);
+    u.type = trade;
+    <span class="c">// A KONBINI: two in three grocers -- read off the hash, never drawing from it, so every other</span>
+    <span class="c">// unit on the street stays what it was</span>
+    <span class="k">if</span> (trade == <span class="n">1</span> &amp;&amp; ((h &gt;&gt; <span class="n">9</span>) + <span class="k">static_cast</span>&lt;<span class="t">uint32_t</span>&gt;(s)) % <span class="n">3u</span> != <span class="n">0</span>) u.type = <span class="n">16</span>;
+    L.shops.push_back(u);</pre>
+  </div>
+  <p>The trades table (<code>trades.h</code>) is the one source everything reads: name, citysim place type, opening
+    hours, weight per shop mix, bay range, fascia colour, whether it sets out a terrace, and the room's finish.
+    <a href="https://github.com/GlennSong/raytracer-clang/blob/main/docs/decisions.md">ADR-0148</a> dresses the
+    pavement in front of a shop with 1.6 m of paving or more, by trade: a grocer's produce stands, an A-board, a
+    restaurant's planters, a bar's high tables, a club's velvet rope (284 fronts on island_8_nature). Malls come in
+    three forms: the indoor mall on a big-box block (<code>bigBox</code> 5: a concourse of units, an anchor, a food
+    court), the American mall with wings off a skylit court on two levels with escalators (<code>bigBox</code> 6), and
+    since ADR-0180 the <code>mall_complex</code>, which builds the American mall as the spine cell of a complex with
+    anchor stores, a garage and a cafe pavilion as cells of their own.</p>
+
+  <h2>Colour and lit windows</h2>
+  <p>Building meshes are grouped by <code>PartId</code> (wall, glass, lit glass, brick, concrete, stucco, roof, trim,
+    door, interior finishes, furniture finishes ...), one mesh per part with one material each, merged across a render
+    cell. Colour rides on the vertices: the glass materials are white, so a pane's vertex colour <em>is</em> its glass
+    (the reflectance the sky is mirrored in), and each tower gets its own tint (blue, green, bronze, smoke, silver ...
+    by <code>glassStyle</code>).</p>
+  <p>At night about a third of the windows light up. Which ones is a hash of the opening's quantised world position
+    (<code>litWindow</code>: <code>(positionHash(worldPos) &amp; 0xffu) &lt; 85</code>), so every LOD tier and every rebuild
+    lights the same windows; a curtain wall lights per bay against a per-storey occupancy instead of row by row. The
+    lit pane's colour has to carry two things, its glass by day and its lamp's tint by night, in one vertex colour:</p>
+  <div class="code">
+    <div class="hd"><span>litPaneColour: the glass in the top 7 bits of each channel, the tint index in the low bits</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/engine/procgen/city/shape_grammar.cpp#L237-L244">src/engine/procgen/city/shape_grammar.cpp</a></div>
+<pre><span class="t">Vec3</span> litPaneColour(<span class="k">const</span> <span class="t">Vec3</span>&amp; glassCol, <span class="k">const</span> <span class="t">Vec3</span>&amp; worldPos, <span class="t">bool</span> curtainWall) {
+    <span class="k">const</span> <span class="t">int</span> idx = litTintIndex(worldPos, curtainWall);
+    <span class="k">auto</span> chan = [](<span class="t">Real</span> c, <span class="t">int</span> bit) {
+        <span class="t">int</span> b = <span class="k">static_cast</span>&lt;<span class="t">int</span>&gt;(std::lround(std::clamp(c, <span class="t">Real</span>(<span class="n">0</span>), <span class="t">Real</span>(<span class="n">1</span>)) * <span class="n">255.0</span>)) &amp; ~<span class="n">1</span>;
+        <span class="k">return</span> <span class="k">static_cast</span>&lt;<span class="t">Real</span>&gt;(b | bit) / <span class="n">255.0</span>;
+    };
+    <span class="k">return</span> <span class="t">Vec3</span>(chan(glassCol.x, idx &amp; <span class="n">1</span>), chan(glassCol.y, (idx &gt;&gt; <span class="n">1</span>) &amp; <span class="n">1</span>), chan(glassCol.z, (idx &gt;&gt; <span class="n">2</span>) &amp; <span class="n">1</span>));
+}</pre>
+  </div>
+  <p>The shaders (Vulkan <code>mesh.frag</code>, Metal and WebGPU mirrors) decode the index back into one of seven
+    tints (office white and fluorescent blue-white behind curtain walls; incandescent, cream and the odd cool or
+    green-white room elsewhere) and apply it to the emission only (<code>FLAG_EMISSIVE_VERTEX_TINT</code>). Lit panes
+    are interior-mapped: the fragment's view ray is intersected with a room box behind the glass and samples a baked
+    atlas of sixteen furnished rooms. Tall roofs add crown bands, signage boxes, podium uplights and flashing red
+    aviation beacons on the FAA's height rule (ADR-0086 point 10).</p>
+  <figure class="shot">
+    <img src="img/buildings/night_windows.webp" alt="Towers at night with scattered lit windows in warm and cool tints and red aviation beacons at the roof corners">
+    <figcaption>Night downtown (2026-09-24): a third of the panes lit, each by its position hash, and red beacons on
+      the towers past 61 m.</figcaption>
+  </figure>
+
+  <h2>The mesh audit</h2>
+  <p>Every triangle the grammar emits goes through the shared mesh library (<code>MeshBuilder</code>,
+    <a href="https://github.com/GlennSong/raytracer-clang/blob/main/docs/decisions.md">ADR-0173</a>), which winds it to
+    the outward normal it is given and drops it when it has no area: nobody writes index order by hand. The audit
+    (<a href="https://github.com/GlennSong/raytracer-clang/blob/main/docs/decisions.md">ADR-0172</a>) then judges every
+    producer by one rule set: the engine's front face is clockwise seen from the normal's side, a triangle more than
+    107° away from its normals is inward, past 154° flipped, and a degenerate triangle is one under
+    <code>kNoArea2</code>.</p>
+  <div class="code">
+    <div class="hd"><span>auditMesh: the angle rule</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/engine/mesh_audit.h#L66-L76">src/engine/mesh_audit.h</a></div>
+<pre>        <span class="k">const</span> <span class="t">Vec3</span> f = cross(c.position - a.position, b.position - a.position);
+        <span class="k">if</span> (ia == ib || ib == ic || ia == ic || f.lengthSquared() &lt; <span class="t">MeshBuilder</span>::kNoArea2) {
+            <span class="c">// ...</span>
+            <span class="k">continue</span>;
+        }
+        <span class="k">const</span> <span class="t">Vec3</span> n = a.normal + b.normal + c.normal;
+        <span class="k">const</span> <span class="t">double</span> cs = n.lengthSquared() &gt; <span class="n">1e-12</span> ? dot(normalize(f), normalize(n)) : <span class="n">1.0</span>;
+        <span class="k">if</span> (cs &lt; -<span class="n">0.3</span>) {</pre>
+  </div>
+  <p>For buildings it runs in <code>test_winding</code> over every recipe, outside and in, on two plans, and over every
+    furniture piece; <code>rt_bake --audit</code> runs it over every mesh a baked level ships. A facade-specific check,
+    <code>auditFacadeCracks</code>, fires level rays in toward each building's axis and reports a back face met first
+    under cover, which means the ray came in through a gap (<code>building_<wbr>facades_<wbr>have_<wbr>no_<wbr>cracks_<wbr>every_<wbr>recipe</code>,
+    gated behind <code>RT_CRACKS=1</code> because it takes minutes). It found the tower tops wound inside out.</p>
+
+  <h2>How it got here</h2>
+  <table>
+    <tr><th>when</th><th>what</th></tr>
+    <tr><td>2026-06-19</td><td>ADR-0038: the split/shape grammar over road → block → parcel, a <code>shape:"city"</code> region recipe, walkable shells but no interiors. The separate <code>generateCity</code> path was deleted on 2026-08-16; <code>growLotBuildingsOnNets</code> became the one pipeline.</td></tr>
+    <tr><td>2026-06-20</td><td>ADR-0040 (height → structure → cladding; base, shaft, crown) and ADR-0042 (Lua recipes over a C++ vocabulary).</td></tr>
+    <tr><td>July–August</td><td>A parallel "Lot System" pipeline with its own Lua recipe surface was built on a branch (2026-07-29 to 08-12, kept as the tag <code>archive/<wbr>claude/<wbr>procgen-city-building-kpuxzd</code>) and abandoned; <code>architect.h</code>'s note that the recipe bodies "are not data" records why its recipe port failed.</td></tr>
+    <tr><td>2026-08-30</td><td>ADR-0080: enterable buildings, streamed interiors, door leaves that swing away from the mover.</td></tr>
+    <tr><td>2026-09-13 → 16</td><td>ADR-0086, skyscrapers v2: site plans, paved urban lots, massing envelopes as data, the core with stairwells and a ridable lift, night lighting, rooms.</td></tr>
+    <tr><td>2026-10-01 → 13</td><td>Shops by trade, attached buildings, big boxes and malls, the campus, then the interiors run (ADR-0160–0171) and the mesh audit and library (0172, 0173).</td></tr>
+    <tr><td>2026-10-14 → 16</td><td>The architectural toolkit (ADR-0174–0180): space graph and gate, section, circulation, mass and stack, complex, implicit, mesh mass, envelope, openings between cells, the mall as cells. Floors zoned like blocks.</td></tr>
+    <tr><td>2026-10-21 → 23</td><td>The sky bridge walked (ADR-0222); party walls blank only as high as the neighbour (ADR-0227).</td></tr>
+  </table>
+  <div class="note history"><p><b>The rule that held it together.</b> Each toolkit step was proven byte-identical for
+    every existing recipe before the new word was used: the mesh-hash census
+    (<code>building_<wbr>mesh_<wbr>hash_<wbr>census_<wbr>every_<wbr>recipe</code> in <code>test_building_lod.cpp</code>) and
+    <code>rt_bake --sections</code> diffs. The census caught a use-after-free in a stair-run refactor the day it
+    landed. The owed list is still real: the drum and the pagoda were meant to be re-expressed as stack presets and
+    their one-off growers (<code>growCylinder</code>, <code>growPagoda</code>) deleted, and the rowhouse strip as a
+    complex preset; at this commit both still stand beside the new words.</p></div>
+
+  <h2>Where to look</h2>
+  <ul class="files">
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/procgen/city/shape_grammar.h">src/engine/procgen/city/shape_grammar.h</a> — <code>BuildingParams</code>, <code>PartId</code>, the human constants, <code>storeyPlans</code>, <code>massStack</code>, party walls, links, <code>growPlanBuilding</code>, <code>growInterior</code></li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/procgen/city/shape_grammar.cpp">src/engine/procgen/city/shape_grammar.cpp</a> — <code>facadeLayout</code>, the facade and curtain-wall emitters, crowns, caps, malls, garages, the interior grow</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/procgen/city/site_plan.h">src/engine/procgen/city/site_plan.h</a> — <code>SiteFrame</code>, yards, <code>largestAlignedRect</code>, open-space pieces</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/procgen/city/parcel.h">src/engine/procgen/city/parcel.h</a> — <code>Lot</code>, frontage-first parcelling</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/procgen/city/architect.h">src/engine/procgen/city/architect.h</a> — districts, <code>BuildingRecipe</code>, the recipe registry, landmarks, the archetype book</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/procgen/city/city_lots.cpp">src/engine/procgen/city/city_lots.cpp</a> — the lot pass: PASS A/B/C, the site plan, complexes, the party-wall pass, open lots</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/procgen/city/mass.h">src/engine/procgen/city/mass.h</a>, <a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/procgen/city/mass_stack.h">mass_stack.h</a>, <a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/procgen/city/section.h">section.h</a>, <a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/procgen/city/face.h">face.h</a> — foundation B</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/procgen/city/implicit.h">src/engine/procgen/city/implicit.h</a>, <a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/procgen/city/mesh_mass.h">mesh_mass.h</a>, <a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/procgen/city/envelope.h">envelope.h</a> — field, mesh and skin forms</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/procgen/city/cells.h">src/engine/procgen/city/cells.h</a> — the complex and its presets</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/procgen/city/space_graph.h">src/engine/procgen/city/space_graph.h</a>, <a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/procgen/city/circulation.h">circulation.h</a>, <a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/procgen/city/core_plan.h">core_plan.h</a> — foundation A, the gate, the core</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/procgen/city/room_plan.h">src/engine/procgen/city/room_plan.h</a>, <a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/procgen/city/floor_zones.h">floor_zones.h</a>, <a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/procgen/city/furniture.h">furniture.h</a> — floor plans and furnishing</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/procgen/city/trades.h">src/engine/procgen/city/trades.h</a> — the trades table</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/procgen/city/building_records.h">src/engine/procgen/city/building_records.h</a>, <a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/procgen/city/lot_cache.h">lot_cache.h</a> — records and the cache</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/systems/building_interior_system.h">src/engine/systems/building_interior_system.h</a>, <a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/systems/elevator_system.h">elevator_system.h</a> — streaming interiors, the lifts</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/mesh_audit.h">src/engine/mesh_audit.h</a> — the audit</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/assets/scripts/floor_programs.lua">assets/scripts/floor_programs.lua</a>, <a href="https://github.com/GlennSong/raytracer-clang/blob/main/assets/scripts/furniture_rooms.lua">furniture_rooms.lua</a>, <a href="https://github.com/GlennSong/raytracer-clang/blob/main/assets/scripts/style_book.lua">style_book.lua</a>, <a href="https://github.com/GlennSong/raytracer-clang/blob/main/assets/scripts/tower_lineup.lua">tower_lineup.lua</a> — the Lua side</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/docs/building-toolkit-plan.md">docs/building-toolkit-plan.md</a> — the toolkit's plan, brief and status table (issue #105)</li>
+  </ul>
+  <h3>Tests</h3>
+  <ul>
+    <li><code>tests/test_space_graph.cpp</code>: <code>graph_gate_every_recipe</code>, <code>storey_<wbr>view_<wbr>equals_<wbr>storey_<wbr>plans_<wbr>every_<wbr>recipe</code></li>
+    <li><code>tests/<wbr>test_<wbr>building_<wbr>lod.cpp</code>: the mesh-hash census (<code>RT_CENSUS_ONLY</code>, <code>RT_CENSUS_PARTS</code>, <code>RT_CENSUS_DUMP</code> to hunt a diff) and the facade crack audit (<code>RT_CRACKS=1</code>, <code>RT_CRACKS_ONLY=&lt;recipe&gt;</code>)</li>
+    <li><code>tests/test_mass_stack.cpp</code>, <code>test_section.cpp</code>: the presets bit for bit</li>
+    <li><code>tests/test_city_lots.cpp</code>: rectilinear footprints, paving at the sidewalk datum, open lots, party walls</li>
+    <li><code>tests/test_furniture.cpp</code>, <code>test_floor_zones.cpp</code> (<code>RT_ZONE_SVG=&lt;dir&gt;</code> draws the lots), <code>test_building_interior.cpp</code>, <code>test_building_collider.cpp</code> (the sky bridge walk), <code>test_elevator.cpp</code> (the twentieth-floor ride), <code>test_winding.cpp</code> (the audit)</li>
+  </ul>
+  <h3>Labs and switches</h3>
+  <ul>
+    <li>Levels: <code>tower_lineup.json</code> (the tower recipes side by side), <code>toolkit_lab.json</code> (one lot, one recipe named by <code>citysim.recipe</code>, walkable to the roof), <code>floor_lab.json</code>, <code>attached_row.json</code>, <code>building_lab.json</code>, <code>big_box_lab.json</code>, <code>campus_lab.json</code>, <code>furniture_showroom.json</code>.</li>
+    <li><code>RT_SITE_DEBUG=1</code> prints lots no rectangle fitted; <code>RT_SITE_PLAN=0</code> skips the site plan (a bisect switch).</li>
+    <li><code>RT_CELLS_DEBUG=1</code> prints each complex cell as the lot pass grows it.</li>
+    <li><code>RT_BLUEPRINTS=&lt;dir&gt;</code> writes a blueprint sheet per building from the level gate.</li>
+    <li><code>RT_FLOOR_PLAN=bands</code> uses the older office floor; <code>RT_NO_OFFICE_FLOORS=1</code>, <code>RT_NO_CIVIC_ROOMS=1</code>, <code>RT_NO_WRAP_FLATS=1</code>, <code>RT_<wbr>FURNITURE_<wbr>BLIND_<wbr>OPENINGS=1</code> are A/B switches for the interior ADRs.</li>
+    <li><code>lot? x z</code> in the running game prints a building's party walls (ADR-0227).</li>
+    <li>Any lot-pass change: bump <code>kLotsBuildTag</code> (<code>lots_producer.cpp</code>), or a level keeps reading its cached lots.</li>
+  </ul>
+  <p>Related pages: <a href="roads.html">roads</a> (where the blocks come from), <a href="citysim.html">the city
+    sim</a> (who uses the shops and offices), <a href="procgen.html">procgen</a> (the SDF kit and the mesh library),
+    <a href="bakes.html">bakes</a> (the lots bundle and its tags), <a href="testing.html">testing</a>.</p>
+
+  <footer>Code excerpts from commit <code>47d587f3</code> (2026-10-26). Drawn from ADR-0038, 0040, 0042, 0080, 0086,
+    0144, 0148, 0160–0173, 0174–0180, 0222 and 0227, and <code>docs/<wbr>building-toolkit-plan.md</code>.</footer>
+</div>
+</body>
+</html>

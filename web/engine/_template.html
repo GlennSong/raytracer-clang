@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<!--
+  Template for a "How the engine works" page (web/engine/AUTHORING.md). Copy it, keep the parts,
+  replace the content. Every component the section uses appears once below.
+-->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>System Name — How the Engine Works</title>
+  <link rel="stylesheet" href="engine.css">
+</head>
+<body>
+<div class="wrap">
+  <div class="nav"><a href="index.html">← How the engine works</a> · <a href="../index.html">scenes</a></div>
+  <h1>System Name</h1>
+  <p class="lede">Two or three sentences: what this system does, and the one idea that makes it work.</p>
+
+  <h2>The problem</h2>
+  <p>What it has to do, in plain words, and what makes that hard.</p>
+
+  <h2>The pipeline</h2>
+  <div class="diagram">
+    <svg viewBox="0 0 760 120" role="img" aria-label="Three stages: input, process, output">
+      <defs><marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" fill="#6f8fb0"/></marker></defs>
+      <g font-family="system-ui, sans-serif" font-size="13" text-anchor="middle">
+        <rect x="20" y="30" width="180" height="60" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="110" y="56" fill="#cfe4ff">Input</text>
+        <text x="110" y="75" fill="#93a6ba" font-size="12">what goes in</text>
+        <rect x="290" y="30" width="180" height="60" rx="9" fill="#131a24" stroke="#3b82f6"/>
+        <text x="380" y="56" fill="#cfe4ff">Process</text>
+        <text x="380" y="75" fill="#93a6ba" font-size="12">the key step</text>
+        <rect x="560" y="30" width="180" height="60" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="650" y="56" fill="#cfe4ff">Output</text>
+        <text x="650" y="75" fill="#93a6ba" font-size="12">what comes out</text>
+        <line x1="200" y1="60" x2="286" y2="60" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar)"/>
+        <line x1="470" y1="60" x2="556" y2="60" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar)"/>
+      </g>
+    </svg>
+  </div>
+  <p class="cap">A caption saying what the diagram shows.</p>
+
+  <h2>The key data</h2>
+  <div class="code">
+    <div class="hd"><span>RideJolt::step: the most the velocity changed over the last 0.3 s</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/engine/player/driver_seat.cpp#L32-L45">src/engine/player/driver_seat.cpp</a></div>
+<pre><span class="t">Real</span> RideJolt::step(<span class="k">const</span> <span class="t">Vec3</span>&amp; velocity, <span class="t">Real</span> dt, <span class="t">Vec3</span>* before) {
+    clock += dt;
+    samples.push_back({clock, velocity});
+    <span class="k">while</span> (!samples.empty() &amp;&amp; samples.front().t &lt; clock - kWindow) samples.erase(samples.begin());
+    <span class="t">Real</span> most = <span class="n">0</span>;
+    <span class="c">// ...</span>
+}</pre>
+  </div>
+  <p>Explain what the excerpt shows and why it is shaped that way.</p>
+
+  <figure class="shot">
+    <img src="img/page/example.webp" alt="Describe the picture">
+    <figcaption>What the screenshot shows.</figcaption>
+  </figure>
+
+  <div class="note history"><p><b>How it got here.</b> What was tried first, what was measured, and why it
+    changed (<a href="https://github.com/GlennSong/raytracer-clang/blob/main/docs/decisions.md">ADR-0000</a>).</p></div>
+
+  <h2>Where to look</h2>
+  <ul class="files">
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/player/driver_seat.h">src/engine/player/driver_seat.h</a> — what it holds</li>
+  </ul>
+
+  <footer>Code excerpts from commit <code>47d587f3</code> (2026-10-26). Drawn from ADR-0000.</footer>
+</div>
+</body>
+</html>

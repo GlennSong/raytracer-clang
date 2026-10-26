@@ -1,0 +1,77 @@
+/* "How the engine works" -- the shared look of web/engine/*.html. Dark only, like the rest of the site.
+   Components: .nav, .lede, .diagram (inline SVG), figure.shot (a screenshot), .code (a captioned excerpt),
+   .grid/.b (cards), .note, table, .files (key files list). See web/engine/AUTHORING.md. */
+:root { color-scheme: dark;
+  --bg: #0c1016; --panel: #131a24; --panel2: #0a0e14; --line: #1f2a37; --line2: #2c3d50;
+  --text: #dfe9f3; --body: #c6d4e2; --muted: #93a6ba; --dim: #64768a;
+  --link: #8ec5ff; --head: #bcd; --code: #b9e0ff;
+  --k: #ff9fb2; --t: #8fd8c8; --s: #e6c07b; --c: #6f8396; --n: #d7b4ff; }
+* { box-sizing: border-box; }
+html, body { margin: 0; background: var(--bg); color: var(--text);
+  font-family: system-ui, -apple-system, sans-serif; line-height: 1.6; }
+.wrap { max-width: 900px; margin: 0 auto; padding: 28px 16px 80px; }
+a { color: var(--link); }
+h1 { font-size: 27px; margin: 0 0 6px; line-height: 1.25; }
+h2 { font-size: 20px; margin: 40px 0 10px; color: var(--head); }
+h3 { font-size: 16px; margin: 24px 0 6px; color: #cfe4ff; }
+p, li { color: var(--body); font-size: 15.5px; }
+.lede { color: #9fb4c9; font-size: 16px; margin: 0 0 6px; }
+.nav { margin-bottom: 14px; font-size: 14px; color: var(--dim); }
+.nav a { text-decoration: none; }
+.nav a:hover { text-decoration: underline; }
+code { background: var(--panel); border: 1px solid #22303f; border-radius: 5px;
+  padding: 1px 5px; font: 13px ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--code); }
+kbd { background: #1a2634; border: 1px solid var(--line2); border-bottom-width: 2px;
+  border-radius: 5px; padding: 1px 7px; font: 13px ui-monospace, monospace; color: #cfe4ff; }
+
+/* a diagram: inline SVG, drawn on the dark panel; scrolls sideways on a phone rather than shrinking unreadably */
+.diagram { margin: 20px 0 6px; background: var(--panel2); border: 1px solid var(--line);
+  border-radius: 12px; padding: 12px; overflow-x: auto; }
+.diagram svg { display: block; width: 100%; min-width: 560px; height: auto; }
+.cap { color: #7f93a8; font-size: 13px; margin: 4px 0 16px; }
+
+/* a screenshot */
+figure.shot { margin: 20px 0 6px; }
+figure.shot img { display: block; width: 100%; height: auto; border-radius: 10px; border: 1px solid var(--line); }
+figure.shot figcaption { color: #7f93a8; font-size: 13px; margin-top: 6px; }
+.shots { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; }
+.shots figure.shot { margin: 8px 0; }
+
+/* a code excerpt: a header naming the file (linked, at the commit it was taken from) and what it shows */
+.code { margin: 18px 0 8px; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; background: var(--panel2); }
+.code .hd { display: flex; justify-content: space-between; gap: 10px; flex-wrap: wrap;
+  padding: 7px 12px; background: var(--panel); border-bottom: 1px solid var(--line); font-size: 12.5px; color: var(--muted); }
+.code .hd a { font: 12.5px ui-monospace, monospace; text-decoration: none; }
+.code .hd a:hover { text-decoration: underline; }
+.code pre { margin: 0; padding: 12px 14px; overflow-x: auto; font: 12.8px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace; color: #d5e2ee; }
+.code pre .k { color: var(--k); }   /* keywords */
+.code pre .t { color: var(--t); }   /* types */
+.code pre .s { color: var(--s); }   /* strings */
+.code pre .c { color: var(--c); font-style: italic; }   /* comments */
+.code pre .n { color: var(--n); }   /* numbers */
+
+.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; margin: 14px 0; }
+.grid .b { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 13px 15px; }
+.grid .b h3 { margin: 0 0 6px; font-size: 15px; }
+.grid .b p { margin: 0; font-size: 14px; color: var(--muted); }
+a.b { text-decoration: none; display: block; transition: border-color .12s, transform .12s; }
+a.b:hover { border-color: #3b82f6; transform: translateY(-2px); }
+
+.note { margin: 18px 0; padding: 12px 16px; border-radius: 10px; background: #10233a; border: 1px solid #2f6a86; }
+.note p { margin: 0; color: #d8e6f5; font-size: 15px; }
+.note.history { background: #1d1a10; border-color: #6a5a2f; }
+
+table { border-collapse: collapse; width: 100%; margin: 14px 0 6px; font-size: 14px; display: block; overflow-x: auto; }
+th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { color: #9db6cf; font-weight: 600; }
+td { color: #a9bccf; }
+
+ul.files { list-style: none; padding: 0; }
+ul.files li { margin: 4px 0; font-size: 14.5px; }
+ul.files li a { font: 13.5px ui-monospace, monospace; }
+footer { margin-top: 48px; padding-top: 14px; border-top: 1px solid var(--line); color: var(--dim); font-size: 13px; }
+
+/* dark scrollbars where diagrams, code and tables scroll inside their boxes */
+.diagram, .code pre, table { scrollbar-color: #2c3d50 #0a0e14; scrollbar-width: thin; }
+.diagram::-webkit-scrollbar, .code pre::-webkit-scrollbar, table::-webkit-scrollbar { height: 8px; background: #0a0e14; }
+.diagram::-webkit-scrollbar-thumb, .code pre::-webkit-scrollbar-thumb, table::-webkit-scrollbar-thumb { background: #2c3d50; border-radius: 4px; }

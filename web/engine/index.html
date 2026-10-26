@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<!--
+  "How the engine works": the section index. One card per system page in web/engine/.
+  Authoring rules: web/engine/AUTHORING.md. Shared look: engine.css.
+-->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>How the Engine Works</title>
+  <link rel="stylesheet" href="engine.css">
+</head>
+<body>
+<div class="wrap">
+  <div class="nav"><a href="../index.html">← scenes</a> · <a href="../about.html">about the engine</a></div>
+  <h1>How the Engine Works</h1>
+  <p class="lede">A tour of the systems inside the engine, at a high to mid level: what each one is for,
+    how its data flows, the key structures and functions (excerpted from the real code, linked to the
+    lines on GitHub), and how it got to be the way it is.</p>
+
+  <h2>The map</h2>
+  <div class="diagram">
+    <svg viewBox="0 0 840 400" role="img" aria-label="How the engine's systems relate: the spine runs everything; the procedural language feeds terrain, trees, roads, buildings and vehicles; bakes cache them; the renderer draws; the city simulation, trains, the player and audio run on top">
+      <defs><marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" fill="#6f8fb0"/></marker></defs>
+      <g font-family="system-ui, sans-serif" font-size="13" text-anchor="middle">
+        <!-- generation row -->
+        <text x="420" y="22" fill="#7f93a8" font-size="12">MAKING THE WORLD (procedural, at load or baked)</text>
+        <a href="procgen.html"><rect x="20" y="36" width="150" height="50" rx="9" fill="#131a24" stroke="#3b82f6"/>
+          <text x="95" y="66" fill="#cfe4ff">Procedural language</text></a>
+        <a href="terrain.html"><rect x="190" y="36" width="120" height="50" rx="9" fill="#131a24" stroke="#2c3d50"/>
+          <text x="250" y="66" fill="#cfe4ff">Terrain</text></a>
+        <a href="roads.html"><rect x="325" y="36" width="120" height="50" rx="9" fill="#131a24" stroke="#2c3d50"/>
+          <text x="385" y="66" fill="#cfe4ff">Roads</text></a>
+        <a href="buildings.html"><rect x="460" y="36" width="120" height="50" rx="9" fill="#131a24" stroke="#2c3d50"/>
+          <text x="520" y="66" fill="#cfe4ff">Buildings</text></a>
+        <a href="trees.html"><rect x="595" y="36" width="105" height="50" rx="9" fill="#131a24" stroke="#2c3d50"/>
+          <text x="647" y="66" fill="#cfe4ff">Trees</text></a>
+        <a href="vehicles.html"><rect x="715" y="36" width="105" height="50" rx="9" fill="#131a24" stroke="#2c3d50"/>
+          <text x="767" y="66" fill="#cfe4ff">Vehicles</text></a>
+        <line x1="170" y1="61" x2="186" y2="61" stroke="#6f8fb0" stroke-width="1.5" marker-end="url(#ar)"/>
+        <!-- cache -->
+        <a href="bakes.html"><rect x="190" y="130" width="630" height="44" rx="9" fill="#131a24" stroke="#e6c07b"/>
+          <text x="505" y="157" fill="#cfe4ff">Bakes, bundles and streaming: everything generated is cached by what made it</text></a>
+        <line x1="505" y1="88" x2="505" y2="126" stroke="#6f8fb0" stroke-width="1.5" marker-end="url(#ar)"/>
+        <!-- running -->
+        <text x="420" y="214" fill="#7f93a8" font-size="12">RUNNING THE WORLD (every frame)</text>
+        <a href="citysim.html"><rect x="190" y="228" width="140" height="50" rx="9" fill="#131a24" stroke="#2c3d50"/>
+          <text x="260" y="258" fill="#cfe4ff">The living city</text></a>
+        <a href="trains.html"><rect x="345" y="228" width="105" height="50" rx="9" fill="#131a24" stroke="#2c3d50"/>
+          <text x="397" y="258" fill="#cfe4ff">Trains</text></a>
+        <a href="player.html"><rect x="465" y="228" width="125" height="50" rx="9" fill="#131a24" stroke="#2c3d50"/>
+          <text x="527" y="258" fill="#cfe4ff">Player mobility</text></a>
+        <a href="audio.html"><rect x="605" y="228" width="100" height="50" rx="9" fill="#131a24" stroke="#2c3d50"/>
+          <text x="655" y="258" fill="#cfe4ff">Sound</text></a>
+        <a href="renderer.html"><rect x="720" y="228" width="100" height="50" rx="9" fill="#131a24" stroke="#2c3d50"/>
+          <text x="770" y="258" fill="#cfe4ff">Renderer</text></a>
+        <line x1="505" y1="176" x2="505" y2="224" stroke="#6f8fb0" stroke-width="1.5" marker-end="url(#ar)"/>
+        <!-- spine -->
+        <a href="spine.html"><rect x="20" y="318" width="800" height="44" rx="9" fill="#131a24" stroke="#3b82f6"/>
+          <text x="420" y="345" fill="#cfe4ff">The spine: Application, systems, ECS, fixed step, events, Lua, physics, the control channel</text></a>
+        <line x1="505" y1="314" x2="505" y2="282" stroke="#6f8fb0" stroke-width="1.5" marker-end="url(#ar)"/>
+        <a href="testing.html"><rect x="20" y="228" width="150" height="50" rx="9" fill="#131a24" stroke="#2c3d50"/>
+          <text x="95" y="252" fill="#cfe4ff">Tests and</text><text x="95" y="268" fill="#cfe4ff">measurement</text></a>
+        <text x="420" y="388" fill="#7f93a8" font-size="12">Click a box to open its page.</text>
+      </g>
+    </svg>
+  </div>
+
+  <h2>Foundations</h2>
+  <div class="grid">
+    <a class="b" href="spine.html"><h3>The engine's spine</h3><p>How a frame runs: the Application, systems, the ECS, the fixed step, events, Lua, and the socket that lets tools drive it.</p></a>
+    <a class="b" href="renderer.html"><h3>A frame on the GPU</h3><p>The passes in order, instancing, culling, impostors and tiers, and the path tracer the project began as.</p></a>
+    <a class="b" href="procgen.html"><h3>The procedural language</h3><p>The shared words every generator is made of: curves, texture fields, the mesh library, Lua recipes.</p></a>
+    <a class="b" href="bakes.html"><h3>Bakes, bundles and streaming</h3><p>How generated content is cached and streamed, and how the island's load fell from minutes to seconds.</p></a>
+    <a class="b" href="testing.html"><h3>Tests and measurement</h3><p>Gates, the trace harness, probes over the control channel, the mesh audit, CI.</p></a>
+  </div>
+
+  <h2>The world</h2>
+  <div class="grid">
+    <a class="b" href="terrain.html"><h3>Building the ground</h3><p>Mountains grown by uplift and erosion, rivers carved by drainage, maps that decide the cover, CDLOD drawing.</p></a>
+    <a class="b" href="roads.html"><h3>The road network</h3><p>From a city plan to lanes, junctions, kerbs, signs and signals, up mountains and over rivers.</p></a>
+    <a class="b" href="buildings.html"><h3>Buildings</h3><p>The shape grammar and the architectural toolkit: masses, storeys, facades, and interiors you can walk.</p></a>
+    <a class="b" href="trees.html"><h3>Trees and forests</h3><p>Lua recipes grown by C++, cards and impostors by distance, forests of hundreds of thousands.</p></a>
+    <a class="b" href="vehicles.html"><h3>Vehicles</h3><p>Bodies from a mesh kit, Jolt vehicles under them, and the handling work that made them drive well.</p></a>
+    <a class="b" href="trains.html"><h3>Trains</h3><p>Track in the lanes builder, the island loop, stations, light rail, and the people who ride.</p></a>
+  </div>
+
+  <h2>Life in it</h2>
+  <div class="grid">
+    <a class="b" href="citysim.html"><h3>The living city</h3><p>Hundreds of thousands of people with days, jobs and routes, simulated in tiers by distance.</p></a>
+    <a class="b" href="player.html"><h3>Player mobility</h3><p>The body as a state machine of modes: climbing, swimming, gliding, the grapple, boards, bikes, the driver's seat.</p></a>
+    <a class="b" href="audio.html"><h3>Sound made from nothing</h3><p>Every sound synthesized: footsteps by surface, rivers from bubbles, engines and trains.</p></a>
+  </div>
+
+  <h2>Earlier pages</h2>
+  <p>The site's first explainers, written as the early systems landed. Some of what they describe has
+    since been replaced; the pages above are current.</p>
+  <ul>
+    <li><a href="../city-build.html">How the city is built</a> · <a href="../buildings.html">How buildings are grown</a> ·
+      <a href="../city-sim.html">How the city thinks</a> · <a href="../procgen.html">The procedural toolkit</a> ·
+      <a href="../retrospective.html">Three months in</a></li>
+  </ul>
+
+  <footer>Every page names the commit its code excerpts were taken from. The decisions behind the systems
+    are in <a href="https://github.com/GlennSong/raytracer-clang/blob/main/docs/decisions.md">docs/decisions.md</a>
+    (the ADRs). How these pages are written: <a href="https://github.com/GlennSong/raytracer-clang/blob/main/web/engine/AUTHORING.md">AUTHORING.md</a>.</footer>
+</div>
+</body>
+</html>

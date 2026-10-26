@@ -1,0 +1,1143 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Vehicles — How the Engine Works</title>
+  <link rel="stylesheet" href="engine.css">
+</head>
+<body>
+<div class="wrap">
+  <div class="nav"><a href="index.html">← How the engine works</a> · <a href="../index.html">scenes</a></div>
+  <h1>Vehicles: built, driven and handled</h1>
+  <p class="lede">Every car, truck and bike starts as a Lua recipe. The recipe builds a body with the engine's own
+    modelling kit and lists the physics numbers: wheels, springs, engine, drivetrain. The same recipe feeds the
+    city's traffic and the car the player drives. Whoever is driving, the player or the city, the car gets the same
+    four inputs (throttle, steering, brake, handbrake), and Jolt's vehicle constraint does the physics.</p>
+
+  <h2>What a vehicle is here</h2>
+  <p>A vehicle has three parts, and the code keeps them separate:</p>
+  <ul>
+    <li><b>A body to draw.</b> This is a mesh: the painted shell, the glass, the cabin, the lamp lenses. It comes
+      from Lua, built on a <i>polymesh kit</i>. That is a small hard-surface modeller inside the engine (loft,
+      extrude, inset, crease, subdivide), so nobody imports a model.</li>
+    <li><b>A body to simulate.</b> This is a Jolt <i>VehicleConstraint</i>: a dynamic box or hull for the chassis,
+      plus raycast wheels. Each wheel has a spring, a tyre friction curve, brakes and a share of the engine's
+      torque.</li>
+    <li><b>A driver.</b> The driver produces a <code>DriverInput</code> each fixed step. It can be the player's
+      keys, an AI controller, or nobody (then the car holds its brake).</li>
+  </ul>
+  <p>The city has hundreds of cars, and most of them are not Jolt vehicles. Ambient traffic is moved by the city
+    planner along its lane path and drawn as instanced meshes. A car becomes a real physics vehicle only when the
+    player takes it (<i>promotion</i>), or when a level gives it a physical-tier budget. The citysim page covers how
+    the planner moves those cars. This page covers the vehicle itself.</p>
+
+  <h2>From recipe to Jolt</h2>
+  <div class="diagram">
+    <svg viewBox="0 0 880 400" role="img" aria-label="A Lua recipe is built by the mesh kit into a body mesh and a collider config, which becomes a Jolt VehicleConstraint; two C++ readers take the recipe for the player car and the city fleet">
+      <defs><marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" fill="#6f8fb0"/></marker></defs>
+      <g font-family="system-ui, sans-serif" font-size="13" text-anchor="middle">
+        <rect x="16" y="40" width="170" height="104" rx="9" fill="#131a24" stroke="#3b82f6"/>
+        <text x="101" y="66" fill="#cfe4ff">vehicles.lua recipe</text>
+        <text x="101" y="88" fill="#93a6ba" font-size="12">vehicle.kit_sedan(seed)</text>
+        <text x="101" y="106" fill="#93a6ba" font-size="12">vehicle.offroad, .motorcycle</text>
+        <text x="101" y="124" fill="#93a6ba" font-size="12">vehicle.fleet[slot].build()</text>
+
+        <rect x="226" y="40" width="190" height="104" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="321" y="66" fill="#cfe4ff">Mesh kit</text>
+        <text x="321" y="88" fill="#93a6ba" font-size="12">vehicle_kit.lua on poly.*</text>
+        <text x="321" y="106" fill="#93a6ba" font-size="12">loft → glass → lamps → cabin</text>
+        <text x="321" y="124" fill="#93a6ba" font-size="12">(or mesh.car, or boxes)</text>
+
+        <rect x="456" y="20" width="196" height="64" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="554" y="45" fill="#cfe4ff">Body mesh + parts</text>
+        <text x="554" y="66" fill="#93a6ba" font-size="12">shell, glass, cabin, markers</text>
+        <rect x="456" y="100" width="196" height="64" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="554" y="125" fill="#cfe4ff">VehicleConfig</text>
+        <text x="554" y="146" fill="#93a6ba" font-size="12">chassis, wheels, engine, drive</text>
+
+        <rect x="692" y="60" width="172" height="84" rx="9" fill="#131a24" stroke="#3b82f6"/>
+        <text x="778" y="86" fill="#cfe4ff">Jolt</text>
+        <text x="778" y="106" fill="#cfe4ff">VehicleConstraint</text>
+        <text x="778" y="126" fill="#93a6ba" font-size="12">Wheeled / Motorcycle</text>
+
+        <line x1="186" y1="92" x2="222" y2="92" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar)"/>
+        <line x1="416" y1="80" x2="452" y2="58" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar)"/>
+        <line x1="416" y1="104" x2="452" y2="126" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar)"/>
+        <line x1="652" y1="132" x2="688" y2="116" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar)"/>
+        <line x1="652" y1="52" x2="688" y2="80" stroke="#6f8fb0" stroke-width="1.6" stroke-dasharray="4 3" marker-end="url(#ar)"/>
+        <text x="670" y="40" fill="#93a6ba" font-size="11">drawn on it</text>
+
+        <!-- the two readers -->
+        <text x="440" y="208" fill="#8ec5ff" font-size="13">Two readers of the same Lua</text>
+        <rect x="16" y="226" width="410" height="150" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="221" y="250" fill="#cfe4ff">The drivable car (engine/scripting)</text>
+        <text x="221" y="274" fill="#93a6ba" font-size="12">loadVehicleSpec → VehicleSpec</text>
+        <text x="221" y="294" fill="#93a6ba" font-size="12">spawnVehicle → entity with a Vehicle component</text>
+        <text x="221" y="314" fill="#93a6ba" font-size="12">VehicleSystem → PhysicsWorld::addVehicle</text>
+        <text x="221" y="340" fill="#e6c07b" font-size="12">level vehicles, the car picker (N), possession</text>
+        <text x="221" y="360" fill="#e6c07b" font-size="12">a hero car: clear glass, cabin, own wheels</text>
+
+        <rect x="454" y="226" width="410" height="150" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="659" y="250" fill="#cfe4ff">The city fleet (apps/citysim/scripting)</text>
+        <text x="659" y="274" fill="#93a6ba" font-size="12">loadFleetCarBody → CarBodyRecipe</text>
+        <text x="659" y="294" fill="#93a6ba" font-size="12">one instanced group per slot (+ glass, cabin)</text>
+        <text x="659" y="314" fill="#93a6ba" font-size="12">taken by the player: configFromBody → Vehicle</text>
+        <text x="659" y="340" fill="#e6c07b" font-size="12">hundreds of cars, baked wheels, opaque glass</text>
+        <text x="659" y="360" fill="#e6c07b" font-size="12">no Jolt until promoted</text>
+      </g>
+    </svg>
+  </div>
+  <p class="cap">The vehicle pipeline. A recipe returns a plain Lua table. Two C++ readers turn it into data: one
+    for a car the player drives, one for the city's instanced fleet. Either way the physics ends in
+    <code>PhysicsWorld::addVehicle</code>.</p>
+  <p>Lua runs only at load. The meshes it returns are plain data, with no ECS and no simulation state, so a seeded
+    run stays deterministic (<a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/docs/decisions.md?plain=1#L4718">ADR-0065</a>).
+    The fleet is "description up front, geometry on demand". Each slot carries its class and size as plain data,
+    which is all the headless simulation needs. The mesh is built only when something calls <code>build()</code>:</p>
+  <div class="code">
+    <div class="hd"><span>The kit fleet: 14 slots, each a body kind and a paint</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/assets/scripts/vehicles.lua#L645-L660">assets/scripts/vehicles.lua</a></div>
+<pre><span class="t">local</span> FLEET_SLOTS = {
+    { kit = <span class="s">"sedan"</span>,       color = { <span class="n">0.62</span>, <span class="n">0.06</span>, <span class="n">0.07</span> } },   <span class="c">-- sedan (red)</span>
+    <span class="c">-- ...</span>
+    { kit = <span class="s">"jeep"</span>,        color = { <span class="n">0.24</span>, <span class="n">0.30</span>, <span class="n">0.18</span> } },   <span class="c">-- jeep (olive)</span>
+    { kit = <span class="s">"convertible"</span>, color = { <span class="n">0.80</span>, <span class="n">0.12</span>, <span class="n">0.10</span> } },   <span class="c">-- convertible (red)</span>
+    { kit = <span class="s">"pickup"</span>,      color = { <span class="n">0.14</span>, <span class="n">0.30</span>, <span class="n">0.20</span> } },   <span class="c">-- pickup (green)</span>
+    { kit = <span class="s">"step_van"</span>,    color = { <span class="n">0.36</span>, <span class="n">0.22</span>, <span class="n">0.10</span> } },   <span class="c">-- parcel step van (brown)</span>
+    { kit = <span class="s">"small_truck"</span>, color = { <span class="n">0.90</span>, <span class="n">0.90</span>, <span class="n">0.88</span> } },   <span class="c">-- small box truck (white cab)</span>
+    { kit = <span class="s">"fire_engine"</span>, color = { <span class="n">0.70</span>, <span class="n">0.05</span>, <span class="n">0.05</span> } },   <span class="c">-- FIRE ENGINE (fire-engine red): stationed, never traffic</span>
+    { class = <span class="s">"bus"</span>,       color = { <span class="n">0.86</span>, <span class="n">0.62</span>, <span class="n">0.08</span> } },   <span class="c">-- CITY BUS (municipal yellow), mesh.car</span>
+}</pre>
+  </div>
+  <div class="code">
+    <div class="hd"><span>catalogue(): size now, mesh only when asked</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/assets/scripts/vehicles.lua#L671-L691">assets/scripts/vehicles.lua</a></div>
+<pre><span class="t">local function</span> catalogue(slots)
+    <span class="k">local</span> out = {}
+    <span class="k">for</span> i, slot <span class="k">in</span> ipairs(slots) <span class="k">do</span>
+        <span class="k">if</span> slot.kit <span class="k">then</span>
+            out[i] = {
+                class = slot.kit,
+                size = kit_size(slot.kit),
+                build = <span class="k">function</span>() <span class="k">return</span> kit_car(slot.kit, slot.color) <span class="k">end</span>,
+            }
+        <span class="k">else</span>
+            <span class="c">-- ... (a mesh.car class: the bus)</span>
+        <span class="k">end</span>
+    <span class="k">end</span>
+    <span class="k">return</span> out
+<span class="k">end</span></pre>
+  </div>
+  <p>A level picks a fleet with <code>citysim.fleet</code>. There are three: <code>fleet_kit</code> (the default),
+    <code>classic</code> (the older mesh.car bodies, which Glenn kept "as a 'classic' set") and
+    <code>fleet_mixed</code> (both together, 25 slots, made for island 8). <code>selectFleet</code> in
+    <code>vehicle_body.h</code> points <code>vehicle.fleet</code> at the one chosen.</p>
+
+  <h2>The vehicle spec, field by field</h2>
+  <p>A drivable recipe returns one table. Its fields fall into six groups, and each group maps onto a C++
+    struct.</p>
+  <div class="diagram">
+    <svg viewBox="0 0 880 486" role="img" aria-label="The Lua spec table's field groups map onto VehicleSpec, its VehicleConfig and VehicleWheel list, and then onto the ECS Vehicle component">
+      <defs><marker id="ar2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" fill="#6f8fb0"/></marker></defs>
+      <g font-family="system-ui, sans-serif" font-size="13">
+        <text x="16" y="22" fill="#8ec5ff">Lua spec table (what a recipe returns)</text>
+        <g font-family="ui-monospace, monospace" font-size="11.5">
+          <rect x="16" y="34" width="430" height="58" rx="8" fill="#131a24" stroke="#2c3d50"/>
+          <text x="28" y="54" fill="#e6c07b">look</text>
+          <text x="96" y="54" fill="#cfe4ff">body, albedo, metallic, roughness</text>
+          <text x="96" y="76" fill="#93a6ba">parts = {{mesh, opacity, roughness}}</text>
+
+          <rect x="16" y="100" width="430" height="58" rx="8" fill="#131a24" stroke="#2c3d50"/>
+          <text x="28" y="120" fill="#e6c07b">markers</text>
+          <text x="96" y="120" fill="#cfe4ff">lights = {{name, pos}}  (driver_seat too)</text>
+          <text x="96" y="142" fill="#93a6ba">seat = {grip, foot, bars, pedals}, open_seat</text>
+
+          <rect x="16" y="166" width="430" height="58" rx="8" fill="#131a24" stroke="#2c3d50"/>
+          <text x="28" y="186" fill="#e6c07b">chassis</text>
+          <text x="96" y="186" fill="#cfe4ff">chassis.half, mass, com_offset</text>
+          <text x="96" y="208" fill="#93a6ba">floor_clearance, approach_deg, departure_deg</text>
+
+          <rect x="16" y="232" width="430" height="58" rx="8" fill="#131a24" stroke="#2c3d50"/>
+          <text x="28" y="252" fill="#e6c07b">drive</text>
+          <text x="96" y="252" fill="#cfe4ff">engine_torque, max_rpm, drive, gear_ratios</text>
+          <text x="96" y="274" fill="#93a6ba">axle_lsd, center_lsd, traction_split, drag_area</text>
+
+          <rect x="16" y="298" width="430" height="58" rx="8" fill="#131a24" stroke="#2c3d50"/>
+          <text x="28" y="318" fill="#e6c07b">handling</text>
+          <text x="96" y="318" fill="#cfe4ff">max_steer_deg, grip, yaw_assist, max_roll_deg</text>
+          <text x="96" y="340" fill="#93a6ba">two_wheeler, max_lean_deg, anti_roll</text>
+
+          <rect x="16" y="364" width="430" height="80" rx="8" fill="#131a24" stroke="#2c3d50"/>
+          <text x="28" y="384" fill="#e6c07b">wheels</text>
+          <text x="96" y="384" fill="#cfe4ff">wheel = {radius, width}</text>
+          <text x="96" y="406" fill="#cfe4ff">wheels = {{x,y,z, steered, driven, hand_brake}}</text>
+          <text x="96" y="428" fill="#93a6ba">suspension = {min, max, freq, damp, rest_drop}</text>
+        </g>
+
+        <text x="500" y="22" fill="#8ec5ff">C++ (vehicle_spec.h, physics_world.h)</text>
+        <rect x="496" y="34" width="368" height="128" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="510" y="56" fill="#cfe4ff">VehicleSpec</text>
+        <g font-family="ui-monospace, monospace" font-size="11.5" fill="#93a6ba">
+          <text x="510" y="78">body, albedo, metallic, roughness</text>
+          <text x="510" y="96">parts: vector&lt;Part&gt;</text>
+          <text x="510" y="114">lights: vector&lt;LampMarker&gt;, driverSeat</text>
+          <text x="510" y="132">seat, openSeat, pedalled, partTime4wd</text>
+          <text x="510" y="150">suspensionMin/Max/Frequency/Damping</text>
+        </g>
+        <rect x="496" y="178" width="368" height="140" rx="9" fill="#131a24" stroke="#3b82f6"/>
+        <text x="510" y="200" fill="#cfe4ff">PhysicsWorld::VehicleConfig  (spec.config)</text>
+        <g font-family="ui-monospace, monospace" font-size="11.5" fill="#93a6ba">
+          <text x="510" y="222">chassisHalfExtent, mass, comOffsetY</text>
+          <text x="510" y="240">floorClearance, approach/departureDegrees</text>
+          <text x="510" y="258">engineTorque, frontDriveShare, *LimitedSlip</text>
+          <text x="510" y="276">lateralGrip, yawAssist, maxPitchRollDegrees</text>
+          <text x="510" y="294">twoWheeler, dragArea, gearRatios</text>
+          <text x="510" y="312">wheels: vector&lt;VehicleWheel&gt;</text>
+        </g>
+        <rect x="496" y="350" width="368" height="110" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="510" y="372" fill="#cfe4ff">engine::Vehicle  (the ECS component)</text>
+        <g font-family="ui-monospace, monospace" font-size="11.5" fill="#93a6ba">
+          <text x="510" y="394">config, vehicleId, driver</text>
+          <text x="510" y="412">throttle, steer, brake, handBrake</text>
+          <text x="510" y="430">lamps, bodyParts, wheelEntities</text>
+          <text x="510" y="448">driverSeat, openSeat, seat</text>
+        </g>
+        <line x1="446" y1="63" x2="492" y2="70" stroke="#6f8fb0" stroke-width="1.4" marker-end="url(#ar2)"/>
+        <line x1="446" y1="129" x2="492" y2="110" stroke="#6f8fb0" stroke-width="1.4" marker-end="url(#ar2)"/>
+        <line x1="446" y1="195" x2="492" y2="215" stroke="#6f8fb0" stroke-width="1.4" marker-end="url(#ar2)"/>
+        <line x1="446" y1="261" x2="492" y2="255" stroke="#6f8fb0" stroke-width="1.4" marker-end="url(#ar2)"/>
+        <line x1="446" y1="327" x2="492" y2="280" stroke="#6f8fb0" stroke-width="1.4" marker-end="url(#ar2)"/>
+        <line x1="446" y1="404" x2="492" y2="308" stroke="#6f8fb0" stroke-width="1.4" marker-end="url(#ar2)"/>
+        <text x="680" y="338" fill="#93a6ba" font-size="11" text-anchor="middle">spawnVehicle copies it in</text>
+      </g>
+    </svg>
+  </div>
+  <p class="cap">The structure of a vehicle spec. On the left is what Lua writes. On the right are the structs
+    <code>loadVehicleSpec</code> fills, and the ECS component <code>spawnVehicle</code> makes from them.
+    <code>VehicleSystem</code> later hands <code>config</code> to Jolt.</p>
+  <div class="code">
+    <div class="hd"><span>VehicleSpec: the C++ side of a recipe</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/engine/scripting/vehicle_spec.h#L22-L75">src/engine/scripting/vehicle_spec.h</a></div>
+<pre><span class="k">struct</span> <span class="t">VehicleSpec</span> {
+    std::shared_ptr&lt;<span class="t">RenderMesh</span>&gt; body;
+    <span class="t">Vec3</span> albedo{<span class="n">0.70</span>, <span class="n">0.12</span>, <span class="n">0.12</span>};
+    <span class="t">float</span> metallic = <span class="n">0.6f</span>;
+    <span class="t">float</span> roughness = <span class="n">0.35f</span>;
+    <span class="t">PhysicsWorld::VehicleConfig</span> config;
+    <span class="c">// ...</span>
+    <span class="k">struct</span> <span class="t">Part</span> {
+        std::shared_ptr&lt;<span class="t">RenderMesh</span>&gt; mesh;
+        <span class="t">Vec3</span> albedo{<span class="n">1</span>, <span class="n">1</span>, <span class="n">1</span>};        <span class="c">// white: hue rides the mesh's vertex colours</span>
+        <span class="t">float</span> metallic = <span class="n">0.0f</span>;
+        <span class="t">float</span> roughness = <span class="n">0.5f</span>;
+        <span class="t">float</span> opacity = <span class="n">1.0f</span>;
+        <span class="t">Vec3</span> emission{<span class="n">0</span>, <span class="n">0</span>, <span class="n">0</span>};
+    };
+    std::vector&lt;<span class="t">Part</span>&gt; parts;
+    <span class="c">// ...</span>
+    std::vector&lt;<span class="t">LampMarker</span>&gt; lights;
+    <span class="c">// ...</span>
+    <span class="t">Vec3</span> driverSeat{<span class="n">0</span>, <span class="n">0</span>, <span class="n">0</span>};
+    <span class="t">bool</span> hasDriverSeat = <span class="k">false</span>;
+    <span class="c">// ...</span>
+    <span class="t">bool</span> openSeat = <span class="k">false</span>;
+    <span class="t">SeatGeometry</span> seat;
+    <span class="c">// `pedals = true`: legs, not an engine (a bicycle) -- no engine note; the freewheel and the tyres instead</span>
+    <span class="t">bool</span> pedalled = <span class="k">false</span>;
+    <span class="c">// ...</span>
+    <span class="t">Real</span> suspensionMin = <span class="t">PhysicsWorld</span>::kStreetSuspensionMin;
+    <span class="t">Real</span> suspensionMax = <span class="t">PhysicsWorld</span>::kStreetSuspensionMax;
+    <span class="t">Real</span> suspensionFrequency = <span class="t">PhysicsWorld</span>::kStreetSuspensionFrequency;
+    <span class="t">Real</span> suspensionDamping = <span class="t">PhysicsWorld</span>::kStreetSuspensionDamping;
+    <span class="t">Real</span> suspensionRestDrop = <span class="t">PhysicsWorld</span>::kStreetSuspensionRestDrop;
+    <span class="t">bool</span> partTime4wd = <span class="k">false</span>;
+};</pre>
+  </div>
+  <p>Why a list of <code>parts</code> rather than one mesh? A <code>Renderable</code> carries a single material,
+    and glass needs an opacity below 1. When the glass was merged into the body, the windows read as solid panels.
+    So <code>spawnVehicle</code> turns each part into a child Renderable pinned to the chassis.</p>
+  <p>The fleet reader returns a different struct, <code>CarBodyRecipe</code>. Ambient traffic draws a whole car,
+    wheels included. A promoted car needs the same car without wheels, because Jolt grows real ones. So the fleet
+    recipe publishes both meshes, plus the wheelset as data:</p>
+  <div class="code">
+    <div class="hd"><span>CarBodyRecipe: one fleet slot, for the instanced city</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/apps/citysim/scripting/vehicle_body.h#L50-L71">src/apps/citysim/scripting/vehicle_body.h</a></div>
+<pre><span class="k">struct</span> <span class="t">CarBodyRecipe</span> {
+    <span class="t">RenderMesh</span> mesh;
+    <span class="t">RenderMesh</span> chassis;
+    std::vector&lt;<span class="t">WheelPlacement</span>&gt; wheels;
+    std::vector&lt;<span class="t">Attachment</span>&gt; lights;
+    <span class="t">Vec3</span> size{<span class="n">0</span>, <span class="n">0</span>, <span class="n">0</span>};
+    std::string className;
+    <span class="c">// THE GLASS, its own part for every slot. A see-into vehicle (the bus: `seeInto`) always draws it</span>
+    <span class="c">// clear; ordinary traffic draws it opaque and reflective, and clear only near the player (fleet v2).</span>
+    <span class="t">RenderMesh</span> glass;
+    <span class="c">// The cabin, apart from the shell for ordinary traffic (drawn only near the player); a see-into</span>
+    <span class="c">// vehicle has it in `mesh` and leaves this empty.</span>
+    <span class="t">RenderMesh</span> interior;
+    <span class="t">bool</span> seeInto = <span class="k">false</span>;
+    <span class="t">bool</span> openSeat = <span class="k">false</span>;   <span class="c">// `open_seat`: nothing round the driver (a convertible): a crash throws them (ADR-0252)</span>
+    <span class="c">// ...</span>
+    std::vector&lt;<span class="t">Vec3</span>&gt; seats;
+    std::vector&lt;<span class="t">Vec3</span>&gt; doors;   <span class="c">// floor points a passenger steps off from</span>
+    <span class="t">Vec3</span> driverSeat{<span class="n">0</span>, <span class="n">0</span>, <span class="n">0</span>};
+    <span class="t">bool</span> hasDriverSeat = <span class="k">false</span>;
+};</pre>
+  </div>
+  <p>The fleet's <code>size</code> is the source of truth for the city. Car-following gaps, parking bays,
+    collider proxies and a promoted car's chassis all read it, so they agree with the drawn body by construction.
+    This replaced a hard-coded C++ table (<code>kFleet</code>) that every car used to be scaled to fit. That table
+    disagreed with the class packages by up to 18%. Because the error was different on each axis, the fit squashed
+    round wheels into ellipses: the pickup's by 10% and the hatchback's by 8% (vehicles.lua comment).</p>
+
+  <h2>Bodies: from boxes to a modelling kit</h2>
+  <p>The car bodies have been rebuilt four times. Each rebuild answered a specific complaint:</p>
+  <table>
+    <tr><th>Era</th><th>How a body was made</th><th>Why it moved on</th></tr>
+    <tr><td>Boxes</td><td>C++ <code>buildCarMesh</code>: hull, cabin, glass slabs and wheels as axis-aligned
+      boxes. ADR-0065 moved the same boxes into Lua (<code>parts = {pos, size, color}</code>).</td>
+      <td>"Every one read as a cybertruck" (vehicle_mesh.h).</td></tr>
+    <tr><td>Lofted shell</td><td><code>buildCarShell</code>: a superellipse cross-section swept along a roofline.</td>
+      <td>It regressed on device: inverted faces from a winding heuristic, and doubled wheels and lamps
+      (<a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/docs/decisions.md?plain=1#L4214">ADR-0062</a>).</td></tr>
+    <tr><td><code>mesh.car</code></td><td>A chamfered profile swept through silhouette stations, flat-shaded through
+      <code>MeshBuilder::emitQuad</code>, with real window holes (<code>procgen/vehicle/car_mesh.cpp</code>).</td>
+      <td>Each new shape needed C++. Glenn asked for "more realistic vehicles … not just cubes on wheels".</td></tr>
+    <tr><td>Polymesh kit</td><td><code>procgen/polymesh.{h,cpp}</code>, exposed to Lua as <code>poly.*</code>.
+      <code>vehicle_kit.lua</code> builds every car and truck from it.</td><td>Current (ADR-0139, 0140). The bus
+      stays on <code>mesh.car</code>, which Glenn likes.</td></tr>
+  </table>
+  <p>The kit is an editable polygon mesh. Its faces carry a group, a material and a colour; its edges carry a crease
+    sharpness. It comes with the operations a box-modeller uses: loft, extrude, inset, crease, mirror,
+    Catmull-Clark subdivide, then <code>toParts</code> to make one RenderMesh per material.</p>
+  <div class="code">
+    <div class="hd"><span>PolyMesh: the kit's data</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/engine/procgen/polymesh.h#L34-L63">src/engine/procgen/polymesh.h</a></div>
+<pre><span class="k">struct</span> <span class="t">PolyMesh</span> {
+    <span class="k">static constexpr</span> <span class="t">float</span> kInfCrease = <span class="n">1e6f</span>;
+    <span class="k">struct</span> <span class="t">Face</span> {
+        std::vector&lt;<span class="t">int</span>&gt; v;
+        <span class="t">int</span> group = <span class="n">0</span>;
+        <span class="t">int</span> mat = <span class="n">0</span>;
+        <span class="t">Vec3</span> color{<span class="n">1</span>, <span class="n">1</span>, <span class="n">1</span>};
+    };
+    std::vector&lt;<span class="t">Vec3</span>&gt; pts;
+    std::vector&lt;<span class="t">Face</span>&gt; faces;
+    std::vector&lt;std::string&gt; groups{<span class="s">"default"</span>};
+    std::vector&lt;std::string&gt; mats{<span class="s">"body"</span>};
+    std::map&lt;std::pair&lt;<span class="t">int</span>, <span class="t">int</span>&gt;, <span class="t">float</span>&gt; creases;   <span class="c">// undirected (min, max) -&gt; sharpness</span>
+    <span class="c">// ...</span>
+    std::map&lt;<span class="t">int</span>, <span class="t">float</span>&gt; corners;
+    <span class="c">// ...</span>
+};</pre>
+  </div>
+  <p>Every kit body is a single loft. The cross-section has the same ten corners at every station along the car:
+    bottom, rocker, side, shoulder, glass base and roof edge, on each side. Because the corners match, the loft is a
+    clean quad cage. What makes a sedan a sedan is a set of <i>profile curves</i> along the car: the belt line, the
+    glass keys (cowl, A-pillar top, C-pillar top, deck), the roof drop, the plan-view taper and the wheel arches.
+    A body spec is just those numbers:</p>
+  <div class="code">
+    <div class="hd"><span>The sedan, as a profile</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/assets/scripts/vehicle_kit.lua#L448-L453">assets/scripts/vehicle_kit.lua</a></div>
+<pre>S.sedan = <span class="k">function</span>() <span class="k">return</span> kit.profile{
+  name = <span class="s">"sedan"</span>, L = <span class="n">4.70</span>, W = <span class="n">1.84</span>, H = <span class="n">1.45</span>, clear = <span class="n">0.15</span>, r = <span class="n">0.33</span>, fo = <span class="n">0.95</span>, ro = <span class="n">1.05</span>,
+  glass = { cowl = <span class="n">0.55</span>, a_top = <span class="n">-0.05</span>, c_top = <span class="n">-0.95</span>, deck = <span class="n">-1.45</span>, a_side = <span class="n">0.45</span>, c_side = <span class="n">-1.05</span>, pillars = { <span class="n">-0.25</span> } },
+  belt = { { <span class="n">-1</span>, <span class="n">0.84</span> }, { <span class="n">-0.87</span>, <span class="n">0.95</span> }, { <span class="n">-0.62</span>, <span class="n">0.98</span> }, { <span class="n">-0.1</span>, <span class="n">0.95</span> }, { <span class="n">0.23</span>, <span class="n">0.92</span> }, { <span class="n">0.83</span>, <span class="n">0.84</span> }, { <span class="n">1</span>, <span class="n">0.66</span> } },
+  windows = { side = { edge = <span class="n">1.0</span>, corner = <span class="n">0.8</span> }, windshield = { edge = <span class="n">1.0</span>, corner = <span class="n">0.6</span> }, back = { edge = <span class="n">1.0</span>, corner = <span class="n">0.6</span> } },
+  color = { <span class="n">0.62</span>, <span class="n">0.06</span>, <span class="n">0.07</span> } } <span class="k">end</span></pre>
+  </div>
+  <p><code>kit.build(P, level)</code> lofts the cage, assigns the glass and sets it behind a trim reveal, adds the
+    lamps and the cabin, centres the result, and returns parts, wheels, size, lamp markers and the driver's hip
+    point. Glenn preferred the faceted look of the bus ("maybe we should stick with the faceted look"), so traffic
+    builds at cage level, flat-shaded, at 1.4k–3.7k triangles per body (ADR-0140). Subdivision stays available
+    through <code>P.level</code>.</p>
+  <p>Lamps are placed by a small <i>placement grammar</i>. A ray is cast onto the finished body, and the part is set
+    into whatever surface it hits. Before this, lamp positions were guessed from the profile curves, and they ended
+    up buried inside the body.</p>
+  <div class="code">
+    <div class="hd"><span>kit.attach: set a part onto the finished surface</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/assets/scripts/vehicle_kit.lua#L368-L382">assets/scripts/vehicle_kit.lua</a></div>
+<pre><span class="k">function</span> kit.attach(S, rule)
+  <span class="k">local</span> o = { rule.from[<span class="n">1</span>], rule.from[<span class="n">2</span>], rule.from[<span class="n">3</span>] }
+  <span class="k">local</span> step = rule.step <span class="k">or</span> { <span class="n">0</span>, <span class="n">-0.02</span>, <span class="n">0</span> }
+  <span class="k">for</span> _ = <span class="n">1</span>, rule.tries <span class="k">or</span> <span class="n">12</span> <span class="k">do</span>
+    <span class="k">local</span> hit, nrm = S:raycast(o, rule.dir)
+    <span class="k">if</span> hit <span class="k">then</span>
+      <span class="k">local</span> d = rule.size[<span class="n">3</span>]
+      <span class="k">local</span> e = rule.embed <span class="k">or</span> <span class="n">0.01</span>
+      <span class="k">local</span> at = { hit[<span class="n">1</span>] + nrm[<span class="n">1</span>] * (d * <span class="n">0.5</span> - e), hit[<span class="n">2</span>] + nrm[<span class="n">2</span>] * (d * <span class="n">0.5</span> - e), hit[<span class="n">3</span>] + nrm[<span class="n">3</span>] * (d * <span class="n">0.5</span> - e) }
+      <span class="k">return</span> kit.oriented_box(rule.size, at, nrm, rule.mat), at, nrm
+    <span class="k">end</span>
+    o = { o[<span class="n">1</span>] + step[<span class="n">1</span>], o[<span class="n">2</span>] + step[<span class="n">2</span>], o[<span class="n">3</span>] + step[<span class="n">3</span>] }
+  <span class="k">end</span>
+  <span class="k">return</span> <span class="k">nil</span>
+<span class="k">end</span></pre>
+  </div>
+  <p>Interiors come from <code>kit.interior</code> (ADR-0140). The liner is the cabin's own sheet metal copied 4 cm
+    inward and flipped. On top of it go a floor, bucket seats set from real hip-point proportions, a dashboard, a
+    steering wheel on its column, and a console. The driver's seat point is taken from those seats.</p>
+  <div class="shots">
+    <figure class="shot">
+      <img src="img/vehicles/freeway-traffic.webp" alt="A freeway of instanced traffic: green and red sedans in the near lanes, a queue of cars on the far carriageway behind a concrete barrier">
+      <figcaption>Ambient traffic on a freeway (2026-09-24), still on the mesh.car fleet that is now the
+        <code>classic</code> set.</figcaption>
+    </figure>
+    <figure class="shot">
+      <img src="img/vehicles/offroader-hill.webp" alt="A yellow boxy four-by-four with a roof rack standing in long grass on a hillside above a coastal town">
+      <figcaption>A kit 4x4 on a hillside (2026-09-28). This is the faceted fleet v2 look: a flat-shaded loft
+        with glass set behind a reveal.</figcaption>
+    </figure>
+  </div>
+
+  <h2>Glass and the near swap</h2>
+  <p>A car with transparent glass costs a transparent draw. A city with hundreds of instanced cars cannot afford
+    that, so the fleet first merged dark-tinted glass into the opaque shell. Glenn's note was "opaque windows", and
+    the player's car (clear glass, a cabin) looked like a different vehicle. ADR-0138 split the difference.
+    Traffic at large draws its glass as an opaque, near-mirror material: roughness 0.03, metallic 0.15, one opaque
+    instanced draw per slot. The cars nearest the player swap to clear glass with the cabin and driver visible,
+    from the same instance, so nothing pops:</p>
+  <div class="code">
+    <div class="hd"><span>The near swap: 12 cars, 50 m in, 58 m out</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/apps/citysim/city_render.cpp#L2797-L2815">src/apps/citysim/city_render.cpp</a></div>
+<pre><span class="k">constexpr</span> <span class="t">Real</span> kNearIn = <span class="n">50.0</span>, kNearOut = <span class="n">58.0</span>;
+<span class="k">constexpr</span> std::<span class="t">size_t</span> kNearCount = <span class="n">12</span>;
+std::vector&lt;std::pair&lt;<span class="t">Real</span>, <span class="t">int</span>&gt;&gt; cand;
+<span class="k">if</span> (sim_.hasTierCenter()) {
+    <span class="k">const</span> <span class="t">Vec2</span> c = sim_.tierCenter();
+    <span class="k">const auto</span>&amp; ags = sim_.agents();
+    <span class="k">for</span> (std::<span class="t">size_t</span> v = <span class="n">0</span>; v &lt; cars.size() &amp;&amp; v &lt; carSeeInto_.size(); ++v) {
+        <span class="k">if</span> (!cars[v] || carSeeInto_[v]) <span class="k">continue</span>;
+        <span class="k">for</span> (<span class="t">int</span> ai : carAgentIds_[v]) {
+            <span class="k">if</span> (ai &lt; <span class="n">0</span>) <span class="k">continue</span>;
+            <span class="k">if</span> (!carOccupied(ai)) <span class="k">continue</span>;   <span class="c">// a car left at the kerb is not swapped: nobody in it</span>
+            <span class="k">const</span> <span class="t">Real</span> d = (ags[<span class="k">static_cast</span>&lt;std::<span class="t">size_t</span>&gt;(ai)].pos - c).length();
+            <span class="k">if</span> (d &lt; (nearSwap_.count(ai) ? kNearOut : kNearIn)) cand.push_back({d, ai});
+        }
+    }
+}
+std::sort(cand.begin(), cand.end());
+nearSwap_.clear();
+<span class="k">for</span> (std::<span class="t">size_t</span> i = <span class="n">0</span>; i &lt; cand.size() &amp;&amp; i &lt; kNearCount; ++i) nearSwap_.insert(cand[i].second);</pre>
+  </div>
+  <p>The gap between 50 m and 58 m is hysteresis: a car at the edge does not flicker between the two looks. The bus
+    and the open convertible are <i>see-into</i> vehicles. They always draw clear, and their cabin rides in the
+    shell.</p>
+
+  <h2>Wheels on the ground</h2>
+  <p>Two rules decide where the wheels go. One is for drawn cars, the other for simulated ones.</p>
+  <p><b>Drawn (kinematic) cars</b> rest on four contact patches
+    (<a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/docs/decisions.md?plain=1#L9022">ADR-0137</a>).
+    <code>agentPose</code> samples the road surface under each tyre and fits a least-squares plane for pitch and
+    roll. It then sets the height so the lowest tyre touches. The old rule sampled one point at the centre and
+    could not tell a street from the overpass above it, so it once drew street cars 8.6 m up on the freeway. On the
+    wheel lab, measured over 1170 car samples: the worst 1% of sinking went from −0.118 m to −0.003 m, and the
+    share of cars more than 5 cm off the road went from 3.8% to 1.1%. <code>RT_FOUR_WHEELS=0</code> restores the
+    old rule for an A/B comparison.</p>
+  <p><b>Simulated cars</b> follow one suspension rule, which lives in <code>PhysicsWorld</code> so every path that
+    builds a car shares it. A recipe publishes each wheel's <i>drawn resting centre</i>. Jolt, however, wants the
+    suspension <i>attachment point</i>, and hangs the wheel below it by the spring's settle. If the drawn centre is
+    passed straight through, the car parks one settle too high. With the stock 0.20/0.45 m travel that was 0.375 m,
+    which is why "the player's car rode jacked up with its wheels dangling". So each reader lifts the attach point
+    by <code>kStreetSuspensionRestDrop</code>:</p>
+  <div class="code">
+    <div class="hd"><span>The street rig, shared by the drivable spec and promoted fleet cars</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/engine/physics/physics_world.h#L240-L246">src/engine/physics/physics_world.h</a></div>
+<pre><span class="k">static constexpr</span> <span class="t">Real</span> kStreetSuspensionMin = <span class="n">0.0</span>;
+<span class="k">static constexpr</span> <span class="t">Real</span> kStreetSuspensionMax = <span class="n">0.22</span>;
+<span class="k">static constexpr</span> <span class="t">Real</span> kStreetSuspensionFrequency = <span class="n">1.8</span>;
+<span class="k">static constexpr</span> <span class="t">Real</span> kStreetSuspensionDamping = <span class="n">0.6</span>;
+<span class="k">static constexpr</span> <span class="t">Real</span> kStreetStaticDeflection = <span class="n">0.052</span>;   <span class="c">// at 1.8 Hz</span>
+<span class="k">static constexpr</span> <span class="t">Real</span> kStreetSuspensionRestDrop =
+    kStreetSuspensionMax - kStreetStaticDeflection;</pre>
+  </div>
+  <p>The settle depends only on the spring's frequency, not on the car's mass: <code>clamp(max − staticDeflection,
+    min, max)</code>. A 1100 kg hatchback and a 2600 kg truck therefore settle by the same amount, and
+    <code>tests/test_driving_lab.cpp</code> pins that.</p>
+
+  <h2>Into Jolt: what addVehicle builds</h2>
+  <p><code>PhysicsWorld::addVehicle</code> is the one place a <code>VehicleConfig</code> becomes Jolt objects. The
+    chassis is a dynamic box with its underside carved off by <code>floorClearance</code> (0.22 m by default). An
+    off-roader instead gets a convex hull whose nose and tail are cut at its approach and departure angles. The
+    centre of mass is lowered by <code>comOffsetY</code>. Then each wheel gets its settings:</p>
+  <div class="code">
+    <div class="hd"><span>Per wheel: spring, steering lock, brake balance, lateral grip curve</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/engine/physics/physics_world.cpp#L980-L1013">src/engine/physics/physics_world.cpp</a></div>
+<pre><span class="k">for</span> (<span class="k">const</span> <span class="t">VehicleWheel</span>&amp; w : cfg.wheels) {
+    <span class="t">JPH::WheelSettingsWV</span>* ws = <span class="k">new</span> <span class="t">JPH::WheelSettingsWV</span>();
+    ws-&gt;mPosition = toJolt(w.position);
+    ws-&gt;mRadius = <span class="k">static_cast</span>&lt;<span class="t">float</span>&gt;(w.radius);
+    ws-&gt;mWidth = <span class="k">static_cast</span>&lt;<span class="t">float</span>&gt;(w.width);
+    ws-&gt;mSuspensionMinLength = <span class="k">static_cast</span>&lt;<span class="t">float</span>&gt;(w.suspensionMin);
+    ws-&gt;mSuspensionMaxLength = <span class="k">static_cast</span>&lt;<span class="t">float</span>&gt;(w.suspensionMax);
+    ws-&gt;mSuspensionSpring.mFrequency = <span class="k">static_cast</span>&lt;<span class="t">float</span>&gt;(w.suspensionFrequency);
+    ws-&gt;mSuspensionSpring.mDamping = <span class="k">static_cast</span>&lt;<span class="t">float</span>&gt;(w.suspensionDamping);
+    ws-&gt;mMaxSteerAngle = w.steered
+        ? JPH::DegreesToRadians(<span class="k">static_cast</span>&lt;<span class="t">float</span>&gt;(cfg.maxSteerDegrees))
+        : <span class="n">0.0f</span>;
+    {   <span class="c">// brake balance: brakeTorque is the per-wheel average; the front axle takes brakeFrontBias of it</span>
+        <span class="c">// ...</span>
+    }
+    <span class="c">// The lateral slip curve at the config's grip (Jolt's shape: a peak</span>
+    <span class="c">// at 3 degrees of slip, 85 % of it once sliding past 20).</span>
+    ws-&gt;mLateralFriction.Clear();
+    ws-&gt;mLateralFriction.AddPoint(<span class="n">0.0f</span>, <span class="n">0.0f</span>);
+    ws-&gt;mLateralFriction.AddPoint(<span class="n">3.0f</span>, <span class="k">static_cast</span>&lt;<span class="t">float</span>&gt;(cfg.lateralGrip));
+    ws-&gt;mLateralFriction.AddPoint(<span class="n">20.0f</span>, <span class="k">static_cast</span>&lt;<span class="t">float</span>&gt;(cfg.lateralGrip * <span class="n">0.85</span>));
+    ws-&gt;mMaxHandBrakeTorque =
+        w.handBrake ? <span class="k">static_cast</span>&lt;<span class="t">float</span>&gt;(cfg.handBrakeTorque) : <span class="n">0.0f</span>;
+    vs.mWheels.push_back(ws);
+}</pre>
+  </div>
+  <p>Two more choices in the same function matter. A two-wheeler gets Jolt's <code>MotorcycleController</code>
+    instead of the four-wheel one (see below). And the wheels are tested against the ground by casting their whole
+    cylinder, not a single ray:</p>
+  <div class="code">
+    <div class="hd"><span>The constraint, with a cylinder cast for the wheels</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/engine/physics/physics_world.cpp#L1120-L1130">src/engine/physics/physics_world.cpp</a></div>
+<pre><span class="t">JPH::VehicleConstraint</span>* constraint = <span class="k">new</span> <span class="t">JPH::VehicleConstraint</span>(*chassis, vs);
+<span class="c">// Cast the wheel's actual CYLINDER, not a single ray. A ray only samples</span>
+<span class="c">// straight down from the hub, so a kerb's vertical face was invisible to</span>
+<span class="c">// the suspension and the chassis just rammed it — the "car stops dead at a</span>
+<span class="c">// kerb" bug. The cylinder cast sees the step's edge, rides the contact up,</span>
+<span class="c">// and the car mounts kerb-height steps; walls still read as walls because</span>
+<span class="c">// their contact normal is horizontal (and the chassis box still collides).</span>
+constraint-&gt;SetVehicleCollisionTester(
+    <span class="k">new</span> <span class="t">JPH::VehicleCollisionTesterCastCylinder</span>(Layers::MOVING));
+impl-&gt;physicsSystem.AddConstraint(constraint);
+impl-&gt;physicsSystem.AddStepListener(constraint);</pre>
+  </div>
+
+  <h2>One car system, one control seam</h2>
+  <p>At first the engine had two car systems that shared nothing. The player drove a Jolt vehicle, while city cars
+    were kinematic pose-holders that could not be entered or driven. Glenn's standing requirement was <b>one car
+    system</b>: the player can walk up to any car and drive it
+    (<a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/docs/decisions.md?plain=1#L4214">ADR-0062</a>).
+    The seam that delivers it is a four-number struct:</p>
+  <div class="code">
+    <div class="hd"><span>DriverInput and DriverCommand: what any driver says</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/engine/ai/driver_agent.h#L19-L40">src/engine/ai/driver_agent.h</a></div>
+<pre><span class="k">struct</span> <span class="t">DriverInput</span> {
+    <span class="t">Real</span> throttle = <span class="n">0</span>;    <span class="c">// [-1,1] forward drive (negative = reverse) -&gt; `forward`</span>
+    <span class="t">Real</span> steer = <span class="n">0</span>;       <span class="c">// [-1,1] steering, +right / -left        -&gt; `right`</span>
+    <span class="t">Real</span> brake = <span class="n">0</span>;       <span class="c">// [0,1]                                   -&gt; `brake`</span>
+    <span class="t">Real</span> handBrake = <span class="n">0</span>;   <span class="c">// [0,1]                                   -&gt; `handBrake`</span>
+};
+<span class="c">// ...</span>
+<span class="k">struct</span> <span class="t">DriverState</span> {
+    <span class="t">Vec2</span> forward{<span class="n">1</span>, <span class="n">0</span>};   <span class="c">// unit XZ heading (the chassis' +Z basis, flattened)</span>
+    <span class="t">Real</span> speed = <span class="n">0</span>;       <span class="c">// forward speed m/s (signed; &lt; 0 = rolling backward)</span>
+};
+<span class="c">// ...</span>
+<span class="k">struct</span> <span class="t">DriverCommand</span> {
+    <span class="t">Vec2</span> desiredHeading{<span class="n">1</span>, <span class="n">0</span>};   <span class="c">// unit XZ direction to steer toward</span>
+    <span class="t">Real</span> desiredSpeed = <span class="n">0</span>;       <span class="c">// m/s to seek (&lt;= brakeSpeed -&gt; come to a stop)</span>
+};</pre>
+  </div>
+  <div class="diagram">
+    <svg viewBox="0 0 880 330" role="img" aria-label="Four kinds of driver produce a DriverInput, which goes through setVehicleInput, then PhysicsWorld::update applies drift, yaw assist, aero drag and traction split before the Jolt step">
+      <defs><marker id="ar3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" fill="#6f8fb0"/></marker></defs>
+      <g font-family="system-ui, sans-serif" font-size="13" text-anchor="middle">
+        <rect x="16" y="14" width="250" height="56" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="141" y="37" fill="#cfe4ff">The seated player</text>
+        <text x="141" y="57" fill="#93a6ba" font-size="12">keys → shapeSteer (speed-limited lock)</text>
+        <rect x="16" y="86" width="250" height="56" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="141" y="109" fill="#cfe4ff">An AgentDriver (possession)</text>
+        <text x="141" y="129" fill="#93a6ba" font-size="12">computeDriverInput(state, command)</text>
+        <rect x="16" y="158" width="250" height="56" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="141" y="181" fill="#cfe4ff">The city's physical tier</text>
+        <text x="141" y="201" fill="#93a6ba" font-size="12">driveTowards (Stanley), its own input</text>
+        <rect x="16" y="230" width="250" height="56" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="141" y="253" fill="#cfe4ff">Nobody at the wheel</text>
+        <text x="141" y="273" fill="#93a6ba" font-size="12">brake = 1 (no creep on a slope)</text>
+
+        <rect x="316" y="112" width="200" height="76" rx="9" fill="#131a24" stroke="#3b82f6"/>
+        <text x="416" y="138" fill="#cfe4ff">setVehicleInput</text>
+        <text x="416" y="158" fill="#93a6ba" font-size="12">forward, right,</text>
+        <text x="416" y="175" fill="#93a6ba" font-size="12">brake, handBrake</text>
+
+        <rect x="566" y="40" width="298" height="220" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="715" y="64" fill="#cfe4ff">PhysicsWorld::update, per car</text>
+        <text x="715" y="92" fill="#93a6ba" font-size="12">1. applyDrift (player's car only)</text>
+        <text x="715" y="114" fill="#93a6ba" font-size="12">2. applyYawAssist (unless drifting)</text>
+        <text x="715" y="136" fill="#93a6ba" font-size="12">3. applyAeroDrag (½ ρ CdA v²)</text>
+        <text x="715" y="158" fill="#93a6ba" font-size="12">4. applyTractionSplit (part-time 4WD)</text>
+        <line x1="600" y1="176" x2="830" y2="176" stroke="#2c3d50"/>
+        <text x="715" y="200" fill="#cfe4ff">Jolt step</text>
+        <text x="715" y="220" fill="#93a6ba" font-size="12">VehicleConstraint: tyres, springs,</text>
+        <text x="715" y="238" fill="#93a6ba" font-size="12">engine, gearbox, differentials</text>
+
+        <line x1="266" y1="42" x2="312" y2="128" stroke="#6f8fb0" stroke-width="1.5" marker-end="url(#ar3)"/>
+        <line x1="266" y1="114" x2="312" y2="142" stroke="#6f8fb0" stroke-width="1.5" marker-end="url(#ar3)"/>
+        <line x1="266" y1="186" x2="312" y2="160" stroke="#6f8fb0" stroke-width="1.5" marker-end="url(#ar3)"/>
+        <line x1="266" y1="258" x2="312" y2="174" stroke="#6f8fb0" stroke-width="1.5" marker-end="url(#ar3)"/>
+        <line x1="516" y1="150" x2="562" y2="150" stroke="#6f8fb0" stroke-width="1.5" marker-end="url(#ar3)"/>
+        <text x="440" y="316" fill="#e6c07b" font-size="12">The first, second and fourth go through VehicleSystem::driveVehicles; the physical tier calls setVehicleInput itself.</text>
+      </g>
+    </svg>
+  </div>
+  <p class="cap">The control seam. Every driver ends in the same four numbers, and every car takes the same physics
+    step. The helpers run before Jolt's step, in <code>PhysicsWorld::update</code>.</p>
+  <div class="code">
+    <div class="hd"><span>VehicleSystem::driveVehicles: one control path for every car</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/engine/systems/vehicle_system.cpp#L310-L349">src/engine/systems/vehicle_system.cpp</a></div>
+<pre>ctx.world.each&lt;<span class="t">Vehicle</span>&gt;([&amp;](<span class="t">Entity</span> e, <span class="t">Vehicle</span>&amp; v) {
+    <span class="k">if</span> (v.vehicleId == <span class="t">PhysicsWorld</span>::INVALID_VEHICLE) <span class="k">return</span>;
+    <span class="t">DriverInput</span> in;
+    <span class="k">if</span> (v.driver.valid()) {
+        <span class="c">// ...</span>
+        in.throttle = throttle;
+        in.steer = shapeSteer(v.steerApplied, steer, fwdSpeed, ctx.clock.fixedStep());
+        in.brake = brake;
+        in.handBrake = hand;
+    } <span class="k">else if</span> (<span class="t">AgentDriver</span>* ad = ctx.world.get&lt;<span class="t">AgentDriver</span>&gt;(e)) {
+        <span class="c">// ...</span>
+        <span class="t">DriverState</span> s;
+        <span class="t">Quat</span> q = pw.vehicleOrientation(v.vehicleId);
+        <span class="t">Vec3</span> fwd = q.rotate(<span class="t">Vec3</span>(<span class="n">0</span>, <span class="n">0</span>, <span class="n">1</span>));       <span class="c">// chassis forward in world</span>
+        s.forward = <span class="t">Vec2</span>(fwd.x, fwd.z);
+        <span class="t">Vec3</span> vel = pw.vehicleVelocity(v.vehicleId);
+        s.speed = vel.x * fwd.x + vel.y * fwd.y + vel.z * fwd.z;   <span class="c">// forward m/s</span>
+        in = computeDriverInput(s, ad-&gt;command, ad-&gt;tuning);
+    } <span class="k">else</span> {
+        <span class="c">// Nobody at the wheel: hold the brake so it doesn't creep on a slope.</span>
+        in.brake = <span class="n">1.0</span>;
+    }
+    v.throttle = in.throttle;
+    v.steer = v.driver.valid() ? steer : in.steer;   <span class="c">// the driver's wheel, for the indicators</span>
+    v.steerApplied = in.steer;
+    v.brake = in.brake;
+    v.handBrake = in.handBrake;
+    pw.setVehicleInput(v.vehicleId, in.throttle, in.steer, in.brake, in.handBrake);
+});</pre>
+  </div>
+
+  <h3>Two motion regimes: the rethink</h3>
+  <p>The first version of ADR-0062 made every city car a Jolt vehicle that chased a planner "ghost", using pure
+    pursuit, station control, a tether and a creep valve. Three rounds of testing on the device ended with jammed
+    junctions. The ADR's diagnosis: two clocks over one body (a kinematic plan on rails and an untuned physics
+    plant chasing it) needed endless reconciliation, and that is "the signature of a structural error, not a tuning
+    problem". Pedestrians worked well, because their plant was trivially commandable. The fix was <b>one motion
+    authority per regime</b>:</p>
+  <div class="diagram">
+    <svg viewBox="0 0 880 250" role="img" aria-label="A city car's life: ambient and kinematic by default; near the player it shows its cabin; optionally on the physical tier; taken by the player it is promoted to a real Vehicle">
+      <defs><marker id="ar4" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" fill="#6f8fb0"/></marker></defs>
+      <g font-family="system-ui, sans-serif" font-size="13" text-anchor="middle">
+        <rect x="16" y="76" width="230" height="102" rx="9" fill="#131a24" stroke="#3b82f6"/>
+        <text x="131" y="106" fill="#cfe4ff">Ambient (the default)</text>
+        <text x="131" y="128" fill="#93a6ba" font-size="12">planner moves it: s += v·dt</text>
+        <text x="131" y="146" fill="#93a6ba" font-size="12">instanced draw, kinematic proxy</text>
+        <text x="131" y="162" fill="#93a6ba" font-size="12">four-wheel ground fit</text>
+
+        <rect x="330" y="14" width="250" height="64" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="455" y="39" fill="#cfe4ff">Near swap</text>
+        <text x="455" y="60" fill="#93a6ba" font-size="12">clear glass, cabin, driver drawn</text>
+        <rect x="330" y="94" width="250" height="64" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="455" y="119" fill="#cfe4ff">Physical tier (opt-in)</text>
+        <text x="455" y="140" fill="#93a6ba" font-size="12">a Jolt car chases its planner pose</text>
+        <rect x="330" y="174" width="250" height="64" rx="9" fill="#131a24" stroke="#3b82f6"/>
+        <text x="455" y="199" fill="#cfe4ff">Promoted</text>
+        <text x="455" y="220" fill="#93a6ba" font-size="12">a real Vehicle; the agent gets out</text>
+
+        <line x1="246" y1="100" x2="326" y2="50" stroke="#6f8fb0" stroke-width="1.5" marker-end="url(#ar4)"/>
+        <line x1="246" y1="125" x2="326" y2="125" stroke="#6f8fb0" stroke-width="1.5" marker-end="url(#ar4)"/>
+        <line x1="246" y1="150" x2="326" y2="200" stroke="#6f8fb0" stroke-width="1.5" marker-end="url(#ar4)"/>
+
+        <g text-anchor="start" font-size="12" fill="#e6c07b">
+          <text x="600" y="38">12 nearest occupied cars</text>
+          <text x="600" y="56">within 50 m (out at 58)</text>
+          <text x="600" y="118">physicalCars budget (default 0),</text>
+          <text x="600" y="136">nearest moving drivers</text>
+          <text x="600" y="198">the player presses E at the</text>
+          <text x="600" y="216">driver's seat (CityVehicleSystem)</text>
+        </g>
+      </g>
+    </svg>
+  </div>
+  <p class="cap">One city car, four ways to be. Only the ambient regime is always on. The other three are
+    triggered by distance, by a level budget, or by the player.</p>
+  <p>Promotion happens in <code>CityVehicleSystem</code>. That system runs before <code>VehicleSystem</code>, so on
+    the frame the player presses enter next to an ambient car, it creates a real <code>Vehicle</code> in the car's
+    place. <code>VehicleSystem</code>'s ordinary enter flow then seats the player in it, later in the same frame:</p>
+  <div class="code">
+    <div class="hd"><span>Promotion: the same body, by draw slot, then a Vehicle</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/apps/citysim/city_vehicles.cpp#L230-L292">src/apps/citysim/city_vehicles.cpp</a></div>
+<pre><span class="c">// PROMOTE: release the agent (its instanced car + widget vanish this tick)</span>
+<span class="c">// and spawn a real Vehicle with the same fleet body at the same pose.</span>
+<span class="k">const</span> <span class="t">Agent</span>&amp; a = agents[bestAgent];
+<span class="c">// THE MODEL IT IS DRAWN AS (#115): every part below by the draw slot, not the vehicle index -- they differ</span>
+<span class="c">// whenever the fleet has service vehicles, and the car in the player's hands turned into another model.</span>
+<span class="k">const</span> <span class="t">int</span> slot = city_.carSlotOf(bestAgent);
+<span class="k">if</span> (slot &lt; <span class="n">0</span>) <span class="k">return</span>;
+<span class="c">// ...</span>
+<span class="k">const</span> <span class="t">VehicleBody</span>&amp; body = sim.fleetBody(slot);
+<span class="c">// ...</span>
+r.mesh = city_.carChassisMesh(slot);
+<span class="c">// ...</span>
+<span class="t">Vehicle</span> v;
+v.config = configFromBody(body, city_.carWheels(slot));</pre>
+  </div>
+  <p>That comment marks a bug that took a while to find
+    (<a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/docs/decisions.md?plain=1#L11959">ADR-0242</a>).
+    Glenn asked "when I take a car, why does the car change?" A car's <i>model</i> is its draw slot.
+    <code>ambientSlotFor</code> deals ordinary cars past the fleet's service slots (the bus, the fire engine), so
+    the slot is not the same number as the vehicle index. Several places read the index as if it were the slot, and
+    commandeering took the chassis, glass, seats and physics of another model. Now
+    <code>CityRenderSystem::carSlotOf</code> is the one way to name an agent's model, and a commandeer logs
+    <code>[cityveh] took agent N's car: vehicle V, model slot S</code>.</p>
+  <figure class="shot">
+    <img src="img/vehicles/take-car.webp" alt="A teal hatchback on a city street seen from behind, with lane arrows on the road and a red sedan in the next lane">
+    <figcaption>The ADR-0242 check on river_town: the stopped teal hatchback the player took stays a teal hatchback,
+      with the player in the right-hand driver's seat.</figcaption>
+  </figure>
+
+  <h2>Handling: no fishtail, no roll</h2>
+  <p>Glenn's report was "the car fishtails and rolls easily"
+    (<a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/docs/decisions.md?plain=1#L6978">ADR-0087</a>).
+    Before tuning anything, <code>tests/test_vehicle_handling.cpp</code> measured both problems and found causes
+    that were not the obvious ones:</p>
+  <ul>
+    <li><b>The roll was the suspension's hard stop, not the centre of mass.</b> The first street rig left 2.5 cm of
+      bump travel. Jolt's hard stop is a rigid constraint, so hitting it hands the wheel's whole closing speed to
+      that corner of the chassis. The fix was more travel at a slightly stiffer spring: the
+      <code>kStreetSuspension</code> rig above.</li>
+    <li><b>The fishtail was lift-off oversteer.</b> Jolt's tyre is a per-step impulse cap. Past a degree or two of
+      sideslip at speed, all four tyres saturate together, and the front/rear load split decides the yaw. Lifting off
+      the throttle moves the load forward and the rear cap drops, so nothing stops the rotation. The fix is a
+      stability-control torque that damps only yaw in excess of what the steering asks for:</li>
+  </ul>
+  <div class="code">
+    <div class="hd"><span>The yaw assist: damp only the excess over the steered rate</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/engine/physics/physics_world.cpp#L1362-L1390">src/engine/physics/physics_world.cpp</a></div>
+<pre><span class="t">void</span> <span class="t">PhysicsWorld</span>::applyYawAssist(std::<span class="t">size_t</span> index) {
+    <span class="t">Impl::Vehicle</span>&amp; v = impl-&gt;vehicles[index];
+    <span class="k">if</span> (v.yawAssist &lt;= <span class="n">0.0f</span> || !v.constraint) <span class="k">return</span>;
+    <span class="c">// ... (no wheel on the ground: return)</span>
+    <span class="k">const</span> <span class="t">float</span> speed = bi.GetLinearVelocity(v.body).Dot(fwd);
+    <span class="k">if</span> (std::fabs(speed) &lt; <span class="n">3.0f</span>) <span class="k">return</span>;             <span class="c">// parking: leave it alone</span>
+    <span class="k">const</span> <span class="t">float</span> yawRate = bi.GetAngularVelocity(v.body).Dot(up);
+    <span class="k">const</span> <span class="t">float</span> delta = -v.steer * v.maxSteerRad;
+    <span class="t">float</span> target = speed * std::tan(delta) / v.wheelbase;
+    <span class="k">const</span> <span class="t">float</span> gripLimit = v.gripAccel / std::fabs(speed);
+    target = std::clamp(target, -gripLimit, gripLimit);
+    <span class="t">float</span> excess = yawRate - target;
+    <span class="c">// Lagging the steered rate on the same side is the driver's business</span>
+    <span class="c">// (turn-in, understeer): the assist never adds yaw.</span>
+    <span class="k">if</span> (target != <span class="n">0.0f</span> &amp;&amp; yawRate * target &gt;= <span class="n">0.0f</span> &amp;&amp; std::fabs(yawRate) &lt; std::fabs(target))
+        excess = <span class="n">0.0f</span>;
+    <span class="k">if</span> (std::fabs(excess) &lt; <span class="n">0.02f</span>) <span class="k">return</span>;           <span class="c">// a dead band: noise is not a spin</span>
+    <span class="k">const</span> <span class="t">JPH::Mat44</span> invI = bi.GetInverseInertia(v.body);
+    <span class="k">const</span> <span class="t">float</span> invIup = (invI * up).Dot(up);
+    <span class="k">if</span> (invIup &lt;= <span class="n">1e-9f</span>) <span class="k">return</span>;
+    bi.AddTorque(v.body, up * (-v.yawAssist * excess / invIup));
+}</pre>
+  </div>
+  <p>The third piece is a steering assist for keyboard players. A key is a square wave: full lock the instant it is
+    pressed, at any speed. <code>shapeSteer</code> reduces the available lock as speed rises (full lock to 8 m/s,
+    half at 22, then a 1/(1+x²) tail) and winds the wheel on at a finite rate. The AI controllers compute an angle
+    directly and bypass it.</p>
+  <div class="code">
+    <div class="hd"><span>The keyboard steering assist</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/engine/vehicle_steering.h#L38-L62">src/engine/vehicle_steering.h</a></div>
+<pre><span class="k">struct</span> <span class="t">SteerAssist</span> {
+    <span class="t">Real</span> fullLockBelow = <span class="n">8.0</span>;    <span class="c">// m/s: full lock available up to here</span>
+    <span class="t">Real</span> halfLockAt = <span class="n">22.0</span>;      <span class="c">// m/s: half lock here (~80 km/h)</span>
+    <span class="t">Real</span> rateIn = <span class="n">6.0</span>;           <span class="c">// full-scales per second, winding on</span>
+    <span class="t">Real</span> rateOut = <span class="n">8.0</span>;          <span class="c">// full-scales per second, returning to centre</span>
+};
+
+<span class="c">// The lock fraction [0,1] available at a forward speed (m/s, sign ignored).</span>
+<span class="k">inline</span> <span class="t">Real</span> steerLockAt(<span class="t">Real</span> forwardSpeed, <span class="k">const</span> <span class="t">SteerAssist</span>&amp; a = {}) {
+    <span class="k">const</span> <span class="t">Real</span> over = std::max(<span class="t">Real</span>(<span class="n">0</span>), std::fabs(forwardSpeed) - a.fullLockBelow);
+    <span class="k">const</span> <span class="t">Real</span> k = std::max(<span class="t">Real</span>(<span class="n">0.01</span>), a.halfLockAt - a.fullLockBelow);
+    <span class="k">const</span> <span class="t">Real</span> x = over / k;
+    <span class="k">return</span> <span class="n">1.0</span> / (<span class="n">1.0</span> + x * x);
+}
+
+<span class="c">// One fixed step of the assist: `prev` is last step's applied steer,</span>
+<span class="c">// `input` the raw driver value in [-1,1]; returns the value to hand Jolt.</span>
+<span class="k">inline</span> <span class="t">Real</span> shapeSteer(<span class="t">Real</span> prev, <span class="t">Real</span> input, <span class="t">Real</span> forwardSpeed, <span class="t">Real</span> dt,
+                       <span class="k">const</span> <span class="t">SteerAssist</span>&amp; a = {}) {
+    <span class="k">const</span> <span class="t">Real</span> target = std::clamp(input, <span class="t">Real</span>(<span class="n">-1</span>), <span class="t">Real</span>(<span class="n">1</span>)) * steerLockAt(forwardSpeed, a);
+    <span class="k">const</span> <span class="t">bool</span> windingOn = std::fabs(target) &gt; std::fabs(prev) &amp;&amp; target * prev &gt;= <span class="n">0</span>;
+    <span class="k">const</span> <span class="t">Real</span> rate = windingOn ? a.rateIn : a.rateOut;
+    <span class="k">const</span> <span class="t">Real</span> step = std::clamp(target - prev, -rate * dt, rate * dt);
+    <span class="k">return</span> prev + step;
+}</pre>
+  </div>
+  <table>
+    <tr><th>Manoeuvre (ADR-0087)</th><th>Before</th><th>After</th></tr>
+    <tr><td>0.15 m kerb, 25° slant, 65 km/h</td><td>rolled over (1.8 m hop)</td><td>2° roll, 0.24 m hop</td></tr>
+    <tr><td>Same kerb at 36 km/h</td><td>18° roll, 1.3 m hop</td><td>4° roll, 0.25 m hop</td></tr>
+    <tr><td>0.6 s of steering at 140 km/h, throttle lifted</td><td>sideslip 3° → 31°, still rotating</td><td>2.9° peak, straight</td></tr>
+  </table>
+  <div class="note history"><p><b>How it got here.</b> Anti-roll bars were tried and left off. On the slanted kerb
+    they passed a one-wheel hit to the other side and lifted the whole car: 26° of roll and a 0.7 m hop at 36 km/h,
+    against 4° and 0.25 m without them. ADR-0087 also added a 65° <i>roll cone</i> (Jolt's
+    <code>mMaxPitchRollAngle</code>). Glenn later asked for it to go: "rolling over should be allowed for active
+    drivers, everyone". It now defaults to 180°, which means off (ADR-0141). A full-lock turn at 40–120 km/h still
+    leans the drivable cars only 2–3°, because the cone was never what kept cars upright. Then came "the turn
+    radius is really bad". The probe found the steady radius was v² over grip, the same with or without the assist.
+    What had changed was the response, so <code>lateralGrip</code> was raised to 2.0 and the steering assist made
+    quicker. T rights a rolled car.</p></div>
+
+  <h2>Drivetrains, gearbox, drag and the off-roader</h2>
+  <p><a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/docs/decisions.md?plain=1#L9103">ADR-0141</a>
+    came out of Glenn's request for "offroad vehicles -- 2 wheel drive, 4 wheel drive". A probe found three things
+    wrong. Every car was all-wheel drive, with differentials paired in wheel-declaration order. Jolt's default
+    gearbox cut the drive for about 1.3 s per upshift: a 3.5 s stall at 105–115 km/h. And linear body damping was
+    standing in for aerodynamic drag. Now there is one differential per driven axle, and a front/rear torque
+    split:</p>
+  <div class="diagram">
+    <svg viewBox="0 0 880 250" role="img" aria-label="Drivetrain: the engine's torque is split by frontDriveShare between a front axle differential and a rear axle differential; the centre coupling runs open when one axle is driven">
+      <defs><marker id="ar5" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" fill="#6f8fb0"/></marker></defs>
+      <g font-family="system-ui, sans-serif" font-size="13" text-anchor="middle">
+        <rect x="16" y="90" width="170" height="70" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="101" y="116" fill="#cfe4ff">Engine + gearbox</text>
+        <text x="101" y="136" fill="#93a6ba" font-size="12">gear_ratios, shift_time</text>
+        <rect x="246" y="80" width="200" height="90" rx="9" fill="#131a24" stroke="#3b82f6"/>
+        <text x="346" y="106" fill="#cfe4ff">Centre split</text>
+        <text x="346" y="126" fill="#93a6ba" font-size="12">frontDriveShare 0 / 0.5 / 1</text>
+        <text x="346" y="144" fill="#93a6ba" font-size="12">centerLimitedSlip</text>
+        <text x="346" y="160" fill="#e6c07b" font-size="11">open when one axle drives</text>
+        <rect x="516" y="20" width="200" height="70" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="616" y="46" fill="#cfe4ff">Front axle diff</text>
+        <text x="616" y="66" fill="#93a6ba" font-size="12">axleLimitedSlip</text>
+        <rect x="516" y="160" width="200" height="70" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="616" y="186" fill="#cfe4ff">Rear axle diff</text>
+        <text x="616" y="206" fill="#93a6ba" font-size="12">axleLimitedSlip</text>
+        <circle cx="790" cy="40" r="16" fill="#131a24" stroke="#6f8fb0"/><circle cx="846" cy="40" r="16" fill="#131a24" stroke="#6f8fb0"/>
+        <circle cx="790" cy="210" r="16" fill="#131a24" stroke="#6f8fb0"/><circle cx="846" cy="210" r="16" fill="#131a24" stroke="#6f8fb0"/>
+        <line x1="716" y1="55" x2="772" y2="44" stroke="#6f8fb0" stroke-width="1.4"/>
+        <line x1="716" y1="195" x2="772" y2="206" stroke="#6f8fb0" stroke-width="1.4"/>
+        <line x1="186" y1="125" x2="242" y2="125" stroke="#6f8fb0" stroke-width="1.5" marker-end="url(#ar5)"/>
+        <line x1="446" y1="110" x2="512" y2="62" stroke="#6f8fb0" stroke-width="1.5" marker-end="url(#ar5)"/>
+        <line x1="446" y1="140" x2="512" y2="190" stroke="#6f8fb0" stroke-width="1.5" marker-end="url(#ar5)"/>
+        <text x="818" y="82" fill="#93a6ba" font-size="12">front</text>
+        <text x="818" y="182" fill="#93a6ba" font-size="12">rear</text>
+        <text x="618" y="125" fill="#e6c07b" font-size="12">traction split: a hanging</text>
+        <text x="618" y="141" fill="#e6c07b" font-size="12">axle's torque goes to the other</text>
+      </g>
+    </svg>
+  </div>
+  <p class="cap">The drivetrain as <code>addVehicle</code> builds it. Driven wheels are grouped into axles by their
+    z position. <code>drive = "fwd"</code> becomes a share of 1, <code>"rwd"</code> 0, <code>"awd"</code> 0.5.
+    <code>"4wd"</code> starts at 0 and Z switches it.</p>
+  <div class="code">
+    <div class="hd"><span>The centre coupling: open for one driven axle</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/engine/physics/physics_world.cpp#L1093-L1099">src/engine/physics/physics_world.cpp</a></div>
+<pre><span class="c">// THE CENTRE COUPLING. Jolt's between-differentials limited slip sends ALL torque to the slower axle once</span>
+<span class="c">// the other spins past the ratio -- at its default 1.4 a "rear-drive" car handed its torque to the fronts</span>
+<span class="c">// the moment the rears slipped, and drove as a 4x4 (measured: RWD, FWD and 4WD climbed identically). A</span>
+<span class="c">// one-axle split therefore runs it OPEN (FLT_MAX), as a part-time 4x4's transfer case in 2WD does.</span>
+<span class="k">const</span> <span class="t">bool</span> oneAxle = share &lt;= <span class="n">0.001f</span> || share &gt;= <span class="n">0.999f</span>;
+controller-&gt;mDifferentialLimitedSlipRatio =
+    oneAxle || cfg.centerLimitedSlip &gt;= <span class="n">1e29</span> ? FLT_MAX : <span class="k">static_cast</span>&lt;<span class="t">float</span>&gt;(cfg.centerLimitedSlip);</pre>
+  </div>
+  <p>Measured on an 18° slope at friction 0.35, starting from rest: RWD +0.6 m, FWD −7.9 m, 4WD +30.6 m. Quadratic
+    drag (<code>dragArea</code> 2.0 m² for a sedan) gives a real top speed of about 205 km/h, and quicker shifts cut
+    50–110 km/h from 5.1 s to 3.2 s. The handling per body lives in Lua:</p>
+  <div class="code">
+    <div class="hd"><span>Handling per kit body, and the off-roader</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/assets/scripts/vehicles.lua#L241-L265">assets/scripts/vehicles.lua</a></div>
+<pre><span class="k">local</span> OFFROAD = {
+  drive = <span class="s">"4wd"</span>, mass = <span class="n">2300</span>, torque_per_kg = <span class="n">0.55</span>, max_rpm = <span class="n">5200</span>, max_steer_deg = <span class="n">32</span>, com_offset = <span class="n">-0.62</span>,
+  grip = <span class="n">2.3</span>, axle_lsd = <span class="n">1.15</span>, center_lsd = <span class="n">1e30</span>, traction_split = <span class="k">true</span>, drag_area = <span class="n">2.8</span>, gear_ratios = { <span class="n">3.9</span>, <span class="n">2.4</span>, <span class="n">1.6</span>, <span class="n">1.15</span>, <span class="n">0.9</span> },
+  suspension = { min = <span class="n">0.0</span>, max = <span class="n">0.40</span>, freq = <span class="n">1.3</span>, damp = <span class="n">0.5</span>, rest_drop = <span class="n">0.30</span> }, wheel_width = <span class="n">0.32</span>,
+  approach_deg = <span class="n">42</span>, departure_deg = <span class="n">36</span>,
+  metallic = <span class="n">0.35</span>, roughness = <span class="n">0.5</span>,
+}
+<span class="c">-- ...</span>
+<span class="k">local</span> KIT_HANDLING = {
+  sedan       = { drive = <span class="s">"fwd"</span>, drag_area = <span class="n">2.0</span> },
+  taxi        = { drive = <span class="s">"fwd"</span>, drag_area = <span class="n">2.0</span> },
+  hatchback   = { drive = <span class="s">"fwd"</span>, drag_area = <span class="n">1.9</span> },
+  convertible = { drive = <span class="s">"rwd"</span>, drag_area = <span class="n">1.8</span>, max_steer_deg = <span class="n">32</span> },
+  suv         = { drive = <span class="s">"awd"</span>, drag_area = <span class="n">2.4</span> },
+  jeep        = trail(<span class="n">38</span>, <span class="n">32</span>),
+  pickup      = trail(<span class="n">28</span>, <span class="n">24</span>),
+  step_van    = { drive = <span class="s">"rwd"</span>, drag_area = <span class="n">3.2</span>, torque_per_kg = <span class="n">0.40</span> },
+  small_truck = { drive = <span class="s">"rwd"</span>, drag_area = <span class="n">3.4</span>, torque_per_kg = <span class="n">0.40</span> },
+  offroad     = OFFROAD,
+}</pre>
+  </div>
+  <p>The off-roader was tuned against Glenn's drives on <code>offroad_course.json</code>, which is generated by
+    <code>tools/offroad_course.py</code>. Each complaint led to a measured fix:</p>
+  <ul>
+    <li>"even with 4WD I get stuck" on rocks. 53 of the course's 90 boulders were taller than a truck can climb,
+      and the square chassis box caught rocks the tyres could have climbed. The fix lowered the boulders and gave
+      the chassis approach and departure angles.</li>
+    <li>"two wheels down (front) and they're not moving". With one axle hanging, the engine hit its rev limiter
+      spinning the hanging pair, and the grounded pair got no torque. The fix is <code>tractionSplit</code>, which
+      gives the hanging axle's torque to the axle on the ground.</li>
+    <li>A truck high-centred on a log. "A tyre pushes only as hard as it is pressed down", so no drivetrain could
+      help, and the logs were made smaller.</li>
+  </ul>
+  <p>Jolt's limited slip <i>between</i> the axles hurts a climb: on 30° dirt a 1.10 centre stalled, 1.4 reached
+    +14 m, and an open centre reached +28 m. So off-roaders run the centre open (<code>center_lsd = 1e30</code>).</p>
+  <p>The car picker is <code>vehicle.drivable</code>: 16 entries (13 cars plus the three two-wheelers). <kbd>-</kbd>
+    and <kbd>=</kbd> pick, <kbd>N</kbd> drops the pick in front of the player, and <kbd>Z</kbd> switches a part-time
+    4x4. <code>test_vehicle_body</code> checks that each entry's drive label matches its physics.</p>
+
+  <h2>The chase camera</h2>
+  <p>"The car once it hits a certain acceleration on the freeway begins to lag behind." A critically damped spring
+    trails a moving target by speed × smoothTime, which is 5.6 m at 170 km/h. Its teleport check also compared the
+    raw feed with that trail, so above about 165 km/h the camera snapped three or four times a second. The fix aims
+    the spring <i>ahead</i> along the low-passed velocity (feed-forward), so a steady chase has no trail and only
+    the unsteady part gets smoothed:</p>
+  <div class="code">
+    <div class="hd"><span>FollowCameraController: lead by velocity, less half a frame</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/engine/camera/follow_camera_controller.cpp#L80-L86">src/engine/camera/follow_camera_controller.cpp</a></div>
+<pre><span class="c">// Spring toward the target led by velocity x smoothTime (feed-forward, header): no steady trail. The</span>
+<span class="c">// discrete spring's own lag is half a frame short of smoothTime, so lead by that much less (measured:</span>
+<span class="c">// without it the rig ran v x dt / 2 AHEAD of the car at every frame rate).</span>
+<span class="k">const</span> <span class="t">Vec3</span> goal = targetPos + targetVelocity * std::max(<span class="t">Real</span>(<span class="n">0</span>), posSmoothTime - <span class="n">0.5</span> * dt);
+smoothedPos.x = smoothDamp(smoothedPos.x, goal.x, posVelocity.x, posSmoothTime, dt);
+smoothedPos.y = smoothDamp(smoothedPos.y, goal.y, posVelocity.y, posSmoothTime, dt);
+smoothedPos.z = smoothDamp(smoothedPos.z, goal.z, posVelocity.z, posSmoothTime, dt);</pre>
+  </div>
+  <p>The rig is also evaluated in <code>CameraSystem::render()</code>, after the frame's fixed steps. Measured at
+    180 km/h: no snaps, and a mean trail under 1.5 cm (it had been about 6 m), at 30, 60 and 144 fps.</p>
+
+  <h2>Two wheels: motorcycle, moped, bicycle</h2>
+  <p><a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/docs/decisions.md?plain=1#L11702">ADR-0235</a>:
+    a recipe with <code>two_wheeler = true</code> gets Jolt's <code>MotorcycleController</code>. It leans the
+    chassis into a turn and limits steering by the lean, and the four-wheel helpers stand aside. Jolt's default lean
+    spring suits the heavy hull in its own sample. On our narrow box (a 220 kg motorcycle, roll inertia about
+    12 kg m²), one 60 Hz step of that damping overshot the roll rate, and the bike flipped on touchdown. So the
+    spring is sized from the bike itself:</p>
+  <div class="code">
+    <div class="hd"><span>The lean spring, sized to the bike</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/engine/physics/physics_world.cpp#L1034-L1050">src/engine/physics/physics_world.cpp</a></div>
+<pre><span class="k">if</span> (cfg.twoWheeler) {
+    <span class="t">JPH::MotorcycleControllerSettings</span>* bike = <span class="k">new</span> <span class="t">JPH::MotorcycleControllerSettings</span>();
+    bike-&gt;mMaxLeanAngle = JPH::DegreesToRadians(<span class="k">static_cast</span>&lt;<span class="t">float</span>&gt;(cfg.maxLeanDegrees));
+    <span class="c">// ...</span>
+    <span class="k">const</span> <span class="t">float</span> m = <span class="k">static_cast</span>&lt;<span class="t">float</span>&gt;(cfg.mass);
+    <span class="k">const</span> <span class="t">float</span> wx = <span class="n">2.0f</span> * <span class="k">static_cast</span>&lt;<span class="t">float</span>&gt;(cfg.chassisHalfExtent.x);
+    <span class="k">const</span> <span class="t">float</span> hy = <span class="n">2.0f</span> * <span class="k">static_cast</span>&lt;<span class="t">float</span>&gt;(cfg.chassisHalfExtent.y);
+    <span class="k">const</span> <span class="t">float</span> rollInertia = m / <span class="n">12.0f</span> * (wx * wx + hy * hy);
+    bike-&gt;mLeanSpringConstant = <span class="n">2.5f</span> * m * <span class="n">9.81f</span> * (<span class="n">0.5f</span> * hy + <span class="n">0.3f</span>);
+    bike-&gt;mLeanSpringDamping = <span class="n">0.4f</span> * rollInertia * <span class="n">60.0f</span>;
+    controller = bike;
+} <span class="k">else</span> {
+    controller = <span class="k">new</span> <span class="t">JPH::WheeledVehicleControllerSettings</span>();
+}</pre>
+  </div>
+  <p>The bodies are boxes on the centre line. Torques are small and gear ratios high, because Jolt multiplies the
+    torque by the gear and a 3.42 final drive. The bicycle's rpm and ratios are both ×4, because Jolt's automatic
+    gearbox shifts up at 4000 rpm and a 1500 rpm "engine" never left first gear. Measured over 12 s flat out and
+    then a turn: motorcycle 79 km/h leaning 28°, moped 47 km/h at 29°, bicycle 25 km/h at 27°.</p>
+
+  <h2>Drift</h2>
+  <p>Glenn asked: "how hard is it to make a car drift? Something like burnout"
+    (<a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/docs/decisions.md?plain=1#L11732">ADR-0236</a>).
+    ADR-0087 had already said that a drift mode should <i>replace</i> the yaw assist through the tyre callback, not
+    fight it, and that is what happened. On the player's car only, a handbrake tap while steering above 40 km/h
+    starts a slide. From then on Jolt's per-wheel tyre-impulse callback scales the rear grip to 35% and the front to
+    90%, the yaw assist stands aside, and a torque holds the slip angle the steering asks for:</p>
+  <div class="code">
+    <div class="hd"><span>applyDrift: into the slide, and holding it</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/engine/physics/physics_world.cpp#L1259-L1284">src/engine/physics/physics_world.cpp</a></div>
+<pre><span class="c">// INTO A SLIDE: a handbrake tap while steering at speed</span>
+<span class="k">if</span> (!v.drifting &amp;&amp; v.handBrake &gt; <span class="n">0.5f</span> &amp;&amp; std::fabs(v.steer) &gt; <span class="n">0.3f</span> &amp;&amp; speed &gt; <span class="n">11.0f</span>) {
+    v.drifting = <span class="k">true</span>;
+    v.driftTime = <span class="n">0</span>;
+    v.holdSpeed = speed;
+}
+<span class="k">if</span> (!v.drifting) { v.rearGrip = v.frontGrip = <span class="n">1.0f</span>; <span class="k">return</span>; }
+v.driftTime += dt;
+v.boost = std::min(<span class="n">1.0f</span>, v.boost + dt * <span class="n">0.25f</span>);
+<span class="c">// OUT: straightened up and nearly straight again, too slow, or spun past saving</span>
+<span class="k">if</span> ((std::fabs(v.steer) &lt; <span class="n">0.15f</span> &amp;&amp; std::fabs(v.slip) &lt; JPH::DegreesToRadians(<span class="n">10.0f</span>)) || speed &lt; <span class="n">6.0f</span> ||
+    std::fabs(v.slip) &gt; JPH::DegreesToRadians(<span class="n">100.0f</span>)) {
+    v.drifting = <span class="k">false</span>;
+    v.rearGrip = v.frontGrip = <span class="n">1.0f</span>;
+    <span class="k">return</span>;
+}
+v.rearGrip = <span class="n">0.35f</span>;
+v.frontGrip = <span class="n">0.9f</span>;
+<span class="c">// hold the slip the steering asks for: the body yaws at the travel's rate plus a pull toward the target</span>
+<span class="k">const</span> <span class="t">float</span> target = -v.steer * JPH::DegreesToRadians(<span class="n">32.0f</span>);
+<span class="k">const</span> <span class="t">float</span> wantRate = travelRate + <span class="n">3.0f</span> * wrap(target - v.slip);
+<span class="c">// ...</span>
+<span class="k">if</span> (invIup &gt; <span class="n">1e-9f</span>) bi.AddTorque(v.body, up * (<span class="n">6.0f</span> * (wantRate - yawRate) / invIup));</pre>
+  </div>
+  <p>A <i>carve</i> force then swings the direction of travel toward the nose. Without it, a 30° slide drew a 55 m
+    arc. Drifting banks boost at 25% a second; <kbd>Shift</kbd> spends it as up to 2.5 s of 7 m/s² along the nose.
+    Measured in <code>tests/test_drift</code> on a kit sedan at 76 km/h: an average slip of 30°, 66 km/h held, 116°
+    turned. The order inside <code>PhysicsWorld::update</code> is what lets the two features coexist:</p>
+  <div class="code">
+    <div class="hd"><span>PhysicsWorld::update: the helpers, then Jolt</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/engine/physics/physics_world.cpp#L1478-L1489">src/engine/physics/physics_world.cpp</a></div>
+<pre><span class="t">void</span> <span class="t">PhysicsWorld</span>::update(<span class="t">Real</span> deltaTime, <span class="t">int</span> collisionSteps) {
+    <span class="k">if</span> (impl) {
+        <span class="k">for</span> (std::<span class="t">size_t</span> i = <span class="n">0</span>; i &lt; impl-&gt;vehicles.size(); ++i) {
+            applyDrift(i, <span class="k">static_cast</span>&lt;<span class="t">float</span>&gt;(deltaTime));
+            <span class="k">if</span> (!impl-&gt;vehicles[i].drifting) applyYawAssist(i);   <span class="c">// the slide is the drift's to hold</span>
+            applyAeroDrag(i);
+            applyTractionSplit(i);
+        }
+        impl-&gt;physicsSystem.Update(<span class="k">static_cast</span>&lt;<span class="t">float</span>&gt;(deltaTime), collisionSteps,
+                                   &amp;impl-&gt;tempAllocator, impl-&gt;jobSystem.get());
+    }
+}</pre>
+  </div>
+  <div class="shots">
+    <figure class="shot">
+      <img src="img/vehicles/drift-smoke.webp" alt="A teal hatchback seen from behind sliding across a pavement, white tyre smoke puffing from its rear wheels">
+      <figcaption>Tyre smoke from the rear wheels in a slide (the particles probe, 2026-10-25). The emitters are
+        <code>VehicleSystem::smoke_</code>.</figcaption>
+    </figure>
+    <figure class="shot">
+      <img src="img/vehicles/motorcycle-lean.webp" alt="A blocky rider on a motorcycle seen from the side on a checkerboard ground, hands on the bars and feet on the pegs">
+      <figcaption>The motorcycle in movement_lab, with the rider posed on it: hands on the bars, feet on the pegs
+        (ADR-0252).</figcaption>
+    </figure>
+  </div>
+
+  <h2>Riding, and the driver's seat</h2>
+  <p>A <i>passenger</i> is a point in a carrier's own frame. The bus, a car's passenger seat, the cab and the train
+    all ride the same way
+    (<a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/docs/decisions.md?plain=1#L11988">ADR-0243</a>).
+    The design follows from the engine's frame order:</p>
+  <div class="diagram">
+    <svg viewBox="0 0 880 210" role="img" aria-label="Frame order: update, then fixed steps where VehicleSystem drives and rideStep pins the rider, then render where RidingSystem places the rider by interpolation">
+      <defs><marker id="ar6" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" fill="#6f8fb0"/></marker></defs>
+      <g font-family="system-ui, sans-serif" font-size="13" text-anchor="middle">
+        <rect x="16" y="30" width="220" height="150" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="126" y="56" fill="#cfe4ff">update (once)</text>
+        <text x="126" y="84" fill="#93a6ba" font-size="12">enter / exit, 4WD switch</text>
+        <text x="126" y="104" fill="#93a6ba" font-size="12">RidingSystem notes where</text>
+        <text x="126" y="122" fill="#93a6ba" font-size="12">the camera was framed</text>
+        <rect x="296" y="30" width="270" height="150" rx="9" fill="#131a24" stroke="#3b82f6"/>
+        <text x="431" y="56" fill="#cfe4ff">fixed steps (0..n)</text>
+        <text x="431" y="84" fill="#93a6ba" font-size="12">VehicleSystem: create, drive,</text>
+        <text x="431" y="102" fill="#93a6ba" font-size="12">writeBack, stepSeat (jolt, sway)</text>
+        <text x="431" y="126" fill="#93a6ba" font-size="12">owner sets Passenger::carrier,</text>
+        <text x="431" y="144" fill="#93a6ba" font-size="12">then rideStep pins the capsule</text>
+        <text x="431" y="168" fill="#93a6ba" font-size="12">PhysicsWorld::update + Jolt</text>
+        <rect x="626" y="30" width="238" height="150" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="745" y="56" fill="#cfe4ff">render</text>
+        <text x="745" y="84" fill="#93a6ba" font-size="12">RidingSystem: rider on the</text>
+        <text x="745" y="102" fill="#93a6ba" font-size="12">carrier between its last two</text>
+        <text x="745" y="120" fill="#93a6ba" font-size="12">steps, by this frame's blend</text>
+        <text x="745" y="144" fill="#93a6ba" font-size="12">chase camera, seated body</text>
+        <text x="745" y="162" fill="#93a6ba" font-size="12">drawn from the car as drawn</text>
+        <line x1="236" y1="105" x2="292" y2="105" stroke="#6f8fb0" stroke-width="1.5" marker-end="url(#ar6)"/>
+        <line x1="566" y1="105" x2="622" y2="105" stroke="#6f8fb0" stroke-width="1.5" marker-end="url(#ar6)"/>
+      </g>
+    </svg>
+  </div>
+  <p class="cap">Why riding is placed in the render. A camera framed in the update is framed from the last frame's
+    step. Walking hides that; on a moving carrier it is a frame of travel.</p>
+  <p>The first attempt placed the rider in the update, which blended a stale fraction against fresh poses, and the
+    first-person view jumped. Measured on a river_town bus at 122 fps, the first-person camera's jerk in the bus's
+    frame went from about 15 mm to 0.00 mm.</p>
+  <p>The driver's seat is a separate path: the player at the wheel is seated by <code>VehicleSystem</code>
+    (<code>InVehicle</code>), not as a <code>Passenger</code>.
+    <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/docs/decisions.md?plain=1#L12319">ADR-0252</a>
+    gave that seat a crash rule that works for any vehicle. The seat's <i>jolt</i> is the most its velocity vector
+    changed over the last 0.3 s, with the vertical counted at half, because the springs take a landing:</p>
+  <div class="code">
+    <div class="hd"><span>RideJolt and who it throws</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/engine/player/driver_seat.cpp#L32-L51">src/engine/player/driver_seat.cpp</a></div>
+<pre><span class="t">Real</span> <span class="t">RideJolt</span>::step(<span class="k">const</span> <span class="t">Vec3</span>&amp; velocity, <span class="t">Real</span> dt, <span class="t">Vec3</span>* before) {
+    clock += dt;
+    samples.push_back({clock, velocity});
+    <span class="k">while</span> (!samples.empty() &amp;&amp; samples.front().t &lt; clock - kWindow) samples.erase(samples.begin());
+    <span class="t">Real</span> most = <span class="n">0</span>;
+    <span class="t">Vec3</span> was = velocity;
+    <span class="k">for</span> (<span class="k">const</span> <span class="t">Sample</span>&amp; s : samples) {
+        <span class="k">const</span> <span class="t">Vec3</span> d = velocity - s.v;
+        <span class="k">const</span> <span class="t">Real</span> j = std::sqrt(d.x * d.x + <span class="n">0.25</span> * d.y * d.y + d.z * d.z);
+        <span class="k">if</span> (j &gt; most) { most = j; was = s.v; }
+    }
+    <span class="k">if</span> (before) *before = was;
+    <span class="k">return</span> most;
+}
+
+<span class="t">Real</span> ejectTolerance(<span class="t">bool</span> twoWheeler, <span class="t">bool</span> openSeat, <span class="t">bool</span> windscreen) {
+    <span class="k">if</span> (twoWheeler) <span class="k">return</span> <span class="n">7.0</span>;
+    <span class="k">if</span> (openSeat) <span class="k">return</span> <span class="n">11.0</span>;
+    <span class="k">return</span> windscreen ? <span class="n">22.0</span> : std::numeric_limits&lt;<span class="t">Real</span>&gt;::infinity();
+}</pre>
+  </div>
+  <p>Past its tolerance, a bike or convertible throws the rider as a ragdoll at 0.8 of the speed they had, plus 3 m/s
+    up. A closed car keeps its driver, except through the windscreen past 22 m/s (on by default; Glenn: "I'd keep
+    that turned on for now"). A rider who stays in the seat sways in it on two damped springs, called
+    <code>SeatSway</code>. The torso lurches until the belt stops it at 0.32 m, and the head snaps past and comes
+    back. The player at the wheel is the jointed body from the movement work: hands on the wheel, turned with the
+    steering; feet on the pedals; a bicycle's feet go round the cranks. AI drivers keep the rigid seated mesh.
+    Measured in movement_lab against the jump tower: the convertible threw its driver at 48 km/h, the motorcycle at
+    29 km/h, and the sedan kept its driver.</p>
+  <div class="shots">
+    <figure class="shot">
+      <img src="img/vehicles/seat-sedan.webp" alt="A red faceted kit sedan side-on with its seated driver visible through the side glass">
+      <figcaption>A kit sedan (a closed seat) with the posed driver behind clear glass.</figcaption>
+    </figure>
+    <figure class="shot">
+      <img src="img/vehicles/seat-convertible.webp" alt="A silver kit convertible side-on with the driver sitting in the open cockpit">
+      <figcaption>The convertible: <code>open_seat</code>, so a crash throws the driver.</figcaption>
+    </figure>
+  </div>
+
+  <h2>Lamps</h2>
+  <p>Lamps follow the same one-system idea. A recipe's <code>lights</code> markers
+    (<code>headlight_l/r</code>, <code>taillight_l/r</code>) set the lens positions. One pure predicate,
+    <code>engine::vehicleLampState</code> (<code>vehicle_lamps.h</code>), decides what is lit: headlights at dusk,
+    brake lights when the car holds or sheds speed, indicators while it turns. The player's car calls it from
+    <code>VehicleSystem</code>. City traffic calls it through the adapter in <code>apps/citysim/car_lamps.h</code>,
+    which maps an agent's state onto it, and draws the lit lenses as three instanced groups.</p>
+  <figure class="shot">
+    <img src="img/vehicles/night-lamps.webp" alt="Night on a two-lane mountain road: a red car with glowing tail lights ahead and a yellow car with lit headlights coming the other way">
+    <figcaption>Headlights and taillights on ambient traffic at night (2026-09-26, mesh.car bodies).</figcaption>
+  </figure>
+
+  <h2>Where to look</h2>
+  <ul class="files">
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/assets/scripts/vehicles.lua">assets/scripts/vehicles.lua</a> — every recipe: from_class, kit_drivable, the off-roader, two-wheelers, <code>vehicle.drivable</code>, the fleets</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/assets/scripts/vehicle_kit.lua">assets/scripts/vehicle_kit.lua</a> — the kit bodies: profiles, loft, glass, lamps (<code>kit.attach</code>), interior, <code>kit.build</code></li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/assets/scripts/vehicle_classes.lua">assets/scripts/vehicle_classes.lua</a>, <a href="https://github.com/GlennSong/raytracer-clang/blob/main/assets/scripts/vehicle_forms.lua">vehicle_forms.lua</a> — class packages and curves for mesh.car bodies</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/procgen/polymesh.h">src/engine/procgen/polymesh.h</a> — the hard-surface kit (<code>poly.*</code> in Lua)</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/procgen/vehicle/car_mesh.h">src/engine/procgen/vehicle/car_mesh.h</a> — <code>mesh.car</code> (the bus, the classic set); <a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/procgen/vehicle_mesh.cpp">vehicle_mesh.cpp</a> — the superseded lofted shell (still bound as <code>mesh.car_shell</code>; no script uses it)</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/scripting/vehicle_spec.h">src/engine/scripting/vehicle_spec.h</a> — <code>VehicleSpec</code>, <code>loadVehicleSpec</code>, <code>spawnVehicle</code>, the drivable catalogue</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/apps/citysim/scripting/vehicle_body.h">src/apps/citysim/scripting/vehicle_body.h</a> — <code>CarBodyRecipe</code>, <code>loadFleetCarBody</code>, <code>selectFleet</code></li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/physics/physics_world.h">src/engine/physics/physics_world.h</a> / <a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/physics/physics_world.cpp">.cpp</a> — <code>VehicleConfig</code>, <code>addVehicle</code>, yaw assist, drift, drag, traction split</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/systems/vehicle_system.cpp">src/engine/systems/vehicle_system.cpp</a> — create, drive, write back, enter/exit, picker, seat, engine and tyre sounds</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/ai/driver_agent.h">src/engine/ai/driver_agent.h</a>, <a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/apps/citysim/driver_control.h">apps/citysim/driver_control.h</a> — the two AI controllers</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/vehicle_steering.h">src/engine/vehicle_steering.h</a>, <a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/vehicle_lamps.h">vehicle_lamps.h</a> — the steering assist, the lamp predicate</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/apps/citysim/city_vehicles.cpp">src/apps/citysim/city_vehicles.cpp</a> — promotion (<code>configFromBody</code>); <a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/apps/citysim/city_physics.cpp">city_physics.cpp</a> — the physical tier</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/riding.h">src/engine/riding.h</a>, <a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/player/driver_seat.h">player/driver_seat.h</a> — riding, the seat's jolt and sway</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/camera/follow_camera_controller.h">src/engine/camera/follow_camera_controller.h</a> — the chase rig</li>
+  </ul>
+  <p><b>Tests</b> (most are in the separate <code>physics_tests</code> binary): <code>test_driving_lab</code> (the
+    suspension settle, kerbs, walls), <code>test_vehicle_handling</code> (lift-off, slanted kerb, steady turn),
+    <code>test_vehicle_drivetrain</code>, <code>test_offroad_course</code>, <code>test_two_wheelers</code>,
+    <code>test_drift</code>, <code>test_driver_seat</code>, <code>test_vehicle_body</code> (every fleet slot and
+    drivable entry builds), <code>test_vehicle_kit</code> (closed, in budget, no slivers), <code>test_polymesh</code>,
+    <code>test_vehicle_mesh</code>, <code>test_vehicle_lamps</code>, <code>test_car_lamps</code>,
+    <code>test_driver_agent</code>, <code>test_lane_follow</code>, <code>test_city_ride</code>.</p>
+  <p><b>Labs:</b> <code>wheel_lab.json</code> (every fleet slot wandering; the tyre probe <code>ground? 0 0 700</code>
+    with <code>RT_GROUND_DUMP</code>), <code>offroad_course.json</code>, <code>fleet_gallery.json</code>,
+    <code>car_gallery.json</code>, <code>car_drive.json</code>, <code>movement_lab.json</code>.</p>
+  <p><b>Switches and probes:</b> <code>RT_FOUR_WHEELS=0</code> (the old centre-sample placement);
+    <code>vehicle?</code> (km/h, rpm, gear, 2wd/4wd, drift, slip, boost); <code>hold &lt;Key&gt; &lt;seconds&gt;</code>
+    (drive through the real input path); <code>vehicle_spawn &lt;recipe&gt;</code>;
+    <code>set vehicle.windscreen false</code>. Keys: W/S throttle and reverse, A/D steer, Space brake, Ctrl handbrake,
+    Shift boost, T right the car, Z 2WD/4WD, H horn, L lights, <kbd>-</kbd>/<kbd>=</kbd> pick, N drop, E get in or
+    out.</p>
+  <p>Related pages: <a href="citysim.html">The living city</a> (how ambient cars are planned and moved) and the
+    older <a href="../city-sim.html">city sim notes</a>.</p>
+
+  <footer>Code excerpts from commit <code>47d587f3</code> (2026-10-26). Drawn from ADR-0059, 0062, 0065, 0087, 0137,
+    0138, 0139, 0140, 0141, 0235, 0236, 0242, 0243 and 0252.</footer>
+</div>
+</body>
+</html>

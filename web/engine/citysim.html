@@ -1,0 +1,1025 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>The Living City — How the Engine Works</title>
+  <link rel="stylesheet" href="engine.css">
+</head>
+<body>
+<div class="wrap">
+  <div class="nav"><a href="index.html">← How the engine works</a> · <a href="../index.html">scenes</a></div>
+  <h1>The living city</h1>
+  <p class="lede">Every person and car in a city is an agent: a small record with a home, a job, a role and a day,
+    run by one deterministic simulation (<code>CitySim</code>). The idea that makes it scale is that an agent is
+    simulated only as finely as anyone can see: in full near the player, coarsely further out, not at all beyond
+    that, and drawn far away by a compute shader that only needs its route and the clock.</p>
+
+  <figure class="shot">
+    <img src="img/citysim/bus_stop_crowd.webp" alt="A crowd of blocky townspeople waiting at a bus stop on a downtown corner; a yellow bus pulls in behind a signal, cars wait at the crossing and an elevated rail line runs behind">
+    <figcaption>Downtown on the island at midday: people waiting at a stop for line 7, a bus at the kerb, traffic held at the signal. Every figure here is an agent with a home, a job and a timetable of its own.</figcaption>
+  </figure>
+
+  <p>The older page <a href="../city-sim.html">How the City Thinks</a> covers the early perception design (vision
+    cones, signals, the first reactive walkers). This page is the system as it stands at commit
+    <code>47d587f3</code>: the day, the goals, the tiers, the scale work, transit, junctions and possession.</p>
+
+  <h2>The problem</h2>
+  <p>A procedural city is beautiful and empty. The roads, lots and buildings are generated, but nothing moves
+    in them, and nothing has a reason to. The wish (ADR-0059, June 2026) was cars and pedestrians that use the
+    generated roads, agents with a reason to move ("a daily schedule, home → work → home"), and later a city you
+    can walk through at a real 1:1 clock and follow one person through their day.</p>
+  <p>Three things make that hard. <b>Cost:</b> the island level counts its walkers in the hundreds of thousands
+    (ADR-0150 measured about 204,000) and has been pushed to 515,191 agents in all; nothing that touches every agent every frame survives that.
+    <b>Continuity:</b> someone you turn away from must still be there, further along, when you turn back.
+    <b>Determinism:</b> the engine's simulations replay from a seed (ADR-0002), so the same seed must give the
+    same city, and identity, routing and parallel placement must not disturb the random-number stream.</p>
+
+  <h2>An agent's day, as a flow</h2>
+  <p>Everything an agent does comes from one chain. Its <b>role</b> (commuter, shopkeeper, student, waiter...)
+    sets the parts of its day. The day is a <b>goal table</b>: a small state machine whose states either rest or
+    go somewhere. When the clock, an arrival or a timer fires an event, the table picks the next state; a
+    <i>go</i> state names a target (work, home, a café from a menu); the target becomes a node on the road
+    graph; A* finds a <b>route</b>; and the agent moves along it at whatever level of detail its
+    <b>tier</b> allows. Arriving fires the next event.</p>
+
+  <div class="diagram">
+    <svg viewBox="0 0 900 400" role="img" aria-label="Flow of an agent's day: role and clock produce events, the goal table picks a state, the target becomes a place and a node, A star finds a route, and the agent moves at its tier; arrival loops back as an event">
+      <defs><marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" fill="#6f8fb0"/></marker></defs>
+      <g font-family="system-ui, sans-serif" font-size="13" text-anchor="middle">
+        <text x="95" y="24" fill="#8ec5ff" font-size="12">1 · SCHEDULE</text>
+        <text x="275" y="24" fill="#8ec5ff" font-size="12">2 · GOAL</text>
+        <text x="455" y="24" fill="#8ec5ff" font-size="12">3 · TARGET</text>
+        <text x="635" y="24" fill="#8ec5ff" font-size="12">4 · ROUTE</text>
+        <text x="810" y="24" fill="#8ec5ff" font-size="12">5 · MOVEMENT TIER</text>
+
+        <rect x="15" y="40" width="160" height="62" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="95" y="64" fill="#cfe4ff">Role</text>
+        <text x="95" y="83" fill="#93a6ba" font-size="12">roles.lua → RoleDay</text>
+        <rect x="15" y="122" width="160" height="62" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="95" y="146" fill="#cfe4ff">Clock + dwell</text>
+        <text x="95" y="165" fill="#93a6ba" font-size="12">departWork, departHome</text>
+        <rect x="15" y="204" width="160" height="80" rx="9" fill="#131a24" stroke="#3b82f6"/>
+        <text x="95" y="228" fill="#cfe4ff">GoalEvent</text>
+        <text x="95" y="247" fill="#93a6ba" font-size="12">DepartWork · DwellDone</text>
+        <text x="95" y="264" fill="#93a6ba" font-size="12">Arrived · NoRoute · Evening</text>
+        <line x1="95" y1="102" x2="95" y2="118" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar)"/>
+        <line x1="95" y1="184" x2="95" y2="200" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar)"/>
+
+        <rect x="195" y="40" width="160" height="62" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="275" y="64" fill="#cfe4ff">buildDayTable</text>
+        <text x="275" y="83" fill="#93a6ba" font-size="12">one table per role</text>
+        <rect x="195" y="204" width="160" height="80" rx="9" fill="#131a24" stroke="#3b82f6"/>
+        <text x="275" y="228" fill="#cfe4ff">GoalTable</text>
+        <text x="275" y="247" fill="#93a6ba" font-size="12">onEvent(state, ev)</text>
+        <text x="275" y="264" fill="#93a6ba" font-size="12">→ Rest | GoTo(target)</text>
+        <line x1="175" y1="71" x2="191" y2="71" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar)"/>
+        <line x1="275" y1="102" x2="275" y2="200" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar)"/>
+        <line x1="175" y1="244" x2="191" y2="244" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar)"/>
+
+        <rect x="375" y="204" width="160" height="80" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="455" y="228" fill="#cfe4ff">Place / venue / spot</text>
+        <text x="455" y="247" fill="#93a6ba" font-size="12">Work, Home, Shop, or a</text>
+        <text x="455" y="264" fill="#93a6ba" font-size="12">menu pick (pickFromMenu)</text>
+        <rect x="375" y="122" width="160" height="62" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="455" y="146" fill="#cfe4ff">Open only if staffed</text>
+        <text x="455" y="165" fill="#93a6ba" font-size="12">Venue::openAt</text>
+        <line x1="455" y1="184" x2="455" y2="200" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar)"/>
+        <line x1="355" y1="244" x2="371" y2="244" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar)"/>
+
+        <rect x="555" y="204" width="160" height="80" rx="9" fill="#131a24" stroke="#3b82f6"/>
+        <text x="635" y="228" fill="#cfe4ff">findRoute (A*)</text>
+        <text x="635" y="247" fill="#93a6ba" font-size="12">NavGraph, cost = time</text>
+        <text x="635" y="264" fill="#93a6ba" font-size="12">→ Route { links }</text>
+        <rect x="555" y="122" width="160" height="62" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="635" y="146" fill="#cfe4ff">Car, foot or bus?</text>
+        <text x="635" y="165" fill="#93a6ba" font-size="12">planTrip, a bay, a cab</text>
+        <line x1="635" y1="184" x2="635" y2="200" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar)"/>
+        <line x1="535" y1="244" x2="551" y2="244" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar)"/>
+
+        <rect x="735" y="40" width="150" height="58" rx="9" fill="#131a24" stroke="#e6c07b"/>
+        <text x="810" y="62" fill="#cfe4ff">K · full sim</text>
+        <text x="810" y="81" fill="#93a6ba" font-size="12">sense, FSM, advance</text>
+        <rect x="735" y="112" width="150" height="58" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="810" y="134" fill="#cfe4ff">V · far, ~1 Hz</text>
+        <text x="810" y="153" fill="#93a6ba" font-size="12">vAdvance, blind</text>
+        <rect x="735" y="184" width="150" height="58" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="810" y="206" fill="#cfe4ff">D · dormant</text>
+        <text x="810" y="225" fill="#93a6ba" font-size="12">schedule heap events</text>
+        <rect x="735" y="256" width="150" height="58" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="810" y="278" fill="#cfe4ff">Drawn as</text>
+        <text x="810" y="297" fill="#93a6ba" font-size="12">body · instance · GPU</text>
+        <line x1="722" y1="69" x2="722" y2="285" stroke="#6f8fb0" stroke-width="1.6"/>
+        <line x1="715" y1="244" x2="722" y2="244" stroke="#6f8fb0" stroke-width="1.6"/>
+        <line x1="722" y1="69" x2="731" y2="69" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar)"/>
+        <line x1="722" y1="141" x2="731" y2="141" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar)"/>
+        <line x1="722" y1="213" x2="731" y2="213" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar)"/>
+        <line x1="722" y1="285" x2="731" y2="285" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar)"/>
+
+        <path d="M810,314 L810,360 L95,360 L95,288" fill="none" stroke="#e6c07b" stroke-width="1.6" stroke-dasharray="5 4" marker-end="url(#ar)"/>
+        <text x="455" y="352" fill="#e6c07b" font-size="12">arrival (or a dwell running out) fires the next event: Arrived → Rest state → DwellDone → GoTo ...</text>
+        <text x="455" y="388" fill="#93a6ba" font-size="12">Lua runs only at load (roles.lua, agents.lua, activities.lua); every transition in the tick is C++.</text>
+      </g>
+    </svg>
+  </div>
+  <p class="cap">The chain behind every agent. Columns 1–4 are decided at <i>transitions</i>, which at the 1:1 clock
+    happen minutes apart; column 5 runs every tick, at a cost set by distance from the player.</p>
+
+  <h2>What an agent is</h2>
+  <p><code>CitySim</code> (<code>src/apps/citysim/city_sim.h</code>) owns one flat array of <code>Agent</code>
+    structs and everything they share: the road graph, the places and venues, a goal table per role, the activity
+    catalog, the bus network, the taxi dispatch, and spatial grids for neighbour queries. The ADR-0060 framing
+    still holds: <i>an agent is a brain (data); a car is an inert vehicle until an agent possesses it</i>. A
+    pedestrian is a brain with no car; a driver owns one (<code>Agent::car</code>) and is in it while driving
+    (<code>Agent::vehicle</code>). <code>mode</code> says how it moves right now; <code>archetype</code> says what it
+    is for the whole run, so a driver who parks and walks to a door doesn't switch to a pedestrian's day.</p>
+
+  <div class="diagram">
+    <svg viewBox="0 0 900 380" role="img" aria-label="Structure: CitySim owns agents, the NavGraph, places and venues, goal tables built from roles, the activity catalog, transit, and spatial grids; each Agent holds identity, role, tier, goal state, route, memory and its places">
+      <defs><marker id="ar2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" fill="#6f8fb0"/></marker></defs>
+      <g font-family="system-ui, sans-serif" font-size="13">
+        <rect x="320" y="14" width="260" height="56" rx="9" fill="#131a24" stroke="#3b82f6"/>
+        <text x="450" y="38" fill="#cfe4ff" text-anchor="middle">CitySim</text>
+        <text x="450" y="57" fill="#93a6ba" font-size="12" text-anchor="middle">step(dt) → stepTick: tiers, goals, motion</text>
+
+        <rect x="20" y="110" width="250" height="250" rx="9" fill="#131a24" stroke="#e6c07b"/>
+        <text x="145" y="134" fill="#cfe4ff" text-anchor="middle">Agent  (agents_[])</text>
+        <g fill="#93a6ba" font-size="12">
+          <text x="34" y="160">uid  — stable AgentId, not the slot</text>
+          <text x="34" y="180">role, archetype, mode</text>
+          <text x="34" y="200">tier  D | V | K  (+ pinned, remembered)</text>
+          <text x="34" y="220">goal, goalHours  — state in its table</text>
+          <text x="34" y="240">home/work/shop places + doors</text>
+          <text x="34" y="260">route, leg, distOnLeg, speed, lane</text>
+          <text x="34" y="280">state  — FSM label (Cruising…)</text>
+          <text x="34" y="300">memory  — AgentMemory tracks</text>
+          <text x="34" y="320">car, vehicle, parkedBay</text>
+          <text x="34" y="340">tethered, directed, released</text>
+        </g>
+
+        <rect x="310" y="110" width="270" height="70" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="445" y="134" fill="#cfe4ff" text-anchor="middle">NavGraph  (engine/ai)</text>
+        <text x="445" y="153" fill="#93a6ba" font-size="12" text-anchor="middle">directed NavLinks from the road net</text>
+        <text x="445" y="170" fill="#93a6ba" font-size="12" text-anchor="middle">+ walker-only footpaths; findRoute</text>
+
+        <rect x="310" y="200" width="270" height="70" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="445" y="224" fill="#cfe4ff" text-anchor="middle">PlaceMap + venues_</text>
+        <text x="445" y="243" fill="#93a6ba" font-size="12" text-anchor="middle">homes, shops, offices, bars… with doors</text>
+        <text x="445" y="260" fill="#93a6ba" font-size="12" text-anchor="middle">hours, staffed mask, floor area</text>
+
+        <rect x="310" y="290" width="270" height="70" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="445" y="314" fill="#cfe4ff" text-anchor="middle">Spatial grids</text>
+        <text x="445" y="333" fill="#93a6ba" font-size="12" text-anchor="middle">grid_, carGrid_, pedGrid_,</text>
+        <text x="445" y="350" fill="#93a6ba" font-size="12" text-anchor="middle">one-tier vGrid_, dGrid_</text>
+
+        <rect x="620" y="110" width="260" height="70" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="750" y="134" fill="#cfe4ff" text-anchor="middle">RoleCatalog → GoalTables</text>
+        <text x="750" y="153" fill="#93a6ba" font-size="12" text-anchor="middle">roles.lua · buildDayTable</text>
+        <text x="750" y="170" fill="#93a6ba" font-size="12" text-anchor="middle">+ wander, taxi, bus tables</text>
+
+        <rect x="620" y="200" width="260" height="70" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="750" y="224" fill="#cfe4ff" text-anchor="middle">ActivityCatalog</text>
+        <text x="750" y="243" fill="#93a6ba" font-size="12" text-anchor="middle">activities.lua: activities + menus,</text>
+        <text x="750" y="260" fill="#93a6ba" font-size="12" text-anchor="middle">seats, spots, group sessions</text>
+
+        <rect x="620" y="290" width="260" height="70" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="750" y="314" fill="#cfe4ff" text-anchor="middle">Transit</text>
+        <text x="750" y="333" fill="#93a6ba" font-size="12" text-anchor="middle">BusNetwork, RideBook, Dispatch</text>
+        <text x="750" y="350" fill="#93a6ba" font-size="12" text-anchor="middle">(cabs), rail riders, parking bays</text>
+
+        <line x1="390" y1="70" x2="200" y2="106" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar2)"/>
+        <line x1="450" y1="70" x2="445" y2="106" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar2)"/>
+        <line x1="510" y1="70" x2="720" y2="106" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar2)"/>
+        <line x1="270" y1="235" x2="306" y2="235" stroke="#6f8fb0" stroke-width="1.6" stroke-dasharray="4 3" marker-end="url(#ar2)"/>
+        <line x1="270" y1="150" x2="306" y2="150" stroke="#6f8fb0" stroke-width="1.6" stroke-dasharray="4 3" marker-end="url(#ar2)"/>
+      </g>
+    </svg>
+  </div>
+  <p class="cap">The main types. Solid arrows: what <code>CitySim</code> owns. Dashed: what an agent refers to by
+    index (a node, a place id). The renderer, the walker bodies and the vehicle bridge live in separate systems
+    (<code>CityRenderSystem</code>, <code>CityWalkerSystem</code>, <code>CityVehicleSystem</code>) and read the sim.</p>
+
+  <p>The tier field is the heart of the scaling story. Its comment is the best short description of the four
+    levels of detail in the code:</p>
+  <div class="code">
+    <div class="hd"><span>Agent::Tier — K, V, D (and P, the physical overlay)</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/apps/citysim/city_sim.h#L60-L80">src/apps/citysim/city_sim.h</a></div>
+<pre>    <span class="c">// Simulation tier (P4 three-tier traffic). K (Kinematic) is the full agent
+    // as it always ran: sensing, FSM, signals, render bake, kinematic proxy.
+    // V (Virtual) is a persistent FAR agent: full identity + exact route state
+    // (link, lane, param, speed) but no rendering, no physics proxy, no
+    // sensing/FSM and no live signal queries — it traverses its real A* route
+    // on a coarse ~1 Hz tick at a modelled speed (class speed shaped by fixed
+    // average junction delays), so promotion finds it where it should be.
+    // P (the physical Jolt tier) stays what it was: possessTier's overlay on K.
+    // Everything is K until a level opts in (CitySim::tieringEnabled) AND a
+    // player position is fed (setTierCenter) — headless sims are unchanged.
+    // D (Dormant) is the tier BELOW V: not simulated at all, not even coarsely.
+    // A V agent still walks its route link by link once a second — cheap, but
+    // not free, and there are thousands of them. A D agent costs nothing: when
+    // the player comes near it is reconstructed from its own schedule
+    // (scheduleSnapshot) and handed to V.
+    //
+    // Its CAR is untouched by any of this. Dormancy strips the agent, never the
+    // vehicle — a parked car keeps its pose, its bay, its instance and its
+    // proxy, which is what lets it still be seen, collided with and stolen
+    // while its owner does not exist.</span>
+    <span class="k">enum class</span> <span class="t">Tier</span> : <span class="t">uint8_t</span> { D, V, K };</pre>
+  </div>
+
+  <h2>The ground it walks on: NavGraph, places and identity</h2>
+  <p>The <b>NavGraph</b> (<code>src/engine/ai/nav_graph.h</code>, ADR-0059) is the road network kept alive at
+    runtime. The road builder used to sample every road into a fine polyline, stroke the asphalt, and throw the
+    graph away; now the same graph survives as a <i>directed</i> lane graph. Each road edge becomes two
+    <code>NavLink</code>s, one per direction (one for a one-way ramp), each a straight segment, so a curved
+    street is a chain of short links. Traffic keeps <b>left</b>, UK/Japan style: the helper called
+    <code>rightOf</code> in <code>nav_graph.cpp</code> is named for the maths and points to the driver's left.</p>
+  <div class="code">
+    <div class="hd"><span>NavLink: one direction of one road segment (excerpt)</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/engine/ai/nav_graph.h#L29-L36">src/engine/ai/nav_graph.h</a></div>
+<pre><span class="k">struct</span> <span class="t">NavLink</span> {
+    <span class="t">int</span> from = <span class="n">0</span>;                       <span class="c">// NavGraph node index (tail)</span>
+    <span class="t">int</span> to = <span class="n">0</span>;                         <span class="c">// NavGraph node index (head)</span>
+    <span class="t">Real</span> length = <span class="n">0</span>;                    <span class="c">// segment length (m)</span>
+    <span class="t">Real</span> width = <span class="n">8</span>;                     <span class="c">// carriageway width of the source road (m)</span>
+    <span class="t">RoadClass</span> klass = RoadClass::Local;
+    <span class="t">int</span> lanes = <span class="n">1</span>;                      <span class="c">// lanes available in THIS direction</span>
+    <span class="t">int</span> layer = <span class="n">0</span>;                      <span class="c">// grade-separation level (0 = ground, >0 = bridge)</span></pre>
+  </div>
+  <p>Further fields carry deck heights, one-way flags, access bits (walkable, frontage, signalable), the parking
+    band, and whether the link is a <b>footpath</b>: park and quad walks are appended at load as walker-only
+    links that vehicle routing never takes. <b>Routing</b> is one A*, shared by cars and walkers:</p>
+  <div class="code">
+    <div class="hd"><span>findRoute: A* over the lane graph, priced in travel time</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/engine/ai/pathfind.h#L22-L39">src/engine/ai/pathfind.h</a></div>
+<pre><span class="c">// A* over the directed lane graph (ADR-0059). Cost is TRAVEL TIME
+// (length / classSpeed), so routes prefer arterials over local streets like real
+// driving; the heuristic is straight-line time at the fastest class speed
+// (admissible -> optimal). Deterministic: ties broken by link index. Returns an
+// empty Route if the goal is unreachable (or equals the start).
+// `onFoot`: skip Freeway/Ramp-class links — a pedestrian must never route
+// along a carriageway (§10.5; the unified graph made those links visible to
+// every consumer, including walkers).
+// ...</span>
+<span class="t">Route</span> findRoute(<span class="k">const</span> <span class="t">NavGraph</span>&amp; graph, <span class="t">int</span> startNode, <span class="t">int</span> goalNode,
+                <span class="t">bool</span> onFoot = <span class="k">false</span>,
+                <span class="k">const</span> std::<span class="t">vector</span>&lt;<span class="t">Real</span>&gt;* linkCostScale = <span class="k">nullptr</span>);</pre>
+  </div>
+  <p>The optional <code>linkCostScale</code> is how the bus planner spreads its routes: it charges extra for a
+    street another route already drives.</p>
+  <p><b>Places</b> (the second ADR-0066, "The Living City") give that graph somewhere to go. A <code>Place</code>
+    is a typed building (home, shop, office, park, civic, and later cafés, bars, clubs, libraries, teaching halls)
+    with a <b>door</b> snapped onto the pavement of its frontage street, hours, and a capacity. Generated
+    buildings become places automatically (each shop front a place of its own), and
+    <code>assignPlaces</code> gives every agent a home and a job it can actually reach. Since ADR-0150 homes and
+    jobs are drawn in proportion to <b>floor area</b>, so a 30-storey block of flats houses more people than a
+    bungalow. <b>Identity</b> is an <code>AgentId</code>: a dense UID handed out at build from a counter
+    <i>separate</i> from the simulation's random stream, so adding identity changed no seeded test. Relationships
+    (coworker, neighbour) are single tags on UID pairs, deliberately shallow.</p>
+
+  <div class="note history"><p><b>A dead walkable graph.</b> ADR-0066 Phase 2 built a separate pedestrian graph
+    (<code>ped_graph.{h,cpp}</code>: corner nodes, sidewalk edges, a door node per place) so a walk could start
+    and end at real doors. Its live integration was deferred, and walkers ended up routing on the NavGraph itself
+    (<code>findRoute(..., onFoot=true)</code> plus footpath links and door positions). At <code>47d587f3</code>,
+    <code>pedRoute</code> has no caller outside its own test.</p></div>
+
+  <h2>Roles: one system describes every resident's day</h2>
+  <p>Glenn asked for "a singular system that can describe all of the npc roles" (2026-10-06). A role is
+    data: the parts of a day — whether it commutes, how long before a break, what the break is, whether breaks
+    repeat (class, break, class...), an errand on the way home, an evening menu and how often it goes out — plus,
+    for a staff role, which places it staffs and on whose hours. Roles are authored in
+    <code>assets/scripts/roles.lua</code>; the same catalog is built into C++ as
+    <code>defaultRoleCatalog</code>, and a test keeps the two describing identically.</p>
+  <div class="code">
+    <div class="hd"><span>roles.lua: a commuter, a shopkeeper, and a staff role (excerpt)</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/assets/scripts/roles.lua#L28-L82">assets/scripts/roles.lua</a></div>
+<pre>roles = {
+  order = { <span class="s">"commuter"</span>, <span class="s">"shopkeeper"</span>, <span class="s">"stroller"</span>, <span class="s">"student"</span>,
+            <span class="s">"teacher"</span>, <span class="s">"librarian"</span>, <span class="s">"manager"</span>, <span class="s">"waiter"</span>, <span class="s">"cook"</span>, <span class="s">"clerk"</span>, <span class="s">"bartender"</span> },
+
+  <span class="c">-- to work, lunch about four hours in (or brought, and stays in), the afternoon, the errand on the way home</span>
+  commuter = {
+    day = { work_before_break = <span class="n">4.0</span>, pause = { target = <span class="s">"lunch"</span>, label = <span class="s">"Lunch"</span>, hours = <span class="n">0.6</span> }, errand = <span class="k">true</span>,
+            evening = <span class="s">"evening"</span> },
+    night_out = <span class="n">0.22</span>,
+  },
+  <span class="c">-- ...</span>
+  <span class="c">-- the floor: on the place's hours, no break out (they eat at work), straight home</span>
+  waiter = {
+    day = { evening = <span class="s">"evening"</span> },
+    night_out = <span class="n">0.10</span>,
+    staff = { places = { <span class="s">"restaurant"</span>, <span class="s">"cafe"</span> }, per_place = <span class="n">3</span>, hours = <span class="s">"place"</span> },
+  },</pre>
+  </div>
+  <p>One composer, <code>buildDayTable</code>, turns any role's <code>RoleDay</code> into its goal table, always
+    from the same vocabulary of state names. A commuter's day comes out like this:</p>
+
+  <div class="diagram">
+    <svg viewBox="0 0 900 300" role="img" aria-label="The commuter's goal table: AtHome, ToWork, AtWork, GoBreak, OnBreak, BackToWork, AtWorkPM, GoShopping, AtShop, ReturnHome, and the night out branch">
+      <defs><marker id="ar3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" fill="#6f8fb0"/></marker></defs>
+      <g font-family="system-ui, sans-serif" font-size="13" text-anchor="middle">
+        <rect x="20" y="40" width="120" height="44" rx="22" fill="#131a24" stroke="#3b82f6"/>
+        <text x="80" y="67" fill="#cfe4ff">AtHome</text>
+        <rect x="190" y="40" width="120" height="44" rx="9" fill="#131a24" stroke="#e6c07b"/>
+        <text x="250" y="67" fill="#cfe4ff">ToWork</text>
+        <rect x="360" y="40" width="120" height="44" rx="22" fill="#131a24" stroke="#2c3d50"/>
+        <text x="420" y="67" fill="#cfe4ff">AtWork</text>
+        <rect x="530" y="40" width="120" height="44" rx="9" fill="#131a24" stroke="#e6c07b"/>
+        <text x="590" y="67" fill="#cfe4ff">GoBreak</text>
+        <rect x="700" y="40" width="120" height="44" rx="22" fill="#131a24" stroke="#2c3d50"/>
+        <text x="760" y="67" fill="#cfe4ff">OnBreak</text>
+        <rect x="700" y="150" width="120" height="44" rx="9" fill="#131a24" stroke="#e6c07b"/>
+        <text x="760" y="177" fill="#cfe4ff">BackToWork</text>
+        <rect x="530" y="150" width="120" height="44" rx="22" fill="#131a24" stroke="#2c3d50"/>
+        <text x="590" y="177" fill="#cfe4ff">AtWorkPM</text>
+        <rect x="360" y="150" width="120" height="44" rx="9" fill="#131a24" stroke="#e6c07b"/>
+        <text x="420" y="177" fill="#cfe4ff">GoShopping</text>
+        <rect x="190" y="150" width="120" height="44" rx="22" fill="#131a24" stroke="#2c3d50"/>
+        <text x="250" y="177" fill="#cfe4ff">AtShop</text>
+        <rect x="20" y="150" width="120" height="44" rx="9" fill="#131a24" stroke="#e6c07b"/>
+        <text x="80" y="177" fill="#cfe4ff">ReturnHome</text>
+
+        <g font-size="11" fill="#93a6ba">
+          <line x1="140" y1="62" x2="186" y2="62" stroke="#6f8fb0" stroke-width="1.5" marker-end="url(#ar3)"/>
+          <text x="165" y="32">departWork</text>
+          <line x1="310" y1="62" x2="356" y2="62" stroke="#6f8fb0" stroke-width="1.5" marker-end="url(#ar3)"/>
+          <text x="335" y="32">arrived</text>
+          <line x1="480" y1="62" x2="526" y2="62" stroke="#6f8fb0" stroke-width="1.5" marker-end="url(#ar3)"/>
+          <text x="505" y="32">dwell 4 h</text>
+          <line x1="650" y1="62" x2="696" y2="62" stroke="#6f8fb0" stroke-width="1.5" marker-end="url(#ar3)"/>
+          <text x="675" y="32">arrived</text>
+          <line x1="760" y1="84" x2="760" y2="146" stroke="#6f8fb0" stroke-width="1.5" marker-end="url(#ar3)"/>
+          <text x="815" y="120">dwell 0.6 h</text>
+          <line x1="700" y1="172" x2="654" y2="172" stroke="#6f8fb0" stroke-width="1.5" marker-end="url(#ar3)"/>
+          <text x="675" y="212">arrived</text>
+          <line x1="530" y1="172" x2="484" y2="172" stroke="#6f8fb0" stroke-width="1.5" marker-end="url(#ar3)"/>
+          <text x="505" y="212">departHome</text>
+          <line x1="360" y1="172" x2="314" y2="172" stroke="#6f8fb0" stroke-width="1.5" marker-end="url(#ar3)"/>
+          <text x="335" y="212">arrived</text>
+          <line x1="190" y1="172" x2="144" y2="172" stroke="#6f8fb0" stroke-width="1.5" marker-end="url(#ar3)"/>
+          <text x="165" y="212">dwell 0.5 h</text>
+          <line x1="80" y1="150" x2="80" y2="88" stroke="#6f8fb0" stroke-width="1.5" marker-end="url(#ar3)"/>
+          <text x="40" y="120">arrived</text>
+          <path d="M590,84 Q590,120 590,146" fill="none" stroke="#6f8fb0" stroke-width="1.2" stroke-dasharray="4 3" marker-end="url(#ar3)"/>
+          <text x="600" y="120" text-anchor="start">noRoute (brought lunch)</text>
+        </g>
+        <text x="450" y="250" fill="#8ec5ff" font-size="12">Rounded ends = Rest states (wait for an event) · square = GoTo states (travel, retry until launched)</text>
+        <text x="450" y="274" fill="#93a6ba" font-size="12">addNightOut adds GoOut → OutTonight → NextStop → HomeTonight off AtHome on the evening / eveningOver events</text>
+      </g>
+    </svg>
+  </div>
+  <p class="cap">The commuter's table as <code>buildDayTable</code> writes it (one break, then <code>AtWorkPM</code>;
+    an errand on the way home). Missing transitions are the <code>noRoute</code> fallbacks, each landing
+    somewhere sensible. A stroller's day is a different branch of the same function: outing, pause, outing, home.</p>
+  <div class="code">
+    <div class="hd"><span>buildDayTable, the commuting branch (excerpt)</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/apps/citysim/city_roles.cpp#L109-L135">src/apps/citysim/city_roles.cpp</a></div>
+<pre>    } <span class="k">else</span> {
+        <span class="k">const bool</span> breaks = d.workBeforeBreak &gt; <span class="n">0</span> &amp;&amp; d.breakTarget != GoalTarget::None;
+        <span class="k">const bool</span> once = breaks &amp;&amp; !d.breaksRepeat;   <span class="c">// one break, then the afternoon</span>
+        t.addState(<span class="s">"ToWork"</span>, GoalAction::GoTo, GoalTarget::Work, Activity::Commuting);
+        t.addState(<span class="s">"AtWork"</span>, GoalAction::Rest, GoalTarget::None, Activity::AtWork, breaks ? d.workBeforeBreak : <span class="n">0.0</span>);
+        <span class="k">if</span> (breaks) {
+            t.addState(<span class="s">"GoBreak"</span>, GoalAction::GoTo, d.breakTarget, d.breakActivity);
+            <span class="c">// ...</span>
+        }
+        <span class="c">// ...</span>
+        t.addTransition(<span class="s">"AtHome"</span>, GoalEvent::DepartWork, <span class="s">"ToWork"</span>);
+        t.addTransition(<span class="s">"ToWork"</span>, GoalEvent::Arrived, <span class="s">"AtWork"</span>);
+        t.addTransition(<span class="s">"ToWork"</span>, GoalEvent::NoRoute, <span class="s">"AtHome"</span>);
+        t.addTransition(<span class="s">"AtWork"</span>, GoalEvent::DepartHome, leave);
+        <span class="k">if</span> (breaks) {
+            t.addTransition(<span class="s">"AtWork"</span>, GoalEvent::DwellDone, <span class="s">"GoBreak"</span>);</pre>
+  </div>
+  <p><b>Staff and opening hours</b> (ADR-0147). Staff come out of the existing population: each place of a staff
+    role's kinds pulls its staff from the commuters living nearest it. A <code>Venue</code> then carries a 24-bit
+    <code>staffed</code> mask — bit <i>h</i> set when someone hired there is at work at <i>h</i>:30 — and
+    <code>Venue::openAt</code> requires the bit. Every customer chooser (outings, lunch, the evening, activities)
+    asks <code>openAt</code>, so none of them needed changing. On island_8_nature that gates 2,585 shops, cafés,
+    restaurants, bars and clubs: 1,315 staffed at 10:00, 742 at 22:00. Two kinds of place keep their posted hours
+    anyway: one nobody was hired at, and one whose staff the schedule never has at work.</p>
+
+  <div class="shots">
+    <figure class="shot">
+      <img src="img/citysim/office_at_work.webp" alt="An open-plan office floor with rows of desks, each with a seated blocky worker at a monitor">
+      <figcaption>"AtWork" from inside: commuters seated at their desks on an office floor. Resting at a door means indoors; these seats are what the building shows of them.</figcaption>
+    </figure>
+    <figure class="shot">
+      <img src="img/citysim/plaza_seats.webp" alt="A small plaza with a fountain; people sit on benches and on the fountain rim while others walk the paths">
+      <figcaption>A plaza at 18:18: people sitting on benches and the fountain rim (seat spots from the activity catalog), others walking through.</figcaption>
+    </figure>
+  </div>
+
+  <h2>Goals as data: the GoalTable</h2>
+  <p>Before ADR-0064 the day was a hand-written <code>switch</code> inside <code>CitySim::step</code>, and every new
+    behaviour meant editing the simulation. Now it is a <code>GoalTable</code>
+    (<code>src/apps/citysim/city_goals.h</code>): named states, each binding one action from a deliberately tiny
+    C++ vocabulary — <code>Rest</code> or <code>GoTo(target)</code> — and transitions on a fixed set of events
+    that the sim emits. The table rides the engine's generic <code>StateMachine</code>, so <b>one</b> table per
+    archetype drives every agent; an agent holds only the int <code>Agent::goal</code>.</p>
+  <div class="code">
+    <div class="hd"><span>GoalState: one row of a day</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/apps/citysim/city_goals.h#L81-L91">src/apps/citysim/city_goals.h</a></div>
+<pre><span class="k">struct</span> <span class="t">GoalState</span> {
+    std::<span class="t">string</span> name;
+    <span class="t">GoalAction</span> action = GoalAction::Rest;
+    <span class="t">GoalTarget</span> target = GoalTarget::None;
+    <span class="t">Activity</span> activity = Activity::AtHome;
+    <span class="t">double</span> dwellHours = <span class="n">0</span>;   <span class="c">// 0 = rest forever (only events can end it)</span>
+    <span class="c">// GoalTarget::Activity: the spot kinds it takes (spotKindBit) and the tags the spot must carry (spot_tag) -- or,
+    // when `menu` names one, a pick from that menu of the activity catalog (activities.h)</span>
+    <span class="t">uint32_t</span> spotKinds = <span class="n">0</span>, spotTags = <span class="n">0</span>;
+    std::<span class="t">string</span> menu;
+};</pre>
+  </div>
+  <p>Targets cover more than home and work: <code>Shop</code>, <code>Lunch</code>, <code>Outing</code>,
+    <code>Campus</code>, <code>Activity</code> (a menu pick), and the dynamic ones a taxi or bus table uses
+    (<code>Fare</code>, <code>Drop</code>, <code>Stop</code>, <code>Depot</code>), looked up in the dispatch rather than
+    stored on the agent — which is how one mechanism drives a resident, a cab and a bus. Firing an event is a
+    lookup, then either a state change or a departure, gated so that the step's routing budget and a parked
+    car's clearance are respected:</p>
+  <div class="code">
+    <div class="hd"><span>CitySim::tryGoalEvent: the table decides, C++ acts</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/apps/citysim/city_sim.cpp#L2929-L2964">src/apps/citysim/city_sim.cpp</a></div>
+<pre>CitySim::<span class="t">GoalFire</span> CitySim::tryGoalEvent(<span class="t">Agent</span>&amp; a, <span class="t">GoalEvent</span> event) {
+    <span class="k">const</span> <span class="t">GoalTable</span>&amp; t = tableFor(a);
+    <span class="t">int</span> next = t.onEvent(a.goal, event);
+    <span class="k">if</span> (next &lt; <span class="n">0</span>) <span class="k">return</span> GoalFire::NoRow;
+    <span class="k">const</span> <span class="t">GoalState</span>&amp; to = t.state(next);
+    <span class="k">if</span> (to.action == GoalAction::GoTo) {
+        <span class="t">int</span> from = departNode(a);
+        <span class="c">// ...</span>
+        <span class="k">if</span> (a.archetype == Agent::Mode::Driver &amp;&amp; !a.far() &amp;&amp; !isBus(indexOf(a)) &amp;&amp;
+            !launchClear(a, from))
+            <span class="k">return</span> GoalFire::Blocked;
+        <span class="k">if</span> (!isBus(indexOf(a)) &amp;&amp; departuresThisStep_ &gt;= kDeparturesPerStep)
+            <span class="k">return</span> GoalFire::Blocked;   <span class="c">// the step's routing budget is spent: leave next tick</span>
+        ++departuresThisStep_;
+        a.goal = next;
+        a.goalHours = <span class="n">0</span>;
+        startGoalTrip(a, from, <span class="c">/*fromRest=*/</span><span class="k">true</span>);
+    } <span class="k">else</span> {
+        a.goal = next;
+        a.goalHours = <span class="n">0</span>;
+        a.activity = to.activity;
+    }
+    <span class="k">return</span> GoalFire::Fired;
+}</pre>
+  </div>
+  <p><b>Load-time Lua, tick-time C++.</b> <code>agents.lua</code>, <code>roles.lua</code> and
+    <code>activities.lua</code> are read once at level load into these tables; nothing scripted runs in the tick.
+    That keeps the tick deterministic and cheap, keeps the headless test build Lua-free, and turns a broken script
+    into a loud load error. When the tables replaced the old <code>switch</code>, the built-in tables were checked
+    to reproduce the old behaviour <i>bit-exactly</i>: an FNV hash over every agent's pose, speed, activity and
+    trips across seven seeded scenarios, identical before and after, now pinned as
+    <code>installing_the_default_tables_changes_nothing</code>.</p>
+  <p><b>Sleepers.</b> An agent resting at a door has nothing to decide until its own day says so, so it names the
+    sim-second it next needs thinking about (<code>Agent::wakeAt</code>) and drops out of the active list. Measured
+    on metro v2 (2026-09-16), about 45% of near agents were asleep at any moment, and at 03:00 all of them — which is why a city can look
+    static while working correctly.</p>
+
+  <h2>Activities: what people go and do</h2>
+  <p>A day's <code>Outing</code>, <code>Lunch</code> or evening is not hard-coded. It is a pick from a
+    <b>menu</b> in the activity catalog (<code>assets/scripts/activities.lua</code>, mirrored by
+    <code>defaultActivityCatalog</code>). An activity says what sites it uses (a café, a bench, a lawn, a pitch,
+    "street"), when it is offered, how long it lasts, how far people will go for it, and how the body performs it
+    (inside, outside, at a spot, wandering, or roaming in a group). A menu is a list of hour bands, each with
+    "first" chances tried in order and then a weighted pick:</p>
+  <div class="code">
+    <div class="hd"><span>activities.lua: the day-off menu by the hour</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/assets/scripts/activities.lua#L98-L112">assets/scripts/activities.lua</a></div>
+<pre>  outing = {
+    { hours = { <span class="n">5</span>, <span class="n">10.5</span> }, first = { { <span class="s">"bench"</span>, <span class="n">0.20</span> }, { <span class="s">"across_town"</span>, <span class="n">0.10</span> } },
+      pick = { { <span class="s">"coffee"</span>, <span class="n">4</span> }, { <span class="s">"park_visit"</span>, <span class="n">3</span> }, { <span class="s">"groceries"</span>, <span class="n">0.5</span> }, { <span class="s">"civic_visit"</span>, <span class="n">0.3</span> }, { <span class="s">"walk_round_block"</span>, <span class="n">3</span> } } },
+    { hours = { <span class="n">10.5</span>, <span class="n">14</span> }, first = { { <span class="s">"bench"</span>, <span class="n">0.25</span> }, { <span class="s">"across_town"</span>, <span class="n">0.14</span> } },
+      pick = { { <span class="s">"browse"</span>, <span class="n">2.5</span> }, { <span class="s">"meal"</span>, <span class="n">2</span> }, { <span class="s">"coffee"</span>, <span class="n">2</span> }, { <span class="s">"park_visit"</span>, <span class="n">3</span> }, { <span class="s">"civic_visit"</span>, <span class="n">0.7</span> }, { <span class="s">"walk_round_block"</span>, <span class="n">2</span> },
+               { <span class="s">"picnic"</span>, <span class="n">1.5</span> }, { <span class="s">"sunbathe"</span>, <span class="n">0.8</span> }, { <span class="s">"chat"</span>, <span class="n">1</span> } } },
+    { hours = { <span class="n">14</span>, <span class="n">17.5</span> }, first = { { <span class="s">"bench"</span>, <span class="n">0.30</span> }, { <span class="s">"across_town"</span>, <span class="n">0.14</span> } },
+      pick = { { <span class="s">"browse"</span>, <span class="n">2.5</span> }, { <span class="s">"groceries"</span>, <span class="n">1.5</span> }, { <span class="s">"park_visit"</span>, <span class="n">3</span> }, { <span class="s">"coffee"</span>, <span class="n">1.5</span> }, { <span class="s">"civic_visit"</span>, <span class="n">0.7</span> }, { <span class="s">"walk_round_block"</span>, <span class="n">3</span> },
+               { <span class="s">"sunbathe"</span>, <span class="n">1</span> }, { <span class="s">"catch"</span>, <span class="n">0.8</span> }, { <span class="s">"chat"</span>, <span class="n">1</span> }, { <span class="s">"picnic"</span>, <span class="n">0.5</span> } } },
+    { hours = { <span class="n">17.5</span>, <span class="n">23</span> }, first = { { <span class="s">"bench"</span>, <span class="n">0.15</span> }, { <span class="s">"across_town"</span>, <span class="n">0.10</span> } },
+      pick = { { <span class="s">"meal"</span>, <span class="n">3</span> }, { <span class="s">"coffee"</span>, <span class="n">1</span> }, { <span class="s">"park_visit"</span>, <span class="n">1.5</span> }, { <span class="s">"groceries"</span>, <span class="n">1</span> }, { <span class="s">"walk_round_block"</span>, <span class="n">2</span> },
+               { <span class="s">"chat"</span>, <span class="n">1</span> }, { <span class="s">"catch"</span>, <span class="n">0.5</span> } } },
+    { hours = { <span class="n">23</span>, <span class="n">5</span> }, first = { { <span class="s">"bench"</span>, <span class="n">0</span> }, { <span class="s">"across_town"</span>, <span class="n">0</span> } },
+      pick = { { <span class="s">"walk_round_block"</span>, <span class="n">1</span> }, { <span class="s">"park_visit"</span>, <span class="n">0.5</span> } } },
+  },</pre>
+  </div>
+  <p><code>CitySim::pickFromMenu</code> replaced three hand-written choosers (<code>pickOuting</code>,
+    <code>pickLunch</code>, <code>pickCampusBreak</code> survive as one-line wrappers that name a menu). Group
+    activities — a kickabout on the campus pitch, a chat circle or picnic on a lawn — are <b>sessions</b>: a
+    definition with roles, a formation and a pose (stand, sit on the ground, lie), joined by whoever turns up,
+    started when enough have, abandoned if not. <code>CitySim::restPose</code> is the one place both drawers (the
+    instanced crowd and the near bodies) ask how a resting person stands, sits or lies.</p>
+
+  <h2>Moving: reactive agents and the cognition loop</h2>
+  <p>The first city sim (ADR-0060) moved agents by global plans: compute an A* route, snap along lanes leg by leg.
+    That teleported at nodes and let agents drive through each other. ADR-0061 made agents <b>reactive</b>: each
+    one perceives only what falls in a vision cone, runs a small state machine (walker: resting, walking, avoiding,
+    waiting; driver: cruising, following, yielding, turning, waiting), and outputs a steering intent, not a jump.
+    ADR-0063 then gave them an inner life between frames:</p>
+
+  <div class="diagram">
+    <svg viewBox="0 0 900 170" role="img" aria-label="The cognition loop: sense with a wedge and height band, remember as tracks, predict closest approach, decide with hysteresis, act through the motor layer, and loop">
+      <defs><marker id="ar4" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" fill="#6f8fb0"/></marker></defs>
+      <g font-family="system-ui, sans-serif" font-size="13" text-anchor="middle">
+        <rect x="10" y="30" width="160" height="72" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="90" y="54" fill="#cfe4ff">Sense</text>
+        <text x="90" y="73" fill="#93a6ba" font-size="12">SensorVolume: wedge</text>
+        <text x="90" y="90" fill="#93a6ba" font-size="12">+ height band (2.5D)</text>
+        <rect x="192" y="30" width="160" height="72" rx="9" fill="#131a24" stroke="#3b82f6"/>
+        <text x="272" y="54" fill="#cfe4ff">Remember</text>
+        <text x="272" y="73" fill="#93a6ba" font-size="12">AgentMemory tracks,</text>
+        <text x="272" y="90" fill="#93a6ba" font-size="12">EMA velocity, 4 s fade</text>
+        <rect x="374" y="30" width="160" height="72" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="454" y="54" fill="#cfe4ff">Predict</text>
+        <text x="454" y="73" fill="#93a6ba" font-size="12">closestApproach,</text>
+        <text x="454" y="90" fill="#93a6ba" font-size="12">timeToCollision</text>
+        <rect x="556" y="30" width="160" height="72" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="636" y="54" fill="#cfe4ff">Decide</text>
+        <text x="636" y="73" fill="#93a6ba" font-size="12">Commitment: hysteresis,</text>
+        <text x="636" y="90" fill="#93a6ba" font-size="12">think every 0.35 s</text>
+        <rect x="738" y="30" width="150" height="72" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="813" y="54" fill="#cfe4ff">Act</text>
+        <text x="813" y="73" fill="#93a6ba" font-size="12">advance along the</text>
+        <text x="813" y="90" fill="#93a6ba" font-size="12">route (one owner)</text>
+        <line x1="170" y1="66" x2="188" y2="66" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar4)"/>
+        <line x1="352" y1="66" x2="370" y2="66" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar4)"/>
+        <line x1="534" y1="66" x2="552" y2="66" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar4)"/>
+        <line x1="716" y1="66" x2="734" y2="66" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar4)"/>
+        <path d="M813,102 L813,140 L90,140 L90,106" fill="none" stroke="#6f8fb0" stroke-width="1.4" stroke-dasharray="5 4" marker-end="url(#ar4)"/>
+        <text x="450" y="160" fill="#93a6ba" font-size="12">every tick integrates smoothly toward the decision held since the last think</text>
+      </g>
+    </svg>
+  </div>
+  <p class="cap">ADR-0063's five stages, each a small pure primitive in <code>src/engine/ai/</code>, composed inside
+    <code>CitySim</code>. K-tier agents only: V and D agents neither sense nor decide.</p>
+  <div class="code">
+    <div class="hd"><span>TrackedBody and AgentMemory: sightings become tracks</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/engine/ai/agent_memory.h#L25-L39">src/engine/ai/agent_memory.h</a></div>
+<pre><span class="k">struct</span> <span class="t">TrackedBody</span> {
+    <span class="t">int</span> id = -<span class="n">1</span>;          <span class="c">// the caller's stable body id</span>
+    <span class="t">Vec2</span> pos;             <span class="c">// best current estimate (extrapolated while unseen)</span>
+    <span class="t">Vec2</span> vel;             <span class="c">// smoothed velocity estimate (m/s)</span>
+    <span class="t">Vec2</span> seenPos;         <span class="c">// raw position at the last actual sighting</span>
+    <span class="t">Real</span> lastSeen = <span class="n">0</span>;    <span class="c">// sim-time of that sighting</span>
+    <span class="t">Real</span> confidence = <span class="n">0</span>;  <span class="c">// 1 = just seen, decays to 0 = forgotten</span>
+    <span class="t">bool</span> hasVelocity = <span class="k">false</span>;   <span class="c">// one sighting can't give a velocity yet</span>
+};
+
+<span class="k">class</span> <span class="t">AgentMemory</span> {
+<span class="k">public</span>:
+    <span class="t">Real</span> memorySeconds = <span class="n">4.0</span>;    <span class="c">// unseen tracks survive (and extrapolate) this long</span>
+    <span class="t">Real</span> velocityBlend = <span class="n">0.5</span>;    <span class="c">// EMA weight of the newest velocity estimate</span>
+    std::<span class="t">size_t</span> maxTracks = <span class="n">32</span>;  <span class="c">// hard cap: weakest track evicted when full</span></pre>
+  </div>
+  <p>Why memory matters: a car that saw a person step behind a van keeps <i>expecting</i> them where they were
+    heading, and creeps to that spot instead of accelerating into it (pinned by
+    <code>cars_remember_a_person_after_losing_sight</code>). Why a slow <b>think cadence</b>: walkers that
+    re-decided every 100 ms visibly "wigged out"; deciding every 0.35 s (staggered per agent) and committing
+    reads as intent. Controllers stay per tick for stability; decisions go slow for commitment.</p>
+  <p>Cars are deliberately <i>not</i> in each other's vision cones: lanes, car-following gaps and signals govern
+    car-against-car, because braking for cross and oncoming cars in the cone deadlocked traffic. They do sense
+    walkers, the player, and real physics vehicles (the player's car reaches the sim as an external obstacle with
+    a half-length). Two cars that still meet on a closing course have a <b>fender-bender</b>: both freeze, then
+    resume on staggered holds — they must collide, not ghost (<code>cars_crash_and_stop_instead_of_ghosting</code>).</p>
+
+  <h2>Junctions</h2>
+  <p>Junctions are where an agent sim earns or loses its credibility, and most of the city's hardest bugs lived
+    here. The rules that stuck, in the order they were learned:</p>
+  <ul>
+    <li><b>Stop lines that read as obeyed</b> (ADR-0063): the line sits back by the junction box radius plus the
+      zebra band plus half the car, so a car holding at red stands short of the crosswalk, not in the middle of it.
+      Signals gained an <b>all-red</b> clearance so the box drains before cross traffic goes. ADR-0063 set green 12 s and all-red 2.5 s; the code now defaults to green 10 s, yellow 2 s, all-red 1.5 s and a walk phase of 8 s, because longer cycles queued more cars per red than small blocks hold (<code>SignalController::build</code>).</li>
+    <li><b>Don't block the box</b>: no car crosses its line while a crossing car is inside; a turn waits for
+      oncoming traffic, with agent order breaking the tie between two stopped opposing turners.</li>
+    <li><b>Knots and rings</b> (ADR-0066): curvy generated crossings planarised into several nodes joined by
+      car-length stubs, each node's box swallowing its neighbours' stop lines — a circular wait. Junction nodes
+      within 7 m now merge, box radii are capped at 60% of the shortest arm, and a <b>gridlock clock</b> lets a car
+      pinned 6–12 s stop yielding to <i>stalled</i> traffic and creep at 0.7 m/s. Worst all-stopped streak:
+      328 s → 9 s.</li>
+    <li><b>Think in route metres, not links.</b> Metro's graph cuts streets into ~4 m links, so any rule written as
+      "the current link" silently meant "4 m". Stop lines, signals and yields are found by
+      <code>junctionAhead</code> along the route; car-following chains 60 m.</li>
+    <li><b>Promotion is a pile-up source.</b> A far car drives blind, so handing it to the full sim at cruise put it
+      0.9 m behind a stopped queue. <code>clearPromotion</code> seats it behind the last body in its corridor at that
+      body's pace, or leaves it far to try again.</li>
+  </ul>
+  <figure class="shot">
+    <img src="img/citysim/bus_ride_junction.webp" alt="View from a seat inside a bus at a junction: a yellow bus, a taxi and a green car meet across the zebra crossing, overlapping">
+    <figcaption>Riding a bus (route 0, seated) through a junction on 2026-10-06. The yellow bus, the cab and the green car have met inside the box — the kind of tangle the box-occupancy rules, the gridlock clock and the fender-bender freeze exist to keep rare and to unwind.</figcaption>
+  </figure>
+  <p>Gates: <code>metro_junctions_stay_clear</code> (level tests; thresholds stuck &lt; 300 car-seconds, overlaps
+    &lt; 800, from about 3,732 and 5,535 before the route-metre fixes) and
+    <code>city_phys_tier_packed_junction_does_not_pile_up</code> (a physics soak).</p>
+
+  <h2>Cars: one car system, two motion owners</h2>
+  <p>ADR-0062 started from Glenn's requirement: "one car system". The player can walk up to <i>any</i> car and drive
+    it, ejecting whoever was inside, and every car drives the same because every car is the same object. Whoever
+    drives speaks only through one seam, a <code>DriverInput {throttle, steer, brake, handBrake}</code>, produced
+    for AI by the pure <code>computeDriverInput</code> in <code>src/engine/ai/driver_agent.h</code>.</p>
+  <p>The first design made <i>every</i> ambient car a Jolt vehicle chasing a kinematic planner "ghost". Three device
+    rounds of jammed junctions later, the ADR records a <b>rethink</b>: two clocks over one car (the planner's and
+    the physics') meant every fix was another reconciliation loop — "the signature of a structural error, not a
+    tuning problem". Pedestrians worked because their body was trivially commandable: one authority. So now there
+    is one motion owner per regime:</p>
+  <div class="diagram">
+    <svg viewBox="0 0 900 230" role="img" aria-label="Two regimes: ambient cars are integrated along their path by the planner, drawn instanced with kinematic proxies; on interaction a car is promoted to a Jolt Vehicle driven through DriverInput by the player or an AgentDriver">
+      <defs><marker id="ar5" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" fill="#6f8fb0"/></marker></defs>
+      <g font-family="system-ui, sans-serif" font-size="13" text-anchor="middle">
+        <text x="200" y="22" fill="#8ec5ff" font-size="12">AMBIENT (every car by default)</text>
+        <text x="680" y="22" fill="#8ec5ff" font-size="12">INTERACTIVE (promotion)</text>
+        <rect x="20" y="36" width="170" height="70" rx="9" fill="#131a24" stroke="#3b82f6"/>
+        <text x="105" y="60" fill="#cfe4ff">CitySim planner</text>
+        <text x="105" y="79" fill="#93a6ba" font-size="12">pos = path(s)</text>
+        <text x="105" y="95" fill="#93a6ba" font-size="12">s += v·dt</text>
+        <rect x="220" y="36" width="190" height="70" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="315" y="60" fill="#cfe4ff">Instanced draw</text>
+        <text x="315" y="79" fill="#93a6ba" font-size="12">+ kinematic box proxy</text>
+        <text x="315" y="95" fill="#93a6ba" font-size="12">(others collide with it)</text>
+        <line x1="190" y1="71" x2="216" y2="71" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar5)"/>
+
+        <rect x="490" y="36" width="170" height="70" rx="9" fill="#131a24" stroke="#2c3d50"/>
+        <text x="575" y="60" fill="#cfe4ff">Player (input)</text>
+        <text x="575" y="79" fill="#93a6ba" font-size="12">or AgentDriver brain</text>
+        <text x="575" y="95" fill="#93a6ba" font-size="12">→ DriverInput</text>
+        <rect x="700" y="36" width="180" height="70" rx="9" fill="#131a24" stroke="#e6c07b"/>
+        <text x="790" y="60" fill="#cfe4ff">Jolt Vehicle</text>
+        <text x="790" y="79" fill="#93a6ba" font-size="12">VehicleSystem,</text>
+        <text x="790" y="95" fill="#93a6ba" font-size="12">same fleet body</text>
+        <line x1="660" y1="71" x2="696" y2="71" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar5)"/>
+
+        <path d="M315,106 L315,160 L575,160 L575,110" fill="none" stroke="#e6c07b" stroke-width="1.6" marker-end="url(#ar5)"/>
+        <text x="445" y="152" fill="#e6c07b" font-size="12">the player presses enter: releaseDriver,</text>
+        <text x="445" y="178" fill="#e6c07b" font-size="12">instance vanishes, a real Vehicle spawns in its place</text>
+        <text x="450" y="214" fill="#93a6ba" font-size="12">Opt-in middle ground: CitySimConfig::physicalCars hands the nearest N cars to Jolt (physics soaks only; default 0)</text>
+      </g>
+    </svg>
+  </div>
+  <p class="cap">"One car system survives where it matters — one component model, one fleet body, one enter flow,
+    one physics API — while motion is owned per regime by the machinery that is good at it" (ADR-0062).</p>
+  <p>The <a href="vehicles.html">vehicles page</a> covers the bodies, the Jolt handling and the driver's seat.</p>
+
+  <h2>Tiers of detail by distance</h2>
+  <p>This is the second centrepiece: how a city of hundreds of thousands costs a few milliseconds. The rule from
+    the measurements (below) is that cost is <b>neighbour sensing</b> in the near tier — position integration is
+    nearly free — so the lever is how many agents are near, never the total. Every distance below is measured from
+    the player (<code>setTierCenter</code>), with hysteresis between the in and out radii so agents on a boundary
+    don't flap.</p>
+
+  <div class="diagram">
+    <svg viewBox="0 0 900 360" role="img" aria-label="Distance bands from the player: physical walker bodies to 140 m, K tier walkers to 280-350 m and cars to 500-620 m, V tier to 1000-1200 m, D beyond; GPU crowd draws far travellers from 60 m for walkers and 120 m for cars out to 1500 and 4000 m">
+      <g font-family="system-ui, sans-serif" font-size="12">
+        <!-- axis: x = 200 + 680*sqrt(d/4000) -->
+        <line x1="200" y1="300" x2="884" y2="300" stroke="#2c3d50" stroke-width="1.4"/>
+        <g fill="#93a6ba" text-anchor="middle" font-size="11">
+          <line x1="200" y1="296" x2="200" y2="306" stroke="#2c3d50"/><text x="200" y="320">0</text>
+          <line x1="301" y1="296" x2="301" y2="306" stroke="#2c3d50"/><text x="301" y="320">140</text>
+          <line x1="342" y1="296" x2="342" y2="306" stroke="#2c3d50"/><text x="342" y="320">280</text>
+          <line x1="440" y1="296" x2="440" y2="306" stroke="#2c3d50"/><text x="440" y="320">500</text>
+          <line x1="540" y1="296" x2="540" y2="306" stroke="#2c3d50"/><text x="540" y="320">1000</text>
+          <line x1="572" y1="296" x2="572" y2="306" stroke="#2c3d50"/><text x="574" y="334">1200</text>
+          <line x1="616" y1="296" x2="616" y2="306" stroke="#2c3d50"/><text x="618" y="320">1500</text>
+          <line x1="880" y1="296" x2="880" y2="306" stroke="#2c3d50"/><text x="872" y="320">4000 m</text>
+        </g>
+        <text x="200" y="350" fill="#64768a" font-size="11">square-root distance scale · default radii, before nearTarget (×0.35–1) and farTarget (×0.2–1) shrink them</text>
+
+        <g text-anchor="end" fill="#cfe4ff">
+          <text x="190" y="34">P · walker bodies</text>
+          <text x="190" y="66">K · walkers</text>
+          <text x="190" y="98">K · cars</text>
+          <text x="190" y="130">V · far, coarse</text>
+          <text x="190" y="162">D · dormant</text>
+          <text x="190" y="206">GPU crowd · walkers</text>
+          <text x="190" y="238">GPU crowd · cars</text>
+        </g>
+        <rect x="200" y="22" width="101" height="18" rx="4" fill="#3b82f6" opacity="0.85"/>
+        <text x="310" y="35" fill="#93a6ba">nearest 200 get a Jolt capsule (out at 1.3×)</text>
+        <rect x="200" y="54" width="142" height="18" rx="4" fill="#e6c07b" opacity="0.85"/>
+        <rect x="342" y="54" width="18" height="18" rx="2" fill="#e6c07b" opacity="0.35"/>
+        <text x="368" y="67" fill="#93a6ba">in at 280, out at 350 · full sim, drawn instanced</text>
+        <rect x="200" y="86" width="240" height="18" rx="4" fill="#e6c07b" opacity="0.85"/>
+        <rect x="440" y="86" width="26" height="18" rx="2" fill="#e6c07b" opacity="0.35"/>
+        <text x="474" y="99" fill="#93a6ba">in at 500, out at 620</text>
+        <rect x="342" y="118" width="230" height="18" rx="4" fill="#8ec5ff" opacity="0.6"/>
+        <text x="580" y="131" fill="#93a6ba">~1 Hz route walk; to D past 1200, back at 1000</text>
+        <rect x="572" y="150" width="312" height="18" rx="4" fill="#64768a" opacity="0.6"/>
+        <text x="590" y="163" fill="#0c1016">not simulated · heap of schedule events</text>
+        <rect x="246" y="194" width="370" height="18" rx="4" fill="#d7b4ff" opacity="0.55"/>
+        <text x="256" y="207" fill="#0c1016">60 – 1500 m</text>
+        <rect x="282" y="226" width="598" height="18" rx="4" fill="#d7b4ff" opacity="0.55"/>
+        <text x="292" y="239" fill="#0c1016">120 – 4000 m · V and D travellers on a trip, placed by crowd.comp</text>
+        <line x1="200" y1="180" x2="884" y2="180" stroke="#1f2a37" stroke-dasharray="3 4"/>
+        <text x="884" y="276" fill="#93a6ba" text-anchor="end" font-size="11">parked cars stay drawn to sceneryRadius 450 m whoever owns them</text>
+      </g>
+    </svg>
+  </div>
+  <p class="cap">The bands, at their default radii (<code>CitySim</code> and <code>CityRenderSystem</code> fields).
+    The upper block is how an agent is <i>simulated</i>; the lower is how a far one is still <i>drawn</i>.</p>
+
+  <table>
+    <tr><th>Tier</th><th>Simulated as</th><th>Drawn as</th><th>Costs</th></tr>
+    <tr><td>P</td><td>K, plus a physical body: a Jolt character capsule for the nearest walkers; cars only when promoted (or <code>physicalCars</code>)</td><td>its own entity, posed limbs</td><td>a fixed budget: <code>maxWalkerBodies</code> 200</td></tr>
+    <tr><td>K</td><td>everything: sensing, memory, FSM, signals, junction rules, fender-benders, seats and sessions</td><td>instanced meshes, lamps, debug rings</td><td>3–30 µs an agent, rising with local density</td></tr>
+    <tr><td>V</td><td>its exact route at a modelled speed, once a second, blind (no sensing, no queues)</td><td>GPU crowd stand-in (or a CPU band where compute is missing)</td><td>~0.3 µs an agent</td></tr>
+    <tr><td>D</td><td>nothing; a heap event at its next departure, arrival, or 4 s waypoint while travelling</td><td>GPU crowd while on a trip; indoors otherwise</td><td>a heap pop per event, budget 400 a tick</td></tr>
+  </table>
+  <p>Per-agent costs are from the scale bench (<code>tests/test_sim_scale.cpp</code>, 2026-09-16: 3.0 → 30.7 µs per
+    near agent as density climbs; far ~0.3 µs). The pass that moves agents between tiers is short enough to read
+    whole; this excerpt shows the adaptive ring and the V→K promotion:</p>
+  <div class="code">
+    <div class="hd"><span>CitySim::tierPass: the ring adapts, and promotion catches up first</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/apps/citysim/city_sim.cpp#L7864-L7972">src/apps/citysim/city_sim.cpp</a></div>
+<pre><span class="t">void</span> CitySim::tierPass(<span class="t">Real</span> hoursPerSecond) {
+    <span class="k">if</span> (!tieringEnabled || !haveTierCenter_) <span class="k">return</span>;   <span class="c">// no player: all K</span>
+    <span class="k">const</span> <span class="t">Vec2</span> c = tierCenter_;
+    <span class="c">// the near target: ease the ring in when it holds too many, back out when too few (slowly: no pumping)</span>
+    <span class="k">if</span> (nearTarget &gt; <span class="n">0</span>) {
+        <span class="k">const</span> <span class="t">Real</span> k = <span class="k">static_cast</span>&lt;<span class="t">Real</span>&gt;(kIdx_.size());
+        <span class="k">if</span> (k &gt; nearTarget * <span class="n">1.15</span>) nearScale_ = std::max(<span class="t">Real</span>(<span class="n">0.35</span>), nearScale_ * <span class="n">0.985</span>);
+        <span class="k">else if</span> (k &lt; nearTarget * <span class="n">0.85</span>) nearScale_ = std::min(<span class="t">Real</span>(<span class="n">1.0</span>), nearScale_ * <span class="n">1.01</span>);
+    } <span class="k">else</span> {
+        nearScale_ = <span class="n">1.0</span>;
+    }
+    <span class="c">// ... the same for farTarget; K -&gt; V past the demote radius; V -&gt; D; D -&gt; V on approach</span>
+    <span class="k">const</span> <span class="t">Real</span> reach = std::max(carPromoteRadius, pedPromoteRadius) * ns;
+    <span class="c">// (V agents only, at their positions as of this tick's re-hash -- grid_'s too; a woken one was placed on waking)</span>
+    vGrid_.query(c, reach + <span class="n">4.0</span>, tierScratch_);
+    <span class="k">for</span> (<span class="t">int</span> idx : tierScratch_) {
+        <span class="t">Agent</span>&amp; a = agents_[<span class="k">static_cast</span>&lt;std::<span class="t">size_t</span>&gt;(idx)];
+        <span class="k">if</span> (a.tier != Agent::Tier::V) <span class="k">continue</span>;
+        <span class="k">const</span> <span class="t">Real</span> pr = (a.mode == Agent::Mode::Driver ? carPromoteRadius : pedPromoteRadius) * ns;
+        <span class="k">const</span> <span class="t">Real</span> dx = a.pos.x - c.x, dy = a.pos.y - c.y;
+        <span class="k">if</span> (dx * dx + dy * dy &gt;= pr * pr) <span class="k">continue</span>;
+        <span class="c">// Catch the V state up to NOW, then hand it to K exactly where the
+        // catch-up left it: the promotion pose IS the lane pose — no teleport,
+        // no snap. Render + kinematic proxy pick it up on this step's bake.</span>
+        tickV(idx, hoursPerSecond);
+        <span class="k">if</span> (!clearPromotion(idx)) <span class="k">continue</span>;   <span class="c">// no room behind: stays far, retries</span>
+        setTier(idx, Agent::Tier::K);
+        grid_.place(idx, a.pos);
+        ++promotions_;
+    }</pre>
+  </div>
+  <p>Some agents never go dormant: anyone driven by the player or tethered to a body, anyone <b>pinned</b> (being
+    followed: "I'd definitely want it so I could follow someone around the city"), anyone <b>remembered</b> (near
+    you in the last 10 minutes, so turning around doesn't make them vanish), and every bus and bus rider — freezing
+    buses out past the bubble once stranded every rider waiting along a loop.</p>
+
+  <h3>Dormant agents keep their day</h3>
+  <p>A D agent costs nothing per tick, but the city it belongs to keeps time. Each dormant agent has one entry in a
+    min-heap keyed on the game clock: its next departure or arrival (from its schedule, its evening plan, or noon,
+    when tonight's plan is drawn), or — while travelling — a waypoint every 4 s (<code>kDormantWaypointSeconds</code>,
+    ADR-0150) so through traffic is where it should be when it wakes. Each tick pops what is due:</p>
+  <div class="code">
+    <div class="hd"><span>CitySim::runDormantEvents (excerpt)</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/apps/citysim/city_sim.cpp#L2259-L2295">src/apps/citysim/city_sim.cpp</a></div>
+<pre><span class="t">void</span> CitySim::runDormantEvents() {
+    <span class="k">static const bool</span> off = std::getenv(<span class="s">"RT_NO_DORMANT_EVENTS"</span>) != <span class="k">nullptr</span>;   <span class="c">// A/B: sleepers frozen, as before</span>
+    <span class="k">if</span> (off) <span class="k">return</span>;
+    <span class="c">// ...</span>
+    <span class="t">int</span> budget = <span class="n">400</span>;   <span class="c">// a backlog (a long pause, a clock jump) spreads over ticks instead of a hitch</span>
+    <span class="k">while</span> (!dormantHeap_.empty() &amp;&amp; budget &gt; <span class="n">0</span> &amp;&amp; dormantHeap_.top().at &lt;= clockTotalHours_) {
+        <span class="k">const</span> <span class="t">DormantEvent</span> ev = dormantHeap_.top();
+        dormantHeap_.pop();
+        <span class="k">const</span> std::<span class="t">size_t</span> i = <span class="k">static_cast</span>&lt;std::<span class="t">size_t</span>&gt;(ev.agent);
+        <span class="k">if</span> (i &gt;= agents_.size() || i &gt;= dormantEventAt_.size() || dormantEventAt_[i] != ev.at) <span class="k">continue</span>;   <span class="c">// stale</span>
+        <span class="t">Agent</span>&amp; a = agents_[i];
+        <span class="k">if</span> (a.tier != Agent::Tier::D) { dormantEventAt_[i] = -<span class="n">1.0</span>; <span class="k">continue</span>; }
+        --budget;
+        <span class="c">// ... a waypoint on the way: dormantGlide along the route, re-push, continue</span>
+        placeFromSchedule(ev.agent);
+        a.vLastTick = simSeconds_;   <span class="c">// its pose is of now (the crowd's t0, a wake's resume)</span>
+        grid_.place(ev.agent, a.pos);
+        dGrid_.place(ev.agent, a.pos);
+        crowdChanged(ev.agent);
+        ++dormantEventsRun_;
+        scheduleDormantEvent(ev.agent);
+    }
+}</pre>
+  </div>
+  <p>Stale entries are skipped by comparing the event's time with the agent's current one, rather than deleting
+    from the heap. When the player comes near, <code>wakeDormant</code> rebuilds the agent from
+    <code>scheduleSnapshot</code> (at work, at home, on the way, at tonight's venue...) and hands it to V — never
+    straight to K, because waking is an approximation and V is the tier whose job is being approximate. A dormant
+    agent mid-trip instead resumes where the clock says it is: where the GPU crowd has been drawing it.</p>
+
+  <h3>The GPU crowd</h3>
+  <p>Far agents still need to be <i>seen</i>. <code>shaders/vulkan/crowd.comp</code> runs one invocation per far
+    traveller (V or D, on a trip). Where it is now is a pure function of the clock: its distance at
+    <code>t0</code> plus speed times the time since, found on its route by binary search over running distances.
+    The shader culls by distance and the view planes and appends an instance to its kind's indirect draw with an
+    atomic. The CPU never touches a far person per frame; it only rewrites a 32-byte record when a far trip changes
+    (<code>CitySim::takeCrowdChanges</code>).</p>
+  <div class="code">
+    <div class="hd"><span>crowd.comp: a far traveller is a route, a distance and a clock</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/shaders/vulkan/crowd.comp#L10-L19">shaders/vulkan/crowd.comp</a></div>
+<pre><span class="k">struct</span> <span class="t">Agent</span> {
+    <span class="t">uint</span> routeOff;   <span class="c">// first entry in Routes</span>
+    <span class="t">uint</span> routeLen;   <span class="c">// entries</span>
+    <span class="t">float</span> dist0;     <span class="c">// metres along the route (from its first entry's link start) at t0</span>
+    <span class="t">float</span> t0;        <span class="c">// sim seconds</span>
+    <span class="t">float</span> speed;     <span class="c">// m/s</span>
+    <span class="t">float</span> side;      <span class="c">// metres off the link's centreline, to its right (x = dir.y, z = -dir.x)</span>
+    <span class="t">uint</span> kind;       <span class="c">// which mesh / material (Kinds, Cmds)</span>
+    <span class="t">uint</span> live;
+};</pre>
+  </div>
+  <p>Stand-ins are not drawn closer than 120 m (cars) or 60 m (walkers): up close is the full sim's job, and a far
+    car waiting on promotion once drew as a box in the lane at 10 m. <code>RT_NO_GPU_CROWD=1</code> turns it off;
+    on renderers without it (<code>supportsGpuCrowd()</code> false: Metal, WebGPU), a CPU band draws far agents
+    instead.</p>
+
+  <figure class="shot">
+    <img src="img/citysim/street_from_above.webp" alt="Looking down a downtown street from a paraglider: a junction with zebra crossings, moving and parked cars, a bus at a stop, pedestrians on the pavements">
+    <figcaption>Saltwood from a paraglider: the near tier at work — traffic on both carriageways, cars in parking bays, a bus at its stop (the HUD: "line 6 bus at the stop now"), walkers on the pavements.</figcaption>
+  </figure>
+
+  <h2>Scale: what was measured</h2>
+  <p>The city's scale history is a sequence of measurements, each one overturning an assumption.</p>
+  <table>
+    <tr><th>When</th><th>Finding</th><th>Source</th></tr>
+    <tr><td>2026-09-16</td><td>Tiering is worth ~9× at 4,000 agents (14.02 → 1.64 ms a tick). 50k tiered costs 192.9 ms: 12.5× the agents of 4k, 122× the CPU — near-tier sensing, not motion. The real ceiling then was draw calls: Vulkan looped one draw per instance.</td><td><code>test_sim_scale.cpp</code> bench</td></tr>
+    <tr><td>ADR-0101</td><td>metro's hitches were the sim: one agent's wander trip running 1,500–5,000 failed A* searches (up to 1 s). A reachability flood + U-turn pricing fixed it; frame p99 34.5 → 19.5 ms. A cap on the scan was tried and <b>rejected</b> (cars flipped lanes).</td><td>ADR-0101</td></tr>
+    <tr><td>2026-10-05</td><td>100k: the tick walked all agents a dozen times though 93% of a 100k city is dormant. Every pass now walks only the K and V lists, and the wake and promote checks ask one-tier grids: tick p50 at 100k 13.79 → 3.30 ms, identical results.</td><td>commits <code>f0d8a959</code>, <code>d60ef923</code></td></tr>
+    <tr><td>2026-10-06</td><td>309k: an adaptive near ring (<code>RT_NEAR_TARGET</code>) holds ~1,300 K agents; city 9.8 → 4.8 ms a step. Placement threaded on the JobSystem: 201 s → 27 s, identical (<code>RT_POPULATION_VERIFY</code>).</td><td><code>7a78e4d8</code>, <code>38e45234</code></td></tr>
+    <tr><td>2026-10-06</td><td><b>515,191 agents</b>: an adaptive far ring too (<code>RT_FAR_TARGET</code>) — at 5× density the 1.2 km circle held ~105,000 V agents, an 11 ms step. Frame median 20.6 ms (~48 fps).</td><td><code>31356bad</code></td></tr>
+    <tr><td>ADR-0150</td><td>"Empty streets": 6–11 cars moving near downtown at 17:30. Floor-area homes, through traffic for sleepers, denser cars: 58–70 moving, 270–400 people outdoors.</td><td>ADR-0150</td></tr>
+    <tr><td>ADR-0152</td><td>A tower's indoor residents sat in the walkers' neighbour grid: city step 112 → 11–14 ms by giving the street walkers and near cars grids of their own.</td><td>ADR-0152</td></tr>
+  </table>
+  <div class="note history"><p><b>A compute shader, rejected and then built.</b> ADR-0063 (agent cognition)
+    rejected compute for agent <i>decisions</i>: readback latency, float nondeterminism breaking replayable sims,
+    and lost debuggability, worth it "only past ~10k homogeneous agents, which is not this game". The GPU crowd
+    of October respects that line exactly: it decides nothing. It only places far stand-ins from a route and a
+    clock; every decision stays on the CPU, deterministic.</p></div>
+
+  <h2>Transit: buses, cabs and trains</h2>
+  <p>A bus is an agent with a one-state table ("drive the loop, for ever") and a <code>BusNetwork</code>
+    (<code>city_bus.h</code>) of derived loops: farthest-point hubs, legs A*'d street-only with a reuse price so
+    routes spread, stops 180–300 m apart, and every loop given a reverse <b>twin</b> so buses run both ways. The
+    metric that mattered was not distance coverage (94% within 220 m hid the problem) but the share of streets a bus
+    drives: 28% → 58%. Buses dwell 10 s plus 3 s a rider; with a depot they have a service day (05:30–23:30) and
+    sleep in their bays overnight.</p>
+  <p>Riders choose with <code>planTrip</code>: door-to-door <i>time</i> (walk, half the headway as the wait, the ride
+    round the loop, one transfer within 100 m), taken only if it beats walking by max(60 s, 15%). Under the old
+    walk-only rule 58% of accepted trips were slower than walking. Between towns there is no walk to beat
+    (<code>walkable=false</code>); that one change took island bus commuters from 34 to 602 of 948. Cabs are
+    drivers with a taxi table matched by <code>Dispatch</code>; trains are a separate <code>RailSim</code> whose
+    riders (ADR-0156) walk to platforms the same way. The player rides a bus in the bus's own frame, placed
+    through its drawn matrix.</p>
+
+  <h2>Possession: every drawn agent is two objects</h2>
+  <p>Possession lets a director — a script, a model, the player — run one agent. The control channel
+    (ADR-0078/0079) takes verbs like <code>possess</code>, <code>walk_to</code>, <code>direct on</code>,
+    <code>agent?</code> and <code>release</code>; <code>tools/citywalk.py</code> drives them. Building it turned up
+    the fact anyone working here needs first (ADR-0091 amendment):</p>
+  <div class="diagram">
+    <svg viewBox="0 0 900 200" role="img" aria-label="The ghost and the body: the planner ghost in CitySim and the physical capsule in CityWalkerSystem; the body position feeds back as the ghost's tether anchor with a 5 m lead; if the ghost leads by more, advance is skipped">
+      <defs><marker id="ar6" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" fill="#6f8fb0"/></marker></defs>
+      <g font-family="system-ui, sans-serif" font-size="13" text-anchor="middle">
+        <rect x="40" y="40" width="250" height="86" rx="9" fill="#131a24" stroke="#3b82f6"/>
+        <text x="165" y="64" fill="#cfe4ff">Planner ghost</text>
+        <text x="165" y="84" fill="#93a6ba" font-size="12">CitySim::Agent — route, plan,</text>
+        <text x="165" y="101" fill="#93a6ba" font-size="12">advance() each tick</text>
+        <rect x="610" y="40" width="250" height="86" rx="9" fill="#131a24" stroke="#e6c07b"/>
+        <text x="735" y="64" fill="#cfe4ff">Physical body</text>
+        <text x="735" y="84" fill="#93a6ba" font-size="12">Jolt capsule (CityWalkerSystem)</text>
+        <text x="735" y="101" fill="#93a6ba" font-size="12">or a car's chassis</text>
+        <line x1="290" y1="66" x2="606" y2="66" stroke="#6f8fb0" stroke-width="1.6" marker-end="url(#ar6)"/>
+        <text x="448" y="58" fill="#93a6ba" font-size="12">steers toward the ghost</text>
+        <line x1="610" y1="104" x2="294" y2="104" stroke="#e6c07b" stroke-width="1.6" marker-end="url(#ar6)"/>
+        <text x="448" y="122" fill="#e6c07b" font-size="12">setAgentTether(pos, 5 m) every step</text>
+        <text x="450" y="160" fill="#cfe4ff" font-size="12">Ghost more than 5 m ahead of its body → the stepper skips advance(): speed 0, state Waiting, valid route.</text>
+        <text x="450" y="182" fill="#93a6ba" font-size="12">Escape: after 4 s of the gap not CLOSING, the body is moved to the plan. A body that is dropped drops its leash.</text>
+      </g>
+    </svg>
+  </div>
+  <p class="cap">"A director that moves the plan without moving the body has not moved the agent" (ADR-0091).</p>
+  <div class="code">
+    <div class="hd"><span>stepTick: the plan waits for its body</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/apps/citysim/city_sim.cpp#L7207-L7219">src/apps/citysim/city_sim.cpp</a></div>
+<pre>        <span class="c">// Tethered ghost too far from its physical car: WAIT for it. The plan can
+        // never outrun the physics — a car knocked back, climbing, or slow off the
+        // line finds its ghost holding just ahead instead of gone (ADR-0062).</span>
+        <span class="k">if</span> (a.moving &amp;&amp; a.tethered) {
+            <span class="t">Real</span> dx = a.pos.x - a.tetherAnchor.x, dy = a.pos.y - a.tetherAnchor.y;
+            <span class="k">if</span> (std::sqrt(dx * dx + dy * dy) &gt; a.tetherLead) {
+                a.speed = <span class="n">0</span>;
+                a.state = Agent::State::Waiting;
+                ++tetherHeldThisTick;
+                <span class="k">continue</span>;
+            }
+        }
+        <span class="k">if</span> (a.moving) { advance(a, dt, gaps_[i], minGaps_[i]); advanced[i] = <span class="n">1</span>; advancedSet_.push_back(<span class="k">static_cast</span>&lt;<span class="t">int</span>&gt;(i)); }</pre>
+  </div>
+  <p>The frozen-agent bugs this explained were each "individually reasonable" layers: a destination snapped to an
+    unroutable node, a no-path branch that parked the agent, the goal layer re-planning from the rest node (moving
+    the ghost 27–290 m), and the leash then holding it. <code>sendAgentTo</code> now validates a route before
+    touching the agent. The <code>agent?</code> verb reports <code>stepped</code> (did <code>advance()</code> run),
+    <code>anchorDist</code> and <code>lead</code>, which diagnose a frozen agent in one poll; and <code>direct on</code>
+    holds the goal layer off so the schedule stops fighting the director.</p>
+
+  <h3>The decision service and Laya</h3>
+  <p>ADR-0091 proposed one agent that decides for itself: a decision service consulted only at <i>transitions</i>
+    (minutes apart at a 1:1 clock), offered a menu the engine built from what is legal right now, answering
+    asynchronously with the scripted table as fallback, and logging every <code>(state, menu, choice, latency)</code>
+    as replay trace and training data. A local LLM via Ollama was rejected (measured 18–33 s a call). What exists at
+    <code>47d587f3</code> is the director half: <code>tools/citywalk.py</code> possesses a walker, builds a menu of
+    nearby places from <code>look?</code>, asks a pluggable decider, walks there, and logs. The deciders are a stub
+    (nearest unvisited) and <b>Laya</b>, an open-weights 421M-parameter encoder that answers choice / score / "how
+    likely is this true" questions with a probability per option, run on the CPU at about 450 ms a call so the GPU
+    stays with the renderer:</p>
+  <div class="code">
+    <div class="hd"><span>citywalk.py: the menu goes to Laya as a choice question</span>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/tools/citywalk.py#L291-L309">tools/citywalk.py</a></div>
+<pre>    <span class="k">def</span> decide(state, menu):
+        keys, criteria = [], {}
+        <span class="k">for</span> i, c <span class="k">in</span> enumerate(menu):
+            k = f<span class="s">"{i}_{re.sub(r'[^a-z0-9]+', '_', str(c['what']).lower()).strip('_')}"</span>[:<span class="n">40</span>]
+            keys.append(k)
+            criteria[k] = c[<span class="s">"label"</span>]
+        questions = {
+            <span class="s">"where_next"</span>: {<span class="s">"type"</span>: <span class="s">"choice"</span>,
+                           <span class="s">"instructions"</span>: <span class="s">"Where should this person go next?"</span>,
+                           <span class="s">"criteria"</span>: criteria},
+            <span class="s">"in_a_hurry"</span>: {<span class="s">"type"</span>: <span class="s">"noul"</span>,
+                           <span class="s">"instructions"</span>: <span class="s">"This person is in a hurry."</span>},
+        }
+        t0 = time.time()
+        res = agent.predict(describe(state), questions)
+        ms = (time.time() - t0) * <span class="n">1000</span>
+        ans = res[<span class="s">"answers"</span>][<span class="s">"where_next"</span>]
+        pick = ans.get(<span class="s">"choice"</span>)
+        idx = keys.index(pick) <span class="k">if</span> pick <span class="k">in</span> keys <span class="k">else</span> <span class="n">0</span></pre>
+  </div>
+  <p>Because the engine builds the menu, an out-of-range answer is impossible. In its first live run (2026-09-21)
+    Laya chose a civic building 85 m away, stuck with it across three decisions until it arrived, then picked a
+    park. The in-engine half — a sidecar consulted at goal-table transitions — is not built.</p>
+
+  <h2>How it got here</h2>
+  <table>
+    <tr><th>ADR</th><th>Turn</th></tr>
+    <tr><td>0059</td><td>The road graph kept alive as a NavGraph; A* priced in travel time; a deterministic AgentSim commuting home → work.</td></tr>
+    <tr><td>0060</td><td>The sim becomes an application (<code>src/apps/citysim</code>): perception, signals, rules, and "the player is just an agent whose brain is input".</td></tr>
+    <tr><td>0061</td><td>Reactive agents: vision cone, FSM, steering, instead of snapping along a solved path.</td></tr>
+    <tr><td>0062</td><td>One car system; then the rethink — one motion owner per regime, promotion on interaction.</td></tr>
+    <tr><td>0063</td><td>Sense → remember → predict → decide → act; the agent lab; stop lines, all-red, fender-benders.</td></tr>
+    <tr><td>0064</td><td>The day becomes a GoalTable read from Lua at load, bit-exact with the code it replaced.</td></tr>
+    <tr><td>0066</td><td>Places, doors, stable UIDs, home and job assignment, the citysim static library (<code>citysim → engine_core</code> only), the gridlock fixes.</td></tr>
+    <tr><td>0091</td><td>The decision service sketch; possession finds the ghost and the body.</td></tr>
+    <tr><td>0101</td><td>The hitches were the sim: wander routing, collider tiles, <code>each&lt;&gt;</code>.</td></tr>
+    <tr><td>0147</td><td>A place is open only while someone works there.</td></tr>
+    <tr><td>0150 · 0152</td><td>Busy streets, through traffic, the far ring; walkers in files and grids of their own.</td></tr>
+  </table>
+  <p>The pre-citysim <code>AgentSim</code>/<code>TrafficSystem</code> pair was deleted in ADR-0063's cleanup (−899
+    lines), dead since ADR-0060.</p>
+
+  <h2>Where to look</h2>
+  <ul class="files">
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/apps/citysim/city_sim.h">src/apps/citysim/city_sim.h</a> — <code>Agent</code>, <code>CitySim</code>, tier knobs, every public hook</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/apps/citysim/city_sim.cpp">src/apps/citysim/city_sim.cpp</a> — <code>stepTick</code>, <code>goalThink</code>, <code>advance</code>, <code>tierPass</code>, the dormant heap, <code>assignPlaces</code></li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/apps/citysim/city_goals.h">src/apps/citysim/city_goals.h</a> — GoalTable, actions, targets, events</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/apps/citysim/city_roles.h">src/apps/citysim/city_roles.h</a> — RoleDay, StaffSpec, <code>buildDayTable</code></li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/apps/citysim/activities.h">src/apps/citysim/activities.h</a> — the activity catalog, menus, sessions</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/apps/citysim/places.h">src/apps/citysim/places.h</a> — Place, PlaceMap, door snapping</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/apps/citysim/city_render.h">src/apps/citysim/city_render.h</a> — <code>CityRenderSystem</code>: builds the sim from a level, draws it, feeds the GPU crowd</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/apps/citysim/city_walkers.cpp">src/apps/citysim/city_walkers.cpp</a> — walker bodies, the body budget, the tether escape</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/apps/citysim/city_vehicles.cpp">src/apps/citysim/city_vehicles.cpp</a> — promotion of an ambient car to a Jolt Vehicle</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/apps/citysim/city_bus.h">src/apps/citysim/city_bus.h</a> — BusNetwork; <a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/apps/citysim/city_dispatch.h">city_dispatch.h</a> cabs; <a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/apps/citysim/rail_sim.h">rail_sim.h</a> trains</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/apps/citysim/city_possess.cpp">src/apps/citysim/city_possess.cpp</a> — possession over the control channel</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/ai/">src/engine/ai/</a> — nav_graph, pathfind, perception, agent_memory, commitment, driver_agent, lane_follow, traffic_sense</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/shaders/vulkan/crowd.comp">shaders/vulkan/crowd.comp</a> — the GPU crowd</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/assets/scripts/roles.lua">assets/scripts/roles.lua</a>, <a href="https://github.com/GlennSong/raytracer-clang/blob/main/assets/scripts/activities.lua">activities.lua</a>, <a href="https://github.com/GlennSong/raytracer-clang/blob/main/assets/scripts/agents.lua">agents.lua</a> — the data</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/tools/citywalk.py">tools/citywalk.py</a> — the director and the Laya decider</li>
+  </ul>
+  <p><b>Tests.</b> <code>test_city_sim</code>, <code>test_city_goals</code> (tables, parity, staffing, the catalog
+    rules), <code>test_agent_goals</code> (the Lua matches the C++), <code>test_agent_memory</code>,
+    <code>test_city_flow</code> (crashes, files of walkers), <code>test_tier_v</code> (tiers, waking mid-trip),
+    <code>test_city_phys_tier</code>, <code>test_city_ride</code>, <code>test_city_bus</code>,
+    <code>test_city_possess</code>, <code>test_sim_scale</code> (the bench, print-only under
+    <code>RT_SIM_SCALE=1</code>), and the level gates in <code>test_levels_playable.cpp</code>
+    (<code>metro_junctions_stay_clear</code>, <code>metro_bus_network_serves_the_city</code>,
+    <code>metro_day_census_prints</code>).</p>
+  <p><b>Labs.</b> <code>assets/levels/agent_lab.json</code>: one driver and one walker on a theta circuit with the
+    debug rings on, wandering for ever. In the viewer, <kbd>J</kbd> toggles the agent rings, <kbd>K</kbd> spectates
+    (<kbd>[</kbd> <kbd>]</kbd> cycle agents).</p>
+  <p><b>Switches.</b> Scale: <code>RT_MAX_AMBIENT</code>, <code>RT_DENSITY_SCALE</code>, <code>RT_CARS_SCALE</code>,
+    <code>RT_NEAR_TARGET</code>, <code>RT_FAR_TARGET</code>. Drawing: <code>RT_NO_GPU_CROWD</code>,
+    <code>RT_CROWD_DEBUG</code>, <code>RT_NO_FAR_BAND</code>. A/B the old behaviour: <code>RT_NO_DORMANT_EVENTS</code>,
+    <code>RT_ONE_FILE</code>, <code>RT_SOLVER_REQUERY</code>, <code>RT_SEAT_AT_ZERO</code>,
+    <code>RT_NO_FOOTPATHS</code>. Diagnostics: <code>RT_TRACE_AGENT=&lt;id&gt;</code>, <code>RT_TRAFFIC_DEBUG</code>,
+    <code>RT_DUMP_STATS</code>, <code>RT_CENSUS=1</code> (with <code>RT_CENSUS_LEVEL</code>,
+    <code>RT_CENSUS_HOUR</code>), <code>RT_POPULATION_VERIFY</code>. Channel verbs: <code>agent?</code>,
+    <code>traffic?</code>, <code>activities?</code>, <code>depots?</code>, <code>who?</code>.</p>
+
+  <footer>Code excerpts from commit <code>47d587f3</code> (2026-10-26). Drawn from ADR-0059, 0060, 0061, 0062,
+    0063, 0064, 0066 (The Living City), 0078, 0079, 0091, 0101, 0147, 0150, 0152, and commits 92308af3, 7a78e4d8,
+    31356bad, 38e45234.</footer>
+</div>
+</body>
+</html>
