@@ -32,16 +32,16 @@
   <div class="nav"><a href="index.html">← How the engine works</a> · <a href="spine.html">the spine</a> · <a href="../index.html">scenes</a></div>
   <h1>Control verbs</h1>
   <p class="lede">A running viewer listens on a local socket, and anything that can write a line of text can drive
-    it: a probe script, Claude through the MCP server, or you with <code>nc</code>. These are all 85 things
+    it: a probe script, Claude through the MCP server, or you with <code>nc</code>. These are all 88 things
     it can be told, straight from the engine's command table, where every verb is registered once with its usage
     and what it does.</p>
 
   <div class="tally">
-    <div><b>85</b><span>verbs in all</span></div>
-    <div><b>38</b><span>questions (ending in <code>?</code>)</span></div>
+    <div><b>88</b><span>verbs in all</span></div>
+    <div><b>39</b><span>questions (ending in <code>?</code>)</span></div>
     <div><b>32</b><span>act directly</span></div>
-    <div><b>28</b><span>send a typed request</span></div>
-    <div><b>24</b><span>answered by their system</span></div>
+    <div><b>31</b><span>send a typed request</span></div>
+    <div><b>25</b><span>answered by their system</span></div>
   </div>
 
   <h2>How a line gets in</h2>
@@ -90,15 +90,18 @@
   <h2>What a verb looks like</h2>
   <div class="code">
     <div class="hd"><span>The teleport verb: its name, usage and summary, then the handler</span>
-      <a href="https://github.com/GlennSong/raytracer-clang/blob/cc97a2b7a8d2697b5768d06dbf9d73fa100473fe/src/engine/application_commands.cpp#L459-L472">src/engine/application_commands.cpp</a></div>
-<pre>commandTable.add(<span class="s">"teleport"</span>, <span class="s">"teleport &lt;x y z [pitch yaw] | x z&gt;"</span>,
-                 <span class="s">"Move the player (the camera when there is none); `x z` lands on the ground. Read the result with teleport?."</span>,
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/2615f909e49048ef511a5a99098bd56c3ca95317/src/engine/application_commands.cpp#L484-L500">src/engine/application_commands.cpp</a></div>
+<pre>commandTable.add(<span class="s">"teleport"</span>, <span class="s">"teleport &lt;x y z [pitch yaw] | x z&gt; | open"</span>,
+                 <span class="s">"Move the player (the camera when there is none); `x z` lands on the ground. Read the result with teleport?. `open` unfolds the Teleport panel."</span>,
                  [this](const ControlCommand&amp; cmd) -&gt; std::string {
     <span class="c">// Move the PLAYER (the camera when there is none): "x y z [pitch yaw]"</span>
     <span class="c">// or "x z" (on the ground) — the Teleport panel's paste format, so a</span>
     <span class="c">// location goes between the panel, the log and a session by paste.</span>
     <span class="c">// A TeleportRequest for TeleportSystem; `teleport?` (bound by it) answers.</span>
-    if (cmd.args.empty()) return <span class="s">"err usage: teleport &lt;x y z [pitch yaw] | x z&gt;"</span>;
+    if (cmd.args.empty()) return <span class="s">"err usage: teleport &lt;x y z [pitch yaw] | x z&gt; | open"</span>;
+    <span class="c">// `open` unfolds the Debug window's Teleport section (a probe can shoot it).</span>
+    if (cmd.args[0] == <span class="s">"open"</span>)
+        return publishRequest(eventBus, TeleportPanelRequest{}, <span class="s">"teleport open"</span>, <span class="s">"ok teleport panel"</span>);
     std::string pose = cmd.args[0];
     for (size_t i = 1; i &lt; cmd.args.size(); ++i) pose += <span class="s">" "</span> + cmd.args[i];
     TeleportRequest r;
@@ -151,10 +154,10 @@ printf 'teleport?\n' | nc -U /tmp/raytracer-viewer-*.sock</pre>
     <tr id="v-person"><td><code>person first|third|toggle</code></td><td>On-foot camera: first or third person (the V key).</td><td><span class="kind request">typed request</span></td></tr>
     <tr id="v-shot"><td><code>shot &lt;path.png&gt;</code></td><td>Save the next composited frame as a PNG; poll for the file.</td><td><span class="kind direct">acts directly</span></td></tr>
     <tr id="v-shots"><td><code>shots &lt;prefix&gt; &lt;frames&gt;</code></td><td>Save the next N frames as &lt;prefix&gt;_000.png, _001.png, ...</td><td><span class="kind direct">acts directly</span></td></tr>
-    <tr id="v-overlay"><td><code>overlay &lt;hud|ui|debug|lamplights|master|agents|cones|nav|plan&gt; &lt;on|off&gt;</code></td><td>Show or hide an overlay: the HUD, the UI, the debug overlay, street-lamp lights, or a city sim layer.</td><td><span class="kind mailbox">settings mailbox</span></td></tr>
+    <tr id="v-overlay"><td><code>overlay &lt;hud|ui|debug|lamplights|master|agents|cones|nav|plan&gt; &lt;on|off&gt;</code></td><td>Show or hide an overlay: the HUD, the UI, the debug overlay, street-lamp lights, or a city sim layer.</td><td><span class="kind request">typed request</span></td></tr>
     <tr id="v-view"><td><code>view &lt;0-8&gt; [wire 0-2]</code></td><td>Debug view: 0 normal, 1 AO, 2 SSR, 3 depth, 4 normals, 5 shadow, 6 albedo, 7 facing, 8 cascades; plus wireframe.</td><td><span class="kind direct">acts directly</span></td></tr>
   </table>
-  <h2 id="time-sky-and-weather">Time, sky and weather <span class="count">9</span></h2>
+  <h2 id="time-sky-and-weather">Time, sky and weather <span class="count">10</span></h2>
   <p>The sim clock, the day/night cycle, the sun, fog and clouds.</p>
   <table class="verbs">
     <tr><th>Usage</th><th>What it does</th><th>How it gets there today</th></tr>
@@ -165,6 +168,7 @@ printf 'teleport?\n' | nc -U /tmp/raytracer-viewer-*.sock</pre>
     <tr id="v-sun_q"><td><code>sun?</code></td><td>The solar elevation, the active light&#x27;s height and intensity, and whether it is dark.</td><td><span class="kind direct">acts directly</span></td></tr>
     <tr id="v-fog"><td><code>fog &lt;density&gt; [heightFalloff] [r g b]</code></td><td>Tune the level&#x27;s fog live (nothing is saved).</td><td><span class="kind direct">acts directly</span></td></tr>
     <tr id="v-fog_q"><td><code>fog?</code></td><td>The fog&#x27;s settings now.</td><td><span class="kind direct">acts directly</span></td></tr>
+    <tr id="v-clouds"><td><code>clouds [on|off] [coverage &lt;0-1&gt;] [density &lt;v&gt;] [scale &lt;v&gt;] [wind &lt;m/s&gt;]</code></td><td>Set the cloud deck live: on or off, coverage, density, scale, wind. Kept with the deck&#x27;s settings.</td><td><span class="kind request">typed request</span></td></tr>
     <tr id="v-weather"><td><code>weather clear|fair|overcast|storm|auto|off [now]</code></td><td>Set the weather (eased in, or `now` to snap); auto walks between states; off hands the clouds back to the panel.</td><td><span class="kind request">typed request</span></td></tr>
     <tr id="v-weather_q"><td><code>weather?</code></td><td>The weather state, and whether it is on auto.</td><td><span class="kind answered">a system answers</span></td></tr>
   </table>
@@ -172,7 +176,7 @@ printf 'teleport?\n' | nc -U /tmp/raytracer-viewer-*.sock</pre>
   <p>Moving, pressing keys, getting into things.</p>
   <table class="verbs">
     <tr><th>Usage</th><th>What it does</th><th>How it gets there today</th></tr>
-    <tr id="v-teleport"><td><code>teleport &lt;x y z [pitch yaw] | x z&gt;</code></td><td>Move the player (the camera when there is none); `x z` lands on the ground. Read the result with teleport?.</td><td><span class="kind request">typed request</span></td></tr>
+    <tr id="v-teleport"><td><code>teleport &lt;x y z [pitch yaw] | x z&gt; | open</code></td><td>Move the player (the camera when there is none); `x z` lands on the ground. Read the result with teleport?. `open` unfolds the Teleport panel.</td><td><span class="kind request">typed request</span></td></tr>
     <tr id="v-teleport_q"><td><code>teleport?</code></td><td>Where the last teleport landed, or (pending).</td><td><span class="kind answered">a system answers</span></td></tr>
     <tr id="v-tap"><td><code>tap &lt;KeyName&gt;</code></td><td>Press and release a key through the real input path (e.g. tap F).</td><td><span class="kind request">typed request</span></td></tr>
     <tr id="v-hold"><td><code>hold &lt;KeyName|MouseLeft&gt; &lt;seconds&gt;</code></td><td>Hold a key down through the real input path for that much sim time.</td><td><span class="kind request">typed request</span></td></tr>
@@ -205,7 +209,7 @@ printf 'teleport?\n' | nc -U /tmp/raytracer-viewer-*.sock</pre>
     <tr id="v-possess_stop"><td><code>possess_stop</code></td><td>Stop the possessed agent where it is.</td><td><span class="kind request">typed request</span></td></tr>
     <tr id="v-release"><td><code>release</code></td><td>Hand the possessed agent back to the city sim.</td><td><span class="kind request">typed request</span></td></tr>
   </table>
-  <h2 id="asking-the-city">Asking the city <span class="count">17</span></h2>
+  <h2 id="asking-the-city">Asking the city <span class="count">19</span></h2>
   <p>The living city&#x27;s counts and diagnostics, and finding things in it.</p>
   <table class="verbs">
     <tr><th>Usage</th><th>What it does</th><th>How it gets there today</th></tr>
@@ -220,6 +224,8 @@ printf 'teleport?\n' | nc -U /tmp/raytracer-viewer-*.sock</pre>
     <tr id="v-depots_q"><td><code>depots?</code></td><td>Buses: on route, heading in, off duty and parked in depot bays, the nearest bus and bay, and any stalled heading in.</td><td><span class="kind answered">a system answers</span></td></tr>
     <tr id="v-trains_q"><td><code>trains?</code></td><td>The trains: lines, stops, every train&#x27;s place, speed and doors, and whether you are aboard.</td><td><span class="kind answered">a system answers</span></td></tr>
     <tr id="v-opensigns_q"><td><code>opensigns?</code></td><td>Shops&#x27; OPEN signs: lit, closed for the night, open with nobody on shift, and the nearest lit one.</td><td><span class="kind answered">a system answers</span></td></tr>
+    <tr id="v-jitter"><td><code>jitter [agent id|-1] [frames]</code></td><td>Record how evenly a vehicle is drawn for some frames (default 300): -1 the bus or cab you ride, else the nearest moving one. jitter? answers.</td><td><span class="kind request">typed request</span></td></tr>
+    <tr id="v-jitter_q"><td><code>jitter?</code></td><td>The jitter measurement: which vehicle is being recorded, then how evenly it and the camera moved.</td><td><span class="kind answered">a system answers</span></td></tr>
     <tr id="v-who_q"><td><code>who? [agent id]</code></td><td>With an id, ask about any agent; alone, read the answer (refreshed every step).</td><td><span class="kind answered">a system answers</span></td></tr>
     <tr id="v-pin"><td><code>pin &lt;agent id&gt;</code></td><td>Follow an agent: it stays in the full sim however far it goes.</td><td><span class="kind request">typed request</span></td></tr>
     <tr id="v-unpin"><td><code>unpin &lt;agent id&gt;</code></td><td>Stop following an agent.</td><td><span class="kind request">typed request</span></td></tr>
@@ -272,7 +278,7 @@ printf 'teleport?\n' | nc -U /tmp/raytracer-viewer-*.sock</pre>
     <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/tests/test_control_channel.cpp">tests/test_control_channel.cpp</a> — the table's tests, and the check that this list matches it</li>
   </ul>
 
-  <footer>Generated by <code>tools/commands_page.py</code> from the command table at commit <code>cc97a2b7</code>.
+  <footer>Generated by <code>tools/commands_page.py</code> from the command table at commit <code>2615f909</code>.
     Drawn from ADR-0078 and ADR-0253 (<a href="https://github.com/GlennSong/raytracer-clang/blob/main/docs/decisions.md">docs/decisions.md</a>).</footer>
 </div>
 </body>
