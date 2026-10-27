@@ -9,8 +9,9 @@ The list comes from web/engine/commands.json, which a test holds equal to the co
 
 --pin names the commit the code excerpt and the "how it gets there" column are read from (default HEAD).
 How each verb reaches its system is read from its handler in src/engine/application_commands.cpp:
-a verb that writes a Settings key is a mailbox, one that only returns a Settings string reads an answer
-board, anything else acts directly. Those counts are the progress of ADR-0253's retirement of the string bus.
+a verb that publishes a typed request sends it to the system that does the job, a question with the engine's
+`unanswered` default is answered by the system that owns it, one that still writes a Settings key is a mailbox
+and one that returns a Settings string an answer board; anything else acts directly (ADR-0253).
 """
 import argparse
 import html
@@ -48,6 +49,8 @@ FAMILIES = [
 
 KIND_TEXT = {
     "direct": ("acts directly", "The handler does the work itself: the renderer, the clock, the world."),
+    "request": ("typed request", "The handler publishes a typed request on the EventBus; the system that does the job hears it."),
+    "answered": ("a system answers", "The system that owns the answer binds this question while it runs."),
     "mailbox": ("settings mailbox", "The handler writes a Settings key; a system finds it next frame and clears it."),
     "board": ("answer board", "The handler returns a string a system keeps rewriting into Settings."),
 }
@@ -85,6 +88,10 @@ SETTINGS_VERBS = {"set", "get", "render"}
 
 
 def kind_of(body):
+    if "unanswered(" in body:
+        return "answered"
+    if "publishRequest(" in body or "eventBus.publish(" in body:
+        return "request"
     if re.search(r'settingsStore\.set(String|Double|Bool)\(', body):
         return "mailbox"
     # an answer board: a string some system keeps rewriting (`levelPath` is a real setting, not a board)
@@ -185,6 +192,8 @@ def main():
     .kind {{ display: inline-block; font-size: 12px; padding: 1px 8px; border-radius: 9px; white-space: nowrap;
              border: 1px solid var(--line2); }}
     .kind.direct {{ color: #8fd8c8; border-color: #2f6a5c; }}
+    .kind.request {{ color: #9cc4ff; border-color: #2f4a6a; }}
+    .kind.answered {{ color: #c8b4ff; border-color: #4a3d6a; }}
     .kind.mailbox {{ color: #e6c07b; border-color: #6a5a2f; }}
     .kind.board {{ color: #ff9fb2; border-color: #6a2f3d; }}
     .tally {{ display: flex; gap: 10px; flex-wrap: wrap; margin: 14px 0; }}
@@ -207,12 +216,13 @@ def main():
     <div><b>{len(cmds)}</b><span>verbs in all</span></div>
     <div><b>{questions}</b><span>questions (ending in <code>?</code>)</span></div>
     <div><b>{counts["direct"]}</b><span>act directly</span></div>
-    <div><b>{counts["mailbox"] + counts["board"]}</b><span>still go through the Settings string bus</span></div>
+    <div><b>{counts["request"]}</b><span>send a typed request</span></div>
+    <div><b>{counts["answered"]}</b><span>answered by their system</span></div>
   </div>
 
   <h2>How a line gets in</h2>
   <div class="diagram">
-    <svg viewBox="0 0 860 210" role="img" aria-label="A client writes a line to the socket; the socket thread buffers it; on the main thread the front door parses it and the command table runs the verb's handler, which acts directly or leaves a Settings key a system reads next frame; the reply goes back as one line">
+    <svg viewBox="0 0 860 210" role="img" aria-label="A client writes a line to the socket; the socket thread buffers it; on the main thread the front door parses it and the command table runs the verb's handler, which acts directly or publishes a typed request the system that does the job hears; the reply goes back as one line">
       <defs><marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
         <path d="M0,0 L10,5 L0,10 z" fill="#6f8fb0"/></marker></defs>
       <g font-family="system-ui, sans-serif" font-size="13" text-anchor="middle">
@@ -242,9 +252,9 @@ def main():
         <rect x="430" y="130" width="190" height="60" rx="9" fill="#131a24" stroke="#2f6a5c"/>
         <text x="525" y="156" fill="#8fd8c8">acts directly</text>
         <text x="525" y="174" fill="#93a6ba" font-size="12">renderer · clock · world</text>
-        <rect x="640" y="130" width="210" height="60" rx="9" fill="#131a24" stroke="#6a5a2f"/>
-        <text x="745" y="156" fill="#e6c07b">a Settings key</text>
-        <text x="745" y="174" fill="#93a6ba" font-size="12">a system reads it next frame</text>
+        <rect x="640" y="130" width="210" height="60" rx="9" fill="#131a24" stroke="#2f4a6a"/>
+        <text x="745" y="156" fill="#9cc4ff">a typed request</text>
+        <text x="745" y="174" fill="#93a6ba" font-size="12">on the bus, to its system</text>
         <line x1="610" y1="96" x2="560" y2="126" stroke="#6f8fb0" stroke-width="1.4" marker-end="url(#ar)"/>
         <line x1="650" y1="96" x2="710" y2="126" stroke="#6f8fb0" stroke-width="1.4" marker-end="url(#ar)"/>
       </g>
@@ -273,13 +283,15 @@ printf 'teleport?\\n' | nc -U /tmp/raytracer-viewer-*.sock</pre>
     (<a href="{GH}/main/docs/control-channel.md">docs/control-channel.md</a>).</p>
 
   <h2>Where it is going</h2>
-  <p>The last column shows how each verb reaches the system that does the work. Many still go through the
-    <b>Settings string bus</b>: the verb writes a named Settings key (a <span class="kind mailbox">settings mailbox</span>)
-    that a system checks every frame, or reads a string a system keeps rewriting (an <span class="kind board">answer
-    board</span>). ADR-0253 moves those onto typed events and questions a system answers when asked, a family at a
-    time, with the text on the wire unchanged. When that is done every verb will read
-    <span class="kind direct">acts directly</span> or name the event it sends. Next, Lua scripts can add their own
-    verbs, and the MCP server builds its tools from this same list.</p>
+  <p>The last column shows how each verb reaches the system that does the work. Most used to go through the
+    <b>Settings string bus</b>: the verb wrote a named Settings key that a system checked every frame, or read a
+    string a system kept rewriting. ADR-0253 retired it, with the text on the wire unchanged. Now a command
+    <span class="kind direct">acts directly</span> or sends a <span class="kind request">typed request</span> on the
+    EventBus, which the system that does the job hears (with no such system in this state, the verb says so), and a
+    question is <span class="kind answered">answered by its system</span> while that system runs. The same requests
+    are named events: <code>events?</code> lists them, <code>publish</code> sends one, <code>watch</code> streams
+    them as they happen, and Lua scripts can send and hear them too, or add verbs of their own. The MCP server
+    builds its tools from this same list.</p>
 
   <p>Families: {toc}</p>
 
