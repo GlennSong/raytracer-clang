@@ -1,4 +1,5 @@
 #include "plan_scene.h"
+#include "../../../../curve.h"
 #include "../../../level_params.h"   // readTerrainParams: the world's rivers
 
 #include "../roads/lanes/interchange.h"   // ONE ramp generator, shared with the level importer
@@ -91,10 +92,7 @@ bool crossingWithRing(const std::vector<Vec2>& open, const std::vector<Vec2>& ri
 
 std::vector<Vec2> cubic(const Vec2& p0, const Vec2& p1, const Vec2& p2, const Vec2& p3, int n) {
     std::vector<Vec2> out;
-    for (int i = 0; i <= n; ++i) {
-        const Real t = Real(i) / n, u = 1 - t;
-        out.push_back(p0 * (u * u * u) + p1 * (3 * u * u * t) + p2 * (3 * u * t * t) + p3 * (t * t * t));
-    }
+    for (int i = 0; i <= n; ++i) out.push_back(engine::bezier(p0, p1, p2, p3, Real(i) / n));
     return out;
 }
 

@@ -2,6 +2,7 @@
 #define RAYTRACER_CURVE_H
 
 #include "rt_math.h"
+#include <algorithm>
 #include <vector>
 #include <cmath>
 
@@ -11,6 +12,42 @@
 // the canonical form Catmull-Rom (here), cubic Bezier, and keyframes all lower
 // to. Per-consumer services (arc-length, rotation-minimizing frames) sit on top.
 namespace engine {
+
+// The two cubic kernels every curve in the engine evaluates through (#117 item 36). Hermite takes
+// the end values and their tangents (per unit t); Bezier takes four control points. A cubic Bezier
+// is the Hermite with m0 = 3 (p1 - p0), m1 = 3 (p3 - p2). T is anything with + and * double
+// (double, Vec2, Vec3). Write a new curve on these, never a private copy of the basis.
+template <typename T>
+T hermite(const T& p0, const T& m0, const T& p1, const T& m1, double t) {
+    double t2 = t * t, t3 = t2 * t;
+    double h00 = 2 * t3 - 3 * t2 + 1;
+    double h10 = t3 - 2 * t2 + t;
+    double h01 = -2 * t3 + 3 * t2;
+    double h11 = t3 - t2;
+    return p0 * h00 + m0 * h10 + p1 * h01 + m1 * h11;
+}
+
+template <typename T>
+T hermiteDerivative(const T& p0, const T& m0, const T& p1, const T& m1, double t) {
+    double t2 = t * t;
+    double d00 = 6 * t2 - 6 * t;
+    double d10 = 3 * t2 - 4 * t + 1;
+    double d01 = -6 * t2 + 6 * t;
+    double d11 = 3 * t2 - 2 * t;
+    return p0 * d00 + m0 * d10 + p1 * d01 + m1 * d11;
+}
+
+template <typename T>
+T bezier(const T& p0, const T& p1, const T& p2, const T& p3, double t) {
+    double u = 1.0 - t;
+    return p0 * (u * u * u) + p1 * (3 * u * u * t) + p2 * (3 * u * t * t) + p3 * (t * t * t);
+}
+
+template <typename T>
+T bezierDerivative(const T& p0, const T& p1, const T& p2, const T& p3, double t) {
+    double u = 1.0 - t;
+    return (p1 - p0) * (3 * u * u) + (p2 - p1) * (6 * u * t) + (p3 - p2) * (3 * t * t);
+}
 
 // Norm of a curve value, for arc-length. Overloaded per supported value type.
 inline double curveNorm(double v) { return std::abs(v); }
@@ -36,6 +73,13 @@ public:
     // (p[i+1]-p[i-1]) * 0.5 * (1-tension), one-sided at the ends. tension in
     // [0,1] (0 = standard Catmull-Rom, 1 = straight/zero tangents).
     static Spline catmullRom(const std::vector<T>& points, double tension = 0.0);
+
+    // Centripetal Catmull-Rom through `points` (alpha = 0.5: the knot spacing is the square root
+    // of the chord), which keeps cusps and overshoot off unevenly spaced points such as a grid
+    // path's corners. Open: the ends are mirrored phantom points, so the curve leaves each end
+    // heading at its neighbour. Closed: it wraps, and the last knot repeats the first. Each
+    // segment still runs u in [0,1]; the non-uniform knots are folded into the tangents.
+    static Spline centripetal(const std::vector<T>& points, bool closed = false);
 
     // Evaluate at u in [0, segments()] (integer part = segment, fraction =
     // position within it); clamped outside the range.
@@ -100,21 +144,48 @@ Spline<T> Spline<T>::catmullRom(const std::vector<T>& p, double tension) {
 }
 
 template <typename T>
+Spline<T> Spline<T>::centripetal(const std::vector<T>& p, bool closed) {
+    Spline s;
+    const int n = static_cast<int>(p.size());
+    if (n == 0) return s;
+    if (n == 1) { s.knots.push_back({p[0], T{}, T{}}); return s; }
+    // Pad so every knot has a neighbour on each side: P[k] is knot k-1.
+    std::vector<T> P;
+    if (closed) {
+        P.push_back(p[n - 1]);
+        P.insert(P.end(), p.begin(), p.end());
+        P.push_back(p[0]);
+        P.push_back(p[1]);
+    } else {
+        P.push_back(p[0] + (p[0] - p[1]));
+        P.insert(P.end(), p.begin(), p.end());
+        P.push_back(p[n - 1] + (p[n - 1] - p[n - 2]));
+    }
+    std::vector<double> t(P.size(), 0.0);
+    for (std::size_t i = 1; i < P.size(); ++i)
+        t[i] = t[i - 1] + std::max(std::sqrt(curveNorm(P[i] - P[i - 1])), 1e-6);
+    const int knots = closed ? n + 1 : n;
+    s.knots.resize(knots);
+    for (int j = 0; j < knots; ++j) {
+        const int k = j + 1;
+        const double dIn = t[k] - t[k - 1], dOut = t[k + 1] - t[k];
+        // The velocity d/dt of the non-uniform Catmull-Rom at the knot (Barry-Goldman, differentiated).
+        T v = (P[k] - P[k - 1]) * (1.0 / dIn) - (P[k + 1] - P[k - 1]) * (1.0 / (dIn + dOut)) +
+              (P[k + 1] - P[k]) * (1.0 / dOut);
+        s.knots[j].value = P[k];
+        s.knots[j].inTangent = v * dIn;
+        s.knots[j].outTangent = v * dOut;
+    }
+    return s;
+}
+
+template <typename T>
 T Spline<T>::eval(double u) const {
     if (knots.empty()) return T{};
     if (knots.size() == 1) return knots[0].value;
     int i; double t;
     localOf(u, i, t);
-    const T& p0 = knots[i].value;
-    const T& p1 = knots[i + 1].value;
-    const T& m0 = knots[i].outTangent;
-    const T& m1 = knots[i + 1].inTangent;
-    double t2 = t * t, t3 = t2 * t;
-    double h00 = 2 * t3 - 3 * t2 + 1;
-    double h10 = t3 - 2 * t2 + t;
-    double h01 = -2 * t3 + 3 * t2;
-    double h11 = t3 - t2;
-    return p0 * h00 + m0 * h10 + p1 * h01 + m1 * h11;
+    return hermite(knots[i].value, knots[i].outTangent, knots[i + 1].value, knots[i + 1].inTangent, t);
 }
 
 template <typename T>
@@ -122,16 +193,7 @@ T Spline<T>::derivative(double u) const {
     if (knots.size() < 2) return T{};
     int i; double t;
     localOf(u, i, t);
-    const T& p0 = knots[i].value;
-    const T& p1 = knots[i + 1].value;
-    const T& m0 = knots[i].outTangent;
-    const T& m1 = knots[i + 1].inTangent;
-    double t2 = t * t;
-    double d00 = 6 * t2 - 6 * t;
-    double d10 = 3 * t2 - 4 * t + 1;
-    double d01 = -6 * t2 + 6 * t;
-    double d11 = 3 * t2 - 2 * t;
-    return p0 * d00 + m0 * d10 + p1 * d01 + m1 * d11;
+    return hermiteDerivative(knots[i].value, knots[i].outTangent, knots[i + 1].value, knots[i + 1].inTangent, t);
 }
 
 template <typename T>

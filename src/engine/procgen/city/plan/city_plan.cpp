@@ -1,5 +1,6 @@
 #include "city_plan.h"
 #include "plan_scene.h"   // the freeway both sides build: what the plan clears for the scene
+#include "../../../../curve.h"
 #include "land_shape.h"   // a city shaped by its land (world.land.shape)
 #include "../roads/lanes/road_graph_spec.h"   // stations
 #include "../roads/lanes/polyline_ops.h"
@@ -1950,7 +1951,7 @@ CityPlan generatePlan(const Brief& B) {
             const Vec2 p1 = p0 + t0 * k, p2 = p3 - t3 * k;
             std::vector<Vec2> out;
             const int n = std::max(4, static_cast<int>((p3 - p0).length() / 20));
-            for (int i = 0; i < n; ++i) { const Real t = Real(i) / n, u = 1 - t; out.push_back(p0 * (u * u * u) + p1 * (3 * u * u * t) + p2 * (3 * u * t * t) + p3 * (t * t * t)); }
+            for (int i = 0; i < n; ++i) out.push_back(engine::bezier(p0, p1, p2, p3, Real(i) / n));
             return out;
         };
         plan.loop = curve(jA, dA, at(iA), tangent(iA));

@@ -527,12 +527,13 @@
     <span class="c">// ...</span>
 };</pre>
   </div>
-  <p>Its users today are the tree skinner (branch centrelines, swept with rotation-minimizing frames) and the terrain.
-    Roads went further. ADR-0048 proposed one road model with a curve as the source of truth and the graph as a derived
-    view, and prototyped a centripetal Catmull-Rom smoother (<code>smoothCentripetalCatmullRom</code> in
-    <code>terrain_field</code>). ADR-0050 built an editable cubic-Bezier path (<code>EditableCurve</code>) with handle
-    modes and arc-length traversal, shared by the road editor and animation paths. Each of those carries its own cubic
-    evaluation instead of lowering to <code>Spline&lt;T&gt;</code>. That is noted below as a duplicate.</p>
+  <p>Beside the class sit the two cubic kernels everything evaluates through: <code>hermite</code> (two ends and their
+    tangents) and <code>bezier</code> (four control points), with their derivatives. <code>Spline&lt;T&gt;</code> is
+    built on <code>hermite</code>. Its users are the tree skinner (branch centrelines, swept with rotation-minimizing
+    frames), the terrain's range spines and the centripetal smoother <code>smoothCentripetalCatmullRom</code>
+    (ADR-0048), which builds a <code>Spline::centripetal</code>. The road net's edges, the lane connectors, the
+    editable Bezier path (<code>EditableCurve</code>, ADR-0050), the tree's sweeping limbs and the city plan's
+    freeway bends call the kernels directly. Until ADR-0255 five of them carried their own copy of the basis.</p>
 
   <h2>One random stream</h2>
   <p>A seed must always grow the same shape on every machine. ADR-0098 added <code>ProcRng</code>

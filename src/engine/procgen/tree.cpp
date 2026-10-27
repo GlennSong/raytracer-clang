@@ -1251,10 +1251,10 @@ void colonizeCrown(std::vector<SkeletonNode>& nodes, const TreeParams& p, uint32
                 const int steps = std::max(2, static_cast<int>(std::ceil(S / D)));
                 int at = best;
                 for (int k = 1; k <= steps; ++k) {
-                    const double t = static_cast<double>(k) / steps, u = 1.0 - t;
-                    Vec3 q = P0 * (u * u * u) + P1 * (3 * u * u * t) + P2 * (3 * u * t * t) + P3 * (t * t * t);
+                    const double t = static_cast<double>(k) / steps;
+                    Vec3 q = bezier(P0, P1, P2, P3, t);
                     q.y = std::max(q.y, std::min(P0.y, low - 0.25 * (top - low)));   // (a sweeping limb, not one dragging the ground)
-                    const Vec3 dq = (P1 - P0) * (3 * u * u) + (P2 - P1) * (6 * u * t) + (P3 - P2) * (3 * t * t);
+                    const Vec3 dq = bezierDerivative(P0, P1, P2, P3, t);
                     at = addNode(at, q, dq.length() > 1e-9 ? normalize(dq) : h3);
                     // (small fans along its outer reach, every couple of metres, up and out to one side)
                     if (t > 0.45 && t < 0.92 && k % std::max(1, static_cast<int>(2.2 / D)) == 0) {

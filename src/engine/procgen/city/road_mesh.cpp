@@ -1,4 +1,5 @@
 #include "road_mesh.h"
+#include "../../../curve.h"
 #include "road_rules.h"   // DesignRules::maxGrade — the per-class grade table
 #include "road_rules.h"
 
@@ -55,12 +56,6 @@ std::vector<Vec2> curbReturnFillet(const Vec2& corner, const Vec2& dirA, const V
 }
 
 namespace {
-Vec2 hermitePoint(const Vec2& p0, const Vec2& m0, const Vec2& p1, const Vec2& m1, double t) {
-    double t2 = t * t, t3 = t2 * t;
-    double h00 = 2 * t3 - 3 * t2 + 1, h10 = t3 - 2 * t2 + t;
-    double h01 = -2 * t3 + 3 * t2, h11 = t3 - t2;
-    return p0 * h00 + m0 * h10 + p1 * h01 + m1 * h11;
-}
 // The tightest bend along a polyline, as a radius (circumradius of each consecutive
 // triple; +inf for a straight run). Smaller = tighter.
 double minCircumRadius(const std::vector<Vec2>& poly) {
@@ -88,7 +83,7 @@ std::vector<Vec2> fairHermite(const Vec2& p0, const Vec2& m0, const Vec2& p1, co
         poly.reserve(segs + 1);
         for (int s = 0; s <= segs; ++s) {
             double t = static_cast<double>(s) / segs;
-            Vec2 curve = hermitePoint(p0, m0, p1, m1, t);
+            Vec2 curve = hermite(p0, m0, p1, m1, t);
             Vec2 chord = p0 + (p1 - p0) * t;
             poly.push_back(curve * (1.0 - alpha) + chord * alpha);
         }

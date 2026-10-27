@@ -1,5 +1,7 @@
 #include "editable_curve.h"
 
+#include "../curve.h"
+
 #include <algorithm>
 #include <cmath>
 
@@ -45,15 +47,6 @@ void EditableCurve::segmentControls(int s, Vec3& p0, Vec3& p1, Vec3& p2, Vec3& p
     p2 = p3 + effIn(*this, b);
 }
 
-static Vec3 bezier(const Vec3& p0, const Vec3& p1, const Vec3& p2, const Vec3& p3, double u) {
-    double v = 1.0 - u;
-    return p0 * (v * v * v) + p1 * (3 * v * v * u) + p2 * (3 * v * u * u) + p3 * (u * u * u);
-}
-static Vec3 bezierDeriv(const Vec3& p0, const Vec3& p1, const Vec3& p2, const Vec3& p3, double u) {
-    double v = 1.0 - u;
-    return (p1 - p0) * (3 * v * v) + (p2 - p1) * (6 * v * u) + (p3 - p2) * (3 * u * u);
-}
-
 // Map t in [0,1] to a segment index + local parameter.
 static void locate(int nseg, double t, int& seg, double& u) {
     t = std::max(0.0, std::min(1.0, t));
@@ -75,7 +68,7 @@ Vec3 EditableCurve::tangent(double t) const {
     if (nseg <= 0) return Vec3(0, 0, 0);
     int seg; double u; locate(nseg, t, seg, u);
     Vec3 p0, p1, p2, p3; segmentControls(seg, p0, p1, p2, p3);
-    return bezierDeriv(p0, p1, p2, p3, u);
+    return bezierDerivative(p0, p1, p2, p3, u);
 }
 
 std::vector<Vec3> EditableCurve::sample(int perSegment) const {

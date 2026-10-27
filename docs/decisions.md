@@ -12524,3 +12524,39 @@ output changes.
 
 **Alternatives.** (a) Leave the manikin: two sets of knees and proportions to keep in step, the ADR-0245 debt. (b) A
 GPU-skinned body with views: right with animation clips (ADR-0245, later), far more than this needs now.
+
+## ADR-0255 — Two cubic kernels: every curve is a Hermite or a Bezier through curve.h
+
+**Context.** The duplicate-systems sweep (#117, wave 3, item 36). ADR-0031 made `Spline<T>` the curve kernel, but
+seven places still wrote out a cubic basis of their own: the centripetal smoother's Barry-Goldman pyramid
+(terrain_field, ADR-0048), the road net's `hermitePoint` (road_mesh), the lane connectors' Hermite (lane_expand),
+`EditableCurve`'s Bezier and its derivative (ADR-0050), and three more Beziers written inline: the tree's sweeping
+limbs, the plan scene's ramp `cubic` and the city plan's freeway bend.
+
+**Decision.**
+1. **Two kernels in curve.h:** `hermite` / `hermiteDerivative` (end values and tangents) and `bezier` /
+   `bezierDerivative` (four control points), templated over any T with + and * double. `Spline<T>::eval` and
+   `derivative` call `hermite`. A new curve calls a kernel; it never writes the basis out again.
+2. **Centripetal is a Spline constructor.** `Spline<T>::centripetal(points, closed)` folds the non-uniform knots
+   (spacing = sqrt of the chord) into each knot's in and out tangents, so each segment still runs u in [0,1].
+   `smoothCentripetalCatmullRom` keeps its decimation and its sampling and builds one; `catmullRomAt` is deleted.
+   Checked against the deleted pyramid over 400 random open and closed paths: worst difference 1.75e-13 m.
+3. **The other six call the kernels.** Each kept its arithmetic in the kernel's order, so its numbers are unchanged
+   except the lane connector, which now passes its tangent scaled by the chord (`t0 * L`) rather than scaling the
+   basis weight; only authored connectors use it, and no level has any (lanelab's hill_junction does).
+4. **PolyMesh keeps counter-clockwise faces** (the item also proposed flipping it). The kit never hands index order
+   to the renderer: `toParts` winds every triangle to its face's normal with `MeshBuilder::triFacing`, so the
+   engine's clockwise rule holds at the only place a render mesh is made. Counter-clockwise is what its Newell
+   normal, inset bisectors, extrude boundary walk and `signedVolume` are written for; flipping it would touch every
+   one of them and change no output.
+
+**Measured.** river_town rebaked before and after, `rt_bake --sections`: every geometry section byte-identical (only
+the timing report differs), with and without the connector change. Tests: the Bezier kernel equals the Hermite with
+tripled tangents; on collinear uneven points uniform Catmull-Rom doubles back and the centripetal Spline does not;
+a closed centripetal Spline wraps with matching tangents at the seam.
+
+**Consequences.** No bake changes, so no tag bump. Arc length, frames and sampling written against `Spline<T>` now
+also work for a centripetal curve.
+
+**Alternatives.** Lowering `EditableCurve` and the road net onto stored `Spline` knots: both rebuild their
+tangents from neighbours on every edit, so a kernel call is the whole of what they share.
