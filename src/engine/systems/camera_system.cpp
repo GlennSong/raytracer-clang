@@ -6,6 +6,7 @@
 #include "../components.h"
 #include "../mesh_builder.h"
 #include "../camera_store.h"
+#include "teleport_pose.h"      // TeleportRequest: fast travel on re-attach
 #include "../../log.h"
 
 #include <cmath>
@@ -61,6 +62,13 @@ void CameraSystem::registerBindings(InputMap& actions) const {
 
 void CameraSystem::onStart(FrameContext& ctx) {
     registerBindings(ctx.actions);
+    onPose_ = ctx.events.listen<CameraPoseRequest>([this](const CameraPoseRequest& r) {
+        pose_ = r;
+        posePending_ = true;
+    });
+    onDetach_ = ctx.events.listen<CameraDetachRequest>([this](const CameraDetachRequest& r) {
+        detachPending_ = r.mode;
+    });
 
     orbit.target = Vec3(
         ctx.settings.getDouble("orbitTargetX", 0.0),
@@ -140,19 +148,16 @@ void CameraSystem::update(FrameContext& ctx) {
     fly.farPlane = viewFar;
     follow.farPlane = viewFar;
 
-    // Control-channel camera (ADR-0078), a one-shot Settings handoff (the
-    // citysim.* idiom): consume the flag, seed the fly pose from the staged
-    // flyEye*/flyPitch/flyYaw, and DETACH — a detached freecam wins over the
-    // player pin (PlayerSystem early-outs on !positionLocked), so a staged
-    // shot frames correctly in play mode too. Consumed before the follow
+    // A CameraPoseRequest (the socket's `camera`, a teleport with no player;
+    // ADR-0253): seed the fly pose and DETACH — a detached freecam wins over
+    // the player pin (PlayerSystem early-outs on !positionLocked), so a staged
+    // shot frames correctly in play mode too. Taken before the follow
     // early-return below so a command sent while driving isn't lost.
-    if (ctx.settings.getDouble("cameraApply", 0.0) > 0.5) {
-        ctx.settings.setDouble("cameraApply", 0.0);
-        fly.eye = Vec3(ctx.settings.getDouble("flyEyeX", fly.eye.x),
-                       ctx.settings.getDouble("flyEyeY", fly.eye.y),
-                       ctx.settings.getDouble("flyEyeZ", fly.eye.z));
-        fly.pitch = ctx.settings.getDouble("flyPitch", fly.pitch);
-        fly.yaw = ctx.settings.getDouble("flyYaw", fly.yaw);
+    if (posePending_) {
+        posePending_ = false;
+        fly.eye = pose_.eye;
+        fly.pitch = pose_.pitch;
+        fly.yaw = pose_.yaw;
         fly.positionLocked = false;
         setActiveController(true);   // the fly camera, not orbit
         activeCamera = Entity{};     // a placed camera would override the pose
@@ -183,14 +188,12 @@ void CameraSystem::update(FrameContext& ctx) {
     // The same toggle F drives, reachable from the control channel as
     // `detach on|off|toggle`. Extracted so the fast-travel path can actually be
     // TESTED -- reasoning about it from the code was wrong twice.
-    double detachReq = ctx.settings.getDouble("camera.setDetached", -1.0);
+    const int detachReq = detachPending_;
     bool detachFired = detachEnabled && ctx.actions.pressed("cam_detach");
-    if (detachReq >= 0.0) {
-        ctx.settings.setDouble("camera.setDetached", -1.0);
-        const bool wantDetached =
-            detachReq >= 2.0 ? fly.positionLocked : (detachReq >= 1.0);
-        if (wantDetached == !fly.positionLocked) detachReq = -1.0;   // already there
-        else detachFired = true;
+    if (detachReq >= 0) {
+        detachPending_ = -1;
+        const bool wantDetached = detachReq >= 2 ? fly.positionLocked : (detachReq == 1);
+        if (wantDetached != !fly.positionLocked) detachFired = true;   // else already there
     }
     if (detachFired) {
         fly.positionLocked = !fly.positionLocked;
@@ -213,12 +216,12 @@ void CameraSystem::update(FrameContext& ctx) {
             // reports through `teleport?`. Two spellings of "move the player"
             // would drift apart.
             if (ctx.settings.getBool("cameraDetachFastTravel", true)) {
-                char pose[96];
-                std::snprintf(pose, sizeof(pose), "%.3f %.3f", fly.eye.x, fly.eye.z);
-                ctx.settings.setString("teleport.result", "");
-                ctx.settings.setString("teleport.request", pose);
+                TeleportRequest go;
+                go.pose.position = fly.eye;
+                go.pose.groundY = true;
+                ctx.events.publish(go);
                 LOG_INFO << "Camera attached: player moved to the camera ("
-                         << pose << ")";
+                         << fly.eye.x << " " << fly.eye.z << ")";
             } else {
                 LOG_INFO << "Camera attached";
             }

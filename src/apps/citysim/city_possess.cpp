@@ -1,4 +1,5 @@
 #include "city_possess.h"
+#include "../../engine/control/city_requests.h"
 
 #include "city_render.h"
 #include "city_sim.h"
@@ -98,15 +99,26 @@ void configureFollow(engine::FollowCameraController& f, bool car) {
 
 }  // namespace
 
+void CityPossessSystem::onStart(engine::FrameContext& ctx) {
+    onRequest_ = ctx.events.listen<engine::PossessRequest>([this](const engine::PossessRequest& r) {
+        requests_.push_back(r.command);
+    });
+    if (ctx.commands == nullptr) return;
+    auto answer = [](const std::string* line) {
+        return [line](const engine::ControlCommand&) { return "ok " + *line; };
+    };
+    answerStatus_ = ctx.commands->bind("possess?", "CityPossessSystem", answer(&statusLine_));
+    answerLook_ = ctx.commands->bind("look?", "CityPossessSystem", answer(&lookLine_));
+    answerAgent_ = ctx.commands->bind("agent?", "CityPossessSystem", answer(&agentLine_));
+}
+
 void CityPossessSystem::update(engine::FrameContext& ctx) {
-    // Consume the channel's one-shot (the citysim.* idiom). Commands are
-    // consumed even when the city isn't built so the sender gets a status
-    // explaining why nothing happened, not silence.
-    const std::string staged = ctx.settings.getString("possess.cmd", "");
-    if (!staged.empty()) {
-        ctx.settings.setString("possess.cmd", "");
-        handleCommand(ctx, parsePossessCmd(staged));
-    }
+    // The channel's requests, in the order they came. Taken even when the
+    // city isn't built so the sender gets a status explaining why nothing
+    // happened, not silence.
+    std::vector<std::string> requests;
+    requests.swap(requests_);
+    for (const std::string& line : requests) handleCommand(ctx, parsePossessCmd(line));
 
     // The player grabbing the possessed car (G) is a release, not a fight:
     // VehicleSystem's driver branch outranks AgentDriver, so just let go.
@@ -119,7 +131,7 @@ void CityPossessSystem::update(engine::FrameContext& ctx) {
 
     updateCamera(ctx);
     publishStatus(ctx);
-    publishLook(ctx);
+    publishLook();
 }
 
 void CityPossessSystem::handleCommand(engine::FrameContext& ctx,
@@ -729,14 +741,14 @@ void CityPossessSystem::updateCamera(engine::FrameContext& ctx) {
 // Bearings are degrees from where the agent faces, positive to its RIGHT, the
 // same convention (and the same two lines of arithmetic) as the bus HUD the
 // player reads, so the two never disagree about which way "left" is.
-void CityPossessSystem::publishLook(engine::FrameContext& ctx) {
+void CityPossessSystem::publishLook() {
     if (!city_.built() || walkerAgent_ < 0) {
-        ctx.settings.setString("look.status", "none");
+        lookLine_ = "none";
         return;
     }
     const std::vector<Agent>& agents = city_.sim().agents();
     if (walkerAgent_ >= static_cast<int>(agents.size())) {
-        ctx.settings.setString("look.status", "none");
+        lookLine_ = "none";
         return;
     }
     const CitySim& sim = city_.sim();
@@ -885,7 +897,7 @@ void CityPossessSystem::publishLook(engine::FrameContext& ctx) {
         out += buf;
     }
 
-    ctx.settings.setString("look.status", out);
+    lookLine_ = out;
 }
 
 void CityPossessSystem::publishStatus(engine::FrameContext& ctx) {
@@ -926,7 +938,7 @@ void CityPossessSystem::publishStatus(engine::FrameContext& ctx) {
     } else {
         line = city_.built() ? "none" : "none (city not built — play mode only)";
     }
-    ctx.settings.setString("possess.status", line);
+    statusLine_ = line;
 
     // THE AGENT'S OWN MIND (ADR-0091 telemetry). possess.status answers "what
     // is the puppeteer doing"; this answers "what is this person doing" — the
@@ -982,7 +994,7 @@ void CityPossessSystem::publishStatus(engine::FrameContext& ctx) {
             agentLine = buf;
         }
     }
-    ctx.settings.setString("agent.status", agentLine);
+    agentLine_ = agentLine;
 }
 
 }  // namespace citysim

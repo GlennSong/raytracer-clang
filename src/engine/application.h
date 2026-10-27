@@ -167,6 +167,8 @@ private:
     AudioEngine audioEngine;
     InputMap inputMap;
     KeyCode pendingTapRelease_ = KeyCode::Unknown;   // `tap`: release next frame
+    std::string pendingTap_, pendingHold_;   // a KeyTapRequest's key / a KeyHoldRequest's "key seconds", for the frame loop
+    EventBus::Subscription onTap_, onHold_;
     std::vector<std::pair<KeyCode, double>> heldKeys_;   // `hold`: sim seconds left
     double heldMouseLeft_ = 0;                           // `hold MouseLeft <s>`: the fire button, sim seconds left
     std::string burstPrefix_;   // `shots`: every frame dumped to <prefix>_NNN.png

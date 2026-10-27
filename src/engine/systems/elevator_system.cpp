@@ -68,6 +68,11 @@ RenderMaterial cabWall() {
 }  // namespace
 
 void ElevatorSystem::onStart(FrameContext& ctx) {
+    onRequest_ = ctx.events.listen<ElevatorRequest>([this](const ElevatorRequest& r) {
+        if (r.call) callEdge_ = true;
+        floorDelta_ += r.pick;
+    });
+    answers_.bind(ctx.commands, "ElevatorSystem", "elevator?", "no bank");
     // E is the interaction broker's (interact_broker.h): the lift OFFERS its call / go, and acts on the command.
     ctx.actions.bindButton("elevator_floor_up", KeyCode::Up);
     ctx.actions.bindButton("elevator_floor_down", KeyCode::Down);
@@ -136,15 +141,6 @@ void ElevatorSystem::update(FrameContext& ctx) {
     picker("elevator_floor_down", holdDown_, -1);
     if (ctx.actions.pressed("elevator_floor_ground")) floorDelta_ -= 100000;
     if (ctx.actions.pressed("elevator_floor_top")) floorDelta_ += 100000;
-    // The control channel's `elevator call` / `elevator pick <n>` (application.cpp).
-    if (ctx.settings.getDouble("elevator.call", 0.0) != 0.0) {
-        callEdge_ = true;
-        ctx.settings.setDouble("elevator.call", 0.0);
-    }
-    if (const double pick = ctx.settings.getDouble("elevator.pick", 0.0); pick != 0.0) {
-        floorDelta_ += static_cast<int>(pick);
-        ctx.settings.setDouble("elevator.pick", 0.0);
-    }
 }
 
 void ElevatorSystem::fixedUpdate(FrameContext& ctx) {
@@ -211,7 +207,7 @@ void ElevatorSystem::fixedUpdate(FrameContext& ctx) {
                       "inCab=%d atDoor=%d moving=%d floor=%d selected=%d floors=%d banks=%zu target=%d dir=%d cabFloor=%d",
                       status_.inCab ? 1 : 0, status_.atDoor ? 1 : 0, status_.moving ? 1 : 0, status_.floor,
                       status_.selected, status_.floors, banks_.size(), status_.target, status_.dir, status_.cabFloor);
-        ctx.settings.setString("elevator.status", buf);
+        answers_.set("elevator?", buf);
     }
     callEdge_ = false;
     floorDelta_ = 0;

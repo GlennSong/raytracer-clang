@@ -51,7 +51,7 @@ void EventBus::sweep(std::vector<Handler>& list) {
 }
 
 std::size_t EventBus::countLive(std::type_index type) const {
-    auto it = handlers.find(type);
+    std::unordered_map<std::type_index, std::vector<Handler>>::const_iterator it = handlers.find(type);
     if (it == handlers.end()) return 0;
     std::size_t count = 0;
     for (const auto& handler : it->second)

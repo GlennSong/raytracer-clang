@@ -6,6 +6,36 @@
 using json = nlohmann::json;
 
 namespace engine {
+namespace {
+
+// Never saved. One-shots a reader clears after acting on it: the `set` verb's idioms and the play-from-here
+// handoff between states. Then the keys the bus retired (ADR-0253), so a settings.json written before it loses
+// them -- a stale `teleport.request` in one fired on the next play start.
+const char* const kNotSaved[] = {
+    "playFromHere", "teleport.open", "clouds.apply", "jitter.request",
+    "citysim.master", "citysim.agents", "citysim.cones", "citysim.nav", "citysim.plan",
+    // retired: commands that are typed requests now
+    "possess.cmd", "teleport.request", "cameraApply", "camera.setDetached", "player.setThirdPerson", "player.limp",
+    "player.limpVelocity", "player.rideRequest", "vehicle.spawn", "vehicle.spawnRecipe", "interact.request",
+    "elevator.call", "elevator.pick", "train.board", "walkers.knockNearest", "pin.request", "findplace.request",
+    "ground.query", "who.query", "input.tap", "input.hold", "weather.set", "daynight.set", "daynight.setPaused",
+    "daynight.setMinutes", "daynight.setDay", "daynight.setTerrain", "daynight.setHud", "daynight.setMoon",
+    "daynight.chart",
+    // retired: answers the owning systems give themselves now
+    "teleport.result", "possess.status", "look.status", "agent.status", "daynight.status", "weather.status",
+    "citysim.hour", "vehicle.telemetry", "player.telemetry", "interact.status", "elevator.status",
+    "walkers.telemetry", "walkers.ragdolls", "walkers.flicker", "activities.telemetry", "speeders.telemetry",
+    "parking.telemetry", "traffic.telemetry", "opensigns.telemetry", "trains.telemetry", "depots.telemetry",
+    "depots.stalled", "pin.status", "findplace.result", "who.result", "ground.result", "telemetry.askedAt",
+};
+
+}  // namespace
+
+bool Settings::persists(const std::string& key) {
+    for (const char* k : kNotSaved)
+        if (key == k) return false;
+    return true;
+}
 
 void Settings::load(const std::string& filepath) {
     std::ifstream file(filepath);
@@ -19,6 +49,7 @@ void Settings::load(const std::string& filepath) {
     }
 
     for (auto& [key, val] : root.items()) {
+        if (!persists(key)) continue;   // a one-shot or a retired key left in an old file
         if (val.is_string())
             values[key] = val.get<std::string>();
         else if (val.is_boolean())
@@ -31,6 +62,7 @@ void Settings::load(const std::string& filepath) {
 void Settings::save(const std::string& filepath) const {
     json root = json::object();
     for (const auto& [key, value] : values) {
+        if (!persists(key)) continue;
         if (value == "true" || value == "false") {
             root[key] = (value == "true");
             continue;

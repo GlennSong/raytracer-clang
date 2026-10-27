@@ -57,6 +57,24 @@ bool describeEvent(EventBus& bus, const char* name, const char* summary) {
     return bus.addNamedType(std::move(t));
 }
 
+// KeyTapRequest / KeyHoldRequest: a key through the real input path (ADR-0253) -- pressed and released next frame,
+// or held down for `seconds` of sim time ("MouseLeft" holds the fire button). The socket's `tap` and `hold`;
+// Application hears them. Tests the KEY, not a verb that imitates what the key does.
+struct KeyTapRequest {
+    std::string key;
+};
+inline void describeProperties(KeyTapRequest& r, PropertyVisitor& v) {
+    v.field(FieldMeta("key"), r.key);
+}
+struct KeyHoldRequest {
+    std::string key;
+    Real seconds = 0;
+};
+inline void describeProperties(KeyHoldRequest& r, PropertyVisitor& v) {
+    v.field(FieldMeta("key"), r.key);
+    v.field(FieldMeta("seconds").units("s"), r.seconds);
+}
+
 struct PlaySound;
 void describeProperties(PlaySound& e, PropertyVisitor& v);
 

@@ -14,11 +14,25 @@
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/un.h>
+#include <cerrno>
 #include <poll.h>
 #include <unistd.h>
 #endif
 
 namespace engine {
+namespace {
+#ifndef _WIN32
+// A client that hangs up between our checks must not take the viewer with it: a send to a closed socket raises
+// SIGPIPE, whose default is to end the process. Linux says so per send; macOS per socket (SO_NOSIGPIPE at accept).
+#ifdef MSG_NOSIGNAL
+constexpr int kSendFlags = MSG_NOSIGNAL | MSG_DONTWAIT;
+#else
+constexpr int kSendFlags = MSG_DONTWAIT;
+#endif
+// Watched events waiting for a client that is not reading are dropped, whole lines, past this much.
+constexpr std::size_t kOutboxCap = 256 * 1024;
+#endif
+}  // namespace
 
 ControlCommand parseControlCommand(const std::string& line) {
     ControlCommand cmd;
@@ -29,6 +43,11 @@ ControlCommand parseControlCommand(const std::string& line) {
             std::transform(tok.begin(), tok.end(), tok.begin(),
                            [](unsigned char c) { return std::tolower(c); });
             cmd.name = tok;
+            const std::streampos after = in.tellg();
+            if (after != std::streampos(-1)) {
+                const std::size_t from = line.find_first_not_of(" \t", static_cast<std::size_t>(after));
+                if (from != std::string::npos) cmd.rest = line.substr(from);
+            }
         } else {
             cmd.args.push_back(tok);
         }
@@ -47,7 +66,21 @@ struct ControlChannel::Impl {
     std::vector<std::string> manualReplies;
     uint64_t clientId = 0;      // guarded by `mutex`: bumped on every accept, 0 while nobody is connected
     uint64_t nextClientId = 1;
-    uint64_t dropped = 0;       // posts a full client buffer refused
+    uint64_t dropped = 0;       // posts a full outbox refused
+    // What the client has yet to read, guarded by `mutex`: replies and watched events, whole lines in order. Sent
+    // without blocking as the socket takes it, so a slow reader never stalls a frame and never gets half a line.
+    std::string outbox;
+#ifndef _WIN32
+    void flushLocked() {
+        while (!outbox.empty() && clientFd >= 0) {
+            const ssize_t n = ::send(clientFd, outbox.data(), outbox.size(), kSendFlags);
+            if (n > 0) { outbox.erase(0, static_cast<std::size_t>(n)); continue; }
+            if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)) return;   // later
+            outbox.clear();   // the client is gone (EPIPE, ECONNRESET): the socket thread drops it
+            return;
+        }
+    }
+#endif
 
 #ifndef _WIN32
     int listenFd = -1;
@@ -83,8 +116,13 @@ struct ControlChannel::Impl {
                 if (fd >= 0) {
                     std::lock_guard<std::mutex> lock(mutex);
                     if (clientFd >= 0) ::close(clientFd);   // newest wins
+#ifdef SO_NOSIGPIPE
+                    const int one = 1;
+                    (void)::setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &one, sizeof(one));
+#endif
                     clientFd = fd;
                     clientId = nextClientId++;
+                    outbox.clear();   // the last client's unread lines are not this one's
                     buffer.clear();
                     continue;   // re-poll with the new client
                 }
@@ -99,6 +137,7 @@ struct ControlChannel::Impl {
                     ::close(clientFd);
                     clientFd = -1;
                     clientId = 0;
+                    outbox.clear();
                 }
                 continue;
             }
@@ -184,6 +223,9 @@ int ControlChannel::drain(const Handler& handler) {
     {
         std::lock_guard<std::mutex> lock(impl->mutex);
         lines.swap(impl->pending);
+#ifndef _WIN32
+        impl->flushLocked();   // what the client could not take last frame
+#endif
     }
     for (const std::string& line : lines) {
         std::string reply = handler(line);
@@ -194,8 +236,9 @@ int ControlChannel::drain(const Handler& handler) {
 #ifndef _WIN32
         reply.push_back('\n');
         std::lock_guard<std::mutex> lock(impl->mutex);
-        if (impl->clientFd >= 0)
-            (void)::send(impl->clientFd, reply.data(), reply.size(), 0);
+        if (impl->clientFd < 0) continue;
+        impl->outbox += reply;   // a reply always goes, if late: the client asked for it
+        impl->flushLocked();
 #endif
     }
     return static_cast<int>(lines.size());
@@ -216,12 +259,17 @@ bool ControlChannel::post(uint64_t client, const std::string& line) {
     }
 #ifndef _WIN32
     if (impl->clientFd < 0 || impl->clientId != client) return false;
-    const std::string out = line + "\n";
-    const ssize_t n = ::send(impl->clientFd, out.data(), out.size(), MSG_DONTWAIT);
-    if (n == static_cast<ssize_t>(out.size())) return true;
-    ++impl->dropped;   // a slow reader: drop, never stall the frame (a partial line is cut too; rare)
-#endif
+    if (impl->outbox.size() > kOutboxCap) {   // a client that stopped reading: drop the line, never stall
+        ++impl->dropped;
+        return false;
+    }
+    impl->outbox += line;
+    impl->outbox += '\n';
+    impl->flushLocked();
+    return true;
+#else
     return false;
+#endif
 }
 
 uint64_t ControlChannel::droppedPosts() const {

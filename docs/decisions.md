@@ -12427,8 +12427,20 @@ drifts.
      (ADR-0018), which gives Lua `events.publish` / `events.on` and the socket's parsing without per-event code. Engine
      events are declared in C++; gameplay and scene events may be declared in Lua. Hot, per-agent events stay
      C++-only.
+     **Done:** 18 named request types. Teleport, CameraPose, CameraDetach, Person, Limp (the vehicle's throw too,
+     with its velocity), VehicleSpawn, Interact, Elevator, DayNight, Weather and KeyTap/KeyHold in engine headers
+     beside their systems; Possess, Ride, TrainBoard, Knock, Pin and FindPlace in control/city_requests.h, the
+     contract with the city-free Application. A verb publishes; with nobody listening it answers "err <verb>:
+     nothing here takes it" instead of staging a request nothing will take (`teleport` in the editor used to reply
+     "staged", then fire on the next play start). Systems hold EventBus::Subscription members, so they stop
+     hearing when they go.
   4. Answers become questions a system answers when asked (its own `?` verb) instead of strings rewritten into
      Settings; `telemetry.askedAt` goes with them.
+     **Done:** the engine still lists every question (usage, summary, a default "nothing answers it here (it needs
+     X)"); the owning system binds the real answer while it runs (ControlCommands::bind, a Binding member), and a
+     board-style answer goes through ControlAnswers, which also knows when it was last asked: the island census
+     runs only while one of the city's own questions is being asked, not any question at all. 24 answers moved;
+     `daynight?`'s sim hour comes from a SimHourQuery on the bus.
   5. `watch <event>` streams events back over the socket (and to MCP as notifications), so probes stop polling.
      **Done (with step 3's groundwork):** the bus names types (`describeEvent<E>(bus, name, summary)`, fields
      through the property layer, which gained an int field); `events?`, `publish <Event> {json}`, `watch` and
@@ -12437,6 +12449,9 @@ drifts.
      owned by the script. PlaySound is the first named type. The JSON crosses event_bus.h as text: the vendored
      library has no forward header.
   6. Settings keeps preferences only, and stops saving the transient keys.
+     **Done:** Settings::persists: the one-shot idioms that remain (`set clouds.apply 1`, `set teleport.open 1`,
+     `jitter.request`, the web panel's `citysim.<layer>` pokes, the editor's playFromHere handoff) work in memory and
+     are never saved; the 57 keys the bus retired are dropped when an old settings.json loads.
 - **Lua's three doors**, for the record: direct calls for questions (`entity.get_position`; generic component access
   through the property layer belongs with #124), queued commands for actions (`spawn.*`), and the shared bus for
   announcements.

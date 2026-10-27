@@ -441,7 +441,7 @@ void CityWalkerSystem::driveWalkers(engine::FrameContext& ctx) {
         // ragdoll of its six blocks (walker_ragdolls.h), up again where it lands. A hit while already down
         // throws it again.
         // (`knock` on the socket throws the walker nearest the player, for trying it without a car)
-        const bool knockNearest = ctx.settings.getDouble("walkers.knockNearest", 0.0) > 0.5;
+        const bool knockNearest = knockPending_;
         for (std::size_t c = 0; c < carPos.size() + (knockNearest ? 1 : 0); ++c) {
             Vec2 from;
             Real speed;
@@ -627,8 +627,23 @@ void CityWalkerSystem::driveWalkers(engine::FrameContext& ctx) {
             w.agentId, posXZ, w.facing, g.pos, stateOverride});
     }
     city_.setExternalPedPoses(std::move(widgetPoses));
-    ctx.settings.setDouble("walkers.knockNearest", 0.0);   // (one throw per request)
-    ctx.settings.setString("walkers.ragdolls", std::to_string(knocks_) + " thrown so far, " + ragdolls_.describe(pw));
+    knockPending_ = false;   // (one throw per request)
+    answers_.set("knock?", std::to_string(knocks_) + " thrown so far, " + ragdolls_.describe(pw));
+}
+
+void CityWalkerSystem::onStart(engine::FrameContext& ctx) {
+    onKnock_ = ctx.events.listen<engine::KnockRequest>([this](const engine::KnockRequest&) { knockPending_ = true; });
+    for (const char* q : {"walkers?", "knock?", "flicker?", "activities?", "speeders?"})
+        answers_.bind(ctx.commands, "CityWalkerSystem", q);
+    // `who? <id>` asks about one agent (answered every step from then on); `who?` alone reads the answer.
+    if (ctx.commands != nullptr)
+        answerWho_ = ctx.commands->bind("who?", "CityWalkerSystem", [this](const engine::ControlCommand& cmd) -> std::string {
+            if (!cmd.args.empty()) {
+                whoQuery_ = cmd.args[0];
+                return "ok staged (poll `who?`)";
+            }
+            return "ok " + whoResult_;
+        });
 }
 
 void CityWalkerSystem::fixedUpdate(engine::FrameContext& ctx) {
@@ -636,7 +651,7 @@ void CityWalkerSystem::fixedUpdate(engine::FrameContext& ctx) {
     driveWalkers(ctx);
     // `who? <id>`: one agent's whole state, answered every step while asked (poll `who?`); its drawn body too
     {
-        const std::string q = ctx.settings.getString("who.query", "");
+        const std::string& q = whoQuery_;
         if (!q.empty()) {
             const int id = std::atoi(q.c_str());
             std::string r = city_.sim().describeAgent(id);
@@ -647,7 +662,7 @@ void CityWalkerSystem::fixedUpdate(engine::FrameContext& ctx) {
                                   w.drawnPath == 0 ? "resting" : w.drawnPath == 1 ? "posed from the plan" : w.drawnPath == 2 ? "a body" : "?");
                     r += b;
                 }
-            ctx.settings.setString("who.result", q + ": " + r);
+            whoResult_ = q + ": " + r;
         }
     }
     // The population scan: this step's slice of it (the whole pass spans the 2 s window).
@@ -732,11 +747,11 @@ void CityWalkerSystem::fixedUpdate(engine::FrameContext& ctx) {
                       walkers_.size(), tel_.maxSpeed, tel_.maxAgent, tel_.maxAt.x, tel_.maxAt.y, tel_.reversals,
                       tel_.steps, tel_.revAt.x, tel_.revAt.y, seated, seatAt.x, seatAt.y, city_.indoorDrawn(), sm.studentCount(),
                       onWalks, studentsOnWalks, joggers, jogBooked, games, playing, gathering, signedUp);
-        ctx.settings.setString("walkers.telemetry", b);
+        answers_.set("walkers?", b);
         {   // the flicker watch: the count, the latest few (newest last); old departures forgotten
             std::string f = std::to_string(flickers_) + " flickers (a body gone and back within 1.5 s)";
             for (const std::string& e : flickerLog_) f += " || " + e;
-            ctx.settings.setString("walkers.flicker", f);
+            answers_.set("flicker?", f);
             const double now = std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
             for (auto it = gone_.begin(); it != gone_.end();) it = now - it->second.at > 2.0 ? gone_.erase(it) : std::next(it);
         }
@@ -760,7 +775,7 @@ void CityWalkerSystem::fixedUpdate(engine::FrameContext& ctx) {
                 if (groups[d]) { std::snprintf(line, sizeof line, " %d groups", groups[d]); out += line; }
                 if (atOf(d)) { std::snprintf(line, sizeof line, " nearest %.0f %.0f", P.nearAt[d].x, P.nearAt[d].y); out += line; }
             }
-            ctx.settings.setString("activities.telemetry", out.empty() ? "nobody out" : out);
+            answers_.set("activities?", out.empty() ? "nobody out" : out);
         }
         // THE SPEEDERS (`speeders?`): how many drawn steps went past a sprint, and the latest few, each with the
         // agent's state at that moment and how it was drawn before and after (0 resting, 1 posed from the plan, 2 body)
@@ -778,7 +793,7 @@ void CityWalkerSystem::fixedUpdate(engine::FrameContext& ctx) {
                 out += line;
                 out += e.state;
             }
-            ctx.settings.setString("speeders.telemetry", out);
+            answers_.set("speeders?", out);
         }
         tel_ = Telemetry{};
     }

@@ -22,7 +22,9 @@ struct PlayerIntent {
     // ONE-SHOTS staged by the frame (a press read in a fixed step would fire twice on a two-step frame). A mode that
     // spends one clears it; one nobody spends waits for the next step.
     bool jump = false;
-    bool limp = false;            // go limp (G, `ragdoll`)
+    bool limp = false;            // go limp (G, `ragdoll`), or thrown (a LimpRequest from a vehicle)
+    bool limpThrown = false;      // thrown: limpVelocity is the speed it was thrown at (else the body's own)
+    Vec3 limpVelocity;
     bool fire = false;            // the trigger's press, with the grapple in hand...
     bool fireHeld = false;        // ...and held (let go and the rope goes)
     Entity playTarget;            // E on the swing (playKind 1) or the monkey bars (2)

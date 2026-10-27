@@ -4,6 +4,8 @@
 #include "../interact_broker.h"
 #include "../system.h"
 #include "../ui/ui_text.h"
+#include "../properties.h"
+#include "../control/control_commands.h"
 #include <string>
 
 namespace engine {
@@ -15,6 +17,15 @@ class PhysicsSystem;
 // better (no flicker between two chairs), moved by Tab or (first person) the mouse wheel -- draws its marker and
 // prompt, and turns E into a command for the focused offer's provider: a tap, or a hold past HOLD_S when the offer
 // has a hold verb.
+// InteractRequest (ADR-0253): the interact key from outside (the socket's `interact`): 1 tap, 2 hold, 3 stand up,
+// 4 move the focus (Tab).
+struct InteractRequest {
+    int action = 1;
+};
+inline void describeProperties(InteractRequest& r, PropertyVisitor& v) {
+    v.field(FieldMeta("action").range(1, 4), r.action);
+}
+
 class InteractBrokerSystem : public System {
 public:
     explicit InteractBrokerSystem(PhysicsSystem* physics = nullptr) : physics_(physics) {}
@@ -26,6 +37,9 @@ public:
     static constexpr double HOLD_S = 0.4;
 
 private:
+    EventBus::Subscription onRequest_;
+    int pendingRequest_ = 0;   // an InteractRequest's action, until update takes it
+    ControlAnswers answers_;   // interact?
     UiText ui_;   // the marker and the prompt (the game UI layer, ADR-0250)
     PhysicsSystem* physics_;
     // the focus, by identity (offers are rebuilt every frame)

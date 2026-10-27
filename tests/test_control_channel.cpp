@@ -7,8 +7,15 @@
 #include "../src/engine/control/control_channel.h"
 #include "../src/engine/control/control_commands.h"
 #include "../src/engine/application.h"
+#include "../src/renderer/settings.h"
 #include "../src/engine/audio/audio_engine.h"   // PlaySound
+#include "../src/engine/systems/camera_system.h"   // CameraPoseRequest
+#include "../src/engine/systems/day_night_system.h"   // DayNightRequest, WeatherRequest
+#include "../src/engine/systems/player_system.h"   // PersonRequest
+#include "../src/engine/systems/teleport_pose.h"   // TeleportRequest
+#include "../src/engine/control/city_requests.h"   // PossessRequest
 
+#include <cstdio>
 #include <cstdlib>
 #include <fstream>
 #include <sstream>
@@ -46,6 +53,11 @@ TEST_CASE(control_parse_lowercases_name_and_keeps_args) {
 
     // `camera?` is its own command, not `camera` with a stray token.
     CHECK(parseControlCommand("camera?").name == "camera?");
+
+    // `rest` is the line after the name as sent: whitespace inside it kept (publish's JSON).
+    c = parseControlCommand("publish  PlaySound {\"clip\": \"a  b\"}");
+    CHECK(c.rest == "PlaySound {\"clip\": \"a  b\"}");
+    CHECK(parseControlCommand("ping").rest.empty());
 }
 
 TEST_CASE(control_manual_mode_round_trips_through_the_handler) {
@@ -125,6 +137,38 @@ TEST_CASE(control_socket_round_trips_a_line) {
     // MCP shim's discovery glob to trip over.
     CHECK(::access(path.c_str(), F_OK) != 0);
 }
+
+// A watching client that hangs up must not take the process with it (SIGPIPE ends it by default), and lines go out
+// whole: two posts arrive as two lines.
+TEST_CASE(control_socket_posts_whole_lines_and_survive_a_hangup) {
+    ControlChannel ch;
+    CHECK(ch.initialize(ControlBackendMode::Socket));
+    int fd = ::socket(AF_UNIX, SOCK_STREAM, 0);
+    sockaddr_un addr{};
+    addr.sun_family = AF_UNIX;
+    std::snprintf(addr.sun_path, sizeof(addr.sun_path), "%s", ch.socketPath().c_str());
+    CHECK(::connect(fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) == 0);
+    for (int i = 0; i < 200 && ch.client() == 0; ++i) std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    const uint64_t client = ch.client();
+    CHECK(client != 0);
+    CHECK(ch.post(client, "event A {}"));
+    CHECK(ch.post(client, "event B {}"));
+    std::string got;
+    char buf[64];
+    for (int i = 0; i < 100 && got.size() < 22; ++i) {
+        const ssize_t n = ::recv(fd, buf, sizeof(buf), MSG_DONTWAIT);
+        if (n > 0) got.append(buf, static_cast<std::size_t>(n));
+        else std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    CHECK(got == "event A {}\nevent B {}\n");
+    ::close(fd);
+    for (int i = 0; i < 50; ++i) {   // before and after the socket thread notices: either way, no signal
+        ch.post(client, "event C {}");
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+    CHECK(true);   // still here
+    ch.shutdown();
+}
 #endif
 
 // The command table (ADR-0253): one handler per verb. A second registration of a name is refused -- the
@@ -182,9 +226,16 @@ TEST_CASE(control_application_registers_every_verb_once_with_its_words) {
     CHECK(app.commands().run(parseControlCommand("commands?")).rfind("ok ", 0) == 0);
     CHECK(app.commands().run(parseControlCommand("bogus")).rfind("err unknown command: bogus", 0) == 0);
     // `ride <x> <z>` goes to the possessed agent with anything after the two numbers, as it did before the merge
+    std::string possess;
+    EventBus::Subscription sub = app.events().listen<PossessRequest>([&](const PossessRequest& r) { possess = r.command; });
     CHECK(app.commands().run(parseControlCommand("ride 120 -340 0")) == "ok staged (poll possess?)");
-    CHECK(app.settings().getString("possess.cmd", "") == "ride 120 -340");
+    CHECK(possess == "ride 120 -340");
+    // ...and the player's ride to the transit system; with none listening, the verb says so
+    CHECK(app.commands().run(parseControlCommand("ride bus")).rfind("err ride: nothing here", 0) == 0);
+    int ride = -1;
+    EventBus::Subscription rides = app.events().listen<RideRequest>([&](const RideRequest& r) { ride = r.mode; });
     CHECK(app.commands().run(parseControlCommand("ride bus")) == "ok ride bus staged");
+    CHECK(ride == 1);
 }
 
 // Names are stored lowercased, as they arrive; a name that is not one word is refused.
@@ -256,8 +307,117 @@ TEST_CASE(control_events_verbs_list_and_publish) {
     const std::string r = app.commands().run(parseControlCommand(R"(publish PlaySound {"clip": "door", "volume": 0.5})"));
     CHECK(r == "ok published PlaySound to 1 subscribers");
     CHECK(clip == "door");
+    CHECK(app.commands().run(parseControlCommand("publish PlaySound {\"clip\": \"door  slam\"}")).rfind("ok", 0) == 0);
+    CHECK(clip == "door  slam");   // the two spaces survive
     CHECK(app.commands().run(parseControlCommand("publish PlaySound {nope")).rfind("err", 0) == 0);
     CHECK(app.commands().run(parseControlCommand("publish Nope")).rfind("err unknown event", 0) == 0);
     CHECK(app.commands().run(parseControlCommand("watch PlaySound")).rfind("err watch:", 0) == 0);
     CHECK(app.commands().run(parseControlCommand("unwatch")) == "ok stopped 0 watches");
+}
+
+// Command verbs publish typed requests (ADR-0253): with nobody listening they say so; with a listener it gets the
+// parsed request. A question is the engine's to list and a system's to answer: unbound it says who would.
+TEST_CASE(control_request_verbs_publish_typed_events) {
+    Application app;
+    CHECK(app.commands().run(parseControlCommand("teleport 1 2 3")).rfind("err teleport: nothing here", 0) == 0);
+    TeleportRequest got;
+    int n = 0;
+    EventBus::Subscription sub = app.events().listen<TeleportRequest>([&](const TeleportRequest& r) { got = r; ++n; });
+    CHECK(app.commands().run(parseControlCommand("teleport 120 -340")) == "ok teleport staged (poll `teleport?`)");
+    CHECK(n == 1 && got.pose.groundY && got.pose.position.x == 120 && got.pose.position.z == -340);
+    CHECK(app.commands().run(parseControlCommand("teleport nowhere")).rfind("err unreadable pose", 0) == 0);
+    CHECK(n == 1);
+    sub.reset();
+    CHECK(app.events().subscriberCount<TeleportRequest>() == 0);
+
+    CHECK(app.commands().run(parseControlCommand("teleport?")).rfind("err teleport?: nothing answers it here", 0) == 0);
+    {
+        ControlCommands::Binding b = app.commands().bind("teleport?", "test", [](const ControlCommand&) {
+            return std::string("ok here");
+        });
+        CHECK(static_cast<bool>(b));
+        CHECK(app.commands().boundBy("teleport?") == "test");
+        CHECK(!app.commands().bind("teleport?", "second", [](const ControlCommand&) { return std::string(); }));
+        CHECK(app.commands().run(parseControlCommand("teleport?")) == "ok here");
+    }
+    CHECK(app.commands().boundBy("teleport?").empty());
+    CHECK(app.commands().run(parseControlCommand("teleport?")).rfind("err", 0) == 0);
+
+    CameraPoseRequest pose;
+    EventBus::Subscription cam = app.events().listen<CameraPoseRequest>([&](const CameraPoseRequest& r) { pose = r; });
+    CHECK(app.commands().run(parseControlCommand("camera 1 2 3 -10 90")) == "ok camera staged");
+    CHECK(pose.eye.y == 2 && pose.pitch == -10 && pose.yaw == 90);
+    int person = -1;
+    EventBus::Subscription per = app.events().listen<PersonRequest>([&](const PersonRequest& r) { person = r.mode; });
+    CHECK(app.commands().run(parseControlCommand("person third")) == "ok person staged");
+    CHECK(person == 1);
+}
+
+// The day/night verbs: each form of `daynight` fills only its field of one DayNightRequest; `weather` a
+// WeatherRequest with its snap.
+TEST_CASE(control_daynight_and_weather_verbs_publish_one_field_each) {
+    Application app;
+    std::vector<DayNightRequest> got;
+    EventBus::Subscription day = app.events().listen<DayNightRequest>([&](const DayNightRequest& r) { got.push_back(r); });
+    CHECK(app.commands().run(parseControlCommand("daynight 18.5")) == "ok time staged");
+    CHECK(app.commands().run(parseControlCommand("daynight hold")) == "ok cycle held");
+    CHECK(app.commands().run(parseControlCommand("daynight moon auto")) == "ok moon follows the calendar");
+    CHECK(app.commands().run(parseControlCommand("daynight 25")).rfind("err usage", 0) == 0);
+    CHECK(got.size() == 3);
+    if (got.size() == 3) {
+        CHECK(got[0].hour == 18.5 && got[0].hold < 0 && !got[0].moonAuto);
+        CHECK(got[1].hold == 1 && got[1].hour < 0);
+        CHECK(got[2].moonAuto && got[2].moon < 0);
+    }
+    WeatherRequest w;
+    EventBus::Subscription weather = app.events().listen<WeatherRequest>([&](const WeatherRequest& r) { w = r; });
+    CHECK(app.commands().run(parseControlCommand("weather storm now")) == "ok weather set");
+    CHECK(w.state == "storm" && w.now);
+    CHECK(app.commands().run(parseControlCommand("daynight?")).rfind("err daynight?: nothing answers", 0) == 0);
+}
+
+// A system's answers (ControlAnswers): the question replies with the latest text while the system holds it, knows
+// it was asked, and falls back to the engine's default when the system goes.
+TEST_CASE(control_answers_reply_latest_and_release) {
+    ControlCommands table;
+    table.add("count?", "count?", "How many.", [](const ControlCommand&) { return std::string("err nobody"); });
+    {
+        ControlAnswers answers;
+        answers.bind(&table, "Counter", "count?", "none yet");
+        CHECK(answers.secondsSinceAsked() > 1e6);
+        CHECK(table.run(parseControlCommand("count?")) == "ok none yet");
+        CHECK(answers.secondsSinceAsked() < 5.0);
+        answers.set("count?", "7");
+        CHECK(table.run(parseControlCommand("count?")) == "ok 7");
+        CHECK(answers.get("count?") == "7");
+        answers.bind(&table, "Counter", "count?");   // a state entered twice: no second binding
+        CHECK(table.run(parseControlCommand("count?")) == "ok 7");
+    }
+    CHECK(table.run(parseControlCommand("count?")) == "err nobody");
+}
+
+// Settings holds preferences only (ADR-0253): a one-shot key works in memory but is never saved, and a key the bus
+// retired is dropped when an old file loads.
+TEST_CASE(control_settings_save_preferences_only) {
+    const char* path = "test_settings_preferences_tmp.json";
+    struct Cleanup { const char* p; ~Cleanup() { std::remove(p); } } cleanup{path};
+    {
+        std::ofstream old(path);
+        old << R"({"windowWidth": 1600, "possess.cmd": "release", "teleport.request": "0 0", "traffic.telemetry": "x"})";
+    }
+    Settings s;
+    s.load(path);
+    CHECK(s.getDouble("windowWidth", 0) == 1600);
+    CHECK(s.getString("teleport.request", "none") == "none");   // a stale request does not fire again
+    CHECK(s.getString("possess.cmd", "none") == "none");
+    s.setBool("playFromHere", true);
+    CHECK(s.getBool("playFromHere", false));   // the handoff still works in memory
+    s.save(path);
+    std::ifstream in(path);
+    std::stringstream text;
+    text << in.rdbuf();
+    CHECK(text.str().find("windowWidth") != std::string::npos);
+    CHECK(text.str().find("playFromHere") == std::string::npos);
+    CHECK(text.str().find("telemetry") == std::string::npos);
+    CHECK(!Settings::persists("clouds.apply") && Settings::persists("clouds.coverage"));
 }

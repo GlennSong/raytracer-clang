@@ -6,6 +6,7 @@
 #include "../../engine/ai/traffic_sense.h"
 #include "../../engine/camera/follow_camera_controller.h"
 #include "city_possess_logic.h"
+#include "../../engine/control/control_commands.h"
 
 #include <vector>
 
@@ -23,8 +24,8 @@ class CityRenderSystem;
 // sim pedestrian), attaches the AgentDriver brain, and follows routed
 // destinations with the pursuit/sensing stack that has sat harness-tested in
 // engine/ai since the possession-tier retirement. The director supplies
-// INTENT (`possess.cmd` one-shots staged by the channel) and reads state back
-// (`possess.status`, rewritten every frame).
+// INTENT (PossessRequests from the channel's verbs) and reads state back
+// (`possess?`, `look?`, `agent?`, which this system answers).
 //
 // This is the first producer of AgentDriver — VehicleSystem has consumed it
 // (vehicle_system.cpp driveVehicles) since ADR-0062 with nobody writing it.
@@ -40,6 +41,7 @@ public:
     CityPossessSystem(CityRenderSystem& city, engine::PhysicsSystem& physics)
         : city_(city), physicsSys_(physics) {}
 
+    void onStart(engine::FrameContext& ctx) override;      // hears PossessRequest, answers possess?/look?/agent?
     void update(engine::FrameContext& ctx) override;       // commands + camera + status
     void fixedUpdate(engine::FrameContext& ctx) override;  // the drive loop
 
@@ -50,7 +52,7 @@ private:
     void driveTo(engine::FrameContext& ctx, engine::Real x, engine::Real z);
     void walkTo(engine::FrameContext& ctx, engine::Real x, engine::Real z);
     void releasePossession(engine::FrameContext& ctx);
-    void publishLook(engine::FrameContext& ctx);
+    void publishLook();
     void boardNearby(engine::FrameContext& ctx, const PossessCmd& cmd);
     void alightHere(engine::FrameContext& ctx);
     void driveCar(engine::FrameContext& ctx);
@@ -67,6 +69,12 @@ private:
     bool directed_ = false;                    // goal layer held off (ADR-0091)
     PossessState state_ = PossessState::None;
     std::string error_;                        // last command error, for status
+    // PossessRequests heard since the last update (ADR-0253), and what the three questions answer, measured each
+    // frame by publishStatus/publishLook.
+    std::vector<std::string> requests_;
+    std::string statusLine_ = "none", lookLine_ = "none", agentLine_ = "none";
+    engine::EventBus::Subscription onRequest_;
+    engine::ControlCommands::Binding answerStatus_, answerLook_, answerAgent_;
 
     engine::LaneFollower follower_;            // car route
     std::vector<engine::Real> pathSpeeds_;     // per-point class speeds

@@ -30,7 +30,8 @@ nlohmann::json toJson(lua_State* L, int idx, int depth) {
         return lua_tonumber(L, idx);
     case LUA_TSTRING: return std::string(lua_tostring(L, idx));
     case LUA_TTABLE: {
-        if (depth > 32) return nullptr;   // a table that holds itself
+        // A table that holds itself, or deeper than the stack can grow (each level pushes a key and a value)
+        if (depth > 32 || !lua_checkstack(L, 4)) return nullptr;
         const int t = lua_absindex(L, idx);
         const lua_Integer n = sequenceLength(L, t);
         if (n > 0) {
@@ -63,32 +64,47 @@ nlohmann::json luaToJson(lua_State* L, int idx) {
     return toJson(L, idx, 0);
 }
 
-void pushJson(lua_State* L, const nlohmann::json& value) {
+namespace {
+
+void push(lua_State* L, const nlohmann::json& value, JsonNumbers numbers, int depth) {
+    if (depth > 32 || !lua_checkstack(L, 3)) {   // each level holds its table and the value being set
+        lua_pushnil(L);
+        return;
+    }
     switch (value.type()) {
     case nlohmann::json::value_t::boolean: lua_pushboolean(L, value.get<bool>()); return;
     case nlohmann::json::value_t::number_integer:
-    case nlohmann::json::value_t::number_unsigned: lua_pushinteger(L, value.get<lua_Integer>()); return;
+    case nlohmann::json::value_t::number_unsigned:
+        if (numbers == JsonNumbers::AsFloat) lua_pushnumber(L, value.get<double>());
+        else lua_pushinteger(L, value.get<lua_Integer>());
+        return;
     case nlohmann::json::value_t::number_float: lua_pushnumber(L, value.get<double>()); return;
     case nlohmann::json::value_t::string: lua_pushstring(L, value.get<std::string>().c_str()); return;
     case nlohmann::json::value_t::array: {
         lua_createtable(L, static_cast<int>(value.size()), 0);
         lua_Integer i = 1;
         for (const nlohmann::json& v : value) {
-            pushJson(L, v);
+            push(L, v, numbers, depth + 1);
             lua_seti(L, -2, i++);
         }
         return;
     }
     case nlohmann::json::value_t::object: {
         lua_createtable(L, 0, static_cast<int>(value.size()));
-        for (const auto& [k, v] : value.items()) {
-            pushJson(L, v);
-            lua_setfield(L, -2, k.c_str());
+        for (nlohmann::json::const_iterator it = value.begin(); it != value.end(); ++it) {
+            push(L, it.value(), numbers, depth + 1);
+            lua_setfield(L, -2, it.key().c_str());
         }
         return;
     }
     default: lua_pushnil(L); return;
     }
+}
+
+}  // namespace
+
+void pushJson(lua_State* L, const nlohmann::json& value, JsonNumbers numbers) {
+    push(L, value, numbers, 0);
 }
 
 }  // namespace engine

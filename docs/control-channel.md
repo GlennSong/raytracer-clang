@@ -154,6 +154,23 @@ returns the reply; text without `ok`/`err` is sent as `ok <text>`, `nil` as
 `ok`, and a Lua error as `err <verb>: <message>`. The verb goes when the
 script's entity does.
 
+## Who answers a verb
+
+A command verb (`teleport`, `possess`, `daynight 18`) parses its words into a
+typed request and publishes it on the EventBus; the system that does the job
+hears it. When this state has no such system (the editor has no player, a
+level without a city has no possession), the verb says so:
+`err teleport: nothing here takes it (no system for it in this state)`.
+
+A question (`teleport?`, `traffic?`, `possess?`) is listed by the engine and
+answered by the system that owns the answer, while that system runs; until
+then it replies `err <verb>: nothing answers it here (it needs ...)`. The
+city's costly island-wide counts run only while one of the city's own
+questions has been asked in the last minute.
+
+The same requests are named events, so `publish TeleportRequest {...}`, a Lua
+`events.publish(...)` and `teleport ...` all reach the same system.
+
 ## Named events
 
 The EventBus's described types (ADR-0253) are reachable from the socket and

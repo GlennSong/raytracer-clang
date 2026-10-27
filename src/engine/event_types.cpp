@@ -1,6 +1,14 @@
 #include "event_types.h"
 
 #include "audio/audio_engine.h"
+#include "control/city_requests.h"
+#include "systems/camera_system.h"
+#include "systems/day_night_system.h"
+#include "systems/player_system.h"
+#include "systems/teleport_pose.h"
+#include "systems/vehicle_system.h"
+#include "systems/interact_broker_system.h"
+#include "systems/elevator_system.h"
 
 namespace engine {
 
@@ -16,6 +24,29 @@ void describeProperties(PlaySound& e, PropertyVisitor& v) {
 void describeEngineEvents(EventBus& bus) {
     describeEvent<PlaySound>(bus, "PlaySound",
                              "Play a sound cue: a clip path or registered name, flat or at a position.");
+    describeEvent<TeleportRequest>(bus, "TeleportRequest",
+                                   "Move the player (the fly camera when there is none); ground = stand at x z.");
+    describeEvent<CameraPoseRequest>(bus, "CameraPoseRequest",
+                                     "Put the free camera at a pose and detach it from the player.");
+    describeEvent<CameraDetachRequest>(bus, "CameraDetachRequest",
+                                       "The F key: detach (1), re-attach (0, the player comes to the camera), toggle (2).");
+    describeEvent<DayNightRequest>(bus, "DayNightRequest",
+                                   "Drive the day/night cycle: hour, hold, loop minutes, calendar day, moon, terrain shadows, sky HUD, chart.");
+    describeEvent<WeatherRequest>(bus, "WeatherRequest", "Set the weather: clear, fair, overcast, storm, auto or off; now snaps it.");
+    describeEvent<PossessRequest>(bus, "PossessRequest",
+                                  "A possession command line: car|walker [x z], driveto|walkto x z, direct on|off, board, enter, exit, alight, ride x z, stop, release.");
+    describeEvent<LimpRequest>(bus, "LimpRequest", "The player goes limp (G), or is thrown limp at a velocity.");
+    describeEvent<VehicleSpawnRequest>(bus, "VehicleSpawnRequest", "Drop a vehicle in front of the player (N); recipe picks one.");
+    describeEvent<InteractRequest>(bus, "InteractRequest", "The interact key: 1 tap, 2 hold, 3 stand up, 4 next focus (Tab).");
+    describeEvent<ElevatorRequest>(bus, "ElevatorRequest", "The lift: call the cab to this door, and/or move the floor selection by pick.");
+    describeEvent<RideRequest>(bus, "RideRequest", "The player boards the nearest bus (1), cab (2) or either (3), or gets off (0).");
+    describeEvent<TrainBoardRequest>(bus, "TrainBoardRequest", "Put the player aboard a train, standing mid-carriage.");
+    describeEvent<KnockRequest>(bus, "KnockRequest", "Throw the walker nearest the player down, as a car would.");
+    describeEvent<PinRequest>(bus, "PinRequest", "Follow an agent in the full sim however far it goes (on), or stop.");
+    describeEvent<FindPlaceRequest>(bus, "FindPlaceRequest", "Find the places whose name contains this; findplace? answers.");
+    describeEvent<KeyTapRequest>(bus, "KeyTapRequest", "Press and release a key through the real input path (e.g. F).");
+    describeEvent<KeyHoldRequest>(bus, "KeyHoldRequest", "Hold a key (or MouseLeft) down for seconds of sim time.");
+    describeEvent<PersonRequest>(bus, "PersonRequest", "The V key: first (0) or third (1) person on foot, or toggle (2).");
 }
 
 }  // namespace engine

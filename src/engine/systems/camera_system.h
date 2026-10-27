@@ -6,8 +6,29 @@
 #include "../camera/fly_camera_controller.h"
 #include "../camera/follow_camera_controller.h"
 #include "../camera/scene_camera.h"
+#include "../properties.h"
 
 namespace engine {
+
+// CameraPoseRequest (ADR-0253): put the free camera at a pose and detach it from the player (it then wins even in
+// play mode). The socket's `camera` and a teleport with no player publish it.
+struct CameraPoseRequest {
+    Vec3 eye;
+    Real pitch = 0, yaw = 0;   // degrees; yaw 0 looks toward -Z
+};
+inline void describeProperties(CameraPoseRequest& r, PropertyVisitor& v) {
+    v.field(FieldMeta("eye").units("m"), r.eye);
+    v.field(FieldMeta("pitch").units("deg"), r.pitch);
+    v.field(FieldMeta("yaw").units("deg"), r.yaw);
+}
+// CameraDetachRequest: the F key's toggle, from outside. mode 1 = detach, 0 = re-attach (the player comes to the
+// camera), 2 = toggle.
+struct CameraDetachRequest {
+    int mode = 2;
+};
+inline void describeProperties(CameraDetachRequest& r, PropertyVisitor& v) {
+    v.field(FieldMeta("mode").range(0, 2), r.mode);
+}
 
 // Drives the active camera controller from the action layer (keyboard, mouse,
 // and gamepad) each frame and publishes the resulting view into the RenderView.
@@ -61,6 +82,10 @@ public:
     Entity placeCameraAtView(FrameContext& ctx);
 
 private:
+    EventBus::Subscription onPose_, onDetach_;
+    bool posePending_ = false;
+    CameraPoseRequest pose_;
+    int detachPending_ = -1;   // a CameraDetachRequest's mode, until update takes it
     void registerBindings(InputMap& actions) const;
     CameraInput gatherInput(FrameContext& ctx) const;
     Entity placeCamera(FrameContext& ctx, float aspect);

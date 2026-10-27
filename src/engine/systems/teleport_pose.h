@@ -2,6 +2,7 @@
 #define RAYTRACER_ENGINE_TELEPORT_POSE_H
 
 #include "../../rt_math.h"
+#include "../properties.h"
 
 #include <string>
 
@@ -24,6 +25,20 @@ struct TeleportPose {
 // 2 → x z (groundY), 3 → x y z, 4 → + pitch, 5+ → + yaw. Returns the count
 // of numbers consumed (0 = nothing usable).
 int parseTeleportPose(const std::string& text, TeleportPose& out);
+
+// TeleportRequest (ADR-0253): move the player there (the fly camera when there is none). TeleportSystem hears it
+// and answers `teleport?` with where it landed. The socket's `teleport`, the camera's fast travel on re-attach,
+// and Lua (events.publish("TeleportRequest", {position = {x, y, z}, ground = true})) publish it.
+struct TeleportRequest {
+    TeleportPose pose;
+};
+inline void describeProperties(TeleportRequest& r, PropertyVisitor& v) {
+    v.field(FieldMeta("position").units("m"), r.pose.position);
+    v.field(FieldMeta("pitch").units("deg"), r.pose.pitch);
+    v.field(FieldMeta("yaw").units("deg"), r.pose.yaw);
+    v.field(FieldMeta("look"), r.pose.hasLook);      // pitch and yaw given
+    v.field(FieldMeta("ground"), r.pose.groundY);    // stand on the ground at position's x z
+}
 // The pose as the paste format ("%.2f %.2f %.2f %.2f %.2f").
 std::string formatTeleportPose(const Vec3& position, double pitch, double yaw);
 

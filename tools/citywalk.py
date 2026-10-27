@@ -90,8 +90,8 @@ class Channel:
         return self.send(f"direct {'on' if on else 'off'}")
 
     def status(self):
-        """`possess?` -> state + pos/speed/remaining (ADR-0079). The settings key
-        possess.status is the INTERNAL channel; the verb is what a director uses."""
+        """`possess?` -> state + pos/speed/remaining (ADR-0079), answered by
+        CityPossessSystem (ADR-0253)."""
         r = self.send("possess?")
         return r[3:].strip() if r.startswith("ok ") else r
 
@@ -350,9 +350,9 @@ def main():
     print(f"viewer: {info[:120]}\nsocket: {os.path.basename(ch.path)}")
 
     before = parse_status(ch.status())
-    print(f"possess.status before: {before['raw']!r}")
+    print(f"possess? before: {before['raw']!r}")
     if a.dry_run:
-        print("[dry-run] would send: set possess.cmd walker")
+        print("[dry-run] would send: possess walker")
     else:
         print("possess walker ->", ch.possess("walker"))
         time.sleep(1.0)
@@ -363,7 +363,7 @@ def main():
 
     status = parse_status(ch.status())
     pos = position(status)
-    print(f"possess.status after: {status['raw']!r}  parsed position: {pos}")
+    print(f"possess? after: {status['raw']!r}  parsed position: {pos}")
     if pos is None and not a.dry_run:
         print("no position in status — cannot navigate; releasing")
         ch.release()

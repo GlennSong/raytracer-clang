@@ -5,6 +5,7 @@
 #include "procgen_mesh.h"
 #include "lua_state.h"
 #include "lua_helpers.h"     // optField, checkVec3/pushVec3
+#include "lua_json.h"        // pushJson: a recipe's args
 #include "../procgen/sdf.h"
 #include "../procgen/noise.h"
 #include "../procgen/lsystem.h"
@@ -4358,40 +4359,12 @@ bool runProcgenMesh(ScriptVM& vm, const std::string& code,
     return false;
 }
 
-namespace {
-// Recursively push a JSON value onto the Lua stack (objects -> keyed tables,
-// arrays -> 1-based tables, primitives map across).
-void pushJson(lua_State* L, const nlohmann::json& j) {
-    if (j.is_object()) {
-        lua_newtable(L);
-        for (auto it = j.begin(); it != j.end(); ++it) {
-            pushJson(L, it.value());
-            lua_setfield(L, -2, it.key().c_str());
-        }
-    } else if (j.is_array()) {
-        lua_newtable(L);
-        lua_Integer i = 1;
-        for (const auto& e : j) {
-            pushJson(L, e);
-            lua_seti(L, -2, i++);
-        }
-    } else if (j.is_boolean()) {
-        lua_pushboolean(L, j.get<bool>());
-    } else if (j.is_number()) {
-        lua_pushnumber(L, j.get<double>());
-    } else if (j.is_string()) {
-        lua_pushstring(L, j.get<std::string>().c_str());
-    } else {
-        lua_pushnil(L);
-    }
-}
-}  // namespace
 
 void setRecipeArgs(ScriptVM& vm, const std::string& optsJson) {
     nlohmann::json opts = nlohmann::json::parse(optsJson, nullptr, false);
     if (opts.is_discarded() || !opts.is_object()) return;   // ignore malformed opts
     lua_State* L = luaState(vm);
-    pushJson(L, opts);
+    pushJson(L, opts, JsonNumbers::AsFloat);
     lua_setglobal(L, "args");
 }
 

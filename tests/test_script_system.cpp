@@ -267,3 +267,27 @@ TEST_CASE(script_events_reach_cpp_and_back) {
     sys.tick(world, 0.1);
     CHECK(bus.subscriberCount<PlaySound>() == 1);
 }
+
+TEST_CASE(script_events_survive_deep_tables) {
+    // A table nested past what the converter follows (or the stack grows) becomes null there, not a crash.
+    World world;
+    EventBus bus;
+    describeEngineEvents(bus);
+    int heard = 0;
+    bus.subscribe<PlaySound>([&](const PlaySound&) { ++heard; });
+    makeScripted(world, R"LUA(
+        local M = {}
+        function M:start(e)
+            local t = {}
+            local deep = t
+            for i = 1, 200 do deep.x = {}; deep = deep.x end
+            assert(events.publish("PlaySound", {clip = "deep", extra = t}))
+        end
+        return M
+    )LUA");
+    ScriptSystem sys;
+    sys.setServices(nullptr, nullptr, nullptr, &bus);
+    sys.tick(world, 0.1);
+    bus.dispatchQueued();
+    CHECK(heard == 1);
+}

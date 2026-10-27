@@ -4,6 +4,7 @@
 #include "../system.h"
 #include "../camera/fly_camera_controller.h"
 #include "teleport_pose.h"
+#include "../control/control_commands.h"
 
 #include <string>
 #include <vector>
@@ -52,7 +53,11 @@ private:
     PhysicsSystem* physics_;
     char pasteBuf_[256] = {};
     char nameBuf_[64] = {};
-    std::string lastResult_;
+    std::string lastResult_;   // what the last TeleportRequest did; "" while one waits (`teleport?` says pending)
+    bool pending_ = false;
+    TeleportPose pendingPose_;
+    EventBus::Subscription onRequest_;
+    ControlCommands::Binding answer_;   // `teleport?`
     std::vector<TeleportBookmark> bookmarks_;
     bool groundAt(FrameContext& ctx, double x, double z, double& y) const;
     void loadBookmarks(FrameContext& ctx);

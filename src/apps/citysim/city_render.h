@@ -7,6 +7,8 @@
 #include "city_meshes.h"   // buildPersonMesh, materials (was declared here)
 #include "city_sim.h"
 #include "places.h"        // PlaceMap (ADR-0066)
+#include "../../engine/control/city_requests.h"
+#include "../../engine/control/control_commands.h"
 #include <functional>
 #include <string>
 #include <unordered_map>
@@ -587,13 +589,22 @@ private:
     std::vector<uint8_t> signedAtWork_;  // ...each one at work, refreshed a thirtieth a frame from shiftCursor_
     std::size_t signedStaffOf_ = 0, shiftCursor_ = 0;
     void listSignedStaff();
-    void dealOpenSigns(engine::World& world, engine::Settings& settings, engine::Vec3 cam);
+    void dealOpenSigns(engine::World& world, engine::Vec3 cam);
     int parkingTick_ = 0;   // (parking? telemetry every 60 frames)   // the drivable parking garages (CitySimConfig)   // seats that are not furniture: a fountain's rim (CitySimConfig)
     std::unordered_map<int, std::vector<uint32_t>> indoorHeld_;   // record index -> spots our occupants hold, per piece
     int indoorDrawn_ = 0;
 public:
     int indoorDrawn() const { return indoorDrawn_; }
 private:
+    engine::EventBus::Subscription onSimHour_;   // SimHourQuery: `daynight?` asks the sim's own hour
+    engine::EventBus::Subscription onPin_, onFindPlace_;
+    std::vector<engine::PinRequest> pinRequests_;
+    std::string findPlace_;            // a FindPlaceRequest's name, until update answers it
+    std::string groundQuery_;          // `ground? x z [r]`, until update answers it
+    std::string groundResult_ = "none";
+    engine::ControlAnswers answers_;   // parking? traffic? depots? opensigns? findplace? pin?
+    engine::ControlCommands::Binding answerGround_;
+    std::string depotsStalled_;
     engine::Entity signalGroups_[3];   // lit lens, indexed by SignalState (Green/Yellow/Red)
     engine::Entity signalPostGroup_;   // the static pole+arm+head assemblies
     engine::Entity parkBayGroup_;      // curbside bay outline markings (R6b)

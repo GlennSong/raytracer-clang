@@ -70,6 +70,34 @@ public:
     // subscriber can unsubscribe unconditionally in its teardown.
     void unsubscribe(SubscriptionId id);
 
+    // A subscription that ends when it is destroyed: a system keeps these as members, so it stops hearing
+    // events when it goes (the bus must outlive it; Application declares it before the state stack).
+    class Subscription {
+    public:
+        Subscription() = default;
+        Subscription(EventBus* bus, SubscriptionId id) : bus_(bus), id_(id) {}
+        ~Subscription() { reset(); }
+        Subscription(Subscription&& o) noexcept : bus_(o.bus_), id_(o.id_) { o.bus_ = nullptr; }
+        Subscription& operator=(Subscription&& o) noexcept {
+            if (this != &o) { reset(); bus_ = o.bus_; id_ = o.id_; o.bus_ = nullptr; }
+            return *this;
+        }
+        Subscription(const Subscription&) = delete;
+        Subscription& operator=(const Subscription&) = delete;
+        void reset() {
+            if (bus_ != nullptr) bus_->unsubscribe(id_);
+            bus_ = nullptr;
+        }
+
+    private:
+        EventBus* bus_ = nullptr;
+        SubscriptionId id_ = INVALID_SUBSCRIPTION;
+    };
+    template <typename E>
+    Subscription listen(std::function<void(const E&)> handler) {
+        return Subscription(this, subscribe<E>(std::move(handler)));
+    }
+
     // Deliver `event` to every current subscriber of E, in subscription order.
     template <typename E>
     void publish(const E& event) {

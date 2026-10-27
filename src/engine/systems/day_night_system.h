@@ -6,6 +6,11 @@
 #include "../sky_chart.h"
 #include "../weather_cycle.h"
 #include "../procgen/terrain_horizon.h"
+#include "../properties.h"
+#include "../control/control_commands.h"
+
+#include <string>
+#include <vector>
 
 #ifdef __EMSCRIPTEN__
 #include <limits>
@@ -14,6 +19,47 @@
 namespace engine {
 
 struct DayNightConfig;
+
+// DayNightRequest (ADR-0253): drive the cycle from outside -- the socket's `daynight`, Lua. Each field left at its
+// "unset" value is left alone: hour < 0, hold/terrain/hud < 0 (else 0 off, 1 on), minutes < 0, day 0, chart "",
+// moon < 0 unless moonAuto. Setting the hour, the day or the moon turns the cycle on.
+struct DayNightRequest {
+    Real hour = -1;        // 0-24
+    int hold = -1;         // 1 holds the light (not the sim clock), 0 runs it
+    Real minutes = -1;     // real minutes per day; 0 freezes the sun
+    int day = 0;           // 1-365: the calendar day (season, moon)
+    Real moon = -1;        // the moon's age in days, held
+    bool moonAuto = false; // the moon follows the calendar again
+    int terrain = -1;      // terrain horizon shadows
+    int hud = -1;          // the sky HUD
+    std::string chart;     // write the day's sky chart (SVG) here
+};
+inline void describeProperties(DayNightRequest& r, PropertyVisitor& v) {
+    v.field(FieldMeta("hour").range(0, 24), r.hour);
+    v.field(FieldMeta("hold"), r.hold);
+    v.field(FieldMeta("minutes"), r.minutes);
+    v.field(FieldMeta("day").range(1, 365), r.day);
+    v.field(FieldMeta("moon").units("days"), r.moon);
+    v.field(FieldMeta("moonAuto"), r.moonAuto);
+    v.field(FieldMeta("terrain"), r.terrain);
+    v.field(FieldMeta("hud"), r.hud);
+    v.field(FieldMeta("chart"), r.chart);
+}
+// WeatherRequest: clear, fair, overcast, storm (eased in over ~40 s, or snapped with `now`), auto (the seeded
+// walk), or off (the cloud knobs back to the panel).
+struct WeatherRequest {
+    std::string state;
+    bool now = false;
+};
+inline void describeProperties(WeatherRequest& r, PropertyVisitor& v) {
+    v.field(FieldMeta("state").options({"clear", "fair", "overcast", "storm", "auto", "off"}), r.state);
+    v.field(FieldMeta("now"), r.now);
+}
+// SimHourQuery: the city sim's own hour, for `daynight?` beside the sky's (one clock). A question on the bus: the
+// sim, if there is one, writes it into `hours` (left at -1 otherwise). Not named: it carries a pointer.
+struct SimHourQuery {
+    double* hours = nullptr;
+};
 
 // Advances a DayNightCycle on SIMULATION time and writes its state into the
 // RenderView's lighting: the procedural sky (skybox + IBL) and the directional
@@ -45,10 +91,17 @@ private:
     bool hdrEnvironmentActive(FrameContext& ctx) const;
     bool configSeeded_ = false;   // DayNightConfig seeds applied once
     void seedFromConfig(const DayNightConfig& c);
-    // `daynight?` on the control channel reads the clock as numbers from
-    // settings ("daynight.status", the weather.status idiom) — the loop's
+    // `daynight?` on the control channel (bound by this system) answers the
+    // clock as numbers, measured here each frame into status_ — the loop's
     // rate is MEASURED, not trusted: two reads a real minute apart.
     void publishStatus(FrameContext& ctx, bool active);
+    std::string status_ = "no cycle";   // what publishStatus last measured
+    std::vector<DayNightRequest> dayRequests_;   // heard since the last update, applied in order
+    bool weatherPending_ = false;
+    WeatherRequest weatherRequest_;
+    void applyRequests(FrameContext& ctx);
+    EventBus::Subscription onDay_, onWeather_;
+    ControlCommands::Binding answerClock_, answerWeather_;
     // THE SKY HUD (device: "sun and moon positions in the sky"): a compass
     // strip with sun/moon markers at their bearings relative to the camera,
     // and the day's polar chart (sky_chart.h) — the same numbers the SVG
