@@ -1034,15 +1034,23 @@ std::string Application::handleControlCommand(const std::string& line) {
     }
 
     if (cmd.name == "ride") {
-        // Board the nearest bus or cab, or get off (city_player_transit.h).
-        // NPCs have been riding since RideBook; this is the player's seat.
+        // One verb, two riders. `ride <x> <z>` sends the possessed agent by bus to a
+        // place (ADR-0091); it was a second handler further down that this one always
+        // returned before, so it never ran.
+        double x, z;
+        if (cmd.args.size() == 2 && num(cmd.args[0], x) && num(cmd.args[1], z)) {
+            settingsStore.setString("possess.cmd", "ride " + cmd.args[0] + " " + cmd.args[1]);
+            return "ok staged (poll possess?)";
+        }
+        // Otherwise the player boards the nearest bus or cab, or gets off
+        // (city_player_transit.h). NPCs have been riding since RideBook; this is the player's seat.
         const std::string what = cmd.args.empty() ? "any" : cmd.args[0];
         double v = -1.0;
         if (what == "off") v = 0.0;
         else if (what == "bus") v = 1.0;
         else if (what == "taxi" || what == "cab") v = 2.0;
         else if (what == "any") v = 3.0;
-        else return "err usage: ride bus|taxi|any|off";
+        else return "err usage: ride bus|taxi|any|off  (or ride <x> <z> for the possessed agent)";
         settingsStore.setDouble("player.rideRequest", v);
         return "ok ride " + what + " staged";
     }
@@ -1417,14 +1425,7 @@ std::string Application::handleControlCommand(const std::string& line) {
         settingsStore.setString("possess.cmd", "board" + arg);
         return "ok staged (poll possess?)";
     }
-    if (cmd.name == "ride") {
-        double x, z;
-        if (cmd.args.size() < 2 || !num(cmd.args[0], x) || !num(cmd.args[1], z))
-            return "err usage: ride <x> <z>";
-        settingsStore.setString("possess.cmd",
-                                "ride " + cmd.args[0] + " " + cmd.args[1]);
-        return "ok staged (poll possess?)";
-    }
+    // `ride <x> <z>` for the possessed agent is handled with the player's `ride` above.
     if (cmd.name == "enter" || cmd.name == "exit") {
         settingsStore.setString("possess.cmd", cmd.name);
         return "ok staged (poll possess?)";
