@@ -200,10 +200,11 @@ void reachTo(BodyPose& pose, BlockBody::Part limb, const Vec3& world) {
 // about the hinge (x, through the joint) by its share of the fold -- none above the bend, all of it below, eased
 // across 2r round it. For a hinge this is what dual-quaternion skinning does: the rings rotate, they don't blend
 // their corners (linear blending pinches a bent joint thin, the "candy wrapper"), so the knee keeps its thickness.
-RenderMesh skinnedLimb(int limb, Real fold, const Vec3& colour) {
+RenderMesh skinnedLimb(int limb, Real fold, const Vec3& colour, Real girth) {
     const BlockBody::Part up = BlockBody::upper(limb), lo = BlockBody::lower(limb);
-    const Vec3 su = BlockBody::parts()[static_cast<std::size_t>(up)].size;
-    const Vec3 sl = BlockBody::parts()[static_cast<std::size_t>(lo)].size;
+    const Vec3 thick(girth, 1, girth);   // (the cross-section only: the bones keep their lengths)
+    const Vec3 su = BlockBody::parts()[static_cast<std::size_t>(up)].size * thick;
+    const Vec3 sl = BlockBody::parts()[static_cast<std::size_t>(lo)].size * thick;
     const Real a = partLength(up), b = partLength(lo);
     const Real r = 0.75 * std::max(su.x, su.z) * 0.5;   // the bend's half width
     const Real th = std::clamp(fold, Real(0), limb >= 2 ? kKneeMax : kElbowMax);

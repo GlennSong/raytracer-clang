@@ -650,6 +650,8 @@ private:
     std::vector<std::vector<engine::Vec3>> carSeats_;
     std::vector<std::vector<engine::Vec3>> carDoors_;
     std::vector<engine::Vec3> carDriverSeat_;
+    std::vector<engine::Vec3> carRearHip_;   // per slot: the back bench's hip point (its middle), where carHasRear_
+    std::vector<char> carHasRear_;
     std::vector<char> carHasDriver_;
     engine::Entity busDriverGroup_{};
     engine::Entity busRiderGroups_[3] = {};

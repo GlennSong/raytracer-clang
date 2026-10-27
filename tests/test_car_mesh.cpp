@@ -256,7 +256,8 @@ TEST_CASE(car_lamp_attaches_are_named_and_legal) {
 
     std::map<std::string, int> seen;
     for (const CarAttach& a : car.attaches) seen[a.tag]++;
-    CHECK(seen.size() == 5);   // four lamps + the driver's seat
+    CHECK(seen.size() == 6);   // four lamps, the driver's seat and the back bench's hip (ADR-0254)
+    CHECK(seen["rear_hip"] == 1);
     CHECK(seen["headlight_l"] == 1);
     CHECK(seen["headlight_r"] == 1);
     CHECK(seen["taillight_l"] == 1);

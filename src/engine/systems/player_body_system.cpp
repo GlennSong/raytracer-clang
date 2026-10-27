@@ -8,6 +8,7 @@
 #include "../player_pose.h"
 #include "../player/driver_seat.h"   // seatedPose
 #include "../procgen/person.h"
+#include "../procgen/vehicle/occupant.h"   // seatedOccupantPose, chairOccupant
 
 #include <algorithm>
 #include <cmath>
@@ -20,6 +21,8 @@ namespace {
 
 constexpr Real kTau = 6.283185307179586;
 constexpr Real kDeg = 3.14159265358979 / 180.0;
+constexpr Real kFaceSpeed = 0.3;      // walking: turn to face the way it goes above this (the walkers' rule)
+constexpr Real kTeleportJump = 3.0;   // a step past this in one tick is a teleport (a respawn, a boarding), not a stride
 
 Vec3 flat(const Vec3& v) {
     const Real l = std::sqrt(v.x * v.x + v.z * v.z);
@@ -114,9 +117,11 @@ void PlayerBodySystem::fixedUpdate(FrameContext& ctx) {
     drawBoards(ctx, p, body, cc ? cc->halfHeight + cc->radius : 0.7);
     // at the wheel: seen from the chase camera whichever view is set
     driving_ = p && body && cc && p->mode == PlayerPose::Mode::Drive && world.has<InVehicle>(player);
+    // in third person (or limp) whatever it is doing; never in someone else's seat model or sat at a pose the
+    // first-person camera holds (Seated: a bench, a bed)
     const bool visible = driving_ ||
-                         (p && body && cc && drawnAsBlocks(p->mode) && !world.has<InVehicle>(player) &&
-                          !world.has<Seated>(player) && (ragdoll || ctx.settings.getBool("playerThirdPerson", false)));
+                         (p && body && cc && !world.has<InVehicle>(player) && !world.has<Seated>(player) &&
+                          (ragdoll || ctx.settings.getBool("playerThirdPerson", false)));
     if (!made_) {
         if (!visible) return;
         const MeshHandle box = ctx.assets.acquireMesh(MeshBuilder::box(Vec3(1, 1, 1)), "player:arm_block");
@@ -135,6 +140,7 @@ void PlayerBodySystem::fixedUpdate(FrameContext& ctx) {
             r.material.opacity = 1.0f;
             world.add<Renderable>(parts_[i], r);
         }
+        meshes_.warm(ctx.assets);
         made_ = true;
     }
     auto place = [&](int i, const Vec3& at, const Quat& q, const Vec3& size) { this->place(world, i, at, q, size); };
@@ -145,12 +151,35 @@ void PlayerBodySystem::fixedUpdate(FrameContext& ctx) {
                 if (PrevTransform* pt = world.get<PrevTransform>(parts_[i])) pt->value = *world.get<Transform>(parts_[i]);
             }
         shown_ = false;
+        haveLast_ = false;   // (the stride re-anchors when it shows again)
+        aboard_ = false;
         return;
     }
     const bool firstShow = !shown_;
     shown_ = true;
+    aboard_ = false;
     if (driving_) return;   // (render() sits it in the seat)
-    clock_ += ctx.clock.fixedStep();
+    const Real dt = ctx.clock.fixedStep();
+    clock_ += dt;
+
+    // How far the body went this step, for the stride and the facing: the capsule's move, or aboard, the feet's way
+    // through the carrier. A jump (a respawn, a boarding) is no stride: the parts are put there, not drawn sliding.
+    const Passenger* ps = world.get<Passenger>(player);
+    const Vec3 jumped = haveLast_ ? body->position - lastPos_ : Vec3(0, 0, 0);
+    const bool snap = std::sqrt(jumped.x * jumped.x + jumped.z * jumped.z) > kTeleportJump;
+    Vec3 moved = snap ? Vec3(0, 0, 0) : jumped;
+    lastPos_ = body->position;
+    if (ps) {
+        const Vec3 l = ps->local - (wasAboard_ ? lastLocal_ : ps->local);
+        lastLocal_ = ps->local;
+        const Vec3 f = ps->facing;   // the carrier's forward; its right is (f.z, -f.x) (a yaw)
+        moved = Vec3(f.z * l.x + f.x * l.z, 0, -f.x * l.x + f.z * l.z);
+    }
+    wasAboard_ = ps != nullptr;
+    haveLast_ = true;
+    if (snap) stride_ = 0;
+    const Real hDist = std::sqrt(moved.x * moved.x + moved.z * moved.z);
+    const Real hSpeed = dt > 0 ? hDist / dt : 0;
 
     std::array<PartTransform, BlockBody::kParts> blocks;
     if (ragdoll) {
@@ -160,6 +189,18 @@ void PlayerBodySystem::fixedUpdate(FrameContext& ctx) {
             blocks[static_cast<std::size_t>(i)].orientation = p->ragdollRot[i];
             blocks[static_cast<std::size_t>(i)].size = BlockBody::parts()[static_cast<std::size_t>(i)].size * s;
         }
+    } else if (ps && ps->sitting) {
+        // SAT DOWN as a passenger: the body in the seat (procgen/vehicle/occupant.h) -- a car's, low and reclined
+        // under its roof, or a bus's or a train's, upright -- its hip `hipBelow` under the rider's centre, facing the
+        // way the carrier faces
+        BodyPose pose = seatedOccupantPose(ps->carSeat ? carPassenger() : chairOccupant(),
+                                           (cc->halfHeight + cc->radius) / BlockBody::kHalfHeight);
+        const Quat yaw = yawTo(ps->facing);
+        pose.position = body->position - Vec3(0, ps->hipBelow, 0) + yaw.rotate(pose.position);
+        pose.orientation = yaw * pose.orientation;
+        if (flat(ps->facing).lengthSquared() > 0.5) facing_ = flat(ps->facing);
+        stride_ = 0;
+        blocks = poseBlocks(pose);
     } else {
         BodyPose pose;
         pose.position = body->position;
@@ -182,6 +223,10 @@ void PlayerBodySystem::fixedUpdate(FrameContext& ctx) {
                 break;
             case PlayerPose::Mode::Grapple:   // turned to what it hangs from (the rope's hand is the right one: PlayerHands)
                 if (flat(p->anchor - body->position).lengthSquared() > 0.5) face = flat(p->anchor - body->position);
+                break;
+            case PlayerPose::Mode::Walk:     // the way it actually goes (the walkers' rule): free to look round a body
+            case PlayerPose::Mode::Hidden:   // standing still
+                if (hSpeed > kFaceSpeed && hDist > 1e-6) face = moved * (1.0 / hDist);
                 break;
             case PlayerPose::Mode::PlaySwing:
             case PlayerPose::Mode::Bars:
@@ -337,10 +382,21 @@ void PlayerBodySystem::fixedUpdate(FrameContext& ctx) {
                 pose.kneeR = 0.55;
                 break;
             }
-            default:
+            case PlayerPose::Mode::Walk:
+            case PlayerPose::Mode::Hidden: {   // (the freecam: the body left standing where it was)
+                // THE STRIDE: the walkers' cycle (procgen/person.h) at its exact swing this step
+                const bool striding = p->mode == PlayerPose::Mode::Walk && advanceStride(stride_, hSpeed, dt);
+                BodyPose walk = walkBodyPose(striding ? strideSwing(stride_) : 0);
+                walk.position = pose.position;
+                walk.scale = pose.scale;
+                walk.orientation = yawTo(face);
+                pose = walk;
+                break;
+            }
+            default:   // in the air
                 pose.orientation = yawTo(face);
                 pose.elbowL = pose.elbowR = 0.25;   // nothing rigid: soft knees and elbows
-                pose.kneeL = pose.kneeR = p->mode == PlayerPose::Mode::Air ? 0.45 : 0.1;
+                pose.kneeL = pose.kneeR = 0.45;
                 break;
         }
         blocks = poseBlocks(pose);
@@ -357,9 +413,11 @@ void PlayerBodySystem::fixedUpdate(FrameContext& ctx) {
         }
         if (Renderable* r = world.get<Renderable>(parts_[i])) r->mesh = b.mesh;
         place(i, b.position, b.orientation, b.scale);
-        if (firstShow)
+        if (firstShow || snap)
             if (PrevTransform* pt = world.get<PrevTransform>(parts_[i])) pt->value = *world.get<Transform>(parts_[i]);
+        rideOffset_[static_cast<std::size_t>(i)] = b.position - body->position;
     }
+    aboard_ = ps != nullptr && !ragdoll;
 }
 
 void PlayerBodySystem::place(World& world, int i, const Vec3& at, const Quat& q, const Vec3& size) {
@@ -373,13 +431,25 @@ void PlayerBodySystem::place(World& world, int i, const Vec3& at, const Quat& q,
 }
 
 void PlayerBodySystem::render(FrameContext& ctx) {
-    if (!driving_ || !made_) return;
+    if (!made_ || !shown_ || (!driving_ && !aboard_)) return;
     World& world = ctx.world;
     Entity player;
     world.each<Transform, CharacterController, ControlledBy>(
         [&](Entity e, Transform&, CharacterController&, ControlledBy&) {
             if (!player.valid()) player = e;
         });
+    if (!driving_) {
+        // aboard: the rider is where RidingSystem's render put them (the carrier as drawn); the body goes with them
+        const Transform* rider = player.valid() ? world.get<Transform>(player) : nullptr;
+        if (!rider) return;
+        for (int i = 0; i < BlockBody::kParts; ++i) {
+            Transform* t = world.get<Transform>(parts_[i]);
+            if (!t || t->position.y < -1000) continue;   // (a part not drawn)
+            t->position = rider->position + rideOffset_[static_cast<std::size_t>(i)];
+            if (PrevTransform* pt = world.get<PrevTransform>(parts_[i])) pt->value = *t;   // drawn where it is put
+        }
+        return;
+    }
     const PlayerPose* p = player.valid() ? world.get<PlayerPose>(player) : nullptr;
     const InVehicle* iv = player.valid() ? world.get<InVehicle>(player) : nullptr;
     const CharacterController* cc = player.valid() ? world.get<CharacterController>(player) : nullptr;

@@ -291,7 +291,7 @@ RenderMesh buildBusInterior(const CabinSpace& cabin, const InteriorParams& p,
 
 RenderMesh buildCarInterior(const CabinSpace& cabin, const InteriorParams& p,
                             Vec3* sgrpOut, std::vector<Vec3>* seatsOut,
-                            std::vector<Vec3>* doorsOut) {
+                            std::vector<Vec3>* doorsOut, std::vector<Vec3>* rearHipOut) {
     if (p.rows <= 0) return buildBusInterior(cabin, p, sgrpOut, seatsOut, doorsOut);
     RenderMesh out;
     const Real cabinLen = cabin.frontZ - cabin.rearZ;
@@ -371,7 +371,9 @@ RenderMesh buildCarInterior(const CabinSpace& cabin, const InteriorParams& p,
         for (const Scope& r : rear) {
             Scope bench = r;
             bench.size.z = std::min(bench.size.z, p.seatPitch);
-            emitSeat(bm, bench, p, nullptr);
+            Vec3 hip;
+            emitSeat(bm, bench, p, &hip);
+            if (rearHipOut && rearHipOut->empty() && p.rows > 0) rearHipOut->push_back(hip);   // (the first row back)
         }
     }
 

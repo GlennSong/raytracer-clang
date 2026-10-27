@@ -22,10 +22,27 @@ struct BodyPose;
 // blocks, each limb one skinned tube bent at its fold. About the pose's position (give it the origin for a mesh
 // centred like the one above).
 RenderMesh buildPosedPerson(const BodyPose& pose, int outfit);
+RenderMesh buildPosedPerson(const BodyPose& pose, const PersonOutfit& outfit);
 // THE STRIDE with knees and elbows, for a walk cycle's `swing` (buildStandingPerson's: radians, + the L leg back):
 // legs opposed and arms counter-swinging as there, the trailing leg's knee folding as it pushes off, the arms'
 // elbows soft and bending as they come forward.
 BodyPose walkBodyPose(Real swing);
+
+// THE WALK CYCLE, one for everyone who walks (the city's walkers and the player's body): the stride advances with the
+// body's REAL horizontal speed, so the legs move exactly as fast as the ground goes by, and below kWalkAnimMinSpeed
+// the phase holds and the body stands -- a held body never moonwalks. The walkers bake kWalkPoses poses of it and
+// hop between them; the player's body is posed every step at its exact swing.
+constexpr int kWalkPoses = 6;             // baked poses per stride cycle (pose 0 stands)
+constexpr Real kMaxSwing = 0.55;          // peak limb pitch (radians, ~32 deg)
+constexpr Real kStrideLength = 1.5;       // metres per full walk cycle
+constexpr Real kWalkAnimMinSpeed = 0.3;   // below this the body stands
+// Advance `stridePhase` (kept wrapped to [0,1)) by the distance walked this tick; false while the body stands.
+bool advanceStride(Real& stridePhase, Real speed, Real dt);
+// The limb swing at a phase of the stride (radians, for walkBodyPose), and the one baked into pose `pose`.
+Real strideSwing(Real stridePhase);
+Real walkPoseSwing(int pose);
+// Advance the stride and return the baked pose to draw (0 standing).
+int walkPoseIndex(Real& stridePhase, Real speed, Real dt);
 
 }  // namespace engine
 

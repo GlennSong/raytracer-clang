@@ -525,8 +525,8 @@ void PlayerSystem::update(FrameContext& ctx) {
         ctx.world.each<SceneCamera>([&](Entity, SceneCamera&) { placedCameras = true; });
         if (!placedCameras) {
             thirdPerson = !thirdPerson;
-            // Published for the body system (apps/citysim/city_player_body.*):
-            // it shows the player's person mesh only in third person.
+            // Kept as a preference; PlayerBodySystem shows the body only in
+            // third person.
             ctx.settings.setBool("playerThirdPerson", thirdPerson);
             LOG_INFO << "On-foot camera: "
                      << (thirdPerson ? "third person (over the shoulder)"

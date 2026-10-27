@@ -23,8 +23,7 @@ class PhysicsSystem;
 // The FLY controller is the player's HEADING either way (CameraSystem feeds it mouse/stick look): first person
 // renders from its pinned eye; third person (V -- the on-foot camera toggle) frames the same heading from an
 // over-the-shoulder follow rig (FollowCameraController::applyShoulderPreset), fly pitch tilting the rig. The mode is
-// published to Settings ("playerThirdPerson") so the render-side body system (apps/citysim/city_player_body.*)
-// shows/hides the player's person mesh without a dependency on this system.
+// kept in Settings ("playerThirdPerson", a preference) and the body (PlayerBodySystem) shows only in third person.
 // PersonRequest (ADR-0253): the on-foot camera, first (0) or third (1) person, or toggle (2) -- the V key from
 // outside: the socket's `person` and the Teleport panel's checkbox.
 struct PersonRequest {

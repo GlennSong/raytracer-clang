@@ -88,7 +88,8 @@ Real foldOf(const Quat& upper, const Quat& lower);
 // THE SKINNED LIMB, folded `fold` radians: one continuous tube -- upper half, the bend, lower half -- in the upper
 // half's frame from poseBlocks with its ROOT JOINT at the origin (the shoulder or hip), unscaled. Placed at the
 // root with the upper's orientation and the pose's scale it covers both halves' blocks.
-RenderMesh skinnedLimb(int limb, Real fold, const Vec3& colour);
+// `girth` scales the cross-section, not the bones: the first-person view's slimmer arm (ADR-0254).
+RenderMesh skinnedLimb(int limb, Real fold, const Vec3& colour, Real girth = 1);
 // The rotation taking local -y to `dir` (unit) with as little twist as it can: a limb hung along a direction.
 Quat hangAlong(const Vec3& dir);
 // A body-frame direction for a limb reaching from its joint to a world point.

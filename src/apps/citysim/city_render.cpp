@@ -1140,6 +1140,8 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
     carSeats_.clear();
     carDoors_.clear();
     carDriverSeat_.clear();
+    carRearHip_.clear();
+    carHasRear_.clear();
     carHasDriver_.clear();
     if (!carsExternallyOwned_) {
 #ifdef RT_ENABLE_SCRIPTING
@@ -1158,7 +1160,8 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
             bool seeInto = false;
             bool openSeat = false;
             std::vector<Vec3> seats, doors;
-            Vec3 driverSeat(0, 0, 0);
+            Vec3 driverSeat(0, 0, 0), rearHip(0, 0, 0);
+            bool hasRear = false;
             bool hasDriver = false;
             if (assets) {
                 engine::RenderMesh mesh;
@@ -1198,6 +1201,8 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
                         doors = recipe.doors;
                         driverSeat = recipe.driverSeat;
                         hasDriver = recipe.hasDriverSeat;
+                        rearHip = recipe.rearHip;
+                        hasRear = recipe.hasRearHip;
                 } else if (vehScript) {
                     LOG_ERROR << "[citysim] fleet slot " << v << ": " << slotErr
                               << " — this slot draws NO car";
@@ -1283,6 +1288,8 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
                 carSeats_.push_back(std::move(seats));
                 carDoors_.push_back(std::move(doors));
                 carDriverSeat_.push_back(driverSeat);
+                carRearHip_.push_back(rearHip);
+                carHasRear_.push_back(hasRear ? 1 : 0);
                 carHasDriver_.push_back(hasDriver ? 1 : 0);
             }
 
@@ -4731,11 +4738,11 @@ bool CityRenderSystem::carSeatsOf(int agent, Mat4* pose, std::vector<Vec3>* seat
         seats->clear();
         seats->push_back(d);
         seats->push_back(Vec3(-d.x, d.y, d.z));
-        // a rear bench needs ~0.85 m behind the front seats: a two-seater (under ~3.9 m) has none
-        if (a.vehicle < static_cast<int>(sim_.vehicles().size()) &&
-            sim_.vehicles()[static_cast<std::size_t>(a.vehicle)].length >= 3.9) {
-            seats->push_back(Vec3(d.x, d.y, d.z - 0.85));
-            seats->push_back(Vec3(-d.x, d.y, d.z - 0.85));
+        // the back bench, where the model has one (its recipe's rear_hip), a seat each side of its middle
+        if (v < carHasRear_.size() && carHasRear_[v]) {
+            const Vec3 r = carRearHip_[v];
+            seats->push_back(Vec3(d.x, r.y, r.z));
+            seats->push_back(Vec3(-d.x, r.y, r.z));
         }
     }
     return true;

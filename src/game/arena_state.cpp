@@ -31,7 +31,6 @@
 #include "../apps/citysim/city_physics.h"
 #include "../apps/citysim/city_vehicles.h"
 #include "../apps/citysim/city_walkers.h"
-#include "../apps/citysim/city_player_body.h"
 #include "../apps/citysim/city_player_transit.h"
 #include "../apps/citysim/train_system.h"
 #include "../apps/citysim/city_map_tool.h"
@@ -211,11 +210,10 @@ ArenaState::ArenaState(Window& window, Renderer& renderer,
     addSystem<citysim::CityPhysicsSystem>(citySys, physSys);   // car proxies + poles
     addSystem<citysim::CityVehicleSystem>(citySys);            // commandeer promotion
     addSystem<citysim::CityWalkerSystem>(citySys, physSys);    // spawn + drive walkers
-    // The player IS a person in third person (ADR-0064): draws the walker body
-    // over the on-foot shoulder camera, walk cycle shared with the crowd. After
-    // PlayerSystem (line 60) so the capsule pose it reads is already this tick's.
-    addSystem<citysim::CityPlayerBodySystem>();
-    addSystem<PlayerBodySystem>();   // ...and posed as blocks when climbing, swimming, flying, swinging, limp
+    // The player IS a person in third person (ADR-0064, ADR-0254): the jointed body posed for what it does --
+    // walking in the crowd's stride, climbing, swimming, flying, sat in a seat, limp. After PlayerSystem so the
+    // capsule pose it reads is already this tick's.
+    addSystem<PlayerBodySystem>();
     // The passenger seat: `ride bus|taxi|any` / `ride off` (city_player_transit).
     addSystem<citysim::CityPlayerTransitSystem>(citySys, physSys, camSys.flyController());
     addSystem<citysim::TrainSystem>(physSys, camSys.flyController(), &citySys);   // trains on the level's tracks, and the player aboard

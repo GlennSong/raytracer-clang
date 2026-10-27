@@ -18,7 +18,6 @@ namespace engine {
 namespace {
 
 constexpr Real kTau = 6.283185307179586;
-constexpr Real kSleeve = 0.075;   // the arm's block, square
 constexpr Real kOut = -100000.0;  // stowed: far below the world, like the gun viewmodel
 
 // local +Z along `dir`, +Y toward `up`
@@ -131,6 +130,7 @@ void PlayerArmsSystem::update(FrameContext& ctx) {
             r.material.opacity = 1.0f;
             world.add<Renderable>(seg, r);
         }
+        arms_.warm(ctx.assets, BodyMeshes::kFirstPersonGirth);
         made_ = true;
     }
     auto place = [&](int i, const Vec3& at, const Quat& q, const Vec3& scale) {
@@ -253,6 +253,8 @@ void PlayerArmsSystem::update(FrameContext& ctx) {
     auto toWorld = [&](const Vec3& l) { return eye + right * l.x + up * l.y + fwd * l.z; };
 
     const Real dt = std::clamp(static_cast<Real>(ctx.frameDelta), Real(0), Real(0.1));
+    const CharacterController* cc = world.get<CharacterController>(player);
+    const Real bodyScale = cc ? (cc->halfHeight + cc->radius) / BlockBody::kHalfHeight : 1.0;
     const bool held = pose->mode == PlayerPose::Mode::Mantle || pose->mode == PlayerPose::Mode::Climb ||
                       pose->mode == PlayerPose::Mode::Ladder || pose->mode == PlayerPose::Mode::Grapple ||
                       pose->mode == PlayerPose::Mode::PlaySwing || pose->mode == PlayerPose::Mode::Bars ||
@@ -361,15 +363,28 @@ void PlayerArmsSystem::update(FrameContext& ctx) {
         const Real rate = held || gun ? 30.0 : 14.0;
         local_[k] = local_[k] + (want - local_[k]) * (1.0 - std::exp(-dt * rate));
 
-        const Vec3 hand = toWorld(local_[k]);
+        // THE BODY'S ARM (ADR-0254): its skinned tube from the shoulder the view shows, the elbow bent so the hand
+        // lands where it is wanted (two-bone IK; straight and short of it out of reach). The body faces the view:
+        // its x (the left) is the view's left, its z the view's forward.
         const Vec3 shoulder = toWorld(Vec3(s * 0.21, -0.26, -0.04));
-        Vec3 along = hand - shoulder;
-        const Real len = std::max(along.length(), Real(0.05));
-        along = along * (1.0 / len);
+        const BlockBody::Part upperArm = BlockBody::upper(k);   // (k 0 the left: ArmL)
+        BodyPose arm;
+        arm.orientation = frameOf(right * -1.0, up);
+        arm.scale = bodyScale;
+        arm.position = shoulder - arm.orientation.rotate(BlockBody::parts()[upperArm].joint * bodyScale);
+        reachTo(arm, upperArm, toWorld(local_[k]));
+        const LimbSolve solved = solveLimb(arm, k);
+        const std::array<PartTransform, BlockBody::kParts> blocks = poseBlocks(arm);
+        const PartTransform& upperBlock = blocks[static_cast<std::size_t>(upperArm)];
+        const PartTransform& lowerBlock = blocks[static_cast<std::size_t>(BlockBody::lower(k))];
+        if (Renderable* r = world.get<Renderable>(parts_[k]))
+            r->mesh = arms_.limb(ctx.assets, k, foldOf(upperBlock.orientation, lowerBlock.orientation),
+                                 BodyMeshes::kFirstPersonGirth);
+        place(k, jointOf(upperArm, upperBlock, bodyScale), upperBlock.orientation, Vec3(bodyScale, bodyScale, bodyScale));
+        const Vec3 hand = solved.end;
+        const Vec3 along = solved.lowerDir;   // the forearm, toward the hand
         const Quat q = facing(along, up);
-        const Real sleeve = std::max(len - 0.07, Real(0.02));
-        place(k, shoulder + along * (sleeve * 0.5), q, Vec3(kSleeve, kSleeve, sleeve));
-        place(2 + k, hand, q, Vec3(0.07, 0.05, 0.1));
+        place(2 + k, hand - along * 0.03, q, Vec3(0.07, 0.05, 0.1));   // the hand over the forearm's end
         handWorld_[k] = hand;
         // THE WATCH, on the back of the left wrist: its face turned to the eye, 12 o'clock up the view
         if (k == 0) {
@@ -391,8 +406,12 @@ void PlayerArmsSystem::update(FrameContext& ctx) {
                 watch->up = fu;
             }
         }
-        if (pose->mode == PlayerPose::Mode::Wingsuit)   // the wing: a sheet hanging from the arm toward the body
-            place(4 + k, shoulder + along * (sleeve * 0.5) - up * 0.16, q, Vec3(0.012, 0.3, sleeve));
+        if (pose->mode == PlayerPose::Mode::Wingsuit) {   // the wing: a sheet hanging from the arm toward the body
+            Vec3 span = hand - shoulder;
+            const Real len = std::max(span.length(), Real(0.05));
+            span = span * (1.0 / len);
+            place(4 + k, shoulder + span * (len * 0.5) - up * 0.16, facing(span, up), Vec3(0.012, 0.3, len));
+        }
         else
             place(4 + k, Vec3(0, kOut, 0), Quat::identity(), Vec3(1, 1, 1));
     }

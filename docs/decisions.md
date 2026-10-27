@@ -12468,3 +12468,59 @@ string bus again (ADR-0066 alternative c).
 **Consequences.** A verb can no longer be handled twice. The listing is the one description of the channel, so the MCP
 tool list and the docs can come from it. Unknown verbs answer `err unknown command: X (try commands?)` rather than a
 hand-kept list that had fallen behind. No bake or level output changes.
+
+## ADR-0254 — One body: sitting, walking and first person are poses and views of the jointed body
+
+**Context.** The duplicate-systems sweep (#117, wave 3, item 34; Glenn: "We should do wave 3"). Four things draw the
+player's body, and a fifth draws everyone seated:
+- CityPlayerBodySystem (citysim): the walker's baked walk-cycle mesh, in third person, walking and in the air, and the
+  seated manikin when the player is a passenger;
+- PlayerBodySystem: the jointed body (ADR-0245) for every other mode, ragdolls, and the driver's seat (ADR-0252);
+- PlayerArmsSystem: box sleeves and hands in first person, posed by their own rules;
+- `buildSeatedOccupant` (procgen/vehicle/occupant): a separate SAE manikin with its own knees, for bench and picnic
+  sitters, bus and train riders, every car's driver and Lua `mesh.occupant`. ADR-0245 owes moving it onto the body.
+
+**Decision.** One body, `BlockBody` posed by a `BodyPose`; what differs is the pose and how much of it is drawn.
+1. **Sitting is a pose.** `buildSeatedOccupant` keeps its SAE parameters as the API but poses the jointed body with
+   `seatedPose` (driver_seat.h, the player's own seat rule): the torso reclined by the back angle, the feet placed
+   where the manikin's solve put the heels, the hands where its arms reached. The body is scaled to the cabin's
+   sitting height, never up: a sedan's 0.78 m makes a 0.87-scale driver, as the manikin's trimmed torso did. The
+   manikin's feet blocks go; the standing body has none either.
+2. **Walking is a pose.** PlayerBodySystem now draws every mode: the walk with `walkBodyPose` (the walkers' stride,
+   advanced by the body's real speed with the walkers' rule), the air with soft knees, the freecam's body left
+   standing, and the passenger's seat with (1), carried with the rider where RidingSystem draws them.
+   CityPlayerBodySystem is deleted.
+3. **First person is a view.** PlayerArmsSystem keeps deciding where the hands go and its props (the wings, the
+   canopy, the rope, the watch), but its arms are the body's arm tubes reaching from the shoulders to those hands
+   (`reachTo`), so an arm bends at the elbow the way the third-person body's does.
+   The view draws the arm at 0.6 of the body's girth (`BodyMeshes::kFirstPersonGirth`, the old sleeve's 7.5 cm): at
+   0.3 m from the eye the body's 12 × 16 cm arm filled the lower edge of the view. The bones and the bend are the
+   body's.
+4. **One walk cycle.** The stride (`kWalkPoses`, `kMaxSwing`, `advanceStride`, `walkPoseIndex`) moves from citysim to
+   procgen/person.h beside `walkBodyPose`, which had copied its 0.55 swing as a literal. The walkers bake its poses;
+   the player's body is posed at its exact swing every step.
+5. **No mesh is built mid-stride.** `BodyMeshes::warm` makes every fold's limb tube when the body is first shown
+   (~120 small meshes; the first person's thinner arms ~60). The walker body built its poses as they were first
+   used, a hitch while walking (TECH_DEBT).
+6. **A back seat is the car's own bench** (Glenn, in a cab's back seat: "He's poking out the back of the car. He's not
+   sitting in the seat"). The city guessed a back seat 0.85 m behind the driver in any car over 3.9 m. The kit
+   sedan has no bench: 1.6 m from the windscreen's foot to the rear window's, so the guess sat the rider in the
+   boot. The interiors now publish the bench's hip point (`rear_hip`: vehicle_kit.lua `kit.interior`, the C++
+   `buildCarInterior`), the recipe reader keeps it, and a car without one offers its front passenger seat. A seated
+   passenger in a car takes the sedan's numbers (`carPassenger`: 0.78 m sitting height, reclined), on a bus or a
+   train a chair's (`Passenger::carSeat`). Tested: every bench is behind the driver, short of the tail, and a
+   passenger on it keeps their head under the roof (3 of the default fleet's 14 slots have one, 15 of
+   fleet_mixed's 26).
+
+**Measured / seen** (river_town at noon): the third-person body striding with knees and elbows; first person running
+and with the gun drawn, the left forearm reaching across to the barrel; two bench sitters on the jointed body, hands
+in their laps; in a kit-sedan cab, the rider in the front passenger seat, inside the car. Tests: the sedan's driver still clears the roof and the floor; the seated pose puts the heels at the
+manikin's floor, the hands ahead, the scale under 1 in a sedan and never above 1. A seated person is now 720
+vertices against the manikin's 240; seated people are drawn only from the sim's near set (63 to 90 on river_town).
+
+**Consequences.** One body, one walk cycle and one seated rule: a change to the body's proportions, its knees or its
+sitting shows everywhere at once. The player's Transform no longer carries a facing (nothing read it). No bake
+output changes.
+
+**Alternatives.** (a) Leave the manikin: two sets of knees and proportions to keep in step, the ADR-0245 debt. (b) A
+GPU-skinned body with views: right with animation clips (ADR-0245, later), far more than this needs now.

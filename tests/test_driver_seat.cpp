@@ -3,6 +3,8 @@
 #include "test_framework.h"
 
 #include "../src/engine/player/driver_seat.h"
+#include "../src/engine/procgen/vehicle/occupant.h"
+#include <algorithm>
 
 #include <cmath>
 #include <cstdio>
@@ -168,4 +170,32 @@ TEST_CASE(a_lurch_tips_the_torso_and_the_head_goes_further) {
           a[BlockBody::Head].position.z - a[BlockBody::Torso].position.z + 0.02);
     // and the hands still on the wheel
     CHECK(dist(solveLimb(thrown, 0).end, seatGrip(car, 0, 0)) < 0.02);
+}
+
+// A seated person is the jointed body in the seat (ADR-0254): the heels where the manikin's solve put them, the hands
+// out ahead, the back reclined, and the body scaled to the cabin's sitting height, never up.
+TEST_CASE(seated_occupant_is_the_jointed_body_in_the_seat) {
+    OccupantParams sedan;   // the defaults: a sedan's driver
+    const BodyPose p = seatedOccupantPose(sedan);
+    CHECK(p.scale > 0.8 && p.scale < 0.9);
+    for (int leg : {2, 3}) {
+        const LimbSolve s = solveLimb(p, leg);
+        CHECK(std::abs(s.end.y + sedan.hipToHeel) < 0.02);   // the heel on the floor
+        CHECK(s.end.z > 0.35);                               // well forward of the knee's root
+        CHECK(s.mid.y > s.root.y - 0.02);                    // the thigh rises to the knee
+    }
+    for (int arm : {0, 1}) CHECK(solveLimb(p, arm).end.z > 0.2);   // reaching ahead to the wheel (the shoulder sits back)
+    const RenderMesh m = buildSeatedOccupant(sedan);
+    Real top = -1e9;
+    for (const Vertex& v : m.vertices) top = std::max(top, static_cast<Real>(v.position.y));
+    CHECK(top < sedan.sittingHeight);   // the head under what the cabin holds
+
+    OccupantParams bench;   // a bench: room to sit up, hands in the lap
+    bench.hipToHeel = 0.45;
+    bench.sittingHeight = 1.2;
+    bench.backAngle = 8.0;
+    bench.armReach = 20.0;
+    const BodyPose b = seatedOccupantPose(bench);
+    CHECK(b.scale == 1.0);   // never scaled up
+    CHECK(solveLimb(b, 2).end.y < -0.35);   // the shin hangs as far as it reaches (a 0.45 m seat is past it)
 }

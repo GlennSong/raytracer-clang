@@ -71,11 +71,6 @@ struct PlayerPose {
     Quat ragdollRot[10];
 };
 
-// Is the body drawn as posed blocks (PlayerBodySystem) rather than the walker mesh and its walk cycle?
-inline bool drawnAsBlocks(PlayerPose::Mode m) {
-    return m != PlayerPose::Mode::Walk && m != PlayerPose::Mode::Air && m != PlayerPose::Mode::Hidden;
-}
-
 }  // namespace engine
 
 #endif

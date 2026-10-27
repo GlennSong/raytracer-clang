@@ -578,11 +578,10 @@ Suspects, in confidence order — none yet confirmed on device:
    here, so it is recorded rather than changed blind. Confirm first with the
    new `texture_uploads` column; if slow frames carry a texture upload, this
    is it.
-2. **Lazy per-pose player-body meshes.** `CityPlayerBodySystem::poseMesh`
-   builds and uploads a mesh the first time each of `kWalkPoses` poses is
-   used — i.e. *while you walk*, one hitch per new pose until the set is warm.
-   Matches "every so often while walking" exactly. Fix: pre-warm all poses at
-   level load (they are a fixed, small set), don't build them mid-play.
+2. ~~**Lazy per-pose player-body meshes.**~~ RESOLVED (ADR-0254): the walker
+   mesh's lazily built poses are gone; the player's body is the jointed body,
+   and `BodyMeshes::warm` makes every fold's limb tube when it is first shown,
+   so nothing is built mid-stride.
 3. **The gun's bullets are cache hits** (`acquirePrimitive("box", …)` by key),
    so the mesh is not the cost — but each shot creates a Jolt dynamic body and
    `gun.lua` caps at MAX=500 live bullets, so repeated firing grows the

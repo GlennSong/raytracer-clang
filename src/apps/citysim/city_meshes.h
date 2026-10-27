@@ -4,6 +4,7 @@
 #include "../../renderer/renderer.h"   // RenderMesh, RenderMaterial
 #include "city_sim.h"                  // VehicleType, Agent::State, fleet table
 #include "traffic_signal.h"            // SignalState
+#include "../../engine/procgen/person.h"   // the walk cycle
 
 namespace citysim {
 
@@ -37,24 +38,14 @@ constexpr engine::Real kLieHalfDepth = 0.13;
 engine::RenderMesh buildGroundSittingPersonMesh(int outfit);
 int playerOutfit();
 
-// --- the shared walk cycle ---------------------------------------------------
-// ONE walk cycle for everyone who walks (city walkers AND the third-person
-// player body): a handful of pre-built limb-swing pose meshes, hopped between
-// as a body's stride advances with its REAL horizontal speed — the legs move
-// exactly as fast as the ground goes by. Pose 0 is standing.
-constexpr int kWalkPoses = 6;                    // poses per stride cycle
-constexpr engine::Real kMaxSwing = 0.55;         // peak limb pitch (radians, ~32 deg)
-constexpr engine::Real kStrideLength = 1.5;      // metres per full walk cycle
-constexpr engine::Real kWalkAnimMinSpeed = 0.3;  // below this the body stands
-
-// The limb swing baked into pose `pose` (sinusoidal over the cycle; pose 0
-// stands) — feed it to buildPersonMesh.
-engine::Real walkPoseSwing(int pose);
-
-// Advance `stridePhase` (kept wrapped to [0,1)) by the distance walked this
-// tick and return the pose index to draw. Below kWalkAnimMinSpeed the phase
-// holds and the body stands (pose 0) — a held body never moonwalks.
-int walkPoseIndex(engine::Real& stridePhase, engine::Real speed, engine::Real dt);
+// The shared walk cycle (one for everyone who walks: the walkers and the player's body) is the engine's,
+// procgen/person.h; the walkers bake its poses.
+using engine::kMaxSwing;
+using engine::kStrideLength;
+using engine::kWalkAnimMinSpeed;
+using engine::kWalkPoses;
+using engine::walkPoseIndex;
+using engine::walkPoseSwing;
 
 // A ground-PROJECTED ring of unit outer radius: a flat glowing band lying just
 // above the pavement, like painted road markings — always visible from any

@@ -304,6 +304,7 @@ void CityPlayerTransitSystem::hold(World& world, Entity player, Transform& t, co
     ps->carrier = pose;
     ps->local = local;
     ps->sitting = sitting;
+    ps->carSeat = sitting && carSeat_ >= 0;
     ps->eyeAbove = sitting ? kSeatedEye : kStandingEye;
     ps->hipBelow = kSeatedEye - kEyeAboveTransform;
     engine::rideStep(world, &physics_.physicsWorld(), player, &fly_);
