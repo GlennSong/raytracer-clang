@@ -805,6 +805,8 @@
     gave every viewer (and the editor) a Unix socket at <code>/tmp/raytracer-viewer-&lt;pid&gt;.sock</code> speaking
     a line protocol: one command in, one <code>ok …</code> or <code>err …</code> line out. It is on by default
     (<code>RT_CONTROL=0</code> turns it off) so any running instance can be attached to; the newest client wins.</p>
+  <div class="note"><p><b>Every verb, listed.</b> Since ADR-0253 the verbs live in one command table, and
+    <a href="commands.html">Control verbs</a> lists all of them from it, grouped by what they are for.</p></div>
   <div class="diagram">
     <svg viewBox="0 0 860 280" role="img" aria-label="Control channel threading: socket thread buffers, the main thread drains and stages Settings keys that systems consume">
       <defs><marker id="ar5" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">

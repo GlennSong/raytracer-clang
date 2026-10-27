@@ -5,7 +5,12 @@
 #include "test_framework.h"
 
 #include "../src/engine/control/control_channel.h"
+#include "../src/engine/control/control_commands.h"
+#include "../src/engine/application.h"
 
+#include <cstdlib>
+#include <fstream>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -120,3 +125,104 @@ TEST_CASE(control_socket_round_trips_a_line) {
     CHECK(::access(path.c_str(), F_OK) != 0);
 }
 #endif
+
+// The command table (ADR-0253): one handler per verb. A second registration of a name is refused -- the
+// if-chain it replaced let `ride` be handled twice, and the second handler never ran.
+TEST_CASE(control_commands_refuse_a_second_handler_for_one_name) {
+    ControlCommands t;
+    CHECK(t.add("ride", "ride bus|off", "the player's seat", [](const ControlCommand&) { return std::string("ok first"); }));
+    CHECK(!t.add("ride", "ride <x> <z>", "the agent's bus", [](const ControlCommand&) { return std::string("ok second"); },
+                 "a script"));
+    CHECK(t.refused() == 1);
+    CHECK(t.size() == 1);
+    CHECK(t.run(parseControlCommand("ride bus")) == "ok first");
+}
+
+TEST_CASE(control_commands_run_pass_args_and_answer_unknown_names) {
+    ControlCommands t;
+    t.add("echo", "echo <words...>", "says them back", [](const ControlCommand& c) {
+        std::string out = "ok";
+        for (const std::string& a : c.args) out += " " + a;
+        return out;
+    });
+    CHECK(t.run(parseControlCommand("ECHO a b")) == "ok a b");
+    CHECK(t.run(parseControlCommand("nope 1")).rfind("err unknown command: nope", 0) == 0);
+}
+
+TEST_CASE(control_commands_list_sorted_and_remove_by_owner) {
+    ControlCommands t;
+    auto ok = [](const ControlCommand&) { return std::string("ok"); };
+    t.add("zeta", "zeta", "last", ok);
+    t.add("alpha", "alpha <n>", "first", ok, "scene.lua");
+    t.add("mid?", "mid?", "a question", ok, "scene.lua");
+    const std::vector<ControlCommandInfo> l = t.list();
+    CHECK(l.size() == 3 && l[0].name == "alpha" && l[2].name == "zeta");
+    CHECK(l[0].owner == "scene.lua" && l[2].owner == "engine");
+    CHECK(t.listingText() == "ok 3 commands: alpha <n>; mid?; zeta;");
+    CHECK(t.listingJson().find("\"summary\":\"first\"") != std::string::npos);
+    CHECK(t.removeOwnedBy("scene.lua") == 2);
+    CHECK(t.size() == 1 && t.has("zeta") && !t.has("alpha"));
+    CHECK(t.remove("zeta") && !t.remove("zeta"));
+}
+
+// The viewer's own verbs: every one registers once (none refused), each says its usage and what it does
+// (that listing is what the MCP server turns into tools), and the front door still answers.
+TEST_CASE(control_application_registers_every_verb_once_with_its_words) {
+    Application app;
+    const ControlCommands& t = app.commands();
+    CHECK(t.refused() == 0);
+    CHECK(t.size() >= 80);
+    for (const ControlCommandInfo& c : t.list()) {
+        CHECK(!c.summary.empty());
+        CHECK(c.usage.rfind(c.name, 0) == 0);   // the usage line starts with the verb
+    }
+    // Only verbs that need no renderer: the Application here is not initialized.
+    CHECK(app.commands().run(parseControlCommand("ping")) == "ok pong");
+    CHECK(app.commands().run(parseControlCommand("commands?")).rfind("ok ", 0) == 0);
+    CHECK(app.commands().run(parseControlCommand("bogus")).rfind("err unknown command: bogus", 0) == 0);
+    // `ride <x> <z>` goes to the possessed agent with anything after the two numbers, as it did before the merge
+    CHECK(app.commands().run(parseControlCommand("ride 120 -340 0")) == "ok staged (poll possess?)");
+    CHECK(app.settings().getString("possess.cmd", "") == "ride 120 -340");
+    CHECK(app.commands().run(parseControlCommand("ride bus")) == "ok ride bus staged");
+}
+
+// Names are stored lowercased, as they arrive; a name that is not one word is refused.
+TEST_CASE(control_commands_store_names_as_they_arrive) {
+    ControlCommands t;
+    CHECK(t.add("PossessStats?", "possessstats?", "a question", [](const ControlCommand&) { return std::string("ok"); }));
+    CHECK(t.run(parseControlCommand("possessStats?")) == "ok");
+    CHECK(!t.add("two words", "two words", "no", [](const ControlCommand&) { return std::string("ok"); }));
+    CHECK(!t.add("", "", "no", [](const ControlCommand&) { return std::string("ok"); }));
+    CHECK(t.refused() == 2 && t.size() == 1);
+}
+
+// A handler may remove verbs, its own included (a Lua script reloading), while it runs.
+TEST_CASE(control_commands_a_handler_can_remove_itself) {
+    ControlCommands t;
+    std::string tail = " still here";   // captured state that dies with the stored std::function
+    t.add("reload_me", "reload_me", "drops its own verbs", [&t, tail](const ControlCommand&) {
+        t.removeOwnedBy("scene.lua");
+        return "ok" + tail;
+    }, "scene.lua");
+    CHECK(t.run(parseControlCommand("reload_me")) == "ok still here");
+    CHECK(!t.has("reload_me"));
+}
+
+// The site's list of verbs (web/engine/commands.html) is built from web/engine/commands.json, which must be the
+// table itself. RT_WRITE_COMMANDS_JSON=1 rewrites it; then run tools/commands_page.py.
+TEST_CASE(control_site_command_list_matches_the_table) {
+    Application app;
+    const std::string want = app.commands().listingJson(1) + "\n";
+    const std::string path = std::string(RT_SOURCE_DIR) + "/web/engine/commands.json";
+    if (std::getenv("RT_WRITE_COMMANDS_JSON")) {
+        std::ofstream(path) << want;
+        return;
+    }
+    std::ifstream in(path);
+    std::stringstream have;
+    have << in.rdbuf();
+    if (have.str() != want)
+        std::printf("    web/engine/commands.json is out of date: RT_WRITE_COMMANDS_JSON=1 "
+                    "RT_TEST_FILTER=control_site ./build-viewer/run_tests, then python3 tools/commands_page.py\n");
+    CHECK(have.str() == want);
+}

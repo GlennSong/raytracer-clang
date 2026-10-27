@@ -27,7 +27,12 @@ so Claude Code sessions get these as first-class tools.
 Every viewer listens at `/tmp/raytracer-viewer-<pid>.sock` (user-only perms;
 `RT_CONTROL=0` disables; newest client wins; unlinked on clean shutdown, and
 stale files from a killed viewer are cleaned by the MCP server's discovery).
-The protocol is one command line in, one reply line out (`ok ...` / `err ...`):
+The protocol is one command line in, one reply line out (`ok ...` / `err ...`).
+
+**Every verb is in one table** (ADR-0253): `commands?` lists them all with their usage, and `commands? json` adds a
+one-line summary and the owner of each, for tools. The list below is the original set, with notes; the table is
+the truth.
+
 
 ```
 ping

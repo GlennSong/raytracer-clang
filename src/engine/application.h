@@ -7,6 +7,7 @@
 #include "xr/xr_backend.h"
 #include "clock.h"
 #include "control/control_channel.h"
+#include "control/control_commands.h"
 #include "frame_stats.h"
 #include "pass_cost.h"
 #include "asset_manager.h"
@@ -78,6 +79,9 @@ public:
     RenderView& renderView() { return view; }
     Window& windowRef() { return *window; }
     Settings& settings() { return settingsStore; }
+    // The control channel's verbs: systems and Lua scripts add their own here (ADR-0253).
+    // Handlers assume an initialized Application (many touch the renderer or the window).
+    ControlCommands& commands() { return commandTable; }
     // Absolute path settings were loaded from (Config::settingsFile) — hosts
     // whose working directory is not the settings directory (the visionOS app
     // saves to Documents) must save back to THIS path, not a relative name.
@@ -103,7 +107,16 @@ public:
 
 private:
     void pumpControlChannel();
-    std::string handleControlCommand(const std::string& line);
+    std::string handleControlCommand(const std::string& line);   // the socket's front door: one line in, one out
+    void registerControlCommands();   // application_commands.cpp: the built-in verbs (ADR-0253)
+    void registerConnectionVerbs();
+    void registerCameraVerbs();
+    void registerSkyVerbs();
+    void registerPlayerVerbs();
+    void registerPossessionVerbs();
+    void registerCityVerbs();
+    void registerGroundVerbs();
+    void registerEngineVerbs();
     void setDebugOverlay(bool on);   // the grave key's push/pop, callable
     void reconcileFramebuffer();
     void renderFrame();
@@ -170,6 +183,7 @@ private:
     StateStack stateStack;
     bool debugOverlayActive = false;
     ControlChannel controlChannel;   // ADR-0078; inert unless the host enables
+    ControlCommands commandTable;    // every socket verb, by name (ADR-0253)
     std::function<std::unique_ptr<AppState>()> controlReloadFactory;
     uint64_t frameCounter = 0;       // monotonic, for the channel's `info`
 
