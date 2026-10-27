@@ -12415,6 +12415,8 @@ drifts.
   so probes and MCP tools keep working:
   1. The MCP server builds its tool list from `commands? json` (the hand-written list goes, except the composite
      tools such as `screenshot` and `launch_viewer`).
+     **Done:** one tool per verb (`?` as `_q`, questions read-only), the site's `commands.json` when no viewer
+     runs, re-read after `launch_viewer`/`viewer_status`/`reload` with `tools/list_changed`; seven composites stay.
   2. Lua registers verbs (`control.command(name, usage, summary, fn)`), owned by the script.
   3. Commands become typed events on the EventBus (`TeleportRequest`, the `possess.cmd` family, daynight, input taps,
      `PlayerThrown` for `player.limp`). Event types describe their fields once through the property layer

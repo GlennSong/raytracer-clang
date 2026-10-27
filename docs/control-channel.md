@@ -12,13 +12,13 @@ so Claude Code sessions get these as first-class tools.
 | "What's running?" | `viewer_status` | any live viewer |
 | "What did the planner do?" | `planner_stats` (COVER, rejections) | launched instances (log captured) |
 | "Toggle the plan overlay" | `overlay` | citysim layers: play mode only |
-| "Freeze traffic for a shot" | `sim pause` / `resume` / `step` | viewer |
+| "Freeze traffic for a shot" | `sim` (`pause` / `resume` / `step`) | viewer |
 | "Regrow the city" | `reload` | viewer |
-| "Make it golden hour" | `time_of_day` (set hour / hold the cycle) | viewer |
-| "Is the sun low yet?" | `sun` (elevation/intensity probe) | viewer |
+| "Make it golden hour" | `daynight` (an hour, `hold`, `run`) | viewer |
+| "Is the sun low yet?" | `sun_q` (elevation/intensity probe) | viewer |
 | "Crank SSAO / grade / shadows" | `render_params` (set + apply live) | viewer |
-| "Any settings knob" | `settings_kv` get/set/save | viewer |
-| "Show me the AO buffer" | `debug_view` (+ wireframe) | viewer |
+| "Any settings knob" | `set` / `get`, `render save` | viewer |
+| "Show me the AO buffer" | `view` (+ wireframe) | viewer |
 | "Where's the frame time going?" | `ledger` summary / CSV capture | viewer |
 | "Give me an avatar" | `possess` car/walker + `drive_to`/`walk_to` | play mode, city levels |
 
@@ -140,14 +140,23 @@ land within a frame; `shot` files land a frame later — poll for the file.
 
 `tools/viewer-mcp.py` — standard library only, registered in the repo-root
 `.mcp.json`. Claude Code spawns it automatically at session start (first use
-asks for approval once). Tools: `viewer_status`, `launch_viewer`,
-`set_camera`, `get_camera`, `screenshot`, `overlay`, `sim`, `reload`,
-`planner_stats`, `time_of_day` (hour / hold / `day_minutes` / `day_of_year`
-/ `moon_age`), `clock` (`daynight?`), `sky_chart`, `city_map`, `teleport`, `where`, `sun`, `settings_kv`,
-`render_params`,
-`debug_view`, `ledger`, and `viewer_command` (raw protocol line — the escape
-hatch that makes engine verbs usable before the shim relearns them at the
-next session restart).
+asks for approval once).
+
+Its tools are the viewer's command table (ADR-0253): one tool per verb, read
+from the newest live viewer's `commands? json`, or from
+`web/engine/commands.json` when no viewer runs (a test holds that copy equal
+to the built-in table). A question's `?` becomes `_q` (`camera?` is
+`camera_q`, marked read-only); every verb tool takes `args`, the rest of the
+line as its usage shows it. After `launch_viewer`, `viewer_status` or `reload`
+the table is read again, and when it changed the client is told to list again
+(`notifications/tools/list_changed`), so a newer build's verbs or a script's
+appear without a session restart.
+
+Written by hand are only the composites, which do more than send one line:
+`viewer_status`, `launch_viewer`, `screenshot` (frames a pose, waits for the
+PNG), `teleport` (stages, then reads `teleport?`), `planner_stats` (the log
+scrape), `render_params` (several `set`s and `render apply`), and
+`viewer_command` (a raw protocol line).
 
 Instances: every tool takes an optional `instance` (socket basename
 substring); default is the newest live viewer — which is how an agent attaches
