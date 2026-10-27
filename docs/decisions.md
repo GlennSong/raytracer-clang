@@ -12449,9 +12449,13 @@ drifts.
      owned by the script. PlaySound is the first named type. The JSON crosses event_bus.h as text: the vendored
      library has no forward header.
   6. Settings keeps preferences only, and stops saving the transient keys.
-     **Done:** Settings::persists: the one-shot idioms that remain (`set clouds.apply 1`, `set teleport.open 1`,
-     `jitter.request`, the web panel's `citysim.<layer>` pokes, the editor's playFromHere handoff) work in memory and
-     are never saved; the 57 keys the bus retired are dropped when an old settings.json loads.
+     **Done:** Settings::persists: the 57 keys the bus retired are dropped when an old settings.json loads.
+     **Then the last one-shots:** `overlay lamplights` (a LampLightsRequest for RenderSystem; `lamps.lights` was
+     saved, so a lights-off A/B used to outlive the run) and the city layers (a CityLayerRequest, which the web
+     panel's rt_web_city sends too); `clouds ...` (a CloudsRequest, fields by name); `teleport open` (a
+     TeleportPanelRequest); `jitter` / `jitter?` (a JitterRequest, answered by CityRenderSystem). Play Here is the
+     play factory's `fromHere` argument, passed to ArenaState, not a flag left in Settings. No system reads a
+     Settings key as a command now; 68 retired keys are dropped on load.
 - **Lua's three doors**, for the record: direct calls for questions (`entity.get_position`; generic component access
   through the property layer belongs with #124), queued commands for actions (`spawn.*`), and the shared bus for
   announcements.

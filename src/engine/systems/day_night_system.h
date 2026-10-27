@@ -55,6 +55,22 @@ inline void describeProperties(WeatherRequest& r, PropertyVisitor& v) {
     v.field(FieldMeta("state").options({"clear", "fair", "overcast", "storm", "auto", "off"}), r.state);
     v.field(FieldMeta("now"), r.now);
 }
+// CloudsRequest: set the cloud deck's knobs live (they are otherwise read at state entry). Each field left below
+// zero is left alone; enabled 0 off, 1 on. The socket's `clouds`; the values persist with the rest of the deck.
+struct CloudsRequest {
+    int enabled = -1;
+    Real coverage = -1;
+    Real density = -1;
+    Real scale = -1;
+    Real wind = -1;
+};
+inline void describeProperties(CloudsRequest& r, PropertyVisitor& v) {
+    v.field(FieldMeta("enabled"), r.enabled);
+    v.field(FieldMeta("coverage").range(0, 1), r.coverage);
+    v.field(FieldMeta("density"), r.density);
+    v.field(FieldMeta("scale"), r.scale);
+    v.field(FieldMeta("wind").units("m/s"), r.wind);
+}
 // SimHourQuery: the city sim's own hour, for `daynight?` beside the sky's (one clock). A question on the bus: the
 // sim, if there is one, writes it into `hours` (left at -1 otherwise). Not named: it carries a pointer.
 struct SimHourQuery {
@@ -100,7 +116,8 @@ private:
     bool weatherPending_ = false;
     WeatherRequest weatherRequest_;
     void applyRequests(FrameContext& ctx);
-    EventBus::Subscription onDay_, onWeather_;
+    std::vector<CloudsRequest> cloudRequests_;
+    EventBus::Subscription onDay_, onWeather_, onClouds_;
     ControlCommands::Binding answerClock_, answerWeather_;
     // THE SKY HUD (device: "sun and moon positions in the sky"): a compass
     // strip with sun/moon markers at their bearings relative to the camera,
@@ -157,7 +174,7 @@ private:
 
     // Weather states over the deck (weather_cycle.h): while active it OWNS the
     // cloud knobs above and dims the sun per state; `weather off` hands the
-    // knobs back to the panel/clouds.apply. Auto mode rolls a seeded neighbor
+    // knobs back to the panel and `clouds`. Auto mode rolls a seeded neighbor
     // walk every few in-world hours.
     WeatherCycle weather;
     bool weatherActive = false;

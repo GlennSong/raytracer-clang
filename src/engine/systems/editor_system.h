@@ -49,7 +49,8 @@ bool deleteRoadNode(World& world, Entity e, int node, Renderer& renderer);
 // level document, and Play saves it before swapping to the game state.
 class EditorSystem : public System {
 public:
-    using PlayFactory = std::function<std::unique_ptr<AppState>()>;
+    // fromHere: start the player at the editor's view (Play Here) instead of the level's spawn.
+    using PlayFactory = std::function<std::unique_ptr<AppState>(bool fromHere)>;
 
     // `bridge`, when given, connects this system to a native shell (the Qt
     // editor): selection is shared and the shell's panels read the world

@@ -9,6 +9,7 @@
 #include "systems/vehicle_system.h"
 #include "systems/interact_broker_system.h"
 #include "systems/elevator_system.h"
+#include "systems/render_system.h"
 
 namespace engine {
 
@@ -44,6 +45,11 @@ void describeEngineEvents(EventBus& bus) {
     describeEvent<KnockRequest>(bus, "KnockRequest", "Throw the walker nearest the player down, as a car would.");
     describeEvent<PinRequest>(bus, "PinRequest", "Follow an agent in the full sim however far it goes (on), or stop.");
     describeEvent<FindPlaceRequest>(bus, "FindPlaceRequest", "Find the places whose name contains this; findplace? answers.");
+    describeEvent<CityLayerRequest>(bus, "CityLayerRequest", "Show or hide a city sim debug layer: master, agents, cones, nav or plan.");
+    describeEvent<JitterRequest>(bus, "JitterRequest", "Record how evenly a vehicle is drawn for some frames; jitter? answers.");
+    describeEvent<CloudsRequest>(bus, "CloudsRequest", "Set the cloud deck live: enabled, coverage, density, scale, wind (below zero: unchanged).");
+    describeEvent<LampLightsRequest>(bus, "LampLightsRequest", "The street lamps' point lights on or off (their heads stay lit).");
+    describeEvent<TeleportPanelRequest>(bus, "TeleportPanelRequest", "Unfold the Debug window's Teleport section once.");
     describeEvent<KeyTapRequest>(bus, "KeyTapRequest", "Press and release a key through the real input path (e.g. F).");
     describeEvent<KeyHoldRequest>(bus, "KeyHoldRequest", "Hold a key (or MouseLeft) down for seconds of sim time.");
     describeEvent<PersonRequest>(bus, "PersonRequest", "The V key: first (0) or third (1) person on foot, or toggle (2).");

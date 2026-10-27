@@ -21,10 +21,12 @@ public:
     // return to the editor" (the play half of the edit/play loop). `bridge`,
     // when provided, is attached in OBSERVER mode for the playtest: the
     // shell's hierarchy/inspector show live values, editing stays off.
+    // fromHere starts the player at the editor's view (Play Here).
     ArenaState(engine::Window& window, engine::Renderer& renderer,
                const std::string& levelFile,
                EditorFactory makeEditorState = nullptr,
-               engine::EditorBridge* bridge = nullptr);
+               engine::EditorBridge* bridge = nullptr,
+               bool fromHere = false);
 
     void onEnter(engine::FrameContext& ctx) override;
     void onExit(engine::FrameContext& ctx) override;
@@ -35,6 +37,7 @@ private:
     std::string levelFile;
     EditorFactory makeEditorState;
     engine::EditorBridge* bridge = nullptr;
+    bool fromHere_ = false;
 
     // Recipe hot-reload (the BUILDING LAB loop, building-grammar-plan.md P1):
     // a level with `"watch_scripts": true` watches its own file plus every

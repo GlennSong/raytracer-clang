@@ -12,8 +12,9 @@
 #include "../src/engine/systems/camera_system.h"   // CameraPoseRequest
 #include "../src/engine/systems/day_night_system.h"   // DayNightRequest, WeatherRequest
 #include "../src/engine/systems/player_system.h"   // PersonRequest
-#include "../src/engine/systems/teleport_pose.h"   // TeleportRequest
-#include "../src/engine/control/city_requests.h"   // PossessRequest
+#include "../src/engine/systems/teleport_pose.h"   // TeleportRequest, TeleportPanelRequest
+#include "../src/engine/systems/render_system.h"   // LampLightsRequest
+#include "../src/engine/control/city_requests.h"   // PossessRequest, CityLayerRequest, JitterRequest
 
 #include <cstdio>
 #include <cstdlib>
@@ -376,6 +377,49 @@ TEST_CASE(control_daynight_and_weather_verbs_publish_one_field_each) {
     CHECK(app.commands().run(parseControlCommand("daynight?")).rfind("err daynight?: nothing answers", 0) == 0);
 }
 
+// The last Settings one-shots as requests (ADR-0253): overlay layers and lamp lights, clouds, the teleport panel,
+// jitter. Each says when nothing takes it, and fills only what it names.
+TEST_CASE(control_overlay_clouds_jitter_publish_requests) {
+    Application app;
+    CHECK(app.commands().run(parseControlCommand("overlay plan on")).rfind("err overlay plan: nothing here", 0) == 0);
+    CHECK(app.commands().run(parseControlCommand("overlay lamplights off")).rfind("err overlay lamplights:", 0) == 0);
+    std::vector<CityLayerRequest> layers;
+    EventBus::Subscription l = app.events().listen<CityLayerRequest>([&](const CityLayerRequest& r) { layers.push_back(r); });
+    bool lamps = true;
+    EventBus::Subscription lamp = app.events().listen<LampLightsRequest>([&](const LampLightsRequest& r) { lamps = r.on; });
+    CHECK(app.commands().run(parseControlCommand("overlay plan on")) == "ok plan");
+    CHECK(app.commands().run(parseControlCommand("overlay cones off")) == "ok cones");
+    CHECK(app.commands().run(parseControlCommand("overlay lamplights off")) == "ok lamplights");
+    CHECK(layers.size() == 2 && layers[0].layer == "plan" && layers[0].on && layers[1].layer == "cones" && !layers[1].on);
+    CHECK(!lamps);
+
+    std::vector<CloudsRequest> clouds;
+    EventBus::Subscription c = app.events().listen<CloudsRequest>([&](const CloudsRequest& r) { clouds.push_back(r); });
+    CHECK(app.commands().run(parseControlCommand("clouds coverage 0.3 wind 12")) == "ok clouds");
+    CHECK(app.commands().run(parseControlCommand("clouds off")) == "ok clouds");
+    CHECK(app.commands().run(parseControlCommand("clouds coverage")).rfind("err usage", 0) == 0);
+    CHECK(app.commands().run(parseControlCommand("clouds fluffy 1")).rfind("err usage", 0) == 0);
+    CHECK(clouds.size() == 2);
+    if (clouds.size() == 2) {
+        CHECK(clouds[0].coverage == 0.3 && clouds[0].wind == 12 && clouds[0].density < 0 && clouds[0].enabled < 0);
+        CHECK(clouds[1].enabled == 0 && clouds[1].coverage < 0);
+    }
+
+    int panels = 0;
+    EventBus::Subscription p = app.events().listen<TeleportPanelRequest>([&](const TeleportPanelRequest&) { ++panels; });
+    CHECK(app.commands().run(parseControlCommand("teleport open")) == "ok teleport panel");
+    CHECK(panels == 1);
+
+    std::vector<JitterRequest> jit;
+    EventBus::Subscription j = app.events().listen<JitterRequest>([&](const JitterRequest& r) { jit.push_back(r); });
+    CHECK(app.commands().run(parseControlCommand("jitter")).rfind("ok recording", 0) == 0);
+    CHECK(app.commands().run(parseControlCommand("jitter 42 120")).rfind("ok recording", 0) == 0);
+    CHECK(app.commands().run(parseControlCommand("jitter bus")).rfind("err usage", 0) == 0);
+    CHECK(app.commands().run(parseControlCommand("jitter 1 5")).rfind("err usage", 0) == 0);
+    CHECK(jit.size() == 2 && jit[0].agent == -1 && jit[0].frames == 300 && jit[1].agent == 42 && jit[1].frames == 120);
+    CHECK(app.commands().run(parseControlCommand("jitter?")).rfind("err jitter?: nothing answers", 0) == 0);
+}
+
 // A system's answers (ControlAnswers): the question replies with the latest text while the system holds it, knows
 // it was asked, and falls back to the engine's default when the system goes.
 TEST_CASE(control_answers_reply_latest_and_release) {
@@ -410,14 +454,14 @@ TEST_CASE(control_settings_save_preferences_only) {
     CHECK(s.getDouble("windowWidth", 0) == 1600);
     CHECK(s.getString("teleport.request", "none") == "none");   // a stale request does not fire again
     CHECK(s.getString("possess.cmd", "none") == "none");
-    s.setBool("playFromHere", true);
-    CHECK(s.getBool("playFromHere", false));   // the handoff still works in memory
+    s.setBool("lamps.lights", false);   // retired: a request now
     s.save(path);
     std::ifstream in(path);
     std::stringstream text;
     text << in.rdbuf();
     CHECK(text.str().find("windowWidth") != std::string::npos);
-    CHECK(text.str().find("playFromHere") == std::string::npos);
+    CHECK(text.str().find("lamps.lights") == std::string::npos);
     CHECK(text.str().find("telemetry") == std::string::npos);
     CHECK(!Settings::persists("clouds.apply") && Settings::persists("clouds.coverage"));
+    CHECK(!Settings::persists("playFromHere") && !Settings::persists("citysim.plan"));
 }

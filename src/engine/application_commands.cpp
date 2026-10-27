@@ -12,11 +12,12 @@
 #include "systems/camera_system.h"   // CameraPoseRequest, CameraDetachRequest
 #include "systems/day_night_system.h"   // DayNightRequest, WeatherRequest
 #include "systems/player_system.h"   // PersonRequest, LimpRequest
-#include "systems/teleport_pose.h"   // TeleportRequest
+#include "systems/teleport_pose.h"   // TeleportRequest, TeleportPanelRequest
+#include "systems/render_system.h"   // LampLightsRequest
 #include "systems/vehicle_system.h"  // VehicleSpawnRequest
 #include "systems/interact_broker_system.h"   // InteractRequest
 #include "systems/elevator_system.h"   // ElevatorRequest
-#include "control/city_requests.h"     // PossessRequest, RideRequest, TrainBoardRequest
+#include "control/city_requests.h"     // PossessRequest, RideRequest, CityLayerRequest, JitterRequest, ...
 #include "systems/debug_overlay_system.h"   // static settings<->renderer mapping (control `render`)
 #include "../log.h"
 #include "engine/bundle/bundle.h"
@@ -169,22 +170,23 @@ void Application::registerCameraVerbs() {
         if (what == "hud") { rendererPtr->showHud = on; return "ok hud"; }
         if (what == "ui") { rendererPtr->uiHidden = !on; return "ok ui"; }
         if (what == "debug") { setDebugOverlay(on); return "ok debug"; }
-        // Street-lamp POINT LIGHTS, live. The lamps' emissive heads stay lit
-        // either way — this toggles only whether they illuminate the world,
-        // which is the A/B that says whether a night artifact is the lights
-        // or something the lights merely reveal. RenderSystem reads it.
+        // Street-lamp POINT LIGHTS, live (the emissive heads stay lit): a
+        // LampLightsRequest for RenderSystem.
         if (what == "lamplights") {
-            settingsStore.setBool("lamps.lights", on);
-            return "ok lamplights";
+            LampLightsRequest r;
+            r.on = on;
+            return publishRequest(eventBus, r, "overlay lamplights", "ok lamplights");
         }
-        // The citysim one-shot keys (city_render consumes and resets them) —
-        // exactly what the web build's rt_web_city writes.
+        // The city sim's debug layers: a CityLayerRequest for CityRenderSystem,
+        // the same one the web build's panel (rt_web_city) sends.
         if (what == "master" || what == "agents" || what == "cones" ||
             what == "nav" || what == "plan") {
-            settingsStore.setDouble("citysim." + what, on ? 1.0 : 0.0);
-            return "ok " + what;
+            CityLayerRequest r;
+            r.layer = what;
+            r.on = on;
+            return publishRequest(eventBus, r, "overlay " + what, "ok " + what);
         }
-        return "err unknown overlay (hud|ui|debug|master|agents|cones|nav|plan)";
+        return "err unknown overlay (hud|ui|debug|lamplights|master|agents|cones|nav|plan)";
     });
 
     commandTable.add("person", "person first|third|toggle",
@@ -350,7 +352,7 @@ void Application::registerSkyVerbs() {
                      [this](const ControlCommand& cmd) -> std::string {
         // Weather states over the volumetric deck (weather_cycle.h); consumed
         // by DayNightSystem. `auto` starts the seeded neighbor walk; `off`
-        // hands the cloud knobs back to the panel/clouds.apply.
+        // hands the cloud knobs back to the panel and `clouds`.
         if (cmd.args.empty()) return "err usage: weather clear|fair|overcast|storm|auto|off";
         const std::string& w = cmd.args[0];
         if (w != "clear" && w != "fair" && w != "overcast" && w != "storm" &&
@@ -362,6 +364,29 @@ void Application::registerSkyVerbs() {
         r.state = w;
         r.now = cmd.args.size() > 1 && cmd.args[1] == "now";
         return publishRequest(eventBus, r, "weather", r.now ? "ok weather set" : "ok weather staged");
+    });
+
+    commandTable.add("clouds", "clouds [on|off] [coverage <0-1>] [density <v>] [scale <v>] [wind <m/s>]",
+                     "Set the cloud deck live: on or off, coverage, density, scale, wind. Kept with the deck's settings.",
+                     [this](const ControlCommand& cmd) -> std::string {
+        // A CloudsRequest for DayNightSystem; a knob not named is left alone.
+        // Under `weather` other than off the weather drives the deck instead.
+        const char* usage = "err usage: clouds [on|off] [coverage <0-1>] [density <v>] [scale <v>] [wind <m/s>]";
+        if (cmd.args.empty()) return usage;
+        CloudsRequest r;
+        for (size_t i = 0; i < cmd.args.size(); ++i) {
+            const std::string& k = cmd.args[i];
+            if (k == "on" || k == "off") { r.enabled = k == "on" ? 1 : 0; continue; }
+            double v;
+            if (i + 1 >= cmd.args.size() || !num(cmd.args[i + 1], v) || v < 0) return usage;
+            ++i;
+            if (k == "coverage") r.coverage = v;
+            else if (k == "density") r.density = v;
+            else if (k == "scale") r.scale = v;
+            else if (k == "wind") r.wind = v;
+            else return usage;
+        }
+        return publishRequest(eventBus, r, "clouds", "ok clouds");
     });
 
     commandTable.add("weather?", "weather?",
@@ -456,14 +481,17 @@ void Application::registerSkyVerbs() {
 
 // The player
 void Application::registerPlayerVerbs() {
-    commandTable.add("teleport", "teleport <x y z [pitch yaw] | x z>",
-                     "Move the player (the camera when there is none); `x z` lands on the ground. Read the result with teleport?.",
+    commandTable.add("teleport", "teleport <x y z [pitch yaw] | x z> | open",
+                     "Move the player (the camera when there is none); `x z` lands on the ground. Read the result with teleport?. `open` unfolds the Teleport panel.",
                      [this](const ControlCommand& cmd) -> std::string {
         // Move the PLAYER (the camera when there is none): "x y z [pitch yaw]"
         // or "x z" (on the ground) — the Teleport panel's paste format, so a
         // location goes between the panel, the log and a session by paste.
         // A TeleportRequest for TeleportSystem; `teleport?` (bound by it) answers.
-        if (cmd.args.empty()) return "err usage: teleport <x y z [pitch yaw] | x z>";
+        if (cmd.args.empty()) return "err usage: teleport <x y z [pitch yaw] | x z> | open";
+        // `open` unfolds the Debug window's Teleport section (a probe can shoot it).
+        if (cmd.args[0] == "open")
+            return publishRequest(eventBus, TeleportPanelRequest{}, "teleport open", "ok teleport panel");
         std::string pose = cmd.args[0];
         for (size_t i = 1; i < cmd.args.size(); ++i) pose += " " + cmd.args[i];
         TeleportRequest r;
@@ -775,6 +803,26 @@ void Application::registerCityVerbs() {
         commandTable.add("unpin", "unpin <agent id>",
                          "Stop following an agent.", h);
     }
+
+    commandTable.add("jitter", "jitter [agent id|-1] [frames]",
+                     "Record how evenly a vehicle is drawn for some frames (default 300): -1 the bus or cab you ride, else the nearest moving one. jitter? answers.",
+                     [this](const ControlCommand& cmd) -> std::string {
+        JitterRequest r;
+        double v;
+        if (!cmd.args.empty()) {
+            if (!num(cmd.args[0], v)) return "err usage: jitter [agent id|-1] [frames]";
+            r.agent = static_cast<int>(v);
+        }
+        if (cmd.args.size() > 1) {
+            if (!num(cmd.args[1], v) || v < 10) return "err usage: jitter [agent id|-1] [frames >= 10]";
+            r.frames = static_cast<int>(v);
+        }
+        return publishRequest(eventBus, r, "jitter", "ok recording (read `jitter?` when it is done)");
+    });
+
+    commandTable.add("jitter?", "jitter?",
+                     "The jitter measurement: which vehicle is being recorded, then how evenly it and the camera moved.",
+                     unanswered("a CityRenderSystem: play mode on a city level"));
 
     commandTable.add("pin?", "pin?",
                      "The agents being followed.",

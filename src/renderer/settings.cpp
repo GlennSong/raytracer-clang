@@ -8,13 +8,14 @@ using json = nlohmann::json;
 namespace engine {
 namespace {
 
-// Never saved. One-shots a reader clears after acting on it: the `set` verb's idioms and the play-from-here
-// handoff between states. Then the keys the bus retired (ADR-0253), so a settings.json written before it loses
-// them -- a stale `teleport.request` in one fired on the next play start.
+// Never saved: the keys the bus retired (ADR-0253), so a settings.json written before it loses them -- a stale
+// `teleport.request` in one fired on the next play start.
 const char* const kNotSaved[] = {
-    "playFromHere", "teleport.open", "clouds.apply", "jitter.request",
-    "citysim.master", "citysim.agents", "citysim.cones", "citysim.nav", "citysim.plan",
+    // retired: Play Here is the play factory's fromHere argument now
+    "playFromHere",
     // retired: commands that are typed requests now
+    "teleport.open", "clouds.apply", "jitter.request", "lamps.lights", "citysim.master", "citysim.agents",
+    "citysim.cones", "citysim.nav", "citysim.plan",
     "possess.cmd", "teleport.request", "cameraApply", "camera.setDetached", "player.setThirdPerson", "player.limp",
     "player.limpVelocity", "player.rideRequest", "vehicle.spawn", "vehicle.spawnRecipe", "interact.request",
     "elevator.call", "elevator.pick", "train.board", "walkers.knockNearest", "pin.request", "findplace.request",
@@ -26,7 +27,7 @@ const char* const kNotSaved[] = {
     "citysim.hour", "vehicle.telemetry", "player.telemetry", "interact.status", "elevator.status",
     "walkers.telemetry", "walkers.ragdolls", "walkers.flicker", "activities.telemetry", "speeders.telemetry",
     "parking.telemetry", "traffic.telemetry", "opensigns.telemetry", "trains.telemetry", "depots.telemetry",
-    "depots.stalled", "pin.status", "findplace.result", "who.result", "ground.result", "telemetry.askedAt",
+    "depots.stalled", "jitter.result", "pin.status", "findplace.result", "who.result", "ground.result", "telemetry.askedAt",
 };
 
 }  // namespace

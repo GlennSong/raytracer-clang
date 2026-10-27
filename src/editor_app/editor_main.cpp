@@ -906,17 +906,17 @@ int main(int argc, char** argv) {
 
     // Same factory wiring as the standalone viewer; the bridge rides along so
     // panels attach whenever an editor state is active.
-    std::function<std::unique_ptr<engine::AppState>()> makePlay;
+    std::function<std::unique_ptr<engine::AppState>(bool)> makePlay;
     std::function<std::unique_ptr<engine::AppState>()> makeEditor;
     makeEditor = [&]() -> std::unique_ptr<engine::AppState> {
         return std::make_unique<engine::EditorState>(
             app.windowRef(), app.renderer(), levelPath, makePlay, &bridge);
     };
-    makePlay = [&]() -> std::unique_ptr<engine::AppState> {
+    makePlay = [&](bool fromHere) -> std::unique_ptr<engine::AppState> {
         // The bridge rides into play too — observer mode: live panels,
         // editing off (ArenaState attaches it read-only).
         return std::make_unique<ArenaState>(app.windowRef(), app.renderer(),
-                                            levelPath, makeEditor, &bridge);
+                                            levelPath, makeEditor, &bridge, fromHere);
     };
 
     // Normalize a level path to one relative to the working directory, so the
@@ -1158,9 +1158,8 @@ int main(int argc, char** argv) {
     auto startPlay = [&](bool fromHere) {
         if (!bridge.editable()) return;     // already playing
         bridge.saveDocument();
-        if (fromHere) app.settings().setBool("playFromHere", true);
         app.simClock().setPaused(false);    // a fresh playtest always runs
-        app.requestState(makePlay());
+        app.requestState(makePlay(fromHere));
         viewport->setFocus();               // WASD goes to the game, not Qt
     };
     auto* playButton = new QToolButton(toolbar);
@@ -1229,7 +1228,7 @@ int main(int argc, char** argv) {
         style->standardIcon(QStyle::SP_BrowserReload), "Restart", [&]() {
         if (bridge.editable() || !bridge.attached()) return;
         app.simClock().setPaused(false);
-        app.requestState(makePlay());
+        app.requestState(makePlay(false));
         viewport->setFocus();
     });
     restartAction->setToolTip("Restart the playtest from the spawn point");

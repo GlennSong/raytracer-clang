@@ -151,9 +151,10 @@ private:
 
 ArenaState::ArenaState(Window& window, Renderer& renderer,
                        const std::string& levelFile,
-                       EditorFactory makeEditorState, EditorBridge* bridge)
+                       EditorFactory makeEditorState, EditorBridge* bridge,
+                       bool fromHere)
     : PlayingState(window), arenaRenderer(renderer), levelFile(levelFile),
-      makeEditorState(std::move(makeEditorState)), bridge(bridge)
+      makeEditorState(std::move(makeEditorState)), bridge(bridge), fromHere_(fromHere)
 {
     // With an editor to return to, Esc stops the playtest instead of quitting.
     addSystem<DevControlSystem>(this->makeEditorState == nullptr);
@@ -431,12 +432,11 @@ void ArenaState::onEnter(FrameContext& ctx) {
     // (ADR-0059), so they are data-driven rather than hardcoded here.
 #endif
 
-    // Play From Here (one-shot flag): start the player at the editor's view
-    // instead of the document's spawn. The position rides the same settings
-    // the editor camera already persists on state exit (flyEye*), and the
-    // facing carries over for free — the play camera restores flyYaw/Pitch.
-    if (ctx.settings.getBool("playFromHere", false)) {
-        ctx.settings.setBool("playFromHere", false);
+    // Play From Here: start the player at the editor's view instead of the
+    // document's spawn. The position rides the settings the editor camera
+    // already persists on state exit (flyEye*), and the facing carries over
+    // for free — the play camera restores flyYaw/Pitch.
+    if (fromHere_) {
         // Drop the capsule in from a little above the eye rather than placing its
         // base exactly at the camera point: the eye sits in open (renderable)
         // space, but the capsule extends downward from its origin, so origin-at-

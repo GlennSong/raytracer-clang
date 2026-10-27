@@ -2,6 +2,8 @@
 #define RAYTRACER_ENGINE_RENDER_SYSTEM_H
 
 #include "../system.h"
+#include "../event_bus.h"
+#include "../properties.h"
 #include "draw_index.h"
 
 #include <chrono>
@@ -36,6 +38,16 @@ void tierFadeBand(RenderMaterial& m, double dist, float share, bool coming);
 // Draws the world each frame using the RenderView's camera and lights, with
 // per-entity interpolation for smooth motion. Also ramps exposure from input.
 // Application brackets render() with begin/endFrame, so this only emits draws.
+// LampLightsRequest: the street lamps' POINT LIGHTS on or off; their emissive heads stay lit either way, so it is
+// the A/B for whether a night artifact is the lights or something they merely reveal. The socket's
+// `overlay lamplights on|off`; RenderSystem hears it.
+struct LampLightsRequest {
+    bool on = true;
+};
+inline void describeProperties(LampLightsRequest& r, PropertyVisitor& v) {
+    v.field(FieldMeta("on"), r.on);
+}
+
 class RenderSystem : public System {
 public:
     void onStart(FrameContext& ctx) override;
@@ -60,6 +72,8 @@ private:
     std::vector<TierFade> tierFade_;
     uint64_t frameNo_ = 0;
     std::chrono::steady_clock::time_point lastRender_;
+    bool lampLights_ = true;   // LampLightsRequest
+    EventBus::Subscription onLampLights_;
 };
 
 

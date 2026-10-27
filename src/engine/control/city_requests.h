@@ -66,6 +66,30 @@ inline void describeProperties(FindPlaceRequest& r, PropertyVisitor& v) {
     v.field(FieldMeta("name"), r.name);
 }
 
+// CityLayerRequest: show or hide one of the city sim's debug layers -- master (the widgets at all), agents (their
+// rings), cones (vision), nav (the graph), plan (blocks and lots). The socket's `overlay <layer> on|off` and the web
+// panel (rt_web_city); the J and ; keys flip the same flags. CityRenderSystem hears it.
+struct CityLayerRequest {
+    std::string layer;
+    bool on = true;
+};
+inline void describeProperties(CityLayerRequest& r, PropertyVisitor& v) {
+    v.field(FieldMeta("layer").options({"master", "agents", "cones", "nav", "plan"}), r.layer);
+    v.field(FieldMeta("on"), r.on);
+}
+
+// JitterRequest: record where a vehicle is drawn every frame for `frames` frames, then say how evenly it moved
+// (the bus shake). agent -1: the bus or cab you ride, else the nearest moving vehicle. CityRenderSystem hears it;
+// `jitter?` answers.
+struct JitterRequest {
+    int agent = -1;
+    int frames = 300;
+};
+inline void describeProperties(JitterRequest& r, PropertyVisitor& v) {
+    v.field(FieldMeta("agent"), r.agent);
+    v.field(FieldMeta("frames").range(10, 100000), r.frames);
+}
+
 }  // namespace engine
 
 #endif

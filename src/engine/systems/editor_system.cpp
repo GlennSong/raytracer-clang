@@ -752,15 +752,14 @@ void EditorSystem::drawToolbar(FrameContext& ctx) {
         // Save first: Play loads the document fresh, so what you built is
         // exactly what runs (and nothing is lost if the game crashes).
         LevelWriter::save(levelFile, ctx.world);
-        ctx.transition.replaceWith(makePlayState());
+        ctx.transition.replaceWith(makePlayState(false));
     }
     ImGui::SameLine();
     if (ImGui::Button("Play Here")) {
-        // Same loop, but spawn the player at this view (one-shot flag the
-        // play state consumes) — skip the walk from the level's spawn point.
+        // Same loop, but spawn the player at this view — skip the walk from
+        // the level's spawn point.
         LevelWriter::save(levelFile, ctx.world);
-        ctx.settings.setBool("playFromHere", true);
-        ctx.transition.replaceWith(makePlayState());
+        ctx.transition.replaceWith(makePlayState(true));
     }
     ImGui::SameLine();
     if (ImGui::Button("Save")) LevelWriter::save(levelFile, ctx.world);

@@ -597,12 +597,14 @@ public:
     int indoorDrawn() const { return indoorDrawn_; }
 private:
     engine::EventBus::Subscription onSimHour_;   // SimHourQuery: `daynight?` asks the sim's own hour
-    engine::EventBus::Subscription onPin_, onFindPlace_;
+    engine::EventBus::Subscription onPin_, onFindPlace_, onLayer_, onJitter_;
+    std::vector<engine::CityLayerRequest> layerRequests_;   // overlay <layer> and the web panel, applied in update
+    std::vector<engine::JitterRequest> jitterRequests_;
     std::vector<engine::PinRequest> pinRequests_;
     std::string findPlace_;            // a FindPlaceRequest's name, until update answers it
     std::string groundQuery_;          // `ground? x z [r]`, until update answers it
     std::string groundResult_ = "none";
-    engine::ControlAnswers answers_;   // parking? traffic? depots? opensigns? findplace? pin?
+    engine::ControlAnswers answers_;   // parking? traffic? depots? opensigns? findplace? pin? jitter?
     engine::ControlCommands::Binding answerGround_;
     std::string depotsStalled_;
     engine::Entity signalGroups_[3];   // lit lens, indexed by SignalState (Green/Yellow/Red)
@@ -757,7 +759,7 @@ private:
     // PlaceMap built from them at build() (each entrance snapped to the sidewalk).
     // Drawn as projected ImGui labels + markers when showPlaces_ (needs no mesh).
     std::vector<engine::AuthoredPlace> authoredPlaces_;
-    // THE SHAKE, MEASURED (`set jitter.request "<agent|-1> <frames>"`, then `get jitter.result`): every drawn frame,
+    // THE SHAKE, MEASURED (`jitter [agent|-1] [frames]`, then `jitter?`): every drawn frame,
     // where a vehicle is drawn (as agentPose places it, without its side effects) and where the camera is; then how
     // evenly each moved -- Glenn: "buses and cars sometimes shake. Their position is not stable. Trains actually
     // appear very stable in contrast". -1: the bus or cab you ride, else the nearest moving vehicle.

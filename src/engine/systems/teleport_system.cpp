@@ -140,6 +140,7 @@ void TeleportSystem::onStart(FrameContext& ctx) {
         pending_ = true;
         lastResult_.clear();
     });
+    onOpenPanel_ = ctx.events.listen<TeleportPanelRequest>([this](const TeleportPanelRequest&) { openPanel_ = true; });
     if (ctx.commands != nullptr)
         answer_ = ctx.commands->bind("teleport?", "TeleportSystem", [this](const ControlCommand&) -> std::string {
             return lastResult_.empty() ? "ok (pending)" : "ok " + lastResult_;
@@ -194,10 +195,10 @@ void TeleportSystem::render(FrameContext& ctx) {
     }
     if (!ctx.debugOverlayActive) return;
     ImGui::Begin("Debug");
-    // `set teleport.open 1` (socket) unfolds the section once — a probe can
+    // `teleport open` (socket) unfolds the section once — a probe can
     // shoot the panel; a header cannot be clicked from outside.
-    if (ctx.settings.getDouble("teleport.open", 0.0) > 0.5) {
-        ctx.settings.setDouble("teleport.open", 0.0);
+    if (openPanel_) {
+        openPanel_ = false;
         ImGui::SetNextItemOpen(true);
     }
     if (ImGui::CollapsingHeader("Teleport")) {

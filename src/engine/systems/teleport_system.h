@@ -56,7 +56,8 @@ private:
     std::string lastResult_;   // what the last TeleportRequest did; "" while one waits (`teleport?` says pending)
     bool pending_ = false;
     TeleportPose pendingPose_;
-    EventBus::Subscription onRequest_;
+    bool openPanel_ = false;   // a TeleportPanelRequest: unfold the section on the next panel draw
+    EventBus::Subscription onRequest_, onOpenPanel_;
     ControlCommands::Binding answer_;   // `teleport?`
     std::vector<TeleportBookmark> bookmarks_;
     bool groundAt(FrameContext& ctx, double x, double z, double& y) const;

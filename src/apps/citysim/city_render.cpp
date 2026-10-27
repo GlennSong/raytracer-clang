@@ -3414,8 +3414,15 @@ void CityRenderSystem::onStart(engine::FrameContext& ctx) {
     onFindPlace_ = ctx.events.listen<engine::FindPlaceRequest>([this](const engine::FindPlaceRequest& r) {
         findPlace_ = r.name;
     });
+    onLayer_ = ctx.events.listen<engine::CityLayerRequest>([this](const engine::CityLayerRequest& r) {
+        layerRequests_.push_back(r);
+    });
+    onJitter_ = ctx.events.listen<engine::JitterRequest>([this](const engine::JitterRequest& r) {
+        jitterRequests_.push_back(r);
+    });
     for (const char* q : {"parking?", "traffic?", "depots?", "opensigns?", "findplace?"})
         answers_.bind(ctx.commands, "CityRenderSystem", q);
+    answers_.bind(ctx.commands, "CityRenderSystem", "jitter?", "nothing recorded (ask with `jitter`)");
     answers_.bind(ctx.commands, "CityRenderSystem", "pin?", "none followed");
     // `ground? x z [r]` asks (r dumps the area to RT_GROUND_DUMP); `ground?` alone reads the answer.
     if (ctx.commands != nullptr)
@@ -3671,11 +3678,9 @@ void CityRenderSystem::dealOpenSigns(World& world, Vec3 cam) {
 }
 
 void CityRenderSystem::measureJitter(engine::FrameContext& ctx) {
-    const std::string req = ctx.settings.getString("jitter.request", "");
-    if (!req.empty()) {
-        ctx.settings.setString("jitter.request", "");
-        int id = -1, frames = 300;
-        std::sscanf(req.c_str(), "%d %d", &id, &frames);
+    for (const engine::JitterRequest& req : jitterRequests_) {
+        int id = req.agent;
+        const int frames = req.frames;
         const Vec3 cam = ctx.view.camera.position;
         if (id < 0) id = playerRidingAgent_;
         if (id < 0) {   // the nearest moving vehicle
@@ -3691,8 +3696,9 @@ void CityRenderSystem::measureJitter(engine::FrameContext& ctx) {
         jitterAgent_ = id;
         jitterFrames_ = std::max(10, frames);
         jitter_.clear();
-        ctx.settings.setString("jitter.result", id < 0 ? "no moving vehicle near" : "recording agent " + std::to_string(id));
+        answers_.set("jitter?", id < 0 ? "no moving vehicle near" : "recording agent " + std::to_string(id));
     }
+    jitterRequests_.clear();
     if (jitterAgent_ < 0 || jitterAgent_ >= static_cast<int>(sim_.agents().size())) return;
     const Agent& a = sim_.agents()[static_cast<std::size_t>(jitterAgent_)];
     // where the RENDERER draws its body this frame: the baked instance, between its last step and this one by the
@@ -3786,7 +3792,7 @@ void CityRenderSystem::measureJitter(engine::FrameContext& ctx) {
                   "in the vehicle's frame %.2f mm",
                   jitterAgent_, jitter_.size(), dtMean * 1000.0, sim_.tickPeriod() * 1000.0, vm, vcv, vs, cm, ccv, cs, rm,
                   jerk, vjerk, inJerk);
-    ctx.settings.setString("jitter.result", b);
+    answers_.set("jitter?", b);
     jitterAgent_ = -1;
     jitter_.clear();
 }
@@ -3845,21 +3851,17 @@ void CityRenderSystem::update(engine::FrameContext& ctx) {
         showPlan_ = !showPlan_;
         if (showPlan_) debugWidgets_ = true;
     }
-    // Web debug panel (rt_web_city): ONE-SHOT settings writes — apply and clear,
-    // so the page's checkboxes and the J/L keys can share the same flags without
-    // a persistent setting overriding the keys every frame.
-    auto pull = [&](const char* key, bool& flag) {
-        const double v = ctx.settings.getDouble(key, -1.0);
-        if (v >= 0.0) {
-            flag = v > 0.5;
-            ctx.settings.setDouble(key, -1.0);
-        }
-    };
-    pull("citysim.master", debugWidgets_);
-    pull("citysim.agents", showAgentWidgets_);
-    pull("citysim.cones", showVisionCones_);
-    pull("citysim.nav", showNavGraph_);
-    pull("citysim.plan", showPlan_);
+    // `overlay <layer>` and the web debug panel (rt_web_city): CityLayerRequests
+    // set the same flags the J and ; keys flip, so the page's checkboxes and the
+    // keys share them.
+    for (const engine::CityLayerRequest& r : layerRequests_) {
+        if (r.layer == "master") debugWidgets_ = r.on;
+        else if (r.layer == "agents") showAgentWidgets_ = r.on;
+        else if (r.layer == "cones") showVisionCones_ = r.on;
+        else if (r.layer == "nav") showNavGraph_ = r.on;
+        else if (r.layer == "plan") showPlan_ = r.on;
+    }
+    layerRequests_.clear();
 
     // Ground probe (channel `ground? x z`, the seam-diagnosis tool): answer
     // with the carved field, the lifted groundAt, and the nearest nav link's

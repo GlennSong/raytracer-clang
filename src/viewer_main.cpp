@@ -51,15 +51,15 @@ int main(int argc, char** argv) {
 
     // The two modes construct each other through factories, so neither layer
     // hard-codes the other (the engine's editor never names game states).
-    std::function<std::unique_ptr<AppState>()> makePlay;
+    std::function<std::unique_ptr<AppState>(bool)> makePlay;
     std::function<std::unique_ptr<AppState>()> makeEditor;
     makeEditor = [&app, levelPath, &makePlay]() -> std::unique_ptr<AppState> {
         return std::make_unique<EditorState>(app.windowRef(), app.renderer(),
                                              levelPath, makePlay);
     };
-    makePlay = [&app, levelPath, &makeEditor]() -> std::unique_ptr<AppState> {
+    makePlay = [&app, levelPath, &makeEditor](bool fromHere) -> std::unique_ptr<AppState> {
         return std::make_unique<ArenaState>(app.windowRef(), app.renderer(),
-                                            levelPath, makeEditor);
+                                            levelPath, makeEditor, nullptr, fromHere);
     };
 
     app.settings().setString("cameraMode", "fly");
@@ -69,10 +69,10 @@ int main(int argc, char** argv) {
     // RT_CONTROL=0 turns it off. `reload` rebuilds the mode we booted into.
     app.enableControlChannel([&app, startInPlay, &makePlay, &makeEditor]() {
         (void)app;
-        return startInPlay ? makePlay() : makeEditor();
+        return startInPlay ? makePlay(false) : makeEditor();
     });
 
-    app.pushState(startInPlay ? makePlay() : makeEditor());
+    app.pushState(startInPlay ? makePlay(false) : makeEditor());
 
     app.run();
     return 0;

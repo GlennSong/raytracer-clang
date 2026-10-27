@@ -25,6 +25,7 @@ void DayNightSystem::onStart(FrameContext& ctx) {
         weatherRequest_ = r;
         weatherPending_ = true;
     });
+    onClouds_ = ctx.events.listen<CloudsRequest>([this](const CloudsRequest& r) { cloudRequests_.push_back(r); });
     if (ctx.commands != nullptr) {
         // The clock as numbers: the sky's hour, the loop length, today's sunrise/sunset, and the city sim's own hour
         // beside it -- with a staged cycle the two must agree (one clock). Two reads a real minute apart MEASURE the
@@ -356,6 +357,17 @@ void DayNightSystem::applyRequests(FrameContext&) {
         }
     }
     dayRequests_.clear();
+    // `clouds ...`: the cloud deck live (coverage/density/scale/wind/enabled
+    // are otherwise state-entry-only, which made "why is the sky so heavy"
+    // answerable only by a reload). onStop persists them with the rest.
+    for (const CloudsRequest& r : cloudRequests_) {
+        if (r.enabled >= 0) cloudsEnabled = r.enabled > 0;
+        if (r.coverage >= 0.0) cloudCoverage = static_cast<float>(r.coverage);
+        if (r.density >= 0.0) cloudDensity = static_cast<float>(r.density);
+        if (r.scale >= 0.0) cloudScale = static_cast<float>(r.scale);
+        if (r.wind >= 0.0) cloudWindSpeed = static_cast<float>(r.wind);
+    }
+    cloudRequests_.clear();
     if (!weatherPending_) return;
     weatherPending_ = false;
     const WeatherRequest& w = weatherRequest_;
@@ -414,7 +426,7 @@ void DayNightSystem::fixedUpdate(FrameContext& ctx) {
     // fraction per second, so hours = dt * speed * 24) and holds with the
     // cycle's artistic pause; the EASING keeps running regardless, so an
     // in-flight front always finishes arriving. While active, weather owns
-    // the cloud knobs — the ImGui sliders and clouds.apply rule again after
+    // the cloud knobs — the ImGui sliders and `clouds` rule again after
     // `weather off`.
     // No policy anywhere (no persisted state, the level silent): a volumetric
     // deck gets today's weather and the walk, so days differ by default.
@@ -461,25 +473,6 @@ void DayNightSystem::update(FrameContext& ctx) {
     // owners between pokes. They work while the sim clock is paused (update
     // still runs): the "freeze golden hour, keep framing" workflow.
     applyRequests(ctx);
-    {
-        auto& cs = ctx.settings;
-        // `set clouds.<knob> <v>` then `clouds.apply 1`: re-read the cloud
-        // deck live (coverage/density/scale/wind/enabled are otherwise
-        // state-entry-only, which made "why is the sky so heavy" answerable
-        // only by a reload).
-        if (cs.getDouble("clouds.apply", 0.0) > 0.5) {
-            cs.setDouble("clouds.apply", 0.0);
-            cloudsEnabled = cs.getBool("clouds.enabled", cloudsEnabled);
-            cloudCoverage =
-                static_cast<float>(cs.getDouble("clouds.coverage", cloudCoverage));
-            cloudDensity =
-                static_cast<float>(cs.getDouble("clouds.density", cloudDensity));
-            cloudScale =
-                static_cast<float>(cs.getDouble("clouds.scale", cloudScale));
-            cloudWindSpeed = static_cast<float>(
-                cs.getDouble("clouds.windSpeed", cloudWindSpeed));
-        }
-    }
 
     // Pushing current state into the view every frame (cheap) keeps panel
     // Level policy (DayNightConfig): a level that authors a static sun turns
@@ -685,7 +678,7 @@ void DayNightSystem::applyClouds(FrameContext& ctx) {
     // one step — see renderer.h), so the 0-1 artistic knob maps into a narrow
     // physical band around that tuning. The level's authored params are
     // captured once and SEED the knobs (authored look wins at boot; the
-    // knobs, clouds.apply, and weather move it live from there).
+    // knobs, `clouds`, and weather move it live from there).
     auto& vc = ctx.view.lighting.volumetricClouds;
     if (vc.enabled) {
         if (!cloudBaseCaptured_) {

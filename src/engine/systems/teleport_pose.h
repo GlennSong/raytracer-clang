@@ -39,6 +39,10 @@ inline void describeProperties(TeleportRequest& r, PropertyVisitor& v) {
     v.field(FieldMeta("look"), r.pose.hasLook);      // pitch and yaw given
     v.field(FieldMeta("ground"), r.pose.groundY);    // stand on the ground at position's x z
 }
+// TeleportPanelRequest: unfold the Debug window's Teleport section once (a probe can shoot the panel; a header
+// cannot be clicked from outside). The socket's `teleport open`; TeleportSystem hears it.
+struct TeleportPanelRequest {};
+inline void describeProperties(TeleportPanelRequest&, PropertyVisitor&) {}
 // The pose as the paste format ("%.2f %.2f %.2f %.2f %.2f").
 std::string formatTeleportPose(const Vec3& position, double pitch, double yaw);
 

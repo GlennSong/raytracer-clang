@@ -40,7 +40,14 @@ info
 camera <x> <y> <z> <pitchDeg> <yawDeg>    # stages + detaches the freecam
 camera?
 shot <path.png>                            # arms; the file lands next frame
-overlay <ui|hud|debug|master|agents|cones|nav|plan> <on|off>
+overlay <ui|hud|debug|lamplights|master|agents|cones|nav|plan> <on|off>
+clouds [on|off] [coverage <0-1>] [density <v>] [scale <v>] [wind <m/s>]
+                                  # the cloud deck live; a knob not named is
+                                  # left alone (weather other than off wins)
+teleport open                     # unfold the Debug window's Teleport section
+jitter [agent|-1] [frames]        # record how evenly a vehicle is drawn (-1:
+                                  # the one you ride, else the nearest moving);
+                                  # jitter? answers when the frames are in
 sim <pause|resume|step|speed> [value]
 reload
 set <key> <value...>              # any Settings key (generic escape hatch)
@@ -170,6 +177,11 @@ questions has been asked in the last minute.
 
 The same requests are named events, so `publish TeleportRequest {...}`, a Lua
 `events.publish(...)` and `teleport ...` all reach the same system.
+
+Settings holds preferences only. `set`/`get` still reach any key, but no system
+watches a key for a command any more: the old idioms (`set clouds.apply 1`,
+`set teleport.open 1`, `set jitter.request ...`) are the verbs above, and the
+editor's Play Here is an argument to the play state.
 
 ## Named events
 
