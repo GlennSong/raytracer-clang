@@ -7,6 +7,7 @@
 #include "../src/engine/control/control_channel.h"
 #include "../src/engine/control/control_commands.h"
 #include "../src/engine/application.h"
+#include "../src/engine/audio/audio_engine.h"   // PlaySound
 
 #include <cstdlib>
 #include <fstream>
@@ -225,4 +226,38 @@ TEST_CASE(control_site_command_list_matches_the_table) {
         std::printf("    web/engine/commands.json is out of date: RT_WRITE_COMMANDS_JSON=1 "
                     "RT_TEST_FILTER=control_site ./build-viewer/run_tests, then python3 tools/commands_page.py\n");
     CHECK(have.str() == want);
+}
+
+// Watched events (ADR-0253) go out as lines nobody asked for. Manual mode is always client 1 and collects them
+// with the replies; Disabled refuses.
+TEST_CASE(control_post_reaches_the_client_and_disabled_refuses) {
+    ControlChannel manual;
+    CHECK(manual.initialize(ControlBackendMode::Manual));
+    CHECK(manual.client() == 1);
+    CHECK(manual.post(1, "event Hop {}"));
+    const std::vector<std::string> replies = manual.takeReplies();
+    CHECK(replies.size() == 1 && replies[0] == "event Hop {}");
+    ControlChannel off;
+    CHECK(off.initialize(ControlBackendMode::Disabled));
+    CHECK(off.client() == 0);
+    CHECK(!off.post(1, "event Hop {}"));
+}
+
+// The bus's named types from the socket: events? lists PlaySound with its fields, publish delivers one, and
+// watch needs a connection (this Application has none).
+TEST_CASE(control_events_verbs_list_and_publish) {
+    Application app;
+    const std::string list = app.commands().run(parseControlCommand("events?"));
+    CHECK(list.rfind("ok ", 0) == 0);
+    CHECK(list.find("PlaySound {") != std::string::npos);
+    CHECK(list.find("clip") != std::string::npos);
+    std::string clip;
+    app.events().subscribe<PlaySound>([&](const PlaySound& s) { clip = s.clip; });
+    const std::string r = app.commands().run(parseControlCommand(R"(publish PlaySound {"clip": "door", "volume": 0.5})"));
+    CHECK(r == "ok published PlaySound to 1 subscribers");
+    CHECK(clip == "door");
+    CHECK(app.commands().run(parseControlCommand("publish PlaySound {nope")).rfind("err", 0) == 0);
+    CHECK(app.commands().run(parseControlCommand("publish Nope")).rfind("err unknown event", 0) == 0);
+    CHECK(app.commands().run(parseControlCommand("watch PlaySound")).rfind("err watch:", 0) == 0);
+    CHECK(app.commands().run(parseControlCommand("unwatch")) == "ok stopped 0 watches");
 }

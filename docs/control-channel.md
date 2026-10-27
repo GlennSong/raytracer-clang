@@ -136,6 +136,43 @@ Threading (ADR-0072 staging): the socket thread only buffers lines;
 `Application::runFrame` applies them top-of-frame on the main thread. Effects
 land within a frame; `shot` files land a frame later — poll for the file.
 
+## Verbs from Lua
+
+A gameplay script (a ScriptBehaviour) can add verbs to the table and run any:
+
+```lua
+function M:start(e)
+  control.command{name = "greet", usage = "greet [who]", summary = "Say hello.",
+                  run = function(args) return "hello " .. (args[1] or "you") end}
+  log(control.run("where?"))
+end
+```
+
+The verb is listed by `commands?` (owner `script:<entity>`) and reaches the
+MCP server's tools at its next relist. `run` gets the words after the verb and
+returns the reply; text without `ok`/`err` is sent as `ok <text>`, `nil` as
+`ok`, and a Lua error as `err <verb>: <message>`. The verb goes when the
+script's entity does.
+
+## Named events
+
+The EventBus's described types (ADR-0253) are reachable from the socket and
+from Lua by name, their fields as JSON:
+
+```
+events?                                     # ok 1 events: PlaySound {clip, pitch, position, range, spatial, volume}
+publish PlaySound {"clip": "bell", "volume": 0.3}
+watch PlaySound                             # then, as they happen:
+event PlaySound {"clip":"bell","pitch":1.0,...}
+unwatch
+```
+
+A watch belongs to its connection: the next client to take the socket ends
+it. Lines go out without blocking the frame; a client that stops reading loses
+them. In Lua: `events.publish(name, fields)` (delivered at the frame's queued
+dispatch), `local id = events.on(name, function(fields) ... end)`,
+`events.off(id)`; a script's subscriptions go with its entity.
+
 ## The MCP server
 
 `tools/viewer-mcp.py` — standard library only, registered in the repo-root

@@ -145,3 +145,78 @@ TEST_CASE(event_bus_enqueue_during_dispatch_runs_next_batch) {
     CHECK(count == 2);
     CHECK(bus.queuedCount() == 0);  // and it didn't chain again
 }
+
+// --- named types (ADR-0253): an event described through the property layer reaches JSON callers by name ---
+
+#include "../src/engine/event_types.h"
+#include <nlohmann/json.hpp>
+
+namespace {
+struct Hop {
+    engine::Vec3 to{1, 2, 3};
+    int agent = -1;
+    bool run = false;
+    std::string why = "test";
+};
+// Found by argument-dependent lookup, beside the type, as an engine event's is beside it in namespace engine.
+void describeProperties(Hop& h, engine::PropertyVisitor& v) {
+    using engine::FieldMeta;
+    v.field(FieldMeta("to"), h.to);
+    v.field(FieldMeta("agent"), h.agent);
+    v.field(FieldMeta("run"), h.run);
+    v.field(FieldMeta("why"), h.why);
+}
+void describeProperties(Ping& p, engine::PropertyVisitor& v) {
+    v.field(engine::FieldMeta("value"), p.value);
+}
+}  // namespace
+
+TEST_CASE(event_bus_named_type_publishes_from_json_and_keeps_defaults) {
+    EventBus bus;
+    CHECK(engine::describeEvent<Hop>(bus, "Hop", "Jump somewhere."));
+    Hop got;
+    int n = 0;
+    bus.subscribe<Hop>([&](const Hop& h) { got = h; ++n; });
+    std::string error;
+    CHECK(bus.publishNamed("Hop", R"({"agent": 7, "run": true})", false, &error));
+    CHECK(n == 1);
+    CHECK(got.agent == 7 && got.run);
+    CHECK(got.to.y == 2 && got.why == "test");   // not given: E's defaults
+    // Queued: delivered at the frame's dispatch, not before.
+    CHECK(bus.publishNamed("Hop", "{}", true, &error));
+    CHECK(n == 1);
+    bus.dispatchQueued();
+    CHECK(n == 2);
+}
+
+TEST_CASE(event_bus_named_type_hands_subscribers_json) {
+    EventBus bus;
+    engine::describeEvent<Hop>(bus, "Hop", "Jump somewhere.");
+    nlohmann::json seen;
+    const EventBus::SubscriptionId id = bus.subscribeNamed("Hop", [&](const std::string& j) { seen = nlohmann::json::parse(j); });
+    CHECK(id != EventBus::INVALID_SUBSCRIPTION);
+    CHECK(bus.namedSubscriberCount("Hop") == 1);
+    Hop h;
+    h.agent = 12;
+    h.to = engine::Vec3(4, 5, 6);
+    bus.publish(h);
+    CHECK(seen["agent"] == 12);   // an integer, not 12.0
+    CHECK(seen["agent"].is_number_integer());
+    CHECK(seen["to"][2] == 6.0);
+    CHECK(seen["why"] == "test");
+    CHECK(bus.subscribeNamed("Nope", [](const std::string&) {}) == EventBus::INVALID_SUBSCRIPTION);
+}
+
+TEST_CASE(event_bus_named_type_refuses_a_second_type_and_bad_fields) {
+    EventBus bus;
+    CHECK(engine::describeEvent<Hop>(bus, "Hop", "Jump somewhere."));
+    CHECK(engine::describeEvent<Hop>(bus, "Hop", "Again, the same type: fine."));
+    CHECK(!engine::describeEvent<Ping>(bus, "Hop", "Another type under the name."));
+    std::string error;
+    CHECK(!bus.publishNamed("Hop", R"({"agent": "seven"})", false, &error));
+    CHECK(!error.empty());
+    CHECK(!bus.publishNamed("Hop", "[1, 2]", false, &error));
+    CHECK(!bus.publishNamed("Nope", "{}", false, &error));
+    CHECK(error.find("unknown event") != std::string::npos);
+    CHECK(bus.namedTypes().size() == 1);
+}

@@ -2,6 +2,9 @@
 
 #include "../src/engine/scripting/script_system.h"
 #include "../src/engine/scripting/script_behaviour.h"
+#include "../src/engine/control/control_commands.h"
+#include "../src/engine/event_types.h"
+#include "../src/engine/audio/audio_engine.h"   // PlaySound
 #include "../src/engine/world.h"
 #include "../src/engine/components.h"
 #include "../src/rt_math.h"
@@ -126,4 +129,141 @@ TEST_CASE(script_behaviour_error_is_isolated) {
     if (!tok || !tbad) { CHECK(false); return; }
     CHECK_APPROX(tok->position.x, 7.0, 1e-9);    // good sibling ran
     CHECK_APPROX(tbad->position.x, 9.0, 1e-9);   // bad one untouched (initial)
+}
+
+// --- control.command / control.run (ADR-0253) ---
+
+TEST_CASE(script_verb_is_added_runs_and_goes_with_its_entity) {
+    // A script adds a verb in start(); the socket's path (commands.run) reaches its function with the words, and
+    // its reply comes back as written ("ok" added when the script leaves it off). When the entity dies, the verb
+    // goes at the next tick.
+    World world;
+    ControlCommands table;
+    Entity e = makeScripted(world, R"LUA(
+        local M = {}
+        function M:start(e)
+            assert(control.command{name = "Greet", usage = "greet [who]", summary = "Say hello.",
+                                   run = function(args) return "hello " .. (args[1] or "you") end})
+            local ok, why = control.command{name = "greet", run = function() end}
+            self.refused = (ok == nil) and why ~= nil
+        end
+        return M
+    )LUA");
+    ScriptSystem sys;
+    sys.setCommands(&table);
+    sys.tick(world, 0.1);
+
+    CHECK(table.has("greet"));
+    CHECK(table.refused() == 1);   // the second add of the same name
+    CHECK(table.run(parseControlCommand("greet Glenn")) == std::string("ok hello Glenn"));
+    CHECK(table.run(parseControlCommand("greet")) == std::string("ok hello you"));
+    const std::vector<ControlCommandInfo> list = table.list();
+    CHECK(list.size() == static_cast<std::size_t>(1));
+    if (!list.empty()) {
+        CHECK(list[0].usage == std::string("greet [who]"));
+        CHECK(list[0].owner.rfind("script:", 0) == 0);
+    }
+
+    world.destroy(e);
+    sys.tick(world, 0.1);
+    CHECK(!table.has("greet"));
+}
+
+TEST_CASE(script_verb_errors_and_spawns_from_the_socket) {
+    // Run between ticks (as the socket does): a Lua error comes back as "err <verb>: ...", and a spawn the verb
+    // asks for is applied when it returns, on the last tick's world.
+    World world;
+    ControlCommands table;
+    makeScripted(world, R"LUA(
+        local M = {}
+        function M:start(e)
+            control.command{name = "boom", run = function() error("no") end}
+            control.command{name = "drop", run = function() spawn.block{position = {0, 5, 0}, velocity = {0, 0, 0}} end}
+        end
+        return M
+    )LUA");
+    ScriptSystem sys;
+    sys.setCommands(&table);
+    sys.tick(world, 0.1);
+
+    const std::string boom = table.run(parseControlCommand("boom"));
+    CHECK(boom.rfind("err boom:", 0) == 0);
+    int bodies = 0;
+    world.each<RigidBody>([&](Entity, RigidBody&) { ++bodies; });
+    CHECK(bodies == 0);
+    CHECK(table.run(parseControlCommand("drop")) == std::string("ok"));
+    world.each<RigidBody>([&](Entity, RigidBody&) { ++bodies; });
+    CHECK(bodies == 1);
+}
+
+TEST_CASE(script_runs_any_verb_and_its_verbs_go_with_the_system) {
+    // control.run reaches an engine verb from inside a tick; destroying the ScriptSystem removes its verbs and
+    // leaves the others.
+    World world;
+    ControlCommands table;
+    table.add("echo", "echo <word>", "Say it back.", [](const ControlCommand& c) {
+        return "ok " + (c.args.empty() ? std::string() : c.args[0]);
+    });
+    Entity e = makeScripted(world, R"LUA(
+        local M = {}
+        function M:start(e)
+            control.command{name = "mine", run = function() return "yes" end}
+            local r = control.run("echo hi")
+            entity.set_position(e, {r == "ok hi" and 1 or 0, 0, 0})
+        end
+        return M
+    )LUA");
+    {
+        ScriptSystem sys;
+        sys.setCommands(&table);
+        sys.tick(world, 0.1);
+        CHECK(table.has("mine"));
+    }
+    const Transform* t = world.get<Transform>(e);
+    CHECK(t != nullptr && t->position.x == 1.0);
+    CHECK(!table.has("mine"));
+    CHECK(table.has("echo"));
+}
+
+// --- events.publish / events.on (ADR-0253) ---
+
+TEST_CASE(script_events_reach_cpp_and_back) {
+    // A script publishes a named event (C++ hears it, typed, at the queued dispatch) and subscribes to one (C++
+    // publishes it typed; the script gets the fields as a table). Its subscription goes with its entity.
+    World world;
+    EventBus bus;
+    describeEngineEvents(bus);
+    std::string heard;
+    bus.subscribe<PlaySound>([&](const PlaySound& s) { heard = s.clip; });
+    Entity e = makeScripted(world, R"LUA(
+        local M = {}
+        function M:start(e)
+            assert(events.publish("PlaySound", {clip = "bell", volume = 0.5}))
+            local ok, why = events.publish("Nope", {})
+            assert(ok == nil and why:find("unknown event"))
+            self.id = assert(events.on("PlaySound", function(f)
+                entity.set_position(e, {f.volume, f.position[2], #f.clip})
+            end))
+        end
+        return M
+    )LUA");
+    ScriptSystem sys;
+    sys.setServices(nullptr, nullptr, nullptr, &bus);
+    sys.tick(world, 0.1);
+    CHECK(heard.empty());   // queued, like sound.play
+    bus.dispatchQueued();   // the script's own bell reaches both
+    CHECK(heard == "bell");
+
+    PlaySound cue;
+    cue.clip = "door";
+    cue.volume = 0.25f;
+    cue.position = Vec3(0, 7, 0);
+    bus.publish(cue);
+    const Transform* t = world.get<Transform>(e);
+    CHECK(t != nullptr && std::fabs(t->position.x - 0.25) < 1e-6 && t->position.y == 7 && t->position.z == 4);
+    CHECK(bus.subscriberCount<PlaySound>() == 2);
+
+    world.destroy(e);
+    sys.tick(world, 0.1);
+    CHECK(bus.subscriberCount<PlaySound>() == 1);
 }

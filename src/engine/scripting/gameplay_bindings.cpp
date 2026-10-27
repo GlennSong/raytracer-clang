@@ -2,9 +2,11 @@
 
 #include "lua_state.h"
 #include "lua_helpers.h"            // unpackEntity, checkVec3/pushVec3, optField
+#include "lua_json.h"               // event fields as tables
 #include "procgen_mesh.h"           // luaToMesh
 #include "../audio/audio_engine.h"  // PlaySound (the sound.play cue)
 #include "../event_bus.h"
+#include "../control/control_commands.h"
 #include "../world.h"
 #include "../components.h"          // Transform, PrevTransform
 #include "../input/input_map.h"
@@ -278,6 +280,78 @@ int l_sound_play(lua_State* L) {
     return 0;
 }
 
+// --- control.* (the control channel's verbs, ADR-0253) ---
+
+int l_control_command(lua_State* L) {
+    GameplayContext* g = gameplayCtx(L);
+    if (g == nullptr || !g->addCommand) return luaL_error(L, "control.command: no command table here");
+    luaL_checktype(L, 1, LUA_TTABLE);
+    const std::string name = strField(L, 1, "name");
+    if (name.empty()) return luaL_error(L, "control.command: 'name' required");
+    lua_getfield(L, 1, "run");
+    if (!lua_isfunction(L, -1)) return luaL_error(L, "control.command: 'run' must be a function");
+    const int fnRef = luaL_ref(L, LUA_REGISTRYINDEX);   // pops it; the host owns the ref from here
+    const std::string usage = strField(L, 1, "usage");
+    const std::string refused = g->addCommand(name, usage.empty() ? name : usage, strField(L, 1, "summary"), fnRef);
+    if (!refused.empty()) {
+        lua_pushnil(L);
+        lua_pushstring(L, refused.c_str());
+        return 2;
+    }
+    lua_pushboolean(L, 1);
+    return 1;
+}
+
+int l_control_run(lua_State* L) {
+    GameplayContext* g = gameplayCtx(L);
+    if (g == nullptr || g->commands == nullptr) return luaL_error(L, "control.run: no command table here");
+    const std::string reply = g->commands->run(parseControlCommand(luaL_checkstring(L, 1)));
+    lua_pushstring(L, reply.c_str());
+    return 1;
+}
+
+// --- events.* (named events on the bus, ADR-0253) ---
+
+int l_events_publish(lua_State* L) {
+    GameplayContext* g = gameplayCtx(L);
+    if (g == nullptr || g->events == nullptr) return luaL_error(L, "events.publish: no event bus here");
+    const std::string name = luaL_checkstring(L, 1);
+    const std::string fields = lua_isnoneornil(L, 2) ? std::string("{}") : luaToJson(L, 2).dump();
+    std::string error;
+    if (!g->events->publishNamed(name, fields, /*queued=*/true, &error)) {
+        lua_pushnil(L);
+        lua_pushstring(L, error.c_str());
+        return 2;
+    }
+    lua_pushboolean(L, 1);
+    return 1;
+}
+
+int l_events_on(lua_State* L) {
+    GameplayContext* g = gameplayCtx(L);
+    if (g == nullptr || !g->subscribe) return luaL_error(L, "events.on: no event bus here");
+    const std::string name = luaL_checkstring(L, 1);
+    luaL_checktype(L, 2, LUA_TFUNCTION);
+    lua_pushvalue(L, 2);
+    const int fnRef = luaL_ref(L, LUA_REGISTRYINDEX);   // the host owns it from here
+    std::string error;
+    const uint64_t id = g->subscribe(name, fnRef, &error);
+    if (id == 0) {
+        lua_pushnil(L);
+        lua_pushstring(L, error.c_str());
+        return 2;
+    }
+    lua_pushinteger(L, static_cast<lua_Integer>(id));
+    return 1;
+}
+
+int l_events_off(lua_State* L) {
+    GameplayContext* g = gameplayCtx(L);
+    if (g == nullptr || !g->unsubscribe) return luaL_error(L, "events.off: no event bus here");
+    lua_pushboolean(L, g->unsubscribe(static_cast<uint64_t>(luaL_checkinteger(L, 1))));
+    return 1;
+}
+
 }  // namespace
 
 void openGameplayLibrary(ScriptVM& vm) {
@@ -333,6 +407,23 @@ void openGameplayLibrary(ScriptVM& vm) {
     };
     luaL_newlib(L, kSpawnFns);
     lua_setglobal(L, "spawn");
+
+    static const luaL_Reg kControlFns[] = {
+        {"command", l_control_command},
+        {"run", l_control_run},
+        {nullptr, nullptr},
+    };
+    luaL_newlib(L, kControlFns);
+    lua_setglobal(L, "control");
+
+    static const luaL_Reg kEventFns[] = {
+        {"publish", l_events_publish},
+        {"on", l_events_on},
+        {"off", l_events_off},
+        {nullptr, nullptr},
+    };
+    luaL_newlib(L, kEventFns);
+    lua_setglobal(L, "events");
 }
 
 void setGameplayContext(ScriptVM& vm, GameplayContext* ctx) {
@@ -343,6 +434,10 @@ void setGameplayContext(ScriptVM& vm, GameplayContext* ctx) {
         lua_pushnil(L);
     }
     lua_setfield(L, LUA_REGISTRYINDEX, kCtxKey);
+}
+
+GameplayContext* gameplayContext(ScriptVM& vm) {
+    return gameplayCtx(luaState(vm));
 }
 
 }  // namespace engine

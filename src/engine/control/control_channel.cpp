@@ -45,6 +45,9 @@ struct ControlChannel::Impl {
     std::mutex mutex;
     std::vector<std::string> pending;
     std::vector<std::string> manualReplies;
+    uint64_t clientId = 0;      // guarded by `mutex`: bumped on every accept, 0 while nobody is connected
+    uint64_t nextClientId = 1;
+    uint64_t dropped = 0;       // posts a full client buffer refused
 
 #ifndef _WIN32
     int listenFd = -1;
@@ -81,6 +84,7 @@ struct ControlChannel::Impl {
                     std::lock_guard<std::mutex> lock(mutex);
                     if (clientFd >= 0) ::close(clientFd);   // newest wins
                     clientFd = fd;
+                    clientId = nextClientId++;
                     buffer.clear();
                     continue;   // re-poll with the new client
                 }
@@ -94,6 +98,7 @@ struct ControlChannel::Impl {
                 if (clientFd == client) {
                     ::close(clientFd);
                     clientFd = -1;
+                    clientId = 0;
                 }
                 continue;
             }
@@ -194,6 +199,34 @@ int ControlChannel::drain(const Handler& handler) {
 #endif
     }
     return static_cast<int>(lines.size());
+}
+
+uint64_t ControlChannel::client() const {
+    if (impl->mode == ControlBackendMode::Manual) return 1;
+    std::lock_guard<std::mutex> lock(impl->mutex);
+    return impl->clientId;
+}
+
+bool ControlChannel::post(uint64_t client, const std::string& line) {
+    if (impl->mode == ControlBackendMode::Disabled || client == 0) return false;
+    std::lock_guard<std::mutex> lock(impl->mutex);
+    if (impl->mode == ControlBackendMode::Manual) {
+        impl->manualReplies.push_back(line);
+        return true;
+    }
+#ifndef _WIN32
+    if (impl->clientFd < 0 || impl->clientId != client) return false;
+    const std::string out = line + "\n";
+    const ssize_t n = ::send(impl->clientFd, out.data(), out.size(), MSG_DONTWAIT);
+    if (n == static_cast<ssize_t>(out.size())) return true;
+    ++impl->dropped;   // a slow reader: drop, never stall the frame (a partial line is cut too; rare)
+#endif
+    return false;
+}
+
+uint64_t ControlChannel::droppedPosts() const {
+    std::lock_guard<std::mutex> lock(impl->mutex);
+    return impl->dropped;
 }
 
 void ControlChannel::pushCommand(const std::string& line) {

@@ -1,5 +1,6 @@
 #include "property_json.h"
 
+#include <cmath>
 #include <nlohmann/json.hpp>
 
 using json = nlohmann::json;
@@ -19,6 +20,9 @@ void JsonWriteVisitor::field(const FieldMeta& meta, bool& value) {
     out[meta.serialKey()] = value;
 }
 void JsonWriteVisitor::field(const FieldMeta& meta, std::string& value) {
+    out[meta.serialKey()] = value;
+}
+void JsonWriteVisitor::field(const FieldMeta& meta, int& value) {
     out[meta.serialKey()] = value;
 }
 void JsonWriteVisitor::bitFlag(const FieldMeta& meta, uint32_t& flags,
@@ -47,6 +51,10 @@ void JsonReadVisitor::field(const FieldMeta& meta, bool& value) {
 void JsonReadVisitor::field(const FieldMeta& meta, std::string& value) {
     if (meta.readOnly || !in.contains(meta.serialKey())) return;
     value = in[meta.serialKey()].get<std::string>();
+}
+void JsonReadVisitor::field(const FieldMeta& meta, int& value) {
+    if (meta.readOnly || !in.contains(meta.serialKey())) return;
+    value = static_cast<int>(std::lround(in[meta.serialKey()].get<double>()));
 }
 void JsonReadVisitor::bitFlag(const FieldMeta& meta, uint32_t& flags,
                               uint32_t mask) {

@@ -5,6 +5,7 @@
 #include "procgen/city/city_svg.h"     // the layered city map
 #include "procgen/city/building_records.h"   // `lot?`: what is actually here
 #include "application.h"
+#include "event_types.h"
 #include "states/debug_overlay_state.h"
 #include "systems/debug_overlay_system.h"   // static settings<->renderer mapping (control `render`)
 #include "../log.h"
@@ -53,7 +54,10 @@ void StateTransition::replaceWith(std::unique_ptr<AppState> state) {
     next = std::move(state);
 }
 
-Application::Application() { registerControlCommands(); }
+Application::Application() {
+    describeEngineEvents(eventBus);
+    registerControlCommands();
+}
 Application::~Application() = default;
 
 bool Application::initialize(const Config& config,
@@ -139,7 +143,7 @@ void Application::popState() {
 FrameContext Application::makeContext() {
     int winW = 0, winH = 0;
     window->getSize(winW, winH);
-    return FrameContext{
+    FrameContext ctx{
         worldState, *rendererPtr, *assetManager, view, clock, settingsStore, jobs,
         eventBus, debugLines, audioEngine, frameStats,
         window->getInput(), inputMap, playerInputs, xrState,
@@ -147,6 +151,8 @@ FrameContext Application::makeContext() {
         frameDelta, interpolation, quit, transitionRequest,
         debugOverlayActive
     };
+    ctx.commands = &commandTable;
+    return ctx;
 }
 
 void Application::reconcileFramebuffer() {
@@ -584,6 +590,13 @@ void Application::pumpControlChannel() {
     ++frameCounter;
     controlChannel.drain(
         [this](const std::string& line) { return handleControlCommand(line); });
+    // A watch ends with its connection: another client took the socket, or it closed.
+    const uint64_t client = controlChannel.client();
+    for (std::size_t i = eventWatches.size(); i-- > 0;) {
+        if (eventWatches[i].client == client) continue;
+        eventBus.unsubscribe(eventWatches[i].id);
+        eventWatches.erase(eventWatches.begin() + static_cast<std::ptrdiff_t>(i));
+    }
 }
 
 void Application::setDebugOverlay(bool on) {

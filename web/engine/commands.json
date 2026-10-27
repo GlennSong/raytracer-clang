@@ -126,6 +126,12 @@
   "usage": "enter"
  },
  {
+  "name": "events?",
+  "owner": "engine",
+  "summary": "Every named event on the bus, with its fields; `json` adds the summaries, defaults and subscribers.",
+  "usage": "events? [json]"
+ },
+ {
   "name": "exit",
   "owner": "engine",
   "summary": "The possessed walker comes back out to the street.",
@@ -306,6 +312,12 @@
   "usage": "possess_stop"
  },
  {
+  "name": "publish",
+  "owner": "engine",
+  "summary": "Publish a named event now, its fields as JSON (missing ones keep their defaults).",
+  "usage": "publish <Event> [{json fields}]"
+ },
+ {
   "name": "ragdoll",
   "owner": "engine",
   "summary": "The player goes limp (the G key); jump, or lying still a moment, gets up.",
@@ -432,6 +444,12 @@
   "usage": "unpin <agent id>"
  },
  {
+  "name": "unwatch",
+  "owner": "engine",
+  "summary": "Stop streaming these events (all of them when none is named).",
+  "usage": "unwatch [Event ...]"
+ },
+ {
   "name": "vehicle?",
   "owner": "engine",
   "summary": "The player's vehicle: speed, rpm, gear, drive mode, position, and the sim speed.",
@@ -460,6 +478,12 @@
   "owner": "engine",
   "summary": "The city's walkers: how many, the fastest, step reversals, seated, indoors, students, on walks, joggers and games.",
   "usage": "walkers?"
+ },
+ {
+  "name": "watch",
+  "owner": "engine",
+  "summary": "Stream these events to this connection as `event <Name> {json}` lines, until unwatch or it closes.",
+  "usage": "watch <Event> [Event ...]"
  },
  {
   "name": "weather",

@@ -53,6 +53,7 @@ add_library(engine_core STATIC
     src/engine/frame_stats.cpp
     src/engine/pass_cost.cpp
     src/engine/event_bus.cpp
+    src/engine/event_types.cpp
     src/engine/debug_draw.cpp
     src/engine/world.cpp
     src/engine/components.cpp
@@ -444,6 +445,7 @@ if(RT_ENABLE_SCRIPTING)
         src/engine/scripting/procgen_bindings.cpp
         src/engine/scripting/gameplay_bindings.cpp
         src/engine/scripting/script_system.cpp
+        src/engine/scripting/lua_json.cpp
         src/engine/scripting/vehicle_spec.cpp
         src/engine/scripting/furniture_library_lua.cpp
         src/engine/scripting/tree_recipes_lua.cpp

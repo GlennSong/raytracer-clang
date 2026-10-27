@@ -8,6 +8,7 @@
 #include "procgen/city/city_svg.h"     // the layered city map
 #include "procgen/city/building_records.h"   // `lot?`: what is actually here
 #include "application.h"
+#include "event_types.h"
 #include "systems/debug_overlay_system.h"   // static settings<->renderer mapping (control `render`)
 #include "../log.h"
 #include "engine/bundle/bundle.h"
@@ -39,6 +40,7 @@ void Application::registerControlCommands() {
     registerCityVerbs();
     registerGroundVerbs();
     registerEngineVerbs();
+    registerEventVerbs();
 }
 
 // Connection
@@ -1180,6 +1182,81 @@ void Application::registerEngineVerbs() {
                      "The level bundle: hit or miss, how long it took, and where it lives.",
                      [](const ControlCommand&) -> std::string {
         return "ok " + engine::bundle::lastBundleStatus() + " root=" + engine::bundle::bundleRoot();
+    });
+}
+
+// Events: the bus's named types (ADR-0253), from the socket
+void Application::registerEventVerbs() {
+    commandTable.add("events?", "events? [json]",
+                     "Every named event on the bus, with its fields; `json` adds the summaries, defaults and subscribers.",
+                     [this](const ControlCommand& cmd) -> std::string {
+        const std::vector<const EventBus::NamedType*> types = eventBus.namedTypes();
+        if (!cmd.args.empty() && cmd.args[0] == "json") {
+            nlohmann::json out = nlohmann::json::array();
+            for (const EventBus::NamedType* t : types)
+                out.push_back({{"name", t->name}, {"summary", t->summary}, {"fields", nlohmann::json::parse(t->fields())},
+                               {"subscribers", eventBus.namedSubscriberCount(t->name)}});
+            return "ok " + out.dump();
+        }
+        std::string out = "ok " + std::to_string(types.size()) + " events:";
+        for (std::size_t i = 0; i < types.size(); ++i) {
+            out += (i == 0 ? " " : "; ") + types[i]->name + " {";
+            const nlohmann::json fields = nlohmann::json::parse(types[i]->fields());
+            bool first = true;
+            for (const auto& [key, value] : fields.items()) {
+                out += (first ? "" : ", ") + key;
+                first = false;
+            }
+            out += "}";
+        }
+        return out;
+    });
+
+    commandTable.add("publish", "publish <Event> [{json fields}]",
+                     "Publish a named event now, its fields as JSON (missing ones keep their defaults).",
+                     [this](const ControlCommand& cmd) -> std::string {
+        if (cmd.args.empty()) return "err usage: publish <Event> [{json fields}]";
+        // The fields are the rest of the line, rejoined: the parser split it on spaces.
+        std::string text;
+        for (std::size_t i = 1; i < cmd.args.size(); ++i) text += (i == 1 ? "" : " ") + cmd.args[i];
+        const std::string& name = cmd.args[0];
+        std::string error;
+        if (!eventBus.publishNamed(name, text, /*queued=*/false, &error)) return "err " + error;
+        return "ok published " + name + " to " + std::to_string(eventBus.namedSubscriberCount(name)) + " subscribers";
+    });
+
+    commandTable.add("watch", "watch <Event> [Event ...]",
+                     "Stream these events to this connection as `event <Name> {json}` lines, until unwatch or it closes.",
+                     [this](const ControlCommand& cmd) -> std::string {
+        if (cmd.args.empty()) return "err usage: watch <Event> [Event ...]";
+        const uint64_t client = controlChannel.client();
+        if (client == 0) return "err watch: no connection to stream to";
+        for (const std::string& name : cmd.args)
+            if (eventBus.namedType(name) == nullptr) return "err unknown event: " + name + " (try events?)";
+        for (const std::string& name : cmd.args) {
+            bool already = false;
+            for (const EventWatch& w : eventWatches) already = already || (w.name == name && w.client == client);
+            if (already) continue;
+            const EventBus::SubscriptionId id = eventBus.subscribeNamed(name, [this, name, client](const std::string& f) {
+                controlChannel.post(client, "event " + name + " " + f);
+            });
+            eventWatches.push_back({name, id, client});
+        }
+        return "ok watching " + std::to_string(eventWatches.size()) + " events";
+    });
+
+    commandTable.add("unwatch", "unwatch [Event ...]",
+                     "Stop streaming these events (all of them when none is named).",
+                     [this](const ControlCommand& cmd) -> std::string {
+        int stopped = 0;
+        for (std::size_t i = eventWatches.size(); i-- > 0;) {
+            const EventWatch& w = eventWatches[i];
+            if (!cmd.args.empty() && std::find(cmd.args.begin(), cmd.args.end(), w.name) == cmd.args.end()) continue;
+            eventBus.unsubscribe(w.id);
+            eventWatches.erase(eventWatches.begin() + static_cast<std::ptrdiff_t>(i));
+            ++stopped;
+        }
+        return "ok stopped " + std::to_string(stopped) + " watches";
     });
 }
 

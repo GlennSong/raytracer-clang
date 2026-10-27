@@ -70,6 +70,12 @@ public:
     virtual void field(const FieldMeta& meta, std::string& value) = 0;
     // A boolean view of one bit in a flags word (e.g. material checkerboard).
     virtual void bitFlag(const FieldMeta& meta, uint32_t& flags, uint32_t mask) = 0;
+    // A whole number (an event's agent id, a count). Visitors that don't care see it as a Real, rounded back.
+    virtual void field(const FieldMeta& meta, int& value) {
+        Real r = value;
+        field(meta, r);
+        value = static_cast<int>(r < 0 ? r - 0.5 : r + 0.5);
+    }
 };
 
 // One describe function per component — the single source of truth its

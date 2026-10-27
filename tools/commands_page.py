@@ -40,6 +40,8 @@ FAMILIES = [
       "trains?", "opensigns?", "who?", "pin", "unpin", "pin?", "findplace", "findplace?"]),
     ("Asking the ground and the buildings", "What stands where, and maps of it.",
      ["lot?", "towers?", "recipes?", "ground?", "citymap"]),
+    ("Events", "The bus's named events (ADR-0253): list them, publish one, stream them as they happen.",
+     ["events?", "publish", "watch", "unwatch"]),
     ("Engine knobs and health", "Settings, the renderer's knobs, memory, frame time, sound, keys, the bake.",
      ["set", "get", "render", "reload", "mem?", "ledger", "audio?", "keys?", "bundle?", "clip", "clip?"]),
 ]

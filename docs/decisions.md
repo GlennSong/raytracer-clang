@@ -12418,6 +12418,10 @@ drifts.
      **Done:** one tool per verb (`?` as `_q`, questions read-only), the site's `commands.json` when no viewer
      runs, re-read after `launch_viewer`/`viewer_status`/`reload` with `tools/list_changed`; seven composites stay.
   2. Lua registers verbs (`control.command(name, usage, summary, fn)`), owned by the script.
+     **Done:** `control.command{name=, usage=, summary=, run=}` from a behaviour's start/update, owned by its entity
+     (gone when the entity or its ScriptBehaviour is, and all of a ScriptSystem's when it is); `control.run(line)`
+     runs any verb. A verb run from the socket gets its own context on the last tick's world; its spawns apply when
+     it returns. The command table now outlives the state stack (declared before it in Application).
   3. Commands become typed events on the EventBus (`TeleportRequest`, the `possess.cmd` family, daynight, input taps,
      `PlayerThrown` for `player.limp`). Event types describe their fields once through the property layer
      (ADR-0018), which gives Lua `events.publish` / `events.on` and the socket's parsing without per-event code. Engine
@@ -12426,6 +12430,12 @@ drifts.
   4. Answers become questions a system answers when asked (its own `?` verb) instead of strings rewritten into
      Settings; `telemetry.askedAt` goes with them.
   5. `watch <event>` streams events back over the socket (and to MCP as notifications), so probes stop polling.
+     **Done (with step 3's groundwork):** the bus names types (`describeEvent<E>(bus, name, summary)`, fields
+     through the property layer, which gained an int field); `events?`, `publish <Event> {json}`, `watch` and
+     `unwatch` on the socket, a watch lasting as long as its connection and never stalling a frame (a full client
+     buffer drops the line); Lua `events.publish(name, table)` (queued) and `events.on(name, fn)` / `events.off`,
+     owned by the script. PlaySound is the first named type. The JSON crosses event_bus.h as text: the vendored
+     library has no forward header.
   6. Settings keeps preferences only, and stops saving the transient keys.
 - **Lua's three doors**, for the record: direct calls for questions (`entity.get_position`; generic component access
   through the property layer belongs with #124), queued commands for actions (`spawn.*`), and the shared bus for
