@@ -8,8 +8,6 @@
 #include "../src/engine/control/control_commands.h"
 #include "../src/engine/application.h"
 
-#include <nlohmann/json.hpp>
-
 #include <cstdlib>
 #include <fstream>
 #include <sstream>
@@ -178,19 +176,43 @@ TEST_CASE(control_application_registers_every_verb_once_with_its_words) {
         CHECK(!c.summary.empty());
         CHECK(c.usage.rfind(c.name, 0) == 0);   // the usage line starts with the verb
     }
-    CHECK(app.handleControlCommand("ping") == "ok pong");
-    CHECK(app.handleControlCommand("commands?").rfind("ok ", 0) == 0);
-    CHECK(app.handleControlCommand("bogus").rfind("err unknown command: bogus", 0) == 0);
+    // Only verbs that need no renderer: the Application here is not initialized.
+    CHECK(app.commands().run(parseControlCommand("ping")) == "ok pong");
+    CHECK(app.commands().run(parseControlCommand("commands?")).rfind("ok ", 0) == 0);
+    CHECK(app.commands().run(parseControlCommand("bogus")).rfind("err unknown command: bogus", 0) == 0);
+    // `ride <x> <z>` goes to the possessed agent with anything after the two numbers, as it did before the merge
+    CHECK(app.commands().run(parseControlCommand("ride 120 -340 0")) == "ok staged (poll possess?)");
+    CHECK(app.settings().getString("possess.cmd", "") == "ride 120 -340");
+    CHECK(app.commands().run(parseControlCommand("ride bus")) == "ok ride bus staged");
+}
+
+// Names are stored lowercased, as they arrive; a name that is not one word is refused.
+TEST_CASE(control_commands_store_names_as_they_arrive) {
+    ControlCommands t;
+    CHECK(t.add("PossessStats?", "possessstats?", "a question", [](const ControlCommand&) { return std::string("ok"); }));
+    CHECK(t.run(parseControlCommand("possessStats?")) == "ok");
+    CHECK(!t.add("two words", "two words", "no", [](const ControlCommand&) { return std::string("ok"); }));
+    CHECK(!t.add("", "", "no", [](const ControlCommand&) { return std::string("ok"); }));
+    CHECK(t.refused() == 2 && t.size() == 1);
+}
+
+// A handler may remove verbs, its own included (a Lua script reloading), while it runs.
+TEST_CASE(control_commands_a_handler_can_remove_itself) {
+    ControlCommands t;
+    std::string tail = " still here";   // captured state that dies with the stored std::function
+    t.add("reload_me", "reload_me", "drops its own verbs", [&t, tail](const ControlCommand&) {
+        t.removeOwnedBy("scene.lua");
+        return "ok" + tail;
+    }, "scene.lua");
+    CHECK(t.run(parseControlCommand("reload_me")) == "ok still here");
+    CHECK(!t.has("reload_me"));
 }
 
 // The site's list of verbs (web/engine/commands.html) is built from web/engine/commands.json, which must be the
 // table itself. RT_WRITE_COMMANDS_JSON=1 rewrites it; then run tools/commands_page.py.
 TEST_CASE(control_site_command_list_matches_the_table) {
     Application app;
-    nlohmann::json arr = nlohmann::json::array();
-    for (const ControlCommandInfo& c : app.commands().list())
-        arr.push_back({{"name", c.name}, {"usage", c.usage}, {"summary", c.summary}, {"owner", c.owner}});
-    const std::string want = arr.dump(1) + "\n";
+    const std::string want = app.commands().listingJson(1) + "\n";
     const std::string path = std::string(RT_SOURCE_DIR) + "/web/engine/commands.json";
     if (std::getenv("RT_WRITE_COMMANDS_JSON")) {
         std::ofstream(path) << want;

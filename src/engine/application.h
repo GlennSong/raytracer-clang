@@ -80,9 +80,8 @@ public:
     Window& windowRef() { return *window; }
     Settings& settings() { return settingsStore; }
     // The control channel's verbs: systems and Lua scripts add their own here (ADR-0253).
+    // Handlers assume an initialized Application (many touch the renderer or the window).
     ControlCommands& commands() { return commandTable; }
-    // Run one control line as the socket would, reply included (an in-game console, tests).
-    std::string handleControlCommand(const std::string& line);
     // Absolute path settings were loaded from (Config::settingsFile) — hosts
     // whose working directory is not the settings directory (the visionOS app
     // saves to Documents) must save back to THIS path, not a relative name.
@@ -108,7 +107,16 @@ public:
 
 private:
     void pumpControlChannel();
+    std::string handleControlCommand(const std::string& line);   // the socket's front door: one line in, one out
     void registerControlCommands();   // application_commands.cpp: the built-in verbs (ADR-0253)
+    void registerConnectionVerbs();
+    void registerCameraVerbs();
+    void registerSkyVerbs();
+    void registerPlayerVerbs();
+    void registerPossessionVerbs();
+    void registerCityVerbs();
+    void registerGroundVerbs();
+    void registerEngineVerbs();
     void setDebugOverlay(bool on);   // the grave key's push/pop, callable
     void reconcileFramebuffer();
     void renderFrame();

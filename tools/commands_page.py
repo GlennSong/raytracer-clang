@@ -51,6 +51,11 @@ KIND_TEXT = {
 }
 
 
+def row_id(name):
+    """A link target per verb: `teleport` and `teleport?` must differ (the question gets -q)."""
+    return "v-" + re.sub(r"[^a-z0-9_]", "", name.replace("?", "_q"))
+
+
 def git_show(pin, path):
     return subprocess.run(["git", "show", f"{pin}:{path}"], cwd=REPO, check=True, capture_output=True,
                           text=True).stdout
@@ -89,7 +94,9 @@ def kind_of(body):
 def excerpt(src, name):
     """The registration of one verb: its line range and text."""
     lines = src.split("\n")
-    a = next(i for i, l in enumerate(lines) if l.startswith(f'    commandTable.add("{name}"'))
+    a = next((i for i, l in enumerate(lines) if l.startswith(f'    commandTable.add("{name}"')), None)
+    if a is None:
+        raise SystemExit(f"commands_page: no `{name}` registration in {SRC} at the pin, for the excerpt")
     b = next(i for i in range(a, len(lines)) if lines[i] == "    });")
     return a + 1, b + 1, "\n".join(lines[a:b + 1])
 
@@ -114,6 +121,14 @@ def main():
     by_name = {c["name"]: c for c in cmds}
     src = git_show(pin, SRC)
     bodies = handler_bodies(src)
+    # The list and the code must be the same version: the "how it gets there" column reads each verb's handler
+    # at the pin. (Verbs a system or script registers elsewhere are owned by someone other than the engine.)
+    engine_verbs = {n for n, c in by_name.items() if c["owner"] == "engine"}
+    if engine_verbs != set(bodies):
+        missing = sorted(engine_verbs - set(bodies)); extra = sorted(set(bodies) - engine_verbs)
+        raise SystemExit(f"commands_page: commands.json and {SRC} at {pin[:8]} disagree "
+                         f"(not in the code: {missing}; not in the list: {extra}). Regenerate commands.json "
+                         f"and pin the commit that has the code.")
     kinds = {n: "direct" if n in SETTINGS_VERBS or by_name[n]["owner"] != "engine" else kind_of(bodies.get(n, ""))
              for n in by_name}
 
@@ -142,7 +157,7 @@ def main():
         for n in names:
             c = by_name[n]
             k = kinds[n]
-            rows.append(f'    <tr id="v-{html.escape(re.sub(r"[^a-z0-9_]", "", n))}"><td><code>{html.escape(c["usage"])}</code></td>'
+            rows.append(f'    <tr id="{row_id(n)}"><td><code>{html.escape(c["usage"])}</code></td>'
                         f'<td>{html.escape(c["summary"])}</td>'
                         f'<td><span class="kind {k}">{KIND_TEXT[k][0]}</span></td></tr>')
         rows.append('  </table>')

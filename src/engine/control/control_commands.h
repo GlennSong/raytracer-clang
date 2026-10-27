@@ -30,7 +30,8 @@ class ControlCommands {
 public:
     using Handler = std::function<std::string(const ControlCommand& cmd)>;
 
-    // Register a verb. Refused (false, logged) when the name is taken, so two handlers can never share one.
+    // Register a verb, lowercased (as incoming names are). Refused (false, logged) when the name is taken, so two
+    // handlers can never share one, or when it is not one word.
     bool add(const std::string& name, const std::string& usage, const std::string& summary, Handler handler,
              const std::string& owner = "engine");
     // Remove a verb (a script unloading, a system shutting down). False when it was not there.
@@ -48,10 +49,11 @@ public:
 
     // Every verb, sorted by name.
     std::vector<ControlCommandInfo> list() const;
-    // The listing as one line: `ok <n> commands: name -- usage; ...`, or JSON for tools
-    // (`ok [{"name":..,"usage":..,"summary":..,"owner":..}, ...]`).
+    // The listing as one line: `ok <n> commands: <usage>; <usage>; ...` (each usage starts with its verb).
     std::string listingText() const;
-    std::string listingJson() const;
+    // The listing as JSON for tools: `[{"name":..,"usage":..,"summary":..,"owner":..}, ...]`, on one line, or
+    // pretty-printed with `indent` spaces (the site's commands.json). No "ok " prefix: `commands? json` adds it.
+    std::string listingJson(int indent = -1) const;
 
 private:
     struct Entry {

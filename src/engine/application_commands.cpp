@@ -29,10 +29,25 @@ bool num(const std::string& s, double& out) {
 }  // namespace
 
 void Application::registerControlCommands() {
+    // One function per family, the families of the site's list (tools/commands_page.py). As each family's
+    // verbs move onto typed events (ADR-0253), they move into the systems that own them.
+    registerConnectionVerbs();
+    registerCameraVerbs();
+    registerSkyVerbs();
+    registerPlayerVerbs();
+    registerPossessionVerbs();
+    registerCityVerbs();
+    registerGroundVerbs();
+    registerEngineVerbs();
+}
+
+// Connection
+void Application::registerConnectionVerbs() {
     commandTable.add("commands?", "commands? [json]",
                      "Every command the viewer takes, with its usage; `json` adds the summaries, for tools.",
                      [this](const ControlCommand& cmd) -> std::string {
-        return !cmd.args.empty() && cmd.args[0] == "json" ? commandTable.listingJson() : commandTable.listingText();
+        if (!cmd.args.empty() && cmd.args[0] == "json") return "ok " + commandTable.listingJson();
+        return commandTable.listingText();
     });
 
     commandTable.add("ping", "ping",
@@ -55,7 +70,10 @@ void Application::registerControlCommands() {
                       engine::bundle::engineIdentity().version.c_str());
         return buf;
     });
+}
 
+// Camera and pictures
+void Application::registerCameraVerbs() {
     commandTable.add("camera", "camera <x> <y> <z> <pitchDeg> <yawDeg>",
                      "Put the free camera at a pose (detaches it from the player, even in play mode).",
                      [this](const ControlCommand& cmd) -> std::string {
@@ -145,6 +163,66 @@ void Application::registerControlCommands() {
         return "err unknown overlay (hud|ui|debug|master|agents|cones|nav|plan)";
     });
 
+    commandTable.add("person", "person first|third|toggle",
+                     "On-foot camera: first or third person (the V key).",
+                     [this](const ControlCommand& cmd) -> std::string {
+        // On-foot camera: first or third person (the V key, explicit and
+        // guard-free). Consumed by PlayerSystem; persisted as playerThirdPerson.
+        if (cmd.args.empty() || (cmd.args[0] != "first" && cmd.args[0] != "third" && cmd.args[0] != "toggle"))
+            return "err usage: person first|third|toggle";
+        settingsStore.setDouble("player.setThirdPerson",
+                                cmd.args[0] == "toggle" ? 2.0 : (cmd.args[0] == "third" ? 1.0 : 0.0));
+        return "ok person staged";
+    });
+
+    commandTable.add("where?", "where?",
+                     "The viewpoint as x y z pitch yaw, the format teleport takes.",
+                     [this](const ControlCommand&) -> std::string {
+        // The viewpoint in the paste format: x y z pitch yaw.
+        const CameraState& c = view.camera;
+        Vec3 fwd = c.target - c.position;
+        const Real len = fwd.length();
+        if (len > 1e-9) fwd = fwd * (1.0 / len);
+        constexpr Real kRadToDeg = 57.29577951308232;
+        char buf[128];
+        std::snprintf(buf, sizeof(buf), "ok %.2f %.2f %.2f %.2f %.2f", c.position.x, c.position.y,
+                      c.position.z, std::asin(std::clamp(fwd.y, Real(-1), Real(1))) * kRadToDeg,
+                      std::atan2(fwd.x, -fwd.z) * kRadToDeg);
+        return buf;
+    });
+
+    commandTable.add("detach", "detach on|off|toggle",
+                     "Detach the camera from the player for fast travel (the F key).",
+                     [this](const ControlCommand& cmd) -> std::string {
+        // Drive the F toggle from a script so the fast-travel path is testable
+        // without a keyboard (it was reported fixed twice while broken).
+        const std::string mode = cmd.args.empty() ? "toggle" : cmd.args[0];
+        double v = 2.0;
+        if (mode == "on") v = 1.0;
+        else if (mode == "off") v = 0.0;
+        else if (mode != "toggle") return "err usage: detach on|off|toggle";
+        settingsStore.setDouble("camera.setDetached", v);
+        return "ok detach " + mode + " staged";
+    });
+
+    commandTable.add("view", "view <0-8> [wire 0-2]",
+                     "Debug view: 0 normal, 1 AO, 2 SSR, 3 depth, 4 normals, 5 shadow, 6 albedo, 7 facing, 8 cascades; plus wireframe.",
+                     [this](const ControlCommand& cmd) -> std::string {
+        // Debug view + wireframe are plain public renderer ints (the
+        // RT_DEBUG_VIEW / RT_WIREFRAME env knobs, now runtime).
+        double v;
+        if (cmd.args.empty() || !num(cmd.args[0], v) || v < 0 || v > 8)
+            return "err usage: view <0-8> [wire0-2]  (0=normal 1=AO 2=SSR "
+                   "3=depth 4=normals 5=shadow 6=albedo 7=facing 8=cascades)";
+        rendererPtr->debugView = static_cast<int>(v);
+        if (cmd.args.size() > 1 && num(cmd.args[1], v))
+            rendererPtr->wireframe = std::clamp(static_cast<int>(v), 0, 2);
+        return "ok view";
+    });
+}
+
+// Time, sky and weather
+void Application::registerSkyVerbs() {
     commandTable.add("sim", "sim pause|resume|step|speed <x>",
                      "Pause, resume or single-step the sim clock, or set its speed.",
                      [this](const ControlCommand& cmd) -> std::string {
@@ -161,48 +239,6 @@ void Application::registerControlCommands() {
             return "ok speed";
         }
         return "err unknown sim action";
-    });
-
-    commandTable.add("reload", "reload",
-                     "Reload the level (regrows the city).",
-                     [this](const ControlCommand&) -> std::string {
-        if (!controlReloadFactory) return "err no reload factory registered";
-        requestState(controlReloadFactory());
-        return "ok reloading";
-    });
-
-    // --- Tier 2 (device: "how deep can the controls go?"): everything that
-    // is already a Settings key or a public Renderer field. `set`/`get` are
-    // the generic escape hatch — every settings-driven knob, current and
-    // future, is reachable without another verb. The typed verbs below are
-    // the ones that need more than a bare settings write.
-    commandTable.add("set", "set <key> <value...>",
-                     "Set any Settings key (the generic knob; `render apply` pushes render keys live).",
-                     [this](const ControlCommand& cmd) -> std::string {
-        if (cmd.args.size() < 2) return "err usage: set <key> <value...>";
-        // Re-join: values may carry spaces (paths). Stored as a string —
-        // Settings coerces on read, so numeric/bool consumers still work.
-        std::string value = cmd.args[1];
-        for (size_t i = 2; i < cmd.args.size(); ++i) value += " " + cmd.args[i];
-        settingsStore.setString(cmd.args[0], value);
-        return "ok set " + cmd.args[0];
-    });
-
-    // WHAT IS PLAYING (Glenn: "how come river town has no audio?"): the mixer's state and its voices now
-    commandTable.add("audio?", "audio?",
-                     "Is the audio mixer up, and how many voices are playing.",
-                     [this](const ControlCommand&) -> std::string {
-        char b[160];
-        std::snprintf(b, sizeof b, "ok ready %d voices %zu", audioEngine.ready() ? 1 : 0, audioEngine.activeVoiceCount());
-        return b;
-    });
-
-    commandTable.add("get", "get <key>",
-                     "Read any Settings key.",
-                     [this](const ControlCommand& cmd) -> std::string {
-        if (cmd.args.empty()) return "err usage: get <key>";
-        const std::string v = settingsStore.getString(cmd.args[0], "");
-        return v.empty() ? "ok (unset)" : "ok " + v;
     });
 
     commandTable.add("daynight", "daynight <hour 0-24> | hold | run | minutes <n> | day <1-365> | moon <age|auto> | terrain on|off | hud on|off | chart <path.svg>",
@@ -280,44 +316,131 @@ void Application::registerControlCommands() {
         return "ok time staged";
     });
 
-    {
-        const ControlCommands::Handler h = [](const ControlCommand& cmd) -> std::string {
-            // The debug UI's clipboard, from outside: `clip <text>` sets it,
-            // `clip?` reads it — the way to tell "ImGui's copy does nothing"
-            // from "the window manager's clipboard bridge is not there".
-#ifdef RT_ENABLE_IMGUI
-            if (ImGui::GetCurrentContext() == nullptr) return "err no debug UI context";
-            if (cmd.name == "clip?") {
-                const char* t = ImGui::GetClipboardText();
-                return std::string("ok ") + (t && *t ? t : "(empty)");
-            }
-            if (cmd.args.empty()) return "err usage: clip <text>";
-            std::string text = cmd.args[0];
-            for (size_t i = 1; i < cmd.args.size(); ++i) text += " " + cmd.args[i];
-            ImGui::SetClipboardText(text.c_str());
-            return "ok clipboard set";
-#else
-            return "err built without the debug UI";
-#endif
-        };
-        commandTable.add("clip", "clip <text>",
-                         "Set the debug UI's clipboard.", h);
-        commandTable.add("clip?", "clip?",
-                         "Read the debug UI's clipboard.", h);
-    }
-
-    commandTable.add("person", "person first|third|toggle",
-                     "On-foot camera: first or third person (the V key).",
-                     [this](const ControlCommand& cmd) -> std::string {
-        // On-foot camera: first or third person (the V key, explicit and
-        // guard-free). Consumed by PlayerSystem; persisted as playerThirdPerson.
-        if (cmd.args.empty() || (cmd.args[0] != "first" && cmd.args[0] != "third" && cmd.args[0] != "toggle"))
-            return "err usage: person first|third|toggle";
-        settingsStore.setDouble("player.setThirdPerson",
-                                cmd.args[0] == "toggle" ? 2.0 : (cmd.args[0] == "third" ? 1.0 : 0.0));
-        return "ok person staged";
+    commandTable.add("daynight?", "daynight?",
+                     "The clock: the sky's hour, the loop length, sunrise and sunset, and the city sim's hour beside it.",
+                     [this](const ControlCommand&) -> std::string {
+        // The clock as numbers (DayNightSystem::publishStatus): the sky's
+        // hour, the loop length, today's sunrise/sunset, and the citysim's
+        // own hour beside it — with a staged cycle the two must agree (one
+        // clock). Two reads a real minute apart MEASURE the loop's rate.
+        char buf[48];
+        std::snprintf(buf, sizeof(buf), " sim=%.4f",
+                      settingsStore.getDouble("citysim.hour", -1.0));
+        return "ok " + settingsStore.getString("daynight.status", "no cycle") + buf;   // incl. ridge=/behind=
     });
 
+    commandTable.add("weather", "weather clear|fair|overcast|storm|auto|off [now]",
+                     "Set the weather (eased in, or `now` to snap); auto walks between states; off hands the clouds back to the panel.",
+                     [this](const ControlCommand& cmd) -> std::string {
+        // Weather states over the volumetric deck (weather_cycle.h); consumed
+        // by DayNightSystem. `auto` starts the seeded neighbor walk; `off`
+        // hands the cloud knobs back to the panel/clouds.apply.
+        if (cmd.args.empty()) return "err usage: weather clear|fair|overcast|storm|auto|off";
+        const std::string& w = cmd.args[0];
+        if (w != "clear" && w != "fair" && w != "overcast" && w != "storm" &&
+            w != "auto" && w != "off")
+            return "err usage: weather clear|fair|overcast|storm|auto|off";
+        // A trailing `now` snaps the state instead of easing the front in
+        // (screenshots, the editor's compare); DayNightSystem parses it.
+        const bool now = cmd.args.size() > 1 && cmd.args[1] == "now";
+        settingsStore.setString("weather.set", now ? w + " now" : w);
+        return now ? "ok weather set" : "ok weather staged";
+    });
+
+    commandTable.add("weather?", "weather?",
+                     "The weather state, and whether it is on auto.",
+                     [this](const ControlCommand&) -> std::string {
+        return "ok " + settingsStore.getString("weather.status", "off");
+    });
+
+    commandTable.add("sun", "sun <x> <y> <z> [intensity] [r g b]",
+                     "Set the sun's direction (toward the sun), intensity and colour, for levels with a static sun.",
+                     [this](const ControlCommand& cmd) -> std::string {
+        // Direct sun set — the ImGui Lighting panel's slider, remotely. This
+        // is the golden-hour knob for levels that author a STATIC sun (no
+        // day/night cycle to steer, e.g. metropolis_sky in edit mode); with a
+        // live cycle the next applyLighting overwrites it — use `daynight`.
+        // Sky disc follows the sun so the scattering sky agrees with shadows;
+        // an optional colour is what actually makes an hour GOLDEN (direction
+        // alone reads as grey daylight from a warm-white authored sun).
+        double v[7] = {0, 0, 0, -1, -1, -1, -1};
+        if (cmd.args.size() < 3 || !num(cmd.args[0], v[0]) ||
+            !num(cmd.args[1], v[1]) || !num(cmd.args[2], v[2]))
+            return "err usage: sun <x> <y> <z> [intensity] [r g b] "
+                   "(direction TOWARD sun)";
+        for (size_t i = 3; i < cmd.args.size() && i < 7; ++i)
+            num(cmd.args[i], v[i]);
+        Vec3 dir(v[0], v[1], v[2]);
+        const Real len = dir.length();
+        if (len < 1e-6) return "err zero sun direction";
+        dir = dir * (1.0 / len);
+        auto& lit = view.lighting;
+        lit.sun.direction = dir;
+        lit.sky.sunDirection = dir;
+        if (v[3] > 0) lit.sun.intensity = static_cast<float>(v[3]);
+        if (v[4] >= 0 && v[5] >= 0 && v[6] >= 0) {
+            const Vec3 col(v[4], v[5], v[6]);
+            lit.sun.color = col;
+            lit.sky.sunColor = col;
+        }
+        return "ok sun set";
+    });
+
+    commandTable.add("sun?", "sun?",
+                     "The solar elevation, the active light's height and intensity, and whether it is dark.",
+                     [this](const ControlCommand&) -> std::string {
+        // The lit truth, for numeric light probes (find golden hour without
+        // eyeballing screenshots). sunY is the SOLAR elevation — at night the
+        // active light in slot 0 is the moon (WS2), so lightY/intensity
+        // describe what's lighting the world while sunY/dark keep the solar
+        // truth the lamp predicates use.
+        const auto& lit = view.lighting;
+        char buf[200];
+        std::snprintf(buf, sizeof(buf),
+                      "ok sunY=%.3f lightY=%.3f intensity=%.3f dark=%d",
+                      lit.solarElevation, lit.sun.direction.y,
+                      lit.sun.intensity,
+                      lit.solarElevation < 0.06 ? 1 : 0);
+        return buf;
+    });
+
+    commandTable.add("fog", "fog <density> [heightFalloff] [r g b]",
+                     "Tune the level's fog live (nothing is saved).",
+                     [this](const ControlCommand& cmd) -> std::string {
+        // The atmosphere tuning knob (WS: "turn fog back on and help me tune
+        // it"): density [heightFalloff] [r g b], live on the level's lighting.
+        // Like `sun`, this edits the LEVEL-OWNED lighting — nothing persists;
+        // bake the values you like into the level JSON.
+        double v[5] = {-1, -1, -1, -1, -1};
+        if (cmd.args.empty() || !num(cmd.args[0], v[0]) || v[0] < 0)
+            return "err usage: fog <density> [heightFalloff] [r g b]";
+        for (size_t i = 1; i < cmd.args.size() && i < 5; ++i)
+            num(cmd.args[i], v[i]);
+        auto& fog = view.lighting.fog;
+        fog.enabled = v[0] > 0.0;
+        fog.density = static_cast<float>(v[0]);
+        if (v[1] >= 0) fog.heightFalloff = static_cast<float>(v[1]);
+        if (v[2] >= 0 && v[3] >= 0 && v[4] >= 0)
+            fog.color = Vec3(v[2], v[3], v[4]);
+        return "ok fog set";
+    });
+
+    commandTable.add("fog?", "fog?",
+                     "The fog's settings now.",
+                     [this](const ControlCommand&) -> std::string {
+        const auto& fog = view.lighting.fog;
+        char buf[160];
+        std::snprintf(buf, sizeof(buf),
+                      "ok enabled=%d density=%.5f heightFalloff=%.4f "
+                      "color=%.2f,%.2f,%.2f",
+                      fog.enabled ? 1 : 0, fog.density, fog.heightFalloff,
+                      fog.color.x, fog.color.y, fog.color.z);
+        return buf;
+    });
+}
+
+// The player
+void Application::registerPlayerVerbs() {
     commandTable.add("teleport", "teleport <x y z [pitch yaw] | x z>",
                      "Move the player (the camera when there is none); `x z` lands on the ground. Read the result with teleport?.",
                      [this](const ControlCommand& cmd) -> std::string {
@@ -338,44 +461,6 @@ void Application::registerControlCommands() {
                      [this](const ControlCommand&) -> std::string {
         const std::string r = settingsStore.getString("teleport.result", "");
         return r.empty() ? "ok (pending)" : "ok " + r;
-    });
-
-    commandTable.add("where?", "where?",
-                     "The viewpoint as x y z pitch yaw, the format teleport takes.",
-                     [this](const ControlCommand&) -> std::string {
-        // The viewpoint in the paste format: x y z pitch yaw.
-        const CameraState& c = view.camera;
-        Vec3 fwd = c.target - c.position;
-        const Real len = fwd.length();
-        if (len > 1e-9) fwd = fwd * (1.0 / len);
-        constexpr Real kRadToDeg = 57.29577951308232;
-        char buf[128];
-        std::snprintf(buf, sizeof(buf), "ok %.2f %.2f %.2f %.2f %.2f", c.position.x, c.position.y,
-                      c.position.z, std::asin(std::clamp(fwd.y, Real(-1), Real(1))) * kRadToDeg,
-                      std::atan2(fwd.x, -fwd.z) * kRadToDeg);
-        return buf;
-    });
-
-    commandTable.add("mem?", "mem?",
-                     "GPU memory: the backend's allocations, then mesh data grouped by name, largest first.",
-                     [this](const ControlCommand&) -> std::string {
-        // WHAT IS ON THE GPU: the backend's live allocations, then the meshes grouped by
-        // name, largest first (AssetManager::meshBytesByPrefix). The rest of what the
-        // driver reports -- render targets, shadow maps, instance and uniform buffers --
-        // is the difference against nvidia-smi.
-        std::string out = "ok " + rendererPtr->memoryReport();
-        std::size_t total = 0;
-        const auto groups = assetManager->meshBytesByPrefix();
-        for (const auto& g : groups) total += g.bytes;
-        char head[96];
-        std::snprintf(head, sizeof(head), " || mesh data by name, %.0f MB in all:", total / 1048576.0);
-        out += head;
-        for (std::size_t i = 0; i < groups.size() && i < 16; ++i) {
-            char b[160];
-            std::snprintf(b, sizeof(b), "  %s %zu meshes %.1f MB", groups[i].prefix.c_str(), groups[i].meshes, groups[i].bytes / 1048576.0);
-            out += b;
-        }
-        return out;
     });
 
     commandTable.add("tap", "tap <KeyName>",
@@ -431,18 +516,204 @@ void Application::registerControlCommands() {
         return "ok staged";
     });
 
-    commandTable.add("walkers?", "walkers?",
-                     "The city's walkers: how many, the fastest, step reversals, seated, indoors, students, on walks, joggers and games.",
-                     [this](const ControlCommand&) -> std::string {
-        return "ok " + settingsStore.getString("walkers.telemetry", "none");
-    });
-
     // THE PLAYER'S MOVEMENT (engine/locomotion.h): mode (walk|mantle|climb|swim|ladder), ground, position,
     // velocity, stamina and the last change ("jump (off steep ground)", "pull up onto a ledge 1.20 m ...").
     commandTable.add("move?", "move?",
                      "The player's movement: mode, ground, position, velocity, stamina and the last change.",
                      [this](const ControlCommand&) -> std::string {
         return "ok " + settingsStore.getString("player.telemetry", "none");
+    });
+
+    // go limp (the G key); jump, or lying still a moment, gets up
+    commandTable.add("ragdoll", "ragdoll",
+                     "The player goes limp (the G key); jump, or lying still a moment, gets up.",
+                     [this](const ControlCommand&) -> std::string {
+        settingsStore.setDouble("player.limp", 1.0);
+        return "ok staged";
+    });
+
+    // `train_board <train> [car]`: aboard, standing mid-carriage
+    commandTable.add("train_board", "train_board [train] [car]",
+                     "Put the player aboard a train, standing mid-carriage (defaults: train 0, car 1).",
+                     [this](const ControlCommand& cmd) -> std::string {
+        settingsStore.setString("train.board", (cmd.args.empty() ? std::string("0") : cmd.args[0]) + " " + (cmd.args.size() > 1 ? cmd.args[1] : std::string("1")));
+        return "ok staged";
+    });
+
+    commandTable.add("interact?", "interact?",
+                     "What the interaction focus is on.",
+                     [this](const ControlCommand&) -> std::string {
+        return "ok " + settingsStore.getString("interact.status", "none");
+    });
+
+    commandTable.add("ride", "ride bus|taxi|any|off | ride <x> <z>",
+                     "The player boards the nearest bus or taxi, or gets off; with x z, the possessed agent rides a bus there.",
+                     [this](const ControlCommand& cmd) -> std::string {
+        // One verb, two riders. `ride <x> <z>` sends the possessed agent by bus to a
+        // place (ADR-0091); it was a second handler further down that this one always
+        // returned before, so it never ran.
+        double x, z;
+        if (cmd.args.size() >= 2 && num(cmd.args[0], x) && num(cmd.args[1], z)) {
+            settingsStore.setString("possess.cmd", "ride " + cmd.args[0] + " " + cmd.args[1]);
+            return "ok staged (poll possess?)";
+        }
+        // Otherwise the player boards the nearest bus or cab, or gets off
+        // (city_player_transit.h). NPCs have been riding since RideBook; this is the player's seat.
+        const std::string what = cmd.args.empty() ? "any" : cmd.args[0];
+        double v = -1.0;
+        if (what == "off") v = 0.0;
+        else if (what == "bus") v = 1.0;
+        else if (what == "taxi" || what == "cab") v = 2.0;
+        else if (what == "any") v = 3.0;
+        else return "err usage: ride bus|taxi|any|off  (or ride <x> <z> for the possessed agent)";
+        settingsStore.setDouble("player.rideRequest", v);
+        return "ok ride " + what + " staged";
+    });
+
+    commandTable.add("elevator", "elevator call | pick <delta>",
+                     "Press the elevator call key, or move the panel's floor selection by delta.",
+                     [this](const ControlCommand& cmd) -> std::string {
+        // The elevator's verbs, remotely (ElevatorSystem consumes them next
+        // frame, exactly like the E / Up / Down keys): `elevator call` presses
+        // E, `elevator pick <n>` moves the panel's selection by n storeys.
+        // Drives a headless ride for frames (tools/elevator_ride.py).
+        if (cmd.args.empty()) return "err usage: elevator call | pick <delta>";
+        if (cmd.args[0] == "call") { settingsStore.setDouble("elevator.call", 1.0); return "ok elevator call staged"; }
+        if (cmd.args[0] == "pick" && cmd.args.size() > 1) {
+            settingsStore.setDouble("elevator.pick", std::atof(cmd.args[1].c_str()));
+            return "ok elevator pick staged";
+        }
+        return "err usage: elevator call | pick <delta>";
+    });
+
+    commandTable.add("elevator?", "elevator?",
+                     "The elevator: in the cab or at a door, moving, the floor, the selection and the cab's floor.",
+                     [this](const ControlCommand&) -> std::string {
+        return "ok " + settingsStore.getString("elevator.status", "no bank");
+    });
+}
+
+// Possession
+void Application::registerPossessionVerbs() {
+    // --- Possession (ADR-0079): transient play acts ----------------------
+    // Application stays city-free (engine_core charter): these verbs only
+    // stage the possess.cmd one-shot string; CityPossessSystem (registered by
+    // city-running states) consumes it and rewrites possess.status every
+    // frame. In a state without that system the status key answers "none".
+    commandTable.add("possess", "possess car|walker [x z]",
+                     "Take over a city car or walker (the nearest, or the one nearest x z). Poll possess?.",
+                     [this](const ControlCommand& cmd) -> std::string {
+        if (cmd.args.empty() ||
+            (cmd.args[0] != "car" && cmd.args[0] != "walker"))
+            return "err usage: possess <car|walker> [x z]";
+        std::string staged = cmd.args[0];
+        for (size_t i = 1; i < cmd.args.size() && i < 3; ++i)
+            staged += " " + cmd.args[i];
+        settingsStore.setString("possess.cmd", staged);
+        return "ok staged (poll possess?)";
+    });
+
+    {
+        const ControlCommands::Handler h = [this](const ControlCommand& cmd) -> std::string {
+            double x, z;
+            if (cmd.args.size() < 2 || !num(cmd.args[0], x) || !num(cmd.args[1], z))
+                return "err usage: " + cmd.name + " <x> <z>";
+            settingsStore.setString(
+                "possess.cmd",
+                (cmd.name == "drive_to" ? "driveto " : "walkto ") + cmd.args[0] +
+                    " " + cmd.args[1]);
+            return "ok staged (poll possess?)";
+        };
+        commandTable.add("drive_to", "drive_to <x> <z>",
+                         "Drive the possessed car to a point.", h);
+        commandTable.add("walk_to", "walk_to <x> <z>",
+                         "Walk the possessed walker to a point.", h);
+    }
+
+    // Hold the goal layer off the possessed agent so a director's plan is not
+    // overwritten by its schedule seconds later (ADR-0091).
+    commandTable.add("direct", "direct on|off",
+                     "Hold the possessed agent's own schedule off, so a director's plan is not overwritten.",
+                     [this](const ControlCommand& cmd) -> std::string {
+        if (cmd.args.size() != 1 || (cmd.args[0] != "on" && cmd.args[0] != "off"))
+            return "err usage: direct on|off";
+        settingsStore.setString("possess.cmd", "direct " + cmd.args[0]);
+        return "ok staged (poll possess?)";
+    });
+
+    // Get into the nearest free car / get out again (ADR-0091).
+    commandTable.add("board", "board [x z]",
+                     "The possessed walker gets into the nearest free car (or the one nearest x z).",
+                     [this](const ControlCommand& cmd) -> std::string {
+        std::string arg;
+        if (cmd.args.size() >= 2) arg = " " + cmd.args[0] + " " + cmd.args[1];
+        settingsStore.setString("possess.cmd", "board" + arg);
+        return "ok staged (poll possess?)";
+    });
+
+    {
+        const ControlCommands::Handler h = [this](const ControlCommand& cmd) -> std::string {
+            settingsStore.setString("possess.cmd", cmd.name);
+            return "ok staged (poll possess?)";
+        };
+        commandTable.add("enter", "enter",
+                         "The possessed walker goes into the building whose door it is standing at.", h);
+        commandTable.add("exit", "exit",
+                         "The possessed walker comes back out to the street.", h);
+    }
+
+    commandTable.add("alight", "alight",
+                     "The possessed walker gets out of the car it is in.",
+                     [this](const ControlCommand&) -> std::string {
+        settingsStore.setString("possess.cmd", "alight");
+        return "ok staged (poll possess?)";
+    });
+
+    commandTable.add("possess_stop", "possess_stop",
+                     "Stop the possessed agent where it is.",
+                     [this](const ControlCommand&) -> std::string {
+        settingsStore.setString("possess.cmd", "stop");
+        return "ok staged";
+    });
+
+    commandTable.add("release", "release",
+                     "Hand the possessed agent back to the city sim.",
+                     [this](const ControlCommand&) -> std::string {
+        settingsStore.setString("possess.cmd", "release");
+        return "ok staged";
+    });
+
+    commandTable.add("possess?", "possess?",
+                     "The possessed agent: kind, state, position, speed and distance left.",
+                     [this](const ControlCommand&) -> std::string {
+        return "ok " + settingsStore.getString("possess.status", "none");
+    });
+
+    // What the agent can SEE: the places, people and transit around it, each
+    // with a point walk_to accepts (ADR-0091). Written every frame by
+    // CityPossessSystem; "none" when nothing is possessed.
+    commandTable.add("look?", "look?",
+                     "What the possessed agent can see: places, people and transit nearby, each with a point walk_to accepts.",
+                     [this](const ControlCommand&) -> std::string {
+        return "ok " + settingsStore.getString("look.status", "none");
+    });
+
+    // The possessed agent's own mind: activity, goal state, and the fields that
+    // decide whether it walks (ADR-0091). Written every frame by
+    // CityPossessSystem; "none" when nothing is possessed.
+    commandTable.add("agent?", "agent?",
+                     "The possessed agent's mind: activity, goal state, and what decides whether it walks.",
+                     [this](const ControlCommand&) -> std::string {
+        return "ok " + settingsStore.getString("agent.status", "none");
+    });
+}
+
+// Asking the city
+void Application::registerCityVerbs() {
+    commandTable.add("walkers?", "walkers?",
+                     "The city's walkers: how many, the fastest, step reversals, seated, indoors, students, on walks, joggers and games.",
+                     [this](const ControlCommand&) -> std::string {
+        return "ok " + settingsStore.getString("walkers.telemetry", "none");
     });
 
     // throw the townsperson nearest the player as if a car hit it (the log says where)
@@ -457,14 +728,6 @@ void Application::registerControlCommands() {
                      "Townspeople thrown so far, and the ragdolls in play.",
                      [this](const ControlCommand&) -> std::string {
         return "ok " + settingsStore.getString("walkers.ragdolls", "none");
-    });
-
-    // go limp (the G key); jump, or lying still a moment, gets up
-    commandTable.add("ragdoll", "ragdoll",
-                     "The player goes limp (the G key); jump, or lying still a moment, gets up.",
-                     [this](const ControlCommand&) -> std::string {
-        settingsStore.setDouble("player.limp", 1.0);
-        return "ok staged";
     });
 
     commandTable.add("flicker?", "flicker?",
@@ -512,14 +775,6 @@ void Application::registerControlCommands() {
         return "ok " + settingsStore.getString("trains.telemetry", "none");
     });
 
-    // `train_board <train> [car]`: aboard, standing mid-carriage
-    commandTable.add("train_board", "train_board [train] [car]",
-                     "Put the player aboard a train, standing mid-carriage (defaults: train 0, car 1).",
-                     [this](const ControlCommand& cmd) -> std::string {
-        settingsStore.setString("train.board", (cmd.args.empty() ? std::string("0") : cmd.args[0]) + " " + (cmd.args.size() > 1 ? cmd.args[1] : std::string("1")));
-        return "ok staged";
-    });
-
     commandTable.add("depots?", "depots?",
                      "Buses: on route, heading in, off duty and parked in depot bays, the nearest bus and bay, and any stalled heading in.",
                      [this](const ControlCommand&) -> std::string {
@@ -561,6 +816,20 @@ void Application::registerControlCommands() {
         return "ok " + settingsStore.getString("findplace.result", "none");
     });
 
+    // `who? <agent>`: stage a question about any agent; `who?` alone: the answer (refreshed every step)
+    commandTable.add("who?", "who? [agent id]",
+                     "With an id, ask about any agent; alone, read the answer (refreshed every step).",
+                     [this](const ControlCommand& cmd) -> std::string {
+        if (!cmd.args.empty()) {
+            settingsStore.setString("who.query", cmd.args[0]);
+            return "ok staged (poll `who?`)";
+        }
+        return "ok " + settingsStore.getString("who.result", "none");
+    });
+}
+
+// Asking the ground and the buildings
+void Application::registerGroundVerbs() {
     // `recipes?`: the level's buildings counted by architect recipe, each with its tallest one's centre, base and
     // height -- whether a recipe the tables roll actually stands in this city, and where to go and look at it
     commandTable.add("recipes?", "recipes?",
@@ -583,81 +852,6 @@ void Application::registerControlCommands() {
             out += buf;
         }
         return out;
-    });
-
-    // `who? <agent>`: stage a question about any agent; `who?` alone: the answer (refreshed every step)
-    commandTable.add("who?", "who? [agent id]",
-                     "With an id, ask about any agent; alone, read the answer (refreshed every step).",
-                     [this](const ControlCommand& cmd) -> std::string {
-        if (!cmd.args.empty()) {
-            settingsStore.setString("who.query", cmd.args[0]);
-            return "ok staged (poll `who?`)";
-        }
-        return "ok " + settingsStore.getString("who.result", "none");
-    });
-
-    commandTable.add("interact?", "interact?",
-                     "What the interaction focus is on.",
-                     [this](const ControlCommand&) -> std::string {
-        return "ok " + settingsStore.getString("interact.status", "none");
-    });
-
-    commandTable.add("keys?", "keys?",
-                     "Every key binding and the mode it works in, then any real clashes.",
-                     [this](const ControlCommand&) -> std::string {
-        // WHAT DOES THIS KEY DO. Bindings live in a dozen systems' onStart, so
-        // the only way to answer that was grep. A shared key is legitimate --
-        // several here are deliberate -- but it should be readable.
-        std::string out;
-        for (const auto& kv : inputMap.bindingReport()) {
-            out += (out.empty() ? "" : "  |  ") + kv.first + ": ";
-            for (std::size_t i = 0; i < kv.second.size(); ++i)
-                out += std::string(i ? ", " : "") + kv.second[i] + " [" +
-                       inputContextName(inputMap.actionContext(kv.second[i])) + "]";
-        }
-        const std::vector<std::string> clash = inputMap.collisions();
-        out += "  ||  REAL CLASHES (same mode): " +
-               (clash.empty() ? std::string("none") : std::to_string(clash.size()));
-        for (const std::string& c : clash) out += "  " + c;
-        return "ok " + (out.empty() ? std::string("no bindings") : out);
-    });
-
-    commandTable.add("ride", "ride bus|taxi|any|off | ride <x> <z>",
-                     "The player boards the nearest bus or taxi, or gets off; with x z, the possessed agent rides a bus there.",
-                     [this](const ControlCommand& cmd) -> std::string {
-        // One verb, two riders. `ride <x> <z>` sends the possessed agent by bus to a
-        // place (ADR-0091); it was a second handler further down that this one always
-        // returned before, so it never ran.
-        double x, z;
-        if (cmd.args.size() == 2 && num(cmd.args[0], x) && num(cmd.args[1], z)) {
-            settingsStore.setString("possess.cmd", "ride " + cmd.args[0] + " " + cmd.args[1]);
-            return "ok staged (poll possess?)";
-        }
-        // Otherwise the player boards the nearest bus or cab, or gets off
-        // (city_player_transit.h). NPCs have been riding since RideBook; this is the player's seat.
-        const std::string what = cmd.args.empty() ? "any" : cmd.args[0];
-        double v = -1.0;
-        if (what == "off") v = 0.0;
-        else if (what == "bus") v = 1.0;
-        else if (what == "taxi" || what == "cab") v = 2.0;
-        else if (what == "any") v = 3.0;
-        else return "err usage: ride bus|taxi|any|off  (or ride <x> <z> for the possessed agent)";
-        settingsStore.setDouble("player.rideRequest", v);
-        return "ok ride " + what + " staged";
-    });
-
-    commandTable.add("detach", "detach on|off|toggle",
-                     "Detach the camera from the player for fast travel (the F key).",
-                     [this](const ControlCommand& cmd) -> std::string {
-        // Drive the F toggle from a script so the fast-travel path is testable
-        // without a keyboard (it was reported fixed twice while broken).
-        const std::string mode = cmd.args.empty() ? "toggle" : cmd.args[0];
-        double v = 2.0;
-        if (mode == "on") v = 1.0;
-        else if (mode == "off") v = 0.0;
-        else if (mode != "toggle") return "err usage: detach on|off|toggle";
-        settingsStore.setDouble("camera.setDetached", v);
-        return "ok detach " + mode + " staged";
     });
 
     // THE TALL BUILDINGS round a point, for a probe to aim at (#114: a swing probe that hooked empty sky never
@@ -804,148 +998,132 @@ void Application::registerControlCommands() {
                    : "err cannot write " + cmd.args[0];
     });
 
-    commandTable.add("daynight?", "daynight?",
-                     "The clock: the sky's hour, the loop length, sunrise and sunset, and the city sim's hour beside it.",
-                     [this](const ControlCommand&) -> std::string {
-        // The clock as numbers (DayNightSystem::publishStatus): the sky's
-        // hour, the loop length, today's sunrise/sunset, and the citysim's
-        // own hour beside it — with a staged cycle the two must agree (one
-        // clock). Two reads a real minute apart MEASURE the loop's rate.
-        char buf[48];
-        std::snprintf(buf, sizeof(buf), " sim=%.4f",
-                      settingsStore.getDouble("citysim.hour", -1.0));
-        return "ok " + settingsStore.getString("daynight.status", "no cycle") + buf;   // incl. ridge=/behind=
-    });
-
-    commandTable.add("weather", "weather clear|fair|overcast|storm|auto|off [now]",
-                     "Set the weather (eased in, or `now` to snap); auto walks between states; off hands the clouds back to the panel.",
+    // Ground probe (the planting/seam diagnosis tool): `ground? x z` stages a
+    // query CityRenderSystem answers next frame (carved field, road lift, and
+    // the nearest nav link's deck height at that point). Poll until the reply
+    // echoes your coordinates — the same ask-again idiom as possess?.
+    commandTable.add("ground?", "ground? [x z [r]]",
+                     "With x z, ask about the ground there (carved field, road lift, nearest deck height); alone, read the answer.",
                      [this](const ControlCommand& cmd) -> std::string {
-        // Weather states over the volumetric deck (weather_cycle.h); consumed
-        // by DayNightSystem. `auto` starts the seeded neighbor walk; `off`
-        // hands the cloud knobs back to the panel/clouds.apply.
-        if (cmd.args.empty()) return "err usage: weather clear|fair|overcast|storm|auto|off";
-        const std::string& w = cmd.args[0];
-        if (w != "clear" && w != "fair" && w != "overcast" && w != "storm" &&
-            w != "auto" && w != "off")
-            return "err usage: weather clear|fair|overcast|storm|auto|off";
-        // A trailing `now` snaps the state instead of easing the front in
-        // (screenshots, the editor's compare); DayNightSystem parses it.
-        const bool now = cmd.args.size() > 1 && cmd.args[1] == "now";
-        settingsStore.setString("weather.set", now ? w + " now" : w);
-        return now ? "ok weather set" : "ok weather staged";
-    });
-
-    commandTable.add("weather?", "weather?",
-                     "The weather state, and whether it is on auto.",
-                     [this](const ControlCommand&) -> std::string {
-        return "ok " + settingsStore.getString("weather.status", "off");
-    });
-
-    commandTable.add("elevator", "elevator call | pick <delta>",
-                     "Press the elevator call key, or move the panel's floor selection by delta.",
-                     [this](const ControlCommand& cmd) -> std::string {
-        // The elevator's verbs, remotely (ElevatorSystem consumes them next
-        // frame, exactly like the E / Up / Down keys): `elevator call` presses
-        // E, `elevator pick <n>` moves the panel's selection by n storeys.
-        // Drives a headless ride for frames (tools/elevator_ride.py).
-        if (cmd.args.empty()) return "err usage: elevator call | pick <delta>";
-        if (cmd.args[0] == "call") { settingsStore.setDouble("elevator.call", 1.0); return "ok elevator call staged"; }
-        if (cmd.args[0] == "pick" && cmd.args.size() > 1) {
-            settingsStore.setDouble("elevator.pick", std::atof(cmd.args[1].c_str()));
-            return "ok elevator pick staged";
+        if (cmd.args.size() >= 2) {
+            settingsStore.setString("ground.query",   // `ground? x z [r]`: r dumps the area (RT_GROUND_DUMP)
+                                    cmd.args[0] + " " + cmd.args[1] + (cmd.args.size() >= 3 ? " " + cmd.args[2] : ""));
+            return "ok staged (poll `ground?` with no args)";
         }
-        return "err usage: elevator call | pick <delta>";
+        return "ok " + settingsStore.getString("ground.result", "none");
     });
+}
 
-    commandTable.add("elevator?", "elevator?",
-                     "The elevator: in the cab or at a door, moving, the floor, the selection and the cab's floor.",
+// Engine knobs and health
+void Application::registerEngineVerbs() {
+    commandTable.add("reload", "reload",
+                     "Reload the level (regrows the city).",
                      [this](const ControlCommand&) -> std::string {
-        return "ok " + settingsStore.getString("elevator.status", "no bank");
+        if (!controlReloadFactory) return "err no reload factory registered";
+        requestState(controlReloadFactory());
+        return "ok reloading";
     });
 
-    commandTable.add("sun", "sun <x> <y> <z> [intensity] [r g b]",
-                     "Set the sun's direction (toward the sun), intensity and colour, for levels with a static sun.",
+    // --- Tier 2 (device: "how deep can the controls go?"): everything that
+    // is already a Settings key or a public Renderer field. `set`/`get` are
+    // the generic escape hatch — every settings-driven knob, current and
+    // future, is reachable without another verb. The typed verbs below are
+    // the ones that need more than a bare settings write.
+    commandTable.add("set", "set <key> <value...>",
+                     "Set any Settings key (the generic knob; `render apply` pushes render keys live).",
                      [this](const ControlCommand& cmd) -> std::string {
-        // Direct sun set — the ImGui Lighting panel's slider, remotely. This
-        // is the golden-hour knob for levels that author a STATIC sun (no
-        // day/night cycle to steer, e.g. metropolis_sky in edit mode); with a
-        // live cycle the next applyLighting overwrites it — use `daynight`.
-        // Sky disc follows the sun so the scattering sky agrees with shadows;
-        // an optional colour is what actually makes an hour GOLDEN (direction
-        // alone reads as grey daylight from a warm-white authored sun).
-        double v[7] = {0, 0, 0, -1, -1, -1, -1};
-        if (cmd.args.size() < 3 || !num(cmd.args[0], v[0]) ||
-            !num(cmd.args[1], v[1]) || !num(cmd.args[2], v[2]))
-            return "err usage: sun <x> <y> <z> [intensity] [r g b] "
-                   "(direction TOWARD sun)";
-        for (size_t i = 3; i < cmd.args.size() && i < 7; ++i)
-            num(cmd.args[i], v[i]);
-        Vec3 dir(v[0], v[1], v[2]);
-        const Real len = dir.length();
-        if (len < 1e-6) return "err zero sun direction";
-        dir = dir * (1.0 / len);
-        auto& lit = view.lighting;
-        lit.sun.direction = dir;
-        lit.sky.sunDirection = dir;
-        if (v[3] > 0) lit.sun.intensity = static_cast<float>(v[3]);
-        if (v[4] >= 0 && v[5] >= 0 && v[6] >= 0) {
-            const Vec3 col(v[4], v[5], v[6]);
-            lit.sun.color = col;
-            lit.sky.sunColor = col;
+        if (cmd.args.size() < 2) return "err usage: set <key> <value...>";
+        // Re-join: values may carry spaces (paths). Stored as a string —
+        // Settings coerces on read, so numeric/bool consumers still work.
+        std::string value = cmd.args[1];
+        for (size_t i = 2; i < cmd.args.size(); ++i) value += " " + cmd.args[i];
+        settingsStore.setString(cmd.args[0], value);
+        return "ok set " + cmd.args[0];
+    });
+
+    // WHAT IS PLAYING (Glenn: "how come river town has no audio?"): the mixer's state and its voices now
+    commandTable.add("audio?", "audio?",
+                     "Is the audio mixer up, and how many voices are playing.",
+                     [this](const ControlCommand&) -> std::string {
+        char b[160];
+        std::snprintf(b, sizeof b, "ok ready %d voices %zu", audioEngine.ready() ? 1 : 0, audioEngine.activeVoiceCount());
+        return b;
+    });
+
+    commandTable.add("get", "get <key>",
+                     "Read any Settings key.",
+                     [this](const ControlCommand& cmd) -> std::string {
+        if (cmd.args.empty()) return "err usage: get <key>";
+        const std::string v = settingsStore.getString(cmd.args[0], "");
+        return v.empty() ? "ok (unset)" : "ok " + v;
+    });
+
+    {
+        const ControlCommands::Handler h = [](const ControlCommand& cmd) -> std::string {
+            // The debug UI's clipboard, from outside: `clip <text>` sets it,
+            // `clip?` reads it — the way to tell "ImGui's copy does nothing"
+            // from "the window manager's clipboard bridge is not there".
+#ifdef RT_ENABLE_IMGUI
+            if (ImGui::GetCurrentContext() == nullptr) return "err no debug UI context";
+            if (cmd.name == "clip?") {
+                const char* t = ImGui::GetClipboardText();
+                return std::string("ok ") + (t && *t ? t : "(empty)");
+            }
+            if (cmd.args.empty()) return "err usage: clip <text>";
+            std::string text = cmd.args[0];
+            for (size_t i = 1; i < cmd.args.size(); ++i) text += " " + cmd.args[i];
+            ImGui::SetClipboardText(text.c_str());
+            return "ok clipboard set";
+#else
+            return "err built without the debug UI";
+#endif
+        };
+        commandTable.add("clip", "clip <text>",
+                         "Set the debug UI's clipboard.", h);
+        commandTable.add("clip?", "clip?",
+                         "Read the debug UI's clipboard.", h);
+    }
+
+    commandTable.add("mem?", "mem?",
+                     "GPU memory: the backend's allocations, then mesh data grouped by name, largest first.",
+                     [this](const ControlCommand&) -> std::string {
+        // WHAT IS ON THE GPU: the backend's live allocations, then the meshes grouped by
+        // name, largest first (AssetManager::meshBytesByPrefix). The rest of what the
+        // driver reports -- render targets, shadow maps, instance and uniform buffers --
+        // is the difference against nvidia-smi.
+        std::string out = "ok " + rendererPtr->memoryReport();
+        std::size_t total = 0;
+        const auto groups = assetManager->meshBytesByPrefix();
+        for (const auto& g : groups) total += g.bytes;
+        char head[96];
+        std::snprintf(head, sizeof(head), " || mesh data by name, %.0f MB in all:", total / 1048576.0);
+        out += head;
+        for (std::size_t i = 0; i < groups.size() && i < 16; ++i) {
+            char b[160];
+            std::snprintf(b, sizeof(b), "  %s %zu meshes %.1f MB", groups[i].prefix.c_str(), groups[i].meshes, groups[i].bytes / 1048576.0);
+            out += b;
         }
-        return "ok sun set";
+        return out;
     });
 
-    commandTable.add("sun?", "sun?",
-                     "The solar elevation, the active light's height and intensity, and whether it is dark.",
+    commandTable.add("keys?", "keys?",
+                     "Every key binding and the mode it works in, then any real clashes.",
                      [this](const ControlCommand&) -> std::string {
-        // The lit truth, for numeric light probes (find golden hour without
-        // eyeballing screenshots). sunY is the SOLAR elevation — at night the
-        // active light in slot 0 is the moon (WS2), so lightY/intensity
-        // describe what's lighting the world while sunY/dark keep the solar
-        // truth the lamp predicates use.
-        const auto& lit = view.lighting;
-        char buf[200];
-        std::snprintf(buf, sizeof(buf),
-                      "ok sunY=%.3f lightY=%.3f intensity=%.3f dark=%d",
-                      lit.solarElevation, lit.sun.direction.y,
-                      lit.sun.intensity,
-                      lit.solarElevation < 0.06 ? 1 : 0);
-        return buf;
-    });
-
-    commandTable.add("fog", "fog <density> [heightFalloff] [r g b]",
-                     "Tune the level's fog live (nothing is saved).",
-                     [this](const ControlCommand& cmd) -> std::string {
-        // The atmosphere tuning knob (WS: "turn fog back on and help me tune
-        // it"): density [heightFalloff] [r g b], live on the level's lighting.
-        // Like `sun`, this edits the LEVEL-OWNED lighting — nothing persists;
-        // bake the values you like into the level JSON.
-        double v[5] = {-1, -1, -1, -1, -1};
-        if (cmd.args.empty() || !num(cmd.args[0], v[0]) || v[0] < 0)
-            return "err usage: fog <density> [heightFalloff] [r g b]";
-        for (size_t i = 1; i < cmd.args.size() && i < 5; ++i)
-            num(cmd.args[i], v[i]);
-        auto& fog = view.lighting.fog;
-        fog.enabled = v[0] > 0.0;
-        fog.density = static_cast<float>(v[0]);
-        if (v[1] >= 0) fog.heightFalloff = static_cast<float>(v[1]);
-        if (v[2] >= 0 && v[3] >= 0 && v[4] >= 0)
-            fog.color = Vec3(v[2], v[3], v[4]);
-        return "ok fog set";
-    });
-
-    commandTable.add("fog?", "fog?",
-                     "The fog's settings now.",
-                     [this](const ControlCommand&) -> std::string {
-        const auto& fog = view.lighting.fog;
-        char buf[160];
-        std::snprintf(buf, sizeof(buf),
-                      "ok enabled=%d density=%.5f heightFalloff=%.4f "
-                      "color=%.2f,%.2f,%.2f",
-                      fog.enabled ? 1 : 0, fog.density, fog.heightFalloff,
-                      fog.color.x, fog.color.y, fog.color.z);
-        return buf;
+        // WHAT DOES THIS KEY DO. Bindings live in a dozen systems' onStart, so
+        // the only way to answer that was grep. A shared key is legitimate --
+        // several here are deliberate -- but it should be readable.
+        std::string out;
+        for (const auto& kv : inputMap.bindingReport()) {
+            out += (out.empty() ? "" : "  |  ") + kv.first + ": ";
+            for (std::size_t i = 0; i < kv.second.size(); ++i)
+                out += std::string(i ? ", " : "") + kv.second[i] + " [" +
+                       inputContextName(inputMap.actionContext(kv.second[i])) + "]";
+        }
+        const std::vector<std::string> clash = inputMap.collisions();
+        out += "  ||  REAL CLASHES (same mode): " +
+               (clash.empty() ? std::string("none") : std::to_string(clash.size()));
+        for (const std::string& c : clash) out += "  " + c;
+        return "ok " + (out.empty() ? std::string("no bindings") : out);
     });
 
     commandTable.add("render", "render apply|save",
@@ -966,21 +1144,6 @@ void Application::registerControlCommands() {
             return "ok saved";
         }
         return "err usage: render apply|save";
-    });
-
-    commandTable.add("view", "view <0-8> [wire 0-2]",
-                     "Debug view: 0 normal, 1 AO, 2 SSR, 3 depth, 4 normals, 5 shadow, 6 albedo, 7 facing, 8 cascades; plus wireframe.",
-                     [this](const ControlCommand& cmd) -> std::string {
-        // Debug view + wireframe are plain public renderer ints (the
-        // RT_DEBUG_VIEW / RT_WIREFRAME env knobs, now runtime).
-        double v;
-        if (cmd.args.empty() || !num(cmd.args[0], v) || v < 0 || v > 8)
-            return "err usage: view <0-8> [wire0-2]  (0=normal 1=AO 2=SSR "
-                   "3=depth 4=normals 5=shadow 6=albedo 7=facing 8=cascades)";
-        rendererPtr->debugView = static_cast<int>(v);
-        if (cmd.args.size() > 1 && num(cmd.args[1], v))
-            rendererPtr->wireframe = std::clamp(static_cast<int>(v), 0, 2);
-        return "ok view";
     });
 
     commandTable.add("ledger", "ledger start <csv> | stop | summary",
@@ -1010,133 +1173,6 @@ void Application::registerControlCommands() {
             return buf;
         }
         return "err usage: ledger start <csv>|stop|summary";
-    });
-
-    // --- Possession (ADR-0079): transient play acts ----------------------
-    // Application stays city-free (engine_core charter): these verbs only
-    // stage the possess.cmd one-shot string; CityPossessSystem (registered by
-    // city-running states) consumes it and rewrites possess.status every
-    // frame. In a state without that system the status key answers "none".
-    commandTable.add("possess", "possess car|walker [x z]",
-                     "Take over a city car or walker (the nearest, or the one nearest x z). Poll possess?.",
-                     [this](const ControlCommand& cmd) -> std::string {
-        if (cmd.args.empty() ||
-            (cmd.args[0] != "car" && cmd.args[0] != "walker"))
-            return "err usage: possess <car|walker> [x z]";
-        std::string staged = cmd.args[0];
-        for (size_t i = 1; i < cmd.args.size() && i < 3; ++i)
-            staged += " " + cmd.args[i];
-        settingsStore.setString("possess.cmd", staged);
-        return "ok staged (poll possess?)";
-    });
-
-    {
-        const ControlCommands::Handler h = [this](const ControlCommand& cmd) -> std::string {
-            double x, z;
-            if (cmd.args.size() < 2 || !num(cmd.args[0], x) || !num(cmd.args[1], z))
-                return "err usage: " + cmd.name + " <x> <z>";
-            settingsStore.setString(
-                "possess.cmd",
-                (cmd.name == "drive_to" ? "driveto " : "walkto ") + cmd.args[0] +
-                    " " + cmd.args[1]);
-            return "ok staged (poll possess?)";
-        };
-        commandTable.add("drive_to", "drive_to <x> <z>",
-                         "Drive the possessed car to a point.", h);
-        commandTable.add("walk_to", "walk_to <x> <z>",
-                         "Walk the possessed walker to a point.", h);
-    }
-
-    // Hold the goal layer off the possessed agent so a director's plan is not
-    // overwritten by its schedule seconds later (ADR-0091).
-    commandTable.add("direct", "direct on|off",
-                     "Hold the possessed agent's own schedule off, so a director's plan is not overwritten.",
-                     [this](const ControlCommand& cmd) -> std::string {
-        if (cmd.args.size() != 1 || (cmd.args[0] != "on" && cmd.args[0] != "off"))
-            return "err usage: direct on|off";
-        settingsStore.setString("possess.cmd", "direct " + cmd.args[0]);
-        return "ok staged (poll possess?)";
-    });
-
-    // Get into the nearest free car / get out again (ADR-0091).
-    commandTable.add("board", "board [x z]",
-                     "The possessed walker gets into the nearest free car (or the one nearest x z).",
-                     [this](const ControlCommand& cmd) -> std::string {
-        std::string arg;
-        if (cmd.args.size() >= 2) arg = " " + cmd.args[0] + " " + cmd.args[1];
-        settingsStore.setString("possess.cmd", "board" + arg);
-        return "ok staged (poll possess?)";
-    });
-
-    {
-        const ControlCommands::Handler h = [this](const ControlCommand& cmd) -> std::string {
-            settingsStore.setString("possess.cmd", cmd.name);
-            return "ok staged (poll possess?)";
-        };
-        commandTable.add("enter", "enter",
-                         "The possessed walker goes into the building whose door it is standing at.", h);
-        commandTable.add("exit", "exit",
-                         "The possessed walker comes back out to the street.", h);
-    }
-
-    commandTable.add("alight", "alight",
-                     "The possessed walker gets out of the car it is in.",
-                     [this](const ControlCommand&) -> std::string {
-        settingsStore.setString("possess.cmd", "alight");
-        return "ok staged (poll possess?)";
-    });
-
-    commandTable.add("possess_stop", "possess_stop",
-                     "Stop the possessed agent where it is.",
-                     [this](const ControlCommand&) -> std::string {
-        settingsStore.setString("possess.cmd", "stop");
-        return "ok staged";
-    });
-
-    commandTable.add("release", "release",
-                     "Hand the possessed agent back to the city sim.",
-                     [this](const ControlCommand&) -> std::string {
-        settingsStore.setString("possess.cmd", "release");
-        return "ok staged";
-    });
-
-    commandTable.add("possess?", "possess?",
-                     "The possessed agent: kind, state, position, speed and distance left.",
-                     [this](const ControlCommand&) -> std::string {
-        return "ok " + settingsStore.getString("possess.status", "none");
-    });
-
-    // What the agent can SEE: the places, people and transit around it, each
-    // with a point walk_to accepts (ADR-0091). Written every frame by
-    // CityPossessSystem; "none" when nothing is possessed.
-    commandTable.add("look?", "look?",
-                     "What the possessed agent can see: places, people and transit nearby, each with a point walk_to accepts.",
-                     [this](const ControlCommand&) -> std::string {
-        return "ok " + settingsStore.getString("look.status", "none");
-    });
-
-    // The possessed agent's own mind: activity, goal state, and the fields that
-    // decide whether it walks (ADR-0091). Written every frame by
-    // CityPossessSystem; "none" when nothing is possessed.
-    commandTable.add("agent?", "agent?",
-                     "The possessed agent's mind: activity, goal state, and what decides whether it walks.",
-                     [this](const ControlCommand&) -> std::string {
-        return "ok " + settingsStore.getString("agent.status", "none");
-    });
-
-    // Ground probe (the planting/seam diagnosis tool): `ground? x z` stages a
-    // query CityRenderSystem answers next frame (carved field, road lift, and
-    // the nearest nav link's deck height at that point). Poll until the reply
-    // echoes your coordinates — the same ask-again idiom as possess?.
-    commandTable.add("ground?", "ground? [x z [r]]",
-                     "With x z, ask about the ground there (carved field, road lift, nearest deck height); alone, read the answer.",
-                     [this](const ControlCommand& cmd) -> std::string {
-        if (cmd.args.size() >= 2) {
-            settingsStore.setString("ground.query",   // `ground? x z [r]`: r dumps the area (RT_GROUND_DUMP)
-                                    cmd.args[0] + " " + cmd.args[1] + (cmd.args.size() >= 3 ? " " + cmd.args[2] : ""));
-            return "ok staged (poll `ground?` with no args)";
-        }
-        return "ok " + settingsStore.getString("ground.result", "none");
     });
 
     // the level bundle (ADR-0084): hit/miss and how long it took
