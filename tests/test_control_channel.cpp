@@ -8,6 +8,11 @@
 #include "../src/engine/control/control_commands.h"
 #include "../src/engine/application.h"
 
+#include <nlohmann/json.hpp>
+
+#include <cstdlib>
+#include <fstream>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -178,3 +183,24 @@ TEST_CASE(control_application_registers_every_verb_once_with_its_words) {
     CHECK(app.handleControlCommand("bogus").rfind("err unknown command: bogus", 0) == 0);
 }
 
+// The site's list of verbs (web/engine/commands.html) is built from web/engine/commands.json, which must be the
+// table itself. RT_WRITE_COMMANDS_JSON=1 rewrites it; then run tools/commands_page.py.
+TEST_CASE(control_site_command_list_matches_the_table) {
+    Application app;
+    nlohmann::json arr = nlohmann::json::array();
+    for (const ControlCommandInfo& c : app.commands().list())
+        arr.push_back({{"name", c.name}, {"usage", c.usage}, {"summary", c.summary}, {"owner", c.owner}});
+    const std::string want = arr.dump(1) + "\n";
+    const std::string path = std::string(RT_SOURCE_DIR) + "/web/engine/commands.json";
+    if (std::getenv("RT_WRITE_COMMANDS_JSON")) {
+        std::ofstream(path) << want;
+        return;
+    }
+    std::ifstream in(path);
+    std::stringstream have;
+    have << in.rdbuf();
+    if (have.str() != want)
+        std::printf("    web/engine/commands.json is out of date: RT_WRITE_COMMANDS_JSON=1 "
+                    "RT_TEST_FILTER=control_site ./build-viewer/run_tests, then python3 tools/commands_page.py\n");
+    CHECK(have.str() == want);
+}
