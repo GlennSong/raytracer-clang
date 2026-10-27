@@ -87,7 +87,7 @@
   <h2>What a verb looks like</h2>
   <div class="code">
     <div class="hd"><span>The teleport verb: its name, usage and summary, then the handler</span>
-      <a href="https://github.com/GlennSong/raytracer-clang/blob/3f813d889e6623685534bd4b974cf027ff309a00/src/engine/application_commands.cpp#L321-L334">src/engine/application_commands.cpp</a></div>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/05b5d2346c760d9cb7c12758001f6598860dadd5/src/engine/application_commands.cpp#L444-L457">src/engine/application_commands.cpp</a></div>
 <pre>commandTable.add(<span class="s">"teleport"</span>, <span class="s">"teleport &lt;x y z [pitch yaw] | x z&gt;"</span>,
                  <span class="s">"Move the player (the camera when there is none); `x z` lands on the ground. Read the result with teleport?."</span>,
                  [this](const ControlCommand&amp; cmd) -&gt; std::string {
@@ -133,15 +133,15 @@ printf 'teleport?\n' | nc -U /tmp/raytracer-viewer-*.sock</pre>
     <tr><th>Usage</th><th>What it does</th><th>How it gets there today</th></tr>
     <tr id="v-ping"><td><code>ping</code></td><td>Is the viewer answering? Replies pong.</td><td><span class="kind direct">acts directly</span></td></tr>
     <tr id="v-info"><td><code>info</code></td><td>The level, frame number, paused/overlay/hud/ui flags and the engine version.</td><td><span class="kind direct">acts directly</span></td></tr>
-    <tr id="v-commands"><td><code>commands? [json]</code></td><td>Every command the viewer takes, with its usage; `json` adds the summaries, for tools.</td><td><span class="kind direct">acts directly</span></td></tr>
+    <tr id="v-commands_q"><td><code>commands? [json]</code></td><td>Every command the viewer takes, with its usage; `json` adds the summaries, for tools.</td><td><span class="kind direct">acts directly</span></td></tr>
   </table>
   <h2 id="camera-and-pictures">Camera and pictures <span class="count">9</span></h2>
   <p>Where the eye is, what it shows, and saving frames.</p>
   <table class="verbs">
     <tr><th>Usage</th><th>What it does</th><th>How it gets there today</th></tr>
     <tr id="v-camera"><td><code>camera &lt;x&gt; &lt;y&gt; &lt;z&gt; &lt;pitchDeg&gt; &lt;yawDeg&gt;</code></td><td>Put the free camera at a pose (detaches it from the player, even in play mode).</td><td><span class="kind mailbox">settings mailbox</span></td></tr>
-    <tr id="v-camera"><td><code>camera?</code></td><td>The camera&#x27;s eye, pitch and yaw now, stamped with the frame number.</td><td><span class="kind direct">acts directly</span></td></tr>
-    <tr id="v-where"><td><code>where?</code></td><td>The viewpoint as x y z pitch yaw, the format teleport takes.</td><td><span class="kind direct">acts directly</span></td></tr>
+    <tr id="v-camera_q"><td><code>camera?</code></td><td>The camera&#x27;s eye, pitch and yaw now, stamped with the frame number.</td><td><span class="kind direct">acts directly</span></td></tr>
+    <tr id="v-where_q"><td><code>where?</code></td><td>The viewpoint as x y z pitch yaw, the format teleport takes.</td><td><span class="kind direct">acts directly</span></td></tr>
     <tr id="v-detach"><td><code>detach on|off|toggle</code></td><td>Detach the camera from the player for fast travel (the F key).</td><td><span class="kind mailbox">settings mailbox</span></td></tr>
     <tr id="v-person"><td><code>person first|third|toggle</code></td><td>On-foot camera: first or third person (the V key).</td><td><span class="kind mailbox">settings mailbox</span></td></tr>
     <tr id="v-shot"><td><code>shot &lt;path.png&gt;</code></td><td>Save the next composited frame as a PNG; poll for the file.</td><td><span class="kind direct">acts directly</span></td></tr>
@@ -155,41 +155,41 @@ printf 'teleport?\n' | nc -U /tmp/raytracer-viewer-*.sock</pre>
     <tr><th>Usage</th><th>What it does</th><th>How it gets there today</th></tr>
     <tr id="v-sim"><td><code>sim pause|resume|step|speed &lt;x&gt;</code></td><td>Pause, resume or single-step the sim clock, or set its speed.</td><td><span class="kind direct">acts directly</span></td></tr>
     <tr id="v-daynight"><td><code>daynight &lt;hour 0-24&gt; | hold | run | minutes &lt;n&gt; | day &lt;1-365&gt; | moon &lt;age|auto&gt; | terrain on|off | hud on|off | chart &lt;path.svg&gt;</code></td><td>Drive the day/night cycle: set the hour, hold or run it, its length, the calendar day, the moon, terrain shadows, the sky HUD, or write the sky chart.</td><td><span class="kind mailbox">settings mailbox</span></td></tr>
-    <tr id="v-daynight"><td><code>daynight?</code></td><td>The clock: the sky&#x27;s hour, the loop length, sunrise and sunset, and the city sim&#x27;s hour beside it.</td><td><span class="kind board">answer board</span></td></tr>
+    <tr id="v-daynight_q"><td><code>daynight?</code></td><td>The clock: the sky&#x27;s hour, the loop length, sunrise and sunset, and the city sim&#x27;s hour beside it.</td><td><span class="kind board">answer board</span></td></tr>
     <tr id="v-sun"><td><code>sun &lt;x&gt; &lt;y&gt; &lt;z&gt; [intensity] [r g b]</code></td><td>Set the sun&#x27;s direction (toward the sun), intensity and colour, for levels with a static sun.</td><td><span class="kind direct">acts directly</span></td></tr>
-    <tr id="v-sun"><td><code>sun?</code></td><td>The solar elevation, the active light&#x27;s height and intensity, and whether it is dark.</td><td><span class="kind direct">acts directly</span></td></tr>
+    <tr id="v-sun_q"><td><code>sun?</code></td><td>The solar elevation, the active light&#x27;s height and intensity, and whether it is dark.</td><td><span class="kind direct">acts directly</span></td></tr>
     <tr id="v-fog"><td><code>fog &lt;density&gt; [heightFalloff] [r g b]</code></td><td>Tune the level&#x27;s fog live (nothing is saved).</td><td><span class="kind direct">acts directly</span></td></tr>
-    <tr id="v-fog"><td><code>fog?</code></td><td>The fog&#x27;s settings now.</td><td><span class="kind direct">acts directly</span></td></tr>
+    <tr id="v-fog_q"><td><code>fog?</code></td><td>The fog&#x27;s settings now.</td><td><span class="kind direct">acts directly</span></td></tr>
     <tr id="v-weather"><td><code>weather clear|fair|overcast|storm|auto|off [now]</code></td><td>Set the weather (eased in, or `now` to snap); auto walks between states; off hands the clouds back to the panel.</td><td><span class="kind mailbox">settings mailbox</span></td></tr>
-    <tr id="v-weather"><td><code>weather?</code></td><td>The weather state, and whether it is on auto.</td><td><span class="kind board">answer board</span></td></tr>
+    <tr id="v-weather_q"><td><code>weather?</code></td><td>The weather state, and whether it is on auto.</td><td><span class="kind board">answer board</span></td></tr>
   </table>
   <h2 id="the-player">The player <span class="count">14</span></h2>
   <p>Moving, pressing keys, getting into things.</p>
   <table class="verbs">
     <tr><th>Usage</th><th>What it does</th><th>How it gets there today</th></tr>
     <tr id="v-teleport"><td><code>teleport &lt;x y z [pitch yaw] | x z&gt;</code></td><td>Move the player (the camera when there is none); `x z` lands on the ground. Read the result with teleport?.</td><td><span class="kind mailbox">settings mailbox</span></td></tr>
-    <tr id="v-teleport"><td><code>teleport?</code></td><td>Where the last teleport landed, or (pending).</td><td><span class="kind board">answer board</span></td></tr>
+    <tr id="v-teleport_q"><td><code>teleport?</code></td><td>Where the last teleport landed, or (pending).</td><td><span class="kind board">answer board</span></td></tr>
     <tr id="v-tap"><td><code>tap &lt;KeyName&gt;</code></td><td>Press and release a key through the real input path (e.g. tap F).</td><td><span class="kind mailbox">settings mailbox</span></td></tr>
     <tr id="v-hold"><td><code>hold &lt;KeyName|MouseLeft&gt; &lt;seconds&gt;</code></td><td>Hold a key down through the real input path for that much sim time.</td><td><span class="kind mailbox">settings mailbox</span></td></tr>
-    <tr id="v-move"><td><code>move?</code></td><td>The player&#x27;s movement: mode, ground, position, velocity, stamina and the last change.</td><td><span class="kind board">answer board</span></td></tr>
+    <tr id="v-move_q"><td><code>move?</code></td><td>The player&#x27;s movement: mode, ground, position, velocity, stamina and the last change.</td><td><span class="kind board">answer board</span></td></tr>
     <tr id="v-ragdoll"><td><code>ragdoll</code></td><td>The player goes limp (the G key); jump, or lying still a moment, gets up.</td><td><span class="kind mailbox">settings mailbox</span></td></tr>
     <tr id="v-interact"><td><code>interact [hold|stand|next]</code></td><td>Furniture interaction: tap or hold the interact key, stand up, or move the focus (Tab).</td><td><span class="kind mailbox">settings mailbox</span></td></tr>
-    <tr id="v-interact"><td><code>interact?</code></td><td>What the interaction focus is on.</td><td><span class="kind board">answer board</span></td></tr>
+    <tr id="v-interact_q"><td><code>interact?</code></td><td>What the interaction focus is on.</td><td><span class="kind board">answer board</span></td></tr>
     <tr id="v-vehicle_spawn"><td><code>vehicle_spawn [recipe]</code></td><td>Drop a vehicle in front of the player (the N key); e.g. vehicle_spawn moped.</td><td><span class="kind mailbox">settings mailbox</span></td></tr>
-    <tr id="v-vehicle"><td><code>vehicle?</code></td><td>The player&#x27;s vehicle: speed, rpm, gear, drive mode, position, and the sim speed.</td><td><span class="kind board">answer board</span></td></tr>
+    <tr id="v-vehicle_q"><td><code>vehicle?</code></td><td>The player&#x27;s vehicle: speed, rpm, gear, drive mode, position, and the sim speed.</td><td><span class="kind board">answer board</span></td></tr>
     <tr id="v-ride"><td><code>ride bus|taxi|any|off | ride &lt;x&gt; &lt;z&gt;</code></td><td>The player boards the nearest bus or taxi, or gets off; with x z, the possessed agent rides a bus there.</td><td><span class="kind mailbox">settings mailbox</span></td></tr>
     <tr id="v-train_board"><td><code>train_board [train] [car]</code></td><td>Put the player aboard a train, standing mid-carriage (defaults: train 0, car 1).</td><td><span class="kind mailbox">settings mailbox</span></td></tr>
     <tr id="v-elevator"><td><code>elevator call | pick &lt;delta&gt;</code></td><td>Press the elevator call key, or move the panel&#x27;s floor selection by delta.</td><td><span class="kind mailbox">settings mailbox</span></td></tr>
-    <tr id="v-elevator"><td><code>elevator?</code></td><td>The elevator: in the cab or at a door, moving, the floor, the selection and the cab&#x27;s floor.</td><td><span class="kind board">answer board</span></td></tr>
+    <tr id="v-elevator_q"><td><code>elevator?</code></td><td>The elevator: in the cab or at a door, moving, the floor, the selection and the cab&#x27;s floor.</td><td><span class="kind board">answer board</span></td></tr>
   </table>
   <h2 id="possession">Possession <span class="count">13</span></h2>
   <p>Take over one of the city&#x27;s people or cars and direct them (ADR-0079, ADR-0091).</p>
   <table class="verbs">
     <tr><th>Usage</th><th>What it does</th><th>How it gets there today</th></tr>
     <tr id="v-possess"><td><code>possess car|walker [x z]</code></td><td>Take over a city car or walker (the nearest, or the one nearest x z). Poll possess?.</td><td><span class="kind mailbox">settings mailbox</span></td></tr>
-    <tr id="v-possess"><td><code>possess?</code></td><td>The possessed agent: kind, state, position, speed and distance left.</td><td><span class="kind board">answer board</span></td></tr>
-    <tr id="v-agent"><td><code>agent?</code></td><td>The possessed agent&#x27;s mind: activity, goal state, and what decides whether it walks.</td><td><span class="kind board">answer board</span></td></tr>
-    <tr id="v-look"><td><code>look?</code></td><td>What the possessed agent can see: places, people and transit nearby, each with a point walk_to accepts.</td><td><span class="kind board">answer board</span></td></tr>
+    <tr id="v-possess_q"><td><code>possess?</code></td><td>The possessed agent: kind, state, position, speed and distance left.</td><td><span class="kind board">answer board</span></td></tr>
+    <tr id="v-agent_q"><td><code>agent?</code></td><td>The possessed agent&#x27;s mind: activity, goal state, and what decides whether it walks.</td><td><span class="kind board">answer board</span></td></tr>
+    <tr id="v-look_q"><td><code>look?</code></td><td>What the possessed agent can see: places, people and transit nearby, each with a point walk_to accepts.</td><td><span class="kind board">answer board</span></td></tr>
     <tr id="v-walk_to"><td><code>walk_to &lt;x&gt; &lt;z&gt;</code></td><td>Walk the possessed walker to a point.</td><td><span class="kind mailbox">settings mailbox</span></td></tr>
     <tr id="v-drive_to"><td><code>drive_to &lt;x&gt; &lt;z&gt;</code></td><td>Drive the possessed car to a point.</td><td><span class="kind mailbox">settings mailbox</span></td></tr>
     <tr id="v-direct"><td><code>direct on|off</code></td><td>Hold the possessed agent&#x27;s own schedule off, so a director&#x27;s plan is not overwritten.</td><td><span class="kind mailbox">settings mailbox</span></td></tr>
@@ -204,32 +204,32 @@ printf 'teleport?\n' | nc -U /tmp/raytracer-viewer-*.sock</pre>
   <p>The living city&#x27;s counts and diagnostics, and finding things in it.</p>
   <table class="verbs">
     <tr><th>Usage</th><th>What it does</th><th>How it gets there today</th></tr>
-    <tr id="v-walkers"><td><code>walkers?</code></td><td>The city&#x27;s walkers: how many, the fastest, step reversals, seated, indoors, students, on walks, joggers and games.</td><td><span class="kind board">answer board</span></td></tr>
-    <tr id="v-flicker"><td><code>flicker?</code></td><td>Walker flickers (a body gone and back within 1.5 s): the count and the latest few.</td><td><span class="kind board">answer board</span></td></tr>
-    <tr id="v-speeders"><td><code>speeders?</code></td><td>People drawn moving faster than a sprint: how many, and the latest with their state.</td><td><span class="kind board">answer board</span></td></tr>
-    <tr id="v-activities"><td><code>activities?</code></td><td>What the city&#x27;s people are out doing: per activity, who is at it or coming, groups, the nearest.</td><td><span class="kind board">answer board</span></td></tr>
+    <tr id="v-walkers_q"><td><code>walkers?</code></td><td>The city&#x27;s walkers: how many, the fastest, step reversals, seated, indoors, students, on walks, joggers and games.</td><td><span class="kind board">answer board</span></td></tr>
+    <tr id="v-flicker_q"><td><code>flicker?</code></td><td>Walker flickers (a body gone and back within 1.5 s): the count and the latest few.</td><td><span class="kind board">answer board</span></td></tr>
+    <tr id="v-speeders_q"><td><code>speeders?</code></td><td>People drawn moving faster than a sprint: how many, and the latest with their state.</td><td><span class="kind board">answer board</span></td></tr>
+    <tr id="v-activities_q"><td><code>activities?</code></td><td>What the city&#x27;s people are out doing: per activity, who is at it or coming, groups, the nearest.</td><td><span class="kind board">answer board</span></td></tr>
     <tr id="v-knock"><td><code>knock</code></td><td>Throw the townsperson nearest the player as if a car hit them.</td><td><span class="kind mailbox">settings mailbox</span></td></tr>
-    <tr id="v-knock"><td><code>knock?</code></td><td>Townspeople thrown so far, and the ragdolls in play.</td><td><span class="kind board">answer board</span></td></tr>
-    <tr id="v-traffic"><td><code>traffic?</code></td><td>City traffic: cars driving island-wide and any pile-ups (more with RT_TRAFFIC_DEBUG).</td><td><span class="kind board">answer board</span></td></tr>
-    <tr id="v-parking"><td><code>parking?</code></td><td>Parking: kerb bays and garage stalls taken, and the nearest taken stall.</td><td><span class="kind board">answer board</span></td></tr>
-    <tr id="v-depots"><td><code>depots?</code></td><td>Buses: on route, heading in, off duty and parked in depot bays, the nearest bus and bay, and any stalled heading in.</td><td><span class="kind board">answer board</span></td></tr>
-    <tr id="v-trains"><td><code>trains?</code></td><td>The trains: lines, stops, every train&#x27;s place, speed and doors, and whether you are aboard.</td><td><span class="kind board">answer board</span></td></tr>
-    <tr id="v-opensigns"><td><code>opensigns?</code></td><td>Shops&#x27; OPEN signs: lit, closed for the night, open with nobody on shift, and the nearest lit one.</td><td><span class="kind board">answer board</span></td></tr>
-    <tr id="v-who"><td><code>who? [agent id]</code></td><td>With an id, ask about any agent; alone, read the answer (refreshed every step).</td><td><span class="kind mailbox">settings mailbox</span></td></tr>
+    <tr id="v-knock_q"><td><code>knock?</code></td><td>Townspeople thrown so far, and the ragdolls in play.</td><td><span class="kind board">answer board</span></td></tr>
+    <tr id="v-traffic_q"><td><code>traffic?</code></td><td>City traffic: cars driving island-wide and any pile-ups (more with RT_TRAFFIC_DEBUG).</td><td><span class="kind board">answer board</span></td></tr>
+    <tr id="v-parking_q"><td><code>parking?</code></td><td>Parking: kerb bays and garage stalls taken, and the nearest taken stall.</td><td><span class="kind board">answer board</span></td></tr>
+    <tr id="v-depots_q"><td><code>depots?</code></td><td>Buses: on route, heading in, off duty and parked in depot bays, the nearest bus and bay, and any stalled heading in.</td><td><span class="kind board">answer board</span></td></tr>
+    <tr id="v-trains_q"><td><code>trains?</code></td><td>The trains: lines, stops, every train&#x27;s place, speed and doors, and whether you are aboard.</td><td><span class="kind board">answer board</span></td></tr>
+    <tr id="v-opensigns_q"><td><code>opensigns?</code></td><td>Shops&#x27; OPEN signs: lit, closed for the night, open with nobody on shift, and the nearest lit one.</td><td><span class="kind board">answer board</span></td></tr>
+    <tr id="v-who_q"><td><code>who? [agent id]</code></td><td>With an id, ask about any agent; alone, read the answer (refreshed every step).</td><td><span class="kind mailbox">settings mailbox</span></td></tr>
     <tr id="v-pin"><td><code>pin &lt;agent id&gt;</code></td><td>Follow an agent: it stays in the full sim however far it goes.</td><td><span class="kind mailbox">settings mailbox</span></td></tr>
     <tr id="v-unpin"><td><code>unpin &lt;agent id&gt;</code></td><td>Stop following an agent.</td><td><span class="kind mailbox">settings mailbox</span></td></tr>
-    <tr id="v-pin"><td><code>pin?</code></td><td>The agents being followed.</td><td><span class="kind board">answer board</span></td></tr>
+    <tr id="v-pin_q"><td><code>pin?</code></td><td>The agents being followed.</td><td><span class="kind board">answer board</span></td></tr>
     <tr id="v-findplace"><td><code>findplace &lt;name...&gt;</code></td><td>Find a named place (a shop by its sign); read the answer with findplace?.</td><td><span class="kind mailbox">settings mailbox</span></td></tr>
-    <tr id="v-findplace"><td><code>findplace?</code></td><td>The last findplace answer: where, its type, hours and who is in.</td><td><span class="kind board">answer board</span></td></tr>
+    <tr id="v-findplace_q"><td><code>findplace?</code></td><td>The last findplace answer: where, its type, hours and who is in.</td><td><span class="kind board">answer board</span></td></tr>
   </table>
   <h2 id="asking-the-ground-and-the-buildings">Asking the ground and the buildings <span class="count">5</span></h2>
   <p>What stands where, and maps of it.</p>
   <table class="verbs">
     <tr><th>Usage</th><th>What it does</th><th>How it gets there today</th></tr>
-    <tr id="v-lot"><td><code>lot? &lt;x&gt; &lt;z&gt; [radius 40]</code></td><td>What is actually here: the nearest road edge (and whether the point is in it), and the building records around, with their party walls.</td><td><span class="kind direct">acts directly</span></td></tr>
-    <tr id="v-towers"><td><code>towers? &lt;x&gt; &lt;z&gt; [radius 300] [min height 40]</code></td><td>The tallest buildings round a point (up to 24): centre, ground height and height.</td><td><span class="kind direct">acts directly</span></td></tr>
-    <tr id="v-recipes"><td><code>recipes?</code></td><td>The level&#x27;s buildings counted by architect recipe, each with its tallest one&#x27;s place and height.</td><td><span class="kind direct">acts directly</span></td></tr>
-    <tr id="v-ground"><td><code>ground? [x z [r]]</code></td><td>With x z, ask about the ground there (carved field, road lift, nearest deck height); alone, read the answer.</td><td><span class="kind mailbox">settings mailbox</span></td></tr>
+    <tr id="v-lot_q"><td><code>lot? &lt;x&gt; &lt;z&gt; [radius 40]</code></td><td>What is actually here: the nearest road edge (and whether the point is in it), and the building records around, with their party walls.</td><td><span class="kind direct">acts directly</span></td></tr>
+    <tr id="v-towers_q"><td><code>towers? &lt;x&gt; &lt;z&gt; [radius 300] [min height 40]</code></td><td>The tallest buildings round a point (up to 24): centre, ground height and height.</td><td><span class="kind direct">acts directly</span></td></tr>
+    <tr id="v-recipes_q"><td><code>recipes?</code></td><td>The level&#x27;s buildings counted by architect recipe, each with its tallest one&#x27;s place and height.</td><td><span class="kind direct">acts directly</span></td></tr>
+    <tr id="v-ground_q"><td><code>ground? [x z [r]]</code></td><td>With x z, ask about the ground there (carved field, road lift, nearest deck height); alone, read the answer.</td><td><span class="kind mailbox">settings mailbox</span></td></tr>
     <tr id="v-citymap"><td><code>citymap &lt;path.svg&gt; [layer,layer,...|all]</code></td><td>Write the running level&#x27;s layered city map as SVG.</td><td><span class="kind direct">acts directly</span></td></tr>
   </table>
   <h2 id="engine-knobs-and-health">Engine knobs and health <span class="count">11</span></h2>
@@ -240,13 +240,13 @@ printf 'teleport?\n' | nc -U /tmp/raytracer-viewer-*.sock</pre>
     <tr id="v-get"><td><code>get &lt;key&gt;</code></td><td>Read any Settings key.</td><td><span class="kind direct">acts directly</span></td></tr>
     <tr id="v-render"><td><code>render apply|save</code></td><td>Push the render Settings keys (ssao.*, ssr.*, shadow.*, bloom.*, grade.*) to the renderer, or save them.</td><td><span class="kind direct">acts directly</span></td></tr>
     <tr id="v-reload"><td><code>reload</code></td><td>Reload the level (regrows the city).</td><td><span class="kind direct">acts directly</span></td></tr>
-    <tr id="v-mem"><td><code>mem?</code></td><td>GPU memory: the backend&#x27;s allocations, then mesh data grouped by name, largest first.</td><td><span class="kind direct">acts directly</span></td></tr>
+    <tr id="v-mem_q"><td><code>mem?</code></td><td>GPU memory: the backend&#x27;s allocations, then mesh data grouped by name, largest first.</td><td><span class="kind direct">acts directly</span></td></tr>
     <tr id="v-ledger"><td><code>ledger start &lt;csv&gt; | stop | summary</code></td><td>The frame-time ledger: capture to CSV, stop, or a summary now.</td><td><span class="kind direct">acts directly</span></td></tr>
-    <tr id="v-audio"><td><code>audio?</code></td><td>Is the audio mixer up, and how many voices are playing.</td><td><span class="kind direct">acts directly</span></td></tr>
-    <tr id="v-keys"><td><code>keys?</code></td><td>Every key binding and the mode it works in, then any real clashes.</td><td><span class="kind direct">acts directly</span></td></tr>
-    <tr id="v-bundle"><td><code>bundle?</code></td><td>The level bundle: hit or miss, how long it took, and where it lives.</td><td><span class="kind direct">acts directly</span></td></tr>
+    <tr id="v-audio_q"><td><code>audio?</code></td><td>Is the audio mixer up, and how many voices are playing.</td><td><span class="kind direct">acts directly</span></td></tr>
+    <tr id="v-keys_q"><td><code>keys?</code></td><td>Every key binding and the mode it works in, then any real clashes.</td><td><span class="kind direct">acts directly</span></td></tr>
+    <tr id="v-bundle_q"><td><code>bundle?</code></td><td>The level bundle: hit or miss, how long it took, and where it lives.</td><td><span class="kind direct">acts directly</span></td></tr>
     <tr id="v-clip"><td><code>clip &lt;text&gt;</code></td><td>Set the debug UI&#x27;s clipboard.</td><td><span class="kind direct">acts directly</span></td></tr>
-    <tr id="v-clip"><td><code>clip?</code></td><td>Read the debug UI&#x27;s clipboard.</td><td><span class="kind direct">acts directly</span></td></tr>
+    <tr id="v-clip_q"><td><code>clip?</code></td><td>Read the debug UI&#x27;s clipboard.</td><td><span class="kind direct">acts directly</span></td></tr>
   </table>
 
   <h2>Where to look</h2>
@@ -258,7 +258,7 @@ printf 'teleport?\n' | nc -U /tmp/raytracer-viewer-*.sock</pre>
     <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/tests/test_control_channel.cpp">tests/test_control_channel.cpp</a> — the table's tests, and the check that this list matches it</li>
   </ul>
 
-  <footer>Generated by <code>tools/commands_page.py</code> from the command table at commit <code>3f813d88</code>.
+  <footer>Generated by <code>tools/commands_page.py</code> from the command table at commit <code>05b5d234</code>.
     Drawn from ADR-0078 and ADR-0253 (<a href="https://github.com/GlennSong/raytracer-clang/blob/main/docs/decisions.md">docs/decisions.md</a>).</footer>
 </div>
 </body>
