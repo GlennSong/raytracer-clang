@@ -49,6 +49,7 @@ add_library(engine_core STATIC
     src/engine/recent_scenes.cpp
     src/engine/clock.cpp
     src/engine/control/control_channel.cpp
+    src/engine/control/control_commands.cpp
     src/engine/frame_stats.cpp
     src/engine/pass_cost.cpp
     src/engine/event_bus.cpp
@@ -56,6 +57,7 @@ add_library(engine_core STATIC
     src/engine/world.cpp
     src/engine/components.cpp
     src/engine/application.cpp
+    src/engine/application_commands.cpp
     src/engine/state_stack.cpp
     src/engine/states/playing_state.cpp
     src/engine/states/debug_overlay_state.cpp

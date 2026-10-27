@@ -12386,3 +12386,54 @@ Tests (`tests/test_driver_seat.cpp`, physics_tests):
   - The swing still hangs from the body's centre line. The capsule never turns, so where the rope is tied cannot tip
     it.
   - The drawn rope's length is the swing's less the arm's reach, so it stays taut where the swing is.
+
+## ADR-0253 — One command table for the control channel; the string bus is retired family by family
+
+**Status:** Accepted (step 1 built) · **Date:** 2026-10-26 · **Amends:** ADR-0066, ADR-0078
+
+**Context.** The duplicate-systems sweep (#117, wave 3, item 1; Glenn chose to start there) found two signalling paths
+side by side. ADR-0066 chose a typed EventBus and rejected a string-keyed dispatcher ("misspelled topics fail
+silently"), yet only `Collision` and `PlaySound` ride the bus. Meanwhile the Settings store, a name→text table saved
+to `settings.json` at exit, carries three other jobs: 161 literal keys over 421 calls, of which about 30 are command
+mailboxes (`teleport.request`, `possess.cmd`, `input.tap`), about 25 are answer boards (`teleport.result`,
+`*.telemetry`) and about 15 wire systems together (`player.limp` with a velocity printed as text). 25 of the 104 keys in
+a working `settings.json` were such leftovers, read back on the next launch. The control channel's 80 verbs were one
+880-line if-chain in `Application::handleControlCommand`; `ride` was handled twice there and the second handler never
+ran (fixed in 48518900). The MCP server (`tools/viewer-mcp.py`) keeps its own hand-written copy of the verbs, which
+drifts.
+
+**Decision.**
+- **One command table** (`engine/control/control_commands.h`, `ControlCommands`): every verb is registered once with
+  its name, a usage line, a one-line summary and an owner. A second registration of a name is refused and logged; a
+  test holds the built-in set to none refused, every verb with a summary and a usage that starts with its name.
+  - The 80 built-in verbs moved verbatim to `application_commands.cpp`; `handleControlCommand` is the front door (the
+    `?` telemetry timestamp, then the table). It is public, for an in-game console and tests.
+  - `commands?` lists them; `commands? json` gives name, usage, summary and owner for tools.
+  - `Application::commands()` is where systems and Lua scripts add their own verbs; `removeOwnedBy` drops a reloading
+    script's set.
+- **Where it goes from here**, one family per commit, each through the gate and a probe run, the wire text unchanged
+  so probes and MCP tools keep working:
+  1. The MCP server builds its tool list from `commands? json` (the hand-written list goes, except the composite
+     tools such as `screenshot` and `launch_viewer`).
+  2. Lua registers verbs (`control.command(name, usage, summary, fn)`), owned by the script.
+  3. Commands become typed events on the EventBus (`TeleportRequest`, the `possess.cmd` family, daynight, input taps,
+     `PlayerThrown` for `player.limp`). Event types describe their fields once through the property layer
+     (ADR-0018), which gives Lua `events.publish` / `events.on` and the socket's parsing without per-event code. Engine
+     events are declared in C++; gameplay and scene events may be declared in Lua. Hot, per-agent events stay
+     C++-only.
+  4. Answers become questions a system answers when asked (its own `?` verb) instead of strings rewritten into
+     Settings; `telemetry.askedAt` goes with them.
+  5. `watch <event>` streams events back over the socket (and to MCP as notifications), so probes stop polling.
+  6. Settings keeps preferences only, and stops saving the transient keys.
+- **Lua's three doors**, for the record: direct calls for questions (`entity.get_position`; generic component access
+  through the property layer belongs with #124), queued commands for actions (`spawn.*`), and the shared bus for
+  announcements.
+
+**Alternatives.** (a) Leave the chain and add a duplicate check: keeps one 880-line function and two verb lists
+(C++ and Python). (b) Move every verb into its owning system now: right in the end, but a large move with no test of
+the moved behaviour; each family moves as it is converted to events instead. (c) A string-topic bus for Lua: the
+string bus again (ADR-0066 alternative c).
+
+**Consequences.** A verb can no longer be handled twice. The listing is the one description of the channel, so the MCP
+tool list and the docs can come from it. Unknown verbs answer `err unknown command: X (try commands?)` rather than a
+hand-kept list that had fallen behind. No bake or level output changes.

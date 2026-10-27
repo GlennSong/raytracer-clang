@@ -5,6 +5,8 @@
 #include "test_framework.h"
 
 #include "../src/engine/control/control_channel.h"
+#include "../src/engine/control/control_commands.h"
+#include "../src/engine/application.h"
 
 #include <string>
 #include <vector>
@@ -120,3 +122,59 @@ TEST_CASE(control_socket_round_trips_a_line) {
     CHECK(::access(path.c_str(), F_OK) != 0);
 }
 #endif
+
+// The command table (ADR-0253): one handler per verb. A second registration of a name is refused -- the
+// if-chain it replaced let `ride` be handled twice, and the second handler never ran.
+TEST_CASE(control_commands_refuse_a_second_handler_for_one_name) {
+    ControlCommands t;
+    CHECK(t.add("ride", "ride bus|off", "the player's seat", [](const ControlCommand&) { return std::string("ok first"); }));
+    CHECK(!t.add("ride", "ride <x> <z>", "the agent's bus", [](const ControlCommand&) { return std::string("ok second"); },
+                 "a script"));
+    CHECK(t.refused() == 1);
+    CHECK(t.size() == 1);
+    CHECK(t.run(parseControlCommand("ride bus")) == "ok first");
+}
+
+TEST_CASE(control_commands_run_pass_args_and_answer_unknown_names) {
+    ControlCommands t;
+    t.add("echo", "echo <words...>", "says them back", [](const ControlCommand& c) {
+        std::string out = "ok";
+        for (const std::string& a : c.args) out += " " + a;
+        return out;
+    });
+    CHECK(t.run(parseControlCommand("ECHO a b")) == "ok a b");
+    CHECK(t.run(parseControlCommand("nope 1")).rfind("err unknown command: nope", 0) == 0);
+}
+
+TEST_CASE(control_commands_list_sorted_and_remove_by_owner) {
+    ControlCommands t;
+    auto ok = [](const ControlCommand&) { return std::string("ok"); };
+    t.add("zeta", "zeta", "last", ok);
+    t.add("alpha", "alpha <n>", "first", ok, "scene.lua");
+    t.add("mid?", "mid?", "a question", ok, "scene.lua");
+    const std::vector<ControlCommandInfo> l = t.list();
+    CHECK(l.size() == 3 && l[0].name == "alpha" && l[2].name == "zeta");
+    CHECK(l[0].owner == "scene.lua" && l[2].owner == "engine");
+    CHECK(t.listingText() == "ok 3 commands: alpha <n>; mid?; zeta;");
+    CHECK(t.listingJson().find("\"summary\":\"first\"") != std::string::npos);
+    CHECK(t.removeOwnedBy("scene.lua") == 2);
+    CHECK(t.size() == 1 && t.has("zeta") && !t.has("alpha"));
+    CHECK(t.remove("zeta") && !t.remove("zeta"));
+}
+
+// The viewer's own verbs: every one registers once (none refused), each says its usage and what it does
+// (that listing is what the MCP server turns into tools), and the front door still answers.
+TEST_CASE(control_application_registers_every_verb_once_with_its_words) {
+    Application app;
+    const ControlCommands& t = app.commands();
+    CHECK(t.refused() == 0);
+    CHECK(t.size() >= 80);
+    for (const ControlCommandInfo& c : t.list()) {
+        CHECK(!c.summary.empty());
+        CHECK(c.usage.rfind(c.name, 0) == 0);   // the usage line starts with the verb
+    }
+    CHECK(app.handleControlCommand("ping") == "ok pong");
+    CHECK(app.handleControlCommand("commands?").rfind("ok ", 0) == 0);
+    CHECK(app.handleControlCommand("bogus").rfind("err unknown command: bogus", 0) == 0);
+}
+
