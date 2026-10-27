@@ -1,0 +1,488 @@
+[
+ {
+  "name": "activities?",
+  "owner": "engine",
+  "summary": "What the city's people are out doing: per activity, who is at it or coming, groups, the nearest.",
+  "usage": "activities?"
+ },
+ {
+  "name": "agent?",
+  "owner": "engine",
+  "summary": "The possessed agent's mind: activity, goal state, and what decides whether it walks.",
+  "usage": "agent?"
+ },
+ {
+  "name": "alight",
+  "owner": "engine",
+  "summary": "The possessed walker gets out of the car it is in.",
+  "usage": "alight"
+ },
+ {
+  "name": "audio?",
+  "owner": "engine",
+  "summary": "Is the audio mixer up, and how many voices are playing.",
+  "usage": "audio?"
+ },
+ {
+  "name": "board",
+  "owner": "engine",
+  "summary": "The possessed walker gets into the nearest free car (or the one nearest x z).",
+  "usage": "board [x z]"
+ },
+ {
+  "name": "bundle?",
+  "owner": "engine",
+  "summary": "The level bundle: hit or miss, how long it took, and where it lives.",
+  "usage": "bundle?"
+ },
+ {
+  "name": "camera",
+  "owner": "engine",
+  "summary": "Put the free camera at a pose (detaches it from the player, even in play mode).",
+  "usage": "camera <x> <y> <z> <pitchDeg> <yawDeg>"
+ },
+ {
+  "name": "camera?",
+  "owner": "engine",
+  "summary": "The camera's eye, pitch and yaw now, stamped with the frame number.",
+  "usage": "camera?"
+ },
+ {
+  "name": "citymap",
+  "owner": "engine",
+  "summary": "Write the running level's layered city map as SVG.",
+  "usage": "citymap <path.svg> [layer,layer,...|all]"
+ },
+ {
+  "name": "clip",
+  "owner": "engine",
+  "summary": "Set the debug UI's clipboard.",
+  "usage": "clip <text>"
+ },
+ {
+  "name": "clip?",
+  "owner": "engine",
+  "summary": "Read the debug UI's clipboard.",
+  "usage": "clip?"
+ },
+ {
+  "name": "commands?",
+  "owner": "engine",
+  "summary": "Every command the viewer takes, with its usage; `json` adds the summaries, for tools.",
+  "usage": "commands? [json]"
+ },
+ {
+  "name": "daynight",
+  "owner": "engine",
+  "summary": "Drive the day/night cycle: set the hour, hold or run it, its length, the calendar day, the moon, terrain shadows, the sky HUD, or write the sky chart.",
+  "usage": "daynight <hour 0-24> | hold | run | minutes <n> | day <1-365> | moon <age|auto> | terrain on|off | hud on|off | chart <path.svg>"
+ },
+ {
+  "name": "daynight?",
+  "owner": "engine",
+  "summary": "The clock: the sky's hour, the loop length, sunrise and sunset, and the city sim's hour beside it.",
+  "usage": "daynight?"
+ },
+ {
+  "name": "depots?",
+  "owner": "engine",
+  "summary": "Buses: on route, heading in, off duty and parked in depot bays, the nearest bus and bay, and any stalled heading in.",
+  "usage": "depots?"
+ },
+ {
+  "name": "detach",
+  "owner": "engine",
+  "summary": "Detach the camera from the player for fast travel (the F key).",
+  "usage": "detach on|off|toggle"
+ },
+ {
+  "name": "direct",
+  "owner": "engine",
+  "summary": "Hold the possessed agent's own schedule off, so a director's plan is not overwritten.",
+  "usage": "direct on|off"
+ },
+ {
+  "name": "drive_to",
+  "owner": "engine",
+  "summary": "Drive the possessed car to a point.",
+  "usage": "drive_to <x> <z>"
+ },
+ {
+  "name": "elevator",
+  "owner": "engine",
+  "summary": "Press the elevator call key, or move the panel's floor selection by delta.",
+  "usage": "elevator call | pick <delta>"
+ },
+ {
+  "name": "elevator?",
+  "owner": "engine",
+  "summary": "The elevator: in the cab or at a door, moving, the floor, the selection and the cab's floor.",
+  "usage": "elevator?"
+ },
+ {
+  "name": "enter",
+  "owner": "engine",
+  "summary": "The possessed walker goes into the building whose door it is standing at.",
+  "usage": "enter"
+ },
+ {
+  "name": "exit",
+  "owner": "engine",
+  "summary": "The possessed walker comes back out to the street.",
+  "usage": "exit"
+ },
+ {
+  "name": "findplace",
+  "owner": "engine",
+  "summary": "Find a named place (a shop by its sign); read the answer with findplace?.",
+  "usage": "findplace <name...>"
+ },
+ {
+  "name": "findplace?",
+  "owner": "engine",
+  "summary": "The last findplace answer: where, its type, hours and who is in.",
+  "usage": "findplace?"
+ },
+ {
+  "name": "flicker?",
+  "owner": "engine",
+  "summary": "Walker flickers (a body gone and back within 1.5 s): the count and the latest few.",
+  "usage": "flicker?"
+ },
+ {
+  "name": "fog",
+  "owner": "engine",
+  "summary": "Tune the level's fog live (nothing is saved).",
+  "usage": "fog <density> [heightFalloff] [r g b]"
+ },
+ {
+  "name": "fog?",
+  "owner": "engine",
+  "summary": "The fog's settings now.",
+  "usage": "fog?"
+ },
+ {
+  "name": "get",
+  "owner": "engine",
+  "summary": "Read any Settings key.",
+  "usage": "get <key>"
+ },
+ {
+  "name": "ground?",
+  "owner": "engine",
+  "summary": "With x z, ask about the ground there (carved field, road lift, nearest deck height); alone, read the answer.",
+  "usage": "ground? [x z [r]]"
+ },
+ {
+  "name": "hold",
+  "owner": "engine",
+  "summary": "Hold a key down through the real input path for that much sim time.",
+  "usage": "hold <KeyName|MouseLeft> <seconds>"
+ },
+ {
+  "name": "info",
+  "owner": "engine",
+  "summary": "The level, frame number, paused/overlay/hud/ui flags and the engine version.",
+  "usage": "info"
+ },
+ {
+  "name": "interact",
+  "owner": "engine",
+  "summary": "Furniture interaction: tap or hold the interact key, stand up, or move the focus (Tab).",
+  "usage": "interact [hold|stand|next]"
+ },
+ {
+  "name": "interact?",
+  "owner": "engine",
+  "summary": "What the interaction focus is on.",
+  "usage": "interact?"
+ },
+ {
+  "name": "keys?",
+  "owner": "engine",
+  "summary": "Every key binding and the mode it works in, then any real clashes.",
+  "usage": "keys?"
+ },
+ {
+  "name": "knock",
+  "owner": "engine",
+  "summary": "Throw the townsperson nearest the player as if a car hit them.",
+  "usage": "knock"
+ },
+ {
+  "name": "knock?",
+  "owner": "engine",
+  "summary": "Townspeople thrown so far, and the ragdolls in play.",
+  "usage": "knock?"
+ },
+ {
+  "name": "ledger",
+  "owner": "engine",
+  "summary": "The frame-time ledger: capture to CSV, stop, or a summary now.",
+  "usage": "ledger start <csv> | stop | summary"
+ },
+ {
+  "name": "look?",
+  "owner": "engine",
+  "summary": "What the possessed agent can see: places, people and transit nearby, each with a point walk_to accepts.",
+  "usage": "look?"
+ },
+ {
+  "name": "lot?",
+  "owner": "engine",
+  "summary": "What is actually here: the nearest road edge (and whether the point is in it), and the building records around, with their party walls.",
+  "usage": "lot? <x> <z> [radius 40]"
+ },
+ {
+  "name": "mem?",
+  "owner": "engine",
+  "summary": "GPU memory: the backend's allocations, then mesh data grouped by name, largest first.",
+  "usage": "mem?"
+ },
+ {
+  "name": "move?",
+  "owner": "engine",
+  "summary": "The player's movement: mode, ground, position, velocity, stamina and the last change.",
+  "usage": "move?"
+ },
+ {
+  "name": "opensigns?",
+  "owner": "engine",
+  "summary": "Shops' OPEN signs: lit, closed for the night, open with nobody on shift, and the nearest lit one.",
+  "usage": "opensigns?"
+ },
+ {
+  "name": "overlay",
+  "owner": "engine",
+  "summary": "Show or hide an overlay: the HUD, the UI, the debug overlay, street-lamp lights, or a city sim layer.",
+  "usage": "overlay <hud|ui|debug|lamplights|master|agents|cones|nav|plan> <on|off>"
+ },
+ {
+  "name": "parking?",
+  "owner": "engine",
+  "summary": "Parking: kerb bays and garage stalls taken, and the nearest taken stall.",
+  "usage": "parking?"
+ },
+ {
+  "name": "person",
+  "owner": "engine",
+  "summary": "On-foot camera: first or third person (the V key).",
+  "usage": "person first|third|toggle"
+ },
+ {
+  "name": "pin",
+  "owner": "engine",
+  "summary": "Follow an agent: it stays in the full sim however far it goes.",
+  "usage": "pin <agent id>"
+ },
+ {
+  "name": "pin?",
+  "owner": "engine",
+  "summary": "The agents being followed.",
+  "usage": "pin?"
+ },
+ {
+  "name": "ping",
+  "owner": "engine",
+  "summary": "Is the viewer answering? Replies pong.",
+  "usage": "ping"
+ },
+ {
+  "name": "possess",
+  "owner": "engine",
+  "summary": "Take over a city car or walker (the nearest, or the one nearest x z). Poll possess?.",
+  "usage": "possess car|walker [x z]"
+ },
+ {
+  "name": "possess?",
+  "owner": "engine",
+  "summary": "The possessed agent: kind, state, position, speed and distance left.",
+  "usage": "possess?"
+ },
+ {
+  "name": "possess_stop",
+  "owner": "engine",
+  "summary": "Stop the possessed agent where it is.",
+  "usage": "possess_stop"
+ },
+ {
+  "name": "ragdoll",
+  "owner": "engine",
+  "summary": "The player goes limp (the G key); jump, or lying still a moment, gets up.",
+  "usage": "ragdoll"
+ },
+ {
+  "name": "recipes?",
+  "owner": "engine",
+  "summary": "The level's buildings counted by architect recipe, each with its tallest one's place and height.",
+  "usage": "recipes?"
+ },
+ {
+  "name": "release",
+  "owner": "engine",
+  "summary": "Hand the possessed agent back to the city sim.",
+  "usage": "release"
+ },
+ {
+  "name": "reload",
+  "owner": "engine",
+  "summary": "Reload the level (regrows the city).",
+  "usage": "reload"
+ },
+ {
+  "name": "render",
+  "owner": "engine",
+  "summary": "Push the render Settings keys (ssao.*, ssr.*, shadow.*, bloom.*, grade.*) to the renderer, or save them.",
+  "usage": "render apply|save"
+ },
+ {
+  "name": "ride",
+  "owner": "engine",
+  "summary": "The player boards the nearest bus or taxi, or gets off; with x z, the possessed agent rides a bus there.",
+  "usage": "ride bus|taxi|any|off | ride <x> <z>"
+ },
+ {
+  "name": "set",
+  "owner": "engine",
+  "summary": "Set any Settings key (the generic knob; `render apply` pushes render keys live).",
+  "usage": "set <key> <value...>"
+ },
+ {
+  "name": "shot",
+  "owner": "engine",
+  "summary": "Save the next composited frame as a PNG; poll for the file.",
+  "usage": "shot <path.png>"
+ },
+ {
+  "name": "shots",
+  "owner": "engine",
+  "summary": "Save the next N frames as <prefix>_000.png, _001.png, ...",
+  "usage": "shots <prefix> <frames>"
+ },
+ {
+  "name": "sim",
+  "owner": "engine",
+  "summary": "Pause, resume or single-step the sim clock, or set its speed.",
+  "usage": "sim pause|resume|step|speed <x>"
+ },
+ {
+  "name": "speeders?",
+  "owner": "engine",
+  "summary": "People drawn moving faster than a sprint: how many, and the latest with their state.",
+  "usage": "speeders?"
+ },
+ {
+  "name": "sun",
+  "owner": "engine",
+  "summary": "Set the sun's direction (toward the sun), intensity and colour, for levels with a static sun.",
+  "usage": "sun <x> <y> <z> [intensity] [r g b]"
+ },
+ {
+  "name": "sun?",
+  "owner": "engine",
+  "summary": "The solar elevation, the active light's height and intensity, and whether it is dark.",
+  "usage": "sun?"
+ },
+ {
+  "name": "tap",
+  "owner": "engine",
+  "summary": "Press and release a key through the real input path (e.g. tap F).",
+  "usage": "tap <KeyName>"
+ },
+ {
+  "name": "teleport",
+  "owner": "engine",
+  "summary": "Move the player (the camera when there is none); `x z` lands on the ground. Read the result with teleport?.",
+  "usage": "teleport <x y z [pitch yaw] | x z>"
+ },
+ {
+  "name": "teleport?",
+  "owner": "engine",
+  "summary": "Where the last teleport landed, or (pending).",
+  "usage": "teleport?"
+ },
+ {
+  "name": "towers?",
+  "owner": "engine",
+  "summary": "The tallest buildings round a point (up to 24): centre, ground height and height.",
+  "usage": "towers? <x> <z> [radius 300] [min height 40]"
+ },
+ {
+  "name": "traffic?",
+  "owner": "engine",
+  "summary": "City traffic: cars driving island-wide and any pile-ups (more with RT_TRAFFIC_DEBUG).",
+  "usage": "traffic?"
+ },
+ {
+  "name": "train_board",
+  "owner": "engine",
+  "summary": "Put the player aboard a train, standing mid-carriage (defaults: train 0, car 1).",
+  "usage": "train_board [train] [car]"
+ },
+ {
+  "name": "trains?",
+  "owner": "engine",
+  "summary": "The trains: lines, stops, every train's place, speed and doors, and whether you are aboard.",
+  "usage": "trains?"
+ },
+ {
+  "name": "unpin",
+  "owner": "engine",
+  "summary": "Stop following an agent.",
+  "usage": "unpin <agent id>"
+ },
+ {
+  "name": "vehicle?",
+  "owner": "engine",
+  "summary": "The player's vehicle: speed, rpm, gear, drive mode, position, and the sim speed.",
+  "usage": "vehicle?"
+ },
+ {
+  "name": "vehicle_spawn",
+  "owner": "engine",
+  "summary": "Drop a vehicle in front of the player (the N key); e.g. vehicle_spawn moped.",
+  "usage": "vehicle_spawn [recipe]"
+ },
+ {
+  "name": "view",
+  "owner": "engine",
+  "summary": "Debug view: 0 normal, 1 AO, 2 SSR, 3 depth, 4 normals, 5 shadow, 6 albedo, 7 facing, 8 cascades; plus wireframe.",
+  "usage": "view <0-8> [wire 0-2]"
+ },
+ {
+  "name": "walk_to",
+  "owner": "engine",
+  "summary": "Walk the possessed walker to a point.",
+  "usage": "walk_to <x> <z>"
+ },
+ {
+  "name": "walkers?",
+  "owner": "engine",
+  "summary": "The city's walkers: how many, the fastest, step reversals, seated, indoors, students, on walks, joggers and games.",
+  "usage": "walkers?"
+ },
+ {
+  "name": "weather",
+  "owner": "engine",
+  "summary": "Set the weather (eased in, or `now` to snap); auto walks between states; off hands the clouds back to the panel.",
+  "usage": "weather clear|fair|overcast|storm|auto|off [now]"
+ },
+ {
+  "name": "weather?",
+  "owner": "engine",
+  "summary": "The weather state, and whether it is on auto.",
+  "usage": "weather?"
+ },
+ {
+  "name": "where?",
+  "owner": "engine",
+  "summary": "The viewpoint as x y z pitch yaw, the format teleport takes.",
+  "usage": "where?"
+ },
+ {
+  "name": "who?",
+  "owner": "engine",
+  "summary": "With an id, ask about any agent; alone, read the answer (refreshed every step).",
+  "usage": "who? [agent id]"
+ }
+]
