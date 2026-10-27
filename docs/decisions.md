@@ -12560,3 +12560,41 @@ also work for a centripetal curve.
 
 **Alternatives.** Lowering `EditableCurve` and the road net onto stored `Spline` knots: both rebuild their
 tangents from neighbours on every edit, so a kernel call is the whole of what they share.
+
+## ADR-0256 — Cache files record the levels that use them; one hash folds every key
+
+**Context.** The duplicate-systems sweep (#117, wave 3, item 37), and the bake housekeeping Glenn approved on
+2026-10-04. Six places folded a cache key with their own copy of FNV-1a: `bundle::fnv1a` beside hand-written loops in
+the population cache (`Fnv` in city_sim), the weather key, the ground maps, texture fields, the cloud noise and the
+erosion bake. The terrain files (erosion, maps, weather, pyramid, world maps) and the population are named by a
+content hash, so levels building the same ground share one file and nothing says whose it is: only bundles could be
+pruned, and cache/terrain had reached 18.9 GB.
+
+**Decision.**
+1. **One hash.** `bundle::Fnv` folds a key field by field over `fnv1a`. The population, weather, maps and texture-field
+   keys use it or `fnv1aStr`; each folds the same bytes in the same order, so every existing file keeps its name
+   (checked live: river_town's pyramid, normal and cover maps and population, and terrain_lab's weather and ground
+   maps all hit the files already on disk). Two stay as they are: the erosion bake folds whole 8-byte words, and
+   changing that would re-run every level's erosion, the slowest bake, for a path item 39 retires; the Metal cloud
+   noise can't be built on this machine.
+2. **A record beside each file.** `<file>.uses` (engine/bundle/cache_use.h): the file's kind and, per level
+   (absolute path), the time the load that last read or wrote it began. `loadLevel` sets the level
+   (`setCacheLevel`); the erosion, maps, weather, pyramid, world-map and population caches call `noteCacheUse` on a
+   hit and after a write. Written aside and renamed.
+3. **The prune covers them.** `rt_bake --prune` at the default root also lists cache/terrain and cache/population: a
+   file is stale once, for every level that used it, a newer file of its kind has been used since, or that level's
+   file is gone (a test's temporary level). A shared file stays while any of its levels still uses it. A file
+   without a record is kept and counted.
+
+**Measured.** The first dry run: 389 files, 6 with records, 0 stale; 383 written before this have no record (18.89
+GB) and are kept until a load stamps them. Test: two loads a second apart; level one moves to a new erosion file
+and pyramid, level two keeps the shared pyramid, a deleted level's file goes, an unrecorded file and an in-flight
+write stay.
+
+**Consequences.** A level's ground can be cleaned without guessing by date. A load that hits the pyramid never opens
+the weather or erosion files under it, so those keep their older stamp, but nothing newer of their kind replaces
+them, so they stay; they go when the ground changes. The rt-bake-cleanup skill is still needed for unrecorded files.
+Still owed: the level suite pruning after itself, and the editor's cache panel showing the terrain files.
+
+**Alternatives.** One index file for the whole cache: two viewers loading at once would race on it; a record per
+file only races with itself. Keying the terrain files by level: levels would stop sharing ground they build alike.

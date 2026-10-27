@@ -62,6 +62,7 @@
 #include "procgen/city/roads/road_builder.h"   // one interface, several road builders
 #include "procgen/city/road_semantics.h"   // editor-authored roads (shape:"road")
 #include "bundle/bake.h"
+#include "bundle/cache_use.h"
 #ifdef RT_ROADS_LANES
 #include "procgen/city/roads/lanes/lanes.h"     // the lanes road builder (ADR-0083/0089)
 #include "procgen/city/roads/lanes/deck_mesh.h"
@@ -1921,6 +1922,7 @@ static void loadCdlodTerrain(const TerrainParams& p, const json& t, World& world
             if (useCache && !pyramid::writePyramidBundle(*pyr, key, cachePath, &cacheErr))
                 LOG_WARN << "[terrain] baked ground not cached: " << cacheErr;
         }
+        if (useCache) engine::bundle::noteCacheUse(cachePath, "pyramid");
         // THE WORLD MAPS, over the authored world, each cached beside the tiles (cache/terrain/<key>.wmap):
         //   the NORMAL MAP (ADR-0205): the drawn ground's slope per texel, the far ground's shading -- a texel of
         //     max(2 m, the world / 8192), or the cdlod block's "normalTexel";
@@ -1947,6 +1949,7 @@ static void loadCdlodTerrain(const TerrainParams& p, const json& t, World& world
                     *m = bake();
                     if (useCache && !writeTerrainWorldMap(*m, k, path)) LOG_WARN << "[terrain] " << what << " not cached: " << path;
                 }
+                if (useCache) engine::bundle::noteCacheUse(path, std::string("wmap:") + what);
                 LOG_INFO << "[terrain] " << what << ": " << m->size << "^2 (" << m->texel() << " m, " << m->channels << " channels), "
                          << m->texels.size() / 1048576 << " MB, " << (hit ? "read from " : "baked and cached as ") << path << " in "
                          << std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count() << " s";
@@ -4081,6 +4084,7 @@ bool LevelLoader::load(const std::string& path,
         // Which level a road belongs to, for every builder (the lanes one is
         // produced per LEVEL through the bundle, not per entity).
         g_levelPath = path; g_levelRoot = root;
+        engine::bundle::setCacheLevel(path);   // the terrain and population files this load uses record it
     } catch (const json::parse_error& e) {
         LOG_ERROR << "JSON parse error in " << path << ": " << e.what();
         return false;

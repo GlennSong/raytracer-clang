@@ -1,4 +1,5 @@
 #include "texture_field.h"
+#include "../bundle/bundle.h"
 
 #include "noise.h"
 #include <algorithm>
@@ -210,8 +211,7 @@ TextureData bakeFieldRGBA(const ColorField2& color, const Field2& alpha, int siz
 }
 
 TextureData bakeCached(const std::string& recipeKey, const std::function<TextureData()>& bake) {
-    uint64_t h = 1469598103934665603ull;   // FNV-1a over the key
-    for (unsigned char ch : recipeKey) { h ^= ch; h *= 1099511628211ull; }
+    const uint64_t h = bundle::fnv1aStr(recipeKey);
     char path[96];
     std::snprintf(path, sizeof path, "cache/fields/%016llx.tex", static_cast<unsigned long long>(h));
     const char* nc = std::getenv("RT_NOCACHE");

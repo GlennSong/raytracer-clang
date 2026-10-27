@@ -1,4 +1,6 @@
 #include "terrain_maps.h"
+#include "../bundle/cache_use.h"
+#include "../bundle/bundle.h"
 
 #include "stream_power.h"
 #include "terrain_weather.h"
@@ -140,10 +142,7 @@ std::shared_ptr<const TerrainMaps> weatheredMapsFor(const nlohmann::json& tjIn) 
     const std::string key = weatheredGroundKey(tjIn);
     std::lock_guard<std::mutex> lock(mu);
     if (auto it = memo.find(key); it != memo.end()) return it->second;
-    std::uint64_t h = 1469598103934665603ULL;
-    auto fold = [&](const std::string& s) { for (unsigned char c : s) { h ^= c; h *= 1099511628211ULL; } };
-    fold(kMapsCodeTag);
-    fold(key);
+    const std::uint64_t h = bundle::fnv1aStr(key, bundle::fnv1aStr(kMapsCodeTag));
     char path[256];
     std::snprintf(path, sizeof path, "cache/terrain/maps_%016llx.bin", static_cast<unsigned long long>(h));
     auto m = std::make_shared<TerrainMaps>();
@@ -170,6 +169,7 @@ std::shared_ptr<const TerrainMaps> weatheredMapsFor(const nlohmann::json& tjIn) 
         }
         LOG_INFO << "[maps] computed " << m->n << "^2 ground maps, cached " << path;
     }
+    bundle::noteCacheUse(path, "maps");
     memo[key] = m;
     return m;
 }

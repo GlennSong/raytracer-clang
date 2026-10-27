@@ -758,13 +758,16 @@ std::vector&lt;<span class="t">uint8_t</span>&gt; headerBytes(<span class="t">ui
     <tr><td><code>rt_bake --status &lt;level.json&gt;</code></td><td>is the level baked, is the bake current, its size (the editor's Level cache panel)</td></tr>
     <tr><td><code>rt_bake --inspect &lt;dir&gt;</code> / <code>--sections &lt;dir&gt;</code></td><td>the manifest, producers and keys / every section's name, size and hash (diff two bakes)</td></tr>
     <tr><td><code>rt_bake --audit &lt;dir&gt;</code></td><td>every baked mesh through the mesh audit (ADR-0172)</td></tr>
-    <tr><td><code>rt_bake --prune [--yes] [level.json …]</code></td><td>list (or delete) every bundle not the newest for its level and not the current bake of a listed level</td></tr>
+    <tr><td><code>rt_bake --prune [--yes] [level.json …]</code></td><td>list (or delete) every bundle not the newest for its level and not the current bake of a listed level, then
+      the terrain and population files every level that used them has moved on from</td></tr>
     <tr><td><code>rt_bake --glb</code> / <code>--glb-split cell</code></td><td>also export the city as glTF for Blender: an export view, not the cache</td></tr>
   </table>
-  <p><code>rt_bake --prune</code> does not cover terrain files, because they are named by a content hash derived from the
-    flattens and do not record which level made them. Until that is fixed, Glenn's <code>rt-bake-cleanup</code> skill
-    (<code>~/.claude/skills/rt-bake-cleanup/prune_bakes.py</code>, outside the repo, dry run by default) prunes bundles
-    and ages pyramids out by date across every checkout.</p>
+  <p>Terrain and population files are named by a content hash, so levels that build the same ground share one. Since
+    ADR-0256 each has a record beside it (<code>&lt;file&gt;.uses</code>): the levels whose loads used it, and when.
+    The prune deletes one once every level that used it has used a newer file of its kind, and keeps a shared file
+    while any of its levels still uses it. Files from before the records are kept; Glenn's <code>rt-bake-cleanup</code>
+    skill (<code>~/.claude/skills/rt-bake-cleanup/prune_bakes.py</code>, outside the repo, dry run by default) ages
+    those out by date across every checkout.</p>
   <div class="note"><p><b>The trap.</b> "Newest" is not "current". Running old code (a baseline checkout, then the level
     tests) bakes newer bundles under old keys; a prune after that keeps those and deletes the current ones. On 2026-10-14
     island_8, metro_lanes and river_town had to be rebaked for this reason. Prune before an old-code run, or check
@@ -774,8 +777,7 @@ std::vector&lt;<span class="t">uint8_t</span>&gt; headerBytes(<span class="t">ui
     find the missing tag bump or key input; drop that level's folders; and last, <code>rm -rf cache/levels cache/terrain
     cache/population</code> — always safe, since every one of these is a cache.</p>
   <p>Still owed (memory note <i>rt-bake-cache-housekeeping</i>, docs/bakes.md): <code>RT_BUNDLE_VERIFY</code> (rebuild in
-    memory and compare section hashes, nightly, to catch a forgotten tag bump); terrain sidecars recording which levels
-    use each file, so <code>--prune</code> can cover them; the level suite pruning after itself.</p>
+    memory and compare section hashes, nightly, to catch a forgotten tag bump); the level suite pruning after itself.</p>
 
   <h2>Where to look</h2>
   <ul class="files">

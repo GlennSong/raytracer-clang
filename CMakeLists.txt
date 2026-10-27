@@ -69,6 +69,7 @@ add_library(engine_core STATIC
     src/engine/mesh_builder.cpp
     src/engine/bundle/bundle.cpp
     src/engine/bundle/bake.cpp
+    src/engine/bundle/cache_use.cpp
     src/engine/bundle/codecs.cpp
     src/engine/glb_export.cpp
     src/engine/bundle/bundle_glb.cpp

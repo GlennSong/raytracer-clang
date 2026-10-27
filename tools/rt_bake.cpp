@@ -2,7 +2,7 @@
 //
 //   rt_bake <level.json> [--out <root>] [--producer a,b] [--glb] [--glb-split cell] [--force] [--threads N] [--require]
 //   rt_bake --inspect <bundle-dir>
-//   rt_bake --prune [--yes] [--out <root>] [level.json ...]
+//   rt_bake --prune [--yes] [--out <root>] [level.json ...]   (and, at the default root, the terrain and population files)
 //   rt_bake --status <level.json> [--out <root>]
 //   rt_bake --audit <bundle-dir>      every baked mesh through the mesh audit (engine/mesh_audit.h)
 //
@@ -13,6 +13,7 @@
 
 #include "engine/bundle/bake.h"
 #include "engine/bundle/bundle_glb.h"
+#include "engine/bundle/cache_use.h"
 #include "engine/bundle/codecs.h"
 #include "engine/mesh_audit.h"
 #include "engine/procgen/city/lot_cache.h"
@@ -44,7 +45,8 @@ int usage() {
         "       rt_bake --inspect <bundle-dir>\n"
         "       rt_bake --sections <bundle-dir>   every section: name, bytes, fnv (diff two bakes section by section)\n"
         "       rt_bake --audit <bundle-dir>   every baked mesh through the mesh audit (inward, degenerate, non-finite)\n"
-        "       rt_bake --prune [--yes] [--out <root>] [level.json ...]   list stale bundles under the root; --yes deletes them\n"
+        "       rt_bake --prune [--yes] [--out <root>] [level.json ...]   list stale bundles under the root, and with the default root\n"
+        "                                                     stale cache/terrain and cache/population files; --yes deletes them\n"
         "                    (stale = not the newest for its level path, and not the current bundle of a listed level)\n"
         "       rt_bake --status <level.json> [--out <root>]   is the level baked, is the bake current, its size (the editor's Level cache panel)\n"
         "  --out        bundle root (default: $RT_BUNDLE_DIR or cache/levels)\n"
@@ -317,6 +319,17 @@ int main(int argc, char** argv) {
         size_t stale = 0; for (const PruneEntry& e : rep.entries) stale += e.stale;
         std::printf("%zu bundles under %s, %zu stale (%s)\n", rep.entries.size(), root.c_str(), stale, humanBytes(rep.staleBytes).c_str());
         if (!yes && stale) std::printf("dry run: pass --yes to delete the stale bundles\n"); else if (yes) std::printf("removed %zu\n", rep.removed);
+        if (!outRoot.empty()) return 0;
+        // The terrain and population files, by the levels that used them (engine/bundle/cache_use.h).
+        const CachePruneReport files = pruneCacheFiles({"cache/terrain", "cache/population"}, yes);
+        size_t fileStale = 0, unowned = 0;
+        for (const CacheFileEntry& f : files.files) {
+            fileStale += f.stale; unowned += !f.owned;
+            if (f.stale) std::printf("stale   %9s  %s  %s\n", humanBytes(f.bytes).c_str(), f.path.c_str(), f.kind.c_str());
+        }
+        std::printf("%zu terrain and population files, %zu stale (%s); %zu with no record of their levels (%s), kept\n", files.files.size(), fileStale,
+                    humanBytes(files.staleBytes).c_str(), unowned, humanBytes(files.unownedBytes).c_str());
+        if (!yes && fileStale) std::printf("dry run: pass --yes to delete the stale files\n"); else if (yes) std::printf("removed %zu files\n", files.removed);
         return 0;
     }
     BakeRequest req; req.levelPath = argv[1]; bool glb = false, split = false, require = false;

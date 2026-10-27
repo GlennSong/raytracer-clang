@@ -8,6 +8,7 @@
 #include "terrain.h"          // TerrainFlatten, applyFlatten
 #include "../mesh_builder.h"
 #include "../../curve.h"
+#include "../bundle/cache_use.h"
 #include <algorithm>
 #include <cmath>
 #include <functional>
@@ -639,6 +640,7 @@ HeightField erodeField(const HeightField& f, double worldSize, int resolution,
                 std::fread(hm->h.data(), sizeof(float), hm->h.size(), fp) ==
                     hm->h.size();
             std::fclose(fp);
+            if (ok) bundle::noteCacheUse(cachePath, "erosion");
             if (ok)
                 return [hm](double x, double z) {
                     return static_cast<double>(
@@ -657,6 +659,7 @@ HeightField erodeField(const HeightField& f, double worldSize, int resolution,
             std::fwrite(&n, sizeof n, 1, fp);
             std::fwrite(hm->h.data(), sizeof(float), hm->h.size(), fp);
             std::fclose(fp);
+            bundle::noteCacheUse(cachePath, "erosion");
         }
     }
     return [hm](double x, double z) {

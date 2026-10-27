@@ -3,6 +3,8 @@
 #include "traffic_rules.h"   // approachStop
 #include "../../engine/ai/idm.h"   // IDM car-following (roads-v2 S7)
 #include "../../profile.h"
+#include "../../engine/bundle/bundle.h"   // the population cache key
+#include "../../engine/bundle/cache_use.h"
 #include "../../job_system.h"   // assignPlaces decides the population in parallel
 
 #include <algorithm>
@@ -777,13 +779,7 @@ void CitySim::build(const NavGraph& graph, int driverCount, int pedCount, uint32
 namespace {
 // ---- the population cache (CitySim::setPopulationCacheDir) --------------------------------------------
 constexpr uint32_t kPopulationFormat = 7;   // (7: homes and jobs drawn by floor area; 6: garage stalls are bays) bump when assignPlaces' rules or this record change
-struct Fnv {
-    uint64_t h = 1469598103934665603ull;
-    void bytes(const void* p, std::size_t n) {
-        const unsigned char* c = static_cast<const unsigned char*>(p);
-        for (std::size_t i = 0; i < n; ++i) { h ^= c[i]; h *= 1099511628211ull; }
-    }
-    template <typename T> void pod(const T& v) { bytes(&v, sizeof v); }
+struct Fnv : engine::bundle::Fnv {
     void real(Real v) { const double d = static_cast<double>(v); pod(d); }
     void vec(const engine::Vec2& v) { real(v.x); real(v.y); }
 };
@@ -1050,8 +1046,10 @@ void CitySim::assignPlaces(const PlaceMap& places, const NavGraph& graph) {
             in.read(reinterpret_cast<char*>(&count), 4) && count == agents_.size()) {
             cached.resize(count);
             if (in.read(reinterpret_cast<char*>(cached.data()), static_cast<std::streamsize>(count * sizeof(PopRecord))) &&
-                in.read(reinterpret_cast<char*>(&cachedTail), sizeof cachedTail))
+                in.read(reinterpret_cast<char*>(&cachedTail), sizeof cachedTail)) {
                 popCache_.hit = true;
+                engine::bundle::noteCacheUse(popPath, "population");
+            }
             else
                 cached.clear();
         }
@@ -1672,6 +1670,7 @@ void CitySim::assignPlaces(const PlaceMap& places, const NavGraph& graph) {
         out.write(reinterpret_cast<const char*>(&tail), sizeof tail);
         out.close();
         if (out) { std::filesystem::rename(tmp, popPath, ec); popCache_.saved = !ec; }
+        if (popCache_.saved) engine::bundle::noteCacheUse(popPath, "population");
     }
     }   // decided (not read from the cache)
     students_ = 0;
