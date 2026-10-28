@@ -391,6 +391,10 @@ const char* programFor(RoomKind kind) {
         case RoomKind::CopyRoom: return "copy_room";
         case RoomKind::PhoneBooths: return "phone_booths";
         case RoomKind::WaterCooler: return "water_cooler";
+        case RoomKind::SalesFloor: return "sales_floor";
+        case RoomKind::CashDesk: return "cash_desk";
+        case RoomKind::FittingRooms: return "fitting_rooms";
+        case RoomKind::Stockroom: return "stockroom";
         default: return "";
     }
 }
@@ -624,6 +628,11 @@ void emitFurniture(std::vector<PlacedPiece>& out, RenderMesh* colliderOut, const
         // a bath room where people do not live (a school's, a museum's, an office's) is a restroom: toilets, basins
         const bool restroom = room.kind == RoomKind::Bath && rp.office;
         const RoomProgram* prog = FurnitureLibrary::global().program(restroom ? "restroom" : programFor(room.kind));
+        // a department store's SALES FLOOR is furnished as its department: the trade's own program
+        // ("sales_floor:boutique", furniture_rooms.lua) where there is one
+        if (room.kind == RoomKind::SalesFloor)
+            if (const TradeInfo* t = tradeById(room.style))
+                if (const RoomProgram* dp = FurnitureLibrary::global().program(std::string("sales_floor:") + t->name)) prog = dp;
         if (prog) {
             ProgramRun run{F, FurnitureLibrary::global(), ring, longFirst, hb, hr};
             for (const FurnStep& st : prog->steps) run.run(st);
@@ -918,9 +927,12 @@ void emitFurniture(std::vector<PlacedPiece>& out, RenderMesh* colliderOut, const
                                  room.kind == RoomKind::ShopFloor || room.kind == RoomKind::Warehouse ||
                                  room.kind == RoomKind::HotelLobby || room.kind == RoomKind::CopyRoom ||
                                  room.kind == RoomKind::PhoneBooths || room.kind == RoomKind::WaterCooler ||
-                                 room.kind == RoomKind::Shop;
-            // a shop is lit as its trade (trades.h): office panels, round fittings in a warm room, a few in a bar
-            const int shopLights = room.kind == RoomKind::Shop ? tradeInterior(room.style).lights : 0;
+                                 room.kind == RoomKind::Shop || room.kind == RoomKind::SalesFloor ||
+                                 room.kind == RoomKind::CashDesk || room.kind == RoomKind::FittingRooms ||
+                                 room.kind == RoomKind::Stockroom;
+            // a shop is lit as its trade (trades.h): office panels, round fittings in a warm room, a few in a bar --
+            // and a department store's sales floor as its department
+            const int shopLights = room.kind == RoomKind::Shop || room.kind == RoomKind::SalesFloor ? tradeInterior(room.style).lights : 0;
             if (working && shopLights == 3) {   // (no lights of its own: under an atrium)
             } else if (working) {
                 const Real pitch = shopLights == 2 ? 3.6 : 2.4;

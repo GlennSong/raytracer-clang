@@ -101,6 +101,10 @@ const char* cellUseName(RoomKind k) {
         case RoomKind::CopyRoom: return "copy room";
         case RoomKind::PhoneBooths: return "phone booths";
         case RoomKind::WaterCooler: return "water cooler";
+        case RoomKind::SalesFloor: return "sales floor";
+        case RoomKind::CashDesk: return "cash desk";
+        case RoomKind::FittingRooms: return "fitting rooms";
+        case RoomKind::Stockroom: return "stockroom";
     }
     return "?";
 }
@@ -539,7 +543,8 @@ const char* useFill(const Cell& c) {
     if (c.kind == CellKind::Link) return "#e3d6a0";
     if (c.kind == CellKind::Hall) return "#f7f4ec";
     switch (c.use) {
-        case RoomKind::Shop: return "#f2b9a0";
+        case RoomKind::Shop: case RoomKind::SalesFloor: case RoomKind::CashDesk: case RoomKind::FittingRooms: return "#f2b9a0";
+        case RoomKind::Stockroom: return "#eadcf2";
         case RoomKind::Office: case RoomKind::Meeting: case RoomKind::OpenPlan: case RoomKind::DeskRow:
         case RoomKind::Reception: case RoomKind::Kitchenette: case RoomKind::CopyRoom: case RoomKind::PhoneBooths:
         case RoomKind::WaterCooler: return "#cfe3f5";

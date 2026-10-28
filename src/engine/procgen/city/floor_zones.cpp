@@ -923,6 +923,44 @@ FloorProgram builtinApartmentProgram() {
     return p;
 }
 
+FloorProgram builtinDepartmentStoreProgram() {
+    FloorProgram p;
+    p.name = "department_store";
+    p.zones.windowDepth = 6.0;
+    p.zones.aisle = 2.4;
+    p.zones.street = 2.4;
+    p.zones.lotWidth = 7.2;
+    p.zones.interiorLot = 36.0;
+    p.fill = "sales";
+    p.shallow = "sales";
+    p.shallowDepth = 0;
+    p.departments = {2, 2, 4, 3, 6};   // boutique, boutique, electronics, bookshop, bakery (the food hall)
+    const uint8_t W = zoneSiteBit(ZoneSite::Window), C = zoneSiteBit(ZoneSite::Corner), I = zoneSiteBit(ZoneSite::Interior);
+    auto rule = [&](const char* tag, RoomKind kind, uint8_t sites) {
+        ZoneRule r;
+        r.tag = tag;
+        r.kind = kind;
+        r.sites = sites;
+        r.walls = 0;
+        p.rules.push_back(r);
+        return &p.rules.back();
+    };
+    ZoneRule* r = rule("cash_desk", RoomKind::CashDesk, I | W);
+    r->count = 1; r->near = 1; r->minArea = 8; r->maxArea = 60; r->minDepth = 2.6;
+    r = rule("fitting_rooms", RoomKind::FittingRooms, I | W);
+    r->count = 1; r->near = 2; r->enclosed = true; r->minArea = 8; r->maxArea = 50; r->minDepth = 2.4; r->departments = {2};
+    r = rule("stockroom", RoomKind::Stockroom, I | W);
+    r->count = 1; r->near = 2; r->enclosed = true; r->minArea = 8; r->maxArea = 50; r->minDepth = 2.0; r->minFloor = 300;
+    rule("sales", RoomKind::SalesFloor, W | C | I);
+    return p;
+}
+
+int floorDepartment(const FloorProgram& prog, int storey) {
+    if (prog.departments.empty()) return -1;
+    const int n = static_cast<int>(prog.departments.size());
+    return prog.departments[static_cast<std::size_t>(((std::max(1, storey) - 1) % n + n) % n)];
+}
+
 FloorProgram builtinResidentsProgram() {
     FloorProgram p;
     p.name = "residents";
@@ -938,14 +976,15 @@ FloorProgram builtinResidentsProgram() {
 }
 
 bool hasFloorProgram(const std::string& name) {
-    return FloorProgramBook::global().find(name) != nullptr || name == "office" || name == "apartments" || name == "residents";
+    return FloorProgramBook::global().find(name) != nullptr || name == "office" || name == "apartments" || name == "residents" ||
+           name == "department_store";
 }
 
 const FloorProgram& floorProgram(const std::string& name) {
     if (const FloorProgram* p = FloorProgramBook::global().find(name)) return *p;
     static const FloorProgram office = builtinOfficeProgram(), apartments = builtinApartmentProgram(),
-                              residents = builtinResidentsProgram();
-    return name == "apartments" ? apartments : name == "residents" ? residents : office;
+                              residents = builtinResidentsProgram(), store = builtinDepartmentStoreProgram();
+    return name == "apartments" ? apartments : name == "residents" ? residents : name == "department_store" ? store : office;
 }
 
 namespace {
@@ -966,7 +1005,7 @@ int ruleIndex(const std::vector<ZoneRule>& rules, const std::string& tag) {
 }
 }  // namespace
 
-ZoneTags tagZones(const FloorPartition& fp, const FloorProgram& progIn, uint32_t seed, bool lifts) {
+ZoneTags tagZones(const FloorPartition& fp, const FloorProgram& progIn, uint32_t seed, bool lifts, int department) {
     ZoneTags out;
     std::vector<ZoneRule> rules = progIn.rules;
     // the building's habit
@@ -993,6 +1032,9 @@ ZoneTags tagZones(const FloorPartition& fp, const FloorProgram& progIn, uint32_t
         if (static_cast<int>(ri) == fill || static_cast<int>(ri) == shallow) continue;
         if (r.lifts && !lifts) continue;
         if (fp.fieldArea < r.minFloor) continue;
+        if (!r.departments.empty() &&
+            std::find(r.departments.begin(), r.departments.end(), static_cast<uint8_t>(std::max(0, department))) == r.departments.end())
+            continue;
         std::vector<std::size_t> el;
         for (std::size_t z = 0; z < nz; ++z) {
             const FloorZone& Z = fp.zones[z];
@@ -1303,7 +1345,8 @@ static RoomPlan zonedFloorCut(const Poly2& plate, const BuildingParams& params, 
         fp = partitionFloor(plan, core, inset, params, lz, Poly2{});
     }
     if (fp.zones.empty()) return rp;
-    const ZoneTags tags = tagZones(fp, prog, static_cast<uint32_t>(params.seed), lifts);
+    const int department = floorDepartment(prog, storey);
+    const ZoneTags tags = tagZones(fp, prog, static_cast<uint32_t>(params.seed), lifts, department);
     std::vector<int> rule = tags.rule;
     // HOMES: the program's fill (the landing) is part of the corridor -- a landing lot with no edge on circulation (a
     // notched plate's arm, walled in by the facade and the flats beside it) is no corridor and no room; its floor is
@@ -1349,6 +1392,16 @@ static RoomPlan zonedFloorCut(const Poly2& plate, const BuildingParams& params, 
 
     const G::PolySet IN = G::offsetSet(G::fromRing(plan), -inset);
     const G::PreparedSet inside(IN);
+    // the floor is walked inside the facade's inner face: the strip the outside wall stands on is no way round a room
+    // walled across an arm of the plate (the space graph's rule; a fitting room cut a store's arm off, uses step 3).
+    // (Not yet homes: some flats' bedrooms are reached only along that strip -- layFlat's doors, owed with item 35.)
+    Poly2 walkPlan = plan;
+    if (!prog.residential) {
+        Real best = 0;
+        for (const G::Polygon2& q : IN)
+            if (ringAreaAbs(q.outer) > best) { best = ringAreaAbs(q.outer); walkPlan = q.outer; }
+        ensureCCW(walkPlan);
+    }
     G::PolySet circSet;
     for (const std::vector<Poly2>& piece : fp.circulation) {
         G::Polygon2 p;
@@ -1393,6 +1446,7 @@ static RoomPlan zonedFloorCut(const Poly2& plate, const BuildingParams& params, 
             const ZoneRule& R = prog.rules[static_cast<std::size_t>(rule[z])];
             Room rm;
             rm.kind = R.kind;
+            if (department >= 0) rm.style = static_cast<uint8_t>(department);   // (a shop floor: its department's trade)
             rm.rect = Z.poly;
             rm.edge = static_cast<std::size_t>(std::max(0, Z.group));
             const bool enclosed = R.enclosed && attempt < 2;
@@ -1489,13 +1543,13 @@ static RoomPlan zonedFloorCut(const Poly2& plate, const BuildingParams& params, 
             }
         }
         roomZone.resize(rp.rooms.size(), fp.zones.empty() ? 0 : fp.zones.size() - 1);
-        if (floorIsWalkable(rp, plan, entry, solid)) { walked = true; break; }
+        if (floorIsWalkable(rp, walkPlan, entry, solid)) { walked = true; break; }
         // HOMES: a landing or storage lot the flats round it have cut off (a notched plate's arm) is no room anyone
         // needs to reach -- drop it (its floor is left walled in) and lay the floor again, once. A flat cut off stays
         // a failure.
         if (prog.residential && !pruned) {
             std::vector<std::size_t> un;
-            floorIsWalkable(rp, plan, entry, solid, &un);
+            floorIsWalkable(rp, walkPlan, entry, solid, &un);
             std::vector<char> drop(fp.zones.size(), 0);
             bool onlyLeftovers = !un.empty();
             for (std::size_t k : un) {

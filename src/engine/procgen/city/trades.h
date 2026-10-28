@@ -45,6 +45,7 @@ const TradeInterior& tradeInterior(uint8_t id);   // a trade with none of its ow
 int tradeCount();
 const TradeInfo& tradeAt(int index);          // by table position
 const TradeInfo* tradeById(uint8_t id);       // by id (a room's style); nullptr if none
+const TradeInfo* tradeByName(const char* name);   // by name ("boutique"); nullptr if none
 // The trade for a unit with `bays` bays left on its run, in shop mix `mix`, from 32 bits of its own hash: weighted,
 // among those that fit (minBays <= bays).
 uint8_t pickTrade(uint32_t bits, int bays, uint8_t mix = 1);

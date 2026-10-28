@@ -210,6 +210,12 @@ furniture_library = {
     spots = { { id = "seat", at = seat(0, 0.69, 0.62) } },
     verbs = { { verb = "sit", spots = { "seat" }, eye = { 0, 1.38, 0.58 }, look = { 0, -0.10, -1 }, exit = { 0, 0, 1.4 } } },
   },
+  -- a department store's fitting room: its bench at the back, under the hook, facing out past the curtain (+z)
+  fitting_room = {
+    family = "fixture", tags = { "shop", "fitting" }, clearance = { front = 0.9 },
+    spots = { { id = "seat", at = seat(0, 0.47, 0.22) } },
+    verbs = { { verb = "sit", spots = { "seat" }, eye = { 0, 1.16, 0.26 }, look = { 0, -0.10, 1 }, exit = { 0, 0, 1.6 } } },
+  },
   -- BENCHING's chairs either side of the desks, facing in (a bench for four has no seats at z 4.0: verbOnPiece)
   desk_pod = {
     family = "surface", tags = { "office", "open_plan" },

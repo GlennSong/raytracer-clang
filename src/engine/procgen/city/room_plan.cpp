@@ -2216,6 +2216,38 @@ RoomPlan roomPlan(const Poly2& planIn, const BuildingParams& params, const CoreP
     auto programFor = [&](const char* fallback) -> const FloorProgram& {
         return floorProgram(hasFloorProgram(use) ? use : std::string(fallback));
     };
+    // THE CORE, or in a building with only a stair, its well standing in for one (no lifts: no reception)
+    auto hubFor = [&]() {
+        CorePlan hub = core;
+        if (!hub.valid && stairWell.size() >= 3) {
+            const OBB2 ob = orientedBoundingBox(stairWell);
+            hub.valid = true;
+            hub.frame.u = ob.axis[0];
+            hub.frame.v = ob.axis[1];
+            hub.length = 2 * ob.half[0];
+            hub.depth = 2 * ob.half[1];
+            hub.frame.origin = ob.center - hub.frame.u * ob.half[0] - hub.frame.v * ob.half[1];
+        }
+        return hub;
+    };
+    // A DEPARTMENT STORE'S FLOOR (a tower's first `storeFloors` storeys over the ground; a mall's anchor, every storey):
+    // the `department_store` program -- a department a floor, its cash desk by the lifts, the fitting rooms and the
+    // stockroom against the core. What it cannot lay is open floor, never offices with their rooms renamed.
+    if (params.storeFloors > 0 && storey >= 1 && storey <= params.storeFloors) {
+        const CorePlan hub = hubFor();
+        if (hub.valid) {
+            const Vec2 entry = core.valid ? core.frame.toWorld({core.length * 0.5, -1.1})
+                             : stairFoot.x < 1e29 ? stairFoot : centroid(stairWell);
+            RoomPlan zf = zonedFloorPlan(planIn, params, hub, inset, storey, core.valid, entry, stairWell,
+                                         floorProgram("department_store"));
+            if (!zf.rooms.empty()) { zf.finish = interiorFinishFor(params); return zf; }
+        }
+        RoomPlan open;
+        open.topology = topo;
+        open.office = true;
+        open.finish = interiorFinishFor(params);
+        return open;
+    }
     // AN OFFICE OR APARTMENT FLOOR IS THE ZONED FLOOR (floor_zones.h, #117 item 35): one planner for every plate, deep
     // or shallow, round a core or a stair; the planners below are the other building types' (a house, a walk-up, a
     // campus hall, a hospital, a hall, a hotel's ring). What the zoned floor cannot lay is open floor.
@@ -2284,20 +2316,6 @@ RoomPlan roomPlan(const Poly2& planIn, const BuildingParams& params, const CoreP
         wu.finish = interiorFinishFor(params);
         if (!wu.rooms.empty() && floorIsWalkable(wu, planIn, centroid(stairWell), stairWell)) return wu;
     }
-    // THE CORE, or in a building with only a stair, its well standing in for one (no lifts: no reception)
-    auto hubFor = [&]() {
-        CorePlan hub = core;
-        if (!hub.valid && stairWell.size() >= 3) {
-            const OBB2 ob = orientedBoundingBox(stairWell);
-            hub.valid = true;
-            hub.frame.u = ob.axis[0];
-            hub.frame.v = ob.axis[1];
-            hub.length = 2 * ob.half[0];
-            hub.depth = 2 * ob.half[1];
-            hub.frame.origin = ob.center - hub.frame.u * ob.half[0] - hub.frame.v * ob.half[1];
-        }
-        return hub;
-    };
     // AN OFFICE FLOOR IS ZONED (floor_zones.h; Glenn, 2026-10-16: partition the floor the way a block is cut into
     // lots, tag the lots, furnish by tag): any plate, curved or not, round its core or its stair. RT_FLOOR_PLAN=bands
     // keeps the old rectangle-only office floor below, for A/B.

@@ -18,12 +18,16 @@
 --   near       "lobby" (closest to the lifts first), "core", "far" (farthest from the lifts first); else spread out
 --   lifts      only on a floor with lifts (a stair-only office has no reception)
 --   min_floor  only on a floor of at least this many m2 (a small floor keeps its lots for desks)
+--   departments  only on a floor of one of these departments (below)
 -- styles     a building's habit, picked per building by weight: `set` overrides zones' numbers by tag.
+-- departments  a shop floor's: the department each storey is, by turns from the first storey over the ground (trade
+--              names, src/engine/procgen/city/trades.cpp); its rooms take the trade (a sales floor furnishes as it)
 -- residential  homes: each `flat` lot is laid out inside as a flat (living room and bedrooms on the glass, hall,
 --              bath and kitchen behind; a studio where that will not walk), and a floor that will not walk is not
 --              opened up: it is laid as flats round the core off its lobby, or as the `residents` floor
 --
--- Keep the programs alike with builtinOfficeProgram() and builtinApartmentProgram() (floor_zones.cpp): they stand
+-- Keep the programs alike with builtinOfficeProgram(), builtinApartmentProgram() and builtinDepartmentStoreProgram()
+-- (floor_zones.cpp): they stand
 -- where this file is not loaded (procgen without the scripting layer, most tests).
 
 floor_programs = {
@@ -77,6 +81,26 @@ floor_programs = {
         area = {4, 40} },
       -- what is left (a storage room with no door, a lot shut off): landing, part of the corridor
       { tag = "landing", kind = "hall", walls = "drywall" },
+    },
+  },
+
+  -- A DEPARTMENT STORE'S FLOOR (a tower's first storeFloors storeys, a mall's anchor): one department a floor, its
+  -- sales floor open over the glass and the court; the tills by the lifts, the fitting rooms (fashion floors) and the
+  -- stockroom against the core
+  department_store = {
+    departments = { "boutique", "boutique", "electronics", "bookshop", "bakery" },   -- the bakery: the food hall
+    lots = { window_depth = 6.0, aisle = 2.4, street = 2.4, lot_width = 7.2, interior_lot = 36, min_side = 2.6 },
+    fill = "sales",
+    shallow = "sales", shallow_depth = 0,
+    zones = {
+      { tag = "cash_desk", kind = "cash_desk", sites = {"interior", "window"}, count = 1, near = "lobby",
+        area = {8, 60}, min_depth = 2.6 },
+      -- (on the glass where the plate leaves no court: a tower's window lots reach the corridor round its core)
+      { tag = "fitting_rooms", kind = "fitting_rooms", sites = {"interior", "window"}, count = 1, near = "core",
+        enclosed = true, walls = "drywall", area = {8, 50}, min_depth = 2.4, departments = { "boutique" } },
+      { tag = "stockroom", kind = "stockroom", sites = {"interior", "window"}, count = 1, near = "core", enclosed = true,
+        walls = "drywall", area = {8, 50}, min_depth = 2.0, min_floor = 300 },
+      { tag = "sales", kind = "sales_floor" },
     },
   },
 

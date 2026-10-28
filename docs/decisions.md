@@ -12755,3 +12755,44 @@ test ran: the recipe's use changed within the second, the generation by one.
 **Consequences.** One place to read and change what a building's floors are for, live. Floors are planned at runtime,
 so no lots tag bump. The furniture programs (`furniture_rooms.lua`) still load once; they could hot-reload the same
 way. Next: the `department_store` program (plan step 3).
+
+## ADR-0260 — A department store is a floor program, not an office floor with its rooms renamed
+
+**Context.** Building-uses plan step 3 (ADR-0259; Glenn, 2026-10-27: "a department store should be a whole floor").
+A tower's store floors (`storeFloors`, rolled by the lot pass; a mall's anchor has every storey) were laid as office
+floors and then relabelled: `storeyRooms` turned every room into a shop of the storey's department. Corner offices and
+meeting rooms became walled shops with an office's doors, which is how two glass towers' store floors were found
+unreachable in item 35 (ADR-0258), and a drum tower kept its offices (the relabel only fitted rectangles).
+
+**Decision.**
+1. **`department_store`** in `floor_programs.lua` (and `builtinDepartmentStoreProgram`, for a build without Lua): the
+   plate cut into big lots, every lot an open SALES FLOOR but for the CASH DESK by the lifts, the FITTING ROOMS
+   (fashion floors only) and the STOCKROOM against the core, the last two walled. Any plate the zoned floor can cut, a
+   drum tower's too. What it cannot lay is open floor, never offices.
+2. **Departments are program data.** A program's `departments` list (trade names, `trades.cpp`) gives each storey its
+   department by turns from the first storey over the ground (fashion, fashion, electronics, books, the food hall, as
+   the relabel did); every room on the floor takes the trade as its style, and a zone rule's own `departments` keeps
+   it to some (the fitting rooms). `tradeByName` is the lookup.
+3. **Four room kinds**: `SalesFloor`, `CashDesk`, `FittingRooms`, `Stockroom`, each a room program in
+   `furniture_rooms.lua`. A sales floor runs its department's program (`sales_floor:boutique`, `:electronics`,
+   `:bookshop`, `:bakery`) where there is one, else `sales_floor`: an open floor's sides are lot lines, so its fittings
+   stand free (rails, back-to-back TV walls and bookcases, gondola runs, the food hall's counters and tables). The
+   cash desk is two counters with their tills (the shop staff's spots) and a display case; a new kit piece,
+   `fitting_room` (a cubicle you step into: mirror, bench, curtain), fills the fitting rooms.
+4. `roomPlan` lays a store storey with the program before any other planner; the relabel pass is deleted (the
+   restaurant floors keep theirs until the `dining` program, step 4). `building.grow_floor{store_floors = n}` and a
+   lab, `store_lab` (a glass tower's five departments, a podium tower's fashion floor).
+
+5. **A shop or office floor is walked inside the facade's inner face**, not its outside line. The strip the outside
+   wall stands on had let the planner's walk past a room walled across an arm of the plate (a fashion floor's fitting
+   rooms cut its arm's tip off; the space graph saw it, the planner did not). Not yet homes: some flats' bedrooms are
+   reached only along that strip (layFlat's doors), so the stricter walk would send those floors to a fallback; that
+   is item 35's owed work.
+
+**Measured.** Space-graph reachability over every enterable building on island_8_nature (8,490): 125 buildings with
+605 unreachable cells before (ADR-0258), 124 / 573 with the program, 116 / 492 with the inner-face walk (fewer
+unreachable desk rows and offices too). The two item-35 store towers clear. Of 43 store towers, two still fail, neither
+on a store floor: offices from storey 8 of a tapered tower, flats from storey 55 of a pencil tower (massing, owed).
+
+**Consequences.** Floors are planned at runtime: no lots tag bump. A mall anchor's upper floor gets the program too,
+but its own lab (the Westfield-style complex, ADR-0180) is still owed.

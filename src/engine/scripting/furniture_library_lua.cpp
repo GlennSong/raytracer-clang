@@ -4,6 +4,7 @@
 #include "script_vm.h"
 #include "../script_assets.h"
 #include "../../log.h"
+#include "../procgen/city/trades.h"
 
 #include <algorithm>
 #include <chrono>
@@ -342,6 +343,26 @@ bool loadFurnitureLibrarySource(const std::string& source, FurnitureLibrary& out
     return readFurnitureLibrary(vm, out, err) && readRoomPrograms(vm, out, err);
 }
 
+namespace {
+// `departments = { "boutique", "electronics", ... }` at field `field` of the table at `t`: trade ids (trades.h)
+bool readDepartments(lua_State* L, int t, std::vector<uint8_t>& out, std::string& bad) {
+    lua_getfield(L, t, "departments");
+    if (lua_istable(L, -1)) {
+        const int dt = lua_gettop(L), n = static_cast<int>(luaL_len(L, dt));
+        for (int k = 1; k <= n; ++k) {
+            lua_rawgeti(L, dt, k);
+            const std::string name = lua_isstring(L, -1) ? lua_tostring(L, -1) : "";
+            lua_pop(L, 1);
+            const TradeInfo* tr = tradeByName(name.c_str());
+            if (!tr) { bad = name; lua_pop(L, 1); return false; }
+            out.push_back(tr->id);
+        }
+    }
+    lua_pop(L, 1);
+    return true;
+}
+}  // namespace
+
 bool readFloorPrograms(ScriptVM& vm, FloorProgramBook& out, std::string* err) {
     lua_State* L = luaState(vm);
     const int base = lua_gettop(L);
@@ -375,6 +396,7 @@ bool readFloorPrograms(ScriptVM& vm, FloorProgramBook& out, std::string* err) {
         if (const std::string f = strField(L, pt, "shallow"); !f.empty()) prog.shallow = f;
         prog.shallowDepth = numField(L, pt, "shallow_depth", prog.shallowDepth);
         prog.residential = boolField(L, pt, "residential", false);
+        if (std::string d; !readDepartments(L, pt, prog.departments, d)) return bad(where + ": unknown department (trade) '" + d + "'");
         lua_getfield(L, pt, "zones");
         if (!lua_istable(L, -1)) return bad(where + ": no zones");
         {
@@ -432,6 +454,7 @@ bool readFloorPrograms(ScriptVM& vm, FloorProgramBook& out, std::string* err) {
                 else if (near == "core") r.near = 2;
                 else if (near == "far") r.near = 3;
                 else return bad(w + ": near must be lobby, core or far");
+                if (std::string d; !readDepartments(L, t, r.departments, d)) return bad(w + ": unknown department (trade) '" + d + "'");
                 prog.rules.push_back(r);
                 lua_pop(L, 1);
             }

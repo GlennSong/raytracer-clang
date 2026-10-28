@@ -1023,9 +1023,11 @@ TEST_CASE(an_american_mall_has_two_levels_of_shops_and_escalators) {
 }
 
 // A JAPANESE TOWER (Glenn: "malls like this in the skyscrapers like in Japan. Also in Japan there are restaurants at the
-// top of skyscrapers"): its department-store floors are fitted as shops, its top floor as restaurants and bars, and it
-// carries the store's vertical board and the restaurant floor's name.
+// top of skyscrapers"): its department-store floors are the `department_store` floor program (a department a floor:
+// fashion with its fitting rooms, then electronics; the tills, the stockroom), its top floor restaurants and bars, and
+// it carries the store's vertical board and the restaurant floor's name.
 TEST_CASE(a_tower_has_a_department_store_and_restaurants_on_top) {
+    ensureFurnitureLibraryLoaded();
     BuildingRecipe rec;
     CHECK(architectRecipeByName("glass_tower", 5u, 0.9, 30.0, 900.0, rec));
     BuildingParams p = rec.params;
@@ -1061,6 +1063,27 @@ TEST_CASE(a_tower_has_a_department_store_and_restaurants_on_top) {
                 dine.count("bistro_table") ? dine.at("bistro_table") : 0, dine.count("kitchen_pass") ? dine.at("kitchen_pass") : 0,
                 office.count("desk") ? office.at("desk") : 0, signs.size());
     CHECK(store.count("clothes_rack") > 0);
+    CHECK(store.count("fitting_room") > 0);
+    CHECK(store.count("shop_counter") > 0);
+    CHECK(store.count("desk") == 0);
+    const auto electronics = piecesOn(3);
+    std::printf("    [tower] storey 3 (electronics): tv units %d, fitting rooms %d\n",
+                electronics.count("tv_unit") ? electronics.at("tv_unit") : 0,
+                electronics.count("fitting_room") ? electronics.at("fitting_room") : 0);
+    CHECK(electronics.count("tv_unit") > 0);
+    CHECK(electronics.count("fitting_room") == 0);
+    // every room on a store floor is the store's
+    {
+        const std::vector<StoreyPlan> storeys = storeyPlans(plan, p);
+        const CorePlan core = coreFor(plan, p, entranceEdgeFor(plan, p));
+        const RoomPlan rp = roomPlan(storeys[1].plan, p, core, static_cast<std::size_t>(-1), interiorWallInset(p), 1);
+        int other = 0;
+        for (const Room& r : rp.rooms)
+            if (r.kind != RoomKind::SalesFloor && r.kind != RoomKind::CashDesk && r.kind != RoomKind::FittingRooms &&
+                r.kind != RoomKind::Stockroom) ++other;
+        CHECK(!rp.rooms.empty());
+        CHECK(other == 0);
+    }
     CHECK(dine.count("bar_counter") > 0 || dine.count("kitchen_pass") > 0);
     CHECK(signs.size() == 2);
 }

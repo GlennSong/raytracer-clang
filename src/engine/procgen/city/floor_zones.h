@@ -109,6 +109,7 @@ struct ZoneRule {
     uint8_t walls = 2;            // 0 drywall, 1 glass, 2 glass behind a curtain wall else drywall
     uint8_t near = 0;             // 0 spread out, 1 the lift lobby, 2 the core
     bool lifts = false;           // only on a floor with lifts (a stair-only office has no reception)
+    std::vector<uint8_t> departments;   // only on a floor of one of these departments (trade ids); empty: any
 };
 
 // A BUILDING'S HABIT (picked per building by seed and weight): numbers the rules take instead of their own --
@@ -130,6 +131,9 @@ struct FloorProgram {
     // floor is no workplace (no office lighting), and one that will not walk is not opened up but laid another way
     // (zonedFloorPlan).
     bool residential = false;
+    // A SHOP FLOOR (a department store's): the department each storey is, by turns from the first storey over the
+    // ground (trade ids, trades.h) -- every room on it takes its trade as its style, and rules can keep to departments
+    std::vector<uint8_t> departments;
     std::vector<ZoneRule> rules;   // `fill` and `shallow` are rules too (looked up by tag; their quotas unused)
     std::vector<ZoneStyle> styles;
 };
@@ -152,6 +156,9 @@ private:
 };
 FloorProgram builtinOfficeProgram();
 FloorProgram builtinApartmentProgram();
+FloorProgram builtinDepartmentStoreProgram();
+// The department a program's storey is (a trade id), or -1 for a program without departments.
+int floorDepartment(const FloorProgram& prog, int storey);
 const FloorProgram& floorProgram(const std::string& name);
 
 // The RoomKind a program names ("open_plan", "meeting", ... -- space_graph's cellUseName with underscores).
@@ -163,7 +170,7 @@ struct ZoneTags {
     std::vector<int> rule;   // per zone: the rule index in prog.rules
     std::string style;
 };
-ZoneTags tagZones(const FloorPartition& fp, const FloorProgram& prog, uint32_t seed, bool lifts);
+ZoneTags tagZones(const FloorPartition& fp, const FloorProgram& prog, uint32_t seed, bool lifts, int department = -1);
 
 // THE FLOOR: partition, tag, walls and doors, walked from `entry` (the lift lobby, the stair's foot) before it is
 // shipped -- an enclosed room it cannot reach is opened up, and a floor that still fails is left open. The ONE planner

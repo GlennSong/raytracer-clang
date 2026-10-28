@@ -1588,6 +1588,25 @@ FurniturePiece build(Piece p, uint32_t variant) {
             k.rod(F::Metal, {0.36, 0.9, 0.995}, {0.36, 1.4, 0.995}, 0.012, kChrome, 8);
             break;
         }
+        case Piece::FittingRoom: {
+            // A FITTING ROOM (a department store's): a cubicle of painted panels clear of the floor, a long mirror on
+            // the back, a bench and a hook, the curtain on its rail across the front (+z), drawn back to one side.
+            // Stood in a row against a wall; the panels collide, not the floor inside: you step in.
+            k.out.size = {1.0, 2.2, 1.3};
+            k.out.colliders = {{Vec3(0, 1.1, 0.02), Vec3(1.0, 2.0, 0.04)}, {Vec3(-0.48, 1.1, 0.65), Vec3(0.04, 2.0, 1.3)},
+                               {Vec3(0.48, 1.1, 0.65), Vec3(0.04, 2.0, 1.3)}};
+            const Vec3 panel = kWhite * 0.95;
+            k.box(F::Hard, {0, 1.12, 0.02}, {1.0, 1.96, 0.04}, 0.005, panel, 1);                    // the back
+            for (double x : {-0.48, 0.48}) k.box(F::Hard, {x, 1.12, 0.65}, {0.04, 1.96, 1.3}, 0.005, panel, 1);   // sides
+            for (double x : {-0.48, 0.48}) k.box(F::Metal, {x, 0.07, 1.27}, {0.04, 0.14, 0.04}, 0.0, kSteel, 1);  // feet
+            k.box(F::Metal, {0, 1.15, 0.045}, {0.46, 1.5, 0.01}, 0.0, kChrome, 1);                  // the mirror
+            k.box(F::Wood, {0, 0.45, 0.20}, {0.86, 0.04, 0.32}, 0.004, wood, 1);                    // the bench
+            for (double x : {-0.4, 0.4}) k.box(F::Wood, {x, 0.22, 0.20}, {0.04, 0.44, 0.30}, 0.0, wood * 0.85, 1);
+            k.rod(F::Metal, {0.40, 1.70, 0.04}, {0.40, 1.70, 0.12}, 0.01, kChrome, 6);              // the hook
+            k.rod(F::Metal, {-0.46, 2.08, 1.26}, {0.46, 2.08, 1.26}, 0.012, kChrome, 8);            // the rail
+            k.box(F::Fabric, {0.32, 1.13, 1.26}, {0.30, 1.88, 0.07}, 0.02, fabric);                 // the curtain
+            break;
+        }
         default: break;
     }
     return k.out;
@@ -1606,7 +1625,7 @@ const char* const kPieceNames[kPieceCount] = {
     "desk_screen", "reception_desk", "hospital_bed", "exam_couch", "waiting_seats",
     "pew", "altar", "cinema_row", "cinema_screen", "market_stall", "judge_bench", "jury_box",
     "gear_locker", "machine", "workbench", "pallet_stack", "forklift",
-    "water_cooler", "copier", "phone_booth"};
+    "water_cooler", "copier", "phone_booth", "fitting_room"};
 
 }  // namespace
 

@@ -5370,20 +5370,19 @@ StoreyRooms storeyRooms(const Poly2& plan, const BuildingParams& params, Real ba
     }
     if (rp.rooms.empty())
         rp = roomPlan(spk.plan, params, core, blankEdge, interiorInset(params), ki, well, entranceEdge, foot);
-    // A TOWER'S DEPARTMENT STORE (a department a floor: fashion, fashion, electronics, books, the food hall) and its
-    // RESTAURANT FLOORS at the top (restaurants and bars by turns round the core): its floors' rooms are shops
+    // A TOWER'S RESTAURANT FLOORS at the top (restaurants and bars by turns round the core): its floors' rooms are
+    // shops. (Its DEPARTMENT STORE is roomPlan's: the `department_store` floor program.)
     {
         const int top = params.dineFloors > 0 ? dineTopOf(storeys) : nS - 1;
         const bool fitted = plan.size() == 4;   // (shops are fitted in rectangular rooms: a drum tower stays offices)
-        const bool store = fitted && params.storeFloors > 0 && ki >= 1 && ki <= params.storeFloors;
+        const bool store = params.storeFloors > 0 && ki >= 1 && ki <= params.storeFloors;
         const bool dine = fitted && params.dineFloors > 0 && ki >= 1 && ki <= top && ki > top - params.dineFloors && !store;
-        if (store || dine) {
-            static const uint8_t kDept[5] = {2, 2, 4, 3, 6};
+        if (dine) {
             int n = 0;
             for (Room& r : rp.rooms) {
                 if (r.rect.size() < 3) continue;
                 r.kind = RoomKind::Shop;
-                r.style = store ? kDept[(ki - 1) % 5] : ((n++ & 1) ? 14 : 13);
+                r.style = (n++ & 1) ? 14 : 13;
             }
         }
     }
