@@ -6,7 +6,10 @@
 #include "../../profile.h"
 #include "../world.h"
 #include "../procgen/city/shape_grammar.h"
-#include "../procgen/city/building_uses.h"   // interiorParamsFor
+#include "../procgen/city/building_uses.h"   // interiorParamsFor, buildingUsesGeneration
+#ifdef RT_ENABLE_SCRIPTING
+#include "../scripting/furniture_library_lua.h"   // floorProgramsGeneration
+#endif
 #include "../procgen/surface_maps.h"   // surfaceMaps (bake, ADR-0080)
 #include "../procgen/furniture_kit.h"
 #include "../procgen/furniture_library.h"   // which pieces are interactive
@@ -129,6 +132,22 @@ void BuildingInteriorSystem::step(World& world, PhysicsWorld* phys,
             lastFree_ = stepCount_;
         }
         return;
+    }
+
+    // HOT RELOAD (the building-uses plan): building_uses.lua or floor_programs.lua edited while the game runs -- the
+    // interiors standing round the player are let go, and grown again below from the tables as they are now
+    {
+        long gen = static_cast<long>(buildingUsesGeneration()) * 100003L;
+#ifdef RT_ENABLE_SCRIPTING
+        gen += floorProgramsGeneration();
+#endif
+        if (tablesGeneration_ >= 0 && gen != tablesGeneration_ && !resident_.empty()) {
+            LOG_INFO << "[interiors] floor uses or programs changed: growing " << resident_.size() << " interiors again";
+            std::vector<std::size_t> keys;
+            for (const auto& kv : resident_) keys.push_back(kv.first);
+            for (std::size_t key : keys) release(world, phys, key);
+        }
+        tablesGeneration_ = gen;
     }
 
     const Vec2 xz(player.x, player.z);

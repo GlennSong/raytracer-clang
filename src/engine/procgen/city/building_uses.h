@@ -24,7 +24,11 @@ bool floorUseListed(const std::string& recipe);
 // Bumped each time building_uses.lua is (re)read: an interior grown before a change can be grown again.
 int buildingUsesGeneration();
 
-// The interior's runtime facts from the use: officeUse (an office floor, and not homes) and house.
+// A use's name as a small id (BuildingParams::floorUse; 0 = not set), and back.
+uint8_t internFloorUse(const std::string& use);
+std::string floorUseName(uint8_t id);
+
+// The interior's runtime facts from the use: floorUse, and officeUse (an office floor, and not homes).
 void applyFloorUse(BuildingParams& p, const std::string& recipe, const std::string& placeType);
 
 // The record's parameters with the interior's runtime facts filled in from its recipe and use.

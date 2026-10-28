@@ -134,6 +134,9 @@ struct FloorProgram {
     std::vector<ZoneStyle> styles;
 };
 
+// Whether a program of this name exists (the Lua book's, or a built-in one).
+bool hasFloorProgram(const std::string& name);
+
 // The programs by name, loaded once from assets/scripts/floor_programs.lua by the scripting layer
 // (furniture_library_lua.h, the same VM as the furniture). Empty until then; floorProgram() falls back to the
 // built-in program of that name (office, apartments: what the Lua file ships with), so procgen and tests need no Lua.

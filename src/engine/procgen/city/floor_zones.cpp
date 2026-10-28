@@ -937,6 +937,10 @@ FloorProgram builtinResidentsProgram() {
     return p;
 }
 
+bool hasFloorProgram(const std::string& name) {
+    return FloorProgramBook::global().find(name) != nullptr || name == "office" || name == "apartments" || name == "residents";
+}
+
 const FloorProgram& floorProgram(const std::string& name) {
     if (const FloorProgram* p = FloorProgramBook::global().find(name)) return *p;
     static const FloorProgram office = builtinOfficeProgram(), apartments = builtinApartmentProgram(),

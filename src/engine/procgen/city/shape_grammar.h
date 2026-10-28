@@ -683,10 +683,10 @@ struct BuildingParams {
     // the lot cache: set from the recipe's use (building_uses.h, building_uses.lua) by the architect and again by the interior
     // system from the building record, so an island baked before it still gets it without a re-bake.
     bool  officeUse = false;
-    // A HOUSE (building_uses.lua's `house` use): one dwelling, or a row or pair of them -- its floors are the house planner's,
-    // never the zoned floor's flats. RUNTIME ONLY like officeUse: set from the recipe by the architect and the
-    // interior system, never in the lot cache.
-    bool  house = false;
+    // WHAT ITS FLOORS ARE FOR (building_uses.h, building_uses.lua): the use's name, interned (floorUseName; 0 = not
+    // set) -- a floor program's name, which the room planner lays, or a planner's (a house, a hotel, a civic building).
+    // RUNTIME ONLY like officeUse: set from the recipe by the architect and the interior system, never in the lot cache.
+    uint8_t floorUse = 0;
     // A CIVIC BUILDING'S OWN ROOMS (Glenn, the same day): off the campus, a university is a teaching hall (1), a library
     // its reading room and stacks (2), a museum its galleries (4), a school its classrooms (5) -- campusPlan's corridor
     // floor, by these numbers (the campus field's, plus 4 and 5) -- and a hospital its wards (6, hospitalPlan); a

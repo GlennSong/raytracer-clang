@@ -1935,6 +1935,11 @@
     too small even for that is the <code>residents</code> program's lounge. A block of flats with only a stair is zoned
     round the stair, as an office building is. Houses, walk-ups, campus buildings, hospitals, halls and hotels keep
     their own planners: they are other buildings. What the zoned floor cannot lay is open floor.</p>
+  <p><b>What the floors are for</b> (ADR-0259). <code>assets/scripts/building_uses.lua</code> lists every recipe's floor
+    use: a floor program's name (<code>office</code>, <code>apartments</code>) or a planner's (<code>house</code>,
+    <code>hotel</code>, <code>hospital</code>, <code>civic</code>). The room planner lays the program a use names, so a new
+    program needs only Lua. Both tables reload while the game runs: edit either and the interiors round you are grown
+    again within a second. What shapes the outside (homes, a civic building's kind) stays with the recipe, baked.</p>
   <div class="shots">
     <figure class="shot"><img src="img/buildings/office_floor.webp" alt="An office floor: cubicles, desks with monitors, drywall rooms and ceiling light panels">
       <figcaption>A zoned office floor (2026-10-16): enclosed rooms, desk pods and cubicles.</figcaption></figure>

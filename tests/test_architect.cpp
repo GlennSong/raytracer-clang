@@ -387,7 +387,7 @@ TEST_CASE(building_uses_list_every_recipe_and_agree_about_homes) {
             std::printf("    [uses] %s: use %s, residential %d\n", name, use.c_str(), r.params.residential ? 1 : 0);
         }
         CHECK(!(r.params.officeUse && r.params.residential));
-        CHECK(r.params.house == (use == "house"));
+        CHECK(floorUseName(r.params.floorUse) == use);
     }
     std::printf("    [uses] %d recipes, %d unlisted, %d disagree about homes\n", recipes, unlisted, disagree);
     CHECK(recipes > 50);

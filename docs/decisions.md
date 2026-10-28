@@ -12740,6 +12740,18 @@ in Lua, so it can change without restarting the engine.
 mesh's vertices and every furniture placement): metro_v2_test (1,159 buildings, 7.0 M vertices, 213 k pieces) and
 river_town (449 buildings, 6.1 M vertices, 426 k pieces) identical before and after.
 
-**Consequences.** One place to read and change what a building's floors are for. Floors are planned at runtime, so no
-lots tag bump. Next (step 2): the planner picks the floor program by the use's name, and the tables hot-reload into
-the interiors standing round the player.
+**Decision (step 2).**
+5. **The planner reads the use.** `BuildingParams::floorUse` (runtime only, an interned id of the use's name, where the
+   `house` flag stood) replaces `house`; `roomPlan` lays a zoned floor with the program the use names when one exists
+   (`hasFloorProgram`), else its default for that kind of floor -- so a new program in `floor_programs.lua`, named as
+   a recipe's use in `building_uses.lua`, is laid with no code. The branches are as they were.
+6. **Hot reload.** `floor_programs.lua` is read again when it changes (`floorProgramsGeneration`, as the uses table
+   is), and `BuildingInteriorSystem` lets its resident interiors go when either table's generation moves, so they
+   grow again round the player from the tables as edited -- within about a second, no restart.
+
+**Measured.** The fingerprints identical again after step 2 (both levels). A probe edited `building_uses.lua` while a
+test ran: the recipe's use changed within the second, the generation by one.
+
+**Consequences.** One place to read and change what a building's floors are for, live. Floors are planned at runtime,
+so no lots tag bump. The furniture programs (`furniture_rooms.lua`) still load once; they could hot-reload the same
+way. Next: the `department_store` program (plan step 3).

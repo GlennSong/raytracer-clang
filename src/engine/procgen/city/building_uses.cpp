@@ -12,6 +12,7 @@
 #include <filesystem>
 #include <map>
 #include <mutex>
+#include <vector>
 
 namespace engine {
 
@@ -28,6 +29,9 @@ struct UseBook {
 
 std::mutex& bookMutex() { static std::mutex m; return m; }
 UseBook& book() { static UseBook b; return b; }
+
+std::mutex& namesMutex() { static std::mutex m; return m; }
+std::vector<std::string>& names() { static std::vector<std::string> n{""}; return n; }
 
 #ifdef RT_ENABLE_SCRIPTING
 // building_uses = { defaults = { placeType = use, ... }, recipes = { name = use, ... } }
@@ -117,9 +121,25 @@ int buildingUsesGeneration() {
     return b.generation;
 }
 
+uint8_t internFloorUse(const std::string& use) {
+    if (use.empty()) return 0;
+    std::lock_guard<std::mutex> lock(namesMutex());
+    std::vector<std::string>& n = names();
+    for (std::size_t i = 1; i < n.size(); ++i) if (n[i] == use) return static_cast<uint8_t>(i);
+    if (n.size() > 255) { LOG_WARN << "[uses] more than 255 floor uses: " << use << " is not kept"; return 0; }
+    n.push_back(use);
+    return static_cast<uint8_t>(n.size() - 1);
+}
+
+std::string floorUseName(uint8_t id) {
+    std::lock_guard<std::mutex> lock(namesMutex());
+    const std::vector<std::string>& n = names();
+    return id < n.size() ? n[id] : std::string();
+}
+
 void applyFloorUse(BuildingParams& p, const std::string& recipe, const std::string& placeType) {
     const std::string use = floorUseFor(recipe, placeType);
-    p.house = use == "house";
+    p.floorUse = internFloorUse(use);
     p.officeUse = use == "office" && !p.residential;   // (homes over a shop are homes: the recipe says so)
 }
 

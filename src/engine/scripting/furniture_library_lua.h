@@ -33,6 +33,11 @@ bool loadFloorProgramsSource(const std::string& source, FloorProgramBook& out, s
 // first result). Logs what it loaded.
 bool ensureFurnitureLibraryLoaded();
 
+// HOT RELOAD (the building-uses plan): floor_programs.lua read again when it has changed since it was last read (looked
+// at no more than once a second), into FloorProgramBook::global(). Returns a generation, bumped on each reload, so the
+// interior system can grow its resident interiors again. Call from the thread that grows interiors.
+int floorProgramsGeneration();
+
 }  // namespace engine
 
 #endif

@@ -6,6 +6,8 @@
 #include "../../log.h"
 
 #include <algorithm>
+#include <chrono>
+#include <filesystem>
 #include <mutex>
 
 namespace engine {
@@ -493,6 +495,35 @@ bool loadFloorProgramsSource(const std::string& source, FloorProgramBook& out, s
     std::string e;
     if (!vm.doString(source, &e)) return fail(err, "floor_programs.lua: " + e);
     return readFloorPrograms(vm, out, err);
+}
+
+int floorProgramsGeneration() {
+    static int generation = 0;
+    static bool seen = false;
+    static std::string path;
+    static std::filesystem::file_time_type stamp{};
+    static std::chrono::steady_clock::time_point checked{};
+    const auto now = std::chrono::steady_clock::now();
+    if (seen && now - checked < std::chrono::seconds(1)) return generation;
+    checked = now;
+    ensureFurnitureLibraryLoaded();   // (the first read is the library's)
+    const std::string p = resolveScriptPath("floor_programs.lua", "");
+    std::error_code ec;
+    const auto s = p.empty() ? std::filesystem::file_time_type{} : std::filesystem::last_write_time(p, ec);
+    if (!seen) { seen = true; path = p; stamp = s; return generation; }
+    if (p == path && s == stamp) return generation;
+    path = p;
+    stamp = s;
+    FloorProgramBook book;
+    std::string err;
+    if (p.empty() || !loadFloorProgramsSource(loadScriptCode("floor_programs.lua", ""), book, &err)) {
+        LOG_WARN << "[floors] floor_programs.lua: " << (p.empty() ? std::string("gone") : err) << " (the programs before the edit stand)";
+        return generation;
+    }
+    FloorProgramBook::global() = book;
+    ++generation;
+    LOG_INFO << "[floors] " << book.size() << " floor programs (reloaded)";
+    return generation;
 }
 
 bool ensureFurnitureLibraryLoaded() {

@@ -1,5 +1,6 @@
 #include "room_plan.h"
 #include "floor_zones.h"
+#include "building_uses.h"   // floorUseName
 #include "../../mesh_builder.h"
 #include <algorithm>
 #include <functional>
@@ -2208,6 +2209,13 @@ RoomPlan roomPlan(const Poly2& planIn, const BuildingParams& params, const CoreP
                   std::size_t blankEdge, Real inset, int storey,
                   const Poly2& stairWell, std::size_t entranceEdge, const Vec2& stairFoot) {
     const PlateTopology topo = plateTopologyFor(planIn, params, core);
+    // WHAT THE FLOOR IS FOR (building_uses.lua): a use that names a floor program is laid as that program -- a new one
+    // in floor_programs.lua needs no code here; else the planner's default for its kind of floor
+    const std::string use = floorUseName(params.floorUse);
+    const bool house = use == "house";
+    auto programFor = [&](const char* fallback) -> const FloorProgram& {
+        return floorProgram(hasFloorProgram(use) ? use : std::string(fallback));
+    };
     // AN OFFICE OR APARTMENT FLOOR IS THE ZONED FLOOR (floor_zones.h, #117 item 35): one planner for every plate, deep
     // or shallow, round a core or a stair; the planners below are the other building types' (a house, a walk-up, a
     // campus hall, a hospital, a hall, a hotel's ring). What the zoned floor cannot lay is open floor.
@@ -2215,7 +2223,7 @@ RoomPlan roomPlan(const Poly2& planIn, const BuildingParams& params, const CoreP
         // the `apartments` program: flats along the glass off the corridor round the core, or off its lobby on a
         // shallow plate, else the residents' floor
         const Vec2 entry = core.frame.toWorld({core.length * 0.5, -1.1});
-        RoomPlan zf = zonedFloorPlan(planIn, params, core, inset, storey, true, entry, stairWell, floorProgram("apartments"));
+        RoomPlan zf = zonedFloorPlan(planIn, params, core, inset, storey, true, entry, stairWell, programFor("apartments"));
         if (!zf.rooms.empty()) { zf.finish = interiorFinishFor(params); return zf; }
     }
     if (topo == PlateTopology::Apartments) {   // (the lobby storey, or a plate the zoned floor could not lay)
@@ -2299,20 +2307,20 @@ RoomPlan roomPlan(const Poly2& planIn, const BuildingParams& params, const CoreP
             const Vec2 entry = core.valid ? core.frame.toWorld({core.length * 0.5, -1.1})
                              : stairFoot.x < 1e29 ? stairFoot : centroid(stairWell);
             RoomPlan zf = zonedFloorPlan(planIn, params, hub, inset, storey, core.valid, entry, stairWell,
-                                         floorProgram("office"));
+                                         programFor("office"));
             if (!zf.rooms.empty()) { zf.finish = interiorFinishFor(params); return zf; }
         }
     }
     // A BLOCK OF FLATS WITH ONLY A STAIR (not a walk-up's or a house's floor, which have their own planners): the zoned
     // apartment floor round the stair's well, as an office building's is (#117 item 35)
-    if (params.residential && !params.house && !core.valid && topo != PlateTopology::WholeFloor && storey >= 1 &&
+    if (params.residential && !house && !core.valid && topo != PlateTopology::WholeFloor && storey >= 1 &&
         stairWell.size() >= 3 && !params.campus && params.civicRooms == 0) {
         const CorePlan hub = hubFor();
         const Vec2 entry = stairFoot.x < 1e29 ? stairFoot : centroid(stairWell);
-        RoomPlan zf = zonedFloorPlan(planIn, params, hub, inset, storey, false, entry, stairWell, floorProgram("apartments"));
+        RoomPlan zf = zonedFloorPlan(planIn, params, hub, inset, storey, false, entry, stairWell, programFor("apartments"));
         if (!zf.rooms.empty()) { zf.finish = interiorFinishFor(params); return zf; }
     }
-    if (params.officeUse || (params.residential && !params.house && topo != PlateTopology::WholeFloor)) {
+    if (params.officeUse || (params.residential && !house && topo != PlateTopology::WholeFloor)) {
         // what the zoned floor could not lay in a workplace or a block of flats (a lobby storey, a plate a metre or
         // two round its core, a tier with no stair): open floor, never another planner's rooms
         RoomPlan open;
