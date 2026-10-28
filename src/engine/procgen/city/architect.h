@@ -193,13 +193,6 @@ const char* architectRecipeName(int index);   // nullptr out of range
 bool architectRecipeByName(const std::string& name, uint32_t seed, Real coreness, Real shortSide, Real area,
                            BuildingRecipe& out);
 
-// Whether a recipe's upper floors are offices (BuildingParams::officeUse): a workplace, civic or commercial building
-// that is not a home, and not one with rooms of its own kind -- a hotel, a hospital, a school, a library, a museum, a
-// university, a church.
-bool officeUseFor(const std::string& recipe, const std::string& placeType, bool residential);
-// Whether a recipe is a HOUSE (BuildingParams::house): one dwelling a building, or a row or pair of them -- its floors
-// are the house planner's, never a block of flats'.
-bool houseFor(const std::string& recipe);
 // The civic building's own rooms (BuildingParams::civicRooms): university 1, library 2, museum 4, school 5,
 // hospital 6, church 7, cinema 8, fire station 9, police 10, courthouse 11, capitol 12, market hall 14, factory 15,
 // warehouse (brick warehouse, metal shed) 16, hotel 17 (its lobby), else 0.

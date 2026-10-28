@@ -1,5 +1,6 @@
 #include <cstdlib>
 #include "architect.h"
+#include "building_uses.h"
 
 #include <algorithm>
 #include <cmath>
@@ -155,22 +156,6 @@ void capFloors(BuildingParams& p, Real shortSide, Real slender = 1.8) {
 }
 }  // namespace (reopened below)
 
-bool officeUseFor(const std::string& recipe, const std::string& placeType, bool residential) {
-    static const bool off = std::getenv("RT_NO_OFFICE_FLOORS") != nullptr;   // A/B: workplaces as before
-    if (off || residential || placeType == "home" || placeType == "depot") return false;
-    static const char* kOwnRooms[] = {"hotel", "hospital", "school", "library", "museum", "university", "church",
-                                      "teaching_hall", "campus_library", "residence_hall"};
-    for (const char* n : kOwnRooms) if (recipe == n) return false;
-    return placeType == "office" || placeType == "civic" || placeType == "shop" || placeType == "park";
-}
-
-bool houseFor(const std::string& recipe) {
-    static const char* kHouses[] = {"yard_house", "modern_house", "bungalow", "craftsman_house", "cottage", "villa",
-                                    "ranch_house", "rowhouses", "duplex"};
-    for (const char* n : kHouses) if (recipe == n) return true;
-    return false;
-}
-
 uint8_t civicRoomsFor(const std::string& recipe) {
     static const bool off = std::getenv("RT_NO_CIVIC_ROOMS") != nullptr;   // A/B: the ring of studios as before
     if (off) return 0;
@@ -200,9 +185,8 @@ void capFloors(BuildingRecipe& out, Real shortSide, Real slender) {
     static const char* kFlatsOverShops[] = {"mixed_use", "oldtown_house", "oldtown_grand", "brick_shop", "corner_shop"};
     out.params.residential = out.placeType == "home";
     for (const char* n : kFlatsOverShops) if (out.name == n) out.params.residential = true;
-    out.params.officeUse = officeUseFor(out.name, out.placeType, out.params.residential);
+    applyFloorUse(out.params, out.name, out.placeType);   // officeUse, house (building_uses.lua; interior only)
     out.params.civicRooms = civicRoomsFor(out.name);
-    out.params.house = houseFor(out.name);
     storeyHeightsByUse(out);
     capFloors(out.params, shortSide, slender);
     if (out.params.floors < 15) out.params.top = 0;   // a top is a tower's: the short ones keep the penthouse

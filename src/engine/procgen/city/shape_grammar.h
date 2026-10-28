@@ -680,10 +680,10 @@ struct BuildingParams {
     // OFFICES INSIDE (Glenn, 2026-10-13: "offices can have meeting rooms, small kitchens, lounge space, reception desk,
     // offices and cubes and open floor plans"): a workplace's upper floors are the office floor (the zoned floor,
     // floor_zones.h), masonry or glass, core or stair -- not the ring of studios a hotel keeps. RUNTIME ONLY, never in
-    // the lot cache: set from the recipe and its use (architect.h officeUseFor) by the architect and again by the interior
+    // the lot cache: set from the recipe's use (building_uses.h, building_uses.lua) by the architect and again by the interior
     // system from the building record, so an island baked before it still gets it without a re-bake.
     bool  officeUse = false;
-    // A HOUSE (architect.h houseFor): one dwelling, or a row or pair of them -- its floors are the house planner's,
+    // A HOUSE (building_uses.lua's `house` use): one dwelling, or a row or pair of them -- its floors are the house planner's,
     // never the zoned floor's flats. RUNTIME ONLY like officeUse: set from the recipe by the architect and the
     // interior system, never in the lot cache.
     bool  house = false;

@@ -12710,3 +12710,36 @@ graph's rule. Still owed from item 35: the massing paths, scope ops, FaceRect, p
 **Alternatives.** Keeping the fallbacks as a safety net: they hid the zoned floor's failures (a shallow plate's floor
 came out an older style storey to storey) and every change landed four times. Folding houses, walk-ups and the civic
 planners in too: Glenn kept them separate.
+
+## ADR-0259 — What a building's floors are for lives in one Lua table
+
+**Context.** The building-uses plan (Glenn, 2026-10-27; the follow-on to ADR-0258): a storey's use decides its layout
+(a floor program), its style decides its finish (`interiorFinishFor`, as before). What a building's floors were for was
+decided in eight places, three of them C++ lookups by recipe name read only by the interior (`officeUseFor`, with an
+A/B switch `RT_NO_OFFICE_FLOORS`; `houseFor`) or by both interior and exterior (`civicRoomsFor`). Glenn: the data lives
+in Lua, so it can change without restarting the engine.
+
+**Decision (step 1).**
+1. **`assets/scripts/building_uses.lua`** lists every recipe's floor use by name (79 recipes): a floor program's name
+   (`office`, `apartments`) or a planner's (`house`, `hotel`, `hospital`, `civic`), `none` for no interior; `defaults`
+   by place type for a recipe added later. Generated from the facts the recipes had, so it says what the code did.
+2. **`procgen/city/building_uses.{h,cpp}`** reads it: `floorUseFor(recipe, placeType)`, on first use and again when the
+   file changes (looked at once a second), so an edit reaches the next interior planned; a build without Lua takes
+   the place type's default and says so. `applyFloorUse` sets the interior's runtime facts from the use
+   (`officeUse` = an office floor and not homes, `house`); `interiorParamsFor(record)` is the ONE setup of a record's
+   parameters for its interior -- the interior system, the tests and any census call it, where three hand copies
+   stood.
+3. **What shapes the outside stays with the recipe** (C++, baked in the lot cache): `residential` (lit windows, flats
+   over shops) and the civic kind (`civicRoomsFor`: a hotel's entrance, a fire station's open bays). A hot-editable
+   file must not change baked geometry, or the cache would go stale with no key to notice. A test holds the table and
+   the recipes together: every recipe listed, and a use of `apartments` or `house` exactly when the recipe is
+   residential.
+4. **Deleted:** `officeUseFor`, `houseFor`, and the `RT_NO_OFFICE_FLOORS` switch (set a recipe's use in the table).
+
+**Measured.** Every enterable building's interior grown as the game grows it, fingerprinted (an FNV hash of every part
+mesh's vertices and every furniture placement): metro_v2_test (1,159 buildings, 7.0 M vertices, 213 k pieces) and
+river_town (449 buildings, 6.1 M vertices, 426 k pieces) identical before and after.
+
+**Consequences.** One place to read and change what a building's floors are for. Floors are planned at runtime, so no
+lots tag bump. Next (step 2): the planner picks the floor program by the use's name, and the tables hot-reload into
+the interiors standing round the player.

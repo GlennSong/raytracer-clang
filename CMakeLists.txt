@@ -205,6 +205,7 @@ add_library(engine_core STATIC
     src/engine/procgen/city/district.cpp
     src/engine/procgen/city/road_crossings.cpp
     src/engine/procgen/city/architect.cpp
+    src/engine/procgen/city/building_uses.cpp
     src/engine/procgen/city/building_collider.cpp
     src/engine/procgen/city/city_lots.cpp
     src/engine/procgen/city/surface_field.cpp

@@ -2123,7 +2123,7 @@
     <li><code>RT_SITE_DEBUG=1</code> prints lots no rectangle fitted; <code>RT_SITE_PLAN=0</code> skips the site plan (a bisect switch).</li>
     <li><code>RT_CELLS_DEBUG=1</code> prints each complex cell as the lot pass grows it.</li>
     <li><code>RT_BLUEPRINTS=&lt;dir&gt;</code> writes a blueprint sheet per building from the level gate.</li>
-    <li><code>RT_NO_OFFICE_FLOORS=1</code>, <code>RT_NO_CIVIC_ROOMS=1</code>, <code>RT_<wbr>FURNITURE_<wbr>BLIND_<wbr>OPENINGS=1</code> are A/B switches for the interior ADRs (<code>RT_FLOOR_PLAN=bands</code> and <code>RT_NO_WRAP_FLATS</code> went with the planners they switched back to, ADR-0258).</li>
+    <li><code>RT_NO_CIVIC_ROOMS=1</code> and <code>RT_<wbr>FURNITURE_<wbr>BLIND_<wbr>OPENINGS=1</code> are A/B switches for the interior ADRs (<code>RT_FLOOR_PLAN=bands</code> and <code>RT_NO_WRAP_FLATS</code> went with the planners they switched back to, ADR-0258; <code>RT_NO_OFFICE_FLOORS</code> went when the uses moved to <code>building_uses.lua</code>, ADR-0259: set a recipe's use there instead).</li>
     <li><code>lot? x z</code> in the running game prints a building's party walls (ADR-0227).</li>
     <li>Any lot-pass change: bump <code>kLotsBuildTag</code> (<code>lots_producer.cpp</code>), or a level keeps reading its cached lots.</li>
   </ul>

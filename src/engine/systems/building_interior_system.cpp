@@ -6,7 +6,7 @@
 #include "../../profile.h"
 #include "../world.h"
 #include "../procgen/city/shape_grammar.h"
-#include "../procgen/city/architect.h"   // officeUseFor
+#include "../procgen/city/building_uses.h"   // interiorParamsFor
 #include "../procgen/surface_maps.h"   // surfaceMaps (bake, ADR-0080)
 #include "../procgen/furniture_kit.h"
 #include "../procgen/furniture_library.h"   // which pieces are interactive
@@ -288,11 +288,7 @@ void BuildingInteriorSystem::build(World& world, PhysicsWorld* phys,
                                    int k0, int k1) {
     const auto t0 = std::chrono::steady_clock::now();
     RenderMesh collider;
-    // officeUse is runtime only (not in the lot cache): from the record's recipe and use
-    BuildingParams params = r.params;
-    params.officeUse = officeUseFor(r.recipe, r.type, params.residential);
-    params.civicRooms = civicRoomsFor(r.recipe);
-    params.house = houseFor(r.recipe);
+    const BuildingParams params = interiorParamsFor(r);   // the runtime facts the lot cache does not hold
     BuildingMesh bm = growInterior(r.plan, params, r.baseY, &collider, k0, k1);
     const double growMs = msSince(t0);
 

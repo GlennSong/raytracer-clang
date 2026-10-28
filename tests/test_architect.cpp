@@ -1,6 +1,7 @@
 #include "test_framework.h"
 
 #include "../src/engine/procgen/city/architect.h"
+#include "../src/engine/procgen/city/building_uses.h"
 #include "../src/engine/procgen/city/city_lots.h"
 #include "../src/engine/procgen/city/shape_grammar.h"
 
@@ -365,4 +366,31 @@ TEST_CASE(lit_pane_colour_packs_glass_and_lit_tint) {
     // The palette the shaders carry.
     CHECK_APPROX(litTintOf(1).z, 0.88, 1e-9);
     CHECK_APPROX(litTintOf(7).y, 1.00, 1e-9);
+}
+
+// WHAT THE FLOORS ARE FOR (assets/scripts/building_uses.lua, the building-uses plan): every recipe is listed by name,
+// so the table is the one place to read a building's use; and the table agrees with the recipes about homes -- a
+// recipe's floors are apartments or a house exactly when the recipe makes it residential (the exterior's fact: its
+// lit windows, flats over shops), and an office floor never is.
+TEST_CASE(building_uses_list_every_recipe_and_agree_about_homes) {
+    int recipes = 0, unlisted = 0, disagree = 0;
+    for (int i = 0; i < architectRecipeCount(); ++i) {
+        const char* name = architectRecipeName(i);
+        BuildingRecipe r;
+        if (!architectRecipeByName(name, 3, 0.6, 24, 600, r)) continue;
+        ++recipes;
+        if (!floorUseListed(name)) { ++unlisted; std::printf("    [uses] %s is not in building_uses.lua\n", name); }
+        const std::string use = floorUseFor(name, r.placeType);
+        const bool homes = use == "apartments" || use == "house";
+        if (homes != r.params.residential) {
+            ++disagree;
+            std::printf("    [uses] %s: use %s, residential %d\n", name, use.c_str(), r.params.residential ? 1 : 0);
+        }
+        CHECK(!(r.params.officeUse && r.params.residential));
+        CHECK(r.params.house == (use == "house"));
+    }
+    std::printf("    [uses] %d recipes, %d unlisted, %d disagree about homes\n", recipes, unlisted, disagree);
+    CHECK(recipes > 50);
+    CHECK(unlisted == 0);
+    CHECK(disagree == 0);
 }

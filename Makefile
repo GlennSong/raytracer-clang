@@ -95,6 +95,7 @@ SRCS = \
 	$(SRC_DIR)/engine/procgen/city/buildability.cpp \
 	$(SRC_DIR)/engine/procgen/city/road_crossings.cpp \
 	$(SRC_DIR)/engine/procgen/city/architect.cpp \
+	$(SRC_DIR)/engine/procgen/city/building_uses.cpp \
 	$(SRC_DIR)/engine/procgen/city/city_lots.cpp \
 	$(SRC_DIR)/engine/procgen/city/surface_field.cpp \
 	$(SRC_DIR)/engine/procgen/city/structure_set.cpp \
@@ -328,6 +329,7 @@ TEST_ENGINE_SRCS = \
 	$(SRC_DIR)/engine/procgen/city/buildability.cpp \
 	$(SRC_DIR)/engine/procgen/city/road_crossings.cpp \
 	$(SRC_DIR)/engine/procgen/city/architect.cpp \
+	$(SRC_DIR)/engine/procgen/city/building_uses.cpp \
 	$(SRC_DIR)/engine/procgen/city/city_lots.cpp \
 	$(SRC_DIR)/engine/procgen/city/surface_field.cpp \
 	$(SRC_DIR)/engine/procgen/city/structure_set.cpp \
