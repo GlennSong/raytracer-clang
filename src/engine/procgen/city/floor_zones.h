@@ -111,10 +111,12 @@ struct ZoneRule {
     bool lifts = false;           // only on a floor with lifts (a stair-only office has no reception)
     std::vector<uint8_t> departments;   // only on a floor of one of these departments (trade ids); empty: any
     int trade = -1;               // its rooms' trade (trades.h: a restaurant, a bar), over the floor's department
+    bool ensuite = false;         // an enclosed room with its own bathroom, carved beside its door (a hotel room)
 };
 
 // A BUILDING'S HABIT (picked per building by seed and weight): numbers the rules take instead of their own --
-// a company of corner offices, one of private offices along the glass, an all-open one.
+// a company of corner offices, one of private offices along the glass, an all-open one. A set on the tag "lots"
+// changes how the plate is cut (lot_width, window_depth, ...): a budget hotel's narrow rooms, a luxury one's wide.
 struct ZoneStyle {
     std::string name;
     Real weight = 1;
@@ -132,6 +134,8 @@ struct FloorProgram {
     // floor is no workplace (no office lighting), and one that will not walk is not opened up but laid another way
     // (zonedFloorPlan).
     bool residential = false;
+    // NO WORKPLACE (a hotel's rooms): the floor is not lit as offices, and its baths are bathrooms, not restrooms
+    bool workplace = true;
     // A SHOP FLOOR (a department store's): the department each storey is, by turns from the first storey over the
     // ground (trade ids, trades.h) -- every room on it takes its trade as its style, and rules can keep to departments
     std::vector<uint8_t> departments;
@@ -159,6 +163,9 @@ FloorProgram builtinOfficeProgram();
 FloorProgram builtinApartmentProgram();
 FloorProgram builtinDepartmentStoreProgram();
 FloorProgram builtinDiningProgram();
+FloorProgram builtinHotelProgram();
+// The style a building of this seed takes (nullptr: the program has none).
+const ZoneStyle* floorStyle(const FloorProgram& prog, uint32_t seed);
 // The department a program's storey is (a trade id), or -1 for a program without departments.
 int floorDepartment(const FloorProgram& prog, int storey);
 const FloorProgram& floorProgram(const std::string& name);

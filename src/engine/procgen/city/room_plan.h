@@ -76,8 +76,9 @@ enum class RoomKind : uint8_t { Office, Flat, Hall, Living, Kitchen, Bath, Bed, 
                                 Nave, Foyer, Auditorium, Market, Cell, Courtroom, Chamber, EngineBay, Apparatus,
                                 ShopFloor, Warehouse, HotelLobby,
                                 CopyRoom, PhoneBooths, WaterCooler,
-                                SalesFloor, CashDesk, FittingRooms, Stockroom };   // a department store's (floor_programs.lua)
-constexpr RoomKind kLastRoomKind = RoomKind::Stockroom;
+                                SalesFloor, CashDesk, FittingRooms, Stockroom,   // a department store's (floor_programs.lua)
+                                HotelRoom, HotelSuite, LinenRoom };              // a hotel's
+constexpr RoomKind kLastRoomKind = RoomKind::LinenRoom;
 
 struct RoomWall {
     Vec2 a, b;           // world XZ, the wall's centre line

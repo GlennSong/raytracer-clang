@@ -395,6 +395,9 @@ const char* programFor(RoomKind kind) {
         case RoomKind::CashDesk: return "cash_desk";
         case RoomKind::FittingRooms: return "fitting_rooms";
         case RoomKind::Stockroom: return "stockroom";
+        case RoomKind::HotelRoom: return "hotel_room";
+        case RoomKind::HotelSuite: return "hotel_suite";
+        case RoomKind::LinenRoom: return "linen_room";
         default: return "";
     }
 }

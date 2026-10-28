@@ -20,15 +20,18 @@
 --   min_floor  only on a floor of at least this many m2 (a small floor keeps its lots for desks)
 --   departments  only on a floor of one of these departments (below)
 --   trade      its rooms are of this trade (a restaurant, a bar: trades.cpp's names), furnished as one
--- styles     a building's habit, picked per building by weight: `set` overrides zones' numbers by tag.
+--   ensuite    an enclosed room with its own bathroom, carved beside its door (a hotel room)
+-- styles     a building's habit, picked per building by weight: `set` overrides zones' numbers by tag, and the
+--            tag `lots` how the plate is cut (a budget hotel's narrow rooms)
+-- workplace  false: not lit as offices, its baths bathrooms rather than restrooms (a hotel)
 -- departments  a shop floor's: the department each storey is, by turns from the first storey over the ground (trade
 --              names, src/engine/procgen/city/trades.cpp); its rooms take the trade (a sales floor furnishes as it)
 -- residential  homes: each `flat` lot is laid out inside as a flat (living room and bedrooms on the glass, hall,
 --              bath and kitchen behind; a studio where that will not walk), and a floor that will not walk is not
 --              opened up: it is laid as flats round the core off its lobby, or as the `residents` floor
 --
--- Keep the programs alike with builtinOfficeProgram(), builtinApartmentProgram(), builtinDepartmentStoreProgram() and
--- builtinDiningProgram() (floor_zones.cpp): they stand
+-- Keep the programs alike with builtinOfficeProgram(), builtinApartmentProgram(), builtinDepartmentStoreProgram(),
+-- builtinDiningProgram() and builtinHotelProgram() (floor_zones.cpp): they stand
 -- where this file is not loaded (procgen without the scripting layer, most tests).
 
 floor_programs = {
@@ -120,6 +123,33 @@ floor_programs = {
       { tag = "bar", kind = "shop", trade = "bar", sites = {"window", "corner"}, share = 1.0, enclosed = true,
         walls = "drywall", area = {20, 1e9}, min_depth = 3.5 },
       { tag = "lounge", kind = "lounge" },
+    },
+  },
+
+  -- A HOTEL'S FLOOR: rooms along the glass off the corridor round the core, each with its own bathroom by its door
+  -- (ensuite), suites at the corners, housekeeping's linen room by the lifts. Its class is the building's style: a
+  -- budget hotel's rooms narrow and no suites, a business hotel's as set here, a luxury one's wide with more suites.
+  hotel = {
+    workplace = false,
+    lots = { window_depth = 6.4, aisle = 1.6, street = 1.8, lot_width = 4.2, interior_lot = 24, min_side = 2.6,
+             min_access = 1.6, min_lot_area = 14 },
+    fill = "hall",
+    shallow = "hall", shallow_depth = 0,
+    zones = {
+      { tag = "linen", kind = "linen_room", sites = {"interior", "window"}, count = 1, near = "lobby", enclosed = true,
+        walls = "drywall", area = {6, 30}, min_depth = 2.0 },
+      { tag = "suite", kind = "hotel_suite", sites = {"corner"}, share = 1.0, enclosed = true, walls = "drywall",
+        area = {28, 1e9}, min_depth = 4.8, ensuite = true },
+      { tag = "window_suite", kind = "hotel_suite", sites = {"window"}, share = 0.0, enclosed = true, walls = "drywall",
+        area = {26, 1e9}, min_depth = 4.8, ensuite = true },
+      { tag = "room", kind = "hotel_room", sites = {"window", "corner"}, share = 1.0, enclosed = true, walls = "drywall",
+        area = {14, 1e9}, min_depth = 4.6, ensuite = true },
+      { tag = "hall", kind = "hall" },
+    },
+    styles = {
+      { name = "budget", weight = 1, set = { lots = { lot_width = 3.6, window_depth = 5.6 }, suite = { share = 0 } } },
+      { name = "business", weight = 2 },
+      { name = "luxury", weight = 1, set = { lots = { lot_width = 5.2, window_depth = 7.2 }, window_suite = { share = 0.25 } } },
     },
   },
 

@@ -396,6 +396,7 @@ bool readFloorPrograms(ScriptVM& vm, FloorProgramBook& out, std::string* err) {
         if (const std::string f = strField(L, pt, "shallow"); !f.empty()) prog.shallow = f;
         prog.shallowDepth = numField(L, pt, "shallow_depth", prog.shallowDepth);
         prog.residential = boolField(L, pt, "residential", false);
+        prog.workplace = boolField(L, pt, "workplace", true);
         if (std::string d; !readDepartments(L, pt, prog.departments, d)) return bad(where + ": unknown department (trade) '" + d + "'");
         lua_getfield(L, pt, "zones");
         if (!lua_istable(L, -1)) return bad(where + ": no zones");
@@ -443,6 +444,7 @@ bool readFloorPrograms(ScriptVM& vm, FloorProgramBook& out, std::string* err) {
                 lua_pop(L, 1);
                 r.enclosed = boolField(L, t, "enclosed", false);
                 r.lifts = boolField(L, t, "lifts", false);
+                r.ensuite = boolField(L, t, "ensuite", false);
                 const std::string walls = strField(L, t, "walls");
                 if (walls.empty() || walls == "facade") r.walls = 2;
                 else if (walls == "glass") r.walls = 1;

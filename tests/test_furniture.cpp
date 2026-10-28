@@ -9,6 +9,7 @@
 #include "../src/engine/procgen/city/core_plan.h"
 #include "../src/engine/procgen/city/shape_grammar.h"
 #include "../src/engine/procgen/city/space_graph.h"
+#include "../src/engine/procgen/city/floor_zones.h"
 #include "../src/engine/procgen/city/architect.h"
 #include "../src/engine/procgen/city/trades.h"
 #include <algorithm>
@@ -1873,6 +1874,62 @@ TEST_CASE(factories_and_warehouses_open_onto_their_floors) {
     CHECK(machines > 50 && racks > 50 && forklifts > 5);
     CHECK(onClearFloor == 0);
     CHECK(upstairsDesks > 0);
+}
+
+// A HOTEL'S FLOORS (building-uses step 5; Glenn, 2026-10-27: "Hotels can have a lobby/front desk, restaurants ...
+// guest rooms, vip suites"): the `hotel` floor program -- rooms along the glass, each with its own bathroom by its
+// door, suites, a linen room; every cell reached from the lifts; the class (budget, business, luxury) the building's.
+TEST_CASE(a_hotel_floor_is_rooms_with_their_own_bathrooms) {
+    UseShippedFurniture shipped;
+    const Real sizes[][2] = {{36, 24}, {48, 34}, {30, 22}};
+    int hotels = 0, rooms = 0, suites = 0, baths = 0, linen = 0, unreached = 0, beds = 0, desks = 0, lowRooms = 0;
+    std::map<std::string, std::pair<int, int>> byClass;   // rooms, floors
+    for (uint32_t seed = 1; seed <= 12; ++seed)
+        for (const auto& sz : sizes) {
+            const Poly2 plan = {{0, 0}, {sz[0], 0}, {sz[0], sz[1]}, {0, sz[1]}};
+            BuildingRecipe rc;
+            if (!architectRecipeByName("hotel", seed, 1.0, sz[1], sz[0] * sz[1], rc)) continue;
+            const BuildingParams& p = rc.params;
+            ++hotels;
+            const SpaceGraph g = spaceGraphOf(plan, p, 0.0);
+            unreached += static_cast<int>(unreachableCells(g).size());
+            int r = 0, f = 0;
+            for (const Cell& c : g.cells) {
+                if (c.kind != CellKind::Room || c.k0 < 1) continue;
+                r += c.use == RoomKind::HotelRoom || c.use == RoomKind::HotelSuite;
+                rooms += c.use == RoomKind::HotelRoom;
+                suites += c.use == RoomKind::HotelSuite;
+                baths += c.use == RoomKind::Bath;
+                linen += c.use == RoomKind::LinenRoom;
+            }
+            for (int k = 1; k < p.floors; ++k) ++f;
+            const ZoneStyle* st = floorStyle(floorProgram("hotel"), static_cast<uint32_t>(p.seed));
+            auto& bc = byClass[st ? st->name : "?"];
+            bc.first += r;
+            bc.second += f;
+            const BuildingMesh in = growInterior(plan, p, 0.0, nullptr, 1, 3);
+            for (const PlacedPiece& pp : in.furniture) {
+                beds += pp.piece == static_cast<uint8_t>(Piece::Bed);
+                desks += pp.piece == static_cast<uint8_t>(Piece::Desk);
+            }
+            for (const Cell& c : g.cells)
+                if (c.kind == CellKind::Room && c.k0 >= 1 && c.k0 <= 2 &&
+                    (c.use == RoomKind::HotelRoom || c.use == RoomKind::HotelSuite)) ++lowRooms;
+        }
+    std::printf("    [hotel] %d hotels: %d rooms, %d suites, %d bathrooms, %d linen rooms, %d unreachable cells; storeys 1-2: "
+                "%d rooms, %d beds, %d desks\n", hotels, rooms, suites, baths, linen, unreached, lowRooms, beds, desks);
+    for (const auto& [k, v] : byClass)
+        std::printf("    [hotel] %-9s %.1f rooms a floor\n", k.c_str(), v.second ? static_cast<double>(v.first) / v.second : 0.0);
+    CHECK(hotels >= 20);
+    CHECK(rooms > 200);
+    CHECK(suites > 0);
+    CHECK(baths >= (rooms + suites) * 9 / 10);   // (nearly every room its own; a wedge's stays whole)
+    CHECK(linen > 0);
+    CHECK(unreached == 0);
+    CHECK(beds >= lowRooms * 9 / 10);   // (a bed in nearly every room)
+    CHECK(byClass.size() == 3);
+    if (byClass.count("budget") && byClass.count("luxury"))
+        CHECK(byClass["budget"].first * byClass["luxury"].second > byClass["luxury"].first * byClass["budget"].second);
 }
 
 // THE HOTEL LOBBY (Glenn, 2026-10-13: "Okay do that"). A hotel's ground floor was shop units round an open middle --

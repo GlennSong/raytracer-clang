@@ -12822,3 +12822,36 @@ ADR-0260; this is the other half.
 **Measured.** Space-graph reachability on island_8_nature: 116 buildings / 491 unreachable cells (492 after
 ADR-0260); no shop, restaurant or bar cell among them. The tower test lays its restaurant floor as 6 restaurants and
 6 bars, every one with its kitchen line or bar run, nothing else but restrooms and the lounge.
+
+## ADR-0262 — A hotel's floors are a floor program: rooms with their own bathrooms, suites, classes
+
+**Context.** Building-uses plan step 5, hotels v1 (Glenn, 2026-10-27: "Hotels can have a lobby/front desk,
+restaurants, a pool, gym, service corridors, guest rooms, vip suites, rooftop bar, outdoor pool, parking lots").
+A hotel's upper floors fell through to the ring planner, every room a studio flat with a kitchenette and a sofa and
+no bathroom. Its ground floor already has the lobby and front desk (ADR-0170) and its bar and cafe units.
+
+**Decision.**
+1. **`hotel`** in `floor_programs.lua` (and `builtinHotelProgram`): rooms along the glass off the corridor, suites at
+   the corners, housekeeping's linen room by the lifts, the rest corridor. `building_uses.lua` already named the
+   recipe's use `hotel`; `roomPlan` now lays any use that names a floor program of its own (a new building type is a
+   program and a line in the uses table).
+2. **Rooms with their own bathroom.** A zone rule's `ensuite`: the door goes to one end of the room's run onto the
+   corridor and a bathroom (up to 2.2 x 2.4 m, a 1.5 x 1.7 shower room at the least) is walled off beside it, its own
+   door onto the short passage, 3 m left for the bed; a room too shallow for that but wide has it across its end. A
+   room it will not fit stays whole.
+3. **Classes are styles.** A style's `set` on the tag `lots` changes how the plate is cut (`floorStyle` picks it for
+   both the cut and the tags): budget (3.6 m rooms, no suites), business (4.2 m, corner suites), luxury (5.2 m, deeper,
+   a quarter of the window rooms suites too). Per building by seed for now; district weighting is step 8.
+4. **A floor that is no workplace** (`workplace = false`): not lit as offices, and its baths furnished as bathrooms
+   (bathtub, toilet, basin), not restrooms.
+5. Room kinds `HotelRoom`, `HotelSuite`, `LinenRoom` with their room programs (the bed between nightstands with the TV
+   across, a desk and armchair at the window, a wardrobe by the door; a suite's sofa, coffee table and table for two;
+   the linen room's shelves). `hotel_lab` shows six hotels' second floors and a lobby.
+
+**Measured.** 36 hotels (three plate sizes, 12 seeds): 3,323 rooms and 814 suites, 3,842 bathrooms (93%), a bed in
+94% of the rooms, every cell reached from the stairs; budget 25.9 rooms a floor, business 22.3, luxury 15.8.
+
+**Consequences.** No lots tag bump (floors are planned at runtime). The ring planner keeps the civic buildings'
+upper floors that reach it; deleting it waits for their own programs. Owed for hotels: the restaurant floor off the
+lobby, gym, pool and meeting rooms (v2), the rooftop bar and resort cells (v3), corridors narrower than the open hall
+a stair-only hotel leaves round its stairs.

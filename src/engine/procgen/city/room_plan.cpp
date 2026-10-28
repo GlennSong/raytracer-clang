@@ -2249,6 +2249,17 @@ RoomPlan roomPlan(const Poly2& planIn, const BuildingParams& params, const CoreP
         open.finish = interiorFinishFor(params);
         return open;
     }
+    // A USE WITH A PROGRAM OF ITS OWN (building_uses.lua: a hotel's rooms): laid as it, round the core or the stair.
+    // (Offices and flats have their own branches below: a block of flats' fallbacks, an office's curtain wall.)
+    if (storey >= 1 && !house && use != "office" && use != "apartments" && hasFloorProgram(use)) {
+        const CorePlan hub = hubFor();
+        if (hub.valid) {
+            const Vec2 entry = core.valid ? core.frame.toWorld({core.length * 0.5, -1.1})
+                             : stairFoot.x < 1e29 ? stairFoot : centroid(stairWell);
+            RoomPlan zf = zonedFloorPlan(planIn, params, hub, inset, storey, core.valid, entry, stairWell, floorProgram(use));
+            if (!zf.rooms.empty()) { zf.finish = interiorFinishFor(params); return zf; }
+        }
+    }
     // AN OFFICE OR APARTMENT FLOOR IS THE ZONED FLOOR (floor_zones.h, #117 item 35): one planner for every plate, deep
     // or shallow, round a core or a stair; the planners below are the other building types' (a house, a walk-up, a
     // campus hall, a hospital, a hall, a hotel's ring). What the zoned floor cannot lay is open floor.

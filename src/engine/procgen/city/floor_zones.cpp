@@ -985,6 +985,47 @@ FloorProgram builtinDiningProgram() {
     return p;
 }
 
+FloorProgram builtinHotelProgram() {
+    FloorProgram p;
+    p.name = "hotel";
+    p.workplace = false;
+    p.zones.windowDepth = 6.4;
+    p.zones.lotWidth = 4.2;
+    p.zones.minAccess = 1.6;
+    p.zones.minLotArea = 14.0;
+    p.fill = "hall";
+    p.shallow = "hall";
+    p.shallowDepth = 0;
+    const uint8_t W = zoneSiteBit(ZoneSite::Window), C = zoneSiteBit(ZoneSite::Corner), I = zoneSiteBit(ZoneSite::Interior);
+    auto rule = [&](const char* tag, RoomKind kind, uint8_t sites) {
+        ZoneRule r;
+        r.tag = tag;
+        r.kind = kind;
+        r.sites = sites;
+        r.walls = 0;
+        p.rules.push_back(r);
+        return &p.rules.back();
+    };
+    ZoneRule* r = rule("linen", RoomKind::LinenRoom, I | W);
+    r->count = 1; r->near = 1; r->enclosed = true; r->minArea = 6; r->maxArea = 30; r->minDepth = 2.0;
+    r = rule("suite", RoomKind::HotelSuite, C);
+    r->share = 1.0; r->enclosed = true; r->minArea = 28; r->minDepth = 4.8; r->ensuite = true;
+    r = rule("window_suite", RoomKind::HotelSuite, W);
+    r->share = 0.0; r->enclosed = true; r->minArea = 26; r->minDepth = 4.8; r->ensuite = true;
+    r = rule("room", RoomKind::HotelRoom, W | C);
+    r->share = 1.0; r->enclosed = true; r->minArea = 14; r->minDepth = 4.6; r->ensuite = true;
+    rule("hall", RoomKind::Hall, W | C | I);
+    ZoneStyle s;
+    s.name = "budget"; s.weight = 1;
+    s.sets = {{"lots", "lot_width", 3.6}, {"lots", "window_depth", 5.6}, {"suite", "share", 0}};
+    p.styles.push_back(s);
+    s = ZoneStyle{}; s.name = "business"; s.weight = 2; p.styles.push_back(s);
+    s = ZoneStyle{}; s.name = "luxury"; s.weight = 1;
+    s.sets = {{"lots", "lot_width", 5.2}, {"lots", "window_depth", 7.2}, {"window_suite", "share", 0.25}};
+    p.styles.push_back(s);
+    return p;
+}
+
 int floorDepartment(const FloorProgram& prog, int storey) {
     if (prog.departments.empty()) return -1;
     const int n = static_cast<int>(prog.departments.size());
@@ -1007,16 +1048,16 @@ FloorProgram builtinResidentsProgram() {
 
 bool hasFloorProgram(const std::string& name) {
     return FloorProgramBook::global().find(name) != nullptr || name == "office" || name == "apartments" || name == "residents" ||
-           name == "department_store" || name == "dining";
+           name == "department_store" || name == "dining" || name == "hotel";
 }
 
 const FloorProgram& floorProgram(const std::string& name) {
     if (const FloorProgram* p = FloorProgramBook::global().find(name)) return *p;
     static const FloorProgram office = builtinOfficeProgram(), apartments = builtinApartmentProgram(),
                               residents = builtinResidentsProgram(), store = builtinDepartmentStoreProgram(),
-                              dining = builtinDiningProgram();
+                              dining = builtinDiningProgram(), hotel = builtinHotelProgram();
     return name == "apartments" ? apartments : name == "residents" ? residents : name == "department_store" ? store
-         : name == "dining" ? dining : office;
+         : name == "dining" ? dining : name == "hotel" ? hotel : office;
 }
 
 namespace {
@@ -1037,19 +1078,24 @@ int ruleIndex(const std::vector<ZoneRule>& rules, const std::string& tag) {
 }
 }  // namespace
 
+const ZoneStyle* floorStyle(const FloorProgram& prog, uint32_t seed) {
+    if (prog.styles.empty()) return nullptr;
+    Real total = 0;
+    for (const ZoneStyle& s : prog.styles) total += std::max(Real(0), s.weight);
+    Real pick = (mix(seed * 2246822519u + 77u) % 100000u) / 100000.0 * total;
+    const ZoneStyle* st = &prog.styles.back();
+    for (const ZoneStyle& s : prog.styles) {
+        if (pick < s.weight) { st = &s; break; }
+        pick -= s.weight;
+    }
+    return st;
+}
+
 ZoneTags tagZones(const FloorPartition& fp, const FloorProgram& progIn, uint32_t seed, bool lifts, int department) {
     ZoneTags out;
     std::vector<ZoneRule> rules = progIn.rules;
     // the building's habit
-    if (!progIn.styles.empty()) {
-        Real total = 0;
-        for (const ZoneStyle& s : progIn.styles) total += std::max(Real(0), s.weight);
-        Real pick = (mix(seed * 2246822519u + 77u) % 100000u) / 100000.0 * total;
-        const ZoneStyle* st = &progIn.styles.back();
-        for (const ZoneStyle& s : progIn.styles) {
-            if (pick < s.weight) { st = &s; break; }
-            pick -= s.weight;
-        }
+    if (const ZoneStyle* st = floorStyle(progIn, seed)) {
         out.style = st->name;
         for (const ZoneStyle::Set& set : st->sets) {
             const int ri = ruleIndex(rules, set.tag);
@@ -1315,6 +1361,68 @@ bool layFlatIn(const FloorZone& Z, const Poly2& frame, const Vec2& door, std::ve
 // its glass (a wedge's largest rectangle is narrow and deep; the flat wants the wide glass for its bedroom); the one
 // that lives best kept. Its rooms and inner walls; false (nothing added) when none walks from the front door: the lot
 // is a studio.
+// A ROOM WITH ITS OWN BATHROOM (a hotel room, a suite): `room` (its zone's polygon and frame) split into the bedroom
+// and a bathroom of up to 2.2 x 2.4 m in the corner of the door's wall away from the door, its own door onto the
+// short passage from the room's. False -- the room stays whole -- where the frame is too small for a bath, a
+// passage and a bed beyond.
+bool layEnsuite(const Room& room, const Vec2& door, std::vector<Room>& rooms, std::vector<RoomWall>& walls) {
+    if (room.frame.size() != 4) return false;
+    // the frame turned so the side nearest the door is its side 2 (u along side 0, v in from it)
+    std::size_t k = 0;
+    Real bd0 = 1e9;
+    for (std::size_t s = 0; s < 4; ++s) {
+        const Real d = distToSegment(door, room.frame[(s + 2) % 4], room.frame[(s + 3) % 4]);
+        if (d < bd0) { bd0 = d; k = s; }
+    }
+    if (bd0 > 0.8) return false;   // (the door is not on the frame's edge: a wedge's)
+    Poly2 f(4);
+    for (std::size_t s = 0; s < 4; ++s) f[s] = room.frame[(s + k) % 4];
+    const Vec2 O = f[0], U = normalize(f[1] - f[0]), N = normalize(f[3] - f[0]);
+    const Real W = (f[1] - f[0]).length(), D = (f[3] - f[0]).length();
+    // the bath: up to 2.2 m along the door's wall beside the door, up to 2.4 m deep (1.5 x 1.7 at the least: a shower
+    // room), leaving 3 m for the bed and its nightstands beyond; a room too shallow for that but wide has it across
+    // its end instead, the full depth of the room
+    const Real du = dot(door - O, U);
+    const bool right = du < W * 0.5;   // the bath at the far end of the door's wall
+    const Real beside = right ? W - (du + kRoomDoorW * 0.5 + 0.15) : du - kRoomDoorW * 0.5 - 0.15;
+    const Real bw = std::min(Real(2.2), beside);
+    Real bd = std::min(Real(2.4), D - 3.0);
+    const bool across = bd < 1.7;   // (the bath across the room's end)
+    if (across) bd = D;
+    if (bw < 1.5 || bd < 1.7 || (across && (W - bw < 3.0 || D > 4.0))) return false;
+    const Real u0 = right ? W - bw : 0, u1 = right ? W : bw, v0 = D - bd;
+    auto P = [&](Real u, Real v) { return O + U * u + N * v; };
+    Room bath;
+    bath.kind = RoomKind::Bath;
+    bath.edge = room.edge;
+    bath.rect = {P(u0, v0), P(u1, v0), P(u1, D), P(u0, D)};
+    ensureCCW(bath.rect);
+    // its frame: side 0 the wall across from its door (the room's side wall), side 2 its door's
+    const Real uIn = right ? u0 : u1, uOut = right ? u1 : u0;
+    bath.frame = {P(uOut, D), P(uOut, v0), P(uIn, v0), P(uIn, D)};
+    ensureCCW(bath.frame);
+    Room bed = room;
+    bed.rect = largestOuter(G::differenceSets(G::fromRing(room.rect), G::fromRing(bath.rect)));
+    if (bed.rect.size() < 3) return false;
+    bed.frame = across ? (right ? Poly2{P(0, 0), P(u0, 0), P(u0, D), P(0, D)} : Poly2{P(u1, 0), P(W, 0), P(W, D), P(u1, D)})
+                       : Poly2{P(0, 0), P(W, 0), P(W, v0), P(0, v0)};
+    ensureCCW(bed.frame);
+    rooms = {bed, bath};
+    walls.clear();
+    if (!across) {   // the bath's back, into the room
+        RoomWall back;
+        back.a = P(u0, v0);
+        back.b = P(u1, v0);
+        walls.push_back(back);
+    }
+    RoomWall side;     // its side onto the passage (or the room), with its door
+    side.a = P(uIn, v0);
+    side.b = P(uIn, D);
+    side.doorAt = across ? 0.75 : 0.5;   // (across the end: its door toward the room's)
+    walls.push_back(side);
+    return true;
+}
+
 bool layFlat(const FloorZone& Z, const Vec2& door, std::vector<Room>& rooms, std::vector<RoomWall>& walls) {
     if (Z.frame.size() != 4) return false;
     std::vector<Poly2> frames = {Z.frame};
@@ -1366,13 +1474,27 @@ static RoomPlan zonedFloorCut(const Poly2& plate, const BuildingParams& params, 
                               int storey, bool lifts, const Vec2& entry, const Poly2& stairWell, const FloorProgram& prog) {
     RoomPlan rp;
     rp.topology = prog.residential ? PlateTopology::Apartments : PlateTopology::Ring;
-    rp.office = !prog.residential;
+    rp.office = !prog.residential && prog.workplace;
     if (storey < 1) return rp;
     Poly2 plan = plate;
     ensureCCW(plan);
-    FloorPartition fp = partitionFloor(plan, core, inset, params, prog.zones, core.valid ? Poly2{} : stairWell);
+    // the building's habit may cut the plate its own way (a budget hotel's narrow rooms)
+    FloorZoneParams zp = prog.zones;
+    if (const ZoneStyle* st = floorStyle(prog, static_cast<uint32_t>(params.seed)))
+        for (const ZoneStyle::Set& set : st->sets) {
+            if (set.tag != "lots") continue;
+            if (set.field == "window_depth") zp.windowDepth = set.value;
+            else if (set.field == "aisle") zp.aisle = set.value;
+            else if (set.field == "street") zp.street = set.value;
+            else if (set.field == "lot_width") zp.lotWidth = set.value;
+            else if (set.field == "interior_lot") zp.interiorLot = set.value;
+            else if (set.field == "min_side") zp.minSide = set.value;
+            else if (set.field == "min_access") zp.minAccess = set.value;
+            else if (set.field == "min_lot_area") zp.minLotArea = set.value;
+        }
+    FloorPartition fp = partitionFloor(plan, core, inset, params, zp, core.valid ? Poly2{} : stairWell);
     if (fp.zones.empty() && core.valid && !prog.residential) {   // a shallow floor: lobby mode (FloorZoneParams)
-        FloorZoneParams lz = prog.zones;
+        FloorZoneParams lz = zp;
         lz.lobbyOnly = true;
         fp = partitionFloor(plan, core, inset, params, lz, Poly2{});
     }
@@ -1555,6 +1677,21 @@ static RoomPlan zonedFloorCut(const Poly2& plate, const BuildingParams& params, 
                 fr = r;
             }
             rm.frame = fr;
+            // A ROOM WITH ITS OWN BATHROOM (a hotel's): its door at one end of its run onto the corridor (the other end
+            // of the run, then the middle, if that will not do), the bathroom carved beside it
+            std::vector<Room> ensRooms;
+            std::vector<RoomWall> ensWalls;
+            bool ensLaid = false;
+            if (R.ensuite && enclosed && best >= kDoorRun && doorEdge < Z.poly.size()) {
+                const Vec2 ea = Z.poly[doorEdge], eb = Z.poly[(doorEdge + 1) % Z.poly.size()];
+                const Real EL = std::max(Real(1e-6), (eb - ea).length()), m = (kRoomDoorW * 0.5 + 0.1) / EL;
+                const Real tLo = doorMid - best / (2 * EL) + m, tHi = doorMid + best / (2 * EL) - m;
+                std::vector<Real> tries;
+                if (tHi > tLo) { tries.push_back(tLo); tries.push_back(tHi); }
+                tries.push_back(doorMid);
+                for (Real t : tries)
+                    if (layEnsuite(rm, ea + (eb - ea) * t, ensRooms, ensWalls)) { doorMid = t; ensLaid = true; break; }
+            }
             if (enclosed && std::getenv("RT_ZONE_DEBUG"))
                 std::fprintf(stderr, "[zones] storey %d try %d %s at (%.2f %.2f): door edge %zu of %zu, run %.2f mid %.2f\n", storey, attempt,
                              cellUseName(R.kind), centroid(Z.poly).x, centroid(Z.poly).y, doorEdge, Z.poly.size(), best, doorMid);
@@ -1588,6 +1725,11 @@ static RoomPlan zonedFloorCut(const Poly2& plate, const BuildingParams& params, 
                     doorCut = true;
             if (!doorCut && std::getenv("RT_ZONE_DEBUG"))
                 std::fprintf(stderr, "[zones] storey %d: a %s's doorway was lost to a shared wall\n", storey, cellUseName(R.kind));
+            if (ensLaid) {
+                rp.rooms.pop_back();
+                for (const Room& r : ensRooms) rp.rooms.push_back(r);
+                for (const RoomWall& w : ensWalls) addWall(rp.walls, w);
+            }
             if (flatLaid) {
                 rp.rooms.pop_back();
                 for (Room& r : flatRooms) { r.edge = rm.edge; rp.rooms.push_back(r); }
