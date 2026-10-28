@@ -1925,6 +1925,16 @@
       { tag = <span class="s">"meeting"</span>, kind = <span class="s">"meeting"</span>, sites = {<span class="s">"interior"</span>, <span class="s">"window"</span>}, per_m2 = <span class="n">320</span>, enclosed = <span class="k">true</span>, walls = <span class="s">"glass"</span>,
         area = {<span class="n">10</span>, <span class="n">45</span>}, min_depth = <span class="n">3.0</span> },</pre>
   </div>
+  <p><b>One planner for offices and homes</b> (ADR-0258, #117 item 35). The older office and apartment planners
+    stood behind the zoned floor as fallbacks, and a census of the island found why they still fired so often: 37% of
+    apartment-tower floors and 20% of office floors were <i>shallow</i>, 2 to 5 m from the glass to the core, where a
+    corridor round the core leaves only slivers. Such a floor is now cut in <b>lobby mode</b>
+    (<code>FloorZoneParams::lobbyOnly</code>): the core keeps clear only its lobby, the strip in front of its lift doors,
+    and the lots take the band round it whole; an office's lots off the lobby are open desk rows, reached through each
+    other. A floor of homes lays two flats wrapped round the core off its lobby (<code>wrapFlatsLayout</code>), and one
+    too small even for that is the <code>residents</code> program's lounge. A block of flats with only a stair is zoned
+    round the stair, as an office building is. Houses, walk-ups, campus buildings, hospitals, halls and hotels keep
+    their own planners: they are other buildings. What the zoned floor cannot lay is open floor.</p>
   <div class="shots">
     <figure class="shot"><img src="img/buildings/office_floor.webp" alt="An office floor: cubicles, desks with monitors, drywall rooms and ceiling light panels">
       <figcaption>A zoned office floor (2026-10-16): enclosed rooms, desk pods and cubicles.</figcaption></figure>
@@ -2113,7 +2123,7 @@
     <li><code>RT_SITE_DEBUG=1</code> prints lots no rectangle fitted; <code>RT_SITE_PLAN=0</code> skips the site plan (a bisect switch).</li>
     <li><code>RT_CELLS_DEBUG=1</code> prints each complex cell as the lot pass grows it.</li>
     <li><code>RT_BLUEPRINTS=&lt;dir&gt;</code> writes a blueprint sheet per building from the level gate.</li>
-    <li><code>RT_FLOOR_PLAN=bands</code> uses the older office floor; <code>RT_NO_OFFICE_FLOORS=1</code>, <code>RT_NO_CIVIC_ROOMS=1</code>, <code>RT_NO_WRAP_FLATS=1</code>, <code>RT_<wbr>FURNITURE_<wbr>BLIND_<wbr>OPENINGS=1</code> are A/B switches for the interior ADRs.</li>
+    <li><code>RT_NO_OFFICE_FLOORS=1</code>, <code>RT_NO_CIVIC_ROOMS=1</code>, <code>RT_<wbr>FURNITURE_<wbr>BLIND_<wbr>OPENINGS=1</code> are A/B switches for the interior ADRs (<code>RT_FLOOR_PLAN=bands</code> and <code>RT_NO_WRAP_FLATS</code> went with the planners they switched back to, ADR-0258).</li>
     <li><code>lot? x z</code> in the running game prints a building's party walls (ADR-0227).</li>
     <li>Any lot-pass change: bump <code>kLotsBuildTag</code> (<code>lots_producer.cpp</code>), or a level keeps reading its cached lots.</li>
   </ul>

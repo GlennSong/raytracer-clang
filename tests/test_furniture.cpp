@@ -1372,11 +1372,12 @@ TEST_CASE(tower_floors_are_furnished_up_their_setbacks) {
 }
 
 // FLATS ROUND THE CORE (Glenn, 2026-10-13: "if you're showing me apartments then we need more walls for the separate
-// apartments and then separate rooms"). A residential crown too slim for apartmentPlan's corridor and bands was the
+// apartments and then separate rooms"). A residential crown too slim for flats off a corridor and bands was the
 // residents' lounge (14 pencil-tower floors in this spread) or a ring of rooms -- named offices behind a glass tower's
-// curtain wall (6). It is two flats off the lift lobby now (room_plan.cpp wrapFlatsPlan), each a hall, a kitchen, a
-// living room, a bedroom and its bath, or a studio. Every residential tower floor here is flats: walkable from the
-// lobby, every one with its kitchen and its bath, and no lounge and no office anywhere.
+// curtain wall (6). It is two flats off the lift lobby now (room_plan.h wrapFlatsLayout, the zoned floor's lobby
+// mode), each a hall, a kitchen, a living room, a bedroom and its bath, or a studio. Every residential tower floor
+// here is flats: walkable from the lobby, every one with its kitchen and its bath, and no lounge and no office
+// anywhere.
 TEST_CASE(slim_residential_crowns_are_flats_round_the_core) {
     const char* recipes[] = {"pencil_tower", "condo_tower"};
     const Real sizes[][2] = {{24, 24}, {30, 30}, {40, 26}, {48, 34}, {36, 20}};
@@ -1415,7 +1416,7 @@ TEST_CASE(slim_residential_crowns_are_flats_round_the_core) {
                                     sp.size(), 2 * ob.half[0], 2 * ob.half[1], core.length, core.depth, (int)rp.topology, (int)rp.rooms[0].kind);
                     }
                     if (rp.topology != PlateTopology::Apartments) continue;
-                    if (halls == 2 && bathRooms == 2) ++wrapped;   // (apartmentPlan's floors carry more than two)
+                    if (halls == 2 && bathRooms == 2) ++wrapped;   // (a corridor floor's flats carry more than two)
                     if (kitchens == 0) ++noKitchen;
                     if (baths == 0) ++noBath;
                     if (!floorIsWalkable(rp, sp, core.frame.toWorld({core.length * 0.5, -1.1}))) ++blocked;

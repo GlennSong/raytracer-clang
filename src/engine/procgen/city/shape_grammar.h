@@ -678,11 +678,15 @@ struct BuildingParams {
     // (room_plan.h, PlateTopology::Apartments); anything else keeps its office ring. Set from the recipe's use.
     bool  residential = false;
     // OFFICES INSIDE (Glenn, 2026-10-13: "offices can have meeting rooms, small kitchens, lounge space, reception desk,
-    // offices and cubes and open floor plans"): a workplace's upper floors are the office floor (room_plan.cpp
-    // officePlan), masonry or glass, core or stair -- not the ring of studios a hotel keeps. RUNTIME ONLY, never in the
-    // lot cache: set from the recipe and its use (architect.h officeUseFor) by the architect and again by the interior
+    // offices and cubes and open floor plans"): a workplace's upper floors are the office floor (the zoned floor,
+    // floor_zones.h), masonry or glass, core or stair -- not the ring of studios a hotel keeps. RUNTIME ONLY, never in
+    // the lot cache: set from the recipe and its use (architect.h officeUseFor) by the architect and again by the interior
     // system from the building record, so an island baked before it still gets it without a re-bake.
     bool  officeUse = false;
+    // A HOUSE (architect.h houseFor): one dwelling, or a row or pair of them -- its floors are the house planner's,
+    // never the zoned floor's flats. RUNTIME ONLY like officeUse: set from the recipe by the architect and the
+    // interior system, never in the lot cache.
+    bool  house = false;
     // A CIVIC BUILDING'S OWN ROOMS (Glenn, the same day): off the campus, a university is a teaching hall (1), a library
     // its reading room and stacks (2), a museum its galleries (4), a school its classrooms (5) -- campusPlan's corridor
     // floor, by these numbers (the campus field's, plus 4 and 5) -- and a hospital its wards (6, hospitalPlan); a

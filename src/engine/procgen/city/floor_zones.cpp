@@ -286,15 +286,26 @@ FloorPartition partitionFloor(const Poly2& plateIn, const CorePlan& core, Real i
     // the field: inside the walls, less the core with its corridor ring and the stair's well
     const G::PolySet IN = G::offsetSet(G::fromRing(plate), -inset);
     G::PolySet K;
+    G::PolySet KW;   // what of K is floor to walk on: the corridor ring with its core, or in lobby mode the lobby alone
     Poly2 coreRing;
     if (core.valid) {
         const Vec2 u = core.frame.u, v = core.frame.v;
         const Vec2 o = core.frame.origin;
-        const Real c = kCorridorRing;
+        const Real c = zp.lobbyOnly ? 0.0 : kCorridorRing;
         coreRing = {o - u * c - v * c, o + u * (core.length + c) - v * c, o + u * (core.length + c) + v * (core.depth + c),
                     o - u * c + v * (core.depth + c)};
         ensureCCW(coreRing);
         K = G::fromRing(coreRing);
+        if (zp.lobbyOnly) {   // the lobby: in front of the lift doors (the core's v = 0 face) out to the glass
+            Poly2 lobby = {o - v * 400.0, o + u * core.length - v * 400.0, o + u * core.length, o};
+            ensureCCW(lobby);
+            KW = G::intersectSets(G::fromRing(lobby), IN);
+            K = G::unionSets(K, KW);
+            for (const G::Polygon2& q : KW) fp.lobbyArea.push_back(q.outer);
+            fp.lobbyMode = true;
+        } else {
+            KW = K;
+        }
         fp.lobby = core.frame.toWorld({core.length * 0.5, -1.1});
     } else {
         fp.lobby = centroid(plate);
@@ -417,7 +428,7 @@ FloorPartition partitionFloor(const Poly2& plateIn, const CorePlan& core, Real i
     // THE COURT: what is left an aisle in from the window lots, less the corridor's long lanes run on to the aisle
     // (the streets), cut like a block's remainder
     G::PolySet I = claimed.empty() ? F : G::differenceSets(F, G::offsetSet(claimed, zp.aisle));
-    if (core.valid && !I.empty()) {
+    if (core.valid && !zp.lobbyOnly && !I.empty()) {   // (lobby mode has no corridor to run on)
         const Vec2 u = core.frame.u, v = core.frame.v, o = core.frame.origin;
         const Real c = kCorridorRing, s = std::min(zp.street, c);
         std::vector<Poly2> lanes;
@@ -450,7 +461,7 @@ FloorPartition partitionFloor(const Poly2& plateIn, const CorePlan& core, Real i
         std::vector<Poly2> outs;
         for (const G::Polygon2& p : pieces) outs.push_back(p.outer);
         if (!outs.empty()) walkSoFar = G::differenceSets(walkSoFar, unionAll(outs));
-        if (!K.empty()) walkSoFar = G::unionSets(walkSoFar, K);
+        if (!KW.empty()) walkSoFar = G::unionSets(walkSoFar, KW);
     }
     auto onWalk = [&](const Poly2& o) {
         return G::setArea(G::intersectSets(G::offsetSet(G::fromRing(o), 0.3), walkSoFar)) > 0.3 * 1.6;
@@ -532,7 +543,46 @@ FloorPartition partitionFloor(const Poly2& plateIn, const CorePlan& core, Real i
     // same lots taken off one at a time leave the true 37 -- on a twisted tower's storey; geom2d owes a look)
     G::PolySet C = F;
     for (const Poly2& r : zr) C = G::differenceSets(C, G::fromRing(r));
-    G::PolySet walkC = K.empty() ? C : G::unionSets(C, K);
+    if (zp.lobbyOnly && !KW.empty() && !C.empty()) {
+        // THE WAY IN, AND ONLY IT: with no corridor round the core, what the lots leave can be a pocket cut off from
+        // the lobby, or one reached only through a slit beside the core -- a door onto it opens onto nowhere. The
+        // floor's circulation is what reaches the lobby at least a doorway wide (C opened by its half-width); a scrap
+        // left by the rounding of its corners stays with it, and a pocket joins the lot it shares the most edge with.
+        constexpr Real kHalfWay = 0.4;
+        const G::PolySet opened = G::offsetSet(G::offsetSet(C, -kHalfWay), kHalfWay);
+        const G::PolySet nearLobby = G::offsetSet(KW, 0.1);
+        G::PolySet reach;
+        for (const G::Polygon2& q : opened)
+            if (G::setArea(G::intersectSets(G::PolySet{q}, nearLobby)) > 0.05) reach.push_back(q);
+        const G::PolySet rest = reach.empty() ? C : G::differenceSets(C, reach);
+        const G::PolySet nearReach = G::offsetSet(reach, 0.05);
+        for (const G::Polygon2& q : rest) {
+            const Real a = ringAreaAbs(q.outer);
+            if (a < 1.0 && G::setArea(G::intersectSets(G::PolySet{q}, nearReach)) > 0.0) {
+                reach = G::unionSets(reach, G::PolySet{q});   // a corner's scrap: still the way
+                continue;
+            }
+            Poly2 pocket = q.outer;
+            ensureCCW(pocket);
+            std::size_t best = fp.zones.size();
+            Real bestGain = 0.3;
+            Poly2 bestPoly;
+            for (std::size_t b = 0; b < fp.zones.size(); ++b) {
+                const G::PolySet un = G::unionSets(G::fromRing(pocket), G::fromRing(fp.zones[b].poly));
+                if (un.size() != 1 || !un.front().holes.empty()) continue;
+                const Real gain = perimeter(pocket) + perimeter(fp.zones[b].poly) - perimeter(un.front().outer);
+                if (gain > bestGain) { bestGain = gain; best = b; bestPoly = un.front().outer; }
+            }
+            if (best >= fp.zones.size()) continue;   // (shut in by the core and the facade alone: dead floor)
+            FloorZone& B = fp.zones[best];
+            const Vec2 ax = B.frame.size() == 4 ? B.frame[1] - B.frame[0] : Vec2(1, 0);
+            ensureCCW(bestPoly);
+            B.poly = bestPoly;
+            B.frame = inscribedRect(B.poly, ax);
+        }
+        C = reach;
+    }
+    G::PolySet walkC = KW.empty() ? C : G::unionSets(C, KW);
     for (const G::Polygon2& p : C) {
         std::vector<Poly2> piece = {p.outer};
         for (const G::Ring& h : p.holes) piece.push_back(h);
@@ -873,10 +923,25 @@ FloorProgram builtinApartmentProgram() {
     return p;
 }
 
+FloorProgram builtinResidentsProgram() {
+    FloorProgram p;
+    p.name = "residents";
+    p.fill = "lounge";
+    p.shallow = "lounge";
+    p.shallowDepth = 0;
+    ZoneRule r;
+    r.tag = "lounge";
+    r.kind = RoomKind::Lounge;
+    r.sites = zoneSiteBit(ZoneSite::Window) | zoneSiteBit(ZoneSite::Corner) | zoneSiteBit(ZoneSite::Interior);
+    p.rules.push_back(r);
+    return p;
+}
+
 const FloorProgram& floorProgram(const std::string& name) {
     if (const FloorProgram* p = FloorProgramBook::global().find(name)) return *p;
-    static const FloorProgram office = builtinOfficeProgram(), apartments = builtinApartmentProgram();
-    return name == "apartments" ? apartments : office;
+    static const FloorProgram office = builtinOfficeProgram(), apartments = builtinApartmentProgram(),
+                              residents = builtinResidentsProgram();
+    return name == "apartments" ? apartments : name == "residents" ? residents : office;
 }
 
 namespace {
@@ -1219,8 +1284,8 @@ bool layFlat(const FloorZone& Z, const Vec2& door, std::vector<Room>& rooms, std
 }
 }  // namespace
 
-RoomPlan zonedFloorPlan(const Poly2& plate, const BuildingParams& params, const CorePlan& core, Real inset,
-                        int storey, bool lifts, const Vec2& entry, const Poly2& stairWell, const FloorProgram& prog) {
+static RoomPlan zonedFloorCut(const Poly2& plate, const BuildingParams& params, const CorePlan& core, Real inset,
+                              int storey, bool lifts, const Vec2& entry, const Poly2& stairWell, const FloorProgram& prog) {
     RoomPlan rp;
     rp.topology = prog.residential ? PlateTopology::Apartments : PlateTopology::Ring;
     rp.office = !prog.residential;
@@ -1228,9 +1293,25 @@ RoomPlan zonedFloorPlan(const Poly2& plate, const BuildingParams& params, const 
     Poly2 plan = plate;
     ensureCCW(plan);
     FloorPartition fp = partitionFloor(plan, core, inset, params, prog.zones, core.valid ? Poly2{} : stairWell);
+    if (fp.zones.empty() && core.valid && !prog.residential) {   // a shallow floor: lobby mode (FloorZoneParams)
+        FloorZoneParams lz = prog.zones;
+        lz.lobbyOnly = true;
+        fp = partitionFloor(plan, core, inset, params, lz, Poly2{});
+    }
     if (fp.zones.empty()) return rp;
     const ZoneTags tags = tagZones(fp, prog, static_cast<uint32_t>(params.seed), lifts);
     std::vector<int> rule = tags.rule;
+    // HOMES: the program's fill (the landing) is part of the corridor -- a landing lot with no edge on circulation (a
+    // notched plate's arm, walled in by the facade and the flats beside it) is no corridor and no room; its floor is
+    // left walled in rather than laid as a hall no door reaches
+    if (prog.residential) {
+        const int fill = ruleIndex(prog.rules, prog.fill);
+        for (std::size_t z = fp.zones.size(); z-- > 0;)
+            if (rule[z] == fill && fp.zones[z].accessLen < kDoorRun) {
+                fp.zones.erase(fp.zones.begin() + static_cast<std::ptrdiff_t>(z));
+                rule.erase(rule.begin() + static_cast<std::ptrdiff_t>(z));
+            }
+    }
 
     // neighbouring OPEN lots of one tag along one chord (or out of one court piece) are one zone when together
     // they are still a rectangle: a run of open plan along the glass, not a desk pod per bay
@@ -1271,7 +1352,9 @@ RoomPlan zonedFloorPlan(const Poly2& plate, const BuildingParams& params, const 
         p.holes.assign(piece.begin() + 1, piece.end());
         circSet.push_back(p);
     }
-    if (core.valid) {
+    if (fp.lobbyMode) {   // no corridor round the core: the lobby is the way in, never the core's own walls
+        for (const Poly2& l : fp.lobbyArea) circSet = G::unionSets(circSet, G::fromRing(l));
+    } else if (core.valid) {
         const Vec2 u = core.frame.u, v = core.frame.v, o = core.frame.origin;
         const Real c = kCorridorRing;
         Poly2 ring = {o - u * c - v * c, o + u * (core.length + c) - v * c,
@@ -1284,18 +1367,24 @@ RoomPlan zonedFloorPlan(const Poly2& plate, const BuildingParams& params, const 
     const RoomKind fillKind = fillRule >= 0 ? prog.rules[static_cast<std::size_t>(fillRule)].kind : RoomKind::OpenPlan;
 
     // three tries: as tagged; the enclosed rooms whose only way in is through another room opened up; no walls (not
-    // in homes: a floor of flats with no walls is no floor of flats, and the planner's older floors take it)
-    bool walked = false;
+    // in homes: a floor of flats with no walls is no floor of flats -- zonedFloorPlan lays it another way)
+    // the walk goes round the core, never through it (its shafts are no floor; the stair is inside it): with a corridor
+    // round the core that never mattered, but a lobby-mode floor's lots stand against it
+    const Poly2 solid = core.valid ? core.rect() : stairWell;
+    bool walked = false, pruned = false;
     int flats = 0, studios = 0;
+    std::vector<std::size_t> roomZone;   // the zone each room was laid from
     for (int attempt = 0; attempt < (prog.residential ? 2 : 3); ++attempt) {
         flats = studios = 0;
         rp.rooms.clear();
         rp.walls.clear();
+        roomZone.clear();
         std::vector<Poly2> open;
         for (std::size_t z = 0; z < fp.zones.size(); ++z)
             if (!prog.rules[static_cast<std::size_t>(rule[z])].enclosed || attempt == 2) open.push_back(fp.zones[z].poly);
         const G::PreparedSet walk(open.empty() ? circSet : G::unionSets(circSet, unionAll(open)));
         for (std::size_t z = 0; z < fp.zones.size(); ++z) {
+            roomZone.resize(rp.rooms.size(), z ? z - 1 : 0);   // (the rooms the zone before laid)
             FloorZone& Z = fp.zones[z];
             const ZoneRule& R = prog.rules[static_cast<std::size_t>(rule[z])];
             Room rm;
@@ -1395,7 +1484,35 @@ RoomPlan zonedFloorPlan(const Poly2& plate, const BuildingParams& params, const 
                 ++studios;
             }
         }
-        if (floorIsWalkable(rp, plan, entry, stairWell)) { walked = true; break; }
+        roomZone.resize(rp.rooms.size(), fp.zones.empty() ? 0 : fp.zones.size() - 1);
+        if (floorIsWalkable(rp, plan, entry, solid)) { walked = true; break; }
+        // HOMES: a landing or storage lot the flats round it have cut off (a notched plate's arm) is no room anyone
+        // needs to reach -- drop it (its floor is left walled in) and lay the floor again, once. A flat cut off stays
+        // a failure.
+        if (prog.residential && !pruned) {
+            std::vector<std::size_t> un;
+            floorIsWalkable(rp, plan, entry, solid, &un);
+            std::vector<char> drop(fp.zones.size(), 0);
+            bool onlyLeftovers = !un.empty();
+            for (std::size_t k : un) {
+                const std::size_t zi = k < roomZone.size() ? roomZone[k] : fp.zones.size();
+                if (zi >= fp.zones.size() || prog.rules[static_cast<std::size_t>(rule[zi])].kind == RoomKind::Flat) {
+                    onlyLeftovers = false;
+                    break;
+                }
+                drop[zi] = 1;
+            }
+            if (onlyLeftovers) {
+                for (std::size_t z = fp.zones.size(); z-- > 0;)
+                    if (drop[z]) {
+                        fp.zones.erase(fp.zones.begin() + static_cast<std::ptrdiff_t>(z));
+                        rule.erase(rule.begin() + static_cast<std::ptrdiff_t>(z));
+                    }
+                pruned = true;
+                attempt = -1;   // (the loop's ++ starts it over at the first try)
+                continue;
+            }
+        }
         if (std::getenv("RT_ZONE_DEBUG"))
             std::fprintf(stderr, "[zones] storey %d: try %d not walkable (%zu rooms, %zu walls)\n", storey, attempt,
                          rp.rooms.size(), rp.walls.size());
@@ -1412,12 +1529,33 @@ RoomPlan zonedFloorPlan(const Poly2& plate, const BuildingParams& params, const 
         std::fprintf(stderr, "\n");
         if (prog.residential) std::fprintf(stderr, "[zones] storey %d: %d flats, %d studios, walked %d\n", storey, flats, studios, walked ? 1 : 0);
     }
-    // (a floor of homes with no flat on it -- every lot too small or shut off -- is left to the older floors too)
+    // (a floor of homes with no flat on it -- every lot too small or shut off -- is laid another way too)
     if (prog.residential && (!walked || flats + studios == 0) && !std::getenv("RT_ZONE_KEEP_FAILED")) {
         RoomPlan none;
         none.topology = rp.topology;
         none.office = false;
         return none;
+    }
+    return rp;
+}
+
+RoomPlan zonedFloorPlan(const Poly2& plate, const BuildingParams& params, const CorePlan& core, Real inset,
+                        int storey, bool lifts, const Vec2& entry, const Poly2& stairWell, const FloorProgram& prog) {
+    RoomPlan rp = zonedFloorCut(plate, params, core, inset, storey, lifts, entry, stairWell, prog);
+    // A SHALLOW FLOOR OF HOMES (lobby mode, #117 item 35): too shallow for flats off a corridor round the core, the
+    // lifts open onto a lobby and two flats wrap the rest of the core (room_plan.h wrapFlatsLayout). (An office floor
+    // takes lobby mode inside the cut: its lots off the lobby are open zones, reached through each other.)
+    if (prog.residential && rp.rooms.empty() && core.valid && storey >= 1) {
+        RoomPlan wf = wrapFlatsLayout(plate, core, inset, storey);
+        if (!wf.rooms.empty() && floorIsWalkable(wf, plate, entry, core.rect())) return wf;
+        // ...and a floor too small even for that (a mid-rise's lift core leaving 2-3 m round it) is the RESIDENTS'
+        // FLOOR: the `residents` program's lounge round the core, walked from the lifts -- never an empty floor
+        RoomPlan lounge = zonedFloorCut(plate, params, core, inset, storey, lifts, entry, stairWell, floorProgram("residents"));
+        if (!lounge.rooms.empty()) {
+            lounge.topology = PlateTopology::Apartments;
+            lounge.office = false;   // homes: no office lighting
+            return lounge;
+        }
     }
     return rp;
 }

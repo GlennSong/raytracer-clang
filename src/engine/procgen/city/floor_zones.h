@@ -52,6 +52,11 @@ struct FloorZoneParams {
     Real minAccess = 0;       // a window lot with less than this onto circulation joins its neighbour along the glass
                               // (a flat needs its hall and bath on the corridor: a tight curve's wedges pair up)
     Real minLotArea = 0;      // ...and so does one smaller than this (m2: no flat in a leftover bay)
+    // LOBBY MODE (a SHALLOW floor, a few metres from the glass to the core, #117 item 35): no corridor round the core,
+    // which would leave the lots slivers -- the core keeps clear only its LOBBY, the strip in front of its lift doors
+    // out to the glass. The lots take the band round the core whole; those off the lobby are reached through the open
+    // zones beside them. zonedFloorPlan cuts this way when the corridor ring leaves no lots.
+    bool lobbyOnly = false;
 };
 
 struct FloorZone {
@@ -77,6 +82,8 @@ struct FloorPartition {
     // what no zone covers: the corridor ring, the streets, the aisle -- each piece its outline then its holes (the
     // zones it rings)
     std::vector<std::vector<Poly2>> circulation;
+    bool lobbyMode = false;  // cut in lobby mode (FloorZoneParams::lobbyOnly)...
+    std::vector<Poly2> lobbyArea;   // ...and its lobby, the floor's way in (the core's own walls are not)
 };
 
 // Cut a storey plate (CCW world XZ, the facade's outside line) round `core` (valid: the core; else none -- a
@@ -120,8 +127,8 @@ struct FloorProgram {
     Real shallowDepth = 3.2;
     // HOMES (an apartment floor): its `flat` lots are laid out inside as flats -- living room and bedrooms on the
     // glass, the hall, bath and kitchen behind (room_plan.h layoutApartment), a studio where that will not walk; the
-    // floor is no workplace (no office lighting), and one that will not walk is not opened up but left to the planner's
-    // older floors.
+    // floor is no workplace (no office lighting), and one that will not walk is not opened up but laid another way
+    // (zonedFloorPlan).
     bool residential = false;
     std::vector<ZoneRule> rules;   // `fill` and `shallow` are rules too (looked up by tag; their quotas unused)
     std::vector<ZoneStyle> styles;
@@ -156,8 +163,11 @@ struct ZoneTags {
 ZoneTags tagZones(const FloorPartition& fp, const FloorProgram& prog, uint32_t seed, bool lifts);
 
 // THE FLOOR: partition, tag, walls and doors, walked from `entry` (the lift lobby, the stair's foot) before it is
-// shipped -- an enclosed room it cannot reach is opened up, and a floor that still fails is left open. Empty when
-// the plate leaves no lots.
+// shipped -- an enclosed room it cannot reach is opened up, and a floor that still fails is left open. The ONE planner
+// of an office or apartment floor (#117 item 35): a plate too shallow for a corridor round its core is cut in lobby
+// mode (FloorZoneParams::lobbyOnly); a floor of homes that lays no flat that way is two flats wrapped round the core
+// off its lobby (room_plan.h wrapFlatsLayout), else the `residents` program's lounge. Empty when the plate leaves no
+// lots at all.
 RoomPlan zonedFloorPlan(const Poly2& plate, const BuildingParams& params, const CorePlan& core, Real inset,
                         int storey, bool lifts, const Vec2& entry, const Poly2& stairWell, const FloorProgram& prog);
 

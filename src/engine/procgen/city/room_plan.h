@@ -214,8 +214,13 @@ RoomPlan transferLoungePlan(const Poly2& storeyPlan, const BuildingParams& param
 void layoutApartment(RoomPlan& rp, std::size_t e, const std::function<Vec2(Real, Real)>& P, Real x0, Real x1,
                      Real vIn, Real vFront, Real D, Real xd, bool partyWallRight, bool frontWall = true);
 
+// FLATS ROUND THE CORE off its lobby (no corridor): the zoned floor's apartment layout for a plate too shallow for a
+// corridor round the core (floor_zones.h lobby mode). A rectangular plate square to the core; empty when it does not fit.
+RoomPlan wrapFlatsLayout(const Poly2& plate, const CorePlan& core, Real inset, int storey);
+
+// `unreached` (optional): every room it could not reach, by index, rather than stopping at the first.
 bool floorIsWalkable(const RoomPlan& rp, const Poly2& storeyPlan, const Vec2& entry,
-                     const Poly2& stairWell = Poly2{});
+                     const Poly2& stairWell = Poly2{}, std::vector<std::size_t>* unreached = nullptr);
 
 // The geometry: drywall partitions and fronts (`drywall`), glass fronts
 // (`glass`, the GlassClear part), doorways cut with their reveals, every

@@ -292,6 +292,7 @@ void BuildingInteriorSystem::build(World& world, PhysicsWorld* phys,
     BuildingParams params = r.params;
     params.officeUse = officeUseFor(r.recipe, r.type, params.residential);
     params.civicRooms = civicRoomsFor(r.recipe);
+    params.house = houseFor(r.recipe);
     BuildingMesh bm = growInterior(r.plan, params, r.baseY, &collider, k0, k1);
     const double growMs = msSince(t0);
 

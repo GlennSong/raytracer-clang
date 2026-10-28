@@ -20,8 +20,8 @@
 --   min_floor  only on a floor of at least this many m2 (a small floor keeps its lots for desks)
 -- styles     a building's habit, picked per building by weight: `set` overrides zones' numbers by tag.
 -- residential  homes: each `flat` lot is laid out inside as a flat (living room and bedrooms on the glass, hall,
---              bath and kitchen behind; a studio where that will not walk), and a floor that will not walk is left to
---              the older apartment floors rather than opened up
+--              bath and kitchen behind; a studio where that will not walk), and a floor that will not walk is not
+--              opened up: it is laid as flats round the core off its lobby, or as the `residents` floor
 --
 -- Keep the programs alike with builtinOfficeProgram() and builtinApartmentProgram() (floor_zones.cpp): they stand
 -- where this file is not loaded (procgen without the scripting layer, most tests).
@@ -77,6 +77,16 @@ floor_programs = {
         area = {4, 40} },
       -- what is left (a storage room with no door, a lot shut off): landing, part of the corridor
       { tag = "landing", kind = "hall", walls = "drywall" },
+    },
+  },
+
+  -- A RESIDENTS' FLOOR: an apartment tower's floor too small for flats even round the core off its lobby (a mid-rise
+  -- whose lift core leaves 2-3 m of floor) is the residents' lounge, open round the core, reached from the lifts
+  residents = {
+    fill = "lounge",
+    shallow = "lounge", shallow_depth = 0,
+    zones = {
+      { tag = "lounge", kind = "lounge" },
     },
   },
 }

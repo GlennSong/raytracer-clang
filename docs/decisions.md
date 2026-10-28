@@ -12651,3 +12651,62 @@ for Glenn.
 
 **Alternatives.** Keeping droplets as a quick path for levels that don't need realism (like the two tree systems):
 Glenn chose one system. Leaving the small labs on droplets: then the code stays and item 39 isn't done.
+
+## ADR-0258 — One floor planner for offices and homes: the zoned floor, with a lobby mode for shallow plates
+
+**Context.** The duplicate-systems sweep (#117, wave 3, item 35, the floor planners first). An office floor had four
+planners and an apartment floor three: the zoned floor (ADR on floor_zones, 2026-10-16) tried first, and behind it the
+older ones as fallbacks -- `officePlan` (rectangles only), `apartmentPlan`, `wrapFlatsPlan`, the ring relabelled as
+studios, the desk row as a residents' lounge. Glenn: keep different building types separate ("their layouts are
+different"), merge the fallbacks. A temporary census (every enterable building's floors planned, the planner that laid
+each counted) measured how often the fallbacks fired. On island_8_nature's upper floors: apartment towers 3,153 zoned,
+**1,846 (37%) fallen back**; offices 6,963 zoned, **~1,690 (20%)**; 762 floors of stair-only blocks of flats never
+tried the zoned floor. Nearly every failure was one shape: a **shallow** plate, 2 to 5 m from the glass to the core.
+The zoned floor keeps a 2.2 m corridor round the core, which leaves window lots under 2 m deep, and drops them.
+
+**Decision.**
+1. **Lobby mode** (`FloorZoneParams::lobbyOnly`): when the corridor cut leaves no lots, the core keeps clear only its
+   lobby (the strip in front of its lift doors out to the glass) and the lots take the band round it whole. The lobby
+   is the floor's way in; the core's own walls are not (doors and access are measured onto the lobby alone). An
+   office's lots off the lobby become open zones (desk rows, open plan), reached through each other; enclosed rooms
+   are those with a door onto the lobby or an open zone. Only floor that reaches the lobby at least a doorway wide is
+   circulation: a pocket the lots cut off (or reach through a slit beside the core) joins the lot beside it, so no
+   door opens onto nowhere. And every zoned floor's walk now goes round the core, not through it: the grid walk
+   (`floorIsWalkable`) knows only the planner's walls, so with lots against the core it walked through the shafts.
+2. **Homes.** A floor of homes the corridor cut cannot lay is two flats wrapped round the core off its lobby: the
+   wrap-flats layout, now `wrapFlatsLayout`, called by `zonedFloorPlan` rather than standing as a planner of its own.
+   One too small even for that (a mid-rise whose lift core leaves 2-3 m round it) is the new `residents` program's
+   lounge, open round the core. A landing lot with no edge on circulation (a notched plate's arm) is dropped before the
+   floor is laid, and a landing or storage room the flats still cut off is dropped and the floor laid again, once
+   (`floorIsWalkable` can now list the rooms it could not reach).
+3. **A block of flats with only a stair** is zoned round the stair's well, as an office building already was.
+   `BuildingParams::house` (runtime only, like `officeUse`; `architect.h houseFor`) keeps a house's floors off it.
+4. **Deleted:** `officePlan`, `apartmentPlan`, the ring and desk-row fallbacks for offices and homes, and the A/B
+   switches `RT_FLOOR_PLAN=bands` and `RT_NO_WRAP_FLATS`. What the zoned floor cannot lay is open floor. The ring
+   (hotels, civic floors), the desk row (behind it), houses, walk-ups, campus buildings, hospitals and halls keep their
+   planners: other building types.
+
+**Measured** (the census, upper floors, then and now). island_8_nature: apartment towers 3,153 zoned -> 3,712 by the
+corridor, 1,130 in lobby mode, 631 residents' floors, 28 open; offices 6,963 -> 6,963 + 1,466 in lobby mode, 142 open;
+stair-only flats 762 ring -> all zoned. metro_v2_test and river_town alike. The 28 + 142 open floors were already
+empty or unreachable (a top tier with no stair) bar 12. **Reachability, by the space graph** (#105's gate: every
+cell reached from the street through its portals), every enterable building on island_8_nature, old planners against
+new: 136 buildings with 1,270 unreachable cells -> 125 with 605 (802 unreachable offices -> 67). 22 buildings pass
+that failed; 11 fail that passed -- a department store's floors in two glass towers (store floors turn every room,
+open zones too, into shops), desk-row chains on two lobby-mode office floors, stray halls and baths in seven small
+blocks of flats -- the next fix. The space graph's gate over every recipe passes (456 of 456). Census 10 s (metro) to
+6 min (the island).
+
+**Consequences.** One planner for an office or apartment floor, so the next change to doors, walls or furniture lands
+once. Floors are planned when the player comes near a building, not baked: no lots tag bump, no re-bake.
+`BuildingParams::house` fits in existing padding, so the lot cache's layout is unchanged. Two things the census showed
+that are massing's, not the planner's: about 500 floors of small mid-rises (mixed_use, brick_shop, loft_block) have a
+lift core that leaves 2-3 m of floor round it -- too big a core for the building, so they are residents' lounges; and
+97 office floors are single-storey top tiers with no stair at all. The reception on a lobby-mode office floor can land
+across the core from the lifts (the lots by the lobby are corner lots, which reception does not take). The grid walk
+and the space graph still disagree where a slit under 0.8 m joins two spaces: the planner's checks should share the
+graph's rule. Still owed from item 35: the massing paths, scope ops, FaceRect, party walls, malls and the two grow entry points.
+
+**Alternatives.** Keeping the fallbacks as a safety net: they hid the zoned floor's failures (a shallow plate's floor
+came out an older style storey to storey) and every change landed four times. Folding houses, walk-ups and the civic
+planners in too: Glenn kept them separate.
