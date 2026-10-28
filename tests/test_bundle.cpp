@@ -571,28 +571,28 @@ TEST_CASE(a_rebake_shares_its_unchanged_sections_with_the_last_one) {
 }
 
 TEST_CASE(cache_files_are_pruned_once_every_level_that_used_them_has_moved_on) {
-    // Two loads, a second apart (the record has second resolution). Level one moves to a new erosion file and a new
+    // Two loads, a second apart (the record has second resolution). Level one moves to a new weather file and a new
     // pyramid; level two still uses the pyramid the two shared. A file nobody recorded is kept, a write in flight is
     // not looked at.
     const std::string dir = tempDir("cacheuse");
     auto touch = [&](const std::string& name) { std::ofstream f(dir + "/" + name); f << "x"; return dir + "/" + name; };
-    const std::string erosionOld = touch("a.bin"), erosionNew = touch("b.bin"), shared = touch("s.pyramid"),
+    const std::string weatherOld = touch("a.bin"), weatherNew = touch("b.bin"), shared = touch("s.pyramid"),
                       pyramidNew = touch("p.pyramid"), unowned = touch("u.bin"), inFlight = touch("c.bin.tmp");
     const std::string one = touch("one.json"), two = touch("two.json"), gone = dir + "/gone.json";
     const std::string orphan = touch("o.pyramid");
     setCacheLevel(gone);
     noteCacheUse(orphan, "pyramid");    // only a level that no longer exists used it
     setCacheLevel(one);
-    noteCacheUse(erosionOld, "erosion");
+    noteCacheUse(weatherOld, "weather");
     noteCacheUse(shared, "pyramid");
     setCacheLevel(two);
     noteCacheUse(shared, "pyramid");
     std::this_thread::sleep_for(std::chrono::milliseconds(1100));
     setCacheLevel(one);
-    noteCacheUse(erosionNew, "erosion");
+    noteCacheUse(weatherNew, "weather");
     noteCacheUse(pyramidNew, "pyramid");
     setCacheLevel("");
-    noteCacheUse(unowned, "erosion");   // no load under way: nothing recorded
+    noteCacheUse(unowned, "weather");   // no load under way: nothing recorded
 
     CacheUse use;
     CHECK(readCacheUse(shared, use) && use.kind == "pyramid" && use.levels.size() == 2);
@@ -603,19 +603,19 @@ TEST_CASE(cache_files_are_pruned_once_every_level_that_used_them_has_moved_on) {
         return -1;   // not listed
     };
     const CachePruneReport dry = pruneCacheFiles({dir}, false);
-    CHECK(staleOf(dry, erosionOld) == 1);
-    CHECK(staleOf(dry, erosionNew) == 0);
+    CHECK(staleOf(dry, weatherOld) == 1);
+    CHECK(staleOf(dry, weatherNew) == 0);
     CHECK(staleOf(dry, shared) == 0);       // level two still uses it
     CHECK(staleOf(dry, pyramidNew) == 0);
     CHECK(staleOf(dry, unowned) == 0);
     CHECK(staleOf(dry, inFlight) == -1);
     CHECK(staleOf(dry, orphan) == 1);
-    CHECK(dry.removed == 0 && fs::exists(erosionOld));
+    CHECK(dry.removed == 0 && fs::exists(weatherOld));
 
     const CachePruneReport done = pruneCacheFiles({dir}, true);
     CHECK(done.removed == 2);
-    CHECK(!fs::exists(erosionOld) && !fs::exists(erosionOld + ".uses"));
-    CHECK(fs::exists(erosionNew) && fs::exists(shared) && fs::exists(unowned) && fs::exists(inFlight));
+    CHECK(!fs::exists(weatherOld) && !fs::exists(weatherOld + ".uses"));
+    CHECK(fs::exists(weatherNew) && fs::exists(shared) && fs::exists(unowned) && fs::exists(inFlight));
     std::error_code ec;
     fs::remove_all(dir, ec);
 }

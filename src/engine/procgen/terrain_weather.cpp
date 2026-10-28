@@ -295,12 +295,10 @@ WeatherParams weatherFromJson(const nlohmann::json& w, const nlohmann::json& tj)
     const nlohmann::json wa = w.value("water", nlohmann::json::object());
     ErosionParams& e = p.water;
     e.vulkan = true;
-    e.droplets = 0;
     // the GPU water / breach / thermal stage is OPT-IN (ADR-0122: the backends agree only statistically, so
     // a default must not move a level's ground): 0 unless the level's "water" block asks
     e.thermalIterations = wa.value("thermal", 0);
     e.talus = tj.value("erodeTalus", e.talus);
-    e.seed = tj.value("seed", 0u) + 1234u;
     e.waterSteps = wa.value("steps", 0);
     e.breachDepth = wa.value("breach", 0.0f);
     e.waterDeposit = wa.value("deposit", 0.15f);
@@ -507,7 +505,7 @@ Heightmap weatherTerrain(const TerrainParams& tpIn, uint32_t seed, const Weather
     // 3. BREACH + WATER + THERMAL (ADR-0123/0124), on the GPU
     ErosionParams e = w.water;
     e.seaLevel = sea;
-    if (e.waterSteps <= 0 && e.droplets <= 0 && e.thermalIterations <= 0 && e.breachDepth <= 0.0f) return hm;
+    if (e.waterSteps <= 0 && e.thermalIterations <= 0 && e.breachDepth <= 0.0f) return hm;
     t0 = std::chrono::steady_clock::now();
     erode(hm, e);
     LOG_INFO << "[weather] water " << e.waterSteps << " steps on " << hm.n << "^2 (" << erosionBackendTag(&e) << ") in "

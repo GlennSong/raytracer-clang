@@ -39,7 +39,7 @@
           "hotspots": 5,
           "kind": "metro",
           "radius": 320,
-          "sea_level": -5.0,
+          "sea_level": -20.0,
           "seed": 5,
           "street_width": 7
         },
@@ -96,11 +96,18 @@
       "worldHalf": 600
     },
     "erode": true,
-    "erodeDroplets": 300000,
-    "erodeRadius": 4,
-    "erodeRes": 600,
-    "erodeTalus": 1.0,
-    "erodeThermal": 14,
+    "weather": {
+      "res": 512,
+      "grow": {"res": 128, "iterations": 250, "blur": 40},
+      "water": {"steps": 0, "breach": 0, "thermal": 0},
+      "roughness": 0.6,
+      "shapeKeep": 1.0,
+      "massifs": 0.6,
+      "shapeScale": 90,
+      "massifScale": 150,
+      "peaks": {"height": 60, "spacing": 200, "uplift": 1.0},
+      "refine": {"detail": 40, "roughness": 0.8, "wavelength": 8, "slopeDamp": 0.3, "incise": 0.012, "iterations": 20, "stochasticFrom": 512}
+    },
     "heightScale": 22,
     "material": {
       "albedo": [
@@ -157,6 +164,6 @@
     "opacity": 0.82,
     "region": 600,
     "roughness": 0.04,
-    "seaLevel": -5.0
+    "seaLevel": -20.0
   }
 }

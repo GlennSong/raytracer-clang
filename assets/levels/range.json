@@ -23,9 +23,20 @@
       "seed": 5
     },
     "erode": true,
-    "erodeDroplets": 90000,
-    "erodeThermal": 12,
-    "erodeTalus": 1.0,
+    "weather": {
+      "res": 256,
+      "grow": {"res": 128, "iterations": 250, "blur": 20},
+      "water": {"steps": 0, "breach": 0, "thermal": 0},
+      "roughness": 0.6,
+      "shapeKeep": 1.0,
+      "massifs": 0.6,
+      "shapeScale": 90,
+      "massifScale": 150,
+      "plainHeight": 3,
+      "reliefRamp": 30,
+      "peaks": {"height": 40, "spacing": 120, "uplift": 1.0},
+      "refine": {"detail": 40, "roughness": 0.8, "wavelength": 8, "slopeDamp": 0.3, "incise": 0.012, "iterations": 20, "stochasticFrom": 256}
+    },
     "material": { "albedo": [1.0, 1.0, 1.0], "roughness": 1.0 }
   },
   "player": {

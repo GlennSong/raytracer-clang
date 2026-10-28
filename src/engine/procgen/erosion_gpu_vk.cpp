@@ -1,12 +1,11 @@
-// GPU erosion bake on Vulkan (ADR-0122): the Linux/Windows twin of erosion_gpu.mm. Same seam
-// (erodeGpuAvailable / erodeGpu, erosion_gpu.h), same kernels (shaders/vulkan/erosion.comp, one SPIR-V
-// module per kernel under RT_VULKAN_SHADER_DIR), same dispatch order. Self-contained: its own headless
-// instance, device and compute queue -- a load-time content bake has no renderer in reach.
+// GPU erosion bake on Vulkan (ADR-0122): the weather bake's opt-in breach + water + thermal stage behind
+// the erosion_gpu.h seam (erodeGpuAvailable / erodeGpu). Kernels: shaders/vulkan/erosion.comp (thermal) and
+// erosion_water.comp, one SPIR-V module per kernel under RT_VULKAN_SHADER_DIR. Self-contained: its own
+// headless instance, device and compute queue -- a load-time content bake has no renderer in reach.
 //
-// Buffers are device-local (the droplet kernel reads the heightmap thousands of times per droplet);
-// the heightmap goes up and comes back through one host-visible staging buffer. Every dispatch is
-// recorded into ONE command buffer with a compute->compute barrier between them, so dispatch order is
-// data order -- the determinism contract of the Metal port.
+// Buffers are device-local; the heightmap goes up and comes back through one host-visible staging buffer.
+// Dispatches are recorded with a compute->compute barrier between them, so dispatch order is data order --
+// the determinism contract.
 #include "erosion_gpu.h"
 
 #if defined(RT_HAVE_VULKAN_EROSION)
@@ -28,34 +27,19 @@
 namespace engine {
 namespace {
 
-// Mirrors the push_constant block in erosion.comp (and the Metal uniforms): 15 four-byte scalars.
+// Mirrors the push_constant block in erosion.comp: three four-byte scalars.
 struct ErosionPushVk {
-    int32_t  n;
-    int32_t  batchStart;
-    int32_t  batchCount;
-    int32_t  maxLifetime;
-    int32_t  brushCount;
-    uint32_t seed;
-    float    inertia;
-    float    sedimentCapacity;
-    float    depositSpeed;
-    float    erodeSpeed;
-    float    evaporation;
-    float    gravity;
-    float    minSlope;
-    float    talus;
-    float    thermalRate;
+    int32_t n;
+    float   talus;
+    float   thermalRate;
 };
-static_assert(sizeof(ErosionPushVk) == 15 * 4, "push block must match erosion.comp");
+static_assert(sizeof(ErosionPushVk) == 3 * 4, "push block must match erosion.comp");
 
-int dropletBatchSize(int n) { return std::clamp(n * n / 64, 1024, 8192); }   // as erosion_gpu.mm
-
-enum Kernel { kDroplets, kClamp, kApplyApplied, kThermal, kApply, kWFlux, kWWater, kWErode, kWTransport, kKernelCount };
+enum Kernel { kThermal, kApply, kWFlux, kWWater, kWErode, kWTransport, kKernelCount };
 constexpr int kFirstWater = kWFlux;
-const char* kKernelFile[kKernelCount] = {"erosion_droplets.comp.spv", "erosion_clamp.comp.spv",
-                                         "erosion_apply_applied.comp.spv", "erosion_thermal.comp.spv",
-                                         "erosion_apply.comp.spv", "erosion_w_flux.comp.spv", "erosion_w_water.comp.spv",
-                                         "erosion_w_erode.comp.spv", "erosion_w_transport.comp.spv"};
+constexpr uint32_t kThermalBindings = 2;   // height, delta
+const char* kKernelFile[kKernelCount] = {"erosion_thermal.comp.spv", "erosion_apply.comp.spv", "erosion_w_flux.comp.spv",
+                                         "erosion_w_water.comp.spv", "erosion_w_erode.comp.spv", "erosion_w_transport.comp.spv"};
 
 // Mirrors the push block of erosion_water.comp (ADR-0123).
 struct WaterPushVk {
@@ -141,15 +125,15 @@ bool ensureReady() {
     if (vkCreateDevice(g.phys, &dci, nullptr, &g.device) != VK_SUCCESS) return false;
     vkGetDeviceQueue(g.device, g.queueFamily, 0, &g.queue);
 
-    VkDescriptorSetLayoutBinding b[5]{};
-    for (uint32_t i = 0; i < 5; ++i) {
+    VkDescriptorSetLayoutBinding b[kThermalBindings]{};
+    for (uint32_t i = 0; i < kThermalBindings; ++i) {
         b[i].binding = i;
         b[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
         b[i].descriptorCount = 1;
         b[i].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
     }
     VkDescriptorSetLayoutCreateInfo lci{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-    lci.bindingCount = 5;
+    lci.bindingCount = kThermalBindings;
     lci.pBindings = b;
     if (vkCreateDescriptorSetLayout(g.device, &lci, nullptr, &g.setLayout) != VK_SUCCESS) return false;
     VkPushConstantRange pcr{VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(ErosionPushVk)};
@@ -202,7 +186,7 @@ bool ensureReady() {
     cpi.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
     cpi.queueFamilyIndex = g.queueFamily;
     if (vkCreateCommandPool(g.device, &cpi, nullptr, &g.cmdPool) != VK_SUCCESS) return false;
-    VkDescriptorPoolSize ps{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 5 + kWaterBindings};
+    VkDescriptorPoolSize ps{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, kThermalBindings + kWaterBindings};
     VkDescriptorPoolCreateInfo dpci{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
     dpci.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
     dpci.maxSets = 2;
@@ -332,43 +316,21 @@ bool erodeGpu(Heightmap& hm, const ErosionParams& p) {
     const int n = hm.n;
     const VkDeviceSize cells = static_cast<VkDeviceSize>(n) * n;
 
-    // the brush, exactly as the Metal host builds it
-    std::vector<int32_t> brushOff;
-    std::vector<float> brushW;
-    {
-        const int r = std::max(1, p.erodeRadius);
-        float wsum = 0.0f;
-        for (int dy = -r; dy <= r; dy++)
-            for (int dx = -r; dx <= r; dx++) {
-                const float d2 = static_cast<float>(dx * dx + dy * dy);
-                if (d2 > r * r) continue;
-                const float w = 1.0f - std::sqrt(d2) / r;
-                brushOff.push_back(dx); brushOff.push_back(dy); brushW.push_back(w); wsum += w;
-            }
-        for (float& w : brushW) w /= wsum;
-    }
-
     const VkBufferUsageFlags storage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
-    Buf height, delta, applied, bOff, bW, staging;
+    Buf height, delta, staging;
     const VkMemoryPropertyFlags host = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
     if (!makeBuffer(height, cells * 4, storage, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) ||
         !makeBuffer(delta, cells * 4, storage, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) ||
-        !makeBuffer(applied, cells * 4, storage, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) ||
-        !makeBuffer(bOff, brushOff.size() * 4, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, host) ||
-        !makeBuffer(bW, brushW.size() * 4, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, host) ||
         !makeBuffer(staging, cells * 4, VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, host)) {
         LOG_WARN << "[erosion] GPU allocation failed at n=" << n << ": CPU erosion";
         return false;
     }
-    auto fill = [&](Buf& b, const void* src, std::size_t bytes) {
+    {
         void* dst = nullptr;
-        vkMapMemory(g.device, b.mem, 0, bytes, 0, &dst);
-        std::memcpy(dst, src, bytes);
-        vkUnmapMemory(g.device, b.mem);
-    };
-    fill(bOff, brushOff.data(), brushOff.size() * 4);
-    fill(bW, brushW.data(), brushW.size() * 4);
-    fill(staging, hm.h.data(), cells * 4);
+        vkMapMemory(g.device, staging.mem, 0, cells * 4, 0, &dst);
+        std::memcpy(dst, hm.h.data(), cells * 4);
+        vkUnmapMemory(g.device, staging.mem);
+    }
 
     VkDescriptorSetAllocateInfo dsai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
     dsai.descriptorPool = g.descPool;
@@ -377,10 +339,9 @@ bool erodeGpu(Heightmap& hm, const ErosionParams& p) {
     VkDescriptorSet set = VK_NULL_HANDLE;
     if (vkAllocateDescriptorSets(g.device, &dsai, &set) != VK_SUCCESS) return false;
     struct FreeSet { VkDevice d; VkDescriptorPool p; VkDescriptorSet s; ~FreeSet() { vkFreeDescriptorSets(d, p, 1, &s); } } freeSet{g.device, g.descPool, set};
-    VkDescriptorBufferInfo infos[5] = {{height.buf, 0, VK_WHOLE_SIZE}, {delta.buf, 0, VK_WHOLE_SIZE}, {applied.buf, 0, VK_WHOLE_SIZE},
-                                       {bOff.buf, 0, VK_WHOLE_SIZE}, {bW.buf, 0, VK_WHOLE_SIZE}};
-    VkWriteDescriptorSet writes[5]{};
-    for (uint32_t i = 0; i < 5; ++i) {
+    VkDescriptorBufferInfo infos[kThermalBindings] = {{height.buf, 0, VK_WHOLE_SIZE}, {delta.buf, 0, VK_WHOLE_SIZE}};
+    VkWriteDescriptorSet writes[kThermalBindings]{};
+    for (uint32_t i = 0; i < kThermalBindings; ++i) {
         writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         writes[i].dstSet = set;
         writes[i].dstBinding = i;
@@ -388,7 +349,7 @@ bool erodeGpu(Heightmap& hm, const ErosionParams& p) {
         writes[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
         writes[i].pBufferInfo = &infos[i];
     }
-    vkUpdateDescriptorSets(g.device, 5, writes, 0, nullptr);
+    vkUpdateDescriptorSets(g.device, kThermalBindings, writes, 0, nullptr);
 
     VkCommandBufferAllocateInfo cbai{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
     cbai.commandPool = g.cmdPool;
@@ -433,21 +394,10 @@ bool erodeGpu(Heightmap& hm, const ErosionParams& p) {
     VkBufferCopy whole{0, 0, cells * 4};
     vkCmdCopyBuffer(cmd, staging.buf, height.buf, 1, &whole);
     vkCmdFillBuffer(cmd, delta.buf, 0, cells * 4, 0);
-    vkCmdFillBuffer(cmd, applied.buf, 0, cells * 4, 0);
     barrier(VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, rw);
 
     ErosionPushVk u{};
     u.n = n;
-    u.maxLifetime = p.maxLifetime;
-    u.brushCount = static_cast<int32_t>(brushW.size());
-    u.seed = p.seed;
-    u.inertia = p.inertia;
-    u.sedimentCapacity = p.sedimentCapacity;
-    u.depositSpeed = p.depositSpeed;
-    u.erodeSpeed = p.erodeSpeed;
-    u.evaporation = p.evaporation;
-    u.gravity = p.gravity;
-    u.minSlope = p.minSlope;
     u.talus = p.talus;
     u.thermalRate = p.thermalRate;
     const uint32_t cellGroups = static_cast<uint32_t>((cells + 63) / 64);
@@ -458,22 +408,7 @@ bool erodeGpu(Heightmap& hm, const ErosionParams& p) {
         vkCmdDispatch(cmd, groups, 1, 1);
         computeBarrier();
     };
-    auto clampApply = [&] { dispatch(kClamp, cellGroups); dispatch(kApplyApplied, cellGroups); };
-
-    // 1. DROPLETS (erosion.comp)
-    const int batchSize = dropletBatchSize(n);
-    int batchesInChunk = 0;
-    for (int start = 0; start < p.droplets; start += batchSize) {
-        u.batchStart = start;
-        u.batchCount = std::min(batchSize, p.droplets - start);
-        dispatch(kDroplets, static_cast<uint32_t>((u.batchCount + 63) / 64));
-        clampApply();
-        if (++batchesInChunk == 256) { if (!submit()) return false; begin(); batchesInChunk = 0; }
-    }
-    constexpr int kResidueFlushPasses = 8;   // as the Metal host: drain what the per-batch clamps held back
-    for (int it = 0; it < kResidueFlushPasses; it++) clampApply();
-
-    // 1b. BREACH (CPU, ADR-0124): read the droplets' ground back, cut the shallow hollows open, send it up
+    // 1. BREACH (CPU, ADR-0124): read the ground back, cut the shallow hollows open, send it up
     if (p.waterSteps > 0 && p.breachDepth > 0.0f) {
         barrier(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_READ_BIT);
         vkCmdCopyBuffer(cmd, height.buf, staging.buf, 1, &whole);
@@ -565,7 +500,7 @@ bool erodeGpu(Heightmap& hm, const ErosionParams& p) {
         LOG_INFO << "[erosion] water: " << p.waterSteps << " steps of " << w.dt << " s on " << n << "^2 at " << w.cellSize << " m";
     }
 
-    // 3. THERMAL (erosion.comp): slump what the water and droplets left steeper than the talus
+    // 3. THERMAL (erosion.comp): slump what the water left steeper than the talus
     vkCmdFillBuffer(cmd, delta.buf, 0, cells * 4, 0);
     barrier(VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, rw);
     for (int it = 0; it < p.thermalIterations; it++) { dispatch(kThermal, cellGroups); dispatch(kApply, cellGroups); }

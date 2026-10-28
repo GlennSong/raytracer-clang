@@ -314,21 +314,6 @@ add_library(meshopt_codecs STATIC
 target_include_directories(meshopt_codecs SYSTEM PUBLIC ${CMAKE_SOURCE_DIR}/third_party/meshoptimizer/src)
 target_link_libraries(engine_core PUBLIC meshopt_codecs)
 
-# GPU erosion bake (metropolis-scale-plan P0.5), Apple only: a self-contained
-# Metal compute host for the droplet/thermal sim — its own device + queue, no
-# renderer dependency — so every engine_core host (viewer, editor, headless
-# tests) gets the fast bake. Falls back to the CPU sim in erosion.cpp when no
-# Metal device or kernel source is present (erosion_gpu.h stubs it off-Apple).
-if(APPLE)
-    enable_language(OBJCXX)
-    target_sources(engine_core PRIVATE src/engine/procgen/erosion_gpu.mm)
-    set_source_files_properties(src/engine/procgen/erosion_gpu.mm
-        PROPERTIES COMPILE_FLAGS "-fobjc-arc")
-    target_link_libraries(engine_core PUBLIC
-        "-framework Metal"
-        "-framework Foundation")
-endif()
-
 # Dear ImGui (ADR-0011): core + ImGuizmo compile inside engine_core (the
 # panels/gizmos live there); platform backends (GLFW/Metal) attach per host.
 #
@@ -892,8 +877,7 @@ add_executable(run_tests
 target_compile_options(run_tests PRIVATE -Wall -Wextra -Wpedantic)
 target_link_libraries(run_tests PRIVATE citysim engine_core)
 target_include_directories(run_tests PRIVATE src tests)   # engine headers include each other from the src root
-# The GPU erosion test chdirs here to reach shaders/metal/erosion.metal (the
-# kernels are compiled from disk, CWD-relative, like the renderer's shaders).
+# Tests read source-tree files (scripts, levels, fixtures) through RT_SOURCE_DIR.
 target_compile_definitions(run_tests PRIVATE RT_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 if(RT_ENABLE_SCRIPTING)
     target_sources(run_tests PRIVATE
@@ -1195,7 +1179,7 @@ function(rt_build_vulkan_shaders)
         list(APPEND VK_SPV_FILES ${VK_SHADER_OUT_DIR}/${shader}.spv)
     endforeach()
     # the erosion bake's kernels (ADR-0122): one GLSL source, one SPIR-V module per kernel
-    foreach(kernel droplets clamp apply_applied thermal apply)
+    foreach(kernel thermal apply)
         string(TOUPPER ${kernel} KERNEL_UP)
         add_custom_command(
             OUTPUT ${VK_SHADER_OUT_DIR}/erosion_${kernel}.comp.spv
@@ -1223,7 +1207,7 @@ function(rt_build_vulkan_shaders)
     add_custom_target(vulkan_shaders DEPENDS ${VK_SPV_FILES})
 endfunction()
 
-# GPU erosion bake on Vulkan (ADR-0122): the Linux/Windows twin of erosion_gpu.mm, compiled into
+# GPU erosion bake on Vulkan (ADR-0122), compiled into
 # engine_core when the SDK is present (every binary that bakes terrain -- viewer, city_plan, the tests
 # -- gets it); without it the CPU sim runs, as before.
 if(NOT APPLE)
@@ -1256,6 +1240,7 @@ endif()
 # ============================================================
 if(CMAKE_SYSTEM_NAME STREQUAL "visionOS")
     enable_language(Swift)
+    enable_language(OBJCXX)   # the .mm sources below (the erosion bake's Metal port enabled it until ADR-0257)
     set(CMAKE_Swift_LANGUAGE_VERSION 5)
 
     set(VISION_SOURCES

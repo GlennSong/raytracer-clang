@@ -1,14 +1,9 @@
 #include "terrain_field.h"
-#include <cstdio>
-#include <cstring>
-#include <filesystem>
 
 #include "noise.h"
-#include "erosion.h"
 #include "terrain.h"          // TerrainFlatten, applyFlatten
 #include "../mesh_builder.h"
 #include "../../curve.h"
-#include "../bundle/cache_use.h"
 #include <algorithm>
 #include <cmath>
 #include <functional>
@@ -565,106 +560,6 @@ HeightField heightClamp(HeightField a, double lo, double hi) {
     return [a, lo, hi](double x, double z) {
         double v = a(x, z);
         return v < lo ? lo : (v > hi ? hi : v);
-    };
-}
-
-HeightField erodeField(const HeightField& f, double worldSize, int resolution,
-                       const ErosionParams& params) {
-    int n = std::max(2, resolution) + 1;
-    auto hm = std::make_shared<Heightmap>();
-    hm->n = n;
-    hm->worldSize = static_cast<float>(worldSize);
-    hm->h.resize(static_cast<std::size_t>(n) * n);
-    double half = worldSize * 0.5;
-    double step = worldSize / (n - 1);
-
-    // CONTENT-HASH CACHE (metropolis-scale-plan P4.1): the droplet sim is the
-    // single biggest load cost and is DETERMINISTIC in (input field, size, res,
-    // erosion params). The key hashes the INPUT FIELD BY SAMPLING it — any
-    // terrain knob or seed change alters sampled heights, so invalidation is
-    // automatic and no parameter enumeration can go stale. RT_NOCACHE=1 skips.
-    const bool useCache = std::getenv("RT_NOCACHE") == nullptr;
-    std::uint64_t key = 1469598103934665603ULL;   // FNV-1a
-    auto fold = [&](double v) {
-        std::uint64_t bits;
-        std::memcpy(&bits, &v, sizeof bits);
-        key ^= bits;
-        key *= 1099511628211ULL;
-    };
-    if (useCache) {
-        // MULTI-SCALE probe: a sparse pseudo-random pattern alone can miss a
-        // localized feature entirely (a +/-1.4 km ridge network in an 8 km
-        // domain slipped through all 64 points — the stale field then grew
-        // ROADS against terrain that no longer existed). Uniform lattices at
-        // full/half/quarter extent bound the largest invisible feature to
-        // under a quarter of a fine cell.
-        for (int i = 0; i < 64; ++i) {           // deterministic probe pattern
-            const double px = -half + worldSize * ((i * 37) % 61) / 61.0;
-            const double pz = -half + worldSize * ((i * 53) % 67) / 67.0;
-            fold(f(px, pz));
-        }
-        for (int scale = 0; scale < 3; ++scale) {
-            const double ext = worldSize / (1 << scale);   // full, half, quarter
-            for (int j = 0; j < 16; ++j)
-                for (int i = 0; i < 16; ++i) {
-                    const double px = -ext * 0.5 + ext * (i + 0.5) / 16.0;
-                    const double pz = -ext * 0.5 + ext * (j + 0.5) / 16.0;
-                    fold(f(px, pz));
-                }
-        }
-        fold(worldSize); fold(static_cast<double>(n));
-        fold(static_cast<double>(params.droplets));
-        fold(params.inertia); fold(params.sedimentCapacity);
-        fold(params.depositSpeed); fold(params.erodeSpeed);
-        fold(params.evaporation); fold(params.gravity); fold(params.minSlope);
-        fold(static_cast<double>(params.erodeRadius));
-        fold(static_cast<double>(params.thermalIterations));
-        fold(params.talus); fold(params.thermalRate);
-        // Backend tag (P0.5): the GPU and CPU sims are each deterministic but
-        // not bit-identical to each other, so the key names which one will
-        // run — CPU- and GPU-baked caches never cross-contaminate, and a
-        // kernel revision (tag bump) invalidates cleanly.
-        for (const char* t = erosionBackendTag(&params); *t; ++t) {
-            key ^= static_cast<unsigned char>(*t);
-            key *= 1099511628211ULL;
-        }
-    }
-    char cachePath[256] = {0};
-    if (useCache) {
-        std::snprintf(cachePath, sizeof cachePath, "cache/terrain/%016llx.bin",
-                      static_cast<unsigned long long>(key));
-        if (std::FILE* fp = std::fopen(cachePath, "rb")) {
-            int fn = 0;
-            const bool ok =
-                std::fread(&fn, sizeof fn, 1, fp) == 1 && fn == n &&
-                std::fread(hm->h.data(), sizeof(float), hm->h.size(), fp) ==
-                    hm->h.size();
-            std::fclose(fp);
-            if (ok) bundle::noteCacheUse(cachePath, "erosion");
-            if (ok)
-                return [hm](double x, double z) {
-                    return static_cast<double>(
-                        hm->sampleWorld(static_cast<float>(x), static_cast<float>(z)));
-                };
-        }
-    }
-
-    for (int z = 0; z < n; ++z)
-        for (int x = 0; x < n; ++x)            // same index convention as bakeHeightmap
-            hm->set(x, z, static_cast<float>(f(-half + x * step, -half + z * step)));
-    erode(*hm, params);
-    if (useCache) {
-        std::filesystem::create_directories("cache/terrain");
-        if (std::FILE* fp = std::fopen(cachePath, "wb")) {
-            std::fwrite(&n, sizeof n, 1, fp);
-            std::fwrite(hm->h.data(), sizeof(float), hm->h.size(), fp);
-            std::fclose(fp);
-            bundle::noteCacheUse(cachePath, "erosion");
-        }
-    }
-    return [hm](double x, double z) {
-        return static_cast<double>(
-            hm->sampleWorld(static_cast<float>(x), static_cast<float>(z)));
     };
 }
 

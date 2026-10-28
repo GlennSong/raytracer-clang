@@ -89,7 +89,6 @@
 #include "text/font.h"                  // signFont
 #include "procgen/city/water_mesh.h"  // buildWaterMesh (ocean/lake surface)
 #include "ai/nav_graph.h"             // buildNavGraph (street furniture plan)
-#include "procgen/erosion.h"
 #include "procgen/lsystem.h"
 #include "procgen/tree.h"
 #include "procgen/tree_recipe.h"
@@ -2056,26 +2055,8 @@ static void loadTerrain(const TerrainParams& p, const Noise& noise, const json& 
     world.add<Transform>(e, tr);
     world.add<PrevTransform>(e, PrevTransform{tr});
 
-    RenderMesh terrainMesh;
-    const bool eroded = t.value("erode", false) && !p.erodedBase;
-    if (eroded) {
-        // Legacy static-mesh erode path (no pre-baked field): bake -> erode ->
-        // mesh, the eroded grid being the source of truth for mesh and collider.
-        // When loadLevel has already baked p.erodedBase (the shared path), fall
-        // through to generateTerrain — it samples that eroded field via
-        // terrainHeight, so re-eroding here would double-erode.
-        Heightmap hm = bakeHeightmap(p, noise);
-        ErosionParams ep;
-        ep.seed = t.value("seed", 0u) + 1234u;
-        ep.droplets = t.value("erodeDroplets", ep.droplets);
-        ep.erodeRadius = t.value("erodeRadius", ep.erodeRadius);
-        ep.thermalIterations = t.value("erodeThermal", ep.thermalIterations);
-        ep.talus = t.value("erodeTalus", ep.talus);
-        erode(hm, ep);
-        terrainMesh = generateTerrainMesh(hm);
-    } else {
-        terrainMesh = generateTerrain(p, noise);
-    }
+    // (a weathered ground, when the level has one, is already on p.erodedBase: generateTerrain samples it)
+    RenderMesh terrainMesh = generateTerrain(p, noise);
 
     // Static collision from the same geometry, so the player walks on the
     // terrain instead of falling through (PhysicsSystem makes one static mesh
@@ -2097,7 +2078,7 @@ static void loadTerrain(const TerrainParams& p, const Noise& noise, const json& 
     }
     if (r.material.surface() == RenderMaterial::Surface::None)
         r.material.setSurface(RenderMaterial::Surface::TerrainGround);   // ground micro-relief
-    if (!eroded) applyGroundLayers(r.material, p, renderer);   // the eroded mesh bakes a colour, not weights
+    applyGroundLayers(r.material, p, renderer);
     world.add<Renderable>(e, r);
 
     // Distant LOD rings extend the terrain to the horizon (mountains/hills) at a

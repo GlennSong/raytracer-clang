@@ -2,7 +2,6 @@
 
 #include "engine/mesh_builder.h"
 #include "engine/procgen/terrain.h"
-#include "engine/procgen/erosion.h"
 #include "engine/procgen/tree.h"
 #include "engine/procgen/surface_maps.h"
 #include "engine/model_importer.h"
@@ -267,20 +266,11 @@ void addTerrain(const json& t, Scene& scene, const MaterialTable& materials,
                                Vec3(1, 1, 1), matIdx, scene);
         return;
     }
-    if (t.value("erode", false) && !tp.erodedBase) {
-        // Bake the analytic base into an eroded field and hang it on the params,
-        // so every terrainHeight() sample (mesh, LOD rings, flatten, normals,
-        // color banding) reads the eroded surface — the same path CDLOD uses.
-        // Skipped when the caller already supplied a shared eroded base.
-        ErosionParams ep;
-        ep.seed = t.value("seed", 0u) + 1234u;
-        ep.droplets = t.value("erodeDroplets", ep.droplets);
-        ep.erodeRadius = t.value("erodeRadius", ep.erodeRadius);
-        ep.thermalIterations = t.value("erodeThermal", ep.thermalIterations);
-        ep.talus = t.value("erodeTalus", ep.talus);
-        int erodeRes = t.value("erodeRes", 512);
-        bakeErodedTerrain(tp, noise, tp.size, erodeRes, ep);
-    }
+    if (t.value("erode", false) && !tp.erodedBase)
+        // the weathered ground on the params, so every terrainHeight() sample (mesh, LOD rings, flatten,
+        // normals, colour banding) reads it -- the same path CDLOD uses. Skipped when the caller already
+        // supplied the shared one.
+        tp.erodedBase = erodedForTerrain(t);
     addMeshAsTriangles(generateTerrain(tp, noise), Vec3(), Quat::identity(),
                        Vec3(1, 1, 1), matIdx, scene);
     // Distant LOD rings (mountains/hills out to the horizon).

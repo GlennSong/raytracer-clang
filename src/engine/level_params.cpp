@@ -100,7 +100,6 @@ TerrainParams readTerrainParams(const json& t) {
         }
     }
     p.seaLevel = t.value("seaLevel", p.seaLevel);   // loaders may override from the water block
-    p.erodeLandOnly = t.value("erodeLandOnly", p.erodeLandOnly);
     // The earthwork field's knobs (procgen/earthwork.h):
     //   "earthwork": { "enabled": true, "reach": 100, "cell": 4, "margin": 0 }
     if (t.contains("earthwork") && t["earthwork"].is_object()) {
@@ -387,18 +386,11 @@ std::shared_ptr<const std::function<double(double, double)>> erodedForTerrain(co
         memo[key] = f;
         return f;
     }
-    TerrainParams eb = readTerrainParams(tj);
-    Noise en(tj.value("seed", 0u));
-    ErosionParams ep;
-    ep.seed = tj.value("seed", 0u) + 1234u;
-    ep.droplets = tj.value("erodeDroplets", ep.droplets);
-    ep.erodeRadius = tj.value("erodeRadius", ep.erodeRadius);
-    ep.thermalIterations = tj.value("erodeThermal", ep.thermalIterations);
-    ep.talus = tj.value("erodeTalus", ep.talus);
-    ep.vulkan = tj.value("erodeGpu", false);   // ADR-0122: opt-in on Vulkan builds
-    bakeErodedTerrain(eb, en, eb.size, tj.value("erodeRes", 512), ep);
-    memo[key] = eb.erodedBase;
-    return eb.erodedBase;
+    // ADR-0257: the droplet sim that once eroded a block without "weather" is gone
+    LOG_WARN << "[terrain] \"erode\" without a \"weather\" block: the ground stays as drawn (droplet erosion was "
+                "retired, ADR-0257; give the terrain a weather block)";
+    memo[key] = nullptr;
+    return nullptr;
 }
 
 void readLotGrowParams(const json& cityJson,

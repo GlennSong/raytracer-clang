@@ -112,8 +112,8 @@ bool skipHeavy() {
     return e && *e && std::string(e) != "0";
 }
 bool isHeavyLevel(const std::string& name) {
-    static const char* kHeavy[] = {"metro_mountain.json", "metro_planned.json", "island_8_weathered.json", "island_8_saltwood.json",
-                                   "piedmont.json", "island_8_rocky.json", "island_8_nature.json", "piedmont_roads.json",
+    static const char* kHeavy[] = {"metro_mountain.json", "metro_planned.json", "island_8_weathered.json", "piedmont.json",
+                                   "island_8_rocky.json", "island_8_nature.json", "piedmont_roads.json",
                                    "tree_lab.json", "scale_lab.json"};
     for (const char* h : kHeavy) if (name == h || (name.size() > std::strlen(h) && name.compare(name.size() - std::strlen(h), std::string::npos, h) == 0 && name[name.size() - std::strlen(h) - 1] == '/')) return true;
     return false;
@@ -3638,10 +3638,10 @@ TEST_CASE(editor_save_keeps_the_road_signs_entity) {
 // sheet of water tilted down into the ground. Rivers fall gently and a lake is flat, so no triangle of the
 // island's water may span more than a few metres of level.
 TEST_CASE(island_water_surface_has_no_spikes) {
-    if (skipHeavy()) { std::printf("    skipped: loads island_8_saltwood (heavy, RT_LEVEL_TESTS_SKIP_HEAVY)\n"); return; }
+    if (skipHeavy()) { std::printf("    skipped: loads island_8_nature (heavy, RT_LEVEL_TESTS_SKIP_HEAVY)\n"); return; }
     // (RT_WATER_LEVEL=name: another level's water, for the debug reports below -- island_8_weathered's rivers, say)
     const char* waterLevel = std::getenv("RT_WATER_LEVEL");
-    std::ifstream in(levelsDir() + "/" + (waterLevel ? std::string(waterLevel) : std::string("island_8_saltwood")) + ".json");
+    std::ifstream in(levelsDir() + "/" + (waterLevel ? std::string(waterLevel) : std::string("island_8_nature")) + ".json");
     CHECK(in.good());
     if (!in.good()) return;
     const json root = json::parse(in);

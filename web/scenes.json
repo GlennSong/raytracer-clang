@@ -155,20 +155,6 @@
       "thumb": "thumbs/chunked.webp"
     },
     {
-      "id": "script_terrain_eroded",
-      "title": "Eroded Scripted Terrain",
-      "tag": "Terrain",
-      "blurb": "Scripted terrain after an erosion pass.",
-      "thumb": "thumbs/script_terrain_eroded.webp"
-    },
-    {
-      "id": "erosion",
-      "title": "Eroded Terrain",
-      "tag": "Terrain",
-      "blurb": "Hydraulic-erosion sculpted heightfield.",
-      "thumb": "thumbs/erosion.webp"
-    },
-    {
       "id": "mountains",
       "title": "Mountains",
       "tag": "Terrain",

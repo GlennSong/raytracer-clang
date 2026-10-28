@@ -1,10 +1,10 @@
 #ifndef RAYTRACER_ENGINE_BUNDLE_CACHE_USE_H
 #define RAYTRACER_ENGINE_BUNDLE_CACHE_USE_H
 
-// WHICH LEVELS USE A CACHE FILE (ADR-0256). The terrain files (erosion, maps, weather, pyramid, world maps) and the
+// WHICH LEVELS USE A CACHE FILE (ADR-0256). The terrain files (weather, maps, pyramid, world maps) and the
 // population are named by a content hash, so levels that build the same ground share one file, and nothing in the
 // name says whose it is. Each now has a record beside it, `<file>.uses`:
-//     {"kind": "pyramid", "levels": {"/abs/assets/levels/coast.json": 1761555600, ...}}
+//     {"kind": "pyramid", "levels": {"/abs/assets/levels/river_town.json": 1761555600, ...}}
 // stamped with the time the level's load began each time a load reads or writes the file. A file is stale once,
 // for every level that used it, a newer file of its kind has been used since (the level moved on) or the level file
 // is gone; `rt_bake --prune` deletes those. A file without a record (written before ADR-0256, or by a test) is never pruned here.
@@ -20,7 +20,7 @@ namespace bundle {
 // The level whose load is under way: later noteCacheUse calls name it, stamped with this call's time. loadLevel
 // calls it first thing; an empty path stops the stamping.
 void setCacheLevel(const std::string& levelPath);
-// Record that the current level uses `file`, of `kind` ("erosion", "pyramid", "wmap:normal", "population"...).
+// Record that the current level uses `file`, of `kind` ("weather", "maps", "pyramid", "wmap:normal", "population"...).
 // No-op without a current level. Thread-safe.
 void noteCacheUse(const std::string& file, const std::string& kind);
 

@@ -49,8 +49,8 @@ inline Quat parseOrientation(const nlohmann::json& ent) {
 void propagateWaterSeaLevel(nlohmann::json& root);
 // The rivers and lakes of a level's terrain (its "rivers" block, ADR-0099) as rings a city's blocks
 // stand back from: each corridor grown by `margin` past the bank (ADR-0104). Empty: none.
-// A terrain block's ERODED relief (its "erode" settings), baked once per block and shared; null
-// without erosion settings are still honoured by the caller (readErodedBase gates on "erode").
+// A terrain block's WEATHERED relief (its "weather" block, ADR-0126), baked once per block and shared;
+// null without one (the caller gates on "erode": true, ADR-0257).
 std::shared_ptr<const std::function<double(double, double)>> erodedForTerrain(const nlohmann::json& terrainBlock);
 std::vector<std::vector<Vec2>> levelWaterKeepOut(const nlohmann::json& root, double margin = 6.0);
 
@@ -61,9 +61,9 @@ TerrainParams readTerrainParams(const nlohmann::json& t);
 // receives the block's seed (0 when absent).
 TreeParams readTreeParams(const nlohmann::json& ent, uint32_t& seedOut);
 
-// Baked erosion (opt-in via terrain.erode): bake ONCE and share the sampler
-// across every consumer — ground, roads, lots — so they all conform to the
-// same eroded surface. Null when the level doesn't opt in.
+// The weathered ground (opt-in via terrain.erode + terrain.weather): bake ONCE and share the
+// sampler across every consumer -- ground, roads, lots -- so they all conform to the same
+// surface. Null when the level doesn't opt in.
 std::shared_ptr<const std::function<double(double, double)>>
 readErodedBase(const nlohmann::json& root);
 

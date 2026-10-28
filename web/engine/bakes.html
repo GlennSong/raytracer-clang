@@ -415,7 +415,7 @@ std::vector&lt;<span class="t">uint8_t</span>&gt; headerBytes(<span class="t">ui
     <tr><th>Folder</th><th>What</th><th>Keyed by</th><th>Size (docs/bakes.md)</th></tr>
     <tr><td><code>cache/levels/&lt;key&gt;/</code></td><td>the bundle</td><td>the producers' keys</td><td>1 GB (metro) to 8 GB (island) before ADR-0224</td></tr>
     <tr><td><code>cache/terrain/&lt;hash&gt;.pyramid</code></td><td>the baked ground, every lot flatten folded in</td><td>the ground's content</td><td>145–385 MB</td></tr>
-    <tr><td><code>cache/terrain/&lt;hash&gt;.bin</code>, <code>maps_*</code>, <code>weather_*</code></td><td>erosion, cover maps, weathered ground</td><td>terrain settings</td><td>~65 MB each, slow to remake</td></tr>
+    <tr><td><code>cache/terrain/maps_*</code>, <code>weather_*</code></td><td>cover maps, weathered ground</td><td>terrain settings</td><td>~65 MB each, slow to remake</td></tr>
     <tr><td><code>cache/population/&lt;hash&gt;.pop</code></td><td>who lives and works where</td><td>places, street graph, agents, buses</td><td>small</td></tr>
   </table>
 

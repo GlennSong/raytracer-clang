@@ -70,12 +70,6 @@
    "tests": "a radial expressway under an elevated ring at ground level, their system interchange (two corner connectors, two loops), and the expressway's inner leg as a one-way boulevard pair meeting a boulevard at two Ts. Written by `lanes_tool interchange-demo`: regenerate it when the generator changes."
   },
   {
-   "name": "coast_city",
-   "kind": "imported",
-   "source": "assets/lanelab/sources/coast_city.json",
-   "tests": "a metro recipe on a coastline"
-  },
-  {
    "name": "living_city",
    "kind": "imported",
    "source": "assets/lanelab/sources/living_city.json",

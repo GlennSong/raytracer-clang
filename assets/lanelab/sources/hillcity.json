@@ -979,11 +979,18 @@
       "worldHalf": 1100
     },
     "erode": true,
-    "erodeDroplets": 500000,
-    "erodeRadius": 4,
-    "erodeRes": 800,
-    "erodeTalus": 1.0,
-    "erodeThermal": 14,
+    "weather": {
+      "res": 1024,
+      "grow": {"res": 256, "iterations": 250, "blur": 85},
+      "water": {"steps": 0, "breach": 0, "thermal": 0},
+      "roughness": 0.6,
+      "shapeKeep": 1.0,
+      "massifs": 0.6,
+      "shapeScale": 210,
+      "massifScale": 350,
+      "peaks": {"height": 120, "spacing": 450, "uplift": 1.0},
+      "refine": {"detail": 40, "roughness": 0.8, "wavelength": 8, "slopeDamp": 0.3, "incise": 0.012, "iterations": 20, "stochasticFrom": 1024}
+    },
     "heightScale": 34,
     "material": {
       "albedo": [

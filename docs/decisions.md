@@ -12598,3 +12598,56 @@ Still owed: the level suite pruning after itself, and the editor's cache panel s
 
 **Alternatives.** One index file for the whole cache: two viewers loading at once would race on it; a record per
 file only races with itself. Keying the terrain files by level: levels would stop sharing ground they build alike.
+
+## ADR-0257 — One erosion: the weather bake; the droplets retire
+
+**Context.** The duplicate-systems sweep (#117, wave 3, item 39). Two systems eroded a level's ground: the droplet
+sim (Beyer / Lague; `erodeField`, `bakeErodedTerrain`, its Metal and Vulkan kernels, Lua `terrain.erode`), run for any
+terrain with `"erode": true`, and the weather bake (ADR-0125..0127: stream power from the level's own uplift, placed
+peaks, refine level by level), run when the terrain also has a `"weather"` block. Droplets only scratch gullies into
+the noise; they hold no water, and their constants only work on 10-20 m cells (at 3 m they pitted the ground,
+ADR-0124). Nine levels, a generator and a Lua demo still used them. Glenn, 2026-10-27: "let's drop the droplet means of
+erosion. And redo the other levels or if some of those levels aren't needed let's delete them."
+
+**Decision.**
+1. **Levels.** Deleted (Glenn's pick): `coast`, `coast_city` (and its lanelab source, conversion and lanes-corpus
+   entry), `erosion`, `island_8_saltwood` (the September island, its signs and lanelab plan; island_8_nature replaced
+   it), and `script_terrain_eroded` with `terrain_eroded.lua` (the Lua droplet demo). Converted to a `"weather"` block
+   sized to the map: `range` (600 m), `piedmont` and `piedmont_roads` (8 km, one block so they share one bake),
+   `piedmont_mini` (2.6 km), `metro_v2_test` (2.76 km), and the lanes-corpus sources `hillcity`, `metro_hills`,
+   `metro_route`, `metro_v2_test`, `piedmont_mini`. Each block is island_8_weathered's scaled to the map: about 2 m
+   fine cells, a grow grid of 5-20 m cells, the shape kept below a seventh to a thirteenth of the map, peaks spaced a
+   quarter of it.
+2. **Code.** `erodeField`, `bakeErodedTerrain`, the droplet kernels (Vulkan `erosion.comp` keeps THERMAL and APPLY;
+   `erosion_gpu.mm` and `shaders/metal/erosion.metal` are gone), `ErosionParams`' droplet fields, the droplet `.bin`
+   cache, the loader's static-mesh erode path, `generateTerrainMesh`, `TerrainParams::erodeLandOnly` and Lua
+   `terrain.erode`. `erode()` is now the weather block's opt-in last stage: breach, the pipe model, thermal (GPU), or
+   thermal alone (CPU). `"erode": true` stays the switch; without a `"weather"` block the ground stays as drawn and the
+   log says why. `level_scene` (the offline tracer) reads the same weathered ground as the loader. The island
+   generator writes island_8_weathered's weather block; `city_plan island` sketches it at 2048² (the coarser refine
+   levels are the same ground; the full 8192² bake is a quarter of an hour).
+3. **`rt_erode` bakes the weather block** (`--res`, `--grow-res`, `--grow-iterations`, the stream-power and water
+   flags override it) and takes the water block's sea level, as the loader does. Without that a preview measured the
+   "plains" from the sea floor and grew relief across metro_v2_test's whole coastal shelf.
+
+**Measured** (rt_erode, RTX 3080; change = weathered minus drawn). range: 1.1 s. metro_v2_test: 11 s; the shelf the
+city stands on moves 0.3 m rms (1.8 m at most), the range 21 m rms. piedmont: 2 min 46 s, 1.1 GB peak; its three towns
+move 0.15 m rms (1.4 m at most). piedmont_mini 8.6 s, hillcity 9.3 s, metro_hills 1.9 s: the ground below 30 m moves
+0.4-1.1 m rms. The droplet bakes these replace took under a second each. GPU thermal against CPU thermal on the test
+hills: 0.0009 rms apart against 0.46 carved.
+
+**Consequences.** One erosion system. The converted levels re-bake their ground once (piedmont's three minutes join
+the nightly suite's cold build) and their roads and lots are rebuilt on it. Linux weather keys are unchanged (the
+backend tag is still `vk-erosion-v1`); on a Mac the backend reads `cpu` now that the Metal port is gone, so a Mac
+re-bakes each weathered ground once. The island levels keep their dead `erodeDroplets`/`erodeRes`/... keys: they are
+part of the weather key, and dropping them would re-run the island's quarter-hour bake for nothing. The lanes-corpus
+baseline is re-recorded for the converted scenes (coast_city's row is gone). metro_hills moved its sea from -5 to -20 m:
+on the drawn ground 41% of its city disc is sea -- the droplets' over-strong deposition had filled that lowland above
+it -- and the recipe built 1 street of 44; at -20 it builds 59 with no ring, the scene it was. Its new ground shows the
+lane builder 31 deck cracks and a 73 cm junction mismatch (it was clean), and metro_route one non-manifold edge in
+128k triangles: findings for the builder, recorded in the baseline, not fixed here. metro_v2, hillcity and
+piedmont_mini have no regressions; hillcity now passes "no terrain above any deck". Untracked `*.cameras.json` bookmarks of the deleted levels are left
+for Glenn.
+
+**Alternatives.** Keeping droplets as a quick path for levels that don't need realism (like the two tree systems):
+Glenn chose one system. Leaving the small labs on droplets: then the code stays and item 39 isn't done.

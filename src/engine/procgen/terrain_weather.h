@@ -7,7 +7,7 @@
 //   "weather": { "res": 4096,                                  // the fine grid (cells a side)
 //                "grow":  { "res": 1024, "iterations": 250,   // stream power (ADR-0125)
 //                           "blur": 600, "K": 2e-5, "diffusion": 0.01 },
-//                "water": { "steps": 20000, "breach": 25,     // droplet-free Mei water + sediment on the GPU
+//                "water": { "steps": 20000, "breach": 25,     // Mei water + sediment on the GPU (opt-in)
 //                           "deposit": 0.15, "rockHardness": 0.15, "creep": 1e-4 },
 //                "roughness": 2.5,                             // m of multi-scale roughness before the water
 //                "shapeKeep": 1.0, "shapeScale": 1500 }        // the original's form below 1.5 km, kept
