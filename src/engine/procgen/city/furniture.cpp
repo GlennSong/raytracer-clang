@@ -727,9 +727,18 @@ void emitFurniture(std::vector<PlacedPiece>& out, RenderMesh* colliderOut, const
                 };
                 // THE KITCHEN (a restaurant's back): the line on the back wall -- tall unit, hobs, a sink, worktops --
                 // a 1.1 m cooks' aisle, the pass facing the dining room.
+                // (the back wall first, as long as it will go; a restaurant whose door is in its back wall -- a
+                // tower's restaurant floor, off the corridor -- takes a side wall)
                 auto kitchenAndPass = [&]() {
-                    const Real w = std::min(F.f.W - 0.2, Real(6.0));
-                    if (w < 2.6 || !F.place(w, 0.6 + 1.1 + 0.8, {2}, p, true, 0.4, F.heightOf(Piece::KitchenTall))) { counterAtBack(); return; }
+                    Real w = 0;
+                    bool laid = false;
+                    for (int side : {2, 1, 3}) {
+                        const Real wall = side == 2 ? F.f.W : F.f.D;
+                        for (w = std::min(wall - 0.2, Real(6.0)); w >= 2.6 && !laid; w -= 0.6)
+                            laid = F.place(w, 0.6 + 1.1 + 0.8, {side}, p, true, 0.4, F.heightOf(Piece::KitchenTall));
+                        if (laid) { w += 0.6; break; }
+                    }
+                    if (!laid) { counterAtBack(); return; }
                     // tall units at the two ends only (a run of hobs, worktops and sinks between)
                     static const Piece kLine[5] = {Piece::KitchenHob, Piece::KitchenHob, Piece::KitchenBase,
                                                    Piece::KitchenSink, Piece::KitchenBase};

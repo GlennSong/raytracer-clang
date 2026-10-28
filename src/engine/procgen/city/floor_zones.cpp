@@ -955,6 +955,36 @@ FloorProgram builtinDepartmentStoreProgram() {
     return p;
 }
 
+FloorProgram builtinDiningProgram() {
+    FloorProgram p;
+    p.name = "dining";
+    p.zones.windowDepth = 7.0;
+    p.zones.lotWidth = 9.0;
+    p.zones.interiorLot = 30.0;
+    p.zones.minAccess = 2.0;
+    p.fill = "lounge";
+    p.shallow = "lounge";
+    p.shallowDepth = 0;
+    const uint8_t W = zoneSiteBit(ZoneSite::Window), C = zoneSiteBit(ZoneSite::Corner), I = zoneSiteBit(ZoneSite::Interior);
+    auto rule = [&](const char* tag, RoomKind kind, uint8_t sites) {
+        ZoneRule r;
+        r.tag = tag;
+        r.kind = kind;
+        r.sites = sites;
+        r.walls = 0;
+        p.rules.push_back(r);
+        return &p.rules.back();
+    };
+    ZoneRule* r = rule("restrooms", RoomKind::Bath, I | W);
+    r->count = 1; r->near = 2; r->enclosed = true; r->minArea = 6; r->maxArea = 30; r->minDepth = 2.0; r->minFloor = 250;
+    r = rule("restaurant", RoomKind::Shop, W | C);
+    r->share = 0.5; r->enclosed = true; r->minArea = 25; r->minDepth = 4.5; r->trade = 13;
+    r = rule("bar", RoomKind::Shop, W | C);
+    r->share = 1.0; r->enclosed = true; r->minArea = 20; r->minDepth = 3.5; r->trade = 14;
+    rule("lounge", RoomKind::Lounge, W | C | I);
+    return p;
+}
+
 int floorDepartment(const FloorProgram& prog, int storey) {
     if (prog.departments.empty()) return -1;
     const int n = static_cast<int>(prog.departments.size());
@@ -977,14 +1007,16 @@ FloorProgram builtinResidentsProgram() {
 
 bool hasFloorProgram(const std::string& name) {
     return FloorProgramBook::global().find(name) != nullptr || name == "office" || name == "apartments" || name == "residents" ||
-           name == "department_store";
+           name == "department_store" || name == "dining";
 }
 
 const FloorProgram& floorProgram(const std::string& name) {
     if (const FloorProgram* p = FloorProgramBook::global().find(name)) return *p;
     static const FloorProgram office = builtinOfficeProgram(), apartments = builtinApartmentProgram(),
-                              residents = builtinResidentsProgram(), store = builtinDepartmentStoreProgram();
-    return name == "apartments" ? apartments : name == "residents" ? residents : name == "department_store" ? store : office;
+                              residents = builtinResidentsProgram(), store = builtinDepartmentStoreProgram(),
+                              dining = builtinDiningProgram();
+    return name == "apartments" ? apartments : name == "residents" ? residents : name == "department_store" ? store
+         : name == "dining" ? dining : office;
 }
 
 namespace {
@@ -1348,6 +1380,23 @@ static RoomPlan zonedFloorCut(const Poly2& plate, const BuildingParams& params, 
     const int department = floorDepartment(prog, storey);
     const ZoneTags tags = tagZones(fp, prog, static_cast<uint32_t>(params.seed), lifts, department);
     std::vector<int> rule = tags.rule;
+    // THE WAY IN is never shut in by walled rooms: a lot the floor's entry stands in or beside is the fill, open, and
+    // so is the walled lot nearest it within the corridor round the hub -- a stair at the facade has no corridor out
+    // to the aisles but through a lot (a restaurant floor's every window lot is walled; an office's are open floor)
+    if (!prog.residential) {
+        const int fillR = ruleIndex(prog.rules, prog.fill);
+        std::size_t nearest = fp.zones.size();
+        Real nearestD = kCorridorRing + 0.9;
+        for (std::size_t z = 0; z < fp.zones.size() && fillR >= 0; ++z) {
+            if (!prog.rules[static_cast<std::size_t>(rule[z])].enclosed) continue;
+            const Poly2& P = fp.zones[z].poly;
+            Real d = pointInPolygon(P, entry) ? 0 : 1e9;
+            for (std::size_t i = 0; i < P.size(); ++i) d = std::min(d, distToSegment(entry, P[i], P[(i + 1) % P.size()]));
+            if (d < 0.9) rule[z] = fillR;   // (in it, or a capsule beside its wall)
+            else if (d < nearestD) { nearestD = d; nearest = z; }
+        }
+        if (nearest < fp.zones.size()) rule[nearest] = fillR;
+    }
     // HOMES: the program's fill (the landing) is part of the corridor -- a landing lot with no edge on circulation (a
     // notched plate's arm, walled in by the facade and the flats beside it) is no corridor and no room; its floor is
     // left walled in rather than laid as a hall no door reaches
@@ -1423,22 +1472,27 @@ static RoomPlan zonedFloorCut(const Poly2& plate, const BuildingParams& params, 
     const int fillRule = ruleIndex(prog.rules, prog.fill);
     const RoomKind fillKind = fillRule >= 0 ? prog.rules[static_cast<std::size_t>(fillRule)].kind : RoomKind::OpenPlan;
 
-    // three tries: as tagged; the enclosed rooms whose only way in is through another room opened up; no walls (not
-    // in homes: a floor of flats with no walls is no floor of flats -- zonedFloorPlan lays it another way)
+    // four tries: as tagged; the enclosed rooms whose only way in is through another room opened up; the rooms that
+    // walk still could not reach opened up, the rest keeping their walls (a restaurant beside a stair at the facade);
+    // no walls (not in homes, which stop after the second: a floor of flats with no walls is no floor of flats --
+    // zonedFloorPlan lays it another way)
     // the walk goes round the core, never through it (its shafts are no floor; the stair is inside it): with a corridor
     // round the core that never mattered, but a lobby-mode floor's lots stand against it
     const Poly2 solid = core.valid ? core.rect() : stairWell;
     bool walked = false, pruned = false;
     int flats = 0, studios = 0;
     std::vector<std::size_t> roomZone;   // the zone each room was laid from
-    for (int attempt = 0; attempt < (prog.residential ? 2 : 3); ++attempt) {
+    std::vector<char> opened(fp.zones.size(), 0);   // the third try's: zones the first two tries' walk could not reach
+    std::size_t missed = 0;
+    for (int attempt = 0; attempt < (prog.residential ? 2 : 4); ++attempt) {
         flats = studios = 0;
         rp.rooms.clear();
         rp.walls.clear();
         roomZone.clear();
         std::vector<Poly2> open;
         for (std::size_t z = 0; z < fp.zones.size(); ++z)
-            if (!prog.rules[static_cast<std::size_t>(rule[z])].enclosed || attempt == 2) open.push_back(fp.zones[z].poly);
+            if (!prog.rules[static_cast<std::size_t>(rule[z])].enclosed || attempt == 3 || (attempt == 2 && opened[z]))
+                open.push_back(fp.zones[z].poly);
         const G::PreparedSet walk(open.empty() ? circSet : G::unionSets(circSet, unionAll(open)));
         for (std::size_t z = 0; z < fp.zones.size(); ++z) {
             roomZone.resize(rp.rooms.size(), z ? z - 1 : 0);   // (the rooms the zone before laid)
@@ -1446,15 +1500,16 @@ static RoomPlan zonedFloorCut(const Poly2& plate, const BuildingParams& params, 
             const ZoneRule& R = prog.rules[static_cast<std::size_t>(rule[z])];
             Room rm;
             rm.kind = R.kind;
-            if (department >= 0) rm.style = static_cast<uint8_t>(department);   // (a shop floor: its department's trade)
+            if (R.trade >= 0) rm.style = static_cast<uint8_t>(R.trade);   // (a restaurant floor's: its own trade)
+            else if (department >= 0) rm.style = static_cast<uint8_t>(department);   // (a shop floor: its department's)
             rm.rect = Z.poly;
             rm.edge = static_cast<std::size_t>(std::max(0, Z.group));
-            const bool enclosed = R.enclosed && attempt < 2;
-            // the door: the longest clear run onto the corridors; failing that (first try only), onto an open zone
+            const bool enclosed = R.enclosed && attempt < 3 && !(attempt == 2 && opened[z]);
+            // the door: the longest clear run onto the corridors; failing that (first and third tries), onto an open zone
             // (a copy room beside the reception opens onto the corridor, not through the reception)
             std::size_t doorEdge = Z.poly.size();
             Real doorMid = 0.5, best = 0;
-            for (int via = 0; enclosed && via < (attempt == 0 ? 2 : 1) && best < kDoorRun; ++via) {
+            for (int via = 0; enclosed && via < (attempt == 1 ? 1 : 2) && best < kDoorRun; ++via) {
                 best = 0;
                 doorEdge = Z.poly.size();
                 for (std::size_t i = 0; i < Z.poly.size(); ++i) {
@@ -1571,6 +1626,16 @@ static RoomPlan zonedFloorCut(const Poly2& plate, const BuildingParams& params, 
                 continue;
             }
         }
+        if (!prog.residential && attempt < 2) {   // (the rooms to open on the third try: the fewer the first two missed)
+            std::vector<std::size_t> un;
+            floorIsWalkable(rp, walkPlan, entry, solid, &un);
+            if (attempt == 0 || un.size() < missed) {
+                missed = un.size();
+                std::fill(opened.begin(), opened.end(), 0);
+                for (std::size_t k : un)
+                    if (k < roomZone.size() && roomZone[k] < opened.size()) opened[roomZone[k]] = 1;
+            }
+        }
         if (std::getenv("RT_ZONE_DEBUG"))
             std::fprintf(stderr, "[zones] storey %d: try %d not walkable (%zu rooms, %zu walls)\n", storey, attempt,
                          rp.rooms.size(), rp.walls.size());
@@ -1584,7 +1649,7 @@ static RoomPlan zonedFloorCut(const Poly2& plate, const BuildingParams& params, 
         std::fprintf(stderr, "[zones] storey %d: %zu zones, style %s, field %.0f m2:", storey, rp.rooms.size(),
                      tags.style.c_str(), fp.fieldArea);
         for (const Room& r : rp.rooms) std::fprintf(stderr, " %s", cellUseName(r.kind));
-        std::fprintf(stderr, "\n");
+        std::fprintf(stderr, "; %zu walls, walked %d\n", rp.walls.size(), walked ? 1 : 0);
         if (prog.residential) std::fprintf(stderr, "[zones] storey %d: %d flats, %d studios, walked %d\n", storey, flats, studios, walked ? 1 : 0);
     }
     // (a floor of homes with no flat on it -- every lot too small or shut off -- is laid another way too)

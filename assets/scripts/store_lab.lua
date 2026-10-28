@@ -2,7 +2,7 @@
 -- 2026-10-27: "a department store should be a whole floor"), cut away at head height and laid out to be seen from
 -- above. building.grow_floor grows exactly what the streamed interior grows.
 --   front row: a glass tower's store, storeys 1-5 -- fashion, fashion, electronics, books, the food hall
---   back row:  a podium tower's fashion floor
+--   back row:  a podium tower's fashion floor | a glass tower's restaurant floor (restaurants and bars, `dining`)
 -- opts.seed rolls the buildings again.
 local opts = args or {}
 local seed = opts.seed or 1
@@ -31,10 +31,12 @@ for k = 1, 5 do
   FLOORS[#FLOORS + 1] = { recipe = "glass_tower", plan = rect(36, 32), x = (k - 3) * 44, z = 0, storey = k, floors = 24 }
 end
 FLOORS[#FLOORS + 1] = { recipe = "podium_tower", plan = rect(42, 32), x = -44, z = -44, storey = 1, floors = 18 }
+FLOORS[#FLOORS + 1] = { recipe = "glass_tower", plan = rect(36, 32), x = 4, z = -44, storey = 3, floors = 24, dine = 24 }
 
 for _, f in ipairs(FLOORS) do
   local parts = building.grow_floor{ recipe = f.recipe, seed = seed * 13 + 7, coreness = 1.0, plan = f.plan,
-                                     floors = f.floors, store_floors = f.floors, storey = f.storey, cutaway = 2.6 }
+                                     floors = f.floors, store_floors = f.dine and 0 or f.floors,
+                                     dine_floors = f.dine or 0, storey = f.storey, cutaway = 2.6 }
   for _, e in ipairs(parts) do
     m:add(mesh.translate(e.mesh, {f.x, 0, f.z}), MATS[e.part] or MATS.default)
   end

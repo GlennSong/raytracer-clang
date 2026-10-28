@@ -455,6 +455,11 @@ bool readFloorPrograms(ScriptVM& vm, FloorProgramBook& out, std::string* err) {
                 else if (near == "far") r.near = 3;
                 else return bad(w + ": near must be lobby, core or far");
                 if (std::string d; !readDepartments(L, t, r.departments, d)) return bad(w + ": unknown department (trade) '" + d + "'");
+                if (const std::string tr = strField(L, t, "trade"); !tr.empty()) {
+                    const TradeInfo* ti = tradeByName(tr.c_str());
+                    if (!ti) return bad(w + ": unknown trade '" + tr + "'");
+                    r.trade = ti->id;
+                }
                 prog.rules.push_back(r);
                 lua_pop(L, 1);
             }

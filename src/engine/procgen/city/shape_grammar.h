@@ -789,6 +789,11 @@ bool mallSignsOf(const Poly2& plan, const BuildingParams& params, std::vector<Ma
 // A Japanese tower's (storeFloors / dineFloors): the store's name down a vertical board, the restaurant floors' across
 // the top. False when it has neither.
 bool towerSignsOf(const Poly2& plan, const BuildingParams& params, std::vector<MallSign>& out);
+// WHAT A TOWER'S STOREY IS FOR when its own facts say so: "department_store" for its first `storeFloors` storeys over
+// the ground, "dining" for the top `dineFloors` of its main tier (below a setback crown), else "" (the building's use,
+// building_uses.lua). Only a four-sided tower has them -- the same towers that carry the store's board and the
+// restaurant floors' name (towerSignsOf) and that the level loader makes the shop and restaurant places of.
+std::string storeyUseOf(const Poly2& plan, const BuildingParams& params, const std::vector<StoreyPlan>& storeys, int storey);
 // THE PARKING GARAGE you can drive into (parkingDecks; buildGarage): its collider -- every deck, ramp and rail -- in
 // world space (false: not a drivable garage, keep the prism); its stalls (centre, the way a parked car faces, height
 // above the base); and its portal (the middle of the opening on the street, and the way out).

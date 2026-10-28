@@ -12796,3 +12796,29 @@ on a store floor: offices from storey 8 of a tapered tower, flats from storey 55
 
 **Consequences.** Floors are planned at runtime: no lots tag bump. A mall anchor's upper floor gets the program too,
 but its own lab (the Westfield-style complex, ADR-0180) is still owed.
+
+## ADR-0261 — A tower's restaurant floors are a floor program; what a storey is for has one definition
+
+**Context.** Building-uses plan step 4. A tower's restaurant floors (`dineFloors`, the top of its main tier) were
+office floors relabelled: every room a restaurant or a bar by turns. The store floors' half of that pass went in
+ADR-0260; this is the other half.
+
+**Decision.**
+1. **`storeyUseOf(plan, params, storeys, k)`** is the one answer to "what is this tower storey for, by its own
+   facts": `department_store` for its first `storeFloors`, `dining` for the top `dineFloors` of the main tier, else
+   the building's use. Only four-sided towers, the same ones `towerSignsOf` boards and the level loader makes shop
+   and restaurant places of (ADR-0260's drum towers with stores are taken back: their store had no sign and no place).
+   `storeyRooms` passes it to `roomPlan` (`storeyUse`), which lays the program it names. The relabel pass is gone.
+2. **`dining`** in `floor_programs.lua` (and `builtinDiningProgram`): restaurants and bars by turns along the glass,
+   each walled with its door onto the corridor, restrooms by the core, a lounge to wait in. A zone rule's `trade`
+   (trade name) gives its rooms that trade, so the shop furnishing lays them as before. A restaurant whose door is in
+   its back wall lays its kitchen line shorter, or on a side wall (it fell back to a counter).
+3. **The way in is never shut in.** On a shop or office floor, a walled lot that the floor's entry stands in or
+   beside, and the walled lot nearest it within the core's corridor ring, take the fill instead: a stair at the facade
+   has no corridor to the aisles but through a lot. And a floor that will not walk walled has a third try before no
+   walls at all: only the rooms the first two tries' walk missed (the fewer) are opened.
+4. `building.grow_floor{dine_floors = n}`; `store_lab` shows a restaurant floor too.
+
+**Measured.** Space-graph reachability on island_8_nature: 116 buildings / 491 unreachable cells (492 after
+ADR-0260); no shop, restaurant or bar cell among them. The tower test lays its restaurant floor as 6 restaurants and
+6 bars, every one with its kitchen line or bar run, nothing else but restrooms and the lounge.

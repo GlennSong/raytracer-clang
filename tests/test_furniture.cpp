@@ -1072,17 +1072,39 @@ TEST_CASE(a_tower_has_a_department_store_and_restaurants_on_top) {
                 electronics.count("fitting_room") ? electronics.at("fitting_room") : 0);
     CHECK(electronics.count("tv_unit") > 0);
     CHECK(electronics.count("fitting_room") == 0);
-    // every room on a store floor is the store's
+    // every room on a store floor is the store's, and every room on a restaurant floor a restaurant, a bar, the
+    // restrooms or the lounge to wait in -- never an office
     {
         const std::vector<StoreyPlan> storeys = storeyPlans(plan, p);
         const CorePlan core = coreFor(plan, p, entranceEdgeFor(plan, p));
-        const RoomPlan rp = roomPlan(storeys[1].plan, p, core, static_cast<std::size_t>(-1), interiorWallInset(p), 1);
+        CHECK(storeyUseOf(plan, p, storeys, 1) == "department_store");
+        CHECK(storeyUseOf(plan, p, storeys, 10).empty());
+        auto roomsOn = [&](int k) {
+            return roomPlan(storeys[static_cast<std::size_t>(k)].plan, p, core, static_cast<std::size_t>(-1),
+                            interiorWallInset(p), k, Poly2{}, static_cast<std::size_t>(-1), Vec2(1e30, 1e30),
+                            storeyUseOf(plan, p, storeys, k));
+        };
+        const RoomPlan rp = roomsOn(1);
         int other = 0;
         for (const Room& r : rp.rooms)
             if (r.kind != RoomKind::SalesFloor && r.kind != RoomKind::CashDesk && r.kind != RoomKind::FittingRooms &&
                 r.kind != RoomKind::Stockroom) ++other;
         CHECK(!rp.rooms.empty());
         CHECK(other == 0);
+        int dineAt = -1;
+        for (int k = 1; k < static_cast<int>(storeys.size()) && dineAt < 0; ++k)
+            if (storeyUseOf(plan, p, storeys, k) == "dining") dineAt = k;
+        CHECK(dineAt == dineK);
+        int restaurants = 0, bars = 0, offices = 0;
+        for (const Room& r : roomsOn(std::max(dineAt, 1)).rooms) {
+            if (r.kind == RoomKind::Shop && r.style == 13) ++restaurants;
+            else if (r.kind == RoomKind::Shop && r.style == 14) ++bars;
+            else if (r.kind != RoomKind::Bath && r.kind != RoomKind::Lounge) ++offices;
+        }
+        std::printf("    [tower] storey %d (dining): %d restaurants, %d bars, %d other rooms\n", dineAt, restaurants, bars, offices);
+        CHECK(restaurants > 0);
+        CHECK(bars > 0);
+        CHECK(offices == 0);
     }
     CHECK(dine.count("bar_counter") > 0 || dine.count("kitchen_pass") > 0);
     CHECK(signs.size() == 2);

@@ -19,6 +19,7 @@
 --   lifts      only on a floor with lifts (a stair-only office has no reception)
 --   min_floor  only on a floor of at least this many m2 (a small floor keeps its lots for desks)
 --   departments  only on a floor of one of these departments (below)
+--   trade      its rooms are of this trade (a restaurant, a bar: trades.cpp's names), furnished as one
 -- styles     a building's habit, picked per building by weight: `set` overrides zones' numbers by tag.
 -- departments  a shop floor's: the department each storey is, by turns from the first storey over the ground (trade
 --              names, src/engine/procgen/city/trades.cpp); its rooms take the trade (a sales floor furnishes as it)
@@ -26,8 +27,8 @@
 --              bath and kitchen behind; a studio where that will not walk), and a floor that will not walk is not
 --              opened up: it is laid as flats round the core off its lobby, or as the `residents` floor
 --
--- Keep the programs alike with builtinOfficeProgram(), builtinApartmentProgram() and builtinDepartmentStoreProgram()
--- (floor_zones.cpp): they stand
+-- Keep the programs alike with builtinOfficeProgram(), builtinApartmentProgram(), builtinDepartmentStoreProgram() and
+-- builtinDiningProgram() (floor_zones.cpp): they stand
 -- where this file is not loaded (procgen without the scripting layer, most tests).
 
 floor_programs = {
@@ -101,6 +102,24 @@ floor_programs = {
       { tag = "stockroom", kind = "stockroom", sites = {"interior", "window"}, count = 1, near = "core", enclosed = true,
         walls = "drywall", area = {8, 50}, min_depth = 2.0, min_floor = 300 },
       { tag = "sales", kind = "sales_floor" },
+    },
+  },
+
+  -- A RESTAURANT FLOOR (a tower's top dineFloors): restaurants and bars by turns along the glass, each its own room
+  -- off the corridor round the core (its kitchen inside, at the back); the restrooms by the core, a lounge to wait in
+  dining = {
+    lots = { window_depth = 7.0, aisle = 1.6, street = 1.8, lot_width = 9.0, interior_lot = 30, min_side = 2.6,
+             min_access = 2.0 },
+    fill = "lounge",
+    shallow = "lounge", shallow_depth = 0,
+    zones = {
+      { tag = "restrooms", kind = "bath", sites = {"interior", "window"}, count = 1, near = "core", enclosed = true,
+        walls = "drywall", area = {6, 30}, min_depth = 2.0, min_floor = 250 },
+      { tag = "restaurant", kind = "shop", trade = "restaurant", sites = {"window", "corner"}, share = 0.5,
+        enclosed = true, walls = "drywall", area = {25, 1e9}, min_depth = 4.5 },
+      { tag = "bar", kind = "shop", trade = "bar", sites = {"window", "corner"}, share = 1.0, enclosed = true,
+        walls = "drywall", area = {20, 1e9}, min_depth = 3.5 },
+      { tag = "lounge", kind = "lounge" },
     },
   },
 

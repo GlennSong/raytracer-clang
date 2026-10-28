@@ -2207,7 +2207,7 @@ bool floorIsWalkable(const RoomPlan& rp, const Poly2& planIn, const Vec2& entry,
 
 RoomPlan roomPlan(const Poly2& planIn, const BuildingParams& params, const CorePlan& core,
                   std::size_t blankEdge, Real inset, int storey,
-                  const Poly2& stairWell, std::size_t entranceEdge, const Vec2& stairFoot) {
+                  const Poly2& stairWell, std::size_t entranceEdge, const Vec2& stairFoot, const std::string& storeyUse) {
     const PlateTopology topo = plateTopologyFor(planIn, params, core);
     // WHAT THE FLOOR IS FOR (building_uses.lua): a use that names a floor program is laid as that program -- a new one
     // in floor_programs.lua needs no code here; else the planner's default for its kind of floor
@@ -2230,16 +2230,17 @@ RoomPlan roomPlan(const Poly2& planIn, const BuildingParams& params, const CoreP
         }
         return hub;
     };
-    // A DEPARTMENT STORE'S FLOOR (a tower's first `storeFloors` storeys over the ground; a mall's anchor, every storey):
-    // the `department_store` program -- a department a floor, its cash desk by the lifts, the fitting rooms and the
-    // stockroom against the core. What it cannot lay is open floor, never offices with their rooms renamed.
-    if (params.storeFloors > 0 && storey >= 1 && storey <= params.storeFloors) {
+    // A TOWER'S STORE OR RESTAURANT FLOOR (storeyUseOf): the program the storey's use names -- `department_store`
+    // (a department a floor, its tills by the lifts, fitting rooms and the stockroom against the core) or `dining`
+    // (restaurants and bars along the glass off the corridor round the core). What it cannot lay is open floor,
+    // never offices with their rooms renamed.
+    if (!storeyUse.empty() && storey >= 1 && hasFloorProgram(storeyUse)) {
         const CorePlan hub = hubFor();
         if (hub.valid) {
             const Vec2 entry = core.valid ? core.frame.toWorld({core.length * 0.5, -1.1})
                              : stairFoot.x < 1e29 ? stairFoot : centroid(stairWell);
             RoomPlan zf = zonedFloorPlan(planIn, params, hub, inset, storey, core.valid, entry, stairWell,
-                                         floorProgram("department_store"));
+                                         floorProgram(storeyUse));
             if (!zf.rooms.empty()) { zf.finish = interiorFinishFor(params); return zf; }
         }
         RoomPlan open;

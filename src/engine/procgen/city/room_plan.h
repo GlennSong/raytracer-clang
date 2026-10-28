@@ -167,16 +167,18 @@ PlateTopology plateTopologyFor(const Poly2& storeyPlan, const BuildingParams& pa
 // straight stair's), npos for none. `stairWell` is that stair's well, where
 // the hall is picked up; `entranceEdge` keeps a partition off the front
 // door. In RING topology storey 0 (the lobby) gets no rooms; in WHOLE FLOOR
-// it does, because the ground floor of a house is where you live.
+// it does, because the ground floor of a house is where you live. `storeyUse` (storeyUseOf: a tower's store or
+// restaurant floor) names the floor program this storey takes over the building's own use.
 RoomPlan roomPlan(const Poly2& storeyPlan, const BuildingParams& params, const CorePlan& core,
                   std::size_t blankEdge, Real inset, int storey,
                   const Poly2& stairWell = Poly2{},
                   std::size_t entranceEdge = static_cast<std::size_t>(-1),
-                  const Vec2& stairFoot = Vec2(1e30, 1e30));
+                  const Vec2& stairFoot = Vec2(1e30, 1e30),
+                  const std::string& storeyUse = std::string());
 
 // ONE STOREY'S ROOMS as growInterior plans them, and the SPACE GRAPH reads them (space_graph.h, issue #105): a
 // mall's levels, a big box's floor, the ground storey's shops, else the room planner's ring / flats / apartments
-// (roomPlan above), a tower's department-store and restaurant floors re-dressed as shops. Empty on a mechanical storey
+// (roomPlan above; a tower's department-store and restaurant floors as storeyUseOf says). Empty on a mechanical storey
 // (no partitions). With the storey's own circulation where its plan has it: a mall's atria (the slab's holes, the
 // upper level), its escalators (feet on the lower level, rising `escalatorRun` along `dir` one storey) and its glass
 // lift. `plan` is the building's CCW plan; `storeys` its storey stack; `core` its core (invalid: none); `runs` the

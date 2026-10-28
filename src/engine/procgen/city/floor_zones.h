@@ -110,6 +110,7 @@ struct ZoneRule {
     uint8_t near = 0;             // 0 spread out, 1 the lift lobby, 2 the core
     bool lifts = false;           // only on a floor with lifts (a stair-only office has no reception)
     std::vector<uint8_t> departments;   // only on a floor of one of these departments (trade ids); empty: any
+    int trade = -1;               // its rooms' trade (trades.h: a restaurant, a bar), over the floor's department
 };
 
 // A BUILDING'S HABIT (picked per building by seed and weight): numbers the rules take instead of their own --
@@ -157,6 +158,7 @@ private:
 FloorProgram builtinOfficeProgram();
 FloorProgram builtinApartmentProgram();
 FloorProgram builtinDepartmentStoreProgram();
+FloorProgram builtinDiningProgram();
 // The department a program's storey is (a trade id), or -1 for a program without departments.
 int floorDepartment(const FloorProgram& prog, int storey);
 const FloorProgram& floorProgram(const std::string& name);
