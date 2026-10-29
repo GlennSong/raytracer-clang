@@ -704,15 +704,35 @@ TEST_CASE(a_stride_through_grass_swishes_and_then_stops) {
 
 TEST_CASE(a_drop_lands_heavier_and_lower_than_a_hop) {
     // #63's gate: "a 1 m hop and a 5 m drop sound different; landing on grass vs rock differs".
+    // Judged over 40 landings, not one (ADR-0265: seed 1 had passed on a lucky draw while an asphalt drop rang only
+    // 1.23x a hop on average): a click's spike moves where 90% of the energy has played, so one drop in a few rings
+    // short; the sound as a whole must ring on.
     const uint32_t rate = 48000;
     for (sfx::Ground g : {sfx::Ground::Grass, sfx::Ground::Rock, sfx::Ground::Asphalt}) {
-        const Voiceprint hop = voiceprint(sfx::landing(g, 0.1, rate, 1), rate);
-        const Voiceprint drop = voiceprint(sfx::landing(g, 1.0, rate, 1), rate);
-        CHECK(drop.length > hop.length * 1.3);         // it rings on
-        CHECK(drop.band[0] > hop.band[0]);             // more of it is the low body thud
+        double ratio = 0;
+        int longer = 0;
+        for (uint32_t seed = 1; seed <= 40; ++seed) {
+            const Voiceprint hop = voiceprint(sfx::landing(g, 0.1, rate, seed), rate);
+            const Voiceprint drop = voiceprint(sfx::landing(g, 1.0, rate, seed), rate);
+            ratio += drop.length / hop.length / 40;
+            longer += drop.length > hop.length * 1.3;
+            CHECK(drop.band[0] > hop.band[0]);             // more of it is the low body thud, every time
+        }
+        std::printf("    [landing] %-8s a drop rings %.2fx a hop on average, 1.3x or more in %d of 40\n", sfx::groundName(g), ratio, longer);
+        CHECK(ratio > 1.5);                                // it rings on
+        CHECK(longer >= 28);
     }
-    CHECK(distance(voiceprint(sfx::landing(sfx::Ground::Grass, 0.6, rate, 1), rate),
-                   voiceprint(sfx::landing(sfx::Ground::Rock, 0.6, rate, 1), rate)) > 0.15);
+    double apart = 0;
+    int distinct = 0;
+    for (uint32_t seed = 1; seed <= 40; ++seed) {
+        const double d = distance(voiceprint(sfx::landing(sfx::Ground::Grass, 0.6, rate, seed), rate),
+                                  voiceprint(sfx::landing(sfx::Ground::Rock, 0.6, rate, seed), rate));
+        apart += d / 40;
+        distinct += d > 0.15;
+    }
+    std::printf("    [landing] grass vs rock %.3f apart on average, distinct in %d of 40\n", apart, distinct);
+    CHECK(apart > 0.2);
+    CHECK(distinct >= 36);
 }
 
 TEST_CASE(ambience_loops_are_seamless_and_audible) {
@@ -858,16 +878,21 @@ TEST_CASE(hard_ground_steps_are_a_heel_and_a_toe) {
         }
         return total > 0 ? inHits / total : 0.0;
     };
+    // over 40 steps a ground (ADR-0265): a toe now and then lands soft under the heel's click (a click is noise, its
+    // spike varies) -- a real step rolls sometimes too -- so nine in ten show both hits, every pair ~0.09 s apart
     for (sfx::Ground g : {sfx::Ground::Asphalt, sfx::Ground::Concrete, sfx::Ground::Rock, sfx::Ground::Wood}) {
-        for (uint32_t seed : {1u, 2u, 3u}) {
+        int two = 0;
+        double hitsLow = 1;
+        for (uint32_t seed = 1; seed <= 40; ++seed) {
             std::vector<double> on;
             const double hits = analyse(sfx::footstep(g, rate, seed), on);
-            std::printf("    [hard] %-8s seed %u onsets %zu (gap %.0f ms), %.0f%% of the energy in the hits\n", sfx::groundName(g), seed, on.size(),
-                                       on.size() > 1 ? (on[1] - on[0]) * 1000 : 0.0, hits * 100);
-            CHECK(on.size() == 2);
+            two += on.size() == 2;
             if (on.size() == 2) CHECK(on[1] - on[0] > 0.06 && on[1] - on[0] < 0.15);
+            hitsLow = std::min(hitsLow, hits);
             if (g != sfx::Ground::Wood) CHECK(hits > 0.6);   // wood's ring is the point of it
         }
+        std::printf("    [hard] %-8s heel and toe in %d of 40 steps, at least %.0f%% of the energy in the hits\n", sfx::groundName(g), two, hitsLow * 100);
+        CHECK(two >= 36);
     }
     for (sfx::Ground g : {sfx::Ground::Grass, sfx::Ground::Sand, sfx::Ground::Snow}) {
         std::vector<double> on;
@@ -1153,3 +1178,4 @@ TEST_CASE(a_tyre_squeals_high_and_rolls_low) {
     CHECK(roll > 0.5);
     CHECK(board > 0.5);
 }
+

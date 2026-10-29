@@ -25,7 +25,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <fstream>
-#include <random>
+#include "../src/proc_rng.h"
 #include <vector>
 
 using namespace engine;
@@ -48,8 +48,8 @@ std::vector<float> humClip() {
 // Low-passed white noise, loopable: a wind/engine "whoosh" bed.
 std::vector<float> whooshClip() {
     std::vector<float> frames(RATE * 2);
-    std::mt19937 rng(42);
-    std::uniform_real_distribution<float> noise(-1.0f, 1.0f);
+    ProcRng rng(42);
+    ProcUniform<float> noise(-1.0f, 1.0f);
     float lp = 0.0f;
     for (auto& f : frames) {
         lp += 0.08f * (noise(rng) - lp);   // one-pole low pass

@@ -4,7 +4,7 @@
 #include "../../rt_math.h"   // Vec3
 #include "lsystem.h"         // ModuleString
 #include <cstdint>
-#include <random>
+#include "../../proc_rng.h"
 #include <vector>
 
 namespace engine {
@@ -36,7 +36,7 @@ struct Skeleton {
 // [ ] = push/pop a branch (depth + 1). `angleJitter` (degrees) perturbs every
 // turn from the rng for natural variation.
 Skeleton buildSkeleton(const ModuleString& modules, float angleJitter,
-                       std::mt19937& rng);
+                       ProcRng& rng);
 Skeleton buildSkeleton(const ModuleString& modules, float angleJitter = 0.0f,
                        uint32_t seed = 0);
 

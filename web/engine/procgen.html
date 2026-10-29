@@ -536,12 +536,15 @@
     freeway bends call the kernels directly. Until ADR-0255 five of them carried their own copy of the basis.</p>
 
   <h2>One random stream</h2>
-  <p>A seed must always grow the same shape on every machine. ADR-0098 added <code>ProcRng</code>
-    (<code>procgen/proc_rng.h</code>), a 28-line xorshift stream that avoids <code>&lt;random&gt;</code> distributions,
-    because their output differs between standard libraries. Generators draw from it in a fixed order. The grass, ground
-    clutter, real_tree, stylized rocks and stylized trees use it. The older generators (the recipe trees in
-    <code>tree.cpp</code>, the L-system, scatter, the foliage kit) still draw from <code>std::mt19937</code> through
-    <code>std::uniform_real_distribution</code>. That is exactly the case the <code>ProcRng</code> header warns about.</p>
+  <p>A seed must always grow the same shape on every machine. <code>ProcRng</code> (<code>src/proc_rng.h</code>) is
+    a small xorshift stream that avoids <code>&lt;random&gt;</code>'s distributions, whose output differs between standard
+    libraries: the same seed used to grow a different tree on a Mac or under MSVC than on Linux. Generators draw from it
+    in a fixed order. Since ADR-0265 everything does: the recipe trees, the L-system, scatter, the foliage kit, rocks,
+    the planet, the sound, the particles and the path tracer. Its ranges (<code>ProcUniform</code>,
+    <code>ProcUniformInt</code>, <code>ProcExponential</code>, <code>ProcPoisson</code>) are called like the
+    <code>&lt;random&gt;</code> ones. One thing keeps <code>std::mt19937</code>: the terrain's Perlin table, shuffled by a
+    frozen copy of what libstdc++'s <code>std::shuffle</code> did (<code>frozenShuffle256</code>), so the islands' ground,
+    and the cities planned on it, stay exactly where they were.</p>
 
   <h2>Where to look</h2>
   <ul class="files">
@@ -550,7 +553,7 @@
     <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/procgen/texture_field.h">src/engine/procgen/texture_field.h</a> — Field2 words and bakes; <a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/procgen/material_recipes.h">material_recipes.h</a> for stone, bark and blade textures as recipes</li>
     <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/procgen/polymesh.h">src/engine/procgen/polymesh.h</a> — the polymesh kit</li>
     <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/procgen/proc_model.h">src/engine/procgen/proc_model.h</a> — ProcModel, parts, colliders, instance groups</li>
-    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/procgen/proc_rng.h">src/engine/procgen/proc_rng.h</a> — the shared random stream</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/proc_rng.h">src/proc_rng.h</a> — the shared random stream</li>
     <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/curve.h">src/curve.h</a> — Spline&lt;T&gt;; <a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/editable_curve.h">engine/editable_curve.h</a>, <a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/curve_edit.h">curve_edit.h</a> for the editing toolkit</li>
     <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/scripting/procgen_bindings.cpp">src/engine/scripting/procgen_bindings.cpp</a> — every Lua word (about 4,500 lines)</li>
     <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/docs/capabilities.md">docs/capabilities.md</a> — the capability ledger to check before building anything new</li>

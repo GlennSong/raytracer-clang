@@ -9,7 +9,7 @@
 
 #include <algorithm>
 #include <cmath>
-#include <random>
+#include "../../proc_rng.h"
 
 namespace engine {
 namespace sfx {
@@ -35,9 +35,9 @@ void ring(std::vector<double>& acc, double rate, double atSec, double hz, double
 }
 
 // A burst of band-limited noise (a click, a scuff) added at `atSec`.
-void burst(std::vector<double>& acc, double rate, std::mt19937& rng, double atSec, double lo, double hi, double attackSec,
+void burst(std::vector<double>& acc, double rate, ProcRng& rng, double atSec, double lo, double hi, double attackSec,
            double decaySec, double amp, bool wrap = false) {
-    std::uniform_real_distribution<double> uni(-1.0, 1.0);
+    ProcUniform<double> uni(-1.0, 1.0);
     BandPass band(lo, hi, rate);
     const auto n = acc.size();
     const auto start = static_cast<size_t>(atSec * rate);
@@ -55,15 +55,15 @@ void burst(std::vector<double>& acc, double rate, std::mt19937& rng, double atSe
     }
 }
 
-std::vector<double> whiteNoise(size_t count, std::mt19937& rng) {
-    std::uniform_real_distribution<double> uni(-1.0, 1.0);
+std::vector<double> whiteNoise(size_t count, ProcRng& rng) {
+    ProcUniform<double> uni(-1.0, 1.0);
     std::vector<double> w(count);
     for (double& x : w) x = uni(rng);
     return w;
 }
 
 // A circEnvelope scaled to [-1, 1].
-std::vector<double> unitEnvelope(size_t count, std::mt19937& rng, int minCycles, int maxCycles, int terms) {
+std::vector<double> unitEnvelope(size_t count, ProcRng& rng, int minCycles, int maxCycles, int terms) {
     std::vector<double> e = circEnvelope(count, rng, minCycles, maxCycles, terms);
     double peak = 1e-9;
     for (double x : e) peak = std::max(peak, std::fabs(x));
@@ -90,7 +90,7 @@ std::vector<float> windRush(uint32_t sampleRate, uint32_t seed) {
     // buffeted a few times a second. The caller raises gain and pitch with airspeed -- faster is louder and brighter.
     const double rate = sampleRate;
     const auto count = static_cast<size_t>(rate * 4.0);
-    std::mt19937 rng(seed * 2246822519u + 3u);
+    ProcRng rng(seed * 2246822519u + 3u);
     const std::vector<double> roar = circBand(whiteNoise(count, rng), rate, 30.0, 380.0);
     const std::vector<double> hiss = circBand(whiteNoise(count, rng), rate, 900.0, 6000.0);
     const std::vector<double> gust = unitEnvelope(count, rng, 1, 3, 3);
@@ -109,8 +109,8 @@ std::vector<float> clothFlutter(double flapsHz, uint32_t sampleRate, uint32_t se
     const double rate = sampleRate;
     const double len = 2.0;
     const auto count = static_cast<size_t>(rate * len);
-    std::mt19937 rng(seed * 3266489917u + 11u);
-    std::uniform_real_distribution<double> u01(0.0, 1.0);
+    ProcRng rng(seed * 3266489917u + 11u);
+    ProcUniform<double> u01(0.0, 1.0);
     const int flaps = std::max(1, static_cast<int>(std::lround(flapsHz * len)));
     const double period = len / flaps;
     const std::vector<double> crackle = circBand(whiteNoise(count, rng), rate, 350.0, 4000.0);
@@ -137,8 +137,8 @@ std::vector<float> canopyOpen(uint32_t sampleRate, uint32_t seed) {
     // taut, then the cloth settling into a flutter. ~1.5 s, one-shot.
     const double rate = sampleRate;
     const auto count = static_cast<size_t>(rate * 1.5);
-    std::mt19937 rng(seed * 2654435761u + 41u);
-    std::uniform_real_distribution<double> uni(-1.0, 1.0);
+    ProcRng rng(seed * 2654435761u + 41u);
+    ProcUniform<double> uni(-1.0, 1.0);
     std::vector<double> acc(count, 0.0);
     BandPass rustle(400.0, 5000.0, rate), tail(300.0, 3000.0, rate);
     constexpr double kFill = 0.55;
@@ -173,8 +173,8 @@ std::vector<float> hookFire(uint32_t sampleRate, uint32_t seed) {
     // pays out -- under a whoosh of the hook going. ~0.5 s.
     const double rate = sampleRate;
     const auto count = static_cast<size_t>(rate * 0.5);
-    std::mt19937 rng(seed * 2246822519u + 77u);
-    std::uniform_real_distribution<double> u01(0.0, 1.0);
+    ProcRng rng(seed * 2246822519u + 77u);
+    ProcUniform<double> u01(0.0, 1.0);
     std::vector<double> acc(count, 0.0);
     ring(acc, rate, 0.0, 140.0, 0.03, 0.9);
     burst(acc, rate, rng, 0.0, 2000.0, 8000.0, 0.0005, 0.002, 0.6);
@@ -197,8 +197,8 @@ std::vector<float> hookBite(uint32_t sampleRate, uint32_t seed) {
     // chipped off. ~0.6 s; seeds vary the steel's pitch.
     const double rate = sampleRate;
     const auto count = static_cast<size_t>(rate * 0.6);
-    std::mt19937 rng(seed * 3266489917u + 5u);
-    std::uniform_real_distribution<double> jitter(0.94, 1.06);
+    ProcRng rng(seed * 3266489917u + 5u);
+    ProcUniform<double> jitter(0.94, 1.06);
     std::vector<double> acc(count, 0.0);
     const double base = 520.0 * jitter(rng);
     const double ratios[4] = {1.0, 2.41, 3.93, 5.6}, gains[4] = {1.0, 0.6, 0.35, 0.2};
@@ -214,8 +214,8 @@ std::vector<float> ropeTwang(uint32_t sampleRate, uint32_t seed) {
     // a rope, not a guitar string), the fibres creaking as they take the load, a thud at the hand. ~0.7 s.
     const double rate = sampleRate;
     const auto count = static_cast<size_t>(rate * 0.7);
-    std::mt19937 rng(seed * 2654435761u + 19u);
-    std::uniform_real_distribution<double> uni(-1.0, 1.0), u01(0.0, 1.0);
+    ProcRng rng(seed * 2654435761u + 19u);
+    ProcUniform<double> uni(-1.0, 1.0), u01(0.0, 1.0);
     std::vector<double> acc(count, 0.0);
     const double f0 = 75.0 * (0.92 + 0.16 * u01(rng));
     const auto period = static_cast<size_t>(rate / f0);
@@ -244,8 +244,8 @@ std::vector<float> reelWinch(uint32_t sampleRate, uint32_t seed) {
     // loop; the caller's pitch follows the reel speed.
     const double rate = sampleRate;
     const auto count = static_cast<size_t>(rate);
-    std::mt19937 rng(seed * 40503u + 13u);
-    std::uniform_real_distribution<double> u01(0.0, 1.0);
+    ProcRng rng(seed * 40503u + 13u);
+    ProcUniform<double> u01(0.0, 1.0);
     std::vector<double> acc(count, 0.0);
     constexpr int kClicks = 30;
     for (int c = 0; c < kClicks; ++c) {
@@ -268,8 +268,8 @@ std::vector<float> boardRoll(uint32_t sampleRate, uint32_t seed) {
     // faint bearing whir. A seamless 2 s loop; gain and pitch by speed (a scooter's small hard wheels: higher).
     const double rate = sampleRate;
     const auto count = static_cast<size_t>(rate * 2.0);
-    std::mt19937 rng(seed * 2246822519u + 29u);
-    std::uniform_real_distribution<double> u01(0.0, 1.0);
+    ProcRng rng(seed * 2246822519u + 29u);
+    ProcUniform<double> u01(0.0, 1.0);
     const std::vector<double> rumble = circBand(whiteNoise(count, rng), rate, 50.0, 600.0);
     const std::vector<double> sway = unitEnvelope(count, rng, 2, 6, 3);
     std::vector<double> acc(count, 0.0);
@@ -286,8 +286,8 @@ std::vector<float> boardClack(uint32_t sampleRate, uint32_t seed) {
     // One truck's wheels over a pavement joint: a thud, the deck's knock, a click. ~0.2 s; played once per truck.
     const double rate = sampleRate;
     const auto count = static_cast<size_t>(rate * 0.2);
-    std::mt19937 rng(seed * 3266489917u + 31u);
-    std::uniform_real_distribution<double> jitter(0.92, 1.08);
+    ProcRng rng(seed * 3266489917u + 31u);
+    ProcUniform<double> jitter(0.92, 1.08);
     std::vector<double> acc(count, 0.0);
     ring(acc, rate, 0.0, 120.0 * jitter(rng), 0.03, 0.8);
     ring(acc, rate, 0.0, 330.0 * jitter(rng), 0.035, 0.45);
@@ -300,7 +300,7 @@ std::vector<float> ollie(uint32_t sampleRate, uint32_t seed) {
     // grip tape. ~0.35 s.
     const double rate = sampleRate;
     const auto count = static_cast<size_t>(rate * 0.35);
-    std::mt19937 rng(seed * 2654435761u + 53u);
+    ProcRng rng(seed * 2654435761u + 53u);
     std::vector<double> acc(count, 0.0);
     burst(acc, rate, rng, 0.0, 1500.0, 7000.0, 0.0003, 0.0015, 1.0);
     ring(acc, rate, 0.0, 420.0, 0.04, 0.8);
@@ -314,8 +314,8 @@ std::vector<float> boardLand(uint32_t sampleRate, uint32_t seed) {
     // Back down: both trucks slapping the ground a hair apart, the deck's knock, the wheels rattling. ~0.4 s.
     const double rate = sampleRate;
     const auto count = static_cast<size_t>(rate * 0.4);
-    std::mt19937 rng(seed * 2246822519u + 61u);
-    std::uniform_real_distribution<double> u01(0.0, 1.0);
+    ProcRng rng(seed * 2246822519u + 61u);
+    ProcUniform<double> u01(0.0, 1.0);
     std::vector<double> acc(count, 0.0);
     for (double at : {0.0, 0.018}) {
         ring(acc, rate, at, 90.0, 0.06, 0.9);
@@ -334,8 +334,8 @@ std::vector<float> handGrab(uint32_t sampleRate, uint32_t seed) {
     // under them, the jacket's cloth swishing as the body's weight swings in. ~0.45 s; seeds vary it.
     const double rate = sampleRate;
     const auto count = static_cast<size_t>(rate * 0.45);
-    std::mt19937 rng(seed * 2246822519u + 7u);
-    std::uniform_real_distribution<double> jitter(0.9, 1.1);
+    ProcRng rng(seed * 2246822519u + 7u);
+    ProcUniform<double> jitter(0.9, 1.1);
     std::vector<double> acc(count, 0.0);
     for (int h = 0; h < 2; ++h) {
         const double at = h * 0.028 * jitter(rng);
@@ -351,8 +351,8 @@ std::vector<float> handHold(uint32_t sampleRate, uint32_t seed) {
     // One hand set on the next hold, climbing: a soft pat and a little grit. ~0.2 s.
     const double rate = sampleRate;
     const auto count = static_cast<size_t>(rate * 0.2);
-    std::mt19937 rng(seed * 3266489917u + 41u);
-    std::uniform_real_distribution<double> jitter(0.88, 1.12);
+    ProcRng rng(seed * 3266489917u + 41u);
+    ProcUniform<double> jitter(0.88, 1.12);
     std::vector<double> acc(count, 0.0);
     ring(acc, rate, 0.0, 170.0 * jitter(rng), 0.018, 0.5);
     burst(acc, rate, rng, 0.0, 1100.0, 3200.0, 0.0006, 0.006, 0.35);
@@ -365,8 +365,8 @@ std::vector<float> metalGrab(uint32_t sampleRate, uint32_t seed) {
     // grip, so short and low), a faint rattle at its fixing. ~0.4 s.
     const double rate = sampleRate;
     const auto count = static_cast<size_t>(rate * 0.4);
-    std::mt19937 rng(seed * 2654435761u + 67u);
-    std::uniform_real_distribution<double> jitter(0.94, 1.06);
+    ProcRng rng(seed * 2654435761u + 67u);
+    ProcUniform<double> jitter(0.94, 1.06);
     std::vector<double> acc(count, 0.0);
     const double base = 610.0 * jitter(rng);
     const double ratios[3] = {1.0, 2.76, 5.40}, gains[3] = {1.0, 0.45, 0.2};
@@ -382,8 +382,8 @@ std::vector<float> freewheel(uint32_t sampleRate, uint32_t seed) {
     // sets pitch from the wheel's revs). A seamless 1 s loop.
     const double rate = sampleRate;
     const auto count = static_cast<size_t>(rate);
-    std::mt19937 rng(seed * 40503u + 71u);
-    std::uniform_real_distribution<double> u01(0.0, 1.0);
+    ProcRng rng(seed * 40503u + 71u);
+    ProcUniform<double> u01(0.0, 1.0);
     std::vector<double> acc(count, 0.0);
     constexpr int kClicks = 40;
     for (int c = 0; c < kClicks; ++c) {
@@ -399,7 +399,7 @@ std::vector<float> tyreRoll(uint32_t sampleRate, uint32_t seed) {
     // A pneumatic tyre on asphalt: a soft broadband hum over a low roar. A seamless 2 s loop; gain and pitch by speed.
     const double rate = sampleRate;
     const auto count = static_cast<size_t>(rate * 2.0);
-    std::mt19937 rng(seed * 3266489917u + 83u);
+    ProcRng rng(seed * 3266489917u + 83u);
     const std::vector<double> hum = circBand(whiteNoise(count, rng), rate, 120.0, 1600.0);
     const std::vector<double> roar = circBand(whiteNoise(count, rng), rate, 40.0, 140.0);
     const std::vector<double> sway = unitEnvelope(count, rng, 2, 5, 3);
@@ -415,8 +415,8 @@ std::vector<float> tyreSqueal(uint32_t sampleRate, uint32_t seed) {
     const double rate = sampleRate;
     constexpr double kLen = 2.0;
     const auto count = static_cast<size_t>(rate * kLen);
-    std::mt19937 rng(seed * 2654435761u + 97u);
-    std::uniform_real_distribution<double> u01(0.0, 1.0), ph(0.0, TWO_PI);
+    ProcRng rng(seed * 2654435761u + 97u);
+    ProcUniform<double> u01(0.0, 1.0), ph(0.0, TWO_PI);
     const double f0 = std::round((860.0 + 120.0 * u01(rng)) * kLen) / kLen;   // whole cycles in the loop
     struct Term { int cycles; double amp, phase; };
     std::vector<Term> wander;

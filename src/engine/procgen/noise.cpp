@@ -9,6 +9,40 @@
 namespace engine {
 
 namespace {
+// THE TERRAIN'S PERMUTATION, FROZEN (ADR-0265): what libstdc++'s std::shuffle over std::mt19937 laid on the islands
+// every bake so far grew from, written out so every host shuffles alike. mt19937 itself is fixed by the standard;
+// shuffle's draws are not (libc++ and MSVC differ), and a new stream would move every hill under the planned cities.
+// libstdc++ (GCC 11+): swaps in pairs, both positions from one draw of Lemire's nearly divisionless range.
+uint32_t lemireBelow(std::mt19937& g, uint32_t range) {
+    uint64_t product = static_cast<uint64_t>(g()) * range;
+    uint32_t low = static_cast<uint32_t>(product);
+    if (low < range) {
+        const uint32_t threshold = static_cast<uint32_t>(-range) % range;
+        while (low < threshold) {
+            product = static_cast<uint64_t>(g()) * range;
+            low = static_cast<uint32_t>(product);
+        }
+    }
+    return static_cast<uint32_t>(product >> 32);
+}
+}  // namespace
+
+void frozenShuffle256(std::array<int, 256>& p, uint32_t seed) {
+    std::mt19937 g(seed);
+    std::size_t i = 1;
+    std::swap(p[i], p[lemireBelow(g, 2)]);   // an even count: the first swap on its own
+    ++i;
+    while (i < p.size()) {
+        const uint32_t range = static_cast<uint32_t>(i) + 1;
+        const uint32_t x = lemireBelow(g, range * (range + 1));
+        std::swap(p[i], p[x / (range + 1)]);
+        ++i;
+        std::swap(p[i], p[x % (range + 1)]);
+        ++i;
+    }
+}
+
+namespace {
 double fade(double t) { return t * t * t * (t * (t * 6.0 - 15.0) + 10.0); }
 double lerp(double t, double a, double b) { return a + t * (b - a); }
 }  // namespace
@@ -16,8 +50,7 @@ double lerp(double t, double a, double b) { return a + t * (b - a); }
 Noise::Noise(uint32_t seed) {
     std::array<int, 256> p;
     std::iota(p.begin(), p.end(), 0);
-    std::mt19937 gen(seed);
-    std::shuffle(p.begin(), p.end(), gen);
+    frozenShuffle256(p, seed);
     for (int i = 0; i < 256; i++) perm_[i] = perm_[i + 256] = p[i];
 }
 

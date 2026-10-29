@@ -1,7 +1,12 @@
 #include "test_framework.h"
 
 #include "../src/engine/procgen/noise.h"
+#include <algorithm>
+#include <array>
 #include <cmath>
+#include <numeric>
+#include <random>
+#include <vector>
 
 using namespace engine;  // namespace migration (ADR-0015)
 
@@ -51,4 +56,25 @@ TEST_CASE(noise_at_integer_lattice_is_near_zero) {
 TEST_CASE(noise2_matches_noise3_zero_slice) {
     Noise n(5);
     CHECK_APPROX(n.noise2(2.3, 4.1), n.noise3(2.3, 4.1, 0.0), 1e-12);
+}
+
+TEST_CASE(the_frozen_permutation_is_libstdcxx_shuffle) {
+    // The terrain's table must be what every bake so far grew from: libstdc++'s std::shuffle over mt19937. Checked
+    // against the library itself where it is libstdc++; elsewhere the frozen copy is the reference.
+#if defined(__GLIBCXX__)
+    int same = 0, n = 0;
+    std::vector<uint32_t> seeds = {0xdeadbeefu, 0xffffffffu};
+    for (uint32_t s = 0; s < 1000; ++s) seeds.push_back(s);
+    for (uint32_t seed : seeds) {
+        std::array<int, 256> a, b;
+        std::iota(a.begin(), a.end(), 0);
+        b = a;
+        std::mt19937 g(seed);
+        std::shuffle(a.begin(), a.end(), g);
+        engine::frozenShuffle256(b, seed);
+        same += a == b;
+        ++n;
+    }
+    CHECK(same == n);
+#endif
 }

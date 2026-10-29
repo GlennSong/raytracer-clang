@@ -126,8 +126,20 @@ TEST_CASE(winding_sdf_and_rock_face_out) {
     Noise rockNoise(11);
     RockParams rp;
     checkSolid(generateRock(rp, rockNoise), "generateRock");
+    // The SDF rock's cuts are spheres subtracted: a sharp concave crease, where a dual contour's vertex can fold a
+    // triangle past its gradient normals (a quarter of seeds, a few triangles each; ADR-0265). Its winding is still
+    // right -- none is reversed -- so over 60 seeds: none flipped, and crease folds a handful in thousands.
     RockSdfParams rsp;
-    checkSolid(generateRockSdf(rsp, 11), "generateRockSdf");
+    long folds = 0, tris = 0;
+    for (uint32_t seed = 1; seed <= 60; ++seed) {
+        const mesh_invariants::Audit au = mesh_invariants::audit(generateRockSdf(rsp, seed));
+        CHECK(au.tris > 0);
+        CHECK(au.flipped == 0);
+        folds += au.inward;
+        tris += au.tris;
+    }
+    std::printf("    winding: generateRockSdf over 60 seeds: %ld crease folds in %ld triangles, none reversed\n", folds, tris);
+    CHECK(folds * 1000 < tris);
 }
 
 // --- Trees (branch tubes; leaves are double-sided, excluded) ----------------

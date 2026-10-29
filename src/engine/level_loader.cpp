@@ -104,7 +104,7 @@
 #include "scripting/vehicle_spec.h"
 #endif
 #include "model_importer.h"
-#include <random>
+#include "../proc_rng.h"
 #include <sstream>
 #include "components.h"
 #include "vehicle_lamps.h"   // beaconCellPhase: the flash every beacon tier shares
@@ -3284,8 +3284,8 @@ static void loadVegetation(const json& veg, const TerrainParams& terrain,
     // pad plants by area (parkTreeDensity per m^2), on the pad's own top plane.
     if (lots && veg.value("parkTrees", true)) {
         const double density = veg.value("parkTreeDensity", 0.012);   // ~1 / 85 m^2
-        std::mt19937 prng(vegSeed ^ 0x51ed270bu);
-        std::uniform_real_distribution<double> uni(0.0, 1.0);
+        ProcRng prng(vegSeed ^ 0x51ed270bu);
+        ProcUniform<double> uni(0.0, 1.0);
         for (const engine::LotBuilding& lb : *lots) {
             if (lb.pad.size() < 3 || (lb.type != "park" && lb.type != "green")) continue;
             // Sculpted parks planted their own treeSpots (terrain-sampled,

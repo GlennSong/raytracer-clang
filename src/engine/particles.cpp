@@ -1,4 +1,5 @@
 #include "particles.h"
+#include "../proc_rng.h"
 
 #include <algorithm>
 #include <cmath>
@@ -102,7 +103,7 @@ void ParticlePool::emit(int effect, const Vec3& pos, const Vec3& vel, Real size,
     if (effect < 0 || static_cast<std::size_t>(effect) >= book_->size()) return;
     if (p_.size() >= kMax) p_.erase(p_.begin(), p_.begin() + static_cast<std::ptrdiff_t>(kMax / 8));   // the oldest
     const ParticleEffect& E = book_->at(effect);
-    std::uniform_real_distribution<float> u(0.0f, 1.0f);
+    ProcUniform<float> u(0.0f, 1.0f);
     Particle p;
     p.pos = pos;
     p.vel = vel;
@@ -119,7 +120,7 @@ void ParticlePool::burst(int effect, const Vec3& pos, const Vec3& dir, int count
                          const Vec3& ref) {
     if (effect < 0 || static_cast<std::size_t>(effect) >= book_->size()) return;
     const ParticleEffect& E = book_->at(effect);
-    std::uniform_real_distribution<Real> u(-1.0, 1.0);
+    ProcUniform<Real> u(-1.0, 1.0);
     auto ball = [&]() {
         for (;;) {
             const Vec3 v(u(rng_), u(rng_), u(rng_));

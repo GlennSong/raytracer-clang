@@ -6,7 +6,7 @@
 #include "../player_pose.h"
 
 #include <cstdint>
-#include <random>
+#include "../../proc_rng.h"
 
 namespace engine {
 
@@ -51,7 +51,7 @@ private:
     Real toJoint_ = 1.0;
     Real backTruckIn_ = -1;
     Real lastKick_ = 0;
-    std::mt19937 rng_{0x6d6f7665};
+    ProcRng rng_{0x6d6f7665};
 };
 
 }  // namespace engine

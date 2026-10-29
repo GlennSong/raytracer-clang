@@ -150,7 +150,7 @@ vocabulary, and a missing word is added HERE (C++ and Lua), not privately to one
 | Bake cache `bakeCached(key, bake)` → `cache/fields/` | `procgen/texture_field.h` | every recipe bake | the recipe string carries the version; replaced `cache/terrain_layers` |
 | Material recipes: stone (granite, sandstone, basalt) | `procgen/material_recipes.h` | rock library | add new material texture sets here |
 | Shape kit: icosphere, displaceNoise, cutByPlane, facet, leanNormals, deform, colorBy, tube, crossCards, vertex / triFacing | `mesh_builder.h` / `mesh_shapes.cpp` | stylized trees, rocks, grass; Lua `mesh.*` | organic/mineral forms; `leanNormals` is the "one soft volume" trick |
-| Seeded stream `ProcRng` | `procgen/proc_rng.h` | flora generators | do not add another private `Rng` (city/district.cpp's predates it) |
+| Seeded stream `ProcRng` | `src/proc_rng.h` | every generator, sound, particles, tracer (ADR-0265; the terrain's permutation alone keeps a frozen mt19937 shuffle) | do not add another private `Rng` (city/district.cpp's predates it) |
 | Winding `MeshBuilder::emitTri` / `triFacing` | `mesh_builder.h` | everything | front face = `dot(cross(c-a, b-a), n) >= 0` |
 | Material features: triplanar, per-instance variation, top layer | `RenderMaterial` fields + `mesh.frag` (ADR-0098) | rocks | off at 0; Vulkan only (Metal owed) |
 | Terrain layers (height-blended, cover weights in vertex colour) | `Surface::TerrainLayers`, `procgen/ground_layers.h` | levels with `groundCover` | Metal owed |

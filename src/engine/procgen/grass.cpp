@@ -1,5 +1,5 @@
 #include "grass.h"
-#include "proc_rng.h"
+#include "../../proc_rng.h"
 #include "../mesh_builder.h"
 
 #include <cstdio>

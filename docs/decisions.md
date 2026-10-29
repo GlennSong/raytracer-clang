@@ -12924,3 +12924,49 @@ eliminated hole returning the filtered bridge as the outer node, and `sectorCont
 build no core, their ramps are the way up); `triangulate_with_rows_of_aligned_holes_leaves_them_open` holds 76 slabs
 of shafts in rows, in plan and mirrored. Every holed polygon in the city may triangulate differently, so the
 meshes change with the v24 rebake.
+
+## ADR-0265 — One random stream: ProcRng everywhere, the terrain's permutation frozen
+
+**Context.** The duplicate-systems sweep (#117, wave 3, item 38). Twenty files drew from `std::mt19937` through
+`<random>`'s distributions beside `ProcRng`, which the newer generators already used: the recipe tree grower, rocks,
+scatter, the foliage cards, the L-system and its skeleton, the planet, the park trees, the procedural sound, the
+footsteps, the particles and the path tracer's per-thread draw. The engine `mt19937` is fixed by the standard, but
+the distributions (`uniform_real_distribution`, `uniform_int_distribution`, `shuffle`, ...) are left to each library,
+so one seed grew a different world on libc++ (Mac) or MSVC (Windows) than on libstdc++ (Linux). Glenn, 2026-10-28,
+offered keeping today's trees through our own copy of libstdc++'s draws or one stream everywhere: "Let's do ProcRng
+everywhere".
+
+**Decision.**
+1. `ProcRng` moves to `src/proc_rng.h` (the base layer beside `rt_math.h`) and is the one stream. Ranges called like
+   `<random>`'s so a generator reads the same: `ProcUniform<T>(a, b)` [a, b), `ProcUniformInt<T>(a, b)` [a, b],
+   `ProcExponential<T>(rate)`, `ProcPoisson<T>(mean)`. A float range never returns `b`.
+2. Every generator above draws from it; the path tracer seeds a thread's `ProcRng` from `std::random_device` (the
+   one `<random>` use left: entropy, not a stream).
+3. THE TERRAIN'S PERMUTATION IS FROZEN. Perlin's table was `std::shuffle` over `mt19937`, and every terrain, erosion
+   bake and planned city sits on it; a new stream would move every hill under the cities. `frozenShuffle256` writes
+   out what libstdc++ (GCC 11+) does -- swaps in pairs, both positions from one Lemire draw of a 32-bit range -- so
+   the terrain is byte-identical on Linux and the same everywhere else. `mt19937` stays there alone, by name.
+
+**Consequences.** Every recipe tree, rock, scattered plant, foliage card and planet grows as a different individual
+once (same species, sizes and styles); `kTreeCacheVersion` 2. No city, lot or terrain bake changes: the city and lots
+producers draw from none of these, and `the_frozen_permutation_is_libstdcxx_shuffle` holds the table to
+`std::shuffle` over 1002 seeds. Sound grain, footstep pitch and particle sprays draw different values, unbaked.
+
+4. WHAT THE NEW DRAWS FOUND. Three tests had judged a design on one to three individuals, and the old stream's
+   individuals happened to pass. Measured over many seeds (Glenn chose to fix the designs and judge the population):
+   - THE HERO'S BARK BUDGET (8000 for the trunk and limbs, `nearTwigTris` for fine twigs besides) was held at seed 2
+     only; a pine averaged 20.2k against 17k (11 of 12 seeds over), and fir, oak, spruce, beech and multistem went
+     over on some. Now the budget is one number (`heroBarkBudget`, `BranchCardSpec::heroWoodTris`): the fine twigs'
+     bark takes what the limbs leave, and a hero whose limbs alone pass it is grown again coarser (sides and rings
+     1.4x apart, up to three times). Pine's sprigs are 1.6 m like the fir's and spruce's (at 1.0 its limbs alone
+     spent the budget). `every_hero_holds_its_bark_budget_whatever_its_seed`, six seeds a species.
+   - A DROP'S THUD decayed only with the square root of its scale, so on hard ground (the click carrying the energy
+     up front) a 5 m drop rang 1.23x a hop on asphalt on average against the gate's 1.3x; it decays with the scale now
+     (1.8-2.2x; a footstep, scale 1, unchanged), and grass and rock landings are apart in 40 of 40. Judged over 40.
+   - HEEL AND TOE: one step in twenty lands its toe under 30 % of a heel click's spike; nine in ten of 40 must show
+     both. The SDF rock's subtracted bites fold a few triangles at their creases on a quarter of seeds (never a
+     reversed one): the winding test holds none reversed and the folds under one in a thousand, over 60 seeds. A
+     sharper crease for the dual contour (both diagonals fold there) is owed.
+
+**Alternatives.** Our own copy of libstdc++'s distributions for every generator kept today's trees, but left two
+streams with a reason; Glenn chose one. Freezing nothing would have reshaped the island's ground under its cities.

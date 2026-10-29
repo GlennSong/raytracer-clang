@@ -6,7 +6,7 @@
 
 #include <algorithm>
 #include <cmath>
-#include <random>
+#include "../../proc_rng.h"
 #include <vector>
 
 namespace engine {
@@ -242,8 +242,8 @@ struct GasStorm { Vec3 dir; double size; double tint; };
 
 // Deterministic storm placement, shared by the texture and vertex-colour paths.
 std::vector<GasStorm> gasStorms(const GasGiantParams& p, uint32_t seed) {
-    std::mt19937 gen(seed + 991u);
-    std::uniform_real_distribution<double> uni(0.0, 1.0);
+    ProcRng gen(seed + 991u);
+    ProcUniform<double> uni(0.0, 1.0);
     std::vector<GasStorm> storms;
     for (int s = 0; s < p.stormCount; s++) {
         double lat = (uni(gen) - 0.5) * 1.4;             // avoid the very poles

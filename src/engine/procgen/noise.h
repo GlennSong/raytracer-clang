@@ -1,9 +1,14 @@
 #ifndef RAYTRACER_ENGINE_NOISE_H
 #define RAYTRACER_ENGINE_NOISE_H
 
+#include <array>
 #include <cstdint>
 
 namespace engine {
+
+// The Perlin table's shuffle: libstdc++'s std::shuffle over std::mt19937(seed), frozen so every host lays the same
+// terrain (noise.cpp; a test holds it to std::shuffle on libstdc++).
+void frozenShuffle256(std::array<int, 256>& p, uint32_t seed);
 
 // Seedable coherent noise for procgen (ROADMAP 3.7). Deterministic by
 // construction (same seed + coordinates -> same value), so generated worlds are

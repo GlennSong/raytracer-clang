@@ -17,6 +17,12 @@ uint32_t nameHash(const std::string& s) {
 }
 }  // namespace
 
+std::size_t heroBarkBudget(const TreeRecipe& r) {
+    const BranchCardSpec& bc = r.branchCards;
+    const bool twigBark = (r.leafKit.set && bc.twigs) || r.needles.set;
+    return static_cast<std::size_t>(bc.heroWoodTris + (twigBark ? bc.nearTwigTris : 0));
+}
+
 LeafCardAtlas recipeLeafAtlas(const TreeRecipe& r, const TreeMesh& tm) {
     const uint32_t h = nameHash(r.name);
     if (tm.foliage == 3 || tm.foliage == 4) {   // BLADES, FRONDS: the strap leaf's veins (material_recipes.h)
@@ -85,6 +91,11 @@ std::vector<RecipeTreeLevel> growRecipeLevels(const TreeRecipe& r, uint32_t seed
                 RecipeTreeLevel L;
                 L.tree = growRecipeTree(r, seed, o);
                 if (!r.leafPalettes.empty()) L.tree.palette = static_cast<int>(seed % r.leafPalettes.size());
+                // (the hero's bark is one budget: the limbs first, the fine twigs' bark what they leave -- heroBarkBudget)
+                const int twigBark = near ? static_cast<int>(std::clamp<long>(static_cast<long>(heroBarkBudget(r)) -
+                                                                                  static_cast<long>(L.tree.branches.indices.size() / 3),
+                                                                              0, bc.nearTwigTris))
+                                          : bc.nearTwigTris;
                 if (needles) {   // (the hero all its side shoots; further, fewer)
                     const bool mid = !near && edge <= bc.woodEdge * 1.7, light = !near && !mid && edge < 0.2;
                     // (the cards are cheap one tree at a time, not a forest's: the mid's ring holds ten times the hero's
@@ -92,14 +103,14 @@ std::vector<RecipeTreeLevel> growRecipeLevels(const TreeRecipe& r, uint32_t seed
                     // around 27": 120M triangles a frame, the spruce's light level 48k. The fronds (ADR-0191) carry a
                     // far crown's mass in few planes, so the further levels thin hard)
                     const double share = near ? 1.0 : mid ? 0.55 : light ? 0.25 : 0.12;
-                    const int wood = near ? bc.nearTwigTris : mid ? 3000 : light ? 800 : 0;
+                    const int wood = near ? twigBark : mid ? 3000 : light ? 800 : 0;
                     const int planes = static_cast<int>(2 * bc.nearLeaves * share);   // (a plane two triangles)
                     wearNeedles(L.tree, r, set, share, wood, planes, seed ^ 0x9e3779b9u);
                     L.atlas = set.atlas;
                     return L;
                 }
                 if (twigs && near && drawn.colonize == 0) {   // (the hero: twigs of bark and leaves one by one)
-                    wearNearLeaves(L.tree, r, bc.nearLeaves, bc.nearTwigTris, bc.fillRadius, bc.fillSpacing, seed ^ 0x51ed27u);
+                    wearNearLeaves(L.tree, r, bc.nearLeaves, twigBark, bc.fillRadius, bc.fillSpacing, seed ^ 0x51ed27u);
                     L.atlas = recipeLeafAtlas(r, L.tree);
                     return L;
                 }
@@ -135,7 +146,11 @@ std::vector<RecipeTreeLevel> growRecipeLevels(const TreeRecipe& r, uint32_t seed
                 next.minDistance = std::max(0.0, b0 - 4.0);
                 out.push_back(std::move(next));
             };
-            out.push_back(level(bc.woodEdge, bc.ringAngle, true, true, 0.0, 1.0, true));            // hero
+            RecipeTreeLevel H = level(bc.woodEdge, bc.ringAngle, true, true, 0.0, 1.0, true);         // hero
+            const std::size_t budget = heroBarkBudget(r);
+            for (double k = 1.4; k < 3.0 && H.tree.branches.indices.size() / 3 > budget; k *= 1.4)   // (held to it)
+                H = level(bc.woodEdge * k, bc.ringAngle * k, true, true, 0.0, 1.0, true);
+            out.push_back(std::move(H));
             if (bands.hero1 > bands.hero0) {
                 RecipeTreeLevel M = level(bc.woodEdge * 1.6, bc.ringAngle * 1.5, true, true, 0.0, 0.3);   // mid
                 fadeInto(M, bands.hero0, bands.hero1);

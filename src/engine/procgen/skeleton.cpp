@@ -1,4 +1,5 @@
 #include "skeleton.h"
+#include "../../proc_rng.h"
 
 namespace engine {
 
@@ -10,7 +11,7 @@ std::vector<std::vector<int>> Skeleton::childLists() const {
     return children;
 }
 
-Skeleton buildSkeleton(const ModuleString& s, float angleJitter, std::mt19937& rng) {
+Skeleton buildSkeleton(const ModuleString& s, float angleJitter, ProcRng& rng) {
     Skeleton skel;
     std::vector<SkeletonNode>& nodes = skel.nodes;
     nodes.push_back(SkeletonNode{});   // root at origin, heading +Y, depth 0
@@ -19,7 +20,7 @@ Skeleton buildSkeleton(const ModuleString& s, float angleJitter, std::mt19937& r
     State st{0, Mat4::identity(), 0};
     std::vector<State> stack;
 
-    std::uniform_real_distribution<float> jit(-angleJitter, angleJitter);
+    ProcUniform<float> jit(-angleJitter, angleJitter);
     auto turn = [&](char axis, float deg) {
         double a = (deg + jit(rng)) * PI / 180.0;
         switch (axis) {
@@ -64,7 +65,7 @@ Skeleton buildSkeleton(const ModuleString& s, float angleJitter, std::mt19937& r
 }
 
 Skeleton buildSkeleton(const ModuleString& modules, float angleJitter, uint32_t seed) {
-    std::mt19937 rng(seed);
+    ProcRng rng(seed);
     return buildSkeleton(modules, angleJitter, rng);
 }
 

@@ -2,7 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
-#include <random>
+#include "../../proc_rng.h"
 
 namespace engine {
 namespace sfx {
@@ -25,8 +25,8 @@ void normalize(std::vector<float>& frames, float peak) {
 std::vector<float> gunshot(uint32_t sampleRate, uint32_t seed) {
     const auto count = static_cast<size_t>(sampleRate * 0.30);
     std::vector<float> frames(count);
-    std::mt19937 rng(seed);
-    std::uniform_real_distribution<double> noise(-1.0, 1.0);
+    ProcRng rng(seed);
+    ProcUniform<double> noise(-1.0, 1.0);
 
     double lowpass = 0.0;
     for (size_t i = 0; i < count; i++) {
@@ -49,9 +49,9 @@ std::vector<float> gunshot(uint32_t sampleRate, uint32_t seed) {
 std::vector<float> impact(uint32_t sampleRate, uint32_t seed) {
     const auto count = static_cast<size_t>(sampleRate * 0.22);
     std::vector<float> frames(count);
-    std::mt19937 rng(seed);
-    std::uniform_real_distribution<double> noise(-1.0, 1.0);
-    std::uniform_real_distribution<double> pitchJitter(0.85, 1.25);
+    ProcRng rng(seed);
+    ProcUniform<double> noise(-1.0, 1.0);
+    ProcUniform<double> pitchJitter(0.85, 1.25);
 
     // The strike pitch varies with the seed; the partial ratios are inharmonic
     // (a knock, not a note).
@@ -127,8 +127,8 @@ std::vector<float> engine(uint32_t sampleRate, uint32_t seed) {
     const double fireCycles = std::round(kEngineRefHz * periodSeconds);   // 42
     const auto fireCount = static_cast<int>(fireCycles);
 
-    std::mt19937 rng(seed * 2654435761u + 12345u);
-    std::uniform_real_distribution<double> uni(-1.0, 1.0);
+    ProcRng rng(seed * 2654435761u + 12345u);
+    ProcUniform<double> uni(-1.0, 1.0);
     std::vector<double> white(count);
     for (double& w : white) w = uni(rng);
 
@@ -170,7 +170,7 @@ std::vector<float> engine(uint32_t sampleRate, uint32_t seed) {
     // CYCLE-TO-CYCLE VARIATION: no two combustion events are equal — this is
     // most of what stops a loop sounding mechanical. One gain per firing, so
     // the pattern repeats only with the whole buffer.
-    std::uniform_real_distribution<double> vary(0.74, 1.26);
+    ProcUniform<double> vary(0.74, 1.26);
     std::vector<double> fireGain(static_cast<size_t>(fireCount));
     for (double& g : fireGain) g = vary(rng);
 
@@ -183,7 +183,7 @@ std::vector<float> engine(uint32_t sampleRate, uint32_t seed) {
         {fireCycles * 4, 0.20},   {fireCycles * 5, 0.12},
     };
     // Slow breathing over the whole period (integer cycles, so still clean).
-    std::uniform_real_distribution<double> phase(0.0, TWO_PI);
+    ProcUniform<double> phase(0.0, TWO_PI);
     const double breathA = phase(rng), breathB = phase(rng);
 
     for (size_t i = 0; i < count; i++) {
@@ -246,8 +246,8 @@ std::vector<float> elevatorDing(bool up, uint32_t sampleRate, uint32_t seed) {
 std::vector<float> elevatorButton(uint32_t sampleRate, uint32_t seed) {
     const auto count = static_cast<size_t>(sampleRate * 0.06);
     std::vector<float> frames(count);
-    std::mt19937 rng(seed);
-    std::uniform_real_distribution<double> noise(-1.0, 1.0);
+    ProcRng rng(seed);
+    ProcUniform<double> noise(-1.0, 1.0);
     double hp = 0, prev = 0;
     for (size_t i = 0; i < count; ++i) {
         const double t = static_cast<double>(i) / sampleRate;
@@ -266,8 +266,8 @@ std::vector<float> elevatorDoors(uint32_t sampleRate, uint32_t seed) {
     const double dur = 1.3;
     const auto count = static_cast<size_t>(sampleRate * dur);
     std::vector<float> frames(count);
-    std::mt19937 rng(seed);
-    std::uniform_real_distribution<double> noise(-1.0, 1.0);
+    ProcRng rng(seed);
+    ProcUniform<double> noise(-1.0, 1.0);
     double lp = 0, lp2 = 0;
     for (size_t i = 0; i < count; ++i) {
         const double t = static_cast<double>(i) / sampleRate;
@@ -292,8 +292,8 @@ std::vector<float> elevatorHum(uint32_t sampleRate, uint32_t seed) {
     // A loop: every tone an integer number of cycles over the buffer, the air a CIRCULAR moving average of noise.
     const auto count = static_cast<size_t>(sampleRate * 2);
     std::vector<float> frames(count);
-    std::mt19937 rng(seed);
-    std::uniform_real_distribution<double> noise(-1.0, 1.0);
+    ProcRng rng(seed);
+    ProcUniform<double> noise(-1.0, 1.0);
     std::vector<double> n(count);
     for (double& x : n) x = noise(rng);
     const int win = std::max(1, static_cast<int>(sampleRate / 900));   // a dark rush
@@ -318,8 +318,8 @@ std::vector<float> elevatorHum(uint32_t sampleRate, uint32_t seed) {
 std::vector<float> railClack(uint32_t sampleRate, uint32_t seed) {
     const auto count = static_cast<size_t>(sampleRate * 0.22);
     std::vector<float> frames(count);
-    std::mt19937 rng(seed);
-    std::uniform_real_distribution<double> noise(-1.0, 1.0);
+    ProcRng rng(seed);
+    ProcUniform<double> noise(-1.0, 1.0);
     // the ring's partials: a rail's bending modes are inharmonic; the seed nudges them so axles differ a little
     const double detune = 1.0 + 0.04 * (static_cast<double>(seed % 7) - 3.0) / 3.0;
     const double ring[3] = {870.0 * detune, 1390.0 * detune, 2240.0 * detune};
@@ -347,8 +347,8 @@ std::vector<float> railRumble(uint32_t sampleRate, uint32_t seed) {
     const auto count = static_cast<size_t>(sampleRate * 1.5);
     const auto fade = static_cast<size_t>(sampleRate * 0.25);
     std::vector<float> raw(count + fade);
-    std::mt19937 rng(seed);
-    std::uniform_real_distribution<double> noise(-1.0, 1.0);
+    ProcRng rng(seed);
+    ProcUniform<double> noise(-1.0, 1.0);
     double l1 = 0, l2 = 0, h1 = 0, hp = 0, prev = 0;
     for (size_t i = 0; i < raw.size(); ++i) {
         const double t = static_cast<double>(i) / sampleRate;
