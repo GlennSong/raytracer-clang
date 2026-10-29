@@ -14,6 +14,7 @@
 #include <map>
 #include <mutex>
 #include "procgen/noise.h"
+#include "procgen/city/circulation.h"   // stairPlaceOf / liftBanksOf
 
 using json = nlohmann::json;
 
@@ -429,6 +430,8 @@ void readLotGrowParams(const json& cityJson,
     lots.wholeBlocks = cityJson.value("wholeBlocks", lots.wholeBlocks);
     lots.recipe = cityJson.value("recipe", lots.recipe);
     lots.recipeCoreness = cityJson.value("coreness", lots.recipeCoreness);
+    lots.recipeStairs = stairPlaceOf(cityJson.value("stairs", std::string()));
+    lots.recipeLifts = liftBanksOf(cityJson.value("lifts", std::string()));
     // Level-authored parcel grain ("parcel", 8km-city P3): piedmont-scale metros
     // lay 150 m+ blocks, so the level can ask for bigger lots. Six knobs only;
     // absent = the compiled-in district tuning, untouched (city_lots rescales

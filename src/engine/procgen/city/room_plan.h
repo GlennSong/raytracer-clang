@@ -225,6 +225,12 @@ RoomPlan wrapFlatsLayout(const Poly2& plate, const CorePlan& core, Real inset, i
 // `unreached` (optional): every room it could not reach, by index, rather than stopping at the first.
 bool floorIsWalkable(const RoomPlan& rp, const Poly2& storeyPlan, const Vec2& entry,
                      const Poly2& stairWell = Poly2{}, std::vector<std::size_t>* unreached = nullptr);
+// ...round several solids (a core's blocks placed apart: each is a hole in the floor, as the stairwell is)
+// `reach` (optional): points that must be reached too -- the doors of the stairwells a layout placed apart -- reported
+// in `unreached` after the rooms (rooms.size() + i).
+bool floorIsWalkable(const RoomPlan& rp, const Poly2& storeyPlan, const Vec2& entry,
+                     const std::vector<Poly2>& solids, std::vector<std::size_t>* unreached = nullptr,
+                     const std::vector<Vec2>* reach = nullptr);
 
 // The geometry: drywall partitions and fronts (`drywall`), glass fronts
 // (`glass`, the GlassClear part), doorways cut with their reveals, every

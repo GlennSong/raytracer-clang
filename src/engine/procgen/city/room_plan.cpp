@@ -2100,6 +2100,13 @@ WallFinish interiorFinishFor(const BuildingParams& p) {
 
 bool floorIsWalkable(const RoomPlan& rp, const Poly2& planIn, const Vec2& entry,
                      const Poly2& stairWell, std::vector<std::size_t>* unreached) {
+    return floorIsWalkable(rp, planIn, entry, stairWell.size() >= 3 ? std::vector<Poly2>{stairWell} : std::vector<Poly2>{},
+                           unreached);
+}
+
+bool floorIsWalkable(const RoomPlan& rp, const Poly2& planIn, const Vec2& entry,
+                     const std::vector<Poly2>& solids, std::vector<std::size_t>* unreached,
+                     const std::vector<Vec2>* reach) {
     if (rp.rooms.empty()) return true;
     Poly2 plan = planIn;
     ensureCCW(plan);
@@ -2122,13 +2129,15 @@ bool floorIsWalkable(const RoomPlan& rp, const Poly2& planIn, const Vec2& entry,
     // Outside the building is not floor. NEITHER IS THE STAIRWELL: it is a
     // hole with a stair in it, and flooding across it made every floor look
     // reachable when the way round was actually blocked (Glenn, 2026-09-15).
-    Poly2 well = stairWell;
-    if (well.size() >= 3) ensureCCW(well);
+    std::vector<Poly2> wells;
+    for (const Poly2& s : solids)
+        if (s.size() >= 3) { wells.push_back(s); ensureCCW(wells.back()); }
     for (int j = 0; j < nz; ++j)
         for (int i = 0; i < nx; ++i) {
             const Vec2 c = centre(i, j);
-            if (!pointInPolygon(plan, c)) blocked[at(i, j)] = 1;
-            else if (well.size() >= 3 && pointInPolygon(well, c)) blocked[at(i, j)] = 1;
+            if (!pointInPolygon(plan, c)) { blocked[at(i, j)] = 1; continue; }
+            for (const Poly2& well : wells)
+                if (pointInPolygon(well, c)) { blocked[at(i, j)] = 1; break; }
         }
     // Every wall, inflated by the capsule's radius, with its doorway left
     // open by the width a capsule actually needs.
@@ -2202,6 +2211,20 @@ bool floorIsWalkable(const RoomPlan& rp, const Poly2& planIn, const Vec2& entry,
             all = false;
         }
     }
+    if (reach)
+        for (std::size_t k = 0; k < reach->size(); ++k) {
+            const auto [ci, cj] = cellOf((*reach)[k]);
+            bool reached = false;
+            for (int dj = -4; dj <= 4 && !reached; ++dj)
+                for (int di = -4; di <= 4 && !reached; ++di) {
+                    const int i = ci + di, j = cj + dj;
+                    if (i >= 0 && i < nx && j >= 0 && j < nz && seen[at(i, j)]) reached = true;
+                }
+            if (reached) continue;
+            if (!unreached) return false;
+            unreached->push_back(rp.rooms.size() + k);
+            all = false;
+        }
     return all;
 }
 
@@ -2280,7 +2303,7 @@ RoomPlan roomPlan(const Poly2& planIn, const BuildingParams& params, const CoreP
     const OBB2 plateBox = orientedBoundingBox(planIn);
     const Real longSide = 2 * std::max(plateBox.half[0], plateBox.half[1]);
     const bool walkupShape = topo == PlateTopology::Ring || (topo == PlateTopology::WholeFloor && longSide >= 24.0);
-    if (params.civicRooms == 6 && core.valid && officePlanFits(planIn)) {
+    if (params.civicRooms == 6 && core.valid && core.blocks.size() <= 1 && officePlanFits(planIn)) {
         // THE HOSPITAL: wards upstairs, the lobby and examination rooms on the ground. Walked from the lifts (and on
         // the ground from the doors too); a floor it cannot lay falls through to the ring.
         RoomPlan hp = hospitalPlan(planIn, params, core, inset, storey, entranceEdge);
@@ -2357,6 +2380,19 @@ RoomPlan roomPlan(const Poly2& planIn, const BuildingParams& params, const CoreP
         open.topology = topo;
         open.office = params.officeUse;
         open.finish = interiorFinishFor(params);
+        return open;
+    }
+    if (core.blocks.size() > 1 && storey >= 1) {
+        // THE RING AND THE DESK ROW plan round one core: a floor whose stairs and lifts stand apart is zoned (the
+        // office program), else open floor
+        const Vec2 entry = core.frame.toWorld({core.length * 0.5, -1.1});
+        RoomPlan zf = zonedFloorPlan(planIn, params, core, inset, storey, true, entry, stairWell, programFor("office"));
+        zf.finish = interiorFinishFor(params);
+        if (!zf.rooms.empty()) return zf;
+        RoomPlan open;
+        open.topology = topo;
+        open.office = !params.residential;
+        open.finish = zf.finish;
         return open;
     }
     RoomPlan rp = topo == PlateTopology::WholeFloor   // a house's floor, else the ring (a hotel's rooms, a civic floor)

@@ -645,6 +645,15 @@ struct BuildingParams {
     // up get an elevator bank and two enclosed stairwells when one fits),
     // 1 = never (the straight stair of ADR-0080, or nothing), 2 = always.
     uint8_t core = 0;
+    // WHERE THE STAIRS AND LIFTS STAND (circulation.h, issue #105 step 3b; Glenn, 2026-10-15: "disconnect them and
+    // place stairs and elevators separately ... elevator setups like you see in real buildings"). stairPlace: 0 auto,
+    // 1 beside the lifts (the classic core), 2 apart -- one stairwell at each end of the plan's long axis, the
+    // floor's corridor running between them past the lifts. liftBanks: 0 auto, 1 one bank, 2 two banks facing
+    // across a lift lobby. Auto is drawn by the seed from what suits the shape, and falls through to the other
+    // layouts where the floor is too small (circulationLayouts). Lua: stairs = "core" | "ends", lifts = "bank" |
+    // "facing".
+    uint8_t stairPlace = 0;
+    uint8_t liftBanks = 0;
     // THE LIGHTING SPEC (skyscrapers v2 M4, Lua-overridable; ADR-0086 point
     // 10): what a tall roof wears at night. 0 = auto (the position hash
     // decides, as before). crown: 1 none, 2 white, 3 amber, 4 blue, 5 red,

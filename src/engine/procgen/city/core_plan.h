@@ -46,6 +46,7 @@ struct CoreShaft {
     Real doorX = 0;
     Real doorWidth = 0;    // 0 = no door (the service block)
     Real doorHeight = 2.1;
+    int block = 0;         // the CorePlan block it stands in
     Poly2 rect() const;                                        // world XZ, CCW
     Vec2 doorFoot() const { return frame.toWorld({doorX, 0}); }
     Vec2 doorNormal() const { return frame.v * -1.0; }         // out of the shaft
@@ -63,15 +64,26 @@ struct CoreStair {
     Real tread = 0.26;
 };
 
+// A BLOCK: shafts standing together inside one outer ring, their doors in its v = 0 wall -- the whole core, or (the
+// circulation layouts that place them apart, circulation.h) a stairwell on its own, a bank of lifts on its own. Every
+// block gets the corridor ring round it on the floors.
+struct CoreBlock {
+    SiteFrame frame;                 // u along the door wall, v away from it
+    Real length = 0, depth = 0;      // along u / v
+    Poly2 rect() const;              // world XZ, CCW
+};
+
 struct CorePlan {
     bool valid = false;
-    SiteFrame frame;                 // u along the bank, v away from the lobby
+    SiteFrame frame;                 // u along the bank, v away from the lobby -- blocks[0]'s, the lifts' block
     Real length = 0, depth = 0;      // along u / v
     std::vector<CoreShaft> hoistways;
-    std::vector<CoreStair> stairs;   // two, at the bank's ends
-    CoreShaft service;               // the closed block behind the hoistways
-    bool hasService = false;
-    Poly2 rect() const;              // the whole core, world XZ, CCW
+    std::vector<CoreStair> stairs;   // two, at the bank's ends (or wherever the layout put them)
+    std::vector<CoreShaft> services; // the closed blocks behind the hoistways, one per bank row deep enough
+    std::vector<CoreBlock> blocks;   // [0] the lifts' block (the lobby faces it); one block = the classic core
+    Poly2 rect() const;              // blocks[0], world XZ, CCW
+    std::vector<CoreBlock> allBlocks() const;   // `blocks`, or the one frame/length/depth block when it is empty
+    std::vector<Poly2> rects() const;   // every block of allBlocks: what a floor plans round
 };
 
 // Hoistways by height: 1 up to 8 floors, 2 to 20, 3 to 40, 4 beyond.
@@ -123,6 +135,8 @@ constexpr Real kBulkheadH = 2.9;
 // Whether this building's core reaches the roof: a flat roof, an open doorway (the building is enterable) and a
 // core that fits. The exterior grow, the streamed interior and the collider all ask this one question.
 bool coreReachesRoof(const BuildingParams& params);
+// The bulkheads' footprints on the roof, each block with a stair in it grown by `grow` (the roof plant's keep-out).
+std::vector<Poly2> coreBulkheads(const CorePlan& core, Real grow);
 // The roof slab's holes: the stairs' shafts (the top flights rise through them).
 std::vector<Poly2> coreRoofHoles(const CorePlan& core);
 // A setback deck's holes: every shaft of the core -- the stairs AND the hoistways -- where the core climbs on

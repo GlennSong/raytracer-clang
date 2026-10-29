@@ -4,6 +4,8 @@
 // interior and the runtime.
 #include "test_framework.h"
 
+#include "../src/engine/procgen/city/architect.h"
+#include "../src/engine/procgen/city/circulation.h"
 #include "../src/engine/procgen/city/core_plan.h"
 #include "../src/engine/procgen/city/shape_grammar.h"
 
@@ -40,7 +42,7 @@ TEST_CASE(core_plan_seats_a_bank_and_two_stairs_facing_the_entrance) {
     CHECK(core.valid);
     CHECK(core.hoistways.size() == 3);   // 21-40 floors
     CHECK(core.stairs.size() == 2);
-    CHECK(core.hasService);
+    CHECK(core.services.size() == 1);
     // Every shaft sits inside the plan and inside the core's own outline
     // (its corners lie ON the outline, so the centroid is the inside test).
     const Poly2 outline = core.rect();
@@ -202,7 +204,17 @@ TEST_CASE(core_plan_refuses_a_notch_through_the_bank) {
     const Poly2 square = {{0, 0}, {40, 0}, {40, 40}, {0, 40}};
     const BuildingParams p = towerParams(30, true);
     CHECK(coreFor(square, p, entranceEdgeFor(square, p)).valid);
-    CHECK(!coreFor(notched, p, entranceEdgeFor(notched, p)).valid);
+    const std::size_t en = entranceEdgeFor(notched, p);
+    CHECK(!corePreset(notched, massStack(notched, p), p, en).valid);
+    // ...so the building slides its lifts clear along the long axis (or stands its stairs apart): every block, ring
+    // and all, off the notch
+    const CorePlan slid = coreFor(notched, p, en);
+    CHECK(slid.valid);
+    for (const CoreBlock& b : slid.blocks) {
+        const Poly2 r = b.rect();
+        for (std::size_t i = 0; i < r.size(); ++i)
+            for (int j = 0; j < 8; ++j) CHECK(pointInPolygon(notched, r[i] + (r[(i + 1) % r.size()] - r[i]) * (j / 8.0)));
+    }
     // The policy's threshold is pinned: four floors open, three do not.
     CHECK(wantsCore(towerParams(4, false)));
     CHECK(!wantsCore(towerParams(3, false)));
@@ -606,4 +618,72 @@ TEST_CASE(core_stairs_reach_the_roof_through_a_bulkhead) {
                 for (const Vertex& v : part.vertices) if (v.position.y > deck + kBulkheadH - 1e-3) shellAbove = true;
         CHECK(shellAbove);
     }
+}
+
+// Glenn (2026-10-28): "Sometimes for stairs and elevators the hole for the floor doesn't get cut and you end up going
+// through a plane of geometry." Every recipe with a core, on three lots at two seeds: no level face of the exterior
+// or the interior lies across a hoistway or a stair's flights at any storey's slab, the ground floor's ceiling
+// included.
+TEST_CASE(no_slab_covers_a_shaft_on_any_recipe) {
+    const Poly2 lots[] = {{{0, 0}, {40, 0}, {40, 40}, {0, 40}}, {{0, 0}, {60, 0}, {60, 48}, {0, 48}},
+                          {{0, 0}, {52, 0}, {52, 20}, {0, 20}}};
+    int buildings = 0, probes = 0, covered = 0;
+    for (int i = 0; i < architectRecipeCount(); ++i) {
+        const char* name = architectRecipeName(i);
+        for (uint32_t seed : {3u, 17u})
+        for (const Poly2& plan : lots) {
+            const OBB2 ob = orientedBoundingBox(plan);
+            BuildingRecipe r;
+            if (!architectRecipeByName(name, seed, 1.0, 2 * std::min(ob.half[0], ob.half[1]), area(plan), r)) continue;
+            BuildingParams p = r.params;
+            p.openDoorway = true;
+            const std::size_t e = entranceEdgeFor(plan, p);
+            const CorePlan core = coreFor(plan, p, e);
+            if (!core.valid) continue;
+            Vec2 at, outward;
+            if (garagePortalOf(plan, p, at, outward)) continue;   // (a drivable garage builds no core: its ramps are the way up)
+            ++buildings;
+            const std::vector<StoreyPlan> sps = storeyPlans(plan, p);
+            const BuildingMesh ext = growPlanBuilding(plan, p);
+            const BuildingMesh in = growInterior(plan, p, 0.0, nullptr);
+            // the points: a hoistway's middle, each flight's middle
+            std::vector<Vec2> pts;
+            for (const CoreShaft& h : core.hoistways) pts.push_back(h.frame.toWorld({h.width * 0.5, h.depth * 0.5}));
+            for (const CoreStair& st : core.stairs) {
+                pts.push_back(st.shaft.frame.toWorld({st.flightWidth * 0.5, st.shaft.depth * 0.5}));
+                pts.push_back(st.shaft.frame.toWorld({st.shaft.width - st.flightWidth * 0.5, st.shaft.depth * 0.5}));
+            }
+            for (std::size_t k = 1; k < sps.size(); ++k) {
+                const Real ySlab = sps[k].y0 + 0.05;
+                for (const Vec2& q : pts) {
+                    ++probes;
+                    const char* hit = nullptr;
+                    int hitPart = -1;   // (the part and its height off the slab line say which emitter laid it)
+                    Real hitDy = 0;
+                    for (const BuildingMesh* bm : {&ext, &in}) {
+                        for (const RenderMesh& part : bm->parts) {
+                            for (std::size_t t = 0; t + 2 < part.indices.size() && !hit; t += 3) {
+                                const Vec3 a = part.vertices[part.indices[t]].position;
+                                const Vec3 b = part.vertices[part.indices[t + 1]].position;
+                                const Vec3 c = part.vertices[part.indices[t + 2]].position;
+                                const Real lo = ySlab - 0.32, hi = ySlab + 0.06;
+                                if (a.y < lo || a.y > hi || std::fabs(a.y - b.y) > 1e-3 || std::fabs(a.y - c.y) > 1e-3) continue;
+                                const Poly2 tri = {{a.x, a.z}, {b.x, b.z}, {c.x, c.z}};
+                                if (pointInPolygon(tri, q)) { hit = bm == &ext ? "exterior" : "interior"; hitPart = part.materialIndex; hitDy = a.y - ySlab; }
+                            }
+                        }
+                    }
+                    if (hit) {
+                        if (covered < 40)
+                            std::printf("    [holes] %s seed %u lot %.0fx%.0f storey %zu/%zu: %s slab over (%.1f, %.1f) part %d dy %.2f\n", name,
+                                        seed, 2 * ob.half[0], 2 * ob.half[1], k, sps.size(), hit, q.x, q.y, hitPart, hitDy);
+                        ++covered;
+                    }
+                }
+            }
+        }
+    }
+    std::printf("    [holes] %d cored buildings, %d shaft-storey probes, %d covered\n", buildings, probes, covered);
+    CHECK(buildings > 20);
+    CHECK(covered == 0);
 }

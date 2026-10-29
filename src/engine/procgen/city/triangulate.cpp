@@ -212,9 +212,18 @@ struct Earcut {
         nodes[bp].next = b2; nodes[b2].prev = bp;
         return b2;
     }
+    // Holes bridged left to right by their LEFTMOST point, ties by y then the slope out of it (mapbox's
+    // compareXYSlope): sorted by the ring's first vertex instead, a hole further left could be bridged after one to
+    // its right, and the earlier bridge cut across it -- rows of core shafts, edges on the same lines, paved over.
     void eliminateHoles(int& outerNode, std::vector<int>& holeNodes) {
-        std::sort(holeNodes.begin(), holeNodes.end(),
-                  [&](int a, int b) { return nodes[a].x < nodes[b].x; });
+        for (int& h : holeNodes) h = getLeftmost(h);
+        std::sort(holeNodes.begin(), holeNodes.end(), [&](int a, int b) {
+            const Node &A = nodes[a], &B = nodes[b];
+            if (A.x != B.x) return A.x < B.x;
+            if (A.y != B.y) return A.y < B.y;
+            const Node &An = nodes[A.next], &Bn = nodes[B.next];
+            return (An.y - A.y) / (An.x - A.x) < (Bn.y - B.y) / (Bn.x - B.x);
+        });
         for (int h : holeNodes) outerNode = eliminateHole(h, outerNode);
     }
     int getLeftmost(int start) {
@@ -227,13 +236,15 @@ struct Earcut {
         return left;
     }
     int eliminateHole(int hole, int outerNode) {
-        hole = getLeftmost(hole);
         int b = findHoleBridge(hole, outerNode);
         if (b == -1) return outerNode;   // give up on this hole (keeps it open)
         int m = splitPolygon(b, hole);
         filterPoints(m, nodes[m].next);
-        filterPoints(b, nodes[b].next);
-        return outerNode;
+        // the collinear filter round the cut may remove the outer node itself: carry on from the bridge (mapbox)
+        return filterPoints(b, nodes[b].next);
+    }
+    bool sectorContainsSector(int m, int p) const {
+        return area(nodes[m].prev, m, nodes[p].prev) < 0 && area(nodes[p].next, m, nodes[m].next) < 0;
     }
     int findHoleBridge(int hole, int outerNode) {
         int p = outerNode; double hx = nodes[hole].x, hy = nodes[hole].y;
@@ -262,7 +273,7 @@ struct Earcut {
                 pointInTriangle(hy < my ? hx : qx, hy, mx, my, hy < my ? qx : hx, hy, px, py)) {
                 double tan = std::fabs(hy - py) / (hx - px);
                 if (locallyInside(p, hole) && (tan < tanMin ||
-                    (tan == tanMin && px > nodes[m].x))) { m = p; tanMin = tan; }
+                    (tan == tanMin && (px > nodes[m].x || (px == nodes[m].x && sectorContainsSector(m, p)))))) { m = p; tanMin = tan; }
             }
             p = nodes[p].next;
         } while (p != stop);

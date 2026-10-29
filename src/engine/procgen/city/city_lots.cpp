@@ -5440,9 +5440,11 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                 BuildingRecipe named;
                 const Real cz = p.recipeCoreness >= 0 ? std::clamp(p.recipeCoreness, Real(0), Real(1)) : coreness;
                 if (architectRecipeByName(p.recipe, mix(pp.seed, static_cast<uint32_t>(li) * 7u + 3u), cz,
-                                          shortSide, area(site), named))
+                                          shortSide, area(site), named)) {
                     rec = std::move(named);
-                else
+                    if (p.recipeStairs) rec.params.stairPlace = p.recipeStairs;
+                    if (p.recipeLifts) rec.params.liftBanks = p.recipeLifts;
+                } else
                     LOG_ERROR << "[citylots] citysim.recipe '" << p.recipe << "' is not an architect recipe";
             }
             // THE SHOP MIX (~/.claude/plans/nightlife-and-malls.md): a residential street's everyday shops, a high

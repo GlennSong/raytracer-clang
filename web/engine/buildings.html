@@ -1791,8 +1791,14 @@
     up to eight floors, two to twenty, three to forty, four beyond), a closed service block behind, seated in the
     centre of the <em>top</em> tier so every tier below contains it, with a 2.2 m corridor ring kept inside every tier.
     Since the toolkit, the core is the first preset of a <code>CirculationPlan</code> of shafts, banks and zones
-    (<code>circulation.h</code>), and the shafts become stair and lift cells in the graph. A tall tower is not grown
-    whole:</p>
+    (<code>circulation.h</code>), and the shafts become stair and lift cells in the graph. The core is a list of
+    <b>blocks</b>, so the stairs and lifts can stand apart (ADR-0263): <code>stairs = "ends"</code> puts a stairwell
+    at each end of the long axis with the floor's corridor running between them past the lifts (a slab hotel's
+    double-loaded corridor), and <code>lifts = "facing"</code> sets two banks across a lift lobby. Left unset, the
+    seed picks one to suit the shape (a slab often gets its stairs at the ends, a tall tower often facing banks, a
+    small one the classic core), and where the floor is too small for that the next layout is tried. Every floor
+    planner, the walk check, the shaft walls, the bulkheads and the roof plant read every block, and every slab the
+    building lays, inside or out, is cut round the shafts. A tall tower is not grown whole:</p>
   <div class="code">
     <div class="hd"><span>BuildingInteriorSystem: the storey window</span>
       <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/engine/systems/building_interior_system.h#L51-L63">src/engine/systems/building_interior_system.h</a></div>

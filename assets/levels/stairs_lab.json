@@ -1,0 +1,329 @@
+{
+  "version": 1,
+  "name": "stairs_lab",
+  "watch_scripts": true,
+  "entities": [
+    {
+      "id": 1,
+      "name": "ground",
+      "shape": "box",
+      "position": [
+        0.0,
+        -0.35,
+        0.0
+      ],
+      "size": [
+        400.0,
+        0.4,
+        400.0
+      ],
+      "material": {
+        "albedo": [
+          0.24,
+          0.24,
+          0.25
+        ],
+        "metallic": 0.0,
+        "roughness": 1.0,
+        "opacity": 1.0,
+        "emission": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "checkerboard": false
+      },
+      "physics": {
+        "motion": "static",
+        "friction": 0.9,
+        "restitution": 0.0
+      }
+    },
+    {
+      "id": 2,
+      "name": "sidewalk_avenue",
+      "shape": "box",
+      "position": [
+        0.0,
+        0.12,
+        26.0
+      ],
+      "size": [
+        96.0,
+        0.3,
+        4.0
+      ],
+      "material": {
+        "albedo": [
+          0.62,
+          0.61,
+          0.58
+        ],
+        "metallic": 0.0,
+        "roughness": 0.95,
+        "opacity": 1.0,
+        "emission": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "checkerboard": false
+      },
+      "physics": {
+        "motion": "static",
+        "friction": 0.9,
+        "restitution": 0.0
+      }
+    },
+    {
+      "id": 3,
+      "name": "sidewalk_avenue_far",
+      "shape": "box",
+      "position": [
+        0.0,
+        0.12,
+        42.0
+      ],
+      "size": [
+        96.0,
+        0.3,
+        4.0
+      ],
+      "material": {
+        "albedo": [
+          0.62,
+          0.61,
+          0.58
+        ],
+        "metallic": 0.0,
+        "roughness": 0.95,
+        "opacity": 1.0,
+        "emission": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "checkerboard": false
+      },
+      "physics": {
+        "motion": "static",
+        "friction": 0.9,
+        "restitution": 0.0
+      }
+    },
+    {
+      "id": 4,
+      "name": "sidewalk_cross",
+      "shape": "box",
+      "position": [
+        34.0,
+        0.12,
+        0.0
+      ],
+      "size": [
+        4.0,
+        0.3,
+        48.0
+      ],
+      "material": {
+        "albedo": [
+          0.62,
+          0.61,
+          0.58
+        ],
+        "metallic": 0.0,
+        "roughness": 0.95,
+        "opacity": 1.0,
+        "emission": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "checkerboard": false
+      },
+      "physics": {
+        "motion": "static",
+        "friction": 0.9,
+        "restitution": 0.0
+      }
+    },
+    {
+      "id": 5,
+      "name": "sidewalk_cross_far",
+      "shape": "box",
+      "position": [
+        50.0,
+        0.12,
+        0.0
+      ],
+      "size": [
+        4.0,
+        0.3,
+        48.0
+      ],
+      "material": {
+        "albedo": [
+          0.62,
+          0.61,
+          0.58
+        ],
+        "metallic": 0.0,
+        "roughness": 0.95,
+        "opacity": 1.0,
+        "emission": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "checkerboard": false
+      },
+      "physics": {
+        "motion": "static",
+        "friction": 0.9,
+        "restitution": 0.0
+      }
+    },
+    {
+      "id": 6,
+      "name": "sidewalk_rear",
+      "shape": "box",
+      "position": [
+        0.0,
+        0.12,
+        -26.0
+      ],
+      "size": [
+        96.0,
+        0.3,
+        4.0
+      ],
+      "material": {
+        "albedo": [
+          0.62,
+          0.61,
+          0.58
+        ],
+        "metallic": 0.0,
+        "roughness": 0.95,
+        "opacity": 1.0,
+        "emission": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "checkerboard": false
+      },
+      "physics": {
+        "motion": "static",
+        "friction": 0.9,
+        "restitution": 0.0
+      }
+    },
+    {
+      "id": 7,
+      "name": "sidewalk_side",
+      "shape": "box",
+      "position": [
+        -34.0,
+        0.12,
+        0.0
+      ],
+      "size": [
+        4.0,
+        0.3,
+        48.0
+      ],
+      "material": {
+        "albedo": [
+          0.62,
+          0.61,
+          0.58
+        ],
+        "metallic": 0.0,
+        "roughness": 0.95,
+        "opacity": 1.0,
+        "emission": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "checkerboard": false
+      },
+      "physics": {
+        "motion": "static",
+        "friction": 0.9,
+        "restitution": 0.0
+      }
+    }
+  ],
+  "citysim": {
+    "buildLots": true,
+    "wholeBlocks": true,
+    "recipe": "hotel",
+    "coreness": 1.0,
+    "seed": 7,
+    "sidewalk": 4.0,
+    "cars": 0,
+    "pedestrians": 0,
+    "blocks": [
+      [
+        [
+          30.0,
+          12.0
+        ],
+        [
+          -30.0,
+          12.0
+        ],
+        [
+          -30.0,
+          -12.0
+        ],
+        [
+          30.0,
+          -12.0
+        ]
+      ]
+    ],
+    "stairs": "ends",
+    "lifts": "bank"
+  },
+  "player": {
+    "position": [
+      0.0,
+      1.2,
+      15.5
+    ],
+    "collider": {
+      "shape": "capsule",
+      "radius": 0.3,
+      "halfHeight": 0.6
+    },
+    "friction": 0.5
+  },
+  "environment": {
+    "skyColor": [
+      0.55,
+      0.68,
+      0.86
+    ]
+  },
+  "lighting": {
+    "ambientMultiplier": 0.7,
+    "exposure": 0.7,
+    "sun": {
+      "castsShadow": true,
+      "color": [
+        1,
+        0.98,
+        0.94
+      ],
+      "direction": [
+        0.4,
+        0.72,
+        -0.32
+      ],
+      "intensity": 6.0
+    }
+  }
+}

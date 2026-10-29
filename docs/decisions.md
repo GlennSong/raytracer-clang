@@ -12855,3 +12855,72 @@ no bathroom. Its ground floor already has the lobby and front desk (ADR-0170) an
 upper floors that reach it; deleting it waits for their own programs. Owed for hotels: the restaurant floor off the
 lobby, gym, pool and meeting rooms (v2), the rooftop bar and resort cells (v3), corridors narrower than the open hall
 a stair-only hotel leaves round its stairs.
+
+## ADR-0263 — Stairs and lifts placed apart: the core is a list of blocks
+
+**Context.** Glenn, 2026-10-15: "the elevator and stairs are always connected. I think we should be able to disconnect
+them and place stairs and elevators separately and also create elevator setups like you see in real buildings."
+Issue #105 step 3a made shafts, banks and zones words of their own (`circulation.h`) with today's core as a preset, but
+every reader still took the one `CorePlan` rectangle: the zoned floor's corridor ring, the walk check, the shaft walls,
+the bulkhead, the roof plant's keep-out, the lobby dressing, the shops' depth, the space graph's hall. Step 3b, the
+placement, was left undone when the toolkit moved on to masses (asked again 2026-10-28: "Why wasn't it ever done?").
+
+**Decision.**
+1. **The core is a list of blocks** (`CoreBlock`, `CirculationPlan::Block`): shafts standing together inside one outer
+   ring, their doors in its front wall. Every shaft names its block. The classic core is one block, `blocks[0]` is the
+   lifts' (the lobby faces it) and `frame / length / depth / rect()` keep meaning that block. Every reader walks
+   `rects()`: a ring and a bulkhead per block (a lift bank on its own stays under the roof slab), the roof plant kept
+   off every bulkhead, the lobby desk and the shop units clear of every block, the hall holed at each.
+2. **Two placement words**, `BuildingParams::stairPlace` (1 beside the lifts, 2 one stairwell at each end of the long
+   axis, slid out toward the end walls as far as every tier allows, its door toward the middle) and `liftBanks` (1 one
+   bank, 2 two banks facing across a 3.2 m lift lobby, the stairs at the rows' far ends when they stay in the core).
+   `apartPreset` lays them, the lifts at the top tier's centre or slid along its long axis a metre at a time (the lot
+   pass's notch in the back of a slab is where the middle is: the first lab hotel got no core at all, the old straight
+   stair, and a floor no try could walk with walls); where they fit nowhere the classic core stands. Lua `stairs = "core" | "ends"`,
+   `lifts = "bank" | "facing"` (after a named recipe too); a lab's `citysim.stairs` / `citysim.lifts`.
+3. **The floor between blocks.** The zoned floor runs the corridor ring round every block and a spine from each block
+   standing clear of the lifts' ring, out of its door and on to the lifts -- the double-loaded corridor of a slab
+   hotel. Its walk must reach every door placed apart (`floorIsWalkable`'s `reach`), and the planners that know only
+   one core (the ring, the desk rows, the hospital, flats wrapped round the core) are not asked: such a floor is
+   zoned, else open.
+
+4. **Left to the seed, a building varies; named, it keeps** (Glenn, 2026-10-28: "we should still be able to have
+   elevator cores ... variety when placing elevator shafts for different buildings either as variety or because the
+   floor space is too small"). `circulationLayouts` lists what a building tries, in order: a field set to 1 or 2 is
+   fixed; the rest is drawn by the seed from what suits the top tier -- a slab (1.8 times longer than wide; flats only
+   17 m deep and over, the depth for a flat either side of the band round the lifts: a 15.6 m pencil tower's strips
+   came to 4.45 m against the apartments program's 4.5) stairs at its ends 55 %, a tower of 21+ floors facing banks
+   35 %, both on a tall slab, anything else the classic core -- then every other allowed layout, the classic core last
+   if not already in. The classic core is tried at the centre (byte-identical) and then slid along the long axis
+   (`apartPreset` with neither word), so a notch through the middle no longer costs a building its core. Every layout
+   is tried at `hoistwaysFor`'s count of lifts before any at one fewer (`circulationOf`; the presets take an exact
+   `lifts`): a tower that drew facing banks too wide for its floor takes the classic core's three lifts, not facing
+   banks shrunk to one (the review's catch, `a_layout_too_wide_for_its_lifts_gives_way_before_a_lift_is_dropped`).
+   Facing banks with their stairs beside them have a service block behind each row, and the CorePlan holds them all
+   (`services`).
+
+**Consequences.** Params v24 (the two fields serialised): every cached city rebakes once, and with the seed's draw
+the island's towers and slabs change their cores. Owed: zones and sky lobbies (express banks), scissor stairs, scenic
+and service lifts, placement from a recipe's own list of shafts.
+
+## ADR-0264 — A slab is cut round every shaft it crosses, and the triangulator bridges holes left to right
+
+**Context.** Glenn, 2026-10-28: "Sometimes for stairs and elevators the hole for the floor doesn't get cut and you
+end up going through a plane of geometry." A census of every recipe with a core (three lots, two seeds: 224
+buildings, 41 469 shaft-storey probes) found a level face across a hoistway or a stair's flights at 4 878 of them.
+Two causes. The exterior laid five slabs whole across the plan where the core runs on through: a setback's cap, an
+overhang's plate, a turned storey's band, the wave's plate and a parking deck. And the slabs that were holed -- the
+setback caps once cut, the roof over the stairs, every `emitPlanPrism` with holes -- went through `emitPolygon`,
+which projects an upward face into a mirrored frame, where the earcut port paved over shafts: it sorted holes by
+their first vertex rather than their leftmost, and kept an outer node the collinear filter had removed, so with a
+core's holes in rows on the same lines a bridge cut across a hole not yet eliminated (1 629 m2 laid where 1 535 was
+the plate less its holes). The interior slabs, triangulated in plan, came through by luck.
+
+**Decision.** `emitPlanSlab` takes holes, and the five exterior slabs get the core's (`coreSlabHoles`). The earcut
+port follows mapbox again: holes bridged by their leftmost point, ties by y then slope (`compareXYSlope`), the
+eliminated hole returning the filtered bridge as the outer node, and `sectorContainsSector` breaking a bridge tie.
+
+**Consequences.** `no_slab_covers_a_shaft_on_any_recipe` holds the census at 0 (drivable garages excepted: they
+build no core, their ramps are the way up); `triangulate_with_rows_of_aligned_holes_leaves_them_open` holds 76 slabs
+of shafts in rows, in plan and mirrored. Every holed polygon in the city may triangulate differently, so the
+meshes change with the v24 rebake.

@@ -1,6 +1,7 @@
 #include "test_framework.h"
 
 #include "../src/engine/procgen/city/road_mesh.h"
+#include "../src/engine/procgen/city/triangulate.h"
 #include <cmath>
 
 using namespace engine;
@@ -214,6 +215,54 @@ TEST_CASE(triangulate_handles_cw_and_degenerate) {
     std::vector<Vec2> cw = { Vec2(0, 0), Vec2(0, 4), Vec2(4, 4), Vec2(4, 0) };
     CHECK_APPROX(sumTriAreas(cw, triangulatePolygon(cw)), 16.0, 1e-9);
     CHECK(triangulatePolygon({ Vec2(0, 0), Vec2(1, 1) }).empty());     // < 3 verts
+}
+
+// A slab round a lift core: rectangular holes in rows, their edges on the same lines and 0.15 m apart -- in plan and
+// mirrored (the frame emitPolygon projects an upward face into). Every case tiles the outline less its holes exactly:
+// the port sorted the holes by their first vertex rather than their leftmost and kept an outer node the collinear
+// filter had removed, and a mirrored core slab paved over its shafts (Glenn, 2026-10-28: "the hole for the floor
+// doesn't get cut and you end up going through a plane of geometry").
+TEST_CASE(triangulate_with_rows_of_aligned_holes_leaves_them_open) {
+    auto rect = [](double x0, double y0, double x1, double y1) { return Poly2{{x0, y0}, {x1, y0}, {x1, y1}, {x0, y1}}; };
+    auto mirror = [](Poly2 p) { for (Vec2& v : p) std::swap(v.x, v.y); return p; };
+    auto tiled = [](const Poly2& outer, const std::vector<Poly2>& holes) {
+        double want = std::fabs(area(outer)), got = 0;
+        for (const Poly2& h : holes) want -= std::fabs(area(h));
+        for (const auto& t : triangulateWithHoles(outer, holes)) got += std::fabs(area(Poly2{t[0], t[1], t[2]}));
+        return std::fabs(got - want) < 1e-6 * std::max(1.0, want);
+    };
+    const std::vector<Poly2> core = {rect(14.975, 21.24, 17.375, 23.84), rect(17.525, 21.24, 19.925, 23.84),
+                                     rect(20.075, 21.24, 22.475, 23.84), rect(22.625, 21.24, 25.025, 23.84),
+                                     rect(12.225, 16.16, 14.825, 23.84), rect(25.175, 16.16, 27.775, 23.84)};
+    const Poly2 square = rect(0, 0, 40, 40);
+    const Poly2 octagon = {{0.70, 0.34}, {39.30, 0.34}, {39.66, 0.70}, {39.66, 39.30}, {39.30, 39.66}, {0.70, 39.66}, {0.34, 39.30}, {0.34, 0.70}};
+    int cases = 0, bad = 0;
+    for (const Poly2& outer : {square, octagon})
+        for (bool m : {false, true}) {
+            std::vector<Poly2> hs;
+            for (const Poly2& h : core) hs.push_back(m ? mirror(h) : h);
+            ++cases;
+            if (!tiled(m ? mirror(outer) : outer, hs)) { ++bad; std::printf("    [earcut] the core slab, %s, mirrored %d\n", outer.size() == 4 ? "square" : "octagon", m ? 1 : 0); }
+        }
+    // ...and rows of 1-6 shafts in 1-3 rows, either stair-high or not, in both frames
+    for (int rows = 1; rows <= 3; ++rows)
+        for (int n = 1; n <= 6; ++n)
+            for (bool stairs : {false, true})
+                for (bool m : {false, true}) {
+                    std::vector<Poly2> hs;
+                    for (int r = 0; r < rows; ++r) {
+                        const double y0 = 8 + r * 9.0;
+                        double x = 8;
+                        if (stairs) { hs.push_back(rect(x, y0 - 5.1, x + 2.6, y0 + 2.6)); x += 2.75; }
+                        for (int i = 0; i < n; ++i) { hs.push_back(rect(x, y0, x + 2.4, y0 + 2.6)); x += 2.55; }
+                        if (stairs) hs.push_back(rect(x, y0 - 5.1, x + 2.6, y0 + 2.6));
+                    }
+                    if (m) for (Poly2& h : hs) h = mirror(h);
+                    ++cases;
+                    if (!tiled(m ? mirror(square) : square, hs)) { ++bad; std::printf("    [earcut] %d rows of %d%s, mirrored %d\n", rows, n, stairs ? " with stairs" : "", m ? 1 : 0); }
+                }
+    std::printf("    [earcut] %d slabs, %d paved over a hole\n", cases, bad);
+    CHECK(bad == 0);
 }
 
 TEST_CASE(curb_fillet_degenerates_to_empty) {

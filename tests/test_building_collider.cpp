@@ -274,7 +274,7 @@ TEST_CASE(tiered_collider_caps_every_deck_and_opens_over_the_stairs) {
         const bool last = t + 1 == tiers.size();
         for (const CoreStair& st : core.stairs) CHECK(!coveredAt(y, centreOf(st.shaft)));
         for (const CoreShaft& hw : core.hoistways) CHECK(coveredAt(y, centreOf(hw)) == last);
-        if (core.hasService) CHECK(coveredAt(y, centreOf(core.service)));   // the service block is roofed at every deck
+        for (const CoreShaft& sv : core.services) CHECK(coveredAt(y, centreOf(sv)));   // each service block is roofed at every deck
     }
     // A pitched roof has no tiers: the caller keeps the one prism.
     BuildingParams g = p;

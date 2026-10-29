@@ -223,7 +223,7 @@ SpaceGraph spaceGraphOf(const Poly2& planIn, const BuildingParams& params, Real 
     const int nS = static_cast<int>(storeys.size());
     g.storeys = nS;
     if (nS == 0) { g.modelled = false; return g; }
-    const Poly2 coreRect = core.valid ? core.rect() : Poly2{};
+    const std::vector<Poly2> coreRects = core.rects();   // every block (empty: no core)
 
     auto add = [&](const Cell& c) { g.cells.push_back(c); return static_cast<int>(g.cells.size()) - 1; };
     std::vector<int> hallOf(static_cast<std::size_t>(nS), -1);
@@ -239,7 +239,8 @@ SpaceGraph spaceGraphOf(const Poly2& planIn, const BuildingParams& params, Real 
             if (a < bestA) { bestA = a; best = r; }
         }
         if (best >= 0) return best;
-        if (core.valid && pointInPolygon(coreRect, q)) return -1;
+        for (const Poly2& cr : coreRects)
+            if (pointInPolygon(cr, q)) return -1;
         if (pointInPolygon(storeys[static_cast<std::size_t>(k)].plan, q)) return hallOf[static_cast<std::size_t>(k)];
         return -1;
     };
@@ -270,7 +271,7 @@ SpaceGraph spaceGraphOf(const Poly2& planIn, const BuildingParams& params, Real 
         hall.height = sp.h;
         hall.k0 = hall.k1 = k;
         hall.tier = sp.tier;
-        if (core.valid) hall.holes.push_back(coreRect);
+        for (const Poly2& cr : coreRects) hall.holes.push_back(cr);
         for (const Poly2& h : sr.holes) hall.holes.push_back(h);
         {   // the floor inside the exterior walls, less the rooms and the core: where a person can stand
             const Poly2 inner = inset(sp.plan, interiorWallInset(params));
@@ -304,7 +305,8 @@ SpaceGraph spaceGraphOf(const Poly2& planIn, const BuildingParams& params, Real 
         std::vector<Cover> covers;
         for (const RoomWall& w : sr.rp.walls) covers.push_back({w.a, w.b, 0.25});
         for (std::size_t i = 0; i < sp.plan.size(); ++i) covers.push_back({sp.plan[i], sp.plan[(i + 1) % sp.plan.size()], 0.7});
-        if (core.valid) for (std::size_t i = 0; i < coreRect.size(); ++i) covers.push_back({coreRect[i], coreRect[(i + 1) % coreRect.size()], 0.3});
+        for (const Poly2& cr : coreRects)
+            for (std::size_t i = 0; i < cr.size(); ++i) covers.push_back({cr[i], cr[(i + 1) % cr.size()], 0.3});
         for (const Poly2& h : sr.holes) for (std::size_t i = 0; i < h.size(); ++i) covers.push_back({h[i], h[(i + 1) % h.size()], 0.3});
         for (int r : roomsOf[static_cast<std::size_t>(k)]) {
             const Poly2 rect = g.cells[static_cast<std::size_t>(r)].plan;   // (a copy: add() may move the cells)
@@ -447,11 +449,12 @@ SpaceGraph spaceGraphOf(const Poly2& planIn, const BuildingParams& params, Real 
             Cell r;
             r.kind = CellKind::Roof;
             r.plan = top.plan;
-            r.holes.push_back(coreRect);
+            for (const Poly2& bh : coreBulkheads(core, 0)) r.holes.push_back(bh);
             r.floor.y0 = baseY + top.y0 + top.h + 0.05;
             r.floor.origin = centroid(top.plan);
             r.height = 0;
-            r.freeArea = area(r.plan) - area(coreRect);
+            r.freeArea = area(r.plan);
+            for (const Poly2& bh : r.holes) r.freeArea -= area(bh);
             if (roof)   // the tanks, the HVAC, the masts' bases, a lantern: not floor (a Screen is the edge, not a hole)
                 for (const RoofItem& ri : *roof) {
                     if (ri.kind == RoofItem::Kind::Screen || ri.kind == RoofItem::Kind::Frame || ri.kind == RoofItem::Kind::Sloped ||

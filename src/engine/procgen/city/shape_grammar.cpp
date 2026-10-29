@@ -2284,7 +2284,7 @@ static Cap::Kind capKindOf(uint8_t top) {
 static void emitCrown(BuildingMesh& out, const Vec3& footOrigin, Real width,
                       Real depth, const Vec3& r, const Vec3& f, Real roofY,
                       const BuildingParams& p, Rng& rng,
-                      const Poly2* topPlan = nullptr, const Poly2* keepOut = nullptr) {
+                      const Poly2* topPlan = nullptr, const std::vector<Poly2>* keepOut = nullptr) {
     const Vec3 up(0, 1, 0);
     // The roof may be an L / U / courtyard PLAN, not its oriented box — a crown
     // element seated by box coordinates alone can hang over the notch (device:
@@ -2298,12 +2298,15 @@ static void emitCrown(BuildingMesh& out, const Vec3& footOrigin, Real width,
             for (int cz = 0; cz <= 1; ++cz) {
                 Vec3 q = o + r * (w2 * cx) + f * (d2 * cz);
                 if (topPlan && !pointInPolygon(*topPlan, Vec2(q.x, q.z))) return false;
-                if (keepOut && pointInPolygon(*keepOut, Vec2(q.x, q.z))) return false;
+                if (keepOut)
+                    for (const Poly2& k : *keepOut)
+                        if (pointInPolygon(k, Vec2(q.x, q.z))) return false;
                 item.push_back(Vec2(q.x, q.z));
             }
         if (keepOut) {   // ...nor may the bulkhead's corners land inside the item (the item straddling it)
             std::swap(item[2], item[3]);   // the corner order above is a Z, not a ring
-            for (const Vec2& k : *keepOut) if (pointInPolygon(item, k)) return false;
+            for (const Poly2& ko : *keepOut)
+                for (const Vec2& k : ko) if (pointInPolygon(item, k)) return false;
         }
         return true;
     };
@@ -2498,11 +2501,12 @@ static void emitCrown(BuildingMesh& out, const Vec3& footOrigin, Real width,
     if (wantPad && ud >= 12.5) {
         Real koU0 = 1e9, koU1 = -1e9;   // the bulkhead's span along r
         if (keepOut)
-            for (const Vec2& q : *keepOut) {
-                const Real du = dot(Vec3(q.x, 0, q.y) - footOrigin, r);
-                koU0 = std::min(koU0, du);
-                koU1 = std::max(koU1, du);
-            }
+            for (const Poly2& ko : *keepOut)
+                for (const Vec2& q : ko) {
+                    const Real du = dot(Vec3(q.x, 0, q.y) - footOrigin, r);
+                    koU0 = std::min(koU0, du);
+                    koU1 = std::max(koU1, du);
+                }
         struct End { Real u0, u1; bool start; };
         const End ends[2] = {{inset, keepOut ? koU0 - 0.5 : width - inset, true}, {keepOut ? koU1 + 0.5 : inset, width - inset, false}};
         bool done = false;
@@ -2885,11 +2889,12 @@ void emitPlanRing(BuildingMesh& out, const Poly2& outer, const Poly2& hole,
     appendToPart(out, part, m);
 }
 
+// `holes`: what it is cut around (a core's shafts, coreSlabHoles), walled.
 void emitPlanSlab(BuildingMesh& out, const Poly2& pl, Real yTop, Real thick,
-                  PartId part, const Vec3& col) {
+                  PartId part, const Vec3& col, const std::vector<Poly2>& holes = {}) {
     if (pl.size() < 3) return;
     RenderMesh m;
-    MeshBuilder::emitPlanPrism(m, pl, {}, yTop - thick, yTop, col);
+    MeshBuilder::emitPlanPrism(m, pl, holes, yTop - thick, yTop, col);
     appendToPart(out, part, m);
 }
 
@@ -4499,8 +4504,8 @@ std::vector<LobbyPiece> lobbyDressing(const Poly2& plan, std::size_t entranceEdg
     const Vec2 v = normalize(E - C);
     const Vec2 u(v.y, -v.x);
     // the core grown by a walkway: nothing of the lobby's dressing stands in front of a shaft door or a stair
-    Poly2 coreRect = core.rect();
-    {
+    std::vector<Poly2> coreRects = core.rects();   // (every block: a stairwell placed apart has its doors too)
+    for (Poly2& coreRect : coreRects) {
         Vec2 m(0, 0);
         for (const Vec2& q : coreRect) m = m + q;
         m = m * (1.0 / static_cast<Real>(coreRect.size()));
@@ -4522,7 +4527,8 @@ std::vector<LobbyPiece> lobbyDressing(const Poly2& plan, std::size_t entranceEdg
     auto fits = [&](const std::vector<LobbyPiece>& g) {
         for (const LobbyPiece& pc : g) {
             const Poly2 fp = pc.footprint();
-            if (convexOverlap(fp, coreRect)) return false;
+            for (const Poly2& coreRect : coreRects)
+                if (convexOverlap(fp, coreRect)) return false;
             for (const Vec2& q : fp)
                 if (!pointInPolygon(plan, q)) return false;
         }
@@ -4961,7 +4967,8 @@ static RoomPlan shopRoomPlan(const Poly2& planIn, const BuildingParams& params, 
         Real deep = std::min(Real(10.0), across * 0.45);
         if (core.valid) {
             Real cd = 1e9;
-            for (const Vec2& c : core.rect()) cd = std::min(cd, dot(a - c, nOut));
+            for (const Poly2& cr : core.rects())
+                for (const Vec2& c : cr) cd = std::min(cd, dot(a - c, nOut));
             deep = cd - 1.0;
         }
         if (deep < inset + 4.0) return;
@@ -4991,7 +4998,7 @@ static RoomPlan shopRoomPlan(const Poly2& planIn, const BuildingParams& params, 
     ensureCCW(plan);
     const std::size_t n = plan.size();
     const Real inset = interiorInset(params);
-    const Poly2 coreR = core.valid ? core.rect() : well;
+    const std::vector<Poly2> coreRs = core.valid ? core.rects() : std::vector<Poly2>{well};
     std::vector<Poly2> taken;
     std::vector<std::pair<std::size_t, std::size_t>> wallsOf;   // each shop room's walls: [first, end) in rp.walls
     for (std::size_t e = 0; e < n; ++e) {
@@ -5010,10 +5017,16 @@ static RoomPlan shopRoomPlan(const Poly2& planIn, const BuildingParams& params, 
         const Real deep = std::min(Real(10.0), across * 0.45);
         // The core's span along this edge and its distance in: a unit IN FRONT of it stops 1.5 m short; the others
         // keep the full depth (the cap used to apply to every unit on the edge: 44 units "too shallow" on the island).
-        Real coreT0 = 1e9, coreT1 = -1e9, coreDist = 1e9;
-        for (const Vec2& c : coreR) {
-            coreT0 = std::min(coreT0, dot(c - a, d)); coreT1 = std::max(coreT1, dot(c - a, d));
-            coreDist = std::min(coreDist, dot(a - c, nOut));
+        struct InFront { Real t0 = 1e9, t1 = -1e9, dist = 1e9; };
+        std::vector<InFront> cores;   // one a block (a layout's stairwells stand apart from its lifts)
+        for (const Poly2& coreR : coreRs) {
+            if (coreR.size() < 3) continue;
+            InFront f;
+            for (const Vec2& c : coreR) {
+                f.t0 = std::min(f.t0, dot(c - a, d)); f.t1 = std::max(f.t1, dot(c - a, d));
+                f.dist = std::min(f.dist, dot(a - c, nOut));
+            }
+            cores.push_back(f);
         }
         static const bool why = std::getenv("RT_SHOP_WHY") != nullptr;
         if (deep < inset + 3.0) {
@@ -5031,7 +5044,8 @@ static RoomPlan shopRoomPlan(const Poly2& planIn, const BuildingParams& params, 
         for (const ShopUnit& u : L.shops) {
             const Real x0 = L.open[static_cast<std::size_t>(u.b0)].x0, x1 = L.open[static_cast<std::size_t>(u.b1)].x1;
             Real dpt = deep;
-            if (coreR.size() >= 3 && x1 > coreT0 - 1.0 && x0 < coreT1 + 1.0) dpt = std::min(dpt, coreDist - 1.5);
+            for (const InFront& f : cores)
+                if (x1 > f.t0 - 1.0 && x0 < f.t1 + 1.0) dpt = std::min(dpt, f.dist - 1.5);
             if (dpt < inset + 3.0) {
                 if (why) std::fprintf(stderr, "[shop why] edge %zu: a unit in front of the core is too shallow (%.1f)\n", e, dpt);
                 continue;
@@ -6933,6 +6947,10 @@ BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
             appendToPart(out, PartId::Interior, cm.drywall);
         }
     }
+    // THE SHAFTS RUN THROUGH every slab the storeys below lay across the plan -- a setback's cap, an overhang's plate,
+    // a turned storey's band, the wave's plate, a parking deck (Glenn, 2026-10-28: "the hole for the floor doesn't get
+    // cut and you end up going through a plane of geometry")
+    const std::vector<Poly2> shaftHoles = ecore.valid ? coreSlabHoles(ecore) : std::vector<Poly2>{};
     const std::vector<StairRun> stairs = stairRuns(plan, params, entranceEdge, storeys);   // the blank stair walls up the tiers
     Poly2 cur = plan;
     Real tierY0 = y;
@@ -6943,7 +6961,7 @@ BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
         if (i > 0 && sp.tier != storeys[static_cast<std::size_t>(i)].tier) {
             // A setback landed at this floor: cap the tier below.
             emitPlanSlab(out, cur, y - 0.05, 0.2, PartId::Roof,
-                         materialFor(PartId::Roof, wallColor).albedo);
+                         materialFor(PartId::Roof, wallColor).albedo, shaftHoles);
             bool flushFace = false;
             (void)exposedRuns(cur, sp.plan, flushFace);
             if (full && params.stringCourse && !params.curtainWall && !flushFace)
@@ -6965,7 +6983,7 @@ BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
                     emitParapetRun(out, r.a, r.b, y, 0.55, materialFor(PartId::Trim, wallColor).albedo,
                                    PartId::Trim, materialFor(PartId::Trim, wallColor).albedo * 0.9);
             if (overhang)
-                emitPlanSlab(out, sp.plan, y, 0.4, PartId::Trim, materialFor(PartId::Trim, wallColor).albedo * 0.9);
+                emitPlanSlab(out, sp.plan, y, 0.4, PartId::Trim, materialFor(PartId::Trim, wallColor).albedo * 0.9, shaftHoles);
             cur = sp.plan;
             tierY0 = y;
         } else if (i > 0 && !samePlan(sp.plan, cur)) {
@@ -6978,7 +6996,7 @@ BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
             if (!(ruledUp && sp.plan.size() == cur.size())) {
                 const Poly2 band = Section::fromLot(cur).unite(Section::fromLot(sp.plan)).tessellate();
                 emitPlanSlab(out, band.size() >= 3 ? band : sp.plan, y, 0.3, PartId::Trim,
-                             materialFor(PartId::Trim, wallColor).albedo * 0.9);
+                             materialFor(PartId::Trim, wallColor).albedo * 0.9, shaftHoles);
             }
             cur = sp.plan;
             tierY0 = y;
@@ -6988,7 +7006,7 @@ BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
         if (!plates.empty() && plates[static_cast<std::size_t>(i) + 1].size() >= 3) {
             const Poly2& plate = plates[static_cast<std::size_t>(i) + 1];
             emitPlanSlab(out, plate, y + 0.02, 0.3, PartId::Concrete,
-                         Vec3(0.80, 0.79, 0.76));   // (pale concrete: the plate reads against the glass, as Aqua's do)
+                         Vec3(0.80, 0.79, 0.76), shaftHoles);   // (pale concrete: the plate reads against the glass, as Aqua's do)
             if (full) emitPlateRailings(out, plate, cur, y + 0.32);   // a railing where the plate runs past the glass
         }
         // THE CEILING'S OUTLINE: the storey above's, when it continues this tier on an outline with the same
@@ -7077,7 +7095,7 @@ BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
         // Parking storeys read as DECKS, not holes: a slab per level.
         if (params.parkingDecks && !params.curtainWall)
             emitPlanSlab(out, cur, y + 0.02, 0.12, PartId::Concrete,
-                         wallColor * 0.92);
+                         wallColor * 0.92, shaftHoles);
         if (i == params.floors / 2) {
             FaceRect ff = planEdgeRect(cur, entranceEdge % cur.size(), y, fh);
             out.attaches.push_back({ff.at(ff.width * 0.5, fh * 0.5), ff.n, "facade"});
@@ -7447,9 +7465,9 @@ BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
             // but skips the penthouse + roof-furniture pack.
             if (full && params.top != 9 && capKind == Cap::Kind::Parapet && (topRise <= 0 || topParams.top == 2 || topParams.top == 7)) {
                 // the bulkhead's footprint, a little wider, keeps the plant off the roof access
-                const Poly2 bulk = roofExit ? offsetPlan(ecore.rect(), -0.75) : Poly2{};
+                const std::vector<Poly2> bulk = roofExit ? coreBulkheads(ecore, 0.75) : std::vector<Poly2>{};
                 emitCrown(out, fo, topObb.half[0] * 2, topObb.half[1] * 2, r3, f3,
-                          y + 0.05, params, rng, &cur, roofExit && bulk.size() >= 3 ? &bulk : nullptr);
+                          y + 0.05, params, rng, &cur, roofExit && !bulk.empty() ? &bulk : nullptr);
             }
         }
     }

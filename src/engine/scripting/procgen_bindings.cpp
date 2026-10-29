@@ -1043,6 +1043,16 @@ static void readAttachedFields(lua_State* L, int idx, BuildingParams& p) {
     p.fireEscape = optBoolField(L, idx, "fire_escape", p.fireEscape);
 }
 
+// Where its stairs and lifts stand (circulation.h): stairs = "core" | "ends", lifts = "bank" | "facing".
+static void readCirculationFields(lua_State* L, int idx, BuildingParams& p) {
+    lua_getfield(L, idx, "stairs");
+    if (lua_isstring(L, -1)) p.stairPlace = stairPlaceOf(lua_tostring(L, -1));
+    lua_pop(L, 1);
+    lua_getfield(L, idx, "lifts");
+    if (lua_isstring(L, -1)) p.liftBanks = liftBanksOf(lua_tostring(L, -1));
+    lua_pop(L, 1);
+}
+
 static void readTopField(lua_State* L, int idx, BuildingParams& p) {
     lua_getfield(L, idx, "top");
     if (lua_isstring(L, -1)) {
@@ -1237,6 +1247,7 @@ BuildingParams readBuildingParamsOnto(lua_State* L, int idx, BuildingParams p) {
         p.core = c == "never" ? 1 : c == "always" ? 2 : 0;
     }
     lua_pop(L, 1);
+    readCirculationFields(L, idx, p);
     // The lighting spec (M4): crown = "auto"|"none"|"white"|"amber"|"blue"|"red"|"green"|"purple",
     // signage = true|false, uplights = true|false (absent = auto, the hash decides).
     lua_getfield(L, idx, "crown");
@@ -1390,6 +1401,7 @@ static void readPlanAndRecipe(lua_State* L, BuildingParams& p, Poly2& plan) {
         p.openDoorway = true;
         readTopField(L, 1, p);   // a script may try another top on the recipe's tower
         readAttachedFields(L, 1, p);   // ...or stand it against its neighbours
+        readCirculationFields(L, 1, p);   // ...or place its stairs and lifts apart
         lua_pushinteger(L, p.floors);   // the floors it grew (the slender cap applied), for the caller's label
         lua_setfield(L, 1, "grown_floors");
     }

@@ -268,6 +268,9 @@ struct LotParams {
     bool wholeBlocks = false;
     std::string recipe;
     Real recipeCoreness = -1;
+    // ...and where its stairs and lifts stand (citysim.stairs = "core" | "ends", citysim.lifts = "bank" | "facing":
+    // BuildingParams::stairPlace / liftBanks; 0 leaves the recipe's)
+    uint8_t recipeStairs = 0, recipeLifts = 0;
     uint32_t seed = 1;
     // TERRAIN sampler (world y at x,z): buildings grow from their graded pad
     // plane (the ENTRANCE-side grade, so the front door sits level with the
