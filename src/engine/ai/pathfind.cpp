@@ -102,8 +102,12 @@ Route findRouteImpl(const NavGraph& graph, int startNode, int goalNode, bool onF
         sc.came[static_cast<std::size_t>(u)] = link;
     };
 
+    // ON FOOT every link is walked at one pace, so a walk's cost is its length (at the local street's speed, to keep
+    // the units): a pedestrian costed by the CARS' class speed took a collector round a block over a footpath 24 m
+    // shorter across it, because a collector "is faster" (ADR-0265, footpaths_are_walked_across_a_block_and_never_driven)
+    const Real footSpeed = classSpeed(RoadClass::Local);
     auto heuristic = [&](int node) {
-        return distance(graph.nodes[node], graph.nodes[goalNode]) / kMaxSpeed;
+        return distance(graph.nodes[node], graph.nodes[goalNode]) / (onFoot ? footSpeed : kMaxSpeed);
     };
 
     // Frontier ordered by f = g + h, tie-broken by node index for determinism.
@@ -141,7 +145,7 @@ Route findRouteImpl(const NavGraph& graph, int startNode, int goalNode, bool onF
                        link.klass == RoadClass::Ramp || !link.walkable))
                 continue;
             if (!onFoot && link.footpath) continue;   // a walk: never a vehicle's
-            Real step = link.length / classSpeed(link.klass);
+            Real step = link.length / (onFoot ? footSpeed : classSpeed(link.klass));
             if (!onFoot && link.to != goalNode && link.klass != RoadClass::Freeway &&
                 link.klass != RoadClass::Ramp && graph.isJunction(link.to))
                 step += kStreetJunctionDelay;

@@ -45,7 +45,7 @@ struct CityRenderParams {
     int nearTarget = 0;                    // CitySimConfig::nearTarget
     int farTarget = 0;                     // CitySimConfig::farTarget
     uint32_t seed = 1;
-    Real hoursPerSecond = 0.05;            // sim-clock hours advanced per real second
+    Real hoursPerSecond = 1.0 / 3600.0;    // sim-clock hours advanced per real second (real time: DayNightCycle)
     // The in-world hour the level OPENS at. The population is placed directly
     // from its schedules at this hour (CitySim::seedFromSchedule), so any hour
     // costs the same: 22:00 is as cheap as 08:00. 10.5 keeps the historical

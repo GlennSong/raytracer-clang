@@ -332,7 +332,9 @@ TEST_CASE(every_registered_recipe_is_rolled_by_some_table) {
         for (uint32_t s = 1; s <= 600; ++s) {
             rolled.insert(architectPick(tag, 24, 520, s, (s % 3) * 0.5).name);
             rolled.insert(architectPick(tag, 12, 160, s + 9000, 0.0).name);
-            if (s <= 200) rolled.insert(architectBlockLandmark(tag, 48, 2800, s, 0.6).name);
+            // (over all 600: the twin towers are a 4 % landmark, and seeds 1-200 are the one window in 25 that never
+            // rolls them -- a recipe is judged on enough rolls to hear it, not on a lucky few)
+            rolled.insert(architectBlockLandmark(tag, 48, 2800, s, 0.6).name);
         }
     }
     for (int k = 0; k < static_cast<int>(LandmarkKind::Count); ++k)
@@ -1276,32 +1278,42 @@ TEST_CASE(building_pads_never_cross_their_parcel_line) {
 // street-facing parcel edge the plate is pushed out to halfWidth + sidewalk
 // from the centreline — and never into the band itself.
 TEST_CASE(paved_plates_reach_the_sidewalk_and_stop_there) {
-    LotParams p;
-    p.seed = 3;
-    p.roadMargin = 6.0;
-    p.sidewalkWidth = 3.5;
-    RoadGraph roads;
-    roads.nodes.push_back({Vec2(-105, -200)});
-    roads.nodes.push_back({Vec2(-105, 200)});
-    roads.edges.push_back({0, 1, 13, RoadClass::Arterial, 0});   // band edge at x = -105 + 6.5 + 3.5 = -95
-    std::vector<Poly2> blocks = {{{-101, -45}, {-11, -45}, {-11, 45}, {-101, 45}}};
-    const Real clearance = 4.6;
-    std::vector<LotBuilding> b = growLotBuildings(blocks, p, nullptr, nullptr, &roads, clearance);
+    // Over twelve seeds (ADR-0265): each one's lots ON the road -- an EDGE along it, not a corner lot whose mitre
+    // only touches it at a point -- reach the band, and no plate enters it.
     int reached = 0, paved = 0;
-    for (const LotBuilding& lb : b) {
-        if (lb.pavedLot.size() < 3) continue;
-        ++paved;
-        Real minX = 1e30, lotMinX = 1e30;
-        for (const Vec2& v : lb.pavedLot) minX = std::min(minX, v.x);
-        for (const Vec2& v : lb.lot) lotMinX = std::min(lotMinX, v.x);
-        CHECK(minX >= -95.0 - 0.15);                 // never into the band
-        if (lotMinX < -90.0) {                       // a lot on the road: its plate reaches the band
-            CHECK(minX <= -95.0 + 0.3);
-            ++reached;
+    for (uint32_t seed = 1; seed <= 12; ++seed) {
+        LotParams p;
+        p.seed = seed;
+        p.roadMargin = 6.0;
+        p.sidewalkWidth = 3.5;
+        RoadGraph roads;
+        roads.nodes.push_back({Vec2(-105, -200)});
+        roads.nodes.push_back({Vec2(-105, 200)});
+        roads.edges.push_back({0, 1, 13, RoadClass::Arterial, 0});   // band edge at x = -105 + 6.5 + 3.5 = -95
+        std::vector<Poly2> blocks = {{{-101, -45}, {-11, -45}, {-11, 45}, {-101, 45}}};
+        const Real clearance = 4.6;
+        std::vector<LotBuilding> b = growLotBuildings(blocks, p, nullptr, nullptr, &roads, clearance);
+        for (const LotBuilding& lb : b) {
+            if (lb.pavedLot.size() < 3) continue;
+            ++paved;
+            Real minX = 1e30;
+            for (const Vec2& v : lb.pavedLot) minX = std::min(minX, v.x);
+            CHECK(minX >= -95.0 - 0.15);                 // never into the band
+            bool onRoad = false;                         // an edge of the lot runs along the road side
+            for (std::size_t i = 0; i < lb.lot.size(); ++i) {
+                const Vec2 a = lb.lot[i], c = lb.lot[(i + 1) % lb.lot.size()];
+                onRoad = onRoad || (a.x < -90.0 && c.x < -90.0 && (c - a).length() > 2.0);
+            }
+            if (onRoad) {                                // a lot on the road: its plate reaches the band
+                if (minX > -95.0 + 0.3) std::printf("    [plates] seed %u: a lot on the road stops at x %.2f\n", seed, minX);
+                CHECK(minX <= -95.0 + 0.3);
+                ++reached;
+            }
         }
     }
-    CHECK(paved > 0);
-    CHECK(reached > 0);
+    std::printf("    [plates] twelve seeds: %d plates, %d on the road reach the band\n", paved, reached);
+    CHECK(paved > 12);
+    CHECK(reached > 12);
     // The offset helper itself: a square pushed out on one edge only.
     const Poly2 sq = {{0, 0}, {10, 0}, {10, 10}, {0, 10}};
     const Poly2 o = offsetPolygonEdges(sq, {2.0, 0.0, 0.0, 0.0});   // edge 0 (y = 0) moves to y = -2

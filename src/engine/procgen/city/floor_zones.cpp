@@ -1668,6 +1668,8 @@ static RoomPlan zonedFloorCut(const Poly2& plate, const BuildingParams& params, 
     int flats = 0, studios = 0;
     std::vector<std::size_t> roomZone;   // the zone each room was laid from
     std::vector<char> opened(fp.zones.size(), 0);   // the third try's: zones the first two tries' walk could not reach
+    std::vector<char> asStudio(fp.zones.size(), 0);   // homes: flats whose own layout cut themselves off, laid as one room
+    bool studied = false;
     std::size_t missed = 0;
     for (int attempt = 0; attempt < (prog.residential ? 2 : 4); ++attempt) {
         flats = studios = 0;
@@ -1713,7 +1715,8 @@ static RoomPlan zonedFloorCut(const Poly2& plate, const BuildingParams& params, 
             std::vector<Room> flatRooms;
             std::vector<RoomWall> flatWalls;
             bool flatLaid = false;
-            if (prog.residential && R.kind == RoomKind::Flat && enclosed && best >= kDoorRun && doorEdge < Z.poly.size()) {
+            if (prog.residential && R.kind == RoomKind::Flat && enclosed && best >= kDoorRun && doorEdge < Z.poly.size() &&
+                !asStudio[z]) {
                 const Vec2 ea = Z.poly[doorEdge], eb = Z.poly[(doorEdge + 1) % Z.poly.size()];
                 const Real EL = std::max(Real(1e-6), (eb - ea).length()), m = (kRoomDoorW * 0.5 + 0.35) / EL;
                 const Real tLo = doorMid - best / (2 * EL) + m, tHi = doorMid + best / (2 * EL) - m;
@@ -1825,9 +1828,31 @@ static RoomPlan zonedFloorCut(const Poly2& plate, const BuildingParams& params, 
                     if (drop[z]) {
                         fp.zones.erase(fp.zones.begin() + static_cast<std::ptrdiff_t>(z));
                         rule.erase(rule.begin() + static_cast<std::ptrdiff_t>(z));
+                        asStudio.erase(asStudio.begin() + static_cast<std::ptrdiff_t>(z));
+                        opened.erase(opened.begin() + static_cast<std::ptrdiff_t>(z));
                     }
                 pruned = true;
                 attempt = -1;   // (the loop's ++ starts it over at the first try)
+                continue;
+            }
+        }
+        // ...and A FLAT ITS OWN LAYOUT CUT OFF (its hall squeezed into a stem beside the corridor too narrow to walk, a
+        // core whose blocks stand apart leaving an odd lot) is laid as a studio, one room on its own front door, and the
+        // floor is laid again, once (ADR-0265: a pencil tower's facing banks left 20 of its crowns without a home)
+        if (prog.residential && !studied) {
+            std::vector<std::size_t> un;
+            floorIsWalkable(rp, walkPlan, entry, solid, &un, reach);
+            bool any = false;
+            for (std::size_t k : un) {
+                const std::size_t zi = k < roomZone.size() ? roomZone[k] : fp.zones.size();
+                if (zi < fp.zones.size() && prog.rules[static_cast<std::size_t>(rule[zi])].kind == RoomKind::Flat && !asStudio[zi]) {
+                    asStudio[zi] = 1;
+                    any = true;
+                }
+            }
+            if (any) {
+                studied = true;
+                attempt = -1;
                 continue;
             }
         }
@@ -1841,9 +1866,18 @@ static RoomPlan zonedFloorCut(const Poly2& plate, const BuildingParams& params, 
                     if (k < roomZone.size() && roomZone[k] < opened.size()) opened[roomZone[k]] = 1;
             }
         }
-        if (std::getenv("RT_ZONE_DEBUG"))
-            std::fprintf(stderr, "[zones] storey %d: try %d not walkable (%zu rooms, %zu walls)\n", storey, attempt,
+        if (std::getenv("RT_ZONE_DEBUG")) {
+            std::fprintf(stderr, "[zones] storey %d: try %d not walkable (%zu rooms, %zu walls); unreached:", storey, attempt,
                          rp.rooms.size(), rp.walls.size());
+            std::vector<std::size_t> un;
+            floorIsWalkable(rp, walkPlan, entry, solid, &un, reach);
+            for (std::size_t k : un)
+                if (k < rp.rooms.size()) {
+                    const Vec2 c = centroid(rp.rooms[k].rect);
+                    std::fprintf(stderr, " %s (%.1f %.1f)", cellUseName(rp.rooms[k].kind), c.x, c.y);
+                }
+            std::fprintf(stderr, "; entry (%.1f %.1f)\n", entry.x, entry.y);
+        }
     }
     if (std::getenv("RT_ZONE_DEBUG")) {
         std::fprintf(stderr, "[zones] storey %d: core %d at", storey, core.valid ? 1 : 0);

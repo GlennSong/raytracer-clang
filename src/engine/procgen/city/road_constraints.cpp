@@ -314,6 +314,9 @@ RoadGraph mergeShortEdges(const RoadGraph& in, Real minLen, int maxDegree) {
             // road). Then rewire, and drop self-loops + parallel duplicates.
             const Real da = std::max(1, degreeOf(a)), db = std::max(1, degreeOf(b));
             g.nodes[a].pos = (g.nodes[a].pos * da + g.nodes[b].pos * db) * (1.0 / (da + db));
+            std::vector<int> before(g.nodes.size(), 0);
+            for (const RoadEdge& e : g.edges) if (e.a != e.b) { ++before[e.a]; ++before[e.b]; }
+            before[a] += before[b] - 2;
             for (RoadEdge& e : g.edges) {
                 if (e.a == b) e.a = a;
                 if (e.b == b) e.b = a;
@@ -331,6 +334,7 @@ RoadGraph mergeShortEdges(const RoadGraph& in, Real minLen, int maxDegree) {
                     }
                 if (!dup) kept.push_back(e);
             }
+            unwindMintedSpurs(kept, g.nodes.size(), before);   // (a triangle's apex, or its folded base)
             g.edges = std::move(kept);
         } else {
             // Can't merge without over-crowding the junction (e.g. the staggered
@@ -832,7 +836,22 @@ RoadGraph consolidateJunctionSpans(
                 int arms = deg[n] + deg[cur] - 2;
                 if (cur == n) arms = deg[n] - 2;         // short loop back onto itself
                 if (arms <= maxDegree) {
-                    best = {n, cur, len, floor, path, spanEdges, /*fuse=*/true};
+                    // ...unless another road joins the same two junctions: fused, it would be a loop back onto the
+                    // one node -- a teardrop, its far end a hairpin (piedmont's rim, ADR-0265). The short span is
+                    // the redundant one there: deleted, the other road stays.
+                    bool parallel = false;
+                    if (cur != n)
+                        for (auto [v0, ve0] : nbr[n]) {
+                            if (std::find(spanEdges.begin(), spanEdges.end(), ve0) != spanEdges.end()) continue;
+                            int prev2 = n, cur2 = v0;
+                            for (int guard = 0; deg[cur2] == 2 && guard < N; ++guard) {
+                                const int nn = nbr[cur2][0].first == prev2 ? nbr[cur2][1].first : nbr[cur2][0].first;
+                                prev2 = cur2;
+                                cur2 = nn;
+                            }
+                            if (cur2 == cur) { parallel = true; break; }
+                        }
+                    best = {n, cur, len, floor, path, spanEdges, /*fuse=*/!parallel};
                     bestDeficit = deficit;
                     continue;
                 }
@@ -943,6 +962,9 @@ RoadGraph consolidateJunctionSpans(
                 }
             if (!dup) kept.push_back(o);
         }
+        std::vector<int> before = deg;
+        if (a != b) before[a] = deg[a] + deg[b] - 2;
+        unwindMintedSpurs(kept, g.nodes.size(), before);   // (a loop fused away, or a triangle's apex)
         g.edges = std::move(kept);
     }
     if (fused > 0)

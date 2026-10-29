@@ -211,90 +211,100 @@ TEST_CASE(parking_bays_live_inside_the_road_s_parking_band) {
             "block_size": 180, "density": 0.6, "kind_bias": "oldtown" }
         ]
     })");
-    RoadEntity net;
-    net.look.defaultWidth = 12.0;
-    net.look.sidewalk = 3.5;
-    net.look.curb = 0.16;
-    applyGenerateRecipe(net, recipe, nullptr);   // no heightAt here (flat)
-    CHECK(!net.graph.edges.empty());
-    CHECK(!net.graph.specs.empty());
+    // Any seed (ADR-0265; Glenn: "Any seed should grow something, and it should grow it in its own way"): the recipe
+    // grown from twelve, each one's streets parked along -- seed 7 alone once hid a metro that grew no side street
+    // on seven seeds in ten.
+    std::size_t totalBays = 0;
+    for (uint32_t seed = 1; seed <= 12; ++seed) {
+        recipe["seed"] = seed;
+        RoadEntity net;
+        net.look.defaultWidth = 12.0;
+        net.look.sidewalk = 3.5;
+        net.look.curb = 0.16;
+        applyGenerateRecipe(net, recipe, nullptr);   // no heightAt here (flat)
+        CHECK(!net.graph.edges.empty());
+        CHECK(!net.graph.specs.empty());
 
-    // (B) ONE source of truth for width: every edge that got a spec carries that
-    // spec's carriageway width, which is what RoadEdge::width hands the mesher,
-    // the lot clearance pass and the nav graph.
-    int specced = 0, withPark = 0;
-    for (std::size_t ei = 0; ei < net.graph.edges.size(); ++ei) {
-        const int si = net.graph.edges[ei].spec;
-        const RoadClass k = net.graph.edges[ei].klass;
-        // Arterials and boulevards keep today's look: no spec, no parking band.
-        if (k != RoadClass::Local && k != RoadClass::Collector) CHECK(si < 0);
-        if (si < 0) continue;
-        ++specced;
-        const RoadSpec& s = net.graph.specs[si];
-        CHECK_APPROX(net.graph.edges[ei].width, s.carriagewayWidth(), 1e-9);
-        CHECK_APPROX(roadNetEdgeSpec(net, static_cast<int>(ei)).carriagewayWidth(),
-                     s.carriagewayWidth(), 1e-9);
-        double off = 0, bw = 0;
-        if (roadSpecParkingBand(s, +1, off, bw)) ++withPark;
-    }
-    CHECK(specced > 0);
-    CHECK(withPark > 0);
-
-    // A generated net saves as its RECIPE (roadRecipeForSave keeps the "generate"
-    // block and never bakes nodes/edges), so the specs must come back by
-    // REGENERATION — same table, same per-edge index, same widths.
-    {
-        nlohmann::json doc;
-        doc["generate"] = recipe;
-        const nlohmann::json saved = roadRecipeForSave(doc.dump(), net);
-        CHECK(saved.contains("generate"));
-        RoadEntity again = roadNetFromJson(saved);
-        applyGenerateRecipe(again, saved["generate"], nullptr);
-        CHECK(again.graph.specs.size() == net.graph.specs.size());
-        CHECK(again.graph.edges.size() == net.graph.edges.size());
-        for (std::size_t i = 0; i < net.graph.edges.size(); ++i) {
-            CHECK(again.graph.edges[i].spec == net.graph.edges[i].spec);
-            CHECK(again.graph.edges[i].width == net.graph.edges[i].width);
+        // (B) ONE source of truth for width: every edge that got a spec carries that
+        // spec's carriageway width, which is what RoadEdge::width hands the mesher,
+        // the lot clearance pass and the nav graph.
+        int specced = 0, withPark = 0;
+        for (std::size_t ei = 0; ei < net.graph.edges.size(); ++ei) {
+            const int si = net.graph.edges[ei].spec;
+            const RoadClass k = net.graph.edges[ei].klass;
+            // Arterials and boulevards keep today's look: no spec, no parking band.
+            if (k != RoadClass::Local && k != RoadClass::Collector) CHECK(si < 0);
+            if (si < 0) continue;
+            ++specced;
+            const RoadSpec& s = net.graph.specs[si];
+            CHECK_APPROX(net.graph.edges[ei].width, s.carriagewayWidth(), 1e-9);
+            CHECK_APPROX(roadNetEdgeSpec(net, static_cast<int>(ei)).carriagewayWidth(),
+                         s.carriagewayWidth(), 1e-9);
+            double off = 0, bw = 0;
+            if (roadSpecParkingBand(s, +1, off, bw)) ++withPark;
         }
-        for (std::size_t i = 0; i < net.graph.specs.size(); ++i)
-            CHECK_APPROX(again.graph.specs[i].carriagewayWidth(),
-                         net.graph.specs[i].carriagewayWidth(), 1e-9);
+        CHECK(specced > 0);
+        CHECK(withPark > 0);
+
+        // A generated net saves as its RECIPE (roadRecipeForSave keeps the "generate"
+        // block and never bakes nodes/edges), so the specs must come back by
+        // REGENERATION — same table, same per-edge index, same widths.
+        {
+            nlohmann::json doc;
+            doc["generate"] = recipe;
+            const nlohmann::json saved = roadRecipeForSave(doc.dump(), net);
+            CHECK(saved.contains("generate"));
+            RoadEntity again = roadNetFromJson(saved);
+            applyGenerateRecipe(again, saved["generate"], nullptr);
+            CHECK(again.graph.specs.size() == net.graph.specs.size());
+            CHECK(again.graph.edges.size() == net.graph.edges.size());
+            for (std::size_t i = 0; i < net.graph.edges.size(); ++i) {
+                CHECK(again.graph.edges[i].spec == net.graph.edges[i].spec);
+                CHECK(again.graph.edges[i].width == net.graph.edges[i].width);
+            }
+            for (std::size_t i = 0; i < net.graph.specs.size(); ++i)
+                CHECK_APPROX(again.graph.specs[i].carriagewayWidth(),
+                             net.graph.specs[i].carriagewayWidth(), 1e-9);
+        }
+
+        NavGraph nav = buildNavGraph(navRoadGraph(net, nullptr));
+        CitySim sim;
+        sim.build(nav, 0, 0, 5);
+        const auto& bays = sim.parkingBays();
+        std::printf("[parking] generated: %d specced edges, %zu specs, %zu bays\n",
+                    specced, net.graph.specs.size(), bays.size());
+        CHECK(!bays.empty());   // the streets really are parked-along
+        totalBays += bays.size();
+
+        Real widestCar = 0;
+        for (int i = 0; i < vehicleFleetSize(); ++i)
+            widestCar = std::max(widestCar, vehicleFleetBody(i).width);
+
+        Real worstOut = 0, worstIn = 0;
+        for (const CitySim::ParkingBay& b : bays) {
+            const NavLink& L = nav.links[b.link];
+            CHECK(L.parkWidth > 0);                       // never a bare travel lane
+            CHECK_APPROX(b.width, L.parkWidth, 1e-9);
+            const Vec2 dir = nav.direction(b.link);
+            const Vec2 rel = b.pos - nav.nodes[L.from];
+            const Real lat = rel.x * dir.y - rel.y * dir.x;   // + = right of travel
+            const Real edge = L.width * 0.5;                  // kerb line
+            const Real inner = edge - L.parkWidth;            // travel-lane boundary
+            // Bay centre IS the band centre; the stall never crosses either side.
+            CHECK_APPROX(lat, (inner + edge) * 0.5, 1e-6);
+            worstOut = std::max(worstOut, lat + b.width * 0.5 - edge);
+            worstIn = std::max(worstIn, inner - (lat - b.width * 0.5));
+            // ...and a real car parked on that centre fits in the band too.
+            CHECK(lat + widestCar * 0.5 <= edge + 1e-9);
+            CHECK(lat - widestCar * 0.5 >= inner - 1e-9);
+        }
+        std::printf("[parking] widest fleet car %.2f m; worst overhang: kerb %.4f m, "
+                    "travel lane %.4f m\n", widestCar, worstOut, worstIn);
+        CHECK(worstOut <= 1e-9);   // NOT half on the sidewalk
+        CHECK(worstIn <= 1e-9);    // NOT half in the travel lane
     }
-
-    NavGraph nav = buildNavGraph(navRoadGraph(net, nullptr));
-    CitySim sim;
-    sim.build(nav, 0, 0, 5);
-    const auto& bays = sim.parkingBays();
-    std::printf("[parking] generated: %d specced edges, %zu specs, %zu bays\n",
-                specced, net.graph.specs.size(), bays.size());
-    CHECK(bays.size() >= 40u);   // the streets really are parked-along
-
-    Real widestCar = 0;
-    for (int i = 0; i < vehicleFleetSize(); ++i)
-        widestCar = std::max(widestCar, vehicleFleetBody(i).width);
-
-    Real worstOut = 0, worstIn = 0;
-    for (const CitySim::ParkingBay& b : bays) {
-        const NavLink& L = nav.links[b.link];
-        CHECK(L.parkWidth > 0);                       // never a bare travel lane
-        CHECK_APPROX(b.width, L.parkWidth, 1e-9);
-        const Vec2 dir = nav.direction(b.link);
-        const Vec2 rel = b.pos - nav.nodes[L.from];
-        const Real lat = rel.x * dir.y - rel.y * dir.x;   // + = right of travel
-        const Real edge = L.width * 0.5;                  // kerb line
-        const Real inner = edge - L.parkWidth;            // travel-lane boundary
-        // Bay centre IS the band centre; the stall never crosses either side.
-        CHECK_APPROX(lat, (inner + edge) * 0.5, 1e-6);
-        worstOut = std::max(worstOut, lat + b.width * 0.5 - edge);
-        worstIn = std::max(worstIn, inner - (lat - b.width * 0.5));
-        // ...and a real car parked on that centre fits in the band too.
-        CHECK(lat + widestCar * 0.5 <= edge + 1e-9);
-        CHECK(lat - widestCar * 0.5 >= inner - 1e-9);
-    }
-    std::printf("[parking] widest fleet car %.2f m; worst overhang: kerb %.4f m, "
-                "travel lane %.4f m\n", widestCar, worstOut, worstIn);
-    CHECK(worstOut <= 1e-9);   // NOT half on the sidewalk
-    CHECK(worstIn <= 1e-9);    // NOT half in the travel lane
+    std::printf("[parking] %zu bays over twelve seeds\n", totalBays);
+    CHECK(totalBays >= 12u * 40u);
 }
 
 // THE PARK-AND-WALK CYCLE. A car owner drives to its destination, leaves the car

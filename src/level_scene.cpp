@@ -1,4 +1,5 @@
 #include "level_scene.h"
+#include "proc_rng.h"
 
 #include "engine/mesh_builder.h"
 #include "engine/procgen/terrain.h"
@@ -720,11 +721,11 @@ bool LevelScene::load(const std::string& levelPath, Scene& scene,
                             leafMat.alphaTex = scene.addTexture(std::move(tex));
                             leafMi = scene.addMaterial(leafMat);
                         }
-                        uint32_t th = static_cast<uint32_t>(
+                        ProcRng thRng(static_cast<uint32_t>(
                             std::llround(lb.site.x * 73.1 + lb.site.y * 37.7)) *
-                            2654435761u;
+                            2654435761u);
                         for (const Vec3& s : lb.treeSpots) {
-                            th = th * 1664525u + 1013904223u;
+                            const uint32_t th = thRng.bits();
                             const TreeMesh& kit = kits[(th >> 8) % kits.size()];
                             const Vec3 pos(s.x, gin.padGround ? gin.padGround(s.x, s.z) : 0.0,
                                            s.z);

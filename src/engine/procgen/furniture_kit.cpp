@@ -1,4 +1,5 @@
 #include "furniture_kit.h"
+#include "../../proc_rng.h"
 #include "../mesh_builder.h"
 #include "lsystem.h"   // houseplants are grown, not modelled
 #include <cmath>
@@ -383,8 +384,8 @@ FurniturePiece build(Piece p, uint32_t variant) {
             const Vec3* pal = kPal[(variant ^ (style * 7)) % 6];
             k.box(F::Hard, {0, cy, 0.022}, {W, H, 0.012}, 0.0, pal[0], 1);   // the ground
             // The fields: seeded rectangles, kept inside the canvas.
-            uint32_t r = variant * 2654435761u + style * 40503u;
-            auto next = [&]() { r ^= r << 13; r ^= r >> 17; r ^= r << 5; return (r & 0xffffu) / 65535.0; };
+            ProcRng r(variant * 2654435761u + style * 40503u);
+            auto next = [&]() { return r.next(); };
             const int fields = 2 + static_cast<int>(next() * 3);
             for (int f = 0; f < fields; ++f) {
                 const Real fwid = W * (0.18 + 0.45 * next()), fht = H * (0.15 + 0.5 * next());
@@ -400,8 +401,8 @@ FurniturePiece build(Piece p, uint32_t variant) {
             for (double x : {-0.58, 0.58}) k.box(F::Hard, {x, 1.0, 0.25}, {0.03, 2.0, 0.48}, 0.003, kWhite, 1);
             for (double y : {0.30, 0.80, 1.40, 1.90}) k.box(F::Hard, {0.29, y, 0.25}, {0.56, 0.025, 0.46}, 0.002, kWhite, 1);
             k.box(F::Hard, {0, 1.98, 0.25}, {1.16, 0.025, 0.48}, 0.002, kWhite, 1);
-            uint32_t r = variant * 747796405u + 1u;
-            auto next = [&]() { r ^= r << 13; r ^= r >> 17; r ^= r << 5; return (r & 0xffffu) / 65535.0; };
+            ProcRng r(variant * 747796405u + 1u);
+            auto next = [&]() { return r.next(); };
             for (double y : {0.31, 0.81, 1.41}) {
                 Real x = 0.05;
                 while (x < 0.5) {
@@ -518,8 +519,8 @@ FurniturePiece build(Piece p, uint32_t variant) {
             k.out.size = {2.4, 1.6, 1.0};
             k.box(F::Hard, {0, 0.06, 0.5}, {2.4, 0.12, 0.96}, 0.004, kBlack * 3.0, 1);       // base
             k.box(F::Hard, {0, 0.85, 0.5}, {2.4, 1.5, 0.04}, 0.004, kWhite * 0.9, 1);        // spine
-            uint32_t r = variant * 2246822519u + 3u;
-            auto next = [&]() { r ^= r << 13; r ^= r >> 17; r ^= r << 5; return (r & 0xffffu) / 65535.0; };
+            ProcRng r(variant * 2246822519u + 3u);
+            auto next = [&]() { return r.next(); };
             static const Vec3 kGoods[8] = {{0.85, 0.20, 0.15}, {0.95, 0.75, 0.15}, {0.20, 0.45, 0.80}, {0.25, 0.65, 0.30},
                                            {0.90, 0.90, 0.88}, {0.55, 0.30, 0.65}, {0.95, 0.50, 0.15}, {0.30, 0.30, 0.32}};
             for (int side = 0; side < 2; ++side) {
@@ -543,8 +544,8 @@ FurniturePiece build(Piece p, uint32_t variant) {
             k.out.size = {2.0, 2.1, 0.45};
             k.box(F::Wood, {0, 1.05, 0.03}, {2.0, 2.1, 0.04}, 0.003, wood * 0.9, 1);
             for (double x : {-0.98, 0.98}) k.box(F::Wood, {x, 1.05, 0.22}, {0.04, 2.1, 0.44}, 0.003, wood, 1);
-            uint32_t r = variant * 3266489917u + 5u;
-            auto next = [&]() { r ^= r << 13; r ^= r >> 17; r ^= r << 5; return (r & 0xffffu) / 65535.0; };
+            ProcRng r(variant * 3266489917u + 5u);
+            auto next = [&]() { return r.next(); };
             for (double y : {0.10, 0.50, 0.90, 1.30, 1.70}) {
                 k.box(F::Wood, {0, y, 0.22}, {1.92, 0.025, 0.42}, 0.002, wood, 1);
                 Real x = -0.92;
@@ -594,8 +595,8 @@ FurniturePiece build(Piece p, uint32_t variant) {
             k.box(F::Wood, {0, 0.42, 0.35}, {1.6, 0.84, 0.66}, 0.006, wood, 1);
             k.box(F::Hard, {0, 1.24, 0.35}, {1.6, 0.03, 0.66}, 0.004, kWhite, 1);
             for (double x : {-0.79, 0.79}) k.box(F::Metal, {x, 1.04, 0.35}, {0.02, 0.38, 0.64}, 0.0, kChrome, 1);
-            uint32_t r = variant * 668265263u + 11u;
-            auto next = [&]() { r ^= r << 13; r ^= r >> 17; r ^= r << 5; return (r & 0xffffu) / 65535.0; };
+            ProcRng r(variant * 668265263u + 11u);
+            auto next = [&]() { return r.next(); };
             static const Vec3 kTreats[4] = {{0.80, 0.55, 0.30}, {0.95, 0.85, 0.65}, {0.45, 0.25, 0.15}, {0.90, 0.40, 0.45}};
             for (double y : {0.86, 1.04})
                 for (int i = 0; i < 7; ++i)
@@ -608,8 +609,8 @@ FurniturePiece build(Piece p, uint32_t variant) {
             k.out.size = {0.8, 2.0, 0.75};
             k.box(F::Hard, {0, 1.0, 0.37}, {0.8, 2.0, 0.72}, 0.006, kWhite * 0.95, 1);
             k.box(F::Hard, {0, 1.0, 0.72}, {0.70, 1.80, 0.02}, 0.0, Vec3(0.05, 0.06, 0.08), 1);   // the dark interior
-            uint32_t r = variant * 2654435761u + 13u;
-            auto next = [&]() { r ^= r << 13; r ^= r >> 17; r ^= r << 5; return (r & 0xffffu) / 65535.0; };
+            ProcRng r(variant * 2654435761u + 13u);
+            auto next = [&]() { return r.next(); };
             static const Vec3 kCans[6] = {{0.85, 0.10, 0.10}, {0.10, 0.30, 0.80}, {0.95, 0.85, 0.20}, {0.20, 0.70, 0.30},
                                           {0.90, 0.90, 0.90}, {0.55, 0.20, 0.10}};
             for (int sh = 0; sh < 5; ++sh) {
@@ -627,8 +628,8 @@ FurniturePiece build(Piece p, uint32_t variant) {
             k.out.size = {1.2, 2.0, 0.35};
             k.box(F::Wood, {0, 1.0, 0.02}, {1.2, 2.0, 0.03}, 0.003, wood * 0.85, 1);
             for (double x : {-0.585, 0.585}) k.box(F::Wood, {x, 1.0, 0.18}, {0.03, 2.0, 0.34}, 0.003, wood, 1);
-            uint32_t r = variant * 1597334677u + 7u;
-            auto next = [&]() { r ^= r << 13; r ^= r >> 17; r ^= r << 5; return (r & 0xffffu) / 65535.0; };
+            ProcRng r(variant * 1597334677u + 7u);
+            auto next = [&]() { return r.next(); };
             // BOOKS (Glenn: "It would be nice to have some more variety in the books"): cloth and leather in sixteen
             // colours, every height and depth, gilt or cream title bands on the spine, now and then a stack lying
             // flat. Each placement is its own bookcase (the library's `variety`: eight designs by position).
@@ -684,8 +685,8 @@ FurniturePiece build(Piece p, uint32_t variant) {
             for (double x : {-1.37, 1.37})
                 for (double z : {0.06, 1.1, 2.14})
                     k.box(F::Metal, {x, 2.2, z}, {0.07, 4.4, 0.07}, 0.0, upright, 1);
-            uint32_t r = variant * 2654435761u + 11u;
-            auto next = [&]() { r ^= r << 13; r ^= r >> 17; r ^= r << 5; return (r & 0xffffu) / 65535.0; };
+            ProcRng r(variant * 2654435761u + 11u);
+            auto next = [&]() { return r.next(); };
             static const Vec3 kCarton[5] = {{0.62, 0.48, 0.32}, {0.70, 0.56, 0.38}, {0.55, 0.42, 0.28},
                                             {0.85, 0.85, 0.82}, {0.30, 0.42, 0.62}};
             for (double y : {1.55, 3.0}) {
@@ -845,8 +846,8 @@ FurniturePiece build(Piece p, uint32_t variant) {
                 const std::size_t from = body.vertices.size() - stems.vertices.size();
                 for (std::size_t i = from; i < body.vertices.size(); ++i)
                     if (((i - from) % 2) == 0) body.vertices[i].position = body.vertices[i].position + body.vertices[i].normal * 0.006;
-                uint32_t rr = variant * 2246822519u + 9u;
-                auto nx = [&]() { rr ^= rr << 13; rr ^= rr >> 17; rr ^= rr << 5; return (rr & 0xffffu) / 65535.0; };
+                ProcRng rr(variant * 2246822519u + 9u);
+                auto nx = [&]() { return rr.next(); };
                 for (std::size_t i = from; i < body.vertices.size(); i += 3) {
                     if (nx() > 0.35) continue;
                     const Vertex& v = body.vertices[i];
@@ -859,8 +860,8 @@ FurniturePiece build(Piece p, uint32_t variant) {
                     k.turned(F::Fabric, crown + Vec3(0, -0.005, 0), {{0.0, 0.0}, {0.018, 0.012}, {0.012, 0.022}, {0.0, 0.016}},
                              Vec3(0.90, 0.35, 0.55), 1.0, 8);
             }
-            uint32_t r = variant * 747796405u + 3u;
-            auto next = [&]() { r ^= r << 13; r ^= r >> 17; r ^= r << 5; return (r & 0xffffu) / 65535.0; };
+            ProcRng r(variant * 747796405u + 3u);
+            auto next = [&]() { return r.next(); };
             for (const LeafPlacement& lf : species == 3 ? std::vector<LeafPlacement>{} : turtleLeaves(sym, tp)) {
                 // a leaf card: long along the heading, flat across it, a little colour each
                 Vec3 d = normalize(lf.direction);
@@ -1076,8 +1077,8 @@ FurniturePiece build(Piece p, uint32_t variant) {
             k.front(F::Wood, 0.02, 0.88, 0.06, 0.86, 0.49, wood * 0.8, kChrome, true);
             k.box(F::Hard, {0, 0.92, 0.25}, {1.82, 0.04, 0.50}, 0.004, kBlack * 2.0, 1);
             k.box(F::Metal, {0, 1.62, 0.02}, {1.7, 1.3, 0.02}, 0.0, Vec3(0.55, 0.60, 0.64), 1);       // the mirror
-            uint32_t r = variant * 2654435761u + 29u;
-            auto next = [&]() { r ^= r << 13; r ^= r >> 17; r ^= r << 5; return (r & 0xffffu) / 65535.0; };
+            ProcRng r(variant * 2654435761u + 29u);
+            auto next = [&]() { return r.next(); };
             static const Vec3 kBottles[6] = {{0.45, 0.25, 0.08}, {0.15, 0.35, 0.18}, {0.85, 0.85, 0.80},
                                              {0.55, 0.12, 0.10}, {0.75, 0.55, 0.20}, {0.20, 0.25, 0.45}};
             for (double y : {1.30, 1.75}) {
@@ -1166,8 +1167,8 @@ FurniturePiece build(Piece p, uint32_t variant) {
             static const Vec3 kTiles[5] = {{1.0, 0.25, 0.70}, {0.25, 0.55, 1.0}, {0.95, 0.75, 0.25}, {0.30, 0.95, 0.70},
                                            {0.65, 0.30, 1.0}};
             k.box(F::Hard, {0, 0.02, 2.0}, {4.0, 0.04, 4.0}, 0.0, kBlack, 1);
-            uint32_t r = variant * 2246822519u + 17u;
-            auto next = [&]() { r ^= r << 13; r ^= r >> 17; r ^= r << 5; return (r & 0xffffu) / 65535.0; };
+            ProcRng r(variant * 2246822519u + 17u);
+            auto next = [&]() { return r.next(); };
             for (int i = 0; i < 8; ++i)
                 for (int j = 0; j < 8; ++j) {
                     const bool lit = ((i + j) & 1) == 0 || next() < 0.3;

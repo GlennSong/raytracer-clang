@@ -611,7 +611,12 @@ std::vector<FabricSegment> fabricChords(const FabricPatch& patch,
     // N != 4 (round 11): MIDPOINT DECOMPOSITION — side midpoints to the
     // centroid make N four-sided sub-patches (classic CAD/hex-mesh layout);
     // the seams are streets. A patch whose centroid falls outside (banana)
-    // or whose seams would leave it emits nothing — never a dangle.
+    // or whose seams would leave it emits nothing — never a dangle. Nor one
+    // whose centre would gather more streets than a junction takes (RoadRules
+    // maxDegree 4): an 11-cornered face's 11-way star was chopped by capDegree
+    // into a knot of 16-100 m spans (piedmont seed 2, ADR-0265); the caller
+    // bisects it instead.
+    if (N > kChordHubArms) return out;
     Vec2 C = centroid(b);
     if (!pointInPoly(b, C)) return out;
     std::vector<SideCurve> half0(N), half1(N);

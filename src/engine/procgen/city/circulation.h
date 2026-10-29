@@ -117,6 +117,9 @@ uint8_t liftBanksOf(const std::string& word);
 constexpr Real kSlabAspect = 1.8;
 // ...and a slab of flats this deep, for its stairs to stand at the ends.
 constexpr Real kEndsFlatsDepth = 17.0;
+// ...and a tower of flats this wide across its top tier, for its lifts to stand in two facing banks: the pair and their
+// lobby take ~17 m, and a 16-18 m crown left no lot deep enough for a home (ADR-0265)
+constexpr Real kFacingFlatsDepth = 24.0;
 // THE LAYOUTS A BUILDING TRIES, in order (Glenn, 2026-10-28: "we should still be able to have elevator cores ...
 // variety when placing elevator shafts for different buildings either as variety or because the floor space is
 // too small"). What stairPlace / liftBanks name is fixed; the rest is drawn by the seed from what suits the shape --

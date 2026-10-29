@@ -822,7 +822,7 @@ struct CitySimConfig {
     int nearTarget = 0;
     int farTarget = 0;    // the far (V) ring held to about this many agents (0: the radii as set)
     uint32_t seed = 1;
-    float hoursPerSecond = 0.05f;        // sim-clock hours per real second
+    float hoursPerSecond = 1.0f / 3600.0f;   // sim-clock hours per real second (real time: DayNightCycle)
     // The in-world hour the level OPENS at. Agents are placed straight from
     // their schedules at this hour, so any start costs the same — a level can
     // open at 03:00 as cheaply as at midday.

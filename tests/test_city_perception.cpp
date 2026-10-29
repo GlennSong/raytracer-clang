@@ -152,10 +152,10 @@ TEST_CASE(cars_remember_a_person_after_losing_sight) {
 
 // Average speed of moving cars that have a pedestrian ahead in their vision cone.
 // With perception ON the car brakes for that pedestrian, so the average is lower.
-static double avgSpeedWithPedAhead(CitySim& sim, double reliability) {
+struct SpeedNearPeds { double sum = 0; long count = 0; };
+static SpeedNearPeds speedWithPedAhead(CitySim& sim, double reliability) {
     sim.setPerceptionReliability(reliability);
-    double sum = 0;
-    long count = 0;
+    SpeedNearPeds r;
     for (int step = 0; step < 4000; ++step) {
         sim.step(0.1, 0.4);
         const auto& ag = sim.agents();
@@ -170,21 +170,30 @@ static double avgSpeedWithPedAhead(CitySim& sim, double reliability) {
                     break;
                 }
             }
-            if (pedAhead) { sum += c.speed; ++count; }
+            if (pedAhead) { r.sum += c.speed; ++r.count; }
         }
     }
-    return count > 0 ? sum / static_cast<double>(count) : -1.0;
+    return r;
 }
 
 TEST_CASE(cars_slow_down_for_pedestrians_they_see) {
+    // Over six towns (ADR-0265): one town's average speed with somebody ahead depends on which walkers happened into
+    // which cars' cones; over many, a car that sees them is the slower.
     NavGraph nav = cityNav();
-    CitySim perceptive, blind;
-    perceptive.build(nav, 25, 40, 321);
-    blind.build(nav, 25, 40, 321);
-    double withPerception = avgSpeedWithPedAhead(perceptive, 1.0);
-    double withoutPerception = avgSpeedWithPedAhead(blind, 0.0);   // never perceives
-    CHECK(withPerception >= 0.0);    // cars did encounter pedestrians ahead
-    CHECK(withoutPerception >= 0.0);
+    SpeedNearPeds seeing, blindTotal;
+    for (uint32_t seed = 321; seed <= 326; ++seed) {
+        CitySim perceptive, blind;
+        perceptive.build(nav, 25, 40, seed);
+        blind.build(nav, 25, 40, seed);
+        const SpeedNearPeds w = speedWithPedAhead(perceptive, 1.0), b = speedWithPedAhead(blind, 0.0);   // (0: never perceives)
+        std::printf("    [perception] town %u: %.2f m/s seeing (%ld samples), %.2f blind (%ld)\n", seed,
+                    w.count ? w.sum / w.count : -1.0, w.count, b.count ? b.sum / b.count : -1.0, b.count);
+        CHECK(w.count > 0 && b.count > 0);   // cars did meet pedestrians ahead
+        seeing.sum += w.sum; seeing.count += w.count;
+        blindTotal.sum += b.sum; blindTotal.count += b.count;
+    }
+    const double withPerception = seeing.sum / std::max(1L, seeing.count), withoutPerception = blindTotal.sum / std::max(1L, blindTotal.count);
+    std::printf("    [perception] six towns: %.2f m/s seeing, %.2f blind\n", withPerception, withoutPerception);
     // Seeing a pedestrian ahead makes a car measurably slower than a blind one.
     CHECK(withPerception < withoutPerception);
 }

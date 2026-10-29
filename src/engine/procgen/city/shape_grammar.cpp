@@ -1,4 +1,6 @@
 #include "shape_grammar.h"
+#include "roads/lanes/geom2d.h"   // the Clipper offsets (tierArmsOk)
+#include "../../../proc_rng.h"
 #include "mass_stack.h"
 #include "implicit.h"
 #include "mesh_mass.h"
@@ -21,16 +23,6 @@
 
 namespace engine {
 namespace {
-
-// Deterministic per-building RNG (seeded; ADR-0002). Small xorshift — we only
-// need cheap, reproducible jitter, not statistical quality.
-struct Rng {
-    uint32_t s;
-    explicit Rng(uint32_t seed) : s(seed ? seed : 0x9e3779b9u) {}
-    uint32_t next() { s ^= s << 13; s ^= s >> 17; s ^= s << 5; return s; }
-    Real unit() { return (next() >> 8) * (1.0 / 16777216.0); }   // [0,1)
-    Real range(Real a, Real b) { return a + (b - a) * unit(); }
-};
 
 int materialIndexFor(PartId id) { return static_cast<int>(id); }
 
@@ -83,13 +75,13 @@ FaceRect faceOf(const Scope& s, int side) {
 }  // namespace
 
 Vec3 facadeColor(FacadeStyle style, uint32_t seed) {
-    Rng rng(seed ? seed : 1u);
-    Real t = rng.unit();
+    ProcRng rng(seed);
+    Real t = rng.next();
     switch (style) {
         case FacadeStyle::Brick: {
             // Warm reds/browns for most; then the brickyard's other runs (Glenn, 2026-09-30: "more varied
             // building materials ... it's all very samey"): buff, cream, chocolate, orange, iron-spot grey.
-            const Real k = rng.unit();
+            const Real k = rng.next();
             if (k < 0.52) return lerp(Vec3(0.50, 0.22, 0.16), Vec3(0.62, 0.40, 0.28), t);
             static const Vec3 kBrick[] = {
                 {0.74, 0.62, 0.46},   // buff / tan (the Upper East Side apartment tower)
@@ -105,10 +97,10 @@ Vec3 facadeColor(FacadeStyle style, uint32_t seed) {
         case FacadeStyle::Painted:
             // Muted pastels (residential).
             return lerp(Vec3(0.74, 0.78, 0.78), Vec3(0.80, 0.72, 0.66), t) +
-                   Vec3(rng.range(-0.04, 0.04), rng.range(-0.04, 0.04), rng.range(-0.04, 0.04));
+                   Vec3(rng.in(-0.04, 0.04), rng.in(-0.04, 0.04), rng.in(-0.04, 0.04));
         case FacadeStyle::GlassCurtain: {
             // The frame and trim of a glass building: aluminium, or dark bronze / black / white metal.
-            const Real k = rng.unit();
+            const Real k = rng.next();
             if (k < 0.55) return lerp(Vec3(0.58, 0.62, 0.66), Vec3(0.66, 0.68, 0.70), t);
             if (k < 0.72) return Vec3(0.20, 0.18, 0.16);   // dark bronze
             if (k < 0.87) return Vec3(0.12, 0.12, 0.13);   // black
@@ -128,9 +120,9 @@ Vec3 facadeColor(FacadeStyle style, uint32_t seed) {
                 {0.60, 0.34, 0.28},   // barn red
                 {0.74, 0.68, 0.58},   // driftwood tan
             };
-            const Vec3 base = kSwatch[rng.next() % 6];
-            return base + Vec3(rng.range(-0.03, 0.03), rng.range(-0.03, 0.03),
-                               rng.range(-0.03, 0.03));
+            const Vec3 base = kSwatch[rng.below(6)];
+            return base + Vec3(rng.in(-0.03, 0.03), rng.in(-0.03, 0.03),
+                               rng.in(-0.03, 0.03));
         }
         case FacadeStyle::DarkBrick:
             // Deep browns to charcoal reds (lofts, factories, dark towers).
@@ -138,7 +130,7 @@ Vec3 facadeColor(FacadeStyle style, uint32_t seed) {
         case FacadeStyle::Sandstone: {
             // Warm buff / honey ashlar (banks, museums, deco masonry) -- and the other dressed stones and
             // terracottas of a midtown avenue.
-            const Real k = rng.unit();
+            const Real k = rng.next();
             if (k < 0.40) return lerp(Vec3(0.78, 0.66, 0.48), Vec3(0.86, 0.76, 0.58), t);
             static const Vec3 kStone[] = {
                 {0.80, 0.79, 0.74},   // Indiana limestone
@@ -152,7 +144,7 @@ Vec3 facadeColor(FacadeStyle style, uint32_t seed) {
         }
         case FacadeStyle::Concrete:
         default: {
-            const Real k = rng.unit();
+            const Real k = rng.next();
             if (k < 0.55) return lerp(Vec3(0.62, 0.62, 0.60), Vec3(0.74, 0.73, 0.70), t);
             static const Vec3 kConcrete[] = {
                 {0.86, 0.85, 0.82},   // white precast (432 Park)
@@ -987,8 +979,8 @@ static FacadeLayout facadeLayout(const FaceRect& fr, FacadeMode mode,
     const bool hotelFront = p.civicRooms == 17 && mode == FacadeMode::Entrance;
     if (L.retailish && p.groundRetail && !p.campus && p.walkableGround && L.bays >= 2 && mode != FacadeMode::Solid &&
         !hotelFront) {   // (a campus building: no shops)
-        uint32_t h = positionHash(Vec3(fr.bl.x + 0.13, 0.0, fr.bl.z + 0.29)) ^ static_cast<uint32_t>(p.seed);
-        auto next = [&]() { h ^= h << 13; h ^= h >> 17; h ^= h << 5; return h; };
+        ProcRng h(positionHash(Vec3(fr.bl.x + 0.13, 0.0, fr.bl.z + 0.29)) ^ static_cast<uint32_t>(p.seed));
+        auto next = [&]() { return h.bits(); };
         const int lobby = mode == FacadeMode::Entrance ? centreBay : -100;
         auto inLobby = [&](int b) { return b >= lobby - 1 && b <= lobby + 1; };
         int b = 0;
@@ -1006,14 +998,15 @@ static FacadeLayout facadeLayout(const FaceRect& fr, FacadeMode mode,
                     break;
                 }
                 const uint8_t trade = pickTrade(next(), left, p.shopMix);
-                const int g = tradeBays(trade, left, next());
+                const uint32_t gBits = next();
+                const int g = tradeBays(trade, left, gBits);
                 ShopUnit u;
                 u.b0 = s; u.b1 = s + g - 1;
                 u.door = g >= 3 ? s + g / 2 : s + static_cast<int>(next() % 2u);
                 u.type = trade;
-                // A KONBINI: two in three grocers -- read off the hash, never drawing from it, so every other
-                // unit on the street stays what it was
-                if (trade == 1 && ((h >> 9) + static_cast<uint32_t>(s)) % 3u != 0) u.type = 16;
+                // A KONBINI: two in three grocers -- read off the unit's last draw, never drawing again, so every
+                // other unit on the street stays what it was
+                if (trade == 1 && ((gBits >> 9) + static_cast<uint32_t>(s)) % 3u != 0) u.type = 16;
                 L.shops.push_back(u);
                 s += g;
             }
@@ -2108,7 +2101,7 @@ static void emitFlaredRoof(BuildingMesh& out, const Vec3& cXZ, Real eaveY, Real 
 
 static BuildingMesh growPagoda(const Scope& scope, const BuildingParams& p) {
     BuildingMesh out;
-    Rng rng(p.seed);
+    ProcRng rng(p.seed);
     Vec3 cXZ = scope.corner(0.5, 0, 0.5); cXZ.y = 0;
     Real baseY = scope.origin.y;
     const Vec3 r(1, 0, 0), f(0, 0, 1);             // world-aligned (grid city)
@@ -2116,7 +2109,7 @@ static BuildingMesh growPagoda(const Scope& scope, const BuildingParams& p) {
 
     Vec3 wallCol(0.62, 0.13, 0.11);                // vermillion
     Vec3 colCol(0.42, 0.08, 0.07);                 // darker red columns/trim
-    Vec3 tile = (rng.unit() < 0.4) ? Vec3(0.16, 0.28, 0.46)   // imperial blue
+    Vec3 tile = (rng.next() < 0.4) ? Vec3(0.16, 0.28, 0.46)   // imperial blue
                                    : Vec3(0.13, 0.40, 0.25);  // jade green
     Vec3 gold(0.80, 0.64, 0.20);
 
@@ -2283,7 +2276,7 @@ static Cap::Kind capKindOf(uint8_t top) {
 // footOrigin/width/depth/r/f describe the (possibly set-back) roof footprint.
 static void emitCrown(BuildingMesh& out, const Vec3& footOrigin, Real width,
                       Real depth, const Vec3& r, const Vec3& f, Real roofY,
-                      const BuildingParams& p, Rng& rng,
+                      const BuildingParams& p, ProcRng& rng,
                       const Poly2* topPlan = nullptr, const std::vector<Poly2>* keepOut = nullptr) {
     const Vec3 up(0, 1, 0);
     // The roof may be an L / U / courtyard PLAN, not its oriented box — a crown
@@ -2340,15 +2333,15 @@ static void emitCrown(BuildingMesh& out, const Vec3& footOrigin, Real width,
         items.push_back({0, bw, bd, Real(2.4), Real(2.0)});
     }
     if (p.floors >= 3 && p.floors <= 20 && !p.curtainWall && width > 4 &&
-        depth > 4 && rng.unit() < 0.65) {                   // water tanks: 1-2
-        const int nTank = (roofArea > 170.0 && rng.unit() < 0.35) ? 2 : 1;
+        depth > 4 && rng.next() < 0.65) {                   // water tanks: 1-2
+        const int nTank = (roofArea > 170.0 && rng.next() < 0.35) ? 2 : 1;
         for (int i = 0; i < nTank; ++i) {
-            const Real tr = std::min(rng.range(1.2, 1.7),
+            const Real tr = std::min(rng.in(1.2, 1.7),
                                      std::min(width, depth) * 0.22);
             items.push_back({1, 2 * tr + 1.0, 2 * tr + 1.0, Real(2.4), Real(2.4)});
         }
     }
-    if (p.floors >= 4 && width > 6 && depth > 5 && rng.unit() < 0.85) {
+    if (p.floors >= 4 && width > 6 && depth > 5 && rng.next() < 0.85) {
         // HVAC units: 1-4 based on the size of the roof
         const int nHvac =
             std::max(1, std::min(4, static_cast<int>(roofArea / 70.0)));
@@ -2362,7 +2355,7 @@ static void emitCrown(BuildingMesh& out, const Vec3& footOrigin, Real width,
     // --- emitters (verbatim geometry from the old placement code, seated at a
     // planned cell instead of a rejection-sampled spot) ---
     auto emitAccess = [&](Real u, Real v, Real bw, Real bd) -> Real {
-        const Real bh = rng.range(2.8, 3.3);
+        const Real bh = rng.in(2.8, 3.3);
         Vec3 po = footOrigin + r * u + f * v;
         emitBox(out, Scope{Vec3(po.x, roofY, po.z), {r, up, f}, Vec3(bw, bh, bd)},
                 PartId::Trim, p.trimColor * 0.85);
@@ -2384,7 +2377,7 @@ static void emitCrown(BuildingMesh& out, const Vec3& footOrigin, Real width,
         return bh;
     };
     auto emitHvac = [&](Real u, Real v, Real aw, Real ad) -> Real {
-        const Real ah = rng.range(1.5, 2.1);
+        const Real ah = rng.in(1.5, 2.1);
         const Vec3 casing = materialFor(PartId::Metal, p.wallColor).albedo;
         const Vec3 louvre(0.30, 0.31, 0.33);
         Vec3 po = footOrigin + r * u + f * v;
@@ -2428,7 +2421,7 @@ static void emitCrown(BuildingMesh& out, const Vec3& footOrigin, Real width,
     };
     auto emitTank = [&](Real u, Real v, Real w2, Real d2) -> Real {
         const Real tr = std::max(Real(0.9), (std::min(w2, d2) - 1.0) * 0.5);
-        const Real th = rng.range(2.6, 3.4), legH = rng.range(1.6, 2.4);
+        const Real th = rng.in(2.6, 3.4), legH = rng.in(1.6, 2.4);
         Vec3 tc = footOrigin + r * (u + w2 * 0.5) + f * (v + d2 * 0.5);
         tc.y = 0;
         const Real tankBase = roofY + legH;
@@ -2552,7 +2545,7 @@ static void emitCrown(BuildingMesh& out, const Vec3& footOrigin, Real width,
             if (cells[i].w * cells[i].d > cells[bi].w * cells[bi].d) bi = i;
         RoofCell c = cells[bi];
         if (std::max(c.w, c.d) < 4.5) break;                // roof full: extras skipped
-        const Real t = rng.range(0.4, 0.6);
+        const Real t = rng.in(0.4, 0.6);
         RoofCell a = c, b = c;
         if (c.w >= c.d) { a.w = c.w * t; b.u = c.u + a.w; b.w = c.w - a.w; }
         else            { a.d = c.d * t; b.v = c.v + a.d; b.d = c.d - a.d; }
@@ -2577,8 +2570,8 @@ static void emitCrown(BuildingMesh& out, const Vec3& footOrigin, Real width,
         if (w2 < it.minW || d2 < it.minD) continue;         // cell too small: skip
         bool placed = false;
         for (int attempt = 0; attempt < 4 && !placed; ++attempt) {
-            const Real u = c.u + (c.w - w2) * rng.range(0.2, 0.8);
-            const Real v = c.v + (c.d - d2) * rng.range(0.2, 0.8);
+            const Real u = c.u + (c.w - w2) * rng.in(0.2, 0.8);
+            const Real v = c.v + (c.d - d2) * rng.in(0.2, 0.8);
             Vec3 po = footOrigin + r * u + f * v;
             if (!onRoof(po, w2, d2)) continue;              // L-plan notch: jitter again
             const Real ih = it.kind == 0 ? emitAccess(u, v, w2, d2) : it.kind == 1 ? emitTank(u, v, w2, d2) : emitHvac(u, v, w2, d2);
@@ -2603,11 +2596,11 @@ BuildingMesh growBuilding(const Scope& scope, const BuildingParams& params,
     if (params.shape == BuildingShape::Pagoda)   return growPagoda(scope, params);
     BuildingMesh out;
     const bool full = detail == FacadeDetail::Full;
-    Rng rng(params.seed);
+    ProcRng rng(params.seed);
 
     const Real baseY = scope.origin.y;
     const Vec3 wallColor =
-        params.wallColor * (0.92 + 0.08 * rng.unit());      // slight per-building tint
+        params.wallColor * (0.92 + 0.08 * rng.next());      // slight per-building tint
 
     // Running footprint (origin XZ + extents along right/forward); shrinks at setbacks.
     Vec3 footOrigin = scope.origin;
@@ -4013,10 +4006,23 @@ namespace {
 // loop's history: "one of the triangle skyscrapers went haywire when building
 // the top"): valid only if it truly shrank, every vertex stayed inside the
 // tier below, and no edge flipped direction.
+// No part of the plate thinner than a floor: opened by half of kTierArmMin (shrunk, then grown back) it keeps nearly all
+// its area. Its box's short side cannot tell: an L inset storey after storey keeps a wide box while its arms thin to
+// 2 m, floors no stair reaches (ADR-0265: a glass tower's storeys 25-33).
+constexpr Real kTierArmMin = 6.0;
+bool tierArmsOk(const Poly2& p) {
+    namespace G = roads::lanes;
+    const Real a = std::fabs(area(p));
+    if (a < 1e-6) return false;
+    const G::PolySet opened = G::offsetSet(G::offsetSet(G::fromRing(p), -kTierArmMin * 0.5), kTierArmMin * 0.5);
+    return G::setArea(opened) >= 0.9 * a;
+}
+
 bool tierInsetOk(const Poly2& outer, const Poly2& inner) {
     if (inner.size() != outer.size()) return false;
     const Real ai = area(inner);
     if (ai < 60.0 || ai >= area(outer)) return false;
+    if (!tierArmsOk(inner)) return false;
     for (std::size_t k = 0; k < inner.size(); ++k) {
         if (!pointInPolygon(outer, inner[k])) return false;
         Vec2 d0 = outer[(k + 1) % outer.size()] - outer[k];
@@ -4627,8 +4633,8 @@ static MallLayout mallLayout(const Poly2& planIn, const BuildingParams& params, 
     const Real A = std::clamp(W * 0.22, Real(20), Real(34)), F = std::clamp(W * 0.18, Real(16), Real(26));
     const Real xa = inset + A, xf = W - inset - F;                              // the anchor's and food court's walls
     const Real xv0 = W * 0.5 - 4.0, xv1 = W * 0.5 + 4.0;                        // the vestibule
-    uint32_t h = positionHash(Vec3(a.x + 0.41, 0.0, a.y + 0.17)) ^ static_cast<uint32_t>(params.seed);
-    auto next = [&]() { h ^= h << 13; h ^= h >> 17; h ^= h << 5; return h; };
+    ProcRng h(positionHash(Vec3(a.x + 0.41, 0.0, a.y + 0.17)) ^ static_cast<uint32_t>(params.seed));
+    auto next = [&]() { return h.bits(); };
     auto wall = [&](const Vec2& p0, const Vec2& p1, Real doorAt = -1, bool glass = false) {
         RoomWall w; w.a = p0; w.b = p1; w.doorAt = doorAt; w.glass = glass;
         rp.walls.push_back(w);
@@ -4757,8 +4763,8 @@ static MallLevel mallLevel(const Poly2& planIn, const BuildingParams& params, in
     if (!M.ok) return L;
     const Real a = MallWings::a, cw = MallWings::cw, inset = interiorInset(params);
     const Real y0 = k == 0 ? 0.0 : params.groundHeight;
-    uint32_t h = positionHash(Vec3(M.c.x + 0.41 + k * 7.0, 0.0, M.c.y + 0.17)) ^ static_cast<uint32_t>(params.seed);
-    auto next = [&]() { h ^= h << 13; h ^= h >> 17; h ^= h << 5; return h; };
+    ProcRng h(positionHash(Vec3(M.c.x + 0.41 + k * 7.0, 0.0, M.c.y + 0.17)) ^ static_cast<uint32_t>(params.seed));
+    auto next = [&]() { return h.bits(); };
     auto wall = [&](const Vec2& p0, const Vec2& p1, Real doorAt = -1, bool glass = false) {
         RoomWall w; w.a = p0; w.b = p1; w.doorAt = doorAt; w.glass = glass;
         rp.walls.push_back(w);
@@ -6492,8 +6498,8 @@ BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
     Poly2 plan = planIn;
     if (plan.size() < 3) return out;
     ensureCCW(plan);
-    Rng rng(params.seed);
-    const Vec3 wallColor = params.wallColor * (0.92 + 0.08 * rng.unit());
+    ProcRng rng(params.seed);
+    const Vec3 wallColor = params.wallColor * (0.92 + 0.08 * rng.next());
 
     // Street-facing edge: the longest edge whose outward normal points most
     // toward faceDir — the door (and its awning/architrave) lands there.

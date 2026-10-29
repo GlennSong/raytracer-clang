@@ -1,4 +1,5 @@
 #include "shop_signs.h"
+#include "../../../proc_rng.h"
 #include "../../mesh_builder.h"
 #include "trades.h"
 
@@ -21,18 +22,17 @@ const char* kEnglish[] = {"Juniper", "Copper", "Saltwater", "Morning", "Harbor",
 const char* kCreature[] = {"Fox", "Anchor", "Owl", "Gecko", "Heron", "Pelican", "Crow", "Stag", "Marlin", "Turtle"};
 const char* kNight[] = {"Neon", "Velvet", "Pulse", "Lava", "Echo", "Static", "Mirage", "Volt"};
 
-template <std::size_t N> const char* pick(const char* (&a)[N], uint32_t& h) {
-    h ^= h << 13; h ^= h >> 17; h ^= h << 5;
-    return a[h % N];
+template <std::size_t N> const char* pick(const char* (&a)[N], ProcRng& h) {
+    return a[h.below(static_cast<int>(N))];
 }
 
 }  // namespace
 
 std::string mallName(uint32_t seed) {
-    uint32_t h = seed * 2654435761u + 0x3a11u;
-    h ^= h << 13; h ^= h >> 17; h ^= h << 5;
-    const char* w = (h % 3u) == 0 ? pick(kHawaiian, h) : (h % 3u) == 1 ? pick(kEnglish, h) : pick(kJapanese, h);
-    switch ((h >> 8) % 4u) {
+    ProcRng h(seed * 2654435761u + 0x3a11u);
+    const uint32_t x = h.bits();
+    const char* w = (x % 3u) == 0 ? pick(kHawaiian, h) : (x % 3u) == 1 ? pick(kEnglish, h) : pick(kJapanese, h);
+    switch ((x >> 8) % 4u) {
         case 0: return std::string(w) + " Galleria";
         case 1: return std::string(w) + " Center";
         case 2: return std::string("The Shops at ") + w;
@@ -41,10 +41,10 @@ std::string mallName(uint32_t seed) {
 }
 
 std::string skyName(uint32_t seed) {
-    uint32_t h = seed * 40503u + 0x51a7u;
-    h ^= h << 13; h ^= h >> 17; h ^= h << 5;
-    const char* w = (h % 2u) ? pick(kJapanese, h) : pick(kHawaiian, h);
-    switch ((h >> 8) % 3u) {
+    ProcRng h(seed * 40503u + 0x51a7u);
+    const uint32_t x = h.bits();
+    const char* w = (x % 2u) ? pick(kJapanese, h) : pick(kHawaiian, h);
+    switch ((x >> 8) % 3u) {
         case 0: return std::string(w) + " Sky Dining";
         case 1: return std::string("The ") + w + " Terrace";
         default: return std::string(w) + " Top of the Tower";
@@ -52,12 +52,12 @@ std::string skyName(uint32_t seed) {
 }
 
 std::string anchorName(uint32_t seed) {
-    uint32_t h = seed * 2246822519u + 0x5a1du;
-    h ^= h << 13; h ^= h >> 17; h ^= h << 5;
+    ProcRng h(seed * 2246822519u + 0x5a1du);
+    const uint32_t x = h.bits();
     static const char* kSurname[] = {"Hollister", "Whitfield", "Ashby", "Kaneshiro", "Maeda", "Halloran", "Pemberton",
                                      "Okamoto", "Delacroix", "Brandt", "Kealoha", "Sutherland"};
-    const char* n = kSurname[h % 12u];
-    switch ((h >> 8) % 3u) {
+    const char* n = kSurname[x % 12u];
+    switch ((x >> 8) % 3u) {
         case 0: return std::string(n) + "'s";
         case 1: return std::string(n) + " & Co.";
         default: return std::string(n);
@@ -65,13 +65,11 @@ std::string anchorName(uint32_t seed) {
 }
 
 std::string shopName(uint8_t trade, uint32_t seed) {
-    uint32_t h = seed * 0x9E3779B9u + 0x7F4A7C15u;
-    if (!h) h = 1;
+    ProcRng h(seed * 0x9E3779B9u + 0x7F4A7C15u);
     auto H = [&]() { return std::string(pick(kHawaiian, h)); };
     auto J = [&]() { return std::string(pick(kJapanese, h)); };
     auto E = [&]() { return std::string(pick(kEnglish, h)); };
-    h ^= h << 13; h ^= h >> 17; h ^= h << 5;
-    const uint32_t form = h % 6u;
+    const uint32_t form = h.bits() % 6u;
     switch (trade) {
         case 0:   // cafe
             switch (form) { case 0: return H() + " Coffee"; case 1: return E() + " Coffee Co."; case 2: return "Kissa " + J();

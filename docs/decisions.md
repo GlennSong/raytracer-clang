@@ -12968,5 +12968,78 @@ producers draw from none of these, and `the_frozen_permutation_is_libstdcxx_shuf
      reversed one): the winding test holds none reversed and the folds under one in a thousand, over 60 seeds. A
      sharper crease for the dual contour (both diagonals fold there) is owed.
 
+5. THE CITY'S OWN STREAMS (Glenn, 2026-10-29: "We should have everything run ProcRng ... so that it's all unified").
+   Beside `<random>`, the city code had grown its own: one 32-bit xorshift written out five times (`Rng` in
+   district, parcel, road_network, street_names and shape_grammar), the same again as `Hash` in architect and the
+   lot pass, the metro's `Lcg`, about thirty inline xorshift and LCG lambdas (the furniture kit, the branch cards,
+   rooms, malls, shop names, street trees, kerb props, the window atlases, the grass card's blades) and the city
+   sim's three. Every one is a `ProcRng` now (`bits()` for the callers that read raw bits, `between(a, b)` for an
+   inclusive int). Hashes that mix an input once (`positionHash`, `fieldCellId`, the brain's trait bits) are not
+   streams and stay. Two places look without drawing, so the draws after them are kept: the bus network's seed
+   (`ProcRng::peek()`, the next `bits()` left undrawn) and the konbini (the shop unit's own last draw).
+   THE CITY SIM'S BRAIN was both an agent's fixed identity (pace, schedule, job, park, pose, rest) and its fault
+   stream: `brainUnit` advanced it, so every perception fault an agent rolled changed who it was. `brain` is fixed
+   now and the faults draw from `Agent::faults`, the trips from `Agent::tripRng`, both seeded from it.
+6. ONE DRAW PER EXPRESSION. C++ leaves the order of a call's arguments, and of `+`'s operands, to the compiler, so
+   `Vec2(rng.next(), rng.next())` is a fixed order only per compiler. Clang builds the engine on Linux, Mac and
+   Windows and takes them left to right; about a hundred older lines (trees, rocks, lots, branch cards) lean on that.
+   New code draws into named locals; the old lines are rewritten when their generator next rerolls anyway.
+
+**Consequences (the city).** Every city rerolls: parcels, buildings and their dressing, shops and their names, street
+trees and props, interiors' furniture, street names, every agent. What a level stores stays: the island's planned
+roads, blocks, rail and stations, its place names and the freeway (the planner and the road builders roll no dice),
+so Saltwood is the same town on the same streets with new lots and buildings. The procedural road generators (grid,
+radial, tensor, district, metro) reroll their levels' roads. kLotsBuildTag and kLanesBuildTag 2026-10-29.1, the grass
+card's key v2. The island's freeway signs carry the street names the planner gave them (`island_8_nature.signs.json`),
+named per city with the city's seed where the loader names the combined graph with the book's -- two namings that
+likely disagreed before this change too (to check in Saltwood); owed, the signs named from the loader's naming.
+
+**What the new rolls found (Glenn: "Any seed should grow something, and it should grow it in its own way").** Tests
+that had judged one seed now judge many, and the other seeds found bugs the one had hidden:
+- the metro's loop pass linked nothing when a small road tree sat within nine hops of itself: no block enclosed on
+  seven seeds in ten (either stream). Short of a link per hotspot it looks again looser (every node, fewer hops, down
+  to a block's span); the first pass is as it was.
+- walkers were costed at the cars' class speed, so a collector round a block beat a footpath across it. On foot the
+  cost is the walk's length (`findRoute`).
+- `scheduleSnapshot` gave every agent the town's MEDIAN commute: where most jobs went to walkers, every driver sat on
+  a 27-hour journey at 0.05 h/s and no shop's staff were ever at work. Each agent's own `commuteSeconds` now.
+- a chained trip (a car ending one trip and starting the next) snapped 1.9-3.9 m from the last lane to the next; it
+  blends its position across a pull, and a pull is long enough to turn its yaw offset at a car's rate.
+- the headlight test counted parked cars; it now holds every MOVING car lit at night.
+- BUILDINGS. A pencil tower's facing lift banks (ADR-0264) took ~17 m of a 16-18 m crown and left no lot for a
+  home: a tower of flats keeps facing banks only on a crown 24 m across (`kFacingFlatsDepth`), and a flat whose own
+  layout cut itself off (its hall a 1.5 m stem beside the corridor) is laid as a studio and the floor laid again.
+  Setback tiers were judged by their box's short side, so an L inset storey after storey kept a wide box while its
+  arms thinned to 2 m, floors no stair reached: a tier needs every arm 6 m across (`tierArmsOk`, an opening of the
+  plate). The recipe-reach test rolled the block landmarks over 200 seeds, the one window in 25 where the 4 % twin
+  towers never come up; it rolls them over 600. The paved-plate test called a corner lot whose mitre touched the road
+  at a point "on the road"; it asks for an edge along it.
+- ROADS. Merging nodes minted dead ends: two junctions fused or a short edge merged dedupes the edges a neighbour
+  had to each (a triangle's apex left a spur), and a short loop fused away leaves its stem. One word,
+  `unwindMintedSpurs` (road_network.h), unwinds every spur a merge makes, in mergeShortEdges and
+  consolidateJunctionSpans (not planarize: its 1 m snaps unwound a skeleton loop's knot into a 60-degree fold); a short span with a parallel road beside it is deleted, not fused into a teardrop. The
+  metro's fill prunes its own dangling streets whole (a chord that met nothing ran 250 m of dead end). A chords patch
+  with more corners than a junction takes (`kChordHubArms` 4) is bisected instead of starring 11 streets into its
+  centre, which the tail chopped into a knot of 16 m spans. OWED: the skeleton grows teardrop loops (a road out and
+  back to one junction, at worst a needle 400 m long and 10 m wide, the south town's only road), and the bend easing,
+  which pulls a chain toward the line between its end junctions, shrinks one into a knot of 1-6 m edges folded
+  40-60 degrees, on whichever seed grows one, in either fill. Smoothing them without shrinking (Taubin) fought the
+  tail's second round of merges; it wants a rule of its own in the skeleton. test_fabric judges the fabric by the folds
+  on its own streets.
+- TRAFFIC (Glenn: "If the traffic code is fragile we should rework that to be better built"). A contact backed the
+  cars out by the centres' distance under their half-lengths, a disc's overlap (cars touching side by side read
+  2.5 m deep), and a stationary partner took the leftover: queued cars knocked back a metre a frame. The overlap is
+  the capsules' own, and a car backs out no further than it came forward since the tick began, so nobody is shoved
+  and nobody is drawn reversing. A turn's control point stood past the new lane when the blend reached back less than
+  the lane's offset (a route starting 5 m short of a junction): one rule, `driverTurnControl`, keeps a driver's turn
+  from receding along the way in or out (else the lane lines' miter, else a straight blend), and the junction turn's
+  span reaches past where the lanes cross. Every trip starts its own pull from the pose the car is drawn in (a pull
+  still under way ran out against the new lane), and a pull's yaw easing never out-turns kCarMinTurnRadius.
+- BUSES. "One bus a route: no trip" held on network 3 only; the test holds the choice -- taken only when door to door
+  it beats the walk by planTrip's margin -- on eight.
+THE CLOCK is real time by default (Glenn: "the default should be 1:1 with realtime. 24/7 clock"): `dayMinutes`
+1440, the city sim's 1/3600 h/s; a level or test asks for a faster day by name.
+
 **Alternatives.** Our own copy of libstdc++'s distributions for every generator kept today's trees, but left two
-streams with a reason; Glenn chose one. Freezing nothing would have reshaped the island's ground under its cities.
+streams with a reason; Glenn chose one. For the city, the five xorshift copies folded into one named stream kept
+every city byte-identical, with three engines in the header; Glenn chose one engine and the reroll. Freezing nothing would have reshaped the island's ground under its cities.

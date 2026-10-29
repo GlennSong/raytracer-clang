@@ -2891,11 +2891,8 @@ TextureData leafTexture(int size) {
     struct Leaf { float cx, cy, ca, sa, halfLen, halfW, shade; };
     const int K = 34;
     std::vector<Leaf> leaves;
-    uint32_t h = 0x9e3779b9u;
-    auto rnd = [&]() {
-        h ^= h << 13; h ^= h >> 17; h ^= h << 5;
-        return (h & 0xffffff) / static_cast<float>(0x1000000);
-    };
+    ProcRng h(0x9e3779b9u);
+    auto rnd = [&]() { return static_cast<float>(h.next()); };
     for (int i = 0; i < K; i++) {
         float ang = rnd() * 6.2831853f;
         Leaf lf;

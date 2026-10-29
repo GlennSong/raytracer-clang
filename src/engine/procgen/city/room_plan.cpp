@@ -1,4 +1,5 @@
 #include "room_plan.h"
+#include "../../../proc_rng.h"
 #include "floor_zones.h"
 #include "building_uses.h"   // floorUseName
 #include "../../mesh_builder.h"
@@ -1430,8 +1431,8 @@ static RoomPlan campusPlan(const Poly2& planIn, const BuildingParams& params, co
     } else {
         bands.push_back(minusBand(2 * hw - inset - kCorr, hw - inset - kCorr));
     }
-    uint32_t h = static_cast<uint32_t>(params.seed) * 2654435761u ^ static_cast<uint32_t>(storey * 131 + 7);
-    auto rnd = [&]() { h ^= h << 13; h ^= h >> 17; h ^= h << 5; return (h & 0xffffu) / 65535.0; };
+    ProcRng h(static_cast<uint32_t>(params.seed) * 2654435761u ^ static_cast<uint32_t>(storey * 131 + 7));
+    auto rnd = [&]() { return h.next(); };
     int roomNo = 0;
     // THE LECTURE HALL: the ground floor's first run long enough for one (10.5 m: the stage, the aisle, a block of
     // rows), on whichever side of the corridor has it -- the stair's side is often cut too short. The city's halls

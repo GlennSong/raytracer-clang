@@ -356,50 +356,55 @@ TEST_CASE(students_fill_every_hall_and_take_classes_in_every_teaching_hall) {
 // tee joins a walk to another's middle; a walk marked off-street (a quad door's) stays off the streets.
 #include "../src/engine/ai/pathfind.h"
 TEST_CASE(footpaths_are_walked_across_a_block_and_never_driven) {
-    NavGraph nav = citytest::cityNav(600.0, 100.0, 4);
-    const int c00 = nav.nearestNode(Vec2(0, 0)), c11 = nav.nearestNode(Vec2(100, 100));
-    CHECK(c00 >= 0 && c11 >= 0 && c00 != c11);
-    const Vec2 p00 = nav.nodes[static_cast<std::size_t>(c00)], p11 = nav.nodes[static_cast<std::size_t>(c11)];
-    const Route before = findRoute(nav, c00, c11, true);
-    Real walkBefore = 0;
-    for (int li : before.links) walkBefore += nav.links[static_cast<std::size_t>(li)].length;
-    const int streetLinks = nav.linkCount(), streetNodes = nav.nodeCount();
-    const Vec2 d = normalize(p11 - p00);
-    std::vector<std::array<Real, 5>> segs = {
-        {p00.x + d.x * 8, p00.y + d.y * 8, p11.x - d.x * 8, p11.y - d.y * 8, 2.0},   // the diagonal, its ends short of the corners
-        // a spur off its middle, toward a door (its far end must not be joined to a street)
-        {(p00.x + p11.x) * 0.5 + 0.6, (p00.y + p11.y) * 0.5 - 0.6, (p00.x + p11.x) * 0.5 + 20.0, (p00.y + p11.y) * 0.5 - 20.0, -2.0}};
-    const NavGraph::FootpathReport rep = nav.appendFootpaths(segs);
-    std::printf("    [footpaths] %d nodes, %d links, %d tees, %d street joins; street walk %.0f m\n", rep.nodes, rep.links, rep.tees,
-                rep.streetJoins, walkBefore);
-    CHECK(rep.tees == 1);
-    CHECK(rep.streetJoins == 2);   // the diagonal's two ends; not the spur's
-    // a walker cuts across; the walk is shorter than the streets round the block
-    const Route after = findRoute(nav, c00, c11, true);
-    Real walkAfter = 0;
-    bool usedPath = false;
-    for (int li : after.links) {
-        walkAfter += nav.links[static_cast<std::size_t>(li)].length;
-        usedPath = usedPath || nav.links[static_cast<std::size_t>(li)].footpath;
-    }
-    CHECK(usedPath);
-    CHECK(walkAfter < walkBefore * 0.85);
-    // a car never takes a walk
-    const Route car = findRoute(nav, c00, c11, false);
-    CHECK(car.valid());
-    for (int li : car.links) CHECK(!nav.links[static_cast<std::size_t>(li)].footpath);
-    // and cannot get to a walk node at all
-    CHECK(!findRoute(nav, c00, streetNodes, false).valid());
-    // nearestNode keeps to the streets, even standing on the walk
-    CHECK(nav.nearestNode((p00 + p11) * 0.5) < streetNodes);
-    // the connector from the street starts on its pavement (a carriageway's half width + 1 m out), never in its middle
-    for (int li = streetLinks; li < nav.linkCount(); ++li) {
-        const NavLink& L = nav.links[static_cast<std::size_t>(li)];
-        CHECK(L.footpath && L.walkable && (L.access & road_access::kFootpath));
-        if (L.from < streetNodes) {
-            const Real off = (L.footA - nav.nodes[static_cast<std::size_t>(L.from)]).length();
-            CHECK(off > 1.0);
-            CHECK((nav.sidewalkPoint(li, 0.0) - L.footA).length() < 1e-9);
+    // Twelve grids, each corner jittered its own way (ADR-0265): a square block's diagonal saves 29 %, a skewed one
+    // 13 %, and on every one the walk takes it. (Walkers were costed by the cars' class speed, so a collector round
+    // the block "beat" a shorter walk across it.)
+    for (uint32_t seed = 1; seed <= 12; ++seed) {
+        NavGraph nav = citytest::cityNav(600.0, 100.0, seed);
+        const int c00 = nav.nearestNode(Vec2(0, 0)), c11 = nav.nearestNode(Vec2(100, 100));
+        CHECK(c00 >= 0 && c11 >= 0 && c00 != c11);
+        const Vec2 p00 = nav.nodes[static_cast<std::size_t>(c00)], p11 = nav.nodes[static_cast<std::size_t>(c11)];
+        const Route before = findRoute(nav, c00, c11, true);
+        Real walkBefore = 0;
+        for (int li : before.links) walkBefore += nav.links[static_cast<std::size_t>(li)].length;
+        const int streetLinks = nav.linkCount(), streetNodes = nav.nodeCount();
+        const Vec2 d = normalize(p11 - p00);
+        std::vector<std::array<Real, 5>> segs = {
+            {p00.x + d.x * 8, p00.y + d.y * 8, p11.x - d.x * 8, p11.y - d.y * 8, 2.0},   // the diagonal, its ends short of the corners
+            // a spur off its middle, toward a door (its far end must not be joined to a street)
+            {(p00.x + p11.x) * 0.5 + 0.6, (p00.y + p11.y) * 0.5 - 0.6, (p00.x + p11.x) * 0.5 + 20.0, (p00.y + p11.y) * 0.5 - 20.0, -2.0}};
+        const NavGraph::FootpathReport rep = nav.appendFootpaths(segs);
+        std::printf("    [footpaths] seed %u: %d nodes, %d links, %d tees, %d street joins; street walk %.0f m\n", seed, rep.nodes, rep.links, rep.tees,
+                    rep.streetJoins, walkBefore);
+        CHECK(rep.tees == 1);
+        CHECK(rep.streetJoins == 2);   // the diagonal's two ends; not the spur's
+        // a walker cuts across; the walk is shorter than the streets round the block
+        const Route after = findRoute(nav, c00, c11, true);
+        Real walkAfter = 0;
+        bool usedPath = false;
+        for (int li : after.links) {
+            walkAfter += nav.links[static_cast<std::size_t>(li)].length;
+            usedPath = usedPath || nav.links[static_cast<std::size_t>(li)].footpath;
+        }
+        CHECK(usedPath);
+        CHECK(walkAfter < walkBefore * 0.9);   // the skewest block still saves 13 %
+        // a car never takes a walk
+        const Route car = findRoute(nav, c00, c11, false);
+        CHECK(car.valid());
+        for (int li : car.links) CHECK(!nav.links[static_cast<std::size_t>(li)].footpath);
+        // and cannot get to a walk node at all
+        CHECK(!findRoute(nav, c00, streetNodes, false).valid());
+        // nearestNode keeps to the streets, even standing on the walk
+        CHECK(nav.nearestNode((p00 + p11) * 0.5) < streetNodes);
+        // the connector from the street starts on its pavement (a carriageway's half width + 1 m out), never in its middle
+        for (int li = streetLinks; li < nav.linkCount(); ++li) {
+            const NavLink& L = nav.links[static_cast<std::size_t>(li)];
+            CHECK(L.footpath && L.walkable && (L.access & road_access::kFootpath));
+            if (L.from < streetNodes) {
+                const Real off = (L.footA - nav.nodes[static_cast<std::size_t>(L.from)]).length();
+                CHECK(off > 1.0);
+                CHECK((nav.sidewalkPoint(li, 0.0) - L.footA).length() < 1e-9);
+            }
         }
     }
 }
@@ -923,38 +928,57 @@ TEST_CASE(lawn_groups_take_their_formations_and_poses) {
 // bar or club with staff is open to customers only in the hours somebody hired there is at work by their own
 // schedule -- so a customer is never sent to a dark shop, and the venues' hours agree with the staff's.
 TEST_CASE(a_shop_is_open_to_customers_only_while_someone_works_there) {
+    // Over eight towns, not one (ADR-0265; Glenn: "Any seed should grow something"): each town's every gated place
+    // open exactly while it is posted open and someone is on shift, and some staffed hour open. (One town of 340 once
+    // seemed to show the gate shutting a place; it was every shop's staff stuck on a walker's median commute --
+    // scheduleSnapshot.)
     NavGraph nav = citytest::cityNav(800.0, 80.0, 5);
-    CitySim sim;
-    sim.build(nav, 40, 300, 23);
-    PlaceMap places;
-    for (int i = 0; i < 10; ++i) places.add(PlaceType::Home, Vec2(-350 + i * 70.0, -330), nav);
-    for (int i = 0; i < 4; ++i) places.add(PlaceType::Shop, Vec2(-300 + i * 160.0, 330), nav, 8, 22);
-    places.add(PlaceType::Cafe, Vec2(120, -40), nav, 6, 23);
-    places.add(PlaceType::Bar, Vec2(-120, 40), nav, 16, 2);
-    sim.assignPlaces(places, nav);
-    const CitySim::VenueStaffing at10 = sim.venueStaffing(10.0);
-    std::printf("    [staffed] %d places gated, %d staffed at 10:00, %d at 03:00\n", at10.gated, at10.staffedNow, sim.venueStaffing(3.0).staffedNow);
-    CHECK(at10.gated > 0);
-    int disagree = 0, closedInHours = 0;
-    for (const CitySim::Venue& v : sim.venues()) {
-        if (v.staffed == 0xFFFFFFu) continue;
-        for (int h = 0; h < 24; ++h) {
-            bool someone = false;
-            for (const Agent& a : sim.agents())
-                if (a.workPlace == v.place && sim.scheduleSnapshot(a, h + 0.5).where == CitySim::Snapshot::Where::AtWork) someone = true;
-            const bool posted = v.openHour == v.closeHour || (v.openHour < v.closeHour ? h + 0.5 >= v.openHour && h + 0.5 < v.closeHour
-                                                                                     : h + 0.5 >= v.openHour || h + 0.5 < v.closeHour);
-            if (v.openAt(h + 0.5) != (posted && someone)) ++disagree;
-            if (posted && !someone) ++closedInHours;
+    int gated = 0, disagree = 0, closedInHours = 0, openHours = 0;
+    for (uint32_t seed = 21; seed <= 28; ++seed) {
+        CitySim sim;
+        sim.build(nav, 40, 300, seed);
+        PlaceMap places;
+        for (int i = 0; i < 10; ++i) places.add(PlaceType::Home, Vec2(-350 + i * 70.0, -330), nav);
+        for (int i = 0; i < 4; ++i) places.add(PlaceType::Shop, Vec2(-300 + i * 160.0, 330), nav, 8, 22);
+        places.add(PlaceType::Cafe, Vec2(120, -40), nav, 6, 23);
+        places.add(PlaceType::Bar, Vec2(-120, 40), nav, 16, 2);
+        sim.assignPlaces(places, nav);
+        const CitySim::VenueStaffing at10 = sim.venueStaffing(10.0);
+        std::printf("    [staffed] seed %u: %d places gated, %d staffed at 10:00, %d at 03:00\n", seed, at10.gated, at10.staffedNow,
+                    sim.venueStaffing(3.0).staffedNow);
+        CHECK(at10.gated > 0);   // every town hires someone
+        gated += at10.gated;
+        for (const CitySim::Venue& v : sim.venues()) {
+            if (v.staffed == 0xFFFFFFu) continue;
+            for (int h = 0; h < 24; ++h) {
+                bool someone = false;
+                for (const Agent& a : sim.agents())
+                    if (a.workPlace == v.place && sim.scheduleSnapshot(a, h + 0.5).where == CitySim::Snapshot::Where::AtWork) someone = true;
+                const bool posted = v.openHour == v.closeHour || (v.openHour < v.closeHour ? h + 0.5 >= v.openHour && h + 0.5 < v.closeHour
+                                                                                         : h + 0.5 >= v.openHour || h + 0.5 < v.closeHour);
+                if (v.openAt(h + 0.5) != (posted && someone)) ++disagree;
+                if (posted && !someone) ++closedInHours;
+                openHours += v.openAt(h + 0.5);
+            }
         }
     }
-    int openHours = 0;
-    for (const CitySim::Venue& v : sim.venues())
-        if (v.staffed != 0xFFFFFFu) for (int h = 0; h < 24; ++h) openHours += v.openAt(h + 0.5);
-    std::printf("    [staffed] %d place-hours inside the posted hours with nobody on shift: closed; %d open\n", closedInHours, openHours);
-    CHECK(disagree == 0);
-    CHECK(closedInHours > 0);   // the gate does something
+    std::printf("    [staffed] eight towns: %d places gated; %d place-hours inside the posted hours with nobody on shift: closed; %d open\n",
+                gated, closedInHours, openHours);
+    CHECK(disagree == 0);       // every town: open exactly when posted and someone is on shift
     CHECK(openHours > 0);       // ...and a staffed place does open
+    // THE GATE SHUTTING a place posted open with nobody there -- a town of a few hundred staffs every posted hour on
+    // every seed tried, so the rule itself: a shop posted 8 to 22 whose staff work 9 to 17
+    CitySim::Venue v;
+    v.openHour = 8;
+    v.closeHour = 22;
+    v.staffed = 0;
+    for (int h = 9; h < 17; ++h) v.staffed |= 1u << h;
+    CHECK(!v.openAt(8.5));    // posted, nobody yet: shut
+    CHECK(v.openAt(12.5));    // posted and staffed: open
+    CHECK(!v.openAt(19.5));   // posted, the shift gone home: shut
+    CHECK(!v.openAt(23.5));   // not posted
+    v.staffed = 0xFFFFFFu;    // not gated: the posted hours alone
+    CHECK(v.openAt(19.5) && !v.openAt(23.5));
 }
 
 // THE BUSY STREETS: homes and jobs are drawn by floor area -- a block of flats houses a block of flats' people, a

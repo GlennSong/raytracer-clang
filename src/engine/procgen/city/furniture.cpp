@@ -1,4 +1,5 @@
 #include "furniture.h"
+#include "../../../proc_rng.h"
 #include "trades.h"
 #include "../furniture_library.h"   // descriptions: anchors to dress, clearances to keep (M3)
 #include "../furniture_kit.h"
@@ -218,18 +219,17 @@ struct Furnisher {
         const FurnitureLibrary& lib = FurnitureLibrary::global();
         const FurnitureAsset* a = lib.find(pc);
         if (!a || a->anchors.empty()) return;
-        uint32_t h = static_cast<uint32_t>(std::lround(M.m[0][3] * 31.0)) * 73856093u ^
-                     static_cast<uint32_t>(std::lround(M.m[2][3] * 17.0)) * 19349663u ^ static_cast<uint32_t>(M.m[1][3] * 7.0);
+        ProcRng hRng(static_cast<uint32_t>(std::lround(M.m[0][3] * 31.0)) * 73856093u ^
+                     static_cast<uint32_t>(std::lround(M.m[2][3] * 17.0)) * 19349663u ^ static_cast<uint32_t>(M.m[1][3] * 7.0));
         for (const FurnAnchor& an : a->anchors) {
-            h = h * 1664525u + 1013904223u;
-            if ((h >> 8) % 1000u >= static_cast<uint32_t>(an.chance * 1000.0)) continue;
+            if ((hRng.bits() >> 8) % 1000u >= static_cast<uint32_t>(an.chance * 1000.0)) continue;
             std::vector<Piece> fits;
             for (Piece g : lib.goodsFor(an.accepts)) {
                 const Vec3 sz = furniturePiece(g, 0).size;
                 if (sz.x <= an.w + 0.05 && sz.z <= an.d + 0.05) fits.push_back(g);
             }
             if (fits.empty()) continue;
-            h = h * 1664525u + 1013904223u;
+            const uint32_t h = hRng.bits();
             const Piece g = fits[(h >> 9) % fits.size()];
             const uint32_t gv = (h >> 13) & 63u;
             const Vec3 sz = furniturePiece(g, gv).size;

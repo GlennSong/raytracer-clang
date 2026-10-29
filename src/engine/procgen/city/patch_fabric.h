@@ -21,6 +21,9 @@
 
 namespace engine {
 
+// The most streets a chords patch's midpoint decomposition meets at its centre: a junction's arms (RoadRules maxDegree).
+constexpr int kChordHubArms = 4;
+
 struct PatchFabricParams {
     double blockLen = 150.0;     // station spacing along sides (cell width)
     double blockDepth = 150.0;   // ring offset step / cell depth

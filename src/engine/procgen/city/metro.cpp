@@ -1,4 +1,5 @@
 #include "metro.h"
+#include "../../../proc_rng.h"
 
 #include "arterial_skeleton.h"  // P8 footprint-first constructed skeleton
 #include "road_constraints.h"   // consolidateJunctionSpans (big-block skeleton)
@@ -27,7 +28,10 @@ constexpr double kTau = 6.283185307179586;
 //           straightens the high-frequency wobble while keeping real curves.
 //   PRUNE:  drop short degree-1 stubs iteratively — kills the dead-end
 //           fragments that parcel into garbage slivers.
-RoadGraph cleanSkeleton(const RoadGraph& in, double stubLen = 60.0) {
+// `smoothPasses` 0 and `streetsOnly` prune the FILLED net's own dead ends: every local street is the fill's, so one
+// that ends in nothing (a chord or a grid cut that met no street) unwinds back to its junction whatever its length;
+// the arterials are left as they are.
+RoadGraph cleanSkeleton(const RoadGraph& in, double stubLen = 60.0, int smoothPasses = 5, bool streetsOnly = false) {
     RoadGraph g = in;
     const auto liveAdj = [&](std::vector<int>& deg,
                              std::vector<std::array<int, 2>>& nbr,
@@ -51,7 +55,7 @@ RoadGraph cleanSkeleton(const RoadGraph& in, double stubLen = 60.0) {
     std::vector<int> deg;
     std::vector<std::array<int, 2>> nbr;
     // SMOOTH — Laplacian, gentle step so large curves survive.
-    for (int pass = 0; pass < 5; ++pass) {
+    for (int pass = 0; pass < smoothPasses; ++pass) {
         liveAdj(deg, nbr, dead);
         std::vector<Vec2> np(g.nodes.size());
         for (std::size_t i = 0; i < g.nodes.size(); ++i) np[i] = g.nodes[i].pos;
@@ -64,7 +68,7 @@ RoadGraph cleanSkeleton(const RoadGraph& in, double stubLen = 60.0) {
         for (std::size_t i = 0; i < g.nodes.size(); ++i) g.nodes[i].pos = np[i];
     }
     // PRUNE — short dangling stubs, iterated so whole short chains unwind.
-    for (int iter = 0; iter < 4; ++iter) {
+    for (int iter = 0; iter < 4 || streetsOnly; ++iter) {
         liveAdj(deg, nbr, dead);
         bool any = false;
         for (std::size_t e = 0; e < g.edges.size(); ++e) {
@@ -72,7 +76,8 @@ RoadGraph cleanSkeleton(const RoadGraph& in, double stubLen = 60.0) {
             const RoadEdge& ed = g.edges[e];
             if (ed.a < 0 || ed.b < 0) continue;
             const bool tip = deg[ed.a] == 1 || deg[ed.b] == 1;
-            if (tip && (g.nodes[ed.a].pos - g.nodes[ed.b].pos).length() < stubLen) {
+            if (streetsOnly && ed.klass != RoadClass::Local) continue;
+            if (tip && (streetsOnly || (g.nodes[ed.a].pos - g.nodes[ed.b].pos).length() < stubLen)) {
                 dead[e] = 1;
                 any = true;
             }
@@ -166,17 +171,6 @@ private:
     std::unordered_map<long long, std::vector<int>> cells_;
 };
 
-// Small deterministic PRNG (SplitMix64-ish), so a metro is reproducible per seed
-// without pulling in the district Rng.
-struct Lcg {
-    std::uint64_t s;
-    double unit() {
-        s = s * 6364136223846793005ULL + 1442695040888963407ULL;
-        return static_cast<double>((s >> 11) & ((1ULL << 53) - 1)) / 9007199254740992.0;
-    }
-    double range(double a, double b) { return a + (b - a) * unit(); }
-};
-
 double dist2(const Vec2& a, const Vec2& b) { Vec2 d = a - b; return d.x * d.x + d.y * d.y; }
 
 // The chord a bisecting line lays across a face (engine-faithful, from district.cpp).
@@ -222,7 +216,7 @@ struct Cut {
 // short axis stays at lot-depth scale — long blocks (NYC ~80 x 274) are
 // structurally impossible with one square cell.
 void gridFill(const Poly2& poly, double cell, double cellLong,
-              double collectorSpan, double crook, Lcg& rng,
+              double collectorSpan, double crook, ProcRng& rng,
               std::vector<Cut>& streets) {
     if (poly.size() < 3 || cell < 8.0) return;
     OBB2 o = orientedBoundingBox(poly);
@@ -239,7 +233,7 @@ void gridFill(const Poly2& poly, double cell, double cellLong,
         const bool collectorAxis =
             collectorSpan > 0 && o.half[1 - axis] * 2.0 > collectorSpan;
         for (int i = 1; i <= lines; ++i) {
-            const double j = crook > 0 ? (rng.unit() - 0.5) * crook * step : 0.0;
+            const double j = crook > 0 ? (rng.next() - 0.5) * crook * step : 0.0;
             const Vec2 sp = o.center + along * (-half + i * step + j);
             Vec2 a, b;
             if (cutSpan(poly, sp, cutDir, a, b))
@@ -273,7 +267,7 @@ int components(const RoadGraph& g, std::vector<int>& comp) {
 RoadGraph buildMetro(const MetroParams& p,
                      std::vector<std::vector<Vec2>>* freewayPlans) {
     RT_PROFILE_ZONE_NAMED("buildMetro");
-    Lcg rng{0x9E3779B97F4A7C15ULL ^ (static_cast<std::uint64_t>(p.seed) * 0x100000001B3ULL)};
+    ProcRng rng(p.seed);
 
     // Effective settlement list: explicit sites, or one legacy site from the
     // flat params. sites[0] is the primary city everywhere below.
@@ -420,9 +414,9 @@ RoadGraph buildMetro(const MetroParams& p,
                 const bool outer = (i - 1) >= ring1;
                 const int k = outer ? (i - 1 - ring1) : (i - 1);
                 const int n = outer ? (SH - 1 - ring1) : ring1;
-                double ang = kTau * k / std::max(1, n) + rng.range(-0.35, 0.35) +
+                double ang = kTau * k / std::max(1, n) + rng.in(-0.35, 0.35) +
                              (outer ? kTau * 0.5 / std::max(1, n) : 0.0);
-                double r = S.radius * (outer ? rng.range(0.60, 0.80) : rng.range(0.34, 0.55));
+                double r = S.radius * (outer ? rng.in(0.60, 0.80) : rng.in(0.34, 0.55));
                 Vec2 pos = snapBuildable(S.center + Vec2(std::cos(ang), std::sin(ang)) * r,
                                          S.radius);
                 hots.push_back({pos,
@@ -556,7 +550,7 @@ RoadGraph buildMetro(const MetroParams& p,
                     double t = static_cast<double>(k) / anchors;
                     double sway = (k == 0 || k == anchors)
                                       ? 0.0
-                                      : rng.range(-0.05, 0.05) * L;
+                                      : rng.in(-0.05, 0.05) * L;
                     Vec2 q = A + dir * (t * L) + nrm * sway;
                     if (!buildable(q.x, q.y)) {
                         // inGlobalBounds, not inDomain: a mid-connector anchor
@@ -701,7 +695,7 @@ RoadGraph buildMetro(const MetroParams& p,
                     double t = static_cast<double>(k) / anchors;
                     double sway = (k == 0 || k == anchors)
                                       ? 0.0
-                                      : rng.range(-0.05, 0.05) * L;
+                                      : rng.in(-0.05, 0.05) * L;
                     Vec2 q = A + dir * (t * L) + nrm * sway;
                     if (!freewayOk(q.x, q.y)) {
                         bool fixed = false;
@@ -820,8 +814,8 @@ RoadGraph buildMetro(const MetroParams& p,
             for (int k = 0; k < n; ++k) {
                 double t = (k + 0.5) / std::max(1, n);
                 Vec2 m = hots[i].pos * (1.0 - t) + hots[j].pos * t;
-                Vec2 q{m.x + rng.range(-spacing, spacing),
-                       m.y + rng.range(-spacing, spacing)};
+                Vec2 q{m.x + rng.in(-spacing, spacing),
+                       m.y + rng.in(-spacing, spacing)};
                 if (buildable(q.x, q.y)) attr.push_back(q);   // corridor stays on land
             }
         }
@@ -836,8 +830,8 @@ RoadGraph buildMetro(const MetroParams& p,
                                static_cast<int>(p.ambientPer500 * (S.radius / 500.0) *
                                                 (S.radius / 500.0) * S.density));
         for (int k = 0; k < ambient; ++k) {
-            Vec2 q{S.center.x + rng.range(-S.radius, S.radius),
-                   S.center.y + rng.range(-S.radius, S.radius)};
+            Vec2 q{S.center.x + rng.in(-S.radius, S.radius),
+                   S.center.y + rng.in(-S.radius, S.radius)};
             if (buildable(q.x, q.y)) attr.push_back(q);
         }
     }
@@ -934,21 +928,32 @@ RoadGraph buildMetro(const MetroParams& p,
     if (p.skeleton != "footprint") {
         std::vector<std::vector<int>> adj(Ga.nodes.size());
         for (const RoadEdge& e : Ga.edges) { adj[e.a].push_back(e.b); adj[e.b].push_back(e.a); }
-        const int loopStride = 3;
-        const double maxLoop = p.loopMax, minLoop = p.loopMin; const int hopBar = 9;
+        const double maxLoop = p.loopMax, minLoop = p.loopMin;
         std::vector<std::pair<int, int>> links;
-        for (std::size_t i = 0; i < Ga.nodes.size(); ++i) {
-            if (adj[i].empty() || (i % loopStride) != 0) continue;
-            std::vector<int> d(Ga.nodes.size(), -1), q{static_cast<int>(i)}; d[i] = 0; std::size_t qi = 0;
-            while (qi < q.size()) { int u = q[qi++]; if (d[u] >= hopBar) continue; for (int v : adj[u]) if (d[v] < 0) { d[v] = d[u] + 1; q.push_back(v); } }
-            int best = -1; double bd = maxLoop * maxLoop;
-            for (std::size_t j = 0; j < Ga.nodes.size(); ++j) {
-                if (j == i || adj[j].empty() || d[j] >= 0) continue;
-                double dd = dist2(Ga.nodes[i].pos, Ga.nodes[j].pos);
-                if (dd < bd && dd > minLoop * minLoop) { bd = dd; best = static_cast<int>(j); }
+        auto findLinks = [&](int loopStride, int hopBar, double minL, bool fromLowerOnly) {
+            for (std::size_t i = 0; i < Ga.nodes.size(); ++i) {
+                if (adj[i].empty() || (i % loopStride) != 0) continue;
+                std::vector<int> d(Ga.nodes.size(), -1), q{static_cast<int>(i)}; d[i] = 0; std::size_t qi = 0;
+                while (qi < q.size()) { int u = q[qi++]; if (d[u] >= hopBar) continue; for (int v : adj[u]) if (d[v] < 0) { d[v] = d[u] + 1; q.push_back(v); } }
+                int best = -1; double bd = maxLoop * maxLoop;
+                for (std::size_t j = 0; j < Ga.nodes.size(); ++j) {
+                    if (j == i || adj[j].empty() || d[j] >= 0) continue;
+                    double dd = dist2(Ga.nodes[i].pos, Ga.nodes[j].pos);
+                    if (dd < bd && dd > minL * minL) { bd = dd; best = static_cast<int>(j); }
+                }
+                if (best < 0 || (fromLowerOnly && best < static_cast<int>(i))) continue;
+                const std::pair<int, int> l{std::min(static_cast<int>(i), best), std::max(static_cast<int>(i), best)};
+                if (std::find(links.begin(), links.end(), l) == links.end()) links.push_back(l);
             }
-            if (best >= 0 && static_cast<int>(i) < best) links.push_back({static_cast<int>(i), best});
-        }
+        };
+        findLinks(3, 9, minLoop, true);   // (as it always was: a node links on to a later one)
+        // EVERY SEED ENCLOSES BLOCKS (ADR-0265; Glenn, 2026-10-29: "Any seed should grow something, and it should grow
+        // it in its own way"): a small tree can sit within nine hops of itself, and then the pass above linked nothing
+        // -- no block enclosed, no street but the arterials (seven seeds in ten of piedmont_mini's recipe, on either
+        // stream). Short of a loop a hotspot, it looks again looser: every node, fewer hops, down to a block's span.
+        const std::size_t wantLoops = std::max<std::size_t>(1, hots.size());
+        if (links.size() < wantLoops) findLinks(1, 6, minLoop * 0.6, false);
+        if (links.size() < wantLoops) findLinks(1, 4, std::max(p.minBlockEdge * 1.35, minLoop * 0.35), false);
         // Big-block thinning: each accepted loop link turns two chain nodes
         // into junctions, so attachment spacing IS junction spacing. Reject a
         // candidate whose endpoints land within minBlockEdge of an already
@@ -1327,6 +1332,12 @@ RoadGraph buildMetro(const MetroParams& p,
                             patch.corners.push_back(vi);
                     }
                     segs = fabricChords(patch, fp);
+                    // (a face the chords refuse -- too many corners for one hub, a banana -- is still the fabric's:
+                    // bisected, before the legacy grid)
+                    if (segs.empty()) {
+                        segs = fabricBisect(f, fp);
+                        if (!segs.empty()) variant = "bisect";
+                    }
                 } else if (variant == "bisect") {
                     segs = fabricBisect(f, fp);
                 } else if (variant == "court") {
@@ -1397,7 +1408,9 @@ RoadGraph buildMetro(const MetroParams& p,
                            " ha at (" + std::to_string(skipWorstAt.x) + ", " +
                            std::to_string(skipWorstAt.y) + ")"
                      : "");
-    return planarize(full, 1.0);
+    // NO DEAD END MINTED: a chord or a grid cut whose end met nothing is a stub of street going nowhere (a 31 m one by
+    // piedmont's east town, ADR-0265) -- pruned as the skeleton's are
+    return cleanSkeleton(planarize(full, 1.0), 60.0, 0, true);
 }
 
 }  // namespace engine

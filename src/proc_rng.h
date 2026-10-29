@@ -5,7 +5,10 @@
 // <random>'s engines are fixed by the standard but its distributions are not, so the same seed grew a different tree
 // on libc++ or MSVC than on libstdc++. One seed, one stream: a generator draws in a fixed order, so a seed always
 // grows the same shape, on Linux, Mac and Windows alike. Procgen, audio, particles and the path tracer all draw from
-// it. (The terrain's Perlin permutation alone keeps its own frozen shuffle: noise.cpp.)
+// it. (The terrain's Perlin permutation alone keeps its own frozen shuffle: noise.cpp.) A fixed order needs one draw
+// per expression: C++ leaves the order of `Vec2(r.next(), r.next())`'s arguments (or `a.next() + b.next()`'s operands)
+// to the compiler. Clang, which builds the engine on all three, takes them left to right; ~100 older lines lean on
+// that, and new code draws into named locals.
 
 #include <cmath>
 #include <cstdint>
@@ -24,6 +27,9 @@ struct ProcRng {
     }
     double in(double a, double b) { return a + (b - a) * next(); }
     int below(int n) { return static_cast<int>(next() * n); }   // 0 .. n-1
+    int between(int a, int b) { return a + below(b - a + 1); }   // a .. b, both in
+    uint32_t bits() { return static_cast<uint32_t>(next() * 4294967296.0); }   // 32 random bits
+    uint32_t peek() const { ProcRng c = *this; return c.bits(); }   // the next bits(), without drawing them
 };
 
 // RANGES drawn from a ProcRng, called like <random>'s distributions (`jit(rng)`) so a generator reads the same.

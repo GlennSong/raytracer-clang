@@ -22,7 +22,7 @@ namespace engine {
 namespace roads::lanes {
 
 const char* const kRailBuildTag = "2026-10-13.2";   // station steel and track boxes from the mesh library; history: git log -G kRailBuildTag
-const char* const kLanesBuildTag = "2026-10-23.1";   // the city cell meshes stored compact (MESH v2, ADR-0224); history: git log -G kLanesBuildTag
+const char* const kLanesBuildTag = "2026-10-29.1";   // the procedural road generators draw from ProcRng (ADR-0265); history: git log -G kLanesBuildTag
 //   // .2: the lot pass keeps its clearance-width graph (roads/lotnav)
 //   // .1: the nav twin carries travel-lane widths (cars in the lane centre)
 //   // .3: hidden slab sides dropped, straight runs merged, layer boundaries oriented   // 2026-09-24.1: deck meshes welded, undersides only where a deck stands clear of the ground (ADR-0095)   // .2: slab sides only where they rise above the ground outside   // .1: the terrain is clamped under every deck VERTEX, not by centreline reach   // .2/.3: ramp ends (elevated or at-grade runs) welded to the road they merge into (nav twin)   // .4: one-way carriageways and ramps; the nav gets a deck's travel width   // .5: blocks are the holes of the pavement WITH its sidewalks

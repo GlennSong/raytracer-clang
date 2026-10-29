@@ -1,4 +1,5 @@
 #include "city_bus.h"
+#include "../../proc_rng.h"
 
 #include "../../engine/ai/pathfind.h"
 
@@ -346,10 +347,9 @@ void BusNetwork::build(const engine::NavGraph& nav, int routeCount,
     if (static_cast<int>(cand.size()) < 3) return;
 
     const int wantHubs = std::max(3, std::min(routeCount + 2, 8));
-    uint32_t h = netSeed ? netSeed : 1u;
-    h ^= h << 13; h ^= h >> 17; h ^= h << 5;
+    engine::ProcRng h(netSeed);
     std::vector<int> hubNodes;
-    hubNodes.push_back(cand[h % cand.size()]);
+    hubNodes.push_back(cand[static_cast<std::size_t>(h.below(static_cast<int>(cand.size())))]);
     std::vector<Real> best(cand.size(), 0);
     for (std::size_t i = 0; i < cand.size(); ++i)
         best[i] = dist(nav.nodes[static_cast<std::size_t>(cand[i])],

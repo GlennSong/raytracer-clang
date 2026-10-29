@@ -1,4 +1,5 @@
 #include "road_network.h"
+#include "../../../proc_rng.h"
 
 #include <algorithm>
 #include <cmath>
@@ -8,14 +9,6 @@
 
 namespace engine {
 namespace {
-
-struct Rng {
-    uint32_t s;
-    explicit Rng(uint32_t seed) : s(seed ? seed : 0x6c078965u) {}
-    uint32_t next() { s ^= s << 13; s ^= s >> 17; s ^= s << 5; return s; }
-    Real unit() { return (next() >> 8) * (1.0 / 16777216.0); }
-    Real range(Real a, Real b) { return a + (b - a) * unit(); }
-};
 
 // Proper interior intersection of segments p1p2 and p3p4. Excludes shared/near
 // endpoints (eps), so only true crossings split an edge. Returns t along p1p2.
@@ -76,7 +69,7 @@ void sampleArc(RoadGraph& g, int n0, int n1, const RoadArc& arc, Real width,
 
 RoadGraph gridRoads(const GridRoadParams& p) {
     RoadGraph g;
-    Rng rng(p.seed);
+    ProcRng rng(p.seed);
     int n = std::max(1, static_cast<int>(std::lround(p.extent * 2 / p.cellSize)));
     int dim = n + 1;
     Real step = p.extent * 2 / n;
@@ -90,7 +83,7 @@ RoadGraph gridRoads(const GridRoadParams& p) {
             bool interior = (i > 0 && i < dim - 1 && j > 0 && j < dim - 1);
             if (interior) {
                 Real jr = p.jitter * step;
-                pos += Vec2(rng.range(-jr, jr), rng.range(-jr, jr));
+                pos += Vec2(rng.in(-jr, jr), rng.in(-jr, jr));
             }
             id[j][i] = g.addNode(pos, 0.01);
         }
@@ -110,12 +103,12 @@ RoadGraph gridRoads(const GridRoadParams& p) {
         for (int i = 0; i < dim; ++i) {
             if (i + 1 < dim) {
                 RoadClass c = classOf(j);
-                if (!(c == RoadClass::Local && rng.unit() < p.dropout))
+                if (!(c == RoadClass::Local && rng.next() < p.dropout))
                     g.addEdge(id[j][i], id[j][i + 1], widthOf(c), c);
             }
             if (j + 1 < dim) {
                 RoadClass c = classOf(i);
-                if (!(c == RoadClass::Local && rng.unit() < p.dropout))
+                if (!(c == RoadClass::Local && rng.next() < p.dropout))
                     g.addEdge(id[j][i], id[j + 1][i], widthOf(c), c);
             }
         }
@@ -124,7 +117,7 @@ RoadGraph gridRoads(const GridRoadParams& p) {
 
 RoadGraph radialRoads(const RadialParams& p) {
     RoadGraph g;
-    Rng rng(p.seed);
+    ProcRng rng(p.seed);
     int rings = std::max(1, static_cast<int>(std::lround(p.extent / p.ringSpacing)));
     int spokes = std::max(3, p.spokes);
     int subdiv = std::max(1, p.ringSubdiv);   // minimum chords per avenue gap
@@ -141,7 +134,7 @@ RoadGraph radialRoads(const RadialParams& p) {
     Real aj = p.jitter * (2 * PI / spokes) * 0.5;
     std::vector<Real> theta(spokes);
     for (int s = 0; s < spokes; ++s)
-        theta[s] = 2 * PI * s / spokes + rng.range(-aj, aj);
+        theta[s] = 2 * PI * s / spokes + rng.in(-aj, aj);
 
     std::vector<std::vector<int>> sp(rings + 1);   // sp[ring][avenue] node on the circle
     for (int r = 1; r <= rings; ++r) {
@@ -379,7 +372,7 @@ void traceFamily(RoadGraph& g, const TensorRoadParams& p, int fam,
 
 RoadGraph tensorRoads(const TensorRoadParams& p) {
     RoadGraph g;
-    Rng rng(p.seed);
+    ProcRng rng(p.seed);
 
     // Major family = avenues/spokes; minor family = the cross streets and rings.
     PointHash majorHash(p.spacing), minorHash(p.spacing);
@@ -393,7 +386,7 @@ RoadGraph tensorRoads(const TensorRoadParams& p) {
     Real jr = p.spacing * 0.15;
     for (Real y = -p.extent; y <= p.extent; y += p.spacing * 1.5)
         for (Real x = -p.extent; x <= p.extent; x += p.spacing * 1.5) {
-            Vec2 s = p.center + Vec2(x + rng.range(-jr, jr), y + rng.range(-jr, jr));
+            Vec2 s = p.center + Vec2(x + rng.in(-jr, jr), y + rng.in(-jr, jr));
             majorSeeds.push(s);
             minorSeeds.push(s);
         }
@@ -502,6 +495,26 @@ RoadGraph connectComponents(const RoadGraph& g, Real connectorWidth) {
         unite(bu, bv);
     }
     return out;
+}
+
+// NO DEAD END MINTED by a merge (ADR-0265): joining two junctions dedupes the edges a node between them had to each --
+// a triangle's apex left a spur going nowhere -- and a short loop fused away leaves the stem it hung on. Unwinds, edge
+// by edge, every spur whose tip had degree >= 2 before the merge (`before`, by node; the merged node's is both ends'
+// arms, so a short edge whose ends shared their one neighbour folds away whole).
+void unwindMintedSpurs(std::vector<RoadEdge>& edges, std::size_t nodes, const std::vector<int>& before) {
+    for (bool cut = true; cut;) {
+        cut = false;
+        std::vector<int> nd(nodes, 0);
+        for (const RoadEdge& e : edges) { ++nd[e.a]; ++nd[e.b]; }
+        for (std::size_t ei = 0; ei < edges.size(); ++ei) {
+            const RoadEdge& e = edges[ei];
+            auto minted = [&](int v) { return nd[v] == 1 && before[v] >= 2; };
+            if (!minted(e.a) && !minted(e.b)) continue;
+            edges.erase(edges.begin() + static_cast<std::ptrdiff_t>(ei));
+            cut = true;
+            break;
+        }
+    }
 }
 
 RoadGraph planarize(const RoadGraph& in, Real tol) {

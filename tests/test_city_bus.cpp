@@ -469,28 +469,53 @@ TEST_CASE(buses_sharing_hub_stops_neither_overlap_nor_deadlock) {
 // the whole loop round. The choice is door-to-door time; with a single bus a
 // route the wait alone sinks it.
 TEST_CASE(bus_trip_is_chosen_by_door_to_door_time) {
-    BusNetwork net;
-    net.build(gridCity(), 2, 8, 3);
-    net.setFleet({6, 6});
+    // Over eight networks (ADR-0265): network 3 alone had a loop long enough that one bus's half-lap wait never
+    // paid, so "one bus: no trip" held there; what holds on every network is the CHOICE -- a bus is taken only when
+    // door to door it beats the walk, the wait counted.
     const Vec2 from(-400, -400), to(400, 400);
-    const BusTrip t = net.planTrip(from, to, 250.0);
-    CHECK(t.valid());
-    if (!t.valid()) return;
-    const BusRoute& r = net.route(t.route);
     const Real walk = dist(from, to) * 1.25 / 1.4;
-    const Real bus = dist(from, r.stops[static_cast<std::size_t>(t.fromStop)].pos) * 1.25 / 1.4 +
-                     net.waitSeconds(t.route) + net.rideSeconds(t.route, t.fromStop, t.toStop) +
-                     dist(r.stops[static_cast<std::size_t>(t.toStop)].pos, to) * 1.25 / 1.4;
-    std::printf("    [choice] walk %.0f s, bus %.0f s (ride %.0f m of a %.0f m loop)\n", walk,
-                bus, net.rideMetres(t.route, t.fromStop, t.toStop), r.loopLength);
-    CHECK(bus < walk - 60.0);
-    // A ride is measured FORWARD round the loop: stop b to stop a is the rest
-    // of the loop, not the way back.
-    CHECK(std::fabs(net.rideMetres(t.route, t.fromStop, t.toStop) +
-                    net.rideMetres(t.route, t.toStop, t.fromStop) - r.loopLength) < 1e-6);
-    // One bus a route: waiting half a lap is not worth it.
-    net.setFleet({1, 1});
-    CHECK(!net.planTrip(from, to, 250.0).valid());
+    const Real margin = std::max(Real(60), walk * Real(0.15));   // (planTrip's: a bus must save this much)
+    auto doorToDoor = [&](const BusNetwork& net, const BusTrip& t) {
+        const BusRoute& r = net.route(t.route);
+        return dist(from, r.stops[static_cast<std::size_t>(t.fromStop)].pos) * 1.25 / 1.4 + net.waitSeconds(t.route) +
+               net.rideSeconds(t.route, t.fromStop, t.toStop) + dist(r.stops[static_cast<std::size_t>(t.toStop)].pos, to) * 1.25 / 1.4;
+    };
+    int refused = 0;
+    for (uint32_t seed = 1; seed <= 8; ++seed) {
+        BusNetwork net;
+        net.build(gridCity(), 2, 8, seed);
+        net.setFleet({6, 6});
+        const BusTrip t = net.planTrip(from, to, 250.0);
+        CHECK(t.valid());   // six buses a route: across town, the bus
+        if (!t.valid()) continue;
+        const BusRoute& r = net.route(t.route);
+        const bool direct = dist(r.stops[static_cast<std::size_t>(t.toStop)].pos, to) <= 250.0;   // (no change on the way)
+        const Real bus = doorToDoor(net, t);
+        std::printf("    [choice] network %u: walk %.0f s, bus %.0f s (ride %.0f m of a %.0f m loop%s)", seed, walk, bus,
+                    net.rideMetres(t.route, t.fromStop, t.toStop), r.loopLength, direct ? "" : ", then a change");
+        if (direct) CHECK(bus < walk - margin);
+        // A ride is measured FORWARD round the loop: stop b to stop a is the rest of the loop, not the way back.
+        CHECK(std::fabs(net.rideMetres(t.route, t.fromStop, t.toStop) + net.rideMetres(t.route, t.toStop, t.fromStop) -
+                        r.loopLength) < 1e-6);
+        // One bus a route: the wait is half a lap -- taken only if the bus still beats the walk with it
+        net.setFleet({1, 1});
+        const BusTrip one = net.planTrip(from, to, 250.0);
+        if (!one.valid()) {
+            ++refused;
+            std::printf("; one bus: walks\n");
+            continue;
+        }
+        const BusRoute& r1 = net.route(one.route);
+        const bool direct1 = dist(r1.stops[static_cast<std::size_t>(one.toStop)].pos, to) <= 250.0;
+        const Real bus1 = doorToDoor(net, one);
+        std::printf("; one bus: %.0f s\n", bus1);
+        if (direct1) {
+            CHECK(bus1 < walk - margin);
+            if (direct) CHECK(bus1 >= bus - 1e-6);   // (never faster than with six)
+        }
+    }
+    std::printf("    [choice] %d of eight networks walk when a route has one bus\n", refused);
+    CHECK(refused > 0);   // the wait counts
 }
 
 // THE BUS DEPOT (Glenn, 2026-10-08: "There should probably be a dedicated bus depot they return to at end of day").

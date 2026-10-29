@@ -291,6 +291,13 @@ RoadGraph connectComponents(const RoadGraph& graph, Real connectorWidth = 8);
 // only adjacencies are at shared endpoints (precondition for face extraction).
 RoadGraph planarize(const RoadGraph& graph, Real tol = 0.5);
 
+// NO DEAD END MINTED by a merge (ADR-0265): joining two nodes dedupes the edges a
+// neighbour had to each -- a triangle's apex left a spur going nowhere -- and a short
+// loop fused away leaves its stem. Unwinds, edge by edge, every spur whose tip had
+// degree >= 2 before the merge (`before`, by node; a merged node's is its ends' arms
+// together). mergeShortEdges and consolidateJunctionSpans call it.
+void unwindMintedSpurs(std::vector<RoadEdge>& edges, std::size_t nodes, const std::vector<int>& before);
+
 // Layer-aware planarize (ADR-0051, the grade-separation rule). Like planarize, but a
 // crossing splits into a shared node ONLY when the two edges share a `layer`; a crossing
 // between different layers is a grade separation (overpass/underpass) and is left intact —

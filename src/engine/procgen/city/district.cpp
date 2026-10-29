@@ -1,4 +1,5 @@
 #include "district.h"
+#include "../../../proc_rng.h"
 
 #include <cmath>
 #include <cstdio>
@@ -8,13 +9,6 @@ namespace engine {
 namespace {
 
 constexpr double kPi = 3.14159265358979323846;
-
-struct Rng {
-    std::uint32_t s;
-    explicit Rng(std::uint32_t seed) : s(seed ? seed : 0x2545f491u) {}
-    std::uint32_t next() { s ^= s << 13; s ^= s >> 17; s ^= s << 5; return s; }
-    double unit() { return (next() >> 8) * (1.0 / 16777216.0); }
-};
 
 // The span of the infinite line (pt + t*dir) within `poly`: its first and last boundary crossings.
 // For a convex face that's the full chord; the street the split lays down.
@@ -41,7 +35,7 @@ bool cutSpan(const Poly2& poly, const Vec2& pt, const Vec2& dir, Vec2& a, Vec2& 
 
 // Recursively bisect a face along its long OBB axis until block-sized; record each cut as a street.
 void subdivideStreets(const Poly2& poly, double minSize, double maxSize, double jitter,
-                      Rng& rng, std::vector<std::vector<Vec2>>& streets,
+                      ProcRng& rng, std::vector<std::vector<Vec2>>& streets,
                       std::vector<Poly2>& blocks, int depth,
                       const Vec2& center, double coreScale, double coreRadius) {
     double ar = area(poly);
@@ -70,7 +64,7 @@ void subdivideStreets(const Poly2& poly, double minSize, double maxSize, double 
         return;
     }
     Vec2 dirLong = obb.axis[la], cutDir = obb.axis[1 - la];
-    double offset = (rng.unit() - 0.5) * 2.0 * jitter * longHalf;
+    double offset = (rng.next() - 0.5) * 2.0 * jitter * longHalf;
     Vec2 sp = obb.center + dirLong * offset;
     Poly2 left, right;
     splitByLine(poly, sp, cutDir, left, right);
@@ -86,7 +80,7 @@ void subdivideStreets(const Poly2& poly, double minSize, double maxSize, double 
 }  // namespace
 
 DistrictNet buildDistrict(const DistrictParams& p) {
-    Rng rng(p.seed ? p.seed : 1u);
+    ProcRng rng(p.seed);
     DistrictNet d;
     std::vector<std::vector<Vec2>> arterials, streets;
 
@@ -95,7 +89,7 @@ DistrictNet buildDistrict(const DistrictParams& p) {
     const int N = 32;
     for (int i = 0; i < N; ++i) {
         double a = 2.0 * kPi * i / N;
-        double r = p.radius * (1.0 - p.irregular * 0.5 + p.irregular * rng.unit());
+        double r = p.radius * (1.0 - p.irregular * 0.5 + p.irregular * rng.next());
         footprint.push_back(Vec2(p.center.x + std::cos(a) * r, p.center.y + std::sin(a) * r));
     }
     ensureCCW(footprint);
@@ -103,7 +97,7 @@ DistrictNet buildDistrict(const DistrictParams& p) {
     // 2. Split the footprint into sectors with a few arterials through (near) the centre.
     std::vector<Poly2> faces = {footprint};
     for (int k = 0; k < p.arterials; ++k) {
-        double ang = kPi * (k + rng.unit() * 0.35) / std::max(1, p.arterials);
+        double ang = kPi * (k + rng.next() * 0.35) / std::max(1, p.arterials);
         Vec2 dir(std::cos(ang), std::sin(ang));
         // All arterials pass through the SAME centre, so they cross at ONE point — a single node
         // (capDegree later splits it into staggered <=4-arm junctions) instead of jittered

@@ -459,13 +459,13 @@ struct TrafficLook {
     long steps = 0, jumps = 0, pivots = 0, backs = 0, reversingOut = 0;
     Real worstJump = 0;
 };
-TrafficLook watchTraffic(bool physicalTier) {
+TrafficLook watchTraffic(bool physicalTier, uint32_t seed = 7) {
     World world;
     world.add<RoadEntity>(world.create(), cityGrid());
     CityRenderParams params;
     params.cars = 24;
     params.pedestrians = 0;
-    params.seed = 7;
+    params.seed = seed;
     params.wander = true;
     params.physicalCars = physicalTier ? 12 : 0;
     params.vehicleScript = readAsset("vehicles.lua");
@@ -561,20 +561,24 @@ TEST_CASE(city_drawn_traffic_rolls_on_its_wheels) {
     // 0.36 m above it, with 26 pivots and snaps of up to 12 m, while the sim's
     // own motion put every wheel on the deck.
     const TrafficLook phys = watchTraffic(true);
-    const TrafficLook kin = watchTraffic(false);
     printLook("physical", phys);
-    printLook("kinematic", kin);
-    // THE SHIPPING DEFAULT. Flat ground: every wheel of every car at one
-    // height, on the road deck (the deck stands a few cm proud of y = 0).
-    CHECK(kin.wheelSamples > 10000);
-    CHECK(kin.wheelMax - kin.wheelMin < 0.05);
-    CHECK(kin.wheelMin > -0.02 && kin.wheelMax < 0.15);
-    // Continuous motion: no pivots, no teleports (a pull-out used to redraw
-    // the car in its lane 5-10 m away in one frame), nothing driving
-    // backwards except a car turning round as it leaves a space.
-    CHECK(kin.pivots == 0);
-    CHECK(kin.worstJump < 0.5);
-    CHECK(kin.backs <= 5);
+    // THE SHIPPING DEFAULT, over five towns (ADR-0265: town 7 alone hid a chained trip snapping 1.9-3.9 m from
+    // the last trip's lane into the next's, queued cars knocked back a metre by a contact's disc-measured overlap,
+    // and a turn off a short first link that drove 0.6 m back against its nose)
+    for (uint32_t seed : {7u, 11u, 19u, 23u, 29u}) {
+        const TrafficLook kin = watchTraffic(false, seed);
+        printLook("kinematic", kin);
+        // Flat ground: every wheel of every car at one height, on the road deck (the deck stands a few cm proud of
+        // y = 0).
+        CHECK(kin.wheelSamples > 10000);
+        CHECK(kin.wheelMax - kin.wheelMin < 0.05);
+        CHECK(kin.wheelMin > -0.02 && kin.wheelMax < 0.15);
+        // Continuous motion: no pivots, no teleports (a pull-out used to redraw the car in its lane 5-10 m away in one
+        // frame), nothing driving backwards except a car turning round as it leaves a space.
+        CHECK(kin.pivots == 0);
+        CHECK(kin.worstJump < 0.5);
+        CHECK(kin.backs <= 5);
+    }
 }
 
 // EVERY LIT LAMP IS ON ITS OWN CAR'S NOSE OR TAIL (Glenn, 2026-09-18: "when I'm

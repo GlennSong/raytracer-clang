@@ -356,11 +356,16 @@ std::vector<CirculationLayout> circulationLayouts(const BuildingParams& params, 
         return ob.half[li] >= kSlabAspect * ob.half[1 - li] && (!params.residential || 2 * ob.half[1 - li] >= kEndsFlatsDepth);
     }();
     const bool tall = hoistwaysFor(params.floors) >= 3;
+    const bool facingFits = !params.residential || (!tiers.empty() && tiers.back().plan.size() >= 3 && [&] {
+        const OBB2 ob = orientedBoundingBox(tiers.back().plan);
+        return 2 * ob.half[1 - ob.longAxis()] >= kFacingFlatsDepth;
+    }());
     // per-mille weights, classic / ends / facing / both
     int w[4] = {1000, 0, 0, 0};
     if (slab && tall) { w[0] = 350; w[1] = 300; w[2] = 150; w[3] = 200; }
     else if (slab) { w[0] = 450; w[1] = 550; }
     else if (tall) { w[0] = 650; w[2] = 350; }
+    if (!facingFits) { w[0] += w[2]; w[1] += w[3]; w[2] = w[3] = 0; }   // (homes on a slim crown: one bank)
     std::vector<CirculationLayout> out;
     int sum = 0;
     for (int i = 0; i < 4; ++i) {

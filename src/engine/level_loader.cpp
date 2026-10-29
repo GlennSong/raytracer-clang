@@ -438,8 +438,8 @@ static TextureHandle bakeRoomAtlas(Renderer& renderer) {
         img[o + 1] = static_cast<unsigned char>(std::min(1.0, std::max(0.0, c.y)) * 255);
         img[o + 2] = static_cast<unsigned char>(std::min(1.0, std::max(0.0, c.z)) * 255);
     };
-    uint32_t h = 9176u;
-    auto rnd = [&]() { h ^= h << 13; h ^= h >> 17; h ^= h << 5; return (h & 0xffffu) / 65535.0; };
+    ProcRng h(9176u);
+    auto rnd = [&]() { return h.next(); };
     for (int r = 0; r < 16; ++r) {
         const bool office = r < 8;
         const int tx = (r % 4) * tile, ty = (r / 4) * tile;
@@ -531,8 +531,8 @@ static TextureHandle bakeLitWindowMap(Renderer& renderer, int cells, uint32_t se
     const int px = 8, n = cells * px;
     std::vector<unsigned char> img(static_cast<std::size_t>(n) * n * 4, 0);
     for (std::size_t i = 3; i < img.size(); i += 4) img[i] = 255;
-    uint32_t h = seed;
-    auto rnd = [&]() { h ^= h << 13; h ^= h >> 17; h ^= h << 5; return (h & 0xffffu) / 65535.0; };
+    ProcRng h(seed);
+    auto rnd = [&]() { return h.next(); };
     static const Vec3 tints[6] = {{1.0, 0.97, 0.92}, {0.92, 0.96, 1.0}, {0.80, 0.90, 1.0},
                                   {1.0, 0.85, 0.62}, {1.0, 0.92, 0.75}, {0.96, 0.98, 0.94}};
     for (int cy = 0; cy < cells; ++cy)
@@ -7090,11 +7090,11 @@ bool LevelLoader::load(const std::string& path,
                 // SCULPTED lots (parks, house yards) carry their own
                 // deterministic tree spots: (x, trunk scale, z).
                 if (!lb.treeSpots.empty()) {
-                    uint32_t th = static_cast<uint32_t>(
+                    ProcRng thRng(static_cast<uint32_t>(
                         std::llround(lb.site.x * 73.1 + lb.site.y * 37.7)) *
-                        2654435761u;
+                        2654435761u);
                     for (const Vec3& s : lb.treeSpots) {
-                        th = th * 1664525u + 1013904223u;
+                        const uint32_t th = thRng.bits();
                         plantTreeAt(s.x, s.z, s.y, th >> 8);
                     }
                 }
