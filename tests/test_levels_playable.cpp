@@ -674,9 +674,11 @@ TEST_CASE(metro_spawn_building_has_a_walkable_door) {
 // foundation's reach — on every level that grows buildings on terrain.
 TEST_CASE(level_census_every_floorplan_conforms_to_the_drawn_ground) {
     int lotLevels = 0;
+    std::string lotNames;
     for (const LevelFacts& f : allLevels()) {
         if (f.censusLots == 0) continue;
         ++lotLevels;
+        lotNames += " " + f.name;
         if (f.censusBurials || f.censusGaps)
             std::printf(
                 "    [census] %s: lots=%d burials=%d gaps=%d worst=%.2f m at "
@@ -691,8 +693,10 @@ TEST_CASE(level_census_every_floorplan_conforms_to_the_drawn_ground) {
         CHECK(f.censusBurials <= residue);
         CHECK(f.censusGaps <= residue);
     }
-    std::printf("    [census] %d levels carry lot buildings\n", lotLevels);
-    CHECK(lotLevels >= 5);
+    std::printf("    [census] %d levels carry lot buildings:%s\n", lotLevels, lotNames.c_str());
+    // the census must run on real cities, not pass on none: 5 until ADR-0267 deleted the grown levels; the push
+    // run (heavy levels skipped) has metro_v2_test and river_town left of the tracked levels
+    CHECK(lotLevels >= 2);
 }
 
 // THE MARKER TEST (ground-probes round, device: "if we place these markers in
@@ -3392,6 +3396,15 @@ TEST_CASE(freeway_census_links_routes_and_traffic) {
             std::printf("    [freeway] %-18s reach: freeway links a street can get onto %d/%d, that can get back to a "
                         "street %d/%d | ramps reachable %d/%d, leading back %d/%d\n",
                         name, fwOn, fwLinks, fwOff, fwLinks, rampOn, ramps, rampOff, ramps);
+            {   // the ramps and freeway links a street cannot get onto, or that lead nowhere: where they are
+                int shown = 0;
+                for (const engine::NavLink& l : nav.links)
+                    if ((l.klass == engine::RoadClass::Ramp || l.klass == engine::RoadClass::Freeway) && (!fwd[l.from] || !bwd[l.to]) && shown++ < 8)
+                        std::printf("    [freeway] %-18s   %s %s link from (%.1f, %.1f) to (%.1f, %.1f), %d links into its start, %zu out of its end, %.1f m\n",
+                                    name, !fwd[l.from] ? "unreachable" : "dead-end", l.klass == engine::RoadClass::Ramp ? "ramp" : "freeway",
+                                    nav.nodes[l.from].x, nav.nodes[l.from].y, nav.nodes[l.to].x, nav.nodes[l.to].y,
+                                    static_cast<int>(inLinks[l.from].size()), nav.outLinks[l.to].size(), (nav.nodes[l.to] - nav.nodes[l.from]).length());
+            }
             // THE GATE: every freeway and ramp link can be reached from the streets and
             // leads back to them (the twin welds each ramp end to the road it merges into).
             CHECK(fwOn == fwLinks);

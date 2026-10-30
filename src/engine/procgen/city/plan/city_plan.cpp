@@ -2282,19 +2282,72 @@ CityPlan generatePlan(const Brief& B) {
         // THE OUTER LOOP: round the mountain side, from one expressway's outer end to the other's.
         std::vector<Real> spurStart(spurTheta.size(), 0);   // where each spur begins, if the loop sets it
         if (!loopSpec.is_null() && spurTheta.size() == 2) buildLoop(spurTheta, spurStart);
+        // ROOM FOR THE SYSTEM INTERCHANGE. A spur with no town and no loop runs in from the map edge, and
+        // the interchange's corner connectors leave and join it linkReach out from the ring. Where the ring
+        // stands nearer the edge than that, a gore fell past the end of the spur's stub: metro_v2_test's NW
+        // spur, 120 m long, left one link ramp no street could reach (ADR-0269). The gore must stand on the
+        // stub, 20 m to spare; the builder fits the decel and aux lanes behind it to what is left (river_town's
+        // spurs, 220-242 m out, build every ramp reachable). INSIDE the ring it must run on past the loops'
+        // gores, since plan_scene's spurFreeway stops it 80 m short of midtown's boulevard: moved into the west
+        // of metro_v2_test, where midtown's rim stands 90 m from the ring, the spur ended at the crossing and its
+        // carriageways led nowhere. The loops' gore and the 80 m, 20 m to spare (river_town's spurs: 175 m). Such a spur takes the
+        // nearest gap between the spokes with the room; with none the city has no radial expressway
+        // (RT_PLAN_WHY says so).
+        const roads::lanes::SystemOptions spurSo = systemOptions();
+        const FreewaySection spurF = freewaySection(B);
+        const Real kSpurRoom = static_cast<Real>(spurSo.linkReach + 20.0);
+        const Real kSpurInside = static_cast<Real>(spurF.edgeReach + spurSo.rampHalf + spurSo.bandGap + spurSo.loopR - spurSo.diverge + 80.0 + 20.0);
+        const Real edgeStart = B.world.is_null() ? B.size * Real(0.5) + 30 : B.world.value("grid", B.size * 0.5 + 60) - 120;
+        std::vector<Real> taken;
         for (std::size_t i = 0; i < spurTheta.size(); ++i) {
-            const Real th0 = spurTheta[i];
+            Real th0 = spurTheta[i];
             // A RADIAL EXPRESSWAY: in from the loop, a town or the map edge — the region's road
             // into the city — across the ring at a system interchange, to midtown's boulevard.
             Polyline spur; spur.klass = RoadClass::Freeway; spur.width = B.freewayWidth;
-            const Real rEnd = midR(th0);
-            const Vec2 dir(std::cos(th0), std::sin(th0));
             std::vector<Vec2> head;   // gate -> where it leaves the city, when it bends to a town
             CityPlan::Town town;
-            if (spurStart[i] <= 0) town = siteTown(dir, head);
+            if (spurStart[i] <= 0) {
+                std::vector<Real> cands{th0};   // the spur's own gap first, then the others nearest it
+                std::vector<Real> gaps;
+                for (std::size_t s = 0; s < spokeTheta.size(); ++s) {
+                    const Real a0 = spokeTheta[s], b0 = spokeTheta[(s + 1) % spokeTheta.size()] + (s + 1 == spokeTheta.size() ? 2 * kPi : 0);
+                    gaps.push_back(0.5 * (a0 + b0));
+                }
+                std::sort(gaps.begin(), gaps.end(), [&](Real u, Real v) { return std::fabs(std::remainder(u - th0, 2 * kPi)) < std::fabs(std::remainder(v - th0, 2 * kPi)); });
+                cands.insert(cands.end(), gaps.begin(), gaps.end());
+                bool placed = false;
+                for (Real c : cands) {
+                    bool used = false;
+                    for (Real u : taken) used = used || std::fabs(std::remainder(u - c, 2 * kPi)) < 1e-6;
+                    if (used) continue;
+                    std::vector<Vec2> h;
+                    CityPlan::Town tw = siteTown(Vec2(std::cos(c), std::sin(c)), h);
+                    if (!tw.built && edgeStart - freewayR(c) < kSpurRoom) {
+                        if (std::getenv("RT_PLAN_WHY"))
+                            std::printf("[plan] expressway %zu at %.0f deg: %.1f m between the ring and the map edge, the interchange needs %.1f\n",
+                                        i, c * 180 / kPi, edgeStart - freewayR(c), kSpurRoom);
+                        continue;
+                    }
+                    if (freewayR(c) - midR(c) < kSpurInside) {
+                        if (std::getenv("RT_PLAN_WHY"))
+                            std::printf("[plan] expressway %zu at %.0f deg: %.1f m between midtown's rim and the ring, the spur needs %.1f\n",
+                                        i, c * 180 / kPi, freewayR(c) - midR(c), kSpurInside);
+                        continue;
+                    }
+                    th0 = c; town = tw; head = h; placed = true;
+                    break;
+                }
+                if (!placed) {
+                    if (std::getenv("RT_PLAN_WHY")) std::printf("[plan] expressway %zu: no gap between the spokes has room, none built\n", i);
+                    continue;
+                }
+            }
+            taken.push_back(th0);
+            const Real rEnd = midR(th0);
+            const Vec2 dir(std::cos(th0), std::sin(th0));
             const Real rStart = spurStart[i] > 0 ? spurStart[i]
                                 : town.built ? outerR + 60
-                                : B.world.is_null() ? B.size * Real(0.5) + 30 : B.world.value("grid", B.size * 0.5 + 60) - 120;
+                                : edgeStart;
             if (town.built) layTown(town);
             plan.towns.push_back(town);
             spur.pts = head;

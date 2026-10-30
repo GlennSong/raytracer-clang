@@ -13254,3 +13254,46 @@ blocks with clearance 0 -- whether it moves anything there is to be measured bef
   freeway right-of-way graph that only the retired lattice front end read, nor `twinRightOfWayPad`, which fed
   only it. Lanes tag `2026-10-29.2`; every lanes level's city re-bakes, and its lots with it (the lots key folds
   in the city's).
+
+## ADR-0269 — A radial expressway needs room for its interchange; an at-grade ramp end on its street is welded
+
+**Status.** Accepted, 2026-10-30. The level suite on the roads work (ADR-0266/0267) left 9 cases red; this fixes
+the freeway and door ones and re-authors metro_v2_test for its planned city.
+
+**Context.** On the re-planned metro_v2_test, 16 ramp links (one ramp) could not be reached from a street, and one
+street link could not be either -- the diamond interchange's "inaccessible roads" Glenn saw. Two causes:
+- THE SPUR'S STUB. A radial expressway with no town runs in from the map edge. metro_v2_test's ring stands 120 m
+  from the edge at the spur's angle, and a system interchange's corner connector has its gore 190 m out
+  (`linkReach`): the gore was anchored at the end of the stub, and the ramp never met it. Moved to the next gap,
+  the spur met the other half of the problem: on the west side midtown's rim stands 90 m inside the ring, the spur
+  stops 80 m short of it (`spurFreeway`), and the loops' gores fell off its inner end.
+- THE TWIN'S AT-GRADE RAMP END. A diamond on-ramp leaves its street part-way along a segment. The twin welds ramp
+  ends only where a deck is involved, leaving street pairs to the planariser, which splits lines where they CROSS
+  -- and a ramp starting on its host's line crosses nothing. The ramp's first 12 m was a one-way stub.
+
+**Decision.**
+1. ROOM FOR THE SYSTEM INTERCHANGE (city_plan). A spur with no town and no loop must have `linkReach` + 20 m
+   between the ring and its start, and the loops' gore + 80 m + 20 m between midtown's rim and the ring. It takes
+   the nearest gap between the spokes that has both; with none, the city has no radial expressway. RT_PLAN_WHY
+   prints every rejected gap. Measured: river_town's spurs (220-242 m out, 175 m in) keep their angles, and
+   piedmont, metro_planned and metro_mountain plan byte-identically; metro_v2_test's brief (ring 783 m in a
+   1900 m map) has no gap with room, so it keeps the C ring alone (Glenn: keep it).
+2. THE TWIN WELDS AN AT-GRADE RAMP END THAT LIES ON ITS HOST'S LINE (within 0.5 m), splitting the host there; one
+   the planariser already joined snaps to that vertex. Every lanes level loses its 1-2 orphan stubs
+   (metro_v2_test 7 -> 6 degree-1 nodes, piedmont 21 -> 19, metro_planned 15 -> 14, metro_mountain 17 -> 16);
+   river_town's twin is unchanged.
+3. metro_v2_test RE-AUTHORED for its planned city: the spawn 1.5 m outside its door (1.51 m), and its transit at 5
+   routes of 16 stops (81% of walkable street within 120 m of a stop, 38% of streets with a bus; was 4 of 14,
+   sized for the grown city).
+Tests: `no_ramp_is_anchored_at_the_end_of_its_road` (six seeds each of a round and a coast city; without
+decision 1, 11 of the 12 fail); the coast city's C measured by length (both carriageways, the whole arc, on every
+seed); the census floor 5 -> 2 (the push run's tracked lot levels after ADR-0267: metro_v2_test, river_town); the
+freeway census prints any ramp or freeway link no street reaches, or that leads nowhere.
+
+**Not done here.**
+- The lanes tag is NOT bumped (Glenn: hold it for item 35 step 2's lots bump). Until then the cached city bundles
+  of every lanes level are stale against decision 2: measure with `rt_bake --force`.
+- `metro_traffic_drives_on_the_road_deck` stays red: on a diamond on-ramp (d0_0_b_on, about 100 m up from s395)
+  the published deck stands 0.29 m over the drawn ramp, and a car rides 0.28 m up. ADR-0223's owed "ramps are
+  drawn off their published profile" question.
+- `metro_planned_regional_bus_joins_the_towns` (heavy): 20 of 40 buses moved in five minutes; not yet looked at.

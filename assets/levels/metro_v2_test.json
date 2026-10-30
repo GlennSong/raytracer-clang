@@ -3,8 +3,8 @@
     "buildChance": 0.9,
     "buildLots": true,
     "busMaxWalk": 220.0,
-    "busRoutes": 4,
-    "busStops": 14,
+    "busRoutes": 5,
+    "busStops": 16,
     "buses": 24,
     "cars": -1,
     "carsPerLaneKm": 35.0,
@@ -140,9 +140,9 @@
     },
     "friction": 0.5,
     "position": [
-      -134.66,
+      -140.06,
       4.2,
-      -287.12
+      -278.3
     ]
   },
   "terrain": {

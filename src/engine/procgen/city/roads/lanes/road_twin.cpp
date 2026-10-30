@@ -297,10 +297,15 @@ RoadEntity roadTwin(const Result& r, double nodeSpacing, bool forLots, bool forN
                 if (hostId.empty()) continue;
                 auto it = linesOf.find(hostId); if (it == linesOf.end()) { ++rampWeldsMissed; continue; }
                 // A street-to-street meeting (an at-grade ramp run on a street host) is the
-                // planariser's job and already done; only a DECK on either side was never joined.
+                // planariser's job, which splits lines where they CROSS -- but an at-grade ramp end that
+                // starts ON its host's line, part-way along a segment, crosses nothing: metro_v2_test's
+                // diamond on-ramp left s404 12 m east of the junction the planariser made, and those 12 m
+                // were a one-way stub no car could enter (ADR-0269). So a street pair is welded too when the
+                // end lies on the host's line; one the planariser already joined snaps to that same vertex.
                 bool hostDeck = false;
                 for (size_t hl : it->second) hostDeck = hostDeck || lines[hl].deck;
-                if (!L.deck && !hostDeck) continue;
+                const bool atGrade = !L.deck && !hostDeck;
+                constexpr double kOnHostLine = 0.5;
                 const Vec2 ep = end == 0 ? L.pts.front() : L.pts.back();
                 double best = 1e30, bestU = 0; size_t bestLine = 0, bestSeg = 0;
                 for (size_t hl : it->second) {
@@ -311,6 +316,7 @@ RoadEntity roadTwin(const Result& r, double nodeSpacing, bool forLots, bool forN
                         if (d < best) { best = d; bestU = u; bestLine = hl; bestSeg = si; }
                     }
                 }
+                if (atGrade && best > kOnHostLine) continue;   // met by the planariser, or not on the host at all
                 if (best > kWeldReach) { ++rampWeldsMissed; continue; }
                 const Line& H = lines[bestLine];
                 const Vec2 a = H.pts[bestSeg], b = H.pts[bestSeg + 1];
