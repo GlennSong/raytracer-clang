@@ -13333,3 +13333,59 @@ Tests: `a_pagoda_grows_its_tiers_on_the_plan_path_on_every_seed` (12 seeds x 3 l
 floor never wider than the one below, roofs and finial above the floors; 32 grown, 4 lots too small left open);
 the box-grammar cases in test_city and test_winding grow on the plan path; test_architect / test_lot_cache follow
 the renames.
+
+## ADR-0271 — One mall: the box, the wings and the complex are one generator
+
+**Status.** Accepted, 2026-10-30. #117 item 35, step 2b (changes the bake; the lots tag bump is at the end of step 2).
+
+**Context.** Three malls: the indoor box mall (bigBox 5: `mallLayout`, its own fronts, its own sign path and the
+loader's third sign loop, a rectangle with a lot in front), the American mall (bigBox 6: `mallWingsOf` /
+`mallLevel`, its plan drawn point by point inside the lot pass) and the mall complex (`mallCells`, which reused
+`mallLevel` for its spine but drew the spine's outline itself). Each had its own selection: a big-box block took the
+box or the wings one mall in 1.5 km, while the complex was a 6% landmark roll that knew nothing of that spacing (a
+complex could stand next to a box mall). The lot pass and Lua's `building.cells{mall = true}` built the complex's
+anchors, garage and pavilion with two copies of the same setup.
+
+**Decision.**
+1. THE BOX MALL IS THE MALL ON ONE LEVEL. `architectMall` is bigBox 6 with `floors = 0` and its tall skylit storey.
+   `mallWingsOf` marks it `oneLevel`; `mallLevel` gives it no upper level, no escalators, no lift and no atria, its
+   -u end the anchor and its +u end the food court (`MallWings::anchor`), its shops from a 16 m entrance hall (the
+   court of a mall on two levels is 40 m: the atrium the escalators climb through). The lot pass shapes it as the
+   wings mall's I. bigBox 5 is retired: `dressBigBox` maps a 5 to 6.
+2. ONE OUTLINE. `mallOutline(court, u, v, arm[4])` is the wings' union; the lot pass shapes a box or wings mall
+   with it and `mallCells` its spine.
+3. ONE FALLBACK CHAIN in the lot pass: the wings mall where it fits, else the box mall, else a store of the chain
+   (it used to fall back to the old box mall).
+4. ONE SPACING RULE (`mallNear`, `kMallSpacing` 1.5 km over `mallAt`): a big-box block's mall, and a whole-block
+   landmark that rolls the complex (it rolls again, up to four times, then takes the street's own pick); a complex
+   that stands keeps the next mall away.
+5. ONE COMPLEX SETUP: `mallComplex(box, faceDir, mall, withGarage, anchorDepth, seed)`, called by the lot pass and
+   by Lua.
+6. DELETED: `mallLayout`, `mallFronts`, `mallSignOf`, the box mall's branches in `shopFrontsOf`, the interior room
+   plan and the store sign's lettering, the loader's box-mall sign loop, the furniture's style-20 concourse.
+Tests: `an_indoor_mall_is_a_concourse_of_shops` is the one-level mall (9 units, the anchor stocked, the food court's
+tables); `every_mall_variant_grows_on_every_seed` (8 seeds: the box on three lengths, the wings as an I and a T, the
+complex on two boxes: every unit indoors, the name boards, the interiors, every cell of a complex reachable from the
+street); the space-graph gate holds every recipe (456 of 456).
+
+**Not done.** The complex's front parking lot (owed since ADR-0180): new work, filed as #144.
+
+## ADR-0272 — Complexes' party walls follow real heights
+
+**Status.** Accepted, 2026-10-30. #117 item 35, step 2c.
+
+**Decision.** `Complex::resolve` sets each shared wall's top with ADR-0268's `partyTopAgainst`: blank as high as the
+neighbour's highest storey still standing on the line (`onPartyLine` from its side), a sill under its top, as the
+lot pass's attached buildings are. It used the neighbour's floor count. With equal storey heights the tops are the
+same; where they differ (an anchor beside the spine, a garage's decks, a tube on another base) they follow the real
+heights. Two neighbours on one plane stay one wall, blank to the taller's top (`addPartyWall`). Every writer of
+partyTop now runs the one rule; Lua's `readAttachedFields` stays authored input.
+
+**Addendum (the same day).** Running the complexes on the shared rule found an off-by-one in it, copied from the lot
+pass's ADR-0227 pass in step 1: it never looked at the top storey, and "one storey under the top" read as "reaches
+the top", so a building ONE storey taller than its neighbour kept its wall blank to the roof. ADR-0227 says the
+storeys above the neighbour take their windows; the complex's floor-count rule had it right
+(`a_courtyard_block_is_eight_cells_round_an_open_court`: a six-storey corner against five-storey wings, blank to
+storey 5). `partyTopAgainst` now considers every storey up to the top and returns "to the roof" only when the
+neighbour reaches the top storey itself; the lot pass's attached buildings one storey taller than a neighbour get
+their top windows too (the bake changes, under step 2's bump).

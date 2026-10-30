@@ -2,6 +2,7 @@
 #include "architect.h"
 #include "../../../proc_rng.h"
 #include "building_uses.h"
+#include "cells.h"   // mallComplex: mallCells
 
 #include <algorithm>
 #include <cmath>
@@ -2245,9 +2246,9 @@ BuildingParams architectRowUnit(uint32_t seed, int floors) {
 void dressBigBox(BuildingParams& p, int chain, uint32_t seed) {
     ProcRng rng(seed | 1u);
     p.bigBox = static_cast<uint8_t>(std::clamp(chain, 1, 6));
+    if (p.bigBox == 5) p.bigBox = 6;   // (5, the box mall, is the one-level mall: ADR-0271)
     switch (p.bigBox) {
-        case 5:   // the indoor mall: warm stone, a deep teal band
-        case 6:
+        case 6:   // a mall: warm stone, a deep teal band
             dress(p, FacadeStyle::Sandstone, rng);
             p.wallColor = Vec3(0.80, 0.72, 0.60);
             p.trimColor = Vec3(0.08, 0.36, 0.38);
@@ -2288,11 +2289,24 @@ BuildingRecipe architectBigBox(uint32_t seed) {
 BuildingRecipe architectMall(uint32_t seed) {
     BuildingRecipe out = architectBigBox(seed);
     ProcRng rng(seed * 40503u ^ 0x3a11u);
-    dressBigBox(out.params, 5, rng.bits());
+    dressBigBox(out.params, 6, rng.bits());
+    out.params.floors = 0;                          // ONE level (mallLevel's box mall): an I, an anchor, a food court
     out.params.groundHeight = rng.in(9.0, 10.5);   // one tall storey: a skylit concourse
     out.params.shopMix = 3;
     out.name = "indoor_mall";
     return out;
+}
+
+Complex mallComplex(const Poly2& box, const Vec2& faceDir, const BuildingParams& mall, bool withGarage, Real anchorDepth,
+                    uint32_t seed) {
+    // the anchors a big-box chain each, the garage a parking garage, a cafe pavilion on the court -- by `seed`
+    const BuildingParams ap = architectBigBox(seed ^ 0x51a3u).params;
+    BuildingRecipe gr;
+    BuildingParams gp = ap;
+    if (architectRecipeByName("parking_garage", seed ^ 0x2c7u, 0.3, 40.0, 1600.0, gr)) gp = gr.params;
+    BuildingRecipe pr;
+    const bool hasPav = architectRecipeByName("oldtown_cafe", seed ^ 0x9e1u, 0.3, 13.0, 130.0, pr);
+    return mallCells(box, faceDir, mall, ap, gp, withGarage, anchorDepth, hasPav ? &pr.params : nullptr);
 }
 
 BuildingRecipe architectMallWings(uint32_t seed) {

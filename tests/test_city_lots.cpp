@@ -132,23 +132,31 @@ TEST_CASE(a_party_wall_is_blank_only_as_high_as_its_neighbour) {
                 const std::vector<StoreyPlan> st = storeyPlans(u.plan, u.params);
                 const Vec2 N = u.params.partyN[k];
                 const Real at = u.params.partyAt[k];
-                const BuildingMesh bm = growPlanBuilding(u.plan, u.params, u.baseY);
-                int below = 0, above = 0;
-                for (const RenderMesh& part : bm.parts) {
-                    if (part.materialIndex != static_cast<int>(PartId::Glass) &&
-                        part.materialIndex != static_cast<int>(PartId::GlassLit) &&
-                        part.materialIndex != static_cast<int>(PartId::GlassClear)) continue;
-                    for (const Vertex& v : part.vertices) {
-                        const Vec2 q(v.position.x, v.position.z);
-                        if (std::fabs(dot(q, N) - at) > 0.6 || v.normal.x * N.x + v.normal.z * N.y < 0.9) continue;
-                        for (std::size_t s = 0; s < st.size(); ++s)
-                            if (v.position.y > u.baseY + st[s].y0 + 0.05 && v.position.y < u.baseY + st[s].y0 + st[s].h - 0.05)
-                                ++(static_cast<int>(s) <= u.params.partyTop[k] ? below : above);
+                // glass on the wall's plane, at or under its top and above it -- as grown, and with no party walls
+                // at all (a face the grammar draws blank anyway, a narrow side, has none above to keep: ADR-0272)
+                auto glassOnPlane = [&](const BuildingParams& q, int& below, int& above) {
+                    below = above = 0;
+                    for (const RenderMesh& part : growPlanBuilding(u.plan, q, u.baseY).parts) {
+                        if (part.materialIndex != static_cast<int>(PartId::Glass) &&
+                            part.materialIndex != static_cast<int>(PartId::GlassLit) &&
+                            part.materialIndex != static_cast<int>(PartId::GlassClear)) continue;
+                        for (const Vertex& v : part.vertices) {
+                            const Vec2 q2(v.position.x, v.position.z);
+                            if (std::fabs(dot(q2, N) - at) > 0.6 || v.normal.x * N.x + v.normal.z * N.y < 0.9) continue;
+                            for (std::size_t s = 0; s < st.size(); ++s)
+                                if (v.position.y > u.baseY + st[s].y0 + 0.05 && v.position.y < u.baseY + st[s].y0 + st[s].h - 0.05)
+                                    ++(static_cast<int>(s) <= u.params.partyTop[k] ? below : above);
+                        }
                     }
-                }
+                };
+                int below = 0, above = 0, freeBelow = 0, freeAbove = 0;
+                glassOnPlane(u.params, below, above);
+                BuildingParams free = u.params;
+                free.partyWalls = 0;
+                glassOnPlane(free, freeBelow, freeAbove);
                 if (below > 0) std::printf("    [party top] %d glass vertices at or under storey %d\n", below, u.params.partyTop[k]);
                 CHECK(below == 0);
-                CHECK(above > 0);
+                CHECK(above > 0 || freeAbove == 0);   // the storeys above keep the windows the face has
                 ++checked;
             }
         CHECK(units == dbg.partyTopped);

@@ -11,6 +11,7 @@
 #include "../src/engine/procgen/city/space_graph.h"
 #include "../src/engine/procgen/city/floor_zones.h"
 #include "../src/engine/procgen/city/architect.h"
+#include "../src/engine/procgen/city/cells.h"
 #include "../src/engine/procgen/city/trades.h"
 #include <algorithm>
 #include <map>
@@ -822,13 +823,66 @@ TEST_CASE(shop_units_take_their_trades_width_and_their_streets_mix) {
     CHECK(outOfRange == 0);
 }
 
-// THE INDOOR MALL (~/.claude/plans/nightlife-and-malls.md stage 2): its units front the concourse (indoors, with
-// signs' fascias), each furnished as its trade; the anchor is stocked and the food court has its tables.
+// THE BOX MALL (~/.claude/plans/nightlife-and-malls.md stage 2; the one-level mall since ADR-0271): its units front
+// the concourse (indoors, with signs' fascias), each furnished as its trade; the anchor is stocked and the food court
+// has its tables. An I down the long axis, as the lot pass shapes it (mallOutline: the court in the middle, a wing
+// each way along the front).
+// ONE MALL, THREE VARIANTS (ADR-0271), on every seed and a range of block sizes: the box (one level, an I), the wings
+// (two levels round a court) and the complex (the wings as the spine of separate anchors and a garage). Every unit
+// fronts its concourse indoors and is fitted out, the mall carries its name boards, and every cell of a complex is
+// reachable from the street.
+TEST_CASE(every_mall_variant_grows_on_every_seed) {
+    int boxes = 0, wings = 0, complexes = 0;
+    for (uint32_t seed = 1; seed <= 8; ++seed) {
+        for (Real arm : {Real(56), Real(70), Real(90)}) {   // the box mall's wings, court to end
+            BuildingParams p = architectMall(seed).params;
+            p.faceDir = Vec3(0, 0, -1);
+            p.mallArms = 0x3;
+            p.mallCourt = Vec2(0, 0);
+            const Real arms[4] = {arm, arm, 0, 0};
+            const Poly2 plan = mallOutline(p.mallCourt, Vec2(1, 0), Vec2(0, 1), arms);
+            const std::vector<ShopFront> fronts = shopFrontsOf(plan, p);
+            CHECK(fronts.size() >= 4);
+            for (const ShopFront& f : fronts) CHECK(f.indoor);
+            std::vector<MallSign> boards;
+            CHECK(mallSignsOf(plan, p, boards));
+            CHECK(!growInterior(plan, p, 0.0, nullptr, 0, 1).furniture.empty());
+            ++boxes;
+        }
+        for (Real back : {Real(0), Real(60)}) {   // the wings mall: an I, or a T with a wing back
+            BuildingParams p = architectMallWings(seed).params;
+            p.faceDir = Vec3(0, 0, -1);
+            p.mallArms = static_cast<uint8_t>(0x3 | (back > 0 ? 0x4 : 0));
+            p.mallCourt = Vec2(0, 0);
+            const Real arms[4] = {100, 100, back, 0};
+            const Poly2 plan = mallOutline(p.mallCourt, Vec2(1, 0), Vec2(0, 1), arms);
+            const std::vector<ShopFront> fronts = shopFrontsOf(plan, p);
+            int upper = 0;
+            for (const ShopFront& f : fronts) { CHECK(f.indoor); upper += f.fasciaY0 > 5.0; }
+            CHECK(fronts.size() >= 20);
+            CHECK(upper > 0);   // two levels of shops
+            ++wings;
+        }
+        for (Real len : {Real(150), Real(200)}) {   // the complex on boxes of two lengths
+            const Poly2 box = {{0, 0}, {len, 0}, {len, 100}, {0, 100}};
+            const Complex cx = mallComplex(box, Vec2(0, -1), architectMallWings(seed).params, true, 30.0, seed);
+            CHECK(cx.cells.size() >= 3);   // the spine and two anchors at least
+            for (const CellFrame& c : cx.cells) CHECK(c.connected);
+            ++complexes;
+        }
+    }
+    std::printf("    [malls] %d box, %d wings, %d complexes grown\n", boxes, wings, complexes);
+}
+
 TEST_CASE(an_indoor_mall_is_a_concourse_of_shops) {
     BuildingRecipe rec = architectMall(1234u);
     BuildingParams p = rec.params;
+    CHECK(p.bigBox == 6 && p.floors == 0);   // the one-level mall
     p.faceDir = Vec3(0, 0, -1);
-    const Poly2 plan = {{0, 0}, {120, 0}, {120, 48}, {0, 48}};   // the front (z = 0) faces -z
+    p.mallArms = 0x3;
+    p.mallCourt = Vec2(60, 24);
+    const Real arm[4] = {60, 60, 0, 0};
+    const Poly2 plan = mallOutline(p.mallCourt, Vec2(1, 0), Vec2(0, 1), arm);   // 120 x 40, the front (z = 4) faces -z
     const std::vector<ShopFront> fronts = shopFrontsOf(plan, p);
     const BuildingMesh in = growInterior(plan, p, 3.0, nullptr, 0, 1);
     int furnished = 0, stocked = 0, tables = 0;

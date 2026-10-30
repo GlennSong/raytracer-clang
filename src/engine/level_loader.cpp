@@ -6470,7 +6470,7 @@ bool LevelLoader::load(const std::string& path,
                             }
                         }
                     }
-                    for (const engine::BuildingUnit& u : lb.units) {   // the American mall's: a board over every entrance and anchor
+                    for (const engine::BuildingUnit& u : lb.units) {   // a mall's: a board over every entrance and anchor
                         std::vector<engine::MallSign> boards;
                         if (u.plan.size() < 3 || !engine::mallSignsOf(u.plan, u.params, boards)) continue;
                         const uint32_t ms = static_cast<uint32_t>(std::lround(u.params.mallCourt.x)) * 73856093u ^
@@ -6488,22 +6488,6 @@ bool LevelLoader::load(const std::string& path,
                             sign.centre = Vec3(b.centre.x, u.baseY + 0.5 * (b.y0 + b.y1), b.centre.y);
                             shopSigns.push_back(std::move(sign));
                         }
-                    }
-                    for (const engine::BuildingUnit& u : lb.units) {   // an indoor mall's name over its doors
-                        Vec2 mc, mn;
-                        Real my0 = 0, my1 = 0, mw = 0;
-                        if (u.plan.size() < 3 || !engine::mallSignOf(u.plan, u.params, mc, mn, my0, my1, mw)) continue;
-                        engine::ShopSign sign;
-                        sign.text = engine::mallName(static_cast<uint32_t>(std::lround(mc.x)) * 73856093u ^
-                                                     static_cast<uint32_t>(std::lround(mc.y)) * 19349663u);
-                        sign.trade = 2;   // (its board colour: the boutique's)
-                        sign.n = Vec3(mn.x, 0, mn.y);
-                        sign.up = Vec3(0, 1, 0);
-                        sign.right = cross(sign.n * -1.0, sign.up);
-                        sign.width = mw - 0.4;
-                        sign.height = (my1 - my0) - 0.2;
-                        sign.centre = Vec3(mc.x + mn.x * 0.03, u.baseY + 0.5 * (my0 + my1), mc.y + mn.y * 0.03);
-                        shopSigns.push_back(std::move(sign));
                     }
                     for (const engine::BuildingUnit& u : lb.units) {
                         if (u.plan.size() < 3) continue;

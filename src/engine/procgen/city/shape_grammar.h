@@ -755,9 +755,9 @@ struct BuildingParams {
     bool  backDoor = false;
     bool  fireEscape = false;
     // A BIG-BOX STORE (architectBigBox): 0 none, else the chain -- 1 warehouse club, 2 electronics, 3 home
-    // improvement, 4 discount store -- or 5, an INDOOR MALL (architectMall: a concourse of shop units, an anchor store,
-    // a food court; mallLayout). The front edge wears the chain's sign and canopy, the rear its loading docks,
-    // a band in the chain's colour (trimColor) rings the top; inside, one store floor (bigBoxRoomPlan).
+    // improvement, 4 discount store -- or 6, a MALL (below; 5, the old box mall, is the one-level mall since
+    // ADR-0271). A store's front edge wears the chain's sign and canopy, the rear its loading docks, a band in the
+    // chain's colour (trimColor) rings the top; inside, one store floor (bigBoxRoomPlan).
     uint8_t bigBox = 0;
     // A UNIVERSITY building (the campus): 0 none, 1 a teaching hall (lecture halls, classrooms, labs), 2 the library
     // (a reading room, the stacks), 3 a residence hall (dorm rooms, a lounge, shared baths). A stair building
@@ -767,9 +767,11 @@ struct BuildingParams {
     // street's cafes, grocers, pharmacies), 1 high street, 2 nightlife (bars, clubs, restaurants), 3 a mall's. Set
     // by the lot pass from the district; the trades draw their weights from it.
     uint8_t shopMix = 1;
-    // THE AMERICAN MALL (bigBox 6; ~/.claude/plans/malls-v2-and-managed-ground.md): its WINGS off the centre court --
+    // THE MALL (bigBox 6; ~/.claude/plans/malls-v2-and-managed-ground.md; ADR-0271): its WINGS off the centre court --
     // bits 0..3 = +u, -u, +v, -v of the plan's own frame (u its long axis, v toward the back) -- and the court's centre
-    // (world XZ). The plan is the wings' outline; mallLayout2 reads the rest from these.
+    // (world XZ). The plan is the wings' outline (mallOutline); mallLevel reads the rest from these. Its variants: the
+    // BOX mall (floors 0: one tall level, an I, an anchor and a food court at its ends), the WINGS mall (floors 1: two
+    // levels, escalators, atria) and the COMPLEX (mallCells: the wings as the spine of separate anchors and a garage).
     uint8_t mallArms = 0;
     // ...and which of those wings END OPEN (bits as mallArms; cells.h mallCells, ADR-0180): no anchor inside the wing,
     // the concourse and its shops run to the end wall, which is a party wall with a wide opening onto the anchor
@@ -791,7 +793,7 @@ struct ShopFront {
     // its FASCIA (the sign band over the glazing), metres above the storey's base, standing `fasciaProud` proud of
     // the wall; fasciaY1 <= fasciaY0 when the storey is too low to carry one
     Real fasciaY0 = 0, fasciaY1 = 0, fasciaProud = 0.16;
-    // INDOORS: a unit of an indoor mall (bigBox 5), its front on the concourse -- no terrace, and the sim's way in is
+    // INDOORS: a mall's unit (bigBox 6), its front on the concourse -- no terrace, and the sim's way in is
     // the mall's own street door (`entry`), not this one
     bool indoor = false;
     Vec2 entry;
@@ -801,12 +803,13 @@ std::vector<ShopFront> shopFrontsOf(const Poly2& plan, const BuildingParams& par
 // none): each room's floor rectangle and its trade.
 struct ShopRoomRect { Poly2 rect; uint8_t trade = 0; };
 std::vector<ShopRoomRect> shopRoomsOf(const Poly2& plan, const BuildingParams& params, Real baseY);
-// An indoor mall's name board over its doors (emitBigBoxDress): its face's centre (XZ), outward normal, its band
-// (y0..y1 above the base) and width. False for anything else.
-bool mallSignOf(const Poly2& plan, const BuildingParams& params, Vec2& centre, Vec2& n, Real& y0, Real& y1, Real& width);
-// The American mall's name boards (bigBox 6): one over every entrance (the mall's name) and every anchor (the store's).
+// A mall's name boards (bigBox 6): one over every entrance (the mall's name) and every anchor (the store's).
 struct MallSign { Vec2 centre, n; Real y0 = 0, y1 = 0, width = 0; bool anchor = false, vertical = false, sky = false; };
 bool mallSignsOf(const Poly2& plan, const BuildingParams& params, std::vector<MallSign>& out);
+// A MALL'S OUTLINE (ADR-0271): its wings' union about the court `c`, u along the long axis and v away from the street,
+// `arm` the wings' lengths from the court's centre (+u, -u, +v, -v; 0 none), each wing 40 m wide. The lot pass shapes
+// a mall's plan with it, and mallCells its spine.
+Poly2 mallOutline(const Vec2& c, const Vec2& u, const Vec2& v, const Real arm[4]);
 // A Japanese tower's (storeFloors / dineFloors): the store's name down a vertical board, the restaurant floors' across
 // the top. False when it has neither.
 bool towerSignsOf(const Poly2& plan, const BuildingParams& params, std::vector<MallSign>& out);
@@ -838,9 +841,10 @@ bool onPartyLine(const Poly2& plan, std::size_t e, const Vec2& n, Real at);
 bool addPartyWall(BuildingParams& params, const Vec2& n, Real at, int top, Real tol);
 // How high a wall stays blank against a neighbour whose top stands at world Y `against`: the last storey (from 1)
 // whose floor is still a sill under it; the storeys above keep their windows. 0 (blank to the roof) when the
-// neighbour reaches the top storey.
+// neighbour reaches the top storey (`floors`: the ground is storey 0), or when no storey above it stands on the wall's
+// line (n, at) to take a window.
 constexpr Real kPartySill = 1.0;
-int partyTopAgainst(const std::vector<StoreyPlan>& storeys, int floors, Real baseY, Real against);
+int partyTopAgainst(const std::vector<StoreyPlan>& storeys, int floors, Real baseY, Real against, const Vec2& n, Real at);
 // Edge `e` is a party wall with a doorway through it (partyDoors): the facade cuts the door, blank otherwise.
 bool partyDoorEdge(const Poly2& plan, const BuildingParams& params, std::size_t e);
 // A LINK DOOR (params.links; cells.h, ADR-0179): the doorway on a storey's face through to a neighbouring cell, and

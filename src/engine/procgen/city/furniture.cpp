@@ -861,11 +861,10 @@ void emitFurniture(std::vector<PlacedPiece>& out, RenderMesh* colliderOut, const
                         highTables();
                         break;
                     }
-                    case 22:    // THE AMERICAN MALL'S UPPER CONCOURSE: its middle is the atrium -- nothing on it
+                    case 22:    // A MALL'S UPPER CONCOURSE: its middle is the atrium -- nothing on it
                     case 23:    // ...and its COURT's floor: the escalators and the lift stand there
                         break;
-                    case 21:    // ...its LOWER concourse and court: as the box mall's (lit through the atrium, unlit itself)
-                    case 20: {  // AN INDOOR MALL'S CONCOURSE (mallLayout; its rect runs along side 0): down its
+                    case 21: {  // ...its LOWER concourse (its rect runs along side 0; a one-level mall's only one): down its
                                 // middle, planters and pairs of benches by turns, the benches back to back facing the shops
                         const Real mid = F.f.D * 0.5;
                         int k = 0;

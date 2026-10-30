@@ -61,6 +61,29 @@ void Complex::resolve(Real tol, Real minRun) {
         c.outerFace = false;
         ensureCCW(c.plan);
     }
+    // THE PARTY-WALL RULE (ADR-0268's partyTopAgainst; ADR-0272): a wall is blank as high as the neighbour against
+    // it stands ON THE LINE -- its highest storey still touching it -- a sill under its top, as the lot pass's
+    // attached buildings are; the storeys above keep their windows
+    std::vector<std::vector<StoreyPlan>> storeys(cells.size());
+    auto storeysOf = [&](std::size_t i) -> const std::vector<StoreyPlan>& {
+        if (storeys[i].empty()) storeys[i] = storeyPlans(cells[i].plan, cells[i].params);
+        return storeys[i];
+    };
+    auto topOnLine = [&](std::size_t j, const Vec2& n, Real at) {   // world Y of j's highest storey on the line (n, at)
+        Real top = -1e30;
+        for (const StoreyPlan& sp : storeysOf(j)) {
+            Poly2 cp = sp.plan;
+            ensureCCW(cp);
+            for (std::size_t e = 0; e < cp.size(); ++e)
+                if (onPartyLine(cp, e, n, at)) { top = std::max(top, cells[j].baseY + sp.y0 + sp.h); break; }
+        }
+        return top;
+    };
+    auto blankTo = [&](std::size_t i, std::size_t j, const Vec2& n, Real at) {   // i's wall on (n, at) against j
+        const Real against = topOnLine(j, n * -1.0, -at);
+        if (against < -1e29) return 0;   // (j's storeys all stand off the line: blank to the roof, as before)
+        return partyTopAgainst(storeysOf(i), cells[i].params.floors, cells[i].baseY, against, n, at);
+    };
     // per cell, per edge: how much of it a neighbour covers (for the outer faces)
     std::vector<std::vector<Real>> covered(cells.size());
     for (std::size_t i = 0; i < cells.size(); ++i) covered[i].assign(cells[i].plan.size(), 0.0);
@@ -97,10 +120,8 @@ void Complex::resolve(Real tol, Real minRun) {
                     covered[i][ea] += t1 - t0;
                     // b's edge: the same run measured along db
                     covered[j][eb] += t1 - t0;
-                    const int fi = cells[i].params.floors, fj = cells[j].params.floors;
-                    // blank to the lower cell's floor count (the lot pass measures the neighbour's height: step 2c)
-                    addPartyWall(cells[i].params, na, ad.at, fj < fi ? fj : 0, tol);
-                    addPartyWall(cells[j].params, na * -1.0, -ad.at, fi < fj ? fi : 0, tol);
+                    addPartyWall(cells[i].params, na, ad.at, blankTo(i, j, na, ad.at), tol);
+                    addPartyWall(cells[j].params, na * -1.0, -ad.at, blankTo(j, i, na * -1.0, -ad.at), tol);
                 }
             }
         }
@@ -486,15 +507,10 @@ Complex mallCells(const Poly2& boxIn, const Vec2& faceDirIn, const BuildingParam
     af = std::min(af, Real(40));
     ab = std::min(ab, Real(44));
     const Real cv = af + a;                        // the court's centre, back from the street
-    // THE SPINE: the long bar between the anchors, the entrance wing to the street, the back wing to the garage
-    Poly2 spine;
-    spine.push_back(P(anchorDepth, cv - a));
-    if (af > 0) { spine.push_back(P(L * 0.5 - a, cv - a)); spine.push_back(P(L * 0.5 - a, 0)); spine.push_back(P(L * 0.5 + a, 0)); spine.push_back(P(L * 0.5 + a, cv - a)); }
-    spine.push_back(P(L - anchorDepth, cv - a));
-    spine.push_back(P(L - anchorDepth, cv + a));
-    if (ab > 0) { spine.push_back(P(L * 0.5 + a, cv + a)); spine.push_back(P(L * 0.5 + a, cv + a + ab)); spine.push_back(P(L * 0.5 - a, cv + a + ab)); spine.push_back(P(L * 0.5 - a, cv + a)); }
-    spine.push_back(P(anchorDepth, cv + a));
-    ensureCCW(spine);
+    // THE SPINE: the long bar between the anchors, the entrance wing to the street, the back wing to the garage -- a
+    // mall's outline (mallOutline, as the lot pass shapes a mall)
+    const Real arm[4] = {L * 0.5 - anchorDepth, L * 0.5 - anchorDepth, ab > 0 ? a + ab : Real(0), af > 0 ? cv : Real(0)};
+    const Poly2 spine = mallOutline(P(L * 0.5, cv), u, v, arm);
     BuildingParams mp = mall;
     mp.bigBox = 6;
     mp.mallArms = static_cast<uint8_t>(0x3 | (ab > 0 ? 0x4 : 0) | (af > 0 ? 0x8 : 0));

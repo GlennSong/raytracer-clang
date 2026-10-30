@@ -1619,17 +1619,11 @@ int l_building_cells(lua_State* L) {
     const bool mallK = flagField(L, 1, "mall");           // mall = true: the American mall as the spine, big-box anchors, a garage (ADR-0180)
     Complex cx;
     if (mallK) {
-        BuildingParams mp = architectMallWings(p.seed).params;
-        const BuildingParams ap = architectBigBox(p.seed ^ 0x51a3u).params;
-        BuildingRecipe gr;
-        BuildingParams gp = ap;
-        if (architectRecipeByName("parking_garage", p.seed ^ 0x2c7u, 0.3, 40.0, 1600.0, gr)) gp = gr.params;
         lua_getfield(L, 1, "garage");
         const bool withGarage = lua_isnil(L, -1) ? true : lua_toboolean(L, -1) != 0;
         lua_pop(L, 1);
-        BuildingRecipe pr;
-        const bool hasPav = architectRecipeByName("oldtown_cafe", p.seed ^ 0x9e1u, 0.3, 13.0, 130.0, pr);
-        cx = mallCells(box, Vec2(p.faceDir.x, p.faceDir.z), mp, ap, gp, withGarage, static_cast<Real>(optField(L, 1, "depth", 30.0)), hasPav ? &pr.params : nullptr);
+        cx = mallComplex(box, Vec2(p.faceDir.x, p.faceDir.z), architectMallWings(p.seed).params, withGarage,
+                         static_cast<Real>(optField(L, 1, "depth", 30.0)), p.seed);
     } else if (twins > 0) {
         cx = twinTowers(box, p, static_cast<Real>(twins), floors, static_cast<int>(optField(L, 1, "bridge", 0.0)), static_cast<Real>(optField(L, 1, "bridge_w", 4.5)));
     } else if (ringN >= 3) {

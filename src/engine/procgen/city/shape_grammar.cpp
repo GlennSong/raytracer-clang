@@ -1096,13 +1096,23 @@ bool addPartyWall(BuildingParams& params, const Vec2& n, Real at, int top, Real 
     return true;
 }
 
-int partyTopAgainst(const std::vector<StoreyPlan>& storeys, int floors, Real baseY, Real against) {
-    // the building's own storeys (the plans run on past them: a roof exit's bulkhead)
-    floors = std::min(static_cast<int>(storeys.size()), floors);
+int partyTopAgainst(const std::vector<StoreyPlan>& storeys, int floors, Real baseY, Real against, const Vec2& n, Real at) {
+    // the building's own storeys, the ground's 0 to the top one's `floors` (the plans run on past them: a roof
+    // exit's bulkhead). (ADR-0272: the lot pass's copy never looked at the top storey, so a building one storey
+    // taller than its neighbour kept a blank wall to the roof; the complex's rule gave it its windows.)
+    floors = std::min(static_cast<int>(storeys.size()) - 1, floors);
     int top = 1;
-    for (int s = 1; s < floors; ++s)
+    for (int s = 1; s <= floors; ++s)
         if (baseY + storeys[s].y0 + kPartySill < against) top = s;
-    return top + 1 >= floors ? 0 : top;
+    if (top >= floors) return 0;
+    // ...and a storey above it still stands on the line, or there is no wall up there to take a window (a setback)
+    for (int s = top + 1; s <= floors; ++s) {
+        Poly2 cp = storeys[s].plan;
+        ensureCCW(cp);
+        for (std::size_t e = 0; e < cp.size(); ++e)
+            if (onPartyLine(cp, e, n, at)) return top;
+    }
+    return 0;
 }
 
 bool partyEdge(const Poly2& plan, const BuildingParams& params, std::size_t e, int storey) {
@@ -4250,22 +4260,15 @@ std::vector<LobbyPiece> lobbyDressing(const Poly2& plan, std::size_t entranceEdg
 // front), behind them the sales floor in the chain's own stock (furniture.cpp: pallet racks, gondolas, televisions,
 // racks of clothes), and across the back the STOCKROOM behind a wall with two doors. Rooms carry the trade:
 // Shop styles 7-10 the chain's floor (7 + chain - 1), 11 the checkouts, 12 the stockroom.
-static std::vector<ShopFront> mallFronts(const Poly2& plan, const BuildingParams& params);   // (after mallLayout)
 static std::vector<ShopFront> mallLevelFronts(const Poly2& plan, const BuildingParams& params, int k);   // (after mallLevel)
 
 std::vector<ShopFront> shopFrontsOf(const Poly2& planIn, const BuildingParams& params) {
     std::vector<ShopFront> out;
-    if (params.bigBox == 6) {   // the American mall: both levels' units
+    if (params.bigBox == 6) {   // a mall: its units on every level
         std::vector<ShopFront> all = mallLevelFronts(planIn, params, 0);
         const std::vector<ShopFront> up = mallLevelFronts(planIn, params, 1);
         all.insert(all.end(), up.begin(), up.end());
         return all;
-    }
-    if (params.bigBox == 5) {   // an indoor mall: its units' fronts on the concourse
-        Poly2 pl = planIn;
-        if (pl.size() < 3) return out;
-        ensureCCW(pl);
-        return mallFronts(pl, params);
     }
     Poly2 plan = planIn;
     if (plan.size() < 3 || !params.groundRetail || !params.walkableGround) return out;
@@ -4297,100 +4300,6 @@ std::vector<ShopFront> shopFrontsOf(const Poly2& planIn, const BuildingParams& p
     return out;
 }
 
-// THE INDOOR MALL (bigBox 5; ~/.claude/plans/nightlife-and-malls.md stage 2): inside the store's box, a CONCOURSE
-// 8 m wide running its length, parallel to the front; a row of shop UNITS either side of it, each a trade of the mall
-// mix with a glass front and a door onto the concourse; at one end the ANCHOR (a department store, the full depth);
-// at the other the FOOD COURT; from the front doors a vestibule through the front row. One layout for the rooms
-// (mallRoomPlan), the shopfronts (shopFrontsOf: places, signs) and the tests.
-struct MallLayout {
-    RoomPlan rp;
-    std::vector<ShopFront> fronts;
-};
-static MallLayout mallLayout(const Poly2& planIn, const BuildingParams& params, std::size_t entranceEdge) {
-    MallLayout ml;
-    RoomPlan& rp = ml.rp;
-    rp.topology = PlateTopology::Ring;
-    rp.office = false;
-    rp.finish = interiorFinishFor(params);
-    Poly2 plan = planIn;
-    ensureCCW(plan);
-    if (params.bigBox != 5 || plan.size() != 4 || entranceEdge >= plan.size()) return ml;
-    const Real inset = interiorInset(params);
-    const Vec2 a = plan[entranceEdge], b = plan[(entranceEdge + 1) % 4];
-    const Real W = (b - a).length();
-    const Vec2 d = (b - a) * (1.0 / std::max(W, Real(1e-6))), nOut(d.y, -d.x);
-    Real D = 0;
-    for (const Vec2& v : plan) D = std::max(D, dot(a - v, nOut));
-    if (W < 60 || D < 30) return ml;
-    auto P = [&](Real x, Real v) { return a + d * x - nOut * v; };
-    const Real cw = 8.0, vc0 = D * 0.5 - cw * 0.5, vc1 = D * 0.5 + cw * 0.5;   // the concourse
-    const Real A = std::clamp(W * 0.22, Real(20), Real(34)), F = std::clamp(W * 0.18, Real(16), Real(26));
-    const Real xa = inset + A, xf = W - inset - F;                              // the anchor's and food court's walls
-    const Real xv0 = W * 0.5 - 4.0, xv1 = W * 0.5 + 4.0;                        // the vestibule
-    ProcRng h(positionHash(Vec3(a.x + 0.41, 0.0, a.y + 0.17)) ^ static_cast<uint32_t>(params.seed));
-    auto next = [&]() { return h.bits(); };
-    auto wall = [&](const Vec2& p0, const Vec2& p1, Real doorAt = -1, bool glass = false) {
-        RoomWall w; w.a = p0; w.b = p1; w.doorAt = doorAt; w.glass = glass;
-        rp.walls.push_back(w);
-    };
-    // the anchor and the food court: full depth, open to the concourse
-    {
-        Room an; an.kind = RoomKind::Shop; an.style = 10; an.edge = entranceEdge;   // the department store's floor (discount-store fit)
-        an.rect = {P(xa, inset), P(inset, inset), P(inset, D - inset), P(xa, D - inset)};
-        rp.rooms.push_back(an);
-        Room fc; fc.kind = RoomKind::Shop; fc.style = 0; fc.edge = entranceEdge;     // the food court: counters, tables
-        fc.rect = {P(W - inset, inset), P(xf, inset), P(xf, D - inset), P(W - inset, D - inset)};
-        rp.rooms.push_back(fc);
-        for (Real x : {xa, xf}) { wall(P(x, inset), P(x, vc0)); wall(P(x, vc1), P(x, D - inset)); }
-    }
-    // THE CONCOURSE itself: a room of its own (style 20: lit, planters and benches down the middle; no walls)
-    {
-        Room cc; cc.kind = RoomKind::Shop; cc.style = 20; cc.edge = entranceEdge;
-        cc.rect = {P(xa, vc0), P(xf, vc0), P(xf, vc1), P(xa, vc1)};
-        rp.rooms.push_back(cc);
-    }
-    // the rows: units cut by trade along each, x0..x1; `front` the row's concourse edge, `back` its outer wall
-    auto row = [&](Real x0, Real x1, bool frontRow) {
-        const Real vf = frontRow ? vc0 : vc1, vb = frontRow ? inset : D - inset;
-        const Real bay = 4.0;
-        int left = static_cast<int>((x1 - x0) / bay);
-        Real x = x0;
-        while (left >= 2) {
-            const uint8_t trade = pickTrade(next(), left, 3);
-            const int g = tradeBays(trade, left, next());
-            const Real ux0 = x, ux1 = left - g < 2 ? x1 : x + g * bay;   // the last takes the rest of the run
-            Room r; r.kind = RoomKind::Shop; r.style = trade; r.edge = entranceEdge;
-            // (from the front edge, winding as the street shops do: the counter goes to the back)
-            r.rect = frontRow ? Poly2{P(ux1, vf), P(ux0, vf), P(ux0, vb), P(ux1, vb)}
-                              : Poly2{P(ux0, vf), P(ux1, vf), P(ux1, vb), P(ux0, vb)};
-            rp.rooms.push_back(r);
-            wall(P(ux0, vf), P(ux1, vf), 0.5, true);                        // the glass front and its door
-            if (ux1 < x1 - 0.05) wall(P(ux1, vf), P(ux1, vb));             // the party wall to the next
-            ShopFront f;
-            // its outward normal points INTO the concourse: from the front row away from the street, from the back
-            // row toward it; the board stands on the wall's concourse face
-            f.n = frontRow ? nOut * -1.0 : nOut;
-            f.a = (frontRow ? P(ux1, vf) : P(ux0, vf)) + f.n * 0.06;
-            f.b = (frontRow ? P(ux0, vf) : P(ux1, vf)) + f.n * 0.06;
-            f.door = (f.a + f.b) * 0.5;
-            f.trade = trade;
-            f.fasciaY0 = 3.5; f.fasciaY1 = 4.2; f.fasciaProud = 0.02;
-            f.indoor = true;
-            f.entry = P(W * 0.5, -1.5);   // the mall's doors, out on the street side
-            ml.fronts.push_back(f);
-            x = ux1;
-            left = static_cast<int>((x1 - x + 1e-6) / bay);
-        }
-    };
-    row(xa, xv0, true);
-    row(xv1, xf, true);
-    row(xa, xf, false);
-    // the vestibule's sides: from the street wall to the concourse (the front row's ends there)
-    wall(P(xv0, inset), P(xv0, vc0));
-    wall(P(xv1, inset), P(xv1, vc0));
-    return ml;
-}
-
 // THE AMERICAN MALL (bigBox 6; ~/.claude/plans/malls-v2-and-managed-ground.md; Glenn: "multiple entrances and exits at
 // the different wings of the mall ... a two story mall with shops on the second floor ... stairs, an elevator shaft,
 // ramps, or escalators"). Its frame: the court's centre, v away from the street, u along it; its wings -- each 40 m
@@ -4399,15 +4308,18 @@ static MallLayout mallLayout(const Poly2& planIn, const BuildingParams& params, 
 // over the court (a 14 m opening the escalators climb through); a wing on the u axis ends in an ANCHOR (a department
 // store, both levels), a wing on the v axis in an ENTRANCE (a vestibule below, the food court above); an I-shaped mall
 // (no v wings) is entered through the court's front.
+// THE BOX MALL is the same mall on ONE level (floors 0; ADR-0271, the old bigBox 5 retired): an I down the long axis,
+// a tall skylit storey, its anchor at the -u end and its food court at the +u end, no escalators, no lift, no atria.
 struct MallWings {
     bool ok = false;
+    bool oneLevel = false;
     Vec2 c, u, v;
     Real arm[4] = {0, 0, 0, 0};   // +u, -u, +v, -v
     static constexpr Real a = 20.0, cw = 6.0;   // the wings' half width; the concourse's half width
     Vec2 dir(int k) const { return k == 0 ? u : k == 1 ? u * -1.0 : k == 2 ? v : v * -1.0; }
     Vec2 lat(int k) const { const Vec2 d = dir(k); return Vec2(-d.y, d.x); }
     Vec2 P(int k, Real s, Real t) const { return c + dir(k) * s + lat(k) * t; }
-    bool anchor(int k) const { return k < 2; }
+    bool anchor(int k) const { return k == 1 || (k == 0 && !oneLevel); }   // (one level: the +u end is the food court)
 };
 static MallWings mallWingsOf(const Poly2& planIn, const BuildingParams& p) {
     MallWings M;
@@ -4415,6 +4327,7 @@ static MallWings mallWingsOf(const Poly2& planIn, const BuildingParams& p) {
     Poly2 plan = planIn;
     ensureCCW(plan);
     M.c = p.mallCourt;
+    M.oneLevel = p.floors <= 0;
     // v: away from the street, snapped to the plan's own edge directions
     const Vec2 fd(p.faceDir.x, p.faceDir.z);
     Real best = -2;
@@ -4437,6 +4350,22 @@ static MallWings mallWingsOf(const Poly2& planIn, const BuildingParams& p) {
     return M;
 }
 
+Poly2 mallOutline(const Vec2& c, const Vec2& u, const Vec2& v, const Real arm[4]) {
+    const Real a = MallWings::a;
+    auto P = [&](Real x, Real y) { return c + u * x + v * y; };
+    Poly2 q;   // round the cross from the +u wing's street side
+    q.push_back(P(a, -a));
+    if (arm[0] > 0) { q.push_back(P(arm[0], -a)); q.push_back(P(arm[0], a)); }
+    if (arm[2] > 0) { q.push_back(P(a, a)); q.push_back(P(a, arm[2])); q.push_back(P(-a, arm[2])); }
+    else if (arm[0] <= 0) q.push_back(P(a, a));
+    q.push_back(P(-a, a));
+    if (arm[1] > 0) { q.push_back(P(-arm[1], a)); q.push_back(P(-arm[1], -a)); }
+    if (arm[3] > 0) { q.push_back(P(-a, -a)); q.push_back(P(-a, -arm[3])); q.push_back(P(a, -arm[3])); }
+    else if (arm[1] <= 0) q.push_back(P(-a, -a));
+    ensureCCW(q);
+    return q;
+}
+
 struct MallLevel {
     RoomPlan rp;
     std::vector<ShopFront> fronts;
@@ -4454,8 +4383,11 @@ static MallLevel mallLevel(const Poly2& planIn, const BuildingParams& params, in
     rp.office = false;
     rp.finish = interiorFinishFor(params);
     const MallWings M = mallWingsOf(planIn, params);
-    if (!M.ok) return L;
+    if (!M.ok || (M.oneLevel && k > 0)) return L;
     const Real a = MallWings::a, cw = MallWings::cw, inset = interiorInset(params);
+    // where the wings' shops begin along the spine: past the 40 m court, or on one level past a 16 m entrance hall
+    // (a box mall's court is the hall inside its front doors, not the atrium the escalators climb through)
+    const Real c0 = M.oneLevel ? Real(8) : a;
     const Real y0 = k == 0 ? 0.0 : params.groundHeight;
     ProcRng h(positionHash(Vec3(M.c.x + 0.41 + k * 7.0, 0.0, M.c.y + 0.17)) ^ static_cast<uint32_t>(params.seed));
     auto next = [&]() { return h.bits(); };
@@ -4482,7 +4414,7 @@ static MallLevel mallLevel(const Poly2& planIn, const BuildingParams& params, in
             wall(M.P(wk, s0, -a + inset), M.P(wk, s0, -cw));
             wall(M.P(wk, s0, cw), M.P(wk, s0, a - inset));
             end = s0;
-        } else if (k == 1) {   // the food court, over the entrance
+        } else if (k == 1 || M.oneLevel) {   // the food court, over the entrance (one level: at the end the anchor is not)
             const Real s0 = A - 26.0;
             room(0, {M.P(wk, A - inset, -a + inset), M.P(wk, A - inset, a - inset), M.P(wk, s0, a - inset), M.P(wk, s0, -a + inset)});
             wall(M.P(wk, s0, -a + inset), M.P(wk, s0, -cw));
@@ -4492,12 +4424,12 @@ static MallLevel mallLevel(const Poly2& planIn, const BuildingParams& params, in
             end = A - 9.0;   // the vestibule: open to the doors
         }
         // THE CONCOURSE from the court to the end (lit and furnished below; lit above, over its atrium)
-        room(k == 0 ? 21 : 22, {M.P(wk, a, -cw), M.P(wk, end, -cw), M.P(wk, end, cw), M.P(wk, a, cw)});
+        room(k == 0 ? 21 : 22, {M.P(wk, c0, -cw), M.P(wk, end, -cw), M.P(wk, end, cw), M.P(wk, c0, cw)});
         // THE SHOPS both sides, cut by trade (mall mix), glass fronts on the concourse
         for (int side : {1, -1}) {
             const Real bay = 4.0;
-            int left = static_cast<int>((end - a) / bay);
-            Real s = a;
+            int left = static_cast<int>((end - c0) / bay);
+            Real s = c0;
             while (left >= 2) {
                 const uint8_t trade = pickTrade(next(), left, 3);
                 const int g = tradeBays(trade, left, next());
@@ -4508,7 +4440,7 @@ static MallLevel mallLevel(const Poly2& planIn, const BuildingParams& params, in
                 room(trade, r);
                 wall(M.P(wk, s0, tf), M.P(wk, s1, tf), 0.5, true);
                 wall(M.P(wk, s1, tf), M.P(wk, s1, tb));
-                if (s0 <= a + 1e-3) wall(M.P(wk, s0, tf), M.P(wk, s0, tb));   // the first unit's court-side wall
+                if (s0 <= c0 + 1e-3) wall(M.P(wk, s0, tf), M.P(wk, s0, tb));   // the first unit's court-side wall
                 ShopFront f;
                 f.n = M.lat(wk) * static_cast<Real>(-side);   // into the concourse
                 f.a = (side > 0 ? M.P(wk, s1, tf) : M.P(wk, s0, tf)) + f.n * 0.06;
@@ -4539,7 +4471,7 @@ static MallLevel mallLevel(const Poly2& planIn, const BuildingParams& params, in
     }
     // THE COURT: open below; above, a 14 m opening the escalators climb through, the glass lift in its corner
     const Real ch = 7.0;
-    if (k == 0) room(23, {M.P(3, -a + inset, -a + inset), M.P(3, -a + inset, a - inset), M.P(3, a - inset, a - inset), M.P(3, a - inset, -a + inset)});
+    if (k == 0) room(23, {M.P(3, -a + inset, -c0 + inset), M.P(3, -a + inset, c0 - inset), M.P(3, a - inset, c0 - inset), M.P(3, a - inset, -c0 + inset)});
     else {
         L.holes.push_back({M.c + M.u * -ch + M.v * -ch, M.c + M.u * ch + M.v * -ch, M.c + M.u * ch + M.v * ch, M.c + M.u * -ch + M.v * ch});
         // the balustrade round it, open where the escalators land (the +u edge, v in [-3, 0])
@@ -4549,11 +4481,13 @@ static MallLevel mallLevel(const Poly2& planIn, const BuildingParams& params, in
         L.balustrades.push_back({M.c + M.u * ch + M.v * -ch, M.c + M.u * ch + M.v * -3.2});
         L.balustrades.push_back({M.c + M.u * ch + M.v * 0.2, M.c + M.u * ch + M.v * ch});
     }
-    // (both levels know them: the lower one walks onto their feet, the upper one off their heads)
-    L.escalators.push_back({M.c + M.u * (ch - kEscalatorRun) + M.v * -2.4, M.u, true});
-    L.escalators.push_back({M.c + M.u * (ch - kEscalatorRun) + M.v * -0.9, M.u, false});
-    L.liftAt = M.c + M.u * -(ch - 1.4) + M.v * (ch - 1.4);
-    L.liftDir = M.u;
+    // (both levels know them: the lower one walks onto their feet, the upper one off their heads; one level has none)
+    if (!M.oneLevel) {
+        L.escalators.push_back({M.c + M.u * (ch - kEscalatorRun) + M.v * -2.4, M.u, true});
+        L.escalators.push_back({M.c + M.u * (ch - kEscalatorRun) + M.v * -0.9, M.u, false});
+        L.liftAt = M.c + M.u * -(ch - 1.4) + M.v * (ch - 1.4);
+        L.liftDir = M.u;
+    }
     // an I-shaped mall (no v wings) is entered through the court's front: its doors on the -v face
     if (!(params.mallArms & 0x8)) for (ShopFront& f : L.fronts) f.entry = M.c + M.v * -(a + 1.5);
     else for (ShopFront& f : L.fronts) f.entry = M.P(3, M.arm[3] + 1.5, 0);
@@ -4564,9 +4498,6 @@ static std::vector<ShopFront> mallLevelFronts(const Poly2& plan, const BuildingP
     return mallLevel(plan, params, k).fronts;
 }
 
-static std::vector<ShopFront> mallFronts(const Poly2& plan, const BuildingParams& params) {
-    return mallLayout(plan, params, entranceEdgeFor(plan, params)).fronts;
-}
 
 static RoomPlan bigBoxRoomPlan(const Poly2& planIn, const BuildingParams& params, std::size_t entranceEdge) {
     RoomPlan rp;
@@ -5066,7 +4997,7 @@ StoreyRooms storeyRooms(const Poly2& plan, const BuildingParams& params, Real ba
         const MallLevel ML = mallLevel(plan, params, ki);
         rp = ML.rp;
         if (ki == 1) sr.holes = ML.holes;
-        if (ki == 0) {
+        if (ki == 0 && params.floors > 0) {   // (a one-level mall has no escalators and no lift)
             for (const MallLevel::Escalator& e : ML.escalators) sr.escalators.push_back({e.foot, e.dir, e.up});
             sr.escalatorRun = kEscalatorRun;
             sr.lift = true;
@@ -5074,8 +5005,7 @@ StoreyRooms storeyRooms(const Poly2& plan, const BuildingParams& params, Real ba
             sr.liftDir = ML.liftDir;
         }
     } else {
-        rp = ki == 0 && params.bigBox == 5 ? mallLayout(spk.plan, params, entranceEdge).rp
-           : ki == 0 && params.bigBox ? bigBoxRoomPlan(spk.plan, params, entranceEdge)
+        rp = ki == 0 && params.bigBox ? bigBoxRoomPlan(spk.plan, params, entranceEdge)
            : ki == 0 && !params.campus && (!params.civicRooms || params.civicRooms == 17) ? shopRoomPlan(spk.plan, params, entranceEdge, baseY + spk.y0, spk.h, core,
                                     well, foot)
                      : RoomPlan{};
@@ -5887,7 +5817,7 @@ static void emitBigBoxDress(BuildingMesh& out, const Poly2& plan, std::size_t en
         // the board in the chain's colour by day; the NAME is what lights (LitBand, a warm white at night)
         const Vec3 o = N * 0.26;
         emitBox(out, Scope{fr.at(cx - sw * 0.5, sy0) + N * 0.25, {X, U, N}, Vec3(sw, sy1 - sy0, 0.02)}, PartId::Trim, brand);
-        const int nL = params.bigBox == 5 ? 0 : 5 + static_cast<int>(params.seed % 4u);   // (a mall's NAME is lettered from the sign atlas: mallSignOf)
+        const int nL = 5 + static_cast<int>(params.seed % 4u);
         const Real lh = (sy1 - sy0) * 0.62, lw = std::min(lh * 0.75, sw * 0.8 / nL);
         const Real lx0 = cx - (nL * lw * 1.15) * 0.5;
         for (int k = 0; k < nL; ++k)
@@ -6153,27 +6083,6 @@ bool garagePortalOf(const Poly2& plan, const BuildingParams& params, Vec2& at, V
     if (!G.ok) return false;
     at = G.at((G.portal0 + G.portal1) * 0.5, -G.hw);
     out = G.v * -1.0;
-    return true;
-}
-
-bool mallSignOf(const Poly2& planIn, const BuildingParams& params, Vec2& centre, Vec2& n, Real& y0, Real& y1, Real& width) {
-    if (params.bigBox != 5) return false;
-    Poly2 plan = planIn;
-    if (plan.size() < 3) return false;
-    ensureCCW(plan);
-    const std::size_t e = entranceEdgeFor(plan, params);
-    if (e >= plan.size()) return false;
-    const Face fr = Face::ofEdge(plan, e, 0.0, params.groundHeight);
-    const Real gh = params.groundHeight, cy = 4.4;
-    const Real sw = std::min(fr.width * 0.4, Real(24.0));
-    // (as emitBigBoxDress lays the board)
-    y0 = std::max(cy + 0.9, gh - 4.6);
-    y1 = std::max(y0 + 2.4, gh - 1.9);
-    if (sw <= 6 || y1 - y0 <= 1.2) return false;
-    const Vec3 c = fr.at(fr.width * 0.5, 0) + fr.n * 0.27;
-    centre = Vec2(c.x, c.z);
-    n = Vec2(fr.n.x, fr.n.z);
-    width = sw;
     return true;
 }
 
