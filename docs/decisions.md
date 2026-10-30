@@ -13184,3 +13184,66 @@ that no longer exist (with their thumbnails).
    script used. The lanes builder grades, bridges and fillets its own roads. `road_mesh` keeps what a lane-built
    city publishes and reads (`UnionSpine`, `RoadDeckField`), `strokeRibbon` (the city renderer's outlines, Lua
    `city.stroke`), `fairHermite` (the twin's sampler) and `triangulatePolygon`.
+
+## ADR-0268 — The buildings dedupe, step one: one face, the box kit by its Scope, one grow entry, one party-wall rule
+
+**Status.** Accepted, 2026-10-29. #117 item 35, step 1 of the approved plan (the output-identical half; step 2 --
+one massing path, one mall, complexes on the height rule -- changes the bake under one lots tag bump).
+
+**Context.** Three read-only maps of the buildings code (2026-10-29) found four duplicates that change nothing a
+player sees when they are made one:
+- `face.h`'s `Face` was used in one place, `planEdgeRect`, which copied it field by field into the grammar's private
+  `FaceRect`; the ruled face (ADR-0175) lived only on `FaceRect`.
+- The CGA box ops (`splitScope` / `repeatScope` / `insetScope`) sat in the middle of the building grammar's header,
+  whose top comment said the grammar was grown with them; it is not -- `facadeLayout` is the only facade layout,
+  and the ops serve car_interior, a planter and Lua `Scope`.
+- Two grow entry points: `growLotBuildingsOnNets`, the lattice's front end (the street graph's faces, rim blocks,
+  a sampled clearance graph, the freeway keep-out band), beside `growCity`'s built-pavement path. Since ADR-0267
+  every level's RoadEntity carries only a look and an empty graph, so the NETS branch grew nothing on every
+  shipped level; the suite's log has none of its lines. Its users were the block audit's `--graph-blocks` mode
+  and six test calls.
+- Party walls written twice: the lot pass's ADR-0227 post-pass (blank up to the last storey a sill under the
+  neighbour's real top) and `Complex::resolve` (blank to the lower cell's floor count, merging two neighbours on
+  one plane into one wall), each with its own copy of the on-the-line test the mesh side's `partyEdge` uses.
+
+**Decision.**
+1. ONE FACE. `Face` takes `FaceRect`'s fields (`ruled`, `tl`, `tr`, the ruled `at()`) and `planEdgeRuled` as
+   `Face::ofEdgeRuled`; the unused `Kind` (Cylindrical) and `normal()` go. `FaceRect`, `planEdgeRect` and
+   `planEdgeRuled` are deleted; the grammar's 40 calls build `Face`s.
+2. THE BOX KIT BY ITS SCOPE. The scope ops' declarations move beside `struct Scope` under a "box kit" heading, and
+   the header's top comment says what grows a building: the plan, its Faces, `facadeLayout`.
+3. ONE GROW ENTRY. `growLotBuildingsOnNets`, `edgeBlocks` and `EdgeBlockParams` are deleted, with
+   `readLotGrowParams`' edge knobs, `LotGrowSetup::ep`/`roadClear`, `CityGrowInputs::netGround`/`freewayROW`, the
+   loader's right-of-way plumbing and `RoadProducts::row`. `growCity` with no blocks grows nothing (it logs so).
+   The block audit grows only on the scene's holes (`lanes_tool blocks --graph-blocks` retired).
+   Tests: `alleys_recover_frontage_orphaned_back_rows` (test_city_lots) is the alleys can-fail pair on deep blocks
+   grown the built-city way (blocks behind the sidewalk, the street graph, no clearance);
+   `lanes_planned_city_lots_keep_parks_off_the_pavement_and_front_streets_not_the_freeway` (lanes_tests, the
+   planned metro_v2_test scene) takes over the two drive-feedback gates (the freeway half reported, not yet
+   checked: see below); `test_lot_road_clearance.cpp` (two
+   graph-face clearance cases, guarding a block model no level uses -- the built city's equivalent is
+   `lanes_the_city_block_pass_yields_well_formed_blocks_on_the_clean_scenes`) and `test_ground_truth.cpp` (whose
+   pit probes had already lost their cases) are deleted.
+4. ONE PARTY-WALL RULE. `shape_grammar.h` holds the rules every writer uses: `onPartyLine` (the edge-on-the-line
+   test `partyEdge` asks of each wall), `addPartyWall` (one wall per plane, blank to the taller neighbour's top)
+   and `partyTopAgainst` (the last storey a `kPartySill` under the neighbour's top). The lot pass's two probes and
+   its post-pass call them; `Complex::resolve` calls `addPartyWall`, still with the floor count as its top --
+   step 2c moves it to `partyTopAgainst`. Lua's `readAttachedFields` stays: it is authored input, not a rule.
+
+**Proof.** `rt_bake --sections` on metro_v2_test and river_town, baked by the binary from before the step and by the
+one after it (each `--force` into its own root): of 1505 and 1614 sections, every city and lots section is
+byte-identical; the one that differs is `city/e0/report`, the bake's own timings. (toolkit_lab bakes no bundle --
+it grows its authored blocks at load -- and is covered by the every-recipe census in run_tests, unchanged.) The
+gate: run_tests 1516/1516 (28 cases left with the two deleted files), physics_tests 141/141, lanes_tests 50/50.
+
+**Found on the way.** The freeway-frontage gate, run on a built city for the first time, finds 21 of
+metro_v2_test's 559 lots standing 76-98 m from any street and about 20 m from the freeway (block 1, the west
+side: a row of homes and a corner shop). The lot pass's frontage gate measures to every edge of the street graph
+it is handed, and a lane city's `lotNav` carries the freeway and its ramps (their ~31 m twin band); door facing
+already skips them (`faces`). Fixed in the next commit, which changes the bake; the gate's `orphans == 0` check
+lands with it.
+
+**Consequences.** `grep -rn "FaceRect\|planEdgeRect\|planEdgeRuled\|growLotBuildingsOnNets\|edgeBlocks\|EdgeBlockParams" src tests tools`
+is empty. Owed: the city bundle still writes `roads/row`, which nothing reads now (dropped in the addendum below, with a
+lanes tag bump). growLotBuildings' `roads` + `roadClearance` push (`pushPolyClearOfRoads`) still runs on a built city's
+blocks with clearance 0 -- whether it moves anything there is to be measured before it is cut.

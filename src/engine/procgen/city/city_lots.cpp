@@ -6,7 +6,6 @@
 #include <memory>
 #include <functional>
 #include "parcel.h"          // subdivideBlock, Lot, ParcelParams
-#include "roads/road_entity.h"        // RoadEntity + navRoadGraph (growLotBuildingsOnNets)
 #include "road_network.h"    // RoadGraph (edge blocks walk its chains)
 #include "architect.h"       // DistrictMap + archetype tables (the architect pass)
 #include "section.h"         // the toolkit's section massing (issue #105)
@@ -3794,14 +3793,14 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
         //     (level_params.cpp), so it is short for anything wider than that;
         //   - the faces were walked over the CONTROL CHORDS (extractBlocks needs a
         //     planar graph), while the asphalt is meshed from the sampled spline,
-        //     and a curvy road bows off its chord — see growLotBuildingsOnNets.
+        //     and a curvy road bows off its chord.
         // Where those bite, the "buildable" interior reaches into the carriageway
         // and its lots are cut and then thrown away downstream as rejClear, so the
         // symptom is missing density rather than a building in the road.
         // Same helper the park pads use: per-edge width-aware, and it subdivides
         // long edges first so a bowing road still moves a long block edge.
-        // Gate: tests/test_lot_road_clearance.cpp
-        //       lot_block_interiors_clear_every_carriageway_on_a_mixed_width_net
+        // (A built city's blocks are the pavement's holes, already behind the kerb;
+        // gate: test_lanes.cpp lanes_the_city_block_pass_yields_well_formed_blocks_on_the_clean_scenes.)
         const Poly2 footBeforePush = foot;
         foot = pushPolyClearOfRoads(foot);
         if (foot.size() < 3) { ++blocksAllCarriageway; continue; }
@@ -6554,14 +6553,10 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                 BuildingParams tp = bp;
                 tp.partyWalls = 0;
                 for (int k = 0; k < lot.partyCount; ++k) {
-                    BuildingParams one = bp;
-                    one.partyWalls = 1;
-                    one.partyN[0] = lot.partyN[k];
-                    one.partyAt[0] = lot.partyAt[k];
                     Poly2 cp = plan;
                     ensureCCW(cp);
                     bool on = false;
-                    for (std::size_t e = 0; e < cp.size() && !on; ++e) on = partyEdge(cp, one, e);
+                    for (std::size_t e = 0; e < cp.size() && !on; ++e) on = onPartyLine(cp, e, lot.partyN[k], lot.partyAt[k]);
                     if (!on) continue;
                     tp.partyN[tp.partyWalls] = lot.partyN[k];
                     tp.partyAt[tp.partyWalls] = lot.partyAt[k];
@@ -6854,7 +6849,6 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
     // complex's cells do). A building that changes is grown again and its first growth cut out of the parts. A wall
     // with no building against it stays blank to the roof: the bare party wall by a vacant lot.
     {
-        constexpr Real kSill = 1.0;   // a storey keeps its windows only once it clears the neighbour's roof by a sill
         constexpr Real kNearGap = 6.0;   // a detached neighbour this close to the line still stands against the wall
         std::map<int, std::vector<std::size_t>> byBlock;
         for (std::size_t i = 0; i < attached.size(); ++i) byBlock[attached[i].block].push_back(i);
@@ -6895,16 +6889,11 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                         if (dot(B.bp.partyN[kb], n) > -0.98 || std::fabs(B.bp.partyAt[kb] + at) > 0.35) continue;
                         Real b0, b1;
                         if (!runOn(B.plan, n, at, b0, b1) || std::min(a1, b1) - std::max(a0, b0) < 1.0) continue;
-                        BuildingParams one = B.bp;
-                        one.partyWalls = 1;
-                        one.partyN[0] = B.bp.partyN[kb];
-                        one.partyAt[0] = B.bp.partyAt[kb];
-                        one.partyTop[0] = 0;
                         for (const StoreyPlan& sp : storeysOf(bi)) {
                             Poly2 cp = sp.plan;
                             ensureCCW(cp);
                             for (std::size_t e = 0; e < cp.size(); ++e)
-                                if (partyEdge(cp, one, e)) { against = std::max(against, B.baseY + sp.y0 + sp.h); break; }
+                                if (onPartyLine(cp, e, B.bp.partyN[kb], B.bp.partyAt[kb])) { against = std::max(against, B.baseY + sp.y0 + sp.h); break; }
                         }
                     }
                 }
@@ -6922,12 +6911,8 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                         against = std::max(against, o.baseY + o.height);
                     }
                 if (against < -1e29) continue;   // nothing against it: a vacant lot
-                // the building's own storeys (the plans run on past them: a roof exit's bulkhead)
-                const int floors = std::min(static_cast<int>(stA.size()), np.floors);
-                int top = 1;
-                for (int s = 1; s < floors; ++s)
-                    if (A.baseY + stA[s].y0 + kSill < against) top = s;
-                if (top + 1 >= floors) continue;   // the neighbour reaches the top storey
+                const int top = partyTopAgainst(stA, np.floors, A.baseY, against);
+                if (top == 0) continue;   // the neighbour reaches the top storey
                 np.partyTop[k] = static_cast<int16_t>(top);
                 changed = true;
             }
@@ -7212,242 +7197,6 @@ std::string SkylineCensus::districtsLine() const {
     return s;
 }
 
-
-namespace {
-// Distance from p to segment [a,b].
-Real segDist(const Vec2& p, const Vec2& a, const Vec2& b) {
-    Vec2 ab = b - a;
-    Real len2 = ab.lengthSquared();
-    Real t = len2 > 1e-12 ? dot(p - a, ab) / len2 : 0.0;
-    t = t < 0 ? 0 : (t > 1 ? 1 : t);
-    Vec2 q(a.x + ab.x * t, a.y + ab.y * t);
-    return (p - q).length();
-}
-}  // namespace
-
-std::vector<Poly2> edgeBlocks(const RoadGraph& roads,
-                              const std::vector<Poly2>& closedBlocks,
-                              const EdgeBlockParams& p) {
-    std::vector<Poly2> out;
-    const int n = static_cast<int>(roads.nodes.size());
-    if (n == 0) return out;
-
-    // Adjacency + degree, then walk maximal CHAINS between non-degree-2 ends
-    // (each chain is one road run between junctions / dead ends).
-    std::vector<std::vector<std::pair<int, int>>> adj(n);   // node -> {edge, other}
-    for (std::size_t ei = 0; ei < roads.edges.size(); ++ei) {
-        const RoadEdge& e = roads.edges[ei];
-        if (e.a < 0 || e.b < 0 || e.a >= n || e.b >= n || e.a == e.b) continue;
-        adj[e.a].push_back({static_cast<int>(ei), e.b});
-        adj[e.b].push_back({static_cast<int>(ei), e.a});
-    }
-    std::vector<uint8_t> used(roads.edges.size(), 0);
-
-    // A candidate rectangle is kept only if its centre is truly OPEN ground:
-    // inside no closed block, and no OTHER road passes near it.
-    auto isOpen = [&](const Vec2& c) {
-        for (const Poly2& b : closedBlocks)
-            if (pointInPolygon(b, c)) return false;
-        for (const RoadEdge& e : roads.edges) {
-            if (e.a < 0 || e.b < 0 || e.a >= n || e.b >= n) continue;
-            if (segDist(c, roads.nodes[e.a].pos, roads.nodes[e.b].pos) <
-                p.margin + p.depth * 0.35)
-                return false;   // some road runs through/near this ground
-        }
-        return true;
-    };
-
-    for (int start = 0; start < n; ++start) {
-        if (adj[start].size() == 2) continue;   // chain interior, not an end
-        for (const auto& [e0, n0] : adj[start]) {
-            if (used[e0]) continue;
-            // Walk the chain from `start` through degree-2 nodes.
-            std::vector<Vec2> line{roads.nodes[start].pos};
-            int prev = start, cur = n0, edge = e0;
-            used[edge] = 1;
-            line.push_back(roads.nodes[cur].pos);
-            while (adj[cur].size() == 2) {
-                const auto& [ea, na] = adj[cur][0];
-                const auto& [eb, nb] = adj[cur][1];
-                int nextEdge = (na == prev && !used[eb]) ? eb
-                             : (nb == prev && !used[ea]) ? ea
-                             : -1;
-                if (nextEdge < 0) break;
-                prev = cur;
-                cur = roads.edges[nextEdge].a == cur ? roads.edges[nextEdge].b
-                                                     : roads.edges[nextEdge].a;
-                used[nextEdge] = 1;
-                line.push_back(roads.nodes[cur].pos);
-            }
-            // Arc length; subdivide into pieces within [minLen, maxLen].
-            Real total = 0;
-            for (std::size_t i = 1; i < line.size(); ++i)
-                total += (line[i] - line[i - 1]).length();
-            if (total < p.minLen) continue;
-            const int pieces = std::max(1, static_cast<int>(total / p.maxLen) + 
-                                           (std::fmod(total, p.maxLen) > p.minLen ? 1 : 0));
-            const Real pieceLen = total / pieces;
-            // Point at arc-length s along the polyline.
-            auto at = [&](Real s) {
-                for (std::size_t i = 1; i < line.size(); ++i) {
-                    Real seg = (line[i] - line[i - 1]).length();
-                    if (s <= seg || i + 1 == line.size())
-                        return line[i - 1] + (line[i] - line[i - 1]) *
-                                                 (seg > 1e-9 ? s / seg : 0.0);
-                    s -= seg;
-                }
-                return line.back();
-            };
-            for (int k = 0; k < pieces; ++k) {
-                Vec2 a = at(k * pieceLen + 2.0);          // small end setbacks so
-                Vec2 b = at((k + 1) * pieceLen - 2.0);    // neighbours don't touch
-                Vec2 d = b - a;
-                Real len = d.length();
-                if (len < p.minLen * 0.6) continue;
-                d = d / len;
-                Vec2 nrm(-d.y, d.x);
-                for (Real side : {Real(1), Real(-1)}) {
-                    Vec2 c = (a + b) * 0.5 + nrm * side * (p.margin + p.depth * 0.5);
-                    if (!isOpen(c)) continue;
-                    Vec2 i0 = a + nrm * side * p.margin;
-                    Vec2 i1 = b + nrm * side * p.margin;
-                    Vec2 o1 = b + nrm * side * (p.margin + p.depth);
-                    Vec2 o0 = a + nrm * side * (p.margin + p.depth);
-                    Poly2 rect{i0, i1, o1, o0};
-                    ensureCCW(rect);
-                    // Rim blocks from DIFFERENT chains can land on the same open
-                    // ground near a corner — two overlapping blocks grew two
-                    // buildings through each other (device: "buildings
-                    // intersecting with one another"). First-come wins; a rect
-                    // overlapping an accepted one (SAT on the convex quads) is
-                    // dropped.
-                    bool overlaps = false;
-                    const Poly2& rectRef = rect;
-                    for (const Poly2& q : out) {
-                        bool separated = false;
-                        for (const Poly2* poly : {&rectRef, &q}) {
-                            for (std::size_t ei = 0; ei < poly->size() && !separated; ++ei) {
-                                Vec2 ed = (*poly)[(ei + 1) % poly->size()] - (*poly)[ei];
-                                Vec2 ax(-ed.y, ed.x);
-                                Real lo0 = 1e30, hi0 = -1e30, lo1 = 1e30, hi1 = -1e30;
-                                for (const Vec2& v : rect) {
-                                    Real t = dot(ax, v);
-                                    lo0 = std::min(lo0, t); hi0 = std::max(hi0, t);
-                                }
-                                for (const Vec2& v : q) {
-                                    Real t = dot(ax, v);
-                                    lo1 = std::min(lo1, t); hi1 = std::max(hi1, t);
-                                }
-                                if (hi0 < lo1 || hi1 < lo0) separated = true;
-                            }
-                            if (separated) break;
-                        }
-                        if (!separated) { overlaps = true; break; }
-                    }
-                    if (overlaps) continue;
-                    out.push_back(std::move(rect));
-                }
-            }
-        }
-    }
-    return out;
-}
-
-NetLotResult growLotBuildingsOnNets(const std::vector<RoadEntity>& nets,
-                                    const LotParams& params,
-                                    const EdgeBlockParams& edgeParams,
-                                    Real roadClearance,
-                                    const RoadGroundFn& ground,
-                                    const RoadGraph* freewayROW,
-                                    bool wantFlatParts,
-                                    bool wantParts) {
-    NetLotResult r;
-    // One combined raw planar graph across every net (the sampled navRoadGraph
-    // loses faces, so the block extraction uses the nets' own nodes/edges) —
-    // plus the SAMPLED centrelines (what the asphalt is actually meshed from;
-    // a curvy road bows off its control chords) with real per-edge widths, for
-    // the building road-clearance check.
-    RoadGraph rg, rgSampled;
-    for (const RoadEntity& net : nets) {
-        const int base = static_cast<int>(rg.nodes.size());
-        for (const RoadNode& n : net.graph.nodes) rg.nodes.push_back({n.pos});
-        for (const RoadEdge& e : net.graph.edges) {
-            // #19 (semantic layer S6): block faces and rim-rectangle lots
-            // derive from the WALKABLE STREET subgraph only. A baked corridor
-            // edge (freeway/ramp) must never be a block boundary or a lot
-            // frontage — else houses grow fronting the freeway with no street
-            // to reach them (Glenn's "orphaned houses along the elevated
-            // freeway"). The freeway ROW stays a keep-out band via rgSampled/
-            // freewayROW below; it is simply not FRONTAGE.
-            if (e.baked || e.klass == RoadClass::Freeway ||
-                e.klass == RoadClass::Ramp)
-                continue;   // corridor edge: not a block/lot source
-            rg.edges.push_back(RoadEdge{base + e.a, base + e.b, e.width,
-                                        RoadClass::Local, 0});
-        }
-        RoadGraph s = navRoadGraph(net, ground);
-        const int sBase = static_cast<int>(rgSampled.nodes.size());
-        for (const auto& n : s.nodes) rgSampled.nodes.push_back(n);
-        for (const auto& e : s.edges)
-            rgSampled.edges.push_back(RoadEdge{sBase + e.a, sBase + e.b,
-                                               e.width, e.klass, e.layer});
-    }
-    // Keep buildings clear of the FREEWAY corridor, not just the streets
-    // (device: "buildings and the freeway overlapping ... if the road graph was
-    // true that wouldn't happen"). Feed the freeway right-of-way into the SAME
-    // clearance graph the building pass reads (rgSampled) as wide edges, so the
-    // city builds AROUND it (and, under a deck, re-zones — see the under-freeway
-    // pass in growLotBuildings) instead of placing masses under/through it.
-    int fwKeep = 0;
-    if (freewayROW && !freewayROW->edges.empty()) {
-        // PREFERRED: the real, routed ROW — dual carriageways AND ramps/gores,
-        // from the unified graph. Each edge keeps its true class so the
-        // under-deck re-zoning can tell freeway shadow from street frontage;
-        // the keep width is the deck/ramp SHADOW (wider than the drivable lane).
-        for (const RoadEdge& e : freewayROW->edges) {
-            const bool ramp = e.klass == RoadClass::Ramp;
-            const float keepW = ramp ? 14.0f : 24.0f;   // shadow half ~7 / ~12 m
-            const int a = static_cast<int>(rgSampled.nodes.size());
-            rgSampled.nodes.push_back({freewayROW->nodes[e.a].pos});
-            const int b = static_cast<int>(rgSampled.nodes.size());
-            rgSampled.nodes.push_back({freewayROW->nodes[e.b].pos});
-            rgSampled.edges.push_back(RoadEdge{a, b, keepW, e.klass, 0});
-            ++fwKeep;
-        }
-        LOG_INFO << "[citylots] freeway keep-out: " << fwKeep
-                 << " ROW segments (carriageways + ramps) from the unified graph";
-    } else {
-        // FALLBACK: the mainline centreline proxy (net.freewayPlans) — used when
-        // no corridor was routed (e.g. a level that authors only freewayPlans).
-        const float kFreewayKeepWidth = 34.0f;   // deck + shoulders + a shy margin
-        for (const RoadEntity& net : nets) {
-            for (const std::vector<Vec2>& plan : net.plan.freewayPlans) {
-                for (std::size_t i = 0; i + 1 < plan.size(); ++i) {
-                    const int a = static_cast<int>(rgSampled.nodes.size());
-                    rgSampled.nodes.push_back({plan[i]});
-                    const int b = static_cast<int>(rgSampled.nodes.size());
-                    rgSampled.nodes.push_back({plan[i + 1]});
-                    rgSampled.edges.push_back(
-                        RoadEdge{a, b, kFreewayKeepWidth, RoadClass::Freeway, 0});
-                    ++fwKeep;
-                }
-            }
-        }
-        LOG_INFO << "[citylots] freeway keep-out: " << fwKeep
-                 << " mainline-proxy segments (no routed ROW)";
-    }
-    std::vector<Poly2> blocks = extractBlocks(rg);
-    // Rim blocks: the town edge has no enclosed faces — synthesize rectangles
-    // on the boundary roads' open sides so the outskirts build up too.
-    std::vector<Poly2> rim = edgeBlocks(rg, blocks, edgeParams);
-    blocks.insert(blocks.end(), rim.begin(), rim.end());
-    LotParams lp = params;
-    r.lots = growLotBuildings(blocks, lp, &r.plan, wantParts ? &r.parts : nullptr, &rgSampled,
-                              roadClearance,
-                              (wantParts && wantFlatParts) ? &r.flatParts : nullptr,
-                              &r.gradeFlatten);
-    return r;
-}
 
 void appendLotMassBox(RenderMesh& out, const LotBuilding& lot,
                       const Vec3& sideColor, const Vec3& roofColor,

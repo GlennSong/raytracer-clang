@@ -239,7 +239,7 @@ TEST_CASE(lanes_road_twin_closes_every_ring_city_block_and_each_survives_the_sid
     int tees = 0, crosses = 0; for (int d : deg) { tees += d == 3; crosses += d >= 4; }
     CHECK(tees >= 8);        // the four inner grid lines end on the outer ones (ramp feet on the spokes add more)
     CHECK(crosses >= 13);    // 4 inner crossings + 8 arterial crossings + the arterials' own (at-grade ramp runs may add one)
-    engine::RoadGraph rg;    // the street subgraph exactly as growLotBuildingsOnNets builds it
+    engine::RoadGraph rg;    // the twin's street subgraph: freeways and ramps left out
     for (const engine::RoadNode& n : twin.graph.nodes) rg.nodes.push_back({n.pos});
     for (const engine::RoadEdge& e : twin.graph.edges)
         if (!e.baked && e.klass != engine::RoadClass::Freeway && e.klass != engine::RoadClass::Ramp) rg.edges.push_back(engine::RoadEdge{e.a, e.b, e.width, engine::RoadClass::Local, 0});
@@ -361,12 +361,60 @@ TEST_CASE(lanes_twin_leaves_no_block_foot_on_built_pavement_in_the_clean_scenes)
 TEST_CASE(lanes_the_city_block_pass_yields_well_formed_blocks_on_the_clean_scenes) {
     nlohmann::json cs = {{"sidewalk", 3.5}, {"buildLots", true}, {"seed", 3}};
     for (const char* name : {"ring_city", "curve_blocks", "hill_junction", "grid_city"}) {
-        BlockAudit a = auditBlocks(scene(name), cs, /*fromScene=*/true);
+        BlockAudit a = auditBlocks(scene(name), cs);
         std::printf("    %s: %s", name, summary(a).c_str());
         CHECK(a.blocks.size() >= 1 || std::string(name) == "hill_junction");
         CHECK(a.broken == 0);
         CHECK(a.padConflicts.empty());   // no building pad or block terrace lifts pavement or sidewalk
     }
+}
+
+// Lots on a planned city with a freeway, grown the loader's way (the pavement's holes). Two drive-feedback gates
+// that ran on the retired graph-face lot pass until ADR-0268:
+//   E1/B4 "parks don't sit on their lots and explode into the street including fences": no park or green pad
+//     lies on built pavement (over 1 m2);
+//   #19 "orphaned houses along the elevated freeway": no lot stands closer to the freeway than to any street
+//     while beyond the reach a street lot could front (60 m).
+TEST_CASE(lanes_planned_city_lots_keep_parks_off_the_pavement_and_front_streets_not_the_freeway) {
+    const Result& r = scene("planned/metro_v2_test_lanelab");
+    BlockAudit a = auditBlocks(r, {{"sidewalk", 4.0}, {"buildLots", true}, {"seed", 5}});
+    const engine::RoadEntity twin = roadTwin(r);
+    engine::RoadGraph streets, freeway;
+    for (const engine::RoadEdge& e : twin.graph.edges) {
+        engine::RoadGraph& g = (e.klass == engine::RoadClass::Freeway || e.klass == engine::RoadClass::Ramp) ? freeway : streets;
+        const int b = static_cast<int>(g.nodes.size());
+        g.nodes.push_back(twin.graph.nodes[static_cast<size_t>(e.a)]); g.nodes.push_back(twin.graph.nodes[static_cast<size_t>(e.b)]);
+        g.edges.push_back(engine::RoadEdge{b, b + 1, e.width, e.klass, 0});
+    }
+    CHECK(!freeway.edges.empty());   // the case is about a freeway: the planned city must carry one
+    auto nearest = [](const engine::RoadGraph& g, const Vec2& p) {
+        double best = 1e30;
+        for (const engine::RoadEdge& e : g.edges) {
+            const Vec2 A = g.nodes[static_cast<size_t>(e.a)].pos, B = g.nodes[static_cast<size_t>(e.b)].pos, ab = B - A;
+            const double l2 = ab.lengthSquared(); const double t = l2 > 1e-9 ? std::max(0.0, std::min(1.0, dot(p - A, ab) / l2)) : 0.0;
+            best = std::min(best, (p - (A + ab * t)).length());
+        }
+        return best;
+    };
+    int parks = 0, parksOnPavement = 0, lots = 0, orphans = 0;
+    for (const engine::LotBuilding& lb : a.grown.lots) {
+        if (lb.recipe.rfind("underfreeway", 0) == 0) continue;   // in the right-of-way by design
+        if (lb.type == "park" || lb.type == "green") {
+            ++parks;
+            if (lb.pad.size() >= 3 && setArea(intersectSets(fromRing(Ring(lb.pad.begin(), lb.pad.end())), r.pavement.surface)) > 1.0) ++parksOnPavement;
+            continue;
+        }
+        ++lots;
+        const double toStreet = nearest(streets, lb.site), toFreeway = nearest(freeway, lb.site);
+        if (toStreet > 60.0 && toFreeway < toStreet) {
+            if (orphans < 8) std::printf("    [lots]   fronts only the freeway: %s/%s at (%.0f, %.0f) block %d, %.0f m to a street, %.0f m to the freeway\n", lb.type.c_str(), lb.recipe.c_str(), lb.site.x, lb.site.y, lb.block, toStreet, toFreeway);
+            ++orphans;
+        }
+    }
+    std::printf("    [lots] %d parks (%d on pavement), %d lots (%d fronting only the freeway)\n", parks, parksOnPavement, lots, orphans);
+    CHECK(parks > 0);
+    CHECK(parksOnPavement == 0);
+    CHECK(lots > 0);
 }
 
 // ---- the city producer (ADR-0084) ------------------------------------------------------------------------
@@ -515,7 +563,7 @@ TEST_CASE(lanes_bundle_glb_view_reads_back_through_the_engine_importer) {
 TEST_CASE(lanes_grown_lots_round_trip_through_the_lot_codecs) {
     using namespace engine::bundle; using namespace engine::lotcache;
     nlohmann::json level; { std::ifstream f(std::string(RT_SOURCE_DIR) + "/assets/lanelab/levels/ring.json"); f >> level; }
-    BlockAudit a = auditBlocks(scene("ring_city"), level.value("citysim", nlohmann::json::object()), /*fromScene=*/true);
+    BlockAudit a = auditBlocks(scene("ring_city"), level.value("citysim", nlohmann::json::object()));
     CHECK(a.grown.lots.size() > 100);
     BundleWriter w; w.openMemory(); writeLotResult(w, "lots/e0/", a.grown); nlohmann::json manifest = nlohmann::json::object(); std::string err; CHECK(w.finish(manifest, &err));
     std::unique_ptr<Bundle> b = Bundle::fromMemory(w.memory(), &err); CHECK(b != nullptr); if (!b) return;

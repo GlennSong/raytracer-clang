@@ -72,12 +72,9 @@ struct RoadProducts {
     std::vector<RoadMesh> meshes;   // the carriageway, kerbs, sidewalks, markings
     RoadDeckField deck;             // the surface things stand on
     CurbBandAudit bands;            // sidewalk loops — the city map draws these
-    // The two things a builder that paves a whole CITY knows and a mesher does not.
-    // Both empty from the lattice: a lattice level grows its lots from the road
-    // graph's faces and has no freeway right-of-way to keep them out of.
-    RoadGraph row;                  // freeway + ramp right-of-way: the lot pass's keep-out
+    // What a builder that paves a whole CITY knows and a mesher does not.
     std::vector<Poly2> holes;       // un-inset pavement holes: the city's blocks
-    std::vector<RailTrack> rails;   // track lanes, for whatever runs trains (empty from the lattice)
+    std::vector<RailTrack> rails;   // track lanes, for whatever runs trains
 };
 
 // WHAT A BUILDER DOES TO THE GROUND — asked BEFORE anything is built, because a

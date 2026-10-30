@@ -382,12 +382,7 @@ std::shared_ptr<const std::function<double(double, double)>> erodedForTerrain(co
     return nullptr;
 }
 
-void readLotGrowParams(const json& cityJson,
-                       EdgeBlockParams& edges, LotParams& lots) {
-    edges.depth = cityJson.value("edgeBlockDepth", edges.depth);
-    edges.minLen = cityJson.value("edgeBlockMinLen", edges.minLen);
-    edges.maxLen = cityJson.value("edgeBlockMaxLen", edges.maxLen);
-    edges.margin = 4.0 + cityJson.value("sidewalk", 4.0);
+void readLotGrowParams(const json& cityJson, LotParams& lots) {
     lots.seed = cityJson.value("seed", 1u) ^ 0x10c5u;
     lots.buildChance = cityJson.value("buildChance", 0.9);
     // ROAD MARGIN — sidewalk only, no road-half term (measured 2026-08-16).
@@ -406,9 +401,9 @@ void readLotGrowParams(const json& cityJson,
     // The city reads empty because ~73% of it is road and margin, not because the
     // blocks are under-built.
     //
-    // Gate: tests/test_lot_road_clearance.cpp
-    //       lot_block_interiors_clear_every_carriageway_on_a_mixed_width_net
-    // fails if this lets a block interior reach into a carriageway.
+    // (A built city's blocks are the pavement's holes and take no margin at all:
+    // engine::growCity sets it to 0. Gate: test_lanes.cpp
+    // lanes_the_city_block_pass_yields_well_formed_blocks_on_the_clean_scenes.)
     lots.roadMargin = cityJson.value("sidewalk", 4.0);
     lots.innerRadius = cityJson.value("downtownRadius", 55.0);
     lots.midRadius = cityJson.value("midtownRadius", 135.0);

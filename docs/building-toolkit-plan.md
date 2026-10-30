@@ -124,7 +124,7 @@ Rules obeyed: C++17, one header + one `.cpp` per module, no new dependencies (Cl
 | --- | --- | --- |
 | `space_graph.h/.cpp` | `FloorSurface`, `Cell`, `Portal`, `SpaceGraph`, `storeyView`, `reachable` | `Room` / `RoomWall` / `WallOpening` / `DoorSpec`; the mall's atria holes; the garage's decks and ramps |
 | `section.h/.cpp` | `Edge` (straight / arc / spline), `Section`, generators, ops, booleans via Clipper2, `tessellate` | `Poly2` upstream of the storey view; `offsetPlan`, `tierBox`, the lot-pass carve, the mall's hand-built union |
-| `face.h/.cpp` | `Face` (Flat, Cylindrical, Ruled), `facadeLayout` over a `Face` | `FaceRect` / `planEdgeRect` (`shape_grammar.cpp:2421`) |
+| `face.h/.cpp` | `Face` (flat or ruled), `facadeLayout` over a `Face` | `FaceRect` / `planEdgeRect` / `planEdgeRuled`: retired, ADR-0268 |
 | `mass.h/.cpp` | the `Mass` interface (`slice`, `shell`, `bounds`), `MeshMass` (slicing a closed mesh), `loftSlices` | new |
 | `mass_stack.h/.cpp` | `Curve`, `Transform`, `Relation`, `StackEntry`, `Stack` as a `Mass`; `emitShell`, `emitSoffit`, `emitCap` | `massStack` / `storeyPlans` (`shape_grammar.cpp:3430`, `:3578`), `tierInsetOk` / `tierNestedIn`, `growCylinder` / `growPagoda` |
 | `sweep.h/.cpp` | `SweepMass`: section along a spline path, rotation-minimising frame | new |

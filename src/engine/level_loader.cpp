@@ -577,7 +577,6 @@ struct LanesPublished {
     // was only ever filled from a lattice net's look, so on a lane-built city it stayed 0
     // and both passes silently did nothing.
     double pavedSidewalk = 0.0;
-    engine::RoadGraph row;                 // freeway + ramp edges of the class-faithful twin, for the lot pass's keep-out
     double sidewalk = 4.0;                 // the citysim sidewalk, read before entities load
     std::vector<engine::Poly2> blocks;     // the lab's city blocks: the pavement's holes, inset by the sidewalk
     std::vector<std::vector<engine::Vec2>> water;   // rivers and lakes the blocks stand back from (ADR-0104)
@@ -642,7 +641,6 @@ static void publishCityProducts(const roads::RoadBuilder& b, const roads::RoadBu
         grid->nx = gp.replace->nx; grid->ny = gp.replace->ny; grid->z = gp.replace->z;
         g_lanes.ground = [grid](double x, double z) { return grid->sample(x, z); };
     }
-    if (!built.row.edges.empty()) g_lanes.row = built.row;
     if (!built.holes.empty()) {
         // The holes stop at the back of the drawn sidewalk; the block begins just behind it and the
         // lot pass gets roadMargin 0. (Same derivation as the terrain pre-pass, below.)
@@ -3617,15 +3615,11 @@ struct GrownLots {
 // The authored player spawn (world XZ): engine::authoredSpawnXZ in lot_grow_setup.h — read from the RAW
 // level json BEFORE any spawn-safety relocation (the lot pass flags the building beside it as enterable).
 
-// `ground` grades the lot pads; `netGround` is what the roads themselves drape
-// on (the pre-pass nets use the NATURAL terrain — the same sampler their
-// conform profiles were computed against), for the sampled clearance graph.
+// `ground` grades the lot pads.
 static GrownLots growCityLots(
     const engine::bundle::LevelInputs& inputs,
     const std::vector<engine::RoadEntity>& nets, const json& cs,
     const std::string& levelDir, const HeightField& ground,
-    const HeightField& netGround,
-    const engine::RoadGraph* freewayROW = nullptr,
     std::function<std::function<engine::Real(engine::Real, engine::Real, engine::Real)>(
         const std::vector<engine::TerrainFlatten>&)> groundWith = nullptr,
     double groundMeshCell = 0.0,
@@ -3642,9 +3636,7 @@ static GrownLots growCityLots(
     gin.citysim = cs.is_object() ? cs : json::object();
     gin.levelDir = levelDir;
     gin.padGround = ground;
-    gin.netGround = netGround;
     gin.nets = &nets;
-    gin.freewayROW = freewayROW;
     gin.groundWith = std::move(groundWith);
     gin.groundMeshCell = groundMeshCell;
     gin.enterableAt = enterableAt;
@@ -3704,7 +3696,6 @@ static GrownLots growCityLots(
             LOG_INFO << "[lanelab] grown in place in " << since(tl) << " s";
         }
         g.lots = std::move(r.lots); g.plan = std::move(r.plan); g.parts = std::move(r.parts); g.flatParts = std::move(r.flatParts); g.gradeFlatten = std::move(r.gradeFlatten); g.grown = true;
-        (void)netGround; (void)freewayROW;
         return g;
     }
 #endif
@@ -4077,7 +4068,6 @@ bool LevelLoader::load(const std::string& path,
             g_lanes.water = engine::levelWaterKeepOut(root);
             g_lanes.blocks = engine::roads::lanes::blocksFromHoles(cp.holes, 1.5, engine::roads::lanes::kBlockMarginBehindSidewalk,
                                                                    engine::roads::lanes::kMinBlockWidth, &g_lanes.water);
-            g_lanes.row = cp.row;
             g_lanes.deck = cp.deck;
             g_lanes.deck.buildIndex();      // queried by the scatter, below, and by the poke report
             g_lanes.nav = cp.lotNav;        // the streets a door faces, at the lot clearance widths (the sim routes on cp.nav)
@@ -4137,11 +4127,6 @@ bool LevelLoader::load(const std::string& path,
 
     loadStage("terrain parse");
     HeightField entityGround = levelGround;   // entities drape on the carved terrain (below)
-
-    // The freeway RIGHT-OF-WAY the lot pass builds (and re-zones) around: a lane-built city's, from its
-    // bundle (g_lanes.row, below).
-    engine::RoadGraph freewayROW;
-    const engine::RoadGraph* freewayROWp = nullptr;
 
     loadStage("road graph + ROW");
     // Terrain is parsed once into params + noise so vegetation can scatter on
@@ -4239,7 +4224,7 @@ bool LevelLoader::load(const std::string& path,
             engine::bundle::LevelInputs lotInputs;
             lotInputs.levelPath = path; lotInputs.level = root; lotInputs.levelDir = levelDir;
             preLots = growCityLots(lotInputs, {}, root["citysim"], levelDir, lotGround,
-                                   levelGround, freewayROWp, lotGroundWith,
+                                   lotGroundWith,
                                    lotMeshCell, haveSpawn ? &spawnXZ : nullptr);
             for (const engine::Poly2& bk : preLots.plan.blocks) if (bk.size() >= 3) managedPolys->push_back(bk);
             for (const engine::LotBuilding& lb : preLots.lots) {
@@ -5946,21 +5931,6 @@ bool LevelLoader::load(const std::string& path,
                 }
             }
         }
-#ifdef RT_ROADS_LANES
-        // The lane lab's freeway and ramps as the routed right-of-way (ADR-0083): its RoadEntity
-        // twin carries them by class, so the lot pass gets the per-class keep-out band and the
-        // under-deck re-zoning instead of the mainline-proxy fallback. Ramps keep their own
-        // class (declaring them Freeway re-zoned every block inside the frontage roads as
-        // freeway shadow); the embankment they sit on is carried by the twin's edge WIDTH,
-        // which the building-clearance check reads.
-        if (freewayROW.edges.empty() && !g_lanes.row.edges.empty()) {
-            freewayROW = g_lanes.row;
-            if (!freewayROW.edges.empty()) {
-                freewayROWp = &freewayROW;
-                LOG_INFO << "[lanelab] freeway right-of-way for the lot pass: " << freewayROW.edges.size() << " carriageway + ramp segments from the road twin";
-            }
-        }
-#endif
         // Grow buildings on the ROAD NETWORK's blocks (ADR-0066): the Living City
         // path — real roads (a shape:"road" `generate` recipe, the tech grown.json
         // uses) whose enclosed blocks become lots and REAL shape-grammar buildings
@@ -5980,7 +5950,7 @@ bool LevelLoader::load(const std::string& path,
                 engine::bundle::LevelInputs lotInputs2;
                 lotInputs2.levelPath = path; lotInputs2.level = root; lotInputs2.levelDir = levelDir;
                 grown = growCityLots(lotInputs2, nets, cs, levelDir, entityGround,
-                                     entityGround, freewayROWp, nullptr,
+                                     nullptr,
                                      lotMeshCell,
                                      haveSpawn2 ? &spawnXZ2 : nullptr);
             }
@@ -6007,7 +5977,7 @@ bool LevelLoader::load(const std::string& path,
                 engine::bundle::LevelInputs lotInputs2;
                 lotInputs2.levelPath = path; lotInputs2.level = root; lotInputs2.levelDir = levelDir;
                 grown = growCityLots(lotInputs2, nets, cs, levelDir, entityGround,
-                                     entityGround, freewayROWp, nullptr,
+                                     nullptr,
                                      lotMeshCell,
                                      haveSpawn2 ? &spawnXZ2 : nullptr);
             }

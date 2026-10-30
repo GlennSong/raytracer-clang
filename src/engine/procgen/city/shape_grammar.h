@@ -12,12 +12,11 @@
 
 namespace engine {
 
-// The split/shape grammar (CityEngine CGA) of ADR-0038 §2 / city-generation-plan
-// §4: a building is grown by rewriting a *scope* (an oriented box) with the ops
-// split / repeat / comp / inset / extrude / roof / hollow / opening, emitting
-// geometry tagged by a named part (wall / glass / roof / trim / ...). This is an
-// L1 grammar sibling of the L-system (different interpreter, shared substrate);
-// the ops here are the vocabulary the Lua surface and the C++ recipes both use.
+// The shape grammar (ADR-0038 §2 / city-generation-plan §4): a building is grown
+// from its plan -- storey outlines (sections, stacks, complexes; the toolkit,
+// ADR-0174..0179) whose edges are Faces the facade words lay their bays on
+// (facadeLayout) -- emitting geometry tagged by a named part (wall / glass /
+// roof / trim / ...). Lua and the C++ recipes compose the same words.
 //
 // Coordinate convention: a scope is axis-aligned to its own frame. We only need
 // upright buildings, so the frame is { right (XZ), up (+Y), forward (XZ) } with
@@ -194,6 +193,17 @@ struct Scope {
         return standing(at, y, along, Vec2(-along.y, along.x), size);
     }
 };
+
+// THE BOX KIT on a scope (#117 item 35: these are not a second facade layout -- a building's bays are laid by
+// facadeLayout over a Face; these cut boxes, for car cabins, furniture and Lua `Scope`'s split/divide/inset).
+// Split a scope along a local axis (0=right,1=up,2=forward) into child scopes of
+// the given sizes, in proportion to them.
+std::vector<Scope> splitScope(const Scope& s, int axis,
+                              const std::vector<Real>& sizes);
+// Repeat-divide a scope along an axis into N≈(extent/target) equal child scopes.
+std::vector<Scope> repeatScope(const Scope& s, int axis, Real target);
+// Inset a scope inward on its footprint (right/forward) by d, keeping height.
+Scope insetScope(const Scope& s, Real d);
 
 // A FLAT RECTANGLE IN A PLAN FRAME: [a0, a1] x [b0, b1] in `f`, at height h, facing up (a yard's asphalt, a
 // playground's rubber, a garden's gravel)
@@ -817,6 +827,18 @@ bool garagePortalOf(const Poly2& plan, const BuildingParams& params, Vec2& at, V
 // Is plan edge `e` a party wall (it lies on one of params' party lines, facing out across it)?
 // ...on `storey` (-1: on any storey): a wall that stops at a lower neighbour's top is no party wall above it.
 bool partyEdge(const Poly2& plan, const BuildingParams& params, std::size_t e, int storey = -1);
+// THE PARTY-WALL RULES (ADR-0268): one copy for every writer of partyN/partyAt/partyTop (the lot pass's attached
+// buildings, a complex's cells).
+// Does CCW plan edge `e` lie on the line (n, at), facing out across it? (What partyEdge asks of each wall.)
+bool onPartyLine(const Poly2& plan, std::size_t e, const Vec2& n, Real at);
+// Add the wall on line (n, at), blank up to storey `top` (0: to the roof). The same plane already on the list (two
+// neighbours along one face) stays ONE wall, blank to the taller neighbour's top. False when all four are spent.
+bool addPartyWall(BuildingParams& params, const Vec2& n, Real at, int top, Real tol);
+// How high a wall stays blank against a neighbour whose top stands at world Y `against`: the last storey (from 1)
+// whose floor is still a sill under it; the storeys above keep their windows. 0 (blank to the roof) when the
+// neighbour reaches the top storey.
+constexpr Real kPartySill = 1.0;
+int partyTopAgainst(const std::vector<StoreyPlan>& storeys, int floors, Real baseY, Real against);
 // Edge `e` is a party wall with a doorway through it (partyDoors): the facade cuts the door, blank otherwise.
 bool partyDoorEdge(const Poly2& plan, const BuildingParams& params, std::size_t e);
 // A LINK DOOR (params.links; cells.h, ADR-0179): the doorway on a storey's face through to a neighbouring cell, and
@@ -945,14 +967,6 @@ void emitShell(BuildingMesh& out, const Scope& s, PartId part, const Vec3& color
 void emitParapet(BuildingMesh& out, const Vec3& footOrigin, Real width, Real depth,
                  const Vec3& r, const Vec3& f, Real y, Real height, Real thick,
                  PartId part, const Vec3& color);
-// Split a scope along a local axis (0=right,1=up,2=forward) into child scopes of
-// the given sizes; a negative size means "repeat to fill" with |size| as target.
-std::vector<Scope> splitScope(const Scope& s, int axis,
-                              const std::vector<Real>& sizes);
-// Repeat-divide a scope along an axis into N≈(extent/target) equal child scopes.
-std::vector<Scope> repeatScope(const Scope& s, int axis, Real target);
-// Inset a scope inward on its footprint (right/forward) by d, keeping height.
-Scope insetScope(const Scope& s, Real d);
 
 }  // namespace engine
 

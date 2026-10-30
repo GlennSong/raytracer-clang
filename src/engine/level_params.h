@@ -12,7 +12,7 @@
 
 #include "procgen/terrain.h"          // TerrainParams
 #include "procgen/tree.h"             // TreeParams
-#include "procgen/city/city_lots.h"   // LotParams, EdgeBlockParams
+#include "procgen/city/city_lots.h"   // LotParams
 #include "procgen/city/water_mesh.h"  // WaterMeshParams
 
 #include <nlohmann/json.hpp>
@@ -71,11 +71,10 @@ readErodedBase(const nlohmann::json& root);
 // derives its sampling from this one number.
 double levelDrawnGroundCell(const nlohmann::json& root);
 
-// The lot-growing knobs of a city/metro block (edge blocks + lot params).
+// The lot-growing knobs of a city block.
 // Callers still supply LotParams::ground and the hub list — those depend on
 // loader-side state (terrain samplers, road nets), not on the JSON.
-void readLotGrowParams(const nlohmann::json& cityJson,
-                       EdgeBlockParams& edges, LotParams& lots);
+void readLotGrowParams(const nlohmann::json& cityJson, LotParams& lots);
 
 // A "water" block ({seaLevel, region | lo/hi, cell, foamBand}).
 WaterMeshParams readWaterParams(const nlohmann::json& w);

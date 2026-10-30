@@ -40,8 +40,10 @@ Both levels were migrated onto `shape:"road"` + `citysim.buildLots` and the
 generator deleted, along with its two host bake paths (`level_loader.cpp` and the
 offline tracer's `level_scene.cpp`) and its `CityModel`->`RoadNet` nav bridge.
 
-**The live pipeline is `city_lots.cpp:growLotBuildingsOnNets`** — everything below
-describes it.
+> **Superseded (ADR-0267, ADR-0268).** The streets are planned by the city planner
+> and built by the lanes builder; the lots grow on its pavement's holes through
+> `engine::growCity`. `growLotBuildingsOnNets`, which everything below describes,
+> and its rim blocks (`edgeBlocks`) are retired. Kept as history.
 
 One duplication remains: `level_scene.cpp` re-implements `growCityLots` for the
 offline tracer. It is narrower than it looks — the JSON half is shared through

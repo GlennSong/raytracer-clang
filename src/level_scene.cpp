@@ -626,7 +626,6 @@ bool LevelScene::load(const std::string& levelPath, Scene& scene,
             gin.padGround = [&ctp, &cnoise](double x, double z) {
                 return terrainHeight(ctp, cnoise, x, z);   // pads grade off the road-carved ground
             };
-            gin.netGround = levelGround;                   // ...the nets drape on the natural one
             gin.nets = &lotNets;
             if (!cityHoles.empty()) {
                 gin.holes = &cityHoles;

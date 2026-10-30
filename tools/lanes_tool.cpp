@@ -167,14 +167,13 @@ int main(int argc, char** argv) {
         std::string out = ".", cs; for (int i = 3; i + 1 < argc; ++i) { if (std::strcmp(argv[i], "--out") == 0) out = argv[i + 1]; if (std::strcmp(argv[i], "--citysim") == 0) cs = argv[i + 1]; }
         nlohmann::json citysim = nlohmann::json::object();
         if (!cs.empty()) { std::ifstream f(cs); nlohmann::json lvl; f >> lvl; citysim = lvl.value("citysim", nlohmann::json::object()); }
-        bool graphBlocks = false; for (int i = 3; i < argc; ++i) if (std::strcmp(argv[i], "--graph-blocks") == 0) graphBlocks = true;
         std::unique_ptr<Result> r = build(RoadLabGraph::load(argv[2]));
         {   // where are the holes? (debug for the scene-block path)
             auto census = [](const PolySet& s, const char* name) { size_t holes = 0, big = 0; for (const Polygon2& p : s) for (const Ring& h : p.holes) { ++holes; if (std::fabs(ringArea(h)) >= 2000.0) ++big; } std::printf("  %s: %zu polygons, %zu holes (%zu >= 2000 m2)\n", name, s.size(), holes, big); };
             census(r->pavement.surface, "surface"); census(r->pavement.shoulder, "shoulder"); census(unionSets(r->pavement.surface, r->pavement.shoulder), "union");
         }
-        BlockAudit a = auditBlocks(*r, citysim, !graphBlocks);
-        std::printf("%s blocks: ", graphBlocks ? "graph-face" : "scene-hole");
+        BlockAudit a = auditBlocks(*r, citysim);
+        std::printf("scene-hole blocks: ");
         std::printf("%s", summary(a).c_str());
         mkdir(out.c_str(), 0755); const std::string svg = out + "/blocks.svg"; writeBlocksSvg(*r, a, svg); std::printf("wrote %s\n", svg.c_str());
         {   // --at x y r: what the lot pass put near a point — lots, building part meshes, LOD1 boxes (set LANELAB_AUDIT_PARTS=1 to grow meshes)
@@ -215,7 +214,7 @@ int main(int argc, char** argv) {
                 for (const engine::RoadEdge& e : twin.graph.edges) if (e.a == static_cast<int>(n) || e.b == static_cast<int>(n)) { const auto& o = twin.graph.nodes[static_cast<size_t>(e.a == static_cast<int>(n) ? e.b : e.a)].pos; std::printf(" ->(%.1f,%.1f) c%d w%.1f%s", o.x, o.y, static_cast<int>(e.klass), e.width, e.baked ? " baked" : ""); }
                 std::printf("\n"); }
         }
-        engine::RoadGraph rg;   // the street subgraph exactly as growLotBuildingsOnNets builds it
+        engine::RoadGraph rg;   // the twin's street subgraph: freeways and ramps left out
         for (const engine::RoadNode& n : twin.graph.nodes) rg.nodes.push_back({n.pos});
         for (const engine::RoadEdge& e : twin.graph.edges) {
             if (e.baked || e.klass == engine::RoadClass::Freeway || e.klass == engine::RoadClass::Ramp) continue;

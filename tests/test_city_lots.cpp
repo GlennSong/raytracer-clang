@@ -1,6 +1,7 @@
 #include "test_framework.h"
 
 #include "../src/engine/procgen/city/architect.h"
+#include "../src/engine/level_params.h"   // readLotGrowParams (the alleys case)
 #include "../src/engine/procgen/city/city_lots.h"
 #include "../src/engine/procgen/city/parcel.h"
 #include "../src/engine/procgen/city/road_network.h"
@@ -9,6 +10,7 @@
 #include "../src/engine/procgen/terrain.h"   // applyFlatten (park-adherence test)
 
 #include <map>
+#include <nlohmann/json.hpp>
 #include <set>
 #include <string>
 
@@ -169,46 +171,58 @@ TEST_CASE(lot_buildings_zone_radially) {
     CHECK(nearNonHome > 0);
 }
 
-TEST_CASE(edge_blocks_build_the_town_rim) {
-    // A single long straight boundary road, no enclosed faces anywhere: edge
-    // blocks must appear on BOTH open sides, sized within [minLen, maxLen] and
-    // set back by the margin, and the usual lot pass grows buildings on them.
-    RoadGraph roads;
-    roads.nodes = { {Vec2(0, 0)}, {Vec2(150, 0)} };
-    roads.edges = { RoadEdge{0, 1, 8, RoadClass::Local, 0} };
-    EdgeBlockParams ep;   // margin 9, depth 34, len 26..58
-    std::vector<Poly2> rim = edgeBlocks(roads, {}, ep);
-    CHECK(!rim.empty());
-    CHECK(rim.size() % 2 == 0u);   // both sides of a road with open ground
-    for (const Poly2& r : rim) {
-        CHECK(r.size() == 4u);
-        Vec2 lo, hi; bounds(r, lo, hi);
-        const Real len = hi.x - lo.x, depth = hi.y - lo.y;
-        CHECK(len >= ep.minLen * 0.6 - 1e-6);
-        CHECK(len <= ep.maxLen + 1e-6);
-        CHECK_APPROX(depth, ep.depth, 1e-6);
-        // Set back from the road (y=0) by the margin: no corner nearer than it.
-        CHECK(std::min(std::abs(lo.y), std::abs(hi.y)) >= ep.margin - 1e-6);
+// STAGE-10 ALLEYS (courts-with-alleys round). The frontage gate refuses any
+// lot whose whole footprint sits beyond 14 m of a street surface -- and on a
+// block deeper than one lot row, the OUTER row is exactly such land: real,
+// parcelled, correctly shaped, and orphaned. Stage 10's contract says that
+// land "connects out" by an alley. This is the can-fail pair for the alley
+// pass: the same blocks grown with alleys OFF must show the orphaned rows (the
+// gate rejecting them), and grown with alleys ON must show zero frontage
+// rejections, at least one lane cut, and more built lots -- not fewer, which
+// is what an over-fat lane does by shrinking the rows it serves (measured:
+// a 5 m lane with 0.7 m clearance COST coverage on living_city).
+// Grown the way a built city grows (engine::growCity): the blocks begin behind
+// the sidewalk (no road margin), the street graph says where the doors face,
+// and there is no clearance on top. (It ran on the retired graph-face rim
+// blocks until ADR-0268.)
+TEST_CASE(alleys_recover_frontage_orphaned_back_rows) {
+    // One straight 10 m street far from the downtown rings (residential grain),
+    // with blocks 56 m deep behind its 4 m sidewalks on both sides, deep enough
+    // that the parcel walk lays TWO rows -- the outer one beyond frontage reach.
+    RoadGraph streets;
+    streets.nodes = { {Vec2(300, 260)}, {Vec2(560, 260)} };
+    streets.edges = { RoadEdge{0, 1, 10, RoadClass::Local, 0} };
+    std::vector<Poly2> blocks;
+    const Real back = 5.0 + 4.0, depth = 56.0, len = 50.0;   // half the street + the sidewalk
+    for (int i = 0; i < 5; ++i) {
+        const Real x0 = 305 + i * (len + 0.4), x1 = x0 + len;
+        blocks.push_back({{x0, 260 + back}, {x1, 260 + back}, {x1, 260 + back + depth}, {x0, 260 + back + depth}});
+        blocks.push_back({{x0, 260 - back - depth}, {x1, 260 - back - depth}, {x1, 260 - back}, {x0, 260 - back}});
     }
-    // The rim rectangles grow buildings through the ordinary lot pass.
-    LotParams lp; lp.seed = 9; lp.roadMargin = 2.0;   // rim blocks are pre-set-back
-    CHECK(!growLotBuildings(rim, lp).empty());
-}
-
-TEST_CASE(edge_blocks_skip_covered_ground) {
-    // The same road, but one side is an enclosed city block: only the open side
-    // gets rim rectangles.
-    RoadGraph roads;
-    roads.nodes = { {Vec2(0, 0)}, {Vec2(150, 0)} };
-    roads.edges = { RoadEdge{0, 1, 8, RoadClass::Local, 0} };
-    Poly2 block{{-10, 5}, {160, 5}, {160, 80}, {-10, 80}};   // covers +y side
-    EdgeBlockParams ep;
-    std::vector<Poly2> rim = edgeBlocks(roads, {block}, ep);
-    CHECK(!rim.empty());
-    for (const Poly2& r : rim) {
-        Vec2 lo, hi; bounds(r, lo, hi);
-        CHECK(hi.y < 0);   // every rim block sits on the OPEN (-y) side
-    }
+    nlohmann::json cityJson = { { "seed", 9 }, { "sidewalk", 4.0 }, { "buildChance", 1.0 } };
+    LotParams lp;
+    readLotGrowParams(cityJson, lp);
+    lp.roadMargin = 0;   // the block already begins behind the sidewalk
+    auto grow = [&](const LotParams& p, LotPlanDebug& plan) {
+        int n = 0;
+        for (const LotBuilding& b : growLotBuildings(blocks, p, &plan, nullptr, &streets, 0.0))
+            if (b.type != "green" && b.type != "park") ++n;
+        return n;
+    };
+    LotParams lpOff = lp;
+    lpOff.alleys = false;
+    LotPlanDebug without, with2;
+    const int builtOff = grow(lpOff, without), builtOn = grow(lp, with2);
+    std::printf("    [alleys] off: rejFrontage=%d built=%d | on: rejFrontage=%d built=%d lanes=%zu\n",
+                without.rejFrontage, builtOff, with2.rejFrontage, builtOn, with2.alleys.size());
+    // The can-fail half: the orphaned outer rows must EXIST, or this whole
+    // test proves nothing (a change to the parcel walk that stops producing
+    // them should be seen here, not silently absorbed).
+    CHECK(without.rejFrontage >= 1);
+    CHECK(without.alleys.empty());
+    CHECK(with2.rejFrontage == 0);        // every orphan gained frontage
+    CHECK(with2.alleys.size() >= 1);      // by an actual lane, not a loophole
+    CHECK(builtOn > builtOff);            // and the city GAINED buildings
 }
 
 // Buildings keep clear of road corridors (device: "buildings overlapping

@@ -188,8 +188,8 @@ should commit to the new one. Adopted. The lane lab's PAVEMENT is the source of 
   red where broken, lots, built plans) and prints every broken block with its spike area, area on
   pavement, convexity and the roads under it. Gate: `lanelab_the_city_block_pass_yields_well_formed_blocks_
   on_the_clean_scenes` (grid, ring, curve, hill) — the first version of this gate failed on three of them
-  while the older twin tests passed, which is what a real gate is for. `--graph-blocks` keeps the old
-  face-extraction path for comparison only.
+  while the older twin tests passed, which is what a real gate is for. (`--graph-blocks`, the old
+  face-extraction path kept for comparison, retired with it in ADR-0268.)
 
 ## Walls (2026-09-06)
 

@@ -61,18 +61,6 @@ void Complex::resolve(Real tol, Real minRun) {
         c.outerFace = false;
         ensureCCW(c.plan);
     }
-    auto party = [&](CellFrame& c, const Vec2& n, Real at, int top) {
-        for (int k = 0; k < c.params.partyWalls; ++k)   // the same plane twice (two neighbours along one face): one wall,
-            if (dot(c.params.partyN[k], n) > 0.999 && std::fabs(c.params.partyAt[k] - at) < tol) {   // blank to the taller's top
-                c.params.partyTop[k] = (top == 0 || c.params.partyTop[k] == 0) ? int16_t(0) : static_cast<int16_t>(std::max<int>(c.params.partyTop[k], top));
-                return;
-            }
-        if (c.params.partyWalls >= 4) return;
-        const int k = c.params.partyWalls++;
-        c.params.partyN[k] = n;
-        c.params.partyAt[k] = at;
-        c.params.partyTop[k] = static_cast<int16_t>(top);
-    };
     // per cell, per edge: how much of it a neighbour covers (for the outer faces)
     std::vector<std::vector<Real>> covered(cells.size());
     for (std::size_t i = 0; i < cells.size(); ++i) covered[i].assign(cells[i].plan.size(), 0.0);
@@ -110,8 +98,9 @@ void Complex::resolve(Real tol, Real minRun) {
                     // b's edge: the same run measured along db
                     covered[j][eb] += t1 - t0;
                     const int fi = cells[i].params.floors, fj = cells[j].params.floors;
-                    party(cells[i], na, ad.at, fj < fi ? fj : 0);
-                    party(cells[j], na * -1.0, -ad.at, fi < fj ? fi : 0);
+                    // blank to the lower cell's floor count (the lot pass measures the neighbour's height: step 2c)
+                    addPartyWall(cells[i].params, na, ad.at, fj < fi ? fj : 0, tol);
+                    addPartyWall(cells[j].params, na * -1.0, -ad.at, fi < fj ? fi : 0, tol);
                 }
             }
         }

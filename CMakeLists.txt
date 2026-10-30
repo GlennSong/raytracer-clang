@@ -776,7 +776,6 @@ add_executable(run_tests
     tests/test_idm.cpp
     tests/test_street_furniture.cpp
     tests/test_street_signs.cpp
-    tests/test_ground_truth.cpp
     tests/test_editable_curve.cpp
     tests/test_curve.cpp
     tests/test_curve_edit.cpp
@@ -845,7 +844,6 @@ add_executable(run_tests
     tests/test_surface_field.cpp
     tests/test_architect.cpp
     tests/test_erosion_gpu.cpp
-    tests/test_lot_road_clearance.cpp
     tests/test_city_plan.cpp
     tests/test_road_signs.cpp
     tests/test_island_links.cpp

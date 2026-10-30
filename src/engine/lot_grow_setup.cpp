@@ -22,7 +22,7 @@ LotGrowSetup lotGrowSetupForLevel(const nlohmann::json& cs, const std::string& l
                                   const std::vector<RoadEntity>& nets, LotGroundWithFn groundWith, double groundMeshCell,
                                   const Vec2* enterableAt) {
     LotGrowSetup s;
-    readLotGrowParams(cs, s.ep, s.lp);
+    readLotGrowParams(cs, s.lp);
     // Polycentric zoning: the level names its districts (citysim.districts, read above).
     // Terrain: buildings grow from their graded pad plane, park/green pads drape per-vertex.
     s.lp.groundWith = std::move(groundWith);
@@ -60,7 +60,6 @@ LotGrowSetup lotGrowSetupForLevel(const nlohmann::json& cs, const std::string& l
 #else
     (void)levelDir;
 #endif
-    s.roadClear = cs.value("sidewalk", 4.0) + 0.6;
     // The sidewalk datum for urban paving (ADR-0086): the lattice carves the ground kRoadConformStep under
     // the deck and the sidewalk slab stands `curb` over it. lanelab sets its own (lanesSidewalkRise).
     if (!nets.empty()) s.lp.sidewalkRise = static_cast<Real>(kRoadConformStep + nets.front().look.curb);

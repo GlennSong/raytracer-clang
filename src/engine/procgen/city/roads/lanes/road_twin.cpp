@@ -355,9 +355,8 @@ RoadEntity roadTwin(const Result& r, double nodeSpacing, bool forLots, bool forN
                 net.graph.edges.back().oneWay = L.oneWay;
                 net.graph.edges.back().spec = specIdx;   // the band model rides the graph (roads-v2)
                 // outside the edge's lots_range the street is right-of-way: no block frontage, no rim lots
-                // (a landing street beyond the freeway; an arterial's run outside the ring). `baked` is
-                // exactly what growLotBuildingsOnNets skips as a block/lot source while keeping the
-                // clearance band.
+                // (a landing street beyond the freeway; an arterial's run outside the ring). `baked` marks
+                // it (road_network's dead-end joins skip it, as they skip the freeway).
                 const double mid = 0.5 * (prevS + st);
                 if ((L.lotsFrom >= 0 && mid < L.lotsFrom) || (L.lotsTo >= 0 && mid > L.lotsTo)) net.graph.edges.back().baked = true;
             }
