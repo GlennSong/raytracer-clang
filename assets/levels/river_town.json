@@ -234,15 +234,81 @@
   "rangeWidth": 900,
   "resolution": 1200,
   "rivers": {
-   "cell": 16,
    "region": 9000,
-   "riverArea": 3000000,
-   "widthK": 0.012,
-   "widthMax": 40,
-   "widthMin": 12,
+   "cell": 16,
+   "auto": false,
+   "lakeMinArea": 1000000000000.0,
    "bankSteep": 4.0,
    "incisionMin": 2.5,
-   "incisionMax": 4.0
+   "incisionMax": 4.0,
+   "courses": [
+    {
+     "_comment": "Off the range in the northwest, down its valley, south through the gap between the mountain city and the main city, then east across the city just north of downtown (as the Chicago River runs along the Loop) to the sea.",
+     "points": [
+      [
+       -2750,
+       3350
+      ],
+      [
+       -2400,
+       3000
+      ],
+      [
+       -2050,
+       2700
+      ],
+      [
+       -1750,
+       2300
+      ],
+      [
+       -1680,
+       1700
+      ],
+      [
+       -1650,
+       1100
+      ],
+      [
+       -1550,
+       650
+      ],
+      [
+       -1250,
+       420
+      ],
+      [
+       -700,
+       380
+      ],
+      [
+       -200,
+       430
+      ],
+      [
+       300,
+       360
+      ],
+      [
+       800,
+       300
+      ],
+      [
+       1300,
+       250
+      ],
+      [
+       2100,
+       150
+      ]
+     ],
+     "width": [
+      20,
+      90
+     ],
+     "meander": 14
+    }
+   ]
   },
   "rockLine": 240,
   "seed": 11,
