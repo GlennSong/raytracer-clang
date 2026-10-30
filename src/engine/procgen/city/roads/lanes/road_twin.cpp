@@ -74,14 +74,6 @@ RoadClass classOf(const EdgeSpec& e) {
     return RoadClass::Local;
 }
 
-double twinRightOfWayPad(const Result& r, RoadClass k) {
-    const char* cls = k == RoadClass::Freeway ? "freeway" : k == RoadClass::Ramp ? "ramp" : nullptr;
-    if (!cls) return 0.0;
-    auto it = r.graph.classes.find(cls);
-    const double shoulder = it != r.graph.classes.end() ? it->second.shoulder : 0.0;
-    return 2.0 * (shoulder + kTwinTolerance + r.graph.rules.conformW);
-}
-
 RoadEntity roadTwin(const Result& r, double nodeSpacing, bool forLots, bool forNav) {
     RoadEntity net; net.look.sidewalk = 3.5; net.look.autoRoundabout = false;   // lanelab owns its junctions
     std::vector<Line> lines;
@@ -165,8 +157,7 @@ RoadEntity roadTwin(const Result& r, double nodeSpacing, bool forLots, bool forN
         // ...except for TRAFFIC on a deck. The nav graph takes this width as the carriageway a
         // one-way link's lanes are spread across, and a freeway's lot-clearance band (earthwork,
         // shoulders, tolerance: ~31 m) put three lanes 10 m apart. The nav twin carries the
-        // travel lanes' own width; the right-of-way the lot pass zones around gets its padding
-        // back where it is built (twinRightOfWayPad, city_producer).
+        // travel lanes' own width.
         if (deckEarthwork && !forLots) L.w = 2.0 * r.graph.hw(e);
         if (forNav) L.w = 2.0 * r.graph.hw(atGradeRamp ? *r.graph.find(e.id) : e);   // every road: its travel lanes
         // THE CROSS-SECTION, so the city can park on it. `w` above is the LOT clearance band —

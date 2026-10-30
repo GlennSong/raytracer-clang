@@ -505,12 +505,15 @@ BlockAudit auditBlocks(const Result& r, const nlohmann::json& citysim) {
     lp.ground = [grid](Real x, Real z) { return static_cast<Real>(grid ? grid->sample(x, z) : 0.0); };
     {
         // ONE representation: the blocks ARE the pavement's holes, exact to the kerb, so the pass needs no
-        // road graph to keep them off the asphalt — no clearance graph, no right-of-way band, no twin.
+        // clearance to keep them off the asphalt.
         const double sidewalk = lp.roadMargin; lp.roadMargin = 0;   // inset here, robustly; the pass's own inset is a no-op
         std::vector<Poly2> blocks = sceneBlocks(r, 1.5, 2000.0, sidewalk);
         a.holesGiven = blocks.size();
         const bool wantParts = std::getenv("LANELAB_AUDIT_PARTS") != nullptr;   // grow the building meshes too (slow): `lanelab_tool blocks --at` lists them
-        a.grown.lots = growLotBuildings(blocks, lp, &a.grown.plan, wantParts ? &a.grown.parts : nullptr, nullptr, 0.0, wantParts ? &a.grown.flatParts : nullptr, &a.grown.gradeFlatten);
+        // the streets a door faces and a lot fronts: the graph the loader hands the pass (city_producer's lotNav)
+        HeightField ground; if (grid) ground = [grid](double x, double z) { return grid->sample(x, z); };
+        const RoadGraph streets = navRoadGraph(roadTwin(r), ground);
+        a.grown.lots = growLotBuildings(blocks, lp, &a.grown.plan, wantParts ? &a.grown.parts : nullptr, &streets, 0.0, wantParts ? &a.grown.flatParts : nullptr, &a.grown.gradeFlatten);
         {   // pads and terraces against the pavement: as the loader built them before, and as it builds them now
             std::vector<TerrainFlatten> raw, now;   // `sidewalk` from the block inset above
             for (const LotBuilding& lb : a.grown.lots) { if (lb.type == "park" || lb.type == "green" || lb.plan.size() < 3) continue; raw.push_back(lotPadFlatten(lb)); }

@@ -13219,8 +13219,7 @@ player sees when they are made one:
    Tests: `alleys_recover_frontage_orphaned_back_rows` (test_city_lots) is the alleys can-fail pair on deep blocks
    grown the built-city way (blocks behind the sidewalk, the street graph, no clearance);
    `lanes_planned_city_lots_keep_parks_off_the_pavement_and_front_streets_not_the_freeway` (lanes_tests, the
-   planned metro_v2_test scene) takes over the two drive-feedback gates (the freeway half reported, not yet
-   checked: see below); `test_lot_road_clearance.cpp` (two
+   planned metro_v2_test scene) takes over the two drive-feedback gates; `test_lot_road_clearance.cpp` (two
    graph-face clearance cases, guarding a block model no level uses -- the built city's equivalent is
    `lanes_the_city_block_pass_yields_well_formed_blocks_on_the_clean_scenes`) and `test_ground_truth.cpp` (whose
    pit probes had already lost their cases) are deleted.
@@ -13236,14 +13235,22 @@ byte-identical; the one that differs is `city/e0/report`, the bake's own timings
 it grows its authored blocks at load -- and is covered by the every-recipe census in run_tests, unchanged.) The
 gate: run_tests 1516/1516 (28 cases left with the two deleted files), physics_tests 141/141, lanes_tests 50/50.
 
-**Found on the way.** The freeway-frontage gate, run on a built city for the first time, finds 21 of
-metro_v2_test's 559 lots standing 76-98 m from any street and about 20 m from the freeway (block 1, the west
-side: a row of homes and a corner shop). The lot pass's frontage gate measures to every edge of the street graph
-it is handed, and a lane city's `lotNav` carries the freeway and its ramps (their ~31 m twin band); door facing
-already skips them (`faces`). Fixed in the next commit, which changes the bake; the gate's `orphans == 0` check
-lands with it.
+**Found on the way (corrected in the addendum).** The freeway-frontage gate, run on a built city for the first
+time, first reported 21 of metro_v2_test's 559 lots 76-98 m from any street and about 20 m from the freeway. The
+audit, not the city: it grew with no street graph, so every lot passed the frontage gate. See the addendum.
 
 **Consequences.** `grep -rn "FaceRect\|planEdgeRect\|planEdgeRuled\|growLotBuildingsOnNets\|edgeBlocks\|EdgeBlockParams" src tests tools`
 is empty. Owed: the city bundle still writes `roads/row`, which nothing reads now (dropped in the addendum below, with a
 lanes tag bump). growLotBuildings' `roads` + `roadClearance` push (`pushPolyClearOfRoads`) still runs on a built city's
 blocks with clearance 0 -- whether it moves anything there is to be measured before it is cut.
+
+**Addendum (2026-10-29, the same evening).**
+- THE AUDIT GROWS WHAT THE LOADER GROWS. `auditBlocks` handed `growLotBuildings` no street graph, so the frontage
+  gate passed every lot and doors had nothing to face. It now passes `navRoadGraph(roadTwin(r))`, the graph
+  city_producer bakes as `lotNav` and the loader hands the pass. With it, the planned metro_v2_test scene has 0
+  lots fronting only the freeway (536 lots, 228 parks, none on pavement), with or without the frontage gate
+  skipping freeway and ramp edges, so the lot pass is left as it is. The gate's `orphans == 0` check is on.
+- `roads/row` DROPPED (Glenn: "drop this thing and rebuild"). The city producer no longer builds or writes the
+  freeway right-of-way graph that only the retired lattice front end read, nor `twinRightOfWayPad`, which fed
+  only it. Lanes tag `2026-10-29.2`; every lanes level's city re-bakes, and its lots with it (the lots key folds
+  in the city's).

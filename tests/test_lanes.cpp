@@ -415,6 +415,7 @@ TEST_CASE(lanes_planned_city_lots_keep_parks_off_the_pavement_and_front_streets_
     CHECK(parks > 0);
     CHECK(parksOnPavement == 0);
     CHECK(lots > 0);
+    CHECK(orphans == 0);
 }
 
 // ---- the city producer (ADR-0084) ------------------------------------------------------------------------
@@ -448,13 +449,13 @@ TEST_CASE(lanes_city_products_round_trip_through_a_bundle) {   // to the byte, b
     using namespace engine::bundle;
     const Result& r = scene("ring_city");
     CityProducts p = cityProductsFromResult(r, 250.0);
-    CHECK(p.hasTerrain == r.hasTerrain); CHECK(!p.cells.empty()); CHECK(!p.holes.empty()); CHECK(p.nav.nodes.size() > 10 && p.row.edges.size() > 0);
+    CHECK(p.hasTerrain == r.hasTerrain); CHECK(!p.cells.empty()); CHECK(!p.holes.empty()); CHECK(p.nav.nodes.size() > 10);
     size_t tris = 0; for (const CityCellMesh& c : p.cells) tris += c.mesh.triangleCount(); CHECK(tris > 100000);
     BundleWriter w; w.openMemory(); writeCityProducts(w, 0, p); nlohmann::json manifest = nlohmann::json::object(); std::string err; CHECK(w.finish(manifest, &err));
     std::unique_ptr<Bundle> b = Bundle::fromMemory(w.memory(), &err); CHECK(b != nullptr); if (!b) return;
     CityProducts q; CHECK(readCityProducts(*b, 0, q, &err)); if (!err.empty()) std::printf("    %s\n", err.c_str());
     CHECK(q.hasTerrain == p.hasTerrain && q.cell == p.cell && q.ground.z == p.ground.z && q.ground.nx == p.ground.nx);
-    CHECK(q.twin.graph.nodes.size() == p.twin.graph.nodes.size() && q.twin.graph.edges.size() == p.twin.graph.edges.size() && q.nav.edges.size() == p.nav.edges.size() && q.row.edges.size() == p.row.edges.size());
+    CHECK(q.twin.graph.nodes.size() == p.twin.graph.nodes.size() && q.twin.graph.edges.size() == p.twin.graph.edges.size() && q.nav.edges.size() == p.nav.edges.size());
     for (size_t i = 0; i < p.twin.graph.nodes.size() && i < q.twin.graph.nodes.size(); ++i) CHECK(p.twin.graph.nodes[i].pos.x == q.twin.graph.nodes[i].pos.x && p.twin.graph.nodes[i].elev == q.twin.graph.nodes[i].elev);
     CHECK(q.holes.size() == p.holes.size()); for (size_t i = 0; i < p.holes.size() && i < q.holes.size(); ++i) CHECK(sameRing(p.holes[i], q.holes[i]));
     CHECK(q.cells.size() == p.cells.size());
