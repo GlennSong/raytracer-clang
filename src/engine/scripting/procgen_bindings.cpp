@@ -1088,11 +1088,11 @@ BuildingParams readBuildingParamsOnto(lua_State* L, int idx, BuildingParams p) {
 
     // Massing: box | cylinder (round tower) | pagoda (tiered) — the "not every
     // building is a box" axis. A cylinder is its plan (luaBuildingPlan); a
-    // pagoda's tiers are its floors (ADR-0270).
+    // pagoda's tiers are its floors (ADR-0270): `tiers` is another name for `floors`.
     std::string shp = optStrField(L, idx, "shape", "box");
     if (shp == "pagoda") {
         p.shape = BuildingShape::Pagoda;
-        p.floors = static_cast<int>(optField(L, idx, "tiers", 5));
+        p.floors = static_cast<int>(optField(L, idx, "tiers", p.floors));
     }
     p.sides     = static_cast<int>(optField(L, idx, "sides", p.sides));
     p.pilasters = optBoolField(L, idx, "pilasters", p.pilasters);
@@ -1286,7 +1286,13 @@ namespace {
 static Poly2 luaBuildingPlan(lua_State* L, int idx, const BuildingParams& p, Real width, Real depth) {
     const Poly2 rect = {{-width * 0.5, -depth * 0.5}, {width * 0.5, -depth * 0.5},
                         {width * 0.5, depth * 0.5}, {-width * 0.5, depth * 0.5}};
-    if (p.shape == BuildingShape::Pagoda) return pagodaPlan(rect, p.floors);
+    if (p.shape == BuildingShape::Pagoda) {
+        const Poly2 sq = pagodaPlan(rect, p.floors);
+        if (sq.empty())
+            luaL_error(L, "building: a %.1f x %.1f m footprint is too small for a pagoda of %d tiers (its top tier keeps a "
+                       "stair: 18.8 m across for 3, 19.5 m for 5)", static_cast<double>(width), static_cast<double>(depth), p.floors);
+        return sq;
+    }
     if (lua_istable(L, idx) && optStrField(L, idx, "shape", "box") == "cylinder")
         return Section::ngon(std::max(6, p.sides), std::min(width, depth) * 0.5).tessellate();
     return rect;

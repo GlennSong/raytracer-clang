@@ -2320,18 +2320,18 @@ CityPlan generatePlan(const Brief& B) {
                     bool used = false;
                     for (Real u : taken) used = used || std::fabs(std::remainder(u - c, 2 * kPi)) < 1e-6;
                     if (used) continue;
+                    if (freewayR(c) - midR(c) < kSpurInside) {   // (first: a radius against a number, before siting a town)
+                        if (std::getenv("RT_PLAN_WHY"))
+                            std::printf("[plan] expressway %zu at %.0f deg: %.1f m between midtown's rim and the ring, the spur needs %.1f\n",
+                                        i, c * 180 / kPi, freewayR(c) - midR(c), kSpurInside);
+                        continue;
+                    }
                     std::vector<Vec2> h;
                     CityPlan::Town tw = siteTown(Vec2(std::cos(c), std::sin(c)), h);
                     if (!tw.built && edgeStart - freewayR(c) < kSpurRoom) {
                         if (std::getenv("RT_PLAN_WHY"))
                             std::printf("[plan] expressway %zu at %.0f deg: %.1f m between the ring and the map edge, the interchange needs %.1f\n",
                                         i, c * 180 / kPi, edgeStart - freewayR(c), kSpurRoom);
-                        continue;
-                    }
-                    if (freewayR(c) - midR(c) < kSpurInside) {
-                        if (std::getenv("RT_PLAN_WHY"))
-                            std::printf("[plan] expressway %zu at %.0f deg: %.1f m between midtown's rim and the ring, the spur needs %.1f\n",
-                                        i, c * 180 / kPi, freewayR(c) - midR(c), kSpurInside);
                         continue;
                     }
                     th0 = c; town = tw; head = h; placed = true;

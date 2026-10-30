@@ -3741,13 +3741,18 @@ bool tierBoxInside(const Poly2& plan, const OBB2& ob, Real& hw, Real& hd) {
 // THE PAGODA (a stack preset, ADR-0270): a square inscribed in the lot's rectangle at 0.78 of its short half, its
 // tiers stepping in from the second floor (envelopeTiers), a flared tile eave round every tier's top and a gold
 // finial on the last (growPlanBuilding). Empty when the lot cannot hold `floors` tiers.
+bool pagodaFits(Real shortSide, int floors) {
+    // the square is 0.78 of the rectangle's short side; room for every tier to step in (at least 2% a side) and the
+    // top one to keep the stair (envelopeTiers)
+    return shortSide * Real(0.78) * std::pow(Real(0.98), std::max(0, floors - 1)) >= kCoreTierMin + Real(0.02);
+}
+
 Poly2 pagodaPlan(const Poly2& lot, int floors) {
     const OBB2 ob = orientedBoundingBox(lot);
     Real hw = 0, hd = 0;
     if (!tierBoxInside(lot, ob, hw, hd)) return {};
+    if (!pagodaFits(2 * std::min(hw, hd), floors)) return {};
     const Real s = std::min(hw, hd) * 0.78;
-    // room for every tier to step in (at least 2% a side) and the top one to keep the stair (envelopeTiers)
-    if (2 * s * std::pow(Real(0.98), std::max(0, floors - 1)) < kCoreTierMin + Real(0.02)) return {};
     return tierBox(ob, s, s);
 }
 
@@ -4362,8 +4367,15 @@ Poly2 mallOutline(const Vec2& c, const Vec2& u, const Vec2& v, const Real arm[4]
     if (arm[1] > 0) { q.push_back(P(-arm[1], a)); q.push_back(P(-arm[1], -a)); }
     if (arm[3] > 0) { q.push_back(P(-a, -a)); q.push_back(P(-a, -arm[3])); q.push_back(P(a, -arm[3])); }
     else if (arm[1] <= 0) q.push_back(P(-a, -a));
-    ensureCCW(q);
-    return q;
+    // a missing front or back wing leaves the court's corner standing on a straight run (the run from one long wing's
+    // end to the other's): dropped, or the facade turns a corner mid-wall there
+    Poly2 o;
+    for (std::size_t i = 0; i < q.size(); ++i) {
+        const Vec2 d0 = q[i] - q[(i + q.size() - 1) % q.size()], d1 = q[(i + 1) % q.size()] - q[i];
+        if (std::fabs(cross(d0, d1)) > 1e-9 * (d0.length() * d1.length() + 1)) o.push_back(q[i]);
+    }
+    ensureCCW(o);
+    return o;
 }
 
 struct MallLevel {

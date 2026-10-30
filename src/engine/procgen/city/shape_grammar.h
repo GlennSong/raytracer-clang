@@ -377,8 +377,10 @@ std::vector<Poly2> wavePlates(const Poly2& plan, const BuildingParams& params);
 // a tier may be for the core to fit (14 m).
 Poly2 tierBox(const OBB2& ob, Real hw, Real hd, Real cut = 0, Vec2 shift = Vec2(0, 0));
 // THE PAGODA'S PLAN (ADR-0270): the square a pagoda of `floors` tiers stands on, inscribed in the lot's rectangle;
-// empty when the lot cannot hold its tiers.
+// empty when the lot cannot hold its tiers. pagodaFits: whether a rectangle `shortSide` across holds `floors` tiers
+// (each steps in, the top keeps its stair) -- what the architect asks before it rolls a pagoda.
 Poly2 pagodaPlan(const Poly2& lot, int floors);
+bool pagodaFits(Real shortSide, int floors);
 bool tierBoxInside(const Poly2& plan, const OBB2& ob, Real& hw, Real& hd);
 bool tierNestedIn(const Poly2& outer, const Poly2& inner);
 Real tierShortSide(const Poly2& p);

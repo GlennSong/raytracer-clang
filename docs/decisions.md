@@ -13389,3 +13389,23 @@ storeys above the neighbour take their windows; the complex's floor-count rule h
 storey 5). `partyTopAgainst` now considers every storey up to the top and returns "to the roof" only when the
 neighbour reaches the top storey itself; the lot pass's attached buildings one storey taller than a neighbour get
 their top windows too (the bake changes, under step 2's bump).
+
+### ADR-0270/0271 addendum — review fixes (2026-10-30)
+
+A review of the wave 3 commits found the new paths left holes where the old ones had covered for them:
+- **The pagoda is rolled only where it fits.** `pagodaFits(shortSide, floors)` is `pagodaPlan`'s test, written once.
+  `recipePagodaTower` gives a lot too narrow for five tiers (19.5 m) three, and one too narrow for three (18.8 m)
+  the street's mixed-use building. Before, those lots became open ground, since the box fallback had been retired.
+  `pagodaPlan`'s empty result stays as the backstop for a trapezoid whose inscribed rectangle is narrower than its
+  OBB. In Lua, `tiers` is another name for `floors` (it had overwritten `floors` with 5), and a footprint too small for
+  its tiers is an error, not an empty mesh.
+- **`mallOutline` drops the court corner left on a straight run** when the front or back wing is missing. The facade
+  turned a corner mid-wall there, and the complex's spine had its front split where the old hand-drawn spine had none.
+- **A mall that falls back to a store** is styled by the style book and records its own colour (the HLOD box had
+  baked the mall's sandstone), and gives back its `mallAt` spot, so a mall that never stood keeps no other mall 1.5 km
+  away. The complex registers its spot after a lab's `citysim.recipe` override, not before.
+- `dressBigBox` takes chains 1–4 or 6 (the chain-5 remap was dead). growCity warns when a host hands it road nets
+  but no blocks. The planner's spur check compares radii before siting a town.
+
+Not changed: the coast brief's spur loss is ADR-0269's rule working (a spur with no room is not built), and the
+k-prefixed constants follow the codebase's convention.

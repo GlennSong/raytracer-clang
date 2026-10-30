@@ -5439,7 +5439,6 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
             if (rec.complex.kind == BuildingRecipe::ComplexSpec::Kind::Mall && mallNear(b.site))   // (four rolls a mall: the street's own)
                 rec = architectPick(tag, shortSide, area(site), mix(pp.seed, static_cast<uint32_t>(li) * 7u + 3u), coreness,
                                     p.archetypeBook.empty() ? nullptr : &p.archetypeBook);
-            if (rec.complex.kind == BuildingRecipe::ComplexSpec::Kind::Mall) dbg->mallAt.push_back(b.site);
             // A LAB'S NAMED RECIPE (LotParams::recipe, citysim.recipe): the architect's own recipe by name on this
             // lot, grown as a lineup grows it (its dice, the slenderness cap on this plan), at the lot's coreness
             // or the one the level asks for. A sculpted site (a store, a depot, a campus, a paseo) keeps its own.
@@ -5454,6 +5453,7 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                 } else
                     LOG_ERROR << "[citylots] citysim.recipe '" << p.recipe << "' is not an architect recipe";
             }
+            if (rec.complex.kind == BuildingRecipe::ComplexSpec::Kind::Mall) dbg->mallAt.push_back(b.site);   // (the recipe it grows)
             // THE SHOP MIX (~/.claude/plans/nightlife-and-malls.md): a residential street's everyday shops, a high
             // street's eating and drinking, and -- round each town's NIGHTLIFE STRIP -- low-rise buildings of bars,
             // restaurants and clubs (Glenn: "these all don't need to be located on skyscrapers").
@@ -5933,16 +5933,27 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                         else ensureCCW(parkingBack);
                         if (std::getenv("RT_BIGBOX_DEBUG")) std::printf("[mall]   lot behind %.0f m2\n", bestA);
                     }
-                    // no mall fits the site: a store of the chain instead (the block was big enough for a big box)
+                    // no mall fits the site: a store of the chain instead (the block was big enough for a big box),
+                    // in the style book's look and the lot record's colour like any store, and the mall it is not keeps
+                    // no other mall away (mallNear)
                     if (!planOk) {
                         const Vec3 fd = bp.faceDir;
                         const BuildingRecipe store = architectBigBox(bp.seed);
                         bp = store.params;
                         bp.faceDir = fd;
+                        if (p.styleHook) p.styleHook(store.name, bp);
+                        b.color = bp.wallColor;
                         b.recipe = store.name;
                         planOk = true;
                         parkingPoly.clear();
                         parkingBack.clear();
+                        const Vec2 at = centroid(lot.footprint);
+                        for (std::size_t mi = 0; mi < dbg->mallAt.size(); ++mi)
+                            if ((dbg->mallAt[mi] - at).length() < 1e-6) {
+                                dbg->mallAt.erase(dbg->mallAt.begin() + static_cast<std::ptrdiff_t>(mi));
+                                --dbg->mallBlocks;
+                                break;
+                            }
                     }
                 }
                 if (bp.bigBox != 6) {

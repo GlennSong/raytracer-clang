@@ -833,6 +833,14 @@ TEST_CASE(shop_units_take_their_trades_width_and_their_streets_mix) {
 // reachable from the street.
 TEST_CASE(every_mall_variant_grows_on_every_seed) {
     int boxes = 0, wings = 0, complexes = 0;
+    // every corner of a mall's outline turns: a straight run with a vertex on it is a corner mid-wall to the facade
+    auto turnsAtEveryCorner = [](const Poly2& q) {
+        for (std::size_t i = 0; i < q.size(); ++i) {
+            const Vec2 d0 = q[i] - q[(i + q.size() - 1) % q.size()], d1 = q[(i + 1) % q.size()] - q[i];
+            if (std::fabs(cross(normalize(d0), normalize(d1))) < 1e-6) return false;
+        }
+        return true;
+    };
     for (uint32_t seed = 1; seed <= 8; ++seed) {
         for (Real arm : {Real(56), Real(70), Real(90)}) {   // the box mall's wings, court to end
             BuildingParams p = architectMall(seed).params;
@@ -841,6 +849,7 @@ TEST_CASE(every_mall_variant_grows_on_every_seed) {
             p.mallCourt = Vec2(0, 0);
             const Real arms[4] = {arm, arm, 0, 0};
             const Poly2 plan = mallOutline(p.mallCourt, Vec2(1, 0), Vec2(0, 1), arms);
+            CHECK(plan.size() == 4 && turnsAtEveryCorner(plan));   // the I: a rectangle
             const std::vector<ShopFront> fronts = shopFrontsOf(plan, p);
             CHECK(fronts.size() >= 4);
             for (const ShopFront& f : fronts) CHECK(f.indoor);
@@ -856,6 +865,7 @@ TEST_CASE(every_mall_variant_grows_on_every_seed) {
             p.mallCourt = Vec2(0, 0);
             const Real arms[4] = {100, 100, back, 0};
             const Poly2 plan = mallOutline(p.mallCourt, Vec2(1, 0), Vec2(0, 1), arms);
+            CHECK(turnsAtEveryCorner(plan));
             const std::vector<ShopFront> fronts = shopFrontsOf(plan, p);
             int upper = 0;
             for (const ShopFront& f : fronts) { CHECK(f.indoor); upper += f.fasciaY0 > 5.0; }
@@ -868,6 +878,7 @@ TEST_CASE(every_mall_variant_grows_on_every_seed) {
             const Complex cx = mallComplex(box, Vec2(0, -1), architectMallWings(seed).params, true, 30.0, seed);
             CHECK(cx.cells.size() >= 3);   // the spine and two anchors at least
             for (const CellFrame& c : cx.cells) CHECK(c.connected);
+            CHECK(turnsAtEveryCorner(cx.cells.front().plan));   // the spine
             ++complexes;
         }
     }

@@ -89,7 +89,11 @@ NetLotResult growCity(const CityGrowInputs& in, LotGrowSetup* setupOut) {
     } else {
         // No blocks: nothing to grow. Every street is planned and built by the lanes builder (ADR-0267),
         // whose pavement holes are the blocks; the road graph's own faces are not blocks any more.
-        LOG_INFO << "[citylots] no blocks to grow on";
+        if (!nets.empty())   // (a host still handing over only its road nets grows nothing: say so)
+            LOG_WARN << "[citylots] " << nets.size() << " road nets but no blocks: lots grow on the lanes builder's "
+                     << "pavement holes or citysim.blocks, not on nets (ADR-0267); no buildings";
+        else
+            LOG_INFO << "[citylots] no blocks to grow on";
     }
     if (setupOut) *setupOut = std::move(s);
     return r;

@@ -589,11 +589,21 @@ void recipeParkingGarage(BuildingRecipe& out, ProcRng& rng, RecipeCtx& cx) {
 }
 
 // The PAGODA tower: the tiered East-Asian silhouette, on the square inscribed in its lot (pagodaPlan), a tier a
-// floor (ADR-0270). A rare midtown flourish.
-void recipePagodaTower(BuildingRecipe& out, ProcRng& rng, RecipeCtx&) {
+// floor (ADR-0270). A rare midtown flourish. On a lot too narrow for five tiers it has three, and on one too narrow
+// for any (pagodaFits: the top tier keeps its stair) the street's mixed-use building stands instead of open ground.
+void recipeMixedUse(BuildingRecipe& out, ProcRng& rng, RecipeCtx&);
+void recipePagodaTower(BuildingRecipe& out, ProcRng& rng, RecipeCtx& cx) {
     BuildingParams& p = out.params;
     p.shape = BuildingShape::Pagoda;
     p.floors = 3 + 2 * rng.between(0, 1);    // 3 or 5 tiers — odd reads best
+    if (cx.shortSide > 0 && !pagodaFits(cx.shortSide, p.floors)) p.floors = 3;
+    if (cx.shortSide > 0 && !pagodaFits(cx.shortSide, p.floors)) {
+        const uint32_t seed = p.seed;   // (the caller's, set before the recipe)
+        p = BuildingParams{};
+        p.seed = seed;
+        recipeMixedUse(out, rng, cx);
+        return;
+    }
     p.groundRetail = false;
     p.wallColor = Vec3(0.58, 0.22, 0.16);  // lacquer red
     p.trimColor = Vec3(0.30, 0.24, 0.18);
@@ -2245,8 +2255,7 @@ BuildingParams architectRowUnit(uint32_t seed, int floors) {
 
 void dressBigBox(BuildingParams& p, int chain, uint32_t seed) {
     ProcRng rng(seed | 1u);
-    p.bigBox = static_cast<uint8_t>(std::clamp(chain, 1, 6));
-    if (p.bigBox == 5) p.bigBox = 6;   // (5, the box mall, is the one-level mall: ADR-0271)
+    p.bigBox = static_cast<uint8_t>(chain == 6 ? 6 : std::clamp(chain, 1, 4));   // a store's chain, or the mall
     switch (p.bigBox) {
         case 6:   // a mall: warm stone, a deep teal band
             dress(p, FacadeStyle::Sandstone, rng);

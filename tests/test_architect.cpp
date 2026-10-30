@@ -61,8 +61,10 @@ TEST_CASE(new_recipes_are_reachable_in_their_districts) {
     for (const char* n : {"brick_shop", "mixed_use", "office_midrise",
                           "condo_tower", "terrace_condo", "loft_block", "hotel",
                           "bank", "cinema", "strip_mall", "supermarket",
-                          "office_park", "pagoda_tower", "civic_midtown"})
+                          "office_park", "civic_midtown"})
         CHECK(com[n] > 0);
+    CHECK(com["pagoda_tower"] == 0);   // a 14 m lot cannot hold a pagoda's top tier and its stair (pagodaFits)...
+    CHECK(tableNames(DistrictTag::Commercial, 24, 600, 600)["pagoda_tower"] > 0);   // ...a 24 m one can
 
     std::map<std::string, int> res = tableNames(DistrictTag::Residential, 14, 260, 600);
     for (const char* n : {"yard_house", "modern_house", "bungalow",
@@ -181,6 +183,16 @@ TEST_CASE(a_pagoda_grows_its_tiers_on_the_plan_path_on_every_seed) {
     std::printf("    [pagoda] %d grown on the plan path, %d lots too small for their tiers\n", grown, tooSmall);
     CHECK(grown >= 24);
     CHECK(pagodaPlan(Poly2{{0, 0}, {14, 0}, {14, 14}, {0, 14}}, 3).empty());   // too small for any pagoda: open ground
+    // ...which the architect never rolls: a lot too narrow for five tiers gets three, one too narrow for three the
+    // street's mixed-use building, on every seed
+    for (uint32_t seed = 1; seed <= 12; ++seed) {
+        BuildingRecipe r;
+        CHECK(architectRecipeByName("pagoda_tower", seed, 0.6, 19.0, 400, r));
+        CHECK(r.massing == BuildingRecipe::Massing::Pagoda && r.params.floors == 3);
+        CHECK(pagodaFits(19.0, r.params.floors));
+        CHECK(architectRecipeByName("pagoda_tower", seed, 0.6, 16.0, 300, r));
+        CHECK(r.massing != BuildingRecipe::Massing::Pagoda && r.params.shape != BuildingShape::Pagoda);
+    }
 }
 
 TEST_CASE(new_recipes_are_deterministic) {
