@@ -1,0 +1,179 @@
+{
+  "center": [
+    -300.0,
+    0.0
+  ],
+  "core": {
+    "angle": 4.2142366674296206,
+    "arterialEvery": 4,
+    "block": [
+      88.575513535065,
+      60.39239559208977
+    ],
+    "radius": 271.84916456855115
+  },
+  "freeway": {
+    "radials": 1,
+    "radius": 782.6151155870908,
+    "wobble": 50.0
+  },
+  "midtown": {
+    "block": [
+      140.19119506494104,
+      95.12973950835284
+    ],
+    "radius": 560.0,
+    "warp": 15.378004853374822
+  },
+  "name": "metro_v2_test",
+  "outskirts": {
+    "curvature": 12.312000304796257,
+    "margin": 120.0,
+    "ringSpacing": 140.02195709979605,
+    "spokes": 8,
+    "streetSpacing": 95.0
+  },
+  "relief": 0.0,
+  "roads": {
+    "arterial": 22.0,
+    "collector": 16.0,
+    "freeway": 30.0,
+    "local": 12.0,
+    "sidewalk": 5.0
+  },
+  "seed": 21095425,
+  "size": 1900.0,
+  "world": {
+    "_comment": "metro_v2_test's coastal shelf: the western range, the land falling east into the sea at -5 m. Calmer than the shelf the old grown metro bulldozed through (heightScale 13 -> 5, tiltX -0.045 -> -0.015), so a planned grid fits it; the land block keeps every street on dry, buildable ground, and the ring closes as a C against the coast.",
+    "base": {
+      "cdlod": {
+        "worldHalf": 1380
+      },
+      "erode": true,
+      "groundCover": {
+        "beachHeight": 3,
+        "dirt": [
+          0.12,
+          0.085,
+          0.05
+        ],
+        "dirtPatches": 0.15,
+        "grass": [
+          0.055,
+          0.085,
+          0.018
+        ],
+        "grassDry": [
+          0.1,
+          0.1,
+          0.04
+        ],
+        "mountainHeight": 300,
+        "rock": [
+          0.15,
+          0.14,
+          0.12
+        ],
+        "rockSlopeDeg": 42,
+        "seed": 5,
+        "snowHeight": 720,
+        "uplandHeight": 90
+      },
+      "heightScale": 5.0,
+      "material": {
+        "albedo": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "roughness": 1.0
+      },
+      "mountainAlongRange": true,
+      "mountainHeight": 180,
+      "mountainMaskHi": 0.4,
+      "mountainMaskLo": -0.1,
+      "mountainMaskScale": 0.001,
+      "mountainScale": 0.002,
+      "noiseScale": 0.0026,
+      "octaves": 6,
+      "rangeHeight": 260,
+      "rangeSpine": [
+        [
+          -1180,
+          -900
+        ],
+        [
+          -1120,
+          -300
+        ],
+        [
+          -1180,
+          300
+        ],
+        [
+          -1120,
+          900
+        ]
+      ],
+      "rangeVariation": 0.6,
+      "rangeWidth": 300,
+      "resolution": 900,
+      "rockLine": 90,
+      "seed": 11,
+      "size": 2760,
+      "snowLine": 230,
+      "tiltX": -0.015,
+      "warp": 0.35,
+      "weather": {
+        "grow": {
+          "blur": 85,
+          "iterations": 250,
+          "res": 256
+        },
+        "massifScale": 350,
+        "massifs": 0.6,
+        "peaks": {
+          "height": 120,
+          "spacing": 450,
+          "uplift": 1.0
+        },
+        "refine": {
+          "detail": 40,
+          "incise": 0.012,
+          "iterations": 20,
+          "roughness": 0.8,
+          "slopeDamp": 0.3,
+          "stochasticFrom": 1024,
+          "wavelength": 8
+        },
+        "res": 1024,
+        "roughness": 0.6,
+        "shapeKeep": 1.0,
+        "shapeScale": 210,
+        "water": {
+          "breach": 0,
+          "steps": 0,
+          "thermal": 0
+        }
+      }
+    },
+    "calm": {
+      "dir": [
+        1,
+        0
+      ],
+      "from": 400,
+      "to": 1300
+    },
+    "grid": 950,
+    "land": {
+      "maxSlope": 0.25,
+      "minHeight": 2.0
+    },
+    "reliefFade": [
+      850,
+      940
+    ],
+    "seaLevel": -5.0
+  }
+}

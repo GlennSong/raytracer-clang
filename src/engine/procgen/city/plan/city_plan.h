@@ -167,6 +167,9 @@ struct PlanChain {
     Real width = 12;
 };
 std::vector<PlanChain> chainsOf(const RoadGraph& g);
+// The edges of every cycle of streets that hangs off ONE junction (a leaf of the street graph's
+// block-cut tree): what generatePlan prunes, for tests to count.
+std::vector<char> hangingLoopEdges(const RoadGraph& g);
 
 CityPlan generatePlan(const Brief& brief);
 PlanScore evaluatePlan(CityPlan& plan);

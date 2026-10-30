@@ -1,7 +1,11 @@
 #include "test_framework.h"
 #include "../src/engine/procgen/city/plan/city_plan.h"
+#include "../src/engine/procgen/city/plan/plan_scene.h"
+#include "planned_city.h"
 
 #include <cmath>
+#include <fstream>
+#include <string>
 
 using namespace engine;
 using namespace engine::plan;
@@ -14,18 +18,7 @@ using namespace engine::plan;
 // time from the same brief. Pinned on a small brief so it runs in a second.
 
 namespace {
-Brief testBrief() {
-    Brief b;
-    b.name = "test_city";
-    b.seed = 11;
-    b.size = 1800;
-    b.coreRadius = 280;
-    b.midRadius = 480;
-    b.freewayRadius = 620;
-    b.spokes = 8;
-    b.outerMargin = 100;
-    return b;
-}
+Brief testBrief() { return citytest::roundBrief(); }
 }  // namespace
 
 TEST_CASE(city_plan_is_the_same_plan_every_time) {
@@ -176,14 +169,117 @@ TEST_CASE(a_shaped_city_meets_its_boulevard_in_junctions_not_stars) {
 TEST_CASE(the_plan_score_measures_streets_merging) {
     // The score's merged-street numbers (PlanScore: worstJunction / crowdedJunctions / tightTurns / pavedOverlapM),
     // on the round test city -- which lays its grid, ring and spokes the older way and was never shaped. Pinned as
-    // measured (799 m, worst junction 4, none under 15 degrees), so a change that merges its streets shows up here,
-    // not first in a walk-through. The 799 m is real and older than this measure: where the round layout's ring
-    // meets its grid and spokes -- owed, like metro_planned's 1.9 km and metro_rivers' 3.1 km.
+    // measured (587 m, worst junction 4, none under 15 degrees), so a change that merges its streets shows up here,
+    // not first in a walk-through. Was 799 m until streets that stopped inside another's pavement were joined to it
+    // in a T, or pruned where no T may stand (joinNearMisses, ADR-0266); the rest is where the round layout's ring
+    // meets its grid and spokes -- owed, like metro_planned's 1.4 km and metro_rivers' 2.4 km.
     CityPlan plan = generatePlan(testBrief());
     const PlanScore s = evaluatePlan(plan);
     std::printf("    [round] %.0f m paved into another, worst junction %d streets (%d of 5+), %d pairs under 15 degrees\n",
                 static_cast<double>(s.pavedOverlapM), s.worstJunction, s.crowdedJunctions, s.tightTurns);
     CHECK(s.worstJunction <= 5);
     CHECK(s.tightTurns == 0);
-    CHECK(s.pavedOverlapM < 900);
+    CHECK(s.pavedOverlapM < 650);
+}
+
+namespace {
+// Street ends standing inside another street's pavement (within its half-width): the dead ends no car
+// can turn out of that the planner used to leave where a street stopped a few metres short of the one
+// it ran into.
+int endsInsideAStreet(const RoadGraph& g) {
+    std::vector<int> degree(g.nodes.size(), 0);
+    for (const RoadEdge& e : g.edges) { ++degree[static_cast<std::size_t>(e.a)]; ++degree[static_cast<std::size_t>(e.b)]; }
+    int n = 0;
+    for (std::size_t v = 0; v < g.nodes.size(); ++v) {
+        if (degree[v] != 1) continue;
+        const Vec2 p = g.nodes[v].pos;
+        for (const RoadEdge& e : g.edges) {
+            if (e.a == static_cast<int>(v) || e.b == static_cast<int>(v)) continue;
+            const Vec2 a = g.nodes[static_cast<std::size_t>(e.a)].pos, ab = g.nodes[static_cast<std::size_t>(e.b)].pos - a;
+            const Real L2 = ab.lengthSquared();
+            const Real t = L2 > 1e-12 ? std::clamp(dot(p - a, ab) / L2, Real(0), Real(1)) : Real(0);
+            if ((a + ab * t - p).length() < e.width * Real(0.5)) { ++n; break; }
+        }
+    }
+    return n;
+}
+
+int hangingLoops(const RoadGraph& g) {
+    int n = 0;
+    for (char c : hangingLoopEdges(g)) n += c;
+    return n;
+}
+
+Brief coastBrief() {
+    std::ifstream in("assets/city_plans/metro_v2_test.json");
+    return briefFromJson(nlohmann::json::parse(in));
+}
+}  // namespace
+
+TEST_CASE(city_plan_never_hangs_a_loop_off_one_junction) {
+    // Glenn, 2026-10-29: "We should prune weird looped single roads." A cycle of streets whose only way
+    // to the rest of the city is one junction -- a scrap of a crossing the planariser left, or a street
+    // round a block a keep-out cut every other link to -- is pruned (dropHangingLoops). Every seed:
+    // before, 9 of 18 seeds across three briefs had one (river_town's seed 41 a 526 m one).
+    int seeds = 0;
+    for (int seed = 1; seed <= 12; ++seed) {
+        Brief b = testBrief();
+        b.seed = static_cast<uint32_t>(seed * 7919);
+        const CityPlan plan = generatePlan(b);
+        CHECK(hangingLoops(plan.streets) == 0);
+        ++seeds;
+    }
+    for (int seed = 1; seed <= 4; ++seed) {
+        Brief b = coastBrief();
+        b.seed = static_cast<uint32_t>(seed * 104729);
+        const CityPlan plan = generatePlan(b);
+        CHECK(hangingLoops(plan.streets) == 0);
+        ++seeds;
+    }
+    CHECK(seeds == 16);
+}
+
+TEST_CASE(city_plan_never_ends_a_street_inside_another) {
+    // A street that stopped 1-5 m short of the one it ran into ended inside that street's pavement and was
+    // never joined to it: 13 of metro_v2_test's 17 dead ends, 20 of metro_planned's 29. Now it is carried
+    // straight on to a T, or -- where a T would stand too near a junction and be fused into it -- pruned
+    // back to its own last junction. Every seed of the round brief and of a coast-clipped one.
+    for (int seed = 1; seed <= 12; ++seed) {
+        Brief b = testBrief();
+        b.seed = static_cast<uint32_t>(seed * 7919);
+        const CityPlan plan = generatePlan(b);
+        CHECK(endsInsideAStreet(plan.streets) == 0);
+    }
+    for (int seed = 1; seed <= 4; ++seed) {
+        Brief b = coastBrief();
+        b.seed = static_cast<uint32_t>(seed * 104729);
+        const CityPlan plan = generatePlan(b);
+        CHECK(endsInsideAStreet(plan.streets) == 0);
+    }
+}
+
+TEST_CASE(a_coast_city_builds_its_ring_as_a_c_and_lands_its_ends) {
+    // Where the coast opens the ring into a C (plan.ringArc), the scene used to build only a closed ring:
+    // metro_v2_test's planned 4.1 km of freeway came out as a 2-edge stub. The C is now chains, carriageways
+    // and system interchanges like the ring, and each end comes down to a street as a boulevard pair (bc*)
+    // or, with none in reach, turns back on itself (tc*). Every seed of the coast brief.
+    for (int seed = 1; seed <= 4; ++seed) {
+        Brief b = coastBrief();
+        b.seed = static_cast<uint32_t>(seed * 104729);
+        const CityPlan plan = generatePlan(b);
+        if (plan.ringArc.empty()) continue;   // a seed whose ring stayed on land, or became a strip city
+        const nlohmann::json scene = planToLanesScene(plan);
+        int freeway = 0;
+        bool end0 = false, end1 = false;
+        for (const nlohmann::json& e : scene["edges"]) {
+            const std::string id = e.value("id", std::string());
+            if (e.value("class", std::string()) == "freeway") ++freeway;
+            end0 = end0 || id.rfind("bc0", 0) == 0 || id == "tc0";
+            end1 = end1 || id.rfind("bc1", 0) == 0 || id == "tc1";
+        }
+        std::printf("    [coast seed %d] %d freeway edges; ends %s / %s\n", seed, freeway, end0 ? "landed" : "LOOSE", end1 ? "landed" : "LOOSE");
+        CHECK(freeway >= 4);
+        CHECK(end0);
+        CHECK(end1);
+    }
 }

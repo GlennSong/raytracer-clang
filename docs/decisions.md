@@ -13043,3 +13043,62 @@ THE CLOCK is real time by default (Glenn: "the default should be 1:1 with realti
 **Alternatives.** Our own copy of libstdc++'s distributions for every generator kept today's trees, but left two
 streams with a reason; Glenn chose one. For the city, the five xorshift copies folded into one named stream kept
 every city byte-identical, with three engines in the header; Glenn chose one engine and the reroll. Freezing nothing would have reshaped the island's ground under its cities.
+
+## ADR-0266 — The planner made fit to be the baseline: a C ring builds, no street ends inside another, no loop hangs off one junction
+
+**Context.** Glenn, 2026-10-29, after the old metro grower's teardrop loops: "We need to get rid of the old road
+system ... We need the new road system to be a baseline." Before the grower goes, the levels it fed are planned
+again by `city_plan` (metro_v2_test and piedmont). Planning metro_v2_test on its own coast showed the planner was not
+yet a baseline; asked whether to fix it first, Glenn: "Yeah go for it". What it found:
+- A ring the coast opens into a C (`plan.ringArc`) was planned but never built: `planToLanesScene` knew only the closed
+  ring, so metro_v2_test's 4.1 km of planned freeway came out as a 2-edge stub.
+- The land cut left every street that ran on toward the sea ending in the sand, 50-100 m short of the water (a rule
+  had kept them on purpose, "a street that runs down to the water").
+- Most of every plan's dead ends were NEAR MISSES: a street that stopped 1-5 m short of the street it ran into, inside
+  that street's pavement, never joined (the planariser snaps a T only within 0.6 m). The scorecard had counted them
+  all along as metres "paved into another" (886 m on metro_v2_test, 1890 m on metro_planned, 3121 m on metro_rivers).
+- A ring at the city's own edge (river_town's: freeway radius 680 m = the outskirts' radius) got no frontage roads,
+  so the outskirts' streets ran out under it and stopped: 22 dead ends round river_town's ring.
+- Over 18 seeds of three briefs, 9 had a LOOP HANGING OFF ONE JUNCTION: scraps of a crossing the planariser left
+  (2-6 m triangles where three streets cross within a few metres), and on river_town's seed 41 a 526 m street round a
+  block an expressway's keep-out had cut every other link to.
+
+**Decision.**
+1. THE C BUILDS (`plan_scene.cpp`). `ringLine`/`ringClosed` give the ring as built, closed or open; `arcChains` cuts a
+   C only at its expressway crossings (just past the system interchange, as on the ring) and never wraps round;
+   `crossingWithRing` takes `closed`. The C is offset as an open line, its deck comes down to grade over its last
+   250 m each end (`kCEnd`, as an expressway's does to a town), and each end lands on a street as a boulevard pair
+   (`bc0`/`bc1`) or, with none in reach, turns back on itself (`tc0`/`tc1`). The pair and the teardrop are the
+   expressway's own (`pair`, `turnaround`, lifted out of the expressway loop). A freeway end reaches a street within
+   120 m (`kTeeReach`; 60 m left metro_v2_test's expressway 67 m short of midtown and the C 70-90 m short of any
+   street: a freeway no car could get on).
+2. A STREET THE LAND CUT SHORT GOES BACK TO ITS JUNCTION, toward the sea as up a slope: the land stops 2 m above the
+   water, so the street never reached it. The city's edge street along the shore is the waterfront. (A seafront
+   collector laid in from the coast was tried first: on metro_v2_test it ran beside midtown's own edge street, which
+   already follows the shore -- 14 overlapping pairs -- and spilled past both ends of the city.)
+3. NO STREET ENDS INSIDE ANOTHER (`joinNearMisses`, `joinFacingEnds`, the whisker prune). After planarising, a street
+   end that runs into another street within its half-width + 2 m, crossing it at 30 degrees or more, is carried
+   STRAIGHT ON along its own heading (over its last 12 m) to a T -- moving the end sideways onto the nearest point
+   swung a cut street's last 4 m piece through a sliver angle (river_town's slivers went 4 -> 22). Not where the T
+   would stand closer to the next junction along that street than collapseShortLinks's own merge distance (half the
+   widest street + 4 sidewalks): it fuses such a T into that junction, and a fifth arm 4 degrees off another was
+   metro_planned's new sliver junctions. Two ends facing each other in line within 6 m (a street with a few metres
+   cut out of it) become one node. An end still standing in a pavement after all that goes back to its last
+   junction, and the two blocks it half divided become one.
+4. A RING AT THE CITY'S EDGE HAS FRONTAGE ROADS (`haveFreeway`: the corridor's inner edge inside the outskirts, not
+   its outer edge).
+5. NO LOOP HANGS OFF ONE JUNCTION (`dropHangingLoops`; `hangingLoopEdges` public for tests): a cycle that is a leaf
+   of the street graph's block-cut tree goes, at any size, after the stub prunes have run (a corner that held an
+   overshoot was a junction until then).
+
+**Consequences.** Before -> after, the shipped briefs: metro_v2_test 17 -> 8 dead ends, metro_planned 29 -> 16,
+metro_rivers 50 -> 25, river_town 38 -> 11, metro_3km 26 -> 13; "paved into another" metro_v2_test 886 -> 300 m,
+metro_planned 1890 -> 1391 m, the round test brief 799 -> 587 m (`the_plan_score_measures_streets_merging` ratcheted
+to < 650). Blocks the same or more on every one, no new junction under 15 degrees on them, no hanging loop on any.
+Over 18 seeds of three briefs: dead ends fall on 17 (one goes 9 -> 10), hanging loops 9 -> 0; a few seeds gain one
+or two junctions under 15 degrees where the new frontage roads meet streets (owed). What is left are roads out of
+town (the under-ring collectors run on past the corridor, where a diamond's ramp lands) and the edge of the map.
+Pinned, every seed: `city_plan_never_hangs_a_loop_off_one_junction` and `city_plan_never_ends_a_street_inside_another`
+(12 seeds of the round brief, 4 of the coast brief), `a_coast_city_builds_its_ring_as_a_c_and_lands_its_ends` (4).
+metro_planned's and metro_mountain's scenes are planned again; river_town's and metro_rivers' are not (Glenn's work in
+progress is in them). The island's cities (`city_plan island-cities`) take these when the island is planned again.
