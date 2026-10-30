@@ -151,12 +151,11 @@ enum class FacadeStyle : uint8_t {
 // painted pastels). Deterministic for the seed.
 Vec3 facadeColor(FacadeStyle style, uint32_t seed);
 
-// Building massing — not every building is a box (curved towers, tiered pagodas).
-// The grammar dispatches on this in growBuilding.
+// Building massing a recipe asks for beyond its plan (ADR-0270: one massing path, growPlanBuilding). A round tower
+// is its plan (Section::ngon; the city's Massing::Circle), not a shape. (Values kept: the lot cache stores them.)
 enum class BuildingShape : uint8_t {
-    Box,        // the orthogonal split-grammar building
-    Cylinder,   // a round tower: cylindrical mass with wrapped glass banding
-    Pagoda,     // East-Asian tiered mass with flared, upturned-corner tile roofs
+    Box = 0,      // the plan, extruded storey by storey
+    Pagoda = 2,   // on pagodaPlan's square: tiers each 0.8 of the one below, a flared tile eave on every tier
 };
 
 // One scope: an oriented box. axis[] are unit and mutually perpendicular; size[i]
@@ -272,7 +271,7 @@ struct BuildingMesh {
     std::vector<PlacedPiece> furniture;   // the interior's pieces (growInterior only)
     std::vector<FurnishedUnit> units;     // the shop rooms among them (PlacedPiece::unit)
     std::vector<AttachPoint> attaches;
-    std::vector<RoofItem> roof;        // what stands on the roof (growPlanBuilding / growBuilding)
+    std::vector<RoofItem> roof;        // what stands on the roof (growPlanBuilding)
     RenderMesh proxy;                  // coarse single-material mass (LOD/impostor bake)
     Real height = 0;
 
@@ -377,6 +376,9 @@ std::vector<Poly2> wavePlates(const Poly2& plan, const BuildingParams& params);
 // biggest such box inside a plan, whether a tier stands on the one below, a plan's short side, and the narrowest
 // a tier may be for the core to fit (14 m).
 Poly2 tierBox(const OBB2& ob, Real hw, Real hd, Real cut = 0, Vec2 shift = Vec2(0, 0));
+// THE PAGODA'S PLAN (ADR-0270): the square a pagoda of `floors` tiers stands on, inscribed in the lot's rectangle;
+// empty when the lot cannot hold its tiers.
+Poly2 pagodaPlan(const Poly2& lot, int floors);
 bool tierBoxInside(const Poly2& plan, const OBB2& ob, Real& hw, Real& hd);
 bool tierNestedIn(const Poly2& outer, const Poly2& inner);
 Real tierShortSide(const Poly2& p);
@@ -572,7 +574,7 @@ struct BuildingParams {
     int   sideBays = 0;
     Vec3  trimColor{0.40, 0.38, 0.35};
     BuildingShape shape = BuildingShape::Box;
-    int   tiers = 5;             // pagoda: number of stacked tiers (odd reads best)
+    int   tiers = 5;             // (unread since ADR-0270: a pagoda's tiers are its floors; leaves with the next codec change)
     int   sides = 32;            // cylinder: facets around the round mass
     uint32_t seed = 0;
     // MASSING ENVELOPE (skyscrapers v2, ADR-0086 point 5): how the mass above
@@ -892,8 +894,7 @@ Real stairWallDoorX(Real wallLen, const BuildingParams& params);
 // The two levels consume the SAME facade layout (the splitter decides bay and
 // opening placement once), so they can never disagree about where a window or
 // the door is — the first in-engine step of the blueprint model
-// (lot-system-plan §15.2). Cylinder and Pagoda shapes currently emit Full at
-// both levels (they are already lean; their flat pass is a later follow-up).
+// (lot-system-plan §15.2).
 enum class FacadeDetail : uint8_t { Full, Flat };
 
 // THE CURTAIN STYLE a glass facade is drawn in (skyscrapers NYC variety M2; the numbers live on BuildingParams:
@@ -913,10 +914,6 @@ CurtainStyle curtainStyleOf(const BuildingParams& p);
 // 40+ one. `floor` counts from 1 (the first storey above the ground storey). Derived from the params alone, so the
 // exterior, its far tier and the interior agree.
 bool mechanicalStorey(const BuildingParams& p, int floor);
-
-// Grow a building into `scope` (ADR-0038 §2). Deterministic for `params.seed`.
-BuildingMesh growBuilding(const Scope& scope, const BuildingParams& params,
-                          FacadeDetail detail = FacadeDetail::Full);
 
 // Grow a FLOORPLAN building (building-grammar-plan.md P3): the massing is a
 // closed polygon — the lot's own shape, an L/T/U composition, a flatiron

@@ -848,11 +848,6 @@ void emitCurtainWallRect(BuildingMesh& out, const Face& fr,
     appendGlassParts(out, glass, glassLit, clearPanes);
     appendToPart(out, PartId::Detail, mull);     // mullions read as metal detail
 }
-void emitCurtainWall(BuildingMesh& out, const Scope& storey, int side,
-                     const Vec3& wallColor) {
-    emitCurtainWallRect(out, faceOf(storey, side), wallColor);
-}
-
 // Subdivide one face into window bays. Wall margins around each window read as
 // mullions/piers; the window is recessed by `inset` (Glass). In Entrance mode the
 // centre bay is a real door-height opening (no fill) so the shell is enterable.
@@ -1993,17 +1988,6 @@ void emitFacadeRect(BuildingMesh& out, const Face& fr, FacadeMode mode,
     appendToPart(out, PartId::Detail, frame);   // frames/muntins read as joinery
 }
 
-// The box-grammar wrapper: pick the storey scope's face, then share the
-// element machinery above with the floorplan path.
-void emitFacade(BuildingMesh& out, const Scope& storey, int side, FacadeMode mode,
-                const BuildingParams& p, const Vec3& wallColor,
-                FacadeDetail detail = FacadeDetail::Full) {
-    if (detail == FacadeDetail::Full)
-        emitFacadeRect(out, faceOf(storey, side), mode, p, wallColor);
-    else
-        emitFlatFacadeRect(out, faceOf(storey, side), mode, p, wallColor);
-}
-
 }  // namespace
 
 // --- Curved (cylindrical) tower -------------------------------------------
@@ -2027,50 +2011,7 @@ static void emitDisc(BuildingMesh& out, const Vec3& cXZ, Real radius, Real y,
     MeshBuilder::emitPolygon(partMesh(out, pid), ring, {}, Vec3(0, up ? 1 : -1, 0), col);
 }
 
-static BuildingMesh growCylinder(const Scope& scope, const BuildingParams& p) {
-    BuildingMesh out;
-    Vec3 cXZ = scope.corner(0.5, 0, 0.5); cXZ.y = 0;
-    Real baseY = scope.origin.y;
-    Real R = std::min(scope.size.x, scope.size.z) * 0.5 * 0.96;
-    int sides = std::max(20, p.sides);
-    Vec3 wall = p.wallColor;
-    Vec3 glass = glassGrey();
-    Real y = baseY;
-    Real gh = p.groundHeight;
-
-    // Round towers are stout, not needle-thin (Marina City / Torre Agbar read at
-    // roughly height ≈ 5x diameter). Cap the storey count to that slenderness so a
-    // small round lot doesn't become a pencil (ADR-0040).
-    Real diameter = 2 * R;
-    int maxFloors = std::max(4, static_cast<int>((5.0 * diameter - gh) / p.floorHeight));
-    int floors = std::min(p.floors, maxFloors);
-
-    // All bands share one radius — a continuous shell, so there are no radial
-    // gaps between the spandrel and window rings to see through (the old inset
-    // left open slots and lit the hollow interior).
-    emitTube(out, cXZ, R, y, y + 0.5, sides, PartId::Trim, p.trimColor);          // base ring
-    emitTube(out, cXZ, R, y + 0.5, y + gh - 0.3, sides, PartId::Glass, glass);    // lobby glass
-    emitTube(out, cXZ, R, y + gh - 0.3, y + gh, sides, PartId::Trim, p.trimColor); // cornice ring
-    y += gh;
-    for (int i = 0; i < floors; ++i) {
-        Real fh = p.floorHeight;
-        emitTube(out, cXZ, R, y, y + 0.9, sides, PartId::Wall, wall);             // spandrel band
-        emitTube(out, cXZ, R, y + 0.9, y + fh, sides, PartId::Glass, glass);      // window band
-        y += fh;
-    }
-    emitDisc(out, cXZ, R, y, sides, PartId::Roof, materialFor(PartId::Roof, wall).albedo, true);
-    emitTube(out, cXZ, R, y, y + p.parapet * 0.7, sides, PartId::Trim, p.trimColor);  // parapet
-    out.height = (y + p.parapet * 0.7) - baseY;
-
-    BuildingMesh sc;
-    emitBox(sc, Scope{scope.origin, {scope.axis[0], Vec3(0, 1, 0), scope.axis[2]},
-                      Vec3(scope.size.x, out.height, scope.size.z)}, PartId::Wall, wall);
-    if (!sc.parts.empty()) out.proxy = sc.parts.front();
-    out.attaches.push_back({cXZ + Vec3(0, y, 0), Vec3(0, 1, 0), "roof"});
-    return out;
-}
-
-// --- Pagoda (tiered, flared upturned roofs) --------------------------------
+// --- Pagoda (the flared, upturned tile roof its tiers wear: pagodaPlan, ADR-0270) ---
 
 // A flared hip roof over a square of half-width `halfW` centred at cXZ, eave at
 // `eaveY`: deep eaves (overhang), a concave sweep up to the apex, and the corners
@@ -2098,61 +2039,6 @@ static void emitFlaredRoof(BuildingMesh& out, const Vec3& cXZ, Real eaveY, Real 
         MeshBuilder::emitTri(m, m0, m1, apex, tn, tile);   // mid -> apex
     }
     appendToPart(out, PartId::Roof, m);
-}
-
-static BuildingMesh growPagoda(const Scope& scope, const BuildingParams& p) {
-    BuildingMesh out;
-    ProcRng rng(p.seed);
-    Vec3 cXZ = scope.corner(0.5, 0, 0.5); cXZ.y = 0;
-    Real baseY = scope.origin.y;
-    const Vec3 r(1, 0, 0), f(0, 0, 1);             // world-aligned (grid city)
-    Real w0 = std::min(scope.size.x, scope.size.z) * 0.5 * 0.78;
-
-    Vec3 wallCol(0.62, 0.13, 0.11);                // vermillion
-    Vec3 colCol(0.42, 0.08, 0.07);                 // darker red columns/trim
-    Vec3 tile = (rng.next() < 0.4) ? Vec3(0.16, 0.28, 0.46)   // imperial blue
-                                   : Vec3(0.13, 0.40, 0.25);  // jade green
-    Vec3 gold(0.80, 0.64, 0.20);
-
-    auto boxAt = [&](Real cy, Real h, Real hw, PartId pid, const Vec3& col) {
-        emitBox(out, Scope{cXZ + Vec3(0, cy, 0) - r * hw - f * hw,
-                           {r, Vec3(0, 1, 0), f}, Vec3(hw * 2, h, hw * 2)}, pid, col);
-    };
-
-    int tiers = std::max(2, p.tiers);
-    Real shrink = 0.80, tierH = std::max(Real(2.8), p.floorHeight);
-    Real y = baseY;
-
-    boxAt(y, 0.7, w0 + 0.6, PartId::Ground, Vec3(0.52, 0.50, 0.46));   // stone podium
-    y += 0.7;
-
-    Real w = w0;
-    for (int t = 0; t < tiers; ++t) {
-        boxAt(y, tierH, w, PartId::Wall, wallCol);                     // red tier body
-        // Corner columns (the temple posts) + a dark lattice screen per face.
-        for (int sx = -1; sx <= 1; sx += 2)
-            for (int sz = -1; sz <= 1; sz += 2)
-                emitBox(out, Scope{cXZ + Vec3(sx * w - 0.16, y, sz * w - 0.16),
-                                   {r, Vec3(0, 1, 0), f}, Vec3(0.32, tierH, 0.32)},
-                        PartId::Trim, colCol);
-        boxAt(y + tierH * 0.18, tierH * 0.6, w * 0.82, PartId::Glass, Vec3(0.032, 0.027, 0.020));
-        y += tierH;
-        // Flared roof at the top of this tier (deep eaves, upturned corners).
-        emitFlaredRoof(out, cXZ, y, w, w * 0.55, w * 0.62, w * 0.16, tile);
-        w *= shrink;
-    }
-    // Gold finial: a stacked post + bead spire.
-    boxAt(y, 1.6, 0.16, PartId::Detail, gold);
-    emitBox(out, Scope{cXZ + Vec3(-0.35, y + 1.6, -0.35), {r, Vec3(0, 1, 0), f},
-                       Vec3(0.7, 0.7, 0.7)}, PartId::Detail, gold);
-    out.height = (y + 2.3) - baseY;
-
-    BuildingMesh sc;
-    emitBox(sc, Scope{Vec3(cXZ.x - w0, baseY, cXZ.z - w0), {r, Vec3(0, 1, 0), f},
-                      Vec3(w0 * 2, out.height, w0 * 2)}, PartId::Wall, wallCol);
-    if (!sc.parts.empty()) out.proxy = sc.parts.front();
-    out.attaches.push_back({cXZ + Vec3(0, y, 0), Vec3(0, 1, 0), "roof"});
-    return out;
 }
 
 // THE GLASS CAPS (issue #105, tops 10-14; mass_stack.h Cap::Kind): the top outline lofted ring by ring in the
@@ -2587,211 +2473,6 @@ static void emitCrown(BuildingMesh& out, const Vec3& footOrigin, Real width,
             placed = true;
         }
     }
-}
-
-BuildingMesh growBuilding(const Scope& scope, const BuildingParams& params,
-                          FacadeDetail detail) {
-    // Cylinder/Pagoda emit Full at both levels for now (already lean; see the
-    // FacadeDetail note in the header).
-    if (params.shape == BuildingShape::Cylinder) return growCylinder(scope, params);
-    if (params.shape == BuildingShape::Pagoda)   return growPagoda(scope, params);
-    BuildingMesh out;
-    const bool full = detail == FacadeDetail::Full;
-    ProcRng rng(params.seed);
-
-    const Real baseY = scope.origin.y;
-    const Vec3 wallColor =
-        params.wallColor * (0.92 + 0.08 * rng.next());      // slight per-building tint
-
-    // Running footprint (origin XZ + extents along right/forward); shrinks at setbacks.
-    Vec3 footOrigin = scope.origin;
-    Real width = scope.size.x, depth = scope.size.z;
-    const Vec3 r = scope.axis[0], f = scope.axis[2];
-
-    auto storeyScope = [&](Real y, Real h) {
-        Scope s;
-        s.axis[0] = r; s.axis[1] = Vec3(0, 1, 0); s.axis[2] = f;
-        s.origin = Vec3(footOrigin.x, y, footOrigin.z);
-        s.size = Vec3(width, h, depth);
-        return s;
-    };
-
-    Real y = baseY;
-
-    // Entrance side: the face whose outward normal points most toward the street
-    // (params.faceDir), so the door faces the road, not an alley (ADR-0040). Side
-    // normals follow faceOf: 0=+f, 1=-f, 2=+r, 3=-r.
-    Vec3 sideNormal[4] = {f, f * -1, r, r * -1};
-    int entranceSide = 0;
-    Real bestDot = -1e30;
-    for (int s = 0; s < 4; ++s) {
-        Real dp = sideNormal[s].x * params.faceDir.x + sideNormal[s].z * params.faceDir.z;
-        if (dp > bestDot) { bestDot = dp; entranceSide = s; }
-    }
-
-    // Ground floor: taller, glassy retail (or lobby), walkable shell with a real
-    // entrance on the street-facing face (ADR-0038 §4).
-    Real gh = params.groundHeight;
-    Scope ground = storeyScope(y, gh);
-    FacadeMode groundMode = params.solidFacade ? FacadeMode::Solid
-                          : params.groundRetail ? FacadeMode::Retail
-                                                : FacadeMode::Residential;
-    for (int side = 0; side < 4; ++side) {
-        FacadeMode mode = (side == entranceSide && params.walkableGround)
-                              ? FacadeMode::Entrance : groundMode;
-        emitFacade(out, ground, side, mode, params, wallColor, detail);
-    }
-    // Ground slab you can stand on.
-    emitBox(out, Scope{Vec3(footOrigin.x, y - 0.05, footOrigin.z),
-                       {r, Vec3(0, 1, 0), f}, Vec3(width, 0.1, depth)},
-            PartId::Ground, materialFor(PartId::Ground, wallColor).albedo);
-
-    // Base course / water-table: a low band the building rises from. Emitted
-    // per face and skipped on the entrance side (ADR-0040) so it steps around
-    // the doorway instead of clipping it ("the foundation eats the base").
-    if (full && params.baseCourse) {
-        const Real bh = std::min(Real(0.45), gh * 0.12);   // water-table height
-        const Real proud = 0.1;
-        Vec3 col = params.trimColor * 0.8;
-        RenderMesh band;
-        for (int side = 0; side < 4; ++side) {
-            if (side == entranceSide && params.walkableGround) continue;   // entrance breaks it
-            Face fr = faceOf(ground, side);
-            Vec3 out = fr.n * proud;
-            Vec3 b0 = fr.at(0, 0), b1 = fr.at(fr.width, 0);
-            Vec3 t0 = fr.at(0, bh), t1 = fr.at(fr.width, bh);
-            MeshBuilder::emitQuad(band, b0 + out, b1 + out, t1 + out, t0 + out, fr.n, col);  // face
-            MeshBuilder::emitQuad(band, t0 + out, t1 + out, t1, t0, fr.v, col);              // top ledge
-        }
-        appendToPart(out, PartId::Trim, band);
-    }
-    // (The entrance attach point + awning + doorframe are emitted by the DOOR
-    // element inside emitFacade, so they sit on the actual door bay — a face-
-    // centred awning was off by half a bay on even bay counts.)
-    // BASE CORNICE: a real stepped profile capping the base (device: "I don't
-    // see a cornice at the top of the building's base" — the old single band
-    // read as nothing). Three courses stepping outward — bed mould, corona,
-    // and a thin cap slab — wrapped around the whole perimeter.
-    auto emitCornice = [&](Real yTop, Real scale) {
-        struct Tier { Real grow, h; };
-        const Tier tiers[3] = {{0.10, 0.16}, {0.24, 0.18}, {0.34, 0.08}};
-        Real yb = yTop;
-        for (const Tier& t : tiers) {
-            Real g2 = t.grow * scale, h2 = t.h * scale;
-            Scope sc{Vec3(footOrigin.x, yb, footOrigin.z) - r * g2 - f * g2,
-                     {r, Vec3(0, 1, 0), f}, Vec3(width + 2 * g2, h2, depth + 2 * g2)};
-            emitBox(out, sc, PartId::Trim, params.trimColor);
-            yb += h2;
-        }
-    };
-    if (full && params.stringCourse) emitCornice(y - 0.32, 1.0);
-    y += gh;
-
-    // Upper floors carry no pilasters — base piers belong to the base only
-    // (ADR-0040), capped by the string course above.
-    BuildingParams upper = params;
-    upper.pilasters = false;
-
-    // Upper residential floors, with optional setbacks.
-    bool didSetback = false;
-    for (int i = 0; i < params.floors; ++i) {
-        if (params.setbackFloors > 0 && params.setbackEvery > 0 && i > 0 &&
-            i % params.setbackFloors == 0 &&
-            width - 2 * params.setbackEvery >= 8.0 &&
-            depth - 2 * params.setbackEvery >= 8.0) {
-            didSetback = true;
-            Real d = params.setbackEvery;
-            Real dx = std::min(d, width * 0.4), dz = std::min(d, depth * 0.4);
-            // Cap the lower (wider) mass with a roof slab so the exposed setback
-            // ledge is a real surface, not an open shelf (ADR-0040: stepped
-            // towers terrace at each setback). Slab spans the old footprint; the
-            // new mass rises from it and hides all but the ledge ring.
-            emitBox(out, Scope{Vec3(footOrigin.x, y - 0.05, footOrigin.z),
-                               {r, Vec3(0, 1, 0), f}, Vec3(width, 0.2, depth)},
-                    PartId::Roof, materialFor(PartId::Roof, wallColor).albedo);
-            footOrigin = footOrigin + r * dx + f * dz;
-            width -= 2 * dx; depth -= 2 * dz;
-            // A low terrace parapet around the stepped-back mass.
-            emitParapet(out, footOrigin, width, depth, r, f, y, 0.6, 0.24,
-                        PartId::Trim, materialFor(PartId::Trim, wallColor).albedo);
-        }
-        Real fh = params.floorHeight;
-        Scope storey = storeyScope(y, fh);
-        FacadeMode mode = params.solidFacade ? FacadeMode::Solid
-                                             : FacadeMode::Residential;
-        for (int side = 0; side < 4; ++side) {
-            if (params.curtainWall)
-                emitCurtainWallRect(out, faceOf(storey, side), wallColor, detail, false, curtainStyleOf(params));
-            else emitFacade(out, storey, side, mode, upper, wallColor, detail);
-        }
-        if (i == params.floors / 2) {
-            Face ff = faceOf(storey, 0);
-            out.attaches.push_back({ff.at(ff.width * 0.5, fh * 0.5), ff.n, "facade"});
-        }
-        y += fh;
-    }
-
-    // QUOINS (element, P2): alternating cast-stone blocks up every corner
-    // arris — the masonry corner treatment (and it hides the thin-texture edge
-    // where two brick faces meet, device feedback). Skipped on stepped towers
-    // (the corners move) and clean-skin facades.
-    if (full && params.quoins && !params.curtainWall && !params.solidFacade &&
-        !didSetback) {
-        const Real qh = 0.42, gap = 0.03, proud = 0.045;
-        const Real longL = 0.62, shortL = 0.30;
-        const Vec3 qcol = params.trimColor;
-        for (int cxi = 0; cxi <= 1; ++cxi)
-            for (int czi = 0; czi <= 1; ++czi) {
-                int k = 0;
-                for (Real qy = baseY + 0.06; qy + qh <= y - 0.45; qy += qh, ++k) {
-                    const bool alongR = ((k + cxi + czi) & 1) == 0;
-                    const Real lr = alongR ? longL : shortL;    // extent along r
-                    const Real lf = alongR ? shortL : longL;    // extent along f
-                    const Real x0q = cxi ? width - lr : -proud;
-                    const Real z0q = czi ? depth - lf : -proud;
-                    Vec3 o = footOrigin + r * x0q + f * z0q;
-                    o.y = qy;
-                    emitBox(out, Scope{o, {r, Vec3(0, 1, 0), f},
-                                       Vec3(lr + proud, qh - gap, lf + proud)},
-                            PartId::Trim, qcol);
-                }
-            }
-    }
-
-    // Top cornice: the stepped crown capping the shaft (mirrors the base
-    // cornice, a touch larger), so the shaft reads as framed between base and
-    // crown — the tripartite base/shaft/capital line a masonry building always
-    // has. Glass towers get a clean cap instead.
-    if (full && params.stringCourse && !params.curtainWall) emitCornice(y - 0.45, 1.25);
-    // Roof: a flat slab + a parapet railing around the perimeter (ADR-0038 §4).
-    emitBox(out, Scope{Vec3(footOrigin.x, y - 0.05, footOrigin.z),
-                       {r, Vec3(0, 1, 0), f}, Vec3(width, 0.2, depth)},
-            PartId::Roof, materialFor(PartId::Roof, wallColor).albedo);
-    if (params.parapet > 0) {
-        emitParapet(out, footOrigin, width, depth, r, f, y, params.parapet, 0.28,
-                    PartId::Trim, materialFor(PartId::Trim, wallColor).albedo);
-    }
-    // Crown: mechanical penthouse + rooftop water tank (ADR-0040 Pass B).
-    // Flat keeps the parapet for the silhouette but skips the roof furniture.
-    if (full) emitCrown(out, footOrigin, width, depth, r, f, y, params, rng);
-    out.attaches.push_back({Vec3(footOrigin.x, y, footOrigin.z) +
-                                r * (width * 0.5) + f * (depth * 0.5),
-                            Vec3(0, 1, 0), "roof"});
-
-    out.height = (y + params.parapet) - baseY;
-
-    // Coarse proxy mass (single box, ground footprint to roof) for HLOD/impostor
-    // baking (ADR-0038 §6). Built into a scratch BuildingMesh so it stays separate
-    // from the detailed parts.
-    {
-        BuildingMesh scratch;
-        emitBox(scratch, Scope{scope.origin, {scope.axis[0], Vec3(0, 1, 0), scope.axis[2]},
-                               Vec3(scope.size.x, out.height, scope.size.z)},
-                PartId::Wall, wallColor);
-        if (!scratch.parts.empty()) out.proxy = scratch.parts.front();
-    }
-
-    return out;
 }
 
 RenderMesh BuildingMesh::merged() const {
@@ -4047,6 +3728,32 @@ bool tierBoxInside(const Poly2& plan, const OBB2& ob, Real& hw, Real& hd) {
     return false;
 }
 
+// THE PAGODA (a stack preset, ADR-0270): a square inscribed in the lot's rectangle at 0.78 of its short half, its
+// tiers stepping in from the second floor (envelopeTiers), a flared tile eave round every tier's top and a gold
+// finial on the last (growPlanBuilding). Empty when the lot cannot hold `floors` tiers.
+Poly2 pagodaPlan(const Poly2& lot, int floors) {
+    const OBB2 ob = orientedBoundingBox(lot);
+    Real hw = 0, hd = 0;
+    if (!tierBoxInside(lot, ob, hw, hd)) return {};
+    const Real s = std::min(hw, hd) * 0.78;
+    // room for every tier to step in (at least 2% a side) and the top one to keep the stair (envelopeTiers)
+    if (2 * s * std::pow(Real(0.98), std::max(0, floors - 1)) < kCoreTierMin + Real(0.02)) return {};
+    return tierBox(ob, s, s);
+}
+
+// A pagoda tier's eave: the flared roof over a square tier's outline, sized as the old box pagoda sized it.
+static Real emitPagodaEave(BuildingMesh& out, const Poly2& tier, Real y, const Vec3& tile) {
+    const OBB2 ob = orientedBoundingBox(tier);
+    const Real w = std::min(ob.half[0], ob.half[1]);
+    emitFlaredRoof(out, Vec3(ob.center.x, 0, ob.center.y), y, w, w * 0.55, w * 0.62, w * 0.16, tile);
+    return w * 0.62;
+}
+static Vec3 pagodaTile(uint32_t seed) {
+    ProcRng rng(seed ^ 0x9a60da5u);
+    return rng.next() < 0.4 ? Vec3(0.16, 0.28, 0.46)    // imperial blue
+                            : Vec3(0.13, 0.40, 0.25);   // jade green
+}
+
 // THE STACK IS THE SOURCE (issue #105 step 4a, mass_stack.h): the tiers and the storey stack are the stack's
 // entries and slices; with identity transforms they are what the two functions below produced until today.
 static bool samePlan(const Poly2& a, const Poly2& b);
@@ -4164,6 +3871,23 @@ std::vector<MassTier> envelopeTiers(const Poly2& planIn, const BuildingParams& p
         return out;
     }
     using Env = BuildingParams::Envelope;
+    // THE PAGODA'S TIERS: square, a tier a floor from the second floor, each 0.8 of the one below where the lot
+    // has the room -- less where it has not, so the top tier still holds the stair (kCoreTierMin): it is a
+    // building you walk up, not a model of one
+    if (params.shape == BuildingShape::Pagoda) {
+        const OBB2 ob = orientedBoundingBox(cur);
+        Real s = std::min(ob.half[0], ob.half[1]);
+        const int steps = params.floors - 1;
+        const Real f = steps > 0 ? std::clamp(std::pow((kCoreTierMin + Real(0.02)) * Real(0.5) / s, Real(1) / steps), Real(0.8), Real(0.98)) : Real(1);
+        for (int g = 1; g < params.floors; ++g) {
+            s *= f;
+            if (2 * s < kCoreTierMin - 1e-6) break;
+            const Poly2 next = tierBox(ob, s, s);
+            out.push_back({next, g});
+            cur = next;
+        }
+        return out;
+    }
     // THE SKY EXPOSURE PLANE: the street wall, then a step every `stepFloors` along the plane (skyRatio up per
     // metre back), the first at least setback1, until the mass covers towerFrac of the lot; the tower above
     // rises straight.
@@ -6934,7 +6658,15 @@ BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
     const std::vector<Poly2> plates = skinPlates(plan, params);   // (the Wave's, or any form's with skin & 2)
     for (int i = 0; i < params.floors; ++i) {
         const StoreyPlan& sp = storeys[static_cast<std::size_t>(i) + 1];
-        if (i > 0 && sp.tier != storeys[static_cast<std::size_t>(i)].tier) {
+        if (i > 0 && sp.tier != storeys[static_cast<std::size_t>(i)].tier && params.shape == BuildingShape::Pagoda) {
+            // A PAGODA'S TIER: the one below capped and roofed by its flared eave, no parapet.
+            emitPlanSlab(out, cur, y - 0.05, 0.2, PartId::Roof,
+                         materialFor(PartId::Roof, wallColor).albedo, shaftHoles);
+            emitPagodaEave(out, cur, y, pagodaTile(params.seed));
+            if (full) cornerPosts(cur, tierY0, y - tierY0);
+            cur = sp.plan;
+            tierY0 = y;
+        } else if (i > 0 && sp.tier != storeys[static_cast<std::size_t>(i)].tier) {
             // A setback landed at this floor: cap the tier below.
             emitPlanSlab(out, cur, y - 0.05, 0.2, PartId::Roof,
                          materialFor(PartId::Roof, wallColor).albedo, shaftHoles);
@@ -7412,7 +7144,16 @@ BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
         Vec3 f3(topObb.axis[1].x, 0, topObb.axis[1].y);
         Vec3 fo = Vec3(topObb.center.x, 0, topObb.center.y) -
                   r3 * topObb.half[0] - f3 * topObb.half[1];
-        if (params.spire) {
+        if (params.shape == BuildingShape::Pagoda) {
+            // THE PAGODA'S TOP: the last tier's eave, and on it a gold finial -- a post and a bead.
+            const Real rise = emitPagodaEave(out, cur, y, pagodaTile(params.seed));
+            const Vec2 c = topObb.center;
+            const Vec3 gold(0.80, 0.64, 0.20), up(0, 1, 0), rr(1, 0, 0), ff(0, 0, 1);
+            const Real ry = y + rise;
+            emitBox(out, Scope{Vec3(c.x - 0.16, ry, c.y - 0.16), {rr, up, ff}, Vec3(0.32, 1.6, 0.32)}, PartId::Detail, gold);
+            emitBox(out, Scope{Vec3(c.x - 0.35, ry + 1.6, c.y - 0.35), {rr, up, ff}, Vec3(0.7, 0.7, 0.7)}, PartId::Detail, gold);
+            roofRise = std::max(roofRise, rise + 2.3);
+        } else if (params.spire) {
             // The art-deco stepped crown + mast instead of the penthouse.
             roofRise = std::max(
                 roofRise, emitSpireCrown(out, topObb, y + 0.05, params,

@@ -56,8 +56,7 @@ struct BuildingRecipe {
         Circle,      // a chord-tessellated drum (roomy curtain-wall lots)
         Park,        // no building: a green with trees
         RowStrip,    // the lot packed with side-by-side ROWHOUSE units
-        BoxMass,     // force the shrink-fit BOX scope + growBuilding, so the
-                     // non-box BuildingShapes (pagoda, cylinder) can dispatch
+        Pagoda,      // the square inscribed in the lot (pagodaPlan), tiered (ADR-0270)
         Plaza,       // no storeys: a raised paver podium with stairs, fencing,
                      // fountain and planting ("a building without the building")
         PodiumTower, // a full-lot PODIUM of a few floors carrying a slender

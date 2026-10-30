@@ -109,7 +109,7 @@ TEST_CASE(new_recipes_keep_their_signatures) {
             CHECK(c.placeType == "home");
         }
         if (c.name == "pagoda_tower") {
-            CHECK(c.massing == BuildingRecipe::Massing::BoxMass);
+            CHECK(c.massing == BuildingRecipe::Massing::Pagoda);
             CHECK(c.params.shape == BuildingShape::Pagoda);
         }
         if (c.name == "supermarket") CHECK(c.params.sideBays > 0);
@@ -136,6 +136,51 @@ TEST_CASE(new_recipes_keep_their_signatures) {
             CHECK(ind.params.groundBays >= 2);
         }
     }
+}
+
+// THE PAGODA ON THE PLAN PATH (ADR-0270): every seed of the recipe, on lots of every proportion, stands on the square
+// inscribed in its lot, its tiers each smaller than the one below, a flared tile roof over them and a gold finial on
+// top -- grown by growPlanBuilding, the one massing path, so it has the city's floors, doors and interiors too.
+TEST_CASE(a_pagoda_grows_its_tiers_on_the_plan_path_on_every_seed) {
+    const std::vector<Poly2> lots = {
+        {{0, 0}, {24, 0}, {24, 24}, {0, 24}},     // square
+        {{0, 0}, {40, 0}, {40, 22}, {0, 22}},     // long
+        {{0, 0}, {30, 0}, {26, 26}, {2, 24}},     // off-square
+    };
+    int grown = 0, tooSmall = 0;
+    for (uint32_t seed = 1; seed <= 12; ++seed) {
+        BuildingRecipe r;
+        if (!architectRecipeByName("pagoda_tower", seed, 0.6, 24, 600, r)) continue;
+        CHECK(r.massing == BuildingRecipe::Massing::Pagoda);
+        for (const Poly2& lot : lots) {
+            const Poly2 sq = pagodaPlan(lot, r.params.floors);
+            if (sq.empty()) { ++tooSmall; continue; }   // a lot that cannot hold its tiers stays open (checked below)
+            CHECK(sq.size() == 4);
+            for (const Vec2& v : sq) CHECK(pointInPolygon(lot, v));   // it stands on its lot
+            const std::vector<StoreyPlan> st = storeyPlans(sq, r.params);
+            int steps = 0;
+            for (std::size_t k = 1; k < st.size(); ++k) {
+                CHECK(area(st[k].plan) <= area(st[k - 1].plan) + 1e-6);   // never wider than the tier below
+                steps += area(st[k].plan) < area(st[k - 1].plan) - 1e-6;
+            }
+            if (steps != r.params.floors - 1) { std::printf("    [pagoda] seed %u: %d floors, %zu storeys, %d steps, short side %.2f; tiers:", seed, r.params.floors, st.size(), steps, std::sqrt(area(sq))); for (const MassTier& mt : envelopeTiers(sq, r.params)) std::printf(" %.2f@%d", std::sqrt(area(mt.plan)), mt.floor0); std::printf(" storeys:"); for (const StoreyPlan& sp : st) std::printf(" %.2f", std::sqrt(area(sp.plan))); std::printf("\n"); }
+            CHECK(steps == r.params.floors - 1);   // a tier a floor from the second floor
+            const BuildingMesh bm = growPlanBuilding(sq, r.params, 0.0);
+            CHECK(!bm.parts.empty());
+            bool roof = false, finial = false;
+            for (const RenderMesh& m : bm.parts) {
+                roof = roof || (m.materialIndex == static_cast<int>(PartId::Roof) && !m.indices.empty());
+                finial = finial || (m.materialIndex == static_cast<int>(PartId::Detail) && !m.indices.empty());
+            }
+            CHECK(roof);
+            CHECK(finial);
+            CHECK(bm.height > r.params.groundHeight + r.params.floors * r.params.floorHeight);   // the roofs and the finial stand above
+            ++grown;
+        }
+    }
+    std::printf("    [pagoda] %d grown on the plan path, %d lots too small for their tiers\n", grown, tooSmall);
+    CHECK(grown >= 24);
+    CHECK(pagodaPlan(Poly2{{0, 0}, {14, 0}, {14, 14}, {0, 14}}, 3).empty());   // too small for any pagoda: open ground
 }
 
 TEST_CASE(new_recipes_are_deterministic) {

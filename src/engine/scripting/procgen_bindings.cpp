@@ -1087,12 +1087,14 @@ BuildingParams readBuildingParamsOnto(lua_State* L, int idx, BuildingParams p) {
     p.seed          = seed;
 
     // Massing: box | cylinder (round tower) | pagoda (tiered) — the "not every
-    // building is a box" axis.
+    // building is a box" axis. A cylinder is its plan (luaBuildingPlan); a
+    // pagoda's tiers are its floors (ADR-0270).
     std::string shp = optStrField(L, idx, "shape", "box");
-    if (shp == "cylinder") p.shape = BuildingShape::Cylinder;
-    else if (shp == "pagoda") p.shape = BuildingShape::Pagoda;
+    if (shp == "pagoda") {
+        p.shape = BuildingShape::Pagoda;
+        p.floors = static_cast<int>(optField(L, idx, "tiers", 5));
+    }
     p.sides     = static_cast<int>(optField(L, idx, "sides", p.sides));
-    p.tiers     = static_cast<int>(optField(L, idx, "tiers", p.tiers));
     p.pilasters = optBoolField(L, idx, "pilasters", p.pilasters);
     p.solidFacade = optBoolField(L, idx, "solid_facade", p.solidFacade);
     p.groundRetail = optBoolField(L, idx, "ground_retail", p.groundRetail);
@@ -1279,14 +1281,22 @@ namespace {
 // Grows the split/shape-grammar building over a rectangular footprint and returns
 // the merged mesh (per-vertex colours baked, so wall/glass/roof read on a single
 // material). Lua authors the grammar params; the rewrite/emit loop stays in C++.
+// The plan a Lua building grows on (ADR-0270: one massing path, growPlanBuilding): the width x depth rectangle
+// centred on the origin, a cylinder's `sides`-gon inscribed in it, or a pagoda's square.
+static Poly2 luaBuildingPlan(lua_State* L, int idx, const BuildingParams& p, Real width, Real depth) {
+    const Poly2 rect = {{-width * 0.5, -depth * 0.5}, {width * 0.5, -depth * 0.5},
+                        {width * 0.5, depth * 0.5}, {-width * 0.5, depth * 0.5}};
+    if (p.shape == BuildingShape::Pagoda) return pagodaPlan(rect, p.floors);
+    if (lua_istable(L, idx) && optStrField(L, idx, "shape", "box") == "cylinder")
+        return Section::ngon(std::max(6, p.sides), std::min(width, depth) * 0.5).tessellate();
+    return rect;
+}
+
 int l_building_grow(lua_State* L) {
     BuildingParams p = readBuildingParams(L, 1);
     Real width = (lua_istable(L, 1)) ? static_cast<Real>(optField(L, 1, "width", 18.0)) : 18.0;
     Real depth = (lua_istable(L, 1)) ? static_cast<Real>(optField(L, 1, "depth", 14.0)) : 14.0;
-    Poly2 foot = {{-width * 0.5, -depth * 0.5}, {width * 0.5, -depth * 0.5},
-                  {width * 0.5, depth * 0.5}, {-width * 0.5, depth * 0.5}};
-    Scope s = scopeFromFootprint(foot, 0.0, 10.0);
-    BuildingMesh bm = growBuilding(s, p);
+    BuildingMesh bm = growPlanBuilding(luaBuildingPlan(L, 1, p, width, depth), p, 0.0);
     pushMesh(L, std::make_shared<RenderMesh>(bm.merged()));
     return 1;
 }
@@ -1301,9 +1311,7 @@ int l_building_grow_parts(lua_State* L) {
     BuildingParams p = readBuildingParams(L, 1);
     Real width = (lua_istable(L, 1)) ? static_cast<Real>(optField(L, 1, "width", 18.0)) : 18.0;
     Real depth = (lua_istable(L, 1)) ? static_cast<Real>(optField(L, 1, "depth", 14.0)) : 14.0;
-    Poly2 foot = {{-width * 0.5, -depth * 0.5}, {width * 0.5, -depth * 0.5},
-                  {width * 0.5, depth * 0.5}, {-width * 0.5, depth * 0.5}};
-    BuildingMesh bm = growBuilding(scopeFromFootprint(foot, 0.0, 10.0), p);
+    BuildingMesh bm = growPlanBuilding(luaBuildingPlan(L, 1, p, width, depth), p, 0.0);
     static const char* kPartNames[] = {"wall", "glass", "trim", "roof", "door",
                                        "ground", "detail", "brick", "concrete",
                                        "stucco", "metal", "wood",
@@ -1899,9 +1907,7 @@ int l_building_grow_floor(lua_State* L) {
 // query for layout code that places a building before committing geometry.
 int l_building_height(lua_State* L) {
     BuildingParams p = readBuildingParams(L, 1);
-    Poly2 foot = {{-9, -7}, {9, -7}, {9, 7}, {-9, 7}};
-    Scope s = scopeFromFootprint(foot, 0.0, 10.0);
-    lua_pushnumber(L, growBuilding(s, p).height);
+    lua_pushnumber(L, growPlanBuilding(luaBuildingPlan(L, 1, p, 18.0, 14.0), p, 0.0).height);
     return 1;
 }
 

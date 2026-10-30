@@ -73,7 +73,7 @@ the honest fix is a script that exercises them, not deletion.
 | --- | --- |
 | ~~**Two city pipelines**~~ | **RESOLVED 2026-08-16.** `city.json`/`city_arena.json` migrated onto `road` + `citysim.buildLots`; `city.{h,cpp}`, both host bake paths and the `CityModel`→`RoadNet` nav bridge deleted. The building-winding gate was ported to `growLotBuildings` first, so retiring the generator did not take the only test for inside-out facades with it. |
 | `level_scene.cpp` re-implements `growCityLots` | **Narrower than first reported.** The JSON half is genuinely shared (`readLotGrowParams`); only the road-net-derived half — hub list + coreness anchor — is duplicated, with a comment explaining that the editor otherwise grows a *different* city (no districts, coreness 0, no towers). Still a fork risk; the fix is to hoist those ~12 lines, not to rewrite. |
-| `emitCornice` (box path) vs `sweptCornice` (plan path) | Two lambdas in different functions carrying the same tier table `{0.10,0.16},{0.24,0.18},{0.34,0.08}`. One emits boxes, one emits plan slabs — so they cannot merge outright, but the table should be one shared constant. |
+| ~~`emitCornice` (box path) vs `sweptCornice` (plan path)~~ | **RESOLVED 2026-10-30 (ADR-0270).** The box path is gone: `growBuilding`, `growCylinder` and `growPagoda` were retired for one massing path, `growPlanBuilding`, and `sweptCornice` is the only cornice. |
 
 **Not dead code — a real gap.**
 

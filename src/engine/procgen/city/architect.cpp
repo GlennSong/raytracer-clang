@@ -587,17 +587,16 @@ void recipeParkingGarage(BuildingRecipe& out, ProcRng& rng, RecipeCtx& cx) {
     out.name = "parking_garage";
 }
 
-// The PAGODA tower: the tiered East-Asian silhouette (box-scope massing so
-// the pagoda shape can dispatch). A rare midtown flourish.
+// The PAGODA tower: the tiered East-Asian silhouette, on the square inscribed in its lot (pagodaPlan), a tier a
+// floor (ADR-0270). A rare midtown flourish.
 void recipePagodaTower(BuildingRecipe& out, ProcRng& rng, RecipeCtx&) {
     BuildingParams& p = out.params;
     p.shape = BuildingShape::Pagoda;
-    p.tiers = 3 + 2 * rng.between(0, 1);    // 3 or 5 — odd reads best
-    p.floors = p.tiers;
+    p.floors = 3 + 2 * rng.between(0, 1);    // 3 or 5 tiers — odd reads best
     p.groundRetail = false;
     p.wallColor = Vec3(0.58, 0.22, 0.16);  // lacquer red
     p.trimColor = Vec3(0.30, 0.24, 0.18);
-    out.massing = BuildingRecipe::Massing::BoxMass;
+    out.massing = BuildingRecipe::Massing::Pagoda;
     out.placeType = "shop";
     out.name = "pagoda_tower";
 }

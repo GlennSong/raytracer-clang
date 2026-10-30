@@ -152,11 +152,10 @@ TEST_CASE(winding_tree_branches_face_out) {
 // --- City: shape grammar, road mesh, street furniture -----------------------
 TEST_CASE(winding_city_geometry_faces_out) {
     Poly2 footprint = {{0, 0}, {18, 0}, {18, 18}, {0, 18}};
-    Scope s = scopeFromFootprint(footprint, 0.0, 24.0);
     BuildingParams bp;
     bp.floors = 6;
     bp.seed = 3;
-    BuildingMesh bm = growBuilding(s, bp);
+    BuildingMesh bm = growPlanBuilding(footprint, bp, 0.0);
     CHECK(!bm.parts.empty());
     for (size_t i = 0; i < bm.parts.size(); ++i)
         checkSolid(bm.parts[i], "building part");
@@ -236,17 +235,12 @@ TEST_CASE(mesh_audit_every_building_recipe) {
             if (r.massing == BuildingRecipe::Massing::Park || r.massing == BuildingRecipe::Massing::Plaza) continue;
             std::vector<Poly2> plans = {rectPlan(24, 20), lPlan(28, 24)};
             for (const Poly2& lp : lotPlans()) plans.push_back(lp);
+            if (r.massing == BuildingRecipe::Massing::Pagoda)   // the pagoda stands on its square, as in the city
+                for (Poly2& plan : plans) plan = pagodaPlan(plan, r.params.floors);
             for (const Poly2& plan : plans) {
+                if (plan.size() < 3) continue;
                 Audit a = auditBuilding(growPlanBuilding(plan, r.params, 0.0), byPart);
                 a.add(auditBuilding(growInterior(plan, r.params, 0.0), byPart));
-                byRecipe[name].add(a);
-                total.add(a);
-            }
-            if (r.massing == BuildingRecipe::Massing::BoxMass) {
-                Scope s;
-                s.origin = Vec3(-10, 0, -8);
-                s.size = Vec3(20, r.params.floors * 3.5, 16);
-                const Audit a = auditBuilding(growBuilding(s, r.params), byPart);
                 byRecipe[name].add(a);
                 total.add(a);
             }

@@ -13297,3 +13297,39 @@ freeway census prints any ramp or freeway link no street reaches, or that leads 
   the published deck stands 0.29 m over the drawn ramp, and a car rides 0.28 m up. ADR-0223's owed "ramps are
   drawn off their published profile" question.
 - `metro_planned_regional_bus_joins_the_towns` (heavy): 20 of 40 buses moved in five minutes; not yet looked at.
+
+## ADR-0270 — One massing path: the pagoda is a stack preset, the drum is its plan, the box grammar is gone
+
+**Status.** Accepted, 2026-10-30. #117 item 35, step 2a (changes the bake; the lots tag is bumped once at the end
+of step 2, with the lanes bump ADR-0269 held).
+
+**Context.** Two massing paths grew buildings: `growPlanBuilding` (the plan grammar, the toolkit stack, every city
+building's floors, cores and interiors) and `growBuilding`, a ~200-line box grammar with its own facade wrapper and
+cornice, which dispatched a Cylinder shape to `growCylinder` and a Pagoda to `growPagoda`. In a city only two kinds
+of lot reached it: the pagoda recipe (`Massing::BoxMass`, forced onto the box path on roomy lots) and any lot whose
+plan failed (a shrink-fit box). Lua's `building.grow` / `grow_parts` / `height` called it directly. ADR-0175 owed
+"the drum and the pagoda as presets".
+
+**Decision.**
+1. THE PAGODA IS A STACK PRESET on the plan path. `pagodaPlan(lot, floors)`: the square inscribed in the lot's
+   rectangle at 0.78 of its short half (the box pagoda's). `envelopeTiers`: a square tier a floor from the second
+   floor, each 0.8 of the one below where the lot has room -- less where it has not (down to 2% a tier), so the top
+   tier still holds a stair (`kCoreTierMin`): a pagoda is a building you walk up now, with the city's floors, doors
+   and interiors. `growPlanBuilding`: a flared tile eave (the box pagoda's `emitFlaredRoof`, blue or jade by seed)
+   round every tier's top instead of the parapet and cornice, corner posts, and on the last tier its eave and a
+   gold finial. A lot that cannot hold the recipe's tiers returns no plan and stays open ground.
+   `Massing::BoxMass` becomes `Massing::Pagoda`; the recipe's tiers are its floors.
+2. THE DRUM IS ITS PLAN. The city's round towers already were (`Massing::Circle`). Lua `shape = "cylinder"` grows
+   on a `sides`-gon inscribed in its width x depth (`Section::ngon`). `BuildingShape::Cylinder` is gone; `Pagoda`
+   keeps its value (2) for the lot cache's codec.
+3. NO PLAN, NO BUILDING. A lot the plan grammar cannot stand on is open ground (`rejBox` counts them), not a
+   shrink-fit box.
+4. Lua `building.grow` / `grow_parts` / `height` grow on the plan path (`luaBuildingPlan`: the rectangle, the
+   cylinder's n-gon, the pagoda's square).
+5. DELETED: `growBuilding`, `growCylinder`, `growPagoda`, the box facade wrapper `emitFacade`, the already dead
+   `emitCurtainWall`, and with them the box path's cornice (TECH_DEBT's "two cornices" row: resolved).
+   `BuildingParams::tiers` is unread and leaves with the next BuildingParams codec change (step 2b).
+Tests: `a_pagoda_grows_its_tiers_on_the_plan_path_on_every_seed` (12 seeds x 3 lot shapes: on its lot, a tier a
+floor never wider than the one below, roofs and finial above the floors; 32 grown, 4 lots too small left open);
+the box-grammar cases in test_city and test_winding grow on the plan path; test_architect / test_lot_cache follow
+the renames.

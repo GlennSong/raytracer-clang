@@ -196,17 +196,16 @@ TEST_CASE(polygon_split_by_line) {
     CHECK_APPROX(area(left), 50.0, 1e-6);
 }
 
-// --- shape grammar (Phase 0) ------------------------------------------------
+// --- shape grammar (Phase 0; the plan grammar since ADR-0270) ----------------
 
 TEST_CASE(grammar_grows_a_multipart_building) {
     BuildingParams p; p.floors = 5; p.seed = 3;
-    Scope s = scopeFromFootprint(square(18), 0.0, 20.0);
-    BuildingMesh bm = growBuilding(s, p);
+    BuildingMesh bm = growPlanBuilding(square(18), p, 0.0);
     CHECK(bm.parts.size() >= 3);                 // wall + glass + roof at least
     CHECK(hasPart(bm, PartId::Wall));
     CHECK(hasPart(bm, PartId::Glass));
-    // 5 floors * 3.2 + 4.5 ground + 1.1 parapet = 21.6 m.
-    CHECK_APPROX(bm.height, 5 * 3.2 + 4.5 + 1.1, 1e-6);
+    // the ground storey, the floors and the parapet at least (a penthouse may stand higher)
+    CHECK(bm.height >= p.groundHeight + p.floors * p.floorHeight + p.parapet - 1e-6);
     CHECK(!bm.proxy.vertices.empty());           // coarse LOD proxy emitted
     CHECK(!bm.attaches.empty());
 }
@@ -263,8 +262,7 @@ TEST_CASE(city_lot_mass_box_faces_outward) {
 TEST_CASE(grammar_hlod_proxy_faces_outward) {
     for (int seed : {3, 11, 29}) {
         BuildingParams p; p.floors = 5; p.seed = seed;
-        Scope s = scopeFromFootprint(square(18), 0.0, 20.0);
-        BuildingMesh bm = growBuilding(s, p);
+        BuildingMesh bm = growPlanBuilding(square(18), p, 0.0);
         const RenderMesh& m = bm.proxy;
         CHECK(!m.vertices.empty());
         CHECK(m.indices.size() >= 3);
@@ -295,17 +293,17 @@ TEST_CASE(grammar_hlod_proxy_faces_outward) {
 }
 
 TEST_CASE(grammar_wall_part_picks_procedural_material) {
-    Scope s = scopeFromFootprint(square(18), 0.0, 16.0);
+    const Poly2 s = square(18);
     // A facade routes its wall geometry to its chosen procedural part (here
     // brick), not the flat Wall part.
     BuildingParams brick; brick.floors = 4; brick.seed = 7; brick.wallPart = PartId::Brick;
-    BuildingMesh bm = growBuilding(s, brick);
+    BuildingMesh bm = growPlanBuilding(s, brick, 0.0);
     CHECK(hasPart(bm, PartId::Brick));
     CHECK(!hasPart(bm, PartId::Wall));
 
     // The default keeps the flat Wall material.
     BuildingParams plain; plain.floors = 4; plain.seed = 7;
-    BuildingMesh pm = growBuilding(s, plain);
+    BuildingMesh pm = growPlanBuilding(s, plain, 0.0);
     CHECK(hasPart(pm, PartId::Wall));
     CHECK(!hasPart(pm, PartId::Brick));
 
@@ -322,8 +320,8 @@ TEST_CASE(grammar_wall_part_picks_procedural_material) {
 
 TEST_CASE(grammar_walkable_ground_punches_a_door) {
     BuildingParams p; p.floors = 3; p.walkableGround = true; p.seed = 1;
-    Scope s = scopeFromFootprint(square(16), 0.0, 12.0);
-    BuildingMesh bm = growBuilding(s, p);
+    const Poly2 s = square(16);
+    BuildingMesh bm = growPlanBuilding(s, p, 0.0);
     CHECK(hasPart(bm, PartId::Door));            // a real entrance opening
     bool entrance = false;
     for (const AttachPoint& a : bm.attaches) if (a.tag == "entrance") entrance = true;
@@ -331,13 +329,13 @@ TEST_CASE(grammar_walkable_ground_punches_a_door) {
 }
 
 TEST_CASE(grammar_taller_with_more_floors_and_deterministic) {
-    Scope s = scopeFromFootprint(square(16), 0.0, 12.0);
+    const Poly2 s = square(16);
     BuildingParams a; a.floors = 4; a.seed = 7;
     BuildingParams b; b.floors = 12; b.seed = 7;
-    CHECK(growBuilding(s, b).height > growBuilding(s, a).height);
+    CHECK(growPlanBuilding(s, b, 0.0).height > growPlanBuilding(s, a, 0.0).height);
     // Same seed + params -> identical geometry.
-    BuildingMesh m1 = growBuilding(s, a);
-    BuildingMesh m2 = growBuilding(s, a);
+    BuildingMesh m1 = growPlanBuilding(s, a, 0.0);
+    BuildingMesh m2 = growPlanBuilding(s, a, 0.0);
     CHECK(m1.parts.size() == m2.parts.size());
     CHECK(m1.merged().vertices.size() == m2.merged().vertices.size());
 }

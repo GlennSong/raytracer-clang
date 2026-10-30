@@ -355,7 +355,7 @@ struct LotPlanDebug {
     int rejPlan = 0;     // finished plan too pinched (inradius gauge) — was
                          // double-counted into rejFill
     int rejClear = 0;    // no inset of the plan cleared the road corridors
-    int rejBox = 0;      // box fallback rejected (fill / shrink-fit too small)
+    int rejBox = 0;      // no plan to stand on (the box fallback before ADR-0270): open ground
     int rejFrontage = 0; // whole footprint too far from any road surface
     int bisectedBlocks = 0;   // blocks the frontage walk failed on, filled by
                               // blind bisection (lots with no street by design)

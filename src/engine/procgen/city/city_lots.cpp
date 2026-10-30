@@ -10,7 +10,7 @@
 #include "architect.h"       // DistrictMap + archetype tables (the architect pass)
 #include "section.h"         // the toolkit's section massing (issue #105)
 #include "cells.h"           // the toolkit's complex: a bundle of tubes (issue #105 step 5)
-#include "shape_grammar.h"   // scopeFromFootprint, growBuilding — REAL buildings
+#include "shape_grammar.h"   // growPlanBuilding — REAL buildings
 #include "road_mesh.h"       // triangulatePolygon (lot-shaped park pads)
 #include "street_kit.h"      // streetLamp (plaza lamp posts)
 #include "block_grade.h"     // gradeBlocks (in-pass block terracing)
@@ -5936,14 +5936,12 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
             // seated at the block's lowest corner (Glenn: "a massive sunken building"). A block whose site cannot take
             // the store and its parking stays open ground.
             if (rec.massing == BuildingRecipe::Massing::BigBox && parkingPoly.empty() && !(bp.bigBox == 6 && planOk)) continue;
-            // BOX-MASS recipes (pagoda / cylinder shapes) must reach
-            // growBuilding — the plan path can't dispatch a BuildingShape —
-            // so a roomy rect-ish lot takes the shrink-fit box fallback
-            // below. A cramped/off-cut lot grows through the plan grammar
-            // instead (the shape can't dispatch, but the lot still builds).
-            if (rec.massing == BuildingRecipe::Massing::BoxMass &&
-                fill >= 0.72 && shortSide >= 10.0)
-                planOk = false;
+            // THE PAGODA stands on the square inscribed in its lot's rectangle (pagodaPlan, ADR-0270), its tiers and
+            // eaves grown by the plan grammar like any other building. A lot with no rectangle to hold one stays open.
+            if (planOk && rec.massing == BuildingRecipe::Massing::Pagoda) {
+                plan = pagodaPlan(plan, bp.floors);
+                if (plan.size() < 3) planOk = false;
+            }
             // A HOUSE sits on a small centred rectangle, not the whole lot —
             // the rest of the parcel reads as its yard (residential realism).
             bool yardApplied = false;
@@ -6612,33 +6610,11 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                 b.yaw = std::atan2(pb.axis[0].y, pb.axis[0].x);
                 b.plan = plan;   // the collider prism follows the massing
             } else {
-                // The box fallback fills the OBB: on a low-fill lot that IS
-                // the overhanging-mass bug, so those go green instead.
-                if (fill < 0.72) { dbg->rejBox++; emitGreen(); continue; }
-                Scope scope = scopeFromFootprint(site, b.baseY, 10.0, clearOfRoads);
-                const Real fitShort = std::min(scope.size.x, scope.size.z);
-                // The urban sliver floor holds for the box path too: a
-                // shrink-fit below minShortUrban is a knife blade, not a mass.
-                if (fitShort < std::max(p.minShort * 0.75,
-                                        std::min(p.minShort, p.minShortUrban))) {
-                    dbg->rejBox++;
-                    emitGreen(); continue;
-                }
-                Vec3 sc = scope.center();
-                b.site = Vec2(sc.x, sc.z);
-                b.width = scope.size.x;
-                b.depth = scope.size.z;
-                b.yaw = std::atan2(scope.axis[0].z, scope.axis[0].x);
-                bm = growBuilding(scope, bp);
-                if (outFlatParts)
-                    bmFlat = growBuilding(scope, bp, FacadeDetail::Flat);
-                // The box scope IS the plan here (shrunk-fit inside the lot).
-                Vec2 r2(scope.axis[0].x, scope.axis[0].z);
-                Vec2 f2(scope.axis[2].x, scope.axis[2].z);
-                Vec2 o2(scope.origin.x, scope.origin.z);
-                b.plan = {o2, o2 + r2 * scope.size.x,
-                          o2 + r2 * scope.size.x + f2 * scope.size.z,
-                          o2 + f2 * scope.size.z};
+                // NO PLAN, NO BUILDING (ADR-0270): a lot the plan grammar cannot stand on stays open ground. (It used to
+                // take a shrink-fit box from the old box grammar, growBuilding, retired.)
+                dbg->rejBox++;
+                emitGreen();
+                continue;
             }
             if (bm.parts.empty()) continue;
             const std::size_t unitAt = b.units.size();
