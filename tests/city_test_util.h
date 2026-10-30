@@ -91,7 +91,9 @@ inline engine::RoadGraph gridCity(const GridCityParams& p) {
             const bool interior = (i > 0 && i < dim - 1 && j > 0 && j < dim - 1);
             if (interior) {
                 const engine::Real jr = p.jitter * step;
-                pos += engine::Vec2(rng.in(-jr, jr), rng.in(-jr, jr));
+                const engine::Real jx = rng.in(-jr, jr);   // (one draw a statement: GCC takes Vec2's arguments right to left)
+                const engine::Real jy = rng.in(-jr, jr);
+                pos += engine::Vec2(jx, jy);
             }
             id[j][i] = g.addNode(pos, 0.01);
         }
