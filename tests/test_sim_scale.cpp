@@ -10,7 +10,8 @@
 
 #include "city_test_util.h"
 #include "../src/apps/citysim/city_sim.h"
-#include "../src/engine/procgen/city/metro.h"
+#include "../src/engine/procgen/city/plan/city_plan.h"
+#include <fstream>
 #include <algorithm>
 #include <chrono>
 #include <vector>
@@ -101,43 +102,19 @@ TEST_CASE(sim_scale_census_prints) {
 
 // METRO V2'S OWN NETWORK (Glenn, 2026-09-16: "enough to make metro v2 feel
 // like a bustling urban environment"). The synthetic grid above answers how
-// the sim scales; this answers what THIS city asks for. The parameters are
-// metro_v2_test.json's own `generate` block, mapped the way road_net.cpp maps
-// it, and the density rule is city_render.cpp's: lane-km x carsPerLaneKm and
-// sidewalk-km x pedsPerKm, each currently clamped to 400.
+// the sim scales; this answers what THIS city asks for: metro_v2_test's own
+// plan (assets/city_plans/metro_v2_test.json, ADR-0266), and the density rule
+// is city_render.cpp's: lane-km x carsPerLaneKm and sidewalk-km x pedsPerKm,
+// each currently clamped to 400.
 //
-// Heavy (it grows a 1 km metro), so it runs only under RT_SIM_SCALE=1.
+// Heavy (it plans a 2 km city on its terrain), so it runs only under RT_SIM_SCALE=1.
 TEST_CASE(metro_v2_density_target_prints) {
     if (!std::getenv("RT_SIM_SCALE")) return;
-    MetroParams mp;
-    mp.radius = 1075;
-    mp.hotspots = 9;
-    mp.blockSize = 180;
-    mp.minBlockEdge = 120;
-    mp.arteryWidth = 17;
-    mp.collectorWidth = 13;
-    mp.streetWidth = 12;
-    mp.freewayWidth = 22;
-    mp.freeways = true;                 // radius >= 550
-    mp.corridorFreeways = true;
-    mp.interchangeSpacing = 700;
-    mp.segLength = 100;
-    mp.influence = 700;
-    mp.killRadius = 260;
-    mp.mergeRadius = 170;
-    mp.corridorSpacing = 200;
-    mp.ambientPer500 = 40;
-    mp.loopMin = 450;
-    mp.loopMax = 1100;
-    mp.fabric = "mix";
-    mp.fabricCoreLen = 100;
-    mp.skeleton = "footprint";
-    mp.districtLen = 900;
-    mp.gateSpacing = 900;
-    mp.seed = 9;
+    std::ifstream in("assets/city_plans/metro_v2_test.json");
+    const plan::Brief brief = plan::briefFromJson(nlohmann::json::parse(in));
 
     const auto tb = std::chrono::steady_clock::now();
-    const RoadGraph g = buildMetro(mp, nullptr);   // freeway corridors not built headlessly
+    const RoadGraph g = plan::generatePlan(brief).streets;   // its freeway is the lanes builder's, not built headlessly
     const NavGraph nav = buildNavGraph(g);
     const double buildMs =
         std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - tb).count();

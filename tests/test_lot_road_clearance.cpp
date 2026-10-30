@@ -25,6 +25,7 @@
 //     gets wrong can only ever prove the formula it wrote itself.
 
 #include "test_framework.h"
+#include "planned_city.h"
 
 #include "../src/engine/level_params.h"
 #include "../src/engine/procgen/city/city_lots.h"
@@ -43,17 +44,11 @@ namespace {
 constexpr double STREET_WIDTH = 12.0;
 constexpr double ARTERIAL_WIDTH = 17.0;
 
-// A generated metro whose edges alternate street / arterial, so a narrow and a
+// A planned city whose edges alternate street / arterial, so a narrow and a
 // wide road meet at essentially every junction and share block frontage.
-RoadEntity mixedWidthMetro() {
-    RoadEntity net;
+RoadEntity mixedWidthCity() {
+    RoadEntity net = citytest::plannedNet();
     net.look.defaultWidth = STREET_WIDTH;
-    net.look.autoRoundabout = false;
-    nlohmann::json gen = { { "kind", "metro" },    { "radius", 600 },
-                           { "hotspots", 4 },      { "block_size", 130 },
-                           { "seed", 21 },         { "freeways", false },
-                           { "min_road_len", 24 }, { "terrain_aware", false } };
-    applyGenerateRecipe(net, gen, nullptr);
     for (std::size_t i = 0; i < net.graph.edges.size(); ++i)
         net.graph.edges[i].width = (i % 2 == 1) ? ARTERIAL_WIDTH : STREET_WIDTH;
     return net;
@@ -73,7 +68,7 @@ double distanceToSegment(const Vec2& p, const Vec2& a, const Vec2& b) {
 // The gate. Every vertex of every grown building PLAN stays out of every
 // carriageway: at least edge_width/2 from that edge's centreline.
 TEST_CASE(lot_buildings_clear_every_carriageway_on_a_mixed_width_net) {
-    RoadEntity net = mixedWidthMetro();
+    RoadEntity net = mixedWidthCity();
     RoadGraph rg = navRoadGraph(net, nullptr);
 
     // The setup must actually be mixed — otherwise a change to the generator
@@ -162,7 +157,7 @@ TEST_CASE(lot_buildings_clear_every_carriageway_on_a_mixed_width_net) {
 //
 // This gate is written BEFORE the fix, which is what the plan asks for.
 TEST_CASE(lot_block_interiors_clear_every_carriageway_on_a_mixed_width_net) {
-    RoadEntity net = mixedWidthMetro();
+    RoadEntity net = mixedWidthCity();
     RoadGraph rg = navRoadGraph(net, nullptr);
 
     nlohmann::json cityJson = { { "seed", 21 }, { "sidewalk", 4.0 },

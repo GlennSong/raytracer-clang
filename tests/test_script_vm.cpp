@@ -324,49 +324,25 @@ TEST_CASE(procgen_script_composes_a_model) {
     CHECK(insts == 3);
 }
 
-TEST_CASE(procgen_script_decorates_the_road_network) {
-    // ADR-0042 Phase 3: the road→block solver is exposed (city.layout) so a Lua
-    // recipe places props along the real street network and returns a model. The
-    // solver stays C++; the recipe just decorates its output.
-    ScriptVM vm;
-    openProcgenLibrary(vm);
-    double nodes = 0, edges = 0, blocks = 0, placed = 0;
-    CHECK(vm.doString(R"LUA(
-        local L = city.layout{ extent = 200, cell_size = 95, seed = 5 }
-        nnodes = #L.nodes
-        nedges = #L.edges
-        nblocks = #L.blocks
-        -- the layout is real geometry: a node has world x/z, an edge indexes nodes
-        ok = (L.nodes[1].x ~= nil) and (L.edges[1].a >= 1) and (#L.blocks[1] >= 3)
-    )LUA"));
-    bool ok = false;
-    CHECK(vm.getGlobalBool("ok", ok));
-    CHECK(ok);
-    CHECK(vm.getGlobalNumber("nnodes", nodes)); CHECK(nodes > 0);
-    CHECK(vm.getGlobalNumber("nedges", edges)); CHECK(edges > 0);
-    CHECK(vm.getGlobalNumber("nblocks", blocks)); CHECK(blocks > 0);
-
-    // A recipe places one lamp per road segment and returns a model; the instance
-    // count equals the edge count (every segment got a lamp).
-    std::shared_ptr<RenderMesh> mesh;
-    std::string err;
-    const char* code = R"LUA(
-        local L = city.layout{ extent = 200, cell_size = 95, seed = 5 }
-        local p = {}
-        for _, e in ipairs(L.edges) do
-            local a, b = L.nodes[e.a], L.nodes[e.b]
-            p[#p + 1] = { pos = { (a.x + b.x) * 0.5, 0, (a.z + b.z) * 0.5 } }
-        end
-        local m = model.new()
-        m:add_instances(streetfurniture.lamp{}, p)
-        placed = m:instance_count()
-        return m
-    )LUA";
-    CHECK(runProcgenMesh(vm, code, mesh, &err));
-    CHECK(mesh && !mesh->vertices.empty());
-    CHECK(vm.getGlobalNumber("placed", placed));
-    CHECK(placed == edges);                        // one lamp per road segment
-}
+// A road layout as the Lua side passes one around ({ nodes = {{x,z}}, edges = {{a,b,width}}, blocks = {{{x,z}}} },
+// 1-based): a 3 x 3 grid of streets `cell` apart round the origin and its 4 blocks. Built in Lua -- the engine's
+// own street generators are the city planner's, not a scripting call (ADR-0267).
+static const char* kGridLayoutLua = R"LUA(
+    local function grid_layout(cell)
+        local L = { nodes = {}, edges = {}, blocks = {} }
+        local function id(i, j) return j * 3 + i + 1 end
+        for j = 0, 2 do for i = 0, 2 do L.nodes[#L.nodes + 1] = { x = (i - 1) * cell, z = (j - 1) * cell } end end
+        for j = 0, 2 do for i = 0, 2 do
+            if i < 2 then L.edges[#L.edges + 1] = { a = id(i, j), b = id(i + 1, j), width = 8 } end
+            if j < 2 then L.edges[#L.edges + 1] = { a = id(i, j), b = id(i, j + 1), width = 8 } end
+        end end
+        for j = 0, 1 do for i = 0, 1 do
+            local x0, z0 = (i - 1) * cell, (j - 1) * cell
+            L.blocks[#L.blocks + 1] = { {x=x0,z=z0}, {x=x0+cell,z=z0}, {x=x0+cell,z=z0+cell}, {x=x0,z=z0+cell} }
+        end end
+        return L
+    end
+)LUA";
 
 TEST_CASE(procgen_model_value_extracts_parts_and_instances) {
     // ADR-0042 Phase 4: runProcgenModelValue pulls the structured ProcModel
@@ -376,8 +352,8 @@ TEST_CASE(procgen_model_value_extracts_parts_and_instances) {
     openProcgenLibrary(vm);
     ProcModel m;
     std::string err;
-    const char* code = R"LUA(
-        local lay = city.layout{ extent = 200, cell_size = 95, seed = 5 }
+    const std::string code = std::string(kGridLayoutLua) + R"LUA(
+        local lay = grid_layout(95)
         local p = {}
         for _, e in ipairs(lay.edges) do
             local a, b = lay.nodes[e.a], lay.nodes[e.b]
@@ -570,15 +546,15 @@ TEST_CASE(procgen_script_composes_terrain_heightfield) {
 
 TEST_CASE(procgen_terrain_conform_binding_runs) {
     // terrain.conform reads a road layout and cuts/fills the field to it so urban
-    // roads sit flat. Smoke-test the binding end to end (city.layout -> conform ->
+    // roads sit flat. Smoke-test the binding end to end (a layout -> conform ->
     // mesh); the cut/fill math itself is covered in test_terrain_field.
     ScriptVM vm;
     openProcgenLibrary(vm);
     std::shared_ptr<RenderMesh> mesh;
     std::string err;
-    const char* code = R"LUA(
+    const std::string code = std::string(kGridLayoutLua) + R"LUA(
         local base = terrain.fbm{ seed=5, freq=0.02, amp=25, octaves=5 }
-        local lay  = city.layout{ extent=120, cell_size=60, seed=5 }
+        local lay  = grid_layout(60)
         local land = terrain.conform(base, lay, { margin=3, falloff=8 })
         return terrain.mesh(land, { size=300, resolution=80, color={0.3,0.4,0.25} })
     )LUA";
@@ -596,9 +572,9 @@ TEST_CASE(procgen_terrain_conform_block_pads_run) {
     openProcgenLibrary(vm);
     std::shared_ptr<RenderMesh> mesh;
     std::string err;
-    const char* code = R"LUA(
+    const std::string code = std::string(kGridLayoutLua) + R"LUA(
         local base = terrain.fbm{ seed=5, freq=0.02, amp=25, octaves=5 }
-        local lay  = city.layout{ extent=120, cell_size=60, seed=5 }
+        local lay  = grid_layout(60)
         local pads = {}
         for _, b in ipairs(lay.blocks) do
             local cx, cz, n = 0, 0, 0

@@ -233,13 +233,13 @@ TEST_CASE(height_grid_road_entity_and_rings_round_trip_field_for_field) {
     RoadEdge b; b.a = 1; b.b = 2; b.klass = RoadClass::Ramp; b.provenance = RoadProvenance::CorridorRamp; b.spec = 2;
     e.graph.edges = {a, b};
     e.look.sidewalk = 2.6; e.look.markings = false; e.look.color = Vec3(0.1, 0.2, 0.3);
-    e.plan.freewayPlans = {{Vec2(1, 2), Vec2(3, 4), Vec2(5, 6)}}; CityHub hub; hub.pos = Vec2(9, 9); hub.kind = 2; hub.radial = true; hub.site = 1; e.plan.cityHubs = {hub};
+    e.plan.freewayPlans = {{Vec2(1, 2), Vec2(3, 4), Vec2(5, 6)}};
     BinWriter w2; putRoadEntity(w2, e); RoadEntity f; BinReader r2(w2.bytes.data(), w2.bytes.size()); CHECK(getRoadEntity(r2, f));
     CHECK(f.graph.nodes.size() == 3 && f.graph.edges.size() == 2 && f.graph.nodes[1].elev == 8.5 && f.graph.nodes[1].elevAbsolute && f.graph.nodes[2].tangent.y == 0.8);
     CHECK(f.graph.edges[0].klass == RoadClass::Freeway && f.graph.edges[0].oneWay && !f.graph.edges[0].walkable && f.graph.edges[0].access == 7 && f.graph.edges[0].baked && f.graph.edges[0].parkWidth == 2.5 && f.graph.edges[0].provenance == RoadProvenance::CorridorMain);
     CHECK(f.graph.edges[1].klass == RoadClass::Ramp && f.graph.edges[1].spec == 2 && f.graph.edges[1].provenance == RoadProvenance::CorridorRamp);
     CHECK(f.look.sidewalk == 2.6 && !f.look.markings && f.look.crosswalks && f.look.color.z == 0.3);
-    CHECK(f.plan.freewayPlans.size() == 1 && f.plan.freewayPlans[0].size() == 3 && f.plan.freewayPlans[0][2].y == 6 && f.plan.cityHubs.size() == 1 && f.plan.cityHubs[0].radial && f.plan.cityHubs[0].site == 1);
+    CHECK(f.plan.freewayPlans.size() == 1 && f.plan.freewayPlans[0].size() == 3 && f.plan.freewayPlans[0][2].y == 6);
     RoadGraph onlyGraph; BinWriter w3; putRoadGraph(w3, e.graph); BinReader r3(w3.bytes.data(), w3.bytes.size()); CHECK(getRoadGraph(r3, onlyGraph) && onlyGraph.edges.size() == 2);
 
     std::vector<std::vector<Vec2>> rings = {{Vec2(0, 0), Vec2(1, 0), Vec2(1, 1)}, {}};

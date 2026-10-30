@@ -76,12 +76,9 @@ add_library(engine_core STATIC
     src/engine/procgen/city/lot_cache.cpp
     src/engine/lot_grow_setup.cpp
     src/engine/city_grow.cpp
-    src/engine/city_prepass.cpp
     src/engine/editable_curve.cpp
     src/engine/curve_edit.cpp
     src/engine/animation_path.cpp
-    src/engine/handle_source.cpp
-    src/engine/path_edit_tool.cpp
     src/engine/asset_manager.cpp
     src/engine/procgen/noise.cpp
     src/engine/procgen/terrain.cpp
@@ -170,9 +167,6 @@ add_library(engine_core STATIC
     src/engine/interior_occupants.cpp
     src/engine/interact_broker.cpp
     src/engine/furniture_draw.cpp
-    src/engine/procgen/city/patch_fabric.cpp
-    src/engine/procgen/city/city_footprint.cpp
-    src/engine/procgen/city/arterial_skeleton.cpp
     src/engine/procgen/city/road_network.cpp
     src/engine/procgen/city/street_kit.cpp
     src/engine/procgen/city/street_furniture.cpp
@@ -180,17 +174,12 @@ add_library(engine_core STATIC
     src/engine/procgen/city/street_signs.cpp     # street name signs: plan, lettered atlas, meshes
     src/engine/text/font.cpp                     # TrueType text into images (stb_truetype)
     src/engine/ui/ui_text.cpp                    # the game UI's words: glyph atlases as UI quads (ADR-0250)
-    src/engine/procgen/city/alignment.cpp
-    src/engine/procgen/city/corridor_mesh.cpp
     src/engine/procgen/city/road_mesh.cpp
     src/engine/procgen/city/triangulate.cpp
-    src/engine/procgen/city/metro.cpp
     src/engine/procgen/city/water_mesh.cpp
     src/engine/procgen/city/terrain_route.cpp
     src/engine/procgen/world/island_world.cpp
     src/engine/procgen/city/buildability.cpp
-    src/engine/procgen/city/corridor_bake.cpp
-    src/engine/procgen/city/corridor_plan.cpp
     src/engine/procgen/city/road_spec.cpp
     # the roads module (2026-09-20): the road ENTITY and its recipe are shared
     # model; the lattice mesher that used to sit in the same file is deprecated
@@ -202,8 +191,6 @@ add_library(engine_core STATIC
     src/engine/procgen/city/road_semantics.cpp
     src/engine/procgen/city/road_rules.cpp
     src/engine/procgen/city/road_offset.cpp
-    src/engine/procgen/city/district.cpp
-    src/engine/procgen/city/road_crossings.cpp
     src/engine/procgen/city/architect.cpp
     src/engine/procgen/city/building_uses.cpp
     src/engine/procgen/city/building_collider.cpp
@@ -542,7 +529,6 @@ if(RT_BUILD_ROADS_LANES)
             src/engine/procgen/city/roads/lanes/lanes.cpp
             src/engine/procgen/city/roads/lanes/deck_mesh.cpp
             src/engine/procgen/city/roads/lanes/lanes_export.cpp
-            src/engine/procgen/city/roads/lanes/level_import.cpp
             src/engine/procgen/city/roads/lanes/road_twin.cpp
             src/engine/procgen/city/roads/lanes/block_audit.cpp
             src/engine/procgen/city/roads/lanes/interchange.cpp
@@ -776,30 +762,21 @@ add_executable(run_tests
     tests/test_earthwork.cpp
     tests/test_winding.cpp
     tests/test_road_constraints.cpp
-    tests/test_metro_sites.cpp
-    tests/test_fabric.cpp
-    tests/test_city_footprint.cpp
     tests/test_sim_rate_ab.cpp
-    tests/test_footprint_skeleton.cpp
     tests/test_city_stages.cpp
     tests/test_road_semantics.cpp
     tests/test_road_layers.cpp
     tests/test_road_offset.cpp
-    tests/test_road_crossings.cpp
     tests/test_building_lod.cpp
-    tests/test_road_net.cpp
     tests/test_road_builder.cpp
     tests/test_road_graph_order.cpp
     tests/test_road_rules.cpp
     tests/test_road_weld.cpp
     tests/test_road_spec.cpp
-    tests/test_freeway_graph.cpp
     tests/test_idm.cpp
     tests/test_street_furniture.cpp
     tests/test_street_signs.cpp
     tests/test_ground_truth.cpp
-    tests/test_handle_source.cpp
-    tests/test_path_edit_tool.cpp
     tests/test_editable_curve.cpp
     tests/test_curve.cpp
     tests/test_curve_edit.cpp
@@ -865,7 +842,6 @@ add_executable(run_tests
     tests/test_room_plan.cpp
     tests/test_ladders.cpp
     tests/test_furniture.cpp
-    tests/test_alignment.cpp
     tests/test_surface_field.cpp
     tests/test_architect.cpp
     tests/test_erosion_gpu.cpp
@@ -947,31 +923,6 @@ if(RT_BUILD_DEMOS)
     target_include_directories(pose_demo PRIVATE src)
     target_compile_options(pose_demo PRIVATE -Wall -Wextra)
     target_link_libraries(pose_demo PRIVATE engine_core)
-
-    # What a road BUILDER hands the engine for a real level (ADR-0089): the
-    # carve, the surface, the deck, the kerb band and the nav graph, by the
-    # numbers. Naming a builder overrides the level's key, so one level can be
-    # measured both ways — the A/B instrument for moving a level to lanes.
-    add_executable(road_products_probe tools/diagnostics/road_products_probe.cpp ${CORE_SOURCES})
-    target_include_directories(road_products_probe PRIVATE src)
-    target_compile_options(road_products_probe PRIVATE -Wall -Wextra)
-    target_link_libraries(road_products_probe PRIVATE engine_core)
-
-    # Junction-geometry census: the PLANNING-phase view of acute angles —
-    # tightest gaps, realign feasibility, bend radii, and a dry run of the
-    # resolution ladder. Device: sharp junctions are a sight-line and
-    # vehicle-handling problem, so the gate belongs on the graph.
-    add_executable(junction_angle_probe tools/diagnostics/junction_angle_probe.cpp ${CORE_SOURCES})
-    target_include_directories(junction_angle_probe PRIVATE src)
-    target_compile_options(junction_angle_probe PRIVATE -Wall -Wextra)
-    target_link_libraries(junction_angle_probe PRIVATE engine_core)
-
-    # The city as a layered SVG map, straight from the real pipeline — the
-    # look-at-it loop for road-rule work without opening the engine.
-    add_executable(road_map_svg tools/diagnostics/road_map_svg.cpp ${CORE_SOURCES})
-    target_include_directories(road_map_svg PRIVATE src)
-    target_compile_options(road_map_svg PRIVATE -Wall -Wextra)
-    target_link_libraries(road_map_svg PRIVATE citysim engine_core)
 
     # Rigid vs CPU-skinned bend, side by side (character-posing-plan P2).
     add_executable(skin_demo tools/skin_demo.cpp ${CORE_SOURCES})

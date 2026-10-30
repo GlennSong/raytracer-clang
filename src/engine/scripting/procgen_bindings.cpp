@@ -30,7 +30,6 @@
 #include "../procgen/city/road_mesh.h"
 #include "../procgen/city/roads/road_entity.h"   // RoadEntity, the road builders
 #include "../procgen/city/roads/road_builder.h"   // city.road_builders(): the registry, by name
-#include "../procgen/city/road_crossings.h"
 #include "../procgen/city/polygon.h"
 #include "../procgen/city/parcel.h"
 #include "../procgen/proc_model.h"
@@ -2239,16 +2238,8 @@ int l_mesh_audit(lua_State* L) {
     return 1;
 }
 
-// --- city.* : the road→block layout solver, exposed for decoration (ADR-0042
-// Phase 3). A recipe asks for the street layout and places props along it; the
-// solver (an algorithm, not a recipe) stays in C++.
-
-// Push a ground-plane point as a { x =, z = } table.
-void pushPoint(lua_State* L, const Vec2& p) {
-    lua_createtable(L, 0, 2);
-    lua_pushnumber(L, p.x); lua_setfield(L, -2, "x");
-    lua_pushnumber(L, p.y); lua_setfield(L, -2, "z");   // Vec2.y == world z
-}
+// --- city.* : lots on a block, exposed for decoration (ADR-0042 Phase 3). (city.layout, the grid / radial /
+// tensor street generators, retired with ADR-0267: the city planner is the one street generator.)
 
 // Read an optional string field (default if absent / not a string).
 std::string optStrField(lua_State* L, int idx, const char* key, const char* def) {
@@ -2264,107 +2255,6 @@ std::string optStrField(lua_State* L, int idx, const char* key, const char* def)
 // (returns nullptr if absent). The pointer is valid for the call: the table on the
 // stack keeps the userdata alive. Defined with the HeightField machinery below.
 const HeightField* optHeightField(lua_State* L, int tableIdx, const char* key);
-
-// city.layout{ pattern=, extent=, cell_size=, ring_spacing=, spokes=, jitter=,
-//   dropout=, seed=, terrain=, max_grade=, slope_align= } -> { nodes = {{x,z}...},
-//   edges = {{a,b,width}...}, blocks = {{{x,z}...}...} }. pattern = "grid" (default)
-//   | "radial" | "tensor" (ADR-0044). When `terrain` (a HeightField) is given, the
-//   network is made grade-aware (ADR-0046): the tensor field bends to follow
-//   contours on steep ground, and every generator's streets steeper than
-//   `max_grade` are pruned — and because that happens before block extraction, the
-//   blocks merge across the dropped streets for free.
-// Node indices in edges are 1-based (Lua convention).
-// Grow a road graph from the city.layout argument table (pattern + params + optional terrain),
-// planarized and — with terrain — grade-pruned then reconnected into one net. Shared by
-// city.layout (returns the raw chord graph) and city.curves (smooths it into real splines).
-static RoadGraph buildLayoutGraph(lua_State* L) {
-    std::string pattern = lua_istable(L, 1) ? optStrField(L, 1, "pattern", "grid") : "grid";
-    const HeightField* terrain = optHeightField(L, 1, "terrain");
-    Real maxGrade   = static_cast<Real>(optField(L, 1, "max_grade", 0.12));
-    Real slopeAlign = static_cast<Real>(optField(L, 1, "slope_align", 1.0));
-    RoadGraph raw;
-    if (pattern == "radial") {
-        RadialParams rp;
-        rp.extent      = static_cast<Real>(optField(L, 1, "extent", rp.extent));
-        rp.ringSpacing = static_cast<Real>(optField(L, 1, "ring_spacing", rp.ringSpacing));
-        rp.spokes      = static_cast<int>(optField(L, 1, "spokes", rp.spokes));
-        rp.ringSubdiv  = static_cast<int>(optField(L, 1, "ring_subdiv", rp.ringSubdiv));
-        rp.jitter      = static_cast<Real>(optField(L, 1, "jitter", rp.jitter));
-        rp.seed        = static_cast<uint32_t>(optField(L, 1, "seed", 0));
-        raw = radialRoads(rp);
-    } else if (pattern == "tensor") {
-        // Hybrid radial<->grid field (ADR-0044): radial core, grid rim, blended.
-        TensorRoadParams tp;
-        tp.extent         = static_cast<Real>(optField(L, 1, "extent", tp.extent));
-        tp.spacing        = static_cast<Real>(optField(L, 1, "spacing", tp.spacing));
-        tp.step           = static_cast<Real>(optField(L, 1, "step", tp.step));
-        tp.gridAngle      = static_cast<Real>(optField(L, 1, "grid_angle", tp.gridAngle));
-        tp.radialStrength = static_cast<Real>(optField(L, 1, "radial_strength", tp.radialStrength));
-        tp.radialDecay    = static_cast<Real>(optField(L, 1, "radial_decay", tp.radialDecay));
-        tp.gridStrength   = static_cast<Real>(optField(L, 1, "grid_strength", tp.gridStrength));
-        tp.seed           = static_cast<uint32_t>(optField(L, 1, "seed", 0));
-        tp.terrain        = terrain;          // contour-follow on steep ground (ADR-0046)
-        tp.slopeAlign     = slopeAlign;
-        tp.maxGrade       = maxGrade;
-        raw = tensorRoads(tp);
-    } else {
-        GridRoadParams gp;
-        if (lua_istable(L, 1)) {
-            gp.extent   = static_cast<Real>(optField(L, 1, "extent", gp.extent));
-            gp.cellSize = static_cast<Real>(optField(L, 1, "cell_size", gp.cellSize));
-            gp.jitter   = static_cast<Real>(optField(L, 1, "jitter", gp.jitter));
-            gp.dropout  = static_cast<Real>(optField(L, 1, "dropout", gp.dropout));
-            gp.seed     = static_cast<uint32_t>(optField(L, 1, "seed", 0));
-        }
-        raw = gridRoads(gp);
-    }
-    RoadGraph g = planarize(raw);
-    if (terrain) {
-        g = pruneSteepEdges(g, *terrain, maxGrade);    // drop unwalkable streets,
-        g = connectComponents(g);                      // then heal any split into one net,
-        g = planarize(g);                              // and re-split at the new connectors
-    }
-    return g;
-}
-
-int l_city_layout(lua_State* L) {
-    RoadGraph g = buildLayoutGraph(L);
-    std::vector<Poly2> blocks = extractBlocks(g);
-
-    lua_createtable(L, 0, 3);
-
-    lua_createtable(L, static_cast<int>(g.nodes.size()), 0);
-    for (std::size_t i = 0; i < g.nodes.size(); ++i) {
-        pushPoint(L, g.nodes[i].pos);
-        lua_seti(L, -2, static_cast<lua_Integer>(i + 1));
-    }
-    lua_setfield(L, -2, "nodes");
-
-    lua_createtable(L, static_cast<int>(g.edges.size()), 0);
-    for (std::size_t i = 0; i < g.edges.size(); ++i) {
-        const RoadEdge& e = g.edges[i];
-        lua_createtable(L, 0, 3);
-        lua_pushinteger(L, e.a + 1); lua_setfield(L, -2, "a");
-        lua_pushinteger(L, e.b + 1); lua_setfield(L, -2, "b");
-        lua_pushnumber(L, e.width);  lua_setfield(L, -2, "width");
-        lua_seti(L, -2, static_cast<lua_Integer>(i + 1));
-    }
-    lua_setfield(L, -2, "edges");
-
-    lua_createtable(L, static_cast<int>(blocks.size()), 0);
-    for (std::size_t i = 0; i < blocks.size(); ++i) {
-        const Poly2& poly = blocks[i];
-        lua_createtable(L, static_cast<int>(poly.size()), 0);
-        for (std::size_t j = 0; j < poly.size(); ++j) {
-            pushPoint(L, poly[j]);
-            lua_seti(L, -2, static_cast<lua_Integer>(j + 1));
-        }
-        lua_seti(L, -2, static_cast<lua_Integer>(i + 1));
-    }
-    lua_setfield(L, -2, "blocks");
-
-    return 1;
-}
 
 // city.lots(block, { inset=, target_area=, min_area=, min_edge=, jitter=, seed= })
 // -> array of lots. `inset` first pulls the block in off the road centrelines (so
@@ -2981,70 +2871,6 @@ int l_city_stroke(lua_State* L) {
     Vec3 color = optVec3Field(L, 1, "color", Vec3(0.10, 0.10, 0.11));
     bool closed = optBoolField(L, 1, "closed", false);
     pushMesh(L, std::make_shared<RenderMesh>(strokeRibbon(pts, hw, y, color, closed)));
-    return 1;
-}
-
-// city.resolve{ spines={ {points={{x,z}..}, width=, layer=} .. }, weld= } -> { spines=..., nodes=
-//   {{x,z,grade_separated,arms}..} }. The crossing RESOLVER (unified-road-plan task 5): splice
-//   every centerline crossing into a shared node so loose generator output becomes ONE connected
-//   graph. result.spines feeds straight into city.solid/weld (same-grade crossings then weld);
-//   result.nodes reports each junction (grade_separated = a fly-over needing a ramp).
-int l_city_resolve(lua_State* L) {
-    luaL_checktype(L, 1, LUA_TTABLE);
-    std::vector<GraphSpine> in;
-    lua_getfield(L, 1, "spines");
-    luaL_checktype(L, -1, LUA_TTABLE);
-    lua_Integer ns = luaL_len(L, -1);
-    for (lua_Integer si = 1; si <= ns; ++si) {
-        lua_geti(L, -1, si);
-        GraphSpine s;
-        s.halfWidth = optField(L, -1, "width", 8.0) * 0.5;
-        s.layer = static_cast<int>(optField(L, -1, "layer", 0));
-        lua_getfield(L, -1, "points");
-        luaL_checktype(L, -1, LUA_TTABLE);
-        lua_Integer np = luaL_len(L, -1);
-        for (lua_Integer pi = 1; pi <= np; ++pi) {
-            lua_geti(L, -1, pi);
-            s.points.push_back(Vec2(optField(L, -1, "x", 0.0), optField(L, -1, "z", 0.0)));
-            lua_pop(L, 1);
-        }
-        lua_pop(L, 1);                                   // points
-        in.push_back(std::move(s));
-        lua_pop(L, 1);                                   // spine
-    }
-    lua_pop(L, 1);                                       // spines
-    double tol = optField(L, 1, "weld", 0.5);
-    ResolvedGraph g = resolveCrossings(in, tol);
-
-    lua_newtable(L);                                     // result
-    lua_newtable(L);                                     // result.spines
-    for (std::size_t i = 0; i < g.spines.size(); ++i) {
-        const GraphSpine& s = g.spines[i];
-        lua_newtable(L);                                 // one spine
-        lua_pushnumber(L, s.halfWidth * 2.0); lua_setfield(L, -2, "width");
-        lua_pushinteger(L, s.layer);          lua_setfield(L, -2, "layer");
-        lua_newtable(L);                                 // points
-        for (std::size_t k = 0; k < s.points.size(); ++k) {
-            lua_newtable(L);
-            lua_pushnumber(L, s.points[k].x); lua_setfield(L, -2, "x");
-            lua_pushnumber(L, s.points[k].y); lua_setfield(L, -2, "z");
-            lua_seti(L, -2, static_cast<lua_Integer>(k + 1));
-        }
-        lua_setfield(L, -2, "points");
-        lua_seti(L, -2, static_cast<lua_Integer>(i + 1));
-    }
-    lua_setfield(L, -2, "spines");
-    lua_newtable(L);                                     // result.nodes
-    for (std::size_t i = 0; i < g.nodes.size(); ++i) {
-        const CrossNode& n = g.nodes[i];
-        lua_newtable(L);
-        lua_pushnumber(L, n.pos.x);  lua_setfield(L, -2, "x");
-        lua_pushnumber(L, n.pos.y);  lua_setfield(L, -2, "z");
-        lua_pushboolean(L, n.gradeSeparated); lua_setfield(L, -2, "grade_separated");
-        lua_pushinteger(L, static_cast<lua_Integer>(n.spines.size())); lua_setfield(L, -2, "arms");
-        lua_seti(L, -2, static_cast<lua_Integer>(i + 1));
-    }
-    lua_setfield(L, -2, "nodes");
     return 1;
 }
 
@@ -4245,11 +4071,9 @@ void openProcgenLibrary(ScriptVM& vm) {
     // marking and bridge kits; the lattice paints markings per road class and
     // builds its own layered bridges. No shipped script used any of the four.
     static const luaL_Reg kCityFns[] = {
-        {"layout", l_city_layout},
         {"lots", l_city_lots},
         {"road_builders", l_city_road_builders},
         {"stroke", l_city_stroke},
-        {"resolve", l_city_resolve},
         {nullptr, nullptr},
     };
     luaL_newlib(L, kCityFns);

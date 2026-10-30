@@ -10,7 +10,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 OUT="${1:-/tmp/piedmont_shots}"
-LEVEL="${2:-assets/levels/piedmont_roads.json}"
+LEVEL="${2:-assets/levels/piedmont.json}"
 VIEWER="./build/viewer"
 SETTINGS="settings.json"
 BACKUP="$(mktemp)"
@@ -26,9 +26,9 @@ SHOTS=(
   "map_orbit|900,5200,2400|900,0,600"        # whole map, high oblique
   "city_plan|900,2600,1100|900,0,880"        # city network, near top-down
   "downtown|1500,420,1650|900,20,900"        # 3/4 into the core
-  "east_town|3400,320,880|3050,15,400"       # oldtown satellite
-  "south_town|700,320,3500|300,15,3050"      # residential satellite
-  "connector_east|2000,260,700|2900,20,430"  # city->east arterial
+  "se_town|3000,320,3350|2658,15,2970"      # the town at the SE expressway's end
+  "nw_town|-200,320,-1500|-514,15,-1181"     # the town at the NW expressway's end
+  "expressway_se|1900,260,1500|2400,20,2500" # city -> SE town
   "range_vista|500,140,500|-3200,700,-3200"  # NW mountains from downtown edge
 )
 

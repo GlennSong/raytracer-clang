@@ -6,6 +6,11 @@ when fixed (git history is the archive).
 
 ## City procgen — dead-code audit (2026-08-15)
 
+*Superseded 2026-10-29 (ADR-0267): the "metro" and "district" kinds, the corridor system, the grid / radial /
+tensor layout generators with `city.layout`, and hand-authored roads are deleted; the city planner is the one
+street generator and every level's roads are a lanes graph. The census and verdict rows below for those are
+struck; the rest stand.*
+
 Commissioned before deleting anything, on the theory that ~60 files in
 `src/engine/procgen/city/` held a lot of abandoned code. **The theory was mostly
 wrong, and the way it was wrong is the useful part.**
@@ -26,10 +31,10 @@ Level census, for reference:
 
 | path | levels |
 | --- | --- |
-| `road:metro` | 10 — coast_city, freeway_lab, hillcity, metro_hills, metropolis, metropolis_roads, metropolis_sky, piedmont, piedmont_mini, piedmont_roads |
-| `road:district` | 2 — grown, living_city |
+| ~~`road:metro`~~ | *deleted 2026-10-29 (ADR-0267)* |
+| ~~`road:district`~~ | *deleted 2026-10-29 (ADR-0267)* |
 | ~~`shape:city`~~ | *retired 2026-08-16; city + city_arena migrated to `road`* |
-| `shape:corridor` | 2 — freeway_lab, freeway_variants |
+| ~~`shape:corridor`~~ | *deleted 2026-10-29 (ADR-0267)* |
 | `citysim.buildLots` | 7 — coast_city, hillcity, living_city, metro_hills, metropolis, metropolis_sky, piedmont |
 
 ### Verdicts
@@ -38,11 +43,11 @@ Level census, for reference:
 
 | Code | Reached by |
 | --- | --- |
-| `tensorRoads`, `radialRoads`, `gridRoads`, `pruneSteepEdges`, `connectComponents` | `city.layout` (`procgen_bindings.cpp:1145`). **`twin_cities.lua` ships both `pattern="radial"` and `pattern="tensor"`**, so the tensor field is live content, not theory. `city.layout` is the most-used verb in the script corpus (7 call sites). |
-| `road_mesh.cpp` weld/union family — `unionRibbons`, `weldRibbons`, `unionRoadbed`, `bridgeDeck`, `deckBarriers`, `deckMarkings`, `laneMarkings`, `buildRoadMesh` | All bound (`city.union`, `city.weld`, `city.roadbed`, `city.deck`, `city.lane_markings`, `city.road_mesh`). |
-| `road_crossings.cpp:resolveCrossings` | `city.resolve` — used twice in shipped scripts. |
-| `metro.cpp`, `patch_fabric.cpp`, `city_footprint.cpp`, `arterial_skeleton.cpp`, `buildability.cpp` | The `"metro"` kind — the majority path. |
-| `corridor_mesh/plan/bake.cpp`, `alignment.cpp` | `shape:"corridor"` levels + metro freeway plans. |
+| ~~`tensorRoads`, `radialRoads`, `gridRoads`, `pruneSteepEdges`, `connectComponents`~~ | *deleted 2026-10-29 (ADR-0267)* |
+| ~~`road_mesh.cpp` weld/union family~~ | *gone with the lattice (2026-10-14); its last pieces -- the joint profile solve, clearance, piers, curb fillets, conform regions -- deleted 2026-10-29 (ADR-0267)* |
+| ~~`road_crossings.cpp:resolveCrossings`~~ | *deleted 2026-10-29 with `city.resolve` (ADR-0267): no shipped script called it* |
+| ~~`metro.cpp`, `patch_fabric.cpp`, `city_footprint.cpp`, `arterial_skeleton.cpp`~~ | *deleted 2026-10-29 (ADR-0267)*; `buildability.cpp` stays (block grading, water) |
+| ~~`corridor_mesh/plan/bake.cpp`, `alignment.cpp`~~ | *deleted 2026-10-29 (ADR-0267)* |
 
 *Caveat worth tracking separately:* several of those Lua verbs are **bound but
 unused by any shipped script** (`city.union`, `city.weld`, `city.stroke`,

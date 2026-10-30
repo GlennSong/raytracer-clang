@@ -12,7 +12,7 @@
 
 #include "../src/apps/citysim/city_render.h"
 #include "../src/engine/components.h"
-#include "../src/engine/procgen/city/metro.h"
+#include "../src/engine/procgen/city/plan/city_plan.h"
 #include "../src/engine/procgen/city/roads/road_entity.h"
 #include "../src/engine/world.h"
 
@@ -24,20 +24,11 @@ using namespace citysim;
 
 namespace {
 
-// The shipping piedmont skeleton, headless.
-RoadEntity piedmontNet() {
-    MetroParams p;
-    p.seed = 7;
-    p.skeleton = "footprint";
-    p.districtLen = 1200;
-    p.gateSpacing = 1100;
-    p.arteryWidth = 17; p.collectorWidth = 13; p.streetWidth = 12;
-    p.blockSize = 220; p.minBlockEdge = 150;
-    p.fabric = "mix"; p.fabricCoreLen = 110;
-    MetroSite city; city.center = {900, 900}; city.radius = 1400;
-    city.hotspots = 9; city.blockSize = 220;
-    p.sites = {city};
-    RoadGraph g = buildMetro(p, nullptr);
+// A planned 3 km city (the planner's default brief), headless.
+RoadEntity cityNet() {
+    plan::Brief b;
+    b.seed = 7;
+    const RoadGraph g = plan::generatePlan(b).streets;
     RoadEntity net;
     net.look.defaultWidth = 12.0;
     net.look.sidewalk = 3.5;
@@ -99,7 +90,7 @@ Census run(Real localHz, Real simSeconds, const RoadEntity& net) {
 }  // namespace
 
 TEST_CASE(sim_rate_ab_tier_split_is_rate_independent) {
-    const RoadEntity net = piedmontNet();
+    const RoadEntity net = cityNet();
     const Real simSeconds = 96.0;   // 8.5 -> ~13.3 sim hours (midday)
     Census a = run(0.0, simSeconds, net);     // 60 Hz (every step)
     Census b = run(30.0, simSeconds, net);    // 30 Hz

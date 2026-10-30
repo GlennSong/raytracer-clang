@@ -7441,27 +7441,7 @@ NetLotResult growLotBuildingsOnNets(const std::vector<RoadEntity>& nets,
     // on the boundary roads' open sides so the outskirts build up too.
     std::vector<Poly2> rim = edgeBlocks(rg, blocks, edgeParams);
     blocks.insert(blocks.end(), rim.begin(), rim.end());
-    // Per-hub-cluster landmark quotas (8km-city P3): the loader forwards hubs
-    // as {pos, kind} only, so recover each hub's SITE id (0 = the primary
-    // city, 1+ = satellite towns) from the nets' own cityHubs by position —
-    // both lists come from the same CityHub records. A caller that already
-    // filled hubClusters keeps its own mapping.
     LotParams lp = params;
-    if (!lp.hubs.empty() && lp.hubClusters.size() != lp.hubs.size()) {
-        lp.hubClusters.assign(lp.hubs.size(), 0);
-        for (std::size_t i = 0; i < lp.hubs.size(); ++i) {
-            bool found = false;
-            for (const RoadEntity& net : nets) {
-                for (const CityHub& h : net.plan.cityHubs)
-                    if ((h.pos - lp.hubs[i].first).lengthSquared() < 1e-6) {
-                        lp.hubClusters[i] = h.site;
-                        found = true;
-                        break;
-                    }
-                if (found) break;
-            }
-        }
-    }
     r.lots = growLotBuildings(blocks, lp, &r.plan, wantParts ? &r.parts : nullptr, &rgSampled,
                               roadClearance,
                               (wantParts && wantFlatParts) ? &r.flatParts : nullptr,

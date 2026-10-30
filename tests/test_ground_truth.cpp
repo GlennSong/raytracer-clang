@@ -9,6 +9,7 @@
 //     sidewalk") — the same grading pins the interior to the street, so the
 //     outer riser stays a step, not a wall.
 #include "test_framework.h"
+#include "planned_city.h"
 
 #include "../src/engine/procgen/city/block_grade.h"
 #include "../src/engine/procgen/city/roads/road_entity.h"
@@ -80,89 +81,45 @@ int trappedCells(F&& ground, double lo, double hi) {
 
 #include "../src/engine/procgen/city/city_lots.h"
 
-TEST_CASE(metro_blocks_reach_city_scale_and_aspect) {
-    // Drive feedback: "streets need more space between them and need to be
-    // longer... Those blocks don't even feel like NYC blocks." NYC blocks
-    // run ~80 x 274 m — LONG: square-celled subdivision structurally cannot
-    // produce that. The generator now cuts each district face with an
-    // ANISOTROPIC cell (short axis ~lot depth, long axis city-scale), so
-    // long blocks exist at all.
-    RoadEntity net;
-    net.look.defaultWidth = 11.0;
-    net.look.autoRoundabout = false;
-    nlohmann::json gen = { { "kind", "metro" },    { "radius", 700 },
-                           { "hotspots", 5 },      { "block_size", 150 },
-                           { "seed", 11 },         { "freeways", false },
-                           { "min_road_len", 24 }, { "terrain_aware", false } };
-    applyGenerateRecipe(net, gen, nullptr);
-    RoadGraph g = navRoadGraph(net, nullptr);
-    std::vector<Poly2> blocks = extractBlocks(g, 400.0);
-    CHECK(blocks.size() > 30u);
-
-    int longBlocks = 0;
-    std::vector<double> areas;
-    for (const Poly2& b : blocks) {
-        OBB2 o = orientedBoundingBox(b);
-        const double longSide = 2.0 * std::max(o.half[0], o.half[1]);
-        const double shortSide = 2.0 * std::min(o.half[0], o.half[1]);
-        if (shortSide < 20.0) continue;              // slivers aren't blocks
-        areas.push_back(longSide * shortSide);
-        if (longSide / std::max(1.0, shortSide) >= 2.0 && longSide >= 150.0)
-            ++longBlocks;
-    }
-    std::sort(areas.begin(), areas.end());
-    const double median = areas.empty() ? 0 : areas[areas.size() / 2];
-    std::printf("[scale] blocks=%zu median=%.0f m2 long=%d\n", blocks.size(),
-                median, longBlocks);
-    CHECK(median >= 7000.0);        // city-scale, not courtyard-scale
-    CHECK(longBlocks >= 8);         // real long blocks exist
-}
-
 TEST_CASE(park_pads_and_fences_stay_out_of_carriageways) {
     // Drive feedback E1/B4: "parks don't sit on their lots and explode into
     // the street including fences... park fences sunk into the road." Every
     // park/green pad vertex must clear every sampled road ribbon — the same
     // protection buildings always had.
-    RoadEntity net;
-    net.look.defaultWidth = 13.0;   // arterial width: the case the old 4 m assumption broke
-    net.look.autoRoundabout = false;
-    nlohmann::json gen = { { "kind", "metro" },    { "radius", 600 },
-                           { "hotspots", 4 },      { "block_size", 130 },
-                           { "seed", 21 },         { "freeways", false },
-                           { "min_road_len", 24 }, { "terrain_aware", false } };
-    applyGenerateRecipe(net, gen, nullptr);
-    RoadGraph rg = navRoadGraph(net, nullptr);
+    for (uint32_t seed : {11u, 29u, 53u}) {   // every seed: three planned cities
+        RoadEntity net = citytest::plannedNet(seed);
+        RoadGraph rg = navRoadGraph(net, nullptr);
 
-    LotParams lp;
-    lp.seed = 7;
-    lp.roadMargin = 8.0;
-    NetLotResult grown =
-        growLotBuildingsOnNets({ net }, lp, EdgeBlockParams{}, 5.0, nullptr, &rg);
-    int parks = 0, violations = 0;
-    for (const LotBuilding& lb : grown.lots) {
-        if (lb.type != "park" && lb.type != "green") continue;
-        if (lb.recipe.rfind("underfreeway", 0) == 0) continue;   // in the ROW by design
-        ++parks;
-        for (const Vec2& v : lb.pad) {
-            for (const RoadEdge& e : rg.edges) {
-                if (e.a < 0 || e.b < 0) continue;
-                const Vec2& a = rg.nodes[e.a].pos;
-                const Vec2& b = rg.nodes[e.b].pos;
-                Vec2 ab = b - a;
-                const Real l2 = ab.lengthSquared();
-                Real t = l2 > 1e-12 ? dot(v - a, ab) / l2 : 0.0;
-                t = t < 0 ? 0 : (t > 1 ? 1 : t);
-                if ((a + ab * t - v).length() < e.width * 0.5) ++violations;
+        LotParams lp;
+        lp.seed = 7;
+        lp.roadMargin = 8.0;
+        NetLotResult grown =
+            growLotBuildingsOnNets({ net }, lp, EdgeBlockParams{}, 5.0, nullptr, &rg);
+        int parks = 0, violations = 0;
+        for (const LotBuilding& lb : grown.lots) {
+            if (lb.type != "park" && lb.type != "green") continue;
+            if (lb.recipe.rfind("underfreeway", 0) == 0) continue;   // in the ROW by design
+            ++parks;
+            for (const Vec2& v : lb.pad) {
+                for (const RoadEdge& e : rg.edges) {
+                    if (e.a < 0 || e.b < 0) continue;
+                    const Vec2& a = rg.nodes[e.a].pos;
+                    const Vec2& b = rg.nodes[e.b].pos;
+                    Vec2 ab = b - a;
+                    const Real l2 = ab.lengthSquared();
+                    Real t = l2 > 1e-12 ? dot(v - a, ab) / l2 : 0.0;
+                    t = t < 0 ? 0 : (t > 1 ? 1 : t);
+                    if ((a + ab * t - v).length() < e.width * 0.5) ++violations;
+                }
             }
         }
+        std::printf("[park] seed %u: parks=%d violations=%d\n", seed, parks, violations);
+        CHECK(parks > 0);
+        CHECK(violations == 0);
     }
-    std::printf("[park] parks=%d violations=%d\n", parks, violations);
-    CHECK(parks > 0);
-    CHECK(violations == 0);
 }
 
 
-#include "../src/engine/procgen/city/corridor_plan.h"
 #include "../src/engine/procgen/city/road_semantics.h"
 
 // #19 (semantic layer S6): city blocks and lots derive from the WALKABLE
@@ -171,68 +128,59 @@ TEST_CASE(park_pads_and_fences_stay_out_of_carriageways) {
 // street to reach them ("orphaned houses along the freeway"). The freeway
 // ROW stays a keep-out band, not frontage.
 TEST_CASE(no_lots_front_the_freeway_only) {
-    RoadEntity net;
-    net.look.defaultWidth = 12.0;
-    net.look.sidewalk = 2.5;
-    net.look.autoRoundabout = false;
-    const RoadGroundFn ground = [](double, double) { return 0.0; };
-    nlohmann::json gen = { { "kind", "metro" },     { "radius", 650 },
-                           { "hotspots", 4 },        { "block_size", 120 },
-                           { "seed", 12 },           { "freeways", true },
-                           { "corridor_freeways", true },
-                           { "min_road_len", 24 },   { "terrain_aware", false } };
-    applyGenerateRecipe(net, gen, ground);
-    CHECK(!net.plan.freewayPlans.empty());
-    const int baked = rebakeNetCorridors(net, 520.0, ground);
-    CHECK(baked > 0);
+    for (uint32_t seed : {11u, 29u, 53u}) {   // every seed: three planned cities, freeway and all
+        RoadEntity net = citytest::plannedNet(seed, true);
+        net.look.sidewalk = 2.5;
+        const RoadGroundFn ground = [](double, double) { return 0.0; };
 
-    // The STREET subgraph (what a walker/car can actually reach) and the
-    // freeway ROW (the corridor's own edges), split by class off the net.
-    RoadGraph streets, freeway;
-    for (const RoadEdge& e : net.graph.edges) {
-        const RoadClass k = e.klass;
-        RoadGraph& dst =
-            (e.baked || k == RoadClass::Freeway || k == RoadClass::Ramp) ? freeway
-                                                                         : streets;
-        const int b = static_cast<int>(dst.nodes.size());
-        dst.nodes.push_back({ net.graph.nodes[e.a].pos });
-        dst.nodes.push_back({ net.graph.nodes[e.b].pos });
-        dst.edges.push_back(RoadEdge{ b, b + 1, 8, k, 0 });
-    }
-    CHECK(!freeway.edges.empty());
-
-    auto nearestEdgeDist = [](const RoadGraph& g, const Vec2& p) {
-        double best = 1e30;
-        for (const RoadEdge& e : g.edges) {
-            const Vec2 A = g.nodes[e.a].pos, B = g.nodes[e.b].pos, ab = B - A;
-            const double l2 = ab.lengthSquared();
-            double t = l2 > 1e-9 ? dot(p - A, ab) / l2 : 0.0;
-            t = t < 0 ? 0 : (t > 1 ? 1 : t);
-            best = std::min(best, (p - (A + ab * t)).length());
+        // The STREET subgraph (what a walker/car can actually reach) and the
+        // freeway ROW (the corridor's own edges), split by class off the net.
+        RoadGraph streets, freeway;
+        for (const RoadEdge& e : net.graph.edges) {
+            const RoadClass k = e.klass;
+            RoadGraph& dst =
+                (e.baked || k == RoadClass::Freeway || k == RoadClass::Ramp) ? freeway
+                                                                             : streets;
+            const int b = static_cast<int>(dst.nodes.size());
+            dst.nodes.push_back({ net.graph.nodes[e.a].pos });
+            dst.nodes.push_back({ net.graph.nodes[e.b].pos });
+            dst.edges.push_back(RoadEdge{ b, b + 1, 8, k, 0 });
         }
-        return best;
-    };
+        CHECK(!freeway.edges.empty());
 
-    RoadGraph rowGraph = engine::navRoadGraph(net, ground);
-    LotParams lp;
-    lp.seed = 5;
-    lp.roadMargin = 8.0;
-    NetLotResult grown =
-        growLotBuildingsOnNets({ net }, lp, EdgeBlockParams{}, 5.0, ground, &rowGraph);
+        auto nearestEdgeDist = [](const RoadGraph& g, const Vec2& p) {
+            double best = 1e30;
+            for (const RoadEdge& e : g.edges) {
+                const Vec2 A = g.nodes[e.a].pos, B = g.nodes[e.b].pos, ab = B - A;
+                const double l2 = ab.lengthSquared();
+                double t = l2 > 1e-9 ? dot(p - A, ab) / l2 : 0.0;
+                t = t < 0 ? 0 : (t > 1 ? 1 : t);
+                best = std::min(best, (p - (A + ab * t)).length());
+            }
+            return best;
+        };
 
-    int lots = 0, orphans = 0;
-    for (const LotBuilding& lb : grown.lots) {
-        // Under-freeway lots are IN the ROW by design (parking/utility/open).
-        if (lb.recipe.rfind("underfreeway", 0) == 0) continue;
-        ++lots;
-        const double toStreet = nearestEdgeDist(streets, lb.site);
-        const double toFreeway = nearestEdgeDist(freeway, lb.site);
-        // An orphan: closer to the freeway than any street, and beyond the
-        // reach a street lot could plausibly front (margin + a generous lot
-        // depth).
-        if (toStreet > 60.0 && toFreeway < toStreet) ++orphans;
+        RoadGraph rowGraph = engine::navRoadGraph(net, ground);
+        LotParams lp;
+        lp.seed = 5;
+        lp.roadMargin = 8.0;
+        NetLotResult grown =
+            growLotBuildingsOnNets({ net }, lp, EdgeBlockParams{}, 5.0, ground, &rowGraph);
+
+        int lots = 0, orphans = 0;
+        for (const LotBuilding& lb : grown.lots) {
+            // Under-freeway lots are IN the ROW by design (parking/utility/open).
+            if (lb.recipe.rfind("underfreeway", 0) == 0) continue;
+            ++lots;
+            const double toStreet = nearestEdgeDist(streets, lb.site);
+            const double toFreeway = nearestEdgeDist(freeway, lb.site);
+            // An orphan: closer to the freeway than any street, and beyond the
+            // reach a street lot could plausibly front (margin + a generous lot
+            // depth).
+            if (toStreet > 60.0 && toFreeway < toStreet) ++orphans;
+        }
+        std::printf("[lots] seed %u: non-underfreeway lots=%d orphans=%d\n", seed, lots, orphans);
+        CHECK(lots > 0);
+        CHECK(orphans == 0);
     }
-    std::printf("[lots] non-underfreeway lots=%d orphans=%d\n", lots, orphans);
-    CHECK(lots > 0);
-    CHECK(orphans == 0);
 }

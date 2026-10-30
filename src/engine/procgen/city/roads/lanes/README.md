@@ -35,7 +35,6 @@ lists every road capability the engine already has and why lanelab does or does 
 | `terrain_conform` | one owner per grid node (lanes, then road envelopes), skirt + 1:2 slopes, sequential; terrain-vs-deck census |
 | `lanelab` | the pipeline, stats, invariants |
 | `deck_mesh` / `lanelab_export` | engine `RenderMesh` via `MeshBuilder` (lane-local UVs), GLB / plan SVG / stats JSON |
-| `level_import` | a shipped level's recipe + terrain → a lanelab graph; perimeter loop → two-carriageway freeway with diamond ramps onto chosen streets |
 
 **Run it.**
 
@@ -43,8 +42,8 @@ lists every road capability the engine already has and why lanelab does or does 
 cmake --build build-viewer --target lanes_tool lanes_tests
 ./build-viewer/lanes_tests                                              # 9 cases: geometry seam + the four scenes' invariants
 ./build-viewer/lanes_tool build assets/lanelab/ring_city.json --out out/lanelab/ring_city     # summary, PASS/FAIL invariants, .glb/.svg/stats.json
-./build-viewer/lanes_tool from-level assets/levels/metro_v2_test.json --out out/lanelab/metro --diamonds 6
-./build-viewer/lanes_tool build out/lanelab/metro/<name>_lanelab.json --out out/lanelab/metro
+./build-viewer/city_plan scene assets/city_plans/metro_v2_test.json out/lanelab/metro.json   # a planned city's scene
+./build-viewer/lanes_tool build out/lanelab/metro.json --out out/lanelab/metro
 ```
 
 Open the `.glb` in Blender (File → Import → glTF) to look at it; the `.svg` is the plan.

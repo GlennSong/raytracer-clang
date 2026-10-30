@@ -97,6 +97,8 @@ TEST_CASE(lanes_graph_loads_and_expands_the_valley_scene) {
 #include "engine/model_importer.h"
 #include "engine/procgen/city/road_network.h"
 #include "engine/procgen/city/polygon.h"
+#include "apps/citysim/city_sim.h"
+#include "engine/ai/nav_graph.h"
 #include <algorithm>
 #include <cstdio>
 #include <set>
@@ -248,6 +250,50 @@ TEST_CASE(lanes_road_twin_closes_every_ring_city_block_and_each_survives_the_sid
     CHECK(ok == faces.size());
     CHECK(maxVerts <= 12);   // corners and junctions only, never a node every 8 m
     CHECK(twin.plan.freewayPlans.size() == 8);   // the ring's carriageway arcs: the lot pass's right-of-way band
+}
+
+// THE REGRESSION THAT WOULD HAVE CAUGHT "half on the sidewalk" (parking round), on the road the city DRIVES:
+// the nav twin a lane-built city's sim runs on (city_producer: navRoadGraph(roadTwin(r, 60, false, forNav)),
+// its streets' cross-sections from road_twin's roadSpecStreetParking). Every bay the sim mints lives inside the
+// Parking band of its own road -- never a bare travel lane, the stall between the last travel lane and the kerb,
+// the widest car in the fleet fitting inside the band. (It ran on the old metro grower's generate recipe until
+// that retired, ADR-0267.) On a planned city: the lab scenes' streets carry two travel lanes in 12 m and have
+// no room for a band, while a planned city's local street is one 6 m lane each way, parked along.
+TEST_CASE(lanes_parking_bays_live_inside_the_road_s_parking_band) {
+    std::size_t totalBays = 0;
+    for (const char* name : {"planned/metro_v2_test_lanelab"}) {
+        const Result& r = scene(name);
+        const engine::NavGraph nav = engine::buildNavGraph(engine::navRoadGraph(roadTwin(r, 60.0, false, /*forNav=*/true), nullptr));
+        citysim::CitySim sim;
+        sim.build(nav, 0, 0, 5);
+        const auto& bays = sim.parkingBays();
+        engine::Real widestCar = 0;
+        for (int i = 0; i < citysim::vehicleFleetSize(); ++i) widestCar = std::max(widestCar, citysim::vehicleFleetBody(i).width);
+        engine::Real worstOut = 0, worstIn = 0;
+        for (const citysim::CitySim::ParkingBay& b : bays) {
+            const engine::NavLink& L = nav.links[b.link];
+            CHECK(L.parkWidth > 0);                       // never a bare travel lane
+            CHECK_APPROX(b.width, L.parkWidth, 1e-9);
+            const engine::Vec2 dir = nav.direction(b.link);
+            const engine::Vec2 rel = b.pos - nav.nodes[L.from];
+            const engine::Real lat = rel.x * dir.y - rel.y * dir.x;   // + = right of travel
+            const engine::Real edge = L.width * 0.5;                  // kerb line
+            const engine::Real inner = edge - L.parkWidth;            // travel-lane boundary
+            CHECK_APPROX(lat, (inner + edge) * 0.5, 1e-6);           // the bay centre IS the band centre
+            worstOut = std::max(worstOut, lat + b.width * 0.5 - edge);
+            worstIn = std::max(worstIn, inner - (lat - b.width * 0.5));
+            CHECK(lat + widestCar * 0.5 <= edge + 1e-9);             // a real car parked there fits the band too
+            CHECK(lat - widestCar * 0.5 >= inner - 1e-9);
+        }
+        std::printf("[parking] %s: %zu bays; widest fleet car %.2f m; worst overhang: kerb %.4f m, travel lane %.4f m\n",
+                    name, bays.size(), widestCar, worstOut, worstIn);
+        CHECK(!bays.empty());      // the streets really are parked-along
+        CHECK(worstOut <= 1e-9);   // NOT half on the sidewalk
+        CHECK(worstIn <= 1e-9);    // NOT half in the travel lane
+        totalBays += bays.size();
+    }
+    std::printf("[parking] %zu bays\n", totalBays);
+    CHECK(totalBays >= 2400u);   // measured 2611 (2026-10-29): a city parked along, not a handful of bays
 }
 
 // The same seam on CURVED streets: curve_blocks is a bezier arterial crossed by three straight

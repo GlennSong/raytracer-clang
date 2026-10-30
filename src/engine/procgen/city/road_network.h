@@ -3,7 +3,6 @@
 
 #include "polygon.h"
 #include "road_spec.h"          // RoadSpec — the band table RoadEdge::spec indexes
-#include "../terrain_field.h"   // HeightField — terrain-aware routing/pruning (ADR-0046)
 #include <cstdint>
 #include <vector>
 
@@ -186,128 +185,6 @@ struct RoadArc {
 // attach to them. `minSegs` is a floor for tiny arcs.
 void sampleArc(RoadGraph& g, int n0, int n1, const RoadArc& arc, Real width,
                RoadClass klass, Real maxErr = 0.15, int minSegs = 1);
-
-// Deformed-grid road generator (city-plan §3.1, the bootstrap). A grid of streets
-// over a square region centred on `center`, vertices jittered by noise, with
-// optional dropout of low-importance local streets. Deterministic for `seed`.
-struct GridRoadParams {
-    Vec2  center{0, 0};
-    Real  extent = 400;     // half-size of the square region (m)
-    Real  cellSize = 90;    // target block spacing (m)
-    Real  jitter = 0.18;    // vertex jitter as a fraction of cellSize
-    Real  dropout = 0.0;    // probability a local street segment is removed
-    Real  arterialWidth = 16, collectorWidth = 11, localWidth = 8;
-    uint32_t seed = 0;
-};
-RoadGraph gridRoads(const GridRoadParams& params);
-
-// Radial road generator (ADR-0044): concentric ring roads + radial avenues — the
-// "Paris/Étoile" pattern. Rings every `ringSpacing` out to `extent`; each ring is
-// a true circular ARC sampled to a fine polyline (bounded chord error), so it
-// reads as a real curve and lots line it. `spokes` avenues radiate from the
-// central ROUNDABOUT (the innermost ring) outward — they meet the ring, never a
-// centre point, so there is no spike and the centre is an island. The outer ring
-// is arterial so the region stays enclosed. Deterministic for `seed`.
-struct RadialParams {
-    Vec2  center{0, 0};
-    Real  extent = 400;      // outer radius (m)
-    Real  ringSpacing = 70;  // distance between concentric rings (m)
-    int   spokes = 8;        // radial avenues from the roundabout
-    int   ringSubdiv = 6;    // minimum chords per avenue gap (arc sampling adds more)
-    Real  jitter = 0.03;     // avenue ANGLE jitter (kept on the circle so rings stay round)
-    Real  arterialWidth = 16, collectorWidth = 11, localWidth = 8;
-    uint32_t seed = 0;
-};
-RoadGraph radialRoads(const RadialParams& params);
-
-// Tensor-field road generator (ADR-0044; after Chen et al., "Interactive
-// Procedural Street Modeling", SIGGRAPH 2008). The single generator that
-// *dovetails* radial and grid: instead of stamping one pattern, it builds a
-// continuous field of road orientations and traces streets along it, so the
-// layout morphs smoothly from radial in the core to a grid at the rim — no hard
-// seam between the two.
-//
-// The field is a symmetric, traceless 2nd-order tensor T(p) = [[a,b],[b,-a]];
-// its two eigenvectors are everywhere perpendicular and have no head/tail (a
-// road has no direction), which is exactly why tensors — not vector fields —
-// blend without the "cowlick" singularities a vector field gives. We sum two
-// basis fields, each weighted by a smooth falloff:
-//   * a RADIAL singularity at `center` whose major eigenvector points radially,
-//     so its streamlines are avenues (major family) and ring roads (minor
-//     family) — the Étoile core; its weight decays as exp(-(r/radialDecay)^2).
-//   * a GRID field of constant orientation `gridAngle`, the rim lattice.
-// Roads are then traced as evenly-spaced streamlines (Jobard & Lefebvre) of both
-// eigenvector families at separation `spacing`, integrated with step `step`.
-// Cross-family crossings become intersections in the usual planarize pass.
-// Deterministic for `seed`.
-struct TensorRoadParams {
-    Vec2  center{0, 0};
-    Real  extent = 400;        // half-size of the square region (m)
-    Real  gridAngle = 0;       // orientation of the grid basis (radians)
-    Real  radialStrength = 1;  // weight of the radial singularity at the core
-    Real  radialDecay = 150;   // 1/e falloff radius of the radial field (m)
-    Real  gridStrength = 1;    // weight of the constant grid basis
-    Real  spacing = 70;        // target streamline separation = block size (m)
-    Real  step = 8;            // streamline integration step (m)
-    Real  arterialWidth = 16, collectorWidth = 11, localWidth = 8;
-    uint32_t seed = 0;
-
-    // Terrain coupling (ADR-0046, after Chen et al. §6). When `terrain` is set, the
-    // field is blended toward the CONTOUR orientation (perpendicular to the terrain
-    // gradient) where the ground is steep, so the avenues bend to follow the
-    // hillside instead of marching across it. Flat ground is untouched. `slopeAlign`
-    // scales how hard steep ground pulls the field; `maxGrade` is the slope at which
-    // that pull saturates (so streets ease onto contours as the grade approaches it).
-    const HeightField* terrain = nullptr;
-    Real  slopeAlign = 1.0;
-    Real  maxGrade = 0.12;
-};
-RoadGraph tensorRoads(const TensorRoadParams& params);
-
-// Thin out the streets a road can't legally climb, WITHOUT fragmenting the network
-// (ADR-0046). A grade-only drop shatters the graph (steep edges are often the only
-// bridge between two parts), so this is a connectivity-preserving prune / max-
-// spanning-forest completion: keep every gentle edge (grade |dh|/run <= maxGrade
-// from `terrain`) and every Arterial, then add back the GENTLEST steep edges needed
-// to reconnect whatever that leaves split. A steep street survives only where
-// there's no gentler way around; a steep street with a gentle detour is dropped. The
-// result has exactly the connected components of the input — no new gaps, no orphans
-// — and the steep ground falls into the (bigger) natural-hillside blocks. Run on the
-// PLANAR graph (so each short segment is judged on its own) before extractBlocks,
-// and the blocks merge across the removed streets for free.
-RoadGraph pruneSteepEdges(const RoadGraph& graph, const HeightField& terrain,
-                          Real maxGrade, int samplesPerEdge = 3);
-
-// Stitch a fragmented network back into ONE connected graph (ADR-0046). Contour
-// coupling can leave streamlines that never cross (parallel on a steep flank), and
-// pruning preserves but can't heal such splits — so this is the coherence backstop:
-// while more than one component remains, add the single shortest connector edge
-// between the closest pair of nodes in different components. Returns a graph with
-// exactly one connected component (re-planarize afterward so the new connectors
-// split cleanly at any road they cross).
-RoadGraph connectComponents(const RoadGraph& graph, Real connectorWidth = 8);
-
-// Planarize: split edges wherever they cross and merge coincident nodes, so the
-// only adjacencies are at shared endpoints (precondition for face extraction).
-RoadGraph planarize(const RoadGraph& graph, Real tol = 0.5);
-
-// NO DEAD END MINTED by a merge (ADR-0265): joining two nodes dedupes the edges a
-// neighbour had to each -- a triangle's apex left a spur going nowhere -- and a short
-// loop fused away leaves its stem. Unwinds, edge by edge, every spur whose tip had
-// degree >= 2 before the merge (`before`, by node; a merged node's is its ends' arms
-// together). mergeShortEdges and consolidateJunctionSpans call it.
-void unwindMintedSpurs(std::vector<RoadEdge>& edges, std::size_t nodes, const std::vector<int>& before);
-
-// Layer-aware planarize (ADR-0051, the grade-separation rule). Like planarize, but a
-// crossing splits into a shared node ONLY when the two edges share a `layer`; a crossing
-// between different layers is a grade separation (overpass/underpass) and is left intact —
-// no node, the edges pass over/under each other. Edge `layer` is carried onto the splits.
-// With every edge on layer 0 this is identical to planarize.
-RoadGraph planarizeLayered(const RoadGraph& graph, Real tol = 0.5);
-
-// How many XY crossings between edges on DIFFERENT layers exist — i.e. the number of grade
-// separations the layer assignment implies. For tests / an editor read-out.
-int gradeSeparationCount(const RoadGraph& graph);
 
 // Extract the minimal interior faces (city blocks) of an already-planar graph via
 // a half-edge DCEL "next clockwise" traversal, discarding the unbounded outer

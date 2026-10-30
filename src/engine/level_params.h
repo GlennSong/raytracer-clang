@@ -40,12 +40,9 @@ inline Quat parseOrientation(const nlohmann::json& ent) {
                                degreesToRadians(o.value("angleDeg", 0.0)));
 }
 
-// Default every road recipe's buildability sea_level (and beach reserve) from
-// the level's top-level "water" block, so the waterline that draws IS the
-// waterline the city respects — ONE number. A recipe that sets its own
-// sea_level keeps it. Mutates `root` in place; no-op without a water block.
-// Run before the road pre-pass in BOTH pipelines so they gate on an
-// identical graph.
+// Default the terrain's seaLevel from the level's top-level "water" block, so the
+// coast the terrain colours IS the waterline that draws -- ONE number. A terrain
+// that sets its own keeps it. Mutates `root` in place; no-op without a water block.
 void propagateWaterSeaLevel(nlohmann::json& root);
 // The rivers and lakes of a level's terrain (its "rivers" block, ADR-0099) as rings a city's blocks
 // stand back from: each corridor grown by `margin` past the bank (ADR-0104). Empty: none.

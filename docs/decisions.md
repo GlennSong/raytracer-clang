@@ -13102,3 +13102,85 @@ Pinned, every seed: `city_plan_never_hangs_a_loop_off_one_junction` and `city_pl
 (12 seeds of the round brief, 4 of the coast brief), `a_coast_city_builds_its_ring_as_a_c_and_lands_its_ends` (4).
 metro_planned's and metro_mountain's scenes are planned again; river_town's and metro_rivers' are not (Glenn's work in
 progress is in them). The island's cities (`city_plan island-cities`) take these when the island is planned again.
+
+## ADR-0267 — The old metro grower retired: the city planner is the one street generator
+
+**Context.** Two street generators had lived side by side since the planner arrived (ADR-0092): the organic grower
+(`buildMetro`, hotspots colonising arterials and a fabric filling the faces, plus `buildDistrict`), reached through a
+road block's `"generate"` recipe, and the city planner (`city_plan`), which plans Saltwood and every island and
+planned city. No shipped level ran the grower any more -- its cities lived on as `converted/` graphs frozen in
+2026-10 by `lanes_tool from-level` -- but its tests, tools and editor panel kept it alive, and a morning went into
+making its output pass tests. Measured over 16 seeds it hung dead-end teardrop loops off its networks on main as on
+the branch (16 vs 20); main's test seed simply had none. Glenn, 2026-10-29: "We need to get rid of the old road
+system. It's confusing you and it's outlived its usefulness. We need the new road system to be a baseline." -- and
+"If we can't convert the old stuff to use saltwood's road system then we should axe it ... It'll be in GitHub's
+history if we need it." He chose to re-plan metro_v2_test and piedmont and to delete the rest.
+
+**Decision.**
+1. RE-PLANNED: `assets/city_plans/metro_v2_test.json` (the coastal shelf, calmed -- heightScale 13 -> 5, tiltX
+   -0.045 -> -0.015 -- so a planned grid fits; the ring a C against the coast) and `assets/city_plans/piedmont.json`
+   (the 8 km world verbatim; its two towns at the expressways' ends). Their scenes are `city_plan scene` output in
+   `assets/lanelab/planned/`; the levels name them and list their districts (`citysim.districts`). Making the planner
+   fit for them is ADR-0266.
+2. DELETED, code: `metro.*`, `district.*`, `arterial_skeleton.*`, `patch_fabric.*`, `city_footprint.*`,
+   `roads/lanes/level_import.*` (`lanes_tool from-level`); `applyGenerateRecipe` with `warpGraph` / `deAcute` /
+   `pruneAcuteArms`; the constraint passes only it ran (`capDegree`, `mergeShortEdges`, `consolidateJunctionSpans`,
+   `relaxSharpBends`, `dissolveAcuteArms`, `realignAcuteJunctions`, `dropParallelEdges`, `cutSharpCorners`,
+   `unwindMintedSpurs`) -- `road_constraints` keeps `applyConstraints`, its roundabout rule and `nodeNeedsRoundabout`;
+   the editor's Road Generation panel and recipe Regenerate; the generate paths in the loader, `level_scene`,
+   `level_params` (recipe sea levels); `city_prepass` (already called by nothing); the diagnostics
+   `road_products_probe`, `junction_angle_probe`, `road_map_svg` (all ran recipes; `city_plan`'s maps draw plans).
+   `RoadPlan` loses `cityHubs` and `siteFootprints`; the road entity codec writes a hub count of 0 and reads past any
+   it finds, so bundles baked before still load (drop the field at the next format bump). A level whose road still
+   carries `"generate"` logs an error naming this ADR.
+3. DELETED, content: `assets/lanelab/sources/` and `converted/` (agent_lab's hand-drawn graph moves to
+   `assets/lanelab/agent_lab_lanelab.json`), `metro_v2/`, `metro_route/`, `assets/lanelab/levels/metro*.json`, and the
+   levels grown, metro_lanes, piedmont_roads, piedmont_mini.
+4. TESTS: the grower's own (`test_metro_sites`, `test_footprint_skeleton`, `test_fabric`, `test_city_footprint`, its
+   stages and recipe cases) go with it. What needed SOME city now stands on planned ones, every seed:
+   `tests/planned_city.h` (`roundBrief`, `plannedCity`, `plannedNet`) -- the lot frontage and clearance gates, the
+   park pads, no lots on the freeway alone, the road classes, the graph order hash, the tier split. The parking-band
+   gate moved to `lanes_tests` on the nav twin a lane-built city drives (`roadTwin(..., forNav)`), which is where
+   streets get their bands now. The level suite's second city is river_town (metro_lanes is gone).
+5. The lanes corpus's real-city half is the planned scenes (kind `planned`: river_town, metro_v2_test, and slow,
+   metro_planned and piedmont); its baseline is measured again.
+
+**Consequences.** One street generator. `grep buildMetro|buildDistrict|applyGenerateRecipe|MetroParams` is empty.
+Every level's roads are a lanes graph, planned or hand-drawn. The bakes of metro_v2_test and piedmont change (their
+cities are new); metro_planned and metro_mountain re-bake on ADR-0266's planner. Glenn's untracked camera files for
+the deleted levels (`*.cameras.json`) are left where they are.
+
+**Addendum (2026-10-29, the same day).** Glenn: "remove the old freeway corridor system, simple layout generators in
+road_network and the hand authoring roads... we don't need those. Let's dedupe and excise old code." Three more
+systems the old grower era left, none reachable by a shipped level:
+6. THE FREEWAY CORRIDOR SYSTEM: `alignment.*`, `corridor_plan.*`, `corridor_bake.*`, `corridor_mesh.*`, the loader's
+   corridor block (the `shape:"corridor"` entity, the root `freewayPlans`/`interchangeSpacing` keys, route planning,
+   landings, authoring, the bake into the net) and their tests (`test_alignment`, `test_freeway_graph`, the corridor
+   cases of `test_road_weld` and `test_road_semantics`). The lanes builder builds every freeway. Kept: the twin's
+   `plan.freewayPlans` (the lot pass's fallback band) and `RoadEdge::baked` (the twin's "no frontage" flag);
+   `RoadProvenance`'s corridor values stay in the codec until the next format bump.
+7. THE SIMPLE LAYOUT GENERATORS in `road_network`: `gridRoads`, `radialRoads`, `tensorRoads`, `pruneSteepEdges`,
+   `connectComponents`, `planarize`, `planarizeLayered`, `gradeSeparationCount`; the Lua `city.layout` that exposed
+   them, with the `lua_city` level and its scripts; their tests. The sim tests' grid town lives on as a TEST FIXTURE,
+   `citytest::gridCity` (tests/city_test_util.h), the same algorithm and the same draws, so the towns -- and every
+   number measured on them -- are unchanged. Kept: `extractBlocks`, `joinDanglingEnds`, `sampleArc` (the
+   auto-roundabout's ring in `applyConstraints`).
+8. HAND-AUTHORED ROADS: the road entity's edit API (move / tangent / add / split / extend / delete / width, the
+   nearest-edge pick), `roadNetFromJson` (the level's node arrays), `roadRecipeForSave`; the editor's road handles,
+   path tool, Ctrl topology gestures and the inspector's "Road" entry -- whose regenerate, fired by any inspector
+   edit, undo or paste, wrote the EMPTY graph over a lanes level's `{"builder":"lanes","graph":...}` block, so a
+   save after it would have wiped the city's roads; `handle_source.*`, `path_edit_tool.*` (no runtime user left);
+   the loader's authored-road pre-pass (`preNets`, the road cache, the LevelRoadGraph and right-of-way built from
+   them, their poke/elevation diagnostics) and `level_scene`'s parsing. A road entity is now the look its builder's
+   products are drawn with; a level road block with `nodes` logs an error naming this ADR. `roadNetToJson` stays as
+   the twin's debug dump into GLB extras. The parking-band gate moved onto metro_v2_test's planned scene in
+   `lanes_tests` (2611 bays, every one inside its street's Parking band): the lab scenes' streets are two lanes in
+   12 m with no room for a band.
+Also: `road_mesh.cpp`'s dead `emitStripe` / `segDist2` / `trimEnds`, and the web scene list's entries for levels
+that no longer exist (with their thumbnails).
+9. THE OLD ROAD MESHER'S LAST PIECES in `road_mesh`: the joint deck-profile solve (`weldChainProfiles`),
+   `roadProfile`, `clearanceProfile`, `bridgePiers`, `curbReturnFillet`, `roadConformRegions`; and
+   `road_crossings` (`resolveCrossings`) with its Lua `city.resolve` -- reached only by tests and a verb no shipped
+   script used. The lanes builder grades, bridges and fillets its own roads. `road_mesh` keeps what a lane-built
+   city publishes and reads (`UnionSpine`, `RoadDeckField`), `strokeRibbon` (the city renderer's outlines, Lua
+   `city.stroke`), `fairHermite` (the twin's sampler) and `triangulatePolygon`.

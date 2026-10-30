@@ -5,6 +5,7 @@
 #include "road_entity.h"
 #include "../polygon.h"
 #include "../rail_track.h"
+#include "../../terrain.h"   // TerrainFlatten
 #include <string>
 #include <memory>
 #include <nlohmann/json.hpp>

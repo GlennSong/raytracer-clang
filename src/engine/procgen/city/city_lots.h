@@ -224,12 +224,10 @@ struct LotParams {
     // Filled by the grower's rebind from groundWith: the dilate-aware sampler
     // the mesh-conforming wrapper queries. Hosts never set this directly.
     std::function<Real(Real, Real, Real)> groundDilatedFn;
-    // Hub CLUSTER ids parallel to `hubs` (multi-site metros, 8km-city P3):
-    // CityHub::site — 0 = the primary city, 1+ = satellite towns. The landmark
-    // planner runs its quotas PER CLUSTER (the city keeps the full civic
-    // table; each town is guaranteed its own school + church). Empty = every
-    // hub is the city; growLotBuildingsOnNets recovers the ids from the nets'
-    // own cityHubs when the caller leaves this unset.
+    // Hub CLUSTER ids parallel to `hubs` (8km-city P3): 0 = the primary city,
+    // 1+ = satellite towns. The landmark planner runs its quotas PER CLUSTER
+    // (the city keeps the full civic table; each town is guaranteed its own
+    // school + church). Empty = every hub is the city.
     std::vector<int> hubClusters;
     // Level-authored PARCEL overrides (citysim.parcel — the 8km-metro knob:
     // 150 m+ blocks parcel bigger lots). <= 0 = unset: the parceler keeps its

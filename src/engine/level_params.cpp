@@ -32,22 +32,10 @@ void propagateWaterSeaLevel(json& root) {
     if (!root.contains("water")) return;
     const json& w = root["water"];
     double sea = w.value("seaLevel", 0.0);
-    double beach = w.value("beachRise", 2.5);
     // The terrain colours its coast by this same sea level (beach/rock/sea floor).
     if (root.contains("terrain") && root["terrain"].is_object() &&
         !root["terrain"].contains("seaLevel"))
         root["terrain"]["seaLevel"] = sea;
-    // Every road recipe gates buildability on it (roads/blocks stay on land).
-    if (!root.contains("entities") || !root["entities"].is_array()) return;
-    for (auto& ent : root["entities"]) {
-        if (ent.value("shape", std::string()) != "road" || !ent.contains("road"))
-            continue;
-        json& road = ent["road"];
-        if (!road.contains("generate") || !road["generate"].is_object()) continue;
-        json& g = road["generate"];
-        if (!g.contains("sea_level")) g["sea_level"] = sea;
-        if (!g.contains("beach_rise")) g["beach_rise"] = beach;
-    }
 }
 
 std::shared_ptr<const std::function<double(double, double)>> erodedForTerrain(const json& tj);

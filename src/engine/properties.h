@@ -14,7 +14,6 @@ struct LensParams;
 struct SceneCamera;
 struct SourceSpec;
 struct Velocity;
-struct RoadEntity;
 
 // The property layer (editor-app plan): each component describes its editable
 // fields ONCE — label, value reference, and editing semantics (range, scale,
@@ -86,7 +85,7 @@ void describeProperties(LensParams& lens, PropertyVisitor& v);
 void describeProperties(SceneCamera& cam, PropertyVisitor& v);
 void describeProperties(SourceSpec& spec, PropertyVisitor& v);
 void describeProperties(Velocity& vel, PropertyVisitor& v);
-void describeProperties(RoadEntity& road, PropertyVisitor& v);
+
 
 }  // namespace engine
 

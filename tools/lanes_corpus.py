@@ -32,13 +32,6 @@ RE_LAYERS = re.compile(r"layers: surface ([\d.]+) m², shoulder ([\d.]+), sidewa
                        r"median ([\d.]+); islands (\d+), enclosed blocks (\d+)")
 RE_VERDICT = re.compile(r"^(PASS|FAIL)\s+([^:]+):?\s*(.*)$")
 # the importer's own summary tail: "... N streets (M trimmed short of the freeway, K dropped), L landings, R ramps"
-RE_IMPORT = re.compile(r"(\d+) streets \((\d+) trimmed short of the freeway, (\d+) dropped\), "
-                       r"(\d+) landings, (\d+) ramps")
-RE_RING = re.compile(r"ring redrawn at R >= ([\d.]+) m: ([\d.]+) m, min radius ([\d.]+) m")
-RE_NO_RING = re.compile(r"no perimeter ring found")
-RE_WROTE = re.compile(r"^wrote (\S+) \((\d+) edges\)")
-
-
 def run(cmd, timeout):
     t0 = time.time()
     try:
@@ -87,43 +80,11 @@ def parse_build(text):
     return r
 
 
-def parse_import(text):
-    r = {}
-    m = RE_IMPORT.search(text)
-    if m:
-        r.update(streets=int(m.group(1)), trimmed=int(m.group(2)), dropped=int(m.group(3)),
-                 landings=int(m.group(4)), ramps=int(m.group(5)))
-    m = RE_RING.search(text)
-    if m:
-        r.update(ring_target_r=float(m.group(1)), ring_len=float(m.group(2)), ring_min_r=float(m.group(3)))
-    elif RE_NO_RING.search(text):
-        r["ring"] = None
-    m = RE_WROTE.search(text)
-    if not m:
-        for line in text.splitlines():
-            m = RE_WROTE.match(line.strip())
-            if m:
-                break
-    if m:
-        r["graph"] = m.group(1)
-        r["edges"] = int(m.group(2))
-    return r
-
-
 def scene_run(sc, tool, outroot, timeout):
     name, out = sc["name"], os.path.join(outroot, sc["name"])
     os.makedirs(out, exist_ok=True)
     res = {"name": name, "kind": sc["kind"], "tests": sc.get("tests", "")}
     graph = sc["source"]
-    if sc["kind"] == "imported":
-        text, rc, secs = run([tool, "from-level", sc["source"], "--out", out], timeout)
-        imp = parse_import(text)
-        res["import"] = imp
-        res["import_seconds"] = round(secs, 1)
-        if rc != 0 or "graph" not in imp:
-            res["error"] = f"from-level failed (rc={rc})"
-            return res
-        graph = imp["graph"]
     cmd = [tool, "build", graph, "--out", os.path.join(out, "build")]
     if sc.get("quick"):
         cmd.append("--quick")          # no invariant sweep: the verdicts are UNKNOWN, not clean
@@ -159,17 +120,7 @@ def table(rows):
                else f"{len(r['failed'])} FAIL: " + ", ".join(r["failed"]))
         print(f"{r['name']:<22}{r['kind']:<10}{r['tris']:>9}{r['nonmanifold']:>7}{r['cracks']:>8}"
               f"{mm:>15}{ad:>24}  {inv[:70]}")
-    imported = [r for r in rows if r["kind"] == "imported" and r.get("import")]
-    if imported:
-        print(f"\n{'scene':<15}{'edges':>7}{'streets':>9}{'dropped':>9}{'landings':>10}{'ramps':>7}"
-              f"{'ring min R':>12}")
-        print("-" * 70)
-        for r in imported:
-            i = r["import"]
-            ring = "none" if i.get("ring", 0) is None else (f"{i['ring_min_r']:.0f} m of {i['ring_target_r']:.0f}"
-                                                            if "ring_min_r" in i else "—")
-            print(f"{r['name']:<15}{i.get('edges','—'):>7}{i.get('streets','—'):>9}{i.get('dropped','—'):>9}"
-                  f"{i.get('landings','—'):>10}{i.get('ramps','—'):>7}{ring:>12}")
+
 
 
 # A gate is only useful if it knows what "worse" means. Counts must not grow; the

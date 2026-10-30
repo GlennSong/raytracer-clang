@@ -483,7 +483,7 @@ bool LevelScene::load(const std::string& levelPath, Scene& scene,
             if (ent.value("shape", std::string()) != "road") continue;
             const json roadBlock = ent.contains("road") ? ent["road"] : json::object();
             roads::RoadBuilder& rb = roads::roadBuilderFor(roadBlock);
-            RoadEntity net = roadNetFromJson(roadBlock);
+            RoadEntity net;   // the builder builds the city from its bundle; the entity carries only the look
             roads::RoadBuildInput in;
             in.road = &net; in.ground = natural; in.options = roadBlock; in.level = root; in.levelPath = levelPath;
             const roads::GroundPlan gp = rb.ground(in);
@@ -582,10 +582,7 @@ bool LevelScene::load(const std::string& levelPath, Scene& scene,
                 if (ent.value("shape", std::string()) != "road") continue;
                 const json roadBlock =
                     ent.contains("road") ? ent["road"] : json::object();
-                RoadEntity net = roadNetFromJson(roadBlock);
-                // levelGround (natural) gates terrain-aware recipes (metro).
-                if (roadBlock.contains("generate"))
-                    applyGenerateRecipe(net, roadBlock["generate"], levelGround);
+                RoadEntity net;   // the builder builds the city from its bundle; the entity carries only the look
                 // (the ground a lane-built city stands on comes from its builder: GroundPlan)
                 roads::RoadBuilder& rb = roads::roadBuilderFor(roadBlock);
                 if (rb.ownsNavGraph()) {   // a builder that paves a whole city knows its blocks
@@ -796,18 +793,10 @@ bool LevelScene::load(const std::string& levelPath, Scene& scene,
             addTree(ent, scene);
             continue;
         }
-        // Editor-authored road (shape:"road", ADR-0049): the same RoadEntity the
-        // editor edits, baked to the carriageway and draped on the level terrain.
+        // A city's roads (shape:"road"): the road builder's products, draped on the level terrain.
         if (ent.value("shape", std::string()) == "road") {
             const json roadBlock = ent.contains("road") ? ent["road"] : json::object();
-            RoadEntity net = roadNetFromJson(roadBlock);
-            // A generated network (ADR-0056 "generate" recipe — grown.json's whole
-            // city) has no authored nodes: grow it exactly like the level loader
-            // does, or the offline render shows bare ground where the city is.
-            // levelGround (natural) gates the metro's terrain-aware layout and
-            // drapes the mesh.
-            if (roadBlock.contains("generate"))
-                applyGenerateRecipe(net, roadBlock["generate"], levelGround);
+            RoadEntity net;   // the builder builds the city from its bundle; the entity carries only the look
             // ONE ROAD BUILDER, CHOSEN BY THE LEVEL (Glenn, 2026-09-21: "whatever it is
             // they should be 1:1. I don't know why the editor should end up building a
             // procedurally generated city different than any other path. There should
