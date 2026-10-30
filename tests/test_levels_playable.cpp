@@ -2006,6 +2006,7 @@ TEST_CASE(metro_junctions_stay_clear) {
     };
     std::vector<Real> stoppedFor(city.sim().agents().size(), 0);
     long samples = 0, carsSeen = 0, inBox = 0, stuckBox = 0, overlaps = 0;
+    std::vector<long> stuckAt(junctions.size(), 0);
     for (int i = 0; i < 1800; ++i) {
         city.step(world, 0.1);
         const auto& ag = city.sim().agents();
@@ -2029,7 +2030,10 @@ TEST_CASE(metro_junctions_stay_clear) {
                 const Real r = mouth[j];
                 if (d.x * d.x + d.y * d.y < r * r) {
                     ++inBox;
-                    if (stoppedFor[k] > 5.0) ++stuckBox;
+                    if (stoppedFor[k] > 5.0) {
+                        ++stuckBox;
+                        ++stuckAt[j];
+                    }
                     break;
                 }
             }
@@ -2049,6 +2053,15 @@ TEST_CASE(metro_junctions_stay_clear) {
                 "(%ld for > 5 s), %ld overlapping pairs\n",
                 samples, samples ? static_cast<double>(carsSeen) / samples : 0.0, inBox,
                 stuckBox, overlaps);
+    std::vector<std::size_t> worst(junctions.size());
+    for (std::size_t j = 0; j < worst.size(); ++j) worst[j] = j;
+    std::sort(worst.begin(), worst.end(),
+              [&](std::size_t a, std::size_t b) { return stuckAt[a] > stuckAt[b]; });
+    for (std::size_t w = 0; w < std::min<std::size_t>(5, worst.size()) && stuckAt[worst[w]] > 0; ++w) {
+        const Vec2 p = nav.nodes[static_cast<std::size_t>(junctions[worst[w]])];
+        std::printf("    [junction]   %ld stuck at node %d  ->  teleport %.2f %.2f\n",
+                    stuckAt[worst[w]], junctions[worst[w]], p.x, p.y);
+    }
     CHECK(samples > 0 && carsSeen / samples > 40);   // the city is actually driving
     CHECK(stuckBox < 300);
     CHECK(overlaps < 800);
