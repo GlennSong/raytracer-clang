@@ -24,6 +24,10 @@
   "pier_spacing": 20.0,
   "conform_w": 12.0
  },
+ "classes": {
+  "local": {"w": 3.5, "fwd": 1, "back": 1, "shoulder": 0.0, "sidewalk": 1.8, "g_max": 0.09, "rank": 1, "thick": 0.5, "window": 40.0},
+  "arterial": {"w": 3.0, "fwd": 2, "back": 2, "shoulder": 0.0, "sidewalk": 2.6, "g_max": 0.06, "rank": 2, "thick": 0.6, "window": 120.0}
+ },
  "edges": [
   {
    "id": "ns0",

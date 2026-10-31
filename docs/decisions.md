@@ -13570,3 +13570,54 @@ standing still, and reversing at 27 km/h through a turn. Getting out works. The 
 
 **Consequences.** No bake change. Riders on buses, cabs and trains lean when their carrier accelerates, brakes or
 corners. The camera is untouched: the sway moves the body, not the first-person eye.
+
+## ADR-0276 — One road class table: every class's section, grade and profile, once
+
+#117 wave 2, item 18. Four tables gave road grades, and they disagreed:
+
+| | freeway | arterial | collector | local | ramp | read by |
+|---|---|---|---|---|---|---|
+| `DesignRules::forClass` (road_rules.cpp) | 5 % | 8 % | 10 % | 12 % | 6 % | lane counts; the old lattice code (item 20) |
+| the lanes builder's defaults (road_graph_spec.cpp) | 3 % | 6 % | — | 9 % | 9 % | graphs that declare no classes: the two rail labs |
+| the planner's scene classes (plan_scene.cpp) | 6 % | 8 % | 10 % | 12 % | 9 % | every graph it plans, so every shipped level |
+| constants elsewhere | | | | | 9 % | `dop.gRamp` (plan_scene twice, island_world); the island's mountain class, built by hand from rural (island_scene); the interchange demo's classes (lanes_tool, its ramp at 8 %) |
+
+**Decision.** One table, `roadClasses()` in roads/lanes road_graph_spec. A graph's classes start from its rows
+(`RoadLabGraph::fromJson`), `classJson` writes a row back, and `roadClass(name)` reads one.
+- **The grades, lane counts, shoulders, ranks, windows and deck thicknesses are the planner's.** They are what
+  every shipped graph carries, so nothing that ships moves.
+- **The sections are the default brief's** (12, 16, 22 and 30 m carriageways, 5 m sidewalks). The planner still puts
+  its brief's widths over them.
+- **The table holds every class:** the planner's seven, the island's `mountain` (the rural section at 15 %, cutting
+  through, guardrailed: ADR-0116, ADR-0117), divider, rail, light rail and footway.
+
+Everything reads the table:
+- the planner writes its classes as table rows with the brief's widths, and its interchange ramps take the ramp row's
+  grade (`dop.gRamp`);
+- the island takes its mountain row and its ramp grade;
+- the interchange demo tool takes its rows;
+- `DesignRules::forClass` takes its grades (its radii and cross-sections stay its own until item 20 retires the
+  lattice code that reads them).
+
+**Not in the table:** the island's terrain-router settings (`freewayRouteParams`, the pass and road routing,
+`finishRoad`). They are the route search's tuning per road kind: cell size, grade cost and weight, margins, the cut
+and fill it tightens to. They are not road rules, and splitting one number out of each set would not remove a
+duplicate. Item 19 (one terrain router) is where they get looked at.
+
+**The rail labs declare their own streets.** `light_rail_lab` and `rail_loop` declared no classes and so drove on the
+builder's defaults: 3.5 m lanes, 1.8 m sidewalks, local 9 % and arterial 6 %. Under the table they took a planned
+city's 6 m lanes and 5 m sidewalks, and the light rail lab's wider streets left one see-through look at a deck edge.
+They now write their narrow streets into their own graph files, as every planned graph does. A lab picks its streets.
+
+**Proved identical.**
+- `city_plan scene` re-planned metro_v2_test with the table. Edges, terrain and rules are byte-equal to the
+  committed graph. The classes differ only by keys now written out: `shoulder: 0` on four street classes and
+  `sidewalk: 0` on the ramp, the zeros the reader filled before.
+- A committed graph loaded under the table fills its omitted keys from the table's rows, the same zeros the old
+  defaults gave.
+- The island's mountain row is the one island_scene built: the guardrail's height and thickness it omits are the
+  reader's guardrail defaults, which the table writes.
+- The rail labs are unchanged: lanes_tests 50/50, the light rail lab back to 0 see-through looks.
+
+**Consequences.** No bake change and no tag bump for this item. The roads chain's re-plan (items 19–21, with #167 and
+#142) is where any grade actually moves, and then from this one table.

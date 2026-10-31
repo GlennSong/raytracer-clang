@@ -329,19 +329,22 @@ nlohmann::json planToLanesScene(const CityPlan& plan, const SceneOptions& opt) {
     scene["name"] = b.name;
     const json& world = b.world;
     scene["terrain"] = sceneTerrain(b);
-    // Lane counts and widths that add up to the brief's carriageway widths.
+    // THE ROAD CLASS TABLE's rows (roads/lanes road_graph_spec: one table, ADR-0276), with lane widths that add up to
+    // the brief's carriageway widths and its sidewalk on every street
+    auto row = [&](const char* name, double carriageway, bool street) {
+        roads::lanes::RoadClassSpec c = roads::lanes::roadClass(name);
+        if (carriageway > 0) c.lanes.w = carriageway / (c.lanes.fwd + c.lanes.back);
+        if (street) c.sidewalk = b.sidewalk;
+        return roads::lanes::classJson(c);
+    };
     scene["classes"] = {
-        {"local", {{"w", b.localWidth / 2}, {"fwd", 1}, {"back", 1}, {"sidewalk", b.sidewalk}, {"g_max", 0.12}, {"rank", 1}, {"thick", 0.5}, {"window", 40}}},
-        {"collector", {{"w", b.collectorWidth / 4}, {"fwd", 2}, {"back", 2}, {"sidewalk", b.sidewalk}, {"g_max", 0.1}, {"rank", 1}, {"thick", 0.5}, {"window", 80}}},
-        {"arterial", {{"w", b.arterialWidth / 6}, {"fwd", 3}, {"back", 3}, {"sidewalk", b.sidewalk}, {"g_max", 0.08}, {"rank", 2}, {"thick", 0.6}, {"window", 120}}},
-        {"boulevard", {{"w", b.arterialWidth / 6}, {"fwd", 3}, {"back", 0}, {"sidewalk", b.sidewalk}, {"g_max", 0.08}, {"rank", 2}, {"thick", 0.6}, {"window", 120}}},
-        {"freeway", {{"w", b.freewayWidth / 8}, {"fwd", 4}, {"back", 0}, {"shoulder", 2.5}, {"sidewalk", 0.0}, {"g_max", 0.06}, {"rank", 3}, {"thick", 1.2}, {"window", 200.0}}},
-        // RURAL: a country road out of town -- the mountain roads -- two lanes and a shoulder, no
-        // sidewalks (and so none of a street's kerbside furniture); drives as a collector
-        {"rural", {{"w", 3.5}, {"fwd", 1}, {"back", 1}, {"shoulder", 1.0}, {"sidewalk", 0.0}, {"g_max", 0.1}, {"rank", 1}, {"thick", 0.5}, {"window", 60}}},
-        // 9%: an urban ramp's grade, and with 8% the diamonds on the hilly ring ran longer than the
-        // 535 m between its arterials and only two fit, both on one side
-        {"ramp", {{"w", 4.5}, {"fwd", 1}, {"back", 0}, {"shoulder", 2.5}, {"g_max", 0.09}, {"rank", 0}, {"thick", 1.0}, {"window", 40}}},
+        {"local", row("local", b.localWidth, true)},
+        {"collector", row("collector", b.collectorWidth, true)},
+        {"arterial", row("arterial", b.arterialWidth, true)},
+        {"boulevard", row("boulevard", b.arterialWidth / 2, true)},   // (one way: half an arterial's six lanes)
+        {"freeway", row("freeway", b.freewayWidth / 2, false)},       // (one carriageway: half the freeway's eight)
+        {"rural", row("rural", 0, false)},
+        {"ramp", row("ramp", 0, false)},
     };
     scene["rules"] = {{"closing", 3.0}};
 
@@ -661,7 +664,7 @@ nlohmann::json planToLanesScene(const CityPlan& plan, const SceneOptions& opt) {
             dop.spacing = opt.interchangeSpacing;
             dop.clearance = opt.clearance;
             dop.rampHalf = 4.5 / 2 + 2.5;   // the ramp class below: one 4.5 m lane, 2.5 m shoulders
-            dop.gRamp = 0.09;               // and its g_max
+            dop.gRamp = roads::lanes::roadClass("ramp").gMax;   // and its g_max
             // a city ring's lanes on and off: 70 m + 50 m taper to leave, 90 m + 60 m to join
             dop.decel = 70; dop.taperOff = 50; dop.aux = 90; dop.taperOn = 60;
             dop.ground = ground;            // the climb is to the ground the ramp lands on
@@ -694,7 +697,7 @@ nlohmann::json planToLanesScene(const CityPlan& plan, const SceneOptions& opt) {
             dop.spacing = opt.interchangeSpacing;
             dop.clearance = opt.clearance;
             dop.rampHalf = 4.5 / 2 + 2.5;
-            dop.gRamp = 0.09;
+            dop.gRamp = roads::lanes::roadClass("ramp").gMax;
             dop.decel = 70; dop.taperOff = 50; dop.aux = 90; dop.taperOn = 60;
             dop.ground = ground;
             dop.deck = deckOf(plan.loop, floorsOf[loopId]);

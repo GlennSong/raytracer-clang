@@ -1,4 +1,5 @@
 #include "island_world.h"
+#include "../city/roads/lanes/road_graph_spec.h"   // the road class table (the ramp grade)
 #include "../../../log.h"
 
 #include "../noise.h"
@@ -1143,7 +1144,7 @@ void islandInterchanges(IslandWorld& w, const std::vector<std::pair<Vec2, Vec2>>
         dop.spacing = 900.0;
         dop.clearance = 7.0;              // the crossing road passes under, the freeway on its embankment
         dop.rampHalf = 4.5 / 2 + 2.5;     // one 4.5 m lane, 2.5 m shoulders
-        dop.gRamp = 0.09;
+        dop.gRamp = roads::lanes::roadClass("ramp").gMax;   // the road class table's ramp grade
         dop.rampPeak = 0.06;   // #40: a ramp's steepest stretch 6%, not ~7.8% ("Short on-ramps are steep")
         dop.ground = ground;
         // THE DECK AS IT WILL BE BUILT: the lanes builder's own profile for this route (its freeway class:
