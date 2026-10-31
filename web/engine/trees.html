@@ -560,7 +560,7 @@
           <text x="228" y="62">joints, near leaves</text>
           <text x="228" y="100" fill="#0c1016">zone 1/3, twig cards</text>
           <text x="448" y="138" fill="#0c1016">no joints, no roots</text>
-          <text x="632" y="176" fill="#0c1016">4 sides, limbs ≥ 6 cm</text>
+          <text x="632" y="176" fill="#0c1016">coarsest, limbs ≥ 6-7 cm</text>
           <text x="560" y="214">one camera-facing card →</text>
         </g>
       </g>
@@ -696,9 +696,11 @@
 <span class="t">bool</span> loadRecipeSpecies(<span class="t">uint64_t</span> key, <span class="t">std::vector</span>&lt;<span class="t">std::vector</span>&lt;<span class="t">RecipeTreeLevel</span>&gt;&gt;&amp; out);
 <span class="t">bool</span> saveRecipeSpecies(<span class="t">uint64_t</span> key, <span class="k">const</span> <span class="t">std::vector</span>&lt;<span class="t">std::vector</span>&lt;<span class="t">RecipeTreeLevel</span>&gt;&gt;&amp; variants);</pre>
   </div>
-  <p>The key also folds in the engine's build identity (<code>bundle::engineIdentity().version</code>, which ADR-0198
-    describes as the build's git describe), so every commit is a new key and a changed grower never serves an
-    old tree. The trade-off is that any commit invalidates the whole cache. A write prunes the least recently used
+  <p>The key also folds in the engine's build identity (<code>bundle::engineIdentity().version</code>: the
+    <code>git describe</code> CMake records when it configures, not at every build), so a commit is a new key once
+    the build reconfigures; between reconfigures, bumping <code>kTreeCacheVersion</code> is what keeps a changed grower
+    from serving an old tree. The trade-off is that a reconfigure after any commit invalidates the whole cache. A
+    write prunes the least recently used
     files beyond <code>RT_TREE_CACHE_MAX_GB</code> (default 4). The forest's age and form for each variant go into the
     <code>age</code> string.</p>
 

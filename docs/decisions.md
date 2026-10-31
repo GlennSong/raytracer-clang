@@ -10782,6 +10782,8 @@ Glenn, 2026-10-18: "Can you do those things next" (the island's recipe forest bu
   162 -> 100 s (the real_tree forest's: 42 s, 96 s).
 - Test `a_species_grown_once_reads_back_the_same`.
 
+*Since then (#117 wave 0):* the "git describe" in the key is bundle::engineIdentity().version (bundle.cpp), the describe CMake records at configure time (CMakeLists.txt), so a commit is a new key only after a reconfigure; between reconfigures kTreeCacheVersion (procgen/tree_cache.h) is the guard.
+
 ## ADR-0199 — Stands: forest-grown forms, a mix of ages, and beech, fir, aspen and alder
 
 Glenn, 2026-10-18: "Can you do those things next" (an age mix in a stand, forest-grown forms, the island's missing
