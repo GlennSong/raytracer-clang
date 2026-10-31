@@ -1,6 +1,7 @@
 -- Physics-block shooting gun (ADR-0024) — a MonoBehaviour-style ECS script on
--- the player. On "fire" it spawns a dynamic cube along the camera aim (the Lua
--- port of the C++ ShootingSystem). On start it ALSO generates a gun viewmodel
+-- the player, and the engine's one gun (ADR-0283: the C++ ShootingSystem it was
+-- ported from is gone). On "fire" it spawns a dynamic, swept (CCD) cube along the
+-- camera aim. On start it ALSO generates a gun viewmodel
 -- with the procgen builders and spawns it as its own camera-following entity.
 --
 -- `camera`/`input`/`spawn`/`sound` are the gameplay surface; `mesh.*` are the
@@ -98,7 +99,7 @@ function M:update(e, dt)
     end
     if not (self.equipped and fp and camera.hands_free()) then return end   -- bare hands / third person / climbing
     if self.fired >= MAX then return end
-    if not input.pressed("fire") then return end
+    if not input.pressed("fire") or not input.pointer_free() then return end   -- a click on a UI panel is not a shot
 
     local eye   = camera.eye()
     local fwd   = camera.forward()
@@ -115,6 +116,7 @@ function M:update(e, dt)
     spawn.block{
         position    = pos,
         origin      = eye,     -- a muzzle behind a pane from the eye swallows the shot
+        ccd         = true,    -- small and fast: swept, or it tunnels through a thin wall
         velocity    = vel,
         size        = SIZE,
         restitution = 0.7,

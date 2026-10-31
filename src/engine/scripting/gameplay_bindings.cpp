@@ -171,6 +171,11 @@ int l_camera_right(lua_State* L) {
     pushVec3(L, normalize(cross(fwd, c.up)));
     return 1;
 }
+int l_input_pointer_free(lua_State* L) {
+    GameplayContext* g = gameplayCtx(L);
+    lua_pushboolean(L, g == nullptr || g->pointerFree);
+    return 1;
+}
 int l_camera_hands_free(lua_State* L) {
     GameplayContext* g = gameplayCtx(L);
     lua_pushboolean(L, g == nullptr || g->handsFree);
@@ -206,6 +211,9 @@ int l_spawn_block(lua_State* L) {
         c.origin = fieldVec3(L, 1, "origin");
         c.hasOrigin = true;
     }
+    lua_pop(L, 1);
+    lua_getfield(L, 1, "ccd");
+    c.ccd = lua_toboolean(L, -1);
     lua_pop(L, 1);
     g->spawns->push_back(c);
     return 0;
@@ -377,6 +385,7 @@ void openGameplayLibrary(ScriptVM& vm) {
         {"pressed", l_input_pressed},
         {"held", l_input_held},
         {"axis", l_input_axis},
+        {"pointer_free", l_input_pointer_free},
         {nullptr, nullptr},
     };
     luaL_newlib(L, kInputFns);

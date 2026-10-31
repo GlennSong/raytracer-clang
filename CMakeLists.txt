@@ -1013,7 +1013,6 @@ if(RT_ENABLE_PHYSICS)
         src/engine/systems/player_arms_system.cpp   # the block arms in first person
         src/engine/systems/player_body_system.cpp   # the body posed in third person, and limp
         src/engine/systems/teleport_system.cpp
-        src/engine/systems/shooting_system.cpp
         src/engine/systems/vehicle_system.cpp
         src/engine/systems/nature_collider_system.cpp   # trunk + rock colliders round the player (#55)
         src/engine/systems/footstep_system.cpp   # the player's feet, heard (#62/#63/#64)

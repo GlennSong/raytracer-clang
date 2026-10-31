@@ -291,3 +291,23 @@ TEST_CASE(script_events_survive_deep_tables) {
     bus.dispatchQueued();
     CHECK(heard == 1);
 }
+
+TEST_CASE(script_block_spawn_is_swept_when_asked) {
+    // gun.lua's bullet asks for ccd (ADR-0283): small and fast, it would tunnel through a thin wall between physics
+    // steps. A block that does not ask stays a plain dynamic body. input.pointer_free() is true with no UI.
+    World world;
+    makeScripted(world, R"LUA(
+        local M = {}
+        function M:start(e)
+            spawn.block{position = {0, 5, 0}, velocity = {0, 0, 90}, ccd = input.pointer_free()}
+            spawn.block{position = {3, 5, 0}, velocity = {0, 0, 0}}
+        end
+        return M
+    )LUA");
+    ScriptSystem sys;
+    sys.tick(world, 0.1);
+    int swept = 0, plain = 0;
+    world.each<RigidBody>([&](Entity, RigidBody& rb) { ++(rb.continuousCollision ? swept : plain); });
+    CHECK(swept == 1);
+    CHECK(plain == 1);
+}

@@ -23,7 +23,7 @@ public:
     // A PLAYER TOOL OWNS THE MOUSE (the map: drag pans it, the wheel zooms
     // it). While set, mouse-look, scroll zoom and click-to-fire leave the
     // pointer to the tool; movement keys still walk. Set by the tool, read by
-    // CameraSystem, PlayerSystem's shoulder rig and ShootingSystem.
+    // CameraSystem and PlayerSystem's shoulder rig.
     bool inputSuspended = false;
     // FPS walk: move on the horizontal plane (forward ignores pitch) at a fixed
     // eye height, no vertical axis. Off = free 6-DOF fly. Look is free either way.

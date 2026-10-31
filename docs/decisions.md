@@ -13817,3 +13817,25 @@ Read on 2026-10-31:
 
 **Test.** `roles_lua_is_the_built_in_role_catalog` now also checks the four ids, the name lookup, and that a
 roles.lua swapping commuter and stroller is refused.
+
+## ADR-0283 — One gun: gun.lua; the C++ ShootingSystem retires
+
+#117 wave 2, item 29: "Two guns (C++ ShootingSystem vs gun.lua) → the Lua one, with C++ only where scripting is
+off, or drop that build." Read on 2026-10-31:
+- `ShootingSystem` was registered only when `RT_ENABLE_SCRIPTING` is off. No build turns it off: every CI
+  workflow, the web, visionOS and the Makefile build with scripting on, and the city has no traffic without it.
+  So the C++ gun was a second gun no one could hold.
+- gun.lua already did more: the tool slots, `hands_free`, the muzzle-behind-a-pane check, pitch jitter, the
+  viewmodel.
+- **What the C++ gun had that gun.lua lacked:**
+  - **CCD.** The C++ bullet was swept between physics steps. Lua's `spawn.block` was a plain dynamic body, so a
+    shot could tunnel through a thin wall.
+  - **The UI check.** The C++ gun held fire while ImGui wanted the mouse. gun.lua fired on a click on a panel.
+
+**Decision.**
+- `spawn.block{ccd = true}` asks for a swept body (`SpawnCommand::ccd` → `RigidBody::continuousCollision`), and
+  gun.lua's bullet asks.
+- `input.pointer_free()` is false while a UI panel has the mouse, and gun.lua holds fire on it.
+- `shooting_system.{h,cpp}` are deleted with their registration. A build without scripting has no gun.
+
+**Test.** `script_block_spawn_is_swept_when_asked`: a block with `ccd` is swept, one without is not.
