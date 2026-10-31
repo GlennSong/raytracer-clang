@@ -667,7 +667,8 @@ set(CORE_SOURCES
     src/geometry.cpp
     src/material.cpp
     src/scene.cpp
-    src/kdtree.cpp
+    src/aabb.cpp
+    src/triangle_bvh.cpp
     src/instance.cpp
     src/level_scene.cpp
     src/path_tracer.cpp

@@ -38,7 +38,8 @@ SRCS = \
 	$(SRC_DIR)/geometry.cpp \
 	$(SRC_DIR)/material.cpp \
 	$(SRC_DIR)/scene.cpp \
-	$(SRC_DIR)/kdtree.cpp \
+	$(SRC_DIR)/aabb.cpp \
+	$(SRC_DIR)/triangle_bvh.cpp \
 	$(SRC_DIR)/instance.cpp \
 	$(SRC_DIR)/curve.cpp \
 	$(SRC_DIR)/level_scene.cpp \
@@ -364,7 +365,8 @@ TEST_ENGINE_SRCS = \
 	$(SRC_DIR)/engine/level_params.cpp \
 	$(SRC_DIR)/scene.cpp \
 	$(SRC_DIR)/geometry.cpp \
-	$(SRC_DIR)/kdtree.cpp \
+	$(SRC_DIR)/aabb.cpp \
+	$(SRC_DIR)/triangle_bvh.cpp \
 	$(SRC_DIR)/instance.cpp \
 	$(SRC_DIR)/curve.cpp \
 	$(SRC_DIR)/image.cpp \

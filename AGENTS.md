@@ -35,7 +35,7 @@ src/
   geometry.h / geometry.cpp  — Shapes (Sphere, Triangle), hit records
   material.h / material.cpp  — Materials and BRDFs
   scene.h / scene.cpp        — Scene graph, object list
-  kdtree.h / kdtree.cpp      — KD-tree acceleration structure
+  triangle_bvh.h / .cpp      — median-split triangle BVH; aabb.h / .cpp — its box
   main.cpp                   — Entry point, render loop
 ```
 
@@ -395,7 +395,7 @@ deletes — save that file aside and restore it after, never stash-and-forget.
 ## Coding Standards
 
 ### Naming Conventions
-- **Classes / Structs / Enums**: `PascalCase` — `Vec3`, `Ray`, `Material`, `KdTree`
+- **Classes / Structs / Enums**: `PascalCase` — `Vec3`, `Ray`, `Material`, `TriangleBVH`
 - **Functions / Methods**: `camelCase` — `normalize()`, `intersect()`, `loadObj()`
 - **Variables / Parameters**: `camelCase` — `hitPoint`, `lightDir`, `maxDepth`
 - **Member variables**: `camelCase`, no prefix — `origin`, `direction`, not `m_origin`

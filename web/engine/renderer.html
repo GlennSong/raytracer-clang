@@ -62,8 +62,8 @@
     return {origin, normalize(target - origin)};
 }</pre>
   </div>
-  <p>Second, the acceleration structures. The class is called <code>KdTree</code>, but it splits the
-    <i>triangles</i> into two halves at the median centroid of the longest axis, and each node keeps a box round its
+  <p>Second, the acceleration structures. The class is <code>TriangleBVH</code> (it was called <code>KdTree</code>
+    until #117 wave 0): it splits the <i>triangles</i> into two halves at the median centroid of the longest axis, and each node keeps a box round its
     triangles. That makes it a median-split bounding volume hierarchy (BVH), not a space-splitting k-d tree. ADR-0041
     added a second level for instancing: a <code>MeshProto</code> (one mesh, its own tree, a "BLAS", bottom-level
     acceleration structure) placed by many <code>SceneInstance</code>s, with an <code>InstanceBVH</code> (the
@@ -84,7 +84,7 @@
         <rect x="250" y="76" width="210" height="34" rx="7" fill="#131a24" stroke="#2c3d50"/>
         <text x="355" y="98" fill="#cfe4ff" font-size="12">analytic spheres</text>
         <rect x="250" y="118" width="210" height="34" rx="7" fill="#131a24" stroke="#2c3d50"/>
-        <text x="355" y="140" fill="#cfe4ff" font-size="12">flat triangles: KdTree (BVH)</text>
+        <text x="355" y="140" fill="#cfe4ff" font-size="12">flat triangles: TriangleBVH</text>
         <rect x="250" y="160" width="210" height="34" rx="7" fill="#131a24" stroke="#2c3d50"/>
         <text x="355" y="182" fill="#cfe4ff" font-size="12">quads</text>
         <rect x="250" y="202" width="210" height="58" rx="7" fill="#131a24" stroke="#3b82f6"/>
@@ -97,7 +97,7 @@
         <text x="635" y="233" fill="#93a6ba" font-size="12">same t in both)</text>
         <rect x="740" y="150" width="145" height="110" rx="9" fill="#131a24" stroke="#3b82f6"/>
         <text x="812" y="175" fill="#cfe4ff">MeshProto</text>
-        <text x="812" y="197" fill="#93a6ba" font-size="12">its own KdTree</text>
+        <text x="812" y="197" fill="#93a6ba" font-size="12">its own TriangleBVH</text>
         <text x="812" y="215" fill="#93a6ba" font-size="12">= the BLAS, built</text>
         <text x="812" y="233" fill="#93a6ba" font-size="12">once per mesh</text>
         <rect x="560" y="30" width="325" height="70" rx="9" fill="#131a24" stroke="#2c3d50"/>
@@ -1202,7 +1202,7 @@ RenderMesh buildDebugLineMesh(const std::vector&lt;DebugDraw::Line&gt;&amp; line
     <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/occlusion.cpp">src/engine/occlusion.h/.cpp</a> — the occlusion test</li>
     <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/renderer/cascade_fit.h">src/renderer/cascade_fit.h</a> — the shadow cascade fit (test: <code>tests/test_cascade_fit.cpp</code>)</li>
     <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/debug_draw.h">src/engine/debug_draw.h</a> — debug lines (test: <code>tests/test_debug_draw.cpp</code>)</li>
-    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/path_tracer.cpp">src/path_tracer.cpp</a>, <a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/camera.cpp">src/camera.cpp</a>, <a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/kdtree.cpp">src/kdtree.cpp</a>, <a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/instance.cpp">src/instance.cpp</a> — the offline tracer (test: <code>tests/test_instance_tlas.cpp</code>)</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/path_tracer.cpp">src/path_tracer.cpp</a>, <a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/camera.cpp">src/camera.cpp</a>, <a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/triangle_bvh.cpp">src/triangle_bvh.cpp</a>, <a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/instance.cpp">src/instance.cpp</a> — the offline tracer (test: <code>tests/test_instance_tlas.cpp</code>)</li>
     <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/tests/test_instancing.cpp">tests/test_instancing.cpp</a> — includes the tier crossfade pixel-split test; <code>tests/test_scatter.cpp</code> has <code>impostor_views_frame_the_tree_from_every_side</code></li>
     <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/docs/renderer-parity.md">docs/renderer-parity.md</a> — which backend has what; <a href="https://github.com/GlennSong/raytracer-clang/blob/main/docs/rendering.md">docs/rendering.md</a> (July; older) and <a href="https://github.com/GlennSong/raytracer-clang/blob/main/docs/world-streaming-plan.md">docs/world-streaming-plan.md</a></li>
     <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/docs/decisions.md">docs/decisions.md</a> — ADR-0001, 0017, 0037, 0041, 0057, 0058, 0067, 0088, 0094–0097, 0100, 0129, 0193, 0195, 0224, 0226, 0240</li>
