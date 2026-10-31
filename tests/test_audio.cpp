@@ -1,5 +1,6 @@
 #include "test_framework.h"
 #include "../src/engine/audio/audio_engine.h"
+#include "../src/engine/audio/engine_voices.h"
 #include "../src/engine/components.h"
 #include "../src/engine/systems/audio_system.h"
 #include "../src/engine/world.h"
@@ -1179,3 +1180,24 @@ TEST_CASE(a_tyre_squeals_high_and_rolls_low) {
     CHECK(board > 0.5);
 }
 
+
+// THE ENGINE VOICE POOL (ADR-0285): the physics cars and the city's traffic share it. The nearest `maxVoices` engines
+// get voices, a car keeps its voice across frames, and a car gone from earshot fades out and is reclaimed.
+TEST_CASE(engine_voice_pool_voices_the_nearest_and_reclaims_the_gone) {
+    AudioEngine audio;
+    CHECK(audio.initialize(AudioBackendMode::Manual));
+    EngineVoicePool pool(2, 70.0, 2);
+    auto frame = [&](std::vector<EngineVoicePool::Engine> heard) { pool.update(audio, heard, 0.0, 1.0 / 60.0); };
+    std::vector<EngineVoicePool::Engine> three = {
+        {7, Vec3(30, 0, 0), 12.0, EngineVoicePool::kEstimate, 0.1, 900},
+        {8, Vec3(5, 0, 0), 9.0, 0.6, 0.2, 25},
+        {9, Vec3(10, 0, 0), 15.0, 0.3, 0.3, 100},
+    };
+    frame(three);
+    CHECK(audio.activeVoiceCount() == 2);   // the nearest two: 8 and 9
+    frame(three);
+    CHECK(audio.activeVoiceCount() == 2);   // the same two, kept, not restarted
+    for (int i = 0; i < 120; ++i) frame({});   // every car gone: two seconds of fading
+    CHECK(audio.activeVoiceCount() == 0);
+    pool.stopAll(audio);
+}

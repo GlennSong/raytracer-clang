@@ -232,6 +232,7 @@ add_library(engine_core STATIC
     src/engine/anim/skin_import.cpp
     src/engine/audio/audio_engine.cpp
     src/engine/audio/sfx.cpp
+    src/engine/audio/engine_voices.cpp   # the running cars, heard: one pool (ADR-0285)
     src/engine/audio/sfx_ground.cpp
     src/engine/audio/sfx_motion.cpp
     src/engine/systems/audio_system.cpp

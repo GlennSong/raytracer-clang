@@ -13859,3 +13859,29 @@ What was written twice is the maths: the sphere round a mesh under an instance t
 cull and Vulkan's `sphereOf` call them. The three paths stay three; their reasons are above.
 
 **Consequences.** Same spheres. No change in what is drawn.
+
+## ADR-0285 — One engine voice pool: the physics cars and the city's traffic feed it
+
+#117 wave 2, item 28: "Two engine-sound adapters → one voice pool over vehicle_audio.h." The note itself was
+already one (`engineSoundFor`, `engineRevFraction`, `engineWobble`). What was written twice, line for line, was
+the pool around it:
+- the nearest-N sort;
+- matching voices to cars across frames;
+- the synthesized loop;
+- the eased gain, direct pitch and per-car rev hunt;
+- the fade-out and reclaim.
+
+`VehicleSystem::updateEngines` did it for the physics cars, and citysim's `CityTrafficAudioSystem` did it for the
+traffic.
+
+**Decision.** `EngineVoicePool` (engine/audio/engine_voices.h) is the pool. Each owner hands it the engines in
+earshot this frame as `{key, pos, speed, throttle, phase, dist2}`. A planner car has no pedal, so it passes
+`kEstimate`, and the pool reads its load from its change of speed (the city adapter's rule). The two owners keep
+their own pool and their own numbers:
+- the physics cars: 6 voices, 90 m, seed 1;
+- the traffic: 8 voices, 70 m, seed 2, so the player's own engine still reads as theirs.
+
+**Not merged: one budget.** The two pools can sound 14 engines between them. Sharing one budget means one owner
+gathering both lists, and the city is an app the engine cannot see. That is left until a level needs it.
+
+**Test.** `engine_voice_pool_voices_the_nearest_and_reclaims_the_gone`, on the manual mixer.

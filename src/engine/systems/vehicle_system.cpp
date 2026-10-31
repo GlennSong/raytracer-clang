@@ -829,102 +829,20 @@ void VehicleSystem::update(FrameContext& ctx) {
 
 void VehicleSystem::updateEngines(FrameContext& ctx) {
     if (!ctx.audio.ready()) return;
-
-    // Every RUNNING physical car — the player's and any the AI drives — near
-    // enough to hear. A driverless car is silent (engineSoundFor's contract),
-    // so a parked street stays parked.
-    struct Candidate {
-        Entity car;
-        Vec3 pos;
-        EngineSound sound;
-        Real rev;      // for the per-car rev hunt (wobble depth)
-        Real dist2;
-    };
-    std::vector<Candidate> heard;
+    // Every RUNNING physical car -- the player's and any the AI drives -- near enough to hear. A driverless car is
+    // silent (engineSoundFor's contract), so a parked street stays parked.
+    std::vector<EngineVoicePool::Engine> heard;
     const Vec3 ear = ctx.view.camera.position;
+    const Real range = engines_.range();
     ctx.world.each<Transform, Vehicle>([&](Entity e, Transform& t, Vehicle& v) {
         const bool running = v.driver.valid() || ctx.world.has<AgentDriver>(e);
         if (!running || v.pedalled) return;   // a bicycle has legs, not an engine
         const Real d2 = (t.position - ear).lengthSquared();
-        if (d2 > kEngineAudibleRange * kEngineAudibleRange) return;
-        heard.push_back({e, t.position,
-                         engineSoundFor(v.speed, v.throttle, true),
-                         engineRevFraction(v.speed), d2});
+        if (d2 > range * range) return;
+        heard.push_back({(static_cast<uint64_t>(e.generation) << 32) | e.index, t.position, v.speed, v.throttle,
+                         static_cast<Real>(e.index % 17) * Real(0.37), d2});
     });
-    // Nearest first: when there are more running cars than voices, the ones
-    // you can actually pick out win the slots.
-    std::sort(heard.begin(), heard.end(),
-              [](const Candidate& a, const Candidate& b) {
-                  return a.dist2 < b.dist2;
-              });
-    if (heard.size() > static_cast<std::size_t>(kMaxEngineVoices))
-        heard.resize(static_cast<std::size_t>(kMaxEngineVoices));
-
-    for (EngineVoice& ev : engineVoices) ev.wanted = false;
-
-    for (const Candidate& c : heard) {
-        EngineVoice* slot = nullptr;
-        for (EngineVoice& ev : engineVoices)
-            if (ev.car == c.car) { slot = &ev; break; }
-        if (!slot) {
-            if (!engineClip.valid()) {
-                // Procedural, synthesized once (ADR-0071): one loop-clean
-                // period, pitch-shifted per car — no sound file, no per-car
-                // sample bank.
-                std::vector<float> pcm = sfx::engine(ctx.audio.sampleRate(), 1);
-                engineClip = ctx.audio.createClip(pcm.data(), pcm.size(), 1,
-                                                  ctx.audio.sampleRate());
-            }
-            if (!engineClip.valid()) return;
-            AudioPlayParams params;
-            params.loop = true;
-            params.volume = 0.0f;   // ramped in below — no click on start
-            params.pitch = c.sound.pitch;
-            EngineVoice ev;
-            ev.car = c.car;
-            ev.voice = ctx.audio.playAt(engineClip, c.pos, kEngineAudibleRange,
-                                        params);
-            if (!ev.voice.valid()) continue;
-            engineVoices.push_back(ev);
-            slot = &engineVoices.back();
-        }
-        slot->wanted = true;
-        // Ease the gain (a car coming into earshot fades up rather than
-        // snapping on); pitch tracks directly, so a gear change reads as the
-        // shift it is instead of a smear.
-        slot->gain += (c.sound.gain - slot->gain) *
-                      std::min(1.0f, 8.0f * static_cast<float>(ctx.frameDelta));
-        // Hunt the revs a touch (per car, so two cars never wobble in step) —
-        // a perfectly steady playback rate is what makes a loop read as a hum.
-        const float wobble =
-            engineWobble(ctx.clock.simulatedTime(),
-                         static_cast<Real>(c.car.index % 17) * Real(0.37), c.rev);
-        ctx.audio.setVoiceVolume(slot->voice, slot->gain);
-        ctx.audio.setVoicePitch(slot->voice, c.sound.pitch * wobble);
-        ctx.audio.setVoicePosition(slot->voice, c.pos);
-    }
-
-    // Fade out and reclaim: cars that drove away, lost their driver, or lost
-    // their slot to a nearer one. A voice the engine already dropped (level
-    // swap -> stopAll) is forgotten so the car can be voiced again.
-    for (std::size_t i = engineVoices.size(); i-- > 0;) {
-        EngineVoice& ev = engineVoices[i];
-        if (!ctx.audio.isPlaying(ev.voice)) {
-            engineVoices.erase(engineVoices.begin() +
-                               static_cast<std::ptrdiff_t>(i));
-            continue;
-        }
-        if (ev.wanted) continue;
-        ev.gain += (0.0f - ev.gain) *
-                   std::min(1.0f, 6.0f * static_cast<float>(ctx.frameDelta));
-        if (ev.gain < 0.01f) {
-            ctx.audio.stop(ev.voice);
-            engineVoices.erase(engineVoices.begin() +
-                               static_cast<std::ptrdiff_t>(i));
-        } else {
-            ctx.audio.setVoiceVolume(ev.voice, ev.gain);
-        }
-    }
+    engines_.update(ctx.audio, heard, ctx.clock.simulatedTime(), ctx.frameDelta);
 }
 
 // HOW HARD THE PLAYER'S TYRES SLIDE, 0..1, onto Vehicle::slide: sideways (the slip angle -- a drift) or spinning /
