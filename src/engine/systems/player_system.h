@@ -2,6 +2,8 @@
 #define RAYTRACER_ENGINE_PLAYER_SYSTEM_H
 
 #include "../system.h"
+#include "../properties.h"
+#include "../control/control_commands.h"
 #include "../camera/fly_camera_controller.h"
 #include "../camera/follow_camera_controller.h"
 #include "../physics/physics_world.h"
@@ -21,8 +23,27 @@ class PhysicsSystem;
 // The FLY controller is the player's HEADING either way (CameraSystem feeds it mouse/stick look): first person
 // renders from its pinned eye; third person (V -- the on-foot camera toggle) frames the same heading from an
 // over-the-shoulder follow rig (FollowCameraController::applyShoulderPreset), fly pitch tilting the rig. The mode is
-// published to Settings ("playerThirdPerson") so the render-side body system (apps/citysim/city_player_body.*)
-// shows/hides the player's person mesh without a dependency on this system.
+// kept in Settings ("playerThirdPerson", a preference) and the body (PlayerBodySystem) shows only in third person.
+// PersonRequest (ADR-0253): the on-foot camera, first (0) or third (1) person, or toggle (2) -- the V key from
+// outside: the socket's `person` and the Teleport panel's checkbox.
+struct PersonRequest {
+    int mode = 2;
+};
+inline void describeProperties(PersonRequest& r, PropertyVisitor& v) {
+    v.field(FieldMeta("mode").range(0, 2), r.mode);
+}
+
+// LimpRequest: the player goes limp (the G key from outside: the socket's `ragdoll`), or is thrown limp at a
+// velocity (VehicleSystem, a rider off an open seat).
+struct LimpRequest {
+    bool thrown = false;
+    Vec3 velocity;   // m/s, when thrown
+};
+inline void describeProperties(LimpRequest& r, PropertyVisitor& v) {
+    v.field(FieldMeta("thrown"), r.thrown);
+    v.field(FieldMeta("velocity").units("m/s"), r.velocity);
+}
+
 class PlayerSystem : public System {
 public:
     PlayerSystem(FlyCameraController& camera, PhysicsSystem& physics)
@@ -34,10 +55,18 @@ public:
     void render(FrameContext& ctx) override;   // Debug > Movement: the tuning, live
 
     bool thirdPersonActive() const { return thirdPerson; }
+    // The movement line `move?` answers (mode, ground, position, velocity, stamina, the last change), measured in
+    // render(): the trace harness reads it too.
+    const std::string& movementTelemetry() const { return answers_.get("move?"); }
     bool swimming() const { return body_.water.swimming; }
     const MovementTuning& tuning() const { return body_.tune; }
 
 private:
+    EventBus::Subscription onPerson_, onLimp_;
+    ControlAnswers answers_;   // move?
+    bool limpThrown_ = false;     // the waiting limp is a throw, at limpVelocity_
+    Vec3 limpVelocity_;
+    int personPending_ = -1;   // a PersonRequest's mode, until update takes it
     FlyCameraController& camera;
     PhysicsSystem& physicsSys;
     FollowCameraController shoulder;   // third-person on-foot rig (shoulder preset)

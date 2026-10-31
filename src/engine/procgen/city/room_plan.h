@@ -75,8 +75,10 @@ enum class RoomKind : uint8_t { Office, Flat, Hall, Living, Kitchen, Bath, Bed, 
                                 Ward, Exam, NurseStation, Waiting,
                                 Nave, Foyer, Auditorium, Market, Cell, Courtroom, Chamber, EngineBay, Apparatus,
                                 ShopFloor, Warehouse, HotelLobby,
-                                CopyRoom, PhoneBooths, WaterCooler };
-constexpr RoomKind kLastRoomKind = RoomKind::WaterCooler;
+                                CopyRoom, PhoneBooths, WaterCooler,
+                                SalesFloor, CashDesk, FittingRooms, Stockroom,   // a department store's (floor_programs.lua)
+                                HotelRoom, HotelSuite, LinenRoom };              // a hotel's
+constexpr RoomKind kLastRoomKind = RoomKind::LinenRoom;
 
 struct RoomWall {
     Vec2 a, b;           // world XZ, the wall's centre line
@@ -166,16 +168,18 @@ PlateTopology plateTopologyFor(const Poly2& storeyPlan, const BuildingParams& pa
 // straight stair's), npos for none. `stairWell` is that stair's well, where
 // the hall is picked up; `entranceEdge` keeps a partition off the front
 // door. In RING topology storey 0 (the lobby) gets no rooms; in WHOLE FLOOR
-// it does, because the ground floor of a house is where you live.
+// it does, because the ground floor of a house is where you live. `storeyUse` (storeyUseOf: a tower's store or
+// restaurant floor) names the floor program this storey takes over the building's own use.
 RoomPlan roomPlan(const Poly2& storeyPlan, const BuildingParams& params, const CorePlan& core,
                   std::size_t blankEdge, Real inset, int storey,
                   const Poly2& stairWell = Poly2{},
                   std::size_t entranceEdge = static_cast<std::size_t>(-1),
-                  const Vec2& stairFoot = Vec2(1e30, 1e30));
+                  const Vec2& stairFoot = Vec2(1e30, 1e30),
+                  const std::string& storeyUse = std::string());
 
 // ONE STOREY'S ROOMS as growInterior plans them, and the SPACE GRAPH reads them (space_graph.h, issue #105): a
 // mall's levels, a big box's floor, the ground storey's shops, else the room planner's ring / flats / apartments
-// (roomPlan above), a tower's department-store and restaurant floors re-dressed as shops. Empty on a mechanical storey
+// (roomPlan above; a tower's department-store and restaurant floors as storeyUseOf says). Empty on a mechanical storey
 // (no partitions). With the storey's own circulation where its plan has it: a mall's atria (the slab's holes, the
 // upper level), its escalators (feet on the lower level, rising `escalatorRun` along `dir` one storey) and its glass
 // lift. `plan` is the building's CCW plan; `storeys` its storey stack; `core` its core (invalid: none); `runs` the
@@ -214,8 +218,19 @@ RoomPlan transferLoungePlan(const Poly2& storeyPlan, const BuildingParams& param
 void layoutApartment(RoomPlan& rp, std::size_t e, const std::function<Vec2(Real, Real)>& P, Real x0, Real x1,
                      Real vIn, Real vFront, Real D, Real xd, bool partyWallRight, bool frontWall = true);
 
+// FLATS ROUND THE CORE off its lobby (no corridor): the zoned floor's apartment layout for a plate too shallow for a
+// corridor round the core (floor_zones.h lobby mode). A rectangular plate square to the core; empty when it does not fit.
+RoomPlan wrapFlatsLayout(const Poly2& plate, const CorePlan& core, Real inset, int storey);
+
+// `unreached` (optional): every room it could not reach, by index, rather than stopping at the first.
 bool floorIsWalkable(const RoomPlan& rp, const Poly2& storeyPlan, const Vec2& entry,
-                     const Poly2& stairWell = Poly2{});
+                     const Poly2& stairWell = Poly2{}, std::vector<std::size_t>* unreached = nullptr);
+// ...round several solids (a core's blocks placed apart: each is a hole in the floor, as the stairwell is)
+// `reach` (optional): points that must be reached too -- the doors of the stairwells a layout placed apart -- reported
+// in `unreached` after the rooms (rooms.size() + i).
+bool floorIsWalkable(const RoomPlan& rp, const Poly2& storeyPlan, const Vec2& entry,
+                     const std::vector<Poly2>& solids, std::vector<std::size_t>* unreached = nullptr,
+                     const std::vector<Vec2>* reach = nullptr);
 
 // The geometry: drywall partitions and fronts (`drywall`), glass fronts
 // (`glass`, the GlassClear part), doorways cut with their reveals, every

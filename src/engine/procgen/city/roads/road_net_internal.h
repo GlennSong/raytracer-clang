@@ -1,11 +1,8 @@
 #ifndef RAYTRACER_ENGINE_PROCGEN_CITY_ROADS_ROAD_NET_INTERNAL_H
 #define RAYTRACER_ENGINE_PROCGEN_CITY_ROADS_ROAD_NET_INTERNAL_H
 
-// The road entity's own internals, shared with the DEPRECATED lattice mesher
-// (procgen/deprecated/roads) — one .cpp until 2026-09-20, when the mesher moved
-// out. These are not a public interface: the sampled/constrained graph and the
-// weld-chain decomposition are published as navRoadGraph, roadNetConstrainedGraph
-// and roadNetWeldSpines. Nothing outside those two files should include this.
+// The road entity's own internals. Not a public interface: the sampled/constrained
+// graph is published as navRoadGraph.
 
 #include "road_entity.h"
 #include "../road_rules.h"   // DesignRules (the per-class grade table)
@@ -28,8 +25,6 @@ RoadGraph sampleNetGraph(const RoadEntity& road, double minTurnRadius = 0.0);
 void joinDanglingEndsLogged(RoadGraph& g, const RoadEntity& road);
 // Sampled + constraints + semantic classification: what navRoadGraph returns.
 RoadGraph constrainedGraph(const RoadEntity& road, const RoadGroundFn& heightAt);
-// One UnionSpine per chain, carrying that road's width.
-std::vector<UnionSpine> weldChainSpines(const RoadGraph& g);
 
 }  // namespace engine::roadnet
 

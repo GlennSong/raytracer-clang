@@ -1,4 +1,6 @@
 #include "texture_field.h"
+#include "../../proc_rng.h"
+#include "../bundle/bundle.h"
 
 #include "noise.h"
 #include <algorithm>
@@ -98,8 +100,8 @@ namespace {
 struct Blade { double root, height, width, lean, tone; };
 std::vector<Blade> makeBlades(uint32_t seed, int count, double width, double lean, double minHeight) {
     std::vector<Blade> out;
-    uint32_t s = seed * 747796405u + 2891336453u;
-    auto next = [&s] { s = s * 747796405u + 2891336453u; uint32_t w = ((s >> ((s >> 28) + 4)) ^ s) * 277803737u; return ((w >> 22) ^ w) / 4294967295.0; };
+    ProcRng rng(seed);
+    auto next = [&rng] { return rng.next(); };
     for (int i = 0; i < std::max(1, count); ++i) {
         Blade b;
         b.root = next();
@@ -210,8 +212,7 @@ TextureData bakeFieldRGBA(const ColorField2& color, const Field2& alpha, int siz
 }
 
 TextureData bakeCached(const std::string& recipeKey, const std::function<TextureData()>& bake) {
-    uint64_t h = 1469598103934665603ull;   // FNV-1a over the key
-    for (unsigned char ch : recipeKey) { h ^= ch; h *= 1099511628211ull; }
+    const uint64_t h = bundle::fnv1aStr(recipeKey);
     char path[96];
     std::snprintf(path, sizeof path, "cache/fields/%016llx.tex", static_cast<unsigned long long>(h));
     const char* nc = std::getenv("RT_NOCACHE");

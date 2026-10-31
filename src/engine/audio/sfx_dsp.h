@@ -7,7 +7,7 @@
 
 #include <algorithm>
 #include <cmath>
-#include <random>
+#include "../../proc_rng.h"
 #include <utility>
 #include <vector>
 
@@ -68,9 +68,9 @@ inline std::vector<double> circBand(const std::vector<double>& white, double rat
     return hi;
 }
 // A smooth periodic random envelope: a few integer-cycle sines, >= 0.
-inline std::vector<double> circEnvelope(size_t count, std::mt19937& rng, int minCycles, int maxCycles, int terms) {
-    std::uniform_int_distribution<int> cyc(minCycles, maxCycles);
-    std::uniform_real_distribution<double> ph(0.0, TWO_PI), amp(0.4, 1.0);
+inline std::vector<double> circEnvelope(size_t count, ProcRng& rng, int minCycles, int maxCycles, int terms) {
+    ProcUniformInt<int> cyc(minCycles, maxCycles);
+    ProcUniform<double> ph(0.0, TWO_PI), amp(0.4, 1.0);
     std::vector<std::pair<int, std::pair<double, double>>> t;
     for (int k = 0; k < terms; ++k) t.push_back({cyc(rng), {ph(rng), amp(rng)}});
     std::vector<double> env(count);

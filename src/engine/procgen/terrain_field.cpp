@@ -1,12 +1,9 @@
 #include "terrain_field.h"
-#include <cstdio>
-#include <cstring>
-#include <filesystem>
 
 #include "noise.h"
-#include "erosion.h"
 #include "terrain.h"          // TerrainFlatten, applyFlatten
 #include "../mesh_builder.h"
+#include "../../curve.h"
 #include <algorithm>
 #include <cmath>
 #include <functional>
@@ -125,20 +122,6 @@ void douglasPeucker(const std::vector<Vec3>& pts, int lo, int hi, double tol,
         douglasPeucker(pts, lo, split, tol, keep);
         douglasPeucker(pts, split, hi, tol, keep);
     }
-}
-
-// Evaluate a non-uniform Catmull-Rom span on [t1,t2] (the piece through P1->P2),
-// Barry-Goldman pyramid. Centripetal knots (alpha=0.5) avoid the cusps/overshoot
-// uniform Catmull-Rom produces on the irregular point spacing a grid path gives.
-Vec3 catmullRomAt(const Vec3& P0, const Vec3& P1, const Vec3& P2, const Vec3& P3,
-                  double t0, double t1, double t2, double t3, double t) {
-    auto mix = [&](const Vec3& a, const Vec3& b, double ta, double tb) {
-        double w = (tb - ta) < 1e-12 ? 0.0 : (t - ta) / (tb - ta);
-        return a * (1.0 - w) + b * w;
-    };
-    Vec3 A1 = mix(P0, P1, t0, t1), A2 = mix(P1, P2, t1, t2), A3 = mix(P2, P3, t2, t3);
-    Vec3 B1 = mix(A1, A2, t0, t2), B2 = mix(A2, A3, t1, t3);
-    return mix(B1, B2, t1, t2);
 }
 
 // Earthwork-aware routing (ADR-0047, after Galin et al. 2010). The road is no longer
@@ -414,46 +397,21 @@ std::vector<Vec3> smoothCentripetalCatmullRom(const std::vector<Vec3>& in, bool 
     }
     if (ctrl.size() < 3) return ctrl;                 // nothing to round
 
-    // 2. Pad with phantom control points so the curve passes through the real ends
-    //    (open) or wraps seamlessly (closed — a ring is just a closed path).
-    std::vector<Vec3> P;
-    if (closed) {
-        P.push_back(ctrl.back());
-        P.insert(P.end(), ctrl.begin(), ctrl.end());
-        P.push_back(ctrl[0]);
-        P.push_back(ctrl[1]);
-    } else {
-        P.push_back(ctrl[0] + (ctrl[0] - ctrl[1]));   // mirror -> tangent at the end
-        P.insert(P.end(), ctrl.begin(), ctrl.end());
-        P.push_back(ctrl.back() + (ctrl.back() - ctrl[ctrl.size() - 2]));
-    }
+    // 2. Centripetal Catmull-Rom through the control points (the shared Spline, ADR-0031).
+    const Spline<Vec3> curve = Spline<Vec3>::centripetal(ctrl, closed);
 
-    // 3. Centripetal knots (alpha = 0.5): t_{i+1} = t_i + |P_{i+1}-P_i|^0.5.
-    std::vector<double> t(P.size(), 0.0);
-    for (std::size_t i = 1; i < P.size(); ++i) {
-        double dx = P[i].x - P[i-1].x, dy = P[i].y - P[i-1].y, dz = P[i].z - P[i-1].z;
-        double d = std::sqrt(std::sqrt(dx*dx + dy*dy + dz*dz));   // ^0.5
-        t[i] = t[i-1] + std::max(d, 1e-6);
-    }
-
-    // 4. Sample each span [P_i..P_{i+1}]. Centripetal Catmull-Rom loads its curvature
-    //    near the control points (the span ENDS), so a midpoint-flatness test misses
-    //    the bend entirely — instead step along each span by arc length so the corners
-    //    get enough samples to read as a curve. `chordTol` sets the spacing (smaller =
-    //    finer); the per-span count grows with the span's length.
+    // 3. Sample each span. Centripetal Catmull-Rom loads its curvature near the control points
+    //    (the span ENDS), so a midpoint-flatness test misses the bend entirely -- instead step
+    //    along each span by arc length so the corners get enough samples to read as a curve.
+    //    `chordTol` sets the spacing (smaller = finer); the per-span count grows with the span's
+    //    length.
     double step = std::max(chordTol > 0 ? chordTol : 0.5, 0.25);
     std::vector<Vec3> out;
-    out.push_back(P[1]);
-    std::size_t last = P.size() - 2;                  // last real span ends at P[last]
-    for (std::size_t i = 1; i < last; ++i) {
-        const Vec3 &P0 = P[i-1], &P1 = P[i], &P2 = P[i+1], &P3 = P[i+2];
-        double chord = std::sqrt((P2.x-P1.x)*(P2.x-P1.x) + (P2.y-P1.y)*(P2.y-P1.y) +
-                                 (P2.z-P1.z)*(P2.z-P1.z));
+    out.push_back(curve.knots.front().value);
+    for (int i = 0; i < curve.segments(); ++i) {
+        double chord = (curve.knots[i + 1].value - curve.knots[i].value).length();
         int n = std::max(2, static_cast<int>(std::ceil(chord / step)));
-        for (int s = 1; s <= n; ++s) {
-            double tt = t[i] + (t[i+1] - t[i]) * (static_cast<double>(s) / n);
-            out.push_back(catmullRomAt(P0, P1, P2, P3, t[i-1], t[i], t[i+1], t[i+2], tt));
-        }
+        for (int s = 1; s <= n; ++s) out.push_back(curve.eval(i + static_cast<double>(s) / n));
     }
     return out;
 }
@@ -602,104 +560,6 @@ HeightField heightClamp(HeightField a, double lo, double hi) {
     return [a, lo, hi](double x, double z) {
         double v = a(x, z);
         return v < lo ? lo : (v > hi ? hi : v);
-    };
-}
-
-HeightField erodeField(const HeightField& f, double worldSize, int resolution,
-                       const ErosionParams& params) {
-    int n = std::max(2, resolution) + 1;
-    auto hm = std::make_shared<Heightmap>();
-    hm->n = n;
-    hm->worldSize = static_cast<float>(worldSize);
-    hm->h.resize(static_cast<std::size_t>(n) * n);
-    double half = worldSize * 0.5;
-    double step = worldSize / (n - 1);
-
-    // CONTENT-HASH CACHE (metropolis-scale-plan P4.1): the droplet sim is the
-    // single biggest load cost and is DETERMINISTIC in (input field, size, res,
-    // erosion params). The key hashes the INPUT FIELD BY SAMPLING it — any
-    // terrain knob or seed change alters sampled heights, so invalidation is
-    // automatic and no parameter enumeration can go stale. RT_NOCACHE=1 skips.
-    const bool useCache = std::getenv("RT_NOCACHE") == nullptr;
-    std::uint64_t key = 1469598103934665603ULL;   // FNV-1a
-    auto fold = [&](double v) {
-        std::uint64_t bits;
-        std::memcpy(&bits, &v, sizeof bits);
-        key ^= bits;
-        key *= 1099511628211ULL;
-    };
-    if (useCache) {
-        // MULTI-SCALE probe: a sparse pseudo-random pattern alone can miss a
-        // localized feature entirely (a +/-1.4 km ridge network in an 8 km
-        // domain slipped through all 64 points — the stale field then grew
-        // ROADS against terrain that no longer existed). Uniform lattices at
-        // full/half/quarter extent bound the largest invisible feature to
-        // under a quarter of a fine cell.
-        for (int i = 0; i < 64; ++i) {           // deterministic probe pattern
-            const double px = -half + worldSize * ((i * 37) % 61) / 61.0;
-            const double pz = -half + worldSize * ((i * 53) % 67) / 67.0;
-            fold(f(px, pz));
-        }
-        for (int scale = 0; scale < 3; ++scale) {
-            const double ext = worldSize / (1 << scale);   // full, half, quarter
-            for (int j = 0; j < 16; ++j)
-                for (int i = 0; i < 16; ++i) {
-                    const double px = -ext * 0.5 + ext * (i + 0.5) / 16.0;
-                    const double pz = -ext * 0.5 + ext * (j + 0.5) / 16.0;
-                    fold(f(px, pz));
-                }
-        }
-        fold(worldSize); fold(static_cast<double>(n));
-        fold(static_cast<double>(params.droplets));
-        fold(params.inertia); fold(params.sedimentCapacity);
-        fold(params.depositSpeed); fold(params.erodeSpeed);
-        fold(params.evaporation); fold(params.gravity); fold(params.minSlope);
-        fold(static_cast<double>(params.erodeRadius));
-        fold(static_cast<double>(params.thermalIterations));
-        fold(params.talus); fold(params.thermalRate);
-        // Backend tag (P0.5): the GPU and CPU sims are each deterministic but
-        // not bit-identical to each other, so the key names which one will
-        // run — CPU- and GPU-baked caches never cross-contaminate, and a
-        // kernel revision (tag bump) invalidates cleanly.
-        for (const char* t = erosionBackendTag(&params); *t; ++t) {
-            key ^= static_cast<unsigned char>(*t);
-            key *= 1099511628211ULL;
-        }
-    }
-    char cachePath[256] = {0};
-    if (useCache) {
-        std::snprintf(cachePath, sizeof cachePath, "cache/terrain/%016llx.bin",
-                      static_cast<unsigned long long>(key));
-        if (std::FILE* fp = std::fopen(cachePath, "rb")) {
-            int fn = 0;
-            const bool ok =
-                std::fread(&fn, sizeof fn, 1, fp) == 1 && fn == n &&
-                std::fread(hm->h.data(), sizeof(float), hm->h.size(), fp) ==
-                    hm->h.size();
-            std::fclose(fp);
-            if (ok)
-                return [hm](double x, double z) {
-                    return static_cast<double>(
-                        hm->sampleWorld(static_cast<float>(x), static_cast<float>(z)));
-                };
-        }
-    }
-
-    for (int z = 0; z < n; ++z)
-        for (int x = 0; x < n; ++x)            // same index convention as bakeHeightmap
-            hm->set(x, z, static_cast<float>(f(-half + x * step, -half + z * step)));
-    erode(*hm, params);
-    if (useCache) {
-        std::filesystem::create_directories("cache/terrain");
-        if (std::FILE* fp = std::fopen(cachePath, "wb")) {
-            std::fwrite(&n, sizeof n, 1, fp);
-            std::fwrite(hm->h.data(), sizeof(float), hm->h.size(), fp);
-            std::fclose(fp);
-        }
-    }
-    return [hm](double x, double z) {
-        return static_cast<double>(
-            hm->sampleWorld(static_cast<float>(x), static_cast<float>(z)));
     };
 }
 

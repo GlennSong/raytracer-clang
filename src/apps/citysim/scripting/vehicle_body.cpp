@@ -300,6 +300,10 @@ bool loadFleetCarBody(ScriptVM& vm, int slot, CarBodyRecipe& out,
         body.hasDriverSeat = lua_istable(L, -1);
         lua_pop(L, 1);
         if (body.hasDriverSeat) body.driverSeat = vec3Field(L, rec, "driver_seat", Vec3(0, 0, 0));
+        lua_getfield(L, rec, "rear_hip");
+        body.hasRearHip = lua_istable(L, -1);
+        lua_pop(L, 1);
+        if (body.hasRearHip) body.rearHip = vec3Field(L, rec, "rear_hip", Vec3(0, 0, 0));
     }
 
     // Compose the two forms the city needs. `mesh` is always the whole car, so

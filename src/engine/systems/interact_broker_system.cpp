@@ -38,14 +38,16 @@ void InteractBrokerSystem::onStart(FrameContext& ctx) {
     ctx.actions.bindButton("interact_cycle", KeyCode::Tab);
     ctx.actions.bindButton("interact_cycle", GamepadButton::Y);
     ctx.actions.setActionContext("interact_cycle", InputContext::OnFoot);
+    onRequest_ = ctx.events.listen<InteractRequest>([this](const InteractRequest& r) { pendingRequest_ = r.action; });
+    answers_.bind(ctx.commands, "InteractBrokerSystem", "interact?");
 }
 
 void InteractBrokerSystem::update(FrameContext& ctx) {
     show_ = marker_ = false;
     pulse_ += ctx.frameDelta;
-    // The control socket's one-shots (`interact`, `interact hold`, `interact stand`, `interact next`).
-    const double req = ctx.settings.getDouble("interact.request", 0.0);
-    if (req > 0) ctx.settings.setDouble("interact.request", 0.0);
+    // An InteractRequest's one-shot (`interact`, `interact hold`, `interact stand`, `interact next`).
+    const double req = pendingRequest_;
+    pendingRequest_ = 0;
 
     Entity player;
     Vec3 pos;
@@ -62,7 +64,7 @@ void InteractBrokerSystem::update(FrameContext& ctx) {
     if (ctx.world.has<InVehicle>(player) || offers.empty()) {
         haveFocus_ = false;
         holding_ = false;
-        ctx.settings.setString("interact.status", "nothing in reach");
+        answers_.set("interact?", "nothing in reach");
         return;
     }
 
@@ -86,7 +88,7 @@ void InteractBrokerSystem::update(FrameContext& ctx) {
         std::snprintf(why, sizeof why, " first %s:%s anchor %.2f %.2f %.2f feet %.2f %.2f %.2f reach %.1f look %.2f blocked %d",
                       o0.provider.c_str(), o0.name.c_str(), o0.anchor.x, o0.anchor.y, o0.anchor.z, feet.x, feet.y, feet.z,
                       o0.reach, look, sightBlocked(eye, o0.anchor, &sc) ? 1 : 0);
-        ctx.settings.setString("interact.status", "nothing in reach (" + std::to_string(offers.size()) +
+        answers_.set("interact?", "nothing in reach (" + std::to_string(offers.size()) +
                                                       " offered, none in view)" + why);
         return;
     }
@@ -133,7 +135,7 @@ void InteractBrokerSystem::update(FrameContext& ctx) {
     {
         char at[96];
         std::snprintf(at, sizeof at, "  at %.2f %.2f %.2f", f.anchor.x, f.anchor.y, f.anchor.z);
-        ctx.settings.setString("interact.status", "focus [" + f.provider + ":" + f.name + "] " + prompt_ +
+        answers_.set("interact?", "focus [" + f.provider + ":" + f.name + "] " + prompt_ +
                                                       (others_ > 0 ? "  +" + std::to_string(others_) : "") + at);
     }
 

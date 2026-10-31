@@ -18,7 +18,6 @@
 #include <algorithm>
 #include <cmath>
 #include "engine/procgen/city/roads/lanes/lanes_export.h"
-#include "engine/procgen/city/roads/lanes/level_import.h"
 #include "engine/procgen/city/roads/lanes/interchange.h"
 #include "engine/procgen/city/roads/lanes/terrain_recipe.h"
 #include <chrono>
@@ -150,10 +149,9 @@ int main(int argc, char** argv) {
         for (std::size_t i = 0; i < rep.undeclared.size() && (i < 20 || std::getenv("LANES_ALL_UNDECLARED")); ++i) std::printf("  not in the plan: %s\n", rep.undeclared[i].c_str());
         return 0;
     }
-    if (argc < 3 || (std::strcmp(argv[1], "build") != 0 && std::strcmp(argv[1], "from-level") != 0 && std::strcmp(argv[1], "twin") != 0 && std::strcmp(argv[1], "blocks") != 0)) {
+    if (argc < 3 || (std::strcmp(argv[1], "build") != 0 && std::strcmp(argv[1], "twin") != 0 && std::strcmp(argv[1], "blocks") != 0)) {
         std::fprintf(stderr, "usage: lanes_tool build <graph.json> [--out <dir>]\n"
                              "       lanes_tool design <graph.json> <out.json> [--plan-crossings]   (the graph with every road's planned profile; built again, taken as given)\n"
-                             "       lanes_tool from-level <level.json> --out <dir> [--diamonds N] [--no-freeway]   (writes <dir>/<name>_lanelab.json + terrain grid)\n"
                              "                    [--ramp-width M] [--ramp-shoulder M]   ramp carriageway (default 4.5 m lane, 2.5 m shoulder)\n");
         return 2;
     }
@@ -169,14 +167,13 @@ int main(int argc, char** argv) {
         std::string out = ".", cs; for (int i = 3; i + 1 < argc; ++i) { if (std::strcmp(argv[i], "--out") == 0) out = argv[i + 1]; if (std::strcmp(argv[i], "--citysim") == 0) cs = argv[i + 1]; }
         nlohmann::json citysim = nlohmann::json::object();
         if (!cs.empty()) { std::ifstream f(cs); nlohmann::json lvl; f >> lvl; citysim = lvl.value("citysim", nlohmann::json::object()); }
-        bool graphBlocks = false; for (int i = 3; i < argc; ++i) if (std::strcmp(argv[i], "--graph-blocks") == 0) graphBlocks = true;
         std::unique_ptr<Result> r = build(RoadLabGraph::load(argv[2]));
         {   // where are the holes? (debug for the scene-block path)
             auto census = [](const PolySet& s, const char* name) { size_t holes = 0, big = 0; for (const Polygon2& p : s) for (const Ring& h : p.holes) { ++holes; if (std::fabs(ringArea(h)) >= 2000.0) ++big; } std::printf("  %s: %zu polygons, %zu holes (%zu >= 2000 m2)\n", name, s.size(), holes, big); };
             census(r->pavement.surface, "surface"); census(r->pavement.shoulder, "shoulder"); census(unionSets(r->pavement.surface, r->pavement.shoulder), "union");
         }
-        BlockAudit a = auditBlocks(*r, citysim, !graphBlocks);
-        std::printf("%s blocks: ", graphBlocks ? "graph-face" : "scene-hole");
+        BlockAudit a = auditBlocks(*r, citysim);
+        std::printf("scene-hole blocks: ");
         std::printf("%s", summary(a).c_str());
         mkdir(out.c_str(), 0755); const std::string svg = out + "/blocks.svg"; writeBlocksSvg(*r, a, svg); std::printf("wrote %s\n", svg.c_str());
         {   // --at x y r: what the lot pass put near a point — lots, building part meshes, LOD1 boxes (set LANELAB_AUDIT_PARTS=1 to grow meshes)
@@ -217,7 +214,7 @@ int main(int argc, char** argv) {
                 for (const engine::RoadEdge& e : twin.graph.edges) if (e.a == static_cast<int>(n) || e.b == static_cast<int>(n)) { const auto& o = twin.graph.nodes[static_cast<size_t>(e.a == static_cast<int>(n) ? e.b : e.a)].pos; std::printf(" ->(%.1f,%.1f) c%d w%.1f%s", o.x, o.y, static_cast<int>(e.klass), e.width, e.baked ? " baked" : ""); }
                 std::printf("\n"); }
         }
-        engine::RoadGraph rg;   // the street subgraph exactly as growLotBuildingsOnNets builds it
+        engine::RoadGraph rg;   // the twin's street subgraph: freeways and ramps left out
         for (const engine::RoadNode& n : twin.graph.nodes) rg.nodes.push_back({n.pos});
         for (const engine::RoadEdge& e : twin.graph.edges) {
             if (e.baked || e.klass == engine::RoadClass::Freeway || e.klass == engine::RoadClass::Ramp) continue;
@@ -335,18 +332,6 @@ int main(int argc, char** argv) {
             svg << "<circle cx='" << at.x << "' cy='" << at.y << "' r='6' fill='none' stroke='#f0f' stroke-width='2'/>\n</svg>\n";
             std::printf("  wrote %s.twin_at.svg\n", argv[2]);
         }
-        return 0;
-    }
-    if (std::strcmp(argv[1], "from-level") == 0) {
-        if (out.empty()) { std::fprintf(stderr, "from-level needs --out <dir>\n"); return 2; }
-        ImportOptions o; for (int i = 3; i < argc; ++i) { if (std::strcmp(argv[i], "--no-freeway") == 0) o.freewayLoop = false; if (std::strcmp(argv[i], "--diamonds") == 0 && i + 1 < argc) o.diamonds = std::atoi(argv[++i]);
-            if (std::strcmp(argv[i], "--ramp-width") == 0 && i + 1 < argc) o.rampLaneW = std::atof(argv[++i]);
-            if (std::strcmp(argv[i], "--ramp-shoulder") == 0 && i + 1 < argc) o.rampShoulder = std::atof(argv[++i]); }
-        mkdir(out.c_str(), 0755); ImportReport rep;
-        try {
-            nlohmann::json graph = graphFromLevel(argv[2], out, o, rep); std::string path = out + "/" + graph["name"].get<std::string>() + ".json";
-            std::ofstream f(path); f << graph.dump(1); std::printf("%s\nwrote %s (%zu edges)\n", rep.notes.c_str(), path.c_str(), graph["edges"].size());
-        } catch (const std::exception& e) { std::fprintf(stderr, "lanes from-level: %s\n", e.what()); return 1; }
         return 0;
     }
     std::unique_ptr<Result> rp;

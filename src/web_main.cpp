@@ -14,6 +14,7 @@
 // is a self-contained procedural scene (no external glTF/HDR to 404).
 
 #include "engine/application.h"
+#include "engine/control/city_requests.h"
 #include "engine/states/editor_state.h"
 #include "game/arena_state.h"
 #include "log.h"
@@ -35,7 +36,7 @@ Application g_app;
 // State factories, file-scope so the rt_web_play hook can swap the running state
 // long after main() has unwound. Editor = free look, no gameplay; Play =
 // ArenaState (Jolt physics, gun, shooting). Set up in main().
-std::function<std::unique_ptr<AppState>()> g_makePlay;
+std::function<std::unique_ptr<AppState>(bool)> g_makePlay;
 std::function<std::unique_ptr<AppState>()> g_makeEditor;
 bool g_inPlay = false;
 
@@ -99,12 +100,11 @@ EMSCRIPTEN_KEEPALIVE void rt_web_play(int play) {
     if (wantPlay && g_makePlay) {
         // Gameplay walks the player on the ground; force grounded FPS controls.
         g_app.settings().setBool("cameraGrounded", true);
-        // Spawn the player at the editor's current view rather than the level's
-        // document spawn (undefined / far above the showcase scene). The editor's
-        // onStop persists flyEye* during this swap, just before ArenaState reads
-        // it — so the capsule drops in where the camera is looking.
-        g_app.settings().setBool("playFromHere", true);
-        g_app.requestState(g_makePlay());
+        // Spawn the player at the editor's current view (fromHere) rather than
+        // the level's document spawn (undefined / far above the showcase scene).
+        // The editor's onStop persists flyEye* during this swap, just before
+        // ArenaState reads it — so the capsule drops in where the camera is looking.
+        g_app.requestState(g_makePlay(true));
     } else if (g_makeEditor) {
         g_app.requestState(g_makeEditor());
     }
@@ -149,16 +149,17 @@ EMSCRIPTEN_KEEPALIVE void rt_web_post(int id, float v) {
     }
 }
 
-// Living City debug layers from the page (the web build has no ImGui panel).
-// One-shot writes: each lands in a settings key the citysim render bridge polls
-// and CLEARS every frame, so the J/L keyboard toggles keep working between
-// panel writes. id: 0=master widgets 1=agent rings 2=vision cones 3=nav graph
-// 4=city plan (blocks + lots).
+// Living City debug layers from the page (the web build has no ImGui panel):
+// a CityLayerRequest, the one `overlay <layer>` sends, setting the same flags
+// the J and ; keys flip. id: 0=master widgets 1=agent rings 2=vision cones
+// 3=nav graph 4=city plan (blocks + lots).
 EMSCRIPTEN_KEEPALIVE void rt_web_city(int id, int val) {
-    static const char* keys[] = {"citysim.master", "citysim.agents",
-                                 "citysim.cones", "citysim.nav", "citysim.plan"};
-    if (id >= 0 && id < 5)
-        g_app.settings().setDouble(keys[id], val != 0 ? 1.0 : 0.0);
+    static const char* layers[] = {"master", "agents", "cones", "nav", "plan"};
+    if (id < 0 || id >= 5) return;
+    engine::CityLayerRequest r;
+    r.layer = layers[id];
+    r.on = val != 0;
+    g_app.events().publish(r);
 }
 
 // Planet Lab controls from the page (the web has no ImGui, so its HTML panel
@@ -229,9 +230,9 @@ int main() {
         return std::make_unique<EditorState>(g_app.windowRef(), g_app.renderer(),
                                              levelPath, g_makePlay);
     };
-    g_makePlay = [levelPath]() -> std::unique_ptr<AppState> {
+    g_makePlay = [levelPath](bool fromHere) -> std::unique_ptr<AppState> {
         return std::make_unique<ArenaState>(g_app.windowRef(), g_app.renderer(),
-                                            levelPath, g_makeEditor);
+                                            levelPath, g_makeEditor, nullptr, fromHere);
     };
 
     // Fly camera + free-look so the on-screen sticks give FPS move+look out of

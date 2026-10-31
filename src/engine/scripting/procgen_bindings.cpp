@@ -5,6 +5,7 @@
 #include "procgen_mesh.h"
 #include "lua_state.h"
 #include "lua_helpers.h"     // optField, checkVec3/pushVec3
+#include "lua_json.h"        // pushJson: a recipe's args
 #include "../procgen/sdf.h"
 #include "../procgen/noise.h"
 #include "../procgen/lsystem.h"
@@ -29,7 +30,6 @@
 #include "../procgen/city/road_mesh.h"
 #include "../procgen/city/roads/road_entity.h"   // RoadEntity, the road builders
 #include "../procgen/city/roads/road_builder.h"   // city.road_builders(): the registry, by name
-#include "../procgen/city/road_crossings.h"
 #include "../procgen/city/polygon.h"
 #include "../procgen/city/parcel.h"
 #include "../procgen/proc_model.h"
@@ -1034,8 +1034,22 @@ static void readAttachedFields(lua_State* L, int idx, BuildingParams& p) {
     }
     // campus = 1 teaching hall, 2 library, 3 residence hall (the university's room plans)
     p.campus = static_cast<uint8_t>(std::clamp(static_cast<int>(optField(L, idx, "campus", p.campus)), 0, 3));
+    // store_floors = n: the first n storeys over the ground are a department store (a mall's anchor: all of them);
+    p.storeFloors = static_cast<uint8_t>(std::clamp(static_cast<int>(optField(L, idx, "store_floors", p.storeFloors)), 0, 255));
+    // dine_floors = n: the top n storeys of its main tier are restaurant floors (a four-sided tower's: storeyUseOf)
+    p.dineFloors = static_cast<uint8_t>(std::clamp(static_cast<int>(optField(L, idx, "dine_floors", p.dineFloors)), 0, 255));
     p.backDoor = optBoolField(L, idx, "back_door", p.backDoor);
     p.fireEscape = optBoolField(L, idx, "fire_escape", p.fireEscape);
+}
+
+// Where its stairs and lifts stand (circulation.h): stairs = "core" | "ends", lifts = "bank" | "facing".
+static void readCirculationFields(lua_State* L, int idx, BuildingParams& p) {
+    lua_getfield(L, idx, "stairs");
+    if (lua_isstring(L, -1)) p.stairPlace = stairPlaceOf(lua_tostring(L, -1));
+    lua_pop(L, 1);
+    lua_getfield(L, idx, "lifts");
+    if (lua_isstring(L, -1)) p.liftBanks = liftBanksOf(lua_tostring(L, -1));
+    lua_pop(L, 1);
 }
 
 static void readTopField(lua_State* L, int idx, BuildingParams& p) {
@@ -1073,12 +1087,14 @@ BuildingParams readBuildingParamsOnto(lua_State* L, int idx, BuildingParams p) {
     p.seed          = seed;
 
     // Massing: box | cylinder (round tower) | pagoda (tiered) — the "not every
-    // building is a box" axis.
+    // building is a box" axis. A cylinder is its plan (luaBuildingPlan); a
+    // pagoda's tiers are its floors (ADR-0270): `tiers` is another name for `floors`.
     std::string shp = optStrField(L, idx, "shape", "box");
-    if (shp == "cylinder") p.shape = BuildingShape::Cylinder;
-    else if (shp == "pagoda") p.shape = BuildingShape::Pagoda;
+    if (shp == "pagoda") {
+        p.shape = BuildingShape::Pagoda;
+        p.floors = static_cast<int>(optField(L, idx, "tiers", p.floors));
+    }
     p.sides     = static_cast<int>(optField(L, idx, "sides", p.sides));
-    p.tiers     = static_cast<int>(optField(L, idx, "tiers", p.tiers));
     p.pilasters = optBoolField(L, idx, "pilasters", p.pilasters);
     p.solidFacade = optBoolField(L, idx, "solid_facade", p.solidFacade);
     p.groundRetail = optBoolField(L, idx, "ground_retail", p.groundRetail);
@@ -1232,6 +1248,7 @@ BuildingParams readBuildingParamsOnto(lua_State* L, int idx, BuildingParams p) {
         p.core = c == "never" ? 1 : c == "always" ? 2 : 0;
     }
     lua_pop(L, 1);
+    readCirculationFields(L, idx, p);
     // The lighting spec (M4): crown = "auto"|"none"|"white"|"amber"|"blue"|"red"|"green"|"purple",
     // signage = true|false, uplights = true|false (absent = auto, the hash decides).
     lua_getfield(L, idx, "crown");
@@ -1264,14 +1281,28 @@ namespace {
 // Grows the split/shape-grammar building over a rectangular footprint and returns
 // the merged mesh (per-vertex colours baked, so wall/glass/roof read on a single
 // material). Lua authors the grammar params; the rewrite/emit loop stays in C++.
+// The plan a Lua building grows on (ADR-0270: one massing path, growPlanBuilding): the width x depth rectangle
+// centred on the origin, a cylinder's `sides`-gon inscribed in it, or a pagoda's square.
+static Poly2 luaBuildingPlan(lua_State* L, int idx, const BuildingParams& p, Real width, Real depth) {
+    const Poly2 rect = {{-width * 0.5, -depth * 0.5}, {width * 0.5, -depth * 0.5},
+                        {width * 0.5, depth * 0.5}, {-width * 0.5, depth * 0.5}};
+    if (p.shape == BuildingShape::Pagoda) {
+        const Poly2 sq = pagodaPlan(rect, p.floors);
+        if (sq.empty())
+            luaL_error(L, "building: a %.1f x %.1f m footprint is too small for a pagoda of %d tiers (its top tier keeps a "
+                       "stair: 18.8 m across for 3, 19.5 m for 5)", static_cast<double>(width), static_cast<double>(depth), p.floors);
+        return sq;
+    }
+    if (lua_istable(L, idx) && optStrField(L, idx, "shape", "box") == "cylinder")
+        return Section::ngon(std::max(6, p.sides), std::min(width, depth) * 0.5).tessellate();
+    return rect;
+}
+
 int l_building_grow(lua_State* L) {
     BuildingParams p = readBuildingParams(L, 1);
     Real width = (lua_istable(L, 1)) ? static_cast<Real>(optField(L, 1, "width", 18.0)) : 18.0;
     Real depth = (lua_istable(L, 1)) ? static_cast<Real>(optField(L, 1, "depth", 14.0)) : 14.0;
-    Poly2 foot = {{-width * 0.5, -depth * 0.5}, {width * 0.5, -depth * 0.5},
-                  {width * 0.5, depth * 0.5}, {-width * 0.5, depth * 0.5}};
-    Scope s = scopeFromFootprint(foot, 0.0, 10.0);
-    BuildingMesh bm = growBuilding(s, p);
+    BuildingMesh bm = growPlanBuilding(luaBuildingPlan(L, 1, p, width, depth), p, 0.0);
     pushMesh(L, std::make_shared<RenderMesh>(bm.merged()));
     return 1;
 }
@@ -1286,9 +1317,7 @@ int l_building_grow_parts(lua_State* L) {
     BuildingParams p = readBuildingParams(L, 1);
     Real width = (lua_istable(L, 1)) ? static_cast<Real>(optField(L, 1, "width", 18.0)) : 18.0;
     Real depth = (lua_istable(L, 1)) ? static_cast<Real>(optField(L, 1, "depth", 14.0)) : 14.0;
-    Poly2 foot = {{-width * 0.5, -depth * 0.5}, {width * 0.5, -depth * 0.5},
-                  {width * 0.5, depth * 0.5}, {-width * 0.5, depth * 0.5}};
-    BuildingMesh bm = growBuilding(scopeFromFootprint(foot, 0.0, 10.0), p);
+    BuildingMesh bm = growPlanBuilding(luaBuildingPlan(L, 1, p, width, depth), p, 0.0);
     static const char* kPartNames[] = {"wall", "glass", "trim", "roof", "door",
                                        "ground", "detail", "brick", "concrete",
                                        "stucco", "metal", "wood",
@@ -1385,6 +1414,7 @@ static void readPlanAndRecipe(lua_State* L, BuildingParams& p, Poly2& plan) {
         p.openDoorway = true;
         readTopField(L, 1, p);   // a script may try another top on the recipe's tower
         readAttachedFields(L, 1, p);   // ...or stand it against its neighbours
+        readCirculationFields(L, 1, p);   // ...or place its stairs and lifts apart
         lua_pushinteger(L, p.floors);   // the floors it grew (the slender cap applied), for the caller's label
         lua_setfield(L, 1, "grown_floors");
     }
@@ -1595,17 +1625,11 @@ int l_building_cells(lua_State* L) {
     const bool mallK = flagField(L, 1, "mall");           // mall = true: the American mall as the spine, big-box anchors, a garage (ADR-0180)
     Complex cx;
     if (mallK) {
-        BuildingParams mp = architectMallWings(p.seed).params;
-        const BuildingParams ap = architectBigBox(p.seed ^ 0x51a3u).params;
-        BuildingRecipe gr;
-        BuildingParams gp = ap;
-        if (architectRecipeByName("parking_garage", p.seed ^ 0x2c7u, 0.3, 40.0, 1600.0, gr)) gp = gr.params;
         lua_getfield(L, 1, "garage");
         const bool withGarage = lua_isnil(L, -1) ? true : lua_toboolean(L, -1) != 0;
         lua_pop(L, 1);
-        BuildingRecipe pr;
-        const bool hasPav = architectRecipeByName("oldtown_cafe", p.seed ^ 0x9e1u, 0.3, 13.0, 130.0, pr);
-        cx = mallCells(box, Vec2(p.faceDir.x, p.faceDir.z), mp, ap, gp, withGarage, static_cast<Real>(optField(L, 1, "depth", 30.0)), hasPav ? &pr.params : nullptr);
+        cx = mallComplex(box, Vec2(p.faceDir.x, p.faceDir.z), architectMallWings(p.seed).params, withGarage,
+                         static_cast<Real>(optField(L, 1, "depth", 30.0)), p.seed);
     } else if (twins > 0) {
         cx = twinTowers(box, p, static_cast<Real>(twins), floors, static_cast<int>(optField(L, 1, "bridge", 0.0)), static_cast<Real>(optField(L, 1, "bridge_w", 4.5)));
     } else if (ringN >= 3) {
@@ -1883,9 +1907,7 @@ int l_building_grow_floor(lua_State* L) {
 // query for layout code that places a building before committing geometry.
 int l_building_height(lua_State* L) {
     BuildingParams p = readBuildingParams(L, 1);
-    Poly2 foot = {{-9, -7}, {9, -7}, {9, 7}, {-9, 7}};
-    Scope s = scopeFromFootprint(foot, 0.0, 10.0);
-    lua_pushnumber(L, growBuilding(s, p).height);
+    lua_pushnumber(L, growPlanBuilding(luaBuildingPlan(L, 1, p, 18.0, 14.0), p, 0.0).height);
     return 1;
 }
 
@@ -2222,16 +2244,8 @@ int l_mesh_audit(lua_State* L) {
     return 1;
 }
 
-// --- city.* : the road→block layout solver, exposed for decoration (ADR-0042
-// Phase 3). A recipe asks for the street layout and places props along it; the
-// solver (an algorithm, not a recipe) stays in C++.
-
-// Push a ground-plane point as a { x =, z = } table.
-void pushPoint(lua_State* L, const Vec2& p) {
-    lua_createtable(L, 0, 2);
-    lua_pushnumber(L, p.x); lua_setfield(L, -2, "x");
-    lua_pushnumber(L, p.y); lua_setfield(L, -2, "z");   // Vec2.y == world z
-}
+// --- city.* : lots on a block, exposed for decoration (ADR-0042 Phase 3). (city.layout, the grid / radial /
+// tensor street generators, retired with ADR-0267: the city planner is the one street generator.)
 
 // Read an optional string field (default if absent / not a string).
 std::string optStrField(lua_State* L, int idx, const char* key, const char* def) {
@@ -2247,107 +2261,6 @@ std::string optStrField(lua_State* L, int idx, const char* key, const char* def)
 // (returns nullptr if absent). The pointer is valid for the call: the table on the
 // stack keeps the userdata alive. Defined with the HeightField machinery below.
 const HeightField* optHeightField(lua_State* L, int tableIdx, const char* key);
-
-// city.layout{ pattern=, extent=, cell_size=, ring_spacing=, spokes=, jitter=,
-//   dropout=, seed=, terrain=, max_grade=, slope_align= } -> { nodes = {{x,z}...},
-//   edges = {{a,b,width}...}, blocks = {{{x,z}...}...} }. pattern = "grid" (default)
-//   | "radial" | "tensor" (ADR-0044). When `terrain` (a HeightField) is given, the
-//   network is made grade-aware (ADR-0046): the tensor field bends to follow
-//   contours on steep ground, and every generator's streets steeper than
-//   `max_grade` are pruned — and because that happens before block extraction, the
-//   blocks merge across the dropped streets for free.
-// Node indices in edges are 1-based (Lua convention).
-// Grow a road graph from the city.layout argument table (pattern + params + optional terrain),
-// planarized and — with terrain — grade-pruned then reconnected into one net. Shared by
-// city.layout (returns the raw chord graph) and city.curves (smooths it into real splines).
-static RoadGraph buildLayoutGraph(lua_State* L) {
-    std::string pattern = lua_istable(L, 1) ? optStrField(L, 1, "pattern", "grid") : "grid";
-    const HeightField* terrain = optHeightField(L, 1, "terrain");
-    Real maxGrade   = static_cast<Real>(optField(L, 1, "max_grade", 0.12));
-    Real slopeAlign = static_cast<Real>(optField(L, 1, "slope_align", 1.0));
-    RoadGraph raw;
-    if (pattern == "radial") {
-        RadialParams rp;
-        rp.extent      = static_cast<Real>(optField(L, 1, "extent", rp.extent));
-        rp.ringSpacing = static_cast<Real>(optField(L, 1, "ring_spacing", rp.ringSpacing));
-        rp.spokes      = static_cast<int>(optField(L, 1, "spokes", rp.spokes));
-        rp.ringSubdiv  = static_cast<int>(optField(L, 1, "ring_subdiv", rp.ringSubdiv));
-        rp.jitter      = static_cast<Real>(optField(L, 1, "jitter", rp.jitter));
-        rp.seed        = static_cast<uint32_t>(optField(L, 1, "seed", 0));
-        raw = radialRoads(rp);
-    } else if (pattern == "tensor") {
-        // Hybrid radial<->grid field (ADR-0044): radial core, grid rim, blended.
-        TensorRoadParams tp;
-        tp.extent         = static_cast<Real>(optField(L, 1, "extent", tp.extent));
-        tp.spacing        = static_cast<Real>(optField(L, 1, "spacing", tp.spacing));
-        tp.step           = static_cast<Real>(optField(L, 1, "step", tp.step));
-        tp.gridAngle      = static_cast<Real>(optField(L, 1, "grid_angle", tp.gridAngle));
-        tp.radialStrength = static_cast<Real>(optField(L, 1, "radial_strength", tp.radialStrength));
-        tp.radialDecay    = static_cast<Real>(optField(L, 1, "radial_decay", tp.radialDecay));
-        tp.gridStrength   = static_cast<Real>(optField(L, 1, "grid_strength", tp.gridStrength));
-        tp.seed           = static_cast<uint32_t>(optField(L, 1, "seed", 0));
-        tp.terrain        = terrain;          // contour-follow on steep ground (ADR-0046)
-        tp.slopeAlign     = slopeAlign;
-        tp.maxGrade       = maxGrade;
-        raw = tensorRoads(tp);
-    } else {
-        GridRoadParams gp;
-        if (lua_istable(L, 1)) {
-            gp.extent   = static_cast<Real>(optField(L, 1, "extent", gp.extent));
-            gp.cellSize = static_cast<Real>(optField(L, 1, "cell_size", gp.cellSize));
-            gp.jitter   = static_cast<Real>(optField(L, 1, "jitter", gp.jitter));
-            gp.dropout  = static_cast<Real>(optField(L, 1, "dropout", gp.dropout));
-            gp.seed     = static_cast<uint32_t>(optField(L, 1, "seed", 0));
-        }
-        raw = gridRoads(gp);
-    }
-    RoadGraph g = planarize(raw);
-    if (terrain) {
-        g = pruneSteepEdges(g, *terrain, maxGrade);    // drop unwalkable streets,
-        g = connectComponents(g);                      // then heal any split into one net,
-        g = planarize(g);                              // and re-split at the new connectors
-    }
-    return g;
-}
-
-int l_city_layout(lua_State* L) {
-    RoadGraph g = buildLayoutGraph(L);
-    std::vector<Poly2> blocks = extractBlocks(g);
-
-    lua_createtable(L, 0, 3);
-
-    lua_createtable(L, static_cast<int>(g.nodes.size()), 0);
-    for (std::size_t i = 0; i < g.nodes.size(); ++i) {
-        pushPoint(L, g.nodes[i].pos);
-        lua_seti(L, -2, static_cast<lua_Integer>(i + 1));
-    }
-    lua_setfield(L, -2, "nodes");
-
-    lua_createtable(L, static_cast<int>(g.edges.size()), 0);
-    for (std::size_t i = 0; i < g.edges.size(); ++i) {
-        const RoadEdge& e = g.edges[i];
-        lua_createtable(L, 0, 3);
-        lua_pushinteger(L, e.a + 1); lua_setfield(L, -2, "a");
-        lua_pushinteger(L, e.b + 1); lua_setfield(L, -2, "b");
-        lua_pushnumber(L, e.width);  lua_setfield(L, -2, "width");
-        lua_seti(L, -2, static_cast<lua_Integer>(i + 1));
-    }
-    lua_setfield(L, -2, "edges");
-
-    lua_createtable(L, static_cast<int>(blocks.size()), 0);
-    for (std::size_t i = 0; i < blocks.size(); ++i) {
-        const Poly2& poly = blocks[i];
-        lua_createtable(L, static_cast<int>(poly.size()), 0);
-        for (std::size_t j = 0; j < poly.size(); ++j) {
-            pushPoint(L, poly[j]);
-            lua_seti(L, -2, static_cast<lua_Integer>(j + 1));
-        }
-        lua_seti(L, -2, static_cast<lua_Integer>(i + 1));
-    }
-    lua_setfield(L, -2, "blocks");
-
-    return 1;
-}
 
 // city.lots(block, { inset=, target_area=, min_area=, min_edge=, jitter=, seed= })
 // -> array of lots. `inset` first pulls the block in off the road centrelines (so
@@ -2681,23 +2594,6 @@ int l_terr_terrace(lua_State* L) {
     pushHeight(L, heightTerrace(checkHeight(L, 1), luaL_checknumber(L, 2)));
     return 1;
 }
-// terrain.erode(field, { size=, resolution=, droplets=, talus=, seed=, ... }) ->
-// HeightField. A bake pass: hydraulic + thermal erosion carves drainage networks.
-int l_terr_erode(lua_State* L) {
-    HeightField& f = checkHeight(L, 1);
-    double size = optField(L, 2, "size", 400.0);
-    int res = static_cast<int>(optField(L, 2, "resolution", 384));
-    ErosionParams p;
-    p.droplets    = static_cast<int>(optField(L, 2, "droplets", p.droplets));
-    p.erodeSpeed  = static_cast<float>(optField(L, 2, "erode_speed", p.erodeSpeed));
-    p.depositSpeed = static_cast<float>(optField(L, 2, "deposit_speed", p.depositSpeed));
-    p.evaporation = static_cast<float>(optField(L, 2, "evaporation", p.evaporation));
-    p.thermalIterations = static_cast<int>(optField(L, 2, "thermal_iterations", p.thermalIterations));
-    p.talus       = static_cast<float>(optField(L, 2, "talus", p.talus));
-    p.seed        = static_cast<uint32_t>(optField(L, 2, "seed", 0));
-    pushHeight(L, erodeField(f, size, res, p));
-    return 1;
-}
 // terrain.conform(field, layout, { margin=, falloff= }) -> HeightField. Cut/fill
 // the terrain to a road network: each edge becomes a constant-grade ramp corridor
 // (its endpoints at the field's natural height, flat across the road, linear
@@ -2981,70 +2877,6 @@ int l_city_stroke(lua_State* L) {
     Vec3 color = optVec3Field(L, 1, "color", Vec3(0.10, 0.10, 0.11));
     bool closed = optBoolField(L, 1, "closed", false);
     pushMesh(L, std::make_shared<RenderMesh>(strokeRibbon(pts, hw, y, color, closed)));
-    return 1;
-}
-
-// city.resolve{ spines={ {points={{x,z}..}, width=, layer=} .. }, weld= } -> { spines=..., nodes=
-//   {{x,z,grade_separated,arms}..} }. The crossing RESOLVER (unified-road-plan task 5): splice
-//   every centerline crossing into a shared node so loose generator output becomes ONE connected
-//   graph. result.spines feeds straight into city.solid/weld (same-grade crossings then weld);
-//   result.nodes reports each junction (grade_separated = a fly-over needing a ramp).
-int l_city_resolve(lua_State* L) {
-    luaL_checktype(L, 1, LUA_TTABLE);
-    std::vector<GraphSpine> in;
-    lua_getfield(L, 1, "spines");
-    luaL_checktype(L, -1, LUA_TTABLE);
-    lua_Integer ns = luaL_len(L, -1);
-    for (lua_Integer si = 1; si <= ns; ++si) {
-        lua_geti(L, -1, si);
-        GraphSpine s;
-        s.halfWidth = optField(L, -1, "width", 8.0) * 0.5;
-        s.layer = static_cast<int>(optField(L, -1, "layer", 0));
-        lua_getfield(L, -1, "points");
-        luaL_checktype(L, -1, LUA_TTABLE);
-        lua_Integer np = luaL_len(L, -1);
-        for (lua_Integer pi = 1; pi <= np; ++pi) {
-            lua_geti(L, -1, pi);
-            s.points.push_back(Vec2(optField(L, -1, "x", 0.0), optField(L, -1, "z", 0.0)));
-            lua_pop(L, 1);
-        }
-        lua_pop(L, 1);                                   // points
-        in.push_back(std::move(s));
-        lua_pop(L, 1);                                   // spine
-    }
-    lua_pop(L, 1);                                       // spines
-    double tol = optField(L, 1, "weld", 0.5);
-    ResolvedGraph g = resolveCrossings(in, tol);
-
-    lua_newtable(L);                                     // result
-    lua_newtable(L);                                     // result.spines
-    for (std::size_t i = 0; i < g.spines.size(); ++i) {
-        const GraphSpine& s = g.spines[i];
-        lua_newtable(L);                                 // one spine
-        lua_pushnumber(L, s.halfWidth * 2.0); lua_setfield(L, -2, "width");
-        lua_pushinteger(L, s.layer);          lua_setfield(L, -2, "layer");
-        lua_newtable(L);                                 // points
-        for (std::size_t k = 0; k < s.points.size(); ++k) {
-            lua_newtable(L);
-            lua_pushnumber(L, s.points[k].x); lua_setfield(L, -2, "x");
-            lua_pushnumber(L, s.points[k].y); lua_setfield(L, -2, "z");
-            lua_seti(L, -2, static_cast<lua_Integer>(k + 1));
-        }
-        lua_setfield(L, -2, "points");
-        lua_seti(L, -2, static_cast<lua_Integer>(i + 1));
-    }
-    lua_setfield(L, -2, "spines");
-    lua_newtable(L);                                     // result.nodes
-    for (std::size_t i = 0; i < g.nodes.size(); ++i) {
-        const CrossNode& n = g.nodes[i];
-        lua_newtable(L);
-        lua_pushnumber(L, n.pos.x);  lua_setfield(L, -2, "x");
-        lua_pushnumber(L, n.pos.y);  lua_setfield(L, -2, "z");
-        lua_pushboolean(L, n.gradeSeparated); lua_setfield(L, -2, "grade_separated");
-        lua_pushinteger(L, static_cast<lua_Integer>(n.spines.size())); lua_setfield(L, -2, "arms");
-        lua_seti(L, -2, static_cast<lua_Integer>(i + 1));
-    }
-    lua_setfield(L, -2, "nodes");
     return 1;
 }
 
@@ -4245,11 +4077,9 @@ void openProcgenLibrary(ScriptVM& vm) {
     // marking and bridge kits; the lattice paints markings per road class and
     // builds its own layered bridges. No shipped script used any of the four.
     static const luaL_Reg kCityFns[] = {
-        {"layout", l_city_layout},
         {"lots", l_city_lots},
         {"road_builders", l_city_road_builders},
         {"stroke", l_city_stroke},
-        {"resolve", l_city_resolve},
         {nullptr, nullptr},
     };
     luaL_newlib(L, kCityFns);
@@ -4294,7 +4124,7 @@ void openProcgenLibrary(ScriptVM& vm) {
         {"flat", l_terr_flat},     {"noise", l_terr_noise},
         {"fbm", l_terr_fbm},       {"ridged", l_terr_ridged},
         {"warp", l_terr_warp},     {"terrace", l_terr_terrace},
-        {"erode", l_terr_erode},   {"conform", l_terr_conform},
+        {"conform", l_terr_conform},
         {"flat_sites", l_terr_flat_sites}, {"route", l_terr_route},
         {"mesh", l_terr_mesh},
         {nullptr, nullptr},
@@ -4358,40 +4188,12 @@ bool runProcgenMesh(ScriptVM& vm, const std::string& code,
     return false;
 }
 
-namespace {
-// Recursively push a JSON value onto the Lua stack (objects -> keyed tables,
-// arrays -> 1-based tables, primitives map across).
-void pushJson(lua_State* L, const nlohmann::json& j) {
-    if (j.is_object()) {
-        lua_newtable(L);
-        for (auto it = j.begin(); it != j.end(); ++it) {
-            pushJson(L, it.value());
-            lua_setfield(L, -2, it.key().c_str());
-        }
-    } else if (j.is_array()) {
-        lua_newtable(L);
-        lua_Integer i = 1;
-        for (const auto& e : j) {
-            pushJson(L, e);
-            lua_seti(L, -2, i++);
-        }
-    } else if (j.is_boolean()) {
-        lua_pushboolean(L, j.get<bool>());
-    } else if (j.is_number()) {
-        lua_pushnumber(L, j.get<double>());
-    } else if (j.is_string()) {
-        lua_pushstring(L, j.get<std::string>().c_str());
-    } else {
-        lua_pushnil(L);
-    }
-}
-}  // namespace
 
 void setRecipeArgs(ScriptVM& vm, const std::string& optsJson) {
     nlohmann::json opts = nlohmann::json::parse(optsJson, nullptr, false);
     if (opts.is_discarded() || !opts.is_object()) return;   // ignore malformed opts
     lua_State* L = luaState(vm);
-    pushJson(L, opts);
+    pushJson(L, opts, JsonNumbers::AsFloat);
     lua_setglobal(L, "args");
 }
 

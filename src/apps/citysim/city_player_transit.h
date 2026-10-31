@@ -22,6 +22,7 @@
 
 #include "rail_board.h"
 #include "../../engine/system.h"
+#include "../../engine/control/city_requests.h"
 #include "../../rt_math.h"   // engine::Vec3
 
 #include <vector>
@@ -93,6 +94,8 @@ public:
     const engine::Vec3& aboardAt() const { return local_; }   // bus-frame floor point
 
 private:
+    engine::EventBus::Subscription onRide_;
+    double rideRequest_ = -1.0;   // a RideRequest's mode, until a fixed step takes it
     void rideBus(engine::World& world, engine::Real dt, const RideInput& in,
                  engine::Entity player, engine::Transform& t,
                  engine::CharacterController& cc, const engine::Mat4& pose, bool interact);

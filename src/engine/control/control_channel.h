@@ -1,6 +1,7 @@
 #ifndef RAYTRACER_ENGINE_CONTROL_CHANNEL_H
 #define RAYTRACER_ENGINE_CONTROL_CHANNEL_H
 
+#include <cstdint>
 #include <functional>
 #include <memory>
 #include <string>
@@ -38,6 +39,7 @@ enum class ControlBackendMode {
 struct ControlCommand {
     std::string name;
     std::vector<std::string> args;
+    std::string rest;   // everything after the name as sent, whitespace kept (a verb whose argument is JSON reads it)
 };
 ControlCommand parseControlCommand(const std::string& line);
 
@@ -63,6 +65,16 @@ public:
     // Returns how many commands were handled.
     using Handler = std::function<std::string(const std::string& line)>;
     int drain(const Handler& handler);
+
+    // The connected client, as a number that changes with every new connection (0 = none; Manual mode is always
+    // client 1). A `watch` belongs to the client that asked for it, and ends when this changes.
+    uint64_t client() const;
+    // MAIN THREAD: send one line nobody asked for (a watched event, ADR-0253) to `client`, if it is still the one
+    // connected. Never blocks: lines wait in an outbox the socket drains as the client reads; once a client has
+    // stopped reading (256 KB waiting), a line is dropped whole and counted. Manual mode collects it with the
+    // replies. False when it was not sent.
+    bool post(uint64_t client, const std::string& line);
+    uint64_t droppedPosts() const;
 
     // Manual mode: stage a line as if a client had sent it / collect replies.
     void pushCommand(const std::string& line);

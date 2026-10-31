@@ -1,4 +1,5 @@
 #include "street_furniture.h"
+#include "../../../proc_rng.h"
 
 #include <unordered_map>
 
@@ -552,7 +553,7 @@ StreetFurniturePlan planStreetFurniture(
         while (s < 16.0 && p.deck->depthInside(c.x + n.x * s, c.y + n.y * s) > 0.0) s += 0.25;
         return c + n * (s + verge);
     };
-    uint32_t h = 0x5EED7u;
+    ProcRng hRng(0x5EED7u);
     for (int li = 0; li < nav.linkCount(); ++li) {
         const NavLink& L = nav.links[li];
         if (!streetWithPavement(L)) continue;
@@ -596,7 +597,7 @@ StreetFurniturePlan planStreetFurniture(
                 if (plantHere && dj >= p.treeJunctionClear && clearOfRoad(sp, 0.4) && !near(trees, sp, dir, pl.spacing * 0.92, true) &&
                     !near(lamps, sp, dir, 3.2, false) && !near(poles, sp, dir, 3.5, false) && !near(bins, sp, dir, 2.0, false) &&
                     !near(props, sp, dir, 2.5, false)) {
-                    h = h * 1664525u + 1013904223u;
+                    const uint32_t h = hRng.bits();
                     if (!p.character) {
                         const uint32_t v = (h >> 16) % 3u;
                         out.trees.push_back({Vec3(sp.x, gy(sp.x, sp.y), sp.y), Real(0.75) + (h >> 8 & 0xFF) / 255.0 * 0.35, v,
@@ -624,7 +625,7 @@ StreetFurniturePlan planStreetFurniture(
                 const Vec2 sp = kerbPoint(li, t, 1.0);
                 if (clearOfRoad(sp, 0.3) && !near(props, sp, dir, p.propSpacing, true) && !near(trees, sp, dir, 2.6, false) &&
                     !near(lamps, sp, dir, 2.0, false) && !near(poles, sp, dir, 2.5, false)) {
-                    h = h * 1664525u + 1013904223u;
+                    const uint32_t h = hRng.bits();
                     out.props.push_back({Vec3(sp.x, gy(sp.x, sp.y), sp.y), normalize(sp - nav.pointOnLink(li, t)), static_cast<uint8_t>((h >> 12) % 3u ? KerbProp::BikeRack : KerbProp::NewsBoxes)});
                     add(props, sp, dir);
                 }

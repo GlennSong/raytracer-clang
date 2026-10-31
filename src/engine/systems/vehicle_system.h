@@ -3,6 +3,9 @@
 
 #include "../system.h"   // System, FrameContext, and (via renderer.h) MeshHandle
 #include "../player/driver_seat.h"   // RideJolt, SeatSway
+#include "../properties.h"
+#include "../control/control_commands.h"
+#include <string>
 
 #include <vector>
 
@@ -21,6 +24,15 @@ class CameraSystem;
 //
 // The create/drive/writeback calls go through the Jolt vehicle wrapper
 // (PhysicsWorld), whose behaviour is gated headlessly by tests/test_driving_lab.cpp.
+// VehicleSpawnRequest (ADR-0253): drop a vehicle in front of the player (the N key from outside: the socket's
+// `vehicle_spawn`); `recipe` picks one from the catalogue first (motorcycle, moped, ...).
+struct VehicleSpawnRequest {
+    std::string recipe;
+};
+inline void describeProperties(VehicleSpawnRequest& r, PropertyVisitor& v) {
+    v.field(FieldMeta("recipe"), r.recipe);
+}
+
 class VehicleSystem : public System {
 public:
     VehicleSystem(PhysicsSystem& physics, CameraSystem& cameras)
@@ -32,6 +44,10 @@ public:
     void render(FrameContext& ctx) override;        // the car picker / drive-mode panel
 
 private:
+    EventBus::Subscription onSpawn_;
+    bool spawnPending_ = false;
+    std::string spawnRecipe_;
+    ControlAnswers answers_;   // vehicle?
     void createVehicles(FrameContext& ctx);
     void driveVehicles(FrameContext& ctx);
     void writeBack(FrameContext& ctx);

@@ -7,6 +7,8 @@
 #include "city_meshes.h"   // buildPersonMesh, materials (was declared here)
 #include "city_sim.h"
 #include "places.h"        // PlaceMap (ADR-0066)
+#include "../../engine/control/city_requests.h"
+#include "../../engine/control/control_commands.h"
 #include <functional>
 #include <string>
 #include <unordered_map>
@@ -43,7 +45,7 @@ struct CityRenderParams {
     int nearTarget = 0;                    // CitySimConfig::nearTarget
     int farTarget = 0;                     // CitySimConfig::farTarget
     uint32_t seed = 1;
-    Real hoursPerSecond = 0.05;            // sim-clock hours advanced per real second
+    Real hoursPerSecond = 1.0 / 3600.0;    // sim-clock hours advanced per real second (real time: DayNightCycle)
     // The in-world hour the level OPENS at. The population is placed directly
     // from its schedules at this hour (CitySim::seedFromSchedule), so any hour
     // costs the same: 22:00 is as cheap as 08:00. 10.5 keeps the historical
@@ -587,13 +589,24 @@ private:
     std::vector<uint8_t> signedAtWork_;  // ...each one at work, refreshed a thirtieth a frame from shiftCursor_
     std::size_t signedStaffOf_ = 0, shiftCursor_ = 0;
     void listSignedStaff();
-    void dealOpenSigns(engine::World& world, engine::Settings& settings, engine::Vec3 cam);
+    void dealOpenSigns(engine::World& world, engine::Vec3 cam);
     int parkingTick_ = 0;   // (parking? telemetry every 60 frames)   // the drivable parking garages (CitySimConfig)   // seats that are not furniture: a fountain's rim (CitySimConfig)
     std::unordered_map<int, std::vector<uint32_t>> indoorHeld_;   // record index -> spots our occupants hold, per piece
     int indoorDrawn_ = 0;
 public:
     int indoorDrawn() const { return indoorDrawn_; }
 private:
+    engine::EventBus::Subscription onSimHour_;   // SimHourQuery: `daynight?` asks the sim's own hour
+    engine::EventBus::Subscription onPin_, onFindPlace_, onLayer_, onJitter_;
+    std::vector<engine::CityLayerRequest> layerRequests_;   // overlay <layer> and the web panel, applied in update
+    std::vector<engine::JitterRequest> jitterRequests_;
+    std::vector<engine::PinRequest> pinRequests_;
+    std::string findPlace_;            // a FindPlaceRequest's name, until update answers it
+    std::string groundQuery_;          // `ground? x z [r]`, until update answers it
+    std::string groundResult_ = "none";
+    engine::ControlAnswers answers_;   // parking? traffic? depots? opensigns? findplace? pin? jitter?
+    engine::ControlCommands::Binding answerGround_;
+    std::string depotsStalled_;
     engine::Entity signalGroups_[3];   // lit lens, indexed by SignalState (Green/Yellow/Red)
     engine::Entity signalPostGroup_;   // the static pole+arm+head assemblies
     engine::Entity parkBayGroup_;      // curbside bay outline markings (R6b)
@@ -637,6 +650,8 @@ private:
     std::vector<std::vector<engine::Vec3>> carSeats_;
     std::vector<std::vector<engine::Vec3>> carDoors_;
     std::vector<engine::Vec3> carDriverSeat_;
+    std::vector<engine::Vec3> carRearHip_;   // per slot: the back bench's hip point (its middle), where carHasRear_
+    std::vector<char> carHasRear_;
     std::vector<char> carHasDriver_;
     engine::Entity busDriverGroup_{};
     engine::Entity busRiderGroups_[3] = {};
@@ -746,7 +761,7 @@ private:
     // PlaceMap built from them at build() (each entrance snapped to the sidewalk).
     // Drawn as projected ImGui labels + markers when showPlaces_ (needs no mesh).
     std::vector<engine::AuthoredPlace> authoredPlaces_;
-    // THE SHAKE, MEASURED (`set jitter.request "<agent|-1> <frames>"`, then `get jitter.result`): every drawn frame,
+    // THE SHAKE, MEASURED (`jitter [agent|-1] [frames]`, then `jitter?`): every drawn frame,
     // where a vehicle is drawn (as agentPose places it, without its side effects) and where the camera is; then how
     // evenly each moved -- Glenn: "buses and cars sometimes shake. Their position is not stable. Trains actually
     // appear very stable in contrast". -1: the bus or cab you ride, else the nearest moving vehicle.

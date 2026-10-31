@@ -112,8 +112,8 @@ bool skipHeavy() {
     return e && *e && std::string(e) != "0";
 }
 bool isHeavyLevel(const std::string& name) {
-    static const char* kHeavy[] = {"metro_mountain.json", "metro_planned.json", "island_8_weathered.json", "island_8_saltwood.json",
-                                   "piedmont.json", "island_8_rocky.json", "island_8_nature.json", "piedmont_roads.json",
+    static const char* kHeavy[] = {"metro_mountain.json", "metro_planned.json", "island_8_weathered.json", "piedmont.json",
+                                   "island_8_rocky.json", "island_8_nature.json",
                                    "tree_lab.json", "scale_lab.json"};
     for (const char* h : kHeavy) if (name == h || (name.size() > std::strlen(h) && name.compare(name.size() - std::strlen(h), std::string::npos, h) == 0 && name[name.size() - std::strlen(h) - 1] == '/')) return true;
     return false;
@@ -674,9 +674,11 @@ TEST_CASE(metro_spawn_building_has_a_walkable_door) {
 // foundation's reach — on every level that grows buildings on terrain.
 TEST_CASE(level_census_every_floorplan_conforms_to_the_drawn_ground) {
     int lotLevels = 0;
+    std::string lotNames;
     for (const LevelFacts& f : allLevels()) {
         if (f.censusLots == 0) continue;
         ++lotLevels;
+        lotNames += " " + f.name;
         if (f.censusBurials || f.censusGaps)
             std::printf(
                 "    [census] %s: lots=%d burials=%d gaps=%d worst=%.2f m at "
@@ -691,8 +693,10 @@ TEST_CASE(level_census_every_floorplan_conforms_to_the_drawn_ground) {
         CHECK(f.censusBurials <= residue);
         CHECK(f.censusGaps <= residue);
     }
-    std::printf("    [census] %d levels carry lot buildings\n", lotLevels);
-    CHECK(lotLevels >= 5);
+    std::printf("    [census] %d levels carry lot buildings:%s\n", lotLevels, lotNames.c_str());
+    // the census must run on real cities, not pass on none: 5 until ADR-0267 deleted the grown levels; the push
+    // run (heavy levels skipped) has metro_v2_test and river_town left of the tracked levels
+    CHECK(lotLevels >= 2);
 }
 
 // THE MARKER TEST (ground-probes round, device: "if we place these markers in
@@ -2002,6 +2006,7 @@ TEST_CASE(metro_junctions_stay_clear) {
     };
     std::vector<Real> stoppedFor(city.sim().agents().size(), 0);
     long samples = 0, carsSeen = 0, inBox = 0, stuckBox = 0, overlaps = 0;
+    std::vector<long> stuckAt(junctions.size(), 0);
     for (int i = 0; i < 1800; ++i) {
         city.step(world, 0.1);
         const auto& ag = city.sim().agents();
@@ -2025,7 +2030,10 @@ TEST_CASE(metro_junctions_stay_clear) {
                 const Real r = mouth[j];
                 if (d.x * d.x + d.y * d.y < r * r) {
                     ++inBox;
-                    if (stoppedFor[k] > 5.0) ++stuckBox;
+                    if (stoppedFor[k] > 5.0) {
+                        ++stuckBox;
+                        ++stuckAt[j];
+                    }
                     break;
                 }
             }
@@ -2045,6 +2053,15 @@ TEST_CASE(metro_junctions_stay_clear) {
                 "(%ld for > 5 s), %ld overlapping pairs\n",
                 samples, samples ? static_cast<double>(carsSeen) / samples : 0.0, inBox,
                 stuckBox, overlaps);
+    std::vector<std::size_t> worst(junctions.size());
+    for (std::size_t j = 0; j < worst.size(); ++j) worst[j] = j;
+    std::sort(worst.begin(), worst.end(),
+              [&](std::size_t a, std::size_t b) { return stuckAt[a] > stuckAt[b]; });
+    for (std::size_t w = 0; w < std::min<std::size_t>(5, worst.size()) && stuckAt[worst[w]] > 0; ++w) {
+        const Vec2 p = nav.nodes[static_cast<std::size_t>(junctions[worst[w]])];
+        std::printf("    [junction]   %ld stuck at node %d  ->  teleport %.2f %.2f\n",
+                    stuckAt[worst[w]], junctions[worst[w]], p.x, p.y);
+    }
     CHECK(samples > 0 && carsSeen / samples > 40);   // the city is actually driving
     CHECK(stuckBox < 300);
     CHECK(overlaps < 800);
@@ -2475,7 +2492,7 @@ void printCityFacts(const CityFacts& f) {
 // Every shipped city, whichever builder paved it, publishes what the engine reads.
 TEST_CASE(every_builder_publishes_a_complete_city) {
     // One level per builder. Adding a builder means adding a level here.
-    const char* kCities[] = {"metro_v2_test.json", "metro_lanes.json"};
+    const char* kCities[] = {"metro_v2_test.json", "river_town.json"};
     for (const char* name : kCities) {
         const CityFacts f = gatherCityFacts(name);
         CHECK(f.loaded);
@@ -2597,7 +2614,7 @@ void note(RoadIntrusion& r, const std::vector<const engine::RoadDeckField*>& dec
 }  // namespace
 
 TEST_CASE(city_furniture_never_stands_in_a_road) {
-    const char* kCities[] = {"metro_v2_test.json", "metro_lanes.json"};
+    const char* kCities[] = {"metro_v2_test.json", "river_town.json"};
     for (const char* name : kCities) {
         std::unique_ptr<Renderer> renderer = Renderer::create();
         RendererMeshUploader uploader(*renderer);
@@ -2737,7 +2754,7 @@ TEST_CASE(city_furniture_never_stands_in_a_road) {
 // ============================================================================
 
 TEST_CASE(front_doors_face_their_street) {
-    const char* kCities[] = {"metro_v2_test.json", "metro_lanes.json"};
+    const char* kCities[] = {"metro_v2_test.json", "river_town.json"};
     for (const char* name : kCities) {
         std::unique_ptr<Renderer> renderer = Renderer::create();
         RendererMeshUploader uploader(*renderer);
@@ -2846,7 +2863,7 @@ TEST_CASE(front_doors_face_their_street) {
 // ============================================================================
 
 TEST_CASE(scenery_is_planted_on_the_ground) {
-    const char* kCities[] = {"metro_v2_test.json", "metro_lanes.json"};
+    const char* kCities[] = {"metro_v2_test.json", "river_town.json"};
     for (const char* name : kCities) {
         std::unique_ptr<Renderer> renderer = Renderer::create();
         RendererMeshUploader uploader(*renderer);
@@ -3000,7 +3017,7 @@ std::vector<std::vector<uint32_t>> meshPieces(const RenderMesh& m) {
 }  // namespace
 
 TEST_CASE(lot_dressing_is_planted_on_the_ground) {
-    const char* kCities[] = {"metro_v2_test.json", "metro_lanes.json"};
+    const char* kCities[] = {"metro_v2_test.json", "river_town.json"};
     for (const char* name : kCities) {
         std::unique_ptr<Renderer> renderer = Renderer::create();
         CapturingUploader uploader(*renderer);
@@ -3254,7 +3271,7 @@ TEST_CASE(lot_dressing_is_planted_on_the_ground) {
         // stretched over sidewalk grading that stood above the plaza (lattice 35 -> 20). What is
         // left is steep ground at block edges and plazas on neighbours' feathers. No worse.
         // (2026-10-22: the lane-built metro_v2_test buries 19-22 -- 20 was the lattice city's.)
-        const std::size_t kPlateResidue = std::string(name) == "metro_lanes.json" ? 33 : 22;
+        const std::size_t kPlateResidue = 22;
         CHECK(buriedPlateAt.size() <= kPlateResidue);
     }
 }
@@ -3266,7 +3283,7 @@ TEST_CASE(lot_dressing_is_planted_on_the_ground) {
 //   3. does TRAFFIC take it — which class every moving car is on after 3 minutes,
 //      and how many of the drivers' planned routes touch a freeway link.
 TEST_CASE(freeway_census_links_routes_and_traffic) {
-    const char* kCities[] = {"metro_lanes.json", "metro_v2_test.json"};
+    const char* kCities[] = {"river_town.json", "metro_v2_test.json"};
     for (const char* name : kCities) {
         std::unique_ptr<Renderer> renderer = Renderer::create();
         RendererMeshUploader uploader(*renderer);
@@ -3392,6 +3409,15 @@ TEST_CASE(freeway_census_links_routes_and_traffic) {
             std::printf("    [freeway] %-18s reach: freeway links a street can get onto %d/%d, that can get back to a "
                         "street %d/%d | ramps reachable %d/%d, leading back %d/%d\n",
                         name, fwOn, fwLinks, fwOff, fwLinks, rampOn, ramps, rampOff, ramps);
+            {   // the ramps and freeway links a street cannot get onto, or that lead nowhere: where they are
+                int shown = 0;
+                for (const engine::NavLink& l : nav.links)
+                    if ((l.klass == engine::RoadClass::Ramp || l.klass == engine::RoadClass::Freeway) && (!fwd[l.from] || !bwd[l.to]) && shown++ < 8)
+                        std::printf("    [freeway] %-18s   %s %s link from (%.1f, %.1f) to (%.1f, %.1f), %d links into its start, %zu out of its end, %.1f m\n",
+                                    name, !fwd[l.from] ? "unreachable" : "dead-end", l.klass == engine::RoadClass::Ramp ? "ramp" : "freeway",
+                                    nav.nodes[l.from].x, nav.nodes[l.from].y, nav.nodes[l.to].x, nav.nodes[l.to].y,
+                                    static_cast<int>(inLinks[l.from].size()), nav.outLinks[l.to].size(), (nav.nodes[l.to] - nav.nodes[l.from]).length());
+            }
             // THE GATE: every freeway and ramp link can be reached from the streets and
             // leads back to them (the twin welds each ramp end to the road it merges into).
             CHECK(fwOn == fwLinks);
@@ -3532,7 +3558,7 @@ TEST_CASE(freeway_census_links_routes_and_traffic) {
 // laid, how many buildings stand, and what share of the block they cover — so a thin block names
 // itself with its size and shape.
 TEST_CASE(block_census_lots_per_block) {
-    const char* kCities[] = {"metro_lanes.json", "metro_v2_test.json"};
+    const char* kCities[] = {"river_town.json", "metro_v2_test.json"};
     for (const char* name : kCities) {
         std::unique_ptr<Renderer> renderer = Renderer::create();
         RendererMeshUploader uploader(*renderer);
@@ -3638,10 +3664,10 @@ TEST_CASE(editor_save_keeps_the_road_signs_entity) {
 // sheet of water tilted down into the ground. Rivers fall gently and a lake is flat, so no triangle of the
 // island's water may span more than a few metres of level.
 TEST_CASE(island_water_surface_has_no_spikes) {
-    if (skipHeavy()) { std::printf("    skipped: loads island_8_saltwood (heavy, RT_LEVEL_TESTS_SKIP_HEAVY)\n"); return; }
+    if (skipHeavy()) { std::printf("    skipped: loads island_8_nature (heavy, RT_LEVEL_TESTS_SKIP_HEAVY)\n"); return; }
     // (RT_WATER_LEVEL=name: another level's water, for the debug reports below -- island_8_weathered's rivers, say)
     const char* waterLevel = std::getenv("RT_WATER_LEVEL");
-    std::ifstream in(levelsDir() + "/" + (waterLevel ? std::string(waterLevel) : std::string("island_8_saltwood")) + ".json");
+    std::ifstream in(levelsDir() + "/" + (waterLevel ? std::string(waterLevel) : std::string("island_8_nature")) + ".json");
     CHECK(in.good());
     if (!in.good()) return;
     const json root = json::parse(in);
@@ -3710,7 +3736,7 @@ TEST_CASE(island_water_surface_has_no_spikes) {
 // height with the DRAWN ground half a metre past it. Printed, not gated, until the grading is fixed:
 // counts, the worst gaps and where to stand.
 TEST_CASE(level_print_road_edges_meet_the_ground) {
-    const char* kCities[] = {"metro_lanes.json", "metro_v2_test.json", "island_8_nature.json"};
+    const char* kCities[] = {"river_town.json", "metro_v2_test.json", "island_8_nature.json"};
     for (const char* name : kCities) {
         if (!std::filesystem::exists(levelsDir() + "/" + name)) continue;
         if (const char* only = std::getenv("RT_LEVELS"); only && *only && std::string(name).find(only) == std::string::npos) continue;
@@ -3916,7 +3942,7 @@ TEST_CASE(level_print_road_edges_meet_the_ground) {
 // OUTERMOST tread against what is really there: the drawn terrain (finest leaf tile) or a paved plate /
 // sidewalk collider at most 0.5 m over the step's bottom, whichever is higher. Printed, not gated.
 TEST_CASE(level_print_entrance_steps_meet_the_ground) {
-    const char* kCities[] = {"metro_lanes.json", "metro_v2_test.json", "island_8_nature.json"};
+    const char* kCities[] = {"river_town.json", "metro_v2_test.json", "island_8_nature.json"};
     for (const char* name : kCities) {
         if (!std::filesystem::exists(levelsDir() + "/" + name)) continue;
         if (const char* only = std::getenv("RT_LEVELS"); only && *only && std::string(name).find(only) == std::string::npos) continue;
@@ -3971,7 +3997,7 @@ TEST_CASE(level_print_entrance_steps_meet_the_ground) {
 // lot remains there"). Every building whose plan comes within 5 m of a freeway or ramp carriageway edge (at-grade
 // or not), nearest first. Printed, not gated.
 TEST_CASE(level_print_buildings_by_the_freeway) {
-    const char* kCities[] = {"metro_lanes.json", "island_8_nature.json"};
+    const char* kCities[] = {"metro_v2_test.json", "island_8_nature.json"};
     for (const char* name : kCities) {
         if (!std::filesystem::exists(levelsDir() + "/" + name)) continue;
         if (const char* only = std::getenv("RT_LEVELS"); only && *only && std::string(name).find(only) == std::string::npos) continue;
@@ -4021,7 +4047,7 @@ TEST_CASE(level_print_buildings_by_the_freeway) {
 // above the ground storey, from the records' params), their tallest, and how many of them kept a door
 // (enterable = the core fit every tier). Printed, not gated.
 TEST_CASE(level_print_skyline_by_recipe) {
-    const char* kCities[] = {"metro_lanes.json", "island_8_nature.json"};
+    const char* kCities[] = {"metro_v2_test.json", "island_8_nature.json"};
     for (const char* name : kCities) {
         if (!std::filesystem::exists(levelsDir() + "/" + name)) continue;
         if (const char* only = std::getenv("RT_LEVELS"); only && *only && std::string(name).find(only) == std::string::npos) continue;

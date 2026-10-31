@@ -22,7 +22,8 @@ Real classSpeed(RoadClass klass);
 // A* over the directed lane graph (ADR-0059). Cost is TRAVEL TIME
 // (length / classSpeed), so routes prefer arterials over local streets like real
 // driving; the heuristic is straight-line time at the fastest class speed
-// (admissible -> optimal). Deterministic: ties broken by link index. Returns an
+// (admissible -> optimal). ON FOOT every link is walked at one pace: the cost is
+// the walk's length, the shortest walk wins. Deterministic: ties broken by link index. Returns an
 // empty Route if the goal is unreachable (or equals the start).
 // `onFoot`: skip Freeway/Ramp-class links — a pedestrian must never route
 // along a carriageway (§10.5; the unified graph made those links visible to

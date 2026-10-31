@@ -15,6 +15,8 @@
 // point in the carriage AS DRAWN this frame, in render(), after the steps -- so the carriage and the view cannot
 // disagree, which is what jitter was on the bus.
 
+#include "../../engine/control/city_requests.h"
+#include "../../engine/control/control_commands.h"
 #include "../../engine/system.h"
 #include "../../engine/components.h"
 #include "../../engine/procgen/vehicle/train_mesh.h"
@@ -38,6 +40,7 @@ public:
     // `city`: the level's city, if it has one -- its people ride these trains (CitySim::setRail)
     TrainSystem(engine::PhysicsSystem& physics, engine::FlyCameraController& fly, CityRenderSystem* city = nullptr)
         : physics_(physics), fly_(fly), city_(city) {}
+    void onStart(engine::FrameContext& ctx) override;  // hears TrainBoardRequest, answers trains?
     void update(engine::FrameContext& ctx) override;   // the seat offers (the interaction broker's E)
     void fixedUpdate(engine::FrameContext& ctx) override;
     void render(engine::FrameContext& ctx) override;
@@ -46,6 +49,10 @@ public:
     int ridingTrain() const { return train_; }
 
 private:
+    engine::EventBus::Subscription onBoard_;
+    bool boardPending_ = false;
+    engine::TrainBoardRequest board_;
+    engine::ControlAnswers answers_;   // trains?
     void build(engine::FrameContext& ctx);
     void sounds(engine::FrameContext& ctx);   // clatter, rumble, horn, door chimes (sfx.h railClack ...)
     void ride(engine::FrameContext& ctx, engine::Real dt);

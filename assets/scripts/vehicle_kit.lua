@@ -797,7 +797,8 @@ end
 --   carpet  the floor pan; seat: two buckets and (P.rear_seat ~= false, room behind) a bench;
 --   dash    a shelf under the windshield with an instrument hood; steer: a wheel on a column; a console
 -- Seats from real proportions: the front hip point ~1.15 m behind the windshield's foot, ~0.27 m above
--- the floor (higher and more upright in a truck). Returns the polys and the driver's hip point.
+-- the floor (higher and more upright in a truck). Returns the polys, the driver's hip point and the back bench's
+-- (nil when there is none).
 function kit.interior(P, S)
   local G = P.glass or {}
   local W = P.width
@@ -843,7 +844,11 @@ function kit.interior(P, S)
   seat(-dx, hipZ, 0.50)
   seat(dx, hipZ, 0.50)
   local rearZ = hipZ - 0.85
-  if P.rear_seat ~= false and rearZ - 0.35 > zBack then seat(0, rearZ, W * 0.66) end
+  local rearHip
+  if P.rear_seat ~= false and rearZ - 0.35 > zBack then
+    seat(0, rearZ, W * 0.66)
+    rearHip = { 0, hipY, rearZ }
+  end
   -- the dashboard, an instrument hood before the driver, the console between the front seats
   local dashY = P.belt(zFront) - 0.10
   add(kit.box_part({ W - 0.30, 0.18, 0.42 }, { 0, dashY, zFront - 0.24 }, 3, "dash"))
@@ -867,7 +872,7 @@ function kit.interior(P, S)
     add(seg)
   end
   add(kit.tilted_box({ 0.05, 0.05, 0.45 }, { wc[1], wc[2] - 0.06, wc[3] + 0.24 }, truck and 0 or 20, "steer"))
-  return polys, { -dx, hipY, hipZ }
+  return polys, { -dx, hipY, hipZ }, rearHip
 end
 
 -- The body cage (the unsubdivided poly) and its finished form (subdivided + detailed), for inspection
@@ -888,8 +893,8 @@ function kit.build(P, level, opts)
   -- extras (boxes, trailer, sign) join before the centring, in ground space
   local car = { polys = {}, height = hi[2] }
   kit.lamps(P, car, S)
-  local cabinPolys, hip = {}, nil
-  if P.interior ~= false then cabinPolys, hip = kit.interior(P, S) end
+  local cabinPolys, hip, rearHip = {}, nil, nil
+  if P.interior ~= false then cabinPolys, hip, rearHip = kit.interior(P, S) end
   if P.extras then P.extras(car) end
   for _, x in ipairs(car.polys) do S:append(x) end
   lo, hi = S:bounds()
@@ -938,6 +943,8 @@ function kit.build(P, level, opts)
   end
   return { parts = parts, wheels = wheels, size = { hi[1] - lo[1], hi[2], hi[3] - lo[3] }, lift = cy,
            length = hi[3] - lo[3], spare = spare, color = P.color, lights = lights, driver_seat = seat,
+           -- the back bench's hip point (its middle), when the cabin has one: where a back-seat rider sits
+           rear_hip = rearHip and { rearHip[1], rearHip[2] - cy, rearHip[3] - cz } or nil,
            cabin = cabin }
 end
 

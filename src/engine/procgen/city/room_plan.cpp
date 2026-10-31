@@ -1,5 +1,7 @@
 #include "room_plan.h"
+#include "../../../proc_rng.h"
 #include "floor_zones.h"
+#include "building_uses.h"   // floorUseName
 #include "../../mesh_builder.h"
 #include <algorithm>
 #include <functional>
@@ -1049,87 +1051,6 @@ void layoutApartment(RoomPlan& rp, std::size_t e, const std::function<Vec2(Real,
         flush(x1);
 }
 
-static RoomPlan apartmentPlan(const Poly2& planIn, const BuildingParams& params, const CorePlan& core, Real inset,
-                              int storey) {
-    RoomPlan rp;
-    rp.topology = PlateTopology::Apartments;
-    rp.office = false;
-    if (storey < 1 || !core.valid || planIn.size() != 4) return rp;
-    Poly2 plan = planIn;
-    ensureCCW(plan);
-    const std::size_t n = plan.size();
-    const Poly2 coreR = core.rect();
-    uint32_t h = static_cast<uint32_t>(params.seed) * 2654435761u ^ static_cast<uint32_t>(storey * 97);
-    auto rnd = [&]() { h ^= h << 13; h ^= h >> 17; h ^= h << 5; return (h & 0xffffu) / 65535.0; };
-
-    struct Band { Vec2 a, d, nOut; Real W = 0, D = 0; bool rooms = false; Real s0 = 0, s1 = 0; };
-    std::vector<Band> B(n);
-    for (std::size_t e = 0; e < n; ++e) {
-        Band& b = B[e];
-        b.a = plan[e];
-        const Vec2 dv = plan[(e + 1) % n] - b.a;
-        b.W = dv.length();
-        if (b.W < 1e-6) continue;
-        b.d = dv * (1.0 / b.W);
-        b.nOut = Vec2(b.d.y, -b.d.x);
-        Real toCore = 1e9;
-        for (const Vec2& c : coreR) toCore = std::min(toCore, dot(b.a - c, b.nOut));
-        b.D = toCore - kCorridor - inset;
-        b.rooms = b.D >= 5.0;
-        b.D = std::min(b.D, Real(13.0));
-    }
-    for (std::size_t e = 0; e < n; ++e) {
-        Band& b = B[e];
-        if (!b.rooms) continue;
-        if (e % 2 == 0) { b.s0 = inset; b.s1 = b.W - inset; }
-        else {
-            const Band& p = B[(e + n - 1) % n];
-            const Band& q = B[(e + 1) % n];
-            b.s0 = inset + (p.rooms ? p.D : 0);
-            b.s1 = b.W - inset - (q.rooms ? q.D : 0);
-        }
-    }
-    for (std::size_t e = 0; e < n; ++e) {
-        const Band& b = B[e];
-        if (!b.rooms || b.s1 - b.s0 < 6.8) continue;
-        auto P = [&](Real x, Real v) { return b.a + b.d * x - b.nOut * v; };   // v: depth in from the wall line
-        const Real vIn = inset, vFront = inset + b.D;
-        // The corridor's reach along this band: the core's span widened by the corridor.
-        Real c0 = 1e9, c1 = -1e9;
-        for (const Vec2& c : coreR) { const Real t = dot(c - b.a, b.d); c0 = std::min(c0, t); c1 = std::max(c1, t); }
-        c0 = std::max(b.s0, c0 - kCorridor);
-        c1 = std::min(b.s1, c1 + kCorridor);
-        if (c1 - c0 < 3.4) continue;
-        // The units: ~7.5-9.5 m each, the first and last stretched to the band's ends but reaching 1.6 m into the
-        // corridor's span, so every front door opens onto the corridor.
-        const Real want = 7.5 + 2.0 * rnd();
-        int units = std::max(1, static_cast<int>((b.s1 - b.s0) / want));
-        std::vector<Real> cuts;
-        for (; units >= 1; --units) {
-            cuts.assign(1, b.s0);
-            for (int k = 1; k < units; ++k) cuts.push_back(b.s0 + (b.s1 - b.s0) * k / units);
-            cuts.push_back(b.s1);
-            if (units > 1) {
-                cuts[1] = std::max(cuts[1], c0 + 1.6);
-                cuts[units - 1] = std::min(cuts[units - 1], c1 - 1.6);
-            }
-            bool ok = true;
-            for (int k = 0; k < units; ++k)
-                if (cuts[k + 1] - cuts[k] < 6.8) ok = false;   // a living room and a kitchen, at the least
-            if (ok) break;
-        }
-        if (units < 1) continue;
-        for (int k = 0; k < units; ++k) {
-            const Real x0 = cuts[k], x1 = cuts[k + 1];
-            // The front door, on the corridor.
-            const Real dLo = std::max(x0, c0) + 0.9, dHi = std::min(x1, c1) - 0.9;
-            const Real xd = dLo <= dHi ? std::clamp((x0 + x1) * 0.5, dLo, dHi) : (std::max(x0, c0) + std::min(x1, c1)) * 0.5;
-            layoutApartment(rp, e, P, x0, x1, vIn, vFront, b.D, xd, k + 1 < units);
-        }
-    }
-    return rp;
-}
-
 // FLATS ROUND THE CORE (Glenn, 2026-10-13: "if you're showing me apartments then we need more walls for the separate
 // apartments and then separate rooms"). A residential crown too slim for apartmentPlan's corridor and its 5 m bands --
 // a 14 m pencil crown leaves 2-4 m between the glass and the smallest core there is -- used to be the residents'
@@ -1146,8 +1067,9 @@ static RoomPlan apartmentPlan(const Poly2& planIn, const BuildingParams& params,
 //     |hall  =|      L O B B Y     |=  hall|       bedroom ends the column and the strip behind is its dressing
 //     +-------+--------------------+-------+       room and bath. Too short for a living room: a studio.
 //
-// Rectangular plates square to the core only; empty when it does not fit, and roomPlan falls back as before.
-static RoomPlan wrapFlatsPlan(const Poly2& planIn, const CorePlan& core, Real inset, int storey) {
+// Rectangular plates square to the core only; empty when it does not fit. The zoned floor's lobby-mode apartment
+// layout (floor_zones.cpp zonedFloorPlan, #117 item 35): the floor too shallow for a corridor round the core.
+RoomPlan wrapFlatsLayout(const Poly2& planIn, const CorePlan& core, Real inset, int storey) {
     constexpr Real kMinStrip = 2.4, kPassMin = 1.3, kHallLen = 2.0, kKitchenLen = 2.4, kLivingMin = 3.0, kBedLen = 3.0, kBedMax = 4.0,
                    kBathLen = 1.8, kClosetMin = 1.2, kStudioMin = 3.4;
     RoomPlan rp;
@@ -1509,8 +1431,8 @@ static RoomPlan campusPlan(const Poly2& planIn, const BuildingParams& params, co
     } else {
         bands.push_back(minusBand(2 * hw - inset - kCorr, hw - inset - kCorr));
     }
-    uint32_t h = static_cast<uint32_t>(params.seed) * 2654435761u ^ static_cast<uint32_t>(storey * 131 + 7);
-    auto rnd = [&]() { h ^= h << 13; h ^= h >> 17; h ^= h << 5; return (h & 0xffffu) / 65535.0; };
+    ProcRng h(static_cast<uint32_t>(params.seed) * 2654435761u ^ static_cast<uint32_t>(storey * 131 + 7));
+    auto rnd = [&]() { return h.next(); };
     int roomNo = 0;
     // THE LECTURE HALL: the ground floor's first run long enough for one (10.5 m: the stage, the aisle, a block of
     // rows), on whichever side of the corridor has it -- the stair's side is often cut too short. The city's halls
@@ -1957,213 +1879,6 @@ static bool officePlanFits(const Poly2& plan) {
     return officeRectFor(plan, r, a, b);
 }
 
-// ------------------------------------------------------------- the office floor
-// THE OFFICE FLOOR (Glenn, 2026-09-30: "the wider floors seem to have a lot of floorspace which in an office would
-// be good for cubicles or open floorplans"). A glass tower's typical floor, rectangular with a core:
-//
-//   +-----+---------------------------+-----+    the corners: glass-fronted corner OFFICES;
-//   | ofc |   open plan (desks by the  | ofc |    the rest of each band, windows to the corridor: OPEN PLAN,
-//   +-----+   windows)  +------+-----+-+-----+    filled with desk clusters (furniture.cpp);
-//   |     |   MEETING   |KITCH.|            |    on two bands, a strip against the corridor: a glass MEETING
-//   ...         corridor round the core            room, and once a floor a KITCHENETTE (open, counters).
-//
-// No partitions but the corner offices' and the meeting rooms' glass, so the floor walks by construction.
-static RoomPlan officePlan(const Poly2& planIn, const BuildingParams& params, const CorePlan& core, Real inset,
-                           int storey, bool lifts = true) {
-    RoomPlan rp;
-    rp.topology = PlateTopology::Ring;
-    rp.office = true;
-    // A CHAMFERED plate is laid in the rectangle its long walls stand on, every band kept clear of the cut corners
-    // (each its corner's nook of open floor at the diagonal glass).
-    Real cutS[4] = {0, 0, 0, 0}, cutE[4] = {0, 0, 0, 0};
-    Poly2 plan = planIn;
-    if (storey < 1 || !core.valid) return rp;
-    bool innerPlate = false;
-    if (!officeRectFor(planIn, plan, cutS, cutE, &innerPlate)) return rp;
-    ensureCCW(plan);
-    const std::size_t n = plan.size();
-    const Poly2 coreR = core.rect();
-    // where a band may start and end along its edge: past its cut corners, and the chamfer's wall
-    auto from = [&](std::size_t e) { return cutS[e] > 0 ? cutS[e] + inset * 1.5 : inset; };
-    auto upto = [&](std::size_t e, Real W) { return cutE[e] > 0 ? W - cutE[e] - inset * 1.5 : W - inset; };
-    struct Band { Vec2 a, d, nOut; Real W = 0, D = 0; bool rooms = false; Real s0 = 0, s1 = 0; };
-    std::vector<Band> B(n);
-    for (std::size_t e = 0; e < n; ++e) {
-        Band& b = B[e];
-        b.a = plan[e];
-        const Vec2 dv = plan[(e + 1) % n] - b.a;
-        b.W = dv.length();
-        if (b.W < 1e-6) continue;
-        b.d = dv * (1.0 / b.W);
-        b.nOut = Vec2(b.d.y, -b.d.x);
-        Real toCore = 1e9;
-        for (const Vec2& c : coreR) toCore = std::min(toCore, dot(b.a - c, b.nOut));
-        b.D = std::min(toCore - kCorridor - inset, Real(16.0));
-        b.rooms = b.D >= 4.0;
-    }
-    for (std::size_t e = 0; e < n; ++e) {
-        Band& b = B[e];
-        if (!b.rooms) continue;
-        if (e % 2 == 0) { b.s0 = from(e); b.s1 = upto(e, b.W); }
-        else {
-            const Band& p = B[(e + n - 1) % n];
-            const Band& q = B[(e + 1) % n];
-            b.s0 = std::max(inset + (p.rooms ? p.D : 0), from(e));
-            b.s1 = std::min(b.W - inset - (q.rooms ? q.D : 0), upto(e, b.W));
-        }
-    }
-    // ...and never past the storey's own skin: the largest rectangle inside a plate is inside it only where it was
-    // sampled (an implicit form's wavy outline dips between the samples), so each band's span is trimmed until the
-    // strip's corners lie inside the outline as drawn (issue #105's wavy tower: an end office past the skin).
-    if (innerPlate)
-        for (std::size_t e = 0; e < n; ++e) {
-            Band& b = B[e];
-            if (!b.rooms) continue;
-            const Real td = inset + std::min(b.D, Real(5.0));
-            auto insideAt = [&](Real s) {
-                for (Real v : {inset + 0.3, td})
-                    if (!pointInPolygon(planIn, b.a + b.d * s - b.nOut * v)) return false;
-                return true;
-            };
-            const Real was0 = b.s0, was1 = b.s1;
-            while (b.s0 < b.s1 && !insideAt(b.s0)) b.s0 += 0.25;
-            while (b.s1 > b.s0 && !insideAt(b.s1)) b.s1 -= 0.25;
-            if (std::getenv("RT_OFFICE_DEBUG"))
-                std::fprintf(stderr, "[office] storey %d band %zu a (%.1f,%.1f) d (%.2f,%.2f) W %.1f D %.1f: span %.1f..%.1f -> %.1f..%.1f (test depth %.2f)\n", storey, e,
-                             b.a.x, b.a.y, b.d.x, b.d.y, b.W, b.D, was0, was1, b.s0, b.s1, td);
-        }
-    if (std::getenv("RT_OFFICE_DEBUG")) std::fprintf(stderr, "[office] storey %d plate %s (%zu edges of %zu)\n", storey, innerPlate ? "inner rect" : "as drawn", n, planIn.size());
-    // A band too shallow for the office's rooms is a ROW OF DESKS at its windows (deskRowPlan's strip), from the glass
-    // to the core, stopping short of its neighbours' rooms and rows.
-    {
-        std::vector<Real> row(n, 0);
-        for (std::size_t e = 0; e < n; ++e)
-            if (!B[e].rooms && B[e].W > 1e-6) {
-                const Real d = std::min(B[e].D + kCorridor, kDeskRowMax);
-                if (d >= kDeskRowMin) row[e] = d;
-            }
-        for (std::size_t e = 0; e < n; ++e) {
-            if (row[e] <= 0) continue;
-            const Band& b = B[e];
-            const std::size_t pe = (e + n - 1) % n, ne = (e + 1) % n;
-            const Real x0 = std::max(inset + (B[pe].rooms ? B[pe].D : row[pe]), from(e));
-            const Real x1 = std::min(b.W - inset - (B[ne].rooms ? B[ne].D : row[ne]), upto(e, b.W));
-            if (x1 - x0 < 2.0) continue;
-            auto P = [&](Real x, Real v) { return b.a + b.d * x - b.nOut * v; };
-            // Private offices where it is deep enough (deskRowPlan's rule: an even row takes a corner no band owns).
-            if (officeRow(rp, params, e, b.W, P, e % 2 == 0 && !B[pe].rooms ? from(e) : x0,
-                          e % 2 == 0 && !B[ne].rooms ? upto(e, b.W) : x1, inset, row[e]))
-                continue;
-            Room rm; rm.edge = e; rm.kind = RoomKind::DeskRow;
-            rm.rect = {P(x0, inset), P(x1, inset), P(x1, inset + row[e]), P(x0, inset + row[e])};
-            rp.rooms.push_back(rm);
-        }
-    }
-    // WHAT THE FLOOR HOLDS (Glenn, 2026-10-13: "offices can have meeting rooms, small kitchens, lounge space,
-    // reception desk, offices and cubes and open floor plans"). Two layouts, a building at a time: a masonry office
-    // (and a third of the glass ones) lines its windows with PRIVATE OFFICES off an aisle, the open plan inside; a
-    // glass one keeps the windows for the open plan and puts its offices in the corners. Either way, each band's
-    // strip against the corridor holds the shared rooms: the RECEPTION facing the lifts (with meeting rooms either
-    // side, for visitors), and on the band opposite the kitchenette, a breakout LOUNGE and the big meeting room; the
-    // other bands a lounge and a small meeting room. The open plan is pods or cubicles (furniture_rooms.lua).
-    const uint32_t hp = static_cast<uint32_t>(params.seed) * 2654435761u;
-    const bool perimeter = !params.curtainWall || (hp >> 7) % 3u == 0;
-    constexpr Real kPerimD = 3.2, kAisle = 1.6, kOpenMin = 3.0, kStripD = 4.0;   // (offices + aisle + a row of desks)
-    // The band the core's doors face (the lift lobby's), and the one opposite; else the longest and its opposite.
-    std::size_t front = n, longest = 0;
-    for (std::size_t e = 0; e < n; ++e) {
-        if (lifts && B[e].W > 1e-6 && dot(B[e].nOut, core.frame.v) < -0.9) front = e;
-        if (B[e].rooms && B[e].s1 - B[e].s0 > B[longest].s1 - B[longest].s0) longest = e;
-    }
-    const std::size_t lobbyBand = front < n ? front : n;
-    const std::size_t opposite = ((front < n ? front : longest) + 2) % n;
-    const Real kCornerW = 5.0;
-    for (std::size_t e = 0; e < n; ++e) {
-        const Band& b = B[e];
-        if (!b.rooms || b.s1 - b.s0 < 6.0) continue;
-        auto P = [&](Real x, Real v) { return b.a + b.d * x - b.nOut * v; };
-        const Real vIn = inset, vFront = inset + b.D;
-        auto room = [&](Real x0, Real x1, Real v0, Real v1, RoomKind kind) {
-            Room rm; rm.edge = e; rm.kind = kind;
-            rm.rect = {P(x0, v0), P(x1, v0), P(x1, v1), P(x0, v1)};
-            rp.rooms.push_back(rm);
-        };
-        auto glassWall = [&](const Vec2& a, const Vec2& c, Real doorAt) {
-            RoomWall w; w.a = a; w.b = c; w.glass = true; w.doorAt = doorAt;
-            rp.walls.push_back(w);
-        };
-        // THE WINDOWS: perimeter offices off an aisle, or corner offices on the even bands (which own the corners).
-        Real openFrom = 0;   // the open plan's depth from the wall's inner face
-        Real cornerBack = 0;   // how deep the corner offices reach (their back wall), 0 for none
-        if (perimeter && b.D >= kPerimD + kAisle + kOpenMin) {
-            officeRowAt(rp, params, e, b.W, P, b.s0, b.s1, inset, kPerimD);
-            openFrom = kPerimD + kAisle;
-        } else if (e % 2 == 0 && b.s1 - b.s0 > 2 * kCornerW + 8.0) {
-            const Real cd = std::min(b.D - 1.6, Real(5.0));
-            cornerBack = vIn + cd;
-            for (int side = 0; side < 2; ++side) {
-                const Real a0 = side == 0 ? b.s0 : b.s1 - kCornerW, a1 = side == 0 ? b.s0 + kCornerW : b.s1;
-                room(a0, a1, vIn, vIn + cd, RoomKind::Office);
-                glassWall(P(a0, vIn + cd), P(a1, vIn + cd), side == 0 ? 0.75 : 0.25);
-                const Real xs = side == 0 ? a1 : a0;
-                glassWall(P(xs, vIn), P(xs, vIn + cd), -1);
-                // short of the exterior (a chamfered corner's nook beyond it): close the outer side too
-                const Real xo = side == 0 ? a0 : a1;
-                if (xo > inset + 0.05 && xo < b.W - inset - 0.05) glassWall(P(xo, vIn), P(xo, vIn + cd), -1);
-            }
-        }
-        // THE CORRIDOR SIDE: the shared rooms, centred on the band (the reception on the core's middle), packed out
-        // from the middle while they fit, the open plan's ends left free to walk round.
-        // (3.2-4 m deep: a meeting table and its chairs; the open plan keeps a row of desks and its walk)
-        const Real stripD = std::clamp(b.D - openFrom - 2.6, Real(3.2), kStripD);
-        if (b.D - openFrom >= stripD + 2.6) {
-            struct Item { RoomKind kind; Real w; };
-            std::vector<Item> items;
-            if (e == lobbyBand) items = {{RoomKind::Meeting, 4.8}, {RoomKind::Reception, 6.0}, {RoomKind::Meeting, 4.8}};
-            else if (e == opposite) items = {{RoomKind::Kitchenette, 5.0}, {RoomKind::Lounge, 5.6}, {RoomKind::Meeting, 6.4}};
-            else items = {{RoomKind::Lounge, 5.0}, {RoomKind::Meeting, 4.8}};
-            // ...and clear of the corner offices where the band is too shallow for the strip to sit behind them (a
-            // small floor: the meeting room ran over the corner office and its door, issue #105's lens tower)
-            const Real v0 = vFront - stripD;
-            const Real keep = cornerBack > v0 + 0.05 ? kCornerW + 0.3 : 2.0;
-            const Real lo = b.s0 + keep, hi = b.s1 - keep;
-            Real mid = (lo + hi) * 0.5;
-            if (e == lobbyBand) {
-                Real c0 = 1e9, c1 = -1e9;
-                for (const Vec2& c : coreR) { const Real t = dot(c - b.a, b.d); c0 = std::min(c0, t); c1 = std::max(c1, t); }
-                mid = (c0 + c1) * 0.5;
-            }
-            // drop from the ends (the reception, in the middle, goes last) until the run fits the band
-            auto total = [&]() { Real t = 0; for (const Item& it : items) t += it.w + 0.3; return t - 0.3; };
-            while (!items.empty() && total() > hi - lo) {
-                std::size_t drop = items.size() - 1;   // the last that is not the reception
-                while (drop > 0 && items[drop].kind == RoomKind::Reception) --drop;
-                items.erase(items.begin() + static_cast<std::ptrdiff_t>(drop));
-            }
-            if (!items.empty() && hi - lo > 2.0) {
-                Real x = std::clamp(mid - total() * 0.5, lo, hi - total());
-                for (const Item& it : items) {
-                    const Real x0 = x, x1 = x + it.w;
-                    room(x0, x1, v0, vFront, it.kind);
-                    if (it.kind == RoomKind::Meeting) {
-                        glassWall(P(x0, v0), P(x1, v0), 0.5);    // the front onto the open plan
-                        glassWall(P(x0, v0), P(x0, vFront), -1);
-                        glassWall(P(x1, v0), P(x1, vFront), -1);
-                        glassWall(P(x0, vFront), P(x1, vFront), -1);   // and onto the corridor
-                    } else if (it.kind == RoomKind::Reception) {
-                        glassWall(P(x0, v0), P(x1, v0), 0.15);   // a screen behind the desk; staff go round its end
-                    }
-                    x = x1 + 0.3;
-                }
-            }
-        }
-        // THE OPEN PLAN: the band from the windows (or the offices' aisle) to the corridor, round what is set into it.
-        room(b.s0, b.s1, vIn + openFrom, vFront, RoomKind::OpenPlan);
-    }
-    (void)params;
-    return rp;
-}
-
 // ------------------------------------------------------------- the hospital
 // THE HOSPITAL (Glenn, 2026-10-13: "Do hospitals. I didn't even know we had them"): one a city (a landmark), four to
 // six storeys round a core, and it was a ring of studio flats over an empty ground floor. Its floors now:
@@ -2385,7 +2100,14 @@ WallFinish interiorFinishFor(const BuildingParams& p) {
 }
 
 bool floorIsWalkable(const RoomPlan& rp, const Poly2& planIn, const Vec2& entry,
-                     const Poly2& stairWell) {
+                     const Poly2& stairWell, std::vector<std::size_t>* unreached) {
+    return floorIsWalkable(rp, planIn, entry, stairWell.size() >= 3 ? std::vector<Poly2>{stairWell} : std::vector<Poly2>{},
+                           unreached);
+}
+
+bool floorIsWalkable(const RoomPlan& rp, const Poly2& planIn, const Vec2& entry,
+                     const std::vector<Poly2>& solids, std::vector<std::size_t>* unreached,
+                     const std::vector<Vec2>* reach) {
     if (rp.rooms.empty()) return true;
     Poly2 plan = planIn;
     ensureCCW(plan);
@@ -2408,13 +2130,15 @@ bool floorIsWalkable(const RoomPlan& rp, const Poly2& planIn, const Vec2& entry,
     // Outside the building is not floor. NEITHER IS THE STAIRWELL: it is a
     // hole with a stair in it, and flooding across it made every floor look
     // reachable when the way round was actually blocked (Glenn, 2026-09-15).
-    Poly2 well = stairWell;
-    if (well.size() >= 3) ensureCCW(well);
+    std::vector<Poly2> wells;
+    for (const Poly2& s : solids)
+        if (s.size() >= 3) { wells.push_back(s); ensureCCW(wells.back()); }
     for (int j = 0; j < nz; ++j)
         for (int i = 0; i < nx; ++i) {
             const Vec2 c = centre(i, j);
-            if (!pointInPolygon(plan, c)) blocked[at(i, j)] = 1;
-            else if (well.size() >= 3 && pointInPolygon(well, c)) blocked[at(i, j)] = 1;
+            if (!pointInPolygon(plan, c)) { blocked[at(i, j)] = 1; continue; }
+            for (const Poly2& well : wells)
+                if (pointInPolygon(well, c)) { blocked[at(i, j)] = 1; break; }
         }
     // Every wall, inflated by the capsule's radius, with its doorway left
     // open by the width a capsule actually needs.
@@ -2459,13 +2183,18 @@ bool floorIsWalkable(const RoomPlan& rp, const Poly2& planIn, const Vec2& entry,
             for (int dj = -r; dj <= r && stack.empty(); ++dj)
                 for (int di = -r; di <= r && stack.empty(); ++di) push(ei + di, ej + dj);
     }
-    if (stack.empty()) return false;
+    if (stack.empty()) {
+        if (unreached) for (std::size_t k = 0; k < rp.rooms.size(); ++k) unreached->push_back(k);
+        return false;
+    }
     while (!stack.empty()) {
         const auto [i, j] = stack.back();
         stack.pop_back();
         push(i + 1, j); push(i - 1, j); push(i, j + 1); push(i, j - 1);
     }
-    for (const Room& r : rp.rooms) {
+    bool all = true;
+    for (std::size_t k = 0; k < rp.rooms.size(); ++k) {
+        const Room& r = rp.rooms[k];
         const Vec2 c = centroid(r.rect);
         const auto [ci, cj] = cellOf(c);
         bool reached = false;
@@ -2478,62 +2207,104 @@ bool floorIsWalkable(const RoomPlan& rp, const Poly2& planIn, const Vec2& entry,
             if (std::getenv("RT_APT_DEBUG"))
                 std::fprintf(stderr, "[walk] unreached room kind %d at %.1f %.1f (entry %.1f %.1f)\n",
                              static_cast<int>(r.kind), c.x, c.y, entry.x, entry.y);
-            return false;
+            if (!unreached) return false;
+            unreached->push_back(k);
+            all = false;
         }
     }
-    return true;
+    if (reach)
+        for (std::size_t k = 0; k < reach->size(); ++k) {
+            const auto [ci, cj] = cellOf((*reach)[k]);
+            bool reached = false;
+            for (int dj = -4; dj <= 4 && !reached; ++dj)
+                for (int di = -4; di <= 4 && !reached; ++di) {
+                    const int i = ci + di, j = cj + dj;
+                    if (i >= 0 && i < nx && j >= 0 && j < nz && seen[at(i, j)]) reached = true;
+                }
+            if (reached) continue;
+            if (!unreached) return false;
+            unreached->push_back(rp.rooms.size() + k);
+            all = false;
+        }
+    return all;
 }
 
 RoomPlan roomPlan(const Poly2& planIn, const BuildingParams& params, const CorePlan& core,
                   std::size_t blankEdge, Real inset, int storey,
-                  const Poly2& stairWell, std::size_t entranceEdge, const Vec2& stairFoot) {
+                  const Poly2& stairWell, std::size_t entranceEdge, const Vec2& stairFoot, const std::string& storeyUse) {
     const PlateTopology topo = plateTopologyFor(planIn, params, core);
-    // RT_FLOOR_PLAN=bands keeps the older office and apartment floors below, for A/B
-    static const bool bandsOnly = [] { const char* e = std::getenv("RT_FLOOR_PLAN"); return e && std::string(e) == "bands"; }();
-    if (!bandsOnly && params.residential && core.valid && storey >= 1 && !params.campus && params.civicRooms == 0) {
-        // AN APARTMENT FLOOR IS ZONED TOO (floor_zones.h, the `apartments` program): the plate cut into flats along
-        // the glass, each reaching the corridor round the core, laid out inside; any plate, curved or not. A floor
-        // that will not walk falls to the older floors below.
+    // WHAT THE FLOOR IS FOR (building_uses.lua): a use that names a floor program is laid as that program -- a new one
+    // in floor_programs.lua needs no code here; else the planner's default for its kind of floor
+    const std::string use = floorUseName(params.floorUse);
+    const bool house = use == "house";
+    auto programFor = [&](const char* fallback) -> const FloorProgram& {
+        return floorProgram(hasFloorProgram(use) ? use : std::string(fallback));
+    };
+    // THE CORE, or in a building with only a stair, its well standing in for one (no lifts: no reception)
+    auto hubFor = [&]() {
+        CorePlan hub = core;
+        if (!hub.valid && stairWell.size() >= 3) {
+            const OBB2 ob = orientedBoundingBox(stairWell);
+            hub.valid = true;
+            hub.frame.u = ob.axis[0];
+            hub.frame.v = ob.axis[1];
+            hub.length = 2 * ob.half[0];
+            hub.depth = 2 * ob.half[1];
+            hub.frame.origin = ob.center - hub.frame.u * ob.half[0] - hub.frame.v * ob.half[1];
+        }
+        return hub;
+    };
+    // A TOWER'S STORE OR RESTAURANT FLOOR (storeyUseOf): the program the storey's use names -- `department_store`
+    // (a department a floor, its tills by the lifts, fitting rooms and the stockroom against the core) or `dining`
+    // (restaurants and bars along the glass off the corridor round the core). What it cannot lay is open floor,
+    // never offices with their rooms renamed.
+    if (!storeyUse.empty() && storey >= 1 && hasFloorProgram(storeyUse)) {
+        const CorePlan hub = hubFor();
+        if (hub.valid) {
+            const Vec2 entry = core.valid ? core.frame.toWorld({core.length * 0.5, -1.1})
+                             : stairFoot.x < 1e29 ? stairFoot : centroid(stairWell);
+            RoomPlan zf = zonedFloorPlan(planIn, params, hub, inset, storey, core.valid, entry, stairWell,
+                                         floorProgram(storeyUse));
+            if (!zf.rooms.empty()) { zf.finish = interiorFinishFor(params); return zf; }
+        }
+        RoomPlan open;
+        open.topology = topo;
+        open.office = true;
+        open.finish = interiorFinishFor(params);
+        return open;
+    }
+    // A USE WITH A PROGRAM OF ITS OWN (building_uses.lua: a hotel's rooms): laid as it, round the core or the stair.
+    // (Offices and flats have their own branches below: a block of flats' fallbacks, an office's curtain wall.)
+    if (storey >= 1 && !house && use != "office" && use != "apartments" && hasFloorProgram(use)) {
+        const CorePlan hub = hubFor();
+        if (hub.valid) {
+            const Vec2 entry = core.valid ? core.frame.toWorld({core.length * 0.5, -1.1})
+                             : stairFoot.x < 1e29 ? stairFoot : centroid(stairWell);
+            RoomPlan zf = zonedFloorPlan(planIn, params, hub, inset, storey, core.valid, entry, stairWell, floorProgram(use));
+            if (!zf.rooms.empty()) { zf.finish = interiorFinishFor(params); return zf; }
+        }
+    }
+    // AN OFFICE OR APARTMENT FLOOR IS THE ZONED FLOOR (floor_zones.h, #117 item 35): one planner for every plate, deep
+    // or shallow, round a core or a stair; the planners below are the other building types' (a house, a walk-up, a
+    // campus hall, a hospital, a hall, a hotel's ring). What the zoned floor cannot lay is open floor.
+    if (params.residential && core.valid && storey >= 1 && !params.campus && params.civicRooms == 0) {
+        // the `apartments` program: flats along the glass off the corridor round the core, or off its lobby on a
+        // shallow plate, else the residents' floor
         const Vec2 entry = core.frame.toWorld({core.length * 0.5, -1.1});
-        RoomPlan zf = zonedFloorPlan(planIn, params, core, inset, storey, true, entry, stairWell, floorProgram("apartments"));
+        RoomPlan zf = zonedFloorPlan(planIn, params, core, inset, storey, true, entry, stairWell, programFor("apartments"));
         if (!zf.rooms.empty()) { zf.finish = interiorFinishFor(params); return zf; }
     }
-    if (topo == PlateTopology::Apartments) {
-        // Walk it from the corridor in front of the core's doors; a floor that fails falls back to the ring.
-        RoomPlan ap = apartmentPlan(planIn, params, core, inset, storey);
-        ap.finish = interiorFinishFor(params);
-        const Vec2 entry = core.frame.toWorld({core.length * 0.5, -1.1});
-        const bool walk = !ap.rooms.empty() && floorIsWalkable(ap, planIn, entry);
-        if (std::getenv("RT_APT_DEBUG"))
-            std::fprintf(stderr, "[apts] storey %d: %zu rooms %zu walls, walkable %d\n", storey, ap.rooms.size(),
-                         ap.walls.size(), walk ? 1 : 0);
-        if (walk) return ap;
-        // Too slim for a corridor: two flats round the core, off the lift lobby.
-        static const bool noWrap = std::getenv("RT_NO_WRAP_FLATS") != nullptr;   // A/B: the old fallbacks
-        if (!noWrap) {
-            RoomPlan wf = wrapFlatsPlan(planIn, core, inset, storey);
-            wf.finish = ap.finish;
-            const bool wwalk = !wf.rooms.empty() && floorIsWalkable(wf, planIn, entry);
-            if (std::getenv("RT_APT_DEBUG"))
-                std::fprintf(stderr, "[apts] storey %d: wrap %zu rooms, walkable %d\n", storey, wf.rooms.size(), wwalk ? 1 : 0);
-            if (wwalk) return wf;
-        }
-        RoomPlan rg = ringPlan(planIn, params, core, blankEdge, inset, storey);
-        rg.finish = interiorFinishFor(params);
-        // ringPlan names a glass tower's rooms offices; a residential tower's are studios behind drywall
-        rg.office = false;
-        for (Room& r : rg.rooms) if (r.kind == RoomKind::Office) r.kind = RoomKind::Flat;
-        for (RoomWall& w : rg.walls) w.glass = false;
-        if (rg.rooms.empty()) {   // too shallow for flats round the core too: the residents' lounge
-            RoomPlan lg = deskRowPlan(planIn, params, core, inset, storey, RoomKind::Lounge);
-            if (!lg.rooms.empty()) { lg.finish = rg.finish; return lg; }
-        }
-        return rg;
+    if (topo == PlateTopology::Apartments) {   // (the lobby storey, or a plate the zoned floor could not lay)
+        RoomPlan open;
+        open.topology = PlateTopology::Apartments;
+        open.office = false;
+        open.finish = interiorFinishFor(params);
+        return open;
     }
     const OBB2 plateBox = orientedBoundingBox(planIn);
     const Real longSide = 2 * std::max(plateBox.half[0], plateBox.half[1]);
     const bool walkupShape = topo == PlateTopology::Ring || (topo == PlateTopology::WholeFloor && longSide >= 24.0);
-    if (params.civicRooms == 6 && core.valid && officePlanFits(planIn)) {
+    if (params.civicRooms == 6 && core.valid && core.blocks.size() <= 1 && officePlanFits(planIn)) {
         // THE HOSPITAL: wards upstairs, the lobby and examination rooms on the ground. Walked from the lifts (and on
         // the ground from the doors too); a floor it cannot lay falls through to the ring.
         RoomPlan hp = hospitalPlan(planIn, params, core, inset, storey, entranceEdge);
@@ -2581,78 +2352,51 @@ RoomPlan roomPlan(const Poly2& planIn, const BuildingParams& params, const CoreP
         wu.finish = interiorFinishFor(params);
         if (!wu.rooms.empty() && floorIsWalkable(wu, planIn, centroid(stairWell), stairWell)) return wu;
     }
-    // THE CORE, or in a building with only a stair, its well standing in for one (no lifts: no reception)
-    auto hubFor = [&]() {
-        CorePlan hub = core;
-        if (!hub.valid && stairWell.size() >= 3) {
-            const OBB2 ob = orientedBoundingBox(stairWell);
-            hub.valid = true;
-            hub.frame.u = ob.axis[0];
-            hub.frame.v = ob.axis[1];
-            hub.length = 2 * ob.half[0];
-            hub.depth = 2 * ob.half[1];
-            hub.frame.origin = ob.center - hub.frame.u * ob.half[0] - hub.frame.v * ob.half[1];
-        }
-        return hub;
-    };
     // AN OFFICE FLOOR IS ZONED (floor_zones.h; Glenn, 2026-10-16: partition the floor the way a block is cut into
     // lots, tag the lots, furnish by tag): any plate, curved or not, round its core or its stair. RT_FLOOR_PLAN=bands
     // keeps the old rectangle-only office floor below, for A/B.
-    if (!bandsOnly && !params.residential && storey >= 1 &&
-        (params.officeUse || (params.curtainWall && topo == PlateTopology::Ring))) {
+    if (!params.residential && storey >= 1 && (params.officeUse || (params.curtainWall && topo == PlateTopology::Ring))) {
         const CorePlan hub = hubFor();
         if (hub.valid) {
             const Vec2 entry = core.valid ? core.frame.toWorld({core.length * 0.5, -1.1})
                              : stairFoot.x < 1e29 ? stairFoot : centroid(stairWell);
             RoomPlan zf = zonedFloorPlan(planIn, params, hub, inset, storey, core.valid, entry, stairWell,
-                                         floorProgram("office"));
+                                         programFor("office"));
             if (!zf.rooms.empty()) { zf.finish = interiorFinishFor(params); return zf; }
         }
     }
-    if (topo == PlateTopology::Ring && params.curtainWall && !params.officeUse && core.valid && planIn.size() == 4) {
-        // An OFFICE floor: open plan with corner offices, meeting rooms and a kitchenette (buildings C).
-        RoomPlan of = officePlan(planIn, params, core, inset, storey);
-        if (!of.rooms.empty()) { of.finish = interiorFinishFor(params); return of; }
+    // A BLOCK OF FLATS WITH ONLY A STAIR (not a walk-up's or a house's floor, which have their own planners): the zoned
+    // apartment floor round the stair's well, as an office building's is (#117 item 35)
+    if (params.residential && !house && !core.valid && topo != PlateTopology::WholeFloor && storey >= 1 &&
+        stairWell.size() >= 3 && !params.campus && params.civicRooms == 0) {
+        const CorePlan hub = hubFor();
+        const Vec2 entry = stairFoot.x < 1e29 ? stairFoot : centroid(stairWell);
+        RoomPlan zf = zonedFloorPlan(planIn, params, hub, inset, storey, false, entry, stairWell, programFor("apartments"));
+        if (!zf.rooms.empty()) { zf.finish = interiorFinishFor(params); return zf; }
     }
-    if (params.officeUse && !params.residential && storey >= 1 && !officePlanFits(planIn) && std::getenv("RT_OFFICE_DEBUG")) {
-        std::fprintf(stderr, "[office] storey %d: a %zu-corner plate the office floor does not lay:", storey, planIn.size());
-        for (const Vec2& v : planIn) std::fprintf(stderr, " (%.2f %.2f)", v.x, v.y);
-        std::fprintf(stderr, " core %d\n", core.valid ? 1 : 0);
+    if (params.officeUse || (params.residential && !house && topo != PlateTopology::WholeFloor)) {
+        // what the zoned floor could not lay in a workplace or a block of flats (a lobby storey, a plate a metre or
+        // two round its core, a tier with no stair): open floor, never another planner's rooms
+        RoomPlan open;
+        open.topology = topo;
+        open.office = params.officeUse;
+        open.finish = interiorFinishFor(params);
+        return open;
     }
-    if (params.officeUse && !params.residential && officePlanFits(planIn) && storey >= 1) {
-        // A WORKPLACE's floor, masonry or glass (Glenn, 2026-10-13): the office floor round its core -- or, in a
-        // building with only a stair, round the stair's well, which stands in for the core (no lifts: no reception).
-        // Walked from the lifts' lobby or the stair; a floor it cannot lay falls through to a ring of offices.
-        CorePlan hub = core;
-        if (!hub.valid && stairWell.size() >= 3) {
-            const OBB2 ob = orientedBoundingBox(stairWell);
-            hub.valid = true;
-            hub.frame.u = ob.axis[0];
-            hub.frame.v = ob.axis[1];
-            hub.length = 2 * ob.half[0];
-            hub.depth = 2 * ob.half[1];
-            hub.frame.origin = ob.center - hub.frame.u * ob.half[0] - hub.frame.v * ob.half[1];
-        }
-        if (hub.valid) {
-            RoomPlan of = officePlan(planIn, params, hub, inset, storey, core.valid);
-            of.finish = interiorFinishFor(params);
-            const Vec2 entry = core.valid ? core.frame.toWorld({core.length * 0.5, -1.1})
-                             : stairFoot.x < 1e29 ? stairFoot : centroid(stairWell);
-            bool clear = true;   // nothing set over the stair's well
-            if (stairWell.size() >= 3) {
-                Poly2 well = stairWell;
-                ensureCCW(well);
-                for (const Room& r : of.rooms) {
-                    for (const Vec2& v : r.rect) clear = clear && !pointInPolygon(well, v);
-                    for (const Vec2& v : well) clear = clear && !pointInPolygon(r.rect, v);
-                }
-            }
-            if (!of.rooms.empty() && clear && floorIsWalkable(of, planIn, entry, stairWell)) return of;
-            if (std::getenv("RT_OFFICE_DEBUG"))
-                std::fprintf(stderr, "[office] storey %d: %zu rooms, clear %d -- falls through\n", storey, of.rooms.size(), clear ? 1 : 0);
-        }
+    if (core.blocks.size() > 1 && storey >= 1) {
+        // THE RING AND THE DESK ROW plan round one core: a floor whose stairs and lifts stand apart is zoned (the
+        // office program), else open floor
+        const Vec2 entry = core.frame.toWorld({core.length * 0.5, -1.1});
+        RoomPlan zf = zonedFloorPlan(planIn, params, core, inset, storey, true, entry, stairWell, programFor("office"));
+        zf.finish = interiorFinishFor(params);
+        if (!zf.rooms.empty()) return zf;
+        RoomPlan open;
+        open.topology = topo;
+        open.office = !params.residential;
+        open.finish = zf.finish;
+        return open;
     }
-    RoomPlan rp = topo == PlateTopology::WholeFloor && !params.officeUse   // (never a house plan in a workplace)
+    RoomPlan rp = topo == PlateTopology::WholeFloor   // a house's floor, else the ring (a hotel's rooms, a civic floor)
                       ? housePlan(planIn, params, stairWell, entranceEdge, inset, storey)
                       : ringPlan(planIn, params, core, blankEdge, inset, storey);
     rp.finish = interiorFinishFor(params);

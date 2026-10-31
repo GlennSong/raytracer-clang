@@ -1,7 +1,6 @@
 #ifndef RAYTRACER_ENGINE_EROSION_H
 #define RAYTRACER_ENGINE_EROSION_H
 
-#include "../../renderer/renderer.h"   // RenderMesh
 #include "terrain.h"
 #include "noise.h"
 #include <cstdint>
@@ -25,33 +24,18 @@ struct Heightmap {
 // Bake the analytic terrain (FBM + mountain layer) into a grid at `resolution`.
 Heightmap bakeHeightmap(const TerrainParams& params, const Noise& noise);
 
-// Hydraulic (droplet) + thermal erosion. Droplets run downhill, eroding where
-// flow is fast/steep and depositing where it slows — carving drainage networks
-// (valleys, ridges). Thermal passes slump slopes past the talus angle.
+// The weather bake's last, opt-in stage (ADR-0126's "water" block; ADR-0257 retired the droplet sim that
+// once ran here): breaching, the water-and-sediment pipe model, then thermal slumping of slopes past the talus.
 struct ErosionParams {
-    // Hydraulic (droplet simulation).
-    int   droplets = 60000;
-    int   maxLifetime = 32;
-    float inertia = 0.05f;        // 0 = follow gradient, 1 = keep direction
-    float sedimentCapacity = 4.0f;
-    float depositSpeed = 0.3f;
-    float erodeSpeed = 0.3f;
-    float evaporation = 0.02f;
-    float gravity = 4.0f;
-    float minSlope = 0.01f;
-    int   erodeRadius = 3;        // brush radius (spreads erosion, avoids spikes)
     // Thermal (talus slumping).
     int   thermalIterations = 12;
     float talus = 1.2f;           // max height drop per cell before material slips
     float thermalRate = 0.5f;
-    uint32_t seed = 0;
-    // Vulkan builds only (ADR-0122): run on the GPU when the terrain asks for it (terrain "erodeGpu").
-    // Off by default so switching a Linux build to GPU erosion does not quietly re-shape every level baked
-    // on the CPU sim (the two agree statistically, not bit for bit). Apple's Metal path ignores it.
+    // Vulkan builds only (ADR-0122): run on the GPU when asked (the weather bake always asks). The CPU runs
+    // thermal alone; the two agree statistically, not bit for bit, so the backend is part of the cache key.
     bool vulkan = false;
-    // WATER AND SEDIMENT (ADR-0123; Vulkan only, 0 steps = off): the Mei et al. 2007 pipe model after the
-    // droplets -- water that pools, spreads and floods, carries sediment and drops it where it slows. Units
-    // are metres and seconds on the grid's real cell size (Heightmap::worldSize / (n - 1)).
+    // WATER AND SEDIMENT (ADR-0123; Vulkan only, 0 steps = off): the Mei et al. 2007 pipe model -- water
+    // that pools, spreads and floods, carries sediment and drops it where it slows. Units are metres and seconds on the grid's real cell size (Heightmap::worldSize / (n - 1)).
     int   waterSteps = 0;
     float waterDt = 0.0f;          // s a step; 0 = derived from the cell size
     float waterRain = 0.002f;      // m/s on land
@@ -71,20 +55,13 @@ struct ErosionParams {
     float seaLevel = -1e30f;       // below it: the sea, held at its level
 };
 
-// Runs the GPU (Metal) port when available — same model, seconds instead of
-// minutes — else the reference CPU sim. RT_CPU_EROSION=1 pins the CPU path.
+// Runs on the GPU (Vulkan) when asked and available, else thermal alone on the CPU. RT_CPU_EROSION=1 pins
+// the CPU path.
 void erode(Heightmap& hm, const ErosionParams& params);
 
-// Which backend erode() will use: "gpu-erosion-v1" (Metal compute) or "cpu".
-// Folded into content-hash cache keys so CPU- and GPU-baked terrain caches
-// never cross-contaminate, and a future kernel revision invalidates cleanly.
-// The backend a bake with `p` will run on (null: the platform default) -- part of every erosion cache key.
+// The backend a bake with `p` will run on (null: the platform default): "vk-erosion-v1" or "cpu". Folded
+// into the weathered ground's cache key, so CPU- and GPU-baked terrain never share a cache entry.
 const char* erosionBackendTag(const ErosionParams* p = nullptr);
-
-// Build a terrain mesh from a (possibly eroded) heightmap: smooth normals,
-// planar UVs, and the same height/slope/altitude vertex coloring as
-// generateTerrain. Centered on the origin.
-RenderMesh generateTerrainMesh(const Heightmap& hm);
 
 }  // namespace engine
 

@@ -63,6 +63,7 @@ void RenderSystem::onStart(FrameContext& ctx) {
     // Adopt the level's exposure (set by the level loader from JSON) rather than
     // forcing our own value — other owners (level JSON, the ImGui slider) drive it.
     exposure = ctx.view.lighting.exposure;
+    onLampLights_ = ctx.events.listen<LampLightsRequest>([this](const LampLightsRequest& r) { lampLights_ = r.on; });
 }
 
 void tierFadeBand(RenderMaterial& m, double dist, float share, bool coming) {
@@ -104,9 +105,8 @@ void RenderSystem::render(FrameContext& ctx) {
     {
         // `overlay lamplights off` kills the lamp POINT LIGHTS while leaving
         // their emissive heads lit — the live A/B for night artifacts.
-        const bool lampLightsOn = ctx.settings.getBool("lamps.lights", true);
         const Real dusk =
-            lampLightsOn ? duskRamp(ctx.view.lighting.solarElevation) : Real(0);
+            lampLights_ ? duskRamp(ctx.view.lighting.solarElevation) : Real(0);
         bool lit = false;
         SceneLighting withLamps;
         // Headlight cones staged by VehicleSystem merge on the same copy —

@@ -143,13 +143,79 @@
       "rivers": {
         "region": 9000,
         "cell": 16,
-        "riverArea": 3000000,
-        "widthMin": 12,
-        "widthMax": 40,
-        "widthK": 0.012,
+        "auto": false,
+        "lakeMinArea": 1000000000000.0,
         "bankSteep": 4.0,
         "incisionMin": 2.5,
-        "incisionMax": 4.0
+        "incisionMax": 4.0,
+        "courses": [
+          {
+            "_comment": "Off the range in the northwest, down its valley, south through the gap between the mountain city and the main city, then east across the city just north of downtown (as the Chicago River runs along the Loop) to the sea.",
+            "points": [
+              [
+                -2750,
+                3350
+              ],
+              [
+                -2400,
+                3000
+              ],
+              [
+                -2050,
+                2700
+              ],
+              [
+                -1750,
+                2300
+              ],
+              [
+                -1680,
+                1700
+              ],
+              [
+                -1650,
+                1100
+              ],
+              [
+                -1550,
+                650
+              ],
+              [
+                -1250,
+                420
+              ],
+              [
+                -700,
+                380
+              ],
+              [
+                -200,
+                430
+              ],
+              [
+                300,
+                360
+              ],
+              [
+                800,
+                300
+              ],
+              [
+                1300,
+                250
+              ],
+              [
+                2100,
+                150
+              ]
+            ],
+            "width": [
+              20,
+              90
+            ],
+            "meander": 14
+          }
+        ]
       }
     },
     "water": {
@@ -164,6 +230,12 @@
       "roughness": 0.04,
       "opacity": 0.82
     },
-    "_comment_rivers": "River test bed (ADR-0104): metro's world with its hydrology on (world.base.rivers), a small town where three rivers cross the plain to the sea. Streets that meet a river become bridges or are cut back to the banks; blocks stand back from the water."
+    "_comment_rivers": "River test bed (ADR-0104): metro's world with its hydrology on (world.base.rivers), a small town where three rivers cross the plain to the sea. Streets that meet a river become bridges or are cut back to the banks; blocks stand back from the water.",
+    "riverPlan": {
+      "maxBridgeGap": 650,
+      "maxBridge": 220,
+      "quay": 4,
+      "riversideStreets": true
+    }
   }
 }

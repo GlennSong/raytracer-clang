@@ -9,6 +9,7 @@
 #include "../src/engine/script_assets.h"                // makeModuleSource
 #include "../src/apps/citysim/scripting/vehicle_body.h"
 #include "../src/engine/scripting/vehicle_spec.h"       // loadVehicleSpec (ride-height gate)
+#include "../src/engine/procgen/vehicle/occupant.h"     // the seated rider (back bench)
 
 #include <cstdio>
 #include <cstdlib>
@@ -684,5 +685,44 @@ TEST_CASE(fleet_bodies_have_no_roof_glass_and_a_floor) {
                     b.className.c_str(), open, roofOpen, lowOpen, floor ? "yes" : "NO", b.interior.vertices.empty() ? "-" : "yes",
                     b.seeInto ? 1 : 0);
         CHECK(floor);
+    }
+}
+
+// A back seat is the model's own bench (rear_hip), not a guess (Glenn, in a cab: "He's poking out the back of the
+// car" -- the city put a back seat 0.85 m behind the driver of a model with no bench, in the boot). Where a body
+// has one it is behind the driver, inside the body, and a car's seated passenger there keeps their head under the
+// roof. (The kit sedan has none: 1.6 m from the windscreen's foot to the rear window's, so a bench 0.85 m behind
+// the front seats would be under the rear window. A cab of that model seats its rider in front.)
+TEST_CASE(fleet_back_bench_is_inside_the_car) {
+    for (const char* fleet : {"", "fleet_mixed"}) {
+        VehiclesVM v;
+        CHECK(v.loaded);
+        std::string err;
+        if (*fleet) CHECK(selectFleet(v.vm, fleet, &err));
+        int withBench = 0;
+        for (int s = 0; s < fleetSlotCount(v.vm); ++s) {
+            CarBodyRecipe body;
+            Vec3 size;
+            std::string cls;
+            if (!loadFleetCarBody(v.vm, s, body, &err) || !loadFleetCatalogueEntry(v.vm, s, size, cls, &err)) continue;
+            if (!body.hasRearHip) continue;
+            ++withBench;
+            CHECK(body.hasDriverSeat);
+            CHECK(body.rearHip.z < body.driverSeat.z - 0.5);   // behind the driver
+            Real top = -1e9, back = 1e9;
+            for (const Vertex& vx : body.mesh.vertices) {
+                top = std::max(top, static_cast<Real>(vx.position.y));
+                back = std::min(back, static_cast<Real>(vx.position.z));
+            }
+            CHECK(body.rearHip.z > back + 0.4);   // ...and short of the tail
+            const RenderMesh rider = buildSeatedOccupant(carPassenger());
+            Real head = -1e9;
+            for (const Vertex& vx : rider.vertices) head = std::max(head, static_cast<Real>(vx.position.y));
+            if (body.rearHip.y + head >= top) std::printf("    %s slot %d (%s): head %.2f over the top %.2f\n", fleet, s,
+                                                          cls.c_str(), body.rearHip.y + head, top);
+            CHECK(body.rearHip.y + head < top);   // the head under the roof
+        }
+        std::printf("    %s: %d slots with a back bench\n", *fleet ? fleet : "default", withBench);
+        CHECK(withBench > 0);
     }
 }

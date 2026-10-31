@@ -20,6 +20,29 @@
 namespace engine {
 
 void DayNightSystem::onStart(FrameContext& ctx) {
+    onDay_ = ctx.events.listen<DayNightRequest>([this](const DayNightRequest& r) { dayRequests_.push_back(r); });
+    onWeather_ = ctx.events.listen<WeatherRequest>([this](const WeatherRequest& r) {
+        weatherRequest_ = r;
+        weatherPending_ = true;
+    });
+    onClouds_ = ctx.events.listen<CloudsRequest>([this](const CloudsRequest& r) { cloudRequests_.push_back(r); });
+    if (ctx.commands != nullptr) {
+        // The clock as numbers: the sky's hour, the loop length, today's sunrise/sunset, and the city sim's own hour
+        // beside it -- with a staged cycle the two must agree (one clock). Two reads a real minute apart MEASURE the
+        // loop's rate.
+        EventBus* bus = &ctx.events;
+        answerClock_ = ctx.commands->bind("daynight?", "DayNightSystem", [this, bus](const ControlCommand&) {
+            double simHours = -1.0;
+            bus->publish(SimHourQuery{&simHours});
+            char sim[48];
+            std::snprintf(sim, sizeof(sim), " sim=%.4f", simHours);
+            return "ok " + status_ + sim;
+        });
+        answerWeather_ = ctx.commands->bind("weather?", "DayNightSystem", [this](const ControlCommand&) {
+            return "ok " + (weatherActive ? std::string(weatherKindName(weather.state)) + (weather.autoMode ? " (auto)" : "")
+                                          : std::string("off"));
+        });
+    }
     auto& s = ctx.settings;
     enabled         = s.getBool("daynight.enabled", enabled);
     cycle.timeOfDay = s.getDouble("daynight.timeOfDay", cycle.timeOfDay);
@@ -304,6 +327,66 @@ void DayNightSystem::findCityBounds(FrameContext& ctx) {
              << lightPollution_ << ", dark sky " << pollutionFalloff_ << " m out";
 }
 
+void DayNightSystem::applyRequests(FrameContext&) {
+    for (const DayNightRequest& r : dayRequests_) {
+        if (r.hour >= 0.0) {
+            // HOURS on the wire, FRACTION in the cycle (0.5 = noon). The first
+            // cut dropped hours straight in; the sun trig wraps modulo one DAY
+            // FRACTION, so `daynight 12` landed on 12 mod 1 = midnight-and-
+            // three-quarters — sunset. Every "golden hour" was found by eye,
+            // one wrong number away.
+            cycle.timeOfDay = std::fmod(r.hour, 24.0) / 24.0;
+            // Asking for an hour IS asking for the cycle's lighting: a level
+            // that booted with the cycle off (static authored sun) would
+            // otherwise take the time and change nothing — the papercut
+            // that ate the first moonlit-midnight attempt.
+            enabled = true;
+        }
+        if (r.hold >= 0) cycle.paused = r.hold > 0;   // "artistic hold", not the sim clock
+        if (r.minutes >= 0.0) cycle.dayMinutes = r.minutes;
+        if (r.day >= 1) {
+            cycle.dayOfYear = r.day;
+            enabled = true;
+        }
+        if (r.terrain >= 0) terrainShadows_ = r.terrain > 0;
+        if (r.hud >= 0) skyHud_ = r.hud > 0;
+        if (!r.chart.empty()) writeSkyChart(r.chart);
+        if (r.moon >= 0.0 || r.moonAuto) {
+            cycle.moonLock = r.moonAuto ? -1.0 : r.moon;
+            enabled = true;
+        }
+    }
+    dayRequests_.clear();
+    // `clouds ...`: the cloud deck live (coverage/density/scale/wind/enabled
+    // are otherwise state-entry-only, which made "why is the sky so heavy"
+    // answerable only by a reload). onStop persists them with the rest.
+    for (const CloudsRequest& r : cloudRequests_) {
+        if (r.enabled >= 0) cloudsEnabled = r.enabled > 0;
+        if (r.coverage >= 0.0) cloudCoverage = static_cast<float>(r.coverage);
+        if (r.density >= 0.0) cloudDensity = static_cast<float>(r.density);
+        if (r.scale >= 0.0) cloudScale = static_cast<float>(r.scale);
+        if (r.wind >= 0.0) cloudWindSpeed = static_cast<float>(r.wind);
+    }
+    cloudRequests_.clear();
+    if (!weatherPending_) return;
+    weatherPending_ = false;
+    const WeatherRequest& w = weatherRequest_;
+    WeatherKind kind;
+    if (w.state == "off") {
+        weatherActive = false;
+    } else if (w.state == "auto") {
+        weatherActive = true;
+        weather.autoMode = true;
+    } else if (weatherKindFromName(w.state, kind)) {
+        // `weather storm` eases the front in over ~40 s; `weather storm now`
+        // snaps it (screenshots, the editor's compare).
+        weatherActive = true;
+        weather.autoMode = false;
+        weather.state = kind;
+        if (w.now) weather.snap();
+    }
+}
+
 void DayNightSystem::publishStatus(FrameContext& ctx, bool active) {
     char buf[384];
     const DayNightState st = cycle.evaluate();
@@ -321,7 +404,7 @@ void DayNightSystem::publishStatus(FrameContext& ctx, bool active) {
                   ctx.view.lighting.sky.lightPollution, ridgeAtCamera_, lightBehindRidge_,
                   DayNightCycle::phaseName(st.moonAgeDays),
                   cycle.paused ? 1 : 0, active ? 1 : 0);
-    ctx.settings.setString("daynight.status", buf);
+    status_ = buf;
 }
 
 // A bound HDR environment owns the sun/sky/ambient (its sun is baked into the
@@ -343,7 +426,7 @@ void DayNightSystem::fixedUpdate(FrameContext& ctx) {
     // fraction per second, so hours = dt * speed * 24) and holds with the
     // cycle's artistic pause; the EASING keeps running regardless, so an
     // in-flight front always finishes arriving. While active, weather owns
-    // the cloud knobs — the ImGui sliders and clouds.apply rule again after
+    // the cloud knobs — the ImGui sliders and `clouds` rule again after
     // `weather off`.
     // No policy anywhere (no persisted state, the level silent): a volumetric
     // deck gets today's weather and the walk, so days differ by default.
@@ -385,122 +468,11 @@ void DayNightSystem::update(FrameContext& ctx) {
     double tod = ws.getDouble("daynight.timeOfDay", cycle.timeOfDay);
     if (tod != webLastTimeOfDay_) { cycle.timeOfDay = tod; webLastTimeOfDay_ = tod; }
 #endif
-    // Control channel one-shots (ADR-0078): `daynight <hour>` / `daynight
-    // hold|run` write these; consume-and-clear (the citysim.* idiom) so the
-    // ImGui panel and the cycle's own animation stay the owners between
-    // pokes. Unlike the web block above this does NOT re-read the persistent
-    // keys every frame — that would stomp live panel edits natively.
-    {
-        auto& cs = ctx.settings;
-        const double setTod = cs.getDouble("daynight.set", -1.0);
-        if (setTod >= 0.0) {
-            // HOURS on the wire, FRACTION in the cycle (0.5 = noon). The first
-            // cut dropped hours straight in; the sun trig wraps modulo one DAY
-            // FRACTION, so `daynight 12` landed on 12 mod 1 = midnight-and-
-            // three-quarters — sunset. Every "golden hour" was found by eye,
-            // one wrong number away.
-            cycle.timeOfDay = std::fmod(setTod, 24.0) / 24.0;
-            cs.setDouble("daynight.set", -1.0);
-            // Asking for an hour IS asking for the cycle's lighting: a level
-            // that booted with the cycle off (static authored sun) would
-            // otherwise consume the time and change nothing — the papercut
-            // that ate the first moonlit-midnight attempt.
-            enabled = true;
-        }
-        // Weather one-shot: `weather clear|fair|overcast|storm|auto|off`.
-        const std::string setWeather = cs.getString("weather.set", "");
-        if (!setWeather.empty()) {
-            cs.setString("weather.set", "");
-            WeatherKind kind;
-            if (setWeather == "off") {
-                weatherActive = false;
-            } else if (setWeather == "auto") {
-                weatherActive = true;
-                weather.autoMode = true;
-            } else {
-                // `weather storm` eases the front in over ~40 s; `weather storm
-                // now` snaps it (screenshots, the editor's compare).
-                std::string name = setWeather;
-                bool now = false;
-                const std::size_t sp = name.find(' ');
-                if (sp != std::string::npos) {
-                    now = name.substr(sp + 1) == "now";
-                    name = name.substr(0, sp);
-                }
-                if (weatherKindFromName(name, kind)) {
-                    weatherActive = true;
-                    weather.autoMode = false;
-                    weather.state = kind;
-                    if (now) weather.snap();
-                }
-            }
-        }
-        cs.setString("weather.status",
-                     weatherActive
-                         ? std::string(weatherKindName(weather.state)) +
-                               (weather.autoMode ? " (auto)" : "")
-                         : "off");
-        const double setHold = cs.getDouble("daynight.setPaused", -1.0);
-        if (setHold >= 0.0) {
-            cycle.paused = setHold > 0.5;   // "artistic hold", not the sim clock
-            cs.setDouble("daynight.setPaused", -1.0);
-        }
-        // `daynight minutes <n>`: the loop length, live (0 freezes the sun).
-        const double setMinutes = cs.getDouble("daynight.setMinutes", -1.0);
-        if (setMinutes >= 0.0) {
-            cycle.dayMinutes = setMinutes;
-            cs.setDouble("daynight.setMinutes", -1.0);
-        }
-        // `daynight day <1-365>`: the calendar day (season + moon follow).
-        const double setDay = cs.getDouble("daynight.setDay", -1.0);
-        if (setDay >= 1.0) {
-            cycle.dayOfYear = static_cast<int>(setDay);
-            cs.setDouble("daynight.setDay", -1.0);
-            enabled = true;
-        }
-        // `daynight terrain on|off`: the terrain horizon shadows.
-        const double setTerrain = cs.getDouble("daynight.setTerrain", -1.0);
-        if (setTerrain >= 0.0) {
-            terrainShadows_ = setTerrain > 0.5;
-            cs.setDouble("daynight.setTerrain", -1.0);
-        }
-        // `daynight hud on|off`: the sky HUD.
-        const double setHud = cs.getDouble("daynight.setHud", -1.0);
-        if (setHud >= 0.0) {
-            skyHud_ = setHud > 0.5;
-            cs.setDouble("daynight.setHud", -1.0);
-        }
-        // `daynight chart <path>`: write the day's sky chart now.
-        const std::string chartPath = cs.getString("daynight.chart", "");
-        if (!chartPath.empty()) {
-            cs.setString("daynight.chart", "");
-            writeSkyChart(chartPath);
-        }
-        // `daynight moon <age-days>|auto`: hold the moon's age, or free it.
-        // -2 = auto (the calendar), since -1 is the consumed sentinel.
-        const double setMoon = cs.getDouble("daynight.setMoon", -1.0);
-        if (setMoon >= 0.0 || setMoon <= -2.0) {
-            cycle.moonLock = setMoon >= 0.0 ? setMoon : -1.0;
-            cs.setDouble("daynight.setMoon", -1.0);
-            enabled = true;
-        }
-        // `set clouds.<knob> <v>` then `clouds.apply 1`: re-read the cloud
-        // deck live (coverage/density/scale/wind/enabled are otherwise
-        // state-entry-only, which made "why is the sky so heavy" answerable
-        // only by a reload).
-        if (cs.getDouble("clouds.apply", 0.0) > 0.5) {
-            cs.setDouble("clouds.apply", 0.0);
-            cloudsEnabled = cs.getBool("clouds.enabled", cloudsEnabled);
-            cloudCoverage =
-                static_cast<float>(cs.getDouble("clouds.coverage", cloudCoverage));
-            cloudDensity =
-                static_cast<float>(cs.getDouble("clouds.density", cloudDensity));
-            cloudScale =
-                static_cast<float>(cs.getDouble("clouds.scale", cloudScale));
-            cloudWindSpeed = static_cast<float>(
-                cs.getDouble("clouds.windSpeed", cloudWindSpeed));
-        }
-    }
+    // The cycle's requests (DayNightRequest / WeatherRequest, ADR-0253),
+    // applied here so the ImGui panel and the cycle's own animation stay the
+    // owners between pokes. They work while the sim clock is paused (update
+    // still runs): the "freeze golden hour, keep framing" workflow.
+    applyRequests(ctx);
 
     // Pushing current state into the view every frame (cheap) keeps panel
     // Level policy (DayNightConfig): a level that authors a static sun turns
@@ -706,7 +678,7 @@ void DayNightSystem::applyClouds(FrameContext& ctx) {
     // one step — see renderer.h), so the 0-1 artistic knob maps into a narrow
     // physical band around that tuning. The level's authored params are
     // captured once and SEED the knobs (authored look wins at boot; the
-    // knobs, clouds.apply, and weather move it live from there).
+    // knobs, `clouds`, and weather move it live from there).
     auto& vc = ctx.view.lighting.volumetricClouds;
     if (vc.enabled) {
         if (!cloudBaseCaptured_) {

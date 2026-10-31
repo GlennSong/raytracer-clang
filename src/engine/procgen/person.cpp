@@ -55,8 +55,9 @@ RenderMesh buildStandingPerson(Real swing, int outfit) {
     return m;
 }
 
-RenderMesh buildPosedPerson(const BodyPose& pose, int outfit) {
-    const PersonOutfit& o = personOutfit(outfit);
+RenderMesh buildPosedPerson(const BodyPose& pose, int outfit) { return buildPosedPerson(pose, personOutfit(outfit)); }
+
+RenderMesh buildPosedPerson(const BodyPose& pose, const PersonOutfit& o) {
     RenderMesh m;
     const std::array<PartTransform, BlockBody::kParts> blocks = poseBlocks(pose);
     for (int i : {BlockBody::Torso, BlockBody::Head}) {
@@ -94,14 +95,29 @@ BodyPose walkBodyPose(Real swing) {
     pose.armL = pitched(armL);
     pose.armR = pitched(armR);
     // the knee: soft under the body, folding as the leg trails (the push-off and the swing through)
-    const Real kMax = 0.55;   // the cycle's reach (city_meshes kMaxSwing)
-    auto knee = [&](Real a) { return 0.06 + 0.7 * std::clamp(a / kMax, Real(0), Real(1)); };
-    auto elbow = [&](Real a) { return 0.18 + 0.4 * std::clamp(-a / (0.7 * kMax), Real(0), Real(1)); };
+    auto knee = [&](Real a) { return 0.06 + 0.7 * std::clamp(a / kMaxSwing, Real(0), Real(1)); };
+    auto elbow = [&](Real a) { return 0.18 + 0.4 * std::clamp(-a / (0.7 * kMaxSwing), Real(0), Real(1)); };
     pose.kneeL = knee(legL);
     pose.kneeR = knee(legR);
     pose.elbowL = elbow(armL);
     pose.elbowR = elbow(armR);
     return pose;
+}
+
+bool advanceStride(Real& stridePhase, Real speed, Real dt) {
+    if (speed <= kWalkAnimMinSpeed) return false;
+    stridePhase += speed * dt / kStrideLength;
+    stridePhase -= std::floor(stridePhase);
+    return true;
+}
+
+Real strideSwing(Real stridePhase) { return kMaxSwing * std::sin(2.0 * 3.14159265358979 * stridePhase); }
+
+Real walkPoseSwing(int pose) { return strideSwing(static_cast<Real>(pose) / kWalkPoses); }
+
+int walkPoseIndex(Real& stridePhase, Real speed, Real dt) {
+    if (!advanceStride(stridePhase, speed, dt)) return 0;
+    return static_cast<int>(stridePhase * kWalkPoses) % kWalkPoses;
 }
 
 }  // namespace engine

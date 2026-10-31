@@ -117,6 +117,7 @@ private:
     void registerCityVerbs();
     void registerGroundVerbs();
     void registerEngineVerbs();
+    void registerEventVerbs();
     void setDebugOverlay(bool on);   // the grave key's push/pop, callable
     void reconcileFramebuffer();
     void renderFrame();
@@ -166,6 +167,8 @@ private:
     AudioEngine audioEngine;
     InputMap inputMap;
     KeyCode pendingTapRelease_ = KeyCode::Unknown;   // `tap`: release next frame
+    std::string pendingTap_, pendingHold_;   // a KeyTapRequest's key / a KeyHoldRequest's "key seconds", for the frame loop
+    EventBus::Subscription onTap_, onHold_;
     std::vector<std::pair<KeyCode, double>> heldKeys_;   // `hold`: sim seconds left
     double heldMouseLeft_ = 0;                           // `hold MouseLeft <s>`: the fire button, sim seconds left
     std::string burstPrefix_;   // `shots`: every frame dumped to <prefix>_NNN.png
@@ -180,11 +183,21 @@ private:
     std::vector<XrInputEvent> xrInputScratch;  // per-frame drain buffer
     double xrPinchSeconds = 0.0;               // current pinch hold duration
     RenderView view;
+    // Every socket verb, by name (ADR-0253). Declared before the state stack so it outlives the systems: a
+    // system or script that added verbs removes them as it goes.
+    ControlCommands commandTable;
     StateStack stateStack;
     bool debugOverlayActive = false;
     ControlChannel controlChannel;   // ADR-0078; inert unless the host enables
-    ControlCommands commandTable;    // every socket verb, by name (ADR-0253)
     std::function<std::unique_ptr<AppState>()> controlReloadFactory;
+    // `watch <event>` (ADR-0253): each named event the socket's client asked to see, posted to it as it happens.
+    // A watch belongs to one connection and ends when another takes the socket.
+    struct EventWatch {
+        std::string name;
+        EventBus::SubscriptionId id;
+        uint64_t client;
+    };
+    std::vector<EventWatch> eventWatches;
     uint64_t frameCounter = 0;       // monotonic, for the channel's `info`
 
     std::string settingsFile;

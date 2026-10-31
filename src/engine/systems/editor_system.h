@@ -5,7 +5,6 @@
 #include "camera_system.h"
 #include "../app_state.h"
 #include "../editor_bridge.h"
-#include "../path_edit_tool.h"   // road/curve handle dragging in the viewport (ADR-0050)
 #include "../undo_stack.h"
 #include <functional>
 #include <memory>
@@ -16,31 +15,6 @@ namespace engine {
 
 class Renderer;
 
-// Road sub-object editing (ADR-0049), for the viewport's node handles. The engine
-// owns the data + regen; the shell owns only the handle drawing and mouse picking.
-//   roadNodeHandles  -> a world position per control node (seated on the road), so
-//                       the viewport can draw a draggable handle at each.
-//   moveRoadNode     -> drop a node at a new world XZ: updates the RoadEntity, rebuilds
-//                       the carriageway mesh, and keeps the saved recipe in sync.
-std::vector<Vec3> roadNodeHandles(World& world, Entity e);
-bool moveRoadNode(World& world, Entity e, int node, const Vec3& worldPos, Renderer& renderer);
-// Spline tangent handles (ADR-0049): a world point per node offset along its current
-// tangent (drawn distinct from the node handles). Dragging one sets that knot's
-// tangent (handle - node), shaping the curve, and regenerates. Every road is a spline,
-// so every node carries a tangent handle.
-std::vector<Vec3> roadTangentHandles(World& world, Entity e);
-bool moveRoadTangent(World& world, Entity e, int node, const Vec3& worldPos, Renderer& renderer);
-// Road topology editing for the viewport (ADR-0049). Each regenerates the mesh +
-// syncs the saved recipe. nearestRoadEdge picks which edge a world point is over
-// (-1 = none within maxDist), so the shell can route a click on the road to a split;
-// splitRoadEdge / extendRoad return the new node's index (to select it); deleteRoadNode
-// removes a node + its edges.
-int  nearestRoadEdge(World& world, Entity e, const Vec3& worldPos, double maxDist);
-bool setRoadEdgeWidth(World& world, Entity e, int edge, double width, Renderer& renderer);
-int  splitRoadEdge(World& world, Entity e, int edge, const Vec3& worldPos, Renderer& renderer);
-int  extendRoad(World& world, Entity e, int fromNode, const Vec3& worldPos, Renderer& renderer);
-bool deleteRoadNode(World& world, Entity e, int node, Renderer& renderer);
-
 // The edit-mode workhorse (docs/edit-mode-plan.md): click-to-select with
 // bounding-sphere picking, an ImGuizmo move/rotate/scale gizmo, an inspector
 // for the selected entity (transform, material, shape, physics spec), an Add
@@ -49,7 +23,8 @@ bool deleteRoadNode(World& world, Entity e, int node, Renderer& renderer);
 // level document, and Play saves it before swapping to the game state.
 class EditorSystem : public System {
 public:
-    using PlayFactory = std::function<std::unique_ptr<AppState>()>;
+    // fromHere: start the player at the editor's view (Play Here) instead of the level's spawn.
+    using PlayFactory = std::function<std::unique_ptr<AppState>(bool fromHere)>;
 
     // `bridge`, when given, connects this system to a native shell (the Qt
     // editor): selection is shared and the shell's panels read the world
@@ -131,10 +106,6 @@ private:
     void drawGizmo(FrameContext& ctx);
     void drawGrid(FrameContext& ctx) const;
     void drawSelectionMarker(FrameContext& ctx) const;
-    // Road handle dragging: rebind the tool to the selected road and run the click/drag
-    // this frame; returns true when it grabbed a handle (so the click isn't also a pick).
-    bool updatePathEdit(FrameContext& ctx, bool click);
-    void drawPathHandles(FrameContext& ctx) const;
     void drawGroupMarkers(FrameContext& ctx) const;
     void drawCameraFrustums(FrameContext& ctx) const;
 
@@ -153,13 +124,6 @@ private:
     Entity lastNoticedSelection;   // edge detection for SelectionChanged
     std::size_t selectionSig = 0;  // folds the whole set for change detection
     bool prevMouseLeft = false;
-    // Viewport path editing (ADR-0050): the tool keeps drag state across frames; the
-    // source is re-seated when the selected road (or its net pointer) changes.
-    PathEditTool pathTool;
-    std::unique_ptr<RoadHandleSource> roadSource;
-    Entity pathEditEntity;
-    struct RoadEntity* pathRoadNet = nullptr;
-    bool pathWasDragging = false;
     bool gizmoBusy = false;     // ImGuizmo hovered/dragging (blocks picking)
     bool gizmoWasUsing = false; // drag-edge detection for undo recording
     Transform gizmoDragStart;

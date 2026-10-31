@@ -1,4 +1,5 @@
 #include "parcel.h"
+#include "../../../proc_rng.h"
 
 #include <algorithm>
 #include <cmath>
@@ -6,15 +7,8 @@
 namespace engine {
 namespace {
 
-struct Rng {
-    uint32_t s;
-    explicit Rng(uint32_t seed) : s(seed ? seed : 0x2545f491u) {}
-    uint32_t next() { s ^= s << 13; s ^= s >> 17; s ^= s << 5; return s; }
-    Real unit() { return (next() >> 8) * (1.0 / 16777216.0); }
-};
-
 // Recursively bisect `poly` along the long OBB axis. Appends finished lots.
-void subdivide(const Poly2& poly, const ParcelParams& p, Rng& rng,
+void subdivide(const Poly2& poly, const ParcelParams& p, ProcRng& rng,
                std::vector<Poly2>& out, int depth) {
     Real a = area(poly);
     if (poly.size() < 3 || a < p.minArea || depth > 24) {
@@ -38,7 +32,7 @@ void subdivide(const Poly2& poly, const ParcelParams& p, Rng& rng,
     // Split perpendicular to the long axis, through the center with a little jitter,
     // so we cut the lot into two shorter halves that still front the same streets.
     Vec2 dirLong = obb.axis[la];
-    Real offset = (rng.unit() - 0.5) * 2.0 * p.jitter * longHalf;
+    Real offset = (rng.next() - 0.5) * 2.0 * p.jitter * longHalf;
     Vec2 splitPoint = obb.center + dirLong * offset;
     // The cut line runs along the short axis (perpendicular to the long axis).
     Vec2 cutDir = obb.axis[1 - la];
@@ -160,7 +154,7 @@ Poly2 mergeFrontageRuns(const Poly2& in, Real tol, Real maxEdge) {
     return out;
 }
 
-bool parcelFrontage(const Poly2& b, const ParcelParams& p, Rng& rng, int district,
+bool parcelFrontage(const Poly2& b, const ParcelParams& p, ProcRng& rng, int district,
                     std::vector<Lot>& out, ParcelReject* rj) {
     const int n = static_cast<int>(b.size());
     if (n < 3) return false;
@@ -184,12 +178,12 @@ bool parcelFrontage(const Poly2& b, const ParcelParams& p, Rng& rng, int distric
     for (int ei = 0; ei < n; ++ei) {
         const Real L = len[ei];
         if (L < Real(0.55) * fw) {                           // keep the stream
-            rng.unit();
+            rng.next();
             if (rj) ++rj->edgeShort;
             continue;
         }
         if (p.isFrontage && !p.isFrontage(b[ei], b[(ei + 1) % n])) {   // a freeway, not a street
-            rng.unit();
+            rng.next();
             if (rj) ++rj->notStreet;
             continue;
         }
@@ -204,7 +198,7 @@ bool parcelFrontage(const Poly2& b, const ParcelParams& p, Rng& rng, int distric
         const Vec2 mnB = nrm - inr[ni];        // keep dot(q-B, mnB) <= 0
         // Slot the edge into ~frontWidth lots (a light per-edge width jitter
         // so streets don't read as one metronome rhythm).
-        const Real wj = fw * (Real(1) + (rng.unit() - Real(0.5)) * Real(0.25));
+        const Real wj = fw * (Real(1) + (rng.next() - Real(0.5)) * Real(0.25));
         const int slots = std::max(1, static_cast<int>(std::lround(L / wj)));
         const Real w = L / slots;
         for (int k = 0; k < slots; ++k) {
@@ -436,7 +430,7 @@ std::vector<Lot> subdivideBlock(const Poly2& block, const ParcelParams& params,
     Poly2 b = mergeFrontageRuns(block, Real(0.75), Real(70.0));
     ensureCCW(b);
 
-    Rng rng(params.seed ? params.seed : 1u);
+    ProcRng rng(params.seed);
 
     // FRONTAGE-FIRST (v2 step 10): the primary path — every lot faces a street,
     // the deep core becomes a reachable court. Falls back to bisection for

@@ -1,8 +1,8 @@
 {
-  "_comment": "Piedmont (8km-city plan P3): the full city on the P1/P2 sandbox's world — terrain + multi-site road recipe copied VERBATIM from piedmont_roads.json (same seeds, so the erosion/conform caches hit), plus the citysim block that builds it: lots + buildings on the metro's blocks, per-hub-cluster civic anchors (each town gets its school + church), piedmont-scale parcel grain (150 m+ blocks parcel bigger lots), and the P5 scattering sky + volumetric clouds as its flagship consumer.",
+  "_comment": "Planned (ADR-0092 planner): assets/city_plans/piedmont.json is the brief, on this level's own terrain; city_plan scene turns it into the lanes scene this level names. The old grown metro this level used to carry retired with its generator.",
   "citysim": {
     "_comment_clock": "8 km world: agents move at real m/s while the clock runs at hoursPerSecond, so 0.05 (180x) made a 3 km commute cost 12.5 in-world hours and a 50 m walk 1.8 h. 0.004 gives a 100-minute day and a ~1 h commute.",
-    "_comment_dormancy": "P5: agents past ~1.2 km stop being simulated entirely and are rebuilt from their schedule when the player returns. Their parked cars stay put — dormancy strips the agent, never the vehicle.",
+    "_comment_dormancy": "P5: agents past ~1.2 km stop being simulated entirely and are rebuilt from their schedule when the player returns. Their parked cars stay put \u2014 dormancy strips the agent, never the vehicle.",
     "adaptiveRate": true,
     "buildChance": 0.9,
     "buildLots": true,
@@ -10,13 +10,13 @@
     "debugWidgets": false,
     "detailDistance": 300,
     "dormancy": true,
-    "downtownRadius": 300,
+    "downtownRadius": 403.2500572213321,
     "facadeDistance": 900,
     "hoursPerSecond": 0.004,
     "hubRadius": 320,
     "localHz": 30.0,
     "maxWalkerBodies": 200,
-    "midtownRadius": 650,
+    "midtownRadius": 800.0,
     "parcel": {
       "courtMinArea": 500,
       "frontWidth": 18,
@@ -34,7 +34,48 @@
     "sidewalk": 4.0,
     "tiered": true,
     "vehicles": "vehicles.lua",
-    "wander": false
+    "wander": false,
+    "districts": {
+      "hubs": [
+        {
+          "at": [
+            900.0,
+            900.0
+          ],
+          "kind": "financial"
+        },
+        {
+          "at": [
+            900.0,
+            1540.0
+          ],
+          "kind": "commercial"
+        },
+        {
+          "at": [
+            260.0,
+            380.0
+          ],
+          "kind": "residential"
+        },
+        {
+          "_place": "town",
+          "at": [
+            2658.0,
+            2970.0
+          ],
+          "kind": "oldtown"
+        },
+        {
+          "_place": "town",
+          "at": [
+            -514.0,
+            -1181.0
+          ],
+          "kind": "oldtown"
+        }
+      ]
+    }
   },
   "dayNight": {
     "enabled": false
@@ -50,7 +91,7 @@
       ],
       "road": {
         "builder": "lanes",
-        "graph": "assets/lanelab/converted/piedmont_lanelab.json",
+        "graph": "assets/lanelab/planned/piedmont_lanelab.json",
         "sidewalks": {
           "arterial": 6.0,
           "collector": 5.5,
@@ -149,14 +190,42 @@
     "cdlod": {
       "gridRes": 32,
       "numLods": 8,
-      "worldHalf": 4000
+      "worldHalf": 4000,
+      "baked": true
     },
     "erode": true,
-    "erodeDroplets": 3000000,
-    "erodeRadius": 4,
-    "erodeRes": 2048,
-    "erodeTalus": 1.0,
-    "erodeThermal": 14,
+    "weather": {
+      "res": 4096,
+      "grow": {
+        "res": 512,
+        "iterations": 250,
+        "blur": 240
+      },
+      "water": {
+        "steps": 0,
+        "breach": 0,
+        "thermal": 0
+      },
+      "roughness": 0.6,
+      "shapeKeep": 1.0,
+      "massifs": 0.6,
+      "shapeScale": 600,
+      "massifScale": 1000,
+      "peaks": {
+        "height": 200,
+        "spacing": 900,
+        "uplift": 1.0
+      },
+      "refine": {
+        "detail": 40,
+        "roughness": 0.8,
+        "wavelength": 8,
+        "slopeDamp": 0.3,
+        "incise": 0.012,
+        "iterations": 20,
+        "stochasticFrom": 4096
+      }
+    },
     "heightScale": 15,
     "material": {
       "albedo": [

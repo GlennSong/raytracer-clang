@@ -20,6 +20,21 @@ Poly2 rectOf(const SiteFrame& f, Real u0, Real v0, Real u1, Real v1) {
 
 Poly2 CoreShaft::rect() const { return rectOf(frame, 0, 0, width, depth); }
 Poly2 CorePlan::rect() const { return rectOf(frame, 0, 0, length, depth); }
+Poly2 CoreBlock::rect() const { return rectOf(frame, 0, 0, length, depth); }
+std::vector<CoreBlock> CorePlan::allBlocks() const {
+    if (!valid) return {};
+    if (!blocks.empty()) return blocks;
+    CoreBlock b;
+    b.frame = frame;
+    b.length = length;
+    b.depth = depth;
+    return {b};
+}
+std::vector<Poly2> CorePlan::rects() const {
+    std::vector<Poly2> out;
+    for (const CoreBlock& b : allBlocks()) out.push_back(b.rect());
+    return out;
+}
 
 int hoistwaysFor(int floors) {
     if (floors <= 8) return 1;
@@ -43,7 +58,7 @@ bool wantsCore(const BuildingParams& params) {
 // THE CORE IS THE PRESET (issue #105 step 3a): corePreset lays the shafts out, this reads them back. Every
 // cored building is byte-identical to the layout that lived here until 2026-10-15.
 CorePlan corePlan(const Poly2& plan, const std::vector<MassTier>& tiers, const BuildingParams& params, std::size_t entranceEdge) {
-    return asCorePlan(corePreset(plan, tiers, params, entranceEdge));
+    return asCorePlan(circulationOf(plan, tiers, params, entranceEdge));
 }
 
 CorePlan coreFor(const Poly2& plan, const BuildingParams& params, std::size_t entranceEdge) {
@@ -243,10 +258,18 @@ void stairStorey(CoreMeshes& out, RenderMesh* col, const CoreStair& st, Real y0,
 // sealed by construction.
 // `target` is the mesh the ring's faces go to (the storeys' drywall; the bulkhead's shell); `hoistwayDoors` false
 // cuts the stairs' doors only (the bulkhead: no hoistway opens onto the roof).
-void coreRing(RenderMesh& target, RenderMesh* col, const CorePlan& core, Real y0, Real h, const Vec3& paint,
-              bool hoistwayDoors = true) {
-    const Real w = kWall, L = core.length, D = core.depth;
-    const SiteFrame& f = core.frame;
+// One ring a block: `bi` picks it, its doors the shafts standing in it.
+static bool blockHasStair(const CorePlan& core, std::size_t bi) {
+    for (const CoreStair& st : core.stairs)
+        if (static_cast<std::size_t>(st.shaft.block) == bi) return true;
+    return false;
+}
+
+void coreRing(RenderMesh& target, RenderMesh* col, const CorePlan& core, std::size_t bi, Real y0, Real h,
+              const Vec3& paint, bool hoistwayDoors = true) {
+    const CoreBlock blk = core.allBlocks()[bi];
+    const Real w = kWall, L = blk.length, D = blk.depth;
+    const SiteFrame& f = blk.frame;
     auto W = [&](Real u, Real v) { const Vec2 p = f.toWorld({u, v}); return Vec3(p.x, 0, p.y); };
     const Vec3 nFront(-f.v.x, 0, -f.v.y), nBack(f.v.x, 0, f.v.y);
     const Vec3 nRight(f.u.x, 0, f.u.y), nLeft(-f.u.x, 0, -f.u.y);
@@ -258,7 +281,7 @@ void coreRing(RenderMesh& target, RenderMesh* col, const CorePlan& core, Real y0
     struct Hole { Real u0, u1, top; };
     std::vector<Hole> holes;
     auto door = [&](const CoreShaft& s) {
-        if (s.doorWidth <= 0) return;
+        if (s.doorWidth <= 0 || static_cast<std::size_t>(s.block) != bi) return;
         const Real su = f.toFrame(s.frame.origin).x;
         holes.push_back({su + s.doorX - s.doorWidth * 0.5, su + s.doorX + s.doorWidth * 0.5,
                          std::min(s.doorHeight, h - 0.3)});
@@ -281,14 +304,26 @@ void emitCoreShaftWalls(CoreMeshes& out, RenderMesh* colliderOut, const CorePlan
     const Real y0 = baseY + sp.y0, h = sp.h;
     const Vec3 paint = interiorPaintFor(params);
     const Vec3 shaftDark(0.34, 0.34, 0.36);
-    coreRing(out.drywall, colliderOut, core, y0, h, paint);
+    for (std::size_t bi = 0; bi < core.allBlocks().size(); ++bi) coreRing(out.drywall, colliderOut, core, bi, y0, h, paint);
     for (const CoreShaft& hw : core.hoistways) shaftWalls(out, colliderOut, core, hw, y0, h, paint, shaftDark);
     for (const CoreStair& st : core.stairs) shaftWalls(out, colliderOut, core, st.shaft, y0, h, paint, paint);
-    if (core.hasService) shaftWalls(out, colliderOut, core, core.service, y0, h, paint, paint);
+    for (const CoreShaft& sv : core.services) shaftWalls(out, colliderOut, core, sv, y0, h, paint, paint);
 }
 
 bool coreReachesRoof(const BuildingParams& params) {
     return params.openDoorway && params.roofStyle == BuildingParams::RoofStyle::Flat && wantsCore(params);
+}
+
+std::vector<Poly2> coreBulkheads(const CorePlan& core, Real grow) {
+    std::vector<Poly2> out;
+    if (!core.valid) return out;
+    const std::vector<CoreBlock> blocks = core.allBlocks();
+    for (std::size_t bi = 0; bi < blocks.size(); ++bi) {
+        if (!blockHasStair(core, bi)) continue;
+        const Poly2 b = grow == 0 ? blocks[bi].rect() : offsetPlanPublic(blocks[bi].rect(), -grow);
+        if (b.size() >= 3) out.push_back(b);
+    }
+    return out;
 }
 
 std::vector<Poly2> coreRoofHoles(const CorePlan& core) {
@@ -318,18 +353,28 @@ void emitCoreBulkhead(CoreMeshes& out, RenderMesh* colliderOut, const CorePlan& 
     // drywall, the lid a slab a wall thickness past the core -- are the exterior mesh's, permanent (`walls`); the
     // streamed interior adds their colliders and each stair's roof landing with the guard across its well (the
     // top storey's own rule), the same split emitCoreShaftWalls / emitCoreStorey make for the storeys.
+    // (one bulkhead a block with a stair in it: a lift bank standing on its own stays under the roof slab)
     const Real w = kWall;
-    const Poly2 lid = rectOf(core.frame, -w, -w, core.length + w, core.depth + w);
+    const std::vector<CoreBlock> blocks = core.allBlocks();
+    auto lidOf = [&](std::size_t bi) {
+        const CoreBlock& blk = blocks[bi];
+        return rectOf(blk.frame, -w, -w, blk.length + w, blk.depth + w);
+    };
     if (walls) {
-        coreRing(out.shell, nullptr, core, deckY, h, shellCol, /*hoistwayDoors=*/false);
+        for (std::size_t bi = 0; bi < blocks.size(); ++bi)
+            if (blockHasStair(core, bi)) coreRing(out.shell, nullptr, core, bi, deckY, h, shellCol, /*hoistwayDoors=*/false);
         for (const CoreStair& st : core.stairs) shaftWalls(out, nullptr, core, st.shaft, deckY, h, paint, paint);
-        MeshBuilder::emitPlanPrism(out.shell, lid, {}, deckY + h, deckY + h + 0.15, shellCol * 0.8);
+        for (std::size_t bi = 0; bi < blocks.size(); ++bi)
+            if (blockHasStair(core, bi)) MeshBuilder::emitPlanPrism(out.shell, lidOf(bi), {}, deckY + h, deckY + h + 0.15, shellCol * 0.8);
         return;
     }
     CoreMeshes scratch;
-    coreRing(scratch.shell, colliderOut, core, deckY, h, shellCol, /*hoistwayDoors=*/false);
+    for (std::size_t bi = 0; bi < blocks.size(); ++bi)
+        if (blockHasStair(core, bi)) coreRing(scratch.shell, colliderOut, core, bi, deckY, h, shellCol, /*hoistwayDoors=*/false);
     for (const CoreStair& st : core.stairs) shaftWalls(scratch, colliderOut, core, st.shaft, deckY, h, paint, paint);
-    if (colliderOut) MeshBuilder::emitPlanPrism(*colliderOut, lid, {}, deckY + h, deckY + h + 0.15, shellCol);
+    if (colliderOut)
+        for (std::size_t bi = 0; bi < blocks.size(); ++bi)
+            if (blockHasStair(core, bi)) MeshBuilder::emitPlanPrism(*colliderOut, lidOf(bi), {}, deckY + h, deckY + h + 0.15, shellCol);
     for (const CoreStair& st : core.stairs)
         stairStorey(out, colliderOut, st, deckY - 0.05, h, /*flightsUp=*/false, /*landing=*/true, floorCol,
                     stairCol, paint);

@@ -126,8 +126,20 @@ TEST_CASE(winding_sdf_and_rock_face_out) {
     Noise rockNoise(11);
     RockParams rp;
     checkSolid(generateRock(rp, rockNoise), "generateRock");
+    // The SDF rock's cuts are spheres subtracted: a sharp concave crease, where a dual contour's vertex can fold a
+    // triangle past its gradient normals (a quarter of seeds, a few triangles each; ADR-0265). Its winding is still
+    // right -- none is reversed -- so over 60 seeds: none flipped, and crease folds a handful in thousands.
     RockSdfParams rsp;
-    checkSolid(generateRockSdf(rsp, 11), "generateRockSdf");
+    long folds = 0, tris = 0;
+    for (uint32_t seed = 1; seed <= 60; ++seed) {
+        const mesh_invariants::Audit au = mesh_invariants::audit(generateRockSdf(rsp, seed));
+        CHECK(au.tris > 0);
+        CHECK(au.flipped == 0);
+        folds += au.inward;
+        tris += au.tris;
+    }
+    std::printf("    winding: generateRockSdf over 60 seeds: %ld crease folds in %ld triangles, none reversed\n", folds, tris);
+    CHECK(folds * 1000 < tris);
 }
 
 // --- Trees (branch tubes; leaves are double-sided, excluded) ----------------
@@ -140,11 +152,10 @@ TEST_CASE(winding_tree_branches_face_out) {
 // --- City: shape grammar, road mesh, street furniture -----------------------
 TEST_CASE(winding_city_geometry_faces_out) {
     Poly2 footprint = {{0, 0}, {18, 0}, {18, 18}, {0, 18}};
-    Scope s = scopeFromFootprint(footprint, 0.0, 24.0);
     BuildingParams bp;
     bp.floors = 6;
     bp.seed = 3;
-    BuildingMesh bm = growBuilding(s, bp);
+    BuildingMesh bm = growPlanBuilding(footprint, bp, 0.0);
     CHECK(!bm.parts.empty());
     for (size_t i = 0; i < bm.parts.size(); ++i)
         checkSolid(bm.parts[i], "building part");
@@ -224,17 +235,12 @@ TEST_CASE(mesh_audit_every_building_recipe) {
             if (r.massing == BuildingRecipe::Massing::Park || r.massing == BuildingRecipe::Massing::Plaza) continue;
             std::vector<Poly2> plans = {rectPlan(24, 20), lPlan(28, 24)};
             for (const Poly2& lp : lotPlans()) plans.push_back(lp);
+            if (r.massing == BuildingRecipe::Massing::Pagoda)   // the pagoda stands on its square, as in the city
+                for (Poly2& plan : plans) plan = pagodaPlan(plan, r.params.floors);
             for (const Poly2& plan : plans) {
+                if (plan.size() < 3) continue;
                 Audit a = auditBuilding(growPlanBuilding(plan, r.params, 0.0), byPart);
                 a.add(auditBuilding(growInterior(plan, r.params, 0.0), byPart));
-                byRecipe[name].add(a);
-                total.add(a);
-            }
-            if (r.massing == BuildingRecipe::Massing::BoxMass) {
-                Scope s;
-                s.origin = Vec3(-10, 0, -8);
-                s.size = Vec3(20, r.params.floors * 3.5, 16);
-                const Audit a = auditBuilding(growBuilding(s, r.params), byPart);
                 byRecipe[name].add(a);
                 total.add(a);
             }

@@ -7,7 +7,7 @@
 
 #include <algorithm>
 #include <cmath>
-#include <random>
+#include "../../proc_rng.h"
 
 namespace engine {
 namespace sfx {
@@ -123,9 +123,9 @@ std::vector<float> render(const Recipe& r, uint32_t sampleRate, uint32_t seed, d
     const double rate = static_cast<double>(sampleRate);
     const auto count = static_cast<size_t>(rate * r.length * scale);
     std::vector<float> out(count, 0.0f);
-    std::mt19937 rng(seed * 2246822519u + 3266489917u);
-    std::uniform_real_distribution<double> uni(-1.0, 1.0);
-    std::uniform_real_distribution<double> jit(0.88, 1.14);
+    ProcRng rng(seed * 2246822519u + 3266489917u);
+    ProcUniform<double> uni(-1.0, 1.0);
+    ProcUniform<double> jit(0.88, 1.14);
     const double pj = jit(rng);   // each step a slightly different shoe, a slightly different spot
     BandPass click(r.clickLo * pj, r.clickHi * pj, rate);
     BandPass scrapeBand(r.clickLo * pj, r.clickHi * pj, rate);
@@ -142,8 +142,8 @@ std::vector<float> render(const Recipe& r, uint32_t sampleRate, uint32_t seed, d
     // grains: onset times drawn up front (Poisson-ish), each a decaying burst of band noise
     std::vector<std::pair<size_t, double>> grains;
     if (r.grainLevel > 0 && r.grainRate > 0) {
-        std::exponential_distribution<double> gap(r.grainRate);
-        std::uniform_real_distribution<double> amp(0.3, 1.0);
+        ProcExponential<double> gap(r.grainRate);
+        ProcUniform<double> amp(0.3, 1.0);
         const double span = r.grainSpan * scale;
         for (double t = gap(rng) * 0.3; t < span; t += gap(rng)) {
             // denser at the start (the weight rolling onto the foot), thinning out
@@ -174,10 +174,10 @@ std::vector<float> render(const Recipe& r, uint32_t sampleRate, uint32_t seed, d
         const double cn = r.dull > 0 ? dc3(dc2(dc1(click(uni(rng))))) * 2.2 : click(uni(rng));
         double v = contact(t, 0.0, 1.0, cn);
         if (r.toeDelay > 0) v += contact(t, toeAt, toeGain, cn);
-        v += weight * r.thumpLevel * std::sin(TWO_PI * thumpHz * t) * std::exp(-t / (r.thumpDecay * std::sqrt(scale)));
+        v += weight * r.thumpLevel * std::sin(TWO_PI * thumpHz * t) * std::exp(-t / (r.thumpDecay * scale));
         if (r.dull > 0 && r.toeDelay > 0 && t >= toeAt)
             v += 0.6 * toeGain * weight * r.thumpLevel * std::sin(TWO_PI * thumpHz * 1.15 * (t - toeAt)) *
-                 std::exp(-(t - toeAt) / (r.thumpDecay * std::sqrt(scale)));
+                 std::exp(-(t - toeAt) / (r.thumpDecay * scale));
         const double att = std::min(1.0, t / std::max(1e-4, r.texAttack));
         const double tn = r.dull > 0 ? dt3(dt2(dt1(tex(uni(rng))))) * 1.5 : tex(uni(rng));
         v += texBoost * r.texLevel * 3.0 * tn * att * std::exp(-t / (r.texDecay * scale));
@@ -242,8 +242,8 @@ std::vector<float> grassSwish(uint32_t sampleRate, uint32_t seed) {
     const double rate = static_cast<double>(sampleRate);
     const double len = 0.42;
     const auto count = static_cast<size_t>(rate * len);
-    std::mt19937 rng(seed * 747796405u + 2891336453u);
-    std::uniform_real_distribution<double> uni(-1.0, 1.0), u01(0.0, 1.0);
+    ProcRng rng(seed * 747796405u + 2891336453u);
+    ProcUniform<double> uni(-1.0, 1.0), u01(0.0, 1.0);
     // the brush: noise through a 600 Hz - 3.2 kHz band, two poles each side
     const double hp = std::exp(-TWO_PI * 600.0 / rate), lp = std::exp(-TWO_PI * 3200.0 / rate);
     double h1 = 0, h1x = 0, h2 = 0, h2x = 0, l1 = 0, l2 = 0;
@@ -286,14 +286,14 @@ std::vector<float> surf(uint32_t sampleRate, uint32_t seed) {
     // fizz. Two noise colours whose balance follows the swell's phase.
     const double rate = static_cast<double>(sampleRate);
     const auto count = static_cast<size_t>(rate * 11.0);
-    std::mt19937 rng(seed * 1664525u + 1013904223u);
-    std::uniform_real_distribution<double> uni(-1.0, 1.0);
+    ProcRng rng(seed * 1664525u + 1013904223u);
+    ProcUniform<double> uni(-1.0, 1.0);
     std::vector<double> white(count);
     for (double& w : white) w = uni(rng);
     const std::vector<double> roar = circBand(white, rate, 60.0, 700.0);
     const std::vector<double> hiss = circBand(white, rate, 1500.0, 9000.0);
     const std::vector<double> wobble = circEnvelope(count, rng, 3, 9, 3);
-    std::uniform_real_distribution<double> ph(0.0, 1.0);
+    ProcUniform<double> ph(0.0, 1.0);
     const double off = ph(rng) * 0.2;
     std::vector<float> out(count);
     for (size_t i = 0; i < count; ++i) {
@@ -316,12 +316,12 @@ std::vector<float> surf(uint32_t sampleRate, uint32_t seed) {
 // real bubble's damping and a slight rising chirp; wrapped round the loop. Then, for a DISTANT layer,
 // low-passed at `lowpassHz` (0 = none) circularly (two passes of a one-pole round the loop, so the
 // filter state at the seam is the settled one).
-std::vector<double> bubbleLayer(size_t count, double rate, std::mt19937& rng, double bursts, double perBurst,
+std::vector<double> bubbleLayer(size_t count, double rate, ProcRng& rng, double bursts, double perBurst,
                                 double rMin, double rMax, double lowpassHz) {
-    std::uniform_real_distribution<double> u01(0.0, 1.0);
+    ProcUniform<double> u01(0.0, 1.0);
     std::vector<double> acc(count, 0.0);
-    std::poisson_distribution<int> nOf(perBurst);
-    std::exponential_distribution<double> gap(bursts);
+    ProcPoisson<int> nOf(perBurst);
+    ProcExponential<double> gap(bursts);
     const double seconds = static_cast<double>(count) / rate;
     for (double tb = gap(rng); tb < seconds; tb += gap(rng)) {
         const int n = std::max(1, nOf(rng));
@@ -366,8 +366,8 @@ std::vector<float> riverLayers(uint32_t sampleRate, uint32_t seed, double size, 
     size = std::clamp(size, 0.0, 1.0);
     const double rate = static_cast<double>(sampleRate);
     const auto count = static_cast<size_t>(rate * 4.0);
-    std::mt19937 rng(seed * 22695477u + 1u);
-    std::uniform_real_distribution<double> uni(-1.0, 1.0);
+    ProcRng rng(seed * 22695477u + 1u);
+    ProcUniform<double> uni(-1.0, 1.0);
     // LOW bubbles: big (7-25 mm, ~130-450 Hz), each a deep bloop that rings on; a broad river's bigger
     const double big = 1.0 + 0.35 * size;
     const std::vector<double> nearL = bubbleLayer(count, rate, rng, 3.0 + 1.0 * size, 1.6, 0.0075 * big, 0.020 * big,
@@ -421,8 +421,8 @@ std::vector<float> river(uint32_t sampleRate, uint32_t seed, double size) {
     const double narrow = 1.0 - size;
     const double rate = static_cast<double>(sampleRate);
     const auto count = static_cast<size_t>(rate * 4.0);
-    std::mt19937 rng(seed * 22695477u + 1u);
-    std::uniform_real_distribution<double> uni(-1.0, 1.0);
+    ProcRng rng(seed * 22695477u + 1u);
+    ProcUniform<double> uni(-1.0, 1.0);
     std::vector<double> white(count), white2(count);
     for (double& w : white) w = uni(rng);
     for (double& w : white2) w = uni(rng);
@@ -447,8 +447,8 @@ std::vector<float> splash(double strength, uint32_t sampleRate, uint32_t seed) {
     const double rate = static_cast<double>(sampleRate);
     const double len = 0.35 + 0.6 * strength;
     const auto count = static_cast<size_t>(rate * len);
-    std::mt19937 rng(seed * 2654435761u + 97u);
-    std::uniform_real_distribution<double> uni(-1.0, 1.0), u01(0.0, 1.0);
+    ProcRng rng(seed * 2654435761u + 97u);
+    ProcUniform<double> uni(-1.0, 1.0), u01(0.0, 1.0);
     std::vector<double> acc(count, 0.0);
     BandPass slapBand(250.0, 2500.0 + 2500.0 * strength, rate);
     const double slapDecay = 0.02 + 0.05 * strength;
@@ -498,8 +498,8 @@ std::vector<float> lap(uint32_t sampleRate, uint32_t seed) {
     // (rising and falling over ~0.5 s) and a few drops as it runs back. Seamless: each wavelet wraps round.
     const double rate = static_cast<double>(sampleRate);
     const auto count = static_cast<size_t>(rate * 12.0);
-    std::mt19937 rng(seed * 40503u + 7u);
-    std::uniform_real_distribution<double> uni(-1.0, 1.0), u01(0.0, 1.0);
+    ProcRng rng(seed * 40503u + 7u);
+    ProcUniform<double> uni(-1.0, 1.0), u01(0.0, 1.0);
     std::vector<double> white(count);
     for (double& w : white) w = uni(rng);
     const std::vector<double> slosh = circBand(white, rate, 120.0, 1400.0);

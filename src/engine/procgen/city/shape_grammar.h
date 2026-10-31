@@ -12,12 +12,11 @@
 
 namespace engine {
 
-// The split/shape grammar (CityEngine CGA) of ADR-0038 §2 / city-generation-plan
-// §4: a building is grown by rewriting a *scope* (an oriented box) with the ops
-// split / repeat / comp / inset / extrude / roof / hollow / opening, emitting
-// geometry tagged by a named part (wall / glass / roof / trim / ...). This is an
-// L1 grammar sibling of the L-system (different interpreter, shared substrate);
-// the ops here are the vocabulary the Lua surface and the C++ recipes both use.
+// The shape grammar (ADR-0038 §2 / city-generation-plan §4): a building is grown
+// from its plan -- storey outlines (sections, stacks, complexes; the toolkit,
+// ADR-0174..0179) whose edges are Faces the facade words lay their bays on
+// (facadeLayout) -- emitting geometry tagged by a named part (wall / glass /
+// roof / trim / ...). Lua and the C++ recipes compose the same words.
 //
 // Coordinate convention: a scope is axis-aligned to its own frame. We only need
 // upright buildings, so the frame is { right (XZ), up (+Y), forward (XZ) } with
@@ -152,12 +151,11 @@ enum class FacadeStyle : uint8_t {
 // painted pastels). Deterministic for the seed.
 Vec3 facadeColor(FacadeStyle style, uint32_t seed);
 
-// Building massing — not every building is a box (curved towers, tiered pagodas).
-// The grammar dispatches on this in growBuilding.
+// Building massing a recipe asks for beyond its plan (ADR-0270: one massing path, growPlanBuilding). A round tower
+// is its plan (Section::ngon; the city's Massing::Circle), not a shape. (Values kept: the lot cache stores them.)
 enum class BuildingShape : uint8_t {
-    Box,        // the orthogonal split-grammar building
-    Cylinder,   // a round tower: cylindrical mass with wrapped glass banding
-    Pagoda,     // East-Asian tiered mass with flared, upturned-corner tile roofs
+    Box = 0,      // the plan, extruded storey by storey
+    Pagoda = 2,   // on pagodaPlan's square: tiers each 0.8 of the one below, a flared tile eave on every tier
 };
 
 // One scope: an oriented box. axis[] are unit and mutually perpendicular; size[i]
@@ -194,6 +192,17 @@ struct Scope {
         return standing(at, y, along, Vec2(-along.y, along.x), size);
     }
 };
+
+// THE BOX KIT on a scope (#117 item 35: these are not a second facade layout -- a building's bays are laid by
+// facadeLayout over a Face; these cut boxes, for car cabins, furniture and Lua `Scope`'s split/divide/inset).
+// Split a scope along a local axis (0=right,1=up,2=forward) into child scopes of
+// the given sizes, in proportion to them.
+std::vector<Scope> splitScope(const Scope& s, int axis,
+                              const std::vector<Real>& sizes);
+// Repeat-divide a scope along an axis into N≈(extent/target) equal child scopes.
+std::vector<Scope> repeatScope(const Scope& s, int axis, Real target);
+// Inset a scope inward on its footprint (right/forward) by d, keeping height.
+Scope insetScope(const Scope& s, Real d);
 
 // A FLAT RECTANGLE IN A PLAN FRAME: [a0, a1] x [b0, b1] in `f`, at height h, facing up (a yard's asphalt, a
 // playground's rubber, a garden's gravel)
@@ -262,7 +271,7 @@ struct BuildingMesh {
     std::vector<PlacedPiece> furniture;   // the interior's pieces (growInterior only)
     std::vector<FurnishedUnit> units;     // the shop rooms among them (PlacedPiece::unit)
     std::vector<AttachPoint> attaches;
-    std::vector<RoofItem> roof;        // what stands on the roof (growPlanBuilding / growBuilding)
+    std::vector<RoofItem> roof;        // what stands on the roof (growPlanBuilding)
     RenderMesh proxy;                  // coarse single-material mass (LOD/impostor bake)
     Real height = 0;
 
@@ -367,6 +376,11 @@ std::vector<Poly2> wavePlates(const Poly2& plan, const BuildingParams& params);
 // biggest such box inside a plan, whether a tier stands on the one below, a plan's short side, and the narrowest
 // a tier may be for the core to fit (14 m).
 Poly2 tierBox(const OBB2& ob, Real hw, Real hd, Real cut = 0, Vec2 shift = Vec2(0, 0));
+// THE PAGODA'S PLAN (ADR-0270): the square a pagoda of `floors` tiers stands on, inscribed in the lot's rectangle;
+// empty when the lot cannot hold its tiers. pagodaFits: whether a rectangle `shortSide` across holds `floors` tiers
+// (each steps in, the top keeps its stair) -- what the architect asks before it rolls a pagoda.
+Poly2 pagodaPlan(const Poly2& lot, int floors);
+bool pagodaFits(Real shortSide, int floors);
 bool tierBoxInside(const Poly2& plan, const OBB2& ob, Real& hw, Real& hd);
 bool tierNestedIn(const Poly2& outer, const Poly2& inner);
 Real tierShortSide(const Poly2& p);
@@ -562,7 +576,7 @@ struct BuildingParams {
     int   sideBays = 0;
     Vec3  trimColor{0.40, 0.38, 0.35};
     BuildingShape shape = BuildingShape::Box;
-    int   tiers = 5;             // pagoda: number of stacked tiers (odd reads best)
+    int   tiers = 5;             // (unread since ADR-0270: a pagoda's tiers are its floors; leaves with the next codec change)
     int   sides = 32;            // cylinder: facets around the round mass
     uint32_t seed = 0;
     // MASSING ENVELOPE (skyscrapers v2, ADR-0086 point 5): how the mass above
@@ -645,6 +659,15 @@ struct BuildingParams {
     // up get an elevator bank and two enclosed stairwells when one fits),
     // 1 = never (the straight stair of ADR-0080, or nothing), 2 = always.
     uint8_t core = 0;
+    // WHERE THE STAIRS AND LIFTS STAND (circulation.h, issue #105 step 3b; Glenn, 2026-10-15: "disconnect them and
+    // place stairs and elevators separately ... elevator setups like you see in real buildings"). stairPlace: 0 auto,
+    // 1 beside the lifts (the classic core), 2 apart -- one stairwell at each end of the plan's long axis, the
+    // floor's corridor running between them past the lifts. liftBanks: 0 auto, 1 one bank, 2 two banks facing
+    // across a lift lobby. Auto is drawn by the seed from what suits the shape, and falls through to the other
+    // layouts where the floor is too small (circulationLayouts). Lua: stairs = "core" | "ends", lifts = "bank" |
+    // "facing".
+    uint8_t stairPlace = 0;
+    uint8_t liftBanks = 0;
     // THE LIGHTING SPEC (skyscrapers v2 M4, Lua-overridable; ADR-0086 point
     // 10): what a tall roof wears at night. 0 = auto (the position hash
     // decides, as before). crown: 1 none, 2 white, 3 amber, 4 blue, 5 red,
@@ -678,11 +701,15 @@ struct BuildingParams {
     // (room_plan.h, PlateTopology::Apartments); anything else keeps its office ring. Set from the recipe's use.
     bool  residential = false;
     // OFFICES INSIDE (Glenn, 2026-10-13: "offices can have meeting rooms, small kitchens, lounge space, reception desk,
-    // offices and cubes and open floor plans"): a workplace's upper floors are the office floor (room_plan.cpp
-    // officePlan), masonry or glass, core or stair -- not the ring of studios a hotel keeps. RUNTIME ONLY, never in the
-    // lot cache: set from the recipe and its use (architect.h officeUseFor) by the architect and again by the interior
+    // offices and cubes and open floor plans"): a workplace's upper floors are the office floor (the zoned floor,
+    // floor_zones.h), masonry or glass, core or stair -- not the ring of studios a hotel keeps. RUNTIME ONLY, never in
+    // the lot cache: set from the recipe's use (building_uses.h, building_uses.lua) by the architect and again by the interior
     // system from the building record, so an island baked before it still gets it without a re-bake.
     bool  officeUse = false;
+    // WHAT ITS FLOORS ARE FOR (building_uses.h, building_uses.lua): the use's name, interned (floorUseName; 0 = not
+    // set) -- a floor program's name, which the room planner lays, or a planner's (a house, a hotel, a civic building).
+    // RUNTIME ONLY like officeUse: set from the recipe by the architect and the interior system, never in the lot cache.
+    uint8_t floorUse = 0;
     // A CIVIC BUILDING'S OWN ROOMS (Glenn, the same day): off the campus, a university is a teaching hall (1), a library
     // its reading room and stacks (2), a museum its galleries (4), a school its classrooms (5) -- campusPlan's corridor
     // floor, by these numbers (the campus field's, plus 4 and 5) -- and a hospital its wards (6, hospitalPlan); a
@@ -730,9 +757,9 @@ struct BuildingParams {
     bool  backDoor = false;
     bool  fireEscape = false;
     // A BIG-BOX STORE (architectBigBox): 0 none, else the chain -- 1 warehouse club, 2 electronics, 3 home
-    // improvement, 4 discount store -- or 5, an INDOOR MALL (architectMall: a concourse of shop units, an anchor store,
-    // a food court; mallLayout). The front edge wears the chain's sign and canopy, the rear its loading docks,
-    // a band in the chain's colour (trimColor) rings the top; inside, one store floor (bigBoxRoomPlan).
+    // improvement, 4 discount store -- or 6, a MALL (below; 5, the old box mall, is the one-level mall since
+    // ADR-0271). A store's front edge wears the chain's sign and canopy, the rear its loading docks, a band in the
+    // chain's colour (trimColor) rings the top; inside, one store floor (bigBoxRoomPlan).
     uint8_t bigBox = 0;
     // A UNIVERSITY building (the campus): 0 none, 1 a teaching hall (lecture halls, classrooms, labs), 2 the library
     // (a reading room, the stacks), 3 a residence hall (dorm rooms, a lounge, shared baths). A stair building
@@ -742,9 +769,11 @@ struct BuildingParams {
     // street's cafes, grocers, pharmacies), 1 high street, 2 nightlife (bars, clubs, restaurants), 3 a mall's. Set
     // by the lot pass from the district; the trades draw their weights from it.
     uint8_t shopMix = 1;
-    // THE AMERICAN MALL (bigBox 6; ~/.claude/plans/malls-v2-and-managed-ground.md): its WINGS off the centre court --
+    // THE MALL (bigBox 6; ~/.claude/plans/malls-v2-and-managed-ground.md; ADR-0271): its WINGS off the centre court --
     // bits 0..3 = +u, -u, +v, -v of the plan's own frame (u its long axis, v toward the back) -- and the court's centre
-    // (world XZ). The plan is the wings' outline; mallLayout2 reads the rest from these.
+    // (world XZ). The plan is the wings' outline (mallOutline); mallLevel reads the rest from these. Its variants: the
+    // BOX mall (floors 0: one tall level, an I, an anchor and a food court at its ends), the WINGS mall (floors 1: two
+    // levels, escalators, atria) and the COMPLEX (mallCells: the wings as the spine of separate anchors and a garage).
     uint8_t mallArms = 0;
     // ...and which of those wings END OPEN (bits as mallArms; cells.h mallCells, ADR-0180): no anchor inside the wing,
     // the concourse and its shops run to the end wall, which is a party wall with a wide opening onto the anchor
@@ -766,7 +795,7 @@ struct ShopFront {
     // its FASCIA (the sign band over the glazing), metres above the storey's base, standing `fasciaProud` proud of
     // the wall; fasciaY1 <= fasciaY0 when the storey is too low to carry one
     Real fasciaY0 = 0, fasciaY1 = 0, fasciaProud = 0.16;
-    // INDOORS: a unit of an indoor mall (bigBox 5), its front on the concourse -- no terrace, and the sim's way in is
+    // INDOORS: a mall's unit (bigBox 6), its front on the concourse -- no terrace, and the sim's way in is
     // the mall's own street door (`entry`), not this one
     bool indoor = false;
     Vec2 entry;
@@ -776,15 +805,21 @@ std::vector<ShopFront> shopFrontsOf(const Poly2& plan, const BuildingParams& par
 // none): each room's floor rectangle and its trade.
 struct ShopRoomRect { Poly2 rect; uint8_t trade = 0; };
 std::vector<ShopRoomRect> shopRoomsOf(const Poly2& plan, const BuildingParams& params, Real baseY);
-// An indoor mall's name board over its doors (emitBigBoxDress): its face's centre (XZ), outward normal, its band
-// (y0..y1 above the base) and width. False for anything else.
-bool mallSignOf(const Poly2& plan, const BuildingParams& params, Vec2& centre, Vec2& n, Real& y0, Real& y1, Real& width);
-// The American mall's name boards (bigBox 6): one over every entrance (the mall's name) and every anchor (the store's).
+// A mall's name boards (bigBox 6): one over every entrance (the mall's name) and every anchor (the store's).
 struct MallSign { Vec2 centre, n; Real y0 = 0, y1 = 0, width = 0; bool anchor = false, vertical = false, sky = false; };
 bool mallSignsOf(const Poly2& plan, const BuildingParams& params, std::vector<MallSign>& out);
+// A MALL'S OUTLINE (ADR-0271): its wings' union about the court `c`, u along the long axis and v away from the street,
+// `arm` the wings' lengths from the court's centre (+u, -u, +v, -v; 0 none), each wing 40 m wide. The lot pass shapes
+// a mall's plan with it, and mallCells its spine.
+Poly2 mallOutline(const Vec2& c, const Vec2& u, const Vec2& v, const Real arm[4]);
 // A Japanese tower's (storeFloors / dineFloors): the store's name down a vertical board, the restaurant floors' across
 // the top. False when it has neither.
 bool towerSignsOf(const Poly2& plan, const BuildingParams& params, std::vector<MallSign>& out);
+// WHAT A TOWER'S STOREY IS FOR when its own facts say so: "department_store" for its first `storeFloors` storeys over
+// the ground, "dining" for the top `dineFloors` of its main tier (below a setback crown), else "" (the building's use,
+// building_uses.lua). Only a four-sided tower has them -- the same towers that carry the store's board and the
+// restaurant floors' name (towerSignsOf) and that the level loader makes the shop and restaurant places of.
+std::string storeyUseOf(const Poly2& plan, const BuildingParams& params, const std::vector<StoreyPlan>& storeys, int storey);
 // THE PARKING GARAGE you can drive into (parkingDecks; buildGarage): its collider -- every deck, ramp and rail -- in
 // world space (false: not a drivable garage, keep the prism); its stalls (centre, the way a parked car faces, height
 // above the base); and its portal (the middle of the opening on the street, and the way out).
@@ -799,6 +834,19 @@ bool garagePortalOf(const Poly2& plan, const BuildingParams& params, Vec2& at, V
 // Is plan edge `e` a party wall (it lies on one of params' party lines, facing out across it)?
 // ...on `storey` (-1: on any storey): a wall that stops at a lower neighbour's top is no party wall above it.
 bool partyEdge(const Poly2& plan, const BuildingParams& params, std::size_t e, int storey = -1);
+// THE PARTY-WALL RULES (ADR-0268): one copy for every writer of partyN/partyAt/partyTop (the lot pass's attached
+// buildings, a complex's cells).
+// Does CCW plan edge `e` lie on the line (n, at), facing out across it? (What partyEdge asks of each wall.)
+bool onPartyLine(const Poly2& plan, std::size_t e, const Vec2& n, Real at);
+// Add the wall on line (n, at), blank up to storey `top` (0: to the roof). The same plane already on the list (two
+// neighbours along one face) stays ONE wall, blank to the taller neighbour's top. False when all four are spent.
+bool addPartyWall(BuildingParams& params, const Vec2& n, Real at, int top, Real tol);
+// How high a wall stays blank against a neighbour whose top stands at world Y `against`: the last storey (from 1)
+// whose floor is still a sill under it; the storeys above keep their windows. 0 (blank to the roof) when the
+// neighbour reaches the top storey (`floors`: the ground is storey 0), or when no storey above it stands on the wall's
+// line (n, at) to take a window.
+constexpr Real kPartySill = 1.0;
+int partyTopAgainst(const std::vector<StoreyPlan>& storeys, int floors, Real baseY, Real against, const Vec2& n, Real at);
 // Edge `e` is a party wall with a doorway through it (partyDoors): the facade cuts the door, blank otherwise.
 bool partyDoorEdge(const Poly2& plan, const BuildingParams& params, std::size_t e);
 // A LINK DOOR (params.links; cells.h, ADR-0179): the doorway on a storey's face through to a neighbouring cell, and
@@ -852,8 +900,7 @@ Real stairWallDoorX(Real wallLen, const BuildingParams& params);
 // The two levels consume the SAME facade layout (the splitter decides bay and
 // opening placement once), so they can never disagree about where a window or
 // the door is — the first in-engine step of the blueprint model
-// (lot-system-plan §15.2). Cylinder and Pagoda shapes currently emit Full at
-// both levels (they are already lean; their flat pass is a later follow-up).
+// (lot-system-plan §15.2).
 enum class FacadeDetail : uint8_t { Full, Flat };
 
 // THE CURTAIN STYLE a glass facade is drawn in (skyscrapers NYC variety M2; the numbers live on BuildingParams:
@@ -873,10 +920,6 @@ CurtainStyle curtainStyleOf(const BuildingParams& p);
 // 40+ one. `floor` counts from 1 (the first storey above the ground storey). Derived from the params alone, so the
 // exterior, its far tier and the interior agree.
 bool mechanicalStorey(const BuildingParams& p, int floor);
-
-// Grow a building into `scope` (ADR-0038 §2). Deterministic for `params.seed`.
-BuildingMesh growBuilding(const Scope& scope, const BuildingParams& params,
-                          FacadeDetail detail = FacadeDetail::Full);
 
 // Grow a FLOORPLAN building (building-grammar-plan.md P3): the massing is a
 // closed polygon — the lot's own shape, an L/T/U composition, a flatiron
@@ -927,14 +970,6 @@ void emitShell(BuildingMesh& out, const Scope& s, PartId part, const Vec3& color
 void emitParapet(BuildingMesh& out, const Vec3& footOrigin, Real width, Real depth,
                  const Vec3& r, const Vec3& f, Real y, Real height, Real thick,
                  PartId part, const Vec3& color);
-// Split a scope along a local axis (0=right,1=up,2=forward) into child scopes of
-// the given sizes; a negative size means "repeat to fill" with |size| as target.
-std::vector<Scope> splitScope(const Scope& s, int axis,
-                              const std::vector<Real>& sizes);
-// Repeat-divide a scope along an axis into N≈(extent/target) equal child scopes.
-std::vector<Scope> repeatScope(const Scope& s, int axis, Real target);
-// Inset a scope inward on its footprint (right/forward) by d, keeping height.
-Scope insetScope(const Scope& s, Real d);
 
 }  // namespace engine
 

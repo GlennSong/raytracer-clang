@@ -3,22 +3,22 @@
     "buildChance": 0.9,
     "buildLots": true,
     "busMaxWalk": 220.0,
-    "busRoutes": 4,
-    "busStops": 14,
+    "busRoutes": 5,
+    "busStops": 16,
     "buses": 24,
     "cars": -1,
     "carsPerLaneKm": 35.0,
     "debugWidgets": false,
     "detailDistance": 300,
     "dormancy": true,
-    "downtownRadius": 300,
+    "downtownRadius": 271.84916456855115,
     "facadeDistance": 950,
     "hailChance": 0.25,
     "hailMinMetres": 350.0,
     "hubRadius": 240,
     "localHz": 30.0,
     "maxAmbient": 14000,
-    "midtownRadius": 600,
+    "midtownRadius": 560.0,
     "pedDemoteRadius": 440.0,
     "pedPromoteRadius": 300.0,
     "pedestrians": -1,
@@ -30,7 +30,32 @@
     "taxiFraction": 0.12,
     "tiered": true,
     "vehicles": "vehicles.lua",
-    "wander": false
+    "wander": false,
+    "districts": {
+      "hubs": [
+        {
+          "at": [
+            -300.0,
+            0.0
+          ],
+          "kind": "financial"
+        },
+        {
+          "at": [
+            -300.0,
+            448.0
+          ],
+          "kind": "commercial"
+        },
+        {
+          "at": [
+            -300.0,
+            -448.0
+          ],
+          "kind": "residential"
+        }
+      ]
+    }
   },
   "dayNight": {
     "dayMinutes": 1440.0,
@@ -47,7 +72,7 @@
       ],
       "road": {
         "builder": "lanes",
-        "graph": "assets/lanelab/converted/metro_v2_test_lanelab.json",
+        "graph": "assets/lanelab/planned/metro_v2_test_lanelab.json",
         "sidewalks": {
           "arterial": 6.0,
           "collector": 5.5,
@@ -115,23 +140,51 @@
     },
     "friction": 0.5,
     "position": [
-      -134.66,
+      -140.06,
       4.2,
-      -287.12
+      -278.3
     ]
   },
   "terrain": {
-    "_comment": "Metropolis-scale coastal shelf (2.6 km): domain-warped fbm + eroded western range, tiltX ramps east into the sea. The 2 km metro (radius 1000) fills the shelf between the foothills and the shoreline.",
+    "_comment": "Metropolis-scale coastal shelf (2.6 km): domain-warped fbm + eroded western range, tilted east into the sea. Must match assets/city_plans/metro_v2_test.json's world.base (city_plan level-world prints it).",
     "cdlod": {
-      "worldHalf": 1380
+      "worldHalf": 1380,
+      "baked": true
     },
     "erode": true,
-    "erodeDroplets": 500000,
-    "erodeRadius": 4,
-    "erodeRes": 800,
-    "erodeTalus": 1.0,
-    "erodeThermal": 14,
-    "heightScale": 13,
+    "weather": {
+      "res": 1024,
+      "grow": {
+        "res": 256,
+        "iterations": 250,
+        "blur": 85
+      },
+      "water": {
+        "steps": 0,
+        "breach": 0,
+        "thermal": 0
+      },
+      "roughness": 0.6,
+      "shapeKeep": 1.0,
+      "massifs": 0.6,
+      "shapeScale": 210,
+      "massifScale": 350,
+      "peaks": {
+        "height": 120,
+        "spacing": 450,
+        "uplift": 1.0
+      },
+      "refine": {
+        "detail": 40,
+        "roughness": 0.8,
+        "wavelength": 8,
+        "slopeDamp": 0.3,
+        "incise": 0.012,
+        "iterations": 20,
+        "stochasticFrom": 1024
+      }
+    },
+    "heightScale": 5.0,
     "material": {
       "albedo": [
         1.0,
@@ -174,7 +227,7 @@
     "seed": 11,
     "size": 2760,
     "snowLine": 230,
-    "tiltX": -0.045,
+    "tiltX": -0.015,
     "warp": 0.35,
     "groundCover": {
       "beachHeight": 3,
@@ -326,5 +379,6 @@
       "variantTint": 0.08,
       "seed": 71
     }
-  ]
+  ],
+  "_comment": "Planned (ADR-0092 planner): assets/city_plans/metro_v2_test.json is the brief, on this level's own terrain; city_plan scene turns it into the lanes scene this level names. The old grown metro this level used to carry retired with its generator."
 }

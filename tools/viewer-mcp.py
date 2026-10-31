@@ -7,6 +7,13 @@ Code session can frame cameras, take screenshots, toggle overlays, drive the
 sim clock, and reload the level in a RUNNING viewer — including one a human
 opened by hand. Registered via the repo's .mcp.json.
 
+The tool list is the viewer's own command table (ADR-0253): one tool per verb,
+read from a live viewer's `commands? json`, or from web/engine/commands.json
+(the copy a test holds equal to the built-in table) when none is running. Only
+the composite tools — the ones that do more than send one line — are written
+here. When a viewer grows a verb (a newer build, a Lua script) the list is
+re-read and the client told (notifications/tools/list_changed).
+
 Standard library only (no `mcp` package, no venv), so it runs anywhere the
 repo clones — same rule as frame-report.py / code-health.py.
 
@@ -25,6 +32,8 @@ import sys
 import time
 
 SOCK_GLOB = "/tmp/raytracer-viewer-*.sock"
+REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+SITE_TABLE = os.path.join(REPO, "web", "engine", "commands.json")
 SHOT_TIMEOUT = 30.0   # seconds to wait for a dump file to land
 
 
@@ -58,12 +67,12 @@ def _resolve(instance):
         raise RuntimeError(f"no viewer matching '{instance}' (live: {socks})")
     return socks[-1]   # newest
 
-def send_command(line, instance=None):
+def send_command(line, instance=None, timeout=10.0):
     """One command, one reply, fresh connection (the channel serves the newest
     client, so short-lived connections compose with a human's tools)."""
     path = _resolve(instance)
     with socket.socket(socket.AF_UNIX) as s:
-        s.settimeout(10.0)
+        s.settimeout(timeout)
         s.connect(path)
         s.sendall((line + "\n").encode())
         buf = b""
@@ -113,13 +122,6 @@ def tool_launch_viewer(args):
         time.sleep(0.25)
     raise RuntimeError(f"socket never appeared; see {log}")
 
-def tool_set_camera(args):
-    return send_command(
-        "camera {x} {y} {z} {pitch} {yaw}".format(**args), args.get("instance"))
-
-def tool_get_camera(args):
-    return send_command("camera?", args.get("instance"))
-
 def tool_screenshot(args):
     inst = args.get("instance")
     if all(k in args for k in ("x", "y", "z", "pitch", "yaw")):
@@ -135,78 +137,11 @@ def tool_screenshot(args):
         time.sleep(0.25)
     raise RuntimeError(f"dump never landed at {path} (still baking?)")
 
-def tool_overlay(args):
-    on = "on" if args.get("on", True) else "off"
-    return send_command(f"overlay {args['name']} {on}", args.get("instance"))
-
-def tool_sim(args):
-    cmd = f"sim {args['action']}"
-    if "value" in args:
-        cmd += f" {args['value']}"
-    return send_command(cmd, args.get("instance"))
-
-def tool_reload(args):
-    return send_command("reload", args.get("instance"))
-
-def tool_time_of_day(args):
-    if "day_of_year" in args:
-        return send_command(f"daynight day {args['day_of_year']}", args.get("instance"))
-    if "moon_age" in args:
-        return send_command(f"daynight moon {args['moon_age']}", args.get("instance"))
-    if "day_minutes" in args:
-        return send_command(f"daynight minutes {args['day_minutes']}",
-                            args.get("instance"))
-    if "hold" in args:
-        return send_command(f"daynight {'hold' if args['hold'] else 'run'}",
-                            args.get("instance"))
-    return send_command(f"daynight {args['hour']}", args.get("instance"))
-
-def tool_sun(args):
-    return send_command("sun?", args.get("instance"))
-
-def tool_clock(args):
-    return send_command("daynight?", args.get("instance"))
-
-def tool_sky_chart(args):
-    return send_command(f"daynight chart {args['path']}", args.get("instance"))
-
 def tool_teleport(args):
     r = send_command(f"teleport {args['pose']}", args.get("instance"))
     if "staged" not in r: return r
     time.sleep(0.4)
     return send_command("teleport?", args.get("instance"))
-
-def tool_where(args):
-    return send_command("where?", args.get("instance"))
-
-def tool_city_map(args):
-    cmd = f"citymap {args['path']}"
-    if args.get("layers"): cmd += f" {args['layers']}"
-    return send_command(cmd, args.get("instance"))
-
-def tool_weather(args):
-    if "state" not in args:
-        return send_command("weather?", args.get("instance"))
-    return send_command(f"weather {args['state']}", args.get("instance"))
-
-def tool_fog(args):
-    if "density" not in args:
-        return send_command("fog?", args.get("instance"))
-    parts = [f"fog {args['density']}"]
-    if "heightFalloff" in args:
-        parts.append(str(args["heightFalloff"]))
-        if "color" in args and len(args["color"]) == 3:
-            parts.append(" ".join(str(c) for c in args["color"]))
-    return send_command(" ".join(parts), args.get("instance"))
-
-def tool_settings_kv(args):
-    a = args["action"]
-    if a == "set":
-        return send_command(f"set {args['key']} {args['value']}",
-                            args.get("instance"))
-    if a == "get":
-        return send_command(f"get {args['key']}", args.get("instance"))
-    return send_command("render save", args.get("instance"))   # a == "save"
 
 def tool_render_params(args):
     # Convenience: write any given ssao./ssr./shadow./bloom./tonemap./grade.
@@ -216,49 +151,10 @@ def tool_render_params(args):
         send_command(f"set {k} {v}", inst)
     return send_command("render apply", inst)
 
-def tool_debug_view(args):
-    views = ["normal", "ao", "ssr", "depth", "normals", "shadow", "albedo",
-             "facing", "cascades"]
-    idx = views.index(args["view"]) if args["view"] in views else 0
-    cmd = f"view {idx}"
-    if "wireframe" in args:
-        cmd += f" {int(args['wireframe'])}"
-    return send_command(cmd, args.get("instance"))
-
-def tool_ledger(args):
-    a = args["action"]
-    if a == "start":
-        path = args.get("path") or f"/tmp/viewer-ledger-{int(time.time())}.csv"
-        return send_command(f"ledger start {path}", args.get("instance"))
-    return send_command(f"ledger {a}", args.get("instance"))
-
 def tool_viewer_command(args):
-    # Escape hatch: raw protocol line, so a newly grown engine verb is usable
-    # before this shim (which only reloads on session restart) learns it.
+    # Escape hatch: a raw protocol line, for a whole line typed as the
+    # protocol has it (docs/control-channel.md).
     return send_command(args["command"], args.get("instance"))
-
-def tool_possess(args):
-    cmd = f"possess {args['kind']}"
-    if "x" in args and "z" in args:
-        cmd += f" {args['x']} {args['z']}"
-    return send_command(cmd, args.get("instance"))
-
-def tool_drive_to(args):
-    return send_command(f"drive_to {args['x']} {args['z']}",
-                        args.get("instance"))
-
-def tool_walk_to(args):
-    return send_command(f"walk_to {args['x']} {args['z']}",
-                        args.get("instance"))
-
-def tool_possess_status(args):
-    return send_command("possess?", args.get("instance"))
-
-def tool_possess_stop(args):
-    return send_command("possess_stop", args.get("instance"))
-
-def tool_possess_release(args):
-    return send_command("release", args.get("instance"))
 
 def tool_planner_stats(args):
     path = _resolve(args.get("instance"))
@@ -278,158 +174,126 @@ NUM = {"type": "number"}
 STR = {"type": "string"}
 CAM_PROPS = {"x": NUM, "y": NUM, "z": NUM, "pitch": NUM, "yaw": NUM,
              "instance": STR}
-TOOLS = [
+# The composite tools: each does more than send one line (launches a process,
+# waits for a file, reads a log, sends several lines). Every other tool comes
+# from the command table.
+COMPOSITES = [
     ("viewer_status", "List running viewer instances (level, frame, state).",
      {}, [], tool_viewer_status),
     ("launch_viewer", "Launch ./build/viewer on a level, detached, with its "
      "log captured for planner_stats. Modes: edit (camera-friendly) or play.",
      {"level": STR, "mode": {"type": "string", "enum": ["edit", "play"]}},
      ["level"], tool_launch_viewer),
-    ("set_camera", "Fly the camera to x,y,z with pitch/yaw in degrees "
-     "(pitch -89 looks straight down; yaw 0 looks toward -Z). Detaches the "
-     "camera so the pose holds in play mode too.",
-     CAM_PROPS, ["x", "y", "z", "pitch", "yaw"], tool_set_camera),
-    ("get_camera", "Current camera eye and angles.", {"instance": STR}, [],
-     tool_get_camera),
     ("screenshot", "Write the next composited frame to a PNG and return its "
-     "path (readable immediately). Optionally frame a camera pose first.",
-     dict(CAM_PROPS, path=STR), [], tool_screenshot),
-    ("overlay", "Toggle a panel/overlay: ui (ALL ImGui panels), hud, debug "
-     "(the backtick overlay), and in PLAY mode the citysim layers "
-     "master/agents/cones/nav/plan.",
-     {"name": {"type": "string", "enum": ["ui", "hud", "debug", "master",
-                                          "agents", "cones", "nav", "plan"]},
-      "on": {"type": "boolean"}, "instance": STR},
-     ["name"], tool_overlay),
-    ("sim", "Drive the sim clock: pause, resume, step (one fixed step), or "
-     "speed with a value (e.g. 0.25).",
-     {"action": {"type": "string",
-                 "enum": ["pause", "resume", "step", "speed"]},
-      "value": NUM, "instance": STR}, ["action"], tool_sim),
-    ("reload", "Rebuild the current level from its recipe (the same clean "
-     "reset the editor-play loop uses).", {"instance": STR}, [], tool_reload),
+     "path once it has landed (readable immediately). Optionally frame a "
+     "camera pose first (pitch -89 looks straight down; yaw 0 looks toward "
+     "-Z).", dict(CAM_PROPS, path=STR), [], tool_screenshot),
+    ("teleport", "Move the PLAYER (or the camera when there is no player) to a "
+     "pose: 'x y z [pitch yaw]' or 'x z' (on the ground), and return where it "
+     "landed. The same format the Debug > Teleport panel copies and pastes, "
+     "and `where?` prints.", {"pose": STR, "instance": STR}, ["pose"],
+     tool_teleport),
     ("planner_stats", "Road-graph and city-lots numbers (COVER, rejections, "
      "corridor routing) scraped from the instance's captured log.",
      {"instance": STR}, [], tool_planner_stats),
-    ("time_of_day", "Set the day/night cycle: hour 0-24 (17.5-18.5 ~ golden "
-     "hour, 12 noon), hold/release the cycle (hold freezes the LIGHT while "
-     "the sim keeps running — traffic moves, sun stays put), or day_minutes = "
-     "real minutes per full loop (default 30; 0 freezes the sun); day_of_year "
-     "1-365 sets the calendar (season + moon phase); moon_age holds the moon "
-     "at an age in days (0 new, 7.4 first quarter, 14.8 full, 22.1 last "
-     "quarter) or 'auto' to follow the calendar.",
-     {"hour": NUM, "hold": {"type": "boolean"}, "day_minutes": NUM,
-      "day_of_year": NUM, "moon_age": STR, "instance": STR}, [],
-     tool_time_of_day),
-    ("clock", "Read the world clock: sky hour, loop length (real minutes), "
-     "today's sunrise/sunset and daylight fraction, solar elevation, and the "
-     "citysim's own hour beside it (equal when a cycle is staged — one "
-     "clock). Two reads a minute apart measure the loop's rate.",
-     {"instance": STR}, [], tool_clock),
-    ("sky_chart", "Write the day's SKY CHART as SVG: the sun's and moon's "
-     "altitude/azimuth arcs with hour ticks, sunrise/sunset and moonrise/"
-     "moonset on the rim, both bodies now, a phase glyph and legend — in the "
-     "street map's orientation (east right, south down).",
-     {"path": STR, "instance": STR}, ["path"], tool_sky_chart),
-    ("teleport", "Move the PLAYER (or the camera when there is no player) to a "
-     "pose: 'x y z [pitch yaw]' or 'x z' (on the ground). The same format the "
-     "Debug > Teleport panel copies and pastes, and `where` prints — so a "
-     "location the user pastes here can be jumped to, and one found here can "
-     "be handed back.", {"pose": STR, "instance": STR}, ["pose"], tool_teleport),
-    ("where", "The current viewpoint as 'x y z pitch yaw' (paste it into the "
-     "Teleport panel or back into `teleport`).", {"instance": STR}, [], tool_where),
-    ("city_map", "Write the LAYERED CITY MAP as SVG from the running level: "
-     "streets by class, the mesher's curb loops and sidewalk band, band gaps, "
-     "the nav graph, signal/lamp poles, planted objects (trees, furniture), "
-     "blocks, lots, building plans, districts (hub rings + tints), places, "
-     "legend. `layers` = comma list to draw only those (roads,curbs,sidewalks,"
-     "gaps,nav,furniture,objects,blocks,lots,buildings,districts,places,"
-     "legend) or 'all'; every layer is also click-toggleable in the file.",
-     {"path": STR, "layers": STR, "instance": STR}, ["path"], tool_city_map),
-    ("sun", "Probe the live sun: elevation (sunY), intensity, and whether "
-     "headlights consider it dark. Numeric golden-hour hunting without "
-     "eyeballing screenshots (golden ~ sunY 0.05-0.25).",
-     {"instance": STR}, [], tool_sun),
-    ("weather", "Set the sky's weather state over the volumetric deck: clear, "
-     "fair, overcast, or storm (eased in over ~2 min like a front arriving — "
-     "the sun dims with the deck), 'auto' for a seeded slow walk between "
-     "neighboring states, 'off' to hand the cloud knobs back. Omit state to "
-     "query.",
-     {"state": {"type": "string",
-                "enum": ["clear", "fair", "overcast", "storm", "auto", "off"]},
-      "instance": STR}, [], tool_weather),
-    ("fog", "Set or query the level's atmospheric fog, live: density "
-     "(~0.0004 subtle valley haze .. 0.0025 moody), optional heightFalloff "
-     "(>0 = low-lying haze you look down through, ~0.01-0.02) and color "
-     "[r,g,b]. On scattering-sky levels the haze fades toward the actual sky "
-     "color, so it stays correct at sunset/night. Omit density to query. "
-     "Level-owned: bake keepers into the level JSON.",
-     {"density": NUM, "heightFalloff": NUM,
-      "color": {"type": "array", "items": {"type": "number"}},
-      "instance": STR}, [], tool_fog),
-    ("settings_kv", "Generic engine Settings access: get/set any key "
-     "(daynight.speed, clouds.coverage, cameraGrounded, ...), or save all "
-     "settings to settings.json. Renderer keys (ssao.*, ssr.*, shadow.*, "
-     "grade.*) need render_params to take effect.",
-     {"action": {"type": "string", "enum": ["get", "set", "save"]},
-      "key": STR, "value": STR, "instance": STR}, ["action"], tool_settings_kv),
     ("render_params", "Set renderer post/quality knobs and apply them live: "
      "pass {\"ssao.radius\": 1.2, \"grade.saturation\": 1.1, ...} — the "
      "families the debug panel owns (ssao.*, ssr.*, shadow.*, bloom.*, "
      "tonemap.op, grade.*, hud.show).",
      {"params": {"type": "object"}, "instance": STR}, [], tool_render_params),
-    ("debug_view", "Switch the renderer's debug view (normal/ao/ssr/depth/"
-     "normals/shadow/albedo/facing/cascades) and optionally wireframe "
-     "(0 off, 1 wire, 2 overlay).",
-     {"view": {"type": "string",
-               "enum": ["normal", "ao", "ssr", "depth", "normals", "shadow",
-                        "albedo", "facing", "cascades"]},
-      "wireframe": NUM, "instance": STR}, ["view"], tool_debug_view),
-    ("ledger", "Frame-time ledger (ADR-0077): start capturing to CSV (for "
-     "tools/frame-report.py), stop, or get a one-line avg/p95/max summary.",
-     {"action": {"type": "string", "enum": ["start", "stop", "summary"]},
-      "path": STR, "instance": STR}, ["action"], tool_ledger),
-    ("viewer_command", "Raw control-channel line (see docs/control-channel.md)"
-     " — escape hatch for engine verbs newer than this tool list.",
-     {"command": STR, "instance": STR}, ["command"], tool_viewer_command),
-    ("possess", "Take an in-world avatar (PLAY mode on a city level): 'car' "
-     "spawns a signal-red AI sedan (at x,z or ahead of the camera, aligned "
-     "with the road); 'walker' commandeers the nearest pedestrian. The chase "
-     "camera follows it. Then drive_to/walk_to command it.",
-     {"kind": {"type": "string", "enum": ["car", "walker"]},
-      "x": NUM, "z": NUM, "instance": STR}, ["kind"], tool_possess),
-    ("drive_to", "Route the possessed car along the road network to world "
-     "(x,z) and drive there — pursuit steering, yields behind traffic. Poll "
-     "possess_status for driving/arrived/stuck/no-route.",
-     {"x": NUM, "z": NUM, "instance": STR}, ["x", "z"], tool_drive_to),
-    ("walk_to", "Route the possessed walker along sidewalks to world (x,z).",
-     {"x": NUM, "z": NUM, "instance": STR}, ["x", "z"], tool_walk_to),
-    ("possess_status", "The avatar's state line: kind, "
-     "driving/walking/arrived/stuck/no-route, position, speed, metres "
-     "remaining.", {"instance": STR}, [], tool_possess_status),
-    ("possess_stop", "Brake to a halt / stand still, keep the possession.",
-     {"instance": STR}, [], tool_possess_stop),
-    ("possess_release", "Detach brain and camera; a possessed car stays "
-     "parked in the world, a walker resumes their simulated life.",
-     {"instance": STR}, [], tool_possess_release),
+    ("viewer_command", "Raw control-channel line (see docs/control-channel.md),"
+     " sent as typed.", {"command": STR, "instance": STR}, ["command"],
+     tool_viewer_command),
 ]
+# Verbs a composite already covers, so they get no tool of their own.
+COVERED = {"shot", "teleport"}
+
+
+# --- the command table -------------------------------------------------------
+
+def _verb_table():
+    """The viewer's verbs as [{name, usage, summary, owner}]: the newest live
+    viewer's table, or the site's copy when no viewer runs (or it predates
+    `commands?`)."""
+    try:
+        # Short wait: a viewer busy loading answers late, and the site's
+        # copy is right for any build at or after it.
+        reply = send_command("commands? json", timeout=2.0)
+        if reply.startswith("ok "):
+            return json.loads(reply[3:])
+    except (RuntimeError, OSError, ValueError):
+        pass
+    with open(SITE_TABLE) as f:
+        return json.load(f)
+
+def _tool_name(verb):
+    # MCP names are [a-zA-Z0-9_-]; a question's '?' becomes '_q', as on the
+    # site's verbs page (camera? -> camera_q).
+    return verb.replace("?", "_q")
+
+def _verb_tool(entry):
+    verb = entry["name"]
+    def run(args):
+        line = verb
+        if args.get("args"):
+            line += " " + str(args["args"]).strip()
+        return send_command(line, args.get("instance"))
+    desc = f"{entry['summary']} Usage: `{entry['usage']}`."
+    if entry.get("owner", "engine") != "engine":
+        desc += f" (Registered by {entry['owner']}.)"
+    return (_tool_name(verb), desc,
+            {"args": {"type": "string",
+                      "description": "Everything after the verb, as in the usage."},
+             "instance": STR}, [], run, verb.endswith("?"))
+
+def _tools():
+    """Composites first, then one tool per verb in the table."""
+    tools = [t + (False,) for t in COMPOSITES]
+    taken = {t[0] for t in tools}
+    for entry in _verb_table():
+        if entry["name"] in COVERED or _tool_name(entry["name"]) in taken:
+            continue
+        tools.append(_verb_tool(entry))
+    return tools
 
 
 # --- MCP over stdio ----------------------------------------------------------
 
-def _tool_list():
-    return [{"name": n, "description": d,
-             "inputSchema": {"type": "object", "properties": p, "required": r}}
-            for n, d, p, r, _ in TOOLS]
+# The calls after which the table is read again (a new viewer or build, a
+# reloaded level), so each other call stays one round trip.
+RELISTS = {"launch_viewer", "viewer_status", "reload"}
 
-def _call(name, arguments):
-    for n, _, _, _, fn in TOOLS:
+INSTRUCTIONS = (
+    "Drives a running raytracer viewer through its control channel. Every "
+    "viewer verb is a tool (questions end in _q: camera_q, where_q); pass "
+    "the rest of the line as `args`. Every tool takes an optional `instance` "
+    "(a socket basename substring); the default is the newest live viewer. "
+    "Camera: pitch -89 is straight down, yaw 0 looks toward -Z. Verbs that "
+    "stage work (teleport, ride, possess) answer with their `?` twin.")
+
+def _tool_list(tools):
+    out = []
+    for n, d, p, r, _, question in tools:
+        t = {"name": n, "description": d,
+             "inputSchema": {"type": "object", "properties": p, "required": r}}
+        if question:
+            t["annotations"] = {"readOnlyHint": True}
+        out.append(t)
+    return out
+
+def _call(tools, name, arguments):
+    for n, _, _, _, fn, _ in tools:
         if n == name:
             return fn(arguments or {})
     raise RuntimeError(f"unknown tool {name}")
 
+def _send(out, msg):
+    out.write(json.dumps(msg) + "\n")
+    out.flush()
+
 def main():
     out = sys.stdout
+    tools = _tools()
     for raw in sys.stdin:
         raw = raw.strip()
         if not raw:
@@ -446,15 +310,17 @@ def main():
             result = {"protocolVersion":
                       msg.get("params", {}).get("protocolVersion",
                                                 "2024-11-05"),
-                      "capabilities": {"tools": {}},
+                      "capabilities": {"tools": {"listChanged": True}},
                       "serverInfo": {"name": "viewer-control",
-                                     "version": "1.0"}}
+                                     "version": "2.0"},
+                      "instructions": INSTRUCTIONS}
         elif method == "tools/list":
-            result = {"tools": _tool_list()}
+            tools = _tools()
+            result = {"tools": _tool_list(tools)}
         elif method == "tools/call":
             params = msg.get("params", {})
             try:
-                text = _call(params.get("name"), params.get("arguments"))
+                text = _call(tools, params.get("name"), params.get("arguments"))
                 result = {"content": [{"type": "text", "text": text}]}
             except Exception as e:   # tool errors are results, not RPC errors
                 result = {"content": [{"type": "text", "text": f"error: {e}"}],
@@ -462,15 +328,19 @@ def main():
         elif method == "ping":
             result = {}
         else:
-            out.write(json.dumps(
-                {"jsonrpc": "2.0", "id": mid,
-                 "error": {"code": -32601,
-                           "message": f"method not found: {method}"}}) + "\n")
-            out.flush()
+            _send(out, {"jsonrpc": "2.0", "id": mid,
+                        "error": {"code": -32601,
+                                  "message": f"method not found: {method}"}})
             continue
-        out.write(json.dumps({"jsonrpc": "2.0", "id": mid,
-                              "result": result}) + "\n")
-        out.flush()
+        _send(out, {"jsonrpc": "2.0", "id": mid, "result": result})
+        if method == "tools/call" and params.get("name") in RELISTS:
+            # A launch or a reload can change the table; when it did, tell
+            # the client to list again.
+            fresh = _tools()
+            if [t[0] for t in fresh] != [t[0] for t in tools]:
+                tools = fresh
+                _send(out, {"jsonrpc": "2.0",
+                            "method": "notifications/tools/list_changed"})
 
 if __name__ == "__main__":
     main()

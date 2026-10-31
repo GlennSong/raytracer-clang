@@ -2,14 +2,14 @@
 #include "../mesh_builder.h"
 #include "sdf.h"
 
-#include <random>
+#include "../../proc_rng.h"
 
 namespace engine {
 
 namespace {
 // A uniformly-distributed point on the unit sphere (for placing lumps/cuts).
-Vec3 randomUnitVec(std::mt19937& gen) {
-    std::uniform_real_distribution<double> u(-1.0, 1.0), a(0.0, 2.0 * PI);
+Vec3 randomUnitVec(ProcRng& gen) {
+    ProcUniform<double> u(-1.0, 1.0), a(0.0, 2.0 * PI);
     double z = u(gen);
     double r = std::sqrt(std::max(0.0, 1.0 - z * z));
     double theta = a(gen);
@@ -42,9 +42,9 @@ RenderMesh generateRock(const RockParams& params, const Noise& noise) {
 }
 
 RenderMesh generateRockSdf(const RockSdfParams& params, uint32_t seed) {
-    std::mt19937 gen(seed);
-    std::uniform_real_distribution<double> radial(0.7, 1.0);
-    std::uniform_real_distribution<double> lumpR(0.4, 1.0);
+    ProcRng gen(seed);
+    ProcUniform<double> radial(0.7, 1.0);
+    ProcUniform<double> lumpR(0.4, 1.0);
 
     const double base = params.baseRadius;
 

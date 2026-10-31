@@ -1,4 +1,5 @@
 #include "street_names.h"
+#include "../../../proc_rng.h"
 
 #include "../../asset_root.h"
 #include "../../../log.h"
@@ -32,12 +33,6 @@ StreetNameBook fallbackBook() {
     return b;
 }
 
-struct Rng {
-    uint32_t s;
-    explicit Rng(uint32_t seed) : s(seed ? seed : 1u) {}
-    uint32_t next() { s ^= s << 13; s ^= s >> 17; s ^= s << 5; return s; }
-};
-
 const char* classTag(RoadClass k) {
     switch (k) {
         case RoadClass::Freeway: return "freeway";
@@ -51,12 +46,12 @@ const char* classTag(RoadClass k) {
 
 // The suffix for a road: its CLASS if the book names one (an alley is an
 // Alley whatever its width), else the widest rule it meets.
-std::string suffixFor(const StreetNameBook& b, double width, RoadClass k, Rng& r) {
+std::string suffixFor(const StreetNameBook& b, double width, RoadClass k, ProcRng& r) {
     const auto byClass = b.classSuffix.find(classTag(k));
     if (byClass != b.classSuffix.end()) return byClass->second;
     for (const StreetNameBook::SuffixRule& rule : b.suffixes)
         if (width >= rule.minWidth && !rule.choices.empty())
-            return rule.choices[r.next() % rule.choices.size()];
+            return rule.choices[r.below(static_cast<int>(rule.choices.size()))];
     return "Street";
 }
 
@@ -218,7 +213,7 @@ StreetNaming nameStreets(const RoadGraph& g, const StreetNameBook& book,
         return out.streets[static_cast<std::size_t>(a)].length >
                out.streets[static_cast<std::size_t>(b)].length;
     });
-    Rng rng(p.seed ? p.seed : book.seed);
+    ProcRng rng(p.seed ? p.seed : book.seed);
     // The WORD is unique while the bank lasts: "Hamilton Rd" and "Hamilton Dr"
     // in one city is a wrong turn waiting to happen. Past that, the full name.
     std::unordered_set<std::string> taken, takenWord;
@@ -227,8 +222,8 @@ StreetNaming nameStreets(const RoadGraph& g, const StreetNameBook& book,
         Street& s = out.streets[static_cast<std::size_t>(si)];
         std::string name;
         for (int attempt = 0; attempt < 96 && bankCount; ++attempt) {
-            const std::vector<std::string>& bank = book.banks[rng.next() % bankCount];
-            const std::string word = bank[rng.next() % bank.size()];
+            const std::vector<std::string>& bank = book.banks[rng.below(static_cast<int>(bankCount))];
+            const std::string word = bank[rng.below(static_cast<int>(bank.size()))];
             name = word + " " + suffixFor(book, s.width, s.klass, rng);
             const bool wordFree = !takenWord.count(word);
             if (!taken.count(name) && (wordFree || attempt >= 64)) {
@@ -238,8 +233,8 @@ StreetNaming nameStreets(const RoadGraph& g, const StreetNameBook& book,
             name.clear();
         }
         if (name.empty() && bankCount) {   // the banks ran dry: number it
-            const std::vector<std::string>& bank = book.banks[rng.next() % bankCount];
-            name = bank[rng.next() % bank.size()] + " " +
+            const std::vector<std::string>& bank = book.banks[rng.below(static_cast<int>(bankCount))];
+            name = bank[rng.below(static_cast<int>(bank.size()))] + " " +
                    suffixFor(book, s.width, s.klass, rng) + " " + std::to_string(si);
         }
         taken.insert(name);

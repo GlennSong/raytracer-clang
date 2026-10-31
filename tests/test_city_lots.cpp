@@ -1,15 +1,16 @@
 #include "test_framework.h"
 
 #include "../src/engine/procgen/city/architect.h"
+#include "../src/engine/level_params.h"   // readLotGrowParams (the alleys case)
 #include "../src/engine/procgen/city/city_lots.h"
 #include "../src/engine/procgen/city/parcel.h"
 #include "../src/engine/procgen/city/road_network.h"
 #include "../src/engine/procgen/city/shape_grammar.h"   // PartId (surfaced walls)
-#include "../src/engine/procgen/city/metro.h"
-#include "../src/engine/procgen/city/road_constraints.h"
+#include "planned_city.h"
 #include "../src/engine/procgen/terrain.h"   // applyFlatten (park-adherence test)
 
 #include <map>
+#include <nlohmann/json.hpp>
 #include <set>
 #include <string>
 
@@ -131,23 +132,31 @@ TEST_CASE(a_party_wall_is_blank_only_as_high_as_its_neighbour) {
                 const std::vector<StoreyPlan> st = storeyPlans(u.plan, u.params);
                 const Vec2 N = u.params.partyN[k];
                 const Real at = u.params.partyAt[k];
-                const BuildingMesh bm = growPlanBuilding(u.plan, u.params, u.baseY);
-                int below = 0, above = 0;
-                for (const RenderMesh& part : bm.parts) {
-                    if (part.materialIndex != static_cast<int>(PartId::Glass) &&
-                        part.materialIndex != static_cast<int>(PartId::GlassLit) &&
-                        part.materialIndex != static_cast<int>(PartId::GlassClear)) continue;
-                    for (const Vertex& v : part.vertices) {
-                        const Vec2 q(v.position.x, v.position.z);
-                        if (std::fabs(dot(q, N) - at) > 0.6 || v.normal.x * N.x + v.normal.z * N.y < 0.9) continue;
-                        for (std::size_t s = 0; s < st.size(); ++s)
-                            if (v.position.y > u.baseY + st[s].y0 + 0.05 && v.position.y < u.baseY + st[s].y0 + st[s].h - 0.05)
-                                ++(static_cast<int>(s) <= u.params.partyTop[k] ? below : above);
+                // glass on the wall's plane, at or under its top and above it -- as grown, and with no party walls
+                // at all (a face the grammar draws blank anyway, a narrow side, has none above to keep: ADR-0272)
+                auto glassOnPlane = [&](const BuildingParams& q, int& below, int& above) {
+                    below = above = 0;
+                    for (const RenderMesh& part : growPlanBuilding(u.plan, q, u.baseY).parts) {
+                        if (part.materialIndex != static_cast<int>(PartId::Glass) &&
+                            part.materialIndex != static_cast<int>(PartId::GlassLit) &&
+                            part.materialIndex != static_cast<int>(PartId::GlassClear)) continue;
+                        for (const Vertex& v : part.vertices) {
+                            const Vec2 q2(v.position.x, v.position.z);
+                            if (std::fabs(dot(q2, N) - at) > 0.6 || v.normal.x * N.x + v.normal.z * N.y < 0.9) continue;
+                            for (std::size_t s = 0; s < st.size(); ++s)
+                                if (v.position.y > u.baseY + st[s].y0 + 0.05 && v.position.y < u.baseY + st[s].y0 + st[s].h - 0.05)
+                                    ++(static_cast<int>(s) <= u.params.partyTop[k] ? below : above);
+                        }
                     }
-                }
+                };
+                int below = 0, above = 0, freeBelow = 0, freeAbove = 0;
+                glassOnPlane(u.params, below, above);
+                BuildingParams free = u.params;
+                free.partyWalls = 0;
+                glassOnPlane(free, freeBelow, freeAbove);
                 if (below > 0) std::printf("    [party top] %d glass vertices at or under storey %d\n", below, u.params.partyTop[k]);
                 CHECK(below == 0);
-                CHECK(above > 0);
+                CHECK(above > 0 || freeAbove == 0);   // the storeys above keep the windows the face has
                 ++checked;
             }
         CHECK(units == dbg.partyTopped);
@@ -170,46 +179,58 @@ TEST_CASE(lot_buildings_zone_radially) {
     CHECK(nearNonHome > 0);
 }
 
-TEST_CASE(edge_blocks_build_the_town_rim) {
-    // A single long straight boundary road, no enclosed faces anywhere: edge
-    // blocks must appear on BOTH open sides, sized within [minLen, maxLen] and
-    // set back by the margin, and the usual lot pass grows buildings on them.
-    RoadGraph roads;
-    roads.nodes = { {Vec2(0, 0)}, {Vec2(150, 0)} };
-    roads.edges = { RoadEdge{0, 1, 8, RoadClass::Local, 0} };
-    EdgeBlockParams ep;   // margin 9, depth 34, len 26..58
-    std::vector<Poly2> rim = edgeBlocks(roads, {}, ep);
-    CHECK(!rim.empty());
-    CHECK(rim.size() % 2 == 0u);   // both sides of a road with open ground
-    for (const Poly2& r : rim) {
-        CHECK(r.size() == 4u);
-        Vec2 lo, hi; bounds(r, lo, hi);
-        const Real len = hi.x - lo.x, depth = hi.y - lo.y;
-        CHECK(len >= ep.minLen * 0.6 - 1e-6);
-        CHECK(len <= ep.maxLen + 1e-6);
-        CHECK_APPROX(depth, ep.depth, 1e-6);
-        // Set back from the road (y=0) by the margin: no corner nearer than it.
-        CHECK(std::min(std::abs(lo.y), std::abs(hi.y)) >= ep.margin - 1e-6);
+// STAGE-10 ALLEYS (courts-with-alleys round). The frontage gate refuses any
+// lot whose whole footprint sits beyond 14 m of a street surface -- and on a
+// block deeper than one lot row, the OUTER row is exactly such land: real,
+// parcelled, correctly shaped, and orphaned. Stage 10's contract says that
+// land "connects out" by an alley. This is the can-fail pair for the alley
+// pass: the same blocks grown with alleys OFF must show the orphaned rows (the
+// gate rejecting them), and grown with alleys ON must show zero frontage
+// rejections, at least one lane cut, and more built lots -- not fewer, which
+// is what an over-fat lane does by shrinking the rows it serves (measured:
+// a 5 m lane with 0.7 m clearance COST coverage on living_city).
+// Grown the way a built city grows (engine::growCity): the blocks begin behind
+// the sidewalk (no road margin), the street graph says where the doors face,
+// and there is no clearance on top. (It ran on the retired graph-face rim
+// blocks until ADR-0268.)
+TEST_CASE(alleys_recover_frontage_orphaned_back_rows) {
+    // One straight 10 m street far from the downtown rings (residential grain),
+    // with blocks 56 m deep behind its 4 m sidewalks on both sides, deep enough
+    // that the parcel walk lays TWO rows -- the outer one beyond frontage reach.
+    RoadGraph streets;
+    streets.nodes = { {Vec2(300, 260)}, {Vec2(560, 260)} };
+    streets.edges = { RoadEdge{0, 1, 10, RoadClass::Local, 0} };
+    std::vector<Poly2> blocks;
+    const Real back = 5.0 + 4.0, depth = 56.0, len = 50.0;   // half the street + the sidewalk
+    for (int i = 0; i < 5; ++i) {
+        const Real x0 = 305 + i * (len + 0.4), x1 = x0 + len;
+        blocks.push_back({{x0, 260 + back}, {x1, 260 + back}, {x1, 260 + back + depth}, {x0, 260 + back + depth}});
+        blocks.push_back({{x0, 260 - back - depth}, {x1, 260 - back - depth}, {x1, 260 - back}, {x0, 260 - back}});
     }
-    // The rim rectangles grow buildings through the ordinary lot pass.
-    LotParams lp; lp.seed = 9; lp.roadMargin = 2.0;   // rim blocks are pre-set-back
-    CHECK(!growLotBuildings(rim, lp).empty());
-}
-
-TEST_CASE(edge_blocks_skip_covered_ground) {
-    // The same road, but one side is an enclosed city block: only the open side
-    // gets rim rectangles.
-    RoadGraph roads;
-    roads.nodes = { {Vec2(0, 0)}, {Vec2(150, 0)} };
-    roads.edges = { RoadEdge{0, 1, 8, RoadClass::Local, 0} };
-    Poly2 block{{-10, 5}, {160, 5}, {160, 80}, {-10, 80}};   // covers +y side
-    EdgeBlockParams ep;
-    std::vector<Poly2> rim = edgeBlocks(roads, {block}, ep);
-    CHECK(!rim.empty());
-    for (const Poly2& r : rim) {
-        Vec2 lo, hi; bounds(r, lo, hi);
-        CHECK(hi.y < 0);   // every rim block sits on the OPEN (-y) side
-    }
+    nlohmann::json cityJson = { { "seed", 9 }, { "sidewalk", 4.0 }, { "buildChance", 1.0 } };
+    LotParams lp;
+    readLotGrowParams(cityJson, lp);
+    lp.roadMargin = 0;   // the block already begins behind the sidewalk
+    auto grow = [&](const LotParams& p, LotPlanDebug& plan) {
+        int n = 0;
+        for (const LotBuilding& b : growLotBuildings(blocks, p, &plan, nullptr, &streets, 0.0))
+            if (b.type != "green" && b.type != "park") ++n;
+        return n;
+    };
+    LotParams lpOff = lp;
+    lpOff.alleys = false;
+    LotPlanDebug without, with2;
+    const int builtOff = grow(lpOff, without), builtOn = grow(lp, with2);
+    std::printf("    [alleys] off: rejFrontage=%d built=%d | on: rejFrontage=%d built=%d lanes=%zu\n",
+                without.rejFrontage, builtOff, with2.rejFrontage, builtOn, with2.alleys.size());
+    // The can-fail half: the orphaned outer rows must EXIST, or this whole
+    // test proves nothing (a change to the parcel walk that stops producing
+    // them should be seen here, not silently absorbed).
+    CHECK(without.rejFrontage >= 1);
+    CHECK(without.alleys.empty());
+    CHECK(with2.rejFrontage == 0);        // every orphan gained frontage
+    CHECK(with2.alleys.size() >= 1);      // by an actual lane, not a loophole
+    CHECK(builtOn > builtOff);            // and the city GAINED buildings
 }
 
 // Buildings keep clear of road corridors (device: "buildings overlapping
@@ -332,7 +353,9 @@ TEST_CASE(every_registered_recipe_is_rolled_by_some_table) {
         for (uint32_t s = 1; s <= 600; ++s) {
             rolled.insert(architectPick(tag, 24, 520, s, (s % 3) * 0.5).name);
             rolled.insert(architectPick(tag, 12, 160, s + 9000, 0.0).name);
-            if (s <= 200) rolled.insert(architectBlockLandmark(tag, 48, 2800, s, 0.6).name);
+            // (over all 600: the twin towers are a 4 % landmark, and seeds 1-200 are the one window in 25 that never
+            // rolls them -- a recipe is judged on enough rolls to hear it, not on a lucky few)
+            rolled.insert(architectBlockLandmark(tag, 48, 2800, s, 0.6).name);
         }
     }
     for (int k = 0; k < static_cast<int>(LandmarkKind::Count); ++k)
@@ -640,139 +663,83 @@ TEST_CASE(landmarks_are_planned_not_rolled) {
 // distance (max 30 m). This gate verifies that the lot-placement algorithm keeps
 // buildings from floating in the middle of the block, far from any street face.
 TEST_CASE(every_built_lot_touches_a_road) {
-    // Build a piedmont-style metro using the same multi-site params as test_metro_sites.
-    MetroParams p;
-    p.seed = 7;
-    p.freeways = true;
-    p.backboneClass = RoadClass::Arterial;
-    p.freewayWidth = 17;
-    p.arteryWidth = 17;
-    p.collectorWidth = 13;
-    p.streetWidth = 12.0;   // parking round: 2.5 park + 3.5 + 3.5 + 2.5 park
-    p.blockSize = 220;
-    p.minBlockEdge = 150;
-    p.segLength = 120;
-    p.influence = 800;
-    p.killRadius = 300;
-    p.mergeRadius = 200;
-    p.corridorSpacing = 240;
-    p.ambientPer500 = 5;
-    p.loopMin = 550;
-    p.loopMax = 1300;
-    p.interchangeSpacing = 600;
+    // On planned cities (the round test brief, three seeds): the planner's streets, as every city's are.
+    for (uint32_t seed : {11u, 29u, 53u}) {
+        const plan::CityPlan city = citytest::plannedCity(seed);
+        const RoadGraph& roads = city.streets;
 
-    MetroSite city;
-    city.center = {900, 900};
-    city.radius = 1400;
-    city.hotspots = 9;
-    city.blockSize = 220;
-    MetroSite east;
-    east.center = {3050, 400};
-    east.radius = 420;
-    east.hotspots = 3;
-    east.blockSize = 180;
-    east.density = 0.55;
-    east.kindBias = 3;
-    MetroSite south;
-    south.center = {300, 3050};
-    south.radius = 380;
-    south.hotspots = 3;
-    south.blockSize = 180;
-    south.density = 0.5;
-    south.kindBias = 2;
-    p.sites = {city, east, south};
+        // Extract the blocks and grow buildings on them.
+        std::vector<Poly2> blocks = extractBlocks(roads, 200.0);
+        CHECK(!blocks.empty());
 
-    RoadGraph roads = buildMetro(p);
+        LotParams lotParams;
+        lotParams.center = city.brief.center;
+        lotParams.seed = 11;
+        std::vector<LotBuilding> buildings = growLotBuildings(blocks, lotParams);
+        CHECK(!buildings.empty());
 
-    // Post-process the graph as test_metro_sites does (two rounds of consolidation).
-    RoadRules rules;
-    rules.autoRoundabout = false;
-        auto spanFloor = [](const Vec2& q) -> Real {
-            const bool inCore =
-                std::fabs(q.x - 900.0) <= 1400.0 && std::fabs(q.y - 900.0) <= 1400.0;
-            return inCore ? 104.5 : 150.0;
+        // For each built (non-park/non-green) lot, compute the minimum distance from
+        // the lot's OBB to any road edge in the graph. The lot's rectangle is defined
+        // by site (centroid), width, depth (half-extents), and yaw (rotation).
+        //
+        // Helper: distance from a point to a line segment (a,b).
+        auto distPointToSegment = [](const Vec2& p, const Vec2& a, const Vec2& b) -> Real {
+            Vec2 ab = b - a;
+            Real len2 = ab.lengthSquared();
+            if (len2 < 1e-12) return (p - a).length();
+            Real t = std::clamp(dot(p - a, ab) / len2, 0.0, 1.0);
+            Vec2 closest = a + ab * t;
+            return (p - closest).length();
         };
-    roads = capDegree(planarize(applyConstraints(roads, rules), 1.0), rules);
-    for (int round = 0; round < 2; ++round) {
-        roads = dropParallelEdges(roads);
-        roads = dissolveAcuteArms(roads, 0.85, 3);
-        roads = consolidateJunctionSpans(roads, spanFloor, rules.maxDegree);
-        roads = capDegree(planarize(roads, 1.0), rules);
-        roads = mergeShortEdges(roads, 30.0, rules.maxDegree);
-        roads = relaxSharpBends(roads, 0.5, 64);
-    }
 
-    // Extract the blocks and grow buildings on them.
-    std::vector<Poly2> blocks = extractBlocks(roads, 200.0);
-    CHECK(!blocks.empty());
+        // Helper: distance from the building's OBB CENTER to the nearest road
+        // CENTRELINE. The ring parceler fronts every lot on a block edge, so a
+        // built mass can never sit deeper than the lot depth behind the street —
+        // the centre-to-centreline bound is tight, not a corner-grazing 85 m.
+        auto distToRoads = [&](const LotBuilding& lot) -> Real {
+            Real minDist = 1e30;
+            for (const RoadEdge& edge : roads.edges) {
+                Vec2 a = roads.nodes[edge.a].pos;
+                Vec2 b = roads.nodes[edge.b].pos;
+                minDist = std::min(minDist, distPointToSegment(lot.site, a, b));
+            }
+            return minDist;
+        };
 
-    LotParams lotParams;
-    lotParams.center = {900, 900};
-    lotParams.seed = 11;
-    std::vector<LotBuilding> buildings = growLotBuildings(blocks, lotParams);
-    CHECK(!buildings.empty());
+        // Measure frontage distances and report the distribution.
+        std::vector<Real> distances;
+        int nonCourtLots = 0;
+        Real maxFrontage = 0;
+        for (const LotBuilding& b : buildings) {
+            // Skip parks and greens (they're ground scenery, not buildings).
+            if (b.type == "park" || b.type == "green") continue;
 
-    // For each built (non-park/non-green) lot, compute the minimum distance from
-    // the lot's OBB to any road edge in the graph. The lot's rectangle is defined
-    // by site (centroid), width, depth (half-extents), and yaw (rotation).
-    //
-    // Helper: distance from a point to a line segment (a,b).
-    auto distPointToSegment = [](const Vec2& p, const Vec2& a, const Vec2& b) -> Real {
-        Vec2 ab = b - a;
-        Real len2 = ab.lengthSquared();
-        if (len2 < 1e-12) return (p - a).length();
-        Real t = std::clamp(dot(p - a, ab) / len2, 0.0, 1.0);
-        Vec2 closest = a + ab * t;
-        return (p - closest).length();
-    };
-
-    // Helper: distance from the building's OBB CENTER to the nearest road
-    // CENTRELINE. The ring parceler fronts every lot on a block edge, so a
-    // built mass can never sit deeper than the lot depth behind the street —
-    // the centre-to-centreline bound is tight, not a corner-grazing 85 m.
-    auto distToRoads = [&](const LotBuilding& lot) -> Real {
-        Real minDist = 1e30;
-        for (const RoadEdge& edge : roads.edges) {
-            Vec2 a = roads.nodes[edge.a].pos;
-            Vec2 b = roads.nodes[edge.b].pos;
-            minDist = std::min(minDist, distPointToSegment(lot.site, a, b));
+            Real dist = distToRoads(b);
+            distances.push_back(dist);
+            nonCourtLots++;
+            maxFrontage = std::max(maxFrontage, dist);
         }
-        return minDist;
-    };
 
-    // Measure frontage distances and report the distribution.
-    std::vector<Real> distances;
-    int nonCourtLots = 0;
-    Real maxFrontage = 0;
-    for (const LotBuilding& b : buildings) {
-        // Skip parks and greens (they're ground scenery, not buildings).
-        if (b.type == "park" || b.type == "green") continue;
+        // Report the measured maximum frontage distance.
+        if (!distances.empty()) {
+            std::sort(distances.begin(), distances.end());
+            Real median = distances[distances.size() / 2];
+            std::printf("        [frontage] %d buildings, median %.1f m, max %.1f m\n",
+                        nonCourtLots, median, maxFrontage);
+        }
 
-        Real dist = distToRoads(b);
-        distances.push_back(dist);
-        nonCourtLots++;
-        maxFrontage = std::max(maxFrontage, dist);
-    }
-
-    // Report the measured maximum frontage distance.
-    if (!distances.empty()) {
-        std::sort(distances.begin(), distances.end());
-        Real median = distances[distances.size() / 2];
-        std::printf("        [frontage] %d buildings, median %.1f m, max %.1f m\n",
-                    nonCourtLots, median, maxFrontage);
-    }
-
-    // Assert: every built (non-park/green) building's centre sits within
-    // max(lotDepth * 1.6, 60 m) of a road centreline. The ring parceler
-    // fronts every lot BY CONSTRUCTION (a lot is at most lotDepth deep behind
-    // the block edge, which is a road face), and the 14 m surface gate greens
-    // any stray — so a mid-block building here is a real regression. Stock
-    // lotDepth is 28 (financial pads reach 60), so the bound is 60 m.
-    const Real centreBound = std::max(ParcelParams().lotDepth * 1.6, Real(60.0));
-    // A BIG-BOX store is the exception by design: a whole block, the store at the back behind its own parking lot.
-    for (const LotBuilding& b : buildings) {
-        if (b.type == "park" || b.type == "green" || b.recipe == "big_box") continue;
-        CHECK(distToRoads(b) <= centreBound);
+        // Assert: every built (non-park/green) building's centre sits within
+        // max(lotDepth * 1.6, 60 m) of a road centreline. The ring parceler
+        // fronts every lot BY CONSTRUCTION (a lot is at most lotDepth deep behind
+        // the block edge, which is a road face), and the 14 m surface gate greens
+        // any stray — so a mid-block building here is a real regression. Stock
+        // lotDepth is 28 (financial pads reach 60), so the bound is 60 m.
+        const Real centreBound = std::max(ParcelParams().lotDepth * 1.6, Real(60.0));
+        // A BIG-BOX store is the exception by design: a whole block, the store at the back behind its own parking lot.
+        for (const LotBuilding& b : buildings) {
+            if (b.type == "park" || b.type == "green" || b.recipe == "big_box") continue;
+            CHECK(distToRoads(b) <= centreBound);
+        }
     }
 }
 
@@ -1276,32 +1243,42 @@ TEST_CASE(building_pads_never_cross_their_parcel_line) {
 // street-facing parcel edge the plate is pushed out to halfWidth + sidewalk
 // from the centreline — and never into the band itself.
 TEST_CASE(paved_plates_reach_the_sidewalk_and_stop_there) {
-    LotParams p;
-    p.seed = 3;
-    p.roadMargin = 6.0;
-    p.sidewalkWidth = 3.5;
-    RoadGraph roads;
-    roads.nodes.push_back({Vec2(-105, -200)});
-    roads.nodes.push_back({Vec2(-105, 200)});
-    roads.edges.push_back({0, 1, 13, RoadClass::Arterial, 0});   // band edge at x = -105 + 6.5 + 3.5 = -95
-    std::vector<Poly2> blocks = {{{-101, -45}, {-11, -45}, {-11, 45}, {-101, 45}}};
-    const Real clearance = 4.6;
-    std::vector<LotBuilding> b = growLotBuildings(blocks, p, nullptr, nullptr, &roads, clearance);
+    // Over twelve seeds (ADR-0265): each one's lots ON the road -- an EDGE along it, not a corner lot whose mitre
+    // only touches it at a point -- reach the band, and no plate enters it.
     int reached = 0, paved = 0;
-    for (const LotBuilding& lb : b) {
-        if (lb.pavedLot.size() < 3) continue;
-        ++paved;
-        Real minX = 1e30, lotMinX = 1e30;
-        for (const Vec2& v : lb.pavedLot) minX = std::min(minX, v.x);
-        for (const Vec2& v : lb.lot) lotMinX = std::min(lotMinX, v.x);
-        CHECK(minX >= -95.0 - 0.15);                 // never into the band
-        if (lotMinX < -90.0) {                       // a lot on the road: its plate reaches the band
-            CHECK(minX <= -95.0 + 0.3);
-            ++reached;
+    for (uint32_t seed = 1; seed <= 12; ++seed) {
+        LotParams p;
+        p.seed = seed;
+        p.roadMargin = 6.0;
+        p.sidewalkWidth = 3.5;
+        RoadGraph roads;
+        roads.nodes.push_back({Vec2(-105, -200)});
+        roads.nodes.push_back({Vec2(-105, 200)});
+        roads.edges.push_back({0, 1, 13, RoadClass::Arterial, 0});   // band edge at x = -105 + 6.5 + 3.5 = -95
+        std::vector<Poly2> blocks = {{{-101, -45}, {-11, -45}, {-11, 45}, {-101, 45}}};
+        const Real clearance = 4.6;
+        std::vector<LotBuilding> b = growLotBuildings(blocks, p, nullptr, nullptr, &roads, clearance);
+        for (const LotBuilding& lb : b) {
+            if (lb.pavedLot.size() < 3) continue;
+            ++paved;
+            Real minX = 1e30;
+            for (const Vec2& v : lb.pavedLot) minX = std::min(minX, v.x);
+            CHECK(minX >= -95.0 - 0.15);                 // never into the band
+            bool onRoad = false;                         // an edge of the lot runs along the road side
+            for (std::size_t i = 0; i < lb.lot.size(); ++i) {
+                const Vec2 a = lb.lot[i], c = lb.lot[(i + 1) % lb.lot.size()];
+                onRoad = onRoad || (a.x < -90.0 && c.x < -90.0 && (c - a).length() > 2.0);
+            }
+            if (onRoad) {                                // a lot on the road: its plate reaches the band
+                if (minX > -95.0 + 0.3) std::printf("    [plates] seed %u: a lot on the road stops at x %.2f\n", seed, minX);
+                CHECK(minX <= -95.0 + 0.3);
+                ++reached;
+            }
         }
     }
-    CHECK(paved > 0);
-    CHECK(reached > 0);
+    std::printf("    [plates] twelve seeds: %d plates, %d on the road reach the band\n", paved, reached);
+    CHECK(paved > 12);
+    CHECK(reached > 12);
     // The offset helper itself: a square pushed out on one edge only.
     const Poly2 sq = {{0, 0}, {10, 0}, {10, 10}, {0, 10}};
     const Poly2 o = offsetPolygonEdges(sq, {2.0, 0.0, 0.0, 0.0});   // edge 0 (y = 0) moves to y = -2

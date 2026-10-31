@@ -3,6 +3,8 @@
 #include "traffic_rules.h"   // approachStop
 #include "../../engine/ai/idm.h"   // IDM car-following (roads-v2 S7)
 #include "../../profile.h"
+#include "../../engine/bundle/bundle.h"   // the population cache key
+#include "../../engine/bundle/cache_use.h"
 #include "../../job_system.h"   // assignPlaces decides the population in parallel
 
 #include <algorithm>
@@ -24,6 +26,30 @@ using engine::Vec2;
 using engine::NavGraph;
 
 namespace {
+// A DRIVER'S TURN NEVER BACKS UP (ADR-0265): the control point of a corner's quadratic from p0 (on the lane in, its
+// direction da) to p2 (on the lane out, db). It is `mid` -- the two lane ends' midpoint at the node, the arc cutting
+// into the junction as driving through it does -- unless that curve would recede along the way in or the way out: on
+// a short link whose blend reaches back less than the lane's offset across the turn, the midpoint stood past the new
+// lane, and the car ran on and came BACK to it (town 19: 0.6 m against its nose into a 90-degree turn, drawn
+// reversing for fourteen frames). Then the lane lines' miter (qa, qb: the lanes at the node), else a straight blend.
+// A U-turn (da . db < -0.5) reverses by design and keeps `mid`. Both of refreshPose's corner curves ask it.
+Vec2 driverTurnControl(const Vec2& p0, const Vec2& p2, const Vec2& mid, const Vec2& qa, const Vec2& qb, const Vec2& da,
+                       const Vec2& db) {
+    if (da.x * db.x + da.y * db.y <= -0.5) return mid;
+    auto forwardAt = [&](const Vec2& k) {
+        const Vec2 in = k - p0, out = p2 - k;
+        return dot(in, da) >= -1e-6 && dot(out, db) >= -1e-6 && dot(out, da) >= -1e-6 && dot(in, db) >= -1e-6;
+    };
+    if (forwardAt(mid)) return mid;
+    const Real den = da.x * db.y - da.y * db.x;
+    if (std::fabs(den) > 0.2) {
+        const Vec2 w = qb - qa;
+        const Vec2 miter = qa + da * ((w.x * db.y - w.y * db.x) / den);
+        if (forwardAt(miter)) return miter;
+    }
+    return (p0 + p2) * 0.5;
+}
+
 // How many a bus carries. Beyond this it drives past a stop full.
 constexpr int kBusSeats = 24;
 constexpr int kTrainSeatsPerCar = 72;   // a coach's seats (train_mesh's coach reports 72)
@@ -311,13 +337,8 @@ std::vector<Vec2> CitySim::lanePath(int agentIndex, Real step) const {
     return out;
 }
 
-uint32_t CitySim::rnd() {
-    rng_ ^= rng_ << 13;
-    rng_ ^= rng_ >> 17;
-    rng_ ^= rng_ << 5;
-    return rng_;
-}
-Real CitySim::rndUnit() { return (rnd() >> 8) * (1.0 / 16777216.0); }
+uint32_t CitySim::rnd() { return rng_.bits(); }
+Real CitySim::rndUnit() { return rng_.next(); }
 
 // A draw from THIS AGENT'S OWN stream. Trip decisions (which lane to take, where
 // to wander to) used to come off the shared `rng_`, which made every agent's
@@ -331,19 +352,9 @@ Real CitySim::rndUnit() { return (rnd() >> 8) * (1.0 / 16777216.0); }
 // every seeded scenario — is untouched. Distinct from brainUnit's stream: that
 // one owns perception faults, and sharing would couple a car's lane choice to
 // how often it had misperceived something.
-uint32_t CitySim::tripRnd(Agent& a) {
-    a.tripRng ^= a.tripRng << 13;
-    a.tripRng ^= a.tripRng >> 17;
-    a.tripRng ^= a.tripRng << 5;
-    return a.tripRng;
-}
+uint32_t CitySim::tripRnd(Agent& a) { return a.tripRng.bits(); }
 
-Real CitySim::brainUnit(Agent& a) {
-    a.brain ^= a.brain << 13;
-    a.brain ^= a.brain >> 17;
-    a.brain ^= a.brain << 5;
-    return (a.brain >> 8) * (1.0 / 16777216.0);
-}
+Real CitySim::brainUnit(Agent& a) { return a.faults.next(); }
 
 void CitySim::build(const NavGraph& graph, int driverCount, int pedCount, uint32_t seed) {
     nav_ = &graph;
@@ -360,7 +371,7 @@ void CitySim::build(const NavGraph& graph, int driverCount, int pedCount, uint32
     clockHours_ = 8.5;   // start mid morning-rush so agents commute right away
     simSeconds_ = 0;
     faultCount_ = 0;
-    rng_ = seed ? seed : 0x6c078965u;
+    rng_ = engine::ProcRng(seed);
     ids_.reset();   // fresh scene → UIDs restart at 0 (reproducible from seed)
     // Three-tier bookkeeping (P4): a rebuild starts everyone K on frame 0 with
     // no bubble centre — the host re-feeds the player each step. The knobs
@@ -654,12 +665,11 @@ void CitySim::build(const NavGraph& graph, int driverCount, int pedCount, uint32
         const Real j0 = rndUnit(), j1 = rndUnit();       // per-agent jitter
         a.activity = Agent::Activity::AtHome;
         a.goal = tableFor(a).entry();   // the day starts at the table's entry
-        a.brain = rnd() | 1u;            // per-agent fault RNG (non-zero)
-        // Trip stream: HASHED from the brain, not drawn, so the build sequence
-        // (and every seeded scenario's layout) is unchanged. Must be non-zero —
-        // a xorshift seeded at 0 stays at 0 forever.
-        a.tripRng = (a.brain * 2654435761u) ^ 0x9E3779B9u;
-        if (a.tripRng == 0) a.tripRng = 1u;
+        a.brain = rnd() | 1u;            // the agent's fixed identity bits
+        // its fault and trip streams seeded from the brain, not drawn, so the
+        // build sequence is the same with or without them
+        a.faults = engine::ProcRng(a.brain, 0xB5297A4D3F84D5B5ull);
+        a.tripRng = engine::ProcRng(a.brain, 0x68E31DA4B4F2A8C1ull);
         // SHIFT DIVERSITY. A single 7.5-9.0 departure window put the whole
         // population on the road at once: one hot rush, a dead city either
         // side of it, and a sim-cost spike where nearly every agent is moving
@@ -777,13 +787,7 @@ void CitySim::build(const NavGraph& graph, int driverCount, int pedCount, uint32
 namespace {
 // ---- the population cache (CitySim::setPopulationCacheDir) --------------------------------------------
 constexpr uint32_t kPopulationFormat = 7;   // (7: homes and jobs drawn by floor area; 6: garage stalls are bays) bump when assignPlaces' rules or this record change
-struct Fnv {
-    uint64_t h = 1469598103934665603ull;
-    void bytes(const void* p, std::size_t n) {
-        const unsigned char* c = static_cast<const unsigned char*>(p);
-        for (std::size_t i = 0; i < n; ++i) { h ^= c[i]; h *= 1099511628211ull; }
-    }
-    template <typename T> void pod(const T& v) { bytes(&v, sizeof v); }
+struct Fnv : engine::bundle::Fnv {
     void real(Real v) { const double d = static_cast<double>(v); pod(d); }
     void vec(const engine::Vec2& v) { real(v.x); real(v.y); }
 };
@@ -1050,8 +1054,10 @@ void CitySim::assignPlaces(const PlaceMap& places, const NavGraph& graph) {
             in.read(reinterpret_cast<char*>(&count), 4) && count == agents_.size()) {
             cached.resize(count);
             if (in.read(reinterpret_cast<char*>(cached.data()), static_cast<std::streamsize>(count * sizeof(PopRecord))) &&
-                in.read(reinterpret_cast<char*>(&cachedTail), sizeof cachedTail))
+                in.read(reinterpret_cast<char*>(&cachedTail), sizeof cachedTail)) {
                 popCache_.hit = true;
+                engine::bundle::noteCacheUse(popPath, "population");
+            }
             else
                 cached.clear();
         }
@@ -1672,6 +1678,7 @@ void CitySim::assignPlaces(const PlaceMap& places, const NavGraph& graph) {
         out.write(reinterpret_cast<const char*>(&tail), sizeof tail);
         out.close();
         if (out) { std::filesystem::rename(tmp, popPath, ec); popCache_.saved = !ec; }
+        if (popCache_.saved) engine::bundle::noteCacheUse(popPath, "population");
     }
     }   // decided (not read from the cache)
     students_ = 0;
@@ -1804,10 +1811,12 @@ void CitySim::measureCommute(const NavGraph& graph) {
 // The model is the one goalThink already runs, read forwards instead of ticked:
 // inside [departWork, departHome) the day says "be at work", outside it "be at
 // home", and the agent is TRAVELLING for as long as the journey takes after each
-// boundary. Travel time comes from the measured median rather than this agent's
-// own route, which is deliberate — the point is to place a population without
-// paying an A* per agent. A seeded agent is approximately right immediately and
-// exactly right as soon as it takes its next real trip.
+// boundary. Travel time is this agent's own commute (Agent::commuteSeconds, costed
+// once when its job is assigned: no A* here), the measured median only for an
+// agent without one. It was the median for everyone, and a city whose jobs went
+// mostly to walkers put every driver on a walker's journey: at the test town's
+// 0.05 h/s a 544 s walk is 27 in-world hours, so no shop's staff were ever at work
+// (ADR-0265: the new stream handed the jobs out differently).
 CitySim::Snapshot CitySim::scheduleSnapshot(const Agent& a, Real clock) const {
     Snapshot s;
     // No commute: it is always home. Also the stranded case (work == home),
@@ -1819,8 +1828,8 @@ CitySim::Snapshot CitySim::scheduleSnapshot(const Agent& a, Real clock) const {
     // Hours since the boundary that put us in this half of the day.
     const Real since = std::fmod(
         clock - (atWorkWindow ? dwHour : a.departHome) + 24.0, 24.0);
-    const Real travelHours =
-        commuteSecondsMedian_ * (hoursPerSecond_ > 0 ? hoursPerSecond_ : 0.0);
+    const Real travelHours = (a.commuteSeconds > 0 ? static_cast<Real>(a.commuteSeconds) : commuteSecondsMedian_) *
+                             (hoursPerSecond_ > 0 ? hoursPerSecond_ : 0.0);
 
     if (since < travelHours) {
         // Still on the road: under way for `since`, heading to whichever end
@@ -3707,7 +3716,7 @@ void CitySim::setBuses(int routes, int stopsPerRoute, int busCount, Real maxWalk
     busRoute_.assign(agents_.size(), -1);
     busStop_.assign(agents_.size(), -1);
     if (!nav_ || routes <= 0 || busCount <= 0) return;
-    buses_.build(*nav_, routes, stopsPerRoute, rng_ ? rng_ : 1u, busAnchors);
+    buses_.build(*nav_, routes, stopsPerRoute, rng_.peek() | 1u, busAnchors);
     if (buses_.empty()) return;
     // Each loop is driven both ways round by the SAME fleet, split between the directions. Doubling it (so each
     // direction kept its old headway) put 80 buses on metro_planned and gridlocked its centre: regional buses
@@ -4228,6 +4237,14 @@ void CitySim::startTrip(Agent& a, int origin, int goal, bool fromRest) {
         pulledFrom = vehicles_[static_cast<std::size_t>(a.car)].pos;
         pulledHeading = vehicles_[static_cast<std::size_t>(a.car)].heading;
     }
+    // ...and a CHAINED trip leaves from where the car is DRAWN: the last trip's lane plus whatever of its pull is
+    // still to run (ADR-0265)
+    Real drawnYawOffset = 0;
+    if (!fromRest && a.pullLen > 0) {
+        const Real w = pullOutWeight(a, a.pullS);
+        pulledFrom = pulledFrom + a.pullOffset * w;
+        drawnYawOffset = a.pullYawOffset * w;
+    }
     // Leaving a BAY: the trip starts from where the car stands on its street,
     // not from the node past it (see the prepend below).
     const int leavingBay =
@@ -4417,29 +4434,38 @@ void CitySim::startTrip(Agent& a, int origin, int goal, bool fromRest) {
     a.heading = nav_->direction(a.route.links.front());   // start pointed down leg 0
     a.tickFromPos = a.pos;          // a placement, not a motion (see tickFromPos)
     a.tickFromHeading = a.heading;
-    a.tickFromPullS = a.pullS;
     // Pull out of the space rather than appear in the lane. Only for a car
-    // leaving from rest in the drawn tier; a far agent is never on screen. A
-    // CHAINED trip keeps a pull already under way -- cutting it short snapped
-    // the car into its lane mid-merge (a 9 m jump and a 158-degree pivot).
-    if (fromRest) a.pullLen = 0;
-    if (fromRest && a.mode == Agent::Mode::Driver && !a.far() && !wasOffStreet) {
+    // in the drawn tier; a far agent is never on screen. EVERY trip starts its
+    // own pull from the pose the car is drawn in (ADR-0265): a chained trip's
+    // last lane at the node and its next one's first lane stand apart (a 1.9 m
+    // snap), and a pull still under way, kept as it was, ran out against the
+    // new lane (2.4 m, its last sliver of weight); cutting one short snapped the
+    // car into its lane mid-merge (a 9 m jump and a 158-degree pivot).
+    a.pullLen = 0;
+    if (a.mode == Agent::Mode::Driver && !a.far() && !wasOffStreet) {
         const Vec2 off = pulledFrom - a.pos;
         const Real d = off.length();
-        if (d > 0.5 && d < 40.0) {
+        // (from rest: the parked car's yaw turns into the lane's; a chained trip was driving, its drawn heading the
+        // sim's, and keeps only what its last pull had still to turn)
+        Real dy = drawnYawOffset;
+        if (fromRest && pulledHeading.lengthSquared() > 0.25) {
+            dy = std::atan2(pulledHeading.x, pulledHeading.y) - std::atan2(a.heading.x, a.heading.y);
+            while (dy > engine::PI) dy -= 2 * engine::PI;
+            while (dy < -engine::PI) dy += 2 * engine::PI;
+        }
+        if ((d > 0.05 || (!fromRest && std::fabs(dy) > 0.05)) && d < 40.0) {   // (a 0.3 m lane step still a snap)
             a.pullOffset = off;
-            a.pullYawOffset = 0;
-            if (pulledHeading.lengthSquared() > 0.25) {
-                Real dy = std::atan2(pulledHeading.x, pulledHeading.y) -
-                          std::atan2(a.heading.x, a.heading.y);
-                while (dy > engine::PI) dy -= 2 * engine::PI;
-                while (dy < -engine::PI) dy += 2 * engine::PI;
-                a.pullYawOffset = dy;
-            }
-            a.pullLen = std::min(std::max(d * 2.5, Real(8)), Real(30));
+            a.pullYawOffset = dy;
+            // (long enough to turn the yaw offset at a car's rate: the smoothstep's steepest is 1.5 |dy| / len a
+            // metre, and a car turns at most 1 / kCarMinTurnRadius a metre -- a car leaving its space at 1.5 rad
+            // turned it in 8 m, a pivot; and one parked facing the other way, turning pi in 26 m while its lane bent
+            // too, out-turned any car)
+            a.pullLen = std::min(std::max({d * 2.5, Real(8), Real(1.5) * kCarMinTurnRadius * std::fabs(a.pullYawOffset)}),
+                                 Real(30));
             a.pullS = 0;
         }
     }
+    a.tickFromPullS = a.pullS;   // (after the pull is set: from its old pull's end, the first frame drew no pull at all)
 }
 
 // How far into the pull-out a car is drawn: 1 at its space, 0 in its lane.
@@ -4556,6 +4582,8 @@ void CitySim::refreshPose(Agent& a) {
             }
         }
         engine::Vec2 p2 = sample(lb, Lb > 1e-9 ? B / Lb : 1.0);
+        if (a.mode == Agent::Mode::Driver)
+            c = driverTurnControl(p0, p2, c, sample(la, 1.0), sample(lb, 0.0), nav_->direction(la), nav_->direction(lb));
         Real v = 1.0 - u;
         return p0 * (v * v) + c * (2.0 * u * v) + p2 * (u * u);
     };
@@ -4647,21 +4675,35 @@ void CitySim::refreshPose(Agent& a) {
                     if (nav_->isJunction(nav_->links[a.route.links[k]].to)) break;
                 }
                 B = std::min(B, std::min(runIn, runOut) * 0.45);
+                auto back = [&](Real m) {   // the guide line m before the node
+                    int k = kin;
+                    Real Lk = nav_->links[a.route.links[k]].length;
+                    while (m > Lk && k > 0) { m -= Lk; --k; Lk = nav_->links[a.route.links[k]].length; }
+                    return sample(a.route.links[k], Lk > 1e-9 ? (Lk - m) / Lk : 0.0);
+                };
+                auto fwd = [&](Real m) {    // ...and m after it
+                    int k = kin + 1;
+                    Real Lk = nav_->links[a.route.links[k]].length;
+                    while (m > Lk && k + 1 < legN) { m -= Lk; ++k; Lk = nav_->links[a.route.links[k]].length; }
+                    return sample(a.route.links[k], Lk > 1e-9 ? m / Lk : 1.0);
+                };
+                // ...but always PAST where the two lanes cross (ADR-0265): turning toward its lane's side, a car's
+                // lane lines cross before the node by the lane's offset, and a span shorter than that (a route
+                // starting 5 m short of a junction: 45% of it is 2.3 m, the lane 2.4 m out) began past the crossing
+                // and ended short of it -- no curve between them goes forward. Up to the run there is.
+                {
+                    const Vec2 qa = back(0), qb = fwd(0);
+                    const Real den = din.x * dout.y - din.y * dout.x;
+                    if (std::fabs(den) > 0.2) {
+                        const Vec2 w = qb - qa;
+                        const Vec2 miter = qa + din * ((w.x * dout.y - w.y * dout.x) / den);
+                        const Real need = std::max(dot(qa - miter, din), dot(miter - qb, dout)) + 1.0;
+                        if (need > B) B = std::min(need, std::min(runIn, runOut) * 0.95);
+                    }
+                }
                 if (B > 0.5 && std::fabs(d) < B) {
-                    auto back = [&](Real m) {   // the guide line m before the node
-                        int k = kin;
-                        Real Lk = nav_->links[a.route.links[k]].length;
-                        while (m > Lk && k > 0) { m -= Lk; --k; Lk = nav_->links[a.route.links[k]].length; }
-                        return sample(a.route.links[k], Lk > 1e-9 ? (Lk - m) / Lk : 0.0);
-                    };
-                    auto fwd = [&](Real m) {    // ...and m after it
-                        int k = kin + 1;
-                        Real Lk = nav_->links[a.route.links[k]].length;
-                        while (m > Lk && k + 1 < legN) { m -= Lk; ++k; Lk = nav_->links[a.route.links[k]].length; }
-                        return sample(a.route.links[k], Lk > 1e-9 ? m / Lk : 1.0);
-                    };
                     const Vec2 p0 = back(B), p2 = fwd(B);
-                    const Vec2 c = (back(0) + fwd(0)) * 0.5;
+                    const Vec2 c = driverTurnControl(p0, p2, (back(0) + fwd(0)) * 0.5, back(0), fwd(0), din, dout);
                     const Real u = (B - d) / (2.0 * B);
                     const Real v = 1.0 - u;
                     a.pos = p0 * (v * v) + c * (2.0 * u * v) + p2 * (u * u);
@@ -7283,8 +7325,9 @@ void CitySim::stepTick(Real dt, Real hoursPerSecond) {
             // contact = exact segment-segment distance under the summed radii:
             // fires exactly at bumper touch nose-to-tail, at body overlap in a
             // side-swipe, and never for a lane-apart pass (>= 3 m centrelines).
+            constexpr Real kHalfW = 0.92;   // body half-width + a small skin
+            Real best2 = 1e30;              // the capsules' squared distance (0: axes cross)
             {
-                const Real kHalfW = 0.92;   // body half-width + a small skin
                 auto axis = [&](const Agent& c, int idx, Real& ex, Real& ey) {
                     const Real half =
                         std::max(Real(0), 0.5 * vehicleLength(idx) - kHalfW);
@@ -7302,7 +7345,6 @@ void CitySim::stepTick(Real dt, Real hoursPerSecond) {
                     const Real v = (px - ox) * (qy - oy) - (py - oy) * (qx - ox);
                     return v > 1e-9 ? 1 : (v < -1e-9 ? -1 : 0);
                 };
-                Real best2 = 1e30;
                 if (ori(A0x, A0y, A1x, A1y, B0x, B0y) !=
                         ori(A0x, A0y, A1x, A1y, B1x, B1y) &&
                     ori(B0x, B0y, B1x, B1y, A0x, A0y) !=
@@ -7340,14 +7382,20 @@ void CitySim::stepTick(Real dt, Real hoursPerSecond) {
             // Undo the overshoot: whoever MOVED into the contact backs its path
             // progress out again, split by speed, so the pair rests touching —
             // without this a resumed car RATCHETED deeper each freeze cycle.
-            Real dist = std::sqrt(d2);
-            Real pen = rs - dist;
+            // THE OVERSHOOT IS THIS TICK'S (ADR-0265): the capsules' own overlap (this was the centres' distance
+            // under the summed half-lengths, a disc's -- two cars touching side by side read 2.5 m deep), and a car
+            // backs out no further than it came forward since the tick began. A car queued at a standstill moved
+            // nothing, so a partner's leftover never shoves it back; and no car is drawn driving backwards to undo a
+            // contact (town 11's queue knocked back a metre a frame, town 19's eighteen cars rolling backwards).
+            Real pen = 2.0 * kHalfW - std::sqrt(best2);
             Real vsum = a.speed + b.speed;
             if (pen > 0 && vsum > 1e-6) {
-                // Returns whatever couldn't be applied (a car at the very start
-                // of its leg can't back past it) so the PARTNER absorbs it —
-                // otherwise a freshly-chained car at distOnLeg 0 left half the
-                // penetration in place.
+                auto cameForward = [](const Agent& c) {
+                    return std::max(Real(0), c.heading.x * (c.pos.x - c.tickFromPos.x) + c.heading.y * (c.pos.y - c.tickFromPos.y));
+                };
+                // Returns whatever couldn't be applied (a car at the very start of its leg can't back past it, nor
+                // past where it stood when the tick began), so the PARTNER absorbs it -- as far as ITS tick's
+                // progress goes.
                 auto rollBack = [&](Agent& c, Agent& other, Real amount) -> Real {
                     if (amount <= 0 || !c.moving ||
                         c.leg >= static_cast<int>(c.route.links.size()))
@@ -7357,7 +7405,8 @@ void CitySim::stepTick(Real dt, Real hoursPerSecond) {
                     Real toOther = c.heading.x * (other.pos.x - c.pos.x) +
                                    c.heading.y * (other.pos.y - c.pos.y);
                     if (toOther <= 0) return amount;   // partner behind: hold still
-                    Real applied = std::min(amount, c.distOnLeg);
+                    Real applied = std::min({amount, c.distOnLeg, cameForward(c)});
+                    if (applied <= 0) return amount;
                     c.distOnLeg -= applied;
                     refreshPose(c);
                     return amount - applied;

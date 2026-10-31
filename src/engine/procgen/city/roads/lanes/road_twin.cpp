@@ -74,14 +74,6 @@ RoadClass classOf(const EdgeSpec& e) {
     return RoadClass::Local;
 }
 
-double twinRightOfWayPad(const Result& r, RoadClass k) {
-    const char* cls = k == RoadClass::Freeway ? "freeway" : k == RoadClass::Ramp ? "ramp" : nullptr;
-    if (!cls) return 0.0;
-    auto it = r.graph.classes.find(cls);
-    const double shoulder = it != r.graph.classes.end() ? it->second.shoulder : 0.0;
-    return 2.0 * (shoulder + kTwinTolerance + r.graph.rules.conformW);
-}
-
 RoadEntity roadTwin(const Result& r, double nodeSpacing, bool forLots, bool forNav) {
     RoadEntity net; net.look.sidewalk = 3.5; net.look.autoRoundabout = false;   // lanelab owns its junctions
     std::vector<Line> lines;
@@ -165,8 +157,7 @@ RoadEntity roadTwin(const Result& r, double nodeSpacing, bool forLots, bool forN
         // ...except for TRAFFIC on a deck. The nav graph takes this width as the carriageway a
         // one-way link's lanes are spread across, and a freeway's lot-clearance band (earthwork,
         // shoulders, tolerance: ~31 m) put three lanes 10 m apart. The nav twin carries the
-        // travel lanes' own width; the right-of-way the lot pass zones around gets its padding
-        // back where it is built (twinRightOfWayPad, city_producer).
+        // travel lanes' own width.
         if (deckEarthwork && !forLots) L.w = 2.0 * r.graph.hw(e);
         if (forNav) L.w = 2.0 * r.graph.hw(atGradeRamp ? *r.graph.find(e.id) : e);   // every road: its travel lanes
         // THE CROSS-SECTION, so the city can park on it. `w` above is the LOT clearance band —
@@ -306,10 +297,15 @@ RoadEntity roadTwin(const Result& r, double nodeSpacing, bool forLots, bool forN
                 if (hostId.empty()) continue;
                 auto it = linesOf.find(hostId); if (it == linesOf.end()) { ++rampWeldsMissed; continue; }
                 // A street-to-street meeting (an at-grade ramp run on a street host) is the
-                // planariser's job and already done; only a DECK on either side was never joined.
+                // planariser's job, which splits lines where they CROSS -- but an at-grade ramp end that
+                // starts ON its host's line, part-way along a segment, crosses nothing: metro_v2_test's
+                // diamond on-ramp left s404 12 m east of the junction the planariser made, and those 12 m
+                // were a one-way stub no car could enter (ADR-0269). So a street pair is welded too when the
+                // end lies on the host's line; one the planariser already joined snaps to that same vertex.
                 bool hostDeck = false;
                 for (size_t hl : it->second) hostDeck = hostDeck || lines[hl].deck;
-                if (!L.deck && !hostDeck) continue;
+                const bool atGrade = !L.deck && !hostDeck;
+                constexpr double kOnHostLine = 0.5;
                 const Vec2 ep = end == 0 ? L.pts.front() : L.pts.back();
                 double best = 1e30, bestU = 0; size_t bestLine = 0, bestSeg = 0;
                 for (size_t hl : it->second) {
@@ -320,6 +316,7 @@ RoadEntity roadTwin(const Result& r, double nodeSpacing, bool forLots, bool forN
                         if (d < best) { best = d; bestU = u; bestLine = hl; bestSeg = si; }
                     }
                 }
+                if (atGrade && best > kOnHostLine) continue;   // met by the planariser, or not on the host at all
                 if (best > kWeldReach) { ++rampWeldsMissed; continue; }
                 const Line& H = lines[bestLine];
                 const Vec2 a = H.pts[bestSeg], b = H.pts[bestSeg + 1];
@@ -355,9 +352,8 @@ RoadEntity roadTwin(const Result& r, double nodeSpacing, bool forLots, bool forN
                 net.graph.edges.back().oneWay = L.oneWay;
                 net.graph.edges.back().spec = specIdx;   // the band model rides the graph (roads-v2)
                 // outside the edge's lots_range the street is right-of-way: no block frontage, no rim lots
-                // (a landing street beyond the freeway; an arterial's run outside the ring). `baked` is
-                // exactly what growLotBuildingsOnNets skips as a block/lot source while keeping the
-                // clearance band.
+                // (a landing street beyond the freeway; an arterial's run outside the ring). `baked` marks
+                // it (road_network's dead-end joins skip it, as they skip the freeway).
                 const double mid = 0.5 * (prevS + st);
                 if ((L.lotsFrom >= 0 && mid < L.lotsFrom) || (L.lotsTo >= 0 && mid > L.lotsTo)) net.graph.edges.back().baked = true;
             }

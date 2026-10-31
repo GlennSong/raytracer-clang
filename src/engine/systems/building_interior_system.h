@@ -95,6 +95,7 @@ private:
     std::vector<MeshHandle> freeQueue_;
     std::uint64_t stepCount_ = 0;
     std::uint64_t lastFree_ = 0;
+    long tablesGeneration_ = -1;   // building_uses.lua + floor_programs.lua as last seen (hot reload)
     Real lastPlayerY_ = 0;
     bool havePlayerY_ = false;
 };

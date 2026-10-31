@@ -14,6 +14,7 @@
 #include <map>
 #include <mutex>
 #include "procgen/noise.h"
+#include "procgen/city/circulation.h"   // stairPlaceOf / liftBanksOf
 
 using json = nlohmann::json;
 
@@ -31,22 +32,10 @@ void propagateWaterSeaLevel(json& root) {
     if (!root.contains("water")) return;
     const json& w = root["water"];
     double sea = w.value("seaLevel", 0.0);
-    double beach = w.value("beachRise", 2.5);
     // The terrain colours its coast by this same sea level (beach/rock/sea floor).
     if (root.contains("terrain") && root["terrain"].is_object() &&
         !root["terrain"].contains("seaLevel"))
         root["terrain"]["seaLevel"] = sea;
-    // Every road recipe gates buildability on it (roads/blocks stay on land).
-    if (!root.contains("entities") || !root["entities"].is_array()) return;
-    for (auto& ent : root["entities"]) {
-        if (ent.value("shape", std::string()) != "road" || !ent.contains("road"))
-            continue;
-        json& road = ent["road"];
-        if (!road.contains("generate") || !road["generate"].is_object()) continue;
-        json& g = road["generate"];
-        if (!g.contains("sea_level")) g["sea_level"] = sea;
-        if (!g.contains("beach_rise")) g["beach_rise"] = beach;
-    }
 }
 
 std::shared_ptr<const std::function<double(double, double)>> erodedForTerrain(const json& tj);
@@ -100,7 +89,6 @@ TerrainParams readTerrainParams(const json& t) {
         }
     }
     p.seaLevel = t.value("seaLevel", p.seaLevel);   // loaders may override from the water block
-    p.erodeLandOnly = t.value("erodeLandOnly", p.erodeLandOnly);
     // The earthwork field's knobs (procgen/earthwork.h):
     //   "earthwork": { "enabled": true, "reach": 100, "cell": 4, "margin": 0 }
     if (t.contains("earthwork") && t["earthwork"].is_object()) {
@@ -387,26 +375,14 @@ std::shared_ptr<const std::function<double(double, double)>> erodedForTerrain(co
         memo[key] = f;
         return f;
     }
-    TerrainParams eb = readTerrainParams(tj);
-    Noise en(tj.value("seed", 0u));
-    ErosionParams ep;
-    ep.seed = tj.value("seed", 0u) + 1234u;
-    ep.droplets = tj.value("erodeDroplets", ep.droplets);
-    ep.erodeRadius = tj.value("erodeRadius", ep.erodeRadius);
-    ep.thermalIterations = tj.value("erodeThermal", ep.thermalIterations);
-    ep.talus = tj.value("erodeTalus", ep.talus);
-    ep.vulkan = tj.value("erodeGpu", false);   // ADR-0122: opt-in on Vulkan builds
-    bakeErodedTerrain(eb, en, eb.size, tj.value("erodeRes", 512), ep);
-    memo[key] = eb.erodedBase;
-    return eb.erodedBase;
+    // ADR-0257: the droplet sim that once eroded a block without "weather" is gone
+    LOG_WARN << "[terrain] \"erode\" without a \"weather\" block: the ground stays as drawn (droplet erosion was "
+                "retired, ADR-0257; give the terrain a weather block)";
+    memo[key] = nullptr;
+    return nullptr;
 }
 
-void readLotGrowParams(const json& cityJson,
-                       EdgeBlockParams& edges, LotParams& lots) {
-    edges.depth = cityJson.value("edgeBlockDepth", edges.depth);
-    edges.minLen = cityJson.value("edgeBlockMinLen", edges.minLen);
-    edges.maxLen = cityJson.value("edgeBlockMaxLen", edges.maxLen);
-    edges.margin = 4.0 + cityJson.value("sidewalk", 4.0);
+void readLotGrowParams(const json& cityJson, LotParams& lots) {
     lots.seed = cityJson.value("seed", 1u) ^ 0x10c5u;
     lots.buildChance = cityJson.value("buildChance", 0.9);
     // ROAD MARGIN — sidewalk only, no road-half term (measured 2026-08-16).
@@ -425,9 +401,9 @@ void readLotGrowParams(const json& cityJson,
     // The city reads empty because ~73% of it is road and margin, not because the
     // blocks are under-built.
     //
-    // Gate: tests/test_lot_road_clearance.cpp
-    //       lot_block_interiors_clear_every_carriageway_on_a_mixed_width_net
-    // fails if this lets a block interior reach into a carriageway.
+    // (A built city's blocks are the pavement's holes and take no margin at all:
+    // engine::growCity sets it to 0. Gate: test_lanes.cpp
+    // lanes_the_city_block_pass_yields_well_formed_blocks_on_the_clean_scenes.)
     lots.roadMargin = cityJson.value("sidewalk", 4.0);
     lots.innerRadius = cityJson.value("downtownRadius", 55.0);
     lots.midRadius = cityJson.value("midtownRadius", 135.0);
@@ -437,6 +413,8 @@ void readLotGrowParams(const json& cityJson,
     lots.wholeBlocks = cityJson.value("wholeBlocks", lots.wholeBlocks);
     lots.recipe = cityJson.value("recipe", lots.recipe);
     lots.recipeCoreness = cityJson.value("coreness", lots.recipeCoreness);
+    lots.recipeStairs = stairPlaceOf(cityJson.value("stairs", std::string()));
+    lots.recipeLifts = liftBanksOf(cityJson.value("lifts", std::string()));
     // Level-authored parcel grain ("parcel", 8km-city P3): piedmont-scale metros
     // lay 150 m+ blocks, so the level can ask for bigger lots. Six knobs only;
     // absent = the compiled-in district tuning, untouched (city_lots rescales

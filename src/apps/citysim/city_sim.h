@@ -2,6 +2,7 @@
 #define RAYTRACER_APPS_CITYSIM_CITY_SIM_H
 
 #include <algorithm>
+#include "../../proc_rng.h"
 #include "../../engine/ai/agent_memory.h"
 #include "../../engine/ai/nav_graph.h"
 #include "../../engine/ai/pathfind.h"
@@ -335,16 +336,20 @@ struct Agent {
     engine::Vec2 crowdOffset{0, 0};
 
     // Imperfect perception (ADR-0060): each step the agent perceives obstacles
-    // with probability `reliability`; otherwise it misses (a fault). `brain` is a
-    // per-agent deterministic RNG so faults reproduce from the sim seed.
+    // with probability `reliability`; otherwise it misses (a fault), drawn from
+    // `faults`, its own stream so faults reproduce from the sim seed. `brain` is
+    // the agent's FIXED identity bits (pace, schedule, job, park, pose): read, never
+    // drawn from -- it was once the fault stream too, so every fault an agent
+    // rolled changed who it was (ADR-0265).
     float reliability = 1.0;
     uint32_t brain = 1;
+    engine::ProcRng faults{1};
     // This agent's own stream for TRIP decisions (lane choice, wander goal),
     // separate from `brain`'s fault stream. Per-agent so a decision depends only
     // on how many decisions THIS agent has made — the property that lets an
     // agent be advanced out of turn (waking from its schedule) without shifting
-    // everybody else's choices. Seeded from `brain` by hash at build.
-    uint32_t tripRng = 1;
+    // everybody else's choices. Seeded from `brain` at build.
+    engine::ProcRng tripRng{1};
     // Working memory (ADR-0063: sense -> REMEMBER -> predict -> decide -> act).
     // Sightings become tracks with velocity estimates; a body that leaves the
     // cone persists a few seconds, extrapolated along where it was heading
@@ -481,7 +486,7 @@ public:
 
     // Advance by `dt` seconds; `hoursPerSecond` maps real time to the wrapping
     // in-world clock. Signals advance with it.
-    void step(Real dt, Real hoursPerSecond = 0.05);
+    void step(Real dt, Real hoursPerSecond = 1.0 / 3600.0);   // (real time by default: DayNightCycle::dayMinutes)
 
     // Median home->work travel time in SIM-SECONDS, measured over a sample in
     // assignPlaces. Multiply by the host's hoursPerSecond to get what a commute
@@ -1914,7 +1919,7 @@ private:
     Real commuteSecondsWalk_ = 0;
     // Last step's clock rate, so a sleeping agent can convert "in-world hours
     // until my next event" into a sim-second wake time.
-    Real hoursPerSecond_ = 0.05;
+    Real hoursPerSecond_ = 1.0 / 3600.0;   // (real time)
     Real staffingRate_ = 0;   // the clock rate Venue::staffed was worked out at (indexVenueStaffing)
     int sleeping_ = 0;   // agents skipped this step by the scheduled wake
     PhaseTimes phase_;   // print-only instrumentation
@@ -1984,7 +1989,7 @@ private:
     uint64_t frameIndex_ = 0;
     long promotions_ = 0;
     long demotions_ = 0;
-    uint32_t rng_ = 1;
+    engine::ProcRng rng_{1};
     // Hands out agent UIDs (ADR-0066): reset at build, then one per agent in
     // order. Separate from rng_ so identity allocation never perturbs the sim's
     // deterministic draw stream.

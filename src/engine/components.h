@@ -586,6 +586,10 @@ struct Passenger {
     bool sitting = false;
     Real hipBelow = 0;
     Vec3 facing{0, 0, 1};
+    // ...in a car (a low seat under a low roof: the sedan's numbers, procgen/vehicle/occupant.h carPassenger), not a
+    // bus's or a train's upright seat (chairOccupant). Glenn, in a cab's back seat: "He's poking out the back of the
+    // car" -- a bus seat's 0.86 m sitting height put the head through the rear window.
+    bool carSeat = false;
     // THE CARRIER (engine/riding.h, ADR-0243): one way of riding for the bus, the car, the cab and the train. The owner
     // (the system that knows the vehicle) sets `carrier` -- its frame to world this fixed step -- `local`, `sitting`
     // and `eyeAbove`, and calls rideStep(), which keeps the step before (`carrierPrev`). RidingSystem draws the rider
@@ -818,7 +822,7 @@ struct CitySimConfig {
     int nearTarget = 0;
     int farTarget = 0;    // the far (V) ring held to about this many agents (0: the radii as set)
     uint32_t seed = 1;
-    float hoursPerSecond = 0.05f;        // sim-clock hours per real second
+    float hoursPerSecond = 1.0f / 3600.0f;   // sim-clock hours per real second (real time: DayNightCycle)
     // The in-world hour the level OPENS at. Agents are placed straight from
     // their schedules at this hour, so any start costs the same — a level can
     // open at 03:00 as cheaply as at midday.

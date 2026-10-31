@@ -1,4 +1,5 @@
 #include "motion_audio_system.h"
+#include "../../proc_rng.h"
 
 #include "../audio/sfx.h"
 #include "../components.h"
@@ -76,7 +77,7 @@ void MotionAudioSystem::drive(FrameContext& ctx, Loop& loop, float target, float
 void MotionAudioSystem::oneShot(FrameContext& ctx, AudioClipHandle clip, const Vec3& at, float volume, float pitch,
                                 Real range) {
     if (!clip.valid() || volume <= 0.01f) return;
-    std::uniform_real_distribution<float> vary(0.94f, 1.06f);
+    ProcUniform<float> vary(0.94f, 1.06f);
     AudioPlayParams p;
     p.volume = std::min(1.0f, volume);
     p.pitch = pitch * vary(rng_);

@@ -15,7 +15,7 @@
 #include <unordered_map>
 #include <map>
 #include <tuple>
-#include <random>
+#include "../../proc_rng.h"
 #include <sstream>
 
 namespace engine {
@@ -131,7 +131,7 @@ float gnarlNoise(const Vec3& p, uint32_t seed) {
 // S), a limb now and then KINKS (crookChance: a lost leader, a lateral taking over -- the kink persists, since the
 // next segment bends from this one's direction), and a smooth multi-octave MEANDER (coherent noise of position, so
 // a limb wanders in curves, not per-node jitter).
-void shapeBranches(std::vector<SkeletonNode>& nodes, const TreeParams& p, std::mt19937& rng, uint32_t seed) {
+void shapeBranches(std::vector<SkeletonNode>& nodes, const TreeParams& p, ProcRng& rng, uint32_t seed) {
     if (nodes.empty() || (p.droop <= 0.0f && p.wander <= 0.0f && p.light <= 0.0f && p.crookChance <= 0.0f &&
                           p.meander <= 0.0f)) return;
 
@@ -155,7 +155,7 @@ void shapeBranches(std::vector<SkeletonNode>& nodes, const TreeParams& p, std::m
     for (size_t i = 0; i < nodes.size(); i++) orig[i] = nodes[i].pos;
 
     float trunkR = std::max(nodes[0].radius, p.tipRadius);
-    std::uniform_real_distribution<float> jit(-1.0f, 1.0f);
+    ProcUniform<float> jit(-1.0f, 1.0f);
     for (size_t i = 1; i < nodes.size(); i++) {
         int par = nodes[i].parent;
         if (par < 0) continue;
@@ -172,7 +172,7 @@ void shapeBranches(std::vector<SkeletonNode>& nodes, const TreeParams& p, std::m
 
         float thin = std::clamp(1.0f - nodes[i].radius / trunkR, 0.0f, 1.0f);
         if (p.crookChance > 0.0f && cont[par] == static_cast<int>(i)) {
-            std::uniform_real_distribution<float> u01(0.0f, 1.0f);
+            ProcUniform<float> u01(0.0f, 1.0f);
             if (u01(rng) < p.crookChance) {   // a kink: the limb carries on from a new direction
                 Vec3 r0 = std::abs(base.y) < 0.95 ? Vec3(0, 1, 0) : Vec3(1, 0, 0);
                 Vec3 s0 = normalize(cross(base, r0)), u0 = normalize(cross(s0, base));
@@ -574,7 +574,7 @@ void addLeaf(RenderMesh& mesh, const Vec3& at, const Vec3& dir, float size,
 //     branch-bark ridge does); darker in a CROTCH (two limbs at a real angle both near)
 void buildTrunkZone(TreeMesh& out, const std::vector<SkeletonNode>& nodes, const std::vector<std::vector<int>>& children,
                     const std::vector<char>& inZone, const TreeParams& params, uint32_t seed, float footY,
-                    const std::function<BranchPath(int, std::mt19937&, Vec3&)>& rootPath, std::vector<BarkMap>* maps,
+                    const std::function<BranchPath(int, ProcRng&, Vec3&)>& rootPath, std::vector<BarkMap>* maps,
                     const std::function<bool(int)>& stubbed) {
     struct Piece {
         Vec3 a, b;
@@ -596,8 +596,8 @@ void buildTrunkZone(TreeMesh& out, const std::vector<SkeletonNode>& nodes, const
     const float vScale = params.barkVScale;
     // frames carried from the foot: each node's, along the limb into it
     std::vector<Vec3> nodeRight(nodes.size(), Vec3(1, 0, 0)), nodeAxis(nodes.size(), Vec3(0, 1, 0));
-    std::mt19937 shadeRng(seed ^ 0x2b07e5u);
-    std::uniform_real_distribution<float> shade(0.85f, 1.0f);
+    ProcRng shadeRng(seed ^ 0x2b07e5u);
+    ProcUniform<float> shade(0.85f, 1.0f);
     auto carry = [](const Vec3& right, const Vec3& from, const Vec3& to) {   // minimal rotation of `right` from -> to
         Vec3 r = right - to * dot(right, to);
         if (r.length() < 1e-6) r = cross(to, std::fabs(to.y) < 0.9 ? Vec3(0, 1, 0) : Vec3(1, 0, 0));
@@ -693,7 +693,7 @@ void buildTrunkZone(TreeMesh& out, const std::vector<SkeletonNode>& nodes, const
     // sinking, and DIVES under it at its end, with a smaller one between each two: the trunk stands IN the ground, held
     // by them. Its azimuth and reach the
     // tube roots' own draws (a tree grown both ways roots the same way).
-    std::mt19937 rootRng(seed ^ 0x700757u);
+    ProcRng rootRng(seed ^ 0x700757u);
     const Vec3 up(0, 1, 0);
     const int mainRoots = params.rootCount;
     for (int k = 0; k < 2 * mainRoots; ++k) {
@@ -713,7 +713,7 @@ void buildTrunkZone(TreeMesh& out, const std::vector<SkeletonNode>& nodes, const
         // (out two trunk widths at most: an old oak's buttresses drop into the ground within a couple of trunk widths
         // -- Glenn, of six radii on a 3 m trunk: "I'm not a huge fan of the massive base")
         const double reach = size * std::clamp(static_cast<double>((tube.points.back() - foot).length()), 3.0 * footR, 4.0 * footR);
-        std::uniform_real_distribution<double> wob(-0.15, 0.15);
+        ProcUniform<double> wob(-0.15, 0.15);
         // (along it: out, up off the ground, radius over the trunk's, height over width)
         // (sized from the trunk's flared foot, not its bare radius: beside the flare a root of the bare one is a spike)
         const double foot2 = footR * (1.0 + 0.5 * std::max(0.0f, params.flare));
@@ -1101,8 +1101,8 @@ void colonizeCrown(std::vector<SkeletonNode>& nodes, const TreeParams& p, uint32
     }
     const Vec3 c(foot.x, 0.5 * (low + top), foot.z);
     const double ry = 0.5 * (top - low);
-    std::mt19937 rng(seed ^ 0xc0101u);
-    std::uniform_real_distribution<double> u01(0.0, 1.0);
+    ProcRng rng(seed ^ 0xc0101u);
+    ProcUniform<double> u01(0.0, 1.0);
     std::vector<Vec3> pts;
     std::vector<int> ptOwner;                       // (lobed: the lobe a point is for; -1 any node)
     std::vector<int> owner(nodes.size(), -1);       // (lobed: the lobe a node grows for; -1 none -- the scaffold's inside)
@@ -1251,10 +1251,10 @@ void colonizeCrown(std::vector<SkeletonNode>& nodes, const TreeParams& p, uint32
                 const int steps = std::max(2, static_cast<int>(std::ceil(S / D)));
                 int at = best;
                 for (int k = 1; k <= steps; ++k) {
-                    const double t = static_cast<double>(k) / steps, u = 1.0 - t;
-                    Vec3 q = P0 * (u * u * u) + P1 * (3 * u * u * t) + P2 * (3 * u * t * t) + P3 * (t * t * t);
+                    const double t = static_cast<double>(k) / steps;
+                    Vec3 q = bezier(P0, P1, P2, P3, t);
                     q.y = std::max(q.y, std::min(P0.y, low - 0.25 * (top - low)));   // (a sweeping limb, not one dragging the ground)
-                    const Vec3 dq = (P1 - P0) * (3 * u * u) + (P2 - P1) * (6 * u * t) + (P3 - P2) * (3 * t * t);
+                    const Vec3 dq = bezierDerivative(P0, P1, P2, P3, t);
                     at = addNode(at, q, dq.length() > 1e-9 ? normalize(dq) : h3);
                     // (small fans along its outer reach, every couple of metres, up and out to one side)
                     if (t > 0.45 && t < 0.92 && k % std::max(1, static_cast<int>(2.2 / D)) == 0) {
@@ -1376,7 +1376,7 @@ void colonizeCrown(std::vector<SkeletonNode>& nodes, const TreeParams& p, uint32
 }
 
 TreeMesh skinTree(const ModuleString& s, const TreeParams& params, uint32_t seed) {
-    std::mt19937 rng(seed);
+    ProcRng rng(seed);
 
     Skeleton skel = buildSkeleton(s, params.angleJitter, rng);
     std::vector<SkeletonNode>& nodes = skel.nodes;
@@ -1392,7 +1392,7 @@ TreeMesh skinTree(const ModuleString& s, const TreeParams& params, uint32_t seed
     }
     // THE LEAN: the whole tree tipped off vertical about its foot, toward a seeded azimuth
     if (params.lean > 0.0f && !nodes.empty()) {
-        std::uniform_real_distribution<float> az(0.0f, 2.0f * static_cast<float>(PI));
+        ProcUniform<float> az(0.0f, 2.0f * static_cast<float>(PI));
         const float a = az(rng);
         const Quat q = Quat::fromAxisAngle(Vec3(std::cos(a), 0, std::sin(a)), params.lean * PI / 180.0);
         const Vec3 foot = nodes[0].pos;
@@ -1515,8 +1515,8 @@ TreeMesh skinTree(const ModuleString& s, const TreeParams& params, uint32_t seed
     // internodes out; the stub keeps no foliage and wears grey bark
     std::vector<char> dead(nodes.size(), 0);
     if ((params.deadChance > 0.0f || params.pruneBelow > 0.0f) && nodes.size() > 2) {
-        std::mt19937 drng(seed ^ 0xdead1u);
-        std::uniform_real_distribution<double> u01(0.0, 1.0);
+        ProcRng drng(seed ^ 0xdead1u);
+        ProcUniform<double> u01(0.0, 1.0);
         std::vector<std::vector<int>> kids(nodes.size());
         for (size_t i = 1; i < nodes.size(); ++i)
             if (nodes[i].parent >= 0) kids[static_cast<std::size_t>(nodes[i].parent)].push_back(static_cast<int>(i));
@@ -1836,11 +1836,11 @@ TreeMesh skinTree(const ModuleString& s, const TreeParams& params, uint32_t seed
             if (c != cont[node] || equalFork[node] || isJoint[node]) work.push_back({node, c});
     };
     // a buttress root (k of rootCount): its path from the foot and its bark colour (the draws: azimuth, length, colour)
-    auto buttressRoot = [&](int k, std::mt19937& r, Vec3& color) {
+    auto buttressRoot = [&](int k, ProcRng& r, Vec3& color) {
         const float baseR = std::max(nodes[0].radius, params.tipRadius * params.radiusScale);
         const Vec3 baseP = nodes[0].pos;
         const float rootLen = baseR * params.rootSpread, tipR = params.tipRadius * params.radiusScale;
-        std::uniform_real_distribution<float> jit(-0.3f, 0.3f), lenv(0.7f, 1.2f), shade(0.85f, 1.0f);
+        ProcUniform<float> jit(-0.3f, 0.3f), lenv(0.7f, 1.2f), shade(0.85f, 1.0f);
         const float ang = (params.phyllotaxis * k) * static_cast<float>(PI) / 180.0f + jit(r);
         const Vec3 dir(std::cos(ang), 0.0f, std::sin(ang));
         const float L = rootLen * lenv(r);
@@ -1871,7 +1871,7 @@ TreeMesh skinTree(const ModuleString& s, const TreeParams& params, uint32_t seed
     const bool zoneOn = trunkTop > 0 && inZone[static_cast<std::size_t>(trunkTop)];
     if (zoneOn) {
         buildTrunkZone(out, nodes, children, inZone, params, seed, static_cast<float>(nodes[0].pos.y),
-                       [&](int k, std::mt19937& r, Vec3& c) { return buttressRoot(k, r, c); }, &zoneMaps,
+                       [&](int k, ProcRng& r, Vec3& c) { return buttressRoot(k, r, c); }, &zoneMaps,
                        [&](int c) { return sprigOf[static_cast<std::size_t>(c)] < 0 &&
                                            (params.woodMinRadius <= 0.0f || nodes[static_cast<std::size_t>(c)].radius >= params.woodMinRadius); });
         own(-1);
@@ -1891,7 +1891,7 @@ TreeMesh skinTree(const ModuleString& s, const TreeParams& params, uint32_t seed
     std::vector<std::vector<EndRing>> jointRings(nodes.size());
 
     float vScale = params.barkVScale;
-    std::uniform_real_distribution<float> vary(0.85f, 1.0f);
+    ProcUniform<float> vary(0.85f, 1.0f);
     const float footY = nodes.empty() ? 0.0f : static_cast<float>(nodes[0].pos.y);
     const int trunkFirst = cont.empty() ? -1 : cont[0];
     // THE WELDS BLENDED (Glenn, 2026-10-18: "we need to blend those textures better ... let's get up to the thin
@@ -2529,9 +2529,9 @@ TreeMesh skinTree(const ModuleString& s, const TreeParams& params, uint32_t seed
             addFrondCrown(params.fronds, n.pos, up, n.radius, seed ^ static_cast<uint32_t>(&n - nodes.data()), out.leaves, out.branches);
         }
     } else if (params.leaves) {
-        std::uniform_real_distribution<float> tilt(-0.5f, 0.5f);
-        std::uniform_real_distribution<float> vary(0.8f, 1.15f);
-        std::uniform_real_distribution<float> off(-1.0f, 1.0f);
+        ProcUniform<float> tilt(-0.5f, 0.5f);
+        ProcUniform<float> vary(0.8f, 1.15f);
+        ProcUniform<float> off(-1.0f, 1.0f);
         int cards = 0;
         // THE PALETTE: a smooth noise over the crown walks each card's colour along it, so colour comes in patches
         // (a limb that has turned, its neighbour not yet), not card by card
@@ -2561,7 +2561,7 @@ TreeMesh skinTree(const ModuleString& s, const TreeParams& params, uint32_t seed
         if (kit) out.foliage = 2;
         const int perNode = kit ? params.leafKit.perTwig : sprays.empty() ? params.leavesPerTip : params.spray.perNode;
         const int budget = kit ? params.leafKit.budget : sprays.empty() ? params.maxLeafCards : params.spray.budget;
-        std::uniform_real_distribution<double> sprayRoll(-0.35, 0.35), sprayColour(0.0, 1.0);
+        ProcUniform<double> sprayRoll(-0.35, 0.35), sprayColour(0.0, 1.0);
         std::size_t wanted = 0, wantedBlossoms = 0;
         for (const SkeletonNode& n : nodes)
             if (leafyNode(n)) {
@@ -2573,7 +2573,7 @@ TreeMesh skinTree(const ModuleString& s, const TreeParams& params, uint32_t seed
         int blossoms = 0;
         const double keep = wanted > static_cast<std::size_t>(budget)
                                 ? static_cast<double>(budget) / static_cast<double>(wanted) : 1.0;
-        std::uniform_real_distribution<double> odds(0.0, 1.0);
+        ProcUniform<double> odds(0.0, 1.0);
         // (the leaf kit's shoots, thinned to whichever budget -- leaves or blossoms -- binds first)
         const double coarse = std::max(1.0, static_cast<double>(params.leafLod));
         const double shootKeep = std::min(keep, blossomKeep) / coarse;
@@ -2594,7 +2594,7 @@ TreeMesh skinTree(const ModuleString& s, const TreeParams& params, uint32_t seed
             h = segLen > 1e-9 ? h * (1.0 / segLen) : n.heading;
             const Vec3 ref = std::abs(h.y) < 0.95 ? Vec3(0, 1, 0) : Vec3(1, 0, 0);
             const Vec3 s1 = normalize(cross(h, ref)), s2 = normalize(cross(h, s1));
-            std::uniform_real_distribution<float> along(1.0f - std::clamp(params.leafClump, 0.0f, 1.0f), 1.0f);
+            ProcUniform<float> along(1.0f - std::clamp(params.leafClump, 0.0f, 1.0f), 1.0f);
             // LEAFY SHOOTS (the leaf kit): a real tree has more orders of fine twigs than the skeleton grows -- each
             // leafy twig puts out a few thin SHOOTS, fanned off it and lifted toward the light, and the leaves (and a
             // sakura's blossom clusters) ride along them, alternate or in opposite pairs, a leaf at the tip
@@ -2647,7 +2647,7 @@ TreeMesh skinTree(const ModuleString& s, const TreeParams& params, uint32_t seed
                         Vec3 skyward = Vec3(0, 1, 0) - ld * dot(Vec3(0, 1, 0), ld);
                         skyward = skyward.length() > 1e-6 ? normalize(skyward) : hang;
                         const Vec3 face = normalize(hang * (1.0 - lk.face) + skyward * lk.face);
-                        std::uniform_int_distribution<int> leafTile(0, lk.blossomSize > 0.0 ? 1 : 3);
+                        ProcUniformInt<int> leafTile(0, lk.blossomSize > 0.0 ? 1 : 3);
                         addKitLeaf(out.leaves, at, ld, face, lk.size * coarse * vary(rng), lk.fold, lk.curl * (0.7 + 0.6 * odds(rng)),
                                    2, leafTile(rng), leafColourAt(at) * vary(rng));
                         ++cards;
@@ -2669,7 +2669,7 @@ TreeMesh skinTree(const ModuleString& s, const TreeParams& params, uint32_t seed
                             const Vec3 stalk = normalize(clusterAxis * std::cos(spread) + (c1 * std::cos(phi) + c2 * std::sin(phi)) * std::sin(spread));
                             const double sz = lk.blossomSize * coarse * (0.85 + 0.3 * odds(rng));
                             const Vec3 centre = sp + stalk * (0.8 * sz);
-                            std::uniform_int_distribution<int> flowerTile(2, 3);
+                            ProcUniformInt<int> flowerTile(2, 3);
                             addKitBlossom(out.leaves, centre, normalize(stalk + Vec3(0, 0.3, 0)), sz, lk.cup, odds(rng) * 2.0 * PI,
                                           2, flowerTile(rng), leafColourAt(centre) * vary(rng));
                             ++blossoms;
@@ -2696,10 +2696,10 @@ TreeMesh skinTree(const ModuleString& s, const TreeParams& params, uint32_t seed
                 if (params.cardTiles > 1) {
                     const int nt = params.cardTiles;
                     if (params.tipCards) {   // the first row at the tips, the rest along the stems
-                        std::uniform_int_distribution<int> col(0, nt - 1), row(1, nt - 1);
+                        ProcUniformInt<int> col(0, nt - 1), row(1, nt - 1);
                         tile = n.isTip ? col(rng) : row(rng) * nt + col(rng);
                     } else {
-                        std::uniform_int_distribution<int> pick(0, nt * nt - 1);
+                        ProcUniformInt<int> pick(0, nt * nt - 1);
                         tile = pick(rng);
                     }
                 }
@@ -2891,11 +2891,8 @@ TextureData leafTexture(int size) {
     struct Leaf { float cx, cy, ca, sa, halfLen, halfW, shade; };
     const int K = 34;
     std::vector<Leaf> leaves;
-    uint32_t h = 0x9e3779b9u;
-    auto rnd = [&]() {
-        h ^= h << 13; h ^= h >> 17; h ^= h << 5;
-        return (h & 0xffffff) / static_cast<float>(0x1000000);
-    };
+    ProcRng h(0x9e3779b9u);
+    auto rnd = [&]() { return static_cast<float>(h.next()); };
     for (int i = 0; i < K; i++) {
         float ang = rnd() * 6.2831853f;
         Leaf lf;

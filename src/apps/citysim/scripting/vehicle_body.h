@@ -68,6 +68,11 @@ struct CarBodyRecipe {
     std::vector<Vec3> doors;   // floor points a passenger steps off from
     Vec3 driverSeat{0, 0, 0};
     bool hasDriverSeat = false;
+    // `rear_hip`: the back bench's hip point (its middle), when the cabin has one. Without it a car has no back
+    // seat (Glenn, in a cab: "He's poking out the back of the car" -- the city guessed one 0.85 m behind the driver,
+    // in a car that had no bench, and sat him in the boot).
+    Vec3 rearHip{0, 0, 0};
+    bool hasRearHip = false;
 };
 
 // The vehicles.lua fleet reader (ADR-0065) — mirrors agent_goals' pattern: Lua

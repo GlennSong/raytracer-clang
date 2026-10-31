@@ -31,20 +31,18 @@
 
 namespace engine {
 
-// Two shapes of city arrive here, and a host fills exactly one side:
+// The blocks a city grows on arrive one of three ways, and a host fills exactly one:
 //
-//   NETS     the lattice: blocks are the faces of the road graph, and the grow
-//            samples the nets for clearance (growLotBuildingsOnNets).
 //   HOLES    a builder that paved a whole city (RoadProducts): the pavement's
 //            holes ARE the blocks, its twin is the streets doors face, and its
 //            kerb band is the pavement a door walks out to.
+//   BLOCKS   the same holes, already run through cityBlocksFromHoles.
+//   AUTHORED a level with no roads draws its blocks by hand (citysim.blocks).
 struct CityGrowInputs {
     nlohmann::json citysim = nlohmann::json::object();
     std::string levelDir;
     HeightField padGround;              // what the lot pads grade off (eroded + the road carve)
-    HeightField netGround;              // NETS: the ground the roads themselves drape on
-    const std::vector<RoadEntity>* nets = nullptr;
-    const RoadGraph* freewayROW = nullptr;   // NETS: the lot pass's keep-out
+    const std::vector<RoadEntity>* nets = nullptr;   // the level's road entities: their look (sidewalk, curb)
     const std::vector<Poly2>* holes = nullptr;   // HOLES: un-inset, straight from the builder
     const std::vector<Poly2>* blocks = nullptr;  // HOLES, already run through cityBlocksFromHoles
     const std::vector<std::vector<Vec2>>* water = nullptr;   // HOLES: rivers and lakes the blocks stand back from (levelWaterKeepOut)

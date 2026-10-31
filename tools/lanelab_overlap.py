@@ -5,7 +5,7 @@ RT_LOT_PLAN_SVG dump plus a lanelab graph) with shapely: road ribbons = centreli
 by half their drawn width; report every block / lot / building polygon that overlaps a ribbon
 by more than `--min` m², with the worst offenders' positions.
 Usage: lanelab_overlap.py --citymap out/x/citymap.svg [--min 0.5]
-       lanelab_overlap.py --plan out/x/lotplan.svg --graph assets/lanelab/metro_v2/metropolis_sky_lanelab.json"""
+       lanelab_overlap.py --plan out/x/lotplan.svg --graph assets/lanelab/planned/metro_v2_test_lanelab.json"""
 import argparse, json, re, sys
 from shapely.geometry import LineString, Polygon
 from shapely.ops import unary_union

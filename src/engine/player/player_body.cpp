@@ -93,15 +93,11 @@ void PlayerBody::step(BodyStep& s) {
     // GOING LIMP on purpose, or thrown (off a bike: the velocity the thrower handed over, else the body's own)
     if (in.limp) {
         in.limp = false;
-        Vec3 v = pw.characterVelocity(cc.characterId);
-        const std::string given = s.settings.getString("player.limpVelocity", "");
-        if (!given.empty()) {
-            s.settings.setString("player.limpVelocity", "");
-            double x = 0, y = 0, z = 0;
-            if (std::sscanf(given.c_str(), "%lf %lf %lf", &x, &y, &z) == 3) v = Vec3(x, y, z);
-        }
+        const bool thrown = in.limpThrown;
+        in.limpThrown = false;
+        const Vec3 v = thrown ? in.limpVelocity : pw.characterVelocity(cc.characterId);
         if (!water.swimming) {
-            goLimp(s, v, given.empty() ? "went limp" : "thrown off");
+            goLimp(s, v, thrown ? "thrown off" : "went limp");
             return finish();
         }
     }

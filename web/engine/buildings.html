@@ -1791,8 +1791,14 @@
     up to eight floors, two to twenty, three to forty, four beyond), a closed service block behind, seated in the
     centre of the <em>top</em> tier so every tier below contains it, with a 2.2 m corridor ring kept inside every tier.
     Since the toolkit, the core is the first preset of a <code>CirculationPlan</code> of shafts, banks and zones
-    (<code>circulation.h</code>), and the shafts become stair and lift cells in the graph. A tall tower is not grown
-    whole:</p>
+    (<code>circulation.h</code>), and the shafts become stair and lift cells in the graph. The core is a list of
+    <b>blocks</b>, so the stairs and lifts can stand apart (ADR-0263): <code>stairs = "ends"</code> puts a stairwell
+    at each end of the long axis with the floor's corridor running between them past the lifts (a slab hotel's
+    double-loaded corridor), and <code>lifts = "facing"</code> sets two banks across a lift lobby. Left unset, the
+    seed picks one to suit the shape (a slab often gets its stairs at the ends, a tall tower often facing banks, a
+    small one the classic core), and where the floor is too small for that the next layout is tried. Every floor
+    planner, the walk check, the shaft walls, the bulkheads and the roof plant read every block, and every slab the
+    building lays, inside or out, is cut round the shafts. A tall tower is not grown whole:</p>
   <div class="code">
     <div class="hd"><span>BuildingInteriorSystem: the storey window</span>
       <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/engine/systems/building_interior_system.h#L51-L63">src/engine/systems/building_interior_system.h</a></div>
@@ -1925,6 +1931,32 @@
       { tag = <span class="s">"meeting"</span>, kind = <span class="s">"meeting"</span>, sites = {<span class="s">"interior"</span>, <span class="s">"window"</span>}, per_m2 = <span class="n">320</span>, enclosed = <span class="k">true</span>, walls = <span class="s">"glass"</span>,
         area = {<span class="n">10</span>, <span class="n">45</span>}, min_depth = <span class="n">3.0</span> },</pre>
   </div>
+  <p><b>One planner for offices and homes</b> (ADR-0258, #117 item 35). The older office and apartment planners
+    stood behind the zoned floor as fallbacks, and a census of the island found why they still fired so often: 37% of
+    apartment-tower floors and 20% of office floors were <i>shallow</i>, 2 to 5 m from the glass to the core, where a
+    corridor round the core leaves only slivers. Such a floor is now cut in <b>lobby mode</b>
+    (<code>FloorZoneParams::lobbyOnly</code>): the core keeps clear only its lobby, the strip in front of its lift doors,
+    and the lots take the band round it whole; an office's lots off the lobby are open desk rows, reached through each
+    other. A floor of homes lays two flats wrapped round the core off its lobby (<code>wrapFlatsLayout</code>), and one
+    too small even for that is the <code>residents</code> program's lounge. A block of flats with only a stair is zoned
+    round the stair, as an office building is. Houses, walk-ups, campus buildings, hospitals, halls and hotels keep
+    their own planners: they are other buildings. What the zoned floor cannot lay is open floor.</p>
+  <p><b>What the floors are for</b> (ADR-0259). <code>assets/scripts/building_uses.lua</code> lists every recipe's floor
+    use: a floor program's name (<code>office</code>, <code>apartments</code>) or a planner's (<code>house</code>,
+    <code>hotel</code>, <code>hospital</code>, <code>civic</code>). The room planner lays the program a use names, so a new
+    program needs only Lua. Both tables reload while the game runs: edit either and the interiors round you are grown
+    again within a second. What shapes the outside (homes, a civic building's kind) stays with the recipe, baked.</p>
+  <p><b>Department stores</b> (ADR-0260). A tower's store floors, and a mall anchor's, are the
+    <code>department_store</code> program: a department a floor (fashion, electronics, books, the food hall), the sales
+    floor open over the glass, the tills by the lifts, fitting rooms and a stockroom against the core. Each department
+    furnishes its sales floor with its own room program (<code>sales_floor:boutique</code> and so on). See it in
+    <code>store_lab</code>. A tower's restaurant floors at the top are the <code>dining</code> program the same way:
+    restaurants and bars by turns along the glass, each walled with its kitchen or its bar, the restrooms by the core
+    (ADR-0261).</p>
+  <p><b>Hotels</b> (ADR-0262). A hotel's upper floors are the <code>hotel</code> program: rooms along the glass, each with
+    its own bathroom walled off beside its door, suites at the corners, a linen room by the lifts. Its class, budget,
+    business or luxury, is the program's style, and a style can cut the plate its own way, into narrow rooms or wide
+    ones. See them in <code>hotel_lab</code>.</p>
   <div class="shots">
     <figure class="shot"><img src="img/buildings/office_floor.webp" alt="An office floor: cubicles, desks with monitors, drywall rooms and ceiling light panels">
       <figcaption>A zoned office floor (2026-10-16): enclosed rooms, desk pods and cubicles.</figcaption></figure>
@@ -2113,7 +2145,7 @@
     <li><code>RT_SITE_DEBUG=1</code> prints lots no rectangle fitted; <code>RT_SITE_PLAN=0</code> skips the site plan (a bisect switch).</li>
     <li><code>RT_CELLS_DEBUG=1</code> prints each complex cell as the lot pass grows it.</li>
     <li><code>RT_BLUEPRINTS=&lt;dir&gt;</code> writes a blueprint sheet per building from the level gate.</li>
-    <li><code>RT_FLOOR_PLAN=bands</code> uses the older office floor; <code>RT_NO_OFFICE_FLOORS=1</code>, <code>RT_NO_CIVIC_ROOMS=1</code>, <code>RT_NO_WRAP_FLATS=1</code>, <code>RT_<wbr>FURNITURE_<wbr>BLIND_<wbr>OPENINGS=1</code> are A/B switches for the interior ADRs.</li>
+    <li><code>RT_NO_CIVIC_ROOMS=1</code> and <code>RT_<wbr>FURNITURE_<wbr>BLIND_<wbr>OPENINGS=1</code> are A/B switches for the interior ADRs (<code>RT_FLOOR_PLAN=bands</code> and <code>RT_NO_WRAP_FLATS</code> went with the planners they switched back to, ADR-0258; <code>RT_NO_OFFICE_FLOORS</code> went when the uses moved to <code>building_uses.lua</code>, ADR-0259: set a recipe's use there instead).</li>
     <li><code>lot? x z</code> in the running game prints a building's party walls (ADR-0227).</li>
     <li>Any lot-pass change: bump <code>kLotsBuildTag</code> (<code>lots_producer.cpp</code>), or a level keeps reading its cached lots.</li>
   </ul>

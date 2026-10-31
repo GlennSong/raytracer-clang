@@ -904,10 +904,10 @@ TEST_CASE(a_card_trees_wood_is_held_to_budget_and_wears_its_sprigs) {
         std::printf("    [cards] %-14s hero bark %5zu tris (joints %4zu), %3zu sprigs -> %4zu card tris; mid bark %5zu, cards %5zu; %zu pictures\n",
                     name.c_str(), bark, (hero.jointIndexEnd - hero.jointIndexStart) / 3, hero.sprigs.size(), cards,
                     levels[1].tree.branches.indices.size() / 3, levels[1].tree.leaves.indices.size() / 3, cache.pictures.size());
-        // (a near hero: the trunk and limbs in 8000, its fine twigs' bark besides -- branch_cards.h wearNearLeaves)
+        // (a near hero: the trunk and limbs in 8000, its fine twigs' bark besides -- tree_lods.h heroBarkBudget)
         const bool near = r->leafKit.set && r->branchCards.twigs;
         const bool needles = r->needles.set;   // (a conifer: needle shoot cards at every level, twig bark besides)
-        CHECK(bark <= 8000 + (near || needles ? static_cast<std::size_t>(r->branchCards.nearTwigTris) : 0));
+        CHECK(bark <= heroBarkBudget(*r));
         if (const char* dir = std::getenv("RT_CARD_ATLAS")) {   // the baked pictures, alpha over grey
             const TextureData& a = cache.atlas.albedo;
             Image img(a.width, a.height);
@@ -1285,5 +1285,25 @@ TEST_CASE(a_stand_grown_tree_has_a_clear_bole) {
         const double stand = lowLeaf(growRecipeTree(formedRecipe(*r, "stand"), 4u), topStand);
         std::printf("    [stand] %-7s lowest leaves %.1f m open, %.1f m in a stand (of %.1f / %.1f m)\n", name, open, stand, topOpen, topStand);
         CHECK(stand > open + 0.1 * topOpen);
+    }
+}
+
+TEST_CASE(every_hero_holds_its_bark_budget_whatever_its_seed) {
+    // The budget is the species', not one individual's: seed 2 alone held it while a pine averaged 20k against 17k
+    // (ADR-0265, the stream changed and the lucky individual went). An individual past it is grown again coarser, and
+    // the fine twigs' bark takes what the limbs leave.
+    const TreeRecipeBook book = shipped();
+    for (const std::string& name : book.names()) {
+        const TreeRecipe* r = book.find(name);
+        if (!r || !r->branchCards.set) continue;
+        std::size_t hi = 0;
+        for (uint32_t seed = 1; seed <= 6; ++seed) {
+            BranchCardSet cache;
+            const std::vector<RecipeTreeLevel> lv = growRecipeLevels(*r, seed, {}, RecipeLodBands{}, true, &cache);
+            CHECK(!lv.empty());
+            if (!lv.empty()) hi = std::max(hi, lv[0].tree.branches.indices.size() / 3);
+        }
+        std::printf("    [budget] %-14s hero bark at most %5zu of %5zu over six seeds\n", name.c_str(), hi, heroBarkBudget(*r));
+        CHECK(hi <= heroBarkBudget(*r));
     }
 }

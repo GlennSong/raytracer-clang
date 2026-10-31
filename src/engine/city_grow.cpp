@@ -77,11 +77,9 @@ NetLotResult growCity(const CityGrowInputs& in, LotGrowSetup* setupOut) {
         // THE STREETS, so a door knows which way to face: growLotBuildings aims each
         // building's faceDir at the nearest point on this graph.
         const RoadGraph* lotRoads = (in.streets && !in.streets->edges.empty()) ? in.streets : nullptr;
-        // ...but NOT the lattice's clearance. `roadClear` is sidewalk + 0.6 m from each
-        // centreline's half-width — the lattice's way of keeping a building off a pavement
-        // its blocks do not know about. These blocks are cut from the BUILT pavement, so the
-        // pavement is already outside them and that clearance counted it twice: measured on
-        // metro_lanes, 1082 buildings with 0 extra against 977 with it.
+        // ...but no clearance from them: these blocks are cut from the BUILT pavement, so the
+        // pavement is already outside them, and the old lattice's sidewalk + 0.6 m counted it
+        // twice (measured on metro_lanes: 1082 buildings with 0 extra against 977 with it).
         constexpr Real kBuiltPavementClear = 0;
         r.lots = growLotBuildings(blocks, s.lp, &r.plan, s.planOnly ? nullptr : &r.parts, lotRoads,
                                   kBuiltPavementClear, (s.wantFlat && !s.planOnly) ? &r.flatParts : nullptr,
@@ -89,8 +87,13 @@ NetLotResult growCity(const CityGrowInputs& in, LotGrowSetup* setupOut) {
         LOG_INFO << "[citylots] lots on " << blocks.size() << " built-pavement blocks: " << r.lots.size()
                  << " buildings, " << r.plan.lots.size() << " lots";
     } else {
-        r = growLotBuildingsOnNets(nets, s.lp, s.ep, s.roadClear, in.netGround, in.freewayROW, s.wantFlat,
-                                   !s.planOnly);
+        // No blocks: nothing to grow. Every street is planned and built by the lanes builder (ADR-0267),
+        // whose pavement holes are the blocks; the road graph's own faces are not blocks any more.
+        if (!nets.empty())   // (a host still handing over only its road nets grows nothing: say so)
+            LOG_WARN << "[citylots] " << nets.size() << " road nets but no blocks: lots grow on the lanes builder's "
+                     << "pavement holes or citysim.blocks, not on nets (ADR-0267); no buildings";
+        else
+            LOG_INFO << "[citylots] no blocks to grow on";
     }
     if (setupOut) *setupOut = std::move(s);
     return r;

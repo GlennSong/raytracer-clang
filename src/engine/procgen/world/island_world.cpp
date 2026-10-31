@@ -155,9 +155,16 @@ json islandTerrainBlock(uint32_t seed, double half) {
                     {"peninsula", {{"bearing", penBearing}, {"length", 3000 + 1500 * r(13)}, {"width", 800 + 400 * r(14)}}},
                     {"cliffs", {{"from", wrap360(cliffMid - cliffSpan * 0.5)}, {"to", wrap360(cliffMid + cliffSpan * 0.5)}, {"height", 70 + 60 * r(15)}}},
                     {"plainHeight", 12}, {"shelfDepth", 45}}},
-        // EROSION: Hawaii's look is its valleys -- deep, branching, down from the ridge -- and a road
-        // over the range wants them (it climbs a valley to the saddle, not across every ridge)
-        {"erode", true}, {"erodeLandOnly", true}, {"erodeRes", 1024}, {"erodeDroplets", 1500000}, {"erodeRadius", 3}, {"erodeThermal", 16},
+        // THE WEATHERED GROUND (ADR-0126; island_8_weathered's block): Hawaii's look is its valleys -- deep,
+        // branching, down from the ridge -- and a road over the range wants them (it climbs a valley to the
+        // saddle, not across every ridge)
+        {"erode", true},
+        {"weather", {{"res", 8192}, {"grow", {{"res", 1024}, {"iterations", 250}, {"blur", 600}}},
+                     {"water", {{"steps", 0}, {"breach", 0}, {"thermal", 0}}},
+                     {"roughness", 0.6}, {"shapeKeep", 1.0}, {"shapeScale", 1500}, {"massifs", 0.6}, {"massifScale", 2500},
+                     {"peaks", {{"height", 450}, {"spacing", 2200}, {"uplift", 1.0}}},
+                     {"refine", {{"detail", 40}, {"roughness", 0.8}, {"wavelength", 8}, {"slopeDamp", 0.3}, {"incise", 0.012},
+                                 {"iterations", 20}, {"stochasticFrom", 8192}}}}},
         {"rivers", {{"region", 2.0 * half}, {"cell", 20}, {"riverArea", 2.0e6}, {"widthMin", 8}, {"widthMax", 70}, {"widthK", 0.02},
                     // (widthVariation, ADR-0121, is not on yet: at 0.6 with gentler banks it re-cut Saltwood's
                     // interchange d0_0 and 94 more lanes lost cover -- the city has to follow the rivers first)

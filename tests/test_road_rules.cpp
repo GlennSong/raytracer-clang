@@ -1,4 +1,5 @@
 #include "test_framework.h"
+#include "planned_city.h"
 
 #include "../src/engine/procgen/city/road_rules.h"
 #include "../src/engine/procgen/city/roads/road_entity.h"
@@ -76,20 +77,15 @@ TEST_CASE(cross_section_ramp) {
     CHECK(xs.back().width > xs.front().width);
 }
 
-// P1 unification: a GENERATED district must carry real road classes end-to-end
-// (generator -> planarize/capDegree/cleanup -> netGraph), not collapse every
-// surface edge to Local. Regression for the netGraph RoadClass::Local hardcode.
+// P1 unification: a PLANNED city must carry real road classes end-to-end
+// (planner -> RoadEntity -> netGraph), not collapse every surface edge to Local.
+// Regression for the netGraph RoadClass::Local hardcode.
 TEST_CASE(generated_net_carries_classes) {
-    RoadEntity net;
-    nlohmann::json recipe = {
-        {"kind", "district"}, {"radius", 160.0}, {"arterials", 3},
-        {"block_size", 40.0}, {"seed", 3},
-    };
-    applyGenerateRecipe(net, recipe, nullptr);
+    RoadEntity net = citytest::plannedNet();
     CHECK(!net.graph.edges.empty());
-    // the district generator distinguishes arterials from local streets — and
-    // every edge came out of generation RESOLVED (the invariant the parallel
-    // class/width arrays used to need a size check for).
+    // the planner distinguishes arterials from local streets — and every edge came
+    // out RESOLVED (the invariant the parallel class/width arrays used to need a
+    // size check for).
     int arterials = 0, locals = 0;
     for (const RoadEdge& e : net.graph.edges) {
         CHECK(e.width > 0.0);                             // widths resolved, never 0

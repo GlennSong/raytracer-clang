@@ -226,10 +226,6 @@ struct TerrainParams {
     // up, dropping to the sea within a few tens of metres, between cliffFromDeg and cliffToDeg around
     // the centre). Inland of the beach the ground rises to plainHeight; past the coast the shelf falls
     // to -shelfDepth. `land` (see islandLand) is 0 at the coast, about 1 at the centre.
-    // Erosion reshapes LAND only: below the sea the raw relief stands (droplets settling in the sea
-    // left a speckled band of shoals round an island). Opt-in ("erodeLandOnly"); other levels' sea
-    // floors are as they were.
-    bool erodeLandOnly = false;
     struct Island {
         bool on = false;
         double cx = 0.0, cz = 0.0;
@@ -251,14 +247,13 @@ struct TerrainParams {
     // closures/entities stays cheap; rebuild via buildFlattenGrid after the
     // footprint set is assembled. terrainHeight uses it when present.
     std::shared_ptr<const FlattenGrid> flattenIndex;
-    // Baked EROSION (optional). When set, terrainHeight samples this pre-baked,
-    // hydraulically+thermally eroded height field as its base — the natural
-    // drainage detail the analytic ridged noise can't produce — instead of
-    // recomputing the raw analytic relief. CDLOD, the collider and every
-    // placement query all read terrainHeight, so this is how erosion reaches the
-    // runtime CDLOD terrain (it previously only touched the static baked-chunk
-    // path). Built by bakeErodedTerrain; null = pure analytic. The cut/fill
-    // flatten still applies on top.
+    // The WEATHERED GROUND (optional, ADR-0126). When set, terrainHeight samples this
+    // pre-baked grown-and-weathered height field as its base -- the drainage and
+    // ridges the analytic noise can't produce -- instead of the raw analytic relief.
+    // CDLOD, the collider and every placement query read terrainHeight, so this is
+    // how the bake reaches the runtime terrain. Built by erodedForTerrain
+    // (level_params.h) from the terrain block's "weather"; null = pure analytic.
+    // The cut/fill flatten still applies on top.
     std::shared_ptr<const std::function<double(double, double)>> erodedBase;
     // THE EARTHWORK FIELD (procgen/earthwork.h): a smooth displacement fitted
     // to the road carve and ADDED to the base relief before the flatten stamps
@@ -301,23 +296,12 @@ double terrainHeight(const TerrainParams& params, const Noise& noise,
 
 // The RAW analytic relief at (x, z): fbm base + mountain/range/ridge layers, with
 // NO erosion and NO cut/fill. terrainHeight uses this as its base when no eroded
-// field is baked, and bakeErodedTerrain erodes THIS into params.erodedBase.
+// field is baked, and the weather bake grows and weathers THIS into params.erodedBase.
 double terrainBaseHeight(const TerrainParams& params, const Noise& noise,
                          double worldX, double worldZ);
 // The island's land field at (x, z): 0 on the coast, positive inland (about 1 at the centre),
 // negative at sea. Meaningful only with params.island.on.
 double islandLand(const TerrainParams& params, const Noise& noise, double worldX, double worldZ);
-
-// Bake hydraulic + thermal EROSION of the analytic relief into params.erodedBase,
-// so the CDLOD terrain (and collider, and placement) get natural drainage detail
-// — the "use the whole toolset" wiring (ADR-0043 erosion had only reached the
-// static baked-chunk path). Samples terrainBaseHeight into a `res`×`res` grid over
-// the centred square of side `worldSize`, erodes it (erosion.h droplets + thermal),
-// and stores a bilinear sampler. Call BEFORE building the terrain; the cut/fill
-// flatten still applies on top. `seed` offsets the erosion RNG.
-struct ErosionParams;  // erosion.h
-void bakeErodedTerrain(TerrainParams& params, const Noise& noise, double worldSize,
-                       int res, const ErosionParams& erosion);
 
 // Sample a smooth spine polyline from authored control points (Catmull-Rom) for
 // TerrainParams::rangeSpine. Points are (x, 0, z).

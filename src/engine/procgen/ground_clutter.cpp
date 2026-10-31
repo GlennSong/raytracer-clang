@@ -1,6 +1,6 @@
 #include "ground_clutter.h"
 
-#include "proc_rng.h"
+#include "../../proc_rng.h"
 #include "stylized_rock.h"
 #include "../mesh_builder.h"
 

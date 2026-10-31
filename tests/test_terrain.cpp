@@ -231,16 +231,25 @@ TEST_CASE(terrain_lod_rings_double_in_extent) {
     }
 }
 
-TEST_CASE(erosion_carves_the_heightfield_within_bounds) {
+TEST_CASE(thermal_erosion_slumps_slopes_past_the_talus) {
+    // the weather bake's thermal stage on the CPU (ADR-0257: droplets retired): material slips off slopes
+    // steeper than the talus, so the steepest drop shrinks, the field stays finite and nothing rises above
+    // the highest point it started with
     TerrainParams p; p.size = 200; p.resolution = 96;
     p.heightScale = 10; p.octaves = 6; p.mountainHeight = 40; p.mountainScale = 0.01;
     Noise n(7);
     Heightmap baked = bakeHeightmap(p, n);
 
     Heightmap eroded = baked;
-    ErosionParams ep; ep.droplets = 8000; ep.seed = 9; ep.thermalIterations = 6;
+    ErosionParams ep; ep.thermalIterations = 20; ep.talus = 0.5f;
     erode(eroded, ep);
 
+    auto steepest = [](const Heightmap& h) {
+        float s = 0.0f;
+        for (int z = 0; z < h.n; z++)
+            for (int x = 0; x + 1 < h.n; x++) s = std::max(s, std::fabs(h.get(x + 1, z) - h.get(x, z)));
+        return s;
+    };
     CHECK(eroded.h.size() == baked.h.size());
     double diff = 0.0, bakedMax = -1e9, erodedMax = -1e9;
     bool finite = true;
@@ -251,8 +260,9 @@ TEST_CASE(erosion_carves_the_heightfield_within_bounds) {
         if (!std::isfinite(eroded.h[i])) finite = false;
     }
     CHECK(finite);
-    CHECK(diff / baked.h.size() > 1e-3);          // it actually changed the field
-    CHECK(erodedMax <= bakedMax + 2.0);           // erosion wears down, not up
+    CHECK(diff / baked.h.size() > 1e-3);           // it actually changed the field
+    CHECK(erodedMax <= bakedMax + 1e-3);           // slumping wears down, not up
+    CHECK(steepest(eroded) < steepest(baked));
 }
 
 TEST_CASE(terrain_mountain_mask_creates_grassland_regions) {

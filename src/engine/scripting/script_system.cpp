@@ -4,14 +4,18 @@
 #include "lua_state.h"
 #include "lua_helpers.h"     // packEntity (scripts see self.entity as this)
 #include "gameplay_bindings.h"
+#include "lua_json.h"
 #include "procgen_bindings.h"
 #include "script_behaviour.h"
 #include "../world.h"
 #include "../components.h"
 #include "../asset_manager.h"
+#include "../control/control_commands.h"
 #include "../../log.h"
 #include "../../profile.h"
 
+#include <algorithm>
+#include <cctype>
 #include <cstdint>
 #include <vector>
 
@@ -57,7 +61,20 @@ void callHook(lua_State* L, const char* hook, Entity e, double dt, bool hasDt) {
     }
 }
 
+// The owner name a script's verbs are listed under: "script:<entity index>.<generation>".
+std::string ownerName(Entity e) {
+    return "script:" + std::to_string(e.index) + "." + std::to_string(e.generation);
+}
+
 }  // namespace
+
+ScriptSystem::~ScriptSystem() {
+    // The VM (and every function ref) dies with this system; the verbs and subscriptions pointing at them go first.
+    if (commands_ != nullptr)
+        for (const ScriptVerb& v : verbs_) commands_->remove(v.name);
+    if (events_ != nullptr)
+        for (const ScriptSubscription& sub : subscriptions_) events_->unsubscribe(sub.id);
+}
 
 ScriptSystem::ScriptSystem() {
     // Gameplay scripts get both surfaces in one VM: the effectful gameplay API
@@ -65,6 +82,141 @@ ScriptSystem::ScriptSystem() {
     // (e.g. the gun viewmodel) and hand it to spawn.model.
     openGameplayLibrary(vm_);
     openProcgenLibrary(vm_);
+}
+
+GameplayContext ScriptSystem::context(World* world, std::vector<SpawnCommand>* spawns) {
+    GameplayContext g;
+    g.world = world;
+    g.input = input_;
+    g.camera = camera_;
+    g.spawns = spawns;
+    g.events = events_;
+    g.firstPersonView = firstPersonView_;
+    g.handsFree = handsFree_;
+    g.commands = commands_;
+    if (commands_ != nullptr)
+        g.addCommand = [this](const std::string& name, const std::string& usage, const std::string& summary,
+                              int fnRef) { return addVerb(running_, name, usage, summary, fnRef); };
+    if (events_ != nullptr) {
+        g.subscribe = [this](const std::string& name, int fnRef, std::string* error) {
+            return addSubscription(running_, name, fnRef, error);
+        };
+        g.unsubscribe = [this](uint64_t id) { return removeSubscription(id); };
+    }
+    return g;
+}
+
+uint64_t ScriptSystem::addSubscription(Entity owner, const std::string& name, int fnRef, std::string* error) {
+    lua_State* L = luaState(vm_);
+    EventBus::SubscriptionId id = EventBus::INVALID_SUBSCRIPTION;
+    if (!owner.valid()) {
+        *error = "events.on is called from a script's start() or update()";
+    } else {
+        id = events_->subscribeNamed(name, [this, fnRef, name](const std::string& fields) {
+            std::string error;
+            if (!callScript(fnRef, [&](lua_State* L) { pushJson(L, nlohmann::json::parse(fields)); }, nullptr, &error))
+                LOG_ERROR << "[script] events.on(" << name << ") error: " << error;
+        });
+        if (id == EventBus::INVALID_SUBSCRIPTION) *error = "unknown event: " + name + " (try events?)";
+    }
+    if (id == EventBus::INVALID_SUBSCRIPTION) {
+        luaL_unref(L, LUA_REGISTRYINDEX, fnRef);
+        return 0;
+    }
+    subscriptions_.push_back({owner, id, fnRef});
+    return id;
+}
+
+bool ScriptSystem::removeSubscription(uint64_t id) {
+    for (std::size_t i = 0; i < subscriptions_.size(); ++i) {
+        if (subscriptions_[i].id != id) continue;
+        events_->unsubscribe(id);
+        luaL_unref(luaState(vm_), LUA_REGISTRYINDEX, subscriptions_[i].fnRef);
+        subscriptions_.erase(subscriptions_.begin() + static_cast<std::ptrdiff_t>(i));
+        return true;
+    }
+    return false;
+}
+
+std::string ScriptSystem::addVerb(Entity owner, const std::string& name, const std::string& usage,
+                                  const std::string& summary, int fnRef) {
+    lua_State* L = luaState(vm_);
+    if (!owner.valid()) {
+        luaL_unref(L, LUA_REGISTRYINDEX, fnRef);
+        return "control.command is called from a script's start() or update()";
+    }
+    const bool added = commands_->add(name, usage, summary,
+        [this, fnRef](const ControlCommand& cmd) { return runVerb(fnRef, cmd); }, ownerName(owner));
+    if (!added) {
+        luaL_unref(L, LUA_REGISTRYINDEX, fnRef);
+        return "'" + name + "' is taken (or not one word)";
+    }
+    std::string stored = name;
+    std::transform(stored.begin(), stored.end(), stored.begin(), [](unsigned char c) { return std::tolower(c); });
+    verbs_.push_back({owner, stored, fnRef});
+    return "";
+}
+
+// A script function called from outside its hooks: a verb from the socket (between ticks) or from control.run
+// inside one, an event from the bus. Between ticks it gets a context of its own on the last tick's world, and its
+// spawns are applied when it returns; inside a tick it shares the tick's, so its spawns wait for the tick's
+// iteration to end like any other.
+bool ScriptSystem::callScript(int fnRef, const std::function<void(lua_State*)>& push, std::string* result,
+                              std::string* error) {
+    lua_State* L = luaState(vm_);
+    GameplayContext* outer = gameplayContext(vm_);
+    std::vector<SpawnCommand> spawns;
+    GameplayContext own = context(world_, &spawns);
+    if (outer == nullptr) setGameplayContext(vm_, &own);
+
+    lua_rawgeti(L, LUA_REGISTRYINDEX, fnRef);
+    push(L);
+    const bool ok = lua_pcall(L, 1, 1, 0) == LUA_OK;
+    if (!ok) {
+        *error = lua_tostring(L, -1) ? lua_tostring(L, -1) : "error";
+    } else if (result != nullptr) {
+        const char* text = lua_isnil(L, -1) ? "" : lua_tostring(L, -1);
+        *result = text ? text : "";
+    }
+    lua_pop(L, 1);
+
+    if (outer == nullptr) {
+        setGameplayContext(vm_, nullptr);
+        if (world_ != nullptr) applySpawns(*world_, spawns);
+    }
+    return ok;
+}
+
+std::string ScriptSystem::runVerb(int fnRef, const ControlCommand& cmd) {
+    std::string reply, error;
+    const bool ok = callScript(fnRef, [&](lua_State* L) {
+        lua_createtable(L, static_cast<int>(cmd.args.size()), 0);
+        for (std::size_t i = 0; i < cmd.args.size(); ++i) {
+            lua_pushstring(L, cmd.args[i].c_str());
+            lua_seti(L, -2, static_cast<lua_Integer>(i + 1));
+        }
+    }, &reply, &error);
+    if (!ok) return "err " + cmd.name + ": " + error;
+    if (reply.empty()) return "ok";
+    if (reply.rfind("ok", 0) != 0 && reply.rfind("err", 0) != 0) reply = "ok " + reply;
+    return reply;
+}
+
+void ScriptSystem::dropScript(Entity owner) {
+    lua_State* L = luaState(vm_);
+    if (commands_ != nullptr) commands_->removeOwnedBy(ownerName(owner));
+    for (const ScriptVerb& v : verbs_)
+        if (v.owner == owner) luaL_unref(L, LUA_REGISTRYINDEX, v.fnRef);
+    verbs_.erase(std::remove_if(verbs_.begin(), verbs_.end(), [&](const ScriptVerb& v) { return v.owner == owner; }),
+                 verbs_.end());
+    for (const ScriptSubscription& sub : subscriptions_) {
+        if (sub.owner != owner) continue;
+        events_->unsubscribe(sub.id);
+        luaL_unref(L, LUA_REGISTRYINDEX, sub.fnRef);
+    }
+    subscriptions_.erase(std::remove_if(subscriptions_.begin(), subscriptions_.end(),
+                                        [&](const ScriptSubscription& sub) { return sub.owner == owner; }),
+                         subscriptions_.end());
 }
 
 void ScriptSystem::setServices(InputMap* input, const CameraState* camera,
@@ -92,6 +244,7 @@ void ScriptSystem::update(FrameContext& ctx) {
     setHandsFree(handsFree);
     setFirstPersonView(!ctx.settings.getBool("playerThirdPerson", false) &&
                        !inVehicle);
+    if (ctx.commands != nullptr && commands_ == nullptr) setCommands(ctx.commands);
     tick(ctx.world, ctx.frameDelta);
 }
 
@@ -99,15 +252,19 @@ void ScriptSystem::tick(World& world, double dt) {
     RT_PROFILE_ZONE_NAMED("scriptTick");
     lua_State* L = luaState(vm_);
 
+    world_ = &world;
+    // A script whose entity died (or lost its behaviour) takes its verbs and subscriptions with it.
+    std::vector<Entity> gone;
+    auto lost = [&](Entity e) {
+        if ((!world.alive(e) || !world.has<ScriptBehaviour>(e)) && std::find(gone.begin(), gone.end(), e) == gone.end())
+            gone.push_back(e);
+    };
+    for (const ScriptVerb& v : verbs_) lost(v.owner);
+    for (const ScriptSubscription& sub : subscriptions_) lost(sub.owner);
+    for (Entity e : gone) dropScript(e);
+
     std::vector<SpawnCommand> spawns;
-    GameplayContext gctx;
-    gctx.world = &world;
-    gctx.input = input_;
-    gctx.camera = camera_;
-    gctx.spawns = &spawns;
-    gctx.events = events_;
-    gctx.firstPersonView = firstPersonView_;
-    gctx.handsFree = handsFree_;
+    GameplayContext gctx = context(&world, &spawns);
     setGameplayContext(vm_, &gctx);
 
     // Mutating ScriptBehaviour's own fields (refs/flags) is allowed inside each;
@@ -121,15 +278,21 @@ void ScriptSystem::tick(World& world, double dt) {
         }
 
         lua_rawgeti(L, LUA_REGISTRYINDEX, sb.instanceRef);   // [inst]
+        running_ = e;
         if (!sb.started) {
             callHook(L, "start", e, dt, /*hasDt=*/false);
             sb.started = true;
         }
         callHook(L, "update", e, dt, /*hasDt=*/true);
+        running_ = Entity{};
         lua_pop(L, 1);                                        // pop inst
     });
 
     setGameplayContext(vm_, nullptr);
+    applySpawns(world, spawns);
+}
+
+void ScriptSystem::applySpawns(World& world, const std::vector<SpawnCommand>& spawns) {
 
     // Apply deferred spawns now that iteration is done (the no-structural-
     // mutation contract held during each). Renderables need GPU upload, so they

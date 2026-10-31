@@ -13,8 +13,9 @@ Everything lives under `cache/` in the checkout the game runs from (each worktre
 |---|---|---|---|
 | `cache/levels/<key>/` | the level's **bundle**: `level.bundle` (sections) + `manifest.json` (its table of contents and producers) | the producers' keys combined | 1 GB (metro) to 8 GB (the island) |
 | `cache/terrain/<hash>.pyramid` | the baked ground mesh (terrain with every lot flatten folded in) | the ground's content, flattens included | 145–385 MB |
-| `cache/terrain/<hash>.bin`, `maps_*.bin`, `weather_*.bin` | the erosion bake, the cover maps, weathered ground | the terrain settings | ~65 MB each; slow to remake |
+| `cache/terrain/maps_*.bin`, `weather_*.bin` | the cover maps, the weathered ground | the terrain settings | ~65 MB each; slow to remake |
 | `cache/population/<hash>.pop` | who lives and works where | places, street graph, agents, buses | small |
+| `*.uses` beside the terrain and population files | which levels used the file, and when (ADR-0256) | | tiny |
 | `cache/fields`, `cache/road_signs`, `cache/clouds` | textures, sign atlases, cloud fields | their own inputs | small |
 
 Every one of these is a **cache**: deleting it is always safe; it is rebuilt on the next load.
@@ -124,7 +125,7 @@ drastic:
 3. **Drop that level's caches**: its `cache/levels/<key>/` folders (the manifest's `level.path` names the
    level) and, if the ground looks wrong, the `.pyramid` files from around the same time.
 4. **Wipe everything**: `rm -rf cache/levels cache/terrain cache/population` in that checkout. Safe;
-   costs time: metro ~15 s, the island ~3 min, plus the erosion bake (minutes) on the first load. Then
+   costs time: metro ~15 s, the island ~3 min, plus the weather bake on the first load (minutes; the island about a quarter of an hour). Then
    pre-bake island_8 and island_8_nature before running the level suite.
 
 Never delete a `*.tmp-<pid>` folder while that process is running (a bake in flight).
@@ -133,9 +134,15 @@ Never delete a `*.tmp-<pid>` folder while that process is running (a bake in fli
 
 Old bundles are never deleted automatically. `build-viewer/rt_bake --prune` lists the bundles under
 `cache/levels` that are not the newest for their level (a dry run); `--prune --yes` deletes them; list
-level files after it to keep their CURRENT bundle whatever its age. The editor's Level cache panel prunes
-one level. Terrain pyramids are not covered (they do not record their level): the `rt-bake-cleanup` skill
-(`~/.claude/skills/rt-bake-cleanup/prune_bakes.py`, a dry run by default) ages them out by date. Known
-gap (ADR-0084): the prune keys on the level path as written, so a test's absolute-path bundle and
-rt_bake's relative-path one are two "levels". Planned: the level suite pruning after itself; terrain files
-that record their level.
+level files after it to keep their CURRENT bundle whatever its age. A level path is compared made absolute,
+so a test's bundle and rt_bake's are the same level. The editor's Level cache panel prunes one level.
+
+At the default root the prune also covers `cache/terrain` and `cache/population` (ADR-0256). Each of those
+files has a record beside it, `<file>.uses`, naming the levels whose loads read or wrote it and when. A file
+is stale once every level that used it has since used a newer file of the same kind (or the level file is
+gone). Levels share a file when they build the same ground, and a shared file stays while any of them still
+uses it. A load that hits a later cache (the pyramid) never opens the earlier ones (weather, maps), so
+those keep their old stamp, and nothing newer of their kind replaces them: they stay. Files written before
+ADR-0256 have no record and are kept; the `rt-bake-cleanup` skill
+(`~/.claude/skills/rt-bake-cleanup/prune_bakes.py`) still ages those out by date. Planned: the level suite
+pruning after itself.

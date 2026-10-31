@@ -1,6 +1,6 @@
 #include "stylized_tree.h"
 #include "noise.h"
-#include "proc_rng.h"
+#include "../../proc_rng.h"
 #include "../mesh_builder.h"
 
 #include <algorithm>

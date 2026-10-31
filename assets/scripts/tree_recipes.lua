@@ -463,7 +463,7 @@ tree_recipes = {
                 frond_spacing = 0.45, frond_length = 0.5,   -- (tufted side twigs along the bare inner branch)
                 color = { {0.06, 0.15, 0.06}, {0.09, 0.19, 0.08} }, tip_color = {0.14, 0.26, 0.10},
                 twig_color = {0.26, 0.20, 0.15} },
-    branch_cards = { sprig = 1.0 },
+    branch_cards = { sprig = 1.6 },   -- (side shoots within 1.6 m are cards: at 1.0 a pine of ten whorls spent its hero bark on limbs)
   },
 
   ---------------------------------------------------------------------------------------------------------------

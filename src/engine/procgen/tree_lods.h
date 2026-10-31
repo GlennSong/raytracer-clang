@@ -48,6 +48,11 @@ std::vector<RecipeTreeLevel> growRecipeLevels(const TreeRecipe& r, uint32_t seed
                                               const RecipeLodBands& bands = {}, bool lod = true,
                                               BranchCardSet* cardCache = nullptr);
 
+// THE HERO'S BARK BUDGET (a recipe with branch cards): its trunk and limbs (`heroWoodTris`) and, where it wears twigs
+// of bark one by one or needles, their bark besides (`nearTwigTris`). An individual grown past it -- a pine of ten
+// whorls -- is grown again coarser (its sides further apart, its rings sparser), up to three times (ADR-0265).
+std::size_t heroBarkBudget(const TreeRecipe& r);
+
 // The picture a recipe tree's leaves wear, by what it grew (TreeMesh::foliage): blades and fronds the strap leaf's
 // veins, leaves one by one the element atlas, sprays the strand, cards the species' card (empty: none drawn).
 LeafCardAtlas recipeLeafAtlas(const TreeRecipe& r, const TreeMesh& tree);

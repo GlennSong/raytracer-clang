@@ -3,6 +3,7 @@
 #include "test_framework.h"
 
 #include "../src/engine/bundle/bake.h"
+#include "../src/engine/bundle/cache_use.h"
 #include "../src/engine/bundle/codecs.h"
 #include "../src/engine/mesh_builder.h"
 #include "../src/engine/vertex_pack.h"
@@ -232,13 +233,13 @@ TEST_CASE(height_grid_road_entity_and_rings_round_trip_field_for_field) {
     RoadEdge b; b.a = 1; b.b = 2; b.klass = RoadClass::Ramp; b.provenance = RoadProvenance::CorridorRamp; b.spec = 2;
     e.graph.edges = {a, b};
     e.look.sidewalk = 2.6; e.look.markings = false; e.look.color = Vec3(0.1, 0.2, 0.3);
-    e.plan.freewayPlans = {{Vec2(1, 2), Vec2(3, 4), Vec2(5, 6)}}; CityHub hub; hub.pos = Vec2(9, 9); hub.kind = 2; hub.radial = true; hub.site = 1; e.plan.cityHubs = {hub};
+    e.plan.freewayPlans = {{Vec2(1, 2), Vec2(3, 4), Vec2(5, 6)}};
     BinWriter w2; putRoadEntity(w2, e); RoadEntity f; BinReader r2(w2.bytes.data(), w2.bytes.size()); CHECK(getRoadEntity(r2, f));
     CHECK(f.graph.nodes.size() == 3 && f.graph.edges.size() == 2 && f.graph.nodes[1].elev == 8.5 && f.graph.nodes[1].elevAbsolute && f.graph.nodes[2].tangent.y == 0.8);
     CHECK(f.graph.edges[0].klass == RoadClass::Freeway && f.graph.edges[0].oneWay && !f.graph.edges[0].walkable && f.graph.edges[0].access == 7 && f.graph.edges[0].baked && f.graph.edges[0].parkWidth == 2.5 && f.graph.edges[0].provenance == RoadProvenance::CorridorMain);
     CHECK(f.graph.edges[1].klass == RoadClass::Ramp && f.graph.edges[1].spec == 2 && f.graph.edges[1].provenance == RoadProvenance::CorridorRamp);
     CHECK(f.look.sidewalk == 2.6 && !f.look.markings && f.look.crosswalks && f.look.color.z == 0.3);
-    CHECK(f.plan.freewayPlans.size() == 1 && f.plan.freewayPlans[0].size() == 3 && f.plan.freewayPlans[0][2].y == 6 && f.plan.cityHubs.size() == 1 && f.plan.cityHubs[0].radial && f.plan.cityHubs[0].site == 1);
+    CHECK(f.plan.freewayPlans.size() == 1 && f.plan.freewayPlans[0].size() == 3 && f.plan.freewayPlans[0][2].y == 6);
     RoadGraph onlyGraph; BinWriter w3; putRoadGraph(w3, e.graph); BinReader r3(w3.bytes.data(), w3.bytes.size()); CHECK(getRoadGraph(r3, onlyGraph) && onlyGraph.edges.size() == 2);
 
     std::vector<std::vector<Vec2>> rings = {{Vec2(0, 0), Vec2(1, 0), Vec2(1, 1)}, {}};
@@ -566,5 +567,55 @@ TEST_CASE(a_rebake_shares_its_unchanged_sections_with_the_last_one) {
         std::printf("    [clone] a rotted source: %llu refused, %llu cloned\n", static_cast<unsigned long long>(w2.clonesRefused()),
                     static_cast<unsigned long long>(w2.bytesCloned()));
     }
+    fs::remove_all(dir, ec);
+}
+
+TEST_CASE(cache_files_are_pruned_once_every_level_that_used_them_has_moved_on) {
+    // Two loads, a second apart (the record has second resolution). Level one moves to a new weather file and a new
+    // pyramid; level two still uses the pyramid the two shared. A file nobody recorded is kept, a write in flight is
+    // not looked at.
+    const std::string dir = tempDir("cacheuse");
+    auto touch = [&](const std::string& name) { std::ofstream f(dir + "/" + name); f << "x"; return dir + "/" + name; };
+    const std::string weatherOld = touch("a.bin"), weatherNew = touch("b.bin"), shared = touch("s.pyramid"),
+                      pyramidNew = touch("p.pyramid"), unowned = touch("u.bin"), inFlight = touch("c.bin.tmp");
+    const std::string one = touch("one.json"), two = touch("two.json"), gone = dir + "/gone.json";
+    const std::string orphan = touch("o.pyramid");
+    setCacheLevel(gone);
+    noteCacheUse(orphan, "pyramid");    // only a level that no longer exists used it
+    setCacheLevel(one);
+    noteCacheUse(weatherOld, "weather");
+    noteCacheUse(shared, "pyramid");
+    setCacheLevel(two);
+    noteCacheUse(shared, "pyramid");
+    std::this_thread::sleep_for(std::chrono::milliseconds(1100));
+    setCacheLevel(one);
+    noteCacheUse(weatherNew, "weather");
+    noteCacheUse(pyramidNew, "pyramid");
+    setCacheLevel("");
+    noteCacheUse(unowned, "weather");   // no load under way: nothing recorded
+
+    CacheUse use;
+    CHECK(readCacheUse(shared, use) && use.kind == "pyramid" && use.levels.size() == 2);
+    CHECK(!readCacheUse(unowned, use));
+
+    auto staleOf = [](const CachePruneReport& r, const std::string& path) {
+        for (const CacheFileEntry& f : r.files) if (f.path == path) return f.stale ? 1 : 0;
+        return -1;   // not listed
+    };
+    const CachePruneReport dry = pruneCacheFiles({dir}, false);
+    CHECK(staleOf(dry, weatherOld) == 1);
+    CHECK(staleOf(dry, weatherNew) == 0);
+    CHECK(staleOf(dry, shared) == 0);       // level two still uses it
+    CHECK(staleOf(dry, pyramidNew) == 0);
+    CHECK(staleOf(dry, unowned) == 0);
+    CHECK(staleOf(dry, inFlight) == -1);
+    CHECK(staleOf(dry, orphan) == 1);
+    CHECK(dry.removed == 0 && fs::exists(weatherOld));
+
+    const CachePruneReport done = pruneCacheFiles({dir}, true);
+    CHECK(done.removed == 2);
+    CHECK(!fs::exists(weatherOld) && !fs::exists(weatherOld + ".uses"));
+    CHECK(fs::exists(weatherNew) && fs::exists(shared) && fs::exists(unowned) && fs::exists(inFlight));
+    std::error_code ec;
     fs::remove_all(dir, ec);
 }

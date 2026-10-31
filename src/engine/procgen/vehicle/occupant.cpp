@@ -1,88 +1,68 @@
 #include "occupant.h"
 
-#include "../../mesh_builder.h"
+#include "../../block_body.h"
+#include "../../player/driver_seat.h"
+#include "../person.h"
+
+#include <algorithm>
 
 #include <cmath>
 
 namespace engine {
 
-namespace {
-
-// A coloured box PITCHED about an arbitrary (y, z) pivot POINT.
-//
-// citysim's walker has the same idea but pivots only about z = 0, which is fine
-// for a hip or shoulder on a standing body. A seated figure needs the general
-// form: the knee is not on z = 0, and it MOVES with the thigh, so the shin has
-// to rotate about wherever the thigh left it.
-void pitchedBox(RenderMesh& out, const Vec3& size, const Vec3& centre,
-                const Vec3& color, Real pivotY, Real pivotZ, Real angle) {
-    MeshBuilder::emitBox(out, MeshFrame::centred(centre, size).rotatedAbout(Vec3(0, pivotY, pivotZ), Vec3(1, 0, 0), angle), color);
+// The jointed body (block_body.h) seated by the player's own seat rule (driver_seat.h seatedPose, ADR-0254): the
+// manikin's numbers say where the seat puts the feet and the hands, and how far the back reclines.
+OccupantParams chairOccupant() {
+    OccupantParams p;
+    p.hipToHeel = 0.45;
+    p.sittingHeight = 0.86;
+    p.backAngle = 8.0;
+    p.armReach = 20.0;
+    return p;
 }
 
-void box(RenderMesh& out, const Vec3& size, const Vec3& centre, const Vec3& color) {
-    pitchedBox(out, size, centre, color, 0, 0, 0);
+OccupantParams carPassenger() {
+    OccupantParams p;
+    p.armReach = 20.0;
+    return p;
 }
 
-}  // namespace
+BodyPose seatedOccupantPose(const OccupantParams& p, Real bodyScale) {
+    // Scaled to the cabin, never up: the manikin's torso and head took 0.98 of the sitting height along the
+    // reclined back; the body's pelvis to the top of its head is 0.88 m.
+    const Real headTop = BlockBody::parts()[BlockBody::Head].joint.y + BlockBody::parts()[BlockBody::Head].size.y -
+                         BlockBody::parts()[BlockBody::Torso].joint.y;
+    const Real scale = std::min(bodyScale, Real(0.98) * p.sittingHeight / headTop);
+    SeatGeometry seat;
+    seat.lean = -p.backAngle;   // (seatedPose: -ve leans back)
+    seat.wheel = false;         // the hands where the arms reach, not round a wheel
+    // The feet: the thigh out from the hip rising by thighRise, the shin leaning forward so the heel lands
+    // hipToHeel under the hip (the manikin's solve, with the body's own bones).
+    const BlockBody::PartSpec& thighSpec = BlockBody::parts()[BlockBody::LegL];
+    const BlockBody::PartSpec& shinSpec = BlockBody::parts()[BlockBody::ShinL];
+    const Real thigh = 2 * thighSpec.rest.length() * scale, shin = 2 * shinSpec.rest.length() * scale;
+    const Real rise = degreesToRadians(p.thighRise);
+    const Real kneeY = thigh * std::sin(rise), kneeZ = thigh * std::cos(rise);
+    const Real drop = std::min(kneeY + p.hipToHeel, shin * Real(0.999));
+    seat.foot = Vec3(thighSpec.joint.x * scale, kneeY - drop, kneeZ + std::sqrt(shin * shin - drop * drop));
+    // The hands: nine tenths of the arm out from the shoulder at armReach from hanging, the elbow taking the rest.
+    const BlockBody::PartSpec& armSpec = BlockBody::parts()[BlockBody::ArmL];
+    const Real pitch = degreesToRadians(seat.lean);
+    const Vec3 shoulderUp = (armSpec.joint - BlockBody::parts()[BlockBody::Torso].joint) * scale;
+    const Vec3 shoulder(shoulderUp.x, shoulderUp.y * std::cos(pitch) - shoulderUp.z * std::sin(pitch),
+                        shoulderUp.y * std::sin(pitch) + shoulderUp.z * std::cos(pitch));
+    const Real arm = 4 * armSpec.rest.length() * scale;   // the upper arm and the forearm
+    const Real reach = degreesToRadians(p.armReach);
+    seat.grip = shoulder + Vec3(0, -std::cos(reach), std::sin(reach)) * (Real(0.9) * arm);
+    return seatedPose(seat, SeatSway{}, 0, 0, scale);
+}
 
 RenderMesh buildSeatedOccupant(const OccupantParams& p) {
-    RenderMesh m;
-
-    // Torso and head recline about the hip by the SEAT's back angle, so the
-    // occupant leans with the seat instead of sitting bolt upright inside it.
-    // Negative because a positive pitch here swings the top FORWARD.
-    const Real recline = -degreesToRadians(p.backAngle);
-    const Real rise = degreesToRadians(p.thighRise);
-
-    // Thighs: forward from the hip along +Z, angled slightly up to the knee.
-    for (Real sx : {Real(-1), Real(1)})
-        pitchedBox(m, Vec3(0.17, 0.17, p.thigh),
-                   Vec3(sx * p.hipHalfWidth, 0, p.thigh * Real(0.5)), p.trousers,
-                   0, 0, rise);
-
-    // The knee, where the thigh actually ended — the shin pivots about THIS.
-    const Real kneeY = p.thigh * std::sin(rise);
-    const Real kneeZ = p.thigh * std::cos(rise);
-    // Solve the shin's forward lean so the heel lands exactly H30 below the hip.
-    const Real drop = std::min(kneeY + p.hipToHeel, p.lowerLeg * Real(0.999));
-    const Real shinLean = -std::acos(std::max(drop / p.lowerLeg, Real(0)));
-    for (Real sx : {Real(-1), Real(1)}) {
-        pitchedBox(m, Vec3(0.15, p.lowerLeg, 0.15),
-                   Vec3(sx * p.hipHalfWidth, kneeY - p.lowerLeg * Real(0.5), kneeZ),
-                   p.trousers, kneeY, kneeZ, shinLean);
-        // Foot at the heel the lean put us at, flat on the floor.
-        const Real heelZ = kneeZ + p.lowerLeg * std::sin(-shinLean);
-        box(m, Vec3(0.14, 0.07, 0.26),
-            Vec3(sx * p.hipHalfWidth, -p.hipToHeel + Real(0.035), heelZ + Real(0.06)),
-            p.trousers);
-    }
-
-    // Torso and head are sized to `sittingHeight`, NOT fixed. The leg segments
-    // above are J826 data and stay put; sitting height is not in that data, and a
-    // 1.45 m sedan with a 0.32 m floor only leaves ~0.78 m from hip to headliner.
-    // Sizing to fit is why the driver's head stopped coming out of the roof.
-    const Real torso = p.sittingHeight * Real(0.68);
-    const Real headSize = p.sittingHeight * Real(0.30);
-    pitchedBox(m, Vec3(0.44, torso, 0.26), Vec3(0, torso * Real(0.5), 0), p.shirt,
-               0, 0, recline);
-    pitchedBox(m, Vec3(headSize, headSize, headSize),
-               Vec3(0, torso + headSize * Real(0.5), 0), p.skin, 0, 0, recline);
-
-    // Arms reach forward to the wheel. The shoulder moved with the recline, so
-    // the arm pitches about where it ended up, not about where it started.
-    //
-    // NEGATIVE armReach. pitchedBox swings +Y toward +Z, and the arm hangs BELOW
-    // the shoulder (ry < 0), so a positive angle drives its far end to negative
-    // z — backwards, toward the boot. The driver was reaching over his own
-    // shoulders for the back seat.
-    const Real shoulderStand = p.sittingHeight * Real(0.62);
-    const Real shoulderY = shoulderStand * std::cos(recline);
-    const Real shoulderZ = shoulderStand * std::sin(recline);
-    for (Real sx : {Real(-1), Real(1)})
-        pitchedBox(m, Vec3(0.12, 0.56, 0.16),
-                   Vec3(sx * 0.25, shoulderY - Real(0.28), shoulderZ), p.shirt,
-                   shoulderY, shoulderZ, degreesToRadians(-p.armReach));
-    return m;
+    PersonOutfit outfit;
+    outfit.shirt = p.shirt;
+    outfit.pants = p.trousers;
+    outfit.skin = p.skin;
+    return buildPosedPerson(seatedOccupantPose(p), outfit);
 }
 
 }  // namespace engine

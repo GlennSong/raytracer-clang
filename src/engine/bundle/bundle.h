@@ -39,10 +39,18 @@ constexpr size_t kSectionAlign = 64;
 // (btrfs, XFS) instead of the bytes being written again. Memory bundles keep kSectionAlign.
 constexpr size_t kFileSectionAlign = 4096;
 
-// FNV-1a, the repo's content hash (terrain_field.cpp's erosion cache uses the same constants).
+// FNV-1a, the repo's content hash: every cache key is folded with it (bundles, terrain files, the population,
+// texture fields, trees).
 constexpr uint64_t kFnvOffset = 1469598103934665603ULL;
 uint64_t fnv1a(const void* data, size_t size, uint64_t seed = kFnvOffset);
 uint64_t fnv1aStr(const std::string& s, uint64_t seed = kFnvOffset);
+// The same hash folded field by field, for a key built from many values.
+struct Fnv {
+    uint64_t h = kFnvOffset;
+    void bytes(const void* p, size_t n) { h = fnv1a(p, n, h); }
+    void str(const std::string& s) { h = fnv1aStr(s, h); }
+    template <typename T> void pod(const T& v) { bytes(&v, sizeof v); }
+};
 // Chains the file's bytes onto `key`; false when the file cannot be read. bytes/mtime are informational.
 bool fnv1aFile(const std::string& path, uint64_t& key, uint64_t* bytes = nullptr, int64_t* mtime = nullptr);
 std::string hex16(uint64_t v);

@@ -1,6 +1,7 @@
 #include "test_framework.h"
 
 #include "../src/engine/procgen/city/architect.h"
+#include "../src/engine/procgen/city/building_uses.h"
 #include "../src/engine/procgen/city/city_lots.h"
 #include "../src/engine/procgen/city/shape_grammar.h"
 
@@ -60,8 +61,10 @@ TEST_CASE(new_recipes_are_reachable_in_their_districts) {
     for (const char* n : {"brick_shop", "mixed_use", "office_midrise",
                           "condo_tower", "terrace_condo", "loft_block", "hotel",
                           "bank", "cinema", "strip_mall", "supermarket",
-                          "office_park", "pagoda_tower", "civic_midtown"})
+                          "office_park", "civic_midtown"})
         CHECK(com[n] > 0);
+    CHECK(com["pagoda_tower"] == 0);   // a 14 m lot cannot hold a pagoda's top tier and its stair (pagodaFits)...
+    CHECK(tableNames(DistrictTag::Commercial, 24, 600, 600)["pagoda_tower"] > 0);   // ...a 24 m one can
 
     std::map<std::string, int> res = tableNames(DistrictTag::Residential, 14, 260, 600);
     for (const char* n : {"yard_house", "modern_house", "bungalow",
@@ -108,7 +111,7 @@ TEST_CASE(new_recipes_keep_their_signatures) {
             CHECK(c.placeType == "home");
         }
         if (c.name == "pagoda_tower") {
-            CHECK(c.massing == BuildingRecipe::Massing::BoxMass);
+            CHECK(c.massing == BuildingRecipe::Massing::Pagoda);
             CHECK(c.params.shape == BuildingShape::Pagoda);
         }
         if (c.name == "supermarket") CHECK(c.params.sideBays > 0);
@@ -134,6 +137,61 @@ TEST_CASE(new_recipes_keep_their_signatures) {
             CHECK(ind.params.solidFacade);
             CHECK(ind.params.groundBays >= 2);
         }
+    }
+}
+
+// THE PAGODA ON THE PLAN PATH (ADR-0270): every seed of the recipe, on lots of every proportion, stands on the square
+// inscribed in its lot, its tiers each smaller than the one below, a flared tile roof over them and a gold finial on
+// top -- grown by growPlanBuilding, the one massing path, so it has the city's floors, doors and interiors too.
+TEST_CASE(a_pagoda_grows_its_tiers_on_the_plan_path_on_every_seed) {
+    const std::vector<Poly2> lots = {
+        {{0, 0}, {24, 0}, {24, 24}, {0, 24}},     // square
+        {{0, 0}, {40, 0}, {40, 22}, {0, 22}},     // long
+        {{0, 0}, {30, 0}, {26, 26}, {2, 24}},     // off-square
+    };
+    int grown = 0, tooSmall = 0;
+    for (uint32_t seed = 1; seed <= 12; ++seed) {
+        BuildingRecipe r;
+        if (!architectRecipeByName("pagoda_tower", seed, 0.6, 24, 600, r)) continue;
+        CHECK(r.massing == BuildingRecipe::Massing::Pagoda);
+        for (const Poly2& lot : lots) {
+            const Poly2 sq = pagodaPlan(lot, r.params.floors);
+            if (sq.empty()) { ++tooSmall; continue; }   // a lot that cannot hold its tiers stays open (checked below)
+            CHECK(sq.size() == 4);
+            for (const Vec2& v : sq) CHECK(pointInPolygon(lot, v));   // it stands on its lot
+            const std::vector<StoreyPlan> st = storeyPlans(sq, r.params);
+            int steps = 0;
+            for (std::size_t k = 1; k < st.size(); ++k) {
+                CHECK(area(st[k].plan) <= area(st[k - 1].plan) + 1e-6);   // never wider than the tier below
+                steps += area(st[k].plan) < area(st[k - 1].plan) - 1e-6;
+            }
+            if (steps != r.params.floors - 1) { std::printf("    [pagoda] seed %u: %d floors, %zu storeys, %d steps, short side %.2f; tiers:", seed, r.params.floors, st.size(), steps, std::sqrt(area(sq))); for (const MassTier& mt : envelopeTiers(sq, r.params)) std::printf(" %.2f@%d", std::sqrt(area(mt.plan)), mt.floor0); std::printf(" storeys:"); for (const StoreyPlan& sp : st) std::printf(" %.2f", std::sqrt(area(sp.plan))); std::printf("\n"); }
+            CHECK(steps == r.params.floors - 1);   // a tier a floor from the second floor
+            const BuildingMesh bm = growPlanBuilding(sq, r.params, 0.0);
+            CHECK(!bm.parts.empty());
+            bool roof = false, finial = false;
+            for (const RenderMesh& m : bm.parts) {
+                roof = roof || (m.materialIndex == static_cast<int>(PartId::Roof) && !m.indices.empty());
+                finial = finial || (m.materialIndex == static_cast<int>(PartId::Detail) && !m.indices.empty());
+            }
+            CHECK(roof);
+            CHECK(finial);
+            CHECK(bm.height > r.params.groundHeight + r.params.floors * r.params.floorHeight);   // the roofs and the finial stand above
+            ++grown;
+        }
+    }
+    std::printf("    [pagoda] %d grown on the plan path, %d lots too small for their tiers\n", grown, tooSmall);
+    CHECK(grown >= 24);
+    CHECK(pagodaPlan(Poly2{{0, 0}, {14, 0}, {14, 14}, {0, 14}}, 3).empty());   // too small for any pagoda: open ground
+    // ...which the architect never rolls: a lot too narrow for five tiers gets three, one too narrow for three the
+    // street's mixed-use building, on every seed
+    for (uint32_t seed = 1; seed <= 12; ++seed) {
+        BuildingRecipe r;
+        CHECK(architectRecipeByName("pagoda_tower", seed, 0.6, 19.0, 400, r));
+        CHECK(r.massing == BuildingRecipe::Massing::Pagoda && r.params.floors == 3);
+        CHECK(pagodaFits(19.0, r.params.floors));
+        CHECK(architectRecipeByName("pagoda_tower", seed, 0.6, 16.0, 300, r));
+        CHECK(r.massing != BuildingRecipe::Massing::Pagoda && r.params.shape != BuildingShape::Pagoda);
     }
 }
 
@@ -365,4 +423,31 @@ TEST_CASE(lit_pane_colour_packs_glass_and_lit_tint) {
     // The palette the shaders carry.
     CHECK_APPROX(litTintOf(1).z, 0.88, 1e-9);
     CHECK_APPROX(litTintOf(7).y, 1.00, 1e-9);
+}
+
+// WHAT THE FLOORS ARE FOR (assets/scripts/building_uses.lua, the building-uses plan): every recipe is listed by name,
+// so the table is the one place to read a building's use; and the table agrees with the recipes about homes -- a
+// recipe's floors are apartments or a house exactly when the recipe makes it residential (the exterior's fact: its
+// lit windows, flats over shops), and an office floor never is.
+TEST_CASE(building_uses_list_every_recipe_and_agree_about_homes) {
+    int recipes = 0, unlisted = 0, disagree = 0;
+    for (int i = 0; i < architectRecipeCount(); ++i) {
+        const char* name = architectRecipeName(i);
+        BuildingRecipe r;
+        if (!architectRecipeByName(name, 3, 0.6, 24, 600, r)) continue;
+        ++recipes;
+        if (!floorUseListed(name)) { ++unlisted; std::printf("    [uses] %s is not in building_uses.lua\n", name); }
+        const std::string use = floorUseFor(name, r.placeType);
+        const bool homes = use == "apartments" || use == "house";
+        if (homes != r.params.residential) {
+            ++disagree;
+            std::printf("    [uses] %s: use %s, residential %d\n", name, use.c_str(), r.params.residential ? 1 : 0);
+        }
+        CHECK(!(r.params.officeUse && r.params.residential));
+        CHECK(floorUseName(r.params.floorUse) == use);
+    }
+    std::printf("    [uses] %d recipes, %d unlisted, %d disagree about homes\n", recipes, unlisted, disagree);
+    CHECK(recipes > 50);
+    CHECK(unlisted == 0);
+    CHECK(disagree == 0);
 }

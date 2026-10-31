@@ -1,8 +1,8 @@
 #include "level_scene.h"
+#include "proc_rng.h"
 
 #include "engine/mesh_builder.h"
 #include "engine/procgen/terrain.h"
-#include "engine/procgen/erosion.h"
 #include "engine/procgen/tree.h"
 #include "engine/procgen/surface_maps.h"
 #include "engine/model_importer.h"
@@ -267,20 +267,11 @@ void addTerrain(const json& t, Scene& scene, const MaterialTable& materials,
                                Vec3(1, 1, 1), matIdx, scene);
         return;
     }
-    if (t.value("erode", false) && !tp.erodedBase) {
-        // Bake the analytic base into an eroded field and hang it on the params,
-        // so every terrainHeight() sample (mesh, LOD rings, flatten, normals,
-        // color banding) reads the eroded surface — the same path CDLOD uses.
-        // Skipped when the caller already supplied a shared eroded base.
-        ErosionParams ep;
-        ep.seed = t.value("seed", 0u) + 1234u;
-        ep.droplets = t.value("erodeDroplets", ep.droplets);
-        ep.erodeRadius = t.value("erodeRadius", ep.erodeRadius);
-        ep.thermalIterations = t.value("erodeThermal", ep.thermalIterations);
-        ep.talus = t.value("erodeTalus", ep.talus);
-        int erodeRes = t.value("erodeRes", 512);
-        bakeErodedTerrain(tp, noise, tp.size, erodeRes, ep);
-    }
+    if (t.value("erode", false) && !tp.erodedBase)
+        // the weathered ground on the params, so every terrainHeight() sample (mesh, LOD rings, flatten,
+        // normals, colour banding) reads it -- the same path CDLOD uses. Skipped when the caller already
+        // supplied the shared one.
+        tp.erodedBase = erodedForTerrain(t);
     addMeshAsTriangles(generateTerrain(tp, noise), Vec3(), Quat::identity(),
                        Vec3(1, 1, 1), matIdx, scene);
     // Distant LOD rings (mountains/hills out to the horizon).
@@ -492,7 +483,7 @@ bool LevelScene::load(const std::string& levelPath, Scene& scene,
             if (ent.value("shape", std::string()) != "road") continue;
             const json roadBlock = ent.contains("road") ? ent["road"] : json::object();
             roads::RoadBuilder& rb = roads::roadBuilderFor(roadBlock);
-            RoadEntity net = roadNetFromJson(roadBlock);
+            RoadEntity net;   // the builder builds the city from its bundle; the entity carries only the look
             roads::RoadBuildInput in;
             in.road = &net; in.ground = natural; in.options = roadBlock; in.level = root; in.levelPath = levelPath;
             const roads::GroundPlan gp = rb.ground(in);
@@ -591,10 +582,7 @@ bool LevelScene::load(const std::string& levelPath, Scene& scene,
                 if (ent.value("shape", std::string()) != "road") continue;
                 const json roadBlock =
                     ent.contains("road") ? ent["road"] : json::object();
-                RoadEntity net = roadNetFromJson(roadBlock);
-                // levelGround (natural) gates terrain-aware recipes (metro).
-                if (roadBlock.contains("generate"))
-                    applyGenerateRecipe(net, roadBlock["generate"], levelGround);
+                RoadEntity net;   // the builder builds the city from its bundle; the entity carries only the look
                 // (the ground a lane-built city stands on comes from its builder: GroundPlan)
                 roads::RoadBuilder& rb = roads::roadBuilderFor(roadBlock);
                 if (rb.ownsNavGraph()) {   // a builder that paves a whole city knows its blocks
@@ -638,7 +626,6 @@ bool LevelScene::load(const std::string& levelPath, Scene& scene,
             gin.padGround = [&ctp, &cnoise](double x, double z) {
                 return terrainHeight(ctp, cnoise, x, z);   // pads grade off the road-carved ground
             };
-            gin.netGround = levelGround;                   // ...the nets drape on the natural one
             gin.nets = &lotNets;
             if (!cityHoles.empty()) {
                 gin.holes = &cityHoles;
@@ -730,11 +717,11 @@ bool LevelScene::load(const std::string& levelPath, Scene& scene,
                             leafMat.alphaTex = scene.addTexture(std::move(tex));
                             leafMi = scene.addMaterial(leafMat);
                         }
-                        uint32_t th = static_cast<uint32_t>(
+                        ProcRng thRng(static_cast<uint32_t>(
                             std::llround(lb.site.x * 73.1 + lb.site.y * 37.7)) *
-                            2654435761u;
+                            2654435761u);
                         for (const Vec3& s : lb.treeSpots) {
-                            th = th * 1664525u + 1013904223u;
+                            const uint32_t th = thRng.bits();
                             const TreeMesh& kit = kits[(th >> 8) % kits.size()];
                             const Vec3 pos(s.x, gin.padGround ? gin.padGround(s.x, s.z) : 0.0,
                                            s.z);
@@ -805,18 +792,10 @@ bool LevelScene::load(const std::string& levelPath, Scene& scene,
             addTree(ent, scene);
             continue;
         }
-        // Editor-authored road (shape:"road", ADR-0049): the same RoadEntity the
-        // editor edits, baked to the carriageway and draped on the level terrain.
+        // A city's roads (shape:"road"): the road builder's products, draped on the level terrain.
         if (ent.value("shape", std::string()) == "road") {
             const json roadBlock = ent.contains("road") ? ent["road"] : json::object();
-            RoadEntity net = roadNetFromJson(roadBlock);
-            // A generated network (ADR-0056 "generate" recipe — grown.json's whole
-            // city) has no authored nodes: grow it exactly like the level loader
-            // does, or the offline render shows bare ground where the city is.
-            // levelGround (natural) gates the metro's terrain-aware layout and
-            // drapes the mesh.
-            if (roadBlock.contains("generate"))
-                applyGenerateRecipe(net, roadBlock["generate"], levelGround);
+            RoadEntity net;   // the builder builds the city from its bundle; the entity carries only the look
             // ONE ROAD BUILDER, CHOSEN BY THE LEVEL (Glenn, 2026-09-21: "whatever it is
             // they should be 1:1. I don't know why the editor should end up building a
             // procedurally generated city different than any other path. There should

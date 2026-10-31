@@ -7,6 +7,8 @@
 #include "../../renderer/debug_ui_clipboard.h"   // which bridge a Copy went through
 
 #include "physics_system.h"
+#include "camera_system.h"   // CameraPoseRequest: a teleport with no player moves the fly camera
+#include "player_system.h"   // PersonRequest: the panel's third-person checkbox
 
 #include <algorithm>
 #include <cmath>
@@ -92,22 +94,15 @@ std::string TeleportSystem::teleport(FrameContext& ctx, const TeleportPose& pose
         }
     }
     if (what.empty()) {
-        // No player (the editor, or a level without one): the fly camera, via
-        // the same staged pose the socket's `camera` verb uses — CameraSystem
-        // consumes it next update and detaches.
-        auto& s = ctx.settings;
-        s.setDouble("flyEyeX", pose.position.x);
-        s.setDouble("flyEyeY", pose.position.y);
-        s.setDouble("flyEyeZ", pose.position.z);
-        if (pose.hasLook) {
-            s.setDouble("flyPitch", pose.pitch);
-            s.setDouble("flyYaw", pose.yaw);
-        } else {
-            const TeleportPose here = poseHere(ctx);
-            s.setDouble("flyPitch", here.pitch);
-            s.setDouble("flyYaw", here.yaw);
-        }
-        s.setDouble("cameraApply", 1.0);
+        // No player (the editor, or a level without one): the fly camera, by
+        // the same request the socket's `camera` verb publishes — CameraSystem
+        // takes it next update and detaches.
+        CameraPoseRequest cam;
+        cam.eye = pose.position;
+        const TeleportPose here = poseHere(ctx);
+        cam.pitch = pose.hasLook ? pose.pitch : here.pitch;
+        cam.yaw = pose.hasLook ? pose.yaw : here.yaw;
+        ctx.events.publish(cam);
         what = "camera";
     }
     LOG_INFO << "[teleport] " << what << " -> " << formatTeleportPose(pose.position, pose.pitch, pose.yaw)
@@ -138,7 +133,19 @@ void TeleportSystem::saveBookmarks(FrameContext& ctx) {
     ctx.settings.setString("teleport.bookmarks", all);
 }
 
-void TeleportSystem::onStart(FrameContext& ctx) { loadBookmarks(ctx); }
+void TeleportSystem::onStart(FrameContext& ctx) {
+    loadBookmarks(ctx);
+    onRequest_ = ctx.events.listen<TeleportRequest>([this](const TeleportRequest& r) {
+        pendingPose_ = r.pose;
+        pending_ = true;
+        lastResult_.clear();
+    });
+    onOpenPanel_ = ctx.events.listen<TeleportPanelRequest>([this](const TeleportPanelRequest&) { openPanel_ = true; });
+    if (ctx.commands != nullptr)
+        answer_ = ctx.commands->bind("teleport?", "TeleportSystem", [this](const ControlCommand&) -> std::string {
+            return lastResult_.empty() ? "ok (pending)" : "ok " + lastResult_;
+        });
+}
 
 void TeleportSystem::onStop(FrameContext& ctx) {
     saveBookmarks(ctx);
@@ -146,16 +153,11 @@ void TeleportSystem::onStop(FrameContext& ctx) {
 }
 
 void TeleportSystem::update(FrameContext& ctx) {
-    // Socket one-shots: `teleport <pose>` moves the player (camera when none);
-    // `where?` is answered from the view directly by the application.
-    auto& s = ctx.settings;
-    const std::string req = s.getString("teleport.request", "");
-    if (!req.empty()) {
-        s.setString("teleport.request", "");
-        TeleportPose p;
-        if (parseTeleportPose(req, p) >= 2) lastResult_ = teleport(ctx, p, true);
-        else lastResult_ = "unreadable pose: " + req;
-        s.setString("teleport.result", lastResult_);
+    // A TeleportRequest (the socket's `teleport`, fast travel, Lua) moves the
+    // player (the camera when none); `teleport?` answers with lastResult_.
+    if (pending_) {
+        pending_ = false;
+        lastResult_ = teleport(ctx, pendingPose_, true);
     }
 }
 
@@ -193,10 +195,10 @@ void TeleportSystem::render(FrameContext& ctx) {
     }
     if (!ctx.debugOverlayActive) return;
     ImGui::Begin("Debug");
-    // `set teleport.open 1` (socket) unfolds the section once — a probe can
+    // `teleport open` (socket) unfolds the section once — a probe can
     // shoot the panel; a header cannot be clicked from outside.
-    if (ctx.settings.getDouble("teleport.open", 0.0) > 0.5) {
-        ctx.settings.setDouble("teleport.open", 0.0);
+    if (openPanel_) {
+        openPanel_ = false;
         ImGui::SetNextItemOpen(true);
     }
     if (ImGui::CollapsingHeader("Teleport")) {
@@ -217,8 +219,11 @@ void TeleportSystem::render(FrameContext& ctx) {
         }
         {
             bool third = ctx.settings.getBool("playerThirdPerson", false);
-            if (ImGui::Checkbox("Third person (V on foot)", &third))
-                ctx.settings.setDouble("player.setThirdPerson", third ? 1.0 : 0.0);
+            if (ImGui::Checkbox("Third person (V on foot)", &third)) {
+                PersonRequest r;
+                r.mode = third ? 1 : 0;
+                ctx.events.publish(r);
+            }
             ImGui::SameLine();
             ImGui::TextDisabled("persisted in settings.json as playerThirdPerson");
         }

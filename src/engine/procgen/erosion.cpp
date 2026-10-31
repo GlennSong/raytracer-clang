@@ -1,12 +1,10 @@
 #include "erosion.h"
 #include "../../log.h"
 #include "erosion_gpu.h"
-#include "../mesh_builder.h"
 
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
-#include <random>
 
 namespace engine {
 
@@ -40,21 +38,6 @@ Heightmap bakeHeightmap(const TerrainParams& params, const Noise& noise) {
 
 namespace {
 
-// Height + gradient at a fractional grid position (bilinear).
-void heightAndGradient(const Heightmap& hm, float gx, float gz,
-                       float& height, float& gx_out, float& gz_out) {
-    int x0 = static_cast<int>(gx), z0 = static_cast<int>(gz);
-    x0 = std::clamp(x0, 0, hm.n - 2);
-    z0 = std::clamp(z0, 0, hm.n - 2);
-    float fx = std::clamp(gx - x0, 0.0f, 1.0f), fz = std::clamp(gz - z0, 0.0f, 1.0f);
-    float nw = hm.get(x0, z0), ne = hm.get(x0 + 1, z0);
-    float sw = hm.get(x0, z0 + 1), se = hm.get(x0 + 1, z0 + 1);
-    // Gradient from the bilinear patch derivatives.
-    gx_out = (ne - nw) * (1 - fz) + (se - sw) * fz;
-    gz_out = (sw - nw) * (1 - fx) + (se - ne) * fx;
-    height = (nw * (1 - fx) + ne * fx) * (1 - fz) + (sw * (1 - fx) + se * fx) * fz;
-}
-
 // RT_CPU_EROSION=1 pins the reference CPU sim (debugging, A/B comparisons,
 // and machines where the GPU result is unwanted).
 bool forceCpuErosion() {
@@ -65,109 +48,17 @@ bool forceCpuErosion() {
 }  // namespace
 
 const char* erosionBackendTag(const ErosionParams* p) {
-#if defined(RT_HAVE_VULKAN_EROSION)
-    // Vulkan's own tag: run-to-run deterministic like the Metal port, not bit-identical to it (ADR-0122)
+    // run-to-run deterministic, not bit-identical to the CPU (ADR-0122)
     return (p && p->vulkan && !forceCpuErosion() && erodeGpuAvailable()) ? "vk-erosion-v1" : "cpu";
-#else
-    return (!forceCpuErosion() && erodeGpuAvailable()) ? "gpu-erosion-v1"
-                                                       : "cpu";
-#endif
 }
 
 void erode(Heightmap& hm, const ErosionParams& p) {
     if (hm.n < 3) return;
-    // GPU first (metropolis-scale-plan P0.5): the Metal port of this same
-    // droplet+thermal model turns a minutes-long bake into seconds at 2048
-    // res. Any failure (no device, kernel source missing, env pin) falls
-    // through to the reference CPU sim below, unchanged.
-#if defined(RT_HAVE_VULKAN_EROSION)
-    if (p.vulkan && !forceCpuErosion() && erodeGpu(hm, p)) return;   // opt-in per terrain (ADR-0122)
+    // GPU first (ADR-0122). Any failure (no device, kernel missing, env pin) falls through to the CPU below.
+    if (p.vulkan && !forceCpuErosion() && erodeGpu(hm, p)) return;
     // the water model and breaching exist only on the Vulkan backend: say so rather than bake without them
     if (p.waterSteps > 0 || p.breachDepth > 0.0f)
         LOG_WARN << "[erosion] water steps / breach asked of the CPU backend, which has neither: the ground bakes without them";
-#else
-    if (!forceCpuErosion() && erodeGpu(hm, p)) return;
-#endif
-    std::mt19937 gen(p.seed);
-    std::uniform_real_distribution<float> pos(0.0f, static_cast<float>(hm.n - 1));
-
-    // Precompute a circular erosion brush (offsets + normalized weights), so a
-    // droplet removes material over an area instead of a single cell (no spikes).
-    std::vector<std::pair<int, int>> brush;
-    std::vector<float> brushW;
-    {
-        int r = std::max(1, p.erodeRadius);
-        float wsum = 0.0f;
-        for (int dy = -r; dy <= r; dy++)
-            for (int dx = -r; dx <= r; dx++) {
-                float d2 = static_cast<float>(dx * dx + dy * dy);
-                if (d2 > r * r) continue;
-                float w = 1.0f - std::sqrt(d2) / r;
-                brush.push_back({dx, dy});
-                brushW.push_back(w);
-                wsum += w;
-            }
-        for (float& w : brushW) w /= wsum;
-    }
-
-    // --- Hydraulic: droplet simulation (Lague-style) ---
-    for (int i = 0; i < p.droplets; i++) {
-        float px = pos(gen), pz = pos(gen);
-        float dx = 0.0f, dz = 0.0f;
-        float speed = 1.0f, water = 1.0f, sediment = 0.0f;
-
-        for (int life = 0; life < p.maxLifetime; life++) {
-            int nx = static_cast<int>(px), nz = static_cast<int>(pz);
-            if (nx < 0 || nz < 0 || nx >= hm.n - 1 || nz >= hm.n - 1) break;
-            float fx = px - nx, fz = pz - nz;
-
-            float h0, gx, gz;
-            heightAndGradient(hm, px, pz, h0, gx, gz);
-
-            // Blend direction: momentum vs downhill (negative gradient).
-            dx = dx * p.inertia - gx * (1.0f - p.inertia);
-            dz = dz * p.inertia - gz * (1.0f - p.inertia);
-            float len = std::sqrt(dx * dx + dz * dz);
-            if (len < 1e-6f) break;            // stuck in a pit / flat
-            dx /= len; dz /= len;
-            float nxp = px + dx, nzp = pz + dz;
-            if (nxp < 0 || nzp < 0 || nxp >= hm.n - 1 || nzp >= hm.n - 1) break;
-
-            float h1, ggx, ggz;
-            heightAndGradient(hm, nxp, nzp, h1, ggx, ggz);
-            float dh = h1 - h0;            // >0 uphill, <0 downhill
-
-            float capacity =
-                std::max(-dh, p.minSlope) * speed * water * p.sedimentCapacity;
-
-            if (sediment > capacity || dh > 0.0f) {
-                // Deposit: fill the pit (uphill) or shed excess. Bilinear back
-                // into the 4 cells of the current position.
-                float deposit = (dh > 0.0f) ? std::min(dh, sediment)
-                                            : (sediment - capacity) * p.depositSpeed;
-                sediment -= deposit;
-                hm.set(nx, nz, hm.get(nx, nz) + deposit * (1 - fx) * (1 - fz));
-                hm.set(nx + 1, nz, hm.get(nx + 1, nz) + deposit * fx * (1 - fz));
-                hm.set(nx, nz + 1, hm.get(nx, nz + 1) + deposit * (1 - fx) * fz);
-                hm.set(nx + 1, nz + 1, hm.get(nx + 1, nz + 1) + deposit * fx * fz);
-            } else {
-                // Erode over the brush, capped so we never dig below the drop.
-                float erodeAmt = std::min((capacity - sediment) * p.erodeSpeed, -dh);
-                for (size_t b = 0; b < brush.size(); b++) {
-                    int bx = nx + brush[b].first, bz = nz + brush[b].second;
-                    if (bx < 0 || bz < 0 || bx >= hm.n || bz >= hm.n) continue;
-                    float w = erodeAmt * brushW[b];
-                    hm.set(bx, bz, hm.get(bx, bz) - w);
-                    sediment += w;
-                }
-            }
-
-            speed = std::sqrt(std::max(0.0f, speed * speed + dh * p.gravity * -1.0f));
-            water *= (1.0f - p.evaporation);
-            px = nxp; pz = nzp;
-        }
-    }
-
     // --- Thermal: slump slopes steeper than the talus drop ---
     for (int it = 0; it < p.thermalIterations; it++) {
         std::vector<float> delta(hm.h.size(), 0.0f);
@@ -191,27 +82,6 @@ void erode(Heightmap& hm, const ErosionParams& p) {
         }
         for (size_t k = 0; k < hm.h.size(); k++) hm.h[k] += delta[k];
     }
-}
-
-RenderMesh generateTerrainMesh(const Heightmap& hm) {
-    RenderMesh mesh;
-    const int n = hm.n;
-    const float half = hm.worldSize * 0.5f;
-    const float step = hm.worldSize / (n - 1);
-    for (int z = 0; z < n; z++)
-        for (int x = 0; x < n; x++)
-            mesh.vertices.push_back(
-                Vertex(Vec3(-half + x * step, hm.get(x, z), -half + z * step),
-                       Vec3(0, 1, 0)));
-    MeshBuilder::gridIndices(mesh, n, n);
-    MeshBuilder::recomputeNormals(mesh);
-    MeshBuilder::generatePlanarUVs(mesh, 1, 1.0f / hm.worldSize);
-    Noise tint(1234);
-    for (Vertex& v : mesh.vertices) {
-        double nv = tint.noise2(v.position.x * 0.15, v.position.z * 0.15);
-        v.color = terrainColor(v.position.y, v.normal.y, nv);
-    }
-    return mesh;
 }
 
 }  // namespace engine

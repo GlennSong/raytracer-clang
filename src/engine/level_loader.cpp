@@ -62,6 +62,7 @@
 #include "procgen/city/roads/road_builder.h"   // one interface, several road builders
 #include "procgen/city/road_semantics.h"   // editor-authored roads (shape:"road")
 #include "bundle/bake.h"
+#include "bundle/cache_use.h"
 #ifdef RT_ROADS_LANES
 #include "procgen/city/roads/lanes/lanes.h"     // the lanes road builder (ADR-0083/0089)
 #include "procgen/city/roads/lanes/deck_mesh.h"
@@ -71,16 +72,12 @@
 #include "procgen/city/roads/lanes/lots_producer.h" // the lot pass as the second producer (milestone B)
 #include "bundle/bake.h"
 #endif
-#include "procgen/city/corridor_bake.h"
-#include "procgen/city/corridor_plan.h"   // S3b: bake solved corridors into the net
 #include "procgen/city/block_grade.h" // grade blocks to their streets (ADR-0075 P2)
 #include "procgen/city/road_network.h" // extractBlocks (block grading)
 #include "procgen/city/city_svg.h"
 #include "procgen/city/architect.h"   // districtName (city map hub labels)
-#include "procgen/city/district.h"   // generated road districts (shape:"road" with "generate")
 #include "procgen/city/road_constraints.h"   // applyConstraints — bake roundabouts into the graph
 #include "procgen/city/road_mesh.h"   // triangulatePolygon (building prism colliders)
-#include "procgen/city/corridor_mesh.h"      // freeway corridors (plan §8)
 #include "procgen/city/street_furniture.h"   // build-time signal/lamp placement
 #include "procgen/city/street_kit.h"  // trafficSignalProto, streetLamp
 #include "procgen/city/street_names.h"  // nameStreets
@@ -88,7 +85,6 @@
 #include "text/font.h"                  // signFont
 #include "procgen/city/water_mesh.h"  // buildWaterMesh (ocean/lake surface)
 #include "ai/nav_graph.h"             // buildNavGraph (street furniture plan)
-#include "procgen/erosion.h"
 #include "procgen/lsystem.h"
 #include "procgen/tree.h"
 #include "procgen/tree_recipe.h"
@@ -104,7 +100,7 @@
 #include "scripting/vehicle_spec.h"
 #endif
 #include "model_importer.h"
-#include <random>
+#include "../proc_rng.h"
 #include <sstream>
 #include "components.h"
 #include "vehicle_lamps.h"   // beaconCellPhase: the flash every beacon tier shares
@@ -438,8 +434,8 @@ static TextureHandle bakeRoomAtlas(Renderer& renderer) {
         img[o + 1] = static_cast<unsigned char>(std::min(1.0, std::max(0.0, c.y)) * 255);
         img[o + 2] = static_cast<unsigned char>(std::min(1.0, std::max(0.0, c.z)) * 255);
     };
-    uint32_t h = 9176u;
-    auto rnd = [&]() { h ^= h << 13; h ^= h >> 17; h ^= h << 5; return (h & 0xffffu) / 65535.0; };
+    ProcRng h(9176u);
+    auto rnd = [&]() { return h.next(); };
     for (int r = 0; r < 16; ++r) {
         const bool office = r < 8;
         const int tx = (r % 4) * tile, ty = (r / 4) * tile;
@@ -531,8 +527,8 @@ static TextureHandle bakeLitWindowMap(Renderer& renderer, int cells, uint32_t se
     const int px = 8, n = cells * px;
     std::vector<unsigned char> img(static_cast<std::size_t>(n) * n * 4, 0);
     for (std::size_t i = 3; i < img.size(); i += 4) img[i] = 255;
-    uint32_t h = seed;
-    auto rnd = [&]() { h ^= h << 13; h ^= h >> 17; h ^= h << 5; return (h & 0xffffu) / 65535.0; };
+    ProcRng h(seed);
+    auto rnd = [&]() { return h.next(); };
     static const Vec3 tints[6] = {{1.0, 0.97, 0.92}, {0.92, 0.96, 1.0}, {0.80, 0.90, 1.0},
                                   {1.0, 0.85, 0.62}, {1.0, 0.92, 0.75}, {0.96, 0.98, 0.94}};
     for (int cy = 0; cy < cells; ++cy)
@@ -581,7 +577,6 @@ struct LanesPublished {
     // was only ever filled from a lattice net's look, so on a lane-built city it stayed 0
     // and both passes silently did nothing.
     double pavedSidewalk = 0.0;
-    engine::RoadGraph row;                 // freeway + ramp edges of the class-faithful twin, for the lot pass's keep-out
     double sidewalk = 4.0;                 // the citysim sidewalk, read before entities load
     std::vector<engine::Poly2> blocks;     // the lab's city blocks: the pavement's holes, inset by the sidewalk
     std::vector<std::vector<engine::Vec2>> water;   // rivers and lakes the blocks stand back from (ADR-0104)
@@ -646,7 +641,6 @@ static void publishCityProducts(const roads::RoadBuilder& b, const roads::RoadBu
         grid->nx = gp.replace->nx; grid->ny = gp.replace->ny; grid->z = gp.replace->z;
         g_lanes.ground = [grid](double x, double z) { return grid->sample(x, z); };
     }
-    if (!built.row.edges.empty()) g_lanes.row = built.row;
     if (!built.holes.empty()) {
         // The holes stop at the back of the drawn sidewalk; the block begins just behind it and the
         // lot pass gets roadMargin 0. (Same derivation as the terrain pre-pass, below.)
@@ -715,48 +709,30 @@ static void spawnRoadMeshes(const json& ent, std::vector<roads::RoadMesh>& meshe
         world.add<MeshCollider>(me, mc);
     }
     // A road that built nothing still IS one: the host keeps its (mesh-less) Renderable so the
-    // editor can select it and give it nodes, exactly as before there was a list.
+    // editor can select it, exactly as before there was a list.
     if (spawned == 0 && hostTakesFirst) world.add<Renderable>(host, proto);
 }
 
 static void loadRoadEntity(const json& ent, World& world, AssetManager& assets,
-                           int index, const HeightField& drapeGround,
-                           const RoadEntity* preNet = nullptr, int entityIndex = -1) {
+                           int index, const HeightField& drapeGround, int entityIndex = -1) {
     const json roadBlock = ent.contains("road") ? ent["road"] : json::object();
-    // REUSE the terrain pre-pass net when given: the pre-pass ran the recipe
-    // against the NATURAL ground and everything downstream (corridor carve,
-    // lot growth, building placement) used THAT graph. Re-running the recipe
-    // here against the CARVED ground made the terrain-aware gate diverge and
-    // built a DIFFERENT network than the lots respect — buildings mid-road
-    // (device: "buildings ... strewn about haphazardly"). One recipe run, one
-    // network.
-    RoadEntity net = preNet ? *preNet : roadNetFromJson(roadBlock);
-
-    // A GENERATED road: instead of authored nodes, "generate" runs a procgen graph (buildDistrict)
-    // and fills the RoadEntity's graph from it — so the generated city IS a real, editable RoadEntity
-    // (the editor's node/tangent handles + buildRoadNetMesh's curves/markings/sidewalks/junctions),
-    // not a baked mesh. The recipe round-trips via SourceSpec; the look comes from the road block.
-    // `drapeGround` is what this road's mesh drapes on. A PRE-PASS net gets the
-    // NATURAL sampler from the caller: the terrain conform computed the road's
-    // height profile on natural ground, and the mesh must compute the
-    // IDENTICAL profile — meshing over the already-carved terrain made the
-    // weld's profiles diverge from the conform planes by up to ~1 m at
-    // junctions (RT_POKE_SITE autopsy). Fresh hand-authored roads get the
-    // carved ground as before.
-    if (!preNet && roadBlock.contains("generate"))
-        applyGenerateRecipe(net, roadBlock["generate"], drapeGround);
+    // The entity's RoadEntity carries the look the builder's products are drawn with (its sidewalk and curb,
+    // copied from the builder's bands below). Its graph stays empty: a lane-built city's road graph is the
+    // twin in its bundle, published as LevelRoadGraph. (Roads drawn as nodes in the level, and the old
+    // grower's "generate" recipe, retired with ADR-0267.)
+    RoadEntity net;
+    if (roadBlock.contains("nodes") || roadBlock.contains("generate"))
+        LOG_ERROR << "[roads] this level's road carries authored nodes or a \"generate\" recipe: both retired (ADR-0267); "
+                     "plan the city with city_plan and name its lanes graph";
 
     Entity e = world.create();
     createEntityCommon(e, ent, world);
 
     SourceSpec spec = buildSourceSpec(ent, "road");
-    // Preserve the ORIGINAL authored block (a "generate" recipe, or hand-authored nodes) as the
-    // saved form — NOT the baked net — so load→save is a no-op and a generated road keeps its recipe
-    // instead of being frozen into geometry. The editor's regenerateRoad re-bakes this only when the
-    // road is actually edited (a node drag / width change), which is when baking is correct.
+    // Preserve the ORIGINAL block as the saved form, so load→save is a no-op.
     spec.recipe = roadBlock.dump();
     world.add<SourceSpec>(e, spec);
-    world.add<RoadEntity>(e, net);                      // the editable source of truth
+    world.add<RoadEntity>(e, net);                      // the look the builder's products are drawn with
 
     Renderable r;
     r.renderLayer = engine::LayerRoads;              // debug layer toggle
@@ -1424,10 +1400,7 @@ static void loadEntities(const json& entities, const json& root, World& world,
                          const std::string& levelDir, bool editorMode,
                          const std::vector<std::pair<const json*, ProcModel>>*
                              scriptCache = nullptr,
-                         const HeightField* ground = nullptr,
-                         const std::vector<std::pair<const json*, RoadEntity>>*
-                             roadCache = nullptr,
-                         const HeightField* naturalGround = nullptr) {
+                         const HeightField* ground = nullptr) {
     MaterialTable materials = buildMaterialTable(root);   // named "materials" table
     SurfaceTexCache surfaceTex;   // one bake+upload per surface across the load
     int treeIndex = 0;
@@ -1443,33 +1416,10 @@ static void loadEntities(const json& entities, const json& root, World& world,
             loadTreeEntity(ent, world, renderer, assets, treeIndex++);
             continue;
         }
-        // Freeway corridor (plan §8): the geometry was built + spawned by the
-        // loader's terrain pre-pass (its flatten windows must join the carve
-        // set). Here it only needs its DOCUMENT entity — the SourceSpec
-        // carrying the corridor block — so the editor's save-then-reload
-        // (Play) round-trips it instead of dropping the freeway on the floor
-        // (device: "the freeway disappeared when the simulation started").
-        if (ent.value("shape", std::string()) == "corridor") {
-            spawnDocumentEntity(
-                ent, "corridor",
-                (ent.contains("corridor") ? ent["corridor"] : json::object())
-                    .dump(),
-                world);
-            continue;
-        }
-        // Editor-authored road (ADR-0049): an editable RoadEntity + its baked mesh.
+        // A city's roads (shape:"road", a lanes builder block): built by the road builder from the level's bundle.
         if (ent.value("shape", std::string()) == "road") {
-            const RoadEntity* pre = nullptr;
-            if (roadCache != nullptr)
-                for (const auto& p : *roadCache)
-                    if (p.first == &ent) { pre = &p.second; break; }
-            // A pre-pass road meshes over the NATURAL ground (the profile the
-            // conform carved to); a fresh road drapes on the carved terrain.
             static const HeightField kFlat;
-            const HeightField& drape =
-                pre ? (naturalGround ? *naturalGround : kFlat)
-                    : (ground ? *ground : kFlat);
-            loadRoadEntity(ent, world, assets, roadIndex++, drape, pre, entityIndex);
+            loadRoadEntity(ent, world, assets, roadIndex++, ground ? *ground : kFlat, entityIndex);
             continue;
         }
 #ifdef RT_ROADS_LANES
@@ -1921,6 +1871,7 @@ static void loadCdlodTerrain(const TerrainParams& p, const json& t, World& world
             if (useCache && !pyramid::writePyramidBundle(*pyr, key, cachePath, &cacheErr))
                 LOG_WARN << "[terrain] baked ground not cached: " << cacheErr;
         }
+        if (useCache) engine::bundle::noteCacheUse(cachePath, "pyramid");
         // THE WORLD MAPS, over the authored world, each cached beside the tiles (cache/terrain/<key>.wmap):
         //   the NORMAL MAP (ADR-0205): the drawn ground's slope per texel, the far ground's shading -- a texel of
         //     max(2 m, the world / 8192), or the cdlod block's "normalTexel";
@@ -1947,6 +1898,7 @@ static void loadCdlodTerrain(const TerrainParams& p, const json& t, World& world
                     *m = bake();
                     if (useCache && !writeTerrainWorldMap(*m, k, path)) LOG_WARN << "[terrain] " << what << " not cached: " << path;
                 }
+                if (useCache) engine::bundle::noteCacheUse(path, std::string("wmap:") + what);
                 LOG_INFO << "[terrain] " << what << ": " << m->size << "^2 (" << m->texel() << " m, " << m->channels << " channels), "
                          << m->texels.size() / 1048576 << " MB, " << (hit ? "read from " : "baked and cached as ") << path << " in "
                          << std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count() << " s";
@@ -2053,26 +2005,8 @@ static void loadTerrain(const TerrainParams& p, const Noise& noise, const json& 
     world.add<Transform>(e, tr);
     world.add<PrevTransform>(e, PrevTransform{tr});
 
-    RenderMesh terrainMesh;
-    const bool eroded = t.value("erode", false) && !p.erodedBase;
-    if (eroded) {
-        // Legacy static-mesh erode path (no pre-baked field): bake -> erode ->
-        // mesh, the eroded grid being the source of truth for mesh and collider.
-        // When loadLevel has already baked p.erodedBase (the shared path), fall
-        // through to generateTerrain — it samples that eroded field via
-        // terrainHeight, so re-eroding here would double-erode.
-        Heightmap hm = bakeHeightmap(p, noise);
-        ErosionParams ep;
-        ep.seed = t.value("seed", 0u) + 1234u;
-        ep.droplets = t.value("erodeDroplets", ep.droplets);
-        ep.erodeRadius = t.value("erodeRadius", ep.erodeRadius);
-        ep.thermalIterations = t.value("erodeThermal", ep.thermalIterations);
-        ep.talus = t.value("erodeTalus", ep.talus);
-        erode(hm, ep);
-        terrainMesh = generateTerrainMesh(hm);
-    } else {
-        terrainMesh = generateTerrain(p, noise);
-    }
+    // (a weathered ground, when the level has one, is already on p.erodedBase: generateTerrain samples it)
+    RenderMesh terrainMesh = generateTerrain(p, noise);
 
     // Static collision from the same geometry, so the player walks on the
     // terrain instead of falling through (PhysicsSystem makes one static mesh
@@ -2094,7 +2028,7 @@ static void loadTerrain(const TerrainParams& p, const Noise& noise, const json& 
     }
     if (r.material.surface() == RenderMaterial::Surface::None)
         r.material.setSurface(RenderMaterial::Surface::TerrainGround);   // ground micro-relief
-    if (!eroded) applyGroundLayers(r.material, p, renderer);   // the eroded mesh bakes a colour, not weights
+    applyGroundLayers(r.material, p, renderer);
     world.add<Renderable>(e, r);
 
     // Distant LOD rings extend the terrain to the horizon (mountains/hills) at a
@@ -3300,8 +3234,8 @@ static void loadVegetation(const json& veg, const TerrainParams& terrain,
     // pad plants by area (parkTreeDensity per m^2), on the pad's own top plane.
     if (lots && veg.value("parkTrees", true)) {
         const double density = veg.value("parkTreeDensity", 0.012);   // ~1 / 85 m^2
-        std::mt19937 prng(vegSeed ^ 0x51ed270bu);
-        std::uniform_real_distribution<double> uni(0.0, 1.0);
+        ProcRng prng(vegSeed ^ 0x51ed270bu);
+        ProcUniform<double> uni(0.0, 1.0);
         for (const engine::LotBuilding& lb : *lots) {
             if (lb.pad.size() < 3 || (lb.type != "park" && lb.type != "green")) continue;
             // Sculpted parks planted their own treeSpots (terrain-sampled,
@@ -3681,15 +3615,11 @@ struct GrownLots {
 // The authored player spawn (world XZ): engine::authoredSpawnXZ in lot_grow_setup.h — read from the RAW
 // level json BEFORE any spawn-safety relocation (the lot pass flags the building beside it as enterable).
 
-// `ground` grades the lot pads; `netGround` is what the roads themselves drape
-// on (the pre-pass nets use the NATURAL terrain — the same sampler their
-// conform profiles were computed against), for the sampled clearance graph.
+// `ground` grades the lot pads.
 static GrownLots growCityLots(
     const engine::bundle::LevelInputs& inputs,
     const std::vector<engine::RoadEntity>& nets, const json& cs,
     const std::string& levelDir, const HeightField& ground,
-    const HeightField& netGround,
-    const engine::RoadGraph* freewayROW = nullptr,
     std::function<std::function<engine::Real(engine::Real, engine::Real, engine::Real)>(
         const std::vector<engine::TerrainFlatten>&)> groundWith = nullptr,
     double groundMeshCell = 0.0,
@@ -3706,9 +3636,7 @@ static GrownLots growCityLots(
     gin.citysim = cs.is_object() ? cs : json::object();
     gin.levelDir = levelDir;
     gin.padGround = ground;
-    gin.netGround = netGround;
     gin.nets = &nets;
-    gin.freewayROW = freewayROW;
     gin.groundWith = std::move(groundWith);
     gin.groundMeshCell = groundMeshCell;
     gin.enterableAt = enterableAt;
@@ -3768,7 +3696,6 @@ static GrownLots growCityLots(
             LOG_INFO << "[lanelab] grown in place in " << since(tl) << " s";
         }
         g.lots = std::move(r.lots); g.plan = std::move(r.plan); g.parts = std::move(r.parts); g.flatParts = std::move(r.flatParts); g.gradeFlatten = std::move(r.gradeFlatten); g.grown = true;
-        (void)netGround; (void)freewayROW;
         return g;
     }
 #endif
@@ -3797,15 +3724,6 @@ static std::shared_ptr<engine::CityMapData> assembleCityMap(
     m->nav = nav;
     m->furniture = plan;
     m->hubRadius = hubRadius;
-    world.each<engine::RoadEntity>([&](Entity, engine::RoadEntity& net) {
-        for (const engine::CityHub& h : net.plan.cityHubs) {
-            engine::CityMapData::Hub hub;
-            hub.pos = h.pos;
-            hub.kind = h.kind;
-            hub.name = engine::districtName(static_cast<engine::DistrictTag>(h.kind));
-            m->hubs.push_back(hub);
-        }
-    });
     world.each<engine::RoadBandDebug>([&](Entity, engine::RoadBandDebug& b) {
         m->curbLoops.insert(m->curbLoops.end(), b.loops.begin(), b.loops.end());
         m->mouthGaps.insert(m->mouthGaps.end(), b.mouthGaps.begin(), b.mouthGaps.end());
@@ -4081,6 +3999,7 @@ bool LevelLoader::load(const std::string& path,
         // Which level a road belongs to, for every builder (the lanes one is
         // produced per LEVEL through the bundle, not per entity).
         g_levelPath = path; g_levelRoot = root;
+        engine::bundle::setCacheLevel(path);   // the terrain and population files this load uses record it
     } catch (const json::parse_error& e) {
         LOG_ERROR << "JSON parse error in " << path << ": " << e.what();
         return false;
@@ -4149,7 +4068,6 @@ bool LevelLoader::load(const std::string& path,
             g_lanes.water = engine::levelWaterKeepOut(root);
             g_lanes.blocks = engine::roads::lanes::blocksFromHoles(cp.holes, 1.5, engine::roads::lanes::kBlockMarginBehindSidewalk,
                                                                    engine::roads::lanes::kMinBlockWidth, &g_lanes.water);
-            g_lanes.row = cp.row;
             g_lanes.deck = cp.deck;
             g_lanes.deck.buildIndex();      // queried by the scatter, below, and by the poke report
             g_lanes.nav = cp.lotNav;        // the streets a door faces, at the lot clearance widths (the sim routes on cp.nav)
@@ -4183,7 +4101,6 @@ bool LevelLoader::load(const std::string& path,
         levelGround = [tp, noise](double x, double z) {
             return terrainHeight(*tp, *noise, x, z);
         };
-        const json& tj = root["terrain"];
         lotMeshCell = levelDrawnGroundCell(root);   // the one derivation (level_params.h)
     }
 
@@ -4209,332 +4126,7 @@ bool LevelLoader::load(const std::string& path,
 #endif
 
     loadStage("terrain parse");
-    // Road pre-pass (ADR-0044 corridor conforming): grade the terrain to each editable
-    // road (shape:"road") BEFORE it builds, mirroring the script pre-pass, so the ground
-    // meets the road's drivable profile and no terrain pokes through.
-    std::vector<TerrainFlatten> roadFlatten;
-    std::vector<engine::RoadEntity> preNets;   // parsed nets, for the lot pre-pass
-    std::vector<const json*> preNetEnts;    // matching entity per pre-pass net
-    if (levelGround && root.contains("entities")) {
-        for (const auto& ent : root["entities"]) {
-            if (ent.value("shape", std::string()) == "road") {
-                const json roadBlock =
-                    ent.contains("road") ? ent["road"] : json::object();
-                RoadEntity net = roadNetFromJson(roadBlock);
-                // A GENERATED road has no baked nodes — run its recipe here
-                // exactly like the real build below does, or this pre-pass
-                // sees an empty net and carves NOTHING (device: "the road is
-                // being buried by the terrain — it's not conforming").
-                // levelGround (natural) gates the metro's terrain-aware layout.
-                if (roadBlock.contains("generate"))
-                    applyGenerateRecipe(net, roadBlock["generate"], levelGround);
-                preNets.push_back(std::move(net));
-                preNetEnts.push_back(&ent);
-            }
-        }
-    }
-    // CORRIDORS (plan §8): freeway-grade alignments. The mesh is built here
-    // against the BASE terrain so its at-grade flatten windows join the same
-    // carve set the roads use; the entities spawn after the terrain does.
-    // Roads-v2.1 2e: there is no corridor renderer. corridorAuthor SOLVES
-    // (ramp centrelines + at-grade flatten windows) and bakeCorridorIntoNet
-    // turns the solve into ordinary graph edges; THE road mesher builds the
-    // freeway from the graph like any street. Flatten flows straight into
-    // roadFlatten; nav routes the baked edges natively via navRoadGraph.
-    std::vector<CorridorDef> corridorDefs;
-    // Roads-v2 S3b: which preNet each SYNTH corridor came from (-1 = authored /
-    // rules-lab). The solved corridor BAKES into that net (bakeCorridorIntoNet)
-    // so freeways+ramps land in the editable street graph before the road
-    // entities spawn from roadCache.
-    std::vector<int> corridorSrcNet;
-    if (levelGround && root.contains("entities")) {
-        for (const auto& ent : root["entities"]) {
-            if (ent.value("shape", std::string()) != "corridor") continue;
-            const json cb = ent.contains("corridor") ? ent["corridor"] : json::object();
-            CorridorDef def;
-            std::vector<Vec2> control;
-            for (const auto& p : cb.value("points", json::array()))
-                if (p.is_array() && p.size() >= 2)
-                    control.emplace_back(p[0].get<double>(), p[1].get<double>());
-            if (control.size() < 2) continue;
-            def.horizontal = Alignment::fromPolyline(
-                control, cb.value("radius", 220.0), cb.value("spiral", 60.0));
-            def.lanes.throughLanes = cb.value("lanes", 4);
-            def.laneWidth = cb.value("laneWidth", 3.6);
-            def.medianWidth = cb.value("median", 1.4);
-            def.designSpeed = cb.value("designSpeed", 30.0);
-            if (cb.contains("profile") && cb["profile"].is_array()) {
-                for (const auto& pv : cb["profile"])
-                    if (pv.is_array() && pv.size() >= 2)
-                        def.vertical.pvis.push_back(
-                            {pv[0].get<double>(), pv[1].get<double>(),
-                             pv.size() > 2 ? pv[2].get<double>() : 0.0});
-            } else {
-                // No authored profile: follow the terrain at a smoothed grade
-                // (PVIs every 80 m at ground height + a small embankment).
-                const Real len = def.horizontal.length();
-                for (Real s = 0; s <= len; s += 80.0) {
-                    const Vec2 p = def.horizontal.pos(std::min(s, len));
-                    def.vertical.pvis.push_back(
-                        {std::min(s, len), levelGround(p.x, p.y) + 0.4, 50.0});
-                }
-            }
-            // (exits parse used to hide inside the profile branch — a
-            // profile-less corridor silently lost its ramps)
-            for (const auto& ex : cb.value("exits", json::array())) {
-                engine::ExitDef e;
-                e.station = ex.value("station", 0.0);
-                e.upStation = ex.value("upStation", true);
-                if (ex.contains("target") && ex["target"].is_array() &&
-                    ex["target"].size() >= 2)
-                    e.target = Vec2(ex["target"][0].get<double>(),
-                                    ex["target"][1].get<double>());
-                // landing grade defaults to the street's own terrain height
-                e.targetY = ex.value("targetY",
-                                     levelGround(e.target.x, e.target.y) + 0.12);
-                e.decelLength = ex.value("decel", 220.0);
-                e.onRamp = ex.value("onRamp", false);
-                e.rampRadius = ex.value("radius", 70.0);
-                e.rampSpiral = ex.value("spiral", 30.0);
-                def.exits.push_back(e);
-            }
-            // 2e: authored corridors bake too — into the level's first street
-            // net (creating an empty one when the level has none), so the one
-            // mesher builds them exactly like the metro-planned corridors.
-            if (preNets.empty()) {
-                preNets.emplace_back();
-                preNetEnts.push_back(&ent);
-            }
-            corridorSrcNet.push_back(0);
-            corridorDefs.push_back(std::move(def));
-            // One-mesher P8: still OPT-IN for authored corridors. Flipping this
-            // to true is a prerequisite for deleting the corridor mesher, but
-            // the weld renders freeway_lab's gores differently from the geometry
-            // it would replace (unexplained dark wedges), and the deletion gate
-            // is "no regression" — so this stays false until that is understood.
-        }
-    }
-    std::vector<std::vector<Vec2>> corridorGuides;   // §12: per built def, its
-                                                     // own dense centreline
-                                                     // (empty for authored)
-    // §10.6/§12: metro-planned corridors with NETWORK RULES (device: "It
-    // needs to have rules about elevation and not having the freeways
-    // intersect. on and off ramps should not criss-cross"):
-    //   rule 1 (generator): one route per hub — routes never touch.
-    //   rule 2 (here): residual geometric crossings force the SHORTER route
-    //          OVER on a bridge bump solved into its profile.
-    //   rule 3 (here): one GLOBAL landing/ramp registry — a ramp that would
-    //          crowd a landing, cross another ramp, or graze another
-    //          corridor at grade is never stamped.
-    if (levelGround) {
-        // The route inputs: rules-lab plans authored straight in the level
-        // JSON ("freewayPlans": [[[x,z],...], ...] — every planner rule
-        // exercisable in ISOLATION, docs/freeway-rules.md), then the plans
-        // each metro net grew (srcNet = the bake target, S3b).
-        std::vector<engine::CorridorRouteInput> routeIns;
-        if (root.contains("freewayPlans") && root["freewayPlans"].is_array()) {
-            for (const auto& jp : root["freewayPlans"]) {
-                engine::CorridorRouteInput in;
-                in.spacing = root.value("interchangeSpacing", 700.0);
-                for (const auto& q : jp)
-                    if (q.is_array() && q.size() >= 2)
-                        in.anchors.emplace_back(q[0].get<double>(),
-                                                q[1].get<double>());
-                if (in.anchors.size() < 2) continue;
-                routeIns.push_back(std::move(in));
-            }
-        }
-        for (std::size_t ni = 0; ni < preNets.size(); ++ni) {
-            const json& rootEnt = *preNetEnts[ni];
-            const json gen = rootEnt.contains("road") &&
-                                     rootEnt["road"].contains("generate")
-                                 ? rootEnt["road"]["generate"]
-                                 : json::object();
-            const Real spacing = gen.value("interchange_spacing", 700.0);
-            for (const std::vector<Vec2>& plan : preNets[ni].plan.freewayPlans) {
-                if (plan.size() < 2) continue;
-                engine::CorridorRouteInput in;
-                in.anchors = plan;
-                in.spacing = spacing;
-                in.srcNet = static_cast<int>(ni);   // S3b: bake target
-                routeIns.push_back(std::move(in));
-            }
-        }
-        // §12 R3f: street-anchor snapshot for FEASIBILITY-driven placement
-        std::vector<engine::CorridorStreetAnchor> synthAnchors;
-        for (const engine::RoadEntity& net2 : preNets) {
-            const engine::RoadGraph& g2 = net2.graph;
-            std::vector<int> deg(g2.nodes.size(), 0);
-            for (const engine::RoadEdge& ed : g2.edges) {
-                if (ed.a >= 0 && ed.a < static_cast<int>(deg.size())) ++deg[ed.a];
-                if (ed.b >= 0 && ed.b < static_cast<int>(deg.size())) ++deg[ed.b];
-            }
-            for (std::size_t k = 0; k < g2.nodes.size(); ++k)
-                synthAnchors.push_back({g2.nodes[k].pos, deg[k]});
-        }
-        // The NETWORK-RULES pipeline lives in corridor_plan.cpp now, SHARED
-        // with the editor's recipe-Regenerate (rebakeNetCorridors) — the
-        // regen path must run the same rules or baked freeways vanish on a
-        // Regenerate (the S3 known gap).
-        for (engine::PlannedCorridor& pc :
-             engine::planCorridorRoutes(routeIns, synthAnchors, levelGround)) {
-            while (corridorGuides.size() < corridorDefs.size())
-                corridorGuides.emplace_back();       // authored defs: no guide
-            corridorGuides.push_back(std::move(pc.guide));
-            while (corridorSrcNet.size() < corridorDefs.size())
-                corridorSrcNet.push_back(-1);
-            corridorSrcNet.push_back(pc.srcNet);
-            corridorDefs.push_back(std::move(pc.def));
-        }
-    }
-    // §10.6: streets may pass UNDER a viaduct, never THROUGH an at-grade
-    // corridor — cut street edges that cross a low span of any corridor
-    // (corridor_plan.cpp, shared with the editor's recipe-Regenerate).
-    if (levelGround && !corridorDefs.empty()) {
-        std::vector<engine::RoadEntity*> netPtrs;
-        for (engine::RoadEntity& net : preNets) netPtrs.push_back(&net);
-        engine::cutStreetsUnderCorridors(netPtrs, corridorDefs, levelGround);
-    }
-    if (levelGround && !corridorDefs.empty()) {
-        for (CorridorDef& def : corridorDefs) {
-            // §10.3/§12 landing resolution (corridor_plan.cpp, shared with
-            // the editor's recipe-Regenerate): each ramp claims a real street
-            // JUNCTION node on its own side (or splits the nearest street
-            // edge into a new T-junction), the unreachable are dropped
-            // (station = -1), and the criss-cross guard prunes any pair
-            // whose gore->landing runs still X.
-            std::vector<engine::RoadEntity*> landNets;
-            for (engine::RoadEntity& n2 : preNets) landNets.push_back(&n2);
-            std::vector<std::pair<int, int>> rampAnchors =
-                engine::resolveCorridorLandings(def, landNets, levelGround);
-            // Roads-v2.1 2e: the corridor SOLVES and BAKES — nothing here
-            // draws. corridorAuthor engineers the ramp centrelines and the
-            // at-grade flatten windows; the bake turns the solved corridor
-            // into ordinary graph edges of its street net, and THE one road
-            // builder builds deck, ramps, parapets, undersides and portal
-            // bents from that graph.
-            // The corridor renderer (sweepCorridor + its entity) is deleted;
-            // signage returns with the R6 furniture pass.
-            engine::CorridorAuthoring au =
-                engine::corridorAuthor(def, levelGround, 3.0);
-            {
-                const std::size_t di =
-                    static_cast<std::size_t>(&def - corridorDefs.data());
-                if (di < corridorSrcNet.size() && corridorSrcNet[di] >= 0 &&
-                    corridorSrcNet[di] < static_cast<int>(preNets.size())) {
-                    engine::RoadEntity& src = preNets[corridorSrcNet[di]];
-                    const std::size_t e0 = src.graph.edges.size();
-                    engine::bakeCorridorIntoNet(src, def, au.rampPaths, {},
-                                                levelGround);
-                    LOG_INFO << "[bake] corridor -> net " << corridorSrcNet[di]
-                             << ": +" << (src.graph.edges.size() - e0)
-                             << " edges (freeway+ramps in the editable graph)";
-                }
-            }
-            roadFlatten.insert(roadFlatten.end(), au.flatten.begin(),
-                               au.flatten.end());
-        }
-    }
-    loadStage("roads + corridors");
-    // §10: ONE derived road graph. Streets and corridor chains weld HERE, at
-    // build — the citysim nav, street furniture, and editor all read this
-    // single component instead of merging graphs privately.
-    if (!preNets.empty()) {
-        engine::LevelRoadGraph lrg;
-        for (const engine::RoadEntity& net : preNets) {
-            engine::RoadGraph g = engine::navRoadGraph(net, levelGround);
-            const int base = static_cast<int>(lrg.graph.nodes.size());
-            for (const engine::RoadNode& n : g.nodes)
-                lrg.graph.nodes.push_back(n);
-            for (engine::RoadEdge e : g.edges) {
-                e.a += base; e.b += base;
-                lrg.graph.edges.push_back(e);
-            }
-        }
-        if (!lrg.graph.edges.empty()) {
-            LOG_INFO << "[roadgraph] unified: " << lrg.graph.nodes.size()
-                     << " nodes, " << lrg.graph.edges.size()
-                     << " edges (freeway+ramps native from the baked graph)";
-            // PROOF DUMP (RT_DUMP_ROADGRAPH=path): write the ONE unified graph —
-            // every street, arterial, freeway carriageway and ramp — so its
-            // connectivity and cross-class reachability can be checked and drawn.
-            if (const char* dp = std::getenv("RT_DUMP_ROADGRAPH")) {
-                std::ofstream f(dp);
-                f << "{\"nodes\":[";
-                for (std::size_t i = 0; i < lrg.graph.nodes.size(); ++i) {
-                    const engine::RoadNode& n = lrg.graph.nodes[i];
-                    f << (i ? "," : "") << "[" << n.pos.x << "," << n.pos.y
-                      << "," << n.elev << "," << static_cast<int>(n.kind) << "]";
-                }
-                f << "],\"edges\":[";
-                for (std::size_t i = 0; i < lrg.graph.edges.size(); ++i) {
-                    const engine::RoadEdge& e = lrg.graph.edges[i];
-                    f << (i ? "," : "") << "[" << e.a << "," << e.b << ","
-                      << static_cast<int>(e.klass) << "," << e.layer << ","
-                      << static_cast<int>(e.provenance) << "]";
-                }
-                f << "]}";
-                LOG_INFO << "[roadgraph] dumped " << lrg.graph.nodes.size()
-                         << " nodes to " << dp;
-            }
-            // Load-time PLANARITY REPORT (#18): the bake already REJECTS
-            // crossing ramp chains; this catches anything else (authored
-            // nets, multi-net overlaps) loudly instead of silently meshing
-            // roads through each other.
-            {
-                const auto viols =
-                    engine::auditRoadGraph(lrg.graph, levelGround);
-                // Corridor crossings are reported individually below (each is
-                // its own LOG_ERROR); only the street-street count is
-                // summarised, so there is nothing to tally for them.
-                int street = 0;
-                for (const auto& v : viols) {
-                    const bool corr =
-                        lrg.graph.edges[v.edgeA].klass == engine::RoadClass::Freeway ||
-                        lrg.graph.edges[v.edgeA].klass == engine::RoadClass::Ramp ||
-                        lrg.graph.edges[v.edgeB].klass == engine::RoadClass::Freeway ||
-                        lrg.graph.edges[v.edgeB].klass == engine::RoadClass::Ramp;
-                    if (corr) {
-                        LOG_ERROR << "[roadgraph] corridor edges " << v.edgeA
-                                  << " and " << v.edgeB << " cross at ("
-                                  << v.at.x << ", " << v.at.y << ") with only "
-                                  << v.dY << " m clearance";
-                    } else {
-                        ++street;
-                    }
-                }
-                if (street)
-                    LOG_WARN << "[roadgraph] " << street
-                             << " street-street curve crossing(s) — the metro "
-                                "generator's own planarity debt (tracked "
-                                "separately from #18)";
-            }
-            world.add<engine::LevelRoadGraph>(world.create(), std::move(lrg));
-        }
-    }
-
     HeightField entityGround = levelGround;   // entities drape on the carved terrain (below)
-
-    // The routed freeway RIGHT-OF-WAY for the lot pass to build (and
-    // re-zone) around — from the BAKED graph now (2e): navRoadGraph carries
-    // the corridor's freeway/ramp edges natively, so blocks under a deck
-    // become open/utility space instead of clipped buildings.
-    engine::RoadGraph freewayROW;
-    for (const engine::RoadEntity& net2 : preNets) {
-        engine::RoadGraph g2 = engine::navRoadGraph(net2, levelGround);
-        const int base = static_cast<int>(freewayROW.nodes.size());
-        for (const engine::RoadNode& n : g2.nodes)
-            freewayROW.nodes.push_back(n);
-        for (engine::RoadEdge e : g2.edges) {
-            if (e.klass != engine::RoadClass::Freeway &&
-                e.klass != engine::RoadClass::Ramp)
-                continue;
-            e.a += base; e.b += base;
-            freewayROW.edges.push_back(e);
-        }
-    }
-    const engine::RoadGraph* freewayROWp =
-        freewayROW.edges.empty() ? nullptr : &freewayROW;
 
     loadStage("road graph + ROW");
     // Terrain is parsed once into params + noise so vegetation can scatter on
@@ -4561,8 +4153,6 @@ bool LevelLoader::load(const std::string& path,
         terrainParams.flatten.insert(terrainParams.flatten.end(),
                                      scriptFlatten.begin(), scriptFlatten.end());
         std::vector<TerrainFlatten> baseFlatten = terrainParams.flatten;   // non-road grading
-        terrainParams.flatten.insert(terrainParams.flatten.end(),
-                                     roadFlatten.begin(), roadFlatten.end());   // carve to roads
         unsigned terrainSeed = root["terrain"].value("seed", 0u);
         Noise terrainNoise(terrainSeed);
         // THE EARTHWORK FIELD (procgen/earthwork.h): the ground reshaped to
@@ -4577,8 +4167,6 @@ bool LevelLoader::load(const std::string& path,
             const double sea = root.contains("water")
                                    ? root["water"].value("seaLevel", terrainParams.seaLevel)
                                    : terrainParams.seaLevel;
-            terrainParams.earthwork = buildEarthworkField(
-                roadFlatten, levelGround, terrainParams.earthworkParams, sea, &es);
 #ifdef RT_ROADS_LANES
             // A LANE CITY has no road carve regions: its streets are the decks it drew. Pin the same field to
             // them (lanesEarthworkField -- the lot pass fitted its pads to this very field at bake time), so
@@ -4625,7 +4213,7 @@ bool LevelLoader::load(const std::string& path,
         if (root.contains("citysim") &&
             (root["citysim"].value("buildLots", false) ||
              root["citysim"].value("planOnly", false)) &&
-            (!preNets.empty() || labBlocks)) {
+            labBlocks) {
             // The lots' ground and its priority-correct rebind for the in-pass block grades -- the
             // SAME construction the lots producer uses (lot_grow_setup.h), so a baked city matches.
             const engine::LotGround lg = engine::lotGroundFor(std::make_shared<TerrainParams>(terrainParams), terrainSeed);
@@ -4635,8 +4223,8 @@ bool LevelLoader::load(const std::string& path,
             const bool haveSpawn = authoredSpawnXZ(root, spawnXZ);
             engine::bundle::LevelInputs lotInputs;
             lotInputs.levelPath = path; lotInputs.level = root; lotInputs.levelDir = levelDir;
-            preLots = growCityLots(lotInputs, preNets, root["citysim"], levelDir, lotGround,
-                                   levelGround, freewayROWp, lotGroundWith,
+            preLots = growCityLots(lotInputs, {}, root["citysim"], levelDir, lotGround,
+                                   lotGroundWith,
                                    lotMeshCell, haveSpawn ? &spawnXZ : nullptr);
             for (const engine::Poly2& bk : preLots.plan.blocks) if (bk.size() >= 3) managedPolys->push_back(bk);
             for (const engine::LotBuilding& lb : preLots.lots) {
@@ -4839,12 +4427,7 @@ bool LevelLoader::load(const std::string& path,
             if (terrainParams.earthwork)
                 surfaces.push_back({"earthworked", [&](double x, double z) {
                     return levelGround(x, z) + (*terrainParams.earthwork)(x, z); }});
-            // Road centrelines, so "where the land moved" reads against the roads.
-            std::vector<std::vector<Vec2>> lines;
-            for (const engine::RoadEntity& net : preNets)
-                for (const UnionSpine& sp : engine::roadNetWeldSpines(
-                         engine::roadNetConstrainedGraph(net, levelGround)))
-                    lines.push_back(sp.points);
+            std::vector<std::vector<Vec2>> lines;   // (no road centrelines here: a lane city's deck is in its bundle)
             double mx = 0, mz = 0; bool hasMark = false;
             if (const char* m = std::getenv("RT_ELEVATION_MARK"))
                 hasMark = std::sscanf(m, "%lf,%lf", &mx, &mz) == 2;
@@ -5627,24 +5210,6 @@ bool LevelLoader::load(const std::string& path,
                 bool published = false;
             };
             std::vector<PokeSet> pokeSets;
-            for (const engine::RoadEntity& net : preNets) {
-                PokeSet ps;
-                ps.sidewalk = net.look.sidewalk;
-                ps.lift = net.look.lift;
-                ps.spines = engine::roadNetWeldSpines(
-                    engine::roadNetConstrainedGraph(net, levelGround));
-                // The SAME arguments the carve passes (road_net.cpp
-                // roadNetConformRegions), or this report measures a different
-                // deck than the one the terrain was cut to.
-                const engine::DesignRules pokeRules;
-                ps.profs = engine::weldChainProfiles(
-                    ps.spines, levelGround, 0.0, /*maxGrade=*/0.08,
-                    net.look.sidewalk + 4.0,
-                    net.look.perClassGrade ? &pokeRules : nullptr);
-                // (a net that welds to nothing -- a lane-built city's leftover recipe since the lattice retired --
-                // measures nothing, and must not stand in for the city's published deck below)
-                if (!ps.spines.empty()) pokeSets.push_back(std::move(ps));
-            }
 #ifdef RT_ROADS_LANES
             // ...from the BUNDLE, not from the world. This report runs in the terrain section,
             // hundreds of lines before loadEntities, so the RoadDeck components a lane-built
@@ -5672,19 +5237,6 @@ bool LevelLoader::load(const std::string& path,
             for (const PokeSet& pokeSet : pokeSets) {
                 const std::vector<UnionSpine>& spines = pokeSet.spines;
                 const std::vector<std::vector<double>>& profs = pokeSet.profs;
-                // The site/junction dumps re-derive the recipe's own graph, so they only mean
-                // anything for a lattice net; a published deck has no recipe behind it.
-                if (!preNets.empty() &&
-                    (std::getenv("RT_POKE_SITE") || std::getenv("RT_JUNCTION_DUMP"))) {
-                    RoadGraph gFp =
-                        engine::roadNetConstrainedGraph(preNets.front(), levelGround);
-                    double fp = 0;
-                    for (std::size_t si2 = 0; si2 < spines.size(); ++si2)
-                        fp += spines[si2].points.front().x * (si2 + 1) * 1e-3;
-                    LOG_INFO << "[report-fingerprint] nodes=" << gFp.nodes.size()
-                             << " edges=" << gFp.edges.size()
-                             << " spines=" << spines.size() << " fp=" << fp;
-                }
                 // Segment spatial hash: the DECK at a point is the NEAREST
                 // spine's profile (weldSolid::heightOf) — comparing a sample
                 // against its OWN chain's profile miscounted junction overlaps
@@ -5853,7 +5405,7 @@ bool LevelLoader::load(const std::string& path,
                                             const double P = pa + (pb - pa) * t2;
                                             const double nat = levelGround(q.x, q.y);
                                             const double carve =
-                                                applyFlatten(roadFlatten, q.x, q.y, nat);
+                                                nat;   // (no road carve regions: a lane city's ground is its earthwork)
                                             const double fin =
                                                 terrainHeight(tpFull, pnNoise, q.x, q.y);
                                             jf << s2 << "," << fromFront << "," << s << ","
@@ -6059,22 +5611,13 @@ bool LevelLoader::load(const std::string& path,
         }
     }
     {
-        // Hand the pre-pass road nets to the entity pass so the recipe runs
-        // ONCE per road: the entity reuses the exact network the lots and the
-        // terrain carve were built against (see loadRoadEntity).
-        std::vector<std::pair<const json*, RoadEntity>> roadCache;
-        roadCache.reserve(preNets.size());
-        for (std::size_t i = 0; i < preNets.size(); ++i)
-            roadCache.emplace_back(preNetEnts[i], std::move(preNets[i]));
 #ifdef RT_ROADS_LANES
         g_lanes.sidewalk = root.contains("citysim") && root["citysim"].is_object() ? root["citysim"].value("sidewalk", 4.0) : 4.0;
 #endif
         loadStage("terrain + lot pre-pass");
         loadEntities(root["entities"], root, world, renderer, assets, levelDir,
                      editorMode, &scriptCache,
-                     entityGround ? &entityGround : nullptr,
-                     roadCache.empty() ? nullptr : &roadCache,
-                     levelGround ? &levelGround : nullptr);
+                     entityGround ? &entityGround : nullptr);
         // THE CITY EXISTS NOW, so the scatter can ask the roads themselves where they
         // are instead of asking a set that was only ever a stand-in for them.
         if (plantScatter) { loadStage("scatter"); plantScatter(); }
@@ -6388,21 +5931,6 @@ bool LevelLoader::load(const std::string& path,
                 }
             }
         }
-#ifdef RT_ROADS_LANES
-        // The lane lab's freeway and ramps as the routed right-of-way (ADR-0083): its RoadEntity
-        // twin carries them by class, so the lot pass gets the per-class keep-out band and the
-        // under-deck re-zoning instead of the mainline-proxy fallback. Ramps keep their own
-        // class (declaring them Freeway re-zoned every block inside the frontage roads as
-        // freeway shadow); the embankment they sit on is carried by the twin's edge WIDTH,
-        // which the building-clearance check reads.
-        if (freewayROW.edges.empty() && !g_lanes.row.edges.empty()) {
-            freewayROW = g_lanes.row;
-            if (!freewayROW.edges.empty()) {
-                freewayROWp = &freewayROW;
-                LOG_INFO << "[lanelab] freeway right-of-way for the lot pass: " << freewayROW.edges.size() << " carriageway + ramp segments from the road twin";
-            }
-        }
-#endif
         // Grow buildings on the ROAD NETWORK's blocks (ADR-0066): the Living City
         // path — real roads (a shape:"road" `generate` recipe, the tech grown.json
         // uses) whose enclosed blocks become lots and REAL shape-grammar buildings
@@ -6422,7 +5950,7 @@ bool LevelLoader::load(const std::string& path,
                 engine::bundle::LevelInputs lotInputs2;
                 lotInputs2.levelPath = path; lotInputs2.level = root; lotInputs2.levelDir = levelDir;
                 grown = growCityLots(lotInputs2, nets, cs, levelDir, entityGround,
-                                     entityGround, freewayROWp, nullptr,
+                                     nullptr,
                                      lotMeshCell,
                                      haveSpawn2 ? &spawnXZ2 : nullptr);
             }
@@ -6449,7 +5977,7 @@ bool LevelLoader::load(const std::string& path,
                 engine::bundle::LevelInputs lotInputs2;
                 lotInputs2.levelPath = path; lotInputs2.level = root; lotInputs2.levelDir = levelDir;
                 grown = growCityLots(lotInputs2, nets, cs, levelDir, entityGround,
-                                     entityGround, freewayROWp, nullptr,
+                                     nullptr,
                                      lotMeshCell,
                                      haveSpawn2 ? &spawnXZ2 : nullptr);
             }
@@ -6942,7 +6470,7 @@ bool LevelLoader::load(const std::string& path,
                             }
                         }
                     }
-                    for (const engine::BuildingUnit& u : lb.units) {   // the American mall's: a board over every entrance and anchor
+                    for (const engine::BuildingUnit& u : lb.units) {   // a mall's: a board over every entrance and anchor
                         std::vector<engine::MallSign> boards;
                         if (u.plan.size() < 3 || !engine::mallSignsOf(u.plan, u.params, boards)) continue;
                         const uint32_t ms = static_cast<uint32_t>(std::lround(u.params.mallCourt.x)) * 73856093u ^
@@ -6960,22 +6488,6 @@ bool LevelLoader::load(const std::string& path,
                             sign.centre = Vec3(b.centre.x, u.baseY + 0.5 * (b.y0 + b.y1), b.centre.y);
                             shopSigns.push_back(std::move(sign));
                         }
-                    }
-                    for (const engine::BuildingUnit& u : lb.units) {   // an indoor mall's name over its doors
-                        Vec2 mc, mn;
-                        Real my0 = 0, my1 = 0, mw = 0;
-                        if (u.plan.size() < 3 || !engine::mallSignOf(u.plan, u.params, mc, mn, my0, my1, mw)) continue;
-                        engine::ShopSign sign;
-                        sign.text = engine::mallName(static_cast<uint32_t>(std::lround(mc.x)) * 73856093u ^
-                                                     static_cast<uint32_t>(std::lround(mc.y)) * 19349663u);
-                        sign.trade = 2;   // (its board colour: the boutique's)
-                        sign.n = Vec3(mn.x, 0, mn.y);
-                        sign.up = Vec3(0, 1, 0);
-                        sign.right = cross(sign.n * -1.0, sign.up);
-                        sign.width = mw - 0.4;
-                        sign.height = (my1 - my0) - 0.2;
-                        sign.centre = Vec3(mc.x + mn.x * 0.03, u.baseY + 0.5 * (my0 + my1), mc.y + mn.y * 0.03);
-                        shopSigns.push_back(std::move(sign));
                     }
                     for (const engine::BuildingUnit& u : lb.units) {
                         if (u.plan.size() < 3) continue;
@@ -7105,11 +6617,11 @@ bool LevelLoader::load(const std::string& path,
                 // SCULPTED lots (parks, house yards) carry their own
                 // deterministic tree spots: (x, trunk scale, z).
                 if (!lb.treeSpots.empty()) {
-                    uint32_t th = static_cast<uint32_t>(
+                    ProcRng thRng(static_cast<uint32_t>(
                         std::llround(lb.site.x * 73.1 + lb.site.y * 37.7)) *
-                        2654435761u;
+                        2654435761u);
                     for (const Vec3& s : lb.treeSpots) {
-                        th = th * 1664525u + 1013904223u;
+                        const uint32_t th = thRng.bits();
                         plantTreeAt(s.x, s.z, s.y, th >> 8);
                     }
                 }

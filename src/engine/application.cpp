@@ -5,6 +5,7 @@
 #include "procgen/city/city_svg.h"     // the layered city map
 #include "procgen/city/building_records.h"   // `lot?`: what is actually here
 #include "application.h"
+#include "event_types.h"
 #include "states/debug_overlay_state.h"
 #include "systems/debug_overlay_system.h"   // static settings<->renderer mapping (control `render`)
 #include "../log.h"
@@ -53,7 +54,14 @@ void StateTransition::replaceWith(std::unique_ptr<AppState> state) {
     next = std::move(state);
 }
 
-Application::Application() { registerControlCommands(); }
+Application::Application() {
+    describeEngineEvents(eventBus);
+    onTap_ = eventBus.listen<KeyTapRequest>([this](const KeyTapRequest& r) { pendingTap_ = r.key; });
+    onHold_ = eventBus.listen<KeyHoldRequest>([this](const KeyHoldRequest& r) {
+        pendingHold_ = r.key + " " + std::to_string(r.seconds);
+    });
+    registerControlCommands();
+}
 Application::~Application() = default;
 
 bool Application::initialize(const Config& config,
@@ -139,7 +147,7 @@ void Application::popState() {
 FrameContext Application::makeContext() {
     int winW = 0, winH = 0;
     window->getSize(winW, winH);
-    return FrameContext{
+    FrameContext ctx{
         worldState, *rendererPtr, *assetManager, view, clock, settingsStore, jobs,
         eventBus, debugLines, audioEngine, frameStats,
         window->getInput(), inputMap, playerInputs, xrState,
@@ -147,6 +155,8 @@ FrameContext Application::makeContext() {
         frameDelta, interpolation, quit, transitionRequest,
         debugOverlayActive
     };
+    ctx.commands = &commandTable;
+    return ctx;
 }
 
 void Application::reconcileFramebuffer() {
@@ -281,9 +291,9 @@ void Application::runFrame() {
         // actually presses -- went untested, and then a context gate was put in
         // front of it that no test exercised.
         {
-            const std::string tapName = settingsStore.getString("input.tap", "");
+            const std::string tapName = pendingTap_;
             if (!tapName.empty()) {
-                settingsStore.setString("input.tap", "");
+                pendingTap_.clear();
                 const KeyCode k = keyCodeFromName(tapName);
                 if (k != KeyCode::Unknown) {
                     Event down(EventType::KeyPressed);
@@ -307,9 +317,9 @@ void Application::runFrame() {
             }
             // `hold <Key> <seconds>`: the same real path, held down (throttle,
             // steering) until its sim-time runs out -- so a probe can DRIVE.
-            const std::string holdReq = settingsStore.getString("input.hold", "");
+            const std::string holdReq = pendingHold_;
             if (!holdReq.empty()) {
-                settingsStore.setString("input.hold", "");
+                pendingHold_.clear();
                 char name[32] = {0};
                 double secs = 0.0;
                 if (std::sscanf(holdReq.c_str(), "%31s %lf", name, &secs) == 2 && std::string(name) == "MouseLeft") {
@@ -584,6 +594,13 @@ void Application::pumpControlChannel() {
     ++frameCounter;
     controlChannel.drain(
         [this](const std::string& line) { return handleControlCommand(line); });
+    // A watch ends with its connection: another client took the socket, or it closed.
+    const uint64_t client = controlChannel.client();
+    for (std::size_t i = eventWatches.size(); i-- > 0;) {
+        if (eventWatches[i].client == client) continue;
+        eventBus.unsubscribe(eventWatches[i].id);
+        eventWatches.erase(eventWatches.begin() + static_cast<std::ptrdiff_t>(i));
+    }
 }
 
 void Application::setDebugOverlay(bool on) {
@@ -599,13 +616,8 @@ void Application::setDebugOverlay(bool on) {
 
 std::string Application::handleControlCommand(const std::string& line) {
     const ControlCommand cmd = parseControlCommand(line);
-    // A QUESTION WAS ASKED (any `name?`): the systems that keep island-wide debug counts for those answers count
-    // only while someone is asking (telemetry.askedAt, steady seconds) -- counted every half second regardless,
-    // they were a 65-130 ms frame twice a second (Glenn on a bus: "a lot of frame stutter")
-    // (`commands?` is a question about the channel, not the world: it counts nothing.)
-    if (!cmd.name.empty() && cmd.name.back() == '?' && cmd.name != "commands?")
-        settingsStore.setDouble("telemetry.askedAt",
-                                std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count());
+    // (A system that keeps island-wide counts for an answer counts only while its questions are being asked: it
+    // knows through its ControlAnswers, ADR-0253 -- once a global telemetry.askedAt stamp here.)
     // Every verb is in the command table (application_commands.cpp, ADR-0253).
     return commandTable.run(cmd);
 }

@@ -12,7 +12,7 @@
 
 #include "procgen/terrain.h"          // TerrainParams
 #include "procgen/tree.h"             // TreeParams
-#include "procgen/city/city_lots.h"   // LotParams, EdgeBlockParams
+#include "procgen/city/city_lots.h"   // LotParams
 #include "procgen/city/water_mesh.h"  // WaterMeshParams
 
 #include <nlohmann/json.hpp>
@@ -40,17 +40,14 @@ inline Quat parseOrientation(const nlohmann::json& ent) {
                                degreesToRadians(o.value("angleDeg", 0.0)));
 }
 
-// Default every road recipe's buildability sea_level (and beach reserve) from
-// the level's top-level "water" block, so the waterline that draws IS the
-// waterline the city respects — ONE number. A recipe that sets its own
-// sea_level keeps it. Mutates `root` in place; no-op without a water block.
-// Run before the road pre-pass in BOTH pipelines so they gate on an
-// identical graph.
+// Default the terrain's seaLevel from the level's top-level "water" block, so the
+// coast the terrain colours IS the waterline that draws -- ONE number. A terrain
+// that sets its own keeps it. Mutates `root` in place; no-op without a water block.
 void propagateWaterSeaLevel(nlohmann::json& root);
 // The rivers and lakes of a level's terrain (its "rivers" block, ADR-0099) as rings a city's blocks
 // stand back from: each corridor grown by `margin` past the bank (ADR-0104). Empty: none.
-// A terrain block's ERODED relief (its "erode" settings), baked once per block and shared; null
-// without erosion settings are still honoured by the caller (readErodedBase gates on "erode").
+// A terrain block's WEATHERED relief (its "weather" block, ADR-0126), baked once per block and shared;
+// null without one (the caller gates on "erode": true, ADR-0257).
 std::shared_ptr<const std::function<double(double, double)>> erodedForTerrain(const nlohmann::json& terrainBlock);
 std::vector<std::vector<Vec2>> levelWaterKeepOut(const nlohmann::json& root, double margin = 6.0);
 
@@ -61,9 +58,9 @@ TerrainParams readTerrainParams(const nlohmann::json& t);
 // receives the block's seed (0 when absent).
 TreeParams readTreeParams(const nlohmann::json& ent, uint32_t& seedOut);
 
-// Baked erosion (opt-in via terrain.erode): bake ONCE and share the sampler
-// across every consumer — ground, roads, lots — so they all conform to the
-// same eroded surface. Null when the level doesn't opt in.
+// The weathered ground (opt-in via terrain.erode + terrain.weather): bake ONCE and share the
+// sampler across every consumer -- ground, roads, lots -- so they all conform to the same
+// surface. Null when the level doesn't opt in.
 std::shared_ptr<const std::function<double(double, double)>>
 readErodedBase(const nlohmann::json& root);
 
@@ -74,11 +71,10 @@ readErodedBase(const nlohmann::json& root);
 // derives its sampling from this one number.
 double levelDrawnGroundCell(const nlohmann::json& root);
 
-// The lot-growing knobs of a city/metro block (edge blocks + lot params).
+// The lot-growing knobs of a city block.
 // Callers still supply LotParams::ground and the hub list — those depend on
 // loader-side state (terrain samplers, road nets), not on the JSON.
-void readLotGrowParams(const nlohmann::json& cityJson,
-                       EdgeBlockParams& edges, LotParams& lots);
+void readLotGrowParams(const nlohmann::json& cityJson, LotParams& lots);
 
 // A "water" block ({seaLevel, region | lo/hi, cell, foamBand}).
 WaterMeshParams readWaterParams(const nlohmann::json& w);

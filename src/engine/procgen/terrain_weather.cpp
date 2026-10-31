@@ -1,4 +1,6 @@
 #include "terrain_weather.h"
+#include "../bundle/cache_use.h"
+#include "../bundle/bundle.h"
 
 #include "noise.h"
 #include "../level_params.h"
@@ -224,28 +226,21 @@ nlohmann::json groundShapingBlock(const nlohmann::json& tjIn) {
 
 std::string weatheredGroundKey(const nlohmann::json& tjIn) {
     const nlohmann::json tj = groundShapingBlock(tjIn);
-    std::uint64_t key = 1469598103934665603ULL;
-    auto foldBytes = [&](const void* data, std::size_t n) {
-        const unsigned char* b = static_cast<const unsigned char*>(data);
-        for (std::size_t i = 0; i < n; ++i) { key ^= b[i]; key *= 1099511628211ULL; }
-    };
-    auto fold = [&](const std::string& s) { foldBytes(s.data(), s.size()); };
-    fold(kWeatherCodeTag);
-    fold(kStreamPowerCodeTag);
-    fold(tj.dump());
+    bundle::Fnv key;
+    key.str(kWeatherCodeTag);
+    key.str(kStreamPowerCodeTag);
+    key.str(tj.dump());
     // the backend the water / breach stage would run on (a Vulkan and a CPU bake differ)
     if (tj.contains("weather") && tj["weather"].is_object()) {
         const WeatherParams wp = weatherFromJson(tj["weather"], tj);
-        fold(erosionBackendTag(&wp.water));
+        key.str(erosionBackendTag(&wp.water));
     }
     // the relief itself, coarsely: a change to the relief code shows here even with no tag bumped
     TerrainParams tp = readTerrainParams(tj);
     tp.resolution = 32;
     const Heightmap coarse = bakeHeightmap(tp, Noise(tj.value("seed", 0u)));
-    foldBytes(coarse.h.data(), coarse.h.size() * sizeof(float));
-    char hex[17];
-    std::snprintf(hex, sizeof hex, "%016llx", static_cast<unsigned long long>(key));
-    return hex;
+    key.bytes(coarse.h.data(), coarse.h.size() * sizeof(float));
+    return bundle::hex16(key.h);
 }
 
 WeatherParams weatherFromJson(const nlohmann::json& w, const nlohmann::json& tj) {
@@ -300,12 +295,10 @@ WeatherParams weatherFromJson(const nlohmann::json& w, const nlohmann::json& tj)
     const nlohmann::json wa = w.value("water", nlohmann::json::object());
     ErosionParams& e = p.water;
     e.vulkan = true;
-    e.droplets = 0;
     // the GPU water / breach / thermal stage is OPT-IN (ADR-0122: the backends agree only statistically, so
     // a default must not move a level's ground): 0 unless the level's "water" block asks
     e.thermalIterations = wa.value("thermal", 0);
     e.talus = tj.value("erodeTalus", e.talus);
-    e.seed = tj.value("seed", 0u) + 1234u;
     e.waterSteps = wa.value("steps", 0);
     e.breachDepth = wa.value("breach", 0.0f);
     e.waterDeposit = wa.value("deposit", 0.15f);
@@ -512,7 +505,7 @@ Heightmap weatherTerrain(const TerrainParams& tpIn, uint32_t seed, const Weather
     // 3. BREACH + WATER + THERMAL (ADR-0123/0124), on the GPU
     ErosionParams e = w.water;
     e.seaLevel = sea;
-    if (e.waterSteps <= 0 && e.droplets <= 0 && e.thermalIterations <= 0 && e.breachDepth <= 0.0f) return hm;
+    if (e.waterSteps <= 0 && e.thermalIterations <= 0 && e.breachDepth <= 0.0f) return hm;
     t0 = std::chrono::steady_clock::now();
     erode(hm, e);
     LOG_INFO << "[weather] water " << e.waterSteps << " steps on " << hm.n << "^2 (" << erosionBackendTag(&e) << ") in "
@@ -537,7 +530,7 @@ Heightmap weatheredTerrainCached(const nlohmann::json& tjIn) {
                 ok = std::fread(hm.h.data(), sizeof(float), hm.h.size(), f) == hm.h.size();
             }
             std::fclose(f);
-            if (ok) { LOG_INFO << "[weather] cached " << path; return hm; }
+            if (ok) { LOG_INFO << "[weather] cached " << path; bundle::noteCacheUse(path, "weather"); return hm; }
         }
     const TerrainParams tp = readTerrainParams(tj);
     hm = weatherTerrain(tp, tj.value("seed", 0u), weatherFromJson(tj["weather"], tj));
@@ -549,6 +542,7 @@ Heightmap weatheredTerrainCached(const nlohmann::json& tjIn) {
         std::fwrite(hm.h.data(), sizeof(float), hm.h.size(), f);
         std::fclose(f);
         LOG_INFO << "[weather] baked and cached " << path;
+        bundle::noteCacheUse(path, "weather");
     }
     return hm;
 }

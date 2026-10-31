@@ -705,10 +705,12 @@ CarMesh buildCarMesh(const CarParams& p) {
             ip.cushionHeight = p.hipHeight;
 
             Vec3 sgrp(0, 0, 0);
-            std::vector<Vec3> seats, doors;
+            std::vector<Vec3> seats, doors, rearHip;
             MeshBuilder::append(interior,
-                                buildCarInterior(cabin, ip, &sgrp, &seats, &doors));
+                                buildCarInterior(cabin, ip, &sgrp, &seats, &doors, &rearHip));
             out.attaches.push_back({sgrp, Vec3(0, 0, 1), "driver_seat"});
+            // The back bench's hip point, when there is a bench: where a back-seat rider goes.
+            for (const Vec3& r : rearHip) out.attaches.push_back({r, Vec3(0, 0, 1), "rear_hip"});
             // Every passenger seat's hip point: where a seated rider goes.
             for (const Vec3& s : seats) out.attaches.push_back({s, Vec3(0, 0, 1), "seat"});
             // Doors (a bus): the floor point a passenger steps off from.

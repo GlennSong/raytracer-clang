@@ -19,6 +19,7 @@
 #include "../mesh_builder.h"
 #include "physics_system.h"
 #include "camera_system.h"
+#include "player_system.h"   // LimpRequest: a rider thrown off
 #include "../../log.h"
 
 #include <algorithm>
@@ -37,6 +38,11 @@
 namespace engine {
 
 void VehicleSystem::onStart(FrameContext& ctx) {
+    onSpawn_ = ctx.events.listen<VehicleSpawnRequest>([this](const VehicleSpawnRequest& r) {
+        spawnPending_ = true;
+        spawnRecipe_ = r.recipe;
+    });
+    answers_.bind(ctx.commands, "VehicleSystem", "vehicle?");
     // Driving actions (global; single-player drive for now). Throttle/steer are
     // axes, brake/handbrake/enter are buttons. Gamepad face-button names may differ
     // per backend — adjust on a real build.
@@ -630,8 +636,8 @@ void VehicleSystem::handleEnterExit(FrameContext& ctx) {
 // the seat can take: an open one (a bike's, a moped's, a convertible's) past it throws the rider off, limp at the speed
 // the vehicle had; a closed car keeps them in. A two-wheeler rolled past its lean (it is going down) puts its rider off
 // too. Whatever stays in the seat sways in it: the torso and the head thrown against the change and pulled back, drawn
-// by PlayerBodySystem from the pose written here. The ragdoll is PlayerSystem's: this hands it the velocity through
-// Settings (player.limp, player.limpVelocity).
+// by PlayerBodySystem from the pose written here. The ragdoll is PlayerSystem's: this hands it the velocity in a
+// LimpRequest.
 void VehicleSystem::stepSeat(FrameContext& ctx) {
     Entity player, ride;
     ctx.world.each<ControlledBy, InVehicle>([&](Entity e, ControlledBy&, InVehicle& iv) {
@@ -682,10 +688,10 @@ void VehicleSystem::stepSeat(FrameContext& ctx) {
     }
     cameras.clearFollowTarget();
     ctx.world.remove<InVehicle>(player);
-    char buf[96];
-    std::snprintf(buf, sizeof(buf), "%.3f %.3f %.3f", thrown.x, thrown.y, thrown.z);
-    ctx.settings.setString("player.limpVelocity", buf);
-    ctx.settings.setDouble("player.limp", 1.0);
+    LimpRequest limp;
+    limp.thrown = true;
+    limp.velocity = thrown;
+    ctx.events.publish(limp);
     LOG_INFO << "[vehicle] thrown off: " << (hit ? "a crash" : "went down") << ", jolt " << jolt << " m/s from "
              << before.length() * 3.6 << " km/h";
 }
@@ -743,11 +749,10 @@ void VehicleSystem::update(FrameContext& ctx) {
         }
     }
     // Drop the picked car in front of the player.
-    if (ctx.actions.pressed("spawn_vehicle") || ctx.settings.getDouble("vehicle.spawn", 0.0) > 0) {
-        ctx.settings.setDouble("vehicle.spawn", 0.0);
+    if (ctx.actions.pressed("spawn_vehicle") || spawnPending_) {
         // `vehicle_spawn <recipe>`: pick that one first (the catalogue's recipe names: motorcycle, moped, ...)
-        wantRecipe_ = ctx.settings.getString("vehicle.spawnRecipe", "");
-        ctx.settings.setString("vehicle.spawnRecipe", "");
+        wantRecipe_ = spawnPending_ ? spawnRecipe_ : std::string();
+        spawnPending_ = false;
         spawnInFront(ctx);
     }
 
@@ -796,7 +801,7 @@ void VehicleSystem::update(FrameContext& ctx) {
                       d.boosting > 0 ? " BOOSTING" : "");
         telem += dr;
     });
-    ctx.settings.setString("vehicle.telemetry", telem);
+    answers_.set("vehicle?", telem + " timescale " + std::to_string(ctx.clock.timeScale()));
 
     updateHorn(ctx);
     updateEngines(ctx);

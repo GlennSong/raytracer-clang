@@ -96,8 +96,10 @@ public:
     // by really fast ... a day-night loop over 30 min"). The previous knob
     // was a bare 0.02 days-per-second — a 50-second day — and every surface
     // (settings, level JSON, web slider) restated it in that unit. <= 0
-    // freezes the sun where it is (a level-authored still).
-    double dayMinutes = 30.0;
+    // freezes the sun where it is (a level-authored still). REAL TIME by default (Glenn, 2026-10-29: "The clock
+    // should be 1:1 with realtime ... the default should be 1:1 with realtime. 24/7 clock"): a 1440-minute day; a
+    // level asks for a faster one by name.
+    double dayMinutes = 1440.0;
     double latitudeDeg = 40.0;   // observer latitude (°N; negative = south)
     int    dayOfYear = 172;      // 1..365; 172 = June 21 (longest day north)
     int    year = 0;             // turns with the calendar; keeps the moon continuous

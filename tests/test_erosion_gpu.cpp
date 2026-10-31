@@ -4,41 +4,18 @@
 #include "../src/engine/procgen/erosion.h"
 #include "../src/engine/procgen/erosion_gpu.h"
 
-#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <filesystem>
 #include <string>
 
 using namespace engine;
 
 namespace {
 
-// erodeGpu compiles its kernels from shaders/metal/erosion.metal relative to
-// CWD (the renderer's shader convention); ctest runs from the build dir, so
-// hop to the source tree for the GPU cases and hop back after.
-struct ScopedSourceDir {
-    std::filesystem::path old;
-    ScopedSourceDir() {
-#ifdef RT_SOURCE_DIR
-        std::error_code ec;
-        old = std::filesystem::current_path(ec);
-        std::filesystem::current_path(RT_SOURCE_DIR, ec);
-#endif
-    }
-    ~ScopedSourceDir() {
-#ifdef RT_SOURCE_DIR
-        std::error_code ec;
-        if (!old.empty()) std::filesystem::current_path(old, ec);
-#endif
-    }
-};
-
 // Synthetic rolling hills with a regional slope: per-cell gradients up to
-// ~2.4 height units exceed the default talus (1.2) and give droplets real
-// downhill runs, so both erosion phases have work to do.
+// ~2.4 height units exceed the default talus (1.2), so thermal has work to do.
 Heightmap makeHills(int res) {
     Heightmap hm;
     hm.n = res + 1;
@@ -83,9 +60,8 @@ double rmsDiff(const Heightmap& a, const Heightmap& b) {
 
 ErosionParams testParams() {
     ErosionParams p;
-    p.droplets = 50000;
-    p.seed = 1234;
-    return p;   // everything else: the shipped defaults
+    p.vulkan = true;   // the GPU runs only when asked (ADR-0122)
+    return p;          // thermal at the shipped defaults; no water
 }
 
 void runCpu(Heightmap& hm, const ErosionParams& p) {
@@ -102,136 +78,64 @@ TEST_CASE(erosion_gpu_unavailable_returns_false_and_env_pins_cpu) {
     CHECK(std::strcmp(erosionBackendTag(), "cpu") == 0);
     unsetenv("RT_CPU_EROSION");
 
-    ScopedSourceDir cd;
     if (!erodeGpuAvailable()) {
-        // Graceful skip: no Metal device (or no kernel source) — erodeGpu
-        // must decline so erode() runs the CPU sim, and the cache tag must
-        // say so.
+        // Graceful skip: no device (or no kernels) -- erodeGpu must decline so erode() runs the CPU, and
+        // the cache tag must say so.
         Heightmap hm = makeHills(32);
-        ErosionParams p = testParams();
-        p.droplets = 100;
-        CHECK(!erodeGpu(hm, p));
-        CHECK(std::strcmp(erosionBackendTag(), "cpu") == 0);
-        std::printf("    [skip] no Metal GPU erosion available\n");
+        CHECK(!erodeGpu(hm, testParams()));
+        const ErosionParams p = testParams();
+        CHECK(std::strcmp(erosionBackendTag(&p), "cpu") == 0);
+        std::printf("    [skip] no GPU erosion available\n");
         return;
     }
-    ErosionParams asks = testParams();
-    asks.vulkan = true;   // a Vulkan build runs on the GPU only when the terrain asks (ADR-0122)
-    CHECK(std::strcmp(erosionBackendTag(&asks), "gpu-erosion-v1") == 0 ||   // Metal
-          std::strcmp(erosionBackendTag(&asks), "vk-erosion-v1") == 0);
-#if defined(RT_HAVE_VULKAN_EROSION)
-    const ErosionParams notAsked = testParams();   // every level baked before ADR-0122 keeps the CPU sim
+    const ErosionParams asks = testParams();
+    CHECK(std::strcmp(erosionBackendTag(&asks), "vk-erosion-v1") == 0);
+    ErosionParams notAsked = testParams();
+    notAsked.vulkan = false;
     CHECK(std::strcmp(erosionBackendTag(&notAsked), "cpu") == 0);
-#endif
 }
 
 TEST_CASE(erosion_gpu_two_runs_bit_identical) {
-    ScopedSourceDir cd;
     if (!erodeGpuAvailable()) {
-        std::printf("    [skip] no Metal GPU erosion available\n");
+        std::printf("    [skip] no GPU erosion available\n");
         return;
     }
-    // Run-to-run determinism is the load-bearing contract: fixed batches,
-    // snapshot reads, and fixed-point integer atomics make the result
-    // independent of GPU thread scheduling — two runs must match to the bit.
-    ErosionParams p = testParams();
+    // Run-to-run determinism is the load-bearing contract: fixed-point integer atomics make the result
+    // independent of GPU thread scheduling -- two runs must match to the bit.
+    const ErosionParams p = testParams();
     Heightmap a = makeHills(256), b = makeHills(256);
     CHECK(erodeGpu(a, p));
     CHECK(erodeGpu(b, p));
     CHECK(a.h.size() == b.h.size());
-    CHECK(std::memcmp(a.h.data(), b.h.data(),
-                      a.h.size() * sizeof(float)) == 0);
+    CHECK(std::memcmp(a.h.data(), b.h.data(), a.h.size() * sizeof(float)) == 0);
 }
 
-TEST_CASE(erosion_gpu_statistically_matches_cpu) {
-    ScopedSourceDir cd;
+TEST_CASE(erosion_gpu_thermal_matches_cpu) {
     if (!erodeGpuAvailable()) {
-        std::printf("    [skip] no Metal GPU erosion available\n");
+        std::printf("    [skip] no GPU erosion available\n");
         return;
     }
-    ErosionParams p = testParams();
-    Heightmap input = makeHills(256);
-    Heightmap gpu = input, cpu = input, cpuB = input;
+    // The same model on both: each pass finds every cell's lowest neighbour on the heights as they stood,
+    // moves half the excess over the talus, then applies it all. They differ only by the GPU's 2^-16
+    // fixed point, so the results agree far below the slumping itself.
+    const ErosionParams p = testParams();
+    const Heightmap input = makeHills(256);
+    Heightmap gpu = input, cpu = input;
     CHECK(erodeGpu(gpu, p));
     runCpu(cpu, p);
-    // A second CPU run with a different seed is the yardstick for every
-    // envelope below: the backends use different RNG streams by design
-    // (mt19937 vs counter hash), so "statistical parity" means GPU-vs-CPU
-    // differences of the same order as the CPU's own seed-to-seed noise.
-    ErosionParams pB = p;
-    pB.seed = 999;
-    runCpu(cpuB, pB);
-
-    Stats si = stats(input), sg = stats(gpu), sc = stats(cpu);
-    // Both backends actually eroded: droplets shave peaks and fill hollows,
-    // thermal slumps over-steep slopes — total height variance must drop.
-    CHECK(sg.var < si.var);
+    const Stats si = stats(input), sg = stats(gpu), sc = stats(cpu);
+    CHECK(sg.var < si.var);   // slopes slumped
     CHECK(sc.var < si.var);
-
-    double rmsGC = rmsDiff(gpu, cpu);       // cross-backend disagreement
-    double rmsCI = rmsDiff(cpu, input);     // how much the CPU sim carved
-    double rmsGI = rmsDiff(gpu, input);     // how much the GPU sim carved
-    double rmsCC = rmsDiff(cpu, cpuB);      // CPU seed-to-seed noise
-    std::printf(
-        "    gpu-vs-cpu rms %.4f (cpu seed-noise %.4f) | carve rms cpu %.4f "
-        "gpu %.4f | mean %.4f/%.4f min %.3f/%.3f max %.3f/%.3f (gpu/cpu)\n",
-        rmsGC, rmsCC, rmsCI, rmsGI, sg.mean, sc.mean, sg.mn, sc.mn, sg.mx,
-        sc.mx);
-
-    // Same amount of carving (measured 0.96x, seed-to-seed 0.99x)...
-    CHECK(rmsGI > 0.7 * rmsCI);
-    CHECK(rmsGI < 1.4 * rmsCI);
-    // ...and pointwise disagreement on the order of seed noise (measured
-    // 1.34x), with an absolute ceiling well under the ~8-unit carve signal
-    // itself (8 percent of the ~81-unit height range) as a backstop against
-    // a silently diverged model.
-    CHECK(rmsGC < 2.5 * rmsCC);
-    CHECK(rmsGC < 0.08 * (si.mx - si.mn));
-
-    // Moments: mean within ~1 percent of the height range (the GPU loses
-    // slightly more in-flight sediment when droplets die); max within the
-    // seed-noise scale (the relief clamp additionally guarantees the GPU
-    // never deposits above the local rim, so max cannot grow).
-    CHECK(std::fabs(sg.mean - sc.mean) < 1.0);
-    CHECK(std::fabs(sg.mx - sc.mx) < 2.0);
-    // Min is an extreme-value statistic driven by the CPU's runaway gorge
-    // incision (its min swings -71 vs -94 across seeds on this input). The
-    // GPU's per-batch relief clamp bounds that singular deepening by design,
-    // so the gate is one-sided: the GPU must never out-dig the CPU, and may
-    // raise the global floor only by bounded pit-filling.
-    CHECK(sg.mn >= sc.mn - 5.0);
-    CHECK(sg.mn <= si.mn + 6.0);
-}
-
-TEST_CASE(erosion_gpu_speedup_bench) {
-    // Opt-in (~seconds of CPU sim): RT_EROSION_BENCH=1 ./run_tests
-    if (!std::getenv("RT_EROSION_BENCH")) return;
-    ScopedSourceDir cd;
-    if (!erodeGpuAvailable()) {
-        std::printf("    [skip] no Metal GPU erosion available\n");
-        return;
-    }
-    ErosionParams p;
-    p.droplets = 500000;
-    p.seed = 7;
-    Heightmap gpu = makeHills(1024), cpu = makeHills(1024);
-    auto t0 = std::chrono::steady_clock::now();
-    CHECK(erodeGpu(gpu, p));
-    auto t1 = std::chrono::steady_clock::now();
-    runCpu(cpu, p);
-    auto t2 = std::chrono::steady_clock::now();
-    double gpuMs = std::chrono::duration<double, std::milli>(t1 - t0).count();
-    double cpuMs = std::chrono::duration<double, std::milli>(t2 - t1).count();
-    std::printf("    res 1024, 500k droplets: gpu %.0f ms, cpu %.0f ms — %.1fx\n",
-                gpuMs, cpuMs, cpuMs / gpuMs);
-    CHECK(gpuMs < cpuMs);
+    const double rmsGC = rmsDiff(gpu, cpu), rmsCI = rmsDiff(cpu, input);
+    std::printf("    gpu-vs-cpu rms %.6f, thermal carved rms %.4f\n", rmsGC, rmsCI);
+    CHECK(rmsCI > 0.01);
+    CHECK(rmsGC < 0.01 * rmsCI);
 }
 
 // THE WATER MODEL (ADR-0123, Mei et al. 2007 pipe model): on a V valley tilted down its length, rain runs
 // off the slopes and collects along the floor; nothing blows up (every height finite, no spike above the
 // valley's rim nor pit below its lowest point -- the relief clamp), and two runs are bit-identical.
 TEST_CASE(erosion_gpu_water_collects_in_the_valley_and_stays_bounded) {
-    ScopedSourceDir cd;
     if (!erodeGpuAvailable()) { std::printf("    [skip] no GPU erosion available\n"); return; }
 #if !defined(RT_HAVE_VULKAN_EROSION)
     std::printf("    [skip] the water model is Vulkan only\n");
@@ -248,7 +152,6 @@ TEST_CASE(erosion_gpu_water_collects_in_the_valley_and_stays_bounded) {
         return hm;
     };
     ErosionParams p;
-    p.droplets = 0;
     p.thermalIterations = 0;
     p.vulkan = true;
     p.waterSteps = 3000;

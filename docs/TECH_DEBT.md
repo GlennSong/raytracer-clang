@@ -6,6 +6,11 @@ when fixed (git history is the archive).
 
 ## City procgen — dead-code audit (2026-08-15)
 
+*Superseded 2026-10-29 (ADR-0267): the "metro" and "district" kinds, the corridor system, the grid / radial /
+tensor layout generators with `city.layout`, and hand-authored roads are deleted; the city planner is the one
+street generator and every level's roads are a lanes graph. The census and verdict rows below for those are
+struck; the rest stand.*
+
 Commissioned before deleting anything, on the theory that ~60 files in
 `src/engine/procgen/city/` held a lot of abandoned code. **The theory was mostly
 wrong, and the way it was wrong is the useful part.**
@@ -26,10 +31,10 @@ Level census, for reference:
 
 | path | levels |
 | --- | --- |
-| `road:metro` | 10 — coast_city, freeway_lab, hillcity, metro_hills, metropolis, metropolis_roads, metropolis_sky, piedmont, piedmont_mini, piedmont_roads |
-| `road:district` | 2 — grown, living_city |
+| ~~`road:metro`~~ | *deleted 2026-10-29 (ADR-0267)* |
+| ~~`road:district`~~ | *deleted 2026-10-29 (ADR-0267)* |
 | ~~`shape:city`~~ | *retired 2026-08-16; city + city_arena migrated to `road`* |
-| `shape:corridor` | 2 — freeway_lab, freeway_variants |
+| ~~`shape:corridor`~~ | *deleted 2026-10-29 (ADR-0267)* |
 | `citysim.buildLots` | 7 — coast_city, hillcity, living_city, metro_hills, metropolis, metropolis_sky, piedmont |
 
 ### Verdicts
@@ -38,11 +43,11 @@ Level census, for reference:
 
 | Code | Reached by |
 | --- | --- |
-| `tensorRoads`, `radialRoads`, `gridRoads`, `pruneSteepEdges`, `connectComponents` | `city.layout` (`procgen_bindings.cpp:1145`). **`twin_cities.lua` ships both `pattern="radial"` and `pattern="tensor"`**, so the tensor field is live content, not theory. `city.layout` is the most-used verb in the script corpus (7 call sites). |
-| `road_mesh.cpp` weld/union family — `unionRibbons`, `weldRibbons`, `unionRoadbed`, `bridgeDeck`, `deckBarriers`, `deckMarkings`, `laneMarkings`, `buildRoadMesh` | All bound (`city.union`, `city.weld`, `city.roadbed`, `city.deck`, `city.lane_markings`, `city.road_mesh`). |
-| `road_crossings.cpp:resolveCrossings` | `city.resolve` — used twice in shipped scripts. |
-| `metro.cpp`, `patch_fabric.cpp`, `city_footprint.cpp`, `arterial_skeleton.cpp`, `buildability.cpp` | The `"metro"` kind — the majority path. |
-| `corridor_mesh/plan/bake.cpp`, `alignment.cpp` | `shape:"corridor"` levels + metro freeway plans. |
+| ~~`tensorRoads`, `radialRoads`, `gridRoads`, `pruneSteepEdges`, `connectComponents`~~ | *deleted 2026-10-29 (ADR-0267)* |
+| ~~`road_mesh.cpp` weld/union family~~ | *gone with the lattice (2026-10-14); its last pieces -- the joint profile solve, clearance, piers, curb fillets, conform regions -- deleted 2026-10-29 (ADR-0267)* |
+| ~~`road_crossings.cpp:resolveCrossings`~~ | *deleted 2026-10-29 with `city.resolve` (ADR-0267): no shipped script called it* |
+| ~~`metro.cpp`, `patch_fabric.cpp`, `city_footprint.cpp`, `arterial_skeleton.cpp`~~ | *deleted 2026-10-29 (ADR-0267)*; `buildability.cpp` stays (block grading, water) |
+| ~~`corridor_mesh/plan/bake.cpp`, `alignment.cpp`~~ | *deleted 2026-10-29 (ADR-0267)* |
 
 *Caveat worth tracking separately:* several of those Lua verbs are **bound but
 unused by any shipped script** (`city.union`, `city.weld`, `city.stroke`,
@@ -68,7 +73,7 @@ the honest fix is a script that exercises them, not deletion.
 | --- | --- |
 | ~~**Two city pipelines**~~ | **RESOLVED 2026-08-16.** `city.json`/`city_arena.json` migrated onto `road` + `citysim.buildLots`; `city.{h,cpp}`, both host bake paths and the `CityModel`→`RoadNet` nav bridge deleted. The building-winding gate was ported to `growLotBuildings` first, so retiring the generator did not take the only test for inside-out facades with it. |
 | `level_scene.cpp` re-implements `growCityLots` | **Narrower than first reported.** The JSON half is genuinely shared (`readLotGrowParams`); only the road-net-derived half — hub list + coreness anchor — is duplicated, with a comment explaining that the editor otherwise grows a *different* city (no districts, coreness 0, no towers). Still a fork risk; the fix is to hoist those ~12 lines, not to rewrite. |
-| `emitCornice` (box path) vs `sweptCornice` (plan path) | Two lambdas in different functions carrying the same tier table `{0.10,0.16},{0.24,0.18},{0.34,0.08}`. One emits boxes, one emits plan slabs — so they cannot merge outright, but the table should be one shared constant. |
+| ~~`emitCornice` (box path) vs `sweptCornice` (plan path)~~ | **RESOLVED 2026-10-30 (ADR-0270).** The box path is gone: `growBuilding`, `growCylinder` and `growPagoda` were retired for one massing path, `growPlanBuilding`, and `sweptCornice` is the only cornice. |
 
 **Not dead code — a real gap.**
 
@@ -578,11 +583,10 @@ Suspects, in confidence order — none yet confirmed on device:
    here, so it is recorded rather than changed blind. Confirm first with the
    new `texture_uploads` column; if slow frames carry a texture upload, this
    is it.
-2. **Lazy per-pose player-body meshes.** `CityPlayerBodySystem::poseMesh`
-   builds and uploads a mesh the first time each of `kWalkPoses` poses is
-   used — i.e. *while you walk*, one hitch per new pose until the set is warm.
-   Matches "every so often while walking" exactly. Fix: pre-warm all poses at
-   level load (they are a fixed, small set), don't build them mid-play.
+2. ~~**Lazy per-pose player-body meshes.**~~ RESOLVED (ADR-0254): the walker
+   mesh's lazily built poses are gone; the player's body is the jointed body,
+   and `BodyMeshes::warm` makes every fold's limb tube when it is first shown,
+   so nothing is built mid-stride.
 3. **The gun's bullets are cache hits** (`acquirePrimitive("box", …)` by key),
    so the mesh is not the cost — but each shot creates a Jolt dynamic body and
    `gun.lua` caps at MAX=500 live bullets, so repeated firing grows the

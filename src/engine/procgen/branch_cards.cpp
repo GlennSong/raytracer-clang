@@ -1,4 +1,5 @@
 #include "branch_cards.h"
+#include "../../proc_rng.h"
 
 #include "../mesh_builder.h"
 #include "foliage_kit.h"   // addKitLeaf, addKitBlossom
@@ -140,8 +141,8 @@ int wearBranchCards(TreeMesh& tree, const BranchCardSet& set, const BranchCardSp
     const double inv = 1.0 / set.colourScale;
     RenderMesh& m = tree.leaves;
     int laid = 0;
-    uint32_t h = seed * 2654435761u + 1u;
-    auto rnd = [&]() { h ^= h << 13; h ^= h >> 17; h ^= h << 5; return (h & 0xffffff) / 16777216.0; };
+    ProcRng h(seed * 2654435761u + 1u);
+    auto rnd = [&]() { return h.next(); };
     // one card: the view `p` laid in frame `f`, `s` metres a picture metre along the axis, `sw` across it
     auto layCard = [&](const Frame& f, const BranchCardSet::View& p, double s, double sw) {
         const double spine = std::clamp(0.0, static_cast<double>(p.x0) * 0.9, static_cast<double>(p.x1) * 0.9);
@@ -244,8 +245,8 @@ BranchCardSet bakeTwigCards(const TreeRecipe& r, double twigLength, int variants
         set.atlas.normal.pixels[i - 3] = 128; set.atlas.normal.pixels[i - 2] = 128; set.atlas.normal.pixels[i - 1] = 255;
         set.atlas.normal.pixels[i] = 255;
     }
-    uint32_t h = seed * 2654435761u + 7u;
-    auto rnd = [&]() { h ^= h << 13; h ^= h >> 17; h ^= h << 5; return (h & 0xffffff) / 16777216.0; };
+    ProcRng h(seed * 2654435761u + 7u);
+    auto rnd = [&]() { return h.next(); };
     // the bark as the trunk shades: the foliage material lights the card brighter than the bark material does the wood
     const Vec3 bark = (r.barkColor * 0.5 + r.barkColorHi * 0.5) * 0.55;
     // (the leaves' colour: the species' palette -- each variant one of them -- else its leaf colour range)
@@ -446,8 +447,8 @@ int wearTwigCards(TreeMesh& tree, const BranchCardSet& set, const BranchCardSpec
         for (const TreeMesh::Twig& t : tree.twigs) crownR = std::max(crownR, (t.b - mid).length());
     }
     const double fold = spec.fold * PI / 180.0, inv = 1.0 / set.colourScale;
-    uint32_t h = seed * 2246822519u + 3u;
-    auto rnd = [&]() { h ^= h << 13; h ^= h >> 17; h ^= h << 5; return (h & 0xffffff) / 16777216.0; };
+    ProcRng h(seed * 2246822519u + 3u);
+    auto rnd = [&]() { return h.next(); };
     RenderMesh& m = tree.leaves;
     int laid = 0;
     // one segment: picture `pi` from `a` along `axis` for `len`, its face rolled `roll` from the sky about the axis
@@ -631,8 +632,8 @@ int wearNearLeaves(TreeMesh& tree, const TreeRecipe& r, int leaves, int twigTris
     const LeafKitSpec& lk = r.leafKit;
     if (!lk.set || tree.twigs.empty()) return 0;
     tree.foliage = 2;
-    uint32_t h = seed * 2654435761u + 11u;
-    auto rnd = [&]() { h ^= h << 13; h ^= h >> 17; h ^= h << 5; return (h & 0xffffff) / 16777216.0; };
+    ProcRng h(seed * 2654435761u + 11u);
+    auto rnd = [&]() { return h.next(); };
     const bool flowers = lk.blossomSize > 0.0;
     // the crown's middle and reach
     Vec3 mid(0, 0, 0);
@@ -829,8 +830,8 @@ BranchCardSet bakeNeedleCards(const TreeRecipe& r, int variants, uint32_t seed) 
     extras.depthShade = 0.3;
     extras.trueNormals = true;
     extras.alphaGrow = 1;   // (Glenn, of the spruce: "your needles need more thickness")
-    uint32_t h = seed * 2654435761u + 5u;
-    auto rnd = [&]() { h ^= h << 13; h ^= h >> 17; h ^= h << 5; return (h & 0xffffff) / 16777216.0; };
+    ProcRng h(seed * 2654435761u + 5u);
+    auto rnd = [&]() { return h.next(); };
     const double L = nd.length, w = nd.width;
     const Vec3 X(1, 0, 0), Y(0, 1, 0), Z(0, 0, 1);
     // one needle: from `p` along `d` (bending a little toward `bendTo`), its face turned to `radial`
@@ -1009,8 +1010,8 @@ int wearNeedles(TreeMesh& tree, const TreeRecipe& r, const BranchCardSet& set, d
     for (std::size_t i = 0; i < set.pictures.size(); ++i)
         if (set.pictures[i].kind >= 0 && set.pictures[i].kind < 4) byKind[set.pictures[i].kind].push_back(static_cast<int>(i));
     if (byKind[0].empty()) return 0;
-    uint32_t h = seed * 2246822519u + 9u;
-    auto rnd = [&]() { h ^= h << 13; h ^= h >> 17; h ^= h << 5; return (h & 0xffffff) / 16777216.0; };
+    ProcRng h(seed * 2246822519u + 9u);
+    auto rnd = [&]() { return h.next(); };
     Vec3 mid(0, 0, 0);
     for (const TreeMesh::Twig& t : tree.twigs) mid = mid + t.b;
     mid = mid * (1.0 / tree.twigs.size());

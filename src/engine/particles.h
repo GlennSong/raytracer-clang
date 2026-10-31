@@ -5,7 +5,7 @@
 #include "world.h"   // Entity
 
 #include <cstdint>
-#include <random>
+#include "../proc_rng.h"
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -106,12 +106,12 @@ public:
     Real drawnSize(const Particle& p) const;
     Real drawnAlpha(const Particle& p) const;
 
-    std::mt19937& rng() { return rng_; }
+    ProcRng& rng() { return rng_; }
 
 private:
     const ParticleBook* book_;
     std::vector<Particle> p_;
-    std::mt19937 rng_;
+    ProcRng rng_;
 };
 
 // A burst asked for by any system, spent by ParticleSystem next frame.

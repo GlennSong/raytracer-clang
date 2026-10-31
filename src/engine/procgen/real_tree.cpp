@@ -1,7 +1,7 @@
 #include "real_tree.h"
 
 #include "../mesh_builder.h"
-#include "proc_rng.h"
+#include "../../proc_rng.h"
 
 #include <algorithm>
 #include <array>

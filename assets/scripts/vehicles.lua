@@ -514,9 +514,11 @@ local function fleet_car(class_name, color)
 
     -- mesh.car publishes every mount point under `lights`: lamps, and the
     -- seats (the driver's hip point, and each passenger seat's on a bus).
-    local lights, seats, doors, driver_seat = {}, {}, {}, nil
+    local lights, seats, doors, driver_seat, rear_hip = {}, {}, {}, nil, nil
     for _, lt in ipairs(car.lights or {}) do
-        if lt.name == "seat" then
+        if lt.name == "rear_hip" then
+            rear_hip = lt.pos
+        elseif lt.name == "seat" then
             seats[#seats + 1] = lt.pos
         elseif lt.name == "door" then
             doors[#doors + 1] = lt.pos
@@ -543,6 +545,7 @@ local function fleet_car(class_name, color)
         seats = seeInto and seats or nil,
         doors = seeInto and doors or nil,
         driver_seat = driver_seat,
+        rear_hip = rear_hip,   -- the back bench's hip point (its middle); nil: no back seat
     }
 end
 
@@ -612,6 +615,7 @@ local function kit_car(spec, color)
     see_into = open,
     open_seat = open,   -- (ADR-0252: a crash throws a commandeered convertible's driver)
     driver_seat = car.driver_seat,
+    rear_hip = car.rear_hip,
   }
 end
 -- the catalogue size without building the meshes' materials: the faceted build is cheap, so it is simply

@@ -21,6 +21,7 @@ namespace engine {
 
 class AssetManager;
 class FrameStats;
+class ControlCommands;
 
 // End-of-frame request to swap the active app state (e.g. the editor's Play
 // button, the game's Stop). Application pops the current state and pushes
@@ -100,6 +101,9 @@ struct FrameContext {
     // by a test still reads as "the single, final step".
     int fixedStepIndex = 0;
     int fixedStepCount = 1;
+    // The control channel's command table (ADR-0253), for systems and scripts that add verbs of their own.
+    // Null in a context a test builds without one.
+    ControlCommands* commands = nullptr;
 };
 
 // The conditions a frame capture was taken under, as a one-line

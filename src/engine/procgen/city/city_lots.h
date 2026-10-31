@@ -224,12 +224,10 @@ struct LotParams {
     // Filled by the grower's rebind from groundWith: the dilate-aware sampler
     // the mesh-conforming wrapper queries. Hosts never set this directly.
     std::function<Real(Real, Real, Real)> groundDilatedFn;
-    // Hub CLUSTER ids parallel to `hubs` (multi-site metros, 8km-city P3):
-    // CityHub::site — 0 = the primary city, 1+ = satellite towns. The landmark
-    // planner runs its quotas PER CLUSTER (the city keeps the full civic
-    // table; each town is guaranteed its own school + church). Empty = every
-    // hub is the city; growLotBuildingsOnNets recovers the ids from the nets'
-    // own cityHubs when the caller leaves this unset.
+    // Hub CLUSTER ids parallel to `hubs` (8km-city P3): 0 = the primary city,
+    // 1+ = satellite towns. The landmark planner runs its quotas PER CLUSTER
+    // (the city keeps the full civic table; each town is guaranteed its own
+    // school + church). Empty = every hub is the city.
     std::vector<int> hubClusters;
     // Level-authored PARCEL overrides (citysim.parcel — the 8km-metro knob:
     // 150 m+ blocks parcel bigger lots). <= 0 = unset: the parceler keeps its
@@ -268,6 +266,9 @@ struct LotParams {
     bool wholeBlocks = false;
     std::string recipe;
     Real recipeCoreness = -1;
+    // ...and where its stairs and lifts stand (citysim.stairs = "core" | "ends", citysim.lifts = "bank" | "facing":
+    // BuildingParams::stairPlace / liftBanks; 0 leaves the recipe's)
+    uint8_t recipeStairs = 0, recipeLifts = 0;
     uint32_t seed = 1;
     // TERRAIN sampler (world y at x,z): buildings grow from their graded pad
     // plane (the ENTRANCE-side grade, so the front door sits level with the
@@ -354,7 +355,7 @@ struct LotPlanDebug {
     int rejPlan = 0;     // finished plan too pinched (inradius gauge) — was
                          // double-counted into rejFill
     int rejClear = 0;    // no inset of the plan cleared the road corridors
-    int rejBox = 0;      // box fallback rejected (fill / shrink-fit too small)
+    int rejBox = 0;      // no plan to stand on (the box fallback before ADR-0270): open ground
     int rejFrontage = 0; // whole footprint too far from any road surface
     int bisectedBlocks = 0;   // blocks the frontage walk failed on, filled by
                               // blind bisection (lots with no street by design)
@@ -478,7 +479,7 @@ void drapeOnGround(RenderMesh& m, const std::function<Real(Real, Real)>& ground,
 // out onto the street"): when given, every building box is additionally kept at
 // least `edge width/2 + roadClearance` from every road centreline — pass the
 // sidewalk width (+ margin) so towers on wide arterials stay behind the curb.
-struct RoadGraph;   // road_network.h (kept light — see edgeBlocks below)
+struct RoadGraph;   // road_network.h (forward-declared to keep this header light)
 // A building's graded pad: its plan dilated by `apron` (the foundation ring and entrance steps sit just
 // outside the plan) as a flat TerrainFlatten at groundY with the given feather. One derivation for the
 // loader and every audit — a pad that is built one way and checked another is not checked.
@@ -493,30 +494,7 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                                           std::vector<RenderMesh>* outFlatParts = nullptr,
                                           std::vector<TerrainFlatten>* outGrade = nullptr);
 
-// EDGE blocks (ADR-0066, device feedback): only fully ENCLOSED faces become city
-// blocks, which leaves the town rim bare. Synthesize rectangular blocks on the
-// OPEN side of boundary roads: walk each road chain between junctions, subdivide
-// it into [minLen, maxLen] pieces, and where a side faces open ground (inside no
-// closed block, clear of other roads) emit a `depth`-wide rectangle set back by
-// `margin`. The rectangles feed growLotBuildings like any other block. Pure
-// geometry, deterministic.
-struct EdgeBlockParams {
-    Real margin = 9.0;     // setback from the road centreline to the block edge
-    Real depth = 34.0;     // block width, outward from the road (m)
-    Real minLen = 26.0;    // shortest block along the road (m)
-    Real maxLen = 58.0;    // longest block along the road (m)
-};
-struct RoadGraph;   // road_network.h (forward-declared to keep this header light)
-std::vector<Poly2> edgeBlocks(const RoadGraph& roads,
-                              const std::vector<Poly2>& closedBlocks,
-                              const EdgeBlockParams& params);
-
-// The whole "road nets → blocks (+ rim) → lots → buildings" pass in one call,
-// shared by the viewer's loader and the offline tracer so both grow the SAME
-// city: combines every net into one planar graph, extracts the enclosed blocks,
-// synthesizes rim blocks on the open sides, and grows the lot buildings against
-// the SAMPLED centrelines (road clearance).
-struct RoadEntity;   // road_net.h
+// What a city's grow hands its host (engine::growCity): the buildings, the plan, the meshes.
 struct NetLotResult {
     std::vector<LotBuilding> lots;
     LotPlanDebug plan;               // blocks + lots, for debug overlays
@@ -530,29 +508,6 @@ struct NetLotResult {
     // terrain INSTEAD of re-deriving them.
     std::vector<TerrainFlatten> gradeFlatten;
 };
-// `freewayROW` (optional): the ACTUAL freeway right-of-way — the corridor's
-// dual carriageways (RoadClass::Freeway) and its ramps (RoadClass::Ramp), in
-// world XZ with real per-edge widths, gathered from the unified road graph
-// AFTER the corridor is routed. When given it supersedes each net's
-// freewayPlans mainline proxy, so the city clears (and, under a deck, re-zones)
-// around the WHOLE freeway footprint — ramps and gores included, not just the
-// mainline centreline.
-// `wantFlatParts`: also grow every building's LOD1 twin into `flatParts`
-// (city-render-perf R2). Off by default so the offline tracer and diagnostics
-// don't pay for a detail tier they never draw.
-NetLotResult growLotBuildingsOnNets(const std::vector<RoadEntity>& nets,
-                                    const LotParams& params,
-                                    const EdgeBlockParams& edgeParams,
-                                    Real roadClearance,
-                                    const std::function<double(double, double)>& ground = nullptr,
-                                    const RoadGraph* freewayROW = nullptr,
-                                    bool wantFlatParts = false,
-                                    bool wantParts = true);
-// `wantParts` false: grow the plan and the lots but no building GEOMETRY at
-// all (`parts` stays empty). The loader's plan-only levels want outlines and
-// were paying for every facade of an 8 km metro (piedmont_roads: 25+ min,
-// 5 GB) to throw the meshes away.
-
 // The HLOD mass box for one lot (metropolis-scale-plan P1.2): the building's
 // oriented box, ground to roof, four walls + a roof cap. This is what the DISTANT
 // city is actually made of — past `detailDistance` the full facades are dropped

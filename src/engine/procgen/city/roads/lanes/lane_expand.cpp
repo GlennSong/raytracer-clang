@@ -1,5 +1,6 @@
 #include "engine/procgen/city/roads/lanes/lane_expand.h"
 #include "engine/procgen/city/roads/lanes/polyline_ops.h"
+#include "curve.h"
 
 #include <algorithm>
 #include <array>
@@ -126,8 +127,7 @@ void rampLanes(const RoadLabGraph& g, int ei, LaneSet& out) {
 std::vector<Vec2> hermite(const Vec2& p0, const Vec2& t0, const Vec2& p1, const Vec2& t1, int n = 80) {
     std::vector<Vec2> out; out.reserve(n); double L = distance(p0, p1);
     for (int i = 0; i < n; ++i) {
-        double u = static_cast<double>(i) / (n - 1), u2 = u * u, u3 = u2 * u;
-        out.push_back(p0 * (2*u3 - 3*u2 + 1) + t0 * ((u3 - 2*u2 + u) * L) + p1 * (-2*u3 + 3*u2) + t1 * ((u3 - u2) * L));
+        out.push_back(engine::hermite(p0, t0 * L, p1, t1 * L, static_cast<double>(i) / (n - 1)));
     }
     return out;
 }

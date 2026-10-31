@@ -56,8 +56,7 @@ struct BuildingRecipe {
         Circle,      // a chord-tessellated drum (roomy curtain-wall lots)
         Park,        // no building: a green with trees
         RowStrip,    // the lot packed with side-by-side ROWHOUSE units
-        BoxMass,     // force the shrink-fit BOX scope + growBuilding, so the
-                     // non-box BuildingShapes (pagoda, cylinder) can dispatch
+        Pagoda,      // the square inscribed in the lot (pagodaPlan), tiered (ADR-0270)
         Plaza,       // no storeys: a raised paver podium with stairs, fencing,
                      // fountain and planting ("a building without the building")
         PodiumTower, // a full-lot PODIUM of a few floors carrying a slender
@@ -193,10 +192,6 @@ const char* architectRecipeName(int index);   // nullptr out of range
 bool architectRecipeByName(const std::string& name, uint32_t seed, Real coreness, Real shortSide, Real area,
                            BuildingRecipe& out);
 
-// Whether a recipe's upper floors are offices (BuildingParams::officeUse): a workplace, civic or commercial building
-// that is not a home, and not one with rooms of its own kind -- a hotel, a hospital, a school, a library, a museum, a
-// university, a church.
-bool officeUseFor(const std::string& recipe, const std::string& placeType, bool residential);
 // The civic building's own rooms (BuildingParams::civicRooms): university 1, library 2, museum 4, school 5,
 // hospital 6, church 7, cinema 8, fire station 9, police 10, courthouse 11, capitol 12, market hall 14, factory 15,
 // warehouse (brick warehouse, metal shed) 16, hotel 17 (its lobby), else 0.
@@ -231,11 +226,18 @@ BuildingRecipe architectCampus(int role, uint32_t seed);
 // two- or three-storey building of shops fronting the paseo (stucco or stone, awnings, the mall's trade mix), role 2
 // the paseo -- Park massing, sculpted by the lot pass (sculptPaseo).
 BuildingRecipe architectPaseo(int role, uint32_t seed);
-// THE INDOOR MALL: a big-box site's box (bigBox 5) -- a concourse of shop units, an anchor, a food court (mallLayout).
+// THE MALL (bigBox 6; ADR-0271), its variants: the BOX mall (architectMall: one tall level, an I of shops between an
+// anchor and a food court), the WINGS mall (architectMallWings; ~/.claude/plans/malls-v2-and-managed-ground.md: wings
+// off a skylit court, two 5.5 m storeys round atria, anchors and entrances at the wing ends) and the COMPLEX
+// (mallComplex). The lot pass shapes the first two's plans (mallOutline: mallArms, mallCourt).
 BuildingRecipe architectMall(uint32_t seed);
-// THE AMERICAN MALL (bigBox 6; ~/.claude/plans/malls-v2-and-managed-ground.md): wings off a skylit court, two 5.5 m
-// storeys round atria, anchors and entrances at the wing ends. The lot pass shapes its plan (mallArms, mallCourt).
 BuildingRecipe architectMallWings(uint32_t seed);
+// THE MALL AS CELLS (cells.h mallCells, ADR-0180): `mall` (a wings mall's params) as the spine of `box`, two anchors
+// of the big-box chains, a parking garage behind its court and a cafe pavilion, all drawn from `seed`. The lot pass
+// and Lua's building.cells{mall = true} both build it here.
+struct Complex;
+Complex mallComplex(const Poly2& box, const Vec2& faceDir, const BuildingParams& mall, bool withGarage, Real anchorDepth,
+                    uint32_t seed);
 // A BUS DEPOT's yard (Massing::Park, place type "depot"): sculpted by the lot pass (sculptBusDepot).
 BuildingRecipe architectBusDepot();
 // The chain's look on `p` (walls, cladding, the band's colour) and p.bigBox = chain.

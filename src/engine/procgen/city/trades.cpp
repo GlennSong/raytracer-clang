@@ -1,6 +1,7 @@
 #include "trades.h"
 
 #include <algorithm>
+#include <cstring>
 
 namespace engine {
 
@@ -79,6 +80,11 @@ const TradeInfo& tradeAt(int index) { return kTrades[index < 0 ? 0 : index >= kC
 
 const TradeInfo* tradeById(uint8_t id) {
     for (const TradeInfo& t : kTrades) if (t.id == id) return &t;
+    return nullptr;
+}
+
+const TradeInfo* tradeByName(const char* name) {
+    for (const TradeInfo& t : kTrades) if (std::strcmp(t.name, name) == 0) return &t;
     return nullptr;
 }
 

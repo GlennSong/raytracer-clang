@@ -33,7 +33,15 @@ public:
     // the pieces for a posed body's blocks (poseBlocks, or a ragdoll's parts with their sizes) at this scale
     std::array<BodyPiece, BlockBody::kParts> pieces(AssetManager& assets, const std::array<PartTransform, BlockBody::kParts>& blocks,
                                                     Real scale);
-    MeshHandle limb(AssetManager& assets, int limb, Real fold);
+    // `girth` 1 is the body as built; the first-person view draws its arms at kFirstPersonGirth
+    MeshHandle limb(AssetManager& assets, int limb, Real fold, Real girth = 1);
+    // seen from 0.3 m the body's 12 x 16 cm arm fills the view's lower edge: the first person draws it as thick as
+    // the old block sleeve (7.5 cm), the same bones and bend
+    static constexpr Real kFirstPersonGirth = 0.6;
+    // Make every fold's tube now (an arm's and a leg's: ~120 small meshes), so a body that starts moving never
+    // builds one mid-stride -- the walking hitch the walker's lazily made poses had (TECH_DEBT).
+    // (girth below 1: the first-person view's arms only)
+    void warm(AssetManager& assets, Real girth = 1);
 
 private:
     MeshHandle box_;

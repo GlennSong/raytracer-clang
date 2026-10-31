@@ -19,6 +19,7 @@ public:
     void field(const FieldMeta& meta, bool& value) override;
     void field(const FieldMeta& meta, std::string& value) override;
     void bitFlag(const FieldMeta& meta, uint32_t& flags, uint32_t mask) override;
+    void field(const FieldMeta& meta, int& value) override;
 
 private:
     nlohmann::json& out;
@@ -36,6 +37,7 @@ public:
     void field(const FieldMeta& meta, bool& value) override;
     void field(const FieldMeta& meta, std::string& value) override;
     void bitFlag(const FieldMeta& meta, uint32_t& flags, uint32_t mask) override;
+    void field(const FieldMeta& meta, int& value) override;
 
 private:
     const nlohmann::json& in;

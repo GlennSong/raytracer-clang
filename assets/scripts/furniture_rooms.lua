@@ -3,7 +3,9 @@
 -- (room_plan.cpp) name the kinds: office, bedroom, flat, living, kitchen, open_plan, meeting, kitchenette, closet,
 -- bath (restroom outside a home), desk_row, lounge, reception, gallery, ward, exam, nurses_station, waiting, nave,
 -- foyer, auditorium, market, cell, courtroom, council_chamber, engine_bay, shop_floor, warehouse, hotel_lobby,
--- copy_room, phone_booths, water_cooler. Shops are still furnished in code, by their trade.
+-- copy_room, phone_booths, water_cooler, sales_floor (and its departments'), cash_desk, fitting_rooms, stockroom,
+-- hotel_room, hotel_suite, linen_room. Shops
+-- are still furnished in code, by their trade.
 --
 -- A PICK is a piece name ("monitor") or what the piece is -- { family = "...", tags = { ... } }: every piece in
 -- furniture_library.lua of that family carrying ALL those tags and fitting the slot, the largest that fits.
@@ -380,6 +382,119 @@ furniture_rooms = {
         { pick = "bar_stool", x = 1.69, fit = { 0.42, 0.42 } },
       } },
     { wall = { 0.9, 0.9 }, sides = { 3, 1, 0 }, pick = { family = "decor", tags = { "plant" } } },
+  },
+
+  -- A DEPARTMENT STORE (floor_programs.lua department_store): a department a floor. A sales floor runs its
+  -- department's program ("sales_floor:" .. the trade's name, trades.h) where there is one, else this one: shelves
+  -- round its walls, runs of gondolas with cross aisles. Side 0 is the glass (a window lot) or any side (the interior).
+  sales_floor = {
+    { grid = { 2.4, 1.0 }, from = 1.4, to = 1.4, aisle = { 0.0, 1.8 }, run = { 4, 2.0 }, pick = "gondola" },
+  },
+  -- (an open sales floor's sides are lot lines, not walls: its fittings stand free, back to back where they have a
+  -- back, never a wall piece showing its back to the aisle)
+  ["sales_floor:boutique"] = {
+    -- fashion: rails in short runs with room to browse between
+    { grid = { 1.6, 0.6 }, from = 1.4, to = 1.4, aisle = { 0.0, 1.5 }, run = { 3, 1.8 }, pick = "clothes_rack" },
+    { wall = { 0.9, 0.9 }, sides = { 0, 1, 3 }, pick = { family = "decor", tags = { "plant" } } },
+  },
+  ["sales_floor:electronics"] = {
+    -- a row of TV walls back to back, display tables of laptops and phones in rows beyond
+    { grid = { 1.6, 0.84 }, from = 1.4, aisle = { 0.0, 1.8 }, rows = 1, run = { 4, 1.6 },
+      set = {
+        { pick = "tv_unit", x = 0.8, z = 0.42, faces = "wall", fit = { 1.6, 0.42 } },
+        { pick = "tv_unit", x = 0.8, z = 0.42, fit = { 1.6, 0.42 } },
+      } },
+    { grid = { 1.4, 0.85 }, from = 4.2, to = 1.4, aisle = { 1.4, 1.6 }, pick = "dining_table" },
+  },
+  ["sales_floor:bookshop"] = {
+    -- books: rows of bookcases back to back, a cross aisle every four; a table to browse at
+    { wall = { 1.4, 1.85 }, sides = { 0, 1, 3 }, pick = "reading_table" },
+    { grid = { 1.2, 0.72 }, from = 1.4, to = 1.4, aisle = { 0.0, 1.5 }, run = { 4, 1.6 },
+      set = {
+        { pick = { family = "storage", tags = { "books" } }, x = 0.6, z = 0.36, faces = "wall", fit = { 1.2, 0.36 } },
+        { pick = { family = "storage", tags = { "books" } }, x = 0.6, z = 0.36, fit = { 1.2, 0.36 } },
+      } },
+  },
+  ["sales_floor:bakery"] = {
+    -- THE FOOD HALL: a row of counters of cakes and deli down the floor, tables round them
+    { grid = { 1.6, 0.7 }, from = 1.6, aisle = { 0.0, 2.4 }, rows = 1, run = { 3, 2.0 }, pick = "display_case" },
+    { grid = { 1.5, 1.7 }, from = 0.6, aisle = { 0.6, 0.6 },
+      set = {
+        { pick = "bistro_chair", x = 0.75 },
+        { pick = "bistro_table", x = 0.75, z = 0.5 },
+        { pick = "bistro_chair", x = 0.75, z = 1.7, faces = "wall" },
+      } },
+  },
+  cash_desk = {
+    -- the floor's tills: a counter (two where there is room), someone behind each, a display case beside them
+    { wall = { 1.8, 1.6 }, sides = { 2, 1, 3, 0 }, set = { { pick = "shop_counter", x = 0.9, z = 0.85 } } },
+    { wall = { 1.8, 1.6 }, sides = { 2, 1, 3, 0 }, min_w = 4.5, set = { { pick = "shop_counter", x = 0.9, z = 0.85 } } },
+    { wall = { 1.6, 0.7 }, sides = { 1, 3, 0 }, clear = 1.0, pick = "display_case" },
+  },
+  fitting_rooms = {
+    -- a row of fitting rooms down the long wall, a second row across where the room is deep enough; a bench to wait
+    -- on, a plant
+    { wall = { 1.0, 1.3 }, sides = "long", clear = 1.0, count = { per = 1.05, min = 1, max = 8 }, pick = "fitting_room" },
+    { wall = { 1.0, 1.3 }, sides = "opposite", clear = 1.0, count = { per = 1.05, min = 1, max = 8 }, pick = "fitting_room" },
+    { wall = { 1.5, 0.5 }, sides = { 1, 3 }, pick = "bench" },
+    { wall = { 0.9, 0.9 }, sides = { 3, 1 }, pick = { family = "decor", tags = { "plant" } } },
+  },
+  stockroom = {
+    -- the store's stock: shelving round the walls, cartons on pallets, a bench to unpack at
+    { wall = { 1.2, 0.5 }, sides = "long", tall = true, count = { per = 1.25, min = 1, max = 8 }, pick = "shelving" },
+    { wall = { 1.2, 0.5 }, sides = "opposite", tall = true, count = { per = 1.25, min = 1, max = 8 }, pick = "shelving" },
+    { wall = { 1.2, 1.0 }, sides = { 1, 3 }, clear = 1.0, count = { per = 3.0, min = 1, max = 3 }, pick = "pallet_stack" },
+    { wall = { 2.0, 0.8 }, sides = { 3, 1 }, clear = 1.0, pick = "workbench" },
+  },
+
+  -- A HOTEL (floor_programs.lua hotel): side 0 is the glass, side 2 the wall the bathroom and the door are on
+  hotel_room = {
+    -- the bed, head to the party wall between its nightstands, the TV across from it; a desk and its chair at the
+    -- window, an armchair, a wardrobe by the door
+    { wall = { 2.6, 2.12 }, sides = { 1, 3, 2 },
+      set = {
+        { pick = { family = "storage", tags = { "bedroom" } }, x = 0.25, fit = { 0.5, 0.5 } },
+        { pick = { family = "sleeping", tags = { "bedroom" } }, x = 1.3 },
+        { pick = { family = "storage", tags = { "bedroom" } }, x = 2.35, fit = { 0.5, 0.5 } },
+      } },
+    { wall = { 1.6, 0.42 }, sides = "opposite", clear = 0.8, pick = "tv_unit" },
+    { wall = { 1.6, 1.4 }, sides = { 0, 1, 3 },
+      set = {
+        { pick = "desk", x = 0.8 },
+        { pick = office_kind({ "office" }), x = 0.8, z = 1.35, faces = "wall", fit = { 0.7, 0.7 } },
+      } },
+    { wall = { 0.84, 0.84 }, sides = { 0, 1, 3 }, pick = "lounge_chair" },
+    { wall = { 1.2, 0.6 }, sides = { 2, 1, 3 }, tall = true, clear = 0.7, pick = { family = "storage", tags = { "bedroom" } } },
+  },
+  hotel_suite = {
+    -- the bed and its nightstands, the sitting room's sofa, coffee table and TV, a table for two at the window
+    { wall = { 2.6, 2.12 }, sides = { 1, 3, 2 },
+      set = {
+        { pick = { family = "storage", tags = { "bedroom" } }, x = 0.25, fit = { 0.5, 0.5 } },
+        { pick = { family = "sleeping", tags = { "bedroom" } }, x = 1.3 },
+        { pick = { family = "storage", tags = { "bedroom" } }, x = 2.35, fit = { 0.5, 0.5 } },
+      } },
+    { wall = { 2.16, 1.75 }, sides = "opposite",
+      set = {
+        { pick = { family = "seating", tags = { "living" } }, x = 1.08, fit = { 2.16, 1.0 } },
+        { pick = { family = "surface", tags = { "living" } }, x = 1.08, z = 1.15, fit = { 1.2, 0.7 } },
+      } },
+    { wall = { 1.6, 0.42 }, sides = { 2, 1, 3 }, clear = 0.8, pick = "tv_unit" },
+    { wall = { 1.4, 1.85 }, sides = { 0 },
+      set = {
+        { pick = { family = "surface", tags = { "dining" } }, x = 0.7, z = 0.5, fit = { 1.4, 0.9 } },
+        { pick = { family = "seating", tags = { "dining" } }, x = 0.7, z = 0.0, fit = { 0.6, 0.6 } },
+        { pick = { family = "seating", tags = { "dining" } }, x = 0.7, z = 1.85, faces = "wall", fit = { 0.6, 0.6 } },
+      } },
+    { wall = { 0.84, 0.84 }, sides = { 0, 1, 3 }, pick = "lounge_chair" },
+    { wall = { 1.2, 0.6 }, sides = { 2, 1, 3 }, tall = true, clear = 0.7, pick = { family = "storage", tags = { "bedroom" } } },
+    { wall = { 0.9, 0.9 }, sides = { 0, 1, 3 }, pick = { family = "decor", tags = { "plant" } } },
+  },
+  linen_room = {
+    -- housekeeping's: shelves of linen round the walls, a table to fold at
+    { wall = { 1.2, 0.5 }, sides = "long", tall = true, count = { per = 1.25, min = 1, max = 6 }, pick = "shelving" },
+    { wall = { 1.2, 0.5 }, sides = "opposite", tall = true, count = { per = 1.25, min = 1, max = 6 }, pick = "shelving" },
+    { wall = { 2.0, 0.8 }, sides = { 1, 3, 0 }, clear = 0.9, pick = "workbench" },
   },
 
   closet = {

@@ -48,7 +48,7 @@
       ],
       "road": {
         "builder": "lanes",
-        "graph": "assets/lanelab/converted/agent_lab_lanelab.json",
+        "graph": "assets/lanelab/agent_lab_lanelab.json",
         "sidewalks": {
           "arterial": 1.8,
           "collector": 1.8,

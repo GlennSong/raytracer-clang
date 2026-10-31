@@ -1,6 +1,7 @@
 #include "../src/apps/citysim/city_sim.h"
 #include "../src/apps/citysim/rail_sim.h"
 #include "test_framework.h"
+#include "city_test_util.h"
 
 #include <algorithm>
 #include <cmath>
@@ -18,13 +19,13 @@ namespace {
 NavGraph twoTowns() {
     RoadGraph g;
     for (int k = -1; k <= 1; k += 2) {
-        GridRoadParams p;
+        citytest::GridCityParams p;
         p.center = Vec2(0, 650.0 * k);
         p.extent = 400;
         p.cellSize = 120;
         p.dropout = 0;
         p.seed = 4 + static_cast<uint32_t>(k + 1);
-        const RoadGraph t = gridRoads(p);
+        const RoadGraph t = citytest::gridCity(p);
         std::vector<int> map;
         for (const RoadNode& n : t.nodes) map.push_back(g.addNode(n.pos));
         for (const RoadEdge& e : t.edges) g.addEdge(map[static_cast<std::size_t>(e.a)], map[static_cast<std::size_t>(e.b)], e.width, e.klass);

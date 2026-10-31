@@ -1,5 +1,8 @@
 #include <cstdlib>
 #include "architect.h"
+#include "../../../proc_rng.h"
+#include "building_uses.h"
+#include "cells.h"   // mallComplex: mallCells
 
 #include <algorithm>
 #include <cmath>
@@ -10,55 +13,44 @@ namespace {
 constexpr Real kTau = 6.283185307179586;
 
 // The same cheap deterministic hash rng the lot pass uses (ADR-0002).
-struct Hash {
-    uint32_t s;
-    explicit Hash(uint32_t seed) : s(seed ? seed : 0x9e3779b9u) {}
-    uint32_t next() {
-        s ^= s << 13; s ^= s >> 17; s ^= s << 5;
-        return s;
-    }
-    Real unit() { return (next() & 0xffffff) / static_cast<Real>(0x1000000); }
-    Real range(Real a, Real b) { return a + (b - a) * unit(); }
-    int irange(int a, int b) { return a + static_cast<int>(unit() * (b - a + 1)); }
-};
 
 // Style helper: cladding + the window element + quoins, one coherent bundle.
-void dress(BuildingParams& p, FacadeStyle style, Hash& rng) {
-    p.wallColor = facadeColor(style, rng.next());
+void dress(BuildingParams& p, FacadeStyle style, ProcRng& rng) {
+    p.wallColor = facadeColor(style, rng.bits());
     switch (style) {
         case FacadeStyle::Brick:
             p.wallPart = PartId::Brick;
             // Several brick looks, not one (device: "same-y"): arched heads
             // with hood moulds, or plain flat heads with a band or bare.
-            if (rng.unit() < 0.55) {
+            if (rng.next() < 0.55) {
                 p.window.head = OpeningStyle::Head::Segmental;
                 p.window.hood = OpeningStyle::Hood::Arch;
             } else {
                 p.window.head = OpeningStyle::Head::Flat;
-                p.window.hood = rng.unit() < 0.6 ? OpeningStyle::Hood::Band
+                p.window.hood = rng.next() < 0.6 ? OpeningStyle::Hood::Band
                                                  : OpeningStyle::Hood::None;
             }
-            p.window.lightsX = rng.irange(1, 2);
-            p.window.lightsY = rng.irange(1, 2);
-            p.quoins = rng.unit() < 0.5;
+            p.window.lightsX = rng.between(1, 2);
+            p.window.lightsY = rng.between(1, 2);
+            p.quoins = rng.next() < 0.5;
             break;
         case FacadeStyle::Stucco:
             p.wallPart = PartId::Stucco;
-            p.window.head = (rng.unit() < 0.45) ? OpeningStyle::Head::Round
+            p.window.head = (rng.next() < 0.45) ? OpeningStyle::Head::Round
                                                 : OpeningStyle::Head::Flat;
             p.window.hood = (p.window.head == OpeningStyle::Head::Round)
                                 ? OpeningStyle::Hood::Arch : OpeningStyle::Hood::Band;
-            p.window.lightsX = rng.irange(1, 2);
+            p.window.lightsX = rng.between(1, 2);
             p.window.lightsY = 1;
-            p.quoins = rng.unit() < 0.5;
+            p.quoins = rng.next() < 0.5;
             break;
         case FacadeStyle::Concrete:
             p.wallPart = PartId::Concrete;
             p.window.head = OpeningStyle::Head::Flat;
-            p.window.hood = rng.unit() < 0.7 ? OpeningStyle::Hood::Band
+            p.window.hood = rng.next() < 0.7 ? OpeningStyle::Hood::Band
                                              : OpeningStyle::Hood::None;
             p.window.lightsX = 1;
-            p.window.lightsY = rng.irange(1, 2);
+            p.window.lightsY = rng.between(1, 2);
             break;
         case FacadeStyle::Metal:
             p.wallPart = PartId::Metal;
@@ -68,15 +60,15 @@ void dress(BuildingParams& p, FacadeStyle style, Hash& rng) {
             // simple painted head casing.
             p.wallPart = PartId::Siding;
             p.window.head = OpeningStyle::Head::Flat;
-            p.window.hood = rng.unit() < 0.5 ? OpeningStyle::Hood::Band
+            p.window.hood = rng.next() < 0.5 ? OpeningStyle::Hood::Band
                                              : OpeningStyle::Hood::None;
-            p.window.lightsX = rng.irange(1, 2);
+            p.window.lightsX = rng.between(1, 2);
             p.window.lightsY = 2;
             break;
         case FacadeStyle::DarkBrick:
             // Industrial masonry: big sash grids, bare heads.
             p.wallPart = PartId::Brick;
-            p.window.head = rng.unit() < 0.4 ? OpeningStyle::Head::Segmental
+            p.window.head = rng.next() < 0.4 ? OpeningStyle::Head::Segmental
                                              : OpeningStyle::Head::Flat;
             p.window.hood = OpeningStyle::Hood::None;
             p.window.lightsX = 2;
@@ -89,8 +81,8 @@ void dress(BuildingParams& p, FacadeStyle style, Hash& rng) {
             p.window.head = OpeningStyle::Head::Flat;
             p.window.hood = OpeningStyle::Hood::Band;
             p.window.lightsX = 1;
-            p.window.lightsY = rng.irange(1, 2);
-            p.quoins = rng.unit() < 0.4;
+            p.window.lightsY = rng.between(1, 2);
+            p.quoins = rng.next() < 0.4;
             break;
         case FacadeStyle::GlassCurtain:
             p.curtainWall = true;
@@ -103,13 +95,13 @@ void dress(BuildingParams& p, FacadeStyle style, Hash& rng) {
     p.awning = !plain;
     // Trim varies per building (warm stone / cool limestone / painted dark),
     // so identical recipes still don't read as the SAME building.
-    const Real tj = rng.range(-0.05, 0.04);
+    const Real tj = rng.in(-0.05, 0.04);
     p.trimColor = plain ? Vec3(0.50, 0.52, 0.55)
                 : (style == FacadeStyle::Brick ? Vec3(0.84, 0.82, 0.76)
                                                : Vec3(0.78, 0.77, 0.73));
     if (!plain) {
         p.trimColor = p.trimColor + Vec3(tj, tj, tj);
-        if (rng.unit() < 0.15) p.trimColor = Vec3(0.34, 0.33, 0.32);  // dark trim
+        if (rng.next() < 0.15) p.trimColor = Vec3(0.34, 0.33, 0.32);  // dark trim
     }
 }
 
@@ -125,23 +117,23 @@ void storeyHeightsByUse(BuildingRecipe& out) {
     BuildingParams& p = out.params;
     const bool fhDefault = std::fabs(p.floorHeight - human::FLOOR_HEIGHT) < 1e-9;
     const bool ghDefault = std::fabs(p.groundHeight - human::GROUND_HEIGHT) < 1e-9;
-    Hash h(p.seed ^ 0x51ae7b3du);
+    ProcRng h(p.seed ^ 0x51ae7b3du);
     const std::string& n = out.name;
     const bool office = out.placeType == "office";
     const bool civic = out.placeType == "civic";
     const bool homeTower = out.placeType == "home" && p.floors >= 12;
     const bool tower = p.floors >= 15;
     if (fhDefault) {
-        if (n == "pencil_tower") p.floorHeight = h.range(4.4, 4.8);
-        else if (office) p.floorHeight = h.range(3.9, 4.1);
-        else if (civic) p.floorHeight = h.range(3.8, 4.1);
-        else if (homeTower) p.floorHeight = h.range(3.1, 3.3);
-        else if (n == "hotel" || n == "commercial_block") p.floorHeight = h.range(3.4, 3.7);
+        if (n == "pencil_tower") p.floorHeight = h.in(4.4, 4.8);
+        else if (office) p.floorHeight = h.in(3.9, 4.1);
+        else if (civic) p.floorHeight = h.in(3.8, 4.1);
+        else if (homeTower) p.floorHeight = h.in(3.1, 3.3);
+        else if (n == "hotel" || n == "commercial_block") p.floorHeight = h.in(3.4, 3.7);
     }
     if (ghDefault) {
-        if (office && tower) p.groundHeight = h.range(6.0, 8.0);
-        else if (office || civic) p.groundHeight = h.range(5.0, 5.6);
-        else if (homeTower || n == "hotel") p.groundHeight = h.range(5.5, 6.5);
+        if (office && tower) p.groundHeight = h.in(6.0, 8.0);
+        else if (office || civic) p.groundHeight = h.in(5.0, 5.6);
+        else if (homeTower || n == "hotel") p.groundHeight = h.in(5.5, 6.5);
     }
 }
 
@@ -154,15 +146,6 @@ void capFloors(BuildingParams& p, Real shortSide, Real slender = 1.8) {
     p.floors = std::min(p.floors, maxFloors);
 }
 }  // namespace (reopened below)
-
-bool officeUseFor(const std::string& recipe, const std::string& placeType, bool residential) {
-    static const bool off = std::getenv("RT_NO_OFFICE_FLOORS") != nullptr;   // A/B: workplaces as before
-    if (off || residential || placeType == "home" || placeType == "depot") return false;
-    static const char* kOwnRooms[] = {"hotel", "hospital", "school", "library", "museum", "university", "church",
-                                      "teaching_hall", "campus_library", "residence_hall"};
-    for (const char* n : kOwnRooms) if (recipe == n) return false;
-    return placeType == "office" || placeType == "civic" || placeType == "shop" || placeType == "park";
-}
 
 uint8_t civicRoomsFor(const std::string& recipe) {
     static const bool off = std::getenv("RT_NO_CIVIC_ROOMS") != nullptr;   // A/B: the ring of studios as before
@@ -193,7 +176,7 @@ void capFloors(BuildingRecipe& out, Real shortSide, Real slender) {
     static const char* kFlatsOverShops[] = {"mixed_use", "oldtown_house", "oldtown_grand", "brick_shop", "corner_shop"};
     out.params.residential = out.placeType == "home";
     for (const char* n : kFlatsOverShops) if (out.name == n) out.params.residential = true;
-    out.params.officeUse = officeUseFor(out.name, out.placeType, out.params.residential);
+    applyFloorUse(out.params, out.name, out.placeType);   // officeUse, house (building_uses.lua; interior only)
     out.params.civicRooms = civicRoomsFor(out.name);
     storeyHeightsByUse(out);
     capFloors(out.params, shortSide, slender);
@@ -204,12 +187,12 @@ void capFloors(BuildingRecipe& out, Real shortSide, Real slender) {
 // OWN dice. `vertChance` of the verticals (and a deeper reveal with them); the group size from {size, weight}.
 void masonryDepth(BuildingParams& p, Real vertChance, std::initializer_list<std::pair<uint8_t, Real>> groups) {
     if (p.curtainWall) return;
-    Hash h(p.seed ^ 0x2b7e1516u);
-    p.verticals = h.unit() < vertChance;
+    ProcRng h(p.seed ^ 0x2b7e1516u);
+    p.verticals = h.next() < vertChance;
     if (p.verticals) p.windowInset = std::max(p.windowInset, Real(0.22));
     Real total = 0;
     for (const auto& [g, w] : groups) total += w;
-    Real r = h.unit() * total;
+    Real r = h.next() * total;
     for (const auto& [g, w] : groups) {
         if (r < w) { p.windowGroup = g; return; }
         r -= w;
@@ -219,10 +202,10 @@ void masonryDepth(BuildingParams& p, Real vertChance, std::initializer_list<std:
 // THE TOP a tower stands under (buildings M2): a weighted menu {top, weight}, rolled on the building's OWN dice
 // (its seed), so no other pick moves. 1 = penthouse; emitTowerTop has the rest.
 void towerTop(BuildingParams& p, std::initializer_list<std::pair<uint8_t, Real>> menu) {
-    Hash h(p.seed ^ 0x7c3e9a15u);
+    ProcRng h(p.seed ^ 0x7c3e9a15u);
     Real total = 0;
     for (const auto& [t, w] : menu) total += w;
-    Real r = h.unit() * total;
+    Real r = h.next() * total;
     for (const auto& [t, w] : menu) {
         if (r < w) { p.top = t; return; }
         r -= w;
@@ -238,7 +221,7 @@ void towerTop(BuildingParams& p, std::initializer_list<std::pair<uint8_t, Real>>
 // weighted lists over these functions, so a new archetype (school, hospital,
 // fire station) is one recipe + a table entry, and its place type is whatever
 // the schedule sim understands.
-void glassStyle(BuildingParams& p, Hash& rng, bool modern);   // the NYC-variety curtain styles (below)
+void glassStyle(BuildingParams& p, ProcRng& rng, bool modern);   // the NYC-variety curtain styles (below)
 
 struct RecipeCtx {
     Real shortSide = 0, area = 0, coreness = 0;
@@ -251,25 +234,25 @@ struct RecipeCtx {
 // NOT need a roomy lot (downtown blocks are small pie slices where the
 // arterials converge; real towers stand on small plates) — the coreness-scaled
 // slender cap is what keeps them believable.
-void recipeGlassTower(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
+void recipeGlassTower(BuildingRecipe& out, ProcRng& rng, RecipeCtx& cx) {
     BuildingParams& p = out.params;
     // Density round ("taller than 40 stories"): dead-centre coreness lifts
     // the glass cluster to 55-62 floors; the rim keeps its 10-16.
     const int lift = static_cast<int>(cx.coreness * 46);
-    p.floors = rng.irange(cx.roomy ? 10 : 6, cx.roomy ? 16 : 9) + lift;
+    p.floors = rng.between(cx.roomy ? 10 : 6, cx.roomy ? 16 : 9) + lift;
     p.groundRetail = true;
     dress(p, FacadeStyle::GlassCurtain, rng);
-    if (p.floors > 8) { p.setbackFloors = rng.irange(4, 6);
-                        p.setbackEvery = rng.range(1.2, 1.8); }
-    if (p.floors > 16) p.setbackFloors = rng.irange(5, 7);
+    if (p.floors > 8) { p.setbackFloors = rng.between(4, 6);
+                        p.setbackEvery = rng.in(1.2, 1.8); }
+    if (p.floors > 16) p.setbackFloors = rng.between(5, 7);
     cx.slender = 3.0 + cx.coreness * 4.5;
     // Roomy square-ish lots sometimes go ROUND (a drum tower); otherwise, near
     // downtown, half of them stand back from the avenue in a PLAZA (the 1961
     // New York model — Seagram); the lot pass needs a deep enough site and
     // falls back to the full plan when it has not got one.
-    if (cx.roomy && rng.unit() < 0.35)
+    if (cx.roomy && rng.next() < 0.35)
         out.massing = BuildingRecipe::Massing::Circle;
-    else if (cx.roomy && cx.coreness > 0.4 && rng.unit() < 0.5)
+    else if (cx.roomy && cx.coreness > 0.4 && rng.next() < 0.5)
         out.massing = BuildingRecipe::Massing::TowerInPlaza;
     out.placeType = "office";
     if (p.curtainWall) glassStyle(p, rng, true);   // every glass tower its own glass (NYC variety M2)
@@ -278,14 +261,14 @@ void recipeGlassTower(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
 }
 
 // Concrete office slab: the downtown workhorse, modest coreness lift.
-void recipeOfficeSlab(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
+void recipeOfficeSlab(BuildingRecipe& out, ProcRng& rng, RecipeCtx& cx) {
     BuildingParams& p = out.params;
-    p.floors = rng.irange(6, 12) +
+    p.floors = rng.between(6, 12) +
                static_cast<int>(cx.coreness * (cx.roomy ? 8 : 3));
     p.groundRetail = true;
     dress(p, FacadeStyle::Concrete, rng);
-    if (p.floors > 8) { p.setbackFloors = rng.irange(4, 6);
-                        p.setbackEvery = rng.range(1.1, 1.6); }
+    if (p.floors > 8) { p.setbackFloors = rng.between(4, 6);
+                        p.setbackEvery = rng.in(1.1, 1.6); }
     cx.slender = 2.4 + cx.coreness * 0.8;
     out.placeType = "office";
     towerTop(p, {{1, 70}, {2, 30}});   // buildings M2
@@ -294,21 +277,21 @@ void recipeOfficeSlab(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
 }
 
 // Downtown brick commercial block with setback tiers and ground retail.
-void recipeCommercialBlock(BuildingRecipe& out, Hash& rng, RecipeCtx&) {
+void recipeCommercialBlock(BuildingRecipe& out, ProcRng& rng, RecipeCtx&) {
     BuildingParams& p = out.params;
-    p.floors = rng.irange(5, 9);
+    p.floors = rng.between(5, 9);
     p.groundRetail = true;
     dress(p, FacadeStyle::Brick, rng);
-    if (p.floors > 6) { p.setbackFloors = rng.irange(3, 4);
-                        p.setbackEvery = rng.range(1.1, 1.5); }
+    if (p.floors > 6) { p.setbackFloors = rng.between(3, 4);
+                        p.setbackEvery = rng.in(1.1, 1.5); }
     out.placeType = "shop";
     out.name = "commercial_block";
 }
 
 // GOVERNMENT / civic hall: low, pilastered, formal — never retail.
-void recipeCivicHall(BuildingRecipe& out, Hash& rng, RecipeCtx&) {
+void recipeCivicHall(BuildingRecipe& out, ProcRng& rng, RecipeCtx&) {
     BuildingParams& p = out.params;
-    p.floors = rng.irange(3, 5);
+    p.floors = rng.between(3, 5);
     p.groundRetail = false;
     p.pilasters = true;
     dress(p, FacadeStyle::Concrete, rng);
@@ -317,34 +300,34 @@ void recipeCivicHall(BuildingRecipe& out, Hash& rng, RecipeCtx&) {
 }
 
 // Midtown civic variant: smaller, sometimes stucco.
-void recipeCivicMidtown(BuildingRecipe& out, Hash& rng, RecipeCtx&) {
+void recipeCivicMidtown(BuildingRecipe& out, ProcRng& rng, RecipeCtx&) {
     BuildingParams& p = out.params;
-    p.floors = rng.irange(2, 4);
+    p.floors = rng.between(2, 4);
     p.groundRetail = false;
     p.pilasters = true;
-    dress(p, rng.unit() < 0.5 ? FacadeStyle::Concrete : FacadeStyle::Stucco, rng);
+    dress(p, rng.next() < 0.5 ? FacadeStyle::Concrete : FacadeStyle::Stucco, rng);
     out.placeType = "civic";
     out.name = "civic_midtown";
 }
 
 // Main-street brick shop rows; low blocks sometimes carry a gable.
-void recipeBrickShop(BuildingRecipe& out, Hash& rng, RecipeCtx&) {
+void recipeBrickShop(BuildingRecipe& out, ProcRng& rng, RecipeCtx&) {
     BuildingParams& p = out.params;
-    p.floors = rng.irange(3, 6);
+    p.floors = rng.between(3, 6);
     p.groundRetail = true;
     dress(p, FacadeStyle::Brick, rng);
-    if (p.floors <= 3 && rng.unit() < 0.3) {
+    if (p.floors <= 3 && rng.next() < 0.3) {
         p.roofStyle = BuildingParams::RoofStyle::Gable;
-        p.roofPitch = rng.range(0.35, 0.5);
+        p.roofPitch = rng.in(0.35, 0.5);
     }
     out.placeType = "shop";
     out.name = "brick_shop";
 }
 
 // Midtown concrete office mid-rise.
-void recipeOfficeMidrise(BuildingRecipe& out, Hash& rng, RecipeCtx&) {
+void recipeOfficeMidrise(BuildingRecipe& out, ProcRng& rng, RecipeCtx&) {
     BuildingParams& p = out.params;
-    p.floors = rng.irange(4, 8);
+    p.floors = rng.between(4, 8);
     p.groundRetail = true;
     dress(p, FacadeStyle::Concrete, rng);
     out.placeType = "office";
@@ -353,48 +336,48 @@ void recipeOfficeMidrise(BuildingRecipe& out, Hash& rng, RecipeCtx&) {
 }
 
 // Stucco / painted walk-up homes over midtown streets.
-void recipeWalkupHomes(BuildingRecipe& out, Hash& rng, RecipeCtx&) {
+void recipeWalkupHomes(BuildingRecipe& out, ProcRng& rng, RecipeCtx&) {
     BuildingParams& p = out.params;
-    p.floors = rng.irange(3, 5);
+    p.floors = rng.between(3, 5);
     p.groundRetail = false;
-    dress(p, rng.unit() < 0.3 ? FacadeStyle::Painted : FacadeStyle::Stucco, rng);
+    dress(p, rng.next() < 0.3 ? FacadeStyle::Painted : FacadeStyle::Stucco, rng);
     out.placeType = "home";
     out.name = "walkup_homes";
 }
 
 // The EUROPEAN old-town house: dense, low, stucco/brick, round arches, quoins,
 // hip roofs — one coherent look, half the ground floors are shops.
-void recipeOldTownHouse(BuildingRecipe& out, Hash& rng, RecipeCtx&) {
+void recipeOldTownHouse(BuildingRecipe& out, ProcRng& rng, RecipeCtx&) {
     BuildingParams& p = out.params;
-    p.floors = rng.irange(2, 3);
-    p.groundRetail = (rng.unit() < 0.5);
-    dress(p, rng.unit() < 0.7 ? FacadeStyle::Stucco : FacadeStyle::Brick, rng);
+    p.floors = rng.between(2, 3);
+    p.groundRetail = (rng.next() < 0.5);
+    dress(p, rng.next() < 0.7 ? FacadeStyle::Stucco : FacadeStyle::Brick, rng);
     p.window.head = OpeningStyle::Head::Round;
     p.window.hood = OpeningStyle::Hood::Arch;
     p.quoins = true;
     p.roofStyle = BuildingParams::RoofStyle::Hip;
-    p.roofPitch = rng.range(0.5, 0.7);
+    p.roofPitch = rng.in(0.5, 0.7);
     out.placeType = p.groundRetail ? "shop" : "home";
     out.name = "oldtown_house";
 }
 
 // Wide solid metal shed with a tall ground floor — the industrial workplace.
-void recipeMetalShed(BuildingRecipe& out, Hash& rng, RecipeCtx&) {
+void recipeMetalShed(BuildingRecipe& out, ProcRng& rng, RecipeCtx&) {
     BuildingParams& p = out.params;
     p.floors = 1;
-    p.groundHeight = rng.range(6.0, 9.0);
+    p.groundHeight = rng.in(6.0, 9.0);
     p.solidFacade = true;
     p.groundRetail = false;
     dress(p, FacadeStyle::Metal, rng);
-    p.groundBays = rng.irange(1, 3);   // loading docks on the street face
+    p.groundBays = rng.between(1, 3);   // loading docks on the street face
     out.placeType = "office";   // a workplace agents commute to
     out.name = "metal_shed";
 }
 
 // Plain concrete office block up front of the yards.
-void recipeIndustrialOffice(BuildingRecipe& out, Hash& rng, RecipeCtx&) {
+void recipeIndustrialOffice(BuildingRecipe& out, ProcRng& rng, RecipeCtx&) {
     BuildingParams& p = out.params;
-    p.floors = rng.irange(2, 3);
+    p.floors = rng.between(2, 3);
     p.groundRetail = false;
     dress(p, FacadeStyle::Concrete, rng);
     out.placeType = "office";
@@ -403,31 +386,31 @@ void recipeIndustrialOffice(BuildingRecipe& out, Hash& rng, RecipeCtx&) {
 
 // The SUBURBAN house: a small centred rectangle so the lot keeps its yard,
 // painted/stucco/brick, gable or hip roof.
-void recipeYardHouse(BuildingRecipe& out, Hash& rng, RecipeCtx&) {
+void recipeYardHouse(BuildingRecipe& out, ProcRng& rng, RecipeCtx&) {
     BuildingParams& p = out.params;
-    p.floors = rng.irange(1, 2);
+    p.floors = rng.between(1, 2);
     p.groundRetail = false;
     p.baseCourse = true;
-    const Real r2 = rng.unit();
+    const Real r2 = rng.next();
     dress(p, r2 < 0.4 ? FacadeStyle::Painted
             : r2 < 0.75 ? FacadeStyle::Stucco : FacadeStyle::Brick, rng);
-    p.roofStyle = rng.unit() < 0.65 ? BuildingParams::RoofStyle::Gable
+    p.roofStyle = rng.next() < 0.65 ? BuildingParams::RoofStyle::Gable
                                     : BuildingParams::RoofStyle::Hip;
-    p.roofPitch = rng.range(0.45, 0.7);
+    p.roofPitch = rng.in(0.45, 0.7);
     out.massing = BuildingRecipe::Massing::RectYard;
     out.placeType = "home";
     out.name = "yard_house";
 }
 
 // Low walk-up apartments on the outskirts; the low ones sometimes gabled.
-void recipeApartments(BuildingRecipe& out, Hash& rng, RecipeCtx&) {
+void recipeApartments(BuildingRecipe& out, ProcRng& rng, RecipeCtx&) {
     BuildingParams& p = out.params;
-    p.floors = rng.irange(2, 4);
+    p.floors = rng.between(2, 4);
     p.groundRetail = false;
-    dress(p, rng.unit() < 0.55 ? FacadeStyle::Brick : FacadeStyle::Stucco, rng);
-    if (p.floors <= 3 && rng.unit() < 0.4) {
+    dress(p, rng.next() < 0.55 ? FacadeStyle::Brick : FacadeStyle::Stucco, rng);
+    if (p.floors <= 3 && rng.next() < 0.4) {
         p.roofStyle = BuildingParams::RoofStyle::Gable;
-        p.roofPitch = rng.range(0.4, 0.6);
+        p.roofPitch = rng.in(0.4, 0.6);
     }
     out.placeType = "home";
     masonryDepth(p, 0.1, {{1, 70}, {2, 30}});   // buildings M3
@@ -435,9 +418,9 @@ void recipeApartments(BuildingRecipe& out, Hash& rng, RecipeCtx&) {
 }
 
 // The residential corner shop.
-void recipeCornerShop(BuildingRecipe& out, Hash& rng, RecipeCtx&) {
+void recipeCornerShop(BuildingRecipe& out, ProcRng& rng, RecipeCtx&) {
     BuildingParams& p = out.params;
-    p.floors = rng.irange(1, 2);
+    p.floors = rng.between(1, 2);
     p.groundRetail = true;
     dress(p, FacadeStyle::Brick, rng);
     out.placeType = "shop";
@@ -445,7 +428,7 @@ void recipeCornerShop(BuildingRecipe& out, Hash& rng, RecipeCtx&) {
 }
 
 // A pocket park: no building, the lot becomes a green with trees.
-void recipePocketPark(BuildingRecipe& out, Hash&, RecipeCtx&) {
+void recipePocketPark(BuildingRecipe& out, ProcRng&, RecipeCtx&) {
     out.massing = BuildingRecipe::Massing::Park;
     out.placeType = "park";
     out.name = "pocket_park";
@@ -458,7 +441,7 @@ void recipePocketPark(BuildingRecipe& out, Hash&, RecipeCtx&) {
 // a fountain, planters and benches. placeType "civic" ON PURPOSE: agents
 // visit it, and the loader's pad-flatten pass (which skips park/green)
 // grades the terrain under it exactly like a building's pad.
-void recipePlaza(BuildingRecipe& out, Hash&, RecipeCtx&) {
+void recipePlaza(BuildingRecipe& out, ProcRng&, RecipeCtx&) {
     out.massing = BuildingRecipe::Massing::Plaza;
     out.placeType = "civic";
     out.name = "plaza";
@@ -466,13 +449,13 @@ void recipePlaza(BuildingRecipe& out, Hash&, RecipeCtx&) {
 
 // The HOTEL: masonry mid-rise, awninged entrance, tiers when tall — fabric,
 // but distinct from offices by proportion and ornament.
-void recipeHotel(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
+void recipeHotel(BuildingRecipe& out, ProcRng& rng, RecipeCtx& cx) {
     BuildingParams& p = out.params;
-    p.floors = rng.irange(5, 8);
+    p.floors = rng.between(5, 8);
     p.groundRetail = true;
-    dress(p, rng.unit() < 0.5 ? FacadeStyle::Stucco : FacadeStyle::Brick, rng);
-    if (p.floors > 6) { p.setbackFloors = rng.irange(3, 5);
-                        p.setbackEvery = rng.range(1.0, 1.4); }
+    dress(p, rng.next() < 0.5 ? FacadeStyle::Stucco : FacadeStyle::Brick, rng);
+    if (p.floors > 6) { p.setbackFloors = rng.between(3, 5);
+                        p.setbackEvery = rng.in(1.0, 1.4); }
     cx.slender = 2.2;
     out.placeType = "shop";
     towerTop(p, {{5, 30}, {1, 70}});   // buildings M2
@@ -488,29 +471,29 @@ void recipeHotel(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
 // the whole plan, one big setback above it, a step every 6-10 floors, and a
 // shaft of 28-42 % of the plan from the second step up — the Empire State and
 // Chrysler silhouette. A tower too short for the stack keeps uniform setbacks.
-void streetWallEnvelope(BuildingParams& p, Hash& rng, const RecipeCtx& cx) {
+void streetWallEnvelope(BuildingParams& p, ProcRng& rng, const RecipeCtx& cx) {
     if (p.floors < 10) {
-        p.setbackFloors = rng.irange(3, 5);
-        p.setbackEvery = rng.range(1.2, 1.8);
+        p.setbackFloors = rng.between(3, 5);
+        p.setbackEvery = rng.in(1.2, 1.8);
         return;
     }
     p.envelope = BuildingParams::Envelope::StreetWallSetback;
-    p.baseFloors = rng.irange(3, 6);
-    p.setback1 = cx.roomy ? rng.range(5.0, 9.0) : rng.range(3.0, 5.0);
-    p.stepFloors = rng.irange(6, 10);
-    p.stepDepth = rng.range(1.5, 3.0);
-    p.towerFrac = rng.range(0.28, 0.42);
-    p.towerFloor = p.baseFloors + p.stepFloors * rng.irange(1, 2);
+    p.baseFloors = rng.between(3, 6);
+    p.setback1 = cx.roomy ? rng.in(5.0, 9.0) : rng.in(3.0, 5.0);
+    p.stepFloors = rng.between(6, 10);
+    p.stepDepth = rng.in(1.5, 3.0);
+    p.towerFrac = rng.in(0.28, 0.42);
+    p.towerFloor = p.baseFloors + p.stepFloors * rng.between(1, 2);
     if (p.towerFloor >= p.floors - 3) p.towerFloor = 0;   // no room for a shaft: steps only
     p.setbackFloors = 0;
     p.setbackEvery = 0;
 }
 
-void recipeArtDecoTower(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
+void recipeArtDecoTower(BuildingRecipe& out, ProcRng& rng, RecipeCtx& cx) {
     BuildingParams& p = out.params;
-    p.floors = rng.irange(9, 14) + static_cast<int>(cx.coreness * 20);
+    p.floors = rng.between(9, 14) + static_cast<int>(cx.coreness * 20);
     p.groundRetail = true;
-    dress(p, rng.unit() < 0.5 ? FacadeStyle::DarkBrick : FacadeStyle::Sandstone,
+    dress(p, rng.next() < 0.5 ? FacadeStyle::DarkBrick : FacadeStyle::Sandstone,
           rng);
     p.spire = true;
     p.window.lightsY = 2;
@@ -522,11 +505,11 @@ void recipeArtDecoTower(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
 }
 
 // The STEPPED (wedding-cake) tower: light masonry, setbacks every few floors.
-void recipeSteppedTower(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
+void recipeSteppedTower(BuildingRecipe& out, ProcRng& rng, RecipeCtx& cx) {
     BuildingParams& p = out.params;
-    p.floors = rng.irange(10, 16) + static_cast<int>(cx.coreness * 14);
+    p.floors = rng.between(10, 16) + static_cast<int>(cx.coreness * 14);
     p.groundRetail = true;
-    dress(p, rng.unit() < 0.5 ? FacadeStyle::Sandstone : FacadeStyle::Brick, rng);
+    dress(p, rng.next() < 0.5 ? FacadeStyle::Sandstone : FacadeStyle::Brick, rng);
     cx.slender = 2.6 + cx.coreness * 1.2;
     streetWallEnvelope(p, rng, cx);
     out.placeType = "office";
@@ -535,11 +518,11 @@ void recipeSteppedTower(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
 }
 
 // The DRUM tower: a round office tower — glass or concrete banding.
-void recipeDrumTower(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
+void recipeDrumTower(BuildingRecipe& out, ProcRng& rng, RecipeCtx& cx) {
     BuildingParams& p = out.params;
-    p.floors = rng.irange(8, 14) + static_cast<int>(cx.coreness * 8);
+    p.floors = rng.between(8, 14) + static_cast<int>(cx.coreness * 8);
     p.groundRetail = true;
-    dress(p, rng.unit() < 0.6 ? FacadeStyle::GlassCurtain : FacadeStyle::Concrete,
+    dress(p, rng.next() < 0.6 ? FacadeStyle::GlassCurtain : FacadeStyle::Concrete,
           rng);
     cx.slender = 2.8 + cx.coreness * 1.2;
     out.massing = BuildingRecipe::Massing::Circle;
@@ -553,13 +536,13 @@ void recipeDrumTower(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
 // carrying a slender curtain-wall tower — the modern downtown block. The lot
 // pass grows the two masses (podium = the lot plan, tower = a centred shaft
 // from podiumFloors up); this recipe just declares the split and the dress.
-void recipePodiumTower(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
+void recipePodiumTower(BuildingRecipe& out, ProcRng& rng, RecipeCtx& cx) {
     BuildingParams& p = out.params;
     const int lift = static_cast<int>(cx.coreness * 44);
-    p.floors = rng.irange(cx.roomy ? 10 : 7, cx.roomy ? 16 : 10) + lift;
+    p.floors = rng.between(cx.roomy ? 10 : 7, cx.roomy ? 16 : 10) + lift;
     p.groundRetail = true;
     dress(p, FacadeStyle::GlassCurtain, rng);
-    out.podiumFloors = rng.irange(2, 4);   // 3-5 storeys with the ground floor
+    out.podiumFloors = rng.between(2, 4);   // 3-5 storeys with the ground floor
     cx.slender = 3.0 + cx.coreness * 4.5;
     out.massing = BuildingRecipe::Massing::PodiumTower;
     out.placeType = "office";
@@ -572,16 +555,16 @@ void recipePodiumTower(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
 // plan -- the rectangle the lot gives with its four corners turned into quarter arcs of 5-8 m -- shops in its lobby
 // ring, a core, a flat roof the stairs reach. The long straight sides keep today's room ring and its furniture; the
 // arcs are the section's, tessellated to chords the facade lays glass on.
-void recipeRoundedTower(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
+void recipeRoundedTower(BuildingRecipe& out, ProcRng& rng, RecipeCtx& cx) {
     BuildingParams& p = out.params;
     const int lift = static_cast<int>(cx.coreness * 30);
-    p.floors = rng.irange(cx.roomy ? 12 : 9, cx.roomy ? 18 : 12) + lift;
+    p.floors = rng.between(cx.roomy ? 12 : 9, cx.roomy ? 18 : 12) + lift;
     p.groundRetail = true;
     dress(p, FacadeStyle::GlassCurtain, rng);
     cx.slender = 3.0 + cx.coreness * 3.0;
     out.massing = BuildingRecipe::Massing::Section;
     out.section.kind = BuildingRecipe::SectionSpec::Kind::Rounded;
-    out.section.radius = 5.0 + 3.0 * rng.unit();
+    out.section.radius = 5.0 + 3.0 * rng.next();
     p.helipad = 2;   // the pad on its roof, the ramp up to it: the roof cell's first contents of its own
     out.placeType = "office";
     if (p.curtainWall) glassStyle(p, rng, true);
@@ -590,9 +573,9 @@ void recipeRoundedTower(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
 }
 
 // The PARKING GARAGE: open concrete decks over a bay-door entry.
-void recipeParkingGarage(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
+void recipeParkingGarage(BuildingRecipe& out, ProcRng& rng, RecipeCtx& cx) {
     BuildingParams& p = out.params;
-    p.floors = rng.irange(4, 6);
+    p.floors = rng.between(4, 6);
     p.groundRetail = false;
     dress(p, FacadeStyle::Concrete, rng);
     p.parkingDecks = true;
@@ -605,17 +588,26 @@ void recipeParkingGarage(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
     out.name = "parking_garage";
 }
 
-// The PAGODA tower: the tiered East-Asian silhouette (box-scope massing so
-// the pagoda shape can dispatch). A rare midtown flourish.
-void recipePagodaTower(BuildingRecipe& out, Hash& rng, RecipeCtx&) {
+// The PAGODA tower: the tiered East-Asian silhouette, on the square inscribed in its lot (pagodaPlan), a tier a
+// floor (ADR-0270). A rare midtown flourish. On a lot too narrow for five tiers it has three, and on one too narrow
+// for any (pagodaFits: the top tier keeps its stair) the street's mixed-use building stands instead of open ground.
+void recipeMixedUse(BuildingRecipe& out, ProcRng& rng, RecipeCtx&);
+void recipePagodaTower(BuildingRecipe& out, ProcRng& rng, RecipeCtx& cx) {
     BuildingParams& p = out.params;
     p.shape = BuildingShape::Pagoda;
-    p.tiers = 3 + 2 * rng.irange(0, 1);    // 3 or 5 — odd reads best
-    p.floors = p.tiers;
+    p.floors = 3 + 2 * rng.between(0, 1);    // 3 or 5 tiers — odd reads best
+    if (cx.shortSide > 0 && !pagodaFits(cx.shortSide, p.floors)) p.floors = 3;
+    if (cx.shortSide > 0 && !pagodaFits(cx.shortSide, p.floors)) {
+        const uint32_t seed = p.seed;   // (the caller's, set before the recipe)
+        p = BuildingParams{};
+        p.seed = seed;
+        recipeMixedUse(out, rng, cx);
+        return;
+    }
     p.groundRetail = false;
     p.wallColor = Vec3(0.58, 0.22, 0.16);  // lacquer red
     p.trimColor = Vec3(0.30, 0.24, 0.18);
-    out.massing = BuildingRecipe::Massing::BoxMass;
+    out.massing = BuildingRecipe::Massing::Pagoda;
     out.placeType = "shop";
     out.name = "pagoda_tower";
 }
@@ -625,37 +617,37 @@ void recipePagodaTower(BuildingRecipe& out, Hash& rng, RecipeCtx&) {
 
 // A curtain style for a glass tower: tint, mullions, bay, ribbon or floor-to-ceiling, fins -- so two glass
 // towers side by side are not the same building (M2 draws them; the numbers ride the regen key now).
-void glassStyle(BuildingParams& p, Hash& rng, bool modern) {
-    const Real r = rng.unit();
+void glassStyle(BuildingParams& p, ProcRng& rng, bool modern) {
+    const Real r = rng.next();
     p.glassTint = static_cast<uint8_t>(r < 0.17 ? 1 : r < 0.27 ? 2 : r < 0.39 ? 3 : r < 0.51 ? 4 : r < 0.66 ? 5
                                        : r < 0.76 ? 6 : r < 0.83 ? 7 : r < 0.93 ? 8 : 9);
-    const Real m = rng.unit();
+    const Real m = rng.next();
     p.mullionTone = static_cast<uint8_t>(p.glassTint == 3 ? (m < 0.7 ? 1 : 2)                    // bronze glass, bronze frames (Seagram)
                                          : m < 0.35 ? 0 : m < 0.6 ? 3 : m < 0.85 ? 2 : 4);
-    p.curtainBay = modern ? rng.range(1.5, 3.0) : rng.range(1.2, 1.8);
-    p.spandrelFrac = modern ? (rng.unit() < 0.6 ? 0.0 : rng.range(0.18, 0.3)) : rng.range(0.3, 0.45);
-    p.fins = static_cast<uint8_t>(rng.unit() < (modern ? 0.35 : 0.2) ? rng.irange(1, 3) : 0);
+    p.curtainBay = modern ? rng.in(1.5, 3.0) : rng.in(1.2, 1.8);
+    p.spandrelFrac = modern ? (rng.next() < 0.6 ? 0.0 : rng.in(0.18, 0.3)) : rng.in(0.3, 0.45);
+    p.fins = static_cast<uint8_t>(rng.next() < (modern ? 0.35 : 0.2) ? rng.between(1, 3) : 0);
 }
 
 // The SKY EXPOSURE tower: the midtown masonry classic cut by the plane -- a 60-85 ft street wall (taller on an
 // avenue), a first setback, then steps up the plane (2.7:1 on a side street, 5.6:1 on an avenue) until the mass
 // covers a quarter (1916) or up to 40% (1961) of the lot, and the tower goes straight up from there.
-void recipeSkyExposureTower(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
+void recipeSkyExposureTower(BuildingRecipe& out, ProcRng& rng, RecipeCtx& cx) {
     BuildingParams& p = out.params;
-    p.floors = rng.irange(10, 14) + static_cast<int>(cx.coreness * 44);   // the district rim keeps to its 10-16
+    p.floors = rng.between(10, 14) + static_cast<int>(cx.coreness * 44);   // the district rim keeps to its 10-16
     p.groundRetail = true;
-    const Real r = rng.unit();
+    const Real r = rng.next();
     dress(p, r < 0.40 ? FacadeStyle::Sandstone : r < 0.70 ? FacadeStyle::Brick : r < 0.85 ? FacadeStyle::DarkBrick : FacadeStyle::Concrete, rng);
-    const bool avenue = rng.unit() < 0.45;
+    const bool avenue = rng.next() < 0.45;
     p.envelope = BuildingParams::Envelope::SkyExposure;
-    p.baseFloors = avenue ? rng.irange(7, 9) : rng.irange(5, 7);
+    p.baseFloors = avenue ? rng.between(7, 9) : rng.between(5, 7);
     p.skyRatio = avenue ? 5.6 : 2.7;
-    p.stepFloors = rng.irange(2, 3);
-    p.setback1 = rng.range(3.0, 6.0);
-    p.towerFrac = rng.unit() < 0.5 ? 0.25 : rng.range(0.30, 0.40);
+    p.stepFloors = rng.between(2, 3);
+    p.setback1 = rng.in(3.0, 6.0);
+    p.towerFrac = rng.next() < 0.5 ? 0.25 : rng.in(0.30, 0.40);
     p.setbackFloors = 0;
     p.setbackEvery = 0;
-    p.spire = p.floors > 30 && rng.unit() < 0.35;
+    p.spire = p.floors > 30 && rng.next() < 0.35;
     cx.slender = 3.2 + cx.coreness * 2.5;
     out.placeType = "office";
     towerTop(p, {{5, 25}, {4, 15}, {8, 10}, {7, 10}, {1, 40}});   // buildings M2
@@ -665,18 +657,18 @@ void recipeSkyExposureTower(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
 
 // The TOWER ON A BASE (the 1990s contextual rules): a base on the lot line up to the street wall, a 10-15 ft
 // setback, and a glass tower over 30-40% of the lot.
-void recipeTowerOnBase(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
+void recipeTowerOnBase(BuildingRecipe& out, ProcRng& rng, RecipeCtx& cx) {
     BuildingParams& p = out.params;
-    p.floors = rng.irange(10, 14) + static_cast<int>(cx.coreness * 40);
+    p.floors = rng.between(10, 14) + static_cast<int>(cx.coreness * 40);
     p.groundRetail = true;
     dress(p, FacadeStyle::GlassCurtain, rng);
     glassStyle(p, rng, true);
     p.envelope = BuildingParams::Envelope::StreetWallSetback;
-    p.baseFloors = rng.irange(5, 8);
-    p.setback1 = rng.range(3.0, 4.5);
+    p.baseFloors = rng.between(5, 8);
+    p.setback1 = rng.in(3.0, 4.5);
     p.stepFloors = 0;
     p.stepDepth = 0;
-    p.towerFrac = rng.range(0.30, 0.40);
+    p.towerFrac = rng.in(0.30, 0.40);
     p.towerFloor = p.baseFloors + 1;
     p.setbackFloors = 0;
     p.setbackEvery = 0;
@@ -688,16 +680,16 @@ void recipeTowerOnBase(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
 
 // The TAPERED glass tower (One World Trade Center): narrowing all the way up, its corners chamfered more and
 // more toward the top -- a square base, an octagon at mid-height.
-void recipeTaperedGlassTower(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
+void recipeTaperedGlassTower(BuildingRecipe& out, ProcRng& rng, RecipeCtx& cx) {
     BuildingParams& p = out.params;
-    p.floors = rng.irange(12, 16) + static_cast<int>(cx.coreness * 52);
+    p.floors = rng.between(12, 16) + static_cast<int>(cx.coreness * 52);
     p.groundRetail = true;
     dress(p, FacadeStyle::GlassCurtain, rng);
     glassStyle(p, rng, true);
     p.envelope = BuildingParams::Envelope::Taper;
-    p.baseFloors = rng.irange(1, 3);
-    p.taperTop = rng.range(0.55, 0.80);
-    p.chamferTop = rng.unit() < 0.5 ? rng.range(0.15, 0.30) : 0.0;
+    p.baseFloors = rng.between(1, 3);
+    p.taperTop = rng.in(0.55, 0.80);
+    p.chamferTop = rng.next() < 0.5 ? rng.in(0.15, 0.30) : 0.0;
     p.setbackFloors = 0;
     p.setbackEvery = 0;
     cx.slender = 4.0 + cx.coreness * 4.0;
@@ -709,18 +701,18 @@ void recipeTaperedGlassTower(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
 // The TWISTED TOWER (issue #105 step 4, the stack's first transform; Turning Torso, Cayan Tower): a stadium or a
 // rounded slab turning up to a quarter turn over its height about its own centre, glass, every storey its own facet
 // with a slab band between -- the plan itself turns, scaled down only as far as the lot makes it.
-void recipeTwistedTower(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
+void recipeTwistedTower(BuildingRecipe& out, ProcRng& rng, RecipeCtx& cx) {
     BuildingParams& p = out.params;
-    p.floors = rng.irange(10, 16) + static_cast<int>(cx.coreness * 44);   // (the district rim keeps to 16; coreness lifts the core)
+    p.floors = rng.between(10, 16) + static_cast<int>(cx.coreness * 44);   // (the district rim keeps to 16; coreness lifts the core)
     p.groundRetail = true;
     dress(p, FacadeStyle::GlassCurtain, rng);
     glassStyle(p, rng, true);
     out.massing = BuildingRecipe::Massing::Section;
-    out.section.kind = rng.unit() < 0.5 ? BuildingRecipe::SectionSpec::Kind::Stadium : BuildingRecipe::SectionSpec::Kind::Rounded;
-    out.section.radius = 4.0 + 3.0 * rng.unit();
+    out.section.kind = rng.next() < 0.5 ? BuildingRecipe::SectionSpec::Kind::Stadium : BuildingRecipe::SectionSpec::Kind::Rounded;
+    out.section.radius = 4.0 + 3.0 * rng.next();
     p.envelope = BuildingParams::Envelope::Twist;
     p.baseFloors = 1;
-    p.twistDeg = rng.range(45.0, 90.0);
+    p.twistDeg = rng.in(45.0, 90.0);
     p.setbackFloors = 0;
     p.setbackEvery = 0;
     cx.slender = 4.0 + cx.coreness * 4.0;
@@ -732,16 +724,16 @@ void recipeTwistedTower(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
 // The STACKED MODULES (issue #105 step 4, Relation::Support; 56 Leonard, the Jenga tower): a rectangular tower in
 // modules of a few storeys, every other one slid along the long axis past the one below -- terraces on the ledges,
 // soffits under the overhangs.
-void recipeStackedModules(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
+void recipeStackedModules(BuildingRecipe& out, ProcRng& rng, RecipeCtx& cx) {
     BuildingParams& p = out.params;
-    p.floors = rng.irange(9, 14) + static_cast<int>(cx.coreness * 28);
+    p.floors = rng.between(9, 14) + static_cast<int>(cx.coreness * 28);
     p.groundRetail = true;
     dress(p, FacadeStyle::GlassCurtain, rng);
     glassStyle(p, rng, true);
     p.envelope = BuildingParams::Envelope::Stack;
-    p.baseFloors = rng.irange(1, 2);
-    p.stepFloors = rng.irange(3, 5);
-    p.stackShift = rng.range(2.5, 4.5);
+    p.baseFloors = rng.between(1, 2);
+    p.stepFloors = rng.between(3, 5);
+    p.stackShift = rng.in(2.5, 4.5);
     p.setbackFloors = 0;
     p.setbackEvery = 0;
     cx.slender = 3.5 + cx.coreness * 3.0;
@@ -752,17 +744,17 @@ void recipeStackedModules(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
 
 // The LENS TOWER (issue #105 step 4, the stack's scale curve; 30 St Mary Axe, Torre Glories): a drum that widens
 // to its waist and narrows to its top, glass, every storey its own facet with a slab band between.
-void recipeLensTower(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
+void recipeLensTower(BuildingRecipe& out, ProcRng& rng, RecipeCtx& cx) {
     BuildingParams& p = out.params;
-    p.floors = rng.irange(10, 15) + static_cast<int>(cx.coreness * 34);
+    p.floors = rng.between(10, 15) + static_cast<int>(cx.coreness * 34);
     p.groundRetail = true;
     dress(p, FacadeStyle::GlassCurtain, rng);
     glassStyle(p, rng, true);
     out.massing = BuildingRecipe::Massing::Circle;
     p.envelope = BuildingParams::Envelope::Bulge;
     p.baseFloors = 1;
-    p.bulge = rng.range(0.38, 0.55);
-    p.taperTop = rng.range(0.45, 0.6);   // (never below what the core needs: the stack raises it on a small drum)
+    p.bulge = rng.in(0.38, 0.55);
+    p.taperTop = rng.in(0.45, 0.6);   // (never below what the core needs: the stack raises it on a small drum)
     p.setbackFloors = 0;
     p.setbackEvery = 0;
     cx.slender = 4.0 + cx.coreness * 3.0;
@@ -775,9 +767,9 @@ void recipeLensTower(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
 // The BUNDLED TUBES (issue #105 step 5, the first complex; the Sears Tower): glass tubes on one frame, nine on a
 // roomy lot, each its own height, the taller keeping their windows above the lower ones' roofs, an inner tube
 // entered through a neighbour's lobby.
-void recipeBundledTubes(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
+void recipeBundledTubes(BuildingRecipe& out, ProcRng& rng, RecipeCtx& cx) {
     BuildingParams& p = out.params;
-    p.floors = rng.irange(12, 16) + static_cast<int>(cx.coreness * 50);
+    p.floors = rng.between(12, 16) + static_cast<int>(cx.coreness * 50);
     p.groundRetail = true;
     dress(p, FacadeStyle::GlassCurtain, rng);
     glassStyle(p, rng, true);
@@ -795,14 +787,14 @@ void recipeBundledTubes(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
 
 // The COURTYARD BLOCK (issue #105 step 5, the complex's second preset; the European perimeter block): brick or
 // stucco wings round an open court, the corners their own houses, every cell its own door on the street.
-void recipeCourtyardBlock(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
+void recipeCourtyardBlock(BuildingRecipe& out, ProcRng& rng, RecipeCtx& cx) {
     BuildingParams& p = out.params;
-    p.floors = rng.irange(4, 6) + (cx.roomy ? 1 : 0);
-    p.groundRetail = rng.unit() < 0.5;
-    dress(p, rng.unit() < 0.6 ? FacadeStyle::Brick : FacadeStyle::Stucco, rng);
+    p.floors = rng.between(4, 6) + (cx.roomy ? 1 : 0);
+    p.groundRetail = rng.next() < 0.5;
+    dress(p, rng.next() < 0.6 ? FacadeStyle::Brick : FacadeStyle::Stucco, rng);
     out.massing = BuildingRecipe::Massing::Complex;
     out.complex.kind = BuildingRecipe::ComplexSpec::Kind::Courtyard;
-    out.complex.depth = rng.range(14.5, 16.5);
+    out.complex.depth = rng.in(14.5, 16.5);
     p.setbackFloors = 0;
     p.setbackEvery = 0;
     cx.slender = 1.2;
@@ -813,16 +805,16 @@ void recipeCourtyardBlock(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
 
 // The LEANING TOWER (issue #105 step 4, the curves composed; Gate of Europe, Capital Gate): a glass slab leaning
 // a sixth of its height along the lot, now and then with a turn in it as well.
-void recipeLeaningTower(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
+void recipeLeaningTower(BuildingRecipe& out, ProcRng& rng, RecipeCtx& cx) {
     BuildingParams& p = out.params;
-    p.floors = rng.irange(10, 15) + static_cast<int>(cx.coreness * 30);
+    p.floors = rng.between(10, 15) + static_cast<int>(cx.coreness * 30);
     p.groundRetail = true;
     dress(p, FacadeStyle::GlassCurtain, rng);
     glassStyle(p, rng, true);
     p.envelope = BuildingParams::Envelope::Curves;
     p.baseFloors = 1;
-    p.lean = (rng.unit() < 0.5 ? 1.0 : -1.0) * rng.range(0.12, 0.2);
-    p.twistDeg = rng.unit() < 0.3 ? rng.range(20.0, 40.0) : 0.0;
+    p.lean = (rng.next() < 0.5 ? 1.0 : -1.0) * rng.in(0.12, 0.2);
+    p.twistDeg = rng.next() < 0.3 ? rng.in(20.0, 40.0) : 0.0;
     p.taperTop = 1.0;
     p.bulge = 0.0;
     p.setbackFloors = 0;
@@ -834,19 +826,19 @@ void recipeLeaningTower(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
 }
 
 // The TWISTED TAPER (the curves composed): a rounded tower turning a quarter and narrowing to two thirds at the top.
-void recipeTwistedTaper(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
+void recipeTwistedTaper(BuildingRecipe& out, ProcRng& rng, RecipeCtx& cx) {
     BuildingParams& p = out.params;
-    p.floors = rng.irange(10, 16) + static_cast<int>(cx.coreness * 40);
+    p.floors = rng.between(10, 16) + static_cast<int>(cx.coreness * 40);
     p.groundRetail = true;
     dress(p, FacadeStyle::GlassCurtain, rng);
     glassStyle(p, rng, true);
     out.massing = BuildingRecipe::Massing::Section;
     out.section.kind = BuildingRecipe::SectionSpec::Kind::Rounded;
-    out.section.radius = 5.0 + 3.0 * rng.unit();
+    out.section.radius = 5.0 + 3.0 * rng.next();
     p.envelope = BuildingParams::Envelope::Curves;
     p.baseFloors = 1;
-    p.twistDeg = rng.range(60.0, 90.0);
-    p.taperTop = rng.range(0.6, 0.75);
+    p.twistDeg = rng.in(60.0, 90.0);
+    p.taperTop = rng.in(0.6, 0.75);
     p.bulge = 0.0;
     p.lean = 0.0;
     p.setbackFloors = 0;
@@ -854,22 +846,22 @@ void recipeTwistedTaper(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
     cx.slender = 4.5 + cx.coreness * 4.0;
     out.placeType = "office";
     towerTop(p, {{1, 35}, {5, 20}, {8, 15}, {11, 30}});   // three in ten a glass spire
-    if (rng.unit() < 0.5) p.diagrid = 2;   // half of them a diagrid
+    if (rng.next() < 0.5) p.diagrid = 2;   // half of them a diagrid
     out.name = "twisted_taper";
 }
 
 // The RING BLOCK (issue #105 step 5, the complex's third preset; Apple Park): a low glass ring of cells round a
 // court, a dozen segments or so, each with its door on the outside.
-void recipeRingBlock(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
+void recipeRingBlock(BuildingRecipe& out, ProcRng& rng, RecipeCtx& cx) {
     BuildingParams& p = out.params;
-    p.floors = rng.irange(3, 5) + (cx.roomy ? 1 : 0);
+    p.floors = rng.between(3, 5) + (cx.roomy ? 1 : 0);
     p.groundRetail = false;
     dress(p, FacadeStyle::GlassCurtain, rng);
     glassStyle(p, rng, true);
     out.massing = BuildingRecipe::Massing::Complex;
     out.complex.kind = BuildingRecipe::ComplexSpec::Kind::Ring;
-    out.complex.sides = rng.irange(10, 16);
-    out.complex.depth = rng.range(12.0, 14.0);
+    out.complex.sides = rng.between(10, 16);
+    out.complex.depth = rng.in(12.0, 14.0);
     p.setbackFloors = 0;
     p.setbackEvery = 0;
     cx.slender = 1.0;
@@ -880,16 +872,16 @@ void recipeRingBlock(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
 
 // The WAVY TOWER (issue #105 step 6, the first implicit form; Aqua Tower): a glass slab whose skin undulates a
 // metre or two across its long axis, the waves climbing the building, every storey its own outline.
-void recipeWavyTower(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
+void recipeWavyTower(BuildingRecipe& out, ProcRng& rng, RecipeCtx& cx) {
     BuildingParams& p = out.params;
-    p.floors = rng.irange(10, 15) + static_cast<int>(cx.coreness * 38);
+    p.floors = rng.between(10, 15) + static_cast<int>(cx.coreness * 38);
     p.groundRetail = true;
     dress(p, FacadeStyle::GlassCurtain, rng);
     glassStyle(p, rng, true);
     p.envelope = BuildingParams::Envelope::Wave;
     p.baseFloors = 1;
-    p.wave = rng.range(1.2, 2.0);
-    p.waveLen = rng.range(16.0, 24.0);
+    p.wave = rng.in(1.2, 2.0);
+    p.waveLen = rng.in(16.0, 24.0);
     p.setbackFloors = 0;
     p.setbackEvery = 0;
     cx.slender = 4.0 + cx.coreness * 3.0;
@@ -901,8 +893,8 @@ void recipeWavyTower(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
 // THE MALL AS CELLS (cells.h mallCells; ADR-0180; the plan's Westfield): the American mall as the spine, an anchor
 // store at each end of it and a parking garage behind its court, every one its own building, the concourse open
 // into the anchors on both levels. A whole-block landmark of the commercial quarter; the lot pass sizes it.
-void recipeMallComplex(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
-    out = architectMallWings(rng.next());
+void recipeMallComplex(BuildingRecipe& out, ProcRng& rng, RecipeCtx& cx) {
+    out = architectMallWings(rng.bits());
     out.massing = BuildingRecipe::Massing::Complex;
     out.complex.kind = BuildingRecipe::ComplexSpec::Kind::Mall;
     out.complex.depth = 30.0;   // the anchors' depth
@@ -913,9 +905,9 @@ void recipeMallComplex(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
 
 // THE TWIN TOWERS (cells.h twinTowers; ADR-0179): two glass towers on one block a gap apart, a sky bridge between
 // them two thirds of the way up, both lobbies on the street -- Petronas. A whole-block landmark.
-void recipeTwinTowers(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
+void recipeTwinTowers(BuildingRecipe& out, ProcRng& rng, RecipeCtx& cx) {
     BuildingParams& p = out.params;
-    p.floors = rng.irange(12, 16) + static_cast<int>(cx.coreness * 44);
+    p.floors = rng.between(12, 16) + static_cast<int>(cx.coreness * 44);
     p.groundRetail = true;
     dress(p, FacadeStyle::GlassCurtain, rng);
     glassStyle(p, rng, true);
@@ -925,9 +917,9 @@ void recipeTwinTowers(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
     p.baseFloors = 0;
     out.massing = BuildingRecipe::Massing::Complex;
     out.complex.kind = BuildingRecipe::ComplexSpec::Kind::Twins;
-    out.complex.gap = rng.range(10.0, 16.0);
+    out.complex.gap = rng.in(10.0, 16.0);
     out.complex.bridgeStorey = 0;
-    out.complex.bridgeW = rng.range(4.0, 6.0);
+    out.complex.bridgeW = rng.in(4.0, 6.0);
     cx.slender = 4.0 + cx.coreness * 3.0;
     out.placeType = "office";
     towerTop(p, {{1, 40}, {11, 35}, {2, 25}});   // a glass spire on a third of them: the pair reads as a pair
@@ -936,9 +928,9 @@ void recipeTwinTowers(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
 
 // The SCULPTED TOWER (issue #105 step 6, the mesh mass): the first form in assets/masses -- modelled, not
 // composed -- fitted to its lot and dressed in glass, every storey its slice.
-void recipeSculptedTower(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
+void recipeSculptedTower(BuildingRecipe& out, ProcRng& rng, RecipeCtx& cx) {
     BuildingParams& p = out.params;
-    p.floors = rng.irange(10, 16) + static_cast<int>(cx.coreness * 40);
+    p.floors = rng.between(10, 16) + static_cast<int>(cx.coreness * 40);
     p.groundRetail = true;
     dress(p, FacadeStyle::GlassCurtain, rng);
     glassStyle(p, rng, true);
@@ -947,7 +939,7 @@ void recipeSculptedTower(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
     p.baseFloors = 1;
     p.setbackFloors = 0;
     p.setbackEvery = 0;
-    if (rng.unit() < 0.5) { p.skin = 1; p.skinGap = rng.range(1.0, 1.6); }   // half of them a veil round straight floors
+    if (rng.next() < 0.5) { p.skin = 1; p.skinGap = rng.in(1.0, 1.6); }   // half of them a veil round straight floors
     cx.slender = 4.0 + cx.coreness * 4.0;
     out.placeType = "office";
     towerTop(p, {{1, 45}, {2, 25}, {13, 30}});   // three in ten an aperture: the form open to the sky
@@ -957,27 +949,27 @@ void recipeSculptedTower(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
 // THE VEIL (issue #105 step 6, the Envelope word; ADR-0178): a straight tower inside a sculpted glass skin -- the
 // form the seed picks (a twist, a lens, the curves, the sculpted mass), straight floors and rectangular rooms a gap
 // inside it, the skin ruled storey to storey, a diagrid on half of them.
-void recipeVeilTower(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
+void recipeVeilTower(BuildingRecipe& out, ProcRng& rng, RecipeCtx& cx) {
     BuildingParams& p = out.params;
-    p.floors = rng.irange(10, 16) + static_cast<int>(cx.coreness * 40);
+    p.floors = rng.between(10, 16) + static_cast<int>(cx.coreness * 40);
     p.groundRetail = true;
     dress(p, FacadeStyle::GlassCurtain, rng);
     glassStyle(p, rng, true);
-    switch (rng.irange(0, 3)) {
+    switch (rng.between(0, 3)) {
     case 0:
         p.envelope = BuildingParams::Envelope::Twist;
-        p.twistDeg = rng.range(40.0, 90.0);
+        p.twistDeg = rng.in(40.0, 90.0);
         break;
     case 1:
         p.envelope = BuildingParams::Envelope::Bulge;
-        p.bulge = rng.range(0.35, 0.6);
-        p.taperTop = rng.range(0.6, 0.8);
+        p.bulge = rng.in(0.35, 0.6);
+        p.taperTop = rng.in(0.6, 0.8);
         break;
     case 2:
         p.envelope = BuildingParams::Envelope::Curves;
-        p.twistDeg = rng.range(30.0, 60.0);
-        p.taperTop = rng.range(0.7, 0.85);
-        p.lean = rng.range(0.06, 0.14);
+        p.twistDeg = rng.in(30.0, 60.0);
+        p.taperTop = rng.in(0.7, 0.85);
+        p.lean = rng.in(0.06, 0.14);
         break;
     default:
         p.envelope = BuildingParams::Envelope::Mesh;
@@ -985,9 +977,9 @@ void recipeVeilTower(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
         break;
     }
     p.skin = 1;
-    p.skinGap = rng.range(1.0, 1.8);
-    if (rng.unit() < 0.5) p.diagrid = 2;
-    p.baseFloors = rng.unit() < 0.5 ? 1 : 2;
+    p.skinGap = rng.in(1.0, 1.8);
+    if (rng.next() < 0.5) p.diagrid = 2;
+    p.baseFloors = rng.next() < 0.5 ? 1 : 2;
     p.setbackFloors = 0;
     p.setbackEvery = 0;
     cx.slender = 4.0 + cx.coreness * 4.0;
@@ -998,17 +990,17 @@ void recipeVeilTower(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
 
 // The GLASS SLAB (UN Secretariat, Lever House): a thin slab on the lot's long axis, sometimes over a low
 // podium, ribbon windows in blue-green glass.
-void recipeGlassSlab(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
+void recipeGlassSlab(BuildingRecipe& out, ProcRng& rng, RecipeCtx& cx) {
     BuildingParams& p = out.params;
-    p.floors = rng.irange(10, 14) + static_cast<int>(cx.coreness * 24);
-    p.groundRetail = rng.unit() < 0.6;
+    p.floors = rng.between(10, 14) + static_cast<int>(cx.coreness * 24);
+    p.groundRetail = rng.next() < 0.6;
     dress(p, FacadeStyle::GlassCurtain, rng);
     glassStyle(p, rng, false);
-    if (rng.unit() < 0.6) p.glassTint = static_cast<uint8_t>(rng.unit() < 0.5 ? 1 : 2);
-    p.spandrelFrac = rng.range(0.35, 0.45);   // the slab's ribbon windows
+    if (rng.next() < 0.6) p.glassTint = static_cast<uint8_t>(rng.next() < 0.5 ? 1 : 2);
+    p.spandrelFrac = rng.in(0.35, 0.45);   // the slab's ribbon windows
     p.envelope = BuildingParams::Envelope::Slab;
-    p.baseFloors = rng.unit() < 0.45 ? 2 : 1;   // Lever House stands on a two-storey podium
-    p.towerFrac = rng.range(0.35, 0.55);
+    p.baseFloors = rng.next() < 0.45 ? 2 : 1;   // Lever House stands on a two-storey podium
+    p.towerFrac = rng.in(0.35, 0.55);
     p.setbackFloors = 0;
     p.setbackEvery = 0;
     cx.slender = 3.0 + cx.coreness * 2.0;
@@ -1019,24 +1011,24 @@ void recipeGlassSlab(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
 
 // The PENCIL tower (432 Park Avenue, 111 West 57th): a supertall on a small lot, very slender, the top
 // feathered back one face at a time. A concrete grid or glass with bronze fins.
-void recipePencilTower(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
+void recipePencilTower(BuildingRecipe& out, ProcRng& rng, RecipeCtx& cx) {
     BuildingParams& p = out.params;
-    p.floors = rng.irange(12, 16) + static_cast<int>(cx.coreness * 66);   // a supertall only where the city is densest
+    p.floors = rng.between(12, 16) + static_cast<int>(cx.coreness * 66);   // a supertall only where the city is densest
     p.groundRetail = true;
-    if (rng.unit() < 0.5) {
+    if (rng.next() < 0.5) {
         dress(p, FacadeStyle::Concrete, rng);   // 432 Park's white concrete grid
         p.window.lightsX = 1;
         p.window.lightsY = 1;
     } else {
         dress(p, FacadeStyle::GlassCurtain, rng);
         glassStyle(p, rng, true);
-        p.fins = static_cast<uint8_t>(rng.irange(1, 2));   // 111 W 57th's terracotta-and-bronze ribs
+        p.fins = static_cast<uint8_t>(rng.between(1, 2));   // 111 W 57th's terracotta-and-bronze ribs
         p.mullionTone = 1;
     }
     p.envelope = BuildingParams::Envelope::Feathered;
     p.baseFloors = 1;
-    p.featherFrom = rng.range(0.6, 0.8);
-    p.stepDepth = rng.range(1.5, 2.5);
+    p.featherFrom = rng.in(0.6, 0.8);
+    p.stepDepth = rng.in(1.5, 2.5);
     p.setbackFloors = 0;
     p.setbackEvery = 0;
     cx.slender = 10.0 + cx.coreness * 4.0;
@@ -1049,16 +1041,16 @@ void recipePencilTower(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
 
 // The CONDO tower: a balconied residential mid-rise — every street-facing bay
 // gets its slab + railing.
-void recipeCondoTower(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
+void recipeCondoTower(BuildingRecipe& out, ProcRng& rng, RecipeCtx& cx) {
     BuildingParams& p = out.params;
-    p.floors = rng.irange(5, 8);
-    p.groundRetail = rng.unit() < 0.5;
-    const Real r = rng.unit();
+    p.floors = rng.between(5, 8);
+    p.groundRetail = rng.next() < 0.5;
+    const Real r = rng.next();
     dress(p, r < 0.45 ? FacadeStyle::Concrete
             : r < 0.75 ? FacadeStyle::Painted : FacadeStyle::Stucco, rng);
     p.balconies = true;
-    if (p.floors > 6) { p.setbackFloors = rng.irange(3, 5);
-                        p.setbackEvery = rng.range(1.0, 1.4); }
+    if (p.floors > 6) { p.setbackFloors = rng.between(3, 5);
+                        p.setbackEvery = rng.in(1.0, 1.4); }
     cx.slender = 2.2;
     out.placeType = "home";
     towerTop(p, {{1, 50}, {2, 30}, {6, 20}});   // buildings M2
@@ -1068,14 +1060,14 @@ void recipeCondoTower(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
 
 // The TERRACED condo: hard setbacks every couple of floors — stacked roof
 // terraces with balcony rails on the way up.
-void recipeTerraceCondo(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
+void recipeTerraceCondo(BuildingRecipe& out, ProcRng& rng, RecipeCtx& cx) {
     BuildingParams& p = out.params;
-    p.floors = rng.irange(4, 6);
+    p.floors = rng.between(4, 6);
     p.groundRetail = false;
-    dress(p, rng.unit() < 0.5 ? FacadeStyle::Painted : FacadeStyle::Stucco, rng);
+    dress(p, rng.next() < 0.5 ? FacadeStyle::Painted : FacadeStyle::Stucco, rng);
     p.balconies = true;
     p.setbackFloors = 2;
-    p.setbackEvery = rng.range(1.6, 2.4);
+    p.setbackEvery = rng.in(1.6, 2.4);
     cx.slender = 2.0;
     out.placeType = "home";
     out.name = "terrace_condo";
@@ -1083,10 +1075,10 @@ void recipeTerraceCondo(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
 
 // The LOFT conversion: dark industrial brick reborn as flats — big sash
 // grids, bare heads, sometimes a shop below.
-void recipeLoftConversion(BuildingRecipe& out, Hash& rng, RecipeCtx&) {
+void recipeLoftConversion(BuildingRecipe& out, ProcRng& rng, RecipeCtx&) {
     BuildingParams& p = out.params;
-    p.floors = rng.irange(3, 5);
-    p.groundRetail = rng.unit() < 0.5;
+    p.floors = rng.between(3, 5);
+    p.groundRetail = rng.next() < 0.5;
     dress(p, FacadeStyle::DarkBrick, rng);
     p.floorHeight = 3.6;               // warehouse storeys
     out.placeType = "home";
@@ -1096,12 +1088,12 @@ void recipeLoftConversion(BuildingRecipe& out, Hash& rng, RecipeCtx&) {
 // ---- Midtown commerce ----------------------------------------------------------
 
 // The CINEMA: one tall marquee-fronted hall.
-void recipeCinema(BuildingRecipe& out, Hash& rng, RecipeCtx&) {
+void recipeCinema(BuildingRecipe& out, ProcRng& rng, RecipeCtx&) {
     BuildingParams& p = out.params;
-    p.floors = rng.irange(0, 1);
-    p.groundHeight = rng.range(5.5, 6.5);
+    p.floors = rng.between(0, 1);
+    p.groundHeight = rng.in(5.5, 6.5);
     p.groundRetail = true;
-    dress(p, rng.unit() < 0.5 ? FacadeStyle::Painted : FacadeStyle::Stucco, rng);
+    dress(p, rng.next() < 0.5 ? FacadeStyle::Painted : FacadeStyle::Stucco, rng);
     p.awning = true;                   // the marquee
     p.trimColor = Vec3(0.62, 0.18, 0.16);   // show-front red
     out.placeType = "shop";
@@ -1109,9 +1101,9 @@ void recipeCinema(BuildingRecipe& out, Hash& rng, RecipeCtx&) {
 }
 
 // The BANK branch: sandstone, pilasters, steps — small-scale civic gravity.
-void recipeBank(BuildingRecipe& out, Hash& rng, RecipeCtx&) {
+void recipeBank(BuildingRecipe& out, ProcRng& rng, RecipeCtx&) {
     BuildingParams& p = out.params;
-    p.floors = rng.irange(2, 3);
+    p.floors = rng.between(2, 3);
     p.groundHeight = 5.0;
     p.groundRetail = false;
     p.pilasters = true;
@@ -1123,12 +1115,12 @@ void recipeBank(BuildingRecipe& out, Hash& rng, RecipeCtx&) {
 }
 
 // The STRIP MALL: one long awninged retail bar.
-void recipeStripMall(BuildingRecipe& out, Hash& rng, RecipeCtx&) {
+void recipeStripMall(BuildingRecipe& out, ProcRng& rng, RecipeCtx&) {
     BuildingParams& p = out.params;
     p.floors = 0;
-    p.groundHeight = rng.range(4.0, 4.6);
+    p.groundHeight = rng.in(4.0, 4.6);
     p.groundRetail = true;
-    dress(p, rng.unit() < 0.5 ? FacadeStyle::Painted : FacadeStyle::Concrete,
+    dress(p, rng.next() < 0.5 ? FacadeStyle::Painted : FacadeStyle::Concrete,
           rng);
     p.awning = true;
     out.placeType = "shop";
@@ -1136,13 +1128,13 @@ void recipeStripMall(BuildingRecipe& out, Hash& rng, RecipeCtx&) {
 }
 
 // The SUPERMARKET: a big solid box with a glass entrance and a loading side.
-void recipeSupermarket(BuildingRecipe& out, Hash& rng, RecipeCtx&) {
+void recipeSupermarket(BuildingRecipe& out, ProcRng& rng, RecipeCtx&) {
     BuildingParams& p = out.params;
     p.floors = 0;
-    p.groundHeight = rng.range(5.5, 7.0);
+    p.groundHeight = rng.in(5.5, 7.0);
     p.groundRetail = false;
     p.solidFacade = true;
-    dress(p, rng.unit() < 0.5 ? FacadeStyle::Metal : FacadeStyle::Concrete, rng);
+    dress(p, rng.next() < 0.5 ? FacadeStyle::Metal : FacadeStyle::Concrete, rng);
     p.sideBays = 1;                    // the loading dock
     out.placeType = "shop";
     out.name = "supermarket";
@@ -1150,12 +1142,12 @@ void recipeSupermarket(BuildingRecipe& out, Hash& rng, RecipeCtx&) {
 
 // The BIG BOX (Glenn, 2026-10-01): a chain's store -- one tall storey, its walls in the chain's colours, the sign
 // and canopy over the doors (shape_grammar's big-box front), loading docks at the back.
-void recipeBigBox(BuildingRecipe& out, Hash& rng, RecipeCtx&) {
+void recipeBigBox(BuildingRecipe& out, ProcRng& rng, RecipeCtx&) {
     BuildingParams& p = out.params;
-    const int chain = 1 + static_cast<int>(rng.next() % 4u);
+    const int chain = 1 + static_cast<int>(rng.bits() % 4u);
     p.bigBox = static_cast<uint8_t>(chain);
     p.floors = 0;
-    p.groundHeight = rng.range(8.0, 10.0);
+    p.groundHeight = rng.in(8.0, 10.0);
     p.groundRetail = false;
     p.solidFacade = true;
     p.walkableGround = true;
@@ -1164,18 +1156,18 @@ void recipeBigBox(BuildingRecipe& out, Hash& rng, RecipeCtx&) {
     p.stringCourse = false;
     p.parapet = 0.9;
     p.core = 1;   // one storey: no core
-    dressBigBox(p, chain, rng.next());
+    dressBigBox(p, chain, rng.bits());
     out.massing = BuildingRecipe::Massing::BigBox;
     out.placeType = "shop";
     out.name = "big_box";
 }
 
 // The OFFICE PARK pavilion: a low glass slab on landscaped grounds.
-void recipeOfficePark(BuildingRecipe& out, Hash& rng, RecipeCtx&) {
+void recipeOfficePark(BuildingRecipe& out, ProcRng& rng, RecipeCtx&) {
     BuildingParams& p = out.params;
-    p.floors = rng.irange(2, 3);
+    p.floors = rng.between(2, 3);
     p.groundRetail = false;
-    dress(p, rng.unit() < 0.5 ? FacadeStyle::GlassCurtain : FacadeStyle::Concrete,
+    dress(p, rng.next() < 0.5 ? FacadeStyle::GlassCurtain : FacadeStyle::Concrete,
           rng);
     out.massing = BuildingRecipe::Massing::RectYard;   // the landscaped grounds
     out.yardHalfWMax = 11.0;
@@ -1187,13 +1179,13 @@ void recipeOfficePark(BuildingRecipe& out, Hash& rng, RecipeCtx&) {
 // ---- The SUBURBAN book (new houses) -------------------------------------------
 
 // The MODERN house: flat roof, big glass, crisp white/grey render.
-void recipeModernHouse(BuildingRecipe& out, Hash& rng, RecipeCtx&) {
+void recipeModernHouse(BuildingRecipe& out, ProcRng& rng, RecipeCtx&) {
     BuildingParams& p = out.params;
-    p.floors = rng.irange(1, 2);
+    p.floors = rng.between(1, 2);
     p.groundRetail = false;
     dress(p, FacadeStyle::Painted, rng);
     p.wallColor = lerp(Vec3(0.88, 0.88, 0.86), Vec3(0.62, 0.63, 0.64),
-                       rng.unit());
+                       rng.next());
     p.window.head = OpeningStyle::Head::Flat;
     p.window.hood = OpeningStyle::Hood::None;
     p.window.lightsX = 2;
@@ -1208,22 +1200,22 @@ void recipeModernHouse(BuildingRecipe& out, Hash& rng, RecipeCtx&) {
 }
 
 // The BUNGALOW: one storey of painted siding under a gable, with a porch.
-void recipeBungalow(BuildingRecipe& out, Hash& rng, RecipeCtx&) {
+void recipeBungalow(BuildingRecipe& out, ProcRng& rng, RecipeCtx&) {
     BuildingParams& p = out.params;
     p.floors = 1;
     p.groundRetail = false;
     dress(p, FacadeStyle::Wood, rng);
     p.porch = true;
-    p.chimney = rng.unit() < 0.5;
+    p.chimney = rng.next() < 0.5;
     p.roofStyle = BuildingParams::RoofStyle::Gable;
-    p.roofPitch = rng.range(0.35, 0.5);
+    p.roofPitch = rng.in(0.35, 0.5);
     out.massing = BuildingRecipe::Massing::RectYard;
     out.placeType = "home";
     out.name = "bungalow";
 }
 
 // The CRAFTSMAN house: two storeys of siding, a full porch, a chimney.
-void recipeCraftsman(BuildingRecipe& out, Hash& rng, RecipeCtx&) {
+void recipeCraftsman(BuildingRecipe& out, ProcRng& rng, RecipeCtx&) {
     BuildingParams& p = out.params;
     p.floors = 2;
     p.groundRetail = false;
@@ -1231,21 +1223,21 @@ void recipeCraftsman(BuildingRecipe& out, Hash& rng, RecipeCtx&) {
     p.porch = true;
     p.chimney = true;
     p.roofStyle = BuildingParams::RoofStyle::Gable;
-    p.roofPitch = rng.range(0.45, 0.6);
+    p.roofPitch = rng.in(0.45, 0.6);
     out.massing = BuildingRecipe::Massing::RectYard;
     out.placeType = "home";
     out.name = "craftsman_house";
 }
 
 // The COTTAGE: small, steep-roofed, chimney smoke implied.
-void recipeCottage(BuildingRecipe& out, Hash& rng, RecipeCtx&) {
+void recipeCottage(BuildingRecipe& out, ProcRng& rng, RecipeCtx&) {
     BuildingParams& p = out.params;
-    p.floors = rng.irange(1, 2);
+    p.floors = rng.between(1, 2);
     p.groundRetail = false;
-    dress(p, rng.unit() < 0.5 ? FacadeStyle::Painted : FacadeStyle::Stucco, rng);
+    dress(p, rng.next() < 0.5 ? FacadeStyle::Painted : FacadeStyle::Stucco, rng);
     p.chimney = true;
     p.roofStyle = BuildingParams::RoofStyle::Gable;
-    p.roofPitch = rng.range(0.65, 0.85);
+    p.roofPitch = rng.in(0.65, 0.85);
     out.massing = BuildingRecipe::Massing::RectYard;
     out.yardHalfWMax = 5.5;
     out.yardHalfDMax = 5.0;
@@ -1254,18 +1246,18 @@ void recipeCottage(BuildingRecipe& out, Hash& rng, RecipeCtx&) {
 }
 
 // The VILLA: a generous stucco house — hip roof, quoins, arched windows.
-void recipeVilla(BuildingRecipe& out, Hash& rng, RecipeCtx&) {
+void recipeVilla(BuildingRecipe& out, ProcRng& rng, RecipeCtx&) {
     BuildingParams& p = out.params;
     p.floors = 2;
     p.groundRetail = false;
-    dress(p, rng.unit() < 0.6 ? FacadeStyle::Stucco : FacadeStyle::Sandstone,
+    dress(p, rng.next() < 0.6 ? FacadeStyle::Stucco : FacadeStyle::Sandstone,
           rng);
     p.window.head = OpeningStyle::Head::Round;
     p.window.hood = OpeningStyle::Hood::Arch;
     p.quoins = true;
     p.entranceSteps = true;
     p.roofStyle = BuildingParams::RoofStyle::Hip;
-    p.roofPitch = rng.range(0.4, 0.55);
+    p.roofPitch = rng.in(0.4, 0.55);
     out.massing = BuildingRecipe::Massing::RectYard;
     out.yardHalfWMax = 9.0;
     out.yardHalfDMax = 7.0;
@@ -1274,14 +1266,14 @@ void recipeVilla(BuildingRecipe& out, Hash& rng, RecipeCtx&) {
 }
 
 // The RANCH house: one wide storey, low hip roof, an attached garage bay.
-void recipeRanchHouse(BuildingRecipe& out, Hash& rng, RecipeCtx&) {
+void recipeRanchHouse(BuildingRecipe& out, ProcRng& rng, RecipeCtx&) {
     BuildingParams& p = out.params;
     p.floors = 1;
     p.groundRetail = false;
-    dress(p, rng.unit() < 0.6 ? FacadeStyle::Wood : FacadeStyle::Painted, rng);
+    dress(p, rng.next() < 0.6 ? FacadeStyle::Wood : FacadeStyle::Painted, rng);
     p.sideBays = 1;                    // the attached garage
     p.roofStyle = BuildingParams::RoofStyle::Hip;
-    p.roofPitch = rng.range(0.3, 0.45);
+    p.roofPitch = rng.in(0.3, 0.45);
     out.massing = BuildingRecipe::Massing::RectYard;
     out.yardHalfWMax = 11.0;
     out.yardHalfDMax = 6.5;
@@ -1290,15 +1282,15 @@ void recipeRanchHouse(BuildingRecipe& out, Hash& rng, RecipeCtx&) {
 }
 
 // The GARDEN condo: a low balconied walk-up on planted grounds.
-void recipeGardenCondo(BuildingRecipe& out, Hash& rng, RecipeCtx&) {
+void recipeGardenCondo(BuildingRecipe& out, ProcRng& rng, RecipeCtx&) {
     BuildingParams& p = out.params;
-    p.floors = rng.irange(3, 4);
+    p.floors = rng.between(3, 4);
     p.groundRetail = false;
-    dress(p, rng.unit() < 0.5 ? FacadeStyle::Stucco : FacadeStyle::Painted, rng);
+    dress(p, rng.next() < 0.5 ? FacadeStyle::Stucco : FacadeStyle::Painted, rng);
     p.balconies = true;
-    if (rng.unit() < 0.3) {
+    if (rng.next() < 0.3) {
         p.roofStyle = BuildingParams::RoofStyle::Gable;
-        p.roofPitch = rng.range(0.35, 0.5);
+        p.roofPitch = rng.in(0.35, 0.5);
     }
     out.massing = BuildingRecipe::Massing::RectYard;
     out.yardHalfWMax = 12.0;
@@ -1310,32 +1302,32 @@ void recipeGardenCondo(BuildingRecipe& out, Hash& rng, RecipeCtx&) {
 // ---- Old-town variety (same coherent look: low, hip, round arches) ------------
 
 // The GRAND old-town house: three storeys, pilastered and quoined.
-void recipeOldTownGrand(BuildingRecipe& out, Hash& rng, RecipeCtx&) {
+void recipeOldTownGrand(BuildingRecipe& out, ProcRng& rng, RecipeCtx&) {
     BuildingParams& p = out.params;
     p.floors = 3;
-    p.groundRetail = rng.unit() < 0.4;
+    p.groundRetail = rng.next() < 0.4;
     p.pilasters = true;
     dress(p, FacadeStyle::Stucco, rng);
     p.window.head = OpeningStyle::Head::Round;
     p.window.hood = OpeningStyle::Hood::Arch;
     p.quoins = true;
     p.roofStyle = BuildingParams::RoofStyle::Hip;
-    p.roofPitch = rng.range(0.5, 0.65);
+    p.roofPitch = rng.in(0.5, 0.65);
     out.placeType = p.groundRetail ? "shop" : "home";
     out.name = "oldtown_grand";
 }
 
 // The old-town CAFE: low, awninged, arcaded shopfront.
-void recipeOldTownCafe(BuildingRecipe& out, Hash& rng, RecipeCtx&) {
+void recipeOldTownCafe(BuildingRecipe& out, ProcRng& rng, RecipeCtx&) {
     BuildingParams& p = out.params;
-    p.floors = rng.irange(1, 2);
+    p.floors = rng.between(1, 2);
     p.groundRetail = true;
-    dress(p, rng.unit() < 0.6 ? FacadeStyle::Stucco : FacadeStyle::Painted, rng);
+    dress(p, rng.next() < 0.6 ? FacadeStyle::Stucco : FacadeStyle::Painted, rng);
     p.window.head = OpeningStyle::Head::Round;
     p.window.hood = OpeningStyle::Hood::Arch;
     p.awning = true;
     p.roofStyle = BuildingParams::RoofStyle::Hip;
-    p.roofPitch = rng.range(0.5, 0.7);
+    p.roofPitch = rng.in(0.5, 0.7);
     out.placeType = "shop";
     out.name = "oldtown_cafe";
 }
@@ -1343,26 +1335,26 @@ void recipeOldTownCafe(BuildingRecipe& out, Hash& rng, RecipeCtx&) {
 // ---- Industry ----------------------------------------------------------------
 
 // The FACTORY: solid dark masonry (or metal) under a SAWTOOTH roof.
-void recipeFactory(BuildingRecipe& out, Hash& rng, RecipeCtx&) {
+void recipeFactory(BuildingRecipe& out, ProcRng& rng, RecipeCtx&) {
     BuildingParams& p = out.params;
-    p.floors = rng.irange(1, 2);
+    p.floors = rng.between(1, 2);
     p.floorHeight = 3.6;
-    p.groundHeight = rng.range(4.5, 6.0);
+    p.groundHeight = rng.in(4.5, 6.0);
     p.solidFacade = true;
     p.groundRetail = false;
-    dress(p, rng.unit() < 0.5 ? FacadeStyle::DarkBrick : FacadeStyle::Metal, rng);
-    p.groundBays = rng.irange(1, 2);
+    dress(p, rng.next() < 0.5 ? FacadeStyle::DarkBrick : FacadeStyle::Metal, rng);
+    p.groundBays = rng.between(1, 2);
     p.roofStyle = BuildingParams::RoofStyle::Sawtooth;
     out.placeType = "office";
     out.name = "factory";
 }
 
 // The BRICK WAREHOUSE: solid dark brick, clerestory strip, loading bays.
-void recipeBrickWarehouse(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
+void recipeBrickWarehouse(BuildingRecipe& out, ProcRng& rng, RecipeCtx& cx) {
     BuildingParams& p = out.params;
-    p.floors = rng.irange(1, 2);
+    p.floors = rng.between(1, 2);
     p.floorHeight = 3.8;
-    p.groundHeight = rng.range(4.5, 5.5);
+    p.groundHeight = rng.in(4.5, 5.5);
     p.solidFacade = true;
     p.groundRetail = false;
     dress(p, FacadeStyle::DarkBrick, rng);
@@ -1375,12 +1367,12 @@ void recipeBrickWarehouse(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
 
 // The SCHOOL: 2-3 floor masonry with the tall classroom window grid, a formal
 // pilastered face, and a real SCHOOLYARD (RectYard massing, generous caps).
-void recipeSchool(BuildingRecipe& out, Hash& rng, RecipeCtx&) {
+void recipeSchool(BuildingRecipe& out, ProcRng& rng, RecipeCtx&) {
     BuildingParams& p = out.params;
-    p.floors = rng.irange(2, 3);
+    p.floors = rng.between(2, 3);
     p.groundRetail = false;
     p.pilasters = true;
-    dress(p, rng.unit() < 0.6 ? FacadeStyle::Brick : FacadeStyle::Stucco, rng);
+    dress(p, rng.next() < 0.6 ? FacadeStyle::Brick : FacadeStyle::Stucco, rng);
     p.window.head = OpeningStyle::Head::Flat;
     p.window.hood = OpeningStyle::Hood::Band;
     p.window.lightsX = 2;
@@ -1394,9 +1386,9 @@ void recipeSchool(BuildingRecipe& out, Hash& rng, RecipeCtx&) {
 }
 
 // The HOSPITAL: a near-white concrete slab; the courtyard carve gives wings.
-void recipeHospital(BuildingRecipe& out, Hash& rng, RecipeCtx&) {
+void recipeHospital(BuildingRecipe& out, ProcRng& rng, RecipeCtx&) {
     BuildingParams& p = out.params;
-    p.floors = rng.irange(4, 6);
+    p.floors = rng.between(4, 6);
     p.groundRetail = false;
     dress(p, FacadeStyle::Concrete, rng);
     p.wallColor = Vec3(0.87, 0.88, 0.87);   // clinical near-white
@@ -1409,13 +1401,13 @@ void recipeHospital(BuildingRecipe& out, Hash& rng, RecipeCtx&) {
 
 // The COURTHOUSE / city hall: the government face of the core — pilasters
 // full height, a tall ground floor, quoins, a heavy parapet.
-void recipeCourthouse(BuildingRecipe& out, Hash& rng, RecipeCtx&) {
+void recipeCourthouse(BuildingRecipe& out, ProcRng& rng, RecipeCtx&) {
     BuildingParams& p = out.params;
-    p.floors = rng.irange(3, 4);
+    p.floors = rng.between(3, 4);
     p.groundHeight = 5.5;
     p.groundRetail = false;
     p.pilasters = true;
-    dress(p, rng.unit() < 0.5 ? FacadeStyle::Concrete : FacadeStyle::Stucco, rng);
+    dress(p, rng.next() < 0.5 ? FacadeStyle::Concrete : FacadeStyle::Stucco, rng);
     p.window.head = OpeningStyle::Head::Round;
     p.window.hood = OpeningStyle::Hood::Arch;
     p.quoins = true;
@@ -1428,9 +1420,9 @@ void recipeCourthouse(BuildingRecipe& out, Hash& rng, RecipeCtx&) {
 }
 
 // The POLICE STATION: squat concrete, dark trim — institutional.
-void recipePolice(BuildingRecipe& out, Hash& rng, RecipeCtx&) {
+void recipePolice(BuildingRecipe& out, ProcRng& rng, RecipeCtx&) {
     BuildingParams& p = out.params;
-    p.floors = rng.irange(2, 3);
+    p.floors = rng.between(2, 3);
     p.groundRetail = false;
     dress(p, FacadeStyle::Concrete, rng);
     p.window.hood = OpeningStyle::Hood::Band;
@@ -1441,9 +1433,9 @@ void recipePolice(BuildingRecipe& out, Hash& rng, RecipeCtx&) {
 }
 
 // The FIRE STATION: brick, VEHICLE BAY doors on the street face.
-void recipeFire(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
+void recipeFire(BuildingRecipe& out, ProcRng& rng, RecipeCtx& cx) {
     BuildingParams& p = out.params;
-    p.floors = rng.irange(1, 2);
+    p.floors = rng.between(1, 2);
     p.groundHeight = 5.0;                    // room for the engines
     p.groundRetail = false;
     dress(p, FacadeStyle::Brick, rng);
@@ -1456,17 +1448,17 @@ void recipeFire(BuildingRecipe& out, Hash& rng, RecipeCtx& cx) {
 
 // The MARKET HALL: one tall arched masonry volume under a gable — the
 // shopping anchor of an old town or a commercial quarter.
-void recipeMarketHall(BuildingRecipe& out, Hash& rng, RecipeCtx&) {
+void recipeMarketHall(BuildingRecipe& out, ProcRng& rng, RecipeCtx&) {
     BuildingParams& p = out.params;
     p.floors = 0;                            // one tall hall, no upper storeys
-    p.groundHeight = rng.range(6.0, 7.5);
+    p.groundHeight = rng.in(6.0, 7.5);
     p.groundRetail = true;
     dress(p, FacadeStyle::Brick, rng);
     p.window.head = OpeningStyle::Head::Round;
     p.window.hood = OpeningStyle::Hood::Arch;
     p.quoins = true;
     p.roofStyle = BuildingParams::RoofStyle::Gable;
-    p.roofPitch = rng.range(0.35, 0.5);
+    p.roofPitch = rng.in(0.35, 0.5);
     out.placeType = "shop";
     out.name = "market_hall";
 }
@@ -1474,9 +1466,9 @@ void recipeMarketHall(BuildingRecipe& out, Hash& rng, RecipeCtx&) {
 // The CAPITOL / town hall: the city's grandest civic front — a full portico
 // (lathe colonnade + pediment) over broad steps, and a drum + colonnade +
 // dome ROTUNDA crowning the roof. Placed dead centre by the planner.
-void recipeCapitol(BuildingRecipe& out, Hash& rng, RecipeCtx&) {
+void recipeCapitol(BuildingRecipe& out, ProcRng& rng, RecipeCtx&) {
     BuildingParams& p = out.params;
-    p.floors = rng.irange(2, 3);
+    p.floors = rng.between(2, 3);
     p.groundHeight = 6.0;
     p.floorHeight = 4.2;
     p.groundRetail = false;
@@ -1497,7 +1489,7 @@ void recipeCapitol(BuildingRecipe& out, Hash& rng, RecipeCtx&) {
 
 // The UNIVERSITY hall: collegiate brick, a smaller portico over steps, and a
 // campus GREEN via generous RectYard caps.
-void recipeUniversity(BuildingRecipe& out, Hash& rng, RecipeCtx&) {
+void recipeUniversity(BuildingRecipe& out, ProcRng& rng, RecipeCtx&) {
     BuildingParams& p = out.params;
     p.floors = 3;
     p.groundRetail = false;
@@ -1521,11 +1513,11 @@ void recipeUniversity(BuildingRecipe& out, Hash& rng, RecipeCtx&) {
 // are rooms either side of a corridor (campusPlan), and none has shops.
 // The TEACHING HALL: collegiate red brick, tall storeys (4.2 m: lecture halls want the height), wide multi-pane
 // windows under band hoods, quoined corners, a portico over steps, a hipped slate roof.
-void recipeTeachingHall(BuildingRecipe& out, Hash& rng, RecipeCtx&) {
+void recipeTeachingHall(BuildingRecipe& out, ProcRng& rng, RecipeCtx&) {
     BuildingParams& p = out.params;
     p.campus = 1;
     p.core = 1;
-    p.floors = rng.irange(2, 3);
+    p.floors = rng.between(2, 3);
     p.groundHeight = 4.6;
     p.floorHeight = 4.2;
     p.groundRetail = false;
@@ -1546,7 +1538,7 @@ void recipeTeachingHall(BuildingRecipe& out, Hash& rng, RecipeCtx&) {
 
 // The LIBRARY: warm sandstone, a tall reading-room storey whose round-headed windows rise under arches, pilasters
 // between the bays, a broad six-column portico over steps, and a dome over the reading room.
-void recipeCampusLibrary(BuildingRecipe& out, Hash& rng, RecipeCtx&) {
+void recipeCampusLibrary(BuildingRecipe& out, ProcRng& rng, RecipeCtx&) {
     BuildingParams& p = out.params;
     p.campus = 2;
     p.core = 1;
@@ -1557,7 +1549,7 @@ void recipeCampusLibrary(BuildingRecipe& out, Hash& rng, RecipeCtx&) {
     p.pilasters = true;
     dress(p, FacadeStyle::Sandstone, rng);
     // warm buff stone, always (the style's palette can roll a painted colour; a library is stone)
-    p.wallColor = Vec3(0.80, 0.72, 0.57) * static_cast<Real>(rng.range(0.94, 1.04));
+    p.wallColor = Vec3(0.80, 0.72, 0.57) * static_cast<Real>(rng.in(0.94, 1.04));
     p.trimColor = Vec3(0.90, 0.86, 0.76);
     p.window.head = OpeningStyle::Head::Round;
     p.window.hood = OpeningStyle::Hood::Arch;
@@ -1566,22 +1558,22 @@ void recipeCampusLibrary(BuildingRecipe& out, Hash& rng, RecipeCtx&) {
     p.quoins = true;
     p.portico = 6;
     p.entranceSteps = true;
-    p.dome = rng.unit() < 0.6;
+    p.dome = rng.next() < 0.6;
     out.placeType = "civic";
     out.name = "campus_library";
 }
 
 // The RESIDENCE HALL: plainer -- darker brick, four or five storeys of ordinary bedroom windows (one to a dorm
 // room), a gabled roof, a simple entrance without a portico.
-void recipeResidenceHall(BuildingRecipe& out, Hash& rng, RecipeCtx&) {
+void recipeResidenceHall(BuildingRecipe& out, ProcRng& rng, RecipeCtx&) {
     BuildingParams& p = out.params;
     p.campus = 3;
     p.core = 1;
-    p.floors = rng.irange(4, 5);
+    p.floors = rng.between(4, 5);
     p.groundRetail = false;
     p.pilasters = false;
     p.residential = true;
-    dress(p, rng.unit() < 0.5 ? FacadeStyle::DarkBrick : FacadeStyle::Brick, rng);
+    dress(p, rng.next() < 0.5 ? FacadeStyle::DarkBrick : FacadeStyle::Brick, rng);
     p.window.head = OpeningStyle::Head::Flat;
     p.window.hood = OpeningStyle::Hood::None;
     p.window.lightsX = 1;
@@ -1595,17 +1587,17 @@ void recipeResidenceHall(BuildingRecipe& out, Hash& rng, RecipeCtx&) {
 
 // The CHURCH: one tall gabled nave, arched windows, and the BELL TOWER
 // steeple rising through the roof — the neighbourhood's vertical accent.
-void recipeChurch(BuildingRecipe& out, Hash& rng, RecipeCtx&) {
+void recipeChurch(BuildingRecipe& out, ProcRng& rng, RecipeCtx&) {
     BuildingParams& p = out.params;
     p.floors = 0;                            // one tall nave, no upper storeys
-    p.groundHeight = rng.range(6.0, 7.5);
+    p.groundHeight = rng.in(6.0, 7.5);
     p.groundRetail = false;
-    dress(p, rng.unit() < 0.6 ? FacadeStyle::Stucco : FacadeStyle::Brick, rng);
+    dress(p, rng.next() < 0.6 ? FacadeStyle::Stucco : FacadeStyle::Brick, rng);
     p.window.head = OpeningStyle::Head::Round;
     p.window.hood = OpeningStyle::Hood::Arch;
     p.quoins = true;
     p.roofStyle = BuildingParams::RoofStyle::Gable;
-    p.roofPitch = rng.range(0.55, 0.75);
+    p.roofPitch = rng.in(0.55, 0.75);
     p.steeple = true;
     p.entranceSteps = true;
     out.placeType = "civic";
@@ -1613,7 +1605,7 @@ void recipeChurch(BuildingRecipe& out, Hash& rng, RecipeCtx&) {
 }
 
 // The LIBRARY: a sandstone reading hall — pilasters, arched windows, steps.
-void recipeLibrary(BuildingRecipe& out, Hash& rng, RecipeCtx&) {
+void recipeLibrary(BuildingRecipe& out, ProcRng& rng, RecipeCtx&) {
     BuildingParams& p = out.params;
     p.floors = 2;
     p.groundHeight = 5.0;
@@ -1623,20 +1615,20 @@ void recipeLibrary(BuildingRecipe& out, Hash& rng, RecipeCtx&) {
     p.window.head = OpeningStyle::Head::Round;
     p.window.hood = OpeningStyle::Hood::Arch;
     p.entranceSteps = true;
-    if (rng.unit() < 0.5) p.portico = 4;
+    if (rng.next() < 0.5) p.portico = 4;
     out.placeType = "civic";
     out.name = "library";
 }
 
 // The MUSEUM: the gallery — a formal portico over broad steps, quoined
 // sandstone, and a forecourt PLAZA via generous RectYard caps.
-void recipeMuseum(BuildingRecipe& out, Hash& rng, RecipeCtx&) {
+void recipeMuseum(BuildingRecipe& out, ProcRng& rng, RecipeCtx&) {
     BuildingParams& p = out.params;
-    p.floors = rng.irange(2, 3);
+    p.floors = rng.between(2, 3);
     p.groundHeight = 5.5;
     p.groundRetail = false;
     p.pilasters = true;
-    dress(p, rng.unit() < 0.6 ? FacadeStyle::Sandstone : FacadeStyle::Concrete,
+    dress(p, rng.next() < 0.6 ? FacadeStyle::Sandstone : FacadeStyle::Concrete,
           rng);
     p.quoins = true;
     p.parapet = 1.3;
@@ -1651,9 +1643,9 @@ void recipeMuseum(BuildingRecipe& out, Hash& rng, RecipeCtx&) {
 
 // ROWHOUSES: the lot packs side-by-side townhome units (the lot pass splits
 // the strip; architectRowUnit dresses each unit). Dense residential streets.
-void recipeRowhouses(BuildingRecipe& out, Hash& rng, RecipeCtx&) {
+void recipeRowhouses(BuildingRecipe& out, ProcRng& rng, RecipeCtx&) {
     BuildingParams& p = out.params;
-    p.floors = rng.irange(2, 3);
+    p.floors = rng.between(2, 3);
     p.groundRetail = false;
     dress(p, FacadeStyle::Brick, rng);   // fallback look if the strip can't split
     out.massing = BuildingRecipe::Massing::RowStrip;
@@ -1662,15 +1654,15 @@ void recipeRowhouses(BuildingRecipe& out, Hash& rng, RecipeCtx&) {
 }
 
 // The DUPLEX: a wider two-family house on its yard — two awninged bays.
-void recipeDuplex(BuildingRecipe& out, Hash& rng, RecipeCtx&) {
+void recipeDuplex(BuildingRecipe& out, ProcRng& rng, RecipeCtx&) {
     BuildingParams& p = out.params;
     p.floors = 2;
     p.groundRetail = false;
     p.baseCourse = true;
-    dress(p, rng.unit() < 0.5 ? FacadeStyle::Painted : FacadeStyle::Stucco, rng);
-    p.roofStyle = rng.unit() < 0.5 ? BuildingParams::RoofStyle::Gable
+    dress(p, rng.next() < 0.5 ? FacadeStyle::Painted : FacadeStyle::Stucco, rng);
+    p.roofStyle = rng.next() < 0.5 ? BuildingParams::RoofStyle::Gable
                                    : BuildingParams::RoofStyle::Hip;
-    p.roofPitch = rng.range(0.4, 0.6);
+    p.roofPitch = rng.in(0.4, 0.6);
     out.massing = BuildingRecipe::Massing::RectYard;
     out.yardHalfWMax = 9.0;   // wider than a single-family house
     out.yardHalfDMax = 6.5;
@@ -1681,11 +1673,11 @@ void recipeDuplex(BuildingRecipe& out, Hash& rng, RecipeCtx&) {
 // MIXED USE: shops below, homes above — the classic main-street block. The
 // grammar already splits ground (Retail) from upper (Residential) storeys;
 // this recipe leans into it with awnings + warm masonry.
-void recipeMixedUse(BuildingRecipe& out, Hash& rng, RecipeCtx&) {
+void recipeMixedUse(BuildingRecipe& out, ProcRng& rng, RecipeCtx&) {
     BuildingParams& p = out.params;
-    p.floors = rng.irange(3, 5);
+    p.floors = rng.between(3, 5);
     p.groundRetail = true;
-    dress(p, rng.unit() < 0.6 ? FacadeStyle::Brick : FacadeStyle::Painted, rng);
+    dress(p, rng.next() < 0.6 ? FacadeStyle::Brick : FacadeStyle::Painted, rng);
     p.awning = true;
     p.stringCourse = true;
     out.placeType = "shop";
@@ -1701,7 +1693,7 @@ void recipeMixedUse(BuildingRecipe& out, Hash& rng, RecipeCtx&) {
 // calling the functions directly; this table is the NAME surface.)
 struct NamedRecipe {
     const char* name;
-    void (*fn)(BuildingRecipe&, Hash&, RecipeCtx&);
+    void (*fn)(BuildingRecipe&, ProcRng&, RecipeCtx&);
 };
 const NamedRecipe kRecipeRegistry[] = {
     {"glass_tower", recipeGlassTower},
@@ -1798,9 +1790,9 @@ bool architectRecipeByName(const std::string& name, uint32_t seed, Real coreness
                            BuildingRecipe& out) {
     const int ri = architectRecipeIndex(name);
     if (ri < 0) return false;
-    Hash rng(seed * 2654435761u ^ 0x9e3779b9u);
+    ProcRng rng(seed * 2654435761u ^ 0x9e3779b9u);
     out = BuildingRecipe{};
-    out.params.seed = rng.next();
+    out.params.seed = rng.bits();
     RecipeCtx cx;
     cx.shortSide = shortSide;
     cx.area = area;
@@ -1862,8 +1854,8 @@ DistrictTag DistrictMap::tagAt(const Vec2& p) const {
     // every city places its quarters differently but deterministically.
     Real ang = std::atan2(d.y, d.x);
     if (ang < 0) ang += kTau;
-    Hash h(seed * 2654435761u + 17u);
-    const Real oldTown0 = h.unit() * kTau, oldTownSpan = 0.9;   // ~52 deg pocket
+    ProcRng h(seed * 2654435761u + 17u);
+    const Real oldTown0 = h.next() * kTau, oldTownSpan = 0.9;   // ~52 deg pocket
     const Real ind0 = std::fmod(oldTown0 + kTau * 0.45, kTau);  // opposite-ish
     const Real indSpan = 1.15;                                  // ~66 deg wedge
     auto inWedge = [&](Real a0, Real span) {
@@ -1889,9 +1881,9 @@ DistrictTag DistrictMap::tagAt(const Vec2& p) const {
 // slenderness cap still holds it to its plate.
 BuildingRecipe architectBlockLandmark(DistrictTag tag, Real shortSide, Real area, uint32_t seed,
                                       Real coreness) {
-    Hash rng(seed * 2654435761u ^ 0x85ebca6bu);
+    ProcRng rng(seed * 2654435761u ^ 0x85ebca6bu);
     BuildingRecipe out;
-    out.params.seed = rng.next();
+    out.params.seed = rng.bits();
     out.params.retailStreetOnly = true;
     RecipeCtx cx;
     cx.shortSide = shortSide;
@@ -1901,7 +1893,7 @@ BuildingRecipe architectBlockLandmark(DistrictTag tag, Real shortSide, Real area
     switch (tag) {
         case DistrictTag::Financial:
         case DistrictTag::Commercial: {
-            const Real r = rng.unit();
+            const Real r = rng.next();
             if (tag == DistrictTag::Commercial && r < 0.06) {
                 recipeMallComplex(out, rng, cx);                      // the mall as cells (ADR-0180): a whole commercial block
             } else if (r < 0.22) {
@@ -1933,11 +1925,11 @@ BuildingRecipe architectBlockLandmark(DistrictTag tag, Real shortSide, Real area
             break;
         }
         case DistrictTag::Residential:
-            if (rng.unit() < 0.45) {
+            if (rng.next() < 0.45) {
                 recipeCourtyardBlock(out, rng, cx);                    // the perimeter block round its court (issue #105)
             } else {
                 recipeApartments(out, rng, cx);
-                out.params.floors = rng.irange(5, 9);
+                out.params.floors = rng.between(5, 9);
                 out.massing = BuildingRecipe::Massing::LotPlan;
                 cx.slender = std::max(cx.slender, Real(2.5));
             }
@@ -1956,19 +1948,18 @@ BuildingRecipe architectBlockLandmark(DistrictTag tag, Real shortSide, Real area
 BuildingRecipe architectPick(DistrictTag tag, Real shortSide, Real area,
                              uint32_t seed, Real coreness,
                              const ArchetypeBook* book) {
-    // Decorrelate the caller's seed before drawing: xorshift's first outputs
-    // stay correlated across sequential seeds, which would skew the tables'
-    // branch weights for neighbouring lots.
-    Hash rng(seed * 2654435761u ^ 0x9e3779b9u);
+    // Decorrelate the caller's seed before drawing, so neighbouring lots' sequential seeds don't skew the tables'
+    // branch weights alike.
+    ProcRng rng(seed * 2654435761u ^ 0x9e3779b9u);
     BuildingRecipe out;
-    out.params.seed = rng.next();
+    out.params.seed = rng.bits();
     out.params.retailStreetOnly = true;   // every city building has a FRONT
     RecipeCtx cx;
     cx.shortSide = shortSide;
     cx.area = area;
     cx.coreness = coreness;
     cx.roomy = shortSide > 16.0;
-    const Real roll = rng.unit();
+    const Real roll = rng.next();
 
     // A Lua-authored ARCHETYPE BOOK replaces this district's weight ladder.
     // Same single roll, drawn above in the same stream position, so a book
@@ -2089,9 +2080,9 @@ const char* landmarkName(LandmarkKind k) {
 
 BuildingRecipe architectLandmark(LandmarkKind kind, Real shortSide, Real area,
                                  uint32_t seed) {
-    Hash rng(seed * 2654435761u ^ 0x51ED2A9Bu);
+    ProcRng rng(seed * 2654435761u ^ 0x51ED2A9Bu);
     BuildingRecipe out;
-    out.params.seed = rng.next();
+    out.params.seed = rng.bits();
     out.params.retailStreetOnly = true;
     RecipeCtx cx;
     cx.shortSide = shortSide;
@@ -2242,32 +2233,31 @@ std::vector<int> planLandmarks(const std::vector<LandmarkCand>& cands,
 }
 
 BuildingParams architectRowUnit(uint32_t seed, int floors) {
-    Hash rng(seed * 2654435761u ^ 0x0BADCAFEu);
+    ProcRng rng(seed * 2654435761u ^ 0x0BADCAFEu);
     BuildingParams p;
-    p.seed = rng.next();
+    p.seed = rng.bits();
     p.floors = floors;
     p.groundRetail = false;
     p.retailStreetOnly = true;
     p.bayWidth = 2.9;               // townhome rhythm: narrow bays
-    const Real r = rng.unit();
+    const Real r = rng.next();
     dress(p, r < 0.40 ? FacadeStyle::Brick
             : r < 0.70 ? FacadeStyle::Painted : FacadeStyle::Stucco, rng);
     p.quoins = false;               // shared party walls, no corner masonry
     p.awning = false;
     p.entranceSteps = true;         // the stoop
-    if (rng.unit() < 0.4) {
+    if (rng.next() < 0.4) {
         p.roofStyle = BuildingParams::RoofStyle::Gable;
-        p.roofPitch = rng.range(0.35, 0.55);
+        p.roofPitch = rng.in(0.35, 0.55);
     }
     return p;
 }
 
 void dressBigBox(BuildingParams& p, int chain, uint32_t seed) {
-    Hash rng(seed | 1u);
-    p.bigBox = static_cast<uint8_t>(std::clamp(chain, 1, 6));
+    ProcRng rng(seed | 1u);
+    p.bigBox = static_cast<uint8_t>(chain == 6 ? 6 : std::clamp(chain, 1, 4));   // a store's chain, or the mall
     switch (p.bigBox) {
-        case 5:   // the indoor mall: warm stone, a deep teal band
-        case 6:
+        case 6:   // a mall: warm stone, a deep teal band
             dress(p, FacadeStyle::Sandstone, rng);
             p.wallColor = Vec3(0.80, 0.72, 0.60);
             p.trimColor = Vec3(0.08, 0.36, 0.38);
@@ -2296,9 +2286,9 @@ void dressBigBox(BuildingParams& p, int chain, uint32_t seed) {
 }
 
 BuildingRecipe architectBigBox(uint32_t seed) {
-    Hash rng(seed * 2654435761u ^ 0x7f4a7c15u);
+    ProcRng rng(seed * 2654435761u ^ 0x7f4a7c15u);
     BuildingRecipe out;
-    out.params.seed = rng.next();
+    out.params.seed = rng.bits();
     out.params.retailStreetOnly = true;
     RecipeCtx cx;
     recipeBigBox(out, rng, cx);
@@ -2307,12 +2297,25 @@ BuildingRecipe architectBigBox(uint32_t seed) {
 
 BuildingRecipe architectMall(uint32_t seed) {
     BuildingRecipe out = architectBigBox(seed);
-    Hash rng(seed * 40503u ^ 0x3a11u);
-    dressBigBox(out.params, 5, rng.next());
-    out.params.groundHeight = rng.range(9.0, 10.5);   // one tall storey: a skylit concourse
+    ProcRng rng(seed * 40503u ^ 0x3a11u);
+    dressBigBox(out.params, 6, rng.bits());
+    out.params.floors = 0;                          // ONE level (mallLevel's box mall): an I, an anchor, a food court
+    out.params.groundHeight = rng.in(9.0, 10.5);   // one tall storey: a skylit concourse
     out.params.shopMix = 3;
     out.name = "indoor_mall";
     return out;
+}
+
+Complex mallComplex(const Poly2& box, const Vec2& faceDir, const BuildingParams& mall, bool withGarage, Real anchorDepth,
+                    uint32_t seed) {
+    // the anchors a big-box chain each, the garage a parking garage, a cafe pavilion on the court -- by `seed`
+    const BuildingParams ap = architectBigBox(seed ^ 0x51a3u).params;
+    BuildingRecipe gr;
+    BuildingParams gp = ap;
+    if (architectRecipeByName("parking_garage", seed ^ 0x2c7u, 0.3, 40.0, 1600.0, gr)) gp = gr.params;
+    BuildingRecipe pr;
+    const bool hasPav = architectRecipeByName("oldtown_cafe", seed ^ 0x9e1u, 0.3, 13.0, 130.0, pr);
+    return mallCells(box, faceDir, mall, ap, gp, withGarage, anchorDepth, hasPav ? &pr.params : nullptr);
 }
 
 BuildingRecipe architectMallWings(uint32_t seed) {
@@ -2335,9 +2338,9 @@ BuildingRecipe architectBusDepot() {
 }
 
 BuildingRecipe architectCampus(int role, uint32_t seed) {
-    Hash rng(seed * 2654435761u ^ 0x5eed0c47u);
+    ProcRng rng(seed * 2654435761u ^ 0x5eed0c47u);
     BuildingRecipe out;
-    out.params.seed = rng.next();
+    out.params.seed = rng.bits();
     RecipeCtx cx;
     switch (role) {
         case 1: recipeTeachingHall(out, rng, cx); out.params.backDoor = true; break;   // a door onto the quad too
@@ -2363,9 +2366,9 @@ BuildingRecipe architectCampus(int role, uint32_t seed) {
 }
 
 BuildingRecipe architectPaseo(int role, uint32_t seed) {
-    Hash rng(seed * 2246822519u ^ 0x9a5e0u);
+    ProcRng rng(seed * 2246822519u ^ 0x9a5e0u);
     BuildingRecipe out;
-    out.params.seed = rng.next();
+    out.params.seed = rng.bits();
     if (role == 2) {
         out.massing = BuildingRecipe::Massing::Park;
         out.placeType = "park";
@@ -2373,13 +2376,13 @@ BuildingRecipe architectPaseo(int role, uint32_t seed) {
         return out;
     }
     BuildingParams& p = out.params;
-    p.floors = rng.unit() < 0.7 ? 1 : 2;   // over the shops: one storey (flats, offices) or two
+    p.floors = rng.next() < 0.7 ? 1 : 2;   // over the shops: one storey (flats, offices) or two
     p.groundRetail = true;
-    const Real r = rng.unit();
+    const Real r = rng.next();
     dress(p, r < 0.45 ? FacadeStyle::Stucco : r < 0.8 ? FacadeStyle::Sandstone : FacadeStyle::Brick, rng);
     p.groundHeight = 5.2;   // tall shopfronts
     p.awning = true;
-    if (rng.unit() < 0.5) { p.window.head = OpeningStyle::Head::Round; p.window.hood = OpeningStyle::Hood::Arch; }
+    if (rng.next() < 0.5) { p.window.head = OpeningStyle::Head::Round; p.window.hood = OpeningStyle::Hood::Arch; }
     p.curtainWall = false;
     p.retailStreetOnly = false;   // shopfronts on the street behind it as well as on the paseo
     p.shopMix = 3;

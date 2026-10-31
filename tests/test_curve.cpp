@@ -67,6 +67,47 @@ TEST_CASE(spline_scalar_value_type) {
     CHECK(s.eval(0.5) > 0.0);   // rises toward the peak
 }
 
+TEST_CASE(bezier_kernel_is_hermite_with_tripled_tangents) {
+    // The two shared kernels describe the same cubic: m0 = 3 (p1 - p0), m1 = 3 (p3 - p2).
+    const Vec3 p0(0, 0, 0), p1(1, 2, 0), p2(3, 2, 1), p3(4, 0, 1);
+    for (int k = 0; k <= 8; ++k) {
+        const double t = k / 8.0;
+        const Vec3 b = bezier(p0, p1, p2, p3, t), h = hermite(p0, (p1 - p0) * 3.0, p3, (p3 - p2) * 3.0, t);
+        CHECK_APPROX((b - h).length(), 0.0, 1e-12);
+        const Vec3 db = bezierDerivative(p0, p1, p2, p3, t), dh = hermiteDerivative(p0, (p1 - p0) * 3.0, p3, (p3 - p2) * 3.0, t);
+        CHECK_APPROX((db - dh).length(), 0.0, 1e-12);
+    }
+}
+
+TEST_CASE(centripetal_spline_does_not_overshoot_uneven_points) {
+    // Collinear points, one gap ten times shorter than its neighbours: uniform Catmull-Rom runs
+    // past the close pair and doubles back; the centripetal curve keeps moving forward.
+    const std::vector<Vec3> pts = {Vec3(0, 0, 0), Vec3(1, 0, 0), Vec3(1.1, 0, 0), Vec3(2.1, 0, 0)};
+    auto monotonic = [](const Spline<Vec3>& s) {
+        double last = s.eval(0.0).x;
+        for (int k = 1; k <= 300; ++k) {
+            const double x = s.eval(k / 100.0).x;
+            if (x < last - 1e-12) return false;
+            last = x;
+        }
+        return true;
+    };
+    CHECK(!monotonic(Spline<Vec3>::catmullRom(pts)));
+    const Spline<Vec3> c = Spline<Vec3>::centripetal(pts);
+    CHECK(monotonic(c));
+    for (int i = 0; i < 4; ++i) CHECK_APPROX((c.eval(i) - pts[i]).length(), 0.0, 1e-12);
+}
+
+TEST_CASE(centripetal_spline_closed_wraps_smoothly) {
+    const std::vector<Vec3> sq = {Vec3(0, 0, 0), Vec3(10, 0, 0), Vec3(10, 0, 10), Vec3(0, 0, 10)};
+    const Spline<Vec3> c = Spline<Vec3>::centripetal(sq, /*closed=*/true);
+    CHECK(c.segments() == 4);
+    CHECK_APPROX((c.eval(4.0) - sq[0]).length(), 0.0, 1e-12);
+    // The seam is as smooth as any other knot: arriving and leaving along the same direction.
+    const Vec3 in = normalize(c.derivative(4.0)), out = normalize(c.derivative(0.0));
+    CHECK_APPROX(dot(in, out), 1.0, 1e-9);
+}
+
 TEST_CASE(rmf_frames_are_orthonormal_and_twist_free) {
     std::vector<Vec3> pts = line(5, 1.0);
     std::vector<Vec3> tan(pts.size(), Vec3(1, 0, 0));

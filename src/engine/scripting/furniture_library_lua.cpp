@@ -4,8 +4,11 @@
 #include "script_vm.h"
 #include "../script_assets.h"
 #include "../../log.h"
+#include "../procgen/city/trades.h"
 
 #include <algorithm>
+#include <chrono>
+#include <filesystem>
 #include <mutex>
 
 namespace engine {
@@ -340,6 +343,26 @@ bool loadFurnitureLibrarySource(const std::string& source, FurnitureLibrary& out
     return readFurnitureLibrary(vm, out, err) && readRoomPrograms(vm, out, err);
 }
 
+namespace {
+// `departments = { "boutique", "electronics", ... }` at field `field` of the table at `t`: trade ids (trades.h)
+bool readDepartments(lua_State* L, int t, std::vector<uint8_t>& out, std::string& bad) {
+    lua_getfield(L, t, "departments");
+    if (lua_istable(L, -1)) {
+        const int dt = lua_gettop(L), n = static_cast<int>(luaL_len(L, dt));
+        for (int k = 1; k <= n; ++k) {
+            lua_rawgeti(L, dt, k);
+            const std::string name = lua_isstring(L, -1) ? lua_tostring(L, -1) : "";
+            lua_pop(L, 1);
+            const TradeInfo* tr = tradeByName(name.c_str());
+            if (!tr) { bad = name; lua_pop(L, 1); return false; }
+            out.push_back(tr->id);
+        }
+    }
+    lua_pop(L, 1);
+    return true;
+}
+}  // namespace
+
 bool readFloorPrograms(ScriptVM& vm, FloorProgramBook& out, std::string* err) {
     lua_State* L = luaState(vm);
     const int base = lua_gettop(L);
@@ -373,6 +396,8 @@ bool readFloorPrograms(ScriptVM& vm, FloorProgramBook& out, std::string* err) {
         if (const std::string f = strField(L, pt, "shallow"); !f.empty()) prog.shallow = f;
         prog.shallowDepth = numField(L, pt, "shallow_depth", prog.shallowDepth);
         prog.residential = boolField(L, pt, "residential", false);
+        prog.workplace = boolField(L, pt, "workplace", true);
+        if (std::string d; !readDepartments(L, pt, prog.departments, d)) return bad(where + ": unknown department (trade) '" + d + "'");
         lua_getfield(L, pt, "zones");
         if (!lua_istable(L, -1)) return bad(where + ": no zones");
         {
@@ -419,6 +444,7 @@ bool readFloorPrograms(ScriptVM& vm, FloorProgramBook& out, std::string* err) {
                 lua_pop(L, 1);
                 r.enclosed = boolField(L, t, "enclosed", false);
                 r.lifts = boolField(L, t, "lifts", false);
+                r.ensuite = boolField(L, t, "ensuite", false);
                 const std::string walls = strField(L, t, "walls");
                 if (walls.empty() || walls == "facade") r.walls = 2;
                 else if (walls == "glass") r.walls = 1;
@@ -430,6 +456,12 @@ bool readFloorPrograms(ScriptVM& vm, FloorProgramBook& out, std::string* err) {
                 else if (near == "core") r.near = 2;
                 else if (near == "far") r.near = 3;
                 else return bad(w + ": near must be lobby, core or far");
+                if (std::string d; !readDepartments(L, t, r.departments, d)) return bad(w + ": unknown department (trade) '" + d + "'");
+                if (const std::string tr = strField(L, t, "trade"); !tr.empty()) {
+                    const TradeInfo* ti = tradeByName(tr.c_str());
+                    if (!ti) return bad(w + ": unknown trade '" + tr + "'");
+                    r.trade = ti->id;
+                }
                 prog.rules.push_back(r);
                 lua_pop(L, 1);
             }
@@ -493,6 +525,35 @@ bool loadFloorProgramsSource(const std::string& source, FloorProgramBook& out, s
     std::string e;
     if (!vm.doString(source, &e)) return fail(err, "floor_programs.lua: " + e);
     return readFloorPrograms(vm, out, err);
+}
+
+int floorProgramsGeneration() {
+    static int generation = 0;
+    static bool seen = false;
+    static std::string path;
+    static std::filesystem::file_time_type stamp{};
+    static std::chrono::steady_clock::time_point checked{};
+    const auto now = std::chrono::steady_clock::now();
+    if (seen && now - checked < std::chrono::seconds(1)) return generation;
+    checked = now;
+    ensureFurnitureLibraryLoaded();   // (the first read is the library's)
+    const std::string p = resolveScriptPath("floor_programs.lua", "");
+    std::error_code ec;
+    const auto s = p.empty() ? std::filesystem::file_time_type{} : std::filesystem::last_write_time(p, ec);
+    if (!seen) { seen = true; path = p; stamp = s; return generation; }
+    if (p == path && s == stamp) return generation;
+    path = p;
+    stamp = s;
+    FloorProgramBook book;
+    std::string err;
+    if (p.empty() || !loadFloorProgramsSource(loadScriptCode("floor_programs.lua", ""), book, &err)) {
+        LOG_WARN << "[floors] floor_programs.lua: " << (p.empty() ? std::string("gone") : err) << " (the programs before the edit stand)";
+        return generation;
+    }
+    FloorProgramBook::global() = book;
+    ++generation;
+    LOG_INFO << "[floors] " << book.size() << " floor programs (reloaded)";
+    return generation;
 }
 
 bool ensureFurnitureLibraryLoaded() {

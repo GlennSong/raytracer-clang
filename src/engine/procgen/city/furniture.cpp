@@ -1,4 +1,5 @@
 #include "furniture.h"
+#include "../../../proc_rng.h"
 #include "trades.h"
 #include "../furniture_library.h"   // descriptions: anchors to dress, clearances to keep (M3)
 #include "../furniture_kit.h"
@@ -218,18 +219,17 @@ struct Furnisher {
         const FurnitureLibrary& lib = FurnitureLibrary::global();
         const FurnitureAsset* a = lib.find(pc);
         if (!a || a->anchors.empty()) return;
-        uint32_t h = static_cast<uint32_t>(std::lround(M.m[0][3] * 31.0)) * 73856093u ^
-                     static_cast<uint32_t>(std::lround(M.m[2][3] * 17.0)) * 19349663u ^ static_cast<uint32_t>(M.m[1][3] * 7.0);
+        ProcRng hRng(static_cast<uint32_t>(std::lround(M.m[0][3] * 31.0)) * 73856093u ^
+                     static_cast<uint32_t>(std::lround(M.m[2][3] * 17.0)) * 19349663u ^ static_cast<uint32_t>(M.m[1][3] * 7.0));
         for (const FurnAnchor& an : a->anchors) {
-            h = h * 1664525u + 1013904223u;
-            if ((h >> 8) % 1000u >= static_cast<uint32_t>(an.chance * 1000.0)) continue;
+            if ((hRng.bits() >> 8) % 1000u >= static_cast<uint32_t>(an.chance * 1000.0)) continue;
             std::vector<Piece> fits;
             for (Piece g : lib.goodsFor(an.accepts)) {
                 const Vec3 sz = furniturePiece(g, 0).size;
                 if (sz.x <= an.w + 0.05 && sz.z <= an.d + 0.05) fits.push_back(g);
             }
             if (fits.empty()) continue;
-            h = h * 1664525u + 1013904223u;
+            const uint32_t h = hRng.bits();
             const Piece g = fits[(h >> 9) % fits.size()];
             const uint32_t gv = (h >> 13) & 63u;
             const Vec3 sz = furniturePiece(g, gv).size;
@@ -391,6 +391,13 @@ const char* programFor(RoomKind kind) {
         case RoomKind::CopyRoom: return "copy_room";
         case RoomKind::PhoneBooths: return "phone_booths";
         case RoomKind::WaterCooler: return "water_cooler";
+        case RoomKind::SalesFloor: return "sales_floor";
+        case RoomKind::CashDesk: return "cash_desk";
+        case RoomKind::FittingRooms: return "fitting_rooms";
+        case RoomKind::Stockroom: return "stockroom";
+        case RoomKind::HotelRoom: return "hotel_room";
+        case RoomKind::HotelSuite: return "hotel_suite";
+        case RoomKind::LinenRoom: return "linen_room";
         default: return "";
     }
 }
@@ -624,6 +631,11 @@ void emitFurniture(std::vector<PlacedPiece>& out, RenderMesh* colliderOut, const
         // a bath room where people do not live (a school's, a museum's, an office's) is a restroom: toilets, basins
         const bool restroom = room.kind == RoomKind::Bath && rp.office;
         const RoomProgram* prog = FurnitureLibrary::global().program(restroom ? "restroom" : programFor(room.kind));
+        // a department store's SALES FLOOR is furnished as its department: the trade's own program
+        // ("sales_floor:boutique", furniture_rooms.lua) where there is one
+        if (room.kind == RoomKind::SalesFloor)
+            if (const TradeInfo* t = tradeById(room.style))
+                if (const RoomProgram* dp = FurnitureLibrary::global().program(std::string("sales_floor:") + t->name)) prog = dp;
         if (prog) {
             ProgramRun run{F, FurnitureLibrary::global(), ring, longFirst, hb, hr};
             for (const FurnStep& st : prog->steps) run.run(st);
@@ -718,9 +730,18 @@ void emitFurniture(std::vector<PlacedPiece>& out, RenderMesh* colliderOut, const
                 };
                 // THE KITCHEN (a restaurant's back): the line on the back wall -- tall unit, hobs, a sink, worktops --
                 // a 1.1 m cooks' aisle, the pass facing the dining room.
+                // (the back wall first, as long as it will go; a restaurant whose door is in its back wall -- a
+                // tower's restaurant floor, off the corridor -- takes a side wall)
                 auto kitchenAndPass = [&]() {
-                    const Real w = std::min(F.f.W - 0.2, Real(6.0));
-                    if (w < 2.6 || !F.place(w, 0.6 + 1.1 + 0.8, {2}, p, true, 0.4, F.heightOf(Piece::KitchenTall))) { counterAtBack(); return; }
+                    Real w = 0;
+                    bool laid = false;
+                    for (int side : {2, 1, 3}) {
+                        const Real wall = side == 2 ? F.f.W : F.f.D;
+                        for (w = std::min(wall - 0.2, Real(6.0)); w >= 2.6 && !laid; w -= 0.6)
+                            laid = F.place(w, 0.6 + 1.1 + 0.8, {side}, p, true, 0.4, F.heightOf(Piece::KitchenTall));
+                        if (laid) { w += 0.6; break; }
+                    }
+                    if (!laid) { counterAtBack(); return; }
                     // tall units at the two ends only (a run of hobs, worktops and sinks between)
                     static const Piece kLine[5] = {Piece::KitchenHob, Piece::KitchenHob, Piece::KitchenBase,
                                                    Piece::KitchenSink, Piece::KitchenBase};
@@ -840,11 +861,10 @@ void emitFurniture(std::vector<PlacedPiece>& out, RenderMesh* colliderOut, const
                         highTables();
                         break;
                     }
-                    case 22:    // THE AMERICAN MALL'S UPPER CONCOURSE: its middle is the atrium -- nothing on it
+                    case 22:    // A MALL'S UPPER CONCOURSE: its middle is the atrium -- nothing on it
                     case 23:    // ...and its COURT's floor: the escalators and the lift stand there
                         break;
-                    case 21:    // ...its LOWER concourse and court: as the box mall's (lit through the atrium, unlit itself)
-                    case 20: {  // AN INDOOR MALL'S CONCOURSE (mallLayout; its rect runs along side 0): down its
+                    case 21: {  // ...its LOWER concourse (its rect runs along side 0; a one-level mall's only one): down its
                                 // middle, planters and pairs of benches by turns, the benches back to back facing the shops
                         const Real mid = F.f.D * 0.5;
                         int k = 0;
@@ -918,9 +938,12 @@ void emitFurniture(std::vector<PlacedPiece>& out, RenderMesh* colliderOut, const
                                  room.kind == RoomKind::ShopFloor || room.kind == RoomKind::Warehouse ||
                                  room.kind == RoomKind::HotelLobby || room.kind == RoomKind::CopyRoom ||
                                  room.kind == RoomKind::PhoneBooths || room.kind == RoomKind::WaterCooler ||
-                                 room.kind == RoomKind::Shop;
-            // a shop is lit as its trade (trades.h): office panels, round fittings in a warm room, a few in a bar
-            const int shopLights = room.kind == RoomKind::Shop ? tradeInterior(room.style).lights : 0;
+                                 room.kind == RoomKind::Shop || room.kind == RoomKind::SalesFloor ||
+                                 room.kind == RoomKind::CashDesk || room.kind == RoomKind::FittingRooms ||
+                                 room.kind == RoomKind::Stockroom;
+            // a shop is lit as its trade (trades.h): office panels, round fittings in a warm room, a few in a bar --
+            // and a department store's sales floor as its department
+            const int shopLights = room.kind == RoomKind::Shop || room.kind == RoomKind::SalesFloor ? tradeInterior(room.style).lights : 0;
             if (working && shopLights == 3) {   // (no lights of its own: under an atrium)
             } else if (working) {
                 const Real pitch = shopLights == 2 ? 3.6 : 2.4;

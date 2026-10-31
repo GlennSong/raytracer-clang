@@ -62,10 +62,13 @@ struct InteriorParams {
 // `seatsOut`, when set, receives every PASSENGER seat's hip point (SgRP), in
 // the same body-local space -- where a seated rider is posed. rows <= 0 builds
 // a CITY BUS (buildBusInterior below): driver's cab, aisle, doors, poles.
+// `rearHipOut`, when set, receives a car's back bench hip point (its middle), left empty when the cabin has no
+// room for one -- where a back-seat rider sits.
 RenderMesh buildCarInterior(const CabinSpace& cabin, const InteriorParams& p,
                             Vec3* sgrpOut = nullptr,
                             std::vector<Vec3>* seatsOut = nullptr,
-                            std::vector<Vec3>* doorsOut = nullptr);
+                            std::vector<Vec3>* doorsOut = nullptr,
+                            std::vector<Vec3>* rearHipOut = nullptr);
 
 // A CITY BUS saloon (Glenn, 2026-09-18: "build an actual bus model with an
 // interior and exterior and have it look like a city bus"). Not a car cabin

@@ -17,7 +17,7 @@
 
 namespace engine {
 
-constexpr uint32_t kTreeCacheVersion = 1;   // bump when the growers change between commits
+constexpr uint32_t kTreeCacheVersion = 2;   // bump when the growers change between commits; 2: ProcRng (ADR-0265)
 
 // The key: the recipe file (its path, hashed by content), what the loader asks for. 0: no cache (RT_TREE_CACHE=0, or
 // the file unreadable).

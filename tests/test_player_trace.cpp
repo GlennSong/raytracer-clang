@@ -175,7 +175,7 @@ std::string traceLine(Rig& r, int step) {
     const Entity e = r.body();
     const Transform* t = r.world.get<Transform>(e);
     const PlayerPose* p = r.world.get<PlayerPose>(e);
-    const std::string tele = r.settings.getString("player.telemetry", "");
+    const std::string tele = r.player.movementTelemetry();
     std::ostringstream o;
     o.precision(9);
     o << step << " | " << telemetryField(tele, "mode") << " | " << telemetryField(tele, "ground") << " | "
@@ -419,7 +419,7 @@ TEST_CASE(the_player_moves_as_scripted_in_the_movement_lab) {
             sc.script(r, pad, r.time);
             r.frame();
             lines.push_back(traceLine(r, i));
-            const std::string last = telemetryField(r.settings.getString("player.telemetry", ""), "last");
+            const std::string last = telemetryField(r.player.movementTelemetry(), "last");
             if (events.empty() || events.back() != last) events.push_back(last);
         }
         std::string said;

@@ -12,7 +12,7 @@
 # -cos(yaw)cos(pitch)); yaw=pitch=0 looks down -Z. We compute yaw/pitch from an eye->target.
 #
 # NOTE --edit, not --play. In play mode the camera ORBITS THE PLAYER (flyEye* is only read
-# when playFromHere is set), so shots cannot be framed on a parked car; edit mode drives the
+# on Play Here), so shots cannot be framed on a parked car; edit mode drives the
 # fly camera directly. Edit mode draws the toolbar over the top-left of the frame, so we set
 # hideEditorUi, which suppresses the editor chrome for exactly this purpose.
 #

@@ -5,6 +5,8 @@
 #include "../asset_manager.h"
 #include "../physics/physics_world.h"
 #include "../procgen/city/building_records.h"
+#include "../properties.h"
+#include "../control/control_commands.h"
 #include "../procgen/city/core_plan.h"
 #include "../audio/audio_engine.h"
 #include <array>
@@ -14,6 +16,17 @@
 #include <vector>
 
 namespace engine {
+
+// ElevatorRequest (ADR-0253): the lift from outside (the socket's `elevator`): call the cab to this door, and/or
+// move the floor selection by `pick` floors.
+struct ElevatorRequest {
+    bool call = false;
+    int pick = 0;
+};
+inline void describeProperties(ElevatorRequest& r, PropertyVisitor& v) {
+    v.field(FieldMeta("call"), r.call);
+    v.field(FieldMeta("pick"), r.pick);
+}
 
 class PhysicsSystem;
 class World;
@@ -104,6 +117,8 @@ public:
     Real cabY(std::size_t record, std::size_t i) const;
 
 private:
+    EventBus::Subscription onRequest_;
+    ControlAnswers answers_;   // elevator?
     enum class CabState { Idle, Opening, Open, Closing, Moving };
     struct Cab {
         Real y = 0;          // the cab floor's top, world

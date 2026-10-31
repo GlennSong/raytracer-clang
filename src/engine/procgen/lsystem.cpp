@@ -6,7 +6,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cmath>
-#include <random>
+#include "../../proc_rng.h"
 #include <sstream>
 #include <vector>
 
@@ -18,7 +18,7 @@ void LSystem::rule(char symbol, const std::string& replacement, double weight) {
 
 std::string LSystem::expand(const std::string& axiom, int iterations,
                             uint32_t seed) const {
-    std::mt19937 gen(seed);
+    ProcRng gen(seed);
     std::string current = axiom;
     for (int it = 0; it < iterations; it++) {
         std::string next;
@@ -37,7 +37,7 @@ std::string LSystem::expand(const std::string& axiom, int iterations,
             // Weighted random pick (seeded, so deterministic per seed).
             double total = 0.0;
             for (const Production& p : prods) total += p.weight;
-            double pick = std::uniform_real_distribution<double>(0.0, total)(gen);
+            double pick = ProcUniform<double>(0.0, total)(gen);
             for (const Production& p : prods) {
                 pick -= p.weight;
                 if (pick <= 0.0) { next += p.text; break; }
@@ -304,7 +304,7 @@ void ParametricLSystem::rule(const std::string& predecessor,
 
 ModuleString ParametricLSystem::expand(const ModuleString& axiom, int iterations,
                                        uint32_t seed) const {
-    std::mt19937 gen(seed);
+    ProcRng gen(seed);
     ModuleString current = axiom;
     for (int it = 0; it < iterations; it++) {
         ModuleString next;
@@ -324,7 +324,7 @@ ModuleString ParametricLSystem::expand(const ModuleString& axiom, int iterations
             if (matches.size() > 1) {
                 double total = 0.0;
                 for (const Production* pr : matches) total += pr->weight;
-                double pick = std::uniform_real_distribution<double>(0.0, total)(gen);
+                double pick = ProcUniform<double>(0.0, total)(gen);
                 for (const Production* pr : matches) {
                     pick -= pr->weight;
                     if (pick <= 0.0) { chosen = pr; break; }

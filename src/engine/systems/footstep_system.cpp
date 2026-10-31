@@ -1,4 +1,5 @@
 #include "footstep_system.h"
+#include "../../proc_rng.h"
 
 #include "../player_pose.h"
 
@@ -134,8 +135,8 @@ void FootstepSystem::fixedUpdate(FrameContext& ctx) {
         }
         wasSwimming_ = true;
         if (horiz > 0.4 && (strokeTimer_ -= dt) <= 0) {
-            strokeTimer_ = 0.85 + 0.15 * std::uniform_real_distribution<double>(0, 1)(rng_);
-            std::uniform_real_distribution<double> pitch(0.9, 1.1);
+            strokeTimer_ = 0.85 + 0.15 * ProcUniform<double>(0, 1)(rng_);
+            ProcUniform<double> pitch(0.9, 1.1);
             AudioPlayParams pp; pp.bus = AudioBus::Sfx; pp.volume = 0.4f; pp.pitch = static_cast<float>(pitch(rng_));
             ctx.audio.playAt(splashes_[0], t.position, 18.0, pp);
         }
@@ -190,12 +191,12 @@ void FootstepSystem::fixedUpdate(FrameContext& ctx) {
         const UnderwaterSystem::Surface w = UnderwaterSystem::surfaceAt(ctx.world, feet.x, feet.z);
         if (w.kind != UnderwaterSystem::Water::None && w.level > feet.y + 0.08) {
             const int gw = static_cast<int>(sfx::Ground::Water);
-            AudioPlayParams wp; wp.bus = AudioBus::Sfx; wp.pitch = static_cast<float>(std::uniform_real_distribution<double>(0.94, 1.06)(rng_));
+            AudioPlayParams wp; wp.bus = AudioBus::Sfx; wp.pitch = static_cast<float>(ProcUniform<double>(0.94, 1.06)(rng_));
             wp.volume = static_cast<float>(ev.volume * (ev.kind == FootstepEvent::Kind::Land ? 0.9 : 0.5));
             AudioClipHandle c = ev.kind == FootstepEvent::Kind::Land ? splashes_[1]
                               : ev.kind == FootstepEvent::Kind::Jump ? jumps_[gw] : steps_[gw][std::max(0, lastVariant_) % kStepVariants];
             if (ev.kind == FootstepEvent::Kind::Step) {
-                std::uniform_int_distribution<int> pick(0, kStepVariants - 1);
+                ProcUniformInt<int> pick(0, kStepVariants - 1);
                 c = steps_[gw][pick(rng_)];
             }
             ctx.audio.playAt(c, feet, 20.0, wp);
@@ -203,7 +204,7 @@ void FootstepSystem::fixedUpdate(FrameContext& ctx) {
         }
     }
     const int g = static_cast<int>(ground);
-    std::uniform_real_distribution<double> pitch(0.94, 1.06);
+    ProcUniform<double> pitch(0.94, 1.06);
     AudioPlayParams pp;
     pp.bus = AudioBus::Sfx;
     pp.pitch = static_cast<float>(pitch(rng_));
@@ -211,7 +212,7 @@ void FootstepSystem::fixedUpdate(FrameContext& ctx) {
     AudioClipHandle clip;
     switch (ev.kind) {
         case FootstepEvent::Kind::Step: {
-            std::uniform_int_distribution<int> pick(0, kStepVariants - 2);
+            ProcUniformInt<int> pick(0, kStepVariants - 2);
             int n = pick(rng_);
             if (n >= lastVariant_) ++n;   // never the same step twice running
             lastVariant_ = n;
@@ -230,7 +231,7 @@ void FootstepSystem::fixedUpdate(FrameContext& ctx) {
     if (ev.kind == FootstepEvent::Kind::Step && swishLevel_ > 0.02) {
         AudioPlayParams sp;
         sp.bus = AudioBus::Sfx;
-        sp.pitch = static_cast<float>(std::uniform_real_distribution<double>(0.92, 1.08)(rng_));
+        sp.pitch = static_cast<float>(ProcUniform<double>(0.92, 1.08)(rng_));
         sp.volume = static_cast<float>(0.4 * swishLevel_ * std::clamp(horiz / 2.5, 0.3, 1.2));
         ctx.audio.playAt(swishes_[std::max(0, lastVariant_) % kStepVariants], feet + Vec3(0, 0.4, 0), 20.0, sp);
     }

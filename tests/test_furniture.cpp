@@ -9,7 +9,9 @@
 #include "../src/engine/procgen/city/core_plan.h"
 #include "../src/engine/procgen/city/shape_grammar.h"
 #include "../src/engine/procgen/city/space_graph.h"
+#include "../src/engine/procgen/city/floor_zones.h"
 #include "../src/engine/procgen/city/architect.h"
+#include "../src/engine/procgen/city/cells.h"
 #include "../src/engine/procgen/city/trades.h"
 #include <algorithm>
 #include <map>
@@ -821,13 +823,77 @@ TEST_CASE(shop_units_take_their_trades_width_and_their_streets_mix) {
     CHECK(outOfRange == 0);
 }
 
-// THE INDOOR MALL (~/.claude/plans/nightlife-and-malls.md stage 2): its units front the concourse (indoors, with
-// signs' fascias), each furnished as its trade; the anchor is stocked and the food court has its tables.
+// THE BOX MALL (~/.claude/plans/nightlife-and-malls.md stage 2; the one-level mall since ADR-0271): its units front
+// the concourse (indoors, with signs' fascias), each furnished as its trade; the anchor is stocked and the food court
+// has its tables. An I down the long axis, as the lot pass shapes it (mallOutline: the court in the middle, a wing
+// each way along the front).
+// ONE MALL, THREE VARIANTS (ADR-0271), on every seed and a range of block sizes: the box (one level, an I), the wings
+// (two levels round a court) and the complex (the wings as the spine of separate anchors and a garage). Every unit
+// fronts its concourse indoors and is fitted out, the mall carries its name boards, and every cell of a complex is
+// reachable from the street.
+TEST_CASE(every_mall_variant_grows_on_every_seed) {
+    int boxes = 0, wings = 0, complexes = 0;
+    // every corner of a mall's outline turns: a straight run with a vertex on it is a corner mid-wall to the facade
+    auto turnsAtEveryCorner = [](const Poly2& q) {
+        for (std::size_t i = 0; i < q.size(); ++i) {
+            const Vec2 d0 = q[i] - q[(i + q.size() - 1) % q.size()], d1 = q[(i + 1) % q.size()] - q[i];
+            if (std::fabs(cross(normalize(d0), normalize(d1))) < 1e-6) return false;
+        }
+        return true;
+    };
+    for (uint32_t seed = 1; seed <= 8; ++seed) {
+        for (Real arm : {Real(56), Real(70), Real(90)}) {   // the box mall's wings, court to end
+            BuildingParams p = architectMall(seed).params;
+            p.faceDir = Vec3(0, 0, -1);
+            p.mallArms = 0x3;
+            p.mallCourt = Vec2(0, 0);
+            const Real arms[4] = {arm, arm, 0, 0};
+            const Poly2 plan = mallOutline(p.mallCourt, Vec2(1, 0), Vec2(0, 1), arms);
+            CHECK(plan.size() == 4 && turnsAtEveryCorner(plan));   // the I: a rectangle
+            const std::vector<ShopFront> fronts = shopFrontsOf(plan, p);
+            CHECK(fronts.size() >= 4);
+            for (const ShopFront& f : fronts) CHECK(f.indoor);
+            std::vector<MallSign> boards;
+            CHECK(mallSignsOf(plan, p, boards));
+            CHECK(!growInterior(plan, p, 0.0, nullptr, 0, 1).furniture.empty());
+            ++boxes;
+        }
+        for (Real back : {Real(0), Real(60)}) {   // the wings mall: an I, or a T with a wing back
+            BuildingParams p = architectMallWings(seed).params;
+            p.faceDir = Vec3(0, 0, -1);
+            p.mallArms = static_cast<uint8_t>(0x3 | (back > 0 ? 0x4 : 0));
+            p.mallCourt = Vec2(0, 0);
+            const Real arms[4] = {100, 100, back, 0};
+            const Poly2 plan = mallOutline(p.mallCourt, Vec2(1, 0), Vec2(0, 1), arms);
+            CHECK(turnsAtEveryCorner(plan));
+            const std::vector<ShopFront> fronts = shopFrontsOf(plan, p);
+            int upper = 0;
+            for (const ShopFront& f : fronts) { CHECK(f.indoor); upper += f.fasciaY0 > 5.0; }
+            CHECK(fronts.size() >= 20);
+            CHECK(upper > 0);   // two levels of shops
+            ++wings;
+        }
+        for (Real len : {Real(150), Real(200)}) {   // the complex on boxes of two lengths
+            const Poly2 box = {{0, 0}, {len, 0}, {len, 100}, {0, 100}};
+            const Complex cx = mallComplex(box, Vec2(0, -1), architectMallWings(seed).params, true, 30.0, seed);
+            CHECK(cx.cells.size() >= 3);   // the spine and two anchors at least
+            for (const CellFrame& c : cx.cells) CHECK(c.connected);
+            CHECK(turnsAtEveryCorner(cx.cells.front().plan));   // the spine
+            ++complexes;
+        }
+    }
+    std::printf("    [malls] %d box, %d wings, %d complexes grown\n", boxes, wings, complexes);
+}
+
 TEST_CASE(an_indoor_mall_is_a_concourse_of_shops) {
     BuildingRecipe rec = architectMall(1234u);
     BuildingParams p = rec.params;
+    CHECK(p.bigBox == 6 && p.floors == 0);   // the one-level mall
     p.faceDir = Vec3(0, 0, -1);
-    const Poly2 plan = {{0, 0}, {120, 0}, {120, 48}, {0, 48}};   // the front (z = 0) faces -z
+    p.mallArms = 0x3;
+    p.mallCourt = Vec2(60, 24);
+    const Real arm[4] = {60, 60, 0, 0};
+    const Poly2 plan = mallOutline(p.mallCourt, Vec2(1, 0), Vec2(0, 1), arm);   // 120 x 40, the front (z = 4) faces -z
     const std::vector<ShopFront> fronts = shopFrontsOf(plan, p);
     const BuildingMesh in = growInterior(plan, p, 3.0, nullptr, 0, 1);
     int furnished = 0, stocked = 0, tables = 0;
@@ -1023,9 +1089,11 @@ TEST_CASE(an_american_mall_has_two_levels_of_shops_and_escalators) {
 }
 
 // A JAPANESE TOWER (Glenn: "malls like this in the skyscrapers like in Japan. Also in Japan there are restaurants at the
-// top of skyscrapers"): its department-store floors are fitted as shops, its top floor as restaurants and bars, and it
-// carries the store's vertical board and the restaurant floor's name.
+// top of skyscrapers"): its department-store floors are the `department_store` floor program (a department a floor:
+// fashion with its fitting rooms, then electronics; the tills, the stockroom), its top floor restaurants and bars, and
+// it carries the store's vertical board and the restaurant floor's name.
 TEST_CASE(a_tower_has_a_department_store_and_restaurants_on_top) {
+    ensureFurnitureLibraryLoaded();
     BuildingRecipe rec;
     CHECK(architectRecipeByName("glass_tower", 5u, 0.9, 30.0, 900.0, rec));
     BuildingParams p = rec.params;
@@ -1061,6 +1129,49 @@ TEST_CASE(a_tower_has_a_department_store_and_restaurants_on_top) {
                 dine.count("bistro_table") ? dine.at("bistro_table") : 0, dine.count("kitchen_pass") ? dine.at("kitchen_pass") : 0,
                 office.count("desk") ? office.at("desk") : 0, signs.size());
     CHECK(store.count("clothes_rack") > 0);
+    CHECK(store.count("fitting_room") > 0);
+    CHECK(store.count("shop_counter") > 0);
+    CHECK(store.count("desk") == 0);
+    const auto electronics = piecesOn(3);
+    std::printf("    [tower] storey 3 (electronics): tv units %d, fitting rooms %d\n",
+                electronics.count("tv_unit") ? electronics.at("tv_unit") : 0,
+                electronics.count("fitting_room") ? electronics.at("fitting_room") : 0);
+    CHECK(electronics.count("tv_unit") > 0);
+    CHECK(electronics.count("fitting_room") == 0);
+    // every room on a store floor is the store's, and every room on a restaurant floor a restaurant, a bar, the
+    // restrooms or the lounge to wait in -- never an office
+    {
+        const std::vector<StoreyPlan> storeys = storeyPlans(plan, p);
+        const CorePlan core = coreFor(plan, p, entranceEdgeFor(plan, p));
+        CHECK(storeyUseOf(plan, p, storeys, 1) == "department_store");
+        CHECK(storeyUseOf(plan, p, storeys, 10).empty());
+        auto roomsOn = [&](int k) {
+            return roomPlan(storeys[static_cast<std::size_t>(k)].plan, p, core, static_cast<std::size_t>(-1),
+                            interiorWallInset(p), k, Poly2{}, static_cast<std::size_t>(-1), Vec2(1e30, 1e30),
+                            storeyUseOf(plan, p, storeys, k));
+        };
+        const RoomPlan rp = roomsOn(1);
+        int other = 0;
+        for (const Room& r : rp.rooms)
+            if (r.kind != RoomKind::SalesFloor && r.kind != RoomKind::CashDesk && r.kind != RoomKind::FittingRooms &&
+                r.kind != RoomKind::Stockroom) ++other;
+        CHECK(!rp.rooms.empty());
+        CHECK(other == 0);
+        int dineAt = -1;
+        for (int k = 1; k < static_cast<int>(storeys.size()) && dineAt < 0; ++k)
+            if (storeyUseOf(plan, p, storeys, k) == "dining") dineAt = k;
+        CHECK(dineAt == dineK);
+        int restaurants = 0, bars = 0, offices = 0;
+        for (const Room& r : roomsOn(std::max(dineAt, 1)).rooms) {
+            if (r.kind == RoomKind::Shop && r.style == 13) ++restaurants;
+            else if (r.kind == RoomKind::Shop && r.style == 14) ++bars;
+            else if (r.kind != RoomKind::Bath && r.kind != RoomKind::Lounge) ++offices;
+        }
+        std::printf("    [tower] storey %d (dining): %d restaurants, %d bars, %d other rooms\n", dineAt, restaurants, bars, offices);
+        CHECK(restaurants > 0);
+        CHECK(bars > 0);
+        CHECK(offices == 0);
+    }
     CHECK(dine.count("bar_counter") > 0 || dine.count("kitchen_pass") > 0);
     CHECK(signs.size() == 2);
 }
@@ -1372,11 +1483,12 @@ TEST_CASE(tower_floors_are_furnished_up_their_setbacks) {
 }
 
 // FLATS ROUND THE CORE (Glenn, 2026-10-13: "if you're showing me apartments then we need more walls for the separate
-// apartments and then separate rooms"). A residential crown too slim for apartmentPlan's corridor and bands was the
+// apartments and then separate rooms"). A residential crown too slim for flats off a corridor and bands was the
 // residents' lounge (14 pencil-tower floors in this spread) or a ring of rooms -- named offices behind a glass tower's
-// curtain wall (6). It is two flats off the lift lobby now (room_plan.cpp wrapFlatsPlan), each a hall, a kitchen, a
-// living room, a bedroom and its bath, or a studio. Every residential tower floor here is flats: walkable from the
-// lobby, every one with its kitchen and its bath, and no lounge and no office anywhere.
+// curtain wall (6). It is two flats off the lift lobby now (room_plan.h wrapFlatsLayout, the zoned floor's lobby
+// mode), each a hall, a kitchen, a living room, a bedroom and its bath, or a studio. Every residential tower floor
+// here is flats: walkable from the lobby, every one with its kitchen and its bath, and no lounge and no office
+// anywhere.
 TEST_CASE(slim_residential_crowns_are_flats_round_the_core) {
     const char* recipes[] = {"pencil_tower", "condo_tower"};
     const Real sizes[][2] = {{24, 24}, {30, 30}, {40, 26}, {48, 34}, {36, 20}};
@@ -1415,7 +1527,7 @@ TEST_CASE(slim_residential_crowns_are_flats_round_the_core) {
                                     sp.size(), 2 * ob.half[0], 2 * ob.half[1], core.length, core.depth, (int)rp.topology, (int)rp.rooms[0].kind);
                     }
                     if (rp.topology != PlateTopology::Apartments) continue;
-                    if (halls == 2 && bathRooms == 2) ++wrapped;   // (apartmentPlan's floors carry more than two)
+                    if (halls == 2 && bathRooms == 2) ++wrapped;   // (a corridor floor's flats carry more than two)
                     if (kitchens == 0) ++noKitchen;
                     if (baths == 0) ++noBath;
                     if (!floorIsWalkable(rp, sp, core.frame.toWorld({core.length * 0.5, -1.1}))) ++blocked;
@@ -1827,6 +1939,62 @@ TEST_CASE(factories_and_warehouses_open_onto_their_floors) {
     CHECK(machines > 50 && racks > 50 && forklifts > 5);
     CHECK(onClearFloor == 0);
     CHECK(upstairsDesks > 0);
+}
+
+// A HOTEL'S FLOORS (building-uses step 5; Glenn, 2026-10-27: "Hotels can have a lobby/front desk, restaurants ...
+// guest rooms, vip suites"): the `hotel` floor program -- rooms along the glass, each with its own bathroom by its
+// door, suites, a linen room; every cell reached from the lifts; the class (budget, business, luxury) the building's.
+TEST_CASE(a_hotel_floor_is_rooms_with_their_own_bathrooms) {
+    UseShippedFurniture shipped;
+    const Real sizes[][2] = {{36, 24}, {48, 34}, {30, 22}};
+    int hotels = 0, rooms = 0, suites = 0, baths = 0, linen = 0, unreached = 0, beds = 0, desks = 0, lowRooms = 0;
+    std::map<std::string, std::pair<int, int>> byClass;   // rooms, floors
+    for (uint32_t seed = 1; seed <= 12; ++seed)
+        for (const auto& sz : sizes) {
+            const Poly2 plan = {{0, 0}, {sz[0], 0}, {sz[0], sz[1]}, {0, sz[1]}};
+            BuildingRecipe rc;
+            if (!architectRecipeByName("hotel", seed, 1.0, sz[1], sz[0] * sz[1], rc)) continue;
+            const BuildingParams& p = rc.params;
+            ++hotels;
+            const SpaceGraph g = spaceGraphOf(plan, p, 0.0);
+            unreached += static_cast<int>(unreachableCells(g).size());
+            int r = 0, f = 0;
+            for (const Cell& c : g.cells) {
+                if (c.kind != CellKind::Room || c.k0 < 1) continue;
+                r += c.use == RoomKind::HotelRoom || c.use == RoomKind::HotelSuite;
+                rooms += c.use == RoomKind::HotelRoom;
+                suites += c.use == RoomKind::HotelSuite;
+                baths += c.use == RoomKind::Bath;
+                linen += c.use == RoomKind::LinenRoom;
+            }
+            for (int k = 1; k < p.floors; ++k) ++f;
+            const ZoneStyle* st = floorStyle(floorProgram("hotel"), static_cast<uint32_t>(p.seed));
+            auto& bc = byClass[st ? st->name : "?"];
+            bc.first += r;
+            bc.second += f;
+            const BuildingMesh in = growInterior(plan, p, 0.0, nullptr, 1, 3);
+            for (const PlacedPiece& pp : in.furniture) {
+                beds += pp.piece == static_cast<uint8_t>(Piece::Bed);
+                desks += pp.piece == static_cast<uint8_t>(Piece::Desk);
+            }
+            for (const Cell& c : g.cells)
+                if (c.kind == CellKind::Room && c.k0 >= 1 && c.k0 <= 2 &&
+                    (c.use == RoomKind::HotelRoom || c.use == RoomKind::HotelSuite)) ++lowRooms;
+        }
+    std::printf("    [hotel] %d hotels: %d rooms, %d suites, %d bathrooms, %d linen rooms, %d unreachable cells; storeys 1-2: "
+                "%d rooms, %d beds, %d desks\n", hotels, rooms, suites, baths, linen, unreached, lowRooms, beds, desks);
+    for (const auto& [k, v] : byClass)
+        std::printf("    [hotel] %-9s %.1f rooms a floor\n", k.c_str(), v.second ? static_cast<double>(v.first) / v.second : 0.0);
+    CHECK(hotels >= 20);
+    CHECK(rooms > 200);
+    CHECK(suites > 0);
+    CHECK(baths >= (rooms + suites) * 9 / 10);   // (nearly every room its own; a wedge's stays whole)
+    CHECK(linen > 0);
+    CHECK(unreached == 0);
+    CHECK(beds >= lowRooms * 9 / 10);   // (a bed in nearly every room)
+    CHECK(byClass.size() == 3);
+    if (byClass.count("budget") && byClass.count("luxury"))
+        CHECK(byClass["budget"].first * byClass["luxury"].second > byClass["luxury"].first * byClass["budget"].second);
 }
 
 // THE HOTEL LOBBY (Glenn, 2026-10-13: "Okay do that"). A hotel's ground floor was shop units round an open middle --

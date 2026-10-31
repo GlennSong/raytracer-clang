@@ -108,23 +108,4 @@ TEST_CASE(spec_reaches_every_edge_via_the_net) {
     const RoadSpec e1 = roadNetEdgeSpec(net, 1);
     CHECK(std::fabs(e1.carriagewayWidth() - 8.0) < 1e-6);  // legacy width kept
     CHECK(e1.hasSidewalk(-1));                              // net look -> sidewalk
-
-    // JSON: a net block carrying specs parses them onto the net — the wire
-    // format keeps the parallel edge_specs array, resolved onto the edges
-    // (which must exist for the indices to land on).
-    nlohmann::json j;
-    j["width"] = 8.0;
-    j["nodes"] = nlohmann::json::array(
-        { { { "x", 0 }, { "z", 0 } }, { { "x", 100 }, { "z", 0 } },
-          { { "x", 200 }, { "z", 0 } } });
-    j["edges"] = nlohmann::json::array({ { 0, 1 }, { 1, 2 } });
-    j["specs"] = nlohmann::json::array({ "freeway3", "local" });
-    j["edge_specs"] = nlohmann::json::array({ 0, 1 });
-    const RoadEntity parsed = roadNetFromJson(j);
-    CHECK(parsed.graph.specs.size() == 2);
-    CHECK(parsed.graph.edges.size() == 2);
-    CHECK(parsed.graph.edges[0].spec == 0);
-    CHECK(parsed.graph.edges[1].spec == 1);
-    CHECK(parsed.graph.specs[0].laneCount() == 6);
-    CHECK(parsed.graph.specs[1].hasSidewalk(-1));
 }

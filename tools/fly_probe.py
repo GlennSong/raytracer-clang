@@ -27,8 +27,9 @@ from walk_probe import eye_at
 
 
 def frame_now(sock):
-    # `info`, not `camera?`: any question (`name?`) switches the island-wide debug counts on for 60 s
-    # (telemetry.askedAt), a 20-70 ms frame every 30-60 frames -- the probe would measure itself
+    # `info`, not a question: the city's own questions (traffic?, parking?, depots?) switch its island-wide counts
+    # on for 60 s, a 20-70 ms frame every 30-60 frames -- the probe would measure itself. (Since ADR-0253 other
+    # questions, camera? among them, no longer do; `info` stays the safe clock.)
     return re.search(r"frame=(\d+)", send(sock, "info")).group(1)
 
 

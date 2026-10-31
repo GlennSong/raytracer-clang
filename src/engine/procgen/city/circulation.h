@@ -19,6 +19,7 @@
 #include "shape_grammar.h"   // MassTier, StoreyPlan, BuildingParams
 #include <cstddef>
 #include <cstdint>
+#include <string>
 #include <vector>
 
 namespace engine {
@@ -46,6 +47,7 @@ struct Shaft {
     Real doorU = 0, doorW = 0;     // doorW 0 = closed (the service block)
     Real doorH = 2.1;
     int bank = -1;                 // a hoistway's bank
+    int block = 0;                 // the CirculationPlan block it stands in
     int cell = -1;                 // the SpaceGraph cell addTo made for it
     Poly2 rect() const;            // world XZ, CCW
     Vec2 doorFoot() const { return frame.toWorld({doorU, 0}); }
@@ -64,11 +66,20 @@ struct Zone {
     int k0 = 0, k1 = 0;
 };
 
+// Shafts standing together inside one outer ring, their doors in its v = 0 wall: the whole core, or a stairwell or a
+// bank of lifts placed on its own. The floors' corridor ring goes round every block.
+struct Block {
+    SiteFrame frame;               // u along the door wall, v away from it
+    Real length = 0, depth = 0;
+    Poly2 rect() const;            // world XZ, CCW
+};
+
 struct CirculationPlan {
     bool valid = false;
-    // The block the shafts stand in when they stand together (the core): u along the bank, v away from the lobby.
+    // The lifts' block (the core, when the shafts stand together): u along the bank, v away from the lobby.
     SiteFrame frame;
     Real length = 0, depth = 0;
+    std::vector<Block> blocks;     // [0] is frame/length/depth's; more when the layout places shafts apart
     std::vector<Shaft> shafts;
     std::vector<Bank> banks;
     std::vector<Zone> zones;
@@ -85,10 +96,42 @@ struct CirculationPlan {
 // THE CORE PRESET: two stairwells either side of hoistwaysFor(floors) hoistways (fewer when the plan is tight),
 // the service block behind, the whole seated at the centre of the top tier with its doors facing the entrance
 // edge, inside every tier with a corridor ring around it. `valid` false when not even one hoistway fits. One bank,
-// one zone over every storey.
+// one zone over every storey. `lifts` > 0 lays exactly that many hoistways (invalid where they don't fit).
 CirculationPlan corePreset(const Poly2& plan, const std::vector<MassTier>& tiers, const BuildingParams& params,
-                           std::size_t entranceEdge);
-// wantsCore ? corePreset(plan, massStack(plan, params), ...) : invalid -- what coreFor reads.
+                           std::size_t entranceEdge, int lifts = 0);
+// THE SHAFTS PLACED APART (`ends` -- a stairwell at each end of the long axis -- and/or `facing` -- two banks facing
+// across a lift lobby; neither, the classic core slid along the long axis): a block per stairwell, per bank.
+// `valid` false when it fits nowhere. `lifts` as corePreset's.
+CirculationPlan apartPreset(const Poly2& plan, const std::vector<MassTier>& tiers, const BuildingParams& params,
+                            std::size_t entranceEdge, bool ends, bool facing, int lifts = 0);
+// A LAYOUT: the stairs at the ends or beside the lifts, the lifts in one bank or two facing.
+struct CirculationLayout {
+    bool ends = false;
+    bool facing = false;
+};
+// The words a level or a script names them by (BuildingParams::stairPlace / liftBanks): stairs "core" 1 | "ends" 2,
+// lifts "bank" 1 | "facing" 2; anything else 0, auto.
+uint8_t stairPlaceOf(const std::string& word);
+uint8_t liftBanksOf(const std::string& word);
+// A plan's top tier this many times longer than wide is a slab (stairs at its ends suit it).
+constexpr Real kSlabAspect = 1.8;
+// ...and a slab of flats this deep, for its stairs to stand at the ends.
+constexpr Real kEndsFlatsDepth = 17.0;
+// ...and a tower of flats this wide across its top tier, for its lifts to stand in two facing banks: the pair and their
+// lobby take ~17 m, and a 16-18 m crown left no lot deep enough for a home (ADR-0265)
+constexpr Real kFacingFlatsDepth = 24.0;
+// THE LAYOUTS A BUILDING TRIES, in order (Glenn, 2026-10-28: "we should still be able to have elevator cores ...
+// variety when placing elevator shafts for different buildings either as variety or because the floor space is
+// too small"). What stairPlace / liftBanks name is fixed; the rest is drawn by the seed from what suits the shape --
+// a square tower of eight floors or fewer the classic core, a slab stairs at its ends about half the time, a tower
+// of 21+ floors facing banks about a third -- then every other allowed layout in turn, the classic core last if not
+// already in, for where the floor is too small for the first.
+std::vector<CirculationLayout> circulationLayouts(const BuildingParams& params, const std::vector<MassTier>& tiers);
+// The first of circulationLayouts that fits (the classic core at the centre, else slid along the long axis), every
+// layout tried at hoistwaysFor's count of lifts before any at one fewer; invalid when none fits even one.
+CirculationPlan circulationOf(const Poly2& plan, const std::vector<MassTier>& tiers, const BuildingParams& params,
+                              std::size_t entranceEdge);
+// wantsCore ? circulationOf(plan, massStack(plan, params), ...) : invalid -- what coreFor reads.
 CirculationPlan circulationFor(const Poly2& plan, const BuildingParams& params, std::size_t entranceEdge);
 // The core_plan.h reading of a plan whose shafts stand together: the stairs, the hoistways, the service block.
 CorePlan asCorePlan(const CirculationPlan& c);

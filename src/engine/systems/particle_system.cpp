@@ -1,4 +1,5 @@
 #include "particle_system.h"
+#include "../../proc_rng.h"
 
 #include "../asset_manager.h"
 #include "../components.h"
@@ -125,7 +126,7 @@ void ParticleSystem::spend(FrameContext& ctx, Real dt) {
         q.queue.clear();
     });
     // the steady flows
-    std::uniform_real_distribution<Real> u(-1.0, 1.0);
+    ProcUniform<Real> u(-1.0, 1.0);
     ctx.world.each<ParticleEmitter, Transform>([&](Entity, ParticleEmitter& em, Transform& t) {
         if (em.rate <= 0) {
             em.due = 0;

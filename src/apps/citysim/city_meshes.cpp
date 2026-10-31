@@ -34,11 +34,7 @@ int personOutfitCount() { return kNumOutfits - 1; }   // last slot = the player'
 
 engine::RenderMesh buildSeatedPersonMesh(int outfit) {
     const PersonOutfit& o = engine::personOutfit(outfit);
-    engine::OccupantParams op;
-    op.hipToHeel = 0.45;       // a bench or a chair
-    op.sittingHeight = 0.86;
-    op.backAngle = 8.0;        // sitting up
-    op.armReach = 20.0;        // hands in the lap
+    engine::OccupantParams op = engine::chairOccupant();
     op.shirt = o.shirt;
     op.trousers = o.pants;
     op.skin = o.skin;
@@ -60,17 +56,6 @@ engine::RenderMesh buildGroundSittingPersonMesh(int outfit) {
     return engine::buildSeatedOccupant(op);
 }
 int playerOutfit() { return kNumOutfits - 1; }
-
-Real walkPoseSwing(int pose) {
-    return kMaxSwing * std::sin(2.0 * engine::PI * pose / kWalkPoses);
-}
-
-int walkPoseIndex(Real& stridePhase, Real speed, Real dt) {
-    if (speed <= kWalkAnimMinSpeed) return 0;
-    stridePhase += speed * dt / kStrideLength;
-    stridePhase -= std::floor(stridePhase);
-    return static_cast<int>(stridePhase * kWalkPoses) % kWalkPoses;
-}
 
 engine::RenderMesh buildPersonMesh(Real swing, int outfit) {
     return engine::buildPosedPerson(engine::walkBodyPose(swing), outfit);   // knees and elbows (block_body.h)

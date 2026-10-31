@@ -89,14 +89,29 @@ TEST_CASE(section_offset_is_the_grammars_offset_plan) {
 TEST_CASE(flat_face_is_the_plan_edges_rectangle) {
     const Poly2 plan = {{-12, -10}, {12, -10}, {12, 10}, {-12, 10}};
     const Face f = Face::ofEdge(plan, 1, 4.5, 3.2);   // the +x edge, (12,-10) -> (12,10)
-    CHECK(f.kind == Face::Kind::Flat);
+    CHECK(!f.ruled);
     CHECK_APPROX(f.width, 20.0, 1e-12);
     CHECK_APPROX(f.height, 3.2, 1e-12);
     const Vec3 bl = f.at(0, 0), tr = f.at(f.width, f.height);
     CHECK_APPROX(bl.x, 12.0, 1e-12); CHECK_APPROX(bl.y, 4.5, 1e-12); CHECK_APPROX(bl.z, -10.0, 1e-12);
     CHECK_APPROX(tr.x, 12.0, 1e-12); CHECK_APPROX(tr.y, 7.7, 1e-12); CHECK_APPROX(tr.z, 10.0, 1e-12);
-    CHECK_APPROX(f.normal(1, 1).x, 1.0, 1e-12);   // outward: to the right of a->b on a CCW plan
-    CHECK_APPROX(f.normal(1, 1).z, 0.0, 1e-12);
+    CHECK_APPROX(f.n.x, 1.0, 1e-12);   // outward: to the right of a->b on a CCW plan
+    CHECK_APPROX(f.n.z, 0.0, 1e-12);
+}
+
+TEST_CASE(a_ruled_face_runs_from_the_floor_outline_to_the_ceilings) {
+    // The storey above twisted: the ceiling's edge is not over the floor's, and at(x, y) rules between the two.
+    const Poly2 lower = {{-12, -10}, {12, -10}, {12, 10}, {-12, 10}};
+    const Poly2 upper = {{-12, -11}, {13, -10}, {12, 11}, {-13, 10}};
+    const Face f = Face::ofEdgeRuled(lower, upper, 1, 0.0, 4.0);
+    CHECK(f.ruled);
+    const Vec3 b = f.at(0, 0), t = f.at(0, f.height), tr = f.at(f.width, f.height);
+    CHECK_APPROX(b.x, 12.0, 1e-12); CHECK_APPROX(b.z, -10.0, 1e-12);
+    CHECK_APPROX(t.x, 13.0, 1e-12); CHECK_APPROX(t.y, 4.0, 1e-12); CHECK_APPROX(t.z, -10.0, 1e-12);   // the ceiling's corner
+    CHECK_APPROX(tr.x, 12.0, 1e-12); CHECK_APPROX(tr.z, 11.0, 1e-12);
+    CHECK(f.n.x > 0.9);   // still outward
+    // outlines that do not match corner for corner: the flat face
+    CHECK(!Face::ofEdgeRuled(lower, Poly2{{0, 0}, {1, 0}, {0, 1}}, 1, 0.0, 4.0).ruled);
 }
 
 TEST_CASE(a_section_grows_what_its_plan_grows) {

@@ -1,9 +1,9 @@
 #ifndef RAYTRACER_ENGINE_PROCGEN_CITY_ROADS_LANES_BLOCK_AUDIT_H
 #define RAYTRACER_ENGINE_PROCGEN_CITY_ROADS_LANES_BLOCK_AUDIT_H
 
-// The city's block/lot pass, run HEADLESS on the lane lab's road twin, and audited. Calls the engine's
-// own growLotBuildingsOnNets (pure: no ECS, no renderer) on exactly the RoadEntity the loader hands it,
-// so the blocks and lots here are the ones the J overlay draws in-engine. Every block is then measured
+// The city's block/lot pass, run HEADLESS on a lane lab's built pavement, and audited. Calls the engine's
+// own growLotBuildings (pure: no ECS, no renderer) on the pavement's holes, as the loader does, so the
+// blocks and lots here are the ones the J overlay draws in-engine. Every block is then measured
 // for what a person sees as "broken": thin protrusions (the area an 8 m morphological opening removes),
 // built pavement under the block, and vertex bloat. Drawn over the lab's paved surface as one SVG so
 // the whole thing is inspectable without starting the 3D engine.
@@ -88,9 +88,7 @@ constexpr double kBlockMarginBehindSidewalk = 0.3;   // the block begins just be
 constexpr double kMinBlockWidth = 16.0;              // the old effective rule at a 5 m inset
 
 // `citysim`: the level's citysim block (sidewalk, buildChance, parcel knobs, seed); empty -> defaults.
-// `fromScene`: hand the pass sceneBlocks() (the loader's lanelab path) instead of letting it extract
-// faces from the twin's graph; the twin then serves only as the road-clearance graph.
-BlockAudit auditBlocks(const Result& r, const nlohmann::json& citysim, bool fromScene = true);
+BlockAudit auditBlocks(const Result& r, const nlohmann::json& citysim);
 // Pavement (grey), blocks (tinted, red where broken), lots (thin outlines), built plans (dark).
 void writeBlocksSvg(const Result& r, const BlockAudit& a, const std::string& path);
 std::string summary(const BlockAudit& a);

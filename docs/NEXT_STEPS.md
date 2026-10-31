@@ -36,7 +36,7 @@ LOST coverage before this was tuned — 48.6% → 47.3%). Knobs: `citysim.alleys
 `living_city`: **COVER 48.6% → 50.4%** (15 070 → 15 643 m²), built 70 → 80,
 greens 27 → 8, `rejFrontage` 13 → **0** — stage 10's acceptance ("every lot
 fronts a street, or the interior explicitly connects out") now holds. Gate:
-`tests/test_lot_road_clearance.cpp alleys_recover_frontage_orphaned_rim_rows`,
+`tests/test_city_lots.cpp alleys_recover_frontage_orphaned_back_rows` (ADR-0268),
 a can-fail pair (alleys off must SHOW the orphaned rows; on must clear them
 and gain buildings — off 20 rejected/20 built, on 0 rejected/40 built).
 

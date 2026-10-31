@@ -75,6 +75,7 @@ const char* relativeDirection(Vec2 forward, Vec2 to) {
 }  // namespace
 
 void CityPlayerTransitSystem::onStart(engine::FrameContext& ctx) {
+    onRide_ = ctx.events.listen<engine::RideRequest>([this](const engine::RideRequest& r) { rideRequest_ = r.mode; });
     // E IS THE INTERACT KEY, and boarding is an interaction. It only acts when
     // a bus or cab is genuinely within reach, so the elevator (which also reads
     // E) is unaffected: a hoistway is indoors and a bus is not, and the two are
@@ -87,10 +88,10 @@ void CityPlayerTransitSystem::onStart(engine::FrameContext& ctx) {
 
 void CityPlayerTransitSystem::fixedUpdate(engine::FrameContext& ctx) {
     RideInput in;
-    // `ride bus|taxi|any` boards, `ride off` gets off. Staged as a Setting the
-    // way every other control verb reaches a system.
-    in.request = ctx.settings.getDouble("player.rideRequest", -1.0);
-    if (in.request >= 0.0) ctx.settings.setDouble("player.rideRequest", -1.0);
+    // `ride bus|taxi|any` boards, `ride off` gets off: a RideRequest, heard in
+    // onStart and taken by the next fixed step.
+    in.request = rideRequest_;
+    rideRequest_ = -1.0;
     // E. Latched in update(): `pressed` is a one-FRAME edge, and a frame can
     // run no fixed step at all, so reading it here dropped presses outright.
     // ElevatorSystem latches its E the same way.
@@ -303,6 +304,7 @@ void CityPlayerTransitSystem::hold(World& world, Entity player, Transform& t, co
     ps->carrier = pose;
     ps->local = local;
     ps->sitting = sitting;
+    ps->carSeat = sitting && carSeat_ >= 0;
     ps->eyeAbove = sitting ? kSeatedEye : kStandingEye;
     ps->hipBelow = kSeatedEye - kEyeAboveTransform;
     engine::rideStep(world, &physics_.physicsWorld(), player, &fly_);

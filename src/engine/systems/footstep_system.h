@@ -9,7 +9,7 @@
 #include <array>
 #include <cstdint>
 #include <memory>
-#include <random>
+#include "../../proc_rng.h"
 
 namespace engine {
 
@@ -52,7 +52,7 @@ private:
     double fallBeforeWater_ = 0.0;
     double swishLevel_ = 0.0;         // 0..1: how much tall grass the legs are wading through here
     FootstepTracker tracker_;
-    std::mt19937 rng_{0x5eed};
+    ProcRng rng_{0x5eed};
     int lastVariant_ = -1;
     Vec3 lastFeet_{};                 // where the feet were last tick: pace is what they MOVED, not what was asked
     bool haveLastFeet_ = false;

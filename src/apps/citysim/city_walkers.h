@@ -7,6 +7,8 @@
 #include "../../renderer/renderer.h"         // engine::MeshHandle
 #include "city_render.h"
 #include "walker_ragdolls.h"
+#include "../../engine/control/city_requests.h"
+#include "../../engine/control/control_commands.h"
 
 #include <unordered_map>
 #include <vector>
@@ -37,10 +39,16 @@ public:
     CityWalkerSystem(CityRenderSystem& city, engine::PhysicsSystem& physics)
         : city_(city), physics_(physics) {}
 
+    void onStart(engine::FrameContext& ctx) override;   // hears KnockRequest, answers walkers?/knock?/who?/...
     void fixedUpdate(engine::FrameContext& ctx) override;
     void onStop(engine::FrameContext& ctx) override;
 
 private:
+    engine::EventBus::Subscription onKnock_;
+    bool knockPending_ = false;
+    engine::ControlAnswers answers_;   // walkers? knock? flicker? activities? speeders?
+    std::string whoQuery_, whoResult_ = "none";   // `who? <id>`: asked once, answered every step
+    engine::ControlCommands::Binding answerWho_;
     void spawnWalkers(engine::FrameContext& ctx);
     void driveWalkers(engine::FrameContext& ctx);
 

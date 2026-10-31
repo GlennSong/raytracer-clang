@@ -89,6 +89,7 @@ struct BranchCardSpec {
     double fillSpacing = 0.35;       // ...about this far apart (0: none)
     int nearLeaves = 6000;           // the hero's leaves one by one (branch_cards.h wearNearLeaves)...
     int nearTwigTris = 9000;         // ...and its fine twigs' bark at most (triangles)
+    int heroWoodTris = 8000;         // the hero's trunk and limbs at most (tree_lods.h heroBarkBudget)
 };
 
 // THE NEEDLES of a conifer (branch_cards.h bakeNeedleCards / wearNeedles; Glenn, 2026-10-18, with a photo of a fir, a

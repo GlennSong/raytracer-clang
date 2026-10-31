@@ -3,7 +3,8 @@
 
 #include <cmath>
 #include <algorithm>
-#include <random>
+#include "proc_rng.h"
+#include <random>   // random_device: the tracer's per-thread seed
 
 namespace engine {
 
@@ -534,8 +535,8 @@ inline Real radiansToDegrees(Real radians) {
 }
 
 inline double randomDouble() {
-    thread_local std::mt19937 gen(std::random_device{}());
-    thread_local std::uniform_real_distribution<double> dist(0.0, 1.0);
+    thread_local ProcRng gen(std::random_device{}());
+    thread_local ProcUniform<double> dist(0.0, 1.0);
     return dist(gen);
 }
 

@@ -1,5 +1,5 @@
 #include "grass.h"
-#include "proc_rng.h"
+#include "../../proc_rng.h"
 #include "../mesh_builder.h"
 
 #include <cstdio>
@@ -90,7 +90,7 @@ RenderMesh grassCardMesh(const GrassClumpParams& p) {
 
 TextureData grassCardTexture(uint32_t seed, const GrassClumpParams& p) {
     char key[256];
-    std::snprintf(key, sizeof key, "grassCard/v1/%u/%.4f,%.4f,%.4f/%.4f,%.4f,%.4f/%.3f", seed, p.rootColor.x, p.rootColor.y,
+    std::snprintf(key, sizeof key, "grassCard/v2/%u/%.4f,%.4f,%.4f/%.4f,%.4f,%.4f/%.3f", seed, p.rootColor.x, p.rootColor.y,
                   p.rootColor.z, p.tipColor.x, p.tipColor.y, p.tipColor.z, p.lean);
     return bakeCached(key, [&] {
         const int count = 90;

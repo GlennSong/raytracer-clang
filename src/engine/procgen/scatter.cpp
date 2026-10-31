@@ -2,7 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
-#include <random>
+#include "../../proc_rng.h"
 #include <utility>
 
 namespace engine {
@@ -11,11 +11,11 @@ std::vector<Placement> scatterOnTerrain(const ScatterParams& params,
                                         const TerrainParams& terrain,
                                         const Noise& terrainNoise) {
     std::vector<Placement> placements;
-    std::mt19937 gen(params.seed);
-    std::uniform_real_distribution<float> coord(-params.regionSize * 0.5f,
+    ProcRng gen(params.seed);
+    ProcUniform<float> coord(-params.regionSize * 0.5f,
                                                  params.regionSize * 0.5f);
-    std::uniform_real_distribution<float> yawDist(0.0f, 2.0f * static_cast<float>(PI));
-    std::uniform_real_distribution<float> scaleDist(params.minScale, params.maxScale);
+    ProcUniform<float> yawDist(0.0f, 2.0f * static_cast<float>(PI));
+    ProcUniform<float> scaleDist(params.minScale, params.maxScale);
 
     // A separate, seed-derived field for the density mask, so clumping is
     // independent of the terrain's own shape but still reproducible.
@@ -29,8 +29,8 @@ std::vector<Placement> scatterOnTerrain(const ScatterParams& params,
     // unchanged when clustering is off.
     std::vector<std::pair<float, float>> parents;
     if (params.clusterCount > 0) {
-        std::mt19937 pgen(params.seed + 99u);
-        std::uniform_real_distribution<float> pc(-params.regionSize * 0.5f,
+        ProcRng pgen(params.seed + 99u);
+        ProcUniform<float> pc(-params.regionSize * 0.5f,
                                                  params.regionSize * 0.5f);
         for (int i = 0; i < params.clusterCount; i++)
             parents.push_back({pc(pgen), pc(pgen)});
@@ -43,7 +43,7 @@ std::vector<Placement> scatterOnTerrain(const ScatterParams& params,
         if (params.clusterCount > 0) {
             // Pick a parent and offset by a Box-Muller Gaussian (2 uniforms ->
             // 2 normals; a fixed draw count keeps it deterministic).
-            std::uniform_real_distribution<float> u01(0.0f, 1.0f);
+            ProcUniform<float> u01(0.0f, 1.0f);
             int pi = std::min(static_cast<int>(u01(gen) * params.clusterCount),
                               params.clusterCount - 1);
             float a = u01(gen), b = u01(gen);
@@ -119,8 +119,8 @@ std::vector<std::vector<Mat4>> bucketPlacementsBySpecies(
     std::vector<std::vector<Mat4>> buckets(numSpecies);
     if (numSpecies == 0) return buckets;
 
-    std::mt19937 pick(seed);
-    std::uniform_int_distribution<std::size_t> speciesPick(0, numSpecies - 1);
+    ProcRng pick(seed);
+    ProcUniformInt<std::size_t> speciesPick(0, numSpecies - 1);
     for (const Placement& pl : placements) {
         std::size_t si = speciesPick(pick);   // every placement lands in a bucket
         Mat4 m = Mat4::trs(pl.position,

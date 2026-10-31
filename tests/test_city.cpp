@@ -59,6 +59,17 @@ double distToSeg(double px, double pz, Vec2 a, Vec2 b) {
 }
 }  // namespace
 
+namespace {
+Poly2 square(Real s) {
+    return {{0, 0}, {s, 0}, {s, s}, {0, s}};   // CCW
+}
+bool hasPart(const BuildingMesh& bm, PartId id) {
+    for (const RenderMesh& p : bm.parts)
+        if (p.materialIndex == static_cast<int>(id)) return true;
+    return false;
+}
+}  // namespace
+
 TEST_CASE(stroke_ribbon_is_exact_and_never_strays) {
     // ADR-0048 back-to-basics: stroking a centerline into a flat ribbon.
     // (1) A straight constant-width line is an exact rectangle: area == length*width.
@@ -126,215 +137,6 @@ TEST_CASE(stroke_ribbon_hairpin_has_a_round_cap) {
 }
 
 
-TEST_CASE(radial_roads_make_rings_and_spokes) {
-    // ADR-0044: concentric rings sampled from true ARCS (bounded chord error) +
-    // avenues radiating from a central roundabout. No centre node, so the avenues
-    // meet the inner ring instead of converging to a spike; rings are smooth.
-    RadialParams rp;
-    rp.extent = 280; rp.ringSpacing = 70; rp.spokes = 8; rp.seed = 5;
-    RoadGraph g = radialRoads(rp);
-    CHECK(g.edges.size() > 0);
-
-    const int rings = 4;                          // round(280 / 70)
-    // Arc sampling gives many nodes per ring (a smooth circle), more than a coarse
-    // polygon would — comfortably above spokes per ring.
-    CHECK(g.nodes.size() > static_cast<std::size_t>(rings * rp.spokes * 3));
-
-    Real minR = 1e9, maxR = 0;
-    for (const RoadNode& n : g.nodes) {
-        minR = std::min(minR, n.pos.length());
-        maxR = std::max(maxR, n.pos.length());
-    }
-    CHECK(minR > rp.ringSpacing * 0.7);           // nothing inside the roundabout
-    CHECK(maxR <= rp.extent + rp.ringSpacing * 0.2);
-
-    // Sampled ring nodes sit ON their circle (true arc, not a chord midpoint that
-    // cuts the corner): every node is within chord-error slack of some ring radius.
-    int offCircle = 0;
-    for (const RoadNode& n : g.nodes) {
-        Real r = n.pos.length();
-        bool onRing = false;
-        for (int k = 1; k <= rings; ++k)
-            if (std::abs(r - k * rp.ringSpacing) < 1.0) onRing = true;
-        if (!onRing) offCircle++;
-    }
-    CHECK(offCircle == 0);
-
-    std::vector<Poly2> blocks = extractBlocks(planarize(g));
-    CHECK(blocks.size() > 8);
-}
-
-TEST_CASE(tensor_roads_blend_radial_core_into_grid_rim) {
-    // ADR-0044: the tensor field is radial in the core and a grid at the rim.
-    // We verify both regimes from one generator: near the centre the two road
-    // families run radial/tangential, far out they align to the grid axes.
-    TensorRoadParams tp;
-    tp.extent = 260; tp.spacing = 70; tp.step = 8;
-    tp.radialDecay = 110; tp.gridAngle = 0; tp.seed = 5;
-    RoadGraph g = tensorRoads(tp);
-    CHECK(g.edges.size() > 0);
-    CHECK(g.nodes.size() > 0);
-
-    // Everything stays inside the requested region.
-    for (const RoadNode& n : g.nodes) {
-        CHECK(std::abs(n.pos.x) <= tp.extent + 1.0);
-        CHECK(std::abs(n.pos.y) <= tp.extent + 1.0);
-    }
-
-    // Classify each edge by where it sits: in the core, the field is radial, so
-    // an edge should run either ~radially or ~tangentially. Count how many do.
-    int coreEdges = 0, coreAligned = 0, rimEdges = 0, rimAxisAligned = 0;
-    for (const RoadEdge& e : g.edges) {
-        Vec2 a = g.nodes[e.a].pos, b = g.nodes[e.b].pos;
-        Vec2 mid = (a + b) * 0.5;
-        Vec2 dir = normalize(b - a);
-        if (dir.lengthSquared() < 1e-9) continue;
-        Real r = mid.length();
-        if (r > 1e-3 && r < tp.radialDecay * 0.6) {
-            ++coreEdges;
-            Vec2 radial = normalize(mid);
-            Real along = std::abs(dot(dir, radial));     // 1 = radial, 0 = tangential
-            if (along > 0.85 || along < 0.15) ++coreAligned;
-        } else if (r > tp.radialDecay * 1.4) {
-            ++rimEdges;
-            Real ax = std::max(std::abs(dir.x), std::abs(dir.y));
-            if (ax > 0.92) ++rimAxisAligned;             // aligned to the grid axes
-        }
-    }
-    CHECK(coreEdges > 0);
-    CHECK(rimEdges > 0);
-    // The blend is approximate (the field rotates continuously), so we only ask
-    // that the dominant character holds for most edges in each regime.
-    CHECK(coreAligned * 2 > coreEdges);                  // >50% radial/tangential
-    CHECK(rimAxisAligned * 2 > rimEdges);                // >50% grid-aligned
-
-    // The streamlines actually enclose blocks once planarised.
-    std::vector<Poly2> blocks = extractBlocks(planarize(g));
-    CHECK(blocks.size() > 4);
-}
-
-TEST_CASE(tensor_roads_are_deterministic) {
-    TensorRoadParams tp; tp.extent = 200; tp.spacing = 60; tp.seed = 11;
-    RoadGraph a = tensorRoads(tp), b = tensorRoads(tp);
-    CHECK(a.nodes.size() == b.nodes.size());
-    CHECK(a.edges.size() == b.edges.size());
-}
-
-namespace {
-// Worst grade along an edge over the given heightfield (matches pruneSteepEdges).
-Real edgeGrade(const RoadGraph& g, const RoadEdge& e, const HeightField& h) {
-    Vec2 a = g.nodes[e.a].pos, b = g.nodes[e.b].pos;
-    Real len = (b - a).length();
-    return len < 1e-4 ? 0 : std::fabs(h(b.x, b.y) - h(a.x, a.y)) / len;
-}
-// Number of connected components among the nodes that appear in some edge.
-int edgeComponents(const RoadGraph& g) {
-    std::vector<int> p(g.nodes.size());
-    for (std::size_t i = 0; i < p.size(); ++i) p[i] = static_cast<int>(i);
-    std::function<int(int)> find = [&](int x) { return p[x] == x ? x : p[x] = find(p[x]); };
-    std::vector<char> used(g.nodes.size(), 0);
-    for (const RoadEdge& e : g.edges) { p[find(e.a)] = find(e.b); used[e.a] = used[e.b] = 1; }
-    std::set<int> roots;
-    for (std::size_t i = 0; i < g.nodes.size(); ++i) if (used[i]) roots.insert(find(static_cast<int>(i)));
-    return static_cast<int>(roots.size());
-}
-}  // namespace
-
-TEST_CASE(prune_steep_edges_keeps_the_network_connected) {
-    // ADR-0046: on a hillside tilted 0.4 in x, a 3x3 lattice's x-edges climb at
-    // grade 0.4 (>0.12) while its z-edges are flat. The prune must NOT fragment the
-    // graph: it keeps every gentle (z) edge and adds back only the minimal steep (x)
-    // bridges needed to join the three vertical lines — so the result is still one
-    // connected network, with the steep streets thinned to the unavoidable few.
-    HeightField slope = [](double x, double) { return 0.4 * x; };
-    RoadGraph g;
-    int id[3][3];
-    for (int j = 0; j < 3; ++j)
-        for (int i = 0; i < 3; ++i) id[i][j] = g.addNode(Vec2(i * 100.0, j * 100.0));
-    for (int j = 0; j < 3; ++j)
-        for (int i = 0; i < 3; ++i) {
-            if (i < 2) g.addEdge(id[i][j], id[i + 1][j], 8, RoadClass::Local);  // steep (x)
-            if (j < 2) g.addEdge(id[i][j], id[i][j + 1], 8, RoadClass::Local);  // flat  (z)
-        }
-    CHECK(g.edges.size() == 12u);
-    CHECK(edgeComponents(g) == 1);
-
-    RoadGraph pruned = pruneSteepEdges(g, slope, 0.12);
-    CHECK(edgeComponents(pruned) == 1);                 // still one coherent network
-    int gentle = 0, steep = 0;
-    for (const RoadEdge& e : pruned.edges)
-        (edgeGrade(pruned, e, slope) <= 0.12 ? gentle : steep)++;
-    CHECK(gentle == 6);                                 // every walkable street kept
-    CHECK(steep == 2);                                  // only the 2 bridges to link 3 lines
-}
-
-TEST_CASE(prune_steep_edges_keeps_arterials_and_never_orphans) {
-    // The skeleton stays whole: an Arterial is kept even when steep, and a node's
-    // last edge is kept rather than orphan it. A lone steep local spur off a node
-    // that has no other edge must survive.
-    HeightField slope = [](double x, double) { return 0.5 * x; };
-    RoadGraph g;
-    int a = g.addNode(Vec2(0, 0)), b = g.addNode(Vec2(100, 0)), c = g.addNode(Vec2(200, 0));
-    g.addEdge(a, b, 16, RoadClass::Arterial);           // steep but structural
-    g.addEdge(b, c, 8, RoadClass::Local);               // steep, but c has no other edge
-    RoadGraph pruned = pruneSteepEdges(g, slope, 0.12);
-    CHECK(pruned.edges.size() == 2u);                   // both kept (skeleton + no orphan)
-}
-
-TEST_CASE(connect_components_heals_a_split_network) {
-    // ADR-0046: two separate street fragments must be stitched into one connected
-    // graph by the shortest bridge between them (the coherence backstop after a
-    // contour-coupled trace leaves non-crossing streamlines).
-    RoadGraph g;
-    int a = g.addNode(Vec2(0, 0)),  b = g.addNode(Vec2(50, 0));    // fragment 1
-    int c = g.addNode(Vec2(0, 200)), d = g.addNode(Vec2(50, 200)); // fragment 2, far off
-    int e = g.addNode(Vec2(500, 0)), f = g.addNode(Vec2(500, 50)); // fragment 3
-    g.addEdge(a, b, 8); g.addEdge(c, d, 8); g.addEdge(e, f, 8);
-    CHECK(edgeComponents(g) == 3);
-
-    RoadGraph joined = connectComponents(g);
-    CHECK(edgeComponents(joined) == 1);                 // one coherent network
-    CHECK(joined.edges.size() == 5u);                   // 3 original + 2 connectors
-}
-
-TEST_CASE(tensor_field_follows_contours_on_a_slope) {
-    // ADR-0046: with terrain coupling the avenues bend to follow the hillside, so
-    // the major (Collector) family runs far gentler than the terrain-blind layout
-    // that marches the same field straight across the slope.
-    HeightField slope = [](double x, double) { return 0.4 * x; };
-    auto meanCollectorGrade = [&](const RoadGraph& g) {
-        Real sum = 0; int n = 0;
-        for (const RoadEdge& e : g.edges)
-            if (e.klass == RoadClass::Collector) { sum += edgeGrade(g, e, slope); ++n; }
-        return n ? sum / n : Real(0);
-    };
-
-    TensorRoadParams blind; blind.extent = 200; blind.spacing = 60; blind.seed = 7;
-    RoadGraph gBlind = tensorRoads(blind);
-
-    TensorRoadParams aware = blind;
-    aware.terrain = &slope; aware.slopeAlign = 2.0; aware.maxGrade = 0.12;
-    RoadGraph gAware = tensorRoads(aware);
-
-    Real blindGrade = meanCollectorGrade(gBlind);
-    Real awareGrade = meanCollectorGrade(gAware);
-    CHECK(awareGrade < blindGrade);          // avenues bent toward the contours
-    CHECK(awareGrade < 0.12);                // and they actually read as walkable
-}
-
-namespace {
-Poly2 square(Real s) {
-    return {{0, 0}, {s, 0}, {s, s}, {0, s}};   // CCW
-}
-bool hasPart(const BuildingMesh& bm, PartId id) {
-    for (const RenderMesh& p : bm.parts)
-        if (p.materialIndex == static_cast<int>(id)) return true;
-    return false;
-}
-}  // namespace
-
-// --- polygon ----------------------------------------------------------------
-
 TEST_CASE(polygon_area_centroid_and_winding) {
     Poly2 sq = square(10);
     CHECK_APPROX(area(sq), 100.0, 1e-9);
@@ -394,17 +196,16 @@ TEST_CASE(polygon_split_by_line) {
     CHECK_APPROX(area(left), 50.0, 1e-6);
 }
 
-// --- shape grammar (Phase 0) ------------------------------------------------
+// --- shape grammar (Phase 0; the plan grammar since ADR-0270) ----------------
 
 TEST_CASE(grammar_grows_a_multipart_building) {
     BuildingParams p; p.floors = 5; p.seed = 3;
-    Scope s = scopeFromFootprint(square(18), 0.0, 20.0);
-    BuildingMesh bm = growBuilding(s, p);
+    BuildingMesh bm = growPlanBuilding(square(18), p, 0.0);
     CHECK(bm.parts.size() >= 3);                 // wall + glass + roof at least
     CHECK(hasPart(bm, PartId::Wall));
     CHECK(hasPart(bm, PartId::Glass));
-    // 5 floors * 3.2 + 4.5 ground + 1.1 parapet = 21.6 m.
-    CHECK_APPROX(bm.height, 5 * 3.2 + 4.5 + 1.1, 1e-6);
+    // the ground storey, the floors and the parapet at least (a penthouse may stand higher)
+    CHECK(bm.height >= p.groundHeight + p.floors * p.floorHeight + p.parapet - 1e-6);
     CHECK(!bm.proxy.vertices.empty());           // coarse LOD proxy emitted
     CHECK(!bm.attaches.empty());
 }
@@ -461,8 +262,7 @@ TEST_CASE(city_lot_mass_box_faces_outward) {
 TEST_CASE(grammar_hlod_proxy_faces_outward) {
     for (int seed : {3, 11, 29}) {
         BuildingParams p; p.floors = 5; p.seed = seed;
-        Scope s = scopeFromFootprint(square(18), 0.0, 20.0);
-        BuildingMesh bm = growBuilding(s, p);
+        BuildingMesh bm = growPlanBuilding(square(18), p, 0.0);
         const RenderMesh& m = bm.proxy;
         CHECK(!m.vertices.empty());
         CHECK(m.indices.size() >= 3);
@@ -493,17 +293,17 @@ TEST_CASE(grammar_hlod_proxy_faces_outward) {
 }
 
 TEST_CASE(grammar_wall_part_picks_procedural_material) {
-    Scope s = scopeFromFootprint(square(18), 0.0, 16.0);
+    const Poly2 s = square(18);
     // A facade routes its wall geometry to its chosen procedural part (here
     // brick), not the flat Wall part.
     BuildingParams brick; brick.floors = 4; brick.seed = 7; brick.wallPart = PartId::Brick;
-    BuildingMesh bm = growBuilding(s, brick);
+    BuildingMesh bm = growPlanBuilding(s, brick, 0.0);
     CHECK(hasPart(bm, PartId::Brick));
     CHECK(!hasPart(bm, PartId::Wall));
 
     // The default keeps the flat Wall material.
     BuildingParams plain; plain.floors = 4; plain.seed = 7;
-    BuildingMesh pm = growBuilding(s, plain);
+    BuildingMesh pm = growPlanBuilding(s, plain, 0.0);
     CHECK(hasPart(pm, PartId::Wall));
     CHECK(!hasPart(pm, PartId::Brick));
 
@@ -520,8 +320,8 @@ TEST_CASE(grammar_wall_part_picks_procedural_material) {
 
 TEST_CASE(grammar_walkable_ground_punches_a_door) {
     BuildingParams p; p.floors = 3; p.walkableGround = true; p.seed = 1;
-    Scope s = scopeFromFootprint(square(16), 0.0, 12.0);
-    BuildingMesh bm = growBuilding(s, p);
+    const Poly2 s = square(16);
+    BuildingMesh bm = growPlanBuilding(s, p, 0.0);
     CHECK(hasPart(bm, PartId::Door));            // a real entrance opening
     bool entrance = false;
     for (const AttachPoint& a : bm.attaches) if (a.tag == "entrance") entrance = true;
@@ -529,13 +329,13 @@ TEST_CASE(grammar_walkable_ground_punches_a_door) {
 }
 
 TEST_CASE(grammar_taller_with_more_floors_and_deterministic) {
-    Scope s = scopeFromFootprint(square(16), 0.0, 12.0);
+    const Poly2 s = square(16);
     BuildingParams a; a.floors = 4; a.seed = 7;
     BuildingParams b; b.floors = 12; b.seed = 7;
-    CHECK(growBuilding(s, b).height > growBuilding(s, a).height);
+    CHECK(growPlanBuilding(s, b, 0.0).height > growPlanBuilding(s, a, 0.0).height);
     // Same seed + params -> identical geometry.
-    BuildingMesh m1 = growBuilding(s, a);
-    BuildingMesh m2 = growBuilding(s, a);
+    BuildingMesh m1 = growPlanBuilding(s, a, 0.0);
+    BuildingMesh m2 = growPlanBuilding(s, a, 0.0);
     CHECK(m1.parts.size() == m2.parts.size());
     CHECK(m1.merged().vertices.size() == m2.merged().vertices.size());
 }
@@ -571,32 +371,6 @@ TEST_CASE(parcel_is_deterministic) {
 }
 
 // --- road network (Phase 2) -------------------------------------------------
-
-TEST_CASE(road_grid_blocks_equal_cells) {
-    GridRoadParams gp; gp.extent = 200; gp.cellSize = 100; gp.jitter = 0; gp.seed = 1;
-    RoadGraph g = gridRoads(gp);
-    CHECK(g.nodes.size() == 25);                 // 5x5 node grid
-    RoadGraph pg = planarize(g);
-    std::vector<Poly2> blocks = extractBlocks(pg);
-    CHECK(blocks.size() == 16);                  // 4x4 cells
-    Real total = 0;
-    for (const Poly2& b : blocks) { total += area(b); CHECK(isCCW(b)); }
-    CHECK_APPROX(total, 400.0 * 400.0, 1.0);     // faces tile the region exactly
-}
-
-TEST_CASE(road_planarize_splits_a_crossing) {
-    // Two crossing segments forming an X: planarize must insert the centre node
-    // and split both edges into 4.
-    RoadGraph g;
-    int a = g.addNode({-10, 0}), b = g.addNode({10, 0});
-    int c = g.addNode({0, -10}), d = g.addNode({0, 10});
-    g.addEdge(a, b); g.addEdge(c, d);
-    RoadGraph pg = planarize(g);
-    CHECK(pg.nodes.size() == 5);                 // 4 ends + 1 crossing
-    CHECK(pg.edges.size() == 4);                 // each segment split in two
-}
-
-// --- Floorplan buildings (building-grammar-plan.md P3) ----------------------
 
 TEST_CASE(plan_building_extrudes_an_l_plan) {
     // An L-shaped plan grows an L-shaped building: geometry reaches into BOTH

@@ -67,7 +67,6 @@ struct CityProducts {
     RoadGraph nav;                   // navRoadGraph(nav twin, ground): what the sim ROUTES on -- travel-lane widths (ADR-0115)
     RoadGraph lotNav;                // navRoadGraph(twin, ground): the same streets at the LOT clearance widths -- the lot pass
                                      // keeps buildings width/2 + clearance off them and walks doors to their kerbs
-    RoadGraph row;                   // twin nodes + Freeway/Ramp edges: the lot pass's keep-out
     std::vector<Ring> holes;         // un-inset pavement holes >= 2000 m² (blocks after the level's sidewalk inset)
     // THE DRIVING SURFACE, as a queryable field, and the kerb line around it. Everything the
     // sim stands ON a road reads these: moving traffic, parked cars, painted bays, signal

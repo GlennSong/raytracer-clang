@@ -12415,16 +12415,47 @@ drifts.
   so probes and MCP tools keep working:
   1. The MCP server builds its tool list from `commands? json` (the hand-written list goes, except the composite
      tools such as `screenshot` and `launch_viewer`).
+     **Done:** one tool per verb (`?` as `_q`, questions read-only), the site's `commands.json` when no viewer
+     runs, re-read after `launch_viewer`/`viewer_status`/`reload` with `tools/list_changed`; seven composites stay.
   2. Lua registers verbs (`control.command(name, usage, summary, fn)`), owned by the script.
+     **Done:** `control.command{name=, usage=, summary=, run=}` from a behaviour's start/update, owned by its entity
+     (gone when the entity or its ScriptBehaviour is, and all of a ScriptSystem's when it is); `control.run(line)`
+     runs any verb. A verb run from the socket gets its own context on the last tick's world; its spawns apply when
+     it returns. The command table now outlives the state stack (declared before it in Application).
   3. Commands become typed events on the EventBus (`TeleportRequest`, the `possess.cmd` family, daynight, input taps,
      `PlayerThrown` for `player.limp`). Event types describe their fields once through the property layer
      (ADR-0018), which gives Lua `events.publish` / `events.on` and the socket's parsing without per-event code. Engine
      events are declared in C++; gameplay and scene events may be declared in Lua. Hot, per-agent events stay
      C++-only.
+     **Done:** 18 named request types. Teleport, CameraPose, CameraDetach, Person, Limp (the vehicle's throw too,
+     with its velocity), VehicleSpawn, Interact, Elevator, DayNight, Weather and KeyTap/KeyHold in engine headers
+     beside their systems; Possess, Ride, TrainBoard, Knock, Pin and FindPlace in control/city_requests.h, the
+     contract with the city-free Application. A verb publishes; with nobody listening it answers "err <verb>:
+     nothing here takes it" instead of staging a request nothing will take (`teleport` in the editor used to reply
+     "staged", then fire on the next play start). Systems hold EventBus::Subscription members, so they stop
+     hearing when they go.
   4. Answers become questions a system answers when asked (its own `?` verb) instead of strings rewritten into
      Settings; `telemetry.askedAt` goes with them.
+     **Done:** the engine still lists every question (usage, summary, a default "nothing answers it here (it needs
+     X)"); the owning system binds the real answer while it runs (ControlCommands::bind, a Binding member), and a
+     board-style answer goes through ControlAnswers, which also knows when it was last asked: the island census
+     runs only while one of the city's own questions is being asked, not any question at all. 24 answers moved;
+     `daynight?`'s sim hour comes from a SimHourQuery on the bus.
   5. `watch <event>` streams events back over the socket (and to MCP as notifications), so probes stop polling.
+     **Done (with step 3's groundwork):** the bus names types (`describeEvent<E>(bus, name, summary)`, fields
+     through the property layer, which gained an int field); `events?`, `publish <Event> {json}`, `watch` and
+     `unwatch` on the socket, a watch lasting as long as its connection and never stalling a frame (a full client
+     buffer drops the line); Lua `events.publish(name, table)` (queued) and `events.on(name, fn)` / `events.off`,
+     owned by the script. PlaySound is the first named type. The JSON crosses event_bus.h as text: the vendored
+     library has no forward header.
   6. Settings keeps preferences only, and stops saving the transient keys.
+     **Done:** Settings::persists: the 57 keys the bus retired are dropped when an old settings.json loads.
+     **Then the last one-shots:** `overlay lamplights` (a LampLightsRequest for RenderSystem; `lamps.lights` was
+     saved, so a lights-off A/B used to outlive the run) and the city layers (a CityLayerRequest, which the web
+     panel's rt_web_city sends too); `clouds ...` (a CloudsRequest, fields by name); `teleport open` (a
+     TeleportPanelRequest); `jitter` / `jitter?` (a JitterRequest, answered by CityRenderSystem). Play Here is the
+     play factory's `fromHere` argument, passed to ArenaState, not a flag left in Settings. No system reads a
+     Settings key as a command now; 68 retired keys are dropped on load.
 - **Lua's three doors**, for the record: direct calls for questions (`entity.get_position`; generic component access
   through the property layer belongs with #124), queued commands for actions (`spawn.*`), and the shared bus for
   announcements.
@@ -12437,3 +12468,944 @@ string bus again (ADR-0066 alternative c).
 **Consequences.** A verb can no longer be handled twice. The listing is the one description of the channel, so the MCP
 tool list and the docs can come from it. Unknown verbs answer `err unknown command: X (try commands?)` rather than a
 hand-kept list that had fallen behind. No bake or level output changes.
+
+## ADR-0254 — One body: sitting, walking and first person are poses and views of the jointed body
+
+**Context.** The duplicate-systems sweep (#117, wave 3, item 34; Glenn: "We should do wave 3"). Four things draw the
+player's body, and a fifth draws everyone seated:
+- CityPlayerBodySystem (citysim): the walker's baked walk-cycle mesh, in third person, walking and in the air, and the
+  seated manikin when the player is a passenger;
+- PlayerBodySystem: the jointed body (ADR-0245) for every other mode, ragdolls, and the driver's seat (ADR-0252);
+- PlayerArmsSystem: box sleeves and hands in first person, posed by their own rules;
+- `buildSeatedOccupant` (procgen/vehicle/occupant): a separate SAE manikin with its own knees, for bench and picnic
+  sitters, bus and train riders, every car's driver and Lua `mesh.occupant`. ADR-0245 owes moving it onto the body.
+
+**Decision.** One body, `BlockBody` posed by a `BodyPose`; what differs is the pose and how much of it is drawn.
+1. **Sitting is a pose.** `buildSeatedOccupant` keeps its SAE parameters as the API but poses the jointed body with
+   `seatedPose` (driver_seat.h, the player's own seat rule): the torso reclined by the back angle, the feet placed
+   where the manikin's solve put the heels, the hands where its arms reached. The body is scaled to the cabin's
+   sitting height, never up: a sedan's 0.78 m makes a 0.87-scale driver, as the manikin's trimmed torso did. The
+   manikin's feet blocks go; the standing body has none either.
+2. **Walking is a pose.** PlayerBodySystem now draws every mode: the walk with `walkBodyPose` (the walkers' stride,
+   advanced by the body's real speed with the walkers' rule), the air with soft knees, the freecam's body left
+   standing, and the passenger's seat with (1), carried with the rider where RidingSystem draws them.
+   CityPlayerBodySystem is deleted.
+3. **First person is a view.** PlayerArmsSystem keeps deciding where the hands go and its props (the wings, the
+   canopy, the rope, the watch), but its arms are the body's arm tubes reaching from the shoulders to those hands
+   (`reachTo`), so an arm bends at the elbow the way the third-person body's does.
+   The view draws the arm at 0.6 of the body's girth (`BodyMeshes::kFirstPersonGirth`, the old sleeve's 7.5 cm): at
+   0.3 m from the eye the body's 12 × 16 cm arm filled the lower edge of the view. The bones and the bend are the
+   body's.
+4. **One walk cycle.** The stride (`kWalkPoses`, `kMaxSwing`, `advanceStride`, `walkPoseIndex`) moves from citysim to
+   procgen/person.h beside `walkBodyPose`, which had copied its 0.55 swing as a literal. The walkers bake its poses;
+   the player's body is posed at its exact swing every step.
+5. **No mesh is built mid-stride.** `BodyMeshes::warm` makes every fold's limb tube when the body is first shown
+   (~120 small meshes; the first person's thinner arms ~60). The walker body built its poses as they were first
+   used, a hitch while walking (TECH_DEBT).
+6. **A back seat is the car's own bench** (Glenn, in a cab's back seat: "He's poking out the back of the car. He's not
+   sitting in the seat"). The city guessed a back seat 0.85 m behind the driver in any car over 3.9 m. The kit
+   sedan has no bench: 1.6 m from the windscreen's foot to the rear window's, so the guess sat the rider in the
+   boot. The interiors now publish the bench's hip point (`rear_hip`: vehicle_kit.lua `kit.interior`, the C++
+   `buildCarInterior`), the recipe reader keeps it, and a car without one offers its front passenger seat. A seated
+   passenger in a car takes the sedan's numbers (`carPassenger`: 0.78 m sitting height, reclined), on a bus or a
+   train a chair's (`Passenger::carSeat`). Tested: every bench is behind the driver, short of the tail, and a
+   passenger on it keeps their head under the roof (3 of the default fleet's 14 slots have one, 15 of
+   fleet_mixed's 26).
+
+**Measured / seen** (river_town at noon): the third-person body striding with knees and elbows; first person running
+and with the gun drawn, the left forearm reaching across to the barrel; two bench sitters on the jointed body, hands
+in their laps; in a kit-sedan cab, the rider in the front passenger seat, inside the car. Tests: the sedan's driver still clears the roof and the floor; the seated pose puts the heels at the
+manikin's floor, the hands ahead, the scale under 1 in a sedan and never above 1. A seated person is now 720
+vertices against the manikin's 240; seated people are drawn only from the sim's near set (63 to 90 on river_town).
+
+**Consequences.** One body, one walk cycle and one seated rule: a change to the body's proportions, its knees or its
+sitting shows everywhere at once. The player's Transform no longer carries a facing (nothing read it). No bake
+output changes.
+
+**Alternatives.** (a) Leave the manikin: two sets of knees and proportions to keep in step, the ADR-0245 debt. (b) A
+GPU-skinned body with views: right with animation clips (ADR-0245, later), far more than this needs now.
+
+## ADR-0255 — Two cubic kernels: every curve is a Hermite or a Bezier through curve.h
+
+**Context.** The duplicate-systems sweep (#117, wave 3, item 36). ADR-0031 made `Spline<T>` the curve kernel, but
+seven places still wrote out a cubic basis of their own: the centripetal smoother's Barry-Goldman pyramid
+(terrain_field, ADR-0048), the road net's `hermitePoint` (road_mesh), the lane connectors' Hermite (lane_expand),
+`EditableCurve`'s Bezier and its derivative (ADR-0050), and three more Beziers written inline: the tree's sweeping
+limbs, the plan scene's ramp `cubic` and the city plan's freeway bend.
+
+**Decision.**
+1. **Two kernels in curve.h:** `hermite` / `hermiteDerivative` (end values and tangents) and `bezier` /
+   `bezierDerivative` (four control points), templated over any T with + and * double. `Spline<T>::eval` and
+   `derivative` call `hermite`. A new curve calls a kernel; it never writes the basis out again.
+2. **Centripetal is a Spline constructor.** `Spline<T>::centripetal(points, closed)` folds the non-uniform knots
+   (spacing = sqrt of the chord) into each knot's in and out tangents, so each segment still runs u in [0,1].
+   `smoothCentripetalCatmullRom` keeps its decimation and its sampling and builds one; `catmullRomAt` is deleted.
+   Checked against the deleted pyramid over 400 random open and closed paths: worst difference 1.75e-13 m.
+3. **The other six call the kernels.** Each kept its arithmetic in the kernel's order, so its numbers are unchanged
+   except the lane connector, which now passes its tangent scaled by the chord (`t0 * L`) rather than scaling the
+   basis weight; only authored connectors use it, and no level has any (lanelab's hill_junction does).
+4. **PolyMesh keeps counter-clockwise faces** (the item also proposed flipping it). The kit never hands index order
+   to the renderer: `toParts` winds every triangle to its face's normal with `MeshBuilder::triFacing`, so the
+   engine's clockwise rule holds at the only place a render mesh is made. Counter-clockwise is what its Newell
+   normal, inset bisectors, extrude boundary walk and `signedVolume` are written for; flipping it would touch every
+   one of them and change no output.
+
+**Measured.** river_town rebaked before and after, `rt_bake --sections`: every geometry section byte-identical (only
+the timing report differs), with and without the connector change. Tests: the Bezier kernel equals the Hermite with
+tripled tangents; on collinear uneven points uniform Catmull-Rom doubles back and the centripetal Spline does not;
+a closed centripetal Spline wraps with matching tangents at the seam.
+
+**Consequences.** No bake changes, so no tag bump. Arc length, frames and sampling written against `Spline<T>` now
+also work for a centripetal curve.
+
+**Alternatives.** Lowering `EditableCurve` and the road net onto stored `Spline` knots: both rebuild their
+tangents from neighbours on every edit, so a kernel call is the whole of what they share.
+
+## ADR-0256 — Cache files record the levels that use them; one hash folds every key
+
+**Context.** The duplicate-systems sweep (#117, wave 3, item 37), and the bake housekeeping Glenn approved on
+2026-10-04. Six places folded a cache key with their own copy of FNV-1a: `bundle::fnv1a` beside hand-written loops in
+the population cache (`Fnv` in city_sim), the weather key, the ground maps, texture fields, the cloud noise and the
+erosion bake. The terrain files (erosion, maps, weather, pyramid, world maps) and the population are named by a
+content hash, so levels building the same ground share one file and nothing says whose it is: only bundles could be
+pruned, and cache/terrain had reached 18.9 GB.
+
+**Decision.**
+1. **One hash.** `bundle::Fnv` folds a key field by field over `fnv1a`. The population, weather, maps and texture-field
+   keys use it or `fnv1aStr`; each folds the same bytes in the same order, so every existing file keeps its name
+   (checked live: river_town's pyramid, normal and cover maps and population, and terrain_lab's weather and ground
+   maps all hit the files already on disk). Two stay as they are: the erosion bake folds whole 8-byte words, and
+   changing that would re-run every level's erosion, the slowest bake, for a path item 39 retires; the Metal cloud
+   noise can't be built on this machine.
+2. **A record beside each file.** `<file>.uses` (engine/bundle/cache_use.h): the file's kind and, per level
+   (absolute path), the time the load that last read or wrote it began. `loadLevel` sets the level
+   (`setCacheLevel`); the erosion, maps, weather, pyramid, world-map and population caches call `noteCacheUse` on a
+   hit and after a write. Written aside and renamed.
+3. **The prune covers them.** `rt_bake --prune` at the default root also lists cache/terrain and cache/population: a
+   file is stale once, for every level that used it, a newer file of its kind has been used since, or that level's
+   file is gone (a test's temporary level). A shared file stays while any of its levels still uses it. A file
+   without a record is kept and counted.
+
+**Measured.** The first dry run: 389 files, 6 with records, 0 stale; 383 written before this have no record (18.89
+GB) and are kept until a load stamps them. Test: two loads a second apart; level one moves to a new erosion file
+and pyramid, level two keeps the shared pyramid, a deleted level's file goes, an unrecorded file and an in-flight
+write stay.
+
+**Consequences.** A level's ground can be cleaned without guessing by date. A load that hits the pyramid never opens
+the weather or erosion files under it, so those keep their older stamp, but nothing newer of their kind replaces
+them, so they stay; they go when the ground changes. The rt-bake-cleanup skill is still needed for unrecorded files.
+Still owed: the level suite pruning after itself, and the editor's cache panel showing the terrain files.
+
+**Alternatives.** One index file for the whole cache: two viewers loading at once would race on it; a record per
+file only races with itself. Keying the terrain files by level: levels would stop sharing ground they build alike.
+
+## ADR-0257 — One erosion: the weather bake; the droplets retire
+
+**Context.** The duplicate-systems sweep (#117, wave 3, item 39). Two systems eroded a level's ground: the droplet
+sim (Beyer / Lague; `erodeField`, `bakeErodedTerrain`, its Metal and Vulkan kernels, Lua `terrain.erode`), run for any
+terrain with `"erode": true`, and the weather bake (ADR-0125..0127: stream power from the level's own uplift, placed
+peaks, refine level by level), run when the terrain also has a `"weather"` block. Droplets only scratch gullies into
+the noise; they hold no water, and their constants only work on 10-20 m cells (at 3 m they pitted the ground,
+ADR-0124). Nine levels, a generator and a Lua demo still used them. Glenn, 2026-10-27: "let's drop the droplet means of
+erosion. And redo the other levels or if some of those levels aren't needed let's delete them."
+
+**Decision.**
+1. **Levels.** Deleted (Glenn's pick): `coast`, `coast_city` (and its lanelab source, conversion and lanes-corpus
+   entry), `erosion`, `island_8_saltwood` (the September island, its signs and lanelab plan; island_8_nature replaced
+   it), and `script_terrain_eroded` with `terrain_eroded.lua` (the Lua droplet demo). Converted to a `"weather"` block
+   sized to the map: `range` (600 m), `piedmont` and `piedmont_roads` (8 km, one block so they share one bake),
+   `piedmont_mini` (2.6 km), `metro_v2_test` (2.76 km), and the lanes-corpus sources `hillcity`, `metro_hills`,
+   `metro_route`, `metro_v2_test`, `piedmont_mini`. Each block is island_8_weathered's scaled to the map: about 2 m
+   fine cells, a grow grid of 5-20 m cells, the shape kept below a seventh to a thirteenth of the map, peaks spaced a
+   quarter of it.
+2. **Code.** `erodeField`, `bakeErodedTerrain`, the droplet kernels (Vulkan `erosion.comp` keeps THERMAL and APPLY;
+   `erosion_gpu.mm` and `shaders/metal/erosion.metal` are gone), `ErosionParams`' droplet fields, the droplet `.bin`
+   cache, the loader's static-mesh erode path, `generateTerrainMesh`, `TerrainParams::erodeLandOnly` and Lua
+   `terrain.erode`. `erode()` is now the weather block's opt-in last stage: breach, the pipe model, thermal (GPU), or
+   thermal alone (CPU). `"erode": true` stays the switch; without a `"weather"` block the ground stays as drawn and the
+   log says why. `level_scene` (the offline tracer) reads the same weathered ground as the loader. The island
+   generator writes island_8_weathered's weather block; `city_plan island` sketches it at 2048² (the coarser refine
+   levels are the same ground; the full 8192² bake is a quarter of an hour).
+3. **`rt_erode` bakes the weather block** (`--res`, `--grow-res`, `--grow-iterations`, the stream-power and water
+   flags override it) and takes the water block's sea level, as the loader does. Without that a preview measured the
+   "plains" from the sea floor and grew relief across metro_v2_test's whole coastal shelf.
+
+**Measured** (rt_erode, RTX 3080; change = weathered minus drawn). range: 1.1 s. metro_v2_test: 11 s; the shelf the
+city stands on moves 0.3 m rms (1.8 m at most), the range 21 m rms. piedmont: 2 min 46 s, 1.1 GB peak; its three towns
+move 0.15 m rms (1.4 m at most). piedmont_mini 8.6 s, hillcity 9.3 s, metro_hills 1.9 s: the ground below 30 m moves
+0.4-1.1 m rms. The droplet bakes these replace took under a second each. GPU thermal against CPU thermal on the test
+hills: 0.0009 rms apart against 0.46 carved.
+
+**Consequences.** One erosion system. The converted levels re-bake their ground once (piedmont's three minutes join
+the nightly suite's cold build) and their roads and lots are rebuilt on it. Linux weather keys are unchanged (the
+backend tag is still `vk-erosion-v1`); on a Mac the backend reads `cpu` now that the Metal port is gone, so a Mac
+re-bakes each weathered ground once. The island levels keep their dead `erodeDroplets`/`erodeRes`/... keys: they are
+part of the weather key, and dropping them would re-run the island's quarter-hour bake for nothing. The lanes-corpus
+baseline is re-recorded for the converted scenes (coast_city's row is gone). metro_hills moved its sea from -5 to -20 m:
+on the drawn ground 41% of its city disc is sea -- the droplets' over-strong deposition had filled that lowland above
+it -- and the recipe built 1 street of 44; at -20 it builds 59 with no ring, the scene it was. Its new ground shows the
+lane builder 31 deck cracks and a 73 cm junction mismatch (it was clean), and metro_route one non-manifold edge in
+128k triangles: findings for the builder, recorded in the baseline, not fixed here. metro_v2, hillcity and
+piedmont_mini have no regressions; hillcity now passes "no terrain above any deck". Untracked `*.cameras.json` bookmarks of the deleted levels are left
+for Glenn.
+
+**Alternatives.** Keeping droplets as a quick path for levels that don't need realism (like the two tree systems):
+Glenn chose one system. Leaving the small labs on droplets: then the code stays and item 39 isn't done.
+
+## ADR-0258 — One floor planner for offices and homes: the zoned floor, with a lobby mode for shallow plates
+
+**Context.** The duplicate-systems sweep (#117, wave 3, item 35, the floor planners first). An office floor had four
+planners and an apartment floor three: the zoned floor (ADR on floor_zones, 2026-10-16) tried first, and behind it the
+older ones as fallbacks -- `officePlan` (rectangles only), `apartmentPlan`, `wrapFlatsPlan`, the ring relabelled as
+studios, the desk row as a residents' lounge. Glenn: keep different building types separate ("their layouts are
+different"), merge the fallbacks. A temporary census (every enterable building's floors planned, the planner that laid
+each counted) measured how often the fallbacks fired. On island_8_nature's upper floors: apartment towers 3,153 zoned,
+**1,846 (37%) fallen back**; offices 6,963 zoned, **~1,690 (20%)**; 762 floors of stair-only blocks of flats never
+tried the zoned floor. Nearly every failure was one shape: a **shallow** plate, 2 to 5 m from the glass to the core.
+The zoned floor keeps a 2.2 m corridor round the core, which leaves window lots under 2 m deep, and drops them.
+
+**Decision.**
+1. **Lobby mode** (`FloorZoneParams::lobbyOnly`): when the corridor cut leaves no lots, the core keeps clear only its
+   lobby (the strip in front of its lift doors out to the glass) and the lots take the band round it whole. The lobby
+   is the floor's way in; the core's own walls are not (doors and access are measured onto the lobby alone). An
+   office's lots off the lobby become open zones (desk rows, open plan), reached through each other; enclosed rooms
+   are those with a door onto the lobby or an open zone. Only floor that reaches the lobby at least a doorway wide is
+   circulation: a pocket the lots cut off (or reach through a slit beside the core) joins the lot beside it, so no
+   door opens onto nowhere. And every zoned floor's walk now goes round the core, not through it: the grid walk
+   (`floorIsWalkable`) knows only the planner's walls, so with lots against the core it walked through the shafts.
+2. **Homes.** A floor of homes the corridor cut cannot lay is two flats wrapped round the core off its lobby: the
+   wrap-flats layout, now `wrapFlatsLayout`, called by `zonedFloorPlan` rather than standing as a planner of its own.
+   One too small even for that (a mid-rise whose lift core leaves 2-3 m round it) is the new `residents` program's
+   lounge, open round the core. A landing lot with no edge on circulation (a notched plate's arm) is dropped before the
+   floor is laid, and a landing or storage room the flats still cut off is dropped and the floor laid again, once
+   (`floorIsWalkable` can now list the rooms it could not reach).
+3. **A block of flats with only a stair** is zoned round the stair's well, as an office building already was.
+   `BuildingParams::house` (runtime only, like `officeUse`; `architect.h houseFor`) keeps a house's floors off it.
+4. **Deleted:** `officePlan`, `apartmentPlan`, the ring and desk-row fallbacks for offices and homes, and the A/B
+   switches `RT_FLOOR_PLAN=bands` and `RT_NO_WRAP_FLATS`. What the zoned floor cannot lay is open floor. The ring
+   (hotels, civic floors), the desk row (behind it), houses, walk-ups, campus buildings, hospitals and halls keep their
+   planners: other building types.
+
+**Measured** (the census, upper floors, then and now). island_8_nature: apartment towers 3,153 zoned -> 3,712 by the
+corridor, 1,130 in lobby mode, 631 residents' floors, 28 open; offices 6,963 -> 6,963 + 1,466 in lobby mode, 142 open;
+stair-only flats 762 ring -> all zoned. metro_v2_test and river_town alike. The 28 + 142 open floors were already
+empty or unreachable (a top tier with no stair) bar 12. **Reachability, by the space graph** (#105's gate: every
+cell reached from the street through its portals), every enterable building on island_8_nature, old planners against
+new: 136 buildings with 1,270 unreachable cells -> 125 with 605 (802 unreachable offices -> 67). 22 buildings pass
+that failed; 11 fail that passed -- a department store's floors in two glass towers (store floors turn every room,
+open zones too, into shops), desk-row chains on two lobby-mode office floors, stray halls and baths in seven small
+blocks of flats -- the next fix. The space graph's gate over every recipe passes (456 of 456). Census 10 s (metro) to
+6 min (the island).
+
+**Consequences.** One planner for an office or apartment floor, so the next change to doors, walls or furniture lands
+once. Floors are planned when the player comes near a building, not baked: no lots tag bump, no re-bake.
+`BuildingParams::house` fits in existing padding, so the lot cache's layout is unchanged. Two things the census showed
+that are massing's, not the planner's: about 500 floors of small mid-rises (mixed_use, brick_shop, loft_block) have a
+lift core that leaves 2-3 m of floor round it -- too big a core for the building, so they are residents' lounges; and
+97 office floors are single-storey top tiers with no stair at all. The reception on a lobby-mode office floor can land
+across the core from the lifts (the lots by the lobby are corner lots, which reception does not take). The grid walk
+and the space graph still disagree where a slit under 0.8 m joins two spaces: the planner's checks should share the
+graph's rule. Still owed from item 35: the massing paths, scope ops, FaceRect, party walls, malls and the two grow entry points.
+
+**Alternatives.** Keeping the fallbacks as a safety net: they hid the zoned floor's failures (a shallow plate's floor
+came out an older style storey to storey) and every change landed four times. Folding houses, walk-ups and the civic
+planners in too: Glenn kept them separate.
+
+## ADR-0259 — What a building's floors are for lives in one Lua table
+
+**Context.** The building-uses plan (Glenn, 2026-10-27; the follow-on to ADR-0258): a storey's use decides its layout
+(a floor program), its style decides its finish (`interiorFinishFor`, as before). What a building's floors were for was
+decided in eight places, three of them C++ lookups by recipe name read only by the interior (`officeUseFor`, with an
+A/B switch `RT_NO_OFFICE_FLOORS`; `houseFor`) or by both interior and exterior (`civicRoomsFor`). Glenn: the data lives
+in Lua, so it can change without restarting the engine.
+
+**Decision (step 1).**
+1. **`assets/scripts/building_uses.lua`** lists every recipe's floor use by name (79 recipes): a floor program's name
+   (`office`, `apartments`) or a planner's (`house`, `hotel`, `hospital`, `civic`), `none` for no interior; `defaults`
+   by place type for a recipe added later. Generated from the facts the recipes had, so it says what the code did.
+2. **`procgen/city/building_uses.{h,cpp}`** reads it: `floorUseFor(recipe, placeType)`, on first use and again when the
+   file changes (looked at once a second), so an edit reaches the next interior planned; a build without Lua takes
+   the place type's default and says so. `applyFloorUse` sets the interior's runtime facts from the use
+   (`officeUse` = an office floor and not homes, `house`); `interiorParamsFor(record)` is the ONE setup of a record's
+   parameters for its interior -- the interior system, the tests and any census call it, where three hand copies
+   stood.
+3. **What shapes the outside stays with the recipe** (C++, baked in the lot cache): `residential` (lit windows, flats
+   over shops) and the civic kind (`civicRoomsFor`: a hotel's entrance, a fire station's open bays). A hot-editable
+   file must not change baked geometry, or the cache would go stale with no key to notice. A test holds the table and
+   the recipes together: every recipe listed, and a use of `apartments` or `house` exactly when the recipe is
+   residential.
+4. **Deleted:** `officeUseFor`, `houseFor`, and the `RT_NO_OFFICE_FLOORS` switch (set a recipe's use in the table).
+
+**Measured.** Every enterable building's interior grown as the game grows it, fingerprinted (an FNV hash of every part
+mesh's vertices and every furniture placement): metro_v2_test (1,159 buildings, 7.0 M vertices, 213 k pieces) and
+river_town (449 buildings, 6.1 M vertices, 426 k pieces) identical before and after.
+
+**Decision (step 2).**
+5. **The planner reads the use.** `BuildingParams::floorUse` (runtime only, an interned id of the use's name, where the
+   `house` flag stood) replaces `house`; `roomPlan` lays a zoned floor with the program the use names when one exists
+   (`hasFloorProgram`), else its default for that kind of floor -- so a new program in `floor_programs.lua`, named as
+   a recipe's use in `building_uses.lua`, is laid with no code. The branches are as they were.
+6. **Hot reload.** `floor_programs.lua` is read again when it changes (`floorProgramsGeneration`, as the uses table
+   is), and `BuildingInteriorSystem` lets its resident interiors go when either table's generation moves, so they
+   grow again round the player from the tables as edited -- within about a second, no restart.
+
+**Measured.** The fingerprints identical again after step 2 (both levels). A probe edited `building_uses.lua` while a
+test ran: the recipe's use changed within the second, the generation by one.
+
+**Consequences.** One place to read and change what a building's floors are for, live. Floors are planned at runtime,
+so no lots tag bump. The furniture programs (`furniture_rooms.lua`) still load once; they could hot-reload the same
+way. Next: the `department_store` program (plan step 3).
+
+## ADR-0260 — A department store is a floor program, not an office floor with its rooms renamed
+
+**Context.** Building-uses plan step 3 (ADR-0259; Glenn, 2026-10-27: "a department store should be a whole floor").
+A tower's store floors (`storeFloors`, rolled by the lot pass; a mall's anchor has every storey) were laid as office
+floors and then relabelled: `storeyRooms` turned every room into a shop of the storey's department. Corner offices and
+meeting rooms became walled shops with an office's doors, which is how two glass towers' store floors were found
+unreachable in item 35 (ADR-0258), and a drum tower kept its offices (the relabel only fitted rectangles).
+
+**Decision.**
+1. **`department_store`** in `floor_programs.lua` (and `builtinDepartmentStoreProgram`, for a build without Lua): the
+   plate cut into big lots, every lot an open SALES FLOOR but for the CASH DESK by the lifts, the FITTING ROOMS
+   (fashion floors only) and the STOCKROOM against the core, the last two walled. Any plate the zoned floor can cut, a
+   drum tower's too. What it cannot lay is open floor, never offices.
+2. **Departments are program data.** A program's `departments` list (trade names, `trades.cpp`) gives each storey its
+   department by turns from the first storey over the ground (fashion, fashion, electronics, books, the food hall, as
+   the relabel did); every room on the floor takes the trade as its style, and a zone rule's own `departments` keeps
+   it to some (the fitting rooms). `tradeByName` is the lookup.
+3. **Four room kinds**: `SalesFloor`, `CashDesk`, `FittingRooms`, `Stockroom`, each a room program in
+   `furniture_rooms.lua`. A sales floor runs its department's program (`sales_floor:boutique`, `:electronics`,
+   `:bookshop`, `:bakery`) where there is one, else `sales_floor`: an open floor's sides are lot lines, so its fittings
+   stand free (rails, back-to-back TV walls and bookcases, gondola runs, the food hall's counters and tables). The
+   cash desk is two counters with their tills (the shop staff's spots) and a display case; a new kit piece,
+   `fitting_room` (a cubicle you step into: mirror, bench, curtain), fills the fitting rooms.
+4. `roomPlan` lays a store storey with the program before any other planner; the relabel pass is deleted (the
+   restaurant floors keep theirs until the `dining` program, step 4). `building.grow_floor{store_floors = n}` and a
+   lab, `store_lab` (a glass tower's five departments, a podium tower's fashion floor).
+
+5. **A shop or office floor is walked inside the facade's inner face**, not its outside line. The strip the outside
+   wall stands on had let the planner's walk past a room walled across an arm of the plate (a fashion floor's fitting
+   rooms cut its arm's tip off; the space graph saw it, the planner did not). Not yet homes: some flats' bedrooms are
+   reached only along that strip (layFlat's doors), so the stricter walk would send those floors to a fallback; that
+   is item 35's owed work.
+
+**Measured.** Space-graph reachability over every enterable building on island_8_nature (8,490): 125 buildings with
+605 unreachable cells before (ADR-0258), 124 / 573 with the program, 116 / 492 with the inner-face walk (fewer
+unreachable desk rows and offices too). The two item-35 store towers clear. Of 43 store towers, two still fail, neither
+on a store floor: offices from storey 8 of a tapered tower, flats from storey 55 of a pencil tower (massing, owed).
+
+**Consequences.** Floors are planned at runtime: no lots tag bump. A mall anchor's upper floor gets the program too,
+but its own lab (the Westfield-style complex, ADR-0180) is still owed.
+
+## ADR-0261 — A tower's restaurant floors are a floor program; what a storey is for has one definition
+
+**Context.** Building-uses plan step 4. A tower's restaurant floors (`dineFloors`, the top of its main tier) were
+office floors relabelled: every room a restaurant or a bar by turns. The store floors' half of that pass went in
+ADR-0260; this is the other half.
+
+**Decision.**
+1. **`storeyUseOf(plan, params, storeys, k)`** is the one answer to "what is this tower storey for, by its own
+   facts": `department_store` for its first `storeFloors`, `dining` for the top `dineFloors` of the main tier, else
+   the building's use. Only four-sided towers, the same ones `towerSignsOf` boards and the level loader makes shop
+   and restaurant places of (ADR-0260's drum towers with stores are taken back: their store had no sign and no place).
+   `storeyRooms` passes it to `roomPlan` (`storeyUse`), which lays the program it names. The relabel pass is gone.
+2. **`dining`** in `floor_programs.lua` (and `builtinDiningProgram`): restaurants and bars by turns along the glass,
+   each walled with its door onto the corridor, restrooms by the core, a lounge to wait in. A zone rule's `trade`
+   (trade name) gives its rooms that trade, so the shop furnishing lays them as before. A restaurant whose door is in
+   its back wall lays its kitchen line shorter, or on a side wall (it fell back to a counter).
+3. **The way in is never shut in.** On a shop or office floor, a walled lot that the floor's entry stands in or
+   beside, and the walled lot nearest it within the core's corridor ring, take the fill instead: a stair at the facade
+   has no corridor to the aisles but through a lot. And a floor that will not walk walled has a third try before no
+   walls at all: only the rooms the first two tries' walk missed (the fewer) are opened.
+4. `building.grow_floor{dine_floors = n}`; `store_lab` shows a restaurant floor too.
+
+**Measured.** Space-graph reachability on island_8_nature: 116 buildings / 491 unreachable cells (492 after
+ADR-0260); no shop, restaurant or bar cell among them. The tower test lays its restaurant floor as 6 restaurants and
+6 bars, every one with its kitchen line or bar run, nothing else but restrooms and the lounge.
+
+## ADR-0262 — A hotel's floors are a floor program: rooms with their own bathrooms, suites, classes
+
+**Context.** Building-uses plan step 5, hotels v1 (Glenn, 2026-10-27: "Hotels can have a lobby/front desk,
+restaurants, a pool, gym, service corridors, guest rooms, vip suites, rooftop bar, outdoor pool, parking lots").
+A hotel's upper floors fell through to the ring planner, every room a studio flat with a kitchenette and a sofa and
+no bathroom. Its ground floor already has the lobby and front desk (ADR-0170) and its bar and cafe units.
+
+**Decision.**
+1. **`hotel`** in `floor_programs.lua` (and `builtinHotelProgram`): rooms along the glass off the corridor, suites at
+   the corners, housekeeping's linen room by the lifts, the rest corridor. `building_uses.lua` already named the
+   recipe's use `hotel`; `roomPlan` now lays any use that names a floor program of its own (a new building type is a
+   program and a line in the uses table).
+2. **Rooms with their own bathroom.** A zone rule's `ensuite`: the door goes to one end of the room's run onto the
+   corridor and a bathroom (up to 2.2 x 2.4 m, a 1.5 x 1.7 shower room at the least) is walled off beside it, its own
+   door onto the short passage, 3 m left for the bed; a room too shallow for that but wide has it across its end. A
+   room it will not fit stays whole.
+3. **Classes are styles.** A style's `set` on the tag `lots` changes how the plate is cut (`floorStyle` picks it for
+   both the cut and the tags): budget (3.6 m rooms, no suites), business (4.2 m, corner suites), luxury (5.2 m, deeper,
+   a quarter of the window rooms suites too). Per building by seed for now; district weighting is step 8.
+4. **A floor that is no workplace** (`workplace = false`): not lit as offices, and its baths furnished as bathrooms
+   (bathtub, toilet, basin), not restrooms.
+5. Room kinds `HotelRoom`, `HotelSuite`, `LinenRoom` with their room programs (the bed between nightstands with the TV
+   across, a desk and armchair at the window, a wardrobe by the door; a suite's sofa, coffee table and table for two;
+   the linen room's shelves). `hotel_lab` shows six hotels' second floors and a lobby.
+
+**Measured.** 36 hotels (three plate sizes, 12 seeds): 3,323 rooms and 814 suites, 3,842 bathrooms (93%), a bed in
+94% of the rooms, every cell reached from the stairs; budget 25.9 rooms a floor, business 22.3, luxury 15.8.
+
+**Consequences.** No lots tag bump (floors are planned at runtime). The ring planner keeps the civic buildings'
+upper floors that reach it; deleting it waits for their own programs. Owed for hotels: the restaurant floor off the
+lobby, gym, pool and meeting rooms (v2), the rooftop bar and resort cells (v3), corridors narrower than the open hall
+a stair-only hotel leaves round its stairs.
+
+## ADR-0263 — Stairs and lifts placed apart: the core is a list of blocks
+
+**Context.** Glenn, 2026-10-15: "the elevator and stairs are always connected. I think we should be able to disconnect
+them and place stairs and elevators separately and also create elevator setups like you see in real buildings."
+Issue #105 step 3a made shafts, banks and zones words of their own (`circulation.h`) with today's core as a preset, but
+every reader still took the one `CorePlan` rectangle: the zoned floor's corridor ring, the walk check, the shaft walls,
+the bulkhead, the roof plant's keep-out, the lobby dressing, the shops' depth, the space graph's hall. Step 3b, the
+placement, was left undone when the toolkit moved on to masses (asked again 2026-10-28: "Why wasn't it ever done?").
+
+**Decision.**
+1. **The core is a list of blocks** (`CoreBlock`, `CirculationPlan::Block`): shafts standing together inside one outer
+   ring, their doors in its front wall. Every shaft names its block. The classic core is one block, `blocks[0]` is the
+   lifts' (the lobby faces it) and `frame / length / depth / rect()` keep meaning that block. Every reader walks
+   `rects()`: a ring and a bulkhead per block (a lift bank on its own stays under the roof slab), the roof plant kept
+   off every bulkhead, the lobby desk and the shop units clear of every block, the hall holed at each.
+2. **Two placement words**, `BuildingParams::stairPlace` (1 beside the lifts, 2 one stairwell at each end of the long
+   axis, slid out toward the end walls as far as every tier allows, its door toward the middle) and `liftBanks` (1 one
+   bank, 2 two banks facing across a 3.2 m lift lobby, the stairs at the rows' far ends when they stay in the core).
+   `apartPreset` lays them, the lifts at the top tier's centre or slid along its long axis a metre at a time (the lot
+   pass's notch in the back of a slab is where the middle is: the first lab hotel got no core at all, the old straight
+   stair, and a floor no try could walk with walls); where they fit nowhere the classic core stands. Lua `stairs = "core" | "ends"`,
+   `lifts = "bank" | "facing"` (after a named recipe too); a lab's `citysim.stairs` / `citysim.lifts`.
+3. **The floor between blocks.** The zoned floor runs the corridor ring round every block and a spine from each block
+   standing clear of the lifts' ring, out of its door and on to the lifts -- the double-loaded corridor of a slab
+   hotel. Its walk must reach every door placed apart (`floorIsWalkable`'s `reach`), and the planners that know only
+   one core (the ring, the desk rows, the hospital, flats wrapped round the core) are not asked: such a floor is
+   zoned, else open.
+
+4. **Left to the seed, a building varies; named, it keeps** (Glenn, 2026-10-28: "we should still be able to have
+   elevator cores ... variety when placing elevator shafts for different buildings either as variety or because the
+   floor space is too small"). `circulationLayouts` lists what a building tries, in order: a field set to 1 or 2 is
+   fixed; the rest is drawn by the seed from what suits the top tier -- a slab (1.8 times longer than wide; flats only
+   17 m deep and over, the depth for a flat either side of the band round the lifts: a 15.6 m pencil tower's strips
+   came to 4.45 m against the apartments program's 4.5) stairs at its ends 55 %, a tower of 21+ floors facing banks
+   35 %, both on a tall slab, anything else the classic core -- then every other allowed layout, the classic core last
+   if not already in. The classic core is tried at the centre (byte-identical) and then slid along the long axis
+   (`apartPreset` with neither word), so a notch through the middle no longer costs a building its core. Every layout
+   is tried at `hoistwaysFor`'s count of lifts before any at one fewer (`circulationOf`; the presets take an exact
+   `lifts`): a tower that drew facing banks too wide for its floor takes the classic core's three lifts, not facing
+   banks shrunk to one (the review's catch, `a_layout_too_wide_for_its_lifts_gives_way_before_a_lift_is_dropped`).
+   Facing banks with their stairs beside them have a service block behind each row, and the CorePlan holds them all
+   (`services`).
+
+**Consequences.** Params v24 (the two fields serialised): every cached city rebakes once, and with the seed's draw
+the island's towers and slabs change their cores. Owed: zones and sky lobbies (express banks), scissor stairs, scenic
+and service lifts, placement from a recipe's own list of shafts.
+
+## ADR-0264 — A slab is cut round every shaft it crosses, and the triangulator bridges holes left to right
+
+**Context.** Glenn, 2026-10-28: "Sometimes for stairs and elevators the hole for the floor doesn't get cut and you
+end up going through a plane of geometry." A census of every recipe with a core (three lots, two seeds: 224
+buildings, 41 469 shaft-storey probes) found a level face across a hoistway or a stair's flights at 4 878 of them.
+Two causes. The exterior laid five slabs whole across the plan where the core runs on through: a setback's cap, an
+overhang's plate, a turned storey's band, the wave's plate and a parking deck. And the slabs that were holed -- the
+setback caps once cut, the roof over the stairs, every `emitPlanPrism` with holes -- went through `emitPolygon`,
+which projects an upward face into a mirrored frame, where the earcut port paved over shafts: it sorted holes by
+their first vertex rather than their leftmost, and kept an outer node the collinear filter had removed, so with a
+core's holes in rows on the same lines a bridge cut across a hole not yet eliminated (1 629 m2 laid where 1 535 was
+the plate less its holes). The interior slabs, triangulated in plan, came through by luck.
+
+**Decision.** `emitPlanSlab` takes holes, and the five exterior slabs get the core's (`coreSlabHoles`). The earcut
+port follows mapbox again: holes bridged by their leftmost point, ties by y then slope (`compareXYSlope`), the
+eliminated hole returning the filtered bridge as the outer node, and `sectorContainsSector` breaking a bridge tie.
+
+**Consequences.** `no_slab_covers_a_shaft_on_any_recipe` holds the census at 0 (drivable garages excepted: they
+build no core, their ramps are the way up); `triangulate_with_rows_of_aligned_holes_leaves_them_open` holds 76 slabs
+of shafts in rows, in plan and mirrored. Every holed polygon in the city may triangulate differently, so the
+meshes change with the v24 rebake.
+
+## ADR-0265 — One random stream: ProcRng everywhere, the terrain's permutation frozen
+
+**Context.** The duplicate-systems sweep (#117, wave 3, item 38). Twenty files drew from `std::mt19937` through
+`<random>`'s distributions beside `ProcRng`, which the newer generators already used: the recipe tree grower, rocks,
+scatter, the foliage cards, the L-system and its skeleton, the planet, the park trees, the procedural sound, the
+footsteps, the particles and the path tracer's per-thread draw. The engine `mt19937` is fixed by the standard, but
+the distributions (`uniform_real_distribution`, `uniform_int_distribution`, `shuffle`, ...) are left to each library,
+so one seed grew a different world on libc++ (Mac) or MSVC (Windows) than on libstdc++ (Linux). Glenn, 2026-10-28,
+offered keeping today's trees through our own copy of libstdc++'s draws or one stream everywhere: "Let's do ProcRng
+everywhere".
+
+**Decision.**
+1. `ProcRng` moves to `src/proc_rng.h` (the base layer beside `rt_math.h`) and is the one stream. Ranges called like
+   `<random>`'s so a generator reads the same: `ProcUniform<T>(a, b)` [a, b), `ProcUniformInt<T>(a, b)` [a, b],
+   `ProcExponential<T>(rate)`, `ProcPoisson<T>(mean)`. A float range never returns `b`.
+2. Every generator above draws from it; the path tracer seeds a thread's `ProcRng` from `std::random_device` (the
+   one `<random>` use left: entropy, not a stream).
+3. THE TERRAIN'S PERMUTATION IS FROZEN. Perlin's table was `std::shuffle` over `mt19937`, and every terrain, erosion
+   bake and planned city sits on it; a new stream would move every hill under the cities. `frozenShuffle256` writes
+   out what libstdc++ (GCC 11+) does -- swaps in pairs, both positions from one Lemire draw of a 32-bit range -- so
+   the terrain is byte-identical on Linux and the same everywhere else. `mt19937` stays there alone, by name.
+
+**Consequences.** Every recipe tree, rock, scattered plant, foliage card and planet grows as a different individual
+once (same species, sizes and styles); `kTreeCacheVersion` 2. No city, lot or terrain bake changes: the city and lots
+producers draw from none of these, and `the_frozen_permutation_is_libstdcxx_shuffle` holds the table to
+`std::shuffle` over 1002 seeds. Sound grain, footstep pitch and particle sprays draw different values, unbaked.
+
+4. WHAT THE NEW DRAWS FOUND. Three tests had judged a design on one to three individuals, and the old stream's
+   individuals happened to pass. Measured over many seeds (Glenn chose to fix the designs and judge the population):
+   - THE HERO'S BARK BUDGET (8000 for the trunk and limbs, `nearTwigTris` for fine twigs besides) was held at seed 2
+     only; a pine averaged 20.2k against 17k (11 of 12 seeds over), and fir, oak, spruce, beech and multistem went
+     over on some. Now the budget is one number (`heroBarkBudget`, `BranchCardSpec::heroWoodTris`): the fine twigs'
+     bark takes what the limbs leave, and a hero whose limbs alone pass it is grown again coarser (sides and rings
+     1.4x apart, up to three times). Pine's sprigs are 1.6 m like the fir's and spruce's (at 1.0 its limbs alone
+     spent the budget). `every_hero_holds_its_bark_budget_whatever_its_seed`, six seeds a species.
+   - A DROP'S THUD decayed only with the square root of its scale, so on hard ground (the click carrying the energy
+     up front) a 5 m drop rang 1.23x a hop on asphalt on average against the gate's 1.3x; it decays with the scale now
+     (1.8-2.2x; a footstep, scale 1, unchanged), and grass and rock landings are apart in 40 of 40. Judged over 40.
+   - HEEL AND TOE: one step in twenty lands its toe under 30 % of a heel click's spike; nine in ten of 40 must show
+     both. The SDF rock's subtracted bites fold a few triangles at their creases on a quarter of seeds (never a
+     reversed one): the winding test holds none reversed and the folds under one in a thousand, over 60 seeds. A
+     sharper crease for the dual contour (both diagonals fold there) is owed.
+
+5. THE CITY'S OWN STREAMS (Glenn, 2026-10-29: "We should have everything run ProcRng ... so that it's all unified").
+   Beside `<random>`, the city code had grown its own: one 32-bit xorshift written out five times (`Rng` in
+   district, parcel, road_network, street_names and shape_grammar), the same again as `Hash` in architect and the
+   lot pass, the metro's `Lcg`, about thirty inline xorshift and LCG lambdas (the furniture kit, the branch cards,
+   rooms, malls, shop names, street trees, kerb props, the window atlases, the grass card's blades) and the city
+   sim's three. Every one is a `ProcRng` now (`bits()` for the callers that read raw bits, `between(a, b)` for an
+   inclusive int). Hashes that mix an input once (`positionHash`, `fieldCellId`, the brain's trait bits) are not
+   streams and stay. Two places look without drawing, so the draws after them are kept: the bus network's seed
+   (`ProcRng::peek()`, the next `bits()` left undrawn) and the konbini (the shop unit's own last draw).
+   THE CITY SIM'S BRAIN was both an agent's fixed identity (pace, schedule, job, park, pose, rest) and its fault
+   stream: `brainUnit` advanced it, so every perception fault an agent rolled changed who it was. `brain` is fixed
+   now and the faults draw from `Agent::faults`, the trips from `Agent::tripRng`, both seeded from it.
+6. ONE DRAW PER EXPRESSION. C++ leaves the order of a call's arguments, and of `+`'s operands, to the compiler, so
+   `Vec2(rng.next(), rng.next())` is a fixed order only per compiler. Clang builds the engine on Linux, Mac and
+   Windows and takes them left to right; about a hundred older lines (trees, rocks, lots, branch cards) lean on that.
+   New code draws into named locals; the old lines are rewritten when their generator next rerolls anyway.
+
+**Consequences (the city).** Every city rerolls: parcels, buildings and their dressing, shops and their names, street
+trees and props, interiors' furniture, street names, every agent. What a level stores stays: the island's planned
+roads, blocks, rail and stations, its place names and the freeway (the planner and the road builders roll no dice),
+so Saltwood is the same town on the same streets with new lots and buildings. The procedural road generators (grid,
+radial, tensor, district, metro) reroll their levels' roads. kLotsBuildTag and kLanesBuildTag 2026-10-29.1, the grass
+card's key v2. The island's freeway signs carry the street names the planner gave them (`island_8_nature.signs.json`),
+named per city with the city's seed where the loader names the combined graph with the book's -- two namings that
+likely disagreed before this change too (to check in Saltwood); owed, the signs named from the loader's naming.
+
+**What the new rolls found (Glenn: "Any seed should grow something, and it should grow it in its own way").** Tests
+that had judged one seed now judge many, and the other seeds found bugs the one had hidden:
+- the metro's loop pass linked nothing when a small road tree sat within nine hops of itself: no block enclosed on
+  seven seeds in ten (either stream). Short of a link per hotspot it looks again looser (every node, fewer hops, down
+  to a block's span); the first pass is as it was.
+- walkers were costed at the cars' class speed, so a collector round a block beat a footpath across it. On foot the
+  cost is the walk's length (`findRoute`).
+- `scheduleSnapshot` gave every agent the town's MEDIAN commute: where most jobs went to walkers, every driver sat on
+  a 27-hour journey at 0.05 h/s and no shop's staff were ever at work. Each agent's own `commuteSeconds` now.
+- a chained trip (a car ending one trip and starting the next) snapped 1.9-3.9 m from the last lane to the next; it
+  blends its position across a pull, and a pull is long enough to turn its yaw offset at a car's rate.
+- the headlight test counted parked cars; it now holds every MOVING car lit at night.
+- BUILDINGS. A pencil tower's facing lift banks (ADR-0264) took ~17 m of a 16-18 m crown and left no lot for a
+  home: a tower of flats keeps facing banks only on a crown 24 m across (`kFacingFlatsDepth`), and a flat whose own
+  layout cut itself off (its hall a 1.5 m stem beside the corridor) is laid as a studio and the floor laid again.
+  Setback tiers were judged by their box's short side, so an L inset storey after storey kept a wide box while its
+  arms thinned to 2 m, floors no stair reached: a tier needs every arm 6 m across (`tierArmsOk`, an opening of the
+  plate). The recipe-reach test rolled the block landmarks over 200 seeds, the one window in 25 where the 4 % twin
+  towers never come up; it rolls them over 600. The paved-plate test called a corner lot whose mitre touched the road
+  at a point "on the road"; it asks for an edge along it.
+- ROADS. Merging nodes minted dead ends: two junctions fused or a short edge merged dedupes the edges a neighbour
+  had to each (a triangle's apex left a spur), and a short loop fused away leaves its stem. One word,
+  `unwindMintedSpurs` (road_network.h), unwinds every spur a merge makes, in mergeShortEdges and
+  consolidateJunctionSpans (not planarize: its 1 m snaps unwound a skeleton loop's knot into a 60-degree fold); a short span with a parallel road beside it is deleted, not fused into a teardrop. The
+  metro's fill prunes its own dangling streets whole (a chord that met nothing ran 250 m of dead end). A chords patch
+  with more corners than a junction takes (`kChordHubArms` 4) is bisected instead of starring 11 streets into its
+  centre, which the tail chopped into a knot of 16 m spans. OWED: the skeleton grows teardrop loops (a road out and
+  back to one junction, at worst a needle 400 m long and 10 m wide, the south town's only road), and the bend easing,
+  which pulls a chain toward the line between its end junctions, shrinks one into a knot of 1-6 m edges folded
+  40-60 degrees, on whichever seed grows one, in either fill. Smoothing them without shrinking (Taubin) fought the
+  tail's second round of merges; it wants a rule of its own in the skeleton. test_fabric judges the fabric by the folds
+  on its own streets.
+- TRAFFIC (Glenn: "If the traffic code is fragile we should rework that to be better built"). A contact backed the
+  cars out by the centres' distance under their half-lengths, a disc's overlap (cars touching side by side read
+  2.5 m deep), and a stationary partner took the leftover: queued cars knocked back a metre a frame. The overlap is
+  the capsules' own, and a car backs out no further than it came forward since the tick began, so nobody is shoved
+  and nobody is drawn reversing. A turn's control point stood past the new lane when the blend reached back less than
+  the lane's offset (a route starting 5 m short of a junction): one rule, `driverTurnControl`, keeps a driver's turn
+  from receding along the way in or out (else the lane lines' miter, else a straight blend), and the junction turn's
+  span reaches past where the lanes cross. Every trip starts its own pull from the pose the car is drawn in (a pull
+  still under way ran out against the new lane), and a pull's yaw easing never out-turns kCarMinTurnRadius.
+- BUSES. "One bus a route: no trip" held on network 3 only; the test holds the choice -- taken only when door to door
+  it beats the walk by planTrip's margin -- on eight.
+THE CLOCK is real time by default (Glenn: "the default should be 1:1 with realtime. 24/7 clock"): `dayMinutes`
+1440, the city sim's 1/3600 h/s; a level or test asks for a faster day by name.
+
+**Alternatives.** Our own copy of libstdc++'s distributions for every generator kept today's trees, but left two
+streams with a reason; Glenn chose one. For the city, the five xorshift copies folded into one named stream kept
+every city byte-identical, with three engines in the header; Glenn chose one engine and the reroll. Freezing nothing would have reshaped the island's ground under its cities.
+
+## ADR-0266 — The planner made fit to be the baseline: a C ring builds, no street ends inside another, no loop hangs off one junction
+
+**Context.** Glenn, 2026-10-29, after the old metro grower's teardrop loops: "We need to get rid of the old road
+system ... We need the new road system to be a baseline." Before the grower goes, the levels it fed are planned
+again by `city_plan` (metro_v2_test and piedmont). Planning metro_v2_test on its own coast showed the planner was not
+yet a baseline; asked whether to fix it first, Glenn: "Yeah go for it". What it found:
+- A ring the coast opens into a C (`plan.ringArc`) was planned but never built: `planToLanesScene` knew only the closed
+  ring, so metro_v2_test's 4.1 km of planned freeway came out as a 2-edge stub.
+- The land cut left every street that ran on toward the sea ending in the sand, 50-100 m short of the water (a rule
+  had kept them on purpose, "a street that runs down to the water").
+- Most of every plan's dead ends were NEAR MISSES: a street that stopped 1-5 m short of the street it ran into, inside
+  that street's pavement, never joined (the planariser snaps a T only within 0.6 m). The scorecard had counted them
+  all along as metres "paved into another" (886 m on metro_v2_test, 1890 m on metro_planned, 3121 m on metro_rivers).
+- A ring at the city's own edge (river_town's: freeway radius 680 m = the outskirts' radius) got no frontage roads,
+  so the outskirts' streets ran out under it and stopped: 22 dead ends round river_town's ring.
+- Over 18 seeds of three briefs, 9 had a LOOP HANGING OFF ONE JUNCTION: scraps of a crossing the planariser left
+  (2-6 m triangles where three streets cross within a few metres), and on river_town's seed 41 a 526 m street round a
+  block an expressway's keep-out had cut every other link to.
+
+**Decision.**
+1. THE C BUILDS (`plan_scene.cpp`). `ringLine`/`ringClosed` give the ring as built, closed or open; `arcChains` cuts a
+   C only at its expressway crossings (just past the system interchange, as on the ring) and never wraps round;
+   `crossingWithRing` takes `closed`. The C is offset as an open line, its deck comes down to grade over its last
+   250 m each end (`kCEnd`, as an expressway's does to a town), and each end lands on a street as a boulevard pair
+   (`bc0`/`bc1`) or, with none in reach, turns back on itself (`tc0`/`tc1`). The pair and the teardrop are the
+   expressway's own (`pair`, `turnaround`, lifted out of the expressway loop). A freeway end reaches a street within
+   120 m (`kTeeReach`; 60 m left metro_v2_test's expressway 67 m short of midtown and the C 70-90 m short of any
+   street: a freeway no car could get on).
+2. A STREET THE LAND CUT SHORT GOES BACK TO ITS JUNCTION, toward the sea as up a slope: the land stops 2 m above the
+   water, so the street never reached it. The city's edge street along the shore is the waterfront. (A seafront
+   collector laid in from the coast was tried first: on metro_v2_test it ran beside midtown's own edge street, which
+   already follows the shore -- 14 overlapping pairs -- and spilled past both ends of the city.)
+3. NO STREET ENDS INSIDE ANOTHER (`joinNearMisses`, `joinFacingEnds`, the whisker prune). After planarising, a street
+   end that runs into another street within its half-width + 2 m, crossing it at 30 degrees or more, is carried
+   STRAIGHT ON along its own heading (over its last 12 m) to a T -- moving the end sideways onto the nearest point
+   swung a cut street's last 4 m piece through a sliver angle (river_town's slivers went 4 -> 22). Not where the T
+   would stand closer to the next junction along that street than collapseShortLinks's own merge distance (half the
+   widest street + 4 sidewalks): it fuses such a T into that junction, and a fifth arm 4 degrees off another was
+   metro_planned's new sliver junctions. Two ends facing each other in line within 6 m (a street with a few metres
+   cut out of it) become one node. An end still standing in a pavement after all that goes back to its last
+   junction, and the two blocks it half divided become one.
+4. A RING AT THE CITY'S EDGE HAS FRONTAGE ROADS (`haveFreeway`: the corridor's inner edge inside the outskirts, not
+   its outer edge).
+5. NO LOOP HANGS OFF ONE JUNCTION (`dropHangingLoops`; `hangingLoopEdges` public for tests): a cycle that is a leaf
+   of the street graph's block-cut tree goes, at any size, after the stub prunes have run (a corner that held an
+   overshoot was a junction until then).
+
+**Consequences.** Before -> after, the shipped briefs: metro_v2_test 17 -> 8 dead ends, metro_planned 29 -> 16,
+metro_rivers 50 -> 25, river_town 38 -> 11, metro_3km 26 -> 13; "paved into another" metro_v2_test 886 -> 300 m,
+metro_planned 1890 -> 1391 m, the round test brief 799 -> 587 m (`the_plan_score_measures_streets_merging` ratcheted
+to < 650). Blocks the same or more on every one, no new junction under 15 degrees on them, no hanging loop on any.
+Over 18 seeds of three briefs: dead ends fall on 17 (one goes 9 -> 10), hanging loops 9 -> 0; a few seeds gain one
+or two junctions under 15 degrees where the new frontage roads meet streets (owed). What is left are roads out of
+town (the under-ring collectors run on past the corridor, where a diamond's ramp lands) and the edge of the map.
+Pinned, every seed: `city_plan_never_hangs_a_loop_off_one_junction` and `city_plan_never_ends_a_street_inside_another`
+(12 seeds of the round brief, 4 of the coast brief), `a_coast_city_builds_its_ring_as_a_c_and_lands_its_ends` (4).
+metro_planned's and metro_mountain's scenes are planned again; river_town's and metro_rivers' are not (Glenn's work in
+progress is in them). The island's cities (`city_plan island-cities`) take these when the island is planned again.
+
+## ADR-0267 — The old metro grower retired: the city planner is the one street generator
+
+**Context.** Two street generators had lived side by side since the planner arrived (ADR-0092): the organic grower
+(`buildMetro`, hotspots colonising arterials and a fabric filling the faces, plus `buildDistrict`), reached through a
+road block's `"generate"` recipe, and the city planner (`city_plan`), which plans Saltwood and every island and
+planned city. No shipped level ran the grower any more -- its cities lived on as `converted/` graphs frozen in
+2026-10 by `lanes_tool from-level` -- but its tests, tools and editor panel kept it alive, and a morning went into
+making its output pass tests. Measured over 16 seeds it hung dead-end teardrop loops off its networks on main as on
+the branch (16 vs 20); main's test seed simply had none. Glenn, 2026-10-29: "We need to get rid of the old road
+system. It's confusing you and it's outlived its usefulness. We need the new road system to be a baseline." -- and
+"If we can't convert the old stuff to use saltwood's road system then we should axe it ... It'll be in GitHub's
+history if we need it." He chose to re-plan metro_v2_test and piedmont and to delete the rest.
+
+**Decision.**
+1. RE-PLANNED: `assets/city_plans/metro_v2_test.json` (the coastal shelf, calmed -- heightScale 13 -> 5, tiltX
+   -0.045 -> -0.015 -- so a planned grid fits; the ring a C against the coast) and `assets/city_plans/piedmont.json`
+   (the 8 km world verbatim; its two towns at the expressways' ends). Their scenes are `city_plan scene` output in
+   `assets/lanelab/planned/`; the levels name them and list their districts (`citysim.districts`). Making the planner
+   fit for them is ADR-0266.
+2. DELETED, code: `metro.*`, `district.*`, `arterial_skeleton.*`, `patch_fabric.*`, `city_footprint.*`,
+   `roads/lanes/level_import.*` (`lanes_tool from-level`); `applyGenerateRecipe` with `warpGraph` / `deAcute` /
+   `pruneAcuteArms`; the constraint passes only it ran (`capDegree`, `mergeShortEdges`, `consolidateJunctionSpans`,
+   `relaxSharpBends`, `dissolveAcuteArms`, `realignAcuteJunctions`, `dropParallelEdges`, `cutSharpCorners`,
+   `unwindMintedSpurs`) -- `road_constraints` keeps `applyConstraints`, its roundabout rule and `nodeNeedsRoundabout`;
+   the editor's Road Generation panel and recipe Regenerate; the generate paths in the loader, `level_scene`,
+   `level_params` (recipe sea levels); `city_prepass` (already called by nothing); the diagnostics
+   `road_products_probe`, `junction_angle_probe`, `road_map_svg` (all ran recipes; `city_plan`'s maps draw plans).
+   `RoadPlan` loses `cityHubs` and `siteFootprints`; the road entity codec writes a hub count of 0 and reads past any
+   it finds, so bundles baked before still load (drop the field at the next format bump). A level whose road still
+   carries `"generate"` logs an error naming this ADR.
+3. DELETED, content: `assets/lanelab/sources/` and `converted/` (agent_lab's hand-drawn graph moves to
+   `assets/lanelab/agent_lab_lanelab.json`), `metro_v2/`, `metro_route/`, `assets/lanelab/levels/metro*.json`, and the
+   levels grown, metro_lanes, piedmont_roads, piedmont_mini.
+4. TESTS: the grower's own (`test_metro_sites`, `test_footprint_skeleton`, `test_fabric`, `test_city_footprint`, its
+   stages and recipe cases) go with it. What needed SOME city now stands on planned ones, every seed:
+   `tests/planned_city.h` (`roundBrief`, `plannedCity`, `plannedNet`) -- the lot frontage and clearance gates, the
+   park pads, no lots on the freeway alone, the road classes, the graph order hash, the tier split. The parking-band
+   gate moved to `lanes_tests` on the nav twin a lane-built city drives (`roadTwin(..., forNav)`), which is where
+   streets get their bands now. The level suite's second city is river_town (metro_lanes is gone).
+5. The lanes corpus's real-city half is the planned scenes (kind `planned`: river_town, metro_v2_test, and slow,
+   metro_planned and piedmont); its baseline is measured again.
+
+**Consequences.** One street generator. `grep buildMetro|buildDistrict|applyGenerateRecipe|MetroParams` is empty.
+Every level's roads are a lanes graph, planned or hand-drawn. The bakes of metro_v2_test and piedmont change (their
+cities are new); metro_planned and metro_mountain re-bake on ADR-0266's planner. Glenn's untracked camera files for
+the deleted levels (`*.cameras.json`) are left where they are.
+
+**Addendum (2026-10-29, the same day).** Glenn: "remove the old freeway corridor system, simple layout generators in
+road_network and the hand authoring roads... we don't need those. Let's dedupe and excise old code." Three more
+systems the old grower era left, none reachable by a shipped level:
+6. THE FREEWAY CORRIDOR SYSTEM: `alignment.*`, `corridor_plan.*`, `corridor_bake.*`, `corridor_mesh.*`, the loader's
+   corridor block (the `shape:"corridor"` entity, the root `freewayPlans`/`interchangeSpacing` keys, route planning,
+   landings, authoring, the bake into the net) and their tests (`test_alignment`, `test_freeway_graph`, the corridor
+   cases of `test_road_weld` and `test_road_semantics`). The lanes builder builds every freeway. Kept: the twin's
+   `plan.freewayPlans` (the lot pass's fallback band) and `RoadEdge::baked` (the twin's "no frontage" flag);
+   `RoadProvenance`'s corridor values stay in the codec until the next format bump.
+7. THE SIMPLE LAYOUT GENERATORS in `road_network`: `gridRoads`, `radialRoads`, `tensorRoads`, `pruneSteepEdges`,
+   `connectComponents`, `planarize`, `planarizeLayered`, `gradeSeparationCount`; the Lua `city.layout` that exposed
+   them, with the `lua_city` level and its scripts; their tests. The sim tests' grid town lives on as a TEST FIXTURE,
+   `citytest::gridCity` (tests/city_test_util.h), the same algorithm and the same draws, so the towns -- and every
+   number measured on them -- are unchanged. Kept: `extractBlocks`, `joinDanglingEnds`, `sampleArc` (the
+   auto-roundabout's ring in `applyConstraints`).
+8. HAND-AUTHORED ROADS: the road entity's edit API (move / tangent / add / split / extend / delete / width, the
+   nearest-edge pick), `roadNetFromJson` (the level's node arrays), `roadRecipeForSave`; the editor's road handles,
+   path tool, Ctrl topology gestures and the inspector's "Road" entry -- whose regenerate, fired by any inspector
+   edit, undo or paste, wrote the EMPTY graph over a lanes level's `{"builder":"lanes","graph":...}` block, so a
+   save after it would have wiped the city's roads; `handle_source.*`, `path_edit_tool.*` (no runtime user left);
+   the loader's authored-road pre-pass (`preNets`, the road cache, the LevelRoadGraph and right-of-way built from
+   them, their poke/elevation diagnostics) and `level_scene`'s parsing. A road entity is now the look its builder's
+   products are drawn with; a level road block with `nodes` logs an error naming this ADR. `roadNetToJson` stays as
+   the twin's debug dump into GLB extras. The parking-band gate moved onto metro_v2_test's planned scene in
+   `lanes_tests` (2611 bays, every one inside its street's Parking band): the lab scenes' streets are two lanes in
+   12 m with no room for a band.
+Also: `road_mesh.cpp`'s dead `emitStripe` / `segDist2` / `trimEnds`, and the web scene list's entries for levels
+that no longer exist (with their thumbnails).
+9. THE OLD ROAD MESHER'S LAST PIECES in `road_mesh`: the joint deck-profile solve (`weldChainProfiles`),
+   `roadProfile`, `clearanceProfile`, `bridgePiers`, `curbReturnFillet`, `roadConformRegions`; and
+   `road_crossings` (`resolveCrossings`) with its Lua `city.resolve` -- reached only by tests and a verb no shipped
+   script used. The lanes builder grades, bridges and fillets its own roads. `road_mesh` keeps what a lane-built
+   city publishes and reads (`UnionSpine`, `RoadDeckField`), `strokeRibbon` (the city renderer's outlines, Lua
+   `city.stroke`), `fairHermite` (the twin's sampler) and `triangulatePolygon`.
+
+## ADR-0268 — The buildings dedupe, step one: one face, the box kit by its Scope, one grow entry, one party-wall rule
+
+**Status.** Accepted, 2026-10-29. #117 item 35, step 1 of the approved plan (the output-identical half; step 2 --
+one massing path, one mall, complexes on the height rule -- changes the bake under one lots tag bump).
+
+**Context.** Three read-only maps of the buildings code (2026-10-29) found four duplicates that change nothing a
+player sees when they are made one:
+- `face.h`'s `Face` was used in one place, `planEdgeRect`, which copied it field by field into the grammar's private
+  `FaceRect`; the ruled face (ADR-0175) lived only on `FaceRect`.
+- The CGA box ops (`splitScope` / `repeatScope` / `insetScope`) sat in the middle of the building grammar's header,
+  whose top comment said the grammar was grown with them; it is not -- `facadeLayout` is the only facade layout,
+  and the ops serve car_interior, a planter and Lua `Scope`.
+- Two grow entry points: `growLotBuildingsOnNets`, the lattice's front end (the street graph's faces, rim blocks,
+  a sampled clearance graph, the freeway keep-out band), beside `growCity`'s built-pavement path. Since ADR-0267
+  every level's RoadEntity carries only a look and an empty graph, so the NETS branch grew nothing on every
+  shipped level; the suite's log has none of its lines. Its users were the block audit's `--graph-blocks` mode
+  and six test calls.
+- Party walls written twice: the lot pass's ADR-0227 post-pass (blank up to the last storey a sill under the
+  neighbour's real top) and `Complex::resolve` (blank to the lower cell's floor count, merging two neighbours on
+  one plane into one wall), each with its own copy of the on-the-line test the mesh side's `partyEdge` uses.
+
+**Decision.**
+1. ONE FACE. `Face` takes `FaceRect`'s fields (`ruled`, `tl`, `tr`, the ruled `at()`) and `planEdgeRuled` as
+   `Face::ofEdgeRuled`; the unused `Kind` (Cylindrical) and `normal()` go. `FaceRect`, `planEdgeRect` and
+   `planEdgeRuled` are deleted; the grammar's 40 calls build `Face`s.
+2. THE BOX KIT BY ITS SCOPE. The scope ops' declarations move beside `struct Scope` under a "box kit" heading, and
+   the header's top comment says what grows a building: the plan, its Faces, `facadeLayout`.
+3. ONE GROW ENTRY. `growLotBuildingsOnNets`, `edgeBlocks` and `EdgeBlockParams` are deleted, with
+   `readLotGrowParams`' edge knobs, `LotGrowSetup::ep`/`roadClear`, `CityGrowInputs::netGround`/`freewayROW`, the
+   loader's right-of-way plumbing and `RoadProducts::row`. `growCity` with no blocks grows nothing (it logs so).
+   The block audit grows only on the scene's holes (`lanes_tool blocks --graph-blocks` retired).
+   Tests: `alleys_recover_frontage_orphaned_back_rows` (test_city_lots) is the alleys can-fail pair on deep blocks
+   grown the built-city way (blocks behind the sidewalk, the street graph, no clearance);
+   `lanes_planned_city_lots_keep_parks_off_the_pavement_and_front_streets_not_the_freeway` (lanes_tests, the
+   planned metro_v2_test scene) takes over the two drive-feedback gates; `test_lot_road_clearance.cpp` (two
+   graph-face clearance cases, guarding a block model no level uses -- the built city's equivalent is
+   `lanes_the_city_block_pass_yields_well_formed_blocks_on_the_clean_scenes`) and `test_ground_truth.cpp` (whose
+   pit probes had already lost their cases) are deleted.
+4. ONE PARTY-WALL RULE. `shape_grammar.h` holds the rules every writer uses: `onPartyLine` (the edge-on-the-line
+   test `partyEdge` asks of each wall), `addPartyWall` (one wall per plane, blank to the taller neighbour's top)
+   and `partyTopAgainst` (the last storey a `kPartySill` under the neighbour's top). The lot pass's two probes and
+   its post-pass call them; `Complex::resolve` calls `addPartyWall`, still with the floor count as its top --
+   step 2c moves it to `partyTopAgainst`. Lua's `readAttachedFields` stays: it is authored input, not a rule.
+
+**Proof.** `rt_bake --sections` on metro_v2_test and river_town, baked by the binary from before the step and by the
+one after it (each `--force` into its own root): of 1505 and 1614 sections, every city and lots section is
+byte-identical; the one that differs is `city/e0/report`, the bake's own timings. (toolkit_lab bakes no bundle --
+it grows its authored blocks at load -- and is covered by the every-recipe census in run_tests, unchanged.) The
+gate: run_tests 1516/1516 (28 cases left with the two deleted files), physics_tests 141/141, lanes_tests 50/50.
+
+**Found on the way (corrected in the addendum).** The freeway-frontage gate, run on a built city for the first
+time, first reported 21 of metro_v2_test's 559 lots 76-98 m from any street and about 20 m from the freeway. The
+audit, not the city: it grew with no street graph, so every lot passed the frontage gate. See the addendum.
+
+**Consequences.** `grep -rn "FaceRect\|planEdgeRect\|planEdgeRuled\|growLotBuildingsOnNets\|edgeBlocks\|EdgeBlockParams" src tests tools`
+is empty. Owed: the city bundle still writes `roads/row`, which nothing reads now (dropped in the addendum below, with a
+lanes tag bump). growLotBuildings' `roads` + `roadClearance` push (`pushPolyClearOfRoads`) still runs on a built city's
+blocks with clearance 0 -- whether it moves anything there is to be measured before it is cut.
+
+**Addendum (2026-10-29, the same evening).**
+- THE AUDIT GROWS WHAT THE LOADER GROWS. `auditBlocks` handed `growLotBuildings` no street graph, so the frontage
+  gate passed every lot and doors had nothing to face. It now passes `navRoadGraph(roadTwin(r))`, the graph
+  city_producer bakes as `lotNav` and the loader hands the pass. With it, the planned metro_v2_test scene has 0
+  lots fronting only the freeway (536 lots, 228 parks, none on pavement), with or without the frontage gate
+  skipping freeway and ramp edges, so the lot pass is left as it is. The gate's `orphans == 0` check is on.
+- `roads/row` DROPPED (Glenn: "drop this thing and rebuild"). The city producer no longer builds or writes the
+  freeway right-of-way graph that only the retired lattice front end read, nor `twinRightOfWayPad`, which fed
+  only it. Lanes tag `2026-10-29.2`; every lanes level's city re-bakes, and its lots with it (the lots key folds
+  in the city's).
+
+## ADR-0269 — A radial expressway needs room for its interchange; an at-grade ramp end on its street is welded
+
+**Status.** Accepted, 2026-10-30. The level suite on the roads work (ADR-0266/0267) left 9 cases red; this fixes
+the freeway and door ones and re-authors metro_v2_test for its planned city.
+
+**Context.** On the re-planned metro_v2_test, 16 ramp links (one ramp) could not be reached from a street, and one
+street link could not be either -- the diamond interchange's "inaccessible roads" Glenn saw. Two causes:
+- THE SPUR'S STUB. A radial expressway with no town runs in from the map edge. metro_v2_test's ring stands 120 m
+  from the edge at the spur's angle, and a system interchange's corner connector has its gore 190 m out
+  (`linkReach`): the gore was anchored at the end of the stub, and the ramp never met it. Moved to the next gap,
+  the spur met the other half of the problem: on the west side midtown's rim stands 90 m inside the ring, the spur
+  stops 80 m short of it (`spurFreeway`), and the loops' gores fell off its inner end.
+- THE TWIN'S AT-GRADE RAMP END. A diamond on-ramp leaves its street part-way along a segment. The twin welds ramp
+  ends only where a deck is involved, leaving street pairs to the planariser, which splits lines where they CROSS
+  -- and a ramp starting on its host's line crosses nothing. The ramp's first 12 m was a one-way stub.
+
+**Decision.**
+1. ROOM FOR THE SYSTEM INTERCHANGE (city_plan). A spur with no town and no loop must have `linkReach` + 20 m
+   between the ring and its start, and the loops' gore + 80 m + 20 m between midtown's rim and the ring. It takes
+   the nearest gap between the spokes that has both; with none, the city has no radial expressway. RT_PLAN_WHY
+   prints every rejected gap. Measured: river_town's spurs (220-242 m out, 175 m in) keep their angles, and
+   piedmont, metro_planned and metro_mountain plan byte-identically; metro_v2_test's brief (ring 783 m in a
+   1900 m map) has no gap with room, so it keeps the C ring alone (Glenn: keep it).
+2. THE TWIN WELDS AN AT-GRADE RAMP END THAT LIES ON ITS HOST'S LINE (within 0.5 m), splitting the host there; one
+   the planariser already joined snaps to that vertex. Every lanes level loses its 1-2 orphan stubs
+   (metro_v2_test 7 -> 6 degree-1 nodes, piedmont 21 -> 19, metro_planned 15 -> 14, metro_mountain 17 -> 16);
+   river_town's twin is unchanged.
+3. metro_v2_test RE-AUTHORED for its planned city: the spawn 1.5 m outside its door (1.51 m), and its transit at 5
+   routes of 16 stops (81% of walkable street within 120 m of a stop, 38% of streets with a bus; was 4 of 14,
+   sized for the grown city).
+Tests: `no_ramp_is_anchored_at_the_end_of_its_road` (six seeds each of a round and a coast city; without
+decision 1, 11 of the 12 fail); the coast city's C measured by length (both carriageways, the whole arc, on every
+seed); the census floor 5 -> 2 (the push run's tracked lot levels after ADR-0267: metro_v2_test, river_town); the
+freeway census prints any ramp or freeway link no street reaches, or that leads nowhere.
+
+**Not done here.**
+- The lanes tag is NOT bumped (Glenn: hold it for item 35 step 2's lots bump). Until then the cached city bundles
+  of every lanes level are stale against decision 2: measure with `rt_bake --force`.
+- `metro_traffic_drives_on_the_road_deck` stays red: on a diamond on-ramp (d0_0_b_on, about 100 m up from s395)
+  the published deck stands 0.29 m over the drawn ramp, and a car rides 0.28 m up. ADR-0223's owed "ramps are
+  drawn off their published profile" question.
+- `metro_planned_regional_bus_joins_the_towns` (heavy): 20 of 40 buses moved in five minutes; not yet looked at.
+
+## ADR-0270 — One massing path: the pagoda is a stack preset, the drum is its plan, the box grammar is gone
+
+**Status.** Accepted, 2026-10-30. #117 item 35, step 2a (changes the bake; the lots tag is bumped once at the end
+of step 2, with the lanes bump ADR-0269 held).
+
+**Context.** Two massing paths grew buildings: `growPlanBuilding` (the plan grammar, the toolkit stack, every city
+building's floors, cores and interiors) and `growBuilding`, a ~200-line box grammar with its own facade wrapper and
+cornice, which dispatched a Cylinder shape to `growCylinder` and a Pagoda to `growPagoda`. In a city only two kinds
+of lot reached it: the pagoda recipe (`Massing::BoxMass`, forced onto the box path on roomy lots) and any lot whose
+plan failed (a shrink-fit box). Lua's `building.grow` / `grow_parts` / `height` called it directly. ADR-0175 owed
+"the drum and the pagoda as presets".
+
+**Decision.**
+1. THE PAGODA IS A STACK PRESET on the plan path. `pagodaPlan(lot, floors)`: the square inscribed in the lot's
+   rectangle at 0.78 of its short half (the box pagoda's). `envelopeTiers`: a square tier a floor from the second
+   floor, each 0.8 of the one below where the lot has room -- less where it has not (down to 2% a tier), so the top
+   tier still holds a stair (`kCoreTierMin`): a pagoda is a building you walk up now, with the city's floors, doors
+   and interiors. `growPlanBuilding`: a flared tile eave (the box pagoda's `emitFlaredRoof`, blue or jade by seed)
+   round every tier's top instead of the parapet and cornice, corner posts, and on the last tier its eave and a
+   gold finial. A lot that cannot hold the recipe's tiers returns no plan and stays open ground.
+   `Massing::BoxMass` becomes `Massing::Pagoda`; the recipe's tiers are its floors.
+2. THE DRUM IS ITS PLAN. The city's round towers already were (`Massing::Circle`). Lua `shape = "cylinder"` grows
+   on a `sides`-gon inscribed in its width x depth (`Section::ngon`). `BuildingShape::Cylinder` is gone; `Pagoda`
+   keeps its value (2) for the lot cache's codec.
+3. NO PLAN, NO BUILDING. A lot the plan grammar cannot stand on is open ground (`rejBox` counts them), not a
+   shrink-fit box.
+4. Lua `building.grow` / `grow_parts` / `height` grow on the plan path (`luaBuildingPlan`: the rectangle, the
+   cylinder's n-gon, the pagoda's square).
+5. DELETED: `growBuilding`, `growCylinder`, `growPagoda`, the box facade wrapper `emitFacade`, the already dead
+   `emitCurtainWall`, and with them the box path's cornice (TECH_DEBT's "two cornices" row: resolved).
+   `BuildingParams::tiers` is unread and leaves with the next BuildingParams codec change (step 2b).
+Tests: `a_pagoda_grows_its_tiers_on_the_plan_path_on_every_seed` (12 seeds x 3 lot shapes: on its lot, a tier a
+floor never wider than the one below, roofs and finial above the floors; 32 grown, 4 lots too small left open);
+the box-grammar cases in test_city and test_winding grow on the plan path; test_architect / test_lot_cache follow
+the renames.
+
+## ADR-0271 — One mall: the box, the wings and the complex are one generator
+
+**Status.** Accepted, 2026-10-30. #117 item 35, step 2b (changes the bake; the lots tag bump is at the end of step 2).
+
+**Context.** Three malls: the indoor box mall (bigBox 5: `mallLayout`, its own fronts, its own sign path and the
+loader's third sign loop, a rectangle with a lot in front), the American mall (bigBox 6: `mallWingsOf` /
+`mallLevel`, its plan drawn point by point inside the lot pass) and the mall complex (`mallCells`, which reused
+`mallLevel` for its spine but drew the spine's outline itself). Each had its own selection: a big-box block took the
+box or the wings one mall in 1.5 km, while the complex was a 6% landmark roll that knew nothing of that spacing (a
+complex could stand next to a box mall). The lot pass and Lua's `building.cells{mall = true}` built the complex's
+anchors, garage and pavilion with two copies of the same setup.
+
+**Decision.**
+1. THE BOX MALL IS THE MALL ON ONE LEVEL. `architectMall` is bigBox 6 with `floors = 0` and its tall skylit storey.
+   `mallWingsOf` marks it `oneLevel`; `mallLevel` gives it no upper level, no escalators, no lift and no atria, its
+   -u end the anchor and its +u end the food court (`MallWings::anchor`), its shops from a 16 m entrance hall (the
+   court of a mall on two levels is 40 m: the atrium the escalators climb through). The lot pass shapes it as the
+   wings mall's I. bigBox 5 is retired: `dressBigBox` maps a 5 to 6.
+2. ONE OUTLINE. `mallOutline(court, u, v, arm[4])` is the wings' union; the lot pass shapes a box or wings mall
+   with it and `mallCells` its spine.
+3. ONE FALLBACK CHAIN in the lot pass: the wings mall where it fits, else the box mall, else a store of the chain
+   (it used to fall back to the old box mall).
+4. ONE SPACING RULE (`mallNear`, `kMallSpacing` 1.5 km over `mallAt`): a big-box block's mall, and a whole-block
+   landmark that rolls the complex (it rolls again, up to four times, then takes the street's own pick); a complex
+   that stands keeps the next mall away.
+5. ONE COMPLEX SETUP: `mallComplex(box, faceDir, mall, withGarage, anchorDepth, seed)`, called by the lot pass and
+   by Lua.
+6. DELETED: `mallLayout`, `mallFronts`, `mallSignOf`, the box mall's branches in `shopFrontsOf`, the interior room
+   plan and the store sign's lettering, the loader's box-mall sign loop, the furniture's style-20 concourse.
+Tests: `an_indoor_mall_is_a_concourse_of_shops` is the one-level mall (9 units, the anchor stocked, the food court's
+tables); `every_mall_variant_grows_on_every_seed` (8 seeds: the box on three lengths, the wings as an I and a T, the
+complex on two boxes: every unit indoors, the name boards, the interiors, every cell of a complex reachable from the
+street); the space-graph gate holds every recipe (456 of 456).
+
+**Not done.** The complex's front parking lot (owed since ADR-0180): new work, filed as #144.
+
+## ADR-0272 — Complexes' party walls follow real heights
+
+**Status.** Accepted, 2026-10-30. #117 item 35, step 2c.
+
+**Decision.** `Complex::resolve` sets each shared wall's top with ADR-0268's `partyTopAgainst`: blank as high as the
+neighbour's highest storey still standing on the line (`onPartyLine` from its side), a sill under its top, as the
+lot pass's attached buildings are. It used the neighbour's floor count. With equal storey heights the tops are the
+same; where they differ (an anchor beside the spine, a garage's decks, a tube on another base) they follow the real
+heights. Two neighbours on one plane stay one wall, blank to the taller's top (`addPartyWall`). Every writer of
+partyTop now runs the one rule; Lua's `readAttachedFields` stays authored input.
+
+**Addendum (the same day).** Running the complexes on the shared rule found an off-by-one in it, copied from the lot
+pass's ADR-0227 pass in step 1: it never looked at the top storey, and "one storey under the top" read as "reaches
+the top", so a building ONE storey taller than its neighbour kept its wall blank to the roof. ADR-0227 says the
+storeys above the neighbour take their windows; the complex's floor-count rule had it right
+(`a_courtyard_block_is_eight_cells_round_an_open_court`: a six-storey corner against five-storey wings, blank to
+storey 5). `partyTopAgainst` now considers every storey up to the top and returns "to the roof" only when the
+neighbour reaches the top storey itself; the lot pass's attached buildings one storey taller than a neighbour get
+their top windows too (the bake changes, under step 2's bump).
+
+### ADR-0270/0271 addendum — review fixes (2026-10-30)
+
+A review of the wave 3 commits found the new paths left holes where the old ones had covered for them:
+- **The pagoda is rolled only where it fits.** `pagodaFits(shortSide, floors)` is `pagodaPlan`'s test, written once.
+  `recipePagodaTower` gives a lot too narrow for five tiers (19.5 m) three, and one too narrow for three (18.8 m)
+  the street's mixed-use building. Before, those lots became open ground, since the box fallback had been retired.
+  `pagodaPlan`'s empty result stays as the backstop for a trapezoid whose inscribed rectangle is narrower than its
+  OBB. In Lua, `tiers` is another name for `floors` (it had overwritten `floors` with 5), and a footprint too small for
+  its tiers is an error, not an empty mesh.
+- **`mallOutline` drops the court corner left on a straight run** when the front or back wing is missing. The facade
+  turned a corner mid-wall there, and the complex's spine had its front split where the old hand-drawn spine had none.
+- **A mall that falls back to a store** is styled by the style book and records its own colour (the HLOD box had
+  baked the mall's sandstone), and gives back its `mallAt` spot, so a mall that never stood keeps no other mall 1.5 km
+  away. The complex registers its spot after a lab's `citysim.recipe` override, not before.
+- `dressBigBox` takes chains 1–4 or 6 (the chain-5 remap was dead). growCity warns when a host hands it road nets
+  but no blocks. The planner's spur check compares radii before siting a town.
+
+Not changed: the coast brief's spur loss is ADR-0269's rule working (a spur with no room is not built), and the
+k-prefixed constants follow the codebase's convention.

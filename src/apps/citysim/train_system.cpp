@@ -388,17 +388,25 @@ void TrainSystem::update(engine::FrameContext& ctx) {
     }
 }
 
+void TrainSystem::onStart(engine::FrameContext& ctx) {
+    onBoard_ = ctx.events.listen<engine::TrainBoardRequest>([this](const engine::TrainBoardRequest& r) {
+        board_ = r;
+        boardPending_ = true;
+    });
+    answers_.bind(ctx.commands, "TrainSystem", "trains?");
+}
+
 void TrainSystem::fixedUpdate(engine::FrameContext& ctx) {
     if (!tried_) build(ctx);
     if (sim_.trains().empty()) return;
     const Real dt = ctx.clock.fixedStep();
     sim_.step(dt);
-    // `train_board <train> <car>`: put the player aboard (a probe's way in; on foot you walk in through a door)
-    const std::string req = ctx.settings.getString("train.board", "");
-    if (!req.empty()) {
-        ctx.settings.setString("train.board", "");
-        int t = 0, c = 1;
-        if (std::sscanf(req.c_str(), "%d %d", &t, &c) >= 1 && t >= 0 && t < static_cast<int>(sim_.trains().size())) {
+    // A TrainBoardRequest (`train_board <train> <car>`): put the player aboard (a probe's way in; on foot you walk
+    // in through a door)
+    if (boardPending_) {
+        boardPending_ = false;
+        const int t = board_.train, c = board_.car;
+        if (t >= 0 && t < static_cast<int>(sim_.trains().size())) {
             train_ = t;
             car_ = std::clamp(c, 1, sim_.carCount(t) - 1);
             local_ = Vec3(0, static_cast<Real>(coachOf(train_).floor), 0);
@@ -442,7 +450,7 @@ void TrainSystem::fixedUpdate(engine::FrameContext& ctx) {
                           rr.stats.gaveUp, phase[0], lb, phase[1], phase[2], phase[3], phase[4]);
             riders = b;
         }
-        ctx.settings.setString("trains.telemetry", sim_.describe() + "; " + aboard + riders);
+        answers_.set("trains?", sim_.describe() + "; " + aboard + riders);
     }
 }
 

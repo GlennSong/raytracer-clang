@@ -47,7 +47,6 @@ public:
         if (!p) return out;
         out.deck = p->deck;                            // the surface everything stands ON
         out.bands = p->bands;                          // and the kerb line it stands clear of
-        out.row = p->row;                              // the lot pass keeps out of the freeway
         out.rails = p->rails;                          // the tracks, for the trains
         for (const lanes::Ring& h : p->holes) out.holes.push_back(h);   // un-inset: the caller insets by its own sidewalk
         for (const lanes::CityCellMesh& c : p->cells) {
@@ -83,10 +82,9 @@ private:
     // One obtain per level, not one per question: ground(), build() and navGraph()
     // are three views of the same city.
     const lanes::CityProducts* products(const RoadBuildInput& in) const {
-        // A caller working from the level's JSON ALONE has no level to obtain against
-        // (the terrain pre-pass, cityPrePassForLevel). It gets nothing, by design and
-        // without a complaint: a lane-built city's ground reaches the terrain through the
-        // level's bundle before that pre-pass runs, not through this call.
+        // A caller working from the level's JSON ALONE has no level to obtain against.
+        // It gets nothing, by design and without a complaint: a lane-built city's ground
+        // reaches the terrain through the level's bundle, not through this call.
         if (in.levelPath.empty()) return nullptr;
         // WHICH city: the ordinal names a section of the bundle and counts CITY entities,
         // which is not the same as counting road entities. An entity the level does not

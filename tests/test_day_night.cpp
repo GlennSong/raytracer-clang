@@ -153,12 +153,20 @@ TEST_CASE(day_night_dusk_horizon_is_warm) {
 
 // THE THIRTY-MINUTE DAY (device: "the day/night cycle zips by really fast
 // ... I'd like to be able to see a day-night loop happen over 30 min").
-// The loop is authored in real minutes, and a fresh cycle stepped at the
-// engine's 60 Hz fixed step for exactly 30 real minutes comes back to where
-// it started — half way through it is half a day on.
-TEST_CASE(day_night_default_loop_is_thirty_real_minutes) {
+// The loop is authored in real minutes: by default a real day (six real hours
+// are a quarter of it), and a level's 30-minute loop stepped at the engine's
+// 60 Hz fixed step for exactly 30 real minutes comes back to where it started
+// — half way through it is half a day on.
+TEST_CASE(day_night_default_loop_is_a_real_day) {
+    // Real time by default (Glenn, 2026-10-29: "The clock should be 1:1 with realtime"); a level names a faster day.
     DayNightCycle c;
-    CHECK_APPROX(c.dayMinutes, 30.0, EPS);
+    CHECK_APPROX(c.dayMinutes, 1440.0, EPS);
+    CHECK_APPROX(c.speed(), 1.0 / 86400.0, 1e-15);
+    c.timeOfDay = 0.2;
+    for (int i = 0; i < 6 * 60 * 60; ++i) c.advance(1.0);   // six real hours: a quarter of the day
+    CHECK_APPROX(c.timeOfDay, 0.45, 1e-6);
+    // ...and the thirty-minute loop a level may still author
+    c.dayMinutes = 30.0;
     CHECK_APPROX(c.speed(), 1.0 / 1800.0, 1e-15);
     c.timeOfDay = 0.2;
     const double step = 1.0 / 60.0;
@@ -199,9 +207,9 @@ TEST_CASE(day_night_default_summer_day_is_longer_than_its_night) {
     CHECK_APPROX(c.sunriseHour(), lit.firstLit, 1.0 / 60.0 + 1e-9);
     CHECK_APPROX(c.sunsetHour(), lit.lastLit, 1.0 / 60.0 + 1e-9);
     CHECK_APPROX(c.daylightFraction() * 24.0, litHours, 2.0 / 60.0);
-    // Of a 30-minute loop that is 18.5 minutes of day and 11.5 of night.
-    CHECK(c.daylightFraction() * c.dayMinutes > 18.0);
-    CHECK(c.daylightFraction() * c.dayMinutes < 19.0);
+    // Of a real day that is 14.8 hours of day and 9.2 of night.
+    CHECK(c.daylightFraction() * c.dayMinutes > 18.0 * 48.0);
+    CHECK(c.daylightFraction() * c.dayMinutes < 19.0 * 48.0);
     // Noon leans south (+z, where the old fixed tilt leaned), never overhead
     // at this latitude — shadows keep falling the way every level was lit.
     DayNightState noon = c.evaluate();

@@ -6,6 +6,7 @@
 #include "../../engine/procgen/furniture_library.h"
 #include "../../engine/procgen/city/shop_signs.h"    // busSignImages: the buses' destination signs
 #include "../../engine/text/font.h"
+#include "../../engine/systems/day_night_system.h"   // SimHourQuery: `daynight?` asks the sim's hour
 
 #include "bus_stop_props.h"
 
@@ -1139,6 +1140,8 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
     carSeats_.clear();
     carDoors_.clear();
     carDriverSeat_.clear();
+    carRearHip_.clear();
+    carHasRear_.clear();
     carHasDriver_.clear();
     if (!carsExternallyOwned_) {
 #ifdef RT_ENABLE_SCRIPTING
@@ -1157,7 +1160,8 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
             bool seeInto = false;
             bool openSeat = false;
             std::vector<Vec3> seats, doors;
-            Vec3 driverSeat(0, 0, 0);
+            Vec3 driverSeat(0, 0, 0), rearHip(0, 0, 0);
+            bool hasRear = false;
             bool hasDriver = false;
             if (assets) {
                 engine::RenderMesh mesh;
@@ -1197,6 +1201,8 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
                         doors = recipe.doors;
                         driverSeat = recipe.driverSeat;
                         hasDriver = recipe.hasDriverSeat;
+                        rearHip = recipe.rearHip;
+                        hasRear = recipe.hasRearHip;
                 } else if (vehScript) {
                     LOG_ERROR << "[citysim] fleet slot " << v << ": " << slotErr
                               << " — this slot draws NO car";
@@ -1282,6 +1288,8 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
                 carSeats_.push_back(std::move(seats));
                 carDoors_.push_back(std::move(doors));
                 carDriverSeat_.push_back(driverSeat);
+                carRearHip_.push_back(rearHip);
+                carHasRear_.push_back(hasRear ? 1 : 0);
                 carHasDriver_.push_back(hasDriver ? 1 : 0);
             }
 
@@ -3406,6 +3414,32 @@ void CityRenderSystem::onStart(engine::FrameContext& ctx) {
     // Semicolon, not L: L is the car's headlight toggle (VehicleSystem), and
     // switching lights used to flash the whole block/lot plan on with it.
     ctx.actions.bindButton("plan_widgets", engine::KeyCode::Semicolon);
+    onSimHour_ = ctx.events.listen<engine::SimHourQuery>([this](const engine::SimHourQuery& q) {
+        if (q.hours != nullptr && built_) *q.hours = sim_.clockHours();
+    });
+    onPin_ = ctx.events.listen<engine::PinRequest>([this](const engine::PinRequest& r) { pinRequests_.push_back(r); });
+    onFindPlace_ = ctx.events.listen<engine::FindPlaceRequest>([this](const engine::FindPlaceRequest& r) {
+        findPlace_ = r.name;
+    });
+    onLayer_ = ctx.events.listen<engine::CityLayerRequest>([this](const engine::CityLayerRequest& r) {
+        layerRequests_.push_back(r);
+    });
+    onJitter_ = ctx.events.listen<engine::JitterRequest>([this](const engine::JitterRequest& r) {
+        jitterRequests_.push_back(r);
+    });
+    for (const char* q : {"parking?", "traffic?", "depots?", "opensigns?", "findplace?"})
+        answers_.bind(ctx.commands, "CityRenderSystem", q);
+    answers_.bind(ctx.commands, "CityRenderSystem", "jitter?", "nothing recorded (ask with `jitter`)");
+    answers_.bind(ctx.commands, "CityRenderSystem", "pin?", "none followed");
+    // `ground? x z [r]` asks (r dumps the area to RT_GROUND_DUMP); `ground?` alone reads the answer.
+    if (ctx.commands != nullptr)
+        answerGround_ = ctx.commands->bind("ground?", "CityRenderSystem", [this](const engine::ControlCommand& cmd) -> std::string {
+            if (cmd.args.size() >= 2) {
+                groundQuery_ = cmd.args[0] + " " + cmd.args[1] + (cmd.args.size() >= 3 ? " " + cmd.args[2] : "");
+                return "ok staged (poll `ground?` with no args)";
+            }
+            return "ok " + groundResult_;
+        });
 }
 
 void CityRenderSystem::feedGpuCrowd(engine::FrameContext& ctx) {
@@ -3559,7 +3593,7 @@ void CityRenderSystem::listSignedStaff() {
     signedStaffOf_ = ag.size();
 }
 
-void CityRenderSystem::dealOpenSigns(World& world, engine::Settings& settings, Vec3 cam) {
+void CityRenderSystem::dealOpenSigns(World& world, Vec3 cam) {
     Real nearD = 1e30;
     Vec3 nearAt, nearN;
     std::vector<uint16_t> hired;
@@ -3647,15 +3681,13 @@ void CityRenderSystem::dealOpenSigns(World& world, engine::Settings& settings, V
     char buf[256];
     std::snprintf(buf, sizeof(buf), "nearest lit %.1f %.1f %.1f facing %.2f %.2f (%.0f m); %d OPEN signs: %d lit, %d closed for the night, %d open but nobody on shift (%d with nobody hired) (%.2f h)",
                   nearAt.x, nearAt.y, nearAt.z, nearN.x, nearN.z, nearD < 1e29 ? nearD : -1.0, signs, lit, closed, unstaffed, noHire, clock);
-    settings.setString("opensigns.telemetry", buf + who);
+    answers_.set("opensigns?", buf + who);
 }
 
 void CityRenderSystem::measureJitter(engine::FrameContext& ctx) {
-    const std::string req = ctx.settings.getString("jitter.request", "");
-    if (!req.empty()) {
-        ctx.settings.setString("jitter.request", "");
-        int id = -1, frames = 300;
-        std::sscanf(req.c_str(), "%d %d", &id, &frames);
+    for (const engine::JitterRequest& req : jitterRequests_) {
+        int id = req.agent;
+        const int frames = req.frames;
         const Vec3 cam = ctx.view.camera.position;
         if (id < 0) id = playerRidingAgent_;
         if (id < 0) {   // the nearest moving vehicle
@@ -3671,8 +3703,9 @@ void CityRenderSystem::measureJitter(engine::FrameContext& ctx) {
         jitterAgent_ = id;
         jitterFrames_ = std::max(10, frames);
         jitter_.clear();
-        ctx.settings.setString("jitter.result", id < 0 ? "no moving vehicle near" : "recording agent " + std::to_string(id));
+        answers_.set("jitter?", id < 0 ? "no moving vehicle near" : "recording agent " + std::to_string(id));
     }
+    jitterRequests_.clear();
     if (jitterAgent_ < 0 || jitterAgent_ >= static_cast<int>(sim_.agents().size())) return;
     const Agent& a = sim_.agents()[static_cast<std::size_t>(jitterAgent_)];
     // where the RENDERER draws its body this frame: the baked instance, between its last step and this one by the
@@ -3766,7 +3799,7 @@ void CityRenderSystem::measureJitter(engine::FrameContext& ctx) {
                   "in the vehicle's frame %.2f mm",
                   jitterAgent_, jitter_.size(), dtMean * 1000.0, sim_.tickPeriod() * 1000.0, vm, vcv, vs, cm, ccv, cs, rm,
                   jerk, vjerk, inJerk);
-    ctx.settings.setString("jitter.result", b);
+    answers_.set("jitter?", b);
     jitterAgent_ = -1;
     jitter_.clear();
 }
@@ -3785,9 +3818,6 @@ void CityRenderSystem::update(engine::FrameContext& ctx) {
     // Stage the sun for the bake's car lamps (see solarElevation_).
     solarElevation_ = ctx.view.lighting.solarElevation;
     solarStaged_ = true;
-    // The sim's own hour, for `daynight?` on the control channel: with a
-    // staged cycle it must read the same as the sky's (one clock).
-    ctx.settings.setDouble("citysim.hour", built_ ? sim_.clockHours() : -1.0);
     if (built_ && !busSignsTried_ && busVariant_ >= 0 && sim_.buses().routeCount() > 0) makeBusSigns(ctx);
     // THE FIRE ENGINES' LADDERS (engine/ladder.h; Glenn, 2026-10-13: "use it on the fire engine"): the ladder up the
     // back of every parked fire engine near the player, for the LadderSystem to offer -- from the road behind it to
@@ -3828,21 +3858,17 @@ void CityRenderSystem::update(engine::FrameContext& ctx) {
         showPlan_ = !showPlan_;
         if (showPlan_) debugWidgets_ = true;
     }
-    // Web debug panel (rt_web_city): ONE-SHOT settings writes — apply and clear,
-    // so the page's checkboxes and the J/L keys can share the same flags without
-    // a persistent setting overriding the keys every frame.
-    auto pull = [&](const char* key, bool& flag) {
-        const double v = ctx.settings.getDouble(key, -1.0);
-        if (v >= 0.0) {
-            flag = v > 0.5;
-            ctx.settings.setDouble(key, -1.0);
-        }
-    };
-    pull("citysim.master", debugWidgets_);
-    pull("citysim.agents", showAgentWidgets_);
-    pull("citysim.cones", showVisionCones_);
-    pull("citysim.nav", showNavGraph_);
-    pull("citysim.plan", showPlan_);
+    // `overlay <layer>` and the web debug panel (rt_web_city): CityLayerRequests
+    // set the same flags the J and ; keys flip, so the page's checkboxes and the
+    // keys share them.
+    for (const engine::CityLayerRequest& r : layerRequests_) {
+        if (r.layer == "master") debugWidgets_ = r.on;
+        else if (r.layer == "agents") showAgentWidgets_ = r.on;
+        else if (r.layer == "cones") showVisionCones_ = r.on;
+        else if (r.layer == "nav") showNavGraph_ = r.on;
+        else if (r.layer == "plan") showPlan_ = r.on;
+    }
+    layerRequests_.clear();
 
     // Ground probe (channel `ground? x z`, the seam-diagnosis tool): answer
     // with the carved field, the lifted groundAt, and the nearest nav link's
@@ -3852,9 +3878,9 @@ void CityRenderSystem::update(engine::FrameContext& ctx) {
         // `parking?`: the kerbside bays and the garages' stalls, how many are taken, and the nearest taken garage
         // stall to the camera (where to go and look)
         // (the counts below walk every agent and vehicle on the island: kept only while a probe is asking -- see
-        // telemetry.askedAt in the control channel. The first question after a quiet spell answers from the last count.)
-        const double askedAt = ctx.settings.getDouble("telemetry.askedAt", -1e30);
-        const bool asked = std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count() - askedAt < 60.0;
+        // answers_: any of this system's questions within the last minute. The first question after a quiet spell
+        // answers from the last count.)
+        const bool asked = answers_.secondsSinceAsked() < 60.0;
         if (++parkingTick_ % 60 == 0 && asked) {
             int kerb = 0, kerbTaken = 0, stalls = 0, stallsTaken = 0;
             Real bestD = 1e30;
@@ -3871,7 +3897,7 @@ void CityRenderSystem::update(engine::FrameContext& ctx) {
             char buf[256];
             std::snprintf(buf, sizeof(buf), "kerb %d/%d taken, garage stalls %d/%d taken; nearest taken stall %.1f %.1f %.1f (%.0f m)",
                           kerbTaken, kerb, stallsTaken, stalls, best.x, bestY, best.y, bestD < 1e29 ? bestD : -1.0);
-            ctx.settings.setString("parking.telemetry", buf);
+            answers_.set("parking?", buf);
             // `traffic?` (the city's next ten: "the streets look empty"): drivers on the road island-wide and within
             // 300 m of the camera, by tier, and how many of those near are parked, walking, cabs or buses
             {
@@ -4078,12 +4104,12 @@ void CityRenderSystem::update(engine::FrameContext& ctx) {
                               laneN, laneOff, laneInBays, laneOut, laneN ? laneErrSum / laneN : 0.0, pulling, restN, restKerb);
                 char pb[160];
                 std::snprintf(pb, sizeof(pb), "; parked with nobody in: %d drawn near (%d in a bay), %d past the kerb", parkN, parkInBay, parkKerb);
-                ctx.settings.setString("traffic.telemetry", std::string(tb) + pileWho + pb + (std::getenv("RT_TRAFFIC_DEBUG") ? kerbWho + parkWho : std::string()));
+                answers_.set("traffic?", std::string(tb) + pileWho + pb + (std::getenv("RT_TRAFFIC_DEBUG") ? kerbWho + parkWho : std::string()));
             }
         }
         // THE OPEN SIGNS (storefronts stage 3): once a second, every window's sign lit while its place is open and
         // someone who works there is at work; `opensigns?` says how many
-        if (built_ && parkingTick_ % 30 == 0) dealOpenSigns(ctx.world, ctx.settings, ctx.view.camera.position);
+        if (built_ && parkingTick_ % 30 == 0) dealOpenSigns(ctx.world, ctx.view.camera.position);
         // THE BUS DEPOTS: `depots?` -- in service or not, buses on the road / heading in / parked in a depot bay, and the
         // depot nearest the camera
         if (built_ && parkingTick_ % 30 == 0 && asked && sim_.depotCount() > 0) {
@@ -4141,7 +4167,7 @@ void CityRenderSystem::update(engine::FrameContext& ctx) {
                               kerbBus, wrongDriver, putAway);
                 stalled += b4;
             }
-            ctx.settings.setString("depots.stalled", stalled);
+            depotsStalled_ = stalled;
             const Vec3 cam = ctx.view.camera.position;
             Real bestD = 1e30;
             Vec2 best(0, 0);
@@ -4174,14 +4200,14 @@ void CityRenderSystem::update(engine::FrameContext& ctx) {
                           nb >= 0 ? ag[static_cast<std::size_t>(nb)].pos.y : 0.0,
                           nb >= 0 ? ag[static_cast<std::size_t>(nb)].heading.x : 0.0, nb >= 0 ? ag[static_cast<std::size_t>(nb)].heading.y : 0.0,
                           nb >= 0 ? ag[static_cast<std::size_t>(nb)].speed : 0.0, sign.c_str());
-            ctx.settings.setString("depots.telemetry", buf);
+            answers_.set("depots?", std::string(buf) + "; stalled heading in:" + depotsStalled_);
         }
         // `pin <id>` / `unpin <id>` (FOLLOW an agent: in the full sim wherever it goes)
         // `findplace <name>`: the places whose name contains it -- where, what, open now, and who is in at its door
         {
-            const std::string fq = ctx.settings.getString("findplace.request", "");
+            const std::string fq = findPlace_;
             if (!fq.empty()) {
-                ctx.settings.setString("findplace.request", "");
+                findPlace_.clear();
                 std::string res;
                 const Real h = sim_.clockHours();
                 for (const Place& p : places_.places()) {
@@ -4200,24 +4226,24 @@ void CityRenderSystem::update(engine::FrameContext& ctx) {
                                   p.door.x, p.door.y, p.openAt(h) ? "open" : "closed", p.openHour, p.closeHour, in, staff);
                     res += b;
                 }
-                ctx.settings.setString("findplace.result", res.empty() ? "no place named like that" : res);
+                answers_.set("findplace?", res.empty() ? "no place named like that" : res);
             }
         }
         {
-            const std::string pr = ctx.settings.getString("pin.request", "");
-            if (!pr.empty()) {
-                ctx.settings.setString("pin.request", "");
-                int id = -1, on = 1;
-                if (std::sscanf(pr.c_str(), "%d %d", &id, &on) >= 1 && id >= 0 && id < static_cast<int>(sim_.agents().size())) {
-                    sim_.pinAgent(id, on != 0);
-                    ctx.settings.setString("pin.status", std::to_string(sim_.pinnedCount()) + " followed; last " + std::to_string(id) +
-                                                             (on ? " pinned" : " unpinned"));
+            std::vector<engine::PinRequest> pins;
+            pins.swap(pinRequests_);
+            for (const engine::PinRequest& pr : pins) {
+                const int id = pr.agent;
+                if (id >= 0 && id < static_cast<int>(sim_.agents().size())) {
+                    sim_.pinAgent(id, pr.on);
+                    answers_.set("pin?", std::to_string(sim_.pinnedCount()) + " followed; last " + std::to_string(id) +
+                                             (pr.on ? " pinned" : " unpinned"));
                 }
             }
         }
-        const std::string q = ctx.settings.getString("ground.query", "");
+        const std::string q = groundQuery_;
         if (!q.empty()) {
-            ctx.settings.setString("ground.query", "");
+            groundQuery_.clear();
             double qx = 0, qz = 0, qr = 0;
             const int nq = std::sscanf(q.c_str(), "%lf %lf %lf", &qx, &qz, &qr);
             if (nq == 3 && qr > 0) {   // `ground? x z r`: dump nav links + deck spines within r to RT_GROUND_DUMP (JSON)
@@ -4293,9 +4319,9 @@ void CityRenderSystem::update(engine::FrameContext& ctx) {
                     }
                     std::fprintf(fp, "]}\n");
                     std::fclose(fp);
-                    ctx.settings.setString("ground.result", std::string("dumped ") + path);
+                    groundResult_ = std::string("dumped ") + path;
                 } else {
-                    ctx.settings.setString("ground.result", "err set RT_GROUND_DUMP to a writable path");
+                    groundResult_ = "err set RT_GROUND_DUMP to a writable path";
                 }
             } else if (nq >= 2) {
                 const double carved = heightAt_ ? heightAt_(qx, qz) : 0.0;
@@ -4365,9 +4391,9 @@ void CityRenderSystem::update(engine::FrameContext& ctx) {
                     out += buf;
                     ++shown;
                 }
-                ctx.settings.setString("ground.result", out);
+                groundResult_ = out;
             } else {
-                ctx.settings.setString("ground.result", "err parse: " + q);
+                groundResult_ = "err parse: " + q;
             }
         }
     }
@@ -4712,11 +4738,11 @@ bool CityRenderSystem::carSeatsOf(int agent, Mat4* pose, std::vector<Vec3>* seat
         seats->clear();
         seats->push_back(d);
         seats->push_back(Vec3(-d.x, d.y, d.z));
-        // a rear bench needs ~0.85 m behind the front seats: a two-seater (under ~3.9 m) has none
-        if (a.vehicle < static_cast<int>(sim_.vehicles().size()) &&
-            sim_.vehicles()[static_cast<std::size_t>(a.vehicle)].length >= 3.9) {
-            seats->push_back(Vec3(d.x, d.y, d.z - 0.85));
-            seats->push_back(Vec3(-d.x, d.y, d.z - 0.85));
+        // the back bench, where the model has one (its recipe's rear_hip), a seat each side of its middle
+        if (v < carHasRear_.size() && carHasRear_[v]) {
+            const Vec3 r = carRearHip_[v];
+            seats->push_back(Vec3(d.x, r.y, r.z));
+            seats->push_back(Vec3(-d.x, r.y, r.z));
         }
     }
     return true;

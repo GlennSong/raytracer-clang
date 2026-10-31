@@ -4,7 +4,7 @@
 
 #include <algorithm>
 #include <cmath>
-#include <random>
+#include "../../proc_rng.h"
 
 namespace engine {
 
@@ -53,9 +53,9 @@ std::vector<RenderMesh> buildSprays(const SpraySpec& s, int tiles, uint32_t seed
     std::vector<RenderMesh> out;
     const int nt = std::max(1, tiles) * std::max(1, tiles);
     for (int k = 0; k < std::max(1, s.variants); ++k) {
-        std::mt19937 rng(seed * 2654435761u + static_cast<uint32_t>(k) * 97u + 1u);
-        std::uniform_real_distribution<double> u01(0.0, 1.0);
-        std::uniform_int_distribution<int> pickTile(0, nt - 1);
+        ProcRng rng(seed * 2654435761u + static_cast<uint32_t>(k) * 97u + 1u);
+        ProcUniform<double> u01(0.0, 1.0);
+        ProcUniformInt<int> pickTile(0, nt - 1);
         RenderMesh m;
         const Vec3 down(0, 0, -1);
         // the main shoot, in three strides (a long strand stretched would blur its needles)
@@ -203,8 +203,8 @@ void addBlade(RenderMesh& m, const Vec3& base, const Vec3& dir, const Vec3& acro
 }
 
 void buildBladePlant(const BladeSpec& sp, uint32_t seed, RenderMesh& leaves, RenderMesh& crown) {
-    std::mt19937 rng(seed * 2246822519u + 11u);
-    std::uniform_real_distribution<double> u01(0.0, 1.0);
+    ProcRng rng(seed * 2246822519u + 11u);
+    ProcUniform<double> u01(0.0, 1.0);
     const double pi = 3.14159265358979323846;
     const double fanAxis = u01(rng) * pi;   // the fan's own bearing
     for (int i = 0; i < sp.count; ++i) {
@@ -244,8 +244,8 @@ void buildBladePlant(const BladeSpec& sp, uint32_t seed, RenderMesh& leaves, Ren
 
 void addFrondCrown(const FrondSpec& sp, const Vec3& top, const Vec3& upIn, float trunkRadius, uint32_t seed,
                    RenderMesh& leaves, RenderMesh& wood) {
-    std::mt19937 rng(seed * 374761393u + 7u);
-    std::uniform_real_distribution<double> u01(0.0, 1.0);
+    ProcRng rng(seed * 374761393u + 7u);
+    ProcUniform<double> u01(0.0, 1.0);
     const double pi = 3.14159265358979323846;
     const Vec3 up = normalize(upIn);
     const Vec3 ref = std::fabs(up.y) < 0.9 ? Vec3(0, 1, 0) : Vec3(1, 0, 0);

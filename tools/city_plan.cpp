@@ -151,7 +151,10 @@ int main(int argc, char** argv) {
         std::filesystem::create_directories(outDir);
         for (int v = 0; v < variants; ++v) {
             const uint32_t s = seed + static_cast<uint32_t>(v);
-            const nlohmann::json block = engine::islandTerrainBlock(s);
+            nlohmann::json block = engine::islandTerrainBlock(s);
+            // a sketch of the island: its weathered ground refined to 2048 (10 m), not the level's 8192 -- the
+            // coarser refine levels are the same ground, and the full bake is a quarter of an hour
+            block["weather"]["res"] = 2048;
             const engine::IslandWorld w = engine::planIsland(block);
             const std::string base = outDir + "/island_" + std::to_string(s);
             engine::writeIslandMap(w, base + ".png");

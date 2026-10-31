@@ -21,6 +21,13 @@
 namespace engine {
 
 void PlayerSystem::onStart(FrameContext& ctx) {
+    onPerson_ = ctx.events.listen<PersonRequest>([this](const PersonRequest& r) { personPending_ = r.mode; });
+    answers_.bind(ctx.commands, "PlayerSystem", "move?");
+    onLimp_ = ctx.events.listen<LimpRequest>([this](const LimpRequest& r) {
+        limpRequested_ = true;
+        limpThrown_ = r.thrown;
+        limpVelocity_ = r.velocity;
+    });
     // cameraStartDetached boots the freecam already detached (the state the
     // cam_detach toggle reaches) so settings-driven poses frame headless
     // captures instead of the spawn point.
@@ -84,6 +91,8 @@ PlayerIntent PlayerSystem::intent(FrameContext& ctx) const {
     in.crouchHeld = ctx.actions.held("player_crouch");
     in.jump = jumpRequested;
     in.limp = limpRequested_;
+    in.limpThrown = limpThrown_;
+    in.limpVelocity = limpVelocity_;
     in.fire = grappleFire_;
     in.fireHeld = grappleHeld_;
     in.playTarget = playTarget_;
@@ -115,6 +124,7 @@ void PlayerSystem::fixedUpdate(FrameContext& ctx) {
             // what the step did not spend waits for the next
             jumpRequested = in.jump;
             limpRequested_ = in.limp;
+            if (!in.limp) limpThrown_ = false;   // spent
             grappleFire_ = in.fire;
             playTarget_ = in.playTarget;
         });
@@ -272,7 +282,7 @@ void PlayerSystem::render(FrameContext& ctx) {
                       hk == Hook::Hooked ? body_.grapple.ropeLen : hk == Hook::Loose ? body_.hands.looseLen : Real(0),
                       span, sag,
                       body_.lastEvent.c_str());
-        ctx.settings.setString("player.telemetry", buf);
+        answers_.set("move?", buf);
     }
     drawGearHud(ctx);
 #ifdef RT_ENABLE_IMGUI
@@ -281,7 +291,7 @@ void PlayerSystem::render(FrameContext& ctx) {
     ImGui::Begin("Debug");
     if (ImGui::CollapsingHeader("Movement")) {
         ImGui::TextDisabled("live; Save keeps them in settings.json (movement.*)");
-        ImGui::Text("%s", ctx.settings.getString("player.telemetry", "").c_str());
+        ImGui::Text("%s", answers_.get("move?").c_str());
         MovementTuning t = body_.tune;
         bool changed = false;
         const char* group = "";
@@ -471,12 +481,8 @@ void PlayerSystem::update(FrameContext& ctx) {
             playKind_ = pc.key;
         }
     }
-    // GO LIMP on purpose: G, or `ragdoll` on the socket (player.limp)
+    // GO LIMP on purpose: G here, or a LimpRequest (`ragdoll` on the socket, a throw; heard in onStart)
     if (camera.positionLocked && ctx.actions.pressed("player_limp")) limpRequested_ = true;
-    if (ctx.settings.getDouble("player.limp", 0.0) > 0.5) {
-        ctx.settings.setDouble("player.limp", 0.0);
-        limpRequested_ = true;
-    }
     // THE GRAPPLE'S TRIGGER: the press is staged for the step, the hold keeps the rope
     const bool grapple = body_.hands.holdingGrapple();
     grappleHeld_ = grapple && camera.positionLocked && ctx.actions.held("fire") && !ctx.input.uiWantsMouse;
@@ -501,13 +507,13 @@ void PlayerSystem::update(FrameContext& ctx) {
 
     // The one-shot beside the V key (device: "how do I switch between third
     // and first person?"): `person first|third|toggle` on the socket and the
-    // Teleport panel's checkbox write player.setThirdPerson (1/0; 2 =
-    // toggle), consumed here — no placed-camera guard, it is explicit.
+    // Teleport panel's checkbox publish a PersonRequest (1/0; 2 = toggle),
+    // taken here — no placed-camera guard, it is explicit.
     {
-        const double want = ctx.settings.getDouble("player.setThirdPerson", -1.0);
-        if (want >= 0.0) {
-            ctx.settings.setDouble("player.setThirdPerson", -1.0);
-            thirdPerson = want >= 1.5 ? !thirdPerson : (want > 0.5);
+        const int want = personPending_;
+        if (want >= 0) {
+            personPending_ = -1;
+            thirdPerson = want >= 2 ? !thirdPerson : (want == 1);
             ctx.settings.setBool("playerThirdPerson", thirdPerson);
             LOG_INFO << "On-foot camera: "
                      << (thirdPerson ? "third person (over the shoulder)" : "first person")
@@ -519,8 +525,8 @@ void PlayerSystem::update(FrameContext& ctx) {
         ctx.world.each<SceneCamera>([&](Entity, SceneCamera&) { placedCameras = true; });
         if (!placedCameras) {
             thirdPerson = !thirdPerson;
-            // Published for the body system (apps/citysim/city_player_body.*):
-            // it shows the player's person mesh only in third person.
+            // Kept as a preference; PlayerBodySystem shows the body only in
+            // third person.
             ctx.settings.setBool("playerThirdPerson", thirdPerson);
             LOG_INFO << "On-foot camera: "
                      << (thirdPerson ? "third person (over the shoulder)"

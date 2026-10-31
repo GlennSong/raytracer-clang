@@ -2,7 +2,6 @@
 #define RAYTRACER_ENGINE_PROCGEN_CITY_ROAD_MESH_H
 
 #include "road_network.h"
-#include "../terrain.h"                   // TerrainFlatten (road -> terrain cut/fill)
 #include "../../../renderer/renderer.h"   // RenderMesh
 #include "../../../rt_math.h"             // Vec3
 #include <array>
@@ -16,20 +15,6 @@ namespace engine {
 // markings, which drifted to 5 cm and read as a slab hovering over the road.
 constexpr double kRoadMarkLift = 0.02;
 
-// A circular curb-return fillet for an intersection corner (ADR-0044 corner fix). The two
-// kerb lines cross at `corner`; `dirA`/`dirB` point FROM the corner back along each kerb
-// toward the carriageway (i.e. -armDirection for the arm whose edge that kerb is). Returns
-// the arc as a polyline from the tangent point on line A to the tangent point on line B —
-// a TRUE fixed-radius arc tangent to both lines, so it reads as a real rounded kerb at ANY
-// corner angle (acute or obtuse), unlike a mouth-to-mouth chord. `radius` is the desired
-// kerb radius; `maxTangent` caps how far back the tangent points may sit (so the fillet
-// shrinks to fit a tight corner instead of overrunning the trim) — the radius is reduced
-// to honour it. Returns empty for a degenerate corner (near-straight or folded, or no
-// room), where the caller should fall back to a straight chamfer. `maxStep` is the arc
-// flattening tolerance in radians.
-std::vector<Vec2> curbReturnFillet(const Vec2& corner, const Vec2& dirA, const Vec2& dirB,
-                                   double radius, double maxTangent, double maxStep = 0.4);
-
 // Sample a Hermite spline (endpoints p0,p1 with tangents m0,m1) into `segs+1` points,
 // relaxing the tangent magnitudes if the curve would otherwise bend tighter than
 // `minRadius` (ADR-0044 fold prevention — a road that folds on itself is a generation
@@ -40,39 +25,6 @@ std::vector<Vec2> curbReturnFillet(const Vec2& corner, const Vec2& dirA, const V
 // than minRadius is returned untouched. Pure + headless.
 std::vector<Vec2> fairHermite(const Vec2& p0, const Vec2& m0, const Vec2& p1, const Vec2& m1,
                               int segs, double minRadius);
-
-// Turn the raw terrain heights sampled under a road centerline into a DRIVABLE vertical
-// profile (corridor model, ADR-0044 terrain conforming). `ground[i]` is the terrain height
-// at centerline sample i and `s[i]` its arc-length position. The profile is smoothed (a
-// 3-point moving average kills bumps so the road isn't a roller-coaster) then slope-limited
-// to |grade| <= maxGrade (rise/run) by iterated forward/backward clamping. The terrain is
-// later cut/filled to meet this profile (roadConformRegions), so a road follows the natural
-// slope where it can and the ground is graded to it where it's too steep. Pure + headless.
-std::vector<double> roadProfile(const std::vector<double>& ground,
-                                const std::vector<double>& s, double maxGrade);
-
-// Vertical profile for a road that must CLEAR what it crosses (ADR-0054 grade separation).
-// `minHeight[i]` is the lowest the deck may sit at arc-length `s[i]` — the ground there, or,
-// at a crossing, the lower road's deck + clearance. Returns the MINIMAL profile that stays
-// >= minHeight everywhere and never exceeds |grade| <= maxGrade: the slope-limited upper
-// envelope of the constraints (each point casts a downward "cone" of slope maxGrade; the
-// profile is their max). So a road hugs the ground, ramps up at maxGrade to clear an
-// obstacle, and eases back down — a bridge approach falls out for free. Where the approach
-// length is too short to return to ground at grade, the ends ride high (the honest answer:
-// the ramp needs more room). Pure + headless.
-std::vector<double> clearanceProfile(const std::vector<double>& s,
-                                     const std::vector<double>& minHeight, double maxGrade);
-
-// Cut/fill footprints that grade the terrain to a road corridor (ADR-0044 terrain
-// conforming). One flatten ramp per centerline segment, set to the road's vertical profile
-// `profileY` (from roadProfile), with half-width = carriageway half-width + `shoulder` and a
-// `falloff` feather back to natural ground (the embankment). Fed to the terrain via
-// applyFlatten so the ground meets the road exactly — cut where land is higher, fill where
-// lower — so no terrain pokes through. Pure; returns the regions for the caller to apply.
-std::vector<TerrainFlatten> roadConformRegions(const std::vector<Vec2>& centerline,
-                                               const std::vector<double>& profileY,
-                                               double halfWidth, double shoulder,
-                                               double falloff);
 
 // Ear-clipping triangulation of a simple polygon (any winding; non-convex OK) into index
 // triples into `poly`. For the junction pad (ADR-0044): fanning from the node centre
@@ -93,19 +45,9 @@ RenderMesh strokeRibbon(const std::vector<Vec2>& centerline,
                         const std::vector<double>& halfW, double y,
                         const Vec3& color, bool closed = false);
 
-// Support columns under a bridge deck (ADR-0054): for each centerline index in `atSamples`, a
-// box pier rising from the ground (`ground`, flat if unset) up to the deck underside
-// (deckY[i] - deckThk) at that point, `width` across the deck and `depth` along the road. The
-// structure that sells a flat overpass as carried on abutments straddling the road below.
-RenderMesh bridgePiers(const std::vector<Vec2>& centerline, const std::vector<double>& deckY,
-                       const std::vector<int>& atSamples, double width, double depth,
-                       double deckThk, const Vec3& color,
-                       const std::function<double(double, double)>& ground = {});
-
 // One road CHAIN as a swept centreline: the polyline, its half-width (constant or
-// per-point), optional absolute heights and per-point cross-slope. This is the unit
-// the road mesher sweeps — `road_lattice.h` includes this header for it, and
-// `weldChainProfiles` below reconciles a set of them into agreeing deck profiles.
+// per-point), optional absolute heights and per-point cross-slope -- a lane-built
+// city's published deck is a list of these (RoadDeck / RoadDeckField).
 struct UnionSpine {
     std::vector<Vec2> points;
     double halfWidth = 4.0;
@@ -129,7 +71,7 @@ struct UnionSpine {
     std::vector<double> yAbs;
     // STRUCTURAL elevation: the chain carries authored absolute heights (a
     // corridor deck / ramp — any node elevAbsolute) or rides a layer above
-    // grade. weldChainProfiles later fills yAbs for EVERY chain, so yAbs
+    // grade. The builder fills yAbs for EVERY chain, so yAbs
     // alone cannot say "this is a bridge"; and comparing a plain street's
     // reconciled profile against the raw terrain cannot either — a street
     // graded across a dip rides a fill the conform pass will carve the
@@ -230,46 +172,6 @@ private:
     std::unordered_map<long long, std::vector<int>> padCells_;
     double cell_ = 24.0;   // >= widest half-width + sidewalk + margin: 3x3 covers
 };
-
-
-// The deck's per-spine profiles, solved JOINTLY over the whole network — the
-// lattice mesher rides these, and the terrain conform pass carves to the same
-// surface. heightAt null = flat topY.
-//
-// One vertical alignment for the graph, not one per chain patched up after:
-// a junction is ONE variable shared by every arm, every consecutive pair of
-// samples is a grade constraint (|dy| <= g * ds, g per class when `rules` is
-// given, else `maxGrade`), and the solve is a symmetric projection onto those
-// slabs iterated to a fixpoint (each violated pair moves BOTH ends by half the
-// excess — the metric projection, so cyclic projections converge on any graph
-// with cycles; a fixed edge order makes it deterministic). Arms cannot disagree
-// at a node by construction, and a two-point chain gets the same grade limit
-// as a long one. The previous scheme — roadProfile per chain, lowest arriving
-// deck at each node smeared linearly along the chain, then a PER-CHAIN
-// lower-only ease with nothing re-reconciling the nodes — left three arms at
-// (-877,-423) on metro_v2 at 51.3 / 48.6 / 43.3 m (nodeSpread 8.02 m, measured
-// by RT_JUNCTION_DUMP); the pad chorded the 8 m inside its 12 m radius and the
-// carve cut a 9 m cliff at the disc edge. Device: "that road T-junction is
-// really bad ... it's like the land around it doesn't elevate up".
-//
-// `overlapReach` > 0 additionally reconciles MID-SPAN overlaps: wherever two
-// chains' corridors come within (halfWidth_j + overlapReach) of each other —
-// junction interiors, slip roads, close parallels — every deck is pulled to
-// the LOWEST overlapping profile (the carve's lowest-plane rule, so deck and
-// carved ground cannot disagree), and the approaches are re-eased at grade by
-// a JOINT lower-only min-plus closure over shared nodes — values only fall,
-// the fixpoint is unique, node agreement survives it, and no deck the overlap
-// pass lowered is ever raised back up.
-//
-// Authored chains (`yAbs`: corridor decks, ramps) are fixed and stay out of
-// the node unification, exactly as before.
-struct DesignRules;
-std::vector<std::vector<double>> weldChainProfiles(
-    const std::vector<UnionSpine>& spines,
-    const std::function<double(double, double)>& heightAt, double topY,
-    double maxGrade, double overlapReach = 0.0,
-    const DesignRules* rules = nullptr);
-
 
 }  // namespace engine
 

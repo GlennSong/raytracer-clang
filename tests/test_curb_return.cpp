@@ -1,71 +1,13 @@
 #include "test_framework.h"
 
 #include "../src/engine/procgen/city/road_mesh.h"
+#include "../src/engine/procgen/city/triangulate.h"
 #include <cmath>
 
 using namespace engine;
 
 namespace {
-// Circumcenter of three 2D points — lets a test recover the arc's centre and confirm it
-// is a TRUE circle (every sample equidistant) without the helper exposing its internals.
-Vec2 circumcenter(const Vec2& a, const Vec2& b, const Vec2& c) {
-    double d = 2 * (a.x * (b.y - c.y) + b.x * (c.y - a.y) + c.x * (a.y - b.y));
-    double a2 = a.x * a.x + a.y * a.y, b2 = b.x * b.x + b.y * b.y, c2 = c.x * c.x + c.y * c.y;
-    double ux = (a2 * (b.y - c.y) + b2 * (c.y - a.y) + c2 * (a.y - b.y)) / d;
-    double uy = (a2 * (c.x - b.x) + b2 * (a.x - c.x) + c2 * (b.x - a.x)) / d;
-    return {ux, uy};
-}
-// Perpendicular distance from p to the line through q with unit direction u.
-double lineDist(const Vec2& p, const Vec2& q, const Vec2& u) {
-    return std::fabs(cross(p - q, normalize(u)));
-}
 double len(const Vec2& v) { return std::sqrt(v.x * v.x + v.y * v.y); }
-
-// Assert `arc` is a true circular fillet of `radius` tangent to both lines (each line
-// through the corner with the given back-direction), starting on A and ending on B.
-void checkFillet(const std::vector<Vec2>& arc, const Vec2& C, const Vec2& uA, const Vec2& uB,
-                 double radius) {
-    CHECK(arc.size() >= 3);
-    if (arc.size() < 3) return;
-    Vec2 ctr = circumcenter(arc.front(), arc[arc.size() / 2], arc.back());
-    for (const Vec2& pt : arc) CHECK_APPROX(len(pt - ctr), radius, 1e-6);   // one circle
-    CHECK_APPROX(lineDist(ctr, C, uA), radius, 1e-6);                       // tangent to A
-    CHECK_APPROX(lineDist(ctr, C, uB), radius, 1e-6);                       // tangent to B
-    CHECK(lineDist(arc.front(), C, uA) < 1e-6);                            // starts on A
-    CHECK(lineDist(arc.back(), C, uB) < 1e-6);                             // ends on B
-}
-}
-
-TEST_CASE(curb_fillet_right_angle_is_a_true_quarter_circle) {
-    Vec2 C(0, 0), uA(-1, 0), uB(0, -1);                 // 90 deg corner
-    std::vector<Vec2> arc = curbReturnFillet(C, uA, uB, 2.0, 100.0);
-    checkFillet(arc, C, uA, uB, 2.0);
-    // Tangent points sit at t = r/tan45 = r = 2 back along each kerb.
-    CHECK_APPROX(len(arc.front() - C), 2.0, 1e-6);
-    CHECK_APPROX(len(arc.back() - C), 2.0, 1e-6);
-}
-
-TEST_CASE(curb_fillet_holds_at_acute_and_obtuse_angles) {
-    Vec2 C(0, 0);
-    // Acute: kerbs 60 deg apart. (The old code rejected anything past ~75 deg.)
-    Vec2 aA(1, 0), aB(std::cos(PI / 3), std::sin(PI / 3));
-    checkFillet(curbReturnFillet(C, aA, aB, 1.5, 100.0), C, aA, aB, 1.5);
-    // Obtuse: kerbs 140 deg apart.
-    Vec2 oA(1, 0), oB(std::cos(PI * 140 / 180), std::sin(PI * 140 / 180));
-    checkFillet(curbReturnFillet(C, oA, oB, 1.5, 100.0), C, oA, oB, 1.5);
-}
-
-TEST_CASE(curb_fillet_shrinks_to_fit_the_tangent_cap) {
-    Vec2 C(0, 0), uA(-1, 0), uB(0, -1);                 // 90 deg: t == effective radius
-    std::vector<Vec2> arc = curbReturnFillet(C, uA, uB, 10.0, 2.0);   // want r=10, only 2 of room
-    CHECK(arc.size() >= 3);
-    if (arc.size() < 3) return;
-    Vec2 ctr = circumcenter(arc.front(), arc[arc.size() / 2], arc.back());
-    CHECK_APPROX(len(arc.front() - ctr), 2.0, 1e-6);    // radius clamped to 2, not 10
-    CHECK_APPROX(len(arc.front() - C), 2.0, 1e-6);      // tangent point at the cap
-}
-
-namespace {
 // The tightest bend along a polyline as a radius (circumradius of each triple; +inf for a
 // straight run). Mirrors the metric fairHermite caps against.
 double minCircum(const std::vector<Vec2>& poly) {
@@ -79,7 +21,7 @@ double minCircum(const std::vector<Vec2>& poly) {
     }
     return worst;
 }
-}
+}  // namespace
 
 TEST_CASE(fair_hermite_relaxes_an_over_tight_curve_to_the_min_radius) {
     // A short edge with huge tangents loops back on itself (radius far below 6 m).
@@ -120,65 +62,6 @@ double sumTriAreas(const std::vector<Vec2>& p, const std::vector<std::array<int,
 }
 
 namespace {
-double maxGradeOf(const std::vector<double>& y, const std::vector<double>& s) {
-    double g = 0.0;
-    for (std::size_t i = 1; i < y.size(); ++i) {
-        double ds = s[i] - s[i - 1];
-        if (ds > 1e-9) g = std::max(g, std::fabs(y[i] - y[i - 1]) / ds);
-    }
-    return g;
-}
-std::vector<double> arcLengths(int n, double step) {
-    std::vector<double> s(n);
-    for (int i = 0; i < n; ++i) s[i] = i * step;
-    return s;
-}
-}
-
-TEST_CASE(road_profile_ramps_a_step_within_the_grade_budget) {
-    // A 4 m step over 70 m — climbable at 10% (budget 7 m) — but concentrated as a cliff
-    // between two samples. The profile spreads it so no step exceeds the grade.
-    std::vector<double> ground = { 0, 0, 0, 0, 4, 4, 4, 4 };
-    std::vector<double> s = arcLengths(8, 10.0);          // 10 m spacing
-    std::vector<double> y = roadProfile(ground, s, 0.10); // max 10% grade
-    CHECK(maxGradeOf(y, s) <= 0.10 + 1e-6);               // drivable everywhere
-    CHECK_APPROX(y.front(), 0.0, 0.6);
-    CHECK_APPROX(y.back(), 4.0, 0.6);                    // the achievable rise is kept
-    CHECK((y[4] - y[3]) < 4.0);                          // the cliff step is gone
-}
-
-TEST_CASE(road_profile_clamps_an_unclimbable_slope_for_cut) {
-    // A 20 m rise over 70 m needs ~29% grade; at 10% the road can only climb ~7 m, so it
-    // deliberately falls short of the terrain — the terrain is cut down to meet it.
-    std::vector<double> ground = { 0, 0, 0, 0, 20, 20, 20, 20 };
-    std::vector<double> s = arcLengths(8, 10.0);
-    std::vector<double> y = roadProfile(ground, s, 0.10);
-    CHECK(maxGradeOf(y, s) <= 0.10 + 1e-6);               // still drivable
-    CHECK(y.back() < 12.0);                               // can't reach 20 -> needs a cut
-}
-
-TEST_CASE(road_profile_leaves_flat_and_gentle_ground_alone) {
-    std::vector<double> s = arcLengths(6, 20.0);
-    std::vector<double> flat = { 5, 5, 5, 5, 5, 5 };
-    std::vector<double> yf = roadProfile(flat, s, 0.10);
-    CHECK(maxGradeOf(yf, s) < 1e-9);                      // stays flat
-    // A gentle 4% ramp is under the 10% limit -> essentially preserved.
-    std::vector<double> ramp = { 0, 0.8, 1.6, 2.4, 3.2, 4.0 };
-    std::vector<double> yr = roadProfile(ramp, s, 0.10);
-    CHECK(maxGradeOf(yr, s) <= 0.045);
-    CHECK_APPROX(yr.back() - yr.front(), 4.0, 0.5);       // overall rise preserved
-}
-
-TEST_CASE(road_conform_carves_terrain_to_the_profile) {
-    // A straight road climbing 0 -> 5 m over 40 m. On the centerline the terrain must be
-    // graded to the road profile; far off the road it must stay natural ground.
-    std::vector<Vec2> cl = { Vec2(0, 0), Vec2(10, 0), Vec2(20, 0), Vec2(30, 0), Vec2(40, 0) };
-    std::vector<double> prof = { 0, 1.25, 2.5, 3.75, 5 };
-    auto regions = roadConformRegions(cl, prof, 4.0, 1.0, 6.0);   // hw 4 + shoulder 1
-    CHECK(static_cast<int>(regions.size()) == 4);
-    double base = 100.0;                                          // natural ground far above
-    CHECK_APPROX(applyFlatten(regions, 20, 0, base), 2.5, 0.3);  // on road -> the profile
-    CHECK_APPROX(applyFlatten(regions, 20, 40, base), base, 1e-6);  // far off road -> natural
 }
 
 TEST_CASE(triangulate_convex_tiles_the_polygon) {
@@ -216,10 +99,51 @@ TEST_CASE(triangulate_handles_cw_and_degenerate) {
     CHECK(triangulatePolygon({ Vec2(0, 0), Vec2(1, 1) }).empty());     // < 3 verts
 }
 
-TEST_CASE(curb_fillet_degenerates_to_empty) {
-    Vec2 C(0, 0);
-    CHECK(curbReturnFillet(C, Vec2(1, 0), Vec2(1, 0.001), 2.0, 100.0).empty());   // folded/parallel
-    CHECK(curbReturnFillet(C, Vec2(1, 0), Vec2(-0.999, 0.045), 2.0, 100.0).empty()); // near-straight
-    CHECK(curbReturnFillet(C, Vec2(-1, 0), Vec2(0, -1), 0.0, 100.0).empty());     // no radius
-    CHECK(curbReturnFillet(C, Vec2(-1, 0), Vec2(0, -1), 2.0, 0.0).empty());       // no room
+// A slab round a lift core: rectangular holes in rows, their edges on the same lines and 0.15 m apart -- in plan and
+// mirrored (the frame emitPolygon projects an upward face into). Every case tiles the outline less its holes exactly:
+// the port sorted the holes by their first vertex rather than their leftmost and kept an outer node the collinear
+// filter had removed, and a mirrored core slab paved over its shafts (Glenn, 2026-10-28: "the hole for the floor
+// doesn't get cut and you end up going through a plane of geometry").
+TEST_CASE(triangulate_with_rows_of_aligned_holes_leaves_them_open) {
+    auto rect = [](double x0, double y0, double x1, double y1) { return Poly2{{x0, y0}, {x1, y0}, {x1, y1}, {x0, y1}}; };
+    auto mirror = [](Poly2 p) { for (Vec2& v : p) std::swap(v.x, v.y); return p; };
+    auto tiled = [](const Poly2& outer, const std::vector<Poly2>& holes) {
+        double want = std::fabs(area(outer)), got = 0;
+        for (const Poly2& h : holes) want -= std::fabs(area(h));
+        for (const auto& t : triangulateWithHoles(outer, holes)) got += std::fabs(area(Poly2{t[0], t[1], t[2]}));
+        return std::fabs(got - want) < 1e-6 * std::max(1.0, want);
+    };
+    const std::vector<Poly2> core = {rect(14.975, 21.24, 17.375, 23.84), rect(17.525, 21.24, 19.925, 23.84),
+                                     rect(20.075, 21.24, 22.475, 23.84), rect(22.625, 21.24, 25.025, 23.84),
+                                     rect(12.225, 16.16, 14.825, 23.84), rect(25.175, 16.16, 27.775, 23.84)};
+    const Poly2 square = rect(0, 0, 40, 40);
+    const Poly2 octagon = {{0.70, 0.34}, {39.30, 0.34}, {39.66, 0.70}, {39.66, 39.30}, {39.30, 39.66}, {0.70, 39.66}, {0.34, 39.30}, {0.34, 0.70}};
+    int cases = 0, bad = 0;
+    for (const Poly2& outer : {square, octagon})
+        for (bool m : {false, true}) {
+            std::vector<Poly2> hs;
+            for (const Poly2& h : core) hs.push_back(m ? mirror(h) : h);
+            ++cases;
+            if (!tiled(m ? mirror(outer) : outer, hs)) { ++bad; std::printf("    [earcut] the core slab, %s, mirrored %d\n", outer.size() == 4 ? "square" : "octagon", m ? 1 : 0); }
+        }
+    // ...and rows of 1-6 shafts in 1-3 rows, either stair-high or not, in both frames
+    for (int rows = 1; rows <= 3; ++rows)
+        for (int n = 1; n <= 6; ++n)
+            for (bool stairs : {false, true})
+                for (bool m : {false, true}) {
+                    std::vector<Poly2> hs;
+                    for (int r = 0; r < rows; ++r) {
+                        const double y0 = 8 + r * 9.0;
+                        double x = 8;
+                        if (stairs) { hs.push_back(rect(x, y0 - 5.1, x + 2.6, y0 + 2.6)); x += 2.75; }
+                        for (int i = 0; i < n; ++i) { hs.push_back(rect(x, y0, x + 2.4, y0 + 2.6)); x += 2.55; }
+                        if (stairs) hs.push_back(rect(x, y0 - 5.1, x + 2.6, y0 + 2.6));
+                    }
+                    if (m) for (Poly2& h : hs) h = mirror(h);
+                    ++cases;
+                    if (!tiled(m ? mirror(square) : square, hs)) { ++bad; std::printf("    [earcut] %d rows of %d%s, mirrored %d\n", rows, n, stairs ? " with stairs" : "", m ? 1 : 0); }
+                }
+    std::printf("    [earcut] %d slabs, %d paved over a hole\n", cases, bad);
+    CHECK(bad == 0);
 }
+

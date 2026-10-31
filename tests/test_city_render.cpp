@@ -75,6 +75,7 @@ struct StubUploader : MeshUploader {
 CityRenderParams cityParams() {
     CityRenderParams p;
     p.vehicleScript = readAsset("vehicles.lua");
+    p.hoursPerSecond = 0.05;   // a twenty-minute day: these tests watch traffic come and go in a few seconds
     return p;
 }
 
@@ -392,31 +393,46 @@ TEST_CASE(city_render_signals_light_up_and_change_state) {
 // these are stable, not flaky.
 
 TEST_CASE(car_headlights_track_the_night_clock) {
-    StubUploader up;
-    AssetManager assets(up);
-    World world;
-    world.add<RoadEntity>(world.create(), squareLoop());
-    CityRenderParams p = cityParams();
-    p.cars = 6;
-    p.pedestrians = 0;
-    p.hoursPerSecond = 3.0;   // sweep a full day in a few hundred steps
-    CityRenderSystem city(p);
-    CHECK(city.build(world, &assets));
-
-    bool nightLit = false, dayDark = false;
-    for (int i = 0; i < 2000; ++i) {
-        city.step(world, 0.1);
-        Real t = city.sim().timeOfDay();
-        std::size_t heads = groupCount(world, city.headlightGroup());
-        std::size_t cars = carTotal(world, city);
-        if (t > 20.0 || t < 5.0) {          // deep night: BOTH headlights per car
-            if (cars > 0 && heads == cars * 2) nightLit = true;
-        } else if (t > 9.0 && t < 16.0) {   // midday: none
-            if (heads == 0) dayDark = true;
+    // At deep night every car on the move wears both headlights (a parked one may stand dark), and by day none --
+    // over six towns, every sample. (It asked for one sample with lamps on EVERY drawn car, parked ones too, and
+    // passed on the moment all six were driving; one town can put none of its six on a night shift -- ADR-0265.)
+    int nightSamples = 0, nightWrong = 0, daySamples = 0, dayWrong = 0;
+    for (uint32_t seed = 1; seed <= 6; ++seed) {
+        StubUploader up;
+        AssetManager assets(up);
+        World world;
+        world.add<RoadEntity>(world.create(), squareLoop());
+        CityRenderParams p = cityParams();
+        p.cars = 6;
+        p.pedestrians = 0;
+        p.seed = seed;
+        p.hoursPerSecond = 3.0;   // sweep a full day in a few hundred steps
+        CityRenderSystem city(p);
+        CHECK(city.build(world, &assets));
+        for (int i = 0; i < 2000; ++i) {
+            city.step(world, 0.1);
+            const Real t = city.sim().timeOfDay();
+            const std::size_t heads = groupCount(world, city.headlightGroup());
+            const std::size_t cars = carTotal(world, city);
+            if (cars == 0) continue;
+            std::size_t driving = 0;
+            for (int ai : city.sim().nearAgents()) {
+                const Agent& a = city.sim().agents()[static_cast<std::size_t>(ai)];
+                driving += a.mode == Agent::Mode::Driver && a.moving && a.speed > 0.5 && !a.far();
+            }
+            if (t > 20.0 || t < 5.0) {          // deep night: BOTH headlights per car on the move
+                if (driving == 0) continue;
+                ++nightSamples;
+                nightWrong += heads < driving * 2 || heads > cars * 2 || heads % 2 != 0;
+            } else if (t > 9.0 && t < 16.0) {   // midday: none
+                ++daySamples;
+                dayWrong += heads != 0;
+            }
         }
     }
-    CHECK(nightLit);   // every drawn car lights two headlights at night
-    CHECK(dayDark);    // and none by day
+    std::printf("    [headlights] six towns: %d night samples (%d wrong), %d midday (%d wrong)\n", nightSamples, nightWrong, daySamples, dayWrong);
+    CHECK(nightSamples > 0 && nightWrong == 0);   // every drawn car lights two headlights at night
+    CHECK(daySamples > 0 && dayWrong == 0);       // and none by day
 }
 
 TEST_CASE(car_brake_lights_come_on_when_holding) {

@@ -1,5 +1,6 @@
 #include "city_plan.h"
 #include "plan_scene.h"   // the freeway both sides build: what the plan clears for the scene
+#include "../../../../curve.h"
 #include "land_shape.h"   // a city shaped by its land (world.land.shape)
 #include "../roads/lanes/road_graph_spec.h"   // stations
 #include "../roads/lanes/polyline_ops.h"
@@ -481,6 +482,227 @@ int simplifyThinBlocks(RoadGraph& g, Real minArea, Real minRadius, const std::fu
     return std::max(0, firstBad);
 }
 
+// NEAR MISSES. The planariser makes a T only where a street's end lies within its snap (0.6 m) of
+// another; a street that stops 1-5 m short -- cut back from a keep-out, clipped by the land, or laid
+// to a boundary the other street does not quite follow -- stops INSIDE that street's pavement and is
+// never joined to it: a dead end no car can turn out of, which the scorecard counted as metres
+// "paved into another" (886 m on metro_v2_test, 1890 m on metro_planned) and which made 13 of
+// metro_v2_test's 17 dead ends. Each such street is carried STRAIGHT ON, along its own heading over
+// its last 12 m, to the street it was running into, if that is within the other's half-width + 2 m
+// and it crosses at 30 degrees or more. Moving the end sideways onto the nearest point instead swung
+// the last 4 m piece of a cut street through a sliver angle (river_town's slivers went 4 -> 22).
+void joinNearMisses(RoadGraph& g, Real sidewalk) {
+    std::vector<std::vector<int>> inc(g.nodes.size());
+    for (int e = 0; e < static_cast<int>(g.edges.size()); ++e) {
+        inc[static_cast<std::size_t>(g.edges[e].a)].push_back(e);
+        inc[static_cast<std::size_t>(g.edges[e].b)].push_back(e);
+    }
+    // Not where collapseShortLinks would fuse the new T with the next junction along that street
+    // (closer than half their widest streets + 4 sidewalks): a fifth arm 4 degrees off another was
+    // metro_planned's new sliver junctions. Walked along the street both ways from the T.
+    auto tooNearJunction = [&](int e, Real t, Real tWidest) {
+        const RoadEdge& E = g.edges[static_cast<std::size_t>(e)];
+        const Real L = (g.nodes[static_cast<std::size_t>(E.b)].pos - g.nodes[static_cast<std::size_t>(E.a)].pos).length();
+        for (int side = 0; side < 2; ++side) {
+            int cur = side ? E.b : E.a, via = e;
+            Real dist = side ? (1 - t) * L : t * L;
+            for (int hops = 0; hops < 64 && dist < 60.0; ++hops) {
+                const std::vector<int>& ie = inc[static_cast<std::size_t>(cur)];
+                if (ie.size() >= 3) {
+                    Real widest = tWidest;
+                    for (int k : ie) widest = std::max(widest, g.edges[static_cast<std::size_t>(k)].width);
+                    if (dist < widest + 4 * sidewalk) return true;
+                    break;
+                }
+                if (ie.size() != 2) break;
+                via = ie[0] == via ? ie[1] : ie[0];
+                const RoadEdge& N = g.edges[static_cast<std::size_t>(via)];
+                const int nxt = N.a == cur ? N.b : N.a;
+                dist += (g.nodes[static_cast<std::size_t>(nxt)].pos - g.nodes[static_cast<std::size_t>(cur)].pos).length();
+                cur = nxt;
+            }
+        }
+        return false;
+    };
+    const int nNodes = static_cast<int>(g.nodes.size());
+    for (int v = 0; v < nNodes; ++v) {
+        if (inc[static_cast<std::size_t>(v)].size() != 1) continue;
+        const RoadEdge own = g.edges[static_cast<std::size_t>(inc[static_cast<std::size_t>(v)][0])];
+        const int nb = own.a == v ? own.b : own.a;
+        const Vec2 p = g.nodes[static_cast<std::size_t>(v)].pos;
+        // its heading over its last 12 m (back through plain chain vertices)
+        Vec2 back = g.nodes[static_cast<std::size_t>(nb)].pos;
+        for (int cur = v, e = inc[static_cast<std::size_t>(v)][0], hops = 0; hops < 8 && (back - p).length() < 12.0; ++hops) {
+            const RoadEdge& E = g.edges[static_cast<std::size_t>(e)];
+            const int nxt = E.a == cur ? E.b : E.a;
+            back = g.nodes[static_cast<std::size_t>(nxt)].pos;
+            if (inc[static_cast<std::size_t>(nxt)].size() != 2) break;
+            e = inc[static_cast<std::size_t>(nxt)][0] == e ? inc[static_cast<std::size_t>(nxt)][1] : inc[static_cast<std::size_t>(nxt)][0];
+            cur = nxt;
+        }
+        if ((p - back).length() < 1e-6) continue;
+        const Vec2 heading = normalize(p - back);
+        int best = -1; Real bs = 1e30, bt = 0;
+        for (std::size_t e = 0; e < g.edges.size(); ++e) {
+            const RoadEdge& E = g.edges[e];
+            if (E.a == v || E.b == v || E.a == nb || E.b == nb) continue;   // its own street, at its own end
+            const Vec2 a = g.nodes[static_cast<std::size_t>(E.a)].pos, ab = g.nodes[static_cast<std::size_t>(E.b)].pos - a;
+            const Real L = ab.length();
+            if (L < 1e-6) continue;
+            const Real den = cross(heading, ab);
+            if (std::fabs(den) < 0.5 * L) continue;   // shallower than 30 degrees: a sliver the builder cannot pave
+            const Real sRay = cross(a - p, ab) / den, t = cross(a - p, heading) / den;
+            // ahead of the end, or behind it: a street that overshot the centreline ended inside the
+            // pavement past it, and goes back to the line
+            const Real reach = E.width * Real(0.5) + 2.0;
+            if (sRay < -reach || sRay > reach || t < 0 || t > 1 || std::fabs(sRay) >= std::fabs(bs)) continue;
+            if (tooNearJunction(static_cast<int>(e), t, std::max(E.width, own.width))) continue;
+            best = static_cast<int>(e); bs = sRay; bt = t;
+        }
+        if (best < 0) continue;
+        const RoadEdge E = g.edges[static_cast<std::size_t>(best)];
+        const Vec2 a = g.nodes[static_cast<std::size_t>(E.a)].pos, b = g.nodes[static_cast<std::size_t>(E.b)].pos;
+        const Real len = (b - a).length();
+        // onto the nearer end of that segment if the T would land within 1 m of it, else a new node
+        int w;
+        if (bt * len < 1.0) w = E.a;
+        else if ((1 - bt) * len < 1.0) w = E.b;
+        else {
+            w = static_cast<int>(g.nodes.size());
+            g.nodes.push_back(RoadNode{a + (b - a) * bt});
+            const int restId = static_cast<int>(g.edges.size());
+            g.edges[static_cast<std::size_t>(best)].b = w;
+            RoadEdge rest = E;
+            rest.a = w;
+            g.edges.push_back(rest);
+            for (int& ie : inc[static_cast<std::size_t>(E.b)]) if (ie == best) ie = restId;
+            inc.push_back({best, restId});
+        }
+        // the street's end moves on to the T, straight ahead of it
+        const int oId = inc[static_cast<std::size_t>(v)][0];
+        RoadEdge& o = g.edges[static_cast<std::size_t>(oId)];
+        (o.a == v ? o.a : o.b) = w;
+        inc[static_cast<std::size_t>(w)].push_back(oId);
+        inc[static_cast<std::size_t>(v)].clear();
+    }
+}
+
+// A STREET BROKEN IN TWO: two dead ends facing each other within 6 m (a cut that took a few metres
+// out of one street) become one node again.
+void joinFacingEnds(RoadGraph& g) {
+    std::vector<std::vector<int>> inc(g.nodes.size());
+    for (int e = 0; e < static_cast<int>(g.edges.size()); ++e) {
+        inc[static_cast<std::size_t>(g.edges[e].a)].push_back(e);
+        inc[static_cast<std::size_t>(g.edges[e].b)].push_back(e);
+    }
+    auto heading = [&](int v) {
+        const RoadEdge& E = g.edges[static_cast<std::size_t>(inc[static_cast<std::size_t>(v)][0])];
+        const int nb = E.a == v ? E.b : E.a;
+        return normalize(g.nodes[static_cast<std::size_t>(v)].pos - g.nodes[static_cast<std::size_t>(nb)].pos);
+    };
+    std::vector<int> ends;
+    for (int v = 0; v < static_cast<int>(inc.size()); ++v) if (inc[static_cast<std::size_t>(v)].size() == 1) ends.push_back(v);
+    std::vector<char> used(g.nodes.size(), 0);
+    for (std::size_t i = 0; i < ends.size(); ++i)
+        for (std::size_t j = i + 1; j < ends.size(); ++j) {
+            const int u = ends[i], v = ends[j];
+            if (used[static_cast<std::size_t>(u)] || used[static_cast<std::size_t>(v)]) continue;
+            const Vec2 pu = g.nodes[static_cast<std::size_t>(u)].pos, pv = g.nodes[static_cast<std::size_t>(v)].pos;
+            const Real d = (pv - pu).length();
+            if (d > 6.0) continue;
+            const Vec2 hu = heading(u), hv = heading(v);
+            if (dot(hu, hv) > -0.85 || (d > 0.5 && dot(hu, (pv - pu) / d) < 0.85)) continue;   // facing, and in line
+            g.nodes[static_cast<std::size_t>(u)].pos = (pu + pv) * Real(0.5);
+            RoadEdge& o = g.edges[static_cast<std::size_t>(inc[static_cast<std::size_t>(v)][0])];
+            (o.a == v ? o.a : o.b) = u;
+            used[static_cast<std::size_t>(u)] = used[static_cast<std::size_t>(v)] = 1;
+        }
+}
+
+// LOOPS HANGING OFF ONE JUNCTION (Glenn, 2026-10-29: "We should prune weird looped single roads"):
+// a cycle of streets whose only way to the rest of the network is one junction -- in the block-cut
+// tree of the street graph, a leaf block that is a cycle. Small ones are scraps of a crossing the
+// planariser left (2-6 m triangles where three streets cross within a few metres); a large one is a
+// street round a block a keep-out cut every other link to (river_town's seed 41, 526 m round). No
+// street plan lays one on purpose. Its edges go; pruneStubs then takes what dangled from it.
+std::vector<char> findHangingLoopEdges(const RoadGraph& g) {
+    const int n = static_cast<int>(g.nodes.size());
+    std::vector<std::vector<std::pair<int, int>>> adj(static_cast<std::size_t>(n));   // node -> (other node, edge)
+    for (int e = 0; e < static_cast<int>(g.edges.size()); ++e) {
+        if (g.edges[e].a == g.edges[e].b) continue;
+        adj[static_cast<std::size_t>(g.edges[e].a)].push_back({g.edges[e].b, e});
+        adj[static_cast<std::size_t>(g.edges[e].b)].push_back({g.edges[e].a, e});
+    }
+    // Tarjan's biconnected components, iterative: each component is a list of edges
+    std::vector<int> tin(static_cast<std::size_t>(n), -1), low(static_cast<std::size_t>(n), 0);
+    std::vector<int> artCount(static_cast<std::size_t>(n), 0);   // >0: an articulation point
+    std::vector<std::vector<int>> comps;
+    std::vector<int> estack;
+    int timer = 0;
+    struct Frame { int v, parentEdge; std::size_t next; int children; };
+    for (int root = 0; root < n; ++root) {
+        if (tin[static_cast<std::size_t>(root)] >= 0 || adj[static_cast<std::size_t>(root)].empty()) continue;
+        std::vector<Frame> st{{root, -1, 0, 0}};
+        tin[static_cast<std::size_t>(root)] = low[static_cast<std::size_t>(root)] = timer++;
+        while (!st.empty()) {
+            Frame& f = st.back();
+            if (f.next < adj[static_cast<std::size_t>(f.v)].size()) {
+                const auto [u, e] = adj[static_cast<std::size_t>(f.v)][f.next++];
+                if (e == f.parentEdge) continue;
+                if (tin[static_cast<std::size_t>(u)] < 0) {
+                    estack.push_back(e);
+                    tin[static_cast<std::size_t>(u)] = low[static_cast<std::size_t>(u)] = timer++;
+                    ++f.children;
+                    st.push_back({u, e, 0, 0});
+                } else if (tin[static_cast<std::size_t>(u)] < tin[static_cast<std::size_t>(f.v)]) {
+                    estack.push_back(e);
+                    low[static_cast<std::size_t>(f.v)] = std::min(low[static_cast<std::size_t>(f.v)], tin[static_cast<std::size_t>(u)]);
+                }
+                continue;
+            }
+            const Frame done = f;
+            st.pop_back();
+            if (st.empty()) {
+                if (done.children > 1) artCount[static_cast<std::size_t>(done.v)] = 1;
+                continue;
+            }
+            Frame& parent = st.back();
+            low[static_cast<std::size_t>(parent.v)] = std::min(low[static_cast<std::size_t>(parent.v)], low[static_cast<std::size_t>(done.v)]);
+            if (low[static_cast<std::size_t>(done.v)] >= tin[static_cast<std::size_t>(parent.v)]) {
+                if (st.size() > 1 || parent.children > 1) artCount[static_cast<std::size_t>(parent.v)] = 1;
+                std::vector<int> comp;
+                while (!estack.empty()) {
+                    const int x = estack.back();
+                    estack.pop_back();
+                    comp.push_back(x);
+                    if (x == done.parentEdge) break;
+                }
+                comps.push_back(std::move(comp));
+            }
+        }
+    }
+    // the root of a DFS tree with more than one child is an articulation point too (set above)
+    std::vector<char> drop(g.edges.size(), 0);
+    for (const std::vector<int>& c : comps) {
+        if (c.size() < 2) continue;   // a bridge, not a cycle
+        std::vector<int> vs;
+        for (int e : c) { vs.push_back(g.edges[static_cast<std::size_t>(e)].a); vs.push_back(g.edges[static_cast<std::size_t>(e)].b); }
+        std::sort(vs.begin(), vs.end());
+        vs.erase(std::unique(vs.begin(), vs.end()), vs.end());
+        int arts = 0;
+        for (int v : vs) arts += artCount[static_cast<std::size_t>(v)];
+        if (arts == 1) for (int e : c) drop[static_cast<std::size_t>(e)] = 1;
+    }
+    return drop;
+}
+
+void dropHangingLoops(RoadGraph& g) {
+    const std::vector<char> drop = findHangingLoopEdges(g);
+    std::vector<RoadEdge> kept;
+    for (std::size_t i = 0; i < g.edges.size(); ++i) if (!drop[i]) kept.push_back(g.edges[i]);
+    g.edges.swap(kept);
+}
+
 void pruneStubs(RoadGraph& g, Real stub) {
     for (int pass = 0; pass < 4; ++pass) {
         std::vector<std::vector<int>> inc(g.nodes.size());
@@ -703,6 +925,8 @@ std::vector<Polyline> cutRoadsWhere(const std::vector<Polyline>& roads, Real sid
 }
 
 }  // namespace
+
+std::vector<char> hangingLoopEdges(const RoadGraph& g) { return findHangingLoopEdges(g); }
 
 // ---- brief I/O -------------------------------------------------------------------
 Brief briefFromJson(const nlohmann::json& j) {
@@ -971,7 +1195,10 @@ CityPlan generatePlan(const Brief& B) {
         if (B.freewayRadius > 0) lim = std::min(lim, freewayR(theta) - corridorHalf - 40);
         return std::max(std::min(r, lim), std::min(r, Real(150)));
     };
-    const bool haveFreeway = B.freewayRadius > B.midRadius + corridorHalf && B.freewayRadius + corridorHalf < outerR;
+    // A ring at the city's edge has its frontage roads too: with its corridor reaching past the
+    // outskirts (river_town's ring stands at the outskirts' own radius), the outskirts' streets ran out
+    // under it and stopped -- 22 dead ends round river_town's ring, and metro_v2_test's west side.
+    const bool haveFreeway = B.freewayRadius > B.midRadius + corridorHalf && B.freewayRadius - corridorHalf < outerR;
     // The warp field: zero in the core, full at midtown's rim — and zero again across the
     // freeway's corridor. The freeway is not warped (at 260 m a 19 m warp bends it tighter
     // than a motorway can), so a warped frontage road wandered 37-69 m from it: too close
@@ -1014,12 +1241,21 @@ CityPlan generatePlan(const Brief& B) {
             const Real th = std::atan2(d.y, d.x);
             // A line that leaves TANGENTIALLY would run inside the boulevard's corridor for
             // hundreds of metres — two roads on one line. Within 20 degrees of parallel, it
-            // stops before the corridor instead of grazing along it.
+            // stops before the corridor instead of grazing along it. Parallel to the RIM as it
+            // runs, and that far from it: where the land flattens the rim (midR held in from a
+            // coast or a mountain front), a circle's tangent and the difference of radii said a
+            // grid arterial 30 m inside a straight stretch of rim crossed it at 40 degrees -- the
+            // two ran side by side, paved into each other, on every seed of metro_v2_test's coast.
             const Real rim = midR(th), dist = d.length();
             const Vec2 radial = dist > 1e-6 ? d * (1 / dist) : Vec2(1, 0);
+            const Real e = 0.01;
+            const Vec2 rimAt = B.center + radial * rim;
+            const Vec2 tangent = normalize(B.center + Vec2(std::cos(th + e), std::sin(th + e)) * midR(th + e) -
+                                           (B.center + Vec2(std::cos(th - e), std::sin(th - e)) * midR(th - e)));
+            const Real gap = std::fabs(cross(tangent, p - rimAt));
             const bool grazing = !std::getenv("RT_PLAN_NOGRAZE") &&
-                                 std::fabs(cross(dirLine, Vec2(-radial.y, radial.x))) < 0.35 &&
-                                 rim - dist < B.arterialWidth / 2 + B.sidewalk + cur.width / 2 + B.sidewalk;
+                                 std::fabs(cross(dirLine, tangent)) < 0.35 && dist <= rim &&
+                                 gap < B.arterialWidth / 2 + B.sidewalk + cur.width / 2 + B.sidewalk;
             if (dist <= rim + overshoot && !grazing) cur.pts.push_back(warped(p));
             else flush();
         }
@@ -1950,7 +2186,7 @@ CityPlan generatePlan(const Brief& B) {
             const Vec2 p1 = p0 + t0 * k, p2 = p3 - t3 * k;
             std::vector<Vec2> out;
             const int n = std::max(4, static_cast<int>((p3 - p0).length() / 20));
-            for (int i = 0; i < n; ++i) { const Real t = Real(i) / n, u = 1 - t; out.push_back(p0 * (u * u * u) + p1 * (3 * u * u * t) + p2 * (3 * u * t * t) + p3 * (t * t * t)); }
+            for (int i = 0; i < n; ++i) out.push_back(engine::bezier(p0, p1, p2, p3, Real(i) / n));
             return out;
         };
         plan.loop = curve(jA, dA, at(iA), tangent(iA));
@@ -2046,19 +2282,72 @@ CityPlan generatePlan(const Brief& B) {
         // THE OUTER LOOP: round the mountain side, from one expressway's outer end to the other's.
         std::vector<Real> spurStart(spurTheta.size(), 0);   // where each spur begins, if the loop sets it
         if (!loopSpec.is_null() && spurTheta.size() == 2) buildLoop(spurTheta, spurStart);
+        // ROOM FOR THE SYSTEM INTERCHANGE. A spur with no town and no loop runs in from the map edge, and
+        // the interchange's corner connectors leave and join it linkReach out from the ring. Where the ring
+        // stands nearer the edge than that, a gore fell past the end of the spur's stub: metro_v2_test's NW
+        // spur, 120 m long, left one link ramp no street could reach (ADR-0269). The gore must stand on the
+        // stub, 20 m to spare; the builder fits the decel and aux lanes behind it to what is left (river_town's
+        // spurs, 220-242 m out, build every ramp reachable). INSIDE the ring it must run on past the loops'
+        // gores, since plan_scene's spurFreeway stops it 80 m short of midtown's boulevard: moved into the west
+        // of metro_v2_test, where midtown's rim stands 90 m from the ring, the spur ended at the crossing and its
+        // carriageways led nowhere. The loops' gore and the 80 m, 20 m to spare (river_town's spurs: 175 m). Such a spur takes the
+        // nearest gap between the spokes with the room; with none the city has no radial expressway
+        // (RT_PLAN_WHY says so).
+        const roads::lanes::SystemOptions spurSo = systemOptions();
+        const FreewaySection spurF = freewaySection(B);
+        const Real kSpurRoom = static_cast<Real>(spurSo.linkReach + 20.0);
+        const Real kSpurInside = static_cast<Real>(spurF.edgeReach + spurSo.rampHalf + spurSo.bandGap + spurSo.loopR - spurSo.diverge + 80.0 + 20.0);
+        const Real edgeStart = B.world.is_null() ? B.size * Real(0.5) + 30 : B.world.value("grid", B.size * 0.5 + 60) - 120;
+        std::vector<Real> taken;
         for (std::size_t i = 0; i < spurTheta.size(); ++i) {
-            const Real th0 = spurTheta[i];
+            Real th0 = spurTheta[i];
             // A RADIAL EXPRESSWAY: in from the loop, a town or the map edge — the region's road
             // into the city — across the ring at a system interchange, to midtown's boulevard.
             Polyline spur; spur.klass = RoadClass::Freeway; spur.width = B.freewayWidth;
-            const Real rEnd = midR(th0);
-            const Vec2 dir(std::cos(th0), std::sin(th0));
             std::vector<Vec2> head;   // gate -> where it leaves the city, when it bends to a town
             CityPlan::Town town;
-            if (spurStart[i] <= 0) town = siteTown(dir, head);
+            if (spurStart[i] <= 0) {
+                std::vector<Real> cands{th0};   // the spur's own gap first, then the others nearest it
+                std::vector<Real> gaps;
+                for (std::size_t s = 0; s < spokeTheta.size(); ++s) {
+                    const Real a0 = spokeTheta[s], b0 = spokeTheta[(s + 1) % spokeTheta.size()] + (s + 1 == spokeTheta.size() ? 2 * kPi : 0);
+                    gaps.push_back(0.5 * (a0 + b0));
+                }
+                std::sort(gaps.begin(), gaps.end(), [&](Real u, Real v) { return std::fabs(std::remainder(u - th0, 2 * kPi)) < std::fabs(std::remainder(v - th0, 2 * kPi)); });
+                cands.insert(cands.end(), gaps.begin(), gaps.end());
+                bool placed = false;
+                for (Real c : cands) {
+                    bool used = false;
+                    for (Real u : taken) used = used || std::fabs(std::remainder(u - c, 2 * kPi)) < 1e-6;
+                    if (used) continue;
+                    if (freewayR(c) - midR(c) < kSpurInside) {   // (first: a radius against a number, before siting a town)
+                        if (std::getenv("RT_PLAN_WHY"))
+                            std::printf("[plan] expressway %zu at %.0f deg: %.1f m between midtown's rim and the ring, the spur needs %.1f\n",
+                                        i, c * 180 / kPi, freewayR(c) - midR(c), kSpurInside);
+                        continue;
+                    }
+                    std::vector<Vec2> h;
+                    CityPlan::Town tw = siteTown(Vec2(std::cos(c), std::sin(c)), h);
+                    if (!tw.built && edgeStart - freewayR(c) < kSpurRoom) {
+                        if (std::getenv("RT_PLAN_WHY"))
+                            std::printf("[plan] expressway %zu at %.0f deg: %.1f m between the ring and the map edge, the interchange needs %.1f\n",
+                                        i, c * 180 / kPi, edgeStart - freewayR(c), kSpurRoom);
+                        continue;
+                    }
+                    th0 = c; town = tw; head = h; placed = true;
+                    break;
+                }
+                if (!placed) {
+                    if (std::getenv("RT_PLAN_WHY")) std::printf("[plan] expressway %zu: no gap between the spokes has room, none built\n", i);
+                    continue;
+                }
+            }
+            taken.push_back(th0);
+            const Real rEnd = midR(th0);
+            const Vec2 dir(std::cos(th0), std::sin(th0));
             const Real rStart = spurStart[i] > 0 ? spurStart[i]
                                 : town.built ? outerR + 60
-                                : B.world.is_null() ? B.size * Real(0.5) + 30 : B.world.value("grid", B.size * 0.5 + 60) - 120;
+                                : edgeStart;
             if (town.built) layTown(town);
             plan.towns.push_back(town);
             spur.pts = head;
@@ -2342,6 +2631,8 @@ CityPlan generatePlan(const Brief& B) {
                     hy->rivers().size(), bridges, maxGap < 1e29 ? " + gap-fillers" : "", cut, sideRuns);
     }
     plan.streets = planarizePolylines(roads);
+    joinFacingEnds(plan.streets);
+    joinNearMisses(plan.streets, B.sidewalk);
     collapseShortLinks(plan.streets, B.sidewalk, shaped);   // chains too, for now only where the depth layout makes them
     pruneStubs(plan.streets, 45.0);
     {
@@ -2362,12 +2653,16 @@ CityPlan generatePlan(const Brief& B) {
             std::printf("[plan] thin or tiny blocks (< %.0f m2, or 2A/P < %.0f m): %d in the city (left), %d beyond it (%d streets removed)\n",
                         minArea, minRadius, city, out, removed);
     }
-    // a street cut short by the SLOPES goes back to its junction (up a hillside it is a whisker, not a
-    // lane anyone laid); one cut by the sea stays -- a street that runs down to the water
+    // a street the LAND cut short goes back to its junction: up a hillside it is a whisker, not a lane
+    // anyone laid, and toward the sea it ended in the sand -- the land stops 2 m above the water, so a
+    // street "running down to the water" stopped 50-100 m short of it, a dozen dead ends along
+    // metro_v2_test's beach. The city's edge street along the shore is the waterfront.
     if (land.n)
         pruneStubsNear(plan.streets, [&](const Vec2& p) {
-            for (const Vec2& d : {Vec2(20, 0), Vec2(-20, 0), Vec2(0, 20), Vec2(0, -20)})
-                if (!landAt(p + d, true) && landAt(p + d, false)) return true;
+            // eight bearings, two reaches: a street cut on the slant ends with the cut off-axis
+            for (int k = 0; k < 8; ++k)
+                for (const Real r : {Real(10), Real(20)})
+                    if (!landAt(p + Vec2(std::cos(k * kPi / 4), std::sin(k * kPi / 4)) * r, true)) return true;
             return false;
         });
     if (!keepOut.empty())
@@ -2376,6 +2671,33 @@ CityPlan generatePlan(const Brief& B) {
                 if (distToPolyline(p, keepOut[k], false) < keepReach[k] + 40.0) return true;
             return false;
         });
+    // loops the prunes above left hanging (a corner that held an overshoot was a junction until then)
+    dropHangingLoops(plan.streets);
+    pruneStubs(plan.streets, 45.0);
+    // WHISKERS: a street end still standing inside another street's pavement is one joinNearMisses
+    // could not make a T of -- too close to a junction on that street, where a T would be fused into it
+    // -- so a stub no car can turn out of. It goes back to its own last junction, and the two blocks it
+    // half divided become one.
+    {
+        std::map<std::pair<Real, Real>, int> at;
+        std::vector<int> degree(plan.streets.nodes.size(), 0);
+        for (const RoadEdge& e : plan.streets.edges) { ++degree[static_cast<std::size_t>(e.a)]; ++degree[static_cast<std::size_t>(e.b)]; }
+        for (std::size_t i = 0; i < plan.streets.nodes.size(); ++i)
+            if (degree[i] == 1) at[{plan.streets.nodes[i].pos.x, plan.streets.nodes[i].pos.y}] = static_cast<int>(i);
+        pruneStubsNear(plan.streets, [&](const Vec2& p) {
+            const auto it = at.find({p.x, p.y});
+            if (it == at.end()) return false;
+            const int v = it->second;
+            for (const RoadEdge& e : plan.streets.edges) {
+                if (e.a == v || e.b == v) continue;
+                const Vec2 a = plan.streets.nodes[static_cast<std::size_t>(e.a)].pos, ab = plan.streets.nodes[static_cast<std::size_t>(e.b)].pos - a;
+                const Real L2 = ab.lengthSquared();
+                const Real t = L2 > 1e-12 ? std::clamp(dot(p - a, ab) / L2, Real(0), Real(1)) : 0;
+                if ((a + ab * t - p).length() < e.width * Real(0.5)) return true;
+            }
+            return false;
+        });
+    }
     // Interchanges: where the ring crosses an arterial (a spoke).
     for (const RoadEdge& e : plan.streets.edges) {
         if (e.klass != RoadClass::Arterial) continue;

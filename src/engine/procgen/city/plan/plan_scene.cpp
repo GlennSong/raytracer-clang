@@ -1,4 +1,5 @@
 #include "plan_scene.h"
+#include "../../../../curve.h"
 #include "../../../level_params.h"   // readTerrainParams: the world's rivers
 
 #include "../roads/lanes/interchange.h"   // ONE ramp generator, shared with the level importer
@@ -70,13 +71,16 @@ std::vector<Vec2> offsetClosed(const std::vector<Vec2>& p, Real d) {
     return std::vector<Vec2>(o.begin() + 1, o.end() - 1);
 }
 
-// The crossing of an open polyline with a closed one: the station along the open one, and the
-// closed one's segment index. False if they do not cross.
-bool crossingWithRing(const std::vector<Vec2>& open, const std::vector<Vec2>& ring, double& sOpen, std::size_t& ringSeg) {
+// The crossing of an open polyline with the ring: the station along the open one, and the ring's
+// segment index. False if they do not cross. A C against the coast (`closed` false) has no
+// segment back from its last vertex to its first.
+bool crossingWithRing(const std::vector<Vec2>& open, const std::vector<Vec2>& ring, double& sOpen, std::size_t& ringSeg,
+                      bool closed = true) {
     const std::vector<double> st = roads::lanes::stations(open);
     const std::size_t n = ring.size();
+    const std::size_t segs = closed ? n : (n > 0 ? n - 1 : 0);
     for (std::size_t i = 0; i + 1 < open.size(); ++i)
-        for (std::size_t k = 0; k < n; ++k) {
+        for (std::size_t k = 0; k < segs; ++k) {
             const Vec2 a = open[i], b = open[i + 1], c = ring[k], d = ring[(k + 1) % n];
             const Real den = cross(b - a, d - c);
             if (std::fabs(den) < 1e-12) continue;
@@ -91,10 +95,7 @@ bool crossingWithRing(const std::vector<Vec2>& open, const std::vector<Vec2>& ri
 
 std::vector<Vec2> cubic(const Vec2& p0, const Vec2& p1, const Vec2& p2, const Vec2& p3, int n) {
     std::vector<Vec2> out;
-    for (int i = 0; i <= n; ++i) {
-        const Real t = Real(i) / n, u = 1 - t;
-        out.push_back(p0 * (u * u * u) + p1 * (3 * u * u * t) + p2 * (3 * u * t * t) + p3 * (t * t * t));
-    }
+    for (int i = 0; i <= n; ++i) out.push_back(engine::bezier(p0, p1, p2, p3, Real(i) / n));
     return out;
 }
 
@@ -122,7 +123,39 @@ roads::lanes::SystemOptions systemOptions() {
     return so;
 }
 
+// The ring as built: the closed loop, or the C it opens into against a coast (plan.ringArc).
+const std::vector<Vec2>& ringLine(const CityPlan& plan) { return plan.ring.empty() ? plan.ringArc : plan.ring; }
+bool ringClosed(const CityPlan& plan) { return !plan.ring.empty(); }
+
+// A C's chains: cut only where an expressway crosses it, just past the system interchange's
+// ramps as on the closed ring, and never wrapping round -- its two ends are the route's ends.
+std::vector<std::vector<Vec2>> arcChains(const CityPlan& plan) {
+    const std::vector<Vec2>& arc = plan.ringArc;
+    const std::size_t n = arc.size();
+    if (n < 8) return {};
+    const std::vector<double> st = roads::lanes::stations(arc);
+    const double per = st.back() / static_cast<double>(n - 1);
+    const std::size_t step = static_cast<std::size_t>(std::ceil((roads::lanes::systemReach(systemOptions()) + per) / per));
+    std::vector<std::size_t> seams;
+    for (const std::vector<Vec2>& sp : plan.spurs) {
+        double s = 0; std::size_t k = 0;
+        if (crossingWithRing(sp, arc, s, k, false) && k + step + 2 < n) seams.push_back(k + step);
+    }
+    std::sort(seams.begin(), seams.end());
+    seams.erase(std::unique(seams.begin(), seams.end()), seams.end());
+    std::vector<std::vector<Vec2>> chains;
+    std::size_t a = 0;
+    seams.push_back(n - 1);
+    for (std::size_t b : seams) {
+        if (b <= a) continue;
+        chains.emplace_back(arc.begin() + static_cast<std::ptrdiff_t>(a), arc.begin() + static_cast<std::ptrdiff_t>(b) + 1);
+        a = b;
+    }
+    return chains;
+}
+
 std::vector<std::vector<Vec2>> ringChains(const CityPlan& plan) {
+    if (!ringClosed(plan)) return arcChains(plan);
     const std::vector<Vec2>& ring = plan.ring;
     const std::size_t n = ring.size();
     if (n < 8) return {};
@@ -185,7 +218,7 @@ constexpr double kTownPair = 150.0;   // the boulevard pair's run from a town's 
 std::vector<Vec2> spurFreeway(const CityPlan& plan, std::size_t j) {
     const std::vector<Vec2>& sp = plan.spurs[j];
     double sx = 0; std::size_t k = 0;
-    if (!crossingWithRing(sp, plan.ring, sx, k)) return sp;
+    if (!crossingWithRing(sp, ringLine(plan), sx, k, ringClosed(plan))) return sp;
     // past the loops' lanes on the stem, and short of midtown's boulevard by room for the
     // one-way pair to splay out to its two Ts
     const FreewaySection f = freewaySection(plan.brief);
@@ -325,31 +358,51 @@ nlohmann::json planToLanesScene(const CityPlan& plan, const SceneOptions& opt) {
     const std::vector<PlanChain> streetChains = chainsOf(plan.streets);
     // A pair's Ts on a street chain, in station order: at an expressway's inner end on midtown's
     // boulevard (end 1), and at a town's main street (end 0).
+    // (spur == kRingEnd: an end of the ring's C, `end` 0 its first vertex, 1 its last)
     struct Tee { std::size_t chain; double s0, s1; std::size_t spur; int end; };
+    constexpr std::size_t kRingEnd = static_cast<std::size_t>(-1);
     std::vector<Tee> tees;
     constexpr double kTee = 20.0;   // each T this far along the street from the expressway's end
+    constexpr double kTeeReach = 120.0;
+    // The nearest stretch of street with room for both Ts, 15 m clear of its junctions, slid along
+    // to within kTeeReach of a freeway's end: where it lands on a junction, the pair splays a little
+    // further to one side of it. False (and how far the nearest was) when there is none. 60 m left
+    // a coast city's expressway 67 m short of midtown and the ring's C 70-90 m short of any street:
+    // a freeway no car could get on. The pair's curves carry it across a gap that size.
+    auto teeAt = [&](const Vec2& at, std::size_t spur, int end, double& best) {
+        best = 1e30;
+        std::size_t bc = 0; double bs = 0;
+        for (std::size_t i = 0; i < streetChains.size(); ++i) {
+            // a C's end never takes a street an expressway's pair already cut (a chain is cut once)
+            if (spur == kRingEnd && std::any_of(tees.begin(), tees.end(), [&](const Tee& t) { return t.chain == i; })) continue;
+            const std::vector<double> st = roads::lanes::stations(streetChains[i].pts);
+            if (st.back() < 2 * kTee + 30.0) continue;
+            const roads::lanes::Projection pr = roads::lanes::project(streetChains[i].pts, st, at);
+            const double c = std::clamp(pr.station, kTee + 15.0, st.back() - kTee - 15.0);
+            const double d = (roads::lanes::pointAt(streetChains[i].pts, st, c) - at).length();
+            if (d < best) { best = d; bc = i; bs = c; }
+        }
+        if (best >= kTeeReach) return false;
+        tees.push_back({bc, bs - kTee, bs + kTee, spur, end});
+        return true;
+    };
     for (std::size_t j = 0; j < plan.spurs.size(); ++j) {
         for (int end = 0; end < 2; ++end) {
             if (end == 0 && !(j < plan.towns.size() && plan.towns[j].built)) continue;
-            const Vec2 at = end == 0 ? plan.spurs[j].front() : plan.spurs[j].back();
-            // The nearest stretch of street with room for both Ts, 15 m clear of its junctions,
-            // slid along to within 60 m of the expressway's end: where it lands on a junction, the
-            // pair splays a little further to one side of it.
-            double best = 1e30; std::size_t bc = 0; double bs = 0;
-            for (std::size_t i = 0; i < streetChains.size(); ++i) {
-                const std::vector<double> st = roads::lanes::stations(streetChains[i].pts);
-                if (st.back() < 2 * kTee + 30.0) continue;
-                const roads::lanes::Projection pr = roads::lanes::project(streetChains[i].pts, st, at);
-                const double c = std::clamp(pr.station, kTee + 15.0, st.back() - kTee - 15.0);
-                const double d = (roads::lanes::pointAt(streetChains[i].pts, st, c) - at).length();
-                if (d < best) { best = d; bc = i; bs = c; }
-            }
-            if (best < 60.0) tees.push_back({bc, bs - kTee, bs + kTee, j, end});
-            else if (std::getenv("RT_PLAN_WHY"))
+            double best = 0;
+            if (!teeAt(end == 0 ? plan.spurs[j].front() : plan.spurs[j].back(), j, end, best) && std::getenv("RT_PLAN_WHY"))
                 std::printf("[plan] expressway %zu: no Ts for its %s boulevard pair (no street with room within %.0f m of its end)\n", j,
                             end == 0 ? "town" : "midtown", best);
         }
     }
+    // THE C'S ENDS: where the coast opened the ring, each end comes down to a street as an
+    // expressway's does -- or, with none in reach, turns back on itself (below)
+    if (!ringClosed(plan) && !chains.empty())
+        for (int end = 0; end < 2; ++end) {
+            double best = 0;
+            if (!teeAt(end == 0 ? plan.ringArc.front() : plan.ringArc.back(), kRingEnd, end, best) && std::getenv("RT_PLAN_WHY"))
+                std::printf("[plan] the ring's C, its %s end: no street with room within %.0f m; a turnaround\n", end == 0 ? "first" : "last", best);
+        }
     std::vector<roads::lanes::RampStreet> rampStreets;
     // A short collector or local passing under the ring — frontage road to frontage road, nothing
     // but a crossing — is one a ring diamond may close when its ramp would pass over it too low.
@@ -371,6 +424,7 @@ nlohmann::json planToLanesScene(const CityPlan& plan, const SceneOptions& opt) {
         return out;
     };
     std::vector<std::array<std::array<Vec2, 2>, 2>> teePoints(plan.spurs.size());   // for each expressway, each end, its two Ts
+    std::array<std::array<Vec2, 2>, 2> ringTeePoints{};                                  // the C's two ends, the same
     for (std::size_t i = 0; i < streetChains.size(); ++i) {
         const PlanChain& c = streetChains[i];
         const std::string sid = "s" + std::to_string(i);
@@ -382,7 +436,8 @@ nlohmann::json planToLanesScene(const CityPlan& plan, const SceneOptions& opt) {
         street(sid + "_1", c.klass, piece(c.pts, t->s0, t->s1));
         street(sid + "_2", c.klass, piece(c.pts, t->s1, len));
         const std::vector<double> st = roads::lanes::stations(c.pts);
-        teePoints[t->spur][static_cast<std::size_t>(t->end)] = {roads::lanes::pointAt(c.pts, st, t->s0), roads::lanes::pointAt(c.pts, st, t->s1)};
+        (t->spur == kRingEnd ? ringTeePoints : teePoints[t->spur])[static_cast<std::size_t>(t->end)] =
+            {roads::lanes::pointAt(c.pts, st, t->s0), roads::lanes::pointAt(c.pts, st, t->s1)};
     }
 
     if (std::getenv("RT_PLAN_WHY") && ground) {
@@ -441,16 +496,21 @@ nlohmann::json planToLanesScene(const CityPlan& plan, const SceneOptions& opt) {
         edges.push_back({{"id", "fw" + std::to_string(id) + "_a"}, {"class", "freeway"}, {"floor", floors}, {"path", {{"points", pointsJson(ca)}}}});
         edges.push_back({{"id", "fw" + std::to_string(id) + "_b"}, {"class", "freeway"}, {"floor", floors}, {"path", {{"points", pointsJson(cb)}}}});
     };
-    // the ring, offset once as the closed loop it is, then cut into its chains
+    // the ring, offset once as the closed loop it is (or the open C it is against a coast), then
+    // cut into its chains
+    const std::vector<Vec2>& ring = ringLine(plan);
+    const std::vector<Vec2> ra = ringClosed(plan) ? offsetClosed(ring, -fs.carriage) : offsetPolyline(ring, -fs.carriage);
+    const std::vector<Vec2> rb = ringClosed(plan) ? offsetClosed(ring, fs.carriage) : offsetPolyline(ring, fs.carriage);
+    constexpr double kCEnd = 250.0;   // a C's deck comes down to its end's street over this, as an expressway's to a town
     {
-        const std::vector<Vec2> ra = offsetClosed(plan.ring, -fs.carriage), rb = offsetClosed(plan.ring, fs.carriage);
-        const std::size_t n = plan.ring.size();
+        const std::size_t n = ring.size();
         std::size_t start = 0;
         for (std::size_t k = 0; k < chains.size(); ++k) {
-            for (std::size_t i = 0; i < n; ++i) if ((plan.ring[i] - chains[k].front()).lengthSquared() < 1e-6) start = i;
+            for (std::size_t i = 0; i < n; ++i) if ((ring[i] - chains[k].front()).lengthSquared() < 1e-6) start = i;
             std::vector<Vec2> ca, cb;
             for (std::size_t i = 0; i < chains[k].size(); ++i) { ca.push_back(ra[(start + i) % n]); cb.push_back(rb[(start + i) % n]); }
-            json floors = floorsOver(chains[k], 0, 1e30);
+            const bool firstEnd = !ringClosed(plan) && k == 0, lastEnd = !ringClosed(plan) && k + 1 == chains.size();
+            json floors = floorsOver(chains[k], firstEnd ? kCEnd : 0.0, lastEnd ? roads::lanes::stations(chains[k]).back() - kCEnd : 1e30);
             // Over an expressway the ring holds 2.5 m higher. The expressway must be at the ring's
             // height again 200 m out, to bridge the suburbs' first street, and at design grade on
             // rolling ground it cannot also get down to the ground under the ring: it passes under
@@ -497,10 +557,54 @@ nlohmann::json planToLanesScene(const CityPlan& plan, const SceneOptions& opt) {
         nLoop = plan.loop.size();
     }
     auto slice = [](const std::vector<Vec2>& v, std::size_t a, std::size_t b) { return std::vector<Vec2>(v.begin() + static_cast<long>(a), v.begin() + static_cast<long>(b)); };
+    // A pair of one-way boulevards between a freeway end and its two Ts, `dir` pointing along
+    // the freeway away from the Ts; a (the carriageway with the route) takes the T on its right.
+    auto pair = [&](const std::string& idp, const std::array<Vec2, 2>& tp, const Vec2& freewayEnd, const Vec2& dir,
+                    const Vec2& aEnd, const Vec2& bEnd, bool aLeavesTee) {
+        const Vec2 route = aLeavesTee ? dir : dir * Real(-1);   // the way a runs, whose right is a's side
+        const bool firstRight = cross(route, tp[0] - freewayEnd) < 0;
+        const Vec2 tA = firstRight ? tp[0] : tp[1], tB = firstRight ? tp[1] : tp[0];
+        const Real reach = (tA - aEnd).length() * Real(0.45);
+        if (aLeavesTee) {   // a runs from its T onto the freeway, b off it to its T
+            edges.push_back({{"id", idp + "_in"}, {"class", "boulevard"}, {"path", {{"points", pointsJson(cubic(tA, tA + dir * reach, aEnd - dir * reach, aEnd, 16))}}}});
+            edges.push_back({{"id", idp + "_out"}, {"class", "boulevard"}, {"path", {{"points", pointsJson(cubic(bEnd, bEnd - dir * reach, tB + dir * reach, tB, 16))}}}});
+        } else {            // a runs off the freeway to its T, b from its T onto it
+            edges.push_back({{"id", idp + "_in"}, {"class", "boulevard"}, {"path", {{"points", pointsJson(cubic(aEnd, aEnd - dir * reach, tA + dir * reach, tA, 16))}}}});
+            edges.push_back({{"id", idp + "_out"}, {"class", "boulevard"}, {"path", {{"points", pointsJson(cubic(tB, tB + dir * reach, bEnd - dir * reach, bEnd, 16))}}}});
+        }
+    };
+    auto found = [](const std::array<Vec2, 2>& t) { return t[0].lengthSquared() != 0 || t[1].lengthSquared() != 0; };
+    // A TEARDROP turns a freeway's outbound carriageway back into its inbound one where it ends with
+    // no street to come down to. Without it the outbound carriageway ended at the map edge with no
+    // way off, and every car that took it -- and every home whose only road led there -- was stranded
+    // (the census found 40 street links so). Looking `out`ward, the outbound carriageway (ending at
+    // `outEnd`) is on the right and the inbound (starting at `inStart`) on the left: the loop runs on
+    // past the outbound's end, round the far side of a 40 m circle and back into the inbound's start.
+    auto turnaround = [&](const std::string& id, const Vec2& outEnd, const Vec2& inStart, const Vec2& out) {
+        const Vec2 left = Vec2(-out.y, out.x);
+        const Real R = 40;
+        const Vec2 c = (outEnd + inStart) * Real(0.5) + out * Real(60);
+        std::vector<Vec2> loop = cubic(outEnd, outEnd + out * Real(30), c - left * R - out * Real(20), c - left * R, 12);
+        for (int i = 1; i <= 24; ++i) {
+            const Real th = M_PI * i / 24;   // from the right of the circle, round its far side, to its left
+            loop.push_back(c - left * (R * std::cos(th)) + out * (R * std::sin(th)));
+        }
+        const std::vector<Vec2> back = cubic(c + left * R, c + left * R - out * Real(20), inStart + out * Real(30), inStart, 12);
+        loop.insert(loop.end(), back.begin() + 1, back.end());
+        edges.push_back({{"id", id}, {"class", "boulevard"}, {"path", {{"points", pointsJson(loop)}}}});
+    };
+    // THE C'S ENDS (a ring opened by the coast): the route runs first vertex to last, a with it
+    if (!ringClosed(plan) && !chains.empty()) {
+        const std::size_t n = ring.size();
+        if (found(ringTeePoints[0])) pair("bc0", ringTeePoints[0], ring.front(), normalize(ring[1] - ring.front()), ra.front(), rb.front(), true);
+        else turnaround("tc0", rb.front(), ra.front(), normalize(ring.front() - ring[1]));
+        if (found(ringTeePoints[1])) pair("bc1", ringTeePoints[1], ring.back(), normalize(ring[n - 2] - ring.back()), ra.back(), rb.back(), false);
+        else turnaround("tc1", ra.back(), rb.back(), normalize(ring.back() - ring[n - 2]));
+    }
     for (std::size_t j = 0; j < plan.spurs.size(); ++j) {
         const std::vector<Vec2> fwy = spurFreeway(plan, j);
         double sx = 0; std::size_t seg = 0;
-        const bool crosses = crossingWithRing(fwy, plan.ring, sx, seg);
+        const bool crosses = crossingWithRing(fwy, ringLine(plan), sx, seg, ringClosed(plan));
         std::vector<Vec2> ca = offsetPolyline(fwy, -fs.carriage), cb = offsetPolyline(fwy, fs.carriage);
         const bool onLoop = looped && (static_cast<int>(j) == plan.loopFrom || static_cast<int>(j) == plan.loopTo);
         if (onLoop && static_cast<int>(j) == plan.loopFrom) {
@@ -518,49 +622,15 @@ nlohmann::json planToLanesScene(const CityPlan& plan, const SceneOptions& opt) {
         const bool town = j < plan.towns.size() && plan.towns[j].built;
         // on the loop, the spur comes down to meet it at ground level 300 m in from the joint
         carriageways(id, ca, cb, floorsOver(fwy, onLoop ? 300.0 : town ? 250.0 : 0.0, crosses ? sx - 170.0 : 1e30));
-        // A pair of one-way boulevards between a freeway end and its two Ts, `dir` pointing along
-        // the freeway away from the Ts; a (the carriageway with the route) takes the T on its right.
-        auto pair = [&](const std::string& idp, const std::array<Vec2, 2>& tp, const Vec2& freewayEnd, const Vec2& dir,
-                        const Vec2& aEnd, const Vec2& bEnd, bool aLeavesTee) {
-            const Vec2 route = aLeavesTee ? dir : dir * Real(-1);   // the way a runs, whose right is a's side
-            const bool firstRight = cross(route, tp[0] - freewayEnd) < 0;
-            const Vec2 tA = firstRight ? tp[0] : tp[1], tB = firstRight ? tp[1] : tp[0];
-            const Real reach = (tA - aEnd).length() * Real(0.45);
-            if (aLeavesTee) {   // a runs from its T onto the freeway, b off it to its T
-                edges.push_back({{"id", idp + "_in"}, {"class", "boulevard"}, {"path", {{"points", pointsJson(cubic(tA, tA + dir * reach, aEnd - dir * reach, aEnd, 16))}}}});
-                edges.push_back({{"id", idp + "_out"}, {"class", "boulevard"}, {"path", {{"points", pointsJson(cubic(bEnd, bEnd - dir * reach, tB + dir * reach, tB, 16))}}}});
-            } else {            // a runs off the freeway to its T, b from its T onto it
-                edges.push_back({{"id", idp + "_in"}, {"class", "boulevard"}, {"path", {{"points", pointsJson(cubic(aEnd, aEnd - dir * reach, tA + dir * reach, tA, 16))}}}});
-                edges.push_back({{"id", idp + "_out"}, {"class", "boulevard"}, {"path", {{"points", pointsJson(cubic(tB, tB + dir * reach, bEnd - dir * reach, bEnd, 16))}}}});
-            }
-        };
         const auto& tp = teePoints[j];
-        auto found = [](const std::array<Vec2, 2>& t) { return t[0].lengthSquared() != 0 || t[1].lengthSquared() != 0; };
         if (onLoop) {
             // the far end runs on into the loop: nothing to end
         } else if (town && found(tp[0])) {
             // THE TOWN END: the expressway comes down to its main street as the same pair
             pair("bt" + std::to_string(j), tp[0], fwy.front(), normalize(fwy[1] - fwy.front()), ca.front(), cb.front(), true);
         } else {
-            // NO TOWN: out in the country, a teardrop turns the outbound carriageway back into the
-            // inbound one. Without it the outbound carriageway ended at the map edge with no way
-            // off, and every car that took it — and every home whose only road led there — was
-            // stranded (the census found 40 street links so). Looking outward, b (outbound) is on
-            // the right and a (inbound) on the left: the loop runs on past b's end, round the far
-            // side of a 40 m circle and back into a's start.
-            const Vec2 out = normalize(fwy.front() - fwy[1]);   // the expressway is drawn from its far end inward
-            const Vec2 left = Vec2(-out.y, out.x);
-            const Vec2 bEnd = cb.front(), aStart = ca.front();
-            const Real R = 40;
-            const Vec2 c = (bEnd + aStart) * Real(0.5) + out * Real(60);
-            std::vector<Vec2> loop = cubic(bEnd, bEnd + out * Real(30), c - left * R - out * Real(20), c - left * R, 12);
-            for (int i = 1; i <= 24; ++i) {
-                const Real th = M_PI * i / 24;   // from the right of the circle, round its far side, to its left
-                loop.push_back(c - left * (R * std::cos(th)) + out * (R * std::sin(th)));
-            }
-            const std::vector<Vec2> back = cubic(c + left * R, c + left * R - out * Real(20), aStart + out * Real(30), aStart, 12);
-            loop.insert(loop.end(), back.begin() + 1, back.end());
-            edges.push_back({{"id", "tn" + std::to_string(j)}, {"class", "boulevard"}, {"path", {{"points", pointsJson(loop)}}}});
+            // NO TOWN: out in the country, a teardrop turns it back (the expressway is drawn from its far end inward)
+            turnaround("tn" + std::to_string(j), cb.front(), ca.front(), normalize(fwy.front() - fwy[1]));
         }
         // THE MIDTOWN END
         if (found(tp[1])) pair("bv" + std::to_string(j), tp[1], fwy.back(), normalize(fwy[fwy.size() - 2] - fwy.back()), ca.back(), cb.back(), false);
