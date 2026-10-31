@@ -1,5 +1,5 @@
 // Planetary atmosphere — Metal port of the CPU reference (engine/procgen/
-// atmosphere.cpp) and the Vulkan atmosphere.frag, single-scattering Rayleigh + Mie
+// atmosphere.cpp), single-scattering Rayleigh + Mie
 // (procedural-planet-plan P3). A fullscreen pass: reconstruct the world ray per
 // pixel, raymarch the atmosphere shell, composite the in-scattered light over the
 // HDR scene by its transmittance. The planet is an analytic sphere so the march
@@ -14,10 +14,10 @@
 //     transmittance); the One+One blend does the compositing, so the limb halo
 //     feeds the bloom pass. This is what Metal and WebGPU ship.
 //   fragmentAtmosphere     — NOT bound. The full-composite variant
-//     (scene * transmittance + inScatter), kept as the 1:1 mirror of
-//     shaders/vulkan/atmosphere.frag, which is still shader-only. See the
-//     "Planetary atmosphere" row in docs/renderer-parity.md. Do not delete it
-//     without resolving that divergence — but note it IS compiled on every
+//     (scene * transmittance + inScatter). Vulkan has no atmosphere pass: its
+//     unwired GLSL copy was deleted in #117 wave 0 (it is in git history), so
+//     this is now the only full-composite version. See the "Planetary
+//     atmosphere" row in docs/renderer-parity.md. Note it IS compiled on every
 //     launch, so a backend subsetting shaderFiles for compile time should know
 //     it is paying for an unbound entry point.
 

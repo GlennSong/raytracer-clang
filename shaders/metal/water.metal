@@ -1,4 +1,4 @@
-// Water surface (procedural-planet-plan P2) — Metal port of water.vert + water.frag.
+// Water surface (procedural-planet-plan P2) — Metal port of water.vert + water.frag (the Vulkan GLSL copy, never wired, was deleted in #117 wave 0; it is in git history).
 // Animated ripple normals, a GGX sun glint, Schlick-Fresnel sky reflection, and
 // depth-tinted transmission (uv.x = depth, uv.y = shore distance, the engine's
 // Surface::Water convention) — so it serves a planet ocean AND city/coast water.

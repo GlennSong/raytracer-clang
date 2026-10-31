@@ -1110,7 +1110,7 @@ function(rt_build_vulkan_shaders)
     set(VK_SHADERS mesh.vert mesh.frag mesh_wire.frag mesh_shadow.vert mesh_shadow_alpha.vert mesh_shadow_alpha.frag terrain.vert
                    sky.vert sky.frag composite.vert composite.frag bloom.frag
                    ssao.frag ssao_blur.frag ssr.frag dof.frag brdf_lut.frag
-                   atmosphere.frag clouds.frag clouds_composite.frag water.vert water.frag star.frag
+                   clouds.frag clouds_composite.frag
                    ui.vert ui.frag occlusion_reduce.comp crowd.comp)
     set(VK_SPV_FILES "")
     foreach(shader ${VK_SHADERS})
