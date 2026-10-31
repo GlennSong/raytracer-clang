@@ -13967,3 +13967,22 @@ the same loops in the same order.
 **Owed: the weather bake's range blur.** Its re-summed window rounds differently from running sums. Measured on
 512² random fields, 2–52 % of cells differ by up to 0.15 mm. That is too small to see, but it changes the weather
 bake's bytes, and with them the erosion and the island's ground. It moves with `kWeatherCodeTag`'s next bump.
+
+## ADR-0290 — One CDLOD morph target: coarseAverage and morphPinned
+
+#117 wave 1, item 12: "The CDLOD morph-target bake written twice (terrain_lod.cpp) → one function; tiles must
+come out byte-identical." The live mesher (`generateLodNodeMesh`) and the baked tiles (`generateBakedTileMesh`)
+each wrote out two things:
+- the stencil: even vertices stay, odd ones collapse to the average of their even neighbours;
+- the pin: a flatten-owned vertex keeps its own height.
+
+They differ in the rest, on purpose. The live mesher works in float and morphs to its own normal; the baked tiles
+work in double and morph to the coarser level's averaged normal.
+
+**Decision.**
+- `coarseAverage(i, j, at)` is the stencil, over any grid value: a float height, a double height or a normal. It
+  returns the value's own type; halving and quartering are exact, so each mesher keeps its precision.
+- `morphPinned` is the pin rule. Both meshers call both.
+
+**Proof.** A hash over the live morph targets of three nodes and all 21 baked tiles of a pyramid, on ground with
+a road ramp and a pad (so the pin fires), is `3e5483088f17f815` before and after.
