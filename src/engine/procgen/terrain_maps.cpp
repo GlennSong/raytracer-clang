@@ -1,4 +1,5 @@
 #include "terrain_maps.h"
+#include "texture_field.h"   // boxBlurGrid (ADR-0289)
 #include "../bundle/cache_use.h"
 #include "../bundle/bundle.h"
 
@@ -13,39 +14,13 @@
 #include <map>
 #include <mutex>
 #include <string>
-#include <thread>
+#include "../../job_system.h"   // parallelRows: the shared pool (ADR-0288)
 
 namespace engine {
 
 namespace {
 constexpr const char* kMapsCodeTag = "2026-09-26.1";
 
-template <class F>
-void rows(int n, F&& f) {
-    const int T = std::max(1u, std::min(32u, std::thread::hardware_concurrency()));
-    std::vector<std::thread> th;
-    for (int t = 0; t < T; ++t) th.emplace_back([&, t] { for (int z = t; z < n; z += T) f(z); });
-    for (auto& x : th) x.join();
-}
-
-// separable box blur of radius r (clamped edges), running sums
-std::vector<float> boxBlur(const std::vector<float>& in, int n, int r) {
-    std::vector<float> a(in), b(in.size());
-    for (int axis = 0; axis < 2; ++axis) {
-        rows(n, [&](int z) {
-            auto at = [&](int k) { const int kk = std::clamp(k, 0, n - 1); return axis == 0 ? a[static_cast<std::size_t>(z) * n + kk] : a[static_cast<std::size_t>(kk) * n + z]; };
-            double s = 0.0;
-            for (int k = -r; k <= r; ++k) s += at(k);
-            for (int x = 0; x < n; ++x) {
-                const std::size_t o = axis == 0 ? static_cast<std::size_t>(z) * n + x : static_cast<std::size_t>(x) * n + z;
-                b[o] = static_cast<float>(s / (2 * r + 1));
-                s += at(x + r + 1) - at(x - r);
-            }
-        });
-        a.swap(b);
-    }
-    return a;
-}
 
 double smooth(double a, double b, double x) {
     const double t = std::clamp((x - a) / (b - a), 0.0, 1.0);
@@ -90,9 +65,9 @@ TerrainMaps computeTerrainMaps(const Heightmap& hmIn, double seaLevel) {
         streamPowerErode(hm, zero, sp, nullptr, &area);
     }
     std::vector<float> slope(N), cliff(N), wet(N), soil(N), convex(N);
-    const std::vector<float> hs = boxBlur(hmIn.h, n, std::max(1, static_cast<int>(8.0 / cell)));   // ~15 m for curvature
+    const std::vector<float> hs = boxBlurGrid(hmIn.h, n, std::max(1, static_cast<int>(8.0 / cell)));   // ~15 m for curvature
     const double cliffTan = std::tan(40.0 * 3.14159265358979 / 180.0);
-    rows(n, [&](int z) {
+    parallelRows(n, [&](int z) {
         for (int x = 0; x < n; ++x) {
             const std::size_t i = static_cast<std::size_t>(z) * n + x;
             const int xa = std::max(0, x - 1), xb = std::min(n - 1, x + 1), za = std::max(0, z - 1), zb = std::min(n - 1, z + 1);
@@ -112,14 +87,14 @@ TerrainMaps computeTerrainMaps(const Heightmap& hmIn, double seaLevel) {
         }
     });
     // scree: moderate slopes with cliffs close by (the fall zone), thicker in the hollows below them
-    const std::vector<float> cliffNear = boxBlur(cliff, n, std::max(1, static_cast<int>(35.0 / cell)));
+    const std::vector<float> cliffNear = boxBlurGrid(cliff, n, std::max(1, static_cast<int>(35.0 / cell)));
     // half resolution out
     TerrainMaps m;
     m.n = (n - 1) / 2 + 1;
     m.worldSize = hmIn.worldSize;
     const std::size_t M = static_cast<std::size_t>(m.n) * m.n;
     m.wet.resize(M); m.scree.resize(M); m.soil.resize(M); m.convex.resize(M);
-    rows(m.n, [&](int z) {
+    parallelRows(m.n, [&](int z) {
         for (int x = 0; x < m.n; ++x) {
             const std::size_t o = static_cast<std::size_t>(z) * m.n + x;
             const std::size_t i = static_cast<std::size_t>(std::min(n - 1, 2 * z)) * n + std::min(n - 1, 2 * x);

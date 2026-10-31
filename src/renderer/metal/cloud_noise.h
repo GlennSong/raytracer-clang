@@ -22,7 +22,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <filesystem>
-#include <thread>
+#include "../../job_system.h"   // parallelRows: the shared pool (ADR-0288)
 #include <vector>
 
 namespace cloudnoise {
@@ -145,19 +145,10 @@ inline float perlinFbm(float u, float v, float w, int freq, int octaves, uint32_
 }
 
 // --- Bake ---------------------------------------------------------------
+// slices [0, n) on the shared pool (ADR-0288), one at a time each
 template <typename Fn>
 inline void parallelSlices(int n, Fn&& fn) {
-    unsigned tc = std::max(1u, std::thread::hardware_concurrency());
-    tc = std::min(tc, static_cast<unsigned>(n));
-    const int per = (n + static_cast<int>(tc) - 1) / static_cast<int>(tc);
-    std::vector<std::thread> pool;
-    for (unsigned t = 0; t < tc; ++t) {
-        const int z0 = static_cast<int>(t) * per;
-        const int z1 = std::min(n, z0 + per);
-        if (z0 >= z1) break;
-        pool.emplace_back([&fn, z0, z1] { fn(z0, z1); });
-    }
-    for (auto& th : pool) th.join();
+    engine::parallelRows(n, [&fn](int z) { fn(z, z + 1); });
 }
 
 inline uint8_t toByte(float v) {

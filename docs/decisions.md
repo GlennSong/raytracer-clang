@@ -13923,3 +13923,47 @@ All were 0.7, and each comment pointed at another.
 
 **Decision.** `kEyeAboveCentre` (player/body_rules.h) is the eye above the capsule centre. The walker's camera,
 a rider pinned in a carrier, every seat's hip and the swimmer's float measure from it. No value changed.
+
+## ADR-0288 — One thread pool for the process: sharedJobs and parallelRows
+
+#117 wave 1, item 10: "The dozen hand-rolled thread pools → JobSystem (parallelRows)." The app owned one
+`JobSystem` and handed it to systems through `FrameContext::jobs`. The level load's procgen could not reach it,
+so each pass spawned its own `std::thread`s: the terrain maps, the weather bake, stream power, the world maps, the
+forest and rocks, the lanes mesher, the lots producer, the island world, and the clouds' noise. The loader and
+the citysim each also made private `JobSystem`s. During a load that meant several pools of hardware-thread size
+at once.
+
+**Decision.**
+- `sharedJobs()` (job_system.h) is the process's pool, made on first use and synchronous on the web build. The
+  app's `jobs` is a reference to it, so frame work and load work share one set of threads.
+- `parallelRows(n, f)` runs rows across it, each exactly once, batched about 8 per worker. The caller helps, so a
+  row loop inside another parallel loop cannot deadlock.
+- Every hand-rolled pool above calls it. Single background threads (the control channel, the editor's bake list,
+  the map tool) are a different job and keep their own.
+- The path tracer's own binary keeps its pool, since nothing else in it runs.
+
+**Determinism.**
+- Every converted loop writes only its own row, except two.
+- **The forest and rock placement** gathered per thread and joined in thread order, so the tree list's order
+  depended on the machine's core count. It now gathers per row and joins in row order, the same everywhere. The
+  set of trees is unchanged; their order is now the sequential one.
+- **The lanes mesher's** fixed contiguous chunks keep their partition and run on the pool.
+
+**Measured** on island_8_nature, from launch to the level answering its control socket: 99.6-100.5 s before, 99.7-100.0 s after (three runs each), every load phase within noise; the same 416,847 trees, 690,608 rocks and 52,074 near groups.
+
+## ADR-0289 — One box blur: boxBlurGrid
+
+#117 wave 1, item 11: "The three separable box blurs → one in texture_field." There were four:
+- the terrain maps' (`boxBlur`, running sums, clamped edges);
+- the weather bake's shape-keep blur (the same, three passes);
+- the weather bake's range blur (a window re-summed at each cell, clamped, three passes);
+- the planner's land masks (`boxBlur` in land_shape.cpp, running sums, the window shrunk at the edges).
+
+**Decision.** `boxBlurGrid(in, n, r, passes, edge)` (texture_field.h) is the blur. It is separable, uses running
+sums and runs its rows on the shared pool. Its edges either clamp, for a height field, or shrink, for a 0/1 mask
+that must stay a true fraction. The terrain maps, the shape-keep blur and the land masks call it, bit-identical:
+the same loops in the same order.
+
+**Owed: the weather bake's range blur.** Its re-summed window rounds differently from running sums. Measured on
+512² random fields, 2–52 % of cells differ by up to 0.15 mm. That is too small to see, but it changes the weather
+bake's bytes, and with them the erosion and the island's ground. It moves with `kWeatherCodeTag`'s next bump.

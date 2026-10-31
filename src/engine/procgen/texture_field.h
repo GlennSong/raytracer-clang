@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <functional>
 #include <string>
+#include <vector>
 
 namespace engine {
 
@@ -97,6 +98,14 @@ TextureData bakeFieldRGBA(const ColorField2& color, const Field2& alpha, int siz
 // version -- a field is a closure, it cannot be hashed itself); the result is stored under
 // cache/fields/<hash>.tex and read back while the key is unchanged. RT_NOCACHE=1 always bakes.
 TextureData bakeCached(const std::string& recipeKey, const std::function<TextureData()>& bake);
+
+// THE BOX BLUR over an n x n row-major grid (ADR-0289, #117 item 11): separable (along rows, then columns), a window
+// of 2r+1 cells by running sums, `passes` times (three passes are near a Gaussian). Its edges either CLAMP (the
+// edge cell stands in for the cells beyond: a height field keeps its level at the border) or SHRINK (the window is
+// what lies inside the grid, averaged: a 0/1 mask stays a true fraction). Rows run on the shared pool. The terrain
+// maps' slope and cliff fields, the weather bake's range and shape passes, and the planner's land masks.
+enum class BlurEdge { Clamp, Shrink };
+std::vector<float> boxBlurGrid(const std::vector<float>& in, int n, int r, int passes = 1, BlurEdge edge = BlurEdge::Clamp);
 
 }  // namespace engine
 

@@ -1,6 +1,7 @@
 #ifndef RAYTRACER_JOB_SYSTEM_H
 #define RAYTRACER_JOB_SYSTEM_H
 
+#include <algorithm>
 #include <atomic>
 #include <condition_variable>
 #include <cstddef>
@@ -74,6 +75,23 @@ private:
     std::vector<std::thread> workers;
     bool stopping = false;
 };
+
+// THE PROCESS'S POOL (ADR-0288, #117 item 10): the one JobSystem every part of the engine runs its parallel work
+// on -- the app's frame jobs (FrameContext::jobs), the level load's procgen passes (the terrain maps, the weather,
+// the forest, the lanes mesher), the pyramid bake, the citysim's population. Made on first use; synchronous (no
+// threads) on the web build, which links without -pthread.
+JobSystem& sharedJobs();
+
+// Rows [0, n) across the shared pool, each exactly once, in no particular order: `f(row)` must write only its own
+// row's data (ADR-0002: the scheduler never changes results). The calling thread helps, so a row loop inside another
+// parallel loop cannot deadlock. Rows are batched so a pass over 16 k short rows is not 16 k queue round trips.
+template <class F>
+void parallelRows(int n, F&& f) {
+    if (n <= 0) return;
+    JobSystem& jobs = sharedJobs();
+    const std::size_t per = std::max<std::size_t>(1, static_cast<std::size_t>(n) / (8 * (jobs.workerCount() + 1)));
+    jobs.parallelFor(0, static_cast<std::size_t>(n), [&f](std::size_t r) { f(static_cast<int>(r)); }, per);
+}
 
 }  // namespace engine
 

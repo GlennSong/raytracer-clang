@@ -1,4 +1,5 @@
 #include "land_shape.h"
+#include "../../texture_field.h"   // boxBlurGrid (ADR-0289)
 
 #include <algorithm>
 #include <cmath>
@@ -34,29 +35,6 @@ std::vector<char> componentOf(const std::vector<char>& m, int n, int i0, int j0)
     return out;
 }
 
-// a separable box blur of a 0/1 mask, `r` cells, as a fraction
-std::vector<float> boxBlur(const std::vector<float>& a, int n, int r) {
-    std::vector<float> t(a.size()), o(a.size());
-    for (int j = 0; j < n; ++j) {
-        double s = 0;
-        int c = 0;
-        for (int i = -r; i < n + r; ++i) {
-            if (i + r < n && i + r >= 0) { s += a[static_cast<std::size_t>(j) * n + i + r]; ++c; }
-            if (i - r - 1 >= 0 && i - r - 1 < n) { s -= a[static_cast<std::size_t>(j) * n + i - r - 1]; --c; }
-            if (i >= 0 && i < n) t[static_cast<std::size_t>(j) * n + i] = static_cast<float>(s / std::max(1, c));
-        }
-    }
-    for (int i = 0; i < n; ++i) {
-        double s = 0;
-        int c = 0;
-        for (int j = -r; j < n + r; ++j) {
-            if (j + r < n && j + r >= 0) { s += t[static_cast<std::size_t>(j + r) * n + i]; ++c; }
-            if (j - r - 1 >= 0 && j - r - 1 < n) { s -= t[static_cast<std::size_t>(j - r - 1) * n + i]; --c; }
-            if (j >= 0 && j < n) o[static_cast<std::size_t>(j) * n + i] = static_cast<float>(s / std::max(1, c));
-        }
-    }
-    return o;
-}
 
 std::vector<Vec2> resample(const std::vector<Vec2>& pts, bool closed, double step) {
     std::vector<Vec2> src = pts;
@@ -269,7 +247,7 @@ LandShape growLandShape(const HeightField& ground, const std::function<bool(cons
     std::vector<float> f(N);
     for (std::size_t k = 0; k < N; ++k) f[k] = grown[k];
     const int r = std::max(1, static_cast<int>(std::lround(p.smooth / p.cell)));
-    f = boxBlur(boxBlur(f, n, r), n, r);
+    f = boxBlurGrid(f, n, r, 2, BlurEdge::Shrink);
     std::vector<char> m(N);
     for (std::size_t k = 0; k < N; ++k) m[k] = f[k] > 0.5f && ok[k];
     m = componentOf(m, n, hi, hj);
@@ -353,7 +331,7 @@ LandShape growLandShape(const HeightField& ground, const std::function<bool(cons
         std::vector<float> d(N);
         for (std::size_t k = 0; k < N; ++k)
             d[k] = mask[k] ? din[k] - 0.5f * a : -std::min(dout[k], 1e5f) + 0.5f * a;   // the edge between the last cell in and the first out
-        return boxBlur(boxBlur(d, n, 1), n, 1);
+        return boxBlurGrid(d, n, 1, 2, BlurEdge::Shrink);
     };
     // the LIMITS from the footprint as it stands; the depth with its water taken out as edges too
     s.depth = signedDepth(m);

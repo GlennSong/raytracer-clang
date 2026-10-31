@@ -3,7 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
-#include <thread>
+#include "../../job_system.h"   // parallelRows: the shared pool (ADR-0288)
 
 namespace engine {
 
@@ -12,16 +12,14 @@ uint8_t encode(double v) { return static_cast<uint8_t>(std::lround(std::clamp(12
 double decode(uint8_t b) { return b / 127.5 - 1.0; }
 constexpr char kMagic[8] = {'R', 'T', 'W', 'M', 'A', 'P', '0', '1'};
 
-// rows [0, size) in bands, one a hardware thread
+// rows [0, size) in bands across the shared pool (ADR-0288), a few a worker
 void parallelBands(int size, const std::function<void(int, int)>& band) {
-    const int T = std::max(1u, std::min(32u, std::thread::hardware_concurrency()));
-    const int per = (size + T - 1) / T;
-    std::vector<std::thread> th;
-    for (int t = 0; t < T; ++t) {
-        const int j0 = t * per, j1 = std::min(size, j0 + per);
-        if (j0 < j1) th.emplace_back([&band, j0, j1] { band(j0, j1); });
-    }
-    for (auto& x : th) x.join();
+    const int B = std::max(1, std::min(size, 4 * static_cast<int>(sharedJobs().workerCount() + 1)));
+    const int per = (size + B - 1) / B;
+    parallelRows(B, [&](int b) {
+        const int j0 = b * per, j1 = std::min(size, j0 + per);
+        if (j0 < j1) band(j0, j1);
+    });
 }
 
 TerrainWorldMap emptyMap(int channels, double originX, double originZ, double extent, int size, uint8_t fill) {

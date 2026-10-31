@@ -6,7 +6,7 @@
 #include <cstdint>
 #include <functional>
 #include <queue>
-#include <thread>
+#include "../../job_system.h"   // parallelRows: the shared pool (ADR-0288)
 #include <utility>
 #include <vector>
 
@@ -93,20 +93,14 @@ int streamPowerErode(Heightmap& hm, const std::vector<float>& uplift, const Stre
             for (std::size_t o = 0; o < order.size(); ++o)
                 for (int32_t d = head[static_cast<std::size_t>(order[o])]; d >= 0; d = next[static_cast<std::size_t>(d)]) order.push_back(d);
         }
-        // (the rock under each cell at its height now, every hardware thread a band of rows)
-        if (p.layers) {
-            const int T = std::max(1u, std::min(32u, std::thread::hardware_concurrency()));
-            std::vector<std::thread> th;
-            for (int t = 0; t < T; ++t)
-                th.emplace_back([&, t] {
-                    for (int z = t; z < n; z += T)
-                        for (int x = 0; x < n; ++x) {
-                            const std::size_t i = static_cast<std::size_t>(z) * n + x;
-                            hard[i] = outlet[i] ? 0.0f : static_cast<float>(p.layers->hardness(p.layerOriginX + x * cell, p.layerOriginZ + z * cell, h[i]));
-                        }
-                });
-            for (auto& t : th) t.join();
-        }
+        // (the rock under each cell at its height now, rows across the shared pool)
+        if (p.layers)
+            parallelRows(n, [&](int z) {
+                for (int x = 0; x < n; ++x) {
+                    const std::size_t i = static_cast<std::size_t>(z) * n + x;
+                    hard[i] = outlet[i] ? 0.0f : static_cast<float>(p.layers->hardness(p.layerOriginX + x * cell, p.layerOriginZ + z * cell, h[i]));
+                }
+            });
         // 3. drainage area, accumulated down the tree (donors before receivers: the order reversed)
         std::fill(area.begin(), area.end(), cellArea);
         for (std::size_t o = order.size(); o-- > 0;) {

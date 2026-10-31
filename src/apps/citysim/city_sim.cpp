@@ -1096,7 +1096,7 @@ void CitySim::assignPlaces(const PlaceMap& places, const NavGraph& graph) {
     // only shared, settled data -- places, the graph, the job and venue indexes, the bus network -- and write only
     // that agent, so they run across the cores and come out identical (RT_POPULATION_VERIFY checks it). What was
     // lazy and shared is settled first: every place's node, the job cells.
-    engine::JobSystem decide;
+    engine::JobSystem& decide = engine::sharedJobs();   // the process's pool (ADR-0288)
     decide.parallelFor(0, places.places().size(), [&](std::size_t pi) { nodeOf(static_cast<PlaceId>(pi)); }, 64);
     for (PlaceId cand : jobs) {
         const Vec2 q = places[cand].site;

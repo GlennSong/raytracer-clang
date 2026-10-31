@@ -1873,9 +1873,8 @@ static void loadCdlodTerrain(const TerrainParams& p, const json& t, World& world
         if (!hit) {
             auto noise = std::make_shared<Noise>(cfg.seed);
             const TerrainParams& tp = cfg.params;
-            JobSystem jobs;
             *pyr = pyramid::buildPyramid(
-                spec, [&](double x, double z, double step) { return lodVertexHeight(tp, *noise, x, z, step); }, &jobs, refine);
+                spec, [&](double x, double z, double step) { return lodVertexHeight(tp, *noise, x, z, step); }, &sharedJobs(), refine);
             if (useCache && !pyramid::writePyramidBundle(*pyr, key, cachePath, &cacheErr))
                 LOG_WARN << "[terrain] baked ground not cached: " << cacheErr;
         }

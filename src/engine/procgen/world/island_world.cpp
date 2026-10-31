@@ -23,7 +23,7 @@
 #include <set>
 #include <fstream>
 #include <sstream>
-#include <thread>
+#include "../../../job_system.h"   // parallelRows: the shared pool (ADR-0288)
 #include <tuple>
 
 namespace engine {
@@ -194,18 +194,10 @@ IslandWorld planIsland(const json& blockIn, double half, double cell, const std:
     const int n = static_cast<int>(std::lround(2.0 * half / cell)) + 1;
     w.n = n;
     w.height.assign(static_cast<std::size_t>(n) * n, 0.0f);
-    {
-        const unsigned T = std::max(1u, std::thread::hardware_concurrency());
-        std::vector<std::thread> pool;
-        for (unsigned t = 0; t < T; ++t)
-            pool.emplace_back([&, t] {
-                for (int j = static_cast<int>(t); j < n; j += static_cast<int>(T))
-                    for (int i = 0; i < n; ++i)
-                        w.height[static_cast<std::size_t>(j) * n + i] =
-                            static_cast<float>(terrainHeight(tp, nz, -half + i * cell, -half + j * cell));
-            });
-        for (auto& th : pool) th.join();
-    }
+    parallelRows(n, [&](int j) {
+        for (int i = 0; i < n; ++i)
+            w.height[static_cast<std::size_t>(j) * n + i] = static_cast<float>(terrainHeight(tp, nz, -half + i * cell, -half + j * cell));
+    });
     auto H = [&](int i, int j) { return static_cast<double>(w.height[static_cast<std::size_t>(std::clamp(j, 0, n - 1)) * n + std::clamp(i, 0, n - 1)]); };
     auto P = [&](int i, int j) { return Vec2(-half + i * cell, -half + j * cell); };
 

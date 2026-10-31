@@ -152,16 +152,11 @@ private:
     // cannot rely on.
     PassSweep passSweep;
     Settings settingsStore;
-    // The one shared thread pool (ADR-0014). Declared before `systems` so it
-    // outlives them — a system (e.g. physics) may hold work referencing it.
-    // The web build (ADR-0058) is single-threaded: it links without -pthread, so
-    // it forces synchronous mode (0 workers) — spawning a std::thread there would
-    // abort at runtime. parallelFor/run still execute inline, just on the caller.
-#ifdef __EMSCRIPTEN__
-    JobSystem jobs{0};
-#else
-    JobSystem jobs;
-#endif
+    // The one shared thread pool (ADR-0014): the process's (sharedJobs, ADR-0288), so the frame's jobs and the
+    // level load's procgen passes share one set of threads. It outlives the app (a function-local static), so a
+    // system (e.g. physics) may hold work referencing it. On the web build (ADR-0058) it is synchronous: 0 workers,
+    // parallelFor/run execute inline on the caller.
+    JobSystem& jobs = sharedJobs();
     EventBus eventBus;
     DebugDraw debugLines;
     AudioEngine audioEngine;
