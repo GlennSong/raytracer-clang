@@ -684,10 +684,11 @@ TEST_CASE(agent_driver_tracks_a_lane_on_real_physics_and_stops_at_its_end) {
         if (i > 60) worstLateral = std::max(worstLateral, std::fabs(lateral));
 
         DriverState s;
+        s.pos = pos2;
         s.forward = Vec2(fwd3.x, fwd3.z);
         s.speed = vel.x * fwd3.x + vel.y * fwd3.y + vel.z * fwd3.z;
         const DriverCommand cmd = pursuitCommand(
-            lf, pos2, /*desiredSpeed=*/10.0, pursuitLookahead(s.speed));
+            lf, pos2, s.forward, /*desiredSpeed=*/10.0, pursuitLookahead(s.speed));
         const DriverInput in = computeDriverInput(s, cmd);
         world.setVehicleInput(car, in.throttle, in.steer, in.brake,
                               in.handBrake);
@@ -755,4 +756,52 @@ TEST_CASE(jolt_job_adapter_survives_transient_pool_exhaustion) {
         }
         CHECK(executed.load() == kRounds * kJobsPerRound);
     }   // ~JoltJobAdapter drains its outstanding count before the pool dies
+}
+
+
+// THE POSSESSED CAR THROUGH CORNERS (item 24, #117): route -> LaneFollower -> pursuitCommand's lane frame -> the one
+// controller -> Jolt, round two right-angle corners on the road's friction. It arrives, stops at the end, and holds
+// the route: Stanley's cross-track measured 0.28 m mean drift here against the old heading-only pursuit's 0.40.
+TEST_CASE(agent_driver_holds_a_cornering_route_on_real_physics) {
+    PhysicsWorld world;
+    world.initialize();
+    world.addBox(Vec3(300, 1, 300), Vec3(0, -1, 100), Quat::identity(), BodyMotion::Static, 0.0, 0.85);
+    PhysicsWorld::VehicleId car = world.addVehicle(sedanConfig(), Vec3(0, 1.0, 0), Quat::identity());
+    CHECK(car != PhysicsWorld::INVALID_VEHICLE);
+    // 60 m north, a right-angle corner onto 50 m west (the car's right), another back north for 60 m
+    std::vector<Vec2> path;
+    for (Real z = 0; z < 60; z += 2) path.push_back(Vec2(0, z));
+    for (int k = 0; k <= 12; ++k) { const Real t = k / 12.0 * 1.5707963; path.push_back(Vec2(-8 + 8 * std::cos(t), 60 + 8 * std::sin(t))); }
+    for (Real x = -10; x > -60; x -= 2) path.push_back(Vec2(x, 68));
+    for (int k = 0; k <= 12; ++k) { const Real t = 1.5707963 - k / 12.0 * 1.5707963; path.push_back(Vec2(-60 - 8 * std::cos(t), 76 - 8 * std::sin(t))); }
+    for (Real z = 78; z <= 140; z += 2) path.push_back(Vec2(-68, z));
+    LaneFollower lf;
+    lf.setPath(path);
+    Real worstLat = 0, sumLat = 0;
+    int n = 0, i = 0;
+    bool arrived = false;
+    for (; i < 60 * 60 && !arrived; ++i) {
+        const Vec3 p3 = world.vehiclePosition(car);
+        const Quat q = world.vehicleOrientation(car);
+        const Vec3 f3 = q.rotate(Vec3(0, 0, 1));
+        const Vec3 v3 = world.vehicleVelocity(car);
+        DriverState s;
+        s.pos = Vec2(p3.x, p3.z);
+        s.forward = Vec2(f3.x, f3.z);
+        s.speed = v3.x * f3.x + v3.y * f3.y + v3.z * f3.z;
+        const Real lat = lf.update(s.pos);
+        if (i > 60) { worstLat = std::max(worstLat, lat); sumLat += lat; ++n; }
+        const DriverInput in = computeDriverInput(s, pursuitCommand(lf, s.pos, s.forward, 11.0, pursuitLookahead(s.speed)));
+        world.setVehicleInput(car, in.throttle, in.steer, in.brake, in.handBrake);
+        world.update(1.0 / 60.0);
+        if (lf.remaining() < 1.5 && std::fabs(s.speed) < 0.3) arrived = true;
+    }
+    const Vec3 end = world.vehiclePosition(car);
+    const Real meanLat = n ? sumLat / n : 0.0;
+    std::printf("    [route] arrived %d in %.1f s; drift off the route mean %.2f m, worst %.2f m; stopped %.2f m from the end\n",
+                arrived ? 1 : 0, i / 60.0, meanLat, worstLat, (Vec2(end.x, end.z) - path.back()).length());
+    CHECK(arrived);
+    CHECK(meanLat < 0.35);
+    CHECK(worstLat < 3.0);
+    CHECK((Vec2(end.x, end.z) - path.back()).length() < 1.5);
 }

@@ -5,7 +5,7 @@
 // flip, stops at the line, and drives the arc.
 #include "test_framework.h"
 
-#include "../src/apps/citysim/driver_control.h"
+#include "../src/engine/ai/driver_agent.h"   // computeDriverInput: the one AI driving controller
 #include "../src/engine/physics/physics_world.h"
 #include <algorithm>
 #include <cmath>
@@ -231,8 +231,11 @@ TEST_CASE(driving_lab_straight_stop_at_the_bar) {
             target = std::min(target, dist > 1.0
                                           ? std::sqrt(std::max(0.0, 2.0 * 2.6 * (dist - 1.0)))
                                           : 0.0);
-        const citysim::DriverInput in = citysim::driveTowards(
-            Vec2(p.x, p.z), fwd, speed, target, laneA, laneB);
+        DriverCommand cmd;
+        cmd.laneA = laneA;
+        cmd.laneB = laneB;
+        cmd.desiredSpeed = target;
+        const DriverInput in = computeDriverInput(DriverState{Vec2(p.x, p.z), fwd, speed}, cmd);
         world.setVehicleInput(car, in.throttle, in.steer, in.brake);
         world.update(1.0 / 60.0);
         minUp = std::min(minUp, upDot(q));
@@ -292,8 +295,11 @@ TEST_CASE(driving_lab_arc_without_flipping) {
                                       : worstCross);
         // Curvature-aware plan speed: slow for the arc (the lookahead rule).
         const Real target = nearest < 12 || nearest > path.size() - 18 ? 8.0 : 5.5;
-        const citysim::DriverInput in = citysim::driveTowards(
-            pos, fwd, speed, target, path[nearest], path[ahead]);
+        DriverCommand cmd;
+        cmd.laneA = path[nearest];
+        cmd.laneB = path[ahead];
+        cmd.desiredSpeed = target;
+        const DriverInput in = computeDriverInput(DriverState{pos, fwd, speed}, cmd);
         world.setVehicleInput(car, in.throttle, in.steer, in.brake);
         world.update(1.0 / 60.0);
         minUp = std::min(minUp, upDot(q));

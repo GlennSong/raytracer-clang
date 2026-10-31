@@ -1,6 +1,6 @@
 #include "city_physics.h"
 
-#include "driver_control.h"
+#include "../../engine/ai/driver_agent.h"   // computeDriverInput: the one AI driving controller
 
 #include "../../engine/components.h"   // InstanceGroup
 #include "../../engine/world.h"
@@ -528,8 +528,11 @@ void CityPhysicsSystem::possessTier(World& world, Real dt) {
                     target, std::max(Real(2.5), std::sqrt(Real(4.0) / k)));
             if (cosA < 0) target = std::min(target, Real(2.5));   // U-turn crawl
         }
-        const DriverInput in =
-            driveTowards(bpos, fwd, speed, target, laneA, laneB);
+        engine::DriverCommand cmd;
+        cmd.laneA = laneA;
+        cmd.laneB = laneB;
+        cmd.desiredSpeed = target;
+        const engine::DriverInput in = engine::computeDriverInput(engine::DriverState{bpos, fwd, speed}, cmd);
         pw.setVehicleInput(p.vid, in.throttle, in.steer, in.brake);
         city_.setAgentPhysPose(
             p.agent, Mat4::translate(bp.x, bp.y, bp.z) * bq.toMat4());

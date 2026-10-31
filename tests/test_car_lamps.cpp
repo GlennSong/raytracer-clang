@@ -113,7 +113,7 @@ TEST_CASE(car_lamps_night_turn_combines_head_and_signal) {
 TEST_CASE(car_turn_side_geometry) {
     // PHYSICAL sides, in the world's right-handed frame: facing +Z the right
     // hand points toward -X (lab-measured — "+steer turns toward -x",
-    // driver_control.h). These used to pin the mirrored convention, which
+    // driver_agent.h). These used to pin the mirrored convention, which
     // cancelled against lamp marker tags that were swapped the same way.
     // Straight through: no side.
     CHECK(carTurnSide(Vec2(0, 1), Vec2(0, 1)) == 0);

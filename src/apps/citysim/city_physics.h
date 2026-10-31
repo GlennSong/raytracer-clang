@@ -101,7 +101,7 @@ private:
                        const std::vector<std::vector<int>>* agentIds = nullptr);
     // R5 (roads-v2.1): the PHYSICAL tier — the N moving drivers nearest the
     // player run on real Jolt wheeled vehicles, driven by the SAME plan the
-    // kinematic brains produce (driveTowards chases the sim's ghost); their
+    // kinematic brains produce (computeDriverInput chases the sim's ghost); their
     // render pose comes from the body (city_.setAgentPhysPose).
     void possessTier(engine::World& world, engine::Real dt);
     // #23: is a footprint of half extents (hx, hz) at (c, yaw) clear of every OTHER car -- the other possessed bodies and the

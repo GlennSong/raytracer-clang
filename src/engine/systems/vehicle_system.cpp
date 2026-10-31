@@ -332,10 +332,12 @@ void VehicleSystem::driveVehicles(FrameContext& ctx) {
             in.brake = brake;
             in.handBrake = hand;
         } else if (AgentDriver* ad = ctx.world.get<AgentDriver>(e)) {
-            // An AI brain drives it: turn what the brain WANTS (heading + speed)
-            // into the same pedal/wheel values through the shared controller, so
+            // An AI brain drives it: turn what the brain WANTS (a lane frame + speed)
+            // into the same pedal/wheel values through the one controller, so
             // this NPC car obeys identical physics to the player's.
             DriverState s;
+            const Vec3 at = pw.vehiclePosition(v.vehicleId);
+            s.pos = Vec2(at.x, at.z);
             Quat q = pw.vehicleOrientation(v.vehicleId);
             Vec3 fwd = q.rotate(Vec3(0, 0, 1));       // chassis forward in world
             s.forward = Vec2(fwd.x, fwd.z);

@@ -800,7 +800,7 @@ CarMesh buildCarMesh(const CarParams& p) {
     // SIDE NAMES ARE PHYSICAL. With the car's forward +Z and up +Y in this
     // right-handed world, the driver's LEFT is +X — measured, not derived: the
     // driving lab's steer-sign probe pinned "+steer turns toward -x" (see
-    // citysim/driver_control.h), and +steer is the RIGHT turn. These tags used
+    // engine/ai/driver_agent.h), and +steer is the RIGHT turn. These tags used
     // to be swapped (+X tagged "_r"), which made the player's car blink its
     // right indicator while steering left; citysim masked the same swap with a
     // mirrored turn-side convention (two flips cancelling — see carTurnSide).

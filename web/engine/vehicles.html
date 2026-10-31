@@ -546,10 +546,10 @@ impl-&gt;physicsSystem.AddStepListener(constraint);</pre>
         <text x="141" y="57" fill="#93a6ba" font-size="12">keys → shapeSteer (speed-limited lock)</text>
         <rect x="16" y="86" width="250" height="56" rx="9" fill="#131a24" stroke="#2c3d50"/>
         <text x="141" y="109" fill="#cfe4ff">An AgentDriver (possession)</text>
-        <text x="141" y="129" fill="#93a6ba" font-size="12">computeDriverInput(state, command)</text>
+        <text x="141" y="129" fill="#93a6ba" font-size="12">computeDriverInput(state, lane frame)</text>
         <rect x="16" y="158" width="250" height="56" rx="9" fill="#131a24" stroke="#2c3d50"/>
         <text x="141" y="181" fill="#cfe4ff">The city's physical tier</text>
-        <text x="141" y="201" fill="#93a6ba" font-size="12">driveTowards (Stanley), its own input</text>
+        <text x="141" y="201" fill="#93a6ba" font-size="12">computeDriverInput too (one controller)</text>
         <rect x="16" y="230" width="250" height="56" rx="9" fill="#131a24" stroke="#2c3d50"/>
         <text x="141" y="253" fill="#cfe4ff">Nobody at the wheel</text>
         <text x="141" y="273" fill="#93a6ba" font-size="12">brake = 1 (no creep on a slope)</text>
@@ -1111,7 +1111,7 @@ v.frontGrip = <span class="n">0.9f</span>;
     <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/apps/citysim/scripting/vehicle_body.h">src/apps/citysim/scripting/vehicle_body.h</a> — <code>CarBodyRecipe</code>, <code>loadFleetCarBody</code>, <code>selectFleet</code></li>
     <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/physics/physics_world.h">src/engine/physics/physics_world.h</a> / <a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/physics/physics_world.cpp">.cpp</a> — <code>VehicleConfig</code>, <code>addVehicle</code>, yaw assist, drift, drag, traction split</li>
     <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/systems/vehicle_system.cpp">src/engine/systems/vehicle_system.cpp</a> — create, drive, write back, enter/exit, picker, seat, engine and tyre sounds</li>
-    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/ai/driver_agent.h">src/engine/ai/driver_agent.h</a>, <a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/apps/citysim/driver_control.h">apps/citysim/driver_control.h</a> — the two AI controllers</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/ai/driver_agent.h">src/engine/ai/driver_agent.h</a> — the one AI driving controller (Stanley over a lane frame; ADR-0274)</li>
     <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/vehicle_steering.h">src/engine/vehicle_steering.h</a>, <a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/vehicle_lamps.h">vehicle_lamps.h</a> — the steering assist, the lamp predicate</li>
     <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/apps/citysim/city_vehicles.cpp">src/apps/citysim/city_vehicles.cpp</a> — promotion (<code>configFromBody</code>); <a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/apps/citysim/city_physics.cpp">city_physics.cpp</a> — the physical tier</li>
     <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/riding.h">src/engine/riding.h</a>, <a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/player/driver_seat.h">player/driver_seat.h</a> — riding, the seat's jolt and sway</li>

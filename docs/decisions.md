@@ -13480,3 +13480,52 @@ the car.
 - No bake changes: handling is read at load, and nothing is cached.
 - Owed: the two-tier pursuit and catch-up gains are still the sedan's (city_physics.cpp). Item 24 (one driving
   controller) is where they get looked at.
+
+## ADR-0274 — One AI driving controller: Stanley over a lane frame, for every AI driver
+
+#117 wave 2, item 24. Two controllers turned an AI's plan into pedals and wheel:
+- **`engine::computeDriverInput`** (driver_agent.h) steered by heading error alone, with soft pedals (throttle 0.5,
+  brake 0.35 per m/s), a full brake under 0.4 m/s and a turn slowdown built in. Only the possessed car used it:
+  CityPossessSystem's route → LaneFollower → pure pursuit → AgentDriver → VehicleSystem.
+- **`citysim::driveTowards`** (driver_control.h) used Stanley steering, heading error plus arctan(k · cross-track /
+  v), with a symmetric 0.9 pedal gain and a held brake at a stop, and had its own `DriverInput` type. The physical
+  traffic tier and the driving lab used it. In pursuit mode the tier already zeroed its cross-track term by starting
+  the lane at the car.
+
+The "retired pursuit / lane-follow stack" in the item's wording is not dead. `LaneFollower` and `pursuitCommand` are
+the possessed car's planner. They plan rather than actuate, and they stay.
+
+**Decision.** One controller, `computeDriverInput(DriverState, DriverCommand, DriverTuning)` in driver_agent.h:
+- **Stanley** with the lab-measured sign (+steer turns toward −x facing +z) and driveTowards' gains, which were
+  measured on Jolt in the lab and the tier soaks.
+- **The command is a lane frame and a speed.** `DriverCommand{laneA, laneB, desiredSpeed}`. Pure pursuit is the
+  frame from the car itself (`DriverCommand::toward`), where the cross-track term is zero. `DriverState` carries the
+  car's position.
+- **One `DriverInput`** (the engine's, with handBrake). citysim's type, `DriverGains`, `driveTowards` and
+  driver_control.h are deleted.
+- **The turn slowdown moved out of the controller** into `pursuitCommand`, since it is speed planning: brake for a
+  turn you haven't made. The tier has its own corner governor.
+- **The possessed car rides Stanley too.** "Keep Stanley if it measures better" (the #117 plan), and it did.
+  `pursuitCommand` now hands the controller the route's frame from the car's spot on the path (the follower's
+  station) to the lookahead point, so the cross-track term pulls it back onto the route.
+
+**Measured.** A real Jolt sedan on road friction round a two-right-angle route
+(`agent_driver_holds_a_cornering_route_on_real_physics`):
+
+| controller | mean drift off the route | worst | arrives | stops from the end |
+|---|---|---|---|---|
+| old: heading error, soft pedals | 0.40 m | 2.94 m | 23.3 s | 0.79 m |
+| one controller, pure-pursuit frame | 0.40 m | 2.99 m | 24.2 s | 0.57 m |
+| one controller, the route's frame (Stanley) | **0.28 m** | **2.70 m** | 24.4 s | 0.57 m |
+
+The physical tier was already on this law, and its soaks and pile-up test are unchanged: soak seed 7 is 2.4% of
+time more than 3 m behind its ghost, and the junction has 0 tipped, climbing or overlapping.
+
+**Tests.** The controller's unit tests, now on lane frames; `driver_steers_back_onto_its_lane_from_beside_it` (the
+cross-track term, which the heading-only controller lacked); `driver_holds_the_brake_at_a_stop`; the cornering route
+on Jolt; the bicycle-model pursuit and convoy harnesses; and the driving lab, all on the one controller.
+
+**Consequences.** No bake change. The possessed car keeps to its route more tightly through corners and accelerates a
+little more firmly (pedal gain 0.9). Still owed from ADR-0273: the tier's own chase laws (catch-up of half the gap
+per second up to 5 m/s, a 2.6 m/s² follower envelope, a 4 m/s² lateral corner governor) are constants. With launches
+planned per car they measure well, so they stay until something shows otherwise.

@@ -8,7 +8,7 @@
 using namespace engine;
 
 // Closed-loop driving quality (ADR-0062): a kinematic BICYCLE-MODEL car driven
-// by the real controller stack — LaneFollower (pure pursuit) -> DriverCommand ->
+// by the real controller stack — LaneFollower (pure pursuit) -> DriverCommand (a lane frame) ->
 // computeDriverInput -> vehicle. This is the headless stand-in for the Jolt car:
 // same controller, same sign conventions, a simple but honest plant (speed-
 // proportional yaw rate, bounded wheel angle, throttle/brake accel). If the car
@@ -48,9 +48,9 @@ DriverInput controlTick(LaneFollower& lf, const BikeCar& car, Real desiredSpeed,
                         Real* latOut = nullptr) {
     Real lat = lf.update(car.pos);
     if (latOut) *latOut = lat;
-    DriverCommand cmd = pursuitCommand(lf, car.pos, desiredSpeed,
+    DriverCommand cmd = pursuitCommand(lf, car.pos, car.fwd, desiredSpeed,
                                        pursuitLookahead(car.speed));
-    return computeDriverInput(DriverState{car.fwd, car.speed}, cmd);
+    return computeDriverInput(DriverState{car.pos, car.fwd, car.speed}, cmd);
 }
 
 std::vector<Vec2> straightPath(Real len, Real step = 5.0) {

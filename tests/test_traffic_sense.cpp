@@ -239,17 +239,17 @@ TEST_CASE(convoy_follower_never_rear_ends_its_leader) {
     for (int i = 0; i < 2000; ++i) {                     // 100 s
         // Leader: plain pursuit at 4 m/s.
         lfLead.update(lead.pos);
-        DriverCommand lc = pursuitCommand(lfLead, lead.pos, 4.0, pursuitLookahead(lead.speed));
-        lead.step(computeDriverInput(DriverState{lead.fwd, lead.speed}, lc), dt);
+        DriverCommand lc = pursuitCommand(lfLead, lead.pos, lead.fwd, 4.0, pursuitLookahead(lead.speed));
+        lead.step(computeDriverInput(DriverState{lead.pos, lead.fwd, lead.speed}, lc), dt);
 
         // Follower: pursuit at 9, capped by what it SEES ahead.
         lfFollow.update(follow.pos);
         std::vector<SensedBody> bodies = { body(lead.pos, lead.fwd, lead.speed, halfLen) };
         LeaderSense sensed = senseLeader(coneAt(follow.pos, follow.fwd), bodies);
         Real target = followSpeed(9.0, sensed, halfLen, bumper);
-        DriverCommand fc = pursuitCommand(lfFollow, follow.pos, target,
+        DriverCommand fc = pursuitCommand(lfFollow, follow.pos, follow.fwd, target,
                                           pursuitLookahead(follow.speed));
-        follow.step(computeDriverInput(DriverState{follow.fwd, follow.speed}, fc), dt);
+        follow.step(computeDriverInput(DriverState{follow.pos, follow.fwd, follow.speed}, fc), dt);
 
         Vec2 d = lead.pos - follow.pos;
         minGap = std::min(minGap, d.length());
