@@ -147,16 +147,10 @@ void Application::popState() {
 FrameContext Application::makeContext() {
     int winW = 0, winH = 0;
     window->getSize(winW, winH);
-    FrameContext ctx{
-        worldState, *rendererPtr, *assetManager, view, clock, settingsStore, jobs,
-        eventBus, debugLines, audioEngine, frameStats,
-        window->getInput(), inputMap, playerInputs, xrState,
-        framebufferWidth, framebufferHeight, winW, winH,
-        frameDelta, interpolation, quit, transitionRequest,
-        debugOverlayActive
-    };
-    ctx.commands = &commandTable;
-    return ctx;
+    return FrameOwners(worldState, *rendererPtr, *assetManager, view, clock, settingsStore, jobs, eventBus, debugLines,
+                       audioEngine, frameStats, window->getInput(), inputMap, playerInputs, xrState, quit,
+                       transitionRequest, &commandTable)
+        .context(framebufferWidth, framebufferHeight, winW, winH, frameDelta, interpolation, debugOverlayActive);
 }
 
 void Application::reconcileFramebuffer() {

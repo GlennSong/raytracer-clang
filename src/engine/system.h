@@ -106,6 +106,49 @@ struct FrameContext {
     ControlCommands* commands = nullptr;
 };
 
+// WHAT A FRAME RUNS ON (ADR-0292, #117 item 17): every owner a FrameContext refers to, named once by one
+// constructor, and the one place a context is built from them (context()). The app builds its frames here
+// (Application::makeContext), and so does a rig that drives the systems without a window (test_player_trace) -- so
+// a field added to FrameContext is set for both, and leaving an owner out is a compile error, not a silent null.
+struct FrameOwners {
+    FrameOwners(World& world, Renderer& renderer, AssetManager& assets, RenderView& view, SimClock& clock,
+                Settings& settings, JobSystem& jobs, EventBus& events, DebugDraw& debug, AudioEngine& audio,
+                FrameStats& stats, const InputState& input, InputMap& actions, PlayerInputs& players, XrState& xr,
+                bool& quit, StateTransition& transition, ControlCommands* commands)
+        : world(world), renderer(renderer), assets(assets), view(view), clock(clock), settings(settings), jobs(jobs),
+          events(events), debug(debug), audio(audio), stats(stats), input(input), actions(actions), players(players),
+          xr(xr), quit(quit), transition(transition), commands(commands) {}
+
+    // This frame's context: the framebuffer's and the window's size, the step, the blend between fixed steps.
+    FrameContext context(int framebufferWidth, int framebufferHeight, int windowWidth, int windowHeight,
+                         double frameDelta, double interpolation, bool debugOverlayActive) const {
+        FrameContext c{world, renderer, assets, view, clock, settings, jobs, events, debug, audio, stats,
+                       input, actions, players, xr, framebufferWidth, framebufferHeight, windowWidth, windowHeight,
+                       frameDelta, interpolation, quit, transition, debugOverlayActive};
+        c.commands = commands;
+        return c;
+    }
+
+    World& world;
+    Renderer& renderer;
+    AssetManager& assets;
+    RenderView& view;
+    SimClock& clock;
+    Settings& settings;
+    JobSystem& jobs;
+    EventBus& events;
+    DebugDraw& debug;
+    AudioEngine& audio;
+    FrameStats& stats;
+    const InputState& input;
+    InputMap& actions;
+    PlayerInputs& players;
+    XrState& xr;
+    bool& quit;
+    StateTransition& transition;
+    ControlCommands* commands;
+};
+
 // The conditions a frame capture was taken under, as a one-line
 // `key=value` string for the capture's header (see FrameStats::startCapture).
 // Defined once (application.cpp) and used by every place that starts a

@@ -14003,3 +14003,14 @@ Six probe tools also each launched a viewer and waited for its socket in the sam
 - `live_sockets` and `newest` find running viewers by their pid, and leave stale socket files alone;
 - `launch` starts a viewer and waits for its socket;
 - `stop` ends the tool's own viewer, by its process.
+
+## ADR-0292 — One way to build a frame: FrameOwners
+
+#117 wave 1, item 17: "test_player_trace's Rig → build its context with Application::makeContext, so it can't
+drift." `makeContext` needs a window, which a test rig has none of, so the test copied its aggregate initialiser.
+The copy had already drifted: makeContext sets `commands`, the control channel's table, and the rig never did.
+
+**Decision.** `FrameOwners` (system.h) names everything a frame refers to in one constructor, so leaving an owner
+out is a compile error, not a silent null. `context()` builds the FrameContext, including the fields a positional
+initialiser defaults silently. `Application::makeContext` and the trace rig both build through it; the rig now
+carries a command table.
