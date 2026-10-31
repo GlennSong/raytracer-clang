@@ -2197,10 +2197,9 @@ static void loadForest(const json& fj, const TerrainParams& terrain, const Noise
     for (const ForestSpecies& s : fp.species) vps = std::max(vps, s.variants);
     const int nVar = static_cast<int>(fp.species.size()) * vps;
     // a variant's near parts: its bark and leaves, or a recipe tree's levels' (tree_lods.h), each an instanced draw
-    struct Part { MeshHandle mesh; RenderMaterial mat; double drawM = 0, minM = 0; };
     // `shade`: the impostor's colour scale -- a recipe tree's crown is darkened inside by real shadows, which the
     // impostor's picture (rasterised unlit, then lit as one card) never had
-    struct Var { std::vector<Part> parts; int species = -1; ImpostorSlot slot; RealTree tree; double shade = 1.0; };
+    struct Var { std::vector<RecipeTreePart> parts; int species = -1; ImpostorSlot slot; RealTree tree; double shade = 1.0; };
     std::vector<Var> vars(nVar);
     std::vector<TextureHandle> folTex(fp.species.size());
     std::vector<TextureData> folData(fp.species.size());
@@ -2303,9 +2302,8 @@ static void loadForest(const json& fj, const TerrainParams& terrain, const Noise
                         : growRecipeLevels(variantRecipes[static_cast<std::size_t>(v)], seed, {}, bands, true, &branchCards);
                 if (!hit && cacheKey) grown.push_back(levels);
                 const std::string key = "forest:recipe:" + fs.recipe + ":" + std::to_string(fp.seed) + ":" + std::to_string(v);
-                for (const RecipeTreePart& pt : recipeTreeParts(levels, key, wood, barkMat, leafTex, reach - reachFade, reach,
-                                                                reach + 10.0, renderer, assets))
-                    var.parts.push_back({pt.mesh, pt.mat, pt.drawM, pt.minM});
+                var.parts = recipeTreeParts(levels, key, wood, barkMat, leafTex, reach - reachFade, reach, reach + 10.0,
+                                            renderer, assets);
                 // the impostor's tree: the light level, measured as real_tree.h measures its own
                 const TreeMesh& lt = levels.back().tree;
                 RealTree& rt = var.tree;
@@ -2593,7 +2591,7 @@ static void loadForest(const json& fj, const TerrainParams& terrain, const Noise
             cen = cen / static_cast<Real>(per[v].size());
             Real spread = 0;
             for (const Mat4& m : per[v]) spread = std::max(spread, (Vec3(m.m[0][3], m.m[1][3], m.m[2][3]) - cen).length());
-            for (const Part& part : vars[v].parts) {
+            for (const RecipeTreePart& part : vars[v].parts) {
                 InstanceGroup g;
                 g.mesh = part.mesh;
                 g.material = part.mat;
