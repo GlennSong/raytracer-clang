@@ -67,8 +67,9 @@ void TrainSystem::build(engine::FrameContext& ctx) {
         tracks.insert(tracks.end(), rt.tracks.begin(), rt.tracks.end());
     });
     if (tracks.empty()) return;
-    // THE STOCK, per line by its track's class: a metro's subway, a city line's light rail, else intercity (RT_TRAIN_KIND
-    // puts one kind on every line, for a look at the others on the same rails)
+    // THE STOCK, per line by its track's class: a city line's light rail, else intercity. "metro" -> subway is a hook for
+    // a graph that authors a metro track class; no built-in class is called that (road_graph_spec.cpp: rail, light_rail).
+    // RT_TRAIN_KIND puts one kind on every line, for a look at the others on the same rails.
     auto kindOf = [](const std::string& cls) {
         std::string name = cls == "metro" ? "subway" : cls == "light_rail" ? "light_rail" : "intercity";
         if (const char* k = std::getenv("RT_TRAIN_KIND")) name = k;

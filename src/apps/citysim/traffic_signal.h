@@ -9,8 +9,9 @@ namespace citysim {
 
 enum class SignalState { Green, Yellow, Red };
 
-// A movement through a junction, in the nav graph's frame (traffic keeps right: a LEFT turn crosses
-// the oncoming stream).
+// A movement through a junction, named in the nav graph's maths frame like rightOf (moveOf: Left =
+// counter-clockwise in x/z). Traffic keeps LEFT, so Move::Left is the DRIVER'S right turn -- the one that
+// crosses the oncoming stream -- and every "left turn"/"left arrow" below means that movement.
 enum class Move { Left, Straight, Right };
 Move moveOf(const engine::Vec2& in, const engine::Vec2& out);
 

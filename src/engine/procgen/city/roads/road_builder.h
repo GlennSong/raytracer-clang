@@ -13,7 +13,8 @@
 #include <string_view>
 #include <vector>
 
-// The roads module: ONE interface, several builders (docs/road-module-plan.md).
+// The roads module: ONE interface and, since the lattice retired, one builder
+// behind it -- lanes (docs/road-module-plan.md; ADR-0089 and its 2026-10-14 note).
 //
 // A level's road entity is PLANNED the same way whatever builds it — the
 // "generate" recipe runs (applyGenerateRecipe) and leaves a RoadGraph on the
@@ -37,8 +38,7 @@ struct RoadBuildInput {
     const RoadEntity* road = nullptr;
     RoadGroundFn ground;                  // null = flat
     nlohmann::json options = nlohmann::json::object();
-    // The level this road belongs to. The lattice ignores it; the lanes builder
-    // needs it, because a lane-built city is produced once per LEVEL through the
+    // The level this road belongs to. The lanes builder needs it, because a lane-built city is produced once per LEVEL through the
     // bundle (ADR-0084) rather than per entity — the same products the loader,
     // rt_bake and the editor's bake button all read.
     nlohmann::json level = nlohmann::json::object();
@@ -50,11 +50,10 @@ struct RoadBuildInput {
     int entityIndex = -1;
 };
 
-// One piece of built road. The lattice welds a city into a single mesh; the lanes
-// builder emits one per (render cell x material), because a lane-built city is
-// asphalt, kerb, sidewalk, median, paint and guardrail as separate surfaces and
-// the renderer wants them separate too. So the product is a LIST, and the lattice
-// returns a list of one.
+// One piece of built road. The lanes builder emits one per (render cell x
+// material), because a lane-built city is asphalt, kerb, sidewalk, median, paint
+// and guardrail as separate surfaces and the renderer wants them separate too.
+// So the product is a LIST.
 struct RoadMesh {
     RenderMesh mesh;
     std::string name = "road";       // the material/part this is ("asphalt", "paint", ...)
@@ -83,7 +82,8 @@ struct RoadProducts {
 //
 //   carve    the level's terrain stays the level's; these are the patches to
 //            press into it ("inside this polygon the ground is this plane,
-//            feathering back to natural over N m"). The lattice works this way.
+//            feathering back to natural over N m"). The retired lattice worked
+//            this way; no builder fills it today.
 //   replace  the builder MADE the ground: a baked grid of absolute heights with
 //            the cut and fill already in it, for the terrain to use as its base
 //            inside the grid's bounds. The lane builder works this way — it
@@ -110,10 +110,9 @@ public:
     virtual GroundPlan ground(const RoadBuildInput& in) const = 0;
     // The centrelines everything routes on: nav, traffic, furniture, signs, map.
     virtual RoadGraph navGraph(const RoadBuildInput& in) const = 0;
-    // Is that graph THE level's road graph? The lattice says no: its navGraph is
-    // navRoadGraph(), the same function the loader applies downstream to every
-    // RoadEntity in the world, so publishing it here would only pre-empt that. A
-    // builder that paves a city says yes — its graph is the twin of what it
+    // Is that graph THE level's road graph? The default says no: the loader then
+    // applies navRoadGraph() downstream to every RoadEntity in the world, as it
+    // did for the retired lattice. A builder that paves a city (lanes) says yes — its graph is the twin of what it
     // actually built, and nothing downstream can re-derive that from the recipe.
     virtual bool ownsNavGraph() const { return false; }
 };

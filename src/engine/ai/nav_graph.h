@@ -67,8 +67,8 @@ struct NavLink {
     // Kerbside PARKING band of the source road (RoadEdge::parkOffset/parkWidth,
     // resolved from its RoadSpec). parkWidth 0 = this road has no parking, and
     // the sim must not put a bay on it. `parkOffset` is measured from the
-    // carriageway centreline toward the RIGHT of travel — the same side each
-    // directed link parks on — so a bay centre is
+    // carriageway centreline toward the KERB side of travel (rightOf: the
+    // driver's left) — the same side each directed link parks on — so a bay centre is
     // pointOnLink(t) + rightOf(direction) * parkOffset, and nothing else needs
     // to know how the cross-section is laid out.
     Real parkOffset = 0;
@@ -149,12 +149,13 @@ struct NavGraph {
     Vec2 pointOnLink(int link, Real t) const;
 
     // Centre of lane `lane` (0 = lane nearest the road centreline) at param t,
-    // offset to the driving side. Right-hand traffic: lanes sit to the RIGHT of
-    // the travel direction, lane i at (0.5 + i) * laneWidth from the centreline.
+    // offset to the driving side. Traffic keeps LEFT: on a two-way link lanes sit
+    // on the kerb side (rightOf, the driver's left), lane i at (0.5 + i) * laneWidth
+    // from the centreline; a one-way link's lanes span its width, centred on the chain.
     Vec2 laneCenter(int link, int lane, Real t, Real laneWidth = 3.5) const;
 
     // A pedestrian point at param t: on the verge just outside the kerb, on the
-    // right of travel. `verge` is the extra offset beyond the carriageway edge.
+    // kerb side of travel (rightOf: the driver's left). `verge` is the extra offset beyond the carriageway edge.
     Vec2 sidewalkPoint(int link, Real t, Real verge = 1.0) const;
 
     // THE WALKS (campus gap pass; Glenn: students should cross the quad): footpath segments (world XZ, a -> b, their

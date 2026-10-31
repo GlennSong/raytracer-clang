@@ -39,18 +39,17 @@ std::vector<LaneMoves> assignLaneMoves(std::size_t lanes, bool hasLeft, bool has
 // The parapet runs the mesher sweeps: a chain of deck-boundary points on an elevated freeway or ramp lane.
 // Exposed so a diagnostic can ask where a wall ENDS — a run whose cap sits on same-level pavement is a wall
 // standing in the middle of drivable road ("the freeway walls end up blocking the car", Glenn, 2026-09-07).
-// What a freeway or ramp deck edge FACES (2026-09-08). Today one geometric rule builds one product — a
-// 0.9 m parapet wherever the deck stands 1.5 m clear of the ground — so an at-grade freeway beside a
-// frontage road gets nothing at all (metro: 45 % of freeway edge carries anything). Naming the role is the
-// first half of an edge grammar: the class table then says what to build for each (Glenn, 2026-09-08:
-// "if it's a lane on the interior or exterior edge it should build some kind of wall/barrier/fence").
-// Freeway and ramp classes only; streets are the lot pass's business.
+// What a freeway or ramp deck edge FACES (2026-09-08). It began as one geometric rule — a 0.9 m parapet
+// wherever the deck stood 1.5 m clear of the ground — which left an at-grade freeway bare. Naming the role
+// is the edge grammar: the class table says what to build for each (barrierFor in deck_mesh.cpp; Glenn,
+// 2026-09-08: "if it's a lane on the interior or exterior edge it should build some kind of wall/barrier/fence").
+// Freeway and ramp classes by default, plus any class that authors a barrier; streets are the lot pass's business.
 enum class EdgeRole : uint8_t {
     Seam = 0,    // same-level pavement just beyond: not an edge of the structure at all, never walled
     Median,      // faces the other carriageway of the same freeway across the median
     VsStreet,    // faces a street, collector or arterial within reach — the freeway/city separation
     Elevated,    // outward edge of a deck standing clear of the ground: structure, needs a parapet
-    AtGrade,     // outward edge sitting on the ground with nothing beyond: today gets nothing
+    AtGrade,     // outward edge sitting on the ground with nothing beyond: a guardrail by default (ADR-0220)
     Count_
 };
 const char* edgeRoleName(EdgeRole role);
