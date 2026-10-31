@@ -13694,3 +13694,30 @@ Measured on 2026-10-31:
 everything routed on it, is unchanged. The gate's suites, which build cities through it, pass.
 
 **Consequences.** No bake change. The old pass also had nothing on the poke report, which reads the lanes deck.
+
+## ADR-0279 — One drainage flood: floodDrainage; stream power runs on it, hydrology joins at the next river re-bake
+
+#117 wave 2, item 21. Two priority floods routed water over a height grid, line for line the same algorithm:
+- `streamPowerErode` (stream_power.cpp), the mountain-growing erosion and the terrain maps' drainage, flooded with
+  a 1e-4 per metre rise so a filled hollow slopes to its spill;
+- `computeHydrology` (hydrology.cpp), the rivers and lakes, flooded level (no rise) so a lake stays flat.
+
+**Decision.** `floodDrainage` (procgen/drainage.{h,cpp}) is the one flood: outlets in, 8 neighbours, each cell
+filled to the higher of its own height and its receiver's plus the rise, a receiver tree visited outlets first.
+`DrainageFlood` keeps its buffers so stream power's repeated floods reuse them. Stream power calls it now.
+
+**Proof.** Stream power's output is byte-identical: checksums of the eroded field before and after match, on a
+deterministic run (346df7b3b4266a8c) and a stochastic one (c5c5ae938074ca1b).
+
+**Hydrology waits.** Its own flood broke ties in a different neighbour order, so switching it moves rivers where
+they cross a perfectly flat filled basin. Measured on island_8_nature: 21 rivers both ways, the 5 lakes identical,
+29.33 km of river against 29.68 km, over 90 % of the river nodes unmoved, a few short stretches shifted, and one
+379 m stub swapped for a 149 m one. Cosmetic, but the river trench is baked into the ground while the water is
+computed at load, so it cannot ship without bumping `kHydroCarveCodeTag`. That means re-baking the island_8
+variants and river_valley. The switch is held, written and measured, until that re-bake is batched with the roads
+follow-ups (#167, #142).
+
+**Not merged.** `breachDepressions` (erosion_gpu_vk.cpp, ADR-0124) also floods from the outlets, but it is a
+different job: it cuts the ground along the flood's path as it goes, over 4 neighbours, to drain a hollow.
+
+**Consequences.** No bake change now.
