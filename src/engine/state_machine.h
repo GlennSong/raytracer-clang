@@ -17,8 +17,8 @@ namespace engine {
 // no hooks is pure data and trivially serializable.
 //
 // Deliberately NOT here: timers, utility scores, hysteresis. Cadence lives
-// with the caller (the sim's think clock), and utility choice with hysteresis
-// is Commitment (ADR-0063) — compose them, don't merge them.
+// with the caller (the sim's think clock), and so does utility choice with
+// hysteresis (ADR-0063's Commitment was never wired and retired in #117 wave 0).
 //
 // Deterministic: transitions fire in the order they were added; the first
 // whose guard passes wins. No hidden clocks, no randomness.

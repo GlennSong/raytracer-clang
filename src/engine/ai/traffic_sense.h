@@ -37,46 +37,9 @@ struct LeaderSense {
     bool yieldAlways = false;
 };
 
-// Scan `bodies` from a forward cone and return the nearest relevant one:
-//  - ahead, inside the cone, and laterally within `lateralMax` of my forward
-//    axis (my lane — not the oncoming or adjacent one);
-//  - travelling my way, OR (nearly) stationary. Moving cross/oncoming traffic
-//    is deliberately NOT a leader — braking for it deadlocks junctions (the
-//    same lesson as the planner's cone); a stopped anything in my lane is an
-//    obstacle no matter which way it points.
-// `skip` excludes the sensing car's own entry.
-inline LeaderSense senseLeader(const VisionCone& cone, const std::vector<SensedBody>& bodies,
-                               Real lateralMax = 2.2, Real stationarySpeed = 1.0,
-                               int skip = -1) {
-    LeaderSense out;
-    Real best = 1e30;
-    for (std::size_t i = 0; i < bodies.size(); ++i) {
-        if (static_cast<int>(i) == skip) continue;
-        const SensedBody& b = bodies[i];
-        if (!sees(cone, b.pos)) continue;
-        if (forwardDistance(cone, b.pos) <= 0.1) continue;
-        Vec2 d = b.pos - cone.origin;
-        Real lat = std::fabs(cone.forward.x * d.y - cone.forward.y * d.x);
-        if (lat > lateralMax) continue;
-        Real align = dot(cone.forward, b.heading);
-        if (b.speed > stationarySpeed && align < 0.5) continue;
-        Real centreDist = d.length();
-        if (centreDist < best) {
-            best = centreDist;
-            out.found = true;
-            out.gap = centreDist;
-            out.speed = align > 0 ? b.speed * align : 0.0;
-            out.halfLength = b.halfLength;
-            out.align = align;
-            out.yieldAlways = b.yieldAlways;
-        }
-    }
-    return out;
-}
-
 // Corridor sensing ALONG THE PURSUIT PATH (the sharper tool when a path exists):
 // the nearest body within `corridorHalf` of the lane polyline over the next
-// `range` metres of path. Unlike the straight cone this bends with the road — a
+// `range` metres of path. Unlike a straight cone (senseLeader, retired in #117 wave 0) this bends with the road — a
 // stopped queue in the ONCOMING lane of a curve never reads as "ahead of me"
 // (with a straight cone it does, and two such queues freeze each other), and a
 // body only blocks me if it actually sits on MY lane's path. `gap` comes back as

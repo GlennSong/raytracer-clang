@@ -60,8 +60,8 @@ inline std::vector<PromotedLamp> promotedLamps(
 // (The earlier all-dynamic bridge — every NPC car a Jolt vehicle chasing a
 // planner ghost through tether/pursuit/station control — is retired: two clocks
 // over one body needed endless reconciliation and jammed junctions. The
-// pursuit/sensing controller stack remains in engine/ai, harness-tested, for
-// promoted DYNAMIC cars that need AI driving later, e.g. hit reactions.)
+// pursuit/sensing controller stack in engine/ai lives on: it drives the
+// possessed car (city_possess, ADR-0079).)
 //
 // Viewer/editor only (needs Jolt via PhysicsSystem/VehicleSystem), not
 // engine_core. UNVERIFIED on device, like the rest of the Jolt path.

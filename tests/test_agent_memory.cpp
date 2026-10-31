@@ -1,7 +1,6 @@
 #include "test_framework.h"
 
 #include "../src/engine/ai/agent_memory.h"
-#include "../src/engine/ai/commitment.h"
 
 #include <cmath>
 #include <vector>
@@ -75,73 +74,20 @@ TEST_CASE(memory_caps_tracks_by_evicting_the_weakest) {
 
 // --- predict ----------------------------------------------------------------
 
-TEST_CASE(closest_approach_and_ttc_for_head_on_bodies) {
-    // Two bodies 20 m apart closing at a combined 10 m/s: nearest (touching) at
-    // 2 s; with 1 m combined radius they collide at (20-1)/10 = 1.9 s.
-    Approach a = closestApproach(Vec2(0, 0), Vec2(5, 0), Vec2(20, 0), Vec2(-5, 0));
-    CHECK(std::fabs(a.time - 2.0) < 1e-9);
-    CHECK(a.distance < 1e-9);
+TEST_CASE(ttc_for_head_on_bodies) {
+    // Two bodies 20 m apart closing at a combined 10 m/s: with 1 m combined
+    // radius they collide at (20-1)/10 = 1.9 s.
     Real ttc = timeToCollision(Vec2(0, 0), Vec2(5, 0), Vec2(20, 0), Vec2(-5, 0), 1.0);
     CHECK(std::fabs(ttc - 1.9) < 1e-9);
 }
 
 TEST_CASE(prediction_knows_a_miss_from_a_hit) {
-    // Crossing paths that miss by 4 m: a real closest approach, but no collision.
-    Approach a = closestApproach(Vec2(0, 0), Vec2(4, 0), Vec2(10, 4), Vec2(0, 0));
-    CHECK(std::fabs(a.distance - 4.0) < 1e-9);
+    // Crossing paths that miss by 4 m: no collision.
     CHECK(timeToCollision(Vec2(0, 0), Vec2(4, 0), Vec2(10, 4), Vec2(0, 0), 1.0) >
           1e9);   // never
-    // Diverging bodies are closest NOW; overlap means TTC zero.
-    Approach d = closestApproach(Vec2(0, 0), Vec2(-1, 0), Vec2(5, 0), Vec2(1, 0));
-    CHECK(d.time == 0.0);
+    // Overlap means TTC zero.
     CHECK(timeToCollision(Vec2(0, 0), Vec2(1, 0), Vec2(0.5, 0), Vec2(0, 0), 1.0) == 0.0);
 }
-
-// --- decide -----------------------------------------------------------------
-
-TEST_CASE(commitment_suppresses_flip_flopping) {
-    // Two options trading a hair's advantage every tick — the classic
-    // oscillation. The committed choice must never flap.
-    Commitment c;
-    c.minHold = 1.0;
-    c.switchMargin = 0.2;
-    int first = c.choose({0.50, 0.49}, 0.0);
-    CHECK(first == 0);
-    int switches = 0, prev = first;
-    for (int i = 1; i <= 100; ++i) {
-        Real a = (i % 2) ? 0.49 : 0.51;    // lead alternates by 0.02 (< margin)
-        Real b = (i % 2) ? 0.51 : 0.49;
-        int now = c.choose({a, b}, 0.1 * i);
-        if (now != prev) ++switches;
-        prev = now;
-    }
-    CHECK(switches == 0);
-}
-
-TEST_CASE(commitment_switches_for_a_sustained_clear_winner) {
-    Commitment c;
-    c.minHold = 1.0;
-    c.switchMargin = 0.2;
-    CHECK(c.choose({1.0, 0.0}, 0.0) == 0);
-    // A decisively better option appears, but the hold protects the incumbent...
-    CHECK(c.choose({0.2, 1.0}, 0.5) == 0);
-    // ...until the hold expires — then the agent visibly changes its mind, once.
-    CHECK(c.choose({0.2, 1.0}, 1.1) == 1);
-    CHECK(c.heldFor(1.5) > 0.3);
-}
-
-TEST_CASE(commitment_emergency_preempts_the_hold) {
-    Commitment c;
-    c.minHold = 5.0;
-    CHECK(c.choose({1.0, 0.0}, 0.0) == 0);
-    // An imminent-collision re-decide overrides the hold instantly.
-    CHECK(c.choose({0.0, 1.0}, 0.2, /*emergency=*/true) == 1);
-    // An emergency that CONFIRMS the current choice doesn't reset its clock.
-    c.choose({0.0, 1.0}, 0.4, true);
-    CHECK(c.heldFor(0.4) > 0.15);
-}
-
-// --- the 2.5D sensor ----------------------------------------------------------
 
 TEST_CASE(sensor_volume_gates_on_height) {
     SensorVolume s;
