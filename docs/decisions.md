@@ -13529,3 +13529,44 @@ on Jolt; the bicycle-model pursuit and convoy harnesses; and the driving lab, al
 little more firmly (pedal gain 0.9). Still owed from ADR-0273: the tier's own chase laws (catch-up of half the gap
 per second up to 5 m/s, a 2.6 m/s² follower envelope, a 4 m/s² lateral corner governor) are constants. With launches
 planned per car they measure well, so they stay until something shows otherwise.
+
+## ADR-0275 — One way of sitting in a vehicle: the driver rides the car, and every rider is thrown in the seat
+
+#117 wave 2, item 26. Two seat paths, and two "follow the vehicle as drawn" paths:
+- **A passenger** (bus, cab, car seat, train) was a `Passenger` of the riding component (ADR-0243). Its owner set
+  the carrier, and `rideStep` pinned the rider each step; `RidingSystem` drew them on the carrier as drawn. Nothing
+  happened to them in the seat: a bus could stop dead and its riders sat still.
+- **The driver** (`InVehicle`) was not a rider. VehicleSystem kept its own seat jolt and sway (ADR-0252), and
+  PlayerBodySystem kept its own copy of "the car as drawn this frame" (the car's PrevTransform slerped by the
+  interpolation) to sit the body in.
+
+**Decision.** One way of sitting.
+- **The driver rides the car.** On getting in, VehicleSystem gives the player a `Passenger`: sat at the car's hip
+  point, a car seat, with the view not turned by the carrier (`Passenger::turnsView`, false at the wheel, where the
+  chase rig frames the car). Each step `stepSeat` sets the carrier to the car's frame and calls `rideStep`, like the
+  transit and train systems do. Getting out or being thrown off takes the Passenger away with `InVehicle`, which
+  stays to mean "at the controls". The pinned capsule cannot push the car: a `CharacterVirtual` owns no body.
+- **The seat's sway and jolt are the riding component's.** `RideJolt` and `SeatSway` move to `player/seat_motion.h`,
+  and `Passenger` carries them. `rideStep` (now taking the step length) measures the carrier's velocity from its own
+  frames, throws the body against its change in the carrier's own axes, and keeps the jolt over the last moment. A
+  jump between carriers (a gangway) starts them afresh. VehicleSystem's own copies are gone: its eject rule reads
+  `Passenger::joltNow`, and the pose reads `Passenger::sway`.
+- **Every seated rider is thrown in the seat.** `seatedOccupantPose` takes the rider's sway and hands it to the
+  driver's `seatedPose`, the one sway rule. A bus pulling up or a cab cornering lurches its passengers as a hard stop
+  lurches the driver.
+- **One "vehicle as drawn".** `RidingSystem`'s render keeps the carrier as drawn (`Passenger::drawn`), and
+  PlayerBodySystem sits the driver's body in it. Its own interpolation of the car is deleted.
+
+**Tests.**
+- `every_rider_is_thrown_forward_when_the_carrier_brakes`: a rider on a carrier braking at 1 g leans 0.073 m, the
+  driver's seat rule exactly, in the carrier's own frame (a carrier facing +x braking along +x still throws them
+  forward, never sideways), and the stop is no crash.
+- `a_jump_between_carriers_starts_the_seat_afresh`.
+- The driver-seat, ride, train and bench suites pass unchanged.
+
+**Seen.** Probe in movement_lab: the drop-menu convertible entered, the driver's body seated in the right-hand seat
+standing still, and reversing at 27 km/h through a turn. Getting out works. The seat measures the same as before.
+(The first "stuck" run was the car spawned nose-on to the lab's obstacle row.)
+
+**Consequences.** No bake change. Riders on buses, cabs and trains lean when their carrier accelerates, brakes or
+corners. The camera is untouched: the sway moves the body, not the first-person eye.

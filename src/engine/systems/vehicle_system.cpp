@@ -15,6 +15,7 @@
 
 #include "../components.h"
 #include "../player_pose.h"
+#include "../riding.h"   // rideStep: the driver rides the car like any rider
 #include "../asset_manager.h"
 #include "../mesh_builder.h"
 #include "physics_system.h"
@@ -36,6 +37,11 @@
 #endif
 
 namespace engine {
+
+namespace {
+// The driver's eye over the hip (Passenger::eyeAbove, sitting), as a seated passenger's.
+constexpr Real kDriverEyeAboveHip = 0.74;
+}  // namespace
 
 void VehicleSystem::onStart(FrameContext& ctx) {
     onSpawn_ = ctx.events.listen<VehicleSpawnRequest>([this](const VehicleSpawnRequest& r) {
@@ -597,6 +603,7 @@ void VehicleSystem::handleEnterExit(FrameContext& ctx) {
         }
         cameras.clearFollowTarget();
         ctx.world.remove<InVehicle>(player);   // structural — after the each() above
+        if (ctx.world.has<Passenger>(player)) ctx.world.remove<Passenger>(player);   // (out of the seat)
     } else {
         // --- get in: the nearest car within reach, occupied by an AI or not ---
         // The player can commandeer ANY car. An AI-driven car counts (we eject its
@@ -621,15 +628,22 @@ void VehicleSystem::handleEnterExit(FrameContext& ctx) {
                 bt.orientation.rotate(Vec3(0, 1, 0)).y < std::cos(v.config.maxLeanDegrees * 0.0174533))
                 physicsSys.physicsWorld().resetVehicleUpright(v.vehicleId, 0.3);
             bikeUpright_ = false;
-            jolt_.reset();
-            sway_.reset();
-            haveSeatVel_ = false;
             v.driver = player;
             cameras.setFollowTarget(best);
             // a bike's chase sits closer than a car's (the car's 8 m left a motorcycle a speck)
             if (ctx.world.get<Vehicle>(best)->config.twoWheeler) cameras.setFollowFraming(4.0, 1.0);
             else cameras.setFollowFraming(8.0, 1.2);
             ctx.world.add<InVehicle>(player, InVehicle{best});   // structural
+            // IN THE SEAT: a rider of the car (engine/riding.h), sat at its hip point; the chase rig frames the car,
+            // so the view does not go round with it. stepSeat sets the carrier each step.
+            Passenger seated;
+            seated.sitting = true;
+            seated.carSeat = true;
+            seated.eyeAbove = kDriverEyeAboveHip;
+            seated.hipBelow = kDriverEyeAboveHip - kRiderEyeAboveCentre;
+            seated.turnsView = false;
+            if (Passenger* was = ctx.world.get<Passenger>(player)) *was = seated;
+            else ctx.world.add<Passenger>(player, seated);
         }
     }
 }
@@ -648,22 +662,24 @@ void VehicleSystem::stepSeat(FrameContext& ctx) {
     Vehicle* v = player.valid() && ride.valid() && ctx.world.alive(ride) ? ctx.world.get<Vehicle>(ride) : nullptr;
     const Transform* rt = v ? ctx.world.get<Transform>(ride) : nullptr;
     if (!v || !rt || v->vehicleId == PhysicsWorld::INVALID_VEHICLE) return;
+    Passenger* ps = ctx.world.get<Passenger>(player);
+    if (!ps) return;
     const Real dt = ctx.clock.fixedStep();
     const Vec3 vel = physicsSys.physicsWorld().vehicleVelocity(v->vehicleId);
-    Vec3 before;
-    const Real jolt = jolt_.step(vel, dt, &before);
-    // the sway: thrown against this step's change, in the vehicle's own frame
-    const Vec3 dv = haveSeatVel_ ? rt->orientation.conjugate().rotate(vel - seatVel_) : Vec3(0, 0, 0);
-    seatVel_ = vel;
-    haveSeatVel_ = true;
-    sway_.step(dv, dt);
+    // the driver rides the car: the carrier this step, the hip point in it -- the pin, and the sway and jolt the seat
+    // throws the body into, are the riding component's (rideStep)
+    ps->carrier = rt->matrix();
+    ps->local = v->hipPoint();
+    rideStep(ctx.world, &physicsSys.physicsWorld(), player, nullptr, dt);
+    const Real jolt = ps->joltNow;
+    const Vec3 before = ps->joltBefore;
     // a bicycle's cranks go round while it is pedalled (the wheel's turn, geared down)
     if (v->seat.pedals && v->throttle > 0.05) crank_ += v->speed * dt / (6.2832 * 0.34 * 2.6);
     if (PlayerPose* pose = ctx.world.get<PlayerPose>(player)) {
         pose->mode = PlayerPose::Mode::Drive;
         pose->handsFree = 0;
-        pose->seatLean = sway_.lean;
-        pose->seatNod = sway_.nod;
+        pose->seatLean = ps->sway.lean;
+        pose->seatNod = ps->sway.nod;
         pose->steer = v->steerApplied;
         pose->crank = crank_;
         pose->velocity = vel;
@@ -678,7 +694,6 @@ void VehicleSystem::stepSeat(FrameContext& ctx) {
     const bool hit = jolt > ejectTolerance(v->config.twoWheeler, v->openSeat, ctx.settings.getBool("vehicle.windscreen", true));
     if (!down && !hit) return;
     const Vec3 thrown = hit ? ejectThrow(before, true) : ejectThrow(vel, false);
-    jolt_.reset();
     v->driver = Entity{};
     if (CharacterController* cc = ctx.world.get<CharacterController>(player)) {
         // off the seat and clear of the body: the capsule's feet just over its top (a convertible's doors are a
@@ -690,6 +705,7 @@ void VehicleSystem::stepSeat(FrameContext& ctx) {
     }
     cameras.clearFollowTarget();
     ctx.world.remove<InVehicle>(player);
+    ctx.world.remove<Passenger>(player);   // (thrown out of the seat)
     LimpRequest limp;
     limp.thrown = true;
     limp.velocity = thrown;

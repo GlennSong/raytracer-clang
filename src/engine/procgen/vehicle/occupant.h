@@ -3,6 +3,7 @@
 
 #include "../../../renderer/renderer.h"
 #include "../../../rt_math.h"
+#include "../../player/seat_motion.h"   // SeatSway
 
 namespace engine {
 
@@ -46,8 +47,9 @@ OccupantParams chairOccupant();
 OccupantParams carPassenger();
 struct BodyPose;
 // The body's pose in the seat (the hip at the origin), and that pose as a mesh in the outfit's colours.
-// `scale` is the person's own size (1: the 1.8 m body); a short cabin scales them down further.
-BodyPose seatedOccupantPose(const OccupantParams& p = {}, Real scale = 1);
+// `scale` is the person's own size (1: the 1.8 m body); a short cabin scales them down further. `sway`: the body thrown
+// in the seat by what the vehicle did (a rider's: Passenger::sway), the driver's seat rule (seatedPose).
+BodyPose seatedOccupantPose(const OccupantParams& p = {}, Real scale = 1, const SeatSway& sway = {});
 RenderMesh buildSeatedOccupant(const OccupantParams& p = {});
 
 }  // namespace engine

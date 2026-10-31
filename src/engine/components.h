@@ -7,6 +7,7 @@
 #include "audio/audio_engine.h"
 #include "physics/physics_world.h"
 #include "player/seat_geometry.h"   // SeatGeometry (Vehicle: where the rider's hands and feet go)
+#include "player/seat_motion.h"     // RideJolt, SeatSway (Passenger: what the seat does to its rider)
 #include "procgen/city/polygon.h"   // Poly2 (city-plan debug outlines, ADR-0066)
 #include "procgen/city/road_network.h"   // RoadGraph (ExtraNavGraph, plan §8 P8.4)
 #include "procgen/city/road_mesh.h"      // RoadDeckField (RoadDeck)
@@ -607,6 +608,22 @@ struct Passenger {
     Vec3 framedAt;
     Real framedYaw = 0;
     bool framed = false;
+    // THE VIEW goes round with the carrier (a bus's corner swings the saloon, not the world) -- not at the wheel, where
+    // the chase rig frames the car (VehicleSystem sets it false for the driver)
+    bool turnsView = true;
+    // WHAT THE SEAT DOES TO THE RIDER (rideStep, from the carrier's own motion; item 26, #117): the body thrown against
+    // the carrier's change of velocity and pulled back (the driver's, a cab's, a bus's, a train's), and the jolt over
+    // the last moment (`joltNow`, the velocity before it in `joltBefore`) -- what throws a driver off an open seat
+    SeatSway sway;
+    RideJolt jolt;
+    Real joltNow = 0;
+    Vec3 joltBefore;
+    Vec3 carrierVel;            // (the carrier's velocity last step)
+    bool haveVel = false;
+    // THE CARRIER AS DRAWN this frame (RidingSystem's render: between its last two steps by the interpolation), for
+    // the body to sit in: one place that knows where the vehicle is drawn
+    Mat4 drawn;
+    bool haveDrawn = false;
 };
 
 // Marks a Vehicle as driven by an AI brain rather than the player (ADR-0062): the

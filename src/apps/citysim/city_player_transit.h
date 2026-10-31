@@ -104,6 +104,7 @@ private:
     // car slows to a walk (a press while it is moving waits for that).
     void rideCar(engine::World& world, engine::Entity player, engine::Transform& t,
                  engine::CharacterController& cc, bool interact);
+    engine::Real stepDt_ = 1.0 / 60.0;   // this step's length (step()), for hold's rideStep
     void hold(engine::World& world, engine::Entity player, engine::Transform& t, const engine::Mat4& pose,
               const engine::Vec3& local, bool sitting);
     void pin(engine::World& world, engine::Entity player, engine::Transform& t,

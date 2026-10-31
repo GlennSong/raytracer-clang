@@ -12,12 +12,13 @@ class FlyCameraController;
 // RIDING (ADR-0243; Glenn, 2026-10-24: "How general of a thing should this component be made where we are going from
 // one relative space to worldspace and back again? I suppose cars, trains, buses would use this. ... ships and dare I
 // say it some kind of spaceship"). A rider is a Passenger: a point in a CARRIER's own frame. The system that owns the
-// vehicle -- the bus and the car (CityPlayerTransitSystem), the train (TrainSystem) -- keeps the rules that are its
-// own (who boards where, the aisle, the gangways, the seats, the doors) and hands the rest here:
+// vehicle -- the bus and the car (CityPlayerTransitSystem), the train (TrainSystem), the driver's seat (VehicleSystem)
+// -- keeps the rules that are its own (who boards where, the aisle, the gangways, the seats, the doors) and hands the rest here:
 //
 //  rideStep()     each fixed step, after the owner set Passenger::carrier / local / sitting / eyeAbove: the capsule
 //                 pinned at carrier x local, the step before kept (carrierPrev), what the footsteps and the body read
-//                 (onFoot, facing), and the view turned with the carrier (a corner swings the saloon, not the world).
+//                 (onFoot, facing), the view turned with the carrier (a corner swings the saloon, not the world), and
+//                 the body thrown in its seat by what the carrier did (sway, jolt: the driver's crash rule reads it).
 //  RidingSystem   each frame, after the fixed steps (its render; the update only notes where the camera was framed
 //                 from): the rider's Transform on the carrier between its last two steps by this frame's
 //                 interpolation -- exactly how the renderer draws the vehicle -- the view turned the rest of the way
@@ -35,8 +36,10 @@ constexpr Real kRiderEyeAboveCentre = 0.7;
 Vec3 riderEye(const Mat4& carrier, const Vec3& local, Real eyeAbove);
 Vec3 riderCentre(const Mat4& carrier, const Vec3& local, Real eyeAbove);
 
-// One fixed step of a ride (see above). `fly` may be null (no view to turn: a test, a headless host).
-void rideStep(World& world, PhysicsWorld* physics, Entity rider, FlyCameraController* fly);
+// One fixed step of a ride (see above), `dt` long: the pin, the step before, the view, and what the seat does to the
+// rider -- the sway and the jolt from the carrier's change of velocity (Passenger::sway / jolt). `fly` may be null (no
+// view to turn: a test, a headless host).
+void rideStep(World& world, PhysicsWorld* physics, Entity rider, FlyCameraController* fly, Real dt);
 
 // (its render runs before the other systems' renders that read the camera: registered early)
 class RidingSystem : public System {

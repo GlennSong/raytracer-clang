@@ -537,7 +537,7 @@ void TrainSystem::ride(engine::FrameContext& ctx, Real dt) {
         ps->sitting = sitting;
         ps->eyeAbove = sitting ? kSeatedEye : kStandingEye;
         ps->hipBelow = kSeatedEye - kEyeAboveTransform;
-        engine::rideStep(ctx.world, &physics_.physicsWorld(), player, &fly_);
+        engine::rideStep(ctx.world, &physics_.physicsWorld(), player, &fly_, dt);
         pinned_ = pt->position;
     };
     if (seat_ >= 0) {   // seated: pinned to the seat, the walk keys do nothing

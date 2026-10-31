@@ -68,13 +68,10 @@ private:
     std::vector<Pick> catalogue_;
     bool catalogueTried_ = false;
     int pick_ = 0;
-    // THE PLAYER'S SEAT (ADR-0252): the jolt it takes (a crash throws the rider off an open one) and the body's sway
-    // in it, each fixed step
+    // THE PLAYER'S SEAT (ADR-0252), each fixed step: the driver rides the car (engine/riding.h: a Passenger at its hip
+    // point), and the jolt and the sway the riding component measures throw them off an open seat or lurch them in a
+    // closed one (item 26, #117: one way of sitting in a vehicle)
     void stepSeat(FrameContext& ctx);
-    RideJolt jolt_;
-    SeatSway sway_;
-    Vec3 seatVel_;
-    bool haveSeatVel_ = false;
     Real crank_ = 0;
     uint32_t driftCar_ = 0xFFFFFFFFu;   // the car with the drift switched on (a PhysicsWorld::VehicleId)
     bool wasDrifting_ = false;

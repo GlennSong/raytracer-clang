@@ -103,6 +103,7 @@ void CityPlayerTransitSystem::fixedUpdate(engine::FrameContext& ctx) {
 }
 
 void CityPlayerTransitSystem::step(World& world, Real dt, const RideInput& in) {
+    stepDt_ = dt;   // (hold's rideStep: the seat's sway and jolt run on the step)
     const CitySim& sim = city_.sim();
 
     // The player, the same way every other citysim system finds it.
@@ -307,7 +308,7 @@ void CityPlayerTransitSystem::hold(World& world, Entity player, Transform& t, co
     ps->carSeat = sitting && carSeat_ >= 0;
     ps->eyeAbove = sitting ? kSeatedEye : kStandingEye;
     ps->hipBelow = kSeatedEye - kEyeAboveTransform;
-    engine::rideStep(world, &physics_.physicsWorld(), player, &fly_);
+    engine::rideStep(world, &physics_.physicsWorld(), player, &fly_, stepDt_);
     seat_ = t.position;
     seated_ = true;
 }
