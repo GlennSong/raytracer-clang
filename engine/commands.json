@@ -66,6 +66,12 @@
   "usage": "clip?"
  },
  {
+  "name": "clouds",
+  "owner": "engine",
+  "summary": "Set the cloud deck live: on or off, coverage, density, scale, wind. Kept with the deck's settings.",
+  "usage": "clouds [on|off] [coverage <0-1>] [density <v>] [scale <v>] [wind <m/s>]"
+ },
+ {
   "name": "commands?",
   "owner": "engine",
   "summary": "Every command the viewer takes, with its usage; `json` adds the summaries, for tools.",
@@ -124,6 +130,12 @@
   "owner": "engine",
   "summary": "The possessed walker goes into the building whose door it is standing at.",
   "usage": "enter"
+ },
+ {
+  "name": "events?",
+  "owner": "engine",
+  "summary": "Every named event on the bus, with its fields; `json` adds the summaries, defaults and subscribers.",
+  "usage": "events? [json]"
  },
  {
   "name": "exit",
@@ -196,6 +208,18 @@
   "owner": "engine",
   "summary": "What the interaction focus is on.",
   "usage": "interact?"
+ },
+ {
+  "name": "jitter",
+  "owner": "engine",
+  "summary": "Record how evenly a vehicle is drawn for some frames (default 300): -1 the bus or cab you ride, else the nearest moving one. jitter? answers.",
+  "usage": "jitter [agent id|-1] [frames]"
+ },
+ {
+  "name": "jitter?",
+  "owner": "engine",
+  "summary": "The jitter measurement: which vehicle is being recorded, then how evenly it and the camera moved.",
+  "usage": "jitter?"
  },
  {
   "name": "keys?",
@@ -306,6 +330,12 @@
   "usage": "possess_stop"
  },
  {
+  "name": "publish",
+  "owner": "engine",
+  "summary": "Publish a named event now, its fields as JSON (missing ones keep their defaults).",
+  "usage": "publish <Event> [{json fields}]"
+ },
+ {
   "name": "ragdoll",
   "owner": "engine",
   "summary": "The player goes limp (the G key); jump, or lying still a moment, gets up.",
@@ -392,8 +422,8 @@
  {
   "name": "teleport",
   "owner": "engine",
-  "summary": "Move the player (the camera when there is none); `x z` lands on the ground. Read the result with teleport?.",
-  "usage": "teleport <x y z [pitch yaw] | x z>"
+  "summary": "Move the player (the camera when there is none); `x z` lands on the ground. Read the result with teleport?. `open` unfolds the Teleport panel.",
+  "usage": "teleport <x y z [pitch yaw] | x z> | open"
  },
  {
   "name": "teleport?",
@@ -432,6 +462,12 @@
   "usage": "unpin <agent id>"
  },
  {
+  "name": "unwatch",
+  "owner": "engine",
+  "summary": "Stop streaming these events (all of them when none is named).",
+  "usage": "unwatch [Event ...]"
+ },
+ {
   "name": "vehicle?",
   "owner": "engine",
   "summary": "The player's vehicle: speed, rpm, gear, drive mode, position, and the sim speed.",
@@ -460,6 +496,12 @@
   "owner": "engine",
   "summary": "The city's walkers: how many, the fastest, step reversals, seated, indoors, students, on walks, joggers and games.",
   "usage": "walkers?"
+ },
+ {
+  "name": "watch",
+  "owner": "engine",
+  "summary": "Stream these events to this connection as `event <Name> {json}` lines, until unwatch or it closes.",
+  "usage": "watch <Event> [Event ...]"
  },
  {
   "name": "weather",

@@ -781,18 +781,21 @@ public:
     <code>skinnedLimb</code> draws a limb as one tube with nine rings round the joint, each ring <i>rotated</i> about
     the hinge by its smoothstepped share of the fold. For a one-axis joint that is what dual-quaternion skinning does:
     rotating instead of blending corners keeps the joint's thickness instead of pinching it (the "candy wrapper").
-    Topology is fixed for every fold, and <code>BodyMeshes</code> keeps one tube per 2.5° of fold, made on first use
+    Topology is fixed for every fold, and <code>BodyMeshes</code> keeps one tube per 2.5° of fold, all made when the body is first shown
     (<a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/docs/decisions.md#L12063">ADR-0245</a>).</p>
   <div class="shots">
     <figure class="shot"><img src="img/player/air_knees.webp" alt="The red-shirted player in the air in third person with knees bent, over the movement lab's checkered floor">
-      <figcaption>In the air in third person the player is still the walker mesh (<code>drawnAsBlocks</code> is false for Walk and Air), which since <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/docs/decisions.md#L12063">ADR-0245</a> strides and jumps with bent knees.</figcaption></figure>
+      <figcaption>In the air in third person, knees bent: the same jointed body as every other mode.</figcaption></figure>
     <figure class="shot"><img src="img/player/limp.webp" alt="The player's ragdoll lying in a heap on the checkered floor between yellow blocks">
       <figcaption>Limp: the same ten blocks as Jolt bodies, landing with partial folds.</figcaption></figure>
   </div>
-  <p>Not everything uses this body. Walking and falling in third person are still the walker mesh and its walk cycle
-    (citysim's <code>CityPlayerBodySystem</code>; <code>drawnAsBlocks</code> decides), first person draws its own box
-    arms (<code>PlayerArmsSystem</code>), and the far crowd keeps the six-block <code>buildStandingPerson</code> (144
-    vertices, so the 515k-agent crowd costs what it did).</p>
+  <p>Everything draws this body (<a href="https://github.com/GlennSong/raytracer-clang/blob/main/docs/decisions.md">ADR-0254</a>).
+    <code>PlayerBodySystem</code> poses it for every mode in third person, walking in the crowd's stride
+    (<code>walkBodyPose</code> at the exact swing of <code>advanceStride</code>, procgen/person.h). First person draws
+    its arms (<code>PlayerArmsSystem</code>, at 0.6 of their girth so they read at 0.3 m from the eye), reaching to the
+    hands by <code>reachTo</code>. A seated person (a driver, a rider, a bench sitter) is <code>seatedPose</code> of it,
+    built from the SAE manikin's numbers (<code>buildSeatedOccupant</code>). Only the far crowd keeps the six-block
+    <code>buildStandingPerson</code> (144 vertices, so the 515k-agent crowd costs what it did).</p>
 
   <h2>Ragdolls</h2>
   <p><code>goLimp</code> builds a BodyPose where the capsule is, calls <code>blockRagdoll</code> and

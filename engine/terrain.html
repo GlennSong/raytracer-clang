@@ -114,7 +114,7 @@
   <p class="cap">Seed and level JSON to the drawn ground. Blue outlines are the stages that do the real work; dashed
     boxes are optional. The ground maps are computed from the weathered grid itself; the pyramid samples
     <code>terrainHeight</code> with every carve and flatten folded in. A level with no <code>"weather"</code> block skips
-    the bake (its base is the raw formula, or the older droplet erosion); one with no <code>"baked"</code> CDLOD
+    the bake (its base is the raw formula); one with no <code>"baked"</code> CDLOD
     evaluates the formula per vertex instead of reading tiles.</p>
 
   <h2>One field: terrainHeight</h2>
@@ -385,11 +385,15 @@
 
   <h2>The erosion bakes: droplets and the pipe model</h2>
   <p>Before stream power, erosion was <i>droplets</i> (after Beyer's thesis and Sebastian Lague): simulated raindrops
-    that pick up and drop sediment as they run downhill. It still serves levels with <code>"erode": true</code> and no
-    <code>"weather"</code> block, through <code>bakeErodedTerrain</code>. ADR-0122 ported the Metal kernels to Vulkan
-    compute (<code>erosion_gpu_vk.cpp</code>, <code>erosion.comp</code>): 1024² with 500k droplets in 59 ms against
-    1137 ms on the CPU. It is opt-in per terrain (<code>"erodeGpu"</code>) because GPU and CPU agree only
-    statistically, and switching would "quietly move their ground under their road plans".</p>
+    that pick up and drop sediment as they run downhill. ADR-0122 ported the Metal kernels to Vulkan compute
+    (<code>erosion_gpu_vk.cpp</code>, <code>erosion.comp</code>): 1024² with 500k droplets in 59 ms against 1137 ms on
+    the CPU, opt-in per terrain because GPU and CPU agree only statistically.</p>
+  <div class="note history"><p><b>Retired.</b> ADR-0257 (2026-10-27) removed the droplets, their Metal port and the
+    Lua <code>terrain.erode</code>: one erosion system, the weather bake. The levels that still eroded with droplets
+    moved to a <code>"weather"</code> block sized to their map (range, the piedmonts, metro_v2_test) or were deleted
+    (coast, coast_city, erosion, island_8_saltwood). A terrain with <code>"erode": true</code> and no
+    <code>"weather"</code> now keeps its drawn ground and says so in the log. What is left of the Vulkan host runs the
+    weather block's opt-in water stage: breaching, the pipe model below, then thermal slumping.</p></div>
   <p>Droplets carve drainage but hold no water, so no lakes or floodplains. ADR-0123 added the shallow-water <i>pipe
     model</i> of Mei, Decaudin &amp; Hu (2007): every cell holds a depth of water that flows to its neighbours through
     virtual pipes, carrying sediment. Four kernels a step, each writing only its own cell (no atomics, deterministic).
@@ -772,7 +776,7 @@
     hard erodibility ×0.06), which became <code>terrain_lab_layers.json</code> and later the island trial. Probe poses
     from the memory notes: <code>"0 350 1900 -8 0"</code> (south), <code>"1700 300 300 -6 270"</code> (east),
     <code>"300 650 900 -14 0"</code> (close).</p>
-  <p>Offline, <code>tools/rt_erode</code> bakes a level's terrain with any settings, and
+  <p>Offline, <code>tools/rt_erode</code> bakes a level's weathered ground with any settings, and
     <code>tools/erosion_preview.py</code> renders the result as compare, water and wetness images, no viewer needed.</p>
 
   <h2>How it got here</h2>
@@ -786,6 +790,7 @@
     <tr><td>2026-09-26</td><td>GPU erosion, pipe model (0122–0124), stream power (0125), keep the shape (0126), peaks + refine (0127), maps (0128)</td><td>noise pyramids that erosion only sharpened</td></tr>
     <tr><td>2026-10-19</td><td>Normals (0204, 0205), 8192 + stochastic routing (0206), relief and maps (0207, 0208), rock (0209–0213)</td><td>"faceted" grass, "more rocky", flat far slopes</td></tr>
     <tr><td>2026-10-21</td><td>Road grid only in a corridor (0221)</td><td>city levels drew the 20 m road copy</td></tr>
+    <tr><td>2026-10-27</td><td>Droplets retired: the weather bake is the one erosion (0257)</td><td>two systems for one job</td></tr>
   </table>
   <p class="cap">Dates from the ADR headers where they have one, otherwise from the commit or memory notes that land
     them.</p>
@@ -796,7 +801,7 @@
     <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/procgen/terrain_weather.cpp">src/engine/procgen/terrain_weather.cpp</a> — the weather bake: uplift, peaks, grow, keep shape, refine, facets</li>
     <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/procgen/stream_power.cpp">src/engine/procgen/stream_power.cpp</a> — the FastScape solver, stochastic routing</li>
     <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/procgen/rock_layers.h">src/engine/procgen/rock_layers.h</a> — the bed field: hardness and tone</li>
-    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/procgen/erosion.h">src/engine/procgen/erosion.h</a>, <a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/procgen/erosion_gpu_vk.cpp">erosion_gpu_vk.cpp</a>, <a href="https://github.com/GlennSong/raytracer-clang/blob/main/shaders/vulkan/erosion_water.comp">shaders/vulkan/erosion_water.comp</a> — droplets and the pipe model</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/procgen/erosion.h">src/engine/procgen/erosion.h</a>, <a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/procgen/erosion_gpu_vk.cpp">erosion_gpu_vk.cpp</a>, <a href="https://github.com/GlennSong/raytracer-clang/blob/main/shaders/vulkan/erosion_water.comp">shaders/vulkan/erosion_water.comp</a> — the weather block's opt-in water stage: breach, pipe model, thermal</li>
     <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/procgen/hydrology.h">src/engine/procgen/hydrology.h</a> — rivers, lakes, carve, water mesh, quays</li>
     <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/procgen/terrain_maps.cpp">src/engine/procgen/terrain_maps.cpp</a>, <a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/procgen/ground_cover.h">ground_cover.h</a>, <a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/procgen/ground_layers.cpp">ground_layers.cpp</a> — maps, cover weights, layer textures</li>
     <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/procgen/terrain_lod.cpp">src/engine/procgen/terrain_lod.cpp</a> — CDLOD selection, morph targets, baked tile meshes, skirts</li>
