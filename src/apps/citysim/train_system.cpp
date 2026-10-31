@@ -32,7 +32,6 @@ namespace {
 
 constexpr Real kWalk = 1.8;               // m/s along a carriage
 constexpr Real kStandingEye = 1.62;       // eye above the floor
-constexpr Real kEyeAboveTransform = 0.7;  // PlayerSystem's eye above the capsule centre
 constexpr Real kWallClear = 0.28;         // how near a wall a standing body comes
 constexpr Real kSeatedEye = 0.74;         // eye above the seat's hip point
 constexpr Real kSeatReach = 2.2;          // seats offered within this of where you stand
@@ -536,7 +535,7 @@ void TrainSystem::ride(engine::FrameContext& ctx, Real dt) {
         ps->local = local;
         ps->sitting = sitting;
         ps->eyeAbove = sitting ? kSeatedEye : kStandingEye;
-        ps->hipBelow = kSeatedEye - kEyeAboveTransform;
+        ps->hipBelow = kSeatedEye - engine::kEyeAboveCentre;
         engine::rideStep(ctx.world, &physics_.physicsWorld(), player, &fly_, dt);
         pinned_ = pt->position;
     };

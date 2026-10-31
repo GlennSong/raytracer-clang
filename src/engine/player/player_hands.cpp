@@ -19,7 +19,7 @@ Vec3 PlayerHands::ropeHand(const BodyStep& s, const Vec3& toward) {
 }
 
 void PlayerHands::aimAndFire(PlayerBody& b, BodyStep& s) {
-    if (holdingGrapple()) aim = findGrappleAnchor(s.pw, s.t.position + Vec3(0, b.eyeHeight, 0), s.in.look, b.tune);
+    if (holdingGrapple()) aim = findGrappleAnchor(s.pw, s.t.position + Vec3(0, kEyeAboveCentre, 0), s.in.look, b.tune);
     else aim.ok = false;
     if (s.in.fire) {
         s.in.fire = false;
@@ -31,7 +31,7 @@ void PlayerHands::aimAndFire(PlayerBody& b, BodyStep& s) {
 void PlayerHands::fire(PlayerBody& b, BodyStep& s) {
     // at what it was aimed at, or (nothing in reach) out to the end of the line, to come back loose
     hookWillHold = aim.ok;
-    hookTarget = aim.ok ? aim.point : s.t.position + Vec3(0, b.eyeHeight, 0) + s.in.look * b.tune.grappleRange;
+    hookTarget = aim.ok ? aim.point : s.t.position + Vec3(0, kEyeAboveCentre, 0) + s.in.look * b.tune.grappleRange;
     const Vec3 hand = ropeHand(s, hookTarget);
     hookTip = hand;
     hook = Hook::Flying;

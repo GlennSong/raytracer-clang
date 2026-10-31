@@ -13911,3 +13911,15 @@ gathering both lists, and the city is an app the engine cannot see. That is left
 - The offline tracer's scene draws water with no `Sea`, because nothing swims there.
 
 **Test.** `open_sea_keeps_the_ocean_and_drops_the_ponds` also checks that a pond is swum in without waves.
+
+## ADR-0287 — One eye height: kEyeAboveCentre
+
+#117 wave 1, item 14: "Eye height twice (riding.h, player_body.h) → one constant." There were four:
+- `kRiderEyeAboveCentre` (riding.h);
+- `PlayerBody::eyeHeight` (a member never assigned);
+- `kEyeAboveTransform` twice, in the bus (city_player_transit.cpp) and the train (train_system.cpp).
+
+All were 0.7, and each comment pointed at another.
+
+**Decision.** `kEyeAboveCentre` (player/body_rules.h) is the eye above the capsule centre. The walker's camera,
+a rider pinned in a carrier, every seat's hip and the swimmer's float measure from it. No value changed.

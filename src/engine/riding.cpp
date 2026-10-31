@@ -39,7 +39,7 @@ Vec3 riderEye(const Mat4& carrier, const Vec3& local, Real eyeAbove) {
 }
 
 Vec3 riderCentre(const Mat4& carrier, const Vec3& local, Real eyeAbove) {
-    return riderEye(carrier, local, eyeAbove) - Vec3(0, kRiderEyeAboveCentre, 0);   // (the capsule stays upright)
+    return riderEye(carrier, local, eyeAbove) - Vec3(0, kEyeAboveCentre, 0);   // (the capsule stays upright)
 }
 
 Real headingDeg(const Mat4& m) {
@@ -151,7 +151,7 @@ void RidingSystem::render(FrameContext& ctx) {
     // carrying it as well overshot by a frame every other frame (71 mm, against 2.3 mm left alone).
     if ((at - p->framedAt).length() >= 2.0) return;   // a boarding or a step off is a jump: framed afresh next frame
     CameraState& cam = ctx.view.camera;
-    const Vec3 framedEye = p->framedAt + Vec3(0, kRiderEyeAboveCentre, 0);
+    const Vec3 framedEye = p->framedAt + Vec3(0, kEyeAboveCentre, 0);
     if ((cam.position - framedEye).length() > 0.5) return;   // not the eye: a shoulder rig, or a placed camera
     const Real turn = fly_ ? (fly_->yaw - p->framedYaw) * 0.017453292519943295 : 0.0;
     const Real c = std::cos(turn), s = std::sin(turn);   // (yaw grows clockwise from above: -Z to +X)

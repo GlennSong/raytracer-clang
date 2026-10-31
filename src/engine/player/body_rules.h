@@ -11,6 +11,11 @@
 
 namespace engine {
 
+// THE EYE ABOVE THE CAPSULE CENTRE (ADR-0287, #117 item 14): where the player's camera sits on its body, standing.
+// The one number the walker's camera, a rider pinned in a carrier (riding.h), a seat's hip (the driver's, a bus's,
+// a train's) and the swimmer's float all measure from.
+constexpr Real kEyeAboveCentre = 0.7;
+
 // Decides when a falling character should snap back to spawn. Pure logic,
 // kept apart from PlayerBody so it is testable without Jolt or a renderer.
 //

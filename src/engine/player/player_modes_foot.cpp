@@ -240,7 +240,7 @@ void SwimMode::step(PlayerBody& b, BodyStep& s) {
     const Vec3 desired = footPrelude(b, s, run);
     b.swimClock += dt;
     b.gate.buffered = -1;   // jump held is "rise" here, not a leap
-    const Real floatY = b.swimLevel + SwimState::kEyeAbove - b.eyeHeight;
+    const Real floatY = b.swimLevel + SwimState::kEyeAbove - kEyeAboveCentre;
     const bool rise = s.in.active && s.in.jumpHeld;
     const bool dive = s.in.active && s.in.crouchHeld;
     const Real stroking = std::min(Real(1), desired.length() / std::max(b.moveSpeed, Real(0.1)));

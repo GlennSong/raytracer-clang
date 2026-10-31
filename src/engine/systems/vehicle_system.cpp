@@ -640,7 +640,7 @@ void VehicleSystem::handleEnterExit(FrameContext& ctx) {
             seated.sitting = true;
             seated.carSeat = true;
             seated.eyeAbove = kDriverEyeAboveHip;
-            seated.hipBelow = kDriverEyeAboveHip - kRiderEyeAboveCentre;
+            seated.hipBelow = kDriverEyeAboveHip - kEyeAboveCentre;
             seated.turnsView = false;
             if (Passenger* was = ctx.world.get<Passenger>(player)) *was = seated;
             else ctx.world.add<Passenger>(player, seated);

@@ -3,6 +3,7 @@
 
 #include "components.h"
 #include "system.h"
+#include "player/body_rules.h"   // kEyeAboveCentre
 
 namespace engine {
 
@@ -28,11 +29,9 @@ class FlyCameraController;
 // collision in the carrier's frame (the carrier publishing its interior, the rider colliding in local space);
 // nothing here assumes the carrier's up is the world's.
 
-// The eye above the capsule centre (PlayerSystem::eyeHeight): a rider's centre sits that far under its eye.
-constexpr Real kRiderEyeAboveCentre = 0.7;
 
 // A rider at `local` in `carrier`: its eye, `eyeAbove` over that point along the carrier's own up, and its capsule's
-// centre (upright, kRiderEyeAboveCentre under the eye).
+// centre (upright, kEyeAboveCentre under the eye: player/body_rules.h).
 Vec3 riderEye(const Mat4& carrier, const Vec3& local, Real eyeAbove);
 Vec3 riderCentre(const Mat4& carrier, const Vec3& local, Real eyeAbove);
 

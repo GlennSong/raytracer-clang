@@ -247,7 +247,6 @@ public:
 
     // WHAT THE MODES SHARE
     MovementTuning tune;
-    Real eyeHeight = 0.7;
     Real moveSpeed = 6.0;
     // the standing capsule, captured on first sight (level-authored); crouched is derived from it, and standing up
     // can be REFUSED by the physics fit test (a ledge overhead keeps you down)
