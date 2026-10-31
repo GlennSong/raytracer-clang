@@ -161,9 +161,10 @@ constexpr Real kVJunctionDelay = 1.5;   // avg dwell per stop/yield junction cro
 constexpr Real kAgentGridCell = 64.0;
 constexpr Real kGridPad = 250.0;
 
-// Lane spacing that fits THIS road: split the right half of the carriageway
-// evenly among the direction's lanes, so a car sits centred in its own lane and
-// clearly on its (right-hand) side. A fixed lane width instead leaves a car
+// Lane spacing that fits THIS road: split the kerb half of the carriageway
+// (rightOf, nav_graph.h: the driver's left -- traffic keeps left) evenly among
+// the direction's lanes, so a car sits centred in its own lane and clearly on
+// its own side. A fixed lane width instead leaves a car
 // hugging the centreline on a wide road, which reads as driving on the wrong
 // side. laneCenter places lane i at (0.5 + i) * spacing off the centreline.
 Real laneSpacing(const engine::NavLink& l, Real drivableWidth) {
@@ -3353,7 +3354,7 @@ engine::Vec2 CitySim::freeStandingSpot(const Agent& a, engine::Vec2 want,
     const int self = indexOf(a);
     const Real al = along.length();
     const Vec2 u = al > 1e-6 ? along * (1.0 / al) : Vec2(1, 0);
-    const Vec2 side(u.y, -u.x);   // right of travel: away from the kerb on the right-hand walk
+    const Vec2 side(u.y, -u.x);   // rightOf(u): the walker's own left, away from the kerb (walkers keep left too)
     std::vector<int> near;
     // the nearest body to p, squared (capped at the 1.5 m query)
     auto nearest2 = [&](Vec2 p) {
@@ -6264,8 +6265,9 @@ void CitySim::computeCarWedge() {
         // stopping horizon. The conflicts the corridor can't see: two greens
         // turning across each other, unsignalled crossings, merge angles.
         // Anti-deadlock is ASYMMETRY: I yield only to a crosser approaching
-        // from my RIGHT (right-hand traffic); it sees me on ITS left and
-        // drives on — mutual yield cannot form. A crosser that a red signal
+        // from my maths RIGHT (rightOf, nav_graph.h: the driver's left, as
+        // traffic keeps left); it sees me on its other side and drives on —
+        // mutual yield cannot form. A crosser that a red signal
         // will stop before the box is exempt (a green driver assumes signal-
         // stopped traffic stays stopped); one already committed is not.
         for (int bi : queryScratch_) {
@@ -7599,7 +7601,7 @@ void CitySim::stepTick(Real dt, Real hoursPerSecond) {
         // herd a walker like a boid.
         Real prev = a.lateralOffset;
         Real maxDelta = kPedLateralRate * dt;
-        // TOWARD THE ROAD (left of travel: a walker keeps to its street's right-hand pavement) only as far as the verge
+        // TOWARD THE ROAD (maths left of travel, the walker's own right: walkers keep left) only as far as the verge
         // allows -- a full 1.6 m lean put a walker stepping round someone 0.6 m into the carriageway (walkersInRoad:
         // "avoiding, in the street it walks along"); toward the buildings, the whole lean
         // -- and where the road side has not the room for the step, it goes round on the buildings' side instead

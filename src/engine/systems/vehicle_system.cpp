@@ -95,9 +95,9 @@ void VehicleSystem::onStart(FrameContext& ctx) {
     ctx.actions.bindButton("vehicle_horn", GamepadButton::LeftThumb);
     ctx.actions.setActionContext("vehicle_horn", engine::InputContext::InVehicle);
     // The car picker: - and = cycle the drivable catalogue; N drops the pick.
-    // NOT , and . -- those are DevControlSystem's sim slower/faster, and picking
-    // a car three places along ran the world at 8x ("super speed mode") -- nor
-    // [ and ], the spectator's. The boot log names any clash ([input] key clash).
+    // NOT , and . -- they were DevControlSystem's sim slower/faster, and picking
+    // a car three places along ran the world at 8x ("super speed mode"); sim speed
+    // is unbound by default now, but the keys stay clear -- nor [ and ], the spectator's. The boot log names any clash ([input] key clash).
     ctx.actions.bindButton("vehicle_pick_prev", KeyCode::Minus);
     ctx.actions.bindButton("vehicle_pick_next", KeyCode::Equal);
     // A part-time 4x4's transfer case: 2WD (rear) <-> 4WD (#41).

@@ -35,7 +35,8 @@ namespace engine {
 // the inward-facing geometry actually exists.
 //
 // Conventions match the rest of the engine's vehicles: the car faces +Z, +X is
-// its right, origin at the BODY CENTRE, `size` = (width, height, length).
+// the driver's LEFT (right-handed, +Y up; see the lamp tags in car_mesh.cpp),
+// origin at the BODY CENTRE, `size` = (width, height, length).
 
 enum class CarLod : std::uint8_t { High, Mid, Low, Proxy };
 

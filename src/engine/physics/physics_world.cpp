@@ -252,7 +252,7 @@ struct PhysicsWorld::Impl {
         float maxSteerRad = 0.0f;
         float wheelbase = 2.7f;
         float yawAssist = 0.0f;
-        float gripAccel = 9.0f;   // the lateral acceleration the assist lets the car keep (m/s²)
+        float gripAccel = 9.0f;   // the lateral acceleration the assist lets the car keep (m/s²; set from lateralGrip)
         std::vector<char> diffFront;   // per differential: a front axle's?
         float frontShare = 0.5f;
         float dragArea = 0.0f;         // Cd x A (m^2); > 0 applies quadratic aero drag each step
@@ -1375,7 +1375,8 @@ void PhysicsWorld::optimizeBroadPhase() {
 // excess of the steered one. Jolt turns a wheel by -right * lock about the
 // up axis, so +steer is a NEGATIVE yaw about up (the lab's sign probe: "+steer
 // turns toward -x" with forward +z); the Ackermann target is v tan(delta) / L,
-// capped at the yaw rate a ~0.95 g road allows at this speed.
+// capped at the yaw rate gripAccel allows at this speed (~2 g at the default
+// lateralGrip 2.0: 1.1 * grip * sqrt(0.85) g, set in addVehicle).
 void PhysicsWorld::applyYawAssist(std::size_t index) {
     Impl::Vehicle& v = impl->vehicles[index];
     if (v.yawAssist <= 0.0f || !v.constraint) return;

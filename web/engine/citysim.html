@@ -283,7 +283,7 @@
     (<code>ped_graph.{h,cpp}</code>: corner nodes, sidewalk edges, a door node per place) so a walk could start
     and end at real doors. Its live integration was deferred, and walkers ended up routing on the NavGraph itself
     (<code>findRoute(..., onFoot=true)</code> plus footpath links and door positions). At <code>47d587f3</code>,
-    <code>pedRoute</code> has no caller outside its own test.</p></div>
+    <code>pedRoute</code> had no caller outside its own test; ADR-0294 then deleted the graph and its test.</p></div>
 
   <h2>Roles: one system describes every resident's day</h2>
   <p>Glenn asked for "a singular system that can describe all of the npc roles" (2026-10-06). A role is

@@ -21,7 +21,7 @@ struct Attachment {
 };
 
 // One wheel of a fleet car, as data: where it sits on the body (+Z forward,
-// x>0 right), how big it is, and what it does. Published by the recipe so a
+// x>0 the driver's left), how big it is, and what it does. Published by the recipe so a
 // PROMOTED car (ADR-0062) builds its Jolt wheels from the same numbers the
 // drawn wheels were cut from — the alternative, deriving a radius and an axle
 // offset from the body's bounding box, put the simulated wheels several

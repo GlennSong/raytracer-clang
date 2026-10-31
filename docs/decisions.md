@@ -4077,6 +4077,8 @@ cross-traffic doesn't yet truly yield, and the player's physics car isn't avoide
 `Vehicle` entities don't `removeVehicle` (no destroy hook, same bounded-leak class
 as the ScriptBehaviour note below).
 
+*Since then (#117 wave 0):* traffic keeps LEFT, UK/Japan style, on purpose -- lanes sit on the driver's-left kerb side (NavGraph::laneCenter, nav_graph.h); "right-hand traffic" above is history.
+
 ---
 
 ## ADR-0060 — Agent-based city simulation as an application (perception, signals, rules)
@@ -4614,6 +4616,8 @@ junction rules to grow up:
   and zero ticks where two cars drive through each other (`ghostTicks == 0`,
   pinned by `cars_crash_and_stop_instead_of_ghosting`).
 
+*Since then (#117 wave 0):* the live signal defaults are green 10 s, yellow 2 s, all-red 1.5 s, plus an 8 s walk phase per cycle (SignalController::build, traffic_signal.h), shortened so a red's queue fits a small block.
+
 ## ADR-0064 — Agent goals become data: the GoalTable, Lua-authored at load
 
 **Context.** The reactive layer (ADR-0061/0063) was already principled, but the
@@ -4796,6 +4800,8 @@ side, all-off daylight cruise, `carTurnSide` geometry) and the instanced bake
 headless with null meshes (`test_city_render.cpp` — night headlights, brake on
 hold, turn-signal flash, externally-owned cars draw none). The emissive GPU draw
 is viewer-gated and UNVERIFIED on device (register row updated). Suite 698/698.
+
+*Since then (#117 wave 0):* fleet bodies are mesh.car shells built by vehicles.lua over vehicle_classes.lua, not box parts, and the C++ mesh fallback is gone -- fleetCarMesh no longer exists, and a slot that fails to load logs an error and draws no car (city_render.cpp); only the kFleet size table in city_sim.cpp remains in C++.
 
 ## ADR-0066 — A typed EventBus: the engine's decoupling seam for cross-system signals
 **Status:** Accepted · **Date:** 2026-07-06
@@ -5489,6 +5495,8 @@ table). 4: role goal-tables + the vertical-slice level (device) — plus the
 Living City ImGui debug panel (per-layer toggles + selected-agent inspector) and
 projected place labels. 5: capabilities / tools. 6: the generator emits the
 PlaceMap + ped graph for a whole city.
+
+*Since then (#117 wave 0):* ped_graph.{h,cpp} and test_ped_graph were deleted unwired (ADR-0294); walkers route on the NavGraph. living_city_traffic_never_gridlocks went with the second city pipeline (d8cb6320); the live no-gridlock gate is busy_junction_does_not_gridlock (tests/test_city_flow.cpp).
 
 ---
 
@@ -7418,6 +7426,8 @@ This also settles one of the Open questions above: possession must be able to **
 layer**, not race it. An errand completes, the agent goes to rest, and seconds later the schedule
 has it walking a 27-leg trip of its own — a director issuing one command per decision spends the
 whole session fighting the table it is supposed to be replacing.
+
+*Since then (#117 wave 0):* the in-engine decision service is still not built; deciding happens in the external director, tools/citywalk.py --decider stub|laya, and the leash now has a way out (a gap not closing for 4 s moves the body to the plan, city_walkers.cpp).
 
 ## ADR-0092 — The city is designed as data first: a brief, a plan, a score, then the build
 
@@ -11736,6 +11746,8 @@ in ragdolling."
   0.8 x the speed it had, plus a lift. Measured: into a 1.2 m rock at 50 km/h, thrown ~8 m over it, up again.
 - Not yet: the rider is the car's seated occupant (not posed on the bike); the chase camera is the car's (far
   behind a bike); pedalling isn't drawn.
+
+*Since then (#117 wave 0):* the car picker is - and = (N drops the pick), not , and . (vehicle_system.cpp); comma/period were the sim-speed keys and are left unbound.
 
 ## ADR-0236 — Drift: a handbrake flick into a held slide, Burnout-style, for the player's car
 

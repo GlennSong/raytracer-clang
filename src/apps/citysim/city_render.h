@@ -372,7 +372,7 @@ public:
         engine::Vec3 pos;
     };
 
-    // One wheel of a fleet car, in body-local space (+Z forward, x>0 right).
+    // One wheel of a fleet car, in body-local space (+Z forward, x>0 the driver's left).
     // Same independence rationale as LampMarker: a mirror of the scripting-only
     // engine::WheelPlacement, so the non-scripting build still compiles.
     struct CarWheel {

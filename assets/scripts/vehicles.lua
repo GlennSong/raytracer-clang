@@ -52,12 +52,12 @@ local function class_handling(c, d, wheels, opts)
     brake_torque = opts.brake_torque or math.floor(mass * 1.15),
     hand_brake_torque = opts.hand_brake_torque or math.floor(mass * 2.9),
     -- The forgiving handling defaults live in PhysicsWorld::VehicleConfig
-    -- (physics_world.h: roll cone 65 deg, anti-roll bars off, yaw assist 3/s);
+    -- (physics_world.h: roll cone off (180 deg), anti-roll bars off, yaw assist 3/s);
     -- a recipe may override any of them (nil = keep the default).
     max_roll_deg = opts.max_roll_deg,
     anti_roll = opts.anti_roll,
     yaw_assist = opts.yaw_assist,
-    grip = opts.grip,               -- the tyres' peak lateral grip (default 1.7)
+    grip = opts.grip,               -- the tyres' peak lateral grip (default 2.0)
     -- real aero drag (a top speed near 205 km/h, not linear body damping) and quick shifts: Jolt's
     -- default gearbox cut the drive for ~1.3 s per upshift -- a 3.5 s stall at 105-115 km/h on the freeway
     drag_area = opts.drag_area or 2.0,
@@ -408,9 +408,9 @@ vehicle.drivable = {
 -- (from_class above) use — over the class packages in vehicle_classes.lua.
 --
 -- The C++ reader (apps/citysim/scripting/vehicle_body.cpp) turns
--- `vehicle.fleet[slot+1]` into ONE vertex-coloured RenderMesh at LEVEL LOAD; a
--- Lua-free (Makefile) build keeps the C++ fleetCarMesh as a fallback, so the
--- streets are never data-dependent to be non-empty.
+-- `vehicle.fleet[slot+1]` into ONE vertex-coloured RenderMesh at LEVEL LOAD.
+-- There is no C++ body fallback any more (fleetCarMesh is gone): a slot that
+-- fails to load logs an error and draws no car (city_render.cpp).
 --
 -- A recipe is:
 --   body   = a Mesh (the mesh.car shell: painted body + lamps + tinted glass)
@@ -432,7 +432,7 @@ vehicle.drivable = {
 -- car's Jolt config is built from, so the simulated wheels land in the arches
 -- drawn for them rather than at a second set of guessed numbers.
 -- `lights` mark the front/rear lamp positions the emissive lamp pass draws
--- (city_render syncCarLamps). Car faces +Z; x>0 = right.
+-- (city_render syncCarLamps). Car faces +Z; x>0 = the driver's left.
 --
 -- The fleet is 3 sedans, 3 hatchbacks, 3 SUVs, a pickup, a van, a box truck
 -- and a CITY BUS (the transit routes used to be driven by sedans).
