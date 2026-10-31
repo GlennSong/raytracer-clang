@@ -18,6 +18,7 @@ using engine::NavLink;
 using engine::Real;
 using engine::RenderMaterial;
 using engine::Renderable;
+using engine::rightOf;
 using engine::Transform;
 using engine::Vec2;
 using engine::Vec3;
@@ -61,8 +62,6 @@ constexpr Real kPoleH = 2.6, kPoleR = 0.05;
 constexpr Real kSignW = 0.88, kSignH = 0.62, kSignT = 0.05, kSignY = 2.30;
 constexpr Real kBandH = 0.34;   // one route's plate on a shared pole
 
-
-Vec2 rightOf(Vec2 d) { return {d.y, -d.x}; }
 
 Entity box(World& world, AssetManager& assets, Vec3 centre, Vec3 size,
            engine::Quat rot, Vec3 albedo, Real metallic, Real roughness,

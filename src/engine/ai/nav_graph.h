@@ -26,6 +26,11 @@ namespace engine {
 // amount. Shared so those readings cannot drift apart.
 constexpr double kLayerClearance = 5.8;
 
+// The KERB side of travel along `dir`. Named for the maths, not the road: in world x/z (y up) (dir.y, -dir.x)
+// points to the driver's LEFT -- traffic keeps left, UK/Japan style (Glenn, 2026-10-02: "I want to keep it that
+// way"). Lanes fill this half of a two-way road, and a bus stop's kerb is on this side.
+inline Vec2 rightOf(const Vec2& dir) { return {dir.y, -dir.x}; }
+
 struct NavLink {
     int from = 0;                       // NavGraph node index (tail)
     int to = 0;                         // NavGraph node index (head)

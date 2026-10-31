@@ -10,13 +10,6 @@
 namespace engine {
 
 namespace {
-// Right-hand normal of a (unit) travel direction: rotate -90 deg. With Vec2
-// mapping to world XZ and +Y up, perp() = {-y, x} is the LEFT (+90) normal, so
-// the right side is its negation: {y, -x}.
-// The KERB side of travel. Named for the maths, not the road: in world x/z (y up) (dir.y, -dir.x) points to the
-// driver's LEFT -- traffic keeps left, UK/Japan style (Glenn, 2026-10-02: "I want to keep it that way").
-inline Vec2 rightOf(const Vec2& dir) { return {dir.y, -dir.x}; }
-
 // Distance from point p to segment [a,b], plus the clamped parameter.
 Real pointSegDist(const Vec2& p, const Vec2& a, const Vec2& b) {
     Vec2 ab = b - a;

@@ -5129,7 +5129,7 @@ void CitySim::advance(Agent& a, Real dt, Real gap, Real minGap) {
             // ROAD RULES (Glenn, 2026-10-02: "Should we mimic road rules? Faster cars are in the furthest lane?" --
             // "our cars and roads are left lane like the uk or japan. And I want to keep it that way"). Traffic
             // drives on the LEFT: lane 0 lies next to the centre line (the OFFSIDE, overtaking lane) and the last
-            // lane is the NEARSIDE, the kerb. (NavGraph::rightOf is the kerb side: in world x/z it points left.)
+            // lane is the NEARSIDE, the kerb. (engine::rightOf (nav_graph.h) is the kerb side: in world x/z it points left.)
             // Not at a junction: nobody changes lane in the box or on its threshold.
             if (lanes > 1 && a.speed > 3.0 && std::fabs(dl) < 0.05 && !nearJunction(a.pos, 6.0)) {
                 const int kerb = lanes - 1;
