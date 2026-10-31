@@ -195,7 +195,6 @@ add_library(engine_core STATIC
     src/engine/procgen/city/building_uses.cpp
     src/engine/procgen/city/building_collider.cpp
     src/engine/procgen/city/city_lots.cpp
-    src/engine/procgen/city/surface_field.cpp
     src/engine/procgen/city/structure_set.cpp
     src/engine/procgen/city/block_grade.cpp
     src/engine/ai/nav_graph.cpp
@@ -840,7 +839,7 @@ add_executable(run_tests
     tests/test_room_plan.cpp
     tests/test_ladders.cpp
     tests/test_furniture.cpp
-    tests/test_surface_field.cpp
+    tests/test_flatten_grade.cpp
     tests/test_architect.cpp
     tests/test_erosion_gpu.cpp
     tests/test_city_plan.cpp

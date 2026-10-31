@@ -552,7 +552,7 @@ Each composes Phases A–C:
   parcels → buildings; the split/shape grammar as an L1 sibling of the L-system;
   facades + walkable shells, not interiors; impostors as the render-scale LOD
   ladder, ADR-0034 §5).
-  - **Terrain grading cascade** (**ADR-0075**) — the conform sub-epic: one
+  - **Terrain grading cascade** (**ADR-0075**; its SurfaceField retired by ADR-0280: TerrainParams + terrainHeight are the oracle) — the conform sub-epic: one
     `SurfaceField` oracle over the existing `terrainHeight`+`applyFlatten`
     substrate; road *corridors* (profile + crown cross-section + cut/fill
     earthwork daylighting into natural ground) and *blocks* that grade to their

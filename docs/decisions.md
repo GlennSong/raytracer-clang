@@ -13721,3 +13721,52 @@ follow-ups (#167, #142).
 different job: it cuts the ground along the flood's path as it goes, over 4 neighbours, to drain a hollow.
 
 **Consequences.** No bake change now.
+
+## ADR-0280 — Height samplers: two answers, each said once; SurfaceField retires
+
+#117 wave 2, item 22: "Height samplers: terrainHeight, lodVertexHeight, lodSurfaceHeight, terrainGridSurfaceHeight,
+Pyramid::height -- map who calls which; finish ADR-0075's SurfaceField or record why not." Mapped on 2026-10-31.
+
+**The ground has two honest answers.**
+- **The authored ground**, `terrainHeight`: eroded base, river carve, earthwork, then the cut/fill stack. About 60
+  callers: placement, the meshers, probes, footsteps. `lodVertexHeight` is one CDLOD vertex of it (dilated, with
+  the road-plane corner clamp).
+- **The drawn ground**, the triangles the meshers emit, which differ from the authored ground by metres at pad and
+  grade edges. Anything that has to stand on what is rendered needs this one. Three samplers answered it:
+  `lodSurfaceHeight` (the CDLOD leaf), `terrainGridSurfaceHeight` (the static grid) and `Pyramid::height` (the
+  baked ground, which the baked mesher draws from).
+
+Those are different jobs and both stay. The duplication was inside them.
+
+**Decision.**
+- **One triangle split.** `drawnCellHeight` (procgen/drawn_cell.h) interpolates a cell across the (a, b, d) /
+  (a, d, c) triangles. `lodSurfaceHeight`, `terrainGridSurfaceHeight` and `HeightTile::sampleLocal` each wrote it
+  out; they now call it with their own corners. Same arithmetic in the same order, so the heights are bit-identical.
+- **One drawn-ground picker in the loader.** `cdlodDrawnGround` now picks the pyramid when the level is baked (the
+  field past its edge, or with `RT_GROUND_FIELD=1`), the rule the vegetation block had kept to itself. The
+  vegetation, the dressing drape and the street furniture all call it. Before, the dressing and furniture evaluated
+  the field in a baked level, while the drawn mesh came from the pyramid. Now they sit on the ground that is drawn,
+  and they skip ~50 us field evaluations.
+- **One closure type.** `HeightSampler` (buildability.h) was `HeightField` (terrain_field.h) under a second name.
+  It is gone, and buildability, block grading and the water mesh take `HeightField`.
+- **SurfaceField is deleted**, along with its two tests. The flatten-grid, batter and block-grade tests in its file
+  stay, in `tests/test_flatten_grade.cpp`.
+  - It never had a production caller. ADR-0075 meant it to own the cut/fill stack and its index, but
+    `TerrainParams` (`flatten`, `flattenIndex`) already does, and `terrainHeight` folds more layers than SurfaceField
+    did. Wiring it in would have made the second owner ADR-0075 itself warned against.
+  - Of the closures it was to subsume, `RoadNet`'s and `RoadMeshParams`' are gone with the lattice, and the other
+    two are now one type.
+  - The idea worth keeping, *a stale index is a perf bug, never a correctness one*, is still owed: `terrainHeight`
+    trusts `flattenIndex`. It is in TECH_DEBT.md, to be done with a bake change.
+
+**Owed (changes the lots bake).** The lot pass's `meshGround` (city_lots.cpp, parks and plazas) means to follow the
+drawn mesh, but it blends bilinearly instead of across the triangle split, anchors at its own grid, and skips the
+road-plane clamp. It should call `drawnCellHeight` over `lodVertexHeight` corners, at the next lots tag bump.
+
+**Not changed.**
+- `entityGround` (`terrainHeight`, dilated) stays for entities that drape themselves.
+- Footsteps read the pyramid when baked and the field otherwise. That only decides the surface sound under a foot.
+
+**Consequences.** No bake change: no baked product reads the dressing or furniture drape. On baked levels the
+load-time dressing and furniture now sit on the pyramid, which is the ground the baked mesher draws. Where the
+pyramid stores leaf-resolution tiles that is the old height to within its 1 mm quantization.

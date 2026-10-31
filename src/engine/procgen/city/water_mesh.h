@@ -2,7 +2,7 @@
 #define RAYTRACER_ENGINE_PROCGEN_CITY_WATER_MESH_H
 
 #include "polygon.h"          // Vec2
-#include "buildability.h"     // HeightSampler
+#include "buildability.h"     // HeightField
 #include "../../mesh_builder.h"   // RenderMesh, MeshBuilder, Vec3
 
 namespace engine {
@@ -23,14 +23,14 @@ struct WaterMeshParams {
     double foamBand = 60.0;   // shore-distance cap baked into UV.v (m)
     // Which cells are sea, when not `floor`: the NATURAL ground, so a river channel cut below
     // sea level near its mouth stays the river's (hydrology waterMesh), not a staircase of sea.
-    HeightSampler extent;
+    HeightField extent;
 };
 
-RenderMesh buildWaterMesh(const HeightSampler& floor, const WaterMeshParams& p);
+RenderMesh buildWaterMesh(const HeightField& floor, const WaterMeshParams& p);
 
 // The sea cells buildWaterMesh emits, as squares: what other water surfaces clip against so
 // the two meet edge to edge and never overlap.
-std::vector<std::vector<Vec2>> waterMeshCells(const HeightSampler& floor, const WaterMeshParams& p);
+std::vector<std::vector<Vec2>> waterMeshCells(const HeightField& floor, const WaterMeshParams& p);
 
 }  // namespace engine
 

@@ -1,4 +1,5 @@
 #include "terrain_lod.h"
+#include "drawn_cell.h"   // the triangle split every drawn-ground sampler shares (ADR-0280)
 #include "../mesh_builder.h"
 
 #include <algorithm>
@@ -202,15 +203,9 @@ double lodSurfaceHeight(const TerrainParams& params, const Noise& noise, double 
     const double fi = std::floor(gx), fj = std::floor(gz);
     const double u = gx - fi, v = gz - fj;
     const double x0 = -worldHalf + fi * step, z0 = -worldHalf + fj * step;
-    const double ha = lodVertexHeight(params, noise, x0, z0, step);
-    const double hd = lodVertexHeight(params, noise, x0 + step, z0 + step, step);
-    // Triangles (a,b,d) and (a,d,c), split on the a-d diagonal (see generateLodNodeMesh).
-    if (u >= v) {
-        const double hb = lodVertexHeight(params, noise, x0 + step, z0, step);
-        return ha + u * (hb - ha) + v * (hd - hb);
-    }
-    const double hc = lodVertexHeight(params, noise, x0, z0 + step, step);
-    return ha + v * (hc - ha) + u * (hd - hc);
+    return drawnCellHeight(u, v, [&](int di, int dj) {
+        return lodVertexHeight(params, noise, x0 + di * step, z0 + dj * step, step);
+    });
 }
 
 LodNodeMesh generateLodNodeMesh(const TerrainParams& params, const Noise& noise,

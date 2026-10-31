@@ -2,6 +2,7 @@
 #define RAYTRACER_ENGINE_PROCGEN_CITY_BUILDABILITY_H
 
 #include "polygon.h"        // Vec2
+#include "../terrain_field.h"   // HeightField: the ground sampler it reads
 #include <functional>
 #include <vector>
 
@@ -15,7 +16,8 @@ namespace engine {
 //   Beach     — low, gentle land right at the water's edge (a reserved fringe).
 //   Steep     — land too steep to build on (mountain flanks, cliffs).
 //   Buildable — everything else: the land the city may occupy.
-using HeightSampler = std::function<double(double, double)>;
+// (The sampler is terrain_field.h's HeightField; a second name for the same closure, HeightSampler, retired with
+// ADR-0280.)
 
 struct BuildabilityConfig {
     double seaLevel   = -1e30;   // terrain below this is ocean; -inf disables water
@@ -28,17 +30,17 @@ struct BuildabilityConfig {
 
 enum class LandClass { Water, Beach, Steep, Buildable };
 
-LandClass classifyLand(const BuildabilityConfig& cfg, const HeightSampler& height,
+LandClass classifyLand(const BuildabilityConfig& cfg, const HeightField& height,
                        double x, double z);
 
-inline bool isBuildable(const BuildabilityConfig& cfg, const HeightSampler& height,
+inline bool isBuildable(const BuildabilityConfig& cfg, const HeightField& height,
                         double x, double z) {
     return classifyLand(cfg, height, x, z) == LandClass::Buildable;
 }
 
 // True if any point along the segment a->b sits over water — i.e. the road would
 // need a bridge. Sampled at ~stepped intervals.
-bool crossesWater(const BuildabilityConfig& cfg, const HeightSampler& height,
+bool crossesWater(const BuildabilityConfig& cfg, const HeightField& height,
                   const Vec2& a, const Vec2& b, double step = 8.0);
 
 }  // namespace engine

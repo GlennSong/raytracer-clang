@@ -300,11 +300,6 @@ static Collider buildCollider(const std::string& shape, const json& sizeJ,
     return c;
 }
 
-// THE SURFACE CDLOD DRAWS: the leaf mesh's triangle under (x, z) (lodSurfaceHeight) -- what the player stands on and
-// the leaf collider is built from. Not entityGround: that one is dilated over a cell, up to 0.4 m above the mesh on a
-// hillside. Empty without a CDLOD terrain. BY POINTER: the closure is copied into every streamed chunk's preparer,
-// and a by-value config copied the whole flatten set each time -- 40,000 street strips x 14,000 chunks was 44 GB
-// and the OOM killer (2026-09-29).
 // THE STREET TREES' HEIGHTS (real_tree.h): each street species at its own street height.
 static double streetTreeHeight(engine::StreetSpecies sp) {
     switch (sp) {
@@ -318,6 +313,15 @@ static double streetTreeHeight(engine::StreetSpecies sp) {
     }
 }
 
+// THE SURFACE CDLOD DRAWS (ADR-0280): what the player stands on and the leaf collider is built from -- the ONE
+// drawn-ground sampler the vegetation, the dressing and the street furniture plant on. Not entityGround: that one is
+// dilated over a cell, up to 0.4 m above the mesh on a hillside. Empty without a CDLOD terrain.
+// - BAKED (ADR-0095): the pyramid IS the drawn ground (the baked mesher draws from it), read in ~9 hash lookups
+//   where the field is evaluated in ~50 us over a city (its pads and earthwork) -- the grass's tiles over a town
+//   took 40-110 ms each (ADR-0225). Past its edge, and with RT_GROUND_FIELD=1 (A/B), the field below.
+// - The field: the leaf mesh's triangle under (x, z) (lodSurfaceHeight).
+// BY POINTER: the closure is copied into every streamed chunk's preparer, and a by-value config copied the whole
+// flatten set each time -- 40,000 street strips x 14,000 chunks was 44 GB and the OOM killer (2026-09-29).
 static std::function<Real(Real, Real)> cdlodDrawnGround(World& world) {
     std::function<Real(Real, Real)> g;
     world.each<TerrainLodConfig>([&](Entity, TerrainLodConfig& c) {
@@ -326,6 +330,13 @@ static std::function<Real(Real, Real)> cdlodDrawnGround(World& world) {
         g = [cfgp, nz](Real x, Real z) {
             return lodSurfaceHeight(cfgp->params, *nz, x, z, cfgp->worldHalf, cfgp->numLods, cfgp->gridRes);
         };
+        if (c.baked && !std::getenv("RT_GROUND_FIELD")) {
+            std::shared_ptr<const pyramid::Pyramid> pyr = c.baked;
+            g = [pyr, cfgp, nz](Real x, Real z) {
+                if (pyr->finestAt(x, z)) return pyr->height(x, z);
+                return lodSurfaceHeight(cfgp->params, *nz, x, z, cfgp->worldHalf, cfgp->numLods, cfgp->gridRes);
+            };
+        }
     });
     return g;
 }
@@ -4603,7 +4614,7 @@ bool LevelLoader::load(const std::string& path,
             // mesh must read the ground the player sees, not the pre-earthwork
             // natural. Sea-floor cells are fixed at D = 0, so basins that were
             // wet stay wet.
-            HeightSampler waterFloor = levelGround;
+            HeightField waterFloor = levelGround;
             if (terrainParams.earthwork) {
                 auto ew = terrainParams.earthwork;
                 auto nat = levelGround;
@@ -4818,30 +4829,11 @@ bool LevelLoader::load(const std::string& path,
             // metro's, worst 6.2 m). This runs after the city now, so it can plant on exactly
             // the surface CDLOD draws.
             TerrainParams tp = tpAtTerrain;
-            std::function<double(double, double)> drawn;
-            world.each<TerrainLodConfig>([&](Entity, TerrainLodConfig& c) {
-                tp = c.params;
-                // THE SURFACE CDLOD DRAWS (and the leaf collider is built from): the
-                // leaf mesh's triangle under the point. Measured against it, 17 of
-                // metro_lanes' 1034 scenery instances and 62 of the lattice metro's
-                // 1373 stood > 0.3 m above the drawn ground while sitting exactly on
-                // the smooth field at their own point.
-                auto cfgp = std::make_shared<const TerrainLodConfig>(c);   // by pointer: copies of `drawn` stay cheap
-                drawn = [cfgp, nz](double x, double z) {
-                    return lodSurfaceHeight(cfgp->params, nz, x, z, cfgp->worldHalf, cfgp->numLods,
-                                            cfgp->gridRes);
-                };
-                // BAKED (ADR-0095): the pyramid IS the drawn ground, read in ~9 hash lookups where the field is
-                // evaluated in ~50 us over a city (its pads and earthwork) -- the grass's tiles over a town took
-                // 40-110 ms each (ADR-0225). RT_GROUND_FIELD=1 evaluates the field as before (A/B).
-                if (c.baked && !std::getenv("RT_GROUND_FIELD")) {
-                    std::shared_ptr<const pyramid::Pyramid> pyr = c.baked;
-                    drawn = [pyr, cfgp, nz](double x, double z) {
-                        if (pyr->finestAt(x, z)) return pyr->height(x, z);
-                        return lodSurfaceHeight(cfgp->params, nz, x, z, cfgp->worldHalf, cfgp->numLods, cfgp->gridRes);   // past its edge
-                    };
-                }
-            });
+            world.each<TerrainLodConfig>([&](Entity, TerrainLodConfig& c) { tp = c.params; });
+            // THE SURFACE CDLOD DRAWS (cdlodDrawnGround). Measured against it, 17 of metro_lanes' 1034 scenery
+            // instances and 62 of the lattice metro's 1373 stood > 0.3 m above the drawn ground while sitting
+            // exactly on the smooth field at their own point.
+            std::function<double(double, double)> drawn = cdlodDrawnGround(world);
             // No CDLOD: the drawn surface is the static grid terrain's (one tile, or chunks),
             // which on a rounded hill sits below the smooth field (floating trees).
             if (!drawn && root.contains("terrain") && root["terrain"].is_object()) {
@@ -5731,7 +5723,7 @@ bool LevelLoader::load(const std::string& path,
             wp.hi = Vec2(x1, z1);
             wp.cell = 0.5;
             wp.foamBand = 0.6;
-            const HeightSampler floorAt = [=](double x, double z) {
+            const HeightField floorAt = [=](double x, double z) {
                 return x >= x0 - 1e-6 && x <= x1 + 1e-6 && z >= z0 - 1e-6 && z <= z1 + 1e-6 ? level - depth
                                                                                              : level + 1.0;
             };
