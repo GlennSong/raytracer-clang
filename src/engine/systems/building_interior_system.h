@@ -20,7 +20,7 @@ class World;
 
 // Streams building INTERIORS (ADR-0080 Phase 2). A building's inside exists
 // only while someone is there or arriving: the system reads the CityBuildings
-// records (plan + doors + the ~250 B BuildingParams regen key), decides
+// records (plan + doors + the 824 B BuildingParams regen key), decides
 // "inside" (XZ in the plan, y in the prism band) and "approaching" (within
 // APPROACH_M in FRONT of a door — the dot with the door normal is what makes
 // walking PAST a shop not build it), and grows the interior deterministically
