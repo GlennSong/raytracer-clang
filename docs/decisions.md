@@ -197,6 +197,8 @@ optimization); `each` always passes `Entity` (no component-only overload).
 smallest pool, or groups); needing safe structural edits during iteration
 (→ deferred command buffer).
 
+*Since then (#117 wave 0):* each<> drives its walk from the smallest pool, not the first listed one (ADR-0101, commit 62bf7980; world.h).
+
 ---
 
 ## ADR-0007 — Core primitives: `Handle` + `SlotMap`, logging, assert
@@ -1135,6 +1137,8 @@ inspector and serializes automatically.
 **Revisit trigger.** A described field whose type the `PropertyVisitor`
 interface can't express (nested structs, arrays, asset references) — extend the
 visitor rather than fork the inspector.
+
+*Since then (#117 wave 0):* eight types are registered (component_registry.cpp); the JSON visitors serve materials, camera lenses and undo snapshots, and level_loader.cpp still reads most of the level format by hand -- a component does not serialize automatically.
 
 ---
 
@@ -5808,6 +5812,8 @@ mode (the system that consumes the keys lives in ArenaState). `shot` replies
 a second external-control consumer (the Qt shell wanting sockets) — either
 means merging this transport with the EditorBridge design rather than growing
 a rival API.
+
+*Since then (#117 wave 0):* the channel injects real input (tap, hold), answers entity questions (agent?, lot?, findplace?) and makes transient play acts (ADR-0079), all in application_commands.cpp; only level-document edits remain the EditorBridge's.
 
 ---
 
@@ -14042,7 +14048,7 @@ carries a command table.
 ## ADR-0293 — One set of lane arrows: the lanes deck's
 
 #117 wave 1, item 16: "The two lane-arrow paint sets → the lanes one (ADR-0108); delete CityRenderSystem's
-angle-guessed copy." Since the lattice retired (ADR-0267), every city road is the lanes builder's, which paints
+angle-guessed copy." Since the lattice retired (ADR-0089, its 2026-10-14 note), every city road is the lanes builder's, which paints
 stop bars, crosswalks and turn arrows into its deck. citysim's `buildRoadMarkings` drew a second set of floating
 quads from the graph, guessing each lane's turn from its angle, gated off by `LevelRoadGraph::paintedMarkings`
 (#39). The gate was on for every road that ships, and the labs that run citysim without lanes have no streets.

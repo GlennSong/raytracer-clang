@@ -139,7 +139,8 @@ Try it by hand against a running viewer:
 printf 'info\n' | nc -U /tmp/raytracer-viewer-*.sock
 ```
 
-Threading (ADR-0072 staging): the socket thread only buffers lines;
+Threading (the physics contact-listener staging pattern, ADR-0078): the
+socket thread only buffers lines;
 `Application::runFrame` applies them top-of-frame on the main thread. Effects
 land within a frame; `shot` files land a frame later — poll for the file.
 
@@ -248,6 +249,10 @@ re-attach.
 
 ## Limits (by charter — ADR-0078)
 
-Read-and-look only: no world edits (the EditorBridge owns those), no input
-injection, no entity queries. citysim overlays need play mode. Windows has no
+No edits to the level document: the EditorBridge owns those. What the channel
+does change is transient — Settings knobs (`set`), the sim clock, possession's
+play acts (ADR-0079), and real input: `tap` and `hold` press keys through the
+same path a keyboard does. Questions about what is in the world (`agent?`,
+`lot?`, `findplace?`, `traffic?`) are answered; `commands?` lists them all.
+citysim overlays need play mode. Windows has no
 socket backend. One client is served at a time; the newest connection wins.

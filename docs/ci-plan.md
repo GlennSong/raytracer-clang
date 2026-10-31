@@ -2,7 +2,13 @@
 
 ## Why (the gap this closes)
 
-There is **no CI today**, and the render backends are a blind spot. The Vulkan
+**Status:** Stages 0 and 1 are live — `.github/workflows/build.yml` (every push
+and PR: Linux Vulkan compile + tests, macOS Metal build + tests + the offline
+shader check, `tools/check-metal-shaders.sh`), plus `levels-nightly.yml` (every
+level, heavy ones included, daily). Stage 2 is still future work. The rest of
+this page is the plan as written, before any CI existed.
+
+There was **no CI** then, and the render backends were a blind spot. The Vulkan
 backend (`vulkan_renderer.cpp` + `shaders/vulkan/*`) only compiles when a Vulkan
 SDK is present, which no machine in the loop had — so it shipped through Phases
 0–3 **never once compiled**. The first real compile (this Windows session) found
