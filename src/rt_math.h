@@ -490,6 +490,23 @@ struct BoundingSphere {
     Vec3 boxMax;
 };
 
+// THE SPHERE ROUND A MESH UNDER AN INSTANCE TRANSFORM (ADR-0284, #117 item 31): the model-space centre carried
+// AFFINE, with no perspective divide (an instance matrix's bottom row can carry DATA -- the grass clump's thinning
+// rank, a signal's state -- and a divide put a clump's sphere 4-140 m away from it: #50, "If I look down at the
+// grass it disappears"), and the radius grown by the largest column scale. The camera's instance cull
+// (frustumCullInstances) and the Vulkan draw's bounds share it.
+inline Vec3 instanceCentre(const Mat4& m, const Vec3& p) {
+    return Vec3(m.m[0][0] * p.x + m.m[0][1] * p.y + m.m[0][2] * p.z + m.m[0][3],
+                m.m[1][0] * p.x + m.m[1][1] * p.y + m.m[1][2] * p.z + m.m[1][3],
+                m.m[2][0] * p.x + m.m[2][1] * p.y + m.m[2][2] * p.z + m.m[2][3]);
+}
+inline Real instanceScale(const Mat4& m) {
+    Real s = 0;
+    for (int col = 0; col < 3; ++col)
+        s = std::max(s, std::sqrt(m.m[0][col] * m.m[0][col] + m.m[1][col] * m.m[1][col] + m.m[2][col] * m.m[2][col]));
+    return s;
+}
+
 struct Frustum {
     Vec3 normals[6];
     Real distances[6];

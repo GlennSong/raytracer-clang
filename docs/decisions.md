@@ -13839,3 +13839,23 @@ off, or drop that build." Read on 2026-10-31:
 - `shooting_system.{h,cpp}` are deleted with their registration. A build without scripting has no gun.
 
 **Test.** `script_block_spawn_is_swept_when_asked`: a block with `ccd` is swept, one without is not.
+
+## ADR-0284 — One instance sphere; the camera cull and the shadow bounds keep their own jobs
+
+#117 wave 2, item 31: "Two instance-cull paths → one, in RenderSystem." Read on 2026-10-31. Three places cull or
+bound instances, and they do different jobs:
+- **The camera cull, `frustumCullInstances`** (render_system.cpp). Every instance group (flora, grass, parked
+  cars, the far crowd band) is tested per instance against the view frustum and the distance band, before
+  anything is submitted.
+- **The Vulkan draw's bounds** (`sphereOf`, `drawMeshInstanced`). One sphere round the instances that survived the
+  camera cull, which feeds only the shadow cascades' per-item cull. That cull needs the light's planes, which live
+  in the backend, so it cannot move into RenderSystem.
+- **The GPU crowd, `crowd.comp`.** The far travellers, culled where they are simulated, on the GPU.
+
+What was written twice is the maths: the sphere round a mesh under an instance transform. Both copies carried the
+#50 lesson (affine, no divide: the bottom row is data) in their own words.
+
+**Decision.** `instanceCentre` and `instanceScale` (rt_math.h, beside `BoundingSphere`) say it once. The camera
+cull and Vulkan's `sphereOf` call them. The three paths stay three; their reasons are above.
+
+**Consequences.** Same spheres. No change in what is drawn.
