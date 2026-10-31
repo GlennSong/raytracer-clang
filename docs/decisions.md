@@ -6451,6 +6451,8 @@ source is refused and written instead). Rejected: a content-addressed section st
 refcount, but a new format and reader — kept for the housekeeping work) and incremental lots computation
 (the lots pass is global: one campus per city, distance rules, grading — weeks, and time is not the
 bottleneck). Operating guide: [docs/bakes.md](bakes.md).
+
+*Since then (#117 wave 0):* pruneBundles (engine/bundle/bake.cpp) compares each manifest's level path made absolute and normalised, so rt_bake's relative spelling and level_tests' absolute one are one level; it still keeps the newest bundle per level without checking its key (`rt_bake --prune <level.json …>` keeps a listed level's current bundle), and since ADR-0256 the prune also covers cache/terrain and cache/population.
 ## ADR-0085 — Two road generators, selected per entity: `shape:"lanelab"` beside `shape:"road"`
 
 **Status:** Accepted · **Date:** 2026-09-09
