@@ -81,7 +81,6 @@ inline engine::plan::CityPlan plannedCity(uint32_t seed = 11) {
 inline engine::RoadEntity plannedNet(uint32_t seed = 11, bool freeway = false) {
     const engine::plan::CityPlan city = plannedCity(seed);
     engine::RoadEntity net;
-    net.look.autoRoundabout = false;
     net.graph = city.streets;
     if (freeway) {
         const int base = static_cast<int>(net.graph.nodes.size());

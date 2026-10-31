@@ -14,5 +14,4 @@ TEST_CASE(design_rules_rank_classes_sensibly) {
     CHECK(!d.forClass(RoadClass::Local).dividedMedian);
     CHECK(d.forClass(RoadClass::Ramp).lanes == 1);                            // a ramp is one lane
     CHECK(d.forClass(RoadClass::Freeway).fullWidth() > d.forClass(RoadClass::Local).fullWidth());
-    CHECK(d.clearance > 4.0 && d.rampGrade > 0.0);                            // grade-sep numbers present
 }

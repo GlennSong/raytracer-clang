@@ -44,18 +44,6 @@ struct RoadLook {
                                   // ground (device feedback)
     bool   markings = true;
     bool   crosswalks = true;
-    // Junction policy (ADR-0075 P0): may the constraints pass PROMOTE a busy or
-    // over-acute node to a roundabout ring? Generated nets (metro/district)
-    // planarize + cap degree instead and set this false; the mesh and terrain-
-    // conform passes must honour it. Hand-authored roads keep true.
-    bool   autoRoundabout = true;
-    // Vertical alignment by CLASS (DesignRules::maxGrade: freeway 5%, arterial
-    // 8%, collector 10%, local 12%, ramp 6%) instead of one 8% for every road.
-    // The table existed and was ignored — every profile solve was handed the
-    // single kRoadMaxGrade — the same way lanesForClass was read by nav and
-    // ignored by the mesher. Steeper side streets, less earth moved; freeways
-    // tighten. Glenn chose this on 2026-08-29. false pins the single grade.
-    bool   perClassGrade = true;
     Vec3   color{0.09, 0.09, 0.10};
 };
 

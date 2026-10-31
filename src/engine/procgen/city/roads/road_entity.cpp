@@ -11,7 +11,6 @@
 
 #include "road_net_internal.h"
 #include "../road_semantics.h"    // classifyRoadGraph (the semantic layer)
-#include "../road_constraints.h"  // applyConstraints, capDegree, joinDanglingEnds
 #include "../road_rules.h"        // DesignRules
 #include "../../../../log.h"
 #include "../../../../profile.h"
@@ -252,18 +251,15 @@ void joinDanglingEndsLogged(RoadGraph& g, const RoadEntity& road) {
     }
 }
 
-// The graph the mesher AND the terrain-conform both build from: the sampled graph put
-// through the local-constraints pass (ADR-0052), so a promoted roundabout is reflected
-// identically in the carriageway and in the ground it grades. One source keeps them in sync.
+// The graph the sim routes on and the city builds from: the sampled graph, its dangling ends joined, classified.
+// (The local-constraints pass that promoted busy or acute nodes to roundabouts, ADR-0052, retired with the lattice:
+// every city is lane-built and its twin's junctions are the lanes builder's own -- ADR-0278.)
 RoadGraph constrainedGraph(const RoadEntity& road, const RoadGroundFn& heightAt) {
     // Roads-v2.1 2e: baked corridor edges stay IN — nav routes the freeway
     // natively from the graph now that the corridor renderer is gone. Only
     // the terrain conform still strips them (roadNetConformRegions):
     // corridorAuthor's engineered flatten owns the corridor's carve.
-    double minR = netMinTurnRadius(road);
-    RoadRules rules;
-    rules.autoRoundabout = road.look.autoRoundabout;   // honour the policy (ADR-0075 P0)
-    RoadGraph g = applyConstraints(sampleNetGraph(road, minR), rules);
+    RoadGraph g = sampleNetGraph(road, netMinTurnRadius(road));
     joinDanglingEndsLogged(g, road);
     classifyRoadGraph(g, heightAt);   // semantic layer (#17): kinds + access
     return g;

@@ -187,7 +187,6 @@ add_library(engine_core STATIC
     src/engine/procgen/city/roads/road_entity.cpp
     src/engine/procgen/city/roads/road_builder.cpp
     src/engine/procgen/city/roads/ground_grid.cpp
-    src/engine/procgen/city/road_constraints.cpp
     src/engine/procgen/city/road_semantics.cpp
     src/engine/procgen/city/road_rules.cpp
     src/engine/procgen/city/road_offset.cpp
@@ -761,7 +760,6 @@ add_executable(run_tests
     tests/test_terrain_field.cpp
     tests/test_earthwork.cpp
     tests/test_winding.cpp
-    tests/test_road_constraints.cpp
     tests/test_sim_rate_ab.cpp
     tests/test_city_stages.cpp
     tests/test_road_semantics.cpp

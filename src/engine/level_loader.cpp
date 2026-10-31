@@ -23,8 +23,6 @@
 #include <cstdlib>
 #include <tinygltf/stb_image_write.h>   // the PNG writer the elevation maps use
                                         // (implementation lives in model_importer.cpp)
-#include "procgen/city/road_rules.h"    // DesignRules: the per-class grade table the
-                                        // poke report hands weldChainProfiles
 #include "procgen/earthwork.h"
 #include "procgen/grass.h"
 #include "procgen/stylized_tree.h"
@@ -76,7 +74,6 @@
 #include "procgen/city/road_network.h" // extractBlocks (block grading)
 #include "procgen/city/city_svg.h"
 #include "procgen/city/architect.h"   // districtName (city map hub labels)
-#include "procgen/city/road_constraints.h"   // applyConstraints — bake roundabouts into the graph
 #include "procgen/city/road_mesh.h"   // triangulatePolygon (building prism colliders)
 #include "procgen/city/street_furniture.h"   // build-time signal/lamp placement
 #include "procgen/city/street_kit.h"  // trafficSignalProto, streetLamp

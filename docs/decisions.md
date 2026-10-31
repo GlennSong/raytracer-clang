@@ -13659,3 +13659,38 @@ points), and `terrain.route` falls back to its straight chain, as it always did.
 
 **Consequences.** No bake change: no level or recipe routes through Lua. The island's and the planner's router
 settings (cell, weights, margins per road kind) are the search's tuning and stay with their callers (ADR-0276).
+
+## ADR-0278 — The lattice's road passes retire: no roundabout promotion, no unread design policy
+
+#117 wave 2, item 20, as the plan put it: "Lattice profile solvers and lattice graph passes still running
+(road_mesh.cpp, road_entity.cpp), called only by the poke report: move the report onto lanes, then delete."
+Measured on 2026-10-31:
+- **The profile solvers are already gone.** `weldChainProfiles` and `clearanceProfile` left with the old road
+  systems (ADR-0267, ADR-0268).
+- **The poke report is already on lanes.** It reads a lane-built city's published deck from the bundle (`RoadDeck`,
+  `readCityProducts`), the surface the question is about.
+- **What remained was the constraints pass.** `applyConstraints` (road_constraints, ADR-0052) promoted a busy or
+  over-acute node to a roundabout ring, gated on `RoadLook::autoRoundabout`. It still ran inside `navRoadGraph`, the
+  function that turns every lane-built city's road twin into the sim's routing graph. But the twin sets
+  `autoRoundabout = false` ("lanelab owns its junctions"), so on every city that ships it passed the graph through
+  untouched. Only hand-built test nets ever took it.
+- **Around it, unread:**
+  - `RoadLook::perClassGrade`, the lattice profile solve's per-class switch;
+  - `kDesignRules` and `kRoadMaxGrade`, that solve's tables;
+  - `DesignRules`' network policy (`minArmAngle`, `maxArmsAtGrade`, `clearance`, `deckThickness`, `rampGrade`), whose
+    reader was the lattice's layered mesh.
+
+**Decision.** They go.
+- `road_constraints.{h,cpp}` and `test_road_constraints.cpp` are deleted.
+- `constrainedGraph` is now the sampled graph, its dangling ends joined (the T-junction repair a twin still uses),
+  classified.
+- `RoadLook` loses `autoRoundabout` and `perClassGrade`. The bundle codec writes two zero bytes in their place and
+  reads past them, the way it keeps the retired grower's hub count, so bundles baked before still read. Drop them at
+  the next format bump.
+- `DesignRules` keeps its per-class rows: the cross-sections, and the lane count nav and the markings read. Its
+  grades are the road class table's (ADR-0276).
+
+**Proof.** For every lane-built city `applyConstraints` was the identity (its gate was off), so `navRoadGraph`, and
+everything routed on it, is unchanged. The gate's suites, which build cities through it, pass.
+
+**Consequences.** No bake change. The old pass also had nothing on the poke report, which reads the lanes deck.
