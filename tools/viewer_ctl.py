@@ -7,37 +7,11 @@
 
 Every viewer listens at /tmp/raytracer-viewer-<pid>.sock; with no --pid this talks to the newest live one.
 """
-import glob
 import os
-import socket
 import sys
 
-
-def live_sockets():
-    out = []
-    for path in glob.glob("/tmp/raytracer-viewer-*.sock"):
-        try:
-            pid = int(path.rsplit("-", 1)[1].split(".")[0])
-            os.kill(pid, 0)   # still running?
-        except (ValueError, ProcessLookupError, PermissionError):
-            continue
-        out.append((os.path.getmtime(path), pid, path))
-    return sorted(out, reverse=True)
-
-
-def send(path, cmd, timeout=60):
-    s = socket.socket(socket.AF_UNIX)
-    s.settimeout(timeout)
-    s.connect(path)
-    s.sendall((cmd.strip() + "\n").encode())
-    reply = b""
-    while not reply.endswith(b"\n"):
-        chunk = s.recv(65536)
-        if not chunk:
-            break
-        reply += chunk
-    s.close()
-    return reply.decode().strip()
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from rtctl import live_sockets, send   # the control channel (ADR-0291)
 
 
 def main(argv):

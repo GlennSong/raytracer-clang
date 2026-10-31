@@ -13986,3 +13986,20 @@ work in double and morph to the coarser level's averaged normal.
 
 **Proof.** A hash over the live morph targets of three nodes and all 21 baked tiles of a pyramid, on ground with
 a road ramp and a pad (so the pin fires), is `3e5483088f17f815` before and after.
+
+## ADR-0291 — One control-channel client: tools/rtctl.py
+
+#117 wave 1, item 13: "The four control-socket clients in tools/ → one rtctl module the others import." Four
+clients, each with its own reading of a reply:
+- lanelab_shots' `send`, which five probes imported;
+- viewer_ctl's;
+- viewer-mcp's, which also deleted socket files that refused a connection;
+- citywalk's `Channel`, which read one 8 KB chunk and could cut a long reply.
+
+Six probe tools also each launched a viewer and waited for its socket in the same eight lines.
+
+**Decision.** `tools/rtctl.py`, which every tool imports:
+- `send` reads a reply to its newline;
+- `live_sockets` and `newest` find running viewers by their pid, and leave stale socket files alone;
+- `launch` starts a viewer and waits for its socket;
+- `stop` ends the tool's own viewer, by its process.

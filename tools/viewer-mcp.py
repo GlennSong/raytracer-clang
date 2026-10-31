@@ -23,15 +23,15 @@ Manual smoke test (what the build session runs before first registration):
     '{"jsonrpc":"2.0","id":2,"method":"tools/list"}' \
     | python3 tools/viewer-mcp.py
 """
-import glob
 import json
 import os
-import socket
 import subprocess
 import sys
 import time
 
-SOCK_GLOB = "/tmp/raytracer-viewer-*.sock"
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import rtctl   # the control channel (ADR-0291)
+
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SITE_TABLE = os.path.join(REPO, "web", "engine", "commands.json")
 SHOT_TIMEOUT = 30.0   # seconds to wait for a dump file to land
@@ -40,48 +40,20 @@ SHOT_TIMEOUT = 30.0   # seconds to wait for a dump file to land
 # --- control-channel client --------------------------------------------------
 
 def _live_sockets():
-    """Live socket paths, newest last. Stale files (a killed viewer skips its
-    unlink) are removed on sight so discovery stays truthful."""
-    live = []
-    for path in sorted(glob.glob(SOCK_GLOB), key=lambda p: os.path.getmtime(p)):
-        try:
-            with socket.socket(socket.AF_UNIX) as s:
-                s.settimeout(2.0)
-                s.connect(path)
-            live.append(path)
-        except OSError:
-            try:
-                os.unlink(path)
-            except OSError:
-                pass
-    return live
+    """Live socket paths, newest last (rtctl's, ADR-0291)."""
+    return [path for _, _, path in reversed(rtctl.live_sockets())]
 
 def _resolve(instance):
-    socks = _live_sockets()
-    if not socks:
-        raise RuntimeError("no running viewer (use launch_viewer)")
-    if instance:
-        for p in socks:
-            if instance in p:
-                return p
-        raise RuntimeError(f"no viewer matching '{instance}' (live: {socks})")
-    return socks[-1]   # newest
+    try:
+        return rtctl.newest(match=instance or None)
+    except RuntimeError:
+        raise RuntimeError(f"no viewer matching '{instance}' (live: {_live_sockets()})" if instance
+                           else "no running viewer (use launch_viewer)")
 
 def send_command(line, instance=None, timeout=10.0):
     """One command, one reply, fresh connection (the channel serves the newest
     client, so short-lived connections compose with a human's tools)."""
-    path = _resolve(instance)
-    with socket.socket(socket.AF_UNIX) as s:
-        s.settimeout(timeout)
-        s.connect(path)
-        s.sendall((line + "\n").encode())
-        buf = b""
-        while b"\n" not in buf:
-            chunk = s.recv(4096)
-            if not chunk:
-                raise RuntimeError(f"viewer closed the connection ({path})")
-            buf += chunk
-    return buf.split(b"\n", 1)[0].decode()
+    return rtctl.send(_resolve(instance), line, timeout)
 
 def _log_for(sock_path):
     return sock_path.replace(".sock", ".log")

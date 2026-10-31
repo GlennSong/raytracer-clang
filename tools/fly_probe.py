@@ -22,7 +22,8 @@ The jump at the start (the teleport onto the path) is excluded. Stdlib only.
 import argparse, csv, json, math, os, re, statistics, subprocess, sys, time
 
 sys.path.insert(0, os.path.dirname(__file__))
-from lanelab_shots import send   # the control-socket helper
+import rtctl   # the control channel (ADR-0291)
+from rtctl import send
 from walk_probe import eye_at
 
 
@@ -70,14 +71,9 @@ def main():
     env.setdefault("RT_PROBE_TAG", "fly_probe")
     log_path = os.path.join(out, "viewer.log")
     log = open(log_path, "wb")
-    proc = subprocess.Popen([a.viewer, a.level, "--play"], stdout=log, stderr=subprocess.STDOUT,
-                            start_new_session=True, env=env)
-    sock = f"/tmp/raytracer-viewer-{proc.pid}.sock"
     t0 = time.time()
+    proc, sock = rtctl.launch(a.viewer, a.level, log=log, env=env)
     try:
-        while not os.path.exists(sock):
-            if proc.poll() is not None or time.time() - t0 > 60: sys.exit("viewer did not open its control socket")
-            time.sleep(0.2)
         send(sock, "info", timeout=a.load_timeout)
         print(f"loaded in {time.time() - t0:.0f} s", flush=True)
         # the path every 10 m; the ground every 100 m
@@ -136,9 +132,7 @@ def main():
         end_mark = frame_now(sock)
         time.sleep(1.5)   # the last log lines
     finally:
-        proc.terminate()
-        try: proc.wait(15)
-        except subprocess.TimeoutExpired: proc.kill()
+        rtctl.stop(proc)
 
     marks = dict(start_mark=int(start_mark), end_mark=int(end_mark), shot_frames=shot_frames, log_from=log_from,
                  arrivals_from=arrivals_from, total=total)

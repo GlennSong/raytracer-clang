@@ -17,16 +17,17 @@ training set (ADR-0091).
 Standard library only, same rule as viewer-mcp.py / frame-report.py.
 """
 import argparse
-import glob
 import json
 import math
 import os
 import random
 import re
-import socket
+import sys
 import time
 
-SOCK_GLOB = "/tmp/raytracer-viewer-*.sock"
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import rtctl   # the control channel (ADR-0291)
+
 LOG = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "citywalk-log.jsonl")
 
 
@@ -41,33 +42,14 @@ class Channel:
 
     @staticmethod
     def discover():
-        """Newest socket that actually answers. Stale files outlive killed viewers."""
-        for p in sorted(glob.glob(SOCK_GLOB), key=os.path.getmtime, reverse=True):
-            try:
-                s = socket.socket(socket.AF_UNIX)
-                s.settimeout(1.5)
-                s.connect(p)
-                s.sendall(b"ping\n")
-                if s.recv(64).startswith(b"ok"):
-                    return p
-            except OSError:
-                continue
-            finally:
-                try:
-                    s.close()
-                except Exception:
-                    pass
-        return None
+        """The newest live viewer's socket (rtctl's, ADR-0291), or None."""
+        try:
+            return rtctl.newest()
+        except RuntimeError:
+            return None
 
     def send(self, line):
-        s = socket.socket(socket.AF_UNIX)
-        s.settimeout(self.timeout)
-        s.connect(self.path)
-        try:
-            s.sendall((line + "\n").encode())
-            return s.recv(8192).decode().strip()
-        finally:
-            s.close()
+        return rtctl.send(self.path, line, self.timeout)
 
     def get(self, key):
         r = self.send(f"get {key}")
