@@ -10,7 +10,6 @@
 #include "../procgen/noise.h"
 #include "../procgen/lsystem.h"
 #include "../procgen/tree.h"
-#include "../procgen/vehicle_mesh.h"
 #include "../procgen/vehicle/car_mesh.h"
 #include "../procgen/vehicle/occupant.h"
 #include "../procgen/person.h"
@@ -293,29 +292,8 @@ int l_mesh_capsule(lua_State* L) {
     return 1;
 }
 
-// mesh.car_shell(style, color, {W, H, L} [, with_wheels]) — the lofted, curved
-// car body (ADR-0062): superellipse sections along a style roofline, glass
-// painted into the greenhouse. The SAME generator the NPC fleet instances, so a
-// Lua vehicle recipe (the player's car) matches the traffic 1:1. Styles:
-// "sedan", "hatchback", "suv", "pickup", "van", "boxtruck".
-int l_mesh_car_shell(lua_State* L) {
-    std::string s = luaL_checkstring(L, 1);
-    CarShellStyle style = CarShellStyle::Sedan;
-    if (s == "hatchback") style = CarShellStyle::Hatchback;
-    else if (s == "suv") style = CarShellStyle::SUV;
-    else if (s == "pickup") style = CarShellStyle::Pickup;
-    else if (s == "van") style = CarShellStyle::Van;
-    else if (s == "boxtruck") style = CarShellStyle::BoxTruck;
-    else if (s != "sedan") return luaL_error(L, "car_shell: unknown style '%s'", s.c_str());
-    Vec3 color = checkVec3(L, 2);
-    Vec3 size = checkVec3(L, 3);
-    bool wheels = lua_isboolean(L, 4) ? lua_toboolean(L, 4) != 0 : true;
-    pushMesh(L, std::make_shared<RenderMesh>(buildCarShell(style, color, size, wheels)));
-    return 1;
-}
-
 // --- mesh.car -------------------------------------------------------------
-// The low-poly car generator. Unlike car_shell it returns PARTS, not one mesh:
+// The low-poly car generator. It returns PARTS, not one mesh:
 // Renderable/InstanceGroup each carry a single RenderMaterial, so transparent
 // glass physically cannot share a mesh with the painted body. Recipes live in
 // vehicles.lua over the class data in vehicle_classes.lua (ADR-0042: C++ owns
@@ -3943,7 +3921,6 @@ void openProcgenLibrary(ScriptVM& vm) {
         {"plane", l_mesh_plane},
         {"torus", l_mesh_torus},
         {"capsule", l_mesh_capsule},
-        {"car_shell", l_mesh_car_shell},
         {"car", l_mesh_car},
         {"occupant", l_mesh_occupant},
         {"person", l_mesh_person},

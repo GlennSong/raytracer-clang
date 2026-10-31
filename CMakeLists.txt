@@ -97,7 +97,6 @@ add_library(engine_core STATIC
     src/engine/procgen/leaf_card.cpp
     src/engine/procgen/foliage_kit.cpp
     src/engine/procgen/surface_maps.cpp
-    src/engine/procgen/vehicle_mesh.cpp
     src/engine/procgen/vehicle/car_mesh.cpp
     src/engine/procgen/vehicle/car_interior.cpp
     src/engine/procgen/vehicle/occupant.cpp
@@ -750,7 +749,6 @@ add_executable(run_tests
     tests/test_sdf.cpp
     tests/test_city.cpp
     tests/test_surface_maps.cpp
-    tests/test_vehicle_mesh.cpp
     tests/test_car_mesh.cpp
     tests/test_vehicle_lamps.cpp
     tests/test_model_importer.cpp
