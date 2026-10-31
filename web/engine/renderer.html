@@ -551,9 +551,9 @@
     </figure>
   </div>
 
-  <div class="note"><p><b>Shaders compiled but not drawn.</b> CMake compiles <code>atmosphere.frag</code>,
+  <div class="note"><p><b>Shaders compiled but not drawn.</b> At <code>47d587f3</code> CMake compiled <code>atmosphere.frag</code>,
     <code>star.frag</code>, <code>water.vert</code> and <code>water.frag</code> (the procedural-planet passes) to
-    SPIR-V, but nothing in the Vulkan backend loads them at this commit. Water on Vulkan is drawn by
+    SPIR-V, but nothing in the Vulkan backend loaded them; ADR-0294 has since deleted all four. Water on Vulkan is drawn by
     <code>mesh.frag</code> through the water pipeline (its <code>Surface::Water</code> and <code>River</code> code), and
     the sky by <code>sky.frag</code>. The memory note on realism records the matching gotcha: the "scattering" sky
     model is Metal only.</p></div>

@@ -21,7 +21,7 @@ directory for a graphics or OS symbol.
 
 | Seam | Interface | Crosses as | Implementations |
 | --- | --- | --- | --- |
-| Rendering (RHI) | `Renderer` (`renderer.h`) | backend-neutral structs only | `metal/`, `vulkan/` (planned), `webgpu/` (web, Phases 0–1), `null_renderer.cpp` |
+| Rendering (RHI) | `Renderer` (`renderer.h`) | backend-neutral structs only | `metal/`, `vulkan/`, `webgpu/` (web, Phases 0–1), `null_renderer.cpp` |
 | Windowing + input | `Window` (`window.h`) | our `Event`/`KeyCode`, opaque `void*` native handle | `window.cpp` (GLFW), `hosted_window.*` (editor embed) |
 
 **The rule (load-bearing, from `AGENTS.md`):** no `GLFW_*`, `NSWindow`/`HWND`,
@@ -99,7 +99,7 @@ brick/concrete/asphalt/…) ids must stay in lockstep across `renderer.h`,
 | `gamepad_gc.h` / `.mm` | Apple GCController backend (macOS only); GLFW joystick elsewhere |
 | `settings.h` / `.cpp` | Persisted viewer settings |
 | `metal/` | Metal backend (macOS) — see `metal/AGENTS.md` |
-| `vulkan/` | Vulkan backend (Linux/Windows, in progress) — see `vulkan/AGENTS.md` |
+| `vulkan/` | Vulkan backend (Linux/Windows) — see `vulkan/AGENTS.md` |
 
 ## When you add a backend
 

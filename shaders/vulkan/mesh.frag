@@ -130,7 +130,8 @@ vec3 fresnelSchlickRoughness(float cosTheta, vec3 F0, float roughness) {
 
 // Procedural-sky environment (no clouds — they are never baked into IBL),
 // ported from environment.metal sampleEnvironment. Used as an analytic stand-in
-// for Metal's baked irradiance/prefiltered cubes (Phase 4b adds the real bake).
+// for Metal's baked irradiance/prefiltered cubes; Vulkan bakes no cubemap (an HDR
+// level samples its equirect map directly, below).
 vec3 sampleEnvironment(vec3 dir) {
     float skyBlend = clamp(dir.y, 0.0, 1.0);
     vec3 sky = mix(g.skyHorizon.rgb, g.skyZenith.rgb, pow(skyBlend, 0.5));
@@ -1508,10 +1509,10 @@ void main() {
         }
     }
 
-    // Image-based lighting from the procedural sky (analytic approximation of
-    // Metal's baked irradiance + GGX-prefiltered split-sum; Phase 4b adds the
-    // real cubemap bake + BRDF LUT, and HDR-equirect mode). g.ambient carries
-    // the ambient tint * multiplier as the overall IBL strength.
+    // Image-based lighting: an analytic stand-in for Metal's baked irradiance +
+    // GGX-prefiltered cubes -- the procedural sky, or the HDR equirect sampled
+    // directly; no cubemap bake. The BRDF LUT (baked at init) gives the split-sum
+    // specular. g.ambient carries the ambient tint * multiplier as the IBL strength.
     float NdotV = max(dot(N, V), 1e-4);
     vec3 R = reflect(-V, N);
     // IBL source: HDR equirect when bound (counts.z==1), else the procedural sky.

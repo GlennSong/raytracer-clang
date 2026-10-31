@@ -1087,6 +1087,8 @@ ADR-0001); many-light scenes making forward lighting the frame's hot spot (→
 deferred or clustered); NPR needs outgrowing per-material models (e.g.
 full-screen stylization passes).
 
+*Since then (#117 wave 0):* SSAO still darkens the whole HDR colour, not indirect light only -- both composites multiply by max(ao, aoFloor) (shaders/vulkan/composite.frag, shaders/metal/post_composite.metal); the interim route stayed.
+
 ---
 
 ## ADR-0018 — The property layer: components describe their editable fields once

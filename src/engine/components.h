@@ -161,9 +161,10 @@ struct Renderable {
 // Replaces "thousands of Renderable entities" for static scatter (the forest):
 // one InstanceGroup carries the shared mesh/material and a baked world matrix per
 // instance, so RenderSystem iterates a handful of groups instead of every plant,
-// culls by the group's bounds, and issues one drawMeshInstanced. The instances
-// are static (no per-instance Transform/interpolation). Per-instance culling /
-// chunking for huge worlds is the Tier 5 follow-up.
+// culls by the group's bounds, and issues one drawMeshInstanced. No per-instance
+// Transform: a group is static unless its owner re-bakes `transforms` each fixed
+// step with `ids` (MOVING INSTANCES below -- traffic, riders), which the renderer
+// interpolates.
 struct InstanceGroup {
     MeshHandle mesh;
     RenderMaterial material;
