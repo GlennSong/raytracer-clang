@@ -1053,9 +1053,9 @@ Open, ratcheted:
   BuildingInteriorSystem residency was skipped to avoid a system-to-system
   reference. Cosmetically indistinguishable today (both gates centre on the
   player); revisit if leaf counts ever matter.
-- **Walkers do not use doors.** PedGraph door nodes exist unwired; NPCs
-  neither enter buildings nor trigger leaves (DoorSystem tracks the player
-  only).
+- **Walkers do not use doors.** NPCs neither enter buildings nor trigger
+  leaves (DoorSystem tracks the player only). The unwired door graph
+  (PedGraph, ADR-0066) was deleted in #117 wave 0; walkers route on NavGraph.
 
 - **Interior finish PICKS are seed bits, not architecture.** Five floor
   finishes (walnut, oak, tile, marble, carpet -- the marble and carpet

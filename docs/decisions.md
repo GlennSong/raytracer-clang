@@ -14029,3 +14029,26 @@ quads from the graph, guessing each lane's turn from its angle, gated off by `Le
 
 Item 15 ("road ear-clipper → earcut") needed no change: road meshing's `triangulatePolygon` already forwards to
 the one triangulator (triangulate.h).
+
+## ADR-0294 — Wave 0: dead code and copies
+
+#117 wave 0, items 1-8: code with no caller outside its own file or test, and private copies of a shared rule.
+Nothing in the world changes. Each item was checked for callers before it went:
+1. `ped_graph.{h,cpp}` and its test are deleted. The door graph (ADR-0066) was never wired; walkers route on
+   NavGraph.
+2. `SwimState::verticalSpeed` is deleted. The swimmer's physics test now swims by `swimVerticalStep`, the rule
+   the game uses.
+3. The four GLSL shaders Vulkan never loaded (atmosphere.frag, star.frag, water.vert, water.frag) are no longer
+   compiled, and the files are deleted. The Metal and WGSL ports stand alone; atmosphere is wired on both.
+4. `buildCarShell` and `mesh.car_shell` are deleted (superseded by `mesh.car`, ADR-0062); no script used them.
+5. The pursuit and lane-follow stack in engine/ai is NOT dead: the possessed car drives on it (city_possess,
+   ADR-0079) and walkers use its stuck and knockdown timers. Only the three pieces with no caller outside tests
+   go: `Commitment` (ADR-0063's decide stage, never wired), `senseLeader` (the straight-cone sensor that
+   `senseAlongPath` replaced; the convoy test now senses along the path, as possession does) and
+   `closestApproach`.
+6. One `rightOf` (nav_graph.h) replaces the private copies in nav_graph.cpp and bus_stop_props.cpp. It keeps its
+   meaning: the kerb side, which is the driver's left (traffic keeps left).
+7. `loadForest` holds its near parts as `RecipeTreePart`, not a field-for-field local copy.
+8. `KdTree` is renamed `TriangleBVH` (triangle_bvh.h): it splits triangles at the median centroid and its
+   children overlap, so it is a BVH, not a k-d tree. `AABB` moves to its own header (aabb.h), shared by the
+   triangle BVH and the instance BVH.

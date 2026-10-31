@@ -456,7 +456,6 @@ add_library(citysim STATIC
     src/apps/citysim/bus_stop_props.cpp   # the pole, sign and bench you can see
     src/apps/citysim/city_map_raster.cpp  # the map tool's picture: the city SVG, rasterized (nanosvg)
     src/apps/citysim/places.cpp          # places layer: buildings → routable POIs (ADR-0066)
-    src/apps/citysim/ped_graph.cpp       # pedestrian nav-graph: door-to-door walking (ADR-0066)
     src/apps/citysim/relationships.cpp   # surface-level social graph (ADR-0066)
     src/apps/citysim/city_sim.cpp
     src/apps/citysim/city_render.cpp
@@ -821,7 +820,6 @@ add_executable(run_tests
     tests/test_places.cpp
     tests/test_screen_project.cpp
     tests/test_relationships.cpp
-    tests/test_ped_graph.cpp
     tests/test_tier_v.cpp
     tests/test_sim_scale.cpp
     tests/test_city_lots.cpp
