@@ -61,7 +61,6 @@ SRCS = \
 	$(SRC_DIR)/engine/procgen/skeleton.cpp \
 	$(SRC_DIR)/engine/procgen/tree.cpp \
 	$(SRC_DIR)/engine/procgen/surface_maps.cpp \
-	$(SRC_DIR)/engine/procgen/vehicle_mesh.cpp \
 	$(SRC_DIR)/engine/procgen/vehicle/car_mesh.cpp \
 	$(SRC_DIR)/engine/procgen/vehicle/car_interior.cpp \
 	$(SRC_DIR)/engine/procgen/vehicle/occupant.cpp \
@@ -191,7 +190,6 @@ TEST_SRCS = \
 	$(TEST_DIR)/test_handle_source.cpp \
 	$(TEST_DIR)/test_path_edit_tool.cpp \
 	$(TEST_DIR)/test_surface_maps.cpp \
-	$(TEST_DIR)/test_vehicle_mesh.cpp \
 	$(TEST_DIR)/test_car_mesh.cpp \
 	$(TEST_DIR)/test_vehicle_lamps.cpp \
 	$(TEST_DIR)/test_model_importer.cpp \
@@ -232,7 +230,6 @@ TEST_SRCS = \
 	$(TEST_DIR)/test_places.cpp \
 	$(TEST_DIR)/test_screen_project.cpp \
 	$(TEST_DIR)/test_relationships.cpp \
-	$(TEST_DIR)/test_ped_graph.cpp \
 	$(TEST_DIR)/test_city_lots.cpp \
 	$(TEST_DIR)/test_site_plan.cpp \
 	$(TEST_DIR)/test_core_plan.cpp \
@@ -289,7 +286,6 @@ TEST_ENGINE_SRCS = \
 	$(SRC_DIR)/engine/procgen/skeleton.cpp \
 	$(SRC_DIR)/engine/procgen/tree.cpp \
 	$(SRC_DIR)/engine/procgen/surface_maps.cpp \
-	$(SRC_DIR)/engine/procgen/vehicle_mesh.cpp \
 	$(SRC_DIR)/engine/procgen/vehicle/car_mesh.cpp \
 	$(SRC_DIR)/engine/procgen/vehicle/car_interior.cpp \
 	$(SRC_DIR)/engine/procgen/vehicle/occupant.cpp \
@@ -344,7 +340,6 @@ TEST_ENGINE_SRCS = \
 	$(SRC_DIR)/apps/citysim/traffic_rules.cpp \
 	$(SRC_DIR)/apps/citysim/city_goals.cpp \
 	$(SRC_DIR)/apps/citysim/places.cpp \
-	$(SRC_DIR)/apps/citysim/ped_graph.cpp \
 	$(SRC_DIR)/apps/citysim/relationships.cpp \
 	$(SRC_DIR)/apps/citysim/city_sim.cpp \
 	$(SRC_DIR)/apps/citysim/city_render.cpp \
