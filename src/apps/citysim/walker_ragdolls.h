@@ -3,9 +3,9 @@
 
 // TOWNSPEOPLE KNOCKED FLYING (Glenn, 2026-10-24: "this might also go for agents you run into, but we wouldn't
 // want them all to ragdoll because I'm sure that would be stupid expensive"). A walker a car floors becomes, for a
-// few seconds, a ragdoll of the six blocks (engine/block_body.h) in its own outfit, thrown away from the car --
+// few seconds, a ragdoll of the ten blocks (engine/block_body.h) in its own outfit, thrown away from the car --
 // one of at most kSlots at once; past that, the oldest gets up early. Only walkers with a physical body can be
-// hit at all (the nearest few hundred), and only a hit costs anything: six Jolt bodies a slot.
+// hit at all (the nearest few hundred), and only a hit costs anything: ten Jolt bodies a slot.
 
 #include "../../engine/block_body.h"
 #include "../../engine/body_draw.h"

@@ -438,7 +438,7 @@ void CityWalkerSystem::driveWalkers(engine::FrameContext& ctx) {
         Vec2 posXZ(pos.x, pos.z);
 
         // Knockdown: a vehicle moving through the walker's body floors it -- thrown away from the car as a
-        // ragdoll of its six blocks (walker_ragdolls.h), up again where it lands. A hit while already down
+        // ragdoll of its ten blocks (walker_ragdolls.h), up again where it lands. A hit while already down
         // throws it again.
         // (`knock` on the socket throws the walker nearest the player, for trying it without a car)
         const bool knockNearest = knockPending_;

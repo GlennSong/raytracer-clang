@@ -176,7 +176,7 @@ public:
     void setCharacterPosition(CharacterId id, const Vec3& position);
 
     // --- Ragdoll (Jolt Ragdoll) ---------------------------------------------
-    // A body gone limp: boxes joined by swing-twist joints (engine/block_body.h's six blocks, for a person),
+    // A body gone limp: boxes joined by swing-twist joints or hinges (engine/block_body.h's ten blocks, for a person),
     // simulated with the world and colliding with it, never with itself at a joint. Parts are listed parents
     // first; each joint is a world point with the axis from parent to child, limited to `swingDeg` off it and
     // `twistDeg` round it.

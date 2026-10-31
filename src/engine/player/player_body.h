@@ -157,7 +157,7 @@ public:
     void pose(const PlayerBody& b, const BodyStep& s, PlayerPose& p) const override;
 };
 
-// --- on a board: the skateboard (slot 8), the scooter (9) --------------------------------------------------------
+// --- on a board: the skateboard (slot 7), the scooter (8) --------------------------------------------------------
 class BoardMode final : public BodyMode {
 public:
     Vec3 heading{0, 0, -1};

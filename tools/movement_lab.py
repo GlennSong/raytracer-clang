@@ -17,12 +17,12 @@ edit of the JSON.
   SOUTH   slopes 30 .. 70 degrees (walkable to 50), a V between two slabs, rocks with a gap between them
   EAST    the pool: 14 x 10 m, 2.6 m deep, steps down at the west end, diving boards 3 and 6 m up its east end
   NE      a stair of ledges up to a 6 m roof, and rooftop gaps
-  SE      the jump tower: a spiral ramp (walkable, 24 deg) up to a 72 m top -- 5 the parachute, 6 the wingsuit,
+  SE      the jump tower: a spiral ramp (walkable, 24 deg) up to a 72 m top -- 4 the parachute, 5 the wingsuit,
           then jump off and jump again in the air
   S       the playground: a swing set (E on a seat; W/S pump) and monkey bars (E under them; W/S along)
   FAR W   the skate run: a 4 m deck with a 40 m ramp down off it (6 deg) onto the flat, and two kickers --
-          8 the skateboard, 9 the scooter
-  FAR S   the swing park: gantries (two 18 m pillars, a beam across) every 14 m heading south -- 7 the grapple,
+          7 the skateboard, 8 the scooter
+  FAR S   the swing park: gantries (two 18 m pillars, a beam across) every 14 m heading south -- 6 the grapple,
           hold the click on a beam, let go at the bottom of the swing, hook the next
 """
 import json
