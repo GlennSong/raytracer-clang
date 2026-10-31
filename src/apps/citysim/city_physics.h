@@ -39,8 +39,12 @@ public:
             engine::PhysicsWorld::INVALID_VEHICLE;
         engine::Real stuckTime = 0;   // body pinned while its ghost recedes
         engine::Real lastDist = 0;    // gap last tick, for closing-rate
+        engine::Real halfX = 0, halfY = 0, halfZ = 0;   // its chassis box (its slot's handling, carConfig)
     };
     const std::vector<Possessed>& possessed() const { return possessed_; }
+    // Each fleet slot's launch, measured on its own handling and handed to the sim (item 23): the tier calls it every
+    // tick and it measures only slots not yet measured since the fleet was (re)built.
+    void measureFleetLaunches();
     // The kinematic proxy boxes standing in for the drawn ambient cars — the
     // bodies the player actually bumps into. Exposed so the walk-through gate
     // (#26) can check every drawn car really has one where it is drawn. The
@@ -100,11 +104,11 @@ private:
     // kinematic brains produce (driveTowards chases the sim's ghost); their
     // render pose comes from the body (city_.setAgentPhysPose).
     void possessTier(engine::World& world, engine::Real dt);
-    // #23: is a sedan footprint at (c, yaw) clear of every OTHER car -- the other possessed bodies and the
+    // #23: is a footprint of half extents (hx, hz) at (c, yaw) clear of every OTHER car -- the other possessed bodies and the
     // kinematic boxes not parked below the world? A body is only ever PLACED (spawned on acquisition,
     // snapped by the backstop) where this holds: teleporting a chassis into a car that is already there is
     // what "piled upon other cars ... go through each other" was.
-    bool spotClear(engine::Vec2 c, engine::Real yaw, int selfAgent) const;
+    bool spotClear(engine::Vec2 c, engine::Real yaw, engine::Real hx, engine::Real hz, int selfAgent) const;
     // Stamp each possessed car's drawn instance transform from its live body,
     // so the car is never drawn where its chassis no longer is (#26).
     void syncPossessedInstances(engine::World& world);

@@ -886,6 +886,23 @@ Real PhysicsWorld::ragdollSpeed(RagdollId id) const {
 // tests/test_driving_lab.cpp (launch envelope, lane hold, kerb climb + its
 // no-clearance control, wall stop) — drive the gates there before tuning here.
 
+Real PhysicsWorld::launchAccel(const VehicleConfig& config, Real friction, Real toSpeed) {
+    PhysicsWorld w;
+    if (!w.initialize()) return 0;
+    w.addBox(Vec3(3000, 1, 3000), Vec3(0, -1, 0), Quat::identity(), BodyMotion::Static, 0.0, friction);
+    w.optimizeBroadPhase();
+    const VehicleId car = w.addVehicle(config, Vec3(0, config.chassisHalfExtent.y + 0.35, 0), Quat::identity());
+    if (car == INVALID_VEHICLE) return 0;
+    const Real dt = 1.0 / 60.0;
+    for (int i = 0; i < 60; ++i) w.update(dt);   // settle on the springs
+    for (int i = 1; i <= 60 * 15; ++i) {
+        w.setVehicleInput(car, 1.0, 0, 0);
+        w.update(dt);
+        if (w.vehicleVelocity(car).length() >= toSpeed) return toSpeed / (i * dt);
+    }
+    return 0;
+}
+
 PhysicsWorld::VehicleId PhysicsWorld::addVehicle(const VehicleConfig& cfg,
                                                  const Vec3& position,
                                                  const Quat& orientation) {

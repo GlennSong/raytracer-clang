@@ -385,6 +385,11 @@ inline bool serviceVehicle(VehicleType t) { return t == VehicleType::Bus || t ==
 struct VehicleBody {
     Real length = 4.2, width = 1.8, height = 1.3;
     VehicleType type = VehicleType::Sedan;
+    // What this car can pull away at (m/s^2, 0 to 10 m/s, PhysicsWorld::launchAccel on its own handling -- item 23):
+    // the brains plan its launches under it, so a bus pulls away like a bus and a physical one keeps its ghost.
+    // Measured where there is physics (CityPhysicsSystem, setFleetLaunch): 0 not yet, -1 never gets there; until
+    // then, and in a build with no physics, the stock kCarAccel.
+    Real launch = 0;
 };
 
 // The BUILT-IN fleet: a fixed, deterministic set of body slots. A driver takes
@@ -412,6 +417,7 @@ struct SimVehicle {
     Real width = 1.8;
     Real height = 1.3;
     VehicleType type = VehicleType::Sedan;
+    int slot = -1;               // its fleet slot (fleetBody): the body it was given, read for its launch
     int driver = -1;             // agent index, or -1 when parked/unpossessed
     engine::Vec2 pos;            // cached pose (mirrors the driver while possessed)
     engine::Vec2 heading{1, 0};
@@ -447,6 +453,10 @@ public:
     // empty table restores the built-in one. Slots wrap exactly as the built-in
     // table's do.
     void setFleet(std::vector<VehicleBody> fleet) { fleet_ = std::move(fleet); }
+    // The measured launch of fleet slot `slot` (VehicleBody::launch); no-op without a scripted fleet.
+    void setFleetLaunch(int slot, Real launch) {
+        if (slot >= 0 && slot < static_cast<int>(fleet_.size())) fleet_[static_cast<std::size_t>(slot)].launch = launch;
+    }
     int fleetSize() const {
         return fleet_.empty() ? vehicleFleetSize()
                               : static_cast<int>(fleet_.size());

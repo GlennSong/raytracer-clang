@@ -406,7 +406,11 @@ public:
     // index: the fleet deals ordinary cars past the service slots (CitySim::ambientSlotFor), and a bus or a fire
     // engine has its own -- so `a.vehicle` named a different model (#115: "when I take a car, why does the car
     // change?"; and a passenger's seats came off another model's layout). -1 when it draws as none.
-    int carSlotOf(int agent) const { return drawSlotFor(agent); }
+    // Over the FLEET's slots (its handling, carConfig), so a city that draws nothing -- a headless soak -- still knows
+    // a bus is a bus; where cars are drawn the two counts are one.
+    int carSlotOf(int agent) const {
+        return slotFor(agent, carConfigs_.empty() ? drawVariantCount() : static_cast<int>(carConfigs_.size()));
+    }
     // That car's driver's hip point (the fleet recipe's `driver_seat`, its interior's own seat), for a commandeered
     // car's driver: false when the slot publishes none.
     bool carDriverSeat(int slot, engine::Vec3& out) const {
@@ -445,6 +449,15 @@ public:
         return carWheels_[((slot % static_cast<int>(carWheels_.size())) +
                            static_cast<int>(carWheels_.size())) %
                           static_cast<int>(carWheels_.size())];
+    }
+    // THAT CAR's HANDLING (item 23, #117): the slot's Jolt config -- its kit's or class's drivable handling on
+    // its drawn wheels, the fleet's `handling` read by the one handling reader -- for a physical-tier car and a
+    // commandeered one alike. Null when the fleet published none for it (no vehicles script).
+    const engine::PhysicsWorld::VehicleConfig* carConfig(int slot) const {
+        if (carConfigs_.empty()) return nullptr;
+        const int n = static_cast<int>(carConfigs_.size());
+        const engine::PhysicsWorld::VehicleConfig& c = carConfigs_[static_cast<std::size_t>(((slot % n) + n) % n)];
+        return c.wheels.empty() ? nullptr : &c;
     }
 
 private:
@@ -498,7 +511,8 @@ private:
     Real deckSurfaceNear(Real x, Real z, Real refY) const;
     // The fleet slot agent `ai` is DRAWN with (the ambient rotation, the bus override): the one mesh,
     // lamps and wheel set that car wears. -1 when there is no drawable slot.
-    int drawSlotFor(int ai) const;
+    int drawSlotFor(int ai) const { return slotFor(ai, drawVariantCount()); }
+    int slotFor(int ai, int variants) const;   // (the rule, over `variants` slots)
     // The drawn road surface under (px, pz) for car `a`, `along` metres ahead of its centre: on a deck, the
     // deck it is on (deckSurfaceNear from its link's height); on the ground, the road or ground at ITS level
     // (the terrain + its layer lift as the reference), so an overpass or a stacked junction pad above never
@@ -630,6 +644,8 @@ private:
     // wheelset; see carChassisMesh() / carWheels().
     std::vector<engine::MeshHandle> carChassis_;
     std::vector<std::vector<CarWheel>> carWheels_;
+    // ...and each slot's handling (carConfig), read with the catalogue: no geometry, so a headless sim has it.
+    std::vector<engine::PhysicsWorld::VehicleConfig> carConfigs_;
     // SEE-INTO VEHICLES (the bus; Glenn: "we should see the npcs sitting on
     // the bus. There should be a driver"). Per variant, indexed like
     // carGroups_: a CLEAR glass group (invalid Entity when the slot's glass is

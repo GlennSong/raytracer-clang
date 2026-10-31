@@ -78,8 +78,8 @@ TEST_CASE(driving_lab_full_throttle_envelope) {
     CHECK(v8 > 20.0);
 }
 
-// The COMMANDEERED car's collision proportions (city_vehicles configFromBody +
-// the fleet's wheel_layout): the chassis is the FULL body box, and the fleet
+// A BODY-BOX sedan's collision proportions (what a commandeered car was before item 23 gave it its kit's
+// handling: city_vehicles' old configFromBody + the fleet's wheel_layout): the chassis is the FULL body box, and the fleet
 // parks each wheel's resting centre ONE RADIUS above that box's floor — so the
 // collision floor rested exactly ON the road. Zero clearance is the kerb bug's
 // mechanism: the bumper's collision corner reaches the 0.15 m kerb face ~0.9 m
@@ -89,12 +89,12 @@ TEST_CASE(driving_lab_full_throttle_envelope) {
 PhysicsWorld::VehicleConfig bodyBoxSedan() {
     PhysicsWorld::VehicleConfig c;
     c.chassisHalfExtent = Vec3(0.91, 0.725, 2.295);   // 1.82 x 1.45 x 4.59 m
-    c.mass = 900.0 + 4.59 * 1.82 * 180.0;             // configFromBody's rule
+    c.mass = 900.0 + 4.59 * 1.82 * 180.0;             // (the old commandeered-car rule)
     c.comOffsetY = -0.45;
     c.engineTorque = 650.0;
     c.brakeTorque = 1600.0;
     c.maxSteerDegrees = 32.0;
-    // configFromBody's street suspension (PhysicsWorld::kStreet*), attach
+    // the street suspension (PhysicsWorld::kStreet*), attach
     // lifted by the rest drop so the wheel rests where the fleet drew it: one
     // radius above the box floor.
     auto wheel = [&](Real x, Real z, bool steered) {
@@ -417,8 +417,8 @@ TEST_CASE(vehicle_suspension_settle_offset_is_measured) {
     }
 
     // And the CORRECTION: lift the attachment point by that drop and the car
-    // rests exactly where it is drawn. This is what citysim's configFromBody
-    // does for a commandeered car.
+    // rests exactly where it is drawn. This is what the one handling reader
+    // (vehicle_spec.cpp readVehicleHandling) does for every car.
     {
         const Real mn = 0.05, mx = 0.15, drop = mx - kStaticDeflection;
         PhysicsWorld w3;

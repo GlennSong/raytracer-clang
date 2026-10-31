@@ -2,6 +2,7 @@
 #define RAYTRACER_APPS_CITYSIM_SCRIPTING_VEHICLE_BODY_H
 
 #include "../../../renderer/renderer.h"   // RenderMesh, Vertex, Vec3
+#include "../../../engine/scripting/vehicle_spec.h"   // VehicleSpec, readVehicleHandling
 
 #include <string>
 #include <vector>
@@ -116,6 +117,12 @@ bool selectFleet(ScriptVM& vm, const std::string& name, std::string* err = nullp
 // global, a missing/out-of-range slot, or a malformed entry.
 bool loadFleetCatalogueEntry(ScriptVM& vm, int slot, Vec3& size,
                              std::string& className, std::string* err = nullptr);
+
+// The HANDLING half of a slot (item 23, #117): its `handling` table -- the same one a drivable spec of its kit or
+// class publishes (vehicles.lua class_handling / kit_handling) -- read by the one handling reader into a spec whose
+// config is what a physical-tier car or a commandeered one drives with. No geometry is built. False (err filled)
+// when the slot has none or it carries no wheels.
+bool loadFleetHandling(ScriptVM& vm, int slot, VehicleSpec& out, std::string* err = nullptr);
 
 }  // namespace engine
 

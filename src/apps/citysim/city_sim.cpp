@@ -720,8 +720,8 @@ void CitySim::build(const NavGraph& graph, int driverCount, int pedCount, uint32
         // maps the same index to a body) draws exactly this shape + size.
         if (a.mode == Agent::Mode::Driver) {
             SimVehicle v;
-            const VehicleBody& body =
-                fleetBody(ambientSlotFor(static_cast<int>(vehicles_.size())));
+            v.slot = ambientSlotFor(static_cast<int>(vehicles_.size()));
+            const VehicleBody& body = fleetBody(v.slot);
             v.length = body.length;
             v.width = body.width;
             v.height = body.height;
@@ -3764,9 +3764,11 @@ void CitySim::setBuses(int routes, int stopsPerRoute, int busCount, Real maxWalk
         if (agents_[i].car >= 0 &&
             agents_[i].car < static_cast<int>(vehicles_.size())) {
             VehicleBody bb{11.4, 2.55, 3.20, VehicleType::Bus};
+            int busSlot = -1;
             for (int fs = 0; fs < fleetSize(); ++fs)
-                if (fleetBody(fs).type == VehicleType::Bus) { bb = fleetBody(fs); break; }
+                if (fleetBody(fs).type == VehicleType::Bus) { bb = fleetBody(fs); busSlot = fs; break; }
             SimVehicle& sv = vehicles_[static_cast<std::size_t>(agents_[i].car)];
+            sv.slot = busSlot;
             sv.length = bb.length;
             sv.width = bb.width;
             sv.height = bb.height;
@@ -3825,6 +3827,7 @@ int CitySim::addStationedVehicle(VehicleType type, Vec2 pos, Vec2 heading, Real 
     v.width = bb.width;
     v.height = bb.height;
     v.type = type;
+    v.slot = slot;
     v.pos = pos;
     v.heading = heading;
     v.parkedY = y;
@@ -5214,7 +5217,17 @@ void CitySim::advance(Agent& a, Real dt, Real gap, Real minGap) {
     // Junction/signal caps are shared road rules and stay unscaled.
     Real target = (car ? engine::classSpeed(nav_->links[li].klass) : kWalkSpeed) *
                   a.speedFactor;
-    Real accel = car ? kCarAccel : kPedAccel;
+    // A car's launch is its own (item 23): nine tenths of what its body can pull away at, the headroom the stock
+    // kCarAccel kept over the old box sedan, and never over kCarAccel -- a bus pulls away like a bus.
+    Real accel = kPedAccel;
+    if (car) {
+        accel = kCarAccel;
+        if (a.vehicle >= 0 && a.vehicle < static_cast<int>(vehicles_.size())) {
+            const int slot = vehicles_[static_cast<std::size_t>(a.vehicle)].slot;
+            const Real launch = slot >= 0 && slot < static_cast<int>(fleet_.size()) ? fleet_[static_cast<std::size_t>(slot)].launch : 0;
+            if (launch > 0) accel = std::min(kCarAccel, Real(0.9) * launch);
+        }
+    }
     // Junction rules (stop line, signal brake, box occupancy / turn yield) cap
     // the target; the gate carries the line the hard clamp below holds at.
     JunctionGate gate = junctionSpeedCap(a, li, target);

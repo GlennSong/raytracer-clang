@@ -19,6 +19,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <fstream>
 #include <sstream>
 #include <string>
@@ -71,6 +72,10 @@ struct StubUploader : engine::MeshUploader {
     engine::BoundingSphere getMeshBounds(engine::MeshHandle) const override { return {}; }
 };
 
+// The city's road under the tyres (road_builder.h RoadMaterial::friction): addBox's default 0.2 is ice, on which a
+// rear-drive car spins its wheels pulling away -- the stock AWD box sedan the tier used to drive hid it (item 23).
+constexpr Real kRoadFriction = 0.85;
+
 Real upDot(const Quat& q) { return q.rotate(Vec3(0, 1, 0)).y; }
 
 }  // namespace
@@ -85,6 +90,8 @@ TEST_CASE(city_phys_tier_soak) {
     params.seed = 7;
     params.wander = true;   // perpetual trips: drivers keep moving all soak
     params.physicalCars = 12;   // this soak exercises the physical tier
+    params.vehicleScript = readAsset("vehicles.lua");   // the cars: a physical one drives with its own handling
+    if (const char* sd = std::getenv("RT_TIER_SEED")) params.seed = static_cast<uint32_t>(std::atoi(sd));
     CityRenderSystem city(params);
     CHECK(city.build(world, nullptr));
 
@@ -99,7 +106,8 @@ TEST_CASE(city_phys_tier_soak) {
     physics.initialize();
     // Flat ground plane under the whole grid (roads sit at y ~= 0).
     physics.physicsWorld().addBox(Vec3(600, 1, 600), Vec3(120, -1, 120),
-                                  Quat::identity(), BodyMotion::Static);
+                                  Quat::identity(), BodyMotion::Static, 0.0,
+                                  kRoadFriction);
     CityPhysicsSystem bridge(city, physics);
 
     // What stands near the measured trap point (163,152)? Poles are the
@@ -234,6 +242,7 @@ TEST_CASE(city_phys_tier_with_tiering) {
     params.seed = 7;
     params.wander = true;
     params.physicalCars = 12;   // this soak exercises the physical tier
+    params.vehicleScript = readAsset("vehicles.lua");   // the cars: a physical one drives with its own handling
     CityRenderSystem city(params);
     CHECK(city.build(world, nullptr));
     CitySim& sim = city.simMutable();
@@ -252,7 +261,8 @@ TEST_CASE(city_phys_tier_with_tiering) {
     PhysicsSystem physics;
     physics.initialize();
     physics.physicsWorld().addBox(Vec3(600, 1, 600), Vec3(120, -1, 120),
-                                  Quat::identity(), BodyMotion::Static);
+                                  Quat::identity(), BodyMotion::Static, 0.0,
+                                  kRoadFriction);
     CityPhysicsSystem bridge(city, physics);
 
     const Real dt = 1.0 / 60.0;
@@ -333,7 +343,8 @@ TEST_CASE(city_every_drawn_car_is_solid) {
     PhysicsSystem physics;
     physics.initialize();
     physics.physicsWorld().addBox(Vec3(600, 1, 600), Vec3(120, -1, 120),
-                                  Quat::identity(), BodyMotion::Static);
+                                  Quat::identity(), BodyMotion::Static, 0.0,
+                                  kRoadFriction);
     physics.createBodies(world);   // makes the player's real capsule
     CityPhysicsSystem bridge(city, physics);
     PhysicsWorld& pw = physics.physicsWorld();
@@ -481,7 +492,8 @@ TrafficLook watchTraffic(bool physicalTier, uint32_t seed = 7) {
     PhysicsSystem physics;
     physics.initialize();
     physics.physicsWorld().addBox(Vec3(600, 1, 600), Vec3(120, -1, 120),
-                                  Quat::identity(), BodyMotion::Static);
+                                  Quat::identity(), BodyMotion::Static, 0.0,
+                                  kRoadFriction);
     CityPhysicsSystem bridge(city, physics);
 
     TrafficLook t;
@@ -651,7 +663,7 @@ TEST_CASE(city_lamps_sit_on_their_own_car_s_ends) {
 // other"). An OVERSATURATED grid -- four times the soak's traffic -- with the player at an interior crossing,
 // so the physical tier's bodies meet queues at every mouth. Measured per possessed body per tick:
 //   tip    -- up vector's y (a car on its side reads ~0)
-//   climb  -- chassis centre height above its resting height on the flat ground (on another car's roof: > 1 m)
+//   climb  -- chassis floor (centre less its half height) above the resting floor on the flat ground (on another car's roof: > 1 m)
 //   ghost  -- the deepest 2D footprint overlap with any other car, body or kinematic box ("go through each other")
 namespace {
 struct Foot { Vec2 c, ax, az; Vec2 he; };   // an oriented footprint: centre, unit axes, half extents
@@ -698,7 +710,8 @@ TEST_CASE(city_phys_tier_packed_junction_does_not_pile_up) {
 
     PhysicsSystem physics;
     physics.initialize();
-    physics.physicsWorld().addBox(Vec3(600, 1, 600), Vec3(120, -1, 120), Quat::identity(), BodyMotion::Static);
+    physics.physicsWorld().addBox(Vec3(600, 1, 600), Vec3(120, -1, 120), Quat::identity(), BodyMotion::Static, 0.0,
+                                  kRoadFriction);
     CityPhysicsSystem bridge(city, physics);
     PhysicsWorld& pw = physics.physicsWorld();
 
@@ -771,9 +784,12 @@ TEST_CASE(city_phys_tier_packed_junction_does_not_pile_up) {
             ++bodyTicks;
             minUp = std::min(minUp, up);
             if (up < 0.8) ++tipTicks;
-            if (up > 0.98 && restN < 2000) { restY += bp.y; ++restN; }
-            const Real rest = restN ? restY / restN : bp.y;
-            const Real climb = bp.y - rest;
+            // each car by its own FLOOR (centre less its half height): the physical tier drives every car as its
+            // own class now (item 23), and a bus rests ~0.8 m higher than a sedan without climbing anything
+            const Real floorY = bp.y - p.halfY;
+            if (up > 0.98 && restN < 2000) { restY += floorY; ++restN; }
+            const Real rest = restN ? restY / restN : floorY;
+            const Real climb = floorY - rest;
             worstClimb = std::max(worstClimb, climb);
             if (climb > 0.6) ++climbTicks;
             { const Real dv = (city.sim().agents()[p.agent].pos - Vec2(bp.x, bp.z)).length();
@@ -849,4 +865,40 @@ TEST_CASE(city_phys_tier_packed_junction_does_not_pile_up) {
     CHECK(climbTicks * per < 0.005);   // cars on other cars' roofs
     CHECK(tipTicks * per < 0.005);     // cars on their sides
     physics.shutdown();
+}
+
+// WHAT EACH CAR CAN DO (item 23, #117): every fleet slot, made physical with its own handling (carConfig), pulls
+// away from rest at what it can (PhysicsWorld::launchAccel), and the brains plan its launches UNDER that -- so a
+// physical car keeps its ghost out of every light. The fleet spans a 5 m/s^2 SUV to a 1.8 m/s^2 bus; the stock plan
+// was 4.0 for all of them.
+TEST_CASE(every_fleet_car_launches_as_the_traffic_plan_asks) {
+    World world;
+    world.add<RoadEntity>(world.create(), cityGrid());
+    CityRenderParams params;
+    params.cars = 4;
+    params.pedestrians = 0;
+    params.vehicleScript = readAsset("vehicles.lua");
+    CityRenderSystem city(params);
+    CHECK(city.build(world, nullptr));
+    PhysicsSystem physics;
+    physics.initialize();
+    CityPhysicsSystem bridge(city, physics);
+    bridge.measureFleetLaunches();
+    const int slots = city.sim().fleetSize();
+    CHECK(slots >= 14);
+    Real slowest = 1e9, fastest = 0;
+    for (int slot = 0; slot < slots; ++slot) {
+        const PhysicsWorld::VehicleConfig* cfg = city.carConfig(slot);
+        CHECK(cfg != nullptr);
+        if (!cfg) continue;
+        const Real can = PhysicsWorld::launchAccel(*cfg);
+        const Real planned = city.sim().fleetBody(slot).launch;
+        std::printf("    [launch] slot %2d mass %5.0f torque %5.0f: pulls away at %.2f m/s2 (0-10 m/s)\n", slot, cfg->mass,
+                    cfg->engineTorque, can);
+        CHECK(can > 1.0);              // every car gets going
+        CHECK(planned == can);         // the catalogue carries the measured launch
+        slowest = std::min(slowest, can);
+        fastest = std::max(fastest, can);
+    }
+    CHECK(fastest > 2.0 * slowest);    // a bus is not an SUV
 }

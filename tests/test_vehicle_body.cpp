@@ -726,3 +726,63 @@ TEST_CASE(fleet_back_bench_is_inside_the_car) {
         CHECK(withBench > 0);
     }
 }
+
+
+// ONE HANDLING BUILDER (item 23, #117): a fleet slot's `handling` IS the drivable handling of its kit -- the config a
+// physical-tier traffic car and a commandeered one drive with is the one the player gets dropping the same car from
+// the menu. The kit slots match field for field, wheels and all; every slot (the classic cars and the bus too, on the
+// class handling) carries a whole car: four or more wheels on the ground datum, mass, torque and brakes.
+TEST_CASE(every_fleet_slot_drives_with_its_kit_s_drivable_handling) {
+    VehiclesVM v;
+    CHECK(v.loaded);
+    if (!v.loaded) return;
+    for (const char* fleet : {"fleet_kit", "classic", "fleet_mixed"}) {
+        std::string err;
+        CHECK(selectFleet(v.vm, fleet, &err));
+        const int slots = fleetSlotCount(v.vm);
+        CHECK(slots > 0);
+        int matched = 0;
+        for (int i = 0; i < slots; ++i) {
+            VehicleSpec h;
+            const bool ok = loadFleetHandling(v.vm, i, h, &err);
+            if (!ok) std::printf("    %s[%d]: %s\n", fleet, i, err.c_str());
+            CHECK(ok);
+            if (!ok) continue;
+            const PhysicsWorld::VehicleConfig& c = h.config;
+            CHECK(c.wheels.size() >= 4);
+            CHECK(c.mass > 500.0);
+            CHECK(c.engineTorque > 0.3 * c.mass);
+            CHECK(c.brakeTorque > c.mass);
+            for (const PhysicsWorld::VehicleWheel& w : c.wheels)   // attach = drawn rest centre + the rig's drop
+                CHECK_APPROX(w.position.y, -c.chassisHalfExtent.y + w.radius + h.suspensionRestDrop, 1e-6);
+            // the slot's own drivable recipe (vehicles.lua catalogue `drivable`): kit_<kit>, or the classic class
+            const std::string slotLua = "vehicle.fleet[" + std::to_string(i + 1) + "]";
+            bool kitBody = false;   // (a classic slot's drawn wheels sit half a tyre inside its drivable spec's)
+            CHECK(v.vm.doString("__kit_body = (" + slotLua + ".drivable or ''):sub(1, 4) == 'kit_'", &err));
+            v.vm.getGlobalBool("__kit_body", kitBody);
+            VehicleSpec d;
+            if (!loadVehicleSpec(v.vm, "local s = " + slotLua + "; if not s.drivable then return nil end; "
+                                 "return vehicle[s.drivable](seed, {})", 1u, d, &err))
+                continue;   // (no drivable recipe: the fire engine, the bus)
+            const PhysicsWorld::VehicleConfig& k = d.config;
+            ++matched;
+            CHECK(c.mass == k.mass);
+            CHECK(c.engineTorque == k.engineTorque);
+            CHECK(c.brakeTorque == k.brakeTorque && c.handBrakeTorque == k.handBrakeTorque);
+            CHECK(c.comOffsetY == k.comOffsetY && c.maxSteerDegrees == k.maxSteerDegrees);
+            CHECK(c.frontDriveShare == k.frontDriveShare && c.dragArea == k.dragArea && c.lateralGrip == k.lateralGrip);
+            CHECK(c.gearRatios == k.gearRatios);
+            CHECK(c.chassisHalfExtent.x == k.chassisHalfExtent.x && c.chassisHalfExtent.z == k.chassisHalfExtent.z);
+            CHECK(c.wheels.size() == k.wheels.size());
+            if (kitBody)
+            for (std::size_t w = 0; w < std::min(c.wheels.size(), k.wheels.size()); ++w) {
+                CHECK(c.wheels[w].position.x == k.wheels[w].position.x && c.wheels[w].position.z == k.wheels[w].position.z);
+                CHECK(c.wheels[w].radius == k.wheels[w].radius && c.wheels[w].steered == k.wheels[w].steered);
+                CHECK(c.wheels[w].suspensionMax == k.wheels[w].suspensionMax);
+            }
+        }
+        std::printf("    [handling] %s: %d slots, %d match their drivable recipe\n", fleet, slots, matched);
+        if (std::string(fleet) != "classic") CHECK(matched >= 10);
+    }
+    CHECK(selectFleet(v.vm, "fleet_kit"));
+}

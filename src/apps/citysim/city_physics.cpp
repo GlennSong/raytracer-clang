@@ -22,8 +22,6 @@ using engine::PhysicsBodyId;
 using engine::BodyMotion;
 
 namespace {
-// The ambient sedan every possessed car is (see possessTier's VehicleConfig).
-constexpr Real kBodyHalfX = 0.92, kBodyHalfZ = 2.15;
 constexpr Real kBodyOffGhost = 1.5;   // metres: past this a body is reported to the sim's drivers as an obstacle
 
 struct Footprint { engine::Vec2 c, ax, az; Real hx, hz; };
@@ -48,20 +46,27 @@ Real yawOf(const Quat& q) {
 }
 }  // namespace
 
-bool CityPhysicsSystem::spotClear(engine::Vec2 c, Real yaw, int selfAgent) const {
+bool CityPhysicsSystem::spotClear(engine::Vec2 c, Real yaw, Real hx, Real hz, int selfAgent) const {
     const PhysicsWorld& pw = physics_.physicsWorld();
-    const Footprint me = footprint(c, yaw, kBodyHalfX, kBodyHalfZ);
+    const Footprint me = footprint(c, yaw, hx, hz);
     const Real margin = 0.1;
-    const Real reach = 8.0;   // nothing car-sized farther than this can touch a sedan
+    const Real reach = 8.0 + hz;   // nothing car-sized farther than this can touch this car
     for (const Possessed& p : possessed_) {
         if (p.agent == selfAgent) continue;
         const Vec3 bp = pw.vehiclePosition(p.vid);
         const engine::Vec2 o(bp.x, bp.z);
         if ((o - c).length() > reach) continue;
-        if (overlaps(me, footprint(o, yawOf(pw.vehicleOrientation(p.vid)), kBodyHalfX, kBodyHalfZ), margin)) return false;
+        if (overlaps(me, footprint(o, yawOf(pw.vehicleOrientation(p.vid)), p.halfX, p.halfZ), margin)) return false;
     }
+    // ITS OWN box is not in its way: the kinematic proxy standing in for this very car (keyed by its uid) sits on the
+    // spot it is being made physical at, and refused every car whose drawn instance had one (item 23 found it: the
+    // soaks had no proxies until they loaded the fleet).
+    const std::vector<Agent>& agents = city_.sim().agents();
+    const long long selfKey = selfAgent >= 0 && selfAgent < static_cast<int>(agents.size())
+                                  ? static_cast<long long>(agents[static_cast<std::size_t>(selfAgent)].uid) : -1;
     for (const auto& kv : carProxies_) {
         if (kv.second.parked) continue;   // a possessed car's own box, below the world
+        if (kv.first == selfKey) continue;
         const Vec3 bp = pw.bodyPosition(kv.second.id);
         const engine::Vec2 o(bp.x, bp.z);
         if ((o - c).length() > reach) continue;
@@ -237,9 +242,23 @@ void CityPhysicsSystem::step(World& world, Real dt) {
     }
 }
 
+// WHAT EACH CAR CAN PULL AWAY AT (item 23, #117), measured here where there is physics: each fleet slot's own
+// handling launched from rest (PhysicsWorld::launchAccel), handed to the sim, which plans that car's launches
+// under it. Once per slot per build (a rebuilt fleet starts at 0 again); -1 marks one that never gets going.
+void CityPhysicsSystem::measureFleetLaunches() {
+    for (int s = 0; s < city_.sim().fleetSize(); ++s) {
+        if (city_.sim().fleetBody(s).launch != 0) continue;
+        const PhysicsWorld::VehicleConfig* cfg = city_.carConfig(s);
+        if (!cfg) continue;
+        const Real launch = PhysicsWorld::launchAccel(*cfg);
+        city_.simMutable().setFleetLaunch(s, launch > 0 ? launch : -1);
+    }
+}
+
 void CityPhysicsSystem::possessTier(World& world, Real dt) {
     RT_PROFILE_ZONE_NAMED("possessTier");
     PhysicsWorld& pw = physics_.physicsWorld();
+    measureFleetLaunches();
     // The tier centres on the PLAYER — found by ControlledBy, not by "the first
     // entity with a CharacterController". Every walker has one of those, so the
     // old scan could centre the possession ring on an arbitrary pedestrian
@@ -322,35 +341,21 @@ void CityPhysicsSystem::possessTier(World& world, Real dt) {
             // Spawn only into a clear spot (#23): the ghost of a car in a sim fender-bender can sit a metre
             // into the car ahead, and a chassis spawned there is two solid cars in one place. It stays a
             // kinematic car this tick and is offered again next tick.
-            if (!spotClear(a.pos, std::atan2(a.heading.x, a.heading.y), ai)) continue;
-            PhysicsWorld::VehicleConfig cfg;   // ambient sedan
-            cfg.chassisHalfExtent = Vec3(0.92, 0.45, 2.15);
-            cfg.mass = 1400.0;
-            cfg.comOffsetY = -0.42;
-            cfg.engineTorque = 900.0;   // matches the lab sedan: the body must
-                                        // out-accelerate the brains' 4 m/s^2
-            auto wheel = [&](Real x, Real z, bool steered, bool driven) {
-                PhysicsWorld::VehicleWheel w;
-                w.position = Vec3(x, -0.35, z);
-                w.radius = 0.34;
-                w.width = 0.24;
-                w.steered = steered;
-                w.driven = driven;
-                return w;
-            };
-            // AWD like the lab sedan: the launch is traction-limited and
-            // rear drive alone cannot follow the brains' 4 m/s^2 plan.
-            cfg.wheels = { wheel(-0.82, 1.45, true, true),
-                           wheel(0.82, 1.45, true, true),
-                           wheel(-0.82, -1.42, false, true),
-                           wheel(0.82, -1.42, false, true) };
+            // ITS OWN CAR (item 23, #117): the slot's handling -- its kit's or class's drivable config on its drawn
+            // wheels -- not a stock sedan; a bus beside the player is a bus. No handling: nothing to make physical.
+            const PhysicsWorld::VehicleConfig* own = city_.carConfig(city_.carSlotOf(ai));
+            if (!own) continue;
+            const PhysicsWorld::VehicleConfig& cfg = *own;
+            const Vec3 half = cfg.chassisHalfExtent;
+            if (!spotClear(a.pos, std::atan2(a.heading.x, a.heading.y), half.x, half.z, ai)) continue;
             const Real yaw = std::atan2(a.heading.x, a.heading.y);
             const Real gy = a.deckY > -1e29
                                 ? a.deckY
                                 : city_.groundHeightAt(a.pos.x, a.pos.y) +
                                       a.elevation;
+            // (the body's centre half its height over the road, and the 0.35 m the springs settle from)
             const PhysicsWorld::VehicleId vid = pw.addVehicle(
-                cfg, Vec3(a.pos.x, gy + 0.8, a.pos.y),
+                cfg, Vec3(a.pos.x, gy + half.y + 0.35, a.pos.y),
                 Quat::fromAxisAngle(Vec3(0, 1, 0), yaw));
             if (vid != PhysicsWorld::INVALID_VEHICLE) {
                 // Velocity-match the ghost's moving frame: spawned at rest
@@ -362,6 +367,9 @@ void CityPhysicsSystem::possessTier(World& world, Real dt) {
                 Possessed np;
                 np.agent = ai;
                 np.vid = vid;
+                np.halfX = half.x;
+                np.halfY = half.y;
+                np.halfZ = half.z;
                 possessed_.push_back(np);
             }
         }
@@ -378,7 +386,7 @@ void CityPhysicsSystem::possessTier(World& world, Real dt) {
             const engine::Vec2 b(bp.x, bp.z);
             if ((agents[p.agent].pos - b).length() < kBodyOffGhost) continue;
             at.push_back(b);
-            half.push_back(kBodyHalfZ);
+            half.push_back(p.halfZ);
             owner.push_back(p.agent);
         }
         city_.simMutable().setBodyObstacles(std::move(at), std::move(half), std::move(owner));
@@ -432,7 +440,7 @@ void CityPhysicsSystem::possessTier(World& world, Real dt) {
             bool clear = false;
             for (int k = 0; k <= 8 && !clear; ++k) {
                 land = a.pos - a.heading * (0.75 * k);
-                clear = spotClear(land, yaw2, p.agent);
+                clear = spotClear(land, yaw2, p.halfX, p.halfZ, p.agent);
             }
             if (!clear) ++snapsHeld_;   // falls through: the body keeps driving at its ghost
             else {
@@ -441,7 +449,7 @@ void CityPhysicsSystem::possessTier(World& world, Real dt) {
                                      : city_.groundHeightAt(land.x, land.y) +
                                            a.elevation;
                 pw.teleport(pw.vehicleBody(p.vid),
-                            Vec3(land.x, gy2 + 0.8, land.y),
+                            Vec3(land.x, gy2 + p.halfY + 0.35, land.y),
                             Quat::fromAxisAngle(Vec3(0, 1, 0), yaw2));
                 pw.setLinearVelocity(
                     pw.vehicleBody(p.vid),
@@ -453,7 +461,7 @@ void CityPhysicsSystem::possessTier(World& world, Real dt) {
                 // chassis — the only solid thing standing in for it — was already
                 // metres away. syncPossessedInstances re-stamps the instance too.
                 city_.setAgentPhysPose(
-                    p.agent, Mat4::translate(land.x, gy2 + 0.8, land.y) *
+                    p.agent, Mat4::translate(land.x, gy2 + p.halfY + 0.35, land.y) *
                                  Quat::fromAxisAngle(Vec3(0, 1, 0), yaw2).toMat4());
                 continue;
             }

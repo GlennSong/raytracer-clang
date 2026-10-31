@@ -158,13 +158,13 @@ Real CityRenderSystem::deckSurfaceNear(Real x, Real z, Real refY) const {
     return refY;
 }
 
-int CityRenderSystem::drawSlotFor(int ai) const {
-    if (ai < 0 || ai >= static_cast<int>(sim_.agents().size()) || drawVariantCount() <= 0) return -1;
+int CityRenderSystem::slotFor(int ai, int variants) const {
+    if (ai < 0 || ai >= static_cast<int>(sim_.agents().size()) || variants <= 0) return -1;
     const Agent& a = sim_.agents()[static_cast<std::size_t>(ai)];
     int v = sim_.ambientSlotFor(a.vehicle >= 0 ? a.vehicle : 0);
-    if (v >= drawVariantCount()) v %= drawVariantCount();
-    if (busVariant_ >= 0 && sim_.isBus(ai) && busVariant_ < drawVariantCount()) v = busVariant_;
-    if (fireVariant_ >= 0 && fireVariant_ < drawVariantCount() && a.vehicle >= 0 &&
+    if (v >= variants) v %= variants;
+    if (busVariant_ >= 0 && sim_.isBus(ai) && busVariant_ < variants) v = busVariant_;
+    if (fireVariant_ >= 0 && fireVariant_ < variants && a.vehicle >= 0 &&
         a.vehicle < static_cast<int>(sim_.vehicles().size()) &&
         sim_.vehicles()[static_cast<std::size_t>(a.vehicle)].type == VehicleType::FireEngine) v = fireVariant_;
     return v;
@@ -543,6 +543,7 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
             else
                 LOG_WARN << "citysim fleet '" << params_.fleet << "': " << ferr << " — keeping the default fleet";
         }
+        carConfigs_.clear();
         if (!scriptOk) {
         } else if (int slots = engine::fleetSlotCount(fleetVM_); slots > 0) {
             // THE ASSET decides how many cars the fleet has. This used to be a
@@ -579,6 +580,12 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
                 else if (className == "bus") { busVariant_ = v; body.type = VehicleType::Bus; }
                 else if (body.type == VehicleType::Bus) busVariant_ = v;
                 else if (body.type == VehicleType::FireEngine) body.type = VehicleType::BoxTruck;
+                // its handling: what it drives with once physical (item 23)
+                engine::VehicleSpec handling;
+                std::string hErr;
+                if (!engine::loadFleetHandling(fleetVM_, v, handling, &hErr))
+                    LOG_WARN << "citysim vehicles fleet[" << v << "]: " << hErr << " (it cannot be made physical)";
+                carConfigs_.push_back(handling.config);
                 catalogue.push_back(body);
             }
             LOG_INFO << "[citysim] fleet: " << slots << " slots, bus variant "

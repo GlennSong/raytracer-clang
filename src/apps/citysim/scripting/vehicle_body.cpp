@@ -353,4 +353,22 @@ bool loadFleetCatalogueEntry(ScriptVM& vm, int slot, Vec3& size,
     return true;
 }
 
+bool loadFleetHandling(ScriptVM& vm, int slot, VehicleSpec& out, std::string* err) {
+    lua_State* L = luaState(vm);
+    const int base = lua_gettop(L);
+    const std::string where = "vehicle.fleet[" + std::to_string(slot + 1) + "]";
+    if (!pushFleetSlot(L, base, slot, where, err)) return false;
+    lua_getfield(L, lua_gettop(L), "handling");
+    if (!lua_istable(L, -1)) {
+        lua_settop(L, base);
+        return fail(err, where + ": no `handling` table");
+    }
+    VehicleSpec spec;
+    readVehicleHandling(L, lua_gettop(L), spec);
+    lua_settop(L, base);
+    if (spec.config.wheels.size() < 2) return fail(err, where + ": `handling` has no wheels");
+    out = std::move(spec);
+    return true;
+}
+
 }  // namespace engine

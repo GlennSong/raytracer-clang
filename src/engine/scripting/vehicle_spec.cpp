@@ -14,65 +14,11 @@ namespace {
 
 }  // namespace
 
-bool loadVehicleSpec(ScriptVM& vm, const std::string& recipe, uint32_t seed,
-                     VehicleSpec& out, std::string* err) {
-    lua_State* L = luaState(vm);
-    vm.setGlobalNumber("seed", static_cast<double>(seed));
-
-    if (luaL_loadstring(L, recipe.c_str()) != LUA_OK ||
-        lua_pcall(L, 0, 1, 0) != LUA_OK) {
-        if (err) {
-            const char* m = lua_tostring(L, -1);
-            *err = m ? m : "vehicle recipe error";
-        }
-        lua_pop(L, 1);
-        return false;
-    }
-
-    int t = lua_gettop(L);
-    if (!lua_istable(L, t)) {
-        if (err) *err = "vehicle recipe did not return a table";
-        lua_pop(L, 1);
-        return false;
-    }
-
-    // Body mesh (procgen Mesh userdata).
-    lua_getfield(L, t, "body");
-    out.body = luaToMesh(L, -1);
-    lua_pop(L, 1);
-
-    out.albedo = vec3Field(L, t, "albedo", out.albedo);
-    out.metallic = static_cast<float>(numField(L, t, "metallic", out.metallic));
-    out.roughness = static_cast<float>(numField(L, t, "roughness", out.roughness));
-
-    // parts = { { mesh=, albedo=, metallic=, roughness=, opacity=, emission= }, ... }
-    // Each becomes a child Renderable so glass/interior keep their own material.
-    lua_getfield(L, t, "parts");
-    if (lua_istable(L, -1)) {
-        const int pt = lua_gettop(L);
-        const int n = static_cast<int>(luaL_len(L, pt));
-        for (int i = 1; i <= n; ++i) {
-            lua_rawgeti(L, pt, i);
-            const int pi = lua_gettop(L);
-            if (lua_istable(L, pi)) {
-                VehicleSpec::Part part;
-                lua_getfield(L, pi, "mesh");
-                part.mesh = luaToMesh(L, -1);
-                lua_pop(L, 1);
-                if (part.mesh) {
-                    part.albedo = vec3Field(L, pi, "albedo", part.albedo);
-                    part.metallic = static_cast<float>(numField(L, pi, "metallic", part.metallic));
-                    part.roughness = static_cast<float>(numField(L, pi, "roughness", part.roughness));
-                    part.opacity = static_cast<float>(numField(L, pi, "opacity", part.opacity));
-                    part.emission = vec3Field(L, pi, "emission", part.emission);
-                    out.parts.push_back(std::move(part));
-                }
-            }
-            lua_pop(L, 1);
-        }
-    }
-    lua_pop(L, 1);
-
+// THE ONE HANDLING READER (item 23, #117): a recipe's handling table -- every field a drivable spec carries
+// besides its meshes and lamps -- into `out`'s Jolt config, suspension rig and drivetrain flags. A drivable
+// spec's own table and a fleet slot's `handling` (vehicles.lua: class_handling / kit_handling) are both read
+// here, so a commandeered traffic car and the same car dropped by the player get one config.
+void readVehicleHandling(lua_State* L, int t, VehicleSpec& out) {
     PhysicsWorld::VehicleConfig& c = out.config;
     c.mass = numField(L, t, "mass", c.mass);
     c.engineTorque = numField(L, t, "engine_torque", c.engineTorque);
@@ -154,6 +100,120 @@ bool loadVehicleSpec(ScriptVM& vm, const std::string& recipe, uint32_t seed,
     }
     lua_pop(L, 1);
 
+    // chassis = { half = {x,y,z} }
+    lua_getfield(L, t, "chassis");
+    if (lua_istable(L, -1))
+        c.chassisHalfExtent = vec3Field(L, lua_gettop(L), "half", c.chassisHalfExtent);
+    lua_pop(L, 1);
+
+    // wheel = { radius=, width= } — defaults for each wheel.
+    double wheelRadius = 0.34, wheelWidth = 0.24;
+    lua_getfield(L, t, "wheel");
+    if (lua_istable(L, -1)) {
+        int wt = lua_gettop(L);
+        wheelRadius = numField(L, wt, "radius", wheelRadius);
+        wheelWidth = numField(L, wt, "width", wheelWidth);
+    }
+    lua_pop(L, 1);
+
+    // wheels = { {x,y,z, steered=, driven=, hand_brake=, radius=, width=}, ... }
+    lua_getfield(L, t, "wheels");
+    if (lua_istable(L, -1)) {
+        int wt = lua_gettop(L);
+        int n = static_cast<int>(luaL_len(L, wt));
+        for (int i = 1; i <= n; ++i) {
+            lua_rawgeti(L, wt, i);
+            int wi = lua_gettop(L);
+            if (lua_istable(L, wi)) {
+                PhysicsWorld::VehicleWheel w;
+                // The spec publishes the wheel's DRAWN resting centre
+                // (vehicles.lua: axleY = -H/2 + r, the same datum the fleet
+                // bakes its wheels at). Lift the attach point by the settle
+                // and use the rig's travel -- every car this reader builds, a
+                // dropped one or a traffic car made physical -- so the car rests
+                // exactly where it is drawn instead of 0.30 m above it. (Jolt hangs
+                // the wheel BELOW its attach point, and the frequency spring's rest
+                // drop is mass-independent: tests/test_driving_lab.cpp pins it.)
+                w.position = Vec3(numField(L, wi, "x", 0),
+                                  numField(L, wi, "y", 0) + out.suspensionRestDrop,
+                                  numField(L, wi, "z", 0));
+                w.suspensionMin = out.suspensionMin;
+                w.suspensionMax = out.suspensionMax;
+                w.suspensionFrequency = out.suspensionFrequency;
+                w.suspensionDamping = out.suspensionDamping;
+                w.radius = numField(L, wi, "radius", wheelRadius);
+                w.width = numField(L, wi, "width", wheelWidth);
+                w.steered = boolField(L, wi, "steered", false);
+                w.driven = boolField(L, wi, "driven", false);
+                w.handBrake = boolField(L, wi, "hand_brake", false);
+                c.wheels.push_back(w);
+            }
+            lua_pop(L, 1);
+        }
+    }
+    lua_pop(L, 1);
+
+}
+
+bool loadVehicleSpec(ScriptVM& vm, const std::string& recipe, uint32_t seed,
+                     VehicleSpec& out, std::string* err) {
+    lua_State* L = luaState(vm);
+    vm.setGlobalNumber("seed", static_cast<double>(seed));
+
+    if (luaL_loadstring(L, recipe.c_str()) != LUA_OK ||
+        lua_pcall(L, 0, 1, 0) != LUA_OK) {
+        if (err) {
+            const char* m = lua_tostring(L, -1);
+            *err = m ? m : "vehicle recipe error";
+        }
+        lua_pop(L, 1);
+        return false;
+    }
+
+    int t = lua_gettop(L);
+    if (!lua_istable(L, t)) {
+        if (err) *err = "vehicle recipe did not return a table";
+        lua_pop(L, 1);
+        return false;
+    }
+
+    // Body mesh (procgen Mesh userdata).
+    lua_getfield(L, t, "body");
+    out.body = luaToMesh(L, -1);
+    lua_pop(L, 1);
+
+    out.albedo = vec3Field(L, t, "albedo", out.albedo);
+    out.metallic = static_cast<float>(numField(L, t, "metallic", out.metallic));
+    out.roughness = static_cast<float>(numField(L, t, "roughness", out.roughness));
+
+    // parts = { { mesh=, albedo=, metallic=, roughness=, opacity=, emission= }, ... }
+    // Each becomes a child Renderable so glass/interior keep their own material.
+    lua_getfield(L, t, "parts");
+    if (lua_istable(L, -1)) {
+        const int pt = lua_gettop(L);
+        const int n = static_cast<int>(luaL_len(L, pt));
+        for (int i = 1; i <= n; ++i) {
+            lua_rawgeti(L, pt, i);
+            const int pi = lua_gettop(L);
+            if (lua_istable(L, pi)) {
+                VehicleSpec::Part part;
+                lua_getfield(L, pi, "mesh");
+                part.mesh = luaToMesh(L, -1);
+                lua_pop(L, 1);
+                if (part.mesh) {
+                    part.albedo = vec3Field(L, pi, "albedo", part.albedo);
+                    part.metallic = static_cast<float>(numField(L, pi, "metallic", part.metallic));
+                    part.roughness = static_cast<float>(numField(L, pi, "roughness", part.roughness));
+                    part.opacity = static_cast<float>(numField(L, pi, "opacity", part.opacity));
+                    part.emission = vec3Field(L, pi, "emission", part.emission);
+                    out.parts.push_back(std::move(part));
+                }
+            }
+            lua_pop(L, 1);
+        }
+    }
+    lua_pop(L, 1);
+
     // lights = { { name = "headlight_l", pos = {x,y,z} }, ... }
     // Same shape citysim's fleet recipes use, so `mesh.car`'s output drops
     // straight into either consumer.
@@ -188,59 +248,10 @@ bool loadVehicleSpec(ScriptVM& vm, const std::string& recipe, uint32_t seed,
     }
     lua_pop(L, 1);
 
-    // chassis = { half = {x,y,z} }
-    lua_getfield(L, t, "chassis");
-    if (lua_istable(L, -1))
-        c.chassisHalfExtent = vec3Field(L, lua_gettop(L), "half", c.chassisHalfExtent);
-    lua_pop(L, 1);
-
-    // wheel = { radius=, width= } — defaults for each wheel.
-    double wheelRadius = 0.34, wheelWidth = 0.24;
-    lua_getfield(L, t, "wheel");
-    if (lua_istable(L, -1)) {
-        int wt = lua_gettop(L);
-        wheelRadius = numField(L, wt, "radius", wheelRadius);
-        wheelWidth = numField(L, wt, "width", wheelWidth);
-    }
-    lua_pop(L, 1);
-
-    // wheels = { {x,y,z, steered=, driven=, hand_brake=, radius=, width=}, ... }
-    lua_getfield(L, t, "wheels");
-    if (lua_istable(L, -1)) {
-        int wt = lua_gettop(L);
-        int n = static_cast<int>(luaL_len(L, wt));
-        for (int i = 1; i <= n; ++i) {
-            lua_rawgeti(L, wt, i);
-            int wi = lua_gettop(L);
-            if (lua_istable(L, wi)) {
-                PhysicsWorld::VehicleWheel w;
-                // The spec publishes the wheel's DRAWN resting centre
-                // (vehicles.lua: axleY = -H/2 + r, the same datum the fleet
-                // bakes its wheels at). Lift the attach point by the settle
-                // and use the street travel — the rule configFromBody applies
-                // to a commandeered car — so the player's car rests exactly
-                // where it is drawn instead of 0.30 m above it.
-                w.position = Vec3(numField(L, wi, "x", 0),
-                                  numField(L, wi, "y", 0) + out.suspensionRestDrop,
-                                  numField(L, wi, "z", 0));
-                w.suspensionMin = out.suspensionMin;
-                w.suspensionMax = out.suspensionMax;
-                w.suspensionFrequency = out.suspensionFrequency;
-                w.suspensionDamping = out.suspensionDamping;
-                w.radius = numField(L, wi, "radius", wheelRadius);
-                w.width = numField(L, wi, "width", wheelWidth);
-                w.steered = boolField(L, wi, "steered", false);
-                w.driven = boolField(L, wi, "driven", false);
-                w.handBrake = boolField(L, wi, "hand_brake", false);
-                c.wheels.push_back(w);
-            }
-            lua_pop(L, 1);
-        }
-    }
-    lua_pop(L, 1);
+    readVehicleHandling(L, t, out);
 
     lua_pop(L, 1);   // the returned spec table
-    return out.body != nullptr || !c.wheels.empty();
+    return out.body != nullptr || !out.config.wheels.empty();
 }
 
 Entity spawnVehicle(World& world, AssetManager& assets, const VehicleSpec& spec,

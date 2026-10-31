@@ -13409,3 +13409,74 @@ A review of the wave 3 commits found the new paths left holes where the old ones
 
 Not changed: the coast brief's spur loss is ADR-0269's rule working (a spur with no room is not built), and the
 k-prefixed constants follow the codebase's convention.
+
+## ADR-0273 — One handling builder: every car drives with its recipe's handling, and plans with what it can do
+
+#117 wave 2, item 23. Three things built a Jolt `VehicleConfig`:
+- **The drivable spec** (`vehicles.lua` → `loadVehicleSpec`) gave the player's car its class's handling.
+- **A commandeered traffic car** got `configFromBody` (city_vehicles.cpp). It put the drawn wheels under C++
+  numbers of its own: 650 Nm, 32° of steer and fixed brakes for every car, from a hatchback to a box truck, with no
+  drivetrain, gearbox or class tuning.
+- **The physical tier** (`possessTier`, city_physics.cpp) made every car near the player one hard-coded box sedan:
+  1,400 kg, 900 Nm, all-wheel drive, 0.34 m wheels at fixed spots. A bus beside the player was simulated as that
+  sedan, its wheels outside its arches.
+
+**Decision.** The recipe is the only place a car's handling is set, and C++ has one reader for it.
+- **Lua.** `class_handling` and `kit_handling` (vehicles.lua) build the handling table: chassis, mass, engine,
+  brakes, grip, drivetrain, gearbox, suspension and wheels. `from_class` and `kit_drivable` publish it with their
+  meshes. Every fleet catalogue slot carries the same table as `handling`, on its drawn wheels (`fleet_wheels` for a
+  class slot, the kit's own for a kit slot), plus `drivable`, the menu's recipe for the same car. It is read without
+  building any mesh.
+- **C++.** `readVehicleHandling` (vehicle_spec.cpp) reads it, both for `loadVehicleSpec` and for
+  `loadFleetHandling` (vehicle_body.cpp). The city keeps one config per slot (`CityRenderSystem::carConfig`).
+  Commandeering and the physical tier both use it. `configFromBody` and the box sedan are deleted, and the tier
+  sizes its spawn height and footprints by the car's own chassis.
+- **The plan follows the car** (Glenn chose this over a torque floor that would keep the stock plan).
+  `PhysicsWorld::launchAccel` measures what a config can pull away at: 0 to 10 m/s at full throttle on the road's
+  0.85. The sedans manage 3.7 m/s², the SUVs about 5.1, the parcel van 2.9, the fire engine 1.95 and the bus 1.8.
+  The tier measures each slot once per build (`CityPhysicsSystem::measureFleetLaunches`, since only hosts with
+  physics can) and hands the value to the sim (`setFleetLaunch`). The sim plans each car's launches at
+  min(kCarAccel, 0.9 × its launch), the headroom the stock 4.0 kept over the old sedan. A bus pulls away like a bus
+  everywhere, not only near the player. A car carries its fleet slot (`SimVehicle::slot`) so the plan reads its
+  body's launch. Builds without physics keep the stock 4.0.
+
+**Found on the way.**
+- **`spotClear` refused every car whose drawn instance had a kinematic proxy.** The candidate's own proxy box sits
+  on the spot it is being made physical at. The tier only took cars through its snap path, and the packed junction's
+  physical body-ticks were about half what they should have been (34k against 62k at seed 11). It now skips the
+  candidate's own proxy, keyed by uid.
+- **Two of the tier soaks ran with no vehicles script**, physicalising invisible sim cars as box sedans. They now
+  load the shipped fleet, as their file's own rule says a city must. `carSlotOf` counts the fleet's slots (not
+  the drawn groups), so a headless city still knows a bus is a bus.
+- **Every tier test stood on `addBox`'s default friction, 0.2.** That is ice: the AWD box sedan pulled away on it,
+  and a rear-drive pickup spun up at 2 m/s² behind a ghost planning 4. They now stand on the road's 0.85
+  (`kRoadFriction`, road_builder.h).
+- **The pile-up test measured "climbing"** against one resting height for all cars. A bus rests about 0.8 m higher
+  than a sedan, so it now measures each car's floor (centre less its half height).
+
+**Measured.** Packed junction (`RT_PILEUP_SEED`) and soak (`RT_TIER_SEED`, new) over seeds 11–18, on road friction,
+own-proxy fix in both columns:
+
+| | box sedan, stock 4.0 plan | own handling + own launch |
+|---|---|---|
+| soak: share of time > 3 m behind the ghost (mean) | 16.4% | 3.8% |
+| soak: longest spell > 6 m (mean / max) | 1.7 / 4.6 s | 0.8 / 2.1 s |
+| junction: longest > 6 m behind (mean / max) | 4.7 / 7.6 s | 2.6 / 4.6 s |
+| junction: snaps held back (mean) | 378 | 0 |
+| junction: tipped / climbing / inside another (max) | 0.06% / 0.10% / 0.09% | 0 / 0 / 0 |
+
+Own handling on the stock plan, without the launch, tipped 1.9% of body-ticks on one seed. The plan has to follow
+the car.
+
+**Tests.**
+- `every_fleet_slot_drives_with_its_kit_s_drivable_handling`: every slot of all three fleets carries a whole car,
+  and each kit slot matches its drivable recipe field for field. The 18 drivable recipes were dumped before and after
+  the Lua split and came out byte-identical.
+- `every_fleet_car_launches_as_the_traffic_plan_asks`: every slot pulls away, the catalogue carries the measured
+  launch, and the fleet's spread is real.
+
+**Consequences.**
+- Traffic everywhere pulls away at its own rate when physics is present, so the level suite's traffic numbers move.
+- No bake changes: handling is read at load, and nothing is cached.
+- Owed: the two-tier pursuit and catch-up gains are still the sedan's (city_physics.cpp). Item 24 (one driving
+  controller) is where they get looked at.
