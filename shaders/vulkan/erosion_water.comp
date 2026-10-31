@@ -1,9 +1,8 @@
 #version 450
 // WATER AND SEDIMENT: the "pipe model" of Mei, Decaudin & Hu, "Fast Hydraulic Erosion Simulation and
-// Visualization on GPU" (Pacific Graphics 2007) -- the shallow-water half of the erosion bake (ADR-0123).
-// The droplet kernels (erosion.comp) carve drainage; they cannot hold water, so they make no lakes, no
-// pools and no floodplains, and a river is only as wide as their brush. Here every cell holds a DEPTH of
-// water that flows to its four neighbours through virtual pipes driven by the water-surface difference:
+// Visualization on GPU" (Pacific Graphics 2007) -- the shallow-water stage of the weather bake's erode()
+// (ADR-0123; the droplet kernels it once followed retired in ADR-0257). Every cell holds a DEPTH of
+// water that flows to its eight neighbours through virtual pipes driven by the water-surface difference:
 // water spreads, ponds, floods over its banks and drops what it carries where it slows. River width,
 // floodplains and fans come out of the simulation.
 //

@@ -86,6 +86,9 @@ decompress — no file parsing. For 100 km the terrain goes in per-region bundle
   Per-tile GPU cost: 129² × 2 B ≈ 33 KB, against ~1 MB of vertices today.
 - **Selection by error, not distance alone:** split a tile when its error, projected to the
   screen, exceeds ~1 px. Flat ground stays coarse up close; road edges refine wherever they are.
+  *As built:* the tile's error decides only whether its children are stored (`buildPyramid`, 5 cm);
+  drawing picks among stored tiles by CDLOD distance ranges (`selectLodNodesGated` in
+  `terrain_lod_system.cpp`), and each tile is its own baked mesh with skirts (`generateBakedTileMesh`).
 - **Pages:** the residency service (§4) owns the texture-array pages; a missing child draws its
   parent until it arrives (never a hole).
 

@@ -2289,6 +2289,8 @@ the in-tree surface nets), which the representation-agnostic AABB cull already a
 overhangs/caves add a volumetric feature layer beside the heightfield; a GPU-VTF
 clipmap replaces CPU node meshing if churn dominates a profile.
 
+*Since then (#117 wave 0):* the baked pyramid's tiles do carry skirts, 1 m plus the tile's error, to cover the crack where a stored leaf meets a finer neighbour (addSkirts in generateBakedTileMesh, terrain_lod.cpp); the morph still hides the seams between selected levels.
+
 ---
 
 ## ADR-0037 — Interactive render budget + display-agnostic tone/grade pipeline
@@ -7589,6 +7591,8 @@ client, buildings second, then vertex layouts, road deck tolerance meshing, came
 rendering, regions, and a 100 km test world. Each step carries before/after `mem?`, load and frame
 times, and a level-test byte budget.
 
+*Since then (#117 wave 0):* tiles are drawn by CDLOD distance ranges, not screen-space error: a tile's error only decides whether its children are stored (buildPyramid, 5 cm), and selectLodNodesGated picks among stored tiles (terrain_lod_system.cpp); each tile is its own baked CPU mesh with skirts (generateBakedTileMesh, terrain_lod.cpp), not one shared grid lifted in the vertex shader.
+
 ## ADR-0096 — Two vertex layouts: a 32-byte standard vertex, and the full one where the data needs it
 
 **Context.** Every mesh paid 56 bytes a vertex (float3 position, normal, tangent and colour, float2
@@ -7861,6 +7865,8 @@ test bed: 6 rivers and 9 lakes from its own relief. **Owed:**
 - the city: planned around rivers, arterials crossing on bridges;
 - widths tuned for the map's scale;
 - Metal.
+
+*Since then (#117 wave 0):* flow is not D8 (steepest of eight): each cell's area passes to its priority-flood receiver, the neighbour that first reached it from the edge or the sea (hydrology.cpp; drainage.h's floodDrainage is the shared form of the same flood).
 
 ## ADR-0100 — Occlusion culling against a recent frame's depth, on the CPU
 
