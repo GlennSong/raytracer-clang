@@ -72,43 +72,7 @@ struct FlatSiteParams {
 // at a site and sizes it to the radius, so it sits on flat ground that can hold it.
 std::vector<FlatSite> findFlatSites(const HeightField& h, const FlatSiteParams& p);
 
-// --- routing (lay a road that keeps a walkable grade) ------------------------
-// A road has to stay walkable: if the character can't climb a slope, the road
-// can't run straight up it either. Instead of draping a straight line over the
-// terrain (and conforming it into a cut/fill canyon over the hill), route the
-// road as a path that follows the ground while keeping its grade bounded — so it
-// carves around a mountain or switchbacks up it at a gentle incline (ADR-0045).
-struct RouteParams {
-    double cell = 12.0;        // search-grid spacing (m): coarser = faster, blockier
-    double maxGrade = 0.12;    // max |rise/run| a segment may climb; steeper is forbidden
-    double pad = 0.0;          // widen the search box past the endpoints (m); 0 => auto
-    double turnPenalty = 6.0;  // cost (m) added per heading change — straightens the path
-    double climbCost = 0.0;    // extra cost per metre climbed — biases toward flatter ground
-    double maxStretch = 8.0;   // give up if the route would exceed straight-line * this
-    double simplifyTol = 0.0;  // collapse points within this offset of a straight run (m); 0 => cell*0.4
-
-    // Earthwork mode (ADR-0047, after Galin et al. 2010). With cutFill < 0 (default)
-    // the road HUGS: it follows the ground and the grade limit is a hard gate on the
-    // terrain it may cross. With cutFill >= 0 the road instead carries its own
-    // elevation profile — the search is over (x, z, road-height), the grade limit is
-    // a hard constraint on the ROAD profile (so it's always walkable, even across
-    // ground too steep to hug), and cut/fill |road - terrain| is a SOFT cost weighted
-    // by cutFill. High cutFill => deviating is dear => the road hugs and switchbacks;
-    // low cutFill => reshaping is cheap => it runs straight and flat, cutting hills and
-    // filling valleys. cutFill is the single "hug <-> modify the terrain" dial.
-    double cutFill = -1.0;     // < 0: hug (no earthwork). >= 0: cost per m^2 of cut/fill
-    double elevStep = 0.0;     // road-height quantum for the profile search (m); 0 => auto
-};
-// Route a road from `from` to `to` over the heightfield, returning a polyline of
-// (x, h(x,z), z) waypoints whose every leg holds grade <= maxGrade. A* over a grid
-// of `cell`-spaced cells, 8-connected, where a step is forbidden when its grade is
-// too steep — so to gain height the path must traverse along the slope and double
-// back (switchbacks) rather than climb straight up. Near-collinear runs collapse,
-// so the result is a handful of segments at the turns. Returns just {from,to} when
-// the endpoints are level/adjacent, and an empty vector when no route fits the
-// grade within the search box (the caller falls back to a straight road).
-std::vector<Vec3> routeRoad(const HeightField& h, const Vec3& from, const Vec3& to,
-                            const RouteParams& p);
+// (A road over the ground within a grade: routeOnTerrain, procgen/city/terrain_route.h -- the one router, ADR-0277.)
 
 // Smooth a road centerline into a curve (ADR-0048). A routed/streamline centerline is
 // a polyline — and a grid-routed one is an 8-direction staircase, which is what reads

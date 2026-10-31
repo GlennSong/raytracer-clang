@@ -39,6 +39,7 @@
 #include "../procgen/stylized_rock.h"   // stylized.rock
 #include "../procgen/grass.h"           // stylized.grass
 #include "../procgen/terrain_field.h"
+#include "../procgen/city/terrain_route.h"   // routeOnTerrain: terrain.route (the one router)
 #include "../procgen/erosion.h"
 #include "../procgen/planet.h"
 #include "../mesh_builder.h"
@@ -2718,41 +2719,37 @@ int l_terr_flat_sites(lua_State* L) {
     }
     return 1;
 }
-// terrain.route(field, { from={x,z}, to={x,z}, max_grade=, cell=, width=,
-//   turn_penalty=, climb_cost=, pad=, max_stretch=, simplify_tol= }) -> a chain
-//   LAYOUT { nodes={{x,z},...}, edges={{a,b,width},...}, blocks={} } following a
-//   grade-bounded path over the terrain (switchbacks up / around steep ground),
-//   ready to drop into terrain.conform + city.road_mesh. Falls back to a straight
-//   two-node chain when no grade-legal route fits (so callers always get a road).
+// terrain.route(field, { from={x,z}, to={x,z}, max_grade=, hard_grade=, cell=, margin=, turn_weight=, width= })
+//   -> a chain LAYOUT { nodes={{x,z,y},...}, edges={{a,b,width},...}, blocks={} } over the terrain, by the one router
+//   (routeOnTerrain, ADR-0277: the planner's and the island's): contours where it can, switchbacks up what is too
+//   steep -- `max_grade` the road's grade (each move above it pays steeply), `hard_grade` the most it may climb at
+//   all (default: max_grade). Ready to drop into terrain.conform + city.road_mesh. Falls back to a straight
+//   two-node chain when no route fits (so callers always get a road).
 int l_terr_route(lua_State* L) {
     HeightField& h = checkHeight(L, 1);
     luaL_checktype(L, 2, LUA_TTABLE);
-    Vec3 from(0, 0, 0), to(0, 0, 0);
+    Vec2 from(0, 0), to(0, 0);
     lua_getfield(L, 2, "from");
     luaL_checktype(L, -1, LUA_TTABLE);
-    from = Vec3(optField(L, -1, "x", 0.0), 0.0, optField(L, -1, "z", 0.0));
+    from = Vec2(optField(L, -1, "x", 0.0), optField(L, -1, "z", 0.0));
     lua_pop(L, 1);
     lua_getfield(L, 2, "to");
     luaL_checktype(L, -1, LUA_TTABLE);
-    to = Vec3(optField(L, -1, "x", 0.0), 0.0, optField(L, -1, "z", 0.0));
+    to = Vec2(optField(L, -1, "x", 0.0), optField(L, -1, "z", 0.0));
     lua_pop(L, 1);
 
-    RouteParams rp;
-    rp.cell        = optField(L, 2, "cell", rp.cell);
-    rp.maxGrade    = optField(L, 2, "max_grade", rp.maxGrade);
-    rp.pad         = optField(L, 2, "pad", rp.pad);
-    rp.turnPenalty = optField(L, 2, "turn_penalty", rp.turnPenalty);
-    rp.climbCost   = optField(L, 2, "climb_cost", rp.climbCost);
-    rp.maxStretch  = optField(L, 2, "max_stretch", rp.maxStretch);
-    rp.simplifyTol = optField(L, 2, "simplify_tol", rp.simplifyTol);
-    rp.cutFill     = optField(L, 2, "cut_fill", rp.cutFill);     // >=0: earthwork mode
-    rp.elevStep    = optField(L, 2, "elev_step", rp.elevStep);
+    TerrainRouteParams rp;
+    rp.cell = optField(L, 2, "cell", rp.cell);
+    rp.maxGrade = optField(L, 2, "max_grade", rp.maxGrade);
+    rp.hardGrade = optField(L, 2, "hard_grade", rp.maxGrade);
+    rp.margin = optField(L, 2, "margin", rp.margin);
+    rp.turnWeight = optField(L, 2, "turn_weight", rp.turnWeight);
     double width = optField(L, 2, "width", 12.0);
 
-    std::vector<Vec3> path = routeRoad(h, from, to, rp);
-    if (path.size() < 2)                       // no grade-legal route: straight road
-        path = {Vec3(from.x, h(from.x, from.z), from.z),
-                Vec3(to.x, h(to.x, to.z), to.z)};
+    std::vector<Vec3> path;
+    for (const Vec2& q : routeOnTerrain(h, from, to, rp).points) path.push_back(Vec3(q.x, h(q.x, q.y), q.y));
+    if (path.size() < 2)                       // no route within the grade: a straight road
+        path = {Vec3(from.x, h(from.x, from.y), from.y), Vec3(to.x, h(to.x, to.y), to.y)};
 
     // Optional spline smoothing (ADR-0048): turn the routed polyline into a curve.
     lua_getfield(L, 2, "smooth");
@@ -2775,7 +2772,7 @@ int l_terr_route(lua_State* L) {
         lua_createtable(L, 0, 3);
         lua_pushnumber(L, path[i].x); lua_setfield(L, -2, "x");
         lua_pushnumber(L, path[i].z); lua_setfield(L, -2, "z");
-        lua_pushnumber(L, path[i].y); lua_setfield(L, -2, "y");   // ROAD height (cut/fill)
+        lua_pushnumber(L, path[i].y); lua_setfield(L, -2, "y");   // the ground under it
         lua_seti(L, -2, static_cast<lua_Integer>(i + 1));
     }
     lua_setfield(L, -2, "nodes");

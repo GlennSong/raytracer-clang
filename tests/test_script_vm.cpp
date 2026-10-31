@@ -564,6 +564,45 @@ TEST_CASE(procgen_terrain_conform_binding_runs) {
     CHECK(mesh->indices.size() % 3 == 0);
 }
 
+// terrain.route on the one router (ADR-0277: routeOnTerrain, the planner's and the island's): a chain from one end to
+// the other over rough ground, every node on the ground, its legs within the road's hard grade.
+TEST_CASE(procgen_terrain_route_runs_on_the_one_router) {
+    ScriptVM vm;
+    openProcgenLibrary(vm);
+    std::string err;
+    const bool ok = vm.doString(R"LUA(
+        local land = terrain.fbm{ seed=5, freq=0.004, amp=30, octaves=2 }   -- hills too steep to drive straight over
+        local lay = terrain.route(land, { from={x=-150, z=-20}, to={x=150, z=40}, max_grade=0.08, hard_grade=0.12, cell=8 })
+        nodes = #lay.nodes
+        edges = #lay.edges
+        local first, last = lay.nodes[1], lay.nodes[#lay.nodes]
+        ends = math.abs(first.x + 150) + math.abs(first.z + 20) + math.abs(last.x - 150) + math.abs(last.z - 40)
+        worst, offGround = 0, 0
+        for i = 1, #lay.nodes do
+            local n = lay.nodes[i]
+            offGround = math.max(offGround, math.abs(n.y - land:at(n.x, n.z)))
+            if i > 1 then
+                local p = lay.nodes[i - 1]
+                local d = math.sqrt((n.x - p.x)^2 + (n.z - p.z)^2)
+                if d > 1 then worst = math.max(worst, math.abs(n.y - p.y) / d) end
+            end
+        end
+    )LUA", &err);
+    if (!ok) std::printf("    lua: %s\n", err.c_str());
+    CHECK(ok);
+    double nodes = 0, edges = 0, ends = 1, worst = 1, offGround = 1;
+    vm.getGlobalNumber("nodes", nodes);
+    vm.getGlobalNumber("edges", edges);
+    vm.getGlobalNumber("ends", ends);
+    vm.getGlobalNumber("worst", worst);
+    vm.getGlobalNumber("offGround", offGround);
+    std::printf("    terrain.route: %.0f nodes, steepest leg %.3f\n", nodes, worst);
+    CHECK(nodes >= 4 && edges == nodes - 1);   // it winds: a straight line over these hills is too steep
+    CHECK(ends < 1e-6);          // from and to exactly
+    CHECK(offGround < 1e-9);     // every node on the ground
+    CHECK(worst <= 0.12 * 1.25); // the hard grade (a simplified leg spans a few moves)
+}
+
 TEST_CASE(procgen_terrain_conform_block_pads_run) {
     // terrain.conform also flattens block pads: the recipe passes a `pads` list of
     // { y, poly } and the ground is cut/filled to a level plot under each. Smoke-

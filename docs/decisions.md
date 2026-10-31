@@ -13621,3 +13621,41 @@ They now write their narrow streets into their own graph files, as every planned
 
 **Consequences.** No bake change and no tag bump for this item. The roads chain's re-plan (items 19–21, with #167 and
 #142) is where any grade actually moves, and then from this one table.
+
+## ADR-0277 — One terrain router: routeOnTerrain; terrain.route runs on it, routeRoad retires
+
+#117 wave 2, item 19. Two grade-limited terrain routers:
+- **`routeRoad`** (terrain_field.cpp, ADR-0045): A* over 8 neighbours with the grade a hard gate. Its switchbacks
+  were 45° staircases (ADR-0048's "unnatural curves"). It also had an earthwork mode (ADR-0047) that searched over
+  (x, z, road height) and priced cut and fill. Its only caller was the Lua binding `terrain.route`, and no script,
+  level or tool calls that.
+- **`routeOnTerrain`** (city/terrain_route.cpp, ADR-0103, after Galin et al. 2010): moves of up to three cells in 32
+  directions, a soft grade (`maxGrade`, priced above) and a hard one (`hardGrade`), turns priced on the incoming
+  direction, self-crossings cut. It is the city planner's mountain roads (plan_scene) and the island's freeway, passes,
+  roads and footpaths.
+
+**Decision.** `routeOnTerrain` is the one router.
+- `terrain.route` keeps its call and its result: `from`, `to`, `cell`, `max_grade`, `width`, the optional spline
+  smoothing, and a chain layout of nodes on the ground and edges. It now runs on `routeOnTerrain`.
+  - `max_grade` is the road's grade, and the new `hard_grade` (default `max_grade`) is the most it may climb at all.
+  - `margin` and `turn_weight` are the router's own knobs.
+  - The old router's `pad`, `turn_penalty`, `climb_cost`, `max_stretch`, `simplify_tol`, `cut_fill` and `elev_step`
+    have nothing to set. They go with it.
+- **`routeRoad`, its earthwork mode and `RouteParams` are deleted.** A road's cut and fill is the builder's: the
+  profile's balance (ADR-0116) cuts through what it cannot climb and fills what it must cross. A router that also
+  priced earthwork was a second answer to that, and nothing asked it.
+- The Douglas-Peucker simplifier stays: the spline smoothing (`smoothCentripetalCatmullRom`, `roundRoadCorners`)
+  decimates with it.
+
+**Tests.** `procgen_terrain_route_runs_on_the_one_router` (Lua): over hills too steep to drive straight
+(`terrain.fbm{freq=0.004, amp=30, octaves=2}`), a chain of 10 nodes. Both ends are exact, every node is on the
+ground, and the steepest leg is 11.7 % against a 12 % hard grade. The four `routeRoad` tests go with it:
+- flat, the peak and walled-in are `routeOnTerrain`'s own cases (`terrain_route_is_straight_on_flat_ground`,
+  `..._winds_up_a_mountain_within_its_grade`);
+- the earthwork test goes with the mode.
+
+Found while writing the test: rough fbm (4 octaves of 90 m at 0.01) has no road within 12 %. The router says so (no
+points), and `terrain.route` falls back to its straight chain, as it always did.
+
+**Consequences.** No bake change: no level or recipe routes through Lua. The island's and the planner's router
+settings (cell, weights, margins per road kind) are the search's tuning and stay with their callers (ADR-0276).
