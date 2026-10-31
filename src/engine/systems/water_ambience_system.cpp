@@ -99,12 +99,12 @@ void WaterAmbienceSystem::update(FrameContext& ctx) {
             const double r = kRadii[sweep_ / kDirs];
             const double a = 6.283185307179586 * ((sweep_ % kDirs) + 0.5 * ((sweep_ / kDirs) % 2)) / kDirs;
             const double x = sweepCentre_.x + r * std::cos(a), z = sweepCentre_.z + r * std::sin(a);
-            if (seaMap->contains(x, z) && r * r < bestD2_) { bestD2_ = r * r; best_ = Vec3(x, sea, z); }
+            if (seaMap->surf(x, z) && r * r < bestD2_) { bestD2_ = r * r; best_ = Vec3(x, sea, z); }
         }
         if (sweep_ >= kRings * kDirs) {
             sweep_ = 0;
             // standing in the sea, the waves are all round: put them right here
-            const bool inSea = seaMap->contains(sweepCentre_.x, sweepCentre_.z);
+            const bool inSea = seaMap->surf(sweepCentre_.x, sweepCentre_.z);
             surfFound_ = inSea || bestD2_ < 1e29;
             surfTarget_ = inSea ? Vec3(sweepCentre_.x, sea, sweepCentre_.z) : best_;
             // high on a cliff the surf is far below: thin it with height above the water

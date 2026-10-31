@@ -847,6 +847,13 @@ TEST_CASE(open_sea_keeps_the_ocean_and_drops_the_ponds) {
     Sea sea;
     for (const auto& b : open) sea.add(b[0], b[1], b[2], b[3]);
     CHECK(sea.contains(500, 60) && !sea.contains(500, 625) && !sea.contains(500, 400));
+    // ADR-0286: the level's Sea holds EVERY drawn cell -- the pond is water to swim in, without the surf
+    const std::vector<uint8_t> mask = openSeaMask(cells, 0, 0, 1000, 1000);
+    Sea drawn;
+    for (std::size_t i = 0; i < cells.size(); ++i) drawn.add(cells[i][0], cells[i][1], cells[i][2], cells[i][3], mask[i] != 0);
+    CHECK(drawn.contains(500, 60) && drawn.surf(500, 60));     // the ocean: swum in, and waves
+    CHECK(drawn.contains(500, 625) && !drawn.surf(500, 625));  // the pond: swum in, no waves
+    CHECK(!drawn.contains(500, 400) && !drawn.surf(500, 400)); // dry land
     // a big lake inland still has waves
     std::vector<std::array<double, 4>> lake;
     for (int i = 0; i < 20; ++i) lake.push_back({i * 50.0, 0, i * 50.0 + 50, 50});   // the "edge" row

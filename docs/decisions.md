@@ -13885,3 +13885,29 @@ their own pool and their own numbers:
 gathering both lists, and the city is an app the engine cannot see. That is left until a level needs it.
 
 **Test.** `engine_voice_pool_voices_the_nearest_and_reclaims_the_gone`, on the manual mixer.
+
+## ADR-0286 — One answer to "which water is here": the drawn sea is the swimmable sea
+
+#117 wave 2, item 30: "Two 'which water is here' lookups → one query (verify the overlap first)." Read on
+2026-10-31:
+- **The point query is already one.** `UnderwaterSystem::surfaceAt` checks a pool, then a lake, then a river,
+  then the sea. The camera, swimming and buoyancy, the bike and the footsteps' splash all ask it.
+- **The other "lookup" asks something else.** `WaterAmbienceSystem` sweeps rings round the listener for the
+  NEAREST sea, lake and river edge, to place their sounds. That is a search for an edge, not a test at a point.
+  It keeps its sweeps.
+- **What disagreed was the data under them.** The loader draws the water mesh over every cell below sea level,
+  but it gave the `Sea` only the open cells (`openSeaCells`, so ponds would have no surf). A pond the water plane
+  fills in a basin was drawn, but `surfaceAt` said dry there. The swimmer walked on it, with no underwater view
+  and no splash.
+
+**Decision.**
+- The `Sea` holds every drawn cell, each marked open water or pond (`openSeaMask`). `Sea::contains` is any water
+  drawn there, which is what the swimmer, the camera and the splash ask. `Sea::surf` is open water only, which is
+  what the ambience's surf sweep asks.
+- `openSeaCells` stays as the open cells of the mask.
+
+**Not changed.**
+- The ambience does not hear `WaterPool`. Only the movement lab has one, and still water makes no sound.
+- The offline tracer's scene draws water with no `Sea`, because nothing swims there.
+
+**Test.** `open_sea_keeps_the_ocean_and_drops_the_ponds` also checks that a pond is swum in without waves.

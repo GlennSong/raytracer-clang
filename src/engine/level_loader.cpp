@@ -4642,14 +4642,17 @@ bool LevelLoader::load(const std::string& path,
                     for (const Vec2& v : cell) { x0 = std::min(x0, v.x); z0 = std::min(z0, v.y); x1 = std::max(x1, v.x); z1 = std::max(z1, v.y); }
                     if (x1 >= x0) boxes.push_back({x0, z0, x1, z1});
                 }
-                const std::vector<std::array<double, 4>> open = openSeaCells(boxes, wp.lo.x, wp.lo.y, wp.hi.x, wp.hi.y);
-                if (!open.empty()) {
-                    Sea sea;
-                    sea.level = terrainParams.seaLevel > -1e29 ? terrainParams.seaLevel : 0.0;
-                    for (const auto& b : open) sea.add(b[0], b[1], b[2], b[3]);
-                    world.add<Sea>(world.create(), std::move(sea));
+                // EVERY drawn cell is water to swim in (ADR-0286); the open ones are the sea with waves (the surf)
+                const std::vector<uint8_t> open = openSeaMask(boxes, wp.lo.x, wp.lo.y, wp.hi.x, wp.hi.y);
+                Sea sea;
+                sea.level = terrainParams.seaLevel > -1e29 ? terrainParams.seaLevel : 0.0;
+                std::size_t openCount = 0;
+                for (std::size_t i = 0; i < boxes.size(); ++i) {
+                    sea.add(boxes[i][0], boxes[i][1], boxes[i][2], boxes[i][3], open[i] != 0);
+                    openCount += open[i];
                 }
-                std::fprintf(stderr, "[water] %zu sea cells, %zu of them open sea\n", boxes.size(), open.size());
+                if (!boxes.empty()) world.add<Sea>(world.create(), std::move(sea));
+                std::fprintf(stderr, "[water] %zu sea cells, %zu of them open sea\n", boxes.size(), openCount);
             }
             if (!wmesh.vertices.empty()) {
                 Entity we = world.create();
