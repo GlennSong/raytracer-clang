@@ -95,7 +95,8 @@ struct SwimState {
 // THE ONE IMPACT RULE (ADR-0247): what a step LOST of the speed the body meant to have, along the way it meant to
 // go -- a landing loses the fall, a wall the run into it, a slam the swing. Speed kept along the way, or turned
 // aside (a skim along the ground, a shove off a corner), is not lost. Every mode reports its own meant and got to
-// PlayerBody::impact, and past the mode's tolerance the body goes limp.
+// PlayerBody::impact, and past the mode's tolerance the body goes limp. A body carried in a seat is measured by its
+// counterpart, RideJolt (seat_motion.h, ADR-0281): it chose no way, so turning aside is felt there too.
 inline Real speedLost(const Vec3& meant, const Vec3& got) {
     const Real m = std::sqrt(meant.x * meant.x + meant.y * meant.y + meant.z * meant.z);
     if (m < 1e-6) return 0;

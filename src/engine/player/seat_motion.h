@@ -12,7 +12,9 @@
 namespace engine {
 
 // THE JOLT over the last kWindow s: the most the seat's velocity changed, the vertical at half (the springs take a
-// landing; a 2 m drop on a bike is a ride, not a crash), and the velocity it had before.
+// landing; a 2 m drop on a bike is a ride, not a crash), and the velocity it had before. The counterpart of the
+// walker's speedLost (body_rules.h), not the same rule (ADR-0281): a carried body chose no way to go, so EVERY change
+// is felt -- a motorbike struck from the side throws its rider though its speed down the road is kept.
 struct RideJolt {
     static constexpr Real kWindow = 0.3;
     struct Sample {

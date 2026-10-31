@@ -12326,8 +12326,8 @@ while stopped lost no "speed" and so did nothing. The player at the wheel was a 
 **Decision.**
 - **One crash measure for any vehicle, the seat's JOLT** (`engine/player/driver_seat.h` `RideJolt`): the most its
   velocity *vector* changed over the last 0.3 s, with the vertical counted at half (the springs take a landing; a 2 m
-  drop on a bike is a ride, not a crash). This is the impact rule's speed lost (ADR-0247) for a body strapped to a
-  vehicle.
+  drop on a bike is a ride, not a crash). This is the impact rule's counterpart (ADR-0247) for a body strapped to a
+  vehicle -- not the same rule: ADR-0281.
 - **Who it throws** (`ejectTolerance`):
   - a two-wheeler past 7 m/s (the old bike rule's 25 km/h gone in a moment);
   - an open seat past 11 m/s: `Vehicle::openSeat`, from the recipe's `open_seat` (the convertible, in the fleet and
@@ -13770,3 +13770,23 @@ road-plane clamp. It should call `drawnCellHeight` over `lodVertexHeight` corner
 **Consequences.** No bake change: no baked product reads the dressing or furniture drape. On baked levels the
 load-time dressing and furniture now sit on the pyramid, which is the ground the baked mesher draws. Where the
 pyramid stores leaf-resolution tiles that is the old height to within its 1 mm quantization.
+
+## ADR-0281 — Two crash measures stay: what a body meant to keep, and what a carried body felt
+
+#117 wave 2, item 25: "Two crash measures (on foot vs RideJolt), which ADR-0252 already calls one rule → one."
+Read on 2026-10-31: the measures are two on purpose, and what follows them is already one.
+
+- **On foot, `speedLost(meant, got)`** (body_rules.h, ADR-0247): the speed lost along the way the body meant to
+  go. `PlayerBody::impact` sums it over one contact. Turning aside is free: a skim along a wall or a shove off a
+  corner is the body's own choice of way, and costs nothing.
+- **In a seat, `RideJolt`** (seat_motion.h, ADR-0252): the largest change of the velocity vector over 0.3 s, with
+  the vertical at half. A carried body chose nothing, so every change is felt, sideways included. A motorbike
+  T-boned at speed must throw its rider, though its speed along the road is kept.
+
+Run through `speedLost` with the old velocity as meant, the T-bone would read zero. Run through the jolt, a wall
+skim on foot would ragdoll the walker. So neither can be written as the other, and ADR-0252's line ("the impact
+rule's speed lost for a body strapped to a vehicle") is corrected to "the impact rule's counterpart". **What is one
+already:** past its tolerance each publishes the same consequence. The jolt sends `LimpRequest` and PlayerSystem
+answers with the walker's own `goLimp`, so there is one throw, one ragdoll and one log line.
+
+**Decision.** Keep both, side by side in the comments that define them. No code change.
