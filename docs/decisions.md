@@ -14014,3 +14014,18 @@ The copy had already drifted: makeContext sets `commands`, the control channel's
 out is a compile error, not a silent null. `context()` builds the FrameContext, including the fields a positional
 initialiser defaults silently. `Application::makeContext` and the trace rig both build through it; the rig now
 carries a command table.
+
+## ADR-0293 — One set of lane arrows: the lanes deck's
+
+#117 wave 1, item 16: "The two lane-arrow paint sets → the lanes one (ADR-0108); delete CityRenderSystem's
+angle-guessed copy." Since the lattice retired (ADR-0267), every city road is the lanes builder's, which paints
+stop bars, crosswalks and turn arrows into its deck. citysim's `buildRoadMarkings` drew a second set of floating
+quads from the graph, guessing each lane's turn from its angle, gated off by `LevelRoadGraph::paintedMarkings`
+(#39). The gate was on for every road that ships, and the labs that run citysim without lanes have no streets.
+
+**Decision.**
+- `buildRoadMarkings`, its instance group and `paintedMarkings` are deleted, with their two tests.
+- The lanes arrows keep their own test (`lanes_arrows_assign_turns_to_the_lanes_that_make_them`).
+
+Item 15 ("road ear-clipper → earcut") needed no change: road meshing's `triangulatePolygon` already forwards to
+the one triangulator (triangulate.h).

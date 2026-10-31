@@ -945,49 +945,6 @@ TEST_CASE(density_population_scales_with_the_graph) {
     CHECK(big.second > 6);                   // walkers scale too
 }
 
-TEST_CASE(road_markings_stay_inside_the_carriageway) {
-    // R6c (plan 4e): every SIGNALLED approach carries a stop bar and one
-    // arrow per lane, and no paint vertex ever leaves the carriageway.
-    World world;
-    world.add<RoadEntity>(world.create(), crossRoads());   // signalled 4-way
-    CityRenderParams params = cityParams();
-    params.cars = 0;
-    params.pedestrians = 0;
-    CityRenderSystem city(params);
-    CHECK(city.build(world, nullptr));
-
-    engine::RenderMesh paint = city.buildRoadMarkings();
-    CHECK(!paint.vertices.empty());
-
-    // Containment: every vertex within some link's carriageway half-width
-    // of its centreline (segment distance), and near the ground.
-    const NavGraph& nav = city.nav();
-    int outside = 0;
-    for (const Vertex& v : paint.vertices) {
-        const Vec2 p(v.position.x, v.position.z);
-        bool inside = false;
-        for (int li = 0; li < nav.linkCount() && !inside; ++li) {
-            const Vec2 A = nav.nodes[nav.links[li].from];
-            const Vec2 B = nav.nodes[nav.links[li].to];
-            const Vec2 AB = B - A;
-            const Real l2 = AB.lengthSquared();
-            Real t = l2 > 1e-9 ? ((p - A).x * AB.x + (p - A).y * AB.y) / l2 : 0;
-            t = std::clamp(t, Real(0), Real(1));
-            const Vec2 cp = A + AB * t;
-            if ((p - cp).length() <= nav.links[li].width * 0.5 + 0.05)
-                inside = true;
-        }
-        if (!inside) ++outside;
-    }
-    std::printf("    [marks] verts=%zu outside=%d\n", paint.vertices.size(),
-                outside);
-    CHECK(outside == 0);
-
-    // Coverage: 4 signalled approaches -> at least a bar + one arrow each
-    // (a bar is 1 quad = 4 verts; an arrow is >= 3 quads).
-    CHECK(paint.vertices.size() >= 4 * 4 * 4);
-}
-
 // --- P8.2d: sim rate below the fixed step -----------------------------------
 // Traffic is not physics, so it may tick slower than 60 Hz — but the DRAWN
 // world must not: a body that freezes for a tick then jumps both judders and
@@ -1401,30 +1358,4 @@ TEST_CASE(city_clock_follows_the_sky_in_lockstep) {
     CHECK(!city.setWorldClock(22.0, 3.0));
     for (int i = 0; i < 10; ++i) city.step(world, 0.1);
     CHECK_APPROX(city.sim().timeOfDay(), 1.0, 1e-6);   // 22 + 3 wraps
-}
-
-// #39 (Glenn: "there are still arrows on the street that flicker on and off based on how you orient the camera.
-// We should remove those arrows in favor of the new ones"). The bridge's stop bars and arrows are quads floating
-// just over the asphalt. A lattice road has no paint of its own and keeps them; over a road whose builder
-// painted its own markings into the surface (the lanes builder: LevelRoadGraph::paintedMarkings) they are gone.
-TEST_CASE(the_bridge_draws_no_floating_arrows_over_a_road_that_painted_its_own) {
-    {
-        World world;
-        world.add<RoadEntity>(world.create(), crossRoads());
-        CityRenderSystem city(cityParams());
-        CHECK(city.build(world, nullptr));
-        CHECK(city.drewRoadMarkings());   // the signalled junction's stop bars and arrows
-    }
-    {
-        World world;
-        const RoadEntity net = crossRoads();
-        world.add<RoadEntity>(world.create(), net);
-        engine::LevelRoadGraph lrg;
-        lrg.graph = engine::navRoadGraph(net, nullptr);
-        lrg.paintedMarkings = true;
-        world.add<engine::LevelRoadGraph>(world.create(), std::move(lrg));
-        CityRenderSystem city(cityParams());
-        CHECK(city.build(world, nullptr));
-        CHECK(!city.drewRoadMarkings());
-    }
 }
