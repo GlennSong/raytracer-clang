@@ -88,13 +88,6 @@ struct SwimState {
         else if (swimming && depth <= -kLeftAbove) swimming = false;   // (no water under: depth -1)
         return swimming;
     }
-    // Vertical speed: toward the floating height (a buoyant spring, bobbing), or up/down on request.
-    static Real verticalSpeed(Real centreY, Real floatY, bool rise, bool dive, Real t) {
-        if (dive) return -1.6;
-        const Real bob = 0.05 * std::sin(t * 1.7);
-        const Real toward = std::clamp((floatY + bob - centreY) * 2.2, Real(-1.4), Real(1.3));
-        return rise ? std::max(toward, centreY < floatY - 0.1 ? Real(1.6) : toward) : toward;
-    }
 };
 
 // THE ONE IMPACT RULE (ADR-0247): what a step LOST of the speed the body meant to have, along the way it meant to

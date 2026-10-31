@@ -278,6 +278,7 @@ TEST_CASE(a_running_jump_carries_its_momentum_through_the_air) {
 }
 
 #include "../src/engine/systems/underwater_system.h"
+#include "../src/engine/locomotion.h"
 
 // #43 SWIMMING: "walk into a lake: float at the surface, swim, climb out on a bank". A beach: a ramp from
 // 6 m under the sea up to 1 m above it over 60 m, the sea at y = 0. The real Jolt character, driven by the
@@ -320,7 +321,8 @@ TEST_CASE(a_swimmer_floats_dives_and_walks_out_up_the_beach) {
     const CharacterController cc = *world.get<CharacterController>(p);
     const Real dt = 1.0 / 60.0, eye = 0.7;
     SwimState swim;
-    Real clock = 0;
+    const MovementTuning tune;
+    Real clock = 0, vy = 0;
     auto tick = [&](Vec3 keys, bool rise, bool dive) {
         const Vec3 c = pw.characterPosition(cc.characterId);
         const Real feet = c.y - (cc.halfHeight + cc.radius);
@@ -330,8 +332,12 @@ TEST_CASE(a_swimmer_floats_dives_and_walks_out_up_the_beach) {
         if (swim.swimming) {
             clock += dt;
             Vec3 v = keys * (SwimState::kSpeed / 6.0);
-            v.y = SwimState::verticalSpeed(c.y, Real(w.level) + SwimState::kEyeAbove - eye, rise, dive, clock);
+            // the rule the game swims by (player_modes_foot.cpp), with its slow swell
+            const Real floatY = Real(w.level) + SwimState::kEyeAbove - eye + 0.04 * std::sin(clock * 1.7);
+            vy = swimVerticalStep(vy, c.y, floatY, rise, dive, dt, tune);
+            v.y = vy;
             pw.moveCharacterFree(cc.characterId, v, dt);
+            vy = (pw.characterPosition(cc.characterId).y - c.y) / dt;   // the floor stops a plunge
         } else {
             pw.moveCharacter(cc.characterId, keys, dt);
         }
