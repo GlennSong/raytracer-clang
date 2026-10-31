@@ -13790,3 +13790,30 @@ already:** past its tolerance each publishes the same consequence. The jolt send
 answers with the walker's own `goLimp`, so there is one throw, one ragdoll and one log line.
 
 **Decision.** Keep both, side by side in the comments that define them. No code change.
+
+## ADR-0282 — One role list: an agent's role is its catalog id; the Role enum retires
+
+#117 wave 2, item 27: "Two role representations (the Agent::Role enum vs RoleCatalog) → RoleCatalog only."
+Read on 2026-10-31:
+- **The enum was not a second source of truth, but it pretended to be.** `Agent::Role` named four values (Commuter,
+  Shopkeeper, Stroller, Student), yet the field already held a catalog index. Staff were cast in with ids 4–10
+  (`static_cast<Agent::Role>(j.role)`), and every day-table lookup indexed the catalog.
+- **Nothing tied the four names to the catalog.** A roles.lua that reordered `order` loaded fine and silently gave
+  every commuter the stroller's day.
+- **The inspector's name printer** knew only the four enum names, so it printed "?" for all seven staff roles.
+
+**Decision.**
+- `Agent::role` is a `RoleId` (city_roles.h), the catalog index. The four roles the sim assigns by its own rules
+  keep names in code, `kRoleCommuter`, `kRoleShopkeeper`, `kRoleStroller` and `kRoleStudent`, as their catalog
+  ids.
+- `builtinRolesLead` holds the catalog to them: the four must lead, in that order. `loadRoleCatalog` refuses a
+  roles.lua that breaks this, and the city keeps the built-in roles, with the reason in the log.
+- The inspector reads the name from the catalog (`RoleCatalog::nameOf`), so staff show as "teacher", "waiter" and
+  so on.
+- Same byte in the agent and in the population cache (`PopRecord::role`), whose key already hashes the catalog's
+  description: no format change, no re-bake.
+
+**Not changed.** The census buckets roles by id into 16 slots and clamps past that. The catalog has 11.
+
+**Test.** `roles_lua_is_the_built_in_role_catalog` now also checks the four ids, the name lookup, and that a
+roles.lua swapping commuter and stroller is refused.

@@ -1069,7 +1069,7 @@ void CitySim::assignPlaces(const PlaceMap& places, const NavGraph& graph) {
         a.shopDoor = Vec2(r.shopDoor[0], r.shopDoor[1]); a.pos = Vec2(r.pos[0], r.pos[1]);
         a.heading = Vec2(r.heading[0], r.heading[1]); a.departHome = r.departHome; a.departWork = r.departWork;
         a.commuteSeconds = r.commuteSeconds;
-        a.role = static_cast<Agent::Role>(r.role); a.archetype = static_cast<Agent::Mode>(r.archetype);
+        a.role = static_cast<RoleId>(r.role); a.archetype = static_cast<Agent::Mode>(r.archetype);
         a.mode = static_cast<Agent::Mode>(r.mode); a.indoors = r.indoors != 0;
     };
     auto record = [](const Agent& a) {
@@ -1170,7 +1170,7 @@ void CitySim::assignPlaces(const PlaceMap& places, const NavGraph& graph) {
         // and are a Shopkeeper (if their workplace is a shop) or a Commuter. All
         // deterministic from the brain's bits (no rng draw).
         a.work = a.home;
-        a.role = Agent::Role::Commuter;
+        a.role = kRoleCommuter;
         const uint32_t roleRoll = (a.brain >> 20) & 0xFF;   // 0..255
         const bool stroller = !parks.empty() && roleRoll < 51;   // ~20%
         auto unit = [](uint32_t bits) { return (bits & 0xFF) / 255.0; };
@@ -1191,7 +1191,7 @@ void CitySim::assignPlaces(const PlaceMap& places, const NavGraph& graph) {
             if (anchor >= 0 && !commutable(hn, anchor)) anchor = -1;
         }
         if (anchor >= 0) {
-            a.role = Agent::Role::Stroller;
+            a.role = kRoleStroller;
             a.work = anchor;
             a.workPlace = kNoPlace;
             a.workDoor = graph.nodes[static_cast<std::size_t>(anchor)];
@@ -1205,7 +1205,7 @@ void CitySim::assignPlaces(const PlaceMap& places, const NavGraph& graph) {
         } else if (stroller) {
             PlaceId pk = parks[(a.brain >> 4) % parks.size()];
             if (commutable(hn, nodeOf(pk))) {
-                a.role = Agent::Role::Stroller;
+                a.role = kRoleStroller;
                 a.work = nodeOf(pk);              // a daytime destination, not a job
                 a.workPlace = kNoPlace;
                 a.workDoor = doorOf(pk);          // rests at the park, not the kerb
@@ -1511,7 +1511,7 @@ void CitySim::assignPlaces(const PlaceMap& places, const NavGraph& graph) {
                     const Real dh = close < 23.5 ? close + 0.5 : 24.0;
                     if (authored && dw != dh) {
                         // Open the shop before it opens, close it after.
-                        a.role = Agent::Role::Shopkeeper;
+                        a.role = kRoleShopkeeper;
                         a.departWork = dw;
                         a.departHome = dh;
                     }
@@ -1543,7 +1543,7 @@ void CitySim::assignPlaces(const PlaceMap& places, const NavGraph& graph) {
         int commuters = 0;
         for (int i = 0; i < static_cast<int>(agents_.size()); ++i) {
             const Agent& a = agents_[static_cast<std::size_t>(i)];
-            if (a.role != Agent::Role::Commuter || isBus(i) || isTaxi(i) || a.homePlace == kNoPlace || a.home < 0) continue;
+            if (a.role != kRoleCommuter || isBus(i) || isTaxi(i) || a.homePlace == kNoPlace || a.home < 0) continue;
             homeCells[cellKey(static_cast<int64_t>(std::floor(a.homeDoor.x / kCell)),
                               static_cast<int64_t>(std::floor(a.homeDoor.y / kCell)))].push_back(i);
             ++commuters;
@@ -1615,7 +1615,7 @@ void CitySim::assignPlaces(const PlaceMap& places, const NavGraph& graph) {
                 const ResidentRole& role = roles_.roles[static_cast<std::size_t>(j.role)];
                 const StaffSpec& sp = role.staff;
                 const Place& p = places[j.place];
-                a.role = static_cast<Agent::Role>(j.role);
+                a.role = static_cast<RoleId>(j.role);
                 a.workPlace = j.place;
                 a.work = j.node;
                 a.workDoor = doorOf(j.place);
@@ -1682,7 +1682,7 @@ void CitySim::assignPlaces(const PlaceMap& places, const NavGraph& graph) {
     }
     }   // decided (not read from the cache)
     students_ = 0;
-    for (const Agent& a : agents_) students_ += a.role == Agent::Role::Student ? 1 : 0;
+    for (const Agent& a : agents_) students_ += a.role == kRoleStudent ? 1 : 0;
     tagSpots();   // the venues are known now: which spots are on the campus
 
     // Seed the surface-level social graph: agents sharing a workplace are
@@ -3668,7 +3668,7 @@ void CitySim::assignStudents(const PlaceMap& places, const NavGraph& graph) {
         ++inHall;
         const Hall& H = live[hall];
         Agent& a = agents_[static_cast<std::size_t>(cand[static_cast<std::size_t>(c)].second)];
-        a.role = Agent::Role::Student;
+        a.role = kRoleStudent;
         a.homePlace = H.id; a.home = H.node; a.homeDoor = doorOf(H.id);
         a.restNode = H.node; a.pos = a.homeDoor; a.indoors = true;
         if (!graph.outLinks[static_cast<std::size_t>(H.node)].empty())
@@ -5962,7 +5962,7 @@ void CitySim::arriveOrChain(Agent& a, Real vArrive) {
         const bool atWork =
             node == a.work &&
             (a.workPlace != kNoPlace ||
-             (a.role == Agent::Role::Stroller && a.work != a.home));
+             (a.role == kRoleStroller && a.work != a.home));
         const bool atShop = a.shopPlace != kNoPlace && node == a.shop;
         // Where the agent is now: INSIDE at a door (not drawn), or outside
         // (drawn, standing somewhere of its own).
@@ -6022,7 +6022,7 @@ void CitySim::arriveOrChain(Agent& a, Real vArrive) {
             inside = true;
         } else if (atWork) {
             a.pos = a.workDoor;
-            inside = a.role != Agent::Role::Stroller;   // the park is outside
+            inside = a.role != kRoleStroller;   // the park is outside
         } else if (atShop) {
             a.pos = a.shopDoor;
             inside = true;

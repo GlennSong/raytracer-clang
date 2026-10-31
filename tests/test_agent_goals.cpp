@@ -62,8 +62,17 @@ TEST_CASE(roles_lua_is_the_built_in_role_catalog) {
     CHECK(a == b);
     for (const citysim::ResidentRole& r : lua.roles)
         CHECK(buildDayTable(r.day).describe() == citysim::builtinDayTable(r.name).describe());
-    // the first four are the built-in Agent::Role ids
-    CHECK(lua.find("commuter") == 0 && lua.find("shopkeeper") == 1 && lua.find("stroller") == 2 && lua.find("student") == 3);
+    // the first four are the built-ins (kRoleCommuter...)
+    CHECK(lua.find("commuter") == citysim::kRoleCommuter && lua.find("shopkeeper") == citysim::kRoleShopkeeper &&
+          lua.find("stroller") == citysim::kRoleStroller && lua.find("student") == citysim::kRoleStudent);
+    CHECK(citysim::builtinRolesLead(lua).empty());
+    CHECK(std::string(lua.nameOf(citysim::kRoleStudent)) == "student");
+    // a catalog that reorders the built-ins is refused: an agent's role id would name the wrong day
+    ScriptVM swapped;
+    CHECK(swapped.doString(ss.str() + "\nroles.order[1], roles.order[3] = roles.order[3], roles.order[1]", &err));
+    citysim::RoleCatalog wrong;
+    CHECK(!loadRoleCatalog(swapped, wrong, &err));
+    CHECK(err.find("commuter") != std::string::npos);
     ScriptVM bad;
     CHECK(bad.doString("roles = { order = { 'x' }, x = { day = { pause = { target = 'moon' } } } }", &err));
     citysim::RoleCatalog none;

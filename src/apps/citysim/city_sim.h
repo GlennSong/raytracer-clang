@@ -93,8 +93,8 @@ struct Agent {
     // Assigned in assignPlaces from the agent's workplace + its own brain bits.
     // A Student (campus milestone 4) lives in the university's residence hall and
     // spends the day between classes in the teaching hall and breaks on campus.
-    enum class Role : uint8_t { Commuter, Shopkeeper, Stroller, Student, Count };
-    Role role = Role::Commuter;
+    // Its id in the role catalog (city_roles.h RoleId): a built-in, or a staff role assignStaff gave it.
+    RoleId role = kRoleCommuter;
 
     // HOW THIS AGENT IS MOVING RIGHT NOW. Nearly everything that reads `mode`
     // is asking exactly this — which route space to plan in, whether to sample a
@@ -1602,10 +1602,10 @@ private:
     int dayRoleOf(const Agent& a) const {
         const int r = static_cast<int>(a.role);
         if (r < 0 || r >= static_cast<int>(roleTables_.size())) return 0;
-        if (a.role == Agent::Role::Stroller && (a.archetype != Agent::Mode::Pedestrian || venues_.empty())) return 0;
+        if (a.role == kRoleStroller && (a.archetype != Agent::Mode::Pedestrian || venues_.empty())) return 0;
         return r;
     }
-    bool outingStroller(const Agent& a) const { return !wander_ && a.role == Agent::Role::Stroller && dayRoleOf(a) != 0; }
+    bool outingStroller(const Agent& a) const { return !wander_ && a.role == kRoleStroller && dayRoleOf(a) != 0; }
     int pickOuting(Agent& a, int origin);   // GoalTarget::Outing -> a node (sets tripVenue)
     int pickCampusBreak(Agent& a, int origin);   // GoalTarget::Campus -> a node (tripVenue / tripSeat)
     // Free seats near the campus (quad benches, bleachers): the seats within reach of a quad or field venue.

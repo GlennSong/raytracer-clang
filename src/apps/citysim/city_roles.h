@@ -13,10 +13,12 @@
 // from the same vocabulary of states, never a table written by hand for one kind of person.
 //
 // Authored in assets/scripts/roles.lua (scripting/roles_lua.h reads it); defaultRoleCatalog is the same catalog in
-// C++ (a test keeps the two describing identically). Role ids are indexes into the catalog; the first four are the
-// built-ins Agent::Role names (commuter, shopkeeper, stroller, student).
+// C++ (a test keeps the two describing identically). Role ids are indexes into the catalog (RoleId); the first four
+// are the built-ins the sim names in code (kRoleCommuter...), and every catalog must list them first, in that order.
 
 #include "city_goals.h"
+
+#include <cstdint>
 
 #include <string>
 #include <vector>
@@ -65,15 +67,28 @@ struct ResidentRole {
     StaffSpec staff;
 };
 
+// AN AGENT'S ROLE (ADR-0282, #117 item 27): its index in the catalog. There is no second list: the four roles the sim
+// assigns by its own rules (a resident with an office job, a shop to keep, no job, a hall bed) are named here by
+// their catalog ids, and builtinRolesLead holds the catalog to them. Staff roles (teacher, waiter...) are catalog
+// ids past these.
+using RoleId = uint8_t;
+inline constexpr RoleId kRoleCommuter = 0, kRoleShopkeeper = 1, kRoleStroller = 2, kRoleStudent = 3;
+inline constexpr const char* kBuiltinRoleNames[4] = {"commuter", "shopkeeper", "stroller", "student"};
+
 struct RoleCatalog {
     std::vector<ResidentRole> roles;   // the id is the index
     int find(const std::string& name) const;   // -1 when unknown
     const ResidentRole* role(const std::string& name) const;
     // Canonical text: two catalogs that describe identically make the same days.
     std::string describe() const;
+    // The role's name, "?" past the catalog.
+    const char* nameOf(RoleId id) const { return id < roles.size() ? roles[id].name.c_str() : "?"; }
 };
 
-// The built-in catalog: commuter, shopkeeper, stroller, student (in Agent::Role order), then the staff roles --
+// Does the catalog list the four built-ins first, in kRole* order? An empty string when it does, else what is wrong.
+std::string builtinRolesLead(const RoleCatalog& c);
+
+// The built-in catalog: commuter, shopkeeper, stroller, student (the kRole* ids), then the staff roles --
 // teacher, librarian, manager, waiter, cook, clerk, bartender.
 RoleCatalog defaultRoleCatalog();
 

@@ -954,11 +954,11 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
             engine::ScriptVM vm;
             std::string err;
             citysim::RoleCatalog roles;
-            if (vm.doString(code, &err) && engine::loadRoleCatalog(vm, roles, &err) && roles.roles.size() >= 4) {
+            if (vm.doString(code, &err) && engine::loadRoleCatalog(vm, roles, &err)) {
                 LOG_INFO << "[citysim] roles: " << roles.roles.size() << " (roles.lua)";
                 sim_.setRoleCatalog(std::move(roles));
             } else {
-                LOG_WARN << "[citysim] roles.lua: " << (err.empty() ? "fewer than the four built-in roles" : err)
+                LOG_WARN << "[citysim] roles.lua: " << err
                          << " (using the built-in roles)";
             }
         }
@@ -4426,16 +4426,6 @@ ImU32 placeColor(PlaceType t) {
         default:                return IM_COL32(220, 220, 220, 255);
     }
 }
-// Short label for an agent's Role (Living City Phase 4).
-const char* agentRoleName(Agent::Role r) {
-    switch (r) {
-        case Agent::Role::Commuter:   return "Commuter";
-        case Agent::Role::Shopkeeper: return "Shopkeeper";
-        case Agent::Role::Stroller:   return "Stroller";
-        case Agent::Role::Student:    return "Student";
-        default:                      return "?";
-    }
-}
 // Short label for an Agent::State (the reactive FSM value the ring colours use).
 const char* agentStateName(Agent::State s) {
     switch (s) {
@@ -4539,7 +4529,7 @@ void CityRenderSystem::render(engine::FrameContext& ctx) {
             const Agent& a = agents[inspectAgent_];
             ImGui::Text("UID %u   %s   %s", a.uid,
                         a.mode == Agent::Mode::Driver ? "Driver" : "Pedestrian",
-                        agentRoleName(a.role));
+                        sim_.roles().nameOf(a.role));
             ImGui::Text("State: %s%s", agentStateName(a.state),
                         a.playerControlled ? "  (player)" : "");
             // Where it lives / works (ADR-0066 Phase 3): real place names.

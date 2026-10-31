@@ -134,14 +134,14 @@ TEST_CASE(assign_places_roles_are_consistent_and_deterministic) {
     for (std::size_t i = 0; i < a.agents().size(); ++i) {
         const Agent& ag = a.agents()[i];
         // A shopkeeper works at a shop, kept open through its hours.
-        if (ag.role == Agent::Role::Shopkeeper) {
+        if (ag.role == kRoleShopkeeper) {
             CHECK(ag.workPlace != kNoPlace);
             CHECK(places[ag.workPlace].type == PlaceType::Shop);
             CHECK(ag.departWork <= places[ag.workPlace].openHour);
             CHECK(ag.departHome >= places[ag.workPlace].closeHour);
         }
         // A stroller holds no job (its day-destination is a park node, not a job).
-        if (ag.role == Agent::Role::Stroller)
+        if (ag.role == kRoleStroller)
             CHECK(ag.workPlace == kNoPlace);
         // Same seed → same role assignment (ADR-0002).
         CHECK(ag.role == b.agents()[i].role);
@@ -180,6 +180,6 @@ TEST_CASE(shop_without_hours_does_not_strand_its_worker) {
         // A shop that never said when it opens cannot claim its worker's hours;
         // the agent keeps the shift it drew at build.
         if (a.workPlace != kNoPlace && places[a.workPlace].type == PlaceType::Shop)
-            CHECK(a.role != Agent::Role::Shopkeeper);
+            CHECK(a.role != kRoleShopkeeper);
     }
 }

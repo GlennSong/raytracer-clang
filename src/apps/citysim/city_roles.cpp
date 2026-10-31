@@ -54,6 +54,13 @@ void addNightOut(GoalTable& t, const std::string& menu) {
 
 }  // namespace
 
+std::string builtinRolesLead(const RoleCatalog& c) {
+    for (RoleId i = 0; i < 4; ++i)
+        if (i >= c.roles.size() || c.roles[i].name != kBuiltinRoleNames[i])
+            return std::string("role ") + std::to_string(i) + " must be \"" + kBuiltinRoleNames[i] + "\" (the built-ins lead, in order)";
+    return {};
+}
+
 int RoleCatalog::find(const std::string& name) const {
     for (std::size_t i = 0; i < roles.size(); ++i)
         if (roles[i].name == name) return static_cast<int>(i);
