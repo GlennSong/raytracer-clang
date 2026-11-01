@@ -784,9 +784,9 @@ TEST_CASE(city_phys_tier_packed_junction_does_not_pile_up) {
             ++bodyTicks;
             minUp = std::min(minUp, up);
             if (up < 0.8) ++tipTicks;
-            // each car by its own FLOOR (centre less its half height): the physical tier drives every car as its
-            // own class now (item 23), and a bus rests ~0.8 m higher than a sedan without climbing anything
-            const Real floorY = bp.y - p.halfY;
+            // each car by its own FLOOR (centre less where it is put down over the road): the physical tier drives
+            // every car as its own class now (item 23), and a bus rests ~0.8 m higher than a sedan without climbing
+            const Real floorY = bp.y - p.spawnAbove;
             if (up > 0.98 && restN < 2000) { restY += floorY; ++restN; }
             const Real rest = restN ? restY / restN : floorY;
             const Real climb = floorY - rest;
@@ -901,4 +901,48 @@ TEST_CASE(every_fleet_car_launches_as_the_traffic_plan_asks) {
         fastest = std::max(fastest, can);
     }
     CHECK(fastest > 2.0 * slowest);    // a bus is not an SUV
+}
+
+// WHERE A CAR IS PUT DOWN (#172): every fleet slot, on its own handling, placed at PhysicsWorld::spawnHeight over flat
+// ground, touches its tyres from the first step and settles onto its springs -- no fall, whatever its travel. The city
+// spawn and the snap back onto a ghost used one 0.35 m drop for every car, a sedan's guess a bus or a truck does not
+// share.
+TEST_CASE(every_fleet_car_is_put_down_on_its_own_springs) {
+    World world;
+    world.add<RoadEntity>(world.create(), cityGrid());
+    CityRenderParams params;
+    params.cars = 4;
+    params.pedestrians = 0;
+    params.vehicleScript = readAsset("vehicles.lua");
+    CityRenderSystem city(params);
+    CHECK(city.build(world, nullptr));
+    const int slots = city.sim().fleetSize();
+    CHECK(slots >= 14);
+    for (int slot = 0; slot < slots; ++slot) {
+        const PhysicsWorld::VehicleConfig* cfg = city.carConfig(slot);
+        CHECK(cfg != nullptr);
+        if (!cfg) continue;
+        PhysicsWorld w;
+        CHECK(w.initialize());
+        w.addBox(Vec3(200, 1, 200), Vec3(0, -1, 0), Quat::identity(), BodyMotion::Static, 0.0, 0.85);
+        w.optimizeBroadPhase();
+        const Real at = PhysicsWorld::spawnHeight(*cfg);
+        const PhysicsWorld::VehicleId car = w.addVehicle(*cfg, Vec3(0, at, 0), Quat::identity());
+        CHECK(car != PhysicsWorld::INVALID_VEHICLE);
+        Real lowest = at, fastest = 0;
+        for (int i = 0; i < 120; ++i) {
+            w.update(1.0 / 60.0);
+            lowest = std::min(lowest, w.vehiclePosition(car).y);
+            fastest = std::max(fastest, std::fabs(w.vehicleVelocity(car).y));
+        }
+        const Real rest = w.vehiclePosition(car).y;
+        std::printf("    [put down] slot %2d at %.3f m: rests %.3f, lowest %.3f, fastest fall %.2f m/s\n", slot, at, rest,
+                    lowest, fastest);
+        CHECK(at >= cfg->chassisHalfExtent.y);
+        CHECK(at - rest < 0.12);       // settles onto its springs
+        CHECK(at - rest > -0.01);      // and was not put down under them
+        CHECK(fastest < 1.0);          // no fall (0.35 m is 2.6 m/s)
+        CHECK(rest - lowest < 0.05);   // one gentle bounce at most
+        w.shutdown();
+    }
 }

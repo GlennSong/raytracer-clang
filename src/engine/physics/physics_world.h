@@ -405,6 +405,10 @@ public:
     // `friction` (the city's road), its mean acceleration from 0 to `toSpeed` m/s -- in a world of its own, so any
     // host may ask (the city plans each car's launch with it). 0 when it never gets there in 15 s.
     static Real launchAccel(const VehicleConfig& config, Real friction = 0.85, Real toSpeed = 10.0);
+    // WHERE A CAR IS PUT DOWN (#172): its chassis centre over the road, the tyres just touching with the springs at
+    // full droop -- its own wheels' attach height, travel and radius, so it settles onto them from no height at all,
+    // a truck's long travel as much as a sedan's. Never less than half the box (its floor on the road) and a hair over.
+    static Real spawnHeight(const VehicleConfig& config);
     // Driver input, each in [-1,1] (brake/handBrake in [0,1]): forward (throttle,
     // negative = reverse), right (steering), brake, handBrake. Wakes the chassis.
     void setVehicleInput(VehicleId id, Real forward, Real right, Real brake,

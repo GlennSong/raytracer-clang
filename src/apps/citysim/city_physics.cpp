@@ -355,9 +355,10 @@ void CityPhysicsSystem::possessTier(World& world, Real dt) {
                                 ? a.deckY
                                 : city_.groundHeightAt(a.pos.x, a.pos.y) +
                                       a.elevation;
-            // (the body's centre half its height over the road, and the 0.35 m the springs settle from)
+            // (put down on its own springs: PhysicsWorld::spawnHeight)
+            const Real above = PhysicsWorld::spawnHeight(cfg);
             const PhysicsWorld::VehicleId vid = pw.addVehicle(
-                cfg, Vec3(a.pos.x, gy + half.y + 0.35, a.pos.y),
+                cfg, Vec3(a.pos.x, gy + above, a.pos.y),
                 Quat::fromAxisAngle(Vec3(0, 1, 0), yaw));
             if (vid != PhysicsWorld::INVALID_VEHICLE) {
                 // Velocity-match the ghost's moving frame: spawned at rest
@@ -370,7 +371,7 @@ void CityPhysicsSystem::possessTier(World& world, Real dt) {
                 np.agent = ai;
                 np.vid = vid;
                 np.halfX = half.x;
-                np.halfY = half.y;
+                np.spawnAbove = above;
                 np.halfZ = half.z;
                 possessed_.push_back(np);
             }
@@ -451,7 +452,7 @@ void CityPhysicsSystem::possessTier(World& world, Real dt) {
                                      : city_.groundHeightAt(land.x, land.y) +
                                            a.elevation;
                 pw.teleport(pw.vehicleBody(p.vid),
-                            Vec3(land.x, gy2 + p.halfY + 0.35, land.y),
+                            Vec3(land.x, gy2 + p.spawnAbove, land.y),
                             Quat::fromAxisAngle(Vec3(0, 1, 0), yaw2));
                 pw.setLinearVelocity(
                     pw.vehicleBody(p.vid),
@@ -463,7 +464,7 @@ void CityPhysicsSystem::possessTier(World& world, Real dt) {
                 // chassis — the only solid thing standing in for it — was already
                 // metres away. syncPossessedInstances re-stamps the instance too.
                 city_.setAgentPhysPose(
-                    p.agent, Mat4::translate(land.x, gy2 + p.halfY + 0.35, land.y) *
+                    p.agent, Mat4::translate(land.x, gy2 + p.spawnAbove, land.y) *
                                  Quat::fromAxisAngle(Vec3(0, 1, 0), yaw2).toMat4());
                 continue;
             }
