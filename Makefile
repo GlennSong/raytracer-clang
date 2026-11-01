@@ -85,7 +85,6 @@ SRCS = \
 	$(SRC_DIR)/engine/procgen/city/road_spec.cpp \
 	$(SRC_DIR)/engine/procgen/city/road_net.cpp \
 	$(SRC_DIR)/engine/procgen/city/road_lattice.cpp \
-	$(SRC_DIR)/engine/procgen/city/road_constraints.cpp \
 	$(SRC_DIR)/engine/procgen/city/road_semantics.cpp \
 	$(SRC_DIR)/engine/procgen/city/road_rules.cpp \
 	$(SRC_DIR)/engine/procgen/city/road_offset.cpp \
@@ -97,7 +96,6 @@ SRCS = \
 	$(SRC_DIR)/engine/procgen/city/architect.cpp \
 	$(SRC_DIR)/engine/procgen/city/building_uses.cpp \
 	$(SRC_DIR)/engine/procgen/city/city_lots.cpp \
-	$(SRC_DIR)/engine/procgen/city/surface_field.cpp \
 	$(SRC_DIR)/engine/procgen/city/structure_set.cpp \
 	$(SRC_DIR)/engine/procgen/city/block_grade.cpp \
 	$(SRC_DIR)/engine/procgen/city/city_footprint.cpp \
@@ -179,7 +177,6 @@ TEST_SRCS = \
 	$(TEST_DIR)/test_road_rules.cpp \
 	$(TEST_DIR)/test_road_weld.cpp \
 	$(TEST_DIR)/test_curb_return.cpp \
-	$(TEST_DIR)/test_road_constraints.cpp \
 	$(TEST_DIR)/test_road_semantics.cpp \
 	$(TEST_DIR)/test_road_layers.cpp \
 	$(TEST_DIR)/test_road_offset.cpp \
@@ -234,7 +231,6 @@ TEST_SRCS = \
 	$(TEST_DIR)/test_site_plan.cpp \
 	$(TEST_DIR)/test_core_plan.cpp \
 	$(TEST_DIR)/test_alignment.cpp \
-	$(TEST_DIR)/test_surface_field.cpp \
 	$(TEST_DIR)/test_architect.cpp \
 	$(TEST_DIR)/test_lot_road_clearance.cpp
 # tests/test_levels_playable.cpp is CMake-only: it drives the real LevelLoader,
@@ -316,7 +312,6 @@ TEST_ENGINE_SRCS = \
 	$(SRC_DIR)/engine/procgen/city/road_spec.cpp \
 	$(SRC_DIR)/engine/procgen/city/road_net.cpp \
 	$(SRC_DIR)/engine/procgen/city/road_lattice.cpp \
-	$(SRC_DIR)/engine/procgen/city/road_constraints.cpp \
 	$(SRC_DIR)/engine/procgen/city/road_semantics.cpp \
 	$(SRC_DIR)/engine/procgen/city/road_rules.cpp \
 	$(SRC_DIR)/engine/procgen/city/road_offset.cpp \
@@ -328,7 +323,6 @@ TEST_ENGINE_SRCS = \
 	$(SRC_DIR)/engine/procgen/city/architect.cpp \
 	$(SRC_DIR)/engine/procgen/city/building_uses.cpp \
 	$(SRC_DIR)/engine/procgen/city/city_lots.cpp \
-	$(SRC_DIR)/engine/procgen/city/surface_field.cpp \
 	$(SRC_DIR)/engine/procgen/city/structure_set.cpp \
 	$(SRC_DIR)/engine/procgen/city/block_grade.cpp \
 	$(SRC_DIR)/engine/procgen/city/city_footprint.cpp \

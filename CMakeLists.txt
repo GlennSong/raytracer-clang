@@ -102,7 +102,8 @@ add_library(engine_core STATIC
     src/engine/procgen/vehicle/occupant.cpp
     src/engine/procgen/person.cpp
     src/engine/block_body.cpp            # the person as ten blocks: poses, two-bone limbs, the ragdoll's parts
-    src/engine/player/driver_seat.cpp    # the player at the wheel: the seat's jolt, the body's sway, the seated pose (ADR-0252)
+    src/engine/player/driver_seat.cpp    # the player at the wheel: the eject rule and the seated pose (ADR-0252)
+    src/engine/player/seat_motion.cpp    # every rider: the seat's jolt and the body's sway (ADR-0252, ADR-0275)
     src/engine/body_draw.cpp             # the jointed body drawn: blocks + skinned limb tubes by fold
     src/engine/procgen/tree_cache.cpp
     src/engine/procgen/vehicle/train_mesh.cpp
