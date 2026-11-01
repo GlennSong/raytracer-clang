@@ -283,7 +283,7 @@
     (<code>ped_graph.{h,cpp}</code>: corner nodes, sidewalk edges, a door node per place) so a walk could start
     and end at real doors. Its live integration was deferred, and walkers ended up routing on the NavGraph itself
     (<code>findRoute(..., onFoot=true)</code> plus footpath links and door positions). At <code>47d587f3</code>,
-    <code>pedRoute</code> has no caller outside its own test.</p></div>
+    <code>pedRoute</code> had no caller outside its own test; ADR-0294 then deleted the graph and its test.</p></div>
 
   <h2>Roles: one system describes every resident's day</h2>
   <p>Glenn asked for "a singular system that can describe all of the npc roles" (2026-10-06). A role is
@@ -536,12 +536,10 @@
         <text x="272" y="90" fill="#93a6ba" font-size="12">EMA velocity, 4 s fade</text>
         <rect x="374" y="30" width="160" height="72" rx="9" fill="#131a24" stroke="#2c3d50"/>
         <text x="454" y="54" fill="#cfe4ff">Predict</text>
-        <text x="454" y="73" fill="#93a6ba" font-size="12">closestApproach,</text>
-        <text x="454" y="90" fill="#93a6ba" font-size="12">timeToCollision</text>
+        <text x="454" y="73" fill="#93a6ba" font-size="12">timeToCollision</text>
         <rect x="556" y="30" width="160" height="72" rx="9" fill="#131a24" stroke="#2c3d50"/>
         <text x="636" y="54" fill="#cfe4ff">Decide</text>
-        <text x="636" y="73" fill="#93a6ba" font-size="12">Commitment: hysteresis,</text>
-        <text x="636" y="90" fill="#93a6ba" font-size="12">think every 0.35 s</text>
+        <text x="636" y="73" fill="#93a6ba" font-size="12">think every 0.35 s</text>
         <rect x="738" y="30" width="150" height="72" rx="9" fill="#131a24" stroke="#2c3d50"/>
         <text x="813" y="54" fill="#cfe4ff">Act</text>
         <text x="813" y="73" fill="#93a6ba" font-size="12">advance along the</text>
@@ -593,7 +591,7 @@
   <ul>
     <li><b>Stop lines that read as obeyed</b> (ADR-0063): the line sits back by the junction box radius plus the
       zebra band plus half the car, so a car holding at red stands short of the crosswalk, not in the middle of it.
-      Signals gained an <b>all-red</b> clearance so the box drains before cross traffic goes. ADR-0063 set green 12 s and all-red 2.5 s; the code now defaults to green 10 s, yellow 2 s, all-red 1.5 s and a walk phase of 8 s, because longer cycles queued more cars per red than small blocks hold (<code>SignalController::build</code>).</li>
+      Signals gained an <b>all-red</b> clearance so the box drains before cross traffic goes. ADR-0063 set green 12 s and all-red 2.5 s; the code now defaults to green 10 s, yellow 2 s, all-red 1.5 s and a walk phase of 8 s, because longer cycles queued more cars per red than small blocks hold. The times live in <code>assets/scripts/signals.lua</code> (<code>SignalTiming</code> holds the same values when the file is absent).</li>
     <li><b>Don't block the box</b>: no car crosses its line while a crossing car is inside; a turn waits for
       oncoming traffic, with agent order breaking the tie between two stopped opposing turners.</li>
     <li><b>Knots and rings</b> (ADR-0066): curvy generated crossings planarised into several nodes joined by

@@ -299,8 +299,8 @@
     <tr><th>Era</th><th>How a body was made</th><th>Why it moved on</th></tr>
     <tr><td>Boxes</td><td>C++ <code>buildCarMesh</code>: hull, cabin, glass slabs and wheels as axis-aligned
       boxes. ADR-0065 moved the same boxes into Lua (<code>parts = {pos, size, color}</code>).</td>
-      <td>"Every one read as a cybertruck" (vehicle_mesh.h).</td></tr>
-    <tr><td>Lofted shell</td><td><code>buildCarShell</code>: a superellipse cross-section swept along a roofline.</td>
+      <td>"Every one read as a cybertruck" (ADR-0062).</td></tr>
+    <tr><td>Lofted shell</td><td><code>buildCarShell</code>: a superellipse cross-section swept along a roofline (deleted in #117 wave 0).</td>
       <td>It regressed on device: inverted faces from a winding heuristic, and doubled wheels and lamps
       (<a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/docs/decisions.md?plain=1#L4214">ADR-0062</a>).</td></tr>
     <tr><td><code>mesh.car</code></td><td>A chamfered profile swept through silhouette stations, flat-shaded through
@@ -546,10 +546,10 @@ impl-&gt;physicsSystem.AddStepListener(constraint);</pre>
         <text x="141" y="57" fill="#93a6ba" font-size="12">keys → shapeSteer (speed-limited lock)</text>
         <rect x="16" y="86" width="250" height="56" rx="9" fill="#131a24" stroke="#2c3d50"/>
         <text x="141" y="109" fill="#cfe4ff">An AgentDriver (possession)</text>
-        <text x="141" y="129" fill="#93a6ba" font-size="12">computeDriverInput(state, command)</text>
+        <text x="141" y="129" fill="#93a6ba" font-size="12">computeDriverInput(state, lane frame)</text>
         <rect x="16" y="158" width="250" height="56" rx="9" fill="#131a24" stroke="#2c3d50"/>
         <text x="141" y="181" fill="#cfe4ff">The city's physical tier</text>
-        <text x="141" y="201" fill="#93a6ba" font-size="12">driveTowards (Stanley), its own input</text>
+        <text x="141" y="201" fill="#93a6ba" font-size="12">computeDriverInput too (one controller)</text>
         <rect x="16" y="230" width="250" height="56" rx="9" fill="#131a24" stroke="#2c3d50"/>
         <text x="141" y="253" fill="#cfe4ff">Nobody at the wheel</text>
         <text x="141" y="273" fill="#93a6ba" font-size="12">brake = 1 (no creep on a slope)</text>
@@ -1106,12 +1106,12 @@ v.frontGrip = <span class="n">0.9f</span>;
     <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/assets/scripts/vehicle_kit.lua">assets/scripts/vehicle_kit.lua</a> — the kit bodies: profiles, loft, glass, lamps (<code>kit.attach</code>), interior, <code>kit.build</code></li>
     <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/assets/scripts/vehicle_classes.lua">assets/scripts/vehicle_classes.lua</a>, <a href="https://github.com/GlennSong/raytracer-clang/blob/main/assets/scripts/vehicle_forms.lua">vehicle_forms.lua</a> — class packages and curves for mesh.car bodies</li>
     <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/procgen/polymesh.h">src/engine/procgen/polymesh.h</a> — the hard-surface kit (<code>poly.*</code> in Lua)</li>
-    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/procgen/vehicle/car_mesh.h">src/engine/procgen/vehicle/car_mesh.h</a> — <code>mesh.car</code> (the bus, the classic set); <a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/procgen/vehicle_mesh.cpp">vehicle_mesh.cpp</a> — the superseded lofted shell (still bound as <code>mesh.car_shell</code>; no script uses it)</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/procgen/vehicle/car_mesh.h">src/engine/procgen/vehicle/car_mesh.h</a> — <code>mesh.car</code> (the bus, the classic set)</li>
     <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/scripting/vehicle_spec.h">src/engine/scripting/vehicle_spec.h</a> — <code>VehicleSpec</code>, <code>loadVehicleSpec</code>, <code>spawnVehicle</code>, the drivable catalogue</li>
     <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/apps/citysim/scripting/vehicle_body.h">src/apps/citysim/scripting/vehicle_body.h</a> — <code>CarBodyRecipe</code>, <code>loadFleetCarBody</code>, <code>selectFleet</code></li>
     <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/physics/physics_world.h">src/engine/physics/physics_world.h</a> / <a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/physics/physics_world.cpp">.cpp</a> — <code>VehicleConfig</code>, <code>addVehicle</code>, yaw assist, drift, drag, traction split</li>
     <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/systems/vehicle_system.cpp">src/engine/systems/vehicle_system.cpp</a> — create, drive, write back, enter/exit, picker, seat, engine and tyre sounds</li>
-    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/ai/driver_agent.h">src/engine/ai/driver_agent.h</a>, <a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/apps/citysim/driver_control.h">apps/citysim/driver_control.h</a> — the two AI controllers</li>
+    <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/ai/driver_agent.h">src/engine/ai/driver_agent.h</a> — the one AI driving controller (Stanley over a lane frame; ADR-0274)</li>
     <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/vehicle_steering.h">src/engine/vehicle_steering.h</a>, <a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/vehicle_lamps.h">vehicle_lamps.h</a> — the steering assist, the lamp predicate</li>
     <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/apps/citysim/city_vehicles.cpp">src/apps/citysim/city_vehicles.cpp</a> — promotion (<code>configFromBody</code>); <a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/apps/citysim/city_physics.cpp">city_physics.cpp</a> — the physical tier</li>
     <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/riding.h">src/engine/riding.h</a>, <a href="https://github.com/GlennSong/raytracer-clang/blob/main/src/engine/player/driver_seat.h">player/driver_seat.h</a> — riding, the seat's jolt and sway</li>
@@ -1122,7 +1122,7 @@ v.frontGrip = <span class="n">0.9f</span>;
     <code>test_vehicle_drivetrain</code>, <code>test_offroad_course</code>, <code>test_two_wheelers</code>,
     <code>test_drift</code>, <code>test_driver_seat</code>, <code>test_vehicle_body</code> (every fleet slot and
     drivable entry builds), <code>test_vehicle_kit</code> (closed, in budget, no slivers), <code>test_polymesh</code>,
-    <code>test_vehicle_mesh</code>, <code>test_vehicle_lamps</code>, <code>test_car_lamps</code>,
+    <code>test_vehicle_lamps</code>, <code>test_car_lamps</code>,
     <code>test_driver_agent</code>, <code>test_lane_follow</code>, <code>test_city_ride</code>.</p>
   <p><b>Labs:</b> <code>wheel_lab.json</code> (every fleet slot wandering; the tyre probe <code>ground? 0 0 700</code>
     with <code>RT_GROUND_DUMP</code>), <code>offroad_course.json</code>, <code>fleet_gallery.json</code>,

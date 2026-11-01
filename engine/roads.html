@@ -698,10 +698,10 @@ std::vector&lt;LaneMoves&gt; assignLaneMoves(std::size_t lanes, bool hasLeft, bo
       (late September 2026).</figcaption>
   </figure>
 
-  <div class="note history"><p><b>Two routers.</b> The first grade-limited router, <code>routeRoad</code> in
-    <code>terrain_field.cpp</code> (ADR-0045, earthwork dial ADR-0047), still exists behind the Lua binding
-    <code>terrain.route</code>. It searched 8 neighbours, which made switchbacks literal 45° staircases (ADR-0048's
-    "unnatural curves"). The planner and island use <code>routeOnTerrain</code>.</p></div>
+  <div class="note history"><p><b>One router.</b> The first grade-limited router, <code>routeRoad</code> in
+    <code>terrain_field.cpp</code> (ADR-0045, earthwork dial ADR-0047), searched 8 neighbours, which made switchbacks
+    literal 45° staircases (ADR-0048's "unnatural curves"). It is retired (ADR-0277): the Lua binding
+    <code>terrain.route</code> now runs on <code>routeOnTerrain</code>, the planner's and the island's router.</p></div>
 
   <h2>Rivers and bridges</h2>
   <p>ADR-0104 made the river the world's: the planner, the lanes ground grid and the level evaluate one hydrology.
@@ -785,10 +785,10 @@ std::vector&lt;LaneMoves&gt; assignLaneMoves(std::size_t lanes, bool hasLeft, bo
 inline Vec2 rightOf(const Vec2&amp; dir) { return {dir.y, -dir.x}; }</pre>
 </div>
 
-  <div class="note"><p><b>Watch the comments.</b> Older comments still say "right" where they mean the kerb side
-    (the <code>parkOffset</code> note in <code>nav_graph.h</code>, and the first three lines above). The signal code
-    says "traffic keeps right" in the <i>nav</i> frame, which is the plan's handedness. Check lane offsets in the code,
-    not the prose.</p></div>
+  <div class="note"><p><b>Watch the names.</b> <code>rightOf</code> now lives in <code>nav_graph.h</code>, and its
+    comments say "kerb side" (the first three lines of the excerpt above are from before that). The signal code's
+    <code>Move::Left</code> is named in the same maths frame: counter-clockwise, which is the driver's <i>right</i>
+    turn, the one that crosses oncoming traffic. Check lane offsets in the code, not the prose.</p></div>
 
   <h2>The planner: a city designed as data</h2>
   <p>Before ADR-0092, nothing decided what a city was: <code>lanes_tool from-level</code> replayed the old lattice
