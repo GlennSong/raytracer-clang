@@ -39,7 +39,7 @@ void EngineVoicePool::update(AudioEngine& audio, std::vector<Engine>& heard, Rea
         }
         slot->wanted = true;
         Real throttle = c.throttle;
-        if (throttle == kEstimate) {
+        if (c.estimate) {
             const Real accel = (c.speed - slot->prevSpeed) / dt;
             throttle = std::min(Real(1), std::max(Real(0.15), accel / Real(3.0)));
         }

@@ -32,8 +32,8 @@ void CityTrafficAudioSystem::update(engine::FrameContext& ctx) {
         const engine::Real d2 = (pos - ear).lengthSquared();
         if (d2 > kAudibleRange * kAudibleRange) continue;
         // (phased by agent id, its own spread beside the physics cars')
-        heard.push_back({static_cast<uint64_t>(i), pos, a.speed, engine::EngineVoicePool::kEstimate,
-                         static_cast<engine::Real>(i % 23) * engine::Real(0.29), d2});
+        heard.push_back({static_cast<uint64_t>(i), pos, a.speed, 0, static_cast<engine::Real>(i % 23) * engine::Real(0.29), d2,
+                         true});
     }
     engines_.update(ctx.audio, heard, ctx.clock.simulatedTime(), ctx.frameDelta);
 }

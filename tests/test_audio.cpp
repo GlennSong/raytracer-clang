@@ -1196,7 +1196,7 @@ TEST_CASE(engine_voice_pool_voices_the_nearest_and_reclaims_the_gone) {
     EngineVoicePool pool(2, 70.0, 2);
     auto frame = [&](std::vector<EngineVoicePool::Engine> heard) { pool.update(audio, heard, 0.0, 1.0 / 60.0); };
     std::vector<EngineVoicePool::Engine> three = {
-        {7, Vec3(30, 0, 0), 12.0, EngineVoicePool::kEstimate, 0.1, 900},
+        {7, Vec3(30, 0, 0), 12.0, 0, 0.1, 900, true},   // a planner car: its load estimated
         {8, Vec3(5, 0, 0), 9.0, 0.6, 0.2, 25},
         {9, Vec3(10, 0, 0), 15.0, 0.3, 0.3, 100},
     };

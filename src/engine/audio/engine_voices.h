@@ -24,13 +24,14 @@ public:
         uint64_t key = 0;     // stable per car across frames
         Vec3 pos;
         Real speed = 0;       // m/s
-        // The pedal, 0..1; kEstimate: the car has none (a planner car), so the pool reads the load from its
-        // change of speed -- a car gaining speed is a car working: "pulling away from the lights" vs "coasting".
-        Real throttle = 0;
+        Real throttle = 0;     // the pedal, -1..1 (reverse is negative)
         Real phase = 0;       // its rev hunt's phase
         Real dist2 = 0;       // to the ear
+        // The car has no pedal (a planner car), so the pool reads the load from its change of speed -- a car gaining
+        // speed is a car working: "pulling away from the lights" vs "coasting". (A flag, not a throttle value: full
+        // reverse is -1.)
+        bool estimate = false;
     };
-    static constexpr Real kEstimate = -1;
 
     EngineVoicePool(int maxVoices, Real range, int clipSeed) : maxVoices_(maxVoices), range_(range), seed_(clipSeed) {}
 
