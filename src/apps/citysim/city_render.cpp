@@ -33,6 +33,7 @@
 #include "scripting/agent_goals.h"      // scripted goal tables (ADR-0064)
 #include "scripting/activities_lua.h"   // the activity catalog (activities.lua)
 #include "scripting/roles_lua.h"         // the role catalog (roles.lua)
+#include "scripting/signals_lua.h"       // the signals' cycle times (signals.lua)
 #include "scripting/vehicle_body.h"     // scripted fleet bodies (ADR-0065)
 #include "../../engine/scripting/script_vm.h"
 #include "../../engine/scripting/procgen_bindings.h"
@@ -627,6 +628,20 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
         }
         sim_.setGarages(std::move(gins));
     }
+#ifdef RT_ENABLE_SCRIPTING
+    {   // THE SIGNALS' CYCLE (signals.lua): before build, which lays every junction's phases on it
+        const std::string code = engine::loadScriptCode("signals.lua", "");
+        if (!code.empty()) {
+            engine::ScriptVM vm;
+            std::string err;
+            citysim::SignalTiming t;
+            if (vm.doString(code, &err) && engine::loadSignalTiming(vm, t, &err))
+                sim_.setSignalTiming(t);
+            else
+                LOG_WARN << "[citysim] signals.lua: " << err << " (using the built-in times)";
+        }
+    }
+#endif
     { const auto tT0 = std::chrono::steady_clock::now();
     sim_.build(nav_, carCount, pedCount, params_.seed);
     LOG_INFO << "[citysim] startup: sim.build " << std::chrono::duration<double>(std::chrono::steady_clock::now() - tT0).count() << " s"; }

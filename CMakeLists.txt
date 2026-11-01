@@ -471,6 +471,7 @@ if(RT_ENABLE_SCRIPTING)
         src/apps/citysim/scripting/agent_goals.cpp
         src/apps/citysim/scripting/activities_lua.cpp
         src/apps/citysim/scripting/roles_lua.cpp
+        src/apps/citysim/scripting/signals_lua.cpp
         src/apps/citysim/scripting/vehicle_body.cpp
     )
 endif()

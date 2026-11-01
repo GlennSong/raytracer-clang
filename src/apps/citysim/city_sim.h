@@ -681,6 +681,8 @@ public:
     engine::Real walkerVerge(const Agent& a) const;   // ...as its distance in from the kerb
     const engine::NavGraph* graph() const { return nav_; }
     SignalController& signals() { return signals_; }
+    // The signals' cycle times (signals.lua at level load; SignalTiming's defaults otherwise). Set before build().
+    void setSignalTiming(const SignalTiming& t) { signalTiming_ = t; }
     // RT_TRAFFIC_DEBUG: why a walker last stood still (1 kerb gap, 2 signal line, 3 a car body, 4 its leader) and
     // its follow gap -- the "spawn point" heaps
     int holdWhyOf(int i) const { return i >= 0 && i < static_cast<int>(holdWhy_.size()) ? holdWhy_[static_cast<std::size_t>(i)] : 0; }
@@ -1885,6 +1887,7 @@ private:
     int dormancies_ = 0;
     int wakes_ = 0;
     SignalController signals_;
+    SignalTiming signalTiming_;
     // THE ROLES and each one's day (setRoleCatalog); the wanderers' tables (the agent lab) beside them.
     RoleCatalog roles_ = defaultRoleCatalog();
     std::vector<GoalTable> roleTables_ = [] {

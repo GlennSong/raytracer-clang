@@ -386,7 +386,7 @@ void CitySim::build(const NavGraph& graph, int driverCount, int pedCount, uint32
     junctionGrid_.configure(engine::Vec2(0, 0), engine::Vec2(1, 1),
                             kAgentGridCell, 0);
     maxJunctionRadius_ = 0;
-    signals_.build(graph);
+    signals_.build(graph, signalTiming_);
     // Curbside bays (R6b): mid-link, in the road's own PARKING BAND, well clear
     // of junction mouths; ~55% seeded with scenery cars so streets read
     // parked-along from the first frame.

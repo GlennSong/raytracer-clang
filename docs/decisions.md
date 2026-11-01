@@ -4620,7 +4620,7 @@ junction rules to grow up:
   and zero ticks where two cars drive through each other (`ghostTicks == 0`,
   pinned by `cars_crash_and_stop_instead_of_ghosting`).
 
-*Since then (#117 wave 0):* the live signal defaults are green 10 s, yellow 2 s, all-red 1.5 s, plus an 8 s walk phase per cycle (SignalController::build, traffic_signal.h), shortened so a red's queue fits a small block.
+*Since then (#117 wave 0):* the live signal defaults are green 10 s, yellow 2 s, all-red 1.5 s, plus an 8 s walk phase per cycle, shortened so a red's queue fits a small block; they are authored in assets/scripts/signals.lua (SignalTiming in traffic_signal.h is the same values, by test).
 
 ## ADR-0064 — Agent goals become data: the GoalTable, Lua-authored at load
 
