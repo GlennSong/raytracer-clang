@@ -327,7 +327,7 @@ void BarsMode::step(PlayerBody& b, BodyStep& s) {
     const bool offEnd = (at >= len && along > 0.2) || (at <= 0 && along < -0.2);
     at = std::clamp(at, Real(0), len);
     const Vec3 grip = mb->a + dir * at;
-    const Vec3 centre = grip - Vec3(0, 0.45 + b.eyeHeight, 0);
+    const Vec3 centre = grip - Vec3(0, 0.45 + kEyeAboveCentre, 0);
     pw.setCharacterPosition(s.cc.characterId, centre);
     t.position = centre;
     b.fall.onGrounded(t.position.y);

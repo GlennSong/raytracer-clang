@@ -1,11 +1,12 @@
 #include "stream_power.h"
+#include "drainage.h"
 
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <functional>
 #include <queue>
-#include <thread>
+#include "../../job_system.h"   // parallelRows: the shared pool (ADR-0288)
 #include <utility>
 #include <vector>
 
@@ -33,13 +34,14 @@ int streamPowerErode(Heightmap& hm, const std::vector<float>& uplift, const Stre
 
     const int dx[8] = {1, -1, 0, 0, 1, -1, 1, -1}, dz[8] = {0, 0, 1, -1, 1, -1, -1, 1};
     const double dl[8] = {cell, cell, cell, cell, cell * std::sqrt(2.0), cell * std::sqrt(2.0), cell * std::sqrt(2.0), cell * std::sqrt(2.0)};
-    std::vector<double> hf(N);
-    std::vector<int32_t> rec(N), order;
-    std::vector<double> area(N), rlen(N);
-    std::vector<uint8_t> seen(N);
+    // the drainage flood's (procgen/drainage.h, ADR-0279), reused every iteration
+    DrainageFlood flood;
+    std::vector<double>& hf = flood.filled;
+    std::vector<int32_t>& rec = flood.receiver;
+    std::vector<int32_t>& order = flood.order;
+    std::vector<double>& rlen = flood.receiverLength;
+    std::vector<double> area(N);
     std::vector<float> hard(p.layers ? N : 0);   // the rock's hardness per cell this iteration (ROCK LAYERS)
-    order.reserve(N);
-    using Item = std::pair<double, int32_t>;
 
     int it = 0;
     for (; it < p.iterations; ++it) {
@@ -49,28 +51,7 @@ int streamPowerErode(Heightmap& hm, const std::vector<float>& uplift, const Stre
         // 2. every cell drains: a priority flood from the outlets fills hollows with a tiny rise (so flats
         //    still slope), and each cell's receiver is the neighbour it was flooded FROM -- a tree rooted at
         //    the outlets, visited in `order` outlets first
-        std::fill(seen.begin(), seen.end(), 0);
-        order.clear();
-        std::priority_queue<Item, std::vector<Item>, std::greater<Item>> q;
-        for (std::size_t i = 0; i < N; ++i)
-            if (outlet[i]) { seen[i] = 1; hf[i] = h[i]; rec[i] = -1; q.push({h[i], static_cast<int32_t>(i)}); }
-        while (!q.empty()) {
-            const auto [lv, c] = q.top();
-            q.pop();
-            order.push_back(c);
-            const int cx = c % n, cz = c / n;
-            for (int k = 0; k < 8; ++k) {
-                const int nx = cx + dx[k], nz = cz + dz[k];
-                if (nx < 0 || nz < 0 || nx >= n || nz >= n) continue;
-                const std::size_t nb = static_cast<std::size_t>(nz) * n + nx;
-                if (seen[nb]) continue;
-                seen[nb] = 1;
-                hf[nb] = std::max(h[nb], lv + 1e-4 * dl[k]);
-                rec[nb] = c;
-                rlen[nb] = dl[k];
-                q.push({hf[nb], static_cast<int32_t>(nb)});
-            }
-        }
+        floodDrainage(h, n, cell, outlet, 1e-4, flood);
         // ...but a cell drains to its STEEPEST downhill neighbour on the filled surface where it has one (the
         // flood's tree otherwise follows the queue's order across open slopes) -- or, stochastic, to one drawn in
         // proportion to the slope toward it
@@ -112,20 +93,14 @@ int streamPowerErode(Heightmap& hm, const std::vector<float>& uplift, const Stre
             for (std::size_t o = 0; o < order.size(); ++o)
                 for (int32_t d = head[static_cast<std::size_t>(order[o])]; d >= 0; d = next[static_cast<std::size_t>(d)]) order.push_back(d);
         }
-        // (the rock under each cell at its height now, every hardware thread a band of rows)
-        if (p.layers) {
-            const int T = std::max(1u, std::min(32u, std::thread::hardware_concurrency()));
-            std::vector<std::thread> th;
-            for (int t = 0; t < T; ++t)
-                th.emplace_back([&, t] {
-                    for (int z = t; z < n; z += T)
-                        for (int x = 0; x < n; ++x) {
-                            const std::size_t i = static_cast<std::size_t>(z) * n + x;
-                            hard[i] = outlet[i] ? 0.0f : static_cast<float>(p.layers->hardness(p.layerOriginX + x * cell, p.layerOriginZ + z * cell, h[i]));
-                        }
-                });
-            for (auto& t : th) t.join();
-        }
+        // (the rock under each cell at its height now, rows across the shared pool)
+        if (p.layers)
+            parallelRows(n, [&](int z) {
+                for (int x = 0; x < n; ++x) {
+                    const std::size_t i = static_cast<std::size_t>(z) * n + x;
+                    hard[i] = outlet[i] ? 0.0f : static_cast<float>(p.layers->hardness(p.layerOriginX + x * cell, p.layerOriginZ + z * cell, h[i]));
+                }
+            });
         // 3. drainage area, accumulated down the tree (donors before receivers: the order reversed)
         std::fill(area.begin(), area.end(), cellArea);
         for (std::size_t o = order.size(); o-- > 0;) {

@@ -76,7 +76,7 @@ TerrainFlatten planePad(const Poly2& block, double c, double dx, double dz, doub
 
 }  // namespace
 
-std::vector<TerrainFlatten> gradeBlock(const Poly2& block, const HeightSampler& ground,
+std::vector<TerrainFlatten> gradeBlock(const Poly2& block, const HeightField& ground,
                                        const BlockGradeParams& p) {
     std::vector<TerrainFlatten> out;
     if (block.size() < 3 || !ground) return out;
@@ -145,7 +145,7 @@ std::vector<TerrainFlatten> gradeBlock(const Poly2& block, const HeightSampler& 
 }
 
 std::vector<TerrainFlatten> gradeBlocks(const std::vector<Poly2>& blocks,
-                                        const HeightSampler& ground,
+                                        const HeightField& ground,
                                         const BlockGradeParams& p) {
     std::vector<TerrainFlatten> out;
     for (const Poly2& b : blocks) {

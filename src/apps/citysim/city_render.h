@@ -309,9 +309,6 @@ public:
     // Is anyone in this driver's car? Only while it is on a trip (moving; a bus or a cab on duty; the car you ride)
     bool carOccupied(int agentIndex) const;
     int loadMultiplier() const { return loadMul_; }
-    // The stop-bar + lane-arrow paint mesh (R6c), rebuilt from the graph;
-    // public so the gate can assert paint never leaves the carriageway.
-    engine::RenderMesh buildRoadMarkings() const;
     CitySim& simMutable() { return sim_; }   // ADR-0062 bridge: release ejected drivers
     const PlaceMap& places() const { return places_; }
     const engine::NavGraph& nav() const { return nav_; }
@@ -375,7 +372,7 @@ public:
         engine::Vec3 pos;
     };
 
-    // One wheel of a fleet car, in body-local space (+Z forward, x>0 right).
+    // One wheel of a fleet car, in body-local space (+Z forward, x>0 the driver's left).
     // Same independence rationale as LampMarker: a mirror of the scripting-only
     // engine::WheelPlacement, so the non-scripting build still compiles.
     struct CarWheel {
@@ -406,7 +403,11 @@ public:
     // index: the fleet deals ordinary cars past the service slots (CitySim::ambientSlotFor), and a bus or a fire
     // engine has its own -- so `a.vehicle` named a different model (#115: "when I take a car, why does the car
     // change?"; and a passenger's seats came off another model's layout). -1 when it draws as none.
-    int carSlotOf(int agent) const { return drawSlotFor(agent); }
+    // Over the FLEET's slots (its handling, carConfig), so a city that draws nothing -- a headless soak -- still knows
+    // a bus is a bus; where cars are drawn the two counts are one.
+    int carSlotOf(int agent) const {
+        return slotFor(agent, carConfigs_.empty() ? drawVariantCount() : static_cast<int>(carConfigs_.size()));
+    }
     // That car's driver's hip point (the fleet recipe's `driver_seat`, its interior's own seat), for a commandeered
     // car's driver: false when the slot publishes none.
     bool carDriverSeat(int slot, engine::Vec3& out) const {
@@ -445,6 +446,15 @@ public:
         return carWheels_[((slot % static_cast<int>(carWheels_.size())) +
                            static_cast<int>(carWheels_.size())) %
                           static_cast<int>(carWheels_.size())];
+    }
+    // THAT CAR's HANDLING (item 23, #117): the slot's Jolt config -- its kit's or class's drivable handling on
+    // its drawn wheels, the fleet's `handling` read by the one handling reader -- for a physical-tier car and a
+    // commandeered one alike. Null when the fleet published none for it (no vehicles script).
+    const engine::PhysicsWorld::VehicleConfig* carConfig(int slot) const {
+        if (carConfigs_.empty()) return nullptr;
+        const int n = static_cast<int>(carConfigs_.size());
+        const engine::PhysicsWorld::VehicleConfig& c = carConfigs_[static_cast<std::size_t>(((slot % n) + n) % n)];
+        return c.wheels.empty() ? nullptr : &c;
     }
 
 private:
@@ -498,7 +508,8 @@ private:
     Real deckSurfaceNear(Real x, Real z, Real refY) const;
     // The fleet slot agent `ai` is DRAWN with (the ambient rotation, the bus override): the one mesh,
     // lamps and wheel set that car wears. -1 when there is no drawable slot.
-    int drawSlotFor(int ai) const;
+    int drawSlotFor(int ai) const { return slotFor(ai, drawVariantCount()); }
+    int slotFor(int ai, int variants) const;   // (the rule, over `variants` slots)
     // The drawn road surface under (px, pz) for car `a`, `along` metres ahead of its centre: on a deck, the
     // deck it is on (deckSurfaceNear from its link's height); on the ground, the road or ground at ITS level
     // (the terrain + its layer lift as the reference), so an overpass or a stacked junction pad above never
@@ -610,11 +621,6 @@ private:
     engine::Entity signalGroups_[3];   // lit lens, indexed by SignalState (Green/Yellow/Red)
     engine::Entity signalPostGroup_;   // the static pole+arm+head assemblies
     engine::Entity parkBayGroup_;      // curbside bay outline markings (R6b)
-    engine::Entity roadMarkGroup_;     // stop bars + lane-turn arrows (R6c)
-public:
-    // Did this bridge draw its own stop bars and arrows? Not over a builder that painted them (#39).
-    bool drewRoadMarkings() const { return roadMarkGroup_.valid(); }
-private:
     engine::Entity crosswalkGroup_;    // baked zebra decals at junction mouths
     // Car lamps (ADR-0065 follow-up): one emissive instance group per lamp kind.
     engine::Entity headlightGroup_{};  // white, forward
@@ -630,6 +636,8 @@ private:
     // wheelset; see carChassisMesh() / carWheels().
     std::vector<engine::MeshHandle> carChassis_;
     std::vector<std::vector<CarWheel>> carWheels_;
+    // ...and each slot's handling (carConfig), read with the catalogue: no geometry, so a headless sim has it.
+    std::vector<engine::PhysicsWorld::VehicleConfig> carConfigs_;
     // SEE-INTO VEHICLES (the bus; Glenn: "we should see the npcs sitting on
     // the bus. There should be a driver"). Per variant, indexed like
     // carGroups_: a CLEAR glass group (invalid Entity when the slot's glass is

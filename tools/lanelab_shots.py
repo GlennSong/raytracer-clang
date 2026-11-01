@@ -12,7 +12,10 @@ the merge markings.
 Usage: tools/lanelab_shots.py LEVEL OUT_DIR [--cams stats.json] [--names a,b] [--shot ...]
        [--near] [--edit] [--viewer build-viewer/viewer] [--settle 3]
 """
-import argparse, json, math, os, re, socket, subprocess, sys, time
+import argparse, json, math, os, re, sys, time
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import rtctl   # the control channel (ADR-0291)
+from rtctl import send
 
 def pose(eye, target):
     ex, ey, ez = eye; tx, ty, tz = target
@@ -21,16 +24,6 @@ def pose(eye, target):
     pitch = math.degrees(math.asin(max(-1.0, min(1.0, dy / L))))
     yaw = math.degrees(math.atan2(dx / L, -dz / L))
     return pitch, yaw
-
-def send(sock_path, line, timeout=180.0):
-    with socket.socket(socket.AF_UNIX) as s:
-        s.settimeout(timeout); s.connect(sock_path); s.sendall((line + "\n").encode())
-        buf = b""
-        while b"\n" not in buf:
-            chunk = s.recv(4096)
-            if not chunk: raise RuntimeError("viewer closed the connection")
-            buf += chunk
-    return buf.split(b"\n", 1)[0].decode()
 
 def main():
     ap = argparse.ArgumentParser()
@@ -65,14 +58,9 @@ def main():
     if not shots and not a.cmd: sys.exit("no shots: give --cams, --shot, --teleport or --cmd")
     os.makedirs(a.out, exist_ok=True)
     log = open(os.path.join(a.out, "viewer.log"), "wb")
-    proc = subprocess.Popen([a.viewer, a.level, "--edit" if a.edit else "--play"],
-                            stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
-    sock_path = f"/tmp/raytracer-viewer-{proc.pid}.sock"
     t0 = time.time()
+    proc, sock_path = rtctl.launch(a.viewer, a.level, *(["--edit"] if a.edit else []), log=log, play=not a.edit)
     try:
-        while not os.path.exists(sock_path):
-            if proc.poll() is not None or time.time() - t0 > 60: sys.exit("viewer did not open its control socket")
-            time.sleep(0.2)
         print(f"viewer up ({time.time() - t0:.1f}s); waiting for the level:", send(sock_path, "camera?", timeout=a.load_timeout), flush=True)
         time.sleep(a.settle)
         # the city sim builds on the first frames after the load (its agents' routes, minutes on a
@@ -104,9 +92,7 @@ def main():
             print(f"  [{'ok' if got else 'FAIL'}] {name}  ({reply})", flush=True)
         print(f"{ok}/{len(queue)} frames in {a.out} ({time.time() - t0:.0f}s)")
     finally:
-        proc.terminate()
-        try: proc.wait(5)
-        except subprocess.TimeoutExpired: proc.kill()
+        rtctl.stop(proc)
 
 if __name__ == "__main__":
     main()

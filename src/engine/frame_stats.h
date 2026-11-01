@@ -18,6 +18,8 @@ namespace engine {
 //             BLOCKS while the GPU is behind (Metal's nextDrawable waits for a
 //             free swapchain image / the vsync deadline). Fat acquire means the
 //             CPU is IDLE waiting on the GPU — a GPU-bound frame, not CPU work.
+//             Metal only: Vulkan's beginFrame just clears its queues, and its
+//             fence wait + vkAcquireNextImageKHR run in endFrame (Submit).
 //   Encode  — the states' render() hooks: walking the world, culling, and
 //             describing draws. Real CPU work that scales with scene size.
 //   Submit  — renderer.endFrame(): building command buffers for every pass and

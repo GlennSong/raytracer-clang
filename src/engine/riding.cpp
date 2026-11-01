@@ -39,7 +39,7 @@ Vec3 riderEye(const Mat4& carrier, const Vec3& local, Real eyeAbove) {
 }
 
 Vec3 riderCentre(const Mat4& carrier, const Vec3& local, Real eyeAbove) {
-    return riderEye(carrier, local, eyeAbove) - Vec3(0, kRiderEyeAboveCentre, 0);   // (the capsule stays upright)
+    return riderEye(carrier, local, eyeAbove) - Vec3(0, kEyeAboveCentre, 0);   // (the capsule stays upright)
 }
 
 Real headingDeg(const Mat4& m) {
@@ -53,7 +53,7 @@ Real wrapDeg(Real d) {
     return d;
 }
 
-void rideStep(World& world, PhysicsWorld* physics, Entity rider, FlyCameraController* fly) {
+void rideStep(World& world, PhysicsWorld* physics, Entity rider, FlyCameraController* fly, Real dt) {
     Passenger* p = world.get<Passenger>(rider);
     Transform* t = world.get<Transform>(rider);
     if (!p || !t) return;
@@ -62,9 +62,33 @@ void rideStep(World& world, PhysicsWorld* physics, Entity rider, FlyCameraContro
     const bool jumped = !p->haveLast || (Vec3(p->carrier.m[0][3], p->carrier.m[1][3], p->carrier.m[2][3]) -
                                          Vec3(p->carrierLast.m[0][3], p->carrierLast.m[1][3], p->carrierLast.m[2][3]))
                                                 .length() > 5.0;
+    const Vec3 was(p->carrierLast.m[0][3], p->carrierLast.m[1][3], p->carrierLast.m[2][3]);
     p->carrierPrev = jumped ? p->carrier : p->carrierLast;
     p->carrierLast = p->carrier;
     p->haveLast = true;
+    // WHAT THE SEAT DOES TO THE RIDER: the carrier's velocity this step, its change thrown against the body in the
+    // carrier's own frame (its axes, unscaled), and the jolt over the last moment. A jump starts the springs afresh.
+    if (jumped || dt <= 0) {
+        p->sway.reset();
+        p->jolt.reset();
+        p->joltNow = 0;
+        p->haveVel = false;
+    } else {
+        const Vec3 now(p->carrier.m[0][3], p->carrier.m[1][3], p->carrier.m[2][3]);
+        const Vec3 vel = (now - was) * (1.0 / dt);
+        if (p->haveVel) {
+            auto axis = [&](int c) {
+                const Vec3 a(p->carrier.m[0][c], p->carrier.m[1][c], p->carrier.m[2][c]);
+                const Real l = a.length();
+                return l > 1e-9 ? a * (1.0 / l) : Vec3(c == 0, c == 1, c == 2);
+            };
+            const Vec3 d = vel - p->carrierVel;
+            p->sway.step(Vec3(dot(d, axis(0)), dot(d, axis(1)), dot(d, axis(2))), dt);
+        }
+        p->joltNow = p->jolt.step(vel, dt, &p->joltBefore);
+        p->carrierVel = vel;
+        p->haveVel = true;
+    }
     const Vec3 at = riderCentre(p->carrier, p->local, p->eyeAbove);
     if (PrevTransform* prev = world.get<PrevTransform>(rider)) prev->value = *t;
     t->position = at;
@@ -77,7 +101,7 @@ void rideStep(World& world, PhysicsWorld* physics, Entity rider, FlyCameraContro
     p->facing = flatForward(p->carrier);
     // the view turns WITH the carrier, a step at a time here (RidingSystem adds the rest of the way each frame)
     const Real yaw = headingDeg(p->carrier);
-    if (fly && p->haveYaw) fly->yaw += wrapDeg(yaw - p->lastYaw);
+    if (fly && p->turnsView && p->haveYaw) fly->yaw += wrapDeg(yaw - p->lastYaw);
     p->lastYaw = yaw;
     p->haveYaw = true;
 }
@@ -111,9 +135,12 @@ void RidingSystem::render(FrameContext& ctx) {
     Mat4 drawn = p->carrier;
     for (int r = 0; r < 3; ++r)
         for (int c = 0; c < 4; ++c) drawn.m[r][c] = p->carrierPrev.m[r][c] + (p->carrier.m[r][c] - p->carrierPrev.m[r][c]) * a;
+    p->drawn = drawn;
+    p->haveDrawn = true;
     const Vec3 at = riderCentre(drawn, p->local, p->eyeAbove);
     t->position = at;
     if (PrevTransform* prev = ctx.world.get<PrevTransform>(rider)) prev->value = *t;   // drawn where it is put
+    if (!p->turnsView) return;   // (at the wheel: the chase rig frames the car, and the view is its own)
     // the view: the rest of the way round with the drawn carrier (rideStep turned it to the step's heading)
     const Real shown = wrapDeg(headingDeg(drawn) - headingDeg(p->carrier));
     if (fly_) fly_->yaw += wrapDeg(shown - p->yawShown);
@@ -124,7 +151,7 @@ void RidingSystem::render(FrameContext& ctx) {
     // carrying it as well overshot by a frame every other frame (71 mm, against 2.3 mm left alone).
     if ((at - p->framedAt).length() >= 2.0) return;   // a boarding or a step off is a jump: framed afresh next frame
     CameraState& cam = ctx.view.camera;
-    const Vec3 framedEye = p->framedAt + Vec3(0, kRiderEyeAboveCentre, 0);
+    const Vec3 framedEye = p->framedAt + Vec3(0, kEyeAboveCentre, 0);
     if ((cam.position - framedEye).length() > 0.5) return;   // not the eye: a shoulder rig, or a placed camera
     const Real turn = fly_ ? (fly_->yaw - p->framedYaw) * 0.017453292519943295 : 0.0;
     const Real c = std::cos(turn), s = std::sin(turn);   // (yaw grows clockwise from above: -Z to +X)

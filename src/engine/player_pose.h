@@ -7,8 +7,10 @@
 
 namespace engine {
 
-// WHAT THE PLAYER'S BODY IS DOING, for whatever draws it (the first-person block arms, PlayerArmsSystem). Written
-// by PlayerSystem on the player entity every fixed step; read-only everywhere else.
+// WHAT THE PLAYER'S BODY IS DOING, for whatever draws or hears it (the first-person arms, PlayerArmsSystem; the
+// third-person body, PlayerBodySystem; footsteps and move sounds). Written on the player entity every fixed step by
+// PlayerBody::publish (engine/player/player_body.h: the mode's pose(), then the counters), and at the wheel by
+// VehicleSystem; read-only everywhere else.
 struct PlayerPose {
     enum class Mode : uint8_t { Walk, Air, Mantle, Climb, Swim, Ladder, Parachute, Wingsuit, Grapple, Ragdoll, Board,
                                 PlaySwing, Bars, Drive, Hidden };
@@ -66,7 +68,7 @@ struct PlayerPose {
     Vec3 seatLean, seatNod;
     Real steer = 0;
     Real crank = 0;
-    // GONE LIMP: the six blocks where the ragdoll's bodies are (engine/block_body.h order)
+    // GONE LIMP: the ten blocks where the ragdoll's bodies are (engine/block_body.h order)
     Vec3 ragdollPos[10];   // (BlockBody::kParts)
     Quat ragdollRot[10];
 };

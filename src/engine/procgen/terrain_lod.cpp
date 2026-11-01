@@ -1,7 +1,9 @@
 #include "terrain_lod.h"
+#include "drawn_cell.h"   // the triangle split every drawn-ground sampler shares (ADR-0280)
 #include "../mesh_builder.h"
 
 #include <algorithm>
+#include <type_traits>
 #include <cmath>
 #include <limits>
 #include <cstdlib>
@@ -202,16 +204,38 @@ double lodSurfaceHeight(const TerrainParams& params, const Noise& noise, double 
     const double fi = std::floor(gx), fj = std::floor(gz);
     const double u = gx - fi, v = gz - fj;
     const double x0 = -worldHalf + fi * step, z0 = -worldHalf + fj * step;
-    const double ha = lodVertexHeight(params, noise, x0, z0, step);
-    const double hd = lodVertexHeight(params, noise, x0 + step, z0 + step, step);
-    // Triangles (a,b,d) and (a,d,c), split on the a-d diagonal (see generateLodNodeMesh).
-    if (u >= v) {
-        const double hb = lodVertexHeight(params, noise, x0 + step, z0, step);
-        return ha + u * (hb - ha) + v * (hd - hb);
-    }
-    const double hc = lodVertexHeight(params, noise, x0, z0 + step, step);
-    return ha + v * (hc - ha) + u * (hd - hc);
+    return drawnCellHeight(u, v, [&](int di, int dj) {
+        return lodVertexHeight(params, noise, x0 + di * step, z0 + dj * step, step);
+    });
 }
+
+namespace {
+// THE CDLOD MORPH TARGET (ADR-0290, #117 item 12) -- the live mesher's and the baked tiles' alike: what vertex (i, j)
+// of a node's grid is at the next coarser level. The coarser level keeps the even vertices; an odd one collapses to
+// the average of its even neighbours (the coarse mesh at that XZ: an edge midpoint's XZ is already the coarse
+// midpoint). `at(i, j)` reads the grid -- a height in the mesher's own precision, or a normal -- and the average
+// comes back in its type (halving and quartering are exact, so the live mesher's floats stay its floats).
+template <class At>
+auto coarseAverage(int i, int j, At&& at) -> std::decay_t<decltype(at(0, 0))> {
+    using T = std::decay_t<decltype(at(0, 0))>;
+    const bool ei = i % 2 == 0, ej = j % 2 == 0;
+    if (ei && ej) return at(i, j);
+    if (!ei && ej) return static_cast<T>((at(i - 1, j) + at(i + 1, j)) * 0.5);
+    if (ei && !ej) return static_cast<T>((at(i, j - 1) + at(i, j + 1)) * 0.5);
+    return static_cast<T>((at(i - 1, j - 1) + at(i + 1, j - 1) + at(i - 1, j + 1) + at(i + 1, j + 1)) * 0.25);
+}
+
+// ...except where a flatten owns the ground (device: "pokes throughout the entire city"): the morph target is a
+// blind neighbour average, so a vertex on a road corridor -- clamped to the deck plane -- lerped back UP toward its
+// natural-ground neighbours at distance and rose through the asphalt. Such a vertex is pinned to its own height at
+// every LOD; it equals the fine height, so there is nothing to pop.
+bool morphPinned(const TerrainParams& params, double x, double z, double flattenDilate) {
+    if (params.flatten.empty()) return false;
+    static const FlattenGrid kNoGrid;
+    const FlattenGrid* fg = params.flattenIndex ? params.flattenIndex.get() : nullptr;
+    return flattenCovers(fg ? *fg : kNoGrid, params.flatten, x, z, flattenDilate);
+}
+}  // namespace
 
 LodNodeMesh generateLodNodeMesh(const TerrainParams& params, const Noise& noise,
                                 const LodNode& node, int gridRes, double normalEps) {
@@ -258,34 +282,13 @@ LodNodeMesh generateLodNodeMesh(const TerrainParams& params, const Noise& noise,
         }
     }
 
-    // Second pass: bake the CDLOD morph target into tangent. On a regular grid the
-    // coarser level keeps even-indexed vertices; odd vertices collapse to the
-    // average of their even neighbours (the coarse mesh's height at that XZ). Only
-    // the height changes — the XZ of an edge midpoint is already the coarse midpoint.
+    // Second pass: the CDLOD morph target (coarseAverage, morphPinned) into the tangent.
     auto h = [&](int i, int j) { return H[static_cast<size_t>(j) * n + i]; };
-    // Flatten-owned vertices DON'T morph (device: "pokes throughout the entire
-    // city"): the morph target is a blind neighbour average, so a vertex sitting
-    // on a road corridor — clamped to the deck plane in pass one — lerped back
-    // UP toward its natural-ground neighbours at distance and rose through the
-    // asphalt. Pin such vertices to their carved height at every LOD; they equal
-    // the fine height, so there is nothing to pop.
-    const FlattenGrid* fg = params.flattenIndex ? params.flattenIndex.get() : nullptr;
-    static const FlattenGrid kNoGrid;
-    auto corridorOwned = [&](double x, double z) {
-        if (params.flatten.empty()) return false;
-        return flattenCovers(fg ? *fg : kNoGrid, params.flatten, x, z, flattenDilate);
-    };
     for (int j = 0; j < n; j++) {
         for (int i = 0; i < n; i++) {
-            bool ei = (i % 2 == 0), ej = (j % 2 == 0);
-            float my;
-            if (ei && ej)        my = h(i, j);
-            else if (!ei && ej)  my = 0.5f * (h(i - 1, j) + h(i + 1, j));
-            else if (ei && !ej)  my = 0.5f * (h(i, j - 1) + h(i, j + 1));
-            else                 my = 0.25f * (h(i - 1, j - 1) + h(i + 1, j - 1) +
-                                               h(i - 1, j + 1) + h(i + 1, j + 1));
+            float my = coarseAverage(i, j, h);
             Vertex& v = mesh.vertices[static_cast<size_t>(j) * n + i];
-            if (my != h(i, j) && corridorOwned(v.position.x, v.position.z))
+            if (my != h(i, j) && morphPinned(params, v.position.x, v.position.z, flattenDilate))
                 my = h(i, j);
             v.tangent = packMorphTarget(my, v.normal);   // morph-target height (its normal: one eps every level here)
         }
@@ -422,32 +425,21 @@ LodNodeMesh generateBakedTileMesh(const pyramid::Pyramid& p, const pyramid::Heig
             if (params.cover && params.coverWeights) v.u = static_cast<float>(terrainSnowWeight(x, z, y, v.normal.y, params, v.normal.x, v.normal.z));
             mesh.vertices.push_back(v);
         }
-    // The CDLOD morph target, as generateLodNodeMesh: even vertices stay, odd ones collapse to
-    // the average of their even neighbours -- except where a flatten owns the ground. Its normal likewise: the
-    // coarser level's at the even vertices, their average between (packMorphTarget)
+    // The CDLOD morph target (coarseAverage, morphPinned). Its normal likewise: the coarser level's at the even
+    // vertices, their average between (packMorphTarget)
     const double flattenDilate = step * 1.45;
-    const FlattenGrid* fg = params.flattenIndex ? params.flattenIndex.get() : nullptr;
-    static const FlattenGrid kNoGrid;
     std::vector<Vec3> coarseN(static_cast<std::size_t>(n) * n);
     for (int j = 0; j < n; j += 2)
         for (int i = 0; i < n; i += 2)
             coarseN[static_cast<std::size_t>(j) * n + i] = fixedSpan ? fixedNormal(x0 + i * step, z0 + j * step) : normalAt(i, j, k2);
     auto cn = [&](int i, int j) { return coarseN[static_cast<std::size_t>(j) * n + i]; };
+    auto th = [&](int i, int j) { return t.at(i, j); };
     for (int j = 0; j < n; ++j)
         for (int i = 0; i < n; ++i) {
-            const bool ei = i % 2 == 0, ej = j % 2 == 0;
-            double my;
-            Vec3 mn;
-            if (ei && ej) { my = t.at(i, j); mn = cn(i, j); }
-            else if (!ei && ej) { my = 0.5 * (t.at(i - 1, j) + t.at(i + 1, j)); mn = cn(i - 1, j) + cn(i + 1, j); }
-            else if (ei && !ej) { my = 0.5 * (t.at(i, j - 1) + t.at(i, j + 1)); mn = cn(i, j - 1) + cn(i, j + 1); }
-            else {
-                my = 0.25 * (t.at(i - 1, j - 1) + t.at(i + 1, j - 1) + t.at(i - 1, j + 1) + t.at(i + 1, j + 1));
-                mn = cn(i - 1, j - 1) + cn(i + 1, j - 1) + cn(i - 1, j + 1) + cn(i + 1, j + 1);
-            }
+            double my = coarseAverage(i, j, th);
+            Vec3 mn = coarseAverage(i, j, cn);
             Vertex& v = mesh.vertices[static_cast<std::size_t>(j) * n + i];
-            if (my != t.at(i, j) && !params.flatten.empty() &&
-                flattenCovers(fg ? *fg : kNoGrid, params.flatten, v.position.x, v.position.z, flattenDilate)) {
+            if (my != t.at(i, j) && morphPinned(params, v.position.x, v.position.z, flattenDilate)) {
                 my = t.at(i, j);
                 mn = v.normal;
             }

@@ -14,7 +14,8 @@ upload counts, which is usually enough to name the culprit. Stdlib only.
 import argparse, csv, math, os, statistics, subprocess, sys, time
 
 sys.path.insert(0, os.path.dirname(__file__))
-from lanelab_shots import send   # the control-socket helper
+import rtctl   # the control channel (ADR-0291)
+from rtctl import send
 
 
 def eye_at(sock, x, z):
@@ -53,14 +54,9 @@ def main():
     env = dict(os.environ, RT_FRAME_STATS=csv_path)
     env.setdefault("RT_VSYNC", "0")
     log = open(os.path.join(a.out, "viewer.log"), "wb")
-    proc = subprocess.Popen([a.viewer, a.level, "--play"], stdout=log, stderr=subprocess.STDOUT,
-                            start_new_session=True, env=env)
-    sock = f"/tmp/raytracer-viewer-{proc.pid}.sock"
     t0 = time.time()
+    proc, sock = rtctl.launch(a.viewer, a.level, log=log, env=env)
     try:
-        while not os.path.exists(sock):
-            if proc.poll() is not None or time.time() - t0 > 60: sys.exit("viewer did not open its control socket")
-            time.sleep(0.2)
         send(sock, "camera?", timeout=a.load_timeout)
         if a.drive:
             time.sleep(a.settle)
@@ -118,9 +114,7 @@ def main():
                 time.sleep(1 / 60)
             end = send(sock, "camera?").split("frame=")[-1]
     finally:
-        proc.terminate()
-        try: proc.wait(10)
-        except subprocess.TimeoutExpired: proc.kill()
+        rtctl.stop(proc)
 
     rows = [r for r in csv.DictReader(l for l in open(csv_path) if not l.startswith("#"))
             if r.get("total_ms") not in (None, "")]   # the last row can be cut off when the viewer closes

@@ -15,6 +15,7 @@
 
 #include "../components.h"
 #include "../player_pose.h"
+#include "../riding.h"   // rideStep: the driver rides the car like any rider
 #include "../asset_manager.h"
 #include "../mesh_builder.h"
 #include "physics_system.h"
@@ -36,6 +37,11 @@
 #endif
 
 namespace engine {
+
+namespace {
+// The driver's eye over the hip (Passenger::eyeAbove, sitting), as a seated passenger's.
+constexpr Real kDriverEyeAboveHip = 0.74;
+}  // namespace
 
 void VehicleSystem::onStart(FrameContext& ctx) {
     onSpawn_ = ctx.events.listen<VehicleSpawnRequest>([this](const VehicleSpawnRequest& r) {
@@ -89,9 +95,9 @@ void VehicleSystem::onStart(FrameContext& ctx) {
     ctx.actions.bindButton("vehicle_horn", GamepadButton::LeftThumb);
     ctx.actions.setActionContext("vehicle_horn", engine::InputContext::InVehicle);
     // The car picker: - and = cycle the drivable catalogue; N drops the pick.
-    // NOT , and . -- those are DevControlSystem's sim slower/faster, and picking
-    // a car three places along ran the world at 8x ("super speed mode") -- nor
-    // [ and ], the spectator's. The boot log names any clash ([input] key clash).
+    // NOT , and . -- they were DevControlSystem's sim slower/faster, and picking
+    // a car three places along ran the world at 8x ("super speed mode"); sim speed
+    // is unbound by default now, but the keys stay clear -- nor [ and ], the spectator's. The boot log names any clash ([input] key clash).
     ctx.actions.bindButton("vehicle_pick_prev", KeyCode::Minus);
     ctx.actions.bindButton("vehicle_pick_next", KeyCode::Equal);
     // A part-time 4x4's transfer case: 2WD (rear) <-> 4WD (#41).
@@ -332,10 +338,12 @@ void VehicleSystem::driveVehicles(FrameContext& ctx) {
             in.brake = brake;
             in.handBrake = hand;
         } else if (AgentDriver* ad = ctx.world.get<AgentDriver>(e)) {
-            // An AI brain drives it: turn what the brain WANTS (heading + speed)
-            // into the same pedal/wheel values through the shared controller, so
+            // An AI brain drives it: turn what the brain WANTS (a lane frame + speed)
+            // into the same pedal/wheel values through the one controller, so
             // this NPC car obeys identical physics to the player's.
             DriverState s;
+            const Vec3 at = pw.vehiclePosition(v.vehicleId);
+            s.pos = Vec2(at.x, at.z);
             Quat q = pw.vehicleOrientation(v.vehicleId);
             Vec3 fwd = q.rotate(Vec3(0, 0, 1));       // chassis forward in world
             s.forward = Vec2(fwd.x, fwd.z);
@@ -503,9 +511,9 @@ void VehicleSystem::writeBack(FrameContext& ctx) {
                 }
             }
 
-            // Keep the seated driver glued to the chassis so they ride along and
-            // are sensibly placed when they get out.
-            if (v.driver.valid() && ctx.world.alive(v.driver)) {
+            // Keep a driver with no seat (no Passenger) glued to the chassis so they ride along; a seated one is
+            // the riding component's (stepSeat -> rideStep puts them at the seat).
+            if (v.driver.valid() && ctx.world.alive(v.driver) && !ctx.world.has<Passenger>(v.driver)) {
                 if (Transform* pt = ctx.world.get<Transform>(v.driver))
                     pt->position = t.position;
             }
@@ -595,6 +603,7 @@ void VehicleSystem::handleEnterExit(FrameContext& ctx) {
         }
         cameras.clearFollowTarget();
         ctx.world.remove<InVehicle>(player);   // structural — after the each() above
+        if (ctx.world.has<Passenger>(player)) ctx.world.remove<Passenger>(player);   // (out of the seat)
     } else {
         // --- get in: the nearest car within reach, occupied by an AI or not ---
         // The player can commandeer ANY car. An AI-driven car counts (we eject its
@@ -619,15 +628,22 @@ void VehicleSystem::handleEnterExit(FrameContext& ctx) {
                 bt.orientation.rotate(Vec3(0, 1, 0)).y < std::cos(v.config.maxLeanDegrees * 0.0174533))
                 physicsSys.physicsWorld().resetVehicleUpright(v.vehicleId, 0.3);
             bikeUpright_ = false;
-            jolt_.reset();
-            sway_.reset();
-            haveSeatVel_ = false;
             v.driver = player;
             cameras.setFollowTarget(best);
             // a bike's chase sits closer than a car's (the car's 8 m left a motorcycle a speck)
             if (ctx.world.get<Vehicle>(best)->config.twoWheeler) cameras.setFollowFraming(4.0, 1.0);
             else cameras.setFollowFraming(8.0, 1.2);
             ctx.world.add<InVehicle>(player, InVehicle{best});   // structural
+            // IN THE SEAT: a rider of the car (engine/riding.h), sat at its hip point; the chase rig frames the car,
+            // so the view does not go round with it. stepSeat sets the carrier each step.
+            Passenger seated;
+            seated.sitting = true;
+            seated.carSeat = true;
+            seated.eyeAbove = kDriverEyeAboveHip;
+            seated.hipBelow = kDriverEyeAboveHip - kEyeAboveCentre;
+            seated.turnsView = false;
+            if (Passenger* was = ctx.world.get<Passenger>(player)) *was = seated;
+            else ctx.world.add<Passenger>(player, seated);
         }
     }
 }
@@ -646,22 +662,24 @@ void VehicleSystem::stepSeat(FrameContext& ctx) {
     Vehicle* v = player.valid() && ride.valid() && ctx.world.alive(ride) ? ctx.world.get<Vehicle>(ride) : nullptr;
     const Transform* rt = v ? ctx.world.get<Transform>(ride) : nullptr;
     if (!v || !rt || v->vehicleId == PhysicsWorld::INVALID_VEHICLE) return;
+    Passenger* ps = ctx.world.get<Passenger>(player);
+    if (!ps) return;
     const Real dt = ctx.clock.fixedStep();
     const Vec3 vel = physicsSys.physicsWorld().vehicleVelocity(v->vehicleId);
-    Vec3 before;
-    const Real jolt = jolt_.step(vel, dt, &before);
-    // the sway: thrown against this step's change, in the vehicle's own frame
-    const Vec3 dv = haveSeatVel_ ? rt->orientation.conjugate().rotate(vel - seatVel_) : Vec3(0, 0, 0);
-    seatVel_ = vel;
-    haveSeatVel_ = true;
-    sway_.step(dv, dt);
+    // the driver rides the car: the carrier this step, the hip point in it -- the pin, and the sway and jolt the seat
+    // throws the body into, are the riding component's (rideStep)
+    ps->carrier = rt->matrix();
+    ps->local = v->hipPoint();
+    rideStep(ctx.world, &physicsSys.physicsWorld(), player, nullptr, dt);
+    const Real jolt = ps->joltNow;
+    const Vec3 before = ps->joltBefore;
     // a bicycle's cranks go round while it is pedalled (the wheel's turn, geared down)
     if (v->seat.pedals && v->throttle > 0.05) crank_ += v->speed * dt / (6.2832 * 0.34 * 2.6);
     if (PlayerPose* pose = ctx.world.get<PlayerPose>(player)) {
         pose->mode = PlayerPose::Mode::Drive;
         pose->handsFree = 0;
-        pose->seatLean = sway_.lean;
-        pose->seatNod = sway_.nod;
+        pose->seatLean = ps->sway.lean;
+        pose->seatNod = ps->sway.nod;
         pose->steer = v->steerApplied;
         pose->crank = crank_;
         pose->velocity = vel;
@@ -676,7 +694,6 @@ void VehicleSystem::stepSeat(FrameContext& ctx) {
     const bool hit = jolt > ejectTolerance(v->config.twoWheeler, v->openSeat, ctx.settings.getBool("vehicle.windscreen", true));
     if (!down && !hit) return;
     const Vec3 thrown = hit ? ejectThrow(before, true) : ejectThrow(vel, false);
-    jolt_.reset();
     v->driver = Entity{};
     if (CharacterController* cc = ctx.world.get<CharacterController>(player)) {
         // off the seat and clear of the body: the capsule's feet just over its top (a convertible's doors are a
@@ -688,6 +705,7 @@ void VehicleSystem::stepSeat(FrameContext& ctx) {
     }
     cameras.clearFollowTarget();
     ctx.world.remove<InVehicle>(player);
+    ctx.world.remove<Passenger>(player);   // (thrown out of the seat)
     LimpRequest limp;
     limp.thrown = true;
     limp.velocity = thrown;
@@ -702,11 +720,14 @@ void VehicleSystem::update(FrameContext& ctx) {
     // Flip the car the player is currently driving back upright.
     if (ctx.actions.pressed("vehicle_flip")) {
         ctx.world.each<ControlledBy, InVehicle>(
-            [&](Entity, ControlledBy&, InVehicle& iv) {
+            [&](Entity e, ControlledBy&, InVehicle& iv) {
                 if (!iv.vehicle.valid() || !ctx.world.has<Vehicle>(iv.vehicle)) return;
                 Vehicle* v = ctx.world.get<Vehicle>(iv.vehicle);
-                if (v->vehicleId != PhysicsWorld::INVALID_VEHICLE)
-                    physicsSys.physicsWorld().resetVehicleUpright(v->vehicleId);
+                if (v->vehicleId == PhysicsWorld::INVALID_VEHICLE) return;
+                physicsSys.physicsWorld().resetVehicleUpright(v->vehicleId);
+                // the car was PLACED, not driven: a 1.5 m lift in one step read as a 90 m/s jolt and threw the driver
+                // through the windscreen. A new frame for the seat, as on boarding (rideStep's jump).
+                if (Passenger* p = ctx.world.get<Passenger>(e)) p->haveLast = false;
             });
     }
 
@@ -811,102 +832,20 @@ void VehicleSystem::update(FrameContext& ctx) {
 
 void VehicleSystem::updateEngines(FrameContext& ctx) {
     if (!ctx.audio.ready()) return;
-
-    // Every RUNNING physical car — the player's and any the AI drives — near
-    // enough to hear. A driverless car is silent (engineSoundFor's contract),
-    // so a parked street stays parked.
-    struct Candidate {
-        Entity car;
-        Vec3 pos;
-        EngineSound sound;
-        Real rev;      // for the per-car rev hunt (wobble depth)
-        Real dist2;
-    };
-    std::vector<Candidate> heard;
+    // Every RUNNING physical car -- the player's and any the AI drives -- near enough to hear. A driverless car is
+    // silent (engineSoundFor's contract), so a parked street stays parked.
+    std::vector<EngineVoicePool::Engine> heard;
     const Vec3 ear = ctx.view.camera.position;
+    const Real range = engines_.range();
     ctx.world.each<Transform, Vehicle>([&](Entity e, Transform& t, Vehicle& v) {
         const bool running = v.driver.valid() || ctx.world.has<AgentDriver>(e);
         if (!running || v.pedalled) return;   // a bicycle has legs, not an engine
         const Real d2 = (t.position - ear).lengthSquared();
-        if (d2 > kEngineAudibleRange * kEngineAudibleRange) return;
-        heard.push_back({e, t.position,
-                         engineSoundFor(v.speed, v.throttle, true),
-                         engineRevFraction(v.speed), d2});
+        if (d2 > range * range) return;
+        heard.push_back({(static_cast<uint64_t>(e.generation) << 32) | e.index, t.position, v.speed, v.throttle,
+                         static_cast<Real>(e.index % 17) * Real(0.37), d2});
     });
-    // Nearest first: when there are more running cars than voices, the ones
-    // you can actually pick out win the slots.
-    std::sort(heard.begin(), heard.end(),
-              [](const Candidate& a, const Candidate& b) {
-                  return a.dist2 < b.dist2;
-              });
-    if (heard.size() > static_cast<std::size_t>(kMaxEngineVoices))
-        heard.resize(static_cast<std::size_t>(kMaxEngineVoices));
-
-    for (EngineVoice& ev : engineVoices) ev.wanted = false;
-
-    for (const Candidate& c : heard) {
-        EngineVoice* slot = nullptr;
-        for (EngineVoice& ev : engineVoices)
-            if (ev.car == c.car) { slot = &ev; break; }
-        if (!slot) {
-            if (!engineClip.valid()) {
-                // Procedural, synthesized once (ADR-0071): one loop-clean
-                // period, pitch-shifted per car — no sound file, no per-car
-                // sample bank.
-                std::vector<float> pcm = sfx::engine(ctx.audio.sampleRate(), 1);
-                engineClip = ctx.audio.createClip(pcm.data(), pcm.size(), 1,
-                                                  ctx.audio.sampleRate());
-            }
-            if (!engineClip.valid()) return;
-            AudioPlayParams params;
-            params.loop = true;
-            params.volume = 0.0f;   // ramped in below — no click on start
-            params.pitch = c.sound.pitch;
-            EngineVoice ev;
-            ev.car = c.car;
-            ev.voice = ctx.audio.playAt(engineClip, c.pos, kEngineAudibleRange,
-                                        params);
-            if (!ev.voice.valid()) continue;
-            engineVoices.push_back(ev);
-            slot = &engineVoices.back();
-        }
-        slot->wanted = true;
-        // Ease the gain (a car coming into earshot fades up rather than
-        // snapping on); pitch tracks directly, so a gear change reads as the
-        // shift it is instead of a smear.
-        slot->gain += (c.sound.gain - slot->gain) *
-                      std::min(1.0f, 8.0f * static_cast<float>(ctx.frameDelta));
-        // Hunt the revs a touch (per car, so two cars never wobble in step) —
-        // a perfectly steady playback rate is what makes a loop read as a hum.
-        const float wobble =
-            engineWobble(ctx.clock.simulatedTime(),
-                         static_cast<Real>(c.car.index % 17) * Real(0.37), c.rev);
-        ctx.audio.setVoiceVolume(slot->voice, slot->gain);
-        ctx.audio.setVoicePitch(slot->voice, c.sound.pitch * wobble);
-        ctx.audio.setVoicePosition(slot->voice, c.pos);
-    }
-
-    // Fade out and reclaim: cars that drove away, lost their driver, or lost
-    // their slot to a nearer one. A voice the engine already dropped (level
-    // swap -> stopAll) is forgotten so the car can be voiced again.
-    for (std::size_t i = engineVoices.size(); i-- > 0;) {
-        EngineVoice& ev = engineVoices[i];
-        if (!ctx.audio.isPlaying(ev.voice)) {
-            engineVoices.erase(engineVoices.begin() +
-                               static_cast<std::ptrdiff_t>(i));
-            continue;
-        }
-        if (ev.wanted) continue;
-        ev.gain += (0.0f - ev.gain) *
-                   std::min(1.0f, 6.0f * static_cast<float>(ctx.frameDelta));
-        if (ev.gain < 0.01f) {
-            ctx.audio.stop(ev.voice);
-            engineVoices.erase(engineVoices.begin() +
-                               static_cast<std::ptrdiff_t>(i));
-        } else {
-            ctx.audio.setVoiceVolume(ev.voice, ev.gain);
-        }
-    }
+    engines_.update(ctx.audio, heard, ctx.clock.simulatedTime(), ctx.frameDelta);
 }
 
 // HOW HARD THE PLAYER'S TYRES SLIDE, 0..1, onto Vehicle::slide: sideways (the slip angle -- a drift) or spinning /

@@ -870,8 +870,9 @@ public:
     // the next composited frame to `path` as PNG. The RT_FRAME_DUMP env path
     // keeps its settle-first frame-90 behavior; this fires on the very next
     // frame — the caller has already framed the camera and waited out any
-    // bake. Returns false when the backend can't capture (only Metal can
-    // today), so callers can report "unsupported" instead of hanging on a
+    // bake. Returns false when the backend can't capture (Metal and Vulkan
+    // can; WebGPU and the null renderer can't), so callers can report
+    // "unsupported" instead of hanging on a
     // file that will never appear.
     virtual bool requestFrameDump(const std::string& /*path*/) { return false; }
     // What the backend holds on the GPU, one line (the control channel's mem?). Empty

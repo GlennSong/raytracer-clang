@@ -7,6 +7,7 @@
 #include "audio/audio_engine.h"
 #include "physics/physics_world.h"
 #include "player/seat_geometry.h"   // SeatGeometry (Vehicle: where the rider's hands and feet go)
+#include "player/seat_motion.h"     // RideJolt, SeatSway (Passenger: what the seat does to its rider)
 #include "procgen/city/polygon.h"   // Poly2 (city-plan debug outlines, ADR-0066)
 #include "procgen/city/road_network.h"   // RoadGraph (ExtraNavGraph, plan §8 P8.4)
 #include "procgen/city/road_mesh.h"      // RoadDeckField (RoadDeck)
@@ -160,9 +161,10 @@ struct Renderable {
 // Replaces "thousands of Renderable entities" for static scatter (the forest):
 // one InstanceGroup carries the shared mesh/material and a baked world matrix per
 // instance, so RenderSystem iterates a handful of groups instead of every plant,
-// culls by the group's bounds, and issues one drawMeshInstanced. The instances
-// are static (no per-instance Transform/interpolation). Per-instance culling /
-// chunking for huge worlds is the Tier 5 follow-up.
+// culls by the group's bounds, and issues one drawMeshInstanced. No per-instance
+// Transform: a group is static unless its owner re-bakes `transforms` each fixed
+// step with `ids` (MOVING INSTANCES below -- traffic, riders), which the renderer
+// interpolates.
 struct InstanceGroup {
     MeshHandle mesh;
     RenderMaterial material;
@@ -239,10 +241,12 @@ struct GrassField {
     bool alignToGround = false;
 };
 
-// THE OCEAN a level draws (its "water" block): the OPEN-sea cells the water mesh covers, at `level`.
-// What "is this point sea?" means -- a river channel carved below sea level is not sea, and neither is
-// a pond the water plane fills in a basin (openSeaCells keeps the water that reaches the edge of the
-// map or is big enough to have waves; #65's surf).
+// THE OCEAN a level draws (its "water" block): every cell the water mesh covers, at `level` -- what "is this point
+// sea?" means to a swimmer, the camera and a splash (UnderwaterSystem::surfaceAt). A river channel carved below sea
+// level is not sea (the mesh leaves it out). Each cell is OPEN water or a POND (ADR-0286): a pond the water plane
+// fills in a basin is drawn and swum in, but has no waves -- surf() asks for the open water only (openSeaCells keeps
+// the water that reaches the edge of the map or is big enough to have waves; #65's surf). Before ADR-0286 the
+// ponds were drawn but not here, so a swimmer walked on them.
 // A POOL: still water in a box, for a level with no terrain (the movement lab's). The loader draws its surface;
 // UnderwaterSystem::surfaceAt finds it, so the swimmer floats in it and the camera sees under it.
 struct WaterPool {
@@ -253,33 +257,40 @@ struct WaterPool {
 struct Sea {
     double level = 0.0;
     std::vector<std::array<double, 4>> boxes;             // each cell: minX, minZ, maxX, maxZ
+    std::vector<uint8_t> open;                            // per cell: open water (1) or a pond (0)
     double bucket = 64.0;                                 // lookup grid (m)
     std::unordered_map<int64_t, std::vector<int>> index;  // bucket -> boxes touching it
     static int64_t key(int64_t bx, int64_t bz) {   // unsigned shift: negative buckets are UB shifted signed
         return static_cast<int64_t>((static_cast<uint64_t>(bx) << 32) ^ (static_cast<uint64_t>(bz) & 0xffffffffULL));
     }
-    void add(double x0, double z0, double x1, double z1) {
+    void add(double x0, double z0, double x1, double z1, bool openWater = true) {
         const int id = static_cast<int>(boxes.size());
         boxes.push_back({x0, z0, x1, z1});
+        open.push_back(openWater ? 1 : 0);
         for (int64_t bx = static_cast<int64_t>(std::floor(x0 / bucket)); bx <= static_cast<int64_t>(std::floor(x1 / bucket)); ++bx)
             for (int64_t bz = static_cast<int64_t>(std::floor(z0 / bucket)); bz <= static_cast<int64_t>(std::floor(z1 / bucket)); ++bz)
                 index[key(bx, bz)].push_back(id);
     }
-    bool contains(double x, double z) const {
+    // Any water drawn here, pond or open.
+    bool contains(double x, double z) const { return find(x, z, false); }
+    // Open water here: the sea that has waves.
+    bool surf(double x, double z) const { return find(x, z, true); }
+    bool find(double x, double z, bool openOnly) const {
         auto it = index.find(key(static_cast<int64_t>(std::floor(x / bucket)), static_cast<int64_t>(std::floor(z / bucket))));
         if (it == index.end()) return false;
         for (int id : it->second) {
             const auto& b = boxes[static_cast<std::size_t>(id)];
-            if (x >= b[0] && x <= b[2] && z >= b[1] && z <= b[3]) return true;
+            if (x >= b[0] && x <= b[2] && z >= b[1] && z <= b[3] && (!openOnly || open[static_cast<std::size_t>(id)]))
+                return true;
         }
         return false;
     }
 };
 
-// The sea cells (axis-aligned squares) that belong to OPEN water: connected bodies reaching the edge of
-// the water's region [lo, hi] (the ocean runs off the map), or larger than `minArea` m^2. Basin ponds drop out.
-inline std::vector<std::array<double, 4>> openSeaCells(const std::vector<std::array<double, 4>>& cells, double loX, double loZ,
-                                                       double hiX, double hiZ, double minArea = 5e5) {
+// Which sea cells (axis-aligned squares) belong to OPEN water, per cell: connected bodies reaching the edge of
+// the water's region [lo, hi] (the ocean runs off the map), or larger than `minArea` m^2. Basin ponds are 0.
+inline std::vector<uint8_t> openSeaMask(const std::vector<std::array<double, 4>>& cells, double loX, double loZ,
+                                        double hiX, double hiZ, double minArea = 5e5) {
     const std::size_t n = cells.size();
     if (n == 0) return {};
     std::vector<int> parent(n);
@@ -313,11 +324,20 @@ inline std::vector<std::array<double, 4>> openSeaCells(const std::vector<std::ar
         area[r] += (a[2] - a[0]) * (a[3] - a[1]);
         if (a[0] <= X0 + eps || a[1] <= Z0 + eps || a[2] >= X1 - eps || a[3] >= Z1 - eps) edge[r] = true;
     }
-    std::vector<std::array<double, 4>> out;
+    std::vector<uint8_t> out(n, 0);
     for (std::size_t i = 0; i < n; ++i) {
         const int r = find(static_cast<int>(i));
-        if (edge[r] || area[r] >= minArea) out.push_back(cells[i]);
+        out[i] = edge[r] || area[r] >= minArea ? 1 : 0;
     }
+    return out;
+}
+// The open cells themselves (openSeaMask's).
+inline std::vector<std::array<double, 4>> openSeaCells(const std::vector<std::array<double, 4>>& cells, double loX, double loZ,
+                                                       double hiX, double hiZ, double minArea = 5e5) {
+    const std::vector<uint8_t> open = openSeaMask(cells, loX, loZ, hiX, hiZ, minArea);
+    std::vector<std::array<double, 4>> out;
+    for (std::size_t i = 0; i < open.size(); ++i)
+        if (open[i]) out.push_back(cells[i]);
     return out;
 }
 
@@ -607,6 +627,22 @@ struct Passenger {
     Vec3 framedAt;
     Real framedYaw = 0;
     bool framed = false;
+    // THE VIEW goes round with the carrier (a bus's corner swings the saloon, not the world) -- not at the wheel, where
+    // the chase rig frames the car (VehicleSystem sets it false for the driver)
+    bool turnsView = true;
+    // WHAT THE SEAT DOES TO THE RIDER (rideStep, from the carrier's own motion; item 26, #117): the body thrown against
+    // the carrier's change of velocity and pulled back (the driver's, a cab's, a bus's, a train's), and the jolt over
+    // the last moment (`joltNow`, the velocity before it in `joltBefore`) -- what throws a driver off an open seat
+    SeatSway sway;
+    RideJolt jolt;
+    Real joltNow = 0;
+    Vec3 joltBefore;
+    Vec3 carrierVel;            // (the carrier's velocity last step)
+    bool haveVel = false;
+    // THE CARRIER AS DRAWN this frame (RidingSystem's render: between its last two steps by the interpolation), for
+    // the body to sit in: one place that knows where the vehicle is drawn
+    Mat4 drawn;
+    bool haveDrawn = false;
 };
 
 // Marks a Vehicle as driven by an AI brain rather than the player (ADR-0062): the
@@ -964,10 +1000,6 @@ struct OpenSigns {
 // (Supersedes the P8.4 ExtraNavGraph bolt-on, which only the sim could see.)
 struct LevelRoadGraph {
     RoadGraph graph;
-    // The builder painted stop bars, crosswalks and lane arrows INTO its road surface (the lanes builder,
-    // ADR-0108), so a consumer must not add floating marking quads of its own on top (#39: they z-fought
-    // the asphalt and flickered with the camera angle).
-    bool paintedMarkings = false;
 };
 
 // The DECK a road entity's mesh actually rode (RoadDeckField), stored by the

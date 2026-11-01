@@ -3,8 +3,9 @@
 
 // engine::bundle — one-file, content- and cell-addressed level bundles (ADR-0084).
 //
-// A bundle is `level.bundle`: a 64-byte header, 64-byte-aligned binary SECTIONS appended in order, then the
-// table of contents as JSON (the manifest, with a "sections" array of name/offset/size/fnv). A reader maps
+// A bundle is `level.bundle`: a 64-byte header, binary SECTIONS appended in order (4 KB-aligned in a file,
+// kFileSectionAlign; 64-byte in memory, kSectionAlign), then the table of contents as JSON (the manifest, with a
+// "sections" array of name/offset/size/fnv). A reader maps
 // the file once and hands out views into it, so a whole-level load reads every section and a streaming
 // loader touches only the cells it needs — same file, same reader. Sections are named by path convention:
 //     <producer>/<global>                  e.g. city/e0/ground, city/e0/roads/nav

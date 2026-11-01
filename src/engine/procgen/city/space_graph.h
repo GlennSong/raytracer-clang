@@ -73,6 +73,7 @@ struct WalkerCaps {
     bool ramp = true;
 };
 
+// A Void (a railing edge onto an atrium) is never passable: you see across it, you cannot walk it.
 bool passable(const Portal& p, const WalkerCaps& caps);
 // Which cells a walker reaches from `from` (a cell index; -1 = the street, through every portal onto it).
 std::vector<bool> reachableFrom(const SpaceGraph& g, int from, const WalkerCaps& caps);

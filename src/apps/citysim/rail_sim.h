@@ -47,7 +47,7 @@ TrainKind trainKindNamed(const std::string& name);
 
 struct RailLine {
     std::string name;
-    std::string cls;                  // its track class (rail, light_rail, metro): what stock runs it
+    std::string cls;                  // its track class (built in: rail, light_rail): what stock runs it
     std::vector<engine::Vec3> pts;    // railhead centreline, running order
     std::vector<double> s;            // station of each point
     double length = 0;

@@ -26,6 +26,48 @@ local classes = require "vehicle_classes"
 local forms   = require "vehicle_forms"
 
 
+-- A CLASS's HANDLING (item 23, #117: one handling builder): everything the C++ reader (vehicle_spec.cpp,
+-- readVehicleHandling) turns into a Jolt config, derived from the class package -- for a drivable spec
+-- (from_class, below) and for a fleet slot of the same class (catalogue), so a traffic car and the same car
+-- dropped by the player drive alike. `wheels` are the drawn resting centres ({ x, y, z, steered, driven,
+-- hand_brake }); `opts` overrides any number.
+local function class_handling(c, d, wheels, opts)
+  opts = opts or {}
+  -- Mass scales with the box the vehicle occupies; a van is not a heavy sedan.
+  local volume = d.length * d.width * d.height
+  local mass = opts.mass or math.floor(volume * 120)
+  return {
+    chassis = { half = { d.width * 0.5, d.height * 0.5, d.length * 0.5 } },
+    mass = mass,
+    -- Centre of gravity below the body centre. Anchored so a sedan-height body
+    -- (1.45 m) gets exactly -0.45 — the value the sedan was hand-tuned to before
+    -- the class recipes ("low CoG so it doesn't tip in turns") — while TALLER
+    -- bodies drop further, or a van/jeep rolls over under any real steering. So
+    -- the sedan drives exactly as tuned and the height term only ever helps the
+    -- new tall classes.
+    com_offset = opts.com_offset or -(0.23 + 0.22 * (d.height / 1.45)),
+    engine_torque = opts.engine_torque or math.floor(mass * 0.46),
+    max_rpm = opts.max_rpm or 6000,
+    max_steer_deg = opts.max_steer_deg or (c.form == "coupe" and 32 or 28),
+    brake_torque = opts.brake_torque or math.floor(mass * 1.15),
+    hand_brake_torque = opts.hand_brake_torque or math.floor(mass * 2.9),
+    -- The forgiving handling defaults live in PhysicsWorld::VehicleConfig
+    -- (physics_world.h: roll cone off (180 deg), anti-roll bars off, yaw assist 3/s);
+    -- a recipe may override any of them (nil = keep the default).
+    max_roll_deg = opts.max_roll_deg,
+    anti_roll = opts.anti_roll,
+    yaw_assist = opts.yaw_assist,
+    grip = opts.grip,               -- the tyres' peak lateral grip (default 2.0)
+    -- real aero drag (a top speed near 205 km/h, not linear body damping) and quick shifts: Jolt's
+    -- default gearbox cut the drive for ~1.3 s per upshift -- a 3.5 s stall at 105-115 km/h on the freeway
+    drag_area = opts.drag_area or 2.0,
+    shift_time = 0.2, clutch_time = 0.15, shift_latency = 0.25,
+    drive = opts.drive,             -- nil: the wheels' driven flags (all four: AWD)
+    wheel = { radius = c.wheel_diameter * 0.5, width = math.max(0.18, c.track * 0.13) },
+    wheels = wheels,
+  }
+end
+
 -- Build a drivable spec from a CLASS. One builder for every wheeled vehicle:
 -- proportions come from vehicle_classes.lua, curves from vehicle_forms.lua, and
 -- the shell from mesh.car. It replaces the old box-stack body that gave every
@@ -85,55 +127,24 @@ local function from_class(class_name, seed, opts)
   local axleY = -d.height * 0.5 + r
   local frontZ = d.length * 0.5 - d.front_overhang
   local rearZ = -(d.length * 0.5 - d.rear_overhang)
-
-  -- Mass scales with the box the vehicle occupies; a van is not a heavy sedan.
-  local volume = d.length * d.width * d.height
-  local mass = opts.mass or math.floor(volume * 120)
-
-  return {
-    body = body,
-    -- WHITE: the shell mesh already carries the paint in its vertex colours and
-    -- the shader multiplies albedo by them. A coloured albedo here squares the
-    -- paint (the old box body did exactly that and drove darker than authored).
-    albedo = { 1, 1, 1 },
-    metallic = 0.6,
-    roughness = 0.35,
-    parts = parts,           -- transparent glass + matte interior
-    lights = car.lights,     -- headlight_l/r, taillight_l/r, driver_seat markers
-    chassis = { half = { d.width * 0.5, d.height * 0.5, d.length * 0.5 } },
-    mass = mass,
-    -- Centre of gravity below the body centre. Anchored so a sedan-height body
-    -- (1.45 m) gets exactly -0.45 — the value the sedan was hand-tuned to before
-    -- the class recipes ("low CoG so it doesn't tip in turns") — while TALLER
-    -- bodies drop further, or a van/jeep rolls over under any real steering. So
-    -- the sedan drives exactly as tuned and the height term only ever helps the
-    -- new tall classes.
-    com_offset = opts.com_offset or -(0.23 + 0.22 * (d.height / 1.45)),
-    engine_torque = opts.engine_torque or math.floor(mass * 0.46),
-    max_rpm = opts.max_rpm or 6000,
-    max_steer_deg = opts.max_steer_deg or (c.form == "coupe" and 32 or 28),
-    brake_torque = opts.brake_torque or math.floor(mass * 1.15),
-    hand_brake_torque = opts.hand_brake_torque or math.floor(mass * 2.9),
-    -- The forgiving handling defaults live in PhysicsWorld::VehicleConfig
-    -- (physics_world.h: roll cone 65 deg, anti-roll bars off, yaw assist 3/s);
-    -- a recipe may override any of them (nil = keep the default).
-    max_roll_deg = opts.max_roll_deg,
-    anti_roll = opts.anti_roll,
-    yaw_assist = opts.yaw_assist,
-    grip = opts.grip,               -- the tyres' peak lateral grip (default 1.7)
-    -- real aero drag (a top speed near 205 km/h, not linear body damping) and quick shifts: Jolt's
-    -- default gearbox cut the drive for ~1.3 s per upshift -- a 3.5 s stall at 105-115 km/h on the freeway
-    drag_area = opts.drag_area or 2.0,
-    shift_time = 0.2, clutch_time = 0.15, shift_latency = 0.25,
-    drive = opts.drive,             -- nil: the wheels' driven flags (all four: AWD)
-    wheel = { radius = r, width = math.max(0.18, c.track * 0.13) },
-    wheels = {
-      { x =  halfTrack, y = axleY, z = frontZ, steered = true,  driven = true },
-      { x = -halfTrack, y = axleY, z = frontZ, steered = true,  driven = true },
-      { x =  halfTrack, y = axleY, z = rearZ,  steered = false, driven = true, hand_brake = true },
-      { x = -halfTrack, y = axleY, z = rearZ,  steered = false, driven = true, hand_brake = true },
-    },
+  local wheels = {
+    { x =  halfTrack, y = axleY, z = frontZ, steered = true,  driven = true },
+    { x = -halfTrack, y = axleY, z = frontZ, steered = true,  driven = true },
+    { x =  halfTrack, y = axleY, z = rearZ,  steered = false, driven = true, hand_brake = true },
+    { x = -halfTrack, y = axleY, z = rearZ,  steered = false, driven = true, hand_brake = true },
   }
+
+  local spec = class_handling(c, d, wheels, opts)
+  spec.body = body
+  -- WHITE: the shell mesh already carries the paint in its vertex colours and
+  -- the shader multiplies albedo by them. A coloured albedo here squares the
+  -- paint (the old box body did exactly that and drove darker than authored).
+  spec.albedo = { 1, 1, 1 }
+  spec.metallic = 0.6
+  spec.roughness = 0.35
+  spec.parts = parts           -- transparent glass + matte interior
+  spec.lights = car.lights     -- headlight_l/r, taillight_l/r, driver_seat markers
+  return spec
 end
 
 function vehicle.sedan(seed, opts)    return from_class("sedan", seed, opts) end
@@ -167,6 +178,45 @@ local KIT_TINT = { trim = { 0.04, 0.04, 0.045 }, gasket = { 0.025, 0.025, 0.028 
                    interior = { 0.35, 0.26, 0.18 }, sign = { 1.0, 0.85, 0.2 } }
 local KIT_CABIN_TINT = { liner = { 0.45, 0.43, 0.40 }, carpet = { 0.10, 0.10, 0.11 }, seat = { 0.18, 0.17, 0.16 },
                          dash = { 0.08, 0.08, 0.09 }, steer = { 0.05, 0.05, 0.05 } }
+-- A KIT BODY's HANDLING (item 23, #117: one handling builder): `P` the kit spec, `car` its kit.build(P, 0), `h`
+-- the handling table (KIT_HANDLING). The drivable spec (kit_drivable) and the fleet slot of the same kit
+-- (catalogue) both publish this, so a commandeered traffic car drives as the one the player drops.
+local function kit_handling(P, car, h, opts)
+  opts = opts or {}
+  local wheels = {}
+  for _, w in ipairs(car.wheels) do
+    wheels[#wheels + 1] = { x = w.pos[1], y = w.pos[2], z = w.pos[3], steered = w.front, driven = true,
+                            hand_brake = not w.front }
+  end
+  local W, H, L = car.size[1], car.size[2], car.size[3]
+  local mass = opts.mass or h.mass or math.floor(L * W * H * 120)
+  return {
+    chassis = { half = { W * 0.5, H * 0.5, L * 0.5 } },
+    mass = mass,
+    com_offset = h.com_offset or -(0.23 + 0.22 * (H / 1.45)),
+    engine_torque = opts.engine_torque or math.floor(mass * (h.torque_per_kg or 0.46)),
+    max_rpm = h.max_rpm or 6000,
+    max_steer_deg = h.max_steer_deg or 30,
+    brake_torque = math.floor(mass * 1.15),
+    hand_brake_torque = math.floor(mass * 2.9),
+    grip = h.grip,
+    -- the collision's underside follows the drawn body: its floor at the body's ground clearance (never
+    -- under the street rig's 0.22 kerb lift), and an off-roader's nose and tail cut to its approach and
+    -- departure angles (physics_world.h) -- a square box caught rocks the tyres could climb
+    floor_clearance = math.max(0.22, P.clear or 0),
+    approach_deg = h.approach_deg, departure_deg = h.departure_deg,
+    max_roll_deg = h.max_roll_deg,
+    drive = h.drive,
+    axle_lsd = h.axle_lsd, center_lsd = h.center_lsd, traction_split = h.traction_split,
+    drag_area = h.drag_area or 2.0,
+    shift_time = 0.2, clutch_time = 0.15, shift_latency = 0.25,
+    gear_ratios = h.gear_ratios,
+    suspension = h.suspension,
+    wheel = { radius = P.wheel_r, width = h.wheel_width or P.wheel_w },
+    wheels = wheels,
+    open_seat = P.open_top or false,   -- a convertible: nothing over the driver, so a crash throws them (ADR-0252)
+  }
+end
 local function kit_drivable(specName, opts, h)
   opts = opts or {}
   local kit = require "vehicle_kit"
@@ -195,43 +245,14 @@ local function kit_drivable(specName, opts, h)
   local lights = {}
   for _, l in ipairs(car.lights) do lights[#lights + 1] = l end
   lights[#lights + 1] = { name = "driver_seat", pos = car.driver_seat }
-  local wheels = {}
-  for _, w in ipairs(car.wheels) do
-    wheels[#wheels + 1] = { x = w.pos[1], y = w.pos[2], z = w.pos[3], steered = w.front, driven = true,
-                            hand_brake = not w.front }
-  end
-  local W, H, L = car.size[1], car.size[2], car.size[3]
-  local mass = opts.mass or h.mass or math.floor(L * W * H * 120)
-  return {
-    body = mesh.recompute_normals(mesh.merge(shell)),
-    albedo = { 1, 1, 1 }, metallic = h.metallic or 0.5, roughness = h.roughness or 0.4,
-    parts = parts,
-    lights = lights,
-    chassis = { half = { W * 0.5, H * 0.5, L * 0.5 } },
-    mass = mass,
-    com_offset = h.com_offset or -(0.23 + 0.22 * (H / 1.45)),
-    engine_torque = opts.engine_torque or math.floor(mass * (h.torque_per_kg or 0.46)),
-    max_rpm = h.max_rpm or 6000,
-    max_steer_deg = h.max_steer_deg or 30,
-    brake_torque = math.floor(mass * 1.15),
-    hand_brake_torque = math.floor(mass * 2.9),
-    grip = h.grip,
-    -- the collision's underside follows the drawn body: its floor at the body's ground clearance (never
-    -- under the street rig's 0.22 kerb lift), and an off-roader's nose and tail cut to its approach and
-    -- departure angles (physics_world.h) -- a square box caught rocks the tyres could climb
-    floor_clearance = math.max(0.22, P.clear or 0),
-    approach_deg = h.approach_deg, departure_deg = h.departure_deg,
-    max_roll_deg = h.max_roll_deg,
-    drive = h.drive,
-    axle_lsd = h.axle_lsd, center_lsd = h.center_lsd, traction_split = h.traction_split,
-    drag_area = h.drag_area or 2.0,
-    shift_time = 0.2, clutch_time = 0.15, shift_latency = 0.25,
-    gear_ratios = h.gear_ratios,
-    suspension = h.suspension,
-    wheel = { radius = P.wheel_r, width = h.wheel_width or P.wheel_w },
-    wheels = wheels,
-    open_seat = P.open_top or false,   -- a convertible: nothing over the driver, so a crash throws them (ADR-0252)
-  }
+  local spec = kit_handling(P, car, h, opts)
+  spec.body = mesh.recompute_normals(mesh.merge(shell))
+  spec.albedo = { 1, 1, 1 }
+  spec.metallic = h.metallic or 0.5
+  spec.roughness = h.roughness or 0.4
+  spec.parts = parts
+  spec.lights = lights
+  return spec
 end
 vehicle.kit_drivable = kit_drivable
 
@@ -387,9 +408,9 @@ vehicle.drivable = {
 -- (from_class above) use — over the class packages in vehicle_classes.lua.
 --
 -- The C++ reader (apps/citysim/scripting/vehicle_body.cpp) turns
--- `vehicle.fleet[slot+1]` into ONE vertex-coloured RenderMesh at LEVEL LOAD; a
--- Lua-free (Makefile) build keeps the C++ fleetCarMesh as a fallback, so the
--- streets are never data-dependent to be non-empty.
+-- `vehicle.fleet[slot+1]` into ONE vertex-coloured RenderMesh at LEVEL LOAD.
+-- There is no C++ body fallback any more (fleetCarMesh is gone): a slot that
+-- fails to load logs an error and draws no car (city_render.cpp).
 --
 -- A recipe is:
 --   body   = a Mesh (the mesh.car shell: painted body + lamps + tinted glass)
@@ -411,7 +432,7 @@ vehicle.drivable = {
 -- car's Jolt config is built from, so the simulated wheels land in the arches
 -- drawn for them rather than at a second set of guessed numbers.
 -- `lights` mark the front/rear lamp positions the emissive lamp pass draws
--- (city_render syncCarLamps). Car faces +Z; x>0 = right.
+-- (city_render syncCarLamps). Car faces +Z; x>0 = the driver's left.
 --
 -- The fleet is 3 sedans, 3 hatchbacks, 3 SUVs, a pickup, a van, a box truck
 -- and a CITY BUS (the transit routes used to be driven by sedans).
@@ -424,6 +445,28 @@ vehicle.drivable = {
 -- and the shaped roofline; "low" would paint the glass on flat. Hero cars (the
 -- player's, the lab's) stay "high".
 local FLEET_LOD = "mid"
+
+-- A class slot's DRAWN wheelset as data ({ x, y, z, radius, width, steered, driven, hand_brake }): the wheels
+-- fleet_car bakes into the body, and the ones its handling (class_handling) gives the physics tier. Cheap -- no
+-- mesh -- so the catalogue carries it for a headless sim too.
+local function fleet_wheels(c, d)
+    local r = c.wheel_diameter * 0.5
+    local halfTrack = c.track * 0.5
+    local axleY = -d.height * 0.5 + r
+    local frontZ = d.length * 0.5 - d.front_overhang
+    local rearZ = -(d.length * 0.5 - d.rear_overhang)
+    local ww = math.max(0.18, c.track * 0.13)
+    local out = {}
+    for _, wx in ipairs({ halfTrack - ww * 0.5, -halfTrack + ww * 0.5 }) do
+        for _, wz in ipairs({ frontZ, rearZ }) do
+            -- Front wheels steer; all four are driven (a loaded van still pulls away); the rears take the
+            -- handbrake. Same roles the drivable spec assigns.
+            out[#out + 1] = { x = wx, y = axleY, z = wz, radius = r, width = ww,
+                              steered = wz == frontZ, driven = true, hand_brake = wz ~= frontZ }
+        end
+    end
+    return out
+end
 
 -- Build one fleet recipe from the real generator. `class_name` picks the
 -- vehicle_classes package; `color` is the paint. THE CLASS IS THE SIZE: the
@@ -468,29 +511,16 @@ local function fleet_car(class_name, color)
     -- drivable spec uses above (Jolt drops the wheel by its travel). Copying
     -- that formula parked every wheel a ride-height too high, tucked up inside
     -- the body with nothing touching the road.
-    local r = c.wheel_diameter * 0.5
-    local halfTrack = c.track * 0.5
-    local axleY = -d.height * 0.5 + r
-    local frontZ = d.length * 0.5 - d.front_overhang
-    local rearZ = -(d.length * 0.5 - d.rear_overhang)
-    local ww = math.max(0.18, c.track * 0.13)
     local tyre = { 0.04, 0.04, 0.05 }
-    local wheelParts, placements = {}, {}
-    for _, wx in ipairs({ halfTrack - ww * 0.5, -halfTrack + ww * 0.5 }) do
-        for _, wz in ipairs({ frontZ, rearZ }) do
-            -- cylinder(radius, height) stands on +Y; roll it onto the lateral
-            -- axis so it spins the way the car drives. bake_height_color with
-            -- one colour top and bottom is a flat tint (the mesh API has no
-            -- separate vertex-paint call).
-            local w = mesh.rotate_z(mesh.cylinder(r, ww), math.pi * 0.5)
-            w = mesh.bake_height_color(w, tyre, tyre)
-            wheelParts[#wheelParts + 1] = mesh.translate(w, { wx, axleY, wz })
-            -- Front wheels steer; all four are driven (a loaded van still pulls
-            -- away); the rears take the handbrake. Same roles the drivable spec
-            -- above assigns, so a commandeered car handles like the player's own.
-            placements[#placements + 1] =
-                { x = wx, y = axleY, z = wz, front = (wz == frontZ) }
-        end
+    local wheelParts = {}
+    for _, p in ipairs(fleet_wheels(c, d)) do
+        -- cylinder(radius, height) stands on +Y; roll it onto the lateral
+        -- axis so it spins the way the car drives. bake_height_color with
+        -- one colour top and bottom is a flat tint (the mesh API has no
+        -- separate vertex-paint call).
+        local w = mesh.rotate_z(mesh.cylinder(p.radius, p.width), math.pi * 0.5)
+        w = mesh.bake_height_color(w, tyre, tyre)
+        wheelParts[#wheelParts + 1] = mesh.translate(w, { p.x, p.y, p.z })
     end
 
     -- No fit. Body and wheelset are built at the class's own size and stay there;
@@ -499,17 +529,11 @@ local function fleet_car(class_name, color)
     local body = mesh.recompute_normals(mesh.merge(shell))
     local wheels = mesh.recompute_normals(mesh.merge(wheelParts))
 
-    -- The wheelset as DATA for the physics tier: exactly the wheels drawn above,
-    -- round and at their true radius (nothing to correct for now that nothing is
-    -- scaled). C++ converts these resting centres into Jolt suspension
-    -- attachment points — see configFromBody.
+    -- The wheelset as DATA for the physics tier: exactly the wheels drawn above.
     local layout = {}
-    for _, p in ipairs(placements) do
-        layout[#layout + 1] = {
-            pos = { p.x, p.y, p.z },
-            radius = r, width = ww,
-            steered = p.front, driven = true, hand_brake = not p.front,
-        }
+    for _, p in ipairs(fleet_wheels(c, d)) do
+        layout[#layout + 1] = { pos = { p.x, p.y, p.z }, radius = p.radius, width = p.width,
+                                steered = p.steered, driven = p.driven, hand_brake = p.hand_brake }
     end
 
     -- mesh.car publishes every mount point under `lights`: lamps, and the
@@ -618,13 +642,6 @@ local function kit_car(spec, color)
     rear_hip = car.rear_hip,
   }
 end
--- the catalogue size without building the meshes' materials: the faceted build is cheap, so it is simply
--- measured (a truck's box or a pickup's bed is part of its length)
-local function kit_size(spec)
-  local car = kit.build(kit.SPECS[spec](), 0)
-  return car.size
-end
-
 -- THE CLASSIC SET: today's mesh.car bodies, kept (Glenn: "it would be nice and funny if we kept some of
 -- the current designs as a 'classic' set"). vehicle.classic[i] has the same shape as vehicle.fleet[i].
 local CLASSIC_SLOTS = {
@@ -676,9 +693,14 @@ local function catalogue(slots)
     local out = {}
     for i, slot in ipairs(slots) do
         if slot.kit then
+            local P = kit.SPECS[slot.kit]()
+            local car = kit.build(P, 0)
             out[i] = {
                 class = slot.kit,
-                size = kit_size(slot.kit),
+                size = car.size,
+                -- what the physics tier and a commandeered car drive with: the kit's drivable handling
+                handling = kit_handling(P, car, KIT_HANDLING[slot.kit] or {}),
+                drivable = "kit_" .. slot.kit,   -- the menu's recipe for this car (nil: none)
                 build = function() return kit_car(slot.kit, slot.color) end,
             }
         else
@@ -687,6 +709,8 @@ local function catalogue(slots)
             out[i] = {
                 class = slot.class,
                 size = { d.width, d.height, d.length },
+                handling = class_handling(c, d, fleet_wheels(c, d)),
+                drivable = vehicle[slot.class] and slot.class or nil,
                 build = function() return fleet_car(slot.class, slot.color) end,
             }
         end

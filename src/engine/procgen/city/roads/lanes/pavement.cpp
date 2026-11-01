@@ -8,7 +8,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <chrono>
-#include <thread>
+#include "../../../../../job_system.h"   // parallelRows: the shared pool (ADR-0288)
 #include <cmath>
 #include <numeric>
 #include <set>
@@ -242,13 +242,11 @@ unsigned lanesThreads(unsigned requested = 0) {
     const unsigned hw = std::thread::hardware_concurrency(); return hw == 0 ? 1u : std::min(hw, 64u);
 }
 // Static, contiguous chunks: chunk t is [t*n/T, (t+1)*n/T). Deterministic partition, so per-chunk results
-// concatenated in chunk order reproduce the sequential output exactly.
+// concatenated in chunk order reproduce the sequential output exactly. Run on the shared pool (ADR-0288).
 template <class F> void parallelChunks(size_t n, unsigned threads, F&& fn) {
     if (n == 0) return; const unsigned T = std::max(1u, std::min<unsigned>(threads, static_cast<unsigned>(std::min<size_t>(n, 1u << 16))));
     if (T == 1) { fn(0u, size_t(0), n); return; }
-    std::vector<std::thread> pool; pool.reserve(T - 1);
-    for (unsigned t = 1; t < T; ++t) pool.emplace_back([&fn, t, n, T]() { fn(t, n * t / T, n * (t + 1) / T); });
-    fn(0u, size_t(0), n / T); for (std::thread& th : pool) th.join();
+    engine::sharedJobs().parallelFor(0, T, [&fn, n, T](size_t t) { fn(static_cast<unsigned>(t), n * t / T, n * (t + 1) / T); });
 }
 }  // namespace
 

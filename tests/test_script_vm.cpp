@@ -132,39 +132,6 @@ TEST_CASE(procgen_script_bakes_a_gas_giant_texture) {
                          mesh, &err));
 }
 
-TEST_CASE(procgen_script_builds_a_curved_car_shell) {
-    // mesh.car_shell (ADR-0062): the Lua vehicle recipes (the player's car) use
-    // the SAME lofted body generator the NPC fleet instances — one body path.
-    ScriptVM vm;
-    openProcgenLibrary(vm);
-    std::shared_ptr<RenderMesh> mesh;
-    std::string err;
-    const char* code = R"LUA(
-        return mesh.car_shell("sedan", {0.72, 0.10, 0.10}, {1.8, 1.3, 4.2}, false)
-    )LUA";
-    CHECK(runProcgenMesh(vm, code, mesh, &err));
-    if (!mesh) { CHECK(false); return; }
-    CHECK(mesh->vertices.size() > 100);
-    CHECK(mesh->indices.size() % 3 == 0);
-    // It's the shell: curved (narrower at the roof than the belt) and glazed.
-    Real beltW = 0, roofW = 0;
-    bool hasGlass = false;
-    for (const Vertex& v : mesh->vertices) {
-        if (v.position.y > -0.2 && v.position.y < 0.05)
-            beltW = std::max(beltW, (Real)std::fabs(v.position.x));
-        if (v.position.y > 0.42 && v.position.y < 0.70)
-            roofW = std::max(roofW, (Real)std::fabs(v.position.x));
-        if (std::fabs(v.color.x - 0.05) < 1e-6 && std::fabs(v.color.z - 0.10) < 1e-6)
-            hasGlass = true;
-    }
-    CHECK(roofW < beltW * 0.85);
-    CHECK(hasGlass);
-    // Bad style: a Lua error, not a crash.
-    std::shared_ptr<RenderMesh> bad;
-    CHECK(!runProcgenMesh(vm, "return mesh.car_shell('hovercraft', {1,0,0}, {2,1,4})",
-                          bad, &err));
-}
-
 TEST_CASE(procgen_script_matches_the_cpp_substrate) {
     // ADR-0023: the Lua front-end and the C++ generators are the SAME substrate.
     // An identical recipe must yield an identical mesh.
@@ -562,6 +529,45 @@ TEST_CASE(procgen_terrain_conform_binding_runs) {
     if (!mesh) { CHECK(false); return; }
     CHECK(mesh->vertices.size() == 81u * 81u);
     CHECK(mesh->indices.size() % 3 == 0);
+}
+
+// terrain.route on the one router (ADR-0277: routeOnTerrain, the planner's and the island's): a chain from one end to
+// the other over rough ground, every node on the ground, its legs within the road's hard grade.
+TEST_CASE(procgen_terrain_route_runs_on_the_one_router) {
+    ScriptVM vm;
+    openProcgenLibrary(vm);
+    std::string err;
+    const bool ok = vm.doString(R"LUA(
+        local land = terrain.fbm{ seed=5, freq=0.004, amp=30, octaves=2 }   -- hills too steep to drive straight over
+        local lay = terrain.route(land, { from={x=-150, z=-20}, to={x=150, z=40}, max_grade=0.08, hard_grade=0.12, cell=8 })
+        nodes = #lay.nodes
+        edges = #lay.edges
+        local first, last = lay.nodes[1], lay.nodes[#lay.nodes]
+        ends = math.abs(first.x + 150) + math.abs(first.z + 20) + math.abs(last.x - 150) + math.abs(last.z - 40)
+        worst, offGround = 0, 0
+        for i = 1, #lay.nodes do
+            local n = lay.nodes[i]
+            offGround = math.max(offGround, math.abs(n.y - land:at(n.x, n.z)))
+            if i > 1 then
+                local p = lay.nodes[i - 1]
+                local d = math.sqrt((n.x - p.x)^2 + (n.z - p.z)^2)
+                if d > 1 then worst = math.max(worst, math.abs(n.y - p.y) / d) end
+            end
+        end
+    )LUA", &err);
+    if (!ok) std::printf("    lua: %s\n", err.c_str());
+    CHECK(ok);
+    double nodes = 0, edges = 0, ends = 1, worst = 1, offGround = 1;
+    vm.getGlobalNumber("nodes", nodes);
+    vm.getGlobalNumber("edges", edges);
+    vm.getGlobalNumber("ends", ends);
+    vm.getGlobalNumber("worst", worst);
+    vm.getGlobalNumber("offGround", offGround);
+    std::printf("    terrain.route: %.0f nodes, steepest leg %.3f\n", nodes, worst);
+    CHECK(nodes >= 4 && edges == nodes - 1);   // it winds: a straight line over these hills is too steep
+    CHECK(ends < 1e-6);          // from and to exactly
+    CHECK(offGround < 1e-9);     // every node on the ground
+    CHECK(worst <= 0.12 * 1.25); // the hard grade (a simplified leg spans a few moves)
 }
 
 TEST_CASE(procgen_terrain_conform_block_pads_run) {

@@ -97,13 +97,13 @@ add_library(engine_core STATIC
     src/engine/procgen/leaf_card.cpp
     src/engine/procgen/foliage_kit.cpp
     src/engine/procgen/surface_maps.cpp
-    src/engine/procgen/vehicle_mesh.cpp
     src/engine/procgen/vehicle/car_mesh.cpp
     src/engine/procgen/vehicle/car_interior.cpp
     src/engine/procgen/vehicle/occupant.cpp
     src/engine/procgen/person.cpp
     src/engine/block_body.cpp            # the person as ten blocks: poses, two-bone limbs, the ragdoll's parts
-    src/engine/player/driver_seat.cpp    # the player at the wheel: the seat's jolt, the body's sway, the seated pose (ADR-0252)
+    src/engine/player/driver_seat.cpp    # the player at the wheel: the eject rule and the seated pose (ADR-0252)
+    src/engine/player/seat_motion.cpp    # every rider: the seat's jolt and the body's sway (ADR-0252, ADR-0275)
     src/engine/body_draw.cpp             # the jointed body drawn: blocks + skinned limb tubes by fold
     src/engine/procgen/tree_cache.cpp
     src/engine/procgen/vehicle/train_mesh.cpp
@@ -112,6 +112,7 @@ add_library(engine_core STATIC
     src/engine/procgen/earthwork.cpp
     src/engine/procgen/erosion.cpp
     src/engine/procgen/stream_power.cpp
+    src/engine/procgen/drainage.cpp
     src/engine/procgen/terrain_weather.cpp
     src/engine/procgen/terrain_maps.cpp
     src/engine/procgen/real_tree.cpp
@@ -187,7 +188,6 @@ add_library(engine_core STATIC
     src/engine/procgen/city/roads/road_entity.cpp
     src/engine/procgen/city/roads/road_builder.cpp
     src/engine/procgen/city/roads/ground_grid.cpp
-    src/engine/procgen/city/road_constraints.cpp
     src/engine/procgen/city/road_semantics.cpp
     src/engine/procgen/city/road_rules.cpp
     src/engine/procgen/city/road_offset.cpp
@@ -195,7 +195,6 @@ add_library(engine_core STATIC
     src/engine/procgen/city/building_uses.cpp
     src/engine/procgen/city/building_collider.cpp
     src/engine/procgen/city/city_lots.cpp
-    src/engine/procgen/city/surface_field.cpp
     src/engine/procgen/city/structure_set.cpp
     src/engine/procgen/city/block_grade.cpp
     src/engine/ai/nav_graph.cpp
@@ -233,6 +232,7 @@ add_library(engine_core STATIC
     src/engine/anim/skin_import.cpp
     src/engine/audio/audio_engine.cpp
     src/engine/audio/sfx.cpp
+    src/engine/audio/engine_voices.cpp   # the running cars, heard: one pool (ADR-0285)
     src/engine/audio/sfx_ground.cpp
     src/engine/audio/sfx_motion.cpp
     src/engine/systems/audio_system.cpp
@@ -456,7 +456,6 @@ add_library(citysim STATIC
     src/apps/citysim/bus_stop_props.cpp   # the pole, sign and bench you can see
     src/apps/citysim/city_map_raster.cpp  # the map tool's picture: the city SVG, rasterized (nanosvg)
     src/apps/citysim/places.cpp          # places layer: buildings → routable POIs (ADR-0066)
-    src/apps/citysim/ped_graph.cpp       # pedestrian nav-graph: door-to-door walking (ADR-0066)
     src/apps/citysim/relationships.cpp   # surface-level social graph (ADR-0066)
     src/apps/citysim/city_sim.cpp
     src/apps/citysim/city_render.cpp
@@ -473,6 +472,7 @@ if(RT_ENABLE_SCRIPTING)
         src/apps/citysim/scripting/agent_goals.cpp
         src/apps/citysim/scripting/activities_lua.cpp
         src/apps/citysim/scripting/roles_lua.cpp
+        src/apps/citysim/scripting/signals_lua.cpp
         src/apps/citysim/scripting/vehicle_body.cpp
     )
 endif()
@@ -669,7 +669,8 @@ set(CORE_SOURCES
     src/geometry.cpp
     src/material.cpp
     src/scene.cpp
-    src/kdtree.cpp
+    src/aabb.cpp
+    src/triangle_bvh.cpp
     src/instance.cpp
     src/level_scene.cpp
     src/path_tracer.cpp
@@ -751,7 +752,6 @@ add_executable(run_tests
     tests/test_sdf.cpp
     tests/test_city.cpp
     tests/test_surface_maps.cpp
-    tests/test_vehicle_mesh.cpp
     tests/test_car_mesh.cpp
     tests/test_vehicle_lamps.cpp
     tests/test_model_importer.cpp
@@ -761,7 +761,6 @@ add_executable(run_tests
     tests/test_terrain_field.cpp
     tests/test_earthwork.cpp
     tests/test_winding.cpp
-    tests/test_road_constraints.cpp
     tests/test_sim_rate_ab.cpp
     tests/test_city_stages.cpp
     tests/test_road_semantics.cpp
@@ -822,7 +821,6 @@ add_executable(run_tests
     tests/test_places.cpp
     tests/test_screen_project.cpp
     tests/test_relationships.cpp
-    tests/test_ped_graph.cpp
     tests/test_tier_v.cpp
     tests/test_sim_scale.cpp
     tests/test_city_lots.cpp
@@ -841,7 +839,7 @@ add_executable(run_tests
     tests/test_room_plan.cpp
     tests/test_ladders.cpp
     tests/test_furniture.cpp
-    tests/test_surface_field.cpp
+    tests/test_flatten_grade.cpp
     tests/test_architect.cpp
     tests/test_erosion_gpu.cpp
     tests/test_city_plan.cpp
@@ -1015,7 +1013,6 @@ if(RT_ENABLE_PHYSICS)
         src/engine/systems/player_arms_system.cpp   # the block arms in first person
         src/engine/systems/player_body_system.cpp   # the body posed in third person, and limp
         src/engine/systems/teleport_system.cpp
-        src/engine/systems/shooting_system.cpp
         src/engine/systems/vehicle_system.cpp
         src/engine/systems/nature_collider_system.cpp   # trunk + rock colliders round the player (#55)
         src/engine/systems/footstep_system.cpp   # the player's feet, heard (#62/#63/#64)
@@ -1114,7 +1111,7 @@ function(rt_build_vulkan_shaders)
     set(VK_SHADERS mesh.vert mesh.frag mesh_wire.frag mesh_shadow.vert mesh_shadow_alpha.vert mesh_shadow_alpha.frag terrain.vert
                    sky.vert sky.frag composite.vert composite.frag bloom.frag
                    ssao.frag ssao_blur.frag ssr.frag dof.frag brdf_lut.frag
-                   atmosphere.frag clouds.frag clouds_composite.frag water.vert water.frag star.frag
+                   clouds.frag clouds_composite.frag
                    ui.vert ui.frag occlusion_reduce.comp crowd.comp)
     set(VK_SPV_FILES "")
     foreach(shader ${VK_SHADERS})

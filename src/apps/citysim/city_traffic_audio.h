@@ -2,7 +2,7 @@
 #define RAYTRACER_APPS_CITYSIM_CITY_TRAFFIC_AUDIO_H
 
 #include "../../engine/system.h"
-#include "../../engine/audio/audio_engine.h"
+#include "../../engine/audio/engine_voices.h"   // EngineVoicePool
 #include "city_render.h"
 
 #include <vector>
@@ -16,10 +16,9 @@ namespace citysim {
 // with forty of them should sound like one. Same core, same clip, same rev
 // curve — the difference is only where the speed comes from.
 //
-// A VOICE POOL, not a voice per car: the nearest few driving agents get the
-// mixer's slots and everything else is silence you would not have picked out
-// anyway. Voices follow their agent across frames (so a car keeps its note as
-// it passes) and fade rather than cut when they lose their slot.
+// The nearest 8 driving agents within 70 m, voiced by the engine pool (engine/audio/engine_voices.h) the physics
+// cars share; seed 2's rasp, so the player's own engine (seed 1) still reads as theirs. The planner gives no pedal,
+// so the pool reads each car's load from its change of speed.
 //
 // Commandeered agents (`released`) are skipped: the player's car is a real
 // physics Vehicle by then, and VehicleSystem voices it — one car, one engine.
@@ -35,17 +34,8 @@ public:
     static constexpr engine::Real kAudibleRange = 70.0;
 
 private:
-    struct Voice {
-        int agent = -1;
-        engine::AudioVoiceHandle voice;
-        float gain = 0.0f;
-        engine::Real prevSpeed = 0;   // for the load (accelerating?) estimate
-        bool wanted = false;
-    };
-
     CityRenderSystem& city_;
-    engine::AudioClipHandle clip_;
-    std::vector<Voice> voices_;
+    engine::EngineVoicePool engines_{kMaxVoices, kAudibleRange, 2};
 };
 
 }  // namespace citysim

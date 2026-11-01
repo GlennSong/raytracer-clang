@@ -32,7 +32,6 @@ namespace {
 
 constexpr Real kWalk = 1.8;               // m/s along a carriage
 constexpr Real kStandingEye = 1.62;       // eye above the floor
-constexpr Real kEyeAboveTransform = 0.7;  // PlayerSystem's eye above the capsule centre
 constexpr Real kWallClear = 0.28;         // how near a wall a standing body comes
 constexpr Real kSeatedEye = 0.74;         // eye above the seat's hip point
 constexpr Real kSeatReach = 2.2;          // seats offered within this of where you stand
@@ -68,8 +67,9 @@ void TrainSystem::build(engine::FrameContext& ctx) {
         tracks.insert(tracks.end(), rt.tracks.begin(), rt.tracks.end());
     });
     if (tracks.empty()) return;
-    // THE STOCK, per line by its track's class: a metro's subway, a city line's light rail, else intercity (RT_TRAIN_KIND
-    // puts one kind on every line, for a look at the others on the same rails)
+    // THE STOCK, per line by its track's class: a city line's light rail, else intercity. "metro" -> subway is a hook for
+    // a graph that authors a metro track class; no built-in class is called that (road_graph_spec.cpp: rail, light_rail).
+    // RT_TRAIN_KIND puts one kind on every line, for a look at the others on the same rails.
     auto kindOf = [](const std::string& cls) {
         std::string name = cls == "metro" ? "subway" : cls == "light_rail" ? "light_rail" : "intercity";
         if (const char* k = std::getenv("RT_TRAIN_KIND")) name = k;
@@ -536,8 +536,8 @@ void TrainSystem::ride(engine::FrameContext& ctx, Real dt) {
         ps->local = local;
         ps->sitting = sitting;
         ps->eyeAbove = sitting ? kSeatedEye : kStandingEye;
-        ps->hipBelow = kSeatedEye - kEyeAboveTransform;
-        engine::rideStep(ctx.world, &physics_.physicsWorld(), player, &fly_);
+        ps->hipBelow = kSeatedEye - engine::kEyeAboveCentre;
+        engine::rideStep(ctx.world, &physics_.physicsWorld(), player, &fly_, dt);
         pinned_ = pt->position;
     };
     if (seat_ >= 0) {   // seated: pinned to the seat, the walk keys do nothing

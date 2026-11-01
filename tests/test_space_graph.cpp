@@ -145,6 +145,24 @@ TEST_CASE(walker_caps_decide_what_the_graph_reaches) {
     CHECK(reachable(g, -1, g.roof, WalkerCaps{}));
 }
 
+// A void (a railing edge onto an atrium) is seen across, never walked: a cell reached only through one is unreached.
+TEST_CASE(a_void_portal_is_never_passable) {
+    Portal v;
+    v.kind = Portal::Kind::Void;
+    CHECK(!passable(v, WalkerCaps{}));
+    SpaceGraph g;
+    g.cells.resize(2);
+    Portal door;
+    door.a = 0;
+    door.b = -1;
+    g.portals.push_back(door);
+    v.a = 0;
+    v.b = 1;
+    g.portals.push_back(v);
+    CHECK(reachable(g, -1, 0, WalkerCaps{}));
+    CHECK(!reachable(g, -1, 1, WalkerCaps{}));
+}
+
 TEST_CASE(storey_view_equals_storey_plans_every_recipe) {
     int buildings = 0, mismatches = 0;
     everyRecipe([&](const char* name, uint32_t seed, const Poly2& plan, const BuildingParams& params) {

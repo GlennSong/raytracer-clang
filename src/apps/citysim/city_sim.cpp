@@ -161,9 +161,10 @@ constexpr Real kVJunctionDelay = 1.5;   // avg dwell per stop/yield junction cro
 constexpr Real kAgentGridCell = 64.0;
 constexpr Real kGridPad = 250.0;
 
-// Lane spacing that fits THIS road: split the right half of the carriageway
-// evenly among the direction's lanes, so a car sits centred in its own lane and
-// clearly on its (right-hand) side. A fixed lane width instead leaves a car
+// Lane spacing that fits THIS road: split the kerb half of the carriageway
+// (rightOf, nav_graph.h: the driver's left -- traffic keeps left) evenly among
+// the direction's lanes, so a car sits centred in its own lane and clearly on
+// its own side. A fixed lane width instead leaves a car
 // hugging the centreline on a wide road, which reads as driving on the wrong
 // side. laneCenter places lane i at (0.5 + i) * spacing off the centreline.
 Real laneSpacing(const engine::NavLink& l, Real drivableWidth) {
@@ -385,7 +386,7 @@ void CitySim::build(const NavGraph& graph, int driverCount, int pedCount, uint32
     junctionGrid_.configure(engine::Vec2(0, 0), engine::Vec2(1, 1),
                             kAgentGridCell, 0);
     maxJunctionRadius_ = 0;
-    signals_.build(graph);
+    signals_.build(graph, signalTiming_);
     // Curbside bays (R6b): mid-link, in the road's own PARKING BAND, well clear
     // of junction mouths; ~55% seeded with scenery cars so streets read
     // parked-along from the first frame.
@@ -720,8 +721,8 @@ void CitySim::build(const NavGraph& graph, int driverCount, int pedCount, uint32
         // maps the same index to a body) draws exactly this shape + size.
         if (a.mode == Agent::Mode::Driver) {
             SimVehicle v;
-            const VehicleBody& body =
-                fleetBody(ambientSlotFor(static_cast<int>(vehicles_.size())));
+            v.slot = ambientSlotFor(static_cast<int>(vehicles_.size()));
+            const VehicleBody& body = fleetBody(v.slot);
             v.length = body.length;
             v.width = body.width;
             v.height = body.height;
@@ -1069,7 +1070,7 @@ void CitySim::assignPlaces(const PlaceMap& places, const NavGraph& graph) {
         a.shopDoor = Vec2(r.shopDoor[0], r.shopDoor[1]); a.pos = Vec2(r.pos[0], r.pos[1]);
         a.heading = Vec2(r.heading[0], r.heading[1]); a.departHome = r.departHome; a.departWork = r.departWork;
         a.commuteSeconds = r.commuteSeconds;
-        a.role = static_cast<Agent::Role>(r.role); a.archetype = static_cast<Agent::Mode>(r.archetype);
+        a.role = static_cast<RoleId>(r.role); a.archetype = static_cast<Agent::Mode>(r.archetype);
         a.mode = static_cast<Agent::Mode>(r.mode); a.indoors = r.indoors != 0;
     };
     auto record = [](const Agent& a) {
@@ -1096,7 +1097,7 @@ void CitySim::assignPlaces(const PlaceMap& places, const NavGraph& graph) {
     // only shared, settled data -- places, the graph, the job and venue indexes, the bus network -- and write only
     // that agent, so they run across the cores and come out identical (RT_POPULATION_VERIFY checks it). What was
     // lazy and shared is settled first: every place's node, the job cells.
-    engine::JobSystem decide;
+    engine::JobSystem& decide = engine::sharedJobs();   // the process's pool (ADR-0288)
     decide.parallelFor(0, places.places().size(), [&](std::size_t pi) { nodeOf(static_cast<PlaceId>(pi)); }, 64);
     for (PlaceId cand : jobs) {
         const Vec2 q = places[cand].site;
@@ -1170,7 +1171,7 @@ void CitySim::assignPlaces(const PlaceMap& places, const NavGraph& graph) {
         // and are a Shopkeeper (if their workplace is a shop) or a Commuter. All
         // deterministic from the brain's bits (no rng draw).
         a.work = a.home;
-        a.role = Agent::Role::Commuter;
+        a.role = kRoleCommuter;
         const uint32_t roleRoll = (a.brain >> 20) & 0xFF;   // 0..255
         const bool stroller = !parks.empty() && roleRoll < 51;   // ~20%
         auto unit = [](uint32_t bits) { return (bits & 0xFF) / 255.0; };
@@ -1191,7 +1192,7 @@ void CitySim::assignPlaces(const PlaceMap& places, const NavGraph& graph) {
             if (anchor >= 0 && !commutable(hn, anchor)) anchor = -1;
         }
         if (anchor >= 0) {
-            a.role = Agent::Role::Stroller;
+            a.role = kRoleStroller;
             a.work = anchor;
             a.workPlace = kNoPlace;
             a.workDoor = graph.nodes[static_cast<std::size_t>(anchor)];
@@ -1205,7 +1206,7 @@ void CitySim::assignPlaces(const PlaceMap& places, const NavGraph& graph) {
         } else if (stroller) {
             PlaceId pk = parks[(a.brain >> 4) % parks.size()];
             if (commutable(hn, nodeOf(pk))) {
-                a.role = Agent::Role::Stroller;
+                a.role = kRoleStroller;
                 a.work = nodeOf(pk);              // a daytime destination, not a job
                 a.workPlace = kNoPlace;
                 a.workDoor = doorOf(pk);          // rests at the park, not the kerb
@@ -1511,7 +1512,7 @@ void CitySim::assignPlaces(const PlaceMap& places, const NavGraph& graph) {
                     const Real dh = close < 23.5 ? close + 0.5 : 24.0;
                     if (authored && dw != dh) {
                         // Open the shop before it opens, close it after.
-                        a.role = Agent::Role::Shopkeeper;
+                        a.role = kRoleShopkeeper;
                         a.departWork = dw;
                         a.departHome = dh;
                     }
@@ -1543,7 +1544,7 @@ void CitySim::assignPlaces(const PlaceMap& places, const NavGraph& graph) {
         int commuters = 0;
         for (int i = 0; i < static_cast<int>(agents_.size()); ++i) {
             const Agent& a = agents_[static_cast<std::size_t>(i)];
-            if (a.role != Agent::Role::Commuter || isBus(i) || isTaxi(i) || a.homePlace == kNoPlace || a.home < 0) continue;
+            if (a.role != kRoleCommuter || isBus(i) || isTaxi(i) || a.homePlace == kNoPlace || a.home < 0) continue;
             homeCells[cellKey(static_cast<int64_t>(std::floor(a.homeDoor.x / kCell)),
                               static_cast<int64_t>(std::floor(a.homeDoor.y / kCell)))].push_back(i);
             ++commuters;
@@ -1615,7 +1616,7 @@ void CitySim::assignPlaces(const PlaceMap& places, const NavGraph& graph) {
                 const ResidentRole& role = roles_.roles[static_cast<std::size_t>(j.role)];
                 const StaffSpec& sp = role.staff;
                 const Place& p = places[j.place];
-                a.role = static_cast<Agent::Role>(j.role);
+                a.role = static_cast<RoleId>(j.role);
                 a.workPlace = j.place;
                 a.work = j.node;
                 a.workDoor = doorOf(j.place);
@@ -1682,7 +1683,7 @@ void CitySim::assignPlaces(const PlaceMap& places, const NavGraph& graph) {
     }
     }   // decided (not read from the cache)
     students_ = 0;
-    for (const Agent& a : agents_) students_ += a.role == Agent::Role::Student ? 1 : 0;
+    for (const Agent& a : agents_) students_ += a.role == kRoleStudent ? 1 : 0;
     tagSpots();   // the venues are known now: which spots are on the campus
 
     // Seed the surface-level social graph: agents sharing a workplace are
@@ -3353,7 +3354,7 @@ engine::Vec2 CitySim::freeStandingSpot(const Agent& a, engine::Vec2 want,
     const int self = indexOf(a);
     const Real al = along.length();
     const Vec2 u = al > 1e-6 ? along * (1.0 / al) : Vec2(1, 0);
-    const Vec2 side(u.y, -u.x);   // right of travel: away from the kerb on the right-hand walk
+    const Vec2 side(u.y, -u.x);   // rightOf(u): the walker's own left, away from the kerb (walkers keep left too)
     std::vector<int> near;
     // the nearest body to p, squared (capped at the 1.5 m query)
     auto nearest2 = [&](Vec2 p) {
@@ -3668,7 +3669,7 @@ void CitySim::assignStudents(const PlaceMap& places, const NavGraph& graph) {
         ++inHall;
         const Hall& H = live[hall];
         Agent& a = agents_[static_cast<std::size_t>(cand[static_cast<std::size_t>(c)].second)];
-        a.role = Agent::Role::Student;
+        a.role = kRoleStudent;
         a.homePlace = H.id; a.home = H.node; a.homeDoor = doorOf(H.id);
         a.restNode = H.node; a.pos = a.homeDoor; a.indoors = true;
         if (!graph.outLinks[static_cast<std::size_t>(H.node)].empty())
@@ -3764,9 +3765,11 @@ void CitySim::setBuses(int routes, int stopsPerRoute, int busCount, Real maxWalk
         if (agents_[i].car >= 0 &&
             agents_[i].car < static_cast<int>(vehicles_.size())) {
             VehicleBody bb{11.4, 2.55, 3.20, VehicleType::Bus};
+            int busSlot = -1;
             for (int fs = 0; fs < fleetSize(); ++fs)
-                if (fleetBody(fs).type == VehicleType::Bus) { bb = fleetBody(fs); break; }
+                if (fleetBody(fs).type == VehicleType::Bus) { bb = fleetBody(fs); busSlot = fs; break; }
             SimVehicle& sv = vehicles_[static_cast<std::size_t>(agents_[i].car)];
+            sv.slot = busSlot;
             sv.length = bb.length;
             sv.width = bb.width;
             sv.height = bb.height;
@@ -3825,6 +3828,7 @@ int CitySim::addStationedVehicle(VehicleType type, Vec2 pos, Vec2 heading, Real 
     v.width = bb.width;
     v.height = bb.height;
     v.type = type;
+    v.slot = slot;
     v.pos = pos;
     v.heading = heading;
     v.parkedY = y;
@@ -5126,7 +5130,7 @@ void CitySim::advance(Agent& a, Real dt, Real gap, Real minGap) {
             // ROAD RULES (Glenn, 2026-10-02: "Should we mimic road rules? Faster cars are in the furthest lane?" --
             // "our cars and roads are left lane like the uk or japan. And I want to keep it that way"). Traffic
             // drives on the LEFT: lane 0 lies next to the centre line (the OFFSIDE, overtaking lane) and the last
-            // lane is the NEARSIDE, the kerb. (NavGraph::rightOf is the kerb side: in world x/z it points left.)
+            // lane is the NEARSIDE, the kerb. (engine::rightOf (nav_graph.h) is the kerb side: in world x/z it points left.)
             // Not at a junction: nobody changes lane in the box or on its threshold.
             if (lanes > 1 && a.speed > 3.0 && std::fabs(dl) < 0.05 && !nearJunction(a.pos, 6.0)) {
                 const int kerb = lanes - 1;
@@ -5214,7 +5218,17 @@ void CitySim::advance(Agent& a, Real dt, Real gap, Real minGap) {
     // Junction/signal caps are shared road rules and stay unscaled.
     Real target = (car ? engine::classSpeed(nav_->links[li].klass) : kWalkSpeed) *
                   a.speedFactor;
-    Real accel = car ? kCarAccel : kPedAccel;
+    // A car's launch is its own (item 23): nine tenths of what its body can pull away at, the headroom the stock
+    // kCarAccel kept over the old box sedan, and never over kCarAccel -- a bus pulls away like a bus.
+    Real accel = kPedAccel;
+    if (car) {
+        accel = kCarAccel;
+        if (a.vehicle >= 0 && a.vehicle < static_cast<int>(vehicles_.size())) {
+            const int slot = vehicles_[static_cast<std::size_t>(a.vehicle)].slot;
+            const Real launch = slot >= 0 && slot < static_cast<int>(fleet_.size()) ? fleet_[static_cast<std::size_t>(slot)].launch : 0;
+            if (launch > 0) accel = std::min(kCarAccel, Real(0.9) * launch);
+        }
+    }
     // Junction rules (stop line, signal brake, box occupancy / turn yield) cap
     // the target; the gate carries the line the hard clamp below holds at.
     JunctionGate gate = junctionSpeedCap(a, li, target);
@@ -5949,7 +5963,7 @@ void CitySim::arriveOrChain(Agent& a, Real vArrive) {
         const bool atWork =
             node == a.work &&
             (a.workPlace != kNoPlace ||
-             (a.role == Agent::Role::Stroller && a.work != a.home));
+             (a.role == kRoleStroller && a.work != a.home));
         const bool atShop = a.shopPlace != kNoPlace && node == a.shop;
         // Where the agent is now: INSIDE at a door (not drawn), or outside
         // (drawn, standing somewhere of its own).
@@ -6009,7 +6023,7 @@ void CitySim::arriveOrChain(Agent& a, Real vArrive) {
             inside = true;
         } else if (atWork) {
             a.pos = a.workDoor;
-            inside = a.role != Agent::Role::Stroller;   // the park is outside
+            inside = a.role != kRoleStroller;   // the park is outside
         } else if (atShop) {
             a.pos = a.shopDoor;
             inside = true;
@@ -6251,8 +6265,9 @@ void CitySim::computeCarWedge() {
         // stopping horizon. The conflicts the corridor can't see: two greens
         // turning across each other, unsignalled crossings, merge angles.
         // Anti-deadlock is ASYMMETRY: I yield only to a crosser approaching
-        // from my RIGHT (right-hand traffic); it sees me on ITS left and
-        // drives on — mutual yield cannot form. A crosser that a red signal
+        // from my maths RIGHT (rightOf, nav_graph.h: the driver's left, as
+        // traffic keeps left); it sees me on its other side and drives on —
+        // mutual yield cannot form. A crosser that a red signal
         // will stop before the box is exempt (a green driver assumes signal-
         // stopped traffic stays stopped); one already committed is not.
         for (int bi : queryScratch_) {
@@ -7586,7 +7601,7 @@ void CitySim::stepTick(Real dt, Real hoursPerSecond) {
         // herd a walker like a boid.
         Real prev = a.lateralOffset;
         Real maxDelta = kPedLateralRate * dt;
-        // TOWARD THE ROAD (left of travel: a walker keeps to its street's right-hand pavement) only as far as the verge
+        // TOWARD THE ROAD (maths left of travel, the walker's own right: walkers keep left) only as far as the verge
         // allows -- a full 1.6 m lean put a walker stepping round someone 0.6 m into the carriageway (walkersInRoad:
         // "avoiding, in the street it walks along"); toward the buildings, the whole lean
         // -- and where the road side has not the room for the step, it goes round on the buildings' side instead

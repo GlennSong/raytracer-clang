@@ -9,10 +9,21 @@ namespace citysim {
 
 enum class SignalState { Green, Yellow, Red };
 
-// A movement through a junction, in the nav graph's frame (traffic keeps right: a LEFT turn crosses
-// the oncoming stream).
+// A movement through a junction, named in the nav graph's maths frame like rightOf (moveOf: Left =
+// counter-clockwise in x/z). Traffic keeps LEFT, so Move::Left is the DRIVER'S right turn -- the one that
+// crosses the oncoming stream -- and every "left turn"/"left arrow" below means that movement.
 enum class Move { Left, Straight, Right };
 Move moveOf(const engine::Vec2& in, const engine::Vec2& out);
+
+// A signal cycle's times, seconds: per group, its green, yellow and all-red (and a lead arrow's green and yellow
+// where the junction has one); WALK closes each full cycle. Authored in assets/scripts/signals.lua (loadSignalTiming);
+// these defaults are that file's values, by test. A 2-group cycle stays near the old 34 s two-phase period --
+// longer cycles queue more cars per red than small city blocks hold, and a saturated block RING is a physical
+// deadlock no rule can undo.
+struct SignalTiming {
+    double green = 10.0, yellow = 2.0, allRed = 1.5, walk = 8.0;
+    double arrow = 7.0, arrowYellow = 2.5;
+};
 
 // Stoplights over a NavGraph's junctions (ADR-0060, reworked roads-v2.1 R3).
 // Phases come from the junction's CONFLICT GRAPH, not bearing parity: two
@@ -33,14 +44,8 @@ Move moveOf(const engine::Vec2& in, const engine::Vec2& out);
 // is a pure function of accumulated time.
 class SignalController {
 public:
-    // Build per-junction phase groups. greenTime/yellowTime/allRedTime are
-    // per-group durations; walkTime closes each full cycle.
-    // Defaults keep a 2-group cycle near the old 34 s two-phase period —
-    // longer cycles queue more cars per red than small city blocks hold,
-    // and a saturated block RING is a physical deadlock no rule can undo.
-    void build(const engine::NavGraph& graph, double greenTime = 10.0,
-               double yellowTime = 2.0, double allRedTime = 1.5,
-               double walkTime = 8.0);
+    // Build per-junction phase groups, cycling on `timing`.
+    void build(const engine::NavGraph& graph, const SignalTiming& timing = SignalTiming{});
 
     // Advance the shared signal clock.
     void update(double dt);
@@ -72,8 +77,7 @@ private:
     std::vector<char> leftArrow_;   // per link: its left turn has a lead arrow
     std::vector<int> nodeOf_;   // per link: the junction node it enters
     std::unordered_map<int, NodePlan> nodes_;   // per signalled junction
-    double green_ = 12.0, yellow_ = 2.5, allRed_ = 2.5, walk_ = 7.0;
-    double arrow_ = 7.0, arrowYellow_ = 2.5;   // a lead arrow's green and yellow
+    SignalTiming t_;
     double clock_ = 0.0;
     double cycleAt(const NodePlan& plan, double& period) const;   // local time
     double slotOf(const NodePlan& plan, int g) const;

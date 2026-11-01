@@ -1,19 +1,23 @@
 #include "road_rules.h"
+#include "roads/lanes/road_graph_spec.h"   // the road class table: the grades
 
 #include <algorithm>
 
 namespace engine {
 
 ClassRules DesignRules::forClass(RoadClass c) const {
+    // the grade is the road class table's (roads/lanes road_graph_spec, ADR-0276); the radius and the cross-section
+    // are this table's own
+    auto g = [](const char* name) { return roads::lanes::roadClass(name).gMax; };
     switch (c) {
-        // class         minRadius  maxGrade  laneW  lanes  divided  sidewalk
-        case RoadClass::Freeway:   return { 300.0, 0.05, 3.6, 6, true,  0.0 };
-        case RoadClass::Arterial:  return {  80.0, 0.08, 3.5, 4, false, 4.5 };
-        case RoadClass::Collector: return {  40.0, 0.10, 3.4, 2, false, 3.5 };
-        case RoadClass::Local:     return {  15.0, 0.12, 3.2, 2, false, 3.0 };
-        case RoadClass::Ramp:      return {  25.0, 0.06, 4.2, 1, false, 0.0 };
+        // class         minRadius  maxGrade           laneW  lanes  divided  sidewalk
+        case RoadClass::Freeway:   return { 300.0, g("freeway"),   3.6, 6, true,  0.0 };
+        case RoadClass::Arterial:  return {  80.0, g("arterial"),  3.5, 4, false, 4.5 };
+        case RoadClass::Collector: return {  40.0, g("collector"), 3.4, 2, false, 3.5 };
+        case RoadClass::Local:     return {  15.0, g("local"),     3.2, 2, false, 3.0 };
+        case RoadClass::Ramp:      return {  25.0, g("ramp"),      4.2, 1, false, 0.0 };
     }
-    return { 15.0, 0.12, 3.2, 2, false, 3.0 };  // unreachable; keeps the compiler happy
+    return { 15.0, g("local"), 3.2, 2, false, 3.0 };  // unreachable; keeps the compiler happy
 }
 
 CrossSection DesignRules::crossSectionFor(RoadClass c) const {

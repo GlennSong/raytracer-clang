@@ -10,6 +10,8 @@
 #include <vector>
 #include <string>
 
+struct lua_State;
+
 namespace engine {
 
 class ScriptVM;
@@ -81,6 +83,11 @@ struct VehicleSpec {
 // UNVERIFIED: the Lua submodule can't be fetched here, so this hasn't compiled.
 bool loadVehicleSpec(ScriptVM& vm, const std::string& recipe, uint32_t seed,
                      VehicleSpec& out, std::string* err = nullptr);
+
+// The one handling reader (item 23, #117): the handling table at stack index `t` -- chassis, mass, engine,
+// brakes, grip, drivetrain, gearbox, suspension, wheels -- into `out.config` and its rig and drivetrain flags.
+// loadVehicleSpec reads a recipe's spec with it, and the city reads each fleet slot's `handling` with it.
+void readVehicleHandling(lua_State* L, int t, VehicleSpec& out);
 
 // The DRIVABLE CATALOGUE (vehicles.lua `vehicle.drivable`): what the player can pick and drop. `drive` is
 // "fwd" | "rwd" | "awd" | "4wd" (part-time). The VM must have vehicles.lua loaded.

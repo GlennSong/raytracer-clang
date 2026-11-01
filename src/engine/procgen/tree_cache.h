@@ -5,8 +5,10 @@
 // the real_tree forest's 42 -- every variant grown at its four levels on every load, the mature oak's ~7 s each): a
 // forest's recipe species, all its variants' levels (tree_lods.h RecipeTreeLevel: the meshes, the card atlases, the
 // bands), in one file under cache/trees, keyed by everything that grows them -- the recipe file's bytes, the recipe's
-// name and age, the seeds, the bands, kTreeCacheVersion and the engine's build (a commit is a new key: a changed
-// grower never wears an old tree). RT_TREE_CACHE=0 grows them every time. Kept under RT_TREE_CACHE_MAX_GB (default 4):
+// name and age, the seeds, the bands, kTreeCacheVersion and the engine's build (engineIdentity().version: the
+// `git describe` CMake took at configure time, so a commit is a new key only once the build reconfigures; until then
+// kTreeCacheVersion is what keeps a changed grower from wearing an old tree). RT_TREE_CACHE=0 grows them every
+// time. Kept under RT_TREE_CACHE_MAX_GB (default 4):
 // a write deletes the least recently used files past it.
 
 #include "tree_lods.h"

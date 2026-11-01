@@ -6,6 +6,9 @@
               "valleys": [{"x": 120, "width": 90, "depth": 14.0}],
               "hills": [{"x": -560, "y": -60, "r": 160, "h": 10.0}]},
   "rules": {"closing": 3.0, "bridge_h": 4.0, "pier_spacing": 24.0, "conform_w": 14.0},
+  "classes": {
+    "local": {"w": 3.5, "fwd": 1, "back": 1, "shoulder": 0.0, "sidewalk": 1.8, "g_max": 0.09, "rank": 1, "thick": 0.5, "window": 40.0}
+  },
   "edges": [
     {"id": "south", "class": "rail", "path": {"type": "polyline", "points": [[-400, -200], [400, -200]]},
      "platforms": [{"name": "Central", "s0": 330, "s1": 470, "side": "both", "w": 4.5}]},

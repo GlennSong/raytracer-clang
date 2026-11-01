@@ -29,92 +29,6 @@ using engine::PhysicsWorld;
 namespace {
 constexpr Real kCommandeerRadius = 4.0;   // same reach as VehicleSystem's enter
 
-// SUSPENSION, and the trap in it. PhysicsWorld::VehicleWheel::position is the
-// suspension ATTACHMENT point — Jolt hangs the wheel below it — so feeding it a
-// wheel's drawn RESTING centre parks the whole chassis one suspension-drop too
-// high, on wheels that dangle below the arches. With the frequency-based spring
-// the resting drop is clamp(max - kStaticDeflection, min, max) and is
-// MASS-INDEPENDENT: a 1100 kg hatchback and a 2600 kg truck settle identically
-// (measured across travel and mass in tests/test_driving_lab.cpp, which pins
-// both this constant and the rule).
-//
-// The stock 0.20/0.45 travel drops a wheel 0.375 m. That is what jacked every
-// commandeered car into the air and made the tall ones feel top-heavy — the CoG
-// rises with the body. Real cars move a fraction of that.
-// (The rule itself lives in PhysicsWorld so the drivable spec shares it.)
-constexpr Real kSuspensionMin = PhysicsWorld::kStreetSuspensionMin;
-constexpr Real kSuspensionMax = PhysicsWorld::kStreetSuspensionMax;
-constexpr Real kSuspensionRestDrop = PhysicsWorld::kStreetSuspensionRestDrop;
-
-// A Jolt vehicle config sized to a fleet body — a 4WD arcade car like the
-// player's sedan, scaled up for a van/box-truck. Front wheels steer; all four
-// are driven (heavy bodies still pull away), rear wheels take the handbrake.
-//
-// `layout` is the fleet recipe's own wheelset (vehicles.lua `wheel_layout`),
-// cut from the same fitted geometry as the drawn car. Prefer it: the derived
-// fallback below guesses an axle offset from the body length and a radius from
-// its height, and those guesses miss the drawn arches by several centimetres —
-// the same class of mismatch as the drivable spec's old hardcoded 0.34 radius
-// against a 0.62 m wheel. The fallback survives only for a recipe that
-// publishes no layout at all.
-PhysicsWorld::VehicleConfig configFromBody(
-    const VehicleBody& b, const std::vector<CityRenderSystem::CarWheel>& layout) {
-    PhysicsWorld::VehicleConfig c;
-    c.chassisHalfExtent = Vec3(b.width * 0.5, b.height * 0.5, b.length * 0.5);
-    c.mass = 900.0 + b.length * b.width * 180.0;   // ~1500 kg sedan, more for a truck
-    c.maxSteerDegrees = 32.0;
-    c.engineTorque = 650.0;
-    c.maxRPM = 6000.0;
-    c.brakeTorque = 1600.0;
-    c.handBrakeTorque = 4200.0;
-    c.friction = 1.0;
-    // Centre of gravity, derived rather than fixed. A flat -0.4 sits low under a
-    // sedan but high under a 2.8 m box truck, which is the other half of "top
-    // heavy". Same anchor the drivable spec uses (vehicles.lua), so a sedan lands
-    // on the value it was hand-tuned to and taller bodies drop further.
-    c.comOffsetY = -(0.23 + 0.22 * (b.height / 1.45));
-
-    // Lift each attachment point by the drop so the wheel RESTS where the car is
-    // drawn (see kSuspensionRestDrop above).
-    auto attach = [](PhysicsWorld::VehicleWheel& w, Vec3 restCentre) {
-        w.position = restCentre + Vec3(0, kSuspensionRestDrop, 0);
-        w.suspensionMin = kSuspensionMin;
-        w.suspensionMax = kSuspensionMax;
-        w.suspensionFrequency = PhysicsWorld::kStreetSuspensionFrequency;
-        w.suspensionDamping = PhysicsWorld::kStreetSuspensionDamping;
-    };
-
-    if (!layout.empty()) {
-        for (const CityRenderSystem::CarWheel& s : layout) {
-            PhysicsWorld::VehicleWheel w;
-            attach(w, s.pos);
-            w.radius = s.radius;
-            w.width = s.width;
-            w.steered = s.steered;
-            w.driven = s.driven;
-            w.handBrake = s.handBrake;
-            c.wheels.push_back(w);
-        }
-        return c;
-    }
-
-    Real hw = b.width * 0.5 - 0.10;
-    Real hl = b.length * 0.34;
-    Real wr = std::max(Real(0.30), b.height * 0.28);
-    auto wheel = [&](Real x, Real z, bool front) {
-        PhysicsWorld::VehicleWheel w;
-        attach(w, Vec3(x, -b.height * 0.5 + wr, z));
-        w.radius = wr;
-        w.width = 0.24;
-        w.steered = front;
-        w.driven = true;
-        w.handBrake = !front;
-        return w;
-    };
-    c.wheels = { wheel(hw, hl, true), wheel(-hw, hl, true),
-                 wheel(hw, -hl, false), wheel(-hw, -hl, false) };
-    return c;
-}
 }  // namespace
 
 void CityVehicleSystem::update(engine::FrameContext& ctx) {
@@ -237,6 +151,13 @@ void CityVehicleSystem::update(engine::FrameContext& ctx) {
     // The ADOPTED fleet's body, so the promoted car's chassis, mass and CoG come
     // from the same catalogue entry its drawn shell was built from.
     const VehicleBody& body = sim.fleetBody(slot);
+    // ...and what it drives with: the slot's handling (item 23, #117), the same config its kit or class gives the
+    // car the player drops from the menu -- one handling builder, so a commandeered sedan drives as that sedan.
+    const PhysicsWorld::VehicleConfig* own = city_.carConfig(slot);
+    if (!own) {
+        LOG_WARN << "[cityveh] slot " << slot << " publishes no handling -- not commandeering";
+        return;
+    }
 
     // WHERE THE CAR ACTUALLY IS. agentWorldPose resolves the ghost's (x,z) onto
     // the terrain and adds its elevation (a bridge deck, a freeway ramp); the
@@ -289,7 +210,7 @@ void CityVehicleSystem::update(engine::FrameContext& ctx) {
     world.add<Renderable>(e, r);
 
     Vehicle v;
-    v.config = configFromBody(body, city_.carWheels(slot));
+    v.config = *own;
 
     // GLASS AND CABIN as body parts pinned to the chassis (as vehicle_spec does for a spawned car). The ambient
     // car drew them as instance groups keyed to the agent, which stop drawing the moment it is released -- Glenn

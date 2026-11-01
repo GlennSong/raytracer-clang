@@ -157,7 +157,7 @@ public:
     void pose(const PlayerBody& b, const BodyStep& s, PlayerPose& p) const override;
 };
 
-// --- on a board: the skateboard (slot 8), the scooter (9) --------------------------------------------------------
+// --- on a board: the skateboard (slot 7), the scooter (8) --------------------------------------------------------
 class BoardMode final : public BodyMode {
 public:
     Vec3 heading{0, 0, -1};
@@ -247,7 +247,6 @@ public:
 
     // WHAT THE MODES SHARE
     MovementTuning tune;
-    Real eyeHeight = 0.7;
     Real moveSpeed = 6.0;
     // the standing capsule, captured on first sight (level-authored); crouched is derived from it, and standing up
     // can be REFUSED by the physics fit test (a ledge overhead keeps you down)

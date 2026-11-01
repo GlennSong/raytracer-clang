@@ -4,7 +4,7 @@
 #include "rt_math.h"
 #include "geometry.h"
 #include "material.h"
-#include "kdtree.h"
+#include "triangle_bvh.h"
 #include "instance.h"
 #include "engine/day_night_cycle.h"
 #include <vector>
@@ -116,7 +116,7 @@ public:
     std::vector<Quad> quads;
     std::vector<Material> materials;
     std::vector<Texture> textures;
-    KdTree kdTree;
+    TriangleBVH triangleBvh;
     // Instancing (ADR-0041): prototype meshes (BLAS) placed by many instances,
     // gated by a TLAS. Additive to the flat soup above — empty for legacy scenes.
     std::vector<MeshProto> protos;

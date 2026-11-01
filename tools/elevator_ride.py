@@ -11,7 +11,8 @@ Usage: tools/elevator_ride.py LEVEL OUT_DIR --door x,z --normal nx,nz --floor-y 
 """
 import argparse, math, os, re, subprocess, sys, time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from lanelab_shots import send
+import rtctl   # the control channel (ADR-0291)
+from rtctl import send
 
 def main():
     ap = argparse.ArgumentParser()
@@ -45,14 +46,9 @@ def main():
     env = dict(os.environ)
     env["RT_SPAWN"] = f"{dx + nx * 1.2:.2f},{a.floor_y + centre:.2f},{dz + nz * 1.2:.2f}"
     log = open(os.path.join(a.out, "ride.log"), "wb")
-    proc = subprocess.Popen([a.viewer, a.level, "--play"], stdout=log, stderr=subprocess.STDOUT,
-                            start_new_session=True, env=env)
-    sock = f"/tmp/raytracer-viewer-{proc.pid}.sock"
     t0 = time.time()
+    proc, sock = rtctl.launch(a.viewer, a.level, log=log, env=env)
     try:
-        while not os.path.exists(sock):
-            if proc.poll() is not None or time.time() - t0 > 60: sys.exit("viewer did not open its control socket")
-            time.sleep(0.2)
         print("level:", send(sock, "camera?", timeout=900), flush=True)
         time.sleep(a.settle)
         if a.hour >= 0: send(sock, f"daynight {a.hour:g}"); send(sock, "daynight hold")
@@ -117,9 +113,7 @@ def main():
         shot("ride_end_level", pitch=0)
         print("where:", send(sock, "where?"), flush=True)
     finally:
-        proc.terminate()
-        try: proc.wait(5)
-        except subprocess.TimeoutExpired: proc.kill()
+        rtctl.stop(proc)
 
 if __name__ == "__main__":
     main()

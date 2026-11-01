@@ -147,16 +147,10 @@ void Application::popState() {
 FrameContext Application::makeContext() {
     int winW = 0, winH = 0;
     window->getSize(winW, winH);
-    FrameContext ctx{
-        worldState, *rendererPtr, *assetManager, view, clock, settingsStore, jobs,
-        eventBus, debugLines, audioEngine, frameStats,
-        window->getInput(), inputMap, playerInputs, xrState,
-        framebufferWidth, framebufferHeight, winW, winH,
-        frameDelta, interpolation, quit, transitionRequest,
-        debugOverlayActive
-    };
-    ctx.commands = &commandTable;
-    return ctx;
+    return FrameOwners(worldState, *rendererPtr, *assetManager, view, clock, settingsStore, jobs, eventBus, debugLines,
+                       audioEngine, frameStats, window->getInput(), inputMap, playerInputs, xrState, quit,
+                       transitionRequest, &commandTable)
+        .context(framebufferWidth, framebufferHeight, winW, winH, frameDelta, interpolation, debugOverlayActive);
 }
 
 void Application::reconcileFramebuffer() {
@@ -174,8 +168,9 @@ void Application::renderFrame() {
     reconcileFramebuffer();
     FrameContext ctx = makeContext();
     // Three brackets, because "render is slow" was never actionable (ADR-0077):
-    // acquire BLOCKS while the GPU is behind, encode is the world walk, submit
-    // builds the pass graph's command buffers. See FramePhase.
+    // acquire is renderer.beginFrame() (on Metal it BLOCKS while the GPU is
+    // behind), encode is the world walk, submit builds the pass graph's command
+    // buffers (on Vulkan it also holds the fence wait + image acquire). See FramePhase.
     {
         RT_PROFILE_ZONE_NAMED("acquire");
         frameStats.beginPhase(FramePhase::RenderAcquire);

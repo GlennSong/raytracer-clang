@@ -53,12 +53,14 @@ nlohmann::json interchangeDemo() {
     json scene;
     scene["name"] = "interchange_demo";
     scene["terrain"] = {{"type", "flat"}, {"bounds", {-900.0, 900.0, -600.0, 900.0}}, {"res", 3.0}};
-    scene["classes"] = {
-        {"freeway", {{"w", laneW}, {"fwd", 4}, {"back", 0}, {"shoulder", 2.5}, {"sidewalk", 0.0}, {"g_max", 0.06}, {"rank", 3}, {"thick", 1.2}, {"window", 200.0}}},
-        {"ramp", {{"w", 4.5}, {"fwd", 1}, {"back", 0}, {"shoulder", 2.5}, {"g_max", 0.08}, {"rank", 0}, {"thick", 1.0}, {"window", 40}}},
-        {"boulevard", {{"w", 3.6667}, {"fwd", 3}, {"back", 0}, {"sidewalk", 5.0}, {"g_max", 0.08}, {"rank", 2}, {"thick", 0.6}, {"window", 120}}},
-        {"arterial", {{"w", 3.6667}, {"fwd", 3}, {"back", 3}, {"sidewalk", 5.0}, {"g_max", 0.08}, {"rank", 2}, {"thick", 0.6}, {"window", 120}}},
-        {"collector", {{"w", 4.0}, {"fwd", 2}, {"back", 2}, {"sidewalk", 5.0}, {"g_max", 0.1}, {"rank", 1}, {"thick", 0.5}, {"window", 80}}}};
+    // the road class table's rows (ADR-0276), the freeway at this demo's lane width
+    roads::lanes::RoadClassSpec fw = roads::lanes::roadClass("freeway");
+    fw.lanes.w = laneW;
+    scene["classes"] = {{"freeway", roads::lanes::classJson(fw)},
+                        {"ramp", roads::lanes::classJson(roads::lanes::roadClass("ramp"))},
+                        {"boulevard", roads::lanes::classJson(roads::lanes::roadClass("boulevard"))},
+                        {"arterial", roads::lanes::classJson(roads::lanes::roadClass("arterial"))},
+                        {"collector", roads::lanes::classJson(roads::lanes::roadClass("collector"))}};
     scene["rules"] = {{"closing", 3.0}};
     json edges = json::array();
     // the ring, 8 m up the whole way

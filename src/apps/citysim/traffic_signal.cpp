@@ -11,13 +11,8 @@ Move moveOf(const engine::Vec2& a, const engine::Vec2& b) {
     return c > 0 ? Move::Left : Move::Right;  // counter-clockwise crosses the oncoming stream
 }
 
-void SignalController::build(const engine::NavGraph& graph, double greenTime,
-                             double yellowTime, double allRedTime,
-                             double walkTime) {
-    green_ = greenTime;
-    yellow_ = yellowTime;
-    allRed_ = allRedTime;
-    walk_ = walkTime;
+void SignalController::build(const engine::NavGraph& graph, const SignalTiming& timing) {
+    t_ = timing;
     clock_ = 0.0;
     phase_.assign(graph.linkCount(), -1);
     nodeOf_.assign(graph.linkCount(), -1);
@@ -87,7 +82,7 @@ void SignalController::build(const engine::NavGraph& graph, double greenTime,
             }
             if (opposed && graph.links[links[i]].lanes >= 2) {
                 leftArrow_[links[i]] = 1;
-                lead[static_cast<std::size_t>(groupOf[i])] = arrow_ + arrowYellow_;
+                lead[static_cast<std::size_t>(groupOf[i])] = t_.arrow + t_.arrowYellow;
             }
         }
         // Per-junction clock OFFSET (golden-ratio spread): one shared clock
@@ -95,8 +90,8 @@ void SignalController::build(const engine::NavGraph& graph, double greenTime,
         // drivers, the whole city stood still together every cycle (the
         // gridlock gate measured 55+ s of EVERYONE stopped). Real signal
         // networks stagger; so do we, deterministically by node id.
-        double period2 = walk_;
-        for (double l : lead) period2 += l + green_ + yellow_ + allRed_;
+        double period2 = t_.walk;
+        for (double l : lead) period2 += l + t_.green + t_.yellow + t_.allRed;
         const double frac = std::fmod(node * 0.6180339887498949, 1.0);
         nodes_[node] = { groups, frac * period2, lead };
     }
@@ -112,11 +107,11 @@ bool SignalController::hasSignal(int link) const {
 // [green][yellow][all-red], then one WALK window (all red, pedestrians own
 // the box) closes the cycle.
 double SignalController::slotOf(const NodePlan& plan, int g) const {
-    return (g >= 0 && g < static_cast<int>(plan.lead.size()) ? plan.lead[static_cast<std::size_t>(g)] : 0.0) + green_ + yellow_ + allRed_;
+    return (g >= 0 && g < static_cast<int>(plan.lead.size()) ? plan.lead[static_cast<std::size_t>(g)] : 0.0) + t_.green + t_.yellow + t_.allRed;
 }
 
 double SignalController::cycleAt(const NodePlan& plan, double& period) const {
-    period = walk_;
+    period = t_.walk;
     for (int g = 0; g < plan.groups; ++g) period += slotOf(plan, g);
     double t = std::fmod(clock_ + plan.offset, period);
     if (t < 0) t += period;
@@ -139,11 +134,11 @@ SignalState SignalController::stateFor(int link, Move m) const {
     const double lead = plan.lead[static_cast<std::size_t>(phase_[link])];
     if (local < lead) {
         if (m != Move::Left || !leftArrow_[link]) return SignalState::Red;   // the arrow is the lefts' alone
-        return local < lead - arrowYellow_ ? SignalState::Green : SignalState::Yellow;
+        return local < lead - t_.arrowYellow ? SignalState::Green : SignalState::Yellow;
     }
     local -= lead;
-    if (local < green_) return SignalState::Green;
-    if (local < green_ + yellow_) return SignalState::Yellow;
+    if (local < t_.green) return SignalState::Green;
+    if (local < t_.green + t_.yellow) return SignalState::Yellow;
     return SignalState::Red;   // own clearance, other groups' turns, or WALK
 }
 
@@ -157,7 +152,7 @@ bool SignalController::protectedLeft(int link) const {
     double start = 0;
     for (int g = 0; g < phase_[link]; ++g) start += slotOf(plan, g);
     const double local = t - start, lead = plan.lead[static_cast<std::size_t>(phase_[link])];
-    return local >= 0 && local < lead - arrowYellow_;
+    return local >= 0 && local < lead - t_.arrowYellow;
 }
 
 bool SignalController::walkWindowAt(int node) const {
@@ -169,7 +164,7 @@ double SignalController::walkRemainingAt(int node) const {
     if (it == nodes_.end()) return 0.0;
     double period = 0;
     const double t = cycleAt(it->second, period);
-    return t >= period - walk_ ? period - t : 0.0;
+    return t >= period - t_.walk ? period - t : 0.0;
 }
 
 }  // namespace citysim

@@ -93,6 +93,7 @@ GameplayContext ScriptSystem::context(World* world, std::vector<SpawnCommand>* s
     g.events = events_;
     g.firstPersonView = firstPersonView_;
     g.handsFree = handsFree_;
+    g.pointerFree = pointerFree_;
     g.commands = commands_;
     if (commands_ != nullptr)
         g.addCommand = [this](const std::string& name, const std::string& usage, const std::string& summary,
@@ -242,6 +243,7 @@ void ScriptSystem::update(FrameContext& ctx) {
             handsFree = p->handsFree >= 2;   // the body's mode says (not on the toggles of a chute, nor in a suit)
     });
     setHandsFree(handsFree);
+    pointerFree_ = !ctx.input.uiWantsMouse;   // a click on a panel is not a shot
     setFirstPersonView(!ctx.settings.getBool("playerThirdPerson", false) &&
                        !inVehicle);
     if (ctx.commands != nullptr && commands_ == nullptr) setCommands(ctx.commands);
@@ -310,7 +312,7 @@ void ScriptSystem::applySpawns(World& world, const std::vector<SpawnCommand>& sp
 
         if (c.kind == SpawnKind::Block) {
             // A dynamic cube the PhysicsSystem turns into a body and launches at
-            // `velocity` next fixed step — the Lua port of ShootingSystem's bullet.
+            // `velocity` next fixed step (the gun's bullet, gun.lua).
             Collider col;
             col.shape = ColliderShape::Box;
             col.halfExtent = Vec3(c.size * 0.5, c.size * 0.5, c.size * 0.5);
@@ -320,6 +322,7 @@ void ScriptSystem::applySpawns(World& world, const std::vector<SpawnCommand>& sp
 
             RigidBody rb;
             rb.motion = BodyMotion::Dynamic;
+            rb.continuousCollision = c.ccd;
             world.add<RigidBody>(e, rb);
 
             Velocity vel;

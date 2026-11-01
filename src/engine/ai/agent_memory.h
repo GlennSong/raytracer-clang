@@ -112,26 +112,6 @@ private:
 
 // --- PREDICT: anticipation from tracked velocities (dot products, not ML) -----
 
-// Closest point of approach between two moving points: when, and how near.
-// `time` is clamped to >= 0 (diverging bodies are closest right now).
-struct Approach {
-    Real time = 0;       // seconds until the minimum separation
-    Real distance = 0;   // that minimum separation (m)
-};
-
-inline Approach closestApproach(const Vec2& pa, const Vec2& va,
-                                const Vec2& pb, const Vec2& vb) {
-    Vec2 dp = pb - pa, dv = vb - va;
-    Real dvv = dv.x * dv.x + dv.y * dv.y;
-    Real t = dvv < 1e-9 ? 0.0 : -(dp.x * dv.x + dp.y * dv.y) / dvv;
-    if (t < 0) t = 0;
-    Vec2 at(dp.x + dv.x * t, dp.y + dv.y * t);
-    Approach a;
-    a.time = t;
-    a.distance = at.length();
-    return a;
-}
-
 // Time until two moving discs of combined radius `radius` touch: 0 if already
 // overlapping, +infinity if they never will (on current velocities).
 inline Real timeToCollision(const Vec2& pa, const Vec2& va,

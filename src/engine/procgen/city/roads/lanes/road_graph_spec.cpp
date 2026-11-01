@@ -8,20 +8,44 @@
 namespace engine {
 namespace roads::lanes {
 
-namespace {
-
-const std::map<std::string, RoadClassSpec>& defaultClasses() {
+// THE ROAD CLASS TABLE (ADR-0276, #117 item 18): every class's section, grade and profile, once. A graph names its
+// classes from it (fromJson starts each class at its row), the city planner writes its rows into every graph it plans
+// (plan_scene: the brief's widths over them), the island adds its mountain row, DesignRules reads the grades. The
+// grades are the planner's, which every shipped graph carries: a freeway 6 %, an arterial or a boulevard 8 %, a
+// collector or a rural road 10 %, a local street 12 %, a ramp 9 % (an urban ramp's: with 8 % the diamonds on the
+// hilly ring ran longer than the 535 m between its arterials and only two fit), a mountain road 15 % (its design
+// grade 12 %: at the rural 10 % the island pass, climbing 8.2 % on average up its valley, could not keep to the ground
+// and rode a 2.5 km viaduct 45 m up). The sections are the default brief's (city_plan.h Brief: 12 / 16 / 22 / 30 m
+// carriageways, 5 m sidewalks).
+const std::map<std::string, RoadClassSpec>& roadClasses() {
     static const std::map<std::string, RoadClassSpec> k = [] {
         std::map<std::string, RoadClassSpec> m;
         auto add = [&](const char* n, double w, int f, int b, double sh, double sw, double med, int rank, double g, double win, double th) {
             RoadClassSpec c; c.name = n; c.lanes.w = w; c.lanes.fwd = f; c.lanes.back = b; c.shoulder = sh; c.sidewalk = sw; c.median = med;
             c.rank = rank; c.gMax = g; c.window = win; c.thick = th; m[n] = c;
         };
-        add("freeway", 3.6, 3, 0, 2.5, 0.0, 0.0, 3, 0.03, 440.0, 1.2);
-        add("arterial", 3.0, 2, 2, 0.0, 2.6, 0.0, 2, 0.06, 120.0, 0.6);
-        add("local", 3.5, 1, 1, 0.0, 1.8, 0.0, 1, 0.09, 40.0, 0.5);
-        add("ramp", 3.6, 1, 0, 1.2, 0.0, 0.0, 0, 0.09, 40.0, 1.0);
-        add("divider", 0.0, 0, 0, 0.0, 0.0, 1.5, -1, 1.0, 1.0, 0.0);
+        //   class        lane w        fwd back shoulder sidewalk median rank g_max  window thick
+        add("local",      12.0 / 2,     1,  1,  0.0,     5.0,     0.0,   1,   0.12,  40.0,  0.5);
+        add("collector",  16.0 / 4,     2,  2,  0.0,     5.0,     0.0,   1,   0.10,  80.0,  0.5);
+        add("arterial",   22.0 / 6,     3,  3,  0.0,     5.0,     0.0,   2,   0.08,  120.0, 0.6);
+        add("boulevard",  22.0 / 6,     3,  0,  0.0,     5.0,     0.0,   2,   0.08,  120.0, 0.6);
+        add("freeway",    30.0 / 8,     4,  0,  2.5,     0.0,     0.0,   3,   0.06,  200.0, 1.2);
+        // RURAL: a country road out of town -- the mountain roads -- two lanes and a shoulder, no sidewalks (and so
+        // none of a street's kerbside furniture); drives as a collector
+        add("rural",      3.5,          1,  1,  1.0,     0.0,     0.0,   1,   0.10,  60.0,  0.5);
+        add("ramp",       4.5,          1,  0,  2.5,     0.0,     0.0,   0,   0.09,  40.0,  1.0);
+        add("divider",    0.0,          0,  0,  0.0,     0.0,     1.5,  -1,   1.0,   1.0,   0.0);
+        // THE MOUNTAIN ROAD: the rural section, graded as mountain roads are, cutting through what it cannot climb
+        // (ADR-0116), with GUARDRAILS (ADR-0117, Glenn: "the mountain road needs railguards at some places") on its
+        // bridges and at grade where the ground 5 m out drops 2 m or more -- nowhere else
+        m["mountain"] = m["rural"];
+        m["mountain"].name = "mountain";
+        m["mountain"].gMax = 0.15;
+        m["mountain"].balance = 0.5;
+        BarrierSpec none; none.set = true;
+        BarrierSpec rail; rail.kind = BarrierKind::Guardrail; rail.h = 0.75; rail.thick = 0.1; rail.set = true;
+        BarrierSpec railDrop = rail; railDrop.minDrop = 2.0;
+        m["mountain"].edges = {none, none, none, rail, railDrop};
         // double track: one track per direction at 4 m centres, a railway's grade (2.5 %) over a long window
         add("rail", 4.0, 1, 1, 0.0, 0.0, 0.0, 3, 0.025, 400.0, 0.8);
         m["rail"].track = true;
@@ -46,6 +70,35 @@ const std::map<std::string, RoadClassSpec>& defaultClasses() {
     }();
     return k;
 }
+
+const RoadClassSpec& roadClass(const std::string& name) {
+    const std::map<std::string, RoadClassSpec>& t = roadClasses();
+    const auto it = t.find(name);
+    return it != t.end() ? it->second : t.at("local");
+}
+
+nlohmann::json classJson(const RoadClassSpec& c) {
+    nlohmann::json j = {{"w", c.lanes.w}, {"fwd", c.lanes.fwd}, {"back", c.lanes.back}, {"shoulder", c.shoulder},
+                        {"sidewalk", c.sidewalk}, {"g_max", c.gMax}, {"rank", c.rank}, {"thick", c.thick},
+                        {"window", c.window}};
+    if (c.median != 0) j["median"] = c.median;
+    if (c.lanes.gap != 0) j["gap"] = c.lanes.gap;
+    if (c.balance != 0) j["balance"] = c.balance;
+    if (c.track) j["track"] = true;
+    if (c.footway) j["footway"] = true;
+    static const char* kRoleKey[5] = {"seam", "median", "vs_street", "elevated", "at_grade"};
+    for (size_t i = 0; i < 5; ++i) {
+        const BarrierSpec& b = c.edges[i];
+        if (!b.set) continue;
+        nlohmann::json e = {{"kind", b.kind == BarrierKind::Wall ? "wall" : b.kind == BarrierKind::Guardrail ? "guardrail" : "none"}};
+        if (b.kind != BarrierKind::None) { e["h"] = b.h; e["thick"] = b.thick; if (b.offset != 0) e["offset"] = b.offset; }
+        if (b.minDrop != 0) e["min_drop"] = b.minDrop;
+        j["edges"][kRoleKey[i]] = e;
+    }
+    return j;
+}
+
+namespace {
 
 double num(const nlohmann::json& j, const char* key, double d) { return j.contains(key) ? j.at(key).get<double>() : d; }
 
@@ -215,7 +268,7 @@ std::vector<LaneSlot> laneSlots(const RoadClassSpec& c, const LaneLayout& L) {
 }
 
 RoadLabGraph RoadLabGraph::fromJson(const nlohmann::json& spec, const std::string& baseDir) {
-    RoadLabGraph g; g.name = spec.value("name", std::string("roads")); g.classes = defaultClasses();
+    RoadLabGraph g; g.name = spec.value("name", std::string("roads")); g.classes = roadClasses();
     if (spec.contains("classes")) for (auto it = spec["classes"].begin(); it != spec["classes"].end(); ++it) {
         RoadClassSpec& c = g.classes[it.key()]; if (c.name.empty()) { c = g.classes.at("local"); c.name = it.key(); }
         const nlohmann::json& j = it.value();

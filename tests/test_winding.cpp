@@ -31,7 +31,6 @@
 #include "../src/engine/procgen/grass.h"
 #include "../src/engine/procgen/planet.h"
 #include "../src/engine/procgen/terrain_lod.h"
-#include "../src/engine/procgen/vehicle_mesh.h"
 #include "../src/engine/procgen/vehicle/car_mesh.h"
 #include "../src/engine/procgen/vehicle/train_mesh.h"
 #include "../src/engine/procgen/vehicle/occupant.h"
@@ -375,9 +374,6 @@ TEST_CASE(mesh_audit_vehicles_and_people) {
         printAudit("buildCarMesh (sedan)", a);
         total.add(a);
     }
-    for (int s = 0; s <= static_cast<int>(CarShellStyle::BoxTruck); ++s)
-        one("buildCarShell " + std::to_string(s), buildCarShell(static_cast<CarShellStyle>(s), Vec3(0.5, 0.1, 0.1),
-                                                                 Vec3(1.8, 1.5, 4.5)));
     for (const char* kind : {"intercity", "subway", "light_rail"}) {
         TrainBodySpec spec;
         spec.kind = kind;

@@ -14,7 +14,7 @@
 
 #include <chrono>
 #include <memory>
-#include <thread>
+#include "../../../../../job_system.h"   // parallelRows: the shared pool (ADR-0288)
 #include <algorithm>
 #include <cmath>
 
@@ -183,19 +183,14 @@ std::shared_ptr<const std::function<double(double, double)>> laneErodedBase(
     auto detailW = std::make_shared<std::vector<float>>(nn);
     {
         std::vector<char> road(nn, 0);
-        const unsigned nt = std::max(1u, std::min(16u, std::thread::hardware_concurrency()));
-        std::vector<std::thread> workers;
-        for (unsigned t = 0; t < nt; ++t)
-            workers.emplace_back([&, t] {
-                for (int j = static_cast<int>(t); j < ny; j += static_cast<int>(nt))
-                    for (int i = 0; i < nx; ++i) {
-                        const std::size_t k = static_cast<std::size_t>(j) * nx + i;
-                        const double x = grid->x0 + i * grid->res, z = grid->y0 + j * grid->res;
-                        (*natNodes)[k] = static_cast<float>(terrainHeight(*fbTp, *fbNoise, x, z));
-                        road[k] = std::fabs(grid->z[k] - (*natNodes)[k]) > 0.05 || (deck && deck->coversAny(x, z, 0.75 * grid->res));
-                    }
-            });
-        for (auto& th : workers) th.join();
+        parallelRows(ny, [&](int j) {
+            for (int i = 0; i < nx; ++i) {
+                const std::size_t k = static_cast<std::size_t>(j) * nx + i;
+                const double x = grid->x0 + i * grid->res, z = grid->y0 + j * grid->res;
+                (*natNodes)[k] = static_cast<float>(terrainHeight(*fbTp, *fbNoise, x, z));
+                road[k] = std::fabs(grid->z[k] - (*natNodes)[k]) > 0.05 || (deck && deck->coversAny(x, z, 0.75 * grid->res));
+            }
+        });
         // distance to the corridor, in metres (a two-pass chamfer on the grid: 1 and sqrt 2 cells)
         std::vector<float> dist(nn, 1e9f);
         for (std::size_t k = 0; k < nn; ++k) if (road[k]) dist[k] = 0.0f;

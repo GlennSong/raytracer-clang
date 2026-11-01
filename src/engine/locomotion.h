@@ -69,7 +69,7 @@ struct MovementTuning {
     Real buoyancy = 10.0;          // 1/s^2: the spring back to floating height (a plunge comes back up)
     Real waterDamping = 2.0;       // 1/s: how soon the bob settles (low = bobs longer)
     Real waterDrag = 0.2;          // 1/m: drag on a fast plunge (v*|v|): how deep a dive off the board goes
-    // gliding (slot 5 the parachute, slot 6 the wingsuit; jump in the air opens them)
+    // gliding (slot 4 the parachute, slot 5 the wingsuit; jump in the air opens them)
     Real deployMinHeight = 4.0;    // m of air under the feet needed to open either
     Real chuteOpenTime = 0.7;      // s from the pull to a full canopy
     Real chuteSpeed = 8.0;         // m/s ahead under a full canopy, hands up
@@ -86,7 +86,7 @@ struct MovementTuning {
     Real suitTurn = 3.5;           // 1/s: how quickly the suit swings the way into where you look
     Real suitPitchDown = 60.0;     // deg the dive is held to
     Real suitPitchUp = 25.0;       // deg the pull-up is held to
-    // the grapple (slot 7): hold the trigger to hang on the rope, let go to fly on
+    // the grapple (slot 6): hold the trigger to hang on the rope, let go to fly on
     Real grappleRange = 60.0;      // m to the farthest hook
     Real grappleMinRange = 3.0;    // m: nearer than this is no swing
     Real grappleCone = 9.0;        // deg off the aim the hook still finds a place (the snap that makes it easy)
@@ -98,7 +98,7 @@ struct MovementTuning {
     Real grappleHookSpeed = 140.0; // m/s the hook flies out (it hooks when it gets there, not on the click)
     Real grappleStretch = 0.02;    // how far the rope gives under the body's weight (a fraction of its length; 0 = a rod)
     Real grappleBounce = 0.4;      // the stretch's damping ratio: low bounces at the bottom, 1 doesn't
-    // boards (slot 8 the skateboard, slot 9 the scooter): ridden whenever on the ground with one in hand
+    // boards (slot 7 the skateboard, slot 8 the scooter): ridden whenever on the ground with one in hand
     Real boardPush = 1.8;          // m/s a kick adds (less as the speed nears the most a kick reaches)
     Real boardPushMax = 8.5;       // m/s: kicking stops helping here (downhill goes faster)
     Real scooterPushMax = 7.0;
@@ -194,7 +194,7 @@ Vec3 parachuteStep(const Vec3& v, Vec3& heading, const Vec3& look, Real inF, Rea
                    const MovementTuning& t);
 // One step of a wingsuit's velocity, flown by where you look (`look`, unit; its pitch held to the suit's range):
 // gravity, lift that swings the way into the facing (fading out below the stall), and drag along it. Pitched
-// down it settles at a glide (~2.7:1 at 20 deg); pulled up it trades speed for height until it stalls.
+// down it settles at a glide (~2.35:1 at 20 deg, ~48 m/s); pulled up it trades speed for height until it stalls.
 Vec3 wingsuitStep(const Vec3& v, const Vec3& look, Real dt, const MovementTuning& t);
 // The look direction with its pitch held to [-suitPitchDown, suitPitchUp].
 Vec3 wingsuitFacing(const Vec3& look, const MovementTuning& t);

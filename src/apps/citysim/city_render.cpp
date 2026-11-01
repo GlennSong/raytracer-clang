@@ -33,6 +33,7 @@
 #include "scripting/agent_goals.h"      // scripted goal tables (ADR-0064)
 #include "scripting/activities_lua.h"   // the activity catalog (activities.lua)
 #include "scripting/roles_lua.h"         // the role catalog (roles.lua)
+#include "scripting/signals_lua.h"       // the signals' cycle times (signals.lua)
 #include "scripting/vehicle_body.h"     // scripted fleet bodies (ADR-0065)
 #include "../../engine/scripting/script_vm.h"
 #include "../../engine/scripting/procgen_bindings.h"
@@ -158,13 +159,13 @@ Real CityRenderSystem::deckSurfaceNear(Real x, Real z, Real refY) const {
     return refY;
 }
 
-int CityRenderSystem::drawSlotFor(int ai) const {
-    if (ai < 0 || ai >= static_cast<int>(sim_.agents().size()) || drawVariantCount() <= 0) return -1;
+int CityRenderSystem::slotFor(int ai, int variants) const {
+    if (ai < 0 || ai >= static_cast<int>(sim_.agents().size()) || variants <= 0) return -1;
     const Agent& a = sim_.agents()[static_cast<std::size_t>(ai)];
     int v = sim_.ambientSlotFor(a.vehicle >= 0 ? a.vehicle : 0);
-    if (v >= drawVariantCount()) v %= drawVariantCount();
-    if (busVariant_ >= 0 && sim_.isBus(ai) && busVariant_ < drawVariantCount()) v = busVariant_;
-    if (fireVariant_ >= 0 && fireVariant_ < drawVariantCount() && a.vehicle >= 0 &&
+    if (v >= variants) v %= variants;
+    if (busVariant_ >= 0 && sim_.isBus(ai) && busVariant_ < variants) v = busVariant_;
+    if (fireVariant_ >= 0 && fireVariant_ < variants && a.vehicle >= 0 &&
         a.vehicle < static_cast<int>(sim_.vehicles().size()) &&
         sim_.vehicles()[static_cast<std::size_t>(a.vehicle)].type == VehicleType::FireEngine) v = fireVariant_;
     return v;
@@ -543,6 +544,7 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
             else
                 LOG_WARN << "citysim fleet '" << params_.fleet << "': " << ferr << " — keeping the default fleet";
         }
+        carConfigs_.clear();
         if (!scriptOk) {
         } else if (int slots = engine::fleetSlotCount(fleetVM_); slots > 0) {
             // THE ASSET decides how many cars the fleet has. This used to be a
@@ -579,6 +581,12 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
                 else if (className == "bus") { busVariant_ = v; body.type = VehicleType::Bus; }
                 else if (body.type == VehicleType::Bus) busVariant_ = v;
                 else if (body.type == VehicleType::FireEngine) body.type = VehicleType::BoxTruck;
+                // its handling: what it drives with once physical (item 23)
+                engine::VehicleSpec handling;
+                std::string hErr;
+                if (!engine::loadFleetHandling(fleetVM_, v, handling, &hErr))
+                    LOG_WARN << "citysim vehicles fleet[" << v << "]: " << hErr << " (it cannot be made physical)";
+                carConfigs_.push_back(handling.config);
                 catalogue.push_back(body);
             }
             LOG_INFO << "[citysim] fleet: " << slots << " slots, bus variant "
@@ -620,6 +628,20 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
         }
         sim_.setGarages(std::move(gins));
     }
+#ifdef RT_ENABLE_SCRIPTING
+    {   // THE SIGNALS' CYCLE (signals.lua): before build, which lays every junction's phases on it
+        const std::string code = engine::loadScriptCode("signals.lua", "");
+        if (!code.empty()) {
+            engine::ScriptVM vm;
+            std::string err;
+            citysim::SignalTiming t;
+            if (vm.doString(code, &err) && engine::loadSignalTiming(vm, t, &err))
+                sim_.setSignalTiming(t);
+            else
+                LOG_WARN << "[citysim] signals.lua: " << err << " (using the built-in times)";
+        }
+    }
+#endif
     { const auto tT0 = std::chrono::steady_clock::now();
     sim_.build(nav_, carCount, pedCount, params_.seed);
     LOG_INFO << "[citysim] startup: sim.build " << std::chrono::duration<double>(std::chrono::steady_clock::now() - tT0).count() << " s"; }
@@ -947,11 +969,11 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
             engine::ScriptVM vm;
             std::string err;
             citysim::RoleCatalog roles;
-            if (vm.doString(code, &err) && engine::loadRoleCatalog(vm, roles, &err) && roles.roles.size() >= 4) {
+            if (vm.doString(code, &err) && engine::loadRoleCatalog(vm, roles, &err)) {
                 LOG_INFO << "[citysim] roles: " << roles.roles.size() << " (roles.lua)";
                 sim_.setRoleCatalog(std::move(roles));
             } else {
-                LOG_WARN << "[citysim] roles.lua: " << (err.empty() ? "fewer than the four built-in roles" : err)
+                LOG_WARN << "[citysim] roles.lua: " << err
                          << " (using the built-in roles)";
             }
         }
@@ -1579,30 +1601,8 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
         world.add<InstanceGroup>(parkBayGroup_, g);
     }
 
-    // Stop bars + lane-turn arrows (R6c, plan 4e): one white PAINT mesh for
-    // every signalled approach (buildRoadMarkings), one identity instance.
-    // NOT on a road whose builder painted its own (LevelRoadGraph::paintedMarkings, the lanes builder):
-    // these quads float just over the asphalt and flickered with the camera angle beside the real paint (#39).
-    bool builderPainted = false;
-    world.each<engine::LevelRoadGraph>([&](Entity, engine::LevelRoadGraph& g) { builderPainted = builderPainted || g.paintedMarkings; });
-    if (!builderPainted) {
-        engine::RenderMesh paint = buildRoadMarkings();
-        MeshHandle mh{};
-        if (assets) mh = assets->acquireMesh(paint, "city:roadmarks");
-        roadMarkGroup_ = world.create();
-        InstanceGroup g;
-        g.mesh = mh;
-        g.material.albedo = Vec3(1, 1, 1);
-        g.material.roughness = 0.92f;
-        // NOT GroundPaint, despite being paint: this is one city-wide merged
-        // mesh on a single identity instance, so a distance test measures the
-        // camera against the CITY CENTRE and would blink every stop bar in the
-        // world out at once. It needs chunking before it can carry a distance.
-        g.drawClass = engine::DrawClass::Unlimited;
-        g.transforms.push_back(Mat4());   // world-space mesh, identity instance
-        refreshBounds(&g);
-        world.add<InstanceGroup>(roadMarkGroup_, g);
-    }
+    // (Stop bars, crosswalks and lane arrows are the lanes builder's, painted into its deck (ADR-0108); this bridge
+    // drew a second set of floating quads from the graph, angles guessed, until ADR-0293.)
 
     // Hand the sim the pole foot positions (XZ) as static obstacles, so pedestrians
     // on the sidewalk steer around the signal poles and never stand inside one.
@@ -1831,92 +1831,6 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
     built_ = true;
     syncGroups(world);
     return true;
-}
-
-engine::RenderMesh CityRenderSystem::buildRoadMarkings() const {
-    // Stop bars + lane-turn arrows (R6c, plan 4e): derived entirely from
-    // the graph (turn options = the node's outgoing street links), thin
-    // raised quads just above the asphalt — the shader's mu/mv paint has
-    // no per-lane identity to hang arrows on.
-    engine::RenderMesh paint;
-        const Vec3 white(0.88, 0.88, 0.88);
-        const Vec3 up(0, 1, 0);
-        auto quad = [&](const engine::Vec2& c, const engine::Vec2& f,
-                        Real halfW, Real halfL, Real y) {
-            const engine::Vec2 r(f.y, -f.x);
-            const engine::Vec2 a2 = c - r * halfW - f * halfL;
-            const engine::Vec2 b2 = c + r * halfW - f * halfL;
-            const engine::Vec2 c2 = c + r * halfW + f * halfL;
-            const engine::Vec2 d2 = c - r * halfW + f * halfL;
-            MeshBuilder::emitQuad(paint, Vec3(a2.x, y, a2.y), Vec3(b2.x, y, b2.y),
-                                  Vec3(c2.x, y, c2.y), Vec3(d2.x, y, d2.y), up,
-                                  white);
-        };
-        // A turn arrow: shaft along the lane + head bent toward the turn
-        // (-1 left, 0 straight, +1 right).
-        auto arrow = [&](const engine::Vec2& c, const engine::Vec2& f, int turn,
-                         Real y) {
-            quad(c, f, 0.12, 0.85, y);   // shaft
-            engine::Vec2 hd = f;
-            if (turn != 0) {
-                const engine::Vec2 r(f.y, -f.x);
-                hd = normalize(f * 0.2 + r * (Real(turn) * 0.98));
-                quad(c + f * 0.75 + hd * 0.35, hd, 0.12, 0.45, y);   // bent head
-            }
-            // Head ticks (a simple V), pointing along hd.
-            const engine::Vec2 tip =
-                c + f * (turn == 0 ? Real(0.95) : Real(0.75)) +
-                (turn == 0 ? engine::Vec2(0, 0) : hd * Real(0.8));
-            const engine::Vec2 hr(hd.y, -hd.x);
-            quad(tip + hd * 0.12 - hr * 0.22, normalize(hd - hr), 0.10, 0.32, y);
-            quad(tip + hd * 0.12 + hr * 0.22, normalize(hd + hr), 0.10, 0.32, y);
-        };
-        for (int li : signalLinks_) {
-            const engine::NavLink& L = nav_.links[li];
-            const int to = L.to;
-            const engine::Vec2 dir = nav_.direction(li);
-            const engine::Vec2 right(dir.y, -dir.x);
-            // Stop line: clear of the crossing road's mouth + the shader's
-            // zebra band (~4.4 m of crosswalk paint past the mouth).
-            Real mouth = 0;
-            for (int ol : nav_.outLinks[to])
-                mouth = std::max(mouth, nav_.links[ol].width * 0.5);
-            Real back = std::min(L.length * 0.4, mouth + 6.2);
-            const engine::Vec2 node = nav_.nodes[to];
-            const engine::Vec2 barC =
-                node - dir * back + right * (L.width * 0.25);
-            const Real y = groundAt(barC.x, barC.y) + 0.06;
-            quad(barC, dir, L.width * 0.24, 0.3, y);   // the bar (approach half)
-            // Turn options from the node's outgoing street links.
-            bool hasL = false, hasS = false, hasR = false;
-            for (int ol : nav_.outLinks[to]) {
-                const engine::NavLink& O = nav_.links[ol];
-                if (O.to == L.from) continue;   // the U-turn back
-                if (!(O.access & engine::road_access::kSignalable)) continue;   // #17/S5
-                const engine::Vec2 od = nav_.direction(ol);
-                const Real cross = dir.x * od.y - dir.y * od.x;
-                const Real dot2 = dir.x * od.x + dir.y * od.y;
-                if (dot2 > 0.7) hasS = true;
-                else if (cross < -0.5) hasL = true;
-                else if (cross > 0.5) hasR = true;
-            }
-            const int lanes = std::max(1, L.lanes);
-            const Real spacing = sim_.laneSpacingFor(li);
-            for (int ln = 0; ln < lanes; ++ln) {
-                const engine::Vec2 laneC =
-                    node - dir * (back + 2.6) +
-                    right * ((0.5 + ln) * spacing);
-                // One arrow per lane: leftmost leans left, rightmost right,
-                // middle (or absent turns) go straight.
-                int turn = 0;
-                if (lanes == 1) turn = hasS ? 0 : (hasL ? -1 : (hasR ? 1 : 0));
-                else if (ln == 0 && hasL) turn = -1;
-                else if (ln == lanes - 1 && hasR) turn = 1;
-                arrow(laneC, dir, turn,
-                      groundAt(laneC.x, laneC.y) + 0.06);
-            }
-        }
-    return paint;
 }
 
 Mat4 CityRenderSystem::agentPose(const Agent& a, int agentIdx) const {
@@ -4419,16 +4333,6 @@ ImU32 placeColor(PlaceType t) {
         default:                return IM_COL32(220, 220, 220, 255);
     }
 }
-// Short label for an agent's Role (Living City Phase 4).
-const char* agentRoleName(Agent::Role r) {
-    switch (r) {
-        case Agent::Role::Commuter:   return "Commuter";
-        case Agent::Role::Shopkeeper: return "Shopkeeper";
-        case Agent::Role::Stroller:   return "Stroller";
-        case Agent::Role::Student:    return "Student";
-        default:                      return "?";
-    }
-}
 // Short label for an Agent::State (the reactive FSM value the ring colours use).
 const char* agentStateName(Agent::State s) {
     switch (s) {
@@ -4532,7 +4436,7 @@ void CityRenderSystem::render(engine::FrameContext& ctx) {
             const Agent& a = agents[inspectAgent_];
             ImGui::Text("UID %u   %s   %s", a.uid,
                         a.mode == Agent::Mode::Driver ? "Driver" : "Pedestrian",
-                        agentRoleName(a.role));
+                        sim_.roles().nameOf(a.role));
             ImGui::Text("State: %s%s", agentStateName(a.state),
                         a.playerControlled ? "  (player)" : "");
             // Where it lives / works (ADR-0066 Phase 3): real place names.

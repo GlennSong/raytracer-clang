@@ -116,8 +116,8 @@ bool passable(const Portal& p, const WalkerCaps& caps) {
     switch (p.kind) {
         case Portal::Kind::Door:
         case Portal::Kind::Passage:
-        case Portal::Kind::Void:
         case Portal::Kind::Vomitory: return true;
+        case Portal::Kind::Void: return false;   // a railing edge onto an atrium: seen across, never walked
         case Portal::Kind::Stair: return caps.stairs;
         case Portal::Kind::Escalator: return caps.escalator;
         case Portal::Kind::Lift: return caps.lift;

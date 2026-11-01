@@ -1,4 +1,5 @@
 #include "island_scene.h"
+#include "../city/roads/lanes/road_graph_spec.h"   // the road class table (the mountain row)
 
 #include <algorithm>
 #include <cmath>
@@ -55,19 +56,10 @@ json islandLanesScene(const IslandWorld& w, const std::vector<json>& placeScenes
     // nothing meets the island freeway at grade: the pass rose to it inside its own diamond and crossed
     // both carriageways as a level junction (Glenn: "literally crosses through two multilane freeways")
     scene["rules"]["freeway_separates"] = true;
-    // THE MOUNTAIN CLASS: the rural road's section, graded as mountain roads are (15%, a design grade of
-    // 12%). At the rural 10% the pass -- climbing 8.2% on average up its valley -- could not keep to the
-    // ground and rode a 2.5 km viaduct 45 m up
-    if (scene.contains("classes") && scene["classes"].contains("rural")) {
-        json m = scene["classes"]["rural"];
-        m["g_max"] = 0.15;
-        m["balance"] = 0.5;   // cut through what it cannot climb, as a mountain road does (ADR-0116)
-        // GUARDRAILS (ADR-0117, Glenn: "the mountain road needs railguards at some places"): on its bridges,
-        // and at grade where the ground 5 m out drops 2 m or more -- nowhere else
-        m["edges"] = {{"seam", {{"kind", "none"}}}, {"median", {{"kind", "none"}}}, {"vs_street", {{"kind", "none"}}},
-                      {"elevated", {{"kind", "guardrail"}}}, {"at_grade", {{"kind", "guardrail"}, {"min_drop", 2.0}}}};
-        scene["classes"]["mountain"] = m;
-    }
+    // THE MOUNTAIN CLASS (the road class table's row, ADR-0276): the rural section at 15 %, cutting through what it
+    // cannot climb, with guardrails on its bridges and where the ground drops away
+    if (scene.contains("classes") && scene["classes"].contains("rural"))
+        scene["classes"]["mountain"] = roads::lanes::classJson(roads::lanes::roadClass("mountain"));
     // ROAD EDGES (the city's next ten #5; Glenn's guardrails, "in places"): the roads between towns get a guardrail
     // at grade where the ground 5 m out drops 2.5 m or more -- an embankment, a bank above a river, a cut's far
     // side -- and nowhere else. Their other edges keep their defaults.

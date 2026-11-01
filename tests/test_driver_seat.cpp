@@ -199,3 +199,78 @@ TEST_CASE(seated_occupant_is_the_jointed_body_in_the_seat) {
     CHECK(b.scale == 1.0);   // never scaled up
     CHECK(solveLimb(b, 2).end.y < -0.35);   // the shin hangs as far as it reaches (a 0.45 m seat is past it)
 }
+
+// ONE WAY OF SITTING IN A VEHICLE (item 26, #117): the riding component measures the seat's sway and jolt from the
+// carrier's own motion, for the driver and every passenger alike (rideStep). A rider on a carrier braking at 1 g leans
+// forward just as the driver's seat rule does (the Run above), in the CARRIER's frame -- a carrier facing +x braking
+// along +x still throws them forward, not sideways -- and a jump (a gangway into the next car) starts the springs fresh.
+#include "../src/engine/riding.h"
+namespace {
+struct Carried {
+    World world;
+    Entity rider;
+    Carried() {
+        rider = world.create();
+        world.add<Transform>(rider, Transform{});
+        Passenger p;
+        p.sitting = true;
+        world.add<Passenger>(rider, p);
+    }
+    // the carrier at `at`, turned `yawDeg` about +y, one step
+    void step(const Vec3& at, Real yawDeg) {
+        Mat4 m = Quat::fromAxisAngle(Vec3(0, 1, 0), degreesToRadians(yawDeg)).toMat4();
+        m.m[0][3] = at.x;
+        m.m[1][3] = at.y;
+        m.m[2][3] = at.z;
+        world.get<Passenger>(rider)->carrier = m;
+        rideStep(world, nullptr, rider, nullptr, kDt);
+    }
+    Passenger& p() { return *world.get<Passenger>(rider); }
+};
+// hold 20 m/s along `dir` for a second, then brake at 1 g to a stop: the most forward lean (in the carrier's frame)
+// and the most jolt
+void brakeAlong(Carried& c, const Vec3& dir, Real yawDeg, Real& lean, Real& side, Real& jolt) {
+    Vec3 at(0, 0, 0);
+    Real v = 20;
+    lean = side = jolt = 0;
+    for (int i = 0; i < 60; ++i) { at = at + dir * (v * kDt); c.step(at, yawDeg); }
+    while (v > 0) {
+        v = std::max(Real(0), v - 9.8 * kDt);
+        at = at + dir * (v * kDt);
+        c.step(at, yawDeg);
+        lean = std::max(lean, c.p().sway.lean.z);
+        side = std::max(side, std::fabs(c.p().sway.lean.x));
+        jolt = std::max(jolt, c.p().joltNow);
+    }
+}
+}  // namespace
+
+TEST_CASE(every_rider_is_thrown_forward_when_the_carrier_brakes) {
+    Run seat;   // the driver's seat rule on the same braking
+    for (int i = 0; i < 60; ++i) seat.step(Vec3(0, 0, 20));
+    Real v = 20;
+    while (v > 0) { v = std::max(Real(0), v - 9.8 * kDt); seat.step(Vec3(0, 0, v)); }
+
+    Carried ahead;
+    Real lean, side, jolt;
+    brakeAlong(ahead, Vec3(0, 0, 1), 0, lean, side, jolt);
+    std::printf("    rider braking: lean %.3f m (the seat rule's %.3f), jolt %.2f m/s\n", lean, seat.leanMost, jolt);
+    CHECK(std::fabs(lean - seat.leanMost) < 0.01);       // the driver's rule, from the carrier's own motion
+    CHECK(jolt < ejectTolerance(true, true, false));      // a stop is not a crash
+
+    Carried turned;   // facing +x (a quarter turn), braking along +x: still forward in its own frame
+    Real lean2, side2, jolt2;
+    brakeAlong(turned, Vec3(1, 0, 0), 90, lean2, side2, jolt2);
+    CHECK(std::fabs(lean2 - lean) < 0.01);
+    CHECK(side2 < 0.005);
+}
+
+TEST_CASE(a_jump_between_carriers_starts_the_seat_afresh) {
+    Carried c;
+    for (int i = 0; i < 30; ++i) c.step(Vec3(0, 0, i * 0.3), 0);   // 18 m/s along +z
+    c.step(Vec3(0, 0, 40), 0);                                      // a gangway: 30 m on in one step
+    CHECK(c.p().joltNow == 0.0);
+    CHECK(c.p().sway.lean.length() < 1e-9);
+    c.step(Vec3(0, 0, 40.3), 0);                                    // riding on at the same speed
+    CHECK(c.p().joltNow < 1.0);
+}

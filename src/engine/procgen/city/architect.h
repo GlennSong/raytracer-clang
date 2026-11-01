@@ -155,7 +155,7 @@ BuildingParams architectRowUnit(uint32_t seed, int floors);
 
 // ---- THE ARCHETYPE BOOK (city-lots-v2 item 3): the SELECTION layer as data.
 //
-// The architect has three layers. Zoning (tagAt) and the 56 recipe BODIES stay
+// The architect has three layers. Zoning (tagAt) and the 79 recipe BODIES stay
 // C++ — the bodies are not data (they branch on coreness/roomy and feed the
 // floor cap back through RecipeCtx::slender; porting them is what the
 // abandoned Lua branch attempted and failed). The layer worth authoring is

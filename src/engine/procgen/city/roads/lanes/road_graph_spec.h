@@ -215,6 +215,12 @@ RoadSpec bandsFor(const RoadClassSpec& c, const LaneLayout& layout);
 
 // (name, left-normal offset from the spine, direction) of each Travel band, from the RoadSpec.
 struct LaneSlot { std::string name; double offset; int dir; };
+// THE ROAD CLASS TABLE (ADR-0276): every class's section, grade and profile, once -- what a graph's classes start
+// from, what the planner writes into the graphs it plans, and DesignRules' grades. `roadClass` falls back to local.
+const std::map<std::string, RoadClassSpec>& roadClasses();
+const RoadClassSpec& roadClass(const std::string& name);
+// A table row as a graph's "classes" entry (what fromJson reads back to the same spec).
+nlohmann::json classJson(const RoadClassSpec& c);
 std::vector<LaneSlot> laneSlots(const RoadClassSpec& c, const LaneLayout& layout);
 
 // --- path helpers shared with lane expansion (ramps are recomposed from their anchors) ---

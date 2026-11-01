@@ -599,7 +599,7 @@ $ printf <span class="s">'ledger summary\n'</span> | nc -U /tmp/raytracer-viewer
   <p><code>levels-nightly.yml</code> builds only <code>level_tests</code> and runs it with every level, daily at
     09:17 UTC or by hand, with a 180-minute limit. <code>deploy-web.yml</code> publishes the site these pages live
     on.</p>
-  <div class="note history"><p><b>How CI got here.</b> <code>docs/ci-plan.md</code> opens "There is no CI today":
+  <div class="note history"><p><b>How CI got here.</b> <code>docs/ci-plan.md</code> was written when there was no CI:
     the Vulkan backend had shipped through three phases <em>never once compiled</em>, and its first compile found a
     reserved GLSL keyword, a wrong uniform field and 43 logging calls against an API the project does not have.
     Stages 0 (headless build and tests) and 1 (render-backend compile coverage) are what <code>build.yml</code> now

@@ -1,4 +1,5 @@
 #include "height_pyramid.h"
+#include "drawn_cell.h"   // the triangle split every drawn-ground sampler shares (ADR-0280)
 #include "../../job_system.h"
 #include "../bundle/bundle.h"
 
@@ -31,9 +32,7 @@ double HeightTile::sampleLocal(double gx, double gz) const {
     int i = std::min(static_cast<int>(gx), kTileCells - 1);
     int j = std::min(static_cast<int>(gz), kTileCells - 1);
     const double u = gx - i, v = gz - j;
-    const double ha = at(i, j), hd = at(i + 1, j + 1);
-    if (u >= v) return ha + u * (at(i + 1, j) - ha) + v * (hd - at(i + 1, j));
-    return ha + v * (at(i, j + 1) - ha) + u * (hd - at(i, j + 1));
+    return drawnCellHeight(u, v, [&](int di, int dj) { return at(i + di, j + dj); });
 }
 
 const HeightTile* Pyramid::finestAt(double x, double z) const {

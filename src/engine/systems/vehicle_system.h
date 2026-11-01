@@ -3,6 +3,7 @@
 
 #include "../system.h"   // System, FrameContext, and (via renderer.h) MeshHandle
 #include "../player/driver_seat.h"   // RideJolt, SeatSway
+#include "../audio/engine_voices.h"   // EngineVoicePool
 #include "../properties.h"
 #include "../control/control_commands.h"
 #include <string>
@@ -68,13 +69,10 @@ private:
     std::vector<Pick> catalogue_;
     bool catalogueTried_ = false;
     int pick_ = 0;
-    // THE PLAYER'S SEAT (ADR-0252): the jolt it takes (a crash throws the rider off an open one) and the body's sway
-    // in it, each fixed step
+    // THE PLAYER'S SEAT (ADR-0252), each fixed step: the driver rides the car (engine/riding.h: a Passenger at its hip
+    // point), and the jolt and the sway the riding component measures throw them off an open seat or lurch them in a
+    // closed one (item 26, #117: one way of sitting in a vehicle)
     void stepSeat(FrameContext& ctx);
-    RideJolt jolt_;
-    SeatSway sway_;
-    Vec3 seatVel_;
-    bool haveSeatVel_ = false;
     Real crank_ = 0;
     uint32_t driftCar_ = 0xFFFFFFFFu;   // the car with the drift switched on (a PhysicsWorld::VehicleId)
     bool wasDrifting_ = false;
@@ -94,23 +92,10 @@ private:
     AudioClipHandle hornClip;
     AudioVoiceHandle hornVoice;
     float hornGain = 0.0f;
-    // Engines: one looping procedural voice (sfx::engine) per RUNNING physical
-    // car — the player's and any AI-driven one — pitched by
-    // engineSoundFor(). Held per entity so a car keeps its voice (and its
-    // ramped gain) across frames; the nearest few are voiced, the rest fade
-    // out, because the mixer's slots are worth more than a car heard from
-    // 200 m. Ambient city traffic is voiced by citysim's own adapter against
-    // the SAME core.
-    struct EngineVoice {
-        Entity car;
-        AudioVoiceHandle voice;
-        float gain = 0.0f;      // ramped toward the core's target
-        bool wanted = false;    // survives this frame's cull?
-    };
-    AudioClipHandle engineClip;
-    std::vector<EngineVoice> engineVoices;
-    static constexpr int kMaxEngineVoices = 6;
-    static constexpr Real kEngineAudibleRange = 90.0;
+    // Engines: the running physical cars -- the player's and any AI-driven one -- voiced by the one engine pool
+    // (audio/engine_voices.h): the nearest 6 within 90 m, with seed 1's rasp, so your own engine still reads as
+    // yours beside the city's traffic (seed 2, citysim's CityTrafficAudioSystem).
+    EngineVoicePool engines_{6, 90.0, 1};
     // Tyres (Glenn, 2026-10-24: "The bike sounds motorized and it shouldn't. The drifting needs some tire squeal"):
     // looping voices on the player's ride, eased by gain
     struct TyreLoop {

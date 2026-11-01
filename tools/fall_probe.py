@@ -7,7 +7,8 @@ player ends up with the drawn ground there. A player metres under the ground fel
 """
 import argparse, os, subprocess, sys, time
 sys.path.insert(0, os.path.dirname(__file__))
-from lanelab_shots import send
+import rtctl   # the control channel (ADR-0291)
+from rtctl import send
 
 def main():
     ap = argparse.ArgumentParser()
@@ -20,13 +21,9 @@ def main():
     a = ap.parse_args()
     os.makedirs(a.out, exist_ok=True)
     log = open(os.path.join(a.out, "viewer.log"), "wb")
-    proc = subprocess.Popen([a.viewer, a.level, "--play"], stdout=log, stderr=subprocess.STDOUT)
-    sock = f"/tmp/raytracer-viewer-{proc.pid}.sock"
+    t0 = time.time()
+    proc, sock = rtctl.launch(a.viewer, a.level, log=log)
     try:
-        t0 = time.time()
-        while not os.path.exists(sock):
-            if proc.poll() is not None or time.time() - t0 > 60: sys.exit("no control socket")
-            time.sleep(0.2)
         send(sock, "camera?", timeout=a.load_timeout)
         time.sleep(5)
         fell = 0
@@ -54,9 +51,7 @@ def main():
             print(f"({x:8.1f}, {z:8.1f}) ground {g!s:28} teleport {r!s:40} eye y {samples[0]:8.2f} -> {samples[-1]:8.2f} (min {low:8.2f}){'  FELL' if bad else ''}", flush=True)
         print(f"{fell}/{len(spots)} spots fell through")
     finally:
-        proc.terminate()
-        try: proc.wait(5)
-        except Exception: proc.kill()
+        rtctl.stop(proc)
 
 if __name__ == "__main__":
     main()

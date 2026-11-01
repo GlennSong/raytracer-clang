@@ -2,7 +2,7 @@
 #define RAYTRACER_ENGINE_PROCGEN_CITY_BLOCK_GRADE_H
 
 #include "polygon.h"          // Poly2, Vec2
-#include "buildability.h"     // HeightSampler
+#include "buildability.h"     // HeightField
 #include "../terrain.h"       // TerrainFlatten
 
 #include <vector>
@@ -47,12 +47,12 @@ struct BlockGradeParams {
 // height the boundary is measured against — pass the road-carved sampler so blocks
 // pin to their streets.
 std::vector<TerrainFlatten> gradeBlocks(const std::vector<Poly2>& blocks,
-                                        const HeightSampler& ground,
+                                        const HeightField& ground,
                                         const BlockGradeParams& p = {});
 
 // Grade ONE block (exposed for tests / a single-block probe): returns its graded
 // footprint(s) — one tilted plane, or several terrace steps when it's too steep.
-std::vector<TerrainFlatten> gradeBlock(const Poly2& block, const HeightSampler& ground,
+std::vector<TerrainFlatten> gradeBlock(const Poly2& block, const HeightField& ground,
                                        const BlockGradeParams& p = {});
 
 }  // namespace engine

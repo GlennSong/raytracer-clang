@@ -20,14 +20,14 @@ double distToRivers(const BuildabilityConfig& cfg, double x, double z) {
     return best;
 }
 
-bool waterAt(const BuildabilityConfig& cfg, const HeightSampler& h, double x, double z) {
+bool waterAt(const BuildabilityConfig& cfg, const HeightField& h, double x, double z) {
     if (h(x, z) < cfg.seaLevel) return true;
     if (!cfg.rivers.empty() && distToRivers(cfg, x, z) < cfg.riverWidth) return true;
     return false;
 }
 
 // Nearest water within beachReach (sampled rings); returns a big number if none.
-double nearWater(const BuildabilityConfig& cfg, const HeightSampler& h, double x, double z) {
+double nearWater(const BuildabilityConfig& cfg, const HeightField& h, double x, double z) {
     const double step = std::max(6.0, cfg.beachReach / 4.0);
     for (double r = step; r <= cfg.beachReach; r += step)
         for (int k = 0; k < 8; ++k) {
@@ -37,7 +37,7 @@ double nearWater(const BuildabilityConfig& cfg, const HeightSampler& h, double x
     return 1e9;
 }
 
-double slopeAt(const HeightSampler& h, double x, double z) {
+double slopeAt(const HeightField& h, double x, double z) {
     const double e = 4.0;
     double gx = (h(x + e, z) - h(x - e, z)) / (2 * e);
     double gz = (h(x, z + e) - h(x, z - e)) / (2 * e);
@@ -46,7 +46,7 @@ double slopeAt(const HeightSampler& h, double x, double z) {
 
 }  // namespace
 
-LandClass classifyLand(const BuildabilityConfig& cfg, const HeightSampler& height,
+LandClass classifyLand(const BuildabilityConfig& cfg, const HeightField& height,
                        double x, double z) {
     if (waterAt(cfg, height, x, z)) return LandClass::Water;
     double h = height(x, z);
@@ -58,7 +58,7 @@ LandClass classifyLand(const BuildabilityConfig& cfg, const HeightSampler& heigh
     return LandClass::Buildable;
 }
 
-bool crossesWater(const BuildabilityConfig& cfg, const HeightSampler& height,
+bool crossesWater(const BuildabilityConfig& cfg, const HeightField& height,
                   const Vec2& a, const Vec2& b, double step) {
     int n = std::max(2, static_cast<int>((b - a).length() / std::max(1.0, step)));
     for (int i = 0; i <= n; ++i) {

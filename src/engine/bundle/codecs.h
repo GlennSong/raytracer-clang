@@ -49,10 +49,11 @@ void colliderFromPacked(const PackedMesh& p, MeshCollider& mc);   // positions +
 void putPackedMesh(BinWriter& w, const PackedMesh& p, bool compact = false);
 bool getPackedMesh(BinReader& r, PackedMesh& p);
 
-// COMPACT MESH (ADR-0224): a RenderMesh as the GPU's standard vertex takes it (ADR-0096) -- float32 position, the
-// normal and tangent as octahedral snorm16 pairs, float32 UV, the tint as unorm8 -- then meshoptimizer's lossless
-// vertex and index codecs over that. What it drops is what the upload drops anyway: the tangent's length (mesh.vert
-// normalises) and tint precision past 8 bits. A mesh the standard vertex does not fit keeps those planes exact: a
+// COMPACT MESH (ADR-0224): a RenderMesh close to the GPU's standard vertex (ADR-0096) -- float32 position, float32
+// normal (kept exact: the loader re-derives world-planar UVs from it), the tangent as an octahedral snorm16 pair,
+// float32 UV, the tint as unorm8 -- then meshoptimizer's lossless vertex and index codecs over that. What it drops is
+// what the upload drops anyway: the tangent's length (mesh.vert normalises) and tint precision past 8 bits. A mesh
+// the standard vertex does not fit keeps those planes exact: a
 // tint outside [0, 1] stores float colour, a tangent that carries data (RenderMesh::tangentIsData) a float tangent.
 // Positions and UVs are exact, so the pieces of neighbouring cells still meet bit for bit.
 void putCompactMesh(BinWriter& w, const RenderMesh& m);

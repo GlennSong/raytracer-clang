@@ -13,7 +13,8 @@ using namespace engine;
 
 namespace {
 DriverState facing(Vec2 fwd, Real speed) { DriverState s; s.forward = fwd; s.speed = speed; return s; }
-DriverCommand want(Vec2 head, Real spd) { DriverCommand c; c.desiredHeading = head; c.desiredSpeed = spd; return c; }
+// Pure pursuit from the car at the origin: a lane frame toward `head`.
+DriverCommand want(Vec2 head, Real spd) { return DriverCommand::toward(Vec2(0, 0), head, spd); }
 }  // namespace
 
 TEST_CASE(driver_throttles_toward_target_speed_when_aligned) {
@@ -27,7 +28,7 @@ TEST_CASE(driver_throttles_toward_target_speed_when_aligned) {
 
 TEST_CASE(driver_steers_right_toward_a_heading_on_its_right) {
     // Facing +Z; the car's right is -X — the lab-measured chirality ("+steer
-    // turns toward -x", driver_control.h). A desired heading of -X must steer +
+    // turns toward -x", the driving lab's steer-sign probe). A desired heading of -X must steer +
     // (right), matching PhysicsWorld::setVehicleInput's `right` sign. These two
     // used to pin the mirrored belief (right = +X), which Jolt refutes.
     DriverInput in = computeDriverInput(facing(Vec2(0, 1), 5.0), want(Vec2(-1, 0), 5.0));
@@ -46,7 +47,7 @@ TEST_CASE(driver_brakes_to_a_stop_when_asked_for_zero_speed) {
 }
 
 TEST_CASE(driver_brakes_when_overspeed) {
-    // Going faster than the target (but target > stopSpeed) → brake, no throttle.
+    // Going faster than the target → brake, no throttle.
     DriverInput in = computeDriverInput(facing(Vec2(0, 1), 15.0), want(Vec2(0, 1), 6.0));
     CHECK(in.brake > 0.0);
     CHECK(in.throttle == 0.0);
@@ -60,4 +61,42 @@ TEST_CASE(driver_steer_and_pedals_stay_in_range) {
     CHECK(in.brake >= 0.0 && in.brake <= 1.0);
     CHECK(in.throttle >= -1.0 && in.throttle <= 1.0);
     CHECK(std::fabs(in.steer) == 1.0);   // saturated on a 180° error
+}
+
+// THE CROSS-TRACK TERM (Stanley; item 24, #117: one controller for every AI driver): a car pointed straight down
+// its lane but sitting beside it steers back onto it -- toward -x (right, facing +z) when it sits at +x of the lane,
+// and harder the further out -- where a heading-only controller would have driven on parallel forever.
+TEST_CASE(driver_steers_back_onto_its_lane_from_beside_it) {
+    DriverCommand lane;
+    lane.laneA = Vec2(0, 0);
+    lane.laneB = Vec2(0, 20);
+    lane.desiredSpeed = 8.0;
+    DriverState s = facing(Vec2(0, 1), 8.0);
+    s.pos = Vec2(1.0, 5.0);   // a metre to the lane's left (+x facing +z)
+    const Real near = computeDriverInput(s, lane).steer;
+    s.pos = Vec2(2.5, 5.0);
+    const Real far = computeDriverInput(s, lane).steer;
+    CHECK(near > 0.0);          // right, back toward the lane
+    CHECK(far > near);          // harder the further out
+    s.pos = Vec2(-1.0, 5.0);
+    CHECK(computeDriverInput(s, lane).steer < 0.0);
+    s.pos = Vec2(0.0, 5.0);
+    CHECK(std::fabs(computeDriverInput(s, lane).steer) < 1e-9);   // on the lane, aligned: straight
+}
+
+// A stop is HELD: told to stop at a crawl, the brake does not ease off to a creep.
+TEST_CASE(driver_holds_the_brake_at_a_stop) {
+    const DriverInput in = computeDriverInput(facing(Vec2(0, 1), 0.1), want(Vec2(0, 1), 0.0));
+    CHECK(in.brake >= 0.6);
+    CHECK(in.throttle == 0.0);
+}
+
+// ...and at a standstill, or rolling back down a slope: told to stop, never the throttle (the review of #117 item 24:
+// the merged controller held the brake only while the car was faster than asked, so a stopped car got neither pedal).
+TEST_CASE(driver_holds_the_brake_standing_still_and_rolling_back) {
+    for (const Real speed : {0.0, -0.5}) {
+        const DriverInput in = computeDriverInput(facing(Vec2(0, 1), speed), want(Vec2(0, 1), 0.0));
+        CHECK(in.brake >= 0.6);
+        CHECK(in.throttle == 0.0);
+    }
 }

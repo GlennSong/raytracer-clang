@@ -10,7 +10,7 @@
 #include <map>
 #include <cmath>
 #include <memory>
-#include <thread>
+#include "../../job_system.h"   // parallelRows: the shared pool (ADR-0288)
 
 namespace engine {
 
@@ -254,7 +254,6 @@ std::vector<ForestTree> placeForest(const ForestParams& p, double half, double s
                                     const std::function<bool(double, double)>& exclude, int vps) {
     std::vector<ForestTree> out;
     if (p.species.empty()) return out;
-    const int T = std::max(1u, std::min(32u, std::thread::hardware_concurrency()));
     const Noise sn(p.seed * 7919u + 13u);
     bool anyUnder = false;
     for (const ForestSpecies& fs : p.species) anyUnder = anyUnder || fs.understory;
@@ -265,81 +264,77 @@ std::vector<ForestTree> placeForest(const ForestParams& p, double half, double s
         const double spacing = under ? p.understorySpacing : p.spacing;
         const uint32_t salt = under ? 0x5EED5u : 0u;
         const int n = static_cast<int>(std::ceil(2.0 * half / spacing));
-        std::vector<std::vector<ForestTree>> parts(T);
-        std::vector<std::thread> th;
-        for (int t = 0; t < T; ++t)
-            th.emplace_back([&, t] {
-                for (int j = t; j < n; j += T)
-                    for (int i = 0; i < n; ++i) {
-                        const uint32_t h = (static_cast<uint32_t>(i) * 73856093u ^ static_cast<uint32_t>(j) * 19349663u ^ p.seed * 83492791u) + salt;
-                        const double x = -half + (i + 0.1 + 0.8 * unit(h)) * spacing, z = -half + (j + 0.1 + 0.8 * unit(h ^ 0xA5A5u)) * spacing;
-                        // the cheap part first: most of the island is rejected before a ground sample
-                        const double roll = unit(h ^ 0x51ED27u);
-                        const double pre = forestPrefilter(p, maps, x, z);
-                        // the understory takes a share of the canopy's density, most at a half-covered edge
-                        auto keep = [&](double d) { return under ? p.understoryDensity * (0.35 + 1.3 * 4.0 * d * (1.0 - d)) * (d > 0.05 ? 1.0 : 0.0) : d; };
-                        if (roll >= keep(pre) && (!under || pre <= 0.0)) continue;
-                        const double y = ground(x, z);
-                        const double e = 1.5;
-                        const double gx = (ground(x + e, z) - ground(x - e, z)) / (2 * e), gz = (ground(x, z + e) - ground(x, z - e)) / (2 * e);
-                        const double slope = std::atan(std::sqrt(gx * gx + gz * gz)) * 180.0 / 3.14159265358979;
-                        const double d = pre * forestGrounded(p, sea, cover, x, z, y, slope);
-                        if (roll >= keep(d)) continue;
-                        if (exclude && exclude(x, z)) continue;
-                        // the species: its altitude band (soft), its weight, its taste for wet ground, and a
-                        // patchy field of its own (stands, not a salad)
-                        const double alt = y - (sea > -1e29 ? sea : 0.0);
-                        const double wet = maps ? maps->at(x, z).wet : 0.0;
-                        // ...and the regions it stands in, each with its own mix (ForestRegion)
-                        double inRegion[8] = {};
-                        const std::size_t nRegions = std::min<std::size_t>(8, p.regions.size());
-                        for (std::size_t r = 0; r < nRegions; ++r) inRegion[r] = forestRegionAt(p.regions[r], p.seed, x, z);
-                        int best = -1;
-                        double bw = -1e9;
-                        for (std::size_t s = 0; s < p.species.size(); ++s) {
-                            const ForestSpecies& fs = p.species[s];
-                            if (fs.understory != under || fs.twinOnly) continue;
-                            double altLo = fs.altLo, regionK = 1.0;
-                            for (std::size_t r = 0; r < nRegions; ++r) {
-                                if (inRegion[r] <= 0.0) continue;
-                                const ForestRegion& R = p.regions[r];
-                                regionK *= 1.0 + (R.weight[s] - 1.0) * inRegion[r];
-                                if (R.named[s]) altLo += (std::min(altLo, R.altLo) - altLo) * inRegion[r];
-                            }
-                            const double band = smooth(altLo - 60.0, altLo + 20.0, alt) * (1.0 - smooth(fs.altHi - 20.0, fs.altHi + 60.0, alt));
-                            if (band <= 0.0) continue;
-                            const double k = regionK * (1.0 + fs.wet * ((0.03 + smooth(0.45, 0.8, wet)) * 4.0 - 1.0));
-                            const double patch = sn.fbm2(x * 0.004 + 17.0 * s, z * 0.004 - 11.0 * s, 3);
-                            const double w = std::log(band * fs.weight * k + 1e-6) + 1.6 * patch + 0.35 * unit(h ^ (0x1234u + static_cast<uint32_t>(s)));
-                            if (w > bw) { bw = w; best = static_cast<int>(s); }
-                        }
-                        if (best < 0) continue;
-                        // (a kind grown both ways: its recipe twin takes the tree where the twin's clumps fall --
-                        // groves of tens of metres, ragged at their edges, about `twinShare` of the kind's trees)
-                        if (const ForestSpecies& k = p.species[best]; k.twin >= 0) {
-                            // (the clumps' noise is near normal, sd 0.19, measured; its CDF makes the share exact)
-                            const double c = sn.fbm2(x * 0.02 + 31.0 * best, z * 0.02 - 23.0 * best, 2) + 0.08 * (unit(h ^ 0x7E7Eu) - 0.5);
-                            if (0.5 * std::erfc(-c / (0.191 * std::sqrt(2.0))) < k.twinShare) best = k.twin;
-                        }
-                        const ForestSpecies& fs = p.species[best];
-                        ForestTree tr;
-                        tr.pos = Vec3(x, y, z);
-                        tr.yaw = static_cast<float>(unit(h ^ 0x77u) * 6.2831853);
-                        // stunted toward the treeline and at a stand's thin edge
-                        const double tl = p.treelineM;
-                        const double stunt = 1.0 - 0.5 * smooth(tl - 220.0, tl, alt);
-                        tr.scale = static_cast<float>((0.72 + 0.5 * unit(h ^ 0x99u)) * stunt * (0.8 + 0.2 * d) * fs.scale);
-                        // (its variant -- in a species grown both ways, the stand-grown half as the stand is thick here)
-                        int nv = fs.variants, first = 0;
-                        if (fs.formByDensity && nv >= 2) {
-                            nv /= 2;
-                            if (unit(h ^ 0xF0F0u) < smooth(0.30, 0.65, d)) first = nv;
-                        }
-                        tr.variant = static_cast<uint16_t>(best * vps + first + static_cast<int>(unit(h ^ 0x3131u) * nv) % nv);
-                        parts[t].push_back(tr);
+        std::vector<std::vector<ForestTree>> parts(static_cast<std::size_t>(n));   // per row, joined in row order: the same on every machine
+        parallelRows(n, [&](int j) {
+            for (int i = 0; i < n; ++i) {
+                const uint32_t h = (static_cast<uint32_t>(i) * 73856093u ^ static_cast<uint32_t>(j) * 19349663u ^ p.seed * 83492791u) + salt;
+                const double x = -half + (i + 0.1 + 0.8 * unit(h)) * spacing, z = -half + (j + 0.1 + 0.8 * unit(h ^ 0xA5A5u)) * spacing;
+                // the cheap part first: most of the island is rejected before a ground sample
+                const double roll = unit(h ^ 0x51ED27u);
+                const double pre = forestPrefilter(p, maps, x, z);
+                // the understory takes a share of the canopy's density, most at a half-covered edge
+                auto keep = [&](double d) { return under ? p.understoryDensity * (0.35 + 1.3 * 4.0 * d * (1.0 - d)) * (d > 0.05 ? 1.0 : 0.0) : d; };
+                if (roll >= keep(pre) && (!under || pre <= 0.0)) continue;
+                const double y = ground(x, z);
+                const double e = 1.5;
+                const double gx = (ground(x + e, z) - ground(x - e, z)) / (2 * e), gz = (ground(x, z + e) - ground(x, z - e)) / (2 * e);
+                const double slope = std::atan(std::sqrt(gx * gx + gz * gz)) * 180.0 / 3.14159265358979;
+                const double d = pre * forestGrounded(p, sea, cover, x, z, y, slope);
+                if (roll >= keep(d)) continue;
+                if (exclude && exclude(x, z)) continue;
+                // the species: its altitude band (soft), its weight, its taste for wet ground, and a
+                // patchy field of its own (stands, not a salad)
+                const double alt = y - (sea > -1e29 ? sea : 0.0);
+                const double wet = maps ? maps->at(x, z).wet : 0.0;
+                // ...and the regions it stands in, each with its own mix (ForestRegion)
+                double inRegion[8] = {};
+                const std::size_t nRegions = std::min<std::size_t>(8, p.regions.size());
+                for (std::size_t r = 0; r < nRegions; ++r) inRegion[r] = forestRegionAt(p.regions[r], p.seed, x, z);
+                int best = -1;
+                double bw = -1e9;
+                for (std::size_t s = 0; s < p.species.size(); ++s) {
+                    const ForestSpecies& fs = p.species[s];
+                    if (fs.understory != under || fs.twinOnly) continue;
+                    double altLo = fs.altLo, regionK = 1.0;
+                    for (std::size_t r = 0; r < nRegions; ++r) {
+                        if (inRegion[r] <= 0.0) continue;
+                        const ForestRegion& R = p.regions[r];
+                        regionK *= 1.0 + (R.weight[s] - 1.0) * inRegion[r];
+                        if (R.named[s]) altLo += (std::min(altLo, R.altLo) - altLo) * inRegion[r];
                     }
-            });
-        for (auto& x : th) x.join();
+                    const double band = smooth(altLo - 60.0, altLo + 20.0, alt) * (1.0 - smooth(fs.altHi - 20.0, fs.altHi + 60.0, alt));
+                    if (band <= 0.0) continue;
+                    const double k = regionK * (1.0 + fs.wet * ((0.03 + smooth(0.45, 0.8, wet)) * 4.0 - 1.0));
+                    const double patch = sn.fbm2(x * 0.004 + 17.0 * s, z * 0.004 - 11.0 * s, 3);
+                    const double w = std::log(band * fs.weight * k + 1e-6) + 1.6 * patch + 0.35 * unit(h ^ (0x1234u + static_cast<uint32_t>(s)));
+                    if (w > bw) { bw = w; best = static_cast<int>(s); }
+                }
+                if (best < 0) continue;
+                // (a kind grown both ways: its recipe twin takes the tree where the twin's clumps fall --
+                // groves of tens of metres, ragged at their edges, about `twinShare` of the kind's trees)
+                if (const ForestSpecies& k = p.species[best]; k.twin >= 0) {
+                    // (the clumps' noise is near normal, sd 0.19, measured; its CDF makes the share exact)
+                    const double c = sn.fbm2(x * 0.02 + 31.0 * best, z * 0.02 - 23.0 * best, 2) + 0.08 * (unit(h ^ 0x7E7Eu) - 0.5);
+                    if (0.5 * std::erfc(-c / (0.191 * std::sqrt(2.0))) < k.twinShare) best = k.twin;
+                }
+                const ForestSpecies& fs = p.species[best];
+                ForestTree tr;
+                tr.pos = Vec3(x, y, z);
+                tr.yaw = static_cast<float>(unit(h ^ 0x77u) * 6.2831853);
+                // stunted toward the treeline and at a stand's thin edge
+                const double tl = p.treelineM;
+                const double stunt = 1.0 - 0.5 * smooth(tl - 220.0, tl, alt);
+                tr.scale = static_cast<float>((0.72 + 0.5 * unit(h ^ 0x99u)) * stunt * (0.8 + 0.2 * d) * fs.scale);
+                // (its variant -- in a species grown both ways, the stand-grown half as the stand is thick here)
+                int nv = fs.variants, first = 0;
+                if (fs.formByDensity && nv >= 2) {
+                    nv /= 2;
+                    if (unit(h ^ 0xF0F0u) < smooth(0.30, 0.65, d)) first = nv;
+                }
+                tr.variant = static_cast<uint16_t>(best * vps + first + static_cast<int>(unit(h ^ 0x3131u) * nv) % nv);
+                parts[static_cast<std::size_t>(j)].push_back(tr);
+            }
+        });
         for (auto& v : parts) out.insert(out.end(), v.begin(), v.end());
     }
     return out;
@@ -351,63 +346,58 @@ std::vector<PlacedRock> placeRocks(const ForestParams& p, double half, double se
                                    const std::function<double(double, double, double)>& shore,
                                    const std::function<bool(double, double)>& excludeShore) {
     std::vector<PlacedRock> out;
-    const int T = std::max(1u, std::min(32u, std::thread::hardware_concurrency()));
     for (std::size_t li = 0; li < p.rocks.size(); ++li) {
         const RockLayer& L = p.rocks[li];
         const int n = static_cast<int>(std::ceil(2.0 * half / L.spacing));
-        std::vector<std::vector<PlacedRock>> parts(T);
-        std::vector<std::thread> th;
-        for (int t = 0; t < T; ++t)
-            th.emplace_back([&, t] {
-                for (int j = t; j < n; j += T)
-                    for (int i = 0; i < n; ++i) {
-                        const uint32_t h = (static_cast<uint32_t>(i) * 73856093u ^ static_cast<uint32_t>(j) * 19349663u ^ p.seed * 83492791u) + 0xB0u * static_cast<uint32_t>(li + 1);
-                        const double roll = unit(h ^ 0x51ED27u);
-                        if (roll >= L.density) continue;
-                        const double x = -half + (i + 0.1 + 0.8 * unit(h)) * L.spacing, z = -half + (j + 0.1 + 0.8 * unit(h ^ 0xA5A5u)) * L.spacing;
-                        // the maps first (no ground sample): most of the island is the wrong ground
-                        TerrainMapSample m;
-                        if (maps) m = maps->at(x, z);
-                        const double pre = forestPrefilter(p, maps, x, z);
-                        bool ok = false;
-                        switch (L.ground) {
-                            case 0: ok = maps && m.scree > 0.25 && roll < L.density * std::min(1.0, m.scree * 1.6); break;
-                            case 1: ok = maps && m.convex > 0.1 && m.soil < 0.35; break;
-                            case 2: ok = maps && m.soil > 0.5 && pre < 0.15; break;
-                            case 3: ok = pre > 0.5; break;
-                            case 5: ok = static_cast<bool>(shore); break;
-                            default: ok = true; break;
-                        }
-                        if (!ok) continue;
-                        const double y = ground(x, z);
-                        const double alt = y - (sea > -1e29 ? sea : 0.0);
-                        if (sea > -1e29 && alt < 0.3) continue;   // (above the sea, when there is one)
-                        const double e = 1.5;
-                        const double gx = (ground(x + e, z) - ground(x - e, z)) / (2 * e), gz = (ground(x, z + e) - ground(x, z - e)) / (2 * e);
-                        const double slope = std::atan(std::sqrt(gx * gx + gz * gz)) * 57.2957795;
-                        if (cover) {
-                            const Cover c = cover->at(x, z, y, std::cos(slope / 57.2957795));
-                            if (L.ground == 1 && c.rock < 0.4) continue;
-                            if (L.ground == 4 && c.sand < 0.5) continue;
-                            if (L.ground != 1 && L.ground != 0 && c.snow > 0.3) continue;
-                        }
-                        if (L.ground == 3 && forestGrounded(p, sea, cover, x, z, y, slope) < 0.3) continue;
-                        if (L.ground == 5 && roll >= L.density * shore(x, z, y)) continue;
-                        if (slope > 55.0) continue;
-                        const auto& ex = L.ground == 5 && excludeShore ? excludeShore : exclude;
-                        if (ex && ex(x, z)) continue;
-                        PlacedRock r;
-                        r.pos = Vec3(x, y, z);
-                        r.yaw = static_cast<float>(unit(h ^ 0x77u) * 6.2831853);
-                        r.scale = static_cast<float>(0.55 + 0.9 * std::pow(unit(h ^ 0x99u), 2.0));   // many small, a few big
-                        r.tiltDir = static_cast<float>(unit(h ^ 0x55u) * 6.2831853);
-                        r.tilt = static_cast<float>(unit(h ^ 0x66u) * (L.ground == 1 ? 0.1 : 0.25) + std::min(0.35, slope / 57.2957795 * 0.5));
-                        r.layer = static_cast<uint16_t>(li);
-                        r.variant = static_cast<uint16_t>(static_cast<int>(unit(h ^ 0x3131u) * L.variants) % L.variants);
-                        parts[t].push_back(r);
-                    }
-            });
-        for (auto& x : th) x.join();
+        std::vector<std::vector<PlacedRock>> parts(static_cast<std::size_t>(n));   // per row, joined in row order: the same on every machine
+        parallelRows(n, [&](int j) {
+            for (int i = 0; i < n; ++i) {
+                const uint32_t h = (static_cast<uint32_t>(i) * 73856093u ^ static_cast<uint32_t>(j) * 19349663u ^ p.seed * 83492791u) + 0xB0u * static_cast<uint32_t>(li + 1);
+                const double roll = unit(h ^ 0x51ED27u);
+                if (roll >= L.density) continue;
+                const double x = -half + (i + 0.1 + 0.8 * unit(h)) * L.spacing, z = -half + (j + 0.1 + 0.8 * unit(h ^ 0xA5A5u)) * L.spacing;
+                // the maps first (no ground sample): most of the island is the wrong ground
+                TerrainMapSample m;
+                if (maps) m = maps->at(x, z);
+                const double pre = forestPrefilter(p, maps, x, z);
+                bool ok = false;
+                switch (L.ground) {
+                    case 0: ok = maps && m.scree > 0.25 && roll < L.density * std::min(1.0, m.scree * 1.6); break;
+                    case 1: ok = maps && m.convex > 0.1 && m.soil < 0.35; break;
+                    case 2: ok = maps && m.soil > 0.5 && pre < 0.15; break;
+                    case 3: ok = pre > 0.5; break;
+                    case 5: ok = static_cast<bool>(shore); break;
+                    default: ok = true; break;
+                }
+                if (!ok) continue;
+                const double y = ground(x, z);
+                const double alt = y - (sea > -1e29 ? sea : 0.0);
+                if (sea > -1e29 && alt < 0.3) continue;   // (above the sea, when there is one)
+                const double e = 1.5;
+                const double gx = (ground(x + e, z) - ground(x - e, z)) / (2 * e), gz = (ground(x, z + e) - ground(x, z - e)) / (2 * e);
+                const double slope = std::atan(std::sqrt(gx * gx + gz * gz)) * 57.2957795;
+                if (cover) {
+                    const Cover c = cover->at(x, z, y, std::cos(slope / 57.2957795));
+                    if (L.ground == 1 && c.rock < 0.4) continue;
+                    if (L.ground == 4 && c.sand < 0.5) continue;
+                    if (L.ground != 1 && L.ground != 0 && c.snow > 0.3) continue;
+                }
+                if (L.ground == 3 && forestGrounded(p, sea, cover, x, z, y, slope) < 0.3) continue;
+                if (L.ground == 5 && roll >= L.density * shore(x, z, y)) continue;
+                if (slope > 55.0) continue;
+                const auto& ex = L.ground == 5 && excludeShore ? excludeShore : exclude;
+                if (ex && ex(x, z)) continue;
+                PlacedRock r;
+                r.pos = Vec3(x, y, z);
+                r.yaw = static_cast<float>(unit(h ^ 0x77u) * 6.2831853);
+                r.scale = static_cast<float>(0.55 + 0.9 * std::pow(unit(h ^ 0x99u), 2.0));   // many small, a few big
+                r.tiltDir = static_cast<float>(unit(h ^ 0x55u) * 6.2831853);
+                r.tilt = static_cast<float>(unit(h ^ 0x66u) * (L.ground == 1 ? 0.1 : 0.25) + std::min(0.35, slope / 57.2957795 * 0.5));
+                r.layer = static_cast<uint16_t>(li);
+                r.variant = static_cast<uint16_t>(static_cast<int>(unit(h ^ 0x3131u) * L.variants) % L.variants);
+                parts[static_cast<std::size_t>(j)].push_back(r);
+            }
+        });
         for (auto& v : parts) out.insert(out.end(), v.begin(), v.end());
     }
     return out;

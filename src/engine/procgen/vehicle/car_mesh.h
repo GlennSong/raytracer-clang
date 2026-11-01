@@ -10,7 +10,7 @@
 
 namespace engine {
 
-// LOW-POLY vehicle bodies, superseding the lofted buildCarShell (ADR-0062).
+// LOW-POLY vehicle bodies, superseding the lofted car shell (ADR-0062; deleted in #117 wave 0).
 //
 // The old cars were compositions of axis-aligned boxes and every one read as a
 // cybertruck; the loft that replaced them regressed on device. This is neither:
@@ -35,7 +35,8 @@ namespace engine {
 // the inward-facing geometry actually exists.
 //
 // Conventions match the rest of the engine's vehicles: the car faces +Z, +X is
-// its right, origin at the BODY CENTRE, `size` = (width, height, length).
+// the driver's LEFT (right-handed, +Y up; see the lamp tags in car_mesh.cpp),
+// origin at the BODY CENTRE, `size` = (width, height, length).
 
 enum class CarLod : std::uint8_t { High, Mid, Low, Proxy };
 

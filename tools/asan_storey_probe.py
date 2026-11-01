@@ -16,7 +16,7 @@ import glob, math, os, random, subprocess, sys, time
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(REPO, "tools"))
-from lanelab_shots import send
+from rtctl import send   # the control channel (ADR-0291)
 
 minutes = float(sys.argv[1]) if len(sys.argv) > 1 else 30.0
 cx, cz = (float(sys.argv[2]), float(sys.argv[3])) if len(sys.argv) > 3 else (-3805.0, -604.0)

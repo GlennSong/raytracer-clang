@@ -159,7 +159,7 @@ Landed: a water SURFACE shader — animated ripple normals, GGX sun glint, Schli
 Fresnel sky reflection, depth-tinted transmission, shoreline foam — reading the
 engine's existing `Surface::Water` UV convention (uv.x depth, uv.y shore) so it
 serves a **planet ocean AND city/coast water**, and writing the same MRT as
-`mesh.frag`. `shaders/vulkan/water.{vert,frag}` (**SPIR-V compile-verified**),
+`mesh.frag`. `shaders/vulkan/water.{vert,frag}` (**SPIR-V compile-verified**; never wired, deleted in #117 wave 0),
 `shaders/metal/water.metal`, `shaders/webgpu/water.wgsl` (compile-unverified).
 **Pending (device):** route Surface::Water draws to the pipeline.
 
@@ -181,7 +181,7 @@ Mars's thin haze are visible without a GPU.
 
 Realtime shaders authored (a fullscreen scattering pass porting the CPU reference)
 for all three backends: `shaders/vulkan/atmosphere.frag` (**SPIR-V compile-verified
-with glslang**), `shaders/metal/atmosphere.metal`, `shaders/webgpu/atmosphere.wgsl`
+with glslang**; never wired, deleted in #117 wave 0), `shaders/metal/atmosphere.metal`, `shaders/webgpu/atmosphere.wgsl`
 (**naga-validated WGSL**; Metal compile-unverified — no Metal toolchain in CI).
 **Pipeline wiring done on Metal AND WebGPU** as an additive glow (loadOp Load, blend
 One+One) — the pass runs after the scene / before post so the limb halo blooms,
@@ -266,7 +266,8 @@ Original design notes:
 ### P6 — Star & deep space  *(shader)* — **star shader authored (3 backends); wiring pending**
 Landed: a star/sun fullscreen pass — a bright HDR disc with limb darkening + a
 Planckian **blackbody colour** from temperature + a bloom-friendly glow, gated on the
-reverse-Z far plane. `shaders/vulkan/star.frag` (**SPIR-V compile-verified**),
+reverse-Z far plane. `shaders/vulkan/star.frag` (**SPIR-V compile-verified**; never
+wired, deleted in #117 wave 0),
 `shaders/metal/star.metal`, `shaders/webgpu/star.wgsl` (compile-unverified). The
 starfield backdrop + night-side city lights remain. **Pending (device):** pipeline
 wiring.

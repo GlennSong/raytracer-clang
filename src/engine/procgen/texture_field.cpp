@@ -3,6 +3,7 @@
 #include "../bundle/bundle.h"
 
 #include "noise.h"
+#include "../../job_system.h"   // parallelRows: the shared pool (ADR-0288)
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -373,6 +374,38 @@ TextureData bakeFieldNormal(const Field2& height, double strength, int size) {
         }
     }
     return td;
+}
+
+std::vector<float> boxBlurGrid(const std::vector<float>& in, int n, int r, int passes, BlurEdge edge) {
+    std::vector<float> a(in), b(in.size());
+    for (int pass = 0; pass < passes; ++pass)
+        for (int axis = 0; axis < 2; ++axis) {
+            // cell k of line z along this pass's axis
+            auto idx = [n, axis](int z, int k) {
+                return axis == 0 ? static_cast<std::size_t>(z) * n + k : static_cast<std::size_t>(k) * n + z;
+            };
+            parallelRows(n, [&](int z) {
+                if (edge == BlurEdge::Clamp) {
+                    auto at = [&](int k) { return a[idx(z, std::clamp(k, 0, n - 1))]; };
+                    double s = 0.0;
+                    for (int k = -r; k <= r; ++k) s += at(k);
+                    for (int x = 0; x < n; ++x) {
+                        b[idx(z, x)] = static_cast<float>(s / (2 * r + 1));
+                        s += at(x + r + 1) - at(x - r);
+                    }
+                } else {   // Shrink: the in-grid part of the window, averaged
+                    double s = 0;
+                    int c = 0;
+                    for (int i = -r; i < n + r; ++i) {
+                        if (i + r < n && i + r >= 0) { s += a[idx(z, i + r)]; ++c; }
+                        if (i - r - 1 >= 0 && i - r - 1 < n) { s -= a[idx(z, i - r - 1)]; --c; }
+                        if (i >= 0 && i < n) b[idx(z, i)] = static_cast<float>(s / std::max(1, c));
+                    }
+                }
+            });
+            a.swap(b);
+        }
+    return a;
 }
 
 }  // namespace engine

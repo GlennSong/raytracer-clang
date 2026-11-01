@@ -64,7 +64,7 @@ the honest fix is a script that exercises them, not deletion.
 
 | Code | What it knows | Recommendation |
 | --- | --- | --- |
-| `surface_field.h` — `SurfaceField` (no production caller; tests only) | The **one-ground-oracle** design from ADR-0075. It unifies the three historically interchangeable height closures (`HeightSampler`, `HeightField`, `RoadNet::heightAt`), owns the cut/fill edit stack with a spatial index, and encodes a genuinely good invariant: *a stale index is a perf bug, never a correctness one* (queries fall back to the linear fold). Today `level_loader` does this by hand — accumulating `TerrainFlatten` vectors, calling `rebuildFlattenIndex` manually, passing bare closures. | **Wire it, don't cut it.** This is unbuilt-but-wanted infrastructure. Adopting it would delete hand-rolled folding from the loader and give the grading cascade one owner. |
+| ~~`surface_field.h` — `SurfaceField`~~ **Deleted (ADR-0280).** | The one-ground-oracle design from ADR-0075. `TerrainParams` already owns the edit stack and its index (`flatten`, `flattenIndex`) and `terrainHeight` folds more layers than SurfaceField did (eroded base, river carve, earthwork), so wiring SurfaceField in would have made a second owner. Its one idea worth keeping is still owed: *a stale index is a perf bug, never a correctness one*. `terrainHeight` trusts `flattenIndex` and its callers rebuild it by hand (`rebuildFlattenIndex`, 10 calls). | Give `FlattenGrid` the region count it was built over and fall back to the linear fold on a mismatch. Do it with a bake change, since a stale index in use today would move ground. |
 | `DistrictNet::blocks` (computed by `buildDistrict`, discarded by `applyGenerateRecipe`; only `city.cpp` consumes it) | The generator knows its own sector faces *before* warp/prune move every node. Discarding is currently correct — the post-warp graph is the truth. | **Keep, revisit under stage-9 work.** Zoning-follows-streets (task #5) may want the generator's own sector identity, which `extractBlocks` cannot recover. |
 
 **Duplication — real, but each needs a decision, not a delete.**
@@ -1053,9 +1053,9 @@ Open, ratcheted:
   BuildingInteriorSystem residency was skipped to avoid a system-to-system
   reference. Cosmetically indistinguishable today (both gates centre on the
   player); revisit if leaf counts ever matter.
-- **Walkers do not use doors.** PedGraph door nodes exist unwired; NPCs
-  neither enter buildings nor trigger leaves (DoorSystem tracks the player
-  only).
+- **Walkers do not use doors.** NPCs neither enter buildings nor trigger
+  leaves (DoorSystem tracks the player only). The unwired door graph
+  (PedGraph, ADR-0066) was deleted in #117 wave 0; walkers route on NavGraph.
 
 - **Interior finish PICKS are seed bits, not architecture.** Five floor
   finishes (walnut, oak, tile, marble, carpet -- the marble and carpet

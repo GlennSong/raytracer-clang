@@ -11,6 +11,11 @@
 
 namespace engine {
 
+// THE EYE ABOVE THE CAPSULE CENTRE (ADR-0287, #117 item 14): where the player's camera sits on its body, standing.
+// The one number the walker's camera, a rider pinned in a carrier (riding.h), a seat's hip (the driver's, a bus's,
+// a train's) and the swimmer's float all measure from.
+constexpr Real kEyeAboveCentre = 0.7;
+
 // Decides when a falling character should snap back to spawn. Pure logic,
 // kept apart from PlayerBody so it is testable without Jolt or a renderer.
 //
@@ -83,19 +88,13 @@ struct SwimState {
         else if (swimming && depth <= -kLeftAbove) swimming = false;   // (no water under: depth -1)
         return swimming;
     }
-    // Vertical speed: toward the floating height (a buoyant spring, bobbing), or up/down on request.
-    static Real verticalSpeed(Real centreY, Real floatY, bool rise, bool dive, Real t) {
-        if (dive) return -1.6;
-        const Real bob = 0.05 * std::sin(t * 1.7);
-        const Real toward = std::clamp((floatY + bob - centreY) * 2.2, Real(-1.4), Real(1.3));
-        return rise ? std::max(toward, centreY < floatY - 0.1 ? Real(1.6) : toward) : toward;
-    }
 };
 
 // THE ONE IMPACT RULE (ADR-0247): what a step LOST of the speed the body meant to have, along the way it meant to
 // go -- a landing loses the fall, a wall the run into it, a slam the swing. Speed kept along the way, or turned
 // aside (a skim along the ground, a shove off a corner), is not lost. Every mode reports its own meant and got to
-// PlayerBody::impact, and past the mode's tolerance the body goes limp.
+// PlayerBody::impact, and past the mode's tolerance the body goes limp. A body carried in a seat is measured by its
+// counterpart, RideJolt (seat_motion.h, ADR-0281): it chose no way, so turning aside is felt there too.
 inline Real speedLost(const Vec3& meant, const Vec3& got) {
     const Real m = std::sqrt(meant.x * meant.x + meant.y * meant.y + meant.z * meant.z);
     if (m < 1e-6) return 0;

@@ -4,6 +4,7 @@
 #include "../src/apps/citysim/activities.h"
 #include "../src/apps/citysim/scripting/agent_goals.h"
 #include "../src/apps/citysim/scripting/roles_lua.h"
+#include "../src/apps/citysim/scripting/signals_lua.h"
 #include "../src/engine/scripting/script_vm.h"
 
 #include <cstdio>
@@ -62,12 +63,45 @@ TEST_CASE(roles_lua_is_the_built_in_role_catalog) {
     CHECK(a == b);
     for (const citysim::ResidentRole& r : lua.roles)
         CHECK(buildDayTable(r.day).describe() == citysim::builtinDayTable(r.name).describe());
-    // the first four are the built-in Agent::Role ids
-    CHECK(lua.find("commuter") == 0 && lua.find("shopkeeper") == 1 && lua.find("stroller") == 2 && lua.find("student") == 3);
+    // the first four are the built-ins (kRoleCommuter...)
+    CHECK(lua.find("commuter") == citysim::kRoleCommuter && lua.find("shopkeeper") == citysim::kRoleShopkeeper &&
+          lua.find("stroller") == citysim::kRoleStroller && lua.find("student") == citysim::kRoleStudent);
+    CHECK(citysim::builtinRolesLead(lua).empty());
+    CHECK(std::string(lua.nameOf(citysim::kRoleStudent)) == "student");
+    // a catalog that reorders the built-ins is refused: an agent's role id would name the wrong day
+    ScriptVM swapped;
+    CHECK(swapped.doString(ss.str() + "\nroles.order[1], roles.order[3] = roles.order[3], roles.order[1]", &err));
+    citysim::RoleCatalog wrong;
+    CHECK(!loadRoleCatalog(swapped, wrong, &err));
+    CHECK(err.find("commuter") != std::string::npos);
     ScriptVM bad;
     CHECK(bad.doString("roles = { order = { 'x' }, x = { day = { pause = { target = 'moon' } } } }", &err));
     citysim::RoleCatalog none;
     CHECK(!loadRoleCatalog(bad, none, &err));
+}
+
+// THE SIGNALS' CYCLE: signals.lua is SignalTiming's defaults, and a time that is not positive is refused.
+TEST_CASE(signals_lua_is_the_built_in_signal_timing) {
+    ScriptVM vm;
+    std::string err;
+    std::ifstream f("assets/scripts/signals.lua");
+    std::stringstream ss;
+    ss << f.rdbuf();
+    CHECK(!ss.str().empty());
+    CHECK(vm.doString(ss.str(), &err));
+    citysim::SignalTiming lua;
+    lua.green = -1;
+    const bool ok = loadSignalTiming(vm, lua, &err);
+    if (!ok) std::printf("    %s\n", err.c_str());
+    CHECK(ok);
+    const citysim::SignalTiming cpp;
+    CHECK(lua.green == cpp.green && lua.yellow == cpp.yellow && lua.allRed == cpp.allRed && lua.walk == cpp.walk &&
+          lua.arrow == cpp.arrow && lua.arrowYellow == cpp.arrowYellow);
+    ScriptVM bad;
+    CHECK(bad.doString("signals = { green = 0 }", &err));
+    citysim::SignalTiming t;
+    CHECK(!loadSignalTiming(bad, t, &err));
+    CHECK(err.find("green") != std::string::npos);
 }
 
 TEST_CASE(agents_lua_rebuilds_the_wander_tables) {

@@ -129,4 +129,13 @@ void JobSystem::parallelFor(std::size_t begin, std::size_t end,
     wait(&counter);
 }
 
+JobSystem& sharedJobs() {
+#ifdef __EMSCRIPTEN__
+    static JobSystem jobs(0);
+#else
+    static JobSystem jobs;
+#endif
+    return jobs;
+}
+
 }  // namespace engine

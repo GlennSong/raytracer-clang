@@ -1,10 +1,8 @@
 #include "test_framework.h"
 
-#include "../src/engine/procgen/city/surface_field.h"
 #include "../src/engine/procgen/city/block_grade.h"
-#include "../src/engine/procgen/city/roads/road_entity.h"
-#include "../src/engine/procgen/city/road_network.h"
 #include "../src/engine/procgen/terrain.h"
+#include "../src/engine/procgen/terrain_field.h"
 
 #include <cmath>
 #include <vector>
@@ -41,17 +39,6 @@ std::vector<TerrainFlatten> sampleRegions() {
         }
     }
     return regions;
-}
-
-int maxDegree(const RoadGraph& g) {
-    std::vector<int> deg(g.nodes.size(), 0);
-    for (const RoadEdge& e : g.edges) {
-        if (e.a >= 0 && e.a < (int)deg.size()) deg[e.a]++;
-        if (e.b >= 0 && e.b < (int)deg.size()) deg[e.b]++;
-    }
-    int m = 0;
-    for (int d : deg) m = std::max(m, d);
-    return m;
 }
 
 }  // namespace
@@ -91,39 +78,6 @@ TEST_CASE(flatten_grid_empty_is_safe) {
     FlattenGrid grid = buildFlattenGrid(none);
     CHECK(grid.empty());
     CHECK_APPROX(applyFlatten(grid, none, 3.0, 4.0, 2.0, 0.0), 2.0, 1e-9);
-}
-
-// SurfaceField.height reproduces base + applyFlatten; the indexed and unindexed
-// paths agree; and it hands out a working sampler closure.
-TEST_CASE(surface_field_height_and_sampler) {
-    HeightField base = [](double x, double z) { return 0.2 * x - 0.1 * z; };
-    std::vector<TerrainFlatten> regions = sampleRegions();
-
-    SurfaceField field(base);
-    field.setEdits(regions);        // index stale -> linear fold
-    SurfaceField indexed(base);
-    indexed.setEdits(regions);
-    indexed.rebuildIndex();         // index live
-
-    Lcg rng(77);
-    for (int i = 0; i < 1500; ++i) {
-        double x = rng.range(-220, 220), z = rng.range(-220, 220);
-        double want = applyFlatten(regions, x, z, base(x, z), 0.0);
-        CHECK_APPROX(field.height(x, z), want, 1e-9);
-        CHECK_APPROX(indexed.height(x, z), want, 1e-9);
-        CHECK_APPROX(indexed.sampler()(x, z), want, 1e-9);
-    }
-}
-
-// Normal of a planar tilt points the expected way (finite differences on height).
-TEST_CASE(surface_field_normal_on_slope) {
-    // Ground rises toward +x at grade 0.5: n.x < 0, n.y > 0, |n|=1.
-    HeightField base = [](double x, double) { return 0.5 * x; };
-    SurfaceField field(base);
-    Vec3 n = field.normal(10.0, 10.0);
-    CHECK(n.y > 0.0f);
-    CHECK(n.x < 0.0f);
-    CHECK_APPROX(std::sqrt(n.x * n.x + n.y * n.y + n.z * n.z), 1.0, 1e-5);
 }
 
 // DaylightBatter earthwork (ADR-0075 Phase 1): outside a flat corridor deck the
@@ -181,7 +135,7 @@ TEST_CASE(block_grades_to_a_plane_then_terraces) {
     Poly2 block = {Vec2(0, 0), Vec2(60, 0), Vec2(60, 60), Vec2(0, 60)};
 
     // Gentle: 5% grade across 60 m = 3 m drop < maxDrop -> one tilted plane.
-    HeightSampler gentle = [](double x, double) { return 0.05 * x; };
+    HeightField gentle = [](double x, double) { return 0.05 * x; };
     std::vector<TerrainFlatten> g = gradeBlock(block, gentle);
     CHECK(g.size() == 1);
     CHECK_APPROX(g[0].dx, 0.05, 0.01);          // tilts with the ground
@@ -192,7 +146,7 @@ TEST_CASE(block_grades_to_a_plane_then_terraces) {
     // Each step keeps a REDUCED tilt (at most maxBandRise across its width) and
     // the steps still climb — not dead-flat stairs (the device: "I don't like
     // the harsh stair steps"), not the full plane either (then no steps).
-    HeightSampler steep = [](double x, double) { return 0.30 * x; };
+    HeightField steep = [](double x, double) { return 0.30 * x; };
     BlockGradeParams bp;
     std::vector<TerrainFlatten> t = gradeBlock(block, steep, bp);
     CHECK(t.size() >= 2);                        // several terraces

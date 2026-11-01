@@ -1,5 +1,6 @@
 #include "test_framework.h"
 #include "../src/engine/audio/audio_engine.h"
+#include "../src/engine/audio/engine_voices.h"
 #include "../src/engine/components.h"
 #include "../src/engine/systems/audio_system.h"
 #include "../src/engine/world.h"
@@ -846,6 +847,13 @@ TEST_CASE(open_sea_keeps_the_ocean_and_drops_the_ponds) {
     Sea sea;
     for (const auto& b : open) sea.add(b[0], b[1], b[2], b[3]);
     CHECK(sea.contains(500, 60) && !sea.contains(500, 625) && !sea.contains(500, 400));
+    // ADR-0286: the level's Sea holds EVERY drawn cell -- the pond is water to swim in, without the surf
+    const std::vector<uint8_t> mask = openSeaMask(cells, 0, 0, 1000, 1000);
+    Sea drawn;
+    for (std::size_t i = 0; i < cells.size(); ++i) drawn.add(cells[i][0], cells[i][1], cells[i][2], cells[i][3], mask[i] != 0);
+    CHECK(drawn.contains(500, 60) && drawn.surf(500, 60));     // the ocean: swum in, and waves
+    CHECK(drawn.contains(500, 625) && !drawn.surf(500, 625));  // the pond: swum in, no waves
+    CHECK(!drawn.contains(500, 400) && !drawn.surf(500, 400)); // dry land
     // a big lake inland still has waves
     std::vector<std::array<double, 4>> lake;
     for (int i = 0; i < 20; ++i) lake.push_back({i * 50.0, 0, i * 50.0 + 50, 50});   // the "edge" row
@@ -1179,3 +1187,24 @@ TEST_CASE(a_tyre_squeals_high_and_rolls_low) {
     CHECK(board > 0.5);
 }
 
+
+// THE ENGINE VOICE POOL (ADR-0285): the physics cars and the city's traffic share it. The nearest `maxVoices` engines
+// get voices, a car keeps its voice across frames, and a car gone from earshot fades out and is reclaimed.
+TEST_CASE(engine_voice_pool_voices_the_nearest_and_reclaims_the_gone) {
+    AudioEngine audio;
+    CHECK(audio.initialize(AudioBackendMode::Manual));
+    EngineVoicePool pool(2, 70.0, 2);
+    auto frame = [&](std::vector<EngineVoicePool::Engine> heard) { pool.update(audio, heard, 0.0, 1.0 / 60.0); };
+    std::vector<EngineVoicePool::Engine> three = {
+        {7, Vec3(30, 0, 0), 12.0, 0, 0.1, 900, true},   // a planner car: its load estimated
+        {8, Vec3(5, 0, 0), 9.0, 0.6, 0.2, 25},
+        {9, Vec3(10, 0, 0), 15.0, 0.3, 0.3, 100},
+    };
+    frame(three);
+    CHECK(audio.activeVoiceCount() == 2);   // the nearest two: 8 and 9
+    frame(three);
+    CHECK(audio.activeVoiceCount() == 2);   // the same two, kept, not restarted
+    for (int i = 0; i < 120; ++i) frame({});   // every car gone: two seconds of fading
+    CHECK(audio.activeVoiceCount() == 0);
+    pool.stopAll(audio);
+}

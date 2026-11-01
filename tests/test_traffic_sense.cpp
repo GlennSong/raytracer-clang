@@ -15,15 +15,6 @@ using namespace engine;
 
 namespace {
 
-VisionCone coneAt(Vec2 pos, Vec2 fwd, Real range = 22.0, Real halfAngle = 0.5) {
-    VisionCone c;
-    c.origin = pos;
-    c.forward = fwd;
-    c.range = range;
-    c.halfAngleRad = halfAngle;
-    return c;
-}
-
 SensedBody body(Vec2 pos, Vec2 heading, Real speed, Real halfLen = 2.1) {
     SensedBody b;
     b.pos = pos;
@@ -55,50 +46,6 @@ struct BikeCar {
 };
 
 }  // namespace
-
-TEST_CASE(sense_finds_the_car_ahead_in_lane) {
-    std::vector<SensedBody> bodies = { body(Vec2(0, 12), Vec2(0, 1), 5.0) };
-    LeaderSense l = senseLeader(coneAt(Vec2(0, 0), Vec2(0, 1)), bodies);
-    CHECK(l.found);
-    CHECK(std::fabs(l.gap - 12.0) < 1e-9);
-    CHECK(std::fabs(l.speed - 5.0) < 1e-9);
-}
-
-TEST_CASE(sense_ignores_moving_cross_traffic) {
-    // A car crossing perpendicular 15 m ahead: braking for it is the junction
-    // deadlock the planner already solved — not a leader.
-    std::vector<SensedBody> bodies = { body(Vec2(0, 15), Vec2(1, 0), 6.0) };
-    CHECK(!senseLeader(coneAt(Vec2(0, 0), Vec2(0, 1)), bodies).found);
-}
-
-TEST_CASE(sense_stops_for_a_stationary_body_regardless_of_facing) {
-    // A stalled car sideways across my lane (or a standing pedestrian) IS an
-    // obstacle, whatever direction it points.
-    std::vector<SensedBody> bodies = { body(Vec2(0.5, 10), Vec2(1, 0), 0.0) };
-    LeaderSense l = senseLeader(coneAt(Vec2(0, 0), Vec2(0, 1)), bodies);
-    CHECK(l.found);
-    CHECK(l.speed == 0.0);
-}
-
-TEST_CASE(sense_ignores_the_adjacent_lane_and_itself) {
-    std::vector<SensedBody> bodies = {
-        body(Vec2(0, 0), Vec2(0, 1), 4.0),      // me (skip index 0)
-        body(Vec2(3.5, 12), Vec2(0, 1), 4.0),   // parallel car one lane over
-    };
-    CHECK(!senseLeader(coneAt(Vec2(0, 0), Vec2(0, 1)), bodies,
-                       /*lateralMax=*/2.2, /*stationarySpeed=*/1.0, /*skip=*/0).found);
-}
-
-TEST_CASE(sense_picks_the_nearest_of_several) {
-    std::vector<SensedBody> bodies = {
-        body(Vec2(0, 18), Vec2(0, 1), 7.0),
-        body(Vec2(0, 9), Vec2(0, 1), 3.0),
-    };
-    LeaderSense l = senseLeader(coneAt(Vec2(0, 0), Vec2(0, 1)), bodies);
-    CHECK(l.found);
-    CHECK(std::fabs(l.gap - 9.0) < 1e-9);
-    CHECK(std::fabs(l.speed - 3.0) < 1e-9);
-}
 
 TEST_CASE(follow_speed_ramps_to_zero_at_the_bumper) {
     LeaderSense l;
@@ -239,17 +186,17 @@ TEST_CASE(convoy_follower_never_rear_ends_its_leader) {
     for (int i = 0; i < 2000; ++i) {                     // 100 s
         // Leader: plain pursuit at 4 m/s.
         lfLead.update(lead.pos);
-        DriverCommand lc = pursuitCommand(lfLead, lead.pos, 4.0, pursuitLookahead(lead.speed));
-        lead.step(computeDriverInput(DriverState{lead.fwd, lead.speed}, lc), dt);
+        DriverCommand lc = pursuitCommand(lfLead, lead.pos, lead.fwd, 4.0, pursuitLookahead(lead.speed));
+        lead.step(computeDriverInput(DriverState{lead.pos, lead.fwd, lead.speed}, lc), dt);
 
         // Follower: pursuit at 9, capped by what it SEES ahead.
         lfFollow.update(follow.pos);
         std::vector<SensedBody> bodies = { body(lead.pos, lead.fwd, lead.speed, halfLen) };
-        LeaderSense sensed = senseLeader(coneAt(follow.pos, follow.fwd), bodies);
+        LeaderSense sensed = senseAlongPath(lfFollow, 30.0, 2.2, bodies);   // as possession senses
         Real target = followSpeed(9.0, sensed, halfLen, bumper);
-        DriverCommand fc = pursuitCommand(lfFollow, follow.pos, target,
+        DriverCommand fc = pursuitCommand(lfFollow, follow.pos, follow.fwd, target,
                                           pursuitLookahead(follow.speed));
-        follow.step(computeDriverInput(DriverState{follow.fwd, follow.speed}, fc), dt);
+        follow.step(computeDriverInput(DriverState{follow.pos, follow.fwd, follow.speed}, fc), dt);
 
         Vec2 d = lead.pos - follow.pos;
         minGap = std::min(minGap, d.length());

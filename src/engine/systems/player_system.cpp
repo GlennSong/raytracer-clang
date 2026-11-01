@@ -572,7 +572,7 @@ void PlayerSystem::update(FrameContext& ctx) {
             ? (body_.standHalfHeight * PlayerBody::kCrouchHalfScale + body_.standRadius) /
                   std::max(Real(1e-3), body_.standHalfHeight + body_.standRadius)
             : Real(1);
-    camera.eye = t->position + Vec3(0, body_.eyeHeight * eyeScale, 0);
+    camera.eye = t->position + Vec3(0, kEyeAboveCentre * eyeScale, 0);
     // SEATED or LYING (InteractionSystem, engine/interaction.h): the eye is the pose's, turned once to face along
     // it -- after that the mouse looks round as usual. First person while there: the shoulder rig frames the
     // standing capsule, not the seat.

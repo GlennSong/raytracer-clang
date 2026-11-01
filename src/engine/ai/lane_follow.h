@@ -99,22 +99,33 @@ inline Real pursuitLookahead(Real speed, Real minLook = 4.0, Real gain = 0.7) {
     return minLook + gain * std::max(Real(0), speed);
 }
 
-// The pursuit command: aim the desired heading at the lookahead point from the
-// car's real position. desiredSpeed is the caller's plan (signals / following /
-// catch-up live above this), except for one built-in guard: it is capped by the
-// REMAINING path (endBrakeGain * metres left), so the car eases to a stop at the
-// path end. Without the cap, a car commanded to cruise past its last point
-// orbits it at full lock forever — the harness caught exactly that.
-inline DriverCommand pursuitCommand(const LaneFollower& lf, const Vec2& pos,
+// The path command: the LANE FRAME of the route around the car -- from its spot on the path (the follower's station)
+// to the lookahead point -- for the one controller's Stanley law (driver_agent.h): heading error to that chord plus
+// the cross-track back onto it. Measured on real physics against the old pure pursuit (aim at the lookahead point
+// alone, cross-track zero) over a two-corner route: mean drift off the route 0.40 -> 0.28 m, worst 2.94 -> 2.70 m
+// (item 24, #117; `agent_driver_holds_a_cornering_route_on_real_physics`).
+// desiredSpeed is the caller's plan (signals / following / catch-up live above this), with two built-in guards. It is
+// capped by the REMAINING path (endBrakeGain * metres left), so the car eases to a stop at the path end: without the
+// cap, a car commanded to cruise past its last point orbits it at full lock forever, which the harness caught. And it
+// SLOWS INTO A MISALIGNED HEADING: turnSlowdown sheds that fraction of the speed as the aim swings away from the car's
+// `forward` (0.75: a perpendicular aim drops it to 25%). A driver brakes for a turn they haven't made yet, and slower
+// also means a shorter lookahead, which tightens the turn.
+inline DriverCommand pursuitCommand(const LaneFollower& lf, const Vec2& pos, const Vec2& forward,
                                     Real desiredSpeed, Real lookaheadDist,
-                                    Real endBrakeGain = 0.5) {
+                                    Real endBrakeGain = 0.5, Real turnSlowdown = 0.75) {
     DriverCommand c;
     c.desiredSpeed = desiredSpeed;
     if (lf.valid()) {
         c.desiredSpeed = std::min(c.desiredSpeed, endBrakeGain * lf.remaining());
-        Vec2 d = lf.lookahead(lookaheadDist) - pos;
-        Real l = std::sqrt(d.x * d.x + d.y * d.y);
-        if (l > 1e-6) c.desiredHeading = d * (1.0 / l);
+        c.laneA = lf.lookahead(0.0);
+        c.laneB = lf.lookahead(lookaheadDist);
+        const Vec2 d = c.laneB - pos;
+        const Real l = std::sqrt(d.x * d.x + d.y * d.y);
+        const Real fl = std::sqrt(forward.x * forward.x + forward.y * forward.y);
+        if (l > 1e-6 && fl > 1e-6) {
+            const Real align = (d.x * forward.x + d.y * forward.y) / (l * fl);
+            c.desiredSpeed *= 1.0 - turnSlowdown * (1.0 - std::max(Real(0), align));
+        }
     }
     return c;
 }

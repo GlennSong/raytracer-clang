@@ -3,7 +3,7 @@
 
 #include "rt_math.h"
 #include "geometry.h"
-#include "kdtree.h"
+#include "triangle_bvh.h"
 #include <vector>
 
 namespace engine {
@@ -18,7 +18,7 @@ namespace engine {
 // Scene::materials, like the flat soup), plus a kd-tree built over them once.
 struct MeshProto {
     std::vector<Triangle> triangles;
-    KdTree blas;
+    TriangleBVH blas;
     AABB localBounds;
 
     void build();   // build the BLAS + local bounds from `triangles`

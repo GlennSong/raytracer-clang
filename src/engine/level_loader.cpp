@@ -23,8 +23,6 @@
 #include <cstdlib>
 #include <tinygltf/stb_image_write.h>   // the PNG writer the elevation maps use
                                         // (implementation lives in model_importer.cpp)
-#include "procgen/city/road_rules.h"    // DesignRules: the per-class grade table the
-                                        // poke report hands weldChainProfiles
 #include "procgen/earthwork.h"
 #include "procgen/grass.h"
 #include "procgen/stylized_tree.h"
@@ -76,7 +74,6 @@
 #include "procgen/city/road_network.h" // extractBlocks (block grading)
 #include "procgen/city/city_svg.h"
 #include "procgen/city/architect.h"   // districtName (city map hub labels)
-#include "procgen/city/road_constraints.h"   // applyConstraints — bake roundabouts into the graph
 #include "procgen/city/road_mesh.h"   // triangulatePolygon (building prism colliders)
 #include "procgen/city/street_furniture.h"   // build-time signal/lamp placement
 #include "procgen/city/street_kit.h"  // trafficSignalProto, streetLamp
@@ -303,11 +300,6 @@ static Collider buildCollider(const std::string& shape, const json& sizeJ,
     return c;
 }
 
-// THE SURFACE CDLOD DRAWS: the leaf mesh's triangle under (x, z) (lodSurfaceHeight) -- what the player stands on and
-// the leaf collider is built from. Not entityGround: that one is dilated over a cell, up to 0.4 m above the mesh on a
-// hillside. Empty without a CDLOD terrain. BY POINTER: the closure is copied into every streamed chunk's preparer,
-// and a by-value config copied the whole flatten set each time -- 40,000 street strips x 14,000 chunks was 44 GB
-// and the OOM killer (2026-09-29).
 // THE STREET TREES' HEIGHTS (real_tree.h): each street species at its own street height.
 static double streetTreeHeight(engine::StreetSpecies sp) {
     switch (sp) {
@@ -321,6 +313,15 @@ static double streetTreeHeight(engine::StreetSpecies sp) {
     }
 }
 
+// THE SURFACE CDLOD DRAWS (ADR-0280): what the player stands on and the leaf collider is built from -- the ONE
+// drawn-ground sampler the vegetation, the dressing and the street furniture plant on. Not entityGround: that one is
+// dilated over a cell, up to 0.4 m above the mesh on a hillside. Empty without a CDLOD terrain.
+// - BAKED (ADR-0095): the pyramid IS the drawn ground (the baked mesher draws from it), read in ~9 hash lookups
+//   where the field is evaluated in ~50 us over a city (its pads and earthwork) -- the grass's tiles over a town
+//   took 40-110 ms each (ADR-0225). Past its edge, and with RT_GROUND_FIELD=1 (A/B), the field below.
+// - The field: the leaf mesh's triangle under (x, z) (lodSurfaceHeight).
+// BY POINTER: the closure is copied into every streamed chunk's preparer, and a by-value config copied the whole
+// flatten set each time -- 40,000 street strips x 14,000 chunks was 44 GB and the OOM killer (2026-09-29).
 static std::function<Real(Real, Real)> cdlodDrawnGround(World& world) {
     std::function<Real(Real, Real)> g;
     world.each<TerrainLodConfig>([&](Entity, TerrainLodConfig& c) {
@@ -329,6 +330,13 @@ static std::function<Real(Real, Real)> cdlodDrawnGround(World& world) {
         g = [cfgp, nz](Real x, Real z) {
             return lodSurfaceHeight(cfgp->params, *nz, x, z, cfgp->worldHalf, cfgp->numLods, cfgp->gridRes);
         };
+        if (c.baked && !std::getenv("RT_GROUND_FIELD")) {
+            std::shared_ptr<const pyramid::Pyramid> pyr = c.baked;
+            g = [pyr, cfgp, nz](Real x, Real z) {
+                if (pyr->finestAt(x, z)) return pyr->height(x, z);
+                return lodSurfaceHeight(cfgp->params, *nz, x, z, cfgp->worldHalf, cfgp->numLods, cfgp->gridRes);
+            };
+        }
     });
     return g;
 }
@@ -656,7 +664,6 @@ static void publishCityProducts(const roads::RoadBuilder& b, const roads::RoadBu
     if (have) return;
     engine::LevelRoadGraph lrg; lrg.graph = b.navGraph(in);
     if (lrg.graph.edges.empty()) return;
-    lrg.paintedMarkings = std::string(b.name()) == "lanes";   // its deck carries the stop bars, crosswalks and arrows
     LOG_INFO << "[roads] unified road graph from the " << b.name() << " builder's twin: "
              << lrg.graph.nodes.size() << " nodes, " << lrg.graph.edges.size() << " edges";
     world.add<engine::LevelRoadGraph>(world.create(), std::move(lrg));
@@ -1865,9 +1872,8 @@ static void loadCdlodTerrain(const TerrainParams& p, const json& t, World& world
         if (!hit) {
             auto noise = std::make_shared<Noise>(cfg.seed);
             const TerrainParams& tp = cfg.params;
-            JobSystem jobs;
             *pyr = pyramid::buildPyramid(
-                spec, [&](double x, double z, double step) { return lodVertexHeight(tp, *noise, x, z, step); }, &jobs, refine);
+                spec, [&](double x, double z, double step) { return lodVertexHeight(tp, *noise, x, z, step); }, &sharedJobs(), refine);
             if (useCache && !pyramid::writePyramidBundle(*pyr, key, cachePath, &cacheErr))
                 LOG_WARN << "[terrain] baked ground not cached: " << cacheErr;
         }
@@ -2191,10 +2197,9 @@ static void loadForest(const json& fj, const TerrainParams& terrain, const Noise
     for (const ForestSpecies& s : fp.species) vps = std::max(vps, s.variants);
     const int nVar = static_cast<int>(fp.species.size()) * vps;
     // a variant's near parts: its bark and leaves, or a recipe tree's levels' (tree_lods.h), each an instanced draw
-    struct Part { MeshHandle mesh; RenderMaterial mat; double drawM = 0, minM = 0; };
     // `shade`: the impostor's colour scale -- a recipe tree's crown is darkened inside by real shadows, which the
     // impostor's picture (rasterised unlit, then lit as one card) never had
-    struct Var { std::vector<Part> parts; int species = -1; ImpostorSlot slot; RealTree tree; double shade = 1.0; };
+    struct Var { std::vector<RecipeTreePart> parts; int species = -1; ImpostorSlot slot; RealTree tree; double shade = 1.0; };
     std::vector<Var> vars(nVar);
     std::vector<TextureHandle> folTex(fp.species.size());
     std::vector<TextureData> folData(fp.species.size());
@@ -2297,9 +2302,8 @@ static void loadForest(const json& fj, const TerrainParams& terrain, const Noise
                         : growRecipeLevels(variantRecipes[static_cast<std::size_t>(v)], seed, {}, bands, true, &branchCards);
                 if (!hit && cacheKey) grown.push_back(levels);
                 const std::string key = "forest:recipe:" + fs.recipe + ":" + std::to_string(fp.seed) + ":" + std::to_string(v);
-                for (const RecipeTreePart& pt : recipeTreeParts(levels, key, wood, barkMat, leafTex, reach - reachFade, reach,
-                                                                reach + 10.0, renderer, assets))
-                    var.parts.push_back({pt.mesh, pt.mat, pt.drawM, pt.minM});
+                var.parts = recipeTreeParts(levels, key, wood, barkMat, leafTex, reach - reachFade, reach, reach + 10.0,
+                                            renderer, assets);
                 // the impostor's tree: the light level, measured as real_tree.h measures its own
                 const TreeMesh& lt = levels.back().tree;
                 RealTree& rt = var.tree;
@@ -2587,7 +2591,7 @@ static void loadForest(const json& fj, const TerrainParams& terrain, const Noise
             cen = cen / static_cast<Real>(per[v].size());
             Real spread = 0;
             for (const Mat4& m : per[v]) spread = std::max(spread, (Vec3(m.m[0][3], m.m[1][3], m.m[2][3]) - cen).length());
-            for (const Part& part : vars[v].parts) {
+            for (const RecipeTreePart& part : vars[v].parts) {
                 InstanceGroup g;
                 g.mesh = part.mesh;
                 g.material = part.mat;
@@ -4606,7 +4610,7 @@ bool LevelLoader::load(const std::string& path,
             // mesh must read the ground the player sees, not the pre-earthwork
             // natural. Sea-floor cells are fixed at D = 0, so basins that were
             // wet stay wet.
-            HeightSampler waterFloor = levelGround;
+            HeightField waterFloor = levelGround;
             if (terrainParams.earthwork) {
                 auto ew = terrainParams.earthwork;
                 auto nat = levelGround;
@@ -4634,14 +4638,17 @@ bool LevelLoader::load(const std::string& path,
                     for (const Vec2& v : cell) { x0 = std::min(x0, v.x); z0 = std::min(z0, v.y); x1 = std::max(x1, v.x); z1 = std::max(z1, v.y); }
                     if (x1 >= x0) boxes.push_back({x0, z0, x1, z1});
                 }
-                const std::vector<std::array<double, 4>> open = openSeaCells(boxes, wp.lo.x, wp.lo.y, wp.hi.x, wp.hi.y);
-                if (!open.empty()) {
-                    Sea sea;
-                    sea.level = terrainParams.seaLevel > -1e29 ? terrainParams.seaLevel : 0.0;
-                    for (const auto& b : open) sea.add(b[0], b[1], b[2], b[3]);
-                    world.add<Sea>(world.create(), std::move(sea));
+                // EVERY drawn cell is water to swim in (ADR-0286); the open ones are the sea with waves (the surf)
+                const std::vector<uint8_t> open = openSeaMask(boxes, wp.lo.x, wp.lo.y, wp.hi.x, wp.hi.y);
+                Sea sea;
+                sea.level = terrainParams.seaLevel > -1e29 ? terrainParams.seaLevel : 0.0;
+                std::size_t openCount = 0;
+                for (std::size_t i = 0; i < boxes.size(); ++i) {
+                    sea.add(boxes[i][0], boxes[i][1], boxes[i][2], boxes[i][3], open[i] != 0);
+                    openCount += open[i];
                 }
-                std::fprintf(stderr, "[water] %zu sea cells, %zu of them open sea\n", boxes.size(), open.size());
+                if (!boxes.empty()) world.add<Sea>(world.create(), std::move(sea));
+                std::fprintf(stderr, "[water] %zu sea cells, %zu of them open sea\n", boxes.size(), openCount);
             }
             if (!wmesh.vertices.empty()) {
                 Entity we = world.create();
@@ -4821,30 +4828,11 @@ bool LevelLoader::load(const std::string& path,
             // metro's, worst 6.2 m). This runs after the city now, so it can plant on exactly
             // the surface CDLOD draws.
             TerrainParams tp = tpAtTerrain;
-            std::function<double(double, double)> drawn;
-            world.each<TerrainLodConfig>([&](Entity, TerrainLodConfig& c) {
-                tp = c.params;
-                // THE SURFACE CDLOD DRAWS (and the leaf collider is built from): the
-                // leaf mesh's triangle under the point. Measured against it, 17 of
-                // metro_lanes' 1034 scenery instances and 62 of the lattice metro's
-                // 1373 stood > 0.3 m above the drawn ground while sitting exactly on
-                // the smooth field at their own point.
-                auto cfgp = std::make_shared<const TerrainLodConfig>(c);   // by pointer: copies of `drawn` stay cheap
-                drawn = [cfgp, nz](double x, double z) {
-                    return lodSurfaceHeight(cfgp->params, nz, x, z, cfgp->worldHalf, cfgp->numLods,
-                                            cfgp->gridRes);
-                };
-                // BAKED (ADR-0095): the pyramid IS the drawn ground, read in ~9 hash lookups where the field is
-                // evaluated in ~50 us over a city (its pads and earthwork) -- the grass's tiles over a town took
-                // 40-110 ms each (ADR-0225). RT_GROUND_FIELD=1 evaluates the field as before (A/B).
-                if (c.baked && !std::getenv("RT_GROUND_FIELD")) {
-                    std::shared_ptr<const pyramid::Pyramid> pyr = c.baked;
-                    drawn = [pyr, cfgp, nz](double x, double z) {
-                        if (pyr->finestAt(x, z)) return pyr->height(x, z);
-                        return lodSurfaceHeight(cfgp->params, nz, x, z, cfgp->worldHalf, cfgp->numLods, cfgp->gridRes);   // past its edge
-                    };
-                }
-            });
+            world.each<TerrainLodConfig>([&](Entity, TerrainLodConfig& c) { tp = c.params; });
+            // THE SURFACE CDLOD DRAWS (cdlodDrawnGround). Measured against it, 17 of metro_lanes' 1034 scenery
+            // instances and 62 of the lattice metro's 1373 stood > 0.3 m above the drawn ground while sitting
+            // exactly on the smooth field at their own point.
+            std::function<double(double, double)> drawn = cdlodDrawnGround(world);
             // No CDLOD: the drawn surface is the static grid terrain's (one tile, or chunks),
             // which on a rounded hill sits below the smooth field (floating trees).
             if (!drawn && root.contains("terrain") && root["terrain"].is_object()) {
@@ -5734,7 +5722,7 @@ bool LevelLoader::load(const std::string& path,
             wp.hi = Vec2(x1, z1);
             wp.cell = 0.5;
             wp.foamBand = 0.6;
-            const HeightSampler floorAt = [=](double x, double z) {
+            const HeightField floorAt = [=](double x, double z) {
                 return x >= x0 - 1e-6 && x <= x1 + 1e-6 && z >= z0 - 1e-6 && z <= z1 + 1e-6 ? level - depth
                                                                                              : level + 1.0;
             };

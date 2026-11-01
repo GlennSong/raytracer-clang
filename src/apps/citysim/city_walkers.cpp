@@ -438,7 +438,7 @@ void CityWalkerSystem::driveWalkers(engine::FrameContext& ctx) {
         Vec2 posXZ(pos.x, pos.z);
 
         // Knockdown: a vehicle moving through the walker's body floors it -- thrown away from the car as a
-        // ragdoll of its six blocks (walker_ragdolls.h), up again where it lands. A hit while already down
+        // ragdoll of its ten blocks (walker_ragdolls.h), up again where it lands. A hit while already down
         // throws it again.
         // (`knock` on the socket throws the walker nearest the player, for trying it without a car)
         const bool knockNearest = knockPending_;
@@ -701,7 +701,7 @@ void CityWalkerSystem::fixedUpdate(engine::FrameContext& ctx) {
             const int li = a.route.links[static_cast<std::size_t>(a.leg)];
             if (li < 0 || li >= ng.linkCount() || !ng.links[static_cast<std::size_t>(li)].footpath) continue;
             ++S.onWalks;
-            S.studentsOnWalks += a.role == Agent::Role::Student ? 1 : 0;
+            S.studentsOnWalks += a.role == kRoleStudent ? 1 : 0;
             if (S.onWalks == 1 && std::getenv("RT_WALK_DEBUG")) {
                 const engine::NavLink& L0 = ng.links[static_cast<std::size_t>(li)];
                 const int ai = static_cast<int>(i);

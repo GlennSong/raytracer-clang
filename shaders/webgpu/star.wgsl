@@ -1,4 +1,4 @@
-// Star / sun (procedural-planet-plan P6) — WebGPU port of star.frag. The local star
+// Star / sun (procedural-planet-plan P6) — WebGPU port of star.frag (the Vulkan GLSL copy, never wired, was deleted in #117 wave 0; it is in git history). The local star
 // as a bright HDR disc with limb darkening + a blackbody colour from its temperature,
 // plus a bloom-friendly glow, composited over the background (gated on the reverse-Z
 // far plane). Mirrors the SPIR-V-verified GLSL; pipeline wiring is the on-device step.

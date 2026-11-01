@@ -1,4 +1,5 @@
 #include "terrain_weather.h"
+#include "texture_field.h"   // boxBlurGrid (ADR-0289)
 #include "../bundle/cache_use.h"
 #include "../bundle/bundle.h"
 
@@ -15,22 +16,13 @@
 #include <cstring>
 #include <memory>
 #include <filesystem>
-#include <thread>
+#include "../../job_system.h"   // parallelRows: the shared pool (ADR-0288)
 
 namespace engine {
 
 namespace {
 // bump when the pipeline's output changes for the same inputs: every weathered cache rebakes
 constexpr const char* kWeatherCodeTag = "2026-09-26.9";   // .2: massifs, peakier uplift; .3: peaks; .4: plains keep the original; .5: crags; .6: pointed summits, sharper crags; .7: refine; .8: the drain masked by height; .9: no detail on the plains
-// rows [0, n) in parallel (the refinement's per-cell passes over 16 M cells)
-template <class F>
-void parallelRows(int n, F&& f) {
-    const int T = std::max(1u, std::min(32u, std::thread::hardware_concurrency()));
-    std::vector<std::thread> th;
-    for (int t = 0; t < T; ++t)
-        th.emplace_back([&, t] { for (int z = t; z < n; z += T) f(z); });
-    for (auto& x : th) x.join();
-}
 
 // UPSCALE, BLUR, DETAIL, DRAIN (ADR-0127; Glenn's pointer: Josh's "Better Mountain Generators That Aren't
 // Perlin Noise or Erosion" -- DLA ridge trees refined by upscale + blur per level -- and IQ's derivative-damped
@@ -322,7 +314,10 @@ Heightmap weatherTerrain(const TerrainParams& tpIn, uint32_t seed, const Weather
     const double cellM = tp.size / w.growRes;
     const int r = std::max(1, static_cast<int>(w.growBlurM / cellM));
     std::vector<float> u(coarse.h.begin(), coarse.h.end()), tmp(u.size());
-    for (int pass = 0; pass < 3; ++pass)   // box blur x3: where the ranges are, none of the noise
+    // box blur x3: where the ranges are, none of the noise. (Owed: boxBlurGrid(u, cn, r, 3), ADR-0289 -- its running
+    // sums round differently from this window sum, by up to 0.15 mm, so it moves the bake: with kWeatherCodeTag's
+    // next bump.)
+    for (int pass = 0; pass < 3; ++pass)
         for (int axis = 0; axis < 2; ++axis) {
             for (int z = 0; z < cn; ++z)
                 for (int x = 0; x < cn; ++x) {
@@ -416,27 +411,8 @@ Heightmap weatherTerrain(const TerrainParams& tpIn, uint32_t seed, const Weather
 
     // KEEP THE SHAPE: the original's low frequencies, the grown terrain's high ones (land only)
     if (w.shapeKeep > 0.0) {
-        auto blur = [&](const std::vector<float>& in, int rad) {
-            std::vector<float> a(in), b2(in.size());
-            for (int pass = 0; pass < 3; ++pass)
-                for (int axis = 0; axis < 2; ++axis) {
-                    for (int z = 0; z < cn; ++z) {
-                        // running box sum along the row / column
-                        double s = 0.0;
-                        auto at = [&](int k) { const int kk = std::clamp(k, 0, cn - 1); return axis == 0 ? a[static_cast<std::size_t>(z) * cn + kk] : a[static_cast<std::size_t>(kk) * cn + z]; };
-                        for (int k = -rad; k <= rad; ++k) s += at(k);
-                        for (int x = 0; x < cn; ++x) {
-                            const std::size_t o = axis == 0 ? static_cast<std::size_t>(z) * cn + x : static_cast<std::size_t>(x) * cn + z;
-                            b2[o] = static_cast<float>(s / (2 * rad + 1));
-                            s += at(x + rad + 1) - at(x - rad);
-                        }
-                    }
-                    a.swap(b2);
-                }
-            return a;
-        };
         const int rad = std::max(1, static_cast<int>(w.shapeScaleM / cellM / 2.0));
-        const std::vector<float> lowO = blur(coarse0.h, rad), lowG = blur(coarse.h, rad);
+        const std::vector<float> lowO = boxBlurGrid(coarse0.h, cn, rad, 3), lowG = boxBlurGrid(coarse.h, cn, rad, 3);
         for (std::size_t i = 0; i < coarse.h.size(); ++i) {
             if (coarse0.h[i] < base0 && sea > -1e29f) continue;   // the sea as it was
             // the grown structure fades out on the original's LOW ground: coastal plains stay the flat

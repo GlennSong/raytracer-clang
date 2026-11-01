@@ -45,10 +45,9 @@ offline tracer's `level_scene.cpp`) and its `CityModel`->`RoadNet` nav bridge.
 > `engine::growCity`. `growLotBuildingsOnNets`, which everything below describes,
 > and its rim blocks (`edgeBlocks`) are retired. Kept as history.
 
-One duplication remains: `level_scene.cpp` re-implements `growCityLots` for the
-offline tracer. It is narrower than it looks — the JSON half is shared through
-`readLotGrowParams`, and only the ~12 road-net-derived lines (hub list, coreness
-anchor) fork. The fix is to hoist those, not to rewrite.
+The offline tracer's `level_scene.cpp` no longer re-implements `growCityLots`:
+since ADR-0093 every host (the loader, the `lots` bundle producer, the offline
+tracer) calls `engine::growCity` (`city_grow.h`) and owns only its caching.
 
 ### Two "district"s that mean different things
 

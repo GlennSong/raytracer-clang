@@ -252,7 +252,7 @@ struct PhysicsWorld::Impl {
         float maxSteerRad = 0.0f;
         float wheelbase = 2.7f;
         float yawAssist = 0.0f;
-        float gripAccel = 9.0f;   // the lateral acceleration the assist lets the car keep (m/s²)
+        float gripAccel = 9.0f;   // the lateral acceleration the assist lets the car keep (m/s²; set from lateralGrip)
         std::vector<char> diffFront;   // per differential: a front axle's?
         float frontShare = 0.5f;
         float dragArea = 0.0f;         // Cd x A (m^2); > 0 applies quadratic aero drag each step
@@ -886,6 +886,23 @@ Real PhysicsWorld::ragdollSpeed(RagdollId id) const {
 // tests/test_driving_lab.cpp (launch envelope, lane hold, kerb climb + its
 // no-clearance control, wall stop) — drive the gates there before tuning here.
 
+Real PhysicsWorld::launchAccel(const VehicleConfig& config, Real friction, Real toSpeed) {
+    PhysicsWorld w;
+    if (!w.initialize()) return 0;
+    w.addBox(Vec3(3000, 1, 3000), Vec3(0, -1, 0), Quat::identity(), BodyMotion::Static, 0.0, friction);
+    w.optimizeBroadPhase();
+    const VehicleId car = w.addVehicle(config, Vec3(0, config.chassisHalfExtent.y + 0.35, 0), Quat::identity());
+    if (car == INVALID_VEHICLE) return 0;
+    const Real dt = 1.0 / 60.0;
+    for (int i = 0; i < 60; ++i) w.update(dt);   // settle on the springs
+    for (int i = 1; i <= 60 * 15; ++i) {
+        w.setVehicleInput(car, 1.0, 0, 0);
+        w.update(dt);
+        if (w.vehicleVelocity(car).length() >= toSpeed) return toSpeed / (i * dt);
+    }
+    return 0;
+}
+
 PhysicsWorld::VehicleId PhysicsWorld::addVehicle(const VehicleConfig& cfg,
                                                  const Vec3& position,
                                                  const Quat& orientation) {
@@ -1358,7 +1375,8 @@ void PhysicsWorld::optimizeBroadPhase() {
 // excess of the steered one. Jolt turns a wheel by -right * lock about the
 // up axis, so +steer is a NEGATIVE yaw about up (the lab's sign probe: "+steer
 // turns toward -x" with forward +z); the Ackermann target is v tan(delta) / L,
-// capped at the yaw rate a ~0.95 g road allows at this speed.
+// capped at the yaw rate gripAccel allows at this speed (~2 g at the default
+// lateralGrip 2.0: 1.1 * grip * sqrt(0.85) g, set in addVehicle).
 void PhysicsWorld::applyYawAssist(std::size_t index) {
     Impl::Vehicle& v = impl->vehicles[index];
     if (v.yawAssist <= 0.0f || !v.constraint) return;

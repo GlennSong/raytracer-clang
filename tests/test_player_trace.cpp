@@ -21,6 +21,7 @@
 #include "../src/engine/frame_stats.h"
 #include "../src/engine/systems/physics_system.h"
 #include "../src/engine/systems/player_system.h"
+#include "../src/engine/control/control_commands.h"
 #include "../src/renderer/renderer.h"
 
 #include <algorithm>
@@ -46,7 +47,8 @@ std::string labPath() {
 #endif
 }
 
-// Everything a frame needs, owned here: the app's FrameContext, built the way Application::makeContext does.
+// Everything a frame needs, owned here; its FrameContext built by FrameOwners, as Application::makeContext builds
+// the app's (ADR-0292), so the two cannot drift.
 struct Rig {
     std::unique_ptr<Renderer> renderer = Renderer::create();
     RendererMeshUploader uploader{*renderer};
@@ -72,10 +74,12 @@ struct Rig {
     GamepadState pad;
     double time = 0;
 
+    ControlCommands commands;
+
     FrameContext ctx(double interpolation = 1.0) {
-        return FrameContext{world, *renderer, assets, view, clock, settings, jobs, events, debug, audio, stats,
-                            input, actions, players, xr, 1280, 720, 1280, 720, clock.fixedStep(), interpolation,
-                            quit, transition, false};
+        return FrameOwners(world, *renderer, assets, view, clock, settings, jobs, events, debug, audio, stats, input,
+                           actions, players, xr, quit, transition, &commands)
+            .context(1280, 720, 1280, 720, clock.fixedStep(), interpolation, false);
     }
 
     bool load() {

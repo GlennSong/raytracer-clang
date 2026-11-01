@@ -93,8 +93,8 @@ struct Agent {
     // Assigned in assignPlaces from the agent's workplace + its own brain bits.
     // A Student (campus milestone 4) lives in the university's residence hall and
     // spends the day between classes in the teaching hall and breaks on campus.
-    enum class Role : uint8_t { Commuter, Shopkeeper, Stroller, Student, Count };
-    Role role = Role::Commuter;
+    // Its id in the role catalog (city_roles.h RoleId): a built-in, or a staff role assignStaff gave it.
+    RoleId role = kRoleCommuter;
 
     // HOW THIS AGENT IS MOVING RIGHT NOW. Nearly everything that reads `mode`
     // is asking exactly this — which route space to plan in, whether to sample a
@@ -385,6 +385,11 @@ inline bool serviceVehicle(VehicleType t) { return t == VehicleType::Bus || t ==
 struct VehicleBody {
     Real length = 4.2, width = 1.8, height = 1.3;
     VehicleType type = VehicleType::Sedan;
+    // What this car can pull away at (m/s^2, 0 to 10 m/s, PhysicsWorld::launchAccel on its own handling -- item 23):
+    // the brains plan its launches under it, so a bus pulls away like a bus and a physical one keeps its ghost.
+    // Measured where there is physics (CityPhysicsSystem, setFleetLaunch): 0 not yet, -1 never gets there; until
+    // then, and in a build with no physics, the stock kCarAccel.
+    Real launch = 0;
 };
 
 // The BUILT-IN fleet: a fixed, deterministic set of body slots. A driver takes
@@ -412,6 +417,7 @@ struct SimVehicle {
     Real width = 1.8;
     Real height = 1.3;
     VehicleType type = VehicleType::Sedan;
+    int slot = -1;               // its fleet slot (fleetBody): the body it was given, read for its launch
     int driver = -1;             // agent index, or -1 when parked/unpossessed
     engine::Vec2 pos;            // cached pose (mirrors the driver while possessed)
     engine::Vec2 heading{1, 0};
@@ -447,6 +453,10 @@ public:
     // empty table restores the built-in one. Slots wrap exactly as the built-in
     // table's do.
     void setFleet(std::vector<VehicleBody> fleet) { fleet_ = std::move(fleet); }
+    // The measured launch of fleet slot `slot` (VehicleBody::launch); no-op without a scripted fleet.
+    void setFleetLaunch(int slot, Real launch) {
+        if (slot >= 0 && slot < static_cast<int>(fleet_.size())) fleet_[static_cast<std::size_t>(slot)].launch = launch;
+    }
     int fleetSize() const {
         return fleet_.empty() ? vehicleFleetSize()
                               : static_cast<int>(fleet_.size());
@@ -671,6 +681,8 @@ public:
     engine::Real walkerVerge(const Agent& a) const;   // ...as its distance in from the kerb
     const engine::NavGraph* graph() const { return nav_; }
     SignalController& signals() { return signals_; }
+    // The signals' cycle times (signals.lua at level load; SignalTiming's defaults otherwise). Set before build().
+    void setSignalTiming(const SignalTiming& t) { signalTiming_ = t; }
     // RT_TRAFFIC_DEBUG: why a walker last stood still (1 kerb gap, 2 signal line, 3 a car body, 4 its leader) and
     // its follow gap -- the "spawn point" heaps
     int holdWhyOf(int i) const { return i >= 0 && i < static_cast<int>(holdWhy_.size()) ? holdWhy_[static_cast<std::size_t>(i)] : 0; }
@@ -1592,10 +1604,10 @@ private:
     int dayRoleOf(const Agent& a) const {
         const int r = static_cast<int>(a.role);
         if (r < 0 || r >= static_cast<int>(roleTables_.size())) return 0;
-        if (a.role == Agent::Role::Stroller && (a.archetype != Agent::Mode::Pedestrian || venues_.empty())) return 0;
+        if (a.role == kRoleStroller && (a.archetype != Agent::Mode::Pedestrian || venues_.empty())) return 0;
         return r;
     }
-    bool outingStroller(const Agent& a) const { return !wander_ && a.role == Agent::Role::Stroller && dayRoleOf(a) != 0; }
+    bool outingStroller(const Agent& a) const { return !wander_ && a.role == kRoleStroller && dayRoleOf(a) != 0; }
     int pickOuting(Agent& a, int origin);   // GoalTarget::Outing -> a node (sets tripVenue)
     int pickCampusBreak(Agent& a, int origin);   // GoalTarget::Campus -> a node (tripVenue / tripSeat)
     // Free seats near the campus (quad benches, bleachers): the seats within reach of a quad or field venue.
@@ -1875,6 +1887,7 @@ private:
     int dormancies_ = 0;
     int wakes_ = 0;
     SignalController signals_;
+    SignalTiming signalTiming_;
     // THE ROLES and each one's day (setRoleCatalog); the wanderers' tables (the agent lab) beside them.
     RoleCatalog roles_ = defaultRoleCatalog();
     std::vector<GoalTable> roleTables_ = [] {

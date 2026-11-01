@@ -15,7 +15,7 @@ namespace engine {
 // survivor was CityPlanDebug's prism (debug-only). These records carry what
 // the RUNTIME needs: the plan (inside tests), the doors (approach tests,
 // leaves, entrance hints), and the verbatim BuildingParams regen key —
-// growPlanBuilding/growInterior are pure in (plan, params, baseY), so ~250 B
+// growPlanBuilding/growInterior are pure in (plan, params, baseY), so 824 B
 // here rebuilds a whole interior on demand. Kept out of components.h so
 // engine core does not include the grammar; the loader stores one
 // CityBuildings component on its own entity.

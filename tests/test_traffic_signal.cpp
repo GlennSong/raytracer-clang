@@ -65,7 +65,7 @@ TEST_CASE(signal_junction_arms_get_signals) {
 TEST_CASE(signal_perpendicular_arms_never_both_green) {
     NavGraph nav = cross();
     SignalController sig;
-    sig.build(nav, 8.0, 2.0);
+    sig.build(nav, SignalTiming{8.0, 2.0});
     int ns = linkApproaching(nav, 0, -1);
     int ew = linkApproaching(nav, -1, 0);
     // Sample the whole 20s cycle; N-S and E-W must never be green simultaneously.
@@ -83,7 +83,7 @@ TEST_CASE(signal_perpendicular_arms_never_both_green) {
 TEST_CASE(signal_cycles_through_states) {
     NavGraph nav = cross();
     SignalController sig;
-    sig.build(nav, 4.0, 1.0);
+    sig.build(nav, SignalTiming{4.0, 1.0});
     int ns = linkApproaching(nav, 0, -1);
     bool sawGreen = false, sawYellow = false, sawRed = false;
     for (int step = 0; step < 200; ++step) {
@@ -144,7 +144,7 @@ bool conflicts(const NavGraph& nav, int a, int b) {
 
 void checkNoConflictingGreens(const NavGraph& nav, const char* tag) {
     SignalController sc;
-    sc.build(nav, 6.0, 1.5, 1.0);
+    sc.build(nav, SignalTiming{6.0, 1.5, 1.0});
     std::vector<int> in;
     for (int i = 0; i < nav.linkCount(); ++i)
         if (nav.links[i].to == 0 && sc.hasSignal(i)) in.push_back(i);
@@ -193,7 +193,7 @@ TEST_CASE(signals_walk_window_stops_everything) {
     // crossings).
     NavGraph nav = cross();
     SignalController sc;
-    sc.build(nav, 6.0, 1.5, 1.0);
+    sc.build(nav, SignalTiming{6.0, 1.5, 1.0});
     bool sawWalk = false;
     for (double t = 0; t < 120.0; t += 0.25) {
         sc.update(0.25);
@@ -263,7 +263,7 @@ NavGraph arterialCross() {
 TEST_CASE(signal_protected_left_leads_the_shared_green) {
     NavGraph nav = arterialCross();
     SignalController s;
-    s.build(nav, 10.0, 2.0);
+    s.build(nav, SignalTiming{10.0, 2.0});
     const int n = linkApproaching(nav, 0, -1), so = linkApproaching(nav, 0, 1);
     const int e = linkApproaching(nav, -1, 0), w = linkApproaching(nav, 1, 0);
     CHECK(n >= 0 && so >= 0 && e >= 0 && w >= 0);

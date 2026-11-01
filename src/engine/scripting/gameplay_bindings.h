@@ -20,7 +20,7 @@ struct RenderMesh;
 // A deferred spawn request (ADR-0024). Scripts can't create entities during
 // World::each (the no-structural-mutation contract, ADR-0006), so spawn.* records
 // this and ScriptSystem applies it after iteration — a tiny command buffer.
-//   Block — a dynamic physics cube (the Lua port of ShootingSystem's bullet):
+//   Block — a dynamic physics cube (gun.lua's bullet):
 //           Transform/Collider/RigidBody/Velocity.
 //   Model — a procgen-generated mesh entity (e.g. the gun viewmodel): a
 //           Renderable, plus an optional ScriptBehaviour so it can drive itself
@@ -43,6 +43,9 @@ struct SpawnCommand {
     // the gun through the window").
     bool hasOrigin = false;
     Vec3 origin;
+    // Block only: swept between physics steps (linear-cast CCD). A bullet is small and fast, so discrete steps
+    // tunnel it straight through thin static geometry (a building wall, a fence).
+    bool ccd = false;
 
     // Model only:
     std::shared_ptr<RenderMesh> mesh;   // the generated mesh to render
@@ -71,6 +74,9 @@ struct GameplayContext {
     // camera.hands_free(): are the player's hands free to hold something? False while they grip a ledge, a wall
     // or a ladder, or swim (engine/player_pose.h) -- the gun stows and holds fire then. Defaults true.
     bool handsFree = true;
+    // input.pointer_free(): is the mouse the player's -- not over a UI panel? False while ImGui wants it; the gun
+    // holds fire then, so a click on a panel is not a shot. Defaults true.
+    bool pointerFree = true;
     // The control channel's verbs (ADR-0253). control.run(line) runs any verb on `commands`;
     // control.command{...} hands its `run` function (a registry ref) to `addCommand`, which registers it owned by
     // the calling script and answers "" or why it was refused. Null / empty = control.* errors.

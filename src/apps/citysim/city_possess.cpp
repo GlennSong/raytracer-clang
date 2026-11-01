@@ -650,7 +650,7 @@ void CityPossessSystem::driveCar(engine::FrameContext& ctx) {
         speedAtStation(follower_.arcs(), pathSpeeds_, follower_.station());
     desired = engine::followSpeed(desired, lead, /*ownHalfLength=*/2.1);
 
-    ad->command = engine::pursuitCommand(follower_, pos2, desired,
+    ad->command = engine::pursuitCommand(follower_, pos2, Vec2(fwd.x, fwd.z), desired,
                                          engine::pursuitLookahead(speed));
     lastLeadGap_ = lead.found ? lead.gap : -1.0;
 

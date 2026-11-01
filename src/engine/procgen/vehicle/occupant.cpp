@@ -27,7 +27,7 @@ OccupantParams carPassenger() {
     return p;
 }
 
-BodyPose seatedOccupantPose(const OccupantParams& p, Real bodyScale) {
+BodyPose seatedOccupantPose(const OccupantParams& p, Real bodyScale, const SeatSway& sway) {
     // Scaled to the cabin, never up: the manikin's torso and head took 0.98 of the sitting height along the
     // reclined back; the body's pelvis to the top of its head is 0.88 m.
     const Real headTop = BlockBody::parts()[BlockBody::Head].joint.y + BlockBody::parts()[BlockBody::Head].size.y -
@@ -54,7 +54,7 @@ BodyPose seatedOccupantPose(const OccupantParams& p, Real bodyScale) {
     const Real arm = 4 * armSpec.rest.length() * scale;   // the upper arm and the forearm
     const Real reach = degreesToRadians(p.armReach);
     seat.grip = shoulder + Vec3(0, -std::cos(reach), std::sin(reach)) * (Real(0.9) * arm);
-    return seatedPose(seat, SeatSway{}, 0, 0, scale);
+    return seatedPose(seat, sway, 0, 0, scale);
 }
 
 RenderMesh buildSeatedOccupant(const OccupantParams& p) {

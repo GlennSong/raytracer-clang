@@ -55,7 +55,7 @@ struct DoorSpec {
 };
 
 // One GROWN MASSING and its verbatim regen key (ADR-0080): growPlanBuilding
-// is pure in (plan, params, baseY), so `params` (~250 B) is the whole recipe
+// is pure in (plan, params, baseY), so `params` (824 B) is the whole recipe
 // for rebuilding this unit's interior on demand. A rowhouse strip is N units,
 // a podium tower two; the box-grammar fallback records its synthesized plan.
 struct BuildingUnit {

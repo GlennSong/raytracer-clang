@@ -197,6 +197,8 @@ optimization); `each` always passes `Entity` (no component-only overload).
 smallest pool, or groups); needing safe structural edits during iteration
 (→ deferred command buffer).
 
+*Since then (#117 wave 0):* each<> drives its walk from the smallest pool, not the first listed one (ADR-0101, commit 62bf7980; world.h).
+
 ---
 
 ## ADR-0007 — Core primitives: `Handle` + `SlotMap`, logging, assert
@@ -1087,6 +1089,8 @@ ADR-0001); many-light scenes making forward lighting the frame's hot spot (→
 deferred or clustered); NPR needs outgrowing per-material models (e.g.
 full-screen stylization passes).
 
+*Since then (#117 wave 0):* SSAO still darkens the whole HDR colour, not indirect light only -- both composites multiply by max(ao, aoFloor) (shaders/vulkan/composite.frag, shaders/metal/post_composite.metal); the interim route stayed.
+
 ---
 
 ## ADR-0018 — The property layer: components describe their editable fields once
@@ -1133,6 +1137,8 @@ inspector and serializes automatically.
 **Revisit trigger.** A described field whose type the `PropertyVisitor`
 interface can't express (nested structs, arrays, asset references) — extend the
 visitor rather than fork the inspector.
+
+*Since then (#117 wave 0):* eight types are registered (component_registry.cpp); the JSON visitors serve materials, camera lenses and undo snapshots, and level_loader.cpp still reads most of the level format by hand -- a component does not serialize automatically.
 
 ---
 
@@ -2288,6 +2294,8 @@ the in-tree surface nets), which the representation-agnostic AABB cull already a
 **Revisit trigger.** Sector streaming (Phase 3) pages these nodes by distance;
 overhangs/caves add a volumetric feature layer beside the heightfield; a GPU-VTF
 clipmap replaces CPU node meshing if churn dominates a profile.
+
+*Since then (#117 wave 0):* the baked pyramid's tiles do carry skirts, 1 m plus the tile's error, to cover the crack where a stored leaf meets a finer neighbour (addSkirts in generateBakedTileMesh, terrain_lod.cpp); the morph still hides the seams between selected levels.
 
 ---
 
@@ -4073,6 +4081,8 @@ cross-traffic doesn't yet truly yield, and the player's physics car isn't avoide
 `Vehicle` entities don't `removeVehicle` (no destroy hook, same bounded-leak class
 as the ScriptBehaviour note below).
 
+*Since then (#117 wave 0):* traffic keeps LEFT, UK/Japan style, on purpose -- lanes sit on the driver's-left kerb side (NavGraph::laneCenter, nav_graph.h); "right-hand traffic" above is history.
+
 ---
 
 ## ADR-0060 — Agent-based city simulation as an application (perception, signals, rules)
@@ -4610,6 +4620,8 @@ junction rules to grow up:
   and zero ticks where two cars drive through each other (`ghostTicks == 0`,
   pinned by `cars_crash_and_stop_instead_of_ghosting`).
 
+*Since then (#117 wave 0):* the live signal defaults are green 10 s, yellow 2 s, all-red 1.5 s, plus an 8 s walk phase per cycle, shortened so a red's queue fits a small block; they are authored in assets/scripts/signals.lua (SignalTiming in traffic_signal.h is the same values, by test).
+
 ## ADR-0064 — Agent goals become data: the GoalTable, Lua-authored at load
 
 **Context.** The reactive layer (ADR-0061/0063) was already principled, but the
@@ -4792,6 +4804,8 @@ side, all-off daylight cruise, `carTurnSide` geometry) and the instanced bake
 headless with null meshes (`test_city_render.cpp` — night headlights, brake on
 hold, turn-signal flash, externally-owned cars draw none). The emissive GPU draw
 is viewer-gated and UNVERIFIED on device (register row updated). Suite 698/698.
+
+*Since then (#117 wave 0):* fleet bodies are mesh.car shells built by vehicles.lua over vehicle_classes.lua, not box parts, and the C++ mesh fallback is gone -- fleetCarMesh no longer exists, and a slot that fails to load logs an error and draws no car (city_render.cpp); only the kFleet size table in city_sim.cpp remains in C++.
 
 ## ADR-0066 — A typed EventBus: the engine's decoupling seam for cross-system signals
 **Status:** Accepted · **Date:** 2026-07-06
@@ -5486,6 +5500,8 @@ Living City ImGui debug panel (per-layer toggles + selected-agent inspector) and
 projected place labels. 5: capabilities / tools. 6: the generator emits the
 PlaceMap + ped graph for a whole city.
 
+*Since then (#117 wave 0):* ped_graph.{h,cpp} and test_ped_graph were deleted unwired (ADR-0294); walkers route on the NavGraph. living_city_traffic_never_gridlocks went with the second city pipeline (d8cb6320); the live no-gridlock gate is busy_junction_does_not_gridlock (tests/test_city_flow.cpp).
+
 ---
 
 ## ADR-0075 — Terrain conform as a grading cascade: one SurfaceField, corridors + blocks that grade to it, walls/bridges as 3-D structures
@@ -5796,6 +5812,8 @@ mode (the system that consumes the keys lives in ArenaState). `shot` replies
 a second external-control consumer (the Qt shell wanting sockets) — either
 means merging this transport with the EditorBridge design rather than growing
 a rival API.
+
+*Since then (#117 wave 0):* the channel injects real input (tap, hold), answers entity questions (agent?, lot?, findplace?) and makes transient play acts (ADR-0079), all in application_commands.cpp; only level-document edits remain the EditorBridge's.
 
 ---
 
@@ -6439,6 +6457,8 @@ source is refused and written instead). Rejected: a content-addressed section st
 refcount, but a new format and reader — kept for the housekeeping work) and incremental lots computation
 (the lots pass is global: one campus per city, distance rules, grading — weeks, and time is not the
 bottleneck). Operating guide: [docs/bakes.md](bakes.md).
+
+*Since then (#117 wave 0):* pruneBundles (engine/bundle/bake.cpp) compares each manifest's level path made absolute and normalised, so rt_bake's relative spelling and level_tests' absolute one are one level; it still keeps the newest bundle per level without checking its key (`rt_bake --prune <level.json …>` keeps a listed level's current bundle), and since ADR-0256 the prune also covers cache/terrain and cache/population.
 ## ADR-0085 — Two road generators, selected per entity: `shape:"lanelab"` beside `shape:"road"`
 
 **Status:** Accepted · **Date:** 2026-09-09
@@ -7415,6 +7435,8 @@ layer**, not race it. An errand completes, the agent goes to rest, and seconds l
 has it walking a 27-leg trip of its own — a director issuing one command per decision spends the
 whole session fighting the table it is supposed to be replacing.
 
+*Since then (#117 wave 0):* the in-engine decision service is still not built; deciding happens in the external director, tools/citywalk.py --decider stub|laya, and the leash now has a way out (a gap not closing for 4 s moves the body to the plan, city_walkers.cpp).
+
 ## ADR-0092 — The city is designed as data first: a brief, a plan, a score, then the build
 
 **Status:** Provisional (2026-09-22) — the planner and its evaluator exist (`city_plan`); nothing
@@ -7588,6 +7610,8 @@ for 0.5–1 m cells where there are streets. The order is: residency service wit
 client, buildings second, then vertex layouts, road deck tolerance meshing, camera-relative
 rendering, regions, and a 100 km test world. Each step carries before/after `mem?`, load and frame
 times, and a level-test byte budget.
+
+*Since then (#117 wave 0):* tiles are drawn by CDLOD distance ranges, not screen-space error: a tile's error only decides whether its children are stored (buildPyramid, 5 cm), and selectLodNodesGated picks among stored tiles (terrain_lod_system.cpp); each tile is its own baked CPU mesh with skirts (generateBakedTileMesh, terrain_lod.cpp), not one shared grid lifted in the vertex shader.
 
 ## ADR-0096 — Two vertex layouts: a 32-byte standard vertex, and the full one where the data needs it
 
@@ -7861,6 +7885,8 @@ test bed: 6 rivers and 9 lakes from its own relief. **Owed:**
 - the city: planned around rivers, arterials crossing on bridges;
 - widths tuned for the map's scale;
 - Metal.
+
+*Since then (#117 wave 0):* flow is not D8 (steepest of eight): each cell's area passes to its priority-flood receiver, the neighbour that first reached it from the edge or the sea (hydrology.cpp; drainage.h's floodDrainage is the shared form of the same flood).
 
 ## ADR-0100 — Occlusion culling against a recent frame's depth, on the CPU
 
@@ -10762,6 +10788,8 @@ Glenn, 2026-10-18: "Can you do those things next" (the island's recipe forest bu
   162 -> 100 s (the real_tree forest's: 42 s, 96 s).
 - Test `a_species_grown_once_reads_back_the_same`.
 
+*Since then (#117 wave 0):* the "git describe" in the key is bundle::engineIdentity().version (bundle.cpp), the describe CMake records at configure time (CMakeLists.txt), so a commit is a new key only after a reconfigure; between reconfigures kTreeCacheVersion (procgen/tree_cache.h) is the guard.
+
 ## ADR-0199 — Stands: forest-grown forms, a mix of ages, and beech, fir, aspen and alder
 
 Glenn, 2026-10-18: "Can you do those things next" (an age mix in a stand, forest-grown forms, the island's missing
@@ -11729,6 +11757,8 @@ in ragdolling."
 - Not yet: the rider is the car's seated occupant (not posed on the bike); the chase camera is the car's (far
   behind a bike); pedalling isn't drawn.
 
+*Since then (#117 wave 0):* the car picker is - and = (N drops the pick), not , and . (vehicle_system.cpp); comma/period were the sim-speed keys and are left unbound.
+
 ## ADR-0236 — Drift: a handbrake flick into a held slide, Burnout-style, for the player's car
 
 Glenn (2026-10-24): "how hard is it to make a car drift? Something like burnout (the videogame)."
@@ -12326,8 +12356,8 @@ while stopped lost no "speed" and so did nothing. The player at the wheel was a 
 **Decision.**
 - **One crash measure for any vehicle, the seat's JOLT** (`engine/player/driver_seat.h` `RideJolt`): the most its
   velocity *vector* changed over the last 0.3 s, with the vertical counted at half (the springs take a landing; a 2 m
-  drop on a bike is a ride, not a crash). This is the impact rule's speed lost (ADR-0247) for a body strapped to a
-  vehicle.
+  drop on a bike is a ride, not a crash). This is the impact rule's counterpart (ADR-0247) for a body strapped to a
+  vehicle -- not the same rule: ADR-0281.
 - **Who it throws** (`ejectTolerance`):
   - a two-wheeler past 7 m/s (the old bike rule's 25 km/h gone in a moment);
   - an open seat past 11 m/s: `Vehicle::openSeat`, from the recipe's `open_seat` (the convertible, in the fleet and
@@ -13409,3 +13439,646 @@ A review of the wave 3 commits found the new paths left holes where the old ones
 
 Not changed: the coast brief's spur loss is ADR-0269's rule working (a spur with no room is not built), and the
 k-prefixed constants follow the codebase's convention.
+
+## ADR-0273 — One handling builder: every car drives with its recipe's handling, and plans with what it can do
+
+#117 wave 2, item 23. Three things built a Jolt `VehicleConfig`:
+- **The drivable spec** (`vehicles.lua` → `loadVehicleSpec`) gave the player's car its class's handling.
+- **A commandeered traffic car** got `configFromBody` (city_vehicles.cpp). It put the drawn wheels under C++
+  numbers of its own: 650 Nm, 32° of steer and fixed brakes for every car, from a hatchback to a box truck, with no
+  drivetrain, gearbox or class tuning.
+- **The physical tier** (`possessTier`, city_physics.cpp) made every car near the player one hard-coded box sedan:
+  1,400 kg, 900 Nm, all-wheel drive, 0.34 m wheels at fixed spots. A bus beside the player was simulated as that
+  sedan, its wheels outside its arches.
+
+**Decision.** The recipe is the only place a car's handling is set, and C++ has one reader for it.
+- **Lua.** `class_handling` and `kit_handling` (vehicles.lua) build the handling table: chassis, mass, engine,
+  brakes, grip, drivetrain, gearbox, suspension and wheels. `from_class` and `kit_drivable` publish it with their
+  meshes. Every fleet catalogue slot carries the same table as `handling`, on its drawn wheels (`fleet_wheels` for a
+  class slot, the kit's own for a kit slot), plus `drivable`, the menu's recipe for the same car. It is read without
+  building any mesh.
+- **C++.** `readVehicleHandling` (vehicle_spec.cpp) reads it, both for `loadVehicleSpec` and for
+  `loadFleetHandling` (vehicle_body.cpp). The city keeps one config per slot (`CityRenderSystem::carConfig`).
+  Commandeering and the physical tier both use it. `configFromBody` and the box sedan are deleted, and the tier
+  sizes its spawn height and footprints by the car's own chassis.
+- **The plan follows the car** (Glenn chose this over a torque floor that would keep the stock plan).
+  `PhysicsWorld::launchAccel` measures what a config can pull away at: 0 to 10 m/s at full throttle on the road's
+  0.85. The sedans manage 3.7 m/s², the SUVs about 5.1, the parcel van 2.9, the fire engine 1.95 and the bus 1.8.
+  The tier measures each slot once per build (`CityPhysicsSystem::measureFleetLaunches`, since only hosts with
+  physics can) and hands the value to the sim (`setFleetLaunch`). The sim plans each car's launches at
+  min(kCarAccel, 0.9 × its launch), the headroom the stock 4.0 kept over the old sedan. A bus pulls away like a bus
+  everywhere, not only near the player. A car carries its fleet slot (`SimVehicle::slot`) so the plan reads its
+  body's launch. Builds without physics keep the stock 4.0.
+
+**Found on the way.**
+- **`spotClear` refused every car whose drawn instance had a kinematic proxy.** The candidate's own proxy box sits
+  on the spot it is being made physical at. The tier only took cars through its snap path, and the packed junction's
+  physical body-ticks were about half what they should have been (34k against 62k at seed 11). It now skips the
+  candidate's own proxy, keyed by uid.
+- **Two of the tier soaks ran with no vehicles script**, physicalising invisible sim cars as box sedans. They now
+  load the shipped fleet, as their file's own rule says a city must. `carSlotOf` counts the fleet's slots (not
+  the drawn groups), so a headless city still knows a bus is a bus.
+- **Every tier test stood on `addBox`'s default friction, 0.2.** That is ice: the AWD box sedan pulled away on it,
+  and a rear-drive pickup spun up at 2 m/s² behind a ghost planning 4. They now stand on the road's 0.85
+  (`kRoadFriction`, road_builder.h).
+- **The pile-up test measured "climbing"** against one resting height for all cars. A bus rests about 0.8 m higher
+  than a sedan, so it now measures each car's floor (centre less its half height).
+
+**Measured.** Packed junction (`RT_PILEUP_SEED`) and soak (`RT_TIER_SEED`, new) over seeds 11–18, on road friction,
+own-proxy fix in both columns:
+
+| | box sedan, stock 4.0 plan | own handling + own launch |
+|---|---|---|
+| soak: share of time > 3 m behind the ghost (mean) | 16.4% | 3.8% |
+| soak: longest spell > 6 m (mean / max) | 1.7 / 4.6 s | 0.8 / 2.1 s |
+| junction: longest > 6 m behind (mean / max) | 4.7 / 7.6 s | 2.6 / 4.6 s |
+| junction: snaps held back (mean) | 378 | 0 |
+| junction: tipped / climbing / inside another (max) | 0.06% / 0.10% / 0.09% | 0 / 0 / 0 |
+
+Own handling on the stock plan, without the launch, tipped 1.9% of body-ticks on one seed. The plan has to follow
+the car.
+
+**Tests.**
+- `every_fleet_slot_drives_with_its_kit_s_drivable_handling`: every slot of all three fleets carries a whole car,
+  and each kit slot matches its drivable recipe field for field. The 18 drivable recipes were dumped before and after
+  the Lua split and came out byte-identical.
+- `every_fleet_car_launches_as_the_traffic_plan_asks`: every slot pulls away, the catalogue carries the measured
+  launch, and the fleet's spread is real.
+
+**Consequences.**
+- Traffic everywhere pulls away at its own rate when physics is present, so the level suite's traffic numbers move.
+- No bake changes: handling is read at load, and nothing is cached.
+- Owed: the two-tier pursuit and catch-up gains are still the sedan's (city_physics.cpp). Item 24 (one driving
+  controller) is where they get looked at.
+
+## ADR-0274 — One AI driving controller: Stanley over a lane frame, for every AI driver
+
+#117 wave 2, item 24. Two controllers turned an AI's plan into pedals and wheel:
+- **`engine::computeDriverInput`** (driver_agent.h) steered by heading error alone, with soft pedals (throttle 0.5,
+  brake 0.35 per m/s), a full brake under 0.4 m/s and a turn slowdown built in. Only the possessed car used it:
+  CityPossessSystem's route → LaneFollower → pure pursuit → AgentDriver → VehicleSystem.
+- **`citysim::driveTowards`** (driver_control.h) used Stanley steering, heading error plus arctan(k · cross-track /
+  v), with a symmetric 0.9 pedal gain and a held brake at a stop, and had its own `DriverInput` type. The physical
+  traffic tier and the driving lab used it. In pursuit mode the tier already zeroed its cross-track term by starting
+  the lane at the car.
+
+The "retired pursuit / lane-follow stack" in the item's wording is not dead. `LaneFollower` and `pursuitCommand` are
+the possessed car's planner. They plan rather than actuate, and they stay.
+
+**Decision.** One controller, `computeDriverInput(DriverState, DriverCommand, DriverTuning)` in driver_agent.h:
+- **Stanley** with the lab-measured sign (+steer turns toward −x facing +z) and driveTowards' gains, which were
+  measured on Jolt in the lab and the tier soaks.
+- **The command is a lane frame and a speed.** `DriverCommand{laneA, laneB, desiredSpeed}`. Pure pursuit is the
+  frame from the car itself (`DriverCommand::toward`), where the cross-track term is zero. `DriverState` carries the
+  car's position.
+- **One `DriverInput`** (the engine's, with handBrake). citysim's type, `DriverGains`, `driveTowards` and
+  driver_control.h are deleted.
+- **The turn slowdown moved out of the controller** into `pursuitCommand`, since it is speed planning: brake for a
+  turn you haven't made. The tier has its own corner governor.
+- **The possessed car rides Stanley too.** "Keep Stanley if it measures better" (the #117 plan), and it did.
+  `pursuitCommand` now hands the controller the route's frame from the car's spot on the path (the follower's
+  station) to the lookahead point, so the cross-track term pulls it back onto the route.
+
+**Measured.** A real Jolt sedan on road friction round a two-right-angle route
+(`agent_driver_holds_a_cornering_route_on_real_physics`):
+
+| controller | mean drift off the route | worst | arrives | stops from the end |
+|---|---|---|---|---|
+| old: heading error, soft pedals | 0.40 m | 2.94 m | 23.3 s | 0.79 m |
+| one controller, pure-pursuit frame | 0.40 m | 2.99 m | 24.2 s | 0.57 m |
+| one controller, the route's frame (Stanley) | **0.28 m** | **2.70 m** | 24.4 s | 0.57 m |
+
+The physical tier was already on this law, and its soaks and pile-up test are unchanged: soak seed 7 is 2.4% of
+time more than 3 m behind its ghost, and the junction has 0 tipped, climbing or overlapping.
+
+**Tests.** The controller's unit tests, now on lane frames; `driver_steers_back_onto_its_lane_from_beside_it` (the
+cross-track term, which the heading-only controller lacked); `driver_holds_the_brake_at_a_stop`; the cornering route
+on Jolt; the bicycle-model pursuit and convoy harnesses; and the driving lab, all on the one controller.
+
+**Consequences.** No bake change. The possessed car keeps to its route more tightly through corners and accelerates a
+little more firmly (pedal gain 0.9). Still owed from ADR-0273: the tier's own chase laws (catch-up of half the gap
+per second up to 5 m/s, a 2.6 m/s² follower envelope, a 4 m/s² lateral corner governor) are constants. With launches
+planned per car they measure well, so they stay until something shows otherwise.
+
+## ADR-0275 — One way of sitting in a vehicle: the driver rides the car, and every rider is thrown in the seat
+
+#117 wave 2, item 26. Two seat paths, and two "follow the vehicle as drawn" paths:
+- **A passenger** (bus, cab, car seat, train) was a `Passenger` of the riding component (ADR-0243). Its owner set
+  the carrier, and `rideStep` pinned the rider each step; `RidingSystem` drew them on the carrier as drawn. Nothing
+  happened to them in the seat: a bus could stop dead and its riders sat still.
+- **The driver** (`InVehicle`) was not a rider. VehicleSystem kept its own seat jolt and sway (ADR-0252), and
+  PlayerBodySystem kept its own copy of "the car as drawn this frame" (the car's PrevTransform slerped by the
+  interpolation) to sit the body in.
+
+**Decision.** One way of sitting.
+- **The driver rides the car.** On getting in, VehicleSystem gives the player a `Passenger`: sat at the car's hip
+  point, a car seat, with the view not turned by the carrier (`Passenger::turnsView`, false at the wheel, where the
+  chase rig frames the car). Each step `stepSeat` sets the carrier to the car's frame and calls `rideStep`, like the
+  transit and train systems do. Getting out or being thrown off takes the Passenger away with `InVehicle`, which
+  stays to mean "at the controls". The pinned capsule cannot push the car: a `CharacterVirtual` owns no body.
+- **The seat's sway and jolt are the riding component's.** `RideJolt` and `SeatSway` move to `player/seat_motion.h`,
+  and `Passenger` carries them. `rideStep` (now taking the step length) measures the carrier's velocity from its own
+  frames, throws the body against its change in the carrier's own axes, and keeps the jolt over the last moment. A
+  jump between carriers (a gangway) starts them afresh. VehicleSystem's own copies are gone: its eject rule reads
+  `Passenger::joltNow`, and the pose reads `Passenger::sway`.
+- **Every seated rider is thrown in the seat.** `seatedOccupantPose` takes the rider's sway and hands it to the
+  driver's `seatedPose`, the one sway rule. A bus pulling up or a cab cornering lurches its passengers as a hard stop
+  lurches the driver.
+- **One "vehicle as drawn".** `RidingSystem`'s render keeps the carrier as drawn (`Passenger::drawn`), and
+  PlayerBodySystem sits the driver's body in it. Its own interpolation of the car is deleted.
+
+**Tests.**
+- `every_rider_is_thrown_forward_when_the_carrier_brakes`: a rider on a carrier braking at 1 g leans 0.073 m, the
+  driver's seat rule exactly, in the carrier's own frame (a carrier facing +x braking along +x still throws them
+  forward, never sideways), and the stop is no crash.
+- `a_jump_between_carriers_starts_the_seat_afresh`.
+- The driver-seat, ride, train and bench suites pass unchanged.
+
+**Seen.** Probe in movement_lab: the drop-menu convertible entered, the driver's body seated in the right-hand seat
+standing still, and reversing at 27 km/h through a turn. Getting out works. The seat measures the same as before.
+(The first "stuck" run was the car spawned nose-on to the lab's obstacle row.)
+
+**Consequences.** No bake change. Riders on buses, cabs and trains lean when their carrier accelerates, brakes or
+corners. The camera is untouched: the sway moves the body, not the first-person eye.
+
+## ADR-0276 — One road class table: every class's section, grade and profile, once
+
+#117 wave 2, item 18. Four tables gave road grades, and they disagreed:
+
+| | freeway | arterial | collector | local | ramp | read by |
+|---|---|---|---|---|---|---|
+| `DesignRules::forClass` (road_rules.cpp) | 5 % | 8 % | 10 % | 12 % | 6 % | lane counts; the old lattice code (item 20) |
+| the lanes builder's defaults (road_graph_spec.cpp) | 3 % | 6 % | — | 9 % | 9 % | graphs that declare no classes: the two rail labs |
+| the planner's scene classes (plan_scene.cpp) | 6 % | 8 % | 10 % | 12 % | 9 % | every graph it plans, so every shipped level |
+| constants elsewhere | | | | | 9 % | `dop.gRamp` (plan_scene twice, island_world); the island's mountain class, built by hand from rural (island_scene); the interchange demo's classes (lanes_tool, its ramp at 8 %) |
+
+**Decision.** One table, `roadClasses()` in roads/lanes road_graph_spec. A graph's classes start from its rows
+(`RoadLabGraph::fromJson`), `classJson` writes a row back, and `roadClass(name)` reads one.
+- **The grades, lane counts, shoulders, ranks, windows and deck thicknesses are the planner's.** They are what
+  every shipped graph carries, so nothing that ships moves.
+- **The sections are the default brief's** (12, 16, 22 and 30 m carriageways, 5 m sidewalks). The planner still puts
+  its brief's widths over them.
+- **The table holds every class:** the planner's seven, the island's `mountain` (the rural section at 15 %, cutting
+  through, guardrailed: ADR-0116, ADR-0117), divider, rail, light rail and footway.
+
+Everything reads the table:
+- the planner writes its classes as table rows with the brief's widths, and its interchange ramps take the ramp row's
+  grade (`dop.gRamp`);
+- the island takes its mountain row and its ramp grade;
+- the interchange demo tool takes its rows;
+- `DesignRules::forClass` takes its grades (its radii and cross-sections stay its own until item 20 retires the
+  lattice code that reads them).
+
+**Not in the table:** the island's terrain-router settings (`freewayRouteParams`, the pass and road routing,
+`finishRoad`). They are the route search's tuning per road kind: cell size, grade cost and weight, margins, the cut
+and fill it tightens to. They are not road rules, and splitting one number out of each set would not remove a
+duplicate. Item 19 (one terrain router) is where they get looked at.
+
+**The rail labs declare their own streets.** `light_rail_lab` and `rail_loop` declared no classes and so drove on the
+builder's defaults: 3.5 m lanes, 1.8 m sidewalks, local 9 % and arterial 6 %. Under the table they took a planned
+city's 6 m lanes and 5 m sidewalks, and the light rail lab's wider streets left one see-through look at a deck edge.
+They now write their narrow streets into their own graph files, as every planned graph does. A lab picks its streets.
+
+**Proved identical.**
+- `city_plan scene` re-planned metro_v2_test with the table. Edges, terrain and rules are byte-equal to the
+  committed graph. The classes differ only by keys now written out: `shoulder: 0` on four street classes and
+  `sidewalk: 0` on the ramp, the zeros the reader filled before.
+- A committed graph loaded under the table fills its omitted keys from the table's rows, the same zeros the old
+  defaults gave.
+- The island's mountain row is the one island_scene built: the guardrail's height and thickness it omits are the
+  reader's guardrail defaults, which the table writes.
+- The rail labs are unchanged: lanes_tests 50/50, the light rail lab back to 0 see-through looks.
+
+**Consequences.** No bake change and no tag bump for this item. The roads chain's re-plan (items 19–21, with #167 and
+#142) is where any grade actually moves, and then from this one table.
+
+## ADR-0277 — One terrain router: routeOnTerrain; terrain.route runs on it, routeRoad retires
+
+#117 wave 2, item 19. Two grade-limited terrain routers:
+- **`routeRoad`** (terrain_field.cpp, ADR-0045): A* over 8 neighbours with the grade a hard gate. Its switchbacks
+  were 45° staircases (ADR-0048's "unnatural curves"). It also had an earthwork mode (ADR-0047) that searched over
+  (x, z, road height) and priced cut and fill. Its only caller was the Lua binding `terrain.route`, and no script,
+  level or tool calls that.
+- **`routeOnTerrain`** (city/terrain_route.cpp, ADR-0103, after Galin et al. 2010): moves of up to three cells in 32
+  directions, a soft grade (`maxGrade`, priced above) and a hard one (`hardGrade`), turns priced on the incoming
+  direction, self-crossings cut. It is the city planner's mountain roads (plan_scene) and the island's freeway, passes,
+  roads and footpaths.
+
+**Decision.** `routeOnTerrain` is the one router.
+- `terrain.route` keeps its call and its result: `from`, `to`, `cell`, `max_grade`, `width`, the optional spline
+  smoothing, and a chain layout of nodes on the ground and edges. It now runs on `routeOnTerrain`.
+  - `max_grade` is the road's grade, and the new `hard_grade` (default `max_grade`) is the most it may climb at all.
+  - `margin` and `turn_weight` are the router's own knobs.
+  - The old router's `pad`, `turn_penalty`, `climb_cost`, `max_stretch`, `simplify_tol`, `cut_fill` and `elev_step`
+    have nothing to set. They go with it.
+- **`routeRoad`, its earthwork mode and `RouteParams` are deleted.** A road's cut and fill is the builder's: the
+  profile's balance (ADR-0116) cuts through what it cannot climb and fills what it must cross. A router that also
+  priced earthwork was a second answer to that, and nothing asked it.
+- The Douglas-Peucker simplifier stays: the spline smoothing (`smoothCentripetalCatmullRom`, `roundRoadCorners`)
+  decimates with it.
+
+**Tests.** `procgen_terrain_route_runs_on_the_one_router` (Lua): over hills too steep to drive straight
+(`terrain.fbm{freq=0.004, amp=30, octaves=2}`), a chain of 10 nodes. Both ends are exact, every node is on the
+ground, and the steepest leg is 11.7 % against a 12 % hard grade. The four `routeRoad` tests go with it:
+- flat, the peak and walled-in are `routeOnTerrain`'s own cases (`terrain_route_is_straight_on_flat_ground`,
+  `..._winds_up_a_mountain_within_its_grade`);
+- the earthwork test goes with the mode.
+
+Found while writing the test: rough fbm (4 octaves of 90 m at 0.01) has no road within 12 %. The router says so (no
+points), and `terrain.route` falls back to its straight chain, as it always did.
+
+**Consequences.** No bake change: no level or recipe routes through Lua. The island's and the planner's router
+settings (cell, weights, margins per road kind) are the search's tuning and stay with their callers (ADR-0276).
+
+## ADR-0278 — The lattice's road passes retire: no roundabout promotion, no unread design policy
+
+#117 wave 2, item 20, as the plan put it: "Lattice profile solvers and lattice graph passes still running
+(road_mesh.cpp, road_entity.cpp), called only by the poke report: move the report onto lanes, then delete."
+Measured on 2026-10-31:
+- **The profile solvers are already gone.** `weldChainProfiles` and `clearanceProfile` left with the old road
+  systems (ADR-0267, ADR-0268).
+- **The poke report is already on lanes.** It reads a lane-built city's published deck from the bundle (`RoadDeck`,
+  `readCityProducts`), the surface the question is about.
+- **What remained was the constraints pass.** `applyConstraints` (road_constraints, ADR-0052) promoted a busy or
+  over-acute node to a roundabout ring, gated on `RoadLook::autoRoundabout`. It still ran inside `navRoadGraph`, the
+  function that turns every lane-built city's road twin into the sim's routing graph. But the twin sets
+  `autoRoundabout = false` ("lanelab owns its junctions"), so on every city that ships it passed the graph through
+  untouched. Only hand-built test nets ever took it.
+- **Around it, unread:**
+  - `RoadLook::perClassGrade`, the lattice profile solve's per-class switch;
+  - `kDesignRules` and `kRoadMaxGrade`, that solve's tables;
+  - `DesignRules`' network policy (`minArmAngle`, `maxArmsAtGrade`, `clearance`, `deckThickness`, `rampGrade`), whose
+    reader was the lattice's layered mesh.
+
+**Decision.** They go.
+- `road_constraints.{h,cpp}` and `test_road_constraints.cpp` are deleted.
+- `constrainedGraph` is now the sampled graph, its dangling ends joined (the T-junction repair a twin still uses),
+  classified.
+- `RoadLook` loses `autoRoundabout` and `perClassGrade`. The bundle codec writes two zero bytes in their place and
+  reads past them, the way it keeps the retired grower's hub count, so bundles baked before still read. Drop them at
+  the next format bump.
+- `DesignRules` keeps its per-class rows: the cross-sections, and the lane count nav and the markings read. Its
+  grades are the road class table's (ADR-0276).
+
+**Proof.** For every lane-built city `applyConstraints` was the identity (its gate was off), so `navRoadGraph`, and
+everything routed on it, is unchanged. The gate's suites, which build cities through it, pass.
+
+**Consequences.** No bake change. The old pass also had nothing on the poke report, which reads the lanes deck.
+
+## ADR-0279 — One drainage flood: floodDrainage; stream power runs on it, hydrology joins at the next river re-bake
+
+#117 wave 2, item 21. Two priority floods routed water over a height grid, line for line the same algorithm:
+- `streamPowerErode` (stream_power.cpp), the mountain-growing erosion and the terrain maps' drainage, flooded with
+  a 1e-4 per metre rise so a filled hollow slopes to its spill;
+- `computeHydrology` (hydrology.cpp), the rivers and lakes, flooded level (no rise) so a lake stays flat.
+
+**Decision.** `floodDrainage` (procgen/drainage.{h,cpp}) is the one flood: outlets in, 8 neighbours, each cell
+filled to the higher of its own height and its receiver's plus the rise, a receiver tree visited outlets first.
+`DrainageFlood` keeps its buffers so stream power's repeated floods reuse them. Stream power calls it now.
+
+**Proof.** Stream power's output is byte-identical: checksums of the eroded field before and after match, on a
+deterministic run (346df7b3b4266a8c) and a stochastic one (c5c5ae938074ca1b).
+
+**Hydrology waits.** Its own flood broke ties in a different neighbour order, so switching it moves rivers where
+they cross a perfectly flat filled basin. Measured on island_8_nature: 21 rivers both ways, the 5 lakes identical,
+29.33 km of river against 29.68 km, over 90 % of the river nodes unmoved, a few short stretches shifted, and one
+379 m stub swapped for a 149 m one. Cosmetic, but the river trench is baked into the ground while the water is
+computed at load, so it cannot ship without bumping `kHydroCarveCodeTag`. That means re-baking the island_8
+variants and river_valley. The switch is held, written and measured, until that re-bake is batched with the roads
+follow-ups (#167, #142).
+
+**Not merged.** `breachDepressions` (erosion_gpu_vk.cpp, ADR-0124) also floods from the outlets, but it is a
+different job: it cuts the ground along the flood's path as it goes, over 4 neighbours, to drain a hollow.
+
+**Consequences.** No bake change now.
+
+## ADR-0280 — Height samplers: two answers, each said once; SurfaceField retires
+
+#117 wave 2, item 22: "Height samplers: terrainHeight, lodVertexHeight, lodSurfaceHeight, terrainGridSurfaceHeight,
+Pyramid::height -- map who calls which; finish ADR-0075's SurfaceField or record why not." Mapped on 2026-10-31.
+
+**The ground has two honest answers.**
+- **The authored ground**, `terrainHeight`: eroded base, river carve, earthwork, then the cut/fill stack. About 60
+  callers: placement, the meshers, probes, footsteps. `lodVertexHeight` is one CDLOD vertex of it (dilated, with
+  the road-plane corner clamp).
+- **The drawn ground**, the triangles the meshers emit, which differ from the authored ground by metres at pad and
+  grade edges. Anything that has to stand on what is rendered needs this one. Three samplers answered it:
+  `lodSurfaceHeight` (the CDLOD leaf), `terrainGridSurfaceHeight` (the static grid) and `Pyramid::height` (the
+  baked ground, which the baked mesher draws from).
+
+Those are different jobs and both stay. The duplication was inside them.
+
+**Decision.**
+- **One triangle split.** `drawnCellHeight` (procgen/drawn_cell.h) interpolates a cell across the (a, b, d) /
+  (a, d, c) triangles. `lodSurfaceHeight`, `terrainGridSurfaceHeight` and `HeightTile::sampleLocal` each wrote it
+  out; they now call it with their own corners. Same arithmetic in the same order, so the heights are bit-identical.
+- **One drawn-ground picker in the loader.** `cdlodDrawnGround` now picks the pyramid when the level is baked (the
+  field past its edge, or with `RT_GROUND_FIELD=1`), the rule the vegetation block had kept to itself. The
+  vegetation, the dressing drape and the street furniture all call it. Before, the dressing and furniture evaluated
+  the field in a baked level, while the drawn mesh came from the pyramid. Now they sit on the ground that is drawn,
+  and they skip ~50 us field evaluations.
+- **One closure type.** `HeightSampler` (buildability.h) was `HeightField` (terrain_field.h) under a second name.
+  It is gone, and buildability, block grading and the water mesh take `HeightField`.
+- **SurfaceField is deleted**, along with its two tests. The flatten-grid, batter and block-grade tests in its file
+  stay, in `tests/test_flatten_grade.cpp`.
+  - It never had a production caller. ADR-0075 meant it to own the cut/fill stack and its index, but
+    `TerrainParams` (`flatten`, `flattenIndex`) already does, and `terrainHeight` folds more layers than SurfaceField
+    did. Wiring it in would have made the second owner ADR-0075 itself warned against.
+  - Of the closures it was to subsume, `RoadNet`'s and `RoadMeshParams`' are gone with the lattice, and the other
+    two are now one type.
+  - The idea worth keeping, *a stale index is a perf bug, never a correctness one*, is still owed: `terrainHeight`
+    trusts `flattenIndex`. It is in TECH_DEBT.md, to be done with a bake change.
+
+**Owed (changes the lots bake).** The lot pass's `meshGround` (city_lots.cpp, parks and plazas) means to follow the
+drawn mesh, but it blends bilinearly instead of across the triangle split, anchors at its own grid, and skips the
+road-plane clamp. It should call `drawnCellHeight` over `lodVertexHeight` corners, at the next lots tag bump.
+
+**Not changed.**
+- `entityGround` (`terrainHeight`, dilated) stays for entities that drape themselves.
+- Footsteps read the pyramid when baked and the field otherwise. That only decides the surface sound under a foot.
+
+**Consequences.** No bake change: no baked product reads the dressing or furniture drape. On baked levels the
+load-time dressing and furniture now sit on the pyramid, which is the ground the baked mesher draws. Where the
+pyramid stores leaf-resolution tiles that is the old height to within its 1 mm quantization.
+
+## ADR-0281 — Two crash measures stay: what a body meant to keep, and what a carried body felt
+
+#117 wave 2, item 25: "Two crash measures (on foot vs RideJolt), which ADR-0252 already calls one rule → one."
+Read on 2026-10-31: the measures are two on purpose, and what follows them is already one.
+
+- **On foot, `speedLost(meant, got)`** (body_rules.h, ADR-0247): the speed lost along the way the body meant to
+  go. `PlayerBody::impact` sums it over one contact. Turning aside is free: a skim along a wall or a shove off a
+  corner is the body's own choice of way, and costs nothing.
+- **In a seat, `RideJolt`** (seat_motion.h, ADR-0252): the largest change of the velocity vector over 0.3 s, with
+  the vertical at half. A carried body chose nothing, so every change is felt, sideways included. A motorbike
+  T-boned at speed must throw its rider, though its speed along the road is kept.
+
+Run through `speedLost` with the old velocity as meant, the T-bone would read zero. Run through the jolt, a wall
+skim on foot would ragdoll the walker. So neither can be written as the other, and ADR-0252's line ("the impact
+rule's speed lost for a body strapped to a vehicle") is corrected to "the impact rule's counterpart". **What is one
+already:** past its tolerance each publishes the same consequence. The jolt sends `LimpRequest` and PlayerSystem
+answers with the walker's own `goLimp`, so there is one throw, one ragdoll and one log line.
+
+**Decision.** Keep both, side by side in the comments that define them. No code change.
+
+## ADR-0282 — One role list: an agent's role is its catalog id; the Role enum retires
+
+#117 wave 2, item 27: "Two role representations (the Agent::Role enum vs RoleCatalog) → RoleCatalog only."
+Read on 2026-10-31:
+- **The enum was not a second source of truth, but it pretended to be.** `Agent::Role` named four values (Commuter,
+  Shopkeeper, Stroller, Student), yet the field already held a catalog index. Staff were cast in with ids 4–10
+  (`static_cast<Agent::Role>(j.role)`), and every day-table lookup indexed the catalog.
+- **Nothing tied the four names to the catalog.** A roles.lua that reordered `order` loaded fine and silently gave
+  every commuter the stroller's day.
+- **The inspector's name printer** knew only the four enum names, so it printed "?" for all seven staff roles.
+
+**Decision.**
+- `Agent::role` is a `RoleId` (city_roles.h), the catalog index. The four roles the sim assigns by its own rules
+  keep names in code, `kRoleCommuter`, `kRoleShopkeeper`, `kRoleStroller` and `kRoleStudent`, as their catalog
+  ids.
+- `builtinRolesLead` holds the catalog to them: the four must lead, in that order. `loadRoleCatalog` refuses a
+  roles.lua that breaks this, and the city keeps the built-in roles, with the reason in the log.
+- The inspector reads the name from the catalog (`RoleCatalog::nameOf`), so staff show as "teacher", "waiter" and
+  so on.
+- Same byte in the agent and in the population cache (`PopRecord::role`), whose key already hashes the catalog's
+  description: no format change, no re-bake.
+
+**Not changed.** The census buckets roles by id into 16 slots and clamps past that. The catalog has 11.
+
+**Test.** `roles_lua_is_the_built_in_role_catalog` now also checks the four ids, the name lookup, and that a
+roles.lua swapping commuter and stroller is refused.
+
+## ADR-0283 — One gun: gun.lua; the C++ ShootingSystem retires
+
+#117 wave 2, item 29: "Two guns (C++ ShootingSystem vs gun.lua) → the Lua one, with C++ only where scripting is
+off, or drop that build." Read on 2026-10-31:
+- `ShootingSystem` was registered only when `RT_ENABLE_SCRIPTING` is off. No build turns it off: every CI
+  workflow, the web, visionOS and the Makefile build with scripting on, and the city has no traffic without it.
+  So the C++ gun was a second gun no one could hold.
+- gun.lua already did more: the tool slots, `hands_free`, the muzzle-behind-a-pane check, pitch jitter, the
+  viewmodel.
+- **What the C++ gun had that gun.lua lacked:**
+  - **CCD.** The C++ bullet was swept between physics steps. Lua's `spawn.block` was a plain dynamic body, so a
+    shot could tunnel through a thin wall.
+  - **The UI check.** The C++ gun held fire while ImGui wanted the mouse. gun.lua fired on a click on a panel.
+
+**Decision.**
+- `spawn.block{ccd = true}` asks for a swept body (`SpawnCommand::ccd` → `RigidBody::continuousCollision`), and
+  gun.lua's bullet asks.
+- `input.pointer_free()` is false while a UI panel has the mouse, and gun.lua holds fire on it.
+- `shooting_system.{h,cpp}` are deleted with their registration. A build without scripting has no gun.
+
+**Test.** `script_block_spawn_is_swept_when_asked`: a block with `ccd` is swept, one without is not.
+
+## ADR-0284 — One instance sphere; the camera cull and the shadow bounds keep their own jobs
+
+#117 wave 2, item 31: "Two instance-cull paths → one, in RenderSystem." Read on 2026-10-31. Three places cull or
+bound instances, and they do different jobs:
+- **The camera cull, `frustumCullInstances`** (render_system.cpp). Every instance group (flora, grass, parked
+  cars, the far crowd band) is tested per instance against the view frustum and the distance band, before
+  anything is submitted.
+- **The Vulkan draw's bounds** (`sphereOf`, `drawMeshInstanced`). One sphere round the instances that survived the
+  camera cull, which feeds only the shadow cascades' per-item cull. That cull needs the light's planes, which live
+  in the backend, so it cannot move into RenderSystem.
+- **The GPU crowd, `crowd.comp`.** The far travellers, culled where they are simulated, on the GPU.
+
+What was written twice is the maths: the sphere round a mesh under an instance transform. Both copies carried the
+#50 lesson (affine, no divide: the bottom row is data) in their own words.
+
+**Decision.** `instanceCentre` and `instanceScale` (rt_math.h, beside `BoundingSphere`) say it once. The camera
+cull and Vulkan's `sphereOf` call them. The three paths stay three; their reasons are above.
+
+**Consequences.** Same spheres. No change in what is drawn.
+
+## ADR-0285 — One engine voice pool: the physics cars and the city's traffic feed it
+
+#117 wave 2, item 28: "Two engine-sound adapters → one voice pool over vehicle_audio.h." The note itself was
+already one (`engineSoundFor`, `engineRevFraction`, `engineWobble`). What was written twice, line for line, was
+the pool around it:
+- the nearest-N sort;
+- matching voices to cars across frames;
+- the synthesized loop;
+- the eased gain, direct pitch and per-car rev hunt;
+- the fade-out and reclaim.
+
+`VehicleSystem::updateEngines` did it for the physics cars, and citysim's `CityTrafficAudioSystem` did it for the
+traffic.
+
+**Decision.** `EngineVoicePool` (engine/audio/engine_voices.h) is the pool. Each owner hands it the engines in
+earshot this frame as `{key, pos, speed, throttle, phase, dist2}`. A planner car has no pedal, so it passes
+`kEstimate`, and the pool reads its load from its change of speed (the city adapter's rule). The two owners keep
+their own pool and their own numbers:
+- the physics cars: 6 voices, 90 m, seed 1;
+- the traffic: 8 voices, 70 m, seed 2, so the player's own engine still reads as theirs.
+
+**Not merged: one budget.** The two pools can sound 14 engines between them. Sharing one budget means one owner
+gathering both lists, and the city is an app the engine cannot see. That is left until a level needs it.
+
+**Test.** `engine_voice_pool_voices_the_nearest_and_reclaims_the_gone`, on the manual mixer.
+
+## ADR-0286 — One answer to "which water is here": the drawn sea is the swimmable sea
+
+#117 wave 2, item 30: "Two 'which water is here' lookups → one query (verify the overlap first)." Read on
+2026-10-31:
+- **The point query is already one.** `UnderwaterSystem::surfaceAt` checks a pool, then a lake, then a river,
+  then the sea. The camera, swimming and buoyancy, the bike and the footsteps' splash all ask it.
+- **The other "lookup" asks something else.** `WaterAmbienceSystem` sweeps rings round the listener for the
+  NEAREST sea, lake and river edge, to place their sounds. That is a search for an edge, not a test at a point.
+  It keeps its sweeps.
+- **What disagreed was the data under them.** The loader draws the water mesh over every cell below sea level,
+  but it gave the `Sea` only the open cells (`openSeaCells`, so ponds would have no surf). A pond the water plane
+  fills in a basin was drawn, but `surfaceAt` said dry there. The swimmer walked on it, with no underwater view
+  and no splash.
+
+**Decision.**
+- The `Sea` holds every drawn cell, each marked open water or pond (`openSeaMask`). `Sea::contains` is any water
+  drawn there, which is what the swimmer, the camera and the splash ask. `Sea::surf` is open water only, which is
+  what the ambience's surf sweep asks.
+- `openSeaCells` stays as the open cells of the mask.
+
+**Not changed.**
+- The ambience does not hear `WaterPool`. Only the movement lab has one, and still water makes no sound.
+- The offline tracer's scene draws water with no `Sea`, because nothing swims there.
+
+**Test.** `open_sea_keeps_the_ocean_and_drops_the_ponds` also checks that a pond is swum in without waves.
+
+## ADR-0287 — One eye height: kEyeAboveCentre
+
+#117 wave 1, item 14: "Eye height twice (riding.h, player_body.h) → one constant." There were four:
+- `kRiderEyeAboveCentre` (riding.h);
+- `PlayerBody::eyeHeight` (a member never assigned);
+- `kEyeAboveTransform` twice, in the bus (city_player_transit.cpp) and the train (train_system.cpp).
+
+All were 0.7, and each comment pointed at another.
+
+**Decision.** `kEyeAboveCentre` (player/body_rules.h) is the eye above the capsule centre. The walker's camera,
+a rider pinned in a carrier, every seat's hip and the swimmer's float measure from it. No value changed.
+
+## ADR-0288 — One thread pool for the process: sharedJobs and parallelRows
+
+#117 wave 1, item 10: "The dozen hand-rolled thread pools → JobSystem (parallelRows)." The app owned one
+`JobSystem` and handed it to systems through `FrameContext::jobs`. The level load's procgen could not reach it,
+so each pass spawned its own `std::thread`s: the terrain maps, the weather bake, stream power, the world maps, the
+forest and rocks, the lanes mesher, the lots producer, the island world, and the clouds' noise. The loader and
+the citysim each also made private `JobSystem`s. During a load that meant several pools of hardware-thread size
+at once.
+
+**Decision.**
+- `sharedJobs()` (job_system.h) is the process's pool, made on first use and synchronous on the web build. The
+  app's `jobs` is a reference to it, so frame work and load work share one set of threads.
+- `parallelRows(n, f)` runs rows across it, each exactly once, batched about 8 per worker. The caller helps, so a
+  row loop inside another parallel loop cannot deadlock.
+- Every hand-rolled pool above calls it. Single background threads (the control channel, the editor's bake list,
+  the map tool) are a different job and keep their own.
+- The path tracer's own binary keeps its pool, since nothing else in it runs.
+
+**Determinism.**
+- Every converted loop writes only its own row, except two.
+- **The forest and rock placement** gathered per thread and joined in thread order, so the tree list's order
+  depended on the machine's core count. It now gathers per row and joins in row order, the same everywhere. The
+  set of trees is unchanged; their order is now the sequential one.
+- **The lanes mesher's** fixed contiguous chunks keep their partition and run on the pool.
+
+**Measured** on island_8_nature, from launch to the level answering its control socket: 99.6-100.5 s before, 99.7-100.0 s after (three runs each), every load phase within noise; the same 416,847 trees, 690,608 rocks and 52,074 near groups.
+
+## ADR-0289 — One box blur: boxBlurGrid
+
+#117 wave 1, item 11: "The three separable box blurs → one in texture_field." There were four:
+- the terrain maps' (`boxBlur`, running sums, clamped edges);
+- the weather bake's shape-keep blur (the same, three passes);
+- the weather bake's range blur (a window re-summed at each cell, clamped, three passes);
+- the planner's land masks (`boxBlur` in land_shape.cpp, running sums, the window shrunk at the edges).
+
+**Decision.** `boxBlurGrid(in, n, r, passes, edge)` (texture_field.h) is the blur. It is separable, uses running
+sums and runs its rows on the shared pool. Its edges either clamp, for a height field, or shrink, for a 0/1 mask
+that must stay a true fraction. The terrain maps, the shape-keep blur and the land masks call it, bit-identical:
+the same loops in the same order.
+
+**Owed: the weather bake's range blur.** Its re-summed window rounds differently from running sums. Measured on
+512² random fields, 2–52 % of cells differ by up to 0.15 mm. That is too small to see, but it changes the weather
+bake's bytes, and with them the erosion and the island's ground. It moves with `kWeatherCodeTag`'s next bump.
+
+## ADR-0290 — One CDLOD morph target: coarseAverage and morphPinned
+
+#117 wave 1, item 12: "The CDLOD morph-target bake written twice (terrain_lod.cpp) → one function; tiles must
+come out byte-identical." The live mesher (`generateLodNodeMesh`) and the baked tiles (`generateBakedTileMesh`)
+each wrote out two things:
+- the stencil: even vertices stay, odd ones collapse to the average of their even neighbours;
+- the pin: a flatten-owned vertex keeps its own height.
+
+They differ in the rest, on purpose. The live mesher works in float and morphs to its own normal; the baked tiles
+work in double and morph to the coarser level's averaged normal.
+
+**Decision.**
+- `coarseAverage(i, j, at)` is the stencil, over any grid value: a float height, a double height or a normal. It
+  returns the value's own type; halving and quartering are exact, so each mesher keeps its precision.
+- `morphPinned` is the pin rule. Both meshers call both.
+
+**Proof.** A hash over the live morph targets of three nodes and all 21 baked tiles of a pyramid, on ground with
+a road ramp and a pad (so the pin fires), is `3e5483088f17f815` before and after.
+
+## ADR-0291 — One control-channel client: tools/rtctl.py
+
+#117 wave 1, item 13: "The four control-socket clients in tools/ → one rtctl module the others import." Four
+clients, each with its own reading of a reply:
+- lanelab_shots' `send`, which five probes imported;
+- viewer_ctl's;
+- viewer-mcp's, which also deleted socket files that refused a connection;
+- citywalk's `Channel`, which read one 8 KB chunk and could cut a long reply.
+
+Six probe tools also each launched a viewer and waited for its socket in the same eight lines.
+
+**Decision.** `tools/rtctl.py`, which every tool imports:
+- `send` reads a reply to its newline;
+- `live_sockets` and `newest` find running viewers by their pid, and leave stale socket files alone;
+- `launch` starts a viewer and waits for its socket;
+- `stop` ends the tool's own viewer, by its process.
+
+## ADR-0292 — One way to build a frame: FrameOwners
+
+#117 wave 1, item 17: "test_player_trace's Rig → build its context with Application::makeContext, so it can't
+drift." `makeContext` needs a window, which a test rig has none of, so the test copied its aggregate initialiser.
+The copy had already drifted: makeContext sets `commands`, the control channel's table, and the rig never did.
+
+**Decision.** `FrameOwners` (system.h) names everything a frame refers to in one constructor, so leaving an owner
+out is a compile error, not a silent null. `context()` builds the FrameContext, including the fields a positional
+initialiser defaults silently. `Application::makeContext` and the trace rig both build through it; the rig now
+carries a command table.
+
+## ADR-0293 — One set of lane arrows: the lanes deck's
+
+#117 wave 1, item 16: "The two lane-arrow paint sets → the lanes one (ADR-0108); delete CityRenderSystem's
+angle-guessed copy." Since the lattice retired (ADR-0089, its 2026-10-14 note), every city road is the lanes builder's, which paints
+stop bars, crosswalks and turn arrows into its deck. citysim's `buildRoadMarkings` drew a second set of floating
+quads from the graph, guessing each lane's turn from its angle, gated off by `LevelRoadGraph::paintedMarkings`
+(#39). The gate was on for every road that ships, and the labs that run citysim without lanes have no streets.
+
+**Decision.**
+- `buildRoadMarkings`, its instance group and `paintedMarkings` are deleted, with their two tests.
+- The lanes arrows keep their own test (`lanes_arrows_assign_turns_to_the_lanes_that_make_them`).
+
+Item 15 ("road ear-clipper → earcut") needed no change: road meshing's `triangulatePolygon` already forwards to
+the one triangulator (triangulate.h).
+
+## ADR-0294 — Wave 0: dead code and copies
+
+#117 wave 0, items 1-8: code with no caller outside its own file or test, and private copies of a shared rule.
+Nothing in the world changes. Each item was checked for callers before it went:
+1. `ped_graph.{h,cpp}` and its test are deleted. The door graph (ADR-0066) was never wired; walkers route on
+   NavGraph.
+2. `SwimState::verticalSpeed` is deleted. The swimmer's physics test now swims by `swimVerticalStep`, the rule
+   the game uses.
+3. The four GLSL shaders Vulkan never loaded (atmosphere.frag, star.frag, water.vert, water.frag) are no longer
+   compiled, and the files are deleted. The Metal and WGSL ports stand alone; atmosphere is wired on both.
+4. `buildCarShell` and `mesh.car_shell` are deleted (superseded by `mesh.car`, ADR-0062); no script used them.
+5. The pursuit and lane-follow stack in engine/ai is NOT dead: the possessed car drives on it (city_possess,
+   ADR-0079) and walkers use its stuck and knockdown timers. Only the three pieces with no caller outside tests
+   go: `Commitment` (ADR-0063's decide stage, never wired), `senseLeader` (the straight-cone sensor that
+   `senseAlongPath` replaced; the convoy test now senses along the path, as possession does) and
+   `closestApproach`.
+6. One `rightOf` (nav_graph.h) replaces the private copies in nav_graph.cpp and bus_stop_props.cpp. It keeps its
+   meaning: the kerb side, which is the driver's left (traffic keeps left).
+7. `loadForest` holds its near parts as `RecipeTreePart`, not a field-for-field local copy.
+8. `KdTree` is renamed `TriangleBVH` (triangle_bvh.h): it splits triangles at the median centroid and its
+   children overlap, so it is a BVH, not a k-d tree. `AABB` moves to its own header (aabb.h), shared by the
+   triangle BVH and the instance BVH.

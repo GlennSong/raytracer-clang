@@ -13,7 +13,7 @@
 
 namespace engine {
 
-// THE MESH LIBRARY (ADR-0172, Glenn 2026-10-13: "a common library of triangulation techniques ... how to represent
+// THE MESH LIBRARY (ADR-0173, Glenn 2026-10-13: "a common library of triangulation techniques ... how to represent
 // triangles in this engine, and then code to handle all the different cases for building vehicles, buildings,
 // furniture, etc. And then lua should be able to access it"). Every procedural mesh in the engine is built from the
 // words below; a producer that needs a shape they lack ADDS a word here rather than a private helper.

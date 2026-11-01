@@ -75,7 +75,7 @@ RoadClass classOf(const EdgeSpec& e) {
 }
 
 RoadEntity roadTwin(const Result& r, double nodeSpacing, bool forLots, bool forNav) {
-    RoadEntity net; net.look.sidewalk = 3.5; net.look.autoRoundabout = false;   // lanelab owns its junctions
+    RoadEntity net; net.look.sidewalk = 3.5;
     std::vector<Line> lines;
     // A ramp is one lanelab edge but two things to the city: at grade, beside the street it leaves
     // (the first hundred metres or so), it is pavement a block must stop at; once it climbs it is

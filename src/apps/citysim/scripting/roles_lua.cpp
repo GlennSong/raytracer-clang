@@ -146,6 +146,7 @@ bool loadRoleCatalog(ScriptVM& vm, citysim::RoleCatalog& out, std::string* err) 
         c.roles.push_back(r);
     }
     lua_settop(L, base);
+    if (const std::string wrong = citysim::builtinRolesLead(c); !wrong.empty()) return fail(err, "roles.order: " + wrong);
     out = std::move(c);
     return true;
 }

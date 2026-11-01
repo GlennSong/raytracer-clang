@@ -602,10 +602,10 @@
     <a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/src/engine/component_registry.cpp#L9-L54">component_registry.cpp</a>)
     lets UI code ask "which components does this entity have" without naming any of them, with optional add/remove
     thunks and a post-edit hook (Shape size → mesh rebuild).</p>
-  <p>Its reach is narrower than the ADR's wording suggests. Nine types are registered (Transform, Shape, Road,
-    Material, Camera, Player Spawn, and read-only Velocity, Rigid Body, Controlled By); the JSON visitors are used for
-    materials, camera lenses and undo snapshots. Most of the level format is still read by hand in
-    <code>level_loader.cpp</code> (8,898 lines).</p>
+  <p>Its reach is narrower than the ADR's wording suggests. Eight types are registered (Transform, Shape,
+    Material, Camera, Player Spawn, and read-only Velocity, Rigid Body, Controlled By; Road left with ADR-0267); the
+    JSON visitors are used for materials, camera lenses and undo snapshots. Most of the level format is still read by
+    hand in <code>level_loader.cpp</code> (about 8,400 lines).</p>
 
   <h2>Events: the typed EventBus, and the other bus</h2>
   <p><a href="https://github.com/GlennSong/raytracer-clang/blob/47d587f31769b795527e22ef848a82f6401ad112/docs/decisions.md?plain=1#L4796">ADR-0066</a>

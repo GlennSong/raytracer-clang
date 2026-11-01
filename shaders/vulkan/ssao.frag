@@ -3,7 +3,8 @@
 // depth buffer via invViewProjection, reads the world normal G-buffer, samples a
 // cosine-weighted hemisphere kernel, and compares each sample's camera distance
 // against the stored geometry to estimate occlusion. Half-res; composite
-// multiplies it in. Approximation of Metal's GTAO (no temporal/blur yet).
+// multiplies it in. Approximation of Metal's GTAO; ssao_blur.frag then box-blurs
+// it (no temporal filter).
 
 struct Light {
     vec4 positionIntensity;

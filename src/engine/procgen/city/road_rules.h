@@ -49,13 +49,10 @@ int    drivingLaneCount(const CrossSection& xs);
 // need PER-DIRECTION lanes on a two-way road pass `perDirection` (half, min 1).
 int    lanesForClass(RoadClass c, bool perDirection = false);
 
-// The road DESIGN RULES, in one place (ADR-0052/0053). Before this, the numbers that govern a
-// road network were scattered: min arm angle / max degree in road_constraints' RoadRules; the
-// bridge clearance, deck thickness and ramp grade hardcoded inline in buildLayeredRoadNetMesh;
-// min curve radius and max grade passed as loose function arguments. This is the single source
-// so "how acutely a road may curve", "when a junction becomes a roundabout", and "how steep a
-// ramp may climb onto an overpass" live together and stay consistent — and so a road's CLASS
-// drives its geometry rather than a magic constant at each call site.
+// THE PER-CLASS CROSS-SECTIONS (ADR-0052/0053): each class's lanes, sidewalks and median, and the lane count nav and
+// the markings read (lanesForClass). Its grades are the road class table's (roads/lanes road_graph_spec, ADR-0276).
+// The network policy that lived beside it -- roundabout promotion, bridge clearance, deck thickness, ramp grade -- went
+// with the lattice builder that read it (ADR-0278).
 //
 // Per-class cross-section + geometry limits.
 struct ClassRules {
@@ -68,17 +65,8 @@ struct ClassRules {
     double fullWidth() const { return lanes * laneWidth; }
 };
 
-// Network-wide policy + the per-class table.
+// The per-class table (the grades are the road class table's, ADR-0276).
 struct DesignRules {
-    // --- junction policy (the constraint pass, ADR-0052) ---
-    double minArmAngle = 0.52;    // two arms closer than this (rad ~30 deg) can't share a flat junction
-    int    maxArmsAtGrade = 4;    // a node with more arms than this is promoted to a roundabout
-
-    // --- grade separation (the layered build / bridges, ADR-0054) ---
-    double clearance = 5.0;       // vertical gap a bridge leaves over the road beneath it (m)
-    double deckThickness = 0.8;   // bridge-deck slab thickness (m)
-    double rampGrade = 0.06;      // grade a bridge approach / ramp climbs at (rise/run)
-
     ClassRules forClass(RoadClass c) const;     // the per-class row
     double minRadius(RoadClass c) const { return forClass(c).minRadius; }
     double maxGrade(RoadClass c) const { return forClass(c).maxGrade; }

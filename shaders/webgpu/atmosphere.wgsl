@@ -1,5 +1,5 @@
 // Planetary atmosphere — WebGPU port of the CPU reference (engine/procgen/
-// atmosphere.cpp) and the Vulkan atmosphere.frag, single-scattering Rayleigh + Mie
+// atmosphere.cpp), single-scattering Rayleigh + Mie
 // (procedural-planet-plan P3). A fullscreen pass that raymarches the atmosphere
 // shell and ADDITIVELY blends the in-scattered light into the HDR scene, run after
 // the main pass and before post so the limb halo blooms — mirroring the Metal
@@ -7,7 +7,8 @@
 // march clips at the surface without a depth fetch; the scene is not sampled (the
 // additive blend does the compositing), so the pass reads only its uniform and can
 // share the HDR target it writes to. Output is scene-linear HDR; composite tone
-// maps. (Math verified against the SPIR-V build of atmosphere.frag; no WGSL
+// maps. (Math verified against the SPIR-V build of the Vulkan atmosphere.frag,
+// deleted unwired in #117 wave 0; no WGSL
 // validator in this environment, so the pipeline wiring is the on-device step.)
 
 struct Atmosphere {

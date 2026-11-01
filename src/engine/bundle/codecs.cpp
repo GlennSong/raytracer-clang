@@ -283,7 +283,8 @@ void putRoadEntity(BinWriter& w, const RoadEntity& e) {
     w.magic("RENT", kRoadEntityVersion); putGraphBody(w, e.graph);
     const RoadLook& l = e.look;
     w.put<double>(l.defaultWidth); w.put<double>(l.sidewalk); w.put<double>(l.curb); w.put<double>(l.cornerRadius); w.put<double>(l.lift);
-    w.put<uint8_t>(l.markings ? 1 : 0); w.put<uint8_t>(l.crosswalks ? 1 : 0); w.put<uint8_t>(l.autoRoundabout ? 1 : 0); w.put<uint8_t>(l.perClassGrade ? 1 : 0);
+    w.put<uint8_t>(l.markings ? 1 : 0); w.put<uint8_t>(l.crosswalks ? 1 : 0);
+    w.put<uint8_t>(0); w.put<uint8_t>(0);   // (autoRoundabout, perClassGrade: retired with the lattice, ADR-0278; drop at the next format bump)
     w.put<double>(l.color.x); w.put<double>(l.color.y); w.put<double>(l.color.z);
     // (the old metro grower's hubs, retired with ADR-0267: always none; the count stays in the layout
     // so the bundles baked before still read. Drop it at the next format bump.)
@@ -298,7 +299,7 @@ bool getRoadEntity(BinReader& r, RoadEntity& e) {
     RoadLook& l = e.look; uint8_t m8 = 0, c8 = 0, a8 = 0, p8 = 0;
     if (!r.get(l.defaultWidth) || !r.get(l.sidewalk) || !r.get(l.curb) || !r.get(l.cornerRadius) || !r.get(l.lift) || !r.get(m8) || !r.get(c8) || !r.get(a8) || !r.get(p8)
         || !r.get(l.color.x) || !r.get(l.color.y) || !r.get(l.color.z)) return false;
-    l.markings = m8 != 0; l.crosswalks = c8 != 0; l.autoRoundabout = a8 != 0; l.perClassGrade = p8 != 0;
+    l.markings = m8 != 0; l.crosswalks = c8 != 0; (void)a8; (void)p8;   // (two retired flags: read past)
     uint32_t nh = 0; if (!r.get(nh)) return false;
     for (uint32_t i = 0; i < nh; ++i) {   // a bundle baked before ADR-0267 may carry the grower's hubs: read past them
         double x = 0, y = 0; int32_t kind = 0, site = 0; uint8_t rad8 = 0;

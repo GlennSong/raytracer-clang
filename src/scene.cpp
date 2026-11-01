@@ -696,7 +696,7 @@ void Scene::addInstance(int proto, const Mat4& toWorld) {
 
 void Scene::buildAccelerator() {
     if (!triangles.empty()) {
-        kdTree.build(triangles);
+        triangleBvh.build(triangles);
     }
     if (!instances.empty()) {
         tlas.build(instances);
@@ -716,8 +716,8 @@ bool Scene::intersect(const Ray& ray, double tMin, double tMax, HitRecord& rec) 
         }
     }
 
-    if (!kdTree.isEmpty()) {
-        if (kdTree.intersect(triangles, ray, tMin, closest, tempRec)) {
+    if (!triangleBvh.isEmpty()) {
+        if (triangleBvh.intersect(triangles, ray, tMin, closest, tempRec)) {
             hitAnything = true;
             closest = tempRec.t;
             rec = tempRec;

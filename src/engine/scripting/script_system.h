@@ -111,6 +111,7 @@ private:
     EventBus* events_ = nullptr;
     bool firstPersonView_ = true;
     bool handsFree_ = true;
+    bool pointerFree_ = true;
 };
 
 }  // namespace engine

@@ -280,7 +280,7 @@ TEST_CASE(students_live_in_the_hall_and_spend_the_day_on_campus) {
     const int hallNode = nav.nearestNode(places[hall].entrance);
     int homeless = 0, othersInHall = 0;
     for (const Agent& a : sim.agents()) {
-        if (a.role == Agent::Role::Student) homeless += a.home != hallNode || a.homePlace != hall;
+        if (a.role == kRoleStudent) homeless += a.home != hallNode || a.homePlace != hall;
         else othersInHall += a.homePlace == hall;
     }
     CHECK(homeless == 0);
@@ -295,7 +295,7 @@ TEST_CASE(students_live_in_the_hall_and_spend_the_day_on_campus) {
         int out = 0;
         for (std::size_t k = 0; k < ag.size(); ++k) {
             const Agent& a = ag[k];
-            if (a.role != Agent::Role::Student) continue;
+            if (a.role != kRoleStudent) continue;
             if (a.indoors && a.restNode == teachNode && a.activity == Activity::AtWork) sawClass[k] = 1;
             if (sim.seatedOn(static_cast<int>(k))) { sawBreak[k] |= 1; }
             if (a.indoors && a.restNode == libNode) sawBreak[k] |= 2;
@@ -305,7 +305,7 @@ TEST_CASE(students_live_in_the_hall_and_spend_the_day_on_campus) {
     }
     for (std::size_t k = 0; k < sim.agents().size(); ++k) {
         const Agent& a = sim.agents()[k];
-        if (a.role != Agent::Role::Student) continue;
+        if (a.role != kRoleStudent) continue;
         inClass += sawClass[k];
         onBench += (sawBreak[k] & 1) ? 1 : 0;
         inLibrary += (sawBreak[k] & 2) ? 1 : 0;
@@ -338,7 +338,7 @@ TEST_CASE(students_fill_every_hall_and_take_classes_in_every_teaching_hall) {
     sim.assignPlaces(places, nav);
     int in1 = 0, in2 = 0, at1 = 0, at2 = 0;
     for (const Agent& a : sim.agents()) {
-        if (a.role != Agent::Role::Student) continue;
+        if (a.role != kRoleStudent) continue;
         in1 += a.homePlace == h1; in2 += a.homePlace == h2;
         at1 += a.workPlace == t1; at2 += a.workPlace == t2;
     }
@@ -446,7 +446,7 @@ TEST_CASE(an_activity_goal_takes_only_spots_of_its_kind_and_tags) {
             if (owner[si] >= 0) ++shared;
             owner[si] = static_cast<int>(k);
             // the city's day-off strollers run their own outing table (any bench); judge only this table's agents
-            if (sim.agents()[k].role == Agent::Role::Stroller) continue;
+            if (sim.agents()[k].role == kRoleStroller) continue;
             if (st->kind != SpotKind::Sit || !(st->tags & spot_tag::kCampus)) ++wrong;
             else ++campusSits;
         }

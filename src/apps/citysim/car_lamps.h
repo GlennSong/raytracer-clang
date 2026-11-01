@@ -69,7 +69,7 @@ inline CarLamps carLampState(Agent::State state, Real speed, Real prevSpeed,
 // travel directions): -1 left, +1 right, 0 straight/undetermined. PHYSICAL side,
 // in the world's right-handed frame: facing +z, the right hand points toward -x
 // (the driving lab's steer-sign probe measured "+steer turns toward -x", and
-// +steer is the right turn — see driver_control.h). A bend toward -x from +z
+// +steer is the right turn — see driver_agent.h). A bend toward -x from +z
 // gives a POSITIVE cross product, so cross > 0 maps to +1. This used to be
 // mirrored ("the sim's right is (d.y, -d.x)"), which cancelled against the
 // then-swapped lamp marker tags; both are now physical, so the pair of flips

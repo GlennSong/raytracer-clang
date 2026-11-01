@@ -9,17 +9,17 @@ namespace engine {
 
 namespace {
 // A cell is sea when any of its corners is below sea level (on the extent's ground).
-bool seaCell(const HeightSampler& ground, const WaterMeshParams& p, double x0, double z0) {
+bool seaCell(const HeightField& ground, const WaterMeshParams& p, double x0, double z0) {
     const double x1 = x0 + p.cell, z1 = z0 + p.cell;
     return ground(x0, z0) < p.seaLevel || ground(x1, z0) < p.seaLevel || ground(x0, z1) < p.seaLevel ||
            ground(x1, z1) < p.seaLevel;
 }
 }  // namespace
 
-std::vector<std::vector<Vec2>> waterMeshCells(const HeightSampler& floor, const WaterMeshParams& p) {
+std::vector<std::vector<Vec2>> waterMeshCells(const HeightField& floor, const WaterMeshParams& p) {
     std::vector<std::vector<Vec2>> out;
     if (!floor || p.seaLevel <= -1e29 || p.cell <= 0.0) return out;
-    const HeightSampler& ground = p.extent ? p.extent : floor;
+    const HeightField& ground = p.extent ? p.extent : floor;
     const int nx = std::max(1, static_cast<int>(std::ceil((p.hi.x - p.lo.x) / p.cell)));
     const int nz = std::max(1, static_cast<int>(std::ceil((p.hi.y - p.lo.y) / p.cell)));
     for (int j = 0; j < nz; ++j)
@@ -31,7 +31,7 @@ std::vector<std::vector<Vec2>> waterMeshCells(const HeightSampler& floor, const 
     return out;
 }
 
-RenderMesh buildWaterMesh(const HeightSampler& floor, const WaterMeshParams& p) {
+RenderMesh buildWaterMesh(const HeightField& floor, const WaterMeshParams& p) {
     RenderMesh mesh;
     if (!floor || p.seaLevel <= -1e29 || p.cell <= 0.0) return mesh;
 

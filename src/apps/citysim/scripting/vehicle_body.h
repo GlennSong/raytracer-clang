@@ -2,6 +2,7 @@
 #define RAYTRACER_APPS_CITYSIM_SCRIPTING_VEHICLE_BODY_H
 
 #include "../../../renderer/renderer.h"   // RenderMesh, Vertex, Vec3
+#include "../../../engine/scripting/vehicle_spec.h"   // VehicleSpec, readVehicleHandling
 
 #include <string>
 #include <vector>
@@ -20,7 +21,7 @@ struct Attachment {
 };
 
 // One wheel of a fleet car, as data: where it sits on the body (+Z forward,
-// x>0 right), how big it is, and what it does. Published by the recipe so a
+// x>0 the driver's left), how big it is, and what it does. Published by the recipe so a
 // PROMOTED car (ADR-0062) builds its Jolt wheels from the same numbers the
 // drawn wheels were cut from — the alternative, deriving a radius and an axle
 // offset from the body's bounding box, put the simulated wheels several
@@ -116,6 +117,12 @@ bool selectFleet(ScriptVM& vm, const std::string& name, std::string* err = nullp
 // global, a missing/out-of-range slot, or a malformed entry.
 bool loadFleetCatalogueEntry(ScriptVM& vm, int slot, Vec3& size,
                              std::string& className, std::string* err = nullptr);
+
+// The HANDLING half of a slot (item 23, #117): its `handling` table -- the same one a drivable spec of its kit or
+// class publishes (vehicles.lua class_handling / kit_handling) -- read by the one handling reader into a spec whose
+// config is what a physical-tier car or a commandeered one drives with. No geometry is built. False (err filled)
+// when the slot has none or it carries no wheels.
+bool loadFleetHandling(ScriptVM& vm, int slot, VehicleSpec& out, std::string* err = nullptr);
 
 }  // namespace engine
 

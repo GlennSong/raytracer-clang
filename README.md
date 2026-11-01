@@ -289,7 +289,7 @@ header, or `daynight minutes 10` on the control socket.
 ```
 src/
   rt_math, handle, slot_map, log, image, camera, geometry, material, scene,
-  kdtree, path_tracer …   — shared core + offline tracer
+  triangle_bvh, path_tracer …   — shared core + offline tracer
   renderer/               — RHI seam (renderer.h), window/input, GPU backends
     metal/                — Metal backend (macOS)          [see metal/AGENTS.md]
     vulkan/               — Vulkan backend (Linux/Windows)  [see vulkan/AGENTS.md]

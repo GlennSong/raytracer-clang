@@ -58,7 +58,6 @@
 #include "../engine/systems/player_system.h"
 #include "../engine/systems/player_arms_system.h"
 #include "../engine/systems/player_body_system.h"
-#include "../engine/systems/shooting_system.h"
 #ifdef RT_ENABLE_SCRIPTING
 #include "../engine/scripting/script_system.h"
 #include "../engine/scripting/script_behaviour.h"
@@ -169,16 +168,14 @@ ArenaState::ArenaState(Window& window, Renderer& renderer,
     addSystem<PlayerSystem>(camSys.flyController(), physSys);
     addSystem<TeleportSystem>(camSys.flyController(), &physSys);   // Debug > Teleport, `teleport`
 #ifdef RT_ENABLE_SCRIPTING
-    // The shooting gun is now a Lua ScriptBehaviour on the player (ADR-0024);
+    // The gun is a Lua ScriptBehaviour on the player (gun.lua, ADR-0024; the one gun since ADR-0283);
     // ScriptSystem drives it. The script is attached in onEnter, once the player
-    // entity exists. (Replaces the C++ ShootingSystem's bullet spawning.)
+    // entity exists. A build without scripting has no gun.
     addSystem<ScriptSystem>().setMuzzleCheck([&physSys](const Vec3& from, const Vec3& to) {
         const Vec3 d = to - from;
         Vec3 hit;
         return d.lengthSquared() > 1e-8 && physSys.physicsWorld().castRay(from, d * 1.05, hit);
     });
-#else
-    addSystem<ShootingSystem>(camSys.flyController(), physSys, renderer);
 #endif
 #endif
     addSystem<MotionSystem>();

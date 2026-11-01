@@ -176,7 +176,7 @@ public:
     void setCharacterPosition(CharacterId id, const Vec3& position);
 
     // --- Ragdoll (Jolt Ragdoll) ---------------------------------------------
-    // A body gone limp: boxes joined by swing-twist joints (engine/block_body.h's six blocks, for a person),
+    // A body gone limp: boxes joined by swing-twist joints or hinges (engine/block_body.h's ten blocks, for a person),
     // simulated with the world and colliding with it, never with itself at a joint. Parts are listed parents
     // first; each joint is a world point with the axis from parent to child, limited to `swingDeg` off it and
     // `twistDeg` round it.
@@ -401,6 +401,10 @@ public:
     VehicleId addVehicle(const VehicleConfig& config, const Vec3& position,
                          const Quat& orientation);
     void removeVehicle(VehicleId id);
+    // WHAT A CAR CAN PULL AWAY AT (item 23, #117): `config` launched from rest at full throttle on flat ground of
+    // `friction` (the city's road), its mean acceleration from 0 to `toSpeed` m/s -- in a world of its own, so any
+    // host may ask (the city plans each car's launch with it). 0 when it never gets there in 15 s.
+    static Real launchAccel(const VehicleConfig& config, Real friction = 0.85, Real toSpeed = 10.0);
     // Driver input, each in [-1,1] (brake/handBrake in [0,1]): forward (throttle,
     // negative = reverse), right (steering), brake, handBrake. Wakes the chassis.
     void setVehicleInput(VehicleId id, Real forward, Real right, Real brake,

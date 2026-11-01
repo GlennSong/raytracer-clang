@@ -193,8 +193,9 @@ void PlayerBodySystem::fixedUpdate(FrameContext& ctx) {
         // SAT DOWN as a passenger: the body in the seat (procgen/vehicle/occupant.h) -- a car's, low and reclined
         // under its roof, or a bus's or a train's, upright -- its hip `hipBelow` under the rider's centre, facing the
         // way the carrier faces
+        // thrown in the seat by what the carrier did (the riding component's sway: a bus pulling up, a cab cornering)
         BodyPose pose = seatedOccupantPose(ps->carSeat ? carPassenger() : chairOccupant(),
-                                           (cc->halfHeight + cc->radius) / BlockBody::kHalfHeight);
+                                           (cc->halfHeight + cc->radius) / BlockBody::kHalfHeight, ps->sway);
         const Quat yaw = yawTo(ps->facing);
         pose.position = body->position - Vec3(0, ps->hipBelow, 0) + yaw.rotate(pose.position);
         pose.orientation = yaw * pose.orientation;
@@ -455,14 +456,13 @@ void PlayerBodySystem::render(FrameContext& ctx) {
     const CharacterController* cc = player.valid() ? world.get<CharacterController>(player) : nullptr;
     const Vehicle* v = iv && world.alive(iv->vehicle) ? world.get<Vehicle>(iv->vehicle) : nullptr;
     const Transform* ct = v ? world.get<Transform>(iv->vehicle) : nullptr;
-    if (!p || !cc || !v || !ct) return;
-    // the vehicle as the renderer draws it this frame: between its last two steps
-    Transform drawn = *ct;
-    if (const PrevTransform* cp = world.get<PrevTransform>(iv->vehicle)) {
-        const Real a = std::clamp(ctx.interpolation, 0.0, 1.0);
-        drawn.position = cp->value.position + (ct->position - cp->value.position) * a;
-        drawn.orientation = Quat::slerp(cp->value.orientation, ct->orientation, a);
-    }
+    const Passenger* rider = player.valid() ? world.get<Passenger>(player) : nullptr;
+    if (!p || !cc || !v || !ct || !rider || !rider->haveDrawn) return;
+    // the vehicle as the renderer draws it this frame: the riding component's (RidingSystem's render, which runs
+    // first), the one place that knows -- the driver sits in it as every rider does
+    Transform drawn;
+    drawn.position = Vec3(rider->drawn.m[0][3], rider->drawn.m[1][3], rider->drawn.m[2][3]);
+    drawn.orientation = Quat::fromRotationMatrix(rider->drawn);
     const Real scale = (cc->halfHeight + cc->radius) / BlockBody::kHalfHeight;
     SeatSway sway;
     sway.lean = p->seatLean;

@@ -42,8 +42,7 @@ constexpr Real kSeatLift = 1.1;
 constexpr Real kStepOffDistance = 3.4;
 // Inside a bus. Reach: how near a door or a free seat must be for E to use it.
 // The aisle's half width, walking pace in a moving saloon, and eye heights:
-// standing above the floor, seated above the hip. kEyeAboveTransform is
-// PlayerSystem's eyeHeight (the eye above the capsule centre it draws from).
+// standing above the floor, seated above the hip (the eye above the capsule centre is kEyeAboveCentre).
 constexpr Real kDoorReach = 1.6;
 constexpr Real kSeatReach = 1.3;
 constexpr Real kAisleHalf = 0.30;
@@ -53,7 +52,6 @@ constexpr Real kSeatedEye = 0.74;
 constexpr uint64_t kCarSeatKey = 2000000;   // + seat: an ambient car's passenger seat, the broker's key
 constexpr Real kCarRideReach = 4.0;          // the same reach as getting in to drive
 constexpr Real kCarExitSpeed = 3.0;          // m/s: you get out once it has slowed to a walk
-constexpr Real kEyeAboveTransform = 0.7;
 
 // "ahead left", "behind" ... from the view direction to a target, both in XZ.
 // Eight sectors: finer than that is noise for a walker turning to look.
@@ -103,6 +101,7 @@ void CityPlayerTransitSystem::fixedUpdate(engine::FrameContext& ctx) {
 }
 
 void CityPlayerTransitSystem::step(World& world, Real dt, const RideInput& in) {
+    stepDt_ = dt;   // (hold's rideStep: the seat's sway and jolt run on the step)
     const CitySim& sim = city_.sim();
 
     // The player, the same way every other citysim system finds it.
@@ -306,8 +305,8 @@ void CityPlayerTransitSystem::hold(World& world, Entity player, Transform& t, co
     ps->sitting = sitting;
     ps->carSeat = sitting && carSeat_ >= 0;
     ps->eyeAbove = sitting ? kSeatedEye : kStandingEye;
-    ps->hipBelow = kSeatedEye - kEyeAboveTransform;
-    engine::rideStep(world, &physics_.physicsWorld(), player, &fly_);
+    ps->hipBelow = kSeatedEye - engine::kEyeAboveCentre;
+    engine::rideStep(world, &physics_.physicsWorld(), player, &fly_, stepDt_);
     seat_ = t.position;
     seated_ = true;
 }

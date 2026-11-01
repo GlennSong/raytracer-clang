@@ -38,7 +38,8 @@ SRCS = \
 	$(SRC_DIR)/geometry.cpp \
 	$(SRC_DIR)/material.cpp \
 	$(SRC_DIR)/scene.cpp \
-	$(SRC_DIR)/kdtree.cpp \
+	$(SRC_DIR)/aabb.cpp \
+	$(SRC_DIR)/triangle_bvh.cpp \
 	$(SRC_DIR)/instance.cpp \
 	$(SRC_DIR)/curve.cpp \
 	$(SRC_DIR)/level_scene.cpp \
@@ -60,7 +61,6 @@ SRCS = \
 	$(SRC_DIR)/engine/procgen/skeleton.cpp \
 	$(SRC_DIR)/engine/procgen/tree.cpp \
 	$(SRC_DIR)/engine/procgen/surface_maps.cpp \
-	$(SRC_DIR)/engine/procgen/vehicle_mesh.cpp \
 	$(SRC_DIR)/engine/procgen/vehicle/car_mesh.cpp \
 	$(SRC_DIR)/engine/procgen/vehicle/car_interior.cpp \
 	$(SRC_DIR)/engine/procgen/vehicle/occupant.cpp \
@@ -85,7 +85,6 @@ SRCS = \
 	$(SRC_DIR)/engine/procgen/city/road_spec.cpp \
 	$(SRC_DIR)/engine/procgen/city/road_net.cpp \
 	$(SRC_DIR)/engine/procgen/city/road_lattice.cpp \
-	$(SRC_DIR)/engine/procgen/city/road_constraints.cpp \
 	$(SRC_DIR)/engine/procgen/city/road_semantics.cpp \
 	$(SRC_DIR)/engine/procgen/city/road_rules.cpp \
 	$(SRC_DIR)/engine/procgen/city/road_offset.cpp \
@@ -97,7 +96,6 @@ SRCS = \
 	$(SRC_DIR)/engine/procgen/city/architect.cpp \
 	$(SRC_DIR)/engine/procgen/city/building_uses.cpp \
 	$(SRC_DIR)/engine/procgen/city/city_lots.cpp \
-	$(SRC_DIR)/engine/procgen/city/surface_field.cpp \
 	$(SRC_DIR)/engine/procgen/city/structure_set.cpp \
 	$(SRC_DIR)/engine/procgen/city/block_grade.cpp \
 	$(SRC_DIR)/engine/procgen/city/city_footprint.cpp \
@@ -179,7 +177,6 @@ TEST_SRCS = \
 	$(TEST_DIR)/test_road_rules.cpp \
 	$(TEST_DIR)/test_road_weld.cpp \
 	$(TEST_DIR)/test_curb_return.cpp \
-	$(TEST_DIR)/test_road_constraints.cpp \
 	$(TEST_DIR)/test_road_semantics.cpp \
 	$(TEST_DIR)/test_road_layers.cpp \
 	$(TEST_DIR)/test_road_offset.cpp \
@@ -190,7 +187,6 @@ TEST_SRCS = \
 	$(TEST_DIR)/test_handle_source.cpp \
 	$(TEST_DIR)/test_path_edit_tool.cpp \
 	$(TEST_DIR)/test_surface_maps.cpp \
-	$(TEST_DIR)/test_vehicle_mesh.cpp \
 	$(TEST_DIR)/test_car_mesh.cpp \
 	$(TEST_DIR)/test_vehicle_lamps.cpp \
 	$(TEST_DIR)/test_model_importer.cpp \
@@ -231,12 +227,10 @@ TEST_SRCS = \
 	$(TEST_DIR)/test_places.cpp \
 	$(TEST_DIR)/test_screen_project.cpp \
 	$(TEST_DIR)/test_relationships.cpp \
-	$(TEST_DIR)/test_ped_graph.cpp \
 	$(TEST_DIR)/test_city_lots.cpp \
 	$(TEST_DIR)/test_site_plan.cpp \
 	$(TEST_DIR)/test_core_plan.cpp \
 	$(TEST_DIR)/test_alignment.cpp \
-	$(TEST_DIR)/test_surface_field.cpp \
 	$(TEST_DIR)/test_architect.cpp \
 	$(TEST_DIR)/test_lot_road_clearance.cpp
 # tests/test_levels_playable.cpp is CMake-only: it drives the real LevelLoader,
@@ -288,7 +282,6 @@ TEST_ENGINE_SRCS = \
 	$(SRC_DIR)/engine/procgen/skeleton.cpp \
 	$(SRC_DIR)/engine/procgen/tree.cpp \
 	$(SRC_DIR)/engine/procgen/surface_maps.cpp \
-	$(SRC_DIR)/engine/procgen/vehicle_mesh.cpp \
 	$(SRC_DIR)/engine/procgen/vehicle/car_mesh.cpp \
 	$(SRC_DIR)/engine/procgen/vehicle/car_interior.cpp \
 	$(SRC_DIR)/engine/procgen/vehicle/occupant.cpp \
@@ -319,7 +312,6 @@ TEST_ENGINE_SRCS = \
 	$(SRC_DIR)/engine/procgen/city/road_spec.cpp \
 	$(SRC_DIR)/engine/procgen/city/road_net.cpp \
 	$(SRC_DIR)/engine/procgen/city/road_lattice.cpp \
-	$(SRC_DIR)/engine/procgen/city/road_constraints.cpp \
 	$(SRC_DIR)/engine/procgen/city/road_semantics.cpp \
 	$(SRC_DIR)/engine/procgen/city/road_rules.cpp \
 	$(SRC_DIR)/engine/procgen/city/road_offset.cpp \
@@ -331,7 +323,6 @@ TEST_ENGINE_SRCS = \
 	$(SRC_DIR)/engine/procgen/city/architect.cpp \
 	$(SRC_DIR)/engine/procgen/city/building_uses.cpp \
 	$(SRC_DIR)/engine/procgen/city/city_lots.cpp \
-	$(SRC_DIR)/engine/procgen/city/surface_field.cpp \
 	$(SRC_DIR)/engine/procgen/city/structure_set.cpp \
 	$(SRC_DIR)/engine/procgen/city/block_grade.cpp \
 	$(SRC_DIR)/engine/procgen/city/city_footprint.cpp \
@@ -343,7 +334,6 @@ TEST_ENGINE_SRCS = \
 	$(SRC_DIR)/apps/citysim/traffic_rules.cpp \
 	$(SRC_DIR)/apps/citysim/city_goals.cpp \
 	$(SRC_DIR)/apps/citysim/places.cpp \
-	$(SRC_DIR)/apps/citysim/ped_graph.cpp \
 	$(SRC_DIR)/apps/citysim/relationships.cpp \
 	$(SRC_DIR)/apps/citysim/city_sim.cpp \
 	$(SRC_DIR)/apps/citysim/city_render.cpp \
@@ -364,7 +354,8 @@ TEST_ENGINE_SRCS = \
 	$(SRC_DIR)/engine/level_params.cpp \
 	$(SRC_DIR)/scene.cpp \
 	$(SRC_DIR)/geometry.cpp \
-	$(SRC_DIR)/kdtree.cpp \
+	$(SRC_DIR)/aabb.cpp \
+	$(SRC_DIR)/triangle_bvh.cpp \
 	$(SRC_DIR)/instance.cpp \
 	$(SRC_DIR)/curve.cpp \
 	$(SRC_DIR)/image.cpp \
