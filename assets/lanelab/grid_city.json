@@ -2,10 +2,10 @@
   "name": "grid_city",
   "terrain": {"type": "flat", "bounds": [-130, 730, -120, 260]},
   "classes": {
-    "freeway":  {"w": 3.6, "fwd": 3, "back": 0, "shoulder": 2.5},
+    "freeway":  {"w": 3.6, "fwd": 3, "back": 0, "shoulder": 2.5, "g_max": 0.03, "window": 440},
     "ramp":     {"w": 3.6, "fwd": 1, "back": 0, "shoulder": 1.2},
-    "arterial": {"w": 3.0, "fwd": 2, "back": 2, "sidewalk": 2.6},
-    "local":    {"w": 3.5, "fwd": 1, "back": 1, "sidewalk": 1.8},
+    "arterial": {"w": 3.0, "fwd": 2, "back": 2, "sidewalk": 2.6, "g_max": 0.06},
+    "local":    {"w": 3.5, "fwd": 1, "back": 1, "sidewalk": 1.8, "g_max": 0.09},
     "divider":  {"median": 1.5}
   },
   "rules": {"closing": 3.0},

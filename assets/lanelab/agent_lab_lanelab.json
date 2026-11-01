@@ -14,7 +14,8 @@
    "w": 3.5,
    "fwd": 1,
    "back": 1,
-   "sidewalk": 1.8
+   "sidewalk": 1.8,
+   "g_max": 0.09
   }
  },
  "rules": {
