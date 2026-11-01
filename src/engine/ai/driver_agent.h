@@ -80,11 +80,14 @@ inline DriverInput computeDriverInput(const DriverState& s, const DriverCommand&
         in.steer = std::clamp(steerRad / t.maxSteerRad, Real(-1), Real(1));
     }
     const Real err = c.desiredSpeed - s.speed;
-    if (err >= 0) {
+    if (c.desiredSpeed < 0.05) {
+        // told to stop: the brake, never the throttle -- at a standstill too, or rolling back down a slope (a
+        // possessed car parked at the kerb is told this and must stay put)
+        in.brake = std::max(std::clamp(std::fabs(err) * t.speedGain, Real(0), Real(1)), t.holdBrake);
+    } else if (err >= 0) {
         in.throttle = std::clamp(err * t.speedGain, Real(0), Real(1));
     } else {
         in.brake = std::clamp(-err * t.speedGain, Real(0), Real(1));
-        if (c.desiredSpeed < 0.05) in.brake = std::max(in.brake, t.holdBrake);
     }
     return in;
 }

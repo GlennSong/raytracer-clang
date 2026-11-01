@@ -90,3 +90,13 @@ TEST_CASE(driver_holds_the_brake_at_a_stop) {
     CHECK(in.brake >= 0.6);
     CHECK(in.throttle == 0.0);
 }
+
+// ...and at a standstill, or rolling back down a slope: told to stop, never the throttle (the review of #117 item 24:
+// the merged controller held the brake only while the car was faster than asked, so a stopped car got neither pedal).
+TEST_CASE(driver_holds_the_brake_standing_still_and_rolling_back) {
+    for (const Real speed : {0.0, -0.5}) {
+        const DriverInput in = computeDriverInput(facing(Vec2(0, 1), speed), want(Vec2(0, 1), 0.0));
+        CHECK(in.brake >= 0.6);
+        CHECK(in.throttle == 0.0);
+    }
+}
