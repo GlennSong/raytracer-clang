@@ -208,6 +208,48 @@ over. Every scene you build is playable by construction.
   log; the cause is a build, not the recipe. Plain `cmake --build build` covers
   every target. Read the editor's log before debugging a "missing geometry" report.
 
+## Kinds Are Data (Engine Rule)
+
+Glenn (2026-10-31, reviewing #117): "How do we make it more resilient and robust as the engine changes so we don't
+have to keep kludging in patches to add yet more one place type to assign or a new road type to consider when it
+could be data that is ingested and interpreted by the engine." Before writing code, decide what is DATA and what is
+the ENGINE. The engine is general mechanisms; data says what exists. Tomorrow will bring a new kind of place, vehicle,
+road, role, activity or building, and adding it must be a data edit, not a new branch in C++. The work to bring the
+existing code under this rule is #172.
+
+- **Ask the question.** For every change: "if a new kind of this arrives tomorrow (a train carriage, a boat, a new
+  venue, a wider ramp), which files change?" The answer should be one data file. If it is a C++ function with a
+  new `case`, `||` or `if (kind == ...)`, the design is wrong; fix the design, not the list.
+- **C++ never names a specific kind.** No branching on a kind's name, id or enum value in logic (`isBus(i) ||
+  isTaxi(i)`, `p.campus == 1 ? "teaching"`, `role == kRoleStudent`). Kinds carry **properties and tags** in their data
+  (`crew = "transit"`, `tags = { "job", "teaching" }`, `staff = { places = ... }`), and the engine asks about the
+  property ("does this agent work a vehicle?", "which places are tagged job?"). A fixed set of built-in kinds that C++
+  must know is a smell to remove, not a constant to name.
+- **General algorithms over special cases.** Write the mechanism once over declared inputs: a matcher that pairs
+  demand (what a role or activity needs, declared in data) with supply (places with tags and capacity), a builder
+  that builds any road class from its row, a spawner that seats any vehicle from its config. Staff hiring in
+  roles.lua (`staff.places`, `per_place`) is the model; a 900-line function of hand-written cases is the anti-model.
+- **Where each number lives.**
+  - It describes a THING (this car's suspension, this ramp's width, this light's green time): that thing's data.
+  - It can be DERIVED from data that already exists (a car's spawn drop from its suspension travel): derive it; never
+    a second copy.
+  - It is a LAW of the engine (the physics step, gravity): ONE named constant in one header, used everywhere.
+  - A bare literal in the middle of logic is none of these and is a bug in waiting.
+- **Where data lives.**
+  - Tunable tables and recipes: Lua under `assets/scripts/` (roles.lua, activities.lua, vehicles.lua, signals.lua),
+    read at load by a small reader in the owning module.
+  - Authored, per-level or generated data: JSON (levels, road graphs) or a bake.
+  - A C++ copy exists only as the fallback when the file is absent, and a test keeps it EQUAL to the file
+    (`roles_lua_is_the_built_in_role_catalog`, `signals_lua_is_the_built_in_signal_timing`). Prefer no copy at all.
+- **Behaviour is composed, not hard-coded.** C++ exposes verbs (actions, events, queries) as an API; data composes
+  them into behaviour, as the goal tables do (ADR-0064: states and transitions in Lua, executed by C++). Per-tick Lua
+  is for the few (a possessed agent, a scripted scene), not the 100k crowd; the crowd runs C++ over tables the
+  scripts declared at load. Where gameplay code lives in general is #124.
+- **Hot loops may compile data.** Turning Lua tables into flat C++ structs at load for speed is fine; the source of
+  truth is still the data, and nothing in the hot loop names a kind.
+- **Reviews check it.** A review flags any new kind-specific branch, magic number or C++-only table, and the change
+  either moves it to data or says in its ADR why it cannot.
+
 ## Engineering Ethos (Engine Rule)
 
 Every system here is a real, load-bearing implementation meant to be an *underlying
