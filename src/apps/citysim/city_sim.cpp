@@ -1545,7 +1545,7 @@ void CitySim::assignPlaces(const PlaceMap& places, const NavGraph& graph) {
         int commuters = 0;
         for (int i = 0; i < static_cast<int>(agents_.size()); ++i) {
             const Agent& a = agents_[static_cast<std::size_t>(i)];
-            if (a.role != kRoleCommuter || isBus(i) || isTaxi(i) || a.homePlace == kNoPlace || a.home < 0) continue;
+            if (a.role != kRoleCommuter || onService(i) || a.homePlace == kNoPlace || a.home < 0) continue;
             homeCells[cellKey(static_cast<int64_t>(std::floor(a.homeDoor.x / kCell)),
                               static_cast<int64_t>(std::floor(a.homeDoor.y / kCell)))].push_back(i);
             ++commuters;
@@ -1741,7 +1741,7 @@ void CitySim::assignPlaces(const PlaceMap& places, const NavGraph& graph) {
     commuteStats_.towns = static_cast<int>(townNets.size());
     for (int i = 0; i < static_cast<int>(agents_.size()); ++i) {   // where the work went, cached or decided
         const Agent& A = agents_[static_cast<std::size_t>(i)];
-        if (isBus(i) || isTaxi(i) || A.workPlace == kNoPlace) continue;
+        if (onService(i) || A.workPlace == kNoPlace) continue;
         const int ht = townOf(A.home), wt = townOf(A.work);
         if (ht < 0 || wt < 0) continue;
         const bool drives = A.archetype == Agent::Mode::Driver;
@@ -2032,7 +2032,7 @@ void CitySim::placeFromSchedule(int idx) {
         // schedule has nothing to say about it.
         {
             const int who = indexOf(a);
-            if (isBus(who) || isTaxi(who)) {
+            if (onService(who)) {
                 a.goal = tableFor(a).entry();
                 a.goalHours = 0;
                 a.wakeAt = -1;
@@ -2232,7 +2232,7 @@ void CitySim::scheduleDormantEvent(int i) {
     if (a.tier != Agent::Tier::D || hoursPerSecond_ <= 0 || !nav_) return;
     // A bus or a cab runs its own table, not a day: placeFromSchedule leaves its trip as it was, so an "arrival"
     // here only reset its clock -- and far away the cab drove the same stretch again, for ever (the 23:00 census).
-    if (isBus(i) || isTaxi(i)) return;
+    if (onService(i)) return;
     double at = -1;
     if (a.moving && a.leg >= 0 && a.leg < static_cast<int>(a.route.links.size())) {
         // mid-trip: when it gets there, at its modelled pace
@@ -2722,7 +2722,7 @@ bool CitySim::startGoalTrip(Agent& a, int origin, bool fromRest) {
     int railLegTo = -1;
     {
         const int self = indexOf(a);
-        if (a.mode == Agent::Mode::Pedestrian && nav_ && rail_.active() && !isBus(self) && !isTaxi(self) &&
+        if (a.mode == Agent::Mode::Pedestrian && nav_ && rail_.active() && !onService(self) &&
             !buses_.tripOf(self) && origin >= 0 && origin < nav_->nodeCount()) {
             RailTrip* rt = rail_.tripOf(self);
             if (!rt) {
@@ -2765,7 +2765,7 @@ bool CitySim::startGoalTrip(Agent& a, int origin, bool fromRest) {
     // state was reached, which is where a mode choice belongs.
     const int busSelf = indexOf(a);
     if (a.mode == Agent::Mode::Pedestrian && nav_ && !buses_.empty() && busesInService() &&   // (no bus after hours)
-        !isBus(busSelf) && !buses_.tripOf(busSelf) && !isTaxi(busSelf)) {
+        !onService(busSelf) && !buses_.tripOf(busSelf)) {
         const int to = railLegTo >= 0 ? railLegTo : chosen >= 0 ? chosen : goalNodeFor(a, s.target);
         if (to >= 0 && origin >= 0 && origin < nav_->nodeCount() &&
             to < nav_->nodeCount() && to != origin) {
@@ -3204,7 +3204,7 @@ void CitySim::reseatOnTables() {
         // placeFromSchedule: matching on an activity LABEL would seat a bus in
         // whatever state happens to wear AtHome, which is its depot.
         const int who = indexOf(a);
-        if (!isBus(who) && !isTaxi(who))
+        if (!onService(who))
             for (int s = 0; s < t.stateCount(); ++s)
                 if (t.state(s).activity == a.activity) { mapped = s; break; }
         a.goal = mapped;
@@ -3652,7 +3652,7 @@ void CitySim::assignStudents(const PlaceMap& places, const NavGraph& graph) {
     int walkers = 0;
     for (std::size_t i = 0; i < agents_.size(); ++i) {
         const Agent& a = agents_[i];
-        if (a.archetype != Agent::Mode::Pedestrian || isBus(static_cast<int>(i)) || isTaxi(static_cast<int>(i))) continue;
+        if (a.archetype != Agent::Mode::Pedestrian || onService(static_cast<int>(i))) continue;
         ++walkers;
         uint32_t k = a.brain * 0x27d4eb2fu;
         k ^= k >> 15; k *= 0x165667b1u; k ^= k >> 13;
@@ -4075,7 +4075,7 @@ void CitySim::releaseBays(Agent& a) {
 bool CitySim::parksInBays(const Agent& a) const {
     if (a.archetype != Agent::Mode::Driver || wander_) return false;
     const int self = indexOf(a);
-    return !isBus(self) && !isTaxi(self);
+    return !onService(self);
 }
 
 // A bus standing at a stop, engine running: in its own vehicle, at rest on
@@ -5899,7 +5899,7 @@ void CitySim::arriveOrChain(Agent& a, Real vArrive) {
             a.parkedBay = bay;
             a.pos = bays_[bay].pos;
             a.heading = bays_[bay].heading;
-        } else if ((parksInBays(a) || isTaxi(myIdx) || isBus(myIdx)) && !bays_.empty()) {
+        } else if ((parksInBays(a) || onService(myIdx)) && !bays_.empty()) {
             // (a cab too: on the verge past the kerb, one fare's end after another, the cabs at a busy door stood
             // heaped on the pavement -- Glenn's "spawn point". It waits off the street, at a rank, until it is hailed.)
             // (and a BUS with no depot bay -- its depot full, or its route given none: it went onto the verge too,

@@ -799,7 +799,7 @@ public:
             return false;
         Agent& a = agents_[static_cast<std::size_t>(agentIndex)];
         if (a.mode != Agent::Mode::Pedestrian || buses_.empty() ||
-            isBus(agentIndex) || isTaxi(agentIndex) || buses_.tripOf(agentIndex))
+            onService(agentIndex) || buses_.tripOf(agentIndex))
             return false;
         const int origin = nav_->nearestNode(a.pos);
         const int to = nav_->nearestNode(dest);
@@ -836,7 +836,7 @@ public:
     bool sendAgentByTrain(int agentIndex, engine::Vec2 dest) {
         if (!nav_ || !rail_.active() || agentIndex < 0 || agentIndex >= static_cast<int>(agents_.size())) return false;
         Agent& a = agents_[static_cast<std::size_t>(agentIndex)];
-        if (a.mode != Agent::Mode::Pedestrian || isBus(agentIndex) || isTaxi(agentIndex) || buses_.tripOf(agentIndex) ||
+        if (a.mode != Agent::Mode::Pedestrian || onService(agentIndex) || buses_.tripOf(agentIndex) ||
             rail_.tripOf(agentIndex))
             return false;
         const int origin = nav_->nearestNode(a.pos);
@@ -1475,6 +1475,11 @@ public:
         hailMinMetres_ = minMetres;
     }
     bool isTaxi(int i) const;
+    // ON A SERVICE (#172): drafted off the driver pool by a vehicle service -- the bus network (setBuses), the cab
+    // dispatch (setTaxis) -- to run the service's own table, not a day: no home or job of its own to hire from, no
+    // schedule, no bay, no ride on a bus or a train. Code that only needs "is this someone's day?" asks this, never
+    // which service; a new service (a train's crew, a ferry's) joins here and every such question follows.
+    bool onService(int i) const { return isBus(i) || isTaxi(i); }
 
     // Make agents LIVE in the city (ADR-0066 Phase 3). Assign each agent a home
     // (a Home place) and a job (a routable Shop/Office/Civic place), pin its

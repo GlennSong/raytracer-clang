@@ -100,7 +100,7 @@ void refreshBounds(InstanceGroup* g) {
 bool CityRenderSystem::carOccupied(int ai) const {
     if (ai < 0 || ai >= static_cast<int>(sim_.agents().size())) return false;
     if (ai == playerRidingAgent_ || ai == playerSeatAgent_) return true;   // the car you are in
-    return sim_.agents()[static_cast<std::size_t>(ai)].moving || sim_.isBus(ai) || sim_.isTaxi(ai);
+    return sim_.agents()[static_cast<std::size_t>(ai)].moving || sim_.onService(ai);
 }
 
 Vec2 CityRenderSystem::drawnAgentPos(int i, Vec2* heading) const {
@@ -3837,7 +3837,7 @@ void CityRenderSystem::update(engine::FrameContext& ctx) {
                     int where[8] = {0}, dh[24] = {0}, dw[24] = {0}, roles[16] = {0};
                     std::vector<Real> cs;
                     for (const Agent& a : ag) {
-                        if (a.archetype != Agent::Mode::Driver || sim_.isBus(static_cast<int>(&a - ag.data())) || sim_.isTaxi(static_cast<int>(&a - ag.data()))) continue;
+                        if (a.archetype != Agent::Mode::Driver || sim_.onService(static_cast<int>(&a - ag.data()))) continue;
                         ++where[static_cast<int>(sim_.scheduleSnapshot(a, sim_.clockHours()).where)];
                         ++dh[static_cast<int>(std::fmod(a.departHome + 24.0, 24.0)) % 24];
                         ++dw[static_cast<int>(sim_.departWorkHour(a)) % 24];
