@@ -50,12 +50,14 @@ bool CityPhysicsSystem::spotClear(engine::Vec2 c, Real yaw, Real hx, Real hz, in
     const PhysicsWorld& pw = physics_.physicsWorld();
     const Footprint me = footprint(c, yaw, hx, hz);
     const Real margin = 0.1;
-    const Real reach = 8.0 + hz;   // nothing car-sized farther than this can touch this car
+    // two boxes can touch only within the sum of their half-diagonals (each body's own: a bus reaches farther)
+    const Real myReach = std::sqrt(hx * hx + hz * hz) + 2 * margin;
+    auto reach = [&](Real ox, Real oz) { return myReach + std::sqrt(ox * ox + oz * oz); };
     for (const Possessed& p : possessed_) {
         if (p.agent == selfAgent) continue;
         const Vec3 bp = pw.vehiclePosition(p.vid);
         const engine::Vec2 o(bp.x, bp.z);
-        if ((o - c).length() > reach) continue;
+        if ((o - c).length() > reach(p.halfX, p.halfZ)) continue;
         if (overlaps(me, footprint(o, yawOf(pw.vehicleOrientation(p.vid)), p.halfX, p.halfZ), margin)) return false;
     }
     // ITS OWN box is not in its way: the kinematic proxy standing in for this very car (keyed by its uid) sits on the
@@ -69,7 +71,7 @@ bool CityPhysicsSystem::spotClear(engine::Vec2 c, Real yaw, Real hx, Real hz, in
         if (kv.first == selfKey) continue;
         const Vec3 bp = pw.bodyPosition(kv.second.id);
         const engine::Vec2 o(bp.x, bp.z);
-        if ((o - c).length() > reach) continue;
+        if ((o - c).length() > reach(kv.second.he.x, kv.second.he.z)) continue;
         if (overlaps(me, footprint(o, yawOf(pw.bodyOrientation(kv.second.id)), kv.second.he.x, kv.second.he.z), margin)) return false;
     }
     return true;
