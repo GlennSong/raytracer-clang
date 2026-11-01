@@ -29,10 +29,12 @@
 #include "../../engine/interior_occupants.h"         // people inside a streamed interior (campus M4)
 #include "../../engine/procgen/furniture_kit.h"
 #include "../../engine/procgen/city/building_records.h"
+#include "../../engine/procgen/city/building_uses.h"   // a home's use picks its dwellings' rule
 #ifdef RT_ENABLE_SCRIPTING
 #include "scripting/agent_goals.h"      // scripted goal tables (ADR-0064)
 #include "scripting/activities_lua.h"   // the activity catalog (activities.lua)
 #include "scripting/roles_lua.h"         // the role catalog (roles.lua)
+#include "scripting/place_kinds_lua.h"   // the place kinds and dwellings (places.lua)
 #include "scripting/signals_lua.h"       // the signals' cycle times (signals.lua)
 #include "scripting/vehicle_body.h"     // scripted fleet bodies (ADR-0065)
 #include "../../engine/scripting/script_vm.h"
@@ -448,6 +450,27 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
     // level. Rebuilt fresh each build() so a reload doesn't accumulate places.
     places_ = PlaceMap{};
     placeOfAuthored_.assign(authoredPlaces_.size(), kNoPlace);
+#ifdef RT_ENABLE_SCRIPTING
+    {   // THE PLACE KINDS (places.lua): what each place is, its tags, and how a home splits into dwellings
+        const std::string code = engine::loadScriptCode("places.lua", "");
+        if (!code.empty()) {
+            engine::ScriptVM vm;
+            std::string err;
+            PlaceKindCatalog kinds;
+            if (vm.doString(code, &err) && engine::loadPlaceKindCatalog(vm, kinds, &err)) {
+                LOG_INFO << "[citysim] place kinds: " << kinds.kinds.size() << ", dwelling rules: " << kinds.dwellings.size() << " (places.lua)";
+                sim_.setPlaceKinds(std::move(kinds));
+            } else {
+                LOG_WARN << "[citysim] places.lua: " << err << " (using the built-in place kinds)";
+            }
+        }
+    }
+#endif
+    const PlaceKindCatalog& kinds = sim_.placeKinds();
+    const uint32_t kBeds = kinds.tag("beds");
+    int homeDwellings = 0, hallBeds = 0;
+    int bySize[6] = {0};   // dwellings by bedrooms: studio, 1 ... 4, 5+
+    std::vector<int> beds;
     for (const engine::AuthoredPlace& ap : authoredPlaces_) {
         PlaceType type;
         if (!parsePlaceType(ap.type, type)) {
@@ -471,9 +494,34 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
                                         ap.name, ap.hasEntrance ? &doorHint : nullptr);
         placeOfAuthored_[static_cast<std::size_t>(&ap - authoredPlaces_.data())] = pid;
         if (synthetic) places_.setAuthoredHours(pid, false);
-        if (ap.campus) places_.setCampus(pid, ap.campus);
+        const int kind = kinds.kindFor(ap.recipe, type);
+        if (kind >= 0) {
+            const PlaceKind& pk = kinds.kinds[static_cast<std::size_t>(kind)];
+            places_.setKind(pid, kind, pk.tags);
+            // A HALL's beds: one per so much of its floor (its kind's bed_m2)
+            if (pk.m2PerBed > 0 && ap.capacity == 0 && ap.floorArea > 0) {
+                places_.setCapacity(pid, static_cast<int>(ap.floorArea / pk.m2PerBed));
+                hallBeds += places_[pid].capacity;
+            }
+            // A HOME's dwellings, one household each: its floor cut by the rule for its use (house, apartments)
+            if (type == PlaceType::Home && !(pk.tags & kBeds)) {
+                const DwellingRule* rule = kinds.dwellingRule(engine::floorUseFor(ap.recipe, "home"));
+                if (rule) {
+                    beds.clear();
+                    dwellingsOf(kinds, *rule, ap.floorArea, ap.units, beds);
+                    places_.setDwellings(pid, beds);
+                    homeDwellings += static_cast<int>(beds.size());
+                    for (int b : beds) ++bySize[std::clamp(b, 0, 5)];
+                }
+            }
+        }
         if (ap.floorArea > 0) places_.setFloorArea(pid, ap.floorArea);
     }
+    if (homeDwellings > 0)
+        LOG_INFO << "[citysim] homes: " << places_.countOfType(PlaceType::Home) << " places, " << homeDwellings
+                 << " dwellings (studio " << bySize[0] << ", 1-bed " << bySize[1] << ", 2-bed " << bySize[2] << ", 3-bed "
+                 << bySize[3] << ", 4-bed " << bySize[4] << ", 5+ " << bySize[5] << ")"
+                 << (hallBeds > 0 ? ", hall beds " + std::to_string(hallBeds) : std::string());
 
     // DENSITY population (roads-v2.1 4c): -1 counts are computed from the
     // graph itself — cars per LANE-km of carriageway, walkers per km of

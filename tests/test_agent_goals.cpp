@@ -4,6 +4,7 @@
 #include "../src/apps/citysim/activities.h"
 #include "../src/apps/citysim/scripting/agent_goals.h"
 #include "../src/apps/citysim/scripting/roles_lua.h"
+#include "../src/apps/citysim/scripting/place_kinds_lua.h"
 #include "../src/apps/citysim/scripting/signals_lua.h"
 #include "../src/engine/scripting/script_vm.h"
 
@@ -78,6 +79,74 @@ TEST_CASE(roles_lua_is_the_built_in_role_catalog) {
     CHECK(bad.doString("roles = { order = { 'x' }, x = { day = { pause = { target = 'moon' } } } }", &err));
     citysim::RoleCatalog none;
     CHECK(!loadRoleCatalog(bad, none, &err));
+}
+
+// THE PLACE KINDS (place_kinds.h): places.lua is the built-in catalog; a kind is found by its recipe, else by its
+// type's name; a file that loses a type's kind, gives a recipe to two kinds or a mix no shares is refused.
+TEST_CASE(places_lua_is_the_built_in_place_kinds) {
+    ScriptVM vm;
+    std::string err;
+    const std::string src = readFile("assets/scripts/places.lua");
+    CHECK(!src.empty());
+    CHECK(vm.doString(src, &err));
+    citysim::PlaceKindCatalog lua;
+    const bool ok = loadPlaceKindCatalog(vm, lua, &err);
+    if (!ok) std::printf("    %s\n", err.c_str());
+    CHECK(ok);
+    const citysim::PlaceKindCatalog cpp = citysim::defaultPlaceKindCatalog();
+    if (lua.describe() != cpp.describe()) std::printf("    LUA:\n%s\n    C++:\n%s\n", lua.describe().c_str(), cpp.describe().c_str());
+    CHECK(lua.describe() == cpp.describe());
+    CHECK(cpp.check().empty());
+    // recipes name the campus kinds; anything else is its type's kind
+    CHECK(std::string(lua.nameOf(lua.kindFor("residence_hall", citysim::PlaceType::Home))) == "residence");
+    CHECK(std::string(lua.nameOf(lua.kindFor("dorm_courtyard", citysim::PlaceType::Park))) == "quad");
+    CHECK(std::string(lua.nameOf(lua.kindFor("glass_slab", citysim::PlaceType::Office))) == "office");
+    CHECK(std::string(lua.nameOf(lua.kindFor("", citysim::PlaceType::Cafe))) == "cafe");
+    // tags are bits the kinds carry
+    const citysim::PlaceKind& field = lua.kinds[static_cast<std::size_t>(lua.find("field"))];
+    CHECK((field.tags & lua.tag("sports")) != 0 && (field.tags & lua.tag("campus")) != 0 && (field.tags & lua.tag("beds")) == 0);
+    CHECK(lua.tag("no_such_tag") == 0);
+    auto refused = [&](const std::string& edit, const char* why) {
+        ScriptVM bad;
+        std::string e;
+        CHECK(bad.doString(src + "\n" + edit, &e));
+        citysim::PlaceKindCatalog c;
+        CHECK(!loadPlaceKindCatalog(bad, c, &e));
+        if (e.find(why) == std::string::npos) std::printf("    `%s` refused with: %s\n", edit.c_str(), e.c_str());
+        CHECK(e.find(why) != std::string::npos);
+    };
+    refused("table.remove(places.order, 6)", "cafe");                                    // a type with no kind
+    refused("places.kinds.library.recipes = { 'teaching_hall' }", "teaching_hall");      // one recipe, two kinds
+    refused("places.kinds.quad.type = 'moon'", "moon");
+    refused("places.dwellings.apartments.mix = { { beds = 1, m2 = 50 } }", "shares");
+}
+
+// A HOME'S DWELLINGS (place_kinds.h dwellingsOf): a house is one, sized by its floor; a row is one per house; a block
+// of flats is its usable floor cut into the mix, in its shares -- never none.
+TEST_CASE(a_home_is_cut_into_dwellings_by_its_use) {
+    const citysim::PlaceKindCatalog c = citysim::defaultPlaceKindCatalog();
+    std::vector<int> beds;
+    citysim::dwellingsOf(c, *c.dwellingRule("house"), 140, 1, beds);   // a two-storey cottage, 70 m2 a floor
+    CHECK(beds.size() == 1 && beds[0] == 3);
+    beds.clear();
+    citysim::dwellingsOf(c, *c.dwellingRule("house"), 6 * 120, 6, beds);   // a row of six
+    CHECK(beds.size() == 6 && beds[0] == 3 && beds[5] == 3);
+    beds.clear();
+    citysim::dwellingsOf(c, *c.dwellingRule("house"), 400, 1, beds);   // a villa
+    CHECK(beds.size() == 1 && beds[0] == 5);
+    // flats: 10,000 m2, 75% usable, a mean of 66.5 m2 -> 113, in shares 15/35/35/15
+    beds.clear();
+    citysim::dwellingsOf(c, *c.dwellingRule("apartments"), 10000, 1, beds);
+    CHECK(beds.size() == 113);
+    int by[4] = {0};
+    for (int b : beds) ++by[b];
+    std::printf("    10,000 m2 of flats: %zu dwellings, studio %d 1-bed %d 2-bed %d 3-bed %d\n", beds.size(), by[0], by[1], by[2], by[3]);
+    CHECK(by[0] == 17 && by[1] == 40 && by[2] == 39 && by[3] == 17);   // the remainders .95, .95, .55 go first
+    // a sliver of a home is still one; an unknown use takes the flats' rule
+    beds.clear();
+    citysim::dwellingsOf(c, *c.dwellingRule("apartments"), 10, 1, beds);
+    CHECK(beds.size() == 1);
+    CHECK(c.dwellingRule("hotel") == c.dwellingRule("apartments"));
 }
 
 // THE SIGNALS' CYCLE: signals.lua is SignalTiming's defaults, and a time that is not positive is refused.

@@ -778,10 +778,12 @@ struct AuthoredPlace {
     // keeps the legacy centroid snap.
     bool hasEntrance = false;
     float ex = 0, ez = 0;
-    // The university (Lot::campus): 1 teaching hall, 2 library, 3 residence hall, 4 quad,
-    // 5 sports field; 0 = not campus. `capacity` is how many live there (the residence
-    // hall's beds); 0 = no limit.
-    uint8_t campus = 0;
+    // The RECIPE that grew it (empty for an authored marker): the citysim's place kind (places.lua) and, for a home,
+    // its dwellings' rule (by the recipe's use, building_uses.lua) come from it. `units`: how many units it grew (a
+    // row of houses is one place of several houses). `capacity`: how many it holds; 0 = no limit (a hall's beds
+    // come from its kind).
+    std::string recipe;
+    int units = 1;
     int capacity = 0;
     // Its FLOOR AREA, m2 (the busy streets): every storey of the building, so a tower draws the residents or the staff
     // a tower holds and a corner shop a corner shop's -- the citysim weights who lives and works where by it. 0: unknown

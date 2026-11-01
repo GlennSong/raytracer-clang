@@ -14082,3 +14082,32 @@ Nothing in the world changes. Each item was checked for callers before it went:
 8. `KdTree` is renamed `TriangleBVH` (triangle_bvh.h): it splits triangles at the median centroid and its
    children overlap, so it is a BVH, not a k-d tree. `AABB` moves to its own header (aabb.h), shared by the
    triangle BVH and the instance BVH.
+
+## ADR-0295 — Place kinds and dwellings are data: places.lua
+
+#172 items 3 and 5, step 1 of the households plan (Glenn, 2026-11-01: residents get ages and households; "apartments,
+condos, family houses actually just house all family together and single people would have their own apartment").
+
+Before, the loader turned five recipe names into `campus` codes (1 teaching hall ... 5 sports field) with an
+if-chain, and the citysim read the numbers in 18 places. A home was a floor area: residents were drawn into it one
+at a time, so a family could not share one.
+
+**Decision.**
+- `assets/scripts/places.lua` lists the place KINDS: one named after each PlaceType, plus teaching, library,
+  residence, quad and field, each with the recipes that grow it and TAGS (campus, classes, library, beds, grounds,
+  sports). A recipe no kind lists takes its type's kind. The sim asks tags (`placeKinds().tag("beds")`), never a kind
+  number; `Place::campus` and the loader's if-chain are gone. AuthoredPlace carries the recipe and its unit count
+  instead.
+- A hall's beds come from its kind (`bed_m2`, 45 m² of floor a bed) instead of the loader. They are now counted on
+  the place's floor area (every storey of every unit) where the loader used the plan times height/3.3, so a hall's
+  bed count moves a little.
+- A HOME is cut into DWELLINGS, one household each, by the rule for its USE (building_uses.lua, the same answer its
+  interior is planned from): `house` makes each grown unit one dwelling, its bedrooms from `house_sizes` by floor
+  area; `apartments` cuts 75% of the floor into studios, 1-, 2- and 3-beds in shares 15/35/35/15 (largest remainder,
+  never none). PlaceMap keeps them (`dwellings()`); nothing places people by them yet (step 2).
+- `defaultPlaceKindCatalog` is the same catalog in C++; a test keeps the two describing identically, and the reader
+  refuses a type with no kind, a recipe two kinds claim, an unknown type and a mix with no shares.
+- The population cache key hashes the catalog and each place's kind name (kPopulationFormat 8).
+
+The building generator's own `BuildingParams::campus` (room plans, facades, the lot cache) is the building's shape,
+not who uses it, and stays.

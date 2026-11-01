@@ -2,6 +2,7 @@
 #define RAYTRACER_APPS_CITYSIM_PLACES_H
 
 #include "../../engine/ai/nav_graph.h"   // engine::NavGraph, Vec2, Real
+#include <algorithm>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -95,9 +96,13 @@ struct Place {
     // cafe's 6:30-19:00 is when customers come, not a 13-hour day for staff.
     bool authoredHours = true;
     std::string name;      // optional authored label ("Al's Diner"); may be empty
-    // The university (campus milestone 4): 1 teaching hall, 2 library, 3 residence
-    // hall, 4 quad, 5 sports field; 0 = not campus. Students live, study and sit here.
-    uint8_t campus = 0;
+    // Its KIND (place_kinds.h, places.lua): the index into the place-kind catalog -- "teaching", "residence", or the
+    // kind named after its type -- and that kind's tags, the bits the sim asks ("beds", "campus"...). -1: not set.
+    int16_t kind = -1;
+    uint32_t tags = 0;
+    // A HOME's dwellings, one household each: dwellings()[firstDwelling, firstDwelling + dwellingCount).
+    uint32_t firstDwelling = 0;
+    uint32_t dwellingCount = 0;
     // Floor area, m2 (AuthoredPlace::floorArea): the weight of this place in the draw of homes and jobs. 0 = unknown.
     Real floorArea = 0;
 
@@ -135,9 +140,22 @@ public:
     void setAuthoredHours(PlaceId id, bool on) {
         if (id < places_.size()) places_[id].authoredHours = on;
     }
-    void setCampus(PlaceId id, uint8_t role) {
-        if (id < places_.size()) places_[id].campus = role;
+    void setKind(PlaceId id, int kind, uint32_t tags) {
+        if (id < places_.size()) { places_[id].kind = static_cast<int16_t>(kind); places_[id].tags = tags; }
     }
+    void setCapacity(PlaceId id, int capacity) {
+        if (id < places_.size()) places_[id].capacity = capacity;
+    }
+    // A home's dwellings (place_kinds.h dwellingsOf): each one's bedrooms, in order. Replaces any it had.
+    void setDwellings(PlaceId id, const std::vector<int>& beds) {
+        if (id >= places_.size()) return;
+        places_[id].firstDwelling = static_cast<uint32_t>(dwellings_.size());
+        places_[id].dwellingCount = static_cast<uint32_t>(beds.size());
+        for (int b : beds) dwellings_.push_back({id, static_cast<uint8_t>(std::clamp(b, 0, 255))});
+    }
+    // ONE HOUSEHOLD EACH: every home's dwellings, by place, in the order the homes were given them.
+    struct Dwelling { PlaceId place = kNoPlace; uint8_t beds = 1; };
+    const std::vector<Dwelling>& dwellings() const { return dwellings_; }
     void setFloorArea(PlaceId id, Real m2) {
         if (id < places_.size()) places_[id].floorArea = m2;
     }
@@ -157,6 +175,7 @@ public:
 
 private:
     std::vector<Place> places_;
+    std::vector<Dwelling> dwellings_;
     // places_ indices grouped by type; byType_[t] is the id list for type t.
     std::vector<PlaceId> byType_[static_cast<int>(PlaceType::Count)];
 };

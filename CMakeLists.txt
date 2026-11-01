@@ -456,6 +456,7 @@ add_library(citysim STATIC
     src/apps/citysim/bus_stop_props.cpp   # the pole, sign and bench you can see
     src/apps/citysim/city_map_raster.cpp  # the map tool's picture: the city SVG, rasterized (nanosvg)
     src/apps/citysim/places.cpp          # places layer: buildings → routable POIs (ADR-0066)
+    src/apps/citysim/place_kinds.cpp     # what kind each place is, its tags, a home's dwellings (places.lua)
     src/apps/citysim/relationships.cpp   # surface-level social graph (ADR-0066)
     src/apps/citysim/city_sim.cpp
     src/apps/citysim/city_render.cpp
@@ -472,6 +473,7 @@ if(RT_ENABLE_SCRIPTING)
         src/apps/citysim/scripting/agent_goals.cpp
         src/apps/citysim/scripting/activities_lua.cpp
         src/apps/citysim/scripting/roles_lua.cpp
+        src/apps/citysim/scripting/place_kinds_lua.cpp
         src/apps/citysim/scripting/signals_lua.cpp
         src/apps/citysim/scripting/vehicle_body.cpp
     )

@@ -788,7 +788,7 @@ void CitySim::build(const NavGraph& graph, int driverCount, int pedCount, uint32
 
 namespace {
 // ---- the population cache (CitySim::setPopulationCacheDir) --------------------------------------------
-constexpr uint32_t kPopulationFormat = 7;   // (7: homes and jobs drawn by floor area; 6: garage stalls are bays) bump when assignPlaces' rules or this record change
+constexpr uint32_t kPopulationFormat = 8;   // (8: place kinds from places.lua, not campus codes; 7: homes and jobs drawn by floor area; 6: garage stalls are bays) bump when assignPlaces' rules or this record change
 struct Fnv : engine::bundle::Fnv {
     void real(Real v) { const double d = static_cast<double>(v); pod(d); }
     void vec(const engine::Vec2& v) { real(v.x); real(v.y); }
@@ -812,10 +812,11 @@ void CitySim::assignPlaces(const PlaceMap& places, const NavGraph& graph) {
     for (Agent& a : agents_) { a.homePlace = kNoPlace; a.workPlace = kNoPlace; }
     if (places.empty() || graph.nodeCount() == 0) return;
 
-    // The university's residence hall is the STUDENTS' home (below), not one more house in the pool.
+    // A hall with BEDS (the university's residence hall) is the STUDENTS' home (below), not one more house in the pool.
+    const uint32_t kBeds = placeKinds_.tag("beds");
     std::vector<PlaceId> homes;
     for (PlaceId id : places.ofType(PlaceType::Home))
-        if (places[id].campus != 3) homes.push_back(id);
+        if (!(places[id].tags & kBeds)) homes.push_back(id);
     if (homes.empty()) homes = places.ofType(PlaceType::Home);
     const std::vector<PlaceId>& parks = places.ofType(PlaceType::Park);
     // A "job" is a workplace place: shop / office / civic (a park is not a job).
@@ -861,7 +862,8 @@ void CitySim::assignPlaces(const PlaceMap& places, const NavGraph& graph) {
         v.door = doorOf(p.id);
         v.openHour = p.openHour;
         v.closeHour = p.closeHour;
-        v.campus = p.campus;
+        v.kind = p.kind;
+        v.tags = p.tags;
         v.place = p.id;
         if (v.node >= 0) venues_.push_back(v);
     }
@@ -1019,6 +1021,7 @@ void CitySim::assignPlaces(const PlaceMap& places, const NavGraph& graph) {
     if (!populationCacheDir_.empty()) {
         Fnv k;
         k.pod(kPopulationFormat);
+        k.str(placeKinds_.describe());   // the kinds' tags and beds decide who lives where
         k.pod(static_cast<int32_t>(graph.nodeCount()));
         for (const Vec2& p : graph.nodes) k.vec(p);
         for (const engine::NavLink& L : graph.links) {
@@ -1026,7 +1029,7 @@ void CitySim::assignPlaces(const PlaceMap& places, const NavGraph& graph) {
         }
         for (const Place& p : places.places()) {
             k.pod(p.id); k.pod(p.type); k.vec(p.site); k.vec(p.entrance); k.pod(p.entranceLink); k.real(p.entranceT);
-            k.real(p.openHour); k.real(p.closeHour); k.pod(p.capacity); k.pod(p.authoredHours); k.pod(p.campus); k.real(p.floorArea);
+            k.real(p.openHour); k.real(p.closeHour); k.pod(p.capacity); k.pod(p.authoredHours); k.str(placeKinds_.nameOf(p.kind)); k.real(p.floorArea);
         }
         for (std::size_t i = 0; i < agents_.size(); ++i) {
             const Agent& a = agents_[i];
@@ -1550,11 +1553,7 @@ void CitySim::assignPlaces(const PlaceMap& places, const NavGraph& graph) {
                               static_cast<int64_t>(std::floor(a.homeDoor.y / kCell)))].push_back(i);
             ++commuters;
         }
-        auto placeKind = [&](const Place& p) -> std::string {
-            if (p.type == PlaceType::Civic) return p.campus == 1 ? "teaching" : p.campus == 2 ? "library" : p.campus == 3 ? "residence" : "civic";
-            if (p.type == PlaceType::Park) return p.campus == 4 ? "quad" : p.campus == 5 ? "field" : "park";
-            return placeTypeName(p.type);
-        };
+        auto placeKind = [&](const Place& p) -> std::string { return p.kind >= 0 ? placeKinds_.nameOf(p.kind) : placeTypeName(p.type); };
         struct Job { int role; PlaceId place; int node; int want; int got; };
         std::vector<Job> openings;
         for (int r = 0; r < static_cast<int>(roles_.roles.size()); ++r) {
@@ -3403,19 +3402,7 @@ int CitySim::pickOuting(Agent& a, int origin) {
 // ---- THE CATALOG'S CHOOSER (activities framework, step A) --------------------------------------------------------
 
 std::string CitySim::venueKind(const Venue& v) const {
-    switch (v.type) {
-        case PlaceType::Cafe: return "cafe";
-        case PlaceType::Restaurant: return "restaurant";
-        case PlaceType::Bar: return "bar";
-        case PlaceType::Club: return "club";
-        case PlaceType::Shop: return "shop";
-        case PlaceType::Supermarket: return "supermarket";
-        case PlaceType::Office: return "office";
-        case PlaceType::Home: return "home";
-        case PlaceType::Park: return v.campus == 4 ? "quad" : v.campus == 5 ? "field" : "park";
-        case PlaceType::Civic: return v.campus == 2 ? "library" : v.campus == 1 ? "teaching" : "civic";
-        default: return "?";
-    }
+    return v.kind >= 0 ? placeKinds_.nameOf(v.kind) : placeTypeName(v.type);
 }
 
 static const char* spotSiteKind(SpotKind k) {
@@ -3618,10 +3605,11 @@ void CitySim::assignStudents(const PlaceMap& places, const NavGraph& graph) {
     // Every hall of each kind: the quad block's residence hall and the dorm block's, both teaching halls.
     std::vector<PlaceId> halls, teach;
     PlaceId lib = kNoPlace;
+    const uint32_t kBeds = placeKinds_.tag("beds"), kClasses = placeKinds_.tag("classes"), kLibrary = placeKinds_.tag("library");
     for (const Place& p : places.places()) {
-        if (p.campus == 3) halls.push_back(p.id);
-        if (p.campus == 1) teach.push_back(p.id);
-        if (p.campus == 2 && lib == kNoPlace) lib = p.id;
+        if (p.tags & kBeds) halls.push_back(p.id);
+        if (p.tags & kClasses) teach.push_back(p.id);
+        if ((p.tags & kLibrary) && lib == kNoPlace) lib = p.id;
     }
     if (halls.empty() || teach.empty()) return;
     auto doorOf = [&](PlaceId id) { const Place& p = places[id]; return p.entrance + (p.site - p.entrance) * 0.4; };
@@ -6382,26 +6370,28 @@ void CitySim::tagSpots() {
             if (v.type == PlaceType::Park && (v.door - p).lengthSquared() < reach * reach) return true;
         return false;
     };
+    // the campus's lawns and its fields (places.lua tags "grounds", "sports")
+    const uint32_t kGrounds = placeKinds_.tag("grounds"), kSports = placeKinds_.tag("sports");
     for (ActivityArea& ar : areas_) {
         ar.tags &= ~(spot_tag::kCampus | spot_tag::kSports | spot_tag::kPark);
         if (nearPark(ar.center, 60.0)) ar.tags |= spot_tag::kPark;
         for (const Venue& v : venues_) {
-            if (v.campus != 4 && v.campus != 5) continue;
+            if (!(v.tags & kGrounds)) continue;
             if ((v.door - ar.center).lengthSquared() >= 200.0 * 200.0) continue;
             ar.tags |= spot_tag::kCampus;
-            if (v.campus == 5) ar.tags |= spot_tag::kSports;
+            if (v.tags & kSports) ar.tags |= spot_tag::kSports;
         }
     }
     for (ActivitySpot& s : seats_) {
         s.tags &= ~(spot_tag::kCampus | spot_tag::kSports | spot_tag::kPark);
         if (s.kind == SpotKind::Sit && nearPark(s.pos, 60.0)) s.tags |= spot_tag::kPark;
         for (const Venue& v : venues_) {
-            if (v.campus != 4 && v.campus != 5) continue;
+            if (!(v.tags & kGrounds)) continue;
             // (a track's far side is a field's width from its door)
             const Real reach = s.kind == SpotKind::Jog ? 200.0 : 120.0;
             if ((v.door - s.pos).lengthSquared() >= reach * reach) continue;
             s.tags |= spot_tag::kCampus;
-            if (v.campus == 5) s.tags |= spot_tag::kSports;
+            if (v.tags & kSports) s.tags |= spot_tag::kSports;
         }
     }
 }

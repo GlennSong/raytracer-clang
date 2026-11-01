@@ -16,6 +16,7 @@
 #include "city_dispatch.h"
 #include "city_transit.h"
 #include "places.h"
+#include "place_kinds.h"   // what kind each place is, and its tags (places.lua)
 #include "relationships.h"
 #include "traffic_signal.h"
 #include <cstdint>
@@ -1310,6 +1311,10 @@ public:
     // (roles.lua at level load; defaultRoleCatalog otherwise). Re-seats every agent on its new table.
     void setRoleCatalog(RoleCatalog c);
     const RoleCatalog& roles() const { return roles_; }
+    // THE PLACE KINDS (place_kinds.h): places.lua at level load, defaultPlaceKindCatalog otherwise. The PlaceMap's kind
+    // indexes and tag bits are this catalog's: set it before the places are given their kinds.
+    void setPlaceKinds(PlaceKindCatalog c) { placeKinds_ = std::move(c); }
+    const PlaceKindCatalog& placeKinds() const { return placeKinds_; }
     // One role's table replaced outright (a level script's own day for it); false when the role is unknown.
     bool setRoleTable(const std::string& role, GoalTable t);
     // Places people go out to (everything but homes), for outings and lunch.
@@ -1318,7 +1323,8 @@ public:
         int node = -1;
         engine::Vec2 door;
         Real openHour = 0, closeHour = 24;
-        uint8_t campus = 0;   // Place::campus: 1 teaching hall, 2 library, 3 residence, 4 quad, 5 field
+        int16_t kind = -1;    // Place::kind (placeKinds()), and its tags
+        uint32_t tags = 0;
         PlaceId place = kNoPlace;
         // THE HOURS SOMEBODY WORKS THERE (bit h: someone hired there is at work at h:30; indexVenueStaffing). A shop,
         // cafe, restaurant, bar, club or supermarket nobody is on shift at is CLOSED to customers, whatever its hours
@@ -1895,6 +1901,7 @@ private:
     SignalTiming signalTiming_;
     // THE ROLES and each one's day (setRoleCatalog); the wanderers' tables (the agent lab) beside them.
     RoleCatalog roles_ = defaultRoleCatalog();
+    PlaceKindCatalog placeKinds_ = defaultPlaceKindCatalog();
     std::vector<GoalTable> roleTables_ = [] {
         std::vector<GoalTable> v;
         for (const ResidentRole& r : defaultRoleCatalog().roles) v.push_back(buildDayTable(r.day));

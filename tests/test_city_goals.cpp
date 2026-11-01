@@ -10,6 +10,13 @@
 using namespace engine;
 using namespace citysim;
 
+// A place given a kind by name, from the built-in place kinds (places.lua's twin): its tags come with it.
+static void kindOf(PlaceMap& places, PlaceId id, const char* name) {
+    const PlaceKindCatalog c = defaultPlaceKindCatalog();
+    const int k = c.find(name);
+    places.setKind(id, k, k >= 0 ? c.kinds[static_cast<std::size_t>(k)].tags : 0u);
+}
+
 // The goal layer as DATA (ADR-0064): an agent's day is a GoalTable — states
 // binding the small C++ action vocabulary (Rest, GoTo work/home/random) with
 // transitions on the events CitySim emits (clock windows, arrival, no-route,
@@ -263,7 +270,7 @@ TEST_CASE(students_live_in_the_hall_and_spend_the_day_on_campus) {
     const PlaceId teach = places.add(PlaceType::Civic, Vec2(60, 120), nav);
     const PlaceId lib = places.add(PlaceType::Civic, Vec2(-40, 200), nav);
     const PlaceId quad = places.add(PlaceType::Park, Vec2(0, 130), nav);
-    places.setCampus(hall, 3); places.setCampus(teach, 1); places.setCampus(lib, 2); places.setCampus(quad, 4);
+    kindOf(places, hall, "residence"); kindOf(places, teach, "teaching"); kindOf(places, lib, "library"); kindOf(places, quad, "quad");
     std::vector<CitySim::SeatSpot> seats;
     for (int i = 0; i < 8; ++i) {   // benches round the quad
         CitySim::SeatSpot s;
@@ -334,7 +341,7 @@ TEST_CASE(students_fill_every_hall_and_take_classes_in_every_teaching_hall) {
     const PlaceId h2 = places.add(PlaceType::Home, Vec2(200, -150), nav, 0, 24, 20);
     const PlaceId t1 = places.add(PlaceType::Civic, Vec2(60, 120), nav);
     const PlaceId t2 = places.add(PlaceType::Civic, Vec2(-60, 200), nav);
-    places.setCampus(h1, 3); places.setCampus(h2, 3); places.setCampus(t1, 1); places.setCampus(t2, 1);
+    kindOf(places, h1, "residence"); kindOf(places, h2, "residence"); kindOf(places, t1, "teaching"); kindOf(places, t2, "teaching");
     sim.assignPlaces(places, nav);
     int in1 = 0, in2 = 0, at1 = 0, at2 = 0;
     for (const Agent& a : sim.agents()) {
@@ -427,7 +434,7 @@ TEST_CASE(an_activity_goal_takes_only_spots_of_its_kind_and_tags) {
     PlaceMap places;
     for (int i = 0; i < 6; ++i) places.add(PlaceType::Home, Vec2(-250 + i * 100.0, -250), nav);
     const PlaceId quad = places.add(PlaceType::Park, Vec2(0, 0), nav);
-    places.setCampus(quad, 4);
+    kindOf(places, quad, "quad");
     std::vector<CitySim::ActivitySpot> spots;
     auto spot = [&](Vec2 p, SpotKind k) { CitySim::ActivitySpot s; s.pos = p; s.face = Vec2(0, 1); s.kind = k; spots.push_back(s); };
     for (int i = 0; i < 6; ++i) spot(Vec2(-15.0 + i * 6.0, 8.0), SpotKind::Sit);          // the quad's benches
@@ -600,7 +607,7 @@ KickRun runKickabout(int walkers) {
     sim.setGoalTables(t, t);
     PlaceMap places;
     const PlaceId field = places.add(PlaceType::Park, Vec2(50, 50), nav);
-    places.setCampus(field, 5);
+    kindOf(places, field, "field");
     for (int i = 0; i < 4; ++i) places.add(PlaceType::Home, Vec2(-250 + i * 150.0, -250), nav);
     CitySim::ActivityArea pitch;
     pitch.kind = "pitch"; pitch.center = Vec2(50, 50); pitch.axis = Vec2(1, 0); pitch.halfL = 25; pitch.halfW = 15;
@@ -729,7 +736,7 @@ TEST_CASE(every_activity_in_the_catalog_keeps_the_rules) {
     // the night's places, with the night's hours (wrapping midnight)
     for (int i = 0; i < 3; ++i) places.add(PlaceType::Bar, Vec2(-300.0 + i * 260.0, -200.0), nav, 16, 2);
     for (int i = 0; i < 2; ++i) places.add(PlaceType::Club, Vec2(-200.0 + i * 380.0, 150.0), nav, 21, 3);
-    places.setCampus(quad, 4); places.setCampus(lib, 2); places.setCampus(field, 5);
+    kindOf(places, quad, "quad"); kindOf(places, lib, "library"); kindOf(places, field, "field");
     std::vector<CitySim::ActivitySpot> spots;
     auto spot = [&](Vec2 p, SpotKind kd) { CitySim::ActivitySpot sp; sp.pos = p; sp.face = Vec2(0, 1); sp.kind = kd; spots.push_back(sp); };
     for (int i = 0; i < 10; ++i) spot(Vec2(-20.0 + i * 4.0, 12.0), SpotKind::Sit);              // the quad's benches

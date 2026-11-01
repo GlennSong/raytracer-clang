@@ -6344,18 +6344,10 @@ bool LevelLoader::load(const std::string& path,
                     p.type = lb.type;
                     p.x = static_cast<float>(lb.site.x);
                     p.z = static_cast<float>(lb.site.y);
-                    // THE UNIVERSITY (campus milestone 4): its halls, quad and field by recipe, so
-                    // the citysim can house students in the residence hall and send them to class.
-                    // Beds: one student per ~45 m2 of floor (a dorm room, its share of the corridor, the
-                    // bathrooms and lounge -- measured against the beds campusPlan furnishes).
-                    if (lb.recipe == "teaching_hall") p.campus = 1;
-                    else if (lb.recipe == "campus_library") p.campus = 2;
-                    else if (lb.recipe == "residence_hall") {
-                        p.campus = 3;
-                        const double storeys = std::max(1.0, std::floor(static_cast<double>(lb.height) / 3.3));
-                        p.capacity = static_cast<int>(engine::area(lb.plan) * storeys / 45.0);
-                    } else if (lb.recipe == "campus_quad" || lb.recipe == "dorm_courtyard") p.campus = 4;
-                    else if (lb.recipe == "sports_field") p.campus = 5;
+                    // WHAT IT IS, to the citysim: its recipe (the place kind -- a teaching hall, a residence hall
+                    // -- and a home's dwellings come from it there, places.lua) and how many units it grew.
+                    p.recipe = lb.recipe;
+                    p.units = std::max<int>(1, static_cast<int>(lb.units.size()));
                     // The real door (ADR-0080): first unit that has one --
                     // the citysim snaps this place's entrance from a step
                     // outside it instead of from the centroid.
@@ -6407,9 +6399,6 @@ bool LevelLoader::load(const std::string& path,
                         for (const engine::Vec2& v : lp) pts.push_back({v.x, v.y});
                         if (pts.size() >= 3) cfg.jogLoops.push_back(std::move(pts));
                     }
-                    if (p.campus && std::getenv("RT_CAMPUS_DEBUG"))
-                        std::fprintf(stderr, "[campus place] %s role %d door (%.1f, %.1f) site (%.1f, %.1f) floor y %.2f beds %d\n",
-                                     lb.recipe.c_str(), p.campus, p.ex, p.ez, p.x, p.z, static_cast<double>(lb.baseY), p.capacity);
                     // ONE BUSINESS PER SHOP UNIT (storefronts plan, stage 1): each shopfront of the ground storey is
                     // its own place, of its trade's type and hours (trades.h), its door the entrance, its site a step
                     // inside -- the trade the facade drew, the interior was furnished for, and the fascia wears. A shop
