@@ -37,7 +37,7 @@ free floor inside the walls under 2 m2) is not a place to stand and is not gated
 ### The words, plainly
 
 - **Cell**: one space inside a building, a volume with a floor, a ceiling and a use. A room is a cell; so is an atrium, a stairwell, a lift shaft, a seating bowl, a ramp.
-- **Portal**: the passage between two cells, or a cell and the outside: a door, an open passage, a stair, an escalator, a lift, a ramp, a vomitory, or a **void** (a railing edge onto an atrium: you see across, you cannot pass). *Not yet in code:* `passable()` in `space_graph.cpp` returns true for a void, and nothing emits one yet; it must say false before atria use it.
+- **Portal**: the passage between two cells, or a cell and the outside: a door, an open passage, a stair, an escalator, a lift, a ramp, a vomitory, or a **void** (a railing edge onto an atrium: you see across, you cannot pass). `passable()` says false for a void; nothing emits one yet (atria are owed).
 - **Floor surface**: level, sloped, stepped or helical. Level is the common case, not the only one.
 - **Section**: one floor's outline. **Mass**: anything that can give its outline at a height (a **slice**) and its skin as a mesh. **Envelope**: the skin when it is not the same thing as the floors.
 - **Prismatic / non-prismatic, punched / curtain / diagrid, shell, soffit**: as before.

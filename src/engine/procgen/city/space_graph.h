@@ -73,8 +73,7 @@ struct WalkerCaps {
     bool ramp = true;
 };
 
-// NOTE: Void answers true today, though the plan (docs/building-toolkit-plan.md) says a void is see-across, not
-// walk-through; nothing emits a Void portal yet.
+// A Void (a railing edge onto an atrium) is never passable: you see across it, you cannot walk it.
 bool passable(const Portal& p, const WalkerCaps& caps);
 // Which cells a walker reaches from `from` (a cell index; -1 = the street, through every portal onto it).
 std::vector<bool> reachableFrom(const SpaceGraph& g, int from, const WalkerCaps& caps);
