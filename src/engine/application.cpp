@@ -113,7 +113,7 @@ bool Application::initialize(const Config& config,
     const char* audioEnv = std::getenv("RT_AUDIO");
     audioEngine.initialize(audioEnv && std::string(audioEnv) == "null" ? AudioBackendMode::Null : config.audio);
 
-    clock.setFixedStep(settingsStore.getDouble("fixedTimestep", 1.0 / 60.0));
+    clock.setFixedStep(settingsStore.getDouble("fixedTimestep", kDefaultFixedStep));
 
     // Frame-ledger capture without a UI (ADR-0077): RT_FRAME_STATS=<path.csv>
     // records every frame from boot; RT_FRAME_STATS_LOG=<seconds> prints a

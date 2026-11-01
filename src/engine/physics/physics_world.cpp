@@ -2,6 +2,7 @@
 
 #include "jolt_job_adapter.h"
 #include "../../job_system.h"
+#include "../clock.h"   // kDefaultFixedStep
 
 #include <Jolt/Jolt.h>
 
@@ -899,9 +900,10 @@ Real PhysicsWorld::launchAccel(const VehicleConfig& config, Real friction, Real 
     w.optimizeBroadPhase();
     const VehicleId car = w.addVehicle(config, Vec3(0, spawnHeight(config), 0), Quat::identity());
     if (car == INVALID_VEHICLE) return 0;
-    const Real dt = 1.0 / 60.0;
-    for (int i = 0; i < 60; ++i) w.update(dt);   // settle on the springs
-    for (int i = 1; i <= 60 * 15; ++i) {
+    const Real dt = kDefaultFixedStep;   // (the step the city's cars drive on)
+    const int perSecond = static_cast<int>(std::lround(1.0 / dt));
+    for (int i = 0; i < perSecond; ++i) w.update(dt);   // settle on the springs
+    for (int i = 1; i <= perSecond * 15; ++i) {
         w.setVehicleInput(car, 1.0, 0, 0);
         w.update(dt);
         if (w.vehicleVelocity(car).length() >= toSpeed) return toSpeed / (i * dt);

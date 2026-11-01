@@ -14,9 +14,14 @@ namespace engine {
 // slow down, or pause. (Shrinking the step instead would change integration
 // behaviour and cost more per simulated second — that knob is setFixedStep,
 // for trading accuracy against performance, not for changing speed.)
+// THE ENGINE'S STEP (#172): the fixed step every simulation runs on unless the `fixedTimestep` setting says otherwise.
+// Code inside a frame asks the clock (ctx.clock.fixedStep()); this is for what runs outside one -- a world of its own
+// (PhysicsWorld::launchAccel), or a value held before the first step.
+inline constexpr double kDefaultFixedStep = 1.0 / 60.0;
+
 class SimClock {
 public:
-    explicit SimClock(double fixedStepSeconds = 1.0 / 60.0);
+    explicit SimClock(double fixedStepSeconds = kDefaultFixedStep);
 
     // Returns the number of fixed steps to run this frame.
     int advance(double realDeltaSeconds);

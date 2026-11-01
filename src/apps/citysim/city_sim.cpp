@@ -3,6 +3,7 @@
 #include "traffic_rules.h"   // approachStop
 #include "../../engine/ai/idm.h"   // IDM car-following (roads-v2 S7)
 #include "../../profile.h"
+#include "../../engine/clock.h"   // kDefaultFixedStep
 #include "../../engine/bundle/bundle.h"   // the population cache key
 #include "../../engine/bundle/cache_use.h"
 #include "../../job_system.h"   // assignPlaces decides the population in parallel
@@ -7858,7 +7859,7 @@ void CitySim::stepTick(Real dt, Real hoursPerSecond) {
         // from the tick length keeps a true vRefreshSeconds refresh at ANY
         // rate: fewer buckets means more agents per tick but proportionally
         // fewer ticks — the same agents per second, the same amortised cost.
-        const Real tickLen = dt > 1e-9 ? dt : (1.0 / 60.0);
+        const Real tickLen = dt > 1e-9 ? dt : engine::kDefaultFixedStep;
         int div = static_cast<int>(vRefreshSeconds / tickLen + 0.5);
         div = std::max(1, std::min(div, vTickDivisor));
         const uint32_t bucket =

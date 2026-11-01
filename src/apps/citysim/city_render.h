@@ -696,7 +696,7 @@ private:
         c.used = drawBake_;
         return c;
     }
-    Real bakeDt_ = 1.0 / 60.0;                     // last step's dt (filter gain)   // last step's per-agent speed (brake decel)
+    Real bakeDt_ = engine::kDefaultFixedStep;                     // last step's dt (filter gain)   // last step's per-agent speed (brake decel)
     // debug ground rings, one per Agent::State (indexed by it)
     engine::Entity footprintGroups_[static_cast<int>(Agent::State::Count)]{};
     engine::Entity forwardGroup_{};          // debug forward-trajectory arrows
