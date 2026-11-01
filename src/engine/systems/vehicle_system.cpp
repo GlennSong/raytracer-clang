@@ -511,9 +511,9 @@ void VehicleSystem::writeBack(FrameContext& ctx) {
                 }
             }
 
-            // Keep the seated driver glued to the chassis so they ride along and
-            // are sensibly placed when they get out.
-            if (v.driver.valid() && ctx.world.alive(v.driver)) {
+            // Keep a driver with no seat (no Passenger) glued to the chassis so they ride along; a seated one is
+            // the riding component's (stepSeat -> rideStep puts them at the seat).
+            if (v.driver.valid() && ctx.world.alive(v.driver) && !ctx.world.has<Passenger>(v.driver)) {
                 if (Transform* pt = ctx.world.get<Transform>(v.driver))
                     pt->position = t.position;
             }
@@ -720,11 +720,14 @@ void VehicleSystem::update(FrameContext& ctx) {
     // Flip the car the player is currently driving back upright.
     if (ctx.actions.pressed("vehicle_flip")) {
         ctx.world.each<ControlledBy, InVehicle>(
-            [&](Entity, ControlledBy&, InVehicle& iv) {
+            [&](Entity e, ControlledBy&, InVehicle& iv) {
                 if (!iv.vehicle.valid() || !ctx.world.has<Vehicle>(iv.vehicle)) return;
                 Vehicle* v = ctx.world.get<Vehicle>(iv.vehicle);
-                if (v->vehicleId != PhysicsWorld::INVALID_VEHICLE)
-                    physicsSys.physicsWorld().resetVehicleUpright(v->vehicleId);
+                if (v->vehicleId == PhysicsWorld::INVALID_VEHICLE) return;
+                physicsSys.physicsWorld().resetVehicleUpright(v->vehicleId);
+                // the car was PLACED, not driven: a 1.5 m lift in one step read as a 90 m/s jolt and threw the driver
+                // through the windscreen. A new frame for the seat, as on boarding (rideStep's jump).
+                if (Passenger* p = ctx.world.get<Passenger>(e)) p->haveLast = false;
             });
     }
 
