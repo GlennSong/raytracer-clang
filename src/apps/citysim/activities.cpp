@@ -216,6 +216,9 @@ ActivityCatalog defaultActivityCatalog() {
       d.hourHi = 2.5; }
     { ActivityDef& d = def("college_club", {"teaching", "library"}); d.distHi = 1e9; d.nearest = 2; d.hourLo = 18.0;
       d.hourHi = 22.0; d.minutesLo = 50; d.minutesHi = 90; }
+    // AN EVENING SHIFT (roles.lua side_job): on a shift night, to the agent's own evening job, there until the evening
+    // (the shift) is over -- its length is the shift's, so the stop outlasts it
+    { ActivityDef& d = def("side_job", {"side_job"}); d.distHi = 1e9; d.nearest = 1; d.minutesLo = 600; d.minutesHi = 600; }
 
     // A DAY OFF, by the hour: coffee and the park in the morning; the shops and lunch at midday; errands and the park
     // in the afternoon; dinner and a coffee in the evening -- a bench or a trip across town now and then all day
@@ -281,7 +284,7 @@ ActivityCatalog defaultActivityCatalog() {
     // A STUDENT'S EVENING: a college club's meeting early, then out like anyone
     Menu studentEvening;
     studentEvening.name = "student_evening";
-    { MenuBand b; b.hourLo = 16.0; b.hourHi = 22.0; b.first = {{"college_club", 0.45, 0}};
+    { MenuBand b; b.hourLo = 16.0; b.hourHi = 22.0; b.first = {{"side_job", 1.0, 0}, {"college_club", 0.45, 0}};
       b.pick = {{"dinner", 0, 2.0}, {"drinks", 0, 2.0}, {"chat", 0, 0.8}, {"quad_time", 0, 0.5}};
       studentEvening.bands.push_back(b); }
     { MenuBand b; b.hourLo = 22.0; b.hourHi = 16.0;

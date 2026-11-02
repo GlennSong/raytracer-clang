@@ -432,6 +432,52 @@ TEST_CASE(households_fill_the_dwellings_one_to_each) {
     CHECK(who(7) != who(8));
 }
 
+// EVENING JOBS (roles.lua side_job; plan step 6): about three students in ten hold a job at a cafe, bar or shop near
+// the hall, and on a shift night they are there through the shift -- walked to, worked, home after -- and the place
+// counts as staffed for those hours. Three seeds.
+TEST_CASE(students_work_their_evening_jobs_on_shift_nights) {
+    for (uint32_t seed = 3; seed <= 5; ++seed) {
+        NavGraph nav = citytest::cityNav(800.0, 80.0, seed);
+        CitySim sim;
+        sim.build(nav, 20, 400, seed);
+        PlaceMap places;
+        for (int i = 0; i < 10; ++i) places.add(PlaceType::Home, Vec2(-350 + i * 70.0, -330), nav);
+        for (int i = 0; i < 4; ++i) places.add(PlaceType::Office, Vec2(-300 + i * 160.0, 330), nav, 9, 17);
+        for (int i = 0; i < 3; ++i) places.add(PlaceType::Cafe, Vec2(-200 + i * 180.0, -40), nav, 7, 23);
+        for (int i = 0; i < 2; ++i) places.add(PlaceType::Bar, Vec2(-150 + i * 260.0, 260), nav, 16, 2);
+        const PlaceId hall = places.add(PlaceType::Home, Vec2(-120, 60), nav, 0, 24, 60);
+        const PlaceId teach = places.add(PlaceType::Civic, Vec2(60, 120), nav);
+        kindOf(places, hall, "residence"); kindOf(places, teach, "teaching");
+        sim.assignPlaces(places, nav);
+        sim.seedFromSchedule(15.0);
+        int holders = 0;
+        for (const Agent& a : sim.agents()) holders += a.sideVenue >= 0 ? 1 : 0;
+        // run the evening; at each holder's mid-shift on a shift night, are they at their job (in at its door)?
+        int checked = 0, there = 0;
+        std::vector<uint8_t> seen(sim.agents().size(), 0);
+        for (int i = 0; i < 40000 && sim.timeOfDay() < 23.9; ++i) {
+            sim.step(0.5, 0.0004);
+            const Real now = sim.timeOfDay();
+            for (std::size_t k = 0; k < sim.agents().size(); ++k) {
+                const Agent& a = sim.agents()[k];
+                Real ss = 0, se = 0;
+                if (seen[k] || a.sideVenue < 0 || !sim.sideShiftTonight(a, ss, se)) continue;
+                const Real mid = ss + 0.5 * (se - ss);
+                if (now < mid) continue;
+                seen[k] = 1;
+                ++checked;
+                const CitySim::Venue& v = sim.venues()[static_cast<std::size_t>(a.sideVenue)];
+                there += (!a.moving && (a.pos - v.door).length() < 15.0) ? 1 : 0;   // (inside: at its door)
+            }
+        }
+        std::printf("    [evening jobs] seed %u: %d of %d students hold one; mid-shift %d of %d at their job\n", seed, holders,
+                    sim.studentCount(), there, checked);
+        CHECK(holders > sim.studentCount() / 6 && holders < sim.studentCount() / 2);
+        CHECK(checked > 0);
+        CHECK(there >= checked * 9 / 10);
+    }
+}
+
 // THE HOUSEHOLDS' TIES (people.lua ties; Glenn's plan step 4): on every seed, every household's members are as old as
 // its ties need (a parent 18 years older than each child, a grandparent 36), and the sim ties its housemates -- each
 // pair a Household bond, a parent's child seeing them as its parent -- and nobody outside the dwelling.
@@ -884,7 +930,9 @@ TEST_CASE(every_activity_in_the_catalog_keeps_the_rules) {
     // the night's places, with the night's hours (wrapping midnight)
     for (int i = 0; i < 3; ++i) places.add(PlaceType::Bar, Vec2(-300.0 + i * 260.0, -200.0), nav, 16, 2);
     for (int i = 0; i < 2; ++i) places.add(PlaceType::Club, Vec2(-200.0 + i * 380.0, 150.0), nav, 21, 3);
-    kindOf(places, quad, "quad"); kindOf(places, lib, "library"); kindOf(places, field, "field");
+    // a residence hall: students, some with evening jobs (roles.lua side_job)
+    const PlaceId hall = places.add(PlaceType::Home, Vec2(-100, 60), nav, 0, 24, 60);
+    kindOf(places, quad, "quad"); kindOf(places, lib, "library"); kindOf(places, field, "field"); kindOf(places, hall, "residence");
     std::vector<CitySim::ActivitySpot> spots;
     auto spot = [&](Vec2 p, SpotKind kd) { CitySim::ActivitySpot sp; sp.pos = p; sp.face = Vec2(0, 1); sp.kind = kd; spots.push_back(sp); };
     for (int i = 0; i < 10; ++i) spot(Vec2(-20.0 + i * 4.0, 12.0), SpotKind::Sit);              // the quad's benches

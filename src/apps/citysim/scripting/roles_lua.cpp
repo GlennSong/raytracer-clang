@@ -165,6 +165,32 @@ bool loadRoleCatalog(ScriptVM& vm, citysim::RoleCatalog& out, std::string* err) 
             }
         }
         lua_pop(L, 1);   // staff
+        // side_job = { share = s, places = { kinds }, start = { lo, hi }, finish = { lo, hi }, nights = n, reach = m }
+        lua_getfield(L, t, "side_job");
+        if (lua_istable(L, -1)) {
+            const int sj = lua_gettop(L);
+            citysim::SideJobSpec& s = r.side;
+            s.share = num(L, sj, "share", 0);
+            lua_getfield(L, sj, "places");
+            if (lua_istable(L, -1)) {
+                const int n = static_cast<int>(luaL_len(L, -1));
+                for (int i = 1; i <= n; ++i) {
+                    lua_rawgeti(L, -1, i);
+                    if (lua_isstring(L, -1)) s.places.push_back(lua_tostring(L, -1));
+                    lua_pop(L, 1);
+                }
+            }
+            lua_pop(L, 1);
+            s.nights = num(L, sj, "nights", s.nights);
+            s.reach = num(L, sj, "reach", s.reach);
+            if (!pairOf(L, sj, "start", s.startLo, s.startHi) || !pairOf(L, sj, "finish", s.finishLo, s.finishHi) ||
+                s.share <= 0 || s.share > 1 || s.places.empty() || s.nights <= 0 || s.nights > 1) {
+                lua_settop(L, base);
+                return fail(err, "roles." + name + ".side_job: share 0..1, places, start = { lo, hi }, finish = { lo, hi }, "
+                                 "nights 0..1");
+            }
+        }
+        lua_pop(L, 1);   // side_job
         lua_pop(L, 1);   // role
         c.roles.push_back(r);
     }

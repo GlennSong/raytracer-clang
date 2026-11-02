@@ -1809,6 +1809,7 @@ void CitySim::assignPlaces(const PlaceMap& places, const NavGraph& graph) {
             }
         }
     }
+    assignSideJobs();     // the students' evening jobs (before the staffing: their shifts staff the place)
     indexNightVenues();   // where the sleepers go out to (eveningVenue)
     indexVenueStaffing();   // ...and only to places somebody is working at
     commuteStats_ = CommuteStats{};
@@ -1976,6 +1977,15 @@ void CitySim::indexVenueStaffing() {
         if (v.place != kNoPlace && gated(v.type)) isGated[v.place] = 1;
     }
     for (const Agent& a : agents_) {
+        // an evening job's shift staffs its place for those hours (on a shift night; the mask is any night's)
+        if (a.sideVenue >= 0) {
+            const PlaceId sp = venues_[static_cast<std::size_t>(a.sideVenue)].place;
+            if (sp != kNoPlace && sp <= maxPlace && isGated[sp]) {
+                hired[sp] = 1;
+                for (int h = 0; h < 24; ++h)
+                    if (inWindow(h + 0.5, a.sideStart, a.sideEnd)) mask[sp] |= 1u << h;
+            }
+        }
         if (a.workPlace == kNoPlace || a.workPlace > maxPlace || !isGated[a.workPlace]) continue;
         hired[a.workPlace] = 1;
         for (int h = 0; h < 24; ++h)   // the schedule's own word for where it is at h:30
@@ -2017,6 +2027,8 @@ void CitySim::indexNightVenues() {
 }
 
 int CitySim::eveningVenue(const Agent& a, Real eveningStart) const {
+    Real ss = 0, se = 0;
+    if (sideShiftTonight(a, ss, se)) return a.sideVenue;   // a shift night: at the evening job
     if (nightVenues_.empty() || !nav_ || a.home < 0) return -1;
     constexpr Real kReach = 1200.0;
     const Vec2 p = a.homeDoor;
@@ -2400,7 +2412,54 @@ void CitySim::dormantGlide(Agent& a, Real seconds) {
     a.heading = nav_->direction(a.route.links[static_cast<std::size_t>(a.leg)]);
 }
 
+bool CitySim::sideShiftTonight(const Agent& a, Real& start, Real& end) const {
+    if (a.sideVenue < 0 || a.role >= roles_.roles.size()) return false;
+    const long night = static_cast<long>(std::floor((clockTotalHours_ - 12.0) / 24.0));   // noon to noon
+    uint32_t h = a.brain * 0x5BD1E995u ^ (static_cast<uint32_t>(night) * 0x27D4EB2Du);
+    h ^= h >> 15; h *= 0x846ca68bU; h ^= h >> 16;
+    if (static_cast<Real>(h & 0x3FF) >= roles_.roles[a.role].side.nights * 1024.0) return false;
+    start = a.sideStart;
+    end = a.sideEnd;
+    return true;
+}
+
+void CitySim::assignSideJobs() {
+    sideJobs_ = 0;
+    for (Agent& a : agents_) a.sideVenue = -1;
+    if (venues_.empty()) return;
+    for (int i = 0; i < static_cast<int>(agents_.size()); ++i) {
+        Agent& a = agents_[static_cast<std::size_t>(i)];
+        if (a.role >= roles_.roles.size() || onService(i) || a.home < 0) continue;
+        const SideJobSpec& sj = roles_.roles[a.role].side;
+        if (sj.share <= 0) continue;
+        uint32_t h = a.brain * 0x2C1B3C6Du ^ 0x51DEu;
+        h ^= h >> 15; h *= 0x7feb352dU; h ^= h >> 16;
+        if (static_cast<Real>(h & 0x3FF) >= sj.share * 1024.0) continue;
+        const Real u1 = ((h >> 10) & 0xFF) / Real(255), u2 = ((h >> 18) & 0xFF) / Real(255);
+        const Real start = sj.startLo + (sj.startHi - sj.startLo) * u1, end = sj.finishLo + (sj.finishHi - sj.finishLo) * u2;
+        // one of the four nearest of its kinds, open at the shift's start and an hour before it ends (posted hours)
+        std::vector<std::pair<Real, int>> near;
+        for (int v = 0; v < static_cast<int>(venues_.size()); ++v) {
+            const Venue& V = venues_[static_cast<std::size_t>(v)];
+            const std::string vk = venueKind(V);
+            if (std::find(sj.places.begin(), sj.places.end(), vk) == sj.places.end()) continue;
+            const Real d2 = (V.door - a.homeDoor).lengthSquared();
+            if (d2 > sj.reach * sj.reach || !V.openAt(start + 0.1) || !V.openAt(std::fmod(end - 1.0 + 24.0, 24.0))) continue;
+            near.push_back({d2, v});
+        }
+        if (near.empty()) continue;
+        const std::size_t k = std::min<std::size_t>(4, near.size());
+        std::partial_sort(near.begin(), near.begin() + static_cast<long>(k), near.end());
+        a.sideVenue = near[(h >> 26) % k].second;
+        a.sideStart = static_cast<float>(start);
+        a.sideEnd = static_cast<float>(end);
+        ++sideJobs_;
+    }
+    if (sideJobs_ > 0) std::fprintf(stderr, "[citysim] evening jobs: %d\n", sideJobs_);
+}
+
 bool CitySim::eveningPlan(const Agent& a, Real& start, Real& end) const {
+    if (sideShiftTonight(a, start, end)) return true;   // a shift night: the evening is the shift (roles.lua side_job)
     const int r = static_cast<int>(a.role);
     const Real share = r >= 0 && r < static_cast<int>(roles_.roles.size()) ? roles_.roles[static_cast<std::size_t>(r)].nightOutShare : 0;
     if (share <= 0) return false;
@@ -3572,11 +3631,16 @@ int CitySim::tryActivity(Agent& a, int origin, int di, int prevVenue, bool count
     // PLACES
     if (venuesToo) {
         std::vector<std::pair<Real, int>> cand;
+        // `side_job`: the agent's own evening job, on a shift night only (roles.lua side_job), open or not -- they open it
+        Real ss = 0, se = 0;
+        bool sideSite = false;
+        for (const std::string& k : d.sites) sideSite = sideSite || k == "side_job";
+        const int sideTonight = sideSite && sideShiftTonight(a, ss, se) && inWindow(h, ss - 1.0, se) ? a.sideVenue : -1;
         for (int i = 0; i < static_cast<int>(venues_.size()); ++i) {
             const Venue& v = venues_[static_cast<std::size_t>(i)];
-            if (i == prevVenue || v.node == origin || !v.openAt(h)) continue;
+            if (i == prevVenue || v.node == origin || (i != sideTonight && !v.openAt(h))) continue;
             const std::string vk = venueKind(v);
-            bool want = false;
+            bool want = i == sideTonight;
             for (const std::string& k : d.sites) want = want || k == vk;
             if (!want) continue;
             const Real d2 = (nav_->nodes[static_cast<std::size_t>(v.node)] - here).lengthSquared();

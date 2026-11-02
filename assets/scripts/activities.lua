@@ -5,7 +5,8 @@
 --
 -- activities.<name> = {
 --   sites      = { kinds } -- places: cafe restaurant bar club shop supermarket civic park library teaching quad field office;
---                             spots: seat bed stand loop pitch watch; areas: lawn pitch plaza (a paseo) beach shore; or street
+--                             spots: seat bed stand loop pitch watch; areas: lawn pitch plaza (a paseo) beach shore; or street;
+--                             or side_job (the agent's own evening job, on a shift night)
 --   tags       = { campus | park | sports | beach }   -- a spot site must carry them all
 --   hours      = { lo, hi }    when it is offered (default all day; may wrap midnight)
 --   minutes    = { lo, hi }    how long (default: what that kind of site keeps a visitor)
@@ -26,7 +27,7 @@
 activities = {
   order = { "bench", "across_town", "park_visit", "coffee", "browse", "groceries", "meal", "civic_visit",
             "walk_round_block", "lunch", "campus_bench", "jog", "study", "quad_time", "kickabout", "watch_game",
-            "chat", "picnic", "sunbathe", "catch", "beach_day", "lounger", "beach_stroll", "errand", "dinner", "drinks", "clubbing", "college_club" },
+            "chat", "picnic", "sunbathe", "catch", "beach_day", "lounger", "beach_stroll", "errand", "dinner", "drinks", "clubbing", "college_club", "side_job" },
 
   -- A DAY OFF'S STOPS
   bench            = { sites = { "seat" }, distance = { 30, 500 }, nearest = 4, perform = "spot" },
@@ -56,6 +57,9 @@ activities = {
   clubbing         = { sites = { "club" }, hours = { 21.5, 2.5 }, distance = { 100, 2500 }, nearest = 3 },
   college_club     = { sites = { "teaching", "library" }, hours = { 18, 22 }, minutes = { 50, 90 }, distance = { 0, 1e9 },
                        nearest = 2 },
+  -- AN EVENING SHIFT (roles.lua side_job): on a shift night, to the agent's own evening job, there until the evening
+  -- (the shift) is over -- its length is the shift's, so the stop outlasts it
+  side_job         = { sites = { "side_job" }, minutes = { 600, 600 }, distance = { 0, 1e9 }, nearest = 1 },
 
   -- A STUDENT'S BREAK
   campus_bench     = { sites = { "seat" }, tags = { "campus" }, distance = { 0, 600 }, nearest = 6, perform = "spot" },
@@ -151,9 +155,10 @@ menus = {
     { hours = { 23.5, 16 }, first = {}, pick = { { "clubbing", 3 }, { "drinks", 2 } } },
   },
 
-  -- A STUDENT'S EVENING: a college club's meeting early, then out like anyone
+  -- A STUDENT'S EVENING: their evening shift on a shift night (roles.lua side_job); else a college club's meeting
+  -- early, then out like anyone
   student_evening = {
-    { hours = { 16, 22 }, first = { { "college_club", 0.45 } },
+    { hours = { 16, 22 }, first = { { "side_job", 1.0 }, { "college_club", 0.45 } },
       pick = { { "dinner", 2 }, { "drinks", 2 }, { "chat", 0.8 }, { "quad_time", 0.5 } } },
     { hours = { 22, 16 }, first = {}, pick = { { "clubbing", 3 }, { "drinks", 2.5 } } },
   },

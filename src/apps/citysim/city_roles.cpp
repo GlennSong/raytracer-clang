@@ -111,6 +111,13 @@ std::string RoleCatalog::describe() const {
                           r.staff.finishHi, r.staff.splitOver);
             out += b;
         }
+        if (r.side.share > 0) {
+            out += "  side_job";
+            for (const std::string& k : r.side.places) out += " " + k;
+            std::snprintf(b, sizeof b, " share=%g start=%g-%g finish=%g-%g nights=%g reach=%g\n", r.side.share,
+                          r.side.startLo, r.side.startHi, r.side.finishLo, r.side.finishHi, r.side.nights, r.side.reach);
+            out += b;
+        }
     }
     return out;
 }
@@ -215,6 +222,9 @@ RoleCatalog defaultRoleCatalog() {
     study.breaksRepeat = true;
     study.eveningMenu = "student_evening";
     add("student", study, 0.40);
+    // ...and three in ten work evenings: a cafe, a restaurant, a bar or a shop near the hall, 17:30-23:00, on three
+    // nights in five
+    c.roles.back().side = {0.3, {"cafe", "restaurant", "bar", "shop", "supermarket"}, 17.5, 18.5, 21.5, 23.0, 0.6, 1500.0};
     // NO JOB: a day out instead. A child is never out at night alone; the retired go out less.
     RoleDay out;
     out.commute = false;

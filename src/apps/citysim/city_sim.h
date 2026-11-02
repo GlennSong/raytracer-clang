@@ -103,6 +103,10 @@ struct Agent {
     int32_t household = -1;
     uint8_t age = 0;
     int8_t stage = -1;
+    // AN EVENING JOB (roles.lua side_job; plan step 6): the venue they work at on shift nights (-1: none) and the
+    // shift's hours. Set by assignSideJobs; a shift night is their evening (eveningPlan).
+    int32_t sideVenue = -1;
+    float sideStart = 0, sideEnd = 0;
 
     // HOW THIS AGENT IS MOVING RIGHT NOW. Nearly everything that reads `mode`
     // is asking exactly this — which route space to plan in, whether to sample a
@@ -594,6 +598,10 @@ public:
     // restaurants, bars or clubs to home, in its own town, within 1.2 km and open when its evening starts -- which
     // one, from its own bits and the night's number (the same place all evening). -1: nowhere (a night in).
     int eveningVenue(const Agent& a, Real eveningStart) const;
+    // Whether tonight (noon to noon) is one of agent a's evening shifts (its role's side_job `nights`), and the shift's
+    // hours if so.
+    bool sideShiftTonight(const Agent& a, Real& start, Real& end) const;
+    int sideJobs() const { return sideJobs_; }   // agents holding an evening job
     Real departWorkHour(const Agent& a) const {
         const Real travel = a.commuteSeconds * (hoursPerSecond_ > 0 ? hoursPerSecond_ : 0.0);
         Real h = std::fmod(a.departWork - travel, 24.0);
@@ -1952,6 +1960,10 @@ private:
     // the night's venues (restaurants, bars, clubs) by 250 m cell, for eveningVenue (indexNightVenues)
     std::unordered_map<int64_t, std::vector<int>> nightVenues_;
     void indexNightVenues();
+    // THE EVENING JOBS (roles.lua side_job): each holder of a role with one, by its share, takes one of the four nearest
+    // venues of its kinds open through its shift, within reach of home. Before indexVenueStaffing: their shifts staff it.
+    void assignSideJobs();
+    int sideJobs_ = 0;
     // Venue::staffed from the hired staff's work windows (their schedules: at work from departHome + the commute to
     // their work departure). Counts of the result in venueStaffing_.
     void indexVenueStaffing();

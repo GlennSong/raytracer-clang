@@ -14394,3 +14394,27 @@ Plan step 5 (~/.claude/plans/kinds-are-data-assign-places.md): figure size by ag
 
 Seen at noon in Deerhaven (island_8_beach): 54 children and 41 adults visible near the centre. With no schools
 (#173) children spend the day out, so they outnumber the working adults on the streets at midday.
+
+## ADR-0306 — A second work slot: students' evening jobs
+
+Plan step 6 (~/.claude/plans/kinds-are-data-assign-places.md): student evening jobs (a second work slot).
+
+**Decision.**
+- A ROLE MAY HAVE A SIDE JOB (roles.lua `side_job`; SideJobSpec): the share of its holders who take one, the kinds of
+  place, the shift's start and finish ranges, the share of nights worked, and how far from home. The student has one:
+  three in ten, at a cafe, restaurant, bar, shop or supermarket within 1.5 km, starting 17:30-18:30 and finishing
+  21:30-23:00, on three nights in five. defaultRoleCatalog matches by test.
+- assignSideJobs (every load, after the venues are known and before indexVenueStaffing): each holder, by its own
+  bits, takes one of the four nearest venues of those kinds open at the shift's start and an hour before its end.
+  Their shift hours count toward the venue's staffing, so a place a student works at opens for those hours.
+- A SHIFT NIGHT IS THEIR EVENING: sideShiftTonight (the role's `nights`, by the night's number) comes first in
+  eveningPlan, so the night-out machinery carries it unchanged. That covers the far tier's snapshot, the dormant
+  wake times and the Evening / EveningOver events. eveningVenue answers the job for the sleepers.
+- The live path goes through the activity catalog: a `side_job` activity (site `side_job`: the agent's own evening
+  job, on a shift night, from an hour before the shift until its end, open or not) heads the student's evening menu.
+  Its 600-minute stay outlasts the shift, so EveningOver ends it.
+- Test: three seeds, 14-20 of 60 students hold one; at mid-shift on a shift night every one of them is in at their
+  job's door. The every-activity catalog test gained a residence hall so side_job is taken up there too.
+
+Not done: daytime internships (a second slot that would compete with classes); the census does not count shifts as
+"at work" (the evening's label is Outing).

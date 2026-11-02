@@ -70,12 +70,24 @@ struct JobSpec {
     bool authoredHours = false;
 };
 
+// A SECOND WORK SLOT (plan step 6; a student's evening job): `share` of the role's holders work evenings at one place
+// of these kinds near home (one of the four nearest within `reach` m, open through the shift), from start to finish,
+// on `nights` of the nights. A shift night is their evening (CitySim::eveningPlan), spent at that place.
+struct SideJobSpec {
+    double share = 0;   // 0: none
+    std::vector<std::string> places;
+    double startLo = 17.5, startHi = 18.5, finishLo = 21.5, finishHi = 23.0;
+    double nights = 0.6;
+    double reach = 1500.0;
+};
+
 struct ResidentRole {
     std::string name;
     RoleDay day;
     double nightOutShare = 0;   // of this role, the share out on any one night (CitySim::eveningPlan)
     JobSpec job;
     StaffSpec staff;
+    SideJobSpec side;
 };
 
 // AN AGENT'S ROLE (ADR-0282, #117 item 27): its index in the catalog.

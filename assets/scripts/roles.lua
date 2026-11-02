@@ -29,6 +29,11 @@
 --     places = { kinds }, per_place = n, holders living nearest it; their hours are the place's ("place": from half
 --     hours = "place" | { start = { lo, hi }, finish = { lo, hi } },   an hour before it opens to a quarter after it
 --     split_over = h                     closes, two shifts when that is longer than split_over hours) or fixed
+--   },
+--   side_job = {                         A SECOND WORK SLOT (an evening job): `share` of the role's holders work at
+--     share = s, places = { kinds },     one place of these kinds near home (one of the four nearest within `reach`
+--     start = { lo, hi }, finish = { lo, hi },   m, open through the shift), start to finish, on `nights` of the
+--     nights = n, reach = m              nights -- a shift night is their evening, spent there
 --   }
 -- }
 
@@ -55,6 +60,9 @@ roles = {
     day = { work_before_break = 0.9, pause = { target = "campus", label = "Outing", hours = 0.25, repeats = true },
             evening = "student_evening" },
     night_out = 0.40,
+    -- three in ten work evenings near the hall, on three nights in five
+    side_job = { share = 0.3, places = { "cafe", "restaurant", "bar", "shop", "supermarket" },
+                 start = { 17.5, 18.5 }, finish = { 21.5, 23.0 }, nights = 0.6, reach = 1500 },
   },
   -- no job: a day out instead (the park, a cafe, the shops, round the block). A child is never out at night alone.
   child = {
