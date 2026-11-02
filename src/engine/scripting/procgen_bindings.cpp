@@ -620,19 +620,9 @@ ArchetypeBook makeArchetypeBook(ScriptVM& vm, const std::string& code,
         if (entries.empty())
             return fail("archetype_book." + dname + ": empty table — omit the "
                         "district to keep its compiled ladder");
-        // Cumulative thresholds as runningSum/total: for k/100-style weights
-        // this reproduces the compiled ladders' literals to the exact double,
-        // which is what makes a default-weight book bit-identical.
-        double total = 0;
-        for (const auto& e : entries) total += e.second;
-        auto& tbl = book.tables[static_cast<std::size_t>(tag)];
-        double run = 0;
-        for (const auto& e : entries) {
-            run += e.second;
-            tbl.push_back({static_cast<Real>(run / total), e.first});
-        }
-        tbl.back().first = Real(1);   // guard the float tail: the last entry
-                                      // owns everything up to roll = 1
+        // Cumulative thresholds as runningSum/total (archetypeThresholds): for k/100-style weights this reproduces the
+        // compiled ladders' literals to the exact double, which is what makes a default-weight book bit-identical.
+        archetypeThresholds(entries, book.tables[static_cast<std::size_t>(tag)]);
         lua_pop(L, 1);   // value; key stays for lua_next
     }
     lua_pop(L, 1);       // the book table

@@ -69,6 +69,7 @@ TEST_CASE(a_link_leaving_along_a_street_is_passed_over) {
 // district finds its kind, and a catalog with a bad naming, a bad radius or a kind twice is refused.
 #ifdef RT_ENABLE_SCRIPTING
 #include "../src/engine/scripting/settlements_lua.h"
+#include "../src/engine/procgen/city/architect.h"
 #include "../src/engine/scripting/script_vm.h"
 #include <fstream>
 #include <sstream>
@@ -102,6 +103,14 @@ TEST_CASE(settlements_lua_is_the_built_in_kinds) {
         if (e.find(why) == std::string::npos) std::printf("    `%s` refused with: %s\n", edit.c_str(), e.c_str());
         CHECK(e.find(why) != std::string::npos);
     };
+    // every recipe a kind's mixes name is the architect's (the level would reject the whole mix)
+    for (const engine::SettlementKind& k : lua.kinds)
+        for (const auto& [d, es] : k.mixes)
+            for (const auto& [r, wt] : es) {
+                if (engine::architectRecipeIndex(r) < 0) std::printf("    %s mixes.%s: no recipe `%s`\n", k.name.c_str(), d.c_str(), r.c_str());
+                CHECK(engine::architectRecipeIndex(r) >= 0 && wt > 0);
+            }
+    CHECK(!lua.of("beach town").mixes.empty() && lua.of("beach town").strip);
     refused("settlements.town.naming = 'moon'", "naming");
     refused("settlements.city.radius = { 1.6, 900, 600 }", "radius");
     refused("settlements.order = { 'city', 'town', 'city' }", "twice");

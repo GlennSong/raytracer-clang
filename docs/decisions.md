@@ -14251,3 +14251,40 @@ places: the island planner, the road signs and `city_plan`.
 - A limit sign's legend carries its title (`title`: the kind's limitSign); a legend without one reads as before.
 - PROOF: island 8 planned again from island_8_nature with `--keep-sites`. Its report and all eight briefs are byte
   for byte the baseline's, and so are its signs, but for the limit signs' new title (9 signs; the map's hover text).
+
+## ADR-0301 — Beach towns: strips grown from a coast road, a seafront line hub, a town's own mixes
+
+Steps 2b-4 of the beach-town plan (~/.claude/plans/beach-town.md). Glenn, 2026-11-01: "A beach town with shops and
+nearby homes"; "a coastal road between cities ... where the beach towns grow out of ... a scenic route"; he picked
+three of the candidate shores (A, C, D).
+
+**Decision.**
+- THE COAST ROAD (planCoastRoad): a road of kind "coast" from a coastal place's limits to the next along the shore.
+  It follows a guide line 150 m behind the shoreline, waypoint to waypoint, routed in a band 60-700 m from the sea,
+  out of the towns. It is drawn on the map, written to the lanes scene as the other country roads are (class
+  "mountain", lookouts), and joined to the towns' streets at its ends.
+- THE BEACH TOWN (addBeachTown; settlements.lua kind "beach town", a STRIP): the coast road through the beach. Its
+  middle 900 m is the town's SPINE, and the town is appended as the last site, so every other place keeps its seed
+  and the freeway its route. The road becomes its two legs. The planner (world.strip) lays the town along the spine:
+  - the seafront an arterial;
+  - three rows behind it, 85 m apart, following its curve;
+  - cross streets every 100 m, every third a collector;
+  - limits the strip's outline, 30 m over the sea side.
+  Its land floor is 0.5 m (the seafront runs low beside the sand).
+- `city_plan island-cities ... --beach-towns ACD` adds them off the candidates. A level's own beach-town hubs
+  (`settlement`) are grown again from their coast road on --keep-sites, not re-sited inland.
+- A LINE HUB (DistrictMap::hubLines, hubRadii): a hub may be a line with its own reach. A strip town's hub is its
+  seafront at 60 m, so the seafront row is commercial and the rest residential. Point hubs zone exactly as before.
+- A TOWN'S OWN MIXES (LotParams::hubBooks; the hub's `mixes`, {district: [[recipe, weight]]}): archetype tables for
+  the lots whose nearest hub it is, in place of the district ladders. Any other place keeps the level's book or the
+  compiled ladders. An unknown recipe rejects that mix, loudly. The beach town's mixes:
+  - seafront: mixed use, brick shops, cafes, corner shops, a small hotel, terrace condos and walk-ups;
+  - behind: cottages, villas, modern houses, bungalows, duplexes, garden condos and walk-ups.
+  The thresholds come from one helper (archetypeThresholds), shared with the Lua book.
+
+Deerhaven (window level island_8_beach): 178 buildings, none over 8 storeys, 746 dwellings.
+- Seafront: 20 mixed use, 13 cafes, 11 small hotels, 9 corner shops, 8 brick shops.
+- Behind: 15 villas, 15 cottages, 11 bungalows, 10 duplexes, and walk-ups and condos.
+
+Owed: the landmark quotas put a hospital, police and a university in a beach town (a kind's landmarks are not data
+yet); a few cross streets end in stubs past the last row; the north leg crosses Saltwood's outer loop at grade.

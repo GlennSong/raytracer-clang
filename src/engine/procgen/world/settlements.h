@@ -11,7 +11,9 @@
 // Authored in assets/scripts/settlements.lua (scripting/settlements_lua.h reads it); defaultSettlements is the same
 // catalog in C++ (a test keeps the two describing identically).
 
+#include <map>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace engine {
@@ -46,6 +48,11 @@ struct SettlementKind {
     bool strip = false;
     double stripLength = 900.0, stripRow = 85.0, stripCross = 100.0, stripSea = 30.0;
     int stripRows = 3;
+    // ITS DISTRICTS (a strip town's hub is its seafront LINE): commercial within `hubReach` m of it, residential
+    // behind; and its own MIXES, {district: [{recipe, weight}]}, in place of the district ladders (the level's hub
+    // carries them: level_params.cpp)
+    double hubReach = 0.0;
+    std::map<std::string, std::vector<std::pair<std::string, double>>> mixes;
     // THE MAP: its circle's colour, its dot (px) and its label (m)
     float rgb[3] = {0.95f, 0.45f, 0.05f};
     double dot = 5.0, label = 150.0;

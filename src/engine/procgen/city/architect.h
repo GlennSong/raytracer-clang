@@ -44,7 +44,14 @@ struct DistrictMap {
     // (0 financial, 1 commercial, 2 residential, 3 oldtown, 4 industrial).
     std::vector<std::pair<Vec2, int>> hubs;
     Real hubRadius = 220.0;     // a hub's flavor reach before Residential wins
+    // A hub may be a LINE (a beach town's seafront; ~/.claude/plans/beach-town.md) -- distance to it is to the line --
+    // and may have its own reach (0: hubRadius). Index-aligned with hubs; shorter: the rest are points of hubRadius.
+    std::vector<std::vector<Vec2>> hubLines;
+    std::vector<Real> hubRadii;
     DistrictTag tagAt(const Vec2& p) const;
+    // The hub nearest p (by hubDistance), -1 with none.
+    int nearestHub(const Vec2& p) const;
+    Real hubDistance(std::size_t i, const Vec2& p) const;
 };
 
 // What the architect hands back for one lot: a fully-populated grammar recipe,
@@ -179,6 +186,11 @@ struct ArchetypeBook {
         return true;
     }
 };
+
+// A book table from {registry index, weight} entries: ascending cumulative thresholds runningSum/total (for k/100-style
+// weights the compiled ladders' literals to the exact double), the last owning everything up to 1. The Lua book and a
+// level's hub mixes both build them so.
+void archetypeThresholds(const std::vector<std::pair<int, double>>& entries, std::vector<std::pair<Real, int>>& table);
 
 // The recipe REGISTRY: every recipe the architect can produce, rolled and
 // landmark alike, by its out.name string. Index is stable within a build.

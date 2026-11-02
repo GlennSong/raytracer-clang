@@ -465,6 +465,43 @@ void readLotGrowParams(const json& cityJson, LotParams& lots) {
                                      ? hj.value("kind", 2)
                                      : kindOf(hj.value("kind", std::string("residential")));
                 lots.hubs.push_back({at, kind});
+                // A LINE hub (a beach town's seafront), its own reach and its own MIXES -- {district: [[recipe, weight]]},
+                // the archetype book's tables for the lots it is nearest (~/.claude/plans/beach-town.md)
+                {
+                    const std::size_t hi = lots.hubs.size() - 1;
+                    std::vector<Vec2> line;
+                    if (hj.contains("line") && hj["line"].is_array())
+                        for (const auto& q : hj["line"])
+                            if (q.is_array() && q.size() >= 2) line.push_back(Vec2(q[0].get<double>(), q[1].get<double>()));
+                    const Real reach = hj.value("radius", 0.0);
+                    ArchetypeBook hb;
+                    if (hj.contains("mixes") && hj["mixes"].is_object())
+                        for (const auto& [dname, entries] : hj["mixes"].items()) {
+                            const int tag = kindOf(dname);
+                            std::vector<std::pair<int, double>> es;
+                            bool ok = entries.is_array() && (dname == "residential" || tag != 2);
+                            for (const auto& e : entries.is_array() ? entries : nlohmann::json::array()) {
+                                const int ri = e.is_array() && e.size() >= 2 ? architectRecipeIndex(e[0].get<std::string>()) : -1;
+                                const double wgt = e.is_array() && e.size() >= 2 && e[1].is_number() ? e[1].get<double>() : 0.0;
+                                if (ri < 0 || !(wgt > 0)) { ok = false; break; }
+                                es.push_back({ri, wgt});
+                            }
+                            if (!ok || es.empty()) {   // never half a mix, never silently
+                                LOG_ERROR << "[districts] hub " << hj.value("_place", std::string("?")) << ": mix '" << dname
+                                          << "' REJECTED (an unknown district or recipe, or a weight <= 0)";
+                                continue;
+                            }
+                            archetypeThresholds(es, hb.tables[static_cast<std::size_t>(tag)]);
+                        }
+                    if (!line.empty() || reach > 0 || !hb.empty()) {
+                        lots.hubLines.resize(hi + 1);
+                        lots.hubRadii.resize(hi + 1, 0.0);
+                        lots.hubBooks.resize(hi + 1);
+                        lots.hubLines[hi] = line;
+                        lots.hubRadii[hi] = reach;
+                        lots.hubBooks[hi] = hb;
+                    }
+                }
                 // Coreness (height grading, landmark quotas) measures from `center`:
                 // the first financial hub is downtown, else the first hub at all.
                 if (!haveCore && (kind == 0 || lots.hubs.size() == 1)) {

@@ -1825,6 +1825,47 @@ const char* districtName(DistrictTag t) {
     return "?";
 }
 
+namespace {
+// The squared distance from p to hub i: to its point, or to its line (a seafront)
+Real hubDist2(const DistrictMap& m, std::size_t i, const Vec2& p) {
+    if (i < m.hubLines.size() && m.hubLines[i].size() >= 2) {
+        const std::vector<Vec2>& L = m.hubLines[i];
+        Real best = 1e30;
+        for (std::size_t k = 0; k + 1 < L.size(); ++k) {
+            const Vec2 ab = L[k + 1] - L[k];
+            const Real t = std::clamp(dot(p - L[k], ab) / std::max(Real(1e-12), dot(ab, ab)), Real(0), Real(1));
+            best = std::min(best, (L[k] + ab * t - p).lengthSquared());
+        }
+        return best;
+    }
+    return (p - m.hubs[i].first).lengthSquared();
+}
+}  // namespace
+
+int DistrictMap::nearestHub(const Vec2& p) const {
+    int best = -1;
+    Real bd = 1e30;
+    for (std::size_t i = 0; i < hubs.size(); ++i) {
+        const Real dd = hubDist2(*this, i, p);
+        if (dd < bd) { bd = dd; best = static_cast<int>(i); }
+    }
+    return best;
+}
+
+Real DistrictMap::hubDistance(std::size_t i, const Vec2& p) const { return std::sqrt(hubDist2(*this, i, p)); }
+
+void archetypeThresholds(const std::vector<std::pair<int, double>>& entries, std::vector<std::pair<Real, int>>& tbl) {
+    tbl.clear();
+    double total = 0;
+    for (const auto& e : entries) total += e.second;
+    double run = 0;
+    for (const auto& e : entries) {
+        run += e.second;
+        tbl.push_back({static_cast<Real>(run / total), e.first});
+    }
+    if (!tbl.empty()) tbl.back().first = Real(1);   // guard the float tail: the last entry owns everything up to roll = 1
+}
+
 DistrictTag DistrictMap::tagAt(const Vec2& p) const {
     // Polycentric geography (metropolis): zone by the NEAREST hub. The centre
     // hub (kind 0) keeps the radial reading below; a flavored hub holds its
@@ -1834,15 +1875,16 @@ DistrictTag DistrictMap::tagAt(const Vec2& p) const {
         std::size_t best = 0;
         Real bd = 1e30;
         for (std::size_t i = 0; i < hubs.size(); ++i) {
-            const Real dd = (p - hubs[i].first).lengthSquared();
+            const Real dd = hubDist2(*this, i, p);
             if (dd < bd) { bd = dd; best = i; }
         }
         const int kind = hubs[best].second;
         if (kind > 0) {
             const Real r = std::sqrt(bd);
-            if (r < hubRadius)
+            const Real reach = best < hubRadii.size() && hubRadii[best] > 0 ? hubRadii[best] : hubRadius;
+            if (r < reach)
                 return static_cast<DistrictTag>(std::min(kind, 4));
-            if (r < hubRadius * 1.35 && kind != 2)
+            if (r < reach * 1.35 && kind != 2)
                 return DistrictTag::Commercial;
             return DistrictTag::Residential;
         }

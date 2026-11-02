@@ -213,6 +213,12 @@ struct LotParams {
     // DistrictMap::hubs (kind mirrors DistrictTag order). Empty = radial rings.
     std::vector<std::pair<Vec2, int>> hubs;
     Real hubRadius = 220.0;
+    // Per hub (index-aligned; shorter: the rest are points of hubRadius with the level's mixes): its LINE (a beach town's
+    // seafront), its own reach, and its own MIXES -- an archetype book whose tables replace the ladders for lots it
+    // is the nearest hub of (~/.claude/plans/beach-town.md)
+    std::vector<std::vector<Vec2>> hubLines;
+    std::vector<Real> hubRadii;
+    std::vector<ArchetypeBook> hubBooks;
     // Finest RENDERED terrain cell (leaf CDLOD node size / gridRes). When set,
     // walkway sculptors sample the ground through the tile's own bilinear
     // interpolation on this grid instead of the ideal analytic function — so

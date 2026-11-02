@@ -85,6 +85,29 @@ bool loadSettlementCatalog(ScriptVM& vm, SettlementCatalog& out, std::string* er
             k.stripSea = numField(L, sp, "sea", k.stripSea);
         }
         lua_pop(L, 1);   // strip
+        k.hubReach = numField(L, t, "hub_reach", k.hubReach);
+        lua_getfield(L, t, "mixes");   // { <district> = { { "recipe", weight }, ... } }, in the district order below
+        if (lua_istable(L, -1)) {
+            const int mx = lua_gettop(L);
+            for (const char* d : {"financial", "commercial", "residential", "oldtown", "industrial"}) {
+                lua_getfield(L, mx, d);
+                if (lua_istable(L, -1)) {
+                    const lua_Integer n = luaL_len(L, -1);
+                    std::vector<std::pair<std::string, double>> es;
+                    for (lua_Integer i = 1; i <= n; ++i) {
+                        lua_rawgeti(L, -1, i);
+                        lua_rawgeti(L, -1, 1);
+                        lua_rawgeti(L, -2, 2);
+                        if (!lua_isstring(L, -2) || !lua_isnumber(L, -1)) return bail(name + ".mixes." + d + ": { \"recipe\", weight } pairs");
+                        es.push_back({lua_tostring(L, -2), lua_tonumber(L, -1)});
+                        lua_pop(L, 3);
+                    }
+                    k.mixes[d] = std::move(es);
+                }
+                lua_pop(L, 1);
+            }
+        }
+        lua_pop(L, 1);   // mixes
         lua_getfield(L, t, "map");
         if (lua_istable(L, -1)) {
             const int m = lua_gettop(L);

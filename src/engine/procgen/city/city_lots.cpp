@@ -3104,6 +3104,8 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
     districts.innerRadius = p.innerRadius;
     districts.midRadius = p.midRadius;
     districts.hubs = p.hubs;
+    districts.hubLines = p.hubLines;
+    districts.hubRadii = p.hubRadii;
     districts.hubRadius = p.hubRadius;
     districts.seed = p.seed;
     // Stage-10 ALLEYS live in their own small graph BESIDE the (const) sampled
@@ -5420,6 +5422,15 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
             // cluster from it. sqrt widens the peak so the cluster is a
             // CLUSTER, not one tall building at the exact centre.
             const Real coreness = tag == DistrictTag::Residential ? suburbAt(b.site) : corenessAt(b.site);
+            // THE MIX: the nearest hub's own, when it has one for this district (a beach town's seafront, its homes);
+            // else the level's archetype book; else the compiled ladder
+            const ArchetypeBook* book = p.archetypeBook.empty() ? nullptr : &p.archetypeBook;
+            if (!p.hubBooks.empty()) {
+                const int h = districts.nearestHub(b.site);
+                if (h >= 0 && static_cast<std::size_t>(h) < p.hubBooks.size() &&
+                    !p.hubBooks[static_cast<std::size_t>(h)].tables[static_cast<std::size_t>(tag)].empty())
+                    book = &p.hubBooks[static_cast<std::size_t>(h)];
+            }
             BuildingRecipe rec =
                 lot.bigBox && lot.mallWings ? architectMallWings(mix(pp.seed, static_cast<uint32_t>(li) * 7u + 3u)) :
                 lot.bigBox && lot.mall ? architectMall(mix(pp.seed, static_cast<uint32_t>(li) * 7u + 3u)) :
@@ -5439,9 +5450,7 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                     : architectPick(tag, shortSide, area(site),
                                     mix(pp.seed,
                                         static_cast<uint32_t>(li) * 7u + 3u),
-                                    coreness,
-                                    p.archetypeBook.empty() ? nullptr
-                                                            : &p.archetypeBook);
+                                    coreness, book);
             // ONE SPACING RULE FOR EVERY MALL (ADR-0271): a whole-block landmark that rolls the mall complex within
             // kMallSpacing of another mall rolls again -- a complex stood beside a box mall -- and one that stands
             // keeps the next one away
@@ -5449,8 +5458,7 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                                      cand.landmark < 0 && lot.wholeBlock && !lot.bigBox && mallNear(b.site); ++again)
                 rec = architectBlockLandmark(tag, shortSide, area(site), mix(pp.seed, static_cast<uint32_t>(li) * 7u + 3u + 0x6d61u * again), coreness);
             if (rec.complex.kind == BuildingRecipe::ComplexSpec::Kind::Mall && mallNear(b.site))   // (four rolls a mall: the street's own)
-                rec = architectPick(tag, shortSide, area(site), mix(pp.seed, static_cast<uint32_t>(li) * 7u + 3u), coreness,
-                                    p.archetypeBook.empty() ? nullptr : &p.archetypeBook);
+                rec = architectPick(tag, shortSide, area(site), mix(pp.seed, static_cast<uint32_t>(li) * 7u + 3u), coreness, book);
             // A LAB'S NAMED RECIPE (LotParams::recipe, citysim.recipe): the architect's own recipe by name on this
             // lot, grown as a lineup grows it (its dice, the slenderness cap on this plan), at the lot's coreness
             // or the one the level asks for. A sculpted site (a store, a depot, a campus, a paseo) keeps its own.

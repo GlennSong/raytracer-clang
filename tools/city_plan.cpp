@@ -493,6 +493,20 @@ int main(int argc, char** argv) {
                 nlohmann::json hub = {{"_place", w.sites[k].name}, {"at", {w.centres[k].x, w.centres[k].y}}, {"kind", sk.hub}};
                 const engine::SettlementKind* first = w.kinds.forHub(sk.hub);
                 if (!first || first->name != sk.name) hub["settlement"] = sk.name;
+                // a STRIP town's centre is its seafront: a line hub of its reach, with the kind's own mixes
+                if (sk.strip && w.sites[k].spine.size() >= 2) {
+                    nlohmann::json line = nlohmann::json::array();
+                    for (const engine::Vec2& q : w.sites[k].spine) line.push_back({q.x, q.y});
+                    hub["line"] = line;
+                    if (sk.hubReach > 0) hub["radius"] = sk.hubReach;
+                    nlohmann::json mixes = nlohmann::json::object();
+                    for (const auto& [d, es] : sk.mixes) {
+                        nlohmann::json arr = nlohmann::json::array();
+                        for (const auto& [r, wt] : es) arr.push_back({r, wt});
+                        mixes[d] = arr;
+                    }
+                    if (!mixes.empty()) hub["mixes"] = mixes;
+                }
                 hubs.push_back(hub);
             }
             if (!level.contains("citysim")) level["citysim"] = nlohmann::json::object();

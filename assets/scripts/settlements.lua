@@ -23,6 +23,8 @@
 --   strip = { length, rows, row, cross, sea }   a STRIP town, laid along the road it grew from (a beach town along
 --                                       its coast road): `length` m of it is the seafront street, `rows` streets behind
 --                                       it every `row` m inland, cross streets every `cross` m, its limits `sea` m out
+--   hub_reach = m                         (a strip town) its centre is its seafront LINE: commercial within this of it
+--   mixes = { <district> = { { "recipe", weight }, ... } }   its own building mixes in place of the district ladders
 --   map = { rgb = { r, g, b }, dot = px, label = m }
 -- }
 
@@ -85,6 +87,15 @@ settlements = {
     naming = "town",
     brief = { prefix = "beach_town_" },
     strip = { length = 900, rows = 3, row = 85, cross = 100, sea = 30 },
+    hub_reach = 60,   -- the seafront's row of blocks
+    -- shops, cafes, flats over shops and a small hotel on the seafront; cottages, villas and garden flats behind
+    mixes = {
+      commercial = { { "mixed_use", 28 }, { "brick_shop", 18 }, { "oldtown_cafe", 12 }, { "corner_shop", 8 }, { "hotel", 10 },
+                     { "terrace_condo", 8 }, { "walkup_homes", 6 }, { "supermarket", 4 }, { "plaza", 3 }, { "pocket_park", 3 } },
+      residential = { { "cottage", 14 }, { "villa", 12 }, { "modern_house", 12 }, { "bungalow", 10 }, { "duplex", 8 },
+                      { "yard_house", 8 }, { "garden_condo", 12 }, { "walkup_homes", 8 }, { "terrace_condo", 6 },
+                      { "rowhouses", 6 }, { "pocket_park", 4 } },
+    },
     map = { rgb = { 0.10, 0.62, 0.68 } },
   },
 }

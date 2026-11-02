@@ -50,7 +50,13 @@ std::string SettlementCatalog::describe() const {
           << " " << k.areaScale << "/" << k.sizeMin << "/" << k.spokeSpacing << " core=" << k.coreBlock[0] << "x" << k.coreBlock[1]
           << " midtown=" << k.midtownBlock[0] << "x" << k.midtownBlock[1] << " warp=" << k.warp << " rings=" << k.ringSpacing
           << " spokes=" << k.spokes << " strip=" << k.strip << "/" << k.stripLength << "/" << k.stripRows << "x" << k.stripRow << "/"
-          << k.stripCross << "/" << k.stripSea << " map=" << k.rgb[0] << "," << k.rgb[1] << "," << k.rgb[2] << "/" << k.dot << "/" << k.label << "\n";
+          << k.stripCross << "/" << k.stripSea << " reach=" << k.hubReach << " mixes=";
+        for (const auto& [d, es] : k.mixes) {
+            o << d << "{";
+            for (const auto& [r, wt] : es) o << r << ":" << wt << ",";
+            o << "}";
+        }
+        o << " map=" << k.rgb[0] << "," << k.rgb[1] << "," << k.rgb[2] << "/" << k.dot << "/" << k.label << "\n";
     }
     return o.str();
 }
@@ -107,6 +113,13 @@ SettlementCatalog defaultSettlements() {
     bt.busRoutes = 1; bt.busStops = 6;
     bt.briefPrefix = "beach_town_";
     bt.strip = true;
+    bt.hubReach = 60.0;   // the seafront's row of blocks
+    // shops, cafes, flats over shops and a small hotel on the seafront; cottages, villas and garden flats behind
+    bt.mixes["commercial"] = {{"mixed_use", 28}, {"brick_shop", 18}, {"oldtown_cafe", 12}, {"corner_shop", 8}, {"hotel", 10},
+                              {"terrace_condo", 8}, {"walkup_homes", 6}, {"supermarket", 4}, {"plaza", 3}, {"pocket_park", 3}};
+    bt.mixes["residential"] = {{"cottage", 14}, {"villa", 12}, {"modern_house", 12}, {"bungalow", 10}, {"duplex", 8},
+                               {"yard_house", 8}, {"garden_condo", 12}, {"walkup_homes", 8}, {"terrace_condo", 6},
+                               {"rowhouses", 6}, {"pocket_park", 4}};
     bt.rgb[0] = 0.10f; bt.rgb[1] = 0.62f; bt.rgb[2] = 0.68f;
     c.kinds.push_back(bt);
     return c;
