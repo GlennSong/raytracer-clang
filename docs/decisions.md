@@ -14206,3 +14206,25 @@ C++ (`kRoleCommuter`... and `builtinRolesLead`). Dice made about one in five a s
 
 metro_v2_test: 3,430 dwellings before ADR-0296 and this; 4,163 with the flats over shops; 8,970 now. Its streets'
 10,516 people are all housed.
+
+## ADR-0299 — Courtyard blocks uncapped; whole blocks of homes rise
+
+Glenn, 2026-11-01: "some of the buildings that take up a whole block are sometimes just a few stories high. Could
+those be converted to a taller skyscraper?"
+
+**Found.**
+- The courtyard block's slenderness of 1.2 was meant for its 15 m wings. But capFloors reads the LOT's short side,
+  so on a 12-16 m lot, where no court fits and it grows as a plan building, it was held to 4-5 storeys whatever it
+  drew. The island's courtyard blocks averaged 4.0-4.3 storeys.
+- On island_8_nature, only downtown (financial) blocks become whole-block buildings. The 16 large blocks elsewhere
+  are skipped for their slope. Downtown's whole blocks are towers already; the big low ones are the capitol, the
+  courthouse and parking garages, all deliberate.
+
+**Decision.**
+- The courtyard block's slenderness is 2.2. The island's courtyard blocks now average 6.7 storeys (commercial) and
+  7.4 (residential); 108,583 dwellings, up from 104,522.
+- A whole-block landmark (architectBlockLandmark) on its own dice: in a residential quarter at suburb coreness 0.5
+  or more (45%), or in a commercial one (25%), a residential condo tower in its plaza. It has 12-18 storeys, plus up
+  to 8 by coreness. Neither island_8_nature nor metro_v2_test has such a block today; it serves levels that do.
+- The housing audit lists the big low buildings (footprint 2,500 m² or more, under ten storeys).
+- Lots tag 2026-11-01.2.

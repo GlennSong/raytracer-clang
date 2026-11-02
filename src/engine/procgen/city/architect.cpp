@@ -800,7 +800,9 @@ void recipeCourtyardBlock(BuildingRecipe& out, ProcRng& rng, RecipeCtx& cx) {
     out.complex.depth = rng.in(14.5, 16.5);
     p.setbackFloors = 0;
     p.setbackEvery = 0;
-    cx.slender = 1.2;
+    // (1.2 was the wings' own slenderness, but the cap reads the LOT's short side: on a 12-16 m lot where no court
+    // fits, it held the block to 4-5 storeys whatever it drew -- the island's courtyard blocks averaged 4.3)
+    cx.slender = 2.2;
     out.placeType = "home";
     masonryDepth(p, 0.1, {{1, 70}, {2, 30}});
     out.name = "courtyard_block";
@@ -1895,6 +1897,23 @@ BuildingRecipe architectBlockLandmark(DistrictTag tag, Real shortSide, Real area
     cx.area = area;
     cx.coreness = std::max(coreness, Real(0.4));
     cx.roomy = true;
+    // A WHOLE BLOCK OF HOMES RISES (Glenn, 2026-11-01: "some of the buildings that take up a whole block are sometimes
+    // just a few stories high. Could those be converted to a taller skyscraper?"): toward the town (a residential
+    // quarter's coreness is its suburb gradient) and in a quarter of midtown's blocks, a residential tower standing in
+    // its plaza -- 12-18 storeys, up to 8 more where it is most central. Its own dice, so the ladder's roll is as it was.
+    {
+        ProcRng tw(seed * 0x9E3779B9u ^ 0x7a11u);
+        const Real towerShare = tag == DistrictTag::Residential ? (coreness >= 0.5 ? 0.45 : 0.0)
+                              : tag == DistrictTag::Commercial ? 0.25 : 0.0;
+        if (tw.next() < towerShare) {
+            recipeCondoTower(out, rng, cx);
+            out.params.floors = tw.between(12, 18) + static_cast<int>(coreness * 8.0);
+            out.massing = BuildingRecipe::Massing::TowerInPlaza;   // falls back to the block plan when too shallow
+            cx.slender = std::max(cx.slender, Real(5.0));
+            capFloors(out, shortSide, cx.slender);
+            return out;
+        }
+    }
     switch (tag) {
         case DistrictTag::Financial:
         case DistrictTag::Commercial: {

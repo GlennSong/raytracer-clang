@@ -4214,6 +4214,25 @@ TEST_CASE(housing_audit_prints) {
             }
         }
     });
+    {   // THE BIG LOW ONES (Glenn: "some of the buildings that take up a whole block are sometimes just a few stories
+        // high"): footprints of a block's size under ten storeys, the largest first
+        struct Big { double a; int storeys; std::string what; Vec2 at; };
+        std::vector<Big> big;
+        world.each<CityBuildings>([&](Entity, CityBuildings& cb) {
+            for (const BuildingRecord& r : cb.records)
+                if (r.plan.size() >= 3 && area(r.plan) >= 2500.0 && r.params.floors + 1 < 10)
+                    big.push_back({area(r.plan), r.params.floors + 1, r.district + " " + r.recipe + " (" + r.type + ")", centroid(r.plan)});
+        });
+        std::sort(big.begin(), big.end(), [](const Big& x, const Big& y) { return x.a > y.a; });
+        std::map<std::string, std::pair<int, double>> kinds;
+        for (const Big& b : big) { ++kinds[b.what].first; kinds[b.what].second += b.a; }
+        std::printf("    [housing] big and low (footprint >= 2500 m2, under 10 storeys): %zu\n", big.size());
+        for (const auto& [what, nk] : kinds)
+            std::printf("    [housing]   %-46s %4d, mean footprint %6.0f m2\n", what.c_str(), nk.first, nk.second / nk.first);
+        for (std::size_t k = 0; k < big.size() && k < 12; ++k)
+            std::printf("    [housing]   the %2zu. largest: %-40s %6.0f m2, %d storeys at (%.0f, %.0f)\n", k + 1, big[k].what.c_str(), big[k].a,
+                        big[k].storeys, big[k].at.x, big[k].at.y);
+    }
     int counted = 0, uncounted = 0;
     double homeM2 = 0, allM2 = 0;
     for (const auto& [district, recipes] : by) {
