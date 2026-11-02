@@ -2181,10 +2181,58 @@ static std::vector<CityRecipeKit> cityRecipeKits(const std::string& recipe, cons
 }
 #endif
 
+// A BEACH TOWN'S SAND (and the town behind it): a coarse mask, `reach` m round each of the level's line hubs (a beach
+// town's seafront) -- where the wild ground's scatter keeps off: the forest's trees and rocks, the stones clutter.
+// Glenn: "people actually hanging out on the beach" -- a town's beach is sand to lie on, not a boulder field.
+struct TownBeachMask {
+    double x0 = 0, z0 = 0, cell = 10.0;
+    int nx = 0, nz = 0;
+    std::vector<char> on;
+    bool covers(double x, double z) const {
+        const int i = static_cast<int>(std::floor((x - x0) / cell)), j = static_cast<int>(std::floor((z - z0) / cell));
+        return i >= 0 && j >= 0 && i < nx && j < nz && on[static_cast<std::size_t>(j) * nx + i];
+    }
+};
+static std::shared_ptr<const TownBeachMask> townBeachMask(const json& root, double reach = 400.0) {
+    std::vector<std::vector<engine::Vec2>> lines;
+    if (root.contains("citysim") && root["citysim"].contains("districts") && root["citysim"]["districts"].contains("hubs"))
+        for (const auto& hj : root["citysim"]["districts"]["hubs"])
+            if (hj.contains("line") && hj["line"].is_array() && hj["line"].size() >= 2) {
+                std::vector<engine::Vec2> L;
+                for (const auto& q : hj["line"]) L.push_back(engine::Vec2(q[0].get<double>(), q[1].get<double>()));
+                lines.push_back(std::move(L));
+            }
+    if (lines.empty()) return nullptr;
+    auto m = std::make_shared<TownBeachMask>();
+    double x1 = -1e30, z1 = -1e30;
+    m->x0 = m->z0 = 1e30;
+    for (const auto& L : lines)
+        for (const engine::Vec2& v : L) { m->x0 = std::min(m->x0, (double)v.x - reach); m->z0 = std::min(m->z0, (double)v.y - reach); x1 = std::max(x1, (double)v.x + reach); z1 = std::max(z1, (double)v.y + reach); }
+    m->nx = static_cast<int>(std::ceil((x1 - m->x0) / m->cell)) + 1;
+    m->nz = static_cast<int>(std::ceil((z1 - m->z0) / m->cell)) + 1;
+    m->on.assign(static_cast<std::size_t>(m->nx) * m->nz, 0);
+    const int r = static_cast<int>(std::ceil(reach / m->cell));
+    for (const auto& L : lines)
+        for (std::size_t k = 0; k + 1 < L.size(); ++k) {
+            const engine::Vec2 a = L[k], ab = L[k + 1] - L[k];
+            const int ci = static_cast<int>((a.x - m->x0) / m->cell), cj = static_cast<int>((a.y - m->z0) / m->cell);
+            const int extra = static_cast<int>(std::ceil(ab.length() / m->cell));
+            for (int j = std::max(0, cj - r - extra); j <= std::min(m->nz - 1, cj + r + extra); ++j)
+                for (int i = std::max(0, ci - r - extra); i <= std::min(m->nx - 1, ci + r + extra); ++i) {
+                    const engine::Vec2 q(m->x0 + (i + 0.5) * m->cell, m->z0 + (j + 0.5) * m->cell);
+                    const double t = std::clamp(engine::dot(q - a, ab) / std::max(1e-12, engine::dot(ab, ab)), 0.0, 1.0);
+                    if ((a + ab * t - q).length() < reach) m->on[static_cast<std::size_t>(j) * m->nx + i] = 1;
+                }
+        }
+    return m;
+}
+
+// `townBeaches` (townBeachMask): a beach town's sand and streets, where the forest and its rocks keep off
 static void loadForest(const json& fj, const TerrainParams& terrain, const Noise& terrainNoise, World& world,
                        Renderer& renderer, AssetManager& assets, double placeDilate,
                        std::function<double(double, double)> drawnGround,
-                       const std::vector<engine::Poly2>* sealedLots = nullptr) {
+                       const std::vector<engine::Poly2>* sealedLots = nullptr,
+                       const TownBeachMask* townBeaches = nullptr) {
     RT_PROFILE_ZONE_NAMED("loadForest");
     const auto t0 = std::chrono::steady_clock::now();
     const ForestParams fp = forestFromJson(fj);
@@ -2481,9 +2529,11 @@ static void loadForest(const json& fj, const TerrainParams& terrain, const Noise
         }
         return false;
     };
+    auto nearTownBeach = [&](double x, double z) { return townBeaches && townBeaches->covers(x, z); };
     auto exclude = [&](double x, double z) {
         if (terrain.hydro && terrain.hydro->isWet(x, z, 2.0)) return true;
         if (onSealedLot(x, z)) return true;
+        if (nearTownBeach(x, z)) return true;
         if (trails && trails->distance(x, z, 3.0) < 2.5) return true;   // the trails stay open (ADR-0134)
         for (const RoadDeckField* d : decks) if (d->coversAny(x, z, margin)) return true;
         if (drawnRoad.near(x, z, margin)) return true;
@@ -2662,6 +2712,7 @@ static void loadForest(const json& fj, const TerrainParams& terrain, const Noise
         std::function<double(double, double, double)> shoreAt;
         if (terrain.hydro) shoreAt = [h = terrain.hydro](double x, double z, double y) { return h->isWet(x, z, 0.0) ? 0.0 : h->shore(x, z, y); };
         auto excludeDry = [&](double x, double z) {
+            if (nearTownBeach(x, z)) return true;   // (the shore layer too: a town's beach is sand)
             if (trails && trails->distance(x, z, 3.0) < 1.5) return true;
             for (const RoadDeckField* d : decks) if (d->coversAny(x, z, margin)) return true;
             if (drawnRoad.near(x, z, margin)) return true;
@@ -4871,7 +4922,10 @@ bool LevelLoader::load(const std::string& path,
             // FORESTS (ADR-0129): real trees near, impostors far, placed by the ground's maps
             // (it lives in the terrain block: the ground cover lays litter under it)
             if (root.contains("terrain") && root["terrain"].contains("forest") && root["terrain"]["forest"].is_object())
-                loadForest(root["terrain"]["forest"], tp, nz, world, renderer, assets, placeDilate, drawn, sealedLotPolys.get());
+            {
+                const std::shared_ptr<const TownBeachMask> beaches = townBeachMask(root);
+                loadForest(root["terrain"]["forest"], tp, nz, world, renderer, assets, placeDilate, drawn, sealedLotPolys.get(), beaches.get());
+            }
             // THE GRASS FIELD (flora plan): not scattered here -- GrassSystem plants it around
             // the camera, from clump meshes and the ground and density rules set up here.
             // GRASS LAYERS (ADR-0130): "grass" is the meadow; "grassLayers" adds more fields, each with a
@@ -4931,6 +4985,7 @@ bool LevelLoader::load(const std::string& path,
                         managedPads->bins[PadIndex::key(i, j)].push_back(k);
             }
             const std::shared_ptr<const PadIndex> managedRO = managedPads;
+            const std::shared_ptr<const TownBeachMask> beachRO = townBeachMask(root);   // (no stones on a town's beach)
             if (!managedPolys->empty()) LOG_INFO << "[grass] managed ground: " << managedPolys->size() << " city blocks mown";
             // A LAWN layer (where: "lawn") mows the city's parks and the campus quad short; with one, the other
             // layers keep off the parks (the meadow stood knee-deep on the quad)
@@ -4973,8 +5028,9 @@ bool LevelLoader::load(const std::string& path,
                 if (kind != 6 && !managedRO->polys.empty())
                     gf.height = [managedRO, mown](double x, double z) { return managedRO->covers(x, z) ? mown : 1.0; };
                 gf.density = [maxSlope, thin, sea, patchiness, patchScale, patches, cover, hydro, kind, shore, clumpScale, clumpCut,
-                              sealedRoads, padsRO, lawnsRO, haveLawn, managedRO](double x, double z, double y, double slopeCos) {
+                              sealedRoads, padsRO, lawnsRO, haveLawn, managedRO, beachRO](double x, double z, double y, double slopeCos) {
                     if (y < sea + 0.15) return 0.0;
+                    if (kind == 7 && beachRO && beachRO->covers(x, z)) return 0.0;   // a beach town's sand: no stones
                     // the wild layers -- tall grass, meadow flowers, clearings -- keep off the city's managed blocks
                     if ((kind == 1 || kind == 3 || kind == 4 || kind == 7 || kind == 8) && managedRO->covers(x, z)) return 0.0;
                     if (!sealedRoads->empty() && sealedRoads->near(x, z, 0.4)) return 0.0;   // the city's sealed ground
