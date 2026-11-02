@@ -21,6 +21,7 @@
 
 #include "../city/polygon.h"   // Vec2
 #include "../hydrology.h"
+#include "settlements.h"
 
 #include <nlohmann/json.hpp>
 
@@ -33,7 +34,7 @@
 namespace engine {
 
 struct IslandSite {
-    std::string kind;          // "city", "town", "mountain town"
+    std::string kind;          // its kind (settlements.lua): "city", "town", "mountain town"
     std::string name;          // place_names.h: what the signs call it
     Vec2 at;
     double radius = 0.0;       // the flat ground it has (m): a city's footprint, a town's
@@ -97,6 +98,7 @@ struct IslandWorld {
     std::vector<uint8_t> buildable;
     std::shared_ptr<const Hydrology> hydro;
     std::vector<IslandSite> sites;
+    SettlementCatalog kinds = defaultSettlements();   // what each site's kind IS (settlements.h)
     std::vector<IslandRoad> roads;
     Vec2 axis{1, 0};           // the island's long axis (the range runs along it)
     std::vector<std::vector<Vec2>> ramps;   // the interchanges' ramps (islandInterchanges), centrelines
@@ -128,8 +130,9 @@ nlohmann::json islandTerrainBlock(uint32_t seed, double half = 10000.0);
 // `keep` (optional; Glenn, 2026-10-20, re-planning the island on new ground): the places to keep -- each its name and
 // kind ("city" / "town" / "mountain town") and where it was; it is re-sited on the best flat ground within 900 m of
 // there (the new ground's), and keeps its name. No other place is added. Empty: the sites found and named afresh.
+// `kinds` (settlements.lua; none: defaultSettlements) is what each kind of place is; the plan keeps it (w.kinds).
 IslandWorld planIsland(const nlohmann::json& terrainBlock, double half = 10000.0, double cell = 20.0,
-                       const std::vector<IslandSite>& keep = {});
+                       const std::vector<IslandSite>& keep = {}, const SettlementCatalog* kinds = nullptr);
 
 // HIKING TRAILS (ADR-0134): footpaths routed on the ground (gentle where they can, switchbacking where
 // they must, never over water) from each place's TRAILHEAD -- the edge of its limits facing the range --

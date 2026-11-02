@@ -180,6 +180,7 @@ add_library(engine_core STATIC
     src/engine/procgen/city/water_mesh.cpp
     src/engine/procgen/city/terrain_route.cpp
     src/engine/procgen/world/island_world.cpp
+    src/engine/procgen/world/settlements.cpp   # the kinds of place on an island (settlements.lua)
     src/engine/procgen/city/buildability.cpp
     src/engine/procgen/city/road_spec.cpp
     # the roads module (2026-09-20): the road ENTITY and its recipe are shared
@@ -423,6 +424,7 @@ if(RT_ENABLE_SCRIPTING)
         src/engine/scripting/vehicle_spec.cpp
         src/engine/scripting/furniture_library_lua.cpp
         src/engine/scripting/tree_recipes_lua.cpp
+        src/engine/scripting/settlements_lua.cpp
         src/engine/scripting/particles_lua.cpp
     )
     target_link_libraries(engine_core PUBLIC lua_static)

@@ -14228,3 +14228,26 @@ those be converted to a taller skyscraper?"
   to 8 by coreness. Neither island_8_nature nor metro_v2_test has such a block today; it serves levels that do.
 - The housing audit lists the big low buildings (footprint 2,500 m² or more, under ten storeys).
 - Lots tag 2026-11-01.2.
+
+## ADR-0300 — The kinds of place on an island are data: settlements.lua
+
+Step 1 of the beach-town plan (~/.claude/plans/beach-town.md); AGENTS.md "Kinds Are Data": a new kind of place is a
+data edit, never a new C++ branch. Before, "city", "town" and "mountain town" were compared as strings in about 26
+places: the island planner, the road signs and `city_plan`.
+
+**Decision.**
+- `assets/scripts/settlements.lua` (procgen/world/settlements.h `SettlementCatalog`; `defaultSettlements` the same in
+  C++, kept equal by a test) says what each kind IS:
+  - its hub district and its radius rule from flat ground;
+  - its coast reach; whether the ring calls at it, the pass ends at it, or a mountain road climbs to it;
+  - its freeway diamonds, link candidates and their spacing, and its local buses;
+  - whether the island's far signs name it, its limit sign and how place_names names it;
+  - its street brief (the blocks, warp, rings and spokes) and how the map draws it.
+- WHERE a kind is found on new ground (the deepest plain each side, other deep flat ground, the highest good ground)
+  stays the planner's code. A kept place's kind comes from its hub: a hub may name its kind (`settlement`), else the
+  first kind of its district (financial: city, commercial: town). `city_plan` writes `settlement` only for a kind
+  that is not its district's first, so today's levels are unchanged.
+- The IslandWorld keeps its catalog (`w.kinds`); `planIsland` takes one, and `city_plan` loads the shipped file.
+- A limit sign's legend carries its title (`title`: the kind's limitSign); a legend without one reads as before.
+- PROOF: island 8 planned again from island_8_nature with `--keep-sites`. Its report and all eight briefs are byte
+  for byte the baseline's, and so are its signs, but for the limit signs' new title (9 signs; the map's hover text).

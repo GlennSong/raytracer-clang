@@ -29,6 +29,9 @@
 
 #include <chrono>
 #include <cctype>
+#ifdef RT_ENABLE_SCRIPTING
+#include "engine/scripting/settlements_lua.h"
+#endif
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
@@ -161,7 +164,7 @@ int main(int argc, char** argv) {
             engine::writeIslandMap(w, base + ".png");
             std::ofstream(base + ".json") << nlohmann::json{{"seed", s}, {"terrain", block}, {"report", w.report}}.dump(2) << "\n";
             int cities = 0, towns = 0, unrouted = 0;
-            for (const auto& st : w.sites) (st.kind == "city" ? cities : towns)++;
+            for (const auto& st : w.sites) (w.kinds.of(st.kind).signedFar ? cities : towns)++;
             for (const auto& rd : w.roads) if (rd.points.empty()) ++unrouted;
             std::printf("island %u: %.0f km2 of land, peak %.0f m, %zu rivers, %d cities, %d towns, ring freeway %.1f km%s (%.1f s) -> %s.png\n",
                         s, w.report["landKm2"].get<double>(), w.report["peak"]["height"].get<double>(), w.hydro ? w.hydro->rivers().size() : 0,
@@ -178,6 +181,14 @@ int main(int argc, char** argv) {
         const uint32_t seed = static_cast<uint32_t>(std::strtoul(argv[2], nullptr, 10));
         const std::string outDir = argv[3];
         std::filesystem::create_directories(outDir);
+        // THE KINDS OF PLACE (settlements.lua): what a city, a town, a mountain town is
+#ifdef RT_ENABLE_SCRIPTING
+        std::string kindsWarn;
+        const engine::SettlementCatalog settlements = engine::shippedSettlements(&kindsWarn);
+        if (!kindsWarn.empty()) std::fprintf(stderr, "%s\n", kindsWarn.c_str());
+#else
+        const engine::SettlementCatalog settlements = engine::defaultSettlements();
+#endif
         // --terrain LEVEL.json (ADR-0132): plan on THAT level's ground -- the weathered island, its rivers,
         // its forest and ground cover -- instead of the seed's generated one; its grass fields come along
         nlohmann::json natureLevel;
@@ -200,13 +211,15 @@ int main(int argc, char** argv) {
                     for (const auto& h : kl["citysim"]["districts"]["hubs"]) {
                         engine::IslandSite s;
                         s.name = h.value("_place", std::string());
-                        s.kind = h.value("kind", std::string()) == "financial" ? "city" : "town";
+                        // its kind: the hub's own (`settlement`, a beach town), else the kind of the hub's district
+                        const engine::SettlementKind* sk = settlements.forHub(h.value("kind", std::string()));
+                        s.kind = h.value("settlement", sk ? sk->name : settlements.kinds.front().name);
                         s.at = engine::Vec2(h["at"][0].get<double>(), h["at"][1].get<double>());
                         keep.push_back(s);
                     }
                 std::printf("keeping %zu places from %s\n", keep.size(), argv[a + 1]);
             }
-        engine::IslandWorld w = engine::planIsland(block, 10000.0, 20.0, keep);
+        engine::IslandWorld w = engine::planIsland(block, 10000.0, 20.0, keep, &settlements);
         struct Drawn { std::string name; engine::Vec2 at; double half; };
         std::vector<Drawn> sites;
         std::vector<std::pair<int, std::vector<std::vector<engine::Vec2>>>> cityLimits;
@@ -299,13 +312,13 @@ int main(int argc, char** argv) {
             engine::joinPassToTowns(w, arterialNodes);   // ADR-0135: the pass runs into its towns
             // and every city onto it: link roads from its arterials (a city three or four, a town one or two)
             for (const auto& [k, art] : arterialNodes) {
-                const bool city = w.sites[static_cast<std::size_t>(k)].kind == "city";
-                if (w.sites[static_cast<std::size_t>(k)].kind == "mountain town") continue;   // its road is the mountain road
+                const engine::SettlementKind& sk = w.kinds.of(w.sites[static_cast<std::size_t>(k)].kind);
+                if (sk.linkCandidates <= 0) continue;   // (a mountain town: its road is the mountain road)
                 // candidates, more than will be kept: the diamond passes keep the ones that fit and drop the rest
                 std::vector<std::pair<engine::Vec2, engine::Vec2>> own;
                 for (const auto& e : plans[k].streets.edges)
                     own.push_back({plans[k].streets.nodes[static_cast<std::size_t>(e.a)].pos, plans[k].streets.nodes[static_cast<std::size_t>(e.b)].pos});
-                engine::linkCityToFreeway(w, k, art, city ? 6 : 4, city ? 700.0 : 300.0, 900.0, arterialNames[k], 0.09, own);   // a link is a collector (10 %), less the climb onto a freeway on a bridge
+                engine::linkCityToFreeway(w, k, art, sk.linkCandidates, sk.linkSpacing, 900.0, arterialNames[k], 0.09, own);   // a link is a collector (10 %), less the climb onto a freeway on a bridge
             }
             std::vector<std::pair<engine::Vec2, engine::Vec2>> streetSegs;
             for (const CityPlan& pl : plans)
@@ -314,10 +327,10 @@ int main(int argc, char** argv) {
             engine::islandInterchanges(w, streetSegs);
             // BUSES: local loops in each place (the city sim's own network builder), then the intercity lines
             for (std::size_t k = 0; k < w.sites.size(); ++k) {
-                if (navs[k].nodes.empty() || w.sites[k].kind == "mountain town") continue;
-                const bool city = w.sites[k].kind == "city";
+                const engine::SettlementKind& sk = w.kinds.of(w.sites[k].kind);
+                if (navs[k].nodes.empty() || sk.busRoutes <= 0) continue;
                 citysim::BusNetwork bn;
-                bn.build(navs[k], city ? 4 : 1, city ? 14 : 8, 1000u + static_cast<uint32_t>(k));
+                bn.build(navs[k], sk.busRoutes, sk.busStops, 1000u + static_cast<uint32_t>(k));
                 for (int r = 0; r < bn.routeCount(); ++r) {
                     const citysim::BusRoute& br = bn.route(r);
                     if (!br.valid() || br.regional) continue;
@@ -442,7 +455,14 @@ int main(int argc, char** argv) {
             // districts: each place's centre (a city's downtown is financial, a town's centre commercial)
             nlohmann::json hubs = nlohmann::json::array();
             for (std::size_t k = 0; k < w.sites.size(); ++k)
-                hubs.push_back({{"_place", w.sites[k].name}, {"at", {w.centres[k].x, w.centres[k].y}}, {"kind", w.sites[k].kind == "city" ? "financial" : "commercial"}});
+            {
+                // the hub's district is its kind's; a kind that is not its district's first (a beach town) names itself
+                const engine::SettlementKind& sk = w.kinds.of(w.sites[k].kind);
+                nlohmann::json hub = {{"_place", w.sites[k].name}, {"at", {w.centres[k].x, w.centres[k].y}}, {"kind", sk.hub}};
+                const engine::SettlementKind* first = w.kinds.forHub(sk.hub);
+                if (!first || first->name != sk.name) hub["settlement"] = sk.name;
+                hubs.push_back(hub);
+            }
             if (!level.contains("citysim")) level["citysim"] = nlohmann::json::object();
             level["citysim"]["districts"]["hubs"] = hubs;
             // a whole island at the template's density routed 14,000 cars and 14,000 walkers before the sim

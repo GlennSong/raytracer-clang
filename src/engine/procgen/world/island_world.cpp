@@ -174,9 +174,15 @@ json islandTerrainBlock(uint32_t seed, double half) {
     return block;
 }
 
-IslandWorld planIsland(const json& blockIn, double half, double cell, const std::vector<IslandSite>& keep) {
+IslandWorld planIsland(const json& blockIn, double half, double cell, const std::vector<IslandSite>& keep, const SettlementCatalog* kinds) {
     const auto t0 = std::chrono::steady_clock::now();
     IslandWorld w;
+    if (kinds) w.kinds = *kinds;
+    // a site's radius from how deep its flat ground runs, by its kind
+    auto radiusOf = [&](const std::string& kind, double depth) {
+        const SettlementKind& k = w.kinds.of(kind);
+        return std::clamp(depth * k.radiusScale, k.radiusMin, k.radiusMax);
+    };
     w.terrain = blockIn;
     w.half = half;
     w.cell = cell;
@@ -272,10 +278,9 @@ IslandWorld planIsland(const json& blockIn, double half, double cell, const std:
         if (bi < 0) { bi = std::clamp(ci, 0, n - 1); bj = std::clamp(cj, 0, n - 1); }
         s.at = P(bi, bj);
         const double d = D(bi, bj);
-        s.radius = s.kind == "city" ? std::clamp(d * 1.6, 600.0, 2000.0) : s.kind == "town" ? std::clamp(d * 1.3, 250.0, 700.0)
-                                                                          : std::clamp(d * 1.4, 150.0, 450.0);
+        s.radius = radiusOf(s.kind, d);
         s.elevation = H(bi, bj);
-        s.coastal = nearSea(s.at, s.kind == "city" ? 2500.0 : 1600.0);
+        s.coastal = nearSea(s.at, w.kinds.of(s.kind).coastReach);
         w.sites.push_back(s);
     }
     // ...or found: a city on each side of the range, the deepest flat ground, preferring the lowlands
@@ -294,9 +299,9 @@ IslandWorld planIsland(const json& blockIn, double half, double cell, const std:
         IslandSite c;
         c.kind = "city";
         c.at = P(bi, bj);
-        c.radius = std::clamp(D(bi, bj) * 1.6, 600.0, 2000.0);
+        c.radius = radiusOf(c.kind, D(bi, bj));
         c.elevation = H(bi, bj);
-        c.coastal = nearSea(c.at, 2500.0);
+        c.coastal = nearSea(c.at, w.kinds.of(c.kind).coastReach);
         w.sites.push_back(c);
     }
     // towns: other deep flat ground, spread out; then the highest good ground, the mountain town
@@ -318,9 +323,9 @@ IslandWorld planIsland(const json& blockIn, double half, double cell, const std:
         IslandSite t;
         t.kind = "town";
         t.at = P(bi, bj);
-        t.radius = std::clamp(D(bi, bj) * 1.3, 250.0, 700.0);
+        t.radius = radiusOf(t.kind, D(bi, bj));
         t.elevation = H(bi, bj);
-        t.coastal = nearSea(t.at, 1600.0);
+        t.coastal = nearSea(t.at, w.kinds.of(t.kind).coastReach);
         w.sites.push_back(t);
     }
     if (keep.empty()) {
@@ -337,7 +342,7 @@ IslandWorld planIsland(const json& blockIn, double half, double cell, const std:
             IslandSite m;
             m.kind = "mountain town";
             m.at = P(bi, bj);
-            m.radius = std::clamp(D(bi, bj) * 1.4, 150.0, 450.0);
+            m.radius = radiusOf(m.kind, D(bi, bj));
             m.elevation = H(bi, bj);
             w.sites.push_back(m);
         }
@@ -405,10 +410,10 @@ IslandWorld planIsland(const json& blockIn, double half, double cell, const std:
         w.roads.push_back(rd);
         return !tr.points.empty();
     };
-    // the ring: every site but the mountain town, in order round the island
+    // the ring: every site whose kind it calls at (not the mountain town), in order round the island
     std::vector<int> ring;
     for (int k = 0; k < static_cast<int>(w.sites.size()); ++k)
-        if (w.sites[static_cast<std::size_t>(k)].kind != "mountain town") ring.push_back(k);
+        if (w.kinds.of(w.sites[static_cast<std::size_t>(k)].kind).onRing) ring.push_back(k);
     std::sort(ring.begin(), ring.end(), [&](int a, int b) {
         const Vec2 da = w.sites[static_cast<std::size_t>(a)].at - C, db = w.sites[static_cast<std::size_t>(b)].at - C;
         return std::atan2(da.y, da.x) < std::atan2(db.y, db.x);
@@ -419,12 +424,12 @@ IslandWorld planIsland(const json& blockIn, double half, double cell, const std:
         if (ring.size() == 2 && k == 1) break;
         route("freeway", a, b, w.sites[static_cast<std::size_t>(a)].at, w.sites[static_cast<std::size_t>(b)].at, fw);
     }
-    // the pass: the two cities, over the range
+    // the pass: the two places of a kind that ends it (the cities), over the range
     json saddleJson;
     {
         int c0 = -1, c1 = -1;
         for (int k = 0; k < static_cast<int>(w.sites.size()); ++k)
-            if (w.sites[static_cast<std::size_t>(k)].kind == "city") (c0 < 0 ? c0 : c1) = k;
+            if (w.kinds.of(w.sites[static_cast<std::size_t>(k)].kind).passEnd) (c0 < 0 ? c0 : c1) = k;
         if (c0 >= 0 && c1 >= 0) {
             // THE SADDLE: the lowest point along the middle of the range's spine -- the pass goes over it
             Vec2 saddle = (w.sites[static_cast<std::size_t>(c0)].at + w.sites[static_cast<std::size_t>(c1)].at) * 0.5;
@@ -464,9 +469,9 @@ IslandWorld planIsland(const json& blockIn, double half, double cell, const std:
             (void)before;
         }
     }
-    // the mountain road: from the nearest point on the freeway up to the mountain town
+    // the mountain road: from the nearest point on the freeway up to each place of a kind it climbs to
     for (int k = 0; k < static_cast<int>(w.sites.size()); ++k) {
-        if (w.sites[static_cast<std::size_t>(k)].kind != "mountain town") continue;
+        if (!w.kinds.of(w.sites[static_cast<std::size_t>(k)].kind).mountainRoad) continue;
         const Vec2 top = w.sites[static_cast<std::size_t>(k)].at;
         Vec2 foot = w.sites.empty() ? top : w.sites.front().at;
         double best = 1e30;
@@ -484,9 +489,9 @@ IslandWorld planIsland(const json& blockIn, double half, double cell, const std:
             IslandSite& s = w.sites[k];
             if (!s.name.empty()) { used.insert(s.name); continue; }   // (a kept place keeps its name)
             PlaceTraits t;
-            t.city = s.kind == "city";
+            t.city = w.kinds.of(s.kind).naming == "city";
             t.coastal = s.coastal;
-            t.mountain = s.kind == "mountain town";
+            t.mountain = w.kinds.of(s.kind).naming == "mountain";
             t.river = w.hydro && w.hydro->distanceToRiver(s.at.x, s.at.y, 2000.0) < std::max(200.0, s.radius * 0.8);
             s.name = placeName(placeNameBook(), t, worldSeed, static_cast<uint32_t>(k), used);
         }
@@ -518,7 +523,7 @@ IslandWorld planIsland(const json& blockIn, double half, double cell, const std:
 
 json islandSiteBrief(const IslandWorld& w, int site) {
     const IslandSite& s = w.sites.at(static_cast<std::size_t>(site));
-    const bool city = s.kind == "city";
+    const SettlementKind& k = w.kinds.of(s.kind);   // its brief's sizes (settlements.lua)
     // TOWARD THE SEA: the nearest sea sample; a site inland squares to the range's axis instead
     Vec2 toSea = w.axis;
     double best = 1e30;
@@ -533,18 +538,18 @@ json islandSiteBrief(const IslandWorld& w, int site) {
     const double angle = std::atan2(toSea.y, toSea.x) * 180.0 / kPi;
     // what it grows to (land_shape.h): a city its flat ground's disc and a little more, a town its own;
     // the plan's square is room for that to run out along a valley or a strip of coast
-    const double area = kPi * std::pow(s.radius * (city ? 1.15 : 1.0), 2.0);
-    const double size = 2.0 * std::max(city ? 1400.0 : 500.0, s.radius * 2.4);
+    const double area = kPi * std::pow(s.radius * k.areaScale, 2.0);
+    const double size = 2.0 * std::max(k.sizeMin, s.radius * 2.4);
     const double core = std::sqrt(area * 0.12 / kPi), mid = std::sqrt(area * 0.35 / kPi);
     const uint32_t seed = static_cast<uint32_t>(w.terrain.value("seed", 0u) * 7919u + static_cast<uint32_t>(site) * 104729u + 17u);
-    const std::string name = (city ? "city_" : s.kind == "town" ? "town_" : "mountain_town_") + std::to_string(site);
+    const std::string name = k.briefPrefix + std::to_string(site);
     json world = {
         {"_comment", "An island site (island_world.h islandSiteBrief): the island's terrain block; the city grown over its land to its area and laid out by depth (land_shape.h)."},
         {"base", w.terrain},
         {"seaLevel", w.terrain.value("seaLevel", 0.0)},
         {"grid", size * 0.5 + 60.0},
         // a street may be as steep as a hill town's (15%); the growth prefers the flat ground anyway
-        {"land", {{"minHeight", 3.0}, {"maxSlope", 0.15}, {"shape", true}, {"area", area}, {"spokeSpacing", city ? 480.0 : 360.0}}},
+        {"land", {{"minHeight", 3.0}, {"maxSlope", 0.15}, {"shape", true}, {"area", area}, {"spokeSpacing", k.spokeSpacing}}},
     };
     return {
         {"name", name},
@@ -552,12 +557,11 @@ json islandSiteBrief(const IslandWorld& w, int site) {
         {"size", size},
         {"center", {s.at.x, s.at.y}},
         {"relief", 3.0},   // the island is the relief; the brief's hills would only roughen it
-        // a CITY's downtown blocks are big enough for towers with room round them (Glenn: "Saltwood downtown blocks
-        // should be bigger"; 94 x 64 left a 72 x 42 m site; 128 x 96 leaves ~105 x 75, and of the sizes tried it merged the fewest streets); a town keeps its
-        // small walkable grid
-        {"core", {{"angle", angle}, {"arterialEvery", 3}, {"block", city ? json::array({128.0, 96.0}) : json::array({94.0, 64.0})}, {"radius", core}}},
-        {"midtown", {{"block", city ? json::array({165.0, 118.0}) : json::array({158.0, 108.0})}, {"radius", mid}, {"warp", city ? 18.0 : 10.0}}},
-        {"outskirts", {{"curvature", 24.0}, {"margin", 120.0}, {"ringSpacing", city ? 140.0 : 120.0}, {"spokes", city ? 10 : 6}, {"streetSpacing", 95.0}}},
+        // a city's downtown blocks are big enough for towers with room round them; a town keeps its small walkable
+        // grid (the kind's blocks: settlements.lua)
+        {"core", {{"angle", angle}, {"arterialEvery", 3}, {"block", json::array({k.coreBlock[0], k.coreBlock[1]})}, {"radius", core}}},
+        {"midtown", {{"block", json::array({k.midtownBlock[0], k.midtownBlock[1]})}, {"radius", mid}, {"warp", k.warp}}},
+        {"outskirts", {{"curvature", 24.0}, {"margin", 120.0}, {"ringSpacing", k.ringSpacing}, {"spokes", k.spokes}, {"streetSpacing", 95.0}}},
         {"freeway", {{"radius", 0.0}, {"radials", 0}, {"wobble", 0.0}}},   // no ring: the island's freeway serves it
         {"roads", {{"arterial", 22.0}, {"collector", 16.0}, {"freeway", 30.0}, {"local", 12.0}, {"sidewalk", 5.0}}},
         {"world", world},
@@ -1287,7 +1291,9 @@ void islandInterchanges(IslandWorld& w, const std::vector<std::pair<Vec2, Vec2>>
         // share (a city three, a town one) -- all of them together blocked each other's ramps
         std::vector<int> order;
         for (std::size_t si = 0; si < w.sites.size(); ++si) order.push_back(static_cast<int>(si));
-        std::stable_sort(order.begin(), order.end(), [&](int a2, int b2) { return (w.sites[static_cast<std::size_t>(a2)].kind == "city") > (w.sites[static_cast<std::size_t>(b2)].kind == "city"); });
+        std::stable_sort(order.begin(), order.end(), [&](int a2, int b2) {
+            return w.kinds.of(w.sites[static_cast<std::size_t>(a2)].kind).interchanges > w.kinds.of(w.sites[static_cast<std::size_t>(b2)].kind).interchanges;
+        });
         auto candidatesOf = [&](int site) {
             std::vector<std::pair<double, std::string>> c;
             for (const roads::lanes::RampStreet& st : streets) {
@@ -1301,7 +1307,7 @@ void islandInterchanges(IslandWorld& w, const std::vector<std::pair<Vec2, Vec2>>
         std::map<int, int> got;
         for (int relaxedPass = 0; relaxedPass < 2; ++relaxedPass)
             for (int site : order) {
-                const int want = w.sites[static_cast<std::size_t>(site)].kind == "city" ? 3 : 1;
+                const int want = w.kinds.of(w.sites[static_cast<std::size_t>(site)].kind).interchanges;
                 if (relaxedPass && got[site] > 0) continue;   // LAST: only places still cut off, spacing relaxed
                 for (const auto& [len, sid] : candidatesOf(site)) {
                     if (got[site] >= (relaxedPass ? 1 : want) || served.count(sid)) continue;
@@ -1595,15 +1601,14 @@ bool writeIslandMap(const IslandWorld& w, const std::string& pngPath, int px, co
         if (!view.sites) break;
         double cx, cy;
         toPx(s.at, cx, cy);
-        const float r = s.kind == "city" ? 0.85f : s.kind == "town" ? 0.95f : 0.62f;
-        const float g = s.kind == "city" ? 0.12f : s.kind == "town" ? 0.45f : 0.25f;
-        const float b = s.kind == "city" ? 0.12f : s.kind == "town" ? 0.05f : 0.75f;
+        const SettlementKind& sk = w.kinds.of(s.kind);
+        const float r = sk.rgb[0], g = sk.rgb[1], b = sk.rgb[2];
         const double R = s.radius / mpp;
         for (int k = 0; k < 720; ++k) {   // the footprint's outline
             const double a = 2 * kPi * k / 720;
             for (double t = -1.2; t <= 1.2; t += 0.4) put(static_cast<int>(cx + std::cos(a) * (R + t)), static_cast<int>(cy + std::sin(a) * (R + t)), r, g, b);
         }
-        const double dot = s.kind == "city" ? 7.0 : 5.0;
+        const double dot = sk.dot;
         for (int yy = static_cast<int>(cy - dot - 2); yy <= static_cast<int>(cy + dot + 2); ++yy)
             for (int xx = static_cast<int>(cx - dot - 2); xx <= static_cast<int>(cx + dot + 2); ++xx) {
                 const double d = std::hypot(xx + 0.5 - cx, yy + 0.5 - cy);
@@ -1810,7 +1815,7 @@ bool writeIslandSvg(const IslandWorld& w, const std::string& svgPath, const Isla
     o << "<g id=\"labels\">\n";
     for (std::size_t k = 0; k < w.sites.size(); ++k) {
         const IslandSite& st = w.sites[k];
-        const double fs = st.kind == "city" ? 260.0 : 150.0;
+        const double fs = w.kinds.of(st.kind).label;
         o << "<text x=\"" << st.at.x << "\" y=\"" << -st.at.y << "\" font-size=\"" << fs << "\" text-anchor=\"middle\" fill=\"#3a1026\">"
           << st.name << "</text>\n";
     }

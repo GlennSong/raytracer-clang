@@ -128,7 +128,7 @@ void planIslandSigns(IslandWorld& w) {
             const std::size_t k = dir > 0 ? (from + step) % n : (from + n - step % n) % n;
             const int site = w.interchanges[k].site;
             if (site < 0 || site == w.interchanges[from].site) continue;
-            if (!cityOnly || w.sites[static_cast<std::size_t>(site)].kind == "city") return w.sites[static_cast<std::size_t>(site)].name;
+            if (!cityOnly || w.kinds.of(w.sites[static_cast<std::size_t>(site)].kind).signedFar) return w.sites[static_cast<std::size_t>(site)].name;
         }
         return std::string();
     };
@@ -256,7 +256,8 @@ void planIslandSigns(IslandWorld& w) {
                     const Vec2 a = way > 0 ? P[m - 1] : P[P.size() - m], b = way > 0 ? P[m] : P[P.size() - 1 - m];
                     if (insideLoops(st.limits, a) || !insideLoops(st.limits, b)) continue;
                     const Vec2 f = unit(b - a);
-                    sign("limit", b + Vec2(f.y, -f.x) * 8.0, f, "roadside", {{"name", st.name}, {"pop", st.population}, {"kind", st.kind}});
+                    sign("limit", b + Vec2(f.y, -f.x) * 8.0, f, "roadside", {{"name", st.name}, {"pop", st.population}, {"kind", st.kind},
+                                                                                         {"title", w.kinds.of(st.kind).limitSign}});
                     break;
                 }
             }
@@ -413,7 +414,8 @@ SignFace layoutSign(const IslandSign& s) {
         const double cap = 0.30;
         const std::string name = L.value("name", std::string());
         const int pop = L.value("pop", 0);
-        const std::string kind = L.value("kind", std::string()) == "city" ? "CITY LIMIT" : "TOWN LIMIT";
+        // its title is the kind's (settlements.lua limitSign); a legend written before titles: by its kind
+        const std::string kind = L.value("title", L.value("kind", std::string()) == "city" ? std::string("CITY LIMIT") : std::string("TOWN LIMIT"));
         std::string popText;
         if (pop > 0) {
             std::string n = std::to_string(pop);
