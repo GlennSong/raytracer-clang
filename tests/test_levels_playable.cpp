@@ -4173,6 +4173,102 @@ TEST_CASE(metro_day_census_prints) {
     }
 }
 
+// THE PEOPLE CENSUS (households plan, ~/.claude/plans/kinds-are-data-assign-places.md "Proof"). Print-only under
+// RT_PEOPLE=1: the level (RT_CENSUS_LEVEL, else the sim level) -- its households by type, people by band, stage and
+// role, housemates' ties by kind, the evening jobs -- and the plan's invariants, which it CHECKS: no dwelling holds two
+// households, every household lives in one dwelling (its members share a home place), every job holder's job is in
+// reach (a commute measured), and the plan of the level's own dwellings at seeds 1-3 houses the same way.
+#include "../src/apps/citysim/households.h"
+#include "../src/apps/citysim/relationships.h"
+TEST_CASE(people_census_prints) {
+    if (!std::getenv("RT_PEOPLE")) return;
+    std::unique_ptr<Renderer> renderer = Renderer::create();
+    RendererMeshUploader uploader(*renderer);
+    AssetManager assets(uploader);
+    World world;
+    RenderView view;
+    const char* lvl = std::getenv("RT_CENSUS_LEVEL");
+    const bool loaded = LevelLoader::load(lvl ? std::string(lvl) : simLevelPath(), world, *renderer, view, assets, false);
+    CHECK(loaded);
+    if (!loaded) return;
+    citysim::CityRenderSystem city;
+    CHECK(city.build(world, &assets, nullptr));
+    const citysim::CitySim& sim = city.sim();
+    const citysim::PeopleCatalog& folk = sim.people();
+    const citysim::HouseholdPlan& plan = sim.households();
+    std::printf("    [people] %s\n", sim.populationLine().c_str());
+    // by role, and the evening jobs
+    std::map<std::string, int> byRole;
+    int jobHolders = 0, noCommute = 0, sideJobs = 0;
+    std::map<std::string, int> noCommuteBy;
+    for (int i = 0; i < static_cast<int>(sim.agents().size()); ++i) {
+        const citysim::Agent& a = sim.agents()[static_cast<std::size_t>(i)];
+        if (sim.onService(i)) continue;
+        ++byRole[sim.roles().nameOf(a.role)];
+        sideJobs += a.sideVenue >= 0 ? 1 : 0;
+        if (a.workPlace != citysim::kNoPlace && a.homePlace != citysim::kNoPlace && a.stage >= 0 &&
+            folk.stages[static_cast<std::size_t>(a.stage)].job) {
+            ++jobHolders;
+            if (a.commuteSeconds <= 0 && a.home != a.work) {   // (work at their own corner: no trip)
+                ++noCommute;
+                char k[160];
+                std::snprintf(k, sizeof k, "%s %s, home %d work %d, workPlace %u", sim.roles().nameOf(a.role),
+                              a.archetype == citysim::Agent::Mode::Driver ? "driver" : "walker", a.home, a.work,
+                              static_cast<unsigned>(a.workPlace));
+                if (noCommute <= 6) std::printf("    [people]   no commute: %s\n", k);
+                ++noCommuteBy[std::string(sim.roles().nameOf(a.role)) + (a.archetype == citysim::Agent::Mode::Driver ? " driver" : " walker")];
+            }
+        }
+    }
+    std::string roles;
+    for (const auto& [r, n] : byRole) roles += (roles.empty() ? "" : ", ") + r + " " + std::to_string(n);
+    std::printf("    [people] roles: %s; evening jobs %d\n", roles.c_str(), sideJobs);
+    // ties by kind, each side's (a parent's child counts once as parent and once as child)
+    std::map<std::string, int> ties;
+    const citysim::RelationshipTable& rel = sim.relationships();
+    for (const citysim::Agent& a : sim.agents())
+        for (const auto& [other, bond] : rel.relationsOf(a.uid))
+            if (bond == citysim::Relationship::Household) {
+                const int t = rel.tieOf(a.uid, other);
+                ++ties[t >= 0 && t < static_cast<int>(folk.ties.size()) ? folk.ties[static_cast<std::size_t>(t)].name : "?"];
+            }
+    std::string tl;
+    for (const auto& [t, n] : ties) tl += (tl.empty() ? "" : ", ") + t + " " + std::to_string(n);
+    std::printf("    [people] household ties: %s\n", tl.c_str());
+    // the invariants
+    std::map<uint32_t, int> perDwelling;
+    for (const citysim::Household& hh : plan.households)
+        if (hh.dwelling != citysim::Household::kNoDwelling) ++perDwelling[hh.dwelling];
+    int overFull = 0;
+    for (const auto& [d, n] : perDwelling) overFull += n > 1 ? 1 : 0;
+    std::map<int, citysim::PlaceId> homeOf;
+    int split = 0;
+    for (const citysim::Agent& a : sim.agents()) {
+        if (a.household < 0) continue;
+        auto [it, fresh] = homeOf.insert({a.household, a.homePlace});
+        if (!fresh && it->second != a.homePlace) ++split;
+    }
+    std::printf("    [people] dwellings with two households %d; households split over homes %d; job holders %d, %d with no "
+                "commute measured\n", overFull, split, jobHolders, noCommute);
+    for (const auto& [k, n] : noCommuteBy) std::printf("    [people]   no commute: %d %s\n", n, k.c_str());
+    CHECK(overFull == 0);
+    CHECK(split == 0);
+    CHECK(noCommute == 0);
+    // every seed: the level's own dwellings planned at seeds 1-3
+    const uint32_t beds = sim.placeKinds().tag("beds");
+    for (uint32_t seed = 1; seed <= 3; ++seed) {
+        const citysim::HouseholdPlan p = citysim::planHouseholds(folk, city.places(), beds, plan.asked, plan.asked / 3, seed);
+        std::map<uint32_t, int> per;
+        for (const citysim::Household& hh : p.households)
+            if (hh.dwelling != citysim::Household::kNoDwelling) ++per[hh.dwelling];
+        int twice = 0;
+        for (const auto& [d, n] : per) twice += n > 1 ? 1 : 0;
+        std::printf("    [people] seed %u: %s\n", seed, citysim::describePlan(folk, p).c_str());
+        CHECK(twice == 0);
+        CHECK(!p.people.empty());
+    }
+}
+
 // THE HOUSING AUDIT (Glenn, 2026-11-01: "build denser housing. See how much we can fit. Build up as well."). Print-only
 // under RT_HOUSING=1: the level (RT_CENSUS_LEVEL, else the sim level), every grown building by district and recipe --
 // how many, their storeys, floor area, the dwellings places.lua cuts them into, and whether the citysim counts them

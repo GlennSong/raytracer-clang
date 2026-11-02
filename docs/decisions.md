@@ -14418,3 +14418,29 @@ Plan step 6 (~/.claude/plans/kinds-are-data-assign-places.md): student evening j
 
 Not done: daytime internships (a second slot that would compete with classes); the census does not count shifts as
 "at work" (the evening's label is Outing).
+
+## ADR-0307 — The people census, and a walker's job in reach on foot, by train or by bus
+
+The plan's proof (~/.claude/plans/kinds-are-data-assign-places.md): a census of the people on several levels and seeds.
+
+**Decision.**
+- `people_census_prints` (level_tests, print-only under RT_PEOPLE=1, RT_CENSUS_LEVEL): households by type, people by
+  band, stage and role, housemates' ties by kind (each side's), evening jobs. It CHECKS that no dwelling holds two
+  households, that every household shares one home, and that every job holder whose job is not at their own corner
+  has a commute measured. It replans the level's own dwellings at seeds 1-3.
+- WHAT IT FOUND: job holders with no commute (10 on metro_v2_test, 97 on river_town, 544 on metro_planned), all
+  walkers. Three causes:
+  - The job search asked whether home and job share a strongly connected component of the CAR graph, for walkers
+    too. A walker in another town, joined by road and by no footway, got the job.
+  - Bus commuters (walkers who ride to a job in another town, both trips planned at the pick) were timed on foot, so
+    their commute read 0 and fell back to the median.
+  - Staff hiring took walkers by walking distance and bus network, which can disagree with the footways.
+- THE FIX: a walker's job is in the walkable component of home, or in a rail planner's network a train line joins
+  (each pair of stations' networks asked once, keyed by RailRiders::networkOf so the check and the plan agree), or
+  the bus branch's job as before. A train commute is timed by RailRiders::plan. A bus commute is timed as the walks
+  to and from the stops, the ride round the loop at 8 m/s and a four-minute wait. Walking staff also need a footway
+  to the place. kPopulationFormat 11.
+
+After: metro_v2_test (10,251 people, 5,028 households), river_town (8,615 / 4,264) and metro_planned (22,140 /
+10,867): no shared dwellings, no split households, every job holder's commute measured; seeds 1-3 plan cleanly. The
+island and a campus level are left for the full-island build (campus_lab has no citysim block).
