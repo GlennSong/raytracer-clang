@@ -20,8 +20,9 @@ namespace citysim {
 enum class Relationship : uint8_t {
     None = 0,        // strangers (never stored)
     Acquaintance,    // seen around / met in passing
-    Neighbor,        // shares a home
+    Neighbor,        // lives in the same building, another dwelling
     Coworker,        // shares a workplace
+    Household,       // lives in the same dwelling: its TIE (people.lua ties: partner, parent, ...) says how
 };
 
 const char* relationshipName(Relationship r);
@@ -43,7 +44,13 @@ public:
     const std::vector<std::pair<AgentId, Relationship>>& relationsOf(AgentId a) const;
 
     int pairCount() const { return static_cast<int>(bonds_.size()); }
-    void clear() { bonds_.clear(); adj_.clear(); }
+    void clear() { bonds_.clear(); adj_.clear(); ties_.clear(); }
+
+    // HOUSEHOLD TIES (directed: a parent's child): record that `a` is `b`'s tie `aToB` and `b` is `a`'s `bToA` (indices
+    // into the people catalog's ties), and the pair's bond as Household.
+    void setTie(AgentId a, AgentId b, int aToB, int bToA);
+    // What `a` is to `b` (a tie index), or -1.
+    int tieOf(AgentId a, AgentId b) const;
 
 private:
     // Order-independent key for a UID pair (min in the high word).
@@ -53,6 +60,7 @@ private:
     }
     std::unordered_map<uint64_t, Relationship> bonds_;
     std::unordered_map<AgentId, std::vector<std::pair<AgentId, Relationship>>> adj_;
+    std::unordered_map<uint64_t, uint16_t> ties_;   // (a << 32 | b) -> what a is to b
 };
 
 }  // namespace citysim

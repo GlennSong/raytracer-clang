@@ -186,6 +186,10 @@ TEST_CASE(people_lua_is_the_built_in_people) {
             "people.households.seniors.beds = { 0, 0 }; people.households.single_parent.beds = { 2, 3 }", "1 bedrooms");
     refused("people.halls.stage = 'working'", "beds");
     refused("people.households.couple.share = 0", "share");
+    refused("people.ties.parent.other = 'sibling'", "does not answer");
+    refused("people.households.family.ties = { { 1, 'parent', 3 } }", "group it has not got");
+    refused("people.households.family.ties = { { 2, 'cousin', 2 } }", "cousin");
+    refused("people.households.couple.ties = { { 1, 'parent', 1 } }", "its own other side");
 }
 
 // THE SIGNALS' CYCLE: signals.lua is SignalTiming's defaults, and a time that is not positive is refused.

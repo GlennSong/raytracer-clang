@@ -4,6 +4,7 @@ namespace citysim {
 
 const char* relationshipName(Relationship r) {
     switch (r) {
+        case Relationship::Household:    return "household";
         case Relationship::Coworker:     return "coworker";
         case Relationship::Neighbor:     return "neighbor";
         case Relationship::Acquaintance: return "acquaintance";
@@ -47,6 +48,18 @@ RelationshipTable::relationsOf(AgentId a) const {
     static const std::vector<std::pair<AgentId, Relationship>> kEmpty;
     auto it = adj_.find(a);
     return it == adj_.end() ? kEmpty : it->second;
+}
+
+void RelationshipTable::setTie(AgentId a, AgentId b, int aToB, int bToA) {
+    if (a == b || a == kNoAgent || b == kNoAgent || aToB < 0 || bToA < 0) return;
+    set(a, b, Relationship::Household);
+    ties_[(static_cast<uint64_t>(a) << 32) | b] = static_cast<uint16_t>(aToB);
+    ties_[(static_cast<uint64_t>(b) << 32) | a] = static_cast<uint16_t>(bToA);
+}
+
+int RelationshipTable::tieOf(AgentId a, AgentId b) const {
+    auto it = ties_.find((static_cast<uint64_t>(a) << 32) | b);
+    return it == ties_.end() ? -1 : it->second;
 }
 
 }  // namespace citysim

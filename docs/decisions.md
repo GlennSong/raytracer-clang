@@ -14353,3 +14353,26 @@ Found on the way: a 1-minute gather window gave up a stroll before anyone had wa
 stood about at the nearest crossing; 15 minutes, like the other beach groups.
 Owed: the lying figures are the box stand-in (a posed lying body); beach_day's 10-minute gather is short for a 2 km
 walk too.
+
+## ADR-0304 — Housemates are tied: partners, parents and children, siblings, roommates
+
+Plan step 4 (~/.claude/plans/kinds-are-data-assign-places.md): relationships inside a home, shown in the inspector.
+
+**Decision.**
+- THE TIES ARE DATA (people.lua `ties`): each tie names its other side (parent / child, partner / partner) and how
+  much older that side is at least (`older`: a parent 18, a grandparent 36). A household type lists its ties as
+  `{ from, "<tie>", to }` over its member groups: group `from` is the <tie> of group `to`; from == to ties every pair
+  in one group, and only a tie that is its own other side may. check() refuses an unanswered tie, an unknown group or
+  tie, a self-tie that is not symmetric, and a tie older on both sides. defaultPeopleCatalog matches by test.
+- THE PLANNER KEEPS THE AGES: each Resident carries its member group. After drawing a household, realize() makes the
+  younger side younger within its band, else the older side older, until nothing moves (three generations chain).
+  Six seeds: 0 of ~4,200 aged pairs too close.
+- THE SIM TIES HOUSEMATES: RelationshipTable gains `Household`, the strongest bond, and a directed tie per pair
+  (setTie / tieOf: what a is to b). assignPlaces ties each household's agents as its type says. `Neighbor` now means
+  the same building and another dwelling, since housemates hold the stronger bond and set() never downgrades.
+- THE INSPECTOR shows age and life stage, the household's type and size, and each housemate as "<tie>: UID, age",
+  then the others the agent knows.
+- No population-format bump: the population cache's key already hashes people_.describe(), which now includes the
+  ties, so every level's cache rebuilds once.
+
+Simplification: in three generations the grandparents are "parent" to both adults (one is an in-law).

@@ -834,6 +834,7 @@ void CitySim::assignPlaces(const PlaceMap& places, const NavGraph& graph) {
     // and the halls' beds are filled with as many people as there are residents -- the buses' and cabs' drivers aside
     // -- and each member is matched to an agent: a child or a student to a walker, the adults to the rest, the
     // drivers spread evenly over them. Sequential and cheap; decided on a cache hit too (the cache holds what follows).
+    std::vector<std::vector<std::pair<int, uint8_t>>> housemates;   // per household: (agent, its member group)
     {
         std::vector<int> drivers, walkers;
         for (int i = 0; i < static_cast<int>(agents_.size()); ++i)
@@ -844,6 +845,7 @@ void CitySim::assignPlaces(const PlaceMap& places, const NavGraph& graph) {
         const int adultDrivers = std::min(static_cast<int>(drivers.size()), adults);
         std::size_t nextD = 0, nextW = 0;
         int adult = 0;
+        housemates.assign(households_.households.size(), {});
         for (std::size_t h = 0; h < households_.households.size(); ++h) {
             const Household& hh = households_.households[h];
             for (uint32_t m = hh.first; m < hh.first + hh.count; ++m) {
@@ -862,6 +864,7 @@ void CitySim::assignPlaces(const PlaceMap& places, const NavGraph& graph) {
                 a.household = static_cast<int32_t>(h);
                 a.age = r.age;
                 a.stage = static_cast<int8_t>(r.stage);
+                housemates[h].push_back({ai, r.group});
             }
         }
         unhoused_ = static_cast<int>(drivers.size() + walkers.size() - nextD - nextW);
@@ -1743,8 +1746,23 @@ void CitySim::assignPlaces(const PlaceMap& places, const NavGraph& graph) {
     for (const Agent& a : agents_) students_ += isStudent(a) ? 1 : 0;
     tagSpots();   // the venues are known now: which spots are on the campus
 
+    // THE HOUSEHOLDS' TIES (people.lua): housemates are partners, parent and child, siblings, roommates... as their
+    // household type ties its member groups -- the strongest bond, so the work and building ties below never cover it
+    for (std::size_t h = 0; h < housemates.size(); ++h) {
+        const Household& hh = households_.households[h];
+        if (hh.type >= people_.households.size()) continue;   // (a hall bed: on their own)
+        for (const HouseholdTie& ht : people_.households[hh.type].ties) {
+            const int back = people_.ties[static_cast<std::size_t>(ht.tie)].other;
+            for (const auto& [i, gi] : housemates[h])
+                for (const auto& [j, gj] : housemates[h])
+                    if (i != j && gi == ht.from && gj == ht.to && (ht.from != ht.to || i < j))
+                        relationships_.setTie(agents_[static_cast<std::size_t>(i)].uid, agents_[static_cast<std::size_t>(j)].uid,
+                                              ht.tie, back);
+        }
+    }
+
     // Seed the surface-level social graph: agents sharing a workplace are
-    // coworkers; those sharing a home are neighbors (housemates).
+    // coworkers; those sharing a home building (another dwelling) are neighbors.
     //
     // Only agents who share a PLACE can be related, so bucket by place and pair
     // within a bucket instead of testing every pair in the city against every

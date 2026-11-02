@@ -5,6 +5,7 @@
 #include "../src/apps/citysim/city_sim.h"
 
 #include <cstdio>
+#include <map>
 #include <vector>
 
 using namespace engine;
@@ -429,6 +430,61 @@ TEST_CASE(households_fill_the_dwellings_one_to_each) {
     };
     CHECK(who(7) == who(7));
     CHECK(who(7) != who(8));
+}
+
+// THE HOUSEHOLDS' TIES (people.lua ties; Glenn's plan step 4): on every seed, every household's members are as old as
+// its ties need (a parent 18 years older than each child, a grandparent 36), and the sim ties its housemates -- each
+// pair a Household bond, a parent's child seeing them as its parent -- and nobody outside the dwelling.
+TEST_CASE(housemates_are_tied_as_their_household_says) {
+    const PeopleCatalog cat = defaultPeopleCatalog();
+    NavGraph nav = citytest::cityNav(800.0, 80.0, 3);
+    PlaceMap places;
+    std::vector<int> beds;
+    for (int d = 0; d < 12; ++d) beds.push_back(d % 6);
+    for (int i = 0; i < 200; ++i) places.setDwellings(places.add(PlaceType::Home, Vec2(-350 + (i % 20) * 35.0, -330 + (i / 20) * 60.0), nav), beds);
+    for (uint32_t seed = 1; seed <= 6; ++seed) {
+        const HouseholdPlan plan = planHouseholds(cat, places, 0, 6000, 3000, seed);
+        int checked = 0, wrong = 0;
+        for (const Household& hh : plan.households) {
+            if (hh.type >= cat.households.size()) continue;
+            for (const HouseholdTie& ht : cat.households[hh.type].ties) {
+                const int older = cat.ties[static_cast<std::size_t>(ht.tie)].older;
+                if (older <= 0) continue;
+                for (uint32_t i = hh.first; i < hh.first + hh.count; ++i)
+                    for (uint32_t j = hh.first; j < hh.first + hh.count; ++j)
+                        if (plan.people[i].group == ht.from && plan.people[j].group == ht.to) {
+                            ++checked;
+                            wrong += plan.people[i].age < plan.people[j].age + older ? 1 : 0;
+                        }
+            }
+        }
+        std::printf("    [ties] seed %u: %zu households, %d aged pairs, %d too close in age\n", seed, plan.households.size(), checked, wrong);
+        CHECK(checked > 0);
+        CHECK(wrong == 0);
+    }
+    // the sim: every Household bond is between agents of one household, and a parent / child pair reads both ways
+    CitySim sim;
+    sim.build(nav, 60, 240, 5);
+    places.add(PlaceType::Office, Vec2(0, 0), nav, 9, 17);
+    sim.assignPlaces(places, nav);
+    const RelationshipTable& rel = sim.relationships();
+    std::map<AgentId, int> hhOf;
+    for (const Agent& a : sim.agents()) hhOf[a.uid] = a.household;
+    int bonds = 0, across = 0, parents = 0, unanswered = 0;
+    for (const Agent& a : sim.agents())
+        for (const auto& [other, bond] : rel.relationsOf(a.uid)) {
+            if (bond != Relationship::Household) continue;
+            ++bonds;
+            across += hhOf[other] != a.household ? 1 : 0;
+            const int t = rel.tieOf(a.uid, other), back = rel.tieOf(other, a.uid);
+            if (t == cat.tie("parent")) ++parents;
+            unanswered += (t < 0 || back != cat.ties[static_cast<std::size_t>(t)].other) ? 1 : 0;
+        }
+    std::printf("    [ties] the sim: %d household bonds (%d a parent's), %d across dwellings, %d unanswered\n", bonds, parents, across, unanswered);
+    CHECK(bonds > 0);
+    CHECK(parents > 0);
+    CHECK(across == 0);
+    CHECK(unanswered == 0);
 }
 
 // HOUSEHOLDS AT ISLAND SCALE (Glenn, 2026-11-01: "How well does this scale to 300k people?"): the plan is sequential

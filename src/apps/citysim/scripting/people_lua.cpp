@@ -102,6 +102,28 @@ bool loadPeopleCatalog(ScriptVM& vm, citysim::PeopleCatalog& out, std::string* e
     }
     lua_pop(L, 1);   // bands
 
+    // THE TIES (before the households, which name them)
+    std::vector<std::string> tieNames;
+    if (section("ties", tieNames)) {
+        std::vector<std::string> others;
+        for (const std::string& n : tieNames) {
+            lua_getfield(L, -1, n.c_str());
+            if (!lua_istable(L, -1)) return bail("ties." + n + ": not a table");
+            const int t = lua_gettop(L);
+            citysim::Tie tie;
+            tie.name = n;
+            tie.older = static_cast<int>(numField(L, t, "older", 0));
+            others.push_back(strField(L, t, "other"));
+            c.ties.push_back(tie);
+            lua_pop(L, 1);
+        }
+        for (std::size_t i = 0; i < c.ties.size(); ++i) {
+            c.ties[i].other = c.tie(others[i]);
+            if (c.ties[i].other < 0) return bail("ties." + tieNames[i] + ": no tie `" + others[i] + "` for its other side");
+        }
+    }
+    lua_pop(L, 1);   // ties
+
     if (!section("households", typeNames)) return bail("`people.households` needs an order");
     for (const std::string& n : typeNames) {
         lua_getfield(L, -1, n.c_str());
@@ -128,6 +150,29 @@ bool loadPeopleCatalog(ScriptVM& vm, citysim::PeopleCatalog& out, std::string* e
             }
         }
         lua_pop(L, 1);   // members
+        // its ties: { from, "<tie>", to } -- group `from` is the <tie> of group `to` (groups count from 1)
+        lua_getfield(L, t, "ties");
+        if (lua_istable(L, -1)) {
+            const lua_Integer m = luaL_len(L, -1);
+            for (lua_Integer i = 1; i <= m; ++i) {
+                lua_rawgeti(L, -1, i);
+                if (!lua_istable(L, -1)) return bail("households." + n + ": a tie is not { from, \"<tie>\", to }");
+                lua_rawgeti(L, -1, 1);
+                lua_rawgeti(L, -2, 2);
+                lua_rawgeti(L, -3, 3);
+                if (!lua_isnumber(L, -3) || !lua_isstring(L, -2) || !lua_isnumber(L, -1))
+                    return bail("households." + n + ": a tie is not { from, \"<tie>\", to }");
+                citysim::HouseholdTie ht;
+                ht.from = static_cast<int>(lua_tointeger(L, -3)) - 1;
+                ht.to = static_cast<int>(lua_tointeger(L, -1)) - 1;
+                const std::string tn = lua_tostring(L, -2);
+                ht.tie = c.tie(tn);
+                if (ht.tie < 0) return bail("households." + n + ": no tie `" + tn + "`");
+                h.ties.push_back(ht);
+                lua_pop(L, 4);
+            }
+        }
+        lua_pop(L, 1);   // ties
         c.households.push_back(std::move(h));
         lua_pop(L, 1);
     }

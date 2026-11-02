@@ -25,6 +25,12 @@ int PeopleCatalog::household(const std::string& name) const {
     return -1;
 }
 
+int PeopleCatalog::tie(const std::string& name) const {
+    for (std::size_t i = 0; i < ties.size(); ++i)
+        if (ties[i].name == name) return static_cast<int>(i);
+    return -1;
+}
+
 std::string PeopleCatalog::check() const {
     if (stages.empty()) return "stages: none";
     if (bands.empty()) return "bands: none";
@@ -59,7 +65,24 @@ std::string PeopleCatalog::check() const {
             }
             if (s <= 0) return "households." + h.name + ": a group's bands need shares";
         }
+        for (const HouseholdTie& t : h.ties) {
+            const int ng = static_cast<int>(h.groups.size());
+            if (t.from < 0 || t.from >= ng || t.to < 0 || t.to >= ng) return "households." + h.name + ": a tie names a group it has not got";
+            if (t.tie < 0 || t.tie >= static_cast<int>(ties.size())) return "households." + h.name + ": an unknown tie";
+            if (t.from == t.to && ties[static_cast<std::size_t>(t.tie)].other != t.tie)
+                return "households." + h.name + ": `" + ties[static_cast<std::size_t>(t.tie)].name +
+                       "` ties a group to itself, so it must be its own other side";
+        }
         widest = std::max(widest, h.bedsHi);
+    }
+    for (std::size_t i = 0; i < ties.size(); ++i) {
+        if (!seen.insert("tie " + ties[i].name).second) return "tie `" + ties[i].name + "` twice";
+        const int o = ties[i].other;
+        if (o < 0 || o >= static_cast<int>(ties.size())) return "ties." + ties[i].name + ": its other side is not a tie";
+        if (ties[static_cast<std::size_t>(o)].other != static_cast<int>(i))
+            return "ties." + ties[i].name + ": `" + ties[static_cast<std::size_t>(o)].name + "` does not answer it";
+        if (ties[i].older < 0 || (ties[i].older > 0 && (o == static_cast<int>(i) || ties[static_cast<std::size_t>(o)].older > 0)))
+            return "ties." + ties[i].name + ": only one side of a tie may be older";
     }
     for (int beds = 0; beds <= widest; ++beds) {   // every dwelling size, up to the biggest any type takes, fits one
         bool fits = false;
@@ -102,8 +125,10 @@ std::string PeopleCatalog::describe() const {
             shares(g.bands, true);
             o << "]";
         }
+        for (const HouseholdTie& t : h.ties) o << " " << t.from << ":" << ties[static_cast<std::size_t>(t.tie)].name << ":" << t.to;
         o << "\n";
     }
+    for (const Tie& t : ties) o << "tie " << t.name << "/" << ties[static_cast<std::size_t>(t.other)].name << " older=" << t.older << "\n";
     o << "halls " << (hallBand >= 0 ? bands[static_cast<std::size_t>(hallBand)].name : "?") << " "
       << (hallStage >= 0 ? stages[static_cast<std::size_t>(hallStage)].name : "?") << " share=" << hallShare << "\n";
     o << "lodgers";
@@ -130,14 +155,19 @@ PeopleCatalog defaultPeopleCatalog() {
         g.lo = lo; g.hi = hi; g.perBed = perBed; g.bands = std::move(bands);
         return g;
     };
+    c.ties = {{"partner", 0, 0}, {"parent", 2, 18}, {"child", 1, 0}, {"sibling", 3, 0}, {"grandparent", 5, 36},
+              {"grandchild", 4, 0}, {"roommate", 6, 0}};
+    const int partner = 0, parent = 1, sibling = 3, grandparent = 4, roommate = 6;
     c.households = {
-        {"single", 28, 0, 2, {group(1, 1, {{young, 0.25}, {adult, 0.75}})}},
-        {"couple", 22, 0, 2, {group(2, 2, {{young, 0.1}, {adult, 0.9}})}},
-        {"roommates", 8, 2, 4, {group(2, 4, {{young, 0.6}, {adult, 0.4}}, true)}},
-        {"single_parent", 7, 1, 3, {group(1, 1, {{adult, 1.0}}), group(1, 2, {{kid, 1.0}})}},
-        {"family", 20, 2, 5, {group(2, 2, {{adult, 1.0}}), group(1, 3, {{kid, 1.0}})}},
-        {"three_generations", 3, 3, 5, {group(2, 2, {{adult, 1.0}}), group(1, 3, {{kid, 1.0}}), group(1, 2, {{senior, 1.0}})}},
-        {"seniors", 12, 0, 3, {group(1, 2, {{senior, 1.0}})}},
+        {"single", 28, 0, 2, {group(1, 1, {{young, 0.25}, {adult, 0.75}})}, {}},
+        {"couple", 22, 0, 2, {group(2, 2, {{young, 0.1}, {adult, 0.9}})}, {{0, 0, partner}}},
+        {"roommates", 8, 2, 4, {group(2, 4, {{young, 0.6}, {adult, 0.4}}, true)}, {{0, 0, roommate}}},
+        {"single_parent", 7, 1, 3, {group(1, 1, {{adult, 1.0}}), group(1, 2, {{kid, 1.0}})}, {{0, 1, parent}, {1, 1, sibling}}},
+        {"family", 20, 2, 5, {group(2, 2, {{adult, 1.0}}), group(1, 3, {{kid, 1.0}})},
+         {{0, 0, partner}, {0, 1, parent}, {1, 1, sibling}}},
+        {"three_generations", 3, 3, 5, {group(2, 2, {{adult, 1.0}}), group(1, 3, {{kid, 1.0}}), group(1, 2, {{senior, 1.0}})},
+         {{0, 0, partner}, {0, 1, parent}, {1, 1, sibling}, {2, 2, partner}, {2, 0, parent}, {2, 1, grandparent}}},
+        {"seniors", 12, 0, 3, {group(1, 2, {{senior, 1.0}})}, {{0, 0, partner}}},
     };
     c.hallBand = young;
     c.hallStage = 1;
@@ -170,8 +200,10 @@ int pick(const std::vector<std::pair<int, double>>& v, uint32_t h) {
 
 // One household of type `t` for a dwelling of `beds` bedrooms, its members appended to `out`; `key` is its own bits.
 void realize(const PeopleCatalog& cat, const HouseholdType& t, int beds, uint32_t key, std::vector<Resident>& out) {
+    const std::size_t first = out.size();
     uint32_t salt = 1;
-    for (const MemberGroup& g : t.groups) {
+    for (std::size_t gi = 0; gi < t.groups.size(); ++gi) {
+        const MemberGroup& g = t.groups[gi];
         const int bi = pick(g.bands, mix(key, salt++));
         const AgeBand& b = cat.bands[static_cast<std::size_t>(bi)];
         const int n = g.perBed ? std::clamp(beds, g.lo, g.hi)
@@ -179,10 +211,32 @@ void realize(const PeopleCatalog& cat, const HouseholdType& t, int beds, uint32_
         for (int k = 0; k < n; ++k) {
             Resident r;
             r.band = static_cast<uint8_t>(bi);
+            r.group = static_cast<uint8_t>(gi);
             r.age = static_cast<uint8_t>(b.lo + static_cast<int>(mix(key, salt++) % static_cast<uint32_t>(b.hi - b.lo + 1)));
             r.stage = static_cast<uint8_t>(pick(b.stages, mix(key, salt++)));
             r.walks = cat.stages[r.stage].walks;
             out.push_back(r);
+        }
+    }
+    // THE AGES THE TIES NEED (a parent 18 years older than a child): the younger side made younger within its band,
+    // else the older side older within its -- until nothing moves (three generations chain: a pass or two)
+    for (int pass = 0, moved = 1; moved && pass < 4; ++pass) {
+        moved = 0;
+        for (const HouseholdTie& ht : t.ties) {
+            const Tie& tie = cat.ties[static_cast<std::size_t>(ht.tie)];
+            if (tie.older <= 0 || ht.from == ht.to) continue;
+            for (std::size_t i = first; i < out.size(); ++i) {
+                if (out[i].group != ht.from) continue;
+                for (std::size_t j = first; j < out.size(); ++j) {
+                    if (out[j].group != ht.to || out[i].age >= out[j].age + tie.older) continue;
+                    const AgeBand& bj = cat.bands[out[j].band];
+                    const AgeBand& bi = cat.bands[out[i].band];
+                    out[j].age = static_cast<uint8_t>(std::max(bj.lo, static_cast<int>(out[i].age) - tie.older));
+                    if (out[i].age < out[j].age + tie.older)
+                        out[i].age = static_cast<uint8_t>(std::min(bi.hi, static_cast<int>(out[j].age) + tie.older));
+                    moved = 1;
+                }
+            }
         }
     }
 }

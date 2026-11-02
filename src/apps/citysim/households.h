@@ -51,18 +51,33 @@ struct MemberGroup {
     std::vector<std::pair<int, double>> bands;   // (band index, share)
 };
 
-// A kind of household: its share of the households, the dwellings it fits (bedrooms bedsLo..bedsHi) and who it is.
+// HOW TWO PEOPLE OF A HOUSEHOLD ARE TIED, as each sees it: a tie and the one its other side holds (parent / child;
+// partner / partner). A tie that is its own other side may tie a group to itself (a couple, the roommates).
+struct Tie {
+    std::string name;
+    int other = 0;   // the tie the other side holds (an index into PeopleCatalog::ties)
+    int older = 0;   // years this side is at least older than the other (a parent 18); the planner keeps it
+};
+// Group `from`'s members are the `tie` of group `to`'s (each pair once; within one group, every pair).
+struct HouseholdTie {
+    int from = 0, to = 0, tie = 0;
+};
+
+// A kind of household: its share of the households, the dwellings it fits (bedrooms bedsLo..bedsHi), who it is and
+// how they are tied.
 struct HouseholdType {
     std::string name;
     double share = 0;
     int bedsLo = 0, bedsHi = 0;
     std::vector<MemberGroup> groups;
+    std::vector<HouseholdTie> ties;
 };
 
 struct PeopleCatalog {
     std::vector<LifeStage> stages;
     std::vector<AgeBand> bands;
     std::vector<HouseholdType> households;
+    std::vector<Tie> ties;
     // Who fills a hall's beds: people of this band and stage (a stage with `beds`), at most this share of the walkers.
     int hallBand = -1, hallStage = -1;
     double hallShare = 0.25;
@@ -73,8 +88,10 @@ struct PeopleCatalog {
     int stage(const std::string& name) const;
     int band(const std::string& name) const;
     int household(const std::string& name) const;
+    int tie(const std::string& name) const;
     // What is wrong with it ("" when nothing): a share-less band or type, a dwelling size no type fits, a hall rule
-    // that names no beds stage, a stage with no job and no role, a lodger band with a walk-only stage.
+    // that names no beds stage, a stage with no job and no role, a lodger band with a walk-only stage, a tie whose
+    // other side does not answer it, a household tie naming a group it has not got.
     std::string check() const;
     std::string describe() const;
 };
@@ -84,6 +101,7 @@ PeopleCatalog defaultPeopleCatalog();
 // One person of the plan.
 struct Resident {
     uint8_t band = 0, stage = 0, age = 0;
+    uint8_t group = 0;   // which of its household type's member groups (its ties)
     bool walks = false;
 };
 // One household: its type (kHallHousehold: a student in a hall bed), its home, the dwelling it has (an index into

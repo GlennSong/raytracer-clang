@@ -4616,13 +4616,36 @@ void CityRenderSystem::render(engine::FrameContext& ctx) {
             };
             ImGui::Text("Lives: %s", placeLabel(a.homePlace));
             ImGui::Text("Works: %s", placeLabel(a.workPlace));
-            // Surface-level social graph: who this agent knows.
+            // WHO THEY ARE (people.lua): age and life stage; their household, and how each housemate is theirs
+            const PeopleCatalog& folk = sim_.people();
             const RelationshipTable& rel = sim_.relationships();
+            const char* stageName = a.stage >= 0 && a.stage < static_cast<int>(folk.stages.size())
+                                        ? folk.stages[static_cast<std::size_t>(a.stage)].name.c_str() : "—";
+            ImGui::Text("Age %d   %s", a.age, stageName);
+            const HouseholdPlan& plan = sim_.households();
+            if (a.household >= 0 && a.household < static_cast<int>(plan.households.size())) {
+                const Household& hh = plan.households[static_cast<std::size_t>(a.household)];
+                const char* typeName = hh.type < folk.households.size() ? folk.households[hh.type].name.c_str() : "hall bed";
+                ImGui::Text("Household: %s of %u", typeName, hh.count);
+                for (const Agent& o : sim_.agents()) {   // (a scan, only while the inspector is open)
+                    if (o.household != a.household || o.uid == a.uid) continue;
+                    const int t = rel.tieOf(o.uid, a.uid);   // what they are to this agent
+                    ImGui::BulletText("%s: UID %u, %d", t >= 0 && t < static_cast<int>(folk.ties.size())
+                                                            ? folk.ties[static_cast<std::size_t>(t)].name.c_str() : "housemate",
+                                      o.uid, o.age);
+                }
+            } else {
+                ImGui::Text("Household: none (a lodger)");
+            }
+            // Surface-level social graph: who else this agent knows.
             const auto& knows = rel.relationsOf(a.uid);
             ImGui::Text("Knows %d", static_cast<int>(knows.size()));
-            for (std::size_t k = 0; k < knows.size() && k < 6; ++k)
-                ImGui::BulletText("UID %u (%s)", knows[k].first,
-                                  relationshipName(knows[k].second));
+            int shown = 0;
+            for (std::size_t k = 0; k < knows.size() && shown < 6; ++k) {
+                if (knows[k].second == Relationship::Household) continue;
+                ImGui::BulletText("UID %u (%s)", knows[k].first, relationshipName(knows[k].second));
+                ++shown;
+            }
             ImGui::Text("Depart work %.1f h   home %.1f h", a.departWork, a.departHome);
             ImGui::Text("Pos (%.1f, %.1f)   Speed %.1f m/s", a.pos.x, a.pos.y, a.speed);
         }

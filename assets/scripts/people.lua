@@ -20,6 +20,11 @@
 --   `count` people of ONE band, drawn once for the group (a couple is two adults, not an adult and a senior):
 --   count = n | { lo, hi };  per_bed = true: one per bedroom, within lo..hi (roommates);  bands = { <band> = share }
 --   Every dwelling size up to the largest any type takes must fit some type.
+--   ties = { { from, "<tie>", to }, ... }   group `from` (counting from 1) is the <tie> of group `to`'s members;
+--   from == to ties every pair in one group (a couple: partners)
+--
+-- people.ties.<name> = { other = "<tie>", older = years }   how two housemates are tied, as each sees it: the tie
+--   the other side holds (a parent's child), and how much older this side is at least (the planner keeps it)
 --
 -- people.halls = { band, stage, share_of_walkers }   who fills the halls' beds, first: at most this share of the
 --   walkers (a student has no car)
@@ -45,20 +50,38 @@ people = {
     senior = { ages = { 65, 90 }, stages = { working = 0.15, retired = 0.85 } },
   },
 
+  ties = {
+    order = { "partner", "parent", "child", "sibling", "grandparent", "grandchild", "roommate" },
+    partner     = { other = "partner" },
+    parent      = { other = "child", older = 18 },
+    child       = { other = "parent" },
+    sibling     = { other = "sibling" },
+    grandparent = { other = "grandchild", older = 36 },
+    grandchild  = { other = "grandparent" },
+    roommate    = { other = "roommate" },
+  },
+
   households = {
     order = { "single", "couple", "roommates", "single_parent", "family", "three_generations", "seniors" },
     single            = { share = 28, beds = { 0, 2 }, members = { { count = 1, bands = { young = 0.25, adult = 0.75 } } } },
-    couple            = { share = 22, beds = { 0, 2 }, members = { { count = 2, bands = { young = 0.1, adult = 0.9 } } } },
+    couple            = { share = 22, beds = { 0, 2 }, members = { { count = 2, bands = { young = 0.1, adult = 0.9 } } },
+                          ties = { { 1, "partner", 1 } } },
     roommates         = { share = 8,  beds = { 2, 4 },
-                          members = { { count = { 2, 4 }, per_bed = true, bands = { young = 0.6, adult = 0.4 } } } },
+                          members = { { count = { 2, 4 }, per_bed = true, bands = { young = 0.6, adult = 0.4 } } },
+                          ties = { { 1, "roommate", 1 } } },
     single_parent     = { share = 7,  beds = { 1, 3 },
-                          members = { { count = 1, bands = { adult = 1 } }, { count = { 1, 2 }, bands = { child = 1 } } } },
+                          members = { { count = 1, bands = { adult = 1 } }, { count = { 1, 2 }, bands = { child = 1 } } },
+                          ties = { { 1, "parent", 2 }, { 2, "sibling", 2 } } },
     family            = { share = 20, beds = { 2, 5 },
-                          members = { { count = 2, bands = { adult = 1 } }, { count = { 1, 3 }, bands = { child = 1 } } } },
+                          members = { { count = 2, bands = { adult = 1 } }, { count = { 1, 3 }, bands = { child = 1 } } },
+                          ties = { { 1, "partner", 1 }, { 1, "parent", 2 }, { 2, "sibling", 2 } } },
     three_generations = { share = 3,  beds = { 3, 5 },
                           members = { { count = 2, bands = { adult = 1 } }, { count = { 1, 3 }, bands = { child = 1 } },
-                                      { count = { 1, 2 }, bands = { senior = 1 } } } },
-    seniors           = { share = 12, beds = { 0, 3 }, members = { { count = { 1, 2 }, bands = { senior = 1 } } } },
+                                      { count = { 1, 2 }, bands = { senior = 1 } } },
+                          ties = { { 1, "partner", 1 }, { 1, "parent", 2 }, { 2, "sibling", 2 },
+                                   { 3, "partner", 3 }, { 3, "parent", 1 }, { 3, "grandparent", 2 } } },
+    seniors           = { share = 12, beds = { 0, 3 }, members = { { count = { 1, 2 }, bands = { senior = 1 } } },
+                          ties = { { 1, "partner", 1 } } },
   },
 
   halls = { band = "young", stage = "student", share_of_walkers = 0.25 },
