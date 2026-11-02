@@ -52,7 +52,7 @@ static int usage() {
                  "       city_plan level-world BRIEF.json      the level's terrain + water blocks that match the brief's world, and its towns' hubs\n"
                  "       city_plan island SEED OUT_DIR [--variants N]   island worlds on the map: terrain, sites, ring freeway (ADR-0105)\n"
                  "       city_plan island-cities SEED OUT_DIR [--terrain LEVEL.json] [--png] [--view X Z HALF NAME]...   that island's cities and towns planned on its land, mapped, and extra close-ups (ADR-0106);\n"
-                 "              ... --level NAME [--template LEVEL.json] [--keep-sites LEVEL.json] [--window X Z HALF] [--rail] [--beaches]   the 3D level; --rail lays the island loop and the cities' light rail in the same run (the map draws them)\n"
+                 "              ... --level NAME [--template LEVEL.json] [--keep-sites LEVEL.json] [--window X Z HALF] [--rail] [--beaches [--coast ABC]] [--beach-towns ABC]   the 3D level; --rail lays the island loop and the cities' light rail in the same run (the map draws them)\n"
                  "       city_plan rivers BRIEF.json [STEP]         the rivers its world's hydrology makes, plan coordinates\n"
                  "       city_plan heights BRIEF.json [HALF STEP]   the brief's ground on a grid, plan coordinates (for placing mountain roads)\n"
                  "       city_plan island-rail GRAPH.json LEVEL.json [--write] [--offset M] [--no-ways] [--way-leg M]   the island loop beside the freeway, a station per town (the level's hubs) and a footway in to each; --write puts it in the graph\n"
@@ -202,6 +202,7 @@ int main(int argc, char** argv) {
         // --keep-sites LEVEL.json: keep that level's places (its citysim hubs: a financial hub a city, a commercial one
         // a town), each re-sited within 900 m on this ground and keeping its name
         std::vector<engine::IslandSite> keep;
+        std::vector<std::pair<engine::Vec2, std::string>> keptBeaches;   // a strip kind's places: grown again from their coast road
         for (int a = 4; a + 1 < argc; ++a)
             if (std::string(argv[a]) == "--keep-sites") {
                 nlohmann::json kl;
@@ -215,7 +216,8 @@ int main(int argc, char** argv) {
                         const engine::SettlementKind* sk = settlements.forHub(h.value("kind", std::string()));
                         s.kind = h.value("settlement", sk ? sk->name : settlements.kinds.front().name);
                         s.at = engine::Vec2(h["at"][0].get<double>(), h["at"][1].get<double>());
-                        keep.push_back(s);
+                        if (settlements.of(s.kind).strip) keptBeaches.push_back({s.at, s.name});   // (not re-sited inland)
+                        else keep.push_back(s);
                     }
                 std::printf("keeping %zu places from %s\n", keep.size(), argv[a + 1]);
             }
@@ -239,7 +241,8 @@ int main(int argc, char** argv) {
         freeways.rgb[0] = 0.98f; freeways.rgb[1] = 0.60f; freeways.rgb[2] = 0.10f; freeways.widthM = 30; freeways.minPx = 2.5; freeways.casing = true;
         limits.label = "Town and city limits"; arterials.label = "Arterial streets"; collectors.label = "Collector streets";
         locals.label = "Local streets"; freeways.label = "City freeway";
-        for (std::size_t k = 0; k < w.sites.size(); ++k) {
+        // EACH PLACE PLANNED (its brief, its plan, its streets on the map, its limits, arterials, buses' graph and centre)
+        auto planSite = [&](std::size_t k) {
             const auto t0 = std::chrono::steady_clock::now();
             const nlohmann::json bj = engine::islandSiteBrief(w, static_cast<int>(k));
             std::ofstream(outDir + "/" + bj["name"].get<std::string>() + ".brief.json") << bj.dump(2) << "\n";
@@ -306,9 +309,38 @@ int main(int argc, char** argv) {
                         "", sc.pavedOverlapM, sc.worstJunction, sc.crowdedJunctions, sc.tightTurns, sc.messAt.empty() ? "" : "; look at");
             for (const engine::Vec2& at : sc.messAt) std::printf(" (%.0f, %.0f)", at.x, at.y);
             std::printf("\n");
-        }
+        };
+        for (std::size_t k = 0; k < w.sites.size(); ++k) planSite(k);
         if (!cityLimits.empty()) {
             engine::routeFreewayRoundCities(w, cityLimits);
+            // THE BEACH TOWNS (~/.claude/plans/beach-town.md): the level's own, or --beach-towns LETTERS off the beach
+            // candidates (findBeachSites, as --beaches letters them); each grows along its coast road and is planned
+            // like any place, after the freeway is routed round the others (which it leaves as it was)
+            {
+                std::vector<std::pair<engine::Vec2, std::string>> beaches = keptBeaches;
+                for (int a = 4; a + 1 < argc; ++a) {
+                    if (std::string(argv[a]) != "--beach-towns") continue;
+                    const std::vector<engine::ShoreSite> shores = engine::findBeachSites(w);
+                    for (const char* L = argv[a + 1]; *L; ++L) {
+                        const std::size_t c = static_cast<std::size_t>(std::toupper(*L) - 'A');
+                        if (c < shores.size()) beaches.push_back({shores[c].at, std::string()});
+                        else std::printf("--beach-towns: no beach %c (%zu candidates)\n", *L, shores.size());
+                    }
+                }
+                const engine::SettlementKind* bk = nullptr;
+                for (const engine::SettlementKind& sk : w.kinds.kinds) if (sk.strip && !bk) bk = &sk;
+                for (const auto& [at, nm] : beaches) {
+                    if (!bk) { std::printf("beach towns: settlements.lua has no strip kind\n"); break; }
+                    std::string why;
+                    const int k = engine::addBeachTown(w, at, bk->name, nm, &why);
+                    if (k < 0) { std::printf("beach town at (%.0f, %.0f): %s\n", at.x, at.y, why.c_str()); continue; }
+                    navs.resize(w.sites.size());
+                    plans.resize(w.sites.size());
+                    w.centres.resize(w.sites.size(), engine::Vec2(0, 0));
+                    planSite(static_cast<std::size_t>(k));
+                    w.sites[static_cast<std::size_t>(k)].limits = plans[static_cast<std::size_t>(k)].limits;
+                }
+            }
             engine::joinPassToTowns(w, arterialNodes);   // ADR-0135: the pass runs into its towns
             // and every city onto it: link roads from its arterials (a city three or four, a town one or two)
             for (const auto& [k, art] : arterialNodes) {

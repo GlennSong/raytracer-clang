@@ -307,7 +307,7 @@ json islandLanesScene(const IslandWorld& w, const std::vector<json>& placeScenes
     std::vector<std::vector<Lookout>> lookouts(w.roads.size());
     for (std::size_t k = 0; k < w.roads.size(); ++k) {
         const IslandRoad& rd = w.roads[k];
-        if ((rd.kind != "pass" && rd.kind != "mountain") || rd.points.size() < 4) continue;
+        if ((rd.kind != "pass" && rd.kind != "mountain" && rd.kind != "coast") || rd.points.size() < 4) continue;
         std::vector<Vec2> targets;
         for (const auto& site : w.sites) targets.push_back(site.at);
         if (w.hydro) for (const Lake& lk : w.hydro->lakes()) targets.push_back(Vec2(0.5 * (lk.minX + lk.maxX), 0.5 * (lk.minZ + lk.maxZ)));

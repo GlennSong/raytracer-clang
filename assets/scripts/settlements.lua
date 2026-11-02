@@ -20,11 +20,14 @@
 --   naming        = "city" | "town" | "mountain"   how place_names names it
 --   brief = { prefix, area_scale, size_min, spoke_spacing, core_block = { l, s }, midtown_block = { l, s }, warp,
 --             ring_spacing, spokes }      its street plan (island_world.cpp islandSiteBrief)
+--   strip = { length, rows, row, cross, sea }   a STRIP town, laid along the road it grew from (a beach town along
+--                                       its coast road): `length` m of it is the seafront street, `rows` streets behind
+--                                       it every `row` m inland, cross streets every `cross` m, its limits `sea` m out
 --   map = { rgb = { r, g, b }, dot = px, label = m }
 -- }
 
 settlements = {
-  order = { "city", "town", "mountain town" },
+  order = { "city", "town", "mountain town", "beach town" },
 
   city = {
     hub = "financial",
@@ -69,5 +72,19 @@ settlements = {
     naming = "mountain",
     brief = { prefix = "mountain_town_" },
     map = { rgb = { 0.62, 0.25, 0.75 } },
+  },
+
+  -- shops on the seafront, homes behind: a strip along its stretch of the coast road (Glenn, 2026-11-01: the coast
+  -- road "where the beach towns grow out of"); off the ring, reached by the coast road
+  ["beach town"] = {
+    hub = "commercial",
+    radius = { 1.0, 300, 600 },
+    on_ring = false,
+    links = { 0, 300 },
+    buses = { 1, 6 },
+    naming = "town",
+    brief = { prefix = "beach_town_" },
+    strip = { length = 900, rows = 3, row = 85, cross = 100, sea = 30 },
+    map = { rgb = { 0.10, 0.62, 0.68 } },
   },
 }

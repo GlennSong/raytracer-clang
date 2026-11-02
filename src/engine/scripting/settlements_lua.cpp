@@ -74,6 +74,17 @@ bool loadSettlementCatalog(ScriptVM& vm, SettlementCatalog& out, std::string* er
             k.spokes = static_cast<int>(numField(L, b, "spokes", k.spokes));
         }
         lua_pop(L, 1);   // brief
+        lua_getfield(L, t, "strip");
+        if (lua_istable(L, -1)) {
+            const int sp = lua_gettop(L);
+            k.strip = true;
+            k.stripLength = numField(L, sp, "length", k.stripLength);
+            k.stripRows = static_cast<int>(numField(L, sp, "rows", k.stripRows));
+            k.stripRow = numField(L, sp, "row", k.stripRow);
+            k.stripCross = numField(L, sp, "cross", k.stripCross);
+            k.stripSea = numField(L, sp, "sea", k.stripSea);
+        }
+        lua_pop(L, 1);   // strip
         lua_getfield(L, t, "map");
         if (lua_istable(L, -1)) {
             const int m = lua_gettop(L);

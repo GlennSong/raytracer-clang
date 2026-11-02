@@ -43,6 +43,9 @@ struct IslandSite {
     bool coastal = false;
     std::vector<std::vector<Vec2>> limits;   // its planned limits (routeFreewayRoundCities), closed
     int population = 0;                      // estimated from its planned buildings (the town-limit sign)
+    // A STRIP town's (a beach town, addBeachTown): the road it grew along -- its seafront street -- and the way inland
+    std::vector<Vec2> spine;
+    Vec2 inland{0, 0};
 };
 
 // An INTERCHANGE on the island freeway: a diamond where a road crosses it (islandInterchanges).
@@ -184,6 +187,17 @@ struct CoastRoadRule {
     double cell = 16.0, maxGrade = 0.07, hardGrade = 0.12;
 };
 int planCoastRoad(IslandWorld& w, int fromSite, const Vec2& via, int toSite, const CoastRoadRule& rule = {}, std::string* why = nullptr);
+
+// NAMES (place_names.h) for every site that has none, in site order; the site shapes the name (the coast, a river
+// through it, the mountain). planIsland calls it; a site added later (a beach town) is named by it too.
+void nameSites(IslandWorld& w);
+
+// A BEACH TOWN (~/.claude/plans/beach-town.md; Glenn: the coast road "where the beach towns grow out of"): the coast
+// road through `beach` (planCoastRoad, from the nearest coastal place one way along the shore to the nearest the
+// other), and a site of `kind` (a strip kind, settlements.lua) appended to w.sites on its middle `stripLength` -- its
+// spine, the town's seafront street. The road becomes its two legs, each place to the town. Call once the places'
+// limits are known (routeFreewayRoundCities). Returns the new site's index; -1 and `why` when there is no road.
+int addBeachTown(IslandWorld& w, const Vec2& beach, const std::string& kind, const std::string& name = {}, std::string* why = nullptr);
 
 // The pass's (and mountain road's) ends run on into their towns: each end, trimmed at its town's limits,
 // joins the nearest of that town's arterial nodes (ADR-0135). Call after routeFreewayRoundCities.

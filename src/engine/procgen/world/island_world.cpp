@@ -174,6 +174,22 @@ json islandTerrainBlock(uint32_t seed, double half) {
     return block;
 }
 
+void nameSites(IslandWorld& w) {
+    std::set<std::string> used;
+    const uint32_t worldSeed = static_cast<uint32_t>(w.terrain.value("seed", 0u));
+    for (const IslandSite& s : w.sites) if (!s.name.empty()) used.insert(s.name);
+    for (std::size_t k = 0; k < w.sites.size(); ++k) {
+        IslandSite& s = w.sites[k];
+        if (!s.name.empty()) continue;   // (a kept place keeps its name)
+        PlaceTraits t;
+        t.city = w.kinds.of(s.kind).naming == "city";
+        t.coastal = s.coastal;
+        t.mountain = w.kinds.of(s.kind).naming == "mountain";
+        t.river = w.hydro && w.hydro->distanceToRiver(s.at.x, s.at.y, 2000.0) < std::max(200.0, s.radius * 0.8);
+        s.name = placeName(placeNameBook(), t, worldSeed, static_cast<uint32_t>(k), used);
+    }
+}
+
 IslandWorld planIsland(const json& blockIn, double half, double cell, const std::vector<IslandSite>& keep, const SettlementCatalog* kinds) {
     const auto t0 = std::chrono::steady_clock::now();
     IslandWorld w;
@@ -481,21 +497,7 @@ IslandWorld planIsland(const json& blockIn, double half, double cell, const std:
         route("mountain", -1, k, foot, top, mountainRouteParams());
     }
 
-    // NAMES (place_names.h): the site shapes the name -- the coast, a river through it, the mountain
-    {
-        std::set<std::string> used;
-        const uint32_t worldSeed = static_cast<uint32_t>(w.terrain.value("seed", 0u));
-        for (std::size_t k = 0; k < w.sites.size(); ++k) {
-            IslandSite& s = w.sites[k];
-            if (!s.name.empty()) { used.insert(s.name); continue; }   // (a kept place keeps its name)
-            PlaceTraits t;
-            t.city = w.kinds.of(s.kind).naming == "city";
-            t.coastal = s.coastal;
-            t.mountain = w.kinds.of(s.kind).naming == "mountain";
-            t.river = w.hydro && w.hydro->distanceToRiver(s.at.x, s.at.y, 2000.0) < std::max(200.0, s.radius * 0.8);
-            s.name = placeName(placeNameBook(), t, worldSeed, static_cast<uint32_t>(k), used);
-        }
-    }
+    nameSites(w);
     // 5. THE REPORT
     json sites = json::array(), roads = json::array();
     for (const IslandSite& s : w.sites)
@@ -551,10 +553,19 @@ json islandSiteBrief(const IslandWorld& w, int site) {
         // a street may be as steep as a hill town's (15%); the growth prefers the flat ground anyway
         {"land", {{"minHeight", 3.0}, {"maxSlope", 0.15}, {"shape", true}, {"area", area}, {"spokeSpacing", k.spokeSpacing}}},
     };
+    // A STRIP town (a beach town): laid along its spine (city_plan.cpp world.strip), on its land's mask but not grown
+    // over it; its square is room for the strip
+    if (k.strip && s.spine.size() >= 2) {
+        world["land"] = {{"minHeight", 0.5}, {"maxSlope", 0.15}};   // (its seafront runs low, by the sand: at 1.5 m the land cut it)
+        json spine = json::array();
+        for (const Vec2& q : s.spine) spine.push_back({q.x, q.y});
+        world["strip"] = {{"spine", spine}, {"inland", {s.inland.x, s.inland.y}}, {"rows", k.stripRows}, {"row", k.stripRow},
+                          {"cross", k.stripCross}, {"sea", k.stripSea}};
+    }
     return {
         {"name", name},
         {"seed", seed},
-        {"size", size},
+        {"size", k.strip && s.spine.size() >= 2 ? 2.0 * std::max(k.sizeMin, k.stripLength * 0.5 + k.stripRow * k.stripRows + 300.0) : size},
         {"center", {s.at.x, s.at.y}},
         {"relief", 3.0},   // the island is the relief; the brief's hills would only roughen it
         // a city's downtown blocks are big enough for towers with room round them; a town keeps its small walkable
@@ -1591,6 +1602,7 @@ bool writeIslandMap(const IslandWorld& w, const std::string& pngPath, int px, co
         if (rd.kind == "freeway") { const double W = wide(44.0, 4.0); stroke(rd.points, W + 2.0, 0.15f, 0.10f, 0.05f); stroke(rd.points, W, 0.98f, 0.60f, 0.10f); }
         else if (rd.kind == "pass") { const double W = wide(11.0, 3.0); stroke(rd.points, W + 1.5, 0.15f, 0.10f, 0.05f); stroke(rd.points, W, 0.99f, 0.90f, 0.25f); }
         else if (rd.kind == "link") { const double W = wide(16.0, 2.6); stroke(rd.points, W + 1.5, 0.15f, 0.10f, 0.05f); stroke(rd.points, W, 0.99f, 0.80f, 0.20f); }
+        else if (rd.kind == "coast") { const double W = wide(10.0, 2.2); stroke(rd.points, W + 1.4, 0.15f, 0.10f, 0.05f); stroke(rd.points, W, 0.12f, 0.65f, 0.69f); }
         else { const double W = wide(9.0, 1.8); stroke(rd.points, W + 1.4, 0.15f, 0.10f, 0.05f); stroke(rd.points, W, 1.0f, 1.0f, 1.0f); }
     }
     for (const std::vector<Vec2>& r : w.ramps) {   // the ramps, over the roads they join
@@ -1767,7 +1779,7 @@ bool writeIslandSvg(const IslandWorld& w, const std::string& svgPath, const Isla
     };
     o << "<g id=\"roads-country\">\n";
     for (const auto& [kind, wd, col] : std::vector<std::tuple<std::string, double, std::string>>{
-             {"mountain", 9.0, "#ffffff"}, {"pass", 11.0, "#fbe43f"}, {"link", 16.0, "#fbcc33"}}) {
+             {"mountain", 9.0, "#ffffff"}, {"coast", 10.0, "#1fa5b0"}, {"pass", 11.0, "#fbe43f"}, {"link", 16.0, "#fbcc33"}}) {
         lines(roadsOf(kind), "stroke=\"#1f1a14\" stroke-width=\"" + std::to_string(wd + 3.0) + "\"");
         lines(roadsOf(kind), "stroke=\"" + col + "\" stroke-width=\"" + std::to_string(wd) + "\"");
     }
@@ -1843,6 +1855,7 @@ bool writeIslandSvg(const IslandWorld& w, const std::string& svgPath, const Isla
         if (has("link")) rows.push_back({"Link roads (town to freeway)", {sw("#1f1a14", W * 0.0024), sw("#fbcc33", W * 0.0018)}});
         if (has("pass")) rows.push_back({"The pass", {sw("#1f1a14", W * 0.0022), sw("#fbe43f", W * 0.0016)}});
         if (has("mountain")) rows.push_back({"Mountain road", {sw("#1f1a14", W * 0.0020), sw("#ffffff", W * 0.0014)}});
+        if (has("coast")) rows.push_back({"Coast road (scenic)", {sw("#1f1a14", W * 0.0021), sw("#1fa5b0", W * 0.0015)}});
         for (const IslandMapLayer& L : view.layers) {
             if (L.label.empty() || L.lines.empty()) continue;
             char rgb[8];
@@ -2312,9 +2325,90 @@ int planCoastRoad(IslandWorld& w, int fromSite, const Vec2& via, int toSite, con
     return static_cast<int>(w.roads.size()) - 1;
 }
 
+int addBeachTown(IslandWorld& w, const Vec2& beach, const std::string& kind, const std::string& name, std::string* why) {
+    auto fail = [&](const std::string& m) { if (why) *why = m; return -1; };
+    const SettlementKind& sk = w.kinds.of(kind);
+    // THE WAY INLAND at the beach: uphill, over 120 m
+    auto uphill = [&](const Vec2& p) {
+        const double d = 60.0;
+        const Vec2 g(w.heightAt(p.x + d, p.y) - w.heightAt(p.x - d, p.y), w.heightAt(p.x, p.y + d) - w.heightAt(p.x, p.y - d));
+        return g.length() > 1e-9 ? normalize(g) : Vec2(1, 0);
+    };
+    const Vec2 in0 = uphill(beach), along(-in0.y, in0.x);
+    // ITS NEIGHBOURS: the nearest coastal place each way along the shore
+    int left = -1, right = -1;
+    double dl = 1e30, dr = 1e30;
+    for (int si = 0; si < static_cast<int>(w.sites.size()); ++si) {
+        const IslandSite& st = w.sites[static_cast<std::size_t>(si)];
+        if (!st.coastal || st.limits.empty()) continue;
+        const Vec2 d = st.at - beach;
+        const double dd = d.length();
+        if (dot(d, along) > 0) { if (dd < dl) { dl = dd; left = si; } }
+        else if (dd < dr) { dr = dd; right = si; }
+    }
+    if (left < 0 || right < 0) return fail("no coastal place one way along the shore");
+    std::string rwhy;
+    const int ri = planCoastRoad(w, left, beach, right, {}, &rwhy);
+    if (ri < 0) return fail("no coast road: " + rwhy);
+    const std::vector<Vec2> P = w.roads[static_cast<std::size_t>(ri)].points;
+    // THE SPINE: the road's `stripLength` round its point nearest the beach, kept 150 m off either end
+    std::vector<double> st{0.0};
+    for (std::size_t i = 1; i < P.size(); ++i) st.push_back(st.back() + (P[i] - P[i - 1]).length());
+    std::size_t mid = 0;
+    double bd = 1e30;
+    for (std::size_t i = 0; i < P.size(); ++i)
+        if ((P[i] - beach).length() < bd) { bd = (P[i] - beach).length(); mid = i; }
+    const double half = sk.stripLength * 0.5;
+    const double s0 = std::max(150.0, st[mid] - half), s1 = std::min(st.back() - 150.0, st[mid] + half);
+    if (s1 - s0 < 200.0) { w.roads.erase(w.roads.begin() + ri); return fail("the coast road is too short for a town between its places"); }
+    auto at = [&](double sv) {
+        const std::size_t i = std::min<std::size_t>(P.size() - 2, static_cast<std::size_t>(std::upper_bound(st.begin(), st.end(), sv) - st.begin()) - 1);
+        const double t = std::clamp((sv - st[i]) / std::max(1e-9, st[i + 1] - st[i]), 0.0, 1.0);
+        return P[i] + (P[i + 1] - P[i]) * t;
+    };
+    std::vector<Vec2> spine{at(s0)}, legA, legB;
+    for (std::size_t i = 0; i < P.size(); ++i) {
+        if (st[i] <= s0) legA.push_back(P[i]);
+        else if (st[i] < s1) spine.push_back(P[i]);
+        else legB.push_back(P[i]);
+    }
+    spine.push_back(at(s1));
+    legA.push_back(at(s0));
+    legB.insert(legB.begin(), at(s1));
+    // the way inland along the spine: the side its sea is not
+    const Vec2 sm = at(0.5 * (s0 + s1)), t = at(std::min(s1, 0.5 * (s0 + s1) + 20.0)) - at(std::max(s0, 0.5 * (s0 + s1) - 20.0));
+    Vec2 n = t.length() > 1e-9 ? Vec2(-t.y, t.x) * (1.0 / t.length()) : in0;
+    if (w.heightAt(sm.x + n.x * 120.0, sm.y + n.y * 120.0) < w.heightAt(sm.x - n.x * 120.0, sm.y - n.y * 120.0)) n = n * -1.0;
+    // THE SITE, at the end of the list (every other place keeps its index, and so its seed)
+    IslandSite s;
+    s.kind = sk.name;
+    s.name = name;
+    s.spine = spine;
+    s.inland = n;
+    s.at = sm + n * (sk.stripRow * sk.stripRows * 0.5);
+    s.radius = std::clamp(0.5 * (s1 - s0), sk.radiusMin, sk.radiusMax);
+    s.elevation = w.heightAt(s.at.x, s.at.y);
+    s.coastal = true;
+    w.sites.push_back(s);
+    const int site = static_cast<int>(w.sites.size()) - 1;
+    nameSites(w);
+    // THE ROAD becomes its two legs: each place to the town (the spine is the town's own street now)
+    IslandRoad a = w.roads[static_cast<std::size_t>(ri)], b = a;
+    a.points = legA; a.to = site;
+    b.points = legB; b.from = site;
+    const HeightField ground = [&w](double x, double z) { return w.heightAt(x, z); };
+    for (IslandRoad* r : {&a, &b}) {
+        const TerrainRoute m = measureRoute(ground, r->points);
+        r->length = m.length; r->climb = m.climb; r->worstGrade = m.worstGrade;
+    }
+    w.roads[static_cast<std::size_t>(ri)] = a;
+    w.roads.push_back(b);
+    return site;
+}
+
 void joinPassToTowns(IslandWorld& w, const std::vector<std::pair<int, std::vector<Vec2>>>& arterialNodes) {
     for (IslandRoad& rd : w.roads) {
-        if ((rd.kind != "pass" && rd.kind != "mountain") || rd.points.size() < 2) continue;
+        if ((rd.kind != "pass" && rd.kind != "mountain" && rd.kind != "coast") || rd.points.size() < 2) continue;
         for (int side = 0; side < 2; ++side) {
             const int site = side ? rd.to : rd.from;   // -1: cut at the freeway -- the nearest town's streets
             const Vec2 end = side ? rd.points.back() : rd.points.front();

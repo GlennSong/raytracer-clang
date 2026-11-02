@@ -34,6 +34,8 @@ std::string SettlementCatalog::check() const {
         if (k.coreBlock[0] <= 0 || k.coreBlock[1] <= 0 || k.midtownBlock[0] <= 0 || k.midtownBlock[1] <= 0)
             return k.name + ": blocks must be positive";
         if (k.naming != "city" && k.naming != "town" && k.naming != "mountain") return k.name + ": naming is city, town or mountain";
+        if (k.strip && (k.stripLength < 200.0 || k.stripRows < 1 || k.stripRow < 40.0 || k.stripCross < 40.0))
+            return k.name + ".strip: length >= 200, rows >= 1, row and cross >= 40 (m)";
     }
     return {};
 }
@@ -47,7 +49,8 @@ std::string SettlementCatalog::describe() const {
           << k.busStops << " signed=" << k.signedFar << " limit=" << k.limitSign << " naming=" << k.naming << " brief=" << k.briefPrefix
           << " " << k.areaScale << "/" << k.sizeMin << "/" << k.spokeSpacing << " core=" << k.coreBlock[0] << "x" << k.coreBlock[1]
           << " midtown=" << k.midtownBlock[0] << "x" << k.midtownBlock[1] << " warp=" << k.warp << " rings=" << k.ringSpacing
-          << " spokes=" << k.spokes << " map=" << k.rgb[0] << "," << k.rgb[1] << "," << k.rgb[2] << "/" << k.dot << "/" << k.label << "\n";
+          << " spokes=" << k.spokes << " strip=" << k.strip << "/" << k.stripLength << "/" << k.stripRows << "x" << k.stripRow << "/"
+          << k.stripCross << "/" << k.stripSea << " map=" << k.rgb[0] << "," << k.rgb[1] << "," << k.rgb[2] << "/" << k.dot << "/" << k.label << "\n";
     }
     return o.str();
 }
@@ -92,6 +95,20 @@ SettlementCatalog defaultSettlements() {
     mt.briefPrefix = "mountain_town_";
     mt.rgb[0] = 0.62f; mt.rgb[1] = 0.25f; mt.rgb[2] = 0.75f;
     c.kinds.push_back(mt);
+
+    // THE BEACH TOWN (Glenn, 2026-11-01: "A beach town with shops and nearby homes" / the coast road "where the beach
+    // towns grow out of"): a strip along its stretch of the coast road, shops on the seafront, homes behind; off the
+    // ring, reached by the coast road, its own bus loop
+    SettlementKind bt = town;
+    bt.name = "beach town";
+    bt.radiusScale = 1.0; bt.radiusMin = 300.0; bt.radiusMax = 600.0;
+    bt.onRing = false;
+    bt.linkCandidates = 0;   // the coast road is its road
+    bt.busRoutes = 1; bt.busStops = 6;
+    bt.briefPrefix = "beach_town_";
+    bt.strip = true;
+    bt.rgb[0] = 0.10f; bt.rgb[1] = 0.62f; bt.rgb[2] = 0.68f;
+    c.kinds.push_back(bt);
     return c;
 }
 

@@ -1793,6 +1793,67 @@ CityPlan generatePlan(const Brief& B) {
         }
         plan.limits = shape.limits;
     }
+    // --- STRIP (world.strip; ~/.claude/plans/beach-town.md): a town laid along the road it grew from -- a beach town
+    // along its stretch of the coast road (Glenn: the coast road "where the beach towns grow out of"). The SPINE is
+    // its seafront street (an arterial: the coast road's ends join it); `rows` streets run behind it every `row` m
+    // inland, following its curve; cross streets every `cross` m from the spine to the last row, every third a
+    // collector. Its limits are the strip's outline, `sea` m out over the spine's sea side (the promenade, the sand).
+    const nlohmann::json stripSpec = B.world.is_object() ? B.world.value("strip", nlohmann::json()) : nlohmann::json();
+    if (stripSpec.is_object() && stripSpec.contains("spine") && stripSpec["spine"].size() >= 2) {
+        roads.clear();
+        // the spine, resampled every 10 m and smoothed over ~60 m: its offsets must not kink where it bends
+        std::vector<Vec2> raw;
+        for (const auto& q : stripSpec["spine"]) raw.push_back(Vec2(q[0].get<double>(), q[1].get<double>()));
+        const std::vector<double> rs = roads::lanes::stations(raw);
+        std::vector<Vec2> spine;
+        for (Real sv = 0; sv < rs.back(); sv += 10) spine.push_back(roads::lanes::pointAt(raw, rs, sv));
+        spine.push_back(raw.back());
+        for (int pass = 0; pass < 3; ++pass) {
+            std::vector<Vec2> sm = spine;
+            for (std::size_t i = 1; i + 1 < spine.size(); ++i) sm[i] = (spine[i - 1] + spine[i] * 2.0 + spine[i + 1]) * 0.25;
+            spine.swap(sm);
+        }
+        const Vec2 inlandHint(stripSpec["inland"][0].get<double>(), stripSpec["inland"][1].get<double>());
+        const int rows = stripSpec.value("rows", 3);
+        const Real row = stripSpec.value("row", 85.0), cross = stripSpec.value("cross", 100.0), seaOut = stripSpec.value("sea", 30.0);
+        // each spine point's inland normal (the side the hint points to)
+        std::vector<Vec2> nrm(spine.size());
+        for (std::size_t i = 0; i < spine.size(); ++i) {
+            const Vec2 t = spine[std::min(i + 1, spine.size() - 1)] - spine[i > 0 ? i - 1 : 0];
+            Vec2 n = t.length() > 1e-9 ? Vec2(-t.y, t.x) * (1.0 / t.length()) : inlandHint;
+            if (dot(n, inlandHint) < 0) n = n * Real(-1);
+            nrm[i] = n;
+        }
+        auto offset = [&](Real off) {
+            std::vector<Vec2> o(spine.size());
+            for (std::size_t i = 0; i < spine.size(); ++i) o[i] = spine[i] + nrm[i] * off;
+            return o;
+        };
+        auto add = [&](std::vector<Vec2> pts, RoadClass k, Real w) {
+            Polyline p; p.klass = k; p.width = w; p.pts = std::move(pts);
+            roads.push_back(std::move(p));
+        };
+        add(spine, RoadClass::Arterial, B.arterialWidth);                                   // the seafront
+        for (int k = 1; k <= rows; ++k) add(offset(row * k), RoadClass::Local, B.localWidth);
+        const std::vector<double> ss = roads::lanes::stations(spine);
+        const int nCross = std::max(1, static_cast<int>(ss.back() / cross));
+        const Real first = (ss.back() - (nCross - 1) * cross) * 0.5;
+        for (int j = 0; j < nCross; ++j) {
+            const Real sv = first + j * cross;
+            const std::size_t i = std::min<std::size_t>(spine.size() - 1, static_cast<std::size_t>(std::upper_bound(ss.begin(), ss.end(), sv) - ss.begin()));
+            const bool trunk = (j - nCross / 2) % 3 == 0;
+            std::vector<Vec2> pts;
+            for (Real off = -2; off <= row * rows + 2; off += 15) pts.push_back(spine[i] + nrm[i] * off);
+            pts.push_back(spine[i] + nrm[i] * (row * rows + 2));
+            add(pts, trunk ? RoadClass::Collector : RoadClass::Local, trunk ? B.collectorWidth : B.localWidth);
+        }
+        std::vector<Vec2> outline = offset(-seaOut);
+        const std::vector<Vec2> back = offset(row * rows + 25.0);
+        outline.insert(outline.end(), back.rbegin(), back.rend());
+        plan.limits = {outline};
+        if (std::getenv("RT_PLAN_WHY"))
+            std::printf("[plan] strip: %.0f m of seafront, %d rows, %d cross streets\n", ss.back(), rows, nCross);
+    }
     // --- the towns at the expressways' far ends ---
     // A site: the farthest point along the expressway's line, past the city by `gap` and inside the
     // ground grid, where the whole town — `depth` along the expressway, `halfWidth` either side —

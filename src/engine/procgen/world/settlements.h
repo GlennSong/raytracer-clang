@@ -40,6 +40,12 @@ struct SettlementKind {
     double coreBlock[2] = {94.0, 64.0}, midtownBlock[2] = {158.0, 108.0}, warp = 10.0;
     double ringSpacing = 120.0;
     int spokes = 6;
+    // A STRIP (a beach town; ~/.claude/plans/beach-town.md): laid along the road it grew from instead of grown over its
+    // land -- its spine `stripLength` of the coast road, the seafront street; `stripRows` streets behind it every
+    // `stripRow` m inland; cross streets every `stripCross`; its limits `stripSea` out over the spine's sea side.
+    bool strip = false;
+    double stripLength = 900.0, stripRow = 85.0, stripCross = 100.0, stripSea = 30.0;
+    int stripRows = 3;
     // THE MAP: its circle's colour, its dot (px) and its label (m)
     float rgb[3] = {0.95f, 0.45f, 0.05f};
     double dot = 5.0, label = 150.0;
