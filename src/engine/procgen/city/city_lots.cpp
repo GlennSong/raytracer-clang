@@ -3074,6 +3074,18 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
         if (d >= edge) return Real(0);
         return (edge - d) / (edge - plateau);
     };
+    // THE SUBURB'S GRADIENT (denser housing, Glenn 2026-11-01: "Build up as well"): coreness is 0 past the downtown's
+    // rim, so a residential quarter had no "toward town". This is 1 at the rim (midRadius), 0 at 2.5 times it: the
+    // residential recipes' flats rise toward the town.
+    auto suburbAt = [&](const Vec2& q) {
+        Real d = (q - p.center).length();
+        for (const auto& h : p.hubs) if (h.second == 0) d = std::min(d, (q - h.first).length());
+        const Real rim = std::max(p.midRadius, p.innerRadius + Real(1));
+        const Real out = rim * 2.5;
+        if (d <= rim) return Real(1);
+        if (d >= out) return Real(0);
+        return (out - d) / (out - rim);
+    };
     // The plan counters always run (the build-end density line below reads
     // them); `debug` just decides whether the caller sees them too.
     LotPlanDebug localDbg;
@@ -5407,7 +5419,7 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
             // financial district's rim — the architect grows the skyscraper
             // cluster from it. sqrt widens the peak so the cluster is a
             // CLUSTER, not one tall building at the exact centre.
-            const Real coreness = corenessAt(b.site);
+            const Real coreness = tag == DistrictTag::Residential ? suburbAt(b.site) : corenessAt(b.site);
             BuildingRecipe rec =
                 lot.bigBox && lot.mallWings ? architectMallWings(mix(pp.seed, static_cast<uint32_t>(li) * 7u + 3u)) :
                 lot.bigBox && lot.mall ? architectMall(mix(pp.seed, static_cast<uint32_t>(li) * 7u + 3u)) :

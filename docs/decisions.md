@@ -14175,3 +14175,34 @@ C++ (`kRoleCommuter`... and `builtinRolesLead`). Dice made about one in five a s
   stage). The buses' and cabs' drivers have no stage and work. The role dice are gone.
 - RoleCatalog::check() replaces builtinRolesLead: a catalog needs a catch-all job role. PeopleCatalog::check() needs
   every stage without a job to name a role.
+
+## ADR-0298 — Denser, taller housing; flats over shops are homes
+
+#172. Glenn, 2026-11-01: "build denser housing. See how much we can fit. Build up as well." The population cap
+(ADR-0296) showed the island's housing held 84k of the 238k its streets ask for.
+
+**What the audit found** (level_tests `housing_audit_prints`, RT_HOUSING=1):
+- Homes were 29% of the island's 15.3M m² of floor; the downtowns were all office.
+- Residential districts were 57% detached houses: 4,938 buildings and 11,410 dwellings.
+- Shop buildings with flats upstairs (mixed use, brick shop, corner shop) housed nobody: 15,658 dwellings.
+
+**Decision.**
+- FLATS OVER SHOPS (load time, no re-bake): a shop building whose units are `residential` adds a home place for the
+  storeys above the ground. The shop place keeps its ground floor.
+- THE MIXES (architectPick; lots tag 2026-11-01.1):
+  - residential: houses from 57% to 27% of the lots (duplexes 6%); rows 10%, courtyard blocks 8%, garden condos
+    12%, apartments 17%, walk-ups 10%;
+  - commercial: condo towers from 6% to 10%, walk-ups from 2% to 8%, mixed use 14%; fewer banks, office midrises
+    and plazas;
+  - financial: residential towers are 18% (pencil towers 8%, condo towers 10%), carved from the glass, podium,
+    slab and office shares.
+- BUILD UP:
+  - apartments 3-5 storeys plus up to 4 toward the town (slender 2.4);
+  - walk-ups 4-6 plus 2; garden condos 3-5 plus 2; courtyard blocks 5-7 plus 3;
+  - terrace condos 5-7; lofts 4-6; mixed use 3-6;
+  - condo towers 6-10 plus 14 at the core, their slenderness rising with it (a residential tower downtown).
+- "Toward the town" in a residential quarter is a new gradient, `suburbAt` in the lot pass: 1 at the downtown's rim,
+  0 at 2.5 times it. Coreness was 0 everywhere past the rim.
+
+metro_v2_test: 3,430 dwellings before ADR-0296 and this; 4,163 with the flats over shops; 8,970 now. Its streets'
+10,516 people are all housed.

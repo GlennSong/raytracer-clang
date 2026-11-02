@@ -312,7 +312,8 @@ TEST_CASE(architect_tables_are_coherent) {
         if (f.params.roofStyle != BuildingParams::RoofStyle::Flat) ++finPitched;
         BuildingRecipe r = architectPick(DistrictTag::Residential, 14, 220, s);
         if (r.massing != BuildingRecipe::Massing::Park) {
-            if (r.params.floors <= 4) ++resLow; else ++resTall;
+            if (r.params.floors <= 7) ++resLow;   // houses, rows, flats and walk-ups (denser housing, ADR-0298)
+            if (r.params.floors >= 10) ++resTall;
             if (r.params.roofStyle != BuildingParams::RoofStyle::Flat) ++resPitched;
         }
         BuildingRecipe ind = architectPick(DistrictTag::Industrial, 24, 500, s);
@@ -326,7 +327,7 @@ TEST_CASE(architect_tables_are_coherent) {
     CHECK(finPitched == 0);    // and never a cottage roof
     CHECK(resTall == 0);       // the outskirts never grow a tower
     CHECK(resLow >= 30);
-    CHECK(resPitched >= 12);   // pitched roofs are common out there
+    CHECK(resPitched >= 6);    // pitched roofs are common out there (a quarter of the lots are houses)
     CHECK(indSolid >= 20);     // the wedge is mostly sheds
 
     // The CORE is a SKYSCRAPER cluster: full coreness lifts the glass towers

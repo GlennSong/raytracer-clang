@@ -336,9 +336,10 @@ void recipeOfficeMidrise(BuildingRecipe& out, ProcRng& rng, RecipeCtx&) {
 }
 
 // Stucco / painted walk-up homes over midtown streets.
-void recipeWalkupHomes(BuildingRecipe& out, ProcRng& rng, RecipeCtx&) {
+void recipeWalkupHomes(BuildingRecipe& out, ProcRng& rng, RecipeCtx& cx) {
     BuildingParams& p = out.params;
-    p.floors = rng.between(3, 5);
+    p.floors = rng.between(4, 6) + static_cast<int>(cx.coreness * 2.0 + 0.5);
+    cx.slender = std::max(cx.slender, Real(2.2));
     p.groundRetail = false;
     dress(p, rng.next() < 0.3 ? FacadeStyle::Painted : FacadeStyle::Stucco, rng);
     out.placeType = "home";
@@ -403,9 +404,11 @@ void recipeYardHouse(BuildingRecipe& out, ProcRng& rng, RecipeCtx&) {
 }
 
 // Low walk-up apartments on the outskirts; the low ones sometimes gabled.
-void recipeApartments(BuildingRecipe& out, ProcRng& rng, RecipeCtx&) {
+void recipeApartments(BuildingRecipe& out, ProcRng& rng, RecipeCtx& cx) {
     BuildingParams& p = out.params;
-    p.floors = rng.between(2, 4);
+    // DENSER HOUSING (Glenn, 2026-11-01: "build denser housing ... Build up as well"): taller toward the town
+    p.floors = rng.between(3, 5) + static_cast<int>(cx.coreness * 4.0 + 0.5);
+    cx.slender = std::max(cx.slender, Real(2.4));
     p.groundRetail = false;
     dress(p, rng.next() < 0.55 ? FacadeStyle::Brick : FacadeStyle::Stucco, rng);
     if (p.floors <= 3 && rng.next() < 0.4) {
@@ -789,7 +792,7 @@ void recipeBundledTubes(BuildingRecipe& out, ProcRng& rng, RecipeCtx& cx) {
 // stucco wings round an open court, the corners their own houses, every cell its own door on the street.
 void recipeCourtyardBlock(BuildingRecipe& out, ProcRng& rng, RecipeCtx& cx) {
     BuildingParams& p = out.params;
-    p.floors = rng.between(4, 6) + (cx.roomy ? 1 : 0);
+    p.floors = rng.between(5, 7) + (cx.roomy ? 1 : 0) + static_cast<int>(cx.coreness * 3.0 + 0.5);
     p.groundRetail = rng.next() < 0.5;
     dress(p, rng.next() < 0.6 ? FacadeStyle::Brick : FacadeStyle::Stucco, rng);
     out.massing = BuildingRecipe::Massing::Complex;
@@ -1043,7 +1046,8 @@ void recipePencilTower(BuildingRecipe& out, ProcRng& rng, RecipeCtx& cx) {
 // gets its slab + railing.
 void recipeCondoTower(BuildingRecipe& out, ProcRng& rng, RecipeCtx& cx) {
     BuildingParams& p = out.params;
-    p.floors = rng.between(5, 8);
+    // a mid-rise in midtown, a residential tower downtown (the condo towers among the office towers)
+    p.floors = rng.between(6, 10) + static_cast<int>(cx.coreness * 14.0);
     p.groundRetail = rng.next() < 0.5;
     const Real r = rng.next();
     dress(p, r < 0.45 ? FacadeStyle::Concrete
@@ -1051,7 +1055,7 @@ void recipeCondoTower(BuildingRecipe& out, ProcRng& rng, RecipeCtx& cx) {
     p.balconies = true;
     if (p.floors > 6) { p.setbackFloors = rng.between(3, 5);
                         p.setbackEvery = rng.in(1.0, 1.4); }
-    cx.slender = 2.2;
+    cx.slender = 2.2 + cx.coreness * 2.0;
     out.placeType = "home";
     towerTop(p, {{1, 50}, {2, 30}, {6, 20}});   // buildings M2
     masonryDepth(p, 0.1, {{1, 70}, {2, 30}});   // buildings M3
@@ -1062,7 +1066,7 @@ void recipeCondoTower(BuildingRecipe& out, ProcRng& rng, RecipeCtx& cx) {
 // terraces with balcony rails on the way up.
 void recipeTerraceCondo(BuildingRecipe& out, ProcRng& rng, RecipeCtx& cx) {
     BuildingParams& p = out.params;
-    p.floors = rng.between(4, 6);
+    p.floors = rng.between(5, 7);
     p.groundRetail = false;
     dress(p, rng.next() < 0.5 ? FacadeStyle::Painted : FacadeStyle::Stucco, rng);
     p.balconies = true;
@@ -1077,7 +1081,7 @@ void recipeTerraceCondo(BuildingRecipe& out, ProcRng& rng, RecipeCtx& cx) {
 // grids, bare heads, sometimes a shop below.
 void recipeLoftConversion(BuildingRecipe& out, ProcRng& rng, RecipeCtx&) {
     BuildingParams& p = out.params;
-    p.floors = rng.between(3, 5);
+    p.floors = rng.between(4, 6);
     p.groundRetail = rng.next() < 0.5;
     dress(p, FacadeStyle::DarkBrick, rng);
     p.floorHeight = 3.6;               // warehouse storeys
@@ -1282,9 +1286,10 @@ void recipeRanchHouse(BuildingRecipe& out, ProcRng& rng, RecipeCtx&) {
 }
 
 // The GARDEN condo: a low balconied walk-up on planted grounds.
-void recipeGardenCondo(BuildingRecipe& out, ProcRng& rng, RecipeCtx&) {
+void recipeGardenCondo(BuildingRecipe& out, ProcRng& rng, RecipeCtx& cx) {
     BuildingParams& p = out.params;
-    p.floors = rng.between(3, 4);
+    p.floors = rng.between(3, 5) + static_cast<int>(cx.coreness * 2.0 + 0.5);
+    cx.slender = std::max(cx.slender, Real(2.2));
     p.groundRetail = false;
     dress(p, rng.next() < 0.5 ? FacadeStyle::Stucco : FacadeStyle::Painted, rng);
     p.balconies = true;
@@ -1675,7 +1680,7 @@ void recipeDuplex(BuildingRecipe& out, ProcRng& rng, RecipeCtx&) {
 // this recipe leans into it with awnings + warm masonry.
 void recipeMixedUse(BuildingRecipe& out, ProcRng& rng, RecipeCtx&) {
     BuildingParams& p = out.params;
-    p.floors = rng.between(3, 5);
+    p.floors = rng.between(3, 6);
     p.groundRetail = true;
     dress(p, rng.next() < 0.6 ? FacadeStyle::Brick : FacadeStyle::Painted, rng);
     p.awning = true;
@@ -1981,52 +1986,56 @@ BuildingRecipe architectPick(DistrictTag tag, Real shortSide, Real area,
             // THE SKYLINE MIX (NYC variety, 2026-09-30): the classic glass tower and podium keep a share, the
             // New York forms join -- the sky-exposure masonry cake, the tower on a base, the tapered and slab
             // glass towers, and a pencil tower where the city is densest (a small lot at the core).
-            if (roll < 0.14)      recipeGlassTower(out, rng, cx);
-            else if (roll < 0.22) recipePodiumTower(out, rng, cx);
-            else if (roll < 0.29) recipeTowerOnBase(out, rng, cx);
-            else if (roll < 0.35) recipeTaperedGlassTower(out, rng, cx);
-            else if (roll < 0.40) recipeGlassSlab(out, rng, cx);
-            else if (roll < 0.44) recipePencilTower(out, rng, cx);
-            else if (roll < 0.52) recipeSkyExposureTower(out, rng, cx);
-            else if (roll < 0.58) recipeArtDecoTower(out, rng, cx);
+            // HOMES DOWNTOWN (Glenn, 2026-11-01: "build denser housing"): a sixth of the core is residential towers
+            // -- the condo tower risen with the core, the pencil tower -- carved from the office shares.
+            if (roll < 0.10)      recipeGlassTower(out, rng, cx);
+            else if (roll < 0.16) recipePodiumTower(out, rng, cx);
+            else if (roll < 0.21) recipeTowerOnBase(out, rng, cx);
+            else if (roll < 0.26) recipeTaperedGlassTower(out, rng, cx);
+            else if (roll < 0.30) recipeGlassSlab(out, rng, cx);
+            else if (roll < 0.38) recipePencilTower(out, rng, cx);
+            else if (roll < 0.48) recipeCondoTower(out, rng, cx);
+            else if (roll < 0.54) recipeSkyExposureTower(out, rng, cx);
+            else if (roll < 0.59) recipeArtDecoTower(out, rng, cx);
             else if (roll < 0.63) recipeSteppedTower(out, rng, cx);
-            else if (roll < 0.67) recipeDrumTower(out, rng, cx);
-            else if (roll < 0.75) recipeOfficeSlab(out, rng, cx);
+            else if (roll < 0.66) recipeDrumTower(out, rng, cx);
+            else if (roll < 0.74) recipeOfficeSlab(out, rng, cx);
             // THE TOOLKIT'S FORMS (issue #105; Glenn, 2026-10-15: "will these show up in island 8?"): accents,
             // a few per district, carved from the office slab's and the commercial block's shares
-            else if (roll < 0.77) recipeTwistedTower(out, rng, cx);
-            else if (roll < 0.79) recipeLensTower(out, rng, cx);
-            else if (roll < 0.805) recipeLeaningTower(out, rng, cx);
-            else if (roll < 0.82) recipeTwistedTaper(out, rng, cx);
-            else if (roll < 0.835) recipeWavyTower(out, rng, cx);
-            else if (roll < 0.85) recipeStackedModules(out, rng, cx);
-            else if (roll < 0.86) recipeRoundedTower(out, rng, cx);
-            else if (roll < 0.865) recipeSculptedTower(out, rng, cx);
-            else if (roll < 0.87) recipeVeilTower(out, rng, cx);
-            else if (roll < 0.89) recipeCommercialBlock(out, rng, cx);
-            else if (roll < 0.935) recipeParkingGarage(out, rng, cx);
+            else if (roll < 0.76) recipeTwistedTower(out, rng, cx);
+            else if (roll < 0.78) recipeLensTower(out, rng, cx);
+            else if (roll < 0.795) recipeLeaningTower(out, rng, cx);
+            else if (roll < 0.81) recipeTwistedTaper(out, rng, cx);
+            else if (roll < 0.825) recipeWavyTower(out, rng, cx);
+            else if (roll < 0.84) recipeStackedModules(out, rng, cx);
+            else if (roll < 0.85) recipeRoundedTower(out, rng, cx);
+            else if (roll < 0.855) recipeSculptedTower(out, rng, cx);
+            else if (roll < 0.86) recipeVeilTower(out, rng, cx);
+            else if (roll < 0.88) recipeCommercialBlock(out, rng, cx);
+            else if (roll < 0.925) recipeParkingGarage(out, rng, cx);
             else if (roll < 0.97) recipePlaza(out, rng, cx);
             else                  recipeCivicHall(out, rng, cx);
             break;
         case DistrictTag::Commercial:
-            if (roll < 0.04)      recipePocketPark(out, rng, cx);
-            else if (roll < 0.07) recipePlaza(out, rng, cx);
-            else if (roll < 0.23) recipeBrickShop(out, rng, cx);
-            else if (roll < 0.25) recipeCourtyardBlock(out, rng, cx);   // (the toolkit's complex: on a lot too small for its court, a plan building)
+            // (denser housing, 2026-11-01: more condos, flats over shops and walk-ups; fewer banks and offices)
+            if (roll < 0.03)      recipePocketPark(out, rng, cx);
+            else if (roll < 0.05) recipePlaza(out, rng, cx);
+            else if (roll < 0.20) recipeBrickShop(out, rng, cx);
+            else if (roll < 0.24) recipeCourtyardBlock(out, rng, cx);   // (the toolkit's complex: on a lot too small for its court, a plan building)
             else if (roll < 0.38) recipeMixedUse(out, rng, cx);
-            else if (roll < 0.46) recipeOfficeMidrise(out, rng, cx);
-            else if (roll < 0.49) recipePodiumTower(out, rng, cx);
-            else if (roll < 0.55) recipeCondoTower(out, rng, cx);
-            else if (roll < 0.61) recipeTerraceCondo(out, rng, cx);
-            else if (roll < 0.67) recipeLoftConversion(out, rng, cx);
-            else if (roll < 0.73) recipeHotel(out, rng, cx);
-            else if (roll < 0.78) recipeBank(out, rng, cx);
-            else if (roll < 0.82) recipeCinema(out, rng, cx);
-            else if (roll < 0.86) recipeStripMall(out, rng, cx);
-            else if (roll < 0.90) recipeSupermarket(out, rng, cx);
-            else if (roll < 0.93) recipeOfficePark(out, rng, cx);
-            else if (roll < 0.95) recipePagodaTower(out, rng, cx);
-            else if (roll < 0.98) recipeCivicMidtown(out, rng, cx);
+            else if (roll < 0.44) recipeOfficeMidrise(out, rng, cx);
+            else if (roll < 0.46) recipePodiumTower(out, rng, cx);
+            else if (roll < 0.56) recipeCondoTower(out, rng, cx);
+            else if (roll < 0.62) recipeTerraceCondo(out, rng, cx);
+            else if (roll < 0.68) recipeLoftConversion(out, rng, cx);
+            else if (roll < 0.72) recipeHotel(out, rng, cx);
+            else if (roll < 0.75) recipeBank(out, rng, cx);
+            else if (roll < 0.78) recipeCinema(out, rng, cx);
+            else if (roll < 0.81) recipeStripMall(out, rng, cx);
+            else if (roll < 0.85) recipeSupermarket(out, rng, cx);
+            else if (roll < 0.87) recipeOfficePark(out, rng, cx);
+            else if (roll < 0.89) recipePagodaTower(out, rng, cx);
+            else if (roll < 0.92) recipeCivicMidtown(out, rng, cx);
             else                  recipeWalkupHomes(out, rng, cx);
             break;
         case DistrictTag::OldTown:
@@ -2041,19 +2050,23 @@ BuildingRecipe architectPick(DistrictTag tag, Real shortSide, Real area,
             else                  recipeIndustrialOffice(out, rng, cx);
             break;
         case DistrictTag::Residential:
-            if (roll < 0.07)      recipePocketPark(out, rng, cx);
-            else if (roll < 0.25) recipeYardHouse(out, rng, cx);
-            else if (roll < 0.31) recipeModernHouse(out, rng, cx);
-            else if (roll < 0.38) recipeBungalow(out, rng, cx);
-            else if (roll < 0.45) recipeCraftsman(out, rng, cx);
-            else if (roll < 0.51) recipeCottage(out, rng, cx);
-            else if (roll < 0.57) recipeVilla(out, rng, cx);
-            else if (roll < 0.64) recipeRanchHouse(out, rng, cx);
-            else if (roll < 0.72) recipeDuplex(out, rng, cx);
-            else if (roll < 0.81) recipeRowhouses(out, rng, cx);
-            else if (roll < 0.84) recipeCourtyardBlock(out, rng, cx);
-            else if (roll < 0.89) recipeGardenCondo(out, rng, cx);
-            else if (roll < 0.96) recipeApartments(out, rng, cx);
+            // DENSER HOUSING (Glenn, 2026-11-01): houses were 57 lots in 100 and a fifth of the island's homes; now
+            // a quarter of the lots, and the rest rows, courts, condos and flats -- taller toward the town
+            // (coreness here is the suburb's: 1 at the downtown's rim, 0 well out: city_lots' suburbAt)
+            if (roll < 0.06)      recipePocketPark(out, rng, cx);
+            else if (roll < 0.14) recipeYardHouse(out, rng, cx);
+            else if (roll < 0.17) recipeModernHouse(out, rng, cx);
+            else if (roll < 0.20) recipeBungalow(out, rng, cx);
+            else if (roll < 0.24) recipeCraftsman(out, rng, cx);
+            else if (roll < 0.27) recipeCottage(out, rng, cx);
+            else if (roll < 0.30) recipeVilla(out, rng, cx);
+            else if (roll < 0.33) recipeRanchHouse(out, rng, cx);
+            else if (roll < 0.39) recipeDuplex(out, rng, cx);
+            else if (roll < 0.49) recipeRowhouses(out, rng, cx);
+            else if (roll < 0.57) recipeCourtyardBlock(out, rng, cx);
+            else if (roll < 0.69) recipeGardenCondo(out, rng, cx);
+            else if (roll < 0.86) recipeApartments(out, rng, cx);
+            else if (roll < 0.96) recipeWalkupHomes(out, rng, cx);
             else                  recipeCornerShop(out, rng, cx);
             break;
     }

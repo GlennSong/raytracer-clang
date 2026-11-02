@@ -19,18 +19,21 @@
 -- archetype_book_identity_weights_reproduce_the_ladders). Edit from here.
 archetype_book = {
   financial = {
-    {"glass_tower", 14}, {"podium_tower", 8}, {"tower_on_base", 7},
-    {"tapered_glass_tower", 6}, {"glass_slab", 5}, {"pencil_tower", 4},
-    {"sky_exposure_tower", 8}, {"art_deco_tower", 6}, {"stepped_tower", 5},
-    {"drum_tower", 4}, {"office_slab", 12}, {"commercial_block", 10},
-    {"parking_garage", 4.5}, {"plaza", 3.5}, {"civic_hall", 3},
+    {"glass_tower", 10}, {"podium_tower", 6}, {"tower_on_base", 5},
+    {"tapered_glass_tower", 5}, {"glass_slab", 4}, {"pencil_tower", 8}, {"condo_tower", 10},
+    {"sky_exposure_tower", 6}, {"art_deco_tower", 5}, {"stepped_tower", 4},
+    {"drum_tower", 3}, {"office_slab", 8},
+    {"twisted_tower", 2}, {"lens_tower", 2}, {"leaning_tower", 1.5}, {"twisted_taper", 1.5},
+    {"wavy_tower", 1.5}, {"stacked_modules", 1.5}, {"rounded_tower", 1.0}, {"sculpted_tower", 0.5}, {"veil_tower", 0.5},
+    {"commercial_block", 2.0},
+    {"parking_garage", 4.5}, {"plaza", 4.5}, {"civic_hall", 3},
   },
   commercial = {
-    {"pocket_park", 4}, {"plaza", 3}, {"brick_shop", 18}, {"mixed_use", 13},
-    {"office_midrise", 8}, {"podium_tower", 3}, {"condo_tower", 6},
-    {"terrace_condo", 6}, {"loft_block", 6}, {"hotel", 6}, {"bank", 5},
-    {"cinema", 4}, {"strip_mall", 4}, {"supermarket", 4}, {"office_park", 3},
-    {"pagoda_tower", 2}, {"civic_midtown", 3}, {"walkup_homes", 2},
+    {"pocket_park", 3}, {"plaza", 2}, {"brick_shop", 15}, {"courtyard_block", 4}, {"mixed_use", 14},
+    {"office_midrise", 6}, {"podium_tower", 2}, {"condo_tower", 10},
+    {"terrace_condo", 6}, {"loft_block", 6}, {"hotel", 4}, {"bank", 3},
+    {"cinema", 3}, {"strip_mall", 3}, {"supermarket", 4}, {"office_park", 2},
+    {"pagoda_tower", 2}, {"civic_midtown", 3}, {"walkup_homes", 8},
   },
   oldtown = {
     {"oldtown_house", 62}, {"oldtown_cafe", 20}, {"oldtown_grand", 18},
@@ -40,9 +43,9 @@ archetype_book = {
     {"industrial_office", 15},
   },
   residential = {
-    {"pocket_park", 7}, {"yard_house", 18}, {"modern_house", 6},
-    {"bungalow", 7}, {"craftsman_house", 7}, {"cottage", 6}, {"villa", 6},
-    {"ranch_house", 7}, {"duplex", 8}, {"rowhouses", 12}, {"garden_condo", 5},
-    {"apartments", 7}, {"corner_shop", 4},
+    {"pocket_park", 6}, {"yard_house", 8}, {"modern_house", 3},
+    {"bungalow", 3}, {"craftsman_house", 4}, {"cottage", 3}, {"villa", 3},
+    {"ranch_house", 3}, {"duplex", 6}, {"rowhouses", 10}, {"courtyard_block", 8}, {"garden_condo", 12},
+    {"apartments", 17}, {"walkup_homes", 10}, {"corner_shop", 4},
   },
 }
