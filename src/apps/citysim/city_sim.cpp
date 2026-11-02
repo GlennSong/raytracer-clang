@@ -6590,7 +6590,8 @@ bool CitySim::farDrawPose(int i, Vec2& pos, Vec2& heading) const {
 
 bool CitySim::restPose(int i, RestPose& out) const {
     if (const SeatSpot* st = seatedOn(i)) {
-        out.kind = RestPose::Kind::Seat;
+        out.kind = st->kind == SpotKind::Lie ? RestPose::Kind::Lie : RestPose::Kind::Seat;
+        out.raised = st->kind == SpotKind::Lie;
         out.pos = st->pos;
         out.face = st->face;
         out.hip = st->hip;
@@ -6800,7 +6801,11 @@ int CitySim::joinSettled(Agent& a, int di, const std::vector<std::pair<Real, int
         const Vec2 side(ar.axis.y, -ar.axis.x);
         // a pair needs its length along the area, a ring its width
         const Real reachL = static_cast<Real>(d.formation == Formation::Pair ? d.radius * 0.5 + 1.0 : 2.0);
-        const Real inL = ar.halfL - reachL, inW = ar.halfW - 2.0;
+        // ...and a spread its row across it (sunbathers side by side, the most its role takes)
+        Real reachW = 2.0;
+        if (d.formation == Formation::Spread)
+            for (const RoleDef& r : d.roles) reachW = std::max(reachW, static_cast<Real>((r.n - 1) * d.radius * 0.5 + 0.6));
+        const Real inL = ar.halfL - reachL, inW = ar.halfW - reachW;
         if (inL <= 0 || inW <= 0) continue;
         Vec2 best;
         Real bestD = -1;

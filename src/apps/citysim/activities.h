@@ -36,6 +36,7 @@ namespace spot_tag {
 constexpr uint32_t kCampus = 1;   // on a university campus: its quad, its courtyard, by its sports field
 constexpr uint32_t kPark = 2;     // in a park
 constexpr uint32_t kSports = 4;   // at the sports field
+constexpr uint32_t kBeach = 8;    // on the beach (a lounger, a towel: the furniture library's "beach" tag)
 }  // namespace spot_tag
 uint32_t spotTagFromName(const std::string& name);   // 0 for an unknown name
 
@@ -80,7 +81,7 @@ enum class Pose : uint8_t { Stand, SitGround, Lie };
 const char* formationName(Formation f);
 const char* poseName(Pose p);
 // Area site kinds: a session on one of the city's areas rather than a spot or a place.
-inline bool isAreaSiteKind(const std::string& k) { return k == "pitch" || k == "lawn" || k == "plaza" || k == "beach"; }
+inline bool isAreaSiteKind(const std::string& k) { return k == "pitch" || k == "lawn" || k == "plaza" || k == "beach" || k == "shore"; }
 
 // A ROLE in a group activity: how many take it, how fast they move, and which part of the area is theirs (-1 the
 // whole of it, 0 / 1 its first / second half along its length -- swapped at the session's half time).

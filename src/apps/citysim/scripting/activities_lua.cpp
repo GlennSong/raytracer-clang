@@ -55,7 +55,7 @@ std::vector<std::string> strings(lua_State* L, int t, const char* key) {
     return out;
 }
 bool knownSite(const std::string& k) {
-    if (citysim::isAreaSiteKind(k)) return true;   // a pitch, a lawn, a plaza, the beach: the one list
+    if (citysim::isAreaSiteKind(k)) return true;   // a pitch, a lawn, a plaza, the beach, its shore: the one list
     static const char* kinds[] = {"cafe", "restaurant", "bar", "club", "shop", "supermarket", "civic", "park", "library", "teaching", "quad",
                                   "field", "office", "seat", "bed", "stand", "loop", "watch", "street"};
     for (const char* x : kinds) if (k == x) return true;

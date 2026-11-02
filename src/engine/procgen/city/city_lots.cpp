@@ -56,8 +56,8 @@ Real distToSeg(const Vec2& p, const Vec2& a, const Vec2& b) {
     return (p - Vec2(a.x + ab.x * t, a.y + ab.y * t)).length();
 }
 
+}  // namespace
 
-namespace {
 // A stable hash of a point (an outdoor piece's variant, without drawing from a pass's own dice).
 uint32_t posHash(const Vec2& p) {
     uint32_t h = static_cast<uint32_t>(std::lround(p.x * 13.0)) * 73856093u ^ static_cast<uint32_t>(std::lround(p.y * 7.0)) * 19349663u;
@@ -75,7 +75,8 @@ OutdoorPiece outdoorPiece(Piece pc, uint32_t h, const Vec2& at, const Vec2& face
     o.draped = draped;
     return o;
 }
-}  // namespace
+
+namespace {
 
 // Merge a grown kit's parts into the by-PartId output array.
 void appendKit(const BuildingMesh& kit, std::vector<RenderMesh>* outParts,

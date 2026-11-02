@@ -50,12 +50,15 @@ TEST_CASE(the_furniture_library_describes_its_pieces_sanely) {
         uint32_t standOnly = 0;   // a STAND spot is on the floor beside the piece (behind a lectern), not on it
         for (const FurnVerb& v : a->verbs) if (v.verb == Verb::Stand) standOnly |= v.spots;
         for (const FurnVerb& v : a->verbs) if (v.verb != Verb::Stand) standOnly &= ~v.spots;
+        uint32_t lieOnly = 0;   // a LIE spot may be on the ground itself (a towel on the sand)
+        for (const FurnVerb& v : a->verbs) if (v.verb == Verb::Lie) lieOnly |= v.spots;
+        for (const FurnVerb& v : a->verbs) if (v.verb != Verb::Lie) lieOnly &= ~v.spots;
         for (std::size_t si = 0; si < a->spots.size(); ++si) {
             const FurnSpot& s = a->spots[si];
             if (standOnly & (1u << si)) { CHECK(std::fabs(s.at.y) < 1e-6); continue; }
             CHECK(std::fabs(s.at.x) <= sz.x * 0.5 + 0.05);
             CHECK(s.at.z >= 0 && s.at.z <= sz.z + 0.05);
-            CHECK(s.at.y > 0.3 && s.at.y <= sz.y);
+            CHECK(s.at.y > ((lieOnly & (1u << si)) ? 0.0 : 0.3) && s.at.y <= sz.y);
         }
         for (const FurnVerb& v : a->verbs) {
             Real top = 0;

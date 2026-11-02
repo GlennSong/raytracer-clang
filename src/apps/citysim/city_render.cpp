@@ -28,6 +28,7 @@
 #include "../../engine/procgen/vehicle/occupant.h"   // people seated on the bus
 #include "../../engine/interior_occupants.h"         // people inside a streamed interior (campus M4)
 #include "../../engine/procgen/furniture_kit.h"
+#include "../../engine/furniture_draw.h"   // spawnFurnitureGroups: the beach's towels and umbrellas
 #include "../../engine/procgen/city/building_records.h"
 #include "../../engine/procgen/city/building_uses.h"   // a home's use picks its dwellings' rule
 #ifdef RT_ENABLE_SCRIPTING
@@ -777,9 +778,34 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
                 const engine::FurnitureAsset* fa = flib.find(static_cast<engine::Piece>(ip.piece));
                 if (!fa) continue;
                 bool outdoor = false;
-                for (const std::string& tg : fa->tags) outdoor = outdoor || tg == "outdoor";
+                uint32_t tags = 0;   // (the library's tags the catalog knows: a lounger's "beach")
+                for (const std::string& tg : fa->tags) {
+                    outdoor = outdoor || tg == "outdoor";
+                    tags |= spotTagFromName(tg);
+                }
                 if (!outdoor) continue;
                 for (const engine::FurnVerb& v : fa->verbs) {
+                    // A PLACE TO LIE (a sun lounger, a towel; Glenn, 2026-11-02): one spot for the verb, the middle of
+                    // the spots it takes, the body's feet pointing away from the eye at its head
+                    if (v.verb == engine::Verb::Lie) {
+                        Vec3 mid(0, 0, 0);
+                        int k = 0;
+                        for (std::size_t q = 0; q < fa->spots.size(); ++q)
+                            if (v.spots & (1u << q)) { mid = mid + fa->spots[q].at; ++k; }
+                        if (k == 0) continue;
+                        mid = mid * (1.0 / k);
+                        const Vec3 at = engine::piecePoint(ip.xform, mid), eye = engine::piecePoint(ip.xform, v.eye);
+                        const Vec2 along(at.x - eye.x, at.z - eye.z);
+                        if (along.lengthSquared() < 1e-6) continue;
+                        CitySim::SeatSpot s;
+                        s.kind = SpotKind::Lie;
+                        s.pos = Vec2(at.x, at.z);
+                        s.face = normalize(along);
+                        s.hip = at.y;
+                        s.tags = tags;
+                        seats.push_back(s);
+                        continue;
+                    }
                     if (v.verb != engine::Verb::Sit) continue;
                     for (std::size_t k = 0; k < fa->spots.size(); ++k) {
                         if (!(v.spots & (1u << k))) continue;
@@ -789,6 +815,7 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
                         s.pos = Vec2(at.x, at.z);
                         s.face = normalize(Vec2(f.x, f.z));
                         s.hip = at.y;
+                        s.tags = tags;
                         seats.push_back(s);
                     }
                 }
@@ -1524,6 +1551,16 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
         InstanceGroup gl = g;
         gl.mesh = pedMesh;
         world.add<InstanceGroup>(pedLieGroup_, gl);
+        engine::FurnitureDrawCache beachDraw;
+        for (uint32_t c = 0; c < 8; ++c)
+            for (auto [pc, groups] : {std::pair<engine::Piece, std::vector<Entity>*>{engine::Piece::BeachTowel, &towelGroups_[c]},
+                                      {engine::Piece::BeachUmbrella, &umbrellaGroups_[c]}}) {
+                engine::PlacedPiece pp;
+                pp.piece = static_cast<uint8_t>(pc);
+                pp.variant = c;
+                engine::spawnFurnitureGroups(world, *assets, nullptr, beachDraw, {pp}, Vec3(0.80, 0.78, 0.75), 250.0, *groups);
+                for (Entity e : *groups) world.get<InstanceGroup>(e)->transforms.clear();
+            }
         indoorBodyGroup_ = world.create();
         InstanceGroup b = g;
         b.mesh = pedMesh;
@@ -2516,6 +2553,48 @@ void CityRenderSystem::bakePlanOutlines(World& world) {
 
 }
 
+// THE BEACH'S THINGS (towelGroups_): a towel under each body lying out on the ground (its head end at the head, the
+// way the body lies), and an umbrella over each group lying out on the sand, its pole beside the middle of their heads.
+void CityRenderSystem::syncBeachThings(World& world) {
+    std::array<std::vector<Mat4>, 8> towels, umbrellas;
+    const std::vector<CitySim::Session>& sessions = sim_.sessions();
+    const std::vector<CitySim::ActivityArea>& areas = sim_.areas();
+    for (std::size_t si = 0; si < sessions.size(); ++si) {
+        const CitySim::Session& se = sessions[si];
+        if (se.state == CitySim::Session::State::Dead) continue;
+        int lying = 0;
+        for (int m : se.members) {
+            CitySim::RestPose rp;
+            if (!sim_.restPose(m, rp) || rp.kind != CitySim::RestPose::Kind::Lie || rp.raised) continue;
+            ++lying;
+            const Vec2 head = rp.pos - rp.face * 0.875;   // (the towel's z = 0 end)
+            towels[(static_cast<uint32_t>(m) * 2654435761u) >> 29]   // (a colour each: the top bits of a Knuth hash)
+               .push_back(
+                Mat4::translate(head.x, groundAt(head.x, head.y) + 0.005, head.y) * Mat4::rotateY(std::atan2(rp.face.x, rp.face.y)));
+        }
+        if (lying == 0 || se.def < 0 || se.area < 0 || se.area >= static_cast<int>(areas.size()) ||
+            areas[static_cast<std::size_t>(se.area)].kind != "beach")
+            continue;
+        // the pole 0.6 m up from the heads, between the middle two (an odd group: beside the middle one)
+        const Vec2 side(se.axis.y, -se.axis.x);
+        const Real gap = sim_.activityCatalog().defs[static_cast<std::size_t>(se.def)].radius;   // (memberPlace's spread)
+        const Vec2 pole = se.center + side * ((se.members.size() % 2u) ? gap * 0.5 : 0.0) - se.axis * 0.3;
+        const Vec2 origin = pole - se.axis * 1.1;   // (the umbrella's pole is 1.1 m along its +z)
+        umbrellas[(static_cast<uint32_t>(si) * 2654435761u + 0x9E37u) >> 29].push_back(
+            Mat4::translate(origin.x, groundAt(pole.x, pole.y), origin.y) * Mat4::rotateY(std::atan2(se.axis.x, se.axis.y)));
+    }
+    auto put = [&](const std::array<std::vector<Entity>, 8>& groups, const std::array<std::vector<Mat4>, 8>& xf) {
+        for (std::size_t c = 0; c < 8; ++c)
+            for (Entity e : groups[c])
+                if (InstanceGroup* g = world.get<InstanceGroup>(e)) {
+                    g->transforms = xf[c];
+                    refreshBounds(g);
+                }
+    };
+    put(towelGroups_, towels);
+    put(umbrellaGroups_, umbrellas);
+}
+
 void CityRenderSystem::syncGroups(World& world) {
     std::vector<InstanceGroup*> cars;
     cars.reserve(carGroups_.size());
@@ -2600,7 +2679,8 @@ void CityRenderSystem::syncGroups(World& world) {
                     if (pedGround)
                         pedGround->transforms.push_back(Mat4::translate(rp.pos.x, groundAt(rp.pos.x, rp.pos.y) + kGroundSitHip, rp.pos.y) * yaw);
                 } else if (pedLie) {   // on its back, head away from the way it faces (its feet point there)
-                    pedLie->transforms.push_back(Mat4::translate(rp.pos.x, groundAt(rp.pos.x, rp.pos.y) + kLieHalfDepth, rp.pos.y) *
+                    const Real bed = rp.raised ? rp.hip : groundAt(rp.pos.x, rp.pos.y);   // (a lounger's, or the ground)
+                    pedLie->transforms.push_back(Mat4::translate(rp.pos.x, bed + kLieHalfDepth, rp.pos.y) *
                                                  yaw * Mat4::rotateX(-engine::PI * 0.5));
                 }
                 continue;
@@ -2786,6 +2866,7 @@ void CityRenderSystem::syncGroups(World& world) {
     refreshBounds(pedGround);
     refreshBounds(pedLie);
     for (int s = 0; s < 3; ++s) refreshBounds(sig[s]);
+    syncBeachThings(world);
 
     sec(2);
     // SEE-INTO VEHICLES. The clear glass rides exactly its bodies' transforms

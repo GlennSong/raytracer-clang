@@ -387,7 +387,7 @@ void CityWalkerSystem::driveWalkers(engine::FrameContext& ctx) {
                 t->orientation = yaw;
             } else {   // lying on its back, feet the way it faces
                 mesh = poseMesh(ctx.assets, w.outfit, 0);
-                t->position = Vec3(rp.pos.x, gy + kLieHalfDepth, rp.pos.y);
+                t->position = Vec3(rp.pos.x, (rp.raised ? rp.hip : gy) + kLieHalfDepth, rp.pos.y);
                 t->orientation = yaw * Quat::fromAxisAngle(Vec3(1, 0, 0), -engine::PI * 0.5);
             }
             if (Renderable* r = world.get<Renderable>(w.entity)) r->mesh = mesh;

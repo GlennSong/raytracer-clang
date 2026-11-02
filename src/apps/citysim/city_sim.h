@@ -1438,6 +1438,7 @@ public:
         Kind kind = Kind::Seat;
         engine::Vec2 pos, face{0, 1};
         Real hip = 0;
+        bool raised = false;   // Lie on furniture (a sun lounger): `hip` is its bed's height, not the ground
     };
     bool restPose(int agentIndex, RestPose& out) const;
     // EVERYTHING ABOUT ONE AGENT, on one line (the `who?` and `speeders?` debug commands): tier, where, how fast,

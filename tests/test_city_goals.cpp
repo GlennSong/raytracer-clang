@@ -834,6 +834,10 @@ TEST_CASE(every_activity_in_the_catalog_keeps_the_rules) {
     for (int i = 0; i < 10; ++i) spot(Vec2(-20.0 + i * 4.0, 12.0), SpotKind::Sit);              // the quad's benches
     for (int i = 0; i < 12; ++i) spot(Vec2(225.0 + i * 4.0, 72.0), SpotKind::Sit);             // the stand
     for (int i = 0; i < 20; ++i) spot(Vec2(-400.0 + i * 40.0, 330.0), SpotKind::Sit);          // the town's benches
+    for (int i = 0; i < 10; ++i) {                                                               // the beach's loungers
+        spot(Vec2(-270.0 + i * 4.0, 100.0), SpotKind::Lie);
+        spots.back().tags = spot_tag::kBeach;
+    }
     std::vector<Vec2> loop;
     for (int i = 0; i < 40; ++i) { const Real a = 6.2831853 * i / 40; loop.push_back(Vec2(250.0 + 40.0 * std::cos(a), 50.0 + 25.0 * std::sin(a))); }
     sim.setLoops({loop});
@@ -850,7 +854,9 @@ TEST_CASE(every_activity_in_the_catalog_keeps_the_rules) {
     lawnP.center = Vec2(-330, 300); lawnP.halfL = 25; lawnP.halfW = 14;
     CitySim::ActivityArea sand = lawnQ;   // a stretch of beach (a beach town's)
     sand.kind = "beach"; sand.center = Vec2(-250, 120); sand.halfL = 26; sand.halfW = 18;
-    sim.setAreas({pitch, lawnQ, lawnP, sand});
+    CitySim::ActivityArea shore = lawnQ;   // ...and its shore, the wet sand at the water's edge
+    shore.kind = "shore"; shore.center = Vec2(-250, 145); shore.halfL = 29; shore.halfW = 3.5;
+    sim.setAreas({pitch, lawnQ, lawnP, sand, shore});
     sim.assignPlaces(places, nav);
     sim.seedFromSchedule(13.0);   // the afternoon into the night: the night's activities open from 16:30
 

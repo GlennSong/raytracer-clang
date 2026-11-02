@@ -119,6 +119,22 @@ furniture_library = {
     spots = { { id = "seat", at = seat(0, 0.48, 0.26) } },
     verbs = { { verb = "sit", spots = { "seat" }, eye = { 0, 1.19, 0.20 }, look = { 0, -0.08, 1 }, exit = { 0, 0, 0.9 } } },
   },
+  -- THE BEACH (Glenn, 2026-11-02: "a towel under them and an umbrella. Or lounge chairs -- a new type of chair that
+  -- the agents and player can use"): a lounger and a towel to lie on, head at z = 0, feet toward +z (the sea); the
+  -- umbrella over them is scenery
+  sun_lounger = {
+    family = "seating", tags = { "outdoor", "beach" },
+    spots = { { id = "bed", at = seat(0, 0.40, 1.05) } },
+    verbs = { { verb = "lie", label = "lie down", spots = { "bed" }, eye = { 0, 0.62, 0.28 }, look = { 0, 0.35, 1 },
+                exit = { 0.75, 0, 1.0 } } },
+  },
+  beach_towel = {
+    family = "seating", tags = { "outdoor", "beach" },
+    spots = { { id = "bed", at = seat(0, 0.03, 0.90) } },
+    verbs = { { verb = "lie", label = "lie down", spots = { "bed" }, eye = { 0, 0.20, 0.20 }, look = { 0, 0.4, 1 },
+                exit = { 0.70, 0, 0.9 } } },
+  },
+  beach_umbrella = { family = "scenery", tags = { "outdoor", "beach" } },
   -- SURFACES AND STORAGE (M3): what they hold (anchors: a surface's centre, its footprint, what goods it takes) and
   -- the floor kept free in front of them (clearance: front, side) -- a desk's chair, a wardrobe's doors.
   desk = {

@@ -5,8 +5,8 @@
 --
 -- activities.<name> = {
 --   sites      = { kinds } -- places: cafe restaurant bar club shop supermarket civic park library teaching quad field office;
---                             spots: seat bed stand loop pitch watch; areas: lawn pitch plaza (a paseo); or street
---   tags       = { campus | park | sports }   -- a spot site must carry them all
+--                             spots: seat bed stand loop pitch watch; areas: lawn pitch plaza (a paseo) beach shore; or street
+--   tags       = { campus | park | sports | beach }   -- a spot site must carry them all
 --   hours      = { lo, hi }    when it is offered (default all day; may wrap midnight)
 --   minutes    = { lo, hi }    how long (default: what that kind of site keeps a visitor)
 --   distance   = { lo, hi }    straight line from where the agent stands (default 0-650 m)
@@ -26,7 +26,7 @@
 activities = {
   order = { "bench", "across_town", "park_visit", "coffee", "browse", "groceries", "meal", "civic_visit",
             "walk_round_block", "lunch", "campus_bench", "jog", "study", "quad_time", "kickabout", "watch_game",
-            "chat", "picnic", "sunbathe", "catch", "beach_day", "errand", "dinner", "drinks", "clubbing", "college_club" },
+            "chat", "picnic", "sunbathe", "catch", "beach_day", "lounger", "beach_stroll", "errand", "dinner", "drinks", "clubbing", "college_club" },
 
   -- A DAY OFF'S STOPS
   bench            = { sites = { "seat" }, distance = { 30, 500 }, nearest = 4, perform = "spot" },
@@ -83,7 +83,7 @@ activities = {
                        formation = "circle", radius = 0.85, minutes = { 30, 60 }, min_players = 1, gather_minutes = 15,
                        roles = { { name = "picnicker", n = 4, speed = { 1.1, 1.6 }, pose = "sit_ground" } } },
   sunbathe         = { sites = { "lawn", "beach" }, hours = { 10, 17 }, distance = { 0, 650 }, nearest = 4, perform = "roam",
-                       formation = "spread", radius = 1.1, minutes = { 20, 45 }, min_players = 1, gather_minutes = 10,
+                       formation = "spread", radius = 1.6, minutes = { 20, 45 }, min_players = 1, gather_minutes = 10,
                        roles = { { name = "sunbather", n = 2, speed = { 1.1, 1.6 }, pose = "lie" } } },
   catch            = { sites = { "lawn", "beach" }, hours = { 9, 20 }, distance = { 0, 650 }, nearest = 4, perform = "roam",
                        formation = "pair", radius = 9, minutes = { 10, 25 }, min_players = 2, gather_minutes = 10,
@@ -91,8 +91,17 @@ activities = {
   -- A DAY AT THE BEACH (Glenn: "people actually hanging out on the beach lounging and sunbathing"): an hour or two on
   -- the sand, lying out in fours, worth a longer walk than a lawn
   beach_day        = { sites = { "beach" }, hours = { 10, 18 }, distance = { 0, 2000 }, nearest = 4, perform = "roam",
-                       formation = "spread", radius = 1.1, minutes = { 60, 150 }, min_players = 1, gather_minutes = 10,
+                       formation = "spread", radius = 2.0, minutes = { 60, 150 }, min_players = 1, gather_minutes = 10,
                        roles = { { name = "sunbather", n = 4, speed = { 1.1, 1.6 }, pose = "lie" } } },
+  -- ...or on a LOUNGER under an umbrella (Glenn, 2026-11-02: "lounge chairs -- a new type of chair that the agents and
+  -- player can use"): the beach's row for hire, one of the six nearest free
+  lounger          = { sites = { "bed" }, tags = { "beach" }, hours = { 9, 18 }, distance = { 0, 2000 }, nearest = 6,
+                       perform = "spot", minutes = { 60, 150 } },
+  -- ...and A STROLL on the sand (Glenn: "people walking around the beach too -- on the sand"): up to three, ambling
+  -- from point to point along the shore's wet sand
+  beach_stroll     = { sites = { "shore" }, hours = { 8, 20 }, distance = { 0, 2000 }, nearest = 4, perform = "roam",
+                       formation = "roam", minutes = { 15, 40 }, min_players = 1, gather_minutes = 15,
+                       roles = { { name = "stroller", n = 3, speed = { 0.8, 1.2 }, pose = "stand" } } },
 }
 
 menus = {
@@ -103,10 +112,10 @@ menus = {
   outing = {
     { hours = { 5, 10.5 }, first = { { "bench", 0.20 }, { "across_town", 0.10 } },
       pick = { { "coffee", 4 }, { "park_visit", 3 }, { "groceries", 0.5 }, { "civic_visit", 0.3 }, { "walk_round_block", 3 } } },
-    { hours = { 10.5, 14 }, first = { { "beach_day", 0.35 }, { "bench", 0.25 }, { "across_town", 0.14 } },
+    { hours = { 10.5, 14 }, first = { { "beach_day", 0.35 }, { "lounger", 0.30 }, { "beach_stroll", 0.20 }, { "bench", 0.25 }, { "across_town", 0.14 } },
       pick = { { "browse", 2.5 }, { "meal", 2 }, { "coffee", 2 }, { "park_visit", 3 }, { "civic_visit", 0.7 }, { "walk_round_block", 2 },
                { "picnic", 1.5 }, { "sunbathe", 0.8 }, { "chat", 1 } } },
-    { hours = { 14, 17.5 }, first = { { "beach_day", 0.40 }, { "bench", 0.30 }, { "across_town", 0.14 } },
+    { hours = { 14, 17.5 }, first = { { "beach_day", 0.40 }, { "lounger", 0.30 }, { "beach_stroll", 0.20 }, { "bench", 0.30 }, { "across_town", 0.14 } },
       pick = { { "browse", 2.5 }, { "groceries", 1.5 }, { "park_visit", 3 }, { "coffee", 1.5 }, { "civic_visit", 0.7 }, { "walk_round_block", 3 },
                { "sunbathe", 1 }, { "catch", 0.8 }, { "chat", 1 }, { "picnic", 0.5 } } },
     { hours = { 17.5, 23 }, first = { { "bench", 0.15 }, { "across_town", 0.10 } },

@@ -5,6 +5,7 @@
 #include "polygon.h"        // Poly2, Vec2
 #include "shape_grammar.h"  // BuildingParams (the style-book hook's target)
 #include "site_plan.h"      // OpenSpace (the lot's ground around the building)
+#include "../furniture_kit.h"   // Piece (an outdoor piece)
 #include "../terrain.h"      // TerrainFlatten (block grades computed in-pass)
 #include "../../../rt_math.h"   // Vec3
 #include "../../../renderer/renderer.h"   // RenderMesh (the grown building geometry)
@@ -44,6 +45,10 @@ struct OutdoorPiece {
 };
 // The piece -> world transform for a floor at world height `y`.
 Mat4 outdoorPieceXform(const OutdoorPiece& p, Real y);
+// A stable hash of a point (an outdoor piece's variant, without drawing from a pass's own dice).
+uint32_t posHash(const Vec2& p);
+// An outdoor library piece at `at` (its back's centre), its front facing `face`; the variant's wood from `h`.
+OutdoorPiece outdoorPiece(Piece pc, uint32_t h, const Vec2& at, const Vec2& face, Real y, bool draped);
 
 struct DoorSpec {
     Vec2 foot;

@@ -14316,3 +14316,40 @@ actually hanging out on the beach lounging and sunbathing."
 Deerhaven at noon (window level island_8_beach): 54 people in 15 groups on the sand twelve minutes after 12:00;
 28 blocks, 884 dwellings; one beach car park (the second point fell outside a block).
 Owed: the rock scatter on the sand (the island's shore rock layers), which the next change clears.
+
+## ADR-0303 — Sun loungers, towels and umbrellas; sunbathers feet to the sea; a stroll along the shore
+
+Glenn, 2026-11-02, on the noon shots: "They should probably have a towel under them and an umbrella. Or lounge chairs —
+that would be a new type of chair that the agents and player can use." Then: "people walking around the beach too —
+on the sand", and "spread the sunbathers out and orient them 90 degrees so they have their feet to the ocean."
+
+**Decision.**
+- THREE KIT PIECES (furniture_kit `SunLounger`, `BeachUmbrella`, `BeachTowel`, appended so stored piece numbers
+  keep), coloured from a beach palette by the variant's low bits. furniture_library.lua: the lounger and the towel are
+  outdoor "beach" pieces with a `lie` verb (head at z = 0, feet toward +z); the umbrella is scenery. The player gets
+  "E lie down" from the interaction system like any bench.
+- THE LOUNGER ROWS: the level loader lays them where it cuts the beach areas (no bake: this is load-time), on two
+  stretches in three whose sand runs 34 m or more: an umbrella every 4.5 m, a lounger each side, feet to the sea, in
+  the stretch's colour. They join the lots' outdoor furniture cells (instanced, interactive). `posHash` and
+  `outdoorPiece` left city_lots' private namespace for this (city_lots.h).
+- PLACES TO LIE: the citysim gathers every outdoor piece's `lie` verb as one SpotKind::Lie spot (the middle of the
+  verb's spots, feet pointing away from its eye), carrying the library tags the catalog knows (`spotTagFromName`,
+  new `beach` = spot_tag::kBeach). RestPose for a Lie spot is Lie with `raised` (hip = the bed's height).
+- `lounger` (activities.lua / C++): a Spot activity on `bed` sites tagged beach, 60-150 min, 09-18, up to 2 km.
+- THE SHORE: a second area per stretch, "shore" (an area site kind), the wet sand 6 m from the water, 58 x 7 m.
+  `beach_stroll` is a Roam session of up to three on it (0.8-1.2 m/s, 15-40 min). It is its own area because a Roam
+  session claims a whole area and settled groups keep off one with a game on it.
+- FEET TO THE SEA: a beach area's long axis now points out to sea (halfL is its depth, halfW 26 along the shore), so a
+  Spread group lies side by side along the shore facing the water. Spread gaps: sunbathe 1.6 m, beach_day 2.0 m.
+  joinSettled keeps a spread's whole row on its area (reachW from the roles' size and the gap).
+- TOWELS AND UMBRELLAS for groups: CityRenderSystem::syncBeachThings draws a towel under every body lying on the
+  ground (lawns too), its colour by agent, and one umbrella per group lying on a beach: the furniture kit's own meshes
+  through spawnFurnitureGroups, transforms rewritten each sync.
+- Outing menu, 10:30-17:30: beach_day first (35/40%), then lounger 30%, then beach_stroll 20%.
+
+Deerhaven at noon (island_8_beach): 35 stretches, 510 loungers and umbrellas; after 12 minutes 62 lying out in 17
+groups, 34 on loungers, 9 strolling in 6 groups.
+Found on the way: a 1-minute gather window gave up a stroll before anyone had walked down to it, and the strollers
+stood about at the nearest crossing; 15 minutes, like the other beach groups.
+Owed: the lying figures are the box stand-in (a posed lying body); beach_day's 10-minute gather is short for a 2 km
+walk too.

@@ -6087,6 +6087,7 @@ bool LevelLoader::load(const std::string& path,
             // THE BEACH (~/.claude/plans/beach-town.md; Glenn: "people actually hanging out on the beach lounging and
             // sunbathing"): along every LINE hub (a beach town's seafront), the sand between its beachfront row and the
             // water, cut into "beach" activity areas every 60 m -- where the sunbathers, the picnics and the games go
+            std::vector<engine::OutdoorPiece> beachFurniture;   // (laid with the lots' furniture below)
             if (dressingGround && cs.contains("districts") && cs["districts"].contains("hubs")) {
                 int beachAreas = 0;
                 for (const auto& hj : cs["districts"]["hubs"]) {
@@ -6109,15 +6110,44 @@ bool LevelLoader::load(const std::string& path,
                             for (double o = from; o <= 600.0; o += 5.0)
                                 if (dressingGround(at.x + n.x * o, at.y + n.y * o) < 0.25) { water = o; break; }
                             if (water < 0 || water - 12.0 - from < 18.0) continue;   // no sand to lie on
-                            const double mid = 0.5 * (from + water - 12.0);
+                            // THE LOUNGERS (Glenn, 2026-11-02: "lounge chairs -- a new type of chair that the agents
+                            // and player can use"): two stretches in three, where the sand is deep enough, get a row
+                            // for hire at the back -- an umbrella every 4.5 m with a lounger each side, feet to the
+                            // sea, all in the stretch's colour; the groups' sand starts in front of it
+                            double back = from;
+                            const uint32_t h = engine::posHash(at);
+                            if (h % 3u != 0 && water - 12.0 - from >= 34.0) {
+                                const engine::Vec2 heads = at + n * (from + 3.0);
+                                auto lay = [&](engine::Piece pc, const engine::Vec2& p) {
+                                    engine::OutdoorPiece op = engine::outdoorPiece(pc, h, p, n, 0.0, true);
+                                    op.variant |= (h >> 4) % 8u;   // (the beach's colours: the low bits)
+                                    beachFurniture.push_back(op);
+                                };
+                                for (double u = -22.0; u <= 22.01; u += 4.5) {
+                                    const engine::Vec2 p = heads + t * u;
+                                    lay(engine::Piece::BeachUmbrella, p - n * 0.2);   // (its pole 1.1 m in: 0.9 m down the loungers)
+                                    lay(engine::Piece::SunLounger, p - t * 0.62);
+                                    lay(engine::Piece::SunLounger, p + t * 0.62);
+                                }
+                                back = from + 7.0;
+                            }
+                            // the sand, its long axis out to the sea (Glenn, 2026-11-02: "orient them ... so they have
+                            // their feet to the ocean"): a group lying side by side lies along the shore, feet seaward
+                            const double mid = 0.5 * (back + water - 12.0);
                             const engine::Vec2 c = at + n * mid;
-                            cfg.activityAreas.push_back({"beach", c.x, c.y, t.x, t.y, 26.0, 0.5 * (water - 12.0 - from) - 2.0});
+                            cfg.activityAreas.push_back({"beach", c.x, c.y, n.x, n.y, 0.5 * (water - 12.0 - back) - 2.0, 26.0});
+                            // ...and THE SHORE, the wet sand along the water's edge (Glenn: "people walking around the
+                            // beach too -- on the sand"): where the strollers go, clear of the groups lying out
+                            const engine::Vec2 w = at + n * (water - 6.0);
+                            cfg.activityAreas.push_back({"shore", w.x, w.y, t.x, t.y, 29.0, 3.5});
                             ++beachAreas;
                         }
                         run += len;
                     }
                 }
-                if (beachAreas) LOG_INFO << "[citysim] the beach: " << beachAreas << " areas on the sand";
+                if (beachAreas)
+                    LOG_INFO << "[citysim] the beach: " << beachAreas << " areas on the sand, " << beachFurniture.size()
+                             << " loungers and umbrellas";
             }
             // The road as drawn, for the lot trees below (drawn_road.h).
             const engine::DrawnRoad lotRoad = engine::gatherDrawnRoad(world, /*withHeights=*/true);
@@ -6211,16 +6241,18 @@ bool LevelLoader::load(const std::string& path,
 #endif
                 const engine::FurnitureLibrary& flib = engine::FurnitureLibrary::global();
                 std::map<std::pair<long, long>, std::vector<engine::PlacedPiece>> cells;
+                auto place = [&](const engine::OutdoorPiece& op) {
+                    const Real fy = op.draped ? (dressingGround ? dressingGround(op.at.x, op.at.y) : Real(0)) + op.y : op.y;
+                    engine::PlacedPiece pp;
+                    pp.piece = op.piece;
+                    pp.variant = op.variant;
+                    pp.xform = engine::outdoorPieceXform(op, fy);
+                    cells[{static_cast<long>(std::floor(op.at.x / 160.0)), static_cast<long>(std::floor(op.at.y / 160.0))}]
+                        .push_back(pp);
+                };
                 for (const engine::LotBuilding& lb : grown.lots)
-                    for (const engine::OutdoorPiece& op : lb.furniture) {
-                        const Real fy = op.draped ? (dressingGround ? dressingGround(op.at.x, op.at.y) : Real(0)) + op.y : op.y;
-                        engine::PlacedPiece pp;
-                        pp.piece = op.piece;
-                        pp.variant = op.variant;
-                        pp.xform = engine::outdoorPieceXform(op, fy);
-                        cells[{static_cast<long>(std::floor(op.at.x / 160.0)), static_cast<long>(std::floor(op.at.y / 160.0))}]
-                            .push_back(pp);
-                    }
+                    for (const engine::OutdoorPiece& op : lb.furniture) place(op);
+                for (const engine::OutdoorPiece& op : beachFurniture) place(op);   // (the beach's loungers)
                 engine::FurnitureDrawCache outdoorDraw;
                 std::size_t pieces = 0, seats = 0;
                 for (const auto& [cell, list] : cells) {

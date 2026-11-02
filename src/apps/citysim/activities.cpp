@@ -43,6 +43,7 @@ uint32_t spotTagFromName(const std::string& name) {
     if (name == "campus") return spot_tag::kCampus;
     if (name == "park") return spot_tag::kPark;
     if (name == "sports") return spot_tag::kSports;
+    if (name == "beach") return spot_tag::kBeach;
     return 0;
 }
 
@@ -179,15 +180,26 @@ ActivityCatalog defaultActivityCatalog() {
     c.defs.back().sites = {"lawn", "plaza", "beach"};   // (chat: on a paseo too, an open-air mall's plaza)
     lawnGroup("picnic", Formation::Circle, 0.85, "picnicker", 4, Pose::SitGround, 1, 15, 30, 60, 11, 15.5);
     c.defs.back().sites = {"lawn", "beach"};
-    lawnGroup("sunbathe", Formation::Spread, 1.1, "sunbather", 2, Pose::Lie, 1, 10, 20, 45, 10, 17);
+    lawnGroup("sunbathe", Formation::Spread, 1.6, "sunbather", 2, Pose::Lie, 1, 10, 20, 45, 10, 17);
     c.defs.back().sites = {"lawn", "beach"};
     lawnGroup("catch", Formation::Pair, 9.0, "catcher", 2, Pose::Stand, 2, 10, 10, 25, 9, 20);
     c.defs.back().sites = {"lawn", "beach"};
     // A DAY AT THE BEACH (Glenn: "people actually hanging out on the beach lounging and sunbathing"): an hour or two on
     // the sand, lying out in fours, worth a longer walk than a lawn
-    lawnGroup("beach_day", Formation::Spread, 1.1, "sunbather", 4, Pose::Lie, 1, 10, 60, 150, 10, 18);
+    lawnGroup("beach_day", Formation::Spread, 2.0, "sunbather", 4, Pose::Lie, 1, 10, 60, 150, 10, 18);
     c.defs.back().sites = {"beach"};
     c.defs.back().distHi = 2000;
+    // ...or on a LOUNGER under an umbrella (Glenn, 2026-11-02: "lounge chairs -- a new type of chair that the agents and
+    // player can use"): the beach's row for hire, one of the six nearest free
+    { ActivityDef& d = def("lounger", {"bed"}); d.tags = spot_tag::kBeach; d.distHi = 2000; d.nearest = 6;
+      d.perform = Perform::Spot; d.minutesLo = 60; d.minutesHi = 150; d.hourLo = 9; d.hourHi = 18; }
+    // ...and A STROLL on the sand (Glenn: "people walking around the beach too -- on the sand"): up to three, ambling
+    // from point to point along the shore's wet sand
+    { ActivityDef& d = def("beach_stroll", {"shore"}); d.distHi = 2000; d.nearest = 4; d.perform = Perform::Roam;
+      d.formation = Formation::Roam; d.minPlayers = 1; d.gatherMinutes = 15; d.minutesLo = 15; d.minutesHi = 40;
+      d.hourLo = 8; d.hourHi = 20;
+      RoleDef r; r.name = "stroller"; r.n = 3; r.pose = Pose::Stand; r.speedLo = 0.8; r.speedHi = 1.2;
+      d.roles = {r}; }
 
     // THE ERRAND on the way home (the old fixed "shop near home"): a supermarket or a store near HOME, one of the three
     // nearest open
@@ -214,7 +226,7 @@ ActivityCatalog defaultActivityCatalog() {
         MenuBand b;
         b.hourLo = lo; b.hourHi = hi;
         b.first = {{"bench", bench, 0}, {"across_town", across, 0}};
-        if (beach > 0) b.first.insert(b.first.begin(), {"beach_day", beach, 0});
+        if (beach > 0) b.first.insert(b.first.begin(), {{"beach_day", beach, 0}, {"lounger", 0.30, 0}, {"beach_stroll", 0.20, 0}});
         b.pick = std::move(pick);
         outing.bands.push_back(b);
     };
