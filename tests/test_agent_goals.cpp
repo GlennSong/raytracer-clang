@@ -5,6 +5,7 @@
 #include "../src/apps/citysim/scripting/agent_goals.h"
 #include "../src/apps/citysim/scripting/roles_lua.h"
 #include "../src/apps/citysim/scripting/place_kinds_lua.h"
+#include "../src/apps/citysim/scripting/people_lua.h"
 #include "../src/apps/citysim/scripting/signals_lua.h"
 #include "../src/engine/scripting/script_vm.h"
 
@@ -147,6 +148,41 @@ TEST_CASE(a_home_is_cut_into_dwellings_by_its_use) {
     citysim::dwellingsOf(c, *c.dwellingRule("apartments"), 10, 1, beds);
     CHECK(beds.size() == 1);
     CHECK(c.dwellingRule("hotel") == c.dwellingRule("apartments"));
+}
+
+// THE PEOPLE: people.lua is defaultPeopleCatalog, and a catalog that would leave a dwelling with no household to fit
+// it, or name a band or stage that is not there, is refused.
+TEST_CASE(people_lua_is_the_built_in_people) {
+    ScriptVM vm;
+    std::string err;
+    const std::string src = readFile("assets/scripts/people.lua");
+    CHECK(!src.empty());
+    CHECK(vm.doString(src, &err));
+    citysim::PeopleCatalog lua;
+    const bool ok = loadPeopleCatalog(vm, lua, &err);
+    if (!ok) std::printf("    %s\n", err.c_str());
+    CHECK(ok);
+    const citysim::PeopleCatalog cpp = citysim::defaultPeopleCatalog();
+    if (lua.describe() != cpp.describe()) std::printf("    LUA:\n%s\n    C++:\n%s\n", lua.describe().c_str(), cpp.describe().c_str());
+    CHECK(lua.describe() == cpp.describe());
+    CHECK(cpp.check().empty());
+    CHECK(lua.stages[static_cast<std::size_t>(lua.stage("child"))].walks && !lua.stages[static_cast<std::size_t>(lua.stage("child"))].job);
+    CHECK(lua.stages[static_cast<std::size_t>(lua.hallStage)].beds);
+    auto refused = [&](const std::string& edit, const char* why) {
+        ScriptVM bad;
+        std::string e;
+        CHECK(bad.doString(src + "\n" + edit, &e));
+        citysim::PeopleCatalog c;
+        CHECK(!loadPeopleCatalog(bad, c, &e));
+        if (e.find(why) == std::string::npos) std::printf("    `%s` refused with: %s\n", edit.c_str(), e.c_str());
+        CHECK(e.find(why) != std::string::npos);
+    };
+    refused("people.bands.adult.stages = { working = 1, on_the_moon = 1 }", "on_the_moon");
+    refused("people.households.family.members[2].bands = { toddler = 1 }", "toddler");
+    refused("people.households.single.beds = { 0, 0 }; people.households.couple.beds = { 0, 0 }; "
+            "people.households.seniors.beds = { 0, 0 }; people.households.single_parent.beds = { 2, 3 }", "1 bedrooms");
+    refused("people.halls.stage = 'working'", "beds");
+    refused("people.households.couple.share = 0", "share");
 }
 
 // THE SIGNALS' CYCLE: signals.lua is SignalTiming's defaults, and a time that is not positive is refused.

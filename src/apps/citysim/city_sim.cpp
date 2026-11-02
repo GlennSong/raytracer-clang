@@ -374,6 +374,7 @@ void CitySim::build(const NavGraph& graph, int driverCount, int pedCount, uint32
     simSeconds_ = 0;
     faultCount_ = 0;
     rng_ = engine::ProcRng(seed);
+    seed_ = seed;
     ids_.reset();   // fresh scene → UIDs restart at 0 (reproducible from seed)
     // Three-tier bookkeeping (P4): a rebuild starts everyone K on frame 0 with
     // no bubble centre — the host re-feeds the player each step. The knobs
@@ -788,7 +789,7 @@ void CitySim::build(const NavGraph& graph, int driverCount, int pedCount, uint32
 
 namespace {
 // ---- the population cache (CitySim::setPopulationCacheDir) --------------------------------------------
-constexpr uint32_t kPopulationFormat = 8;   // (8: place kinds from places.lua, not campus codes; 7: homes and jobs drawn by floor area; 6: garage stalls are bays) bump when assignPlaces' rules or this record change
+constexpr uint32_t kPopulationFormat = 9;   // (9: households in the dwellings, life stages decide who works; 8: place kinds from places.lua, not campus codes; 7: homes and jobs drawn by floor area; 6: garage stalls are bays) bump when assignPlaces' rules or this record change
 struct Fnv : engine::bundle::Fnv {
     void real(Real v) { const double d = static_cast<double>(v); pod(d); }
     void vec(const engine::Vec2& v) { real(v.x); real(v.y); }
@@ -809,7 +810,9 @@ struct PopTail {
 
 void CitySim::assignPlaces(const PlaceMap& places, const NavGraph& graph) {
     relationships_.clear();
-    for (Agent& a : agents_) { a.homePlace = kNoPlace; a.workPlace = kNoPlace; }
+    for (Agent& a : agents_) { a.homePlace = kNoPlace; a.workPlace = kNoPlace; a.household = -1; a.age = 0; a.stage = -1; }
+    households_ = HouseholdPlan{};
+    unhoused_ = 0;
     if (places.empty() || graph.nodeCount() == 0) return;
 
     // A hall with BEDS (the university's residence hall) is the STUDENTS' home (below), not one more house in the pool.
@@ -826,6 +829,43 @@ void CitySim::assignPlaces(const PlaceMap& places, const NavGraph& graph) {
         for (PlaceId id : places.ofType(t)) jobs.push_back(id);
     venues_.clear();
     if (homes.empty()) return;   // nowhere to live → leave the built schedule alone
+
+    // THE HOUSEHOLDS (households.h; Glenn, 2026-11-01: "a family would be expressed by like a unit"). The dwellings
+    // and the halls' beds are filled with as many people as there are residents -- the buses' and cabs' drivers aside
+    // -- and each member is matched to an agent: a child or a student to a walker, the adults to the rest, the
+    // drivers spread evenly over them. Sequential and cheap; decided on a cache hit too (the cache holds what follows).
+    {
+        std::vector<int> drivers, walkers;
+        for (int i = 0; i < static_cast<int>(agents_.size()); ++i)
+            if (!onService(i)) (agents_[static_cast<std::size_t>(i)].archetype == Agent::Mode::Pedestrian ? walkers : drivers).push_back(i);
+        households_ = planHouseholds(people_, places, kBeds, static_cast<int>(drivers.size() + walkers.size()),
+                                     static_cast<int>(walkers.size()), seed_);
+        const int adults = static_cast<int>(households_.people.size()) - households_.walkersOnly;
+        const int adultDrivers = std::min(static_cast<int>(drivers.size()), adults);
+        std::size_t nextD = 0, nextW = 0;
+        int adult = 0;
+        for (std::size_t h = 0; h < households_.households.size(); ++h) {
+            const Household& hh = households_.households[h];
+            for (uint32_t m = hh.first; m < hh.first + hh.count; ++m) {
+                const Resident& r = households_.people[m];
+                bool drive = false;
+                if (!r.walks) {   // this adult's turn to drive: the even spread of adultDrivers over the adults
+                    drive = static_cast<long long>(adult + 1) * adultDrivers / adults > static_cast<long long>(adult) * adultDrivers / adults;
+                    ++adult;
+                }
+                int ai = -1;
+                if (drive && nextD < drivers.size()) ai = drivers[nextD++];
+                else if (nextW < walkers.size()) ai = walkers[nextW++];
+                else if (!r.walks && nextD < drivers.size()) ai = drivers[nextD++];
+                if (ai < 0) continue;   // (the plan housed no more people than there are: never)
+                Agent& a = agents_[static_cast<std::size_t>(ai)];
+                a.household = static_cast<int32_t>(h);
+                a.age = r.age;
+                a.stage = static_cast<int8_t>(r.stage);
+            }
+        }
+        unhoused_ = static_cast<int>(drivers.size() + walkers.size() - nextD - nextW);
+    }
 
     // The nav node a place routes through (nearest to its snapped entrance), each looked up once:
     // nearestNode scans every node, and the job search below asks it again and again.
@@ -1022,6 +1062,10 @@ void CitySim::assignPlaces(const PlaceMap& places, const NavGraph& graph) {
         Fnv k;
         k.pod(kPopulationFormat);
         k.str(placeKinds_.describe());   // the kinds' tags and beds decide who lives where
+        k.str(people_.describe());       // ...and the households who
+        k.pod(seed_);
+        k.pod(static_cast<uint32_t>(places.dwellings().size()));
+        for (const PlaceMap::Dwelling& d : places.dwellings()) { k.pod(d.place); k.pod(d.beds); }
         k.pod(static_cast<int32_t>(graph.nodeCount()));
         for (const Vec2& p : graph.nodes) k.vec(p);
         for (const engine::NavLink& L : graph.links) {
@@ -1149,7 +1193,8 @@ void CitySim::assignPlaces(const PlaceMap& places, const NavGraph& graph) {
         hmix ^= hmix >> 16; hmix *= 0x7feb352dU;
         hmix ^= hmix >> 15; hmix *= 0x846ca68bU;
         hmix ^= hmix >> 16;
-        PlaceId hp = drawFrom(homes, hmix);
+        // A HOUSEHOLD'S HOME is its dwelling's (or its hall's); someone the housing could not hold takes one by area.
+        PlaceId hp = a.household >= 0 ? households_.households[static_cast<std::size_t>(a.household)].place : drawFrom(homes, hmix);
         int hn = nodeOf(hp);
         a.homePlace = hp;
         a.home = hn;
@@ -1177,7 +1222,10 @@ void CitySim::assignPlaces(const PlaceMap& places, const NavGraph& graph) {
         a.work = a.home;
         a.role = kRoleCommuter;
         const uint32_t roleRoll = (a.brain >> 20) & 0xFF;   // 0..255
-        const bool stroller = !parks.empty() && roleRoll < 51;   // ~20%
+        // WHO WORKS is their life stage's (people.lua: a child, the retired, those at home do not); someone with no
+        // household rolls for it as before.
+        const LifeStage* stage = a.stage >= 0 ? &people_.stages[static_cast<std::size_t>(a.stage)] : nullptr;
+        const bool stroller = !parks.empty() && (stage ? !stage->job : roleRoll < 51);   // ~20%
         auto unit = [](uint32_t bits) { return (bits & 0xFF) / 255.0; };
         // A WALKER WITH THE DAY OFF (Glenn, 2026-09-19: "we should have non
         // workers and pedestrians who are out for a stroll or going to public
@@ -1187,7 +1235,7 @@ void CitySim::assignPlaces(const PlaceMap& places, const NavGraph& graph) {
         // (early, mid-morning, afternoon, evening) so the street is never
         // just the commute.
         const bool dayOff = a.archetype == Agent::Mode::Pedestrian &&
-                            !venues_.empty() && roleRoll < 85;   // ~1 in 3
+                            !venues_.empty() && (stage ? !stage->job : roleRoll < 85);   // ~1 in 3
         int anchor = -1;
         if (dayOff) {
             // The window mechanics need somewhere that is not home: the
@@ -1217,7 +1265,7 @@ void CitySim::assignPlaces(const PlaceMap& places, const NavGraph& graph) {
                 a.departWork = 9.5 + 2.0 * unit(a.brain);         // late-morning out
                 a.departHome = 15.5 + 1.5 * unit(a.brain >> 8);   // home mid-afternoon
             }
-        } else if (!jobs.empty()) {
+        } else if (!jobs.empty() && (!stage || stage->job)) {   // (a child, say, with no outing to go to stays home)
             // Prefer the brain-picked workplace; if it isn't routable from
             // home, scan for any that is — STARTING FROM A PER-AGENT OFFSET.
             // Scanning from index 0 funneled every fallback agent onto the
@@ -1549,6 +1597,7 @@ void CitySim::assignPlaces(const PlaceMap& places, const NavGraph& graph) {
         for (int i = 0; i < static_cast<int>(agents_.size()); ++i) {
             const Agent& a = agents_[static_cast<std::size_t>(i)];
             if (a.role != kRoleCommuter || onService(i) || a.homePlace == kNoPlace || a.home < 0) continue;
+            if (a.stage >= 0 && !people_.stages[static_cast<std::size_t>(a.stage)].job) continue;   // a child is not hired
             homeCells[cellKey(static_cast<int64_t>(std::floor(a.homeDoor.x / kCell)),
                               static_cast<int64_t>(std::floor(a.homeDoor.y / kCell)))].push_back(i);
             ++commuters;
@@ -3614,7 +3663,7 @@ void CitySim::assignStudents(const PlaceMap& places, const NavGraph& graph) {
     if (halls.empty() || teach.empty()) return;
     auto doorOf = [&](PlaceId id) { const Place& p = places[id]; return p.entrance + (p.site - p.entrance) * 0.4; };
     // the halls a student can live in: routable to every teaching hall and back on foot
-    struct Hall { PlaceId id; int node; int beds; };
+    struct Hall { PlaceId id; int node; };
     std::vector<Hall> live;
     std::vector<std::pair<PlaceId, int>> classes;
     for (PlaceId t : teach) {
@@ -3629,35 +3678,22 @@ void CitySim::assignStudents(const PlaceMap& places, const NavGraph& graph) {
         for (const auto& c : classes)
             ok = ok && c.second != hn && engine::findRoute(graph, hn, c.second, true).valid() &&
                  engine::findRoute(graph, c.second, hn, true).valid();
-        if (ok) live.push_back({h, hn, places[h].capacity > 0 ? places[h].capacity : 150});
+        if (ok) live.push_back({h, hn});
     }
     if (live.empty()) return;
     const int ln = lib != kNoPlace ? graph.nearestNode(places[lib].entrance) : -1;
 
-    // WHO: walkers only (a student has no car), never a bus or a cab's driver, chosen by their own bits so the same
-    // city always has the same students. As many as the halls have beds, never more than a quarter of the walkers.
-    std::vector<std::pair<uint32_t, int>> cand;
-    int walkers = 0;
-    for (std::size_t i = 0; i < agents_.size(); ++i) {
-        const Agent& a = agents_[i];
-        if (a.archetype != Agent::Mode::Pedestrian || onService(static_cast<int>(i))) continue;
-        ++walkers;
-        uint32_t k = a.brain * 0x27d4eb2fu;
-        k ^= k >> 15; k *= 0x165667b1u; k ^= k >> 13;
-        cand.push_back({k, static_cast<int>(i)});
-    }
-    int beds = 0;
-    for (const Hall& h : live) beds += h.beds;
-    const int want = std::min(beds, walkers / 4);
-    if (want <= 0) return;
-    std::partial_sort(cand.begin(), cand.begin() + want, cand.end());
-    std::size_t hall = 0;
-    int inHall = 0;
-    for (int c = 0; c < want; ++c) {
-        while (inHall >= live[hall].beds * want / std::max(1, beds) + 1 && hall + 1 < live.size()) { ++hall; inHall = 0; }   // halls fill in proportion
-        ++inHall;
-        const Hall& H = live[hall];
-        Agent& a = agents_[static_cast<std::size_t>(cand[static_cast<std::size_t>(c)].second)];
+    // WHO: the households' students (households.h -- the halls' beds are filled first, with walkers, never more than
+    // the people.lua share of them), each in the hall the plan gave them, when it is one a student can live in.
+    for (Agent& a : agents_) {
+        if (a.household < 0) continue;
+        const Household& hh = households_.households[static_cast<std::size_t>(a.household)];
+        if (hh.type != Household::kHall) continue;
+        const Hall* hall = nullptr;
+        for (const Hall& h : live)
+            if (h.id == hh.place) hall = &h;
+        if (!hall) continue;
+        const Hall& H = *hall;
         a.role = kRoleStudent;
         a.homePlace = H.id; a.home = H.node; a.homeDoor = doorOf(H.id);
         a.restNode = H.node; a.pos = a.homeDoor; a.indoors = true;

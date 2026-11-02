@@ -14111,3 +14111,41 @@ at a time, so a family could not share one.
 
 The building generator's own `BuildingParams::campus` (room plans, facades, the lot cache) is the building's shape,
 not who uses it, and stays.
+
+## ADR-0296 — Households in the dwellings: people.lua, and the population capped by the housing
+
+#172 items 3 and 5, step 2 of the households plan (Glenn, 2026-11-01: "a family would be expressed by like a unit";
+"single people would have their own apartment ... and single people could have roommates"; more people than homes:
+"Do a cap for now").
+
+Before, each resident drew a home by floor area on their own, with no limit, and a role by dice: about one in five a
+stroller, one in three walkers a day off. Nobody had an age, and nobody lived with anybody.
+
+**Decision.**
+- `assets/scripts/people.lua` (households.h `PeopleCatalog`; `defaultPeopleCatalog` the same in C++, kept equal by a
+  test) holds:
+  - LIFE STAGES with what they mean: `job` (looks for work), `walks` (never drives), `beds` (lives in a hall's beds);
+  - AGE BANDS (child 0-17, young 18-24, adult 25-64, senior 65-90), each with the stages its people lead, by share;
+  - HOUSEHOLD TYPES (single, couple, roommates, single parent, family, three generations, seniors), each with a share,
+    the bedrooms of the dwellings it fits and its members: groups of one band, `count` of them or one a bedroom;
+  - who fills the halls' beds (young students, at most a quarter of the walkers).
+  The reader refuses an unknown stage or band, a type without a share, and a dwelling size no type fits.
+- `planHouseholds` fills the halls' beds first, then every dwelling in an order of the seed's. Each dwelling draws a
+  type that fits its bedrooms, by share. If that type would need more people or more walk-only members than are left,
+  the dwelling tries its other fitting types; if none fits, it stays empty. One household to a dwelling, always.
+- assignPlaces plans households for its residents (the buses' and cabs' drivers aside). It matches each member to an
+  agent: a walk-only member to a walker, the adults to the rest, with the drivers spread evenly over the adults. Each
+  agent gets `household`, `age` and `stage`, and its home is its household's. The life stage, not dice, decides who
+  works: a child, a retiree or someone at home goes out on the day-off and park outings, never gets the job search
+  and is never hired as staff. The hall students are the plan's, not a draw of their own.
+- THE CAP: city_render runs the same plan on the density population before the sim builds. When the housing holds
+  fewer people than the streets ask for, cars and walkers are both cut to what is housed (walkers enough for the
+  children and students), and the shortfall is logged as more dwellings wanted. An AUTHORED car or walker count is
+  the level's word and is kept. Anyone past the housing is counted unhoused and takes a home by floor area, as before.
+- The log and `CitySim::populationLine()` report households by type, people by band and stage, dwellings filled, hall
+  beds, and anyone unhoused.
+- The population cache key hashes the people catalog, the seed and every dwelling (kPopulationFormat 9). The plan is
+  cheap and sequential, so it is made again on a cache hit. The cache keeps only what follows from it.
+
+Roles are still today's four built-ins and the staff (step 3 makes every job a place hiring and turns the life stages
+into roles). Within a home, the relationship tag is still Neighbor (step 4).

@@ -357,6 +357,80 @@ TEST_CASE(students_fill_every_hall_and_take_classes_in_every_teaching_hall) {
     CHECK(at1 >= 15 && at2 >= 15);
 }
 
+// HOUSEHOLDS IN THE DWELLINGS (households.h; Glenn, 2026-11-01: "a family would be expressed by like a unit"; "Do a
+// cap for now"). Every seed: one household to a dwelling at most; every member of one lives at its home; a child (or
+// any walk-only member) is a walker and holds no job; everyone has a home. With more people than the housing holds,
+// the rest are counted unhoused (and take a home by area, as before); with housing to spare, nobody is.
+TEST_CASE(households_fill_the_dwellings_one_to_each) {
+    for (int perBlock : {6, 40})
+        for (uint32_t seed = 1; seed <= 4; ++seed) {
+            NavGraph nav = citytest::cityNav(800.0, 80.0, seed);
+            CitySim sim;
+            sim.build(nav, 120, 360, seed);
+            PlaceMap places;
+            for (int i = 0; i < 24; ++i) {
+                const PlaceId h = places.add(PlaceType::Home, Vec2(-350 + (i % 12) * 60.0, i < 12 ? -330 : 330), nav);
+                std::vector<int> beds;
+                if (i % 3 == 0) beds = {i % 2 ? 3 : 5};   // a house
+                else for (int d = 0; d < perBlock; ++d) beds.push_back(d % 4);   // flats, studio to 3-bed
+                places.setDwellings(h, beds);
+            }
+            places.add(PlaceType::Office, Vec2(0, 0), nav, 9, 17);
+            places.add(PlaceType::Park, Vec2(150, 150), nav);
+            places.add(PlaceType::Cafe, Vec2(-150, 150), nav, 7, 19);
+            sim.assignPlaces(places, nav);
+            const HouseholdPlan& plan = sim.households();
+            std::vector<int> taken(places.dwellings().size(), 0);
+            for (const Household& h : plan.households)
+                if (h.dwelling != Household::kNoDwelling) ++taken[h.dwelling];
+            int twice = 0;
+            for (int t : taken) twice += t > 1 ? 1 : 0;
+            int housed = 0, service = 0, wrongHome = 0, kidsDriving = 0, kidsWorking = 0, homeless = 0, kids = 0;
+            for (int i = 0; i < static_cast<int>(sim.agents().size()); ++i) {
+                const Agent& a = sim.agents()[static_cast<std::size_t>(i)];
+                if (sim.onService(i)) { ++service; continue; }
+                homeless += a.homePlace == kNoPlace ? 1 : 0;
+                if (a.household < 0) continue;
+                ++housed;
+                const Household& h = plan.households[static_cast<std::size_t>(a.household)];
+                wrongHome += a.homePlace != h.place ? 1 : 0;
+                const LifeStage& st = sim.people().stages[static_cast<std::size_t>(a.stage)];
+                if (st.walks && h.type != Household::kHall) {
+                    ++kids;
+                    kidsDriving += a.archetype != Agent::Mode::Pedestrian ? 1 : 0;
+                    kidsWorking += a.workPlace != kNoPlace ? 1 : 0;
+                }
+            }
+            const int residents = static_cast<int>(sim.agents().size()) - service;
+            std::printf("    [households] %d a block, seed %u: %s; unhoused %d\n", perBlock, seed, sim.populationLine().c_str(),
+                        sim.unhousedCount());
+            CHECK(twice == 0);
+            CHECK(housed == static_cast<int>(plan.people.size()));
+            CHECK(sim.unhousedCount() == residents - housed);
+            CHECK(wrongHome == 0);
+            CHECK(kids > 0 && kidsDriving == 0 && kidsWorking == 0);
+            CHECK(homeless == 0);
+            CHECK(plan.capacity >= housed);
+            if (perBlock == 6) CHECK(sim.unhousedCount() > 0 && plan.dwellingsFilled >= plan.dwellings * 9 / 10);
+            else CHECK(sim.unhousedCount() == 0);
+        }
+    // the same city houses the same people the same way
+    auto who = [](uint32_t seed) {
+        NavGraph nav = citytest::cityNav(800.0, 80.0, seed);
+        CitySim sim;
+        sim.build(nav, 60, 200, seed);
+        PlaceMap places;
+        for (int i = 0; i < 12; ++i) places.setDwellings(places.add(PlaceType::Home, Vec2(-350 + i * 60.0, -330), nav), {0, 1, 2, 3, 2, 1});
+        places.add(PlaceType::Office, Vec2(0, 0), nav, 9, 17);
+        sim.assignPlaces(places, nav);
+        std::vector<int> out;
+        for (const Agent& a : sim.agents()) { out.push_back(a.household); out.push_back(a.age); out.push_back(a.stage); }
+        return out;
+    };
+    CHECK(who(7) == who(7));
+    CHECK(who(7) != who(8));
+}
+
 // THE WALKS IN THE WALKING NETWORK (Glenn: students should cross the quad; and every park's paths): footpaths join the
 // nav graph as walker-only links. A walker's route takes the diagonal across a block when it is shorter; a car's never
 // does; nearestNode never answers with a walk node; a walk's end joins the street at its pavement, not its middle; a

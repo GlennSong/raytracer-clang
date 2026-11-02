@@ -35,6 +35,7 @@
 #include "scripting/activities_lua.h"   // the activity catalog (activities.lua)
 #include "scripting/roles_lua.h"         // the role catalog (roles.lua)
 #include "scripting/place_kinds_lua.h"   // the place kinds and dwellings (places.lua)
+#include "scripting/people_lua.h"        // ages, life stages, households (people.lua)
 #include "scripting/signals_lua.h"       // the signals' cycle times (signals.lua)
 #include "scripting/vehicle_body.h"     // scripted fleet bodies (ADR-0065)
 #include "../../engine/scripting/script_vm.h"
@@ -465,6 +466,21 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
             }
         }
     }
+    {   // THE PEOPLE (people.lua): ages, life stages and the households the dwellings are filled with
+        const std::string code = engine::loadScriptCode("people.lua", "");
+        if (!code.empty()) {
+            engine::ScriptVM vm;
+            std::string err;
+            PeopleCatalog people;
+            if (vm.doString(code, &err) && engine::loadPeopleCatalog(vm, people, &err)) {
+                LOG_INFO << "[citysim] people: " << people.bands.size() << " age bands, " << people.households.size()
+                         << " household types (people.lua)";
+                sim_.setPeople(std::move(people));
+            } else {
+                LOG_WARN << "[citysim] people.lua: " << err << " (using the built-in people)";
+            }
+        }
+    }
 #endif
     const PlaceKindCatalog& kinds = sim_.placeKinds();
     const uint32_t kBeds = kinds.tag("beds");
@@ -550,6 +566,25 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
         LOG_INFO << "[citysim] density population: " << carCount << " cars ("
                  << laneKm << " lane-km), " << pedCount << " walkers ("
                  << walkKm << " sidewalk-km)";
+        // NO MORE PEOPLE THAN HOMES (Glenn, 2026-11-01: "Do a cap for now"). The streets ask for so many; the
+        // dwellings and the halls' beds hold so many (planHouseholds, the same draw assignPlaces makes). A density
+        // population is cut to what is housed, cars and walkers alike, keeping walkers enough for the children and
+        // the students; the shortfall is the generator's to build. An authored count is the level's word: kept, and
+        // whoever it holds past the housing is counted unhoused.
+        if (homeDwellings > 0) {
+            const int asked = carCount + pedCount;
+            const HouseholdPlan fit = planHouseholds(sim_.people(), places_, kBeds, asked, pedCount, params_.seed);
+            const int housed = static_cast<int>(fit.people.size());
+            if (housed < asked) {
+                const int cars = std::min(carCount, std::max(0, housed - fit.walkersOnly));
+                const int capped = std::min(cars, static_cast<int>(std::lround(static_cast<double>(carCount) * housed / asked)));
+                LOG_INFO << "[citysim] housing holds " << housed << " of the " << asked << " the streets ask for: "
+                         << capped << " cars, " << housed - capped << " walkers (" << asked - housed
+                         << " short: more dwellings wanted)";
+                carCount = capped;
+                pedCount = housed - capped;
+            }
+        }
     }
     // THE FLEET CATALOGUE, loaded before the sim builds. Drivers take their body
     // at build time, so the sim has to know the real sizes first — the recipes
@@ -1057,6 +1092,9 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
     if (!std::getenv("RT_NOCACHE")) sim_.setPopulationCacheDir("cache/population");
     { const auto tT0 = std::chrono::steady_clock::now();
     sim_.assignPlaces(places_, nav_);
+    if (!sim_.households().households.empty())
+        LOG_INFO << "[citysim] population: " << sim_.populationLine()
+                 << (sim_.unhousedCount() > 0 ? ", " + std::to_string(sim_.unhousedCount()) + " unhoused (more than the housing holds)" : std::string());
     {   // THE ACTIVITY SPOTS, by kind and where (tagged once the places are known)
         int byKind[static_cast<int>(SpotKind::Count)] = {0}, campus = 0, sports = 0, campusJog = 0;
         for (const CitySim::ActivitySpot& sp : sim_.spots()) {

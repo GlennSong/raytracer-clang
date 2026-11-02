@@ -17,6 +17,7 @@
 #include "city_transit.h"
 #include "places.h"
 #include "place_kinds.h"   // what kind each place is, and its tags (places.lua)
+#include "households.h"     // ages, life stages and households (people.lua)
 #include "relationships.h"
 #include "traffic_signal.h"
 #include <cstdint>
@@ -96,6 +97,12 @@ struct Agent {
     // spends the day between classes in the teaching hall and breaks on campus.
     // Its id in the role catalog (city_roles.h RoleId): a built-in, or a staff role assignStaff gave it.
     RoleId role = kRoleCommuter;
+    // WHO THEY ARE (households.h, people.lua): their household in the sim's plan (-1: none -- a bus or cab driver, or
+    // more people than the housing holds), their age and their life stage (an index into the people catalog's
+    // stages; -1 with no household). Set in assignPlaces; time is frozen, so never again.
+    int32_t household = -1;
+    uint8_t age = 0;
+    int8_t stage = -1;
 
     // HOW THIS AGENT IS MOVING RIGHT NOW. Nearly everything that reads `mode`
     // is asking exactly this — which route space to plan in, whether to sample a
@@ -1315,6 +1322,15 @@ public:
     // indexes and tag bits are this catalog's: set it before the places are given their kinds.
     void setPlaceKinds(PlaceKindCatalog c) { placeKinds_ = std::move(c); }
     const PlaceKindCatalog& placeKinds() const { return placeKinds_; }
+    // WHO LIVES HERE (people.lua): ages, life stages and household types; assignPlaces fills the dwellings with them.
+    void setPeople(PeopleCatalog c) { people_ = std::move(c); }
+    const PeopleCatalog& people() const { return people_; }
+    // The households assignPlaces housed the agents in (Agent::household indexes it), and what it came to.
+    const HouseholdPlan& households() const { return households_; }
+    std::string populationLine() const { return describePlan(people_, households_); }
+    // Agents assignPlaces could give no household (more people than the housing holds, an authored count), drivers
+    // of buses and cabs aside: they take a home by floor area, as everyone did before households.
+    int unhousedCount() const { return unhoused_; }
     // One role's table replaced outright (a level script's own day for it); false when the role is unknown.
     bool setRoleTable(const std::string& role, GoalTable t);
     // Places people go out to (everything but homes), for outings and lunch.
@@ -1902,6 +1918,10 @@ private:
     // THE ROLES and each one's day (setRoleCatalog); the wanderers' tables (the agent lab) beside them.
     RoleCatalog roles_ = defaultRoleCatalog();
     PlaceKindCatalog placeKinds_ = defaultPlaceKindCatalog();
+    PeopleCatalog people_ = defaultPeopleCatalog();
+    HouseholdPlan households_;
+    int unhoused_ = 0;
+    uint32_t seed_ = 1;   // build()'s: the households' order
     std::vector<GoalTable> roleTables_ = [] {
         std::vector<GoalTable> v;
         for (const ResidentRole& r : defaultRoleCatalog().roles) v.push_back(buildDayTable(r.day));
