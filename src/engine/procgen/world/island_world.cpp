@@ -1894,6 +1894,42 @@ bool writeIslandSvg(const IslandWorld& w, const std::string& svgPath, const Isla
     return static_cast<bool>(f);
 }
 
+namespace {
+// Every place's limits rasterized on the world grid, grown `growM` (1: in or near a town). The trails and the
+// coast road keep out of it.
+std::vector<char> limitsRaster(const IslandWorld& w, double growM) {
+    const int n = w.n;
+    std::vector<char> town(static_cast<std::size_t>(n) * n, 0);
+    {
+        const int grow = static_cast<int>(std::ceil(growM / w.cell));
+        std::vector<char> inside(town.size(), 0);
+        for (const IslandSite& st : w.sites)
+            for (int j = 0; j < n; ++j) {
+                const double z = -w.half + j * w.cell;
+                std::vector<double> xs;
+                for (const auto& L : st.limits)
+                    for (std::size_t k = 0; k < L.size(); ++k) {
+                        const Vec2 a = L[k], b = L[(k + 1) % L.size()];
+                        if ((a.y > z) != (b.y > z)) xs.push_back(a.x + (z - a.y) / (b.y - a.y) * (b.x - a.x));
+                    }
+                std::sort(xs.begin(), xs.end());
+                for (std::size_t k = 0; k + 1 < xs.size(); k += 2)
+                    for (int i = std::max(0, static_cast<int>(std::ceil((xs[k] + w.half) / w.cell))); i < n && -w.half + i * w.cell <= xs[k + 1]; ++i)
+                        inside[static_cast<std::size_t>(j) * n + i] = 1;
+            }
+        for (int j = 0; j < n; ++j)
+            for (int i = 0; i < n; ++i)
+                if (inside[static_cast<std::size_t>(j) * n + i])
+                    for (int dj = -grow; dj <= grow; ++dj)
+                        for (int di = -grow; di <= grow; ++di) {
+                            const int u = i + di, v = j + dj;
+                            if (u >= 0 && v >= 0 && u < n && v < n) town[static_cast<std::size_t>(v) * n + u] = 1;
+                        }
+    }
+    return town;
+}
+}  // namespace
+
 void planTrails(IslandWorld& w) {
     w.trails.clear();
     w.trailNames.clear();
@@ -1944,33 +1980,7 @@ void planTrails(IslandWorld& w) {
     }
     // THE TOWNS are out of bounds (a trail through a town stood under its buildings): every place's
     // limits rasterized on the world grid, grown 30 m
-    std::vector<char> town(static_cast<std::size_t>(n) * n, 0);
-    {
-        const int grow = static_cast<int>(std::ceil(30.0 / w.cell));
-        std::vector<char> inside(town.size(), 0);
-        for (const IslandSite& st : w.sites)
-            for (int j = 0; j < n; ++j) {
-                const double z = -w.half + j * w.cell;
-                std::vector<double> xs;
-                for (const auto& L : st.limits)
-                    for (std::size_t k = 0; k < L.size(); ++k) {
-                        const Vec2 a = L[k], b = L[(k + 1) % L.size()];
-                        if ((a.y > z) != (b.y > z)) xs.push_back(a.x + (z - a.y) / (b.y - a.y) * (b.x - a.x));
-                    }
-                std::sort(xs.begin(), xs.end());
-                for (std::size_t k = 0; k + 1 < xs.size(); k += 2)
-                    for (int i = std::max(0, static_cast<int>(std::ceil((xs[k] + w.half) / w.cell))); i < n && -w.half + i * w.cell <= xs[k + 1]; ++i)
-                        inside[static_cast<std::size_t>(j) * n + i] = 1;
-            }
-        for (int j = 0; j < n; ++j)
-            for (int i = 0; i < n; ++i)
-                if (inside[static_cast<std::size_t>(j) * n + i])
-                    for (int dj = -grow; dj <= grow; ++dj)
-                        for (int di = -grow; di <= grow; ++di) {
-                            const int u = i + di, v = j + dj;
-                            if (u >= 0 && v >= 0 && u < n && v < n) town[static_cast<std::size_t>(v) * n + u] = 1;
-                        }
-    }
+    const std::vector<char> town = limitsRaster(w, 30.0);
     auto inTown = [&](double x, double z) {
         const int i = static_cast<int>(std::lround((x + w.half) / w.cell)), j = static_cast<int>(std::lround((z + w.half) / w.cell));
         return i >= 0 && j >= 0 && i < n && j < n && town[static_cast<std::size_t>(j) * n + i];
@@ -2155,6 +2165,146 @@ std::vector<ShoreSite> findBeachSites(const IslandWorld& w, const ShoreRule& r) 
     if (a >= 0) out[static_cast<std::size_t>(a)].pick = true;
     if (b >= 0) out[static_cast<std::size_t>(b)].pick = true;
     return out;
+}
+
+int planCoastRoad(IslandWorld& w, int fromSite, const Vec2& via, int toSite, const CoastRoadRule& r, std::string* why) {
+    const int n = w.n;
+    const double cell = w.cell;
+    // HOW FAR FROM THE SEA each cell is (m): a two-pass chamfer from the sea's cells
+    std::vector<float> sea(static_cast<std::size_t>(n) * n, 0.0f);
+    {
+        const float big = 1e9f, a1 = static_cast<float>(cell), a2 = static_cast<float>(cell * 1.41421356);
+        for (std::size_t k = 0; k < sea.size(); ++k) sea[k] = w.height[k] < 0.0f ? 0.0f : big;
+        auto at = [&](int i, int j) -> float& { return sea[static_cast<std::size_t>(j) * n + i]; };
+        for (int j = 0; j < n; ++j)
+            for (int i = 0; i < n; ++i) {
+                float& d = at(i, j);
+                if (d == 0.0f) continue;
+                if (i > 0) d = std::min(d, at(i - 1, j) + a1);
+                if (j > 0) d = std::min(d, at(i, j - 1) + a1);
+                if (i > 0 && j > 0) d = std::min(d, at(i - 1, j - 1) + a2);
+                if (i + 1 < n && j > 0) d = std::min(d, at(i + 1, j - 1) + a2);
+            }
+        for (int j = n - 1; j >= 0; --j)
+            for (int i = n - 1; i >= 0; --i) {
+                float& d = at(i, j);
+                if (d == 0.0f) continue;
+                if (i + 1 < n) d = std::min(d, at(i + 1, j) + a1);
+                if (j + 1 < n) d = std::min(d, at(i, j + 1) + a1);
+                if (i + 1 < n && j + 1 < n) d = std::min(d, at(i + 1, j + 1) + a2);
+                if (i > 0 && j + 1 < n) d = std::min(d, at(i - 1, j + 1) + a2);
+            }
+    }
+    auto idx = [&](double x, double z) {
+        const int i = static_cast<int>(std::lround((x + w.half) / cell)), j = static_cast<int>(std::lround((z + w.half) / cell));
+        return i >= 0 && j >= 0 && i < n && j < n ? static_cast<long>(j) * n + i : -1L;
+    };
+    auto seaDist = [&](double x, double z) { const long k = idx(x, z); return k < 0 ? 0.0 : static_cast<double>(sea[static_cast<std::size_t>(k)]); };
+    const std::vector<char> town = limitsRaster(w, 30.0);
+    auto inTown = [&](double x, double z) { const long k = idx(x, z); return k >= 0 && town[static_cast<std::size_t>(k)]; };
+    // EACH END: the place's limits nearest the beach, stepped out of the town toward it
+    auto endOf = [&](int site) {
+        const IslandSite& s = w.sites.at(static_cast<std::size_t>(site));
+        Vec2 best = s.at;
+        double bd = 1e30;
+        for (const auto& L : s.limits)
+            for (const Vec2& q : L)
+                if ((q - via).length() < bd) { bd = (q - via).length(); best = q; }
+        const Vec2 out = normalize(via - best);
+        Vec2 e = best;
+        for (double t = 0.0; t <= 400.0 && (inTown(e.x, e.y) || w.water(e.x, e.y)); t += 20.0) e = best + out * t;
+        return e;
+    };
+    const Vec2 a = endOf(fromSite), b = endOf(toSite);
+    // THE BAND: behind the sand, within reach of the sea; near an end the road may leave it to meet the town
+    TerrainRouteParams rp;
+    rp.cell = r.cell; rp.maxGrade = r.maxGrade; rp.hardGrade = r.hardGrade; rp.gradeWeight = 600.0; rp.turnWeight = 8.0;
+    rp.maxTurnDeg = 60.0; rp.margin = 900.0;
+    auto bandBlocked = [&](double x, double z) {
+        if (w.water(x, z)) return true;
+        const Vec2 q(x, z);
+        if ((q - a).length() < r.endFree || (q - b).length() < r.endFree) return inTown(x, z) && (q - a).length() > 60.0 && (q - b).length() > 60.0;
+        const double d = seaDist(x, z);
+        return inTown(x, z) || d < r.back || d > r.reach;
+    };
+    rp.blocked = bandBlocked;
+    const HeightField ground = [&w](double x, double z) { return w.heightAt(x, z); };
+    // the beach's own point: the nearest to it on the guide line, in rings round it (a bay's middle is out on
+    // its water, where no gradient leads inland)
+    Vec2 v = via;
+    {
+        double best = 1e30;
+        for (double rr = 0.0; rr <= 800.0; rr += cell)
+            for (int k = 0; k < std::max(1, static_cast<int>(rr / cell * 6.0)); ++k) {
+                const double ang = 2.0 * kPi * k / std::max(1, static_cast<int>(rr / cell * 6.0));
+                const Vec2 q = via + Vec2(std::cos(ang), std::sin(ang)) * rr;
+                if (w.water(q.x, q.y) || inTown(q.x, q.y)) continue;
+                const double off = std::fabs(seaDist(q.x, q.y) - r.guide) + 0.25 * rr;
+                if (off < best) { best = off; v = q; }
+            }
+    }
+    // THE GUIDE: from each end, walk along the line `guide` metres behind the shore toward the beach -- a step
+    // along the contour of the sea's distance (across its gradient, the way that heads for the beach), then back
+    // onto the line -- dropping a waypoint every `step`
+    auto grad = [&](const Vec2& q) {
+        const Vec2 g(seaDist(q.x + cell, q.y) - seaDist(q.x - cell, q.y), seaDist(q.x, q.y + cell) - seaDist(q.x, q.y - cell));
+        return g.length() < 1e-9 ? Vec2(0, 0) : normalize(g);
+    };
+    auto onGuide = [&](Vec2 q) {
+        for (int k = 0; k < 12; ++k) {
+            const Vec2 g = grad(q);
+            const double off = r.guide - seaDist(q.x, q.y);
+            if (std::fabs(off) < cell || g.length() < 0.5) break;
+            q = q + g * std::clamp(off, -120.0, 120.0);
+        }
+        return q;
+    };
+    auto walkTo = [&](const Vec2& from, const Vec2& to) {
+        std::vector<Vec2> pts{from};
+        Vec2 q = onGuide(from);
+        int away = 0;
+        for (int k = 0; k < 80 && (q - to).length() > r.step * 1.5; ++k) {
+            const Vec2 g = grad(q);
+            Vec2 t(-g.y, g.x);
+            if (dot(t, to - q) < 0) t = t * -1.0;
+            if (g.length() < 0.5) t = normalize(to - q);
+            const Vec2 nq = onGuide(q + t * r.step);
+            // round a bend the line may head away for a step or two; three in a row, it has turned for good (a
+            // headland's far side): straight on from here
+            away = (nq - to).length() >= (q - to).length() ? away + 1 : 0;
+            if (away >= 3) break;
+            q = nq;
+            if (!inTown(q.x, q.y) && !w.water(q.x, q.y)) pts.push_back(q);
+        }
+        pts.push_back(to);
+        return pts;
+    };
+    std::vector<Vec2> way = walkTo(a, v);
+    {
+        std::vector<Vec2> back = walkTo(b, v);   // from the far end toward the beach, then reversed
+        std::reverse(back.begin(), back.end());
+        way.insert(way.end(), back.begin() + 1, back.end());
+    }
+    IslandRoad rd;
+    rd.kind = "coast";
+    rd.from = fromSite;
+    rd.to = toSite;
+    for (std::size_t k = 0; k + 1 < way.size(); ++k) {
+        const TerrainRoute leg = routeOnTerrain(ground, way[k], way[k + 1], rp);
+        if (leg.points.size() < 2) {
+            if (why) {
+                char b[160];
+                std::snprintf(b, sizeof b, "no way from (%.0f, %.0f) to (%.0f, %.0f), waypoint %zu of %zu", way[k].x, way[k].y, way[k + 1].x,
+                              way[k + 1].y, k + 1, way.size() - 1);
+                *why = b;
+            }
+            return -1;
+        }
+        rd.points.insert(rd.points.end(), leg.points.begin() + (rd.points.empty() ? 0 : 1), leg.points.end());
+    }
+    finishRoad(rd, ground, bandBlocked);
+    w.roads.push_back(rd);
+    return static_cast<int>(w.roads.size()) - 1;
 }
 
 void joinPassToTowns(IslandWorld& w, const std::vector<std::pair<int, std::vector<Vec2>>>& arterialNodes) {

@@ -28,6 +28,7 @@
 #include <nlohmann/json.hpp>
 
 #include <chrono>
+#include <cctype>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
@@ -523,6 +524,39 @@ int main(int argc, char** argv) {
             }
             whole.layers.push_back(others);
             whole.layers.push_back(picked);
+            // --coast LETTERS (with --beaches): a COAST ROAD through each of those beaches, from the nearest coastal
+            // place one way along the shore to the nearest the other way (Glenn: "a coastal road between cities ...
+            // where the beach towns grow out of ... a scenic route")
+            for (int c = 4; c + 1 < argc; ++c) {
+                if (std::string(argv[c]) != "--coast") continue;
+                engine::IslandMapLayer coast;
+                coast.name = "coast-road"; coast.label = "Coast road (scenic)"; coast.rgb[0] = 0.05f; coast.rgb[1] = 0.65f; coast.rgb[2] = 0.70f;
+                coast.widthM = 40; coast.minPx = 3.0; coast.casing = true;   // (drawn wider than it is: a scenic line to find on the map)
+                for (const char* L = argv[c + 1]; *L; ++L) {
+                    const std::size_t k = static_cast<std::size_t>(std::toupper(*L) - 'A');
+                    if (k >= shores.size()) { std::printf("  --coast: no beach %c\n", *L); continue; }
+                    const engine::ShoreSite& sh = shores[k];
+                    const engine::Vec2 along(-sh.inland.y, sh.inland.x);
+                    int left = -1, right = -1;
+                    double dl = 1e30, dr = 1e30;
+                    for (int si = 0; si < static_cast<int>(w.sites.size()); ++si) {
+                        const engine::IslandSite& st = w.sites[static_cast<std::size_t>(si)];
+                        if (!st.coastal) continue;
+                        const engine::Vec2 d = st.at - sh.at;
+                        const double dd = d.length();
+                        if (dot(d, along) > 0 ? dd < dl : dd < dr) (dot(d, along) > 0 ? left : right) = si, (dot(d, along) > 0 ? dl : dr) = dd;
+                    }
+                    if (left < 0 || right < 0) { std::printf("  coast road through %c: no place one side of it\n", *L); continue; }
+                    std::string why;
+                    const int ri = engine::planCoastRoad(w, left, sh.at, right, {}, &why);
+                    if (ri < 0) { std::printf("  coast road through %c (%s - %s): %s\n", *L, w.sites[static_cast<std::size_t>(left)].name.c_str(), w.sites[static_cast<std::size_t>(right)].name.c_str(), why.c_str()); continue; }
+                    const engine::IslandRoad& rd = w.roads[static_cast<std::size_t>(ri)];
+                    std::printf("  coast road through %c: %s - %s, %.1f km, climbs %.0f m, steepest %.1f%%\n", *L, w.sites[static_cast<std::size_t>(left)].name.c_str(),
+                                w.sites[static_cast<std::size_t>(right)].name.c_str(), rd.length / 1000.0, rd.climb, rd.worstGrade * 100.0);
+                    coast.lines.push_back(rd.points);
+                }
+                whole.layers.push_back(coast);
+            }
         }
         const std::string base = outDir + "/island_" + std::to_string(seed);
         engine::writeIslandSvg(w, base + ".svg", whole);

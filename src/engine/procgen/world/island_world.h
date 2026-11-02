@@ -167,6 +167,21 @@ struct ShoreSite {
 };
 std::vector<ShoreSite> findBeachSites(const IslandWorld& w, const ShoreRule& rule = {});
 
+// THE COAST ROAD (~/.claude/plans/beach-town.md; Glenn, 2026-11-01: "a coastal road between cities ... a road that rides
+// along the beach ... where the beach towns grow out of ... a scenic route"): from `fromSite`'s limits through `via`
+// (a beach, findBeachSites) to `toSite`'s. It follows a GUIDE line `guide` metres behind the shore, waypoint to
+// waypoint, routed on the ground in a BAND -- never on the sand (nearer the sea than `back`), never farther inland
+// than `reach`, out of the towns -- graded like a hill road so it may climb a headland. Near its ends it may leave the band to meet the town. Appends an IslandRoad of kind "coast"
+// and returns its index; -1 when the band has no way through (`why`: between which waypoints).
+struct CoastRoadRule {
+    double back = 60.0, reach = 700.0;     // the band: metres from the sea
+    double guide = 150.0;                  // the line it RIDES, this far behind the shore (Glenn: "a road that rides along the beach")
+    double step = 300.0;                   // its waypoints along that line
+    double endFree = 250.0;                // within this of an end, the band does not hold
+    double cell = 16.0, maxGrade = 0.07, hardGrade = 0.12;
+};
+int planCoastRoad(IslandWorld& w, int fromSite, const Vec2& via, int toSite, const CoastRoadRule& rule = {}, std::string* why = nullptr);
+
 // The pass's (and mountain road's) ends run on into their towns: each end, trimmed at its town's limits,
 // joins the nearest of that town's arterial nodes (ADR-0135). Call after routeFreewayRoundCities.
 void joinPassToTowns(IslandWorld& w, const std::vector<std::pair<int, std::vector<Vec2>>>& arterialNodes);
