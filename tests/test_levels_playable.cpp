@@ -4173,6 +4173,69 @@ TEST_CASE(metro_day_census_prints) {
     }
 }
 
+// THE HOUSING AUDIT (Glenn, 2026-11-01: "build denser housing. See how much we can fit. Build up as well."). Print-only
+// under RT_HOUSING=1: the level (RT_CENSUS_LEVEL, else the sim level), every grown building by district and recipe --
+// how many, their storeys, floor area, the dwellings places.lua cuts them into, and whether the citysim counts them
+// as homes (a home place, or the flats over a shop) or not.
+#include "../src/apps/citysim/place_kinds.h"
+#include "../src/engine/procgen/city/building_uses.h"
+TEST_CASE(housing_audit_prints) {
+    if (!std::getenv("RT_HOUSING")) return;
+    std::unique_ptr<Renderer> renderer = Renderer::create();
+    RendererMeshUploader uploader(*renderer);
+    AssetManager assets(uploader);
+    World world;
+    RenderView view;
+    const char* lvl = std::getenv("RT_CENSUS_LEVEL");
+    const bool loaded = LevelLoader::load(lvl ? std::string(lvl) : simLevelPath(), world, *renderer, view, assets, false);
+    CHECK(loaded);
+    if (!loaded) return;
+    const citysim::PlaceKindCatalog kinds = citysim::defaultPlaceKindCatalog();
+    struct Row { int units = 0; double floors = 0, m2 = 0, footprint = 0; int dwellings = 0; bool home = false; std::string use; };
+    std::map<std::string, std::map<std::string, Row>> by;   // district -> recipe
+    world.each<CityBuildings>([&](Entity, CityBuildings& cb) {
+        for (const BuildingRecord& r : cb.records) {
+            if (r.plan.size() < 3) continue;
+            Row& row = by[r.district][r.recipe + " (" + r.type + ")"];
+            const double a = area(r.plan), m2 = a * (1.0 + std::max(0, r.params.floors));
+            ++row.units;
+            row.floors += 1.0 + std::max(0, r.params.floors);
+            row.m2 += m2;
+            row.footprint += a;
+            row.use = floorUseFor(r.recipe, r.type);
+            row.home = r.type == "home" || r.params.residential;   // (flats over shops are homes too)
+            const citysim::DwellingRule* rule = kinds.dwellingRule(row.use);
+            if (rule && (row.use == "house" || row.use == "apartments")) {
+                // flats over shops: the floors above the ground
+                const double flats = row.home ? m2 : a * std::max(0, r.params.floors);
+                std::vector<int> beds;
+                citysim::dwellingsOf(kinds, *rule, flats, 1, beds);
+                row.dwellings += static_cast<int>(beds.size());
+            }
+        }
+    });
+    int counted = 0, uncounted = 0;
+    double homeM2 = 0, allM2 = 0;
+    for (const auto& [district, recipes] : by) {
+        int dd = 0, du = 0;
+        double dm = 0;
+        for (const auto& [name, row] : recipes) { dd += row.dwellings; du += row.units; dm += row.m2; }
+        std::printf("    [housing] %-12s %6d buildings %10.0f m2 floor %7d dwellings\n", district.c_str(), du, dm, dd);
+        std::vector<std::pair<std::string, Row>> rows(recipes.begin(), recipes.end());
+        std::sort(rows.begin(), rows.end(), [](const auto& x, const auto& y) { return x.second.m2 > y.second.m2; });
+        for (const auto& [name, row] : rows) {
+            std::printf("    [housing]   %-34s %5d x %4.1f storeys, footprint %6.0f m2, floor %9.0f m2, use %-10s %6d dwellings%s\n",
+                        name.c_str(), row.units, row.floors / row.units, row.footprint / row.units, row.m2, row.use.c_str(),
+                        row.dwellings, row.dwellings && !row.home ? "  <- NOT counted as homes" : "");
+            (row.home ? counted : uncounted) += row.dwellings;
+            if (row.home) homeM2 += row.m2;
+            allM2 += row.m2;
+        }
+    }
+    std::printf("    [housing] TOTAL: %d dwellings counted as homes, %d more not counted; homes are %.0f%% of %.0f m2 of floor\n",
+                counted, uncounted, 100.0 * homeM2 / std::max(1.0, allM2), allM2);
+}
+
 // WALKERS IN THE ROAD (Glenn: "the npcs all over the roads is a problem. It's interfering with traffic ... they can
 // walk through vehicles"). Print-only under RT_ROADWALK=1: the island (or RT_CENSUS_LEVEL), a player standing
 // downtown where they were seen (RT_ROADWALK_AT="x z"), at the morning and the evening -- every visible walker of

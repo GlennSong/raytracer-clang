@@ -6538,6 +6538,24 @@ bool LevelLoader::load(const std::string& path,
                             if (u.plan.size() >= 3) m2 += engine::area(u.plan) * (1.0 + std::max(0, u.params.floors));
                         p.floorArea = static_cast<float>(std::max(0.0, m2 - 60.0 * fronts));
                     }
+                    // FLATS OVER THE SHOPS (Glenn, 2026-11-01: "build denser housing"): a shop building whose upper
+                    // floors are homes (BuildingParams::residential -- mixed use, a brick shop, a corner shop) is a
+                    // HOME as well, its floor the storeys above the ground. It housed nobody: 15,658 dwellings on
+                    // island_8_nature, 40% more than its homes.
+                    if (lb.type == "shop") {
+                        double flats = 0;
+                        for (const engine::BuildingUnit& u : lb.units)
+                            if (u.params.residential && u.plan.size() >= 3) flats += engine::area(u.plan) * std::max(0, u.params.floors);
+                        if (flats > 0) {
+                            engine::AuthoredPlace h = p;
+                            h.type = "home";
+                            h.units = 1;   // one block of flats, cut by its floor
+                            h.floorArea = static_cast<float>(flats);
+                            h.name.clear();
+                            cfg.places.push_back(std::move(h));
+                            p.floorArea = static_cast<float>(std::max(0.0, p.floorArea - flats));   // the shop is its ground floor
+                        }
+                    }
                     if (!(fronts > 0 && lb.type == "shop")) cfg.places.push_back(std::move(p));
                 }
 
