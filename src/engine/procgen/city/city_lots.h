@@ -219,6 +219,9 @@ struct LotParams {
     std::vector<std::vector<Vec2>> hubLines;
     std::vector<Real> hubRadii;
     std::vector<ArchetypeBook> hubBooks;
+    // Blocks to make SURFACE CAR PARKS whole (Glenn: "a parking lot so that people visiting the beach can park"): the
+    // block holding each point is one car-park lot (a beach town's hub `parking`)
+    std::vector<Vec2> parkingAt;
     // Finest RENDERED terrain cell (leaf CDLOD node size / gridRes). When set,
     // walkway sculptors sample the ground through the tile's own bilinear
     // interpolation on this grid instead of the ideal analytic function — so

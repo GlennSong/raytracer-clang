@@ -47,6 +47,7 @@ struct SettlementKind {
     // `stripRow` m inland; cross streets every `stripCross`; its limits `stripSea` out over the spine's sea side.
     bool strip = false;
     double stripLength = 900.0, stripRow = 85.0, stripCross = 100.0, stripSea = 30.0;
+    double stripPromenade = 0.0;   // a promenade this far out on the sand side: a beachfront row of blocks (0: none)
     int stripRows = 3;
     // ITS DISTRICTS (a strip town's hub is its seafront LINE): commercial within `hubReach` m of it, residential
     // behind; and its own MIXES, {district: [{recipe, weight}]}, in place of the district ladders (the level's hub

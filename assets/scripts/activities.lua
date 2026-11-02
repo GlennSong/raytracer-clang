@@ -26,7 +26,7 @@
 activities = {
   order = { "bench", "across_town", "park_visit", "coffee", "browse", "groceries", "meal", "civic_visit",
             "walk_round_block", "lunch", "campus_bench", "jog", "study", "quad_time", "kickabout", "watch_game",
-            "chat", "picnic", "sunbathe", "catch", "errand", "dinner", "drinks", "clubbing", "college_club" },
+            "chat", "picnic", "sunbathe", "catch", "beach_day", "errand", "dinner", "drinks", "clubbing", "college_club" },
 
   -- A DAY OFF'S STOPS
   bench            = { sites = { "seat" }, distance = { 30, 500 }, nearest = 4, perform = "spot" },
@@ -76,18 +76,23 @@ activities = {
   -- ON THE LAWNS (a park's, the quad's): groups that settle rather than run about. A CHAT -- a ring standing, facing
   -- in, that anyone passing may join (up to six); a PICNIC -- a ring sitting on the grass; SUNBATHING -- lying side
   -- by side; CATCH -- two, ten metres apart, stepping about
-  chat             = { sites = { "lawn", "plaza" }, hours = { 7, 22 }, distance = { 0, 650 }, nearest = 4, perform = "roam",
+  chat             = { sites = { "lawn", "plaza", "beach" }, hours = { 7, 22 }, distance = { 0, 650 }, nearest = 4, perform = "roam",
                        formation = "circle", radius = 0.8, minutes = { 10, 25 }, min_players = 2, gather_minutes = 12,
                        roles = { { name = "talker", n = 6, speed = { 1.1, 1.6 }, pose = "stand" } } },
-  picnic           = { sites = { "lawn" }, hours = { 11, 15.5 }, distance = { 0, 650 }, nearest = 4, perform = "roam",
+  picnic           = { sites = { "lawn", "beach" }, hours = { 11, 15.5 }, distance = { 0, 650 }, nearest = 4, perform = "roam",
                        formation = "circle", radius = 0.85, minutes = { 30, 60 }, min_players = 1, gather_minutes = 15,
                        roles = { { name = "picnicker", n = 4, speed = { 1.1, 1.6 }, pose = "sit_ground" } } },
-  sunbathe         = { sites = { "lawn" }, hours = { 10, 17 }, distance = { 0, 650 }, nearest = 4, perform = "roam",
+  sunbathe         = { sites = { "lawn", "beach" }, hours = { 10, 17 }, distance = { 0, 650 }, nearest = 4, perform = "roam",
                        formation = "spread", radius = 1.1, minutes = { 20, 45 }, min_players = 1, gather_minutes = 10,
                        roles = { { name = "sunbather", n = 2, speed = { 1.1, 1.6 }, pose = "lie" } } },
-  catch            = { sites = { "lawn" }, hours = { 9, 20 }, distance = { 0, 650 }, nearest = 4, perform = "roam",
+  catch            = { sites = { "lawn", "beach" }, hours = { 9, 20 }, distance = { 0, 650 }, nearest = 4, perform = "roam",
                        formation = "pair", radius = 9, minutes = { 10, 25 }, min_players = 2, gather_minutes = 10,
                        roles = { { name = "catcher", n = 2, speed = { 1.1, 1.6 }, pose = "stand" } } },
+  -- A DAY AT THE BEACH (Glenn: "people actually hanging out on the beach lounging and sunbathing"): an hour or two on
+  -- the sand, lying out in fours, worth a longer walk than a lawn
+  beach_day        = { sites = { "beach" }, hours = { 10, 18 }, distance = { 0, 2000 }, nearest = 4, perform = "roam",
+                       formation = "spread", radius = 1.1, minutes = { 60, 150 }, min_players = 1, gather_minutes = 10,
+                       roles = { { name = "sunbather", n = 4, speed = { 1.1, 1.6 }, pose = "lie" } } },
 }
 
 menus = {
@@ -98,10 +103,10 @@ menus = {
   outing = {
     { hours = { 5, 10.5 }, first = { { "bench", 0.20 }, { "across_town", 0.10 } },
       pick = { { "coffee", 4 }, { "park_visit", 3 }, { "groceries", 0.5 }, { "civic_visit", 0.3 }, { "walk_round_block", 3 } } },
-    { hours = { 10.5, 14 }, first = { { "bench", 0.25 }, { "across_town", 0.14 } },
+    { hours = { 10.5, 14 }, first = { { "beach_day", 0.35 }, { "bench", 0.25 }, { "across_town", 0.14 } },
       pick = { { "browse", 2.5 }, { "meal", 2 }, { "coffee", 2 }, { "park_visit", 3 }, { "civic_visit", 0.7 }, { "walk_round_block", 2 },
                { "picnic", 1.5 }, { "sunbathe", 0.8 }, { "chat", 1 } } },
-    { hours = { 14, 17.5 }, first = { { "bench", 0.30 }, { "across_town", 0.14 } },
+    { hours = { 14, 17.5 }, first = { { "beach_day", 0.40 }, { "bench", 0.30 }, { "across_town", 0.14 } },
       pick = { { "browse", 2.5 }, { "groceries", 1.5 }, { "park_visit", 3 }, { "coffee", 1.5 }, { "civic_visit", 0.7 }, { "walk_round_block", 3 },
                { "sunbathe", 1 }, { "catch", 0.8 }, { "chat", 1 }, { "picnic", 0.5 } } },
     { hours = { 17.5, 23 }, first = { { "bench", 0.15 }, { "across_town", 0.10 } },

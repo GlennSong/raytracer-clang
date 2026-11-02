@@ -83,6 +83,7 @@ bool loadSettlementCatalog(ScriptVM& vm, SettlementCatalog& out, std::string* er
             k.stripRow = numField(L, sp, "row", k.stripRow);
             k.stripCross = numField(L, sp, "cross", k.stripCross);
             k.stripSea = numField(L, sp, "sea", k.stripSea);
+            k.stripPromenade = numField(L, sp, "promenade", k.stripPromenade);
         }
         lua_pop(L, 1);   // strip
         k.hubReach = numField(L, t, "hub_reach", k.hubReach);

@@ -364,6 +364,8 @@ TEST_CASE(every_registered_recipe_is_rolled_by_some_table) {
     static const std::set<std::string> placedByHand = {
         // the campus pass's halls and the big-box pass's store: placed by their own passes (city_lots), never rolled
         "teaching_hall", "campus_library", "residence_hall", "big_box",
+        // ...and a beach town's car parks: whole blocks the level names (LotParams::parkingAt), or a town's own mix
+        "car_park",
     };
     std::vector<std::string> silent;
     for (int i = 0; i < architectRecipeCount(); ++i) {

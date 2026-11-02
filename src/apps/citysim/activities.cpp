@@ -114,6 +114,7 @@ void siteKindMinutes(const std::string& k, double& lo, double& hi) {
     else if (k == "street") { lo = 0.6; hi = 2.4; }
     else if (k == "pitch") { lo = 30; hi = 45; }
     else if (k == "lawn") { lo = 15; hi = 40; }
+    else if (k == "beach") { lo = 30; hi = 90; }   // a spell on the sand
     else { lo = 6; hi = 18; }   // a shop, anything else
 }
 
@@ -173,11 +174,20 @@ ActivityCatalog defaultActivityCatalog() {
         RoleDef r; r.name = role; r.n = n; r.pose = pose; r.speedLo = 1.1; r.speedHi = 1.6;
         d.roles = {r};
     };
+    // ...and ON THE BEACH (a beach town's sand; Glenn: "people actually hanging out on the beach lounging and sunbathing")
     lawnGroup("chat", Formation::Circle, 0.8, "talker", 6, Pose::Stand, 2, 12, 10, 25, 7, 22);
-    c.defs.back().sites = {"lawn", "plaza"};   // (chat: on a paseo too, an open-air mall's plaza)
+    c.defs.back().sites = {"lawn", "plaza", "beach"};   // (chat: on a paseo too, an open-air mall's plaza)
     lawnGroup("picnic", Formation::Circle, 0.85, "picnicker", 4, Pose::SitGround, 1, 15, 30, 60, 11, 15.5);
+    c.defs.back().sites = {"lawn", "beach"};
     lawnGroup("sunbathe", Formation::Spread, 1.1, "sunbather", 2, Pose::Lie, 1, 10, 20, 45, 10, 17);
+    c.defs.back().sites = {"lawn", "beach"};
     lawnGroup("catch", Formation::Pair, 9.0, "catcher", 2, Pose::Stand, 2, 10, 10, 25, 9, 20);
+    c.defs.back().sites = {"lawn", "beach"};
+    // A DAY AT THE BEACH (Glenn: "people actually hanging out on the beach lounging and sunbathing"): an hour or two on
+    // the sand, lying out in fours, worth a longer walk than a lawn
+    lawnGroup("beach_day", Formation::Spread, 1.1, "sunbather", 4, Pose::Lie, 1, 10, 60, 150, 10, 18);
+    c.defs.back().sites = {"beach"};
+    c.defs.back().distHi = 2000;
 
     // THE ERRAND on the way home (the old fixed "shop near home"): a supermarket or a store near HOME, one of the three
     // nearest open
@@ -199,10 +209,12 @@ ActivityCatalog defaultActivityCatalog() {
     // in the afternoon; dinner and a coffee in the evening -- a bench or a trip across town now and then all day
     Menu outing;
     outing.name = "outing";
-    auto band = [&](double lo, double hi, double bench, double across, std::vector<MenuEntry> pick) {
+    // (a day at the beach comes first, where there is one in reach: `beach`, its chance)
+    auto band = [&](double lo, double hi, double bench, double across, std::vector<MenuEntry> pick, double beach = 0.0) {
         MenuBand b;
         b.hourLo = lo; b.hourHi = hi;
         b.first = {{"bench", bench, 0}, {"across_town", across, 0}};
+        if (beach > 0) b.first.insert(b.first.begin(), {"beach_day", beach, 0});
         b.pick = std::move(pick);
         outing.bands.push_back(b);
     };
@@ -210,10 +222,10 @@ ActivityCatalog defaultActivityCatalog() {
                                 {"walk_round_block", 0, 3.0}});
     band(10.5, 14.0, 0.25, 0.14, {{"browse", 0, 2.5}, {"meal", 0, 2.0}, {"coffee", 0, 2.0}, {"park_visit", 0, 3.0},
                                  {"civic_visit", 0, 0.7}, {"walk_round_block", 0, 2.0}, {"picnic", 0, 1.5},
-                                 {"sunbathe", 0, 0.8}, {"chat", 0, 1.0}});
+                                 {"sunbathe", 0, 0.8}, {"chat", 0, 1.0}}, 0.35);
     band(14.0, 17.5, 0.30, 0.14, {{"browse", 0, 2.5}, {"groceries", 0, 1.5}, {"park_visit", 0, 3.0}, {"coffee", 0, 1.5},
                                  {"civic_visit", 0, 0.7}, {"walk_round_block", 0, 3.0}, {"sunbathe", 0, 1.0},
-                                 {"catch", 0, 0.8}, {"chat", 0, 1.0}, {"picnic", 0, 0.5}});
+                                 {"catch", 0, 0.8}, {"chat", 0, 1.0}, {"picnic", 0, 0.5}}, 0.40);
     band(17.5, 23.0, 0.15, 0.10, {{"meal", 0, 3.0}, {"coffee", 0, 1.0}, {"park_visit", 0, 1.5}, {"groceries", 0, 1.0},
                                  {"walk_round_block", 0, 2.0}, {"chat", 0, 1.0}, {"catch", 0, 0.5}});
     band(23.0, 5.0, 0.0, 0.0, {{"walk_round_block", 0, 1.0}, {"park_visit", 0, 0.5}});

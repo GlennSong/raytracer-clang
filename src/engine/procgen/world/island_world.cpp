@@ -560,7 +560,7 @@ json islandSiteBrief(const IslandWorld& w, int site) {
         json spine = json::array();
         for (const Vec2& q : s.spine) spine.push_back({q.x, q.y});
         world["strip"] = {{"spine", spine}, {"inland", {s.inland.x, s.inland.y}}, {"rows", k.stripRows}, {"row", k.stripRow},
-                          {"cross", k.stripCross}, {"sea", k.stripSea}};
+                          {"cross", k.stripCross}, {"sea", k.stripSea}, {"promenade", k.stripPromenade}};
     }
     return {
         {"name", name},

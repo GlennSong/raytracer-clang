@@ -6028,6 +6028,41 @@ bool LevelLoader::load(const std::string& path,
             });
             if (!dressingGround && entityGround)
                 dressingGround = [g = entityGround](Real x, Real z) { return g(x, z); };
+            // THE BEACH (~/.claude/plans/beach-town.md; Glenn: "people actually hanging out on the beach lounging and
+            // sunbathing"): along every LINE hub (a beach town's seafront), the sand between its beachfront row and the
+            // water, cut into "beach" activity areas every 60 m -- where the sunbathers, the picnics and the games go
+            if (dressingGround && cs.contains("districts") && cs["districts"].contains("hubs")) {
+                int beachAreas = 0;
+                for (const auto& hj : cs["districts"]["hubs"]) {
+                    if (!hj.contains("line") || !hj["line"].is_array() || hj["line"].size() < 2) continue;
+                    std::vector<engine::Vec2> L;
+                    for (const auto& q : hj["line"]) L.push_back(engine::Vec2(q[0].get<double>(), q[1].get<double>()));
+                    const double from = hj.value("beachFrom", 90.0);   // the beachfront row and its promenade, first
+                    double run = 0.0, next = 30.0;
+                    for (std::size_t i = 0; i + 1 < L.size(); ++i) {
+                        const engine::Vec2 d = L[i + 1] - L[i];
+                        const double len = d.length();
+                        if (len < 1e-6) continue;
+                        const engine::Vec2 t = d * (1.0 / len);
+                        for (; next <= run + len; next += 60.0) {
+                            const engine::Vec2 at = L[i] + t * (next - run);
+                            // the sea side: where the ground falls
+                            engine::Vec2 n(-t.y, t.x);
+                            if (dressingGround(at.x + n.x * 150.0, at.y + n.y * 150.0) > dressingGround(at.x - n.x * 150.0, at.y - n.y * 150.0)) n = n * -1.0;
+                            double water = -1.0;
+                            for (double o = from; o <= 600.0; o += 5.0)
+                                if (dressingGround(at.x + n.x * o, at.y + n.y * o) < 0.25) { water = o; break; }
+                            if (water < 0 || water - 12.0 - from < 18.0) continue;   // no sand to lie on
+                            const double mid = 0.5 * (from + water - 12.0);
+                            const engine::Vec2 c = at + n * mid;
+                            cfg.activityAreas.push_back({"beach", c.x, c.y, t.x, t.y, 26.0, 0.5 * (water - 12.0 - from) - 2.0});
+                            ++beachAreas;
+                        }
+                        run += len;
+                    }
+                }
+                if (beachAreas) LOG_INFO << "[citysim] the beach: " << beachAreas << " areas on the sand";
+            }
             // The road as drawn, for the lot trees below (drawn_road.h).
             const engine::DrawnRoad lotRoad = engine::gatherDrawnRoad(world, /*withHeights=*/true);
             int lotTreesOnRoad = 0;

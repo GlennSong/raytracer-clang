@@ -1816,6 +1816,10 @@ CityPlan generatePlan(const Brief& B) {
         const Vec2 inlandHint(stripSpec["inland"][0].get<double>(), stripSpec["inland"][1].get<double>());
         const int rows = stripSpec.value("rows", 3);
         const Real row = stripSpec.value("row", 85.0), cross = stripSpec.value("cross", 100.0), seaOut = stripSpec.value("sea", 30.0);
+        // THE BEACHFRONT (Glenn: "buildings on the other side of that road that are along the beach"): a promenade
+        // `promenade` m out on the sand side, the cross streets carried down to it -- a row of blocks between the
+        // seafront and the promenade (0: none)
+        const Real prom = stripSpec.value("promenade", 0.0);
         // each spine point's inland normal (the side the hint points to)
         std::vector<Vec2> nrm(spine.size());
         for (std::size_t i = 0; i < spine.size(); ++i) {
@@ -1835,6 +1839,7 @@ CityPlan generatePlan(const Brief& B) {
         };
         add(spine, RoadClass::Arterial, B.arterialWidth);                                   // the seafront
         for (int k = 1; k <= rows; ++k) add(offset(row * k), RoadClass::Local, B.localWidth);
+        if (prom > 0) add(offset(-prom), RoadClass::Local, B.localWidth);                   // the promenade
         const std::vector<double> ss = roads::lanes::stations(spine);
         const int nCross = std::max(1, static_cast<int>(ss.back() / cross));
         const Real first = (ss.back() - (nCross - 1) * cross) * 0.5;
@@ -1843,11 +1848,17 @@ CityPlan generatePlan(const Brief& B) {
             const std::size_t i = std::min<std::size_t>(spine.size() - 1, static_cast<std::size_t>(std::upper_bound(ss.begin(), ss.end(), sv) - ss.begin()));
             const bool trunk = (j - nCross / 2) % 3 == 0;
             std::vector<Vec2> pts;
-            for (Real off = -2; off <= row * rows + 2; off += 15) pts.push_back(spine[i] + nrm[i] * off);
+            for (Real off = prom > 0 ? 0 : -2; off <= row * rows + 2; off += 15) pts.push_back(spine[i] + nrm[i] * off);   // (from the seafront itself when the lane below meets it there)
             pts.push_back(spine[i] + nrm[i] * (row * rows + 2));
             add(pts, trunk ? RoadClass::Collector : RoadClass::Local, trunk ? B.collectorWidth : B.localWidth);
+            if (prom > 0) {   // ...and down to the promenade: a local lane across the beachfront row
+                std::vector<Vec2> down;
+                for (Real off = -prom - 2; off <= 0; off += 15) down.push_back(spine[i] + nrm[i] * off);
+                down.push_back(spine[i]);
+                add(down, RoadClass::Local, B.localWidth);
+            }
         }
-        std::vector<Vec2> outline = offset(-seaOut);
+        std::vector<Vec2> outline = offset(-prom - seaOut);
         const std::vector<Vec2> back = offset(row * rows + 25.0);
         outline.insert(outline.end(), back.rbegin(), back.rend());
         plan.limits = {outline};

@@ -493,6 +493,9 @@ void readLotGrowParams(const json& cityJson, LotParams& lots) {
                             }
                             archetypeThresholds(es, hb.tables[static_cast<std::size_t>(tag)]);
                         }
+                    if (hj.contains("parking") && hj["parking"].is_array())   // its car-park blocks (a beach town's)
+                        for (const auto& q : hj["parking"])
+                            if (q.is_array() && q.size() >= 2) lots.parkingAt.push_back(Vec2(q[0].get<double>(), q[1].get<double>()));
                     if (!line.empty() || reach > 0 || !hb.empty()) {
                         lots.hubLines.resize(hi + 1);
                         lots.hubRadii.resize(hi + 1, 0.0);

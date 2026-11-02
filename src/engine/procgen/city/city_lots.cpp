@@ -1,4 +1,5 @@
 #include "city_lots.h"
+#include "implicit.h"   // simplifyLoop: a curved lot's outline for its open frame
 #include "../../../proc_rng.h"
 #include "trades.h"
 
@@ -1375,6 +1376,9 @@ static bool openFrameOf(const Poly2& poly, Vec2 frontage, Real inset0, Real minW
     f.u = Vec2(f.v.y, -f.v.x);
     f.origin = centroid(poly);
     Poly2 inner = inset(poly, inset0);
+    // a CURVED lot (a beach town's block along its seafront) has short edges that flip under the inset: its outline
+    // simplified, once more
+    if (inner.size() < 3) inner = inset(simplifyLoop(poly, 0.4), inset0);
     if (inner.size() < 3) return false;
     const bool ok = largestFrameRect(inner, f.origin, f.u, f.v, 0.5, minW, minD, f.x0, f.x1, f.y0, f.y1);
     if (!ok && std::getenv("RT_OPENLOT_DEBUG")) {
@@ -4054,8 +4058,11 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                          << static_cast<int>(centroid(foot).y);
             // ...or a LAB'S lot (LotParams::wholeBlocks): every block is one site, whatever the parcel walk made
             const bool unfillable = viable <= 2 && viableA < Real(0.5) * blockA && blockA >= kWholeBlockMinArea;
-            if ((unfillable || p.wholeBlocks) &&
-                2 * std::min(fb.half[0], fb.half[1]) >= kWholeBlockMinShort && !padOnCarriageway(foot) &&
+            // ...or a CAR PARK the level asked for here (a beach town's, LotParams::parkingAt): the whole block, paved
+            bool parkingHere = false;
+            for (const Vec2& q : p.parkingAt) parkingHere = parkingHere || pointInPolygon(foot, q);
+            if ((unfillable || p.wholeBlocks || parkingHere) &&
+                (parkingHere || 2 * std::min(fb.half[0], fb.half[1]) >= kWholeBlockMinShort) && !padOnCarriageway(foot) &&
                 seatable && hasStreet) {
                 Lot whole;
                 // the block AS IT CAME when the road push moved a vertex out of it (a folded push -- see the
@@ -4065,6 +4072,7 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                 whole.footprint = pushedOut ? footBeforePush : foot;
                 whole.area = blockA;
                 whole.wholeBlock = true;
+                whole.carPark = parkingHere;
                 // Faces its longest street edge (the door rule re-aims it at the nearest road).
                 const Real sgn = signedArea(foot) >= 0 ? Real(1) : Real(-1);
                 Real longest = -1;
@@ -4936,7 +4944,8 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
             // `natural`: hillside or road-locked ground, which stays green; any other lot that does not build is
             // first offered the OPEN-LOT program (a car park, a playground, a community garden, a pocket park).
             // `street`: whether the lot meets a street (a car park needs a way in for cars).
-            auto emitGreen = [&](bool natural = false, bool street = true) {
+            // `only` (>= 0): that open-lot use alone (a mix's car park), never vacant
+            auto emitGreen = [&](bool natural = false, bool street = true, int only = -1) {
                 OBB2 gb = orientedBoundingBox(lot.footprint);
                 LotBuilding g;
                 g.site = centroid(lot.footprint);
@@ -4955,7 +4964,8 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
                     ProcRng orng(mix(pp.seed, static_cast<uint32_t>(li) * 29u + 7u));
                     const Real roll = orng.next();
                     std::vector<int> order;   // 0 car park, 1 playground, 2 community garden, 3 pocket park
-                    if (orng.next() >= 0.15) {
+                    if (only >= 0) order = {only};
+                    else if (orng.next() >= 0.15) {
                         switch (blockTag) {
                             case DistrictTag::Financial: case DistrictTag::Commercial: case DistrictTag::OldTown:
                                 order = roll < 0.45 ? std::vector<int>{0, 3, 2} : roll < 0.78 ? std::vector<int>{3, 2, 0} : std::vector<int>{2, 3, 0};
@@ -5504,6 +5514,10 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
             b.block = cand.block;
             b.district = districtName(tag);
             b.color = colorFor(b.type);
+            if (lot.carPark || rec.name == "car_park") {   // a car park: the open lots' (sculptCarPark), its way in a street
+                emitGreen(false, true, 0);
+                continue;
+            }
             if (rec.massing == BuildingRecipe::Massing::Park) {
                 b.height = 0.18;  // low green pad — stays UNDER the road deck
                                   // lift so park edges tuck below the asphalt

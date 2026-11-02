@@ -506,6 +506,30 @@ int main(int argc, char** argv) {
                         mixes[d] = arr;
                     }
                     if (!mixes.empty()) hub["mixes"] = mixes;
+                    // THE BEACH'S CAR PARKS (Glenn: "a parking lot so that people visiting the beach can park"): the first
+                    // and last blocks of the beachfront row, between the seafront and the promenade, where the visitors
+                    // come in off the coast road
+                    if (sk.stripPromenade > 0) {
+                        const std::vector<engine::Vec2>& sp = w.sites[k].spine;
+                        std::vector<double> st{0.0};
+                        for (std::size_t i = 1; i < sp.size(); ++i) st.push_back(st.back() + (sp[i] - sp[i - 1]).length());
+                        const int nCross = std::max(1, static_cast<int>(st.back() / sk.stripCross));
+                        const double first = (st.back() - (nCross - 1) * sk.stripCross) * 0.5;
+                        nlohmann::json parking = nlohmann::json::array();
+                        for (double sv : {first + 0.5 * sk.stripCross, first + (nCross - 1.5) * sk.stripCross}) {
+                            if (nCross < 3) break;
+                            std::size_t i = 0;
+                            while (i + 2 < sp.size() && st[i + 1] < sv) ++i;
+                            const engine::Vec2 a = sp[i], b = sp[i + 1];
+                            const engine::Vec2 p = a + (b - a) * ((sv - st[i]) / std::max(1e-9, st[i + 1] - st[i]));
+                            engine::Vec2 n(-(b - a).y, (b - a).x);
+                            n = n * (1.0 / std::max(1e-9, n.length()));
+                            if (dot(n, w.sites[k].inland) > 0) n = n * -1.0;   // toward the sea
+                            const engine::Vec2 q = p + n * (sk.stripPromenade * 0.5);
+                            parking.push_back({q.x, q.y});
+                        }
+                        if (!parking.empty()) hub["parking"] = parking;
+                    }
                 }
                 hubs.push_back(hub);
             }

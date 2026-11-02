@@ -20,12 +20,16 @@
 --   naming        = "city" | "town" | "mountain"   how place_names names it
 --   brief = { prefix, area_scale, size_min, spoke_spacing, core_block = { l, s }, midtown_block = { l, s }, warp,
 --             ring_spacing, spokes }      its street plan (island_world.cpp islandSiteBrief)
---   strip = { length, rows, row, cross, sea }   a STRIP town, laid along the road it grew from (a beach town along
---                                       its coast road): `length` m of it is the seafront street, `rows` streets behind
---                                       it every `row` m inland, cross streets every `cross` m, its limits `sea` m out
+--   strip = { length, rows, row, cross, sea, promenade }   a STRIP town, laid along the road it grew from (a beach
+--                                       town along its coast road): `length` m of it is the seafront street, `rows`
+--                                       streets behind it every `row` m inland, cross streets every `cross` m, a
+--                                       promenade `promenade` m out on the sand side (a beachfront row of blocks between;
+--                                       0: none), its limits `sea` m beyond
 --   hub_reach = m                         (a strip town) its centre is its seafront LINE: commercial within this of it
 --   mixes = { <district> = { { "recipe", weight }, ... } }   its own building mixes in place of the district ladders
 --   map = { rgb = { r, g, b }, dot = px, label = m }
+--   (a strip town with a promenade: the first and last blocks of its beachfront row are car parks for the beach's
+--   visitors, written into its hub as `parking`)
 -- }
 
 settlements = {
@@ -86,7 +90,7 @@ settlements = {
     buses = { 1, 6 },
     naming = "town",
     brief = { prefix = "beach_town_" },
-    strip = { length = 900, rows = 3, row = 85, cross = 100, sea = 30 },
+    strip = { length = 900, rows = 3, row = 85, cross = 100, sea = 30, promenade = 55 },
     hub_reach = 60,   -- the seafront's row of blocks
     -- shops, cafes, flats over shops and a small hotel on the seafront; cottages, villas and garden flats behind
     mixes = {

@@ -22,7 +22,7 @@ namespace engine {
 namespace roads::lanes {
 
 // Bump whenever the lot pass's output changes for the same inputs (the key cannot see code).
-const char* const kLotsBuildTag = "2026-11-01.2";   // whole blocks of homes rise, courtyard blocks uncapped (ADR-0299); denser housing (ADR-0298); history: git log -G kLotsBuildTag
+const char* const kLotsBuildTag = "2026-11-01.3";   // beach car parks: a curved lot's open frame from its simplified outline; .2 whole blocks of homes rise, courtyard blocks uncapped (ADR-0299); denser housing (ADR-0298); history: git log -G kLotsBuildTag
 //   // .2-.4: soft foliage (emitSoftBox hedges, bushes, beds)   // 2026-09-24.1: grows on terrain, on the loader's ground (laneErodedBase + lotGroundFor, ADR-0095);   // ground-relative (draped) dressing slots; blocks behind the drawn sidewalk; door walks reach it   // 2026-09-22.1: ONE grow (engine::growCity) — the bake gets the streets and the paved band the loader always had
 
 namespace {

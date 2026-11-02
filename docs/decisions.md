@@ -14288,3 +14288,31 @@ Deerhaven (window level island_8_beach): 178 buildings, none over 8 storeys, 746
 
 Owed: the landmark quotas put a hospital, police and a university in a beach town (a kind's landmarks are not data
 yet); a few cross streets end in stubs past the last row; the north leg crosses Saltwood's outer loop at grade.
+
+## ADR-0302 — The beach as a place: a beachfront row, beach car parks, a day at the beach
+
+Glenn, 2026-11-02, on Deerhaven's first shots: "buildings on the other side of that road that are along the beach.
+There might also be a parking lot so that people visiting the beach can park somewhere. It would be nice seeing people
+actually hanging out on the beach lounging and sunbathing."
+
+**Decision.**
+- THE BEACHFRONT ROW (world.strip `promenade`, settlements.lua strip.promenade = 55): a promenade street 55 m out
+  on the sand side of the seafront. The cross streets come down to it as local lanes, which keeps the seafront's
+  junctions T-like enough for the lanes builder to weld. The seafront's line hub reaches both sides, so the row
+  takes the seafront's commercial mix. The town's limits run 30 m past the promenade.
+- BEACH CAR PARKS: a hub may name `parking` points. The block holding each one becomes a whole-block lot
+  (Lot::carPark), paved by the open lots' car park (sculptCarPark), its stalls the sim's. A beach town's are the
+  first and last blocks of its beachfront row; city_plan writes them. A `car_park` recipe (the registry, a mix may
+  name it) routes a rolled lot the same way.
+  - A curved block's short edges flip under the open frame's 0.8 m inset: openFrameOf tries the outline simplified
+    (Douglas-Peucker, 0.4 m) when the inset fails. Lots that failed before may now open, so this is lots tag
+    2026-11-01.3.
+- THE SAND: the level loader cuts the sand along every line hub into "beach" activity areas (every 60 m, from 90 m
+  out to 12 m short of the waterline). "beach" is an area site kind (isAreaSiteKind, now also the Lua reader's one
+  list). Chat, picnic, sunbathe and catch take beaches as well as lawns.
+- A DAY AT THE BEACH (activities.lua beach_day): an hour or two lying out in fours, reached from up to 2 km. It is
+  tried first on the outing menu from 10:30 to 17:30 (35-40%) where a beach is in reach.
+
+Deerhaven at noon (window level island_8_beach): 54 people in 15 groups on the sand twelve minutes after 12:00;
+28 blocks, 884 dwellings; one beach car park (the second point fell outside a block).
+Owed: the rock scatter on the sand (the island's shore rock layers), which the next change clears.

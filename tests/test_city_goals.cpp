@@ -848,7 +848,9 @@ TEST_CASE(every_activity_in_the_catalog_keeps_the_rules) {
     lawnQ.kind = "lawn"; lawnQ.center = Vec2(0, -30); lawnQ.axis = Vec2(1, 0); lawnQ.halfL = 18; lawnQ.halfW = 10;
     CitySim::ActivityArea lawnP = lawnQ;   // a park's in town
     lawnP.center = Vec2(-330, 300); lawnP.halfL = 25; lawnP.halfW = 14;
-    sim.setAreas({pitch, lawnQ, lawnP});
+    CitySim::ActivityArea sand = lawnQ;   // a stretch of beach (a beach town's)
+    sand.kind = "beach"; sand.center = Vec2(-250, 120); sand.halfL = 26; sand.halfW = 18;
+    sim.setAreas({pitch, lawnQ, lawnP, sand});
     sim.assignPlaces(places, nav);
     sim.seedFromSchedule(13.0);   // the afternoon into the night: the night's activities open from 16:30
 

@@ -437,6 +437,15 @@ void recipePocketPark(BuildingRecipe& out, ProcRng&, RecipeCtx&) {
     out.name = "pocket_park";
 }
 
+// A SURFACE CAR PARK (Glenn, 2026-11-01: "a parking lot so that people visiting the beach can park somewhere"): no
+// building -- the lot pass paves it as the open lots' car park (sculptCarPark), its stalls the sim's. A mix names it
+// (a beach town's seafront); the district ladders never roll it.
+void recipeCarPark(BuildingRecipe& out, ProcRng&, RecipeCtx&) {
+    out.massing = BuildingRecipe::Massing::Park;
+    out.placeType = "depot";
+    out.name = "car_park";
+}
+
 // The urban PLAZA (device: "concrete plazas, walking paths, decorative
 // fencing and staircases between elevations ... like building a building
 // structure without the building"): no storeys — the lot becomes a raised
@@ -1711,6 +1720,7 @@ const NamedRecipe kRecipeRegistry[] = {
     {"brick_shop", recipeBrickShop},
     {"office_midrise", recipeOfficeMidrise},
     {"walkup_homes", recipeWalkupHomes},
+    {"car_park", recipeCarPark},
     {"oldtown_house", recipeOldTownHouse},
     {"metal_shed", recipeMetalShed},
     {"industrial_office", recipeIndustrialOffice},
