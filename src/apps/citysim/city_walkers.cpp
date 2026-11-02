@@ -701,7 +701,7 @@ void CityWalkerSystem::fixedUpdate(engine::FrameContext& ctx) {
             const int li = a.route.links[static_cast<std::size_t>(a.leg)];
             if (li < 0 || li >= ng.linkCount() || !ng.links[static_cast<std::size_t>(li)].footpath) continue;
             ++S.onWalks;
-            S.studentsOnWalks += a.role == kRoleStudent ? 1 : 0;
+            S.studentsOnWalks += sm.isStudent(a) ? 1 : 0;
             if (S.onWalks == 1 && std::getenv("RT_WALK_DEBUG")) {
                 const engine::NavLink& L0 = ng.links[static_cast<std::size_t>(li)];
                 const int ai = static_cast<int>(i);

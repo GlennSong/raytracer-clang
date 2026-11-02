@@ -29,7 +29,7 @@ static void kindOf(PlaceMap& places, PlaceId id, const char* name) {
 // / work till 5pm / go shopping / go home"). It no longer mirrors the
 // pre-table control flow, which had no errand leg.
 TEST_CASE(goal_default_table_is_the_daily_round) {
-    GoalTable t = builtinDayTable("commuter");
+    GoalTable t = builtinDayTable("worker");
     int home = t.findState("AtHome");
     int commute = t.findState("ToWork");
     int work = t.findState("AtWork");
@@ -76,7 +76,7 @@ TEST_CASE(goal_default_table_is_the_daily_round) {
 
 TEST_CASE(goal_stroller_table_is_an_outing) {
     // A day OUT: from home, stop after stop until the window closes.
-    GoalTable t = builtinDayTable("stroller");
+    GoalTable t = builtinDayTable("at_home");
     const int home = t.findState("AtHome");
     const int go = t.findState("Outing");
     const int pause = t.findState("OutAndAbout");
@@ -129,7 +129,7 @@ TEST_CASE(installing_the_default_tables_changes_nothing) {
     CitySim a, b;
     a.build(nav, 16, 8, 17);
     b.build(nav, 16, 8, 17);
-    b.setGoalTables(builtinDayTable("commuter"), builtinDayTable("commuter"));
+    b.setGoalTables(builtinDayTable("worker"), builtinDayTable("worker"));
     bool same = true;
     for (int i = 0; i < 6000; ++i) {
         a.step(0.1, 0.5);
@@ -287,7 +287,7 @@ TEST_CASE(students_live_in_the_hall_and_spend_the_day_on_campus) {
     const int hallNode = nav.nearestNode(places[hall].entrance);
     int homeless = 0, othersInHall = 0;
     for (const Agent& a : sim.agents()) {
-        if (a.role == kRoleStudent) homeless += a.home != hallNode || a.homePlace != hall;
+        if (sim.isStudent(a)) homeless += a.home != hallNode || a.homePlace != hall;
         else othersInHall += a.homePlace == hall;
     }
     CHECK(homeless == 0);
@@ -302,7 +302,7 @@ TEST_CASE(students_live_in_the_hall_and_spend_the_day_on_campus) {
         int out = 0;
         for (std::size_t k = 0; k < ag.size(); ++k) {
             const Agent& a = ag[k];
-            if (a.role != kRoleStudent) continue;
+            if (!sim.isStudent(a)) continue;
             if (a.indoors && a.restNode == teachNode && a.activity == Activity::AtWork) sawClass[k] = 1;
             if (sim.seatedOn(static_cast<int>(k))) { sawBreak[k] |= 1; }
             if (a.indoors && a.restNode == libNode) sawBreak[k] |= 2;
@@ -312,7 +312,7 @@ TEST_CASE(students_live_in_the_hall_and_spend_the_day_on_campus) {
     }
     for (std::size_t k = 0; k < sim.agents().size(); ++k) {
         const Agent& a = sim.agents()[k];
-        if (a.role != kRoleStudent) continue;
+        if (!sim.isStudent(a)) continue;
         inClass += sawClass[k];
         onBench += (sawBreak[k] & 1) ? 1 : 0;
         inLibrary += (sawBreak[k] & 2) ? 1 : 0;
@@ -345,7 +345,7 @@ TEST_CASE(students_fill_every_hall_and_take_classes_in_every_teaching_hall) {
     sim.assignPlaces(places, nav);
     int in1 = 0, in2 = 0, at1 = 0, at2 = 0;
     for (const Agent& a : sim.agents()) {
-        if (a.role != kRoleStudent) continue;
+        if (!sim.isStudent(a)) continue;
         in1 += a.homePlace == h1; in2 += a.homePlace == h2;
         at1 += a.workPlace == t1; at2 += a.workPlace == t2;
     }
@@ -429,6 +429,24 @@ TEST_CASE(households_fill_the_dwellings_one_to_each) {
     };
     CHECK(who(7) == who(7));
     CHECK(who(7) != who(8));
+}
+
+// HOUSEHOLDS AT ISLAND SCALE (Glenn, 2026-11-01: "How well does this scale to 300k people?"): the plan is sequential
+// -- one sort of the dwellings, one pass -- so 170,000 dwellings and 300,000 people must plan in well under a second.
+#include <chrono>
+TEST_CASE(households_plan_three_hundred_thousand_people_quickly) {
+    NavGraph nav = citytest::cityNav(800.0, 80.0, 3);
+    PlaceMap places;
+    std::vector<int> beds;
+    for (int d = 0; d < 170; ++d) beds.push_back(d % 4);
+    for (int i = 0; i < 1000; ++i) places.setDwellings(places.add(PlaceType::Home, Vec2(-350 + (i % 40) * 18.0, -330 + (i / 40) * 25.0), nav), beds);
+    const auto t0 = std::chrono::steady_clock::now();
+    const HouseholdPlan plan = planHouseholds(defaultPeopleCatalog(), places, 0, 300000, 240000, 9);
+    const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+    std::printf("    [households at scale] %zu dwellings, %zu households, %zu people in %.1f ms\n", places.dwellings().size(),
+                plan.households.size(), plan.people.size(), ms);
+    CHECK(plan.people.size() == 300000);
+    CHECK(ms < 2000.0);
 }
 
 // THE WALKS IN THE WALKING NETWORK (Glenn: students should cross the quad; and every park's paths): footpaths join the
@@ -527,7 +545,7 @@ TEST_CASE(an_activity_goal_takes_only_spots_of_its_kind_and_tags) {
             if (owner[si] >= 0) ++shared;
             owner[si] = static_cast<int>(k);
             // the city's day-off strollers run their own outing table (any bench); judge only this table's agents
-            if (sim.agents()[k].role == kRoleStroller) continue;
+            if (sim.daysOut(sim.agents()[k])) continue;
             if (st->kind != SpotKind::Sit || !(st->tags & spot_tag::kCampus)) ++wrong;
             else ++campusSits;
         }

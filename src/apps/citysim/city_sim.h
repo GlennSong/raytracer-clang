@@ -96,7 +96,7 @@ struct Agent {
     // A Student (campus milestone 4) lives in the university's residence hall and
     // spends the day between classes in the teaching hall and breaks on campus.
     // Its id in the role catalog (city_roles.h RoleId): a built-in, or a staff role assignStaff gave it.
-    RoleId role = kRoleCommuter;
+    RoleId role = 0;
     // WHO THEY ARE (households.h, people.lua): their household in the sim's plan (-1: none -- a bus or cab driver, or
     // more people than the housing holds), their age and their life stage (an index into the people catalog's
     // stages; -1 with no household). Set in assignPlaces; time is frozen, so never again.
@@ -1357,6 +1357,15 @@ public:
     const std::vector<Venue>& venues() const { return venues_; }
     // How many agents assignPlaces made students (0 without a campus with a residence and a teaching hall).
     int studentCount() const { return students_; }
+    // Does this agent's role spend the day OUT, not at work (roles.lua `commute = false`: a child, someone at home,
+    // the retired)?
+    bool daysOut(const Agent& a) const {
+        return a.role < roles_.roles.size() && !roles_.roles[a.role].day.commute;
+    }
+    // A student: a resident of a hall's beds (people.lua's stage with beds) with a class to go to.
+    bool isStudent(const Agent& a) const {
+        return a.stage >= 0 && people_.stages[static_cast<std::size_t>(a.stage)].beds && a.workPlace != kNoPlace;
+    }
     void setActivityCatalog(ActivityCatalog c) { catalog_ = std::move(c); }
     const ActivityCatalog& activityCatalog() const { return catalog_; }
     // Debug: agent i's follow gap and its minimum (computeGaps), +inf with no leader.
@@ -1440,7 +1449,7 @@ public:
     struct Census {
         int agents = 0, walkers = 0, drivers = 0;
         int walkersOutside = 0, walkersMoving = 0, driversMoving = 0, riding = 0, waiting = 0;
-        static constexpr int kRoles = 16;   // by role id (roles().roles: commuter, shopkeeper, stroller, student, the staff...)
+        static constexpr int kRoles = 16;   // by role id (roles().roles)
         int byRole[kRoles] = {}, outsideByRole[kRoles] = {};
         int atWorkByRole[kRoles] = {};   // resting in a state wearing AtWork (on shift, in class)
         int outing = 0;                   // wearing Outing: at or on the way to a stop, by day or by night
@@ -1626,15 +1635,15 @@ private:
         return roleTables_[static_cast<std::size_t>(dayRoleOf(a))];
     }
     GoalTable& tableFor(const Agent& a) { return const_cast<GoalTable&>(static_cast<const CitySim&>(*this).tableFor(a)); }
-    // The role whose day an agent runs: its own -- except a stroller with no day out to take (one who drives, or
-    // a city with nowhere to go), whose park is its "work": the commuter's day (the historical park-as-destination).
+    // The role whose day an agent runs: its own -- except a day out with none to take (one who drives, or a city
+    // with nowhere to go), whose park is its "work": the catch-all job's day (the historical park-as-destination).
     int dayRoleOf(const Agent& a) const {
         const int r = static_cast<int>(a.role);
-        if (r < 0 || r >= static_cast<int>(roleTables_.size())) return 0;
-        if (a.role == kRoleStroller && (a.archetype != Agent::Mode::Pedestrian || venues_.empty())) return 0;
+        if (r < 0 || r >= static_cast<int>(roleTables_.size())) return catchAllRole_;
+        if (daysOut(a) && (a.archetype != Agent::Mode::Pedestrian || venues_.empty())) return catchAllRole_;
         return r;
     }
-    bool outingStroller(const Agent& a) const { return !wander_ && a.role == kRoleStroller && dayRoleOf(a) != 0; }
+    bool outingStroller(const Agent& a) const { return !wander_ && daysOut(a) && dayRoleOf(a) == static_cast<int>(a.role); }
     int pickOuting(Agent& a, int origin);   // GoalTarget::Outing -> a node (sets tripVenue)
     int pickCampusBreak(Agent& a, int origin);   // GoalTarget::Campus -> a node (tripVenue / tripSeat)
     // Free seats near the campus (quad benches, bleachers): the seats within reach of a quad or field venue.
@@ -1922,6 +1931,7 @@ private:
     HouseholdPlan households_;
     int unhoused_ = 0;
     uint32_t seed_ = 1;   // build()'s: the households' order
+    int catchAllRole_ = 0;   // roles_.catchAllJobRole(), kept with the role tables
     std::vector<GoalTable> roleTables_ = [] {
         std::vector<GoalTable> v;
         for (const ResidentRole& r : defaultRoleCatalog().roles) v.push_back(buildDayTable(r.day));

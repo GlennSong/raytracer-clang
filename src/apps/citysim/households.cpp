@@ -30,8 +30,10 @@ std::string PeopleCatalog::check() const {
     if (bands.empty()) return "bands: none";
     if (households.empty()) return "households: none";
     std::set<std::string> seen;
-    for (const LifeStage& s : stages)
+    for (const LifeStage& s : stages) {
         if (!seen.insert("stage " + s.name).second) return "stage `" + s.name + "` twice";
+        if (!s.job && s.role.empty()) return "stages." + s.name + ": no job, so it needs a role";
+    }
     for (const AgeBand& b : bands) {
         if (!seen.insert("band " + b.name).second) return "band `" + b.name + "` twice";
         if (b.lo < 0 || b.hi < b.lo || b.hi > 120) return "bands." + b.name + ": ages must be lo <= hi, 0..120";
@@ -68,6 +70,15 @@ std::string PeopleCatalog::check() const {
     if (hallStage < 0 || hallStage >= static_cast<int>(stages.size()) || !stages[static_cast<std::size_t>(hallStage)].beds)
         return "halls: the stage must be one with beds";
     if (hallShare < 0 || hallShare > 1) return "halls: the share of walkers is 0..1";
+    double lodged = 0;
+    for (const auto& [b, share] : lodgers) {
+        if (b < 0 || b >= static_cast<int>(bands.size())) return "lodgers: an unknown band";
+        for (const auto& [st, ss] : bands[static_cast<std::size_t>(b)].stages)
+            if (ss > 0 && stages[static_cast<std::size_t>(st)].walks)
+                return "lodgers: band `" + bands[static_cast<std::size_t>(b)].name + "` leads a walk-only stage";
+        lodged += share;
+    }
+    if (lodged <= 0) return "lodgers: the bands need shares";
     return {};
 }
 
@@ -77,7 +88,8 @@ std::string PeopleCatalog::describe() const {
         for (const auto& [i, s] : v)
             o << " " << (ofBands ? bands[static_cast<std::size_t>(i)].name : stages[static_cast<std::size_t>(i)].name) << "=" << s;
     };
-    for (const LifeStage& s : stages) o << "stage " << s.name << " job=" << s.job << " walks=" << s.walks << " beds=" << s.beds << "\n";
+    for (const LifeStage& s : stages)
+        o << "stage " << s.name << " job=" << s.job << " walks=" << s.walks << " beds=" << s.beds << " role=" << s.role << "\n";
     for (const AgeBand& b : bands) {
         o << "band " << b.name << " " << b.lo << "-" << b.hi;
         shares(b.stages, false);
@@ -94,16 +106,19 @@ std::string PeopleCatalog::describe() const {
     }
     o << "halls " << (hallBand >= 0 ? bands[static_cast<std::size_t>(hallBand)].name : "?") << " "
       << (hallStage >= 0 ? stages[static_cast<std::size_t>(hallStage)].name : "?") << " share=" << hallShare << "\n";
+    o << "lodgers";
+    shares(lodgers, true);
+    o << "\n";
     return o.str();
 }
 
 PeopleCatalog defaultPeopleCatalog() {
     PeopleCatalog c;
-    c.stages = {{"child", false, true, false},
-                {"student", false, true, true},
-                {"working", true, false, false},
-                {"at_home", false, false, false},
-                {"retired", false, false, false}};
+    c.stages = {{"child", false, true, false, "child"},
+                {"student", false, true, true, "student"},
+                {"working", true, false, false, ""},
+                {"at_home", false, false, false, "at_home"},
+                {"retired", false, false, false, "retired"}};
     const int child = 0, working = 2, atHome = 3, retired = 4;
     c.bands = {{"child", 0, 17, {{child, 1.0}}},
                {"young", 18, 24, {{working, 0.6}, {atHome, 0.4}}},
@@ -127,6 +142,7 @@ PeopleCatalog defaultPeopleCatalog() {
     c.hallBand = young;
     c.hallStage = 1;
     c.hallShare = 0.25;
+    c.lodgers = {{young, 0.2}, {adult, 0.7}, {senior, 0.1}};
     return c;
 }
 
@@ -172,6 +188,17 @@ void realize(const PeopleCatalog& cat, const HouseholdType& t, int beds, uint32_
 }
 
 }  // namespace
+
+Resident drawLodger(const PeopleCatalog& cat, uint32_t key) {
+    Resident r;
+    const int bi = pick(cat.lodgers, mix(key, 0x10D6u));
+    const AgeBand& b = cat.bands[static_cast<std::size_t>(bi)];
+    r.band = static_cast<uint8_t>(bi);
+    r.age = static_cast<uint8_t>(b.lo + static_cast<int>(mix(key, 0x10D7u) % static_cast<uint32_t>(b.hi - b.lo + 1)));
+    r.stage = static_cast<uint8_t>(pick(b.stages, mix(key, 0x10D8u)));
+    r.walks = cat.stages[r.stage].walks;
+    return r;
+}
 
 HouseholdPlan planHouseholds(const PeopleCatalog& cat, const PlaceMap& places, uint32_t bedsTag, int people, int walkers,
                              uint32_t seed) {

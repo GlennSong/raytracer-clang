@@ -81,6 +81,7 @@ bool loadPeopleCatalog(ScriptVM& vm, citysim::PeopleCatalog& out, std::string* e
         s.job = boolField(L, t, "job", false);
         s.walks = boolField(L, t, "walks", false);
         s.beds = boolField(L, t, "beds", false);
+        s.role = strField(L, t, "role");
         c.stages.push_back(s);
         lua_pop(L, 1);
     }
@@ -138,6 +139,11 @@ bool loadPeopleCatalog(ScriptVM& vm, citysim::PeopleCatalog& out, std::string* e
         c.hallBand = c.band(strField(L, t, "band"));
         c.hallStage = c.stage(strField(L, t, "stage"));
         c.hallShare = numField(L, t, "share_of_walkers", c.hallShare);
+    }
+    lua_pop(L, 1);   // halls
+    {
+        std::string unknown;
+        if (!shares(L, pt, "lodgers", bandNames, c.lodgers, unknown)) return bail("lodgers: no band `" + unknown + "`");
     }
     lua_settop(L, base);
     if (const std::string wrong = c.check(); !wrong.empty()) return fail(err, "people.lua: " + wrong);

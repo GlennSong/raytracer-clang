@@ -5,7 +5,12 @@
 --
 -- Every resident's day is its ROLE's, built from these parts by one composer (buildDayTable) -- never a table written
 -- by hand for one kind of person. With no file the citysim uses the same catalog built into C++ (defaultRoleCatalog --
--- a test keeps the two describing identically). The first four, in `order`, are the built-in roles.
+-- a test keeps the two describing identically).
+--
+-- WHO HOLDS A ROLE (#172; Glenn, 2026-11-01: roles are what a person is, commuting and strolling are parts of a day):
+--   * a LIFE STAGE's people (people.lua: each stage without a job names its role -- child, student, at_home, retired);
+--   * someone of a working stage, by the job they found: the FIRST role in `order` whose `job` takes that place;
+--   * a STAFF role's, hired by the places it staffs, from the holders of a catch-all job role (`job = {}`).
 --
 -- roles.<name> = {
 --   day = {
@@ -18,33 +23,32 @@
 --     evening           = "<menu>"       a night out's activity menu (activities.lua); none: never goes out
 --   },
 --   night_out = share                    of this role, the share out on any one night
---   staff = {                            a STAFF role: each place of these kinds pulls per_place of the commuters living
---     places = { kinds }, per_place = n, nearest it; their hours are the place's ("place": from half an hour before it
---     hours = "place" | { start = { lo, hi }, finish = { lo, hi } },   opens to a quarter after it closes, two shifts
---     split_over = h                     when that is longer than split_over hours) or fixed
+--   job = { places = { kinds },          a job the job search finds: at these kinds of place (none: any -- the
+--           hours = "authored" }         catch-all); "authored": only a place whose hours the level wrote, on them
+--   staff = {                            a STAFF role: each place of these kinds pulls per_place of the catch-all job
+--     places = { kinds }, per_place = n, holders living nearest it; their hours are the place's ("place": from half
+--     hours = "place" | { start = { lo, hi }, finish = { lo, hi } },   an hour before it opens to a quarter after it
+--     split_over = h                     closes, two shifts when that is longer than split_over hours) or fixed
 --   }
 -- }
 
 roles = {
-  order = { "commuter", "shopkeeper", "stroller", "student",
+  order = { "shopkeeper", "worker", "student", "child", "at_home", "retired",
             "teacher", "librarian", "manager", "waiter", "cook", "clerk", "bartender" },
 
-  -- to work, lunch about four hours in (or brought, and stays in), the afternoon, the errand on the way home
-  commuter = {
-    day = { work_before_break = 4.0, pause = { target = "lunch", label = "Lunch", hours = 0.6 }, errand = true,
-            evening = "evening" },
-    night_out = 0.22,
-  },
-  -- the same day, on the shop's hours
+  -- keeps a shop whose hours the level wrote: a worker's day, on the shop's hours
   shopkeeper = {
     day = { work_before_break = 4.0, pause = { target = "lunch", label = "Lunch", hours = 0.6 }, errand = true,
             evening = "evening" },
     night_out = 0.15,
+    job = { places = { "shop", "cafe", "restaurant", "supermarket", "bar", "club" }, hours = "authored" },
   },
-  -- no job: a day out instead, and out more evenings
-  stroller = {
-    day = { commute = false, outing_pause = 0.05, evening = "evening" },
-    night_out = 0.30,
+  -- any other job: to work, lunch about four hours in (or brought, and stays in), the afternoon, the errand home
+  worker = {
+    day = { work_before_break = 4.0, pause = { target = "lunch", label = "Lunch", hours = 0.6 }, errand = true,
+            evening = "evening" },
+    night_out = 0.22,
+    job = {},
   },
   -- to class in the teaching hall, a break between classes (the quad, the library, a run), back to class
   student = {
@@ -52,9 +56,22 @@ roles = {
             evening = "student_evening" },
     night_out = 0.40,
   },
+  -- no job: a day out instead (the park, a cafe, the shops, round the block). A child is never out at night alone.
+  child = {
+    day = { commute = false, outing_pause = 0.05 },
+    night_out = 0,
+  },
+  at_home = {
+    day = { commute = false, outing_pause = 0.05, evening = "evening" },
+    night_out = 0.30,
+  },
+  retired = {
+    day = { commute = false, outing_pause = 0.05, evening = "evening" },
+    night_out = 0.15,
+  },
 
   -- THE STAFF (Glenn: "you'd need teachers for the students, managers for shops, waiters for restaurants")
-  -- a teacher's and a librarian's day is a commuter's, on the campus's hours
+  -- a teacher's and a librarian's day is a worker's, on the campus's hours
   teacher = {
     day = { work_before_break = 4.0, pause = { target = "lunch", label = "Lunch", hours = 0.6 }, errand = true,
             evening = "evening" },

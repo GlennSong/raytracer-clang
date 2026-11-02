@@ -65,17 +65,20 @@ TEST_CASE(roles_lua_is_the_built_in_role_catalog) {
     CHECK(a == b);
     for (const citysim::ResidentRole& r : lua.roles)
         CHECK(buildDayTable(r.day).describe() == citysim::builtinDayTable(r.name).describe());
-    // the first four are the built-ins (kRoleCommuter...)
-    CHECK(lua.find("commuter") == citysim::kRoleCommuter && lua.find("shopkeeper") == citysim::kRoleShopkeeper &&
-          lua.find("stroller") == citysim::kRoleStroller && lua.find("student") == citysim::kRoleStudent);
-    CHECK(citysim::builtinRolesLead(lua).empty());
-    CHECK(std::string(lua.nameOf(citysim::kRoleStudent)) == "student");
-    // a catalog that reorders the built-ins is refused: an agent's role id would name the wrong day
-    ScriptVM swapped;
-    CHECK(swapped.doString(ss.str() + "\nroles.order[1], roles.order[3] = roles.order[3], roles.order[1]", &err));
+    // a job found names its role: the first that takes the place (the shopkeeper only on authored hours)
+    CHECK(std::string(lua.nameOf(static_cast<citysim::RoleId>(lua.jobRoleFor("cafe", true)))) == "shopkeeper");
+    CHECK(std::string(lua.nameOf(static_cast<citysim::RoleId>(lua.jobRoleFor("cafe", false)))) == "worker");
+    CHECK(std::string(lua.nameOf(static_cast<citysim::RoleId>(lua.jobRoleFor("office", true)))) == "worker");
+    CHECK(lua.catchAllJobRole() == lua.find("worker"));
+    // every stage without a job names a role the catalog has
+    for (const citysim::LifeStage& st : citysim::defaultPeopleCatalog().stages)
+        CHECK(st.job || lua.find(st.role) >= 0);
+    // a catalog with no catch-all job is refused: someone's job would have no role
+    ScriptVM noCatchAll;
+    CHECK(noCatchAll.doString(ss.str() + "\nroles.worker.job = nil", &err));
     citysim::RoleCatalog wrong;
-    CHECK(!loadRoleCatalog(swapped, wrong, &err));
-    CHECK(err.find("commuter") != std::string::npos);
+    CHECK(!loadRoleCatalog(noCatchAll, wrong, &err));
+    CHECK(err.find("catch-all") != std::string::npos);
     ScriptVM bad;
     CHECK(bad.doString("roles = { order = { 'x' }, x = { day = { pause = { target = 'moon' } } } }", &err));
     citysim::RoleCatalog none;

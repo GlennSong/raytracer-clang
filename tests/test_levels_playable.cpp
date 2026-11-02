@@ -4111,7 +4111,7 @@ TEST_CASE(metro_day_census_prints) {
     citysim::CityRenderSystem city;
     CHECK(city.build(world, &assets, nullptr));
     std::printf("    [census] hour | out%% (walkers out / moving, drivers moving, riding, waiting) | by role out%% "
-                "commuter/shopkeeper/stroller/student | boardings in 5 min | bus plans asked / taken / not worth it\n");
+                "of the first four roles | boardings in 5 min | bus plans asked / taken / not worth it\n");
     const char* only = std::getenv("RT_CENSUS_HOUR");   // one hour of the seven, to look closer
     for (Real hour : {8.0, 10.0, 12.5, 15.0, 17.5, 20.0, 23.0}) {
         if (only && std::fabs(std::atof(only) - hour) > 1e-6) continue;

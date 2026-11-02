@@ -789,7 +789,7 @@ void CitySim::build(const NavGraph& graph, int driverCount, int pedCount, uint32
 
 namespace {
 // ---- the population cache (CitySim::setPopulationCacheDir) --------------------------------------------
-constexpr uint32_t kPopulationFormat = 9;   // (9: households in the dwellings, life stages decide who works; 8: place kinds from places.lua, not campus codes; 7: homes and jobs drawn by floor area; 6: garage stalls are bays) bump when assignPlaces' rules or this record change
+constexpr uint32_t kPopulationFormat = 10;   // (10: roles from life stages and jobs, lodgers; 9: households in the dwellings, life stages decide who works; 8: place kinds from places.lua, not campus codes; 7: homes and jobs drawn by floor area; 6: garage stalls are bays) bump when assignPlaces' rules or this record change
 struct Fnv : engine::bundle::Fnv {
     void real(Real v) { const double d = static_cast<double>(v); pod(d); }
     void vec(const engine::Vec2& v) { real(v.x); real(v.y); }
@@ -865,6 +865,24 @@ void CitySim::assignPlaces(const PlaceMap& places, const NavGraph& graph) {
             }
         }
         unhoused_ = static_cast<int>(drivers.size() + walkers.size() - nextD - nextW);
+        // LODGERS: anyone past the housing (a level's own count) is someone on their own, of people.lua's lodger bands
+        for (const std::vector<int>* pool : {&drivers, &walkers})
+            for (std::size_t k = pool == &drivers ? nextD : nextW; k < pool->size(); ++k) {
+                Agent& a = agents_[static_cast<std::size_t>((*pool)[k])];
+                const Resident r = drawLodger(people_, a.brain * 0x2545F491u);
+                a.age = r.age;
+                a.stage = static_cast<int8_t>(r.stage);
+            }
+    }
+    // EACH STAGE'S ROLE (people.lua `role`, a roles.lua name); a stage with a job takes the job's
+    std::vector<int> stageRole(people_.stages.size(), catchAllRole_);
+    for (std::size_t st = 0; st < people_.stages.size(); ++st) {
+        const LifeStage& ls = people_.stages[st];
+        if (ls.job) continue;
+        const int r = roles_.find(ls.role);
+        if (r >= 0) stageRole[st] = r;
+        else std::fprintf(stderr, "[citysim] WARN: stage `%s` holds role `%s`, which roles.lua does not have (they work)\n",
+                          ls.name.c_str(), ls.role.c_str());
     }
 
     // The nav node a place routes through (nearest to its snapped entrance), each looked up once:
@@ -1215,27 +1233,24 @@ void CitySim::assignPlaces(const PlaceMap& places, const NavGraph& graph) {
                 a.heading = graph.direction(graph.outLinks[hn][0]);
         }
 
-        // Role (Phase 4) decides how the day runs. ~1 in 5 (when the city has a
-        // park) is a Stroller — no job, a day out at the park; the rest hold a job
-        // and are a Shopkeeper (if their workplace is a shop) or a Commuter. All
-        // deterministic from the brain's bits (no rng draw).
+        // THE ROLE (Phase 4; #172) decides how the day runs. WHO WORKS is their life stage's (people.lua): a child,
+        // someone at home, the retired hold their stage's role and spend the day out -- a park, a cafe, the shops; a
+        // working resident's role is the job they find (roles.lua `job`: the shop they keep, else the catch-all).
+        // A bus's or a cab's driver has no stage, and works.
         a.work = a.home;
-        a.role = kRoleCommuter;
-        const uint32_t roleRoll = (a.brain >> 20) & 0xFF;   // 0..255
-        // WHO WORKS is their life stage's (people.lua: a child, the retired, those at home do not); someone with no
-        // household rolls for it as before.
         const LifeStage* stage = a.stage >= 0 ? &people_.stages[static_cast<std::size_t>(a.stage)] : nullptr;
-        const bool stroller = !parks.empty() && (stage ? !stage->job : roleRoll < 51);   // ~20%
+        const bool works = !stage || stage->job;
+        a.role = static_cast<RoleId>(works ? catchAllRole_ : stageRole[static_cast<std::size_t>(a.stage)]);
+        const bool stroller = !parks.empty() && !works;
         auto unit = [](uint32_t bits) { return (bits & 0xFF) / 255.0; };
         // A WALKER WITH THE DAY OFF (Glenn, 2026-09-19: "we should have non
         // workers and pedestrians who are out for a stroll or going to public
-        // spaces"): about one walker in three holds no job and spends part of
-        // the day out -- park, cafe, shops, a walk round the block (the
-        // outing table, strollerGoals). Their outings are spread over the day
-        // (early, mid-morning, afternoon, evening) so the street is never
-        // just the commute.
-        const bool dayOff = a.archetype == Agent::Mode::Pedestrian &&
-                            !venues_.empty() && (stage ? !stage->job : roleRoll < 85);   // ~1 in 3
+        // spaces"): a walker with no job spends part of the day out -- park,
+        // cafe, shops, a walk round the block (the outing table,
+        // strollerGoals). Their outings are spread over the day (early,
+        // mid-morning, afternoon, evening) so the street is never just the
+        // commute. One who drives (or finds no venue) goes to a park instead.
+        const bool dayOff = a.archetype == Agent::Mode::Pedestrian && !venues_.empty() && !works;
         int anchor = -1;
         if (dayOff) {
             // The window mechanics need somewhere that is not home: the
@@ -1244,7 +1259,6 @@ void CitySim::assignPlaces(const PlaceMap& places, const NavGraph& graph) {
             if (anchor >= 0 && !commutable(hn, anchor)) anchor = -1;
         }
         if (anchor >= 0) {
-            a.role = kRoleStroller;
             a.work = anchor;
             a.workPlace = kNoPlace;
             a.workDoor = graph.nodes[static_cast<std::size_t>(anchor)];
@@ -1258,14 +1272,13 @@ void CitySim::assignPlaces(const PlaceMap& places, const NavGraph& graph) {
         } else if (stroller) {
             PlaceId pk = parks[(a.brain >> 4) % parks.size()];
             if (commutable(hn, nodeOf(pk))) {
-                a.role = kRoleStroller;
                 a.work = nodeOf(pk);              // a daytime destination, not a job
                 a.workPlace = kNoPlace;
                 a.workDoor = doorOf(pk);          // rests at the park, not the kerb
                 a.departWork = 9.5 + 2.0 * unit(a.brain);         // late-morning out
                 a.departHome = 15.5 + 1.5 * unit(a.brain >> 8);   // home mid-afternoon
             }
-        } else if (!jobs.empty() && (!stage || stage->job)) {   // (a child, say, with no outing to go to stays home)
+        } else if (!jobs.empty() && works) {   // (a child, say, with no outing to go to stays home)
             // Prefer the brain-picked workplace; if it isn't routable from
             // home, scan for any that is — STARTING FROM A PER-AGENT OFFSET.
             // Scanning from index 0 funneled every fallback agent onto the
@@ -1543,33 +1556,27 @@ void CitySim::assignPlaces(const PlaceMap& places, const NavGraph& graph) {
                     }
                     a.commuteSeconds = secs;
                 }
-                const PlaceType wt = places[pick].type;
-                if (wt == PlaceType::Shop || wt == PlaceType::Cafe || wt == PlaceType::Restaurant ||
-                    wt == PlaceType::Supermarket || wt == PlaceType::Bar || wt == PlaceType::Club) {
-                    const Real open = places[pick].openHour;
-                    const Real close = places[pick].closeHour;
-                    // ONLY when the shop actually authored hours. A place minted
-                    // from a LotBuilding carries the wide-open default (0..24,
-                    // components.h:373), and running that through the formula
-                    // below yields departWork 0.0 / departHome 24.0 — a window
-                    // that is open every hour of the day. Such an agent departs
-                    // for work once and is never again outside its work window,
-                    // so it never goes home and its car never comes back. On
-                    // piedmont, where every place is lot-derived, that was every
-                    // shop worker in the city. Without authored hours it simply
-                    // keeps the shift it drew at build.
-                    const bool authored = (open > 0.0 || close < 24.0) &&
-                                          places[pick].authoredHours;
-                    const Real dw = open > 0.5 ? open - 0.5 : 0.0;
-                    const Real dh = close < 23.5 ? close + 0.5 : 24.0;
-                    if (authored && dw != dh) {
-                        // Open the shop before it opens, close it after.
-                        a.role = kRoleShopkeeper;
+                // THE JOB'S ROLE (roles.lua `job`): the first role that takes this kind of place -- the shopkeeper
+                // a shop whose hours the level wrote, else the catch-all worker. ONLY authored hours count: a place
+                // minted from a LotBuilding carries the wide-open default (0..24, components.h:373), and running
+                // that through the formula below yields departWork 0.0 / departHome 24.0 -- a window that is open
+                // every hour of the day. Such an agent departs for work once and is never again outside its work
+                // window, so it never goes home and its car never comes back. On piedmont, where every place is
+                // lot-derived, that was every shop worker in the city. Without authored hours a worker keeps the
+                // shift it drew at build.
+                const Place& wp = places[pick];
+                const Real open = wp.openHour, close = wp.closeHour;
+                const Real dw = open > 0.5 ? open - 0.5 : 0.0;
+                const Real dh = close < 23.5 ? close + 0.5 : 24.0;
+                const bool authored = (open > 0.0 || close < 24.0) && wp.authoredHours && dw != dh;
+                const int jr = roles_.jobRoleFor(wp.kind >= 0 ? placeKinds_.nameOf(wp.kind) : placeTypeName(wp.type), authored);
+                if (jr >= 0) {
+                    a.role = static_cast<RoleId>(jr);
+                    if (roles_.roles[static_cast<std::size_t>(jr)].job.authoredHours) {   // open up before, close up after
                         a.departWork = dw;
                         a.departHome = dh;
                     }
                 }
-                // else Commuter — keep the jittered office hours from build().
             }
         }
     });
@@ -1596,8 +1603,9 @@ void CitySim::assignPlaces(const PlaceMap& places, const NavGraph& graph) {
         int commuters = 0;
         for (int i = 0; i < static_cast<int>(agents_.size()); ++i) {
             const Agent& a = agents_[static_cast<std::size_t>(i)];
-            if (a.role != kRoleCommuter || onService(i) || a.homePlace == kNoPlace || a.home < 0) continue;
-            if (a.stage >= 0 && !people_.stages[static_cast<std::size_t>(a.stage)].job) continue;   // a child is not hired
+            // the catch-all job's holders (a child, the retired, a shopkeeper are not hired away)
+            if (a.role != catchAllRole_ || onService(i) || a.homePlace == kNoPlace || a.home < 0) continue;
+            if (a.stage >= 0 && !people_.stages[static_cast<std::size_t>(a.stage)].job) continue;
             homeCells[cellKey(static_cast<int64_t>(std::floor(a.homeDoor.x / kCell)),
                               static_cast<int64_t>(std::floor(a.homeDoor.y / kCell)))].push_back(i);
             ++commuters;
@@ -1732,7 +1740,7 @@ void CitySim::assignPlaces(const PlaceMap& places, const NavGraph& graph) {
     }
     }   // decided (not read from the cache)
     students_ = 0;
-    for (const Agent& a : agents_) students_ += a.role == kRoleStudent ? 1 : 0;
+    for (const Agent& a : agents_) students_ += isStudent(a) ? 1 : 0;
     tagSpots();   // the venues are known now: which spots are on the campus
 
     // Seed the surface-level social graph: agents sharing a workplace are
@@ -3213,14 +3221,12 @@ void CitySim::installGoalTables(GoalTable pedestrian, GoalTable driver) {
         goalPed_ = std::move(pedestrian);
         goalDriver_ = std::move(driver);
     } else {
-        // A host's own day for the working roles (a test's errand loop, a level script's schedule): the commuter's
-        // and the shopkeeper's (they share a day). One table for both archetypes: a role's day is the same on foot or
+        // A host's own day for the working roles (a test's errand loop, a level script's schedule): every role the
+        // job search hands out (they share a day). One table for both archetypes: a role's day is the same on foot or
         // at the wheel.
         (void)driver;
-        for (const char* r : {"commuter", "shopkeeper"}) {
-            const int id = roles_.find(r);
-            if (id >= 0 && id < static_cast<int>(roleTables_.size())) roleTables_[static_cast<std::size_t>(id)] = pedestrian;
-        }
+        for (std::size_t id = 0; id < roles_.roles.size() && id < roleTables_.size(); ++id)
+            if (roles_.roles[id].job.search) roleTables_[id] = pedestrian;
     }
     reseatOnTables();
 }
@@ -3228,6 +3234,7 @@ void CitySim::installGoalTables(GoalTable pedestrian, GoalTable driver) {
 void CitySim::rebuildRoleTables() {
     roleTables_.clear();
     for (const ResidentRole& r : roles_.roles) roleTables_.push_back(buildDayTable(r.day));
+    catchAllRole_ = std::max(0, roles_.catchAllJobRole());
 }
 
 void CitySim::setRoleCatalog(RoleCatalog c) {
@@ -3683,6 +3690,8 @@ void CitySim::assignStudents(const PlaceMap& places, const NavGraph& graph) {
     if (live.empty()) return;
     const int ln = lib != kNoPlace ? graph.nearestNode(places[lib].entrance) : -1;
 
+    const int hallRole = people_.hallStage >= 0 ? roles_.find(people_.stages[static_cast<std::size_t>(people_.hallStage)].role) : -1;
+    const int studentRole = hallRole >= 0 ? hallRole : catchAllRole_;
     // WHO: the households' students (households.h -- the halls' beds are filled first, with walkers, never more than
     // the people.lua share of them), each in the hall the plan gave them, when it is one a student can live in.
     for (Agent& a : agents_) {
@@ -3694,7 +3703,7 @@ void CitySim::assignStudents(const PlaceMap& places, const NavGraph& graph) {
             if (h.id == hh.place) hall = &h;
         if (!hall) continue;
         const Hall& H = *hall;
-        a.role = kRoleStudent;
+        a.role = static_cast<RoleId>(studentRole);
         a.homePlace = H.id; a.home = H.node; a.homeDoor = doorOf(H.id);
         a.restNode = H.node; a.pos = a.homeDoor; a.indoors = true;
         if (!graph.outLinks[static_cast<std::size_t>(H.node)].empty())
@@ -5988,7 +5997,7 @@ void CitySim::arriveOrChain(Agent& a, Real vArrive) {
         const bool atWork =
             node == a.work &&
             (a.workPlace != kNoPlace ||
-             (a.role == kRoleStroller && a.work != a.home));
+             (daysOut(a) && a.work != a.home));
         const bool atShop = a.shopPlace != kNoPlace && node == a.shop;
         // Where the agent is now: INSIDE at a door (not drawn), or outside
         // (drawn, standing somewhere of its own).
@@ -6048,7 +6057,7 @@ void CitySim::arriveOrChain(Agent& a, Real vArrive) {
             inside = true;
         } else if (atWork) {
             a.pos = a.workDoor;
-            inside = a.role != kRoleStroller;   // the park is outside
+            inside = !daysOut(a);   // the park is outside
         } else if (atShop) {
             a.pos = a.shopDoor;
             inside = true;

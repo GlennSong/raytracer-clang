@@ -14149,3 +14149,29 @@ stroller, one in three walkers a day off. Nobody had an age, and nobody lived wi
 
 Roles are still today's four built-ins and the staff (step 3 makes every job a place hiring and turns the life stages
 into roles). Within a home, the relationship tag is still Neighbor (step 4).
+
+## ADR-0297 — Roles from life stages and jobs: no built-in roles
+
+#172 items 3 and 5, step 3 of the households plan. Glenn, 2026-11-01: a commuter "as a role doesn't totally make
+entire sense since commuting is only a part of a role". Roles are what a person is; commuting and a day out are parts
+of a day.
+
+Before, the catalog had to lead with four built-ins (commuter, shopkeeper, stroller, student) that the sim named in
+C++ (`kRoleCommuter`... and `builtinRolesLead`). Dice made about one in five a stroller.
+
+**Decision.**
+- Nobody's role is named in C++. A resident holds one of:
+  - THEIR STAGE'S ROLE: people.lua gives each stage without a job a `role` (child, student, at_home, retired);
+  - THEIR JOB'S ROLE: roles.lua `job = { places, hours = "authored" }`. The first role in order that takes the place
+    the job search found: `shopkeeper` for a shop, cafe and the like whose hours the level wrote (on those hours),
+    else the catch-all `worker` (`job = {}`);
+  - A STAFF ROLE, hired by the places it staffs from the catch-all's holders, as before.
+- The job search itself (the threaded commute search, the bus and cross-town commutes) is unchanged. Only who goes
+  looking (the stage) and what the job makes them (the data) moved.
+- `commuter` became `worker`. `stroller` became three day-out roles: `child` (never out at night), `at_home` and
+  `retired`. A day-out role is any role with `commute = false`; code that asked "a stroller?" asks `daysOut`. A
+  level script's `stroller` table replaces every day-out role's day, and its `schedule` every job role's.
+- Anyone past the housing (a level's own count) is a LODGER, drawn from people.lua `lodgers` (bands with no walk-only
+  stage). The buses' and cabs' drivers have no stage and work. The role dice are gone.
+- RoleCatalog::check() replaces builtinRolesLead: a catalog needs a catch-all job role. PeopleCatalog::check() needs
+  every stage without a job to name a role.

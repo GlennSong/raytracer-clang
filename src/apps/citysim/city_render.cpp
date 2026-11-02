@@ -1071,11 +1071,12 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
             engine::loadGoalTable(vm, pedName, ped, &err) &&
             engine::loadGoalTable(vm, drvName, driver, &err)) {
             sim_.setGoalTables(std::move(ped), std::move(driver));
-            // The stroller role's own day, when the script has one.
+            // The day OUT's own table, when the script has one (`stroller`): every role that spends the day out.
             citysim::GoalTable stroll;
             std::string serr;
             if (!params_.wander && engine::loadGoalTable(vm, "stroller", stroll, &serr))
-                sim_.setRoleTable("stroller", std::move(stroll));
+                for (const ResidentRole& r : sim_.roles().roles)
+                    if (!r.day.commute) sim_.setRoleTable(r.name, stroll);
         } else {
             LOG_WARN << "citysim agents script: " << err << " (using built-ins)";
         }

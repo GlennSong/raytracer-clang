@@ -13,8 +13,9 @@
 // from the same vocabulary of states, never a table written by hand for one kind of person.
 //
 // Authored in assets/scripts/roles.lua (scripting/roles_lua.h reads it); defaultRoleCatalog is the same catalog in
-// C++ (a test keeps the two describing identically). Role ids are indexes into the catalog (RoleId); the first four
-// are the built-ins the sim names in code (kRoleCommuter...), and every catalog must list them first, in that order.
+// C++ (a test keeps the two describing identically). Role ids are indexes into the catalog (RoleId). The sim names no
+// role in code (#172, kinds are data): a life stage names its role (people.lua), a job found names its by the place
+// (JobSpec), a place hires its staff (StaffSpec).
 
 #include "city_goals.h"
 
@@ -51,7 +52,7 @@ struct RoleDay {
 // restaurants"): the kinds of place it staffs ("restaurant", "teaching", ... -- CitySim::placeKind), how many each
 // place takes, and its hours -- fixed windows, or the PLACE's own (opening half an hour before it opens, leaving a
 // quarter after it closes; a day longer than `splitOver` hours is two shifts, early and late). Each place pulls its
-// staff from the commuters living nearest it (CitySim::assignStaff): the population is the same, its jobs are not.
+// staff from the catch-all job role's holders living nearest it (CitySim::assignStaff): the population is the same, its jobs are not.
 struct StaffSpec {
     std::vector<std::string> places;   // empty: not a staff role
     int perPlace = 0;
@@ -60,20 +61,25 @@ struct StaffSpec {
     double splitOver = 9;
 };
 
+// A role the JOB SEARCH hands out (assignPlaces: the job a working resident finds near home): the first role in the
+// catalog whose spec takes the place found. No places: any (the catch-all, whose holders the staff are hired from).
+// `authoredHours`: only a place whose hours the level wrote, and the role keeps them (opens up, closes up).
+struct JobSpec {
+    bool search = false;
+    std::vector<std::string> places;
+    bool authoredHours = false;
+};
+
 struct ResidentRole {
     std::string name;
     RoleDay day;
     double nightOutShare = 0;   // of this role, the share out on any one night (CitySim::eveningPlan)
+    JobSpec job;
     StaffSpec staff;
 };
 
-// AN AGENT'S ROLE (ADR-0282, #117 item 27): its index in the catalog. There is no second list: the four roles the sim
-// assigns by its own rules (a resident with an office job, a shop to keep, no job, a hall bed) are named here by
-// their catalog ids, and builtinRolesLead holds the catalog to them. Staff roles (teacher, waiter...) are catalog
-// ids past these.
+// AN AGENT'S ROLE (ADR-0282, #117 item 27): its index in the catalog.
 using RoleId = uint8_t;
-inline constexpr RoleId kRoleCommuter = 0, kRoleShopkeeper = 1, kRoleStroller = 2, kRoleStudent = 3;
-inline constexpr const char* kBuiltinRoleNames[4] = {"commuter", "shopkeeper", "stroller", "student"};
 
 struct RoleCatalog {
     std::vector<ResidentRole> roles;   // the id is the index
@@ -83,12 +89,16 @@ struct RoleCatalog {
     std::string describe() const;
     // The role's name, "?" past the catalog.
     const char* nameOf(RoleId id) const { return id < roles.size() ? roles[id].name.c_str() : "?"; }
+    // The role of a job found at a place of `kind` (its hours authored or not): the first job role that takes it;
+    // -1 when none does.
+    int jobRoleFor(const std::string& kind, bool authored) const;
+    // The first job role that takes any place: the job search's catch-all and the staff's pool; -1 when none.
+    int catchAllJobRole() const;
+    // What is wrong with it ("" when nothing): no catch-all job role, more roles than a RoleId holds.
+    std::string check() const;
 };
 
-// Does the catalog list the four built-ins first, in kRole* order? An empty string when it does, else what is wrong.
-std::string builtinRolesLead(const RoleCatalog& c);
-
-// The built-in catalog: commuter, shopkeeper, stroller, student (the kRole* ids), then the staff roles --
+// The built-in catalog (roles.lua in C++): shopkeeper, worker, student, child, at_home, retired, then the staff --
 // teacher, librarian, manager, waiter, cook, clerk, bartender.
 RoleCatalog defaultRoleCatalog();
 

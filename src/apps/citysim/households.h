@@ -25,13 +25,15 @@
 
 namespace citysim {
 
-// What a person's days are for. `job`: they look for work; `walks`: they never drive (a child, a student in a hall);
-// `beds`: they live in a hall's beds, not a dwelling.
+// What a person's days are for. `job`: they look for work (their role is the job's, roles.lua); else `role` names the
+// role they hold. `walks`: they never drive (a child, a student in a hall); `beds`: they live in a hall's beds, not a
+// dwelling.
 struct LifeStage {
     std::string name;
     bool job = false;
     bool walks = false;
     bool beds = false;
+    std::string role;
 };
 
 // An age band: its years and the life stages people of those ages lead, with shares (stage index, share).
@@ -64,12 +66,15 @@ struct PeopleCatalog {
     // Who fills a hall's beds: people of this band and stage (a stage with `beds`), at most this share of the walkers.
     int hallBand = -1, hallStage = -1;
     double hallShare = 0.25;
+    // LODGERS: anyone past the housing (a level's authored count) is one of these bands, on their own. No band of
+    // theirs may lead a walk-only stage (a lodger may be a driver).
+    std::vector<std::pair<int, double>> lodgers;
 
     int stage(const std::string& name) const;
     int band(const std::string& name) const;
     int household(const std::string& name) const;
     // What is wrong with it ("" when nothing): a share-less band or type, a dwelling size no type fits, a hall rule
-    // that names no beds stage.
+    // that names no beds stage, a stage with no job and no role, a lodger band with a walk-only stage.
     std::string check() const;
     std::string describe() const;
 };
@@ -106,6 +111,9 @@ struct HouseholdPlan {
 // more than `walkers` of whom may be walk-only (children, students). Deterministic in `seed`.
 HouseholdPlan planHouseholds(const PeopleCatalog& cat, const PlaceMap& places, uint32_t bedsTag, int people, int walkers,
                              uint32_t seed);
+
+// A lodger (PeopleCatalog::lodgers) from `key`'s bits: their band, age and stage.
+Resident drawLodger(const PeopleCatalog& cat, uint32_t key);
 
 // One line: households by type, people by band and stage, dwellings filled, and the people the housing turned away.
 std::string describePlan(const PeopleCatalog& cat, const HouseholdPlan& plan);

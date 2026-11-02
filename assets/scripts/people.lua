@@ -7,7 +7,8 @@
 -- The numbers are round, not a census of anywhere; a real one can replace them here.
 --
 -- people.stages.<name> = what a person's days are for
---   job   = true    they look for work (whoever finds none stays home)
+--   job   = true    they look for work; their role is the job's (roles.lua `job`)
+--   role  = "<role>"  (no job) the role they hold (roles.lua)
 --   walks = true    they never drive: a child, a student in a hall
 --   beds  = true    they live in a hall's beds (places tagged beds), not a dwelling
 --
@@ -22,15 +23,18 @@
 --
 -- people.halls = { band, stage, share_of_walkers }   who fills the halls' beds, first: at most this share of the
 --   walkers (a student has no car)
+--
+-- people.lodgers = { <band> = share }   anyone past the housing (a level's own count of cars or walkers), on their
+--   own: no band here may lead a walk-only stage
 
 people = {
   stages = {
     order = { "child", "student", "working", "at_home", "retired" },
-    child   = { walks = true },
-    student = { walks = true, beds = true },
+    child   = { walks = true, role = "child" },
+    student = { walks = true, beds = true, role = "student" },
     working = { job = true },
-    at_home = {},
-    retired = {},
+    at_home = { role = "at_home" },
+    retired = { role = "retired" },
   },
 
   bands = {
@@ -58,4 +62,6 @@ people = {
   },
 
   halls = { band = "young", stage = "student", share_of_walkers = 0.25 },
+
+  lodgers = { young = 0.2, adult = 0.7, senior = 0.1 },
 }
