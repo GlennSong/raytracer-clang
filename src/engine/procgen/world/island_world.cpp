@@ -1748,6 +1748,10 @@ bool writeIslandSvg(const IslandWorld& w, const std::string& svgPath, const Isla
         a << "stroke=\"" << rgb << "\" stroke-width=\"" << L.widthM << "\"" << (L.widthM < 6.0 ? " class=\"hair\"" : "");
         lines(L.lines, a.str());
         if (!L.dash.empty()) lines(L.lines, "stroke=\"#ffffff\" stroke-width=\"" + std::to_string(L.widthM * 0.55) + "\" stroke-dasharray=\"" + L.dash + "\"");
+        for (const auto& [at, word] : L.tags)   // its words (a candidate's letter), in its colour, haloed
+            o << "<text x=\"" << at.x << "\" y=\"" << -at.y << "\" font-size=\"" << W * 0.012 << "\" font-weight=\"bold\" text-anchor=\"middle\" "
+              << "stroke=\"#ffffff\" stroke-width=\"" << W * 0.003 << "\" paint-order=\"stroke\" fill=\"rgb(" << static_cast<int>(L.rgb[0] * 255) << ','
+              << static_cast<int>(L.rgb[1] * 255) << ',' << static_cast<int>(L.rgb[2] * 255) << ")\">" << word << "</text>\n";
         o << "</g>\n";
     }
     // THE ISLAND'S ROADS: freeway (44 m kerb to kerb), its ramps, the pass, the links, the mountain road
@@ -2029,6 +2033,128 @@ void planTrails(IslandWorld& w) {
         if (a == b || (heads[static_cast<std::size_t>(a)] - heads[static_cast<std::size_t>(b)]).length() > 9000.0) continue;
         walk(heads[static_cast<std::size_t>(a)], heads[static_cast<std::size_t>(b)], "coast path " + w.sites[static_cast<std::size_t>(a)].name + " - " + w.sites[static_cast<std::size_t>(b)].name);
     }
+}
+
+std::vector<ShoreSite> findBeachSites(const IslandWorld& w, const ShoreRule& r) {
+    const int n = w.n;
+    const double cell = w.cell;
+    auto H = [&](int i, int j) { return static_cast<double>(w.height[static_cast<std::size_t>(std::clamp(j, 0, n - 1)) * n + std::clamp(i, 0, n - 1)]); };
+    auto P = [&](int i, int j) { return Vec2(-w.half + i * cell, -w.half + j * cell); };
+    auto buildableAt = [&](const Vec2& q) {
+        const int i = static_cast<int>(std::lround((q.x + w.half) / cell)), j = static_cast<int>(std::lround((q.y + w.half) / cell));
+        return i >= 0 && j >= 0 && i < n && j < n && w.buildable[static_cast<std::size_t>(j) * n + i] != 0;
+    };
+    // the land's middle and the range's axis: which side a shore is on
+    Vec2 mid(0, 0);
+    double land = 0;
+    for (int j = 0; j < n; j += 4)
+        for (int i = 0; i < n; i += 4)
+            if (H(i, j) > 0.0) { mid += P(i, j); land += 1; }
+    if (land > 0) mid = mid * (1.0 / land);
+
+    // 1. THE SHORE: land beside the sea, and whether it is gentle; the buildable share behind each
+    struct Shore { Vec2 p, inland; bool gentle; double back; };
+    std::vector<Shore> shore;
+    for (int j = 1; j + 1 < n; ++j)
+        for (int i = 1; i + 1 < n; ++i) {
+            if (H(i, j) < 0.0) continue;
+            if (H(i + 1, j) >= 0.0 && H(i - 1, j) >= 0.0 && H(i, j + 1) >= 0.0 && H(i, j - 1) >= 0.0) continue;
+            const Vec2 g(H(i + 3, j) - H(i - 3, j), H(i, j + 3) - H(i, j - 3));   // uphill, over six cells
+            if (g.length() < 1e-6) continue;
+            Shore c;
+            c.p = P(i, j);
+            c.inland = normalize(g);
+            c.gentle = w.heightAt(c.p.x + c.inland.x * r.riseAt, c.p.y + c.inland.y * r.riseAt) <= r.maxRise &&
+                       w.heightAt(c.p.x + c.inland.x * r.riseAt * 0.5, c.p.y + c.inland.y * r.riseAt * 0.5) <= r.maxRise * 0.75 &&
+                       w.heightAt(c.p.x - c.inland.x * r.offshoreAt, c.p.y - c.inland.y * r.offshoreAt) >= r.minOffshore &&
+                       !(w.hydro && w.hydro->isWet(c.p.x, c.p.y, 30.0));
+            int in = 0, of = 0;
+            for (double d = 60.0; d <= r.backDepth; d += 40.0, ++of) in += buildableAt(c.p + c.inland * d) ? 1 : 0;
+            c.back = of ? static_cast<double>(in) / of : 0.0;
+            shore.push_back(c);
+        }
+    // 2. EACH GENTLE CELL'S STRETCH: the gentle coast within shoreReach, and the mean ground behind it (bucketed)
+    const double bucket = r.shoreReach;
+    std::map<std::pair<int, int>, std::vector<int>> buckets;
+    auto key = [&](const Vec2& q) { return std::make_pair(static_cast<int>(std::floor(q.x / bucket)), static_cast<int>(std::floor(q.y / bucket))); };
+    for (int k = 0; k < static_cast<int>(shore.size()); ++k)
+        if (shore[static_cast<std::size_t>(k)].gentle) buckets[key(shore[static_cast<std::size_t>(k)].p)].push_back(k);
+    auto toFreeway = [&](const Vec2& q) {
+        double best = 1e30;
+        auto seg = [&](const Vec2& a, const Vec2& b) {
+            const Vec2 ab = b - a;
+            const double t = std::clamp(dot(q - a, ab) / std::max(1e-9, dot(ab, ab)), 0.0, 1.0);
+            best = std::min(best, (a + ab * t - q).length());
+        };
+        if (w.freewayRoute.size() >= 2)
+            for (std::size_t k = 0; k + 1 < w.freewayRoute.size(); ++k) seg(w.freewayRoute[k], w.freewayRoute[k + 1]);
+        else
+            for (const IslandRoad& rd : w.roads)
+                if (rd.kind == "freeway")
+                    for (std::size_t k = 0; k + 1 < rd.points.size(); ++k) seg(rd.points[k], rd.points[k + 1]);
+        return best;
+    };
+    std::vector<ShoreSite> all;
+    for (const Shore& c : shore) {
+        if (!c.gentle) continue;
+        bool clear = true;
+        for (const IslandSite& s : w.sites) clear = clear && (s.at - c.p).length() >= s.radius + r.clearOfPlaces;
+        if (!clear) continue;
+        const auto [bx, bz] = key(c.p);
+        int cnt = 0;
+        double back = 0;
+        Vec2 sum(0, 0);
+        for (int dx = -1; dx <= 1; ++dx)
+            for (int dz = -1; dz <= 1; ++dz) {
+                auto it = buckets.find({bx + dx, bz + dz});
+                if (it == buckets.end()) continue;
+                for (int k : it->second) {
+                    const Shore& o = shore[static_cast<std::size_t>(k)];
+                    if ((o.p - c.p).length() > r.shoreReach) continue;
+                    ++cnt;
+                    back += o.back;
+                    sum += o.p;
+                }
+            }
+        const double len = cnt * cell;
+        if (len < r.minShore || cnt == 0) continue;
+        ShoreSite s;
+        s.at = sum * (1.0 / cnt);   // the stretch's middle (a candidate on a bend sits on its sand, not off it)
+        s.inland = c.inland;
+        s.shore = len;
+        s.back = back / cnt;
+        if (s.back < r.minBack) continue;
+        s.toFreeway = toFreeway(s.at);
+        const Vec2 d = s.at - mid;
+        s.side = w.axis.x * d.y - w.axis.y * d.x > 0 ? 1 : -1;
+        s.score = std::min(1.0, len / (2.0 * r.shoreReach)) * s.back *
+                  (s.toFreeway <= r.freewayReach ? 1.0 : std::max(0.4, r.freewayReach / s.toFreeway));
+        all.push_back(s);
+    }
+    // 3. THE CANDIDATES: the best, spaced; ties to the earlier (the grid's order)
+    std::stable_sort(all.begin(), all.end(), [](const ShoreSite& a, const ShoreSite& b) { return a.score > b.score; });
+    std::vector<ShoreSite> out;
+    for (const ShoreSite& s : all) {
+        if (static_cast<int>(out.size()) >= r.candidates) break;
+        bool spaced = true;
+        for (const ShoreSite& o : out) spaced = spaced && (o.at - s.at).length() >= r.spacing;
+        if (spaced) out.push_back(s);
+    }
+    // 4. THE PICKS: the best each side of the range, when they are far enough apart; else the best two that are
+    int a = -1, b = -1;
+    for (int k = 0; k < static_cast<int>(out.size()); ++k) {
+        if (out[static_cast<std::size_t>(k)].side > 0 && a < 0) a = k;
+        if (out[static_cast<std::size_t>(k)].side < 0 && b < 0) b = k;
+    }
+    if (a < 0 || b < 0 || (out[static_cast<std::size_t>(a)].at - out[static_cast<std::size_t>(b)].at).length() < r.apart) {
+        a = out.empty() ? -1 : 0;
+        b = -1;
+        for (int k = 1; k < static_cast<int>(out.size()) && b < 0; ++k)
+            if ((out[static_cast<std::size_t>(k)].at - out[0].at).length() >= r.apart) b = k;
+    }
+    if (a >= 0) out[static_cast<std::size_t>(a)].pick = true;
+    if (b >= 0) out[static_cast<std::size_t>(b)].pick = true;
+    return out;
 }
 
 void joinPassToTowns(IslandWorld& w, const std::vector<std::pair<int, std::vector<Vec2>>>& arterialNodes) {

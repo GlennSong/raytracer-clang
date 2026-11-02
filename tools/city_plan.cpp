@@ -48,7 +48,7 @@ static int usage() {
                  "       city_plan level-world BRIEF.json      the level's terrain + water blocks that match the brief's world, and its towns' hubs\n"
                  "       city_plan island SEED OUT_DIR [--variants N]   island worlds on the map: terrain, sites, ring freeway (ADR-0105)\n"
                  "       city_plan island-cities SEED OUT_DIR [--terrain LEVEL.json] [--png] [--view X Z HALF NAME]...   that island's cities and towns planned on its land, mapped, and extra close-ups (ADR-0106);\n"
-                 "              ... --level NAME [--template LEVEL.json] [--keep-sites LEVEL.json] [--window X Z HALF] [--rail]   the 3D level; --rail lays the island loop and the cities' light rail in the same run (the map draws them)\n"
+                 "              ... --level NAME [--template LEVEL.json] [--keep-sites LEVEL.json] [--window X Z HALF] [--rail] [--beaches]   the 3D level; --rail lays the island loop and the cities' light rail in the same run (the map draws them)\n"
                  "       city_plan rivers BRIEF.json [STEP]         the rivers its world's hydrology makes, plan coordinates\n"
                  "       city_plan heights BRIEF.json [HALF STEP]   the brief's ground on a grid, plan coordinates (for placing mountain roads)\n"
                  "       city_plan island-rail GRAPH.json LEVEL.json [--write] [--offset M] [--no-ways] [--way-leg M]   the island loop beside the freeway, a station per town (the level's hubs) and a footway in to each; --write puts it in the graph\n"
@@ -483,7 +483,9 @@ int main(int argc, char** argv) {
             rail.name = "rail"; rail.label = "Railway (the island loop)"; rail.rgb[0] = rail.rgb[1] = rail.rgb[2] = 0.15f; rail.widthM = 14; rail.minPx = 2.0; rail.dash = "18 18";
             light.name = "light-rail"; light.label = "Light rail"; light.rgb[0] = 0.45f; light.rgb[1] = 0.10f; light.rgb[2] = 0.55f; light.widthM = 10; light.minPx = 1.6; light.dash = "12 12";
             ways.name = "station-footways"; ways.label = "Footways in to the stations"; ways.rgb[0] = ways.rgb[1] = ways.rgb[2] = 0.97f; ways.widthM = 4; ways.minPx = 1.0; ways.casing = true;
-            for (const nlohmann::json& e : finishedScene.value("edges", nlohmann::json::array())) {
+            // (a map-only run, without --level, has no finished scene: no rail to draw)
+            const nlohmann::json noEdges = nlohmann::json::array();
+            for (const nlohmann::json& e : finishedScene.is_object() ? finishedScene.value("edges", noEdges) : noEdges) {
                 const std::string cls = e.value("class", "");
                 engine::IslandMapLayer* L = cls == "rail" ? &rail : cls == "light_rail" ? &light : cls == "footway" ? &ways : nullptr;
                 if (!L || !e.contains("path")) continue;
@@ -492,6 +494,35 @@ int main(int argc, char** argv) {
                 L->lines.push_back(pl);
             }
             for (const engine::IslandMapLayer* L : {&ways, &light, &rail}) if (!L->lines.empty()) whole.layers.push_back(*L);
+        }
+        // --beaches: the sandy shores a BEACH TOWN could stand on (~/.claude/plans/beach-town.md), ringed and lettered on
+        // the map, the two picks in red, the rest in orange
+        for (int a = 4; a < argc; ++a) {
+            if (std::string(argv[a]) != "--beaches") continue;
+            const std::vector<engine::ShoreSite> shores = engine::findBeachSites(w);
+            engine::IslandMapLayer picked, others;
+            picked.name = "beach-picks"; picked.label = "Beach town: recommended"; picked.rgb[0] = 0.85f; picked.rgb[1] = 0.10f; picked.rgb[2] = 0.10f;
+            picked.widthM = 30; picked.minPx = 2.5;
+            others.name = "beach-candidates"; others.label = "Beach town: other candidates"; others.rgb[0] = 0.95f; others.rgb[1] = 0.55f; others.rgb[2] = 0.05f;
+            others.widthM = 22; others.minPx = 2.0;
+            std::printf("beach towns: %zu candidates\n", shores.size());
+            for (std::size_t k = 0; k < shores.size(); ++k) {
+                const engine::ShoreSite& sh = shores[k];
+                const std::string letter(1, static_cast<char>('A' + k));
+                std::printf("  %s%s at (%6.0f, %6.0f) side %+d: score %.2f, %4.0f m of gentle shore, %2.0f%% buildable behind, %5.0f m to the freeway\n",
+                            letter.c_str(), sh.pick ? " (pick)" : "       ", sh.at.x, sh.at.y, sh.side, sh.score, sh.shore, sh.back * 100.0, sh.toFreeway);
+                engine::IslandMapLayer& L = sh.pick ? picked : others;
+                std::vector<engine::Vec2> ring;
+                for (int q = 0; q <= 48; ++q) {
+                    const double ang = 2.0 * 3.14159265358979 * q / 48.0;
+                    ring.push_back(sh.at + engine::Vec2(std::cos(ang), std::sin(ang)) * 450.0);
+                }
+                L.lines.push_back(ring);
+                L.lines.push_back({sh.at, sh.at + sh.inland * 450.0});   // inland
+                L.tags.push_back({sh.at + engine::Vec2(0, 600.0), letter});
+            }
+            whole.layers.push_back(others);
+            whole.layers.push_back(picked);
         }
         const std::string base = outDir + "/island_" + std::to_string(seed);
         engine::writeIslandSvg(w, base + ".svg", whole);

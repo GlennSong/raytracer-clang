@@ -137,6 +137,36 @@ IslandWorld planIsland(const nlohmann::json& terrainBlock, double half = 10000.0
 // long-distance path). Needs the places' limits (routeFreewayRoundCities). Fills w.trails.
 void planTrails(IslandWorld& w);
 
+// A SANDY SHORE FOR A BEACH TOWN (~/.claude/plans/beach-town.md; Glenn, 2026-11-01: "A beach town with shops and
+// nearby homes" / "Two beach towns if you can fit it"). A shore cell is land beside the sea; it is GENTLE when the
+// ground a little inland stays low (no cliff, no bluff), the sea a little out stays shallow (a shelving beach) and no
+// river meets the sea there. A candidate is a gentle stretch with buildable ground behind it, clear of the places;
+// its score is the stretch's length and the ground behind, less for one far from the freeway (the rail loop runs
+// beside it: a place within the station rule's reach gets its stop).
+struct ShoreRule {
+    double riseAt = 120.0, maxRise = 8.0;             // the ground this far inland no higher than this (m)
+    double offshoreAt = 150.0, minOffshore = -12.0;   // the sea this far out no deeper than this (m)
+    double shoreReach = 700.0;                        // the stretch measured round each shore cell (m, a radius)
+    double minShore = 600.0;                          // gentle coast within it, at least (m)
+    double backDepth = 400.0, minBack = 0.35;         // buildable ground behind, as a share of samples this far in
+    double clearOfPlaces = 1500.0;                    // from a place's edge (its radius)
+    double spacing = 1500.0;                          // between two candidates
+    double apart = 4000.0;                            // between the two picks
+    double freewayReach = 1200.0;                     // farther from the freeway than this scores less
+    int candidates = 6;
+};
+struct ShoreSite {
+    Vec2 at;                  // the middle of its shore
+    Vec2 inland;              // unit, away from the sea
+    double shore = 0.0;       // m of gentle coast round it
+    double back = 0.0;        // the share of buildable ground behind it
+    double toFreeway = 0.0;   // m to the freeway as routed
+    int side = 0;             // which side of the range (+1, -1)
+    double score = 0.0;       // 0..1
+    bool pick = false;        // one of the (up to) two recommended: the best each side, or the best two `apart`
+};
+std::vector<ShoreSite> findBeachSites(const IslandWorld& w, const ShoreRule& rule = {});
+
 // The pass's (and mountain road's) ends run on into their towns: each end, trimmed at its town's limits,
 // joins the nearest of that town's arterial nodes (ADR-0135). Call after routeFreewayRoundCities.
 void joinPassToTowns(IslandWorld& w, const std::vector<std::pair<int, std::vector<Vec2>>>& arterialNodes);
@@ -199,6 +229,7 @@ struct IslandMapLayer {
     bool casing = false;                   // a dark edge round each line
     std::string dash;                      // an SVG stroke-dasharray over the line in white (a railway's ties); empty: solid
     std::string label;                     // its row in the map's legend; empty: none
+    std::vector<std::pair<Vec2, std::string>> tags;   // words written on the map at points (a candidate's letter)
 };
 struct IslandMapView {
     Vec2 centre{0, 0};
