@@ -9,6 +9,7 @@
 #include "../src/apps/citysim/scripting/signals_lua.h"
 #include "../src/engine/scripting/script_vm.h"
 
+#include <cmath>
 #include <cstdio>
 #include <fstream>
 #include <sstream>
@@ -190,6 +191,12 @@ TEST_CASE(people_lua_is_the_built_in_people) {
     refused("people.households.family.ties = { { 1, 'parent', 3 } }", "group it has not got");
     refused("people.households.family.ties = { { 2, 'cousin', 2 } }", "cousin");
     refused("people.households.couple.ties = { { 1, 'parent', 1 } }", "its own other side");
+    refused("people.bands.child.height = { 0.1, 0.9 }", "height");
+    // a child grows: about five eighths of an adult's height at five, nearly all of it at 17; an adult is full height;
+    // a senior a little shorter
+    CHECK(std::fabs(cpp.heightAt(5) - 0.62) < 1e-9 && std::fabs(cpp.heightAt(17) - 0.97) < 1e-9);
+    CHECK(cpp.heightAt(8) > 0.62 && cpp.heightAt(8) < cpp.heightAt(12));
+    CHECK(std::fabs(cpp.heightAt(30) - 1.0) < 0.01 && cpp.heightAt(80) < cpp.heightAt(30));
 }
 
 // THE SIGNALS' CYCLE: signals.lua is SignalTiming's defaults, and a time that is not positive is refused.

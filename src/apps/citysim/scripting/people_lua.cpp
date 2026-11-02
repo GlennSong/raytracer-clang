@@ -95,6 +95,18 @@ bool loadPeopleCatalog(ScriptVM& vm, citysim::PeopleCatalog& out, std::string* e
         citysim::AgeBand b;
         b.name = n;
         if (!range(L, t, "ages", b.lo, b.hi)) return bail("bands." + n + ": ages = { lo, hi }");
+        lua_getfield(L, t, "height");   // one number, or { at its youngest, at its oldest }
+        if (lua_isnumber(L, -1)) {
+            b.heightLo = b.heightHi = lua_tonumber(L, -1);
+        } else if (lua_istable(L, -1)) {
+            lua_rawgeti(L, -1, 1);
+            lua_rawgeti(L, -2, 2);
+            if (!lua_isnumber(L, -2) || !lua_isnumber(L, -1)) return bail("bands." + n + ": height = n or { lo, hi }");
+            b.heightLo = lua_tonumber(L, -2);
+            b.heightHi = lua_tonumber(L, -1);
+            lua_pop(L, 2);
+        }
+        lua_pop(L, 1);
         std::string unknown;
         if (!shares(L, t, "stages", stageNames, b.stages, unknown)) return bail("bands." + n + ": no stage `" + unknown + "`");
         c.bands.push_back(std::move(b));

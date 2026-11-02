@@ -25,6 +25,15 @@ int PeopleCatalog::household(const std::string& name) const {
     return -1;
 }
 
+double PeopleCatalog::heightAt(int age) const {
+    for (const AgeBand& b : bands)
+        if (age >= b.lo && age <= b.hi) {
+            const double t = b.hi > b.lo ? static_cast<double>(age - b.lo) / (b.hi - b.lo) : 0.0;
+            return b.heightLo + (b.heightHi - b.heightLo) * t;
+        }
+    return 1.0;
+}
+
 int PeopleCatalog::tie(const std::string& name) const {
     for (std::size_t i = 0; i < ties.size(); ++i)
         if (ties[i].name == name) return static_cast<int>(i);
@@ -43,6 +52,8 @@ std::string PeopleCatalog::check() const {
     for (const AgeBand& b : bands) {
         if (!seen.insert("band " + b.name).second) return "band `" + b.name + "` twice";
         if (b.lo < 0 || b.hi < b.lo || b.hi > 120) return "bands." + b.name + ": ages must be lo <= hi, 0..120";
+        if (b.heightLo < 0.3 || b.heightLo > 1.3 || b.heightHi < 0.3 || b.heightHi > 1.3)
+            return "bands." + b.name + ": a height is 0.3..1.3 of an adult's";
         double s = 0;
         for (const auto& [st, share] : b.stages) {
             if (st < 0 || st >= static_cast<int>(stages.size())) return "bands." + b.name + ": an unknown stage";
@@ -114,7 +125,7 @@ std::string PeopleCatalog::describe() const {
     for (const LifeStage& s : stages)
         o << "stage " << s.name << " job=" << s.job << " walks=" << s.walks << " beds=" << s.beds << " role=" << s.role << "\n";
     for (const AgeBand& b : bands) {
-        o << "band " << b.name << " " << b.lo << "-" << b.hi;
+        o << "band " << b.name << " " << b.lo << "-" << b.hi << " height=" << b.heightLo << "-" << b.heightHi;
         shares(b.stages, false);
         o << "\n";
     }
@@ -145,10 +156,10 @@ PeopleCatalog defaultPeopleCatalog() {
                 {"at_home", false, false, false, "at_home"},
                 {"retired", false, false, false, "retired"}};
     const int child = 0, working = 2, atHome = 3, retired = 4;
-    c.bands = {{"child", 0, 17, {{child, 1.0}}},
-               {"young", 18, 24, {{working, 0.6}, {atHome, 0.4}}},
-               {"adult", 25, 64, {{working, 0.8}, {atHome, 0.2}}},
-               {"senior", 65, 90, {{working, 0.15}, {retired, 0.85}}}};
+    c.bands = {{"child", 5, 17, {{child, 1.0}}, 0.62, 0.97},
+               {"young", 18, 24, {{working, 0.6}, {atHome, 0.4}}, 1.0, 1.0},
+               {"adult", 25, 64, {{working, 0.8}, {atHome, 0.2}}, 1.0, 0.99},
+               {"senior", 65, 90, {{working, 0.15}, {retired, 0.85}}, 0.98, 0.94}};
     const int kid = 0, young = 1, adult = 2, senior = 3;
     auto group = [](int lo, int hi, std::vector<std::pair<int, double>> bands, bool perBed = false) {
         MemberGroup g;

@@ -41,6 +41,8 @@ struct AgeBand {
     std::string name;
     int lo = 0, hi = 0;
     std::vector<std::pair<int, double>> stages;
+    // HOW TALL, against a grown adult (1): at its youngest age and at its oldest, in a line between (a child grows)
+    double heightLo = 1.0, heightHi = 1.0;
 };
 
 // Some members of a household, all of one band (drawn once for the group: a couple is two adults, not an adult and
@@ -89,6 +91,8 @@ struct PeopleCatalog {
     int band(const std::string& name) const;
     int household(const std::string& name) const;
     int tie(const std::string& name) const;
+    // A body's height at `age` against a grown adult's: its band's height line (1 for an age no band holds).
+    double heightAt(int age) const;
     // What is wrong with it ("" when nothing): a share-less band or type, a dwelling size no type fits, a hall rule
     // that names no beds stage, a stage with no job and no role, a lodger band with a walk-only stage, a tie whose
     // other side does not answer it, a household tie naming a group it has not got.

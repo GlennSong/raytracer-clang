@@ -12,8 +12,9 @@
 --   walks = true    they never drive: a child, a student in a hall
 --   beds  = true    they live in a hall's beds (places tagged beds), not a dwelling
 --
--- people.bands.<name> = { ages = { lo, hi }, stages = { <stage> = share, ... } }
---   an age band, and the life stages people of those ages lead
+-- people.bands.<name> = { ages = { lo, hi }, stages = { <stage> = share, ... }, height = n | { lo, hi } }
+--   an age band, the life stages people of those ages lead, and how tall they are against a grown adult (1): at the
+--   band's youngest age and its oldest, in a line between (a child grows; default 1)
 --
 -- people.households.<name> = { share = n, beds = { lo, hi }, members = { group, ... } }
 --   a kind of household: its share, the dwellings it fits (bedrooms lo..hi; 0 a studio) and who it is. A group is
@@ -44,10 +45,11 @@ people = {
 
   bands = {
     order = { "child", "young", "adult", "senior" },
-    child  = { ages = { 0, 17 },  stages = { child = 1 } },
+    -- (no babies or toddlers: nobody yet carries one, and a two-year-old does not walk to the park alone)
+    child  = { ages = { 5, 17 },  stages = { child = 1 }, height = { 0.62, 0.97 } },
     young  = { ages = { 18, 24 }, stages = { working = 0.6, at_home = 0.4 } },
-    adult  = { ages = { 25, 64 }, stages = { working = 0.8, at_home = 0.2 } },
-    senior = { ages = { 65, 90 }, stages = { working = 0.15, retired = 0.85 } },
+    adult  = { ages = { 25, 64 }, stages = { working = 0.8, at_home = 0.2 }, height = { 1, 0.99 } },
+    senior = { ages = { 65, 90 }, stages = { working = 0.15, retired = 0.85 }, height = { 0.98, 0.94 } },
   },
 
   ties = {

@@ -2670,22 +2670,31 @@ void CityRenderSystem::syncGroups(World& world) {
             carAgentIds_[v].push_back(static_cast<int>(ai));
         } else if (ped && !pedsExternallyOwned_) {   // walkers owned externally: no bake
             if (!sim_.pedVisible(static_cast<int>(ai))) continue;   // indoors / riding
+            // HOW TALL (people.lua band heights by age): every pose scaled about its feet, or its hip on a seat
+            const Real s = sim_.bodyScale(static_cast<int>(ai));
+            const Mat4 sized = Mat4::scale(s, s, s);
             CitySim::RestPose rp;
             if (sim_.restPose(static_cast<int>(ai), rp)) {   // sitting (M5), on the grass, lying in the sun
                 const Mat4 yaw = Mat4::rotateY(std::atan2(rp.face.x, rp.face.y));
                 if (rp.kind == CitySim::RestPose::Kind::Seat) {
-                    if (pedSeated) pedSeated->transforms.push_back(Mat4::translate(rp.pos.x, rp.hip, rp.pos.y) * yaw);
+                    if (pedSeated) pedSeated->transforms.push_back(Mat4::translate(rp.pos.x, rp.hip, rp.pos.y) * yaw * sized);
                 } else if (rp.kind == CitySim::RestPose::Kind::SitGround) {
                     if (pedGround)
-                        pedGround->transforms.push_back(Mat4::translate(rp.pos.x, groundAt(rp.pos.x, rp.pos.y) + kGroundSitHip, rp.pos.y) * yaw);
+                        pedGround->transforms.push_back(
+                            Mat4::translate(rp.pos.x, groundAt(rp.pos.x, rp.pos.y) + kGroundSitHip * s, rp.pos.y) * yaw * sized);
                 } else if (pedLie) {   // on its back, head away from the way it faces (its feet point there)
                     const Real bed = rp.raised ? rp.hip : groundAt(rp.pos.x, rp.pos.y);   // (a lounger's, or the ground)
-                    pedLie->transforms.push_back(Mat4::translate(rp.pos.x, bed + kLieHalfDepth, rp.pos.y) *
-                                                 yaw * Mat4::rotateX(-engine::PI * 0.5));
+                    pedLie->transforms.push_back(Mat4::translate(rp.pos.x, bed + kLieHalfDepth * s, rp.pos.y) *
+                                                 yaw * Mat4::rotateX(-engine::PI * 0.5) * sized);
                 }
                 continue;
             }
-            ped->push(agentPose(a), movingId(a, 0));
+            Mat4 pose = agentPose(a);
+            if (s != 1.0) {
+                pose.m[1][3] -= params_.pedSize.y * 0.5 * (1.0 - s);   // (agentPose stands the body half its height up)
+                pose = pose * sized;
+            }
+            ped->push(pose, movingId(a, 0));
             pedAgentIds_[0].push_back(static_cast<int>(ai));
         }
     }
@@ -2851,8 +2860,9 @@ void CityRenderSystem::syncGroups(World& world) {
                 fc[static_cast<std::size_t>(v)]->transforms.push_back(
                     Mat4::trs(Vec3(p.x, dcf.farY + hy, p.y), Quat::fromAxisAngle(Vec3(0, 1, 0), yaw), Vec3(1, 1, 1)));
             } else if (fp) {
+                const Real s = sim_.bodyScale(vi);   // (a child's height: the feet stay on the ground)
                 fp->transforms.push_back(
-                    Mat4::trs(Vec3(p.x, dcf.farY + 0.9, p.y), Quat::fromAxisAngle(Vec3(0, 1, 0), yaw), Vec3(1, 1, 1)));
+                    Mat4::trs(Vec3(p.x, dcf.farY + 0.9 * s, p.y), Quat::fromAxisAngle(Vec3(0, 1, 0), yaw), Vec3(s, s, s)));
             }
             ++farDrawn_;
         }

@@ -369,6 +369,8 @@ void CityWalkerSystem::driveWalkers(engine::FrameContext& ctx) {
                 pw.setCharacterPosition(cc->characterId, Vec3(rp.pos.x, gy + kCapsuleHalf + kCapsuleRadius, rp.pos.y));
             const Quat yaw = Quat::fromAxisAngle(Vec3(0, 1, 0), std::atan2(rp.face.x, rp.face.y));
             engine::MeshHandle mesh;
+            const Real s = sim.bodyScale(w.agentId);   // (how tall: about the hip on a seat, else the ground)
+            t->scale = Vec3(s, s, s);
             if (rp.kind == CitySim::RestPose::Kind::Seat) {
                 auto it = seatedMeshes_.find(w.outfit);
                 if (it == seatedMeshes_.end())
@@ -383,11 +385,11 @@ void CityWalkerSystem::driveWalkers(engine::FrameContext& ctx) {
                     it = groundSitMeshes_.emplace(w.outfit, ctx.assets.acquireMesh(buildGroundSittingPersonMesh(w.outfit),
                                                                                   "citywalk:groundsit" + std::to_string(w.outfit))).first;
                 mesh = it->second;
-                t->position = Vec3(rp.pos.x, gy + kGroundSitHip, rp.pos.y);
+                t->position = Vec3(rp.pos.x, gy + kGroundSitHip * s, rp.pos.y);
                 t->orientation = yaw;
             } else {   // lying on its back, feet the way it faces
                 mesh = poseMesh(ctx.assets, w.outfit, 0);
-                t->position = Vec3(rp.pos.x, (rp.raised ? rp.hip : gy) + kLieHalfDepth, rp.pos.y);
+                t->position = Vec3(rp.pos.x, (rp.raised ? rp.hip : gy) + kLieHalfDepth * s, rp.pos.y);
                 t->orientation = yaw * Quat::fromAxisAngle(Vec3(1, 0, 0), -engine::PI * 0.5);
             }
             if (Renderable* r = world.get<Renderable>(w.entity)) r->mesh = mesh;
@@ -562,9 +564,11 @@ void CityWalkerSystem::driveWalkers(engine::FrameContext& ctx) {
             t->orientation = yawQ * Quat::fromAxisAngle(Vec3(1, 0, 0), engine::PI * 0.5);
             t->scale = Vec3(1, 1, 1);
         } else {
-            t->position = pos;
+            // HOW TALL (people.lua band heights by age): the body scaled about its feet, the capsule's foot
+            const Real s = sim.bodyScale(w.agentId);
+            t->position = Vec3(pos.x, pos.y - (kCapsuleHalf + kCapsuleRadius) * (1.0 - s), pos.z);
             t->orientation = yawQ;
-            t->scale = Vec3(1, 1, 1);
+            t->scale = Vec3(s, s, s);
         }
 
         // THE LEASH NEEDS A WAY OUT. The tether holds the plan back until the

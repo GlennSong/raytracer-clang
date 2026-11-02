@@ -6577,12 +6577,15 @@ std::string CitySim::describeAgent(int i) const {
         static const char* kSes[] = {"gathering", "running", "ending", "dead"};
         sess = kSes[static_cast<int>(sessions_[static_cast<std::size_t>(a.session)].state)];
     }
-    char b[640];
+    const char* stageName = a.stage >= 0 && a.stage < static_cast<int>(people_.stages.size())
+                                ? people_.stages[static_cast<std::size_t>(a.stage)].name.c_str() : "-";
+    char b[800];
     std::snprintf(b, sizeof b,
-                  "agent %d %s tier %c pos %.1f %.1f speed %.2f heading %.2f %.2f moving %d state %s indoors %d visible %d | trip venue %d "
+                  "agent %d %s age %d %s household %d height %.2f tier %c pos %.1f %.1f speed %.2f heading %.2f %.2f moving %d state %s indoors %d visible %d | trip venue %d "
                   "seat %d phase %d activity %s (at %s) session %d %s role %d | route leg %d/%zu link %d%s dist %.1f | rest %.3f h "
                   "goal %.3f h | tethered %d lag %.2f player %d | lean %.2f -> %.2f",
-                  i, a.mode == Agent::Mode::Pedestrian ? "walker" : "driver", "DVK"[static_cast<int>(a.tier)], a.pos.x, a.pos.y,
+                  i, a.mode == Agent::Mode::Pedestrian ? "walker" : "driver", a.age, stageName, a.household,
+                  static_cast<double>(bodyScale(i)), "DVK"[static_cast<int>(a.tier)], a.pos.x, a.pos.y,
                   a.speed, a.heading.x, a.heading.y, a.moving ? 1 : 0, st >= 0 && st < 8 ? kStates[st] : "?", a.indoors ? 1 : 0,
                   pedVisible(i) ? 1 : 0, a.tripVenue, a.tripSeat, a.seatPhase, actName(a.tripActivity), actName(a.atActivity),
                   a.session, sess, a.sessionRole, a.leg, a.route.links.size(), link, foot ? " (footpath)" : "", a.distOnLeg,

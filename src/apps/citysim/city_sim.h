@@ -1325,6 +1325,13 @@ public:
     // WHO LIVES HERE (people.lua): ages, life stages and household types; assignPlaces fills the dwellings with them.
     void setPeople(PeopleCatalog c) { people_ = std::move(c); }
     const PeopleCatalog& people() const { return people_; }
+    // HOW TALL agent i is drawn against a grown adult (people.lua band heights, by age): 1 for anyone the plan did
+    // not make (a bus or cab driver)
+    Real bodyScale(int agentIndex) const {
+        if (agentIndex < 0 || agentIndex >= static_cast<int>(agents_.size())) return 1.0;
+        const Agent& a = agents_[static_cast<std::size_t>(agentIndex)];
+        return a.stage < 0 ? 1.0 : static_cast<Real>(people_.heightAt(a.age));
+    }
     // The households assignPlaces housed the agents in (Agent::household indexes it), and what it came to.
     const HouseholdPlan& households() const { return households_; }
     std::string populationLine() const { return describePlan(people_, households_); }

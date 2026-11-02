@@ -14376,3 +14376,21 @@ Plan step 4 (~/.claude/plans/kinds-are-data-assign-places.md): relationships ins
   ties, so every level's cache rebuilds once.
 
 Simplification: in three generations the grandparents are "parent" to both adults (one is an in-law).
+
+## ADR-0305 — People are drawn their age's height
+
+Plan step 5 (~/.claude/plans/kinds-are-data-assign-places.md): figure size by age.
+
+**Decision.**
+- people.lua bands gain `height` (against a grown adult; one number, or { at the band's youngest, at its oldest },
+  a line between). Children 0.62 at 5 to 0.97 at 17; adults 1 to 0.99; seniors 0.98 to 0.94. PeopleCatalog::heightAt
+  reads it; CitySim::bodyScale(i) is 1 for anyone the plan did not make (a bus or cab driver).
+- Every drawn body is scaled, its feet kept on the ground: the near walkers (about the capsule's foot), the crowd's
+  walking peds (agentPose stands a body half its height up), the far band, and the rest poses (seated about the hip
+  on the seat, sitting on the ground and lying at the scaled hip / half depth). Capsules stay adult-sized.
+- The child band is now 5-17: nobody carries a baby or walks a toddler yet (#174), and a two-year-old walking to the
+  park alone read wrong in the first look.
+- `who?` reports age, life stage, household and drawn height.
+
+Seen at noon in Deerhaven (island_8_beach): 54 children and 41 adults visible near the centre. With no schools
+(#173) children spend the day out, so they outnumber the working adults on the streets at midday.
