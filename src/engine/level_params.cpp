@@ -163,6 +163,15 @@ TerrainParams readTerrainParams(const json& t) {
         if (t.value("erode", false)) gp.maps = weatheredMapsFor(t);   // ADR-0128: nullptr unless weathered
         if (t.contains("trails") && t["trails"].is_array())                 // ADR-0134: the hiking trails
             gp.trails = std::make_shared<const TrailNetwork>(TrailNetwork::fromJson(t["trails"]));
+        if (t.contains("settled") && t["settled"].is_array()) {             // ADR-0313: a beach town's ground, not sand
+            std::vector<std::vector<Vec2>> polys;
+            for (const json& P : t["settled"]) {
+                std::vector<Vec2> poly;
+                for (const json& q : P) poly.push_back(Vec2(q[0].get<double>(), q[1].get<double>()));
+                if (poly.size() >= 3) polys.push_back(std::move(poly));
+            }
+            if (!polys.empty()) gp.settled = std::make_shared<const SettledGround>(std::move(polys));
+        }
         if (t.contains("forest") && t["forest"].is_object())                // ADR-0129: litter under the canopy
             gp.forest = std::make_shared<const ForestParams>(forestFromJson(t["forest"]));
         p.cover = std::make_shared<const GroundCover>(gp);

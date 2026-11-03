@@ -9,6 +9,8 @@
 #include "../city/roads/lanes/vertical_profile.h"   // profileAlong: the deck as the builder will make it   // diamondRamps: the one way on and off a freeway
 #include "../city/plan/land_shape.h"             // isoLines: contours, the coastline
 #include "place_names.h"
+#include "island_rail.h"    // the island loop's offset: where its line will run beside the freeway
+#include "island_scene.h"   // the carriageways' offset off the freeway's line
 #include "../../level_params.h"   // readTerrainParams: the island's terrain block, as a level reads it
 
 #include <tinygltf/stb_image_write.h>
@@ -2190,7 +2192,20 @@ std::vector<ShoreSite> findBeachSites(const IslandWorld& w, const ShoreRule& r) 
     return out;
 }
 
+namespace {
+int planCoastRoadOnce(IslandWorld& w, int fromSite, const Vec2& via, int toSite, const CoastRoadRule& r, std::string* why);
+}
+
 int planCoastRoad(IslandWorld& w, int fromSite, const Vec2& via, int toSite, const CoastRoadRule& r, std::string* why) {
+    const int ri = planCoastRoadOnce(w, fromSite, via, toSite, r, why);
+    if (ri >= 0 || !r.clearEnds) return ri;
+    CoastRoadRule asIs = r;   // its ends clear of the freeway found no way (they were on its inland side): as they are
+    asIs.clearEnds = false;
+    return planCoastRoadOnce(w, fromSite, via, toSite, asIs, why);
+}
+
+namespace {
+int planCoastRoadOnce(IslandWorld& w, int fromSite, const Vec2& via, int toSite, const CoastRoadRule& r, std::string* why) {
     const int n = w.n;
     const double cell = w.cell;
     // HOW FAR FROM THE SEA each cell is (m): a two-pass chamfer from the sea's cells
@@ -2225,35 +2240,21 @@ int planCoastRoad(IslandWorld& w, int fromSite, const Vec2& via, int toSite, con
     auto seaDist = [&](double x, double z) { const long k = idx(x, z); return k < 0 ? 0.0 : static_cast<double>(sea[static_cast<std::size_t>(k)]); };
     const std::vector<char> town = limitsRaster(w, 30.0);
     auto inTown = [&](double x, double z) { const long k = idx(x, z); return k >= 0 && town[static_cast<std::size_t>(k)]; };
-    // EACH END: the place's limits nearest the beach, stepped out of the town toward it
-    auto endOf = [&](int site) {
-        const IslandSite& s = w.sites.at(static_cast<std::size_t>(site));
-        Vec2 best = s.at;
-        double bd = 1e30;
-        for (const auto& L : s.limits)
-            for (const Vec2& q : L)
-                if ((q - via).length() < bd) { bd = (q - via).length(); best = q; }
-        const Vec2 out = normalize(via - best);
-        Vec2 e = best;
-        for (double t = 0.0; t <= 400.0 && (inTown(e.x, e.y) || w.water(e.x, e.y)); t += 20.0) e = best + out * t;
-        return e;
-    };
-    const Vec2 a = endOf(fromSite), b = endOf(toSite);
-    // THE BAND: behind the sand, within reach of the sea; near an end the road may leave it to meet the town
-    TerrainRouteParams rp;
-    rp.cell = r.cell; rp.maxGrade = r.maxGrade; rp.hardGrade = r.hardGrade; rp.gradeWeight = 600.0; rp.turnWeight = 8.0;
-    rp.maxTurnDeg = 60.0; rp.margin = 900.0;
     // THE FREEWAY'S CORRIDOR, `freewayClear` either side of its line (or, where the shore pinches it, `freewayHold`), on
     // the router's grid: out of the band -- a coast road that wove across it was a pair of bridges and a freeway heaved
     // over them -- unless no way round it exists
     const double fc = r.cell;
+    // THE ISLAND LOOP's line, as islandRailLoop will lay it: the carriageway on the towns' side, offset outward (the
+    // rail is laid after the roads, on the graph; the freeway's line and its offsets are all there is of it yet)
+    const double railLine = IslandSceneOptions{}.carriage + IslandRailOptions{}.offset;
+    const double freewayHold = railLine + r.railClear;
     const int fn = static_cast<int>(std::ceil(2.0 * w.half / fc)) + 1;
     std::vector<float> freeway(static_cast<std::size_t>(fn) * fn, 1e9f);   // m to the freeway's line, near it
     for (const std::vector<Vec2>* L : freewayLines(w))
         for (std::size_t k = 0; k + 1 < L->size(); ++k) {
             const Vec2 p0 = (*L)[k], ab = (*L)[k + 1] - p0;
             const int steps = std::max(1, static_cast<int>(ab.length() / (fc * 0.5)));
-            const int rr = static_cast<int>(std::ceil(r.freewayClear / fc));
+            const int rr = static_cast<int>(std::ceil(std::max(r.freewayClear, freewayHold) / fc));
             for (int t = 0; t <= steps; ++t) {
                 const Vec2 c = p0 + ab * (static_cast<double>(t) / steps);
                 const int ci = static_cast<int>(std::lround((c.x + w.half) / fc)), cj = static_cast<int>(std::lround((c.y + w.half) / fc));
@@ -2266,17 +2267,45 @@ int planCoastRoad(IslandWorld& w, int fromSite, const Vec2& via, int toSite, con
                     }
             }
         }
-    double keepOff = r.freewayClear;
-    auto onFreeway = [&](double x, double z) {
+    double keepOff = r.freewayClear, back = r.back;
+    auto freewayAt = [&](double x, double z) {
         const int i = static_cast<int>(std::lround((x + w.half) / fc)), j = static_cast<int>(std::lround((z + w.half) / fc));
-        return i >= 0 && j >= 0 && i < fn && j < fn && freeway[static_cast<std::size_t>(j) * fn + i] < keepOff;
+        return i >= 0 && j >= 0 && i < fn && j < fn ? static_cast<double>(freeway[static_cast<std::size_t>(j) * fn + i]) : 1e9;
     };
+    auto onFreeway = [&](double x, double z) { return freewayAt(x, z) < keepOff; };
+    // on the loop's line (either side of the freeway: the towns' is the one that counts), while the freeway holds
+    auto onRail = [&](double x, double z) { return keepOff > 0.0 && std::fabs(freewayAt(x, z) - railLine) < r.railClear; };
+    // EACH END: the place's limits nearest the beach CLEAR OF THE FREEWAY'S CORRIDOR (a town's limits run to the freeway: an end there was
+    // reached from the town's streets over the rail loop and left over it again, outside Ivycombe), stepped out of the
+    // town toward it; any of its limits when none are (or `clearEnds` is off: a caller's retry when the clear end found
+    // no way, on the freeway's inland side)
+    auto endOf = [&](int site) {
+        const IslandSite& s = w.sites.at(static_cast<std::size_t>(site));
+        Vec2 best = s.at;
+        double bd = 1e30;
+        for (const bool clear : {r.clearEnds, false}) {
+            for (const auto& L : s.limits)
+                for (const Vec2& q : L)
+                    if ((!clear || freewayAt(q.x, q.y) >= freewayHold) && (q - via).length() < bd) { bd = (q - via).length(); best = q; }
+            if (bd < 1e30) break;
+        }
+        const Vec2 out = normalize(via - best);
+        Vec2 e = best;
+        for (double t = 0.0; t <= 400.0 && (inTown(e.x, e.y) || w.water(e.x, e.y)); t += 20.0) e = best + out * t;
+        return e;
+    };
+    const Vec2 a = endOf(fromSite), b = endOf(toSite);
+    // THE BAND: behind the sand, within reach of the sea; near an end the road may leave it to meet the town
+    TerrainRouteParams rp;
+    rp.cell = r.cell; rp.maxGrade = r.maxGrade; rp.hardGrade = r.hardGrade; rp.gradeWeight = 600.0; rp.turnWeight = 8.0;
+    rp.maxTurnDeg = 60.0; rp.margin = 900.0;
     auto bandBlocked = [&](double x, double z) {
         if (w.water(x, z)) return true;
         const Vec2 q(x, z);
-        if ((q - a).length() < r.endFree || (q - b).length() < r.endFree) return inTown(x, z) && (q - a).length() > 60.0 && (q - b).length() > 60.0;
+        if ((q - a).length() < r.endFree || (q - b).length() < r.endFree)
+            return (inTown(x, z) || onRail(x, z)) && (q - a).length() > 60.0 && (q - b).length() > 60.0;
         const double d = seaDist(x, z);
-        return inTown(x, z) || d < r.back || d > r.reach || onFreeway(x, z);
+        return inTown(x, z) || d < back || d > r.reach || onFreeway(x, z);
     };
     rp.blocked = bandBlocked;
     // A RIVER IS CROSSED, NOT FOLLOWED: a run along its water (or a straight line tightened along it) took a road
@@ -2358,13 +2387,16 @@ int planCoastRoad(IslandWorld& w, int fromSite, const Vec2& via, int toSite, con
     }
     for (std::size_t k = 0; k + 1 < way.size(); ++k) {
         TerrainRoute leg = routeOnTerrain(ground, way[k], way[k + 1], rp);
-        // pinched between the freeway and the sand: nearer it (still past the rail loop beside it), then across it
-        for (const double off : {r.freewayHold, 0.0}) {
+        // pinched between the freeway and the sand: nearer it (just past the rail loop beside it), then down by the
+        // sand too (a road on the shore's edge), and only then across both
+        for (const auto& [off, bk] : {std::pair<double, double>{freewayHold, r.back}, {freewayHold, r.pinchedBack}, {0.0, r.back}}) {
             if (leg.points.size() >= 2) break;
             keepOff = off;
+            back = bk;
             leg = routeOnTerrain(ground, way[k], way[k + 1], rp);
         }
         keepOff = r.freewayClear;
+        back = r.back;
         if (leg.points.size() < 2) {
             if (why) {
                 char b[160];
@@ -2379,6 +2411,24 @@ int planCoastRoad(IslandWorld& w, int fromSite, const Vec2& via, int toSite, con
     finishRoad(rd, ground, [&](double x, double z) { return bandBlocked(x, z) || wet(x, z); });
     w.roads.push_back(rd);
     return static_cast<int>(w.roads.size()) - 1;
+}
+}  // namespace
+
+std::vector<Vec2> stripGround(const IslandWorld& w, const IslandSite& s) {
+    const SettlementKind& sk = w.kinds.of(s.kind);
+    if (!sk.strip || s.spine.size() < 2) return {};
+    const double sea = (sk.stripPromenade > 0.0 ? sk.stripPromenade : 0.0) + 8.0;   // (a sidewalk's width past its street)
+    const double land = sk.stripRow * (s.rows > 0 ? s.rows : sk.stripRows) + 25.0;     // (the depth addBeachTown fits)
+    std::vector<Vec2> seaSide, landSide;
+    for (std::size_t i = 0; i < s.spine.size(); ++i) {
+        const Vec2 tv = s.spine[std::min(i + 1, s.spine.size() - 1)] - s.spine[i > 0 ? i - 1 : 0];
+        Vec2 m = tv.length() > 1e-9 ? Vec2(-tv.y, tv.x) * (1.0 / tv.length()) : s.inland;
+        if (dot(m, s.inland) < 0) m = m * -1.0;
+        seaSide.push_back(s.spine[i] - m * sea);
+        landSide.push_back(s.spine[i] + m * land);
+    }
+    seaSide.insert(seaSide.end(), landSide.rbegin(), landSide.rend());
+    return seaSide;
 }
 
 int addBeachTown(IslandWorld& w, const Vec2& beach, const std::string& kind, const std::string& name, std::string* why) {
@@ -2456,6 +2506,7 @@ int addBeachTown(IslandWorld& w, const Vec2& beach, const std::string& kind, con
     s.name = name;
     s.spine = spine;
     s.inland = n;
+    s.beach = beach;
     s.rows = rows;
     s.at = sm + n * (sk.stripRow * rows * 0.5);
     s.radius = std::clamp(0.5 * (s1 - s0), sk.radiusMin, sk.radiusMax);

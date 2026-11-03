@@ -14518,3 +14518,46 @@ Result: 0 roads under a river (was 1). coast14 moves up to 181 m and crosses on 
 44 m. Nothing else in the plan changes except three street profiles where those roads meet their towns; the freeway
 is identical. Re-planned from the pre-beach level (~/Claude/backups/island_8_nature_2026-11-01), as the first build
 was: re-planning from the level as it now stands reads its beach towns back in another order, and renames them.
+
+## ADR-0311 — Re-planning keeps the beach towns; a coast road's end is off the freeway's corridor
+
+Two gaps in ADR-0309/0310. First: re-planning island_8_nature from the level as it stands (`--keep-sites` the level
+itself) lost Heathholm and grew its beach again as "Fernby". A kept beach town was handed to addBeachTown at its
+hub's centre, which lies inland of the beach it grew from, and `--beach-towns ACD` added the same beaches a second time.
+Second: outside Ivycombe the coast road to Marlwick (coast9) bridged the island loop twice, 160 m apart. Its end was
+the point of Ivycombe's limits nearest the beach, and a town's limits run to the freeway, so that end was 10 m off
+the freeway's line. joinPassToTowns then ran a straight approach from Ivycombe's streets to that end across the rail,
+and the road left it across the rail again.
+
+**Decision.**
+- A STRIP TOWN REMEMBERS ITS BEACH (`IslandSite::beach`, the hub's `beach` in the level). `--keep-sites` regrows a kept
+  strip town from the beach candidate (findBeachSites) nearest its `beach`, or nearest its seafront point nearest
+  its centre for a level written before this. A `--beach-towns` letter within a strip's length of a kept town's beach
+  is that town's and is skipped. The same recipe now re-plans the same towns.
+- A COAST ROAD'S ENDS ARE CLEAR OF THE FREEWAY'S CORRIDOR (`CoastRoadRule::clearEnds`): each is the nearest point of its
+  place's limits at least `freewayHold` off the freeway's line. When that finds no way (the clear end lay on the
+  freeway's inland side, as Heathholm's neighbour's did), planCoastRoad tries once more with its ends as they were.
+- THE ISLAND LOOP'S LINE IS KEPT CLEAR, END ZONES TOO: the rail is laid after the roads, so the coast road predicts its
+  line from the scene's carriage offset and the rail's offset (IslandSceneOptions::carriage +
+  IslandRailOptions::offset, 57 m off the freeway's line) and keeps `railClear` (24 m) off it. `freewayHold`, the
+  pinched road's fallback, is that line + railClear (81 m, was a fixed 70 m: 13 m from the track). A pinched road may
+  also run nearer the sand (`pinchedBack`, 15 m) before it crosses the freeway.
+
+Result, re-planned from the level itself: Marlwick, Heathholm and Deerhaven come back under their own names, numbers
+(p8, p9, p10) and blocks. coast9 crosses the rail 0 times (was 2), and the island loop crosses 9 roads (was 11).
+The freeway is identical (max profile dz 0 on all four carriageways). 75 of 2519 edges change: coast9 and two more coast
+legs, Marlwick's streets that hang off coast9, the rail profiles, and three link profiles.
+
+## ADR-0313 — A beach town stands on its own ground, not the beach's sand
+
+Deerhaven's beachfront blocks showed bare beach sand round their buildings, framed by the sidewalks, so the paving
+looked holed. The ground cover draws sand on anything lower than `beachHeight` (2.5 m) above the sea, and a strip town
+is built that low. An inland town's yards read as grass for the same reason.
+
+**Decision.** `stripGround(w, site)` (island_world.h) is a strip town's outline: from its promenade's sidewalk
+(the seafront's, with no promenade) inland to its last row's blocks (the depth addBeachTown fits). city_plan writes the
+outlines into the terrain block as `settled`, the way it writes `trails`, so the ground cover reads them with the rest
+of the terrain block. `GroundCoverParams::settled` (a `SettledGround`, boxed polygons) draws no sand inside them: the
+ground there is the lowland's grass and dirt. The beach beyond the promenade is unchanged, as are the activity areas
+on it (90 m out) and the town beach mask. Being in the terrain block, the outlines change the terrain's bake key,
+so no tag bump is needed.

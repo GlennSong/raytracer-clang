@@ -15,14 +15,23 @@
 
 #include "../../rt_math.h"
 #include "noise.h"
+#include "city/polygon.h"   // Vec2 (the settled ground's outlines)
 
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <vector>
 
 namespace engine {
 
 struct TerrainMaps;
+// SETTLED GROUND (the terrain block's "settled": a beach town's outline, island_world.h stripGround): no beach sand
+struct SettledGround {
+    std::vector<std::vector<Vec2>> polys;
+    std::vector<Vec2> lo, hi;   // each one's box
+    explicit SettledGround(std::vector<std::vector<Vec2>> p);
+    bool covers(double x, double z) const;
+};
 struct ForestParams;
 class TrailNetwork;
 
@@ -54,6 +63,7 @@ struct GroundCoverParams {
     std::shared_ptr<const ForestParams> forest;
     // HIKING TRAILS (ADR-0134): bare earth along the terrain's "trails", about 1.5 m wide, ragged
     std::shared_ptr<const TrailNetwork> trails;
+    std::shared_ptr<const SettledGround> settled;
 };
 
 struct Cover {

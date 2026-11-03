@@ -26,6 +26,21 @@ double smooth(double a, double b, double x) {
 Vec3 mix3(const Vec3& a, const Vec3& b, double t) { return a + (b - a) * t; }
 }  // namespace
 
+SettledGround::SettledGround(std::vector<std::vector<Vec2>> p) : polys(std::move(p)) {
+    for (const std::vector<Vec2>& P : polys) {
+        Vec2 a(1e30, 1e30), b(-1e30, -1e30);
+        for (const Vec2& q : P) { a = Vec2(std::min(a.x, q.x), std::min(a.y, q.y)); b = Vec2(std::max(b.x, q.x), std::max(b.y, q.y)); }
+        lo.push_back(a);
+        hi.push_back(b);
+    }
+}
+
+bool SettledGround::covers(double x, double z) const {
+    for (std::size_t k = 0; k < polys.size(); ++k)
+        if (x >= lo[k].x && x <= hi[k].x && z >= lo[k].y && z <= hi[k].y && pointInPolygon(polys[k], Vec2(x, z))) return true;
+    return false;
+}
+
 GroundCover::GroundCover(const GroundCoverParams& p) : p_(p), noise_(p.seed * 2654435761u + 17u) {}
 
 Cover GroundCover::at(double x, double z, double height, double normalUp, double normalX, double normalZ) const {
@@ -76,7 +91,7 @@ Cover GroundCover::at(double x, double z, double height, double normalUp, double
         ? std::max(smooth(-0.15, 0.15, (slope + 7.0 * jag - p_.rockSlopeDeg - 6.0 * (ms.soil - 0.5)) / 10.0),
                    high * smooth(0.25, 0.65, 1.0 - ms.soil + 0.15 * jag))
         : std::max(smooth(-0.15, 0.15, (slope + 7.0 * jag - p_.rockSlopeDeg) / 10.0), 0.55 * high);
-    const double sandRaw = sea ? 1.0 - smooth(-0.12, 0.12, (h + 1.2 * jag - p_.beachHeight) / p_.beachHeight) : 0.0;
+    const double sandRaw = sea && !(p_.settled && p_.settled->covers(x, z)) ? 1.0 - smooth(-0.12, 0.12, (h + 1.2 * jag - p_.beachHeight) / p_.beachHeight) : 0.0;
     const double patch = noise_.fbm2(x * 0.045 + 7.0, z * 0.045 - 3.0, 3) * 0.5 + 0.5 + 0.18 * fine;
     const double dryUp = smooth(p_.uplandHeight, p_.mountainHeight, h);
     const double dirtRaw = std::clamp(smooth(0.66 - 0.4 * p_.dirtPatches, 0.74 - 0.4 * p_.dirtPatches, patch) *

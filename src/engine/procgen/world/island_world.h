@@ -46,6 +46,7 @@ struct IslandSite {
     // A STRIP town's (a beach town, addBeachTown): the road it grew along -- its seafront street -- and the way inland
     std::vector<Vec2> spine;
     Vec2 inland{0, 0};
+    Vec2 beach{0, 0};          // the beach it grew from (a re-plan grows it again from here, --keep-sites)
     int rows = 0;              // its streets behind the seafront: as many of its kind's as stay clear of the freeway (0: the kind's)
 };
 
@@ -176,6 +177,10 @@ std::vector<ShoreSite> findBeachSites(const IslandWorld& w, const ShoreRule& rul
 
 // How far `q` is from the freeway (m): its route once there is one (w.freewayRoute), else its roads as planned.
 double freewayDistance(const IslandWorld& w, const Vec2& q);
+// A STRIP TOWN'S GROUND (a beach town's): the outline of what it is built on -- from its promenade's sidewalk (or the
+// seafront's, with no promenade) inland to its last row's blocks -- closed. The ground cover draws no sand on it: its
+// blocks' yards sat below the beach band's height and read as holes in the paving. Empty for a place not a strip.
+std::vector<Vec2> stripGround(const IslandWorld& w, const IslandSite& s);
 
 // THE COAST ROAD (~/.claude/plans/beach-town.md; Glenn, 2026-11-01: "a coastal road between cities ... a road that rides
 // along the beach ... where the beach towns grow out of ... a scenic route"): from `fromSite`'s limits through `via`
@@ -185,12 +190,16 @@ double freewayDistance(const IslandWorld& w, const Vec2& q);
 // and returns its index; -1 when the band has no way through (`why`: between which waypoints).
 struct CoastRoadRule {
     double back = 60.0, reach = 700.0;     // the band: metres from the sea
+    double pinchedBack = 15.0;             // ...nearer the sea where the freeway pinches it, before it crosses the freeway
     double guide = 150.0;                  // the line it RIDES, this far behind the shore (Glenn: "a road that rides along the beach")
     double step = 300.0;                   // its waypoints along that line
     double endFree = 250.0;                // within this of an end, the band does not hold
+    bool clearEnds = true;                 // each end on its place's limits clear of the freeway's corridor (the rail loop's side)
     double freewayClear = 90.0;            // off the freeway's line by this (m): a scenic road, not its frontage; near an end it may cross
     double riverWeight = 30.0, riverMargin = 6.0;   // each metre within a river's banks (+ margin) costs this many more: it crosses square (a run along one is no bridge, ADR-0310)
-    double freewayHold = 70.0;             // ...or this, where the shore pinches it: still seaward of the rail loop (45 m off a carriageway)
+    double railClear = 24.0;               // off the island loop's line by this (m), the end zones too: it runs beside the freeway on the
+                                           // towns' side, so a road weaving onto it bridged the line twice (outside Ivycombe). Where the
+                                           // shore pinches the road it holds just past it (the loop's line + this) before the freeway's
     double cell = 16.0, maxGrade = 0.07, hardGrade = 0.12;
 };
 int planCoastRoad(IslandWorld& w, int fromSite, const Vec2& via, int toSite, const CoastRoadRule& rule = {}, std::string* why = nullptr);

@@ -216,7 +216,20 @@ int main(int argc, char** argv) {
                         const engine::SettlementKind* sk = settlements.forHub(h.value("kind", std::string()));
                         s.kind = h.value("settlement", sk ? sk->name : settlements.kinds.front().name);
                         s.at = engine::Vec2(h["at"][0].get<double>(), h["at"][1].get<double>());
-                        if (settlements.of(s.kind).strip) keptBeaches.push_back({s.at, s.name});   // (not re-sited inland)
+                        // (a strip kind's: kept by where it grew -- its `beach`, else its seafront point nearest its
+                        // centre -- and grown again from the beach candidate nearest that; never re-sited inland)
+                        if (settlements.of(s.kind).strip) {
+                            engine::Vec2 b = s.at;
+                            if (h.contains("beach")) b = engine::Vec2(h["beach"][0].get<double>(), h["beach"][1].get<double>());
+                            else if (h.contains("line")) {
+                                double bd = 1e30;
+                                for (const auto& q : h["line"]) {
+                                    const engine::Vec2 p(q[0].get<double>(), q[1].get<double>());
+                                    if ((p - s.at).length() < bd) { bd = (p - s.at).length(); b = p; }
+                                }
+                            }
+                            keptBeaches.push_back({b, s.name});
+                        }
                         else keep.push_back(s);
                     }
                 std::printf("keeping %zu places from %s\n", keep.size(), argv[a + 1]);
@@ -317,12 +330,30 @@ int main(int argc, char** argv) {
             // candidates (findBeachSites, as --beaches letters them); each grows along its coast road and is planned
             // like any place, after the freeway is routed round the others (which it leaves as it was)
             {
+                // a kept town grows again from the beach candidate nearest where it grew (its `beach`, or its seafront)
+                // -- the very point the first plan grew it from, on this ground
+                const std::vector<engine::ShoreSite> shores = engine::findBeachSites(w);
+                double reach = 0.0;
+                for (const engine::SettlementKind& sk : w.kinds.kinds) if (sk.strip) reach = std::max(reach, sk.stripLength);
+                for (auto& [kat, knm] : keptBeaches) {
+                    const engine::ShoreSite* best = nullptr;
+                    for (const engine::ShoreSite& sh : shores)
+                        if ((sh.at - kat).length() < reach && (!best || (sh.at - kat).length() < (best->at - kat).length())) best = &sh;
+                    if (best) kat = best->at;
+                }
                 std::vector<std::pair<engine::Vec2, std::string>> beaches = keptBeaches;
                 for (int a = 4; a + 1 < argc; ++a) {
                     if (std::string(argv[a]) != "--beach-towns") continue;
-                    const std::vector<engine::ShoreSite> shores = engine::findBeachSites(w);
                     for (const char* L = argv[a + 1]; *L; ++L) {
                         const std::size_t c = static_cast<std::size_t>(std::toupper(*L) - 'A');
+                        // (a beach a kept town grew from is that town's: the same recipe re-plans the same towns)
+                        bool kept = false;
+                        for (const auto& [kat, knm] : keptBeaches)
+                            if (c < shores.size() && (shores[c].at - kat).length() < reach) {
+                                std::printf("--beach-towns: beach %c is %s's (kept)\n", *L, knm.c_str());
+                                kept = true;
+                            }
+                        if (kept) continue;
                         if (c < shores.size()) beaches.push_back({shores[c].at, std::string()});
                         else std::printf("--beach-towns: no beach %c (%zu candidates)\n", *L, shores.size());
                     }
@@ -470,6 +501,19 @@ int main(int argc, char** argv) {
                 }
                 terrain["trails"] = tr;
             }
+            // THE TOWNS' OWN GROUND (stripGround): the cover draws no beach sand on a strip town's blocks
+            {
+                nlohmann::json settled = nlohmann::json::array();
+                for (const engine::IslandSite& s : w.sites) {
+                    const std::vector<engine::Vec2> g = engine::stripGround(w, s);
+                    if (g.size() < 3) continue;
+                    nlohmann::json pl = nlohmann::json::array();
+                    for (const engine::Vec2& q : g) pl.push_back({std::round(q.x * 10.0) / 10.0, std::round(q.y * 10.0) / 10.0});
+                    settled.push_back(pl);
+                }
+                if (!settled.empty()) terrain["settled"] = settled;
+                else terrain.erase("settled");
+            }
             level["terrain"] = terrain;
             // the nature level's fields and light (ADR-0132): its grass layers, and its lighting (tuned for the forest)
             for (const char* k : {"grass", "grassLayers", "lighting"})
@@ -498,6 +542,7 @@ int main(int argc, char** argv) {
                     nlohmann::json line = nlohmann::json::array();
                     for (const engine::Vec2& q : w.sites[k].spine) line.push_back({q.x, q.y});
                     hub["line"] = line;
+                    hub["beach"] = {w.sites[k].beach.x, w.sites[k].beach.y};
                     if (sk.hubReach > 0) hub["radius"] = sk.hubReach;
                     nlohmann::json mixes = nlohmann::json::object();
                     for (const auto& [d, es] : sk.mixes) {
