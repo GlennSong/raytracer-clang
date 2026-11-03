@@ -104,6 +104,33 @@ BodyPose walkBodyPose(Real swing) {
     return pose;
 }
 
+BodyPose lieBodyPose(int variant) {
+    BodyPose pose;   // (at the origin, unturned: the hands and feet reached for are in the standing frame)
+    const int v = ((variant % kLiePoses) + kLiePoses) % kLiePoses;
+    // the ground is the back's plane once the body is turned over: the torso's back face, z = -0.13
+    auto footUp = [&](BlockBody::Part leg, Real side) { reachTo(pose, leg, Vec3(side, -0.62, -0.06)); };   // the knee up
+    auto behindHead = [&](BlockBody::Part arm, Real side) { reachTo(pose, arm, Vec3(side, 0.78, -0.10)); };
+    auto alongside = [&](Vec3& arm, Real& elbow, Real side) { arm = normalize(Vec3(side, -1.0, -0.05)); elbow = 0.15; };
+    pose.legL = normalize(Vec3(0.06, -1, 0));
+    pose.legR = normalize(Vec3(-0.06, -1, 0));
+    pose.kneeL = pose.kneeR = 0.05;
+    if (v == 0) {
+        behindHead(BlockBody::ArmL, 0.10);
+        behindHead(BlockBody::ArmR, -0.10);
+        footUp(BlockBody::LegR, -0.13);
+    } else if (v == 1) {
+        alongside(pose.armL, pose.elbowL, 0.22);
+        alongside(pose.armR, pose.elbowR, -0.22);
+        pose.legL = normalize(Vec3(0.12, -1, 0));
+        pose.legR = normalize(Vec3(-0.12, -1, 0));
+    } else {
+        reachTo(pose, BlockBody::ArmR, Vec3(-0.02, 0.74, 0.16));   // the forearm over the eyes
+        alongside(pose.armL, pose.elbowL, 0.22);
+        footUp(BlockBody::LegL, 0.13);
+    }
+    return pose;
+}
+
 bool advanceStride(Real& stridePhase, Real speed, Real dt) {
     if (speed <= kWalkAnimMinSpeed) return false;
     stridePhase += speed * dt / kStrideLength;

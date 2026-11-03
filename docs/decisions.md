@@ -14548,6 +14548,18 @@ Result, re-planned from the level itself: Marlwick, Heathholm and Deerhaven come
 The freeway is identical (max profile dz 0 on all four carriageways). 75 of 2519 edges change: coast9 and two more coast
 legs, Marlwick's streets that hang off coast9, the rail profiles, and three link profiles.
 
+## ADR-0312 — People lie down in a posed body
+
+The lying figures were stand-ins. A walker was the standing body turned onto its back, arms hanging straight past its
+hips, and the far crowd's lying group drew its plain standing block.
+
+**Decision.** `engine::lieBodyPose(variant)` (procgen/person.h) gives kLiePoses (3) lying poses in the jointed body's
+kit (block_body.h), set up in the standing frame so the existing turn onto the back still applies: hands behind the
+head with a knee up; arms at the sides; a forearm over the eyes with the other knee up. Hands and feet are placed by
+the kit's two-bone IK (reachTo). `buildLyingPersonMesh(outfit, variant)` builds it. Walkers cache one per outfit and
+pose. The crowd has one instance group per pose, and an agent's pose is its index mod 3 in both tiers, so a body
+keeps its pose between them.
+
 ## ADR-0313 — A beach town stands on its own ground, not the beach's sand
 
 Deerhaven's beachfront blocks showed bare beach sand round their buildings, framed by the sidewalks, so the paving

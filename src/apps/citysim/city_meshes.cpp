@@ -55,6 +55,9 @@ engine::RenderMesh buildGroundSittingPersonMesh(int outfit) {
     op.skin = o.skin;
     return engine::buildSeatedOccupant(op);
 }
+engine::RenderMesh buildLyingPersonMesh(int outfit, int variant) {
+    return engine::buildPosedPerson(engine::lieBodyPose(variant), outfit);
+}
 int playerOutfit() { return kNumOutfits - 1; }
 
 engine::RenderMesh buildPersonMesh(Real swing, int outfit) {

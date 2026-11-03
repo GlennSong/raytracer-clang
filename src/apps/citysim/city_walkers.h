@@ -155,6 +155,7 @@ private:
     // their transforms rewritten each step
     engine::Entity boardGroups_[2];
     std::unordered_map<int, engine::MeshHandle> groundSitMeshes_;   // by outfit: sitting on the grass
+    std::unordered_map<int, engine::MeshHandle> lieMeshes_;         // by outfit and pose: lying in the sun
     std::vector<char> haveWalker_;   // agentId -> has a body (reconcile scratch)
     std::vector<int> haveSet_;       // ...the ids marked (cleared next step, not the whole array)
     // THE FLICKER WATCH (Glenn: "agents flickering into view and then out"): a body removed and given back to the

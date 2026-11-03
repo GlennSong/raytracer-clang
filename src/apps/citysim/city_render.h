@@ -9,6 +9,7 @@
 #include "places.h"        // PlaceMap (ADR-0066)
 #include "../../engine/control/city_requests.h"
 #include "../../engine/control/control_commands.h"
+#include <array>
 #include <functional>
 #include <string>
 #include <unordered_map>
@@ -546,7 +547,7 @@ private:
     engine::Entity pedGroup_;
     engine::Entity pedSeatedGroup_;   // the drawn crowd's people sitting on benches and chairs (M5)
     engine::Entity pedGroundGroup_;   // ... sitting on the grass (a picnic)
-    engine::Entity pedLieGroup_;      // ... lying on it (in the sun)
+    std::array<engine::Entity, engine::kLiePoses> pedLieGroups_;   // ... lying on it (in the sun), one per pose
     // THE BEACH'S THINGS (Glenn, 2026-11-02: "a towel under them and an umbrella"): a towel under everyone lying out
     // on the ground, an umbrella over each group on the sand -- the furniture kit's pieces, one set of groups (one per
     // finish) per colour, their transforms rewritten each sync

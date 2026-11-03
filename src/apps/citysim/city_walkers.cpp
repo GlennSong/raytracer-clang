@@ -408,8 +408,13 @@ void CityWalkerSystem::driveWalkers(engine::FrameContext& ctx) {
                 mesh = it->second;
                 t->position = Vec3(rp.pos.x, gy + kGroundSitHip * s, rp.pos.y);
                 t->orientation = yaw;
-            } else {   // lying on its back, feet the way it faces
-                mesh = poseMesh(ctx.assets, w.outfit, 0);
+            } else {   // lying on its back, feet the way it faces, in the pose the crowd draws it in (by its agent)
+                const int v = w.agentId % engine::kLiePoses, key = w.outfit * engine::kLiePoses + v;
+                auto it = lieMeshes_.find(key);
+                if (it == lieMeshes_.end())
+                    it = lieMeshes_.emplace(key, ctx.assets.acquireMesh(buildLyingPersonMesh(w.outfit, v),
+                                                                        "citywalk:lie" + std::to_string(key))).first;
+                mesh = it->second;
                 t->position = Vec3(rp.pos.x, (rp.raised ? rp.hip : gy) + kLieHalfDepth * s, rp.pos.y);
                 t->orientation = yaw * Quat::fromAxisAngle(Vec3(1, 0, 0), -engine::PI * 0.5);
             }
@@ -839,6 +844,7 @@ void CityWalkerSystem::onStop(engine::FrameContext& ctx) {
     poseMeshes_.clear();
     seatedMeshes_.clear();
     groundSitMeshes_.clear();
+    lieMeshes_.clear();
 }
 
 }  // namespace citysim

@@ -1548,10 +1548,12 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
         InstanceGroup gs = g;
         gs.mesh = assets->acquireMesh(buildGroundSittingPersonMesh(0), "city:ped_ground_sit");
         world.add<InstanceGroup>(pedGroundGroup_, gs);
-        pedLieGroup_ = world.create();
-        InstanceGroup gl = g;
-        gl.mesh = pedMesh;
-        world.add<InstanceGroup>(pedLieGroup_, gl);
+        for (int v = 0; v < engine::kLiePoses; ++v) {
+            pedLieGroups_[static_cast<std::size_t>(v)] = world.create();
+            InstanceGroup gl = g;
+            gl.mesh = assets->acquireMesh(buildLyingPersonMesh(0, v), "city:ped_lie" + std::to_string(v));
+            world.add<InstanceGroup>(pedLieGroups_[static_cast<std::size_t>(v)], gl);
+        }
         for (int k = 0; k < 2; ++k) {   // THE BOARDS under riders in the crowd and the far band
             crowdBoardGroups_[k] = world.create();
             InstanceGroup bg = g;
@@ -2612,9 +2614,12 @@ void CityRenderSystem::syncGroups(World& world) {
     InstanceGroup* pedSeated = pedSeatedGroup_.valid() ? world.get<InstanceGroup>(pedSeatedGroup_) : nullptr;
     if (pedSeated) pedSeated->transforms.clear();
     InstanceGroup* pedGround = pedGroundGroup_.valid() ? world.get<InstanceGroup>(pedGroundGroup_) : nullptr;
-    InstanceGroup* pedLie = pedLieGroup_.valid() ? world.get<InstanceGroup>(pedLieGroup_) : nullptr;
+    std::array<InstanceGroup*, engine::kLiePoses> pedLie{};
+    for (std::size_t v = 0; v < pedLie.size(); ++v) {
+        pedLie[v] = pedLieGroups_[v].valid() ? world.get<InstanceGroup>(pedLieGroups_[v]) : nullptr;
+        if (pedLie[v]) pedLie[v]->transforms.clear();
+    }
     if (pedGround) pedGround->transforms.clear();
-    if (pedLie) pedLie->transforms.clear();
     InstanceGroup* boardsG[2];
     for (int k = 0; k < 2; ++k) {
         boardsG[k] = crowdBoardGroups_[k].valid() ? world.get<InstanceGroup>(crowdBoardGroups_[k]) : nullptr;
@@ -2703,9 +2708,10 @@ void CityRenderSystem::syncGroups(World& world) {
                     if (pedGround)
                         pedGround->transforms.push_back(
                             Mat4::translate(rp.pos.x, groundAt(rp.pos.x, rp.pos.y) + kGroundSitHip * s, rp.pos.y) * yaw * sized);
-                } else if (pedLie) {   // on its back, head away from the way it faces (its feet point there)
+                } else if (InstanceGroup* lie = pedLie[ai % pedLie.size()]) {   // on its back, head away from the way
+                    // it faces (its feet point there), in its own pose of the few
                     const Real bed = rp.raised ? rp.hip : groundAt(rp.pos.x, rp.pos.y);   // (a lounger's, or the ground)
-                    pedLie->transforms.push_back(Mat4::translate(rp.pos.x, bed + kLieHalfDepth * s, rp.pos.y) *
+                    lie->transforms.push_back(Mat4::translate(rp.pos.x, bed + kLieHalfDepth * s, rp.pos.y) *
                                                  yaw * Mat4::rotateX(-engine::PI * 0.5) * sized);
                 }
                 continue;
@@ -2901,7 +2907,7 @@ void CityRenderSystem::syncGroups(World& world) {
     refreshBounds(ped);
     refreshBounds(pedSeated);
     refreshBounds(pedGround);
-    refreshBounds(pedLie);
+    for (InstanceGroup* lie : pedLie) refreshBounds(lie);
     for (InstanceGroup* bg : boardsG) refreshBounds(bg);
     for (int s = 0; s < 3; ++s) refreshBounds(sig[s]);
     syncBeachThings(world);
