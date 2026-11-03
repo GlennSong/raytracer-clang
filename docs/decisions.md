@@ -14444,3 +14444,31 @@ The plan's proof (~/.claude/plans/kinds-are-data-assign-places.md): a census of 
 After: metro_v2_test (10,251 people, 5,028 households), river_town (8,615 / 4,264) and metro_planned (22,140 /
 10,867): no shared dwellings, no split households, every job holder's commute measured; seeds 1-3 plan cleanly. The
 island and a campus level are left for the full-island build (campus_lab has no citysim block).
+
+## ADR-0308 — Children play: playgrounds, tag, skateboards and scooters
+
+Glenn, 2026-11-02: "The kids should at least go and play. Roam around the neighborhood on skateboards or play at parks
+and playgrounds."
+
+**Decision.**
+- A ROLE NAMES ITS DAY OUT'S MENU (roles.lua `day.outings`, RoleDay::outingMenu, default "outing"); pickOuting follows
+  it. The child's is `kid_outing`.
+- `kid_outing` (activities.lua): from 7:00 to 20:00 the playground first (30%), then a skateboard (15%) or a scooter
+  (10%) round the block, else the park, tag, catch, a ride, a walk round the block, a chat or a picnic. Never an
+  adult's stop (a coffee, the shops, a meal out).
+- THE ACTIVITIES: `play` (a Roam session of up to eight on a playground, 0.8-2.6 m/s, 30-75 min); `tag` (up to six on
+  a park's lawn, 1.2-3.2 m/s); `skate` and `scoot` (a wander round the block, ridden).
+- A RIDE IS DATA ON THE ACTIVITY (`ride = { kind = "skateboard" | "scooter", pace = { lo, hi } }`, Ride in
+  activities.h, checked by the reader). The sim moves a rider at its pace times walking speed (its own bits pick where
+  in the band), the near walker body's catch-up ceiling scales with it, and CitySim::rideOf answers what a walker
+  rides on the trip it is on.
+- THE BOARDS ARE DRAWN under the riders, standing on the deck in the standing pose: near walkers (CityWalkerSystem's
+  two board groups), the crowd and the far band (CityRenderSystem's). One maker for each board, engine/board_meshes
+  (moved out of the player body system, which now uses it too).
+- PLAYGROUNDS BECOME PLAY AREAS at load: an open lot of the playground recipe gives a "playground" area (its box, a
+  metre in off the fence). An area site kind. No bake change.
+- `who?` reports the ride.
+
+Test (three seeds, a town of families with a playground and a park lawn, 9:00-17:00): 126-137 children played 42-49
+times at the playground, rode 165-180 times, played tag, catch and picnicked; no adult stops; riders faster than a
+walk. Deerhaven at 11:00: 9 of 85 visible children riding; a skateboard and a scooter shot.

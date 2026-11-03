@@ -28,7 +28,8 @@
 #include "../../engine/procgen/vehicle/occupant.h"   // people seated on the bus
 #include "../../engine/interior_occupants.h"         // people inside a streamed interior (campus M4)
 #include "../../engine/procgen/furniture_kit.h"
-#include "../../engine/furniture_draw.h"   // spawnFurnitureGroups: the beach's towels and umbrellas
+#include "../../engine/furniture_draw.h"
+#include "../../engine/board_meshes.h"   // the boards the riders ride   // spawnFurnitureGroups: the beach's towels and umbrellas
 #include "../../engine/procgen/city/building_records.h"
 #include "../../engine/procgen/city/building_uses.h"   // a home's use picks its dwellings' rule
 #ifdef RT_ENABLE_SCRIPTING
@@ -1551,6 +1552,14 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
         InstanceGroup gl = g;
         gl.mesh = pedMesh;
         world.add<InstanceGroup>(pedLieGroup_, gl);
+        for (int k = 0; k < 2; ++k) {   // THE BOARDS under riders in the crowd and the far band
+            crowdBoardGroups_[k] = world.create();
+            InstanceGroup bg = g;
+            bg.mesh = assets->acquireMesh(k == 0 ? engine::buildSkateboard() : engine::buildScooter(),
+                                          k == 0 ? "city:skateboard" : "city:scooter");
+            bg.material.albedo = Vec3(1, 1, 1);
+            world.add<InstanceGroup>(crowdBoardGroups_[k], bg);
+        }
         engine::FurnitureDrawCache beachDraw;
         for (uint32_t c = 0; c < 8; ++c)
             for (auto [pc, groups] : {std::pair<engine::Piece, std::vector<Entity>*>{engine::Piece::BeachTowel, &towelGroups_[c]},
@@ -2606,6 +2615,18 @@ void CityRenderSystem::syncGroups(World& world) {
     InstanceGroup* pedLie = pedLieGroup_.valid() ? world.get<InstanceGroup>(pedLieGroup_) : nullptr;
     if (pedGround) pedGround->transforms.clear();
     if (pedLie) pedLie->transforms.clear();
+    InstanceGroup* boardsG[2];
+    for (int k = 0; k < 2; ++k) {
+        boardsG[k] = crowdBoardGroups_[k].valid() ? world.get<InstanceGroup>(crowdBoardGroups_[k]) : nullptr;
+        if (boardsG[k]) boardsG[k]->transforms.clear();
+    }
+    // a rider's board, at its feet the way it heads (activities.lua `ride`)
+    auto boardUnder = [&](int ai, Real x, Real feetY, Real z, Real yaw) {
+        const Ride r = sim_.rideOf(ai);
+        InstanceGroup* bg = r == Ride::Skateboard ? boardsG[0] : r == Ride::Scooter ? boardsG[1] : nullptr;
+        if (bg) bg->transforms.push_back(Mat4::translate(x, feetY, z) * Mat4::rotateY(yaw));
+        return r != Ride::None ? (r == Ride::Skateboard ? Real(0.12) : Real(0.09)) : Real(0);   // the deck it stands on
+    };
     InstanceGroup* sig[3];
     for (int s = 0; s < 3; ++s) sig[s] = world.get<InstanceGroup>(signalGroups_[s]);
 
@@ -2690,6 +2711,11 @@ void CityRenderSystem::syncGroups(World& world) {
                 continue;
             }
             Mat4 pose = agentPose(a);
+            {
+                const Real feet = pose.m[1][3] - params_.pedSize.y * 0.5;
+                pose.m[1][3] += boardUnder(static_cast<int>(ai), pose.m[0][3], feet, pose.m[2][3],
+                                           std::atan2(a.heading.x, a.heading.y));
+            }
             if (s != 1.0) {
                 pose.m[1][3] -= params_.pedSize.y * 0.5 * (1.0 - s);   // (agentPose stands the body half its height up)
                 pose = pose * sized;
@@ -2861,8 +2887,9 @@ void CityRenderSystem::syncGroups(World& world) {
                     Mat4::trs(Vec3(p.x, dcf.farY + hy, p.y), Quat::fromAxisAngle(Vec3(0, 1, 0), yaw), Vec3(1, 1, 1)));
             } else if (fp) {
                 const Real s = sim_.bodyScale(vi);   // (a child's height: the feet stay on the ground)
+                const Real deck = boardUnder(vi, p.x, dcf.farY, p.y, yaw);
                 fp->transforms.push_back(
-                    Mat4::trs(Vec3(p.x, dcf.farY + 0.9 * s, p.y), Quat::fromAxisAngle(Vec3(0, 1, 0), yaw), Vec3(s, s, s)));
+                    Mat4::trs(Vec3(p.x, dcf.farY + deck + 0.9 * s, p.y), Quat::fromAxisAngle(Vec3(0, 1, 0), yaw), Vec3(s, s, s)));
             }
             ++farDrawn_;
         }
@@ -2875,6 +2902,7 @@ void CityRenderSystem::syncGroups(World& world) {
     refreshBounds(pedSeated);
     refreshBounds(pedGround);
     refreshBounds(pedLie);
+    for (InstanceGroup* bg : boardsG) refreshBounds(bg);
     for (int s = 0; s < 3; ++s) refreshBounds(sig[s]);
     syncBeachThings(world);
 

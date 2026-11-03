@@ -602,6 +602,10 @@ public:
     // hours if so.
     bool sideShiftTonight(const Agent& a, Real& start, Real& end) const;
     int sideJobs() const { return sideJobs_; }   // agents holding an evening job
+    // ON A BOARD (activities.lua `ride`: a child skating round the block): what walker i rides on the trip it is on --
+    // Ride::None on foot -- and the pace it rides at, times its walking speed (1 on foot).
+    Ride rideOf(int agentIndex) const;
+    Real ridePace(const Agent& a) const;
     Real departWorkHour(const Agent& a) const {
         const Real travel = a.commuteSeconds * (hoursPerSecond_ > 0 ? hoursPerSecond_ : 0.0);
         Real h = std::fmod(a.departWork - travel, 24.0);

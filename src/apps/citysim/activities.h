@@ -78,10 +78,15 @@ enum class Formation : uint8_t {
 };
 // How a member's body is held once it is in its place.
 enum class Pose : uint8_t { Stand, SitGround, Lie };
+// What a body rides on its way (a child skating round the block): nothing, or a board the engine draws
+// (engine/board_meshes.h). A ride sets the pace: `pace` times walking speed.
+enum class Ride : uint8_t { None, Skateboard, Scooter };
 const char* formationName(Formation f);
 const char* poseName(Pose p);
+const char* rideName(Ride r);
+bool rideFromName(const std::string& name, Ride& out);
 // Area site kinds: a session on one of the city's areas rather than a spot or a place.
-inline bool isAreaSiteKind(const std::string& k) { return k == "pitch" || k == "lawn" || k == "plaza" || k == "beach" || k == "shore"; }
+inline bool isAreaSiteKind(const std::string& k) { return k == "pitch" || k == "lawn" || k == "plaza" || k == "beach" || k == "shore" || k == "playground"; }
 
 // A ROLE in a group activity: how many take it, how fast they move, and which part of the area is theirs (-1 the
 // whole of it, 0 / 1 its first / second half along its length -- swapped at the session's half time).
@@ -120,6 +125,10 @@ struct ActivityDef {
     double radius = 0;
     // Offered only while a session of this activity is running within `distHi` (watching a game).
     std::string during;
+    // ON A BOARD (Glenn, 2026-11-02: "roam around the neighborhood on skateboards"): its trips ridden, at paceLo..paceHi
+    // times the rider's walking speed (their own bits pick where in the band)
+    Ride ride = Ride::None;
+    double paceLo = 1, paceHi = 1;
 };
 
 struct MenuEntry {

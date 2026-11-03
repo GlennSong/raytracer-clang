@@ -93,8 +93,8 @@ std::string RoleCatalog::describe() const {
     for (const ResidentRole& r : roles) {
         const RoleDay& d = r.day;
         std::snprintf(b, sizeof b,
-                      "role %s commute=%d pause=%g work=%g break=%s/%s/%s/%g repeat=%d errand=%d evening=%s share=%g\n",
-                      r.name.c_str(), d.commute ? 1 : 0, d.outingPause, d.workBeforeBreak, targetLabel(d.breakTarget),
+                      "role %s commute=%d pause=%g outings=%s work=%g break=%s/%s/%s/%g repeat=%d errand=%d evening=%s share=%g\n",
+                      r.name.c_str(), d.commute ? 1 : 0, d.outingPause, d.outingMenu.c_str(), d.workBeforeBreak, targetLabel(d.breakTarget),
                       d.breakMenu.c_str(), activityLabel(d.breakActivity), d.breakHours, d.breaksRepeat ? 1 : 0,
                       d.errand ? 1 : 0, d.eveningMenu.c_str(), r.nightOutShare);
         out += b;
@@ -229,7 +229,9 @@ RoleCatalog defaultRoleCatalog() {
     RoleDay out;
     out.commute = false;
     out.outingPause = 0.05;
+    out.outingMenu = "kid_outing";   // (the playground, a game of tag, a skateboard round the block)
     add("child", out, 0.0);
+    out.outingMenu = "outing";
     out.eveningMenu = "evening";
     add("at_home", out, 0.30);
     add("retired", out, 0.15);

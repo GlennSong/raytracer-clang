@@ -551,6 +551,7 @@ private:
     // on the ground, an umbrella over each group on the sand -- the furniture kit's pieces, one set of groups (one per
     // finish) per colour, their transforms rewritten each sync
     std::array<std::vector<engine::Entity>, 8> towelGroups_, umbrellaGroups_;
+    engine::Entity crowdBoardGroups_[2];   // the crowd's and the far band's riders' boards (skateboard, scooter)
     void syncBeachThings(engine::World& world);
     // THE MID-RANGE BAND (the 100k plan's M band; Glenn: "increase the number of people throughout the island"):
     // far (V) agents within farCarRadius / farPedRadius, drawn from CitySim::farDrawPose as cheap stand-ins -- a

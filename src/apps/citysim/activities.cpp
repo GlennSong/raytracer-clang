@@ -30,6 +30,20 @@ const char* formationName(Formation f) {
     return "?";
 }
 
+const char* rideName(Ride r) {
+    switch (r) {
+        case Ride::Skateboard: return "skateboard";
+        case Ride::Scooter: return "scooter";
+        default: return "none";
+    }
+}
+
+bool rideFromName(const std::string& name, Ride& out) {
+    for (Ride r : {Ride::None, Ride::Skateboard, Ride::Scooter})
+        if (name == rideName(r)) { out = r; return true; }
+    return false;
+}
+
 const char* poseName(Pose p) {
     switch (p) {
         case Pose::Stand: return "stand";
@@ -83,6 +97,10 @@ std::string ActivityCatalog::describe() const {
         if (!d.roles.empty() || !d.during.empty()) {
             std::snprintf(b, sizeof b, "  group min=%d gather=%g swap=%g during=%s formation=%s radius=%g\n", d.minPlayers,
                           d.gatherMinutes, d.swapAt, d.during.c_str(), formationName(d.formation), d.radius);
+            out += b;
+        }
+        if (d.ride != Ride::None) {
+            std::snprintf(b, sizeof b, "  ride %s pace=%g-%g\n", rideName(d.ride), d.paceLo, d.paceHi);
             out += b;
         }
     }
@@ -220,6 +238,22 @@ ActivityCatalog defaultActivityCatalog() {
     // (the shift) is over -- its length is the shift's, so the stop outlasts it
     { ActivityDef& d = def("side_job", {"side_job"}); d.distHi = 1e9; d.nearest = 1; d.minutesLo = 600; d.minutesHi = 600; }
 
+    // A CHILD'S DAY OUT (Glenn, 2026-11-02: "The kids should at least go and play. Roam around the neighborhood on
+    // skateboards or play at parks and playgrounds"): the playground, a game of tag on a park's lawn, a ride round the
+    // block on a skateboard or a scooter
+    { ActivityDef& d = def("play", {"playground"}); d.distHi = 900; d.nearest = 3; d.perform = Perform::Roam;
+      d.formation = Formation::Roam; d.minPlayers = 1; d.gatherMinutes = 15; d.minutesLo = 30; d.minutesHi = 75;
+      d.hourLo = 8; d.hourHi = 20;
+      RoleDef r; r.name = "kid"; r.n = 8; r.speedLo = 0.8; r.speedHi = 2.6; d.roles = {r}; }
+    { ActivityDef& d = def("tag", {"lawn"}); d.distHi = 700; d.nearest = 4; d.perform = Perform::Roam;
+      d.formation = Formation::Roam; d.minPlayers = 2; d.gatherMinutes = 10; d.minutesLo = 15; d.minutesHi = 30;
+      d.hourLo = 9; d.hourHi = 20;
+      RoleDef r; r.name = "runner"; r.n = 6; r.speedLo = 1.2; r.speedHi = 3.2; d.roles = {r}; }
+    { ActivityDef& d = def("skate", {"street"}); d.distLo = 150; d.distHi = 600; d.perform = Perform::Wander;
+      d.walkersOnly = true; d.hourLo = 8; d.hourHi = 20; d.ride = Ride::Skateboard; d.paceLo = 2.0; d.paceHi = 2.6; }
+    { ActivityDef& d = def("scoot", {"street"}); d.distLo = 150; d.distHi = 500; d.perform = Perform::Wander;
+      d.walkersOnly = true; d.hourLo = 8; d.hourHi = 20; d.ride = Ride::Scooter; d.paceLo = 1.5; d.paceHi = 2.0; }
+
     // A DAY OFF, by the hour: coffee and the park in the morning; the shops and lunch at midday; errands and the park
     // in the afternoon; dinner and a coffee in the evening -- a bench or a trip across town now and then all day
     Menu outing;
@@ -290,6 +324,15 @@ ActivityCatalog defaultActivityCatalog() {
     { MenuBand b; b.hourLo = 22.0; b.hourHi = 16.0;
       b.pick = {{"clubbing", 0, 3.0}, {"drinks", 0, 2.5}}; studentEvening.bands.push_back(b); }
     c.menus.push_back(studentEvening);
+    // A CHILD'S DAY OUT: the playground and a ride round the block first, else the park, a game, the beach's games
+    Menu kids;
+    kids.name = "kid_outing";
+    { MenuBand b; b.hourLo = 7.0; b.hourHi = 20.0; b.first = {{"play", 0.30, 0}, {"skate", 0.15, 0}, {"scoot", 0.10, 0}};
+      b.pick = {{"park_visit", 0, 3.0}, {"tag", 0, 2.0}, {"catch", 0, 1.5}, {"skate", 0, 1.0}, {"scoot", 0, 0.7},
+                {"walk_round_block", 0, 1.0}, {"chat", 0, 0.5}, {"picnic", 0, 0.5}};
+      kids.bands.push_back(b); }
+    { MenuBand b; b.hourLo = 20.0; b.hourHi = 7.0; b.pick = {{"walk_round_block", 0, 1.0}}; kids.bands.push_back(b); }
+    c.menus.push_back(kids);
     return c;
 }
 

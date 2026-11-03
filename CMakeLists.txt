@@ -67,6 +67,7 @@ add_library(engine_core STATIC
     src/engine/mesh_shapes.cpp
     src/engine/mesh_words.cpp
     src/engine/mesh_builder.cpp
+    src/engine/board_meshes.cpp          # the skateboard and scooter a body rides (player, citysim children)
     src/engine/bundle/bundle.cpp
     src/engine/bundle/bake.cpp
     src/engine/bundle/cache_use.cpp

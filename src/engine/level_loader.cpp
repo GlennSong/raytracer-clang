@@ -6517,6 +6517,15 @@ bool LevelLoader::load(const std::string& path,
                     }
                     for (const engine::LotBuilding::Area& ar : lb.areas)
                         cfg.activityAreas.push_back({ar.kind, ar.center.x, ar.center.y, ar.axis.x, ar.axis.y, ar.halfL, ar.halfW});
+                    // A PLAYGROUND (an open lot's, the swings and the frames): where the children play (activities.lua
+                    // `play`; Glenn, 2026-11-02: "play at parks and playgrounds") -- its box, a metre in off the fence
+                    if (lb.recipe == "playground" && lb.plan.size() >= 3) {
+                        const engine::OBB2 ob = engine::orientedBoundingBox(lb.plan);
+                        const int la = ob.longAxis();
+                        const double hl = ob.half[la] - 1.0, hw = ob.half[1 - la] - 1.0;
+                        if (hl > 2.0 && hw > 2.0)
+                            cfg.activityAreas.push_back({"playground", ob.center.x, ob.center.y, ob.axis[la].x, ob.axis[la].y, hl, hw});
+                    }
                     for (const engine::Poly2& lp : lb.loops) {
                         std::vector<std::array<double, 2>> pts;
                         for (const engine::Vec2& v : lp) pts.push_back({v.x, v.y});

@@ -478,6 +478,69 @@ TEST_CASE(students_work_their_evening_jobs_on_shift_nights) {
     }
 }
 
+// A CHILD'S DAY (Glenn, 2026-11-02: "The kids should at least go and play. Roam around the neighborhood on skateboards
+// or play at parks and playgrounds"): children's days out come from kid_outing -- the playground, tag on a park's
+// lawn, a skateboard or a scooter round the block -- and never an adult's stop (a coffee, the shops, a meal out). A
+// rider rolls faster than a walk. Three seeds.
+TEST_CASE(children_play_skate_and_scoot) {
+    for (uint32_t seed = 2; seed <= 4; ++seed) {
+        NavGraph nav = citytest::cityNav(800.0, 80.0, seed);
+        CitySim sim;
+        sim.build(nav, 20, 500, seed);
+        PlaceMap places;
+        std::vector<int> beds;
+        for (int d = 0; d < 6; ++d) beds.push_back(2 + d % 3);   // family-sized flats
+        for (int i = 0; i < 20; ++i) places.setDwellings(places.add(PlaceType::Home, Vec2(-330 + (i % 10) * 70.0, -330 + (i / 10) * 600.0), nav), beds);
+        for (int i = 0; i < 4; ++i) places.add(PlaceType::Office, Vec2(-300 + i * 160.0, 200), nav, 9, 17);
+        for (int i = 0; i < 3; ++i) places.add(PlaceType::Cafe, Vec2(-200 + i * 180.0, -40), nav, 7, 19);
+        places.add(PlaceType::Shop, Vec2(60, -200), nav, 9, 19);
+        places.add(PlaceType::Restaurant, Vec2(-60, -200), nav, 11, 22);
+        const PlaceId park = places.add(PlaceType::Park, Vec2(0, 0), nav);
+        (void)park;
+        sim.assignPlaces(places, nav);
+        CitySim::ActivityArea lawn;
+        lawn.kind = "lawn"; lawn.center = Vec2(0, 0); lawn.axis = Vec2(1, 0); lawn.halfL = 22; lawn.halfW = 14;
+        CitySim::ActivityArea yard = lawn;
+        yard.kind = "playground"; yard.center = Vec2(-160, 120); yard.halfL = 12; yard.halfW = 9;
+        sim.setAreas({lawn, yard});
+        sim.seedFromSchedule(9.0);
+        const ActivityCatalog& cat = sim.activityCatalog();
+        std::map<std::string, int> kidDid;
+        int adultStops = 0, riders = 0, fastRiders = 0, kids = 0;
+        for (const Agent& a : sim.agents()) kids += a.stage >= 0 && sim.people().stages[static_cast<std::size_t>(a.stage)].name == "child";
+        std::vector<uint8_t> seen(sim.agents().size() * cat.defs.size(), 0);
+        for (int i = 0; i < 40000 && sim.timeOfDay() < 17.0; ++i) {
+            sim.step(0.5, 0.0004);
+            for (int k = 0; k < static_cast<int>(sim.agents().size()); ++k) {
+                const Agent& a = sim.agents()[static_cast<std::size_t>(k)];
+                if (a.stage < 0 || sim.people().stages[static_cast<std::size_t>(a.stage)].name != "child") continue;
+                const int d = a.tripActivity >= 0 ? a.tripActivity : a.atActivity;
+                if (d < 0 || d >= static_cast<int>(cat.defs.size())) continue;
+                uint8_t& once = seen[static_cast<std::size_t>(k) * cat.defs.size() + static_cast<std::size_t>(d)];
+                if (!once) {
+                    once = 1;
+                    const std::string& n = cat.defs[static_cast<std::size_t>(d)].name;
+                    ++kidDid[n];
+                    adultStops += (n == "coffee" || n == "browse" || n == "meal" || n == "groceries") ? 1 : 0;
+                }
+                if (sim.rideOf(k) != Ride::None && a.moving) {
+                    ++riders;
+                    fastRiders += a.speed > 1.9 ? 1 : 0;
+                }
+            }
+        }
+        std::string did;
+        for (const auto& [n, c] : kidDid) did += (did.empty() ? "" : ", ") + n + " " + std::to_string(c);
+        std::printf("    [kids] seed %u: %d children; did: %s; riding samples %d (%d faster than a walk); adult stops %d\n", seed, kids,
+                    did.c_str(), riders, fastRiders, adultStops);
+        CHECK(kids > 20);
+        CHECK(kidDid["play"] > 0);
+        CHECK(kidDid["skate"] + kidDid["scoot"] > 0);
+        CHECK(adultStops == 0);
+        CHECK(riders > 0 && fastRiders > riders / 2);
+    }
+}
+
 // THE HOUSEHOLDS' TIES (people.lua ties; Glenn's plan step 4): on every seed, every household's members are as old as
 // its ties need (a parent 18 years older than each child, a grandparent 36), and the sim ties its housemates -- each
 // pair a Household bond, a parent's child seeing them as its parent -- and nobody outside the dwelling.
@@ -960,7 +1023,9 @@ TEST_CASE(every_activity_in_the_catalog_keeps_the_rules) {
     sand.kind = "beach"; sand.center = Vec2(-250, 120); sand.halfL = 26; sand.halfW = 18;
     CitySim::ActivityArea shore = lawnQ;   // ...and its shore, the wet sand at the water's edge
     shore.kind = "shore"; shore.center = Vec2(-250, 145); shore.halfL = 29; shore.halfW = 3.5;
-    sim.setAreas({pitch, lawnQ, lawnP, sand, shore});
+    CitySim::ActivityArea play = lawnQ;    // a playground (an open lot's)
+    play.kind = "playground"; play.center = Vec2(120, -120); play.halfL = 12; play.halfW = 8;
+    sim.setAreas({pitch, lawnQ, lawnP, sand, shore, play});
     sim.assignPlaces(places, nav);
     sim.seedFromSchedule(13.0);   // the afternoon into the night: the night's activities open from 16:30
 

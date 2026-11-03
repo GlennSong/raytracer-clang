@@ -3,6 +3,7 @@
 #include <cstdio>
 
 #include "../../engine/asset_manager.h"
+#include "../../engine/board_meshes.h"   // the skateboard and scooter a child rides
 #include "../../engine/components.h"
 #include "../../engine/mesh_builder.h"
 #include "../../engine/world.h"
@@ -342,6 +343,26 @@ void CityWalkerSystem::driveWalkers(engine::FrameContext& ctx) {
 
     std::vector<CityRenderSystem::ExternalAgentPose> widgetPoses;
     widgetPoses.reserve(walkers_.size());
+    // THE BOARDS (a child skating round the block): made once, refilled below from the walkers riding one
+    engine::InstanceGroup* boards[2] = {nullptr, nullptr};
+    for (int k = 0; k < 2; ++k) {
+        if (!boardGroups_[k].valid()) {
+            boardGroups_[k] = world.create();
+            engine::InstanceGroup bg;
+            bg.mesh = ctx.assets.acquireMesh(k == 0 ? engine::buildSkateboard() : engine::buildScooter(),
+                                             k == 0 ? "citywalk:skateboard" : "citywalk:scooter");
+            bg.material.albedo = Vec3(1, 1, 1);
+            bg.material.roughness = 0.6f;
+            bg.renderLayer = engine::LayerSim;
+            bg.drawClass = engine::DrawClass::SimBody;
+            bg.boundsRadius = 1e7;   // (a handful of boards anywhere near the player: never culled as a group)
+            world.add<engine::InstanceGroup>(boardGroups_[k], bg);
+        }
+    }
+    for (int k = 0; k < 2; ++k) {   // (after both are made: adding one may move the other)
+        boards[k] = world.get<engine::InstanceGroup>(boardGroups_[k]);
+        if (boards[k]) boards[k]->transforms.clear();
+    }
 
     for (Walker& w : walkers_) {
         if (!world.alive(w.entity)) continue;
@@ -488,8 +509,10 @@ void CityWalkerSystem::driveWalkers(engine::FrameContext& ctx) {
             Vec2 steer(0, 0);
             Vec2 to(g.pos.x - posXZ.x, g.pos.y - posXZ.y);
             Real d = to.length();
+            // (on a board the body keeps up with its ride: the ceiling scales with the pace)
+            const Real walkMax = kWalkMax * std::max(Real(1), sim.ridePace(g));
             if (d > kWalkStandoff) {
-                Real speed = std::min(kWalkMax, kWalkGain * (d - kWalkStandoff));
+                Real speed = std::min(walkMax, kWalkGain * (d - kWalkStandoff));
                 steer = Vec2(to.x / d * speed, to.y / d * speed);
             }
             for (std::size_t p = 0; p < people.size(); ++p) {
@@ -502,7 +525,7 @@ void CityWalkerSystem::driveWalkers(engine::FrameContext& ctx) {
                 }
             }
             Real sl = steer.length();
-            if (sl > kWalkMax) steer = steer * (kWalkMax / sl);
+            if (sl > walkMax) steer = steer * (walkMax / sl);
             desired = Vec3(steer.x, 0, steer.y);
             // Wants to walk but the body is pinned (crowd, parked car, wall):
             // stop trying for a beat — a standing person reads as "waiting", a
@@ -542,8 +565,9 @@ void CityWalkerSystem::driveWalkers(engine::FrameContext& ctx) {
         // WALK CYCLE: the stride phase advances with the body's REAL speed, so
         // the legs move exactly as fast as the ground goes by — a held body
         // stands (pose 0), a knocked-down one keeps whatever it fell in.
+        const Ride ride = sim.rideOf(w.agentId);   // on a board: standing on it, rolling
         if (!down) {
-            int pose = walkPoseIndex(w.stride, hSpeed, dt);
+            int pose = ride != Ride::None ? 0 : walkPoseIndex(w.stride, hSpeed, dt);
             if (Renderable* r = world.get<Renderable>(w.entity))
                 r->mesh = poseMesh(ctx.assets, w.outfit, pose);
         }
@@ -566,9 +590,13 @@ void CityWalkerSystem::driveWalkers(engine::FrameContext& ctx) {
         } else {
             // HOW TALL (people.lua band heights by age): the body scaled about its feet, the capsule's foot
             const Real s = sim.bodyScale(w.agentId);
-            t->position = Vec3(pos.x, pos.y - (kCapsuleHalf + kCapsuleRadius) * (1.0 - s), pos.z);
+            const Real feet = pos.y - (kCapsuleHalf + kCapsuleRadius);
+            const Real deck = ride == Ride::Skateboard ? 0.12 : ride == Ride::Scooter ? 0.09 : 0.0;   // stood on its deck
+            t->position = Vec3(pos.x, pos.y - (kCapsuleHalf + kCapsuleRadius) * (1.0 - s) + deck, pos.z);
             t->orientation = yawQ;
             t->scale = Vec3(s, s, s);
+            engine::InstanceGroup* bg = ride == Ride::Skateboard ? boards[0] : ride == Ride::Scooter ? boards[1] : nullptr;
+            if (bg) bg->transforms.push_back(engine::Mat4::translate(pos.x, feet, pos.z) * engine::Mat4::rotateY(yaw));
         }
 
         // THE LEASH NEEDS A WAY OUT. The tether holds the plan back until the

@@ -33,6 +33,7 @@ struct RoleDay {
     // sets one), until the window closes.
     bool commute = true;
     double outingPause = 0.05;
+    std::string outingMenu = "outing";   // the day out's stops: this activity menu (a child's: kid_outing)
     // At work: hours before the first break (0: no break -- at work until the window closes).
     double workBeforeBreak = 0;
     // The break: where it goes (Lunch, Campus, or Activity with `breakMenu`), the label it wears, how long it lasts,

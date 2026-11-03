@@ -16,6 +16,7 @@
 --   day = {
 --     commute           = true | false   to work and back; false: a day OUT instead (stop to stop off the outing table)
 --     outing_pause      = hours          (a day out) the pause at each stop, when the stop sets none
+--     outings           = "<menu>"       (a day out) the activity menu its stops come from (default "outing")
 --     work_before_break = hours          at work before the first break (0: no break)
 --     pause = { target = "lunch" | "campus" | "activity", menu = "<activity menu>", label = "Lunch" | "Outing" | ...,
 --               hours = h, repeats = true }   -- the break; repeats: work, break, work, break... else one, then the PM
@@ -65,8 +66,9 @@ roles = {
                  start = { 17.5, 18.5 }, finish = { 21.5, 23.0 }, nights = 0.6, reach = 1500 },
   },
   -- no job: a day out instead (the park, a cafe, the shops, round the block). A child is never out at night alone.
+  -- ...the playground, a game of tag, a skateboard round the block (activities.lua kid_outing)
   child = {
-    day = { commute = false, outing_pause = 0.05 },
+    day = { commute = false, outing_pause = 0.05, outings = "kid_outing" },
     night_out = 0,
   },
   at_home = {

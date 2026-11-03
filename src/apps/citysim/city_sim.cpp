@@ -2466,6 +2466,23 @@ void CitySim::dormantGlide(Agent& a, Real seconds) {
     a.heading = nav_->direction(a.route.links[static_cast<std::size_t>(a.leg)]);
 }
 
+Ride CitySim::rideOf(int i) const {
+    if (i < 0 || i >= static_cast<int>(agents_.size())) return Ride::None;
+    const Agent& a = agents_[static_cast<std::size_t>(i)];
+    if (a.mode != Agent::Mode::Pedestrian || !a.moving || a.tripActivity < 0 ||
+        a.tripActivity >= static_cast<int>(catalog_.defs.size()))
+        return Ride::None;
+    return catalog_.defs[static_cast<std::size_t>(a.tripActivity)].ride;
+}
+
+Real CitySim::ridePace(const Agent& a) const {
+    if (a.mode != Agent::Mode::Pedestrian || a.tripActivity < 0 || a.tripActivity >= static_cast<int>(catalog_.defs.size()))
+        return 1.0;
+    const ActivityDef& d = catalog_.defs[static_cast<std::size_t>(a.tripActivity)];
+    if (d.ride == Ride::None) return 1.0;
+    return d.paceLo + (d.paceHi - d.paceLo) * static_cast<Real>((a.brain >> 11) & 0xFF) / 255.0;   // its own bits
+}
+
 bool CitySim::sideShiftTonight(const Agent& a, Real& start, Real& end) const {
     if (a.sideVenue < 0 || a.role >= roles_.roles.size()) return false;
     const long night = static_cast<long>(std::floor((clockTotalHours_ - 12.0) / 24.0));   // noon to noon
@@ -3582,7 +3599,9 @@ engine::Vec2 CitySim::freeStandingSpot(const Agent& a, engine::Vec2 want,
 // park or a coffee is likelier than the town hall; never straight back to
 // the stop just left. Sets a.tripVenue (-1 for the plain walk).
 int CitySim::pickOuting(Agent& a, int origin) {
-    const Menu* m = catalog_.menu("outing");
+    // the role's own day out (roles.lua `outings`: a child's kid_outing), else the outing menu
+    const Menu* m = a.role < roles_.roles.size() ? catalog_.menu(roles_.roles[a.role].day.outingMenu) : nullptr;
+    if (!m) m = catalog_.menu("outing");
     return m ? pickFromMenu(a, origin, *m) : -1;
 }
 
@@ -5386,8 +5405,8 @@ void CitySim::advance(Agent& a, Real dt, Real gap, Real minGap) {
     // Nominal pace scaled by personality (ADR-0062): drivers and walkers each
     // hold their OWN fraction of the limit, so traffic doesn't move in lockstep.
     // Junction/signal caps are shared road rules and stay unscaled.
-    Real target = (car ? engine::classSpeed(nav_->links[li].klass) : kWalkSpeed) *
-                  a.speedFactor;
+    Real target = (car ? engine::classSpeed(nav_->links[li].klass) : kWalkSpeed * ridePace(a)) *
+                  a.speedFactor;   // (a walker on a board rides at its pace: activities.lua `ride`)
     // A car's launch is its own (item 23): nine tenths of what its body can pull away at, the headroom the stock
     // kCarAccel kept over the old box sedan, and never over kCarAccel -- a bus pulls away like a bus.
     Real accel = kPedAccel;
@@ -6699,11 +6718,11 @@ std::string CitySim::describeAgent(int i) const {
                                 ? people_.stages[static_cast<std::size_t>(a.stage)].name.c_str() : "-";
     char b[800];
     std::snprintf(b, sizeof b,
-                  "agent %d %s age %d %s household %d height %.2f tier %c pos %.1f %.1f speed %.2f heading %.2f %.2f moving %d state %s indoors %d visible %d | trip venue %d "
+                  "agent %d %s age %d %s household %d height %.2f ride %s tier %c pos %.1f %.1f speed %.2f heading %.2f %.2f moving %d state %s indoors %d visible %d | trip venue %d "
                   "seat %d phase %d activity %s (at %s) session %d %s role %d | route leg %d/%zu link %d%s dist %.1f | rest %.3f h "
                   "goal %.3f h | tethered %d lag %.2f player %d | lean %.2f -> %.2f",
                   i, a.mode == Agent::Mode::Pedestrian ? "walker" : "driver", a.age, stageName, a.household,
-                  static_cast<double>(bodyScale(i)), "DVK"[static_cast<int>(a.tier)], a.pos.x, a.pos.y,
+                  static_cast<double>(bodyScale(i)), rideName(rideOf(i)), "DVK"[static_cast<int>(a.tier)], a.pos.x, a.pos.y,
                   a.speed, a.heading.x, a.heading.y, a.moving ? 1 : 0, st >= 0 && st < 8 ? kStates[st] : "?", a.indoors ? 1 : 0,
                   pedVisible(i) ? 1 : 0, a.tripVenue, a.tripSeat, a.seatPhase, actName(a.tripActivity), actName(a.atActivity),
                   a.session, sess, a.sessionRole, a.leg, a.route.links.size(), link, foot ? " (footpath)" : "", a.distOnLeg,

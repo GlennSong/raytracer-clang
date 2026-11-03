@@ -83,6 +83,7 @@ bool loadRoleCatalog(ScriptVM& vm, citysim::RoleCatalog& out, std::string* err) 
         const int dt = lua_gettop(L);
         d.commute = flag(L, dt, "commute", true);
         d.outingPause = num(L, dt, "outing_pause", d.outingPause);
+        { const std::string om = str(L, dt, "outings"); if (!om.empty()) d.outingMenu = om; }
         d.workBeforeBreak = num(L, dt, "work_before_break", 0);
         d.errand = flag(L, dt, "errand", false);
         d.eveningMenu = str(L, dt, "evening");
