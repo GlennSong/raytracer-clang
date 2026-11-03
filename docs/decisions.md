@@ -14591,11 +14591,25 @@ guaranteed school or church.
   makes the hubs of one `_place` one cluster (`LotParams::landmarkClusters`, 1 up). planLandmarks plans each from its
   own list, or the civic table centred on its own hub (`landmarkKindNamed`). Every planned place gets its own
   anchors: each island city its own capitol and courthouse.
-- Hubs that carry neither stay cluster 0, planned exactly as before. Every other level's lots are unchanged, and the
-  lots cache key already holds the level's citysim block, so only a re-planned level re-bakes: no lots tag bump.
+- A LOT IS THE PLACE'S WHOSE LIMITS HOLD IT (the hub's `limits`, simplified to 2 m). The nearest centre gave a city's
+  outskirts to the town beside it: Deerhaven's church stood in Saltwood's southern suburbs. A lot inside no place's
+  limits (a house on a country road between towns) is nobody's and gets no landmark; Deerhaven's school had been
+  planned 1.3 km out of town. A level whose hubs carry no limits keeps the nearest hub.
+- Hubs that carry neither stay cluster 0, planned as before.
+- A LOT THAT IS ALREADY SOMETHING (a big-box block's store, a campus, a bus depot, a car park) is no landmark
+  candidate. The planner takes the biggest lots, and a landmark it put on one was dropped afterwards, not moved:
+  the first island bake of this change gave each beach town its school and church, but its market hall and police
+  post went to its car-park blocks and vanished. This moves landmarks on every level where that happened: lots tag
+  2026-11-03.1.
 - THE BEACH CAR PARKS are now the first and last blocks of the plan's own beachfront row: the blocks seaward of the
   seafront and short of the promenade, each named by its centroid. Before, they were points spaced along the
   seafront by the strip's cross-street spacing, and one fell outside its block where the seafront curved.
 
 Test: `landmarks_by_each_places_kind` (two civic cities each get their own courthouse and capitol; a beach town gets
-its four and no university or hospital).
+its four and no university or hospital; country lots get none). `level_print_landmarks_by_place`
+(RT_PRINT_LANDMARKS=island_8_nature.json) counts a level's landmark buildings by place.
+
+island_8_nature after: Saltwood and Weyby each have a capitol, a courthouse, a university and a museum, with schools,
+churches and fire stations by their quarters (Saltwood 47 schools, by the city table's 1 + residential lots / 50).
+Each of the six towns has a school and a church. Each beach town has a school, a church, a market hall and a police
+post, all inside its limits. Before, the whole island was one city.

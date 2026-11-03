@@ -818,6 +818,59 @@ TEST_CASE(level_blueprints_and_graph_gate) {
     }
 }
 
+// WHERE THE LANDMARKS STAND (ADR-0314: each place plans its own, by its kind): every landmark building of a level,
+// counted by the place whose hub it is nearest. Printed; RT_PRINT_LANDMARKS=level.json (a name in assets/levels).
+TEST_CASE(level_print_landmarks_by_place) {
+    const char* lv = std::getenv("RT_PRINT_LANDMARKS");
+    if (!lv) return;
+    const std::string path = levelsDir() + "/" + lv;
+    nlohmann::json root;
+    { std::ifstream in(path); if (in) in >> root; }
+    std::vector<std::pair<std::string, Vec2>> places;
+    std::vector<std::vector<Poly2>> limits;   // each place's (its hub's `limits`): the lot pass's rule, then the nearest hub
+    if (root.contains("citysim") && root["citysim"].contains("districts") && root["citysim"]["districts"].contains("hubs"))
+        for (const auto& h : root["citysim"]["districts"]["hubs"]) {
+            places.push_back({h.value("_place", std::string("?")), Vec2(h["at"][0].get<double>(), h["at"][1].get<double>())});
+            limits.emplace_back();
+            for (const auto& rj : h.contains("limits") ? h["limits"] : nlohmann::json::array()) {
+                Poly2 ring;
+                for (const auto& q : rj) ring.push_back(Vec2(q[0].get<double>(), q[1].get<double>()));
+                limits.back().push_back(ring);
+            }
+        }
+    std::unique_ptr<Renderer> renderer = Renderer::create();
+    RendererMeshUploader uploader(*renderer);
+    AssetManager assets(uploader);
+    World world;
+    RenderView view;
+    CHECK(LevelLoader::load(path, world, *renderer, view, assets, false));
+    const CityBuildings* cbp = nullptr;
+    world.each<CityBuildings>([&](Entity, CityBuildings& cb) { cbp = &cb; });
+    CHECK(cbp != nullptr);
+    if (!cbp || places.empty()) return;
+    std::map<std::string, std::map<std::string, int>> by;
+    for (const BuildingRecord& r : cbp->records) {
+        LandmarkKind k;
+        if (r.plan.size() < 3 || !landmarkKindNamed(r.recipe, k)) continue;
+        const Vec2 c = centroid(r.plan);
+        std::size_t best = places.size();
+        for (std::size_t i = 0; i < places.size() && best == places.size(); ++i)
+            for (const Poly2& ring : limits[i]) if (pointInPolygon(ring, c)) best = i;
+        if (best == places.size()) {
+            best = 0;
+            for (std::size_t i = 1; i < places.size(); ++i)
+                if ((places[i].second - c).lengthSquared() < (places[best].second - c).lengthSquared()) best = i;
+        }
+        ++by[places[best].first][r.recipe];
+        std::printf("    [landmark] %s %s at (%.0f, %.0f)\n", places[best].first.c_str(), r.recipe.c_str(), c.x, c.y);
+    }
+    for (const auto& [place, at] : places) {
+        std::printf("    [landmarks] %-18s", place.c_str());
+        for (const auto& [lm, n] : by[place]) std::printf(" %s %d", lm.c_str(), n);
+        std::printf("\n");
+    }
+}
+
 TEST_CASE(level_print_tower_cores) {
     if (!std::getenv("RT_PRINT_CORES")) return;
     for (const std::string& name : shippedLevels()) {

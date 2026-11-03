@@ -4873,7 +4873,15 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
     // cluster ids) = one city, exactly the old plan. A place whose hub carries
     // its kind's landmarks (landmarkClusters) plans its own.
     {
+        bool anyLimits = false;
+        for (const LandmarkCluster& lc : p.landmarkClusters) anyLimits = anyLimits || !lc.limits.empty();
         auto clusterOf = [&](const Vec2& q) -> int {
+            for (std::size_t c = 1; c < p.landmarkClusters.size(); ++c)   // inside a place's limits: that place's
+                for (const Poly2& ring : p.landmarkClusters[c].limits)
+                    if (pointInPolygon(ring, q)) return static_cast<int>(c);
+            // ...outside every place's (a house on a country road between two towns): nobody's -- a town's school
+            // planned 1.3 km out of it
+            if (anyLimits) return -1;
             if (p.hubs.empty() || p.hubClusters.size() != p.hubs.size())
                 return 0;
             std::size_t best = 0;
@@ -4884,20 +4892,27 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
             }
             return p.hubClusters[best];
         };
-        std::vector<LandmarkCand> lmc(cands.size());
+        // (a lot that is already something -- a big-box block's store, a campus's halls, a bus depot, a car park -- is
+        // no candidate: the planner picked the biggest lots, and a landmark it put on one was lost, not moved; a beach
+        // town's market hall and police post went to its car-park blocks)
+        std::vector<LandmarkCand> lmc;
+        std::vector<std::size_t> lmOf;   // each candidate's lot
         for (std::size_t ci = 0; ci < cands.size(); ++ci) {
             const LotCand& c = cands[ci];
+            if (c.lot.bigBox || c.lot.campus || c.lot.depot || c.lot.carPark) continue;
             OBB2 ob = orientedBoundingBox(c.lot.footprint);
-            lmc[ci].tag = binfos[c.block].tag;
-            lmc[ci].shortSide = 2 * std::min(ob.half[0], ob.half[1]);
-            lmc[ci].area = area(c.lot.footprint);
-            lmc[ci].pos = centroid(c.lot.footprint);
-            lmc[ci].cluster = clusterOf(lmc[ci].pos);
+            LandmarkCand lc;
+            lc.tag = binfos[c.block].tag;
+            lc.shortSide = 2 * std::min(ob.half[0], ob.half[1]);
+            lc.area = area(c.lot.footprint);
+            lc.pos = centroid(c.lot.footprint);
+            lc.cluster = clusterOf(lc.pos);
+            lmc.push_back(lc);
+            lmOf.push_back(ci);
         }
         const std::vector<int> placed =
             planLandmarks(lmc, p.center, p.innerRadius, p.landmarkClusters.empty() ? nullptr : &p.landmarkClusters);
-        for (std::size_t ci = 0; ci < cands.size(); ++ci)
-            cands[ci].landmark = cands[ci].lot.bigBox || cands[ci].lot.campus || cands[ci].lot.depot ? -1 : placed[ci];   // a big-box block keeps its store, a campus its halls
+        for (std::size_t k = 0; k < lmOf.size(); ++k) cands[lmOf[k]].landmark = placed[k];
     }
 
     // Every ATTACHED building PASS C grows, for the pass after it that stops each party wall at its neighbour's roof:

@@ -575,6 +575,7 @@ TEST_CASE(landmarks_by_each_places_kind) {
     }
     addLots(3, DistrictTag::Commercial, 10, {0, 5000});    // a beach town: its seafront...
     addLots(3, DistrictTag::Residential, 10, {0, 5200});   // ...and the homes behind
+    addLots(-1, DistrictTag::Residential, 30, {0, 9000});  // houses on a country road, no place's: bigger lots, none
     std::vector<LandmarkCluster> cl(4);
     cl[1].civic = cl[2].civic = true;
     cl[1].center = Vec2(5000, 0);
@@ -604,6 +605,8 @@ TEST_CASE(landmarks_by_each_places_kind) {
     CHECK(countIn(3, LandmarkKind::Police) == 1);
     CHECK(countIn(3, LandmarkKind::University) == 0);   // (Deerhaven got one as "the city")
     CHECK(countIn(3, LandmarkKind::Hospital) == 0);
+    for (std::size_t i = 0; i < plan.size(); ++i)
+        if (cands[i].cluster < 0) CHECK(plan[i] < 0);
     CHECK(plan == planLandmarks(cands, Vec2(0, 0), 60.0, &cl));   // deterministic
 }
 

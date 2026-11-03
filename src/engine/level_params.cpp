@@ -488,6 +488,11 @@ void readLotGrowParams(const json& cityJson, LotParams& lots) {
                             LandmarkCluster lc;
                             lc.civic = hj.value("civic", false);
                             lc.center = at;
+                            for (const auto& rj : hj.contains("limits") && hj["limits"].is_array() ? hj["limits"] : nlohmann::json::array()) {
+                                Poly2 ring;
+                                for (const auto& q : rj) if (q.is_array() && q.size() >= 2) ring.push_back(Vec2(q[0].get<double>(), q[1].get<double>()));
+                                if (ring.size() >= 3) lc.limits.push_back(std::move(ring));
+                            }
                             for (const auto& lj : hj.contains("landmarks") && hj["landmarks"].is_array() ? hj["landmarks"] : nlohmann::json::array()) {
                                 LandmarkWant lw;
                                 if (!lj.is_object() || !landmarkKindNamed(lj.value("name", std::string()), lw.kind)) {

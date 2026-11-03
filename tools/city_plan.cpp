@@ -18,6 +18,7 @@
 #include "engine/procgen/world/road_sign_build.h"
 #include "engine/procgen/world/island_scene.h"
 #include "engine/procgen/world/island_rail.h"
+#include "engine/procgen/city/implicit.h"   // simplifyLoop (a place's limits in its hub)
 #include "engine/procgen/city/roads/lanes/lanes.h"         // designedGraph: the scene designed before it is written
 #include "engine/procgen/city/roads/lanes/road_design.h"   // planCrossings: the planner's crossing policy
 #include "engine/procgen/city/street_names.h"
@@ -544,6 +545,19 @@ int main(int argc, char** argv) {
                     for (const engine::SettlementLandmark& l : sk.landmarks)
                         lms.push_back({{"name", l.name}, {"count", l.count}, {"minLots", l.minLots}, {"minOldTown", l.minOldTown}, {"any", l.any}});
                     hub["landmarks"] = lms;
+                }
+                // ITS LIMITS (simplified to 2 m): the lots inside them are its own -- the nearest centre gave a city's
+                // outskirts to the town beside it (Deerhaven's church stood in Saltwood's southern suburbs)
+                {
+                    nlohmann::json lim = nlohmann::json::array();
+                    for (const engine::Poly2& ring : plans[k].limits) {
+                        const engine::Poly2 sr = engine::simplifyLoop(ring, 2.0);
+                        if (sr.size() < 3) continue;
+                        nlohmann::json pl = nlohmann::json::array();
+                        for (const engine::Vec2& q : sr) pl.push_back({std::round(q.x), std::round(q.y)});
+                        lim.push_back(pl);
+                    }
+                    if (!lim.empty()) hub["limits"] = lim;
                 }
                 // a STRIP town's centre is its seafront: a line hub of its reach, with the kind's own mixes
                 if (sk.strip && w.sites[k].spine.size() >= 2) {

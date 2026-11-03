@@ -2205,7 +2205,8 @@ std::vector<int> planLandmarks(const std::vector<LandmarkCand>& cands,
     // a stable order so the plan is deterministic in the candidates' order.
     std::vector<int> clusters;
     for (const LandmarkCand& c : cands)
-        if (std::find(clusters.begin(), clusters.end(), c.cluster) ==
+        if (c.cluster >= 0 &&   // (-1: no place's -- it plans none)
+            std::find(clusters.begin(), clusters.end(), c.cluster) ==
             clusters.end())
             clusters.push_back(c.cluster);
     std::sort(clusters.begin(), clusters.end());

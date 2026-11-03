@@ -147,7 +147,7 @@ struct LandmarkCand {
     Real shortSide = 0;    // lot OBB short side (m)
     Real area = 0;         // lot polygon area (m²)
     Vec2 pos{0, 0};        // lot centroid (world XZ)
-    int cluster = 0;       // hub-cluster id (0 = the city; 1+ = towns)
+    int cluster = 0;       // hub-cluster id (0 = the city; 1+ = towns; -1 = no place's: no landmark)
 };
 // A PLACE'S LANDMARKS (its settlement kind's, settlements.h, carried by its hub): a `civic` place has the city's full
 // table, centred on `center`; any other the `wants` -- `count` of a kind once the place has `minLots` lots (and
@@ -161,6 +161,7 @@ struct LandmarkCluster {
     bool civic = false;
     std::vector<LandmarkWant> wants;
     Vec2 center{0, 0};
+    std::vector<Poly2> limits;   // its town or city limits: a lot inside them is its own (none: by the nearest hub)
 };
 // The LandmarkKind named `name` (landmarkName's); false for none.
 bool landmarkKindNamed(const std::string& name, LandmarkKind& out);
