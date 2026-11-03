@@ -3729,6 +3729,57 @@ TEST_CASE(island_water_surface_has_no_spikes) {
     CHECK(spikes == 0);
 }
 
+// ROADS UNDER THE WATER (Glenn, 2026-11-02, on the re-planned island: "the road runs under the river"): every road
+// in the level's graph, every 4 m along its planned profile, where it is inside a river's banks -- its height against
+// the water there. A road lower than the water is under the river. Printed, not gated: where to stand.
+TEST_CASE(level_print_roads_under_the_water) {
+    if (skipHeavy()) { std::printf("    skipped: island_8_nature (heavy, RT_LEVEL_TESTS_SKIP_HEAVY)\n"); return; }
+    const char* other = std::getenv("RT_UNDER_LEVEL");   // (another level by name: a re-plan before it is merged)
+    std::ifstream in(levelsDir() + "/" + (other ? std::string(other) : std::string("island_8_nature")) + ".json");
+    CHECK(in.good());
+    if (!in.good()) return;
+    const json root = json::parse(in);
+    const TerrainParams tp = readTerrainParams(root["terrain"]);
+    CHECK(tp.hydro != nullptr);
+    if (!tp.hydro) return;
+    std::ifstream gin(levelsDir() + "/../../" + root["citysim"]["graph"].get<std::string>());
+    CHECK(gin.good());
+    if (!gin.good()) return;
+    const json graph = json::parse(gin);
+    int under = 0;
+    for (const json& e : graph["edges"]) {
+        if (!e.contains("profile") || !e["profile"].contains("z")) continue;
+        const json& P = e["path"]["points"];
+        const json& Z = e["profile"]["z"];
+        const double step = e["profile"].value("step", 1.0);
+        double run = 0.0, worst = 0.0;
+        Vec2 at;
+        double s0 = 0.0;   // the path's length to this segment
+        for (std::size_t i = 0; i + 1 < P.size(); ++i) {
+            const Vec2 a(P[i][0].get<double>(), P[i][1].get<double>()), b(P[i + 1][0].get<double>(), P[i + 1][1].get<double>());
+            const double L = (b - a).length();
+            for (double t = 0.0; t < L; t += 4.0) {
+                const double s = s0 + t;
+                const Vec2 q = a + (b - a) * (t / std::max(1e-9, L));
+                double level = 0.0;
+                const std::size_t zi = std::min<std::size_t>(Z.size() - 1, static_cast<std::size_t>(s / step));
+                const double z = Z[zi].get<double>();
+                if (tp.hydro->distanceToRiver(q.x, q.y, 30.0, &level) <= 0.0 && std::isfinite(level) && z < level + 0.5) {
+                    run += 4.0;
+                    if (level - z > worst) { worst = level - z; at = q; }
+                }
+            }
+            s0 += L;
+        }
+        if (run > 0.0) {
+            ++under;
+            std::printf("    [under] %-16s %-10s %4.0f m in a river, worst %.1f m under the water at (%.0f, %.0f)\n",
+                        e["id"].get<std::string>().c_str(), e["class"].get<std::string>().c_str(), run, worst, at.x, at.y);
+        }
+    }
+    std::printf("    [under] %d roads under a river\n", under);
+}
+
 // ROAD EDGES MEET THE GROUND (Glenn, 2026-09-29, standing beside Weyby's streets: "a lot of roads tend to
 // float off the ground ... they're not flush"). Every AT-GRADE road (layer 0, no authored deck -- a bridge
 // or a viaduct is meant to stand clear), every 10 m, both sides: walk out from the carriageway edge until

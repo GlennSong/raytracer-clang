@@ -2279,6 +2279,10 @@ int planCoastRoad(IslandWorld& w, int fromSite, const Vec2& via, int toSite, con
         return inTown(x, z) || d < r.back || d > r.reach || onFreeway(x, z);
     };
     rp.blocked = bandBlocked;
+    // A RIVER IS CROSSED, NOT FOLLOWED: a run along its water (or a straight line tightened along it) took a road
+    // under it, with no bridge -- a long wet run reads as a road beside the river (island_scene's riverFloors)
+    auto wet = [&](double x, double z) { return w.hydro && w.hydro->distanceToRiver(x, z, r.riverMargin + 1.0) < r.riverMargin; };
+    rp.penalty = [&](double x, double z) { return wet(x, z) ? r.riverWeight : 0.0; };
     const HeightField ground = [&w](double x, double z) { return w.heightAt(x, z); };
     // the beach's own point: the nearest to it on the guide line, in rings round it (a bay's middle is out on
     // its water, where no gradient leads inland)
@@ -2372,7 +2376,7 @@ int planCoastRoad(IslandWorld& w, int fromSite, const Vec2& via, int toSite, con
         }
         rd.points.insert(rd.points.end(), leg.points.begin() + (rd.points.empty() ? 0 : 1), leg.points.end());
     }
-    finishRoad(rd, ground, bandBlocked);
+    finishRoad(rd, ground, [&](double x, double z) { return bandBlocked(x, z) || wet(x, z); });
     w.roads.push_back(rd);
     return static_cast<int>(w.roads.size()) - 1;
 }

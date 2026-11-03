@@ -189,6 +189,7 @@ struct CoastRoadRule {
     double step = 300.0;                   // its waypoints along that line
     double endFree = 250.0;                // within this of an end, the band does not hold
     double freewayClear = 90.0;            // off the freeway's line by this (m): a scenic road, not its frontage; near an end it may cross
+    double riverWeight = 30.0, riverMargin = 6.0;   // each metre within a river's banks (+ margin) costs this many more: it crosses square (a run along one is no bridge, ADR-0310)
     double freewayHold = 70.0;             // ...or this, where the shore pinches it: still seaward of the rail loop (45 m off a carriageway)
     double cell = 16.0, maxGrade = 0.07, hardGrade = 0.12;
 };

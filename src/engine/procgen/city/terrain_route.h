@@ -36,6 +36,9 @@ struct TerrainRouteParams {
     double margin = 500.0;         // the search box: the endpoints' bounds grown by this (m)
     // optional: where the road may not go (water, a city block); true = blocked
     std::function<bool(double x, double y)> blocked;
+    // optional: an extra cost per metre of a move into (x, y) -- a river's water, so a road crosses it square and
+    // never runs along it
+    std::function<double(double x, double y)> penalty;
 };
 
 struct TerrainRoute {

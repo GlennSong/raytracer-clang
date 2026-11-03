@@ -129,6 +129,12 @@ TerrainRoute routeOnce(const HeightField& height, const Vec2& from, const Vec2& 
         return v;
     };
     auto h = [&](int i, int j) { return hHalf(2 * i, 2 * j); };
+    std::vector<float> penaltyCell;
+    if (p.penalty) {
+        penaltyCell.assign(static_cast<std::size_t>(nx) * ny, 0.0f);
+        for (int j = 0; j < ny; ++j)
+            for (int i = 0; i < nx; ++i) { const Vec2 q = P(i, j); penaltyCell[static_cast<std::size_t>(j) * nx + i] = static_cast<float>(p.penalty(q.x, q.y)); }
+    }
     std::vector<char> blockedCell;
     if (p.blocked) {
         blockedCell.assign(static_cast<std::size_t>(nx) * ny, 0);
@@ -185,6 +191,7 @@ TerrainRoute routeOnce(const HeightField& height, const Vec2& from, const Vec2& 
             if (g > p.hardGrade) continue;
             const double over = std::max(0.0, g - p.maxGrade);
             double cost = L * (1.0 + p.flatWeight * g + p.gradeWeight * over * over) + p.turnWeight * turn * turn * c;
+            if (!penaltyCell.empty()) cost += L * penaltyCell[static_cast<std::size_t>(nj) * nx + ni];
             if (d < nd && p.bendWeight > 0.0) {   // the change of SIGNED grade from the move before
                 const Move& pm = moves[static_cast<std::size_t>(d)];
                 const double gPrev = (hij - h(i - pm.dx, j - pm.dy)) / (pm.len * c);

@@ -14498,3 +14498,23 @@ Result (island 8, the full plan with `--keep-sites`, `--rail`, `--beach-towns AC
 towns): the four carriageways' profiles identical; nine town streets' profiles change where the coast roads join
 them; Marlwick and Heathholm get stations on the loop (Deerhaven is out of reach, as planned). Owed: just out of
 Ivycombe the coast road starts on the freeway's side of the rail loop and bridges the loop twice.
+
+## ADR-0310 — A coast road crosses a river square
+
+Glenn, 2026-11-02, walking the re-planned island: "the road runs under the river ... you may need to change how that
+road crosses the river." The coast road from Deerhaven toward Coldwell (coast14) ran 236 m inside a river's banks,
+up to 4.9 m under its water. The route-tightening step had pulled a 400 m straight line along the river, and a wet
+run longer than 200 m reads to island_scene's riverFloors as a road running beside a river, so it got no bridge.
+
+**Decision.**
+- THE TERRAIN ROUTER TAKES A PENALTY (`TerrainRouteParams::penalty`, an extra cost per metre of a move into a
+  point), sampled once per cell like `blocked`. Unset, every route is as before.
+- THE COAST ROAD PAYS `CoastRoadRule::riverWeight` (30) a metre within `riverMargin` (6 m) of a river's banks, so it
+  crosses square; and its tightening may not lay a straight line through a river (the existing crossings stay).
+- `level_print_roads_under_the_water` (level_tests, printed): every road in island_8_nature's graph, every 4 m,
+  where it is inside a river's banks below the water. `RT_UNDER_LEVEL=name` checks a re-plan before it is merged.
+
+Result: 0 roads under a river (was 1). coast14 moves up to 181 m and crosses on 4 bridge floors; coast12 moves up to
+44 m. Nothing else in the plan changes except three street profiles where those roads meet their towns; the freeway
+is identical. Re-planned from the pre-beach level (~/Claude/backups/island_8_nature_2026-11-01), as the first build
+was: re-planning from the level as it now stands reads its beach towns back in another order, and renames them.
