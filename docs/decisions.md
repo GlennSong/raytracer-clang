@@ -14472,3 +14472,29 @@ and playgrounds."
 Test (three seeds, a town of families with a playground and a park lawn, 9:00-17:00): 126-137 children played 42-49
 times at the playground, rode 165-180 times, played tag, catch and picnicked; no adult stops; riders faster than a
 walk. Deerhaven at 11:00: 9 of 85 visible children riding; a skateboard and a scooter shot.
+
+## ADR-0309 — The coast road keeps off the freeway; a strip town stops short of it
+
+Glenn, 2026-11-02: "Okay do it" (the full island build with the three beach towns A, C and D). Re-planning the whole
+island with them against the same plan without them showed the beach towns moving the freeway: its profile rose up
+to 35 m over 1.4 km by Marlwick, where the coast road from Ivycombe wove across it twice, and 9.6 m by Heathholm,
+whose strip of blocks ran inland over it (its streets bridged across). The beach-town plan's rule is that the other
+places' roads stay as they were, apart from the new links.
+
+**Decision.**
+- THE COAST ROAD'S BAND KEEPS OFF THE FREEWAY: `CoastRoadRule::freewayClear` (90 m) either side of its line, on the
+  router's grid; where the shore pinches it, a leg tries `freewayHold` (70 m: still seaward of the rail loop, 45 m
+  off a carriageway), then crosses. Near an end (`endFree`) the band does not hold, as before. A guide waypoint that
+  falls in the corridor steps seaward out of it.
+- A STRIP TOWN TAKES AS MANY OF ITS KIND'S ROWS AS STAY CLEAR (`IslandSite::rows`, addBeachTown): its back (the last
+  row's blocks, 25 m on) at least `freewayClear` off the freeway along the whole seafront. Marlwick 2 rows, Heathholm 1,
+  Deerhaven its kind's 3.
+- `freewayDistance(w, q)` is the one measure of a point's distance to the freeway (findBeachSites' own copy went).
+- THE GUIDE WALK STOPS PACING: a step counts as getting on only when it is a quarter step nearer than the nearest yet;
+  three that do not end the walk at the last step that did. Heathholm's walk had paced back and forth across a bay
+  for twenty legs.
+
+Result (island 8, the full plan with `--keep-sites`, `--rail`, `--beach-towns ACD`, against the same without the
+towns): the four carriageways' profiles identical; nine town streets' profiles change where the coast roads join
+them; Marlwick and Heathholm get stations on the loop (Deerhaven is out of reach, as planned). Owed: just out of
+Ivycombe the coast road starts on the freeway's side of the rail loop and bridges the loop twice.
