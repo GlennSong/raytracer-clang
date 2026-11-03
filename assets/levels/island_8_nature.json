@@ -21,6 +21,7 @@
       -4057.8978224666885,
       -439.58125797554817
      ],
+     "civic": true,
      "kind": "financial"
     },
     {
@@ -29,6 +30,7 @@
       4618.3281471566415,
       -655.9669534133765
      ],
+     "civic": true,
      "kind": "financial"
     },
     {
@@ -37,7 +39,30 @@
       -1696.5158660611248,
       -4668.771358159206
      ],
-     "kind": "commercial"
+     "kind": "commercial",
+     "landmarks": [
+      {
+       "any": true,
+       "count": 1,
+       "minLots": 10,
+       "minOldTown": 0,
+       "name": "school"
+      },
+      {
+       "any": true,
+       "count": 1,
+       "minLots": 8,
+       "minOldTown": 0,
+       "name": "church"
+      },
+      {
+       "any": false,
+       "count": 1,
+       "minLots": 0,
+       "minOldTown": 6,
+       "name": "market_hall"
+      }
+     ]
     },
     {
      "_place": "Brookcliff",
@@ -45,7 +70,30 @@
       2569.137208166777,
       -7751.923297829251
      ],
-     "kind": "commercial"
+     "kind": "commercial",
+     "landmarks": [
+      {
+       "any": true,
+       "count": 1,
+       "minLots": 10,
+       "minOldTown": 0,
+       "name": "school"
+      },
+      {
+       "any": true,
+       "count": 1,
+       "minLots": 8,
+       "minOldTown": 0,
+       "name": "church"
+      },
+      {
+       "any": false,
+       "count": 1,
+       "minLots": 0,
+       "minOldTown": 6,
+       "name": "market_hall"
+      }
+     ]
     },
     {
      "_place": "Carrcombe Harbor",
@@ -53,7 +101,30 @@
       -4790.0,
       2265.8175741568166
      ],
-     "kind": "commercial"
+     "kind": "commercial",
+     "landmarks": [
+      {
+       "any": true,
+       "count": 1,
+       "minLots": 10,
+       "minOldTown": 0,
+       "name": "school"
+      },
+      {
+       "any": true,
+       "count": 1,
+       "minLots": 8,
+       "minOldTown": 0,
+       "name": "church"
+      },
+      {
+       "any": false,
+       "count": 1,
+       "minLots": 0,
+       "minOldTown": 6,
+       "name": "market_hall"
+      }
+     ]
     },
     {
      "_place": "Dunwyn Harbor",
@@ -61,7 +132,30 @@
       5099.658944903611,
       -3770.3006764273655
      ],
-     "kind": "commercial"
+     "kind": "commercial",
+     "landmarks": [
+      {
+       "any": true,
+       "count": 1,
+       "minLots": 10,
+       "minOldTown": 0,
+       "name": "school"
+      },
+      {
+       "any": true,
+       "count": 1,
+       "minLots": 8,
+       "minOldTown": 0,
+       "name": "church"
+      },
+      {
+       "any": false,
+       "count": 1,
+       "minLots": 0,
+       "minOldTown": 6,
+       "name": "market_hall"
+      }
+     ]
     },
     {
      "_place": "Port Penwood",
@@ -69,7 +163,30 @@
       -133.89427435570565,
       6600.740687619522
      ],
-     "kind": "commercial"
+     "kind": "commercial",
+     "landmarks": [
+      {
+       "any": true,
+       "count": 1,
+       "minLots": 10,
+       "minOldTown": 0,
+       "name": "school"
+      },
+      {
+       "any": true,
+       "count": 1,
+       "minLots": 8,
+       "minOldTown": 0,
+       "name": "church"
+      },
+      {
+       "any": false,
+       "count": 1,
+       "minLots": 0,
+       "minOldTown": 6,
+       "name": "market_hall"
+      }
+     ]
     },
     {
      "_place": "Ivycombe",
@@ -77,7 +194,30 @@
       -2994.5763355010567,
       7012.6742472133255
      ],
-     "kind": "commercial"
+     "kind": "commercial",
+     "landmarks": [
+      {
+       "any": true,
+       "count": 1,
+       "minLots": 10,
+       "minOldTown": 0,
+       "name": "school"
+      },
+      {
+       "any": true,
+       "count": 1,
+       "minLots": 8,
+       "minOldTown": 0,
+       "name": "church"
+      },
+      {
+       "any": false,
+       "count": 1,
+       "minLots": 0,
+       "minOldTown": 6,
+       "name": "market_hall"
+      }
+     ]
     },
     {
      "_place": "Marlwick",
@@ -90,6 +230,36 @@
       5092.131147540984
      ],
      "kind": "commercial",
+     "landmarks": [
+      {
+       "any": true,
+       "count": 1,
+       "minLots": 10,
+       "minOldTown": 0,
+       "name": "school"
+      },
+      {
+       "any": true,
+       "count": 1,
+       "minLots": 8,
+       "minOldTown": 0,
+       "name": "church"
+      },
+      {
+       "any": true,
+       "count": 1,
+       "minLots": 0,
+       "minOldTown": 0,
+       "name": "market_hall"
+      },
+      {
+       "any": true,
+       "count": 1,
+       "minLots": 0,
+       "minOldTown": 0,
+       "name": "police"
+      }
+     ],
      "line": [
       [
        -4649.391057687345,
@@ -560,12 +730,12 @@
      },
      "parking": [
       [
-       -4733.264800754749,
-       5229.086724102254
+       -4765.910907701347,
+       5193.009693967963
       ],
       [
-       -5242.415262784429,
-       4757.590794060963
+       -5208.610389200455,
+       4794.370205404149
       ]
      ],
      "radius": 60.0,
@@ -582,6 +752,36 @@
       -6071.351351351352
      ],
      "kind": "commercial",
+     "landmarks": [
+      {
+       "any": true,
+       "count": 1,
+       "minLots": 10,
+       "minOldTown": 0,
+       "name": "school"
+      },
+      {
+       "any": true,
+       "count": 1,
+       "minLots": 8,
+       "minOldTown": 0,
+       "name": "church"
+      },
+      {
+       "any": true,
+       "count": 1,
+       "minLots": 0,
+       "minOldTown": 0,
+       "name": "market_hall"
+      },
+      {
+       "any": true,
+       "count": 1,
+       "minLots": 0,
+       "minOldTown": 0,
+       "name": "police"
+      }
+     ],
      "line": [
       [
        3914.088602245842,
@@ -1056,12 +1256,12 @@
      },
      "parking": [
       [
-       4047.8208535945405,
-       -5968.5950144225535
+       4047.9415067422524,
+       -5972.501579300781
       ],
       [
-       4507.429295425364,
-       -5622.766882547504
+       4515.034665637349,
+       -5615.822406528083
       ]
      ],
      "radius": 60.0,
@@ -1078,6 +1278,36 @@
       -3192.3809523809523
      ],
      "kind": "commercial",
+     "landmarks": [
+      {
+       "any": true,
+       "count": 1,
+       "minLots": 10,
+       "minOldTown": 0,
+       "name": "school"
+      },
+      {
+       "any": true,
+       "count": 1,
+       "minLots": 8,
+       "minOldTown": 0,
+       "name": "church"
+      },
+      {
+       "any": true,
+       "count": 1,
+       "minLots": 0,
+       "minOldTown": 0,
+       "name": "market_hall"
+      },
+      {
+       "any": true,
+       "count": 1,
+       "minLots": 0,
+       "minOldTown": 0,
+       "name": "police"
+      }
+     ],
      "line": [
       [
        -4110.165481051864,
@@ -1548,12 +1778,12 @@
      },
      "parking": [
       [
-       -4046.4476913144676,
-       -2870.582890076169
+       -4048.493417091976,
+       -2872.0199029640776
       ],
       [
-       -3655.7041689693187,
-       -3314.158930543315
+       -3653.182236078833,
+       -3324.768055630722
       ]
      ],
      "radius": 60.0,

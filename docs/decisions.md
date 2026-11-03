@@ -14573,3 +14573,29 @@ of the terrain block. `GroundCoverParams::settled` (a `SettledGround`, boxed pol
 ground there is the lowland's grass and dirt. The beach beyond the promenade is unchanged, as are the activity areas
 on it (90 m out) and the town beach mask. Being in the terrain block, the outlines change the terrain's bake key,
 so no tag bump is needed.
+
+## ADR-0314 — Each place plans its own landmarks, by its kind; beach car parks from the plan's blocks
+
+Deerhaven was given a university, a hospital and police. The landmark planner runs its quotas per hub cluster,
+the city's full civic table for cluster 0 and a town's school and church for the rest, but nothing outside a unit
+test ever filled `LotParams::hubClusters`. So every planned level, the whole island included, planned as one city:
+one capitol, courthouse, hospital and university for the island, on its best lots wherever they were, and no town's
+guaranteed school or church.
+
+**Decision.**
+- A KIND NAMES ITS LANDMARKS (settlements.lua; SettlementKind::civic / ::landmarks, SettlementLandmark). The city is
+  `civic`: the full civic table. Any other kind lists `{ "landmark", count, min_lots, min_old_town, any }`. A field
+  left out is a town's: its school and church, and a market hall in an old town (the old town table, now data).
+  The beach town has a school, a church, a market hall and a police post.
+- city_plan writes the kind's landmarks into its hub (`civic`, or `landmarks`), as it does the mixes. level_params
+  makes the hubs of one `_place` one cluster (`LotParams::landmarkClusters`, 1 up). planLandmarks plans each from its
+  own list, or the civic table centred on its own hub (`landmarkKindNamed`). Every planned place gets its own
+  anchors: each island city its own capitol and courthouse.
+- Hubs that carry neither stay cluster 0, planned exactly as before. Every other level's lots are unchanged, and the
+  lots cache key already holds the level's citysim block, so only a re-planned level re-bakes: no lots tag bump.
+- THE BEACH CAR PARKS are now the first and last blocks of the plan's own beachfront row: the blocks seaward of the
+  seafront and short of the promenade, each named by its centroid. Before, they were points spaced along the
+  seafront by the strip's cross-street spacing, and one fell outside its block where the seafront curved.
+
+Test: `landmarks_by_each_places_kind` (two civic cities each get their own courthouse and capitol; a beach town gets
+its four and no university or hospital).

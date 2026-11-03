@@ -4870,7 +4870,8 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
     // 8km-city P3: the quotas run PER HUB CLUSTER now (nearest-hub assignment
     // via hubClusters): the primary city keeps the full civic table; every
     // satellite town is guaranteed its own school + church. No hubs (or no
-    // cluster ids) = one city, exactly the old plan.
+    // cluster ids) = one city, exactly the old plan. A place whose hub carries
+    // its kind's landmarks (landmarkClusters) plans its own.
     {
         auto clusterOf = [&](const Vec2& q) -> int {
             if (p.hubs.empty() || p.hubClusters.size() != p.hubs.size())
@@ -4894,7 +4895,7 @@ std::vector<LotBuilding> growLotBuildings(const std::vector<Poly2>& blocks,
             lmc[ci].cluster = clusterOf(lmc[ci].pos);
         }
         const std::vector<int> placed =
-            planLandmarks(lmc, p.center, p.innerRadius);
+            planLandmarks(lmc, p.center, p.innerRadius, p.landmarkClusters.empty() ? nullptr : &p.landmarkClusters);
         for (std::size_t ci = 0; ci < cands.size(); ++ci)
             cands[ci].landmark = cands[ci].lot.bigBox || cands[ci].lot.campus || cands[ci].lot.depot ? -1 : placed[ci];   // a big-box block keeps its store, a campus its halls
     }

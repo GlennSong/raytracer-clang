@@ -149,11 +149,29 @@ struct LandmarkCand {
     Vec2 pos{0, 0};        // lot centroid (world XZ)
     int cluster = 0;       // hub-cluster id (0 = the city; 1+ = towns)
 };
+// A PLACE'S LANDMARKS (its settlement kind's, settlements.h, carried by its hub): a `civic` place has the city's full
+// table, centred on `center`; any other the `wants` -- `count` of a kind once the place has `minLots` lots (and
+// `minOldTown` of them old town), on its districts' best lot or, `anyDistrict`, any lot's.
+struct LandmarkWant {
+    LandmarkKind kind = LandmarkKind::School;
+    int count = 1, minLots = 0, minOldTown = 0;
+    bool anyDistrict = false;
+};
+struct LandmarkCluster {
+    bool civic = false;
+    std::vector<LandmarkWant> wants;
+    Vec2 center{0, 0};
+};
+// The LandmarkKind named `name` (landmarkName's); false for none.
+bool landmarkKindNamed(const std::string& name, LandmarkKind& out);
 // One entry per candidate: the assigned LandmarkKind as int, -1 = none.
 // `cityCenter`/`innerRadius` feed the centrality scoring of the wantCore
 // picks (capitol, courthouse, museum), exactly as the city-only planner did.
+// `places` (by cluster id): each place's own landmarks. A cluster it does not
+// cover plans as before: 0 the city's table, 1+ a satellite town's.
 std::vector<int> planLandmarks(const std::vector<LandmarkCand>& cands,
-                               const Vec2& cityCenter, Real innerRadius);
+                               const Vec2& cityCenter, Real innerRadius,
+                               const std::vector<LandmarkCluster>* places = nullptr);
 
 // One ROWHOUSE unit's dressed params for the RowStrip massing: the lot pass
 // splits the strip and calls this per unit, so neighbours vary in cladding

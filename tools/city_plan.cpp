@@ -537,6 +537,14 @@ int main(int argc, char** argv) {
                 nlohmann::json hub = {{"_place", w.sites[k].name}, {"at", {w.centres[k].x, w.centres[k].y}}, {"kind", sk.hub}};
                 const engine::SettlementKind* first = w.kinds.forHub(sk.hub);
                 if (!first || first->name != sk.name) hub["settlement"] = sk.name;
+                // ITS LANDMARKS (its kind's): the city's civic table, or the kind's list -- each place its own
+                if (sk.civic) hub["civic"] = true;
+                else {
+                    nlohmann::json lms = nlohmann::json::array();
+                    for (const engine::SettlementLandmark& l : sk.landmarks)
+                        lms.push_back({{"name", l.name}, {"count", l.count}, {"minLots", l.minLots}, {"minOldTown", l.minOldTown}, {"any", l.any}});
+                    hub["landmarks"] = lms;
+                }
                 // a STRIP town's centre is its seafront: a line hub of its reach, with the kind's own mixes
                 if (sk.strip && w.sites[k].spine.size() >= 2) {
                     nlohmann::json line = nlohmann::json::array();
@@ -553,26 +561,32 @@ int main(int argc, char** argv) {
                     if (!mixes.empty()) hub["mixes"] = mixes;
                     // THE BEACH'S CAR PARKS (Glenn: "a parking lot so that people visiting the beach can park"): the first
                     // and last blocks of the beachfront row, between the seafront and the promenade, where the visitors
-                    // come in off the coast road
+                    // come in off the coast road -- the plan's own blocks (a point placed by the strip's spacing missed
+                    // its block where the seafront curved), each named by a point inside it
                     if (sk.stripPromenade > 0) {
                         const std::vector<engine::Vec2>& sp = w.sites[k].spine;
-                        std::vector<double> st{0.0};
-                        for (std::size_t i = 1; i < sp.size(); ++i) st.push_back(st.back() + (sp[i] - sp[i - 1]).length());
-                        const int nCross = std::max(1, static_cast<int>(st.back() / sk.stripCross));
-                        const double first = (st.back() - (nCross - 1) * sk.stripCross) * 0.5;
-                        nlohmann::json parking = nlohmann::json::array();
-                        for (double sv : {first + 0.5 * sk.stripCross, first + (nCross - 1.5) * sk.stripCross}) {
-                            if (nCross < 3) break;
-                            std::size_t i = 0;
-                            while (i + 2 < sp.size() && st[i + 1] < sv) ++i;
-                            const engine::Vec2 a = sp[i], b = sp[i + 1];
-                            const engine::Vec2 p = a + (b - a) * ((sv - st[i]) / std::max(1e-9, st[i + 1] - st[i]));
-                            engine::Vec2 n(-(b - a).y, (b - a).x);
-                            n = n * (1.0 / std::max(1e-9, n.length()));
-                            if (dot(n, w.sites[k].inland) > 0) n = n * -1.0;   // toward the sea
-                            const engine::Vec2 q = p + n * (sk.stripPromenade * 0.5);
-                            parking.push_back({q.x, q.y});
+                        struct Front { double along; engine::Vec2 at; };
+                        std::vector<Front> row;   // the beachfront row's blocks, by how far along the seafront
+                        for (const PlanBlock& bl : plans[k].blocks) {
+                            if (bl.buildable.size() < 3) continue;
+                            const engine::Vec2 c = engine::centroid(bl.buildable);
+                            if (!engine::pointInPolygon(bl.buildable, c)) continue;
+                            double bd = 1e30, along = 0.0, run = 0.0, side = 0.0;
+                            for (std::size_t i = 0; i + 1 < sp.size(); ++i) {
+                                const engine::Vec2 ab = sp[i + 1] - sp[i];
+                                const double L = ab.length();
+                                if (L < 1e-9) continue;
+                                const double t = std::clamp(dot(c - sp[i], ab) / (L * L), 0.0, 1.0);
+                                const engine::Vec2 q = sp[i] + ab * t;
+                                if ((c - q).length() < bd) { bd = (c - q).length(); along = run + t * L; side = dot(c - q, w.sites[k].inland); }
+                                run += L;
+                            }
+                            if (side < 0.0 && bd < sk.stripPromenade) row.push_back({along, c});   // (seaward, short of the promenade)
                         }
+                        std::sort(row.begin(), row.end(), [](const Front& a, const Front& b) { return a.along < b.along; });
+                        nlohmann::json parking = nlohmann::json::array();
+                        if (row.size() >= 3)   // (a shorter row keeps its blocks for the seafront's shops)
+                            for (const Front* f : {&row.front(), &row.back()}) parking.push_back({f->at.x, f->at.y});
                         if (!parking.empty()) hub["parking"] = parking;
                     }
                 }

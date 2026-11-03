@@ -109,6 +109,33 @@ bool loadSettlementCatalog(ScriptVM& vm, SettlementCatalog& out, std::string* er
             }
         }
         lua_pop(L, 1);   // mixes
+        lua_getfield(L, t, "civic");
+        if (lua_isboolean(L, -1)) k.civic = lua_toboolean(L, -1) != 0;
+        lua_pop(L, 1);
+        lua_getfield(L, t, "landmarks");   // { { "school", n, min_lots = n, min_old_town = n, any = bool }, ... }
+        if (lua_istable(L, -1)) {
+            const int lt = lua_gettop(L);
+            k.landmarks.clear();
+            const lua_Integer n = luaL_len(L, lt);
+            for (lua_Integer i = 1; i <= n; ++i) {
+                lua_rawgeti(L, lt, i);
+                const int e = lua_gettop(L);
+                SettlementLandmark lm;
+                lua_rawgeti(L, e, 1);
+                lua_rawgeti(L, e, 2);
+                if (!lua_istable(L, e) || !lua_isstring(L, -2)) return bail(name + ".landmarks: { \"landmark\", count, ... } entries");
+                lm.name = lua_tostring(L, -2);
+                if (lua_isnumber(L, -1)) lm.count = static_cast<int>(lua_tointeger(L, -1));
+                lua_pop(L, 2);
+                lm.minLots = static_cast<int>(numField(L, e, "min_lots", lm.minLots));
+                lm.minOldTown = static_cast<int>(numField(L, e, "min_old_town", lm.minOldTown));
+                lua_getfield(L, e, "any");
+                if (lua_isboolean(L, -1)) lm.any = lua_toboolean(L, -1) != 0;
+                lua_pop(L, 2);   // any, the entry
+                k.landmarks.push_back(std::move(lm));
+            }
+        }
+        lua_pop(L, 1);   // landmarks
         lua_getfield(L, t, "map");
         if (lua_istable(L, -1)) {
             const int m = lua_gettop(L);

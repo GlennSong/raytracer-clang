@@ -243,6 +243,10 @@ struct LotParams {
     // (the city keeps the full civic table; each town is guaranteed its own
     // school + church). Empty = every hub is the city.
     std::vector<int> hubClusters;
+    // EACH PLACE'S OWN LANDMARKS (by cluster id; a hub that carries its kind's `civic` or `landmarks`, level_params:
+    // the hubs of one `_place` are one cluster, 1 up; hubs that carry neither stay cluster 0, the city as before).
+    // Empty = the old plan.
+    std::vector<LandmarkCluster> landmarkClusters;
     // Level-authored PARCEL overrides (citysim.parcel — the 8km-metro knob:
     // 150 m+ blocks parcel bigger lots). <= 0 = unset: the parceler keeps its
     // compiled-in district tuning EXACTLY. When set, targetArea / frontWidth /

@@ -50,7 +50,9 @@ std::string SettlementCatalog::describe() const {
           << " " << k.areaScale << "/" << k.sizeMin << "/" << k.spokeSpacing << " core=" << k.coreBlock[0] << "x" << k.coreBlock[1]
           << " midtown=" << k.midtownBlock[0] << "x" << k.midtownBlock[1] << " warp=" << k.warp << " rings=" << k.ringSpacing
           << " spokes=" << k.spokes << " strip=" << k.strip << "/" << k.stripLength << "/" << k.stripRows << "x" << k.stripRow << "/"
-          << k.stripCross << "/" << k.stripSea << "/" << k.stripPromenade << " reach=" << k.hubReach << " mixes=";
+          << k.stripCross << "/" << k.stripSea << "/" << k.stripPromenade << " reach=" << k.hubReach << " civic=" << k.civic << " landmarks=";
+        for (const SettlementLandmark& l : k.landmarks) o << l.name << ":" << l.count << "/" << l.minLots << "/" << l.minOldTown << "/" << l.any << ",";
+        o << " mixes=";
         for (const auto& [d, es] : k.mixes) {
             o << d << "{";
             for (const auto& [r, wt] : es) o << r << ":" << wt << ",";
@@ -75,6 +77,7 @@ SettlementCatalog defaultSettlements() {
     city.signedFar = true;
     city.limitSign = "CITY LIMIT";
     city.naming = "city";
+    city.civic = true;   // the full civic table
     // a CITY's downtown blocks are big enough for towers with room round them (Glenn: "Saltwood downtown blocks
     // should be bigger"; 94 x 64 left a 72 x 42 m site; 128 x 96 leaves ~105 x 75)
     city.briefPrefix = "city_";
@@ -121,6 +124,8 @@ SettlementCatalog defaultSettlements() {
     bt.mixes["residential"] = {{"cottage", 14}, {"villa", 12}, {"modern_house", 12}, {"bungalow", 10}, {"duplex", 8},
                                {"yard_house", 8}, {"garden_condo", 12}, {"walkup_homes", 8}, {"terrace_condo", 6},
                                {"rowhouses", 6}, {"pocket_park", 4}};
+    // a town's school and church, a market hall on the seafront and a police post by the beach, whatever its districts
+    bt.landmarks = {{"school", 1, 10, 0, true}, {"church", 1, 8, 0, true}, {"market_hall", 1, 0, 0, true}, {"police", 1, 0, 0, true}};
     bt.rgb[0] = 0.10f; bt.rgb[1] = 0.62f; bt.rgb[2] = 0.68f;
     c.kinds.push_back(bt);
     return c;

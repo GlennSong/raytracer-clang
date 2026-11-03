@@ -466,6 +466,7 @@ void readLotGrowParams(const json& cityJson, LotParams& lots) {
                 return 2;                                  // an unknown quarter is housing
             };
             bool haveCore = false;
+            std::vector<std::string> landmarkPlaces(1);   // each landmark cluster's place (0: none)
             for (const auto& hj : dj["hubs"]) {
                 if (!hj.is_object() || !hj.contains("at") || !hj["at"].is_array() || hj["at"].size() < 2)
                     continue;
@@ -474,6 +475,39 @@ void readLotGrowParams(const json& cityJson, LotParams& lots) {
                                      ? hj.value("kind", 2)
                                      : kindOf(hj.value("kind", std::string("residential")));
                 lots.hubs.push_back({at, kind});
+                // ITS LANDMARKS (its settlement kind's, written by city_plan): the hubs of one place are one cluster
+                {
+                    int cl = 0;
+                    const bool own = hj.value("civic", false) || (hj.contains("landmarks") && hj["landmarks"].is_array());
+                    if (own) {
+                        const std::string place = hj.value("_place", std::string());
+                        if (lots.landmarkClusters.empty()) lots.landmarkClusters.resize(1);   // (0: the hubs with none, the city)
+                        for (std::size_t c = 1; c < lots.landmarkClusters.size() && cl == 0; ++c)
+                            if (!place.empty() && landmarkPlaces[c] == place) cl = static_cast<int>(c);
+                        if (cl == 0) {
+                            LandmarkCluster lc;
+                            lc.civic = hj.value("civic", false);
+                            lc.center = at;
+                            for (const auto& lj : hj.contains("landmarks") && hj["landmarks"].is_array() ? hj["landmarks"] : nlohmann::json::array()) {
+                                LandmarkWant lw;
+                                if (!lj.is_object() || !landmarkKindNamed(lj.value("name", std::string()), lw.kind)) {
+                                    LOG_ERROR << "[districts] hub " << place << ": landmark " << lj.dump() << " REJECTED (no such landmark)";
+                                    continue;
+                                }
+                                lw.count = lj.value("count", 1);
+                                lw.minLots = lj.value("minLots", 0);
+                                lw.minOldTown = lj.value("minOldTown", 0);
+                                lw.anyDistrict = lj.value("any", false);
+                                lc.wants.push_back(lw);
+                            }
+                            lots.landmarkClusters.push_back(lc);
+                            landmarkPlaces.resize(lots.landmarkClusters.size());
+                            landmarkPlaces.back() = place;
+                            cl = static_cast<int>(lots.landmarkClusters.size()) - 1;
+                        }
+                    }
+                    lots.hubClusters.push_back(cl);
+                }
                 // A LINE hub (a beach town's seafront), its own reach and its own MIXES -- {district: [[recipe, weight]]},
                 // the archetype book's tables for the lots it is nearest (~/.claude/plans/beach-town.md)
                 {

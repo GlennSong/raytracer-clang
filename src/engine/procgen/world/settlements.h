@@ -18,6 +18,15 @@
 
 namespace engine {
 
+// A LANDMARK a kind of place is given (architect.h LandmarkKind, by its name: "school", "church", "market_hall",
+// "police", ...): `count` of them once the place has `minLots` lots (and `minOldTown` of them old town), on the best
+// lots of their districts -- or, `any`, the best lot of any district when none of theirs can carry one.
+struct SettlementLandmark {
+    std::string name;
+    int count = 1, minLots = 0, minOldTown = 0;
+    bool any = false;
+};
+
 struct SettlementKind {
     std::string name;                     // "city", "town", "mountain town"
     std::string hub = "commercial";       // its centre's district in the level (citysim.districts.hubs[].kind)
@@ -54,6 +63,11 @@ struct SettlementKind {
     // carries them: level_params.cpp)
     double hubReach = 0.0;
     std::map<std::string, std::vector<std::pair<std::string, double>>> mixes;
+    // ITS LANDMARKS (the lot pass's landmark planner, per place): a `civic` kind has the city's full civic table (a
+    // capitol, courthouse, hospital, university, schools by its quarters, ...); any other the list -- a town's school
+    // and church, and a market hall in an old town
+    bool civic = false;
+    std::vector<SettlementLandmark> landmarks{{"school", 1, 10, 0, true}, {"church", 1, 8, 0, true}, {"market_hall", 1, 0, 6, false}};
     // THE MAP: its circle's colour, its dot (px) and its label (m)
     float rgb[3] = {0.95f, 0.45f, 0.05f};
     double dot = 5.0, label = 150.0;

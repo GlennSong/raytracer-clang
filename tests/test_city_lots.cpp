@@ -551,6 +551,62 @@ TEST_CASE(parcel_overrides_rescale_the_lot_grain) {
     CHECK(sameDbg.lots.size() == base.lots.size());
 }
 
+TEST_CASE(landmarks_by_each_places_kind) {
+    // A place's hub carries its kind's landmarks (settlements.lua): two cities each get their own civic table, centred
+    // on their own hub; a beach town its school, church, market hall and police post whatever its districts; a
+    // cluster no list covers plans as before
+    std::vector<LandmarkCand> cands;
+    auto addLots = [&](int cluster, DistrictTag tag, int n, Vec2 base) {
+        for (int i = 0; i < n; ++i) {
+            LandmarkCand c;
+            c.tag = tag;
+            c.shortSide = 16 + (i % 5);
+            c.area = 360 + 8 * i;
+            c.pos = base + Vec2((i % 6) * 40.0, (i / 6) * 40.0);
+            c.cluster = cluster;
+            cands.push_back(c);
+        }
+    };
+    for (int city : {1, 2}) {
+        const Vec2 at(city * 5000.0, 0.0);
+        addLots(city, DistrictTag::Financial, 8, at);
+        addLots(city, DistrictTag::Commercial, 12, at + Vec2(150, 0));
+        addLots(city, DistrictTag::Residential, 14, at + Vec2(0, 200));
+    }
+    addLots(3, DistrictTag::Commercial, 10, {0, 5000});    // a beach town: its seafront...
+    addLots(3, DistrictTag::Residential, 10, {0, 5200});   // ...and the homes behind
+    std::vector<LandmarkCluster> cl(4);
+    cl[1].civic = cl[2].civic = true;
+    cl[1].center = Vec2(5000, 0);
+    cl[2].center = Vec2(10000, 0);
+    for (const char* n : {"school", "church", "market_hall", "police"}) {
+        LandmarkWant w;
+        CHECK(landmarkKindNamed(n, w.kind));
+        w.anyDistrict = true;
+        cl[3].wants.push_back(w);
+    }
+    LandmarkKind none;
+    CHECK(!landmarkKindNamed("lighthouse", none));
+    const std::vector<int> plan = planLandmarks(cands, Vec2(0, 0), 60.0, &cl);
+    auto countIn = [&](int cluster, LandmarkKind k) {
+        int n = 0;
+        for (std::size_t i = 0; i < plan.size(); ++i)
+            if (cands[i].cluster == cluster && plan[i] == static_cast<int>(k)) ++n;
+        return n;
+    };
+    for (int city : {1, 2}) {
+        CHECK(countIn(city, LandmarkKind::Courthouse) == 1);   // each city its own civic anchors
+        CHECK(countIn(city, LandmarkKind::Capitol) == 1);
+    }
+    CHECK(countIn(3, LandmarkKind::School) == 1);
+    CHECK(countIn(3, LandmarkKind::Church) == 1);
+    CHECK(countIn(3, LandmarkKind::Market) == 1);
+    CHECK(countIn(3, LandmarkKind::Police) == 1);
+    CHECK(countIn(3, LandmarkKind::University) == 0);   // (Deerhaven got one as "the city")
+    CHECK(countIn(3, LandmarkKind::Hospital) == 0);
+    CHECK(plan == planLandmarks(cands, Vec2(0, 0), 60.0, &cl));   // deterministic
+}
+
 TEST_CASE(landmark_quotas_run_per_hub_cluster) {
     // 8km-city P3: multi-site metros plan their civic anchors PER HUB CLUSTER
     // — the primary city (cluster 0) keeps the global table (one courthouse),

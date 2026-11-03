@@ -27,6 +27,12 @@
 --                                       0: none), its limits `sea` m beyond
 --   hub_reach = m                         (a strip town) its centre is its seafront LINE: commercial within this of it
 --   mixes = { <district> = { { "recipe", weight }, ... } }   its own building mixes in place of the district ladders
+--   civic = bool                          the city's full civic table (capitol, courthouse, hospital, university, ...)
+--   landmarks = { { "landmark", count, min_lots = n, min_old_town = n, any = bool }, ... }   (not civic) its own:
+--                                       `count` once it has `min_lots` lots (`min_old_town` old town); `any`: on any
+--                                       district's lot when none of its own can carry one. Landmarks: school, church,
+--                                       market_hall, police, fire_station, library, hospital, university, capitol,
+--                                       courthouse, museum. Each place plans its own (the lot pass, per place).
 --   map = { rgb = { r, g, b }, dot = px, label = m }
 --   (a strip town with a promenade: the first and last blocks of its beachfront row are car parks for the beach's
 --   visitors, written into its hub as `parking`)
@@ -46,6 +52,7 @@ settlements = {
     signed_far = true,
     limit_sign = "CITY LIMIT",
     naming = "city",
+    civic = true,
     -- downtown blocks big enough for towers with room round them (Glenn: "Saltwood downtown blocks should be bigger")
     brief = { prefix = "city_", area_scale = 1.15, size_min = 1400, spoke_spacing = 480,
               core_block = { 128, 96 }, midtown_block = { 165, 118 }, warp = 18, ring_spacing = 140, spokes = 10 },
@@ -62,6 +69,9 @@ settlements = {
     buses = { 1, 8 },
     limit_sign = "TOWN LIMIT",
     naming = "town",
+    -- its school and church, and a market hall in an old town
+    landmarks = { { "school", 1, min_lots = 10, any = true }, { "church", 1, min_lots = 8, any = true },
+                  { "market_hall", 1, min_old_town = 6 } },
     brief = { prefix = "town_", area_scale = 1.0, size_min = 500, spoke_spacing = 360,
               core_block = { 94, 64 }, midtown_block = { 158, 108 }, warp = 10, ring_spacing = 120, spokes = 6 },
     map = { rgb = { 0.95, 0.45, 0.05 }, dot = 5, label = 150 },
@@ -92,6 +102,9 @@ settlements = {
     brief = { prefix = "beach_town_" },
     strip = { length = 900, rows = 3, row = 85, cross = 100, sea = 30, promenade = 55 },
     hub_reach = 60,   -- the seafront's row of blocks
+    -- a town's school and church, a market hall on the seafront and a police post by the beach
+    landmarks = { { "school", 1, min_lots = 10, any = true }, { "church", 1, min_lots = 8, any = true },
+                  { "market_hall", 1, any = true }, { "police", 1, any = true } },
     -- shops, cafes, flats over shops and a small hotel on the seafront; cottages, villas and garden flats behind
     mixes = {
       commercial = { { "mixed_use", 28 }, { "brick_shop", 18 }, { "oldtown_cafe", 12 }, { "corner_shop", 8 }, { "hotel", 10 },

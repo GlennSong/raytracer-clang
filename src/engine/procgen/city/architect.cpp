@@ -2190,8 +2190,15 @@ BuildingRecipe architectLandmark(LandmarkKind kind, Real shortSide, Real area,
     return out;
 }
 
+bool landmarkKindNamed(const std::string& name, LandmarkKind& out) {
+    for (int k = 0; k < static_cast<int>(LandmarkKind::Count); ++k)
+        if (name == landmarkName(static_cast<LandmarkKind>(k))) { out = static_cast<LandmarkKind>(k); return true; }
+    return false;
+}
+
 std::vector<int> planLandmarks(const std::vector<LandmarkCand>& cands,
-                               const Vec2& cityCenter, Real innerRadius) {
+                               const Vec2& cityCenter, Real innerRadius,
+                               const std::vector<LandmarkCluster>* places) {
     std::vector<int> out(cands.size(), -1);
 
     // The clusters present, ascending: the city (0) plans first, towns after —
@@ -2229,7 +2236,31 @@ std::vector<int> planLandmarks(const std::vector<LandmarkCand>& cands,
             }
         }
         std::vector<Want> wants;
-        if (cl == 0) {
+        const LandmarkCluster* own = places && cl >= 0 && cl < static_cast<int>(places->size()) ? &(*places)[static_cast<std::size_t>(cl)] : nullptr;
+        const Vec2 centre = own ? own->center : cityCenter;
+        if (own && !own->civic) {
+            // A PLACE'S OWN LIST (its kind's): each kind's lot needs and districts are the landmark's, as the tables
+            // below give them; the count and the fallback the place's
+            for (const LandmarkWant& lw : own->wants) {
+                if (total < lw.minLots || nOld < lw.minOldTown) continue;
+                Want w{lw.kind, lw.count, 10.0, 180.0, false, DistrictTag::Commercial, DistrictTag::Commercial, lw.anyDistrict};
+                switch (lw.kind) {
+                    case LandmarkKind::School:     w.minShort = 13.0; w.minArea = 320.0; w.tagA = DistrictTag::Residential; w.tagB = DistrictTag::OldTown; break;
+                    case LandmarkKind::Church:     w.minShort = 10.0; w.minArea = 180.0; w.tagA = DistrictTag::Residential; w.tagB = DistrictTag::OldTown; break;
+                    case LandmarkKind::Market:     w.tagA = DistrictTag::OldTown; w.tagB = DistrictTag::Commercial; break;
+                    case LandmarkKind::Police:     w.minShort = 9.0; w.minArea = 140.0; break;
+                    case LandmarkKind::Fire:       w.minShort = 11.0; w.minArea = 220.0; w.tagB = DistrictTag::Industrial; break;
+                    case LandmarkKind::Library:    w.minShort = 12.0; w.minArea = 240.0; w.tagB = DistrictTag::Residential; break;
+                    case LandmarkKind::Hospital:   w.minShort = 15.0; w.minArea = 380.0; break;
+                    case LandmarkKind::University: w.minShort = 15.0; w.minArea = 380.0; w.tagA = DistrictTag::Residential; break;
+                    case LandmarkKind::Capitol:    w.minShort = 13.0; w.minArea = 300.0; w.wantCore = true; w.tagA = DistrictTag::Financial; break;
+                    case LandmarkKind::Courthouse: w.minShort = 12.0; w.minArea = 260.0; w.wantCore = true; w.tagA = w.tagB = DistrictTag::Financial; break;
+                    case LandmarkKind::Museum:     w.minShort = 14.0; w.minArea = 320.0; w.wantCore = true; w.tagA = DistrictTag::Financial; break;
+                    default: break;
+                }
+                wants.push_back(w);
+            }
+        } else if (cl == 0 || (own && own->civic)) {
             // The CITY keeps the full civic table (quotas as before).
             wants = {
                 {LandmarkKind::Capitol, (nFin + nCom) >= 6 ? 1 : 0, 13.0, 300.0,
@@ -2296,7 +2327,7 @@ std::vector<int> planLandmarks(const std::vector<LandmarkCand>& cands,
                             continue;
                         Real score = c.area;
                         if (w.wantCore) {
-                            const Real r = (c.pos - cityCenter).length();
+                            const Real r = (c.pos - centre).length();   // (its own place's centre)
                             score *= 0.4 + std::max(
                                 Real(0),
                                 1.0 - r / std::max(Real(1), innerRadius));
