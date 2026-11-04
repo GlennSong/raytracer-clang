@@ -54,6 +54,13 @@ struct VehiclesVM {
     }
 };
 
+// A TWO-WHEELER's slot (the motorcycle, 2026-11-04), by its own handling's `two_wheeler`: one wheel and one lamp per
+// end, no glass, an open seat. The car rules below hold for every other slot unchanged.
+bool twoWheelSlot(ScriptVM& vm, int slot) {
+    VehicleSpec h;
+    return loadFleetHandling(vm, slot, h) && h.config.twoWheeler;
+}
+
 bool anyColored(const RenderMesh& m) {
     for (const Vertex& v : m.vertices)
         if (v.color.x != 1.0 || v.color.y != 1.0 || v.color.z != 1.0) return true;
@@ -136,8 +143,9 @@ TEST_CASE(every_fleet_slot_has_exactly_four_corner_lamps) {
             }
         std::printf("    [slot %2d] %d markers: %d head, %d tail\n", slot,
                     static_cast<int>(body.lights.size()), heads, tails);
-        CHECK(heads == 2);
-        CHECK(tails == 2);
+        const int perEnd = twoWheelSlot(a.vm, slot) ? 1 : 2;   // a bike: one lamp each end, on its centre line
+        CHECK(heads == perEnd);
+        CHECK(tails == perEnd);
         CHECK(tooClose == 0);
     }
 }
@@ -206,7 +214,9 @@ TEST_CASE(fleet_wheel_layout_matches_the_drawn_wheels) {
         CarBodyRecipe body;
         std::string err;
         CHECK(loadFleetCarBody(a.vm, slot, body, &err));
-        CHECK(body.wheels.size() == 4);
+        const bool bike = twoWheelSlot(a.vm, slot);
+        const std::size_t perAxle = bike ? 1 : 2;
+        CHECK(body.wheels.size() == 2 * perAxle);
 
         int steered = 0, handBrake = 0;
         double loX = 1e30, hiX = -1e30, loY = 1e30, loZ = 1e30, hiZ = -1e30;
@@ -220,7 +230,7 @@ TEST_CASE(fleet_wheel_layout_matches_the_drawn_wheels) {
         for (const WheelPlacement& w : body.wheels) {
             CHECK(w.radius > 0.15 && w.radius < 1.0);
             CHECK(w.width > 0.05);
-            CHECK(w.driven);                    // 4WD, like the drivable spec
+            CHECK(w.driven || (bike && w.steered));   // 4WD, like the drivable spec (a bike: its rear wheel)
             if (w.steered) ++steered;
             if (w.handBrake) ++handBrake;
             // Front wheels steer, rear wheels take the handbrake — never both.
@@ -232,8 +242,8 @@ TEST_CASE(fleet_wheel_layout_matches_the_drawn_wheels) {
             // which is exactly what the baked wheels reach.
             CHECK(std::fabs((w.pos.y - w.radius) - loY) < 0.02);
         }
-        CHECK(steered == 2);
-        CHECK(handBrake == 2);
+        CHECK(steered == static_cast<int>(perAxle));
+        CHECK(handBrake == static_cast<int>(perAxle));
 
         // The layout beside the box it sits in, and beside the two numbers the
         // city_vehicles fallback would have guessed from that box (a half-track
@@ -262,7 +272,7 @@ TEST_CASE(fleet_wheels_are_round) {
         CarBodyRecipe body;
         std::string err;
         CHECK(loadFleetCarBody(a.vm, slot, body, &err));
-        CHECK(body.wheels.size() == 4);
+        CHECK(body.wheels.size() == (twoWheelSlot(a.vm, slot) ? 2u : 4u));
         // The wheelset mesh is everything the chassis is not.
         const std::size_t wheelVerts =
             body.mesh.vertices.size() - body.chassis.vertices.size();
@@ -315,9 +325,10 @@ TEST_CASE(fleet_catalogue_is_the_size_the_car_is_built_at) {
         // is per-class now rather than being quietly loosened for everyone --
         // an 8 m "car" should still fail.
         const bool transit = (className == "bus" || className == "fire_engine");   // (a 9.2 m fire engine too)
-        CHECK(size.x > 1.0 && size.x < 3.0);                          // width
-        CHECK(size.y > 1.0 && size.y < (transit ? 4.0 : 3.5));        // height
-        CHECK(size.z > 3.0 && size.z < (transit ? 15.0 : 8.0));       // length
+        const bool bike = twoWheelSlot(a.vm, slot);   // a motorcycle: 0.7 m over the bars, about 2 m long
+        CHECK(size.x > (bike ? 0.4 : 1.0) && size.x < (bike ? 1.2 : 3.0));             // width
+        CHECK(size.y > (bike ? 0.5 : 1.0) && size.y < (transit ? 4.0 : 3.5));          // height
+        CHECK(size.z > (bike ? 1.4 : 3.0) && size.z < (transit ? 15.0 : bike ? 2.8 : 8.0));   // length
 
         CarBodyRecipe body;
         CHECK(loadFleetCarBody(a.vm, slot, body, &err));
@@ -325,7 +336,8 @@ TEST_CASE(fleet_catalogue_is_the_size_the_car_is_built_at) {
         CHECK(std::fabs(body.size.z - size.z) < 1e-9);
         // The drawn shell fits inside that box and very nearly fills it.
         double loX = 1e30, hiX = -1e30, loZ = 1e30, hiZ = -1e30;
-        for (const Vertex& v : body.chassis.vertices) {
+        // (a bike's wheels ARE its ends, standing past its guards: its drawn length is the shell with them)
+        for (const Vertex& v : (bike ? body.mesh : body.chassis).vertices) {
             loX = std::min(loX, static_cast<double>(v.position.x));
             hiX = std::max(hiX, static_cast<double>(v.position.x));
             loZ = std::min(loZ, static_cast<double>(v.position.z));
@@ -393,6 +405,12 @@ TEST_CASE(fleet_cars_stand_on_their_wheels) {
         for (const Vertex& v : body.mesh.vertices)
             if (std::fabs(v.position.x) < xMax * 0.25)
                 rocker = std::min(rocker, static_cast<double>(v.position.y));
+        // a bike's wheels stand ON its centre line, so its "rocker" is the lowest point of the frame (the shell without
+        // its wheels)
+        if (twoWheelSlot(a.vm, slot)) {
+            rocker = 1e30;
+            for (const Vertex& v : body.chassis.vertices) rocker = std::min(rocker, static_cast<double>(v.position.y));
+        }
         const double height = hi - lo;
         // Wheels reach below the centreline rocker by a real fraction of the
         // car's height (a tucked-up wheel makes these equal).
@@ -451,11 +469,11 @@ TEST_CASE(fleet_bus_is_a_bus_you_can_see_into) {
         CarBodyRecipe body;
         std::string err;
         CHECK(loadFleetCarBody(a.vm, slot, body, &err));
-        CHECK(!body.glass.vertices.empty());
+        CHECK(!body.glass.vertices.empty() || twoWheelSlot(a.vm, slot));   // (a bike has no glass)
         if (body.className != "bus") {
-            // an open car (the convertible) is seen into like the bus; every other car shows its cabin only
+            // an open seat (the convertible, a bike) is seen into like the bus; every other car shows its cabin only
             // near the player
-            CHECK(!body.seeInto || body.className == "convertible");
+            CHECK(!body.seeInto || body.openSeat);
             // fleet v2 kit bodies carry no cabin yet (the city keeps their glass opaque); mesh.car ones do
             CHECK(body.hasDriverSeat);
             CHECK(body.seats.empty());
@@ -570,20 +588,21 @@ TEST_CASE(car_picker_catalogue_builds_and_says_the_true_drivetrain) {
 TEST_CASE(fleet_mixed_carries_kit_and_classic_bodies_and_one_bus) {
     VehiclesVM v;
     CHECK(v.loaded);
-    CHECK(fleetSlotCount(v.vm) == 14);   // the default: the kit fleet (the fire engine, 2026-10-13, the 14th)
+    CHECK(fleetSlotCount(v.vm) == 15);   // the default: the kit fleet (the fire engine, 2026-10-13; the motorcycle, 2026-11-04)
     std::string err;
     CHECK(!selectFleet(v.vm, "no_such_fleet", &err));   // a bad name leaves the default...
-    CHECK(fleetSlotCount(v.vm) == 14);
+    CHECK(fleetSlotCount(v.vm) == 15);
     CHECK(selectFleet(v.vm, "fleet_mixed", &err));      // ...a good one switches it (the city bridge's call)
     const int n = fleetSlotCount(v.vm);
     std::printf("    fleet_mixed: %d slots\n", n);
-    CHECK(n == 26);   // (and the fire engine, before the bus)
+    CHECK(n == 27);   // (and the motorcycle, and the fire engine before the bus)
     int buses = 0, kitSedans = 0, classicSedans = 0, fireEngines = 0;
     for (int s = 0; s < n; ++s) {
         Vec3 size;
         std::string cls, e;
         CHECK(loadFleetCatalogueEntry(v.vm, s, size, cls, &e));
-        CHECK(size.x > 1.0 && size.z > 3.0);
+        const bool bike = twoWheelSlot(v.vm, s);
+        CHECK(size.x > (bike ? 0.4 : 1.0) && size.z > (bike ? 1.4 : 3.0));
         if (cls == "bus") ++buses;
         if (cls == "fire_engine") ++fireEngines;
         if (cls == "sedan") (s < 12 ? kitSedans : classicSedans) += 1;
@@ -680,7 +699,7 @@ TEST_CASE(fleet_bodies_have_no_roof_glass_and_a_floor) {
         }
         std::printf("      glass m2 (both faces): flat %.2f  front %.2f  rear %.2f  side %.2f\n", gTop, gFront, gRear, gSide);
         CHECK(gTop < 0.3);                 // no sunroof (a raked pane near its top edge may tip past 26 deg)
-        CHECK(gFront + gRear > 0.3);       // and the screens are still there
+        CHECK(gFront + gRear > 0.3 || b.glass.vertices.empty());   // and the screens are still there (a bike has none)
         std::printf("    slot %2d %-10s open edges %4d (roof %3d, low %3d)  floor %s  interior %s  see-into %d\n", s,
                     b.className.c_str(), open, roofOpen, lowOpen, floor ? "yes" : "NO", b.interior.vertices.empty() ? "-" : "yes",
                     b.seeInto ? 1 : 0);
@@ -749,8 +768,8 @@ TEST_CASE(every_fleet_slot_drives_with_its_kit_s_drivable_handling) {
             CHECK(ok);
             if (!ok) continue;
             const PhysicsWorld::VehicleConfig& c = h.config;
-            CHECK(c.wheels.size() >= 4);
-            CHECK(c.mass > 500.0);
+            CHECK(c.wheels.size() >= (c.twoWheeler ? 2u : 4u));
+            CHECK(c.mass > (c.twoWheeler ? 100.0 : 500.0));   // (a 220 kg motorcycle)
             CHECK(c.engineTorque > 0.3 * c.mass);
             CHECK(c.brakeTorque > c.mass);
             for (const PhysicsWorld::VehicleWheel& w : c.wheels)   // attach = drawn rest centre + the rig's drop

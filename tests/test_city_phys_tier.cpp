@@ -642,7 +642,10 @@ TEST_CASE(city_lamps_sit_on_their_own_car_s_ends) {
                             std::fabs(local.y) > he[v].y + 0.5 ||
                             std::fabs(local.z) > he[v].z + 0.3)
                             continue;
-                        off = std::min(off, std::fabs(std::fabs(local.z) - he[v].z));
+                        // a bike's ends are its tyres: its lamps sit a wheel's radius inside them, on the fork and the tail
+                        const engine::PhysicsWorld::VehicleConfig* vc = city.carConfig(static_cast<int>(v));
+                        const Real inset = vc && vc->twoWheeler && !vc->wheels.empty() ? vc->wheels[0].radius : 0.0;
+                        off = std::min(off, std::max(Real(0), std::fabs(std::fabs(local.z) - he[v].z) - inset));
                     }
                 }
                 ++lamps;

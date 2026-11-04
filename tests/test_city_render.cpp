@@ -1146,7 +1146,8 @@ TEST_CASE(fleet_bridge_holds_a_promotable_body_per_variant) {
 
     for (int v = 0; v < static_cast<int>(city.carGroups().size()); ++v) {
         CHECK(city.carChassisMesh(v).valid());
-        CHECK(city.carWheels(v).size() == 4u);
+        const engine::PhysicsWorld::VehicleConfig* c = city.carConfig(v);   // (a motorcycle's slot: two wheels)
+        CHECK(city.carWheels(v).size() == (c && c->twoWheeler ? 2u : 4u));
     }
     // Slots wrap the way a driver's vehicle index does, so a car in any slot can
     // be promoted (the sim hands out indices unbounded by the fleet size).
@@ -1164,14 +1165,16 @@ TEST_CASE(fleet_bridge_holds_a_promotable_body_per_variant) {
         bool hasSeat = false;
         const std::vector<PromotedLamp> lamps =
             promotedLamps(city.carLamps(v), &seat, &hasSeat);
-        CHECK(lamps.size() == 4u);
+        const engine::PhysicsWorld::VehicleConfig* c = city.carConfig(v);
+        const bool bike = c && c->twoWheeler;   // one lamp each end, on its centre line
+        CHECK(lamps.size() == (bike ? 2u : 4u));
         int front = 0, left = 0;
         for (const PromotedLamp& l : lamps) {
             if (l.front) ++front;
             if (l.left) ++left;
         }
-        CHECK(front == 2);   // two at the nose...
-        CHECK(left == 2);    // ...and one of each pair per indicator side
+        CHECK(front == (bike ? 1 : 2));   // two at the nose...
+        CHECK(bike || left == 2);         // ...and one of each pair per indicator side
         // ON the bodywork, which is the whole difference from the corner guess:
         // that fallback puts its lenses at ±(halfLength + 0.05), i.e. floating
         // just PAST the tail. A real marker sits on the nose/tail ring itself

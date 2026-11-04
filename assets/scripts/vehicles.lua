@@ -392,7 +392,7 @@ vehicle.drivable = {
   { recipe = "sedan",            label = "Sedan (classic)",      drive = "awd" },
   { recipe = "pickup",           label = "Pickup (classic)",     drive = "awd" },
   { recipe = "van",              label = "Van (classic)",        drive = "awd" },
-  { recipe = "motorcycle",       label = "Motorcycle",           drive = "rwd" },
+  { recipe = "motorcycle",       label = "Motorcycle",           drive = "rwd", quick = true },   -- M drops it
   { recipe = "moped",            label = "Moped",                drive = "rwd" },
   { recipe = "bicycle",          label = "Bicycle",              drive = "rwd" },
 }
@@ -676,9 +676,39 @@ local FLEET_SLOTS = {
     { kit = "pickup",      color = { 0.14, 0.30, 0.20 } },   -- pickup (green)
     { kit = "step_van",    color = { 0.36, 0.22, 0.10 } },   -- parcel step van (brown)
     { kit = "small_truck", color = { 0.90, 0.90, 0.88 } },   -- small box truck (white cab)
+    { bike = "motorcycle", color = { 0.75, 0.08, 0.06 } },   -- motorcycle (red): its rider drawn astride
     { kit = "fire_engine", color = { 0.70, 0.05, 0.05 } },   -- FIRE ENGINE (fire-engine red): stationed, never traffic
     { class = "bus",       color = { 0.86, 0.62, 0.08 } },   -- CITY BUS (municipal yellow), mesh.car
 }
+
+-- A TWO-WHEELER IN THE FLEET (Glenn, 2026-11-04: "motorcycles -- can you make it available"): the drivable recipe
+-- above, its wheels baked in for traffic like every fleet body. Its handling IS that drivable spec (two_wheeler,
+-- lean, the seat's bars and pegs), so a commandeered bike rides like the one N drops, and the city draws its rider
+-- astride from the same seat (a seat with bars, not a wheel).
+local function bike_fleet(kind, color)
+  local spec = two_wheeler(kind, { color = color })
+  local tyre = { 0.04, 0.04, 0.05 }
+  local wheelParts, layout = {}, {}
+  for _, w in ipairs(spec.wheels) do
+    local t = mesh.rotate_z(mesh.cylinder(spec.wheel.radius, spec.wheel.width), math.pi * 0.5)
+    wheelParts[#wheelParts + 1] = mesh.translate(mesh.bake_height_color(t, tyre, tyre), { w.x, w.y, w.z })
+    layout[#layout + 1] = { pos = { w.x, w.y, w.z }, radius = spec.wheel.radius, width = spec.wheel.width,
+                            steered = w.steered, driven = w.driven, hand_brake = w.hand_brake }
+  end
+  local lights, driver_seat = {}, nil
+  for _, lt in ipairs(spec.lights) do
+    if lt.name == "driver_seat" then driver_seat = lt.pos else lights[#lights + 1] = lt end
+  end
+  local h = spec.chassis.half
+  local wheelbase = math.abs(spec.wheels[1].z - spec.wheels[2].z)
+  return {
+    body = spec.body, wheels = mesh.recompute_normals(mesh.merge(wheelParts)), wheel_layout = layout,
+    lights = lights, size = { 0.7, h[2] * 2, wheelbase + 2 * spec.wheel.radius }, class = kind,
+    see_into = true,     -- nothing to see through: the rider is always in view
+    open_seat = true,
+    driver_seat = driver_seat,
+  }
+end
 
 -- The fleet is DESCRIPTION up front and GEOMETRY on demand.
 --
@@ -692,7 +722,17 @@ local FLEET_SLOTS = {
 local function catalogue(slots)
     local out = {}
     for i, slot in ipairs(slots) do
-        if slot.kit then
+        if slot.bike then
+            local spec = two_wheeler(slot.bike, { color = slot.color })
+            out[i] = {
+                class = slot.bike,
+                size = { 0.7, spec.chassis.half[2] * 2, math.abs(spec.wheels[1].z - spec.wheels[2].z) + 2 * spec.wheel.radius },
+                -- its handling IS the drivable spec: two wheels, the lean, the seat's bars and pegs
+                handling = spec,
+                drivable = slot.bike,
+                build = function() return bike_fleet(slot.bike, slot.color) end,
+            }
+        elseif slot.kit then
             local P = kit.SPECS[slot.kit]()
             local car = kit.build(P, 0)
             out[i] = {

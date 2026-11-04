@@ -65,7 +65,7 @@ private:
     // THE CAR PICKER (Glenn: "cycle through all of them somehow and then select a car to drop. It should
     // tell me if the car is 2WD or 4WD"): the drivable catalogue (vehicles.lua), the pick, and a panel
     // shown for a few seconds after a pick, a drop or a 2WD/4WD switch.
-    struct Pick { std::string recipe, label, drive; };
+    struct Pick { std::string recipe, label, drive; bool quick = false; };
     std::vector<Pick> catalogue_;
     bool catalogueTried_ = false;
     int pick_ = 0;

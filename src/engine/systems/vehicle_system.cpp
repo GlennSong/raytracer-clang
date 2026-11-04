@@ -107,6 +107,8 @@ void VehicleSystem::onStart(FrameContext& ctx) {
     // Debug: spawn a fresh car in front of the player (always on solid ground,
     // since the player is standing on a collider).
     ctx.actions.bindButton("spawn_vehicle", KeyCode::N);
+    // ...and M drops the catalogue's QUICK vehicle (the entry marked `quick`: the motorcycle) without cycling to it
+    ctx.actions.bindButton("vehicle_quick", KeyCode::M);
 }
 
 void VehicleSystem::spawnInFront(FrameContext& ctx) {
@@ -175,7 +177,7 @@ void VehicleSystem::loadCatalogue() {
     if (!vm.doString(lib, &err)) { LOG_WARN << "vehicles.lua: " << err; return; }
     std::vector<DrivableEntry> entries;
     if (!loadDrivableCatalogue(vm, entries, &err)) { LOG_WARN << "car picker: " << err; return; }
-    for (const DrivableEntry& e : entries) catalogue_.push_back({e.recipe, e.label, e.drive});
+    for (const DrivableEntry& e : entries) catalogue_.push_back({e.recipe, e.label, e.drive, e.quick});
     LOG_INFO << "[vehicle] car picker: " << catalogue_.size() << " drivable vehicles (, . to pick, N to drop)";
 #endif
 }
@@ -190,7 +192,10 @@ void VehicleSystem::render(FrameContext& ctx) {
                  ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoInputs |
                      ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav);
     ImGui::TextUnformatted(panelText_.c_str());
-    ImGui::TextDisabled("-  =  pick      N  drop      Z  2WD/4WD");
+    std::string keys = "-  =  pick      N  drop";
+    for (const Pick& p : catalogue_)
+        if (p.quick) { keys += "      M  " + p.label; break; }   // (the quick vehicle's own label, from the data)
+    ImGui::TextDisabled("%s      Z  2WD/4WD", keys.c_str());
     ImGui::End();
 #else
     (void)ctx;
@@ -770,9 +775,15 @@ void VehicleSystem::update(FrameContext& ctx) {
         }
     }
     // Drop the picked car in front of the player.
-    if (ctx.actions.pressed("spawn_vehicle") || spawnPending_) {
+    const bool quick = ctx.actions.pressed("vehicle_quick");
+    if (ctx.actions.pressed("spawn_vehicle") || spawnPending_ || quick) {
         // `vehicle_spawn <recipe>`: pick that one first (the catalogue's recipe names: motorcycle, moped, ...)
         wantRecipe_ = spawnPending_ ? spawnRecipe_ : std::string();
+        if (quick) {
+            loadCatalogue();
+            for (const Pick& p : catalogue_)
+                if (p.quick) { wantRecipe_ = p.recipe; break; }
+        }
         spawnPending_ = false;
         spawnInFront(ctx);
     }

@@ -9,6 +9,7 @@
 #include "places.h"        // PlaceMap (ADR-0066)
 #include "../../engine/control/city_requests.h"
 #include "../../engine/control/control_commands.h"
+#include "../../engine/player/seat_geometry.h"   // SeatGeometry (a rider astride)
 #include <array>
 #include <functional>
 #include <string>
@@ -645,6 +646,9 @@ private:
     std::vector<std::vector<CarWheel>> carWheels_;
     // ...and each slot's handling (carConfig), read with the catalogue: no geometry, so a headless sim has it.
     std::vector<engine::PhysicsWorld::VehicleConfig> carConfigs_;
+    // ...and its seat (the handling's `seat`): a seat with BARS, not a wheel, is ridden astride, so the slot draws
+    // its own rider (carRiderGroups_) posed by the player's seat rule instead of the car driver
+    std::vector<engine::SeatGeometry> carSeatGeom_;
     // SEE-INTO VEHICLES (the bus; Glenn: "we should see the npcs sitting on
     // the bus. There should be a driver"). Per variant, indexed like
     // carGroups_: a CLEAR glass group (invalid Entity when the slot's glass is
@@ -669,6 +673,7 @@ private:
     std::vector<char> carHasRear_;
     std::vector<char> carHasDriver_;
     engine::Entity busDriverGroup_{};
+    std::vector<engine::Entity> carRiderGroups_;   // per slot: its rider astride (invalid: a car's driver, if any)
     engine::Entity busRiderGroups_[3] = {};
     // The seat the PLAYER holds on the bus they ride (-1 none): NPC riders
     // are dealt round it, so nobody is drawn sitting in the player's lap.

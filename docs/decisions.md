@@ -14760,3 +14760,33 @@ byte-identical. The gate passes.
 
 **Proof:** the bakes match section for section, all but the timing report; the gate passes (the mesh audit's
 own cases included).
+
+## ADR-0322 — Motorcycles in the city: a fleet slot, a rider astride, and the M key
+
+**Status.** Accepted, 2026-11-04. Glenn: "motorcycles. We have one, can you make it available?" -- parked in the city,
+riding in traffic, and easier to pick.
+
+**Context.** The motorcycle (ADR-0235, `two_wheeler` in vehicles.lua) was only reachable through the car picker: cycle
+16 entries with - and =, then N. The city's fleet was cars and trucks only, and the one ambient occupant the city draws
+(the seated car driver) is a car-seat pose.
+
+**Decision.**
+1. A FLEET SLOT, as data: `{ bike = "motorcycle", color = ... }` in FLEET_SLOTS (and so in fleet_mixed). The catalogue
+   builds it from the drivable recipe with its wheels baked in (`bike_fleet`); its `handling` IS the drivable spec, so
+   the physical tier and a commandeered bike ride on Jolt's two-wheeler with the seat's bars and pegs. One slot in 15:
+   about one ordinary vehicle in 13. Parked bikes come from the same slot rotation as parked cars.
+2. A RIDER ASTRIDE, by the seat, not the kind: a slot whose handling's seat has bars (not a wheel) gets its own rider
+   group, posed by the player's seat rule (`seatedPose`: hands on the grips, feet on the pegs, the seat's lean) and
+   built by `buildPosedPerson`. The slot is `see_into`, so the rider is drawn whenever the bike is on a trip, near or
+   far; parked, nobody sits on it (the car rule).
+3. THE QUICK KEY: `vehicle_quick` (M, rebindable) drops the drivable entry marked `quick = true` -- the motorcycle. The
+   picker's hint names it from the data.
+4. `traffic?` reports the riders drawn and the nearest one, for probes.
+
+The fleet tests that held car invariants for every slot (four wheels, four corner lamps, glass, 1 m wide, 500 kg, lamps
+at the body's ends) now ask each slot what it is (`twoWheelSlot`, from its own handling): a bike has one wheel and one
+lamp per end, no glass, an open seat, and lamps a tyre's radius inside its ends. Runtime only: no bake change.
+
+**Verified.** run_tests 1505/1505, physics_tests 146/146, lanes_tests 50/50. river_town in the viewer: 20-21 riders in
+traffic, shot astride at a light; `tap M` logs "Dropped: Motorcycle". Not yet checked by hand: commandeering a parked bike
+and a physical-tier bike under the AI driver (Jolt's controller holds it up; untested at a junction).

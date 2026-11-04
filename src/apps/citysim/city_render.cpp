@@ -26,6 +26,7 @@
 #include <imgui.h>                                   // Living City debug section
 #endif
 #include "../../engine/procgen/vehicle/occupant.h"   // people seated on the bus
+#include "../../engine/player/driver_seat.h"         // seatedPose: a rider astride a bike
 #include "../../engine/interior_occupants.h"         // people inside a streamed interior (campus M4)
 #include "../../engine/procgen/furniture_kit.h"
 #include "../../engine/furniture_draw.h"
@@ -630,6 +631,7 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
                 LOG_WARN << "citysim fleet '" << params_.fleet << "': " << ferr << " — keeping the default fleet";
         }
         carConfigs_.clear();
+        carSeatGeom_.clear();
         if (!scriptOk) {
         } else if (int slots = engine::fleetSlotCount(fleetVM_); slots > 0) {
             // THE ASSET decides how many cars the fleet has. This used to be a
@@ -672,6 +674,7 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
                 if (!engine::loadFleetHandling(fleetVM_, v, handling, &hErr))
                     LOG_WARN << "citysim vehicles fleet[" << v << "]: " << hErr << " (it cannot be made physical)";
                 carConfigs_.push_back(handling.config);
+                carSeatGeom_.push_back(handling.seat);
                 catalogue.push_back(body);
             }
             LOG_INFO << "[citysim] fleet: " << slots << " slots, bus variant "
@@ -1479,6 +1482,22 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
                                         Vec3(0.52, 0.36, 0.25), 24.0, "city:busrider1");
             busRiderGroups_[2] = person(Vec3(0.80, 0.74, 0.60), Vec3(0.15, 0.16, 0.20),
                                         Vec3(0.92, 0.76, 0.64), 24.0, "city:busrider2");
+        }
+        // RIDERS ASTRIDE (a motorcycle, a moped): a slot whose seat has bars draws its own rider, posed by the
+        // player's seat rule (seatedPose: hands on the grips, feet on the pegs, the seat's lean) -- the same body the
+        // player rides in, so an NPC bike and the one you drop agree. Nothing to see through: always drawn on a trip.
+        carRiderGroups_.assign(carGroups_.size(), Entity{});
+        for (std::size_t v = 0; assets && v < carGroups_.size() && v < carSeatGeom_.size(); ++v) {
+            if (carSeatGeom_[v].wheel || v >= carHasDriver_.size() || !carHasDriver_[v]) continue;
+            InstanceGroup g;
+            g.mesh = assets->acquireMesh(engine::buildPosedPerson(engine::seatedPose(carSeatGeom_[v], {}, 0, 0, 1),
+                                                                  static_cast<int>(v)),
+                                         "city:rider" + std::to_string(v));
+            g.material = pedMaterial();
+            g.renderLayer = engine::LayerSim;
+            g.drawClass = engine::DrawClass::SimBody;
+            carRiderGroups_[v] = world.create();
+            world.add<InstanceGroup>(carRiderGroups_[v], g);
         }
 
         // FLEET VERDICT — loud, unmissable, once per build. "Why is the city
@@ -2979,6 +2998,8 @@ void CityRenderSystem::syncGroups(World& world) {
             refreshBounds(cabin);
             const std::vector<Vec3>& seats = carSeats_[v];
             const bool hasDriver = carHasDriver_[v] != 0;
+            InstanceGroup* rider = v < carRiderGroups_.size() && carRiderGroups_[v].valid() ? world.get<InstanceGroup>(carRiderGroups_[v]) : nullptr;
+            if (rider) rider->beginStep();
             if (seats.empty() && !hasDriver) continue;
             const int n = static_cast<int>(seats.size());
             for (std::size_t k = 0; k < ids.size() && k < cars[v]->transforms.size(); ++k) {
@@ -2994,7 +3015,7 @@ void CityRenderSystem::syncGroups(World& world) {
                 // trip -- moving, or a bus or a cab on duty; at rest the person is indoors and the car stands empty
                 if (!carOccupied(ai)) continue;
                 const uint64_t body = k < cars[v]->ids.size() ? cars[v]->ids[k] : 0;
-                if (hasDriver && drv) drv->push(xf * Mat4::trs(carDriverSeat_[v], Quat(), Vec3(1, 1, 1)), body | 3);
+                if (hasDriver && (rider || drv)) (rider ? rider : drv)->push(xf * Mat4::trs(carDriverSeat_[v], Quat(), Vec3(1, 1, 1)), body | 3);
                 const int load = std::min(sim_.rides().load(ai), n);
                 int placed = 0;
                 for (int j = 0; j < n && placed < load; ++j) {
@@ -3007,6 +3028,7 @@ void CityRenderSystem::syncGroups(World& world) {
                     ++placed;
                 }
             }
+            refreshBounds(rider);
         }
         refreshBounds(drv);
         for (InstanceGroup* r : rid) refreshBounds(r);
@@ -4230,7 +4252,20 @@ void CityRenderSystem::update(engine::FrameContext& ctx) {
                               laneN, laneOff, laneInBays, laneOut, laneN ? laneErrSum / laneN : 0.0, pulling, restN, restKerb);
                 char pb[160];
                 std::snprintf(pb, sizeof(pb), "; parked with nobody in: %d drawn near (%d in a bay), %d past the kerb", parkN, parkInBay, parkKerb);
-                answers_.set("traffic?", std::string(tb) + pileWho + pb + (std::getenv("RT_TRAFFIC_DEBUG") ? kerbWho + parkWho : std::string()));
+                // ...and the riders astride (a motorcycle's): how many are drawn, the nearest one's spot -- a probe aims there
+                int riders = 0; Vec3 riderAt(0, 0, 0); Real riderD = 1e30;
+                for (Entity re : carRiderGroups_)
+                    if (const InstanceGroup* rg = re.valid() ? ctx.world.get<InstanceGroup>(re) : nullptr)
+                        for (const Mat4& m : rg->transforms) {
+                            ++riders;
+                            const Vec3 at(m.m[0][3], m.m[1][3], m.m[2][3]);
+                            const Real d = (Vec2(at.x, at.z) - cam).length();
+                            if (d < riderD) { riderD = d; riderAt = at; }
+                        }
+                char rb[128];
+                std::snprintf(rb, sizeof(rb), "; riders astride %d drawn, nearest %.1f %.1f %.1f (%.0f m)", riders, riderAt.x, riderAt.y,
+                              riderAt.z, riders ? riderD : -1.0);
+                answers_.set("traffic?", std::string(tb) + pileWho + pb + rb + (std::getenv("RT_TRAFFIC_DEBUG") ? kerbWho + parkWho : std::string()));
             }
         }
         // THE OPEN SIGNS (storefronts stage 3): once a second, every window's sign lit while its place is open and

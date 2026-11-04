@@ -337,6 +337,7 @@ bool loadDrivableCatalogue(ScriptVM& vm, std::vector<DrivableEntry>& out, std::s
             lua_getfield(L, -1, "recipe"); if (lua_isstring(L, -1)) e.recipe = lua_tostring(L, -1); lua_pop(L, 1);
             lua_getfield(L, -1, "label"); if (lua_isstring(L, -1)) e.label = lua_tostring(L, -1); lua_pop(L, 1);
             lua_getfield(L, -1, "drive"); if (lua_isstring(L, -1)) e.drive = lua_tostring(L, -1); lua_pop(L, 1);
+            lua_getfield(L, -1, "quick"); e.quick = lua_toboolean(L, -1) != 0; lua_pop(L, 1);
             if (!e.recipe.empty()) out.push_back(std::move(e));
         }
         lua_pop(L, 1);

@@ -91,7 +91,7 @@ void readVehicleHandling(lua_State* L, int t, VehicleSpec& out);
 
 // The DRIVABLE CATALOGUE (vehicles.lua `vehicle.drivable`): what the player can pick and drop. `drive` is
 // "fwd" | "rwd" | "awd" | "4wd" (part-time). The VM must have vehicles.lua loaded.
-struct DrivableEntry { std::string recipe, label, drive; };
+struct DrivableEntry { std::string recipe, label, drive; bool quick = false; };   // quick: the one key's vehicle (M)
 bool loadDrivableCatalogue(ScriptVM& vm, std::vector<DrivableEntry>& out, std::string* err = nullptr);
 // "4WD (part-time, Z)" style text for a drive code.
 std::string driveLabel(const std::string& drive);
