@@ -1,4 +1,5 @@
 #include "forest.h"
+#include "../../hash.h"   // lowbias32
 #include "../mesh_builder.h"
 
 #include "ground_cover.h"
@@ -15,15 +16,7 @@
 namespace engine {
 
 namespace {
-double smooth(double a, double b, double x) {
-    const double t = std::clamp((x - a) / (b - a), 0.0, 1.0);
-    return t * t * (3.0 - 2.0 * t);
-}
-uint32_t mix32(uint32_t h) {
-    h ^= h >> 16; h *= 0x7feb352du; h ^= h >> 15; h *= 0x846ca68bu; h ^= h >> 16;
-    return h;
-}
-double unit(uint32_t h) { return (mix32(h) & 0xFFFFFFu) / 16777216.0; }
+double unit(uint32_t h) { return unit24(lowbias32(h)); }
 }  // namespace
 
 ForestParams forestFromJson(const nlohmann::json& j) {
@@ -185,10 +178,10 @@ double forestPrefilter(const ForestParams& p, const TerrainMaps* maps, double x,
     const Noise& nz = forestNoise(p.seed);
     const double stand = 0.5 + 0.5 * nz.fbm2(x / p.standScaleM + 7.7, z / p.standScaleM - 2.9, 4) + 0.08 * nz.noise2(x * 0.03, z * 0.03);
     const double t0 = 1.0 - p.coverage - 0.1;
-    double d = smooth(t0, t0 + 0.2, stand);
+    double d = smoothstep(t0, t0 + 0.2, stand);
     if (d > 0.0 && maps) {
         const TerrainMapSample m = maps->at(x, z);
-        d *= smooth(0.12, 0.45, m.soil) * (1.0 - smooth(0.2, 0.55, m.scree));
+        d *= smoothstep(0.12, 0.45, m.soil) * (1.0 - smoothstep(0.2, 0.55, m.scree));
     }
     return d;
 }
@@ -196,11 +189,11 @@ double forestPrefilter(const ForestParams& p, const TerrainMaps* maps, double x,
 double forestGrounded(const ForestParams& p, double sea, const GroundCover* cover, double x, double z, double y, double slopeDeg) {
     const Noise& nz = forestNoise(p.seed);
     const double alt = y - (sea > -1e29 ? sea : 0.0);
-    double d = smooth(p.shoreClearM, p.shoreClearM + 8.0, alt);
+    double d = smoothstep(p.shoreClearM, p.shoreClearM + 8.0, alt);
     if (d <= 0.0) return 0.0;
     const double tl = p.treelineM + 90.0 * nz.fbm2(x * 0.0017 + 3.3, z * 0.0017 - 1.1, 3);
-    d *= 1.0 - smooth(tl - 70.0, tl, alt);
-    d *= 1.0 - smooth(p.maxSlopeDeg - 8.0, p.maxSlopeDeg, slopeDeg);
+    d *= 1.0 - smoothstep(tl - 70.0, tl, alt);
+    d *= 1.0 - smoothstep(p.maxSlopeDeg - 8.0, p.maxSlopeDeg, slopeDeg);
     if (d > 0.0 && cover) {
         const Cover c = cover->at(x, z, y, std::cos(slopeDeg * 3.14159265358979 / 180.0));
         d *= std::max(0.0, 1.0 - 1.6 * (c.rock + c.snow + c.sand));
@@ -215,17 +208,17 @@ ForestWhy forestWhy(const ForestParams& p, double sea, const GroundCover* cover,
     const Noise& nz = forestNoise(p.seed);
     const double stand = 0.5 + 0.5 * nz.fbm2(x / p.standScaleM + 7.7, z / p.standScaleM - 2.9, 4) + 0.08 * nz.noise2(x * 0.03, z * 0.03);
     const double t0 = 1.0 - p.coverage - 0.1;
-    w.stand = smooth(t0, t0 + 0.2, stand);
+    w.stand = smoothstep(t0, t0 + 0.2, stand);
     if (maps) {
         const TerrainMapSample m = maps->at(x, z);
-        w.soil = smooth(0.12, 0.45, m.soil);
-        w.scree = 1.0 - smooth(0.2, 0.55, m.scree);
+        w.soil = smoothstep(0.12, 0.45, m.soil);
+        w.scree = 1.0 - smoothstep(0.2, 0.55, m.scree);
     }
     const double alt = y - (sea > -1e29 ? sea : 0.0);
-    w.shore = smooth(p.shoreClearM, p.shoreClearM + 8.0, alt);
+    w.shore = smoothstep(p.shoreClearM, p.shoreClearM + 8.0, alt);
     const double tl = p.treelineM + 90.0 * nz.fbm2(x * 0.0017 + 3.3, z * 0.0017 - 1.1, 3);
-    w.treeline = 1.0 - smooth(tl - 70.0, tl, alt);
-    w.slope = 1.0 - smooth(p.maxSlopeDeg - 8.0, p.maxSlopeDeg, slopeDeg);
+    w.treeline = 1.0 - smoothstep(tl - 70.0, tl, alt);
+    w.slope = 1.0 - smoothstep(p.maxSlopeDeg - 8.0, p.maxSlopeDeg, slopeDeg);
     if (cover) {
         const Cover c = cover->at(x, z, y, std::cos(slopeDeg * 3.14159265358979 / 180.0));
         w.cover = std::max(0.0, 1.0 - 1.6 * (c.rock + c.snow + c.sand));
@@ -240,7 +233,7 @@ double forestRegionAt(const ForestRegion& R, uint32_t seed, double x, double z) 
     if (d > 1.25 * R.radius + R.edge) return 0.0;
     const double a = std::atan2(dz, dx);
     const double r = R.radius * (1.0 + 0.25 * nz.fbm2(std::cos(a) * 1.7 + R.cx * 1e-3, std::sin(a) * 1.7 + R.cz * 1e-3, 3));
-    return 1.0 - smooth(r - R.edge, r, d);
+    return 1.0 - smoothstep(r - R.edge, r, d);
 }
 
 double forestCanopy(const ForestParams& p, double sea, const TerrainMaps* maps, double x, double z, double y,
@@ -302,9 +295,9 @@ std::vector<ForestTree> placeForest(const ForestParams& p, double half, double s
                         regionK *= 1.0 + (R.weight[s] - 1.0) * inRegion[r];
                         if (R.named[s]) altLo += (std::min(altLo, R.altLo) - altLo) * inRegion[r];
                     }
-                    const double band = smooth(altLo - 60.0, altLo + 20.0, alt) * (1.0 - smooth(fs.altHi - 20.0, fs.altHi + 60.0, alt));
+                    const double band = smoothstep(altLo - 60.0, altLo + 20.0, alt) * (1.0 - smoothstep(fs.altHi - 20.0, fs.altHi + 60.0, alt));
                     if (band <= 0.0) continue;
-                    const double k = regionK * (1.0 + fs.wet * ((0.03 + smooth(0.45, 0.8, wet)) * 4.0 - 1.0));
+                    const double k = regionK * (1.0 + fs.wet * ((0.03 + smoothstep(0.45, 0.8, wet)) * 4.0 - 1.0));
                     const double patch = sn.fbm2(x * 0.004 + 17.0 * s, z * 0.004 - 11.0 * s, 3);
                     const double w = std::log(band * fs.weight * k + 1e-6) + 1.6 * patch + 0.35 * unit(h ^ (0x1234u + static_cast<uint32_t>(s)));
                     if (w > bw) { bw = w; best = static_cast<int>(s); }
@@ -323,13 +316,13 @@ std::vector<ForestTree> placeForest(const ForestParams& p, double half, double s
                 tr.yaw = static_cast<float>(unit(h ^ 0x77u) * 6.2831853);
                 // stunted toward the treeline and at a stand's thin edge
                 const double tl = p.treelineM;
-                const double stunt = 1.0 - 0.5 * smooth(tl - 220.0, tl, alt);
+                const double stunt = 1.0 - 0.5 * smoothstep(tl - 220.0, tl, alt);
                 tr.scale = static_cast<float>((0.72 + 0.5 * unit(h ^ 0x99u)) * stunt * (0.8 + 0.2 * d) * fs.scale);
                 // (its variant -- in a species grown both ways, the stand-grown half as the stand is thick here)
                 int nv = fs.variants, first = 0;
                 if (fs.formByDensity && nv >= 2) {
                     nv /= 2;
-                    if (unit(h ^ 0xF0F0u) < smooth(0.30, 0.65, d)) first = nv;
+                    if (unit(h ^ 0xF0F0u) < smoothstep(0.30, 0.65, d)) first = nv;
                 }
                 tr.variant = static_cast<uint16_t>(best * vps + first + static_cast<int>(unit(h ^ 0x3131u) * nv) % nv);
                 parts[static_cast<std::size_t>(j)].push_back(tr);

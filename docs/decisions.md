@@ -14665,3 +14665,28 @@ code (ece55808… vs d8bfe75d…). rt_bake is reproducible run to run. Owed: why
 
 AGENTS.md rule, restated for these: a segment, polyline or simplification helper goes in polyline.h, never a private
 copy. The wider inventory (smoothstep, angle wrap, hashes, area, bounds, stations, resampling...) is #117 wave 4.
+
+## ADR-0317 — #184 batch 1: smoothstep, the lowbias32 hash, lerp and the degree wrap, once
+
+#184 (Glenn, 2026-11-03: "build shared libraries of these functions to avoid having to do that work over and over"),
+the first batch: the copies that were bit-identical.
+
+**Decision.**
+- `smoothstep(e0, e1, x)` and `smoothstep01(t)` live in rt_math.h. They replace 13 three-argument copies (sstep,
+  surfStep, smoothstep ×2, smooth ×6 incl. lambdas, smooth01, sm) and 9 one-argument copies (smooth ×3, smoothStep,
+  smoothstep, smooth01 ×2, ease). All computed `clamp((x-e0)/(e1-e0), 0, 1)`, then `t*t*(3-2t)`. planet.cpp keeps its
+  equal-edges step as `edgeStep`, a wrapper over the shared one.
+- `wrapDegrees` (to [-180, 180]) lives in rt_math.h. It replaces riding's wrapDeg and the follow camera's wrapDegrees.
+- `lowbias32` lives in a new `src/hash.h` beside proc_rng.h (stateless hashes; proc_rng is the seeded stream).
+  It replaces nine copies: mix ×2, mixHash, mix32 ×3, hashU32, hash32, hashU. With it: `hashCell(a, b, seed)`
+  (a grid cell's bits) and `unit24(h)` (the low 24 bits as [0, 1)). They replace four inline cell hashes with the same
+  constants (level_params' rock facets, stream_power's stochastic routing, terrain_weather, rock_layers' beds, which
+  pass seed 0) and forest's `unit`.
+- `lerp(Vec3)` (rt_math.h) replaces mix3, mixv ×2 and lerp3. `Vec3::length()` replaces vlen ×2.
+
+**Proof.** river_town's and metro_v2_test's bakes match section for section, all but the timing report. The
+island re-planned from itself is byte-identical (graph, signs, hubs, terrain). The rest of the changed code runs at
+play time or grows trees (the vehicle sounds, locomotion, riding, the camera, the sky clock, forests, interior
+occupants, the tracer's scene), or only when a weather or erosion block is baked anew (stream_power,
+terrain_weather, rock_layers: the island reads its cached one). There the copies were the same arithmetic, operation for
+operation, and the commit tests pass, their erosion, rock and weather cases included.

@@ -1,4 +1,5 @@
 #include "procgen/tree_recipe.h"
+#include "../hash.h"   // hashCell, unit24
 #include "level_params.h"
 #include "procgen/terrain_weather.h"   // the weathered ground (ADR-0126)
 #include "procgen/terrain_maps.h"      // its maps (ADR-0128)
@@ -342,10 +343,8 @@ std::shared_ptr<const std::function<double(double, double)>> erodedForTerrain(co
                     // face cut into Voronoi cells ~blockCell across -- each a flat block, the ground's own slope over
                     // it tilted its own way and stepped out or in by up to `amp`, a crack sunk along its edges. The
                     // face becomes a mosaic of blocks (an object laid on a smooth face read as rocks stuck on it)
-                    auto hsh = [](int64_t a, int64_t b, uint32_t s) {
-                        uint32_t q = static_cast<uint32_t>(a) * 0x9E3779B1u ^ static_cast<uint32_t>(b) * 0x85EBCA77u ^ s * 0xC2B2AE3Du;
-                        q ^= q >> 16; q *= 0x7FEB352Du; q ^= q >> 15; q *= 0x846CA68Bu; q ^= q >> 16;
-                        return (q & 0xFFFFFFu) / 16777216.0;
+                    auto hsh = [](int64_t a, int64_t b, uint32_t s) {   // (hash.h)
+                        return unit24(hashCell(static_cast<uint32_t>(a), static_cast<uint32_t>(b), s));
                     };
                     const double C = blockCell;
                     const int64_t cx = static_cast<int64_t>(std::floor(x / C)), cz = static_cast<int64_t>(std::floor(z / C));

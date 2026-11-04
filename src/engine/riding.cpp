@@ -47,11 +47,6 @@ Real headingDeg(const Mat4& m) {
     return std::atan2(f.x, -f.z) * 57.29577951308232;
 }
 
-Real wrapDeg(Real d) {
-    while (d > 180) d -= 360;
-    while (d < -180) d += 360;
-    return d;
-}
 
 void rideStep(World& world, PhysicsWorld* physics, Entity rider, FlyCameraController* fly, Real dt) {
     Passenger* p = world.get<Passenger>(rider);
@@ -101,7 +96,7 @@ void rideStep(World& world, PhysicsWorld* physics, Entity rider, FlyCameraContro
     p->facing = flatForward(p->carrier);
     // the view turns WITH the carrier, a step at a time here (RidingSystem adds the rest of the way each frame)
     const Real yaw = headingDeg(p->carrier);
-    if (fly && p->turnsView && p->haveYaw) fly->yaw += wrapDeg(yaw - p->lastYaw);
+    if (fly && p->turnsView && p->haveYaw) fly->yaw += wrapDegrees(yaw - p->lastYaw);
     p->lastYaw = yaw;
     p->haveYaw = true;
 }
@@ -142,8 +137,8 @@ void RidingSystem::render(FrameContext& ctx) {
     if (PrevTransform* prev = ctx.world.get<PrevTransform>(rider)) prev->value = *t;   // drawn where it is put
     if (!p->turnsView) return;   // (at the wheel: the chase rig frames the car, and the view is its own)
     // the view: the rest of the way round with the drawn carrier (rideStep turned it to the step's heading)
-    const Real shown = wrapDeg(headingDeg(drawn) - headingDeg(p->carrier));
-    if (fly_) fly_->yaw += wrapDeg(shown - p->yawShown);
+    const Real shown = wrapDegrees(headingDeg(drawn) - headingDeg(p->carrier));
+    if (fly_) fly_->yaw += wrapDegrees(shown - p->yawShown);
     p->yawShown = shown;
     // THE FIRST-PERSON EYE, carried on rigidly from where it was framed: moved with the body and turned by the
     // carrier's turn since (measured: 0.00 mm against the saloon, from ~15 mm framed a frame late). A third-person

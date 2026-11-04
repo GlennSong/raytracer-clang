@@ -15,12 +15,6 @@ constexpr double kDeg = kPi / 180.0;
 constexpr double kObliquityDeg = 23.44;
 
 // Hermite smoothstep, clamped — the standard 0→1 ease used throughout.
-double smoothstep(double edge0, double edge1, double x) {
-    double t = (x - edge0) / (edge1 - edge0);
-    if (t < 0.0) t = 0.0;
-    if (t > 1.0) t = 1.0;
-    return t * t * (3.0 - 2.0 * t);
-}
 
 double mix(double a, double b, double t) { return a + (b - a) * t; }
 

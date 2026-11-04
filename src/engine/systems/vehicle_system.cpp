@@ -872,10 +872,6 @@ void VehicleSystem::measureSlide(FrameContext& ctx) {
     if (!v || v->vehicleId == PhysicsWorld::INVALID_VEHICLE) return smokeOff();
     PhysicsWorld& pw = physicsSys.physicsWorld();
     const PhysicsWorld::VehicleTelemetry tel = pw.vehicleTelemetry(v->vehicleId);
-    auto smooth = [](Real a, Real b, Real x) {
-        const Real u = std::clamp((x - a) / (b - a), Real(0), Real(1));
-        return u * u * (3 - 2 * u);
-    };
     Real along = 0;
     for (std::size_t i = 0; i < tel.wheelSlip.size(); ++i)
         if (i < tel.wheelContact.size() && tel.wheelContact[i]) along = std::max(along, std::fabs(tel.wheelSlip[i]));
@@ -884,9 +880,9 @@ void VehicleSystem::measureSlide(FrameContext& ctx) {
     // lock. A brisk corner, a wheelspin pull-away, a bump: silent.
     const PhysicsWorld::DriftState drift = pw.vehicleDrift(v->vehicleId);
     const Real speed = std::fabs(v->speed);
-    const Real drifting = drift.drifting ? smooth(6.0, 26.0, std::fabs(drift.slipDeg)) : Real(0);
-    const Real braking = smooth(0.55, 0.95, std::max(v->brake, v->handBrake)) * (0.6 + 0.4 * smooth(0.2, 0.7, along));
-    const Real fast = smooth(4.0, 11.0, speed);
+    const Real drifting = drift.drifting ? smoothstep(6.0, 26.0, std::fabs(drift.slipDeg)) : Real(0);
+    const Real braking = smoothstep(0.55, 0.95, std::max(v->brake, v->handBrake)) * (0.6 + 0.4 * smoothstep(0.2, 0.7, along));
+    const Real fast = smoothstep(4.0, 11.0, speed);
     v->slide = v->pedalled ? Real(0) : std::max(drifting, braking) * fast;
     // the smoke: a drift's in full, a hard stop's a wisp (Glenn: "The braking smoke is a little heavy")
     const Real smoky = v->pedalled ? Real(0) : std::max(drifting, braking * Real(0.3)) * fast;
@@ -958,10 +954,6 @@ void VehicleSystem::updateTyres(FrameContext& ctx) {
     }
     const Real speed = std::fabs(v->speed);
     const Real slide = v->slide;   // (measureSlide)
-    auto smooth = [](Real a, Real b, Real x) {
-        const Real u = std::clamp((x - a) / (b - a), Real(0), Real(1));
-        return u * u * (3 - 2 * u);
-    };
     drive(squeal_, static_cast<float>(0.3 * slide), static_cast<float>(0.9 + 0.15 * slide + speed / 150.0),
           t->position, 9);
     // A BICYCLE: the freewheel's pawls ticking while it coasts (as fast as the back wheel turns), the tyres' hum
@@ -969,7 +961,7 @@ void VehicleSystem::updateTyres(FrameContext& ctx) {
     const Real r = v->config.wheels.empty() ? 0.34 : v->config.wheels.back().radius;
     const Real clicks = 24.0 * speed / (6.283185307179586 * r);   // 24 pawl engagements a turn
     const bool coasting = bike && speed > 0.8 && std::fabs(v->throttle) < 0.05;
-    drive(freewheel_, coasting ? static_cast<float>(0.3 * smooth(0.8, 3.0, speed)) : 0.0f,
+    drive(freewheel_, coasting ? static_cast<float>(0.3 * smoothstep(0.8, 3.0, speed)) : 0.0f,
           static_cast<float>(std::clamp(clicks / 40.0, 0.25, 3.0)), t->position, 12);
     drive(roll_, bike ? static_cast<float>(0.45 * std::pow(std::clamp(speed / 9.0, 0.0, 1.0), 0.8)) : 0.0f,
           static_cast<float>(0.7 + speed / 14.0), t->position, 8);

@@ -467,7 +467,6 @@ std::vector<TerrainFlatten> lanesTerraces(const std::vector<TerrainFlatten>& gra
 std::vector<PadConflict> padsOnPavement(const Result& r, const std::vector<TerrainFlatten>& pads, double kerb) {
     std::vector<PadConflict> out; if (!r.hasTerrain || r.terrain.nx < 2 || r.conform.nodeOwner.size() != r.terrain.z.size()) return out;
     const HeightGrid& G = r.terrain;
-    auto smooth = [](double u) { u = std::clamp(u, 0.0, 1.0); return u * u * (3 - 2 * u); };
     for (size_t pi = 0; pi < pads.size(); ++pi) {
         const TerrainFlatten& f = pads[pi]; if (f.polygon.size() < 3) continue;
         Ring ring; for (const Vec3& v : f.polygon) ring.emplace_back(v.x, v.z);
@@ -479,7 +478,7 @@ std::vector<PadConflict> padsOnPavement(const Result& r, const std::vector<Terra
             const Vec2 q(G.x0 + i * G.res, G.y0 + j * G.res); double w = 1.0;
             if (!pointInRing(ring, q)) {
                 double d = 1e300; for (size_t k = 0; k < ring.size(); ++k) { const Vec2& a = ring[k]; const Vec2& b = ring[(k + 1) % ring.size()]; const Vec2 ab = b - a; const double L2 = dot(ab, ab); const double t = L2 > 1e-12 ? std::clamp(dot(q - a, ab) / L2, 0.0, 1.0) : 0.0; d = std::min(d, distance(q, a + ab * t)); }
-                if (d >= f.falloff) continue; w = smooth(1.0 - d / f.falloff);
+                if (d >= f.falloff) continue; w = smoothstep01(1.0 - d / f.falloff);
             }
             const double plane = f.c + f.dx * q.x + f.dz * q.y, ground = G.z[n], rise = (plane - ground) * w;
             if (rise <= kerb) continue;

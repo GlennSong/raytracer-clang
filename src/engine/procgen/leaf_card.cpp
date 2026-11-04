@@ -1,4 +1,5 @@
 #include "leaf_card.h"
+#include "../../hash.h"   // lowbias32
 
 #include "lsystem.h"
 
@@ -12,11 +13,7 @@ namespace {
 
 constexpr double kPi = 3.14159265358979323846;
 
-uint32_t mixHash(uint32_t h) {
-    h ^= h >> 16; h *= 0x7feb352du; h ^= h >> 15; h *= 0x846ca68bu; h ^= h >> 16;
-    return h;
-}
-double unit(uint32_t h) { return mixHash(h) / 4294967296.0; }
+double unit(uint32_t h) { return lowbias32(h) / 4294967296.0; }
 
 struct V2 {
     double x = 0, y = 0;
@@ -128,7 +125,7 @@ void drawTwig(const LeafCardSpec& s, uint32_t seed, int row, std::vector<Stem>& 
             case 'W': {   // a flower
                 if (!s.flower.set) break;
                 const double sc = m.params.empty() ? 1.0 : arg;
-                h = mixHash(h + 0x77u);
+                h = lowbias32(h + 0x77u);
                 Leaf lf;
                 lf.base = st.p;
                 lf.dir = {std::cos(st.a), std::sin(st.a)};
@@ -140,7 +137,7 @@ void drawTwig(const LeafCardSpec& s, uint32_t seed, int row, std::vector<Stem>& 
             }
             case 'L': {
                 const double sc = m.params.empty() ? 1.0 : arg;
-                h = mixHash(h + 0x51u);
+                h = lowbias32(h + 0x51u);
                 Leaf lf;
                 lf.base = st.p;
                 lf.dir = {std::cos(st.a), std::sin(st.a)};

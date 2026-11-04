@@ -28,7 +28,6 @@ namespace {
 
 constexpr double kPi = 3.14159265358979;
 
-Vec3 lerp3(const Vec3& a, const Vec3& b, double t) { return a + (b - a) * t; }
 
 // The tree recipes build on the shape kit (MeshBuilder): icosphere, displaceNoise, deform,
 // leanNormals, colorBy, tube, vertex / triFacing.
@@ -52,7 +51,7 @@ void clump(RenderMesh& m, const Vec3& centre, double r, const Vec3& C, const Vec
         const Vec3 rel((P.x - C.x) / E.x, (P.y - C.y) / E.y, (P.z - C.z) / E.z);
         const double up = std::clamp((P.y - (C.y - E.y)) / (2.0 * E.y), 0.0, 1.0);
         const double outward = std::clamp(rel.length() / 1.25, 0.0, 1.0);
-        return lerp3(dark, light, std::clamp(0.1 + 0.55 * up + 0.4 * outward * outward, 0.0, 1.0));
+        return lerp(dark, light, std::clamp(0.1 + 0.55 * up + 0.4 * outward * outward, 0.0, 1.0));
     });
     MeshBuilder::append(m, cl);
 }
@@ -161,7 +160,7 @@ StylizedTree broadleaf(uint32_t seed, const StylizedTreeParams& p, ProcRng& rng)
         std::vector<Vec3> pts, cols; std::vector<double> rad;
         for (int i = 0; i < rings; ++i) {
             const double s = static_cast<double>(i) / (rings - 1);
-            pts.push_back(lerp3(foot, head, s) + lean * (s * (1 - s)));
+            pts.push_back(lerp(foot, head, s) + lean * (s * (1 - s)));
             const double flare = 1.0 + (F.flare - 1.0) * std::pow(1.0 - s, 6.0);   // the root flare, then straight
             rad.push_back(tr * (stems > 1 ? 0.75 : 1.0) * (1.1 - 0.5 * s) * flare);
             Vec3 c = bark * (0.75 + 0.35 * s);
@@ -173,19 +172,19 @@ StylizedTree broadleaf(uint32_t seed, const StylizedTreeParams& p, ProcRng& rng)
     }
     if (stems == 1 && rng.next() < F.twin) {   // a second stem forking low off the first, out to the crown's side
         const double a = rng.in(0, 2 * kPi);
-        const Vec3 from = lerp3(mainPts.front(), mainPts.back(), 0.28);
+        const Vec3 from = lerp(mainPts.front(), mainPts.back(), 0.28);
         const Vec3 to = C + Vec3(std::cos(a) * E.x * 0.45, -E.y * 0.15, std::sin(a) * E.z * 0.45);
-        tube(t.bark, {from, lerp3(from, to, 0.5) + Vec3(0, 0.1 * R, 0), to}, {tr * 0.85, tr * 0.7, tr * 0.5}, 6,
+        tube(t.bark, {from, lerp(from, to, 0.5) + Vec3(0, 0.1 * R, 0), to}, {tr * 0.85, tr * 0.7, tr * 0.5}, 6,
              {bark * 0.8, bark * 0.95, bark * 1.1});
     }
     const double fork = C.y - E.y * 0.75;
     int limbs = 0;
     const double forkS = std::clamp(fork / std::max(mainPts.back().y, 1e-6), 0.0, 1.0);
-    const Vec3 from = lerp3(mainPts.front(), mainPts.back(), forkS);
+    const Vec3 from = lerp(mainPts.front(), mainPts.back(), forkS);
     for (std::size_t i = clumps.size() / 3; i < clumps.size() - 1 && limbs < F.limbs; i += 2, ++limbs) {
-        const Vec3 to = lerp3(from, clumps[i].first, 0.8);
+        const Vec3 to = lerp(from, clumps[i].first, 0.8);
         // out first, then up (an oak's limbs run nearly level before they climb)
-        const Vec3 mid = Vec3(lerp3(from, to, 0.55).x, from.y + (to.y - from.y) * F.limbSpread + 0.1 * R, lerp3(from, to, 0.55).z);
+        const Vec3 mid = Vec3(lerp(from, to, 0.55).x, from.y + (to.y - from.y) * F.limbSpread + 0.1 * R, lerp(from, to, 0.55).z);
         tube(t.bark, {from, mid, to}, {tr * F.limb, tr * F.limb * 0.7, tr * F.limb * 0.42}, p.shape == StylizedShape::Oak ? 6 : 5,
              {bark * 0.9, bark, bark * 1.1});
     }
@@ -219,12 +218,12 @@ StylizedTree pine(uint32_t seed, const StylizedTreeParams& p, ProcRng& rng) {
             rim[static_cast<std::size_t>(k)] = Vec3(rr * std::cos(a), y0 - (k % 2 == 0 ? droop * r : 0.05 * r), rr * std::sin(a));
         }
         // the top surface: apex to the rim, normals out and up (a soft cone)
-        const uint32_t ia = vert(t.canopy, apex, Vec3(0, 1, 0), lerp3(dark, light, 0.75));
+        const uint32_t ia = vert(t.canopy, apex, Vec3(0, 1, 0), lerp(dark, light, 0.75));
         std::vector<uint32_t> ir(ringN), iu(ringN);
         for (int k = 0; k < ringN; ++k) {
             const Vec3& q = rim[static_cast<std::size_t>(k)];
             const Vec3 n = normalize(Vec3(q.x, r * 0.9, q.z));
-            ir[static_cast<std::size_t>(k)] = vert(t.canopy, q, n, lerp3(dark, light, k % 2 == 0 ? 0.95 : 0.55));
+            ir[static_cast<std::size_t>(k)] = vert(t.canopy, q, n, lerp(dark, light, k % 2 == 0 ? 0.95 : 0.55));
             iu[static_cast<std::size_t>(k)] = vert(t.canopy, q, Vec3(q.x * 0.3, -1, q.z * 0.3), dark * 0.7);
         }
         const uint32_t iuc = vert(t.canopy, under, Vec3(0, -1, 0), dark * 0.5);
@@ -268,7 +267,7 @@ StylizedTree palm(uint32_t seed, const StylizedTreeParams& p, ProcRng& rng) {
             const double s = static_cast<double>(k) / n;
             const Vec3 c = top + out * (L * s) + Vec3(0, L * (lift * s - droop * s * s * 0.5), 0);
             const double w = L * 0.24 * std::sin(kPi * std::min(1.0, s * 1.05)) * (k % 2 == 0 ? 1.0 : 0.5);   // sawtooth
-            const Vec3 col = lerp3(dark, light, 0.3 + 0.6 * s);
+            const Vec3 col = lerp(dark, light, 0.3 + 0.6 * s);
             const Vec3 up(0, 1, 0);
             spine.push_back(vert(t.canopy, c + Vec3(0, w * 0.12, 0), up, col));
             left.push_back(vert(t.canopy, c + side * w - Vec3(0, w * 0.3, 0), normalize(up + side * 0.35), col * 0.9));

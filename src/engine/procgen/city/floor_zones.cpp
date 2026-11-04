@@ -1,4 +1,5 @@
 #include "floor_zones.h"
+#include "../../../hash.h"   // lowbias32
 #include "polyline.h"   // distToPolyline
 
 #include "roads/lanes/geom2d.h"   // the Clipper booleans (every piece kept, holes too)
@@ -23,12 +24,8 @@ constexpr Real kSharpTurn = 0.6;      // radians: a facade turning more than thi
 // emitRooms keeps (a wall shorter than kRoomDoorW + 0.6 gets no doorway at all)
 constexpr Real kDoorRun = kRoomDoorW + 0.65;
 
-uint32_t mix(uint32_t h) {
-    h ^= h >> 16; h *= 0x7feb352du; h ^= h >> 15; h *= 0x846ca68bu; h ^= h >> 16;
-    return h;
-}
 uint32_t hashAt(uint32_t seed, const Vec2& p) {
-    return mix(seed ^ (static_cast<uint32_t>(std::lround(p.x * 10.0)) * 73856093u) ^
+    return lowbias32(seed ^ (static_cast<uint32_t>(std::lround(p.x * 10.0)) * 73856093u) ^
                (static_cast<uint32_t>(std::lround(p.y * 10.0)) * 19349663u));
 }
 
@@ -563,7 +560,7 @@ FloorPartition partitionFloor(const Poly2& plateIn, const CorePlan& core, Real i
                      ob.center + u * 4000.0 + n * (zp.aisle * 0.5), ob.center - u * 4000.0 + n * (zp.aisle * 0.5)};
             ensureCCW(strip);
             walkSoFar = G::unionSets(walkSoFar, G::intersectSets(G::fromRing(strip), G::fromRing(o)));
-            for (std::size_t k = 0; k < hs.size(); ++k) bisect(hs[k], depth + 1, mix(h + 1u + static_cast<uint32_t>(k)));
+            for (std::size_t k = 0; k < hs.size(); ++k) bisect(hs[k], depth + 1, lowbias32(h + 1u + static_cast<uint32_t>(k)));
             return;
         }
         if (A <= zp.interiorLot * 1.6 || longSide < 2 * zp.minSide) { leaf(); return; }
@@ -575,7 +572,7 @@ FloorPartition partitionFloor(const Poly2& plateIn, const CorePlan& core, Real i
             bool ok = hs.size() >= 2;
             for (const Poly2& q : hs) ok = ok && onWalk(q);
             if (!ok) continue;
-            for (std::size_t k = 0; k < hs.size(); ++k) bisect(hs[k], depth + 1, mix(h + 1u + static_cast<uint32_t>(k)));
+            for (std::size_t k = 0; k < hs.size(); ++k) bisect(hs[k], depth + 1, lowbias32(h + 1u + static_cast<uint32_t>(k)));
             return;
         }
         leaf();
@@ -583,7 +580,7 @@ FloorPartition partitionFloor(const Poly2& plateIn, const CorePlan& core, Real i
     for (const G::Polygon2& p : pieces) {
         Poly2 o = p.outer;
         ensureCCW(o);
-        bisect(o, 0, mix(static_cast<uint32_t>(params.seed) * 2654435761u + static_cast<uint32_t>(group)));
+        bisect(o, 0, lowbias32(static_cast<uint32_t>(params.seed) * 2654435761u + static_cast<uint32_t>(group)));
         ++group;
     }
 
@@ -1139,7 +1136,7 @@ const ZoneStyle* floorStyle(const FloorProgram& prog, uint32_t seed) {
     if (prog.styles.empty()) return nullptr;
     Real total = 0;
     for (const ZoneStyle& s : prog.styles) total += std::max(Real(0), s.weight);
-    Real pick = (mix(seed * 2246822519u + 77u) % 100000u) / 100000.0 * total;
+    Real pick = (lowbias32(seed * 2246822519u + 77u) % 100000u) / 100000.0 * total;
     const ZoneStyle* st = &prog.styles.back();
     for (const ZoneStyle& s : prog.styles) {
         if (pick < s.weight) { st = &s; break; }

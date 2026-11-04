@@ -55,7 +55,6 @@ Real ringNoise(Real theta, int k, uint32_t s) {
     }
     return v / norm;
 }
-Real smooth01(Real t) { t = std::max(Real(0), std::min(Real(1), t)); return t * t * (3 - 2 * t); }
 
 // ---- roads as polylines ------------------------------------------------------
 struct Polyline {
@@ -77,7 +76,7 @@ std::vector<std::pair<Real, int>> gridPositions(Real coreBlock, Real midBlock, R
     for (int dir = -1; dir <= 1; dir += 2) {
         Real s = 0;
         for (int i = 1; i < 200; ++i) {
-            const Real t = smooth01((s - coreR * 0.6) / std::max(Real(1), midR - coreR * 0.6));
+            const Real t = smoothstep01((s - coreR * 0.6) / std::max(Real(1), midR - coreR * 0.6));
             const Real step = coreBlock + (midBlock - coreBlock) * t;
             s += step;
             if (s > midR * 1.15) break;
@@ -1133,7 +1132,7 @@ CityPlan generatePlan(const Brief& B) {
         Real sea = 0;
         const Real e = edgeAt(th, &sea);
         const Real onLand = std::min(r, e - corridorHalf - 30);
-        return onLand + (r - onLand) * smooth01((sea - 0.3) / 0.4);   // blended, so a C has no kink where coast meets foothill
+        return onLand + (r - onLand) * smoothstep01((sea - 0.3) / 0.4);   // blended, so a C has no kink where coast meets foothill
     };
     auto midR = [&](Real theta) {
         const Real r = B.midRadius * (1.0 + 0.05 * ringNoise(theta, 99, B.seed));
@@ -1154,10 +1153,10 @@ CityPlan generatePlan(const Brief& B) {
     auto warped = [&](const Vec2& p) {
         const Vec2 d = p - B.center;
         const Real r = d.length();
-        Real w = B.warp * smooth01((r - B.coreRadius) / std::max(Real(1), B.midRadius - B.coreRadius));
+        Real w = B.warp * smoothstep01((r - B.coreRadius) / std::max(Real(1), B.midRadius - B.coreRadius));
         if (haveFreeway && w > 0) {
             const Real off = std::fabs(r - freewayR(std::atan2(d.y, d.x)));
-            w *= smooth01((off - corridorHalf - 10) / 80.0);
+            w *= smoothstep01((off - corridorHalf - 10) / 80.0);
         }
         if (w <= 0) return p;
         const Real s = 1.0 / 260.0;

@@ -1,4 +1,5 @@
 #include "terrain_weather.h"
+#include "../../hash.h"   // hashCell, unit24
 #include "texture_field.h"   // boxBlurGrid (ADR-0289)
 #include "../bundle/cache_use.h"
 #include "../bundle/bundle.h"
@@ -46,10 +47,8 @@ void facetRock(Heightmap& g, float base0, float sea, const WeatherParams& w, uin
         auto at = [&](int a, int b) { return static_cast<double>(src[static_cast<std::size_t>(b) * n + a]); };
         return (at(i, j) * (1 - u) + at(i + 1, j) * u) * (1 - v) + (at(i, j + 1) * (1 - u) + at(i + 1, j + 1) * u) * v;
     };
-    auto hsh = [&](int64_t a, int64_t b, uint32_t salt) {
-        uint32_t h = static_cast<uint32_t>(a) * 0x9E3779B1u ^ static_cast<uint32_t>(b) * 0x85EBCA77u ^ (seed + salt) * 0xC2B2AE3Du;
-        h ^= h >> 16; h *= 0x7FEB352Du; h ^= h >> 15; h *= 0x846CA68Bu; h ^= h >> 16;
-        return (h & 0xFFFFFFu) / 16777216.0;
+    auto hsh = [&](int64_t a, int64_t b, uint32_t salt) {   // (hash.h)
+        return unit24(hashCell(static_cast<uint32_t>(a), static_cast<uint32_t>(b), seed + salt));
     };
     std::atomic<long> faceted{0};
     parallelRows(n, [&](int z) {

@@ -1,4 +1,5 @@
 #include "rock_layers.h"
+#include "../../hash.h"   // hashCell, unit24
 
 #include <algorithm>
 #include <cmath>
@@ -72,11 +73,10 @@ double RockLayers::tone(double x, double z, double h) const {
 double RockLayers::hardness(double x, double z, double h) const {
     const double u = bedCoordinate(x, z, h, p_.thicknessM);
     const double f = std::floor(u), t = u - f;
-    uint32_t hs = static_cast<uint32_t>(static_cast<int64_t>(f)) * 0x9E3779B1u ^ seed_ * 0x85EBCA77u;
-    hs ^= hs >> 16; hs *= 0x7FEB352Du; hs ^= hs >> 15; hs *= 0x846CA68Bu; hs ^= hs >> 16;
+    const uint32_t hs = hashCell(static_cast<uint32_t>(static_cast<int64_t>(f)), seed_, 0u);   // (hash.h)
     // hard by its index (a share `hard`), softened at its top and bottom contacts (a bed's edges grade into the next)
     // and in patches along its outcrop
-    const double bed = std::clamp(((hs & 0xFFFFFFu) / 16777216.0 - (1.0 - p_.hard)) / 0.12, 0.0, 1.0);
+    const double bed = std::clamp((unit24(hs) - (1.0 - p_.hard)) / 0.12, 0.0, 1.0);
     const double contact = std::clamp(std::min(t, 1.0 - t) / 0.08, 0.0, 1.0);
     const double lateral = std::clamp((0.5 + 0.5 * n_.fbm2(x / p_.lateralScaleM + 1.7, z / p_.lateralScaleM - 3.1, 2) - 0.3) / 0.25, 0.0, 1.0);
     double high = 1.0;

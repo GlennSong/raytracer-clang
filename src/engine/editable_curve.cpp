@@ -8,7 +8,6 @@
 namespace engine {
 
 namespace {
-double vlen(const Vec3& v) { return std::sqrt(v.lengthSquared()); }
 }  // namespace
 
 int EditableCurve::segmentCount() const {
@@ -92,7 +91,7 @@ std::vector<Vec3> EditableCurve::sample(int perSegment) const {
 double EditableCurve::length(int perSeg) const {
     std::vector<Vec3> pts = sample(perSeg);
     double L = 0;
-    for (std::size_t i = 1; i < pts.size(); ++i) L += vlen(pts[i] - pts[i - 1]);
+    for (std::size_t i = 1; i < pts.size(); ++i) L += (pts[i] - pts[i - 1]).length();
     return L;
 }
 
@@ -102,7 +101,7 @@ Vec3 EditableCurve::atDistance(double dist, int perSeg) const {
     if (pts.size() == 1 || dist <= 0) return pts.front();
     double acc = 0;
     for (std::size_t i = 1; i < pts.size(); ++i) {
-        double seg = vlen(pts[i] - pts[i - 1]);
+        double seg = (pts[i] - pts[i - 1]).length();
         if (acc + seg >= dist) {
             double f = seg > 1e-9 ? (dist - acc) / seg : 0.0;
             return pts[i - 1] + (pts[i] - pts[i - 1]) * f;
@@ -139,8 +138,8 @@ void EditableCurve::setOutHandle(int i, const Vec3& worldPos) {
     Vec3 offset = worldPos - knots[i].position;
     knots[i].outHandle = offset;
     if (knots[i].mode == KnotMode::Aligned) {          // keep in/out collinear (smooth)
-        double inLen = vlen(knots[i].inHandle);
-        double ol = vlen(offset);
+        double inLen = (knots[i].inHandle).length();
+        double ol = (offset).length();
         if (inLen < 1e-9) inLen = ol;
         if (ol > 1e-9) knots[i].inHandle = offset * (-inLen / ol);
     }
@@ -152,8 +151,8 @@ void EditableCurve::setInHandle(int i, const Vec3& worldPos) {
     Vec3 offset = worldPos - knots[i].position;
     knots[i].inHandle = offset;
     if (knots[i].mode == KnotMode::Aligned) {
-        double outLen = vlen(knots[i].outHandle);
-        double ol = vlen(offset);
+        double outLen = (knots[i].outHandle).length();
+        double ol = (offset).length();
         if (outLen < 1e-9) outLen = ol;
         if (ol > 1e-9) knots[i].outHandle = offset * (-outLen / ol);
     }

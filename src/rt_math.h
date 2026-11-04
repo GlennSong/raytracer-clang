@@ -551,6 +551,25 @@ inline Real radiansToDegrees(Real radians) {
     return radians * 180.0 / PI;
 }
 
+// AN ANGLE IN DEGREES wrapped to [-180, 180] (#184): the turn from one heading to another, the short way.
+inline Real wrapDegrees(Real a) {
+    while (a > 180.0) a -= 360.0;
+    while (a < -180.0) a += 360.0;
+    return a;
+}
+
+// SMOOTHSTEP (#184: it had been written ~25 times): 0 at or below e0, 1 at or above e1, and the S t*t*(3-2t) between.
+// Equal edges divide by zero (as every copy did): ease where the edges differ.
+inline Real smoothstep(Real e0, Real e1, Real x) {
+    const Real t = std::clamp((x - e0) / (e1 - e0), Real(0), Real(1));
+    return t * t * (3 - 2 * t);
+}
+// ...of a fraction already: 0 at 0, 1 at 1, clamped.
+inline Real smoothstep01(Real t) {
+    t = std::clamp(t, Real(0), Real(1));
+    return t * t * (3 - 2 * t);
+}
+
 inline double randomDouble() {
     thread_local ProcRng gen(std::random_device{}());
     thread_local ProcUniform<double> dist(0.0, 1.0);

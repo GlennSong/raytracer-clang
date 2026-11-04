@@ -17,10 +17,10 @@ inline double clampd(double x, double lo, double hi) {
     return x < lo ? lo : (x > hi ? hi : x);
 }
 
-inline double smoothstep(double edge0, double edge1, double x) {
+// smoothstep (rt_math.h), and equal edges a step at them
+inline double edgeStep(double edge0, double edge1, double x) {
     if (edge0 == edge1) return x < edge0 ? 0.0 : 1.0;
-    double t = clampd((x - edge0) / (edge1 - edge0), 0.0, 1.0);
-    return t * t * (3.0 - 2.0 * t);
+    return smoothstep(edge0, edge1, x);
 }
 
 // 3D ridged multifractal: sum (1-|noise|)² octaves — the sharp irregular ridgelines
@@ -94,7 +94,7 @@ double planetHeight(const PlanetParams& p, uint32_t seed, const Vec3& dir) {
 
     // Mountains ride the land only: mask by how far above sea the continents sit, so
     // ranges rise on land and the sea floor stays smooth.
-    double landMask = smoothstep(p.seaLevel - 0.05, p.seaLevel + 0.25, cont);
+    double landMask = edgeStep(p.seaLevel - 0.05, p.seaLevel + 0.25, cont);
     double mountains = (ridged3(mnt, d, p.mountainFreq, p.mountainOctaves) - 0.5) *
                        2.0 * p.mountainAmp * landMask;
 
@@ -124,7 +124,7 @@ Vec3 planetSurfaceColor(const PlanetParams& p, uint32_t seed, const Vec3& dir) {
         c = ramp.eval(elev);
     }
     if (p.polarCaps) {                          // ice caps over land AND frozen sea
-        double capMask = smoothstep(p.capLatitude - 0.06, p.capLatitude + 0.06,
+        double capMask = edgeStep(p.capLatitude - 0.06, p.capLatitude + 0.06,
                                     std::fabs(dir.y));
         c = lerp(c, p.capColor, capMask);
     }
@@ -277,7 +277,7 @@ Vec3 gasBandColor(const GasGiantParams& p, const ColorRamp& ramp, const Noise& f
     for (const GasStorm& st : storms) {
         double ang = std::acos(clampd(dot(dir, st.dir), -1.0, 1.0));  // radians
         double reach = st.size * PI;
-        if (ang < reach) c = lerp(c, p.stormColor, smoothstep(reach, reach * 0.2, ang) * st.tint);
+        if (ang < reach) c = lerp(c, p.stormColor, edgeStep(reach, reach * 0.2, ang) * st.tint);
     }
     return clampVec(c, 0.0, 1.0);
 }

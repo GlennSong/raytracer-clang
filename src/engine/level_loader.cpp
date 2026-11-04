@@ -7674,10 +7674,9 @@ bool LevelLoader::load(const std::string& path,
                             const double h = ground ? static_cast<double>(ground(at.x, at.y)) : 20.0;
                             double dHub = 1e9;
                             for (const engine::Vec2& hb : hubAt) dHub = std::min(dHub, static_cast<double>((hb - at).length()));
-                            auto smooth = [](double a, double b, double x) { const double t = std::clamp((x - a) / (b - a), 0.0, 1.0); return t * t * (3 - 2 * t); };
                             c.coastal = h < 5.0;
-                            c.wealth = std::clamp(0.38 + 0.4 * smooth(8.0, 70.0, h) + 0.7 * (noise(at.x, at.y, 650.0, 17u) - 0.5), 0.0, 1.0);
-                            c.age = std::clamp(1.0 - smooth(250.0, 1900.0, dHub) + 0.4 * (noise(at.x, at.y, 500.0, 91u) - 0.5), 0.0, 1.0);
+                            c.wealth = std::clamp(0.38 + 0.4 * smoothstep(8.0, 70.0, h) + 0.7 * (noise(at.x, at.y, 650.0, 17u) - 0.5), 0.0, 1.0);
+                            c.age = std::clamp(1.0 - smoothstep(250.0, 1900.0, dHub) + 0.4 * (noise(at.x, at.y, 500.0, 91u) - 0.5), 0.0, 1.0);
                             if (n == 0) { c.kind = engine::StreetCharacter::Rural; return c; }
                             const double avg = storeys / n;
                             int best = 2;

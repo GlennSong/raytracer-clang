@@ -1,4 +1,5 @@
 #include "furniture.h"
+#include "../../../hash.h"   // lowbias32
 #include "../../../proc_rng.h"
 #include "trades.h"
 #include "../furniture_library.h"   // descriptions: anchors to dress, clearances to keep (M3)
@@ -12,10 +13,6 @@ namespace engine {
 
 namespace {
 
-uint32_t mix32(uint32_t h) {
-    h ^= h >> 16; h *= 0x7feb352du; h ^= h >> 15; h *= 0x846ca68bu; h ^= h >> 16;
-    return h;
-}
 
 // THE ROOM FRAME: origin at rect[0], u along rect[0]->rect[1] (the ring room's window wall), v toward rect[3].
 struct RoomFrame {
@@ -175,7 +172,7 @@ struct Furnisher {
         if (const FurnitureAsset* fa = FurnitureLibrary::global().find(pc); fa && fa->variety > 0) {
             const uint32_t h = static_cast<uint32_t>(std::lround(a.x * 13.0)) * 73856093u ^
                                static_cast<uint32_t>(std::lround(a.y * 13.0)) * 19349663u;
-            pp.variant = (variant & 31u) | ((mix32(h) % static_cast<uint32_t>(fa->variety)) << 5);
+            pp.variant = (variant & 31u) | ((lowbias32(h) % static_cast<uint32_t>(fa->variety)) << 5);
         }
         Mat4& M = pp.xform;
         M.m[0][0] = X.x; M.m[1][0] = 0; M.m[2][0] = X.z;
@@ -577,7 +574,7 @@ void emitFurniture(std::vector<PlacedPiece>& out, RenderMesh* colliderOut, const
     std::vector<Vec2> doors;
     for (const RoomWall& w : rp.walls)
         if (w.doorAt >= 0) doors.push_back(w.a + (w.b - w.a) * w.doorAt);
-    const uint32_t hb = mix32(seed ^ 0x6a09e667u);
+    const uint32_t hb = lowbias32(seed ^ 0x6a09e667u);
     // The building's wood and kitchen style; the fabric varies a little room to room within its palette.
     const uint32_t wood = (hb >> 3) & 3u, style = (hb >> 9) & 3u;
 
@@ -587,7 +584,7 @@ void emitFurniture(std::vector<PlacedPiece>& out, RenderMesh* colliderOut, const
         const Poly2& rr = room.frame.size() == 4 ? room.frame : room.rect;
         if (rr.size() != 4 || room.kind == RoomKind::Hall) continue;
         const Vec2 rc = (rr[0] + rr[2]) * 0.5;
-        const uint32_t hr = mix32(hb ^ static_cast<uint32_t>(std::lround(rc.x * 7.0)) ^
+        const uint32_t hr = lowbias32(hb ^ static_cast<uint32_t>(std::lround(rc.x * 7.0)) ^
                                   (static_cast<uint32_t>(std::lround(rc.y * 13.0)) << 8));
         const uint32_t fabric = (hb + ((hr >> 5) % 3u)) & 7u;
         Furnisher F{out, colliderOut, {}, y0, fabric | (wood << 3) | (style << 5), {}};

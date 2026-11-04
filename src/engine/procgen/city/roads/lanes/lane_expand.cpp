@@ -12,7 +12,6 @@ namespace roads::lanes {
 
 namespace {
 
-double smooth01(double u) { u = std::clamp(u, 0.0, 1.0); return u * u * (3 - 2 * u); }
 
 Lane ribbonLane(const std::string& id, int parent, const std::string& kind, const std::string& cls, double w, int dir,
                 const std::vector<Vec2>& spine, const std::vector<Vec2>& nrm, const std::vector<double>& off) {
@@ -58,7 +57,7 @@ void composeRamp(RoadLabGraph& g, EdgeSpec& e) {
         double sg = hostStation(host, e.to), aux = e.to.aux, tap = e.to.taper > 0 ? e.to.taper : 30 * host.lanes.w, appr = e.to.approach;
         double sgn = slot.dir > 0 ? 1.0 : -1.0, outward = (e.to.side == "right") ? -1.0 : +1.0;   // the auxiliary lane lies outside the outer lane
         std::vector<double> ss, off; int n = static_cast<int>(aux + tap) + 1;
-        for (int k = 0; k < n; ++k) { double d = std::min<double>(k, aux + tap); ss.push_back(sg + sgn * d); off.push_back(slot.offset + outward * host.lanes.w * (1 - smooth01((d - aux) / tap))); }
+        for (int k = 0; k < n; ++k) { double d = std::min<double>(k, aux + tap); ss.push_back(sg + sgn * d); off.push_back(slot.offset + outward * host.lanes.w * (1 - smoothstep01((d - aux) / tap))); }
         post = hostPath(host, ss, off); Vec2 G = post.front(), T = tangentAtStation(host.xy, host.s, sg) * sgn;
         e.anchorLanes["to"] = host.id + "." + slot.name;
         if (kind == "bezier" && pts.size() == 4) { pts[3] = {G.x, G.y}; Vec2 c = G - T * appr; pts[2] = {c.x, c.y}; }
@@ -69,7 +68,7 @@ void composeRamp(RoadLabGraph& g, EdgeSpec& e) {
         double sg = hostStation(host, e.from), dec = e.from.decel, tap = e.from.taper > 0 ? e.from.taper : 30 * host.lanes.w, appr = e.from.approach;
         double sgn = slot.dir > 0 ? 1.0 : -1.0, outward = (e.from.side == "right") ? -1.0 : +1.0;
         std::vector<double> ss, off; int n = static_cast<int>(dec + tap) + 1;
-        for (int k = 0; k < n; ++k) { double d = std::min<double>(k, dec + tap); ss.push_back(sg - sgn * (dec + tap) + sgn * d); off.push_back(slot.offset + outward * host.lanes.w * smooth01(d / tap)); }
+        for (int k = 0; k < n; ++k) { double d = std::min<double>(k, dec + tap); ss.push_back(sg - sgn * (dec + tap) + sgn * d); off.push_back(slot.offset + outward * host.lanes.w * smoothstep01(d / tap)); }
         pre = hostPath(host, ss, off); Vec2 G = pre.back(), T = tangentAtStation(host.xy, host.s, sg) * sgn;
         e.anchorLanes["from"] = host.id + "." + slot.name;
         if (kind == "bezier" && pts.size() == 4) { pts[0] = {G.x, G.y}; Vec2 c = G + T * appr; pts[1] = {c.x, c.y}; }
@@ -105,8 +104,8 @@ void roadLanes(const RoadLabGraph& g, int ei, LaneSet& out) {
         std::vector<Vec2> sp, nn; std::vector<double> off;
         for (size_t i = 0; i < e.xy.size(); ++i) {
             double st = e.s[i]; if (st < pk.s0 || st > pk.s1) continue;
-            double birth = d > 0 ? smooth01((st - pk.s0) / ti) : smooth01((pk.s1 - st) / ti);
-            double death = to <= 0 ? 1.0 : (d > 0 ? smooth01((pk.s1 - st) / to) : smooth01((st - pk.s0) / to));
+            double birth = d > 0 ? smoothstep01((st - pk.s0) / ti) : smoothstep01((pk.s1 - st) / ti);
+            double death = to <= 0 ? 1.0 : (d > 0 ? smoothstep01((pk.s1 - st) / to) : smoothstep01((st - pk.s0) / to));
             sp.push_back(e.xy[i]); nn.push_back(nrm[i]); off.push_back(baseOff + sgn * w * std::min(birth, death));
         }
         if (sp.size() >= 2) out.lanes.push_back(ribbonLane(e.id + "." + pk.id, ei, pk.kind, e.cls, w, d, sp, nn, off));
@@ -119,7 +118,7 @@ void rampLanes(const RoadLabGraph& g, int ei, LaneSet& out) {
     out.lanes.push_back(ribbonLane(e.id + ".f0", ei, "ramp", e.cls, w, +1, e.xy, nrm, zero));
     if (e.lanes.fwd >= 2) {                                        // the second lane dies into the first: the dovetail
         double dv = e.lanes.dovetail, tap = 20 * w; std::vector<Vec2> sp, nn; std::vector<double> off;
-        for (size_t i = 0; i < e.xy.size(); ++i) { if (e.s[i] > dv + tap) break; sp.push_back(e.xy[i]); nn.push_back(nrm[i]); off.push_back(-w * (1 - smooth01((e.s[i] - dv) / tap))); }
+        for (size_t i = 0; i < e.xy.size(); ++i) { if (e.s[i] > dv + tap) break; sp.push_back(e.xy[i]); nn.push_back(nrm[i]); off.push_back(-w * (1 - smoothstep01((e.s[i] - dv) / tap))); }
         if (sp.size() >= 2) out.lanes.push_back(ribbonLane(e.id + ".f1", ei, "ramp", e.cls, w, +1, sp, nn, off));
     }
 }

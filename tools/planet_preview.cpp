@@ -5,6 +5,7 @@
 #include <tinygltf/stb_image_write.h>
 
 #include "engine/procgen/planet.h"
+#include "hash.h"   // lowbias32
 #include "engine/procgen/atmosphere.h"
 #include "rt_math.h"
 
@@ -17,10 +18,9 @@
 
 using namespace engine;
 
-static uint32_t hashU(uint32_t x){ x^=x>>16; x*=0x7feb352du; x^=x>>15; x*=0x846ca68bu; x^=x>>16; return x; }
 
 static Vec3 starField(int px, int py) {
-    uint32_t h = hashU(px * 73856093u ^ py * 19349663u);
+    uint32_t h = lowbias32(px * 73856093u ^ py * 19349663u);
     double r = (h >> 8) * (1.0 / 16777216.0);
     if (r > 0.9975) { double b = 0.5 + 0.5 * ((h & 0xff) / 255.0); return Vec3(b, b, b); }
     return Vec3(0.012, 0.015, 0.025);
@@ -181,11 +181,11 @@ static void writeStarfield(const char* file, int W, int H) {
         double cw = std::cos(lat);                     // narrower rows near the poles
         for (int i = 0; i < W; i++) {
             Vec3 c(0.0015, 0.0020, 0.0040);            // faint deep-space glow
-            uint32_t h = hashU((uint32_t)i * 73856093u ^ (uint32_t)j * 19349663u ^ 0x9e3779b1u);
+            uint32_t h = lowbias32((uint32_t)i * 73856093u ^ (uint32_t)j * 19349663u ^ 0x9e3779b1u);
             double s = (h >> 8) * (1.0 / 16777216.0);
             double thresh = 0.9989 + 0.0010 * (1.0 - cw);
             if (s > thresh) {
-                uint32_t h2 = hashU(h);
+                uint32_t h2 = lowbias32(h);
                 double b = 0.6 + 4.0 * std::pow((h2 & 0xffff) / 65535.0, 3.0);  // few very bright
                 double t = ((h2 >> 16) & 0xff) / 255.0;                          // colour temp
                 Vec3 tint = t < 0.5 ? Vec3(0.75 + 0.5 * t, 0.85, 1.0)

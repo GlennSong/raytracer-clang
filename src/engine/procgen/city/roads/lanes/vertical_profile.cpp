@@ -35,7 +35,6 @@ std::vector<double> gradeLimit(const std::vector<double>& z, const std::vector<d
     return a;
 }
 
-double smoothstep(double u) { u = std::clamp(u, 0.0, 1.0); return u * u * (3 - 2 * u); }
 
 // An edge's plan bounds, for the all-pairs passes below: a pair whose boxes, grown by the reach the
 // pass tests within, do not overlap cannot meet, and on a city of 1500 edges with 10 km freeway runs
@@ -370,7 +369,7 @@ void rampProfile(RoadLabGraph& g, EdgeSpec& e, const HeightField& terrain) {
     double s0 = e.s[static_cast<size_t>(i0)], s1 = e.s[static_cast<size_t>(i1)], za = zA[static_cast<size_t>(i0)], zb = zB[static_cast<size_t>(i1)];
     e.z.resize(n);
     for (size_t i = 0; i < n; ++i) {
-        double w = smoothstep((e.s[i] - s0) / std::max(s1 - s0, 1e-6));
+        double w = smoothstep01((e.s[i] - s0) / std::max(s1 - s0, 1e-6));
         double holdA = e.s[i] <= s0 ? zA[i] : za, holdB = e.s[i] >= s1 ? zB[i] : zb;
         e.z[i] = (1 - w) * holdA + w * holdB;
     }

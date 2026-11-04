@@ -1,4 +1,5 @@
 #include "city_sim.h"
+#include "../../hash.h"   // lowbias32
 
 #include "traffic_rules.h"   // approachStop
 #include "../../engine/ai/idm.h"   // IDM car-following (roads-v2 S7)
@@ -6903,10 +6904,6 @@ int CitySim::joinSession(Agent& a, int di, Vec2 here, Real distLo, Real distHi, 
 }
 
 // a small integer hash (lowbias32): places and beats that must be the same whoever asks
-static uint32_t hash32(uint32_t x) {
-    x ^= x >> 16; x *= 0x7feb352du; x ^= x >> 15; x *= 0x846ca68bu; x ^= x >> 16;
-    return x;
-}
 
 // Is `p` at least `r` from every footpath's line (a walk's half width counted in)?
 bool CitySim::clearOfWalks(Vec2 p, Real r) const {
@@ -6967,9 +6964,9 @@ int CitySim::joinSettled(Agent& a, int di, const std::vector<std::pair<Real, int
         if (inL <= 0 || inW <= 0) continue;
         Vec2 best;
         Real bestD = -1;
-        uint32_t h = hash32(static_cast<uint32_t>(indexOf(a)) * 2654435761u ^ static_cast<uint32_t>(clockTotalHours_ * 3600.0));
+        uint32_t h = engine::lowbias32(static_cast<uint32_t>(indexOf(a)) * 2654435761u ^ static_cast<uint32_t>(clockTotalHours_ * 3600.0));
         for (int t = 0; t < 16; ++t) {
-            h = hash32(h + 0x9E37u);
+            h = engine::lowbias32(h + 0x9E37u);
             const Real fu = static_cast<Real>(h & 0xFFFF) / 65535.0 * 2 - 1, fv = static_cast<Real>(h >> 16) / 65535.0 * 2 - 1;
             const Vec2 p = ar.center + ar.axis * (inL * fu) + side * (inW * fv);
             // not on a walk (a lawn's box takes in the walks across it): a ring's edge, or each end of a pair
@@ -7026,7 +7023,7 @@ Vec2 CitySim::memberPlace(const Session& se, int agentIndex, Vec2* face) const {
             const Real s = k == 0 ? -1.0 : 1.0;
             // a step this way or that every four seconds or so, as the throws come
             const uint32_t beat = static_cast<uint32_t>(clockTotalHours_ * 3600.0 / 4.0);
-            const uint32_t h = hash32(static_cast<uint32_t>(agentIndex) * 2246822519u + beat);
+            const uint32_t h = engine::lowbias32(static_cast<uint32_t>(agentIndex) * 2246822519u + beat);
             const Real lat = (static_cast<Real>(h & 0xFF) / 255.0 * 2 - 1) * 1.2;
             const Real lon = (static_cast<Real>((h >> 8) & 0xFF) / 255.0 * 2 - 1) * 0.8;
             p = se.center + se.axis * (s * (d.radius * 0.5 + lon)) + side * lat;
