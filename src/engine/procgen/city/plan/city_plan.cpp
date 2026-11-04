@@ -4,6 +4,7 @@
 #include "land_shape.h"   // a city shaped by its land (world.land.shape)
 #include "../roads/lanes/road_graph_spec.h"   // stations
 #include "../roads/lanes/polyline_ops.h"
+#include "../polyline.h"   // distToPolyline, distToSegment, lineCross, nearestOnPolyline
 #include "../roads/lanes/geom2d.h"          // constrainedTriangulation: the towns' cells     // pointAt, tangentAtStation: the loop's frame
 
 #include "../parcel.h"
@@ -746,20 +747,6 @@ Real polylineLength(const RoadGraph& g) {
     return L;
 }
 
-Real distToPolyline(const Vec2& p, const std::vector<Vec2>& P, bool closed) {
-    Real best = 1e30;
-    const std::size_t n = P.size();
-    const std::size_t ns = closed ? n : (n ? n - 1 : 0);
-    for (std::size_t i = 0; i < ns; ++i) {
-        const Vec2 a = P[i], b = P[(i + 1) % n], ab = b - a;
-        const Real L2 = ab.lengthSquared();
-        Real t = L2 > 1e-12 ? dot(p - a, ab) / L2 : 0.0;
-        t = std::max(Real(0), std::min(Real(1), t));
-        best = std::min(best, (p - (a + ab * t)).length());
-    }
-    return best;
-}
-
 const char* planClassName(RoadClass k) {
     switch (k) {
         case RoadClass::Freeway: return "freeway";
@@ -775,48 +762,26 @@ const char* planClassName(RoadClass k) {
 // is inside its corridor for fifty metres — so everything that asks "are these two roads on top
 // of each other" asks about the angle too.
 Real distToPolylineDir(const Vec2& p, const std::vector<Vec2>& P, Vec2* dirOut, bool* pastEndOut) {
-    Real best = 1e30;
-    for (std::size_t i = 0; i + 1 < P.size(); ++i) {
-        const Vec2 a = P[i], b = P[i + 1], ab = b - a;
-        const Real L2 = ab.lengthSquared();
-        const Real raw = L2 > 1e-12 ? dot(p - a, ab) / L2 : 0.0;
-        const Real t = std::max(Real(0), std::min(Real(1), raw));
-        const Real d = (p - (a + ab * t)).length();
-        if (d < best) {
-            best = d;
-            if (dirOut && L2 > 1e-12) *dirOut = ab * (1 / std::sqrt(L2));
-            // BESIDE the road, or PAST THE END of it? A road that continues where another
-            // stops — the same street on the far side of a junction — is nearest to that
-            // road's last vertex, not to any point along it. That is a continuation, not two
-            // roads sharing a line, and it is most of what a naive distance test reports.
-            if (pastEndOut) *pastEndOut = (i == 0 && raw < 0) || (i + 2 == P.size() && raw > 1);
-        }
-    }
-    return best;
+    // BESIDE the road, or PAST THE END of it? A road that continues where another stops -- the same street on the far
+    // side of a junction -- is nearest to that road's last vertex, not to any point along it. That is a continuation,
+    // not two roads sharing a line, and it is most of what a naive distance test reports. (polyline.h; `dirOut` keeps
+    // the caller's when no segment had a direction)
+    const PolylineNearest n = nearestOnPolyline(p, P);
+    if (dirOut && n.dir.lengthSquared() > 0) *dirOut = n.dir;
+    if (pastEndOut && n.dist < 1e30) *pastEndOut = n.pastEnd;
+    return n.dist;
 }
 
 // Two roads share a line when they are inside each other's corridor AND running the same way.
 constexpr Real kParallelSin = 0.35;   // ~20 degrees: anything more open is a crossing
 bool sharesLine(const Vec2& dirA, const Vec2& dirB) { return std::fabs(cross(dirA, dirB)) < kParallelSin; }
 
-Real pointSegDistance(const Vec2& p, const Vec2& a, const Vec2& b) {
-    const Vec2 ab = b - a;
-    const Real L2 = ab.lengthSquared();
-    Real t = L2 > 1e-12 ? dot(p - a, ab) / L2 : 0.0;
-    t = std::max(Real(0), std::min(Real(1), t));
-    return (p - (a + ab * t)).length();
-}
-
 // Distance between two segments: 0 when they cross, else the nearest endpoint approach.
 Real segmentDistance(const Vec2& a0, const Vec2& a1, const Vec2& b0, const Vec2& b1) {
-    const Vec2 r = a1 - a0, s2 = b1 - b0;
-    const Real denom = cross(r, s2);
-    if (std::fabs(denom) > 1e-12) {
-        const Real t = cross(b0 - a0, s2) / denom, u = cross(b0 - a0, r) / denom;
-        if (t >= 0 && t <= 1 && u >= 0 && u <= 1) return 0;
-    }
-    return std::min(std::min(pointSegDistance(a0, b0, b1), pointSegDistance(a1, b0, b1)),
-                    std::min(pointSegDistance(b0, a0, a1), pointSegDistance(b1, a0, a1)));
+    Real t = 0, u = 0;
+    if (lineCross(a0, a1, b0, b1, t, u) && t >= 0 && t <= 1 && u >= 0 && u <= 1) return 0;
+    return std::min(std::min(distToSegment(a0, b0, b1), distToSegment(a1, b0, b1)),
+                    std::min(distToSegment(b0, a0, a1), distToSegment(b1, a0, a1)));
 }
 
 // MEETING EXACTLY (2026-10-09, Glenn: "many roads merged together"). The shaped layout lays its street
@@ -869,25 +834,8 @@ std::vector<Vec2> cutPolyline(const std::vector<Vec2>& P, Real s0, Real s1) {
 }
 
 std::vector<std::size_t> dpKeep(const Poly2& P, Real tol) {
-    const std::size_t n = P.size();
-    if (n < 4) { std::vector<std::size_t> all(n); for (std::size_t i = 0; i < n; ++i) all[i] = i; return all; }
-    std::vector<char> keep(n, 0); keep[0] = keep[n - 1] = 1;
-    std::vector<std::pair<std::size_t, std::size_t>> st{{0, n - 1}};
-    while (!st.empty()) {
-        auto [a, b] = st.back(); st.pop_back();
-        if (b <= a + 1) continue;
-        Real bd = -1; std::size_t bi = a;
-        const Vec2 d = P[b] - P[a]; const Real L = d.length();
-        for (std::size_t i = a + 1; i < b; ++i) {
-            const Vec2 v = P[i] - P[a];
-            const Real dist = L > 1e-9 ? std::fabs(cross(v, d)) / L : v.length();
-            if (dist > bd) { bd = dist; bi = i; }
-        }
-        if (bd > tol) { keep[bi] = 1; st.push_back({a, bi}); st.push_back({bi, b}); }
-    }
-    std::vector<std::size_t> out;
-    for (std::size_t i = 0; i < n; ++i) if (keep[i]) out.push_back(i);
-    return out;
+    if (P.size() < 4) { std::vector<std::size_t> all(P.size()); for (std::size_t i = 0; i < P.size(); ++i) all[i] = i; return all; }
+    return simplifyRun(P, tol);   // (polyline.h)
 }
 
 // Cut roads where `blocked(point, half-width)` holds -- walked at 4 m so a cut lands within a few
@@ -3133,7 +3081,7 @@ PlanScore evaluatePlan(CityPlan& plan) {
                                 if (cj == ci) continue;
                                 const PlanChain& B = chains[static_cast<std::size_t>(cj)];
                                 const Real lim = (A.width + B.width) / 2;
-                                if (pointSegDistance(q, B.pts[static_cast<std::size_t>(sk)], B.pts[static_cast<std::size_t>(sk) + 1]) >= lim) continue;
+                                if (distToSegment(q, B.pts[static_cast<std::size_t>(sk)], B.pts[static_cast<std::size_t>(sk) + 1]) >= lim) continue;
                                 bool atJunction = false;
                                 for (int n : A.nodes)
                                     if (nodesOf[static_cast<std::size_t>(cj)].count(n) && (g.nodes[static_cast<std::size_t>(n)].pos - q).length() < 2 * lim) { atJunction = true; break; }

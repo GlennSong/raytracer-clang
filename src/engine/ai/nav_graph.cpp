@@ -1,4 +1,5 @@
 #include "nav_graph.h"
+#include "../procgen/city/polyline.h"   // distToSegment
 
 #include "../procgen/city/road_semantics.h"
 #include "../procgen/city/road_rules.h"
@@ -10,14 +11,6 @@
 namespace engine {
 
 namespace {
-// Distance from point p to segment [a,b], plus the clamped parameter.
-Real pointSegDist(const Vec2& p, const Vec2& a, const Vec2& b) {
-    Vec2 ab = b - a;
-    Real len2 = ab.lengthSquared();
-    Real t = len2 > 1e-12 ? dot(p - a, ab) / len2 : 0.0;
-    t = t < 0 ? 0 : (t > 1 ? 1 : t);
-    return (p - (a + ab * t)).length();
-}
 }  // namespace
 
 Vec2 NavGraph::direction(int link) const {
@@ -67,7 +60,7 @@ int NavGraph::nearestLink(const Vec2& p) const {
     int best = -1;
     Real bestD = 0;
     for (int i = 0; i < linkCount(); ++i) {
-        Real d = pointSegDist(p, nodes[links[i].from], nodes[links[i].to]);
+        Real d = distToSegment(p, nodes[links[i].from], nodes[links[i].to]);
         if (best < 0 || d < bestD) { best = i; bestD = d; }
     }
     return best;
@@ -389,7 +382,7 @@ NavGraph::FootpathReport NavGraph::appendFootpaths(const std::vector<std::array<
         for (int li = 0; li < firstLink; ++li) {
             if (!streetLink(li)) continue;
             const NavLink& L = links[static_cast<std::size_t>(li)];
-            const Real dd = pointSegDist(pts[p], nodes[static_cast<std::size_t>(L.from)], nodes[static_cast<std::size_t>(L.to)]);
+            const Real dd = distToSegment(pts[p], nodes[static_cast<std::size_t>(L.from)], nodes[static_cast<std::size_t>(L.to)]);
             if (dd < bestD) { bestD = dd; bestLink = li; }
         }
         if (bestLink < 0) { ++rep.unjoined; continue; }

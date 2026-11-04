@@ -1,4 +1,5 @@
 #include "site_plan.h"
+#include "polyline.h"   // distToSegment
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -26,13 +27,6 @@ Vec2 outwardNormal(const Poly2& ccw, std::size_t i) {
     const Real len = d.length();
     if (len < 1e-9) return {0, 0};
     return {d.y / len, -d.x / len};
-}
-Real distToSegment(const Vec2& p, const Vec2& a, const Vec2& b) {
-    const Vec2 ab = b - a;
-    const Real len2 = ab.lengthSquared();
-    Real t = len2 > 1e-12 ? dot(p - a, ab) / len2 : 0.0;
-    t = std::max(Real(0), std::min(Real(1), t));
-    return (p - (a + ab * t)).length();
 }
 }  // namespace
 

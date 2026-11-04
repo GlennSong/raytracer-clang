@@ -21,6 +21,7 @@
 
 #include <nlohmann/json.hpp>
 
+#include "../src/engine/procgen/city/polyline.h"   // distToSegment, distToPolyline
 #include "../src/engine/asset_manager.h"
 #include "../src/engine/components.h"
 #include "../src/engine/level_loader.h"
@@ -740,14 +741,6 @@ TEST_CASE(level_print_buildings_in_the_carriageway) {
         world.each<CityMap>([&](Entity, CityMap& m) { if (!cm) cm = &m; });
         if (!cb || !cm || !cm->data) continue;
         const RoadGraph& rg = cm->data->roads;
-        auto segDist = [](const Vec2& p, const Vec2& a, const Vec2& b) {
-            const Vec2 ab = b - a;
-            const Real l2 = ab.x * ab.x + ab.y * ab.y;
-            if (l2 < 1e-9) return (p - a).length();
-            Real t = ((p.x - a.x) * ab.x + (p.y - a.y) * ab.y) / l2;
-            t = std::max(Real(0), std::min(Real(1), t));
-            return (p - (a + ab * t)).length();
-        };
         int offenders = 0;
         Real worst = 0; Vec2 worstAt(0, 0); std::size_t worstRec = 0;
         for (std::size_t i = 0; i < cb->records.size(); ++i) {
@@ -758,7 +751,7 @@ TEST_CASE(level_print_buildings_in_the_carriageway) {
                 for (std::size_t e = 0; e < rg.edges.size(); ++e) {
                     const RoadEdge& ed = rg.edges[e];
                     if (ed.a < 0 || ed.b < 0) continue;
-                    const Real d = segDist(v, rg.nodes[ed.a].pos, rg.nodes[ed.b].pos);
+                    const Real d = distToSegment(v, rg.nodes[ed.a].pos, rg.nodes[ed.b].pos);
                     const Real into = ed.width * Real(0.5) - d;   // >0 = inside the lane
                     if (into > Real(0.25)) {
                         bad = true;
@@ -1141,13 +1134,6 @@ TEST_CASE(metro_signal_poles_stand_off_the_asphalt) {
         }
     }
 
-    auto distSeg = [](const Vec2& p, const Vec2& a, const Vec2& b) {
-        const Vec2 ab = b - a;
-        const double l2 = ab.lengthSquared();
-        double t = l2 > 1e-12 ? dot(p - a, ab) / l2 : 0.0;
-        t = t < 0 ? 0 : (t > 1 ? 1 : t);
-        return (a + ab * t - p).length();
-    };
 
     int total = 0, inPad = 0, inCompound = 0, inBody = 0;
     double worst = 0; Vec2 worstAt(0, 0); const char* worstKind = "";
@@ -1166,14 +1152,14 @@ TEST_CASE(metro_signal_poles_stand_off_the_asphalt) {
         for (const Pair& c : compound)
             compDepth = std::max(compDepth,
                                  std::min(rad[c.a], rad[c.b]) -
-                                     distSeg(p, g.nodes[c.a].pos, g.nodes[c.b].pos));
+                                     distToSegment(p, g.nodes[c.a].pos, g.nodes[c.b].pos));
         // (3) inside a body ribbon (carriageway only — the sidewalk band is
         //     exactly where a pole belongs)
         double bodyDepth = 0;
         for (const RoadEdge& e : g.edges) {
             if (e.a < 0 || e.b < 0 || e.a >= N || e.b >= N) continue;
             bodyDepth = std::max(bodyDepth,
-                                 e.width * 0.5 - distSeg(p, g.nodes[e.a].pos, g.nodes[e.b].pos));
+                                 e.width * 0.5 - distToSegment(p, g.nodes[e.a].pos, g.nodes[e.b].pos));
         }
         if (!kerb.empty()) { padDepth = 0; compDepth = 0; bodyDepth = kerb.depth(p); }
         const char* kind = nullptr;
@@ -1212,7 +1198,7 @@ TEST_CASE(metro_signal_poles_stand_off_the_asphalt) {
         for (const RoadEdge& e : g.edges) {
             if (e.a < 0 || e.b < 0 || e.a >= N || e.b >= N) continue;
             depth = std::max(depth,
-                             e.width * 0.5 - distSeg(q, g.nodes[e.a].pos, g.nodes[e.b].pos));
+                             e.width * 0.5 - distToSegment(q, g.nodes[e.a].pos, g.nodes[e.b].pos));
         }
         if (!kerb.empty()) depth = kerb.depth(q);
         if (depth > 0.05) {

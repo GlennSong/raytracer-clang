@@ -22,9 +22,8 @@ Projection project(const std::vector<Vec2>& xy, const std::vector<double>& s, co
     Projection best; best.distance = std::numeric_limits<double>::infinity();
     if (xy.size() == 1) { best.distance = distance(xy[0], p); return best; }
     for (size_t i = 0; i + 1 < xy.size(); ++i) {
-        Vec2 a = xy[i], d = xy[i+1] - a; double L2 = d.lengthSquared();
-        double t = L2 > 1e-18 ? std::clamp(dot(p - a, d) / L2, 0.0, 1.0) : 0.0;
-        double dist = distance(a + d * t, p);
+        Real t = 0;
+        const double dist = distance(closestOnSegment(p, xy[i], xy[i + 1], &t, 1e-18), p);   // (polyline.h; a lane's micro-segments count)
         if (dist < best.distance) { best.distance = dist; best.segment = i; best.t = t; best.station = s[i] + (s[i+1] - s[i]) * t; }
     }
     return best;

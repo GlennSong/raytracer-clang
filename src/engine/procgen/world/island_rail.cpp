@@ -1,4 +1,5 @@
 #include "island_rail.h"
+#include "../city/polyline.h"   // lineCross
 
 #include <algorithm>
 #include <functional>
@@ -67,12 +68,11 @@ std::vector<Vec2> resampleClosed(const std::vector<Vec2>& p, double step) {
     return out;
 }
 
+// p1->p2 (a stretch of the line) crosses p3->p4, and where: half-open along the line, so a road through one of its
+// vertices counts once (polyline.h lineCross)
 bool segCross(Vec2 p1, Vec2 p2, Vec2 p3, Vec2 p4, Vec2* at) {
-    const double d = (p2.x - p1.x) * (p4.y - p3.y) - (p2.y - p1.y) * (p4.x - p3.x);
-    if (std::fabs(d) < 1e-12) return false;
-    const double t = ((p3.x - p1.x) * (p4.y - p3.y) - (p3.y - p1.y) * (p4.x - p3.x)) / d;
-    const double u = ((p3.x - p1.x) * (p2.y - p1.y) - (p3.y - p1.y) * (p2.x - p1.x)) / d;
-    if (t < 0 || t >= 1 || u < 0 || u > 1) return false;   // (half-open along the line: a road through a vertex counts once)
+    Real t = 0, u = 0;
+    if (!lineCross(p1, p2, p3, p4, t, u) || t < 0 || t >= 1 || u < 0 || u > 1) return false;
     if (at) *at = p1 + (p2 - p1) * t;
     return true;
 }
@@ -416,18 +416,6 @@ struct StreetGraph {
     }
 };
 
-// Douglas-Peucker on an open polyline
-void simplify(const std::vector<Vec2>& p, std::size_t a, std::size_t b, double tol, std::vector<char>& keep) {
-    if (b <= a + 1) return;
-    double worst = -1; std::size_t at = a;
-    const Vec2 u = p[b] - p[a];
-    const double L = std::max(1e-9, u.length());
-    for (std::size_t i = a + 1; i < b; ++i) {
-        const double d = std::fabs(u.x * (p[i] - p[a]).y - u.y * (p[i] - p[a]).x) / L;
-        if (d > worst) { worst = d; at = i; }
-    }
-    if (worst > tol) { keep[at] = 1; simplify(p, a, at, tol, keep); simplify(p, at, b, tol, keep); }
-}
 
 // a closed polygon offset by `d` toward its inside (mitred, the miter capped), then any loop the offset tied cut out
 std::vector<Vec2> insetClosed(const std::vector<Vec2>& p, double d) {
@@ -575,8 +563,9 @@ IslandRailResult cityRailLoop(const json& graph, const RailTown& city, Vec2 inte
         std::size_t far = 1;
         for (std::size_t i = 1; i + 1 < open.size(); ++i) if (dist(open[i], open[0]) > dist(open[far], open[0])) far = i;
         keep[far] = 1;
-        simplify(open, 0, far, 4.0, keep);
-        simplify(open, far, open.size() - 1, 4.0, keep);
+        auto off = [&](std::size_t i, std::size_t a, std::size_t b) { return distToLine(open[i], open[a], open[b]); };
+        douglasPeucker(0, far, 4.0, off, keep);   // (polyline.h)
+        douglasPeucker(far, open.size() - 1, 4.0, off, keep);
         std::vector<Vec2> s2;
         for (std::size_t i = 0; i + 1 < open.size(); ++i) if (keep[i]) s2.push_back(open[i]);
         st = s2;

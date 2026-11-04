@@ -14632,3 +14632,36 @@ is what set walkers onto each other.
 Result: the test passes (0 overlapping pairs at its samples). Counted every tick, close pairs at that place fell from
 183 to 42, with none coincident. A few pairs pinned between a car and each other still come to 0.28–0.43 m. The
 fix for those is the car not stopping across the walkers' way, which is owed with the junction work (#145).
+
+## ADR-0316 — One segment and polyline kit: polyline.h
+
+Glenn, 2026-11-03, reading island_scene.cpp: "should those be utility functions?", then "we should put them into a
+shared utility file". The point-to-segment distance alone was written ten times across nine files under six names
+(segDist, pointSegDist ×2, distToSegment ×3, nearestParam, pointSegDistance, dpDistance, distToSeg). Each copy used the
+same arithmetic. The distance to a polyline was written four times, the crossing of two segments four times, and
+Douglas-Peucker seven times. Two of the polyline copies also lived on in tests.
+
+**Decision.** `engine/procgen/city/polyline.h` (header-only, beside polygon.h) holds them once:
+- `segmentParam`, `closestOnSegment`, `distToSegment`. A degenerate segment counts as its first point; the
+  threshold is `minL2` (the road twin's measures keep their 0 and 1e-18).
+- `lineCross` gives both fractions; each caller keeps its own rule for which ends count (island_scene both
+  ends; island_rail half-open, so a road through a vertex counts once; road_offset strictly inside). `segmentsCross`
+  is the ends-included case.
+- `nearestOnPolyline` (distance, foot, direction, segment, fraction, past-the-end; open or closed) and `distToPolyline`.
+  city_plan's `distToPolylineDir` is now an adapter over it.
+- `distToLine`, and `douglasPeucker(first, last, tol, off, [split], keep)`: one algorithm. What "off" means stays the
+  caller's: distance to the line, to the segment, plan and height in tolerances (the terrain router), or XZ of a Vec3
+  (terrain_field). `split` forces a split (the road twin's long runs). `simplifyRun` is the common open-run case.
+- polyline_ops.h (the road builder's toolkit) includes it, and its `project` uses it.
+- `distToRing` and `distToOutline` stay as thin adapters, keeping their own answer for an empty ring.
+
+**Proof (ADR-0174: identical, not "looks the same").** Re-planning island_8_nature from itself gives a
+byte-identical road graph, signs, hubs and terrain. rt_bake --force on river_town matches the pre-change bundle in
+every section but `city/e0/report` (it holds build timings). metro_v2_test matches a bake of the committed code in
+every section but the report.
+
+Found on the way: metro_v2_test's `city/e0/roads/twin` from a level-suite bake differs from an rt_bake of the same
+code (ece55808… vs d8bfe75d…). rt_bake is reproducible run to run. Owed: why the two bake paths build a different twin.
+
+AGENTS.md rule, restated for these: a segment, polyline or simplification helper goes in polyline.h, never a private
+copy. The wider inventory (smoothstep, angle wrap, hashes, area, bounds, stations, resampling...) is #117 wave 4.

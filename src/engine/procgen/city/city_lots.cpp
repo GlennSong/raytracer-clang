@@ -1,4 +1,5 @@
 #include "city_lots.h"
+#include "polyline.h"   // distToSegment
 #include "implicit.h"   // simplifyLoop: a curved lot's outline for its open frame
 #include "../../../proc_rng.h"
 #include "trades.h"
@@ -47,14 +48,6 @@ Vec3 colorFor(const std::string& t) {
     return {0.72, 0.70, 0.64};
 }
 
-// Distance from p to segment [a,b] (shared by the sculptors below).
-Real distToSeg(const Vec2& p, const Vec2& a, const Vec2& b) {
-    Vec2 ab = b - a;
-    Real len2 = ab.lengthSquared();
-    Real t = len2 > 1e-12 ? dot(p - a, ab) / len2 : 0.0;
-    t = t < 0 ? 0 : (t > 1 ? 1 : t);
-    return (p - Vec2(a.x + ab.x * t, a.y + ab.y * t)).length();
-}
 
 }  // namespace
 
@@ -236,7 +229,7 @@ void sculptPark(LotBuilding& g, const Poly2& poly, Real h,
     std::vector<std::pair<Vec2, Real>> claimed;
     auto clearAt = [&](const Vec2& p2, Real r) {
         for (const Spoke& s : spokes)
-            if (distToSeg(p2, s.a, s.b) < r + 1.1) return false;   // path + margin
+            if (distToSegment(p2, s.a, s.b) < r + 1.1) return false;   // path + margin
         for (const auto& [q, qr] : claimed)
             if ((q - p2).length() < r + qr) return false;
         return true;
@@ -430,7 +423,7 @@ void sculptPark(LotBuilding& g, const Poly2& poly, Real h,
         if (!clearAt(tp, 1.4)) continue;
         bool clear = true;
         for (const Spoke& s : spokes)
-            if (distToSeg(tp, s.a, s.b) < 2.2) { clear = false; break; }
+            if (distToSegment(tp, s.a, s.b) < 2.2) { clear = false; break; }
         for (const Vec3& other : g.treeSpots)
             if ((Vec2(other.x, other.z) - tp).length() < 3.2) {
                 clear = false;
@@ -585,7 +578,7 @@ static void sculptQuad(LotBuilding& g, const Poly2& poly, uint32_t seed, std::ve
         if ((q - c).length() < R + clear) return false;
         if (std::fabs(dot(q - c, va)) < wMain / 2 + clear) return false;   // the long walk
         if (crossWalks && std::fabs(dot(q - c, ua)) < wMain / 2 + clear) return false;   // the cross walk
-        for (const auto& d : diags) if (distToSeg(q, d.first, d.second) < wDiag / 2 + clear) return false;
+        for (const auto& d : diags) if (distToSegment(q, d.first, d.second) < wDiag / 2 + clear) return false;
         return inside(q);
     };
 
@@ -595,7 +588,7 @@ static void sculptQuad(LotBuilding& g, const Poly2& poly, uint32_t seed, std::ve
         const Vec2 d(std::cos(a), std::sin(a));
         const Vec2 bp = c + d * (R - 0.75);
         bool clear = std::fabs(dot(bp - c, va)) > wMain / 2 + 1.1 && (!crossWalks || std::fabs(dot(bp - c, ua)) > wMain / 2 + 1.1);
-        for (const auto& dg : diags) clear = clear && distToSeg(bp, dg.first, dg.second) > wDiag / 2 + 1.1;
+        for (const auto& dg : diags) clear = clear && distToSegment(bp, dg.first, dg.second) > wDiag / 2 + 1.1;
         if (clear) g.furniture.push_back(outdoorPiece(Piece::Bench, posHash(bp) ^ seed, bp + d * 0.33, Vec2(-d.x, -d.y), 0.02, true));
     }
     // FLOWER BEDS in the round's corners, just outside it between the walks
@@ -1042,7 +1035,7 @@ static bool sculptSportsField(LotBuilding& g, const Poly2& poly, uint32_t seed, 
         if (!pointInPolygon(poly, tp)) continue;
         bool clear = true;
         for (std::size_t i = 0; i < poly.size() && clear; ++i)   // 2.5 m in from the block's edge
-            if (distToSeg(tp, poly[i], poly[(i + 1) % poly.size()]) < 2.5) clear = false;
+            if (distToSegment(tp, poly[i], poly[(i + 1) % poly.size()]) < 2.5) clear = false;
         for (const Vec3& o : g.treeSpots) if ((Vec2(o.x, o.z) - tp).length() < 5.0) clear = false;
         if (clear) g.treeSpots.push_back(Vec3(tp.x, rng.in(0.9, 1.3), tp.y));
     }
@@ -2074,7 +2067,7 @@ void sculptYard(LotBuilding& b, const Poly2& lotPoly, const Poly2& house,
             const int n = static_cast<int>((len - 1.6) / 2.0);
             for (int k = 0; k < n; ++k) {
                 Vec2 hc = a + dir * (0.8 + 2.0 * k + 1.0) - nrm * 0.6;
-                if (distToSeg(hc, door, walkEnd) < 1.4) continue;   // walk gap
+                if (distToSegment(hc, door, walkEnd) < 1.4) continue;   // walk gap
                 if (!pointInPolygon(lotPoly, hc)) continue;
                 Vec3 t3(dir.x, 0, dir.y), n3(nrm.x, 0, nrm.y);
                 // Bedded 5 cm: ground-relative, so the base sits in the grass

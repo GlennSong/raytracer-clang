@@ -1,4 +1,5 @@
 #include "floor_zones.h"
+#include "polyline.h"   // distToPolyline
 
 #include "roads/lanes/geom2d.h"   // the Clipper booleans (every piece kept, holes too)
 #include "space_graph.h"          // cellUseName: the tags' RoomKind names
@@ -56,16 +57,7 @@ G::PolySet halfPlane(const Vec2& p, const Vec2& dir, bool left) {
     return G::fromRing(r);
 }
 
-Real distToSegment(const Vec2& q, const Vec2& a, const Vec2& b) {
-    const Vec2 ab = b - a;
-    const Real t = std::clamp(dot(q - a, ab) / std::max(Real(1e-12), ab.lengthSquared()), Real(0), Real(1));
-    return (q - (a + ab * t)).length();
-}
-Real distToRing(const Vec2& q, const Poly2& r) {
-    Real best = 1e9;
-    for (std::size_t i = 0; i < r.size(); ++i) best = std::min(best, distToSegment(q, r[i], r[(i + 1) % r.size()]));
-    return best;
-}
+Real distToRing(const Vec2& q, const Poly2& r) { return r.empty() ? 1e9 : distToPolyline(q, r, /*closed=*/true); }   // (polyline.h)
 Real distToRings(const Vec2& q, const std::vector<Poly2>& rs) {
     Real best = 1e9;
     for (const Poly2& r : rs) best = std::min(best, distToRing(q, r));

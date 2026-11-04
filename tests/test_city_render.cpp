@@ -1,5 +1,6 @@
 #include "test_framework.h"
 
+#include "../src/engine/procgen/city/polyline.h"   // distToSegment, distToPolyline
 #include "../src/apps/citysim/city_render.h"
 #include "../src/apps/citysim/city_vehicles.h"   // promotedLamps (pure mapping)
 #include "../src/engine/asset_manager.h"
@@ -499,16 +500,6 @@ TEST_CASE(externally_owned_cars_draw_no_lamps) {
     CHECK(!everLit);   // no instanced lamps while the cars are externally owned
 }
 
-// Distance from point p to segment [a,b] (XZ).
-static double segDist(Vec2 p, Vec2 a, Vec2 b) {
-    Vec2 ab(b.x - a.x, b.y - a.y);
-    double L2 = ab.x * ab.x + ab.y * ab.y;
-    double t = L2 > 1e-9 ? ((p.x - a.x) * ab.x + (p.y - a.y) * ab.y) / L2 : 0.0;
-    if (t < 0) t = 0; else if (t > 1) t = 1;
-    double cx = a.x + ab.x * t, cy = a.y + ab.y * t;
-    double dx = p.x - cx, dy = p.y - cy;
-    return std::sqrt(dx * dx + dy * dy);
-}
 
 TEST_CASE(signal_poles_stand_outside_the_carriageway) {
     // A WIDE cross: a fixed pole setback would land inside the carriageway ("in
@@ -538,7 +529,7 @@ TEST_CASE(signal_poles_stand_outside_the_carriageway) {
         Vec2 p(t.m[0][3], t.m[2][3]);
         double dmin = 1e9;
         for (const auto& link : nav.links)
-            dmin = std::min(dmin, segDist(p, nav.nodes[link.from], nav.nodes[link.to]));
+            dmin = std::min(dmin, distToSegment(p, nav.nodes[link.from], nav.nodes[link.to]));
         CHECK(dmin > halfW * 0.9);   // clear of every carriageway (not in the road)
     }
 }

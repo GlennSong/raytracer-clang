@@ -1,4 +1,5 @@
 #include "space_graph.h"
+#include "polyline.h"   // distToPolyline
 #include "circulation.h"
 
 #include "core_plan.h"
@@ -185,17 +186,8 @@ std::vector<StoreyPlan> storeyView(const SpaceGraph& g, Real baseY) {
 
 namespace {
 
-Real distToSegment(const Vec2& p, const Vec2& a, const Vec2& b) {
-    const Vec2 ab = b - a;
-    const Real l2 = ab.lengthSquared();
-    const Real t = l2 < 1e-12 ? 0.0 : std::max(Real(0), std::min(Real(1), dot(p - a, ab) / l2));
-    return (p - (a + ab * t)).length();
-}
-
 Real distToOutline(const Vec2& p, const Poly2& poly) {
-    Real best = std::numeric_limits<Real>::max();
-    for (std::size_t i = 0; i < poly.size(); ++i) best = std::min(best, distToSegment(p, poly[i], poly[(i + 1) % poly.size()]));
-    return best;
+    return poly.empty() ? std::numeric_limits<Real>::max() : distToPolyline(p, poly, /*closed=*/true);   // (polyline.h)
 }
 
 }  // namespace

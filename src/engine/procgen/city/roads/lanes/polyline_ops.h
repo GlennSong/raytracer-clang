@@ -6,6 +6,7 @@
 // passes make by the hundred thousand.
 
 #include "engine/procgen/city/polygon.h"
+#include "engine/procgen/city/polyline.h"   // the segment and polyline basics this toolkit builds on
 #include <vector>
 
 namespace engine {

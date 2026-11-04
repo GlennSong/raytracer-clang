@@ -1,5 +1,6 @@
 #include "test_framework.h"
 
+#include "../src/engine/procgen/city/polyline.h"   // distToSegment
 #include "../src/engine/procgen/city/architect.h"
 #include "../src/engine/level_params.h"   // readLotGrowParams (the alleys case)
 #include "../src/engine/procgen/city/city_lots.h"
@@ -744,15 +745,6 @@ TEST_CASE(every_built_lot_touches_a_road) {
         // the lot's OBB to any road edge in the graph. The lot's rectangle is defined
         // by site (centroid), width, depth (half-extents), and yaw (rotation).
         //
-        // Helper: distance from a point to a line segment (a,b).
-        auto distPointToSegment = [](const Vec2& p, const Vec2& a, const Vec2& b) -> Real {
-            Vec2 ab = b - a;
-            Real len2 = ab.lengthSquared();
-            if (len2 < 1e-12) return (p - a).length();
-            Real t = std::clamp(dot(p - a, ab) / len2, 0.0, 1.0);
-            Vec2 closest = a + ab * t;
-            return (p - closest).length();
-        };
 
         // Helper: distance from the building's OBB CENTER to the nearest road
         // CENTRELINE. The ring parceler fronts every lot on a block edge, so a
@@ -763,7 +755,7 @@ TEST_CASE(every_built_lot_touches_a_road) {
             for (const RoadEdge& edge : roads.edges) {
                 Vec2 a = roads.nodes[edge.a].pos;
                 Vec2 b = roads.nodes[edge.b].pos;
-                minDist = std::min(minDist, distPointToSegment(lot.site, a, b));
+                minDist = std::min(minDist, distToSegment(lot.site, a, b));
             }
             return minDist;
         };

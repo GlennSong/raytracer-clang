@@ -1,4 +1,5 @@
 #include "drawn_road.h"
+#include "procgen/city/polyline.h"   // distToSegment
 
 #include "components.h"
 #include "world.h"
@@ -21,13 +22,6 @@ bool inTri(const DrawnRoad::Tri& t, double x, double z) {
     return !(neg && pos);
 }
 
-double segDist(const Vec2& p, const Vec2& a, const Vec2& b) {
-    const Vec2 ab = b - a;
-    const double l2 = ab.lengthSquared();
-    double t = l2 > 1e-12 ? dot(p - a, ab) / l2 : 0.0;
-    t = std::max(0.0, std::min(1.0, t));
-    return (p - (a + ab * t)).length();
-}
 }  // namespace
 
 void DrawnRoad::add(const Vec2& a, const Vec2& b, const Vec2& c) {
@@ -84,7 +78,7 @@ bool DrawnRoad::overhead(double x, double z, double footY, double topY, double r
                 const double lo = std::min({h[0], h[1], h[2]}), hi = std::max({h[0], h[1], h[2]});
                 if (hi < footY + 0.5 || lo > topY) continue;   // under the foot (its own pavement), or clear above
                 const Tri& t = tris[static_cast<std::size_t>(ti)];
-                if (inTri(t, x, z) || segDist(p, t.a, t.b) < radius || segDist(p, t.b, t.c) < radius || segDist(p, t.c, t.a) < radius)
+                if (inTri(t, x, z) || distToSegment(p, t.a, t.b) < radius || distToSegment(p, t.b, t.c) < radius || distToSegment(p, t.c, t.a) < radius)
                     return true;
             }
         }
@@ -153,8 +147,8 @@ bool DrawnRoad::near(double x, double z, double margin) const {
             if (it == cells.end()) continue;
             for (int ti : it->second) {
                 const Tri& t = tris[static_cast<std::size_t>(ti)];
-                if (inTri(t, x, z) || segDist(p, t.a, t.b) < margin || segDist(p, t.b, t.c) < margin ||
-                    segDist(p, t.c, t.a) < margin)
+                if (inTri(t, x, z) || distToSegment(p, t.a, t.b) < margin || distToSegment(p, t.b, t.c) < margin ||
+                    distToSegment(p, t.c, t.a) < margin)
                     return true;
             }
         }

@@ -1,4 +1,5 @@
 #include "road_offset.h"
+#include "polyline.h"   // lineCross
 
 #include <algorithm>
 #include <cmath>
@@ -82,12 +83,8 @@ Poly2 bridgeOneHole(const Poly2& outer, const Poly2& hole) {
 
 // Proper interior crossing of a->b and c->d; on a hit, `t` is along a->b (interior of both).
 bool segCrossParam(const Vec2& a, const Vec2& b, const Vec2& c, const Vec2& d, double& t) {
-    Vec2 r = b - a, s = d - c;
-    double denom = cross(r, s);
-    if (std::fabs(denom) < 1e-12) return false;          // parallel/collinear
-    Vec2 ac = c - a;
-    t = cross(ac, s) / denom;
-    double u = cross(ac, r) / denom;
+    double u = 0;
+    if (!lineCross(a, b, c, d, t, u)) return false;      // parallel/collinear (polyline.h)
     return t > kEps && t < 1.0 - kEps && u > kEps && u < 1.0 - kEps;
 }
 

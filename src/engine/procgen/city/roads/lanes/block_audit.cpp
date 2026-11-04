@@ -21,15 +21,8 @@ namespace roads::lanes {
 
 namespace {
 std::vector<size_t> dpKeep(const Ring& pts, double tol) {
-    std::vector<char> keep(pts.size(), 0); if (pts.size() < 3) return {};
-    keep.front() = 1; keep.back() = 1; std::vector<std::pair<size_t, size_t>> stack{{0, pts.size() - 1}};
-    while (!stack.empty()) {
-        auto [a, b] = stack.back(); stack.pop_back(); if (b <= a + 1) continue;
-        const Vec2 d = pts[b] - pts[a]; const double L = std::hypot(d.x, d.y); size_t best = a; double bd = -1;
-        for (size_t i = a + 1; i < b; ++i) { const Vec2 v = pts[i] - pts[a]; const double dist = L > 1e-9 ? std::fabs(v.x * d.y - v.y * d.x) / L : std::hypot(v.x, v.y); if (dist > bd) { bd = dist; best = i; } }
-        if (bd > tol) { keep[best] = 1; stack.push_back({a, best}); stack.push_back({best, b}); }
-    }
-    std::vector<size_t> out; for (size_t i = 0; i < pts.size(); ++i) if (keep[i]) out.push_back(i); return out;
+    if (pts.size() < 3) return {};
+    return simplifyRun(pts, tol);   // (polyline.h)
 }
 }  // namespace
 
