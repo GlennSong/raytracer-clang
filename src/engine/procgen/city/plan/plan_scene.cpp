@@ -76,7 +76,7 @@ std::vector<Vec2> offsetClosed(const std::vector<Vec2>& p, Real d) {
 // segment back from its last vertex to its first.
 bool crossingWithRing(const std::vector<Vec2>& open, const std::vector<Vec2>& ring, double& sOpen, std::size_t& ringSeg,
                       bool closed = true) {
-    const std::vector<double> st = roads::lanes::stations(open);
+    const std::vector<double> st = stations(open);
     const std::size_t n = ring.size();
     const std::size_t segs = closed ? n : (n > 0 ? n - 1 : 0);
     for (std::size_t i = 0; i + 1 < open.size(); ++i)
@@ -133,7 +133,7 @@ std::vector<std::vector<Vec2>> arcChains(const CityPlan& plan) {
     const std::vector<Vec2>& arc = plan.ringArc;
     const std::size_t n = arc.size();
     if (n < 8) return {};
-    const std::vector<double> st = roads::lanes::stations(arc);
+    const std::vector<double> st = stations(arc);
     const double per = st.back() / static_cast<double>(n - 1);
     const std::size_t step = static_cast<std::size_t>(std::ceil((roads::lanes::systemReach(systemOptions()) + per) / per));
     std::vector<std::size_t> seams;
@@ -188,7 +188,7 @@ std::vector<std::vector<Vec2>> ringChains(const CityPlan& plan) {
         // INSIDE the system interchanges' own stretch: just past the end of its ramps' lanes on from
         // each expressway's crossing, where no diamond could stand anyway. Midway between them the
         // seams took four of the ring's ten arterial crossings, and every diamond left was on one side.
-        const std::vector<double> st = roads::lanes::stations(ring);
+        const std::vector<double> st = stations(ring);
         const double per = st.back() / static_cast<double>(n - 1);   // ~20 m a vertex
         const std::size_t step = static_cast<std::size_t>(std::ceil((roads::lanes::systemReach(systemOptions()) + per) / per));
         for (std::size_t a : at) seams.push_back((a + step) % n);
@@ -224,7 +224,7 @@ std::vector<Vec2> spurFreeway(const CityPlan& plan, std::size_t j) {
     const FreewaySection f = freewaySection(plan.brief);
     const roads::lanes::SystemOptions so = systemOptions();
     const double loopGore = f.edgeReach + so.rampHalf + so.bandGap + so.loopR - so.diverge;
-    const std::vector<double> st = roads::lanes::stations(sp);
+    const std::vector<double> st = stations(sp);
     const double sEnd = std::min(sx + loopGore + 40.0, st.back() - 80.0);
     // and, at a town, short of its main street by the same room for the pair at that end
     const double sStart = j < plan.towns.size() && plan.towns[j].built ? kTownPair : 0.0;
@@ -378,7 +378,7 @@ nlohmann::json planToLanesScene(const CityPlan& plan, const SceneOptions& opt) {
         for (std::size_t i = 0; i < streetChains.size(); ++i) {
             // a C's end never takes a street an expressway's pair already cut (a chain is cut once)
             if (spur == kRingEnd && std::any_of(tees.begin(), tees.end(), [&](const Tee& t) { return t.chain == i; })) continue;
-            const std::vector<double> st = roads::lanes::stations(streetChains[i].pts);
+            const std::vector<double> st = stations(streetChains[i].pts);
             if (st.back() < 2 * kTee + 30.0) continue;
             const roads::lanes::Projection pr = roads::lanes::project(streetChains[i].pts, st, at);
             const double c = std::clamp(pr.station, kTee + 15.0, st.back() - kTee - 15.0);
@@ -411,7 +411,7 @@ nlohmann::json planToLanesScene(const CityPlan& plan, const SceneOptions& opt) {
     // but a crossing — is one a ring diamond may close when its ramp would pass over it too low.
     auto closable = [&](RoadClass k, const std::vector<Vec2>& pts) {
         if (k != RoadClass::Collector && k != RoadClass::Local) return false;
-        if (roads::lanes::stations(pts).back() > 2 * (fs.edgeReach + 60.0)) return false;
+        if (stations(pts).back() > 2 * (fs.edgeReach + 60.0)) return false;
         for (const auto& c : chains) if (!roads::lanes::crossings(c, pts).empty()) return true;
         return false;
     };
@@ -420,7 +420,7 @@ nlohmann::json planToLanesScene(const CityPlan& plan, const SceneOptions& opt) {
         rampStreets.push_back({sid, pts, closable(k, pts)});
     };
     auto piece = [](const std::vector<Vec2>& pts, double s0, double s1) {
-        const std::vector<double> st = roads::lanes::stations(pts);
+        const std::vector<double> st = stations(pts);
         std::vector<Vec2> out{roads::lanes::pointAt(pts, st, s0)};
         for (std::size_t i = 0; i < pts.size(); ++i) if (st[i] > s0 + 0.5 && st[i] < s1 - 0.5) out.push_back(pts[i]);
         out.push_back(roads::lanes::pointAt(pts, st, s1));
@@ -434,11 +434,11 @@ nlohmann::json planToLanesScene(const CityPlan& plan, const SceneOptions& opt) {
         const Tee* t = nullptr;
         for (std::size_t j = 0; j < tees.size(); ++j) if (tees[j].chain == i) t = &tees[j];
         if (!t) { street(sid, c.klass, c.pts); continue; }
-        const double len = roads::lanes::stations(c.pts).back();
+        const double len = stations(c.pts).back();
         street(sid + "_0", c.klass, piece(c.pts, 0, t->s0));
         street(sid + "_1", c.klass, piece(c.pts, t->s0, t->s1));
         street(sid + "_2", c.klass, piece(c.pts, t->s1, len));
-        const std::vector<double> st = roads::lanes::stations(c.pts);
+        const std::vector<double> st = stations(c.pts);
         (t->spur == kRingEnd ? ringTeePoints : teePoints[t->spur])[static_cast<std::size_t>(t->end)] =
             {roads::lanes::pointAt(c.pts, st, t->s0), roads::lanes::pointAt(c.pts, st, t->s1)};
     }
@@ -469,7 +469,7 @@ nlohmann::json planToLanesScene(const CityPlan& plan, const SceneOptions& opt) {
         // under the hills and pointless over the hollows. Sampled from the same terrain the
         // builder will make from this scene's own spec.
         json floors = json::array();
-        const std::vector<double> st = roads::lanes::stations(c);
+        const std::vector<double> st = stations(c);
         // Every 30 m, held flat 15 m either side: at 60 m and 60 m the deck stayed at a high
         // sample's height right across the dips between, and a diamond's ramp down into one had
         // half as much again to climb as the ground said.
@@ -484,7 +484,7 @@ nlohmann::json planToLanesScene(const CityPlan& plan, const SceneOptions& opt) {
     // to each floor's tent — flat over its half-span, falling at the freeway's design grade beyond.
     std::map<std::size_t, json> floorsOf;   // by route id, for the diamonds' sizing
     auto deckOf = [&](const std::vector<Vec2>& c, const json& floors) {
-        const std::vector<double> st = roads::lanes::stations(c);
+        const std::vector<double> st = stations(c);
         std::vector<double> z = roads::lanes::profileAlong(c, ground, 200.0, 0.06);
         const double gd = roads::lanes::kDesignGrade * 0.06;
         for (const json& f : floors) {
@@ -513,14 +513,14 @@ nlohmann::json planToLanesScene(const CityPlan& plan, const SceneOptions& opt) {
             std::vector<Vec2> ca, cb;
             for (std::size_t i = 0; i < chains[k].size(); ++i) { ca.push_back(ra[(start + i) % n]); cb.push_back(rb[(start + i) % n]); }
             const bool firstEnd = !ringClosed(plan) && k == 0, lastEnd = !ringClosed(plan) && k + 1 == chains.size();
-            json floors = floorsOver(chains[k], firstEnd ? kCEnd : 0.0, lastEnd ? roads::lanes::stations(chains[k]).back() - kCEnd : 1e30);
+            json floors = floorsOver(chains[k], firstEnd ? kCEnd : 0.0, lastEnd ? stations(chains[k]).back() - kCEnd : 1e30);
             // Over an expressway the ring holds 2.5 m higher. The expressway must be at the ring's
             // height again 200 m out, to bridge the suburbs' first street, and at design grade on
             // rolling ground it cannot also get down to the ground under the ring: it passes under
             // at about 1.3 m, and the ring's girders need their clearance above that.
             for (const SystemAt& at : systems) {
                 if (at.chain != k || !at.r.built) continue;
-                const Vec2 q = roads::lanes::pointAt(chains[k], roads::lanes::stations(chains[k]), at.r.sThrough);
+                const Vec2 q = roads::lanes::pointAt(chains[k], stations(chains[k]), at.r.sThrough);
                 // ...or over the expressway's own deck there, which on a hillside comes down from higher
                 // ground and passes under well above it (3.2 m at the SW crossing). 3.5 m over the
                 // clearance: this estimate of its floors put it 0.7 m up there — it is still climbing
@@ -793,7 +793,7 @@ nlohmann::json planToLanesScene(const CityPlan& plan, const SceneOptions& opt) {
             for (const json& q : e["path"]["points"]) S.pts.emplace_back(q[0].get<double>(), q[1].get<double>());
             if (S.pts.size() < 2) continue;
             S.river = true;
-            S.st = roads::lanes::stations(S.pts);
+            S.st = stations(S.pts);
             const double L = S.st.back(), hw = halfWidth(k);
             bool in = false;
             double s0 = 0.0, lvlSum = 0.0;

@@ -26,7 +26,6 @@ namespace plan {
 
 namespace {
 
-constexpr Real kPi = 3.14159265358979323846;
 
 // ---- noise -------------------------------------------------------------------
 uint32_t hash3(int x, int y, uint32_t s) {
@@ -48,7 +47,7 @@ Real ringNoise(Real theta, int k, uint32_t s) {
     Real v = 0, norm = 0;
     for (int h = 2; h <= 5; ++h) {
         const uint32_t hh = hash3(k, h, s);
-        const Real phase = (hh & 0xFFFF) / 65535.0 * 2 * kPi;
+        const Real phase = (hh & 0xFFFF) / 65535.0 * 2 * PI;
         const Real amp = 1.0 / h;
         v += amp * std::sin(h * theta + phase);
         norm += amp;
@@ -138,11 +137,8 @@ RoadGraph planarizePolylines(const std::vector<Polyline>& roads, Real snap = 0.6
                     if (d <= 1 || (roads[A.road].closed && d == n - 1)) continue;   // neighbours share a vertex
                 }
                 const Vec2 p = segs[s0].first, q = segs[s0].second, a = segs[s1].first, b = segs[s1].second;
-                const Vec2 r = q - p, s = b - a;
-                const Real den = r.x * s.y - r.y * s.x;
-                if (std::fabs(den) > 1e-12) {
-                    const Vec2 ap = a - p;
-                    const Real t = (ap.x * s.y - ap.y * s.x) / den, u = (ap.x * r.y - ap.y * r.x) / den;
+                Real t = 0, u = 0;   // (polyline.h)
+                if (lineCross(p, q, a, b, t, u)) {
                     if (t > 1e-6 && t < 1 - 1e-6 && u > 1e-6 && u < 1 - 1e-6) {
                         cuts[A.road][A.seg].push_back(t);
                         cuts[B.road][B.seg].push_back(u);
@@ -799,10 +795,8 @@ std::vector<std::pair<Real, Vec2>> crossingsWith(const std::vector<Vec2>& P, con
         const Real len = r.length();
         for (const std::vector<Vec2>& L : lines)
             for (std::size_t j = 0; j + 1 < L.size(); ++j) {
-                const Vec2 b0 = L[j], s2 = L[j + 1] - L[j];
-                const Real den = cross(r, s2);
-                if (std::fabs(den) < 1e-12) continue;
-                const Real t = cross(b0 - a0, s2) / den, u = cross(b0 - a0, r) / den;
+                Real t = 0, u = 0;   // (polyline.h; half-open along the line: a crossing at a vertex counts once)
+                if (!lineCross(a0, P[i + 1], L[j], L[j + 1], t, u)) continue;
                 if (t >= 0 && t < 1 && u >= 0 && u <= 1) out.push_back({st + t * len, a0 + r * t});
             }
         st += len;
@@ -859,7 +853,7 @@ std::vector<Polyline> cutRoadsWhere(const std::vector<Polyline>& roads, Real sid
         cur.closed = false;
         cur.pts.clear();
         auto flush = [&] {
-            if (cur.pts.size() >= 2 && roads::lanes::stations(cur.pts).back() > minLen) kept.push_back(cur);
+            if (cur.pts.size() >= 2 && stations(cur.pts).back() > minLen) kept.push_back(cur);
             cur.pts.clear();
         };
         for (const Vec2& q : dense) {
@@ -973,7 +967,7 @@ const char* blockUseName(BlockUse u) {
 CityPlan generatePlan(const Brief& B) {
     CityPlan plan;
     plan.brief = B;
-    const Real ang = B.gridAngleDeg * kPi / 180.0;
+    const Real ang = B.gridAngleDeg * PI / 180.0;
     const Frame F{B.center, Vec2(std::cos(ang), std::sin(ang)), Vec2(-std::sin(ang), std::cos(ang))};
     const Real outerR = B.size * 0.5 - B.outerMargin;
     const Real corridorHalf = B.freewayWidth * 0.5 + 35.0;
@@ -1059,7 +1053,7 @@ CityPlan generatePlan(const Brief& B) {
         std::vector<Real> raw(kBins);
         std::vector<char> rawSea(kBins, 0);
         for (int b = 0; b < kBins; ++b) {
-            const Real th = 2 * kPi * b / kBins;
+            const Real th = 2 * PI * b / kBins;
             const Vec2 d(std::cos(th), std::sin(th));
             Real r = 0;
             for (; r < half - 20; r += land.cell * 0.5) {
@@ -1095,7 +1089,7 @@ CityPlan generatePlan(const Brief& B) {
         if (shaped) {
             LandShapeParams sp;
             sp.cell = land.cell;
-            sp.targetArea = landSpec.value("area", kPi * B.size * B.size * 0.16);
+            sp.targetArea = landSpec.value("area", PI * B.size * B.size * 0.16);
             sp.slopeWeight = landSpec.value("slopeWeight", sp.slopeWeight);
             sp.riseWeight = landSpec.value("riseWeight", sp.riseWeight);
             sp.seaLevel = B.world.value("seaLevel", -1e9);
@@ -1111,7 +1105,7 @@ CityPlan generatePlan(const Brief& B) {
         }
     }
     auto edgeAt = [&](Real th, Real* seaOut = nullptr) {
-        const int b = ((static_cast<int>(std::lround(th / (2 * kPi) * kBins)) % kBins) + kBins) % kBins;
+        const int b = ((static_cast<int>(std::lround(th / (2 * PI) * kBins)) % kBins) + kBins) % kBins;
         if (seaOut) *seaOut = edgeSea[static_cast<std::size_t>(b)];
         return edgeR[static_cast<std::size_t>(b)];
     };
@@ -1214,9 +1208,9 @@ CityPlan generatePlan(const Brief& B) {
     auto ringAt = [&](std::function<Real(Real)> radius, RoadClass k, Real w) {
         Polyline ring; ring.klass = k; ring.width = w; ring.closed = true;
         const Real r0 = radius(0);
-        const int n = std::max(24, static_cast<int>(2 * kPi * r0 / 15.0));
+        const int n = std::max(24, static_cast<int>(2 * PI * r0 / 15.0));
         for (int i = 0; i < n; ++i) {
-            const Real th = 2 * kPi * i / n;
+            const Real th = 2 * PI * i / n;
             const Real r = radius(th);
             ring.pts.push_back(warped(B.center + Vec2(std::cos(th), std::sin(th)) * r));
         }
@@ -1248,7 +1242,7 @@ CityPlan generatePlan(const Brief& B) {
             const Real want = B.collectorWidth + 2 * B.sidewalk + 10;
             bool touches = false;
             for (int i = 0; i < 72 && !touches; ++i) {
-                const Real th = 2 * kPi * i / 72;
+                const Real th = 2 * PI * i / 72;
                 touches = std::fabs(rf(th) - (freewayR(th) - corridorHalf)) < want ||
                           std::fabs(rf(th) - (freewayR(th) + corridorHalf)) < want;
             }
@@ -1261,7 +1255,7 @@ CityPlan generatePlan(const Brief& B) {
     std::vector<Real> spokeTheta;
     std::vector<std::vector<Vec2>> spokeLines;   // a spoke MEANDERS: its angle is not where it is
     for (int s = 0; s < B.spokes; ++s) {
-        const Real th0 = 2 * kPi * (s + 0.5 * ((hash3(s, 3, B.seed) & 0xFF) / 255.0 - 0.5)) / B.spokes;
+        const Real th0 = 2 * PI * (s + 0.5 * ((hash3(s, 3, B.seed) & 0xFF) / 255.0 - 0.5)) / B.spokes;
         spokeTheta.push_back(th0);
         Polyline sp; sp.klass = RoadClass::Arterial; sp.width = B.arterialWidth;
         for (Real r = midR(th0) - 8.0; r <= outerR + 8.0; r += 15.0) {
@@ -1286,7 +1280,7 @@ CityPlan generatePlan(const Brief& B) {
         std::size_t ci = 0;
         while (ci < bandEdges.size() && !bandEdges[ci].corridorInner) ++ci;
         for (std::size_t sI = 0; sI < spokeTheta.size() && ci < bandEdges.size(); ++sI) {
-            const Real a = spokeTheta[sI], b = spokeTheta[(sI + 1) % spokeTheta.size()] + (sI + 1 == spokeTheta.size() ? 2 * kPi : 0);
+            const Real a = spokeTheta[sI], b = spokeTheta[(sI + 1) % spokeTheta.size()] + (sI + 1 == spokeTheta.size() ? 2 * PI : 0);
             const Real th = 0.5 * (a + b);
             Polyline c; c.klass = RoadClass::Collector; c.width = B.collectorWidth;
             const Real r0 = (ci > 0 ? bandEdges[ci - 1].r(th) : freewayR(th) - corridorHalf) - 8;
@@ -1305,12 +1299,12 @@ CityPlan generatePlan(const Brief& B) {
         const Real rMid = 0.5 * (inner(0) + outer(0));
         const Real dTheta = B.wedgeStreetSpacing / std::max(Real(100), rMid);
         const Real stagger = (bi % 2) * 0.5 * dTheta;
-        for (Real th = stagger; th < 2 * kPi; th += dTheta) {
+        for (Real th = stagger; th < 2 * PI; th += dTheta) {
             bool nearSpoke = false;
             const bool besideCorridor = bandEdges[bi + 1].corridorInner || (bi > 0 && bandEdges[bi - 1].corridorInner);
             for (const std::vector<Real>* at : {&spokeTheta, besideCorridor ? &underTheta : &spokeTheta})
                 for (Real st : *at) {
-                    Real d = std::fabs(std::remainder(th - st, 2 * kPi));
+                    Real d = std::fabs(std::remainder(th - st, 2 * PI));
                     if (d * rMid < 0.45 * B.wedgeStreetSpacing) nearSpoke = true;
                 }
             if (nearSpoke) continue;
@@ -1318,7 +1312,7 @@ CityPlan generatePlan(const Brief& B) {
             const Real r0 = inner(th) - 8.0, r1 = outer(th) + 8.0;
             for (int i = 0; i <= 8; ++i) {
                 const Real r = r0 + (r1 - r0) * i / 8.0;
-                const Real bend = (B.curvature * 0.4 / rMid) * std::sin(kPi * i / 8.0) * valueNoise(th * 3.0, bi * 1.7, B.seed + 7);
+                const Real bend = (B.curvature * 0.4 / rMid) * std::sin(PI * i / 8.0) * valueNoise(th * 3.0, bi * 1.7, B.seed + 7);
                 ls.pts.push_back(warped(B.center + Vec2(std::cos(th + bend), std::sin(th + bend)) * r));
             }
             // ...and the spoke it is parallel to may have MEANDERED into it since: both are
@@ -1349,7 +1343,7 @@ CityPlan generatePlan(const Brief& B) {
             for (int i = 0; i < shape.n; ++i)
                 if (shape.depth[static_cast<std::size_t>(j) * shape.n + i] >= shapeRim)
                     reach = std::max(reach, (shape.origin + Vec2(i * shape.cell, j * shape.cell) - shape.heart).length());
-        const Real coreR = std::sqrt(std::max(Real(1), shape.area * landSpec.value("coreShare", 0.12)) / kPi);
+        const Real coreR = std::sqrt(std::max(Real(1), shape.area * landSpec.value("coreShare", 0.12)) / PI);
         std::vector<Polyline> grid;
         for (int axis = 0; axis < 2; ++axis) {
             const bool alongV = axis == 0;
@@ -1453,7 +1447,7 @@ CityPlan generatePlan(const Brief& B) {
                 std::vector<Vec2> ext{pts[0] + d0 * reachOn};
                 ext.insert(ext.end(), pts.begin(), pts.end());
                 ext.push_back(pts.back() + d1 * reachOn);
-                const Real total = roads::lanes::stations(ext).back();
+                const Real total = stations(ext).back();
                 auto square = [&](const Vec2& at, const Vec2& d) {
                     Real best = 1e30;
                     Vec2 rd(1, 0);
@@ -1522,7 +1516,7 @@ CityPlan generatePlan(const Brief& B) {
                     if (pc.pts.size() < 2 || (pc.rim0 && pc.rim1)) continue;
                     std::vector<std::vector<Vec2>> others;
                     for (std::size_t k = 0; k < standing.size(); ++k) if (standingOf[k] != pi) others.push_back(standing[k]);
-                    const Real total = roads::lanes::stations(pc.pts).back();
+                    const Real total = stations(pc.pts).back();
                     Real lo = pc.rim0 ? 0 : 1e30, hi = pc.rim1 ? total : -1e30;
                     for (const auto& [st, q] : crossingsWith(pc.pts, others)) {
                         if (!pc.rim0) lo = std::min(lo, st);
@@ -1566,7 +1560,7 @@ CityPlan generatePlan(const Brief& B) {
         std::vector<std::vector<Vec2>> spokeLines;
         const Real spokeSpacing = landSpec.value("spokeSpacing", 480.0);
         for (const std::vector<Vec2>& r : rim) {
-            const std::vector<double> st = roads::lanes::stations(r);
+            const std::vector<double> st = stations(r);
             const int k = std::max(1, static_cast<int>(std::lround(st.back() / spokeSpacing)));
             for (int i = 0; i < k; ++i) {
                 RoadClass art = RoadClass::Arterial;
@@ -1593,12 +1587,12 @@ CityPlan generatePlan(const Brief& B) {
             std::vector<std::vector<Vec2>> placed;
             std::vector<Arrival> ends;
             for (const std::vector<Vec2>& inner : ringLines[bi]) {
-                const std::vector<double> st = roads::lanes::stations(inner);
+                const std::vector<double> st = stations(inner);
                 const Real stagger = (bi % 2) * 0.5 * B.wedgeStreetSpacing;
                 for (Real s0 = stagger + 0.5 * B.wedgeStreetSpacing; s0 < st.back(); s0 += B.wedgeStreetSpacing) {
                     const Vec2 p = snapTo(roads::lanes::pointAt(inner, st, s0), arrivals, std::max(0.42 * B.wedgeStreetSpacing, junctionGap), nullptr);
                     std::vector<Vec2> line = outward(p, bi);
-                    if (line.size() < 2 || roads::lanes::stations(line).back() < 30.0) continue;
+                    if (line.size() < 2 || stations(line).back() < 30.0) continue;
                     bool clash = false;
                     for (const auto* set : {&spokeLines, &placed, &gridLines}) {
                         for (const std::vector<Vec2>& o : *set) {
@@ -1640,7 +1634,7 @@ CityPlan generatePlan(const Brief& B) {
                 std::vector<Vec2> line;
                 for (const RiverNode& nd : rv.nodes) line.push_back(nd.p);
                 if (line.size() < 2) continue;
-                const std::vector<double> st = roads::lanes::stations(line);
+                const std::vector<double> st = stations(line);
                 // the river's runs inside the city (its water cells in the footprint), by station
                 std::vector<std::pair<double, double>> runs;
                 bool in = false;
@@ -1751,7 +1745,7 @@ CityPlan generatePlan(const Brief& B) {
         // the spine, resampled every 10 m and smoothed over ~60 m: its offsets must not kink where it bends
         std::vector<Vec2> raw;
         for (const auto& q : stripSpec["spine"]) raw.push_back(Vec2(q[0].get<double>(), q[1].get<double>()));
-        const std::vector<double> rs = roads::lanes::stations(raw);
+        const std::vector<double> rs = stations(raw);
         std::vector<Vec2> spine;
         for (Real sv = 0; sv < rs.back(); sv += 10) spine.push_back(roads::lanes::pointAt(raw, rs, sv));
         spine.push_back(raw.back());
@@ -1787,7 +1781,7 @@ CityPlan generatePlan(const Brief& B) {
         add(spine, RoadClass::Arterial, B.arterialWidth);                                   // the seafront
         for (int k = 1; k <= rows; ++k) add(offset(row * k), RoadClass::Local, B.localWidth);
         if (prom > 0) add(offset(-prom), RoadClass::Local, B.localWidth);                   // the promenade
-        const std::vector<double> ss = roads::lanes::stations(spine);
+        const std::vector<double> ss = stations(spine);
         const int nCross = std::max(1, static_cast<int>(ss.back() / cross));
         const Real first = (ss.back() - (nCross - 1) * cross) * 0.5;
         for (int j = 0; j < nCross; ++j) {
@@ -1832,7 +1826,7 @@ CityPlan generatePlan(const Brief& B) {
             return std::fabs(q.x - B.center.x) <= gridHalf - 150 && std::fabs(q.y - B.center.y) <= gridHalf - 150 && townGround(q.x, q.y) >= sea + above;
         };
         for (int k = 0; k <= 10; ++k) {
-            const Real bend = (k == 0 ? 0 : (k % 2 ? 1 : -1) * ((k + 1) / 2) * 10.0) * kPi / 180.0;
+            const Real bend = (k == 0 ? 0 : (k % 2 ? 1 : -1) * ((k + 1) / 2) * 10.0) * PI / 180.0;
             const Vec2 d(dir.x * std::cos(bend) - dir.y * std::sin(bend), dir.x * std::sin(bend) + dir.y * std::cos(bend));
             const Vec2 left(-d.y, d.x);
             for (Real r = gridHalf * Real(1.41); r >= townSpec.value("gap", 500.0); r -= 20) {
@@ -1908,7 +1902,7 @@ CityPlan generatePlan(const Brief& B) {
     std::vector<Polyline> placeRoads;
     auto layPlace = [&](CityPlan::Place& pl, int depth, const HeightField& g) {
         (void)g;
-        const std::vector<double> st = roads::lanes::stations(plan.loop);
+        const std::vector<double> st = stations(plan.loop);
         auto frame = [&](Real s, Real off) {
             const Vec2 p = roads::lanes::pointAt(plan.loop, st, s), t = roads::lanes::tangentAtStation(plan.loop, st, s);
             const Vec2 n(-t.y, t.x);
@@ -1956,7 +1950,7 @@ CityPlan generatePlan(const Brief& B) {
     // also the junction the lanes builder is happiest with. The cells stop short of the freeway, the
     // centre, steep ground (6%), the sea and the edge of the ground grid, so the town's edge is ragged.
     auto layTown2 = [&](CityPlan::Place& pl, const nlohmann::json& pj, const HeightField& g) {
-        const std::vector<double> st = roads::lanes::stations(plan.loop);
+        const std::vector<double> st = stations(plan.loop);
         const Real sc = (pl.s0 + pl.s1) / 2;
         auto frameAt = [&](Real s, Real off, Vec2& origin, Vec2& along, Vec2& in) {
             origin = roads::lanes::pointAt(plan.loop, st, s);
@@ -2011,7 +2005,7 @@ CityPlan generatePlan(const Brief& B) {
         }
         // inside the centre's grid, in the loop's own (station, offset) frame, so a grid kilometres
         // long follows the loop's curve (a town's straight frame at its middle was close enough)
-        const std::vector<double> gst = roads::lanes::stations(plan.loop);
+        const std::vector<double> gst = stations(plan.loop);
         auto inGrid = [&](const Vec2& p, Real margin) {
             const roads::lanes::Projection pr = roads::lanes::project(plan.loop, gst, p);
             const Vec2 foot = roads::lanes::pointAt(plan.loop, gst, pr.station);
@@ -2022,7 +2016,7 @@ CityPlan generatePlan(const Brief& B) {
         const Real cell = pj.value("cell", 105.0), radius = pj.value("radius", 520.0), fringe = pj.value("fringe", 0.0);
         const Real sea = B.world.value("seaLevel", -1e30), gridHalf = B.world.value("grid", B.size * 0.5 + 60);
         const Vec2 tc = o + in * (50 + nbV * bv * Real(0.5));
-        const std::vector<double> lst = roads::lanes::stations(plan.loop);
+        const std::vector<double> lst = stations(plan.loop);
         auto open = [&](const Vec2& p) {   // may a residential street stand here?
             if (town ? (p - tc).length() > radius : !inGrid(p, fringe)) return false;
             // on the town's own side of the loop: across it, nothing reaches a cell
@@ -2090,12 +2084,12 @@ CityPlan generatePlan(const Brief& B) {
         // that ends near a grid ran along its edge street 10-18 m off, two roads where one belongs.
         const std::size_t before = placeRoads.size();
         auto runsBeside = [&](const std::vector<Vec2>& pts) {
-            const std::vector<double> ss = roads::lanes::stations(pts);
+            const std::vector<double> ss = stations(pts);
             for (Real sv = 10; sv < ss.back() - 10; sv += 6) {
                 const Vec2 q = roads::lanes::pointAt(pts, ss, sv), t = roads::lanes::tangentAtStation(pts, ss, sv);
                 for (std::size_t k = 0; k < before; ++k) {
                     const std::vector<Vec2>& o2 = placeRoads[k].pts;
-                    const std::vector<double> os = roads::lanes::stations(o2);
+                    const std::vector<double> os = stations(o2);
                     const roads::lanes::Projection pr = roads::lanes::project(o2, os, q);
                     if (pr.distance < 24 && std::fabs(dot(t, roads::lanes::tangentAtStation(o2, os, pr.station))) > 0.8) return true;
                 }
@@ -2165,12 +2159,12 @@ CityPlan generatePlan(const Brief& B) {
             }
             return Real(1e9);
         };
-        const Real deg = kPi / 180;
+        const Real deg = PI / 180;
         Real a0 = th[0], a1 = th[1];
         auto sweep = [&](Real from, Real to, Real sign) {   // angles from `from` to `to` going `sign`-wise, 1 degree apart
             std::vector<Real> out;
-            Real span = std::remainder(to - from, 2 * kPi);
-            if (span * sign < 0) span += sign * 2 * kPi;
+            Real span = std::remainder(to - from, 2 * PI);
+            if (span * sign < 0) span += sign * 2 * PI;
             for (Real t = 0; t <= std::fabs(span) + 1e-9; t += deg) out.push_back(from + sign * t);
             return out;
         };
@@ -2215,13 +2209,13 @@ CityPlan generatePlan(const Brief& B) {
         plan.loop.push_back(jB);
         plan.loopFrom = 0; plan.loopTo = 1;
         // THE PLACES: each at the loop's point nearest its angle, `length` along the loop.
-        const std::vector<double> st = roads::lanes::stations(plan.loop);
+        const std::vector<double> st = stations(plan.loop);
         for (const nlohmann::json& pj : loopSpec.value("places", nlohmann::json::array())) {
             const Real want = pj.value("at", 180.0) * deg;
             std::size_t best = 0; Real bd = 1e9;
             for (std::size_t i = 0; i < plan.loop.size(); ++i) {
                 const Vec2 d = plan.loop[i] - B.center;
-                const Real e = std::fabs(std::remainder(std::atan2(d.y, d.x) - want, 2 * kPi));
+                const Real e = std::fabs(std::remainder(std::atan2(d.y, d.x) - want, 2 * PI));
                 if (e < bd) { bd = e; best = i; }
             }
             CityPlan::Place pl;
@@ -2242,9 +2236,9 @@ CityPlan generatePlan(const Brief& B) {
     bool ringKept = B.freewayRadius > 0 && !shaped;   // a shaped city's freeways are the region's, not a ring
     {
         Polyline ring; ring.klass = RoadClass::Freeway; ring.width = B.freewayWidth; ring.closed = true;
-        const int n = static_cast<int>(2 * kPi * B.freewayRadius / 20.0);
+        const int n = static_cast<int>(2 * PI * B.freewayRadius / 20.0);
         for (int i = 0; i < n; ++i) {
-            const Real th = 2 * kPi * i / n;
+            const Real th = 2 * PI * i / n;
             ring.pts.push_back(B.center + Vec2(std::cos(th), std::sin(th)) * freewayR(th));
         }
         // AGAINST THE COAST: the ring's longest run over land, as an open C. Less than 40% of it left
@@ -2270,7 +2264,7 @@ CityPlan generatePlan(const Brief& B) {
                     for (std::size_t k = 1; k < 15; ++k) {
                         const Vec2 d0 = arc[k] - arc[k - 1], d1 = arc[k + 1] - arc[k];
                         const Real c = dot(d0, d1) / std::max(Real(1e-9), d0.length() * d1.length());
-                        if (c < std::cos(20.0 * kPi / 180.0)) cut = k + 1;
+                        if (c < std::cos(20.0 * PI / 180.0)) cut = k + 1;
                     }
                     arc.erase(arc.begin(), arc.begin() + static_cast<std::ptrdiff_t>(cut));
                     std::reverse(arc.begin(), arc.end());
@@ -2285,13 +2279,13 @@ CityPlan generatePlan(const Brief& B) {
         std::vector<Real> spurTheta;
         for (int i = 0; i < B.freewayRadials; ++i) {
             // Midway between two spokes, so the spur never runs down an arterial.
-            Real th0 = 2 * kPi * (i + 0.25) / std::max(1, B.freewayRadials);
+            Real th0 = 2 * PI * (i + 0.25) / std::max(1, B.freewayRadials);
             if (!spokeTheta.empty()) {
                 Real best = 1e9, pick = th0;
                 for (std::size_t s = 0; s < spokeTheta.size(); ++s) {
-                    const Real a = spokeTheta[s], b = spokeTheta[(s + 1) % spokeTheta.size()] + (s + 1 == spokeTheta.size() ? 2 * kPi : 0);
+                    const Real a = spokeTheta[s], b = spokeTheta[(s + 1) % spokeTheta.size()] + (s + 1 == spokeTheta.size() ? 2 * PI : 0);
                     const Real mid = 0.5 * (a + b);
-                    const Real d = std::fabs(std::remainder(mid - th0, 2 * kPi));
+                    const Real d = std::fabs(std::remainder(mid - th0, 2 * PI));
                     if (d < best) { best = d; pick = mid; }
                 }
                 th0 = pick;
@@ -2329,20 +2323,20 @@ CityPlan generatePlan(const Brief& B) {
                 std::vector<Real> cands{th0};   // the spur's own gap first, then the others nearest it
                 std::vector<Real> gaps;
                 for (std::size_t s = 0; s < spokeTheta.size(); ++s) {
-                    const Real a0 = spokeTheta[s], b0 = spokeTheta[(s + 1) % spokeTheta.size()] + (s + 1 == spokeTheta.size() ? 2 * kPi : 0);
+                    const Real a0 = spokeTheta[s], b0 = spokeTheta[(s + 1) % spokeTheta.size()] + (s + 1 == spokeTheta.size() ? 2 * PI : 0);
                     gaps.push_back(0.5 * (a0 + b0));
                 }
-                std::sort(gaps.begin(), gaps.end(), [&](Real u, Real v) { return std::fabs(std::remainder(u - th0, 2 * kPi)) < std::fabs(std::remainder(v - th0, 2 * kPi)); });
+                std::sort(gaps.begin(), gaps.end(), [&](Real u, Real v) { return std::fabs(std::remainder(u - th0, 2 * PI)) < std::fabs(std::remainder(v - th0, 2 * PI)); });
                 cands.insert(cands.end(), gaps.begin(), gaps.end());
                 bool placed = false;
                 for (Real c : cands) {
                     bool used = false;
-                    for (Real u : taken) used = used || std::fabs(std::remainder(u - c, 2 * kPi)) < 1e-6;
+                    for (Real u : taken) used = used || std::fabs(std::remainder(u - c, 2 * PI)) < 1e-6;
                     if (used) continue;
                     if (freewayR(c) - midR(c) < kSpurInside) {   // (first: a radius against a number, before siting a town)
                         if (std::getenv("RT_PLAN_WHY"))
                             std::printf("[plan] expressway %zu at %.0f deg: %.1f m between midtown's rim and the ring, the spur needs %.1f\n",
-                                        i, c * 180 / kPi, freewayR(c) - midR(c), kSpurInside);
+                                        i, c * 180 / PI, freewayR(c) - midR(c), kSpurInside);
                         continue;
                     }
                     std::vector<Vec2> h;
@@ -2350,7 +2344,7 @@ CityPlan generatePlan(const Brief& B) {
                     if (!tw.built && edgeStart - freewayR(c) < kSpurRoom) {
                         if (std::getenv("RT_PLAN_WHY"))
                             std::printf("[plan] expressway %zu at %.0f deg: %.1f m between the ring and the map edge, the interchange needs %.1f\n",
-                                        i, c * 180 / kPi, edgeStart - freewayR(c), kSpurRoom);
+                                        i, c * 180 / PI, edgeStart - freewayR(c), kSpurRoom);
                         continue;
                     }
                     th0 = c; town = tw; head = h; placed = true;
@@ -2450,7 +2444,7 @@ CityPlan generatePlan(const Brief& B) {
             // the expressway at ground level: from 150 m outside the ring (where it is still
             // climbing to bridge the suburbs) to where its freeway ends inside
             const std::vector<Vec2> fwy = spurFreeway(plan, at.spur);
-            const std::vector<double> st = roads::lanes::stations(fwy);
+            const std::vector<double> st = stations(fwy);
             std::vector<Vec2> low;
             for (std::size_t i = 0; i < fwy.size(); ++i) if (st[i] >= at.r.sStem - 150.0) low.push_back(fwy[i]);
             if (low.size() >= 2) { keepOut.push_back(low); keepReach.push_back(fs.edgeReach + 3); }
@@ -2608,13 +2602,13 @@ CityPlan generatePlan(const Brief& B) {
             cur.pts.clear();
             for (const Vec2& q : dense[i]) {
                 if (bank(q) < cutAt) {
-                    if (cur.pts.size() >= 2 && roads::lanes::stations(cur.pts).back() > 20.0) kept.push_back(cur);
+                    if (cur.pts.size() >= 2 && stations(cur.pts).back() > 20.0) kept.push_back(cur);
                     cur.pts.clear();
                 } else {
                     cur.pts.push_back(q);
                 }
             }
-            if (cur.pts.size() >= 2 && roads::lanes::stations(cur.pts).back() > 20.0) kept.push_back(cur);
+            if (cur.pts.size() >= 2 && stations(cur.pts).back() > 20.0) kept.push_back(cur);
         }
         roads.swap(kept);
         // the riverside streets: each bank of each river, where it runs through the city
@@ -2626,7 +2620,7 @@ CityPlan generatePlan(const Brief& B) {
                     cur.klass = RoadClass::Collector;
                     cur.width = B.collectorWidth;
                     auto flush = [&] {
-                        if (cur.pts.size() >= 2 && roads::lanes::stations(cur.pts).back() > 80.0) { roads.push_back(cur); ++sideRuns; }
+                        if (cur.pts.size() >= 2 && stations(cur.pts).back() > 80.0) { roads.push_back(cur); ++sideRuns; }
                         cur.pts.clear();
                     };
                     double since = 1e30;
@@ -2681,7 +2675,7 @@ CityPlan generatePlan(const Brief& B) {
             // eight bearings, two reaches: a street cut on the slant ends with the cut off-axis
             for (int k = 0; k < 8; ++k)
                 for (const Real r : {Real(10), Real(20)})
-                    if (!landAt(p + Vec2(std::cos(k * kPi / 4), std::sin(k * kPi / 4)) * r, true)) return true;
+                    if (!landAt(p + Vec2(std::cos(k * PI / 4), std::sin(k * PI / 4)) * r, true)) return true;
             return false;
         });
     if (!keepOut.empty())
@@ -3029,7 +3023,7 @@ PlanScore evaluatePlan(CityPlan& plan) {
             leaving[static_cast<std::size_t>(e.a)].push_back(d * (1 / d.length()));
             leaving[static_cast<std::size_t>(e.b)].push_back(d * (-1 / d.length()));
         }
-        const Real tightCos = std::cos(15.0 * kPi / 180.0);
+        const Real tightCos = std::cos(15.0 * PI / 180.0);
         std::vector<std::pair<int, Vec2>> crowded;
         for (std::size_t n = 0; n < leaving.size(); ++n) {
             const auto& L = leaving[n];

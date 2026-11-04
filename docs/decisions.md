@@ -14690,3 +14690,55 @@ play time or grows trees (the vehicle sounds, locomotion, riding, the camera, th
 occupants, the tracer's scene), or only when a weather or erosion block is baked anew (stream_power,
 terrain_weather, rock_layers: the island reads its cached one). There the copies were the same arithmetic, operation for
 operation, and the commit tests pass, their erosion, rock and weather cases included.
+
+## ADR-0318 — #184 batch 2: one polygon area, one point-in-polygon, one bilinear sample, one station lookup
+
+**Decision.**
+- `signedArea` (polygon.h) replaces the road builder's `ringArea` (21 uses; the same shoelace sum, `0.5 * s` vs
+  `s * 0.5`, both exactly 0 under three points) and island_rail's `loopArea`. `area()` replaces floor_zones'
+  `ringAreaAbs`. pavement's `polyArea` (an outline less its holes) stays, built on it.
+- `pointInPolygon` (polygon.h) replaces polyline_ops' `pointInRing` (9 uses; the same ray cast. pointInRing's
+  comment claimed edge points count as inside; a ray cast does not promise that).
+- road_graph_spec's private `interpolateAt` was polyline_ops' `pointAt` line for line, and is gone. Its `tangentAt`
+  differed only in its threshold (any length above zero), so polyline_ops' `tangentAt` takes `minLen` (default 1e-12)
+  and road_graph_spec passes 0.
+- `bilinearGrid(nx, ny, gx, gy, at)` (rt_math.h) replaces five copies of the same sample: IslandWorld's heightAt and
+  smoothAt, LandShape's depthAt, the lots producer's ground lookup, and terrain_weather's facet source. Each clamped to
+  n - 1.001 and blended in the same order. Its caller still chooses its own grid coordinates and how it reads a sample.
+
+**Proof:** as ADR-0317. river_town and metro_v2_test bakes match section for section, all but the timing report;
+the island re-planned from itself is byte-identical; the gate passes.
+
+## ADR-0319 — #184 batch 3: π, τ and the degree factors once; the inline lowbias32 copies
+
+**Decision.**
+- rt_math.h adds `TAU = 2 * PI`, `DEG_TO_RAD = PI / 180` and `RAD_TO_DEG = 180 / PI` beside `PI`. Every local copy
+  with the SAME value goes:
+  - full-precision `kPi` ×11, terrain_field's local `PI` (which hid the shared one) and foliage_kit's two local `pi`s;
+  - `kTwoPi`, `kTau` ×5 and the audio's `TWO_PI` ×2. `6.283185307179586` is exactly `2 * PI`; checked in Python;
+  - `kDeg` where it was `kPi / 180` (×3), and `kRadToDeg` ×3 (`57.29577951308232` is exactly `180 / PI`).
+- The 15-digit copies (`3.14159265358979`, a different double: island_world, real_tree, stylized_tree,
+  street_furniture, locomotion's five `kDeg`, player_body's and driver_seat's `kDeg`, three tests) are NOT changed
+  here. Switching them changes output, so they wait for #184's output-changing batch.
+- hash.h adds `hashPair(a, b)` (the PCG-style multiply-add island_world's `rnd` and place_names' `mix` both used).
+  Seven inline copies of the lowbias32 steps become calls to it: places, households, city_sim ×2, level_loader's
+  scatter `unit`, island_world, place_names. The look-alikes in city_sim that stop after two steps or reorder
+  them are different functions and stay.
+
+**Proof:** as ADR-0317. The bakes match section for section, all but the timing report. The island re-plan is
+byte-identical, its signs (the place names) included. The gate passes.
+
+## ADR-0320 — #184 batch 4: stations once; the inline segment crossings
+
+**Decision.**
+- `stations(P)` (an open polyline's running length) moves from road_graph_spec into polyline.h, for every caller, not
+  only the road builder's. Hand-written copies become calls: lane_follow, hydrology's river smoothing, deck_mesh's
+  taper, terrain_route's resample, island_scene's road profile, road_entity's arc length. The closed-ring versions
+  (island_rail, polymesh) have one more entry and stay. So does branch_cards', which measures 3-D points.
+- Four more inline crossings become `lineCross`, each keeping its own rule for which ends count: road_twin's
+  `lineParams` (the same function), city_plan's road-against-lines walk and its street cuts, and island_world's
+  road-under-freeway search. One city_plan copy tested `|den| > 1e-12` where lineCross refuses `< 1e-12`. They
+  differ only at exactly 1e-12, and the proof below holds.
+
+**Proof:** as ADR-0317. The bakes match section for section, all but the timing report. The island re-plan is
+byte-identical. The gate passes.

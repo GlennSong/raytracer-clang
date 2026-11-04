@@ -446,8 +446,7 @@ Real strokeSurgePhase(Real strokes) {
 }
 
 Real strokeSpeedScale(Real phase, Real surge) {
-    constexpr Real kTau = 6.283185307179586;
-    return 1.0 + surge * std::cos(kTau * (phase - 0.3));   // the pull peaks a third of the way in
+    return 1.0 + surge * std::cos(TAU * (phase - 0.3));   // the pull peaks a third of the way in
 }
 
 }  // namespace engine

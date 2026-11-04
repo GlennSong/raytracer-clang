@@ -41,11 +41,8 @@ void facetRock(Heightmap& g, float base0, float sea, const WeatherParams& w, uin
     const Noise vn(seed * 40503u + 7u);   // the regions' variety
     const std::vector<float> src = g.h;
     auto H = [&](double x, double z) {   // bilinear on the source grid, world metres
-        const double gx = std::clamp((x + half) / cell, 0.0, n - 1.001), gz = std::clamp((z + half) / cell, 0.0, n - 1.001);
-        const int i = static_cast<int>(gx), j = static_cast<int>(gz);
-        const double u = gx - i, v = gz - j;
-        auto at = [&](int a, int b) { return static_cast<double>(src[static_cast<std::size_t>(b) * n + a]); };
-        return (at(i, j) * (1 - u) + at(i + 1, j) * u) * (1 - v) + (at(i, j + 1) * (1 - u) + at(i + 1, j + 1) * u) * v;
+        return bilinearGrid(n, n, (x + half) / cell, (z + half) / cell,
+                            [&](int a, int b) { return static_cast<double>(src[static_cast<std::size_t>(b) * n + a]); });
     };
     auto hsh = [&](int64_t a, int64_t b, uint32_t salt) {   // (hash.h)
         return unit24(hashCell(static_cast<uint32_t>(a), static_cast<uint32_t>(b), seed + salt));

@@ -23,7 +23,6 @@
 namespace engine {
 
 namespace {
-constexpr double kRadToDeg = 57.29577951308232;
 constexpr double kEyeAboveGround = 1.4;   // the point-and-teleport stand height
 }
 
@@ -34,8 +33,8 @@ TeleportPose TeleportSystem::poseHere(const FrameContext& ctx) {
     if (len > 1e-9) fwd = fwd * (1.0 / len);
     TeleportPose p;
     p.position = c.position;
-    p.pitch = std::asin(std::clamp(fwd.y, Real(-1), Real(1))) * kRadToDeg;
-    p.yaw = std::atan2(fwd.x, -fwd.z) * kRadToDeg;
+    p.pitch = std::asin(std::clamp(fwd.y, Real(-1), Real(1))) * RAD_TO_DEG;
+    p.yaw = std::atan2(fwd.x, -fwd.z) * RAD_TO_DEG;
     p.hasLook = true;
     return p;
 }

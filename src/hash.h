@@ -20,6 +20,9 @@ inline uint32_t lowbias32(uint32_t h) {
     return h;
 }
 
+// TWO NUMBERS' bits (a seed and an index, a seed and a salt): a PCG-style multiply-add of each, then lowbias32.
+inline uint32_t hashPair(uint32_t a, uint32_t b) { return lowbias32(a * 747796405u + b * 2891336453u + 0x9E3779B9u); }
+
 // A GRID CELL's bits: its two indices and a seed multiplied apart (the golden ratio's and murmur3's odd constants),
 // then lowbias32. (A one-index lattice -- rock beds -- passes seed 0.)
 inline uint32_t hashCell(uint32_t a, uint32_t b, uint32_t seed) {

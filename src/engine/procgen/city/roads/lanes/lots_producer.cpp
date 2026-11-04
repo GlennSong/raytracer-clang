@@ -223,11 +223,8 @@ std::shared_ptr<const std::function<double(double, double)>> laneErodedBase(
                  << " nodes off the build's ground by > 1 m where detail shows (worst " << worstFar << " m)";
     }
     auto bilinear = [grid](const std::vector<float>& v, double x, double z) {
-        const double fx = std::clamp((x - grid->x0) / grid->res, 0.0, grid->nx - 1.001), fz = std::clamp((z - grid->y0) / grid->res, 0.0, grid->ny - 1.001);
-        const int i = static_cast<int>(fx), j = static_cast<int>(fz);
-        const double u = fx - i, w = fz - j;
-        auto C = [&](int p, int q) { return static_cast<double>(v[static_cast<std::size_t>(q) * grid->nx + p]); };
-        return (C(i, j) * (1 - u) + C(i + 1, j) * u) * (1 - w) + (C(i, j + 1) * (1 - u) + C(i + 1, j + 1) * u) * w;
+        return bilinearGrid(grid->nx, grid->ny, (x - grid->x0) / grid->res, (z - grid->y0) / grid->res,
+                            [&](int p, int q) { return static_cast<double>(v[static_cast<std::size_t>(q) * grid->nx + p]); });
     };
     return std::make_shared<const std::function<double(double, double)>>(
         [fbTp, fbNoise, bx1, by1, grid, natNodes, detailW, bilinear](double x, double z) {

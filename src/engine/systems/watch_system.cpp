@@ -13,7 +13,6 @@
 namespace engine {
 
 namespace {
-constexpr Real kDeg = 3.14159265358979323846 / 180.0;
 constexpr float kMark[4] = {1.00f, 0.78f, 0.16f, 1.0f};   // the waypoint's gold (the map's too)
 
 Entity thePlayer(World& world) {
@@ -69,7 +68,7 @@ void WatchSystem::drawDial(Renderer& r, std::vector<Renderer::UiQuad>& out, floa
     ui_.disc(r, out, c, c, 93.0f * s, glass);
     // a point on the dial at `deg` (the world's bearing, clockwise from north) and radius `rad`: up is ahead
     auto at = [&](Real deg, float rad, float& x, float& y) {
-        const Real a = (deg - f.headingDeg) * kDeg;
+        const Real a = (deg - f.headingDeg) * DEG_TO_RAD;
         x = c + static_cast<float>(std::sin(a)) * rad * s;
         y = c - static_cast<float>(std::cos(a)) * rad * s;
     };
@@ -117,12 +116,12 @@ void WatchSystem::render(FrameContext& ctx) {
     Vec3 ahead = cam.target - cam.position;
     ahead.y = 0;
     Face f;
-    f.headingDeg = ahead.lengthSquared() > 1e-10 ? std::atan2(ahead.x, -ahead.z) / kDeg : 0.0;
+    f.headingDeg = ahead.lengthSquared() > 1e-10 ? std::atan2(ahead.x, -ahead.z) / DEG_TO_RAD : 0.0;
     f.clockHours = ctx.view.lighting.clockHours;
     if (const Waypoint* wp = ctx.world.get<Waypoint>(player)) {
         const Real dx = wp->at.x - t->position.x, dz = wp->at.z - t->position.z;
         f.distance = std::sqrt(dx * dx + dz * dz);
-        f.bearingDeg = std::atan2(dx, -dz) / kDeg;
+        f.bearingDeg = std::atan2(dx, -dz) / DEG_TO_RAD;
     }
     // drawn in its own square, then each quad's corners taken onto the screen
     const float W = static_cast<float>(ctx.framebufferWidth), H = static_cast<float>(ctx.framebufferHeight);

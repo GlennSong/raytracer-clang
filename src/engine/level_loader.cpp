@@ -1,4 +1,5 @@
 #include "level_loader.h"
+#include "../hash.h"   // lowbias32
 #include "particles.h"
 #ifdef RT_ENABLE_SCRIPTING
 #include "scripting/furniture_library_lua.h"
@@ -3412,9 +3413,7 @@ static void loadVegetation(const json& veg, const TerrainParams& terrain,
                 (static_cast<int64_t>(m.m[0][3] * 8) * 73856093LL) ^
                 (static_cast<int64_t>(m.m[2][3] * 8) * 19349663LL) ^ vegSeed);
             auto unit = [&](uint32_t salt) {
-                uint32_t x = hsh ^ (salt * 2654435761u);
-                x ^= x >> 16; x *= 0x7feb352du; x ^= x >> 15; x *= 0x846ca68bu;
-                x ^= x >> 16;
+                const uint32_t x = lowbias32(hsh ^ (salt * 2654435761u));   // (hash.h)
                 return (x & 0xFFFFFF) / 16777215.0;
             };
             if (isRock) {

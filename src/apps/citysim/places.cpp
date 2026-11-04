@@ -1,4 +1,5 @@
 #include "places.h"
+#include "../../hash.h"   // lowbias32
 
 #include <cmath>
 #include <cstring>
@@ -37,7 +38,7 @@ RetailKind retailKindFor(Vec2 site) {
     // never share one.
     uint32_t h = static_cast<uint32_t>(static_cast<int32_t>(std::lround(site.x * 2.0))) * 73856093u ^
                  static_cast<uint32_t>(static_cast<int32_t>(std::lround(site.y * 2.0))) * 19349663u;
-    h ^= h >> 16; h *= 0x7feb352dU; h ^= h >> 15; h *= 0x846ca68bU; h ^= h >> 16;
+    h = engine::lowbias32(h);
     const uint32_t roll = h % 100u;
     RetailKind k;
     if (roll < 22)      { k.type = PlaceType::Cafe;        k.openHour = 6.5; k.closeHour = 19.0; }

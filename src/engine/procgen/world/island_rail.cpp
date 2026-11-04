@@ -50,12 +50,6 @@ std::vector<std::vector<Vec2>> freewayLoops(const json& graph) {
     return loops;
 }
 
-double loopArea(const std::vector<Vec2>& p) {
-    double a = 0;
-    for (std::size_t i = 0; i < p.size(); ++i) { const Vec2& u = p[i]; const Vec2& v = p[(i + 1) % p.size()]; a += u.x * v.y - v.x * u.y; }
-    return 0.5 * a;
-}
-
 std::vector<Vec2> resampleClosed(const std::vector<Vec2>& p, double step) {
     std::vector<Vec2> out{p[0]};
     Vec2 at = p[0];
@@ -225,10 +219,10 @@ IslandRailResult islandRailLoop(const json& graph, const std::vector<RailTown>& 
     if (loops.empty()) { r.skipped.push_back("no closed freeway in the graph"); return r; }
     // THE OUTER CARRIAGEWAY: of the freeway's loops, the one enclosing the most -- the line goes beside it, outward
     const std::vector<Vec2>* outer = &loops[0];
-    for (const auto& l : loops) if (std::fabs(loopArea(l)) > std::fabs(loopArea(*outer))) outer = &l;
+    for (const auto& l : loops) if (std::fabs(signedArea(l)) > std::fabs(signedArea(*outer))) outer = &l;
     const std::vector<Vec2> fw = resampleClosed(*outer, o.spacing);
     const std::size_t n = fw.size();
-    const double turn = loopArea(fw) > 0 ? 1.0 : -1.0;   // counter-clockwise: the left normal points in
+    const double turn = signedArea(fw) > 0 ? 1.0 : -1.0;   // counter-clockwise: the left normal points in
     // the offset, on a tangent read over +-30 m (a carriageway's 1 m wiggles are not the line's)
     const int k = std::max(1, static_cast<int>(std::lround(30.0 / o.spacing)));
     std::vector<Vec2> line(n);
@@ -420,7 +414,7 @@ struct StreetGraph {
 // a closed polygon offset by `d` toward its inside (mitred, the miter capped), then any loop the offset tied cut out
 std::vector<Vec2> insetClosed(const std::vector<Vec2>& p, double d) {
     const std::size_t n = p.size();
-    const double sgn = loopArea(p) > 0 ? 1.0 : -1.0;   // ccw: the inside is on the left
+    const double sgn = signedArea(p) > 0 ? 1.0 : -1.0;   // ccw: the inside is on the left
     std::vector<Vec2> out;
     for (std::size_t i = 0; i < n; ++i) {
         const Vec2 a = p[(i + n - 1) % n], b = p[i], c = p[(i + 1) % n];
@@ -449,7 +443,7 @@ std::vector<Vec2> insetClosed(const std::vector<Vec2>& p, double d) {
                 a1.push_back(x);
                 for (std::size_t q = (i + 1) % m; q != (j + 1) % m; q = (q + 1) % m) a2.push_back(out[q]);
                 a2.push_back(x);
-                out = std::fabs(loopArea(a1)) >= std::fabs(loopArea(a2)) ? a1 : a2;
+                out = std::fabs(signedArea(a1)) >= std::fabs(signedArea(a2)) ? a1 : a2;
                 cut = true;
             }
         if (!cut) break;
@@ -676,7 +670,7 @@ IslandRailResult cityRailLoop(const json& graph, const RailTown& city, Vec2 inte
         std::size_t k0 = 0;
         for (std::size_t i = 0; i < line0.size(); ++i) if (dist(line0[i], interchange) < dist(line0[k0], interchange)) k0 = i;
         for (std::size_t i = 0; i < line0.size(); ++i) line.push_back(line0[(k0 + i) % line0.size()]);
-        if (loopArea(line) < 0) std::reverse(line.begin() + 1, line.end());
+        if (signedArea(line) < 0) std::reverse(line.begin() + 1, line.end());
     }
     const std::size_t n = line.size();
     std::vector<double> sAt(n + 1, 0);

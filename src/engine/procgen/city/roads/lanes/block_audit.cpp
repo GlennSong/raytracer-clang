@@ -39,10 +39,10 @@ std::vector<Ring> pavementHoles(const Result& r, double minArea) {
     // of whatever sidewalk each street really has, and the block begins there.
     std::vector<Ring> holes; const PolySet paved = unionSets(unionSets(r.pavement.surface, r.pavement.shoulder), r.pavement.sidewalk);
     PolySet enclosed;
-    for (const Polygon2& p : paved) for (const Ring& h : p.holes) if (std::fabs(ringArea(h)) >= minArea) for (const Polygon2& q : fromRing(h)) enclosed.push_back(q);
+    for (const Polygon2& p : paved) for (const Ring& h : p.holes) if (std::fabs(signedArea(h)) >= minArea) for (const Polygon2& q : fromRing(h)) enclosed.push_back(q);
     if (enclosed.empty()) return holes;
     for (const Polygon2& piece : differenceSets(unionSets(enclosed, PolySet{}), paved)) {
-        if (!piece.holes.empty() || std::fabs(ringArea(piece.outer)) < minArea) continue;
+        if (!piece.holes.empty() || std::fabs(signedArea(piece.outer)) < minArea) continue;
         holes.push_back(piece.outer);
     }
     return holes;
@@ -59,7 +59,7 @@ std::vector<Poly2> blocksFromHoles(const std::vector<Ring>& holes, double simpli
         // already excludes its sidewalks is inset by centimetres, and "vanishes under 3 m more"
         // would then keep 7 m verges as blocks.
         const double stripHalf = std::max(3.0, (minWidth > 0 ? minWidth : 2.0 * (insetBy + 3.0)) * 0.5 - insetBy);
-        for (const Polygon2& q : offsetSet(fromRing(h), -insetBy)) if (std::fabs(ringArea(q.outer)) >= 135.0 && !offsetSet(PolySet{q}, -stripHalf).empty()) rings.push_back(q.outer);
+        for (const Polygon2& q : offsetSet(fromRing(h), -insetBy)) if (std::fabs(signedArea(q.outer)) >= 135.0 && !offsetSet(PolySet{q}, -stripHalf).empty()) rings.push_back(q.outer);
     }
     // THE WATER (rivers and lakes, ADR-0104): a block the river runs through is two blocks, one each
     // side; a block only grazed by it loses the wet strip. Pieces under 135 m2 are not blocks.
@@ -68,7 +68,7 @@ std::vector<Poly2> blocksFromHoles(const std::vector<Ring>& holes, double simpli
         std::vector<Ring> dry;
         for (const Ring& h : rings)
             for (const Polygon2& q : differenceSets(fromRing(h), wet))
-                if (std::fabs(ringArea(q.outer)) >= 135.0) dry.push_back(q.outer);
+                if (std::fabs(signedArea(q.outer)) >= 135.0) dry.push_back(q.outer);
         rings = std::move(dry);
     }
     for (const Ring& h : rings) {
@@ -113,7 +113,7 @@ std::vector<Poly2> blocksFromHoles(const std::vector<Ring>& holes, double simpli
         }
         // The hole stays the last word: whatever a sharp corner left over the pavement is clipped off.
         for (const Polygon2& pg : intersectSets(fromRing(tucked), fromRing(h))) {
-            if (pg.outer.size() < 3 || std::fabs(ringArea(pg.outer)) < 135.0) continue;
+            if (pg.outer.size() < 3 || std::fabs(signedArea(pg.outer)) < 135.0) continue;
             Poly2 poly(pg.outer.begin(), pg.outer.end());
             double a = 0; for (size_t i = 0; i < poly.size(); ++i) { const Vec2& u = poly[i]; const Vec2& v = poly[(i + 1) % poly.size()]; a += u.x * v.y - v.x * u.y; }
             if (a < 0) std::reverse(poly.begin(), poly.end());   // CCW, as extractBlocks would hand them
@@ -413,7 +413,7 @@ std::vector<std::vector<Vec3>> insideBlock(const std::vector<Vec3>& polygon, con
     if (near.empty()) return {};
     PolySet ps = intersectSets(self, near);   // the blocks inset too: a terrace wider than its block would otherwise feather from the block line outward
     std::vector<std::vector<Vec3>> out;
-    for (const Polygon2& pg : ps) { if (pg.outer.size() < 3 || std::fabs(ringArea(pg.outer)) < 1.0) continue; std::vector<Vec3> poly; for (const Vec2& q : pg.outer) poly.push_back(Vec3(q.x, 0, q.y)); out.push_back(std::move(poly)); }
+    for (const Polygon2& pg : ps) { if (pg.outer.size() < 3 || std::fabs(signedArea(pg.outer)) < 1.0) continue; std::vector<Vec3> poly; for (const Vec2& q : pg.outer) poly.push_back(Vec3(q.x, 0, q.y)); out.push_back(std::move(poly)); }
     return out;
 }
 }  // namespace
@@ -476,7 +476,7 @@ std::vector<PadConflict> padsOnPavement(const Result& r, const std::vector<Terra
         for (int j = j0; j <= j1; ++j) for (int i = i0; i <= i1; ++i) {
             const size_t n = static_cast<size_t>(j) * G.nx + i; if (r.conform.nodeOwner[n] == "-" || r.conform.nodeDist[n] > 0.01) continue;   // not on pavement or sidewalk
             const Vec2 q(G.x0 + i * G.res, G.y0 + j * G.res); double w = 1.0;
-            if (!pointInRing(ring, q)) {
+            if (!pointInPolygon(ring, q)) {
                 double d = 1e300; for (size_t k = 0; k < ring.size(); ++k) { const Vec2& a = ring[k]; const Vec2& b = ring[(k + 1) % ring.size()]; const Vec2 ab = b - a; const double L2 = dot(ab, ab); const double t = L2 > 1e-12 ? std::clamp(dot(q - a, ab) / L2, 0.0, 1.0) : 0.0; d = std::min(d, distance(q, a + ab * t)); }
                 if (d >= f.falloff) continue; w = smoothstep01(1.0 - d / f.falloff);
             }
@@ -522,7 +522,7 @@ BlockAudit auditBlocks(const Result& r, const nlohmann::json& citysim) {
         // holes the pass returned nothing for: a block foot's centroid inside the hole claims it
         for (const Poly2& h : blocks) {
             bool claimed = false;
-            for (const Poly2& f : a.grown.plan.blocks) { Vec2 c; for (const Vec2& q : f) c += q; c = c / static_cast<double>(f.size()); if (pointInRing(h, c)) { claimed = true; break; } }
+            for (const Poly2& f : a.grown.plan.blocks) { Vec2 c; for (const Vec2& q : f) c += q; c = c / static_cast<double>(f.size()); if (pointInPolygon(h, c)) { claimed = true; break; } }
             if (claimed) continue;
             double ar = 0, shortest = 1e300; Vec2 c;
             for (size_t i = 0; i < h.size(); ++i) { const Vec2& u = h[i]; const Vec2& v = h[(i + 1) % h.size()]; ar += u.x * v.y - v.x * u.y; shortest = std::min(shortest, (v - u).length()); c += u; }
@@ -536,13 +536,13 @@ BlockAudit auditBlocks(const Result& r, const nlohmann::json& citysim) {
         if (foot.size() < 3) continue;
         BlockReport b; b.foot = foot; b.vertices = foot.size();
         Ring ring(foot.begin(), foot.end()); PolySet fs = fromRing(ring);
-        b.area = std::fabs(ringArea(ring));
+        b.area = std::fabs(signedArea(ring));
         const PolySet opened = offsetSet(offsetSet(fs, -4.0), 4.0);
         b.thinArea = std::max(0.0, b.area - setArea(opened));
         for (const Polygon2& piece : differenceSets(fs, opened)) {   // each thin piece: a spike if it is long
             double longest = 0; const Ring& o = piece.outer;
             for (size_t i = 0; i < o.size(); ++i) for (size_t j = i + 1; j < o.size(); ++j) longest = std::max(longest, (o[i] - o[j]).length());
-            if (longest > 25.0) b.spikeArea += std::fabs(ringArea(piece.outer));
+            if (longest > 25.0) b.spikeArea += std::fabs(signedArea(piece.outer));
         }
         b.pavedArea = setArea(intersectSets(fs, paved));
         {   // convex hull (monotone chain) for the wedge-vs-spike call

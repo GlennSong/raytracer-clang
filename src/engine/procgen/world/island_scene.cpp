@@ -289,8 +289,7 @@ json islandLanesScene(const IslandWorld& w, const std::vector<json>& placeScenes
         std::vector<Vec2> targets;
         for (const auto& site : w.sites) targets.push_back(site.at);
         if (w.hydro) for (const Lake& lk : w.hydro->lakes()) targets.push_back(Vec2(0.5 * (lk.minX + lk.maxX), 0.5 * (lk.minZ + lk.maxZ)));
-        std::vector<double> st{0.0};
-        for (std::size_t i = 1; i < rd.points.size(); ++i) st.push_back(st.back() + (rd.points[i] - rd.points[i - 1]).length());
+        const std::vector<double> st = stations(rd.points);   // (polyline.h)
         auto at = [&](double s) {
             const std::size_t i = std::min<std::size_t>(rd.points.size() - 2, static_cast<std::size_t>(std::upper_bound(st.begin(), st.end(), s) - st.begin()) - 1);
             const double t = std::clamp((s - st[i]) / std::max(1e-9, st[i + 1] - st[i]), 0.0, 1.0);

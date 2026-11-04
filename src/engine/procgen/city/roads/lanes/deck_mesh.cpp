@@ -198,7 +198,7 @@ void sweepWall(RenderMesh& mesh, const std::vector<Vec2>& pts, const std::vector
     const size_t n = pts.size(); if (n < 2) return;
     std::vector<double> hv(n, height);
     if (!closed && (taperStart > 0.0 || taperEnd > 0.0)) {
-        std::vector<double> st(n, 0.0); for (size_t i = 1; i < n; ++i) st[i] = st[i - 1] + (pts[i] - pts[i - 1]).length();
+        const std::vector<double> st = stations(pts);   // (polyline.h)
         const double S = st.back(), cap = S * 0.4;   // a short run tapers over its own length, never more than 40 % each end
         const double t0 = std::min(taperStart, cap), t1 = std::min(taperEnd, cap);
         for (size_t i = 0; i < n; ++i) {

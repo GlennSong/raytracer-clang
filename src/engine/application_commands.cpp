@@ -126,7 +126,6 @@ void Application::registerCameraVerbs() {
         Vec3 fwd = c.target - c.position;
         const Real len = fwd.length();
         if (len > 1e-9) fwd = fwd * (1.0 / len);
-        constexpr Real kRadToDeg = 57.29577951308232;
         char buf[256];
         // frame= stamps the reply with SERVER time: judder measurements divide
         // eye deltas by frame-count deltas, not by client wall clock — socket
@@ -134,8 +133,8 @@ void Application::registerCameraVerbs() {
         std::snprintf(buf, sizeof(buf),
                       "ok eye=%.2f,%.2f,%.2f pitch=%.2f yaw=%.2f frame=%llu",
                       c.position.x, c.position.y, c.position.z,
-                      std::asin(std::clamp(fwd.y, Real(-1), Real(1))) * kRadToDeg,
-                      std::atan2(fwd.x, -fwd.z) * kRadToDeg,
+                      std::asin(std::clamp(fwd.y, Real(-1), Real(1))) * RAD_TO_DEG,
+                      std::atan2(fwd.x, -fwd.z) * RAD_TO_DEG,
                       static_cast<unsigned long long>(frameCounter));
         return buf;
     });
@@ -209,11 +208,10 @@ void Application::registerCameraVerbs() {
         Vec3 fwd = c.target - c.position;
         const Real len = fwd.length();
         if (len > 1e-9) fwd = fwd * (1.0 / len);
-        constexpr Real kRadToDeg = 57.29577951308232;
         char buf[128];
         std::snprintf(buf, sizeof(buf), "ok %.2f %.2f %.2f %.2f %.2f", c.position.x, c.position.y,
-                      c.position.z, std::asin(std::clamp(fwd.y, Real(-1), Real(1))) * kRadToDeg,
-                      std::atan2(fwd.x, -fwd.z) * kRadToDeg);
+                      c.position.z, std::asin(std::clamp(fwd.y, Real(-1), Real(1))) * RAD_TO_DEG,
+                      std::atan2(fwd.x, -fwd.z) * RAD_TO_DEG);
         return buf;
     });
 

@@ -12,10 +12,10 @@ void frames(const std::vector<Vec2>& xy, std::vector<Vec2>& tan, std::vector<Vec
     for (size_t i = 0; i < n; ++i) { tan[i] = tangentAt(xy, i); nrm[i] = perp(tan[i]); }
 }
 
-Vec2 tangentAt(const std::vector<Vec2>& xy, size_t i) {
+Vec2 tangentAt(const std::vector<Vec2>& xy, size_t i, double minLen) {
     if (xy.size() < 2) return {1, 0};
     size_t j = std::min(i + 1, xy.size() - 1), k = i == 0 ? 0 : i - 1; Vec2 d = xy[j] - xy[k];
-    return d.length() > 1e-12 ? normalize(d) : Vec2(1, 0);
+    return d.length() > minLen ? normalize(d) : Vec2(1, 0);
 }
 
 Projection project(const std::vector<Vec2>& xy, const std::vector<double>& s, const Vec2& p) {
@@ -47,15 +47,6 @@ double interp(const std::vector<double>& xs, const std::vector<double>& ys, doub
     if (x >= xs.back()) return ys.back();
     size_t k = std::upper_bound(xs.begin(), xs.end(), x) - xs.begin();
     double f = (x - xs[k-1]) / std::max(xs[k] - xs[k-1], 1e-12); return ys[k-1] + (ys[k] - ys[k-1]) * f;
-}
-
-bool pointInRing(const std::vector<Vec2>& ring, const Vec2& p) {
-    bool inside = false; size_t n = ring.size();
-    for (size_t i = 0, j = n - 1; i < n; j = i++) {
-        const Vec2& a = ring[i]; const Vec2& b = ring[j];
-        if (((a.y > p.y) != (b.y > p.y)) && (p.x < (b.x - a.x) * (p.y - a.y) / (b.y - a.y) + a.x)) inside = !inside;
-    }
-    return inside;
 }
 
 std::vector<Vec2> crossings(const std::vector<Vec2>& a, const std::vector<Vec2>& b) {

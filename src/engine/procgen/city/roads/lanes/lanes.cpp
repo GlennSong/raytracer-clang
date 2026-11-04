@@ -208,7 +208,7 @@ std::vector<SurfaceStep> surfaceSteps(const Result& r, double kerb) {
             // the side away from the layer's material, from orientation alone (no point-in-set test: that
             // is quadratic on a city's sidewalk ring): an outer ring has its material on the left when CCW,
             // a hole ring has the layer's material on its left when CW
-            const bool ccw = ringArea(ring) > 0; const double away = hole ? (ccw ? -1.0 : 1.0) : (ccw ? 1.0 : -1.0);
+            const bool ccw = signedArea(ring) > 0; const double away = hole ? (ccw ? -1.0 : 1.0) : (ccw ? 1.0 : -1.0);
             for (size_t k = 0; k < n; ++k) {
                 const Vec2& a = ring[k]; const Vec2& b = ring[(k + 1) % n]; const Vec2 d = b - a; const double L = std::hypot(d.x, d.y); if (L < 0.05) continue;
                 const Vec2 nrm(d.y / L, -d.x / L);
@@ -269,7 +269,7 @@ std::vector<Check> invariants(const Result& r) {
                     d << " " << l.id << " " << static_cast<int>(frac * 100) << "% at (" << static_cast<int>(mid.x) << ", " << static_cast<int>(mid.y) << ") [inside its footprint:";
                     double tot = 0; for (const auto& kv : by) tot += kv.second;
                     for (const auto& kv : by) if (kv.second > 0.05 * fa) d << " " << (kv.first >= 0 && kv.first < static_cast<int>(r.lanes.lanes.size()) ? r.lanes.lanes[static_cast<size_t>(kv.first)].id : std::string("?")) << " " << static_cast<int>(kv.second) << "m2";
-                    double raw = 0; for (const Polygon2& pg : r.pavement.footprints[li]) raw += std::fabs(ringArea(pg.outer));
+                    double raw = 0; for (const Polygon2& pg : r.pavement.footprints[li]) raw += std::fabs(signedArea(pg.outer));
                     d << ", triangulated " << static_cast<int>(100 * tot / fa) << "%, ring raw/union area " << static_cast<int>(raw) << "/" << static_cast<int>(fa) << ", polygons " << r.pavement.footprints[li].size() << "]";
                 }
             }

@@ -542,6 +542,9 @@ inline void transformedAABB(const Mat4& m, const Vec3& boxMin, const Vec3& boxMa
 }
 
 constexpr Real PI = 3.14159265358979323846;
+constexpr Real TAU = 2 * PI;                     // a whole turn
+constexpr Real DEG_TO_RAD = PI / 180.0;          // (#184: one value, not a 15-digit pi written into a file)
+constexpr Real RAD_TO_DEG = 180.0 / PI;
 
 inline Real degreesToRadians(Real degrees) {
     return degrees * PI / 180.0;
@@ -556,6 +559,17 @@ inline Real wrapDegrees(Real a) {
     while (a > 180.0) a -= 360.0;
     while (a < -180.0) a += 360.0;
     return a;
+}
+
+// BILINEAR on a grid of nx by ny samples (#184: written five times): `gx`, `gy` in grid cells, clamped inside the grid (a
+// hair short of the last sample, so the cell beyond exists); `at(i, j)` one sample.
+template <class At>
+inline Real bilinearGrid(int nx, int ny, Real gx, Real gy, At at) {
+    gx = std::clamp(gx, Real(0), nx - Real(1.001));
+    gy = std::clamp(gy, Real(0), ny - Real(1.001));
+    const int i = static_cast<int>(gx), j = static_cast<int>(gy);
+    const Real u = gx - i, v = gy - j;
+    return (at(i, j) * (1 - u) + at(i + 1, j) * u) * (1 - v) + (at(i, j + 1) * (1 - u) + at(i + 1, j + 1) * u) * v;
 }
 
 // SMOOTHSTEP (#184: it had been written ~25 times): 0 at or below e0, 1 at or above e1, and the S t*t*(3-2t) between.

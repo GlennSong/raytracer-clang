@@ -838,7 +838,7 @@ TEST_CASE(lanes_pads_clip_to_their_blocks_same_as_the_full_union) {
         Ring ring; for (const engine::Vec3& v : raw.polygon) ring.emplace_back(v.x, v.z);
         std::vector<Ring> mine;
         for (const Polygon2& pg : intersectSets(fromRing(ring), all)) {
-            if (pg.outer.size() < 3 || std::fabs(ringArea(pg.outer)) < 1.0) continue;
+            if (pg.outer.size() < 3 || std::fabs(signedArea(pg.outer)) < 1.0) continue;
             mine.push_back(pg.outer);
             std::vector<engine::Vec3> poly; for (const engine::Vec2& q : pg.outer) poly.push_back(engine::Vec3(q.x, 0, q.y));
             slow.push_back(engine::makeFlattenPad(std::move(poly), lb.groundY, falloff));
@@ -847,7 +847,7 @@ TEST_CASE(lanes_pads_clip_to_their_blocks_same_as_the_full_union) {
         bool held = true;
         for (const engine::Vec2& v : lb.plan) {
             bool in = false;
-            for (const Ring& r : mine) in = in || pointInRing(r, v);
+            for (const Ring& r : mine) in = in || pointInPolygon(r, v);
             held = held && in;
         }
         if (!mine.empty() && !held) {

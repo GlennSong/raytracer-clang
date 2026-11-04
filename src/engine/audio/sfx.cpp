@@ -3,13 +3,13 @@
 #include <algorithm>
 #include <cmath>
 #include "../../proc_rng.h"
+#include "../../rt_math.h"   // TAU
 
 namespace engine {
 namespace sfx {
 
 namespace {
 
-constexpr double TWO_PI = 6.283185307179586;
 
 // Scale so the loudest sample sits at `peak`, and hard-guarantee [-1, 1].
 void normalize(std::vector<float>& frames, float peak) {
@@ -38,7 +38,7 @@ std::vector<float> gunshot(uint32_t sampleRate, uint32_t seed) {
         double crack = lowpass * std::exp(-t * 28.0);
         // The body: a thump sweeping 150 -> 55 Hz.
         double sweep = 150.0 * std::exp(-t * 10.0) + 55.0;
-        double thump = 0.8 * std::sin(TWO_PI * sweep * t) * std::exp(-t * 11.0);
+        double thump = 0.8 * std::sin(TAU * sweep * t) * std::exp(-t * 11.0);
         // Soft clip for punch.
         frames[i] = static_cast<float>(std::tanh(2.2 * (crack + thump)));
     }
@@ -63,7 +63,7 @@ std::vector<float> impact(uint32_t sampleRate, uint32_t seed) {
         double t = static_cast<double>(i) / sampleRate;
         double knock = 0.0;
         for (int p = 0; p < 3; p++)
-            knock += gains[p] * std::sin(TWO_PI * base * partials[p] * t) *
+            knock += gains[p] * std::sin(TAU * base * partials[p] * t) *
                      std::exp(-t * (16.0 + 14.0 * p));
         // Contact scuff: a few ms of noise at the touch.
         double scuff = 0.25 * noise(rng) * std::exp(-t * 220.0);
@@ -98,7 +98,7 @@ std::vector<float> horn(uint32_t sampleRate, uint32_t seed) {
             const double cyclesBase = base[note] * 0.25;   // cycles per period
             for (int h = 0; h < 5; h++) {
                 const double cycles = std::round(cyclesBase * (h + 1));
-                v += gains[h] * std::sin(TWO_PI * cycles * phase01);
+                v += gains[h] * std::sin(TAU * cycles * phase01);
             }
         }
         // Soft clip: the flattened peaks are the honk's bite.
@@ -183,7 +183,7 @@ std::vector<float> engine(uint32_t sampleRate, uint32_t seed) {
         {fireCycles * 4, 0.20},   {fireCycles * 5, 0.12},
     };
     // Slow breathing over the whole period (integer cycles, so still clean).
-    ProcUniform<double> phase(0.0, TWO_PI);
+    ProcUniform<double> phase(0.0, TAU);
     const double breathA = phase(rng), breathB = phase(rng);
 
     for (size_t i = 0; i < count; i++) {
@@ -201,10 +201,10 @@ std::vector<float> engine(uint32_t sampleRate, uint32_t seed) {
 
         double tone = 0.0;
         for (const Partial& p : partials)
-            tone += p.gain * std::sin(TWO_PI * p.cycles * phase01);
+            tone += p.gain * std::sin(TAU * p.cycles * phase01);
 
-        const double breathe = 1.0 + 0.07 * std::sin(TWO_PI * phase01 + breathA) +
-                               0.05 * std::sin(TWO_PI * 3.0 * phase01 + breathB);
+        const double breathe = 1.0 + 0.07 * std::sin(TAU * phase01 + breathA) +
+                               0.05 * std::sin(TAU * 3.0 * phase01 + breathB);
         // Noise is GATED by the pulse train: each firing is an audible event
         // rather than a continuous hiss laid over a drone.
         const double bed = rumble[i] * 0.85 + rasp[i] * 0.22;
@@ -233,9 +233,9 @@ std::vector<float> elevatorDing(bool up, uint32_t sampleRate, uint32_t seed) {
         for (size_t i = start; i < count; ++i) {
             const double t = static_cast<double>(i - start) / sampleRate;
             const double attack = 1.0 - std::exp(-t * 900.0);
-            const double v = 0.60 * std::sin(TWO_PI * f * t) * std::exp(-t * 2.4) +
-                             0.22 * std::sin(TWO_PI * f * 2.76 * t) * std::exp(-t * 6.0) +
-                             0.18 * std::sin(TWO_PI * f * 0.5 * t) * std::exp(-t * 3.0);
+            const double v = 0.60 * std::sin(TAU * f * t) * std::exp(-t * 2.4) +
+                             0.22 * std::sin(TAU * f * 2.76 * t) * std::exp(-t * 6.0) +
+                             0.18 * std::sin(TAU * f * 0.5 * t) * std::exp(-t * 3.0);
             frames[i] += static_cast<float>(attack * v);
         }
     }
@@ -255,7 +255,7 @@ std::vector<float> elevatorButton(uint32_t sampleRate, uint32_t seed) {
         hp = 0.85 * (hp + n - prev);   // a bright, clicky high-pass
         prev = n;
         const double tick = hp * std::exp(-t * 260.0);
-        const double spring = 0.35 * std::sin(TWO_PI * 2300.0 * t) * std::exp(-t * 90.0);
+        const double spring = 0.35 * std::sin(TAU * 2300.0 * t) * std::exp(-t * 90.0);
         frames[i] = static_cast<float>(tick + spring);
     }
     normalize(frames, 0.5f);
@@ -278,10 +278,10 @@ std::vector<float> elevatorDoors(uint32_t sampleRate, uint32_t seed) {
         lp2 += 0.02 * (lp - lp2);
         const double rumble = lp2 * 3.0 * move;
         const double whirF = 180.0 + 220.0 * move;
-        const double whir = 0.18 * std::sin(TWO_PI * whirF * t) * move + 0.06 * std::sin(TWO_PI * whirF * 2.0 * t) * move;
+        const double whir = 0.18 * std::sin(TAU * whirF * t) * move + 0.06 * std::sin(TAU * whirF * 2.0 * t) * move;
         // The leaves meet: a soft thunk at the end of the travel.
         const double tt = t - dur * 0.92;
-        const double thunk = tt > 0 ? 0.6 * std::sin(TWO_PI * 85.0 * tt) * std::exp(-tt * 40.0) : 0.0;
+        const double thunk = tt > 0 ? 0.6 * std::sin(TAU * 85.0 * tt) * std::exp(-tt * 40.0) : 0.0;
         frames[i] = static_cast<float>(rumble + whir + thunk);
     }
     normalize(frames, 0.55f);
@@ -306,7 +306,7 @@ std::vector<float> elevatorHum(uint32_t sampleRate, uint32_t seed) {
     }
     for (size_t i = 0; i < count; ++i) {
         const double ph = static_cast<double>(i) / count;
-        auto tone = [&](double hz, double g) { return g * std::sin(TWO_PI * std::round(hz * 2.0) * ph); };
+        auto tone = [&](double hz, double g) { return g * std::sin(TAU * std::round(hz * 2.0) * ph); };
         const double hum = tone(60.0, 0.5) + tone(120.0, 0.25) + tone(180.0, 0.08);
         frames[i] = static_cast<float>(hum + air[i] * 2.2);
     }
@@ -328,9 +328,9 @@ std::vector<float> railClack(uint32_t sampleRate, uint32_t seed) {
         const double t = static_cast<double>(i) / sampleRate;
         const double attack = 1.0 - std::exp(-t * 1500.0);
         // the thump: a falling low note, the wheel dropping into the joint gap and out
-        const double thump = std::sin(TWO_PI * (95.0 - 120.0 * t) * t) * std::exp(-t * 38.0);
+        const double thump = std::sin(TAU * (95.0 - 120.0 * t) * t) * std::exp(-t * 38.0);
         double r = 0;
-        for (int k = 0; k < 3; ++k) r += std::sin(TWO_PI * ring[k] * t) * std::exp(-t * (28.0 + 14.0 * k)) / (1.0 + k);
+        for (int k = 0; k < 3; ++k) r += std::sin(TAU * ring[k] * t) * std::exp(-t * (28.0 + 14.0 * k)) / (1.0 + k);
         // the scuff: noise through a soft band, very short
         const double n = noise(rng);
         lp += 0.25 * (n - lp);
@@ -359,7 +359,7 @@ std::vector<float> railRumble(uint32_t sampleRate, uint32_t seed) {
         prev = n;
         h1 += 0.30 * (hp - h1);
         // a slow swell, whole cycles over the loop (no seam): the roll is never quite even
-        const double swell = 1.0 + 0.15 * std::sin(TWO_PI * 2.0 * t / 1.5);
+        const double swell = 1.0 + 0.15 * std::sin(TAU * 2.0 * t / 1.5);
         raw[i] = static_cast<float>(swell * (9.0 * l2 + 0.05 * h1));
     }
     std::vector<float> frames(count);
@@ -388,7 +388,7 @@ std::vector<float> trainHorn(uint32_t sampleRate, uint32_t seed) {
             double v = 0;
             for (int h = 1; h <= 8; ++h) {
                 const double g = 1.0 / std::pow(static_cast<double>(h), 0.9) * (h % 2 ? 1.0 : 0.7);
-                v += g * (std::sin(TWO_PI * nt.f * h * t) + std::sin(TWO_PI * nt.f * 1.006 * h * t));
+                v += g * (std::sin(TAU * nt.f * h * t) + std::sin(TAU * nt.f * 1.006 * h * t));
             }
             frames[i] += static_cast<float>(env * std::tanh(0.35 * v));
         }
@@ -405,7 +405,7 @@ std::vector<float> trainDoorChime(bool opening, uint32_t sampleRate, uint32_t se
         for (size_t i = static_cast<size_t>(at * sampleRate); i < count; ++i) {
             const double t = static_cast<double>(i) / sampleRate - at;
             const double v = (1.0 - std::exp(-t * 700.0)) *
-                             (0.7 * std::sin(TWO_PI * f * t) + 0.15 * std::sin(TWO_PI * f * 2.0 * t) * std::exp(-t * 4.0)) *
+                             (0.7 * std::sin(TAU * f * t) + 0.15 * std::sin(TAU * f * 2.0 * t) * std::exp(-t * 4.0)) *
                              std::exp(-t * decay);
             frames[i] += static_cast<float>(v);
         }
@@ -419,7 +419,7 @@ std::vector<float> trainDoorChime(bool opening, uint32_t sampleRate, uint32_t se
             for (size_t i = static_cast<size_t>(at * sampleRate); i < count && i < static_cast<size_t>((at + 0.14) * sampleRate); ++i) {
                 const double t = static_cast<double>(i) / sampleRate - at;
                 const double env = (1.0 - std::exp(-t * 400.0)) * (1.0 - std::exp(-(0.14 - t) * 400.0));
-                frames[i] += static_cast<float>(env * (0.8 * std::sin(TWO_PI * 1046.5 * t) + 0.1 * std::sin(TWO_PI * 3139.5 * t)));
+                frames[i] += static_cast<float>(env * (0.8 * std::sin(TAU * 1046.5 * t) + 0.1 * std::sin(TAU * 3139.5 * t)));
             }
         }
     }

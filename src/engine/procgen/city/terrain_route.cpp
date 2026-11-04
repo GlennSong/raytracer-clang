@@ -248,8 +248,7 @@ std::vector<Vec2> tightenRoute(const HeightField& height, const std::vector<Vec2
         return true;
     };
     // along the road, measured, so the look-ahead is bounded by distance, not by vertex count
-    std::vector<double> s(pts.size(), 0.0);
-    for (std::size_t k = 1; k < pts.size(); ++k) s[k] = s[k - 1] + (pts[k] - pts[k - 1]).length();
+    const std::vector<double> s = stations(pts);   // (polyline.h)
     std::vector<Vec2> out{pts.front()};
     std::size_t i = 0;
     while (i + 1 < pts.size()) {

@@ -95,6 +95,13 @@ inline Real distToPolyline(const Vec2& p, const std::vector<Vec2>& P, bool close
     return nearestOnPolyline(p, P, closed).dist;
 }
 
+// THE STATIONS of an open polyline: each point's distance along it from the first (0 first, the length last).
+inline std::vector<Real> stations(const std::vector<Vec2>& P) {
+    std::vector<Real> s(P.size(), 0.0);
+    for (std::size_t i = 1; i < P.size(); ++i) s[i] = s[i - 1] + (P[i] - P[i - 1]).length();
+    return s;
+}
+
 // How far p lies off the LINE through a and b (to a itself when they meet).
 inline Real distToLine(const Vec2& p, const Vec2& a, const Vec2& b) {
     const Vec2 ab = b - a;

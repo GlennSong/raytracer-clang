@@ -10,7 +10,6 @@ namespace engine {
 
 namespace {
 
-constexpr double kPi = 3.14159265358979323846;
 
 // One SHOOT from `p0` along `dir`, `len` long: `fins` strand planes through its axis, each a strip of `segs` quads
 // bending toward `down` (the spray's -Z) as it goes. `tile` is the strand it wears.
@@ -27,7 +26,7 @@ void addShoot(RenderMesh& m, const SpraySpec& s, const Vec3& p0, Vec3 dir, doubl
     const double ts = 1.0 / std::max(1, tiles);
     const double u0 = (tile % std::max(1, tiles)) * ts, v0 = (tile / std::max(1, tiles)) * ts;
     for (int f = 0; f < s.fins; ++f) {
-        const double th = roll + f * kPi / s.fins;
+        const double th = roll + f * PI / s.fins;
         const uint32_t base = static_cast<uint32_t>(m.vertices.size());
         for (int i = 0; i <= segs; ++i) {
             const Vec3 d = dirs[i];
@@ -70,7 +69,7 @@ std::vector<RenderMesh> buildSprays(const SpraySpec& s, int tiles, uint32_t seed
             axisDir.push_back(d);
         }
         for (int i = 0; i < strides; ++i)
-            addShoot(m, s, axis[i], axisDir[i], 1.04 / strides, down, u01(rng) * kPi, tiles, pickTile(rng));
+            addShoot(m, s, axis[i], axisDir[i], 1.04 / strides, down, u01(rng) * PI, tiles, pickTile(rng));
         auto along = [&](double t, Vec3& at, Vec3& dir) {   // a point and heading on the main shoot, t in [0, 1]
             const double x = std::clamp(t, 0.0, 1.0) * strides;
             const int i = std::min(strides - 1, static_cast<int>(x));
@@ -81,14 +80,14 @@ std::vector<RenderMesh> buildSprays(const SpraySpec& s, int tiles, uint32_t seed
         double len = s.sideLength;
         for (int j = 0; j < n; ++j) {
             const double sgn = (j % 2 == 0) ? 1.0 : -1.0;
-            const double ang = (s.sideAngle + (u01(rng) - 0.5) * 14.0) * kPi / 180.0;
-            const double lift = (u01(rng) * 2.0 - 1.0) * s.lift * kPi / 180.0;
+            const double ang = (s.sideAngle + (u01(rng) - 0.5) * 14.0) * PI / 180.0;
+            const double lift = (u01(rng) * 2.0 - 1.0) * s.lift * PI / 180.0;
             Vec3 at, fwd;
             along((j + 0.6) / (n + 0.6), at, fwd);
             const Vec3 across = normalize(cross(fwd, Vec3(0, 0, 1))) * -sgn;
             Vec3 sd = normalize(fwd * std::cos(ang) + across * std::sin(ang));
             sd = normalize(sd * std::cos(lift) + Vec3(0, 0, 1) * std::sin(lift));
-            addShoot(m, s, at, sd, len * (0.9 + 0.2 * u01(rng)), down, u01(rng) * kPi, tiles, pickTile(rng));
+            addShoot(m, s, at, sd, len * (0.9 + 0.2 * u01(rng)), down, u01(rng) * PI, tiles, pickTile(rng));
             len *= s.sideFalloff;
         }
         out.push_back(std::move(m));
@@ -205,22 +204,21 @@ void addBlade(RenderMesh& m, const Vec3& base, const Vec3& dir, const Vec3& acro
 void buildBladePlant(const BladeSpec& sp, uint32_t seed, RenderMesh& leaves, RenderMesh& crown) {
     ProcRng rng(seed * 2246822519u + 11u);
     ProcUniform<double> u01(0.0, 1.0);
-    const double pi = 3.14159265358979323846;
-    const double fanAxis = u01(rng) * pi;   // the fan's own bearing
+    const double fanAxis = u01(rng) * PI;   // the fan's own bearing
     for (int i = 0; i < sp.count; ++i) {
         const double rank = static_cast<double>(i) / std::max(1, sp.count - 1);   // 0 the outermost .. 1 the innermost
         // the bearing: round the clump by the golden angle, or (fan) gathered to the fan's two sides
         double az = i * 2.39996323 + u01(rng) * 0.4;
         if (sp.fan > 0.0) {
-            const double fanAz = fanAxis + (i % 2 ? pi : 0.0) + (u01(rng) - 0.5) * pi * (1.0 - sp.fan);
+            const double fanAz = fanAxis + (i % 2 ? PI : 0.0) + (u01(rng) - 0.5) * PI * (1.0 - sp.fan);
             az = az * (1.0 - sp.fan) + fanAz * sp.fan;
         }
         const Vec3 out(std::cos(az), 0.0, std::sin(az));
-        const double lean = (sp.rise + sp.spread * (1.0 - rank) * (0.7 + 0.6 * u01(rng))) * pi / 180.0;
+        const double lean = (sp.rise + sp.spread * (1.0 - rank) * (0.7 + 0.6 * u01(rng))) * PI / 180.0;
         const Vec3 dir = normalize(Vec3(0, 1, 0) * std::cos(lean) + out * std::sin(lean));
         BladeShape b;
         // longest in the middle of the clump, the outer ones shorter, each its own
-        b.length = sp.length * (0.75 + 0.35 * std::sin(pi * (0.25 + 0.6 * rank))) * (1.0 + sp.lengthJitter * (u01(rng) * 2.0 - 1.0));
+        b.length = sp.length * (0.75 + 0.35 * std::sin(PI * (0.25 + 0.6 * rank))) * (1.0 + sp.lengthJitter * (u01(rng) * 2.0 - 1.0));
         b.width = sp.width * (0.85 + 0.3 * u01(rng));
         b.arch = sp.arch * (0.6 + 0.8 * u01(rng)) * (0.5 + (1.0 - rank));
         b.fold = sp.fold;
@@ -246,7 +244,6 @@ void addFrondCrown(const FrondSpec& sp, const Vec3& top, const Vec3& upIn, float
                    RenderMesh& leaves, RenderMesh& wood) {
     ProcRng rng(seed * 374761393u + 7u);
     ProcUniform<double> u01(0.0, 1.0);
-    const double pi = 3.14159265358979323846;
     const Vec3 up = normalize(upIn);
     const Vec3 ref = std::fabs(up.y) < 0.9 ? Vec3(0, 1, 0) : Vec3(1, 0, 0);
     const Vec3 e1 = normalize(cross(up, ref)), e2 = cross(up, e1);
@@ -269,7 +266,7 @@ void addFrondCrown(const FrondSpec& sp, const Vec3& top, const Vec3& upIn, float
     }
     auto frond = [&](double pitchDeg, double az, double lengthScale, const Vec3& colour, bool dead) {
         const Vec3 out = e1 * std::cos(az) + e2 * std::sin(az);
-        const double pitch = pitchDeg * pi / 180.0;
+        const double pitch = pitchDeg * PI / 180.0;
         Vec3 d = normalize(up * std::cos(pitch) + out * std::sin(pitch));
         const double L = sp.length * lengthScale * (1.0 + sp.lengthJitter * (u01(rng) * 2.0 - 1.0));
         const double archL = dead ? 0.3 : sp.arch * (0.7 + 0.6 * u01(rng));
@@ -298,9 +295,9 @@ void addFrondCrown(const FrondSpec& sp, const Vec3& top, const Vec3& upIn, float
                 const Vec3 fwd = dirs[i + 1];
                 Vec3 side = normalize(cross(fwd, Vec3(0, 1, 0)));
                 if (side.length() < 1e-6) side = e1;
-                const double lenK = sp.leafletLength * (0.35 + 0.65 * std::sin(pi * std::min(1.0, t * 1.15)));
+                const double lenK = sp.leafletLength * (0.35 + 0.65 * std::sin(PI * std::min(1.0, t * 1.15)));
                 for (int sgn = -1; sgn <= 1; sgn += 2) {
-                    const double ang = (sp.leafletAngle + (u01(rng) - 0.5) * 10.0) * pi / 180.0;
+                    const double ang = (sp.leafletAngle + (u01(rng) - 0.5) * 10.0) * PI / 180.0;
                     Vec3 ld = normalize(fwd * std::cos(ang) + side * (sgn * std::sin(ang)));
                     ld = normalize(ld + Vec3(0, 0.25, 0));   // (a V: the leaflets rise a little off the rachis)
                     BladeShape bs;
@@ -319,7 +316,7 @@ void addFrondCrown(const FrondSpec& sp, const Vec3& top, const Vec3& upIn, float
             Vec3 side = normalize(cross(fwd, Vec3(0, 1, 0)));
             if (side.length() < 1e-6) side = e1;
             const Vec3 fanUp = normalize(cross(side, fwd));
-            const double half = sp.fanSpread * 0.5 * pi / 180.0;
+            const double half = sp.fanSpread * 0.5 * PI / 180.0;
             for (int k = 0; k < sp.leaflets; ++k) {
                 const double a = -half + 2.0 * half * (k + 0.5) / sp.leaflets;
                 // the fan stands up from the petiole a little (its plane tipped toward the sky), pleated
@@ -340,7 +337,7 @@ void addFrondCrown(const FrondSpec& sp, const Vec3& top, const Vec3& upIn, float
         const double age = static_cast<double>(f) / std::max(1, sp.count - 1);   // 0 the newest .. 1 the oldest
         const double pitch = sp.pitchYoung + (sp.pitchOld - sp.pitchYoung) * age + (u01(rng) - 0.5) * 12.0;
         const Vec3 colour = sp.color + (sp.colorHi - sp.color) * u01(rng);
-        frond(pitch, f * 2.39996323 + u01(rng) * 0.3, 0.75 + 0.35 * std::sin(pi * (0.2 + 0.7 * age)), colour, false);
+        frond(pitch, f * 2.39996323 + u01(rng) * 0.3, 0.75 + 0.35 * std::sin(PI * (0.2 + 0.7 * age)), colour, false);
     }
     for (int f = 0; f < sp.skirt; ++f)   // the dead, hanging down the trunk
         frond(160.0 + u01(rng) * 15.0, f * 2.39996323 + 0.7, 0.8, sp.skirtColor * (0.8 + 0.4 * u01(rng)), true);

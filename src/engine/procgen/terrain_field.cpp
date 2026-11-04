@@ -139,7 +139,6 @@ std::vector<Vec3> smoothCentripetalCatmullRom(const std::vector<Vec3>& in, bool 
 
 std::vector<Vec3> roundRoadCorners(const std::vector<Vec3>& in, double minRadius,
                                    double chordTol, double decimateTol) {
-    constexpr double PI = 3.14159265358979323846;
     // Decimate to control points (the corners to round).
     std::vector<Vec3> C;
     if (decimateTol > 0 && in.size() > 2) {

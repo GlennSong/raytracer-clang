@@ -8,7 +8,6 @@ namespace engine {
 
 namespace {
 
-constexpr double kPi = 3.14159265358979323846;
 constexpr double kHalfHeight = 0.9;   // the standing body's origin above its feet
 constexpr double kHalfDepth = 0.13;   // its back to its middle, lying down
 
@@ -60,7 +59,7 @@ std::vector<Occupant> planOccupants(const Interactables& set, const FurnitureLib
             // On the back along the bed, head at the pillow end (-z): the body's up turned to -z, its face to +y; its
             // middle a little toward the pillow from the mattress's own spot (the crown at the pillow), its back on
             // the mattress (half the torso's depth above it).
-            o.at = ip.xform * Mat4::translate(c.x, c.y + kHalfDepth, c.z + 0.03) * Mat4::rotateX(-kPi * 0.5);
+            o.at = ip.xform * Mat4::translate(c.x, c.y + kHalfDepth, c.z + 0.03) * Mat4::rotateX(-PI * 0.5);
         } else if (pose == Occupant::Pose::Stand) {
             o.at = Mat4::translate(at.x, at.y + kHalfHeight, at.z) * Mat4::rotateY(yawOf(ip.xform, v.look));
         } else {

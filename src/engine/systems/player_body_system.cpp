@@ -20,7 +20,6 @@ static_assert(sizeof(PlayerPose::ragdollPos) / sizeof(Vec3) == BlockBody::kParts
 
 namespace {
 
-constexpr Real kTau = 6.283185307179586;
 constexpr Real kDeg = 3.14159265358979 / 180.0;
 constexpr Real kFaceSpeed = 0.3;      // walking: turn to face the way it goes above this (the walkers' rule)
 constexpr Real kTeleportJump = 3.0;   // a step past this in one tick is a teleport (a respawn, a boarding), not a stride
@@ -247,14 +246,14 @@ void PlayerBodySystem::fixedUpdate(FrameContext& ctx) {
                 for (int k = 0; k < 2; ++k) {
                     const Real s = k ? -1.0 : 1.0;
                     const Real ph = p->swimPhase + (k ? 0.5 : 0.0);
-                    const Real a = kTau * (ph - std::floor(ph));
+                    const Real a = TAU * (ph - std::floor(ph));
                     const Vec3 crawl(s * 0.12, std::cos(a), std::sin(a));
-                    const Real sc = std::sin(tc * kTau * 1.1 + (k ? 3.14159 : 0.0));
+                    const Real sc = std::sin(tc * TAU * 1.1 + (k ? 3.14159 : 0.0));
                     const Vec3 scull(s * (0.85 + 0.2 * sc), -0.12, 0.45 + 0.25 * sc);   // out flat at the surface
                     (k ? pose.armR : pose.armL) = normalize(scull + (normalize(crawl) - normalize(scull)) * L);
                 }
                 const Real kick = std::sin(clock_ * 9.0);
-                const Real tread = std::sin(tc * kTau * 1.0);   // a leg a beat: the lift that holds the head up
+                const Real tread = std::sin(tc * TAU * 1.0);   // a leg a beat: the lift that holds the head up
                 const Vec3 trL(0.12, -1, 0.45 * tread), trR(-0.12, -1, -0.45 * tread);
                 const Vec3 flL(0.04, -1, 0.15 * kick), flR(-0.04, -1, -0.15 * kick);
                 pose.legL = normalize(normalize(trL) + (normalize(flL) - normalize(trL)) * L);

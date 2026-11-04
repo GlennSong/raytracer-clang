@@ -1,4 +1,5 @@
 #include "hydrology.h"
+#include "city/polyline.h"   // stations
 #include "../mesh_builder.h"
 #include "city/roads/lanes/geom2d.h"   // union + constrained Delaunay: the water polygon
 
@@ -250,8 +251,10 @@ std::shared_ptr<const Hydrology> Hydrology::build(const std::function<double(dou
         if (p.widthVariation > 0.0 && r.nodes.size() >= 3) {
             const double v = p.widthVariation;
             const std::size_t n = r.nodes.size();
-            std::vector<double> st(n, 0.0), mul(n, 1.0);
-            for (std::size_t k = 1; k < n; ++k) st[k] = st[k - 1] + (r.nodes[k].p - r.nodes[k - 1].p).length();
+            std::vector<Vec2> along(n);
+            for (std::size_t k = 0; k < n; ++k) along[k] = r.nodes[k].p;
+            const std::vector<double> st = stations(along);   // (polyline.h)
+            std::vector<double> mul(n, 1.0);
             const double phase = 0.37 * static_cast<double>(found.size() + H.rivers_.size());
             for (std::size_t k = 0, a = 0, b = 0; k < n; ++k) {
                 while (a < k && st[k] - st[a] > 60.0) ++a;

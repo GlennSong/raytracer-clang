@@ -29,14 +29,13 @@ uint32_t hashAt(uint32_t seed, const Vec2& p) {
                (static_cast<uint32_t>(std::lround(p.y * 10.0)) * 19349663u));
 }
 
-Real ringAreaAbs(const Poly2& r) { return std::fabs(signedArea(r)); }
 
 // The set's largest outer ring, CCW (a cut that leaves a sliver keeps the lot, not the sliver).
 Poly2 largestOuter(const G::PolySet& s) {
     const G::Polygon2* best = nullptr;
     Real bestA = 0;
     for (const G::Polygon2& p : s) {
-        const Real a = ringAreaAbs(p.outer);
+        const Real a = area(p.outer);
         if (a > bestA) { bestA = a; best = &p; }
     }
     if (!best) return {};
@@ -463,7 +462,7 @@ FloorPartition partitionFloor(const Poly2& plateIn, const CorePlan& core, Real i
             // rectangle (a sliver along a lot's side would make it an L with a doorway onto nothing)
             const Real gain = perimeter(Z.poly) + perimeter(fp.zones[b].poly) - perimeter(un.front().outer);
             const OBB2 ob = orientedBoundingBox(un.front().outer);
-            if (ringAreaAbs(un.front().outer) < 0.85 * 4 * ob.half[0] * ob.half[1]) continue;
+            if (area(un.front().outer) < 0.85 * 4 * ob.half[0] * ob.half[1]) continue;
             if (gain > bestGain) { bestGain = gain; best = b; }
         }
         if (best < fp.zones.size() && bestGain > 1.0) {
@@ -611,7 +610,7 @@ FloorPartition partitionFloor(const Poly2& plateIn, const CorePlan& core, Real i
         const G::PolySet rest = reach.empty() ? C : G::differenceSets(C, reach);
         const G::PolySet nearReach = G::offsetSet(reach, 0.05);
         for (const G::Polygon2& q : rest) {
-            const Real a = ringAreaAbs(q.outer);
+            const Real a = area(q.outer);
             if (a < 1.0 && G::setArea(G::intersectSets(G::PolySet{q}, nearReach)) > 0.0) {
                 reach = G::unionSets(reach, G::PolySet{q});   // a corner's scrap: still the way
                 continue;
@@ -1624,7 +1623,7 @@ static RoomPlan zonedFloorCut(const Poly2& plate, const BuildingParams& params, 
     if (!prog.residential) {
         Real best = 0;
         for (const G::Polygon2& q : IN)
-            if (ringAreaAbs(q.outer) > best) { best = ringAreaAbs(q.outer); walkPlan = q.outer; }
+            if (area(q.outer) > best) { best = area(q.outer); walkPlan = q.outer; }
         ensureCCW(walkPlan);
     }
     G::PolySet circSet;

@@ -11,7 +11,6 @@ namespace engine {
 
 namespace {
 
-constexpr double kPi = 3.14159265358979323846;
 
 // The swatch books. Wood: oak, walnut, birch, ebonised. Fabric: grey, navy, sage, rust, oat, charcoal, mustard, teal.
 const Vec3 kWood[4] = {{0.66, 0.50, 0.33}, {0.40, 0.27, 0.18}, {0.82, 0.72, 0.56}, {0.24, 0.18, 0.15}};
@@ -122,7 +121,7 @@ FurniturePiece build(Piece p, uint32_t variant) {
             k.out.solid = false;
             const Vec3 c(0, 0, 0.33);
             for (int i = 0; i < 5; ++i) {
-                const double a = 2 * kPi * i / 5 + 0.3;
+                const double a = 2 * PI * i / 5 + 0.3;
                 const Vec3 tip = c + Vec3(0.30 * std::cos(a), 0.07, 0.30 * std::sin(a));
                 k.rod(F::Metal, c + Vec3(0, 0.10, 0), tip, 0.018, kBlack, 8);
                 k.turned(F::Hard, tip - Vec3(0, 0.07, 0), {{0.0, 0.0}, {0.028, 0.008}, {0.032, 0.03}, {0.028, 0.055},
@@ -1103,7 +1102,7 @@ FurniturePiece build(Piece p, uint32_t variant) {
             k.turned(F::Metal, {0, 0, 0.21}, {{0.0, 0.0}, {0.19, 0.0}, {0.19, 0.02}, {0.04, 0.04}, {0.0, 0.04}}, kChrome, 1.0, 16);
             k.rod(F::Metal, {0, 0.03, 0.21}, {0, 0.74, 0.21}, 0.025, kChrome, 10);
             for (int i = 0; i < 8; ++i) {   // the foot ring
-                const double a0 = i * kPi / 4, a1 = (i + 1) * kPi / 4;
+                const double a0 = i * PI / 4, a1 = (i + 1) * PI / 4;
                 k.rod(F::Metal, {0.16 * std::cos(a0), 0.30, 0.21 + 0.16 * std::sin(a0)},
                       {0.16 * std::cos(a1), 0.30, 0.21 + 0.16 * std::sin(a1)}, 0.009, kChrome, 6);
             }
@@ -1489,10 +1488,10 @@ FurniturePiece build(Piece p, uint32_t variant) {
                          brass, 1.0, 12);
                 k.rod(F::Metal, {x, 1.07, 1.0}, {x, 1.13, 1.0}, 0.008, brass, 6);
                 for (int seg = 0; seg < 7; ++seg) {   // the shade: a half tube along x, open underneath
-                    const double a0 = kPi * seg / 7.0, a1 = kPi * (seg + 1) / 7.0, am = (a0 + a1) * 0.5;
+                    const double a0 = PI * seg / 7.0, a1 = PI * (seg + 1) / 7.0, am = (a0 + a1) * 0.5;
                     const double r = 0.075, cw = r * (a1 - a0) + 0.004;
                     k.boxTilted(F::Ceramic, {x, 1.10 + r * std::sin(am), 1.0 + r * std::cos(am)}, {0.34, 0.008, cw}, 0.0,
-                                kPi * 0.5 - am, green);
+                                PI * 0.5 - am, green);
                 }
                 for (double bx : {-0.07, 0.07})
                     k.turned(F::Light, {x + bx, 1.085, 1.0}, {{0.0, 0.0}, {0.022, 0.012}, {0.024, 0.03}, {0.012, 0.05}, {0.0, 0.055}},

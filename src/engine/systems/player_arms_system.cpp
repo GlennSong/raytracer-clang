@@ -17,7 +17,6 @@ namespace engine {
 
 namespace {
 
-constexpr Real kTau = 6.283185307179586;
 constexpr Real kOut = -100000.0;  // stowed: far below the world, like the gun viewmodel
 
 // local +Z along `dir`, +Y toward `up`
@@ -339,7 +338,7 @@ void PlayerArmsSystem::update(FrameContext& ctx) {
             default: {
                 // walking: the hands swing opposite the legs, low at the edge of the view; running pumps them
                 const Real amp = std::clamp(pose->speed / 6.0, Real(0), Real(1));
-                const Real swing = std::sin(kTau * pose->stride + (k == 0 ? 0.0 : kTau * 0.5));
+                const Real swing = std::sin(TAU * pose->stride + (k == 0 ? 0.0 : TAU * 0.5));
                 // (the view's lower edge is ~0.58 x the distance ahead below the eye: a hand at 0.45 ahead shows
                 // above -0.26)
                 if (pose->run && pose->speed > 3.0)

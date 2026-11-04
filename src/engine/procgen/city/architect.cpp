@@ -10,7 +10,6 @@
 namespace engine {
 
 namespace {
-constexpr Real kTau = 6.283185307179586;
 
 // The same cheap deterministic hash rng the lot pass uses (ADR-0002).
 
@@ -1912,14 +1911,14 @@ DistrictTag DistrictMap::tagAt(const Vec2& p) const {
     // industry takes a slice of the outskirts. Angles derive from the seed so
     // every city places its quarters differently but deterministically.
     Real ang = std::atan2(d.y, d.x);
-    if (ang < 0) ang += kTau;
+    if (ang < 0) ang += TAU;
     ProcRng h(seed * 2654435761u + 17u);
-    const Real oldTown0 = h.next() * kTau, oldTownSpan = 0.9;   // ~52 deg pocket
-    const Real ind0 = std::fmod(oldTown0 + kTau * 0.45, kTau);  // opposite-ish
+    const Real oldTown0 = h.next() * TAU, oldTownSpan = 0.9;   // ~52 deg pocket
+    const Real ind0 = std::fmod(oldTown0 + TAU * 0.45, TAU);  // opposite-ish
     const Real indSpan = 1.15;                                  // ~66 deg wedge
     auto inWedge = [&](Real a0, Real span) {
         Real rel = ang - a0;
-        if (rel < 0) rel += kTau;
+        if (rel < 0) rel += TAU;
         return rel < span;
     };
     if (r < midRadius)

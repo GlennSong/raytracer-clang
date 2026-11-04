@@ -28,13 +28,6 @@ struct Line {
 };
 
 
-// Segment p+t(q-p) against a+u(b-a): true with t,u when the lines are not parallel.
-bool lineParams(const Vec2& p, const Vec2& q, const Vec2& a, const Vec2& b, double& t, double& u) {
-    const Vec2 r = q - p, s = b - a; const double den = r.x * s.y - r.y * s.x;
-    if (std::fabs(den) < 1e-12) return false;
-    const Vec2 ap = a - p;
-    t = (ap.x * s.y - ap.y * s.x) / den; u = (ap.x * r.y - ap.y * r.x) / den; return true;
-}
 
 // Parameter along a-b of the point nearest p, and the distance to it.
 double nearestParam(const Vec2& p, const Vec2& a, const Vec2& b, double& dist) {
@@ -237,7 +230,7 @@ RoadEntity roadTwin(const Result& r, double nodeSpacing, bool forLots, bool forN
                 auto zAt = [](const Line& Ln, size_t seg, double tt) {
                     return Ln.z.size() > seg + 1 ? Ln.z[seg] + (Ln.z[seg + 1] - Ln.z[seg]) * tt : 0.0;
                 };
-                if (lineParams(p, q, a, b, t, u) && t > eps && t < 1 - eps && u > eps && u < 1 - eps) {   // a proper crossing
+                if (lineCross(p, q, a, b, t, u) && t > eps && t < 1 - eps && u > eps && u < 1 - eps) {   // a proper crossing
                     // (the LOT twin keeps every crossing: its faces are the blocks, and a bridge still divides them in plan)
                     if (!forLots && std::fabs(zAt(lines[li], si, t) - zAt(LO, static_cast<size_t>(o.seg), u)) >= r.graph.rules.bridgeH) {
                         ++bridgedCrossings;

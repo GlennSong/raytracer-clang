@@ -11,6 +11,7 @@
 // Plan coordinates: the scene files use (x, y); the engine world is (x, height, z). Vec2.x
 // is world x and Vec2.y is world z throughout lanelab.
 
+#include "engine/procgen/city/polyline.h"   // stations
 #include "engine/procgen/city/polygon.h"      // Vec2
 #include "engine/procgen/city/road_spec.h"    // RoadSpec / RoadBand
 #include <nlohmann/json.hpp>
@@ -226,7 +227,6 @@ std::vector<LaneSlot> laneSlots(const RoadClassSpec& c, const LaneLayout& layout
 // --- path helpers shared with lane expansion (ramps are recomposed from their anchors) ---
 std::vector<Vec2> bezier(const std::array<Vec2, 4>& p, int n = 200);
 std::vector<Vec2> resample(const std::vector<Vec2>& pts, double step);
-std::vector<double> stations(const std::vector<Vec2>& xy);
 // A point spec: [x, y] or {"edge", s|t|x|y, along, normal, dx, dy}; edges must already be resolved.
 Vec2 resolvePoint(const nlohmann::json& spec, const RoadLabGraph& g);
 std::vector<Vec2> resolvePath(const nlohmann::json& path, const RoadLabGraph& g, double step);

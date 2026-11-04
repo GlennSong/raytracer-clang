@@ -1,4 +1,6 @@
 #include "island_world.h"
+#include "../city/polyline.h"   // lineCross
+#include "../../../hash.h"   // hashPair
 #include "../city/roads/lanes/road_graph_spec.h"   // the road class table (the ramp grade)
 #include "../../../log.h"
 
@@ -36,9 +38,7 @@ namespace {
 constexpr double kPi = 3.14159265358979;
 
 double rnd(uint32_t seed, int k) {   // a deterministic [0, 1) per (seed, k)
-    uint32_t x = seed * 747796405u + static_cast<uint32_t>(k) * 2891336453u + 0x9E3779B9u;
-    x ^= x >> 16; x *= 0x7FEB352Du; x ^= x >> 15; x *= 0x846CA68Bu; x ^= x >> 16;
-    return (x >> 8) / 16777216.0;
+    return (hashPair(seed, static_cast<uint32_t>(k)) >> 8) / 16777216.0;   // (hash.h)
 }
 Vec2 fromAxis(double u, double v, double a) { return Vec2(u * std::cos(a) - v * std::sin(a), u * std::sin(a) + v * std::cos(a)); }
 double wrap360(double d) { d = std::fmod(d, 360.0); return d < 0 ? d + 360.0 : d; }
@@ -110,20 +110,14 @@ bool IslandWorld::water(double x, double z) const {
 }
 
 double IslandWorld::heightAt(double x, double z) const {
-    const double fx = std::clamp((x + half) / cell, 0.0, n - 1.001), fz = std::clamp((z + half) / cell, 0.0, n - 1.001);
-    const int i = static_cast<int>(fx), j = static_cast<int>(fz);
-    const double u = fx - i, v = fz - j;
-    auto H = [&](int a, int b) { return static_cast<double>(height[static_cast<std::size_t>(b) * n + a]); };
-    return (H(i, j) * (1 - u) + H(i + 1, j) * u) * (1 - v) + (H(i, j + 1) * (1 - u) + H(i + 1, j + 1) * u) * v;
+    return bilinearGrid(n, n, (x + half) / cell, (z + half) / cell,
+                        [&](int a, int b) { return static_cast<double>(height[static_cast<std::size_t>(b) * n + a]); });
 }
 
 double IslandWorld::smoothAt(double x, double z) const {
     if (heightSmooth.size() != height.size()) return heightAt(x, z);
-    const double fx = std::clamp((x + half) / cell, 0.0, n - 1.001), fz = std::clamp((z + half) / cell, 0.0, n - 1.001);
-    const int i = static_cast<int>(fx), j = static_cast<int>(fz);
-    const double u = fx - i, v = fz - j;
-    auto H = [&](int a, int b) { return static_cast<double>(heightSmooth[static_cast<std::size_t>(b) * n + a]); };
-    return (H(i, j) * (1 - u) + H(i + 1, j) * u) * (1 - v) + (H(i, j + 1) * (1 - u) + H(i + 1, j + 1) * u) * v;
+    return bilinearGrid(n, n, (x + half) / cell, (z + half) / cell,
+                        [&](int a, int b) { return static_cast<double>(heightSmooth[static_cast<std::size_t>(b) * n + a]); });
 }
 
 json islandTerrainBlock(uint32_t seed, double half) {
@@ -1171,11 +1165,9 @@ void islandInterchanges(IslandWorld& w, const std::vector<std::pair<Vec2, Vec2>>
                 for (std::size_t i = 0; i + 1 < rd.points.size(); ++i)
                     for (std::size_t j = 0; j + 1 < route.size(); ++j) {
                         const Vec2 a = rd.points[i], b = rd.points[i + 1], c = route[j], d = route[j + 1];
-                        const Vec2 r = b - a, sv = d - c;
-                        const double den = r.x * sv.y - r.y * sv.x;
-                        if (std::fabs(den) < 1e-12) continue;
-                        const double t = ((c - a).x * sv.y - (c - a).y * sv.x) / den, u = ((c - a).x * r.y - (c - a).y * r.x) / den;
-                        if (t < 0 || t > 1 || u < 0 || u > 1) continue;
+                        const Vec2 r = b - a;
+                        Real t = 0, u = 0;   // (polyline.h)
+                        if (!lineCross(a, b, c, d, t, u) || t < 0 || t > 1 || u < 0 || u > 1) continue;
                         const Vec2 x = a + r * t;
                         // over the crossing road's HIGHEST ground under both carriageways (the builder clears it
                         // there, not at the centreline: a road climbing 12% rises a metre across one of them)

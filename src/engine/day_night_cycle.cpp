@@ -9,9 +9,6 @@ namespace engine {
 
 namespace {
 
-constexpr double kPi = 3.14159265358979323846;
-constexpr double kTwoPi = 2.0 * kPi;
-constexpr double kDeg = kPi / 180.0;
 constexpr double kObliquityDeg = 23.44;
 
 // Hermite smoothstep, clamped — the standard 0→1 ease used throughout.
@@ -26,8 +23,8 @@ double mix(double a, double b, double t) { return a + (b - a) * t; }
 // Engine z points SOUTH (see the header), so z = -north: at noon in the
 // northern hemisphere the sun leans toward +z, as the old tilt did.
 Vec3 bodyDirection(double hourAngle, double declinationDeg, double latitudeDeg) {
-    const double sp = std::sin(latitudeDeg * kDeg), cp = std::cos(latitudeDeg * kDeg);
-    const double sd = std::sin(declinationDeg * kDeg), cd = std::cos(declinationDeg * kDeg);
+    const double sp = std::sin(latitudeDeg * DEG_TO_RAD), cp = std::cos(latitudeDeg * DEG_TO_RAD);
+    const double sd = std::sin(declinationDeg * DEG_TO_RAD), cd = std::cos(declinationDeg * DEG_TO_RAD);
     const double up = sp * sd + cp * cd * std::cos(hourAngle);
     const double east = -cd * std::sin(hourAngle);
     const double north = cp * sd - sp * cd * std::cos(hourAngle);
@@ -59,7 +56,7 @@ double DayNightCycle::moonAgeDays() const {
 }
 
 double DayNightCycle::declinationForDay(int dayOfYear) {
-    return kObliquityDeg * std::sin(solarLongitudeForDay(dayOfYear) * kDeg);
+    return kObliquityDeg * std::sin(solarLongitudeForDay(dayOfYear) * DEG_TO_RAD);
 }
 
 double DayNightCycle::solarLongitudeForDay(int dayOfYear) {
@@ -73,12 +70,12 @@ double DayNightCycle::solarLongitudeForDay(int dayOfYear) {
 
 double DayNightCycle::halfDayArc(double latitudeDeg, double declinationDeg) {
     // cos H0 = -tan φ tan δ; beyond ±1 the sun never sets / never rises.
-    const double c = -std::tan(latitudeDeg * kDeg) * std::tan(declinationDeg * kDeg);
+    const double c = -std::tan(latitudeDeg * DEG_TO_RAD) * std::tan(declinationDeg * DEG_TO_RAD);
     return std::acos(std::clamp(c, -1.0, 1.0));
 }
 
 double DayNightCycle::daylightFractionFor(double latitudeDeg, double declinationDeg) {
-    return halfDayArc(latitudeDeg, declinationDeg) / kPi;
+    return halfDayArc(latitudeDeg, declinationDeg) / PI;
 }
 
 double DayNightCycle::sunriseHourFor(double latitudeDeg, double declinationDeg) {
@@ -90,7 +87,7 @@ double DayNightCycle::sunsetHourFor(double latitudeDeg, double declinationDeg) {
 }
 
 double DayNightCycle::illuminationForAge(double ageDays) {
-    const double elongation = kTwoPi * ageDays / kSynodicMonthDays;
+    const double elongation = TAU * ageDays / kSynodicMonthDays;
     return 0.5 * (1.0 - std::cos(elongation));
 }
 
@@ -116,7 +113,7 @@ DayNightState DayNightCycle::evaluateAt(double timeOfDay, double latitudeDeg,
                                         double solarLongitudeDeg) {
     // Sun position from the solar model. Hour angle H: 0 at local noon,
     // negative through the morning (sun in the east), +π at midnight.
-    const double H = (timeOfDay - 0.5) * kTwoPi;
+    const double H = (timeOfDay - 0.5) * TAU;
     Vec3 sunDir = bodyDirection(H, declinationDeg, latitudeDeg);
     double elev = sunDir.y;  // -1 (deepest night) .. 1 (highest noon)
 
@@ -179,11 +176,11 @@ DayNightState DayNightCycle::evaluateAt(double timeOfDay, double latitudeDeg,
     // FULL moon; the phase scales it by the lit fraction squared (a quarter
     // moon is a tenth as bright as full, roughly as outside).
     const double age = std::fmod(std::max(moonAgeDays, 0.0), kSynodicMonthDays);
-    const double elongation = kTwoPi * age / kSynodicMonthDays;
+    const double elongation = TAU * age / kSynodicMonthDays;
     const double sunLon = solarLongitudeDeg < 1e8
                               ? solarLongitudeDeg
-                              : std::asin(std::clamp(declinationDeg / kObliquityDeg, -1.0, 1.0)) / kDeg;
-    const double moonDec = kObliquityDeg * std::sin((sunLon + elongation / kDeg) * kDeg);
+                              : std::asin(std::clamp(declinationDeg / kObliquityDeg, -1.0, 1.0)) / DEG_TO_RAD;
+    const double moonDec = kObliquityDeg * std::sin((sunLon + elongation / DEG_TO_RAD) * DEG_TO_RAD);
     Vec3 moonDir = bodyDirection(H - elongation, moonDec, latitudeDeg);
     const double illum = illuminationForAge(age);
     const Vec3 moonColor(0.62, 0.72, 0.95);
@@ -209,9 +206,9 @@ DayNightState DayNightCycle::evaluateAt(double timeOfDay, double latitudeDeg,
     // as the ecliptic longitude; the obliquity correction is under 2.5°).
     // bodyDirection is a rotation, so the three axes are orthonormal and a
     // star at (α, δ) sits at cosδ cosα X + cosδ sinα Y + sinδ Z.
-    const double lst = H + sunLon * kDeg;
+    const double lst = H + sunLon * DEG_TO_RAD;
     s.celestialX = bodyDirection(lst, 0.0, latitudeDeg);
-    s.celestialY = bodyDirection(lst - kPi * 0.5, 0.0, latitudeDeg);
+    s.celestialY = bodyDirection(lst - PI * 0.5, 0.0, latitudeDeg);
     s.celestialZ = bodyDirection(0.0, 90.0, latitudeDeg);
     // Out once the sun is well down (astronomical-ish twilight at -0.18),
     // and a bright moon washes the field — a full moon costs half the stars.

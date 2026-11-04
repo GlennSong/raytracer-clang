@@ -1241,10 +1241,7 @@ void CitySim::assignPlaces(const PlaceMap& places, const NavGraph& graph) {
         // draw). MIXED first: brains are forced odd (rnd()|1), so a raw
         // modulo could only ever reach odd home indices when homes.size()
         // is even — half the housing stock sat empty.
-        std::uint32_t hmix = a.brain;
-        hmix ^= hmix >> 16; hmix *= 0x7feb352dU;
-        hmix ^= hmix >> 15; hmix *= 0x846ca68bU;
-        hmix ^= hmix >> 16;
+        const std::uint32_t hmix = engine::lowbias32(a.brain);
         // A HOUSEHOLD'S HOME is its dwelling's (or its hall's); someone the housing could not hold takes one by area.
         PlaceId hp = a.household >= 0 ? households_.households[static_cast<std::size_t>(a.household)].place : drawFrom(homes, hmix);
         int hn = nodeOf(hp);
@@ -2536,8 +2533,7 @@ bool CitySim::eveningPlan(const Agent& a, Real& start, Real& end) const {
     const Real share = r >= 0 && r < static_cast<int>(roles_.roles.size()) ? roles_.roles[static_cast<std::size_t>(r)].nightOutShare : 0;
     if (share <= 0) return false;
     const long night = static_cast<long>(std::floor((clockTotalHours_ - 12.0) / 24.0));   // noon to noon
-    uint32_t h = a.brain ^ (static_cast<uint32_t>(night) * 0x9E3779B9u);
-    h ^= h >> 16; h *= 0x7feb352dU; h ^= h >> 15; h *= 0x846ca68bU; h ^= h >> 16;
+    const uint32_t h = engine::lowbias32(a.brain ^ (static_cast<uint32_t>(night) * 0x9E3779B9u));
     if (static_cast<Real>(h & 0x3FF) >= share * 1024.0) return false;
     const Real u1 = ((h >> 10) & 0xFF) / Real(255), u2 = ((h >> 18) & 0xFF) / Real(255);
     start = 18.5 + 2.5 * u1;

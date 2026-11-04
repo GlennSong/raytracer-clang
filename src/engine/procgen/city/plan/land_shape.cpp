@@ -83,11 +83,8 @@ bool LandShape::inside(const Vec2& p) const {
 
 double LandShape::depthAt(const Vec2& p) const {
     if (n < 2) return 0.0;
-    const double fx = std::clamp((p.x - origin.x) / cell, 0.0, n - 1.001), fy = std::clamp((p.y - origin.y) / cell, 0.0, n - 1.001);
-    const int i = static_cast<int>(fx), j = static_cast<int>(fy);
-    const double u = fx - i, v = fy - j;
-    auto D = [&](int a, int b) { return static_cast<double>(depth[static_cast<std::size_t>(b) * n + a]); };
-    return (D(i, j) * (1 - u) + D(i + 1, j) * u) * (1 - v) + (D(i, j + 1) * (1 - u) + D(i + 1, j + 1) * u) * v;
+    return bilinearGrid(n, n, (p.x - origin.x) / cell, (p.y - origin.y) / cell,
+                        [&](int a, int b) { return static_cast<double>(depth[static_cast<std::size_t>(b) * n + a]); });
 }
 
 Vec2 LandShape::gradient(const Vec2& p) const {

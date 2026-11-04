@@ -1,4 +1,5 @@
 #include "households.h"
+#include "../../hash.h"   // lowbias32
 
 #include <algorithm>
 #include <cmath>
@@ -190,11 +191,7 @@ PeopleCatalog defaultPeopleCatalog() {
 namespace {
 
 uint32_t mix(uint32_t a, uint32_t b) {
-    uint32_t h = a * 0x9E3779B9u ^ (b + 0x7F4A7C15u + (a << 6) + (a >> 2));
-    h ^= h >> 16; h *= 0x7feb352dU;
-    h ^= h >> 15; h *= 0x846ca68bU;
-    h ^= h >> 16;
-    return h;
+    return engine::lowbias32(a * 0x9E3779B9u ^ (b + 0x7F4A7C15u + (a << 6) + (a >> 2)));   // (hash.h)
 }
 double unit(uint32_t h) { return (static_cast<double>(h) + 0.5) / 4294967296.0; }
 // The index a draw lands on in (index, share) pairs
