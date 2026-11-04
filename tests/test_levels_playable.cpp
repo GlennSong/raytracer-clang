@@ -1462,10 +1462,10 @@ TEST_CASE(level_print_published_deck_against_the_drawn_road) {
     world.each<engine::RoadDeck>([&](Entity, engine::RoadDeck& d) { decks.push_back(&d.field); });
     struct Bucket { int n = 0, over10 = 0, over25 = 0; double sum = 0, lo = 1e9, hi = -1e9; };
     // [near node, mid-edge] x [centre, mid, edge]
-    Bucket own[2][3], field, threeHeight, oneSlope, ownSection;
+    Bucket own[2][3], deckOwn[3], field, threeHeight, oneSlope, ownSection;   // deckOwn: authored decks (ramps, viaducts) alone
     int otherSpine = 0;   // the field answered from another road where this one's own section was right
     int none = 0;
-    struct Spot { double d, x, z, pub, drawn; int spine; double lat, fromEnd; int klass; };
+    struct Spot { double d, x, z, pub, drawn; int spine; double lat, fromEnd; int klass, layer; bool authored; };
     std::vector<Spot> spots;
     auto add = [](Bucket& b, double d) {
         ++b.n; b.sum += d; b.lo = std::min(b.lo, d); b.hi = std::max(b.hi, d);
@@ -1475,7 +1475,8 @@ TEST_CASE(level_print_published_deck_against_the_drawn_road) {
     for (const engine::RoadDeckField* f : decks) {
         for (std::size_t si = 0; si < f->spines.size(); ++si) {
             const engine::UnionSpine& s = f->spines[si];
-            if (s.use != engine::UnionSpine::Use::Road || s.layer != 0 || s.yAbs.size() != s.points.size()) continue;
+            // every road spine, ramps and raised decks too (#142: a ramp's deck stood 0.3 m over its drawing)
+            if (s.use != engine::UnionSpine::Use::Road || s.yAbs.size() != s.points.size()) continue;
             double total = 0;
             for (std::size_t k = 1; k < s.points.size(); ++k) total += (s.points[k] - s.points[k - 1]).length();
             double base = 0;
@@ -1506,6 +1507,7 @@ TEST_CASE(level_print_published_deck_against_the_drawn_road) {
                         if (std::fabs(best - pub) > 1.5) { ++none; continue; }
                         const double d = pub - best;   // + : the published deck stands over the drawn road
                         add(own[fromEnd < 25.0 ? 0 : 1][std::fabs(frac) < 0.1 ? 0 : std::fabs(frac) < 0.7 ? 1 : 2], d);
+                        if (s.authoredDeck) add(deckOwn[std::fabs(frac) < 0.1 ? 0 : std::fabs(frac) < 0.7 ? 1 : 2], d);
                         add(ownSection, s.sectionY(k - 1, u / len, lat) - best);
                         double fy;
                         if (f->heightAt(q.x, q.y, 0.0, &fy) && std::fabs(fy - best) < 1.5) {
@@ -1519,7 +1521,8 @@ TEST_CASE(level_print_published_deck_against_the_drawn_road) {
                         }
                         const double ds = s.sectionY(k - 1, u / len, lat) - best;   // the published section's miss
                         if (std::fabs(ds) > 0.10)
-                            spots.push_back({ds, q.x, q.y, s.sectionY(k - 1, u / len, lat), best, static_cast<int>(si), lat, fromEnd, static_cast<int>(s.klass)});
+                            spots.push_back({ds, q.x, q.y, s.sectionY(k - 1, u / len, lat), best, static_cast<int>(si), lat, fromEnd, static_cast<int>(s.klass),
+                                             s.layer, s.authoredDeck});
                     }
                 }
                 base += len;
@@ -1534,6 +1537,10 @@ TEST_CASE(level_print_published_deck_against_the_drawn_road) {
             std::printf("    [deck] own profile, %s, %s: %d samples, mean %+.3f, %+.2f..%+.2f m, %d over 10 cm, %d over 25 cm\n",
                         where[i], across[j], b.n, b.n ? b.sum / b.n : 0.0, b.lo, b.hi, b.over10, b.over25);
         }
+    for (int j = 0; j < 3; ++j)
+        std::printf("    [deck] authored decks only, %s: %d samples, mean %+.3f, %+.2f..%+.2f m, %d over 10 cm, %d over 25 cm\n",
+                    across[j], deckOwn[j].n, deckOwn[j].n ? deckOwn[j].sum / deckOwn[j].n : 0.0, deckOwn[j].lo, deckOwn[j].hi,
+                    deckOwn[j].over10, deckOwn[j].over25);
     std::printf("    [deck] the field's answer: %d samples, mean %+.3f, %+.2f..%+.2f m, %d over 10 cm, %d over 25 cm; "
                 "%d samples with no drawn surface within 1.5 m\n",
                 field.n, field.n ? field.sum / field.n : 0.0, field.lo, field.hi, field.over10, field.over25, none);
@@ -1548,14 +1555,38 @@ TEST_CASE(level_print_published_deck_against_the_drawn_road) {
                 "%+.2f..%+.2f m, %d over 10 cm, %d over 25 cm\n", oneSlope.n, oneSlope.n ? oneSlope.sum / oneSlope.n : 0.0,
                 oneSlope.lo, oneSlope.hi, oneSlope.over10, oneSlope.over25);
     std::sort(spots.begin(), spots.end(), [](const Spot& a, const Spot& b) { return std::fabs(a.d) > std::fabs(b.d); });
+    if (const char* near = std::getenv("RT_DECK_NEAR")) {   // every miss within 15 m of x,z (an offender from the traffic test)
+        double nx = 0, nz = 0;
+        if (std::sscanf(near, "%lf,%lf", &nx, &nz) == 2)
+            for (const Spot& o : spots)
+                if (std::hypot(o.x - nx, o.z - nz) < 15.0)
+                    std::printf("      near: d=%+.2f at (%.1f, %.1f) published %.2f drawn %.2f spine %d layer %d lateral %+.1f\n",
+                                o.d, o.x, o.z, o.pub, o.drawn, o.spine, o.layer, o.lat);
+        // the drawn triangles under x,z, and the spine's own points around it: is the miss between vertices?
+        auto cell = grid.cells.find(ColliderGrid::key(static_cast<int>(std::floor(nx / ColliderGrid::kCell)), static_cast<int>(std::floor(nz / ColliderGrid::kCell))));
+        if (cell != grid.cells.end())
+            for (int id : cell->second) {
+                const ColliderGrid::Tri& t = grid.tris[static_cast<std::size_t>(id)];
+                if (!pointInTriangleXZ(nx, nz, t.a, t.b, t.c)) continue;
+                std::printf("      tri under: (%.1f, %.1f, y %.2f) (%.1f, %.1f, y %.2f) (%.1f, %.1f, y %.2f)\n",
+                            t.a.x, t.a.z, t.a.y, t.b.x, t.b.z, t.b.y, t.c.x, t.c.z, t.c.y);
+            }
+        for (const engine::RoadDeckField* f : decks)
+            for (std::size_t si = 0; si < f->spines.size(); ++si) {
+                const engine::UnionSpine& sp = f->spines[si];
+                for (std::size_t k = 0; k < sp.points.size() && k < sp.yAbs.size(); ++k)
+                    if (std::hypot(sp.points[k].x - nx, sp.points[k].y - nz) < 30.0)
+                        std::printf("      spine %zu point %zu (%.1f, %.1f) yAbs %.2f\n", si, k, sp.points[k].x, sp.points[k].y, sp.yAbs[k]);
+            }
+    }
     std::vector<std::pair<int, int>> shown;
     int printed = 0;
     for (const Spot& o : spots) {
         const std::pair<int, int> c{static_cast<int>(std::floor(o.x / 10.0)), static_cast<int>(std::floor(o.z / 10.0))};
         if (std::find(shown.begin(), shown.end(), c) != shown.end()) continue;
         shown.push_back(c);
-        std::printf("      d=%+.2f at (%.1f, %.1f) published %.2f drawn %.2f spine %d class %d lateral %+.1f, %.1f m from its end\n",
-                    o.d, o.x, o.z, o.pub, o.drawn, o.spine, o.klass, o.lat, o.fromEnd);
+        std::printf("      d=%+.2f at (%.1f, %.1f) published %.2f drawn %.2f spine %d class %d layer %d%s lateral %+.1f, %.1f m from its end\n",
+                    o.d, o.x, o.z, o.pub, o.drawn, o.spine, o.klass, o.layer, o.authored ? " deck" : "", o.lat, o.fromEnd);
         if (++printed >= 20) break;
     }
 }
