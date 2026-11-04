@@ -128,8 +128,7 @@ std::vector<Vec2> roundedPolygon(const std::vector<Vec2>& c, const std::vector<d
         const Vec2 ctr = p + bis * (r / std::sin(theta * 0.5));
         const double a0 = std::atan2(pa.y - ctr.y, pa.x - ctr.x), a1raw = std::atan2(pb.y - ctr.y, pb.x - ctr.x);
         double d = a1raw - a0;
-        while (d > M_PI) d -= 2 * M_PI;
-        while (d < -M_PI) d += 2 * M_PI;
+        d = wrapRadians(d);   // (rt_math.h)
         for (int s = 0; s <= segs; ++s) {
             const double ang = a0 + d * (static_cast<double>(s) / segs);
             out.push_back(Vec2(ctr.x + r * std::cos(ang), ctr.y + r * std::sin(ang)));

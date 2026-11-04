@@ -14742,3 +14742,18 @@ byte-identical, its signs (the place names) included. The gate passes.
 
 **Proof:** as ADR-0317. The bakes match section for section, all but the timing report. The island re-plan is
 byte-identical. The gate passes.
+
+## ADR-0321 — #184 batch 5: the radian wrap and one ray-triangle test
+
+**Decision.**
+- `wrapRadians` (rt_math.h, beside wrapDegrees: to [-pi, pi] by whole turns) replaces leaf_card's `wrapPi` and the
+  same two while-loops in polymesh (with M_PI, the same double), terrain_field, street_kit and two tests.
+  island_rail's loop uses 15-digit constants (a different double) and waits for the output-changing batch.
+- `rayTriangle(o, d, a, b, c, t, edge)` (rt_math.h: Moller-Trumbore, two-sided, the caller bounds t) replaces three
+  identical copies in mesh_audit.h, the see-through probe among them (with its 1e-9 edge slack). The mesh audit's
+  fourth copy divides by the determinant instead of multiplying by its inverse (it rounds differently), and stays.
+  So do the other five copies (geometry.cpp's Triangle::intersect, polymesh, three tests), which use other
+  thresholds.
+
+**Proof:** the bakes match section for section, all but the timing report; the gate passes (the mesh audit's
+own cases included).

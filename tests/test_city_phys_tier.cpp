@@ -537,8 +537,7 @@ TrafficLook watchTraffic(bool physicalTier, uint32_t seed = 7) {
                     t.worstJump = std::max(t.worstJump, disp);
                 }
                 Real dy = yaw - it->second.yaw;
-                while (dy > PI) dy -= 2 * PI;
-                while (dy < -PI) dy += 2 * PI;
+                dy = wrapRadians(dy);
                 // A car's yaw rate is bounded by speed / min turn radius (~5 m)
                 // plus a margin; "on a dime" is turning with no speed to turn.
                 if (std::fabs(dy) / dt > a.speed / 4.0 + 0.8) ++t.pivots;

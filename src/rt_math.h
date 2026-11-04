@@ -561,6 +561,31 @@ inline Real wrapDegrees(Real a) {
     return a;
 }
 
+// MOLLER-TRUMBORE, two-sided (#184): where the ray o + d t meets triangle abc -- `t` along d (d need not be unit); false
+// when it misses or lies in its plane. `edge` widens the barycentric bounds (a hit on a shared edge, rounded outside
+// both triangles by an ulp, still counts). The caller bounds t.
+inline bool rayTriangle(const Vec3& o, const Vec3& d, const Vec3& a, const Vec3& b, const Vec3& c, Real& t, Real edge = 0) {
+    const Vec3 e1 = b - a, e2 = c - a, p = cross(d, e2);
+    const Real det = dot(e1, p);
+    if (std::fabs(det) < 1e-12) return false;
+    const Real inv = 1.0 / det;
+    const Vec3 s = o - a;
+    const Real u = dot(s, p) * inv;
+    if (u < -edge || u > 1 + edge) return false;
+    const Vec3 q = cross(s, e1);
+    const Real v = dot(d, q) * inv;
+    if (v < -edge || u + v > 1 + edge) return false;
+    t = dot(e2, q) * inv;
+    return true;
+}
+
+// AN ANGLE IN RADIANS wrapped to [-pi, pi] (#184): the turn from one bearing to another, the short way.
+inline Real wrapRadians(Real a) {
+    while (a > PI) a -= 2 * PI;
+    while (a < -PI) a += 2 * PI;
+    return a;
+}
+
 // BILINEAR on a grid of nx by ny samples (#184: written five times): `gx`, `gy` in grid cells, clamped inside the grid (a
 // hair short of the last sample, so the cell beyond exists); `at(i, j)` one sample.
 template <class At>

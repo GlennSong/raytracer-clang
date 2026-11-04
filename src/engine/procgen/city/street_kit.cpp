@@ -53,8 +53,7 @@ Poly2 roundPolygonCorners(const Poly2& poly, Real radius, int segs) {
         Real a1 = std::atan2(t1.y - center.y, t1.x - center.x);
         // Sweep the short way from t0 to t1.
         Real d = a1 - a0;
-        while (d >  PI) d -= 2 * PI;
-        while (d < -PI) d += 2 * PI;
+        d = wrapRadians(d);   // (rt_math.h)
         int sc = std::max(1, segs);
         for (int k = 0; k <= sc; ++k) {
             Real a = a0 + d * (static_cast<Real>(k) / sc);

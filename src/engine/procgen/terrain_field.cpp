@@ -194,8 +194,7 @@ std::vector<Vec3> roundRoadCorners(const std::vector<Vec3>& in, double minRadius
 
         double angA = std::atan2(A.z - cz, A.x - cx), angB = std::atan2(B.z - cz, B.x - cx);
         double dAng = angB - angA;
-        while (dAng >  PI) dAng -= 2*PI;
-        while (dAng < -PI) dAng += 2*PI;                                         // minor arc
+        dAng = wrapRadians(dAng);                                                // minor arc
         double dThetaMax = R > tol ? 2.0 * std::acos(std::max(0.0, 1.0 - tol/R)) : std::fabs(dAng);
         int segs = std::max(1, static_cast<int>(std::ceil(std::fabs(dAng) / std::max(1e-6, dThetaMax))));
         out.push_back(A);

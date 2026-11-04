@@ -47,11 +47,6 @@ double halfWidth(const LeafCardSpec& s, double t) {
 bool polarShape(const std::string& shape) {
     return shape == "palmate" || shape == "blossom" || shape == "daisy" || shape == "floret";
 }
-double wrapPi(double a) {
-    while (a > PI) a -= 2.0 * PI;
-    while (a < -PI) a += 2.0 * PI;
-    return a;
-}
 // Inside the outline at (rho, phi)? (rho a fraction of the radius)
 bool insidePolar(const std::string& shape, int lobes, int teeth, int petals, double notch, double eye, double rho,
                  double phi) {
@@ -63,7 +58,7 @@ bool insidePolar(const std::string& shape, int lobes, int teeth, int petals, dou
         for (int k = 0; k < n; ++k) {
             const double pk = -spread + step * k;
             const double Lk = 1.0 - 0.32 * std::pow(std::fabs(pk) / spread, 1.5);
-            const double pointed = std::max(0.0, 1.0 - std::fabs(wrapPi(phi - pk)) / w);
+            const double pointed = std::max(0.0, 1.0 - std::fabs(wrapRadians(phi - pk)) / w);
             r = std::max(r, 0.26 + (Lk - 0.26) * std::pow(pointed, 0.7));
         }
         const double saw = phi * std::max(1, teeth) * n / PI;
@@ -72,7 +67,7 @@ bool insidePolar(const std::string& shape, int lobes, int teeth, int petals, dou
     }
     const int n = std::max(1, petals);
     const double cell = 2.0 * PI / n;
-    const double d = wrapPi(phi) - cell * std::round(wrapPi(phi) / cell);   // from the nearest petal's midline
+    const double d = wrapRadians(phi) - cell * std::round(wrapRadians(phi) / cell);   // from the nearest petal's midline
     const double u = d / (0.5 * cell);                                      // -1 .. 1 across the petal
     if (rho <= eye) return true;
     if (shape == "blossom") {   // round petals, a notch at each tip
@@ -273,7 +268,7 @@ LeafCardAtlas leafCardAtlas(const LeafCardSpec& spec, uint32_t seed, int tileW, 
                         // the veins: darker rays out from the stalk along each lobe
                         const int n = std::max(3, spec.lobes);
                         const double step = 2.0 * 0.78 * PI / (n - 1);
-                        const double dv = std::fabs(wrapPi(phi + 0.78 * PI) - step * std::round(wrapPi(phi + 0.78 * PI) / step));
+                        const double dv = std::fabs(wrapRadians(phi + 0.78 * PI) - step * std::round(wrapRadians(phi + 0.78 * PI) / step));
                         b = static_cast<float>(l.shade * (0.86 + 0.14 * rho) * (dv * rho * R < 0.9 * SS ? 0.82 : 1.0));
                     }
                     const double cupk = (l.flower ? 0.6 : spec.cup) * rho;   // cupped: the normal tips out from the centre
