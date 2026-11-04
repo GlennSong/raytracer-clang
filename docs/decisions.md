@@ -14661,7 +14661,10 @@ every section but `city/e0/report` (it holds build timings). metro_v2_test match
 every section but the report.
 
 Found on the way: metro_v2_test's `city/e0/roads/twin` from a level-suite bake differs from an rt_bake of the same
-code (ece55808… vs d8bfe75d…). rt_bake is reproducible run to run. Owed: why the two bake paths build a different twin.
+code (ece55808… vs d8bfe75d…). rt_bake is reproducible run to run. Resolved 2026-11-04: not a second build path. The cached bundle's city producer
+was copied from an Oct 30 bake (manifest `copiedFrom`), and the two twin sections differ in exactly one byte: the
+retired `perClassGrade` flag, which ADR-0278 writes as 0 where the older code wrote 1 and which the reader skips
+(bisected to 724941a9). The roads are identical; no tag bump is owed.
 
 AGENTS.md rule, restated for these: a segment, polyline or simplification helper goes in polyline.h, never a private
 copy. The wider inventory (smoothstep, angle wrap, hashes, area, bounds, stations, resampling...) is #117 wave 4.
