@@ -280,6 +280,23 @@ demo, not a screenshot prop. Build it to be used by everything that comes after.
   meshing tools once grew up side by side when there should have been one (the
   mesh library, ADR-0173, is the one). When you find a duplicate, add it to the
   duplicate-systems sweep (#117) instead of building on either half.
+- **The math is shared; look before you write a helper** (#184, ADR-0316..0321).
+  A dozen kinds of small helper had each been written five to twenty-five times.
+  Before writing one, look in:
+  - `src/rt_math.h`: `PI`, `TAU`, `DEG_TO_RAD`, `RAD_TO_DEG`, `smoothstep`,
+    `smoothstep01`, `wrapDegrees`, `wrapRadians`, `bilinearGrid`, `rayTriangle`,
+    and the Vec3/Quat basics;
+  - `src/hash.h`: `lowbias32`, `hashPair`, `hashCell`, `unit24`. Stateless hashes
+    only; the seeded stream is `proc_rng.h`;
+  - `src/engine/procgen/city/polygon.h`: `Vec2`, `signedArea`, `area`, `centroid`,
+    `bounds`, `pointInPolygon`;
+  - `src/engine/procgen/city/polyline.h`: segment distance and closest point,
+    `lineCross` and `segmentsCross`, `nearestOnPolyline` and `distToPolyline`,
+    `stations`, `distToLine`, `douglasPeucker` and `simplifyRun`.
+
+  A missing variant (a threshold, an end rule) becomes a parameter of the shared
+  function, never a private copy. A shared function that changes output is a tag
+  bump.
 - **One source of truth, wired through.** A generated thing flows through the *same*
   pipeline and the *same* types the engine already uses (procgen recipe → real
   component/asset → real renderer/edit systems). The Lua binding wraps the *same* C++
