@@ -14613,3 +14613,22 @@ island_8_nature after: Saltwood and Weyby each have a capitol, a courthouse, a u
 churches and fire stations by their quarters (Saltwood 47 schools, by the city table's 1 + residential lots / 50).
 Each of the six towns has a school and a church. Each beach town has a school, a church, a market hall and a police
 post, all inside its limits. Before, the whole island was one city.
+
+## ADR-0315 — Walkers are parted again after the pushes off cars and poles
+
+metro_pedestrians_walk_and_keep_apart failed on this branch on Linux and macOS (main passes): 1–2 pairs of walkers
+closer than 0.45 m. A trace showed every such pair at least 0.5 m apart when the walker relaxation ended. The pushes
+after it (out of a signal pole's clearance, off the player, out of a moving or parked car's footprint, up to 1.5 m in
+a tick) set one walker down beside or onto another, coincident at worst, and nothing parted them. It surfaced now
+because the housing work put more people on metro_planned's streets, all at one place, about (-473, -170), where cars
+cross a busy footway.
+
+**Decision.** The relaxation is one lambda (`relaxWalkers(passes)`) over the neighbours gathered once a tick. It runs
+6 passes where it did, then 4 more after the pushes, each followed by the poles' clearance and the player's berth
+(`clearOfPolesAndPlayer`), so the two settle together and the berth holds last: they are hard rules, and the extra passes had pushed a walker back to 0.92 m from
+the player (walkers_keep_a_wide_berth_around_the_player asks 1.1 m). Car footprints are not re-applied: a car's push
+is what set walkers onto each other.
+
+Result: the test passes (0 overlapping pairs at its samples). Counted every tick, close pairs at that place fell from
+183 to 42, with none coincident. A few pairs pinned between a car and each other still come to 0.28–0.43 m. The
+fix for those is the car not stopping across the walkers' way, which is owed with the junction work (#145).

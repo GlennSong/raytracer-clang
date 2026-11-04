@@ -7866,7 +7866,11 @@ void CitySim::stepTick(Real dt, Real hoursPerSecond) {
         }
     }
     solverFrom_.push_back(static_cast<int>(solverNbr_.size()));
-    for (int iter = 0; iter < 6; ++iter)
+    // THE RELAXATION, a pass at a time: run here, and once more after the pushes off poles, the player and cars below
+    // (a walker squeezed out of a car's footprint was set down on the walker beside it, up to 1.5 m in a tick, and
+    // nothing parted them: metro_pedestrians_walk_and_keep_apart's overlaps)
+    auto relaxWalkers = [&](int passes) {
+    for (int iter = 0; iter < passes; ++iter)
         for (std::size_t k = 0; k < active_.size(); ++k) {
             const int ai = active_[k];
             Agent& a = agents_[ai];
@@ -7936,6 +7940,8 @@ void CitySim::stepTick(Real dt, Real hoursPerSecond) {
                 touch(gj, still);
             }
         }
+    };
+    relaxWalkers(6);
 
     // KEEP THE CROWD'S SPACING: what the floor (and the offset carried in) moved each walker off its path this tick is
     // its crowd offset next tick -- at most 1.5 m, shrinking 0.4 m/s once nobody presses, so it drifts back to its
@@ -7972,11 +7978,7 @@ void CitySim::stepTick(Real dt, Real hoursPerSecond) {
     // player (a wider berth, so a near miss reads as a step-around). The cone
     // bias above makes it lean away in advance; this is the physical backstop.
     phaseMark(phase_.advSolver);
-    for (int ki : kIdx_) {
-        Agent& a = agents_[static_cast<std::size_t>(ki)];
-        if (a.mode != Agent::Mode::Pedestrian || !a.moving ||
-            a.far())
-            continue;
+    auto clearOfPolesAndPlayer = [&](Agent& a) {
         auto pushOut = [&](const Vec2& o, Real clearance) {
             Real dx = a.pos.x - o.x, dy = a.pos.y - o.y;
             Real d = std::sqrt(dx * dx + dy * dy);
@@ -7990,6 +7992,13 @@ void CitySim::stepTick(Real dt, Real hoursPerSecond) {
         };
         forObstaclesNear(a.pos, obstacleMaxClearance_ + 0.5, [&](const StaticObstacle& o) { pushOut(o.p, o.clearance); });
         for (const Vec2& o : externalObstacles_) pushOut(o, kPlayerClearance);
+    };
+    for (int ki : kIdx_) {
+        Agent& a = agents_[static_cast<std::size_t>(ki)];
+        if (a.mode != Agent::Mode::Pedestrian || !a.moving ||
+            a.far())
+            continue;
+        clearOfPolesAndPlayer(a);
         // ...and never stand INSIDE a car's footprint (device: walkers stuck
         // bumping a car). The push resolves along the SHALLOWEST axis of the
         // car-local box, so a walker pressed against a door is squeezed out
@@ -8038,6 +8047,15 @@ void CitySim::stepTick(Real dt, Real hoursPerSecond) {
             if (v.driver >= 0) continue;   // driven: handled by the scan above
             if (v.offStreet) continue;     // in a garage: not in the street
             clearOfCar(v, a.elevation);    // parked at grade with the walker
+        }
+    }
+    // ...a pass at a time with the poles' and the player's berth, which hold last (a hard rule:
+    // walkers_keep_a_wide_berth_around_the_player); the two settle together
+    for (int pass = 0; pass < 4; ++pass) {
+        relaxWalkers(1);
+        for (int ki : kIdx_) {
+            Agent& a = agents_[static_cast<std::size_t>(ki)];
+            if (a.mode == Agent::Mode::Pedestrian && a.moving && !a.far()) clearOfPolesAndPlayer(a);
         }
     }
 
