@@ -584,7 +584,8 @@ void joinNearMisses(RoadGraph& g, Real sidewalk) {
 }
 
 // A STREET BROKEN IN TWO: two dead ends facing each other within 6 m (a cut that took a few metres
-// out of one street) become one node again.
+// out of one street) become one node again; up to 20 m apart, facing and in line, the piece between is laid again (a
+// town's ring left 16 m short of itself, Kingswood's, ADR-0324).
 void joinFacingEnds(RoadGraph& g) {
     std::vector<std::vector<int>> inc(g.nodes.size());
     for (int e = 0; e < static_cast<int>(g.edges.size()); ++e) {
@@ -605,13 +606,21 @@ void joinFacingEnds(RoadGraph& g) {
             if (used[static_cast<std::size_t>(u)] || used[static_cast<std::size_t>(v)]) continue;
             const Vec2 pu = g.nodes[static_cast<std::size_t>(u)].pos, pv = g.nodes[static_cast<std::size_t>(v)].pos;
             const Real d = (pv - pu).length();
-            if (d > 6.0) continue;
+            if (d > 20.0) continue;
             const Vec2 hu = heading(u), hv = heading(v);
             if (dot(hu, hv) > -0.85 || (d > 0.5 && dot(hu, (pv - pu) / d) < 0.85)) continue;   // facing, and in line
+            used[static_cast<std::size_t>(u)] = used[static_cast<std::size_t>(v)] = 1;
+            if (d > 6.0) {   // the missing piece, as the street it belongs to
+                RoadEdge link = g.edges[static_cast<std::size_t>(inc[static_cast<std::size_t>(u)][0])];
+                link.a = u;
+                link.b = v;
+                link.oneWay = false;
+                g.edges.push_back(link);
+                continue;
+            }
             g.nodes[static_cast<std::size_t>(u)].pos = (pu + pv) * Real(0.5);
             RoadEdge& o = g.edges[static_cast<std::size_t>(inc[static_cast<std::size_t>(v)][0])];
             (o.a == v ? o.a : o.b) = u;
-            used[static_cast<std::size_t>(u)] = used[static_cast<std::size_t>(v)] = 1;
         }
 }
 

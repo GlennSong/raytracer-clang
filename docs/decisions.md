@@ -14871,3 +14871,16 @@ cities"; a hamlet "could be a handful of buildings... like a street with some bu
 line (blend across the feather); an inn recipe (the hamlet's "hotel" was a city tower); street trees by height (palms on
 a hamlet 350 m up); the re-plan keeping a foothill town and its hamlets (--keep-sites); tests; then island_8_nature after
 PR #182.
+
+### ADR-0324 addendum (2026-11-04): connected streets, conifers on the high ground
+
+Glenn, of the first shots: "some of the streets don't really connect in one of those aerial views. Also, palm trees?
+That doesn't seem to make sense on a mountain. I would imagine we'd have more pine trees?"
+- The lab window had cut Kingswood off at x 1800 (its east ring ended in the air): now `--window -300 4300 2700`.
+- A ring the planner left 16 m short of itself (two collector ends facing, in line): `joinFacingEnds` lays the missing
+  piece, as the street it belongs to, for ends up to 20 m apart (6 m and under still merge). Every town gets it when it
+  is next planned.
+- STREET TREES BY HEIGHT: `StreetSpecies` gains pine, spruce and birch (real_tree / their recipes); `StreetCharacter`
+  gains `highland` (0 below the level's ground-cover upland line, 0.25 there, 1 at its mountain line). On high ground
+  no palm and no tropical tree, the palm and flowering schemes become avenues, and the higher the street the more of its
+  broadleaves are conifers. Planned at load: no re-bake; a lowland street plants as before.

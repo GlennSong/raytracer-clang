@@ -7657,7 +7657,16 @@ bool LevelLoader::load(const std::string& path,
                             const double a = lattice(ix, iz, salt), b = lattice(ix + 1, iz, salt), c = lattice(ix, iz + 1, salt), d = lattice(ix + 1, iz + 1, salt);
                             return (a + (b - a) * tx) + ((c + (d - c) * tx) - (a + (b - a) * tx)) * tz;
                         };
-                        fp.character = [cells, ground, hubAt, noise](engine::Vec2 at) {
+                        // the island's height bands (its ground cover's): a street above the upland line is a hill
+                        // town's, more mountain the nearer the mountain line; a level without bands has no high ground
+                        double uplandH = 1e30, mountainH = 1e30;
+                        if (root.contains("terrain") && root["terrain"].contains("groundCover") && root["terrain"]["groundCover"].is_object()) {
+                            const nlohmann::json& gc = root["terrain"]["groundCover"];
+                            const double sea = root["terrain"].value("seaLevel", 0.0);
+                            uplandH = sea + gc.value("uplandHeight", 1e30);
+                            mountainH = sea + gc.value("mountainHeight", 1e30);
+                        }
+                        fp.character = [cells, ground, hubAt, noise, uplandH, mountainH](engine::Vec2 at) {
                             engine::StreetCharacter c;
                             const long long cx = static_cast<long long>(std::floor(at.x / 80.0)), cz = static_cast<long long>(std::floor(at.y / 80.0));
                             int votes[5] = {0, 0, 0, 0, 0}, n = 0;
@@ -7674,6 +7683,7 @@ bool LevelLoader::load(const std::string& path,
                             double dHub = 1e9;
                             for (const engine::Vec2& hb : hubAt) dHub = std::min(dHub, static_cast<double>((hb - at).length()));
                             c.coastal = h < 5.0;
+                            if (h > uplandH) c.highland = std::clamp(0.25 + 0.75 * (h - uplandH) / std::max(1.0, mountainH - uplandH), 0.0, 1.0);
                             c.wealth = std::clamp(0.38 + 0.4 * smoothstep(8.0, 70.0, h) + 0.7 * (noise(at.x, at.y, 650.0, 17u) - 0.5), 0.0, 1.0);
                             c.age = std::clamp(1.0 - smoothstep(250.0, 1900.0, dHub) + 0.4 * (noise(at.x, at.y, 500.0, 91u) - 0.5), 0.0, 1.0);
                             if (n == 0) { c.kind = engine::StreetCharacter::Rural; return c; }
@@ -7955,7 +7965,8 @@ bool LevelLoader::load(const std::string& path,
                 const bool streetRecipes = cityRecipeTrees(root);
                 static const std::map<std::string, std::pair<std::string, std::string>> kStreetRecipe = {
                     {"oak", {"oak", "young"}}, {"beech", {"beech", "young"}}, {"maple", {"maple", ""}},
-                    {"coconut_palm", {"coconut_palm", ""}}, {"royal_palm", {"royal_palm", ""}}};
+                    {"coconut_palm", {"coconut_palm", ""}}, {"royal_palm", {"royal_palm", ""}},
+                    {"pine", {"pine", ""}}, {"spruce", {"spruce", "young"}}, {"birch", {"birch", ""}}};
                 std::vector<std::vector<RecipeTreePart>> recipeKits(kits.size());
                 std::vector<double> recipeTall(kits.size(), 0.0);
                 for (int kd = 0; kd < kKinds; ++kd) {

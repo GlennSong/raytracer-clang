@@ -11,7 +11,8 @@
 namespace engine {
 
 const char* streetSpeciesName(StreetSpecies s) {
-    static const char* const n[] = {"maple", "oak", "beech", "royal_palm", "coconut_palm", "monkeypod", "poinciana", "jacaranda", "plumeria"};
+    static const char* const n[] = {"maple", "oak", "beech", "royal_palm", "coconut_palm", "monkeypod", "poinciana", "jacaranda", "plumeria",
+                                    "pine", "spruce", "birch"};
     const int i = static_cast<int>(s);
     return i >= 0 && i < static_cast<int>(StreetSpecies::Count) ? n[i] : "maple";
 }
@@ -87,6 +88,21 @@ StreetPlanting choosePlanting(const StreetCharacter& c, RoadClass klass, Real u,
             }
             break;
         }
+    }
+    // THE HIGH GROUND (Glenn, 2026-11-04, of a hamlet 350 m up: "palm trees? That doesn't seem to make sense on a
+    // mountain ... I would imagine we'd have more pine trees"): above the upland line no palm and no tropical tree --
+    // the mountain's own pines, spruces and birches instead -- and the higher the street, the more of its broadleaves
+    // are conifers too
+    if (c.highland > 0) {
+        const S hill[3] = {S::Pine, S::Spruce, S::Birch};
+        const Real w = u * 7.31 + v * 3.17, draw = w - std::floor(w);   // a third draw of its own
+        for (int k = 0; k < 3; ++k) {
+            S& sp = pl.species[k];
+            const bool tropical = sp == S::RoyalPalm || sp == S::CoconutPalm || sp == S::Monkeypod || sp == S::Poinciana ||
+                                  sp == S::Jacaranda || sp == S::Plumeria;
+            if (tropical || draw < c.highland) sp = hill[(k + static_cast<int>(v * 3)) % 3];
+        }
+        if (pl.scheme == StreetPlanting::Palms || pl.scheme == StreetPlanting::Flowering) pl.scheme = StreetPlanting::Avenue;
     }
     return pl;
 }

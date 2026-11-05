@@ -34,10 +34,11 @@ struct StreetCharacter {
     Real wealth = 0.5;     // 0 poor .. 1 well off
     Real age = 0.5;        // 0 just built .. 1 the oldest streets in town
     bool coastal = false;  // low ground by the sea
+    Real highland = 0;     // 0 below the upland line .. 1 at the mountain line: a hill town's streets (no palms; conifers)
 };
 
 // The street trees' kinds (the loader models each from real_tree.h): the forest's broadleaves and the island's own.
-enum class StreetSpecies : uint8_t { Maple, Oak, Beech, RoyalPalm, CoconutPalm, Monkeypod, Poinciana, Jacaranda, Plumeria, Count };
+enum class StreetSpecies : uint8_t { Maple, Oak, Beech, RoyalPalm, CoconutPalm, Monkeypod, Poinciana, Jacaranda, Plumeria, Pine, Spruce, Birch, Count };
 const char* streetSpeciesName(StreetSpecies s);   // its real_tree.h name ("royal_palm", ...)
 
 // ONE STREET'S PLANTING: nothing; an avenue of one kind at a close even spacing; a mix; a few survivors with gaps; a
