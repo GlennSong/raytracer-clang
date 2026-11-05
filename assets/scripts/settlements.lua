@@ -137,15 +137,15 @@ settlements = {
     buses = { 1, 6 },
     layout = "terraces",   -- a hill town on its shelves (Glenn: "towns with terraces")
     brief = { prefix = "foothill_town_", size_min = 400, spokes = 5 },
-    -- a hill town's own: two to four storeys, shops and cafes in its middle, houses and rows on its shelves (the town
+    -- a hill town's own: two and three storeys, shops and cafes in its middle, houses and rows on its shelves (the town
     -- ladders built it of city walk-ups six to eight storeys high)
     mixes = {
-      commercial = { { "brick_shop", 22 }, { "oldtown_cafe", 16 }, { "corner_shop", 14 }, { "walkup_homes", 16 }, { "rowhouses", 14 },
-                     { "terrace_condo", 10 }, { "plaza", 4 }, { "pocket_park", 4 } },
-      residential = { { "rowhouses", 22 }, { "cottage", 18 }, { "walkup_homes", 14 }, { "duplex", 12 }, { "yard_house", 12 },
-                      { "bungalow", 10 }, { "garden_condo", 8 }, { "pocket_park", 4 } },
+      commercial = { { "brick_shop", 26 }, { "oldtown_cafe", 18 }, { "corner_shop", 16 }, { "rowhouses", 22 }, { "cottage", 10 },
+                     { "plaza", 4 }, { "pocket_park", 4 } },
+      residential = { { "rowhouses", 26 }, { "cottage", 22 }, { "duplex", 16 }, { "yard_house", 14 }, { "bungalow", 14 },
+                      { "pocket_park", 4 } },
     },
-    regrade = { max_slope = 0.10, terrace = 6, bank = 0.3, feather = 120, margin = 80 },
+    regrade = { max_slope = 0.14, terrace = 8, bank = 0.3, feather = 120, margin = 80 },
     map = { rgb = { 0.55, 0.40, 0.20 } },
   },
 

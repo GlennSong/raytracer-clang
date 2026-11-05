@@ -152,13 +152,13 @@ SettlementCatalog defaultSettlements() {
     ft.sizeMin = 400.0; ft.spokes = 5;
     ft.layout = "terraces";   // a hill town on its shelves (Glenn: "towns with terraces")
     ft.regrade = true;
-    ft.regradeMaxSlope = 0.10; ft.regradeTerrace = 6.0; ft.regradeBank = 0.3; ft.regradeFeather = 120.0; ft.regradeMargin = 80.0;
-    // a hill town's own: two to four storeys, shops and cafes in its middle, houses and rows on its shelves (the town
+    ft.regradeMaxSlope = 0.14; ft.regradeTerrace = 8.0; ft.regradeBank = 0.3; ft.regradeFeather = 120.0; ft.regradeMargin = 80.0;
+    // a hill town's own: two and three storeys, shops and cafes in its middle, houses and rows on its shelves (the town
     // ladders built it of city walk-ups six to eight storeys high)
-    ft.mixes["commercial"] = {{"brick_shop", 22}, {"oldtown_cafe", 16}, {"corner_shop", 14}, {"walkup_homes", 16}, {"rowhouses", 14},
-                              {"terrace_condo", 10}, {"plaza", 4}, {"pocket_park", 4}};
-    ft.mixes["residential"] = {{"rowhouses", 22}, {"cottage", 18}, {"walkup_homes", 14}, {"duplex", 12}, {"yard_house", 12},
-                               {"bungalow", 10}, {"garden_condo", 8}, {"pocket_park", 4}};
+    ft.mixes["commercial"] = {{"brick_shop", 26}, {"oldtown_cafe", 18}, {"corner_shop", 16}, {"rowhouses", 22}, {"cottage", 10},
+                              {"plaza", 4}, {"pocket_park", 4}};
+    ft.mixes["residential"] = {{"rowhouses", 26}, {"cottage", 22}, {"duplex", 16}, {"yard_house", 14}, {"bungalow", 14},
+                               {"pocket_park", 4}};
     ft.rgb[0] = 0.55f; ft.rgb[1] = 0.40f; ft.rgb[2] = 0.20f;
     c.kinds.push_back(ft);
 
