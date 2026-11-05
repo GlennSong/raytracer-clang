@@ -62,8 +62,13 @@ RenderMesh buildPosedPerson(const BodyPose& pose, const PersonOutfit& o) {
     const std::array<PartTransform, BlockBody::kParts> blocks = poseBlocks(pose);
     for (int i : {BlockBody::Torso, BlockBody::Head}) {
         const PartTransform& b = blocks[static_cast<std::size_t>(i)];
-        MeshBuilder::emitBox(m, MeshFrame::centred(b.position, b.size, b.orientation.rotate(Vec3(1, 0, 0)),
-                                                   b.orientation.rotate(Vec3(0, 1, 0))),
+        Vec3 at = b.position, size = b.size;
+        if (i == BlockBody::Head && pose.headScale != 1) {   // grown about the neck: its bottom stays on the shoulders
+            const Vec3 up = b.orientation.rotate(Vec3(0, 1, 0));
+            at = at + up * (b.size.y * 0.5 * (pose.headScale - 1));
+            size = b.size * pose.headScale;
+        }
+        MeshBuilder::emitBox(m, MeshFrame::centred(at, size, b.orientation.rotate(Vec3(1, 0, 0)), b.orientation.rotate(Vec3(0, 1, 0))),
                              i == BlockBody::Head ? o.skin : o.shirt);
     }
     // each limb one skinned tube at its exact fold (block_body.h skinnedLimb), set at its shoulder or hip

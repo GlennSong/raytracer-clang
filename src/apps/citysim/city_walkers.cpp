@@ -75,13 +75,19 @@ void CityWalkerSystem::watchDrawn(Walker& w, Vec2 p, int path, Real dt, const Ci
 }
 
 engine::MeshHandle CityWalkerSystem::poseMesh(engine::AssetManager& assets,
-                                              int outfit, int pose) {
-    int key = outfit * kWalkPoses + pose;
+                                              int outfit, int pose, Real bodyScale) {
+    // A CHILD'S HEAD (Glenn, 2026-11-05: "Children tend to have slightly bigger heads and smaller bodies. Maybe their
+    // heads aren't the size of a full on adult's head but I think there's a proportion to keep in mind"): scaled with
+    // the body, a 1.15 m six-year-old's head came out 64 % of an adult's; a real one is about 90 %. Three heads, by
+    // how tall: an adult's, an older child's (x1.15 before the scale), a small child's (x1.4)
+    const int bin = bodyScale >= 0.88 ? 0 : bodyScale >= 0.7 ? 1 : 2;
+    static const Real kHead[3] = {1.0, 1.15, 1.4};
+    int key = (outfit * kWalkPoses + pose) * 3 + bin;
     auto it = poseMeshes_.find(key);
     if (it != poseMeshes_.end()) return it->second;
     engine::MeshHandle h = assets.acquireMesh(
-        buildPersonMesh(walkPoseSwing(pose), outfit),
-        "citywalk:person" + std::to_string(outfit) + ":" + std::to_string(pose));
+        buildPersonMesh(walkPoseSwing(pose), outfit, kHead[bin]),
+        "citywalk:person" + std::to_string(outfit) + ":" + std::to_string(pose) + (bin ? ":child" + std::to_string(bin) : ""));
     poseMeshes_[key] = h;
     return h;
 }
@@ -183,7 +189,7 @@ void CityWalkerSystem::spawnWalkers(engine::FrameContext& ctx) {
         int outfit = static_cast<int>((static_cast<uint32_t>(i) * 2654435761u >> 8) %
                                       static_cast<uint32_t>(personOutfitCount()));
         Renderable r;
-        r.mesh = poseMesh(ctx.assets, outfit, 0);
+        r.mesh = poseMesh(ctx.assets, outfit, 0, sim.bodyScale(static_cast<int>(i)));
         r.material.albedo = Vec3(1, 1, 1);
         r.material.metallic = 0.0f;
         r.material.roughness = 0.9f;
@@ -457,7 +463,7 @@ void CityWalkerSystem::driveWalkers(engine::FrameContext& ctx) {
                 Vec3(0, 1, 0), std::atan2(w.facing.x, w.facing.y));
             const int pose = walkPoseIndex(w.stride, g.speed, dt);
             if (Renderable* r = world.get<Renderable>(w.entity))
-                r->mesh = poseMesh(ctx.assets, w.outfit, pose);
+                r->mesh = poseMesh(ctx.assets, w.outfit, pose, sim.bodyScale(w.agentId));
             watchDrawn(w, Vec2(t->position.x, t->position.z), 1, dt, sim);
             continue;
         }
@@ -574,7 +580,7 @@ void CityWalkerSystem::driveWalkers(engine::FrameContext& ctx) {
         if (!down) {
             int pose = ride != Ride::None ? 0 : walkPoseIndex(w.stride, hSpeed, dt);
             if (Renderable* r = world.get<Renderable>(w.entity))
-                r->mesh = poseMesh(ctx.assets, w.outfit, pose);
+                r->mesh = poseMesh(ctx.assets, w.outfit, pose, sim.bodyScale(w.agentId));
         }
 
         // Pose write-back. Standing: the box rides the capsule centre. Down: lay

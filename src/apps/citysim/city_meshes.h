@@ -20,7 +20,7 @@ namespace citysim {
 // set of these meshes IS the walk cycle — walkers hop between shared pose
 // meshes by walk phase, no skeleton needed. `outfit` picks a deterministic
 // shirt/pants/skin combination.
-engine::RenderMesh buildPersonMesh(engine::Real swing, int outfit);
+engine::RenderMesh buildPersonMesh(engine::Real swing, int outfit, engine::Real headScale = 1);   // (headScale: a child's, BodyPose::headScale)
 
 // Outfits a WALKER may be dealt (deterministic per walker). The table holds one
 // extra slot past this count — the player's fixed, distinctive outfit

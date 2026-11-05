@@ -14957,3 +14957,12 @@ steep for my car to go up ... the sidewalk is intersecting with the road. And NP
 
 **Owed.** A lanes tag bump for the rails and the paint (every baked level's roads), with the post-#182 batch; the hill
 town's ramps cross its streets in a tangle (a layout rethink); the dust sprites' squares.
+
+### ADR-0327 addendum (2026-11-05): a child's head
+
+Glenn: "The children agents. They're scaled but I wonder if maybe their heads shouldn't scale down as much. Children tend
+to have slightly bigger heads and smaller bodies." `BodyPose::headScale` grows the DRAWN head block about the neck (the
+ragdoll and the joints keep the body's). The city's walkers take one of three heads by how tall they are
+(`CityWalkerSystem::poseMesh`): an adult's, x1.15 under 0.88 of an adult's height, x1.4 under 0.7 -- before the body is
+scaled down, so a 1.15 m six-year-old's head is about 90 % of an adult's, not 64 %. Owed: the seated, ground-sitting
+and lying walkers and the far crowd still draw an adult's proportions.

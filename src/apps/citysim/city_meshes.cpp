@@ -60,8 +60,10 @@ engine::RenderMesh buildLyingPersonMesh(int outfit, int variant) {
 }
 int playerOutfit() { return kNumOutfits - 1; }
 
-engine::RenderMesh buildPersonMesh(Real swing, int outfit) {
-    return engine::buildPosedPerson(engine::walkBodyPose(swing), outfit);   // knees and elbows (block_body.h)
+engine::RenderMesh buildPersonMesh(Real swing, int outfit, Real headScale) {
+    engine::BodyPose pose = engine::walkBodyPose(swing);   // knees and elbows (block_body.h)
+    pose.headScale = headScale;
+    return engine::buildPosedPerson(pose, outfit);
 }
 
 engine::RenderMesh ringXZ(Real innerFrac, int segs) {
