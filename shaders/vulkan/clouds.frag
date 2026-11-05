@@ -153,7 +153,11 @@ void main() {
     const vec4 CLEAR = vec4(0.0, 0.0, 0.0, 1.0);
 
     vec2 ndc = inUV * 2.0 - 1.0;   // flipped invVP: no manual y negation
-    vec4 world = u.invViewProjection * vec4(ndc, 1.0, 1.0);
+    // THE RAY, from a point ~100 m out (reverse-Z depth 0.002, a few hundred near planes), not the near plane itself: there
+    // the point minus the camera is a ~10 cm vector made of two ~10 km world positions in float32, and with the island's
+    // 35 km far plane the inverse projection's own rounding on top -- every pixel's direction snapped to a coarse grid, and
+    // far clouds came out as cubes (ADR-0332 addendum; Glenn: "the clouds look blocky"). The lab's 8 km far plane hid it.
+    vec4 world = u.invViewProjection * vec4(ndc, 0.002, 1.0);
     vec3 camPos = u.cameraPosition.xyz;
     vec3 dir = normalize(world.xyz / world.w - camPos);
     vec3 sunDir = normalize(u.sunDirection.xyz);

@@ -40,7 +40,7 @@ void main() {
     // WHERE THIS PIXEL'S CLOUD WAS: the point along its ray at the cloud deck's middle (or the scene, nearer), seen
     // through last frame's camera (the flipped convention of clouds.frag: ndc = uv * 2 - 1)
     vec2 ndc = inUV * 2.0 - 1.0;
-    vec4 wf = u.invViewProjection * vec4(ndc, 1.0, 1.0);
+    vec4 wf = u.invViewProjection * vec4(ndc, 0.002, 1.0);   // (~100 m out, not the near plane: clouds.frag's precision note)
     vec3 cam = u.cameraPosition.xyz;
     vec3 dir = normalize(wf.xyz / wf.w - cam);
     float mid = 0.5 * (u.layer.x + u.layer.y);

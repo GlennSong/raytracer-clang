@@ -15146,3 +15146,19 @@ cloud edges at different places. At 400 steps the outlines came out round. That 
   - GPU memory 2.6 / 10 GB.
 - Something the island level loads changes how the clouds read their noise. Next: bisect the island's blocks into lab
   copies.
+
+### ADR-0332 addendum: the island's blocks were the RAY, not the clouds
+- **The bisection.** The lab plus the island's terrain block was blocky. The lab plus only the island's
+  `cdlod.worldHalf` (2200 → 10000) was blocky too. So the cause is the far plane: `worldViewFar` is 3.5 × worldHalf, so
+  8 km in the lab against 35 km on the island.
+- **The cause.** clouds.frag and clouds_resolve.frag built each pixel's ray from the NEAR plane: `invVP · (ndc, 1, 1)`
+  in reverse-Z, minus the camera. That is a ~10 cm vector made from two ~6.6 km float32 positions (half-millimetre
+  ulps), plus the inverse projection's own rounding at a 35 km far plane. Every pixel's direction snapped to a coarse
+  grid, and at 10–25 km a snapped step is tens of metres. That made the cubes, with no detail.
+- **Why every cloud-side experiment failed.** The noise, the march and the history were never the fault.
+- **Fix.** Both shaders build the ray from a point ~100 m out (`ndc z = 0.002`). The beach view comes out round and
+  detailed, at the same cost (the lab's cloud pass 0.44–0.55 ms).
+- **Owed.**
+  - Metal's clouds (#71) likely carry the same reconstruction.
+  - Any other pass that builds a direction from the near plane should be checked. ssao and ssr build from depth.
+  - The pale slab under the far banks remains.
