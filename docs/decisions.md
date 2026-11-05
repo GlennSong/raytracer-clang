@@ -15057,3 +15057,39 @@ island_8_nature, three faults showed:
 **Not done.**
 - Metal: its mesh vertex shader has neither the ground normal nor the billboard (Vulkan-only already, #71).
 - The near clumps keep their dark roots. That is right up close; check it at their fade band if it shows.
+
+## ADR-0330 — The surf: a signed waterline distance, breakers on it (#187)
+
+**Context.** The reference shots (ADR-0328's fixed shots) have white surf lines along every beach; ours had none, from
+the air or the shore. The sea had a shore-foam band (6-13 m), but its shore distance was the first of 15 m rings
+(cell 20 m) to reach land from a corner, and **0 on every land corner**. The band interpolated out from a corner that
+lay under the beach and never showed.
+
+**Decision.**
+- **The shore distance is signed and real.** buildWaterMesh measures it on its own corner grid: + offshore, −
+  inland, in metres from the WATERLINE.
+  - Each edge that crosses the waterline seeds both of its corners with the crossing's own distance.
+  - The shared `chamferSweepGrid` spreads it, and `boxBlurGrid` smooths it, except within a cell or two of the line,
+    which stays put. The chamfer's eight directions had drawn the crests as zigzags at the cell's scale.
+  - The cap is the wider of `foamBand` and the new `surfBand` (default 120 m; JSON `water.surfBand`).
+  - The depth in uv.u is signed too; the shaders clamp it.
+  - Pools set `surfBand` 0.
+- **The surf** (mesh.frag surfWater):
+  - Breakers roll in on the shore distance: a crest every ~24 m, one every ~8 s. Each is a sharp front with a foam
+    trail that thins to lace, widened to the pixel's footprint (`fwidth`) so far crests neither alias nor vanish.
+  - They break only in water under ~4 m (fully under 2 m), so a steep shore gets one line and a shelf several.
+  - Each crest is broken along the shore by its own noise (the wave's id seeds it), plus calmer stretches at a
+    300 m scale. A faint wash lies over the shallowest surf zone.
+- **Sea foam is opaque and matte** (`gSeaFoam` → the water composite's `waterFoam`, and roughness toward 0.6), as the
+  rivers' foam already was. The old band's foam joins it, so it no longer lets the sky's reflection through.
+
+**Measured** (island_8_nature, RT_GPU_TIMES):
+- beach_curve: 10.13 ms a frame (scene 8.19).
+- coast_aerial: 5.83 ms.
+- The surf's branch runs only where the water is under 4 m and within 110 m of the line.
+
+**Not done.**
+- The swash: the wash running up the sand. The water plane stops at the waterline, and the terrain shader has no sea
+  level.
+- Metal (#71): it reads the signed values safely (it saturates the depth and tests shore > 0) but has no surf.
+- A carved river-mouth channel's straight depth contours give straight crests.

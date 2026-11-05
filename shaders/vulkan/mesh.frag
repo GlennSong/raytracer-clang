@@ -354,7 +354,9 @@ vec3 surfTerrain(vec3 base, vec3 worldPos) {
 // meshUV.x = baked water depth (m), meshUV.y = baked distance to land (m).
 // Colour only — the animated wave normals live in surfaceReliefWater below.
 // Ported from surface_water.metal; `time` is g.wind1.w (seconds).
+float gSeaFoam = 0.0;   // surfWater's foam (0..1), for the water composite: foam is opaque and matte
 vec3 surfWater(vec3 base, float depth, float shore, vec3 worldPos, float time) {
+    depth = max(depth, 0.0);   // (signed in the mesh: negative on a land corner)
     vec3 deep    = base;
     vec3 mid     = base * 2.0 + vec3(0.010, 0.045, 0.050);   // green-blue
     vec3 shallow = base * 3.0 + vec3(0.030, 0.130, 0.120);   // teal shallows
@@ -380,6 +382,30 @@ vec3 surfWater(vec3 base, float depth, float shore, vec3 worldPos, float time) {
         float f = u * u * (0.20 + 0.60 * pattern);
         f += smoothstep(0.85, 1.0, u) * 0.30;    // bright washing edge
         c = mix(c, vec3(0.92, 0.96, 0.98), clamp(f, 0.0, 1.0));
+        gSeaFoam = max(gSeaFoam, clamp(f, 0.0, 1.0));
+    }
+    // THE SURF (ADR-0330; #187, the reference's white lines along the beach): breakers rolling in to the waterline
+    // on the shore distance -- a crest every ~24 m, one every ~8 s, each a sharp white front with a foam trail
+    // behind it that thins to lace. They break only where the water is shallow enough (under ~3.5 m), so a steep
+    // shore gets one line at its foot and a long shelf several; each crest is broken along the shore by its own
+    // noise (a wave's id seeds it), so no two sets match and no line runs unbroken. A pool's band is 0.
+    if (shore > 1.0 && shore < 110.0 && depth < 4.0) {
+        float warp = 9.0 * fbm2(worldPos.x * 0.004 + 3.1, worldPos.z * 0.004 - 1.7);   // crests not quite the contours
+        float ph = (shore + warp) / 24.0 + time / 8.0 + 0.5;
+        float id = floor(ph), w = fract(ph) - 0.5;   // w: 0 at the crest, < 0 shoreward of it, > 0 the trail behind
+        // (the front widens to the pixel's footprint: far off it neither aliases nor thins to nothing)
+        float fw = fwidth(ph);
+        float front = smoothstep(-0.05 - fw, 0.0, w) * exp(-max(w, 0.0) * 6.0 / (1.0 + 6.0 * fw));
+        float along = fbm2(worldPos.x * 0.018 + id * 7.13, worldPos.z * 0.018 - id * 3.71) *
+                      (0.6 + 0.6 * fbm2(worldPos.x * 0.003 - 4.2, worldPos.z * 0.003 + 2.6));   // (and calmer stretches)
+        float lace = fbm2(worldPos.x * 0.45 + time * 0.05, worldPos.z * 0.45 - id * 1.3);
+        float zone = (1.0 - smoothstep(2.0, 4.0, depth)) * smoothstep(1.0, 3.0, shore);
+        float surf = front * smoothstep(0.38, 0.62, along) * (0.45 + 0.75 * lace) * zone;
+        // the broken water left behind: a faint wash over the whole surf zone, thicker nearer the beach
+        surf = max(surf, zone * (1.0 - smoothstep(0.0, 1.5, depth)) * 0.35 * smoothstep(0.5, 0.8, lace));
+        surf = clamp(surf, 0.0, 1.0);
+        c = mix(c, vec3(0.90, 0.94, 0.96), surf);
+        gSeaFoam = max(gSeaFoam, surf);
     }
     return c;
 }
@@ -1432,12 +1458,14 @@ void main() {
         if (surfaceId != 0u)
             albedo = applySurface(surfaceId, albedo, inWorldPos, N, inTexcoord, g.wind1.w);
     }
+    if (pc.surfaceFlags.x == 12u) waterFoam = gSeaFoam;   // (the sea's foam and surf: opaque, matte, unglinting)
     // Procedural relief for surfaces with no baked normal/roughness map (road,
     // terrain, water); mirrors the applySurfaceRelief seam in surfaces.metal.
     // (Runs regardless of the albedo gate above, exactly like Metal — the
     // relief ids never carry baked maps.)
     applySurfaceRelief(pc.surfaceFlags.x, inWorldPos, inTexcoord, g.wind1.w,
                        g.cameraPosition.xyz, N, roughness);
+    if (pc.surfaceFlags.x == 12u) roughness = mix(roughness, 0.6, gSeaFoam);
 
     vec3 V = normalize(g.cameraPosition.xyz - inWorldPos);
     vec3 f0 = mix(vec3(0.04), albedo, metallic);

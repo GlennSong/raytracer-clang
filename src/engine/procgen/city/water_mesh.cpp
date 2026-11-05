@@ -1,6 +1,8 @@
 #include "water_mesh.h"
 #include "../../mesh_builder.h"
+#include "../texture_field.h"   // chamferSweepGrid
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <vector>
@@ -36,21 +38,47 @@ RenderMesh buildWaterMesh(const HeightField& floor, const WaterMeshParams& p) {
     if (!floor || p.seaLevel <= -1e29 || p.cell <= 0.0) return mesh;
 
     auto depthAt = [&](double x, double z) { return p.seaLevel - floor(x, z); };
-    // Distance to the nearest land, capped at foamBand — baked into UV.v so the
-    // shader draws a foam band only at the true waterline (not on offshore shoals).
-    auto shoreAt = [&](double x, double z) -> float {
-        if (depthAt(x, z) <= 0.0) return 0.0f;
-        for (double r = p.cell; r <= p.foamBand; r += p.cell * 0.75)
-            for (int k = 0; k < 12; ++k) {
-                double t = 6.28318530718 * k / 12.0;
-                if (depthAt(x + std::cos(t) * r, z + std::sin(t) * r) <= 0.0)
-                    return static_cast<float>(r);
-            }
-        return static_cast<float>(p.foamBand);
-    };
-
     const int nx = std::max(1, static_cast<int>(std::ceil((p.hi.x - p.lo.x) / p.cell)));
     const int nz = std::max(1, static_cast<int>(std::ceil((p.hi.y - p.lo.y) / p.cell)));
+    // THE SHORE DISTANCE, SIGNED (ADR-0330): metres from the WATERLINE at every corner, + offshore and - inland,
+    // so the interpolated value crosses 0 where the interpolated depth does. Seeded on each edge that crosses the
+    // waterline (the crossing's own distance from either end) and spread by the chamfer sweep, capped at the wider
+    // of the foam and surf bands. (It used to be the first of 15 m rings to reach land from a corner, 0 at any land
+    // corner: the foam's band ran out from a corner under the beach, and never showed.)
+    const int n = std::max(nx, nz) + 1;
+    const float cap = static_cast<float>(std::max(p.foamBand, p.surfBand));
+    std::vector<float> depth(static_cast<std::size_t>(n) * n, -1.0f);
+    for (int j = 0; j <= nz; ++j)
+        for (int i = 0; i <= nx; ++i)
+            depth[static_cast<std::size_t>(j) * n + i] = static_cast<float>(depthAt(p.lo.x + i * p.cell, p.lo.y + j * p.cell));
+    const float far = 1e9f;
+    std::vector<float> off(depth.size(), far), in(depth.size(), far);
+    for (int j = 0; j <= nz; ++j)
+        for (int i = 0; i <= nx; ++i) {
+            const std::size_t a = static_cast<std::size_t>(j) * n + i;
+            const int nb[4][2] = {{i + 1, j}, {i - 1, j}, {i, j + 1}, {i, j - 1}};
+            for (const auto& b : nb) {
+                if (b[0] < 0 || b[1] < 0 || b[0] > nx || b[1] > nz) continue;
+                const float da = depth[a], db = depth[static_cast<std::size_t>(b[1]) * n + b[0]];
+                if ((da > 0.0f) == (db > 0.0f)) continue;
+                const float t = da / (da - db);   // the crossing, from this corner (0..1 of the edge)
+                (da > 0.0f ? off[a] : in[a]) = std::min(da > 0.0f ? off[a] : in[a], t * static_cast<float>(p.cell));
+            }
+        }
+    const float c = static_cast<float>(p.cell);
+    chamferSweepGrid(off, n, c, c * 1.41421356f);
+    chamferSweepGrid(in, n, c, c * 1.41421356f);
+    // the chamfer's eight directions draw its contours as polygons -- the surf's crests zigzagged at the cell's
+    // scale -- so the distance is blurred, all but within a cell or two of the waterline (which stays put)
+    std::vector<float> sd(depth.size());
+    for (std::size_t a = 0; a < sd.size(); ++a) sd[a] = depth[a] > 0.0f ? std::min(off[a], cap) : -std::min(in[a], cap);
+    const std::vector<float> soft = boxBlurGrid(sd, n, 2, 2);
+    auto shoreAt = [&](int i, int j) -> float {
+        const std::size_t a = static_cast<std::size_t>(j) * n + i;
+        const float k = std::clamp((std::fabs(sd[a]) - c) / c, 0.0f, 1.0f);
+        return sd[a] + (soft[a] - sd[a]) * k;
+    };
+
     const Vec3 up(0, 1, 0);
     const Vec3 col(0.09, 0.22, 0.34);          // fallback tint; the shader grades by depth
     auto P = [&](double x, double z) { return Vec3(x, p.seaLevel, z); };
@@ -63,7 +91,8 @@ RenderMesh buildWaterMesh(const HeightField& floor, const WaterMeshParams& p) {
         int32_t& id = vid[static_cast<std::size_t>(j) * (nx + 1) + i];
         if (id < 0) {
             const double x = p.lo.x + i * p.cell, z = p.lo.y + j * p.cell;
-            Vertex v(P(x, z), up, Vec3(1, 0, 0), static_cast<float>(std::max(0.0, depthAt(x, z))), shoreAt(x, z));
+            // (the depth signed too: the shader clamps it, and it crosses 0 with the shore distance)
+            Vertex v(P(x, z), up, Vec3(1, 0, 0), depth[static_cast<std::size_t>(j) * n + i], shoreAt(i, j));
             v.color = col;
             id = static_cast<int32_t>(mesh.vertices.size());
             mesh.vertices.push_back(v);

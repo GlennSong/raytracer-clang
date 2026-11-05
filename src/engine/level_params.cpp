@@ -624,6 +624,7 @@ WaterMeshParams readWaterParams(const json& w) {
         wp.hi = {w["hi"][0].get<double>(), w["hi"][1].get<double>()};
     wp.cell = w.value("cell", wp.cell);
     wp.foamBand = w.value("foamBand", wp.foamBand);
+    wp.surfBand = w.value("surfBand", wp.surfBand);
     return wp;
 }
 

@@ -5777,6 +5777,7 @@ bool LevelLoader::load(const std::string& path,
             wp.hi = Vec2(x1, z1);
             wp.cell = 0.5;
             wp.foamBand = 0.6;
+            wp.surfBand = 0.0;   // (a pool has no surf)
             const HeightField floorAt = [=](double x, double z) {
                 return x >= x0 - 1e-6 && x <= x1 + 1e-6 && z >= z0 - 1e-6 && z <= z1 + 1e-6 ? level - depth
                                                                                              : level + 1.0;
