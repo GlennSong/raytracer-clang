@@ -14884,3 +14884,25 @@ That doesn't seem to make sense on a mountain. I would imagine we'd have more pi
   gains `highland` (0 below the level's ground-cover upland line, 0.25 there, 1 at its mountain line). On high ground
   no palm and no tropical tree, the palm and flowering schemes become avenues, and the higher the street the more of its
   broadleaves are conifers. Planned at load: no re-bake; a lowland street plants as before.
+
+## ADR-0325 — Driving for play: thrown off only in a real crash, country roads with a shoulder
+
+Glenn, 2026-11-04, after driving the mountain lab: "for the 2 lane roads on the mountains and even on the ground we
+should give some more shoulder space because it's hard to drive when they're that narrow for a player. Also I think we
+should up the speed before we eject the player from the moving vehicle. Right now I feel like everything I hit causes me
+to eject out of the car. It's funny, but not useful. I don't think that tuning needs to be physically accurate, but there
+needs to be more balance ... Especially the motorcycle."
+
+**Decision.**
+- THE EJECT RULE (ADR-0252) is tuned for play: a seat's jolt throws its rider past 15 m/s on a two-wheeler (55 km/h
+  stopped dead; was 7), 19 in an open seat (was 11), 30 through a closed car's windscreen (was 22). `EjectRule`, and the
+  prefs `vehicle.ejectBike`, `vehicle.ejectOpen`, `vehicle.ejectCar` (m/s) retune them without a build.
+- A BIKE GOES DOWN only lying on its side (past 75 degrees) for 0.4 s; leant past its limit in a fast bend (its limit +
+  10 degrees) it no longer throws you.
+- THE RURAL CLASS (and the mountain class built from it: the pass, the high road, the coast road, the mountain roads)
+  has a 2.5 m shoulder each side, a ramp's, instead of 1.0: 12 m of deck for two 3.5 m lanes. Every shipped graph
+  carries its own class table, so no bake changes; new plans take it, island_8_nature at its next re-plan.
+- A strip's main street is the kind's (`strip.main`): a hamlet's is a local street, two lanes, not a four-lane
+  arterial; a place with no arterial offers all its junctions to the roads that run into it.
+- Tests: the wall test now keeps every rider in at 50 km/h, throws a bike at 60, a convertible at 75, a closed car only
+  through the windscreen at 120, and a rule of its own moves the line.

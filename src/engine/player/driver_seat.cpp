@@ -12,10 +12,10 @@ constexpr Real kDeg = 3.14159265358979 / 180.0;
 
 }  // namespace
 
-Real ejectTolerance(bool twoWheeler, bool openSeat, bool windscreen) {
-    if (twoWheeler) return 7.0;
-    if (openSeat) return 11.0;
-    return windscreen ? 22.0 : std::numeric_limits<Real>::infinity();
+Real ejectTolerance(bool twoWheeler, bool openSeat, bool windscreen, const EjectRule& rule) {
+    if (twoWheeler) return rule.bike;
+    if (openSeat) return rule.open;
+    return windscreen ? rule.car : std::numeric_limits<Real>::infinity();
 }
 
 Vec3 ejectThrow(const Vec3& before, bool hit) {

@@ -19,10 +19,13 @@
 
 namespace engine {
 
-// The jolt a seat takes before it throws its rider (m/s): a two-wheeler 7 (25 km/h gone in a moment, the bike rule
-// of ADR-0235), a convertible 11 (belted in, but nothing over the head), a closed car never -- or 22 through the
-// windscreen while that rule is on (vehicle.windscreen; on unless set false).
-Real ejectTolerance(bool twoWheeler, bool openSeat, bool windscreen);
+// The jolt a seat takes before it throws its rider (m/s), tuned for play, not for physics (Glenn, 2026-11-04:
+// "everything I hit causes me to eject out of the car. It's funny, but not useful ... there needs to be more balance so
+// the player isn't frustrated ... Especially the motorcycle"): a two-wheeler 15 (55 km/h gone in a moment), an open
+// seat 19 (70 km/h), a closed car never -- or 30 (110 km/h) through the windscreen while that rule is on
+// (vehicle.windscreen; on unless set false). The prefs vehicle.ejectBike / ejectOpen / ejectCar retune them.
+struct EjectRule { Real bike = 15.0, open = 19.0, car = 30.0; };
+Real ejectTolerance(bool twoWheeler, bool openSeat, bool windscreen, const EjectRule& rule = {});
 // How the rider leaves: on at most of the way the vehicle was going, up off the seat; a bike that went down (no hit)
 // slides you off slower.
 Vec3 ejectThrow(const Vec3& before, bool hit);

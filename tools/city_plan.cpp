@@ -300,6 +300,11 @@ int main(int argc, char** argv) {
                     const std::string nm = st >= 0 ? engine::abbreviateStreetName(naming.streets[static_cast<std::size_t>(st)].name) : std::string();
                     for (int nd : {e.a, e.b}) { art.push_back(plan.streets.nodes[static_cast<std::size_t>(nd)].pos); names.push_back(nm); }
                 }
+                // (a place with no arterial -- a hamlet's street is a local one -- offers all its junctions: the roads
+                // that run into it join where they meet it)
+                if (art.empty())
+                    for (const auto& e : plan.streets.edges)
+                        for (int nd : {e.a, e.b}) { art.push_back(plan.streets.nodes[static_cast<std::size_t>(nd)].pos); names.push_back(std::string()); }
                 arterialNodes.push_back({static_cast<int>(k), art});
                 // its streets as a nav graph, and its CENTRE: the node nearest the middle of its core blocks
                 navs[k] = engine::buildNavGraph(plan.streets);

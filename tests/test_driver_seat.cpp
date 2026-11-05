@@ -60,14 +60,22 @@ TEST_CASE(hard_braking_leans_you_forward_and_throws_nobody) {
     CHECK(r.leanMost < SeatSway::kLeanMax * 0.6);        // ...not thrown to it
 }
 
-TEST_CASE(a_wall_at_fifty_throws_the_open_seats_and_keeps_the_closed_car) {
+TEST_CASE(a_wall_at_fifty_keeps_everyone_in_and_a_fast_one_throws_the_open_seats) {
+    // tuned for play (Glenn, 2026-11-04: "everything I hit causes me to eject out of the car"): a city-speed knock
+    // keeps every rider in; it takes a real crash to come off
     const Run r = stopFrom(50 / 3.6, 2);
     std::printf("    50 km/h into a wall: jolt %.2f m/s, lean %.3f m\n", r.most, r.leanMost);
-    CHECK(r.most > ejectTolerance(true, true, false));    // a bike
-    CHECK(r.most > ejectTolerance(false, true, false));   // a convertible
-    CHECK(!(r.most > ejectTolerance(false, false, false)));   // a closed car: never
-    CHECK(!(r.most > ejectTolerance(false, false, true)));    // ...nor through the windscreen at 50
-    CHECK(stopFrom(100 / 3.6, 2).most > ejectTolerance(false, false, true));   // ...but at 100, with it on
+    CHECK(!(r.most > ejectTolerance(true, true, false)));    // a bike stays on
+    CHECK(!(r.most > ejectTolerance(false, true, false)));   // a convertible keeps you
+    CHECK(stopFrom(60 / 3.6, 2).most > ejectTolerance(true, true, false));      // a bike at 60
+    CHECK(stopFrom(75 / 3.6, 2).most > ejectTolerance(false, true, false));     // a convertible at 75
+    CHECK(!(stopFrom(100 / 3.6, 2).most > ejectTolerance(false, false, false)));   // a closed car: never
+    CHECK(!(stopFrom(100 / 3.6, 2).most > ejectTolerance(false, false, true)));    // ...nor through the windscreen at 100
+    CHECK(stopFrom(120 / 3.6, 2).most > ejectTolerance(false, false, true));       // ...but at 120, with it on
+    // a rule of its own (the prefs) moves the line
+    EjectRule soft;
+    soft.bike = 25.0;
+    CHECK(!(stopFrom(60 / 3.6, 2).most > ejectTolerance(true, true, false, soft)));
     // and the body in the seat goes to the belt
     CHECK(r.leanMost > SeatSway::kLeanMax * 0.95);
 }

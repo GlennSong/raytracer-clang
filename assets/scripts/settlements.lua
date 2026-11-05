@@ -26,7 +26,8 @@
 --                                       streets behind it every `row` m inland, cross streets every `cross` m, a
 --                                       promenade `promenade` m out on the sand side (a beachfront row of blocks between;
 --                                       0: none), its limits `sea` m beyond; `along` the road it grows from ("coast",
---                                       or "high": a high road), `both_sides` its rows either side of the spine
+--                                       or "high": a high road), `both_sides` its rows either side of the spine, `main`
+--                                       its spine's class ("arterial", the default; "collector"; "local")
 --   regrade = { blur, max_slope, terrace, bank, feather, margin }   its ground levelled (procgen/regrade.h, ADR-0323):
 --                                       over its disc (a strip: its outline) and `margin` m more, written into the
 --                                       terrain block when the place is added
@@ -146,7 +147,7 @@ settlements = {
     buses = { 0, 6 },
     naming = "mountain",
     brief = { prefix = "hamlet_" },
-    strip = { length = 350, rows = 1, row = 55, cross = 120, sea = 0, along = "high", both_sides = true },
+    strip = { length = 350, rows = 1, row = 55, cross = 120, sea = 0, along = "high", both_sides = true, main = "local" },
     hub_reach = 60,
     -- a shop or two and a cafe on the street (an inn is owed: "hotel" is a city's tower); cottages and houses behind
     mixes = {

@@ -633,6 +633,7 @@ void VehicleSystem::handleEnterExit(FrameContext& ctx) {
                 bt.orientation.rotate(Vec3(0, 1, 0)).y < std::cos(v.config.maxLeanDegrees * 0.0174533))
                 physicsSys.physicsWorld().resetVehicleUpright(v.vehicleId, 0.3);
             bikeUpright_ = false;
+            bikeDown_ = 0;
             v.driver = player;
             cameras.setFollowTarget(best);
             // a bike's chase sits closer than a car's (the car's 8 m left a motorcycle a speck)
@@ -691,12 +692,19 @@ void VehicleSystem::stepSeat(FrameContext& ctx) {
     }
 
     const Real tilt = std::acos(std::clamp(rt->orientation.rotate(Vec3(0, 1, 0)).y, Real(-1), Real(1))) * 57.29578;
+    // a bike that has GONE DOWN puts you off: on its side (past 75 degrees) for 0.4 s, not leant hard into a turn past
+    // its limit (that threw the rider out of a fast bend)
     bool down = false;
     if (v->config.twoWheeler) {
         if (tilt < v->config.maxLeanDegrees) bikeUpright_ = true;
-        down = bikeUpright_ && tilt > v->config.maxLeanDegrees + 10.0 && v->speed < 25.0;
+        bikeDown_ = bikeUpright_ && tilt > 75.0 && v->speed < 25.0 ? bikeDown_ + dt : 0.0;
+        down = bikeDown_ > 0.4;
     }
-    const bool hit = jolt > ejectTolerance(v->config.twoWheeler, v->openSeat, ctx.settings.getBool("vehicle.windscreen", true));
+    EjectRule rule;
+    rule.bike = ctx.settings.getDouble("vehicle.ejectBike", rule.bike);
+    rule.open = ctx.settings.getDouble("vehicle.ejectOpen", rule.open);
+    rule.car = ctx.settings.getDouble("vehicle.ejectCar", rule.car);
+    const bool hit = jolt > ejectTolerance(v->config.twoWheeler, v->openSeat, ctx.settings.getBool("vehicle.windscreen", true), rule);
     if (!down && !hit) return;
     const Vec3 thrown = hit ? ejectThrow(before, true) : ejectThrow(vel, false);
     v->driver = Entity{};

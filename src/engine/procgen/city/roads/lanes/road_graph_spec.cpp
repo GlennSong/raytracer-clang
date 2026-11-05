@@ -32,8 +32,10 @@ const std::map<std::string, RoadClassSpec>& roadClasses() {
         add("boulevard",  22.0 / 6,     3,  0,  0.0,     5.0,     0.0,   2,   0.08,  120.0, 0.6);
         add("freeway",    30.0 / 8,     4,  0,  2.5,     0.0,     0.0,   3,   0.06,  200.0, 1.2);
         // RURAL: a country road out of town -- the mountain roads -- two lanes and a shoulder, no sidewalks (and so
-        // none of a street's kerbside furniture); drives as a collector
-        add("rural",      3.5,          1,  1,  1.0,     0.0,     0.0,   1,   0.10,  60.0,  0.5);
+        // none of a street's kerbside furniture); drives as a collector. The shoulder is 2.5 m, a ramp's (Glenn,
+        // 2026-11-04: "for the 2 lane roads on the mountains and even on the ground we should give some more shoulder
+        // space because it's hard to drive when they're that narrow"): 1.0 m left 9 m of deck to hold a car on
+        add("rural",      3.5,          1,  1,  2.5,     0.0,     0.0,   1,   0.10,  60.0,  0.5);
         add("ramp",       4.5,          1,  0,  2.5,     0.0,     0.0,   0,   0.09,  40.0,  1.0);
         add("divider",    0.0,          0,  0,  0.0,     0.0,     1.5,  -1,   1.0,   1.0,   0.0);
         // THE MOUNTAIN ROAD: the rural section, graded as mountain roads are, cutting through what it cannot climb

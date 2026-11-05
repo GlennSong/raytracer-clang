@@ -78,6 +78,7 @@ private:
     bool wasDrifting_ = false;
     Real lastDriftTime_ = 0;
     bool bikeUpright_ = false;   // the ridden bike has stood up since you got on: only then can it go down
+    Real bikeDown_ = 0;          // how long it has lain on its side (s): down past 0.4 s
     std::string wantRecipe_;   // `vehicle_spawn <recipe>`: picked once the catalogue is loaded
     double clock_ = 0.0, panelUntil_ = 0.0;
     std::string panelText_;

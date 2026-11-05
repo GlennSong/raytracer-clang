@@ -546,6 +546,7 @@ json islandSiteBrief(const IslandWorld& w, int site) {
         world["strip"] = {{"spine", spine}, {"inland", {s.inland.x, s.inland.y}}, {"rows", s.rows > 0 ? s.rows : k.stripRows}, {"row", k.stripRow},
                           {"cross", k.stripCross}, {"sea", k.stripSea}, {"promenade", k.stripPromenade}};
         if (k.stripBoth) world["strip"]["both"] = true;   // (written only when set: a beach town's brief is as it was)
+        if (k.stripMain != "arterial") world["strip"]["main"] = k.stripMain;
     }
     return {
         {"name", name},

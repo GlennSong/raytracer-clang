@@ -87,6 +87,7 @@ bool loadSettlementCatalog(ScriptVM& vm, SettlementCatalog& out, std::string* er
             k.stripPromenade = numField(L, sp, "promenade", k.stripPromenade);
             if (const std::string al = strField(L, sp, "along"); !al.empty()) k.stripAlong = al;
             k.stripBoth = boolField(L, sp, "both_sides", k.stripBoth);
+            if (const std::string mn = strField(L, sp, "main"); !mn.empty()) k.stripMain = mn;
         }
         lua_pop(L, 1);   // strip
         lua_getfield(L, t, "regrade");   // { blur, max_slope, terrace, bank, feather, margin } (procgen/regrade.h)

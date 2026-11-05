@@ -1790,7 +1790,11 @@ CityPlan generatePlan(const Brief& B) {
             Polyline p; p.klass = k; p.width = w; p.pts = std::move(pts);
             roads.push_back(std::move(p));
         };
-        add(spine, RoadClass::Arterial, B.arterialWidth);                                   // the seafront
+        // the seafront (or a hamlet's street: `main`, its class)
+        const std::string mainClass = stripSpec.value("main", std::string("arterial"));
+        if (mainClass == "local") add(spine, RoadClass::Local, B.localWidth);
+        else if (mainClass == "collector") add(spine, RoadClass::Collector, B.collectorWidth);
+        else add(spine, RoadClass::Arterial, B.arterialWidth);
         for (int k = 1; k <= rows; ++k) add(offset(row * k), RoadClass::Local, B.localWidth);
         if (both)
             for (int k = 1; k <= rows; ++k) add(offset(-row * k), RoadClass::Local, B.localWidth);

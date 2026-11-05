@@ -62,6 +62,7 @@ struct SettlementKind {
     int stripRows = 3;
     std::string stripAlong = "coast";   // the road it grows along: "coast" (the coast road) or "high" (a high road: a hamlet)
     bool stripBoth = false;             // its rows on both sides of the spine (a hamlet's street), not only inland
+    std::string stripMain = "arterial";  // its spine's class: "arterial" (a seafront) or "local" (a hamlet's two-lane street)
     // ITS GROUND LEVELLED (procgen/regrade.h, ADR-0323): over its disc (or a strip's outline) and `regradeMargin` m more,
     // blurred over regradeBlur, capped at regradeMaxSlope, shelves regradeTerrace apart (0: none) with regradeBank,
     // eased back over regradeFeather; written into the terrain block when the place is added

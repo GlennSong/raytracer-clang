@@ -37,6 +37,8 @@ std::string SettlementCatalog::check() const {
         if (k.strip && (k.stripLength < 200.0 || k.stripRows < 1 || k.stripRow < 40.0 || k.stripCross < 40.0))
             return k.name + ".strip: length >= 200, rows >= 1, row and cross >= 40 (m)";
         if (k.strip && k.stripAlong != "coast" && k.stripAlong != "high") return k.name + ".strip.along is coast or high";
+        if (k.strip && k.stripMain != "arterial" && k.stripMain != "collector" && k.stripMain != "local")
+            return k.name + ".strip.main is arterial, collector or local";
         if (k.regrade && (k.regradeBlur <= 0 || k.regradeMaxSlope <= 0 || k.regradeFeather < 0 || k.regradeBank < 0 || k.regradeBank > 1))
             return k.name + ".regrade: blur and max_slope > 0, feather >= 0, bank 0..1";
     }
@@ -53,7 +55,7 @@ std::string SettlementCatalog::describe() const {
           << " " << k.areaScale << "/" << k.sizeMin << "/" << k.spokeSpacing << " core=" << k.coreBlock[0] << "x" << k.coreBlock[1]
           << " midtown=" << k.midtownBlock[0] << "x" << k.midtownBlock[1] << " warp=" << k.warp << " rings=" << k.ringSpacing
           << " spokes=" << k.spokes << " strip=" << k.strip << "/" << k.stripLength << "/" << k.stripRows << "x" << k.stripRow << "/"
-          << k.stripCross << "/" << k.stripSea << "/" << k.stripPromenade << "/" << k.stripAlong << "/" << k.stripBoth << " regrade=" << k.regrade
+          << k.stripCross << "/" << k.stripSea << "/" << k.stripPromenade << "/" << k.stripAlong << "/" << k.stripBoth << "/" << k.stripMain << " regrade=" << k.regrade
           << "/" << k.regradeBlur << "/" << k.regradeMaxSlope << "/" << k.regradeTerrace << "/" << k.regradeBank << "/" << k.regradeFeather << "/"
           << k.regradeMargin << " reach=" << k.hubReach << " civic=" << k.civic << " landmarks=";
         for (const SettlementLandmark& l : k.landmarks) o << l.name << ":" << l.count << "/" << l.minLots << "/" << l.minOldTown << "/" << l.any << ",";
@@ -165,6 +167,7 @@ SettlementCatalog defaultSettlements() {
     hm.stripLength = 350.0; hm.stripRows = 1; hm.stripRow = 55.0; hm.stripCross = 120.0; hm.stripSea = 0.0;
     hm.stripAlong = "high";
     hm.stripBoth = true;
+    hm.stripMain = "local";   // a village street, two lanes
     hm.hubReach = 60.0;   // its street's lots are its commercial district
     // a shop or two and a cafe on the street (an inn is owed: "hotel" is a city's tower); cottages and houses behind
     hm.mixes["commercial"] = {{"oldtown_cafe", 20}, {"corner_shop", 18}, {"brick_shop", 12}, {"cottage", 30}, {"bungalow", 20}};
