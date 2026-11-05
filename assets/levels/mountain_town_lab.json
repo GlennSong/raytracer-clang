@@ -118,7 +118,9 @@
   },
   {
    "blades": 6,
-   "cards": false,
+   "cardRadius": 140,
+   "cardSpacing": 1.8,
+   "cards": true,
    "clumpCut": 0.0,
    "clumpRadius": 0.28,
    "clumpScale": 0.02,
@@ -186,7 +188,9 @@
   },
   {
    "blades": 5,
-   "cards": false,
+   "cardRadius": 140,
+   "cardSpacing": 1.8,
+   "cards": true,
    "clumpCut": 0.0,
    "clumpRadius": 0.28,
    "clumpScale": 0.02,
@@ -239,7 +243,9 @@
   },
   {
    "blades": 8,
-   "cards": false,
+   "cardRadius": 140,
+   "cardSpacing": 1.8,
+   "cards": true,
    "clumpCut": 0.15,
    "clumpRadius": 0.28,
    "clumpScale": 0.08,

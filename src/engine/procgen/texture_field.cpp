@@ -99,7 +99,7 @@ Field2 fieldCellId(uint32_t seed, int period) {
 }
 namespace {
 struct Blade { double root, height, width, lean, tone; };
-std::vector<Blade> makeBlades(uint32_t seed, int count, double width, double lean, double minHeight) {
+std::vector<Blade> makeBlades(uint32_t seed, int count, double width, double lean, double minHeight, double crown) {
     std::vector<Blade> out;
     ProcRng rng(seed);
     auto next = [&rng] { return rng.next(); };
@@ -107,6 +107,7 @@ std::vector<Blade> makeBlades(uint32_t seed, int count, double width, double lea
         Blade b;
         b.root = next();
         b.height = minHeight + (1.0 - minHeight) * next();
+        b.height *= 1.0 - crown * (2.0 * b.root - 1.0) * (2.0 * b.root - 1.0);   // a tussock: tall mid, short sides
         b.width = width * (0.6 + 0.8 * next());
         b.lean = lean * (next() * 2.0 - 1.0);
         b.tone = next();
@@ -130,12 +131,12 @@ int bladeAt(const std::vector<Blade>& bl, double u, double v) {
     return hit;
 }
 }  // namespace
-Field2 fieldBlades(uint32_t seed, int count, double width, double lean, double minHeight) {
-    auto bl = std::make_shared<std::vector<Blade>>(makeBlades(seed, count, width, lean, minHeight));
+Field2 fieldBlades(uint32_t seed, int count, double width, double lean, double minHeight, double crown) {
+    auto bl = std::make_shared<std::vector<Blade>>(makeBlades(seed, count, width, lean, minHeight, crown));
     return [bl](double u, double v) { return bladeAt(*bl, wrap01(u), v) >= 0 ? 1.0 : 0.0; };
 }
-Field2 fieldBladeTone(uint32_t seed, int count, double width, double lean, double minHeight) {
-    auto bl = std::make_shared<std::vector<Blade>>(makeBlades(seed, count, width, lean, minHeight));
+Field2 fieldBladeTone(uint32_t seed, int count, double width, double lean, double minHeight, double crown) {
+    auto bl = std::make_shared<std::vector<Blade>>(makeBlades(seed, count, width, lean, minHeight, crown));
     return [bl](double u, double v) {
         const int i = bladeAt(*bl, wrap01(u), v);
         return i >= 0 ? (*bl)[static_cast<std::size_t>(i)].tone : 0.5;
@@ -184,6 +185,13 @@ ColorField2 colorMixBy(ColorField2 a, ColorField2 b, Field2 t) {
     };
 }
 ColorField2 colorMul(ColorField2 c, Field2 k) { return [c, k](double u, double v) { return c(u, v) * k(u, v); }; }
+ColorField2 colorPalette(Field2 index, std::vector<Vec3> colours) {
+    if (colours.empty()) colours.push_back(Vec3(1, 1, 1));
+    return [index, colours](double u, double v) {
+        const std::size_t n = colours.size();
+        return colours[std::min(n - 1, static_cast<std::size_t>(clamp01(index(u, v)) * static_cast<double>(n)))];
+    };
+}
 ColorField2 colorTint(ColorField2 c, const Vec3& tint) {
     return [c, tint](double u, double v) {
         const Vec3 x = c(u, v);

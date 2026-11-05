@@ -34,11 +34,12 @@ struct GrassClumpParams {
 // Three triangles a blade: a tapered quad to the bend, a triangle to the tip.
 RenderMesh grassClump(uint32_t seed, const GrassClumpParams& p);
 
-// THE FAR FIELD: a grass CARD -- three crossed quads (MeshBuilder::crossCards) carrying a baked
+// THE FAR FIELD: a grass CARD -- one quad, turned to the camera by mesh.vert (ADR-0329), carrying a baked
 // texture of blades (fieldBlades), coloured root to tip like the clumps so the two blend where
 // one fades into the other. RGBA, linear (the renderer does not decode sRGB), alpha the cut-out.
 RenderMesh grassCardMesh(const GrassClumpParams& p);
-TextureData grassCardTexture(uint32_t seed, const GrassClumpParams& p);
+// A flowering layer's (p.flowers > 0) cards carry heads too, in `flowerColors` (p.flowerColor when empty).
+TextureData grassCardTexture(uint32_t seed, const GrassClumpParams& p, const std::vector<Vec3>& flowerColors = {});
 
 }  // namespace engine
 

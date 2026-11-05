@@ -5169,7 +5169,7 @@ bool LevelLoader::load(const std::string& path,
                 }
                 // THE FAR FIELD: cards of baked blades beyond the clumps, growing in as they fade
                 if (gj.value("cards", !clutter)) {
-                    const TextureData ct = grassCardTexture(gf.seed * 7919u + 3u, cp);
+                    const TextureData ct = grassCardTexture(gf.seed * 7919u + 3u, cp, flowerColors);
                     gf.card = assets.acquireMesh(grassCardMesh(cp), tag + ":card");
                     gf.cardSpacing = gj.value("cardSpacing", gf.cardSpacing);
                     gf.cardRadius = gj.value("cardRadius", gf.cardRadius);

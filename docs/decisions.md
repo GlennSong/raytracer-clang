@@ -15016,3 +15016,44 @@ low clouds sit in faint hard-edged rectangles near the horizon.
   changed nothing; reverted). Next suspect: the base noise's own 44 m trilinear cells through the steep coverage
   threshold, bare where the far march fades the detail erosion out. A/B shots in
   ~/Pictures/Raytracer/2026-11-05_ref_shots/baseline (cloud_crop.png).
+
+## ADR-0329 — Far grass: one camera-facing card, a tussock, a slope shear; flowers in the cards (#187)
+
+**Context.** Glenn, 2026-11-05: "I can still see the cards. It doesn't entirely look like grass when on the hilly parts
+of the terrain. Also the flowers tend to pop in as you traverse the terrain." Shot from 12-25 m above a hillside on
+island_8_nature, three faults showed:
+- **Stars.** A far card was three crossed quads; looked down on, each read as a six-pointed star.
+- **Boxes.** The tall grass's cards were flat-topped rectangles, and on a slope a card's straight foot floated at one
+  side and sank at the other.
+- **Dark dashes.** Most of a card's coverage is its dense foot, baked in the clump's dark root colour. Once the stars
+  were gone, every card read as a dark dash on the lighter ground.
+- **Flowers.** The flowering layers had `"cards": false`, so a meadow's colour ended where its clumps ended (fadeEnd
+  80 m) and grew in as you walked.
+
+**Decision.**
+- **One quad a card, turned to the camera.** `grassCardMesh` is `crossCards(1.0, h x 1.25, 1)`. mesh.vert turns it
+  about its planted origin's vertical to face the camera, for FLAG_GRASS + FLAG_ALPHA_TEST (not clutter). Half of the
+  cards are mirrored by rank. Grass casts no shadow, so the shadow pass is untouched.
+- **A slope shear.** For every grass vertex (clumps and cards, not clutter), mesh.vert lifts the vertex by the
+  ground's gradient times its horizontal offset from the origin. The ground normal already rides the instance's
+  bottom row. Blades stay vertical and the foot follows the hill. The shear runs after the wind, so the wind's weight
+  still measures height above the root.
+- **A tussock.** `fieldBlades`/`fieldBladeTone` take `crown` (default 0, so other callers are unchanged): each blade's
+  height × (1 − crown (2u − 1)²). The cards bake with crown 0.45. A layer with fewer blades bakes a sparser card
+  (5 × blades, 20..90).
+- **A lighter foot.** The card's colour runs from 55% of the way root → tip, not from the root. Up close, the clump's
+  dark root is its blades shading each other; at a card's distance it only made dashes.
+- **Flowers in the far field.** `grassCardTexture(seed, p, flowerColors)` bakes heads for a flowering layer: half the
+  cells of an 8 × 8 lattice, high in the blades, inside the dome, in the layer's colours. It uses the new
+  `colorPalette` colour-field word. Each level's flowering layers now say `"cards": true, cardRadius 140, cardSpacing
+  1.8` (island_8_nature/rocky/weathered, the labs, mountain_town_lab, zz_mtn_window; island_8_beach is Glenn's,
+  untouched). The grass is not in the bake key, so no re-bake.
+
+**Measured** (island_8_nature, RT_GPU_TIMES, two hillside views):
+- GPU 7.83 and 6.93 ms a frame.
+- With the flower cards off: 7.83 and 6.91 ms.
+- The flowers' cards cost about 0.02 ms. The single quad costs a third of the old card's fill.
+
+**Not done.**
+- Metal: its mesh vertex shader has neither the ground normal nor the billboard (Vulkan-only already, #71).
+- The near clumps keep their dark roots. That is right up close; check it at their fade band if it shows.

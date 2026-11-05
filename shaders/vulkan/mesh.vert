@@ -103,6 +103,17 @@ void main() {
     vec4 world = M * vec4(inPosition, 1.0);
     vec3 normal = kPackedVertex ? octDecode(inNormal.xy) : inNormal.xyz;
     vec3 tangent = kPackedVertex ? octDecode(inTangent.xy) : inTangent.xyz;
+    // GRASS CARDS (FLAG_GRASS with FLAG_ALPHA_TEST, not clutter; ADR-0329): one quad, turned about its planted
+    // origin's vertical to face the camera -- three crossed quads read as six-pointed stars from above. Half of
+    // them (by rank) are mirrored, so a field of the one texture does not repeat its silhouette.
+    const bool clutter = (pc.surfaceFlags.y & (1u << 26)) != 0u;
+    if (grass && !clutter && (pc.surfaceFlags.y & 2u) != 0u) {
+        const vec3 o = M[3].xyz;
+        vec2 toCam = g.cameraPosition.xz - o.xz;
+        toCam = dot(toCam, toCam) > 1e-6 ? normalize(toCam) : vec2(0.0, 1.0);
+        const vec3 right = vec3(toCam.y, 0.0, -toCam.x) * (fract(rank * 7.31) < 0.5 ? -1.0 : 1.0);
+        world.xyz = o + right * (inPosition.x * length(M[0].xyz)) + vec3(0.0, inPosition.y * length(M[1].xyz), 0.0);
+    }
 
     // Wind sway (FLAG_WIND = bit 2): displace in the wind direction, weighted by
     // height above the model's base (planted root, moving tips) and phase-offset
@@ -134,6 +145,13 @@ void main() {
         float phase = g.wind1.w * g.wind2.x + dot(world.xz, vec2(0.15, 0.1));
         float gust = sin(phase) + 0.3 * sin(phase * 2.3 + 1.7);
         world.xz += g.wind1.xz * (g.wind2.z * weight * gust);
+    }
+    // ON A SLOPE every blade stands up from the ground under IT, not from a level plane through the planted origin:
+    // a shear by the ground's gradient (its normal rides the bottom row), so a card's foot follows the hill instead
+    // of floating at one side and sinking at the other. (Clutter is already turned to the ground.)
+    if (grass && !clutter) {
+        const float ny = sqrt(max(1.0 - dot(groundXZ, groundXZ), 0.05));
+        world.y -= dot(groundXZ, world.xz - M[3].xz) / ny;
     }
 
     // FLAG_IMPOSTOR_VIEWS (bit 24, forest.h appendImpostorViews): ONE card a tree, turned to the camera about the
