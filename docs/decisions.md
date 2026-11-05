@@ -15011,3 +15011,8 @@ low clouds sit in faint hard-edged rectangles near the horizon.
   curving away from above the sea, a low eye on a hillside over the coast, straight down on the coast, a lake at eye
   level), each at its own hour and its height above the ground under it. The planner prints its lakes under
   RT_PLAN_WHY (where a pose or a trail can go).
+- THE FAR CLOUDS' PLATES (seen, not fixed): toward the horizon the clouds come out as slanted straight-edged plates. Not
+  the march's step (the same at 48 steps as at 96) and not the weather map's bilinear creases (a B-spline weather
+  changed nothing; reverted). Next suspect: the base noise's own 44 m trilinear cells through the steep coverage
+  threshold, bare where the far march fades the detail erosion out. A/B shots in
+  ~/Pictures/Raytracer/2026-11-05_ref_shots/baseline (cloud_crop.png).
