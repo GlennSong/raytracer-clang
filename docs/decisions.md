@@ -14966,3 +14966,11 @@ ragdoll and the joints keep the body's). The city's walkers take one of three he
 (`CityWalkerSystem::poseMesh`): an adult's, x1.15 under 0.88 of an adult's height, x1.4 under 0.7 -- before the body is
 scaled down, so a 1.15 m six-year-old's head is about 90 % of an adult's, not 64 %. Owed: the seated, ground-sitting
 and lying walkers and the far crowd still draw an adult's proportions.
+
+### ADR-0327 addendum (2026-11-05): hairpins a car can turn, stairs that land
+
+Glenn: "the hairpins are undrivable. The corners are too sharp ... if the hairpins were more curved"; "some of them [the
+stairs] just end in the sky". The hill town's ramps are SWITCHBACK BENDS: from each end of a shelf's longest street, a
+cubic U-turn to the nearest end of the street below, each end's way leant out from the town's middle, handles grown until
+the bend holds 12 % over the step and a 15 m radius -- Kingswood's 18 bends hold 19-25 m at 4-9 %. A footway is kept only
+when both its ends land on a street the plan kept (the pruning after the stairs took some of their streets).

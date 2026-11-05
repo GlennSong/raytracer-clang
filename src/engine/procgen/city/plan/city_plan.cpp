@@ -1894,34 +1894,58 @@ CityPlan generatePlan(const Brief& B) {
             for (const std::vector<Vec2>& r : runs) add(r, RoadClass::Local, B.localWidth);
             if (!runs.empty()) levels.push_back(runs);
         }
-        // the ramps: each shelf's longest street down to the next one's, from BOTH its ends to the nearest end below --
-        // straight down the bank, a 2 m overshoot each end for the planariser's T. A ladder: a shelf's street open at an
-        // end is a dead end the stub pruning eats whole (the first try, ramps at alternate ends, kept one block of six
-        // shelves), and the way up still turns at each end, shelf to shelf
+        // THE HAIRPINS: each shelf's longest street, at BOTH its ends, carried on round a U-TURN down to the end of the
+        // shelf street below -- a switchback bend, leaving one street's end along its own way and arriving along the
+        // other's, bulging just past the town's edge (onto the regrade's margin). A ladder: a shelf street open at an end
+        // is a dead end the stub pruning eats whole. Each bend is a cubic from end to end, its handles grown until it
+        // holds a car's grade (12 % over the step) and a turning radius of 15 m: straight ramps met the streets in sharp
+        // corners (Glenn, 2026-11-05: "the hairpins are undrivable. The corners are too sharp ... if the hairpins were
+        // more curved") and, run on the slant, crossed each other.
         int ramps = 0;
+        auto outward = [](const std::vector<Vec2>& run, bool atFront) {
+            const Vec2 a = atFront ? run[0] : run.back(), b = atFront ? run[std::min<std::size_t>(3, run.size() - 1)] : run[run.size() - 1 - std::min<std::size_t>(3, run.size() - 1)];
+            const Vec2 d = a - b;
+            return d.length() > 1e-9 ? d * (1.0 / d.length()) : Vec2(1, 0);
+        };
         for (std::size_t L = 1; L < levels.size(); ++L) {
             const std::vector<Vec2>& up = levels[L].front();
             const std::vector<Vec2>& dn = levels[L - 1].front();
-            for (const Vec2& a : {up.front(), up.back()}) {
-                // DOWN THE BANK ON THE SLANT: to the point of the street below nearest the near end that is at least a
-                // car's grade away (9 % over the step, and the two junctions' flats) -- straight down, an 8 m step came
-                // out at 28 % (Glenn, 2026-11-05: "the road where I'm at is too steep for my car to go up")
-                const Real need = step / 0.09 + 30.0;
-                const Vec2 nearEnd = (dn.front() - a).length() < (dn.back() - a).length() ? dn.front() : dn.back();
-                Vec2 b = nearEnd;
-                Real bd = 1e30;
-                for (const Vec2& q : dn) {
-                    const Real dq = (q - a).length();
-                    if (dq >= need && (q - nearEnd).length() < bd) { bd = (q - nearEnd).length(); b = q; }
+            if (up.size() < 4 || dn.size() < 4) continue;
+            for (const bool front : {true, false}) {
+                // (each end's way leant out from the town's middle: a contour meets the town's edge on the slant, and
+                // along its own way alone the bend kinked where it left the street -- 6-10 m radii)
+                auto lean = [&](const Vec2& end, const Vec2& way) {
+                    const Vec2 radial = end - c, w = way + (radial.length() > 1e-9 ? radial * (1.5 / radial.length()) : Vec2(0, 0));
+                    return w.length() > 1e-9 ? w * (1.0 / w.length()) : way;
+                };
+                const Vec2 a = front ? up.front() : up.back(), ta = lean(a, outward(up, front));
+                const bool dnFront = (dn.front() - a).length() < (dn.back() - a).length();
+                const Vec2 b = dnFront ? dn.front() : dn.back(), tb = lean(b, outward(dn, dnFront));
+                const Real chord = (b - a).length();
+                if (chord < 15.0 || chord > 200.0) continue;
+                std::vector<Vec2> best;
+                for (const Real kScale : {0.7, 0.9, 1.2, 1.6}) {
+                    const Real k = std::max(Real(20), chord * kScale);
+                    const Vec2 p1 = a + ta * k, p2 = b + tb * k;
+                    std::vector<Vec2> pts;
+                    for (int q = 0; q <= 48; ++q) {
+                        const Real t = q / 48.0, v = 1 - t;
+                        pts.push_back(a * (v * v * v) + p1 * (3 * v * v * t) + p2 * (3 * v * t * t) + b * (t * t * t));
+                    }
+                    Real len = 0, tightest = 1e30;
+                    for (std::size_t q = 1; q < pts.size(); ++q) len += (pts[q] - pts[q - 1]).length();
+                    for (std::size_t q = 1; q + 1 < pts.size(); ++q) {   // the circle through three samples
+                        const Vec2 e1 = pts[q] - pts[q - 1], e2 = pts[q + 1] - pts[q];
+                        const Real cr = std::fabs(e1.x * e2.y - e1.y * e2.x);
+                        if (cr > 1e-9) tightest = std::min(tightest, e1.length() * e2.length() * (pts[q + 1] - pts[q - 1]).length() / (2 * cr));
+                    }
+                    if (std::getenv("RT_PLAN_WHY"))
+                        std::printf("[plan] terraces: hairpin (%.0f, %.0f) -> (%.0f, %.0f): %.0f m, %.1f %%, radius %.0f m\n", a.x, a.y, b.x, b.y, len,
+                                    100.0 * step / len, tightest);
+                    if (step / len <= 0.12 && tightest >= 15.0) { best = pts; break; }
                 }
-                const Real d = (b - a).length();
-                if (std::getenv("RT_PLAN_WHY")) std::printf("[plan] terraces: ramp (%.0f, %.0f) -> (%.0f, %.0f), %.0f m\n", a.x, a.y, b.x, b.y, d);
-                if (d < need - 1.0 || d > need + 120.0) continue;
-                const Vec2 u = (b - a) * (1.0 / d);
-                std::vector<Vec2> pts;
-                for (Real t = -2.0; t < d + 2.0; t += 10.0) pts.push_back(a + u * t);
-                pts.push_back(b + u * 2.0);
-                add(pts, RoadClass::Local, B.localWidth);
+                if (best.empty()) continue;
+                add(best, RoadClass::Local, B.localWidth);
                 ++ramps;
             }
         }
@@ -2864,6 +2888,24 @@ CityPlan generatePlan(const Brief& B) {
             }
             return false;
         });
+    }
+    // FOOTWAYS THAT LAND (a hill town's stairs, ADR-0326): each end on a street the plan KEPT -- the pruning above took
+    // streets a stair was laid to, and it stood ending in the air (Glenn, 2026-11-05: "some of them just end in the
+    // sky which isn't useful")
+    if (!plan.footways.empty()) {
+        auto onStreet = [&](const Vec2& p) {
+            for (const RoadEdge& e : plan.streets.edges)
+                if (distToSegment(p, plan.streets.nodes[static_cast<std::size_t>(e.a)].pos, plan.streets.nodes[static_cast<std::size_t>(e.b)].pos) <
+                    e.width * 0.5 + 1.5)
+                    return true;
+            return false;
+        };
+        const std::size_t before = plan.footways.size();
+        plan.footways.erase(std::remove_if(plan.footways.begin(), plan.footways.end(),
+                                           [&](const std::vector<Vec2>& f) { return f.size() < 2 || !onStreet(f.front()) || !onStreet(f.back()); }),
+                            plan.footways.end());
+        if (std::getenv("RT_PLAN_WHY"))
+            std::printf("[plan] footways: %zu of %zu land on a street both ends\n", plan.footways.size(), before);
     }
     // Interchanges: where the ring crosses an arterial (a spoke).
     for (const RoadEdge& e : plan.streets.edges) {
