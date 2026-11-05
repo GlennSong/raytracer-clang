@@ -53,6 +53,10 @@ struct SettlementKind {
     double coreBlock[2] = {94.0, 64.0}, midtownBlock[2] = {158.0, 108.0}, warp = 10.0;
     double ringSpacing = 120.0;
     int spokes = 6;
+    // ITS LAYOUT (a place not a strip): "grown" -- grown over its land to its area and laid out by depth (the grid, the
+    // rings, the spokes); "terraces" -- a hill town, a street along the back of each shelf its regrade cut (regradeTerrace
+    // apart), ramps between them (city_plan.cpp world.terraces, ADR-0326)
+    std::string layout = "grown";
     // A STRIP (a beach town; ~/.claude/plans/beach-town.md): laid along the road it grew from instead of grown over its
     // land -- its spine `stripLength` of the coast road, the seafront street; `stripRows` streets behind it every
     // `stripRow` m inland; cross streets every `stripCross`; its limits `stripSea` out over the spine's sea side.

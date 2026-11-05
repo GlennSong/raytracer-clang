@@ -537,6 +537,12 @@ json islandSiteBrief(const IslandWorld& w, int site) {
         // a street may be as steep as a hill town's (15%); the growth prefers the flat ground anyway
         {"land", {{"minHeight", 3.0}, {"maxSlope", 0.15}, {"shape", true}, {"area", area}, {"spokeSpacing", k.spokeSpacing}}},
     };
+    // A HILL TOWN (layout "terraces"): its streets along the shelves its regrade cut, inside its disc
+    // (its banks are the regrade's, on purpose: steep is not "off the land" there, and it is not grown over its land)
+    if (k.layout == "terraces") {
+        world["terraces"] = {{"radius", s.radius}, {"step", k.regradeTerrace}};
+        world["land"] = {{"minHeight", 3.0}, {"maxSlope", 1.0}};
+    }
     // A STRIP town (a beach town): laid along its spine (city_plan.cpp world.strip), on its land's mask but not grown
     // over it; its square is room for the strip
     if (k.strip && s.spine.size() >= 2) {

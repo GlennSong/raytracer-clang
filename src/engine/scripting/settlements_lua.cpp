@@ -61,6 +61,7 @@ bool loadSettlementCatalog(ScriptVM& vm, SettlementCatalog& out, std::string* er
         k.signedFar = boolField(L, t, "signed_far", k.signedFar);
         if (const std::string ls = strField(L, t, "limit_sign"); !ls.empty()) k.limitSign = ls;
         if (const std::string nm = strField(L, t, "naming"); !nm.empty()) k.naming = nm;
+        if (const std::string ly = strField(L, t, "layout"); !ly.empty()) k.layout = ly;
         lua_getfield(L, t, "brief");
         if (lua_istable(L, -1)) {
             const int b = lua_gettop(L);

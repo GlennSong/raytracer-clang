@@ -36,6 +36,8 @@ std::string SettlementCatalog::check() const {
         if (k.naming != "city" && k.naming != "town" && k.naming != "mountain") return k.name + ": naming is city, town or mountain";
         if (k.strip && (k.stripLength < 200.0 || k.stripRows < 1 || k.stripRow < 40.0 || k.stripCross < 40.0))
             return k.name + ".strip: length >= 200, rows >= 1, row and cross >= 40 (m)";
+        if (k.layout != "grown" && k.layout != "terraces") return k.name + ".layout is grown or terraces";
+        if (k.layout == "terraces" && !(k.regrade && k.regradeTerrace > 0)) return k.name + ": a terraced layout needs regrade.terrace";
         if (k.strip && k.stripAlong != "coast" && k.stripAlong != "high") return k.name + ".strip.along is coast or high";
         if (k.strip && k.stripMain != "arterial" && k.stripMain != "collector" && k.stripMain != "local")
             return k.name + ".strip.main is arterial, collector or local";
@@ -54,7 +56,7 @@ std::string SettlementCatalog::describe() const {
           << k.busStops << " signed=" << k.signedFar << " limit=" << k.limitSign << " naming=" << k.naming << " brief=" << k.briefPrefix
           << " " << k.areaScale << "/" << k.sizeMin << "/" << k.spokeSpacing << " core=" << k.coreBlock[0] << "x" << k.coreBlock[1]
           << " midtown=" << k.midtownBlock[0] << "x" << k.midtownBlock[1] << " warp=" << k.warp << " rings=" << k.ringSpacing
-          << " spokes=" << k.spokes << " strip=" << k.strip << "/" << k.stripLength << "/" << k.stripRows << "x" << k.stripRow << "/"
+          << " spokes=" << k.spokes << " layout=" << k.layout << " strip=" << k.strip << "/" << k.stripLength << "/" << k.stripRows << "x" << k.stripRow << "/"
           << k.stripCross << "/" << k.stripSea << "/" << k.stripPromenade << "/" << k.stripAlong << "/" << k.stripBoth << "/" << k.stripMain << " regrade=" << k.regrade
           << "/" << k.regradeBlur << "/" << k.regradeMaxSlope << "/" << k.regradeTerrace << "/" << k.regradeBank << "/" << k.regradeFeather << "/"
           << k.regradeMargin << " reach=" << k.hubReach << " civic=" << k.civic << " landmarks=";
@@ -148,8 +150,15 @@ SettlementCatalog defaultSettlements() {
     ft.busRoutes = 1; ft.busStops = 6;
     ft.briefPrefix = "foothill_town_";
     ft.sizeMin = 400.0; ft.spokes = 5;
+    ft.layout = "terraces";   // a hill town on its shelves (Glenn: "towns with terraces")
     ft.regrade = true;
-    ft.regradeMaxSlope = 0.10; ft.regradeFeather = 120.0; ft.regradeMargin = 80.0;
+    ft.regradeMaxSlope = 0.10; ft.regradeTerrace = 6.0; ft.regradeBank = 0.3; ft.regradeFeather = 120.0; ft.regradeMargin = 80.0;
+    // a hill town's own: two to four storeys, shops and cafes in its middle, houses and rows on its shelves (the town
+    // ladders built it of city walk-ups six to eight storeys high)
+    ft.mixes["commercial"] = {{"brick_shop", 22}, {"oldtown_cafe", 16}, {"corner_shop", 14}, {"walkup_homes", 16}, {"rowhouses", 14},
+                              {"terrace_condo", 10}, {"plaza", 4}, {"pocket_park", 4}};
+    ft.mixes["residential"] = {{"rowhouses", 22}, {"cottage", 18}, {"walkup_homes", 14}, {"duplex", 12}, {"yard_house", 12},
+                               {"bungalow", 10}, {"garden_condo", 8}, {"pocket_park", 4}};
     ft.rgb[0] = 0.55f; ft.rgb[1] = 0.40f; ft.rgb[2] = 0.20f;
     c.kinds.push_back(ft);
 

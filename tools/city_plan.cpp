@@ -400,7 +400,7 @@ int main(int argc, char** argv) {
                     // town's blocks on the raw slope, empty
                     engine::IslandSite& site = w.sites[static_cast<std::size_t>(k)];
                     const engine::SettlementKind& sk = w.kinds.of(site.kind);
-                    if (sk.regrade && !sk.strip) {
+                    if (sk.regrade && !sk.strip && sk.layout == "grown") {
                         const CityPlan dry = generatePlan(briefFromJson(engine::islandSiteBrief(w, k)));
                         for (const std::vector<engine::Vec2>& ring : dry.limits) {
                             std::vector<engine::Vec2> grown;
@@ -635,13 +635,8 @@ int main(int argc, char** argv) {
                     }
                     if (!lim.empty()) hub["limits"] = lim;
                 }
-                // a STRIP town's centre is its seafront: a line hub of its reach, with the kind's own mixes
-                if (sk.strip && w.sites[k].spine.size() >= 2) {
-                    nlohmann::json line = nlohmann::json::array();
-                    for (const engine::Vec2& q : w.sites[k].spine) line.push_back({q.x, q.y});
-                    hub["line"] = line;
-                    hub["beach"] = {w.sites[k].beach.x, w.sites[k].beach.y};
-                    if (sk.hubReach > 0) hub["radius"] = sk.hubReach;
+                // the kind's own mixes, any kind that has them (a beach town's, a hill town's)
+                {
                     nlohmann::json mixes = nlohmann::json::object();
                     for (const auto& [d, es] : sk.mixes) {
                         nlohmann::json arr = nlohmann::json::array();
@@ -649,6 +644,14 @@ int main(int argc, char** argv) {
                         mixes[d] = arr;
                     }
                     if (!mixes.empty()) hub["mixes"] = mixes;
+                }
+                // a STRIP town's centre is its seafront: a line hub of its reach
+                if (sk.strip && w.sites[k].spine.size() >= 2) {
+                    nlohmann::json line = nlohmann::json::array();
+                    for (const engine::Vec2& q : w.sites[k].spine) line.push_back({q.x, q.y});
+                    hub["line"] = line;
+                    hub["beach"] = {w.sites[k].beach.x, w.sites[k].beach.y};
+                    if (sk.hubReach > 0) hub["radius"] = sk.hubReach;
                     // THE BEACH'S CAR PARKS (Glenn: "a parking lot so that people visiting the beach can park"): the first
                     // and last blocks of the beachfront row, between the seafront and the promenade, where the visitors
                     // come in off the coast road -- the plan's own blocks (a point placed by the strip's spacing missed

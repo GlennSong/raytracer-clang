@@ -19,6 +19,9 @@
 --   signed_far    = bool                  named on the island's distance and control-city signs
 --   limit_sign    = "TOWN LIMIT"
 --   naming        = "city" | "town" | "mountain"   how place_names names it
+--   layout        = "grown" | "terraces"   (not a strip) grown over its land by depth, the default; or a HILL TOWN: a
+--                                       street along the back of each shelf its regrade cut, ramps between (needs
+--                                       regrade.terrace)
 --   brief = { prefix, area_scale, size_min, spoke_spacing, core_block = { l, s }, midtown_block = { l, s }, warp,
 --             ring_spacing, spokes }      its street plan (island_world.cpp islandSiteBrief)
 --   strip = { length, rows, row, cross, sea, promenade }   a STRIP town, laid along the road it grew from (a beach
@@ -132,8 +135,17 @@ settlements = {
     high_road = true,
     links = { 2, 300 },
     buses = { 1, 6 },
+    layout = "terraces",   -- a hill town on its shelves (Glenn: "towns with terraces")
     brief = { prefix = "foothill_town_", size_min = 400, spokes = 5 },
-    regrade = { max_slope = 0.10, feather = 120, margin = 80 },
+    -- a hill town's own: two to four storeys, shops and cafes in its middle, houses and rows on its shelves (the town
+    -- ladders built it of city walk-ups six to eight storeys high)
+    mixes = {
+      commercial = { { "brick_shop", 22 }, { "oldtown_cafe", 16 }, { "corner_shop", 14 }, { "walkup_homes", 16 }, { "rowhouses", 14 },
+                     { "terrace_condo", 10 }, { "plaza", 4 }, { "pocket_park", 4 } },
+      residential = { { "rowhouses", 22 }, { "cottage", 18 }, { "walkup_homes", 14 }, { "duplex", 12 }, { "yard_house", 12 },
+                      { "bungalow", 10 }, { "garden_condo", 8 }, { "pocket_park", 4 } },
+    },
+    regrade = { max_slope = 0.10, terrace = 6, bank = 0.3, feather = 120, margin = 80 },
     map = { rgb = { 0.55, 0.40, 0.20 } },
   },
 

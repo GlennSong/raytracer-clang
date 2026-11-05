@@ -14906,3 +14906,25 @@ needs to be more balance ... Especially the motorcycle."
   arterial; a place with no arterial offers all its junctions to the roads that run into it.
 - Tests: the wall test now keeps every rider in at 50 km/h, throws a bike at 60, a convertible at 75, a closed car only
   through the windscreen at 120, and a rule of its own moves the line.
+
+## ADR-0326 — Terraced hill towns
+
+Glenn, 2026-11-04: "It would be interesting to see something more interesting on the mountain"; then "I'd like to have
+towns with terraces and other towns with winding roads".
+
+**Decision.**
+- A kind's LAYOUT is data (settlements.lua `layout`): "grown" (as before) or "terraces". The foothill town is terraced: its
+  regrade cuts shelves (`terrace = 6`, `bank = 0.3`), and its brief carries `world.terraces` (radius, step) with a land
+  rule that counts its banks as land.
+- THE LAYOUT (city_plan.cpp): on each shelf, a street along its BACK -- the contour where the bank above starts (step x k,
+  just over), set down the slope by the street's half width and sidewalk, so the carriageway stands on the flat -- clipped
+  to the town's disc. RAMPS from both ends of each shelf's longest street down to the next (a ladder: a shelf street open
+  at an end was a dead end the pruning ate whole). LANES DOWN every 140 m along each street to the nearest street below:
+  the shelves' long blocks cut into blocks, the shelves' other pieces joined to the town. Limits: the disc.
+- `dropHangingLoops` never drops the LARGEST block: a terraced town's streets are one block, and one stub off it read as
+  "the whole town hangs off one junction" (every town planned before had a larger network round its loops).
+- A kind's own MIXES reach the level for any kind (city_plan wrote them for strips only); the foothill town's are two to
+  four storeys -- shops, cafes, rowhouses, cottages -- not the town ladders' walk-ups.
+- Kingswood (candidate A): 6 shelves 103-139 m, 18 blocks, ~154 buildings, one network.
+
+**Next.** A steeper site shows the shelves (A rises 36 m across its town); the WINDING layout.

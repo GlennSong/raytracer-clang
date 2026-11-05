@@ -688,7 +688,13 @@ std::vector<char> findHangingLoopEdges(const RoadGraph& g) {
     }
     // the root of a DFS tree with more than one child is an articulation point too (set above)
     std::vector<char> drop(g.edges.size(), 0);
-    for (const std::vector<int>& c : comps) {
+    // (the largest block is the network itself, never a loop hanging off it: a terraced town's streets are ONE block,
+    // and a single stub off it read as "the whole town hangs off one junction", ADR-0326)
+    std::size_t largest = 0;
+    for (std::size_t k = 1; k < comps.size(); ++k) if (comps[k].size() > comps[largest].size()) largest = k;
+    for (std::size_t ci = 0; ci < comps.size(); ++ci) {
+        const std::vector<int>& c = comps[ci];
+        if (ci == largest) continue;
         if (c.size() < 2) continue;   // a bridge, not a cycle
         std::vector<int> vs;
         for (int e : c) { vs.push_back(g.edges[static_cast<std::size_t>(e)].a); vs.push_back(g.edges[static_cast<std::size_t>(e)].b); }
@@ -1826,6 +1832,121 @@ CityPlan generatePlan(const Brief& B) {
         plan.limits = {outline};
         if (std::getenv("RT_PLAN_WHY"))
             std::printf("[plan] strip: %.0f m of seafront, %d rows, %d cross streets\n", ss.back(), rows, nCross);
+    }
+    // --- TERRACES (world.terraces; ~/.claude/plans/mountain-towns.md, ADR-0326): a HILL TOWN on the shelves its regrade cut
+    // (Glenn, 2026-11-04: "towns with terraces"). Each shelf's street runs along its BACK, against the bank of the shelf
+    // above -- the contour where the bank starts (`step` x k, just over), set down the slope off it by the street's half
+    // width and its sidewalk, so the carriageway stands on the flat -- and the shelf's lots look out over the open side.
+    // RAMPS join each street to the one below at alternate ends, so the way up zigzags shelf to shelf. Its limits are
+    // its disc.
+    const nlohmann::json terrSpec = B.world.is_object() ? B.world.value("terraces", nlohmann::json()) : nlohmann::json();
+    if (terrSpec.is_object() && !(stripSpec.is_object() && stripSpec.contains("spine"))) {
+        roads.clear();
+        const Vec2 c = B.center;
+        const Real R = terrSpec.value("radius", 300.0), step = terrSpec.value("step", 6.0);
+        const HeightField g = sceneGround(B);
+        const Real cell = 4.0;
+        const int n = static_cast<int>(std::ceil(2.0 * R / cell)) + 1;
+        const Vec2 origin = c - Vec2(R, R);
+        std::vector<float> field(static_cast<std::size_t>(n) * n);
+        Real lo = 1e30, hi = -1e30;
+        for (int j = 0; j < n; ++j)
+            for (int i = 0; i < n; ++i) {
+                const Vec2 q = origin + Vec2(i * cell, j * cell);
+                const Real h = g(q.x, q.y);
+                field[static_cast<std::size_t>(j) * n + i] = static_cast<float>(h);
+                if ((q - c).length() <= R) { lo = std::min(lo, h); hi = std::max(hi, h); }
+            }
+        auto add = [&](std::vector<Vec2> pts, RoadClass k, Real w) {
+            Polyline p; p.klass = k; p.width = w; p.pts = std::move(pts);
+            roads.push_back(std::move(p));
+        };
+        auto downhill = [&](const Vec2& q) {
+            const Real d = 6.0;
+            const Vec2 gr(g(q.x + d, q.y) - g(q.x - d, q.y), g(q.x, q.y + d) - g(q.x, q.y - d));
+            return gr.length() > 1e-9 ? gr * Real(-1.0 / gr.length()) : Vec2(0, 0);
+        };
+        const Real off = B.localWidth * 0.5 + B.sidewalk + 1.0, inside = R - 15.0;
+        // each shelf's street: its runs inside the disc, at least 100 m long, longest first
+        std::vector<std::vector<std::vector<Vec2>>> levels;
+        for (Real k = std::ceil(lo / step); k * step <= hi; k += 1) {
+            std::vector<std::vector<Vec2>> runs;
+            for (const std::vector<Vec2>& line : isoLines(field, n, origin, cell, k * step + 0.25, 10.0, 80.0, 20.0)) {
+                std::vector<Vec2> run;
+                auto flush = [&] {
+                    Real len = 0;
+                    for (std::size_t i = 1; i < run.size(); ++i) len += (run[i] - run[i - 1]).length();
+                    if (len >= 100.0) runs.push_back(run);
+                    run.clear();
+                };
+                for (const Vec2& q : line) {
+                    const Vec2 p = q + downhill(q) * off;
+                    if ((p - c).length() <= inside) run.push_back(p);
+                    else flush();
+                }
+                flush();
+            }
+            std::sort(runs.begin(), runs.end(), [](const std::vector<Vec2>& a, const std::vector<Vec2>& b) { return a.size() > b.size(); });
+            if (std::getenv("RT_PLAN_WHY"))
+                for (const std::vector<Vec2>& r : runs)
+                    std::printf("[plan] terraces: shelf %.0f m: a street of %zu points (%.0f, %.0f) .. (%.0f, %.0f)\n", k * step, r.size(), r.front().x, r.front().y,
+                                r.back().x, r.back().y);
+            for (const std::vector<Vec2>& r : runs) add(r, RoadClass::Local, B.localWidth);
+            if (!runs.empty()) levels.push_back(runs);
+        }
+        // the ramps: each shelf's longest street down to the next one's, from BOTH its ends to the nearest end below --
+        // straight down the bank, a 2 m overshoot each end for the planariser's T. A ladder: a shelf's street open at an
+        // end is a dead end the stub pruning eats whole (the first try, ramps at alternate ends, kept one block of six
+        // shelves), and the way up still turns at each end, shelf to shelf
+        int ramps = 0;
+        for (std::size_t L = 1; L < levels.size(); ++L) {
+            const std::vector<Vec2>& up = levels[L].front();
+            const std::vector<Vec2>& dn = levels[L - 1].front();
+            for (const Vec2& a : {up.front(), up.back()}) {
+                const Vec2 b = (dn.front() - a).length() < (dn.back() - a).length() ? dn.front() : dn.back();
+                const Real d = (b - a).length();
+                if (std::getenv("RT_PLAN_WHY")) std::printf("[plan] terraces: ramp (%.0f, %.0f) -> (%.0f, %.0f), %.0f m\n", a.x, a.y, b.x, b.y, d);
+                if (d < 20.0 || d > 200.0) continue;
+                const Vec2 u = (b - a) * (1.0 / d);
+                std::vector<Vec2> pts;
+                for (Real t = -2.0; t < d + 2.0; t += 10.0) pts.push_back(a + u * t);
+                pts.push_back(b + u * 2.0);
+                add(pts, RoadClass::Local, B.localWidth);
+                ++ramps;
+            }
+        }
+        // THE LANES DOWN: every `cross` m along each shelf's streets, a lane straight down to the nearest point of a street
+        // on the shelf below -- what cuts a shelf's long block into blocks, and joins a shelf's other pieces to the town
+        const Real cross = terrSpec.value("cross", 140.0);
+        int lanes = 0;
+        for (std::size_t L = 1; L < levels.size(); ++L)
+            for (const std::vector<Vec2>& run : levels[L]) {
+                Real along = cross * 0.5;
+                for (std::size_t i = 1; i < run.size(); ++i) {
+                    along += (run[i] - run[i - 1]).length();
+                    if (along < cross || i + 1 >= run.size()) continue;
+                    along = 0;
+                    const Vec2 p = run[i];
+                    Vec2 best = p;
+                    Real bd = 1e30;
+                    for (const std::vector<Vec2>& below : levels[L - 1])
+                        for (const Vec2& q : below) if ((q - p).length() < bd) { bd = (q - p).length(); best = q; }
+                    if (bd < 25.0 || bd > 160.0) continue;
+                    const Vec2 u = (best - p) * (1.0 / bd);
+                    std::vector<Vec2> pts;
+                    for (Real t = -2.0; t < bd + 2.0; t += 10.0) pts.push_back(p + u * t);
+                    pts.push_back(best + u * 2.0);
+                    add(pts, RoadClass::Local, B.localWidth);
+                    ++lanes;
+                }
+            }
+        ramps += lanes;
+        std::vector<Vec2> disc;
+        for (int q = 0; q < 48; ++q) disc.push_back(c + Vec2(std::cos(2.0 * PI * q / 48.0), std::sin(2.0 * PI * q / 48.0)) * R);
+        plan.limits = {disc};
+        if (std::getenv("RT_PLAN_WHY"))
+            std::printf("[plan] terraces: %zu shelves (%.0f .. %.0f m, every %.0f m), %zu streets, %d ramps and lanes down\n", levels.size(), lo, hi, step,
+                        roads.size() - static_cast<std::size_t>(ramps), ramps);
     }
     // --- the towns at the expressways' far ends ---
     // A site: the farthest point along the expressway's line, past the city by `gap` and inside the
