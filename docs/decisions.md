@@ -15093,3 +15093,56 @@ lay under the beach and never showed.
   level.
 - Metal (#71): it reads the signed values safely (it saturates the depth and tests shore > 0) but has no surf.
 - A carved river-mouth channel's straight depth contours give straight crests.
+
+## ADR-0332 — The far clouds: each pixel's own march offset, inside every step; the cloud lab (#187)
+
+**Context.** Glenn, 2026-11-05: "the clouds look blocky". Far banks came out in shelves, stair-steps and plates. A
+cloud lab was built to test fixes on fixed skies:
+- `assets/levels/cloud_lab.json`: terrain_lab's island under island_8_nature's sky, without forest or grass, so it loads
+  in seconds.
+- `tools/cloud_lab.py`: ten fixed poses (near, mid, horizon, sunward, inside the deck, above it, the far deck to the four
+  quarters, and the island's beach_curve camera). Each pose gives a PNG and its RT_GPU_TIMES line. `--against` builds
+  side-by-side A/B sheets.
+- The wind is pinned by the new `RT_WIND_TIME=<s>` (vulkan_renderer endFrame), so every run draws the same sky.
+
+**Ruled out, each by an A/B in the lab or on the island** (each change reverted; none moved the blocks):
+- quintic-smoothed base-noise texels;
+- dropping the Worley remap;
+- forcing the weather to full;
+- detail noise off (blockier);
+- 384 steps on the island view;
+- a converged history (30 frames);
+- a band-limited base bake (no octave under 4 texels; Hillaire's TileableVolumeNoise advice; kept out, unproven);
+- mipmapped noise read by distance (Nubis-style LOD). Even with each level's contrast restretched, the far deck
+  emptied: the coverage cut lives on the noise's extremes;
+- extra steps for long rays;
+- a smoothed weather read.
+
+**Found** (lab debug outputs, unlit and sun-only): the far banks' outlines were notched row by row. A ray near the
+horizon crosses 10–30 km of the deck, and once its fine steps are spent its steps grow to hundreds of metres. The start
+offset (a 2×2 pattern plus a quarter-step hash) moved only the FIRST sample, by part of a 58 m step. So every pixel
+sampled the far deck at nearly the same distances, and each screen row, entering the deck a little further on, caught
+cloud edges at different places. At 400 steps the outlines came out round. That proved the cause, but it cost 1.2 ms.
+
+**Decision.**
+- Each pixel takes its own start offset from a hash, re-rolled every frame (`u.frame.x`).
+- Each sample sits at that offset WITHIN ITS OWN STEP: `t + (stepLen - ds) · jitter`.
+- The history (ADR-0328) averages the coarse steps to the right answer.
+- `RT_CLOUD_JITTER=coherent` brings back the old pattern, for the A/B (`u.detail.y`).
+- The noise reads are explicit `textureLod(…, 0)`: the march's derivatives are undefined inside its loops.
+
+**Measured** (lab, 17:12, the clouds pass):
+- The far views' outlines go from notched to rounded.
+- 0.23 → 0.23 ms overhead; 0.47 → 0.65 mid; 0.53 → 0.54 horizon; 0.38 → 0.44 far_s; 0.46 → 0.55 far_e.
+
+**Not done: the island's own blocks.**
+- At island_8_nature's beach camera, with the wind pinned, the lab draws the same clouds soft and wispy, and the
+  island draws them as coarse cubes with no detail.
+- On the island side, measured to be no different:
+  - every cloud uniform, identical (logged);
+  - no scene depth behind the sky;
+  - the history working (the lab without it is noisy, not blocky);
+  - the weather the same, and off doesn't help;
+  - GPU memory 2.6 / 10 GB.
+- Something the island level loads changes how the clouds read their noise. Next: bisect the island's blocks into lab
+  copies.

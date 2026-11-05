@@ -24,7 +24,7 @@ layout(set = 0, binding = 0) uniform CloudUniforms {
     vec4 layer;           // x bottom, y top, z planetRadius, w domainMode
     vec4 params;          // x coverage, y densityScale, z noiseScale, w windSpeed
     vec4 march;           // x viewSteps, y lightSteps, z phaseG, w farDistance
-    vec4 detail;          // x detailStrength (edge-erosion depth), yzw unused
+    vec4 detail;          // x detailStrength (edge-erosion depth), y 1: the old coherent march offset (the A/B), zw unused
     mat4 prevViewProjection;   // last frame's (clouds_resolve.frag: the history's reprojection)
     vec4 frame;                // x this frame's dither offset in [0,1), y history weight (0: reset), zw unused
 } u;
@@ -73,7 +73,7 @@ vec3 clWind() { return vec3(u.params.w * u.skyAmbient.w, 0.0, 0.0); }
 
 float clWeather(vec2 xz) {
     vec2 q = (xz + clWind().xz) * (u.params.z * 0.035);
-    return texture(baseNoise, vec3(q.x, 0.37, q.y)).r;
+    return textureLod(baseNoise, vec3(q.x, 0.37, q.y), 0.0).r;   // (explicit: inside the march's loops the derivatives are undefined)
 }
 
 // Coverage after the weather map: fair skies carve banks with real gaps,
@@ -97,14 +97,14 @@ float clDensity(vec3 p, float detailFade) {
     vec3 wind = clWind();
     vec3 q = (p + wind) * u.params.z;
     // Base shape: R = perlin-worley, GBA = worley fBm at rising frequency.
-    vec4 nse = texture(baseNoise, q * 0.25);
+    vec4 nse = textureLod(baseNoise, q * 0.25, 0.0);   // (explicit: one level, and the march's derivatives are undefined)
     float lowFbm = nse.g * 0.625 + nse.b * 0.25 + nse.a * 0.125;
     float base = clamp(clRemap(nse.r, lowFbm - 1.0, 1.0, 0.0, 1.0), 0.0, 1.0);
     float cov = clLocalCoverage(clWeather(p.xz));
     float d = clamp((base - (1.0 - cov)) / max(1e-3, cov), 0.0, 1.0);
     // Edge erosion: subtract high-frequency worley scaled by (1 - d), so
     // interiors stay solid and edges wisp away.
-    vec3 det = texture(detailNoise, (q + wind * (0.08 * u.params.z) + vec3(0.0, 0.002 * u.skyAmbient.w * u.params.z, 0.0)) * 2.0).rgb;
+    vec3 det = textureLod(detailNoise, (q + wind * (0.08 * u.params.z) + vec3(0.0, 0.002 * u.skyAmbient.w * u.params.z, 0.0)) * 2.0, 0.0).rgb;
     float detailFbm = det.r * 0.625 + det.g * 0.25 + det.b * 0.125;
     d = clamp(d - detailFbm * u.detail.x * detailFade * (1.0 - d), 0.0, 1.0);
     return d * profile * u.params.y;
@@ -210,6 +210,16 @@ void main() {
     // averages the start offsets away instead of the pattern standing fixed on the screen -- where, as the camera moved,
     // it crawled across the clouds (#187: the sky's frame-to-frame noise p99 3.5 still, 13.5 moving 2 m a frame)
     float jitter = fract(clDither(gl_FragCoord.xy) + 0.25 * (float(hj & 0xFFFFu) / 65536.0) + u.frame.x);
+    // ...but now the history averages the march's noise away (ADR-0328), a coherent start offset is the wrong trade: whole
+    // rows of pixels sampled the deck at the same distances and the far banks showed the sample shells as horizontal
+    // shelves and stair-steps (ADR-0332; Glenn: "the clouds look blocky"). Each pixel takes its own offset, re-rolled
+    // every frame. (u.detail.y: 1 the old coherent pattern, the A/B: RT_CLOUD_JITTER=coherent)
+    if (u.detail.y < 0.5) {
+        uvec2 hq = uvec2(gl_FragCoord.xy);
+        uint hk = hq.x * 2654435761u ^ hq.y * 2246822519u ^ 374761393u;
+        hk = (hk ^ (hk >> 16)) * 0x7feb352du; hk = (hk ^ (hk >> 15)) * 0x846ca68bu; hk ^= hk >> 16;
+        jitter = fract(float(hk & 0xFFFFFFu) / 16777216.0 + u.frame.x);
+    }
     // (a hash, not IGN: IGN's structure runs ~15 px along x and barely changes along y, and with no
     // temporal accumulation to average it the sun march printed soft VERTICAL COLUMNS over every
     // distant mountain seen through thin cloud)
@@ -242,7 +252,10 @@ void main() {
         // before it, so far clouds ended along hard lines tracing the nearer ones'. Out of budget, steps coarsen.
         float leastStep = (t1 - t) / float(max(1, viewSteps - i));
         stepLen = max(stepLen, leastStep);
-        vec3 p = camPos + dir * t;
+        // (each sample at the ray's jitter WITHIN ITS OWN STEP, not only the first: out where the steps are hundreds of
+        // metres a start offset of part of the fine step left every pixel sampling the far deck at the same distances --
+        // the notched rows (ADR-0332). Re-rolled every frame, the history averages the coarse steps to the right answer.)
+        vec3 p = camPos + dir * (t + max(0.0, stepLen - ds) * (u.detail.y < 0.5 ? jitter : 0.0));
         // Detail falls away with distance — erosion finer than the pixel
         // footprint can only alias; far banks keep their SHAPE.
         float farFade = 1.0 - smoothstep(3500.0, 14000.0, t);

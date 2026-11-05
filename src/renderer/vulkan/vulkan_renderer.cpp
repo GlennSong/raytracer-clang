@@ -201,7 +201,7 @@ struct CloudUniformsGPU {
     float layer[4];           // x bottom, y top, z planetRadius, w domainMode
     float params[4];          // x coverage, y densityScale, z noiseScale, w wind
     float march[4];           // x viewSteps, y lightSteps, z phaseG, w farDistance
-    float detail[4];          // x detailStrength, yzw unused
+    float detail[4];          // x detailStrength, y 1: the old coherent march offset (the A/B), zw unused
     float prevViewProjection[16];   // last frame's (the history's reprojection, clouds_resolve.frag)
     float frame[4];                 // x dither offset in [0,1), y history weight (0: reset)
 };
@@ -6004,6 +6004,10 @@ void VulkanRenderer::Impl::drawFrame() {
         cu.march[2] = cp.phaseG;
         cu.march[3] = cp.farDistance;
         cu.detail[0] = cp.detailStrength;
+        // each pixel's own march offset, each sample at it within its own step (clouds.frag, ADR-0332);
+        // RT_CLOUD_JITTER=coherent the old 2x2 pattern and step-start samples (the A/B: the far banks notched row by row)
+        static const bool kCoherentJitter = [] { const char* e = std::getenv("RT_CLOUD_JITTER"); return e && std::string(e) == "coherent"; }();
+        cu.detail[1] = kCoherentJitter ? 1.0f : 0.0f;
         // THE HISTORY'S INPUTS: last frame's camera, and how much of the history to keep -- none on the first frame
         // after new targets or a jump (a teleport, a cut: over 50 m in a frame); RT_CLOUD_HISTORY=0 turns it off (the
         // A/B), any other number sets the weight (0.9: about ten frames' memory)
@@ -7494,6 +7498,9 @@ void VulkanRenderer::endFrame() {
     // vertex shader applies it per-instance from the model matrix base.
     float windTime = std::chrono::duration<float>(
                          std::chrono::steady_clock::now() - impl->windStart).count();
+    // RT_WIND_TIME=<s> pins it (the cloud lab, tools/cloud_lab.py: every run's clouds stand in the same place)
+    static const float kPinnedWind = [] { const char* e = std::getenv("RT_WIND_TIME"); return e ? static_cast<float>(std::atof(e)) : -1.0f; }();
+    if (kPinnedWind >= 0.0f) windTime = kPinnedWind;
     impl->cpuGlobals.wind1[0] = 0.85f;  impl->cpuGlobals.wind1[1] = 0.0f;
     impl->cpuGlobals.wind1[2] = 0.30f;  impl->cpuGlobals.wind1[3] = windTime;
     impl->cpuGlobals.wind2[0] = 1.6f;   // frequency
