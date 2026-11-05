@@ -48,6 +48,12 @@ json islandLanesScene(const IslandWorld& w, const std::vector<json>& placeScenes
         if (scene.contains("classes") && scene["classes"].contains(k) && !(scene["classes"][k].contains("edges") &&
                                                                            scene["classes"][k]["edges"].contains("at_grade")))
             scene["classes"][k]["edges"]["at_grade"] = {{"kind", "guardrail"}, {"min_drop", 2.5}};
+    // a place's footways (a hill town's lanes down, ADR-0326): the island's class table is the first place's, so a
+    // footway class any place uses is added to it
+    for (const json& ps : placeScenes)
+        if (ps.is_object() && ps.contains("classes") && ps["classes"].contains("footway") && scene.contains("classes") &&
+            !scene["classes"].contains("footway"))
+            scene["classes"]["footway"] = ps["classes"]["footway"];
     json edges = json::array();
     const bool windowed = o.windowHalf > 0.0;
     auto inWin = [&](const Vec2& p, double margin) {

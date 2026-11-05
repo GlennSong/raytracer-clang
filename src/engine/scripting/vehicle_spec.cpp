@@ -78,6 +78,7 @@ void readVehicleHandling(lua_State* L, int t, VehicleSpec& out) {
     lua_pop(L, 1);
     // AERO and GEARBOX
     c.dragArea = numField(L, t, "drag_area", c.dragArea);
+    c.downforce = numField(L, t, "downforce", c.downforce);
     c.shiftTime = numField(L, t, "shift_time", c.shiftTime);
     c.clutchReleaseTime = numField(L, t, "clutch_time", c.clutchReleaseTime);
     c.shiftLatency = numField(L, t, "shift_latency", c.shiftLatency);

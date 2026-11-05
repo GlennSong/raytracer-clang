@@ -1903,10 +1903,20 @@ CityPlan generatePlan(const Brief& B) {
             const std::vector<Vec2>& up = levels[L].front();
             const std::vector<Vec2>& dn = levels[L - 1].front();
             for (const Vec2& a : {up.front(), up.back()}) {
-                const Vec2 b = (dn.front() - a).length() < (dn.back() - a).length() ? dn.front() : dn.back();
+                // DOWN THE BANK ON THE SLANT: to the point of the street below nearest the near end that is at least a
+                // car's grade away (9 % over the step, and the two junctions' flats) -- straight down, an 8 m step came
+                // out at 28 % (Glenn, 2026-11-05: "the road where I'm at is too steep for my car to go up")
+                const Real need = step / 0.09 + 30.0;
+                const Vec2 nearEnd = (dn.front() - a).length() < (dn.back() - a).length() ? dn.front() : dn.back();
+                Vec2 b = nearEnd;
+                Real bd = 1e30;
+                for (const Vec2& q : dn) {
+                    const Real dq = (q - a).length();
+                    if (dq >= need && (q - nearEnd).length() < bd) { bd = (q - nearEnd).length(); b = q; }
+                }
                 const Real d = (b - a).length();
                 if (std::getenv("RT_PLAN_WHY")) std::printf("[plan] terraces: ramp (%.0f, %.0f) -> (%.0f, %.0f), %.0f m\n", a.x, a.y, b.x, b.y, d);
-                if (d < 20.0 || d > 200.0) continue;
+                if (d < need - 1.0 || d > need + 120.0) continue;
                 const Vec2 u = (b - a) * (1.0 / d);
                 std::vector<Vec2> pts;
                 for (Real t = -2.0; t < d + 2.0; t += 10.0) pts.push_back(a + u * t);
@@ -1915,8 +1925,10 @@ CityPlan generatePlan(const Brief& B) {
                 ++ramps;
             }
         }
-        // THE LANES DOWN: every `cross` m along each shelf's streets, a lane straight down to the nearest point of a street
-        // on the shelf below -- what cuts a shelf's long block into blocks, and joins a shelf's other pieces to the town
+        // THE LANES DOWN: every `cross` m along each shelf's streets, a FOOTWAY straight down to the nearest point of a street
+        // on the shelf below, stepped where it is steep (the builder's footway). As streets they crossed each bank at 28 %
+        // -- too steep to drive, and their sidewalks stood in flat slabs across the climbing road (Glenn: "this area is not
+        // really walkable or drivable")
         const Real cross = terrSpec.value("cross", 140.0);
         int lanes = 0;
         for (std::size_t L = 1; L < levels.size(); ++L)
@@ -1934,19 +1946,19 @@ CityPlan generatePlan(const Brief& B) {
                     if (bd < 25.0 || bd > 160.0) continue;
                     const Vec2 u = (best - p) * (1.0 / bd);
                     std::vector<Vec2> pts;
-                    for (Real t = -2.0; t < bd + 2.0; t += 10.0) pts.push_back(p + u * t);
-                    pts.push_back(best + u * 2.0);
-                    add(pts, RoadClass::Local, B.localWidth);
+                    for (Real t = 0.0; t < bd; t += 10.0) pts.push_back(p + u * t);
+                    pts.push_back(best);
+                    plan.footways.push_back(pts);
                     ++lanes;
                 }
             }
-        ramps += lanes;
+
         std::vector<Vec2> disc;
         for (int q = 0; q < 48; ++q) disc.push_back(c + Vec2(std::cos(2.0 * PI * q / 48.0), std::sin(2.0 * PI * q / 48.0)) * R);
         plan.limits = {disc};
         if (std::getenv("RT_PLAN_WHY"))
-            std::printf("[plan] terraces: %zu shelves (%.0f .. %.0f m, every %.0f m), %zu streets, %d ramps and lanes down\n", levels.size(), lo, hi, step,
-                        roads.size() - static_cast<std::size_t>(ramps), ramps);
+            std::printf("[plan] terraces: %zu shelves (%.0f .. %.0f m, every %.0f m), %zu streets, %d ramps, %d footways down\n", levels.size(), lo, hi, step,
+                        roads.size() - static_cast<std::size_t>(ramps), ramps, lanes);
     }
     // --- the towns at the expressways' far ends ---
     // A site: the farthest point along the expressway's line, past the city by `gap` and inside the

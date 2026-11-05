@@ -1046,6 +1046,7 @@ if(RT_ENABLE_PHYSICS)
         tests/test_driver_seat.cpp      # the player at the wheel: the jolt, the sway, the seated pose (ADR-0252)
         tests/test_two_wheelers.cpp
         tests/test_drift.cpp
+        tests/test_rollover.cpp         # every drivable car held at full lock: it may slide, not go over
         tests/test_driving_lab.cpp
         tests/test_vehicle_handling.cpp
         tests/test_vehicle_drivetrain.cpp

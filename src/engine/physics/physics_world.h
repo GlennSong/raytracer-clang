@@ -361,6 +361,11 @@ public:
         // ~0.65, a truck ~1.1). 0 keeps the old linear body damping -- which at motorway speed was ~4x a
         // real car's drag and left no true top speed (the freeway-lag diagnosis measured it).
         Real dragArea = 0.0;
+        // DOWNFORCE (Glenn, 2026-11-05: "the cars are also too light. They should hug the road a little more"): a push
+        // down the chassis' own up axis, in g at 100 km/h and growing with the square of the speed (capped at 1 g),
+        // while a wheel is on the ground -- a crest at speed no longer floats the car off its tyres. For play, not
+        // aerodynamics. 0 = none (the default; the recipes set it).
+        Real downforce = 0.0;
         // GEARBOX: Jolt's defaults cut the drive for 0.5 s per shift plus 0.3 s of clutch and 0.5 s of
         // latency -- a stall every upshift. Quicker here; ratios empty = Jolt's five.
         Real shiftTime = 0.5;
@@ -447,6 +452,7 @@ private:
     void applyYawAssist(std::size_t index);
     void applyDrift(std::size_t index, float dt);
     void applyAeroDrag(std::size_t index);
+    void applyDownforce(std::size_t index);
     void applyTractionSplit(std::size_t index);
 };
 

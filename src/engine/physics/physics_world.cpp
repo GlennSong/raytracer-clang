@@ -257,6 +257,8 @@ struct PhysicsWorld::Impl {
         std::vector<char> diffFront;   // per differential: a front axle's?
         float frontShare = 0.5f;
         float dragArea = 0.0f;         // Cd x A (m^2); > 0 applies quadratic aero drag each step
+        float downforce = 0.0f;        // g at 100 km/h (VehicleConfig::downforce)
+        float mass = 1500.0f;
         float centerLimitedSlip = 1.4f; // the coupling between axles in 4WD (open in 2WD)
         bool tractionSplit = false;     // VehicleConfig::tractionSplit
         float appliedShare = -1.0f;     // the front share the differentials carry this step
@@ -1164,6 +1166,8 @@ PhysicsWorld::VehicleId PhysicsWorld::addVehicle(const VehicleConfig& cfg,
     v.frontShare = share;
     v.centerLimitedSlip = cfg.centerLimitedSlip >= 1e29 ? FLT_MAX : static_cast<float>(cfg.centerLimitedSlip);
     v.dragArea = static_cast<float>(std::max(Real(0), cfg.dragArea));
+    v.downforce = static_cast<float>(std::max(Real(0), cfg.downforce));
+    v.mass = static_cast<float>(cfg.mass);
     v.tractionSplit = cfg.tractionSplit;
     v.appliedShare = share;
     for (const VehicleWheel& w : cfg.wheels) v.wheelRear.push_back(w.position.z < zMid ? 1 : 0);   // (the drift's)
@@ -1501,12 +1505,30 @@ void PhysicsWorld::applyAeroDrag(std::size_t index) {
     bi.AddForce(v.body, vel * (-0.5f * 1.225f * v.dragArea * speed));
 }
 
+// DOWNFORCE (VehicleConfig::downforce): mass x g x downforce x (v / 100 km/h)^2, capped at 1 g, down the chassis' up
+// axis while a wheel touches -- so it presses the tyres onto the road, never pulls a car off a wall it climbs.
+void PhysicsWorld::applyDownforce(std::size_t index) {
+    Impl::Vehicle& v = impl->vehicles[index];
+    if (v.downforce <= 0.0f || !v.constraint) return;
+    bool grounded = false;
+    for (const JPH::Wheel* w : v.constraint->GetWheels())
+        if (w->HasContact()) { grounded = true; break; }
+    if (!grounded) return;
+    JPH::BodyInterface& bi = impl->bodies();
+    const float speed = bi.GetLinearVelocity(v.body).Length();
+    const float g = std::min(1.0f, v.downforce * (speed / 27.78f) * (speed / 27.78f));
+    if (g <= 0.0f) return;
+    const JPH::Vec3 up = bi.GetRotation(v.body) * JPH::Vec3(0, 1, 0);
+    bi.AddForce(v.body, up * (-v.mass * 9.81f * g));
+}
+
 void PhysicsWorld::update(Real deltaTime, int collisionSteps) {
     if (impl) {
         for (std::size_t i = 0; i < impl->vehicles.size(); ++i) {
             applyDrift(i, static_cast<float>(deltaTime));
             if (!impl->vehicles[i].drifting) applyYawAssist(i);   // the slide is the drift's to hold
             applyAeroDrag(i);
+            applyDownforce(i);
             applyTractionSplit(i);
         }
         impl->physicsSystem.Update(static_cast<float>(deltaTime), collisionSteps,

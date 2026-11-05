@@ -805,16 +805,16 @@ std::vector<NamedMesh> buildMeshes(const Result& r) {
     const double layerLift[3] = {kSidewalkLift, 0.0, 0.10}, layerThick[3] = {kSidewalkThick, kShoulderThick, kMedianThick};
     std::vector<FlatMesh> layerMesh[3];
     for (int k = 0; k < 3; ++k) if (!layerRoadsOf[k].empty()) { const std::vector<double> band = layerBands(g, static_cast<LayerKind>(k)); layerMesh[k] = layerMeshes(g, H, *layerSet[k], layerRoadsOf[k], nullptr, &band); }
-    struct Drawn { Vec2 a, b, c; double za, zb, zc, thick; };
+    struct Drawn { Vec2 a, b, c; double za, zb, zc, thick; bool road; };
     std::vector<Drawn> drawn;
-    auto addDrawn = [&](const std::vector<DeckVertex>& v, const std::vector<std::array<int, 3>>& tris, double lift, double thick) {
+    auto addDrawn = [&](const std::vector<DeckVertex>& v, const std::vector<std::array<int, 3>>& tris, double lift, double thick, bool road) {
         for (const auto& t : tris) {
             const DeckVertex &A = v[static_cast<size_t>(t[0])], &B = v[static_cast<size_t>(t[1])], &C = v[static_cast<size_t>(t[2])];
-            drawn.push_back({A.xy, B.xy, C.xy, A.z + lift, B.z + lift, C.z + lift, thick});
+            drawn.push_back({A.xy, B.xy, C.xy, A.z + lift, B.z + lift, C.z + lift, thick, road});
         }
     };
-    for (const Surface& s : r.pavement.decks) addDrawn(s.verts, s.tris, 0.0, s.thick);
-    for (int k = 0; k < 3; ++k) for (const FlatMesh& m : layerMesh[k]) addDrawn(m.verts, m.tris, layerLift[k], layerThick[k]);
+    for (const Surface& s : r.pavement.decks) addDrawn(s.verts, s.tris, 0.0, s.thick, true);
+    for (int k = 0; k < 3; ++k) for (const FlatMesh& m : layerMesh[k]) addDrawn(m.verts, m.tris, layerLift[k], layerThick[k], k == 1);   // (a shoulder is road)
     constexpr double kDrawnCell = 4.0;
     auto drawnKey = [](long i, long j) { return (static_cast<long long>(i) << 32) ^ static_cast<long long>(static_cast<uint32_t>(j)); };
     std::unordered_map<long long, std::vector<uint32_t>> drawnGrid;
@@ -988,7 +988,7 @@ std::vector<NamedMesh> buildMeshes(const Result& r) {
         if (trackLane(r, static_cast<int>(li)) || footwayLane(r, static_cast<int>(li))) continue;   // a track is not painted, nor a path
         for (int side = 0; side < 2; ++side) {
             const std::vector<Vec2>& E = side == 0 ? l.left : l.right; std::vector<Vec2> pts; std::vector<double> z; std::vector<int> style;   // 0 edge, 1 lane, 2 centre
-            std::vector<double> Es = stations(E); int n = std::max(2, static_cast<int>(Es.back() / 4.0) + 1);
+            std::vector<double> Es = stations(E); int n = std::max(2, static_cast<int>(Es.back() / 1.5) + 1);   // (1.5 m: the paint follows a crest)
             for (int k = 0; k < n; ++k) {
                 double st = Es.back() * k / (n - 1); Vec2 p = pointAt(E, Es, st); Vec2 t = tangentAtStation(E, Es, st); Vec2 nrm = perp(t) * (side == 0 ? 1.0 : -1.0); Vec2 q = p + nrm * 0.3;
                 int sty = (inBox(li, p, t) >= 0 || inSpan(l, p)) ? 3 : 0;   // 3: inside a junction box, no paint
@@ -1141,6 +1141,33 @@ std::vector<NamedMesh> buildMeshes(const Result& r) {
         }
         MeshBuilder::gridIndices(terrain, G.nx, G.ny, 0); MeshBuilder::recomputeNormals(terrain);
     }
+    // PAINT ON THE DRAWN ROAD (Glenn, 2026-11-05: "Street markings are floating above the street ... It has to match the
+    // geometry 1:1 for it to look flush with the surface"): every paint vertex goes onto the road triangle drawn under it
+    // (the one nearest its height, of the asphalt and shoulder -- never a sidewalk's, so an edge line does not climb the
+    // kerb), 2 cm up. The paint was laid on the lanes' height model, which the triangulated surface follows only at its
+    // vertices (#142: 0.3-0.4 m apart across a leaning ramp), and each stripe's two edges took its centre's height, so on
+    // a banked road one edge floated and the other sank.
+    auto onRoad = [&](const Vec2& q, double near, double& out) {
+        auto it = drawnGrid.find(drawnKey(std::lround(std::floor(q.x / kDrawnCell)), std::lround(std::floor(q.y / kDrawnCell))));
+        if (it == drawnGrid.end()) return false;
+        double best = 1.0;
+        bool found = false;
+        for (uint32_t i : it->second) {
+            const Drawn& d = drawn[i];
+            if (!d.road) continue;
+            const double det = cross(d.b - d.a, d.c - d.a); if (std::fabs(det) < 1e-12) continue;
+            const double u = cross(q - d.a, d.c - d.a) / det, v = cross(d.b - d.a, q - d.a) / det;
+            if (u < -1e-9 || v < -1e-9 || u + v > 1 + 1e-9) continue;
+            const double z = d.za + u * (d.zb - d.za) + v * (d.zc - d.za);
+            if (std::fabs(z - near) < best) { best = std::fabs(z - near); out = z; found = true; }
+        }
+        return found;
+    };
+    for (RenderMesh* paint : {&paintW, &paintY})
+        for (Vertex& v : paint->vertices) {
+            double z = 0;
+            if (onRoad(Vec2(v.position.x, v.position.z), v.position.y, z)) v.position.y = static_cast<Real>(z + 0.02);
+        }
     std::vector<NamedMesh> out;
     auto add = [&](const char* n, RenderMesh& m, const Vec3& c) { if (!m.indices.empty()) out.push_back({n, std::move(m), c}); };
     add("asphalt", asphalt, kAsphalt); add("concrete", concrete, kConcrete); add("guardrail", guardrail, kGuardrail); add("sidewalk", sidewalk, kSidewalk); add("shoulder", shoulder, kShoulder); add("median", median, kMedian);
@@ -1260,6 +1287,10 @@ std::vector<ParapetRun> parapetRuns(const Result& r, ParapetCensus* census) {
             into = unionSets(into, r.pavement.footprints[li]);
         }
     if (deckPaved.empty() && footPaved.empty()) return out;
+    // ...and the SHOULDER is the road's: the barrier stands at its outer edge, not between it and the lanes (Glenn,
+    // 2026-11-05, on a mountain road: "the shoulder is wider but the guardrails are right next to the road ... There's
+    // literally no space to manuver for a player" -- the shoulder ran outside the rail)
+    if (!deckPaved.empty() && !r.pavement.shoulder.empty()) deckPaved = unionSets(deckPaved, r.pavement.shoulder);
     const double standOff = 0.05;                    // the barrier hugs the pavement edge; its body lies outside it
     std::vector<Ring> rings; std::vector<int> ringIsFoot;
     for (const PolySet* set : {&deckPaved, &footPaved}) {
@@ -1281,8 +1312,12 @@ std::vector<ParapetRun> parapetRuns(const Result& r, ParapetCensus* census) {
         for (size_t i = 0; i < n; ++i) {
             const Vec2 t = normalize(pts[(i + 1) % n] - pts[(i + n - 1) % n]); const Vec2 nrm(t.y, -t.x);
             // the pavement is on one side; "beyond" is the other
-            int inLane = deckLaneAt(pts[i] - nrm * 0.6), outLane = -1; double sign = -1.0;
-            if (inLane < 0) { inLane = deckLaneAt(pts[i] + nrm * 0.6); sign = +1.0; }
+            // (in across the shoulder, to its lane: a shoulder is up to a ramp's 2.5 m)
+            int inLane = -1, outLane = -1; double sign = -1.0;
+            for (const double in : {0.6, 1.6, 2.7, 3.2}) {
+                if ((inLane = deckLaneAt(pts[i] - nrm * in)) >= 0) { sign = -1.0; break; }
+                if ((inLane = deckLaneAt(pts[i] + nrm * in)) >= 0) { sign = +1.0; break; }
+            }
             if (inLane < 0) continue;                                   // no deck lane either side: not our line
             lane[i] = inLane; z[i] = r.heights->deck(inLane, pts[i]);
             const Vec2 outward = nrm * -sign;

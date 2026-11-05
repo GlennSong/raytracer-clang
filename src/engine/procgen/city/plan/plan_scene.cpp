@@ -426,6 +426,10 @@ nlohmann::json planToLanesScene(const CityPlan& plan, const SceneOptions& opt) {
         out.push_back(roads::lanes::pointAt(pts, st, s1));
         return out;
     };
+    // THE FOOTWAYS (a hill town's lanes down between its shelves, ADR-0326): paths on foot, stepped where steep
+    for (std::size_t i = 0; i < plan.footways.size(); ++i)
+        edges.push_back({{"id", "f" + std::to_string(i)}, {"class", "footway"}, {"path", {{"points", pointsJson(plan.footways[i])}}}});
+    if (!plan.footways.empty()) scene["classes"]["footway"] = roads::lanes::classJson(roads::lanes::roadClass("footway"));
     std::vector<std::array<std::array<Vec2, 2>, 2>> teePoints(plan.spurs.size());   // for each expressway, each end, its two Ts
     std::array<std::array<Vec2, 2>, 2> ringTeePoints{};                                  // the C's two ends, the same
     for (std::size_t i = 0; i < streetChains.size(); ++i) {

@@ -61,6 +61,8 @@ local function class_handling(c, d, wheels, opts)
     -- real aero drag (a top speed near 205 km/h, not linear body damping) and quick shifts: Jolt's
     -- default gearbox cut the drive for ~1.3 s per upshift -- a 3.5 s stall at 105-115 km/h on the freeway
     drag_area = opts.drag_area or 2.0,
+    -- pressed onto the road at speed (physics_world.h downforce; Glenn: "they should hug the road a little more")
+    downforce = opts.downforce or 0.4,
     shift_time = 0.2, clutch_time = 0.15, shift_latency = 0.25,
     drive = opts.drive,             -- nil: the wheels' driven flags (all four: AWD)
     wheel = { radius = c.wheel_diameter * 0.5, width = math.max(0.18, c.track * 0.13) },
@@ -209,6 +211,7 @@ local function kit_handling(P, car, h, opts)
     drive = h.drive,
     axle_lsd = h.axle_lsd, center_lsd = h.center_lsd, traction_split = h.traction_split,
     drag_area = h.drag_area or 2.0,
+    downforce = h.downforce or 0.4,   -- pressed onto the road at speed (as class_handling's)
     shift_time = 0.2, clutch_time = 0.15, shift_latency = 0.25,
     gear_ratios = h.gear_ratios,
     suspension = h.suspension,

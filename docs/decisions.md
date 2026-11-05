@@ -14928,3 +14928,32 @@ towns with terraces and other towns with winding roads".
 - Kingswood (candidate A): 6 shelves 103-139 m, 18 blocks, ~154 buildings, one network.
 
 **Next.** A steeper site shows the shelves (A rises 36 m across its town); the WINDING layout.
+
+## ADR-0327 — Drivable roads: rails outside the shoulder, paint on the drawn road, downforce, a hill town on foot
+
+Glenn, 2026-11-05, driving the mountain lab: "the shoulder is wider but the guardrails are right next to the road";
+"Street markings are floating above the street ... It has to match the geometry 1:1"; "the cars are also too light. They
+should hug the road a little more. The big yellow SUV topples over easily"; in Kingswood, "the road where I'm at is too
+steep for my car to go up ... the sidewalk is intersecting with the road. And NPCs are stuck in the grass".
+
+**Decision.**
+- THE BARRIER LINE is the lanes' outline AND their shoulder (`parapetRuns` unions `pavement.shoulder` in; the lane is
+  found up to 3.2 m in across it). The shoulder had been a band outside the lane footprints, so a guardrail stood on the
+  edge line with the shoulder paved beyond it.
+- PAINT ON THE DRAWN ROAD: every paint vertex is moved onto the road triangle drawn under it (asphalt or shoulder, the
+  one nearest its height -- never a sidewalk's), 2 cm up; lane lines are sampled every 1.5 m (was 4). Paint was laid on
+  the lanes' height model, which the triangulated deck meets only at its vertices (#142), and a stripe's two edges took
+  its centre's height.
+- DOWNFORCE (`VehicleConfig::downforce`, g at 100 km/h, rising with the square of the speed, capped at 1 g, while a
+  wheel touches): 0.4 for every four-wheeled recipe (class_handling, kit_handling); 0 by default in C++.
+- THE ROLLOVER PROBE (physics_tests, test_rollover.cpp): every four-wheeled drivable recipe at full lock through the
+  player's steering shaping at 40/60/80 km/h, slid sideways into a 0.15 m kerb at 8 m/s, and turned hard across a 12 %
+  side slope: none tips (the worst roll 9 degrees on the slope, the slope's own 7 of it). The SUV went over on the
+  broken ground of the terraced town's steep junctions, not in a turn.
+- THE HILL TOWN ON FOOT: its lanes down between shelves are FOOTWAYS (`CityPlan::footways`, written as "footway" edges,
+  stepped where steep; the island scene takes the class when a place uses it), not streets: as streets they crossed each
+  8 m bank at 28 %, and their sidewalks stood in flat slabs across the climbing road. Its car ramps run down the bank on
+  the slant, to the nearest point of the street below at least step / 0.09 + 30 m away.
+
+**Owed.** A lanes tag bump for the rails and the paint (every baked level's roads), with the post-#182 batch; the hill
+town's ramps cross its streets in a tangle (a layout rethink); the dust sprites' squares.
