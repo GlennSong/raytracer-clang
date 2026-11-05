@@ -36,6 +36,9 @@ std::string SettlementCatalog::check() const {
         if (k.naming != "city" && k.naming != "town" && k.naming != "mountain") return k.name + ": naming is city, town or mountain";
         if (k.strip && (k.stripLength < 200.0 || k.stripRows < 1 || k.stripRow < 40.0 || k.stripCross < 40.0))
             return k.name + ".strip: length >= 200, rows >= 1, row and cross >= 40 (m)";
+        if (k.strip && k.stripAlong != "coast" && k.stripAlong != "high") return k.name + ".strip.along is coast or high";
+        if (k.regrade && (k.regradeBlur <= 0 || k.regradeMaxSlope <= 0 || k.regradeFeather < 0 || k.regradeBank < 0 || k.regradeBank > 1))
+            return k.name + ".regrade: blur and max_slope > 0, feather >= 0, bank 0..1";
     }
     return {};
 }
@@ -44,13 +47,15 @@ std::string SettlementCatalog::describe() const {
     std::ostringstream o;
     for (const SettlementKind& k : kinds) {
         o << "kind " << k.name << " hub=" << k.hub << " radius=" << k.radiusScale << "/" << k.radiusMin << "/" << k.radiusMax
-          << " coast=" << k.coastReach << " ring=" << k.onRing << " pass=" << k.passEnd << " mountain=" << k.mountainRoad
+          << " coast=" << k.coastReach << " ring=" << k.onRing << " pass=" << k.passEnd << " mountain=" << k.mountainRoad << " high=" << k.highRoad
           << " interchanges=" << k.interchanges << " links=" << k.linkCandidates << "/" << k.linkSpacing << " buses=" << k.busRoutes << "/"
           << k.busStops << " signed=" << k.signedFar << " limit=" << k.limitSign << " naming=" << k.naming << " brief=" << k.briefPrefix
           << " " << k.areaScale << "/" << k.sizeMin << "/" << k.spokeSpacing << " core=" << k.coreBlock[0] << "x" << k.coreBlock[1]
           << " midtown=" << k.midtownBlock[0] << "x" << k.midtownBlock[1] << " warp=" << k.warp << " rings=" << k.ringSpacing
           << " spokes=" << k.spokes << " strip=" << k.strip << "/" << k.stripLength << "/" << k.stripRows << "x" << k.stripRow << "/"
-          << k.stripCross << "/" << k.stripSea << "/" << k.stripPromenade << " reach=" << k.hubReach << " civic=" << k.civic << " landmarks=";
+          << k.stripCross << "/" << k.stripSea << "/" << k.stripPromenade << "/" << k.stripAlong << "/" << k.stripBoth << " regrade=" << k.regrade
+          << "/" << k.regradeBlur << "/" << k.regradeMaxSlope << "/" << k.regradeTerrace << "/" << k.regradeBank << "/" << k.regradeFeather << "/"
+          << k.regradeMargin << " reach=" << k.hubReach << " civic=" << k.civic << " landmarks=";
         for (const SettlementLandmark& l : k.landmarks) o << l.name << ":" << l.count << "/" << l.minLots << "/" << l.minOldTown << "/" << l.any << ",";
         o << " mixes=";
         for (const auto& [d, es] : k.mixes) {
@@ -128,6 +133,48 @@ SettlementCatalog defaultSettlements() {
     bt.landmarks = {{"school", 1, 10, 0, true}, {"church", 1, 8, 0, true}, {"market_hall", 1, 0, 0, true}, {"police", 1, 0, 0, true}};
     bt.rgb[0] = 0.10f; bt.rgb[1] = 0.62f; bt.rgb[2] = 0.68f;
     c.kinds.push_back(bt);
+
+    // THE FOOTHILL TOWN (~/.claude/plans/mountain-towns.md; Glenn, 2026-11-04: "a town at the base of the mountain and
+    // then a road that goes into the mountains"): a small town on the lower slopes inland of the ring, its ground
+    // regraded, one way onto the freeway, and the high road from it over the range
+    SettlementKind ft = town;
+    ft.name = "foothill town";
+    ft.radiusScale = 1.0; ft.radiusMin = 200.0; ft.radiusMax = 400.0;
+    ft.onRing = false;
+    ft.highRoad = true;
+    ft.linkCandidates = 2;
+    ft.busRoutes = 1; ft.busStops = 6;
+    ft.briefPrefix = "foothill_town_";
+    ft.sizeMin = 400.0; ft.spokes = 5;
+    ft.regrade = true;
+    ft.regradeMaxSlope = 0.10; ft.regradeFeather = 120.0; ft.regradeMargin = 80.0;
+    ft.rgb[0] = 0.55f; ft.rgb[1] = 0.40f; ft.rgb[2] = 0.20f;
+    c.kinds.push_back(ft);
+
+    // THE HAMLET (Glenn: "a handful of buildings... like a street with some buildings", up in the mountains on the
+    // high road): a short strip along the high road, a row of lots either side of it, its band of ground regraded
+    SettlementKind hm = town;
+    hm.name = "hamlet";
+    hm.radiusScale = 1.0; hm.radiusMin = 120.0; hm.radiusMax = 250.0;
+    hm.onRing = false;
+    hm.linkCandidates = 0;   // the high road is its road
+    hm.busRoutes = 0; hm.busStops = 6;
+    hm.naming = "mountain";
+    hm.briefPrefix = "hamlet_";
+    hm.strip = true;
+    hm.stripLength = 350.0; hm.stripRows = 1; hm.stripRow = 55.0; hm.stripCross = 120.0; hm.stripSea = 0.0;
+    hm.stripAlong = "high";
+    hm.stripBoth = true;
+    hm.hubReach = 60.0;   // its street's lots are its commercial district
+    // a shop or two and a cafe on the street (an inn is owed: "hotel" is a city's tower); cottages and houses behind
+    hm.mixes["commercial"] = {{"oldtown_cafe", 20}, {"corner_shop", 18}, {"brick_shop", 12}, {"cottage", 30}, {"bungalow", 20}};
+    hm.mixes["residential"] = {{"cottage", 40}, {"bungalow", 25}, {"yard_house", 20}, {"villa", 15}};
+    hm.landmarks = {{"church", 1, 0, 0, true}};
+    hm.regrade = true;
+    hm.regradeBlur = 60.0; hm.regradeMaxSlope = 0.10; hm.regradeFeather = 60.0; hm.regradeMargin = 40.0;
+    hm.rgb[0] = 0.45f; hm.rgb[1] = 0.30f; hm.rgb[2] = 0.15f;
+    hm.dot = 3.5; hm.label = 110.0;
+    c.kinds.push_back(hm);
     return c;
 }
 

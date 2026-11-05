@@ -1761,6 +1761,9 @@ CityPlan generatePlan(const Brief& B) {
         // `promenade` m out on the sand side, the cross streets carried down to it -- a row of blocks between the
         // seafront and the promenade (0: none)
         const Real prom = stripSpec.value("promenade", 0.0);
+        // BOTH SIDES (a hamlet's street, ~/.claude/plans/mountain-towns.md): its rows run either side of the spine, the
+        // cross streets right across; no sea side, no promenade
+        const bool both = stripSpec.value("both", false);
         // each spine point's inland normal (the side the hint points to)
         std::vector<Vec2> nrm(spine.size());
         for (std::size_t i = 0; i < spine.size(); ++i) {
@@ -1780,16 +1783,21 @@ CityPlan generatePlan(const Brief& B) {
         };
         add(spine, RoadClass::Arterial, B.arterialWidth);                                   // the seafront
         for (int k = 1; k <= rows; ++k) add(offset(row * k), RoadClass::Local, B.localWidth);
+        if (both)
+            for (int k = 1; k <= rows; ++k) add(offset(-row * k), RoadClass::Local, B.localWidth);
         if (prom > 0) add(offset(-prom), RoadClass::Local, B.localWidth);                   // the promenade
         const std::vector<double> ss = stations(spine);
-        const int nCross = std::max(1, static_cast<int>(ss.back() / cross));
-        const Real first = (ss.back() - (nCross - 1) * cross) * 0.5;
+        // (both sides: cross streets at its two ends too, 10 m in, so each row closes into blocks -- a row past its last
+        // cross street is a dead end the stub pruning takes back, and a hamlet's short street had only its middle left)
+        const int nCross = both ? std::max(2, static_cast<int>(std::lround((ss.back() - 20.0) / cross)) + 1) : std::max(1, static_cast<int>(ss.back() / cross));
+        const Real gap = both ? (ss.back() - 20.0) / (nCross - 1) : cross;
+        const Real first = both ? Real(10) : (ss.back() - (nCross - 1) * cross) * 0.5;
         for (int j = 0; j < nCross; ++j) {
-            const Real sv = first + j * cross;
+            const Real sv = first + j * gap;
             const std::size_t i = std::min<std::size_t>(spine.size() - 1, static_cast<std::size_t>(std::upper_bound(ss.begin(), ss.end(), sv) - ss.begin()));
             const bool trunk = (j - nCross / 2) % 3 == 0;
             std::vector<Vec2> pts;
-            for (Real off = prom > 0 ? 0 : -2; off <= row * rows + 2; off += 15) pts.push_back(spine[i] + nrm[i] * off);   // (from the seafront itself when the lane below meets it there)
+            for (Real off = both ? -row * rows - 2 : prom > 0 ? 0 : -2; off <= row * rows + 2; off += 15) pts.push_back(spine[i] + nrm[i] * off);   // (from the seafront itself when the lane below meets it there)
             pts.push_back(spine[i] + nrm[i] * (row * rows + 2));
             add(pts, trunk ? RoadClass::Collector : RoadClass::Local, trunk ? B.collectorWidth : B.localWidth);
             if (prom > 0) {   // ...and down to the promenade: a local lane across the beachfront row
@@ -1799,7 +1807,7 @@ CityPlan generatePlan(const Brief& B) {
                 add(down, RoadClass::Local, B.localWidth);
             }
         }
-        std::vector<Vec2> outline = offset(-prom - seaOut);
+        std::vector<Vec2> outline = offset(both ? -(row * rows + 25.0) : -prom - seaOut);
         const std::vector<Vec2> back = offset(row * rows + 25.0);
         outline.insert(outline.end(), back.rbegin(), back.rend());
         plan.limits = {outline};

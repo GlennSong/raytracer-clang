@@ -12,6 +12,7 @@
 --   on_ring       = bool                  the island freeway's ring calls at it
 --   pass_end      = bool                  the pass over the range joins two of these
 --   mountain_road = bool                  a mountain road climbs to it from the freeway (its only road)
+--   high_road     = bool                  a HIGH ROAD climbs from it over the range to the city across (a second pass)
 --   interchanges  = n                     freeway diamonds it is given first (more first)
 --   links         = { candidates, spacing }   link roads offered to the freeway, their ends this far apart (m)
 --   buses         = { routes, stops }     its local bus network; 0 routes: none
@@ -24,7 +25,11 @@
 --                                       town along its coast road): `length` m of it is the seafront street, `rows`
 --                                       streets behind it every `row` m inland, cross streets every `cross` m, a
 --                                       promenade `promenade` m out on the sand side (a beachfront row of blocks between;
---                                       0: none), its limits `sea` m beyond
+--                                       0: none), its limits `sea` m beyond; `along` the road it grows from ("coast",
+--                                       or "high": a high road), `both_sides` its rows either side of the spine
+--   regrade = { blur, max_slope, terrace, bank, feather, margin }   its ground levelled (procgen/regrade.h, ADR-0323):
+--                                       over its disc (a strip: its outline) and `margin` m more, written into the
+--                                       terrain block when the place is added
 --   hub_reach = m                         (a strip town) its centre is its seafront LINE: commercial within this of it
 --   mixes = { <district> = { { "recipe", weight }, ... } }   its own building mixes in place of the district ladders
 --   civic = bool                          the city's full civic table (capitol, courthouse, hospital, university, ...)
@@ -39,7 +44,7 @@
 -- }
 
 settlements = {
-  order = { "city", "town", "mountain town", "beach town" },
+  order = { "city", "town", "mountain town", "beach town", "foothill town", "hamlet" },
 
   city = {
     hub = "financial",
@@ -114,5 +119,42 @@ settlements = {
                       { "rowhouses", 6 }, { "pocket_park", 4 } },
     },
     map = { rgb = { 0.10, 0.62, 0.68 } },
+  },
+
+  -- a small town on the lower slopes inland of the ring, its ground regraded, the high road from it over the range
+  -- (~/.claude/plans/mountain-towns.md; Glenn, 2026-11-04: "a town at the base of the mountain and then a road that
+  -- goes into the mountains")
+  ["foothill town"] = {
+    hub = "commercial",
+    radius = { 1.0, 200, 400 },
+    on_ring = false,
+    high_road = true,
+    links = { 2, 300 },
+    buses = { 1, 6 },
+    brief = { prefix = "foothill_town_", size_min = 400, spokes = 5 },
+    regrade = { max_slope = 0.10, feather = 120, margin = 80 },
+    map = { rgb = { 0.55, 0.40, 0.20 } },
+  },
+
+  -- a handful of buildings on a street up in the mountains (Glenn: "like a street with some buildings"): a short strip
+  -- along the high road, a row of lots either side, its band of ground regraded
+  hamlet = {
+    hub = "commercial",
+    radius = { 1.0, 120, 250 },
+    on_ring = false,
+    links = { 0, 300 },
+    buses = { 0, 6 },
+    naming = "mountain",
+    brief = { prefix = "hamlet_" },
+    strip = { length = 350, rows = 1, row = 55, cross = 120, sea = 0, along = "high", both_sides = true },
+    hub_reach = 60,
+    -- a shop or two and a cafe on the street (an inn is owed: "hotel" is a city's tower); cottages and houses behind
+    mixes = {
+      commercial = { { "oldtown_cafe", 20 }, { "corner_shop", 18 }, { "brick_shop", 12 }, { "cottage", 30 }, { "bungalow", 20 } },
+      residential = { { "cottage", 40 }, { "bungalow", 25 }, { "yard_house", 20 }, { "villa", 15 } },
+    },
+    landmarks = { { "church", 1, any = true } },
+    regrade = { blur = 60, max_slope = 0.10, feather = 60, margin = 40 },
+    map = { rgb = { 0.45, 0.30, 0.15 }, dot = 3.5, label = 110 },
   },
 }

@@ -14829,3 +14829,45 @@ and eased back to the raw ground over `feather` (100 m) outside it. The patch is
 **Next.** A mountain town ON it: candidates lettered on the island map (findMountainSites, as findBeachSites) and
 `--mountain-towns` to add one (its regrade written into the terrain block, its winding road, its streets on the
 shelves), then the island re-plan after PR #182 merges.
+
+## ADR-0324 — Foothill towns, the high road over the range, and hamlets on it
+
+Glenn, 2026-11-04: "a town at the base of the mountain and then a road that goes into the mountains and a small hamlet
+or two up in the mountains and then have that road continue across over the mountains and connect up with one of the
+cities"; a hamlet "could be a handful of buildings... like a street with some buildings". Plan:
+~/.claude/plans/mountain-towns.md. Built on the regrade (ADR-0323).
+
+**Decision.**
+- TWO KINDS, data (settlements.lua, with defaultSettlements kept equal): the FOOTHILL TOWN (`high_road`, a `regrade`,
+  links to the freeway, a bus loop) and the HAMLET (a `strip` `along = "high"`, `both_sides`, one row, 350 m, its own
+  small mix and a church, a `regrade`). New kind fields: `high_road`, `strip.along`, `strip.both_sides`, `regrade = {
+  blur, max_slope, terrace, bank, feather, margin }`.
+- CANDIDATES (`findFoothillSites`, lettered on the map by `city_plan island-cities --foothills`): the lower slopes 50-250 m
+  up, 1.5 km from the sea, the range 200 m higher 1.5 km uphill, off the freeway and 1.5 km off the pass; scored by the
+  broad grade and the roughness the regrade must cut and fill; the far city is the city across the range.
+- `--foothill-towns LETTERS`: `addFoothillTown` appends the site (every other place keeps its index), `regradePlace`
+  levels it -- a disc, then (city_plan) the town is planned once dry and its LIMITS + the kind's margin are levelled
+  before it is planned for real, so its blocks stand on the levelled ground -- and the plan's own ground is sampled
+  again where it changed.
+- THE HIGH ROAD (`planHighRoad`): a second road of kind "pass", from the town's limits over a saddle of its own (on the
+  range's spine near the line to the city, 1.5 km off the pass) to the city's limits, graded as the pass is; running
+  within 150 m of the pass costs a little (a corridor priced out wholly sent it 20 km round the pass's end). It is cut
+  where it meets the freeway (`cutAtFreeway`, the pass's own cut, now one function given its saddle) and joined into
+  the city's streets by joinPassToTowns.
+- HAMLETS (`addHamlets`): up to two 350 m stretches of the high road above 200 m, the gentlest and straightest, 1.5 km
+  apart; each a site whose spine is that stretch, its band regraded, the road split into its legs. A both-sided strip
+  has cross streets at its two ends too (its rows past the last cross street were dead ends the stub pruning took).
+- Buses: the legs of a pass with places on it are one line, X4 The High Road, stopping at each hamlet.
+- Rivers are computed on the ground WITHOUT the regrades (a town never moves a river), and a regraded block shares its
+  unregraded weathered ground (one grid, however many places are levelled). On a regrade's outline the ground cover
+  reads plain soil, not the weather maps' scree and wash (`GroundCoverParams::levelled`).
+- Island 8 without `--foothill-towns` plans byte for byte as before (briefs, signs).
+- Lab: `city_plan island-cities 8 OUT --terrain assets/levels/island_8_nature.json --keep-sites
+  assets/levels/island_8_nature.json --beach-towns ACD --foothill-towns A --level zz_mtn_window --template
+  assets/levels/island_8_nature.json --window -400 4300 2200`: Kingswood (25 blocks), the high road 16.8 km to Saltwood,
+  hamlets Larktop (349 m up) and Lintop (245 m), 6 blocks each.
+
+**Owed.** Kingswood's blocks build sparsely (why: the lot census); the levelled ground's cover meets the rock in a hard
+line (blend across the feather); an inn recipe (the hamlet's "hotel" was a city tower); street trees by height (palms on
+a hamlet 350 m up); the re-plan keeping a foothill town and its hamlets (--keep-sites); tests; then island_8_nature after
+PR #182.

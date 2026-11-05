@@ -175,6 +175,67 @@ struct ShoreSite {
 };
 std::vector<ShoreSite> findBeachSites(const IslandWorld& w, const ShoreRule& rule = {});
 
+// A FOOTHILL TOWN'S GROUND (~/.claude/plans/mountain-towns.md; Glenn, 2026-11-04: "a town at the base of the mountain
+// and then a road that goes into the mountains and a small hamlet or two up in the mountains and then have that road
+// continue across over the mountains and connect up with one of the cities"). The lower slopes inland of the ring:
+// between two heights, well back from the sea, the range rising behind. Nothing here is flat (ADR-0323: the town's
+// ground is regraded), so a candidate is scored by the broad GRADE over its disc and the ROUGHNESS the regrade must
+// cut and fill (the ground off its broad surface, mean), and by how far it is from the freeway. Its FAR CITY is the
+// city across the range from it, where its road over the mountains comes down.
+struct FoothillRule {
+    double minHeight = 50.0, maxHeight = 250.0;   // m above the sea
+    double radius = 300.0;                        // the disc a town is measured over (m)
+    double maxGrade = 0.18;                       // the broad grade over it, at most
+    double riseAt = 1500.0, minRise = 200.0;      // the range behind: this much higher this far uphill (m)
+    double minFromSea = 1500.0;                   // m
+    double clearOfPlaces = 1200.0;                // from a place's edge (its radius)
+    double freewayClear = 400.0;                  // off the freeway's line (m)
+    double freewayReach = 2500.0;                 // farther from the freeway than this scores less
+    double passClear = 1500.0;                    // off the pass (and any high road): its own way over, not the pass's
+    double spacing = 1500.0;                      // between two candidates
+    int candidates = 6;
+};
+struct FoothillSite {
+    Vec2 at;
+    Vec2 uphill;              // unit, toward the range
+    double height = 0.0, grade = 0.0, roughness = 0.0, rise = 0.0;   // m; broad grade; m off the broad surface; m behind
+    double toFreeway = 0.0;   // m
+    int side = 0;             // which side of the range (+1, -1)
+    int farCity = -1;         // the city across the range (a site index; -1: none)
+    double score = 0.0;       // 0..1
+    bool pick = false;        // the best each side
+};
+std::vector<FoothillSite> findFoothillSites(const IslandWorld& w, const FoothillRule& rule = {});
+
+// A PLACE'S GROUND LEVELLED (procgen/regrade.h, ADR-0323): `g` is appended to the terrain block's "regrade" -- so the
+// place's brief, which carries the block, is planned on the levelled ground, and the level built from it stands on it --
+// and the plan's own ground (height, heightSmooth) is sampled again where it changed. Its kind's regrade knobs, over
+// `outline`.
+void regradePlace(IslandWorld& w, const std::vector<Vec2>& outline, const SettlementKind& kind);
+
+// A FOOTHILL TOWN on candidate `c` (findFoothillSites): a site of `kind` (a high-road kind, settlements.lua) appended to
+// w.sites (every other place keeps its index), its disc regraded. Plan it, and its links, as any place; then its high
+// road. Returns the new site's index.
+int addFoothillTown(IslandWorld& w, const FoothillSite& c, const std::string& kind, const std::string& name = {});
+
+// THE HIGH ROAD (Glenn: "a road that goes into the mountains ... and then have that road continue across over the
+// mountains and connect up with one of the cities"): a second pass, from `fromSite`'s limits over a saddle of its own
+// (the range's lowest crossing near the line to the city, `passClear` m or more off the pass) and down to `toSite` --
+// cut where it meets the freeway, as the pass is, and run on into the city's streets by joinPassToTowns. Kind "pass",
+// from the town to the city. Returns its w.roads index; -1 and `why` when there is no way.
+int planHighRoad(IslandWorld& w, int fromSite, int toSite, double passClear = 1500.0, std::string* why = nullptr);
+
+// HAMLETS ON A HIGH ROAD (Glenn: "a handful of buildings... like a street with some buildings", "a small hamlet or two up
+// in the mountains"): up to `count` stretches of road `road`, each its kind's stripLength, chosen where the road runs
+// gentlest and straightest above `minHeight`, `spacing` apart and `endClear` off its ends. Each is a site of `kind` (a
+// strip kind along "high") appended to w.sites, its band regraded; the road becomes its legs. Returns the new sites.
+struct HamletRule {
+    int count = 2;
+    double minHeight = 200.0, spacing = 1500.0, endClear = 700.0;
+    double maxTurnDeg = 50.0;   // the street's bends, summed over its length, at most
+};
+std::vector<int> addHamlets(IslandWorld& w, int road, const std::string& kind, const HamletRule& rule = {});
+
 // How far `q` is from the freeway (m): its route once there is one (w.freewayRoute), else its roads as planned.
 double freewayDistance(const IslandWorld& w, const Vec2& q);
 // A STRIP TOWN'S GROUND (a beach town's): the outline of what it is built on -- from its promenade's sidewalk (or the

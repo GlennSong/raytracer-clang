@@ -50,6 +50,7 @@ bool loadSettlementCatalog(ScriptVM& vm, SettlementCatalog& out, std::string* er
         k.onRing = boolField(L, t, "on_ring", k.onRing);
         k.passEnd = boolField(L, t, "pass_end", k.passEnd);
         k.mountainRoad = boolField(L, t, "mountain_road", k.mountainRoad);
+        k.highRoad = boolField(L, t, "high_road", k.highRoad);
         k.interchanges = static_cast<int>(numField(L, t, "interchanges", k.interchanges));
         double links[2] = {static_cast<double>(k.linkCandidates), k.linkSpacing};
         if (!numbers(L, t, "links", links, 2)) return bail(name + ".links = { candidates, spacing }");
@@ -84,8 +85,22 @@ bool loadSettlementCatalog(ScriptVM& vm, SettlementCatalog& out, std::string* er
             k.stripCross = numField(L, sp, "cross", k.stripCross);
             k.stripSea = numField(L, sp, "sea", k.stripSea);
             k.stripPromenade = numField(L, sp, "promenade", k.stripPromenade);
+            if (const std::string al = strField(L, sp, "along"); !al.empty()) k.stripAlong = al;
+            k.stripBoth = boolField(L, sp, "both_sides", k.stripBoth);
         }
         lua_pop(L, 1);   // strip
+        lua_getfield(L, t, "regrade");   // { blur, max_slope, terrace, bank, feather, margin } (procgen/regrade.h)
+        if (lua_istable(L, -1)) {
+            const int rg = lua_gettop(L);
+            k.regrade = true;
+            k.regradeBlur = numField(L, rg, "blur", k.regradeBlur);
+            k.regradeMaxSlope = numField(L, rg, "max_slope", k.regradeMaxSlope);
+            k.regradeTerrace = numField(L, rg, "terrace", k.regradeTerrace);
+            k.regradeBank = numField(L, rg, "bank", k.regradeBank);
+            k.regradeFeather = numField(L, rg, "feather", k.regradeFeather);
+            k.regradeMargin = numField(L, rg, "margin", k.regradeMargin);
+        }
+        lua_pop(L, 1);   // regrade
         k.hubReach = numField(L, t, "hub_reach", k.hubReach);
         lua_getfield(L, t, "mixes");   // { <district> = { { "recipe", weight }, ... } }, in the district order below
         if (lua_istable(L, -1)) {

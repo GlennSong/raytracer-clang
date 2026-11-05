@@ -36,6 +36,8 @@ struct SettlementKind {
     bool onRing = true;                   // the island freeway's ring calls at it
     bool passEnd = false;                 // the pass over the range joins two of these
     bool mountainRoad = false;            // a mountain road climbs to it from the freeway (its only road)
+    bool highRoad = false;                // a HIGH ROAD climbs from it over the range to the city across (a second pass;
+                                          // ~/.claude/plans/mountain-towns.md): a foothill town
     int interchanges = 1;                 // the diamonds it is given first (more first)
     int linkCandidates = 4;               // link roads offered to the freeway...
     double linkSpacing = 300.0;           // ...their freeway ends this far apart
@@ -58,6 +60,13 @@ struct SettlementKind {
     double stripLength = 900.0, stripRow = 85.0, stripCross = 100.0, stripSea = 30.0;
     double stripPromenade = 0.0;   // a promenade this far out on the sand side: a beachfront row of blocks (0: none)
     int stripRows = 3;
+    std::string stripAlong = "coast";   // the road it grows along: "coast" (the coast road) or "high" (a high road: a hamlet)
+    bool stripBoth = false;             // its rows on both sides of the spine (a hamlet's street), not only inland
+    // ITS GROUND LEVELLED (procgen/regrade.h, ADR-0323): over its disc (or a strip's outline) and `regradeMargin` m more,
+    // blurred over regradeBlur, capped at regradeMaxSlope, shelves regradeTerrace apart (0: none) with regradeBank,
+    // eased back over regradeFeather; written into the terrain block when the place is added
+    bool regrade = false;
+    double regradeBlur = 100.0, regradeMaxSlope = 0.12, regradeTerrace = 0.0, regradeBank = 0.35, regradeFeather = 100.0, regradeMargin = 60.0;
     // ITS DISTRICTS (a strip town's hub is its seafront LINE): commercial within `hubReach` m of it, residential
     // behind; and its own MIXES, {district: [{recipe, weight}]}, in place of the district ladders (the level's hub
     // carries them: level_params.cpp)

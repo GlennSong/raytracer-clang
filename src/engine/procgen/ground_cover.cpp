@@ -56,7 +56,7 @@ Cover GroundCover::at(double x, double z, double height, double normalUp, double
     //   tongues  -- snow runs down the fall line in gullies: noise stretched ALONG the downslope direction.
     // All in proportion to the snow height, so a low island and a high range wander alike.
     const bool mapped = p_.maps != nullptr;
-    const TerrainMapSample ms = mapped ? p_.maps->at(x, z) : TerrainMapSample{};
+    const TerrainMapSample ms = mapped && !(p_.levelled && p_.levelled->covers(x, z)) ? p_.maps->at(x, z) : TerrainMapSample{};
     double snowLine = p_.snowHeight;
     if (p_.snowHeight < 1e29) {
         const double S = std::max(50.0, p_.snowHeight);

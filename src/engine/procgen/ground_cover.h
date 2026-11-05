@@ -64,6 +64,9 @@ struct GroundCoverParams {
     // HIKING TRAILS (ADR-0134): bare earth along the terrain's "trails", about 1.5 m wide, ragged
     std::shared_ptr<const TrailNetwork> trails;
     std::shared_ptr<const SettledGround> settled;
+    // LEVELLED GROUND (the terrain block's "regrade" outlines, ADR-0323): the maps' scree, washed gravel and thin soil are
+    // the ground's as it was before a town's patch was levelled; on it the cover reads plain soil
+    std::shared_ptr<const SettledGround> levelled;
 };
 
 struct Cover {

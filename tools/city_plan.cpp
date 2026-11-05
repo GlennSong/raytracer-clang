@@ -53,7 +53,7 @@ static int usage() {
                  "       city_plan level-world BRIEF.json      the level's terrain + water blocks that match the brief's world, and its towns' hubs\n"
                  "       city_plan island SEED OUT_DIR [--variants N]   island worlds on the map: terrain, sites, ring freeway (ADR-0105)\n"
                  "       city_plan island-cities SEED OUT_DIR [--terrain LEVEL.json] [--png] [--view X Z HALF NAME]...   that island's cities and towns planned on its land, mapped, and extra close-ups (ADR-0106);\n"
-                 "              ... --level NAME [--template LEVEL.json] [--keep-sites LEVEL.json] [--window X Z HALF] [--rail] [--beaches [--coast ABC]] [--beach-towns ABC]   the 3D level; --rail lays the island loop and the cities' light rail in the same run (the map draws them)\n"
+                 "              ... --level NAME [--template LEVEL.json] [--keep-sites LEVEL.json] [--window X Z HALF] [--rail] [--beaches [--coast ABC]] [--beach-towns ABC] [--foothills] [--foothill-towns A]   the 3D level; --rail lays the island loop and the cities' light rail in the same run (the map draws them)\n"
                  "       city_plan rivers BRIEF.json [STEP]         the rivers its world's hydrology makes, plan coordinates\n"
                  "       city_plan heights BRIEF.json [HALF STEP]   the brief's ground on a grid, plan coordinates (for placing mountain roads)\n"
                  "       city_plan island-rail GRAPH.json LEVEL.json [--write] [--offset M] [--no-ways] [--way-leg M]   the island loop beside the freeway, a station per town (the level's hubs) and a footway in to each; --write puts it in the graph\n"
@@ -335,7 +335,7 @@ int main(int argc, char** argv) {
                 // -- the very point the first plan grew it from, on this ground
                 const std::vector<engine::ShoreSite> shores = engine::findBeachSites(w);
                 double reach = 0.0;
-                for (const engine::SettlementKind& sk : w.kinds.kinds) if (sk.strip) reach = std::max(reach, sk.stripLength);
+                for (const engine::SettlementKind& sk : w.kinds.kinds) if (sk.strip && sk.stripAlong == "coast") reach = std::max(reach, sk.stripLength);
                 for (auto& [kat, knm] : keptBeaches) {
                     const engine::ShoreSite* best = nullptr;
                     for (const engine::ShoreSite& sh : shores)
@@ -360,7 +360,7 @@ int main(int argc, char** argv) {
                     }
                 }
                 const engine::SettlementKind* bk = nullptr;
-                for (const engine::SettlementKind& sk : w.kinds.kinds) if (sk.strip && !bk) bk = &sk;
+                for (const engine::SettlementKind& sk : w.kinds.kinds) if (sk.strip && sk.stripAlong == "coast" && !bk) bk = &sk;
                 for (const auto& [at, nm] : beaches) {
                     if (!bk) { std::printf("beach towns: settlements.lua has no strip kind\n"); break; }
                     std::string why;
@@ -371,6 +371,77 @@ int main(int argc, char** argv) {
                     w.centres.resize(w.sites.size(), engine::Vec2(0, 0));
                     planSite(static_cast<std::size_t>(k));
                     w.sites[static_cast<std::size_t>(k)].limits = plans[static_cast<std::size_t>(k)].limits;
+                }
+            }
+            // THE FOOTHILL TOWNS (~/.claude/plans/mountain-towns.md): --foothill-towns LETTERS off the candidates
+            // (findFoothillSites, as --foothills letters them); each planned like any place on its regraded ground, then its
+            // HIGH ROAD over the range to the city across, and the HAMLETS on that road, each planned in turn
+            for (int a = 4; a + 1 < argc; ++a) {
+                if (std::string(argv[a]) != "--foothill-towns") continue;
+                const engine::SettlementKind* fk = nullptr;
+                const engine::SettlementKind* hk = nullptr;
+                for (const engine::SettlementKind& sk : w.kinds.kinds) {
+                    if (sk.highRoad && !fk) fk = &sk;
+                    if (sk.strip && sk.stripAlong == "high" && !hk) hk = &sk;
+                }
+                if (!fk) { std::printf("foothill towns: settlements.lua has no high-road kind\n"); break; }
+                const std::vector<engine::FoothillSite> hills = engine::findFoothillSites(w);
+                auto grow = [&](int k) {
+                    navs.resize(w.sites.size());
+                    plans.resize(w.sites.size());
+                    w.centres.resize(w.sites.size(), engine::Vec2(0, 0));
+                    // a place grown over its land (not a strip) is levelled where it GROWS: planned once dry, its limits
+                    // (and its kind's margin) regraded, then planned on that ground -- a guessed disc left half a
+                    // town's blocks on the raw slope, empty
+                    engine::IslandSite& site = w.sites[static_cast<std::size_t>(k)];
+                    const engine::SettlementKind& sk = w.kinds.of(site.kind);
+                    if (sk.regrade && !sk.strip) {
+                        const CityPlan dry = generatePlan(briefFromJson(engine::islandSiteBrief(w, k)));
+                        for (const std::vector<engine::Vec2>& ring : dry.limits) {
+                            std::vector<engine::Vec2> grown;
+                            for (const engine::Vec2& q : ring) {
+                                const engine::Vec2 d = q - site.at;
+                                grown.push_back(d.length() > 1e-6 ? q + d * (sk.regradeMargin / d.length()) : q);
+                            }
+                            engine::regradePlace(w, grown, sk);
+                        }
+                    }
+                    planSite(static_cast<std::size_t>(k));
+                    w.sites[static_cast<std::size_t>(k)].limits = plans[static_cast<std::size_t>(k)].limits;
+                };
+                for (const char* L = argv[a + 1]; *L; ++L) {
+                    const std::size_t c = static_cast<std::size_t>(std::toupper(*L) - 'A');
+                    if (c >= hills.size()) { std::printf("--foothill-towns: no candidate %c (%zu)\n", *L, hills.size()); continue; }
+                    const int k = engine::addFoothillTown(w, hills[c], fk->name);
+                    grow(k);
+                    std::string why;
+                    const int r = engine::planHighRoad(w, k, hills[c].farCity, engine::FoothillRule{}.passClear, &why);
+                    if (r < 0) { std::printf("high road from %s: %s\n", w.sites[static_cast<std::size_t>(k)].name.c_str(), why.c_str()); continue; }
+                    const engine::IslandRoad& hr = w.roads[static_cast<std::size_t>(r)];
+                    std::printf("high road %s -> %s: %.1f km, climbs %.0f m, worst %.1f%%\n", w.sites[static_cast<std::size_t>(k)].name.c_str(),
+                                w.sites[static_cast<std::size_t>(hills[c].farCity)].name.c_str(), hr.length / 1000.0, hr.climb, hr.worstGrade * 100.0);
+                    if (std::getenv("RT_PLAN_WHY")) {
+                        std::printf("  high road: %zu points, (%.0f, %.0f) .. (%.0f, %.0f), from %d to %d\n", hr.points.size(), hr.points.front().x, hr.points.front().y,
+                                    hr.points.back().x, hr.points.back().y, hr.from, hr.to);
+                        // its steepest 60 m, on the ground it is graded on
+                        double worst = 0.0;
+                        engine::Vec2 wat;
+                        for (std::size_t q = 0; q + 1 < hr.points.size(); ++q) {
+                            double run = 0.0;
+                            std::size_t e = q;
+                            while (e + 1 < hr.points.size() && run < 60.0) { run += (hr.points[e + 1] - hr.points[e]).length(); ++e; }
+                            if (run < 30.0) break;
+                            const double g = std::abs(w.smoothAt(hr.points[e].x, hr.points[e].y) - w.smoothAt(hr.points[q].x, hr.points[q].y)) / run;
+                            if (g > worst) { worst = g; wat = hr.points[q]; }
+                        }
+                        std::printf("  steepest 60 m: %.1f%% at (%.0f, %.0f)\n", worst * 100.0, wat.x, wat.y);
+                    }
+                    if (!hk) continue;
+                    for (int h : engine::addHamlets(w, r, hk->name)) {
+                        grow(h);
+                        const engine::IslandSite& hs = w.sites[static_cast<std::size_t>(h)];
+                        std::printf("  hamlet %s at (%.0f, %.0f), %.0f m up\n", hs.name.c_str(), hs.at.x, hs.at.y, hs.elevation);
+                    }
                 }
             }
             engine::joinPassToTowns(w, arterialNodes);   // ADR-0135: the pass runs into its towns
@@ -658,6 +729,36 @@ int main(int argc, char** argv) {
                 L->lines.push_back(pl);
             }
             for (const engine::IslandMapLayer* L : {&ways, &light, &rail}) if (!L->lines.empty()) whole.layers.push_back(*L);
+        }
+        // --foothills: the lower slopes a FOOTHILL TOWN could stand on (~/.claude/plans/mountain-towns.md), ringed and
+        // lettered on the map, the best each side in red, the rest in orange, each with a line to its far city
+        for (int a = 4; a < argc; ++a) {
+            if (std::string(argv[a]) != "--foothills") continue;
+            const std::vector<engine::FoothillSite> hills = engine::findFoothillSites(w);
+            engine::IslandMapLayer picked, others;
+            picked.name = "foothill-picks"; picked.label = "Foothill town: recommended"; picked.rgb[0] = 0.85f; picked.rgb[1] = 0.10f; picked.rgb[2] = 0.10f;
+            picked.widthM = 30; picked.minPx = 2.5;
+            others.name = "foothill-candidates"; others.label = "Foothill town: other candidates"; others.rgb[0] = 0.95f; others.rgb[1] = 0.55f; others.rgb[2] = 0.05f;
+            others.widthM = 22; others.minPx = 2.0; others.dash = "40 30";
+            std::printf("foothill towns: %zu candidates\n", hills.size());
+            for (std::size_t k = 0; k < hills.size(); ++k) {
+                const engine::FoothillSite& c = hills[k];
+                const std::string letter(1, static_cast<char>('A' + k));
+                const std::string far = c.farCity >= 0 ? w.sites[static_cast<std::size_t>(c.farCity)].name : std::string("-");
+                std::printf("  %s%s at (%6.0f, %6.0f) side %+d: score %.2f, %3.0f m up, grade %4.1f%%, %4.1f m rough, the range %3.0f m higher behind, %5.0f m to the freeway; across to %s\n",
+                            letter.c_str(), c.pick ? " (pick)" : "       ", c.at.x, c.at.y, c.side, c.score, c.height, c.grade * 100.0, c.roughness, c.rise, c.toFreeway, far.c_str());
+                engine::IslandMapLayer& L = c.pick ? picked : others;
+                std::vector<engine::Vec2> ring;
+                for (int q = 0; q <= 48; ++q) {
+                    const double ang = 2.0 * 3.14159265358979 * q / 48.0;
+                    ring.push_back(c.at + engine::Vec2(std::cos(ang), std::sin(ang)) * 300.0);
+                }
+                L.lines.push_back(ring);
+                L.lines.push_back({c.at, c.at + c.uphill * 300.0});   // toward the range
+                L.tags.push_back({c.at + engine::Vec2(0, 450.0), letter});
+            }
+            whole.layers.push_back(others);
+            whole.layers.push_back(picked);
         }
         // --beaches: the sandy shores a BEACH TOWN could stand on (~/.claude/plans/beach-town.md), ringed and lettered on
         // the map, the two picks in red, the rest in orange

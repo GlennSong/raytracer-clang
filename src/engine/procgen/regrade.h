@@ -34,6 +34,8 @@ struct Regrade {
 // The terrain block's "regrade": [ { "outline": [[x, z], ...], "blur", "maxSlope", "terrace", "bank", "feather",
 // "cell" }, ... ]. Empty without one.
 std::vector<Regrade> regradesFromJson(const nlohmann::json& terrainBlock);
+// One regrade as its entry in that list (regradesFromJson reads it back the same).
+nlohmann::json regradeToJson(const Regrade& g);
 
 // `base` with each regrade laid over it in turn. The levelled patches are computed here, once.
 HeightField regradeField(HeightField base, const std::vector<Regrade>& regrades);

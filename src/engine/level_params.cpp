@@ -174,6 +174,11 @@ TerrainParams readTerrainParams(const json& t) {
             }
             if (!polys.empty()) gp.settled = std::make_shared<const SettledGround>(std::move(polys));
         }
+        if (const std::vector<Regrade> rg = regradesFromJson(t); !rg.empty()) {   // ADR-0323: levelled ground, plain soil
+            std::vector<std::vector<Vec2>> polys;
+            for (const Regrade& g : rg) polys.push_back(g.outline);
+            gp.levelled = std::make_shared<const SettledGround>(std::move(polys));
+        }
         if (t.contains("forest") && t["forest"].is_object())                // ADR-0129: litter under the canopy
             gp.forest = std::make_shared<const ForestParams>(forestFromJson(t["forest"]));
         p.cover = std::make_shared<const GroundCover>(gp);
@@ -185,7 +190,10 @@ TerrainParams readTerrainParams(const json& t) {
     if (t.contains("rivers") && t["rivers"].is_object()) {
         static std::mutex memoMutex;
         static std::map<std::string, std::shared_ptr<const Hydrology>> memo;
-        const std::string key = t.dump();
+        // the rivers run over the ground WITHOUT its regrades (ADR-0323): levelling a town's patch never moves a river
+        json unlevelled = t;
+        unlevelled.erase("regrade");
+        const std::string key = unlevelled.dump();
         std::lock_guard<std::mutex> lock(memoMutex);
         auto it = memo.find(key);
         if (it == memo.end()) {
@@ -231,7 +239,7 @@ TerrainParams readTerrainParams(const json& t) {
             // are where the rivers belong), else the raw relief
             std::function<double(double, double)> over = [base, n](double x, double z) { return terrainBaseHeight(base, n, x, z); };
             if (t.value("erode", false))
-                if (auto eb = erodedForTerrain(t)) over = [eb](double x, double z) { return (*eb)(x, z); };
+                if (auto eb = erodedForTerrain(unlevelled)) over = [eb](double x, double z) { return (*eb)(x, z); };
             auto hy = Hydrology::build(over, hp);
             LOG_INFO << "[hydrology] " << hy->rivers().size() << " rivers, " << hy->lakes().size() << " lakes on a "
                      << hy->gridSize() << "^2 grid (" << hp.cell << " m) in "
@@ -305,7 +313,7 @@ namespace {
 std::shared_ptr<const std::function<double(double, double)>> regraded(const json& tj,
                                                                       std::shared_ptr<const std::function<double(double, double)>> f) {
     const std::vector<Regrade> rg = regradesFromJson(tj);
-    if (rg.empty()) return f;
+    if (rg.empty() || !f) return f;
     return std::make_shared<const std::function<double(double, double)>>(
         regradeField([f](double x, double z) { return (*f)(x, z); }, rg));
 }
@@ -319,6 +327,19 @@ std::shared_ptr<const std::function<double(double, double)>> erodedForTerrain(co
     static std::mutex memoMutex;
     static std::map<std::string, std::shared_ptr<const std::function<double(double, double)>>> memo;
     const std::string key = tj.dump();
+    // A REGRADED block is its ground without the regrades (one weathered grid, however many places are levelled on it),
+    // levelled as it is read
+    if (tj.contains("regrade")) {
+        {
+            std::lock_guard<std::mutex> lock(memoMutex);
+            if (auto it = memo.find(key); it != memo.end()) return it->second;
+        }
+        json bare = tj;
+        bare.erase("regrade");
+        std::shared_ptr<const std::function<double(double, double)>> f = regraded(tj, erodedForTerrain(bare));
+        std::lock_guard<std::mutex> lock(memoMutex);
+        return memo.emplace(key, f).first->second;
+    }
     std::lock_guard<std::mutex> lock(memoMutex);
     if (auto it = memo.find(key); it != memo.end()) return it->second;
     // THE WEATHERED GROUND (ADR-0126): grown from uplift and weathered by water offline, cached on disk
@@ -388,11 +409,13 @@ std::shared_ptr<const std::function<double(double, double)>> erodedForTerrain(co
                 }
                 return h + m * amp * (r / tot - 0.5) * 2.0;
             });
-            return memo[key] = regraded(tj, f);
+            memo[key] = f;
+            return f;
         }
         auto f = std::make_shared<const std::function<double(double, double)>>(
             [grid](double x, double z) { return static_cast<double>(grid->sampleWorld(static_cast<float>(x), static_cast<float>(z))); });
-        return memo[key] = regraded(tj, f);
+        memo[key] = f;
+        return f;
     }
     // ADR-0257: the droplet sim that once eroded a block without "weather" is gone
     LOG_WARN << "[terrain] \"erode\" without a \"weather\" block: the ground stays as drawn (droplet erosion was "

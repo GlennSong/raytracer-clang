@@ -27,6 +27,13 @@ std::vector<Regrade> regradesFromJson(const nlohmann::json& t) {
     return out;
 }
 
+nlohmann::json regradeToJson(const Regrade& g) {
+    nlohmann::json outline = nlohmann::json::array();
+    for (const Vec2& q : g.outline) outline.push_back({std::round(q.x * 10.0) / 10.0, std::round(q.y * 10.0) / 10.0});
+    return {{"outline", outline}, {"blur", g.blur}, {"maxSlope", g.maxSlope}, {"terrace", g.terrace}, {"bank", g.bank},
+            {"feather", g.feather}, {"cell", g.cell}};
+}
+
 namespace {
 
 // One regrade's patch: the levelled height, and how much of it holds (1 inside the outline, easing to 0 across the
