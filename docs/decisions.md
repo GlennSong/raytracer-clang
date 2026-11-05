@@ -15218,3 +15218,34 @@ when he raised the cloud density.
   per-pixel cloud depth, as Decima does.
 - The faint horizontal bands across clear sky look like colour banding in the sky gradient, separate from the clouds.
   To check.
+
+## ADR-0334 — The clouds' history reprojects by each pixel's cloud depth (#187)
+
+**Context.** Glenn, 2026-11-05: "some of the layers shift as you go above the clouds. Like they're not stable." The
+history (ADR-0328) reprojected every pixel as if its cloud stood at the deck's middle height. Seen from the ground
+that is close enough. Near the deck or above it, it is far off, so last frame's clouds were pasted in the wrong place
+and slid. Decima's clouds reproject by each pixel's own cloud distance.
+
+**Decision.**
+- **A second march target.** The march writes R32F: each pixel's distance to the cloud its ray found, weighted by what
+  each step added to the pixel (transmittance × (1 − the step's transmittance)), or −1 for none.
+  - Its own render pass, `cloudMarchRenderPass`, has two attachments. The history keeps the one-target `cloudRenderPass`.
+  - `makeFullscreen` takes a target count.
+  - The march / resolve set layout has a fifth binding: the march sets put a placeholder there (it never reads it), the
+    resolve sets the depth target.
+- **The resolve** reprojects at that depth, with the middle height only where a pixel has no cloud, and the scene's
+  depth when that is nearer.
+- **A/B:** `RT_CLOUD_DEPTH=0` reprojects by the middle height, as before (`u.detail.z`).
+
+**Measured** (cloud lab, coverage 0.55, density 0.6, wind pinned, flying 40 m/s):
+- Frames flying through the deck: the big near cloud is clean, where the middle height smeared and speckled it. Over
+  the deck: slightly crisper.
+- The flicker metric doesn't separate them: deck 1.30 against 1.45, over 0.54 against 0.48, under 2.00 against 1.78
+  (mean, 0..255). Flying, real parallax dominates it.
+- One mistake on the way: the history pass copied the march's begin info and so began the two-target pass on its
+  one-target framebuffer. The NVIDIA driver crashed in `vkCmdBeginRenderPass`.
+
+**Not done.**
+- The band of horizontal streaks along the deck's own level: rays nearly parallel to the layer cross tens of km of it.
+  The near and far steps are owed.
+- Metal (#71).

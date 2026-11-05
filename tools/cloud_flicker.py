@@ -48,16 +48,27 @@ def main():
                     help="m/s: fly the camera sideways continuously through one burst of consecutive frames (the real "
                          "moving case; --move's frames are seconds apart, so the wind's drift swamps them)")
     ap.add_argument("--hour", type=float, default=15.0)
+    ap.add_argument("--cmd", nargs="*", default=[], help="control commands after the load ('weather off' 'clouds density 0.6')")
+    ap.add_argument("--env", nargs="*", default=[], help="RT_* switches for the run (an A/B)")
+    ap.add_argument("--wind", type=float, default=-1.0, help="pin the wind (RT_WIND_TIME): the clouds stand still, so all "
+                                                              "frame-to-frame change is the renderer's")
     a = ap.parse_args()
     out = os.path.abspath(a.out)
     os.makedirs(out, exist_ok=True)
     env = dict(os.environ, RT_VSYNC="0", RT_PROBE_TAG="cloud_flicker", RT_AUDIO="null")
+    if a.wind >= 0.0:
+        env["RT_WIND_TIME"] = str(a.wind)
+    for kv in a.env:
+        k, v = kv.split("=", 1)
+        env[k] = v
     proc, sock = rtctl.launch("build-viewer/viewer", a.level, log=open(os.path.join(out, "viewer.log"), "wb"), env=env)
     lines = []
     try:
         send(sock, "info", timeout=2400)
         send(sock, f"daynight {a.hour}")
         send(sock, "sim pause")
+        for c in a.cmd:
+            send(sock, c)
         for v in a.views:
             name, x, y, z, pitch, yaw = v.split(":")
             send(sock, f"camera {x} {y} {z} {pitch} {yaw}")

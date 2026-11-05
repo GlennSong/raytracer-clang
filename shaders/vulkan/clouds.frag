@@ -24,7 +24,7 @@ layout(set = 0, binding = 0) uniform CloudUniforms {
     vec4 layer;           // x bottom, y top, z planetRadius, w domainMode
     vec4 params;          // x coverage, y densityScale, z noiseScale, w windSpeed
     vec4 march;           // x viewSteps, y lightSteps, z phaseG, w farDistance
-    vec4 detail;          // x detailStrength (edge-erosion depth), y 1: the old coherent march offset (the A/B), zw unused
+    vec4 detail;          // x detailStrength (edge-erosion depth), y 1: the old coherent march offset (the A/B), z 1: the resolve reprojects by cloud depth, w unused
     mat4 prevViewProjection;   // last frame's (clouds_resolve.frag: the history's reprojection)
     vec4 frame;                // x this frame's dither offset in [0,1), y history weight (0: reset), zw unused
 } u;
@@ -35,6 +35,10 @@ layout(set = 0, binding = 3) uniform sampler3D detailNoise;  // repeat, linear
 
 layout(location = 0) in vec2 inUV;
 layout(location = 0) out vec4 outColor;
+// EACH PIXEL'S CLOUD DEPTH (ADR-0334): the distance to the cloud its ray found, weighted by what each step added to the
+// pixel; -1 where it found none. The history reprojects by it (clouds_resolve.frag) -- by the deck's middle height it
+// pasted last frame's clouds in the wrong place whenever the camera was near or above the deck, and they slid.
+layout(location = 1) out float outCloudDepth;
 
 float clRemap(float x, float a, float b, float c, float d) {
     return c + (x - a) / max(b - a, 1e-5) * (d - c);
@@ -163,6 +167,7 @@ void main() {
     vec3 sunDir = normalize(u.sunDirection.xyz);
 
     float t0, t1;
+    outCloudDepth = -1.0;
     if (!clLayerInterval(camPos, dir, t0, t1)) { outColor = CLEAR; return; }
 
     // Scene depth occlusion (reverse-Z: background depth == 0 -> far).
@@ -238,6 +243,7 @@ void main() {
 
     float transmittance = 1.0;
     vec3 scattered = vec3(0.0);
+    float depthSum = 0.0, depthW = 0.0;
     vec3 sunLight = u.sunColor.rgb * u.sunColor.w;
 
     // ZERO-RUN STRETCH: consecutive empty samples grow the stride so gaps
@@ -344,6 +350,9 @@ void main() {
             vec3 lum = sunLight * beer * phase * powder + ambient;
             float stepT = exp(-density * stepLen);
             scattered += transmittance * lum * (1.0 - stepT);
+            const float wgt = transmittance * (1.0 - stepT);
+            depthSum += length(p - camPos) * wgt;
+            depthW += wgt;
             transmittance *= stepT;
             if (transmittance < 0.01) break;
         }
@@ -364,4 +373,5 @@ void main() {
     scattered *= ringFade;
     transmittance = mix(1.0, transmittance, ringFade);
     outColor = vec4(scattered, transmittance);
+    outCloudDepth = depthW > 1e-3 ? depthSum / depthW : -1.0;
 }

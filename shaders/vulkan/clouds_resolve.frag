@@ -21,6 +21,7 @@ layout(set = 0, binding = 0) uniform CloudUniforms {
 layout(set = 0, binding = 1) uniform sampler2D current;   // this frame's march (rgb in-scatter, a transmittance)
 layout(set = 0, binding = 2) uniform sampler2D history;   // last frame's resolve
 layout(set = 0, binding = 3) uniform sampler2D sceneDepth;
+layout(set = 0, binding = 4) uniform sampler2D cloudDepth;   // the march's: each pixel's distance to its cloud (-1: none)
 layout(location = 0) in vec2 inUV;
 layout(location = 0) out vec4 outColor;
 
@@ -37,8 +38,10 @@ void main() {
             lo = min(lo, s);
             hi = max(hi, s);
         }
-    // WHERE THIS PIXEL'S CLOUD WAS: the point along its ray at the cloud deck's middle (or the scene, nearer), seen
-    // through last frame's camera (the flipped convention of clouds.frag: ndc = uv * 2 - 1)
+    // WHERE THIS PIXEL'S CLOUD WAS: the point along its ray at ITS cloud's depth (ADR-0334; the march's second target), or
+    // with none, at the deck's middle height -- or the scene, nearer -- seen through last frame's camera (the flipped
+    // convention of clouds.frag: ndc = uv * 2 - 1). By the middle height alone, clouds slid when the camera was near or
+    // above the deck (Glenn: "some of the layers shift as you go above the clouds")
     vec2 ndc = inUV * 2.0 - 1.0;
     vec4 wf = u.invViewProjection * vec4(ndc, 0.002, 1.0);   // (~100 m out, not the near plane: clouds.frag's precision note)
     vec3 cam = u.cameraPosition.xyz;
@@ -49,6 +52,8 @@ void main() {
         float tm = (mid - cam.y) / dir.y;
         if (tm > 0.0) t = min(t, tm);
     }
+    const float cd = texture(cloudDepth, inUV).r;
+    if (cd > 0.0 && u.detail.z > 0.5) t = cd;   // (u.detail.z 0: by the middle height, the A/B: RT_CLOUD_DEPTH=0)
     float depth = texture(sceneDepth, inUV).r;
     if (depth > 0.0) {
         vec4 w = u.invViewProjection * vec4(ndc, depth, 1.0);
