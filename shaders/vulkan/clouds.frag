@@ -25,6 +25,8 @@ layout(set = 0, binding = 0) uniform CloudUniforms {
     vec4 params;          // x coverage, y densityScale, z noiseScale, w windSpeed
     vec4 march;           // x viewSteps, y lightSteps, z phaseG, w farDistance
     vec4 detail;          // x detailStrength (edge-erosion depth), yzw unused
+    mat4 prevViewProjection;   // last frame's (clouds_resolve.frag: the history's reprojection)
+    vec4 frame;                // x this frame's dither offset in [0,1), y history weight (0: reset), zw unused
 } u;
 
 layout(set = 0, binding = 1) uniform sampler2D sceneDepth;
@@ -177,7 +179,7 @@ void main() {
     {
         float cov = 0.0;
         for (int k = 0; k < 8 && cov < 0.02; ++k) {
-            float f = (float(k) + clDither(gl_FragCoord.xy)) / 8.0;
+            float f = (float(k) + fract(clDither(gl_FragCoord.xy) + u.frame.x)) / 8.0;
             cov = max(cov, clLocalCoverage(clWeather((camPos + dir * mix(t0, t1, f)).xz)));
         }
         if (cov < 0.02) { outColor = CLEAR; return; }
@@ -204,14 +206,17 @@ void main() {
     uvec2 hb = uvec2(gl_FragCoord.xy) >> 1u;
     uint hj = hb.x * 7919u + hb.y * 104729u + 1013u;
     hj = (hj ^ (hj >> 16)) * 0x7feb352du; hj = (hj ^ (hj >> 15)) * 0x846ca68bu; hj ^= hj >> 16;
-    float jitter = fract(clDither(gl_FragCoord.xy) + 0.25 * (float(hj & 0xFFFFu) / 65536.0));
+    // ...and the whole pattern rolls by a golden-ratio step every frame (u.frame.x), so the history (clouds_resolve.frag)
+    // averages the start offsets away instead of the pattern standing fixed on the screen -- where, as the camera moved,
+    // it crawled across the clouds (#187: the sky's frame-to-frame noise p99 3.5 still, 13.5 moving 2 m a frame)
+    float jitter = fract(clDither(gl_FragCoord.xy) + 0.25 * (float(hj & 0xFFFFu) / 65536.0) + u.frame.x);
     // (a hash, not IGN: IGN's structure runs ~15 px along x and barely changes along y, and with no
     // temporal accumulation to average it the sun march printed soft VERTICAL COLUMNS over every
     // distant mountain seen through thin cloud)
     uvec2 hp = uvec2(gl_FragCoord.xy);
     uint hh = hp.x * 1973u + hp.y * 9277u + 26699u;
     hh = (hh ^ (hh >> 16)) * 0x7feb352du; hh = (hh ^ (hh >> 15)) * 0x846ca68bu; hh ^= hh >> 16;
-    float lightJitter = float(hh & 0xFFFFFFu) / 16777216.0;
+    float lightJitter = fract(float(hh & 0xFFFFFFu) / 16777216.0 + u.frame.x);
     // High-frequency erosion budget: full detail while the step resolves the
     // detail cells, faded out past Nyquist.
     float detailCell = 1.0 / max(1e-6, 16.0 * u.params.z);

@@ -14974,3 +14974,29 @@ stairs] just end in the sky". The hill town's ramps are SWITCHBACK BENDS: from e
 cubic U-turn to the nearest end of the street below, each end's way leant out from the town's middle, handles grown until
 the bend holds 12 % over the step and a 15 m radius -- Kingswood's 18 bends hold 19-25 m at 4-9 %. A footway is kept only
 when both its ends land on a street the plan kept (the pruning after the stairs took some of their streets).
+
+## ADR-0328 — The clouds keep a history (#187 step 1, #59)
+
+#187 put the clouds first: Glenn sees them jitter, the march showing, and they "fall apart quickly". MEASURED first
+(tools/cloud_flicker.py: a burst of consecutive frames, the sky's high-frequency temporal noise -- each frame against
+its neighbours' mean, so a cloud drifting steadily scores near zero): still, the sky's p99 3.5 of 255 (mean 0.14);
+flown sideways at 15 m/s, p99 9.0 (mean 0.34), the clouds lit up in bands on the flicker map and the clear sky dark.
+The march's start offsets were a pattern FIXED TO THE SCREEN (stratified per 2x2 block, hashed per block, never moving
+in time): standing still it is invisible, and as the camera moves it crawls across the clouds.
+
+**Decision.**
+- The march's offsets (the view start, the sun march, the empty-ray probes) roll by a golden-ratio step each frame
+  (`CloudUniforms.frame.x`).
+- A RESOLVE pass (shaders/vulkan/clouds_resolve.frag; the march's own render pass and set layout) blends this frame's
+  march with last frame's resolve -- two half-res histories, ping-ponged -- reprojected through last frame's
+  view-projection to where the cloud was: the point along the ray at the deck's middle height, or the scene where it is
+  nearer. The history is clamped to this frame's 3x3 neighbourhood (no ghost at a moving silhouette) and kept at 0.9;
+  reset on new targets or a camera jump over 50 m. The composite reads the resolve. `RT_CLOUD_HISTORY=0` is the A/B
+  (the fixed offsets, no history); another number sets the weight.
+- `transitionImageLayout` gains UNDEFINED -> SHADER_READ (a target read before it is first drawn).
+- MEASURED after: still p99 1.0 (mean 0.04), flown p99 4.0 (mean 0.16) -- the moving shimmer halved. The cloud pass
+  0.61-0.71 ms against 0.60-0.62 (both runs beside another viewer on the GPU).
+- Metal (clouds.metal) keeps the old march; the history is a follow-up there (#71).
+
+**Seen, owed.** The clouds' sides still come out in slices (stepped shells along a deck's flank, in both modes); the far
+low clouds sit in faint hard-edged rectangles near the horizon.

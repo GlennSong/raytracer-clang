@@ -202,6 +202,8 @@ struct CloudUniformsGPU {
     float params[4];          // x coverage, y densityScale, z noiseScale, w wind
     float march[4];           // x viewSteps, y lightSteps, z phaseG, w farDistance
     float detail[4];          // x detailStrength, yzw unused
+    float prevViewProjection[16];   // last frame's (the history's reprojection, clouds_resolve.frag)
+    float frame[4];                 // x dither offset in [0,1), y history weight (0: reset)
 };
 
 // Per-draw push constants for the forward pass (120 <= 128 B).
@@ -479,6 +481,21 @@ struct VulkanRenderer::Impl {
     VkPipeline cloudMarchPipeline = VK_NULL_HANDLE;
     VkPipelineLayout cloudCompositePipelineLayout = VK_NULL_HANDLE;
     VkPipeline cloudCompositePipeline = VK_NULL_HANDLE;
+    // THE HISTORY (#187): two half-res resolves, ping-ponged -- this frame's march blended with the last resolve
+    // reprojected (clouds_resolve.frag, the march's own pass and set layout); the composite reads this frame's
+    std::array<VkImage, 2> cloudHistImage{};
+    std::array<VkDeviceMemory, 2> cloudHistMemory{};
+    std::array<VkImageView, 2> cloudHistView{};
+    std::array<VkFramebuffer, 2> cloudHistFramebuffer{};
+    std::array<std::array<VkDescriptorSet, 2>, MAX_FRAMES_IN_FLIGHT> cloudResolveSets{};   // [frame][writes into]
+    std::array<VkDescriptorSet, 2> cloudCompositeSets{};                                   // [reads]
+    VkPipeline cloudResolvePipeline = VK_NULL_HANDLE;
+    int cloudHistCur = 0;           // the history written this frame
+    bool cloudHistValid = false;    // false: the next frame starts it afresh (new targets, a jump)
+    bool cloudHistFresh = true;     // the targets are new: their layout is still undefined
+    float cloudPrevVP[16] = {};
+    float cloudPrevCam[3] = {0, 0, 0};
+    uint64_t cloudFrames = 0;
     std::array<VkBuffer, MAX_FRAMES_IN_FLIGHT> cloudUboBuffers{};
     std::array<VkDeviceMemory, MAX_FRAMES_IN_FLIGHT> cloudUboMemory{};
     std::array<void*, MAX_FRAMES_IN_FLIGHT> cloudUboMapped{};
@@ -1540,15 +1557,16 @@ bool VulkanRenderer::Impl::createCloudResources() {
         if (vkCreateDescriptorSetLayout(device, &cl, nullptr, &cloudCompositeSetLayout) != VK_SUCCESS)
             return false;
 
+        // (the march's sets, the resolve's -- one per frame and history -- and the composite's two)
         std::array<VkDescriptorPoolSize, 2> sizes{
             VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-                                 3 * MAX_FRAMES_IN_FLIGHT + 2},
-            VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, MAX_FRAMES_IN_FLIGHT}};
+                                 3 * MAX_FRAMES_IN_FLIGHT + 3 * 2 * MAX_FRAMES_IN_FLIGHT + 2 * 3},
+            VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, MAX_FRAMES_IN_FLIGHT + 2 * MAX_FRAMES_IN_FLIGHT}};
         VkDescriptorPoolCreateInfo pp{};
         pp.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
         pp.poolSizeCount = static_cast<uint32_t>(sizes.size());
         pp.pPoolSizes = sizes.data();
-        pp.maxSets = MAX_FRAMES_IN_FLIGHT + 1;
+        pp.maxSets = MAX_FRAMES_IN_FLIGHT + 2 * MAX_FRAMES_IN_FLIGHT + 3;
         if (vkCreateDescriptorPool(device, &pp, nullptr, &cloudPool) != VK_SUCCESS) return false;
         for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
             VkDescriptorSetAllocateInfo a{};
@@ -1565,6 +1583,12 @@ bool VulkanRenderer::Impl::createCloudResources() {
         a.descriptorSetCount = 1;
         a.pSetLayouts = &cloudCompositeSetLayout;
         if (vkAllocateDescriptorSets(device, &a, &cloudCompositeSet) != VK_SUCCESS) return false;
+        for (int h = 0; h < 2; ++h)
+            if (vkAllocateDescriptorSets(device, &a, &cloudCompositeSets[h]) != VK_SUCCESS) return false;
+        a.pSetLayouts = &cloudMarchSetLayout;   // the resolve: uniforms + current + history + depth
+        for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
+            for (int h = 0; h < 2; ++h)
+                if (vkAllocateDescriptorSets(device, &a, &cloudResolveSets[i][h]) != VK_SUCCESS) return false;
 
         // Per-frame uniform ring (the mapped-write pattern of globalsBuffers).
         for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
@@ -1669,6 +1693,11 @@ bool VulkanRenderer::Impl::createCloudResources() {
             LOG_ERROR("[vulkan] cloud march pipeline creation failed");
             return false;
         }
+        if (!makeFullscreen("clouds_resolve.frag.spv", cloudMarchPipelineLayout, cloudRenderPass,
+                            marchBA, &cloudResolvePipeline)) {
+            LOG_ERROR("[vulkan] cloud resolve pipeline creation failed");
+            return false;
+        }
 
         VkPushConstantRange cpr{VK_SHADER_STAGE_FRAGMENT_BIT, 0, 2 * sizeof(float)};
         VkPipelineLayoutCreateInfo cpl{};
@@ -1714,6 +1743,16 @@ bool VulkanRenderer::Impl::createCloudResources() {
     fb.height = cloudExtent.height;
     fb.layers = 1;
     if (vkCreateFramebuffer(device, &fb, nullptr, &cloudFramebuffer) != VK_SUCCESS) return false;
+    for (int h = 0; h < 2; ++h) {
+        if (!createColorTarget(cloudExtent.width, cloudExtent.height, kHdrFormat,
+                               VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                               cloudHistImage[h], cloudHistMemory[h], cloudHistView[h]))
+            return false;
+        fb.pAttachments = &cloudHistView[h];
+        if (vkCreateFramebuffer(device, &fb, nullptr, &cloudHistFramebuffer[h]) != VK_SUCCESS) return false;
+    }
+    cloudHistValid = false;
+    cloudHistFresh = true;
     fb.renderPass = cloudCompositeRenderPass;
     fb.pAttachments = &hdrView;
     fb.width = swapchainExtent.width;
@@ -1760,6 +1799,32 @@ bool VulkanRenderer::Impl::createCloudResources() {
         cw[k].pImageInfo = &cimgs[k];
     }
     vkUpdateDescriptorSets(device, static_cast<uint32_t>(cw.size()), cw.data(), 0, nullptr);
+    // the history's sets: each resolve reads the march and the OTHER history, and the composite the one just written
+    for (int h = 0; h < 2; ++h) {
+        std::array<VkDescriptorImageInfo, 2> hc{};
+        hc[0] = {compositeSampler, cloudHistView[h], VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+        hc[1] = {compositeSampler, depthView, VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL};
+        for (uint32_t k = 0; k < 2; ++k) { cw[k].dstSet = cloudCompositeSets[h]; cw[k].pImageInfo = &hc[k]; }
+        vkUpdateDescriptorSets(device, static_cast<uint32_t>(cw.size()), cw.data(), 0, nullptr);
+        for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
+            VkDescriptorBufferInfo ubo{cloudUboBuffers[i], 0, sizeof(CloudUniformsGPU)};
+            std::array<VkDescriptorImageInfo, 3> ri{};
+            ri[0] = {compositeSampler, cloudView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+            ri[1] = {compositeSampler, cloudHistView[1 - h], VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+            ri[2] = {compositeSampler, depthView, VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL};
+            std::array<VkWriteDescriptorSet, 4> rw{};
+            for (uint32_t k = 0; k < 4; ++k) {
+                rw[k].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                rw[k].dstSet = cloudResolveSets[i][h];
+                rw[k].dstBinding = k;
+                rw[k].descriptorCount = 1;
+                rw[k].descriptorType = k == 0 ? VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER : VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+                if (k == 0) rw[k].pBufferInfo = &ubo;
+                else rw[k].pImageInfo = &ri[k - 1];
+            }
+            vkUpdateDescriptorSets(device, static_cast<uint32_t>(rw.size()), rw.data(), 0, nullptr);
+        }
+    }
     return true;
 }
 
@@ -4632,7 +4697,12 @@ void VulkanRenderer::Impl::transitionImageLayout(VkCommandBuffer cmd, VkImage im
     barrier.subresourceRange.layerCount = 1;
 
     VkPipelineStageFlags srcStage, dstStage;
-    if (from == VK_IMAGE_LAYOUT_UNDEFINED && to == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL) {
+    if (from == VK_IMAGE_LAYOUT_UNDEFINED && to == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) {   // (a target read before it is drawn)
+        barrier.srcAccessMask = 0;
+        barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        srcStage = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
+        dstStage = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+    } else if (from == VK_IMAGE_LAYOUT_UNDEFINED && to == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL) {
         barrier.srcAccessMask = 0;
         barrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
         srcStage = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
@@ -5263,6 +5333,16 @@ void VulkanRenderer::Impl::cleanupSwapchain() {
     cloudView = VK_NULL_HANDLE;
     cloudImage = VK_NULL_HANDLE;
     cloudMemory = VK_NULL_HANDLE;
+    for (int h = 0; h < 2; ++h) {
+        if (cloudHistFramebuffer[h]) vkDestroyFramebuffer(device, cloudHistFramebuffer[h], nullptr);
+        if (cloudHistView[h]) vkDestroyImageView(device, cloudHistView[h], nullptr);
+        if (cloudHistImage[h]) vkDestroyImage(device, cloudHistImage[h], nullptr);
+        if (cloudHistMemory[h]) vkFreeMemory(device, cloudHistMemory[h], nullptr);
+        cloudHistFramebuffer[h] = VK_NULL_HANDLE;
+        cloudHistView[h] = VK_NULL_HANDLE;
+        cloudHistImage[h] = VK_NULL_HANDLE;
+        cloudHistMemory[h] = VK_NULL_HANDLE;
+    }
     if (dofFramebuffer) vkDestroyFramebuffer(device, dofFramebuffer, nullptr);
     if (dofView) vkDestroyImageView(device, dofView, nullptr);
     if (dofImage) vkDestroyImage(device, dofImage, nullptr);
@@ -5649,6 +5729,27 @@ void VulkanRenderer::Impl::recordCommandBuffer(VkCommandBuffer cmd, uint32_t ima
         vkCmdDraw(cmd, 3, 1, 0, 0);
         vkCmdEndRenderPass(cmd);
 
+        // THE HISTORY: this frame's march and the other history (reprojected) into history[cur]
+        const bool resolve = cloudResolvePipeline && cloudHistFramebuffer[0] && cloudHistFramebuffer[1];
+        if (resolve) {
+            if (cloudHistFresh) {   // (new targets: the one read first has never been written)
+                for (int h = 0; h < 2; ++h)
+                    transitionImageLayout(cmd, cloudHistImage[static_cast<std::size_t>(h)], VK_IMAGE_LAYOUT_UNDEFINED,
+                                          VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+                cloudHistFresh = false;
+            }
+            VkRenderPassBeginInfo rrp = mrp;
+            rrp.framebuffer = cloudHistFramebuffer[static_cast<std::size_t>(cloudHistCur)];
+            vkCmdBeginRenderPass(cmd, &rrp, VK_SUBPASS_CONTENTS_INLINE);
+            vkCmdSetViewport(cmd, 0, 1, &cvp);
+            vkCmdSetScissor(cmd, 0, 1, &csc);
+            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, cloudResolvePipeline);
+            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, cloudMarchPipelineLayout, 0, 1,
+                                    &cloudResolveSets[currentFrame][static_cast<std::size_t>(cloudHistCur)], 0, nullptr);
+            vkCmdDraw(cmd, 3, 1, 0, 0);
+            vkCmdEndRenderPass(cmd);
+        }
+
         VkRenderPassBeginInfo crp2{};
         crp2.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
         crp2.renderPass = cloudCompositeRenderPass;
@@ -5663,12 +5764,13 @@ void VulkanRenderer::Impl::recordCommandBuffer(VkCommandBuffer cmd, uint32_t ima
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, cloudCompositePipeline);
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
                                 cloudCompositePipelineLayout, 0, 1,
-                                &cloudCompositeSet, 0, nullptr);
+                                resolve ? &cloudCompositeSets[static_cast<std::size_t>(cloudHistCur)] : &cloudCompositeSet, 0, nullptr);
         float nearFar[2] = {camNear, camFar};
         vkCmdPushConstants(cmd, cloudCompositePipelineLayout, VK_SHADER_STAGE_FRAGMENT_BIT,
                            0, sizeof(nearFar), nearFar);
         vkCmdDraw(cmd, 3, 1, 0, 0);
         vkCmdEndRenderPass(cmd);
+        if (resolve) cloudHistCur = 1 - cloudHistCur;   // next frame writes the other, reading this one
     }
 
     // Bloom + SSAO read the scene outputs (always run so their views stay
@@ -5900,7 +6002,24 @@ void VulkanRenderer::Impl::drawFrame() {
         cu.march[2] = cp.phaseG;
         cu.march[3] = cp.farDistance;
         cu.detail[0] = cp.detailStrength;
+        // THE HISTORY'S INPUTS: last frame's camera, and how much of the history to keep -- none on the first frame
+        // after new targets or a jump (a teleport, a cut: over 50 m in a frame); RT_CLOUD_HISTORY=0 turns it off (the
+        // A/B), any other number sets the weight (0.9: about ten frames' memory)
+        static const float kHistory = [] {
+            const char* e = std::getenv("RT_CLOUD_HISTORY");
+            return e ? std::clamp(static_cast<float>(std::atof(e)), 0.0f, 0.97f) : 0.9f;
+        }();
+        const float dx = cpuGlobals.cameraPosition[0] - cloudPrevCam[0], dy = cpuGlobals.cameraPosition[1] - cloudPrevCam[1],
+                    dz = cpuGlobals.cameraPosition[2] - cloudPrevCam[2];
+        const bool jumped = dx * dx + dy * dy + dz * dz > 50.0f * 50.0f;
+        std::memcpy(cu.prevViewProjection, cloudHistValid ? cloudPrevVP : cpuGlobals.viewProjection, sizeof(cu.prevViewProjection));
+        cu.frame[0] = kHistory > 0.0f ? static_cast<float>(std::fmod(static_cast<double>(cloudFrames) * 0.6180339887, 1.0)) : 0.0f;
+        cu.frame[1] = cloudHistValid && !jumped ? kHistory : 0.0f;
         std::memcpy(cloudUboMapped[currentFrame], &cu, sizeof(cu));
+        std::memcpy(cloudPrevVP, cpuGlobals.viewProjection, sizeof(cloudPrevVP));
+        std::memcpy(cloudPrevCam, cpuGlobals.cameraPosition, sizeof(cloudPrevCam));
+        cloudHistValid = true;
+        ++cloudFrames;
     }
 
     if (imagesInFlight[imageIndex] != VK_NULL_HANDLE)
@@ -6207,6 +6326,7 @@ void VulkanRenderer::shutdown() {
 
     // Volumetric-cloud resources (size-independent parts).
     if (impl->cloudMarchPipeline) vkDestroyPipeline(impl->device, impl->cloudMarchPipeline, nullptr);
+    if (impl->cloudResolvePipeline) vkDestroyPipeline(impl->device, impl->cloudResolvePipeline, nullptr);
     if (impl->cloudMarchPipelineLayout)
         vkDestroyPipelineLayout(impl->device, impl->cloudMarchPipelineLayout, nullptr);
     if (impl->cloudCompositePipeline)
