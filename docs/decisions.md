@@ -14790,3 +14790,42 @@ lamp per end, no glass, an open seat, and lamps a tyre's radius inside its ends.
 **Verified.** run_tests 1505/1505, physics_tests 146/146, lanes_tests 50/50. river_town in the viewer: 20-21 riders in
 traffic, shot astride at a light; `tap M` logs "Dropped: Motorcycle". Not yet checked by hand: commandeering a parked bike
 and a physical-tier bike under the AI driver (Jolt's controller holds it up; untested at a junction).
+
+## ADR-0323 — The regrade: a town's patch of mountain levelled, its shape kept
+
+Glenn, 2026-11-04, on a mountain town: "you will need a way to terraform the mountain area. Not to make it entirely
+flat but to level it enough to place buildings and roads. And somewhat retain the mountain shape." The island planner's
+mountain town wants a flat patch (slope under 9 %) reaching 70 m in from its edge, 120 m up; since the rocky regen
+(ADR-0214) island 8's highland has none (even blurred over 100 m and allowed 15 %, one spot reaches 68 m in), so the
+island has never had its mountain town in 3D. The street and lot grading levels a street or a lot at a time; nothing
+reshaped a hillside.
+
+**Decision.** `procgen/regrade.h`: the terrain block's `"regrade": [{ "outline", "blur", "maxSlope", "terrace", "bank",
+"feather", "cell" }]`. Over the outline the ground is
+1. blurred over `blur` (100 m): the crags and gullies go, the shoulder and the fall of the hill stay;
+2. capped at `maxSlope` (12 %): the cut (the highest ground no steeper than that under it) and the fill (the lowest over
+   it) each finished by the other and averaged -- the earth off the knolls about fills the hollows, and the middle of a
+   hillside steeper than the cap stays where it was while the top is cut and the foot filled;
+3. optionally stepped into shelves `terrace` m apart, each easing up its last `bank` of the rise (`terraceHeight`, which
+   heightTerrace now calls with no bank);
+and eased back to the raw ground over `feather` (100 m) outside it. The patch is computed once on a `cell` (4 m) grid (a
+`roads::GroundGrid`) and blended over the ground as it is read.
+
+- It is GROUND: `erodedForTerrain` lays it on the weathered relief (after the rock relief), so the rivers, the island
+  planner, the road solve's natural ground, the lots and the drawn tiles all stand on it. The streets' and pads' own
+  cut and fill (ADR-0075, ADR-0221) come after, as on any ground.
+- The weathered grid is unchanged: `groundShapingBlock` leaves "regrade" out of the weather bake's key (as it does
+  "rockRelief"), so adding one never re-erodes the island. It is in the terrain block, so the pyramid and bundle keys
+  change with it; no tag bump.
+- THE SLOPE CAP is a chamfer sweep seeded with heights. The planner's two hand-written chamfer distance transforms
+  (depth into flat ground, distance from the sea) are now that one `chamferSweepGrid` (texture_field.h, beside
+  boxBlurGrid); island 8 plans byte for byte as before.
+- Test bed: `assets/levels/mountain_town_lab.json`, island 8's ground with no city and one regrade on the shoulder at
+  (1445, 2910), 196 m up.
+- Tests (run_tests, test_regrade.cpp): the sweep as a distance and as a cap; terraceHeight; a rough 10 % hillside
+  levelled with its fall kept, cut about filling, untouched past the feather; a 20 % one laid back to 12 % (cut above,
+  filled below, the middle in place); terraces (2/3 of the town on level shelves, banks ~48 %).
+
+**Next.** A mountain town ON it: candidates lettered on the island map (findMountainSites, as findBeachSites) and
+`--mountain-towns` to add one (its regrade written into the terrain block, its winding road, its streets on the
+shelves), then the island re-plan after PR #182 merges.

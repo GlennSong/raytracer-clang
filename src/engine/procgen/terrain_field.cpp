@@ -249,11 +249,17 @@ HeightField heightWarp(HeightField base, HeightField by, double strength) {
     };
 }
 
+double terraceHeight(double h, double step, double bank) {
+    const double s = step > 1e-6 ? step : 1.0;
+    if (bank <= 0.0) return std::round(h / s) * s;
+    // the shelf holds its level until the last `bank` of the step, then eases up to the next one
+    const double q = h / s + 0.5, k = std::floor(q);
+    const double t = std::clamp((q - k - (1.0 - bank)) / bank, 0.0, 1.0);
+    return (k + t * t * (3.0 - 2.0 * t)) * s;
+}
+
 HeightField heightTerrace(HeightField base, double step) {
-    double s = step > 1e-6 ? step : 1.0;
-    return [base, s](double x, double z) {
-        return std::round(base(x, z) / s) * s;
-    };
+    return [base, step](double x, double z) { return terraceHeight(base(x, z), step); };
 }
 
 HeightField heightAdd(HeightField a, HeightField b) {

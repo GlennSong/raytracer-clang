@@ -110,6 +110,7 @@ add_library(engine_core STATIC
     src/engine/procgen/vehicle/train_mesh.cpp
     src/engine/procgen/texture_field.cpp
     src/engine/procgen/terrain_field.cpp
+    src/engine/procgen/regrade.cpp       # a town's patch of mountain levelled, its shape kept (ADR-0323)
     src/engine/procgen/earthwork.cpp
     src/engine/procgen/erosion.cpp
     src/engine/procgen/stream_power.cpp
@@ -766,6 +767,7 @@ add_executable(run_tests
     tests/test_instance_tlas.cpp
     tests/test_texture_field.cpp
     tests/test_terrain_field.cpp
+    tests/test_regrade.cpp
     tests/test_earthwork.cpp
     tests/test_winding.cpp
     tests/test_sim_rate_ab.cpp

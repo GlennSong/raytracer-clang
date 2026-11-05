@@ -66,6 +66,8 @@ SRCS = \
 	$(SRC_DIR)/engine/procgen/vehicle/occupant.cpp \
 	$(SRC_DIR)/engine/procgen/texture_field.cpp \
 	$(SRC_DIR)/engine/procgen/terrain_field.cpp \
+	$(SRC_DIR)/engine/procgen/regrade.cpp \
+	$(SRC_DIR)/engine/procgen/city/roads/ground_grid.cpp \
 	$(SRC_DIR)/engine/procgen/earthwork.cpp \
 	$(SRC_DIR)/engine/procgen/erosion.cpp \
 	$(SRC_DIR)/engine/procgen/city/polygon.cpp \
@@ -287,6 +289,8 @@ TEST_ENGINE_SRCS = \
 	$(SRC_DIR)/engine/procgen/vehicle/occupant.cpp \
 	$(SRC_DIR)/engine/procgen/texture_field.cpp \
 	$(SRC_DIR)/engine/procgen/terrain_field.cpp \
+	$(SRC_DIR)/engine/procgen/regrade.cpp \
+	$(SRC_DIR)/engine/procgen/city/roads/ground_grid.cpp \
 	$(SRC_DIR)/engine/procgen/earthwork.cpp \
 	$(SRC_DIR)/engine/procgen/erosion.cpp \
 	$(SRC_DIR)/engine/procgen/rock.cpp \

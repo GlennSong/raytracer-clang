@@ -3,6 +3,7 @@
 #include "level_params.h"
 #include "procgen/terrain_weather.h"   // the weathered ground (ADR-0126)
 #include "procgen/terrain_maps.h"      // its maps (ADR-0128)
+#include "procgen/regrade.h"            // a town's patch of mountain levelled (ADR-0323)
 #include "procgen/forest.h"            // its forest (ADR-0129)
 #include "procgen/trails.h"            // its trails (ADR-0134)
 #include "procgen/terrain_lod.h"   // kBakedCell0 (ADR-0095)
@@ -298,6 +299,18 @@ readErodedBase(const json& root) {
     return erodedForTerrain(root["terrain"]);
 }
 
+namespace {
+// THE REGRADE (procgen/regrade.h, ADR-0323): a town's patch of mountain levelled, laid on the weathered ground as it
+// is read; the weathered grid itself is the same (groundShapingBlock leaves "regrade" out of its key)
+std::shared_ptr<const std::function<double(double, double)>> regraded(const json& tj,
+                                                                      std::shared_ptr<const std::function<double(double, double)>> f) {
+    const std::vector<Regrade> rg = regradesFromJson(tj);
+    if (rg.empty()) return f;
+    return std::make_shared<const std::function<double(double, double)>>(
+        regradeField([f](double x, double z) { return (*f)(x, z); }, rg));
+}
+}  // namespace
+
 std::shared_ptr<const std::function<double(double, double)>> erodedForTerrain(const json& tjIn) {
     // once per terrain block (a load reads it several times; the island planner and the level agree).
     // Its "rivers" are left out: they are computed ON this, and reading them here would recurse.
@@ -375,13 +388,11 @@ std::shared_ptr<const std::function<double(double, double)>> erodedForTerrain(co
                 }
                 return h + m * amp * (r / tot - 0.5) * 2.0;
             });
-            memo[key] = f;
-            return f;
+            return memo[key] = regraded(tj, f);
         }
         auto f = std::make_shared<const std::function<double(double, double)>>(
             [grid](double x, double z) { return static_cast<double>(grid->sampleWorld(static_cast<float>(x), static_cast<float>(z))); });
-        memo[key] = f;
-        return f;
+        return memo[key] = regraded(tj, f);
     }
     // ADR-0257: the droplet sim that once eroded a block without "weather" is gone
     LOG_WARN << "[terrain] \"erode\" without a \"weather\" block: the ground stays as drawn (droplet erosion was "

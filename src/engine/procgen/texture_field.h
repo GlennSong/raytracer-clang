@@ -106,6 +106,12 @@ TextureData bakeCached(const std::string& recipeKey, const std::function<Texture
 // maps' slope and cliff fields, the weather bake's range and shape passes, and the planner's land masks.
 enum class BlurEdge { Clamp, Shrink };
 std::vector<float> boxBlurGrid(const std::vector<float>& in, int n, int r, int passes = 1, BlurEdge edge = BlurEdge::Clamp);
+// THE CHAMFER SWEEP over an n x n row-major grid, in place: two passes (forward, then back) that leave each cell at
+// most its neighbour plus `straight` (along a row or column) or `diagonal` (corner to corner). Seeded 0 where a set
+// is and huge elsewhere, it is the chamfer distance to that set (the planner's depth into flat ground, its distance
+// from the sea); seeded with heights and a step's rise, it is the highest ground no steeper than that slope lying
+// under them (the regrade's slope cap, regrade.h).
+void chamferSweepGrid(std::vector<float>& v, int n, float straight, float diagonal);
 
 }  // namespace engine
 

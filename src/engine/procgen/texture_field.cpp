@@ -408,4 +408,24 @@ std::vector<float> boxBlurGrid(const std::vector<float>& in, int n, int r, int p
     return a;
 }
 
+void chamferSweepGrid(std::vector<float>& v, int n, float straight, float diagonal) {
+    auto at = [&](int i, int j) -> float& { return v[static_cast<std::size_t>(j) * n + i]; };
+    for (int j = 0; j < n; ++j)
+        for (int i = 0; i < n; ++i) {
+            float& d = at(i, j);
+            if (i > 0) d = std::min(d, at(i - 1, j) + straight);
+            if (j > 0) d = std::min(d, at(i, j - 1) + straight);
+            if (i > 0 && j > 0) d = std::min(d, at(i - 1, j - 1) + diagonal);
+            if (i + 1 < n && j > 0) d = std::min(d, at(i + 1, j - 1) + diagonal);
+        }
+    for (int j = n - 1; j >= 0; --j)
+        for (int i = n - 1; i >= 0; --i) {
+            float& d = at(i, j);
+            if (i + 1 < n) d = std::min(d, at(i + 1, j) + straight);
+            if (j + 1 < n) d = std::min(d, at(i, j + 1) + straight);
+            if (i + 1 < n && j + 1 < n) d = std::min(d, at(i + 1, j + 1) + diagonal);
+            if (i > 0 && j + 1 < n) d = std::min(d, at(i - 1, j + 1) + diagonal);
+        }
+}
+
 }  // namespace engine

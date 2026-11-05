@@ -6,6 +6,7 @@
 
 #include "../noise.h"
 #include "../terrain.h"
+#include "../texture_field.h"   // chamferSweepGrid: depth into flat ground, distance from the sea
 #include "../city/terrain_route.h"
 #include "../city/roads/lanes/interchange.h"
 #include "../city/roads/lanes/vertical_profile.h"   // profileAlong: the deck as the builder will make it   // diamondRamps: the one way on and off a freeway
@@ -240,25 +241,7 @@ IslandWorld planIsland(const json& blockIn, double half, double cell, const std:
     {
         const float big = 1e9f, a1 = static_cast<float>(cell), a2 = static_cast<float>(cell * 1.41421356);
         for (std::size_t k = 0; k < dt.size(); ++k) dt[k] = w.buildable[k] ? big : 0.0f;
-        auto at = [&](int i, int j) -> float& { return dt[static_cast<std::size_t>(j) * n + i]; };
-        for (int j = 0; j < n; ++j)
-            for (int i = 0; i < n; ++i) {
-                float& d = at(i, j);
-                if (d == 0.0f) continue;
-                if (i > 0) d = std::min(d, at(i - 1, j) + a1);
-                if (j > 0) d = std::min(d, at(i, j - 1) + a1);
-                if (i > 0 && j > 0) d = std::min(d, at(i - 1, j - 1) + a2);
-                if (i + 1 < n && j > 0) d = std::min(d, at(i + 1, j - 1) + a2);
-            }
-        for (int j = n - 1; j >= 0; --j)
-            for (int i = n - 1; i >= 0; --i) {
-                float& d = at(i, j);
-                if (d == 0.0f) continue;
-                if (i + 1 < n) d = std::min(d, at(i + 1, j) + a1);
-                if (j + 1 < n) d = std::min(d, at(i, j + 1) + a1);
-                if (i + 1 < n && j + 1 < n) d = std::min(d, at(i + 1, j + 1) + a2);
-                if (i > 0 && j + 1 < n) d = std::min(d, at(i - 1, j + 1) + a2);
-            }
+        chamferSweepGrid(dt, n, a1, a2);
     }
     auto D = [&](int i, int j) { return static_cast<double>(dt[static_cast<std::size_t>(j) * n + i]); };
     auto nearSea = [&](const Vec2& q, double within) {
@@ -2205,25 +2188,7 @@ int planCoastRoadOnce(IslandWorld& w, int fromSite, const Vec2& via, int toSite,
     {
         const float big = 1e9f, a1 = static_cast<float>(cell), a2 = static_cast<float>(cell * 1.41421356);
         for (std::size_t k = 0; k < sea.size(); ++k) sea[k] = w.height[k] < 0.0f ? 0.0f : big;
-        auto at = [&](int i, int j) -> float& { return sea[static_cast<std::size_t>(j) * n + i]; };
-        for (int j = 0; j < n; ++j)
-            for (int i = 0; i < n; ++i) {
-                float& d = at(i, j);
-                if (d == 0.0f) continue;
-                if (i > 0) d = std::min(d, at(i - 1, j) + a1);
-                if (j > 0) d = std::min(d, at(i, j - 1) + a1);
-                if (i > 0 && j > 0) d = std::min(d, at(i - 1, j - 1) + a2);
-                if (i + 1 < n && j > 0) d = std::min(d, at(i + 1, j - 1) + a2);
-            }
-        for (int j = n - 1; j >= 0; --j)
-            for (int i = n - 1; i >= 0; --i) {
-                float& d = at(i, j);
-                if (d == 0.0f) continue;
-                if (i + 1 < n) d = std::min(d, at(i + 1, j) + a1);
-                if (j + 1 < n) d = std::min(d, at(i, j + 1) + a1);
-                if (i + 1 < n && j + 1 < n) d = std::min(d, at(i + 1, j + 1) + a2);
-                if (i > 0 && j + 1 < n) d = std::min(d, at(i - 1, j + 1) + a2);
-            }
+        chamferSweepGrid(sea, n, a1, a2);
     }
     auto idx = [&](double x, double z) {
         const int i = static_cast<int>(std::lround((x + w.half) / cell)), j = static_cast<int>(std::lround((z + w.half) / cell));
