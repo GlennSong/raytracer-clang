@@ -4,7 +4,7 @@ on the same skies -- near, mid-distance, at the horizon (where they went blocky)
 -- with the GPU's time for each.
 
   python3 tools/cloud_lab.py OUT [--level assets/levels/cloud_lab.json] [--only NAME,...] [--env K=V ...]
-                                 [--wind 400] [--hour 15] [--against DIR]
+                                 [--wind 400] [--hour 15] [--against DIR] [--cmd 'weather off' ...]
 
 OUT/<pose>.png for every pose, OUT/gpu.txt (RT_GPU_TIMES per pose), OUT/sheet.png (all poses, labelled). With --against
 an earlier OUT, OUT/ab_<pose>.png puts the two side by side (that run left, this one right) and OUT/ab_sheet.png all of
@@ -56,6 +56,8 @@ def main():
     ap.add_argument("--wind", type=float, default=400.0, help="the pinned wind time (s)")
     ap.add_argument("--hour", type=float, default=15.0)
     ap.add_argument("--against", default="")
+    ap.add_argument("--cmd", nargs="*", default=[], help="control commands sent after the load (e.g. 'weather off' "
+                                                          "'clouds density 1 coverage 0.6')")
     a = ap.parse_args()
     out = os.path.abspath(a.out)
     os.makedirs(out, exist_ok=True)
@@ -73,6 +75,8 @@ def main():
         for o in ("hud", "ui", "debug"):
             send(sock, f"overlay {o} off")
         send(sock, f"daynight {a.hour}")
+        for c in a.cmd:
+            print(c, "->", send(sock, c), flush=True)
         for name in want:
             x, y, z, pitch, yaw = POSES[name]
             send(sock, f"camera {x} {y} {z} {pitch} {yaw}")

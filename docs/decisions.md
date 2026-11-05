@@ -15189,3 +15189,32 @@ cloud edges at different places. At 400 steps the outlines came out round. That 
 - The textured (layered) ground has no channel for a heath tint. Under the plants the soil stays the grass texture;
   that needs a cover-map channel (a new binding, both renderers).
 - The colour is still more ochre than the reference's orange. It is a level value, tuned by eye.
+
+## ADR-0333 — Cloud haze on cloud only; the sun's cone (#187)
+
+**Context.** Glenn, 2026-11-05: "squares around the clouds ... they stand out as weird squares". He also saw stripes
+when he raised the cloud density.
+
+**Decision.**
+- **The far haze tints the cloud a ray found, in proportion to it** (`· (1 − transmittance)`). It used to be mixed into
+  every marched ray, empty ones too, while rays the weather probe skipped got none. So the weather map's 320 m texels
+  showed round far clouds as pale squares. In the lab the slab under the far banks is gone.
+- **The sun's light march is Nubis's cone** (Schneider 2015/2017):
+  - six samples at growing distances (about 10 m first, about 120 m last, jittered within each);
+  - each pushed off the line within a cone that widens toward the sun;
+  - the samples read the base shape only, with no detail erosion;
+  - plus one long sample at 3× for what lies far up-sun.
+  Lab debug outputs (unlit, sun-only, ambient-only) put the low-sun stripes in the SUN term: six samples on one
+  straight line through the full-detail noise had streaked every cloud along the light. `RT_CLOUD_JITTER=coherent`
+  brings back the old line too.
+
+**Measured** (lab, 17:12, the clouds pass): isle_beach 0.51 → 0.51 ms, mid 0.64 → 0.58, inside 0.52 → 0.65, above 0.74
+→ 0.70.
+
+**Not done.**
+- Regular horizontal ridges (~58 m apart in height) and a shelf across tall clouds remain in the sun term. Not yet
+  known whether they come from the noise or from sampling.
+- The history reprojects at the deck's mid-height, so layers slide when flying level with or above the deck. Owed: a
+  per-pixel cloud depth, as Decima does.
+- The faint horizontal bands across clear sky look like colour banding in the sky gradient, separate from the clouds.
+  To check.

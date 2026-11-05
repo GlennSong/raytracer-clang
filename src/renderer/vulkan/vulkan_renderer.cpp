@@ -6005,7 +6005,7 @@ void VulkanRenderer::Impl::drawFrame() {
         cu.march[3] = cp.farDistance;
         cu.detail[0] = cp.detailStrength;
         // each pixel's own march offset, each sample at it within its own step (clouds.frag, ADR-0332);
-        // RT_CLOUD_JITTER=coherent the old 2x2 pattern and step-start samples (the A/B: the far banks notched row by row)
+        // RT_CLOUD_JITTER=coherent the old 2x2 pattern, step-start samples and straight sun line (the A/B)
         static const bool kCoherentJitter = [] { const char* e = std::getenv("RT_CLOUD_JITTER"); return e && std::string(e) == "coherent"; }();
         cu.detail[1] = kCoherentJitter ? 1.0f : 0.0f;
         // THE HISTORY'S INPUTS: last frame's camera, and how much of the history to keep -- none on the first frame

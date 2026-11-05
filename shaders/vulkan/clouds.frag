@@ -292,6 +292,25 @@ void main() {
             float lightSpan = min(slab, 240.0);
             float lds = lightSpan / float(max(1, lightSteps));
             float lightOD = 0.0;
+            if (u.detail.y < 0.5) {   // (RT_CLOUD_JITTER=coherent: the old straight line too, for the A/B)
+                // THE SUN'S CONE (Schneider 2015/2017): samples at growing distances, each pushed off the line inside a cone
+                // that widens toward the sun, reading the base shape only (no detail: the light needs the cloud's bulk);
+                // then one long sample for the deep shadow. Six samples on one straight line through the full-detail
+                // noise streaked every low-sun cloud along the light (the "layers")
+                float d0 = 0.0;
+                for (int j = 0; j < lightSteps; j++) {
+                    float f1 = float(j + 1) / float(lightSteps);
+                    float d1 = lightSpan * f1 * f1 * 1.6;             // growing steps: ~10 m first, ~120 m last
+                    float dm = mix(d0, d1, lightJitter);
+                    uint hc = hh ^ (uint(j) * 0x9E3779B9u) ^ uint(u.frame.x * 65536.0);
+                    hc = (hc ^ (hc >> 16)) * 0x7feb352du; hc = (hc ^ (hc >> 15)) * 0x846ca68bu; hc ^= hc >> 16;
+                    vec3 rnd = vec3(float(hc & 1023u), float((hc >> 10) & 1023u), float((hc >> 20) & 1023u)) / 511.5 - 1.0;
+                    vec3 lp = p + sunDir * dm + rnd * (0.35 * dm);   // the cone: widening with distance
+                    lightOD += clDensity(lp, 0.0) * (d1 - d0);
+                    d0 = d1;
+                }
+                lightOD += clDensity(p + sunDir * (d0 * 3.0), 0.0) * d0;   // the long sample: what lies far up-sun
+            } else
             for (int j = 0; j < lightSteps; j++) {
                 vec3 lp = p + sunDir * (lds * (float(j) + lightJitter));
                 lightOD += clDensity(lp, detailFade * farFade * 0.5) * lds;
@@ -335,7 +354,10 @@ void main() {
     // aerial perspective, so the deck needs its own), and the deck ends
     // SOFTLY at the march clamp instead of on a crisp entry ring.
     float aerial = smoothstep(5000.0, 0.85 * u.march.w, t0) * 0.7;
-    scattered = mix(scattered, u.skyAmbient.rgb * 1.15, aerial);
+    // (the haze tints the CLOUD a ray found, in proportion to it -- it was mixed into every marched ray, empty ones too, and
+    // rays the weather probe skipped got none: the weather map's 320 m texels showed round every far cloud as pale squares,
+    // Glenn, 2026-11-05: "squares around the clouds ... they stand out as weird squares")
+    scattered = mix(scattered, u.skyAmbient.rgb * 1.15 * (1.0 - transmittance), aerial);
     transmittance = mix(transmittance, 1.0, aerial * 0.35);
 
     float ringFade = 1.0 - smoothstep(0.75 * u.march.w, u.march.w, t0);
