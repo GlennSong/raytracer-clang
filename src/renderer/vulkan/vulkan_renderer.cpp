@@ -5261,10 +5261,12 @@ void VulkanRenderer::Impl::recordShadowPass(VkCommandBuffer cmd) {
                                   planes[pi][2] * item.worldCenter[2] + planes[pi][3] < -item.worldRadius;
                     if (out) continue;
                 }
-                // Debug-gizmo overlays (FLAG_OVERLAY), ground cover (FLAG_GRASS) and the camera-turned impostor cards
-                // (FLAG_IMPOSTOR_VIEWS: their shadow-only crossed cards cast theirs) cast no shadows.
+                // Debug-gizmo overlays (FLAG_OVERLAY), ground cover (FLAG_GRASS), the camera-turned impostor cards
+                // (FLAG_IMPOSTOR_VIEWS: their shadow-only crossed cards cast theirs) and SPRITES (FLAG_ALPHA_FROM_MAP: a
+                // particle's puff, a beacon's glow -- each cast its whole quad, a hard square under every dust cloud;
+                // Glenn, 2026-11-05: "you can see the alpha channel space around them") cast no shadows.
                 if (item.push.surfaceFlags[1] & (RenderMaterial::FLAG_OVERLAY | RenderMaterial::FLAG_GRASS |
-                                                 RenderMaterial::FLAG_IMPOSTOR_VIEWS)) continue;
+                                                 RenderMaterial::FLAG_IMPOSTOR_VIEWS | RenderMaterial::FLAG_ALPHA_FROM_MAP)) continue;
                 // alpha-cut surfaces (leaf cards) cut their shadow too, when their albedo map is bound
                 const bool cut = (item.push.surfaceFlags[1] & RenderMaterial::FLAG_ALPHA_TEST) && item.textures[0].valid() &&
                                  shadowAlphaPipeline && shadowAlphaPipelinePacked;

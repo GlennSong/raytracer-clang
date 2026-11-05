@@ -15000,3 +15000,14 @@ in time): standing still it is invisible, and as the camera moves it crawls acro
 
 **Seen, owed.** The clouds' sides still come out in slices (stepped shells along a deck's flank, in both modes); the far
 low clouds sit in faint hard-edged rectangles near the horizon.
+
+### ADR-0328 addendum (2026-11-05): sprites cast no shadow; the fixed shots
+
+- Glenn: the dust clouds show "the alpha channel space around them". Reproduced on the movement lab's steam: the
+  SPRITES (FLAG_ALPHA_FROM_MAP: particle puffs, beacon glows) cast their whole quad into the shadow maps -- a hard square
+  under every puff, and diagonal streaks where puffs shadowed each other. The Vulkan shadow pass now skips them with
+  the overlays, grass and impostor views. (Metal's shadow pass draws only opaque calls: sprites never reached it.)
+- #187 step 0, the fixed shots: `tools/ref_shots.py` -- four poses on the island mirroring Glenn's references (a beach
+  curving away from above the sea, a low eye on a hillside over the coast, straight down on the coast, a lake at eye
+  level), each at its own hour and its height above the ground under it. The planner prints its lakes under
+  RT_PLAN_WHY (where a pose or a trail can go).

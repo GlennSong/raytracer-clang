@@ -16,10 +16,10 @@ from walk_probe import eye_at
 
 # name: (x, z, metres above the ground, pitch, yaw, hour) -- the reference each mirrors in the comment
 POSES = {
-    "beach_curve": (1460, 6620, 90, -18, 75, 17.2),    # black-sand beach curving away, surf along it, from above the sea
+    "beach_curve": (1460, 6620, 90, -14, 25, 17.2),    # black-sand beach curving away, surf along it, from above the sea
     "heath_slope": (-560, 5600, 3, -10, 20, 17.6),     # a low eye on a hillside, the heath down to the coast and the sea
     "coast_aerial": (600, 6500, 420, -88, 30, 16.4),   # straight down on the coast: the shallows, the surf, the forest
-    "forest_lake": (-1450, 3400, 4, -2, 300, 11.0),    # a lake at eye level, the shore's trees in it
+    "forest_lake": (4085, 1770, 4, -3, 90, 11.0),      # a lake at eye level, the shore's trees in it (the lake at 4300, 1770)
 }
 
 
@@ -41,6 +41,8 @@ def main():
     try:
         send(sock, "info", timeout=2400)
         send(sock, "overlay hud off")
+        send(sock, "overlay ui off")
+        send(sock, "overlay debug off")
         for name in want:
             x, z, up, pitch, yaw, hour = POSES[name]
             send(sock, f"daynight {hour}")

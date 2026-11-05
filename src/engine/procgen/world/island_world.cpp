@@ -494,6 +494,10 @@ IslandWorld planIsland(const json& blockIn, double half, double cell, const std:
                          {"climb", std::round(rd.climb)}, {"worstGradePct", std::round(rd.worstGrade * 1000.0) / 10.0},
                          {"routed", !rd.points.empty()}});
     }
+    if (w.hydro && std::getenv("RT_PLAN_WHY"))   // (where the lakes are: a camera pose, a trail's end)
+        for (const Lake& lk : w.hydro->lakes())
+            std::printf("[island] lake at (%.0f, %.0f), %.0f x %.0f m, level %.1f m\n", 0.5 * (lk.minX + lk.maxX), 0.5 * (lk.minZ + lk.maxZ),
+                        lk.maxX - lk.minX, lk.maxZ - lk.minZ, lk.level);
     double riverKm = 0.0;
     if (w.hydro)
         for (const River& rv : w.hydro->rivers())
