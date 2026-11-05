@@ -15162,3 +15162,30 @@ cloud edges at different places. At 400 steps the outlines came out round. That 
   - Metal's clouds (#71) likely carry the same reconstruction.
   - Any other pass that builds a direction from the near plane should be checked. ssao and ssr build from depth.
   - The pale slab under the far banks remains.
+
+## ADR-0331 — Heath: a share of the grass, a layer that grows on it (#187)
+
+**Context.** The reference stills' hillsides are red, orange and brown heath; ours were one even green.
+
+**Decision.**
+- **Ground cover.** `GroundCoverParams` takes `heath {color, patches, from, scale}` (JSON `terrain.groundCover.heath`).
+  `Cover::heath` is the share of the grass that is heath:
+  - in patches about `scale` m across (220), `patches` of them (0.45);
+  - from `from` × the upland height up to the mountain's;
+  - more on dry, convex ground when the terrain has maps;
+  - a flat-coloured ground tints toward `color`.
+- **Grass layers.** A layer with `"cover": "heath"` grows on that share. Every other layer gives way there by
+  `underHeath` (default 0.75; a little grass threads the heather). Kinds stay data: no new `where` branch.
+- **island_8_nature:** heath patches, plus a heath layer:
+  - low (0.32 m) rust-brown clumps;
+  - a few heather heads;
+  - cards to 300 m, so the hillsides read brown from afar.
+- **Not in the lots' bake key.** lots_producer erases `groundCover.heath` only where it is present, so every level
+  without one keeps its key. The pyramid and weather keys already drop the whole `groundCover`. No re-bake.
+
+**Measured.** The hillside view: GPU 6.90 ms a frame, against 6.93 ms before.
+
+**Not done.**
+- The textured (layered) ground has no channel for a heath tint. Under the plants the soil stays the grass texture;
+  that needs a cover-map channel (a new binding, both renderers).
+- The colour is still more ochre than the reference's orange. It is a level value, tuned by eye.

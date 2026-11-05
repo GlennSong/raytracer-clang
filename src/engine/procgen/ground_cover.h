@@ -54,6 +54,14 @@ struct GroundCoverParams {
     Vec3 sand{0.40, 0.34, 0.22};
     Vec3 rock{0.085, 0.080, 0.072};      // dark enough to sit beside stylized grass in full sun
     Vec3 snow{0.85, 0.88, 0.92};
+    // HEATH (ADR-0331; #187, the reference's red and orange hillsides): a share of the GRASS that is heath -- ling,
+    // bilberry, dwarf shrub -- in patches over the open upland. 0 patches: none. It thins the meadow's grass layers
+    // and feeds a layer that names it ("cover": "heath"); a flat-coloured ground tints toward `heath`. From
+    // `heathFrom` x the upland height up to the mountain's, a patch `heathScale` m across, more on dry convex ground.
+    Vec3 heath{0.11, 0.045, 0.02};
+    double heathPatches = 0.0;
+    double heathFrom = 0.5;
+    double heathScale = 220.0;
     // THE GROUND'S MAPS (ADR-0128, procgen/terrain_maps.h), when the terrain is a weathered one: rock where
     // the ground sheds soil (steep, convex, high), scree below cliffs, meadow in the hollows, snow held in
     // gullies and blown off ridges, washed gravel down the channels
@@ -71,6 +79,7 @@ struct GroundCoverParams {
 
 struct Cover {
     double grass = 1, dirt = 0, sand = 0, rock = 0, snow = 0;   // sum to 1
+    double heath = 0;   // the share of `grass` that is heath (0..1)
     Biome biome = Biome::Lowland;
     Vec3 colour;
 };

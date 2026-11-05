@@ -5355,6 +5355,55 @@
  },
  "grassLayers": [
   {
+   "blades": 14,
+   "cardRadius": 300,
+   "cardSpacing": 1.5,
+   "cards": true,
+   "clumpRadius": 0.32,
+   "cover": "heath",
+   "fadeEnd": 60,
+   "fadeStart": 44,
+   "flowerColors": [
+    [
+     0.32,
+     0.07,
+     0.28
+    ],
+    [
+     0.42,
+     0.1,
+     0.2
+    ],
+    [
+     0.55,
+     0.2,
+     0.05
+    ]
+   ],
+   "flowerSize": 0.025,
+   "flowers": 5,
+   "height": 0.32,
+   "lean": 0.5,
+   "nearRadius": 24,
+   "patchiness": 0,
+   "radius": 60,
+   "rootColor": [
+    0.025,
+    0.012,
+    0.006
+   ],
+   "seed": 81,
+   "spacing": 0.38,
+   "tipColor": [
+    0.16,
+    0.085,
+    0.03
+   ],
+   "variantTint": 0.35,
+   "variants": 5,
+   "width": 0.05
+  },
+  {
    "blades": 24,
    "cardRadius": 220,
    "cardSpacing": 1.8,
@@ -5962,6 +6011,12 @@
    "understorySpacing": 5.0
   },
   "groundCover": {
+   "heath": {
+    "color": [0.11, 0.045, 0.02],
+    "from": 0.5,
+    "patches": 0.45,
+    "scale": 220
+   },
    "beachHeight": 3,
    "dirt": [
     0.078,

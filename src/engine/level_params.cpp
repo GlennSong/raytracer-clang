@@ -162,6 +162,14 @@ TerrainParams readTerrainParams(const json& t) {
         };
         col("grass", gp.grass); col("grassDry", gp.grassDry); col("dirt", gp.dirt);
         col("sand", gp.sand); col("rock", gp.rock); col("snow", gp.snow);
+        if (g.contains("heath") && g["heath"].is_object()) {   // ADR-0331 (not in the lots' key: it only paints and plants)
+            const json& hj = g["heath"];
+            if (hj.contains("color") && hj["color"].is_array() && hj["color"].size() == 3)
+                gp.heath = Vec3(hj["color"][0].get<double>(), hj["color"][1].get<double>(), hj["color"][2].get<double>());
+            gp.heathPatches = hj.value("patches", 0.4);
+            gp.heathFrom = hj.value("from", gp.heathFrom);
+            gp.heathScale = hj.value("scale", gp.heathScale);
+        }
         if (t.value("erode", false)) gp.maps = weatheredMapsFor(t);   // ADR-0128: nullptr unless weathered
         if (t.contains("trails") && t["trails"].is_array())                 // ADR-0134: the hiking trails
             gp.trails = std::make_shared<const TrailNetwork>(TrailNetwork::fromJson(t["trails"]));

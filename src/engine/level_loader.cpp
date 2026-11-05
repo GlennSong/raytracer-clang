@@ -5021,12 +5021,16 @@ bool LevelLoader::load(const std::string& path,
                                : where == "tall" ? 1 : where == "reeds" ? 2 : where == "flowers" ? 3 : where == "clearing" ? 4 : where == "shore" ? 5
                                : where == "lawn" ? 6 : 0;
                 const double clumpScale = gj.value("clumpScale", 0.06), clumpCut = gj.value("clumpCut", 0.25);
+                // HEATH (ADR-0331): a layer that names it ("cover": "heath") grows on the cover's heath share of the grass;
+                // the others give way there by `underHeath` (0.75: a little grass still threads the heather)
+                const bool fromHeath = gj.value("cover", std::string("grass")) == "heath";
+                const double underHeath = gj.value("underHeath", 0.75);
                 const double shore = gj.value("shoreBand", 6.0);
                 // MOWN in the city's blocks (managed ground): the meadow at a lawn's height; a lawn layer as it is
                 const double mown = gj.value("mownHeight", 0.3);
                 if (kind != 6 && !managedRO->polys.empty())
                     gf.height = [managedRO, mown](double x, double z) { return managedRO->covers(x, z) ? mown : 1.0; };
-                gf.density = [maxSlope, thin, sea, patchiness, patchScale, patches, cover, hydro, kind, shore, clumpScale, clumpCut,
+                gf.density = [maxSlope, thin, sea, patchiness, patchScale, patches, cover, hydro, kind, shore, clumpScale, clumpCut, fromHeath, underHeath,
                               sealedRoads, padsRO, lawnsRO, haveLawn, managedRO, beachRO](double x, double z, double y, double slopeCos) {
                     if (y < sea + 0.15) return 0.0;
                     if (kind == 7 && beachRO && beachRO->covers(x, z)) return 0.0;   // a beach town's sand: no stones
@@ -5072,8 +5076,13 @@ bool LevelLoader::load(const std::string& path,
                     }
                     // With a ground-cover map the cover decides (grass stops at sand, rock and
                     // bare earth, raggedly); without one, the slope rule.
-                    double d = cover ? cover->at(x, z, y, slopeCos).grass
-                                     : std::clamp((maxSlope - slope) / thin, 0.0, 1.0);
+                    double d = std::clamp((maxSlope - slope) / thin, 0.0, 1.0);
+                    if (cover) {
+                        const Cover cv = cover->at(x, z, y, slopeCos);
+                        d = cv.grass * (fromHeath ? cv.heath : 1.0 - underHeath * cv.heath);
+                    } else if (fromHeath) {
+                        return 0.0;
+                    }
                     if (hydro && d > 0.0) d *= 1.0 - 0.85 * hydro->shore(x, z, y);   // the pebbly shore (ADR-0131)
                     if (kind == 3 || kind == 4) {   // FLOWERS: patches of open meadow / a field in a forest clearing
                         if (!cover || !cover->params().forest) return kind == 3 ? d * clumps(7.0) : 0.0;

@@ -114,8 +114,18 @@ Cover GroundCover::at(double x, double z, double height, double normalUp, double
     else if (h > p_.mountainHeight * 0.85 + 8.0 * jag) c.biome = Biome::Mountain;
     else if (h > p_.uplandHeight + 6.0 * jag) c.biome = Biome::Upland;
     else c.biome = Biome::Lowland;
+    if (p_.heathPatches > 0.0 && c.grass > 0.0) {   // HEATH: patches over the open upland, thickest on dry crowns
+        const double band = smoothstep(p_.uplandHeight * p_.heathFrom, p_.uplandHeight, h + 10.0 * jag) *
+                            (1.0 - smoothstep(p_.mountainHeight, p_.mountainHeight * 1.4, h + 15.0 * jag));
+        const double f = 1.0 / std::max(1.0, p_.heathScale);
+        double n = 0.5 + 0.5 * noise_.fbm2(x * f - 31.7, z * f + 12.9, 4) + 0.08 * fine;
+        if (mapped) n += 0.12 * ms.convex - 0.15 * ms.wet;
+        const double cut = 1.0 - p_.heathPatches;
+        c.heath = band * smoothstep(cut - 0.06, cut + 0.06, n);
+    }
     // colour: grass greener in the lowland, drier uphill; each layer mottled a little
-    const Vec3 grassCol = lerp(p_.grass, p_.grassDry, std::clamp(0.25 * dryUp + 0.12 * (macro + 1.0) * dryUp, 0.0, 1.0)) *
+    const Vec3 grassCol = lerp(lerp(p_.grass, p_.grassDry, std::clamp(0.25 * dryUp + 0.12 * (macro + 1.0) * dryUp, 0.0, 1.0)),
+                               p_.heath, c.heath) *
                           (1.0 + 0.10 * macro);
     const Vec3 col = grassCol * c.grass + p_.dirt * (c.dirt * (1.0 + 0.12 * fine)) + p_.sand * (c.sand * (1.0 + 0.06 * fine)) +
                      p_.rock * (c.rock * (1.0 + 0.15 * macro)) + p_.snow * c.snow;
