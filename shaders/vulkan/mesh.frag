@@ -370,7 +370,8 @@ vec3 surfWater(vec3 base, float depth, float shore, vec3 worldPos, float time) {
     // Sparse whitecap flecks in open water, advecting with the wind.
     float cap = fbm2(worldPos.x * 0.09 + time * 0.05, worldPos.z * 0.09 - time * 0.03) *
                 (0.55 + 0.45 * fbm2(worldPos.x * 0.021 - time * 0.013, worldPos.z * 0.021));
-    float capMask = smoothstep(0.60, 0.78, cap) * clamp(depth / 8.0, 0.0, 1.0) * 0.30;
+    // (whitecaps with the wind, ADR-0337: few at a moderate breeze, as before, none in a calm, many in a gale)
+    float capMask = smoothstep(0.60, 0.78, cap) * clamp(depth / 8.0, 0.0, 1.0) * 0.30 * clamp((g.wind2.w - 2.5) / 3.5, 0.0, 2.5);
     c = mix(c, vec3(0.85, 0.92, 0.95), capMask);
     // Lapping shoreline foam: a narrow washing edge plus patchy streaks.
     float band = 6.0 + 4.5 * fbm2(worldPos.x * 0.05, worldPos.z * 0.05) +
@@ -714,6 +715,12 @@ void surfaceReliefWater(vec3 worldPos, vec2 meshUV, float time, vec3 cameraPos,
         vec3( 0.827, -0.562, 21.0),
         vec3( 0.399,  0.917,  8.5));
     const float trainAmp[4]   = float[4](0.115, 0.100, 0.075, 0.080);
+    // THE SEA STATE (ADR-0337): the trains' heading the wind's, their height growing with its speed (as authored at a
+    // moderate 6 m/s; a calm's a third, a gale's over twice)
+    const vec2 wd = normalize(g.wind1.xz + vec2(1e-5, 0.0));
+    const vec2 a0 = vec2(0.980, 0.199);
+    const vec2 seaRot = vec2(dot(wd, a0), a0.x * wd.y - a0.y * wd.x);   // cos, sin of the turn from a0 to the wind
+    const float seaState = clamp(g.wind2.w / 6.0, 0.35, 2.3);
     const float trainSpeed[4] = float[4](6.5, 5.8, 3.8, 2.1);
     // Each train fades once its wavelength drops toward the pixel footprint —
     // otherwise the short chop aliases into a corduroy grating at distance.
@@ -722,7 +729,8 @@ void surfaceReliefWater(vec3 worldPos, vec2 meshUV, float time, vec3 cameraPos,
     for (int i = 0; i < 4; ++i) {
         float fade = exp(-dist * trainFade[i]);
         if (fade < 0.02) continue;
-        vec2 d = trainDirLen[i].xy;
+        // (turned to the weather's wind: the trains were authored about the first's heading, 0.98/0.199 -- ADR-0337)
+        vec2 d = vec2(trainDirLen[i].x * seaRot.x - trainDirLen[i].y * seaRot.y, trainDirLen[i].x * seaRot.y + trainDirLen[i].y * seaRot.x);
         float k = 6.2831853 / trainDirLen[i].z;
         // slow amplitude patches: wave GROUPS, not an infinite even train
         float ampPatch = 0.45 + 0.55 * vnoise2(wx * 0.013 + float(i) * 7.31,
@@ -734,7 +742,7 @@ void surfaceReliefWater(vec3 worldPos, vec2 meshUV, float time, vec3 cameraPos,
                                                       wz * warpF + float(i) * 2.9);
         float ph = dot(P, d) * k - wt * trainSpeed[i] * k + warp;
         float s = sin(ph), cph = cos(ph);
-        float w = trainAmp[i] * ampPatch * fade;
+        float w = trainAmp[i] * ampPatch * fade * seaState;
         float slope = w * cph * (0.55 + 0.45 * (s * 0.5 + 0.5));  // sharpened crests
         slopeX += d.x * slope;
         slopeZ += d.y * slope;

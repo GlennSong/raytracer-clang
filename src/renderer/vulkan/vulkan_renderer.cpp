@@ -208,6 +208,7 @@ struct CloudUniformsGPU {
     float typeProfile[4][4];
     float typeParams[4][4];         // x density, y erosion, z anvil, w unused
     float typeRange[4];             // x lo, y hi along the type axis (0 stratus .. 1 cumulonimbus), zw unused
+    float wind[4];                  // xy the clouds' drift so far (x, z m: ADR-0337), zw unused
 };
 
 // Per-draw push constants for the forward pass (120 <= 128 B).
@@ -467,7 +468,9 @@ struct VulkanRenderer::Impl {
     VkImage cloudDepthImage = VK_NULL_HANDLE;                // R32F: the distance to the ray's cloud (-1: none)
     VkDeviceMemory cloudDepthMemory = VK_NULL_HANDLE;
     VkImageView cloudDepthView = VK_NULL_HANDLE;
-    GpuTexture cloudWeatherTex;                              // the 2D weather map (cloudnoise::bakeWeather, ADR-0336)
+    GpuTexture cloudWeatherTex;
+    double cloudWindOffset[2] = {0.0, 0.0};   // the clouds' drift along the weather's wind (ADR-0337)
+    double cloudWindLast = 0.0;                              // the 2D weather map (cloudnoise::bakeWeather, ADR-0336)
     VkRenderPass cloudCompositeRenderPass = VK_NULL_HANDLE;  // HDR load+blend
     VkFramebuffer cloudFramebuffer = VK_NULL_HANDLE;
     VkFramebuffer cloudCompositeFramebuffer = VK_NULL_HANDLE;
@@ -6064,6 +6067,8 @@ void VulkanRenderer::Impl::drawFrame() {
         }
         cu.typeRange[0] = cp.typeLo;
         cu.typeRange[1] = cp.typeHi;
+        cu.wind[0] = static_cast<float>(cloudWindOffset[0]);
+        cu.wind[1] = static_cast<float>(cloudWindOffset[1]);
         // RT_CLOUD_TYPES=0: the base volume's slice and one profile, as before (the A/B)
         static const bool kNoTypes = [] { const char* e = std::getenv("RT_CLOUD_TYPES"); return e && e[0] == '0'; }();
         cu.detail[3] = kNoTypes ? 1.0f : 0.0f;
@@ -7571,12 +7576,30 @@ void VulkanRenderer::endFrame() {
     // RT_WIND_TIME=<s> pins it (the cloud lab, tools/cloud_lab.py: every run's clouds stand in the same place)
     static const float kPinnedWind = [] { const char* e = std::getenv("RT_WIND_TIME"); return e ? static_cast<float>(std::atof(e)) : -1.0f; }();
     if (kPinnedWind >= 0.0f) windTime = kPinnedWind;
-    impl->cpuGlobals.wind1[0] = 0.85f;  impl->cpuGlobals.wind1[1] = 0.0f;
-    impl->cpuGlobals.wind1[2] = 0.30f;  impl->cpuGlobals.wind1[3] = windTime;
-    impl->cpuGlobals.wind2[0] = 1.6f;   // frequency
+    // THE WEATHER'S WIND (ADR-0337; Renderer::windDir/Speed/Gust, set by DayNightSystem): wind1 xz where the air goes,
+    // y how squally; wind2 z the sway's amplitude -- 0.12 at a moderate 6 m/s, as it was, growing with the speed -- and
+    // w the speed itself (the sea's wave trains, mesh.frag)
+    const float wspd = std::max(windSpeed, 0.0f);
+    impl->cpuGlobals.wind1[0] = windDir[0];  impl->cpuGlobals.wind1[1] = windGust;
+    impl->cpuGlobals.wind1[2] = windDir[1];  impl->cpuGlobals.wind1[3] = windTime;
+    impl->cpuGlobals.wind2[0] = 1.6f * std::clamp(std::sqrt(wspd / 6.0f), 0.6f, 1.8f);   // frequency
     impl->cpuGlobals.wind2[1] = 2.5f;   // height
-    impl->cpuGlobals.wind2[2] = 0.12f;  // amplitude
-    impl->cpuGlobals.wind2[3] = 0.0f;
+    impl->cpuGlobals.wind2[2] = 0.12f * std::clamp(wspd / 6.0f, 0.25f, 2.6f);   // amplitude
+    impl->cpuGlobals.wind2[3] = wspd;
+    // the clouds drift along the same wind, integrated so a veering wind turns the drift instead of swinging the sky
+    // (the deck's own `wind` is its speed at 6 m/s on the ground; with RT_WIND_TIME pinned, a fixed offset)
+    {
+        const double cloudSpeed = static_cast<double>(impl->cloudParams.wind) * (wspd / 6.0);
+        if (kPinnedWind >= 0.0f) {
+            impl->cloudWindOffset[0] = windDir[0] * cloudSpeed * kPinnedWind;
+            impl->cloudWindOffset[1] = windDir[1] * cloudSpeed * kPinnedWind;
+        } else {
+            const double dt = std::clamp(static_cast<double>(windTime) - impl->cloudWindLast, 0.0, 0.25);
+            impl->cloudWindOffset[0] += windDir[0] * cloudSpeed * dt;
+            impl->cloudWindOffset[1] += windDir[1] * cloudSpeed * dt;
+        }
+        impl->cloudWindLast = windTime;
+    }
 #ifdef RT_ENABLE_IMGUI
     // Finalize the ImGui draw data (built by systems during render) before the
     // command buffer records it inside the composite pass.

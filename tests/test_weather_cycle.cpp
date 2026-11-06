@@ -4,7 +4,9 @@
 #include "test_framework.h"
 
 #include "../src/engine/weather_cycle.h"
+#include "../src/engine/wind.h"
 
+#include <algorithm>
 #include <cmath>
 #include <set>
 
@@ -145,4 +147,41 @@ TEST_CASE(night_glow_lights_a_chunk_that_streams_in_after_dusk) {
     applyNightGlowRamp(world, 0.0);            // dawn: both go dark
     CHECK_APPROX(world.get<Renderable>(early)->material.emission.x, 0.0, 1e-6);
     CHECK_APPROX(world.get<Renderable>(late)->material.emission.x, 0.0, 1e-6);
+}
+
+// THE WIND (engine/wind.h, ADR-0337): the weather's wind rises toward the storm, and windAt keeps to its contract
+TEST_CASE(wind_rises_with_the_weather_and_keeps_its_bounds) {
+    const WeatherKind chain[4] = {WeatherKind::Clear, WeatherKind::Fair, WeatherKind::Overcast, WeatherKind::Storm};
+    for (int i = 1; i < 4; ++i) {
+        CHECK(weatherTargets(chain[i]).windSpeed > weatherTargets(chain[i - 1]).windSpeed);
+        CHECK(weatherTargets(chain[i]).windGust >= weatherTargets(chain[i - 1]).windGust);
+    }
+    Wind w;
+    w.dir = Vec3(0.6, 0.0, 0.8);
+    w.speed = 10.0;
+    w.gust = 0.5;
+    Real lo = 1e9, hi = -1e9;
+    for (int k = 0; k < 400; ++k) {
+        const Vec3 p(k * 37.0, 10.0, k * -23.0);
+        const Vec3 v = windAt(w, p);
+        CHECK_APPROX(v.y, 0.0, 1e-12);                                  // horizontal
+        CHECK(dot(v, w.dir) > 0.0);                                     // downwind, always
+        CHECK_APPROX(cross(v, w.dir).length(), 0.0, 1e-9);              // along the wind
+        lo = std::min(lo, v.length()); hi = std::max(hi, v.length());
+    }
+    CHECK(lo >= 10.0 * (1.0 - 0.5 * 0.5) - 1e-9);                       // a lull is at most half the gust lighter
+    CHECK(hi <= 10.0 * (1.0 + 0.5) + 1e-9);                             // a gust at most `gust` stronger
+    CHECK(hi - lo > 2.0);                                               // and it does gust
+    // stronger aloft, within its clamp
+    CHECK(windAt(w, Vec3(0, 200, 0)).length() / windGustFactor(w, Vec3(0, 200, 0)) > 12.0);
+    CHECK(windAt(w, Vec3(0, 2, 0)).length() / windGustFactor(w, Vec3(0, 2, 0)) >= 6.0 - 1e-9);
+    // a gust travels downwind at the wind's speed: what is here at t was 10 * dt upwind at t - dt
+    Wind w2 = w;
+    w2.time = 3.0;
+    const Vec3 p(123.0, 10.0, -77.0);
+    CHECK_APPROX(windGustFactor(w2, p), windGustFactor(w, p - w.dir * 30.0), 1e-9);
+    // a calm is a calm
+    Wind calm = w;
+    calm.speed = 0.0;
+    CHECK_APPROX(windAt(calm, p).length(), 0.0, 1e-12);
 }

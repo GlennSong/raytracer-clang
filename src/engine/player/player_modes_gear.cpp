@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include "../wind.h"   // the air a canopy flies in (ADR-0337)
 
 namespace engine {
 
@@ -50,13 +51,19 @@ void GlideMode::step(PlayerBody& b, BodyStep& s) {
     } else {
         g.velocity = wingsuitStep(g.velocity, look, dt, tune);
     }
+    // THE WIND (ADR-0337): a canopy or a suit flies in the moving air, so it goes over the ground at its airspeed plus
+    // the wind where it is -- a chute drifts downwind and is buffeted by the gusts, a suit flown into a gale makes
+    // little way. (g.velocity stays the AIRSPEED: the flight model's; the touchdown keeps judging it as before. The
+    // height for the wind's profile is above the sea, the ground under a flyer not being to hand here.)
+    Vec3 air(0, 0, 0);
+    s.world.each<Wind>([&](Entity, Wind& w) { air = windAt(w, t.position, 0.0); });
     const Vec3 was = t.position;
-    pw.moveCharacterFree(s.cc.characterId, g.velocity, dt);
+    pw.moveCharacterFree(s.cc.characterId, g.velocity + air, dt);
     t.position = pw.characterPosition(s.cc.characterId);
     b.fall.onGrounded(t.position.y);   // flying is not falling
     // DOWN: on the ground, or into something hard enough to stop the way
     const Vec3 moved = t.position - was;
-    const Real want = g.velocity.length() * dt;
+    const Real want = (g.velocity + air).length() * dt;
     const GroundState gs = pw.characterGroundState(s.cc.characterId);
     const bool blocked = want > 0.05 && moved.length() < want * 0.4;
     if (gs == GroundState::OnGround || gs == GroundState::OnSteepGround || blocked) {

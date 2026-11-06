@@ -4,6 +4,7 @@
 #include "../system.h"
 #include "../day_night_cycle.h"
 #include "../sky_chart.h"
+#include "../wind.h"
 #include "../weather_cycle.h"
 #include "../procgen/terrain_horizon.h"
 #include "../properties.h"
@@ -106,6 +107,8 @@ private:
     // must not drive the sun/sky/ambient (see definition in the .cpp).
     bool hdrEnvironmentActive(FrameContext& ctx) const;
     bool configSeeded_ = false;   // DayNightConfig seeds applied once
+    bool startApplied_ = false;   // the launch's start time (RT_TIME / daynight.start: ADR-0338), once
+    void applyLaunchStart(FrameContext& ctx);
     void seedFromConfig(const DayNightConfig& c);
     // `daynight?` on the control channel (bound by this system) answers the
     // clock as numbers, measured here each frame into status_ — the loop's
@@ -178,6 +181,8 @@ private:
     // knobs back to the panel and `clouds`. Auto mode rolls a seeded neighbor
     // walk every few in-world hours.
     WeatherCycle weather;
+    Wind wind;                      // the live wind (ADR-0337): published as the world's Wind each fixed step
+    Entity windEntity_{};
     bool weatherActive = false;
     bool weatherFromSettings_ = false;   // a persisted state was restored: the level's policy yields
     bool weatherDefaulted_ = false;      // the level policy / volumetric default applied once

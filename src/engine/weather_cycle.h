@@ -40,6 +40,8 @@ struct WeatherTargets {
     // The CLOUD TYPES the weather's map spreads over (ADR-0336; 0 stratus, 1/3 stratocumulus, 2/3 cumulus, 1
     // cumulonimbus): easing between states morphs the types too -- a front's puffs flatten into a deck.
     float typeLo, typeHi;
+    // THE WIND the state blows (ADR-0337, wind.h): m/s at 10 m, and how squally
+    float windSpeed, windGust;
 };
 
 inline WeatherTargets weatherTargets(WeatherKind k) {
@@ -47,12 +49,12 @@ inline WeatherTargets weatherTargets(WeatherKind k) {
         // 0.03, not 0.08: the coverage threshold rides the top of a noise
         // field, and 8 % still filled the sky with popcorn — a clear day is a
         // few wisps at most (Glenn, 2026-09-14: "can we see different weather?").
-        case WeatherKind::Clear:    return {0.03f, 0.25f, 0.90f, 1.00f, 1.00f, 0.00f, 0.62f, 0.70f};   // fair-weather puffs
-        case WeatherKind::Overcast: return {0.80f, 0.60f, 1.90f, 0.55f, 1.35f, 0.60f, 0.00f, 0.40f};   // stratus deck
-        case WeatherKind::Storm:    return {0.92f, 1.00f, 1.60f, 0.28f, 1.45f, 0.85f, 0.60f, 1.00f};   // towers
+        case WeatherKind::Clear:    return {0.03f, 0.25f, 0.90f, 1.00f, 1.00f, 0.00f, 0.62f, 0.70f, 3.0f, 0.20f};   // fair-weather puffs, a light breeze
+        case WeatherKind::Overcast: return {0.80f, 0.60f, 1.90f, 0.55f, 1.35f, 0.60f, 0.00f, 0.40f, 9.0f, 0.40f};   // stratus deck, a fresh wind
+        case WeatherKind::Storm:    return {0.92f, 1.00f, 1.60f, 0.28f, 1.45f, 0.85f, 0.60f, 1.00f, 16.0f, 0.70f};   // towers, a gale gusting
         case WeatherKind::Fair:     break;
     }
-    return {0.32f, 0.45f, 1.10f, 1.00f, 1.05f, 0.08f, 0.40f, 0.75f};   // Fair — the everyday sky
+    return {0.32f, 0.45f, 1.10f, 1.00f, 1.05f, 0.08f, 0.40f, 0.75f, 6.0f, 0.35f};   // Fair — the everyday sky, a moderate breeze
 }
 
 inline const char* weatherKindName(WeatherKind k) {
@@ -108,6 +110,7 @@ struct WeatherCycle {
     float ambientScale = 1.05f;
     float shadowSoften = 0.08f;
     float typeLo = 0.40f, typeHi = 0.75f;
+    float windSpeed = 6.0f, windGust = 0.35f;
 
     bool autoMode = false;
     double sinceStepHours = 0.0;   // in-world hours since the last auto roll
@@ -130,6 +133,8 @@ struct WeatherCycle {
         shadowSoften += (t.shadowSoften - shadowSoften) * a;
         typeLo += (t.typeLo - typeLo) * a;
         typeHi += (t.typeHi - typeHi) * a;
+        windSpeed += (t.windSpeed - windSpeed) * a;
+        windGust += (t.windGust - windGust) * a;
     }
 
     // Jump straight to the state's targets (state restore at level start —
@@ -144,6 +149,8 @@ struct WeatherCycle {
         shadowSoften = t.shadowSoften;
         typeLo = t.typeLo;
         typeHi = t.typeHi;
+        windSpeed = t.windSpeed;
+        windGust = t.windGust;
     }
 
     // Advance the auto clock by in-world hours. At each kAutoHours boundary:

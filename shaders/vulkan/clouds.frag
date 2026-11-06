@@ -31,6 +31,7 @@ layout(set = 0, binding = 0) uniform CloudUniforms {
     vec4 typeProfile[4];       // the height fractions: rise from x, full by y, full to z, gone by w
     vec4 typeParams[4];        // x density, y erosion, z anvil
     vec4 typeRange;            // x lo, y hi: the live weather's types
+    vec4 windOffset;           // xy: the clouds' drift so far along the weather's wind (x, z m: ADR-0337)
 } u;
 
 layout(set = 0, binding = 1) uniform sampler2D sceneDepth;
@@ -78,7 +79,7 @@ float clLayerHeight(vec3 p) {
 // through a coverage map pinned to the ground, so every cloud stood still while its insides churned through it --
 // clouds that boil and wobble in place. Now the weather map, the shape and the detail all ride the same wind:
 // a cloud drifts across the sky as one body; the detail runs a little ahead, so its edges still evolve, slowly.
-vec3 clWind() { return vec3(u.params.w * u.skyAmbient.w, 0.0, 0.0); }
+vec3 clWind() { return vec3(u.windOffset.x, 0.0, u.windOffset.y); }   // (the weather's wind, integrated: ADR-0337)
 
 // THE WEATHER MAP (ADR-0336): x the coverage field, y the cloud type at this point (the map's G spread over the live
 // weather's type range). Its own 2D texture, R the slice of the base volume the march used to read, so the sky keeps

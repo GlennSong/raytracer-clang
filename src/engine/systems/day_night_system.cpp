@@ -97,6 +97,7 @@ void DayNightSystem::onStart(FrameContext& ctx) {
             configSeeded_ = true;
         }
     });
+    if (!startApplied_) applyLaunchStart(ctx);
 
     // One boot line so a headset/simulator console shows the resolved state —
     // "why is it dusk" is unanswerable from the picture alone. Printed after the
@@ -252,6 +253,18 @@ void DayNightSystem::onStop(FrameContext& ctx) {
     s.setBool("weather.auto", weather.autoMode);
 
     s.save("settings.json");
+}
+
+// THE LAUNCH'S START TIME (ADR-0338): RT_TIME for this run, else the saved preference daynight.start -- "saved" (the
+// default: the saved or level time stands), "now" (the wall clock and today's date, at real speed), an hour, or a moment
+// (sunrise, sunset, dusk, ...). After the level's seeds, so a launch's choice wins over both. Once.
+void DayNightSystem::applyLaunchStart(FrameContext& ctx) {
+    startApplied_ = true;
+    const char* env = std::getenv("RT_TIME");
+    const std::string spec = env && *env ? std::string(env) : ctx.settings.getString("daynight.start", "saved");
+    std::string what;
+    if (applyStartTime(cycle, spec, &what)) LOG_INFO << "[daynight] start time " << what;
+    else if (!what.empty()) LOG_WARN << "[daynight] " << what;
 }
 
 // Level seeds (DayNightConfig): a level that authors its own day. Applied
@@ -455,6 +468,27 @@ void DayNightSystem::fixedUpdate(FrameContext& ctx) {
     } else {
         cloudTypeLo = cloudTypeHi = -1.0f;   // (the level's own range)
     }
+    // THE WIND (ADR-0337): the weather's speed and gustiness (a moderate breeze with the weather off); its direction
+    // veers slowly through the day about the seed's prevailing one (+-30 degrees over ~26 in-world hours)
+    {
+        const double seed = ctx.settings.getDouble("weather.seed", 7.0);
+        const double hours = cycle.absoluteDay() * 24.0;
+        const double a = seed * 2.3999632 + 0.52 * std::sin(hours * 6.283185307 / 26.0) + 0.17 * std::sin(hours * 6.283185307 / 7.3);
+        wind.dir = Vec3(std::cos(a), 0.0, std::sin(a));
+        wind.speed = weatherActive ? weather.windSpeed : 6.0;
+        wind.gust = weatherActive ? weather.windGust : 0.35;
+        wind.time += ctx.clock.fixedStep();
+        if (!ctx.world.alive(windEntity_)) {
+            windEntity_ = ctx.world.create();
+            ctx.world.add<Wind>(windEntity_, wind);
+        } else if (Wind* w = ctx.world.get<Wind>(windEntity_)) {
+            *w = wind;
+        }
+        ctx.renderer.windDir[0] = static_cast<float>(wind.dir.x);
+        ctx.renderer.windDir[1] = static_cast<float>(wind.dir.z);
+        ctx.renderer.windSpeed = static_cast<float>(wind.speed);
+        ctx.renderer.windGust = static_cast<float>(wind.gust);
+    }
 }
 
 void DayNightSystem::update(FrameContext& ctx) {
@@ -490,6 +524,7 @@ void DayNightSystem::update(FrameContext& ctx) {
             configSeeded_ = true;
         }
     });
+    if (!startApplied_) applyLaunchStart(ctx);
     // edits live even while the simulation is paused.
     const bool active = enabled && levelEnabled && !hdrEnvironmentActive(ctx);
     if (active) applyLighting(ctx);

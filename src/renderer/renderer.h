@@ -1031,6 +1031,12 @@ public:
     bool skyScatteringEnabled = true;
     bool volumetricCloudsEnabled = true;
     int  cloudStepsOverride = 0;
+    // THE WIND (ADR-0337, engine/wind.h): set each frame by DayNightSystem from the weather -- where the air goes (x, z,
+    // unit), m/s at 10 m, and how squally. The clouds drift along it, grass and trees sway with it, the sea's wave
+    // trains turn to it and grow with it.
+    float windDir[2] = {0.94f, 0.34f};
+    float windSpeed = 6.0f;
+    float windGust = 0.35f;
 
     // Resolution scale for the screen-space effect buffers (SSAO + SSR), a
     // fraction of the framebuffer. These effects are low/medium frequency, so

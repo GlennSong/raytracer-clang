@@ -144,7 +144,14 @@ void main() {
         weight *= weight;
         float phase = g.wind1.w * g.wind2.x + dot(world.xz, vec2(0.15, 0.1));
         float gust = sin(phase) + 0.3 * sin(phase * 2.3 + 1.7);
-        world.xz += g.wind1.xz * (g.wind2.z * weight * gust);
+        // GUST FRONTS (ADR-0337): bands of stronger air travelling downwind at the wind's speed -- a field bows in a wave
+        // that crosses it -- their strength the weather's gustiness (wind1.y), and the whole sway leaning downwind
+        // (a mean push, not only the swing about upright)
+        const vec2 wdir = g.wind1.xz;
+        const float along = dot(world.xz, wdir) - g.wind1.w * g.wind2.w;
+        const float front = 0.5 + 0.5 * sin(along * 0.07 + 0.6 * sin(dot(world.xz, vec2(-wdir.y, wdir.x)) * 0.013));
+        const float push = 1.0 + g.wind1.y * (2.2 * front * front - 0.5);
+        world.xz += wdir * (g.wind2.z * weight * (gust * push + 0.6 * push));
     }
     // ON A SLOPE every blade stands up from the ground under IT, not from a level plane through the planted origin:
     // a shear by the ground's gradient (its normal rides the bottom row), so a card's foot follows the hill instead
