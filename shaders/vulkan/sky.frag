@@ -1,4 +1,6 @@
 #version 450
+#extension GL_GOOGLE_include_directive : require
+#include "sky_common.glsl"
 // Procedural day/night sky + FBM clouds (ported from environment.metal
 // sampleEnvironment + applyClouds). Output is scene-linear; the sRGB swapchain
 // encodes on store. Without the Phase 5 tone map the bright sun disc clips to
@@ -163,8 +165,9 @@ vec3 skyGlow(vec3 dir) {
 
 vec3 sampleEnvironment(vec3 dir) {
     float skyBlend = clamp(dir.y, 0.0, 1.0);
-    vec3 sky = mix(g.skyHorizon.rgb, g.skyZenith.rgb, pow(skyBlend, 0.5));
-    vec3 lowerHaze = mix(g.skyHorizon.rgb, g.skyGround.rgb, smoothstep(0.0, -0.4, dir.y));
+    const vec3 hor = skyHorizonToward(dir, g.skyHorizon.rgb, g.skyZenith.rgb, g.skySunDir.xyz);   // (by direction: ADR-0339)
+    vec3 sky = mix(hor, g.skyZenith.rgb, pow(skyBlend, 0.5));
+    vec3 lowerHaze = mix(hor, g.skyGround.rgb, smoothstep(0.0, -0.4, dir.y));
     float horizonBlend = smoothstep(-0.05, 0.05, dir.y);
     vec3 col = mix(lowerHaze, sky, horizonBlend);
 

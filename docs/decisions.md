@@ -15384,3 +15384,35 @@ saved time. A level could ask for the wall clock's hour (`clockSource`), but onl
 
 **Not done.** The weather still restores the last session's state rather than the calendar's. Proposed to Glenn: a
 per-level climate, with weather from the in-game date.
+
+## ADR-0339 — The sky's horizon by direction: the sunset glow on the sun's side (#187)
+
+**Context.** Glenn, 2026-11-05: "sunset lighting though... the buildings seem to be illuminated all around? Should there
+not be a directional sunlight?" The day model's horizon is one colour all round, the dusk orange (0.95, 0.45, 0.18).
+The sky light (mesh.frag sampleSkyDome / sampleEnvironment) fills a vertical wall from the horizon it faces. So a wall
+facing away from the sun was filled as warm as one facing it.
+- **Measured** on a beach town at 18:20 (island_8_nature): the two faces of a building differed only 1.25–1.35×, both
+  the same orange.
+- That town was in fact in the mountains' shadow, the sun setting behind the range: the glow was all sky light.
+
+**Decision.**
+- **One shared function,** `skyHorizonToward(dir, horizon, zenith, sunDir)` in a new `shaders/vulkan/sky_common.glsl`.
+  - The horizon a direction sees keeps the warm glow toward the sun (×1.2).
+  - Away from the sun it goes to a cooler, dimmer blue-grey: the anti-twilight, the horizon's luminance tinted
+    (0.68, 0.73, 0.95), mixed half with the zenith, × 0.8.
+  - The tint fades in as the sun nears the horizon (gone above sinΘ = 0.35, and below −0.18).
+- **Used by both** sky.frag (the sky you see) and mesh.frag (the light it casts), so the two agree.
+- **The Vulkan shaders gain `#include`** (GL_GOOGLE_include_directive): glslc runs with `-I shaders/vulkan`, and every
+  shader depends on sky_common.glsl. This is the first shared GLSL source, a small step toward #141.
+
+**Measured** (same views):
+- The shaded town at sunset is now a cool, dim fill. Faces read about (64, 47, 45) and (57, 51, 56), where they were
+  (96, 56, 38) and (105, 71, 45).
+- The horizon is warm toward the sun and blue opposite.
+- At 17:30, with the sun clear of the range, the streets show long shadows and sun-facing fronts lit against darker
+  shadow sides.
+
+**Not done.**
+- The low sun's own colour is still near white an hour before sunset (`sunColor` warms only below sin 0.45, gently): an
+  artistic tune.
+- Metal (#71) has its own sky and IBL.

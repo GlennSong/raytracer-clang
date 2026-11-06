@@ -1129,8 +1129,9 @@ function(rt_build_vulkan_shaders)
             OUTPUT ${VK_SHADER_OUT_DIR}/${shader}.spv
             COMMAND ${Vulkan_GLSLC_EXECUTABLE}
                     ${VK_SHADER_SRC_DIR}/${shader}
+                    -I ${VK_SHADER_SRC_DIR}
                     -o ${VK_SHADER_OUT_DIR}/${shader}.spv
-            DEPENDS ${VK_SHADER_SRC_DIR}/${shader}
+            DEPENDS ${VK_SHADER_SRC_DIR}/${shader} ${VK_SHADER_SRC_DIR}/sky_common.glsl
             COMMENT "glslc ${shader} -> ${shader}.spv"
             VERBATIM)
         list(APPEND VK_SPV_FILES ${VK_SHADER_OUT_DIR}/${shader}.spv)

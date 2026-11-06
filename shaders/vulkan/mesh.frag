@@ -1,4 +1,6 @@
 #version 450
+#extension GL_GOOGLE_include_directive : require
+#include "sky_common.glsl"
 // Phase 2 forward fragment stage (ADR-0057). Faithful port of the Metal
 // evaluateLighting + the procedural surface library (shaders/metal/lighting.metal
 // + common.metal): multi-light Cook-Torrance (GGX + height-correlated Smith,
@@ -134,8 +136,9 @@ vec3 fresnelSchlickRoughness(float cosTheta, vec3 F0, float roughness) {
 // level samples its equirect map directly, below).
 vec3 sampleEnvironment(vec3 dir) {
     float skyBlend = clamp(dir.y, 0.0, 1.0);
-    vec3 sky = mix(g.skyHorizon.rgb, g.skyZenith.rgb, pow(skyBlend, 0.5));
-    vec3 lowerHaze = mix(g.skyHorizon.rgb, g.skyGround.rgb, smoothstep(0.0, -0.4, dir.y));
+    const vec3 hor = skyHorizonToward(dir, g.skyHorizon.rgb, g.skyZenith.rgb, g.skySunDir.xyz);   // (by direction: ADR-0339)
+    vec3 sky = mix(hor, g.skyZenith.rgb, pow(skyBlend, 0.5));
+    vec3 lowerHaze = mix(hor, g.skyGround.rgb, smoothstep(0.0, -0.4, dir.y));
     float horizonBlend = smoothstep(-0.05, 0.05, dir.y);
     vec3 col = mix(lowerHaze, sky, horizonBlend);
     float disc = g.skySunDir.w;
@@ -153,8 +156,9 @@ vec3 sampleEnvironment(vec3 dir) {
 // out (Glenn: "when they get light cast on them the lighting seems to blow out the leaves").
 vec3 sampleSkyDome(vec3 dir) {
     float skyBlend = clamp(dir.y, 0.0, 1.0);
-    vec3 sky = mix(g.skyHorizon.rgb, g.skyZenith.rgb, pow(skyBlend, 0.5));
-    vec3 lowerHaze = mix(g.skyHorizon.rgb, g.skyGround.rgb, smoothstep(0.0, -0.4, dir.y));
+    const vec3 hor = skyHorizonToward(dir, g.skyHorizon.rgb, g.skyZenith.rgb, g.skySunDir.xyz);   // (by direction: ADR-0339)
+    vec3 sky = mix(hor, g.skyZenith.rgb, pow(skyBlend, 0.5));
+    vec3 lowerHaze = mix(hor, g.skyGround.rgb, smoothstep(0.0, -0.4, dir.y));
     vec3 col = mix(lowerHaze, sky, smoothstep(-0.05, 0.05, dir.y));
     float sunDot = max(dot(dir, g.skySunDir.xyz), 0.0);
     col += g.skySunColor.rgb * pow(sunDot, 4.0) * 0.15 * g.skySunDir.w;
