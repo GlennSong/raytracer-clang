@@ -91,6 +91,42 @@ inline uint32_t weatherHash(uint32_t seed, uint32_t step) {
     return x;
 }
 
+// A PLACE'S CLIMATE (ADR-0340): the odds of each state (clear, fair, overcast, storm; any scale) in midsummer and in
+// midwinter, blended by the day of the year (cosine, coldest about 15 January in the north, flipped south of the
+// equator); where the prevailing wind comes FROM (compass degrees, north 0, east 90); and a scale on the weather's wind
+// (a windy coast, a sheltered valley). The default is the old fixed odds all year (30 / 42 / 20 / 8), a south-westerly.
+// A level's "dayNight": {"climate": {...}} sets it.
+struct WeatherClimate {
+    float summer[4] = {36.0f, 50.0f, 24.0f, 10.0f};
+    float winter[4] = {36.0f, 50.0f, 24.0f, 10.0f};
+    float prevailingFromDeg = 225.0f;
+    float windScale = 1.0f;
+};
+
+// The state a DAY opens with: the seed, the year and the day picked through the climate's odds for that day
+inline WeatherKind weatherForDay(uint32_t seed, int dayOfYear, int year, const WeatherClimate& c, double latitudeDeg) {
+    const double w = 0.5 + 0.5 * std::cos((dayOfYear - 15) * 6.283185307179586 / 365.25);   // 1 midwinter (north)
+    const double wint = latitudeDeg < 0.0 ? 1.0 - w : w;
+    double odds[4], sum = 0.0;
+    for (int i = 0; i < 4; ++i) {
+        odds[i] = std::max(0.0, c.summer[i] + (c.winter[i] - c.summer[i]) * wint);
+        sum += odds[i];
+    }
+    if (sum <= 0.0) return WeatherKind::Fair;
+    const uint32_t step = static_cast<uint32_t>(year) * 400u + static_cast<uint32_t>(dayOfYear) + 1000u;
+    double r = (weatherHash(seed ^ 0xA5A5u, step) % 100000u) / 100000.0 * sum;
+    for (int i = 0; i < 4; ++i) {
+        if (r < odds[i]) return static_cast<WeatherKind>(i);
+        r -= odds[i];
+    }
+    return WeatherKind::Storm;
+}
+
+// The walk within a day is seeded by the day too, so a given day's weather is the same every time it is lived
+inline uint32_t weatherDaySeed(uint32_t seed, int dayOfYear, int year) {
+    return weatherHash(seed ^ 0x51ED27u, static_cast<uint32_t>(year) * 400u + static_cast<uint32_t>(dayOfYear));
+}
+
 inline WeatherKind weatherForDay(uint32_t seed, int dayOfYear) {
     const uint32_t r = weatherHash(seed ^ 0xA5A5u, static_cast<uint32_t>(dayOfYear) + 1000u) % 120u;
     if (r < 36u) return WeatherKind::Clear;      // 30 %

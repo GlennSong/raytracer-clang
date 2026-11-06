@@ -11,6 +11,7 @@
 #include "procgen/city/polygon.h"   // Poly2 (city-plan debug outlines, ADR-0066)
 #include "procgen/city/road_network.h"   // RoadGraph (ExtraNavGraph, plan §8 P8.4)
 #include "procgen/city/road_mesh.h"      // RoadDeckField (RoadDeck)
+#include "weather_cycle.h"               // WeatherClimate (DayNightConfig)
 #include "procgen/city/rail_track.h"     // RailTrack (RailTracks)
 #include "procgen/terrain.h"
 #include "procgen/height_pyramid.h"   // TerrainLodConfig::baked (ADR-0095)
@@ -828,6 +829,10 @@ struct DayNightConfig {
     // Pair with "dayMinutes": 1440 for one-to-one with reality.
     int clockSource = -1;
     float utcOffsetHours = -1000.0f;
+    // THE CLIMATE ("dayNight": {"climate": {"summer": [c, f, o, s], "winter": [...], "odds": [...] (both),
+    // "prevailingFrom": deg, "windScale": x}}, ADR-0340): the odds each day's weather is drawn from, the wind's home
+    bool hasClimate = false;
+    WeatherClimate climate;
 };
 
 struct CitySimConfig {

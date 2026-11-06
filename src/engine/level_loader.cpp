@@ -7547,6 +7547,20 @@ bool LevelLoader::load(const std::string& path,
             else if (w == "overcast") dc.weather = 4;
             else if (w == "storm") dc.weather = 5;
         }
+        if (dn.contains("climate") && dn["climate"].is_object()) {   // ADR-0340
+            const auto& cj = dn["climate"];
+            dc.hasClimate = true;
+            auto odds = [&](const char* key, float* out) {
+                if (cj.contains(key) && cj[key].is_array() && cj[key].size() == 4)
+                    for (int i = 0; i < 4; ++i) out[i] = cj[key][static_cast<std::size_t>(i)].get<float>();
+            };
+            odds("odds", dc.climate.summer);
+            odds("odds", dc.climate.winter);
+            odds("summer", dc.climate.summer);
+            odds("winter", dc.climate.winter);
+            dc.climate.prevailingFromDeg = cj.value("prevailingFrom", dc.climate.prevailingFromDeg);
+            dc.climate.windScale = cj.value("windScale", dc.climate.windScale);
+        }
         world.add<DayNightConfig>(world.create(), dc);
     }
 

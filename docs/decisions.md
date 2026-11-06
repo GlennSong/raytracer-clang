@@ -15416,3 +15416,37 @@ facing away from the sun was filled as warm as one facing it.
 - The low sun's own colour is still near white an hour before sunset (`sunColor` warms only below sin 0.45, gently): an
   artistic tune.
 - Metal (#71) has its own sky and IBL.
+
+## ADR-0340 — The weather follows the calendar and the level's climate (#187)
+
+**Context.** At startup the weather took, in order: the state the last session quit with (saved in settings.json);
+then the level's policy; then the day's roll. Every session saved its weather, so the first won almost every time and
+the day's roll almost never ran. The level-policy path also rolled with a hard-coded seed of 7 where the default path
+read `weather.seed`. The odds were the same everywhere and all year. Glenn, 2026-11-05: "I do like the idea of the
+game having its own weather state and calendar".
+
+**Decision.**
+- **Auto weather is the calendar's.** `weatherForDay(seed, day, year, climate, latitude)` draws a day's opening state
+  through the climate's odds. The walk within the day is seeded by the day (`weatherDaySeed`), so a given day always has
+  the same weather however it is reached.
+  - At each new in-world day, auto weather eases to the new day's state, and the walk starts afresh.
+  - `weather auto` returns to today's.
+- **Only a deliberate choice survives a restart.** A state chosen by hand (`weather storm`, the panel; saved with
+  `weather.auto` false) is restored as an explicit override. Saved auto weather is not.
+- **The climate is level data:** `"dayNight": {"climate": {"summer": [c, f, o, s], "winter": [...], "odds": [...]
+  (both), "prevailingFrom": deg, "windScale": x}}`.
+  - Midsummer and midwinter odds are blended by a cosine of the day (coldest about 15 January in the north, flipped
+    south of the equator).
+  - The prevailing wind's compass bearing aims the weather wind (ADR-0337; north −z, east +x), still veering ±30° through
+    the day. `windScale` scales its speed.
+  - The default is the old odds all year (30 / 42 / 20 / 8 %) and a south-westerly.
+- **The seed bug:** the level-policy path now uses the settings' seed.
+- **island_8_nature** gets a North Atlantic climate and `weather: auto` (it was fixed "fair"):
+  - summer 10 / 35 / 40 / 15;
+  - winter 5 / 20 / 45 / 30;
+  - wind from 245°, × 1.3.
+- **Test:** `weather_calendar_climate_and_season`. It checks reproducibility, that January storms outnumber July's in
+  the north and the reverse in the south, the default odds within sampling, and the day-seeded walk.
+
+**Not done.** Phase 3's simulation replaces the walk: fronts from the prevailing wind, the daily draw choosing what is
+coming.

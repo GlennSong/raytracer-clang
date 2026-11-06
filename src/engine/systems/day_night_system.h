@@ -186,6 +186,13 @@ private:
     bool weatherActive = false;
     bool weatherFromSettings_ = false;   // a persisted state was restored: the level's policy yields
     bool weatherDefaulted_ = false;      // the level policy / volumetric default applied once
+    // THE CALENDAR (ADR-0340): auto weather is the day's, from the seed, the date and the level's climate
+    WeatherClimate climate_;
+    uint32_t weatherSeed_ = 7;
+    int weatherDay_ = -1;                // the in-world day the weather was last drawn for
+    WeatherKind dayWeather() const {
+        return weatherForDay(weatherSeed_, cycle.dayOfYear, cycle.year, climate_, cycle.latitudeDeg);
+    }
 
     // Night exposure adaptation (WS2): the eye the renderer doesn't have. A
     // moonlit world is readable because pupils dilate — without adaptation the

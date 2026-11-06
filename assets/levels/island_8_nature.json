@@ -5266,7 +5266,14 @@
  "dayNight": {
   "dayMinutes": 1440.0,
   "timeOfDay": 0.32292,
-  "weather": "fair"
+  "climate": {
+   "_comment": "ADR-0340: a North Atlantic island -- overcast most days, stormier in winter, a WSW wind stronger than inland",
+   "summer": [10, 35, 40, 15],
+   "winter": [5, 20, 45, 30],
+   "prevailingFrom": 245,
+   "windScale": 1.3
+  },
+  "weather": "auto"
  },
  "entities": [
   {

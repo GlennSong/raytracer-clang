@@ -185,3 +185,35 @@ TEST_CASE(wind_rises_with_the_weather_and_keeps_its_bounds) {
     calm.speed = 0.0;
     CHECK_APPROX(windAt(calm, p).length(), 0.0, 1e-12);
 }
+
+// THE CALENDAR (ADR-0340): a day's weather is the same every time, the climate's season moves the odds, the south
+// has its winter in July, and the default climate keeps the old year-round odds
+TEST_CASE(weather_calendar_climate_and_season) {
+    WeatherClimate atlantic;
+    const float summer[4] = {10, 35, 40, 15}, winter[4] = {5, 20, 45, 30};
+    for (int i = 0; i < 4; ++i) { atlantic.summer[i] = summer[i]; atlantic.winter[i] = winter[i]; }
+    CHECK(weatherForDay(7u, 200, 2026, atlantic, 60.0) == weatherForDay(7u, 200, 2026, atlantic, 60.0));
+    // storms in January against July, over many years
+    int janStorm = 0, julStorm = 0, julStormSouth = 0;
+    for (int y = 2000; y < 2200; ++y)
+        for (int d = 0; d < 10; ++d) {
+            janStorm += weatherForDay(7u, 10 + d, y, atlantic, 60.0) == WeatherKind::Storm;
+            julStorm += weatherForDay(7u, 192 + d, y, atlantic, 60.0) == WeatherKind::Storm;
+            julStormSouth += weatherForDay(7u, 192 + d, y, atlantic, -45.0) == WeatherKind::Storm;
+        }
+    CHECK(janStorm > julStorm * 1.5);              // winter's 30 against summer's 15
+    CHECK(julStormSouth > julStorm * 1.5);         // July is the south's winter
+    // the default climate: the old odds all year (30 / 42 / 20 / 8 %), within sampling
+    WeatherClimate def;
+    int n[4] = {0, 0, 0, 0};
+    for (int y = 2000; y < 2010; ++y)
+        for (int d = 1; d <= 365; ++d) ++n[static_cast<int>(weatherForDay(7u, d, y, def, 40.0))];
+    const double total = 3650.0;
+    CHECK_APPROX(n[0] / total, 0.30, 0.03);
+    CHECK_APPROX(n[1] / total, 0.42, 0.03);
+    CHECK_APPROX(n[2] / total, 0.20, 0.03);
+    CHECK_APPROX(n[3] / total, 0.08, 0.02);
+    // the walk's seed follows the day: different days walk differently, the same day the same way
+    CHECK(weatherDaySeed(7u, 100, 2026) == weatherDaySeed(7u, 100, 2026));
+    CHECK(weatherDaySeed(7u, 100, 2026) != weatherDaySeed(7u, 101, 2026));
+}
