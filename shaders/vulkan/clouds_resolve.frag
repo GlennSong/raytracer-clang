@@ -5,7 +5,7 @@
 // frame's 3x3 neighbourhood (no ghost where a cloud edge or a hill's silhouette moved), and the blend is
 // 1 - historyWeight of the new frame. Same set layout as the march: the uniforms, then three images.
 layout(set = 0, binding = 0) uniform CloudUniforms {
-    mat4 invViewProjection;
+    mat4 invViewProjection;   // CAMERA-RELATIVE: clip -> the offset from the camera (ADR-0335)
     vec4 cameraPosition;
     vec4 sunDirection;
     vec4 sunColor;
@@ -15,7 +15,7 @@ layout(set = 0, binding = 0) uniform CloudUniforms {
     vec4 params;
     vec4 march;           // w farDistance
     vec4 detail;
-    mat4 prevViewProjection;
+    mat4 prevViewProjection;  // CAMERA-RELATIVE: the offset from THIS frame's camera -> last frame's clip
     vec4 frame;           // x dither offset, y history weight (0: reset)
 } u;
 layout(set = 0, binding = 1) uniform sampler2D current;   // this frame's march (rgb in-scatter, a transmittance)
@@ -45,7 +45,7 @@ void main() {
     vec2 ndc = inUV * 2.0 - 1.0;
     vec4 wf = u.invViewProjection * vec4(ndc, 0.002, 1.0);   // (~100 m out, not the near plane: clouds.frag's precision note)
     vec3 cam = u.cameraPosition.xyz;
-    vec3 dir = normalize(wf.xyz / wf.w - cam);
+    vec3 dir = normalize(wf.xyz / wf.w);
     float mid = 0.5 * (u.layer.x + u.layer.y);
     float t = u.march.w;
     if (abs(dir.y) > 1e-4) {
@@ -57,9 +57,9 @@ void main() {
     float depth = texture(sceneDepth, inUV).r;
     if (depth > 0.0) {
         vec4 w = u.invViewProjection * vec4(ndc, depth, 1.0);
-        t = min(t, length(w.xyz / w.w - cam));
+        t = min(t, length(w.xyz / w.w));
     }
-    vec4 prevClip = u.prevViewProjection * vec4(cam + dir * t, 1.0);
+    vec4 prevClip = u.prevViewProjection * vec4(dir * t, 1.0);
     vec2 prevUV = prevClip.xy / prevClip.w * 0.5 + 0.5;
     if (prevClip.w <= 0.0 || any(lessThan(prevUV, vec2(0.0))) || any(greaterThan(prevUV, vec2(1.0)))) {
         outColor = cur;   // off last frame's screen: nothing to blend

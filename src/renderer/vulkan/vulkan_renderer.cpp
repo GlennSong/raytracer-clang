@@ -497,7 +497,7 @@ struct VulkanRenderer::Impl {
     int cloudHistCur = 0;           // the history written this frame
     bool cloudHistValid = false;    // false: the next frame starts it afresh (new targets, a jump)
     bool cloudHistFresh = true;     // the targets are new: their layout is still undefined
-    float cloudPrevVP[16] = {};
+    Mat4 cloudPrevFlipVP;   // last frame's world -> clip (y flipped), in double: the history's camera-relative reprojection
     float cloudPrevCam[3] = {0, 0, 0};
     uint64_t cloudFrames = 0;
     std::array<VkBuffer, MAX_FRAMES_IN_FLIGHT> cloudUboBuffers{};
@@ -6010,8 +6010,14 @@ void VulkanRenderer::Impl::drawFrame() {
     if (cloudsActive && cloudUboMapped[currentFrame]) {
         const VolumetricCloudParams& cp = cloudParams;
         CloudUniformsGPU cu{};
-        std::memcpy(cu.invViewProjection, cpuGlobals.invViewProjection,
-                    sizeof(cu.invViewProjection));
+        // CAMERA-RELATIVE (ADR-0335): the clouds' rays and their reprojection are built from matrices about the camera,
+        // composed and inverted in double -- in float the shaders subtracted kilometre-scale positions, and with a still
+        // camera every pixel's history read landed a fraction of a texel off its own, a little differently in bands
+        // across the screen: resampled frame after frame, that drew thin wavy lines across every close cloud (Glenn,
+        // 2026-11-05: "horizontal striping going through each cloud"; without the reprojection they more than halved).
+        // invViewProjection: clip -> the offset from the camera; prevViewProjection: that offset -> last frame's clip.
+        const Mat4 toCam = Mat4::translate(frameEye.x, frameEye.y, frameEye.z);
+        packMat4((frameViewProj * toCam).inverse(), cu.invViewProjection, /*flipY=*/false);
         std::memcpy(cu.cameraPosition, cpuGlobals.cameraPosition, sizeof(cu.cameraPosition));
         if (cpuGlobals.counts[0] > 0) {   // sun = light 0, like Metal
             std::memcpy(cu.sunDirection, cpuGlobals.lights[0].directionInner,
@@ -6057,11 +6063,11 @@ void VulkanRenderer::Impl::drawFrame() {
         const float dx = cpuGlobals.cameraPosition[0] - cloudPrevCam[0], dy = cpuGlobals.cameraPosition[1] - cloudPrevCam[1],
                     dz = cpuGlobals.cameraPosition[2] - cloudPrevCam[2];
         const bool jumped = dx * dx + dy * dy + dz * dz > 50.0f * 50.0f;
-        std::memcpy(cu.prevViewProjection, cloudHistValid ? cloudPrevVP : cpuGlobals.viewProjection, sizeof(cu.prevViewProjection));
+        packMat4((cloudHistValid ? cloudPrevFlipVP : frameViewProj) * toCam, cu.prevViewProjection, /*flipY=*/false);
         cu.frame[0] = kHistory > 0.0f ? static_cast<float>(std::fmod(static_cast<double>(cloudFrames) * 0.6180339887, 1.0)) : 0.0f;
         cu.frame[1] = cloudHistValid && !jumped ? kHistory : 0.0f;
         std::memcpy(cloudUboMapped[currentFrame], &cu, sizeof(cu));
-        std::memcpy(cloudPrevVP, cpuGlobals.viewProjection, sizeof(cloudPrevVP));
+        cloudPrevFlipVP = frameViewProj;
         std::memcpy(cloudPrevCam, cpuGlobals.cameraPosition, sizeof(cloudPrevCam));
         cloudHistValid = true;
         ++cloudFrames;

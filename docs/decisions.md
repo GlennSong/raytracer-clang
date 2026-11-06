@@ -15249,3 +15249,35 @@ and slid. Decima's clouds reproject by each pixel's own cloud distance.
 - The band of horizontal streaks along the deck's own level: rays nearly parallel to the layer cross tens of km of it.
   The near and far steps are owed.
 - Metal (#71).
+
+## ADR-0335 — The clouds' rays and history camera-relative, in double (#187)
+
+**Context.** Glenn, 2026-11-05: "horizontal striping going through each cloud like you can see each layer". The lab's
+`near` pose (coverage 0.55, density 0.6) shows thin, wavy lines across every close cloud. A stripe score was used: the
+peak-to-median of the rows' high-passed spectrum over the cloud.
+- **The bisection.** A single frame with no history scores 8.7: no visible lines, only grain. The history at 0.9
+  scores 26.5. The history without reprojection (prevUV = uv, camera still) scores 11.6. So the history's
+  REPROJECTION was the amplifier.
+- **The cause.** The reprojection was `invVP · (ndc, z, 1) − camera`, then `prevVP · (camera + dir · t)`, all in
+  float, with km-scale positions. Every pixel's read landed a fraction of a texel off its own, a little differently in
+  bands across the screen, and resampling that frame after frame drew the lines.
+- **Earlier dead ends, kept for the record** (none moved the stripes): half view steps; 12 light steps; a smooth-F1
+  Worley bake; a 256³ base; quintic texel reads; the light cone against the line; a rounded coverage threshold; a
+  dither on the noise reads. A jittered in-cloud step length was tried after the fix and also made no change.
+
+**Decision.**
+- The cloud uniforms' `invViewProjection` is `(flipVP · T(eye))⁻¹`, composed and inverted in double: clip → the offset
+  from the camera.
+- `prevViewProjection` is `prevFlipVP · T(eye)`: the offset from this frame's camera → last frame's clip.
+- clouds.frag and clouds_resolve.frag use the offsets directly. The camera position no longer goes into the
+  reprojection. Nothing else reads these two uniforms.
+
+**Measured** (lab `near`):
+- Stripe score 26.5 → 15.1.
+- The cloud pass costs the same: 1.45 ms before and after.
+
+**Not done.**
+- A faint residue (no-reprojection floor 11.6, against 8.7 for one frame): a consistent pattern in the march's own
+  per-frame result, which the averaging reveals. Next: a per-sample numeric dump of the light march along a ray
+  through a line and one beside it.
+- Metal (#71).

@@ -15,7 +15,7 @@
 // FLIPPED invViewProjection convention as ssao.frag (uv*2-1, no negation).
 
 layout(set = 0, binding = 0) uniform CloudUniforms {
-    mat4 invViewProjection;
+    mat4 invViewProjection;   // CAMERA-RELATIVE: clip -> the offset from the camera (ADR-0335)
     vec4 cameraPosition;
     vec4 sunDirection;
     vec4 sunColor;        // rgb, w intensity
@@ -163,7 +163,7 @@ void main() {
     // far clouds came out as cubes (ADR-0332 addendum; Glenn: "the clouds look blocky"). The lab's 8 km far plane hid it.
     vec4 world = u.invViewProjection * vec4(ndc, 0.002, 1.0);
     vec3 camPos = u.cameraPosition.xyz;
-    vec3 dir = normalize(world.xyz / world.w - camPos);
+    vec3 dir = normalize(world.xyz / world.w);   // (already relative to the camera)
     vec3 sunDir = normalize(u.sunDirection.xyz);
 
     float t0, t1;
@@ -175,7 +175,7 @@ void main() {
     float tScene = u.march.w;
     if (depth > 0.0) {
         vec4 w = u.invViewProjection * vec4(ndc, depth, 1.0);
-        tScene = length(w.xyz / w.w - camPos);
+        tScene = length(w.xyz / w.w);
     }
     t1 = min(t1, tScene);
     if (t1 <= t0) { outColor = CLEAR; return; }

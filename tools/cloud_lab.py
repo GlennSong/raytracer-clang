@@ -32,6 +32,7 @@ POSES = {
     "far_w": (2600, 90, -2600, 3, 270),
     # island_8_nature's beach_curve camera (tools/ref_shots.py), where Glenn saw the far clouds blocky: the same sky here
     "isle_beach": (1460, 90, 6620, -14, 25),
+    "near": (2600, 700, -2600, 12, 90),        # under the deck, a cloud a few hundred metres off: the layers up close
 }
 
 
