@@ -2400,6 +2400,12 @@ void CityRenderSystem::syncCarLamps(World& world) {
                 busSignAt_ = sg->transforms.back().transformPoint(Vec3(0, 0, 0));
             }
         }
+        // A CAR AT REST is dark (ADR-0341): parked at the end of its trip, on the street or off it. The body skips one
+        // parked OFF-street (syncGroups) and the lamps did not, so at night every car in a lot or a garage hung its
+        // headlights in the air over the kerb with no car behind them (Glenn, 2026-11-05: "a lot of headlights sitting
+        // here but no cars"); and a car parked at the kerb kept its headlights on all night. (A car held at a light is
+        // still on its trip: `moving`.)
+        if (!a.moving) continue;
         const std::vector<LampMarker>& markers = carLights_[v];
         if (markers.empty()) continue;
 

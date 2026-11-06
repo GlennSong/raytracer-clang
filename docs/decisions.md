@@ -15450,3 +15450,19 @@ game having its own weather state and calendar".
 
 **Not done.** Phase 3's simulation replaces the walk: fronts from the prevailing wind, the daily draw choosing what is
 coming.
+
+## ADR-0341 — A car at rest is dark (#187)
+
+**Context.** Glenn, 2026-11-05, at night on island_8_nature: "a lot of headlights sitting here but no cars". The city
+draws car bodies (`syncGroups`) and lamps (`syncCarLamps`) in two passes. The body pass skips a driver resting in a car
+parked OFF-street; the lamp pass skipped only far, commandeered and non-driver agents. At night, every car in a lot or
+a garage hung its pair of headlight boxes in the air by the kerb, with no body. The lamp code already noted the
+off-street rule, but applied it only to the bus's destination sign. A car parked at the kerb also kept its headlights
+on all night.
+
+**Decision.**
+- The lamp pass skips any driver not on a trip (`!a.moving`: arrived and parked, on the street or off it). A car held
+  at a light, or yielding, is still on its trip and keeps its lamps and brake lights.
+- The bus's destination sign keeps its own rule.
+- `car_headlights_track_the_night_clock` now also requires that no headlights belong to a car at rest: at most two per
+  car on a trip.

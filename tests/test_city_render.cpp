@@ -394,7 +394,7 @@ TEST_CASE(city_render_signals_light_up_and_change_state) {
 // these are stable, not flaky.
 
 TEST_CASE(car_headlights_track_the_night_clock) {
-    // At deep night every car on the move wears both headlights (a parked one may stand dark), and by day none --
+    // At deep night every car on the move wears both headlights, a parked one none (ADR-0341), and by day none --
     // over six towns, every sample. (It asked for one sample with lamps on EVERY drawn car, parked ones too, and
     // passed on the moment all six were driving; one town can put none of its six on a night shift -- ADR-0265.)
     int nightSamples = 0, nightWrong = 0, daySamples = 0, dayWrong = 0;
@@ -416,15 +416,17 @@ TEST_CASE(car_headlights_track_the_night_clock) {
             const std::size_t heads = groupCount(world, city.headlightGroup());
             const std::size_t cars = carTotal(world, city);
             if (cars == 0) continue;
-            std::size_t driving = 0;
+            std::size_t driving = 0, onTrip = 0;
             for (int ai : city.sim().nearAgents()) {
                 const Agent& a = city.sim().agents()[static_cast<std::size_t>(ai)];
                 driving += a.mode == Agent::Mode::Driver && a.moving && a.speed > 0.5 && !a.far();
+                onTrip += a.mode == Agent::Mode::Driver && a.moving && !a.far() && !a.released;
             }
-            if (t > 20.0 || t < 5.0) {          // deep night: BOTH headlights per car on the move
+            if (t > 20.0 || t < 5.0) {          // deep night: BOTH headlights per car on the move, NONE on a parked one
                 if (driving == 0) continue;
                 ++nightSamples;
-                nightWrong += heads < driving * 2 || heads > cars * 2 || heads % 2 != 0;
+                // (a parked car is dark, ADR-0341: lamps on a car at rest hung over the kerb with no body under them)
+                nightWrong += heads < driving * 2 || heads > onTrip * 2 || heads % 2 != 0;
             } else if (t > 9.0 && t < 16.0) {   // midday: none
                 ++daySamples;
                 dayWrong += heads != 0;
