@@ -15321,3 +15321,66 @@ channel and per-type height profiles (Schneider 2015/2017). Glenn asked for this
 - The deck is 900–1600 m, too thin for a real cumulonimbus. Its own taller deck, or a per-type top, is owed.
 - Metal (#71).
 - Wind: one weather wind for clouds, grass, trees, sea and players. Proposed to Glenn, not built.
+
+## ADR-0337 — One wind, from the weather, for everything the air moves (#187)
+
+**Context.** Glenn, 2026-11-05: "if this weather map has wind, can we use that to also manipulate things like players
+... the parachute and wing suit ... grass or trees ... the waves in the sea". "Wind" was three unrelated constants:
+- the clouds drifted along +x at the level's speed;
+- grass and trees swayed toward (0.85, 0.30) at a fixed strength (mesh.vert);
+- the sea's four wave trains had fixed headings and heights.
+Nothing in gameplay felt any.
+
+**Decision.**
+- **`engine/wind.h`:** a `Wind` (direction, speed at 10 m, gustiness, a clock) and one query,
+  `windAt(wind, position, groundY)`. It returns horizontal m/s, stronger aloft (power law, a = 0.14, held within 0.6–1.8
+  of the 10 m speed) and gusting. Gusts are value-noise patches about 120 m across, carried downwind at the wind's speed
+  (`windGustFactor`, 1 − gust/2 … 1 + gust).
+- **Set by the weather** (`WeatherTargets.windSpeed/windGust`, eased with the rest): clear 3 m/s / 0.2, fair 6 / 0.35,
+  overcast 9 / 0.4, storm 16 / 0.7. With the weather off: a moderate 6 / 0.35.
+  - DayNightSystem veers the direction slowly through the day: the seed's prevailing heading ± 30° over about 26
+    in-world hours.
+  - It publishes the state as the world's `Wind` component each fixed step, and as `Renderer::windDir/Speed/Gust`.
+- **Read by:**
+  - **The clouds:** their drift is integrated on the CPU along the wind (`cloudWindOffset`, so a veering wind turns the
+    drift instead of swinging the sky), scaled by the deck's own `wind` at 6 m/s. It reaches clouds.frag as `windOffset`.
+    With `RT_WIND_TIME` pinned, it is a fixed offset.
+  - **Grass and trees** (mesh.vert): they sway along the wind. The amplitude is 0.12 m at 6 m/s, as before, scaling with
+    speed; the frequency scales with √speed. Gust fronts are bands travelling downwind at the wind's speed, so a field
+    bows in waves. A mean downwind lean is added.
+  - **The sea** (mesh.frag): the four trains are turned so the first heads downwind. Their height scales by speed / 6
+    (0.35–2.3). Whitecaps run from none in a calm to many in a gale.
+  - **The glide and parachute** (GlideMode): they fly in the moving air. Ground motion is airspeed plus
+    `windAt(position)`, so a chute drifts downwind and is buffeted by gusts, and a suit makes little way into a gale.
+    The flight model and the touchdown still judge airspeed, so landings are judged as before.
+- **Tests:** `wind_rises_with_the_weather_and_keeps_its_bounds`. It checks that wind is horizontal, downwind and within
+  its gust bounds, stronger aloft, that a gust travels at the wind's speed, and that a calm is still.
+
+**Not done.**
+- The wind is one airmass: phase 3's simulation should vary it by place (lee, ridges, open sea).
+- Other gameplay: swings, ropes, boats, tall vehicles; and wind in the audio.
+- The glide uses height above the sea for the wind profile, not above the ground under it.
+- Metal (#71).
+
+## ADR-0338 — The launch's start time: now, an hour, or a moment (#187)
+
+**Context.** Glenn, 2026-11-05: "if I start the engine up at 8 PM here then it's 8 PM in the game and it's at night.
+Alternatively ... give a time of day and start the engine up at that point such as sunset". The clock restored its
+saved time. A level could ask for the wall clock's hour (`clockSource`), but only per level and without the date.
+
+**Decision.**
+- `applyStartTime(cycle, spec)` (day_night_cycle.h) takes:
+  - **"saved":** nothing; the default.
+  - **"now":** the machine's local time and today's date, at real speed (1440-minute day), unpaused.
+  - **An hour:** 0–24.
+  - **A moment:** dawn, sunrise, morning, noon, afternoon, golden (an hour before sunset), sunset (the sun just above
+    the horizon), dusk, night or midnight. Dawn, sunrise, golden, sunset and dusk come from the sun's own arc for the
+    cycle's day and latitude.
+- DayNightSystem applies it once, after the level's seeds, from `RT_TIME` for a run, else the saved preference
+  `daynight.start`.
+- The city simulation follows by its existing rule (`CityRenderSystem::setWorldClock`): it opens its day, or re-seeds
+  the population, at the sky's hour.
+- **Test:** `start_time_hours_moments_and_now`.
+
+**Not done.** The weather still restores the last session's state rather than the calendar's. Proposed to Glenn: a
+per-level climate, with weather from the in-game date.

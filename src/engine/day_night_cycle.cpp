@@ -4,6 +4,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
+#include <cstdlib>
 
 namespace engine {
 
@@ -248,6 +250,53 @@ double wallClockTimeOfDay(double utcOffsetHours) {
     if (f < 0) f += 1.0;
     if (f >= 1.0) f -= 1.0;
     return f;
+}
+
+bool applyStartTime(DayNightCycle& c, const std::string& spec, std::string* what) {
+    auto say = [&](const std::string& w) { if (what) *what = w; };
+    if (spec.empty() || spec == "saved") return false;
+    if (spec == "now") {
+        const std::time_t t = std::time(nullptr);
+        std::tm local{};
+#if defined(_WIN32)
+        localtime_s(&local, &t);
+#else
+        localtime_r(&t, &local);
+#endif
+        c.timeOfDay = wallClockTimeOfDay();
+        c.dayOfYear = local.tm_yday + 1;
+        c.year = local.tm_year + 1900;
+        c.dayMinutes = 1440.0;   // real speed
+        c.paused = false;
+        char buf[96];
+        std::snprintf(buf, sizeof buf, "now: %02d:%02d, day %d of %d, real speed", local.tm_hour, local.tm_min, c.dayOfYear, c.year);
+        say(buf);
+        return true;
+    }
+    const double rise = c.sunriseHour(), set = c.sunsetHour();
+    double h = -1.0;
+    if (spec == "dawn") h = rise - 0.5;
+    else if (spec == "sunrise") h = rise + 0.05;
+    else if (spec == "morning") h = 9.0;
+    else if (spec == "noon") h = 12.0;
+    else if (spec == "afternoon") h = 15.0;
+    else if (spec == "golden") h = set - 1.0;
+    else if (spec == "sunset") h = set - 0.15;   // the sun just above the horizon
+    else if (spec == "dusk") h = set + 0.5;
+    else if (spec == "night") h = 22.5;
+    else if (spec == "midnight") h = 0.0;
+    else {
+        char* end = nullptr;
+        const double v = std::strtod(spec.c_str(), &end);
+        if (end && *end == '\0' && end != spec.c_str() && v >= 0.0 && v <= 24.0) h = v;
+    }
+    if (h < 0.0 && spec != "midnight") { say("unknown start time '" + spec + "' (saved / now / an hour / sunrise, sunset, ...)"); return false; }
+    h = std::fmod(h + 24.0, 24.0);
+    c.timeOfDay = h / 24.0;
+    char buf[96];
+    std::snprintf(buf, sizeof buf, "%s: %.2f h (sunrise %.2f, sunset %.2f)", spec.c_str(), h, rise, set);
+    say(buf);
+    return true;
 }
 
 }  // namespace engine

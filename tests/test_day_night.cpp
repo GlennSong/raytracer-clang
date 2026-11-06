@@ -420,3 +420,39 @@ TEST_CASE(day_night_light_pollution_fades_with_distance_from_the_city) {
     CHECK_APPROX(DayNightCycle::lightPollutionFor(9000.0, 0.7, 1500.0), 0.0, 1e-9);
     CHECK_APPROX(DayNightCycle::lightPollutionFor(100.0, 0.0, 1500.0), 0.0, 1e-9);    // a dark level
 }
+
+// THE LAUNCH'S START TIME (applyStartTime, ADR-0338): saved leaves the clock; an hour and the named moments set it,
+// sunset and sunrise from the day's own arc; now takes the date too and real speed; nonsense sets nothing
+TEST_CASE(start_time_hours_moments_and_now) {
+    DayNightCycle c;
+    c.dayOfYear = 172;
+    c.latitudeDeg = 52.0;
+    c.timeOfDay = 0.123;
+    CHECK(!applyStartTime(c, "saved"));
+    CHECK(!applyStartTime(c, ""));
+    CHECK_APPROX(c.timeOfDay, 0.123, EPS);
+    CHECK(applyStartTime(c, "17.5"));
+    CHECK_APPROX(c.timeOfDay * 24.0, 17.5, 1e-9);
+    CHECK(applyStartTime(c, "sunset"));
+    CHECK(c.timeOfDay * 24.0 < c.sunsetHour() && c.timeOfDay * 24.0 > c.sunsetHour() - 0.5);
+    CHECK(c.evaluate().sunDirection.y > 0.0);            // the sun still just up
+    CHECK(applyStartTime(c, "dusk"));
+    CHECK(c.evaluate().sunDirection.y < 0.0);            // and down by dusk
+    CHECK(applyStartTime(c, "sunrise"));
+    CHECK(c.timeOfDay * 24.0 > c.sunriseHour());
+    CHECK(applyStartTime(c, "midnight"));
+    CHECK_APPROX(c.timeOfDay, 0.0, EPS);
+    const double before = c.timeOfDay;
+    std::string why;
+    CHECK(!applyStartTime(c, "teatime", &why));
+    CHECK(!why.empty());
+    CHECK_APPROX(c.timeOfDay, before, EPS);
+    CHECK(!applyStartTime(c, "25"));
+    c.dayMinutes = 10.0;
+    c.paused = true;
+    CHECK(applyStartTime(c, "now"));
+    CHECK_APPROX(c.dayMinutes, 1440.0, EPS);
+    CHECK(!c.paused);
+    CHECK(c.dayOfYear >= 1 && c.dayOfYear <= 366);
+    CHECK_APPROX(c.timeOfDay, wallClockTimeOfDay(), 1.0 / 1440.0);   // within the minute
+}
