@@ -84,7 +84,6 @@ private:
     std::string panelText_;
     void loadCatalogue();
     MeshHandle wheelMesh;            // shared wheel cylinder, uploaded on first use
-    MeshHandle lensMesh;             // shared head/taillight lens box
     MeshHandle driverMesh;          // shared driver capsule
     Real enterRadius = 4.0;          // how close the player must be to board (m)
     int spawnCount_ = 0;             // debug-spawn seed counter

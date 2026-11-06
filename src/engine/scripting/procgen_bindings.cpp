@@ -749,6 +749,32 @@ int l_mesh_bake_height_color(lua_State* L) {
     return 1;
 }
 
+// mesh.set_uv(mesh, u, v) -> every vertex's texture coordinate set to (u, v): an untextured part's slot as a TAG
+// (a vehicle's lamp lens carries its role there, engine/vehicle_lamps.h LensRole)
+int l_mesh_set_uv(lua_State* L) {
+    auto m = std::make_shared<RenderMesh>(checkMesh(L, 1));
+    const float u = static_cast<float>(luaL_checknumber(L, 2)), v = static_cast<float>(luaL_optnumber(L, 3, 0.0));
+    for (Vertex& x : m->vertices) { x.u = u; x.v = v; }
+    pushMesh(L, m);
+    return 1;
+}
+// mesh.uv_by(mesh, function(pos, normal) return u, v end) -> each vertex's texture coordinate from the function
+int l_mesh_uv_by(lua_State* L) {
+    auto m = std::make_shared<RenderMesh>(checkMesh(L, 1));
+    luaL_checktype(L, 2, LUA_TFUNCTION);
+    for (Vertex& x : m->vertices) {
+        lua_pushvalue(L, 2);
+        pushVec3(L, x.position);
+        pushVec3(L, x.normal);
+        lua_call(L, 2, 2);
+        x.u = static_cast<float>(luaL_optnumber(L, -2, x.u));
+        x.v = static_cast<float>(luaL_optnumber(L, -1, x.v));
+        lua_pop(L, 2);
+    }
+    pushMesh(L, m);
+    return 1;
+}
+
 // --- the SHAPE KIT (MeshBuilder, the flora plan): organic and mineral forms from Lua ---
 // mesh.icosphere(subdiv) -> unit icosphere
 int l_mesh_icosphere(lua_State* L) {
@@ -3925,6 +3951,8 @@ void openProcgenLibrary(ScriptVM& vm) {
         {"orient", l_mesh_orient},
         {"recompute_normals", l_mesh_recompute_normals},
         {"bake_height_color", l_mesh_bake_height_color},
+        {"set_uv", l_mesh_set_uv},
+        {"uv_by", l_mesh_uv_by},
         {"quad", l_mesh_quad},
         {"icosphere", l_mesh_icosphere},
         {"displace", l_mesh_displace},

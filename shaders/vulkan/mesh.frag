@@ -1068,8 +1068,9 @@ void main() {
     // FLAG_EMISSIVE_VERTEX_TINT (32): the vertex colour tints the emission, not the albedo.
     const bool emissiveTint = (pc.surfaceFlags.y & 32u) != 0u;
     vec3 albedo = pc.albedoMetallic.rgb * (emissiveTint ? vec3(1.0) : inColor);
-    // FLAG_SIGNAL_STATE (bit 20): mesh.vert marks the lit lamp by pushing its colour past 1 -- it glows
-    const bool signalLamp = (pc.surfaceFlags.y & (1u << 20)) != 0u && max(inColor.r, max(inColor.g, inColor.b)) > 1.5;
+    // FLAG_SIGNAL_STATE (bit 20) / FLAG_LAMP_STATE (bit 27): mesh.vert marks the lit lamp by pushing its colour past
+    // 1 -- it glows
+    const bool signalLamp = (pc.surfaceFlags.y & ((1u << 20) | (1u << 27))) != 0u && max(inColor.r, max(inColor.g, inColor.b)) > 1.5;
     if (signalLamp) albedo = pc.albedoMetallic.rgb * inColor / 8.0;
     float metallic = clamp(pc.albedoMetallic.a, 0.0, 1.0);
     float roughness = clamp(pc.emissionRough.a, 0.04, 1.0);
@@ -1077,6 +1078,12 @@ void main() {
     const bool emissionPaint = (pc.surfaceFlags.y & (1u << 21)) != 0u;
     vec3 emission = pc.emissionRough.rgb * (emissiveTint || emissionPaint ? inColor : vec3(1.0));
     if (signalLamp) emission = inColor / 8.0 * 6.0;
+    // ...a lit vehicle lamp's colour came as colour x (2 + emission), its brightest channel 1 (mesh.vert)
+    if (signalLamp && (pc.surfaceFlags.y & (1u << 27)) != 0u) {
+        const float k = max(inColor.r, max(inColor.g, inColor.b));
+        albedo = pc.albedoMetallic.rgb * inColor / k * 0.12;
+        emission = inColor / k * (k - 2.0);
+    }
     // A LIT PANE (the interior-mapped, emissive-tinted part) PACKS its glass and its lit tint in the vertex
     // colour (shape_grammar litPaneColour): the glass in the top 7 bits of each channel is the day albedo,
     // the low bits (r bit 0, g bit 1, b bit 2) index the lit palette (litTintOf -- keep in step). Index 0 is

@@ -401,6 +401,7 @@ void RenderSystem::render(FrameContext& ctx) {
                     }
                 }
             }
+            if (r.instanceData != 0.0f) model.m[3][0] = r.instanceData;   // (after the culls: data, not geometry)
             ctx.renderer.drawMesh(r.mesh, model, r.material);
             ++encEntDrawn;
         };

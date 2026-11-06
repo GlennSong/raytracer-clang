@@ -100,6 +100,34 @@ void main() {
                  all(lessThan(abs(inColor.rgb - vec3(0.85, 0.12, 0.10)), vec3(0.03))))
             signalLit = -1.0;
     }
+    // FLAG_LAMP_STATE (bit 27, ADR-0342): a vehicle's lamps are lenses in its own body, tagged by role in their u
+    // (engine/vehicle_lamps.h: u = -1000 - role), and the lamps lit this step ride the bottom row as a mask (1 head,
+    // 2 brake, 4 left indicator lit, 8 right). A lit lens's colour (its brightest channel 1) goes out as colour x
+    // (2 + its emission): past 1.5, as a lit signal's, and mesh.frag takes the two apart.
+    float lampGain = 0.0;
+    vec3 lampColor = inColor.rgb;
+    if ((pc.surfaceFlags.y & (1u << 27)) != 0u) {
+        const uint mask = uint(M[0][3] + 0.5);
+        M[0][3] = 0.0;
+        const int role = inTexcoord.x < -1000.5 ? int(-1000.0 - inTexcoord.x + 0.5) : 0;
+        if (role > 0) {
+            // the lens's side of the body: +x is the driver's left (a lens on the centre line is neither)
+            const bool blink = (inPosition.x > 0.05 && (mask & 4u) != 0u) || (inPosition.x < -0.05 && (mask & 8u) != 0u);
+            const vec3 amber = vec3(1.0, 0.52, 0.04);
+            if (role == 1) {                                  // head
+                if (blink) { lampColor = amber; lampGain = 2.2; }
+                else if ((mask & 1u) != 0u) { lampColor = vec3(1.0, 0.97, 0.86); lampGain = 2.2; }
+            } else if (role == 2) {                           // tail: dim at night, bright braking
+                if (blink) { lampColor = amber; lampGain = 2.2; }
+                else if ((mask & 2u) != 0u) { lampColor = vec3(1.0, 0.05, 0.03); lampGain = 2.4; }
+                else if ((mask & 1u) != 0u) { lampColor = vec3(1.0, 0.05, 0.03); lampGain = 0.6; }
+            } else if (role == 3) {                           // indicator
+                if (blink) { lampColor = amber; lampGain = 2.2; }
+            } else if (role == 4) {                           // marker / clearance
+                if ((mask & 1u) != 0u) { lampColor = amber; lampGain = 1.0; }
+            }
+        }
+    }
     vec4 world = M * vec4(inPosition, 1.0);
     vec3 normal = kPackedVertex ? octDecode(inNormal.xy) : inNormal.xyz;
     vec3 tangent = kPackedVertex ? octDecode(inTangent.xy) : inTangent.xyz;
@@ -192,6 +220,7 @@ void main() {
     outUvBlend = (pc.surfaceFlags.y & (1u << 23)) != 0u ? inTangent.xyz : vec3(0.0);
     if ((pc.surfaceFlags.y & (1u << 24)) != 0u) outUvBlend = vec3(inNormal.z, inColor.g, 0.0);   // (the cell's size)
     outColor = signalLit > 0.5 ? inColor.rgb * 8.0 : signalLit < -0.5 ? inColor.rgb * 0.06 : inColor.rgb;   // (a lit signal lamp: see mesh.frag)
+    if (lampGain > 0.0) outColor = lampColor * (2.0 + lampGain);   // (a lit vehicle lamp: see mesh.frag)
     if ((pc.surfaceFlags.y & (1u << 24)) != 0u) outColor = vec3(inColor.r);   // (an impostor's shade; g carries its cell)
     gl_Position = g.viewProjection * world;
 }

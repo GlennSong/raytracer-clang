@@ -156,6 +156,9 @@ struct Renderable {
     // Content class. An explicit drawDistance above still wins (the HLOD chunks
     // compute theirs); this is what everything else resolves through.
     DrawClass drawClass = DrawClass::Unset;
+    // Per-draw DATA on the model's bottom row (Mat4::m[3][0]), as an instance carries it, for a material flag that
+    // reads it -- a vehicle's lit-lamp mask under FLAG_LAMP_STATE (ADR-0342). 0: none.
+    float instanceData = 0.0f;
 };
 
 // Many instances of one mesh, drawn as a batch (ROADMAP Phase B instancing).
@@ -530,12 +533,8 @@ struct Vehicle {
     Real steerApplied = 0;
     Real slide = 0;                // the player's ride: how hard its tyres slide, 0..1 (VehicleSystem::measureSlide)
     std::vector<Entity> wheelEntities;   // rendered wheels (optional)
-    // Head/taillight glow toggle (ADR-0059) and the lens entities VehicleSystem
-    // positions + lights each frame; `driverModel` is a capsule shown in the seat
-    // while occupied.
+    // The manual headlight switch (ADR-0059); `driverModel` is the occupant shown in the seat while occupied.
     bool lightsOn = false;               // manual switch: forces headlights ON
-    std::vector<Entity> headlights;      // front lenses (warm)
-    std::vector<Entity> taillights;      // rear lenses (red)
     Entity driverModel;                  // driver capsule (stowed when unoccupied)
 
     // Lamp state, so the player's car behaves like the city's traffic rather than
@@ -548,10 +547,9 @@ struct Vehicle {
     int turnSignal = 0;                  // -1 left, +1 right, 0 none
     Real signalHold = 0;                 // seconds an indicator stays on after the
                                          // steering straightens, so it doesn't flicker
-    // Lamp lenses placed from the body recipe's markers. Empty falls back to the
-    // hardcoded chassis corners, so a car with no marker data still lights.
+    // Where the lamps are, from the body recipe's markers (the chassis corners when it has none): the headlight
+    // cones start there. The lenses that LIGHT are the body's own (ADR-0342).
     struct Lamp {
-        Entity entity;
         Vec3 local{0, 0, 0};
         bool front = true;               // headlight end vs tail end
         bool left = false;               // which indicator side it belongs to

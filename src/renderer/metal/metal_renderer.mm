@@ -711,6 +711,18 @@ static simd_float4x4 toSimd(const Mat4& m) {
     return result;
 }
 
+// A MODEL matrix: its bottom row is DATA (rt_math.h -- a grass clump's rank and ground, a signal's state, a vehicle's
+// lit-lamp mask), never a projective row, so it goes to the GPU as (0, 0, 0, 1). The lamp mask comes back through
+// lampMaskOf below.
+static simd_float4x4 toSimdModel(const Mat4& m) {
+    simd_float4x4 r = toSimd(m);
+    r.columns[0][3] = 0.0f; r.columns[1][3] = 0.0f; r.columns[2][3] = 0.0f; r.columns[3][3] = 1.0f;
+    return r;
+}
+static float lampMaskOf(const Mat4& m, uint32_t flags) {
+    return (flags & RenderMaterial::FLAG_LAMP_STATE) ? static_cast<float>(m.m[3][0]) : 0.0f;
+}
+
 static simd_float4x4 inverseTranspose(simd_float4x4 m) {
     return simd_transpose(simd_inverse(m));
 }
@@ -3624,7 +3636,7 @@ void MetalRenderer::Impl::bakeProbes(Impl* impl, const std::vector<ReflectionPro
                     if (!mesh) continue;
 
                     ModelUniforms modelU;
-                    modelU.model = toSimd(dc.transform);
+                    modelU.model = toSimdModel(dc.transform);
                     modelU.normalMatrix = inverseTranspose(modelU.model);
 
                     MaterialUniforms matU;
@@ -3634,7 +3646,7 @@ void MetalRenderer::Impl::bakeProbes(Impl* impl, const std::vector<ReflectionPro
                     matU.metallic = dc.material.metallic;
                     matU.roughness = dc.material.roughness;
                     matU.opacity = dc.material.opacity;
-                    matU.flags = static_cast<float>(dc.material.flags);
+                    matU.flags = static_cast<float>(dc.material.flags & ~RenderMaterial::FLAG_LAMP_STATE);
                     matU.textureFlags = 0;
                     matU.emission = {static_cast<float>(dc.material.emission.x),
                                      static_cast<float>(dc.material.emission.y),
@@ -3874,7 +3886,7 @@ void MetalRenderer::endFrame() {
                                 continue;
                         }
                         stats.shadowCasters++;
-                        shadowInstBuf[shadowInstOffset].model = toSimd(m);
+                        shadowInstBuf[shadowInstOffset].model = toSimdModel(m);
                         shadowInstOffset++;
                         runCount++;
                     }
@@ -4107,15 +4119,16 @@ void MetalRenderer::endFrame() {
 
     auto fillInstanceData = [&](const Impl::DrawCall& dc) -> GPUInstanceData {
         GPUInstanceData inst;
-        inst.model = toSimd(dc.transform);
+        inst.model = toSimdModel(dc.transform);
         inst.normalMatrix = inverseTranspose(inst.model);
         inst.albedo = {static_cast<float>(dc.material.albedo.x),
                        static_cast<float>(dc.material.albedo.y),
-                       static_cast<float>(dc.material.albedo.z), 0};
+                       static_cast<float>(dc.material.albedo.z), lampMaskOf(dc.transform, dc.material.flags)};
         inst.metallic = dc.material.metallic;
         inst.roughness = dc.material.roughness;
         inst.opacity = dc.material.opacity;
-        inst.flags = static_cast<float>(dc.material.flags);
+        // (the lamp bit stripped: past bit 24 a float drops the low flags; the mask in albedo.w says it all)
+        inst.flags = static_cast<float>(dc.material.flags & ~RenderMaterial::FLAG_LAMP_STATE);
         inst.emission = {static_cast<float>(dc.material.emission.x),
                          static_cast<float>(dc.material.emission.y),
                          static_cast<float>(dc.material.emission.z), 0};
@@ -4129,7 +4142,7 @@ void MetalRenderer::endFrame() {
         if (!mesh) return;
 
         ModelUniforms modelUniforms;
-        modelUniforms.model = toSimd(dc.transform);
+        modelUniforms.model = toSimdModel(dc.transform);
         modelUniforms.normalMatrix = inverseTranspose(modelUniforms.model);
 
         uint32_t tf = computeTextureFlags(dc.material);
@@ -4140,7 +4153,7 @@ void MetalRenderer::endFrame() {
         matUniforms.metallic = dc.material.metallic;
         matUniforms.roughness = dc.material.roughness;
         matUniforms.opacity = dc.material.opacity;
-        matUniforms.flags = static_cast<float>(dc.material.flags);
+        matUniforms.flags = static_cast<float>(dc.material.flags & ~RenderMaterial::FLAG_LAMP_STATE);
         matUniforms.textureFlags = tf;
         matUniforms.emission = {static_cast<float>(dc.material.emission.x),
                                 static_cast<float>(dc.material.emission.y),
@@ -4229,7 +4242,8 @@ void MetalRenderer::endFrame() {
                 (int(drawCalls[batchStart].material.flags) & RenderMaterial::FLAG_ALPHA_TEST))
                 continue;
 
-            if (batchSize == 1) {
+            // (a vehicle with its lamps in its body draws instanced even alone: only that entry lights its lenses)
+            if (batchSize == 1 && !(drawCalls[batchStart].material.flags & RenderMaterial::FLAG_LAMP_STATE)) {
                 [impl->currentEncoder setRenderPipelineState:singlePipeline];
                 issueSingleDraw(drawCalls[batchStart]);
                 continue;

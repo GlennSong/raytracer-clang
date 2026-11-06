@@ -322,15 +322,9 @@ public:
     engine::Entity signalGroup(SignalState s) const { return signalGroups_[static_cast<int>(s)]; }
     engine::Entity signalPostGroup() const { return signalPostGroup_; }
     engine::Entity crosswalkGroup() const { return crosswalkGroup_; }
-    // Car lamp instance groups (ADR-0065 follow-up): emissive headlights (white),
-    // brake lights (red), and turn signals (amber), rebuilt each step from each
-    // drawn car's carLampState — the same shape as the signal lenses (one group
-    // per lamp kind; a lit lamp pushes an emissive box at its body marker's world
-    // pose). Exposed so headless tests read the baked transforms (mirrors
-    // signalGroup()).
-    engine::Entity headlightGroup() const { return headlightGroup_; }
-    engine::Entity brakeLightGroup() const { return brakeLightGroup_; }
-    engine::Entity turnSignalGroup() const { return turnSignalGroup_; }
+    // How many drawn cars carry any of these lit-lamp bits this bake (engine::kLampMask*): the lamps are the body's
+    // own lenses, lit by a mask on its instance (ADR-0342). For the headless tests.
+    std::size_t carsLit(engine::World& world, uint32_t bits) const;
     const std::vector<engine::Vec2>& crosswalkCenters() const { return crosswalkCenters_; }
     // The painted curbside bay outlines (R6b). Exposed so the height gate (#25)
     // can check the paint lands on the asphalt instead of floating over it.
@@ -630,10 +624,6 @@ private:
     engine::Entity signalPostGroup_;   // the static pole+arm+head assemblies
     engine::Entity parkBayGroup_;      // curbside bay outline markings (R6b)
     engine::Entity crosswalkGroup_;    // baked zebra decals at junction mouths
-    // Car lamps (ADR-0065 follow-up): one emissive instance group per lamp kind.
-    engine::Entity headlightGroup_{};  // white, forward
-    engine::Entity brakeLightGroup_{}; // red, rear
-    engine::Entity turnSignalGroup_{}; // amber, blinks (render clock)
     // Retained lamp markers, one list per car variant (indexed like carGroups_):
     // the Lua fleet's headlight_l/r + taillight_l/r markers in body-local space,
     // or a synthesized default set for C++ fallback cars. An empty entry => that

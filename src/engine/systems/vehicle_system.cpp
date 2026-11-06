@@ -248,57 +248,26 @@ void VehicleSystem::createVehicles(FrameContext& ctx) {
             v->wheelEntities.push_back(we);
         }
 
-        // Head/taillight lens boxes (emission toggled in writeBack) + a driver
-        // capsule (stowed until someone's aboard). Shared meshes, built once.
-        if (!lensMesh.valid())
-            lensMesh = ctx.assets.acquireMesh(MeshBuilder::box(Vec3(0.34, 0.18, 0.10)),
-                                              "vehicle:lens");
+        // A driver (stowed until someone's aboard). The LAMPS are the body's own lenses, lit by the mask writeBack puts
+        // on the body (ADR-0342); `lamps` keeps where they are, for the headlight cones.
         // A SEATED occupant, not a capsule. The capsule proved a car was
         // occupied; this shows who is driving it, posed from the same SAE manikin
         // the interior is packaged around so it fits the seat it sits in.
         if (!driverMesh.valid())
             driverMesh = ctx.assets.acquireMesh(buildSeatedOccupant(), "vehicle:driver");
-        auto makeLens = [&](Vec3 albedo) {
-            Entity le = ctx.world.create();
-            Transform lt;
-            ctx.world.add<Transform>(le, lt);
-            ctx.world.add<PrevTransform>(le, {lt});
-            Renderable r;
-            r.mesh = lensMesh;
-            r.material.albedo = albedo;     // always a coloured lens (front/back cue)
-            r.material.roughness = 0.4f;
-            r.material.opacity = 1.0f;
-            ctx.world.add<Renderable>(le, r);
-            return le;
-        };
-        if (!v->lamps.empty()) {
-            // Recipe-driven: one lens per marker, wherever the body generator put
-            // it. This is what lets a generated car's lamps sit in its actual
-            // housings instead of at guessed chassis corners.
-            for (Vehicle::Lamp& lamp : v->lamps)
-                lamp.entity = makeLens(lamp.front ? Vec3(1.0, 0.97, 0.82)
-                                                  : Vec3(0.85, 0.06, 0.05));
-        } else {
-            // No marker data (hand-built or legacy body): fall back to corners so
-            // every car still has lamps. The car's LEFT is +X (forward +Z, up +Y,
-            // right-handed — the lab-measured convention car_mesh.cpp documents).
+        if (v->lamps.empty()) {
+            // No marker data (hand-built or legacy body): the cones fall back to the corners. The car's LEFT is +X
+            // (forward +Z, up +Y, right-handed — the lab-measured convention car_mesh.cpp documents).
             const Vec3& hx = v->config.chassisHalfExtent;
             const Real lx = hx.x - 0.30, ly = -hx.y * 0.15;
             for (int i = 0; i < 4; ++i) {
-                const bool front = i < 2;
-                const bool left = (i % 2) == 1;
                 Vehicle::Lamp lamp;
-                lamp.front = front;
-                lamp.left = left;
-                lamp.local = Vec3(left ? lx : -lx, ly,
-                                  front ? hx.z + 0.05 : -hx.z - 0.05);
-                lamp.entity = makeLens(front ? Vec3(1.0, 0.97, 0.82)
-                                             : Vec3(0.85, 0.06, 0.05));
+                lamp.front = i < 2;
+                lamp.left = (i % 2) == 1;
+                lamp.local = Vec3(lamp.left ? lx : -lx, ly, lamp.front ? hx.z + 0.05 : -hx.z - 0.05);
                 v->lamps.push_back(lamp);
             }
         }
-        for (const Vehicle::Lamp& lamp : v->lamps)
-            (lamp.front ? v->headlights : v->taillights).push_back(lamp.entity);
 
         v->driverModel = ctx.world.create();
         {
@@ -453,17 +422,10 @@ void VehicleSystem::writeBack(FrameContext& ctx) {
                 v.turnSignal, v.lightsOn);
             const bool blink = lampBlinkOn(ctx.clock.simulatedTime());
 
-            for (const Vehicle::Lamp& lamp : v.lamps) {
-                place(lamp.entity, lamp.local);
-                Renderable* r = ctx.world.get<Renderable>(lamp.entity);
-                if (!r) continue;
-                const bool signalling = (lamp.left ? lit.left : lit.right) && blink;
-                Vec3 e(0, 0, 0);
-                if (signalling)          e = Vec3(2.4, 1.05, 0.07);   // amber wins
-                else if (lamp.front)     e = lit.head ? Vec3(3.0, 2.8, 2.2) : Vec3(0, 0, 0);
-                else if (lit.brake)      e = Vec3(2.6, 0.10, 0.08);   // hard red
-                else if (lit.head)       e = Vec3(0.7, 0.05, 0.04);   // dim tail glow
-                r->material.emission = e;
+            // THE BODY'S OWN LENSES light (ADR-0342): the mask rides its model's bottom row (Renderable::instanceData)
+            if (Renderable* body = ctx.world.get<Renderable>(e)) {
+                body->material.flags |= RenderMaterial::FLAG_LAMP_STATE;
+                body->instanceData = static_cast<float>(lampMask(lit, blink));
             }
 
             // Headlight CONES (WS3, the ADR-0065 deferred row): lit headlights

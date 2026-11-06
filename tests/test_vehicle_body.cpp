@@ -10,6 +10,7 @@
 #include "../src/apps/citysim/scripting/vehicle_body.h"
 #include "../src/engine/scripting/vehicle_spec.h"       // loadVehicleSpec (ride-height gate)
 #include "../src/engine/procgen/vehicle/occupant.h"     // the seated rider (back bench)
+#include "../src/engine/vehicle_lamps.h"                // LensRole: the lamp lenses' tags
 
 #include <cstdio>
 #include <cstdlib>
@@ -147,6 +148,67 @@ TEST_CASE(every_fleet_slot_has_exactly_four_corner_lamps) {
         CHECK(heads == perEnd);
         CHECK(tails == perEnd);
         CHECK(tooClose == 0);
+    }
+}
+
+// THE LAMPS ARE THE BODY'S (ADR-0342, #186): every fleet body -- the kit fleet, the classic set, the bikes, and the
+// semi with its trailer -- carries its own lamp lenses, tagged by role in their u (engine/vehicle_lamps.h), and the
+// renderer lights those. A body without a head and a tail lens drives dark; a head lens behind the middle lights
+// the wrong end. A bike has an indicator a side at each end; a semi's trailer its tail, turn and marker lamps.
+namespace {
+struct LensCount { int head = 0, tail = 0, indicatorL = 0, indicatorR = 0, marker = 0, wrongEnd = 0; };
+LensCount countLenses(const RenderMesh& m) {
+    LensCount c;
+    for (const Vertex& v : m.vertices) {
+        if (v.u > engine::kLensTagBase - 0.5f) continue;
+        const int role = static_cast<int>(engine::kLensTagBase - v.u + 0.5f);
+        if (role == static_cast<int>(engine::LensRole::Head)) { ++c.head; c.wrongEnd += v.position.z <= 0; }
+        else if (role == static_cast<int>(engine::LensRole::Tail)) { ++c.tail; c.wrongEnd += v.position.z >= 0; }
+        else if (role == static_cast<int>(engine::LensRole::Indicator)) (v.position.x > 0 ? c.indicatorL : c.indicatorR)++;
+        else if (role == static_cast<int>(engine::LensRole::Marker)) ++c.marker;
+    }
+    return c;
+}
+}  // namespace
+
+TEST_CASE(every_fleet_body_carries_its_own_lit_lenses) {
+    VehiclesVM a;
+    CHECK(a.loaded);
+    std::string err;
+    // (a drivable spec as a fleet slot: its body and lamps; the wheels are not what is checked)
+    CHECK(a.vm.doString("function __asSlot(s) return { body = s.body, wheels = mesh.box({0.1, 0.1, 0.1}), lights = s.lights } end", &err));
+    for (const char* fleet : {"fleet_kit", "classic", "fleet_semis"}) {
+        if (std::string(fleet) == "fleet_semis")
+            CHECK(a.vm.doString("vehicle.fleet_semis = {"
+                                "  { class = 'semi', size = {2.6, 4.1, 22}, build = function() return __asSlot(vehicle.kit_drivable('semi', {}, {})) end },"
+                                "  { class = 'semi_tanker', size = {2.6, 4.1, 22}, build = function() return __asSlot(vehicle.kit_drivable('semi_tanker', {}, {})) end } }", &err));
+        CHECK(a.vm.doString(std::string("vehicle.fleet = vehicle.") + fleet, &err));
+        for (int slot = 0; slot < fleetSlotCount(a.vm); ++slot) {
+            CarBodyRecipe body;
+            const bool ok = loadFleetCarBody(a.vm, slot, body, &err);
+            if (!ok) std::printf("    [%s %2d] %s\n", fleet, slot, err.c_str());
+            CHECK(ok);
+            const LensCount c = countLenses(body.mesh);
+            std::printf("    [%s %2d] lens verts: head %d, tail %d, indicators %d/%d, markers %d, wrong end %d\n", fleet, slot,
+                        c.head, c.tail, c.indicatorL, c.indicatorR, c.marker, c.wrongEnd);
+            CHECK(c.head > 0);
+            CHECK(c.tail > 0);
+            CHECK(c.wrongEnd == 0);
+            if (twoWheelSlot(a.vm, slot)) CHECK(c.indicatorL > 0 && c.indicatorR > 0);
+            if (std::string(fleet) == "fleet_semis") CHECK(c.indicatorL > 0 && c.indicatorR > 0 && c.marker > 0);
+        }
+    }
+    // ...and the bikes the player rides, which are no fleet slot yet (#186: into traffic next)
+    for (const char* bike : {"motorcycle", "moped"}) {
+        CHECK(a.vm.doString(std::string("vehicle.fleet = { { class = '") + bike + "', size = {0.7, 1.2, 2.0}, build = function() return __asSlot(vehicle." +
+                                bike + "(0)) end } }", &err));
+        CarBodyRecipe body;
+        const bool ok = loadFleetCarBody(a.vm, 0, body, &err);
+        if (!ok) std::printf("    [%s] %s\n", bike, err.c_str());
+        CHECK(ok);
+        const LensCount c = countLenses(body.mesh);
+        std::printf("    [%s] lens verts: head %d, tail %d, indicators %d/%d\n", bike, c.head, c.tail, c.indicatorL, c.indicatorR);
+        CHECK(c.head > 0 && c.tail > 0 && c.wrongEnd == 0 && c.indicatorL > 0 && c.indicatorR > 0);
     }
 }
 

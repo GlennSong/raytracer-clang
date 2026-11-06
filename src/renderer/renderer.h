@@ -162,6 +162,10 @@ struct RenderMaterial {
     // FLAG_CLUTTER (bit 26, with FLAG_GRASS): ground clutter planted like grass (GrassSystem: its rank, its fade) but a
     // SOLID little mesh -- not a blade turned to the viewer and bent to the sky, no light through it. Vulkan.
     static constexpr uint32_t FLAG_CLUTTER = 1u << 26;
+    // FLAG_LAMP_STATE (bit 27, ADR-0342): a vehicle's lamps are lenses in its own body, tagged by role in their u
+    // (engine/vehicle_lamps.h LensRole), and the lamps lit ride each instance's bottom row as a mask (Mat4::m[3][0]):
+    // mesh.vert lights the tagged lenses the mask names. Vulkan + Metal.
+    static constexpr uint32_t FLAG_LAMP_STATE = 1u << 27;
     float lodIn0 = 0.0f, lodIn1 = 0.0f, lodOut0 = 0.0f, lodOut1 = 0.0f;
     float fadeStart = 0.0f, fadeEnd = 0.0f;   // FLAG_GRASS only
     // FLAG_GRASS: grows in over [fadeInStart, fadeInEnd] (the far field's cards, arriving as the

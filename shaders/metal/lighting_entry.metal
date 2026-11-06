@@ -83,6 +83,32 @@ vertex FragmentData vertexMainInstanced(
     out.flags = inst.flags;
     out.emission = inst.emission.xyz;
     out.textureFlags = inst.textureFlags;
+    // FLAG_LAMP_STATE (ADR-0342; mesh.vert's twin): a vehicle's lamps are lenses in its body, tagged by role in their u
+    // (u = -1000 - role: 1 head, 2 tail, 3 indicator, 4 marker), and the lamps lit ride albedo.w as a mask (1 head,
+    // 2 brake, 4 left indicator lit, 8 right; the host moves it there off the model's bottom row). +x is the left.
+    const uint mask = uint(inst.albedo.w + 0.5);
+    const float u = vertices[vid].texcoord[0];
+    if (mask != 0u && u < -1000.5) {
+        const int role = int(-1000.0 - u + 0.5);
+        const float x = vertices[vid].position[0];
+        const bool blink = (x > 0.05 && (mask & 4u) != 0u) || (x < -0.05 && (mask & 8u) != 0u);
+        const float3 amber = float3(1.0, 0.52, 0.04), red = float3(1.0, 0.05, 0.03);
+        float3 c = float3(0.0);
+        float gain = 0.0;
+        if (role == 1) {
+            if (blink) { c = amber; gain = 2.2; }
+            else if ((mask & 1u) != 0u) { c = float3(1.0, 0.97, 0.86); gain = 2.2; }
+        } else if (role == 2) {
+            if (blink) { c = amber; gain = 2.2; }
+            else if ((mask & 2u) != 0u) { c = red; gain = 2.4; }
+            else if ((mask & 1u) != 0u) { c = red; gain = 0.6; }
+        } else if (role == 3) {
+            if (blink) { c = amber; gain = 2.2; }
+        } else if (role == 4) {
+            if ((mask & 1u) != 0u) { c = amber; gain = 1.0; }
+        }
+        if (gain > 0.0) { out.vertexColor = c * 0.12; out.emission = c * gain; }
+    }
     return out;
 }
 

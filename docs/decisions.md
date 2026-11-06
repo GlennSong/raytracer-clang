@@ -15466,3 +15466,69 @@ on all night.
 - The bus's destination sign keeps its own rule.
 - `car_headlights_track_the_night_clock` now also requires that no headlights belong to a car at rest: at most two per
   car on a trip.
+
+## ADR-0342 — A vehicle's lamps are its own body's lenses (#186)
+
+**Context.** The city drew car lamps as separate emissive boxes, in three instance groups (head, brake, turn). Each lit
+box was pushed at a lamp marker in its own pass, and VehicleSystem gave the player's and promoted cars lens entities of
+their own. That second thing had to be kept in step with the body, and when it was not, the lamps showed it:
+- the floating headlights over parked cars (ADR-0341);
+- a bus's tail lights inside its saloon;
+- a second pair of tail lights at guessed chassis corners.
+
+The kit bodies already had real lens parts, but these were never lit. The two-wheelers and the semi trailer had no
+lamp geometry at all. Glenn, 2026-11-05: "why did we separate the light from the cars?"
+
+**Decision.**
+- **Lenses are tagged by role.** Each lens vertex carries its role in its texture slot: u = -1000 - role. The roles
+  (`engine/vehicle_lamps.h` `LensRole`) are head 1, tail 2, indicator 3 and marker 4.
+  - Lua has a new generic mesh word, `mesh.set_uv` (and `mesh.uv_by`).
+  - vehicles.lua tags parts by material: `lamp`, `lamp_red`, `lamp_amber`, `lamp_marker`.
+  - The classic `buildCarMesh` tags its own lenses.
+  - A lens's side comes from its model x (+x is the driver's left).
+- **The lit lamps are a mask on the instance.** The mask has bits for head 1, brake 2, left lit 4 and right lit 8
+  (`lampMask`; the blink is on the sim clock). It rides the instance matrix's bottom row, `m[3][0]`, under
+  `FLAG_LAMP_STATE` (bit 27). A Renderable gets the same slot through `Renderable::instanceData`, so the player's car
+  and promoted cars use it too.
+- **mesh.vert lights the tagged lenses.** A lit lens's colour goes out as colour × (2 + emission), and mesh.frag splits
+  the two:
+  - head: white;
+  - tail: red, dim with the headlights and bright on the brakes;
+  - an indicator flashes the head or tail lens on its own side amber, and lights the amber lenses;
+  - markers: amber, lit with the headlights.
+- **Metal.**
+  - Model matrices go up with the bottom row as (0, 0, 0, 1) (`toSimdModel`). Nothing on Metal stripped it before,
+    so grass and signals carried data there into w.
+  - The mask moves to `GPUInstanceData::albedo.w`.
+  - The lamp bit is stripped from the float flags, because past bit 24 a float drops the low flags.
+  - A lamp-state draw goes instanced even when it is alone.
+  - The instanced vertex lights the lenses the way mesh.vert does.
+  - **None of this has been compiled or run on a Mac yet.**
+- **New geometry.**
+  - Motorcycle and moped: a round headlamp on the fork crown, a tail lamp, and an indicator on a stalk at each corner.
+  - Semi trailer: stop/tail lamps and turn lamps; amber side markers at the front and middle, red at the back; clearance
+    lamps at the top corners (box trailer). All are lit from the tractor's mask; when #189 articulates the trailer, its
+    instance carries the same mask.
+  - The fire engine's roof light bar is `beacon`, not a tail lamp, and stays unlit for now.
+- **Removed.**
+  - The three lamp groups, `lampMaterial`, and syncCarLamps' boxes. syncCarLamps keeps the bus signs and the speed
+    history, and writes each driver's mask onto its body instance.
+  - VehicleSystem's lens entities. `Vehicle::lamps` keeps the positions for the headlight cones, with the corner guess
+    only for those.
+- **Tests.**
+  - New: `every_fleet_body_carries_its_own_lit_lenses` (the kit fleet, the classic set, both semis, both bikes: head
+    and tail lenses at their own ends, indicators a side, markers on the trailer).
+  - The night, brake, turn and external-ownership cases now read `CityRenderSystem::carsLit`.
+  - `city_lamps_sit_on_their_own_car_s_ends` is retired: a lens is part of the body, so it cannot be at another car's
+    end.
+
+- **The mask is written last** in the bake (syncCarLamps). Everything that copies a body's matrix (glass, cabin,
+  riders, the bus sign, the ride pose) copies it before then, so the copies carry no data. Two places had to keep or
+  skip it:
+  - The physics bridge overwrites a possessed car's matrix with its Jolt pose, and now keeps the mask.
+  - `city_drawn_traffic_rolls_on_its_wheels` measured wheels with `Mat4::transformPoint`, which DIVIDES by the bottom
+    row. It now uses `instanceCentre` (affine). Any new reader of a car's drawn matrix must too.
+
+**Consequences.** One thing to draw per car. A lamp is wherever its body is, never anywhere else. Kinds stay data: a new
+vehicle lights by naming its lens parts. Bodies with no tagged lens (a hand-built level body) drive dark until they tag
+theirs.

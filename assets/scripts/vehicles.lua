@@ -25,6 +25,18 @@ vehicle = {}
 local classes = require "vehicle_classes"
 local forms   = require "vehicle_forms"
 
+-- LAMPS IN THE BODY (ADR-0342, #186): a lens is a part of the body tagged with its ROLE in its texture slot
+-- (engine/vehicle_lamps.h LensRole: u = -1000 - role), and the renderer lights the tagged lenses by the vehicle's
+-- lamps this step -- the lamp is where the body put it, and goes where the body goes. The kit names its lens parts
+-- by these materials; a hand-built body tags its own.
+local LENS_ROLE = { lamp = 1, lamp_red = 2, lamp_amber = 3, lamp_marker = 4 }
+local function lens_tag(m, mat)
+  local r = LENS_ROLE[mat]
+  return r and mesh.set_uv(m, -1000 - r, 0) or m
+end
+local LENS_TINT = { lamp = { 0.95, 0.95, 0.90 }, lamp_red = { 0.75, 0.06, 0.05 },
+                    lamp_amber = { 0.85, 0.42, 0.05 }, lamp_marker = { 0.85, 0.42, 0.05 } }
+local function lens(m, mat) local c = LENS_TINT[mat]; return lens_tag(mesh.bake_height_color(m, c, c), mat) end
 
 -- A CLASS's HANDLING (item 23, #117: one handling builder): everything the C++ reader (vehicle_spec.cpp,
 -- readVehicleHandling) turns into a Jolt config, derived from the class package -- for a drivable spec
@@ -177,7 +189,7 @@ vehicle.from_class = from_class
 local KIT_TINT = { trim = { 0.04, 0.04, 0.045 }, gasket = { 0.025, 0.025, 0.028 }, grille = { 0.06, 0.06, 0.065 },
                    chrome = { 0.72, 0.73, 0.75 }, lamp = { 0.95, 0.95, 0.90 }, lamp_red = { 0.75, 0.06, 0.05 },
                    chassis = { 0.07, 0.07, 0.08 }, box = { 0.90, 0.90, 0.88 }, bed = { 0.08, 0.08, 0.09 },
-                   interior = { 0.35, 0.26, 0.18 }, sign = { 1.0, 0.85, 0.2 } }
+                   interior = { 0.35, 0.26, 0.18 }, sign = { 1.0, 0.85, 0.2 }, beacon = { 0.80, 0.06, 0.05 } }
 local KIT_CABIN_TINT = { liner = { 0.45, 0.43, 0.40 }, carpet = { 0.10, 0.10, 0.11 }, seat = { 0.18, 0.17, 0.16 },
                          dash = { 0.08, 0.08, 0.09 }, steer = { 0.05, 0.05, 0.05 } }
 -- A KIT BODY's HANDLING (item 23, #117: one handling builder): `P` the kit spec, `car` its kit.build(P, 0), `h`
@@ -229,8 +241,8 @@ local function kit_drivable(specName, opts, h)
   local shell = {}
   for name, part in pairs(car.parts) do
     if name ~= "glass" then
-      local col = name == "body" and P.color or (KIT_TINT[name] or { 0.4, 0.4, 0.4 })
-      shell[#shell + 1] = mesh.bake_height_color(part, col, col)
+      local col = name == "body" and P.color or (KIT_TINT[name] or LENS_TINT[name] or { 0.4, 0.4, 0.4 })
+      shell[#shell + 1] = lens_tag(mesh.bake_height_color(part, col, col), name)
     end
   end
   local parts = {}
@@ -344,13 +356,26 @@ local function two_wheeler(kind, opts)
     add(at(mesh.box({ 0.16, 0.03, 0.42 }), 0, wy + K.r + 0.06, zf), col)                      -- front guard
     add(at(mesh.box({ 0.16, 0.03, 0.42 }), 0, wy + K.r + 0.06, zr), dark)                     -- rear guard
     add(at(mesh.rotate_x(mesh.cylinder(0.04, 0.6), math.pi * 0.5), 0.14, wy - 0.02, zr + 0.3), metal) -- exhaust
+    -- THE LAMPS (#186): a round headlamp on the fork crown, a tail lamp on the tail, an indicator on a stalk at each
+    -- corner (+x is the rider's left)
+    local hz, hy = zf - 0.10, wy + 0.56
+    add(at(mesh.rotate_x(mesh.cylinder(0.095, 0.10), math.pi * 0.5), 0, hy, hz), dark)            -- the headlamp shell
+    shell[#shell + 1] = lens(at(mesh.rotate_x(mesh.cylinder(0.08, 0.02), math.pi * 0.5), 0, hy, hz + 0.055), "lamp")
+    local tz, ty = kind == "moped" and -0.47 or -0.58, kind == "moped" and wy + 0.36 or wy + 0.34
+    shell[#shell + 1] = lens(at(mesh.box({ 0.14, 0.06, 0.03 }), 0, ty, tz), "lamp_red")
+    for _, sx in ipairs({ 1, -1 }) do
+      add(at(mesh.box({ 0.10, 0.015, 0.015 }), sx * 0.12, hy - 0.03, hz - 0.02), dark)          -- front stalks
+      shell[#shell + 1] = lens(at(mesh.box({ 0.05, 0.035, 0.05 }), sx * 0.19, hy - 0.03, hz - 0.02), "lamp_amber")
+      add(at(mesh.box({ 0.10, 0.015, 0.015 }), sx * 0.12, ty, tz + 0.04), dark)                 -- rear stalks
+      shell[#shell + 1] = lens(at(mesh.box({ 0.05, 0.035, 0.05 }), sx * 0.19, ty, tz + 0.04), "lamp_amber")
+    end
   end
   return {
     body = mesh.recompute_normals(mesh.merge(shell)),
     albedo = { 1, 1, 1 }, metallic = 0.3, roughness = 0.45,
     lights = kind == "bicycle" and { { name = "driver_seat", pos = { 0, wy + 0.52, -0.26 } } } or {
-      { name = "headlight_l", pos = { 0, wy + 0.52, zf - 0.18 } },
-      { name = "taillight_l", pos = { 0, wy + 0.38, zr + 0.05 } },
+      { name = "headlight_l", pos = { 0, wy + 0.56, zf - 0.04 } },
+      { name = "taillight_l", pos = { 0, kind == "moped" and wy + 0.36 or wy + 0.34, kind == "moped" and -0.485 or -0.595 } },
       { name = "driver_seat", pos = { 0, wy + 0.52, -0.22 } },
     },
     chassis = { half = { 0.2, K.H * 0.5, K.base * 0.5 + K.r * 0.6 } },
@@ -587,6 +612,7 @@ local KIT_TINT = {
   lamp_red = { 0.75, 0.06, 0.05 }, interior = { 0.35, 0.26, 0.18 }, bed = { 0.08, 0.08, 0.09 },
   box = { 0.90, 0.90, 0.88 }, chassis = { 0.07, 0.07, 0.08 }, door = { 0.80, 0.81, 0.82 },
   tank = { 0.78, 0.79, 0.80 }, trailer = { 0.86, 0.87, 0.88 }, sign = { 1.0, 0.85, 0.2 },
+  beacon = { 0.80, 0.06, 0.05 },
 }
 local KIT_CABIN = {
   liner = { 0.55, 0.53, 0.50 }, carpet = { 0.10, 0.10, 0.11 }, seat = { 0.22, 0.20, 0.19 },
@@ -598,8 +624,8 @@ local function kit_car(spec, color)
   local shell = {}
   for name, part in pairs(car.parts) do
     if name ~= "glass" then
-      local col = name == "body" and color or (KIT_TINT[name] or { 0.5, 0.5, 0.5 })
-      shell[#shell + 1] = mesh.bake_height_color(part, col, col)
+      local col = name == "body" and color or (KIT_TINT[name] or LENS_TINT[name] or { 0.5, 0.5, 0.5 })
+      shell[#shell + 1] = lens_tag(mesh.bake_height_color(part, col, col), name)
     end
   end
   local glass = car.parts.glass and mesh.bake_height_color(car.parts.glass, KIT_TINT.glass, KIT_TINT.glass) or nil

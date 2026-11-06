@@ -2,6 +2,7 @@
 
 #include "car_interior.h"
 #include "../../mesh_builder.h"
+#include "../../vehicle_lamps.h"   // LensRole: the lenses carry their role (ADR-0342)
 
 #include <algorithm>
 #include <cmath>
@@ -807,10 +808,10 @@ CarMesh buildCarMesh(const CarParams& p) {
     for (int side = 0; side < 2; ++side) {
         const Real sx = side == 0 ? Real(1) : Real(-1);
         const char* tag = side == 0 ? "_l" : "_r";
-        struct End { int station; Real dir; Vec3 tint; const char* name; };
+        struct End { int station; Real dir; Vec3 tint; const char* name; LensRole role; };
         const End ends[2] = {
-            {0, Real(1), Vec3(1.0, 0.97, 0.82), "headlight"},
-            {S - 1, Real(-1), Vec3(0.85, 0.06, 0.05), "taillight"},
+            {0, Real(1), Vec3(1.0, 0.97, 0.82), "headlight", LensRole::Head},
+            {S - 1, Real(-1), Vec3(0.85, 0.06, 0.05), "taillight", LensRole::Tail},
         };
         for (const End& e : ends) {
             const Real z = st[e.station] * L;
@@ -823,7 +824,8 @@ CarMesh buildCarMesh(const CarParams& p) {
             // inside the body, so it reads as a lens set into the panel.
             RenderMesh lens = MeshBuilder::box(
                 Vec3(p.lampWidth, p.lampHeight, p.lampDepth));
-            for (Vertex& v : lens.vertices) v.color = e.tint;
+            // (tagged with its role: the body's own lens is the lamp that lights, ADR-0342)
+            for (Vertex& v : lens.vertices) { v.color = e.tint; v.u = lensTag(e.role); v.v = 0.0f; }
             const Real faceZ = z + e.dir * kLampProud;
             const Real centreZ = faceZ - e.dir * p.lampDepth * Real(0.5);
             MeshBuilder::appendTransformed(

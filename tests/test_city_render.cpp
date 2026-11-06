@@ -8,6 +8,7 @@
 #include "../src/engine/components.h"
 #include "../src/engine/mesh_uploader.h"
 #include "../src/engine/procgen/city/roads/road_entity.h"
+#include "../src/engine/vehicle_lamps.h"   // the lit-lamp mask bits (ADR-0342)
 #include "../src/engine/world.h"
 
 #include <algorithm>
@@ -413,7 +414,7 @@ TEST_CASE(car_headlights_track_the_night_clock) {
         for (int i = 0; i < 2000; ++i) {
             city.step(world, 0.1);
             const Real t = city.sim().timeOfDay();
-            const std::size_t heads = groupCount(world, city.headlightGroup());
+            const std::size_t heads = city.carsLit(world, engine::kLampMaskHead);   // (cars, each its own two lenses)
             const std::size_t cars = carTotal(world, city);
             if (cars == 0) continue;
             std::size_t driving = 0, onTrip = 0;
@@ -422,11 +423,11 @@ TEST_CASE(car_headlights_track_the_night_clock) {
                 driving += a.mode == Agent::Mode::Driver && a.moving && a.speed > 0.5 && !a.far();
                 onTrip += a.mode == Agent::Mode::Driver && a.moving && !a.far() && !a.released;
             }
-            if (t > 20.0 || t < 5.0) {          // deep night: BOTH headlights per car on the move, NONE on a parked one
+            if (t > 20.0 || t < 5.0) {          // deep night: headlights on every car on the move, NONE on a parked one
                 if (driving == 0) continue;
                 ++nightSamples;
                 // (a parked car is dark, ADR-0341: lamps on a car at rest hung over the kerb with no body under them)
-                nightWrong += heads < driving * 2 || heads > onTrip * 2 || heads % 2 != 0;
+                nightWrong += heads < driving || heads > onTrip;
             } else if (t > 9.0 && t < 16.0) {   // midday: none
                 ++daySamples;
                 dayWrong += heads != 0;
@@ -434,7 +435,7 @@ TEST_CASE(car_headlights_track_the_night_clock) {
         }
     }
     std::printf("    [headlights] six towns: %d night samples (%d wrong), %d midday (%d wrong)\n", nightSamples, nightWrong, daySamples, dayWrong);
-    CHECK(nightSamples > 0 && nightWrong == 0);   // every drawn car lights two headlights at night
+    CHECK(nightSamples > 0 && nightWrong == 0);   // every drawn car on the move lights its headlights at night
     CHECK(daySamples > 0 && dayWrong == 0);       // and none by day
 }
 
@@ -452,7 +453,7 @@ TEST_CASE(car_brake_lights_come_on_when_holding) {
     bool sawBrake = false;
     for (int i = 0; i < 3000; ++i) {
         city.step(world, 0.1);
-        if (groupCount(world, city.brakeLightGroup()) > 0) sawBrake = true;
+        if (city.carsLit(world, engine::kLampMaskBrake) > 0) sawBrake = true;
     }
     CHECK(sawBrake);   // cars hold at the red / yield and light their brakes
 }
@@ -473,7 +474,7 @@ TEST_CASE(car_turn_signals_flash_on_turns) {
         city.step(world, 0.1);
         // A turning car's indicator flashes (sim-clock blink), so over many steps
         // a Turning-state car coincides with a blink-on window.
-        if (groupCount(world, city.turnSignalGroup()) > 0) sawTurn = true;
+        if (city.carsLit(world, engine::kLampMaskLeft | engine::kLampMaskRight) > 0) sawTurn = true;
     }
     CHECK(sawTurn);
 }
@@ -494,10 +495,7 @@ TEST_CASE(externally_owned_cars_draw_no_lamps) {
     bool everLit = false;
     for (int i = 0; i < 500; ++i) {
         city.step(world, 0.1);
-        if (groupCount(world, city.headlightGroup()) > 0 ||
-            groupCount(world, city.brakeLightGroup()) > 0 ||
-            groupCount(world, city.turnSignalGroup()) > 0)
-            everLit = true;
+        if (city.carsLit(world, ~0u) > 0) everLit = true;
     }
     CHECK(!everLit);   // no instanced lamps while the cars are externally owned
 }

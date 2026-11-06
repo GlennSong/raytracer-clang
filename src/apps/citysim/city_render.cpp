@@ -1437,6 +1437,7 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
             InstanceGroup g;
             g.mesh = mh;
             g.material = carMaterial();
+            g.material.flags |= engine::RenderMaterial::FLAG_LAMP_STATE;   // its lenses light by the mask (ADR-0342)
             g.renderLayer = engine::LayerSim;   // debug layer toggle
             g.drawClass = engine::DrawClass::SimBody;
             world.add<InstanceGroup>(e, g);
@@ -1605,26 +1606,6 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
         g.drawClass = engine::DrawClass::Effect;
         world.add<InstanceGroup>(signalGroups_[s], g);
     }
-
-    // Car lamp groups (ADR-0065 follow-up): one emissive instance batch per lamp
-    // kind, sharing a small lens box. Created unconditionally (they stay empty
-    // when cars are externally owned); syncCarLamps pushes the lit lamps each step.
-    MeshHandle lampMesh{};
-    if (assets)
-        lampMesh = assets->acquireMesh(MeshBuilder::box(Vec3(0.28, 0.16, 0.12)),
-                                       "city:carlamp");
-    headlightGroup_ = world.create();
-    { InstanceGroup g; g.mesh = lampMesh; g.material = lampMaterial(Vec3(1.5, 1.45, 1.2));
-      g.renderLayer = engine::LayerSim; g.drawClass = engine::DrawClass::Effect;
-      world.add<InstanceGroup>(headlightGroup_, g); }
-    brakeLightGroup_ = world.create();
-    { InstanceGroup g; g.mesh = lampMesh; g.material = lampMaterial(Vec3(1.7, 0.06, 0.04));
-      g.renderLayer = engine::LayerSim; g.drawClass = engine::DrawClass::Effect;
-      world.add<InstanceGroup>(brakeLightGroup_, g); }
-    turnSignalGroup_ = world.create();
-    { InstanceGroup g; g.mesh = lampMesh; g.material = lampMaterial(Vec3(1.7, 0.75, 0.05));
-      g.renderLayer = engine::LayerSim; g.drawClass = engine::DrawClass::Effect;
-      world.add<InstanceGroup>(turnSignalGroup_, g); }
 
     // Reuse the city's street-kit traffic-signal model: one pole+arm+head
     // assembly per signalled approach, placed on the near-right corner facing the
@@ -2342,13 +2323,11 @@ int CityRenderSystem::carTurnDir(const Agent& a) const {
 // emissive box at each lit lamp marker's WORLD pose. Only the lit lamps are
 // pushed, so a phase change (headlights on at dusk, brakes on braking) just moves
 // transforms between batches — cheap, a handful of quads per car, rebuilt per step.
+// THE LAMPS ARE THE BODY'S (ADR-0342, #186): each drawn car's lit lamps as a mask on its body instance (the bottom
+// row, FLAG_LAMP_STATE), lighting the lenses the body was built with. They were emissive boxes pushed at the lamp
+// markers in their own groups -- a second thing to keep in step with the body, and when it was not, headlights hung
+// in the air over a parked car (ADR-0341) or glowed inside a bus.
 void CityRenderSystem::syncCarLamps(World& world) {
-    InstanceGroup* head = world.get<InstanceGroup>(headlightGroup_);
-    InstanceGroup* brake = world.get<InstanceGroup>(brakeLightGroup_);
-    InstanceGroup* turn = world.get<InstanceGroup>(turnSignalGroup_);
-    if (head) head->beginStep();   // (moving with their cars: InstanceGroup::ids)
-    if (brake) brake->beginStep();
-    if (turn) turn->beginStep();
     for (Entity e : busSignGroups_)
         if (InstanceGroup* sg = world.get<InstanceGroup>(e)) sg->beginStep();
     busSignsDrawn_ = 0;
@@ -2363,7 +2342,8 @@ void CityRenderSystem::syncCarLamps(World& world) {
     // the bake is reproducible and headless-testable. A render-time wall clock
     // would be acceptable too (a non-deterministic blink is fine per the ADR), but
     // the sim clock keeps determinism intact.
-    const bool blinkOn = std::fmod(sim_.seconds() * kTurnBlinkHz, 1.0) < 0.5;
+    const bool blinkOn = engine::lampBlinkOn(sim_.seconds());
+    std::unordered_map<int, uint32_t> masks;   // the lit lamps of each drawn driver, by agent
 
     // (the K tier only: a far car has no drawn body and no lamps -- its speed is recorded once it is near again)
     for (int nearIdx : sim_.nearAgents()) {
@@ -2406,8 +2386,6 @@ void CityRenderSystem::syncCarLamps(World& world) {
         // here but no cars"); and a car parked at the kerb kept its headlights on all night. (A car held at a light is
         // still on its trip: `moving`.)
         if (!a.moving) continue;
-        const std::vector<LampMarker>& markers = carLights_[v];
-        if (markers.empty()) continue;
 
         // A lane change signals the side it moves toward (device); the
         // route-bend indicator covers junction turns as before. Lane offsets
@@ -2424,55 +2402,31 @@ void CityRenderSystem::syncCarLamps(World& world) {
         const bool dark = solarStaged_
                               ? solarElevation_ < engine::kLampDuskSunY
                               : cityIsDark(sim_.timeOfDay());
-        CarLamps lamps =
-            carLampStateSolar(a.state, a.speed, prev, dark, turnDir);
-        if (!lamps.head && !lamps.brake && !lamps.left && !lamps.right) continue;
-
-        // SAME POSE SOURCE AS THE BODY. A physically-possessed agent draws its
-        // car at the Jolt body's pose (physPose_), while the sim's kinematic
-        // ghost "legitimately runs ahead/behind" it — so taking agentPose()
-        // here hung the lamps off the GHOST and left them floating down the
-        // street beside their own car. One car, one pose.
-        const auto lampPo = physPose_.find(static_cast<int>(ai));
-        // NB: no agent index — agentPose(a, idx) ADVANCES the tilt low-pass for
-        // that agent, and the body already advanced it this step. Passing it
-        // here ran the filter twice a tick and reintroduced the pose vibration
-        // car_pose_probe_no_vibration_on_jagged_ground exists to catch. Lamps
-        // need the POSITION to match the car; a tick of tilt smoothing on a
-        // 0.28 m lens is not observable.
-        const Mat4 pose =
-            lampPo != physPose_.end() ? lampPo->second : agentPose(a);
-        const Real yaw = std::atan2(a.heading.x, a.heading.y);
-        const Quat rot = Quat::fromAxisAngle(Vec3(0, 1, 0), yaw);
-        // A vehicle you can SEE INTO (the bus): the lens box is centred on its
-        // marker, which sits exactly on the end face, so half of it poked
-        // through into the saloon -- tail lights glowing inside the bus
-        // (Glenn). Out by half the lens depth, it sits flush on the outside.
-        const bool seeInto = v < static_cast<int>(carSeeInto_.size()) && carSeeInto_[static_cast<std::size_t>(v)] != 0;
-        uint32_t lampNo = 0;
-        for (const LampMarker& m : markers) {
-            const uint64_t lampId = movingId(a, 64 + (lampNo++ & 127));
-            const bool isHead = m.name.rfind("headlight", 0) == 0;
-            const bool isTail = m.name.rfind("taillight", 0) == 0;
-            const bool leftSide = !m.name.empty() && m.name.back() == 'l';
-            const bool rightSide = !m.name.empty() && m.name.back() == 'r';
-            Vec3 local = m.pos;
-            if (seeInto) local.z += (local.z >= 0 ? Real(1) : Real(-1)) * Real(0.061);
-            const Vec3 wpos = pose.transformPoint(local);
-            const Mat4 xf = Mat4::trs(wpos, rot, Vec3(1, 1, 1));
-            if (isHead && lamps.head && head) head->push(xf, lampId);
-            if (isTail && lamps.brake && brake) brake->push(xf, lampId);
-            // The turn indicator on the signalling side flashes on BOTH the front
-            // and rear corner markers of that side.
-            const bool signalling =
-                (leftSide && lamps.left) || (rightSide && lamps.right);
-            if (signalling && blinkOn && turn) turn->push(xf, lampId);
-        }
+        const CarLamps lamps = carLampStateSolar(a.state, a.speed, prev, dark, turnDir);
+        const uint32_t m = engine::lampMask(lamps, blinkOn);
+        if (m) masks[static_cast<int>(ai)] = m;
     }
-    refreshBounds(head);
-    refreshBounds(brake);
-    refreshBounds(turn);
+    // ...onto the body instances syncGroups drew this bake (carAgentIds_ runs beside each group's transforms)
+    if (!masks.empty())
+        for (std::size_t v = 0; v < carGroups_.size() && v < carAgentIds_.size(); ++v) {
+            InstanceGroup* g = world.get<InstanceGroup>(carGroups_[v]);
+            if (!g) continue;
+            const std::vector<int>& ids = carAgentIds_[v];
+            for (std::size_t k = 0; k < ids.size() && k < g->transforms.size(); ++k) {
+                const auto it = masks.find(ids[k]);
+                if (it != masks.end()) g->transforms[k].m[3][0] = static_cast<Real>(it->second);
+            }
+        }
     for (Entity e : busSignGroups_) refreshBounds(world.get<InstanceGroup>(e));
+}
+
+std::size_t CityRenderSystem::carsLit(World& world, uint32_t bits) const {
+    std::size_t n = 0;
+    for (Entity e : carGroups_)
+        if (const InstanceGroup* g = world.get<InstanceGroup>(e))
+            for (const Mat4& t : g->transforms)
+                if (static_cast<uint32_t>(t.m[3][0] + 0.5) & bits) ++n;
+    return n;
 }
 
 // The row a bus's sign shows: its line, or NOT IN SERVICE while it deadheads to the depot or stands off duty.
@@ -3176,8 +3130,7 @@ void CityRenderSystem::syncGroups(World& world) {
     }
 
     sec(4);
-    // Emissive car lamps (ADR-0065 follow-up): headlights / brake / turn signals,
-    // driven by each drawn car's carLampState. Always baked (not a debug widget).
+    // Car lamps (ADR-0342): each drawn car's lit lamps onto its body instance, and the bus signs. Always baked.
     syncCarLamps(world);
     sec(5);
     if (syncStats && ++secCalls % 300 == 0) {

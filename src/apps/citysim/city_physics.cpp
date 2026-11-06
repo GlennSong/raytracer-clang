@@ -207,7 +207,9 @@ void CityPhysicsSystem::syncPossessedInstances(World& world) {
                 const Quat bq = pw.vehicleOrientation(p.vid);
                 const Mat4 pose =
                     Mat4::translate(bp.x, bp.y, bp.z) * bq.toMat4();
+                const Real lamps = g->transforms[ii].m[3][0];   // the lit-lamp mask rides the bottom row (ADR-0342)
                 g->transforms[ii] = pose;
+                g->transforms[ii].m[3][0] = lamps;
                 city_.setAgentPhysPose(aid, pose);
                 break;
             }
