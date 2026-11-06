@@ -158,11 +158,11 @@ double DeckHeight::distanceToLane(int lane, const Vec2& p, double radius) const 
     bool inside = false;
     for (size_t k = 0; k < b.outerRings.size() && !inside; ++k) {
         const Box2& bx = b.outerBoxes[k]; if (p.x < bx.minX || p.x > bx.maxX || p.y < bx.minY || p.y > bx.maxY) continue;
-        inside = pointInRing(b.outerRings[k], p);
+        inside = pointInPolygon(b.outerRings[k], p);
     }
     if (!inside) return best;
     double inHole = std::numeric_limits<double>::infinity();
-    for (size_t k = 0; k < b.holeRings.size(); ++k) if (pointInRing(b.holeRings[k], p)) inHole = std::min(inHole, b.holes[k].distanceWithin(p, radius));
+    for (size_t k = 0; k < b.holeRings.size(); ++k) if (pointInPolygon(b.holeRings[k], p)) inHole = std::min(inHole, b.holes[k].distanceWithin(p, radius));
     return std::isfinite(inHole) ? inHole : 0.0;
 }
 
@@ -176,9 +176,9 @@ bool DeckHeight::deepInside(int lane, const Vec2& p, double margin) const {
     bool inside = false;
     for (size_t k = 0; k < b.outerRings.size() && !inside; ++k) {
         const Box2& bx = b.outerBoxes[k]; if (p.x < bx.minX || p.x > bx.maxX || p.y < bx.minY || p.y > bx.maxY) continue;
-        inside = pointInRing(b.outerRings[k], p);
+        inside = pointInPolygon(b.outerRings[k], p);
     }
-    for (size_t k = 0; k < b.holeRings.size() && inside; ++k) if (pointInRing(b.holeRings[k], p)) inside = false;
+    for (size_t k = 0; k < b.holeRings.size() && inside; ++k) if (pointInPolygon(b.holeRings[k], p)) inside = false;
     return inside;
 }
 

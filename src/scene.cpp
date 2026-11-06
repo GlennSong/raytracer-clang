@@ -98,10 +98,6 @@ double surfHash(double a, double b) {   // == common.metal hash21, bit-exact
     return static_cast<double>(h >> 8) * (1.0 / 16777216.0);
 }
 double surfTile(double x, double m) { return x - m * std::floor(x / m); }  // [0,m)
-double surfStep(double e0, double e1, double x) {
-    double t = std::clamp((x - e0) / (e1 - e0), 0.0, 1.0);
-    return t * t * (3.0 - 2.0 * t);
-}
 double surfVNoise(double x, double y) {            // value noise, bilinear
     double xi = std::floor(x), yi = std::floor(y), xf = x - xi, yf = y - yi;
     double a = surfHash(xi, yi), b = surfHash(xi + 1, yi);
@@ -162,7 +158,7 @@ Vec3 surfConcrete(const Vec3& base, double u, double v) {
     double shade = 0.84 + 0.22 * n + 0.06 * (fine - 0.5);
     double gu = surfTile(u, 3.0); gu = std::min(gu, 3.0 - gu);
     double gv = surfTile(v, 3.0); gv = std::min(gv, 3.0 - gv);
-    double jt = surfStep(0.015, 0.04, std::min(gu, gv));   // control joints
+    double jt = smoothstep(0.015, 0.04, std::min(gu, gv));   // control joints
     return base * shade * (0.74 + 0.26 * jt);
 }
 Vec3 surfStucco(const Vec3& base, double u, double v) {
@@ -176,8 +172,8 @@ Vec3 surfRoofTile(const Vec3& base, double u, double v) {
     double uu = u + off, col = std::floor(uu / tileW);
     double fx = uu - col * tileW, fy = v - row * rowH;
     double curve = std::sin(PI * (fx / tileW));               // barrel crown
-    double valley = surfStep(0.0, 0.02, std::min(fx, tileW - fx));
-    double lap = surfStep(0.0, 0.05, fy);                     // head-lap shadow
+    double valley = smoothstep(0.0, 0.02, std::min(fx, tileW - fx));
+    double lap = smoothstep(0.0, 0.05, fy);                     // head-lap shadow
     double h = surfHash(col, row);
     double shade = (0.55 + 0.5 * curve) * (0.85 + 0.30 * h) * valley * (0.6 + 0.4 * lap);
     return base * shade;
@@ -189,8 +185,8 @@ Vec3 surfShingle(const Vec3& base, double u, double v) {
     double uu = u + off, col = std::floor(uu / tabW);
     double fx = uu - col * tabW, fy = v - row * rowH;
     double h = surfHash(col, row);
-    double key = surfStep(0.0, 0.012, std::min(fx, tabW - fx));
-    double shadow = surfStep(0.0, 0.03, fy);
+    double key = smoothstep(0.0, 0.012, std::min(fx, tabW - fx));
+    double shadow = smoothstep(0.0, 0.03, fy);
     return base * (0.82 + 0.32 * h) * (0.55 + 0.45 * key) * (0.5 + 0.5 * shadow);
 }
 Vec3 surfCorrugated(const Vec3& base, double u, double v) {
@@ -216,7 +212,7 @@ Vec3 surfPavement(const Vec3& base, double u, double v) {
     double h = surfHash(std::floor(u / slab), std::floor(v / slab));
     double spk = surfVNoise(u * 26.0, v * 26.0);
     double shade = 0.90 + 0.12 * (h - 0.5) + 0.06 * (spk - 0.5);
-    double jt = surfStep(0.02, 0.05, joint);
+    double jt = smoothstep(0.02, 0.05, joint);
     return base * shade * (0.6 + 0.4 * jt);
 }
 Vec3 surfCobble(const Vec3& base, double u, double v) {
@@ -231,7 +227,7 @@ Vec3 surfCobble(const Vec3& base, double u, double v) {
             double dx = cu - px, dy = cv - py, d = dx * dx + dy * dy;
             if (d < best) { best = d; bh = surfHash(ci + 9.1, cj + 4.3); }
         }
-    double stone = surfStep(0.0, 0.12, 0.62 - std::sqrt(best));
+    double stone = smoothstep(0.0, 0.12, 0.62 - std::sqrt(best));
     Vec3 mortar(0.32, 0.30, 0.27);
     return mortar + (base * (0.7 + 0.6 * bh) - mortar) * stone;
 }
@@ -239,7 +235,7 @@ Vec3 surfWood(const Vec3& base, double u, double v) {
     const double boardH = 0.18;
     double row = std::floor(v / boardH), fy = v - row * boardH;
     double h = surfHash(row, 3.0), grain = surfVNoise(u * 40.0, row * 9.0 + v * 2.0);
-    double shadow = surfStep(0.0, 0.02, fy);
+    double shadow = smoothstep(0.0, 0.02, fy);
     return base * (0.85 + 0.20 * h + 0.12 * (grain - 0.5)) * (0.55 + 0.45 * shadow);
 }
 
@@ -305,13 +301,9 @@ Vec3 surfRoadMarkings(const Vec3& base, double mu, double mv, double wu, double 
     // junction mouth (baked by the road mesher), so the band sits set back on the
     // approach, not in the intersection. Bars run across the carriageway (mu). This
     // mirrors the Metal/Vulkan RoadMarkings shader for realtime<->offline parity.
-    auto sstep = [](double a, double b, double x) {
-        double t = std::clamp((x - a) / (b - a), 0.0, 1.0);
-        return t * t * (3.0 - 2.0 * t);
-    };
     // Only the carriageway (mu in [~1,3]) — the raised sidewalk/curb shares this
     // surface but carries a 0..1 UV, so gate on mu > 1.05 to keep paint off the curb.
-    double cwEdge = sstep(0.5, 0.8, mv) * (1.0 - sstep(3.3, 3.6, mv));
+    double cwEdge = smoothstep(0.5, 0.8, mv) * (1.0 - smoothstep(3.3, 3.6, mv));
     double barPhase = (mu - 1.0) * 4.0; barPhase -= std::floor(barPhase);
     double cw = cwEdge * (barPhase < 0.5 ? 1.0 : 0.0) * (mu > 1.05 ? 1.0 : 0.0);
     c = c * (1.0 - cw) + white * cw;
@@ -404,12 +396,6 @@ void EnvironmentMap::suppressSunDisc() {
 }
 
 namespace {
-double sstep(double e0, double e1, double x) {
-    double t = (x - e0) / (e1 - e0);
-    if (t < 0.0) t = 0.0;
-    if (t > 1.0) t = 1.0;
-    return t * t * (3.0 - 2.0 * t);
-}
 Vec3 crossV(const Vec3& a, const Vec3& b) {
     return Vec3(a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z, a.x * b.y - a.y * b.x);
 }
@@ -427,8 +413,8 @@ Vec3 EnvironmentLight::proceduralRadiance(const Vec3& dir) const {
     const DayNightState& s = night;
     const double skyBlend = std::max(std::min(dir.y, 1.0), 0.0);
     Vec3 sky = lerp(s.horizonColor, s.zenithColor, std::pow(skyBlend, 0.5));
-    Vec3 lowerHaze = lerp(s.horizonColor, s.groundColor, sstep(0.0, -0.4, dir.y));
-    Vec3 col = lerp(lowerHaze, sky, sstep(-0.05, 0.05, dir.y));
+    Vec3 lowerHaze = lerp(s.horizonColor, s.groundColor, smoothstep(0.0, -0.4, dir.y));
+    Vec3 col = lerp(lowerHaze, sky, smoothstep(-0.05, 0.05, dir.y));
 
     // The sun's WIDE glow only; the disc and tight aureole are the light.
     const double glow = s.skyDiscIntensity;
@@ -471,12 +457,12 @@ Vec3 EnvironmentLight::proceduralRadiance(const Vec3& dir) const {
                     const double mag = std::pow(r3, 4.0);
                     const double sigma = 0.0007 + 0.0007 * mag;
                     double I = std::exp(-ang * ang / (2.0 * sigma * sigma)) * (0.10 + 2.0 * mag);
-                    I *= 1.0 + (sstep(0.03, 0.30, mag) - 1.0) * pollution;
+                    I *= 1.0 + (smoothstep(0.03, 0.30, mag) - 1.0) * pollution;
                     const Vec3 tint = lerp(Vec3(0.78, 0.85, 1.0), Vec3(1.0, 0.86, 0.70), r1 * r1);
                     sum = sum + tint * I;
                 }
         sum = sum + Vec3(0.30, 0.34, 0.46) * (0.03 * band);
-        col = col + sum * (gate * sstep(-0.02, 0.18, dir.y));
+        col = col + sum * (gate * smoothstep(-0.02, 0.18, dir.y));
     }
 
     // Light pollution's sky glow (skyGlow).
@@ -507,7 +493,7 @@ Vec3 EnvironmentLight::proceduralRadiance(const Vec3& dir) const {
             const double u = dot(off, right) / std::sin(kMoonRadius);
             const double v = dot(off, up) / std::sin(kMoonRadius);
             const double r2 = u * u + v * v;
-            const double edge = 1.0 - sstep(0.92, 1.02, std::sqrt(r2));
+            const double edge = 1.0 - smoothstep(0.92, 1.02, std::sqrt(r2));
             const double w = std::sqrt(std::max(1.0 - r2, 0.0));
             const Vec3 n = right * u + up * v - m * w;
             const double lit = std::max(dot(n, sun), 0.0);

@@ -1,4 +1,5 @@
 #include "level_loader.h"
+#include "../hash.h"   // lowbias32
 #include "particles.h"
 #ifdef RT_ENABLE_SCRIPTING
 #include "scripting/furniture_library_lua.h"
@@ -2181,10 +2182,58 @@ static std::vector<CityRecipeKit> cityRecipeKits(const std::string& recipe, cons
 }
 #endif
 
+// A BEACH TOWN'S SAND (and the town behind it): a coarse mask, `reach` m round each of the level's line hubs (a beach
+// town's seafront) -- where the wild ground's scatter keeps off: the forest's trees and rocks, the stones clutter.
+// Glenn: "people actually hanging out on the beach" -- a town's beach is sand to lie on, not a boulder field.
+struct TownBeachMask {
+    double x0 = 0, z0 = 0, cell = 10.0;
+    int nx = 0, nz = 0;
+    std::vector<char> on;
+    bool covers(double x, double z) const {
+        const int i = static_cast<int>(std::floor((x - x0) / cell)), j = static_cast<int>(std::floor((z - z0) / cell));
+        return i >= 0 && j >= 0 && i < nx && j < nz && on[static_cast<std::size_t>(j) * nx + i];
+    }
+};
+static std::shared_ptr<const TownBeachMask> townBeachMask(const json& root, double reach = 400.0) {
+    std::vector<std::vector<engine::Vec2>> lines;
+    if (root.contains("citysim") && root["citysim"].contains("districts") && root["citysim"]["districts"].contains("hubs"))
+        for (const auto& hj : root["citysim"]["districts"]["hubs"])
+            if (hj.contains("line") && hj["line"].is_array() && hj["line"].size() >= 2) {
+                std::vector<engine::Vec2> L;
+                for (const auto& q : hj["line"]) L.push_back(engine::Vec2(q[0].get<double>(), q[1].get<double>()));
+                lines.push_back(std::move(L));
+            }
+    if (lines.empty()) return nullptr;
+    auto m = std::make_shared<TownBeachMask>();
+    double x1 = -1e30, z1 = -1e30;
+    m->x0 = m->z0 = 1e30;
+    for (const auto& L : lines)
+        for (const engine::Vec2& v : L) { m->x0 = std::min(m->x0, (double)v.x - reach); m->z0 = std::min(m->z0, (double)v.y - reach); x1 = std::max(x1, (double)v.x + reach); z1 = std::max(z1, (double)v.y + reach); }
+    m->nx = static_cast<int>(std::ceil((x1 - m->x0) / m->cell)) + 1;
+    m->nz = static_cast<int>(std::ceil((z1 - m->z0) / m->cell)) + 1;
+    m->on.assign(static_cast<std::size_t>(m->nx) * m->nz, 0);
+    const int r = static_cast<int>(std::ceil(reach / m->cell));
+    for (const auto& L : lines)
+        for (std::size_t k = 0; k + 1 < L.size(); ++k) {
+            const engine::Vec2 a = L[k], ab = L[k + 1] - L[k];
+            const int ci = static_cast<int>((a.x - m->x0) / m->cell), cj = static_cast<int>((a.y - m->z0) / m->cell);
+            const int extra = static_cast<int>(std::ceil(ab.length() / m->cell));
+            for (int j = std::max(0, cj - r - extra); j <= std::min(m->nz - 1, cj + r + extra); ++j)
+                for (int i = std::max(0, ci - r - extra); i <= std::min(m->nx - 1, ci + r + extra); ++i) {
+                    const engine::Vec2 q(m->x0 + (i + 0.5) * m->cell, m->z0 + (j + 0.5) * m->cell);
+                    const double t = std::clamp(engine::dot(q - a, ab) / std::max(1e-12, engine::dot(ab, ab)), 0.0, 1.0);
+                    if ((a + ab * t - q).length() < reach) m->on[static_cast<std::size_t>(j) * m->nx + i] = 1;
+                }
+        }
+    return m;
+}
+
+// `townBeaches` (townBeachMask): a beach town's sand and streets, where the forest and its rocks keep off
 static void loadForest(const json& fj, const TerrainParams& terrain, const Noise& terrainNoise, World& world,
                        Renderer& renderer, AssetManager& assets, double placeDilate,
                        std::function<double(double, double)> drawnGround,
-                       const std::vector<engine::Poly2>* sealedLots = nullptr) {
+                       const std::vector<engine::Poly2>* sealedLots = nullptr,
+                       const TownBeachMask* townBeaches = nullptr) {
     RT_PROFILE_ZONE_NAMED("loadForest");
     const auto t0 = std::chrono::steady_clock::now();
     const ForestParams fp = forestFromJson(fj);
@@ -2481,9 +2530,11 @@ static void loadForest(const json& fj, const TerrainParams& terrain, const Noise
         }
         return false;
     };
+    auto nearTownBeach = [&](double x, double z) { return townBeaches && townBeaches->covers(x, z); };
     auto exclude = [&](double x, double z) {
         if (terrain.hydro && terrain.hydro->isWet(x, z, 2.0)) return true;
         if (onSealedLot(x, z)) return true;
+        if (nearTownBeach(x, z)) return true;
         if (trails && trails->distance(x, z, 3.0) < 2.5) return true;   // the trails stay open (ADR-0134)
         for (const RoadDeckField* d : decks) if (d->coversAny(x, z, margin)) return true;
         if (drawnRoad.near(x, z, margin)) return true;
@@ -2662,6 +2713,7 @@ static void loadForest(const json& fj, const TerrainParams& terrain, const Noise
         std::function<double(double, double, double)> shoreAt;
         if (terrain.hydro) shoreAt = [h = terrain.hydro](double x, double z, double y) { return h->isWet(x, z, 0.0) ? 0.0 : h->shore(x, z, y); };
         auto excludeDry = [&](double x, double z) {
+            if (nearTownBeach(x, z)) return true;   // (the shore layer too: a town's beach is sand)
             if (trails && trails->distance(x, z, 3.0) < 1.5) return true;
             for (const RoadDeckField* d : decks) if (d->coversAny(x, z, margin)) return true;
             if (drawnRoad.near(x, z, margin)) return true;
@@ -3361,9 +3413,7 @@ static void loadVegetation(const json& veg, const TerrainParams& terrain,
                 (static_cast<int64_t>(m.m[0][3] * 8) * 73856093LL) ^
                 (static_cast<int64_t>(m.m[2][3] * 8) * 19349663LL) ^ vegSeed);
             auto unit = [&](uint32_t salt) {
-                uint32_t x = hsh ^ (salt * 2654435761u);
-                x ^= x >> 16; x *= 0x7feb352du; x ^= x >> 15; x *= 0x846ca68bu;
-                x ^= x >> 16;
+                const uint32_t x = lowbias32(hsh ^ (salt * 2654435761u));   // (hash.h)
                 return (x & 0xFFFFFF) / 16777215.0;
             };
             if (isRock) {
@@ -4871,7 +4921,10 @@ bool LevelLoader::load(const std::string& path,
             // FORESTS (ADR-0129): real trees near, impostors far, placed by the ground's maps
             // (it lives in the terrain block: the ground cover lays litter under it)
             if (root.contains("terrain") && root["terrain"].contains("forest") && root["terrain"]["forest"].is_object())
-                loadForest(root["terrain"]["forest"], tp, nz, world, renderer, assets, placeDilate, drawn, sealedLotPolys.get());
+            {
+                const std::shared_ptr<const TownBeachMask> beaches = townBeachMask(root);
+                loadForest(root["terrain"]["forest"], tp, nz, world, renderer, assets, placeDilate, drawn, sealedLotPolys.get(), beaches.get());
+            }
             // THE GRASS FIELD (flora plan): not scattered here -- GrassSystem plants it around
             // the camera, from clump meshes and the ground and density rules set up here.
             // GRASS LAYERS (ADR-0130): "grass" is the meadow; "grassLayers" adds more fields, each with a
@@ -4931,6 +4984,7 @@ bool LevelLoader::load(const std::string& path,
                         managedPads->bins[PadIndex::key(i, j)].push_back(k);
             }
             const std::shared_ptr<const PadIndex> managedRO = managedPads;
+            const std::shared_ptr<const TownBeachMask> beachRO = townBeachMask(root);   // (no stones on a town's beach)
             if (!managedPolys->empty()) LOG_INFO << "[grass] managed ground: " << managedPolys->size() << " city blocks mown";
             // A LAWN layer (where: "lawn") mows the city's parks and the campus quad short; with one, the other
             // layers keep off the parks (the meadow stood knee-deep on the quad)
@@ -4967,14 +5021,19 @@ bool LevelLoader::load(const std::string& path,
                                : where == "tall" ? 1 : where == "reeds" ? 2 : where == "flowers" ? 3 : where == "clearing" ? 4 : where == "shore" ? 5
                                : where == "lawn" ? 6 : 0;
                 const double clumpScale = gj.value("clumpScale", 0.06), clumpCut = gj.value("clumpCut", 0.25);
+                // HEATH (ADR-0331): a layer that names it ("cover": "heath") grows on the cover's heath share of the grass;
+                // the others give way there by `underHeath` (0.75: a little grass still threads the heather)
+                const bool fromHeath = gj.value("cover", std::string("grass")) == "heath";
+                const double underHeath = gj.value("underHeath", 0.75);
                 const double shore = gj.value("shoreBand", 6.0);
                 // MOWN in the city's blocks (managed ground): the meadow at a lawn's height; a lawn layer as it is
                 const double mown = gj.value("mownHeight", 0.3);
                 if (kind != 6 && !managedRO->polys.empty())
                     gf.height = [managedRO, mown](double x, double z) { return managedRO->covers(x, z) ? mown : 1.0; };
-                gf.density = [maxSlope, thin, sea, patchiness, patchScale, patches, cover, hydro, kind, shore, clumpScale, clumpCut,
-                              sealedRoads, padsRO, lawnsRO, haveLawn, managedRO](double x, double z, double y, double slopeCos) {
+                gf.density = [maxSlope, thin, sea, patchiness, patchScale, patches, cover, hydro, kind, shore, clumpScale, clumpCut, fromHeath, underHeath,
+                              sealedRoads, padsRO, lawnsRO, haveLawn, managedRO, beachRO](double x, double z, double y, double slopeCos) {
                     if (y < sea + 0.15) return 0.0;
+                    if (kind == 7 && beachRO && beachRO->covers(x, z)) return 0.0;   // a beach town's sand: no stones
                     // the wild layers -- tall grass, meadow flowers, clearings -- keep off the city's managed blocks
                     if ((kind == 1 || kind == 3 || kind == 4 || kind == 7 || kind == 8) && managedRO->covers(x, z)) return 0.0;
                     if (!sealedRoads->empty() && sealedRoads->near(x, z, 0.4)) return 0.0;   // the city's sealed ground
@@ -5017,8 +5076,13 @@ bool LevelLoader::load(const std::string& path,
                     }
                     // With a ground-cover map the cover decides (grass stops at sand, rock and
                     // bare earth, raggedly); without one, the slope rule.
-                    double d = cover ? cover->at(x, z, y, slopeCos).grass
-                                     : std::clamp((maxSlope - slope) / thin, 0.0, 1.0);
+                    double d = std::clamp((maxSlope - slope) / thin, 0.0, 1.0);
+                    if (cover) {
+                        const Cover cv = cover->at(x, z, y, slopeCos);
+                        d = cv.grass * (fromHeath ? cv.heath : 1.0 - underHeath * cv.heath);
+                    } else if (fromHeath) {
+                        return 0.0;
+                    }
                     if (hydro && d > 0.0) d *= 1.0 - 0.85 * hydro->shore(x, z, y);   // the pebbly shore (ADR-0131)
                     if (kind == 3 || kind == 4) {   // FLOWERS: patches of open meadow / a field in a forest clearing
                         if (!cover || !cover->params().forest) return kind == 3 ? d * clumps(7.0) : 0.0;
@@ -5114,7 +5178,7 @@ bool LevelLoader::load(const std::string& path,
                 }
                 // THE FAR FIELD: cards of baked blades beyond the clumps, growing in as they fade
                 if (gj.value("cards", !clutter)) {
-                    const TextureData ct = grassCardTexture(gf.seed * 7919u + 3u, cp);
+                    const TextureData ct = grassCardTexture(gf.seed * 7919u + 3u, cp, flowerColors);
                     gf.card = assets.acquireMesh(grassCardMesh(cp), tag + ":card");
                     gf.cardSpacing = gj.value("cardSpacing", gf.cardSpacing);
                     gf.cardRadius = gj.value("cardRadius", gf.cardRadius);
@@ -5722,6 +5786,7 @@ bool LevelLoader::load(const std::string& path,
             wp.hi = Vec2(x1, z1);
             wp.cell = 0.5;
             wp.foamBand = 0.6;
+            wp.surfBand = 0.0;   // (a pool has no surf)
             const HeightField floorAt = [=](double x, double z) {
                 return x >= x0 - 1e-6 && x <= x1 + 1e-6 && z >= z0 - 1e-6 && z <= z1 + 1e-6 ? level - depth
                                                                                              : level + 1.0;
@@ -6028,6 +6093,71 @@ bool LevelLoader::load(const std::string& path,
             });
             if (!dressingGround && entityGround)
                 dressingGround = [g = entityGround](Real x, Real z) { return g(x, z); };
+            // THE BEACH (~/.claude/plans/beach-town.md; Glenn: "people actually hanging out on the beach lounging and
+            // sunbathing"): along every LINE hub (a beach town's seafront), the sand between its beachfront row and the
+            // water, cut into "beach" activity areas every 60 m -- where the sunbathers, the picnics and the games go
+            std::vector<engine::OutdoorPiece> beachFurniture;   // (laid with the lots' furniture below)
+            if (dressingGround && cs.contains("districts") && cs["districts"].contains("hubs")) {
+                int beachAreas = 0;
+                for (const auto& hj : cs["districts"]["hubs"]) {
+                    if (!hj.contains("line") || !hj["line"].is_array() || hj["line"].size() < 2) continue;
+                    std::vector<engine::Vec2> L;
+                    for (const auto& q : hj["line"]) L.push_back(engine::Vec2(q[0].get<double>(), q[1].get<double>()));
+                    const double from = hj.value("beachFrom", 90.0);   // the beachfront row and its promenade, first
+                    double run = 0.0, next = 30.0;
+                    for (std::size_t i = 0; i + 1 < L.size(); ++i) {
+                        const engine::Vec2 d = L[i + 1] - L[i];
+                        const double len = d.length();
+                        if (len < 1e-6) continue;
+                        const engine::Vec2 t = d * (1.0 / len);
+                        for (; next <= run + len; next += 60.0) {
+                            const engine::Vec2 at = L[i] + t * (next - run);
+                            // the sea side: where the ground falls
+                            engine::Vec2 n(-t.y, t.x);
+                            if (dressingGround(at.x + n.x * 150.0, at.y + n.y * 150.0) > dressingGround(at.x - n.x * 150.0, at.y - n.y * 150.0)) n = n * -1.0;
+                            double water = -1.0;
+                            for (double o = from; o <= 600.0; o += 5.0)
+                                if (dressingGround(at.x + n.x * o, at.y + n.y * o) < 0.25) { water = o; break; }
+                            if (water < 0 || water - 12.0 - from < 18.0) continue;   // no sand to lie on
+                            // THE LOUNGERS (Glenn, 2026-11-02: "lounge chairs -- a new type of chair that the agents
+                            // and player can use"): two stretches in three, where the sand is deep enough, get a row
+                            // for hire at the back -- an umbrella every 4.5 m with a lounger each side, feet to the
+                            // sea, all in the stretch's colour; the groups' sand starts in front of it
+                            double back = from;
+                            const uint32_t h = engine::posHash(at);
+                            if (h % 3u != 0 && water - 12.0 - from >= 34.0) {
+                                const engine::Vec2 heads = at + n * (from + 3.0);
+                                auto lay = [&](engine::Piece pc, const engine::Vec2& p) {
+                                    engine::OutdoorPiece op = engine::outdoorPiece(pc, h, p, n, 0.0, true);
+                                    op.variant |= (h >> 4) % 8u;   // (the beach's colours: the low bits)
+                                    beachFurniture.push_back(op);
+                                };
+                                for (double u = -22.0; u <= 22.01; u += 4.5) {
+                                    const engine::Vec2 p = heads + t * u;
+                                    lay(engine::Piece::BeachUmbrella, p - n * 0.2);   // (its pole 1.1 m in: 0.9 m down the loungers)
+                                    lay(engine::Piece::SunLounger, p - t * 0.62);
+                                    lay(engine::Piece::SunLounger, p + t * 0.62);
+                                }
+                                back = from + 7.0;
+                            }
+                            // the sand, its long axis out to the sea (Glenn, 2026-11-02: "orient them ... so they have
+                            // their feet to the ocean"): a group lying side by side lies along the shore, feet seaward
+                            const double mid = 0.5 * (back + water - 12.0);
+                            const engine::Vec2 c = at + n * mid;
+                            cfg.activityAreas.push_back({"beach", c.x, c.y, n.x, n.y, 0.5 * (water - 12.0 - back) - 2.0, 26.0});
+                            // ...and THE SHORE, the wet sand along the water's edge (Glenn: "people walking around the
+                            // beach too -- on the sand"): where the strollers go, clear of the groups lying out
+                            const engine::Vec2 w = at + n * (water - 6.0);
+                            cfg.activityAreas.push_back({"shore", w.x, w.y, t.x, t.y, 29.0, 3.5});
+                            ++beachAreas;
+                        }
+                        run += len;
+                    }
+                }
+                if (beachAreas)
+                    LOG_INFO << "[citysim] the beach: " << beachAreas << " areas on the sand, " << beachFurniture.size()
+                             << " loungers and umbrellas";
+            }
             // The road as drawn, for the lot trees below (drawn_road.h).
             const engine::DrawnRoad lotRoad = engine::gatherDrawnRoad(world, /*withHeights=*/true);
             int lotTreesOnRoad = 0;
@@ -6120,16 +6250,18 @@ bool LevelLoader::load(const std::string& path,
 #endif
                 const engine::FurnitureLibrary& flib = engine::FurnitureLibrary::global();
                 std::map<std::pair<long, long>, std::vector<engine::PlacedPiece>> cells;
+                auto place = [&](const engine::OutdoorPiece& op) {
+                    const Real fy = op.draped ? (dressingGround ? dressingGround(op.at.x, op.at.y) : Real(0)) + op.y : op.y;
+                    engine::PlacedPiece pp;
+                    pp.piece = op.piece;
+                    pp.variant = op.variant;
+                    pp.xform = engine::outdoorPieceXform(op, fy);
+                    cells[{static_cast<long>(std::floor(op.at.x / 160.0)), static_cast<long>(std::floor(op.at.y / 160.0))}]
+                        .push_back(pp);
+                };
                 for (const engine::LotBuilding& lb : grown.lots)
-                    for (const engine::OutdoorPiece& op : lb.furniture) {
-                        const Real fy = op.draped ? (dressingGround ? dressingGround(op.at.x, op.at.y) : Real(0)) + op.y : op.y;
-                        engine::PlacedPiece pp;
-                        pp.piece = op.piece;
-                        pp.variant = op.variant;
-                        pp.xform = engine::outdoorPieceXform(op, fy);
-                        cells[{static_cast<long>(std::floor(op.at.x / 160.0)), static_cast<long>(std::floor(op.at.y / 160.0))}]
-                            .push_back(pp);
-                    }
+                    for (const engine::OutdoorPiece& op : lb.furniture) place(op);
+                for (const engine::OutdoorPiece& op : beachFurniture) place(op);   // (the beach's loungers)
                 engine::FurnitureDrawCache outdoorDraw;
                 std::size_t pieces = 0, seats = 0;
                 for (const auto& [cell, list] : cells) {
@@ -6344,18 +6476,10 @@ bool LevelLoader::load(const std::string& path,
                     p.type = lb.type;
                     p.x = static_cast<float>(lb.site.x);
                     p.z = static_cast<float>(lb.site.y);
-                    // THE UNIVERSITY (campus milestone 4): its halls, quad and field by recipe, so
-                    // the citysim can house students in the residence hall and send them to class.
-                    // Beds: one student per ~45 m2 of floor (a dorm room, its share of the corridor, the
-                    // bathrooms and lounge -- measured against the beds campusPlan furnishes).
-                    if (lb.recipe == "teaching_hall") p.campus = 1;
-                    else if (lb.recipe == "campus_library") p.campus = 2;
-                    else if (lb.recipe == "residence_hall") {
-                        p.campus = 3;
-                        const double storeys = std::max(1.0, std::floor(static_cast<double>(lb.height) / 3.3));
-                        p.capacity = static_cast<int>(engine::area(lb.plan) * storeys / 45.0);
-                    } else if (lb.recipe == "campus_quad" || lb.recipe == "dorm_courtyard") p.campus = 4;
-                    else if (lb.recipe == "sports_field") p.campus = 5;
+                    // WHAT IT IS, to the citysim: its recipe (the place kind -- a teaching hall, a residence hall
+                    // -- and a home's dwellings come from it there, places.lua) and how many units it grew.
+                    p.recipe = lb.recipe;
+                    p.units = std::max<int>(1, static_cast<int>(lb.units.size()));
                     // The real door (ADR-0080): first unit that has one --
                     // the citysim snaps this place's entrance from a step
                     // outside it instead of from the centroid.
@@ -6402,14 +6526,20 @@ bool LevelLoader::load(const std::string& path,
                     }
                     for (const engine::LotBuilding::Area& ar : lb.areas)
                         cfg.activityAreas.push_back({ar.kind, ar.center.x, ar.center.y, ar.axis.x, ar.axis.y, ar.halfL, ar.halfW});
+                    // A PLAYGROUND (an open lot's, the swings and the frames): where the children play (activities.lua
+                    // `play`; Glenn, 2026-11-02: "play at parks and playgrounds") -- its box, a metre in off the fence
+                    if (lb.recipe == "playground" && lb.plan.size() >= 3) {
+                        const engine::OBB2 ob = engine::orientedBoundingBox(lb.plan);
+                        const int la = ob.longAxis();
+                        const double hl = ob.half[la] - 1.0, hw = ob.half[1 - la] - 1.0;
+                        if (hl > 2.0 && hw > 2.0)
+                            cfg.activityAreas.push_back({"playground", ob.center.x, ob.center.y, ob.axis[la].x, ob.axis[la].y, hl, hw});
+                    }
                     for (const engine::Poly2& lp : lb.loops) {
                         std::vector<std::array<double, 2>> pts;
                         for (const engine::Vec2& v : lp) pts.push_back({v.x, v.y});
                         if (pts.size() >= 3) cfg.jogLoops.push_back(std::move(pts));
                     }
-                    if (p.campus && std::getenv("RT_CAMPUS_DEBUG"))
-                        std::fprintf(stderr, "[campus place] %s role %d door (%.1f, %.1f) site (%.1f, %.1f) floor y %.2f beds %d\n",
-                                     lb.recipe.c_str(), p.campus, p.ex, p.ez, p.x, p.z, static_cast<double>(lb.baseY), p.capacity);
                     // ONE BUSINESS PER SHOP UNIT (storefronts plan, stage 1): each shopfront of the ground storey is
                     // its own place, of its trade's type and hours (trades.h), its door the entrance, its site a step
                     // inside -- the trade the facade drew, the interior was furnished for, and the fascia wears. A shop
@@ -6548,6 +6678,24 @@ bool LevelLoader::load(const std::string& path,
                         for (const engine::BuildingUnit& u : lb.units)
                             if (u.plan.size() >= 3) m2 += engine::area(u.plan) * (1.0 + std::max(0, u.params.floors));
                         p.floorArea = static_cast<float>(std::max(0.0, m2 - 60.0 * fronts));
+                    }
+                    // FLATS OVER THE SHOPS (Glenn, 2026-11-01: "build denser housing"): a shop building whose upper
+                    // floors are homes (BuildingParams::residential -- mixed use, a brick shop, a corner shop) is a
+                    // HOME as well, its floor the storeys above the ground. It housed nobody: 15,658 dwellings on
+                    // island_8_nature, 40% more than its homes.
+                    if (lb.type == "shop") {
+                        double flats = 0;
+                        for (const engine::BuildingUnit& u : lb.units)
+                            if (u.params.residential && u.plan.size() >= 3) flats += engine::area(u.plan) * std::max(0, u.params.floors);
+                        if (flats > 0) {
+                            engine::AuthoredPlace h = p;
+                            h.type = "home";
+                            h.units = 1;   // one block of flats, cut by its floor
+                            h.floorArea = static_cast<float>(flats);
+                            h.name.clear();
+                            cfg.places.push_back(std::move(h));
+                            p.floorArea = static_cast<float>(std::max(0.0, p.floorArea - flats));   // the shop is its ground floor
+                        }
                     }
                     if (!(fronts > 0 && lb.type == "shop")) cfg.places.push_back(std::move(p));
                 }
@@ -7399,6 +7547,20 @@ bool LevelLoader::load(const std::string& path,
             else if (w == "overcast") dc.weather = 4;
             else if (w == "storm") dc.weather = 5;
         }
+        if (dn.contains("climate") && dn["climate"].is_object()) {   // ADR-0340
+            const auto& cj = dn["climate"];
+            dc.hasClimate = true;
+            auto odds = [&](const char* key, float* out) {
+                if (cj.contains(key) && cj[key].is_array() && cj[key].size() == 4)
+                    for (int i = 0; i < 4; ++i) out[i] = cj[key][static_cast<std::size_t>(i)].get<float>();
+            };
+            odds("odds", dc.climate.summer);
+            odds("odds", dc.climate.winter);
+            odds("summer", dc.climate.summer);
+            odds("winter", dc.climate.winter);
+            dc.climate.prevailingFromDeg = cj.value("prevailingFrom", dc.climate.prevailingFromDeg);
+            dc.climate.windScale = cj.value("windScale", dc.climate.windScale);
+        }
         world.add<DayNightConfig>(world.create(), dc);
     }
 
@@ -7519,7 +7681,16 @@ bool LevelLoader::load(const std::string& path,
                             const double a = lattice(ix, iz, salt), b = lattice(ix + 1, iz, salt), c = lattice(ix, iz + 1, salt), d = lattice(ix + 1, iz + 1, salt);
                             return (a + (b - a) * tx) + ((c + (d - c) * tx) - (a + (b - a) * tx)) * tz;
                         };
-                        fp.character = [cells, ground, hubAt, noise](engine::Vec2 at) {
+                        // the island's height bands (its ground cover's): a street above the upland line is a hill
+                        // town's, more mountain the nearer the mountain line; a level without bands has no high ground
+                        double uplandH = 1e30, mountainH = 1e30;
+                        if (root.contains("terrain") && root["terrain"].contains("groundCover") && root["terrain"]["groundCover"].is_object()) {
+                            const nlohmann::json& gc = root["terrain"]["groundCover"];
+                            const double sea = root["terrain"].value("seaLevel", 0.0);
+                            uplandH = sea + gc.value("uplandHeight", 1e30);
+                            mountainH = sea + gc.value("mountainHeight", 1e30);
+                        }
+                        fp.character = [cells, ground, hubAt, noise, uplandH, mountainH](engine::Vec2 at) {
                             engine::StreetCharacter c;
                             const long long cx = static_cast<long long>(std::floor(at.x / 80.0)), cz = static_cast<long long>(std::floor(at.y / 80.0));
                             int votes[5] = {0, 0, 0, 0, 0}, n = 0;
@@ -7535,10 +7706,10 @@ bool LevelLoader::load(const std::string& path,
                             const double h = ground ? static_cast<double>(ground(at.x, at.y)) : 20.0;
                             double dHub = 1e9;
                             for (const engine::Vec2& hb : hubAt) dHub = std::min(dHub, static_cast<double>((hb - at).length()));
-                            auto smooth = [](double a, double b, double x) { const double t = std::clamp((x - a) / (b - a), 0.0, 1.0); return t * t * (3 - 2 * t); };
                             c.coastal = h < 5.0;
-                            c.wealth = std::clamp(0.38 + 0.4 * smooth(8.0, 70.0, h) + 0.7 * (noise(at.x, at.y, 650.0, 17u) - 0.5), 0.0, 1.0);
-                            c.age = std::clamp(1.0 - smooth(250.0, 1900.0, dHub) + 0.4 * (noise(at.x, at.y, 500.0, 91u) - 0.5), 0.0, 1.0);
+                            if (h > uplandH) c.highland = std::clamp(0.25 + 0.75 * (h - uplandH) / std::max(1.0, mountainH - uplandH), 0.0, 1.0);
+                            c.wealth = std::clamp(0.38 + 0.4 * smoothstep(8.0, 70.0, h) + 0.7 * (noise(at.x, at.y, 650.0, 17u) - 0.5), 0.0, 1.0);
+                            c.age = std::clamp(1.0 - smoothstep(250.0, 1900.0, dHub) + 0.4 * (noise(at.x, at.y, 500.0, 91u) - 0.5), 0.0, 1.0);
                             if (n == 0) { c.kind = engine::StreetCharacter::Rural; return c; }
                             const double avg = storeys / n;
                             int best = 2;
@@ -7818,7 +7989,8 @@ bool LevelLoader::load(const std::string& path,
                 const bool streetRecipes = cityRecipeTrees(root);
                 static const std::map<std::string, std::pair<std::string, std::string>> kStreetRecipe = {
                     {"oak", {"oak", "young"}}, {"beech", {"beech", "young"}}, {"maple", {"maple", ""}},
-                    {"coconut_palm", {"coconut_palm", ""}}, {"royal_palm", {"royal_palm", ""}}};
+                    {"coconut_palm", {"coconut_palm", ""}}, {"royal_palm", {"royal_palm", ""}},
+                    {"pine", {"pine", ""}}, {"spruce", {"spruce", "young"}}, {"birch", {"birch", ""}}};
                 std::vector<std::vector<RecipeTreePart>> recipeKits(kits.size());
                 std::vector<double> recipeTall(kits.size(), 0.0);
                 for (int kd = 0; kd < kKinds; ++kd) {
@@ -8283,6 +8455,23 @@ bool LevelLoader::load(const std::string& path,
             vc.farDistance = c.value("far", vc.farDistance);
             vc.ambient     = c.value("ambient", vc.ambient);
             vc.detailStrength = c.value("detailStrength", vc.detailStrength);
+            // the cloud types (ADR-0336): up to four, along the type axis; and the range when the weather is off
+            if (c.contains("types") && c["types"].is_array()) {
+                std::size_t k = 0;
+                for (const auto& tj : c["types"]) {
+                    if (k >= vc.types.size() || !tj.is_object()) break;
+                    auto& ty = vc.types[k++];
+                    if (tj.contains("profile") && tj["profile"].is_array() && tj["profile"].size() == 4)
+                        for (int i = 0; i < 4; ++i) ty.profile[i] = tj["profile"][i].get<float>();
+                    ty.density = tj.value("density", ty.density);
+                    ty.erosion = tj.value("erosion", ty.erosion);
+                    ty.anvil = tj.value("anvil", ty.anvil);
+                }
+            }
+            if (c.contains("typeRange") && c["typeRange"].is_array() && c["typeRange"].size() == 2) {
+                vc.typeLo = c["typeRange"][0].get<float>();
+                vc.typeHi = c["typeRange"][1].get<float>();
+            }
         }
         // Aerial-perspective fog (matches the offline tracer's Scene::fog). Lives
         // under "environment" alongside the sky; pushed to the renderer via the

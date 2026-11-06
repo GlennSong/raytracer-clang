@@ -148,10 +148,16 @@ private:
     std::vector<Walker> walkers_;
     // Shared pose meshes, acquired lazily per (outfit, pose): the walk cycle is
     // a handful of pre-built limb-swing poses the walkers hop between by phase.
-    engine::MeshHandle poseMesh(engine::AssetManager& assets, int outfit, int pose);
+    // (`bodyScale`: how tall the walker is against an adult -- a child's mesh has its head bigger, as a child's is, before
+    // the whole body is scaled down)
+    engine::MeshHandle poseMesh(engine::AssetManager& assets, int outfit, int pose, engine::Real bodyScale = 1);
     std::unordered_map<int, engine::MeshHandle> poseMeshes_;
     std::unordered_map<int, engine::MeshHandle> seatedMeshes_;   // by outfit: the walker sitting (M5)
+    // THE BOARDS under the walkers riding one (activities.lua `ride`): a skateboard group and a scooter group,
+    // their transforms rewritten each step
+    engine::Entity boardGroups_[2];
     std::unordered_map<int, engine::MeshHandle> groundSitMeshes_;   // by outfit: sitting on the grass
+    std::unordered_map<int, engine::MeshHandle> lieMeshes_;         // by outfit and pose: lying in the sun
     std::vector<char> haveWalker_;   // agentId -> has a body (reconcile scratch)
     std::vector<int> haveSet_;       // ...the ids marked (cleared next step, not the whole array)
     // THE FLICKER WATCH (Glenn: "agents flickering into view and then out"): a body removed and given back to the

@@ -634,7 +634,7 @@ S.fire_engine = function()
         add(kit.box_part({ 0.80, 0.04, 0.04 }, { 0, bodyY + bodyH + 0.16, lz0 + i * (lz1 - lz0) / n }, 3, "chrome"))
       end
       -- the LIGHT BAR on the cab roof, the front bumper and the pump panel's gauges behind the cab
-      add(kit.box_part({ 1.70, 0.13, 0.30 }, { 0, 3.10, 0.75 }, 2.5, "lamp_red"))
+      add(kit.box_part({ 1.70, 0.13, 0.30 }, { 0, 3.10, 0.75 }, 2.5, "beacon"))   -- (not a tail lamp: unlit for now)
       add(kit.box_part({ 2.44, 0.32, 0.22 }, { 0, 0.62, 1.55 + 0.11 }, 3, "chrome"))
       -- the rear: tail lamps on the body's back, the chassis rails under it
       car.markers = car.markers or {}
@@ -747,6 +747,25 @@ local function semi(trailer)
         add(kit.box_part({ 0.24, 0.05, 0.24 }, { sx * 0.60, 0.06, tFront - 3.5 }, 3, "chassis"))
         add(kit.box_part({ 0.12, 0.22, 3.2 }, { sx * 0.48, floorY - 0.24, (tA1 + tA2) * 0.5 }, 3, "chassis"))
         add(kit.box_part({ 0.62, 0.62, 0.02 }, { sx * 1.02, 0.55, tA1 - 0.62 }, 3, "trim"))   -- mudflaps
+      end
+      -- THE TRAILER'S LAMPS (#186; FMVSS 108's set for a trailer over 2 m wide): on the tail, a stop/tail lamp and an
+      -- amber turn lamp a side; amber side markers at the front and the middle and red ones at the back, low along
+      -- each side; clearance lamps at the top corners (amber ahead, red behind). All lit from the tractor's lamps.
+      car.markers = car.markers or {}
+      local topY = trailer == "tanker" and floorY + 0.25 or 4.11 - 0.10
+      for _, sx in ipairs({ 1, -1 }) do
+        local side = sx * (trW * 0.5 + 0.015)
+        add(kit.box_part({ 0.24, 0.14, 0.04 }, { sx * 0.95, 1.05, tBack - 0.02 }, 2.5, "lamp_red"))
+        add(kit.box_part({ 0.14, 0.14, 0.04 }, { sx * 0.62, 1.05, tBack - 0.02 }, 2.5, "lamp_amber"))
+        car.markers[#car.markers + 1] = { name = sx > 0 and "taillight_l" or "taillight_r", pos = { sx * 0.95, 1.05, tBack - 0.04 } }
+        for _, z in ipairs({ tFront - 0.30, tz }) do
+          add(kit.box_part({ 0.03, 0.06, 0.12 }, { side, floorY + 0.06, z }, 2.5, "lamp_marker"))
+        end
+        add(kit.box_part({ 0.03, 0.06, 0.12 }, { side, floorY + 0.06, tBack + 0.30 }, 2.5, "lamp_red"))
+        if trailer ~= "tanker" then
+          add(kit.box_part({ 0.10, 0.06, 0.03 }, { sx * (trW * 0.5 - 0.08), topY, tFront + 0.015 }, 2.5, "lamp_marker"))
+          add(kit.box_part({ 0.10, 0.06, 0.03 }, { sx * (trW * 0.5 - 0.08), topY, tBack - 0.015 }, 2.5, "lamp_red"))
+        end
       end
       -- the under-ride (ICC) bar at the tail
       add(kit.box_part({ trW - 0.3, 0.12, 0.12 }, { 0, 0.55, tBack + 0.25 }, 3, "chassis"))

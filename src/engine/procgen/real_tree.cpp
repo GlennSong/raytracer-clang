@@ -18,10 +18,6 @@ constexpr double kPi = 3.14159265358979;
 const char* const kNames[] = {"spruce", "fir", "pine", "oak", "beech", "birch", "maple", "aspen", "willow", "alder", "shrub",
                               "royal_palm", "coconut_palm", "monkeypod", "poinciana", "jacaranda", "plumeria"};
 
-double smooth01(double a, double b, double x) {
-    const double t = std::clamp((x - a) / (b - a), 0.0, 1.0);
-    return t * t * (3.0 - 2.0 * t);
-}
 
 Vec3 perpTo(const Vec3& d) {
     const Vec3 a = std::abs(d.y) < 0.9 ? Vec3(0, 1, 0) : Vec3(1, 0, 0);
@@ -185,7 +181,7 @@ void trunk(RenderMesh& bark, ProcRng& r, double h, double top, double r0, const 
         const double flare = 1.0 + 0.45 * std::exp(-y / 0.7);
         pts.push_back(Vec3(off.x, y, off.z));
         rad.push_back(std::max(0.03, r0 * flare * std::pow(1.0 - 0.85 * y / h, 1.1)));
-        Vec3 c = sp.bark + (sp.barkHigh - sp.bark) * smooth01(0.35 * h, 0.7 * h, y);
+        Vec3 c = sp.bark + (sp.barkHigh - sp.bark) * smoothstep(0.35 * h, 0.7 * h, y);
         if (birch) c = c * (r.next() < 0.3 ? 0.35 : 1.0);   // the black bands
         col.push_back(c * r.in(0.85, 1.1));
     }
@@ -254,7 +250,7 @@ void conifer(RealTree& t, RealSpecies s, ProcRng& r, double h) {
                 const double crownHere = std::max(0.3, R * std::pow(std::max(0.0, 1.0 - (p.y - cb) / (h - cb)), 0.85));
                 const double rr = std::clamp(std::sqrt(rel.x * rel.x + rel.z * rel.z) / crownHere, 0.0, 1.2);
                 const Vec3 n = normalize(Vec3(rel.x, 0, rel.z) / crownHere + up * 0.55);
-                double ao = (0.42 + 0.58 * smooth01(0.1, 1.0, rr)) * (0.72 + 0.28 * tc);
+                double ao = (0.42 + 0.58 * smoothstep(0.1, 1.0, rr)) * (0.72 + 0.28 * tc);
                 const Vec3 c = sp.tint * (ao * r.in(0.85, 1.12));
                 const Vec3 sideA = rotateAbout(side0, along, r.in(-0.35, 0.35));
                 card(t.foliage, p, rotateAbout(along, up, r.in(-0.25, 0.25)), sideA, len, len * 0.85, n, c, r.below(kTiles * kTiles));
@@ -357,7 +353,7 @@ void shellCrown(RealTree& t, RealSpecies s, ProcRng& r, double h) {
             Vec3 along = normalize(outDir + Vec3(r.in(-0.6, 0.6), r.in(-0.4, 0.5) - sp.hang, r.in(-0.6, 0.6)));
             const Vec3 side = rotateAbout(perpTo(along), along, r.in(0, kPi));
             const double sz = sp.cardSize * r.in(0.8, 1.2);
-            const double ao = (0.40 + 0.60 * smooth01(0.35, 1.0, rr)) * (0.72 + 0.28 * low);
+            const double ao = (0.40 + 0.60 * smoothstep(0.35, 1.0, rr)) * (0.72 + 0.28 * low);
             if (sp.bloomShare <= 0) {
                 card(t.foliage, base, along, side, sz, sz * 0.9, n, sp.tint * (ao * r.in(0.82, 1.15)), r.below(kTiles * kTiles));
                 continue;
@@ -365,7 +361,7 @@ void shellCrown(RealTree& t, RealSpecies s, ProcRng& r, double h) {
             // in flower: the flower tile (the atlas' last) in the bloom colour, flowers carried on the OUTSIDE of the
             // crown (the share rises toward the shell and the top); the leaves on the other three tiles
             const double lift = r.in(0.82, 1.15);
-            const bool flower = r.next() < sp.bloomShare * (0.55 + 0.6 * smooth01(0.5, 1.0, rr)) * (0.75 + 0.5 * low);
+            const bool flower = r.next() < sp.bloomShare * (0.55 + 0.6 * smoothstep(0.5, 1.0, rr)) * (0.75 + 0.5 * low);
             const Vec3 tint = flower ? sp.bloom * (0.55 + 0.45 * ao) * lift : sp.tint * (ao * lift);
             const int tile = flower ? kTiles * kTiles - 1 : r.below(kTiles * kTiles - 1);
             card(t.foliage, base, along, side, flower ? sz * 0.85 : sz, (flower ? sz * 0.85 : sz) * 0.9, n, tint, tile);

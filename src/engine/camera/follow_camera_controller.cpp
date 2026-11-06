@@ -24,11 +24,6 @@ Real smoothDamp(Real current, Real target, Real& velocity, Real smoothTime,
 
 // Degrees wrapped to [-180, 180] — yaw smoothing must take the short arc, or
 // a 350° -> 10° heading change swings the camera the long way round.
-Real wrapDegrees(Real a) {
-    while (a > 180.0) a -= 360.0;
-    while (a < -180.0) a += 360.0;
-    return a;
-}
 
 }  // namespace
 

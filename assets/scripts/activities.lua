@@ -5,8 +5,10 @@
 --
 -- activities.<name> = {
 --   sites      = { kinds } -- places: cafe restaurant bar club shop supermarket civic park library teaching quad field office;
---                             spots: seat bed stand loop pitch watch; areas: lawn pitch plaza (a paseo); or street
---   tags       = { campus | park | sports }   -- a spot site must carry them all
+--                             spots: seat bed stand loop pitch watch; areas: lawn pitch plaza (a paseo) beach shore playground;
+--                             or street;
+--                             or side_job (the agent's own evening job, on a shift night)
+--   tags       = { campus | park | sports | beach }   -- a spot site must carry them all
 --   hours      = { lo, hi }    when it is offered (default all day; may wrap midnight)
 --   minutes    = { lo, hi }    how long (default: what that kind of site keeps a visitor)
 --   distance   = { lo, hi }    straight line from where the agent stands (default 0-650 m)
@@ -26,7 +28,8 @@
 activities = {
   order = { "bench", "across_town", "park_visit", "coffee", "browse", "groceries", "meal", "civic_visit",
             "walk_round_block", "lunch", "campus_bench", "jog", "study", "quad_time", "kickabout", "watch_game",
-            "chat", "picnic", "sunbathe", "catch", "errand", "dinner", "drinks", "clubbing", "college_club" },
+            "chat", "picnic", "sunbathe", "catch", "beach_day", "lounger", "beach_stroll", "errand", "dinner", "drinks", "clubbing", "college_club", "side_job",
+            "play", "tag", "skate", "scoot" },
 
   -- A DAY OFF'S STOPS
   bench            = { sites = { "seat" }, distance = { 30, 500 }, nearest = 4, perform = "spot" },
@@ -56,6 +59,23 @@ activities = {
   clubbing         = { sites = { "club" }, hours = { 21.5, 2.5 }, distance = { 100, 2500 }, nearest = 3 },
   college_club     = { sites = { "teaching", "library" }, hours = { 18, 22 }, minutes = { 50, 90 }, distance = { 0, 1e9 },
                        nearest = 2 },
+  -- AN EVENING SHIFT (roles.lua side_job): on a shift night, to the agent's own evening job, there until the evening
+  -- (the shift) is over -- its length is the shift's, so the stop outlasts it
+  side_job         = { sites = { "side_job" }, minutes = { 600, 600 }, distance = { 0, 1e9 }, nearest = 1 },
+
+  -- A CHILD'S DAY OUT (Glenn, 2026-11-02: "The kids should at least go and play. Roam around the neighborhood on
+  -- skateboards or play at parks and playgrounds"): the playground, a game of tag on a park's lawn, a ride round the
+  -- block on a skateboard or a scooter (ride = { kind, pace = { lo, hi } times walking speed })
+  play             = { sites = { "playground" }, hours = { 8, 20 }, distance = { 0, 900 }, nearest = 3, perform = "roam",
+                       formation = "roam", minutes = { 30, 75 }, min_players = 1, gather_minutes = 15,
+                       roles = { { name = "kid", n = 8, speed = { 0.8, 2.6 } } } },
+  tag              = { sites = { "lawn" }, hours = { 9, 20 }, distance = { 0, 700 }, nearest = 4, perform = "roam",
+                       formation = "roam", minutes = { 15, 30 }, min_players = 2, gather_minutes = 10,
+                       roles = { { name = "runner", n = 6, speed = { 1.2, 3.2 } } } },
+  skate            = { sites = { "street" }, hours = { 8, 20 }, distance = { 150, 600 }, perform = "wander",
+                       walkers_only = true, ride = { kind = "skateboard", pace = { 2.0, 2.6 } } },
+  scoot            = { sites = { "street" }, hours = { 8, 20 }, distance = { 150, 500 }, perform = "wander",
+                       walkers_only = true, ride = { kind = "scooter", pace = { 1.5, 2.0 } } },
 
   -- A STUDENT'S BREAK
   campus_bench     = { sites = { "seat" }, tags = { "campus" }, distance = { 0, 600 }, nearest = 6, perform = "spot" },
@@ -76,32 +96,46 @@ activities = {
   -- ON THE LAWNS (a park's, the quad's): groups that settle rather than run about. A CHAT -- a ring standing, facing
   -- in, that anyone passing may join (up to six); a PICNIC -- a ring sitting on the grass; SUNBATHING -- lying side
   -- by side; CATCH -- two, ten metres apart, stepping about
-  chat             = { sites = { "lawn", "plaza" }, hours = { 7, 22 }, distance = { 0, 650 }, nearest = 4, perform = "roam",
+  chat             = { sites = { "lawn", "plaza", "beach" }, hours = { 7, 22 }, distance = { 0, 650 }, nearest = 4, perform = "roam",
                        formation = "circle", radius = 0.8, minutes = { 10, 25 }, min_players = 2, gather_minutes = 12,
                        roles = { { name = "talker", n = 6, speed = { 1.1, 1.6 }, pose = "stand" } } },
-  picnic           = { sites = { "lawn" }, hours = { 11, 15.5 }, distance = { 0, 650 }, nearest = 4, perform = "roam",
+  picnic           = { sites = { "lawn", "beach" }, hours = { 11, 15.5 }, distance = { 0, 650 }, nearest = 4, perform = "roam",
                        formation = "circle", radius = 0.85, minutes = { 30, 60 }, min_players = 1, gather_minutes = 15,
                        roles = { { name = "picnicker", n = 4, speed = { 1.1, 1.6 }, pose = "sit_ground" } } },
-  sunbathe         = { sites = { "lawn" }, hours = { 10, 17 }, distance = { 0, 650 }, nearest = 4, perform = "roam",
-                       formation = "spread", radius = 1.1, minutes = { 20, 45 }, min_players = 1, gather_minutes = 10,
+  sunbathe         = { sites = { "lawn", "beach" }, hours = { 10, 17 }, distance = { 0, 650 }, nearest = 4, perform = "roam",
+                       formation = "spread", radius = 1.6, minutes = { 20, 45 }, min_players = 1, gather_minutes = 10,
                        roles = { { name = "sunbather", n = 2, speed = { 1.1, 1.6 }, pose = "lie" } } },
-  catch            = { sites = { "lawn" }, hours = { 9, 20 }, distance = { 0, 650 }, nearest = 4, perform = "roam",
+  catch            = { sites = { "lawn", "beach" }, hours = { 9, 20 }, distance = { 0, 650 }, nearest = 4, perform = "roam",
                        formation = "pair", radius = 9, minutes = { 10, 25 }, min_players = 2, gather_minutes = 10,
                        roles = { { name = "catcher", n = 2, speed = { 1.1, 1.6 }, pose = "stand" } } },
+  -- A DAY AT THE BEACH (Glenn: "people actually hanging out on the beach lounging and sunbathing"): an hour or two on
+  -- the sand, lying out in fours, worth a longer walk than a lawn
+  beach_day        = { sites = { "beach" }, hours = { 10, 18 }, distance = { 0, 2000 }, nearest = 4, perform = "roam",
+                       formation = "spread", radius = 2.0, minutes = { 60, 150 }, min_players = 1, gather_minutes = 10,
+                       roles = { { name = "sunbather", n = 4, speed = { 1.1, 1.6 }, pose = "lie" } } },
+  -- ...or on a LOUNGER under an umbrella (Glenn, 2026-11-02: "lounge chairs -- a new type of chair that the agents and
+  -- player can use"): the beach's row for hire, one of the six nearest free
+  lounger          = { sites = { "bed" }, tags = { "beach" }, hours = { 9, 18 }, distance = { 0, 2000 }, nearest = 6,
+                       perform = "spot", minutes = { 60, 150 } },
+  -- ...and A STROLL on the sand (Glenn: "people walking around the beach too -- on the sand"): up to three, ambling
+  -- from point to point along the shore's wet sand
+  beach_stroll     = { sites = { "shore" }, hours = { 8, 20 }, distance = { 0, 2000 }, nearest = 4, perform = "roam",
+                       formation = "roam", minutes = { 15, 40 }, min_players = 1, gather_minutes = 15,
+                       roles = { { name = "stroller", n = 3, speed = { 0.8, 1.2 }, pose = "stand" } } },
 }
 
 menus = {
-  order = { "outing", "errand", "lunch", "student_break", "evening", "student_evening" },
+  order = { "outing", "errand", "lunch", "student_break", "evening", "student_evening", "kid_outing" },
 
   -- A DAY OFF, by the hour: coffee and the park in the morning; the shops and lunch at midday; errands and the park in
   -- the afternoon; dinner and a coffee in the evening -- a bench or a trip across town now and then all day
   outing = {
     { hours = { 5, 10.5 }, first = { { "bench", 0.20 }, { "across_town", 0.10 } },
       pick = { { "coffee", 4 }, { "park_visit", 3 }, { "groceries", 0.5 }, { "civic_visit", 0.3 }, { "walk_round_block", 3 } } },
-    { hours = { 10.5, 14 }, first = { { "bench", 0.25 }, { "across_town", 0.14 } },
+    { hours = { 10.5, 14 }, first = { { "beach_day", 0.35 }, { "lounger", 0.30 }, { "beach_stroll", 0.20 }, { "bench", 0.25 }, { "across_town", 0.14 } },
       pick = { { "browse", 2.5 }, { "meal", 2 }, { "coffee", 2 }, { "park_visit", 3 }, { "civic_visit", 0.7 }, { "walk_round_block", 2 },
                { "picnic", 1.5 }, { "sunbathe", 0.8 }, { "chat", 1 } } },
-    { hours = { 14, 17.5 }, first = { { "bench", 0.30 }, { "across_town", 0.14 } },
+    { hours = { 14, 17.5 }, first = { { "beach_day", 0.40 }, { "lounger", 0.30 }, { "beach_stroll", 0.20 }, { "bench", 0.30 }, { "across_town", 0.14 } },
       pick = { { "browse", 2.5 }, { "groceries", 1.5 }, { "park_visit", 3 }, { "coffee", 1.5 }, { "civic_visit", 0.7 }, { "walk_round_block", 3 },
                { "sunbathe", 1 }, { "catch", 0.8 }, { "chat", 1 }, { "picnic", 0.5 } } },
     { hours = { 17.5, 23 }, first = { { "bench", 0.15 }, { "across_town", 0.10 } },
@@ -137,10 +171,19 @@ menus = {
     { hours = { 23.5, 16 }, first = {}, pick = { { "clubbing", 3 }, { "drinks", 2 } } },
   },
 
-  -- A STUDENT'S EVENING: a college club's meeting early, then out like anyone
+  -- A STUDENT'S EVENING: their evening shift on a shift night (roles.lua side_job); else a college club's meeting
+  -- early, then out like anyone
   student_evening = {
-    { hours = { 16, 22 }, first = { { "college_club", 0.45 } },
+    { hours = { 16, 22 }, first = { { "side_job", 1.0 }, { "college_club", 0.45 } },
       pick = { { "dinner", 2 }, { "drinks", 2 }, { "chat", 0.8 }, { "quad_time", 0.5 } } },
     { hours = { 22, 16 }, first = {}, pick = { { "clubbing", 3 }, { "drinks", 2.5 } } },
+  },
+
+  -- A CHILD'S DAY OUT: the playground and a ride round the block first, else the park, a game, a picnic
+  kid_outing = {
+    { hours = { 7, 20 }, first = { { "play", 0.30 }, { "skate", 0.15 }, { "scoot", 0.10 } },
+      pick = { { "park_visit", 3 }, { "tag", 2 }, { "catch", 1.5 }, { "skate", 1 }, { "scoot", 0.7 },
+               { "walk_round_block", 1 }, { "chat", 0.5 }, { "picnic", 0.5 } } },
+    { hours = { 20, 7 }, first = {}, pick = { { "walk_round_block", 1 } } },
   },
 }

@@ -1,4 +1,5 @@
 #include "city_svg.h"
+#include "polyline.h"   // distToSegment
 
 #include "../../../log.h"
 
@@ -165,20 +166,13 @@ std::vector<SidewalkCrossing> findSidewalkRoadCrossings(
             for (int cx = cellOf(std::min(A.x, B.x) - hw); cx <= cellOf(std::max(A.x, B.x) + hw); ++cx)
                 cells[key(cx, cz)].push_back(ei);
     }
-    auto segDist = [](const Vec2& p, const Vec2& a, const Vec2& b) {
-        const Vec2 ab = b - a;
-        const double l2 = ab.lengthSquared();
-        double t = l2 > 1e-12 ? dot(p - a, ab) / l2 : 0.0;
-        t = std::max(0.0, std::min(1.0, t));
-        return (a + ab * t - p).length();
-    };
     auto nearestEdge = [&](const Vec2& p) {
         int best = -1;
         double bestD = 1e30;
         auto it = cells.find(key(cellOf(p.x), cellOf(p.y)));
         if (it == cells.end()) return best;
         for (int ei : it->second) {
-            const double d = segDist(p, g.nodes[g.edges[ei].a].pos, g.nodes[g.edges[ei].b].pos);
+            const double d = distToSegment(p, g.nodes[g.edges[ei].a].pos, g.nodes[g.edges[ei].b].pos);
             if (d < bestD) { bestD = d; best = ei; }
         }
         return best;

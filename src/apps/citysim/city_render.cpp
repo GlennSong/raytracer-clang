@@ -26,13 +26,19 @@
 #include <imgui.h>                                   // Living City debug section
 #endif
 #include "../../engine/procgen/vehicle/occupant.h"   // people seated on the bus
+#include "../../engine/player/driver_seat.h"         // seatedPose: a rider astride a bike
 #include "../../engine/interior_occupants.h"         // people inside a streamed interior (campus M4)
 #include "../../engine/procgen/furniture_kit.h"
+#include "../../engine/furniture_draw.h"
+#include "../../engine/board_meshes.h"   // the boards the riders ride   // spawnFurnitureGroups: the beach's towels and umbrellas
 #include "../../engine/procgen/city/building_records.h"
+#include "../../engine/procgen/city/building_uses.h"   // a home's use picks its dwellings' rule
 #ifdef RT_ENABLE_SCRIPTING
 #include "scripting/agent_goals.h"      // scripted goal tables (ADR-0064)
 #include "scripting/activities_lua.h"   // the activity catalog (activities.lua)
 #include "scripting/roles_lua.h"         // the role catalog (roles.lua)
+#include "scripting/place_kinds_lua.h"   // the place kinds and dwellings (places.lua)
+#include "scripting/people_lua.h"        // ages, life stages, households (people.lua)
 #include "scripting/signals_lua.h"       // the signals' cycle times (signals.lua)
 #include "scripting/vehicle_body.h"     // scripted fleet bodies (ADR-0065)
 #include "../../engine/scripting/script_vm.h"
@@ -100,7 +106,7 @@ void refreshBounds(InstanceGroup* g) {
 bool CityRenderSystem::carOccupied(int ai) const {
     if (ai < 0 || ai >= static_cast<int>(sim_.agents().size())) return false;
     if (ai == playerRidingAgent_ || ai == playerSeatAgent_) return true;   // the car you are in
-    return sim_.agents()[static_cast<std::size_t>(ai)].moving || sim_.isBus(ai) || sim_.isTaxi(ai);
+    return sim_.agents()[static_cast<std::size_t>(ai)].moving || sim_.onService(ai);
 }
 
 Vec2 CityRenderSystem::drawnAgentPos(int i, Vec2* heading) const {
@@ -165,6 +171,7 @@ int CityRenderSystem::slotFor(int ai, int variants) const {
     int v = sim_.ambientSlotFor(a.vehicle >= 0 ? a.vehicle : 0);
     if (v >= variants) v %= variants;
     if (busVariant_ >= 0 && sim_.isBus(ai) && busVariant_ < variants) v = busVariant_;
+    if (taxiVariant_ >= 0 && sim_.isTaxi(ai) && taxiVariant_ < variants) v = taxiVariant_;
     if (fireVariant_ >= 0 && fireVariant_ < variants && a.vehicle >= 0 &&
         a.vehicle < static_cast<int>(sim_.vehicles().size()) &&
         sim_.vehicles()[static_cast<std::size_t>(a.vehicle)].type == VehicleType::FireEngine) v = fireVariant_;
@@ -448,6 +455,42 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
     // level. Rebuilt fresh each build() so a reload doesn't accumulate places.
     places_ = PlaceMap{};
     placeOfAuthored_.assign(authoredPlaces_.size(), kNoPlace);
+#ifdef RT_ENABLE_SCRIPTING
+    {   // THE PLACE KINDS (places.lua): what each place is, its tags, and how a home splits into dwellings
+        const std::string code = engine::loadScriptCode("places.lua", "");
+        if (!code.empty()) {
+            engine::ScriptVM vm;
+            std::string err;
+            PlaceKindCatalog kinds;
+            if (vm.doString(code, &err) && engine::loadPlaceKindCatalog(vm, kinds, &err)) {
+                LOG_INFO << "[citysim] place kinds: " << kinds.kinds.size() << ", dwelling rules: " << kinds.dwellings.size() << " (places.lua)";
+                sim_.setPlaceKinds(std::move(kinds));
+            } else {
+                LOG_WARN << "[citysim] places.lua: " << err << " (using the built-in place kinds)";
+            }
+        }
+    }
+    {   // THE PEOPLE (people.lua): ages, life stages and the households the dwellings are filled with
+        const std::string code = engine::loadScriptCode("people.lua", "");
+        if (!code.empty()) {
+            engine::ScriptVM vm;
+            std::string err;
+            PeopleCatalog people;
+            if (vm.doString(code, &err) && engine::loadPeopleCatalog(vm, people, &err)) {
+                LOG_INFO << "[citysim] people: " << people.bands.size() << " age bands, " << people.households.size()
+                         << " household types (people.lua)";
+                sim_.setPeople(std::move(people));
+            } else {
+                LOG_WARN << "[citysim] people.lua: " << err << " (using the built-in people)";
+            }
+        }
+    }
+#endif
+    const PlaceKindCatalog& kinds = sim_.placeKinds();
+    const uint32_t kBeds = kinds.tag("beds");
+    int homeDwellings = 0, hallBeds = 0;
+    int bySize[6] = {0};   // dwellings by bedrooms: studio, 1 ... 4, 5+
+    std::vector<int> beds;
     for (const engine::AuthoredPlace& ap : authoredPlaces_) {
         PlaceType type;
         if (!parsePlaceType(ap.type, type)) {
@@ -471,9 +514,34 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
                                         ap.name, ap.hasEntrance ? &doorHint : nullptr);
         placeOfAuthored_[static_cast<std::size_t>(&ap - authoredPlaces_.data())] = pid;
         if (synthetic) places_.setAuthoredHours(pid, false);
-        if (ap.campus) places_.setCampus(pid, ap.campus);
+        const int kind = kinds.kindFor(ap.recipe, type);
+        if (kind >= 0) {
+            const PlaceKind& pk = kinds.kinds[static_cast<std::size_t>(kind)];
+            places_.setKind(pid, kind, pk.tags);
+            // A HALL's beds: one per so much of its floor (its kind's bed_m2)
+            if (pk.m2PerBed > 0 && ap.capacity == 0 && ap.floorArea > 0) {
+                places_.setCapacity(pid, static_cast<int>(ap.floorArea / pk.m2PerBed));
+                hallBeds += places_[pid].capacity;
+            }
+            // A HOME's dwellings, one household each: its floor cut by the rule for its use (house, apartments)
+            if (type == PlaceType::Home && !(pk.tags & kBeds)) {
+                const DwellingRule* rule = kinds.dwellingRule(engine::floorUseFor(ap.recipe, "home"));
+                if (rule) {
+                    beds.clear();
+                    dwellingsOf(kinds, *rule, ap.floorArea, ap.units, beds);
+                    places_.setDwellings(pid, beds);
+                    homeDwellings += static_cast<int>(beds.size());
+                    for (int b : beds) ++bySize[std::clamp(b, 0, 5)];
+                }
+            }
+        }
         if (ap.floorArea > 0) places_.setFloorArea(pid, ap.floorArea);
     }
+    if (homeDwellings > 0)
+        LOG_INFO << "[citysim] homes: " << places_.countOfType(PlaceType::Home) << " places, " << homeDwellings
+                 << " dwellings (studio " << bySize[0] << ", 1-bed " << bySize[1] << ", 2-bed " << bySize[2] << ", 3-bed "
+                 << bySize[3] << ", 4-bed " << bySize[4] << ", 5+ " << bySize[5] << ")"
+                 << (hallBeds > 0 ? ", hall beds " + std::to_string(hallBeds) : std::string());
 
     // DENSITY population (roads-v2.1 4c): -1 counts are computed from the
     // graph itself — cars per LANE-km of carriageway, walkers per km of
@@ -502,6 +570,25 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
         LOG_INFO << "[citysim] density population: " << carCount << " cars ("
                  << laneKm << " lane-km), " << pedCount << " walkers ("
                  << walkKm << " sidewalk-km)";
+        // NO MORE PEOPLE THAN HOMES (Glenn, 2026-11-01: "Do a cap for now"). The streets ask for so many; the
+        // dwellings and the halls' beds hold so many (planHouseholds, the same draw assignPlaces makes). A density
+        // population is cut to what is housed, cars and walkers alike, keeping walkers enough for the children and
+        // the students; the shortfall is the generator's to build. An authored count is the level's word: kept, and
+        // whoever it holds past the housing is counted unhoused.
+        if (homeDwellings > 0) {
+            const int asked = carCount + pedCount;
+            const HouseholdPlan fit = planHouseholds(sim_.people(), places_, kBeds, asked, pedCount, params_.seed);
+            const int housed = static_cast<int>(fit.people.size());
+            if (housed < asked) {
+                const int cars = std::min(carCount, std::max(0, housed - fit.walkersOnly));
+                const int capped = std::min(cars, static_cast<int>(std::lround(static_cast<double>(carCount) * housed / asked)));
+                LOG_INFO << "[citysim] housing holds " << housed << " of the " << asked << " the streets ask for: "
+                         << capped << " cars, " << housed - capped << " walkers (" << asked - housed
+                         << " short: more dwellings wanted)";
+                carCount = capped;
+                pedCount = housed - capped;
+            }
+        }
     }
     // THE FLEET CATALOGUE, loaded before the sim builds. Drivers take their body
     // at build time, so the sim has to know the real sizes first — the recipes
@@ -545,6 +632,7 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
                 LOG_WARN << "citysim fleet '" << params_.fleet << "': " << ferr << " — keeping the default fleet";
         }
         carConfigs_.clear();
+        carSeatGeom_.clear();
         if (!scriptOk) {
         } else if (int slots = engine::fleetSlotCount(fleetVM_); slots > 0) {
             // THE ASSET decides how many cars the fleet has. This used to be a
@@ -577,7 +665,9 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
                 // ...and the FIRE ENGINE, stationed in the fire stations' bays (never dealt to traffic), by its name
                 // too -- first, so the built-in table's type for its slot number (it stands where the bus did) is
                 // never read
+                // ...and the TAXI, dealt to the cabs alone (a yellow cab with nobody's fare is not ambient traffic)
                 if (className == "fire_engine") { fireVariant_ = v; body.type = VehicleType::FireEngine; }
+                else if (className == "taxi") { taxiVariant_ = v; body.type = VehicleType::Taxi; }
                 else if (className == "bus") { busVariant_ = v; body.type = VehicleType::Bus; }
                 else if (body.type == VehicleType::Bus) busVariant_ = v;
                 else if (body.type == VehicleType::FireEngine) body.type = VehicleType::BoxTruck;
@@ -587,6 +677,7 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
                 if (!engine::loadFleetHandling(fleetVM_, v, handling, &hErr))
                     LOG_WARN << "citysim vehicles fleet[" << v << "]: " << hErr << " (it cannot be made physical)";
                 carConfigs_.push_back(handling.config);
+                carSeatGeom_.push_back(handling.seat);
                 catalogue.push_back(body);
             }
             LOG_INFO << "[citysim] fleet: " << slots << " slots, bus variant "
@@ -694,9 +785,34 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
                 const engine::FurnitureAsset* fa = flib.find(static_cast<engine::Piece>(ip.piece));
                 if (!fa) continue;
                 bool outdoor = false;
-                for (const std::string& tg : fa->tags) outdoor = outdoor || tg == "outdoor";
+                uint32_t tags = 0;   // (the library's tags the catalog knows: a lounger's "beach")
+                for (const std::string& tg : fa->tags) {
+                    outdoor = outdoor || tg == "outdoor";
+                    tags |= spotTagFromName(tg);
+                }
                 if (!outdoor) continue;
                 for (const engine::FurnVerb& v : fa->verbs) {
+                    // A PLACE TO LIE (a sun lounger, a towel; Glenn, 2026-11-02): one spot for the verb, the middle of
+                    // the spots it takes, the body's feet pointing away from the eye at its head
+                    if (v.verb == engine::Verb::Lie) {
+                        Vec3 mid(0, 0, 0);
+                        int k = 0;
+                        for (std::size_t q = 0; q < fa->spots.size(); ++q)
+                            if (v.spots & (1u << q)) { mid = mid + fa->spots[q].at; ++k; }
+                        if (k == 0) continue;
+                        mid = mid * (1.0 / k);
+                        const Vec3 at = engine::piecePoint(ip.xform, mid), eye = engine::piecePoint(ip.xform, v.eye);
+                        const Vec2 along(at.x - eye.x, at.z - eye.z);
+                        if (along.lengthSquared() < 1e-6) continue;
+                        CitySim::SeatSpot s;
+                        s.kind = SpotKind::Lie;
+                        s.pos = Vec2(at.x, at.z);
+                        s.face = normalize(along);
+                        s.hip = at.y;
+                        s.tags = tags;
+                        seats.push_back(s);
+                        continue;
+                    }
                     if (v.verb != engine::Verb::Sit) continue;
                     for (std::size_t k = 0; k < fa->spots.size(); ++k) {
                         if (!(v.spots & (1u << k))) continue;
@@ -706,6 +822,7 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
                         s.pos = Vec2(at.x, at.z);
                         s.face = normalize(Vec2(f.x, f.z));
                         s.hip = at.y;
+                        s.tags = tags;
                         seats.push_back(s);
                     }
                 }
@@ -988,11 +1105,12 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
             engine::loadGoalTable(vm, pedName, ped, &err) &&
             engine::loadGoalTable(vm, drvName, driver, &err)) {
             sim_.setGoalTables(std::move(ped), std::move(driver));
-            // The stroller role's own day, when the script has one.
+            // The day OUT's own table, when the script has one (`stroller`): every role that spends the day out.
             citysim::GoalTable stroll;
             std::string serr;
             if (!params_.wander && engine::loadGoalTable(vm, "stroller", stroll, &serr))
-                sim_.setRoleTable("stroller", std::move(stroll));
+                for (const ResidentRole& r : sim_.roles().roles)
+                    if (!r.day.commute) sim_.setRoleTable(r.name, stroll);
         } else {
             LOG_WARN << "citysim agents script: " << err << " (using built-ins)";
         }
@@ -1009,6 +1127,9 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
     if (!std::getenv("RT_NOCACHE")) sim_.setPopulationCacheDir("cache/population");
     { const auto tT0 = std::chrono::steady_clock::now();
     sim_.assignPlaces(places_, nav_);
+    if (!sim_.households().households.empty())
+        LOG_INFO << "[citysim] population: " << sim_.populationLine()
+                 << (sim_.unhousedCount() > 0 ? ", " + std::to_string(sim_.unhousedCount()) + " unhoused (more than the housing holds)" : std::string());
     {   // THE ACTIVITY SPOTS, by kind and where (tagged once the places are known)
         int byKind[static_cast<int>(SpotKind::Count)] = {0}, campus = 0, sports = 0, campusJog = 0;
         for (const CitySim::ActivitySpot& sp : sim_.spots()) {
@@ -1319,6 +1440,7 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
             InstanceGroup g;
             g.mesh = mh;
             g.material = carMaterial();
+            g.material.flags |= engine::RenderMaterial::FLAG_LAMP_STATE;   // its lenses light by the mask (ADR-0342)
             g.renderLayer = engine::LayerSim;   // debug layer toggle
             g.drawClass = engine::DrawClass::SimBody;
             world.add<InstanceGroup>(e, g);
@@ -1364,6 +1486,22 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
                                         Vec3(0.52, 0.36, 0.25), 24.0, "city:busrider1");
             busRiderGroups_[2] = person(Vec3(0.80, 0.74, 0.60), Vec3(0.15, 0.16, 0.20),
                                         Vec3(0.92, 0.76, 0.64), 24.0, "city:busrider2");
+        }
+        // RIDERS ASTRIDE (a motorcycle, a moped): a slot whose seat has bars draws its own rider, posed by the
+        // player's seat rule (seatedPose: hands on the grips, feet on the pegs, the seat's lean) -- the same body the
+        // player rides in, so an NPC bike and the one you drop agree. Nothing to see through: always drawn on a trip.
+        carRiderGroups_.assign(carGroups_.size(), Entity{});
+        for (std::size_t v = 0; assets && v < carGroups_.size() && v < carSeatGeom_.size(); ++v) {
+            if (carSeatGeom_[v].wheel || v >= carHasDriver_.size() || !carHasDriver_[v]) continue;
+            InstanceGroup g;
+            g.mesh = assets->acquireMesh(engine::buildPosedPerson(engine::seatedPose(carSeatGeom_[v], {}, 0, 0, 1),
+                                                                  static_cast<int>(v)),
+                                         "city:rider" + std::to_string(v));
+            g.material = pedMaterial();
+            g.renderLayer = engine::LayerSim;
+            g.drawClass = engine::DrawClass::SimBody;
+            carRiderGroups_[v] = world.create();
+            world.add<InstanceGroup>(carRiderGroups_[v], g);
         }
 
         // FLEET VERDICT — loud, unmissable, once per build. "Why is the city
@@ -1433,10 +1571,30 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
         InstanceGroup gs = g;
         gs.mesh = assets->acquireMesh(buildGroundSittingPersonMesh(0), "city:ped_ground_sit");
         world.add<InstanceGroup>(pedGroundGroup_, gs);
-        pedLieGroup_ = world.create();
-        InstanceGroup gl = g;
-        gl.mesh = pedMesh;
-        world.add<InstanceGroup>(pedLieGroup_, gl);
+        for (int v = 0; v < engine::kLiePoses; ++v) {
+            pedLieGroups_[static_cast<std::size_t>(v)] = world.create();
+            InstanceGroup gl = g;
+            gl.mesh = assets->acquireMesh(buildLyingPersonMesh(0, v), "city:ped_lie" + std::to_string(v));
+            world.add<InstanceGroup>(pedLieGroups_[static_cast<std::size_t>(v)], gl);
+        }
+        for (int k = 0; k < 2; ++k) {   // THE BOARDS under riders in the crowd and the far band
+            crowdBoardGroups_[k] = world.create();
+            InstanceGroup bg = g;
+            bg.mesh = assets->acquireMesh(k == 0 ? engine::buildSkateboard() : engine::buildScooter(),
+                                          k == 0 ? "city:skateboard" : "city:scooter");
+            bg.material.albedo = Vec3(1, 1, 1);
+            world.add<InstanceGroup>(crowdBoardGroups_[k], bg);
+        }
+        engine::FurnitureDrawCache beachDraw;
+        for (uint32_t c = 0; c < 8; ++c)
+            for (auto [pc, groups] : {std::pair<engine::Piece, std::vector<Entity>*>{engine::Piece::BeachTowel, &towelGroups_[c]},
+                                      {engine::Piece::BeachUmbrella, &umbrellaGroups_[c]}}) {
+                engine::PlacedPiece pp;
+                pp.piece = static_cast<uint8_t>(pc);
+                pp.variant = c;
+                engine::spawnFurnitureGroups(world, *assets, nullptr, beachDraw, {pp}, Vec3(0.80, 0.78, 0.75), 250.0, *groups);
+                for (Entity e : *groups) world.get<InstanceGroup>(e)->transforms.clear();
+            }
         indoorBodyGroup_ = world.create();
         InstanceGroup b = g;
         b.mesh = pedMesh;
@@ -1451,26 +1609,6 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
         g.drawClass = engine::DrawClass::Effect;
         world.add<InstanceGroup>(signalGroups_[s], g);
     }
-
-    // Car lamp groups (ADR-0065 follow-up): one emissive instance batch per lamp
-    // kind, sharing a small lens box. Created unconditionally (they stay empty
-    // when cars are externally owned); syncCarLamps pushes the lit lamps each step.
-    MeshHandle lampMesh{};
-    if (assets)
-        lampMesh = assets->acquireMesh(MeshBuilder::box(Vec3(0.28, 0.16, 0.12)),
-                                       "city:carlamp");
-    headlightGroup_ = world.create();
-    { InstanceGroup g; g.mesh = lampMesh; g.material = lampMaterial(Vec3(1.5, 1.45, 1.2));
-      g.renderLayer = engine::LayerSim; g.drawClass = engine::DrawClass::Effect;
-      world.add<InstanceGroup>(headlightGroup_, g); }
-    brakeLightGroup_ = world.create();
-    { InstanceGroup g; g.mesh = lampMesh; g.material = lampMaterial(Vec3(1.7, 0.06, 0.04));
-      g.renderLayer = engine::LayerSim; g.drawClass = engine::DrawClass::Effect;
-      world.add<InstanceGroup>(brakeLightGroup_, g); }
-    turnSignalGroup_ = world.create();
-    { InstanceGroup g; g.mesh = lampMesh; g.material = lampMaterial(Vec3(1.7, 0.75, 0.05));
-      g.renderLayer = engine::LayerSim; g.drawClass = engine::DrawClass::Effect;
-      world.add<InstanceGroup>(turnSignalGroup_, g); }
 
     // Reuse the city's street-kit traffic-signal model: one pole+arm+head
     // assembly per signalled approach, placed on the near-right corner facing the
@@ -2188,13 +2326,11 @@ int CityRenderSystem::carTurnDir(const Agent& a) const {
 // emissive box at each lit lamp marker's WORLD pose. Only the lit lamps are
 // pushed, so a phase change (headlights on at dusk, brakes on braking) just moves
 // transforms between batches — cheap, a handful of quads per car, rebuilt per step.
+// THE LAMPS ARE THE BODY'S (ADR-0342, #186): each drawn car's lit lamps as a mask on its body instance (the bottom
+// row, FLAG_LAMP_STATE), lighting the lenses the body was built with. They were emissive boxes pushed at the lamp
+// markers in their own groups -- a second thing to keep in step with the body, and when it was not, headlights hung
+// in the air over a parked car (ADR-0341) or glowed inside a bus.
 void CityRenderSystem::syncCarLamps(World& world) {
-    InstanceGroup* head = world.get<InstanceGroup>(headlightGroup_);
-    InstanceGroup* brake = world.get<InstanceGroup>(brakeLightGroup_);
-    InstanceGroup* turn = world.get<InstanceGroup>(turnSignalGroup_);
-    if (head) head->beginStep();   // (moving with their cars: InstanceGroup::ids)
-    if (brake) brake->beginStep();
-    if (turn) turn->beginStep();
     for (Entity e : busSignGroups_)
         if (InstanceGroup* sg = world.get<InstanceGroup>(e)) sg->beginStep();
     busSignsDrawn_ = 0;
@@ -2209,7 +2345,8 @@ void CityRenderSystem::syncCarLamps(World& world) {
     // the bake is reproducible and headless-testable. A render-time wall clock
     // would be acceptable too (a non-deterministic blink is fine per the ADR), but
     // the sim clock keeps determinism intact.
-    const bool blinkOn = std::fmod(sim_.seconds() * kTurnBlinkHz, 1.0) < 0.5;
+    const bool blinkOn = engine::lampBlinkOn(sim_.seconds());
+    std::unordered_map<int, uint32_t> masks;   // the lit lamps of each drawn driver, by agent
 
     // (the K tier only: a far car has no drawn body and no lamps -- its speed is recorded once it is near again)
     for (int nearIdx : sim_.nearAgents()) {
@@ -2246,8 +2383,12 @@ void CityRenderSystem::syncCarLamps(World& world) {
                 busSignAt_ = sg->transforms.back().transformPoint(Vec3(0, 0, 0));
             }
         }
-        const std::vector<LampMarker>& markers = carLights_[v];
-        if (markers.empty()) continue;
+        // A CAR AT REST is dark (ADR-0341): parked at the end of its trip, on the street or off it. The body skips one
+        // parked OFF-street (syncGroups) and the lamps did not, so at night every car in a lot or a garage hung its
+        // headlights in the air over the kerb with no car behind them (Glenn, 2026-11-05: "a lot of headlights sitting
+        // here but no cars"); and a car parked at the kerb kept its headlights on all night. (A car held at a light is
+        // still on its trip: `moving`.)
+        if (!a.moving) continue;
 
         // A lane change signals the side it moves toward (device); the
         // route-bend indicator covers junction turns as before. Lane offsets
@@ -2264,55 +2405,31 @@ void CityRenderSystem::syncCarLamps(World& world) {
         const bool dark = solarStaged_
                               ? solarElevation_ < engine::kLampDuskSunY
                               : cityIsDark(sim_.timeOfDay());
-        CarLamps lamps =
-            carLampStateSolar(a.state, a.speed, prev, dark, turnDir);
-        if (!lamps.head && !lamps.brake && !lamps.left && !lamps.right) continue;
-
-        // SAME POSE SOURCE AS THE BODY. A physically-possessed agent draws its
-        // car at the Jolt body's pose (physPose_), while the sim's kinematic
-        // ghost "legitimately runs ahead/behind" it — so taking agentPose()
-        // here hung the lamps off the GHOST and left them floating down the
-        // street beside their own car. One car, one pose.
-        const auto lampPo = physPose_.find(static_cast<int>(ai));
-        // NB: no agent index — agentPose(a, idx) ADVANCES the tilt low-pass for
-        // that agent, and the body already advanced it this step. Passing it
-        // here ran the filter twice a tick and reintroduced the pose vibration
-        // car_pose_probe_no_vibration_on_jagged_ground exists to catch. Lamps
-        // need the POSITION to match the car; a tick of tilt smoothing on a
-        // 0.28 m lens is not observable.
-        const Mat4 pose =
-            lampPo != physPose_.end() ? lampPo->second : agentPose(a);
-        const Real yaw = std::atan2(a.heading.x, a.heading.y);
-        const Quat rot = Quat::fromAxisAngle(Vec3(0, 1, 0), yaw);
-        // A vehicle you can SEE INTO (the bus): the lens box is centred on its
-        // marker, which sits exactly on the end face, so half of it poked
-        // through into the saloon -- tail lights glowing inside the bus
-        // (Glenn). Out by half the lens depth, it sits flush on the outside.
-        const bool seeInto = v < static_cast<int>(carSeeInto_.size()) && carSeeInto_[static_cast<std::size_t>(v)] != 0;
-        uint32_t lampNo = 0;
-        for (const LampMarker& m : markers) {
-            const uint64_t lampId = movingId(a, 64 + (lampNo++ & 127));
-            const bool isHead = m.name.rfind("headlight", 0) == 0;
-            const bool isTail = m.name.rfind("taillight", 0) == 0;
-            const bool leftSide = !m.name.empty() && m.name.back() == 'l';
-            const bool rightSide = !m.name.empty() && m.name.back() == 'r';
-            Vec3 local = m.pos;
-            if (seeInto) local.z += (local.z >= 0 ? Real(1) : Real(-1)) * Real(0.061);
-            const Vec3 wpos = pose.transformPoint(local);
-            const Mat4 xf = Mat4::trs(wpos, rot, Vec3(1, 1, 1));
-            if (isHead && lamps.head && head) head->push(xf, lampId);
-            if (isTail && lamps.brake && brake) brake->push(xf, lampId);
-            // The turn indicator on the signalling side flashes on BOTH the front
-            // and rear corner markers of that side.
-            const bool signalling =
-                (leftSide && lamps.left) || (rightSide && lamps.right);
-            if (signalling && blinkOn && turn) turn->push(xf, lampId);
-        }
+        const CarLamps lamps = carLampStateSolar(a.state, a.speed, prev, dark, turnDir);
+        const uint32_t m = engine::lampMask(lamps, blinkOn);
+        if (m) masks[static_cast<int>(ai)] = m;
     }
-    refreshBounds(head);
-    refreshBounds(brake);
-    refreshBounds(turn);
+    // ...onto the body instances syncGroups drew this bake (carAgentIds_ runs beside each group's transforms)
+    if (!masks.empty())
+        for (std::size_t v = 0; v < carGroups_.size() && v < carAgentIds_.size(); ++v) {
+            InstanceGroup* g = world.get<InstanceGroup>(carGroups_[v]);
+            if (!g) continue;
+            const std::vector<int>& ids = carAgentIds_[v];
+            for (std::size_t k = 0; k < ids.size() && k < g->transforms.size(); ++k) {
+                const auto it = masks.find(ids[k]);
+                if (it != masks.end()) g->transforms[k].m[3][0] = static_cast<Real>(it->second);
+            }
+        }
     for (Entity e : busSignGroups_) refreshBounds(world.get<InstanceGroup>(e));
+}
+
+std::size_t CityRenderSystem::carsLit(World& world, uint32_t bits) const {
+    std::size_t n = 0;
+    for (Entity e : carGroups_)
+        if (const InstanceGroup* g = world.get<InstanceGroup>(e))
+            for (const Mat4& t : g->transforms)
+                if (static_cast<uint32_t>(t.m[3][0] + 0.5) & bits) ++n;
+    return n;
 }
 
 // The row a bus's sign shows: its line, or NOT IN SERVICE while it deadheads to the depot or stands off duty.
@@ -2429,6 +2546,48 @@ void CityRenderSystem::bakePlanOutlines(World& world) {
 
 }
 
+// THE BEACH'S THINGS (towelGroups_): a towel under each body lying out on the ground (its head end at the head, the
+// way the body lies), and an umbrella over each group lying out on the sand, its pole beside the middle of their heads.
+void CityRenderSystem::syncBeachThings(World& world) {
+    std::array<std::vector<Mat4>, 8> towels, umbrellas;
+    const std::vector<CitySim::Session>& sessions = sim_.sessions();
+    const std::vector<CitySim::ActivityArea>& areas = sim_.areas();
+    for (std::size_t si = 0; si < sessions.size(); ++si) {
+        const CitySim::Session& se = sessions[si];
+        if (se.state == CitySim::Session::State::Dead) continue;
+        int lying = 0;
+        for (int m : se.members) {
+            CitySim::RestPose rp;
+            if (!sim_.restPose(m, rp) || rp.kind != CitySim::RestPose::Kind::Lie || rp.raised) continue;
+            ++lying;
+            const Vec2 head = rp.pos - rp.face * 0.875;   // (the towel's z = 0 end)
+            towels[(static_cast<uint32_t>(m) * 2654435761u) >> 29]   // (a colour each: the top bits of a Knuth hash)
+               .push_back(
+                Mat4::translate(head.x, groundAt(head.x, head.y) + 0.005, head.y) * Mat4::rotateY(std::atan2(rp.face.x, rp.face.y)));
+        }
+        if (lying == 0 || se.def < 0 || se.area < 0 || se.area >= static_cast<int>(areas.size()) ||
+            areas[static_cast<std::size_t>(se.area)].kind != "beach")
+            continue;
+        // the pole 0.6 m up from the heads, between the middle two (an odd group: beside the middle one)
+        const Vec2 side(se.axis.y, -se.axis.x);
+        const Real gap = sim_.activityCatalog().defs[static_cast<std::size_t>(se.def)].radius;   // (memberPlace's spread)
+        const Vec2 pole = se.center + side * ((se.members.size() % 2u) ? gap * 0.5 : 0.0) - se.axis * 0.3;
+        const Vec2 origin = pole - se.axis * 1.1;   // (the umbrella's pole is 1.1 m along its +z)
+        umbrellas[(static_cast<uint32_t>(si) * 2654435761u + 0x9E37u) >> 29].push_back(
+            Mat4::translate(origin.x, groundAt(pole.x, pole.y), origin.y) * Mat4::rotateY(std::atan2(se.axis.x, se.axis.y)));
+    }
+    auto put = [&](const std::array<std::vector<Entity>, 8>& groups, const std::array<std::vector<Mat4>, 8>& xf) {
+        for (std::size_t c = 0; c < 8; ++c)
+            for (Entity e : groups[c])
+                if (InstanceGroup* g = world.get<InstanceGroup>(e)) {
+                    g->transforms = xf[c];
+                    refreshBounds(g);
+                }
+    };
+    put(towelGroups_, towels);
+    put(umbrellaGroups_, umbrellas);
+}
+
 void CityRenderSystem::syncGroups(World& world) {
     std::vector<InstanceGroup*> cars;
     cars.reserve(carGroups_.size());
@@ -2437,9 +2596,24 @@ void CityRenderSystem::syncGroups(World& world) {
     InstanceGroup* pedSeated = pedSeatedGroup_.valid() ? world.get<InstanceGroup>(pedSeatedGroup_) : nullptr;
     if (pedSeated) pedSeated->transforms.clear();
     InstanceGroup* pedGround = pedGroundGroup_.valid() ? world.get<InstanceGroup>(pedGroundGroup_) : nullptr;
-    InstanceGroup* pedLie = pedLieGroup_.valid() ? world.get<InstanceGroup>(pedLieGroup_) : nullptr;
+    std::array<InstanceGroup*, engine::kLiePoses> pedLie{};
+    for (std::size_t v = 0; v < pedLie.size(); ++v) {
+        pedLie[v] = pedLieGroups_[v].valid() ? world.get<InstanceGroup>(pedLieGroups_[v]) : nullptr;
+        if (pedLie[v]) pedLie[v]->transforms.clear();
+    }
     if (pedGround) pedGround->transforms.clear();
-    if (pedLie) pedLie->transforms.clear();
+    InstanceGroup* boardsG[2];
+    for (int k = 0; k < 2; ++k) {
+        boardsG[k] = crowdBoardGroups_[k].valid() ? world.get<InstanceGroup>(crowdBoardGroups_[k]) : nullptr;
+        if (boardsG[k]) boardsG[k]->transforms.clear();
+    }
+    // a rider's board, at its feet the way it heads (activities.lua `ride`)
+    auto boardUnder = [&](int ai, Real x, Real feetY, Real z, Real yaw) {
+        const Ride r = sim_.rideOf(ai);
+        InstanceGroup* bg = r == Ride::Skateboard ? boardsG[0] : r == Ride::Scooter ? boardsG[1] : nullptr;
+        if (bg) bg->transforms.push_back(Mat4::translate(x, feetY, z) * Mat4::rotateY(yaw));
+        return r != Ride::None ? (r == Ride::Skateboard ? Real(0.12) : Real(0.09)) : Real(0);   // the deck it stands on
+    };
     InstanceGroup* sig[3];
     for (int s = 0; s < 3; ++s) sig[s] = world.get<InstanceGroup>(signalGroups_[s]);
 
@@ -2486,16 +2660,9 @@ void CityRenderSystem::syncGroups(World& world) {
             // A BUS draws as the bus slot, not as whatever body its vehicle
             // index happened to land on. Everything else keeps its stable
             // per-car variant.
-            int v = sim_.ambientSlotFor(a.vehicle >= 0 ? a.vehicle : 0);
-            if (v >= drawVariantCount()) v %= drawVariantCount();
-            if (busVariant_ >= 0 && sim_.isBus(static_cast<int>(ai)) &&
-                busVariant_ < drawVariantCount())
-                v = busVariant_;
-            if (fireVariant_ >= 0 && fireVariant_ < drawVariantCount() && a.vehicle >= 0 &&   // (someone took the engine)
-                a.vehicle < static_cast<int>(sim_.vehicles().size()) &&
-                sim_.vehicles()[static_cast<std::size_t>(a.vehicle)].type == VehicleType::FireEngine)
-                v = fireVariant_;
-            if (!cars[v]) continue;
+            // (one rule, drawSlotFor: the bus, the cab, the fire engine someone took, else the stable variant)
+            const int v = drawSlotFor(static_cast<int>(ai));
+            if (v < 0 || v >= static_cast<int>(cars.size()) || !cars[v]) continue;
             // R5: a physically-possessed agent renders its Jolt body's pose —
             // real suspension, pitch and roll — while the sim's kinematic
             // plan stays the brains' truth.
@@ -2504,21 +2671,37 @@ void CityRenderSystem::syncGroups(World& world) {
             carAgentIds_[v].push_back(static_cast<int>(ai));
         } else if (ped && !pedsExternallyOwned_) {   // walkers owned externally: no bake
             if (!sim_.pedVisible(static_cast<int>(ai))) continue;   // indoors / riding
+            // HOW TALL (people.lua band heights by age): every pose scaled about its feet, or its hip on a seat
+            const Real s = sim_.bodyScale(static_cast<int>(ai));
+            const Mat4 sized = Mat4::scale(s, s, s);
             CitySim::RestPose rp;
             if (sim_.restPose(static_cast<int>(ai), rp)) {   // sitting (M5), on the grass, lying in the sun
                 const Mat4 yaw = Mat4::rotateY(std::atan2(rp.face.x, rp.face.y));
                 if (rp.kind == CitySim::RestPose::Kind::Seat) {
-                    if (pedSeated) pedSeated->transforms.push_back(Mat4::translate(rp.pos.x, rp.hip, rp.pos.y) * yaw);
+                    if (pedSeated) pedSeated->transforms.push_back(Mat4::translate(rp.pos.x, rp.hip, rp.pos.y) * yaw * sized);
                 } else if (rp.kind == CitySim::RestPose::Kind::SitGround) {
                     if (pedGround)
-                        pedGround->transforms.push_back(Mat4::translate(rp.pos.x, groundAt(rp.pos.x, rp.pos.y) + kGroundSitHip, rp.pos.y) * yaw);
-                } else if (pedLie) {   // on its back, head away from the way it faces (its feet point there)
-                    pedLie->transforms.push_back(Mat4::translate(rp.pos.x, groundAt(rp.pos.x, rp.pos.y) + kLieHalfDepth, rp.pos.y) *
-                                                 yaw * Mat4::rotateX(-engine::PI * 0.5));
+                        pedGround->transforms.push_back(
+                            Mat4::translate(rp.pos.x, groundAt(rp.pos.x, rp.pos.y) + kGroundSitHip * s, rp.pos.y) * yaw * sized);
+                } else if (InstanceGroup* lie = pedLie[ai % pedLie.size()]) {   // on its back, head away from the way
+                    // it faces (its feet point there), in its own pose of the few
+                    const Real bed = rp.raised ? rp.hip : groundAt(rp.pos.x, rp.pos.y);   // (a lounger's, or the ground)
+                    lie->transforms.push_back(Mat4::translate(rp.pos.x, bed + kLieHalfDepth * s, rp.pos.y) *
+                                                 yaw * Mat4::rotateX(-engine::PI * 0.5) * sized);
                 }
                 continue;
             }
-            ped->push(agentPose(a), movingId(a, 0));
+            Mat4 pose = agentPose(a);
+            {
+                const Real feet = pose.m[1][3] - params_.pedSize.y * 0.5;
+                pose.m[1][3] += boardUnder(static_cast<int>(ai), pose.m[0][3], feet, pose.m[2][3],
+                                           std::atan2(a.heading.x, a.heading.y));
+            }
+            if (s != 1.0) {
+                pose.m[1][3] -= params_.pedSize.y * 0.5 * (1.0 - s);   // (agentPose stands the body half its height up)
+                pose = pose * sized;
+            }
+            ped->push(pose, movingId(a, 0));
             pedAgentIds_[0].push_back(static_cast<int>(ai));
         }
     }
@@ -2585,6 +2768,7 @@ void CityRenderSystem::syncGroups(World& world) {
             if (v >= drawVariantCount()) v %= drawVariantCount();
             if (sv.type == VehicleType::Bus && busVariant_ >= 0 && busVariant_ < drawVariantCount()) v = busVariant_;   // a bus parked in its depot
             if (sv.type == VehicleType::FireEngine && fireVariant_ >= 0 && fireVariant_ < drawVariantCount()) v = fireVariant_;   // in its bay
+            if (sv.type == VehicleType::Taxi && taxiVariant_ >= 0 && taxiVariant_ < drawVariantCount()) v = taxiVariant_;   // a cab at the kerb
             if (!cars[v]) continue;
             // The ground sample is the per-frame cost the old one-shot bake
             // existed to avoid — but only a few dozen cars survive the cull, and
@@ -2684,8 +2868,10 @@ void CityRenderSystem::syncGroups(World& world) {
                 fc[static_cast<std::size_t>(v)]->transforms.push_back(
                     Mat4::trs(Vec3(p.x, dcf.farY + hy, p.y), Quat::fromAxisAngle(Vec3(0, 1, 0), yaw), Vec3(1, 1, 1)));
             } else if (fp) {
+                const Real s = sim_.bodyScale(vi);   // (a child's height: the feet stay on the ground)
+                const Real deck = boardUnder(vi, p.x, dcf.farY, p.y, yaw);
                 fp->transforms.push_back(
-                    Mat4::trs(Vec3(p.x, dcf.farY + 0.9, p.y), Quat::fromAxisAngle(Vec3(0, 1, 0), yaw), Vec3(1, 1, 1)));
+                    Mat4::trs(Vec3(p.x, dcf.farY + deck + 0.9 * s, p.y), Quat::fromAxisAngle(Vec3(0, 1, 0), yaw), Vec3(s, s, s)));
             }
             ++farDrawn_;
         }
@@ -2697,8 +2883,10 @@ void CityRenderSystem::syncGroups(World& world) {
     refreshBounds(ped);
     refreshBounds(pedSeated);
     refreshBounds(pedGround);
-    refreshBounds(pedLie);
+    for (InstanceGroup* lie : pedLie) refreshBounds(lie);
+    for (InstanceGroup* bg : boardsG) refreshBounds(bg);
     for (int s = 0; s < 3; ++s) refreshBounds(sig[s]);
+    syncBeachThings(world);
 
     sec(2);
     // SEE-INTO VEHICLES. The clear glass rides exactly its bodies' transforms
@@ -2767,6 +2955,8 @@ void CityRenderSystem::syncGroups(World& world) {
             refreshBounds(cabin);
             const std::vector<Vec3>& seats = carSeats_[v];
             const bool hasDriver = carHasDriver_[v] != 0;
+            InstanceGroup* rider = v < carRiderGroups_.size() && carRiderGroups_[v].valid() ? world.get<InstanceGroup>(carRiderGroups_[v]) : nullptr;
+            if (rider) rider->beginStep();
             if (seats.empty() && !hasDriver) continue;
             const int n = static_cast<int>(seats.size());
             for (std::size_t k = 0; k < ids.size() && k < cars[v]->transforms.size(); ++k) {
@@ -2782,7 +2972,7 @@ void CityRenderSystem::syncGroups(World& world) {
                 // trip -- moving, or a bus or a cab on duty; at rest the person is indoors and the car stands empty
                 if (!carOccupied(ai)) continue;
                 const uint64_t body = k < cars[v]->ids.size() ? cars[v]->ids[k] : 0;
-                if (hasDriver && drv) drv->push(xf * Mat4::trs(carDriverSeat_[v], Quat(), Vec3(1, 1, 1)), body | 3);
+                if (hasDriver && (rider || drv)) (rider ? rider : drv)->push(xf * Mat4::trs(carDriverSeat_[v], Quat(), Vec3(1, 1, 1)), body | 3);
                 const int load = std::min(sim_.rides().load(ai), n);
                 int placed = 0;
                 for (int j = 0; j < n && placed < load; ++j) {
@@ -2795,6 +2985,7 @@ void CityRenderSystem::syncGroups(World& world) {
                     ++placed;
                 }
             }
+            refreshBounds(rider);
         }
         refreshBounds(drv);
         for (InstanceGroup* r : rid) refreshBounds(r);
@@ -2936,8 +3127,7 @@ void CityRenderSystem::syncGroups(World& world) {
     }
 
     sec(4);
-    // Emissive car lamps (ADR-0065 follow-up): headlights / brake / turn signals,
-    // driven by each drawn car's carLampState. Always baked (not a debug widget).
+    // Car lamps (ADR-0342): each drawn car's lit lamps onto its body instance, and the bus signs. Always baked.
     syncCarLamps(world);
     sec(5);
     if (syncStats && ++secCalls % 300 == 0) {
@@ -3837,7 +4027,7 @@ void CityRenderSystem::update(engine::FrameContext& ctx) {
                     int where[8] = {0}, dh[24] = {0}, dw[24] = {0}, roles[16] = {0};
                     std::vector<Real> cs;
                     for (const Agent& a : ag) {
-                        if (a.archetype != Agent::Mode::Driver || sim_.isBus(static_cast<int>(&a - ag.data())) || sim_.isTaxi(static_cast<int>(&a - ag.data()))) continue;
+                        if (a.archetype != Agent::Mode::Driver || sim_.onService(static_cast<int>(&a - ag.data()))) continue;
                         ++where[static_cast<int>(sim_.scheduleSnapshot(a, sim_.clockHours()).where)];
                         ++dh[static_cast<int>(std::fmod(a.departHome + 24.0, 24.0)) % 24];
                         ++dw[static_cast<int>(sim_.departWorkHour(a)) % 24];
@@ -4018,7 +4208,20 @@ void CityRenderSystem::update(engine::FrameContext& ctx) {
                               laneN, laneOff, laneInBays, laneOut, laneN ? laneErrSum / laneN : 0.0, pulling, restN, restKerb);
                 char pb[160];
                 std::snprintf(pb, sizeof(pb), "; parked with nobody in: %d drawn near (%d in a bay), %d past the kerb", parkN, parkInBay, parkKerb);
-                answers_.set("traffic?", std::string(tb) + pileWho + pb + (std::getenv("RT_TRAFFIC_DEBUG") ? kerbWho + parkWho : std::string()));
+                // ...and the riders astride (a motorcycle's): how many are drawn, the nearest one's spot -- a probe aims there
+                int riders = 0; Vec3 riderAt(0, 0, 0); Real riderD = 1e30;
+                for (Entity re : carRiderGroups_)
+                    if (const InstanceGroup* rg = re.valid() ? ctx.world.get<InstanceGroup>(re) : nullptr)
+                        for (const Mat4& m : rg->transforms) {
+                            ++riders;
+                            const Vec3 at(m.m[0][3], m.m[1][3], m.m[2][3]);
+                            const Real d = (Vec2(at.x, at.z) - cam).length();
+                            if (d < riderD) { riderD = d; riderAt = at; }
+                        }
+                char rb[128];
+                std::snprintf(rb, sizeof(rb), "; riders astride %d drawn, nearest %.1f %.1f %.1f (%.0f m)", riders, riderAt.x, riderAt.y,
+                              riderAt.z, riders ? riderD : -1.0);
+                answers_.set("traffic?", std::string(tb) + pileWho + pb + rb + (std::getenv("RT_TRAFFIC_DEBUG") ? kerbWho + parkWho : std::string()));
             }
         }
         // THE OPEN SIGNS (storefronts stage 3): once a second, every window's sign lit while its place is open and
@@ -4448,13 +4651,36 @@ void CityRenderSystem::render(engine::FrameContext& ctx) {
             };
             ImGui::Text("Lives: %s", placeLabel(a.homePlace));
             ImGui::Text("Works: %s", placeLabel(a.workPlace));
-            // Surface-level social graph: who this agent knows.
+            // WHO THEY ARE (people.lua): age and life stage; their household, and how each housemate is theirs
+            const PeopleCatalog& folk = sim_.people();
             const RelationshipTable& rel = sim_.relationships();
+            const char* stageName = a.stage >= 0 && a.stage < static_cast<int>(folk.stages.size())
+                                        ? folk.stages[static_cast<std::size_t>(a.stage)].name.c_str() : "—";
+            ImGui::Text("Age %d   %s", a.age, stageName);
+            const HouseholdPlan& plan = sim_.households();
+            if (a.household >= 0 && a.household < static_cast<int>(plan.households.size())) {
+                const Household& hh = plan.households[static_cast<std::size_t>(a.household)];
+                const char* typeName = hh.type < folk.households.size() ? folk.households[hh.type].name.c_str() : "hall bed";
+                ImGui::Text("Household: %s of %u", typeName, hh.count);
+                for (const Agent& o : sim_.agents()) {   // (a scan, only while the inspector is open)
+                    if (o.household != a.household || o.uid == a.uid) continue;
+                    const int t = rel.tieOf(o.uid, a.uid);   // what they are to this agent
+                    ImGui::BulletText("%s: UID %u, %d", t >= 0 && t < static_cast<int>(folk.ties.size())
+                                                            ? folk.ties[static_cast<std::size_t>(t)].name.c_str() : "housemate",
+                                      o.uid, o.age);
+                }
+            } else {
+                ImGui::Text("Household: none (a lodger)");
+            }
+            // Surface-level social graph: who else this agent knows.
             const auto& knows = rel.relationsOf(a.uid);
             ImGui::Text("Knows %d", static_cast<int>(knows.size()));
-            for (std::size_t k = 0; k < knows.size() && k < 6; ++k)
-                ImGui::BulletText("UID %u (%s)", knows[k].first,
-                                  relationshipName(knows[k].second));
+            int shown = 0;
+            for (std::size_t k = 0; k < knows.size() && shown < 6; ++k) {
+                if (knows[k].second == Relationship::Household) continue;
+                ImGui::BulletText("UID %u (%s)", knows[k].first, relationshipName(knows[k].second));
+                ++shown;
+            }
             ImGui::Text("Depart work %.1f h   home %.1f h", a.departWork, a.departHome);
             ImGui::Text("Pos (%.1f, %.1f)   Speed %.1f m/s", a.pos.x, a.pos.y, a.speed);
         }

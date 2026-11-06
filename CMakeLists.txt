@@ -67,6 +67,7 @@ add_library(engine_core STATIC
     src/engine/mesh_shapes.cpp
     src/engine/mesh_words.cpp
     src/engine/mesh_builder.cpp
+    src/engine/board_meshes.cpp          # the skateboard and scooter a body rides (player, citysim children)
     src/engine/bundle/bundle.cpp
     src/engine/bundle/bake.cpp
     src/engine/bundle/cache_use.cpp
@@ -109,6 +110,7 @@ add_library(engine_core STATIC
     src/engine/procgen/vehicle/train_mesh.cpp
     src/engine/procgen/texture_field.cpp
     src/engine/procgen/terrain_field.cpp
+    src/engine/procgen/regrade.cpp       # a town's patch of mountain levelled, its shape kept (ADR-0323)
     src/engine/procgen/earthwork.cpp
     src/engine/procgen/erosion.cpp
     src/engine/procgen/stream_power.cpp
@@ -180,6 +182,7 @@ add_library(engine_core STATIC
     src/engine/procgen/city/water_mesh.cpp
     src/engine/procgen/city/terrain_route.cpp
     src/engine/procgen/world/island_world.cpp
+    src/engine/procgen/world/settlements.cpp   # the kinds of place on an island (settlements.lua)
     src/engine/procgen/city/buildability.cpp
     src/engine/procgen/city/road_spec.cpp
     # the roads module (2026-09-20): the road ENTITY and its recipe are shared
@@ -423,6 +426,7 @@ if(RT_ENABLE_SCRIPTING)
         src/engine/scripting/vehicle_spec.cpp
         src/engine/scripting/furniture_library_lua.cpp
         src/engine/scripting/tree_recipes_lua.cpp
+        src/engine/scripting/settlements_lua.cpp
         src/engine/scripting/particles_lua.cpp
     )
     target_link_libraries(engine_core PUBLIC lua_static)
@@ -456,6 +460,8 @@ add_library(citysim STATIC
     src/apps/citysim/bus_stop_props.cpp   # the pole, sign and bench you can see
     src/apps/citysim/city_map_raster.cpp  # the map tool's picture: the city SVG, rasterized (nanosvg)
     src/apps/citysim/places.cpp          # places layer: buildings → routable POIs (ADR-0066)
+    src/apps/citysim/place_kinds.cpp     # what kind each place is, its tags, a home's dwellings (places.lua)
+    src/apps/citysim/households.cpp      # ages, life stages, households in the dwellings (people.lua)
     src/apps/citysim/relationships.cpp   # surface-level social graph (ADR-0066)
     src/apps/citysim/city_sim.cpp
     src/apps/citysim/city_render.cpp
@@ -472,6 +478,8 @@ if(RT_ENABLE_SCRIPTING)
         src/apps/citysim/scripting/agent_goals.cpp
         src/apps/citysim/scripting/activities_lua.cpp
         src/apps/citysim/scripting/roles_lua.cpp
+        src/apps/citysim/scripting/place_kinds_lua.cpp
+        src/apps/citysim/scripting/people_lua.cpp
         src/apps/citysim/scripting/signals_lua.cpp
         src/apps/citysim/scripting/vehicle_body.cpp
     )
@@ -759,6 +767,7 @@ add_executable(run_tests
     tests/test_instance_tlas.cpp
     tests/test_texture_field.cpp
     tests/test_terrain_field.cpp
+    tests/test_regrade.cpp
     tests/test_earthwork.cpp
     tests/test_winding.cpp
     tests/test_sim_rate_ab.cpp
@@ -1037,6 +1046,7 @@ if(RT_ENABLE_PHYSICS)
         tests/test_driver_seat.cpp      # the player at the wheel: the jolt, the sway, the seated pose (ADR-0252)
         tests/test_two_wheelers.cpp
         tests/test_drift.cpp
+        tests/test_rollover.cpp         # every drivable car held at full lock: it may slide, not go over
         tests/test_driving_lab.cpp
         tests/test_vehicle_handling.cpp
         tests/test_vehicle_drivetrain.cpp
@@ -1111,7 +1121,7 @@ function(rt_build_vulkan_shaders)
     set(VK_SHADERS mesh.vert mesh.frag mesh_wire.frag mesh_shadow.vert mesh_shadow_alpha.vert mesh_shadow_alpha.frag terrain.vert
                    sky.vert sky.frag composite.vert composite.frag bloom.frag
                    ssao.frag ssao_blur.frag ssr.frag dof.frag brdf_lut.frag
-                   clouds.frag clouds_composite.frag
+                   clouds.frag clouds_composite.frag clouds_resolve.frag
                    ui.vert ui.frag occlusion_reduce.comp crowd.comp)
     set(VK_SPV_FILES "")
     foreach(shader ${VK_SHADERS})
@@ -1119,8 +1129,9 @@ function(rt_build_vulkan_shaders)
             OUTPUT ${VK_SHADER_OUT_DIR}/${shader}.spv
             COMMAND ${Vulkan_GLSLC_EXECUTABLE}
                     ${VK_SHADER_SRC_DIR}/${shader}
+                    -I ${VK_SHADER_SRC_DIR}
                     -o ${VK_SHADER_OUT_DIR}/${shader}.spv
-            DEPENDS ${VK_SHADER_SRC_DIR}/${shader}
+            DEPENDS ${VK_SHADER_SRC_DIR}/${shader} ${VK_SHADER_SRC_DIR}/sky_common.glsl
             COMMENT "glslc ${shader} -> ${shader}.spv"
             VERBATIM)
         list(APPEND VK_SPV_FILES ${VK_SHADER_OUT_DIR}/${shader}.spv)

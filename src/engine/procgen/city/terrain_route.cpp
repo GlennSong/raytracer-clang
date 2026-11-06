@@ -1,4 +1,5 @@
 #include "terrain_route.h"
+#include "polyline.h"   // distToSegment
 
 #include <algorithm>
 #include <cmath>
@@ -24,33 +25,6 @@ std::vector<Move> movesUpTo3() {
     return m;
 }
 
-double pointSegDist(const Vec2& p, const Vec2& a, const Vec2& b) {
-    const Vec2 ab = b - a;
-    const double L2 = dot(ab, ab);
-    const double t = L2 > 1e-12 ? std::clamp(dot(p - a, ab) / L2, 0.0, 1.0) : 0.0;
-    return (p - (a + ab * t)).length();
-}
-
-// Douglas-Peucker on plan position AND height together: a straight run keeps one segment, but a
-// crest or a dip along it keeps its vertex (the builder needs the climb, not only the plan)
-void simplify(const std::vector<Vec2>& in, const std::vector<double>& h, double tol, double htol,
-              std::size_t a, std::size_t b, std::vector<char>& keep) {
-    if (b <= a + 1) return;
-    double worst = -1.0;
-    std::size_t at = a;
-    for (std::size_t k = a + 1; k < b; ++k) {
-        const double d = pointSegDist(in[k], in[a], in[b]);
-        const double s = std::clamp(dot(in[k] - in[a], in[b] - in[a]) / std::max(1e-9, dot(in[b] - in[a], in[b] - in[a])), 0.0, 1.0);
-        const double dh = std::fabs(h[k] - (h[a] + (h[b] - h[a]) * s));
-        const double e = std::max(d / tol, dh / htol);
-        if (e > worst) { worst = e; at = k; }
-    }
-    if (worst > 1.0) {
-        keep[at] = 1;
-        simplify(in, h, tol, htol, a, at, keep);
-        simplify(in, h, tol, htol, at, b, keep);
-    }
-}
 }  // namespace
 
 namespace {
@@ -129,6 +103,12 @@ TerrainRoute routeOnce(const HeightField& height, const Vec2& from, const Vec2& 
         return v;
     };
     auto h = [&](int i, int j) { return hHalf(2 * i, 2 * j); };
+    std::vector<float> penaltyCell;
+    if (p.penalty) {
+        penaltyCell.assign(static_cast<std::size_t>(nx) * ny, 0.0f);
+        for (int j = 0; j < ny; ++j)
+            for (int i = 0; i < nx; ++i) { const Vec2 q = P(i, j); penaltyCell[static_cast<std::size_t>(j) * nx + i] = static_cast<float>(p.penalty(q.x, q.y)); }
+    }
     std::vector<char> blockedCell;
     if (p.blocked) {
         blockedCell.assign(static_cast<std::size_t>(nx) * ny, 0);
@@ -185,6 +165,7 @@ TerrainRoute routeOnce(const HeightField& height, const Vec2& from, const Vec2& 
             if (g > p.hardGrade) continue;
             const double over = std::max(0.0, g - p.maxGrade);
             double cost = L * (1.0 + p.flatWeight * g + p.gradeWeight * over * over) + p.turnWeight * turn * turn * c;
+            if (!penaltyCell.empty()) cost += L * penaltyCell[static_cast<std::size_t>(nj) * nx + ni];
             if (d < nd && p.bendWeight > 0.0) {   // the change of SIGNED grade from the move before
                 const Move& pm = moves[static_cast<std::size_t>(d)];
                 const double gPrev = (hij - h(i - pm.dx, j - pm.dy)) / (pm.len * c);
@@ -222,7 +203,18 @@ TerrainRoute routeOnce(const HeightField& height, const Vec2& from, const Vec2& 
     // simplify: 1.5 m off the line in plan, 0.6 m in height
     std::vector<char> keep(pts.size(), 0);
     keep.front() = keep.back() = 1;
-    simplify(pts, hs, 1.5, 0.6, 0, pts.size() - 1, keep);
+    // Douglas-Peucker on plan position AND height together (polyline.h): a straight run keeps one segment, but a crest
+    // or a dip along it keeps its vertex (the builder needs the climb, not only the plan) -- off by the worse of the two,
+    // each in its own tolerance
+    {
+        const double tol = 1.5, htol = 0.6;
+        douglasPeucker(0, pts.size() - 1, 1.0, [&](std::size_t k, std::size_t a, std::size_t b) {
+            const double d = distToSegment(pts[k], pts[a], pts[b]);
+            const double sv = std::clamp(dot(pts[k] - pts[a], pts[b] - pts[a]) / std::max(1e-9, dot(pts[b] - pts[a], pts[b] - pts[a])), 0.0, 1.0);
+            const double dh = std::fabs(hs[k] - (hs[a] + (hs[b] - hs[a]) * sv));
+            return std::max(d / tol, dh / htol);
+        }, keep);
+    }
     for (std::size_t k = 0; k < pts.size(); ++k)
         if (keep[k]) {
             if (!out.points.empty()) {
@@ -256,8 +248,7 @@ std::vector<Vec2> tightenRoute(const HeightField& height, const std::vector<Vec2
         return true;
     };
     // along the road, measured, so the look-ahead is bounded by distance, not by vertex count
-    std::vector<double> s(pts.size(), 0.0);
-    for (std::size_t k = 1; k < pts.size(); ++k) s[k] = s[k - 1] + (pts[k] - pts[k - 1]).length();
+    const std::vector<double> s = stations(pts);   // (polyline.h)
     std::vector<Vec2> out{pts.front()};
     std::size_t i = 0;
     while (i + 1 < pts.size()) {

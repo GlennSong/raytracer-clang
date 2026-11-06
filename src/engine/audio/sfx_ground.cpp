@@ -163,8 +163,8 @@ std::vector<float> render(const Recipe& r, uint32_t sampleRate, uint32_t seed, d
         const double u = t - delay;
         double v = clickBoost * r.clickLevel * noise * std::exp(-u / r.clickDecay);
         if (r.ringLevel > 0) {
-            double ring = std::sin(TWO_PI * ringHz * u);
-            if (ringHz2 > 0) ring = 0.65 * ring + 0.35 * std::sin(TWO_PI * ringHz2 * u);
+            double ring = std::sin(TAU * ringHz * u);
+            if (ringHz2 > 0) ring = 0.65 * ring + 0.35 * std::sin(TAU * ringHz2 * u);
             v += r.ringLevel * ring * std::exp(-u / r.ringDecay);
         }
         return gain * v;
@@ -174,9 +174,9 @@ std::vector<float> render(const Recipe& r, uint32_t sampleRate, uint32_t seed, d
         const double cn = r.dull > 0 ? dc3(dc2(dc1(click(uni(rng))))) * 2.2 : click(uni(rng));
         double v = contact(t, 0.0, 1.0, cn);
         if (r.toeDelay > 0) v += contact(t, toeAt, toeGain, cn);
-        v += weight * r.thumpLevel * std::sin(TWO_PI * thumpHz * t) * std::exp(-t / (r.thumpDecay * scale));
+        v += weight * r.thumpLevel * std::sin(TAU * thumpHz * t) * std::exp(-t / (r.thumpDecay * scale));
         if (r.dull > 0 && r.toeDelay > 0 && t >= toeAt)
-            v += 0.6 * toeGain * weight * r.thumpLevel * std::sin(TWO_PI * thumpHz * 1.15 * (t - toeAt)) *
+            v += 0.6 * toeGain * weight * r.thumpLevel * std::sin(TAU * thumpHz * 1.15 * (t - toeAt)) *
                  std::exp(-(t - toeAt) / (r.thumpDecay * scale));
         const double att = std::min(1.0, t / std::max(1e-4, r.texAttack));
         const double tn = r.dull > 0 ? dt3(dt2(dt1(tex(uni(rng))))) * 1.5 : tex(uni(rng));
@@ -245,7 +245,7 @@ std::vector<float> grassSwish(uint32_t sampleRate, uint32_t seed) {
     ProcRng rng(seed * 747796405u + 2891336453u);
     ProcUniform<double> uni(-1.0, 1.0), u01(0.0, 1.0);
     // the brush: noise through a 600 Hz - 3.2 kHz band, two poles each side
-    const double hp = std::exp(-TWO_PI * 600.0 / rate), lp = std::exp(-TWO_PI * 3200.0 / rate);
+    const double hp = std::exp(-TAU * 600.0 / rate), lp = std::exp(-TAU * 3200.0 / rate);
     double h1 = 0, h1x = 0, h2 = 0, h2x = 0, l1 = 0, l2 = 0;
     const double rise = 0.11, peak = 0.13;
     std::vector<double> out(count, 0.0);
@@ -256,7 +256,7 @@ std::vector<float> grassSwish(uint32_t sampleRate, uint32_t seed) {
         h2 = hp * (h2 + h1 - h2x); h2x = h1;
         l1 = (1 - lp) * h2 + lp * l1;
         l2 = (1 - lp) * l1 + lp * l2;
-        const double env = t < rise ? std::pow(std::sin(0.5 * TWO_PI * 0.5 * t / rise), 2.0)
+        const double env = t < rise ? std::pow(std::sin(0.5 * TAU * 0.5 * t / rise), 2.0)
                                     : std::exp(-(t - rise) / peak) * std::max(0.0, 1.0 - (t - rise) / (len - rise));
         out[i] = 0.55 * l2 * env;
     }
@@ -269,7 +269,7 @@ std::vector<float> grassSwish(uint32_t sampleRate, uint32_t seed) {
         const auto n = static_cast<size_t>(0.012 * rate);
         for (size_t j = 0; j < n && i0 + j < count; ++j) {
             const double tj = static_cast<double>(j) / rate;
-            out[i0 + j] += a * std::sin(TWO_PI * f * tj) * std::exp(-tj / 0.0025);
+            out[i0 + j] += a * std::sin(TAU * f * tj) * std::exp(-tj / 0.0025);
         }
     }
     std::vector<float> f(count);
@@ -300,7 +300,7 @@ std::vector<float> surf(uint32_t sampleRate, uint32_t seed) {
         const double p = static_cast<double>(i) / static_cast<double>(count);
         // two swells: phase within the current one, 0..1
         const double w = std::fmod(p * 2.0 + off, 1.0);
-        const double rise = std::pow(std::sin(0.5 * TWO_PI * std::min(1.0, w / 0.55)), 2.0);   // build, peak at the break
+        const double rise = std::pow(std::sin(0.5 * TAU * std::min(1.0, w / 0.55)), 2.0);   // build, peak at the break
         const double breakHiss = w > 0.35 ? std::exp(-(w - 0.45) * (w - 0.45) / 0.012) : 0.0;
         const double drain = w > 0.5 ? std::exp(-(w - 0.5) * 4.0) : 0.0;
         const double wob = 1.0 + 0.12 * wobble[i] / 2.0;

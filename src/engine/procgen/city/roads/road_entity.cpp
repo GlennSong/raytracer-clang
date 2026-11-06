@@ -8,6 +8,7 @@
 // roads::roadBuilder("lattice").
 
 #include "road_entity.h"
+#include "../polyline.h"   // stations
 
 #include "road_net_internal.h"
 #include "../road_semantics.h"    // classifyRoadGraph (the semantic layer)
@@ -184,9 +185,7 @@ RoadGraph sampleNetGraph(const RoadEntity& road, double minTurnRadius) {
         std::vector<double> arc;
         if (elevSpan) {
             ea = cg.nodes[a].elev; eb = cg.nodes[b].elev;
-            arc.assign(poly.size(), 0.0);
-            for (std::size_t s = 1; s < poly.size(); ++s)
-                arc[s] = arc[s - 1] + (poly[s] - poly[s - 1]).length();
+            arc = stations(poly);   // (polyline.h)
         }
         Real parkOff = 0, parkW = 0;
         epark(ei, parkOff, parkW);

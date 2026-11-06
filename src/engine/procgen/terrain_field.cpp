@@ -1,4 +1,5 @@
 #include "terrain_field.h"
+#include "city/polyline.h"   // douglasPeucker, distToLine
 
 #include "noise.h"
 #include "terrain.h"          // TerrainFlatten, applyFlatten
@@ -98,33 +99,6 @@ std::vector<FlatSite> findFlatSites(const HeightField& h, const FlatSiteParams& 
     return kept;
 }
 
-namespace {
-// Perpendicular distance from point p to the segment a->b, in the XZ plane.
-double perpDistXZ(const Vec3& p, const Vec3& a, const Vec3& b) {
-    double ex = b.x - a.x, ez = b.z - a.z;
-    double len = std::sqrt(ex * ex + ez * ez);
-    if (len < 1e-9) return std::hypot(p.x - a.x, p.z - a.z);
-    return std::fabs((p.x - a.x) * ez - (p.z - a.z) * ex) / len;
-}
-// Douglas-Peucker on an XZ polyline: keep the endpoints and any vertex that sits
-// more than `tol` off the straight run, so collinear cells collapse but the
-// switchback corners (which lie far off their chord) survive.
-void douglasPeucker(const std::vector<Vec3>& pts, int lo, int hi, double tol,
-                    std::vector<char>& keep) {
-    if (hi <= lo + 1) return;
-    double worst = -1; int split = -1;
-    for (int i = lo + 1; i < hi; ++i) {
-        double d = perpDistXZ(pts[i], pts[lo], pts[hi]);
-        if (d > worst) { worst = d; split = i; }
-    }
-    if (worst > tol && split > 0) {
-        keep[split] = 1;
-        douglasPeucker(pts, lo, split, tol, keep);
-        douglasPeucker(pts, split, hi, tol, keep);
-    }
-}
-
-}  // namespace
 
 std::vector<Vec3> smoothCentripetalCatmullRom(const std::vector<Vec3>& in, bool closed,
                                               double chordTol, double decimateTol) {
@@ -135,7 +109,9 @@ std::vector<Vec3> smoothCentripetalCatmullRom(const std::vector<Vec3>& in, bool 
     if (decimateTol > 0 && in.size() > 2) {
         std::vector<char> keep(in.size(), 0);
         keep.front() = keep.back() = 1;
-        douglasPeucker(in, 0, static_cast<int>(in.size()) - 1, decimateTol, keep);
+        douglasPeucker(0, in.size() - 1, decimateTol, [&](std::size_t i, std::size_t a, std::size_t b) {   // (polyline.h: in XZ)
+            return distToLine(Vec2(in[i].x, in[i].z), Vec2(in[a].x, in[a].z), Vec2(in[b].x, in[b].z));
+        }, keep);
         for (std::size_t i = 0; i < in.size(); ++i) if (keep[i]) ctrl.push_back(in[i]);
     } else {
         ctrl = in;
@@ -163,13 +139,14 @@ std::vector<Vec3> smoothCentripetalCatmullRom(const std::vector<Vec3>& in, bool 
 
 std::vector<Vec3> roundRoadCorners(const std::vector<Vec3>& in, double minRadius,
                                    double chordTol, double decimateTol) {
-    constexpr double PI = 3.14159265358979323846;
     // Decimate to control points (the corners to round).
     std::vector<Vec3> C;
     if (decimateTol > 0 && in.size() > 2) {
         std::vector<char> keep(in.size(), 0);
         keep.front() = keep.back() = 1;
-        douglasPeucker(in, 0, static_cast<int>(in.size()) - 1, decimateTol, keep);
+        douglasPeucker(0, in.size() - 1, decimateTol, [&](std::size_t i, std::size_t a, std::size_t b) {   // (polyline.h: in XZ)
+            return distToLine(Vec2(in[i].x, in[i].z), Vec2(in[a].x, in[a].z), Vec2(in[b].x, in[b].z));
+        }, keep);
         for (std::size_t i = 0; i < in.size(); ++i) if (keep[i]) C.push_back(in[i]);
     } else {
         C = in;
@@ -217,8 +194,7 @@ std::vector<Vec3> roundRoadCorners(const std::vector<Vec3>& in, double minRadius
 
         double angA = std::atan2(A.z - cz, A.x - cx), angB = std::atan2(B.z - cz, B.x - cx);
         double dAng = angB - angA;
-        while (dAng >  PI) dAng -= 2*PI;
-        while (dAng < -PI) dAng += 2*PI;                                         // minor arc
+        dAng = wrapRadians(dAng);                                                // minor arc
         double dThetaMax = R > tol ? 2.0 * std::acos(std::max(0.0, 1.0 - tol/R)) : std::fabs(dAng);
         int segs = std::max(1, static_cast<int>(std::ceil(std::fabs(dAng) / std::max(1e-6, dThetaMax))));
         out.push_back(A);
@@ -273,11 +249,17 @@ HeightField heightWarp(HeightField base, HeightField by, double strength) {
     };
 }
 
+double terraceHeight(double h, double step, double bank) {
+    const double s = step > 1e-6 ? step : 1.0;
+    if (bank <= 0.0) return std::round(h / s) * s;
+    // the shelf holds its level until the last `bank` of the step, then eases up to the next one
+    const double q = h / s + 0.5, k = std::floor(q);
+    const double t = std::clamp((q - k - (1.0 - bank)) / bank, 0.0, 1.0);
+    return (k + t * t * (3.0 - 2.0 * t)) * s;
+}
+
 HeightField heightTerrace(HeightField base, double step) {
-    double s = step > 1e-6 ? step : 1.0;
-    return [base, s](double x, double z) {
-        return std::round(base(x, z) / s) * s;
-    };
+    return [base, step](double x, double z) { return terraceHeight(base(x, z), step); };
 }
 
 HeightField heightAdd(HeightField a, HeightField b) {

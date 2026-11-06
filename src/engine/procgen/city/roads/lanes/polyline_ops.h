@@ -6,6 +6,7 @@
 // passes make by the hundred thousand.
 
 #include "engine/procgen/city/polygon.h"
+#include "engine/procgen/city/polyline.h"   // the segment and polyline basics this toolkit builds on
 #include <vector>
 
 namespace engine {
@@ -13,7 +14,8 @@ namespace roads::lanes {
 
 // Central-difference tangents (one-sided at the ends) and left normals.
 void frames(const std::vector<Vec2>& xy, std::vector<Vec2>& tan, std::vector<Vec2>& nrm);
-Vec2 tangentAt(const std::vector<Vec2>& xy, size_t i);
+// (`minLen`: the shortest neighbours' span that is a direction; else +x)
+Vec2 tangentAt(const std::vector<Vec2>& xy, size_t i, double minLen = 1e-12);
 
 struct Projection { double station = 0, distance = 0; size_t segment = 0; double t = 0; };
 // Nearest point of the polyline to p (brute force).
@@ -22,8 +24,6 @@ Vec2 pointAt(const std::vector<Vec2>& xy, const std::vector<double>& s, double s
 Vec2 tangentAtStation(const std::vector<Vec2>& xy, const std::vector<double>& s, double station);
 double interp(const std::vector<double>& xs, const std::vector<double>& ys, double x);   // np.interp, clamped
 
-// Crossing-number point-in-ring test (ring closed implicitly); boundary points count as inside.
-bool pointInRing(const std::vector<Vec2>& ring, const Vec2& p);
 
 // Polyline x polyline intersections (interior crossings), brute force with a bounds test.
 std::vector<Vec2> crossings(const std::vector<Vec2>& a, const std::vector<Vec2>& b);

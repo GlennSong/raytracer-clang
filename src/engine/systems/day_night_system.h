@@ -4,6 +4,7 @@
 #include "../system.h"
 #include "../day_night_cycle.h"
 #include "../sky_chart.h"
+#include "../wind.h"
 #include "../weather_cycle.h"
 #include "../procgen/terrain_horizon.h"
 #include "../properties.h"
@@ -106,6 +107,8 @@ private:
     // must not drive the sun/sky/ambient (see definition in the .cpp).
     bool hdrEnvironmentActive(FrameContext& ctx) const;
     bool configSeeded_ = false;   // DayNightConfig seeds applied once
+    bool startApplied_ = false;   // the launch's start time (RT_TIME / daynight.start: ADR-0338), once
+    void applyLaunchStart(FrameContext& ctx);
     void seedFromConfig(const DayNightConfig& c);
     // `daynight?` on the control channel (bound by this system) answers the
     // clock as numbers, measured here each frame into status_ — the loop's
@@ -169,6 +172,7 @@ private:
     float  cloudCoverage  = 0.35f;
     float  cloudDensity   = 0.55f;
     float  cloudScale     = 1.2f;
+    float  cloudTypeLo = -1.0f, cloudTypeHi = -1.0f;   // the weather's cloud types (ADR-0336); < 0: the level's
     float  cloudWindSpeed = 1.0f;
     double cloudPhase     = 0.0;   // accumulated drift, seconds
 
@@ -177,9 +181,18 @@ private:
     // knobs back to the panel and `clouds`. Auto mode rolls a seeded neighbor
     // walk every few in-world hours.
     WeatherCycle weather;
+    Wind wind;                      // the live wind (ADR-0337): published as the world's Wind each fixed step
+    Entity windEntity_{};
     bool weatherActive = false;
     bool weatherFromSettings_ = false;   // a persisted state was restored: the level's policy yields
     bool weatherDefaulted_ = false;      // the level policy / volumetric default applied once
+    // THE CALENDAR (ADR-0340): auto weather is the day's, from the seed, the date and the level's climate
+    WeatherClimate climate_;
+    uint32_t weatherSeed_ = 7;
+    int weatherDay_ = -1;                // the in-world day the weather was last drawn for
+    WeatherKind dayWeather() const {
+        return weatherForDay(weatherSeed_, cycle.dayOfYear, cycle.year, climate_, cycle.latitudeDeg);
+    }
 
     // Night exposure adaptation (WS2): the eye the renderer doesn't have. A
     // moonlit world is readable because pupils dilate — without adaptation the

@@ -1,4 +1,5 @@
 #include "engine/procgen/city/roads/lanes/road_graph_spec.h"
+#include "engine/procgen/city/roads/lanes/polyline_ops.h"   // pointAt, tangentAt
 
 #include <algorithm>
 #include <cmath>
@@ -31,8 +32,10 @@ const std::map<std::string, RoadClassSpec>& roadClasses() {
         add("boulevard",  22.0 / 6,     3,  0,  0.0,     5.0,     0.0,   2,   0.08,  120.0, 0.6);
         add("freeway",    30.0 / 8,     4,  0,  2.5,     0.0,     0.0,   3,   0.06,  200.0, 1.2);
         // RURAL: a country road out of town -- the mountain roads -- two lanes and a shoulder, no sidewalks (and so
-        // none of a street's kerbside furniture); drives as a collector
-        add("rural",      3.5,          1,  1,  1.0,     0.0,     0.0,   1,   0.10,  60.0,  0.5);
+        // none of a street's kerbside furniture); drives as a collector. The shoulder is 2.5 m, a ramp's (Glenn,
+        // 2026-11-04: "for the 2 lane roads on the mountains and even on the ground we should give some more shoulder
+        // space because it's hard to drive when they're that narrow"): 1.0 m left 9 m of deck to hold a car on
+        add("rural",      3.5,          1,  1,  2.5,     0.0,     0.0,   1,   0.10,  60.0,  0.5);
         add("ramp",       4.5,          1,  0,  2.5,     0.0,     0.0,   0,   0.09,  40.0,  1.0);
         add("divider",    0.0,          0,  0,  0.0,     0.0,     1.5,  -1,   1.0,   1.0,   0.0);
         // THE MOUNTAIN ROAD: the rural section, graded as mountain roads are, cutting through what it cannot climb
@@ -126,12 +129,6 @@ std::vector<Vec2> bezier(const std::array<Vec2, 4>& p, int n) {
     return out;
 }
 
-std::vector<double> stations(const std::vector<Vec2>& xy) {
-    std::vector<double> s(xy.size(), 0.0);
-    for (size_t i = 1; i < xy.size(); ++i) s[i] = s[i-1] + distance(xy[i-1], xy[i]);
-    return s;
-}
-
 std::vector<Vec2> resample(const std::vector<Vec2>& pts, double step) {
     if (pts.size() < 2) return pts;
     std::vector<double> s = stations(pts); double L = s.back();
@@ -146,26 +143,13 @@ std::vector<Vec2> resample(const std::vector<Vec2>& pts, double step) {
     return out;
 }
 
-namespace {
-Vec2 tangentAt(const std::vector<Vec2>& xy, size_t i) {
-    size_t j = std::min(i + 1, xy.size() - 1), k = i == 0 ? 0 : i - 1; Vec2 d = xy[j] - xy[k];
-    return d.length() > 0 ? normalize(d) : Vec2(1, 0);
-}
-Vec2 interpolateAt(const std::vector<Vec2>& xy, const std::vector<double>& s, double station) {
-    if (station <= s.front()) return xy.front();
-    if (station >= s.back()) return xy.back();
-    size_t k = std::upper_bound(s.begin(), s.end(), station) - s.begin();
-    double f = (station - s[k-1]) / std::max(s[k] - s[k-1], 1e-12); return lerp(xy[k-1], xy[k], f);
-}
-}  // namespace
-
 Vec2 resolvePoint(const nlohmann::json& spec, const RoadLabGraph& g) {
     if (spec.is_array()) return {spec.at(0).get<double>(), spec.at(1).get<double>()};
     const EdgeSpec* e = g.find(spec.at("edge").get<std::string>());
     if (!e || e->xy.empty()) throw std::runtime_error("point references unknown or later edge " + spec.at("edge").get<std::string>());
     const std::vector<Vec2>& xy = e->xy; Vec2 base; size_t i = 0;
-    if (spec.contains("s")) base = interpolateAt(xy, e->s, spec.at("s").get<double>());
-    else if (spec.contains("t")) base = interpolateAt(xy, e->s, spec.at("t").get<double>() * e->s.back());
+    if (spec.contains("s")) base = pointAt(xy, e->s, spec.at("s").get<double>());
+    else if (spec.contains("t")) base = pointAt(xy, e->s, spec.at("t").get<double>() * e->s.back());
     else if (spec.contains("x") || spec.contains("y")) {
         bool ax = spec.contains("x"); double v = spec.at(ax ? "x" : "y").get<double>(); double best = 1e300;
         for (size_t k = 0; k < xy.size(); ++k) { double d = std::fabs((ax ? xy[k].x : xy[k].y) - v); if (d < best) { best = d; i = k; } }
@@ -173,7 +157,7 @@ Vec2 resolvePoint(const nlohmann::json& spec, const RoadLabGraph& g) {
     } else throw std::runtime_error("point on edge " + e->id + " needs one of s, t, x, y");
     double best = 1e300;
     for (size_t k = 0; k < xy.size(); ++k) { double d = distance(xy[k], base); if (d < best) { best = d; i = k; } }
-    Vec2 tan = tangentAt(xy, i), nrm = perp(tan);
+    Vec2 tan = tangentAt(xy, i, 0.0), nrm = perp(tan);
     return base + tan * num(spec, "along", 0.0) + nrm * num(spec, "normal", 0.0) + Vec2(num(spec, "dx", 0.0), num(spec, "dy", 0.0));
 }
 
@@ -182,7 +166,7 @@ std::vector<Vec2> resolvePath(const nlohmann::json& p, const RoadLabGraph& g, do
     if (kind == "offset") {
         const EdgeSpec* e = g.find(p.at("edge").get<std::string>()); if (!e) throw std::runtime_error("offset of unknown edge");
         double d = p.at("d").get<double>();
-        for (size_t i = 0; i < e->xy.size(); ++i) pts.push_back(e->xy[i] + perp(tangentAt(e->xy, i)) * d);
+        for (size_t i = 0; i < e->xy.size(); ++i) pts.push_back(e->xy[i] + perp(tangentAt(e->xy, i, 0.0)) * d);
     } else if (kind == "arc") {
         double cx = p.at("center").at(0).get<double>(), cy = p.at("center").at(1).get<double>(), r = p.at("r").get<double>();
         double a0 = p.at("a0").get<double>() * M_PI / 180.0, a1 = p.at("a1").get<double>() * M_PI / 180.0;

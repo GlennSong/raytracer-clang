@@ -7,6 +7,7 @@
 #include "../src/engine/locomotion.h"
 #include "../src/engine/physics/physics_world.h"
 #include "../src/engine/rope_line.h"
+#include "../src/engine/procgen/person.h"   // buildPosedPerson: a child's head
 
 #include <cmath>
 #include <cstdio>
@@ -707,4 +708,26 @@ TEST_CASE(an_impact_is_the_speed_lost_along_the_way_meant) {
     CHECK_APPROX(speedLost(Vec3(7, 0, 0), Vec3(-3, 0, 0)), 7.0, 1e-9);                 // a bounce back: no more than all
     CHECK(speedLost(Vec3(24, -10, 0), Vec3(24, 0, 0)) < 4.0);                           // a skid onto the ground
     CHECK_APPROX(speedLost(Vec3(0, 0, 0), Vec3(3, 0, 0)), 0.0, 1e-9);
+}
+
+TEST_CASE(a_childs_head_is_drawn_bigger_and_still_sits_on_its_shoulders) {
+    // (Glenn, 2026-11-05: "Children tend to have slightly bigger heads and smaller bodies") -- the skin-coloured head
+    // block grows about the neck: its bottom stays where the adult's is, its top rises, nothing else moves
+    auto headSpan = [](Real headScale) {
+        BodyPose p = walkBodyPose(0.0);
+        p.headScale = headScale;
+        const RenderMesh m = buildPosedPerson(p, 0);
+        const Vec3 skin = personOutfit(0).skin;
+        Real lo = 1e9, hi = -1e9, bodyLo = 1e9;
+        for (const Vertex& v : m.vertices) {
+            if ((v.color - skin).length() < 1e-4 && v.position.y > 0.4) { lo = std::min(lo, v.position.y); hi = std::max(hi, v.position.y); }
+            bodyLo = std::min(bodyLo, v.position.y);
+        }
+        return std::array<Real, 3>{lo, hi, bodyLo};
+    };
+    const std::array<Real, 3> adult = headSpan(1.0), child = headSpan(1.4);
+    std::printf("    [child head] adult %.3f..%.3f, x1.4 %.3f..%.3f\n", adult[0], adult[1], child[0], child[1]);
+    CHECK_APPROX(child[0], adult[0], 0.01);                                   // on the same shoulders
+    CHECK_APPROX(child[1] - child[0], (adult[1] - adult[0]) * 1.4, 0.01);     // 1.4 times as tall
+    CHECK_APPROX(child[2], adult[2], 1e-6);                                    // the feet where they were
 }

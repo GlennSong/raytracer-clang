@@ -12,7 +12,7 @@
    "kind": "advance",
    "legend": {
     "dests": [
-     "Canal Blvd",
+     "Fourth Ave",
      "Brookcliff"
     ],
     "dist": "2 km",
@@ -32,7 +32,7 @@
    "kind": "advance",
    "legend": {
     "dests": [
-     "Canal Blvd",
+     "Fourth Ave",
      "Brookcliff"
     ],
     "dist": "1 km",
@@ -53,7 +53,7 @@
    "legend": {
     "arrow": "up-left",
     "dests": [
-     "Canal Blvd",
+     "Fourth Ave",
      "Brookcliff"
     ],
     "exit": "34"
@@ -133,7 +133,7 @@
    "kind": "advance",
    "legend": {
     "dests": [
-     "Canal Blvd",
+     "Fourth Ave",
      "Brookcliff"
     ],
     "dist": "2 km",
@@ -153,7 +153,7 @@
    "kind": "advance",
    "legend": {
     "dests": [
-     "Canal Blvd",
+     "Fourth Ave",
      "Brookcliff"
     ],
     "dist": "1 km",
@@ -174,7 +174,7 @@
    "legend": {
     "arrow": "up-left",
     "dests": [
-     "Canal Blvd",
+     "Fourth Ave",
      "Brookcliff"
     ],
     "exit": "34"
@@ -339,7 +339,7 @@
    "kind": "advance",
    "legend": {
     "dests": [
-     "Beech Ave",
+     "Lowell Ave",
      "Dunwyn Harbor"
     ],
     "dist": "2 km",
@@ -359,7 +359,7 @@
    "kind": "advance",
    "legend": {
     "dests": [
-     "Beech Ave",
+     "Lowell Ave",
      "Dunwyn Harbor"
     ],
     "dist": "1 km",
@@ -380,7 +380,7 @@
    "legend": {
     "arrow": "up-left",
     "dests": [
-     "Beech Ave",
+     "Lowell Ave",
      "Dunwyn Harbor"
     ],
     "exit": "30"
@@ -460,7 +460,7 @@
    "kind": "advance",
    "legend": {
     "dests": [
-     "Beech Ave",
+     "Lowell Ave",
      "Dunwyn Harbor"
     ],
     "dist": "2 km",
@@ -480,7 +480,7 @@
    "kind": "advance",
    "legend": {
     "dests": [
-     "Beech Ave",
+     "Lowell Ave",
      "Dunwyn Harbor"
     ],
     "dist": "1 km",
@@ -501,7 +501,7 @@
    "legend": {
     "arrow": "up-left",
     "dests": [
-     "Beech Ave",
+     "Lowell Ave",
      "Dunwyn Harbor"
     ],
     "exit": "30"
@@ -986,7 +986,7 @@
    "kind": "advance",
    "legend": {
     "dests": [
-     "Howard Ave",
+     "Fifteenth Ave",
      "Port Penwood"
     ],
     "dist": "2 km",
@@ -1006,7 +1006,7 @@
    "kind": "advance",
    "legend": {
     "dests": [
-     "Howard Ave",
+     "Fifteenth Ave",
      "Port Penwood"
     ],
     "dist": "1 km",
@@ -1027,7 +1027,7 @@
    "legend": {
     "arrow": "up-left",
     "dests": [
-     "Howard Ave",
+     "Fifteenth Ave",
      "Port Penwood"
     ],
     "exit": "19"
@@ -1107,7 +1107,7 @@
    "kind": "advance",
    "legend": {
     "dests": [
-     "Howard Ave",
+     "Fifteenth Ave",
      "Port Penwood"
     ],
     "dist": "2 km",
@@ -1127,7 +1127,7 @@
    "kind": "advance",
    "legend": {
     "dests": [
-     "Howard Ave",
+     "Fifteenth Ave",
      "Port Penwood"
     ],
     "dist": "1 km",
@@ -1148,7 +1148,7 @@
    "legend": {
     "arrow": "up-left",
     "dests": [
-     "Howard Ave",
+     "Fifteenth Ave",
      "Port Penwood"
     ],
     "exit": "19"
@@ -1313,7 +1313,7 @@
    "kind": "advance",
    "legend": {
     "dests": [
-     "Twentieth Pkwy",
+     "Quarry Pkwy",
      "Ivycombe"
     ],
     "dist": "2 km",
@@ -1333,7 +1333,7 @@
    "kind": "advance",
    "legend": {
     "dests": [
-     "Twentieth Pkwy",
+     "Quarry Pkwy",
      "Ivycombe"
     ],
     "dist": "1 km",
@@ -1354,7 +1354,7 @@
    "legend": {
     "arrow": "up-left",
     "dests": [
-     "Twentieth Pkwy",
+     "Quarry Pkwy",
      "Ivycombe"
     ],
     "exit": "15"
@@ -1434,7 +1434,7 @@
    "kind": "advance",
    "legend": {
     "dests": [
-     "Twentieth Pkwy",
+     "Quarry Pkwy",
      "Ivycombe"
     ],
     "dist": "2 km",
@@ -1454,7 +1454,7 @@
    "kind": "advance",
    "legend": {
     "dests": [
-     "Twentieth Pkwy",
+     "Quarry Pkwy",
      "Ivycombe"
     ],
     "dist": "1 km",
@@ -1475,7 +1475,7 @@
    "legend": {
     "arrow": "up-left",
     "dests": [
-     "Twentieth Pkwy",
+     "Quarry Pkwy",
      "Ivycombe"
     ],
     "exit": "15"
@@ -1640,7 +1640,7 @@
    "kind": "advance",
    "legend": {
     "dests": [
-     "Sherman Pkwy",
+     "Magnolia Ave",
      "Carrcombe Harbor"
     ],
     "dist": "2 km",
@@ -1660,7 +1660,7 @@
    "kind": "advance",
    "legend": {
     "dests": [
-     "Sherman Pkwy",
+     "Magnolia Ave",
      "Carrcombe Harbor"
     ],
     "dist": "1 km",
@@ -1681,7 +1681,7 @@
    "legend": {
     "arrow": "up-left",
     "dests": [
-     "Sherman Pkwy",
+     "Magnolia Ave",
      "Carrcombe Harbor"
     ],
     "exit": "10"
@@ -1761,7 +1761,7 @@
    "kind": "advance",
    "legend": {
     "dests": [
-     "Sherman Pkwy",
+     "Magnolia Ave",
      "Carrcombe Harbor"
     ],
     "dist": "2 km",
@@ -1781,7 +1781,7 @@
    "kind": "advance",
    "legend": {
     "dests": [
-     "Sherman Pkwy",
+     "Magnolia Ave",
      "Carrcombe Harbor"
     ],
     "dist": "1 km",
@@ -1802,7 +1802,7 @@
    "legend": {
     "arrow": "up-left",
     "dests": [
-     "Sherman Pkwy",
+     "Magnolia Ave",
      "Carrcombe Harbor"
     ],
     "exit": "10"
@@ -1967,7 +1967,7 @@
    "kind": "advance",
    "legend": {
     "dests": [
-     "Sycamore Pkwy",
+     "Second Pkwy",
      "Saltwood"
     ],
     "dist": "2 km",
@@ -1987,7 +1987,7 @@
    "kind": "advance",
    "legend": {
     "dests": [
-     "Sycamore Pkwy",
+     "Second Pkwy",
      "Saltwood"
     ],
     "dist": "1 km",
@@ -2008,7 +2008,7 @@
    "legend": {
     "arrow": "up-left",
     "dests": [
-     "Sycamore Pkwy",
+     "Second Pkwy",
      "Saltwood"
     ],
     "exit": "7"
@@ -2088,7 +2088,7 @@
    "kind": "advance",
    "legend": {
     "dests": [
-     "Sycamore Pkwy",
+     "Second Pkwy",
      "Saltwood"
     ],
     "dist": "2 km",
@@ -2108,7 +2108,7 @@
    "kind": "advance",
    "legend": {
     "dests": [
-     "Sycamore Pkwy",
+     "Second Pkwy",
      "Saltwood"
     ],
     "dist": "1 km",
@@ -2129,7 +2129,7 @@
    "legend": {
     "arrow": "up-left",
     "dests": [
-     "Sycamore Pkwy",
+     "Second Pkwy",
      "Saltwood"
     ],
     "exit": "7"
@@ -2294,7 +2294,7 @@
    "kind": "advance",
    "legend": {
     "dests": [
-     "Ninth Ave",
+     "Twelfth Ave",
      "Coldwell"
     ],
     "dist": "2 km",
@@ -2314,7 +2314,7 @@
    "kind": "advance",
    "legend": {
     "dests": [
-     "Ninth Ave",
+     "Twelfth Ave",
      "Coldwell"
     ],
     "dist": "1 km",
@@ -2335,7 +2335,7 @@
    "legend": {
     "arrow": "up-left",
     "dests": [
-     "Ninth Ave",
+     "Twelfth Ave",
      "Coldwell"
     ],
     "exit": "3"
@@ -2415,7 +2415,7 @@
    "kind": "advance",
    "legend": {
     "dests": [
-     "Ninth Ave",
+     "Twelfth Ave",
      "Coldwell"
     ],
     "dist": "2 km",
@@ -2435,7 +2435,7 @@
    "kind": "advance",
    "legend": {
     "dests": [
-     "Ninth Ave",
+     "Twelfth Ave",
      "Coldwell"
     ],
     "dist": "1 km",
@@ -2456,7 +2456,7 @@
    "legend": {
     "arrow": "up-left",
     "dests": [
-     "Ninth Ave",
+     "Twelfth Ave",
      "Coldwell"
     ],
     "exit": "3"
@@ -2609,7 +2609,26 @@
    "legend": {
     "kind": "city",
     "name": "Saltwood",
-    "pop": 18000
+    "pop": 18000,
+    "title": "CITY LIMIT"
+   },
+   "mount": "roadside"
+  },
+  {
+   "at": [
+    -4173.532878562185,
+    -2194.49208131841
+   ],
+   "facing": [
+    -0.45584646549452595,
+    0.8900584249902634
+   ],
+   "kind": "limit",
+   "legend": {
+    "kind": "city",
+    "name": "Saltwood",
+    "pop": 18000,
+    "title": "CITY LIMIT"
    },
    "mount": "roadside"
   },
@@ -2626,7 +2645,8 @@
    "legend": {
     "kind": "city",
     "name": "Saltwood",
-    "pop": 18000
+    "pop": 18000,
+    "title": "CITY LIMIT"
    },
    "mount": "roadside"
   },
@@ -2643,7 +2663,26 @@
    "legend": {
     "kind": "city",
     "name": "Weyby",
-    "pop": 15000
+    "pop": 15000,
+    "title": "CITY LIMIT"
+   },
+   "mount": "roadside"
+  },
+  {
+   "at": [
+    -2341.0723951742916,
+    -4254.318352956367
+   ],
+   "facing": [
+    0.7951338507916871,
+    -0.6064339694683858
+   ],
+   "kind": "limit",
+   "legend": {
+    "kind": "town",
+    "name": "Coldwell",
+    "pop": 6100,
+    "title": "TOWN LIMIT"
    },
    "mount": "roadside"
   },
@@ -2660,7 +2699,26 @@
    "legend": {
     "kind": "town",
     "name": "Coldwell",
-    "pop": 6100
+    "pop": 6100,
+    "title": "TOWN LIMIT"
+   },
+   "mount": "roadside"
+  },
+  {
+   "at": [
+    3083.4526780618344,
+    -7193.627551877718
+   ],
+   "facing": [
+    -0.9997035883603171,
+    -0.0243461582083417
+   ],
+   "kind": "limit",
+   "legend": {
+    "kind": "town",
+    "name": "Brookcliff",
+    "pop": 6300,
+    "title": "TOWN LIMIT"
    },
    "mount": "roadside"
   },
@@ -2677,7 +2735,26 @@
    "legend": {
     "kind": "town",
     "name": "Brookcliff",
-    "pop": 6300
+    "pop": 6300,
+    "title": "TOWN LIMIT"
+   },
+   "mount": "roadside"
+  },
+  {
+   "at": [
+    -4981.5642556415605,
+    3006.682683517359
+   ],
+   "facing": [
+    -0.47231733203805226,
+    -0.8814285778532803
+   ],
+   "kind": "limit",
+   "legend": {
+    "kind": "town",
+    "name": "Carrcombe Harbor",
+    "pop": 6400,
+    "title": "TOWN LIMIT"
    },
    "mount": "roadside"
   },
@@ -2694,7 +2771,26 @@
    "legend": {
     "kind": "town",
     "name": "Carrcombe Harbor",
-    "pop": 6500
+    "pop": 6400,
+    "title": "TOWN LIMIT"
+   },
+   "mount": "roadside"
+  },
+  {
+   "at": [
+    4952.026279436134,
+    -4729.6337386324
+   ],
+   "facing": [
+    0.22140761698757402,
+    0.975181350898326
+   ],
+   "kind": "limit",
+   "legend": {
+    "kind": "town",
+    "name": "Dunwyn Harbor",
+    "pop": 4900,
+    "title": "TOWN LIMIT"
    },
    "mount": "roadside"
   },
@@ -2711,7 +2807,8 @@
    "legend": {
     "kind": "town",
     "name": "Dunwyn Harbor",
-    "pop": 4900
+    "pop": 4900,
+    "title": "TOWN LIMIT"
    },
    "mount": "roadside"
   },
@@ -2728,7 +2825,26 @@
    "legend": {
     "kind": "town",
     "name": "Port Penwood",
-    "pop": 2600
+    "pop": 2600,
+    "title": "TOWN LIMIT"
+   },
+   "mount": "roadside"
+  },
+  {
+   "at": [
+    -3592.8544319916577,
+    6902.98435574213
+   ],
+   "facing": [
+    0.9700465033221726,
+    0.24291928987304856
+   ],
+   "kind": "limit",
+   "legend": {
+    "kind": "town",
+    "name": "Ivycombe",
+    "pop": 1900,
+    "title": "TOWN LIMIT"
    },
    "mount": "roadside"
   },
@@ -2745,7 +2861,116 @@
    "legend": {
     "kind": "town",
     "name": "Ivycombe",
-    "pop": 2000
+    "pop": 1900,
+    "title": "TOWN LIMIT"
+   },
+   "mount": "roadside"
+  },
+  {
+   "at": [
+    -4661.158088865169,
+    5288.171654423106
+   ],
+   "facing": [
+    -0.6238023430007971,
+    -0.7815821369931097
+   ],
+   "kind": "limit",
+   "legend": {
+    "kind": "beach town",
+    "name": "Marlwick",
+    "pop": 560,
+    "title": "TOWN LIMIT"
+   },
+   "mount": "roadside"
+  },
+  {
+   "at": [
+    -5267.085794258,
+    4658.7939550879455
+   ],
+   "facing": [
+    0.5036736777126073,
+    0.8638939902438592
+   ],
+   "kind": "limit",
+   "legend": {
+    "kind": "beach town",
+    "name": "Marlwick",
+    "pop": 560,
+    "title": "TOWN LIMIT"
+   },
+   "mount": "roadside"
+  },
+  {
+   "at": [
+    3923.245978295436,
+    -6036.610876005102
+   ],
+   "facing": [
+    0.6266635900445497,
+    0.7792898978637388
+   ],
+   "kind": "limit",
+   "legend": {
+    "kind": "beach town",
+    "name": "Heathholm",
+    "pop": 320,
+    "title": "TOWN LIMIT"
+   },
+   "mount": "roadside"
+  },
+  {
+   "at": [
+    4556.888268579852,
+    -5484.202641926222
+   ],
+   "facing": [
+    -0.5544014377861031,
+    -0.8322493891741237
+   ],
+   "kind": "limit",
+   "legend": {
+    "kind": "beach town",
+    "name": "Heathholm",
+    "pop": 320,
+    "title": "TOWN LIMIT"
+   },
+   "mount": "roadside"
+  },
+  {
+   "at": [
+    -4115.6758666848345,
+    -2738.1053984149235
+   ],
+   "facing": [
+    0.5748051553060999,
+    -0.8182903112181705
+   ],
+   "kind": "limit",
+   "legend": {
+    "kind": "beach town",
+    "name": "Deerhaven",
+    "pop": 910,
+    "title": "TOWN LIMIT"
+   },
+   "mount": "roadside"
+  },
+  {
+   "at": [
+    -3553.4742998088286,
+    -3428.270606040004
+   ],
+   "facing": [
+    -0.5536728690975925,
+    0.8327342637511923
+   ],
+   "kind": "limit",
+   "legend": {
+    "kind": "beach town",
+    "name": "Deerhaven",
+    "pop": 910,
+    "title": "TOWN LIMIT"
    },
    "mount": "roadside"
   },

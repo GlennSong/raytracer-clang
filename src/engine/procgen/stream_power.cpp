@@ -1,4 +1,5 @@
 #include "stream_power.h"
+#include "../../hash.h"   // hashCell, unit24
 #include "drainage.h"
 
 #include <algorithm>
@@ -68,9 +69,7 @@ int streamPowerErode(Heightmap& hm, const std::vector<float>& uplift, const Stre
                 if (s > best) { best = s; rec[i] = static_cast<int32_t>(nb); rlen[i] = dl[k]; }
             }
             if (p.stochastic && sum > 0.0) {
-                uint32_t hsh = static_cast<uint32_t>(i) * 0x9E3779B1u ^ static_cast<uint32_t>(it) * 0x85EBCA77u ^ p.seed * 0xC2B2AE3Du;
-                hsh ^= hsh >> 16; hsh *= 0x7FEB352Du; hsh ^= hsh >> 15; hsh *= 0x846CA68Bu; hsh ^= hsh >> 16;
-                double roll = (hsh & 0xFFFFFFu) / 16777216.0 * sum;
+                double roll = unit24(hashCell(static_cast<uint32_t>(i), static_cast<uint32_t>(it), p.seed)) * sum;   // (hash.h)
                 for (int k = 0; k < 8; ++k) {
                     if (s8[k] <= 0.0) continue;
                     roll -= s8[k];

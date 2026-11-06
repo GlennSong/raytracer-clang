@@ -2,6 +2,7 @@
 
 #include "../../asset_root.h"
 #include "../../../log.h"
+#include "../../../hash.h"   // hashPair
 
 #include <fstream>
 
@@ -9,9 +10,7 @@ namespace engine {
 
 namespace {
 uint32_t mix(uint32_t a, uint32_t b) {
-    uint32_t x = a * 747796405u + b * 2891336453u + 0x9E3779B9u;
-    x ^= x >> 16; x *= 0x7FEB352Du; x ^= x >> 15; x *= 0x846CA68Bu; x ^= x >> 16;
-    return x;
+    return hashPair(a, b);   // (hash.h)
 }
 std::vector<std::string> strings(const nlohmann::json& j, const char* key) {
     std::vector<std::string> out;

@@ -55,8 +55,10 @@ Field2 fieldStripes(double count);   // as fieldBands, across u: stripes running
 // of the tile), root width (`width`, a fraction of the tile) and curving lean (up to `lean` of its
 // height, either way). Tiles across u, not v. The mask is 1 inside a blade; the tone is a random
 // value per blade (the frontmost at that texel), for colour variation. Grass cards, reeds, fur.
-Field2 fieldBlades(uint32_t seed, int count, double width, double lean, double minHeight);
-Field2 fieldBladeTone(uint32_t seed, int count, double width, double lean, double minHeight);
+// `crown` 0..1 shortens the blades toward the tile's sides (height x 1 - crown (2u - 1)^2): a tussock's dome
+// instead of a flat-topped strip (a lone card, which does not tile, reads as a rectangle without it).
+Field2 fieldBlades(uint32_t seed, int count, double width, double lean, double minHeight, double crown = 0.0);
+Field2 fieldBladeTone(uint32_t seed, int count, double width, double lean, double minHeight, double crown = 0.0);
 
 // --- shaping and composition ---
 Field2 fieldSmoothstep(Field2 a, double lo, double hi);
@@ -78,6 +80,7 @@ ColorField2 colorConstant(const Vec3& c);
 ColorField2 colorMixBy(ColorField2 a, ColorField2 b, Field2 t);   // lerp a->b by a field
 ColorField2 colorMul(ColorField2 c, Field2 k);                    // brightness by a field
 ColorField2 colorTint(ColorField2 c, const Vec3& tint);            // per-channel multiply
+ColorField2 colorPalette(Field2 index, std::vector<Vec3> colours);   // colours[index 0..1 x n]: a field picks one
 
 // --- bake ---
 // Grayscale: the field's value (clamped to [0,1]) written to all three channels
@@ -106,6 +109,12 @@ TextureData bakeCached(const std::string& recipeKey, const std::function<Texture
 // maps' slope and cliff fields, the weather bake's range and shape passes, and the planner's land masks.
 enum class BlurEdge { Clamp, Shrink };
 std::vector<float> boxBlurGrid(const std::vector<float>& in, int n, int r, int passes = 1, BlurEdge edge = BlurEdge::Clamp);
+// THE CHAMFER SWEEP over an n x n row-major grid, in place: two passes (forward, then back) that leave each cell at
+// most its neighbour plus `straight` (along a row or column) or `diagonal` (corner to corner). Seeded 0 where a set
+// is and huge elsewhere, it is the chamfer distance to that set (the planner's depth into flat ground, its distance
+// from the sea); seeded with heights and a step's rise, it is the highest ground no steeper than that slope lying
+// under them (the regrade's slope cap, regrade.h).
+void chamferSweepGrid(std::vector<float>& v, int n, float straight, float diagonal);
 
 }  // namespace engine
 

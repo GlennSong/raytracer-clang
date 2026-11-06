@@ -44,7 +44,14 @@ struct DistrictMap {
     // (0 financial, 1 commercial, 2 residential, 3 oldtown, 4 industrial).
     std::vector<std::pair<Vec2, int>> hubs;
     Real hubRadius = 220.0;     // a hub's flavor reach before Residential wins
+    // A hub may be a LINE (a beach town's seafront; ~/.claude/plans/beach-town.md) -- distance to it is to the line --
+    // and may have its own reach (0: hubRadius). Index-aligned with hubs; shorter: the rest are points of hubRadius.
+    std::vector<std::vector<Vec2>> hubLines;
+    std::vector<Real> hubRadii;
     DistrictTag tagAt(const Vec2& p) const;
+    // The hub nearest p (by hubDistance), -1 with none.
+    int nearestHub(const Vec2& p) const;
+    Real hubDistance(std::size_t i, const Vec2& p) const;
 };
 
 // What the architect hands back for one lot: a fully-populated grammar recipe,
@@ -140,13 +147,32 @@ struct LandmarkCand {
     Real shortSide = 0;    // lot OBB short side (m)
     Real area = 0;         // lot polygon area (m²)
     Vec2 pos{0, 0};        // lot centroid (world XZ)
-    int cluster = 0;       // hub-cluster id (0 = the city; 1+ = towns)
+    int cluster = 0;       // hub-cluster id (0 = the city; 1+ = towns; -1 = no place's: no landmark)
 };
+// A PLACE'S LANDMARKS (its settlement kind's, settlements.h, carried by its hub): a `civic` place has the city's full
+// table, centred on `center`; any other the `wants` -- `count` of a kind once the place has `minLots` lots (and
+// `minOldTown` of them old town), on its districts' best lot or, `anyDistrict`, any lot's.
+struct LandmarkWant {
+    LandmarkKind kind = LandmarkKind::School;
+    int count = 1, minLots = 0, minOldTown = 0;
+    bool anyDistrict = false;
+};
+struct LandmarkCluster {
+    bool civic = false;
+    std::vector<LandmarkWant> wants;
+    Vec2 center{0, 0};
+    std::vector<Poly2> limits;   // its town or city limits: a lot inside them is its own (none: by the nearest hub)
+};
+// The LandmarkKind named `name` (landmarkName's); false for none.
+bool landmarkKindNamed(const std::string& name, LandmarkKind& out);
 // One entry per candidate: the assigned LandmarkKind as int, -1 = none.
 // `cityCenter`/`innerRadius` feed the centrality scoring of the wantCore
 // picks (capitol, courthouse, museum), exactly as the city-only planner did.
+// `places` (by cluster id): each place's own landmarks. A cluster it does not
+// cover plans as before: 0 the city's table, 1+ a satellite town's.
 std::vector<int> planLandmarks(const std::vector<LandmarkCand>& cands,
-                               const Vec2& cityCenter, Real innerRadius);
+                               const Vec2& cityCenter, Real innerRadius,
+                               const std::vector<LandmarkCluster>* places = nullptr);
 
 // One ROWHOUSE unit's dressed params for the RowStrip massing: the lot pass
 // splits the strip and calls this per unit, so neighbours vary in cladding
@@ -179,6 +205,11 @@ struct ArchetypeBook {
         return true;
     }
 };
+
+// A book table from {registry index, weight} entries: ascending cumulative thresholds runningSum/total (for k/100-style
+// weights the compiled ladders' literals to the exact double), the last owning everything up to 1. The Lua book and a
+// level's hub mixes both build them so.
+void archetypeThresholds(const std::vector<std::pair<int, double>>& entries, std::vector<std::pair<Real, int>>& table);
 
 // The recipe REGISTRY: every recipe the architect can produce, rolled and
 // landmark alike, by its out.name string. Index is stable within a build.

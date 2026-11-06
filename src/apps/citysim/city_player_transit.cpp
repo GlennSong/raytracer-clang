@@ -547,7 +547,7 @@ void CityPlayerTransitSystem::update(engine::FrameContext& ctx) {
                         for (int ni : sim0.nearAgents()) {
                             const std::size_t i = static_cast<std::size_t>(ni);
                             const int ai = ni;
-                            if (!(sim0.isBus(ai) || sim0.isTaxi(ai)) || ag[i].speed > 2.0) continue;
+                            if (!sim0.onService(ai) || ag[i].speed > 2.0) continue;
                             if (sim0.isBus(ai) && !sim0.busInService(ai)) continue;   // (NOT IN SERVICE)
                             const Real dx = ag[i].pos.x - pt->position.x, dz = ag[i].pos.y - pt->position.z;
                             const Real d = std::sqrt(dx * dx + dz * dz);
@@ -572,7 +572,7 @@ void CityPlayerTransitSystem::update(engine::FrameContext& ctx) {
                         const Agent& a = ag[i];
                         const int ai = ni;
                         if (a.mode != Agent::Mode::Driver || a.vehicle < 0 || a.released || a.playerControlled) continue;
-                        if (sim0.isBus(ai) || sim0.isTaxi(ai)) continue;
+                        if (sim0.onService(ai)) continue;
                         const Real dx = a.pos.x - pt->position.x, dz = a.pos.y - pt->position.z;
                         const Real d = std::sqrt(dx * dx + dz * dz);
                         if (d < bestD) { bestD = d; best = ai; }

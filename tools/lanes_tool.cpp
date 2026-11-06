@@ -171,7 +171,7 @@ int main(int argc, char** argv) {
         if (!cs.empty()) { std::ifstream f(cs); nlohmann::json lvl; f >> lvl; citysim = lvl.value("citysim", nlohmann::json::object()); }
         std::unique_ptr<Result> r = build(RoadLabGraph::load(argv[2]));
         {   // where are the holes? (debug for the scene-block path)
-            auto census = [](const PolySet& s, const char* name) { size_t holes = 0, big = 0; for (const Polygon2& p : s) for (const Ring& h : p.holes) { ++holes; if (std::fabs(ringArea(h)) >= 2000.0) ++big; } std::printf("  %s: %zu polygons, %zu holes (%zu >= 2000 m2)\n", name, s.size(), holes, big); };
+            auto census = [](const PolySet& s, const char* name) { size_t holes = 0, big = 0; for (const Polygon2& p : s) for (const Ring& h : p.holes) { ++holes; if (std::fabs(signedArea(h)) >= 2000.0) ++big; } std::printf("  %s: %zu polygons, %zu holes (%zu >= 2000 m2)\n", name, s.size(), holes, big); };
             census(r->pavement.surface, "surface"); census(r->pavement.shoulder, "shoulder"); census(unionSets(r->pavement.surface, r->pavement.shoulder), "union");
         }
         BlockAudit a = auditBlocks(*r, citysim);
@@ -448,7 +448,7 @@ int main(int argc, char** argv) {
                     double x0 = 1e300, x1 = -1e300, y0 = 1e300, y1 = -1e300;
                     for (const engine::Vec2& q : pg.outer) { x0 = std::min(x0, q.x); x1 = std::max(x1, q.x); y0 = std::min(y0, q.y); y1 = std::max(y1, q.y); }
                     std::printf("           %-9s %7.0f m2 at (%7.1f,%7.1f)  %3zu pts  bbox %.0f x %.0f m\n",
-                                what, std::fabs(ringArea(pg.outer)), c.x, c.y, pg.outer.size(), x1 - x0, y1 - y0);
+                                what, std::fabs(signedArea(pg.outer)), c.x, c.y, pg.outer.size(), x1 - x0, y1 - y0);
                 }
             };
             std::printf("         layers within %.0f m of (%.1f, %.1f):\n", probeR, probeX, probeY);
@@ -507,7 +507,7 @@ int main(int argc, char** argv) {
         struct H { double area, opened; engine::Vec2 c; std::string near; double d; };
         std::vector<H> hs;
         for (const Polygon2& sp : r.pavement.surface) for (const Ring& h : sp.holes) {
-            const double a = std::fabs(ringArea(h)); if (a < 1.0 || a >= 2000.0) continue;   // >= 2000 m2 is a city block
+            const double a = std::fabs(signedArea(h)); if (a < 1.0 || a >= 2000.0) continue;   // >= 2000 m2 is a city block
             engine::Vec2 c; for (const engine::Vec2& q : h) c += q; c = c / static_cast<double>(h.size());
             // what actually covers the ground here: the median layer carries the kerbed grass slabs (islands and gores)
             H e; e.area = a; e.opened = contains(r.pavement.median, c) ? 0.0 : 1.0; e.c = c; e.d = 1e300;

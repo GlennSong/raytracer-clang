@@ -1,4 +1,5 @@
 #include "terrain_weather.h"
+#include "../../hash.h"   // hashCell, unit24
 #include "texture_field.h"   // boxBlurGrid (ADR-0289)
 #include "../bundle/cache_use.h"
 #include "../bundle/bundle.h"
@@ -40,16 +41,11 @@ void facetRock(Heightmap& g, float base0, float sea, const WeatherParams& w, uin
     const Noise vn(seed * 40503u + 7u);   // the regions' variety
     const std::vector<float> src = g.h;
     auto H = [&](double x, double z) {   // bilinear on the source grid, world metres
-        const double gx = std::clamp((x + half) / cell, 0.0, n - 1.001), gz = std::clamp((z + half) / cell, 0.0, n - 1.001);
-        const int i = static_cast<int>(gx), j = static_cast<int>(gz);
-        const double u = gx - i, v = gz - j;
-        auto at = [&](int a, int b) { return static_cast<double>(src[static_cast<std::size_t>(b) * n + a]); };
-        return (at(i, j) * (1 - u) + at(i + 1, j) * u) * (1 - v) + (at(i, j + 1) * (1 - u) + at(i + 1, j + 1) * u) * v;
+        return bilinearGrid(n, n, (x + half) / cell, (z + half) / cell,
+                            [&](int a, int b) { return static_cast<double>(src[static_cast<std::size_t>(b) * n + a]); });
     };
-    auto hsh = [&](int64_t a, int64_t b, uint32_t salt) {
-        uint32_t h = static_cast<uint32_t>(a) * 0x9E3779B1u ^ static_cast<uint32_t>(b) * 0x85EBCA77u ^ (seed + salt) * 0xC2B2AE3Du;
-        h ^= h >> 16; h *= 0x7FEB352Du; h ^= h >> 15; h *= 0x846CA68Bu; h ^= h >> 16;
-        return (h & 0xFFFFFFu) / 16777216.0;
+    auto hsh = [&](int64_t a, int64_t b, uint32_t salt) {   // (hash.h)
+        return unit24(hashCell(static_cast<uint32_t>(a), static_cast<uint32_t>(b), seed + salt));
     };
     std::atomic<long> faceted{0};
     parallelRows(n, [&](int z) {
@@ -211,8 +207,9 @@ Heightmap refineGrown(const Heightmap& grown, float base0, float sea, const Weat
 
 nlohmann::json groundShapingBlock(const nlohmann::json& tjIn) {
     nlohmann::json tj = tjIn;
-    // ("rockRelief" too: it is laid on the weathered grid as it is read, ADR-0213 -- the grid itself is the same)
-    for (const char* k : {"rivers", "groundCover", "cdlod", "material", "forest", "trails", "rockRelief"}) tj.erase(k);
+    // ("rockRelief" and "regrade" too: they are laid on the weathered grid as it is read, ADR-0213 / ADR-0323 -- the
+    // grid itself is the same)
+    for (const char* k : {"rivers", "groundCover", "cdlod", "material", "forest", "trails", "rockRelief", "regrade"}) tj.erase(k);
     return tj;
 }
 

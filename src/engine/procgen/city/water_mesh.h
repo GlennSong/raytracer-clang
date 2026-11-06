@@ -11,8 +11,9 @@ namespace engine {
 // the terrain floor sits below the sea (land cells are skipped; the terrain mesh
 // occludes the plane at the shoreline). Each vertex bakes two values into its UV
 // for the Water surface shader — with NO dependence on a depth buffer:
-//   u = water DEPTH   (seaLevel - floorHeight), the depth-colour gradient
-//   v = SHORE distance (metres to the nearest land, capped at foamBand), the foam
+//   u = water DEPTH   (seaLevel - floorHeight; negative on land corners), the depth-colour gradient
+//   v = SHORE distance (metres from the waterline, + offshore, - inland, capped at the wider of foamBand
+//       and surfBand), the foam and the surf (ADR-0330)
 // The mesh is drawn with a Surface::Water material (low roughness + <1 opacity),
 // so waves + foam animate on windTime and it reflects via SSR / fresnel.
 struct WaterMeshParams {
@@ -21,6 +22,7 @@ struct WaterMeshParams {
     Vec2   hi{ 500,  500};
     double cell     = 10.0;   // water grid step (m); shore detail comes from the shader
     double foamBand = 60.0;   // shore-distance cap baked into UV.v (m)
+    double surfBand = 120.0;  // ...and how far out the breakers roll from (0: none -- a pool)
     // Which cells are sea, when not `floor`: the NATURAL ground, so a river channel cut below
     // sea level near its mouth stays the river's (hydrology waterMesh), not a staircase of sea.
     HeightField extent;

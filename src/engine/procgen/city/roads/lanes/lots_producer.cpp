@@ -22,7 +22,7 @@ namespace engine {
 namespace roads::lanes {
 
 // Bump whenever the lot pass's output changes for the same inputs (the key cannot see code).
-const char* const kLotsBuildTag = "2026-10-30.1";   // one massing path, one mall, one party-wall rule (#117 item 35, ADR-0270..0272); history: git log -G kLotsBuildTag
+const char* const kLotsBuildTag = "2026-11-03.1";   // a landmark is never planned onto a lot that is already a store, campus, depot or car park (ADR-0314); .3 beach car parks: a curved lot's open frame from its simplified outline; .2 whole blocks of homes rise, courtyard blocks uncapped (ADR-0299); denser housing (ADR-0298); history: git log -G kLotsBuildTag
 //   // .2-.4: soft foliage (emitSoftBox hedges, bushes, beds)   // 2026-09-24.1: grows on terrain, on the loader's ground (laneErodedBase + lotGroundFor, ADR-0095);   // ground-relative (draped) dressing slots; blocks behind the drawn sidewalk; door walks reach it   // 2026-09-22.1: ONE grow (engine::growCity) — the bake gets the streets and the paved band the loader always had
 
 namespace {
@@ -86,6 +86,10 @@ public:
         // island must not re-bake its 8.8 GB of city; a level with no forest keys exactly as before)
         nlohmann::json terrainKey = in.level.value("terrain", nlohmann::json());
         if (terrainKey.is_object()) terrainKey.erase("forest");
+        // (nor the cover's heath, ADR-0331: it paints and plants, the lots never see it -- erased only where it is, so
+        // every level without one keeps its key)
+        if (terrainKey.is_object() && terrainKey.contains("groundCover") && terrainKey["groundCover"].is_object())
+            terrainKey["groundCover"].erase("heath");
         k = bundle::fnv1aStr(terrainKey.dump(), k);
         k = bundle::fnv1aStr(in.level.value("water", nlohmann::json()).dump(), k);
         const double drawnCell = levelDrawnGroundCell(in.level);
@@ -223,11 +227,8 @@ std::shared_ptr<const std::function<double(double, double)>> laneErodedBase(
                  << " nodes off the build's ground by > 1 m where detail shows (worst " << worstFar << " m)";
     }
     auto bilinear = [grid](const std::vector<float>& v, double x, double z) {
-        const double fx = std::clamp((x - grid->x0) / grid->res, 0.0, grid->nx - 1.001), fz = std::clamp((z - grid->y0) / grid->res, 0.0, grid->ny - 1.001);
-        const int i = static_cast<int>(fx), j = static_cast<int>(fz);
-        const double u = fx - i, w = fz - j;
-        auto C = [&](int p, int q) { return static_cast<double>(v[static_cast<std::size_t>(q) * grid->nx + p]); };
-        return (C(i, j) * (1 - u) + C(i + 1, j) * u) * (1 - w) + (C(i, j + 1) * (1 - u) + C(i + 1, j + 1) * u) * w;
+        return bilinearGrid(grid->nx, grid->ny, (x - grid->x0) / grid->res, (z - grid->y0) / grid->res,
+                            [&](int p, int q) { return static_cast<double>(v[static_cast<std::size_t>(q) * grid->nx + p]); });
     };
     return std::make_shared<const std::function<double(double, double)>>(
         [fbTp, fbNoise, bx1, by1, grid, natNodes, detailW, bilinear](double x, double z) {

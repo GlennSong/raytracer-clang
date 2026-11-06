@@ -16,6 +16,7 @@
 
 #include <cstdint>
 #include <string>
+#include <vector>
 
 namespace engine {
 
@@ -88,6 +89,22 @@ inline std::string strField(lua_State* L, int t, const char* key) {
     std::string v = s ? s : "";
     lua_pop(L, 1);
     return v;
+}
+
+// The strings of the list-field `key` (none when absent; non-strings skipped).
+inline std::vector<std::string> stringsField(lua_State* L, int t, const char* key) {
+    std::vector<std::string> out;
+    lua_getfield(L, t, key);
+    if (lua_istable(L, -1)) {
+        const lua_Integer n = luaL_len(L, -1);
+        for (lua_Integer i = 1; i <= n; ++i) {
+            lua_rawgeti(L, -1, i);
+            if (lua_isstring(L, -1)) out.push_back(lua_tostring(L, -1));
+            lua_pop(L, 1);
+        }
+    }
+    lua_pop(L, 1);
+    return out;
 }
 
 // A {x,y,z} array-field: missing components keep `def`.

@@ -10,7 +10,6 @@ namespace engine {
 
 namespace {
 
-constexpr Real kPi = 3.14159265358979323846;
 
 // An arc from its chord and sagitta: the centre, radius and the signed sweep (left of a->b positive).
 struct ArcGeom { Vec2 c; Real r = 0; Real a0 = 0, sweep = 0; bool ok = false; };
@@ -33,7 +32,7 @@ ArcGeom arcOf(const Edge& e) {
     // the arc goes the long way round, the same way.
     const Real half = std::asin(std::min(Real(1), L * 0.5 / g.r));
     g.sweep = -sign * 2.0 * half;
-    if (s > L * 0.5) g.sweep = -sign * (2.0 * kPi - 2.0 * half);
+    if (s > L * 0.5) g.sweep = -sign * (2.0 * PI - 2.0 * half);
     g.ok = true;
     return g;
 }
@@ -144,7 +143,7 @@ Section Section::rounded(Real r) const {
         if (in.kind != Edge::Kind::Line || out.kind != Edge::Kind::Line) continue;
         const Vec2 d0 = normalize(in.b - in.a), d1 = normalize(out.b - out.a);
         const Real phi = std::acos(std::max(Real(-1), std::min(Real(1), dot(d0, d1))));   // the turn
-        if (phi < 1e-3 || phi > kPi - 1e-3) continue;
+        if (phi < 1e-3 || phi > PI - 1e-3) continue;
         trim[i] = r * std::tan(phi * 0.5);
     }
     for (std::size_t i = 0; i < n; ++i) {   // an edge can give each end at most half its length
@@ -319,7 +318,7 @@ Section Section::retagArcs(const Poly2& outline) {
         while (count < n) {
             const std::size_t j = (i + count) % n;
             if (group[j] >= 0 || !continues((i + count - 1) % n, j)) break;
-            if (std::fabs(sweep + turn[(i + count - 1) % n]) > kPi + 0.02) break;
+            if (std::fabs(sweep + turn[(i + count - 1) % n]) > PI + 0.02) break;
             sweep += turn[(i + count - 1) % n];
             ++count;
         }
@@ -339,7 +338,7 @@ Section Section::retagArcs(const Poly2& outline) {
                 const Real chord = (b - a).length();
                 Real sag = R - std::sqrt(std::max(Real(0), R * R - chord * chord * 0.25));
                 const Real total = theta * count;
-                if (total > kPi) sag = 2.0 * R - sag;   // the long way round
+                if (total > PI) sag = 2.0 * R - sag;   // the long way round
                 Edge arc;
                 arc.kind = Edge::Kind::Arc;
                 arc.a = a;

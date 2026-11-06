@@ -1,6 +1,7 @@
 #include "player_body_system.h"
 
 #include "../asset_manager.h"
+#include "../board_meshes.h"   // buildSkateboard, buildScooter
 #include "../body_draw.h"
 #include "../components.h"
 #include "../interaction.h"   // Seated
@@ -19,7 +20,6 @@ static_assert(sizeof(PlayerPose::ragdollPos) / sizeof(Vec3) == BlockBody::kParts
 
 namespace {
 
-constexpr Real kTau = 6.283185307179586;
 constexpr Real kDeg = 3.14159265358979 / 180.0;
 constexpr Real kFaceSpeed = 0.3;      // walking: turn to face the way it goes above this (the walkers' rule)
 constexpr Real kTeleportJump = 3.0;   // a step past this in one tick is a teleport (a respawn, a boarding), not a stride
@@ -30,36 +30,6 @@ Vec3 flat(const Vec3& v) {
 }
 
 Quat yawTo(const Vec3& face) { return Quat::fromAxisAngle(Vec3(0, 1, 0), std::atan2(face.x, face.z)); }
-
-void addBlock(RenderMesh& m, const Vec3& centre, const Vec3& size, const Vec3& colour) {
-    MeshBuilder::emitBox(m, MeshFrame::centred(centre, size), colour);
-}
-
-// A SKATEBOARD along +z, its wheels on y = 0: a deck, kicked-up tail and nose, four wheels
-RenderMesh buildSkateboard() {
-    RenderMesh m;
-    const Vec3 deck(0.16, 0.1, 0.12), wheel(0.92, 0.9, 0.82), truck(0.6, 0.6, 0.62);
-    addBlock(m, Vec3(0, 0.1, 0), Vec3(0.21, 0.025, 0.62), deck);
-    addBlock(m, Vec3(0, 0.125, 0.36), Vec3(0.21, 0.025, 0.14), deck);    // nose
-    addBlock(m, Vec3(0, 0.125, -0.36), Vec3(0.21, 0.025, 0.14), deck);   // tail
-    for (Real z : {-0.24, 0.24}) {
-        addBlock(m, Vec3(0, 0.065, z), Vec3(0.16, 0.04, 0.04), truck);
-        for (Real x : {-0.085, 0.085}) addBlock(m, Vec3(x, 0.03, z), Vec3(0.035, 0.06, 0.06), wheel);
-    }
-    return m;
-}
-
-// A KICK SCOOTER along +z: a low deck, the stem up from the front, the bar across
-RenderMesh buildScooter() {
-    RenderMesh m;
-    const Vec3 deck(0.15, 0.16, 0.18), metal(0.7, 0.72, 0.75), grip(0.08, 0.08, 0.09), wheel(0.2, 0.2, 0.22);
-    addBlock(m, Vec3(0, 0.07, 0), Vec3(0.13, 0.035, 0.6), deck);
-    addBlock(m, Vec3(0, 0.55, 0.34), Vec3(0.04, 0.95, 0.04), metal);    // the stem
-    addBlock(m, Vec3(0, 1.02, 0.34), Vec3(0.5, 0.035, 0.035), metal);   // the bar
-    for (Real x : {-0.22, 0.22}) addBlock(m, Vec3(x, 1.02, 0.34), Vec3(0.09, 0.045, 0.045), grip);
-    for (Real z : {-0.3, 0.34}) addBlock(m, Vec3(0, 0.05, z), Vec3(0.03, 0.1, 0.1), wheel);
-    return m;
-}
 
 }  // namespace
 
@@ -276,14 +246,14 @@ void PlayerBodySystem::fixedUpdate(FrameContext& ctx) {
                 for (int k = 0; k < 2; ++k) {
                     const Real s = k ? -1.0 : 1.0;
                     const Real ph = p->swimPhase + (k ? 0.5 : 0.0);
-                    const Real a = kTau * (ph - std::floor(ph));
+                    const Real a = TAU * (ph - std::floor(ph));
                     const Vec3 crawl(s * 0.12, std::cos(a), std::sin(a));
-                    const Real sc = std::sin(tc * kTau * 1.1 + (k ? 3.14159 : 0.0));
+                    const Real sc = std::sin(tc * TAU * 1.1 + (k ? 3.14159 : 0.0));
                     const Vec3 scull(s * (0.85 + 0.2 * sc), -0.12, 0.45 + 0.25 * sc);   // out flat at the surface
                     (k ? pose.armR : pose.armL) = normalize(scull + (normalize(crawl) - normalize(scull)) * L);
                 }
                 const Real kick = std::sin(clock_ * 9.0);
-                const Real tread = std::sin(tc * kTau * 1.0);   // a leg a beat: the lift that holds the head up
+                const Real tread = std::sin(tc * TAU * 1.0);   // a leg a beat: the lift that holds the head up
                 const Vec3 trL(0.12, -1, 0.45 * tread), trR(-0.12, -1, -0.45 * tread);
                 const Vec3 flL(0.04, -1, 0.15 * kick), flR(-0.04, -1, -0.15 * kick);
                 pose.legL = normalize(normalize(trL) + (normalize(flL) - normalize(trL)) * L);

@@ -1,4 +1,6 @@
 #include "floor_zones.h"
+#include "../../../hash.h"   // lowbias32
+#include "polyline.h"   // distToPolyline
 
 #include "roads/lanes/geom2d.h"   // the Clipper booleans (every piece kept, holes too)
 #include "space_graph.h"          // cellUseName: the tags' RoomKind names
@@ -22,23 +24,18 @@ constexpr Real kSharpTurn = 0.6;      // radians: a facade turning more than thi
 // emitRooms keeps (a wall shorter than kRoomDoorW + 0.6 gets no doorway at all)
 constexpr Real kDoorRun = kRoomDoorW + 0.65;
 
-uint32_t mix(uint32_t h) {
-    h ^= h >> 16; h *= 0x7feb352du; h ^= h >> 15; h *= 0x846ca68bu; h ^= h >> 16;
-    return h;
-}
 uint32_t hashAt(uint32_t seed, const Vec2& p) {
-    return mix(seed ^ (static_cast<uint32_t>(std::lround(p.x * 10.0)) * 73856093u) ^
+    return lowbias32(seed ^ (static_cast<uint32_t>(std::lround(p.x * 10.0)) * 73856093u) ^
                (static_cast<uint32_t>(std::lround(p.y * 10.0)) * 19349663u));
 }
 
-Real ringAreaAbs(const Poly2& r) { return std::fabs(signedArea(r)); }
 
 // The set's largest outer ring, CCW (a cut that leaves a sliver keeps the lot, not the sliver).
 Poly2 largestOuter(const G::PolySet& s) {
     const G::Polygon2* best = nullptr;
     Real bestA = 0;
     for (const G::Polygon2& p : s) {
-        const Real a = ringAreaAbs(p.outer);
+        const Real a = area(p.outer);
         if (a > bestA) { bestA = a; best = &p; }
     }
     if (!best) return {};
@@ -56,16 +53,7 @@ G::PolySet halfPlane(const Vec2& p, const Vec2& dir, bool left) {
     return G::fromRing(r);
 }
 
-Real distToSegment(const Vec2& q, const Vec2& a, const Vec2& b) {
-    const Vec2 ab = b - a;
-    const Real t = std::clamp(dot(q - a, ab) / std::max(Real(1e-12), ab.lengthSquared()), Real(0), Real(1));
-    return (q - (a + ab * t)).length();
-}
-Real distToRing(const Vec2& q, const Poly2& r) {
-    Real best = 1e9;
-    for (std::size_t i = 0; i < r.size(); ++i) best = std::min(best, distToSegment(q, r[i], r[(i + 1) % r.size()]));
-    return best;
-}
+Real distToRing(const Vec2& q, const Poly2& r) { return r.empty() ? 1e9 : distToPolyline(q, r, /*closed=*/true); }   // (polyline.h)
 Real distToRings(const Vec2& q, const std::vector<Poly2>& rs) {
     Real best = 1e9;
     for (const Poly2& r : rs) best = std::min(best, distToRing(q, r));
@@ -474,7 +462,7 @@ FloorPartition partitionFloor(const Poly2& plateIn, const CorePlan& core, Real i
             // rectangle (a sliver along a lot's side would make it an L with a doorway onto nothing)
             const Real gain = perimeter(Z.poly) + perimeter(fp.zones[b].poly) - perimeter(un.front().outer);
             const OBB2 ob = orientedBoundingBox(un.front().outer);
-            if (ringAreaAbs(un.front().outer) < 0.85 * 4 * ob.half[0] * ob.half[1]) continue;
+            if (area(un.front().outer) < 0.85 * 4 * ob.half[0] * ob.half[1]) continue;
             if (gain > bestGain) { bestGain = gain; best = b; }
         }
         if (best < fp.zones.size() && bestGain > 1.0) {
@@ -571,7 +559,7 @@ FloorPartition partitionFloor(const Poly2& plateIn, const CorePlan& core, Real i
                      ob.center + u * 4000.0 + n * (zp.aisle * 0.5), ob.center - u * 4000.0 + n * (zp.aisle * 0.5)};
             ensureCCW(strip);
             walkSoFar = G::unionSets(walkSoFar, G::intersectSets(G::fromRing(strip), G::fromRing(o)));
-            for (std::size_t k = 0; k < hs.size(); ++k) bisect(hs[k], depth + 1, mix(h + 1u + static_cast<uint32_t>(k)));
+            for (std::size_t k = 0; k < hs.size(); ++k) bisect(hs[k], depth + 1, lowbias32(h + 1u + static_cast<uint32_t>(k)));
             return;
         }
         if (A <= zp.interiorLot * 1.6 || longSide < 2 * zp.minSide) { leaf(); return; }
@@ -583,7 +571,7 @@ FloorPartition partitionFloor(const Poly2& plateIn, const CorePlan& core, Real i
             bool ok = hs.size() >= 2;
             for (const Poly2& q : hs) ok = ok && onWalk(q);
             if (!ok) continue;
-            for (std::size_t k = 0; k < hs.size(); ++k) bisect(hs[k], depth + 1, mix(h + 1u + static_cast<uint32_t>(k)));
+            for (std::size_t k = 0; k < hs.size(); ++k) bisect(hs[k], depth + 1, lowbias32(h + 1u + static_cast<uint32_t>(k)));
             return;
         }
         leaf();
@@ -591,7 +579,7 @@ FloorPartition partitionFloor(const Poly2& plateIn, const CorePlan& core, Real i
     for (const G::Polygon2& p : pieces) {
         Poly2 o = p.outer;
         ensureCCW(o);
-        bisect(o, 0, mix(static_cast<uint32_t>(params.seed) * 2654435761u + static_cast<uint32_t>(group)));
+        bisect(o, 0, lowbias32(static_cast<uint32_t>(params.seed) * 2654435761u + static_cast<uint32_t>(group)));
         ++group;
     }
 
@@ -622,7 +610,7 @@ FloorPartition partitionFloor(const Poly2& plateIn, const CorePlan& core, Real i
         const G::PolySet rest = reach.empty() ? C : G::differenceSets(C, reach);
         const G::PolySet nearReach = G::offsetSet(reach, 0.05);
         for (const G::Polygon2& q : rest) {
-            const Real a = ringAreaAbs(q.outer);
+            const Real a = area(q.outer);
             if (a < 1.0 && G::setArea(G::intersectSets(G::PolySet{q}, nearReach)) > 0.0) {
                 reach = G::unionSets(reach, G::PolySet{q});   // a corner's scrap: still the way
                 continue;
@@ -1147,7 +1135,7 @@ const ZoneStyle* floorStyle(const FloorProgram& prog, uint32_t seed) {
     if (prog.styles.empty()) return nullptr;
     Real total = 0;
     for (const ZoneStyle& s : prog.styles) total += std::max(Real(0), s.weight);
-    Real pick = (mix(seed * 2246822519u + 77u) % 100000u) / 100000.0 * total;
+    Real pick = (lowbias32(seed * 2246822519u + 77u) % 100000u) / 100000.0 * total;
     const ZoneStyle* st = &prog.styles.back();
     for (const ZoneStyle& s : prog.styles) {
         if (pick < s.weight) { st = &s; break; }
@@ -1635,7 +1623,7 @@ static RoomPlan zonedFloorCut(const Poly2& plate, const BuildingParams& params, 
     if (!prog.residential) {
         Real best = 0;
         for (const G::Polygon2& q : IN)
-            if (ringAreaAbs(q.outer) > best) { best = ringAreaAbs(q.outer); walkPlan = q.outer; }
+            if (area(q.outer) > best) { best = area(q.outer); walkPlan = q.outer; }
         ensureCCW(walkPlan);
     }
     G::PolySet circSet;

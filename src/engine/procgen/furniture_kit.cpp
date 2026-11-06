@@ -11,7 +11,6 @@ namespace engine {
 
 namespace {
 
-constexpr double kPi = 3.14159265358979323846;
 
 // The swatch books. Wood: oak, walnut, birch, ebonised. Fabric: grey, navy, sage, rust, oat, charcoal, mustard, teal.
 const Vec3 kWood[4] = {{0.66, 0.50, 0.33}, {0.40, 0.27, 0.18}, {0.82, 0.72, 0.56}, {0.24, 0.18, 0.15}};
@@ -19,6 +18,9 @@ const Vec3 kFabric[8] = {{0.48, 0.50, 0.53}, {0.20, 0.26, 0.40}, {0.45, 0.53, 0.
                          {0.74, 0.68, 0.58}, {0.22, 0.22, 0.24}, {0.72, 0.56, 0.22}, {0.20, 0.42, 0.44}};
 const Vec3 kWhite(0.90, 0.90, 0.88), kBlack(0.07, 0.07, 0.08), kSteel(0.62, 0.64, 0.67), kChrome(0.85, 0.86, 0.88);
 const Vec3 kPorcelain(0.95, 0.95, 0.93), kLinen(0.93, 0.92, 0.88);
+// The beach's cloths (a lounger's pad, an umbrella, a towel): red, blue, yellow, teal, orange, navy, pink, green.
+const Vec3 kBeachColours[8] = {{0.80, 0.18, 0.15}, {0.15, 0.35, 0.75}, {0.92, 0.75, 0.18}, {0.10, 0.55, 0.55},
+                               {0.90, 0.45, 0.12}, {0.10, 0.15, 0.35}, {0.85, 0.40, 0.55}, {0.25, 0.60, 0.30}};
 
 // A bar's timber: walnut or ebonised, by the wood bits.
 inline Vec3 barWood(uint32_t variant) { return ((variant >> 3) & 1u) ? kWood[1] : kWood[3] * 1.2; }
@@ -119,7 +121,7 @@ FurniturePiece build(Piece p, uint32_t variant) {
             k.out.solid = false;
             const Vec3 c(0, 0, 0.33);
             for (int i = 0; i < 5; ++i) {
-                const double a = 2 * kPi * i / 5 + 0.3;
+                const double a = 2 * PI * i / 5 + 0.3;
                 const Vec3 tip = c + Vec3(0.30 * std::cos(a), 0.07, 0.30 * std::sin(a));
                 k.rod(F::Metal, c + Vec3(0, 0.10, 0), tip, 0.018, kBlack, 8);
                 k.turned(F::Hard, tip - Vec3(0, 0.07, 0), {{0.0, 0.0}, {0.028, 0.008}, {0.032, 0.03}, {0.028, 0.055},
@@ -1100,7 +1102,7 @@ FurniturePiece build(Piece p, uint32_t variant) {
             k.turned(F::Metal, {0, 0, 0.21}, {{0.0, 0.0}, {0.19, 0.0}, {0.19, 0.02}, {0.04, 0.04}, {0.0, 0.04}}, kChrome, 1.0, 16);
             k.rod(F::Metal, {0, 0.03, 0.21}, {0, 0.74, 0.21}, 0.025, kChrome, 10);
             for (int i = 0; i < 8; ++i) {   // the foot ring
-                const double a0 = i * kPi / 4, a1 = (i + 1) * kPi / 4;
+                const double a0 = i * PI / 4, a1 = (i + 1) * PI / 4;
                 k.rod(F::Metal, {0.16 * std::cos(a0), 0.30, 0.21 + 0.16 * std::sin(a0)},
                       {0.16 * std::cos(a1), 0.30, 0.21 + 0.16 * std::sin(a1)}, 0.009, kChrome, 6);
             }
@@ -1486,10 +1488,10 @@ FurniturePiece build(Piece p, uint32_t variant) {
                          brass, 1.0, 12);
                 k.rod(F::Metal, {x, 1.07, 1.0}, {x, 1.13, 1.0}, 0.008, brass, 6);
                 for (int seg = 0; seg < 7; ++seg) {   // the shade: a half tube along x, open underneath
-                    const double a0 = kPi * seg / 7.0, a1 = kPi * (seg + 1) / 7.0, am = (a0 + a1) * 0.5;
+                    const double a0 = PI * seg / 7.0, a1 = PI * (seg + 1) / 7.0, am = (a0 + a1) * 0.5;
                     const double r = 0.075, cw = r * (a1 - a0) + 0.004;
                     k.boxTilted(F::Ceramic, {x, 1.10 + r * std::sin(am), 1.0 + r * std::cos(am)}, {0.34, 0.008, cw}, 0.0,
-                                kPi * 0.5 - am, green);
+                                PI * 0.5 - am, green);
                 }
                 for (double bx : {-0.07, 0.07})
                     k.turned(F::Light, {x + bx, 1.085, 1.0}, {{0.0, 0.0}, {0.022, 0.012}, {0.024, 0.03}, {0.012, 0.05}, {0.0, 0.055}},
@@ -1608,6 +1610,45 @@ FurniturePiece build(Piece p, uint32_t variant) {
             k.box(F::Fabric, {0.32, 1.13, 1.26}, {0.30, 1.88, 0.07}, 0.02, fabric);                 // the curtain
             break;
         }
+        // ---- THE BEACH (Glenn, 2026-11-02: "a towel under them and an umbrella. Or lounge chairs"): the colourway is
+        // the variant's low three bits, brighter than the upholstery's.
+        case Piece::SunLounger: {
+            // A SUN LOUNGER: a white aluminium frame on four legs, a padded bed, its head end (z = 0) raised a little;
+            // lain on feet first toward +z (the sea).
+            const Vec3 pad = kBeachColours[variant & 7u];
+            k.out.size = {0.70, 0.52, 1.95};
+            k.out.colliderH = 0.36;
+            for (double x : {-0.31, 0.31}) {
+                k.rod(F::Metal, {x, 0.30, 0.05}, {x, 0.30, 1.90}, 0.016, kWhite, 8);                  // side rail
+                for (double z : {0.18, 1.78}) k.rod(F::Metal, {x, 0.0, z}, {x, 0.30, z}, 0.016, kWhite, 8);   // legs
+            }
+            k.box(F::Fabric, {0, 0.35, 1.22}, {0.62, 0.07, 1.30}, 0.025, pad);                         // the bed
+            k.boxTilted(F::Fabric, {0, 0.41, 0.32}, {0.62, 0.07, 0.58}, 0.025, 0.25, pad * 0.94);    // the head rest
+            break;
+        }
+        case Piece::BeachUmbrella: {
+            // A BEACH UMBRELLA: a white pole, a shallow canopy 2.2 m across with a valance round its rim, a finial.
+            const Vec3 cloth = kBeachColours[variant & 7u];
+            k.out.size = {2.2, 2.32, 2.2};
+            k.out.colliders = {{Vec3(0, 1.15, 1.1), Vec3(0.06, 2.3, 0.06)}};   // only the pole: you walk under it
+            k.rod(F::Metal, {0, 0.0, 1.1}, {0, 2.26, 1.1}, 0.022, kWhite, 8);
+            // the canopy, its top (a lathe runs bottom to top) and the underside, darker, the other way
+            k.turned(F::Fabric, {0, 1.94, 1.1}, {{1.1, 0.0}, {0.6, 0.22}, {0.0, 0.33}}, cloth, 1.0, 16);
+            k.turned(F::Fabric, {0, 1.935, 1.1}, {{0.0, 0.32}, {0.6, 0.21}, {1.09, 0.0}}, cloth * 0.55, 1.0, 16);
+            k.turned(F::Fabric, {0, 1.86, 1.1}, {{1.1, 0.0}, {1.1, 0.08}}, kWhite, 1.0, 16);           // the valance
+            k.turned(F::Fabric, {0, 1.86, 1.1}, {{1.095, 0.08}, {1.095, 0.0}}, kWhite * 0.6, 1.0, 16);
+            k.turned(F::Hard, {0, 2.26, 1.1}, {{0.0, 0.0}, {0.03, 0.01}, {0.03, 0.04}, {0.0, 0.06}}, kWhite, 1.0, 8);
+            break;
+        }
+        case Piece::BeachTowel: {
+            // A BEACH TOWEL laid out on the sand: its colour, a white band across each end; lain on head at z = 0.
+            const Vec3 cloth = kBeachColours[variant & 7u];
+            k.out.size = {0.85, 0.03, 1.75};
+            k.out.solid = false;
+            k.box(F::Fabric, {0, 0.012, 0.875}, {0.85, 0.012, 1.75}, 0.0, cloth, 1);
+            for (double z : {0.18, 1.57}) k.box(F::Fabric, {0, 0.020, z}, {0.85, 0.006, 0.10}, 0.0, kWhite, 1);
+            break;
+        }
         default: break;
     }
     return k.out;
@@ -1626,7 +1667,7 @@ const char* const kPieceNames[kPieceCount] = {
     "desk_screen", "reception_desk", "hospital_bed", "exam_couch", "waiting_seats",
     "pew", "altar", "cinema_row", "cinema_screen", "market_stall", "judge_bench", "jury_box",
     "gear_locker", "machine", "workbench", "pallet_stack", "forklift",
-    "water_cooler", "copier", "phone_booth", "fitting_room"};
+    "water_cooler", "copier", "phone_booth", "fitting_room", "sun_lounger", "beach_umbrella", "beach_towel"};
 
 }  // namespace
 

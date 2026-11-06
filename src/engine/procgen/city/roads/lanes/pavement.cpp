@@ -48,7 +48,7 @@ Vec2 centroidOf(const Ring& r) {
     return {cx / (3 * a), cy / (3 * a)};
 }
 
-double polyArea(const Polygon2& p) { double a = std::fabs(ringArea(p.outer)); for (const Ring& h : p.holes) a -= std::fabs(ringArea(h)); return a; }
+double polyArea(const Polygon2& p) { double a = std::fabs(signedArea(p.outer)); for (const Ring& h : p.holes) a -= std::fabs(signedArea(h)); return a; }
 
 void densify(const Ring& r, std::vector<Vec2>& pts, std::vector<std::pair<int, int>>& edges) {
     int start = static_cast<int>(pts.size()); size_t n = r.size();
@@ -154,7 +154,7 @@ void buildFootprints(const RoadLabGraph& g, const LaneSet& L, const DeckHeight& 
             return best && (best->isRamp() || g.cls(*best).rank >= 3);
         };
         for (const Polygon2& sp : out.surface) for (const Ring& h : sp.holes) {
-            const double a = std::fabs(ringArea(h)); if (a < 2.0 || a > 2000.0) continue;
+            const double a = std::fabs(signedArea(h)); if (a < 2.0 || a > 2000.0) continue;
             if (setArea(offsetSet(fromRing(h), -4.0)) > 1.0 && !inRoadCorridor(h)) continue;   // has a body and is not in a road corridor: a small block, not an island
             isl.push_back(h);
         }
@@ -231,7 +231,7 @@ void buildFootprints(const RoadLabGraph& g, const LaneSet& L, const DeckHeight& 
         out.sidewalk = sw.empty() ? PolySet{} : unionAll(sw);
     }
     out.islands.clear(); out.enclosedBlocks = 0;
-    for (const Polygon2& p : out.surface) for (const Ring& h : p.holes) { double a = std::fabs(ringArea(h)); if (a > 1.0 && a < 2000.0) out.islands.push_back(a); else if (a >= 2000.0) ++out.enclosedBlocks; }
+    for (const Polygon2& p : out.surface) for (const Ring& h : p.holes) { double a = std::fabs(signedArea(h)); if (a > 1.0 && a < 2000.0) out.islands.push_back(a); else if (a >= 2000.0) ++out.enclosedBlocks; }
 }
 
 namespace {

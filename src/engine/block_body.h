@@ -49,6 +49,9 @@ struct BodyPose {
     Vec3 position;                 // the capsule centre (world)
     Quat orientation;              // the body's facing and lean
     Real scale = 1;                // (capsule half height + radius) / 0.9
+    // THE HEAD's size against the body's (a child's: Glenn, 2026-11-05, "children tend to have slightly bigger heads and
+    // smaller bodies"): the drawn head block only, grown about the neck -- the ragdoll and the joints keep the body's
+    Real headScale = 1;
     Vec3 armL{0, -1, 0}, armR{0, -1, 0}, legL{0, -1, 0}, legR{0, -1, 0};
     Real elbowL = 0, elbowR = 0, kneeL = 0, kneeR = 0;
     Quat neck = Quat::identity();  // the head turned on the neck (body frame): a nod, a snap in a crash

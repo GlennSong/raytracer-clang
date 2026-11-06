@@ -1,0 +1,222 @@
+{
+ "_comment": "THE CLOUD LAB (#187): terrain_lab's island without its forest and grass, under island_8_nature's sky, clouds and light -- a fast load for testing the volumetric clouds. tools/cloud_lab.py shoots its fixed poses with the wind pinned (RT_WIND_TIME), so two runs are an honest A/B.",
+ "dayNight": {
+  "dayMinutes": 1440.0,
+  "timeOfDay": 0.32292,
+  "weather": "fair"
+ },
+ "entities": [],
+ "environment": {
+  "clouds": {
+   "bottom": 900,
+   "coverage": 0.38,
+   "density": 0.05,
+   "lightSteps": 6,
+   "noiseScale": 0.0007,
+   "steps": 96,
+   "top": 1600,
+   "wind": 14
+  },
+  "fog": {
+   "density": 0.00016
+  },
+  "sky": {
+   "aerial": 4.0,
+   "model": "scattering",
+   "turbidity": 2.0
+  },
+  "skyColor": [
+   0.55,
+   0.68,
+   0.86
+  ]
+ },
+ "lighting": {
+  "ambientMultiplier": 0.75,
+  "exposure": 0.7,
+  "sun": {
+   "castsShadow": true,
+   "color": [
+    1,
+    0.98,
+    0.94
+   ],
+   "direction": [
+    0.4,
+    0.72,
+    -0.32
+   ],
+   "intensity": 6.0
+  }
+ },
+ "name": "cloud_lab",
+ "player": {
+  "collider": {
+   "halfHeight": 0.6,
+   "radius": 0.3,
+   "shape": "capsule"
+  },
+  "friction": 0.5,
+  "position": [
+   -1500.0,
+   30.0,
+   -1300.0
+  ]
+ },
+ "terrain": {
+  "cdlod": {
+   "baked": true,
+   "worldHalf": 2200.0
+  },
+  "erode": true,
+  "erodeDroplets": 1500000,
+  "erodeLandOnly": true,
+  "erodeRadius": 3,
+  "erodeRes": 256,
+  "erodeThermal": 16,
+  "groundCover": {
+   "beachHeight": 3,
+   "dirt": [
+    0.078,
+    0.056,
+    0.036
+   ],
+   "dirtPatches": 0.15,
+   "grass": [
+    0.055,
+    0.085,
+    0.018
+   ],
+   "grassDry": [
+    0.1,
+    0.1,
+    0.04
+   ],
+   "mountainHeight": 300,
+   "rock": [
+    0.15,
+    0.14,
+    0.12
+   ],
+   "rockSlopeDeg": 42,
+   "seed": 5,
+   "snowHeight": 720,
+   "uplandHeight": 90
+  },
+  "heightScale": 6,
+  "island": {
+   "angle": 40.0,
+   "aspect": 1.25,
+   "cliffs": {
+    "from": 28.701289892196655,
+    "height": 98.85647773742676,
+    "to": 75.73035478591919
+   },
+   "coastNoise": 0.21829410552978518,
+   "coastScale": 0.0003765980303287506,
+   "plainHeight": 12,
+   "radius": 1750.0,
+   "shelfDepth": 45
+  },
+  "material": {
+   "albedo": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "roughness": 1.0
+  },
+  "mountainAlongRange": true,
+  "mountainHeight": 335.909264087677,
+  "mountainMaskScale": 0,
+  "mountainScale": 0.0009,
+  "noiseScale": 0.0006,
+  "octaves": 5,
+  "rangeHeight": 845.1857483386993,
+  "rangeSpine": [
+   [
+    -1150.0,
+    -850.0
+   ],
+   [
+    -300.0,
+    -150.0
+   ],
+   [
+    450.0,
+    250.0
+   ],
+   [
+    1150.0,
+    900.0
+   ]
+  ],
+  "rangeVariation": 0.65,
+  "rangeWidth": 1150.0,
+  "resolution": 440,
+  "rockLine": 520,
+  "seaLevel": 0.0,
+  "seed": 108,
+  "size": 4400.0,
+  "snowLine": 1300,
+  "warp": 0.35,
+  "weather": {
+   "res": 2048,
+   "grow": {
+    "res": 256,
+    "iterations": 250,
+    "blur": 140
+   },
+   "water": {
+    "steps": 0,
+    "breach": 0,
+    "thermal": 0
+   },
+   "roughness": 0.6,
+   "shapeKeep": 1.0,
+   "shapeScale": 330,
+   "massifs": 0.6,
+   "massifScale": 550,
+   "peaks": {
+    "height": 450,
+    "spacing": 700,
+    "uplift": 1.0
+   },
+   "refine": {
+    "detail": 40,
+    "roughness": 0.8,
+    "wavelength": 8,
+    "slopeDamp": 0.3,
+    "incise": 0.012,
+    "iterations": 20,
+    "stochasticFrom": 2048
+   }
+  }
+ },
+ "vehicles": [
+  {
+   "position": [
+    70.0,
+    12.0,
+    70.0
+   ],
+   "recipe": "sedan",
+   "seed": 1,
+   "yaw": 0
+  }
+ ],
+ "version": 1,
+ "water": {
+  "cell": 20,
+  "color": [
+   0.012,
+   0.05,
+   0.08
+  ],
+  "foamBand": 36,
+  "opacity": 0.82,
+  "region": 10000.0,
+  "roughness": 0.04,
+  "seaLevel": 0.0
+ }
+}

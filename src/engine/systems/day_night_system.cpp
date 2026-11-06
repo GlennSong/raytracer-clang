@@ -71,16 +71,19 @@ void DayNightSystem::onStart(FrameContext& ctx) {
     cloudScale     = static_cast<float>(s.getDouble("clouds.scale", cloudScale));
     cloudWindSpeed = static_cast<float>(s.getDouble("clouds.windSpeed", cloudWindSpeed));
 
-    // Weather state survives the session (yesterday's storm resumes AS a
-    // storm — snap, don't fade in from the boot deck).
+    // THE WEATHER AT START (ADR-0340): a state chosen by hand (`weather storm`, the panel) survives the session -- an
+    // explicit override, snapped; AUTO weather does not: it is the calendar's, drawn in update() from the seed, the
+    // in-world date and the level's climate, so a given day always has its own weather (it used to resume whatever the
+    // last session quit with, and the day's roll almost never ran).
+    weatherSeed_ = static_cast<uint32_t>(s.getDouble("weather.seed", 7.0));
     const std::string ws = s.getString("weather.state", "");
-    if (!ws.empty() && ws != "off") {
+    if (!ws.empty() && ws != "off" && !s.getBool("weather.auto", false)) {
         WeatherKind kind;
         if (weatherKindFromName(ws, kind)) {
             weatherActive = true;
             weatherFromSettings_ = true;
             weather.state = kind;
-            weather.autoMode = s.getBool("weather.auto", false);
+            weather.autoMode = false;
             weather.snap();
         }
     }
@@ -97,6 +100,7 @@ void DayNightSystem::onStart(FrameContext& ctx) {
             configSeeded_ = true;
         }
     });
+    if (!startApplied_) applyLaunchStart(ctx);
 
     // One boot line so a headset/simulator console shows the resolved state —
     // "why is it dusk" is unanswerable from the picture alone. Printed after the
@@ -254,6 +258,28 @@ void DayNightSystem::onStop(FrameContext& ctx) {
     s.save("settings.json");
 }
 
+// THE LAUNCH'S START TIME (ADR-0338): RT_TIME for this run, else the saved preference daynight.start -- "saved" (the
+// default: the saved or level time stands), "now" (the wall clock and today's date, at real speed), an hour, or a moment
+// (sunrise, sunset, dusk, ...). After the level's seeds, so a launch's choice wins over both. Once.
+void DayNightSystem::applyLaunchStart(FrameContext& ctx) {
+    startApplied_ = true;
+    const char* env = std::getenv("RT_TIME");
+    const std::string spec = env && *env ? std::string(env) : ctx.settings.getString("daynight.start", "saved");
+    std::string what;
+    if (applyStartTime(cycle, spec, &what)) {
+        LOG_INFO << "[daynight] start time " << what;
+        // the date may have moved (now): auto weather opens AS the new day's, not easing to it from the saved one's
+        if (weatherActive && weather.autoMode && weatherDay_ >= 0 && cycle.dayOfYear != weatherDay_) {
+            weather.state = dayWeather();
+            weatherDay_ = cycle.dayOfYear;
+            weather.snap();
+            LOG_INFO << "[weather] today (day " << cycle.dayOfYear << "): " << weatherKindName(weather.state) << " (the calendar)";
+        }
+    } else if (!what.empty()) {
+        LOG_WARN << "[daynight] " << what;
+    }
+}
+
 // Level seeds (DayNightConfig): a level that authors its own day. Applied
 // once; the settings-persisted values stand where the level says nothing.
 void DayNightSystem::seedFromConfig(const DayNightConfig& c) {
@@ -279,6 +305,7 @@ void DayNightSystem::seedFromConfig(const DayNightConfig& c) {
     // The weather policy: a persisted state (yesterday's storm) still wins;
     // otherwise the level's word, and a level that says nothing gets AUTO
     // if it has a volumetric deck (applied in update, where the deck is known).
+    if (c.hasClimate) climate_ = c.climate;   // ADR-0340
     if (!weatherFromSettings_ && c.weather >= 0) {
         weatherDefaulted_ = true;
         if (c.weather == 0) {
@@ -286,7 +313,8 @@ void DayNightSystem::seedFromConfig(const DayNightConfig& c) {
         } else if (c.weather == 1) {
             weatherActive = true;
             weather.autoMode = true;
-            weather.state = weatherForDay(7u, cycle.dayOfYear);
+            weather.state = dayWeather();   // (the settings' seed: it was a fixed 7 here, the default path's own)
+            weatherDay_ = cycle.dayOfYear;
             weather.snap();
         } else {
             weatherActive = true;
@@ -377,6 +405,9 @@ void DayNightSystem::applyRequests(FrameContext&) {
     } else if (w.state == "auto") {
         weatherActive = true;
         weather.autoMode = true;
+        weather.state = dayWeather();   // back to the calendar: today's weather (ADR-0340)
+        weatherDay_ = cycle.dayOfYear;
+        if (w.now) weather.snap();
     } else if (weatherKindFromName(w.state, kind)) {
         // `weather storm` eases the front in over ~40 s; `weather storm now`
         // snaps it (screenshots, the editor's compare).
@@ -434,22 +465,56 @@ void DayNightSystem::fixedUpdate(FrameContext& ctx) {
         weatherDefaulted_ = true;
         weatherActive = true;
         weather.autoMode = true;
-        weather.state = weatherForDay(static_cast<uint32_t>(ctx.settings.getDouble("weather.seed", 7.0)),
-                                      cycle.dayOfYear);
+        weather.state = dayWeather();
+        weatherDay_ = cycle.dayOfYear;
         weather.snap();
         LOG_INFO << "[weather] today (day " << cycle.dayOfYear << "): " << weatherKindName(weather.state)
                  << " (auto)";
     }
     if (weatherActive) {
         const double dt = ctx.clock.fixedStep();
+        // A NEW DAY under auto weather: the calendar's state for it, eased in (a front arriving overnight), and the walk
+        // starts afresh, seeded by the day (ADR-0340)
+        if (weather.autoMode && weatherDay_ >= 0 && cycle.dayOfYear != weatherDay_) {
+            weather.state = dayWeather();
+            weather.autoSteps = 0;
+            weather.sinceStepHours = 0.0;
+            LOG_INFO << "[weather] day " << cycle.dayOfYear << ": " << weatherKindName(weather.state) << " (the calendar)";
+        }
+        if (weather.autoMode) weatherDay_ = cycle.dayOfYear;
         if (!cycle.paused)
-            weather.advanceAuto(dt * cycle.speed() * 24.0,
-                                static_cast<uint32_t>(
-                                    ctx.settings.getDouble("weather.seed", 7.0)));
+            weather.advanceAuto(dt * cycle.speed() * 24.0, weatherDaySeed(weatherSeed_, cycle.dayOfYear, cycle.year));
         weather.ease(dt);
         cloudCoverage = weather.coverage;
         cloudDensity  = weather.density;
         cloudScale    = weather.scale;
+        cloudTypeLo   = weather.typeLo;
+        cloudTypeHi   = weather.typeHi;
+    } else {
+        cloudTypeLo = cloudTypeHi = -1.0f;   // (the level's own range)
+    }
+    // THE WIND (ADR-0337): the weather's speed and gustiness (a moderate breeze with the weather off); its direction
+    // veers slowly through the day about the seed's prevailing one (+-30 degrees over ~26 in-world hours)
+    {
+        // (the climate's prevailing wind, ADR-0340: it comes FROM that compass bearing, so it goes toward the opposite;
+        // north is -z, east +x)
+        const double hours = cycle.absoluteDay() * 24.0;
+        const double toward = (climate_.prevailingFromDeg + 180.0) * 0.017453292519943295 +
+                              0.52 * std::sin(hours * 6.283185307 / 26.0) + 0.17 * std::sin(hours * 6.283185307 / 7.3);
+        wind.dir = Vec3(std::sin(toward), 0.0, -std::cos(toward));
+        wind.speed = (weatherActive ? weather.windSpeed : 6.0) * climate_.windScale;
+        wind.gust = weatherActive ? weather.windGust : 0.35;
+        wind.time += ctx.clock.fixedStep();
+        if (!ctx.world.alive(windEntity_)) {
+            windEntity_ = ctx.world.create();
+            ctx.world.add<Wind>(windEntity_, wind);
+        } else if (Wind* w = ctx.world.get<Wind>(windEntity_)) {
+            *w = wind;
+        }
+        ctx.renderer.windDir[0] = static_cast<float>(wind.dir.x);
+        ctx.renderer.windDir[1] = static_cast<float>(wind.dir.z);
+        ctx.renderer.windSpeed = static_cast<float>(wind.speed);
+        ctx.renderer.windGust = static_cast<float>(wind.gust);
     }
 }
 
@@ -486,6 +551,7 @@ void DayNightSystem::update(FrameContext& ctx) {
             configSeeded_ = true;
         }
     });
+    if (!startApplied_) applyLaunchStart(ctx);
     // edits live even while the simulation is paused.
     const bool active = enabled && levelEnabled && !hdrEnvironmentActive(ctx);
     if (active) applyLighting(ctx);
@@ -698,6 +764,8 @@ void DayNightSystem::applyClouds(FrameContext& ctx) {
         vc.noiseScale =
             cloudBase_.noiseScale * (1.2f / std::max(cloudScale, 0.3f));
         vc.wind = cloudBase_.wind * cloudWindSpeed;
+        vc.typeLo = cloudTypeLo >= 0.0f ? cloudTypeLo : cloudBase_.typeLo;
+        vc.typeHi = cloudTypeHi >= 0.0f ? cloudTypeHi : cloudBase_.typeHi;
     }
 }
 

@@ -64,3 +64,55 @@ TEST_CASE(a_link_leaving_along_a_street_is_passed_over) {
     for (const IslandRoad& r : w.roads)
         if (r.kind == "link") CHECK(r.points.front().y < -600.0);
 }
+
+// THE KINDS OF PLACE (settlements.h; AGENTS.md "Kinds Are Data"): settlements.lua is defaultSettlements, a hub's
+// district finds its kind, and a catalog with a bad naming, a bad radius or a kind twice is refused.
+#ifdef RT_ENABLE_SCRIPTING
+#include "../src/engine/scripting/settlements_lua.h"
+#include "../src/engine/procgen/city/architect.h"
+#include "../src/engine/scripting/script_vm.h"
+#include <fstream>
+#include <sstream>
+TEST_CASE(settlements_lua_is_the_built_in_kinds) {
+    std::ifstream f("assets/scripts/settlements.lua");
+    std::stringstream ss;
+    ss << f.rdbuf();
+    const std::string src = ss.str();
+    CHECK(!src.empty());
+    engine::ScriptVM vm;
+    std::string err;
+    CHECK(vm.doString(src, &err));
+    engine::SettlementCatalog lua;
+    const bool ok = engine::loadSettlementCatalog(vm, lua, &err);
+    if (!ok) std::printf("    %s\n", err.c_str());
+    CHECK(ok);
+    const engine::SettlementCatalog cpp = engine::defaultSettlements();
+    if (lua.describe() != cpp.describe()) std::printf("    LUA:\n%s\n    C++:\n%s\n", lua.describe().c_str(), cpp.describe().c_str());
+    CHECK(lua.describe() == cpp.describe());
+    CHECK(cpp.check().empty());
+    CHECK(lua.forHub("financial") && lua.forHub("financial")->name == "city");
+    CHECK(lua.forHub("commercial") && lua.forHub("commercial")->name == "town");
+    CHECK(lua.of("mountain town").mountainRoad && !lua.of("mountain town").onRing);
+    CHECK(lua.of("no such kind").name == "city");   // an unknown kind is planned as the first
+    auto refused = [&](const std::string& edit, const char* why) {
+        engine::ScriptVM bad;
+        std::string e;
+        CHECK(bad.doString(src + "\n" + edit, &e));
+        engine::SettlementCatalog c;
+        CHECK(!engine::loadSettlementCatalog(bad, c, &e));
+        if (e.find(why) == std::string::npos) std::printf("    `%s` refused with: %s\n", edit.c_str(), e.c_str());
+        CHECK(e.find(why) != std::string::npos);
+    };
+    // every recipe a kind's mixes name is the architect's (the level would reject the whole mix)
+    for (const engine::SettlementKind& k : lua.kinds)
+        for (const auto& [d, es] : k.mixes)
+            for (const auto& [r, wt] : es) {
+                if (engine::architectRecipeIndex(r) < 0) std::printf("    %s mixes.%s: no recipe `%s`\n", k.name.c_str(), d.c_str(), r.c_str());
+                CHECK(engine::architectRecipeIndex(r) >= 0 && wt > 0);
+            }
+    CHECK(!lua.of("beach town").mixes.empty() && lua.of("beach town").strip);
+    refused("settlements.town.naming = 'moon'", "naming");
+    refused("settlements.city.radius = { 1.6, 900, 600 }", "radius");
+    refused("settlements.order = { 'city', 'town', 'city' }", "twice");
+}
+#endif

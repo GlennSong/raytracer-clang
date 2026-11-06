@@ -1,4 +1,6 @@
 #version 450
+#extension GL_GOOGLE_include_directive : require
+#include "sky_common.glsl"
 // Phase 2 forward fragment stage (ADR-0057). Faithful port of the Metal
 // evaluateLighting + the procedural surface library (shaders/metal/lighting.metal
 // + common.metal): multi-light Cook-Torrance (GGX + height-correlated Smith,
@@ -134,8 +136,9 @@ vec3 fresnelSchlickRoughness(float cosTheta, vec3 F0, float roughness) {
 // level samples its equirect map directly, below).
 vec3 sampleEnvironment(vec3 dir) {
     float skyBlend = clamp(dir.y, 0.0, 1.0);
-    vec3 sky = mix(g.skyHorizon.rgb, g.skyZenith.rgb, pow(skyBlend, 0.5));
-    vec3 lowerHaze = mix(g.skyHorizon.rgb, g.skyGround.rgb, smoothstep(0.0, -0.4, dir.y));
+    const vec3 hor = skyHorizonToward(dir, g.skyHorizon.rgb, g.skyZenith.rgb, g.skySunDir.xyz);   // (by direction: ADR-0339)
+    vec3 sky = mix(hor, g.skyZenith.rgb, pow(skyBlend, 0.5));
+    vec3 lowerHaze = mix(hor, g.skyGround.rgb, smoothstep(0.0, -0.4, dir.y));
     float horizonBlend = smoothstep(-0.05, 0.05, dir.y);
     vec3 col = mix(lowerHaze, sky, horizonBlend);
     float disc = g.skySunDir.w;
@@ -153,8 +156,9 @@ vec3 sampleEnvironment(vec3 dir) {
 // out (Glenn: "when they get light cast on them the lighting seems to blow out the leaves").
 vec3 sampleSkyDome(vec3 dir) {
     float skyBlend = clamp(dir.y, 0.0, 1.0);
-    vec3 sky = mix(g.skyHorizon.rgb, g.skyZenith.rgb, pow(skyBlend, 0.5));
-    vec3 lowerHaze = mix(g.skyHorizon.rgb, g.skyGround.rgb, smoothstep(0.0, -0.4, dir.y));
+    const vec3 hor = skyHorizonToward(dir, g.skyHorizon.rgb, g.skyZenith.rgb, g.skySunDir.xyz);   // (by direction: ADR-0339)
+    vec3 sky = mix(hor, g.skyZenith.rgb, pow(skyBlend, 0.5));
+    vec3 lowerHaze = mix(hor, g.skyGround.rgb, smoothstep(0.0, -0.4, dir.y));
     vec3 col = mix(lowerHaze, sky, smoothstep(-0.05, 0.05, dir.y));
     float sunDot = max(dot(dir, g.skySunDir.xyz), 0.0);
     col += g.skySunColor.rgb * pow(sunDot, 4.0) * 0.15 * g.skySunDir.w;
@@ -354,7 +358,9 @@ vec3 surfTerrain(vec3 base, vec3 worldPos) {
 // meshUV.x = baked water depth (m), meshUV.y = baked distance to land (m).
 // Colour only — the animated wave normals live in surfaceReliefWater below.
 // Ported from surface_water.metal; `time` is g.wind1.w (seconds).
+float gSeaFoam = 0.0;   // surfWater's foam (0..1), for the water composite: foam is opaque and matte
 vec3 surfWater(vec3 base, float depth, float shore, vec3 worldPos, float time) {
+    depth = max(depth, 0.0);   // (signed in the mesh: negative on a land corner)
     vec3 deep    = base;
     vec3 mid     = base * 2.0 + vec3(0.010, 0.045, 0.050);   // green-blue
     vec3 shallow = base * 3.0 + vec3(0.030, 0.130, 0.120);   // teal shallows
@@ -368,7 +374,8 @@ vec3 surfWater(vec3 base, float depth, float shore, vec3 worldPos, float time) {
     // Sparse whitecap flecks in open water, advecting with the wind.
     float cap = fbm2(worldPos.x * 0.09 + time * 0.05, worldPos.z * 0.09 - time * 0.03) *
                 (0.55 + 0.45 * fbm2(worldPos.x * 0.021 - time * 0.013, worldPos.z * 0.021));
-    float capMask = smoothstep(0.60, 0.78, cap) * clamp(depth / 8.0, 0.0, 1.0) * 0.30;
+    // (whitecaps with the wind, ADR-0337: few at a moderate breeze, as before, none in a calm, many in a gale)
+    float capMask = smoothstep(0.60, 0.78, cap) * clamp(depth / 8.0, 0.0, 1.0) * 0.30 * clamp((g.wind2.w - 2.5) / 3.5, 0.0, 2.5);
     c = mix(c, vec3(0.85, 0.92, 0.95), capMask);
     // Lapping shoreline foam: a narrow washing edge plus patchy streaks.
     float band = 6.0 + 4.5 * fbm2(worldPos.x * 0.05, worldPos.z * 0.05) +
@@ -380,6 +387,30 @@ vec3 surfWater(vec3 base, float depth, float shore, vec3 worldPos, float time) {
         float f = u * u * (0.20 + 0.60 * pattern);
         f += smoothstep(0.85, 1.0, u) * 0.30;    // bright washing edge
         c = mix(c, vec3(0.92, 0.96, 0.98), clamp(f, 0.0, 1.0));
+        gSeaFoam = max(gSeaFoam, clamp(f, 0.0, 1.0));
+    }
+    // THE SURF (ADR-0330; #187, the reference's white lines along the beach): breakers rolling in to the waterline
+    // on the shore distance -- a crest every ~24 m, one every ~8 s, each a sharp white front with a foam trail
+    // behind it that thins to lace. They break only where the water is shallow enough (under ~3.5 m), so a steep
+    // shore gets one line at its foot and a long shelf several; each crest is broken along the shore by its own
+    // noise (a wave's id seeds it), so no two sets match and no line runs unbroken. A pool's band is 0.
+    if (shore > 1.0 && shore < 110.0 && depth < 4.0) {
+        float warp = 9.0 * fbm2(worldPos.x * 0.004 + 3.1, worldPos.z * 0.004 - 1.7);   // crests not quite the contours
+        float ph = (shore + warp) / 24.0 + time / 8.0 + 0.5;
+        float id = floor(ph), w = fract(ph) - 0.5;   // w: 0 at the crest, < 0 shoreward of it, > 0 the trail behind
+        // (the front widens to the pixel's footprint: far off it neither aliases nor thins to nothing)
+        float fw = fwidth(ph);
+        float front = smoothstep(-0.05 - fw, 0.0, w) * exp(-max(w, 0.0) * 6.0 / (1.0 + 6.0 * fw));
+        float along = fbm2(worldPos.x * 0.018 + id * 7.13, worldPos.z * 0.018 - id * 3.71) *
+                      (0.6 + 0.6 * fbm2(worldPos.x * 0.003 - 4.2, worldPos.z * 0.003 + 2.6));   // (and calmer stretches)
+        float lace = fbm2(worldPos.x * 0.45 + time * 0.05, worldPos.z * 0.45 - id * 1.3);
+        float zone = (1.0 - smoothstep(2.0, 4.0, depth)) * smoothstep(1.0, 3.0, shore);
+        float surf = front * smoothstep(0.38, 0.62, along) * (0.45 + 0.75 * lace) * zone;
+        // the broken water left behind: a faint wash over the whole surf zone, thicker nearer the beach
+        surf = max(surf, zone * (1.0 - smoothstep(0.0, 1.5, depth)) * 0.35 * smoothstep(0.5, 0.8, lace));
+        surf = clamp(surf, 0.0, 1.0);
+        c = mix(c, vec3(0.90, 0.94, 0.96), surf);
+        gSeaFoam = max(gSeaFoam, surf);
     }
     return c;
 }
@@ -688,6 +719,12 @@ void surfaceReliefWater(vec3 worldPos, vec2 meshUV, float time, vec3 cameraPos,
         vec3( 0.827, -0.562, 21.0),
         vec3( 0.399,  0.917,  8.5));
     const float trainAmp[4]   = float[4](0.115, 0.100, 0.075, 0.080);
+    // THE SEA STATE (ADR-0337): the trains' heading the wind's, their height growing with its speed (as authored at a
+    // moderate 6 m/s; a calm's a third, a gale's over twice)
+    const vec2 wd = normalize(g.wind1.xz + vec2(1e-5, 0.0));
+    const vec2 a0 = vec2(0.980, 0.199);
+    const vec2 seaRot = vec2(dot(wd, a0), a0.x * wd.y - a0.y * wd.x);   // cos, sin of the turn from a0 to the wind
+    const float seaState = clamp(g.wind2.w / 6.0, 0.35, 2.3);
     const float trainSpeed[4] = float[4](6.5, 5.8, 3.8, 2.1);
     // Each train fades once its wavelength drops toward the pixel footprint —
     // otherwise the short chop aliases into a corduroy grating at distance.
@@ -696,7 +733,8 @@ void surfaceReliefWater(vec3 worldPos, vec2 meshUV, float time, vec3 cameraPos,
     for (int i = 0; i < 4; ++i) {
         float fade = exp(-dist * trainFade[i]);
         if (fade < 0.02) continue;
-        vec2 d = trainDirLen[i].xy;
+        // (turned to the weather's wind: the trains were authored about the first's heading, 0.98/0.199 -- ADR-0337)
+        vec2 d = vec2(trainDirLen[i].x * seaRot.x - trainDirLen[i].y * seaRot.y, trainDirLen[i].x * seaRot.y + trainDirLen[i].y * seaRot.x);
         float k = 6.2831853 / trainDirLen[i].z;
         // slow amplitude patches: wave GROUPS, not an infinite even train
         float ampPatch = 0.45 + 0.55 * vnoise2(wx * 0.013 + float(i) * 7.31,
@@ -708,7 +746,7 @@ void surfaceReliefWater(vec3 worldPos, vec2 meshUV, float time, vec3 cameraPos,
                                                       wz * warpF + float(i) * 2.9);
         float ph = dot(P, d) * k - wt * trainSpeed[i] * k + warp;
         float s = sin(ph), cph = cos(ph);
-        float w = trainAmp[i] * ampPatch * fade;
+        float w = trainAmp[i] * ampPatch * fade * seaState;
         float slope = w * cph * (0.55 + 0.45 * (s * 0.5 + 0.5));  // sharpened crests
         slopeX += d.x * slope;
         slopeZ += d.y * slope;
@@ -1030,8 +1068,9 @@ void main() {
     // FLAG_EMISSIVE_VERTEX_TINT (32): the vertex colour tints the emission, not the albedo.
     const bool emissiveTint = (pc.surfaceFlags.y & 32u) != 0u;
     vec3 albedo = pc.albedoMetallic.rgb * (emissiveTint ? vec3(1.0) : inColor);
-    // FLAG_SIGNAL_STATE (bit 20): mesh.vert marks the lit lamp by pushing its colour past 1 -- it glows
-    const bool signalLamp = (pc.surfaceFlags.y & (1u << 20)) != 0u && max(inColor.r, max(inColor.g, inColor.b)) > 1.5;
+    // FLAG_SIGNAL_STATE (bit 20) / FLAG_LAMP_STATE (bit 27): mesh.vert marks the lit lamp by pushing its colour past
+    // 1 -- it glows
+    const bool signalLamp = (pc.surfaceFlags.y & ((1u << 20) | (1u << 27))) != 0u && max(inColor.r, max(inColor.g, inColor.b)) > 1.5;
     if (signalLamp) albedo = pc.albedoMetallic.rgb * inColor / 8.0;
     float metallic = clamp(pc.albedoMetallic.a, 0.0, 1.0);
     float roughness = clamp(pc.emissionRough.a, 0.04, 1.0);
@@ -1039,6 +1078,12 @@ void main() {
     const bool emissionPaint = (pc.surfaceFlags.y & (1u << 21)) != 0u;
     vec3 emission = pc.emissionRough.rgb * (emissiveTint || emissionPaint ? inColor : vec3(1.0));
     if (signalLamp) emission = inColor / 8.0 * 6.0;
+    // ...a lit vehicle lamp's colour came as colour x (2 + emission), its brightest channel 1 (mesh.vert)
+    if (signalLamp && (pc.surfaceFlags.y & (1u << 27)) != 0u) {
+        const float k = max(inColor.r, max(inColor.g, inColor.b));
+        albedo = pc.albedoMetallic.rgb * inColor / k * 0.12;
+        emission = inColor / k * (k - 2.0);
+    }
     // A LIT PANE (the interior-mapped, emissive-tinted part) PACKS its glass and its lit tint in the vertex
     // colour (shape_grammar litPaneColour): the glass in the top 7 bits of each channel is the day albedo,
     // the low bits (r bit 0, g bit 1, b bit 2) index the lit palette (litTintOf -- keep in step). Index 0 is
@@ -1432,12 +1477,14 @@ void main() {
         if (surfaceId != 0u)
             albedo = applySurface(surfaceId, albedo, inWorldPos, N, inTexcoord, g.wind1.w);
     }
+    if (pc.surfaceFlags.x == 12u) waterFoam = gSeaFoam;   // (the sea's foam and surf: opaque, matte, unglinting)
     // Procedural relief for surfaces with no baked normal/roughness map (road,
     // terrain, water); mirrors the applySurfaceRelief seam in surfaces.metal.
     // (Runs regardless of the albedo gate above, exactly like Metal — the
     // relief ids never carry baked maps.)
     applySurfaceRelief(pc.surfaceFlags.x, inWorldPos, inTexcoord, g.wind1.w,
                        g.cameraPosition.xyz, N, roughness);
+    if (pc.surfaceFlags.x == 12u) roughness = mix(roughness, 0.6, gSeaFoam);
 
     vec3 V = normalize(g.cameraPosition.xyz - inWorldPos);
     vec3 f0 = mix(vec3(0.04), albedo, metallic);

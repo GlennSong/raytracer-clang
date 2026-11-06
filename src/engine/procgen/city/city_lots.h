@@ -5,6 +5,7 @@
 #include "polygon.h"        // Poly2, Vec2
 #include "shape_grammar.h"  // BuildingParams (the style-book hook's target)
 #include "site_plan.h"      // OpenSpace (the lot's ground around the building)
+#include "../furniture_kit.h"   // Piece (an outdoor piece)
 #include "../terrain.h"      // TerrainFlatten (block grades computed in-pass)
 #include "../../../rt_math.h"   // Vec3
 #include "../../../renderer/renderer.h"   // RenderMesh (the grown building geometry)
@@ -44,6 +45,10 @@ struct OutdoorPiece {
 };
 // The piece -> world transform for a floor at world height `y`.
 Mat4 outdoorPieceXform(const OutdoorPiece& p, Real y);
+// A stable hash of a point (an outdoor piece's variant, without drawing from a pass's own dice).
+uint32_t posHash(const Vec2& p);
+// An outdoor library piece at `at` (its back's centre), its front facing `face`; the variant's wood from `h`.
+OutdoorPiece outdoorPiece(Piece pc, uint32_t h, const Vec2& at, const Vec2& face, Real y, bool draped);
 
 struct DoorSpec {
     Vec2 foot;
@@ -213,6 +218,15 @@ struct LotParams {
     // DistrictMap::hubs (kind mirrors DistrictTag order). Empty = radial rings.
     std::vector<std::pair<Vec2, int>> hubs;
     Real hubRadius = 220.0;
+    // Per hub (index-aligned; shorter: the rest are points of hubRadius with the level's mixes): its LINE (a beach town's
+    // seafront), its own reach, and its own MIXES -- an archetype book whose tables replace the ladders for lots it
+    // is the nearest hub of (~/.claude/plans/beach-town.md)
+    std::vector<std::vector<Vec2>> hubLines;
+    std::vector<Real> hubRadii;
+    std::vector<ArchetypeBook> hubBooks;
+    // Blocks to make SURFACE CAR PARKS whole (Glenn: "a parking lot so that people visiting the beach can park"): the
+    // block holding each point is one car-park lot (a beach town's hub `parking`)
+    std::vector<Vec2> parkingAt;
     // Finest RENDERED terrain cell (leaf CDLOD node size / gridRes). When set,
     // walkway sculptors sample the ground through the tile's own bilinear
     // interpolation on this grid instead of the ideal analytic function — so
@@ -229,6 +243,10 @@ struct LotParams {
     // (the city keeps the full civic table; each town is guaranteed its own
     // school + church). Empty = every hub is the city.
     std::vector<int> hubClusters;
+    // EACH PLACE'S OWN LANDMARKS (by cluster id; a hub that carries its kind's `civic` or `landmarks`, level_params:
+    // the hubs of one `_place` are one cluster, 1 up; hubs that carry neither stay cluster 0, the city as before).
+    // Empty = the old plan.
+    std::vector<LandmarkCluster> landmarkClusters;
     // Level-authored PARCEL overrides (citysim.parcel — the 8km-metro knob:
     // 150 m+ blocks parcel bigger lots). <= 0 = unset: the parceler keeps its
     // compiled-in district tuning EXACTLY. When set, targetArea / frontWidth /

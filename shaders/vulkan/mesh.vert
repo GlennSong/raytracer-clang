@@ -100,9 +100,48 @@ void main() {
                  all(lessThan(abs(inColor.rgb - vec3(0.85, 0.12, 0.10)), vec3(0.03))))
             signalLit = -1.0;
     }
+    // FLAG_LAMP_STATE (bit 27, ADR-0342): a vehicle's lamps are lenses in its own body, tagged by role in their u
+    // (engine/vehicle_lamps.h: u = -1000 - role), and the lamps lit this step ride the bottom row as a mask (1 head,
+    // 2 brake, 4 left indicator lit, 8 right). A lit lens's colour (its brightest channel 1) goes out as colour x
+    // (2 + its emission): past 1.5, as a lit signal's, and mesh.frag takes the two apart.
+    float lampGain = 0.0;
+    vec3 lampColor = inColor.rgb;
+    if ((pc.surfaceFlags.y & (1u << 27)) != 0u) {
+        const uint mask = uint(M[0][3] + 0.5);
+        M[0][3] = 0.0;
+        const int role = inTexcoord.x < -1000.5 ? int(-1000.0 - inTexcoord.x + 0.5) : 0;
+        if (role > 0) {
+            // the lens's side of the body: +x is the driver's left (a lens on the centre line is neither)
+            const bool blink = (inPosition.x > 0.05 && (mask & 4u) != 0u) || (inPosition.x < -0.05 && (mask & 8u) != 0u);
+            const vec3 amber = vec3(1.0, 0.52, 0.04);
+            if (role == 1) {                                  // head
+                if (blink) { lampColor = amber; lampGain = 2.2; }
+                else if ((mask & 1u) != 0u) { lampColor = vec3(1.0, 0.97, 0.86); lampGain = 2.2; }
+            } else if (role == 2) {                           // tail: dim at night, bright braking
+                if (blink) { lampColor = amber; lampGain = 2.2; }
+                else if ((mask & 2u) != 0u) { lampColor = vec3(1.0, 0.05, 0.03); lampGain = 2.4; }
+                else if ((mask & 1u) != 0u) { lampColor = vec3(1.0, 0.05, 0.03); lampGain = 0.6; }
+            } else if (role == 3) {                           // indicator
+                if (blink) { lampColor = amber; lampGain = 2.2; }
+            } else if (role == 4) {                           // marker / clearance
+                if ((mask & 1u) != 0u) { lampColor = amber; lampGain = 1.0; }
+            }
+        }
+    }
     vec4 world = M * vec4(inPosition, 1.0);
     vec3 normal = kPackedVertex ? octDecode(inNormal.xy) : inNormal.xyz;
     vec3 tangent = kPackedVertex ? octDecode(inTangent.xy) : inTangent.xyz;
+    // GRASS CARDS (FLAG_GRASS with FLAG_ALPHA_TEST, not clutter; ADR-0329): one quad, turned about its planted
+    // origin's vertical to face the camera -- three crossed quads read as six-pointed stars from above. Half of
+    // them (by rank) are mirrored, so a field of the one texture does not repeat its silhouette.
+    const bool clutter = (pc.surfaceFlags.y & (1u << 26)) != 0u;
+    if (grass && !clutter && (pc.surfaceFlags.y & 2u) != 0u) {
+        const vec3 o = M[3].xyz;
+        vec2 toCam = g.cameraPosition.xz - o.xz;
+        toCam = dot(toCam, toCam) > 1e-6 ? normalize(toCam) : vec2(0.0, 1.0);
+        const vec3 right = vec3(toCam.y, 0.0, -toCam.x) * (fract(rank * 7.31) < 0.5 ? -1.0 : 1.0);
+        world.xyz = o + right * (inPosition.x * length(M[0].xyz)) + vec3(0.0, inPosition.y * length(M[1].xyz), 0.0);
+    }
 
     // Wind sway (FLAG_WIND = bit 2): displace in the wind direction, weighted by
     // height above the model's base (planted root, moving tips) and phase-offset
@@ -133,7 +172,21 @@ void main() {
         weight *= weight;
         float phase = g.wind1.w * g.wind2.x + dot(world.xz, vec2(0.15, 0.1));
         float gust = sin(phase) + 0.3 * sin(phase * 2.3 + 1.7);
-        world.xz += g.wind1.xz * (g.wind2.z * weight * gust);
+        // GUST FRONTS (ADR-0337): bands of stronger air travelling downwind at the wind's speed -- a field bows in a wave
+        // that crosses it -- their strength the weather's gustiness (wind1.y), and the whole sway leaning downwind
+        // (a mean push, not only the swing about upright)
+        const vec2 wdir = g.wind1.xz;
+        const float along = dot(world.xz, wdir) - g.wind1.w * g.wind2.w;
+        const float front = 0.5 + 0.5 * sin(along * 0.07 + 0.6 * sin(dot(world.xz, vec2(-wdir.y, wdir.x)) * 0.013));
+        const float push = 1.0 + g.wind1.y * (2.2 * front * front - 0.5);
+        world.xz += wdir * (g.wind2.z * weight * (gust * push + 0.6 * push));
+    }
+    // ON A SLOPE every blade stands up from the ground under IT, not from a level plane through the planted origin:
+    // a shear by the ground's gradient (its normal rides the bottom row), so a card's foot follows the hill instead
+    // of floating at one side and sinking at the other. (Clutter is already turned to the ground.)
+    if (grass && !clutter) {
+        const float ny = sqrt(max(1.0 - dot(groundXZ, groundXZ), 0.05));
+        world.y -= dot(groundXZ, world.xz - M[3].xz) / ny;
     }
 
     // FLAG_IMPOSTOR_VIEWS (bit 24, forest.h appendImpostorViews): ONE card a tree, turned to the camera about the
@@ -167,6 +220,7 @@ void main() {
     outUvBlend = (pc.surfaceFlags.y & (1u << 23)) != 0u ? inTangent.xyz : vec3(0.0);
     if ((pc.surfaceFlags.y & (1u << 24)) != 0u) outUvBlend = vec3(inNormal.z, inColor.g, 0.0);   // (the cell's size)
     outColor = signalLit > 0.5 ? inColor.rgb * 8.0 : signalLit < -0.5 ? inColor.rgb * 0.06 : inColor.rgb;   // (a lit signal lamp: see mesh.frag)
+    if (lampGain > 0.0) outColor = lampColor * (2.0 + lampGain);   // (a lit vehicle lamp: see mesh.frag)
     if ((pc.surfaceFlags.y & (1u << 24)) != 0u) outColor = vec3(inColor.r);   // (an impostor's shade; g carries its cell)
     gl_Position = g.viewProjection * world;
 }

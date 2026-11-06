@@ -21,6 +21,7 @@
 
 #include <nlohmann/json.hpp>
 
+#include "../src/engine/procgen/city/polyline.h"   // distToSegment, distToPolyline
 #include "../src/engine/asset_manager.h"
 #include "../src/engine/components.h"
 #include "../src/engine/level_loader.h"
@@ -740,14 +741,6 @@ TEST_CASE(level_print_buildings_in_the_carriageway) {
         world.each<CityMap>([&](Entity, CityMap& m) { if (!cm) cm = &m; });
         if (!cb || !cm || !cm->data) continue;
         const RoadGraph& rg = cm->data->roads;
-        auto segDist = [](const Vec2& p, const Vec2& a, const Vec2& b) {
-            const Vec2 ab = b - a;
-            const Real l2 = ab.x * ab.x + ab.y * ab.y;
-            if (l2 < 1e-9) return (p - a).length();
-            Real t = ((p.x - a.x) * ab.x + (p.y - a.y) * ab.y) / l2;
-            t = std::max(Real(0), std::min(Real(1), t));
-            return (p - (a + ab * t)).length();
-        };
         int offenders = 0;
         Real worst = 0; Vec2 worstAt(0, 0); std::size_t worstRec = 0;
         for (std::size_t i = 0; i < cb->records.size(); ++i) {
@@ -758,7 +751,7 @@ TEST_CASE(level_print_buildings_in_the_carriageway) {
                 for (std::size_t e = 0; e < rg.edges.size(); ++e) {
                     const RoadEdge& ed = rg.edges[e];
                     if (ed.a < 0 || ed.b < 0) continue;
-                    const Real d = segDist(v, rg.nodes[ed.a].pos, rg.nodes[ed.b].pos);
+                    const Real d = distToSegment(v, rg.nodes[ed.a].pos, rg.nodes[ed.b].pos);
                     const Real into = ed.width * Real(0.5) - d;   // >0 = inside the lane
                     if (into > Real(0.25)) {
                         bad = true;
@@ -815,6 +808,59 @@ TEST_CASE(level_blueprints_and_graph_gate) {
         std::printf("[blueprints] %s: %d enterable, %d modelled, %d pass the gate, %d sheets in %s\n", name.c_str(), enterable, modelled, passing, written, dir);
         int shown = 0;
         for (const auto& [w, n] : why) { if (shown++ >= 12) { std::printf("[blueprints]   ...\n"); break; } std::printf("[blueprints]   fails %s x%d\n", w.c_str(), n); }
+    }
+}
+
+// WHERE THE LANDMARKS STAND (ADR-0314: each place plans its own, by its kind): every landmark building of a level,
+// counted by the place whose hub it is nearest. Printed; RT_PRINT_LANDMARKS=level.json (a name in assets/levels).
+TEST_CASE(level_print_landmarks_by_place) {
+    const char* lv = std::getenv("RT_PRINT_LANDMARKS");
+    if (!lv) return;
+    const std::string path = levelsDir() + "/" + lv;
+    nlohmann::json root;
+    { std::ifstream in(path); if (in) in >> root; }
+    std::vector<std::pair<std::string, Vec2>> places;
+    std::vector<std::vector<Poly2>> limits;   // each place's (its hub's `limits`): the lot pass's rule, then the nearest hub
+    if (root.contains("citysim") && root["citysim"].contains("districts") && root["citysim"]["districts"].contains("hubs"))
+        for (const auto& h : root["citysim"]["districts"]["hubs"]) {
+            places.push_back({h.value("_place", std::string("?")), Vec2(h["at"][0].get<double>(), h["at"][1].get<double>())});
+            limits.emplace_back();
+            for (const auto& rj : h.contains("limits") ? h["limits"] : nlohmann::json::array()) {
+                Poly2 ring;
+                for (const auto& q : rj) ring.push_back(Vec2(q[0].get<double>(), q[1].get<double>()));
+                limits.back().push_back(ring);
+            }
+        }
+    std::unique_ptr<Renderer> renderer = Renderer::create();
+    RendererMeshUploader uploader(*renderer);
+    AssetManager assets(uploader);
+    World world;
+    RenderView view;
+    CHECK(LevelLoader::load(path, world, *renderer, view, assets, false));
+    const CityBuildings* cbp = nullptr;
+    world.each<CityBuildings>([&](Entity, CityBuildings& cb) { cbp = &cb; });
+    CHECK(cbp != nullptr);
+    if (!cbp || places.empty()) return;
+    std::map<std::string, std::map<std::string, int>> by;
+    for (const BuildingRecord& r : cbp->records) {
+        LandmarkKind k;
+        if (r.plan.size() < 3 || !landmarkKindNamed(r.recipe, k)) continue;
+        const Vec2 c = centroid(r.plan);
+        std::size_t best = places.size();
+        for (std::size_t i = 0; i < places.size() && best == places.size(); ++i)
+            for (const Poly2& ring : limits[i]) if (pointInPolygon(ring, c)) best = i;
+        if (best == places.size()) {
+            best = 0;
+            for (std::size_t i = 1; i < places.size(); ++i)
+                if ((places[i].second - c).lengthSquared() < (places[best].second - c).lengthSquared()) best = i;
+        }
+        ++by[places[best].first][r.recipe];
+        std::printf("    [landmark] %s %s at (%.0f, %.0f)\n", places[best].first.c_str(), r.recipe.c_str(), c.x, c.y);
+    }
+    for (const auto& [place, at] : places) {
+        std::printf("    [landmarks] %-18s", place.c_str());
+        for (const auto& [lm, n] : by[place]) std::printf(" %s %d", lm.c_str(), n);
+        std::printf("\n");
     }
 }
 
@@ -1088,13 +1134,6 @@ TEST_CASE(metro_signal_poles_stand_off_the_asphalt) {
         }
     }
 
-    auto distSeg = [](const Vec2& p, const Vec2& a, const Vec2& b) {
-        const Vec2 ab = b - a;
-        const double l2 = ab.lengthSquared();
-        double t = l2 > 1e-12 ? dot(p - a, ab) / l2 : 0.0;
-        t = t < 0 ? 0 : (t > 1 ? 1 : t);
-        return (a + ab * t - p).length();
-    };
 
     int total = 0, inPad = 0, inCompound = 0, inBody = 0;
     double worst = 0; Vec2 worstAt(0, 0); const char* worstKind = "";
@@ -1113,14 +1152,14 @@ TEST_CASE(metro_signal_poles_stand_off_the_asphalt) {
         for (const Pair& c : compound)
             compDepth = std::max(compDepth,
                                  std::min(rad[c.a], rad[c.b]) -
-                                     distSeg(p, g.nodes[c.a].pos, g.nodes[c.b].pos));
+                                     distToSegment(p, g.nodes[c.a].pos, g.nodes[c.b].pos));
         // (3) inside a body ribbon (carriageway only — the sidewalk band is
         //     exactly where a pole belongs)
         double bodyDepth = 0;
         for (const RoadEdge& e : g.edges) {
             if (e.a < 0 || e.b < 0 || e.a >= N || e.b >= N) continue;
             bodyDepth = std::max(bodyDepth,
-                                 e.width * 0.5 - distSeg(p, g.nodes[e.a].pos, g.nodes[e.b].pos));
+                                 e.width * 0.5 - distToSegment(p, g.nodes[e.a].pos, g.nodes[e.b].pos));
         }
         if (!kerb.empty()) { padDepth = 0; compDepth = 0; bodyDepth = kerb.depth(p); }
         const char* kind = nullptr;
@@ -1159,7 +1198,7 @@ TEST_CASE(metro_signal_poles_stand_off_the_asphalt) {
         for (const RoadEdge& e : g.edges) {
             if (e.a < 0 || e.b < 0 || e.a >= N || e.b >= N) continue;
             depth = std::max(depth,
-                             e.width * 0.5 - distSeg(q, g.nodes[e.a].pos, g.nodes[e.b].pos));
+                             e.width * 0.5 - distToSegment(q, g.nodes[e.a].pos, g.nodes[e.b].pos));
         }
         if (!kerb.empty()) depth = kerb.depth(q);
         if (depth > 0.05) {
@@ -1423,10 +1462,10 @@ TEST_CASE(level_print_published_deck_against_the_drawn_road) {
     world.each<engine::RoadDeck>([&](Entity, engine::RoadDeck& d) { decks.push_back(&d.field); });
     struct Bucket { int n = 0, over10 = 0, over25 = 0; double sum = 0, lo = 1e9, hi = -1e9; };
     // [near node, mid-edge] x [centre, mid, edge]
-    Bucket own[2][3], field, threeHeight, oneSlope, ownSection;
+    Bucket own[2][3], deckOwn[3], field, threeHeight, oneSlope, ownSection;   // deckOwn: authored decks (ramps, viaducts) alone
     int otherSpine = 0;   // the field answered from another road where this one's own section was right
     int none = 0;
-    struct Spot { double d, x, z, pub, drawn; int spine; double lat, fromEnd; int klass; };
+    struct Spot { double d, x, z, pub, drawn; int spine; double lat, fromEnd; int klass, layer; bool authored; };
     std::vector<Spot> spots;
     auto add = [](Bucket& b, double d) {
         ++b.n; b.sum += d; b.lo = std::min(b.lo, d); b.hi = std::max(b.hi, d);
@@ -1436,7 +1475,8 @@ TEST_CASE(level_print_published_deck_against_the_drawn_road) {
     for (const engine::RoadDeckField* f : decks) {
         for (std::size_t si = 0; si < f->spines.size(); ++si) {
             const engine::UnionSpine& s = f->spines[si];
-            if (s.use != engine::UnionSpine::Use::Road || s.layer != 0 || s.yAbs.size() != s.points.size()) continue;
+            // every road spine, ramps and raised decks too (#142: a ramp's deck stood 0.3 m over its drawing)
+            if (s.use != engine::UnionSpine::Use::Road || s.yAbs.size() != s.points.size()) continue;
             double total = 0;
             for (std::size_t k = 1; k < s.points.size(); ++k) total += (s.points[k] - s.points[k - 1]).length();
             double base = 0;
@@ -1467,6 +1507,7 @@ TEST_CASE(level_print_published_deck_against_the_drawn_road) {
                         if (std::fabs(best - pub) > 1.5) { ++none; continue; }
                         const double d = pub - best;   // + : the published deck stands over the drawn road
                         add(own[fromEnd < 25.0 ? 0 : 1][std::fabs(frac) < 0.1 ? 0 : std::fabs(frac) < 0.7 ? 1 : 2], d);
+                        if (s.authoredDeck) add(deckOwn[std::fabs(frac) < 0.1 ? 0 : std::fabs(frac) < 0.7 ? 1 : 2], d);
                         add(ownSection, s.sectionY(k - 1, u / len, lat) - best);
                         double fy;
                         if (f->heightAt(q.x, q.y, 0.0, &fy) && std::fabs(fy - best) < 1.5) {
@@ -1480,7 +1521,8 @@ TEST_CASE(level_print_published_deck_against_the_drawn_road) {
                         }
                         const double ds = s.sectionY(k - 1, u / len, lat) - best;   // the published section's miss
                         if (std::fabs(ds) > 0.10)
-                            spots.push_back({ds, q.x, q.y, s.sectionY(k - 1, u / len, lat), best, static_cast<int>(si), lat, fromEnd, static_cast<int>(s.klass)});
+                            spots.push_back({ds, q.x, q.y, s.sectionY(k - 1, u / len, lat), best, static_cast<int>(si), lat, fromEnd, static_cast<int>(s.klass),
+                                             s.layer, s.authoredDeck});
                     }
                 }
                 base += len;
@@ -1495,6 +1537,10 @@ TEST_CASE(level_print_published_deck_against_the_drawn_road) {
             std::printf("    [deck] own profile, %s, %s: %d samples, mean %+.3f, %+.2f..%+.2f m, %d over 10 cm, %d over 25 cm\n",
                         where[i], across[j], b.n, b.n ? b.sum / b.n : 0.0, b.lo, b.hi, b.over10, b.over25);
         }
+    for (int j = 0; j < 3; ++j)
+        std::printf("    [deck] authored decks only, %s: %d samples, mean %+.3f, %+.2f..%+.2f m, %d over 10 cm, %d over 25 cm\n",
+                    across[j], deckOwn[j].n, deckOwn[j].n ? deckOwn[j].sum / deckOwn[j].n : 0.0, deckOwn[j].lo, deckOwn[j].hi,
+                    deckOwn[j].over10, deckOwn[j].over25);
     std::printf("    [deck] the field's answer: %d samples, mean %+.3f, %+.2f..%+.2f m, %d over 10 cm, %d over 25 cm; "
                 "%d samples with no drawn surface within 1.5 m\n",
                 field.n, field.n ? field.sum / field.n : 0.0, field.lo, field.hi, field.over10, field.over25, none);
@@ -1509,14 +1555,38 @@ TEST_CASE(level_print_published_deck_against_the_drawn_road) {
                 "%+.2f..%+.2f m, %d over 10 cm, %d over 25 cm\n", oneSlope.n, oneSlope.n ? oneSlope.sum / oneSlope.n : 0.0,
                 oneSlope.lo, oneSlope.hi, oneSlope.over10, oneSlope.over25);
     std::sort(spots.begin(), spots.end(), [](const Spot& a, const Spot& b) { return std::fabs(a.d) > std::fabs(b.d); });
+    if (const char* near = std::getenv("RT_DECK_NEAR")) {   // every miss within 15 m of x,z (an offender from the traffic test)
+        double nx = 0, nz = 0;
+        if (std::sscanf(near, "%lf,%lf", &nx, &nz) == 2)
+            for (const Spot& o : spots)
+                if (std::hypot(o.x - nx, o.z - nz) < 15.0)
+                    std::printf("      near: d=%+.2f at (%.1f, %.1f) published %.2f drawn %.2f spine %d layer %d lateral %+.1f\n",
+                                o.d, o.x, o.z, o.pub, o.drawn, o.spine, o.layer, o.lat);
+        // the drawn triangles under x,z, and the spine's own points around it: is the miss between vertices?
+        auto cell = grid.cells.find(ColliderGrid::key(static_cast<int>(std::floor(nx / ColliderGrid::kCell)), static_cast<int>(std::floor(nz / ColliderGrid::kCell))));
+        if (cell != grid.cells.end())
+            for (int id : cell->second) {
+                const ColliderGrid::Tri& t = grid.tris[static_cast<std::size_t>(id)];
+                if (!pointInTriangleXZ(nx, nz, t.a, t.b, t.c)) continue;
+                std::printf("      tri under: (%.1f, %.1f, y %.2f) (%.1f, %.1f, y %.2f) (%.1f, %.1f, y %.2f)\n",
+                            t.a.x, t.a.z, t.a.y, t.b.x, t.b.z, t.b.y, t.c.x, t.c.z, t.c.y);
+            }
+        for (const engine::RoadDeckField* f : decks)
+            for (std::size_t si = 0; si < f->spines.size(); ++si) {
+                const engine::UnionSpine& sp = f->spines[si];
+                for (std::size_t k = 0; k < sp.points.size() && k < sp.yAbs.size(); ++k)
+                    if (std::hypot(sp.points[k].x - nx, sp.points[k].y - nz) < 30.0)
+                        std::printf("      spine %zu point %zu (%.1f, %.1f) yAbs %.2f\n", si, k, sp.points[k].x, sp.points[k].y, sp.yAbs[k]);
+            }
+    }
     std::vector<std::pair<int, int>> shown;
     int printed = 0;
     for (const Spot& o : spots) {
         const std::pair<int, int> c{static_cast<int>(std::floor(o.x / 10.0)), static_cast<int>(std::floor(o.z / 10.0))};
         if (std::find(shown.begin(), shown.end(), c) != shown.end()) continue;
         shown.push_back(c);
-        std::printf("      d=%+.2f at (%.1f, %.1f) published %.2f drawn %.2f spine %d class %d lateral %+.1f, %.1f m from its end\n",
-                    o.d, o.x, o.z, o.pub, o.drawn, o.spine, o.klass, o.lat, o.fromEnd);
+        std::printf("      d=%+.2f at (%.1f, %.1f) published %.2f drawn %.2f spine %d class %d layer %d%s lateral %+.1f, %.1f m from its end\n",
+                    o.d, o.x, o.z, o.pub, o.drawn, o.spine, o.klass, o.layer, o.authored ? " deck" : "", o.lat, o.fromEnd);
         if (++printed >= 20) break;
     }
 }
@@ -3729,6 +3799,57 @@ TEST_CASE(island_water_surface_has_no_spikes) {
     CHECK(spikes == 0);
 }
 
+// ROADS UNDER THE WATER (Glenn, 2026-11-02, on the re-planned island: "the road runs under the river"): every road
+// in the level's graph, every 4 m along its planned profile, where it is inside a river's banks -- its height against
+// the water there. A road lower than the water is under the river. Printed, not gated: where to stand.
+TEST_CASE(level_print_roads_under_the_water) {
+    if (skipHeavy()) { std::printf("    skipped: island_8_nature (heavy, RT_LEVEL_TESTS_SKIP_HEAVY)\n"); return; }
+    const char* other = std::getenv("RT_UNDER_LEVEL");   // (another level by name: a re-plan before it is merged)
+    std::ifstream in(levelsDir() + "/" + (other ? std::string(other) : std::string("island_8_nature")) + ".json");
+    CHECK(in.good());
+    if (!in.good()) return;
+    const json root = json::parse(in);
+    const TerrainParams tp = readTerrainParams(root["terrain"]);
+    CHECK(tp.hydro != nullptr);
+    if (!tp.hydro) return;
+    std::ifstream gin(levelsDir() + "/../../" + root["citysim"]["graph"].get<std::string>());
+    CHECK(gin.good());
+    if (!gin.good()) return;
+    const json graph = json::parse(gin);
+    int under = 0;
+    for (const json& e : graph["edges"]) {
+        if (!e.contains("profile") || !e["profile"].contains("z")) continue;
+        const json& P = e["path"]["points"];
+        const json& Z = e["profile"]["z"];
+        const double step = e["profile"].value("step", 1.0);
+        double run = 0.0, worst = 0.0;
+        Vec2 at;
+        double s0 = 0.0;   // the path's length to this segment
+        for (std::size_t i = 0; i + 1 < P.size(); ++i) {
+            const Vec2 a(P[i][0].get<double>(), P[i][1].get<double>()), b(P[i + 1][0].get<double>(), P[i + 1][1].get<double>());
+            const double L = (b - a).length();
+            for (double t = 0.0; t < L; t += 4.0) {
+                const double s = s0 + t;
+                const Vec2 q = a + (b - a) * (t / std::max(1e-9, L));
+                double level = 0.0;
+                const std::size_t zi = std::min<std::size_t>(Z.size() - 1, static_cast<std::size_t>(s / step));
+                const double z = Z[zi].get<double>();
+                if (tp.hydro->distanceToRiver(q.x, q.y, 30.0, &level) <= 0.0 && std::isfinite(level) && z < level + 0.5) {
+                    run += 4.0;
+                    if (level - z > worst) { worst = level - z; at = q; }
+                }
+            }
+            s0 += L;
+        }
+        if (run > 0.0) {
+            ++under;
+            std::printf("    [under] %-16s %-10s %4.0f m in a river, worst %.1f m under the water at (%.0f, %.0f)\n",
+                        e["id"].get<std::string>().c_str(), e["class"].get<std::string>().c_str(), run, worst, at.x, at.y);
+        }
+    }
+    std::printf("    [under] %d roads under a river\n", under);
+}
+
 // ROAD EDGES MEET THE GROUND (Glenn, 2026-09-29, standing beside Weyby's streets: "a lot of roads tend to
 // float off the ground ... they're not flush"). Every AT-GRADE road (layer 0, no authored deck -- a bridge
 // or a viaduct is meant to stand clear), every 10 m, both sides: walk out from the carriageway edge until
@@ -4111,7 +4232,7 @@ TEST_CASE(metro_day_census_prints) {
     citysim::CityRenderSystem city;
     CHECK(city.build(world, &assets, nullptr));
     std::printf("    [census] hour | out%% (walkers out / moving, drivers moving, riding, waiting) | by role out%% "
-                "commuter/shopkeeper/stroller/student | boardings in 5 min | bus plans asked / taken / not worth it\n");
+                "of the first four roles | boardings in 5 min | bus plans asked / taken / not worth it\n");
     const char* only = std::getenv("RT_CENSUS_HOUR");   // one hour of the seven, to look closer
     for (Real hour : {8.0, 10.0, 12.5, 15.0, 17.5, 20.0, 23.0}) {
         if (only && std::fabs(std::atof(only) - hour) > 1e-6) continue;
@@ -4171,6 +4292,184 @@ TEST_CASE(metro_day_census_prints) {
             for (const auto& kv : why) std::printf("    [census night] %5d  %s\n", kv.second, kv.first.c_str());
         }
     }
+}
+
+// THE PEOPLE CENSUS (households plan, ~/.claude/plans/kinds-are-data-assign-places.md "Proof"). Print-only under
+// RT_PEOPLE=1: the level (RT_CENSUS_LEVEL, else the sim level) -- its households by type, people by band, stage and
+// role, housemates' ties by kind, the evening jobs -- and the plan's invariants, which it CHECKS: no dwelling holds two
+// households, every household lives in one dwelling (its members share a home place), every job holder's job is in
+// reach (a commute measured), and the plan of the level's own dwellings at seeds 1-3 houses the same way.
+#include "../src/apps/citysim/households.h"
+#include "../src/apps/citysim/relationships.h"
+TEST_CASE(people_census_prints) {
+    if (!std::getenv("RT_PEOPLE")) return;
+    std::unique_ptr<Renderer> renderer = Renderer::create();
+    RendererMeshUploader uploader(*renderer);
+    AssetManager assets(uploader);
+    World world;
+    RenderView view;
+    const char* lvl = std::getenv("RT_CENSUS_LEVEL");
+    const bool loaded = LevelLoader::load(lvl ? std::string(lvl) : simLevelPath(), world, *renderer, view, assets, false);
+    CHECK(loaded);
+    if (!loaded) return;
+    citysim::CityRenderSystem city;
+    CHECK(city.build(world, &assets, nullptr));
+    const citysim::CitySim& sim = city.sim();
+    const citysim::PeopleCatalog& folk = sim.people();
+    const citysim::HouseholdPlan& plan = sim.households();
+    std::printf("    [people] %s\n", sim.populationLine().c_str());
+    // by role, and the evening jobs
+    std::map<std::string, int> byRole;
+    int jobHolders = 0, noCommute = 0, sideJobs = 0;
+    std::map<std::string, int> noCommuteBy;
+    for (int i = 0; i < static_cast<int>(sim.agents().size()); ++i) {
+        const citysim::Agent& a = sim.agents()[static_cast<std::size_t>(i)];
+        if (sim.onService(i)) continue;
+        ++byRole[sim.roles().nameOf(a.role)];
+        sideJobs += a.sideVenue >= 0 ? 1 : 0;
+        if (a.workPlace != citysim::kNoPlace && a.homePlace != citysim::kNoPlace && a.stage >= 0 &&
+            folk.stages[static_cast<std::size_t>(a.stage)].job) {
+            ++jobHolders;
+            if (a.commuteSeconds <= 0 && a.home != a.work) {   // (work at their own corner: no trip)
+                ++noCommute;
+                char k[160];
+                std::snprintf(k, sizeof k, "%s %s, home %d work %d, workPlace %u", sim.roles().nameOf(a.role),
+                              a.archetype == citysim::Agent::Mode::Driver ? "driver" : "walker", a.home, a.work,
+                              static_cast<unsigned>(a.workPlace));
+                if (noCommute <= 6) std::printf("    [people]   no commute: %s\n", k);
+                ++noCommuteBy[std::string(sim.roles().nameOf(a.role)) + (a.archetype == citysim::Agent::Mode::Driver ? " driver" : " walker")];
+            }
+        }
+    }
+    std::string roles;
+    for (const auto& [r, n] : byRole) roles += (roles.empty() ? "" : ", ") + r + " " + std::to_string(n);
+    std::printf("    [people] roles: %s; evening jobs %d\n", roles.c_str(), sideJobs);
+    // ties by kind, each side's (a parent's child counts once as parent and once as child)
+    std::map<std::string, int> ties;
+    const citysim::RelationshipTable& rel = sim.relationships();
+    for (const citysim::Agent& a : sim.agents())
+        for (const auto& [other, bond] : rel.relationsOf(a.uid))
+            if (bond == citysim::Relationship::Household) {
+                const int t = rel.tieOf(a.uid, other);
+                ++ties[t >= 0 && t < static_cast<int>(folk.ties.size()) ? folk.ties[static_cast<std::size_t>(t)].name : "?"];
+            }
+    std::string tl;
+    for (const auto& [t, n] : ties) tl += (tl.empty() ? "" : ", ") + t + " " + std::to_string(n);
+    std::printf("    [people] household ties: %s\n", tl.c_str());
+    // the invariants
+    std::map<uint32_t, int> perDwelling;
+    for (const citysim::Household& hh : plan.households)
+        if (hh.dwelling != citysim::Household::kNoDwelling) ++perDwelling[hh.dwelling];
+    int overFull = 0;
+    for (const auto& [d, n] : perDwelling) overFull += n > 1 ? 1 : 0;
+    std::map<int, citysim::PlaceId> homeOf;
+    int split = 0;
+    for (const citysim::Agent& a : sim.agents()) {
+        if (a.household < 0) continue;
+        auto [it, fresh] = homeOf.insert({a.household, a.homePlace});
+        if (!fresh && it->second != a.homePlace) ++split;
+    }
+    std::printf("    [people] dwellings with two households %d; households split over homes %d; job holders %d, %d with no "
+                "commute measured\n", overFull, split, jobHolders, noCommute);
+    for (const auto& [k, n] : noCommuteBy) std::printf("    [people]   no commute: %d %s\n", n, k.c_str());
+    CHECK(overFull == 0);
+    CHECK(split == 0);
+    CHECK(noCommute == 0);
+    // every seed: the level's own dwellings planned at seeds 1-3
+    const uint32_t beds = sim.placeKinds().tag("beds");
+    for (uint32_t seed = 1; seed <= 3; ++seed) {
+        const citysim::HouseholdPlan p = citysim::planHouseholds(folk, city.places(), beds, plan.asked, plan.asked / 3, seed);
+        std::map<uint32_t, int> per;
+        for (const citysim::Household& hh : p.households)
+            if (hh.dwelling != citysim::Household::kNoDwelling) ++per[hh.dwelling];
+        int twice = 0;
+        for (const auto& [d, n] : per) twice += n > 1 ? 1 : 0;
+        std::printf("    [people] seed %u: %s\n", seed, citysim::describePlan(folk, p).c_str());
+        CHECK(twice == 0);
+        CHECK(!p.people.empty());
+    }
+}
+
+// THE HOUSING AUDIT (Glenn, 2026-11-01: "build denser housing. See how much we can fit. Build up as well."). Print-only
+// under RT_HOUSING=1: the level (RT_CENSUS_LEVEL, else the sim level), every grown building by district and recipe --
+// how many, their storeys, floor area, the dwellings places.lua cuts them into, and whether the citysim counts them
+// as homes (a home place, or the flats over a shop) or not.
+#include "../src/apps/citysim/place_kinds.h"
+#include "../src/engine/procgen/city/building_uses.h"
+TEST_CASE(housing_audit_prints) {
+    if (!std::getenv("RT_HOUSING")) return;
+    std::unique_ptr<Renderer> renderer = Renderer::create();
+    RendererMeshUploader uploader(*renderer);
+    AssetManager assets(uploader);
+    World world;
+    RenderView view;
+    const char* lvl = std::getenv("RT_CENSUS_LEVEL");
+    const bool loaded = LevelLoader::load(lvl ? std::string(lvl) : simLevelPath(), world, *renderer, view, assets, false);
+    CHECK(loaded);
+    if (!loaded) return;
+    const citysim::PlaceKindCatalog kinds = citysim::defaultPlaceKindCatalog();
+    struct Row { int units = 0; double floors = 0, m2 = 0, footprint = 0; int dwellings = 0; bool home = false; std::string use; };
+    std::map<std::string, std::map<std::string, Row>> by;   // district -> recipe
+    world.each<CityBuildings>([&](Entity, CityBuildings& cb) {
+        for (const BuildingRecord& r : cb.records) {
+            if (r.plan.size() < 3) continue;
+            Row& row = by[r.district][r.recipe + " (" + r.type + ")"];
+            const double a = area(r.plan), m2 = a * (1.0 + std::max(0, r.params.floors));
+            ++row.units;
+            row.floors += 1.0 + std::max(0, r.params.floors);
+            row.m2 += m2;
+            row.footprint += a;
+            row.use = floorUseFor(r.recipe, r.type);
+            row.home = r.type == "home" || r.params.residential;   // (flats over shops are homes too)
+            const citysim::DwellingRule* rule = kinds.dwellingRule(row.use);
+            if (rule && (row.use == "house" || row.use == "apartments")) {
+                // flats over shops: the floors above the ground
+                const double flats = row.home ? m2 : a * std::max(0, r.params.floors);
+                std::vector<int> beds;
+                citysim::dwellingsOf(kinds, *rule, flats, 1, beds);
+                row.dwellings += static_cast<int>(beds.size());
+            }
+        }
+    });
+    {   // THE BIG LOW ONES (Glenn: "some of the buildings that take up a whole block are sometimes just a few stories
+        // high"): footprints of a block's size under ten storeys, the largest first
+        struct Big { double a; int storeys; std::string what; Vec2 at; };
+        std::vector<Big> big;
+        world.each<CityBuildings>([&](Entity, CityBuildings& cb) {
+            for (const BuildingRecord& r : cb.records)
+                if (r.plan.size() >= 3 && area(r.plan) >= 2500.0 && r.params.floors + 1 < 10)
+                    big.push_back({area(r.plan), r.params.floors + 1, r.district + " " + r.recipe + " (" + r.type + ")", centroid(r.plan)});
+        });
+        std::sort(big.begin(), big.end(), [](const Big& x, const Big& y) { return x.a > y.a; });
+        std::map<std::string, std::pair<int, double>> kinds;
+        for (const Big& b : big) { ++kinds[b.what].first; kinds[b.what].second += b.a; }
+        std::printf("    [housing] big and low (footprint >= 2500 m2, under 10 storeys): %zu\n", big.size());
+        for (const auto& [what, nk] : kinds)
+            std::printf("    [housing]   %-46s %4d, mean footprint %6.0f m2\n", what.c_str(), nk.first, nk.second / nk.first);
+        for (std::size_t k = 0; k < big.size() && k < 12; ++k)
+            std::printf("    [housing]   the %2zu. largest: %-40s %6.0f m2, %d storeys at (%.0f, %.0f)\n", k + 1, big[k].what.c_str(), big[k].a,
+                        big[k].storeys, big[k].at.x, big[k].at.y);
+    }
+    int counted = 0, uncounted = 0;
+    double homeM2 = 0, allM2 = 0;
+    for (const auto& [district, recipes] : by) {
+        int dd = 0, du = 0;
+        double dm = 0;
+        for (const auto& [name, row] : recipes) { dd += row.dwellings; du += row.units; dm += row.m2; }
+        std::printf("    [housing] %-12s %6d buildings %10.0f m2 floor %7d dwellings\n", district.c_str(), du, dm, dd);
+        std::vector<std::pair<std::string, Row>> rows(recipes.begin(), recipes.end());
+        std::sort(rows.begin(), rows.end(), [](const auto& x, const auto& y) { return x.second.m2 > y.second.m2; });
+        for (const auto& [name, row] : rows) {
+            std::printf("    [housing]   %-34s %5d x %4.1f storeys, footprint %6.0f m2, floor %9.0f m2, use %-10s %6d dwellings%s\n",
+                        name.c_str(), row.units, row.floors / row.units, row.footprint / row.units, row.m2, row.use.c_str(),
+                        row.dwellings, row.dwellings && !row.home ? "  <- NOT counted as homes" : "");
+            (row.home ? counted : uncounted) += row.dwellings;
+            if (row.home) homeM2 += row.m2;
+            allM2 += row.m2;
+        }
+    }
+    std::printf("    [housing] TOTAL: %d dwellings counted as homes, %d more not counted; homes are %.0f%% of %.0f m2 of floor\n",
+                counted, uncounted, 100.0 * homeM2 / std::max(1.0, allM2), allM2);
 }
 
 // WALKERS IN THE ROAD (Glenn: "the npcs all over the roads is a problem. It's interfering with traffic ... they can

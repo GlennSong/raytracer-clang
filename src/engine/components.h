@@ -11,6 +11,7 @@
 #include "procgen/city/polygon.h"   // Poly2 (city-plan debug outlines, ADR-0066)
 #include "procgen/city/road_network.h"   // RoadGraph (ExtraNavGraph, plan §8 P8.4)
 #include "procgen/city/road_mesh.h"      // RoadDeckField (RoadDeck)
+#include "weather_cycle.h"               // WeatherClimate (DayNightConfig)
 #include "procgen/city/rail_track.h"     // RailTrack (RailTracks)
 #include "procgen/terrain.h"
 #include "procgen/height_pyramid.h"   // TerrainLodConfig::baked (ADR-0095)
@@ -155,6 +156,9 @@ struct Renderable {
     // Content class. An explicit drawDistance above still wins (the HLOD chunks
     // compute theirs); this is what everything else resolves through.
     DrawClass drawClass = DrawClass::Unset;
+    // Per-draw DATA on the model's bottom row (Mat4::m[3][0]), as an instance carries it, for a material flag that
+    // reads it -- a vehicle's lit-lamp mask under FLAG_LAMP_STATE (ADR-0342). 0: none.
+    float instanceData = 0.0f;
 };
 
 // Many instances of one mesh, drawn as a batch (ROADMAP Phase B instancing).
@@ -529,12 +533,8 @@ struct Vehicle {
     Real steerApplied = 0;
     Real slide = 0;                // the player's ride: how hard its tyres slide, 0..1 (VehicleSystem::measureSlide)
     std::vector<Entity> wheelEntities;   // rendered wheels (optional)
-    // Head/taillight glow toggle (ADR-0059) and the lens entities VehicleSystem
-    // positions + lights each frame; `driverModel` is a capsule shown in the seat
-    // while occupied.
+    // The manual headlight switch (ADR-0059); `driverModel` is the occupant shown in the seat while occupied.
     bool lightsOn = false;               // manual switch: forces headlights ON
-    std::vector<Entity> headlights;      // front lenses (warm)
-    std::vector<Entity> taillights;      // rear lenses (red)
     Entity driverModel;                  // driver capsule (stowed when unoccupied)
 
     // Lamp state, so the player's car behaves like the city's traffic rather than
@@ -547,10 +547,9 @@ struct Vehicle {
     int turnSignal = 0;                  // -1 left, +1 right, 0 none
     Real signalHold = 0;                 // seconds an indicator stays on after the
                                          // steering straightens, so it doesn't flicker
-    // Lamp lenses placed from the body recipe's markers. Empty falls back to the
-    // hardcoded chassis corners, so a car with no marker data still lights.
+    // Where the lamps are, from the body recipe's markers (the chassis corners when it has none): the headlight
+    // cones start there. The lenses that LIGHT are the body's own (ADR-0342).
     struct Lamp {
-        Entity entity;
         Vec3 local{0, 0, 0};
         bool front = true;               // headlight end vs tail end
         bool left = false;               // which indicator side it belongs to
@@ -778,10 +777,12 @@ struct AuthoredPlace {
     // keeps the legacy centroid snap.
     bool hasEntrance = false;
     float ex = 0, ez = 0;
-    // The university (Lot::campus): 1 teaching hall, 2 library, 3 residence hall, 4 quad,
-    // 5 sports field; 0 = not campus. `capacity` is how many live there (the residence
-    // hall's beds); 0 = no limit.
-    uint8_t campus = 0;
+    // The RECIPE that grew it (empty for an authored marker): the citysim's place kind (places.lua) and, for a home,
+    // its dwellings' rule (by the recipe's use, building_uses.lua) come from it. `units`: how many units it grew (a
+    // row of houses is one place of several houses). `capacity`: how many it holds; 0 = no limit (a hall's beds
+    // come from its kind).
+    std::string recipe;
+    int units = 1;
     int capacity = 0;
     // Its FLOOR AREA, m2 (the busy streets): every storey of the building, so a tower draws the residents or the staff
     // a tower holds and a corner shop a corner shop's -- the citysim weights who lives and works where by it. 0: unknown
@@ -826,6 +827,10 @@ struct DayNightConfig {
     // Pair with "dayMinutes": 1440 for one-to-one with reality.
     int clockSource = -1;
     float utcOffsetHours = -1000.0f;
+    // THE CLIMATE ("dayNight": {"climate": {"summer": [c, f, o, s], "winter": [...], "odds": [...] (both),
+    // "prevailingFrom": deg, "windScale": x}}, ADR-0340): the odds each day's weather is drawn from, the wind's home
+    bool hasClimate = false;
+    WeatherClimate climate;
 };
 
 struct CitySimConfig {

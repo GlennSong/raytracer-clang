@@ -28,37 +28,21 @@ struct Line {
 };
 
 
-// Segment p+t(q-p) against a+u(b-a): true with t,u when the lines are not parallel.
-bool lineParams(const Vec2& p, const Vec2& q, const Vec2& a, const Vec2& b, double& t, double& u) {
-    const Vec2 r = q - p, s = b - a; const double den = r.x * s.y - r.y * s.x;
-    if (std::fabs(den) < 1e-12) return false;
-    const Vec2 ap = a - p;
-    t = (ap.x * s.y - ap.y * s.x) / den; u = (ap.x * r.y - ap.y * r.x) / den; return true;
-}
 
 // Parameter along a-b of the point nearest p, and the distance to it.
 double nearestParam(const Vec2& p, const Vec2& a, const Vec2& b, double& dist) {
-    const Vec2 d = b - a; const double L2 = d.x * d.x + d.y * d.y;
-    double u = L2 > 0 ? ((p.x - a.x) * d.x + (p.y - a.y) * d.y) / L2 : 0.0; u = std::max(0.0, std::min(1.0, u));
-    const Vec2 c(a.x + d.x * u, a.y + d.y * u); dist = std::hypot(p.x - c.x, p.y - c.y); return u;
+    Real u = 0;
+    const Vec2 c = closestOnSegment(p, a, b, &u, 0.0);   // (polyline.h; any length above zero is a segment here)
+    dist = std::hypot(p.x - c.x, p.y - c.y);         // (hypot, as the baked twins were measured: rounded once, not twice)
+    return u;
 }
 
 // Douglas-Peucker on a polyline, returning the indices kept (endpoints always), then
 // splitting any run longer than `maxSpan` metres (station-based) so long curves still sample.
 std::vector<size_t> simplifyIndices(const std::vector<Vec2>& pts, double tol, double maxSpan, const std::vector<double>& s) {
     std::vector<char> keep(pts.size(), 0); keep.front() = keep.back() = 1;
-    std::vector<std::pair<size_t, size_t>> stack{{0, pts.size() - 1}};
-    while (!stack.empty()) {
-        auto [a, b] = stack.back(); stack.pop_back(); if (b <= a + 1) continue;
-        const Vec2 d = pts[b] - pts[a]; const double L = std::hypot(d.x, d.y); size_t best = a; double bd = -1;
-        for (size_t i = a + 1; i < b; ++i) {
-            const Vec2 v = pts[i] - pts[a];
-            const double dist = L > 1e-9 ? std::fabs(v.x * d.y - v.y * d.x) / L : std::hypot(v.x, v.y);
-            if (dist > bd) { bd = dist; best = i; }
-        }
-        const bool tooLong = s.size() == pts.size() && s[b] - s[a] > maxSpan;
-        if (bd > tol || tooLong) { if (bd <= tol) best = (a + b) / 2; keep[best] = 1; stack.push_back({a, best}); stack.push_back({best, b}); }
-    }
+    douglasPeucker(0, pts.size() - 1, tol, [&](size_t i, size_t a, size_t b) { return distToLine(pts[i], pts[a], pts[b]); },
+                   [&](size_t a, size_t b) { return s.size() == pts.size() && s[b] - s[a] > maxSpan; }, keep);   // (polyline.h)
     std::vector<size_t> out; for (size_t i = 0; i < pts.size(); ++i) if (keep[i]) out.push_back(i); return out;
 }
 
@@ -246,7 +230,7 @@ RoadEntity roadTwin(const Result& r, double nodeSpacing, bool forLots, bool forN
                 auto zAt = [](const Line& Ln, size_t seg, double tt) {
                     return Ln.z.size() > seg + 1 ? Ln.z[seg] + (Ln.z[seg + 1] - Ln.z[seg]) * tt : 0.0;
                 };
-                if (lineParams(p, q, a, b, t, u) && t > eps && t < 1 - eps && u > eps && u < 1 - eps) {   // a proper crossing
+                if (lineCross(p, q, a, b, t, u) && t > eps && t < 1 - eps && u > eps && u < 1 - eps) {   // a proper crossing
                     // (the LOT twin keeps every crossing: its faces are the blocks, and a bridge still divides them in plan)
                     if (!forLots && std::fabs(zAt(lines[li], si, t) - zAt(LO, static_cast<size_t>(o.seg), u)) >= r.graph.rules.bridgeH) {
                         ++bridgedCrossings;

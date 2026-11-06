@@ -9,8 +9,6 @@
 namespace engine {
 
 namespace {
-constexpr double kPi = 3.14159265358979323846;
-constexpr double kDeg = kPi / 180.0;
 
 SkyChartSample sampleOf(double hour, const Vec3& dir) {
     SkyChartSample s;
@@ -41,19 +39,19 @@ std::string clock(double hours) {
 
 double skyBearingDeg(const Vec3& dir) {
     // North is -z, east +x: bearing clockwise from north.
-    double b = std::atan2(dir.x, -dir.z) / kDeg;
+    double b = std::atan2(dir.x, -dir.z) / DEG_TO_RAD;
     if (b < 0.0) b += 360.0;
     return b;
 }
 
 double skyAltitudeDeg(const Vec3& dir) {
-    return std::asin(std::clamp(dir.y, -1.0, 1.0)) / kDeg;
+    return std::asin(std::clamp(dir.y, -1.0, 1.0)) / DEG_TO_RAD;
 }
 
 ChartPoint skyChartPoint(const Vec3& dir) {
     const double alt = skyAltitudeDeg(dir);
     const double r = 1.0 - alt / 90.0;          // zenith 0, horizon 1, nadir 2
-    const double b = skyBearingDeg(dir) * kDeg;
+    const double b = skyBearingDeg(dir) * DEG_TO_RAD;
     // Map orientation: east (+x) right, south (+z) DOWN the page — north up.
     return ChartPoint{r * std::sin(b), -r * std::cos(b)};
 }
@@ -173,7 +171,7 @@ bool writeSkyChartSvg(const SkyChart& chart, const std::string& path) {
         const SkyChartSample* best = &s.front();
         for (const SkyChartSample& p : s)
             if (std::fabs(p.hour - hour) < std::fabs(best->hour - hour)) best = &p;
-        const double b = best->azimuthDeg * kDeg;
+        const double b = best->azimuthDeg * DEG_TO_RAD;
         const double x = cx + R * std::sin(b), y = cy - R * std::cos(b);
         const double ox = cx + (R + 14) * std::sin(b), oy = cy - (R + 14) * std::cos(b);
         out << "<circle cx='" << x << "' cy='" << y << "' r='5' fill='" << colour
@@ -191,7 +189,7 @@ bool writeSkyChartSvg(const SkyChart& chart, const std::string& path) {
     auto body = [&](const SkyChartSample& s, double r, const char* fill, const char* label) {
         Vec3 d = s.dir;
         if (!s.up) {   // clamp to the rim so a set body still shows its bearing
-            const double b = s.azimuthDeg * kDeg;
+            const double b = s.azimuthDeg * DEG_TO_RAD;
             d = Vec3(std::sin(b), 0.0, -std::cos(b));
         }
         const ChartPoint q = px(d);

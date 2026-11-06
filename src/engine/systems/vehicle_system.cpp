@@ -107,6 +107,8 @@ void VehicleSystem::onStart(FrameContext& ctx) {
     // Debug: spawn a fresh car in front of the player (always on solid ground,
     // since the player is standing on a collider).
     ctx.actions.bindButton("spawn_vehicle", KeyCode::N);
+    // ...and M drops the catalogue's QUICK vehicle (the entry marked `quick`: the motorcycle) without cycling to it
+    ctx.actions.bindButton("vehicle_quick", KeyCode::M);
 }
 
 void VehicleSystem::spawnInFront(FrameContext& ctx) {
@@ -175,7 +177,7 @@ void VehicleSystem::loadCatalogue() {
     if (!vm.doString(lib, &err)) { LOG_WARN << "vehicles.lua: " << err; return; }
     std::vector<DrivableEntry> entries;
     if (!loadDrivableCatalogue(vm, entries, &err)) { LOG_WARN << "car picker: " << err; return; }
-    for (const DrivableEntry& e : entries) catalogue_.push_back({e.recipe, e.label, e.drive});
+    for (const DrivableEntry& e : entries) catalogue_.push_back({e.recipe, e.label, e.drive, e.quick});
     LOG_INFO << "[vehicle] car picker: " << catalogue_.size() << " drivable vehicles (, . to pick, N to drop)";
 #endif
 }
@@ -190,7 +192,10 @@ void VehicleSystem::render(FrameContext& ctx) {
                  ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoInputs |
                      ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav);
     ImGui::TextUnformatted(panelText_.c_str());
-    ImGui::TextDisabled("-  =  pick      N  drop      Z  2WD/4WD");
+    std::string keys = "-  =  pick      N  drop";
+    for (const Pick& p : catalogue_)
+        if (p.quick) { keys += "      M  " + p.label; break; }   // (the quick vehicle's own label, from the data)
+    ImGui::TextDisabled("%s      Z  2WD/4WD", keys.c_str());
     ImGui::End();
 #else
     (void)ctx;
@@ -243,57 +248,26 @@ void VehicleSystem::createVehicles(FrameContext& ctx) {
             v->wheelEntities.push_back(we);
         }
 
-        // Head/taillight lens boxes (emission toggled in writeBack) + a driver
-        // capsule (stowed until someone's aboard). Shared meshes, built once.
-        if (!lensMesh.valid())
-            lensMesh = ctx.assets.acquireMesh(MeshBuilder::box(Vec3(0.34, 0.18, 0.10)),
-                                              "vehicle:lens");
+        // A driver (stowed until someone's aboard). The LAMPS are the body's own lenses, lit by the mask writeBack puts
+        // on the body (ADR-0342); `lamps` keeps where they are, for the headlight cones.
         // A SEATED occupant, not a capsule. The capsule proved a car was
         // occupied; this shows who is driving it, posed from the same SAE manikin
         // the interior is packaged around so it fits the seat it sits in.
         if (!driverMesh.valid())
             driverMesh = ctx.assets.acquireMesh(buildSeatedOccupant(), "vehicle:driver");
-        auto makeLens = [&](Vec3 albedo) {
-            Entity le = ctx.world.create();
-            Transform lt;
-            ctx.world.add<Transform>(le, lt);
-            ctx.world.add<PrevTransform>(le, {lt});
-            Renderable r;
-            r.mesh = lensMesh;
-            r.material.albedo = albedo;     // always a coloured lens (front/back cue)
-            r.material.roughness = 0.4f;
-            r.material.opacity = 1.0f;
-            ctx.world.add<Renderable>(le, r);
-            return le;
-        };
-        if (!v->lamps.empty()) {
-            // Recipe-driven: one lens per marker, wherever the body generator put
-            // it. This is what lets a generated car's lamps sit in its actual
-            // housings instead of at guessed chassis corners.
-            for (Vehicle::Lamp& lamp : v->lamps)
-                lamp.entity = makeLens(lamp.front ? Vec3(1.0, 0.97, 0.82)
-                                                  : Vec3(0.85, 0.06, 0.05));
-        } else {
-            // No marker data (hand-built or legacy body): fall back to corners so
-            // every car still has lamps. The car's LEFT is +X (forward +Z, up +Y,
-            // right-handed — the lab-measured convention car_mesh.cpp documents).
+        if (v->lamps.empty()) {
+            // No marker data (hand-built or legacy body): the cones fall back to the corners. The car's LEFT is +X
+            // (forward +Z, up +Y, right-handed — the lab-measured convention car_mesh.cpp documents).
             const Vec3& hx = v->config.chassisHalfExtent;
             const Real lx = hx.x - 0.30, ly = -hx.y * 0.15;
             for (int i = 0; i < 4; ++i) {
-                const bool front = i < 2;
-                const bool left = (i % 2) == 1;
                 Vehicle::Lamp lamp;
-                lamp.front = front;
-                lamp.left = left;
-                lamp.local = Vec3(left ? lx : -lx, ly,
-                                  front ? hx.z + 0.05 : -hx.z - 0.05);
-                lamp.entity = makeLens(front ? Vec3(1.0, 0.97, 0.82)
-                                             : Vec3(0.85, 0.06, 0.05));
+                lamp.front = i < 2;
+                lamp.left = (i % 2) == 1;
+                lamp.local = Vec3(lamp.left ? lx : -lx, ly, lamp.front ? hx.z + 0.05 : -hx.z - 0.05);
                 v->lamps.push_back(lamp);
             }
         }
-        for (const Vehicle::Lamp& lamp : v->lamps)
-            (lamp.front ? v->headlights : v->taillights).push_back(lamp.entity);
 
         v->driverModel = ctx.world.create();
         {
@@ -448,17 +422,10 @@ void VehicleSystem::writeBack(FrameContext& ctx) {
                 v.turnSignal, v.lightsOn);
             const bool blink = lampBlinkOn(ctx.clock.simulatedTime());
 
-            for (const Vehicle::Lamp& lamp : v.lamps) {
-                place(lamp.entity, lamp.local);
-                Renderable* r = ctx.world.get<Renderable>(lamp.entity);
-                if (!r) continue;
-                const bool signalling = (lamp.left ? lit.left : lit.right) && blink;
-                Vec3 e(0, 0, 0);
-                if (signalling)          e = Vec3(2.4, 1.05, 0.07);   // amber wins
-                else if (lamp.front)     e = lit.head ? Vec3(3.0, 2.8, 2.2) : Vec3(0, 0, 0);
-                else if (lit.brake)      e = Vec3(2.6, 0.10, 0.08);   // hard red
-                else if (lit.head)       e = Vec3(0.7, 0.05, 0.04);   // dim tail glow
-                r->material.emission = e;
+            // THE BODY'S OWN LENSES light (ADR-0342): the mask rides its model's bottom row (Renderable::instanceData)
+            if (Renderable* body = ctx.world.get<Renderable>(e)) {
+                body->material.flags |= RenderMaterial::FLAG_LAMP_STATE;
+                body->instanceData = static_cast<float>(lampMask(lit, blink));
             }
 
             // Headlight CONES (WS3, the ADR-0065 deferred row): lit headlights
@@ -628,6 +595,7 @@ void VehicleSystem::handleEnterExit(FrameContext& ctx) {
                 bt.orientation.rotate(Vec3(0, 1, 0)).y < std::cos(v.config.maxLeanDegrees * 0.0174533))
                 physicsSys.physicsWorld().resetVehicleUpright(v.vehicleId, 0.3);
             bikeUpright_ = false;
+            bikeDown_ = 0;
             v.driver = player;
             cameras.setFollowTarget(best);
             // a bike's chase sits closer than a car's (the car's 8 m left a motorcycle a speck)
@@ -686,12 +654,19 @@ void VehicleSystem::stepSeat(FrameContext& ctx) {
     }
 
     const Real tilt = std::acos(std::clamp(rt->orientation.rotate(Vec3(0, 1, 0)).y, Real(-1), Real(1))) * 57.29578;
+    // a bike that has GONE DOWN puts you off: on its side (past 75 degrees) for 0.4 s, not leant hard into a turn past
+    // its limit (that threw the rider out of a fast bend)
     bool down = false;
     if (v->config.twoWheeler) {
         if (tilt < v->config.maxLeanDegrees) bikeUpright_ = true;
-        down = bikeUpright_ && tilt > v->config.maxLeanDegrees + 10.0 && v->speed < 25.0;
+        bikeDown_ = bikeUpright_ && tilt > 75.0 && v->speed < 25.0 ? bikeDown_ + dt : 0.0;
+        down = bikeDown_ > 0.4;
     }
-    const bool hit = jolt > ejectTolerance(v->config.twoWheeler, v->openSeat, ctx.settings.getBool("vehicle.windscreen", true));
+    EjectRule rule;
+    rule.bike = ctx.settings.getDouble("vehicle.ejectBike", rule.bike);
+    rule.open = ctx.settings.getDouble("vehicle.ejectOpen", rule.open);
+    rule.car = ctx.settings.getDouble("vehicle.ejectCar", rule.car);
+    const bool hit = jolt > ejectTolerance(v->config.twoWheeler, v->openSeat, ctx.settings.getBool("vehicle.windscreen", true), rule);
     if (!down && !hit) return;
     const Vec3 thrown = hit ? ejectThrow(before, true) : ejectThrow(vel, false);
     v->driver = Entity{};
@@ -770,9 +745,15 @@ void VehicleSystem::update(FrameContext& ctx) {
         }
     }
     // Drop the picked car in front of the player.
-    if (ctx.actions.pressed("spawn_vehicle") || spawnPending_) {
+    const bool quick = ctx.actions.pressed("vehicle_quick");
+    if (ctx.actions.pressed("spawn_vehicle") || spawnPending_ || quick) {
         // `vehicle_spawn <recipe>`: pick that one first (the catalogue's recipe names: motorcycle, moped, ...)
         wantRecipe_ = spawnPending_ ? spawnRecipe_ : std::string();
+        if (quick) {
+            loadCatalogue();
+            for (const Pick& p : catalogue_)
+                if (p.quick) { wantRecipe_ = p.recipe; break; }
+        }
         spawnPending_ = false;
         spawnInFront(ctx);
     }
@@ -872,10 +853,6 @@ void VehicleSystem::measureSlide(FrameContext& ctx) {
     if (!v || v->vehicleId == PhysicsWorld::INVALID_VEHICLE) return smokeOff();
     PhysicsWorld& pw = physicsSys.physicsWorld();
     const PhysicsWorld::VehicleTelemetry tel = pw.vehicleTelemetry(v->vehicleId);
-    auto smooth = [](Real a, Real b, Real x) {
-        const Real u = std::clamp((x - a) / (b - a), Real(0), Real(1));
-        return u * u * (3 - 2 * u);
-    };
     Real along = 0;
     for (std::size_t i = 0; i < tel.wheelSlip.size(); ++i)
         if (i < tel.wheelContact.size() && tel.wheelContact[i]) along = std::max(along, std::fabs(tel.wheelSlip[i]));
@@ -884,9 +861,9 @@ void VehicleSystem::measureSlide(FrameContext& ctx) {
     // lock. A brisk corner, a wheelspin pull-away, a bump: silent.
     const PhysicsWorld::DriftState drift = pw.vehicleDrift(v->vehicleId);
     const Real speed = std::fabs(v->speed);
-    const Real drifting = drift.drifting ? smooth(6.0, 26.0, std::fabs(drift.slipDeg)) : Real(0);
-    const Real braking = smooth(0.55, 0.95, std::max(v->brake, v->handBrake)) * (0.6 + 0.4 * smooth(0.2, 0.7, along));
-    const Real fast = smooth(4.0, 11.0, speed);
+    const Real drifting = drift.drifting ? smoothstep(6.0, 26.0, std::fabs(drift.slipDeg)) : Real(0);
+    const Real braking = smoothstep(0.55, 0.95, std::max(v->brake, v->handBrake)) * (0.6 + 0.4 * smoothstep(0.2, 0.7, along));
+    const Real fast = smoothstep(4.0, 11.0, speed);
     v->slide = v->pedalled ? Real(0) : std::max(drifting, braking) * fast;
     // the smoke: a drift's in full, a hard stop's a wisp (Glenn: "The braking smoke is a little heavy")
     const Real smoky = v->pedalled ? Real(0) : std::max(drifting, braking * Real(0.3)) * fast;
@@ -958,10 +935,6 @@ void VehicleSystem::updateTyres(FrameContext& ctx) {
     }
     const Real speed = std::fabs(v->speed);
     const Real slide = v->slide;   // (measureSlide)
-    auto smooth = [](Real a, Real b, Real x) {
-        const Real u = std::clamp((x - a) / (b - a), Real(0), Real(1));
-        return u * u * (3 - 2 * u);
-    };
     drive(squeal_, static_cast<float>(0.3 * slide), static_cast<float>(0.9 + 0.15 * slide + speed / 150.0),
           t->position, 9);
     // A BICYCLE: the freewheel's pawls ticking while it coasts (as fast as the back wheel turns), the tyres' hum
@@ -969,7 +942,7 @@ void VehicleSystem::updateTyres(FrameContext& ctx) {
     const Real r = v->config.wheels.empty() ? 0.34 : v->config.wheels.back().radius;
     const Real clicks = 24.0 * speed / (6.283185307179586 * r);   // 24 pawl engagements a turn
     const bool coasting = bike && speed > 0.8 && std::fabs(v->throttle) < 0.05;
-    drive(freewheel_, coasting ? static_cast<float>(0.3 * smooth(0.8, 3.0, speed)) : 0.0f,
+    drive(freewheel_, coasting ? static_cast<float>(0.3 * smoothstep(0.8, 3.0, speed)) : 0.0f,
           static_cast<float>(std::clamp(clicks / 40.0, 0.25, 3.0)), t->position, 12);
     drive(roll_, bike ? static_cast<float>(0.45 * std::pow(std::clamp(speed / 9.0, 0.0, 1.0), 0.8)) : 0.0f,
           static_cast<float>(0.7 + speed / 14.0), t->position, 8);

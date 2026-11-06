@@ -27,6 +27,11 @@ RenderMesh buildPosedPerson(const BodyPose& pose, const PersonOutfit& outfit);
 // legs opposed and arms counter-swinging as there, the trailing leg's knee folding as it pushes off, the arms'
 // elbows soft and bending as they come forward.
 BodyPose walkBodyPose(Real swing);
+// LYING ON ITS BACK (sunbathing, a lounger): the pose in the standing body frame -- turned onto its back about x
+// (front up, head toward -z) it lies with its back on the ground. kLiePoses of them, so a beach is not a row of
+// planks: hands behind the head with a knee up, arms at the sides, an arm over the eyes with the other knee up.
+constexpr int kLiePoses = 3;
+BodyPose lieBodyPose(int variant);   // (any int: wrapped round)
 
 // THE WALK CYCLE, one for everyone who walks (the city's walkers and the player's body): the stride advances with the
 // body's REAL horizontal speed, so the legs move exactly as fast as the ground goes by, and below kWalkAnimMinSpeed

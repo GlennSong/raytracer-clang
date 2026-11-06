@@ -69,6 +69,28 @@ inline VehicleLamps vehicleLampState(LampMotion motion, Real speed, Real prevSpe
     return lamps;
 }
 
+// LAMPS IN THE BODY (ADR-0342, #186): a vehicle's lenses are part of its own mesh, each lens vertex TAGGED with
+// its role in the texture slot (u = kLensTagBase - role; a body is never textured there), and the lamps lit this
+// step ride the instance matrix's bottom row as a mask (Mat4::m[3][0], under RenderMaterial::FLAG_LAMP_STATE) --
+// mesh.vert lights the tagged lenses the mask names. So a lamp is where the body put it, moves with it, and is gone
+// when the body is: no overlay box to float over a parked car or poke through a bus's end wall. Left and right are
+// the lens's side of the body (+x is the driver's left).
+enum class LensRole : int {
+    Head = 1,        // white, forward: lit with the headlights; the indicator of its side flashes it amber
+    Tail = 2,        // red, rear: dim with the headlights, bright with the brakes; its side's indicator flashes it
+    Indicator = 3,   // amber: only its side's indicator lights it (a bike's stalks, a trailer's corners)
+    Marker = 4,      // amber: a side marker or clearance lamp, lit with the headlights
+};
+constexpr float kLensTagBase = -1000.0f;   // u = kLensTagBase - role
+constexpr inline float lensTag(LensRole r) { return kLensTagBase - static_cast<float>(static_cast<int>(r)); }
+// The lit mask's bits (mesh.vert reads the same numbers)
+constexpr uint32_t kLampMaskHead = 1u, kLampMaskBrake = 2u, kLampMaskLeft = 4u, kLampMaskRight = 8u;
+// The mask for this step: the indicator bits are its side signalling AND the blink lit now
+inline uint32_t lampMask(const VehicleLamps& l, bool blinkOn) {
+    return (l.head ? kLampMaskHead : 0u) | (l.brake ? kLampMaskBrake : 0u) |
+           (l.left && blinkOn ? kLampMaskLeft : 0u) | (l.right && blinkOn ? kLampMaskRight : 0u);
+}
+
 // Is it dark enough for headlights, from the SUN's elevation (the y of the
 // direction toward the sun)? Takes the scalar, not the light direction: at
 // night the active light in slot 0 is the MOON (WS2), whose elevation must

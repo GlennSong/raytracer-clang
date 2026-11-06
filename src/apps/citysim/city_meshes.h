@@ -20,7 +20,7 @@ namespace citysim {
 // set of these meshes IS the walk cycle — walkers hop between shared pose
 // meshes by walk phase, no skeleton needed. `outfit` picks a deterministic
 // shirt/pants/skin combination.
-engine::RenderMesh buildPersonMesh(engine::Real swing, int outfit);
+engine::RenderMesh buildPersonMesh(engine::Real swing, int outfit, engine::Real headScale = 1);   // (headScale: a child's, BodyPose::headScale)
 
 // Outfits a WALKER may be dealt (deterministic per walker). The table holds one
 // extra slot past this count — the player's fixed, distinctive outfit
@@ -31,11 +31,13 @@ int personOutfitCount();
 // chair -- seat height 0.45, upright back, hands in the lap -- in `outfit`'s colours. ORIGIN IS THE HIP, facing
 // +Z: put the hip on the seat.
 engine::RenderMesh buildSeatedPersonMesh(int outfit);
-// Sitting on the ground (origin at the hip, kGroundSitHip above the grass); lying down is the standing body turned
-// onto its back, its middle kLieHalfDepth above the grass.
+// Sitting on the ground (origin at the hip, kGroundSitHip above the grass). LYING DOWN (buildLyingPersonMesh): one of
+// engine::lieBodyPose's poses, centred like the standing body, to be turned onto its back -- its middle kLieHalfDepth
+// above the grass.
 constexpr engine::Real kGroundSitHip = 0.10;
 constexpr engine::Real kLieHalfDepth = 0.13;
 engine::RenderMesh buildGroundSittingPersonMesh(int outfit);
+engine::RenderMesh buildLyingPersonMesh(int outfit, int variant);
 int playerOutfit();
 
 // The shared walk cycle (one for everyone who walks: the walkers and the player's body) is the engine's,
@@ -77,12 +79,6 @@ engine::RenderMaterial pedMaterial();
 engine::RenderMaterial signalMaterial(SignalState s);      // emissive lit lens
 engine::RenderMaterial signalPostMaterial();               // pole/arm/head assembly
 engine::RenderMaterial widgetMaterial(engine::Vec3 color); // debug ground paint
-// An emissive CAR lamp lens (ADR-0065 follow-up): a dark lens body with strong
-// self-illumination in `emission` so headlights (white), brake lights (red), and
-// turn signals (amber) glow like the traffic-signal lenses. Same material recipe
-// as signalMaterial (FLAG none, regular depth), so it renders on device exactly
-// the way the signal lenses do.
-engine::RenderMaterial lampMaterial(engine::Vec3 emission);
 
 // Traffic-light semantics (user-requested): GREEN = going, RED = stopped,
 // AMBER = braking/avoiding, violet = turning, teal = following a leader.

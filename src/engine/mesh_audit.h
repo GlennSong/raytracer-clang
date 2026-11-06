@@ -340,17 +340,8 @@ inline SeeThroughAudit auditSeeThrough(const std::vector<NamedMeshRef>& all, con
                     // face beyond read as a see-through -- the macOS build did on light_rail_lab (2 looks), Linux's not. The
                     // nearest hit takes either; (the winding count below must not, or it would count one edge twice)
                     constexpr double kEdge = 1e-9;
-                    const Vec3 e1 = t.b - t.a, e2 = t.c - t.a, p = cross(d, e2);
-                    const double det = dot(e1, p);
-                    if (std::fabs(det) < 1e-12) continue;
-                    const double inv = 1.0 / det;
-                    const Vec3 s = o - t.a;
-                    const double u = dot(s, p) * inv;
-                    if (u < -kEdge || u > 1 + kEdge) continue;
-                    const Vec3 q = cross(s, e1);
-                    const double v = dot(d, q) * inv;
-                    if (v < -kEdge || u + v > 1 + kEdge) continue;
-                    const double tt = dot(e2, q) * inv;
+                    double tt = 0;
+                    if (!rayTriangle(o, d, t.a, t.b, t.c, tt, kEdge)) continue;   // (rt_math.h)
                     if (tt > 1e-4 && tt < tHit) { tHit = tt; face = cross(t.c - t.a, t.b - t.a); hitMesh = t.mesh; }
                 }
             }
@@ -371,17 +362,8 @@ inline SeeThroughAudit auditSeeThrough(const std::vector<NamedMeshRef>& all, con
                 auto it = grid.find({i, k});
                 if (it == grid.end()) continue;
                 for (const Tri& t : it->second) {
-                    const Vec3 e1 = t.b - t.a, e2 = t.c - t.a, p = cross(d, e2);
-                    const double det = dot(e1, p);
-                    if (std::fabs(det) < 1e-12) continue;
-                    const double inv = 1.0 / det;
-                    const Vec3 s = o - t.a;
-                    const double u = dot(s, p) * inv;
-                    if (u < 0 || u > 1) continue;
-                    const Vec3 q = cross(s, e1);
-                    const double v = dot(d, q) * inv;
-                    if (v < 0 || u + v > 1) continue;
-                    const double tt = dot(e2, q) * inv;
+                    double tt = 0;
+                    if (!rayTriangle(o, d, t.a, t.b, t.c, tt)) continue;   // (rt_math.h)
                     if (tt <= 1e-4 || tt >= reach || !met.insert(t.id).second) continue;
                     w += dot(cross(t.c - t.a, t.b - t.a), d) > 0 ? 1 : -1;
                 }
@@ -519,14 +501,8 @@ inline FacadeCrackAudit auditFacadeCracks(const std::vector<NamedMeshRef>& parts
             // screen) puts a back and a front at the same depth, and the front is what is drawn there
             double best = 2 * radius, bestFront = 2 * radius; const Tri* hit = nullptr;
             for (const Tri& t : it->second) {   // Moller-Trumbore, two-sided
-                const Vec3 e1 = t.b - t.a, e2 = t.c - t.a, p = cross(d, e2);
-                const double det = dot(e1, p);
-                if (std::fabs(det) < 1e-12) continue;
-                const double inv = 1.0 / det; const Vec3 s = o - t.a;
-                const double u = dot(s, p) * inv; if (u < 0 || u > 1) continue;
-                const Vec3 q = cross(s, e1);
-                const double v = dot(d, q) * inv; if (v < 0 || u + v > 1) continue;
-                const double tt = dot(e2, q) * inv;
+                double tt = 0;
+                if (!rayTriangle(o, d, t.a, t.b, t.c, tt)) continue;   // (rt_math.h)
                 if (tt <= 1e-4) continue;
                 if (tt < best) { best = tt; hit = &t; }
                 if (tt < bestFront && dot(cross(t.c - t.a, t.b - t.a), d) <= 0) bestFront = tt;

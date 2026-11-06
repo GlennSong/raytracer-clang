@@ -30,7 +30,7 @@ void ring(std::vector<double>& acc, double rate, double atSec, double hz, double
             i %= n;
         }
         const double t = static_cast<double>(k) / rate;
-        acc[i] += amp * std::sin(TWO_PI * hz * t) * std::exp(-t / decaySec);
+        acc[i] += amp * std::sin(TAU * hz * t) * std::exp(-t / decaySec);
     }
 }
 
@@ -42,7 +42,7 @@ void burst(std::vector<double>& acc, double rate, ProcRng& rng, double atSec, do
     const auto n = acc.size();
     const auto start = static_cast<size_t>(atSec * rate);
     const auto len = static_cast<size_t>((attackSec + decaySec * 6.0) * rate);
-    const double gain = 1.0 + std::sqrt(rate / (TWO_PI * std::max(hi - lo, 50.0)));   // a narrow band is quieter
+    const double gain = 1.0 + std::sqrt(rate / (TAU * std::max(hi - lo, 50.0)));   // a narrow band is quieter
     for (size_t k = 0; k < len; ++k) {
         size_t i = start + k;
         if (i >= n) {
@@ -145,19 +145,19 @@ std::vector<float> canopyOpen(uint32_t sampleRate, uint32_t seed) {
     for (size_t i = 0; i < count; ++i) {
         const double t = static_cast<double>(i) / rate;
         if (t < kFill + 0.05) {
-            const double up = std::pow(std::min(1.0, t / kFill), 2.0) * (0.6 + 0.4 * std::sin(TWO_PI * 14.0 * t));
+            const double up = std::pow(std::min(1.0, t / kFill), 2.0) * (0.6 + 0.4 * std::sin(TAU * 14.0 * t));
             acc[i] += 0.5 * rustle(uni(rng)) * up * (t > kFill ? 1.0 - (t - kFill) / 0.05 : 1.0);
         }
         if (t > kFill) {
             const double s = t - kFill;
-            acc[i] += 0.35 * tail(uni(rng)) * (0.5 + 0.5 * std::sin(TWO_PI * 9.0 * s)) * std::exp(-s / 0.35);
+            acc[i] += 0.35 * tail(uni(rng)) * (0.5 + 0.5 * std::sin(TAU * 9.0 * s)) * std::exp(-s / 0.35);
         }
     }
     // the whump: a falling low sweep and a dark burst
     double ph = 0;
     for (size_t i = static_cast<size_t>(kFill * rate); i < count; ++i) {
         const double s = static_cast<double>(i) / rate - kFill;
-        ph += TWO_PI * (55.0 + 40.0 * std::exp(-s / 0.05)) / rate;
+        ph += TAU * (55.0 + 40.0 * std::exp(-s / 0.05)) / rate;
         acc[i] += 1.1 * std::sin(ph) * std::exp(-s / 0.12) * std::min(1.0, s / 0.004);
     }
     burst(acc, rate, rng, kFill, 60.0, 900.0, 0.003, 0.08, 0.9);
@@ -256,7 +256,7 @@ std::vector<float> reelWinch(uint32_t sampleRate, uint32_t seed) {
     }
     const std::vector<double> hiss = circBand(whiteNoise(count, rng), rate, 2000.0, 7000.0);
     for (size_t i = 0; i < count; ++i) {
-        const double p = TWO_PI * static_cast<double>(i) / rate;   // integer Hz over a 1 s loop: seamless
+        const double p = TAU * static_cast<double>(i) / rate;   // integer Hz over a 1 s loop: seamless
         acc[i] += 0.14 * std::sin(180.0 * p) + 0.07 * std::sin(360.0 * p + 0.4) + 0.035 * std::sin(540.0 * p + 1.1) +
                   0.03 * hiss[i];
     }
@@ -274,7 +274,7 @@ std::vector<float> boardRoll(uint32_t sampleRate, uint32_t seed) {
     const std::vector<double> sway = unitEnvelope(count, rng, 2, 6, 3);
     std::vector<double> acc(count, 0.0);
     for (size_t i = 0; i < count; ++i) {
-        const double p = TWO_PI * static_cast<double>(i) / rate;
+        const double p = TAU * static_cast<double>(i) / rate;
         acc[i] = 0.8 * rumble[i] * (1.0 + 0.15 * sway[i]) + 0.025 * std::sin(820.0 * p) + 0.015 * std::sin(1230.0 * p);
     }
     for (int g = 0; g < 600; ++g)   // grit: ~300 grains a second
@@ -416,7 +416,7 @@ std::vector<float> tyreSqueal(uint32_t sampleRate, uint32_t seed) {
     constexpr double kLen = 2.0;
     const auto count = static_cast<size_t>(rate * kLen);
     ProcRng rng(seed * 2654435761u + 97u);
-    ProcUniform<double> u01(0.0, 1.0), ph(0.0, TWO_PI);
+    ProcUniform<double> u01(0.0, 1.0), ph(0.0, TAU);
     const double f0 = std::round((860.0 + 120.0 * u01(rng)) * kLen) / kLen;   // whole cycles in the loop
     struct Term { int cycles; double amp, phase; };
     std::vector<Term> wander;
@@ -431,12 +431,12 @@ std::vector<float> tyreSqueal(uint32_t sampleRate, uint32_t seed) {
         // phase = 2 pi f0 (t + sum a sin(w t + p) integrated) -- the integral of each whole-cycle sine is periodic
         double integral = 0;
         for (const Term& w : wander) {
-            const double om = TWO_PI * w.cycles / kLen;
+            const double om = TAU * w.cycles / kLen;
             integral += w.amp * (std::cos(w.phase) - std::cos(om * t + w.phase)) / om;
         }
-        const double phase = TWO_PI * f0 * (t + integral);
+        const double phase = TAU * f0 * (t + integral);
         double am = 1.0;
-        for (const Term& c : chatter) am += c.amp * std::sin(TWO_PI * c.cycles * t / kLen + c.phase);
+        for (const Term& c : chatter) am += c.amp * std::sin(TAU * c.cycles * t / kLen + c.phase);
         acc[i] = am * (std::sin(phase) + 0.5 * std::sin(2.0 * phase + 0.3) + 0.22 * std::sin(3.0 * phase + 1.0)) +
                  0.35 * scrub[i];
     }

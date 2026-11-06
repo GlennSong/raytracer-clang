@@ -39,7 +39,8 @@ public:
             engine::PhysicsWorld::INVALID_VEHICLE;
         engine::Real stuckTime = 0;   // body pinned while its ghost recedes
         engine::Real lastDist = 0;    // gap last tick, for closing-rate
-        engine::Real halfX = 0, halfY = 0, halfZ = 0;   // its chassis box (its slot's handling, carConfig)
+        engine::Real halfX = 0, halfZ = 0;   // its chassis box (its slot's handling, carConfig)
+        engine::Real spawnAbove = 0;         // its centre over the road when put down (PhysicsWorld::spawnHeight)
     };
     const std::vector<Possessed>& possessed() const { return possessed_; }
     // Each fleet slot's launch, measured on its own handling and handed to the sim (item 23): the tier calls it every

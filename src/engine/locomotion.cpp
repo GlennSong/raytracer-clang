@@ -15,10 +15,6 @@ Vec3 flat(const Vec3& v) {
     return l > 1e-6 ? Vec3(v.x / l, 0, v.z / l) : Vec3(0, 0, 0);
 }
 
-Real smooth(Real s) {
-    s = std::clamp(s, Real(0), Real(1));
-    return s * s * (3 - 2 * s);
-}
 
 }  // namespace
 
@@ -224,13 +220,13 @@ void MantleMove::start(const Vec3& centre, const Ledge& l, const MovementTuning&
 
 Vec3 MantleMove::at(Real time) const {
     if (time < riseTime) {
-        const Real s = smooth(time / riseTime);
+        const Real s = smoothstep01(time / riseTime);
         // the climb comes first, the step in to the wall early: hands on the edge, body hauled up against it
-        const Real sIn = smooth(std::min(Real(1), time / (riseTime * 0.5)));
+        const Real sIn = smoothstep01(std::min(Real(1), time / (riseTime * 0.5)));
         return Vec3(from.x + (rise.x - from.x) * sIn, from.y + (rise.y - from.y) * s,
                     from.z + (rise.z - from.z) * sIn);
     }
-    const Real s = smooth((time - riseTime) / overTime);
+    const Real s = smoothstep01((time - riseTime) / overTime);
     return rise + (stand - rise) * s;
 }
 
@@ -450,8 +446,7 @@ Real strokeSurgePhase(Real strokes) {
 }
 
 Real strokeSpeedScale(Real phase, Real surge) {
-    constexpr Real kTau = 6.283185307179586;
-    return 1.0 + surge * std::cos(kTau * (phase - 0.3));   // the pull peaks a third of the way in
+    return 1.0 + surge * std::cos(TAU * (phase - 0.3));   // the pull peaks a third of the way in
 }
 
 }  // namespace engine

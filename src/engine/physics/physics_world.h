@@ -361,6 +361,11 @@ public:
         // ~0.65, a truck ~1.1). 0 keeps the old linear body damping -- which at motorway speed was ~4x a
         // real car's drag and left no true top speed (the freeway-lag diagnosis measured it).
         Real dragArea = 0.0;
+        // DOWNFORCE (Glenn, 2026-11-05: "the cars are also too light. They should hug the road a little more"): a push
+        // down the chassis' own up axis, in g at 100 km/h and growing with the square of the speed (capped at 1 g),
+        // while a wheel is on the ground -- a crest at speed no longer floats the car off its tyres. For play, not
+        // aerodynamics. 0 = none (the default; the recipes set it).
+        Real downforce = 0.0;
         // GEARBOX: Jolt's defaults cut the drive for 0.5 s per shift plus 0.3 s of clutch and 0.5 s of
         // latency -- a stall every upshift. Quicker here; ratios empty = Jolt's five.
         Real shiftTime = 0.5;
@@ -405,6 +410,10 @@ public:
     // `friction` (the city's road), its mean acceleration from 0 to `toSpeed` m/s -- in a world of its own, so any
     // host may ask (the city plans each car's launch with it). 0 when it never gets there in 15 s.
     static Real launchAccel(const VehicleConfig& config, Real friction = 0.85, Real toSpeed = 10.0);
+    // WHERE A CAR IS PUT DOWN (#172): its chassis centre over the road, the tyres just touching with the springs at
+    // full droop -- its own wheels' attach height, travel and radius, so it settles onto them from no height at all,
+    // a truck's long travel as much as a sedan's. Never less than half the box (its floor on the road) and a hair over.
+    static Real spawnHeight(const VehicleConfig& config);
     // Driver input, each in [-1,1] (brake/handBrake in [0,1]): forward (throttle,
     // negative = reverse), right (steering), brake, handBrake. Wakes the chassis.
     void setVehicleInput(VehicleId id, Real forward, Real right, Real brake,
@@ -443,6 +452,7 @@ private:
     void applyYawAssist(std::size_t index);
     void applyDrift(std::size_t index, float dt);
     void applyAeroDrag(std::size_t index);
+    void applyDownforce(std::size_t index);
     void applyTractionSplit(std::size_t index);
 };
 

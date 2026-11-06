@@ -1,5 +1,6 @@
 #include "city_roles.h"
 
+#include <algorithm>
 #include <cstdio>
 
 namespace citysim {
@@ -54,10 +55,24 @@ void addNightOut(GoalTable& t, const std::string& menu) {
 
 }  // namespace
 
-std::string builtinRolesLead(const RoleCatalog& c) {
-    for (RoleId i = 0; i < 4; ++i)
-        if (i >= c.roles.size() || c.roles[i].name != kBuiltinRoleNames[i])
-            return std::string("role ") + std::to_string(i) + " must be \"" + kBuiltinRoleNames[i] + "\" (the built-ins lead, in order)";
+int RoleCatalog::jobRoleFor(const std::string& kind, bool authored) const {
+    for (std::size_t i = 0; i < roles.size(); ++i) {
+        const JobSpec& j = roles[i].job;
+        if (!j.search || (j.authoredHours && !authored)) continue;
+        if (j.places.empty() || std::find(j.places.begin(), j.places.end(), kind) != j.places.end()) return static_cast<int>(i);
+    }
+    return -1;
+}
+
+int RoleCatalog::catchAllJobRole() const {
+    for (std::size_t i = 0; i < roles.size(); ++i)
+        if (roles[i].job.search && roles[i].job.places.empty() && !roles[i].job.authoredHours) return static_cast<int>(i);
+    return -1;
+}
+
+std::string RoleCatalog::check() const {
+    if (roles.size() > 255) return "more than 255 roles";
+    if (catchAllJobRole() < 0) return "no catch-all job role (`job = {}`): someone's job would have no role";
     return {};
 }
 
@@ -78,17 +93,29 @@ std::string RoleCatalog::describe() const {
     for (const ResidentRole& r : roles) {
         const RoleDay& d = r.day;
         std::snprintf(b, sizeof b,
-                      "role %s commute=%d pause=%g work=%g break=%s/%s/%s/%g repeat=%d errand=%d evening=%s share=%g\n",
-                      r.name.c_str(), d.commute ? 1 : 0, d.outingPause, d.workBeforeBreak, targetLabel(d.breakTarget),
+                      "role %s commute=%d pause=%g outings=%s work=%g break=%s/%s/%s/%g repeat=%d errand=%d evening=%s share=%g\n",
+                      r.name.c_str(), d.commute ? 1 : 0, d.outingPause, d.outingMenu.c_str(), d.workBeforeBreak, targetLabel(d.breakTarget),
                       d.breakMenu.c_str(), activityLabel(d.breakActivity), d.breakHours, d.breaksRepeat ? 1 : 0,
                       d.errand ? 1 : 0, d.eveningMenu.c_str(), r.nightOutShare);
         out += b;
+        if (r.job.search) {
+            out += "  job";
+            for (const std::string& k : r.job.places) out += " " + k;
+            out += r.job.authoredHours ? " authored\n" : "\n";
+        }
         if (!r.staff.places.empty()) {
             out += "  staff";
             for (const std::string& k : r.staff.places) out += " " + k;
             std::snprintf(b, sizeof b, " per=%d placeHours=%d start=%g-%g finish=%g-%g split=%g\n", r.staff.perPlace,
                           r.staff.placeHours ? 1 : 0, r.staff.startLo, r.staff.startHi, r.staff.finishLo,
                           r.staff.finishHi, r.staff.splitOver);
+            out += b;
+        }
+        if (r.side.share > 0) {
+            out += "  side_job";
+            for (const std::string& k : r.side.places) out += " " + k;
+            std::snprintf(b, sizeof b, " share=%g start=%g-%g finish=%g-%g nights=%g reach=%g\n", r.side.share,
+                          r.side.startLo, r.side.startHi, r.side.finishLo, r.side.finishHi, r.side.nights, r.side.reach);
             out += b;
         }
     }
@@ -171,8 +198,7 @@ RoleCatalog defaultRoleCatalog() {
         r.nightOutShare = share;
         c.roles.push_back(r);
     };
-    // THE COMMUTER: to work, lunch about four hours in (a cafe or restaurant near work -- or brought, and stays in),
-    // the afternoon, the errand on the way home, and out on about one night in five
+    // THE SHOPKEEPER: keeps a shop whose hours the level wrote -- a worker's day on the shop's hours, out less often
     RoleDay work;
     work.workBeforeBreak = 4.0;
     work.breakTarget = GoalTarget::Lunch;
@@ -180,15 +206,12 @@ RoleCatalog defaultRoleCatalog() {
     work.breakHours = 0.6;
     work.errand = true;
     work.eveningMenu = "evening";
-    add("commuter", work, 0.22);
-    // THE SHOPKEEPER: the same day, on the shop's hours (assignPlaces), out less often
     add("shopkeeper", work, 0.15);
-    // THE STROLLER: no job -- a day out instead, and out more evenings
-    RoleDay out;
-    out.commute = false;
-    out.outingPause = 0.05;
-    out.eveningMenu = "evening";
-    add("stroller", out, 0.30);
+    c.roles.back().job = {true, {"shop", "cafe", "restaurant", "supermarket", "bar", "club"}, true};
+    // THE WORKER: any other job -- to work, lunch about four hours in (a cafe or restaurant near work, or brought, and
+    // stays in), the afternoon, the errand on the way home, and out on about one night in five
+    add("worker", work, 0.22);
+    c.roles.back().job = {true, {}, false};
     // THE STUDENT: to class in the teaching hall, a break between classes (the quad, the library, a run), back to
     // class, until the day is done; a college club or a night out on two evenings in five
     RoleDay study;
@@ -199,9 +222,22 @@ RoleCatalog defaultRoleCatalog() {
     study.breaksRepeat = true;
     study.eveningMenu = "student_evening";
     add("student", study, 0.40);
+    // ...and three in ten work evenings: a cafe, a restaurant, a bar or a shop near the hall, 17:30-23:00, on three
+    // nights in five
+    c.roles.back().side = {0.3, {"cafe", "restaurant", "bar", "shop", "supermarket"}, 17.5, 18.5, 21.5, 23.0, 0.6, 1500.0};
+    // NO JOB: a day out instead. A child is never out at night alone; the retired go out less.
+    RoleDay out;
+    out.commute = false;
+    out.outingPause = 0.05;
+    out.outingMenu = "kid_outing";   // (the playground, a game of tag, a skateboard round the block)
+    add("child", out, 0.0);
+    out.outingMenu = "outing";
+    out.eveningMenu = "evening";
+    add("at_home", out, 0.30);
+    add("retired", out, 0.15);
 
     // THE STAFF (Glenn: "you'd need teachers for the students, managers for shops, waiters for restaurants"). Each
-    // place pulls its own from the commuters living nearest it.
+    // place pulls its own from the workers living nearest it.
     auto staff = [&](const char* name, RoleDay d, double share, std::vector<std::string> places, int per, bool placeHours,
                      double sLo = 8, double sHi = 9, double fLo = 17, double fHi = 18) {
         add(name, d, share);
@@ -211,7 +247,7 @@ RoleCatalog defaultRoleCatalog() {
         s.placeHours = placeHours;
         s.startLo = sLo; s.startHi = sHi; s.finishLo = fLo; s.finishHi = fHi;
     };
-    // a teacher's and a librarian's day is a commuter's, on the campus's hours
+    // a teacher's and a librarian's day is a worker's, on the campus's hours
     staff("teacher", work, 0.15, {"teaching"}, 4, false, 7.5, 8.5, 16.0, 17.5);
     staff("librarian", work, 0.15, {"library"}, 2, false, 8.5, 9.0, 17.0, 18.5);
     // a manager runs the place: its hours, lunch out, the errand home

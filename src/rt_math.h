@@ -542,6 +542,9 @@ inline void transformedAABB(const Mat4& m, const Vec3& boxMin, const Vec3& boxMa
 }
 
 constexpr Real PI = 3.14159265358979323846;
+constexpr Real TAU = 2 * PI;                     // a whole turn
+constexpr Real DEG_TO_RAD = PI / 180.0;          // (#184: one value, not a 15-digit pi written into a file)
+constexpr Real RAD_TO_DEG = 180.0 / PI;
 
 inline Real degreesToRadians(Real degrees) {
     return degrees * PI / 180.0;
@@ -549,6 +552,61 @@ inline Real degreesToRadians(Real degrees) {
 
 inline Real radiansToDegrees(Real radians) {
     return radians * 180.0 / PI;
+}
+
+// AN ANGLE IN DEGREES wrapped to [-180, 180] (#184): the turn from one heading to another, the short way.
+inline Real wrapDegrees(Real a) {
+    while (a > 180.0) a -= 360.0;
+    while (a < -180.0) a += 360.0;
+    return a;
+}
+
+// MOLLER-TRUMBORE, two-sided (#184): where the ray o + d t meets triangle abc -- `t` along d (d need not be unit); false
+// when it misses or lies in its plane. `edge` widens the barycentric bounds (a hit on a shared edge, rounded outside
+// both triangles by an ulp, still counts). The caller bounds t.
+inline bool rayTriangle(const Vec3& o, const Vec3& d, const Vec3& a, const Vec3& b, const Vec3& c, Real& t, Real edge = 0) {
+    const Vec3 e1 = b - a, e2 = c - a, p = cross(d, e2);
+    const Real det = dot(e1, p);
+    if (std::fabs(det) < 1e-12) return false;
+    const Real inv = 1.0 / det;
+    const Vec3 s = o - a;
+    const Real u = dot(s, p) * inv;
+    if (u < -edge || u > 1 + edge) return false;
+    const Vec3 q = cross(s, e1);
+    const Real v = dot(d, q) * inv;
+    if (v < -edge || u + v > 1 + edge) return false;
+    t = dot(e2, q) * inv;
+    return true;
+}
+
+// AN ANGLE IN RADIANS wrapped to [-pi, pi] (#184): the turn from one bearing to another, the short way.
+inline Real wrapRadians(Real a) {
+    while (a > PI) a -= 2 * PI;
+    while (a < -PI) a += 2 * PI;
+    return a;
+}
+
+// BILINEAR on a grid of nx by ny samples (#184: written five times): `gx`, `gy` in grid cells, clamped inside the grid (a
+// hair short of the last sample, so the cell beyond exists); `at(i, j)` one sample.
+template <class At>
+inline Real bilinearGrid(int nx, int ny, Real gx, Real gy, At at) {
+    gx = std::clamp(gx, Real(0), nx - Real(1.001));
+    gy = std::clamp(gy, Real(0), ny - Real(1.001));
+    const int i = static_cast<int>(gx), j = static_cast<int>(gy);
+    const Real u = gx - i, v = gy - j;
+    return (at(i, j) * (1 - u) + at(i + 1, j) * u) * (1 - v) + (at(i, j + 1) * (1 - u) + at(i + 1, j + 1) * u) * v;
+}
+
+// SMOOTHSTEP (#184: it had been written ~25 times): 0 at or below e0, 1 at or above e1, and the S t*t*(3-2t) between.
+// Equal edges divide by zero (as every copy did): ease where the edges differ.
+inline Real smoothstep(Real e0, Real e1, Real x) {
+    const Real t = std::clamp((x - e0) / (e1 - e0), Real(0), Real(1));
+    return t * t * (3 - 2 * t);
+}
+// ...of a fraction already: 0 at 0, 1 at 1, clamped.
+inline Real smoothstep01(Real t) {
+    t = std::clamp(t, Real(0), Real(1));
+    return t * t * (3 - 2 * t);
 }
 
 inline double randomDouble() {

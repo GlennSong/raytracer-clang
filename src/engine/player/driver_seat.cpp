@@ -9,14 +9,13 @@ namespace engine {
 namespace {
 
 constexpr Real kDeg = 3.14159265358979 / 180.0;
-constexpr Real kTau = 6.283185307179586;
 
 }  // namespace
 
-Real ejectTolerance(bool twoWheeler, bool openSeat, bool windscreen) {
-    if (twoWheeler) return 7.0;
-    if (openSeat) return 11.0;
-    return windscreen ? 22.0 : std::numeric_limits<Real>::infinity();
+Real ejectTolerance(bool twoWheeler, bool openSeat, bool windscreen, const EjectRule& rule) {
+    if (twoWheeler) return rule.bike;
+    if (openSeat) return rule.open;
+    return windscreen ? rule.car : std::numeric_limits<Real>::infinity();
 }
 
 Vec3 ejectThrow(const Vec3& before, bool hit) {
@@ -45,7 +44,7 @@ Vec3 seatFoot(const SeatGeometry& seat, int side, Real crank) {
     const Real sx = side == 0 ? 1.0 : -1.0;
     if (!seat.pedals) return Vec3(seat.foot.x * sx, seat.foot.y, seat.foot.z);
     // round the crank, the two feet half a turn apart
-    const Real a = kTau * (crank + (side == 0 ? 0.0 : 0.5));
+    const Real a = TAU * (crank + (side == 0 ? 0.0 : 0.5));
     return Vec3(seat.foot.x * sx, seat.foot.y + seat.crank * std::cos(a), seat.foot.z + seat.crank * std::sin(a));
 }
 

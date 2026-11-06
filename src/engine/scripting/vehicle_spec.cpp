@@ -78,6 +78,7 @@ void readVehicleHandling(lua_State* L, int t, VehicleSpec& out) {
     lua_pop(L, 1);
     // AERO and GEARBOX
     c.dragArea = numField(L, t, "drag_area", c.dragArea);
+    c.downforce = numField(L, t, "downforce", c.downforce);
     c.shiftTime = numField(L, t, "shift_time", c.shiftTime);
     c.clutchReleaseTime = numField(L, t, "clutch_time", c.clutchReleaseTime);
     c.shiftLatency = numField(L, t, "shift_latency", c.shiftLatency);
@@ -337,6 +338,7 @@ bool loadDrivableCatalogue(ScriptVM& vm, std::vector<DrivableEntry>& out, std::s
             lua_getfield(L, -1, "recipe"); if (lua_isstring(L, -1)) e.recipe = lua_tostring(L, -1); lua_pop(L, 1);
             lua_getfield(L, -1, "label"); if (lua_isstring(L, -1)) e.label = lua_tostring(L, -1); lua_pop(L, 1);
             lua_getfield(L, -1, "drive"); if (lua_isstring(L, -1)) e.drive = lua_tostring(L, -1); lua_pop(L, 1);
+            lua_getfield(L, -1, "quick"); e.quick = lua_toboolean(L, -1) != 0; lua_pop(L, 1);
             if (!e.recipe.empty()) out.push_back(std::move(e));
         }
         lua_pop(L, 1);

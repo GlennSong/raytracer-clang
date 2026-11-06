@@ -10,7 +10,6 @@
 namespace engine {
 
 namespace {
-constexpr Real kTau = 6.283185307179586;
 
 // The same cheap deterministic hash rng the lot pass uses (ADR-0002).
 
@@ -336,9 +335,10 @@ void recipeOfficeMidrise(BuildingRecipe& out, ProcRng& rng, RecipeCtx&) {
 }
 
 // Stucco / painted walk-up homes over midtown streets.
-void recipeWalkupHomes(BuildingRecipe& out, ProcRng& rng, RecipeCtx&) {
+void recipeWalkupHomes(BuildingRecipe& out, ProcRng& rng, RecipeCtx& cx) {
     BuildingParams& p = out.params;
-    p.floors = rng.between(3, 5);
+    p.floors = rng.between(4, 6) + static_cast<int>(cx.coreness * 2.0 + 0.5);
+    cx.slender = std::max(cx.slender, Real(2.2));
     p.groundRetail = false;
     dress(p, rng.next() < 0.3 ? FacadeStyle::Painted : FacadeStyle::Stucco, rng);
     out.placeType = "home";
@@ -403,9 +403,11 @@ void recipeYardHouse(BuildingRecipe& out, ProcRng& rng, RecipeCtx&) {
 }
 
 // Low walk-up apartments on the outskirts; the low ones sometimes gabled.
-void recipeApartments(BuildingRecipe& out, ProcRng& rng, RecipeCtx&) {
+void recipeApartments(BuildingRecipe& out, ProcRng& rng, RecipeCtx& cx) {
     BuildingParams& p = out.params;
-    p.floors = rng.between(2, 4);
+    // DENSER HOUSING (Glenn, 2026-11-01: "build denser housing ... Build up as well"): taller toward the town
+    p.floors = rng.between(3, 5) + static_cast<int>(cx.coreness * 4.0 + 0.5);
+    cx.slender = std::max(cx.slender, Real(2.4));
     p.groundRetail = false;
     dress(p, rng.next() < 0.55 ? FacadeStyle::Brick : FacadeStyle::Stucco, rng);
     if (p.floors <= 3 && rng.next() < 0.4) {
@@ -432,6 +434,15 @@ void recipePocketPark(BuildingRecipe& out, ProcRng&, RecipeCtx&) {
     out.massing = BuildingRecipe::Massing::Park;
     out.placeType = "park";
     out.name = "pocket_park";
+}
+
+// A SURFACE CAR PARK (Glenn, 2026-11-01: "a parking lot so that people visiting the beach can park somewhere"): no
+// building -- the lot pass paves it as the open lots' car park (sculptCarPark), its stalls the sim's. A mix names it
+// (a beach town's seafront); the district ladders never roll it.
+void recipeCarPark(BuildingRecipe& out, ProcRng&, RecipeCtx&) {
+    out.massing = BuildingRecipe::Massing::Park;
+    out.placeType = "depot";
+    out.name = "car_park";
 }
 
 // The urban PLAZA (device: "concrete plazas, walking paths, decorative
@@ -789,7 +800,7 @@ void recipeBundledTubes(BuildingRecipe& out, ProcRng& rng, RecipeCtx& cx) {
 // stucco wings round an open court, the corners their own houses, every cell its own door on the street.
 void recipeCourtyardBlock(BuildingRecipe& out, ProcRng& rng, RecipeCtx& cx) {
     BuildingParams& p = out.params;
-    p.floors = rng.between(4, 6) + (cx.roomy ? 1 : 0);
+    p.floors = rng.between(5, 7) + (cx.roomy ? 1 : 0) + static_cast<int>(cx.coreness * 3.0 + 0.5);
     p.groundRetail = rng.next() < 0.5;
     dress(p, rng.next() < 0.6 ? FacadeStyle::Brick : FacadeStyle::Stucco, rng);
     out.massing = BuildingRecipe::Massing::Complex;
@@ -797,7 +808,9 @@ void recipeCourtyardBlock(BuildingRecipe& out, ProcRng& rng, RecipeCtx& cx) {
     out.complex.depth = rng.in(14.5, 16.5);
     p.setbackFloors = 0;
     p.setbackEvery = 0;
-    cx.slender = 1.2;
+    // (1.2 was the wings' own slenderness, but the cap reads the LOT's short side: on a 12-16 m lot where no court
+    // fits, it held the block to 4-5 storeys whatever it drew -- the island's courtyard blocks averaged 4.3)
+    cx.slender = 2.2;
     out.placeType = "home";
     masonryDepth(p, 0.1, {{1, 70}, {2, 30}});
     out.name = "courtyard_block";
@@ -1043,7 +1056,8 @@ void recipePencilTower(BuildingRecipe& out, ProcRng& rng, RecipeCtx& cx) {
 // gets its slab + railing.
 void recipeCondoTower(BuildingRecipe& out, ProcRng& rng, RecipeCtx& cx) {
     BuildingParams& p = out.params;
-    p.floors = rng.between(5, 8);
+    // a mid-rise in midtown, a residential tower downtown (the condo towers among the office towers)
+    p.floors = rng.between(6, 10) + static_cast<int>(cx.coreness * 14.0);
     p.groundRetail = rng.next() < 0.5;
     const Real r = rng.next();
     dress(p, r < 0.45 ? FacadeStyle::Concrete
@@ -1051,7 +1065,7 @@ void recipeCondoTower(BuildingRecipe& out, ProcRng& rng, RecipeCtx& cx) {
     p.balconies = true;
     if (p.floors > 6) { p.setbackFloors = rng.between(3, 5);
                         p.setbackEvery = rng.in(1.0, 1.4); }
-    cx.slender = 2.2;
+    cx.slender = 2.2 + cx.coreness * 2.0;
     out.placeType = "home";
     towerTop(p, {{1, 50}, {2, 30}, {6, 20}});   // buildings M2
     masonryDepth(p, 0.1, {{1, 70}, {2, 30}});   // buildings M3
@@ -1062,7 +1076,7 @@ void recipeCondoTower(BuildingRecipe& out, ProcRng& rng, RecipeCtx& cx) {
 // terraces with balcony rails on the way up.
 void recipeTerraceCondo(BuildingRecipe& out, ProcRng& rng, RecipeCtx& cx) {
     BuildingParams& p = out.params;
-    p.floors = rng.between(4, 6);
+    p.floors = rng.between(5, 7);
     p.groundRetail = false;
     dress(p, rng.next() < 0.5 ? FacadeStyle::Painted : FacadeStyle::Stucco, rng);
     p.balconies = true;
@@ -1077,7 +1091,7 @@ void recipeTerraceCondo(BuildingRecipe& out, ProcRng& rng, RecipeCtx& cx) {
 // grids, bare heads, sometimes a shop below.
 void recipeLoftConversion(BuildingRecipe& out, ProcRng& rng, RecipeCtx&) {
     BuildingParams& p = out.params;
-    p.floors = rng.between(3, 5);
+    p.floors = rng.between(4, 6);
     p.groundRetail = rng.next() < 0.5;
     dress(p, FacadeStyle::DarkBrick, rng);
     p.floorHeight = 3.6;               // warehouse storeys
@@ -1282,9 +1296,10 @@ void recipeRanchHouse(BuildingRecipe& out, ProcRng& rng, RecipeCtx&) {
 }
 
 // The GARDEN condo: a low balconied walk-up on planted grounds.
-void recipeGardenCondo(BuildingRecipe& out, ProcRng& rng, RecipeCtx&) {
+void recipeGardenCondo(BuildingRecipe& out, ProcRng& rng, RecipeCtx& cx) {
     BuildingParams& p = out.params;
-    p.floors = rng.between(3, 4);
+    p.floors = rng.between(3, 5) + static_cast<int>(cx.coreness * 2.0 + 0.5);
+    cx.slender = std::max(cx.slender, Real(2.2));
     p.groundRetail = false;
     dress(p, rng.next() < 0.5 ? FacadeStyle::Stucco : FacadeStyle::Painted, rng);
     p.balconies = true;
@@ -1675,7 +1690,7 @@ void recipeDuplex(BuildingRecipe& out, ProcRng& rng, RecipeCtx&) {
 // this recipe leans into it with awnings + warm masonry.
 void recipeMixedUse(BuildingRecipe& out, ProcRng& rng, RecipeCtx&) {
     BuildingParams& p = out.params;
-    p.floors = rng.between(3, 5);
+    p.floors = rng.between(3, 6);
     p.groundRetail = true;
     dress(p, rng.next() < 0.6 ? FacadeStyle::Brick : FacadeStyle::Painted, rng);
     p.awning = true;
@@ -1704,6 +1719,7 @@ const NamedRecipe kRecipeRegistry[] = {
     {"brick_shop", recipeBrickShop},
     {"office_midrise", recipeOfficeMidrise},
     {"walkup_homes", recipeWalkupHomes},
+    {"car_park", recipeCarPark},
     {"oldtown_house", recipeOldTownHouse},
     {"metal_shed", recipeMetalShed},
     {"industrial_office", recipeIndustrialOffice},
@@ -1818,6 +1834,47 @@ const char* districtName(DistrictTag t) {
     return "?";
 }
 
+namespace {
+// The squared distance from p to hub i: to its point, or to its line (a seafront)
+Real hubDist2(const DistrictMap& m, std::size_t i, const Vec2& p) {
+    if (i < m.hubLines.size() && m.hubLines[i].size() >= 2) {
+        const std::vector<Vec2>& L = m.hubLines[i];
+        Real best = 1e30;
+        for (std::size_t k = 0; k + 1 < L.size(); ++k) {
+            const Vec2 ab = L[k + 1] - L[k];
+            const Real t = std::clamp(dot(p - L[k], ab) / std::max(Real(1e-12), dot(ab, ab)), Real(0), Real(1));
+            best = std::min(best, (L[k] + ab * t - p).lengthSquared());
+        }
+        return best;
+    }
+    return (p - m.hubs[i].first).lengthSquared();
+}
+}  // namespace
+
+int DistrictMap::nearestHub(const Vec2& p) const {
+    int best = -1;
+    Real bd = 1e30;
+    for (std::size_t i = 0; i < hubs.size(); ++i) {
+        const Real dd = hubDist2(*this, i, p);
+        if (dd < bd) { bd = dd; best = static_cast<int>(i); }
+    }
+    return best;
+}
+
+Real DistrictMap::hubDistance(std::size_t i, const Vec2& p) const { return std::sqrt(hubDist2(*this, i, p)); }
+
+void archetypeThresholds(const std::vector<std::pair<int, double>>& entries, std::vector<std::pair<Real, int>>& tbl) {
+    tbl.clear();
+    double total = 0;
+    for (const auto& e : entries) total += e.second;
+    double run = 0;
+    for (const auto& e : entries) {
+        run += e.second;
+        tbl.push_back({static_cast<Real>(run / total), e.first});
+    }
+    if (!tbl.empty()) tbl.back().first = Real(1);   // guard the float tail: the last entry owns everything up to roll = 1
+}
+
 DistrictTag DistrictMap::tagAt(const Vec2& p) const {
     // Polycentric geography (metropolis): zone by the NEAREST hub. The centre
     // hub (kind 0) keeps the radial reading below; a flavored hub holds its
@@ -1827,15 +1884,16 @@ DistrictTag DistrictMap::tagAt(const Vec2& p) const {
         std::size_t best = 0;
         Real bd = 1e30;
         for (std::size_t i = 0; i < hubs.size(); ++i) {
-            const Real dd = (p - hubs[i].first).lengthSquared();
+            const Real dd = hubDist2(*this, i, p);
             if (dd < bd) { bd = dd; best = i; }
         }
         const int kind = hubs[best].second;
         if (kind > 0) {
             const Real r = std::sqrt(bd);
-            if (r < hubRadius)
+            const Real reach = best < hubRadii.size() && hubRadii[best] > 0 ? hubRadii[best] : hubRadius;
+            if (r < reach)
                 return static_cast<DistrictTag>(std::min(kind, 4));
-            if (r < hubRadius * 1.35 && kind != 2)
+            if (r < reach * 1.35 && kind != 2)
                 return DistrictTag::Commercial;
             return DistrictTag::Residential;
         }
@@ -1853,14 +1911,14 @@ DistrictTag DistrictMap::tagAt(const Vec2& p) const {
     // industry takes a slice of the outskirts. Angles derive from the seed so
     // every city places its quarters differently but deterministically.
     Real ang = std::atan2(d.y, d.x);
-    if (ang < 0) ang += kTau;
+    if (ang < 0) ang += TAU;
     ProcRng h(seed * 2654435761u + 17u);
-    const Real oldTown0 = h.next() * kTau, oldTownSpan = 0.9;   // ~52 deg pocket
-    const Real ind0 = std::fmod(oldTown0 + kTau * 0.45, kTau);  // opposite-ish
+    const Real oldTown0 = h.next() * TAU, oldTownSpan = 0.9;   // ~52 deg pocket
+    const Real ind0 = std::fmod(oldTown0 + TAU * 0.45, TAU);  // opposite-ish
     const Real indSpan = 1.15;                                  // ~66 deg wedge
     auto inWedge = [&](Real a0, Real span) {
         Real rel = ang - a0;
-        if (rel < 0) rel += kTau;
+        if (rel < 0) rel += TAU;
         return rel < span;
     };
     if (r < midRadius)
@@ -1890,6 +1948,23 @@ BuildingRecipe architectBlockLandmark(DistrictTag tag, Real shortSide, Real area
     cx.area = area;
     cx.coreness = std::max(coreness, Real(0.4));
     cx.roomy = true;
+    // A WHOLE BLOCK OF HOMES RISES (Glenn, 2026-11-01: "some of the buildings that take up a whole block are sometimes
+    // just a few stories high. Could those be converted to a taller skyscraper?"): toward the town (a residential
+    // quarter's coreness is its suburb gradient) and in a quarter of midtown's blocks, a residential tower standing in
+    // its plaza -- 12-18 storeys, up to 8 more where it is most central. Its own dice, so the ladder's roll is as it was.
+    {
+        ProcRng tw(seed * 0x9E3779B9u ^ 0x7a11u);
+        const Real towerShare = tag == DistrictTag::Residential ? (coreness >= 0.5 ? 0.45 : 0.0)
+                              : tag == DistrictTag::Commercial ? 0.25 : 0.0;
+        if (tw.next() < towerShare) {
+            recipeCondoTower(out, rng, cx);
+            out.params.floors = tw.between(12, 18) + static_cast<int>(coreness * 8.0);
+            out.massing = BuildingRecipe::Massing::TowerInPlaza;   // falls back to the block plan when too shallow
+            cx.slender = std::max(cx.slender, Real(5.0));
+            capFloors(out, shortSide, cx.slender);
+            return out;
+        }
+    }
     switch (tag) {
         case DistrictTag::Financial:
         case DistrictTag::Commercial: {
@@ -1981,52 +2056,56 @@ BuildingRecipe architectPick(DistrictTag tag, Real shortSide, Real area,
             // THE SKYLINE MIX (NYC variety, 2026-09-30): the classic glass tower and podium keep a share, the
             // New York forms join -- the sky-exposure masonry cake, the tower on a base, the tapered and slab
             // glass towers, and a pencil tower where the city is densest (a small lot at the core).
-            if (roll < 0.14)      recipeGlassTower(out, rng, cx);
-            else if (roll < 0.22) recipePodiumTower(out, rng, cx);
-            else if (roll < 0.29) recipeTowerOnBase(out, rng, cx);
-            else if (roll < 0.35) recipeTaperedGlassTower(out, rng, cx);
-            else if (roll < 0.40) recipeGlassSlab(out, rng, cx);
-            else if (roll < 0.44) recipePencilTower(out, rng, cx);
-            else if (roll < 0.52) recipeSkyExposureTower(out, rng, cx);
-            else if (roll < 0.58) recipeArtDecoTower(out, rng, cx);
+            // HOMES DOWNTOWN (Glenn, 2026-11-01: "build denser housing"): a sixth of the core is residential towers
+            // -- the condo tower risen with the core, the pencil tower -- carved from the office shares.
+            if (roll < 0.10)      recipeGlassTower(out, rng, cx);
+            else if (roll < 0.16) recipePodiumTower(out, rng, cx);
+            else if (roll < 0.21) recipeTowerOnBase(out, rng, cx);
+            else if (roll < 0.26) recipeTaperedGlassTower(out, rng, cx);
+            else if (roll < 0.30) recipeGlassSlab(out, rng, cx);
+            else if (roll < 0.38) recipePencilTower(out, rng, cx);
+            else if (roll < 0.48) recipeCondoTower(out, rng, cx);
+            else if (roll < 0.54) recipeSkyExposureTower(out, rng, cx);
+            else if (roll < 0.59) recipeArtDecoTower(out, rng, cx);
             else if (roll < 0.63) recipeSteppedTower(out, rng, cx);
-            else if (roll < 0.67) recipeDrumTower(out, rng, cx);
-            else if (roll < 0.75) recipeOfficeSlab(out, rng, cx);
+            else if (roll < 0.66) recipeDrumTower(out, rng, cx);
+            else if (roll < 0.74) recipeOfficeSlab(out, rng, cx);
             // THE TOOLKIT'S FORMS (issue #105; Glenn, 2026-10-15: "will these show up in island 8?"): accents,
             // a few per district, carved from the office slab's and the commercial block's shares
-            else if (roll < 0.77) recipeTwistedTower(out, rng, cx);
-            else if (roll < 0.79) recipeLensTower(out, rng, cx);
-            else if (roll < 0.805) recipeLeaningTower(out, rng, cx);
-            else if (roll < 0.82) recipeTwistedTaper(out, rng, cx);
-            else if (roll < 0.835) recipeWavyTower(out, rng, cx);
-            else if (roll < 0.85) recipeStackedModules(out, rng, cx);
-            else if (roll < 0.86) recipeRoundedTower(out, rng, cx);
-            else if (roll < 0.865) recipeSculptedTower(out, rng, cx);
-            else if (roll < 0.87) recipeVeilTower(out, rng, cx);
-            else if (roll < 0.89) recipeCommercialBlock(out, rng, cx);
-            else if (roll < 0.935) recipeParkingGarage(out, rng, cx);
+            else if (roll < 0.76) recipeTwistedTower(out, rng, cx);
+            else if (roll < 0.78) recipeLensTower(out, rng, cx);
+            else if (roll < 0.795) recipeLeaningTower(out, rng, cx);
+            else if (roll < 0.81) recipeTwistedTaper(out, rng, cx);
+            else if (roll < 0.825) recipeWavyTower(out, rng, cx);
+            else if (roll < 0.84) recipeStackedModules(out, rng, cx);
+            else if (roll < 0.85) recipeRoundedTower(out, rng, cx);
+            else if (roll < 0.855) recipeSculptedTower(out, rng, cx);
+            else if (roll < 0.86) recipeVeilTower(out, rng, cx);
+            else if (roll < 0.88) recipeCommercialBlock(out, rng, cx);
+            else if (roll < 0.925) recipeParkingGarage(out, rng, cx);
             else if (roll < 0.97) recipePlaza(out, rng, cx);
             else                  recipeCivicHall(out, rng, cx);
             break;
         case DistrictTag::Commercial:
-            if (roll < 0.04)      recipePocketPark(out, rng, cx);
-            else if (roll < 0.07) recipePlaza(out, rng, cx);
-            else if (roll < 0.23) recipeBrickShop(out, rng, cx);
-            else if (roll < 0.25) recipeCourtyardBlock(out, rng, cx);   // (the toolkit's complex: on a lot too small for its court, a plan building)
+            // (denser housing, 2026-11-01: more condos, flats over shops and walk-ups; fewer banks and offices)
+            if (roll < 0.03)      recipePocketPark(out, rng, cx);
+            else if (roll < 0.05) recipePlaza(out, rng, cx);
+            else if (roll < 0.20) recipeBrickShop(out, rng, cx);
+            else if (roll < 0.24) recipeCourtyardBlock(out, rng, cx);   // (the toolkit's complex: on a lot too small for its court, a plan building)
             else if (roll < 0.38) recipeMixedUse(out, rng, cx);
-            else if (roll < 0.46) recipeOfficeMidrise(out, rng, cx);
-            else if (roll < 0.49) recipePodiumTower(out, rng, cx);
-            else if (roll < 0.55) recipeCondoTower(out, rng, cx);
-            else if (roll < 0.61) recipeTerraceCondo(out, rng, cx);
-            else if (roll < 0.67) recipeLoftConversion(out, rng, cx);
-            else if (roll < 0.73) recipeHotel(out, rng, cx);
-            else if (roll < 0.78) recipeBank(out, rng, cx);
-            else if (roll < 0.82) recipeCinema(out, rng, cx);
-            else if (roll < 0.86) recipeStripMall(out, rng, cx);
-            else if (roll < 0.90) recipeSupermarket(out, rng, cx);
-            else if (roll < 0.93) recipeOfficePark(out, rng, cx);
-            else if (roll < 0.95) recipePagodaTower(out, rng, cx);
-            else if (roll < 0.98) recipeCivicMidtown(out, rng, cx);
+            else if (roll < 0.44) recipeOfficeMidrise(out, rng, cx);
+            else if (roll < 0.46) recipePodiumTower(out, rng, cx);
+            else if (roll < 0.56) recipeCondoTower(out, rng, cx);
+            else if (roll < 0.62) recipeTerraceCondo(out, rng, cx);
+            else if (roll < 0.68) recipeLoftConversion(out, rng, cx);
+            else if (roll < 0.72) recipeHotel(out, rng, cx);
+            else if (roll < 0.75) recipeBank(out, rng, cx);
+            else if (roll < 0.78) recipeCinema(out, rng, cx);
+            else if (roll < 0.81) recipeStripMall(out, rng, cx);
+            else if (roll < 0.85) recipeSupermarket(out, rng, cx);
+            else if (roll < 0.87) recipeOfficePark(out, rng, cx);
+            else if (roll < 0.89) recipePagodaTower(out, rng, cx);
+            else if (roll < 0.92) recipeCivicMidtown(out, rng, cx);
             else                  recipeWalkupHomes(out, rng, cx);
             break;
         case DistrictTag::OldTown:
@@ -2041,19 +2120,23 @@ BuildingRecipe architectPick(DistrictTag tag, Real shortSide, Real area,
             else                  recipeIndustrialOffice(out, rng, cx);
             break;
         case DistrictTag::Residential:
-            if (roll < 0.07)      recipePocketPark(out, rng, cx);
-            else if (roll < 0.25) recipeYardHouse(out, rng, cx);
-            else if (roll < 0.31) recipeModernHouse(out, rng, cx);
-            else if (roll < 0.38) recipeBungalow(out, rng, cx);
-            else if (roll < 0.45) recipeCraftsman(out, rng, cx);
-            else if (roll < 0.51) recipeCottage(out, rng, cx);
-            else if (roll < 0.57) recipeVilla(out, rng, cx);
-            else if (roll < 0.64) recipeRanchHouse(out, rng, cx);
-            else if (roll < 0.72) recipeDuplex(out, rng, cx);
-            else if (roll < 0.81) recipeRowhouses(out, rng, cx);
-            else if (roll < 0.84) recipeCourtyardBlock(out, rng, cx);
-            else if (roll < 0.89) recipeGardenCondo(out, rng, cx);
-            else if (roll < 0.96) recipeApartments(out, rng, cx);
+            // DENSER HOUSING (Glenn, 2026-11-01): houses were 57 lots in 100 and a fifth of the island's homes; now
+            // a quarter of the lots, and the rest rows, courts, condos and flats -- taller toward the town
+            // (coreness here is the suburb's: 1 at the downtown's rim, 0 well out: city_lots' suburbAt)
+            if (roll < 0.06)      recipePocketPark(out, rng, cx);
+            else if (roll < 0.14) recipeYardHouse(out, rng, cx);
+            else if (roll < 0.17) recipeModernHouse(out, rng, cx);
+            else if (roll < 0.20) recipeBungalow(out, rng, cx);
+            else if (roll < 0.24) recipeCraftsman(out, rng, cx);
+            else if (roll < 0.27) recipeCottage(out, rng, cx);
+            else if (roll < 0.30) recipeVilla(out, rng, cx);
+            else if (roll < 0.33) recipeRanchHouse(out, rng, cx);
+            else if (roll < 0.39) recipeDuplex(out, rng, cx);
+            else if (roll < 0.49) recipeRowhouses(out, rng, cx);
+            else if (roll < 0.57) recipeCourtyardBlock(out, rng, cx);
+            else if (roll < 0.69) recipeGardenCondo(out, rng, cx);
+            else if (roll < 0.86) recipeApartments(out, rng, cx);
+            else if (roll < 0.96) recipeWalkupHomes(out, rng, cx);
             else                  recipeCornerShop(out, rng, cx);
             break;
     }
@@ -2106,15 +2189,23 @@ BuildingRecipe architectLandmark(LandmarkKind kind, Real shortSide, Real area,
     return out;
 }
 
+bool landmarkKindNamed(const std::string& name, LandmarkKind& out) {
+    for (int k = 0; k < static_cast<int>(LandmarkKind::Count); ++k)
+        if (name == landmarkName(static_cast<LandmarkKind>(k))) { out = static_cast<LandmarkKind>(k); return true; }
+    return false;
+}
+
 std::vector<int> planLandmarks(const std::vector<LandmarkCand>& cands,
-                               const Vec2& cityCenter, Real innerRadius) {
+                               const Vec2& cityCenter, Real innerRadius,
+                               const std::vector<LandmarkCluster>* places) {
     std::vector<int> out(cands.size(), -1);
 
     // The clusters present, ascending: the city (0) plans first, towns after —
     // a stable order so the plan is deterministic in the candidates' order.
     std::vector<int> clusters;
     for (const LandmarkCand& c : cands)
-        if (std::find(clusters.begin(), clusters.end(), c.cluster) ==
+        if (c.cluster >= 0 &&   // (-1: no place's -- it plans none)
+            std::find(clusters.begin(), clusters.end(), c.cluster) ==
             clusters.end())
             clusters.push_back(c.cluster);
     std::sort(clusters.begin(), clusters.end());
@@ -2145,7 +2236,31 @@ std::vector<int> planLandmarks(const std::vector<LandmarkCand>& cands,
             }
         }
         std::vector<Want> wants;
-        if (cl == 0) {
+        const LandmarkCluster* own = places && cl >= 0 && cl < static_cast<int>(places->size()) ? &(*places)[static_cast<std::size_t>(cl)] : nullptr;
+        const Vec2 centre = own ? own->center : cityCenter;
+        if (own && !own->civic) {
+            // A PLACE'S OWN LIST (its kind's): each kind's lot needs and districts are the landmark's, as the tables
+            // below give them; the count and the fallback the place's
+            for (const LandmarkWant& lw : own->wants) {
+                if (total < lw.minLots || nOld < lw.minOldTown) continue;
+                Want w{lw.kind, lw.count, 10.0, 180.0, false, DistrictTag::Commercial, DistrictTag::Commercial, lw.anyDistrict};
+                switch (lw.kind) {
+                    case LandmarkKind::School:     w.minShort = 13.0; w.minArea = 320.0; w.tagA = DistrictTag::Residential; w.tagB = DistrictTag::OldTown; break;
+                    case LandmarkKind::Church:     w.minShort = 10.0; w.minArea = 180.0; w.tagA = DistrictTag::Residential; w.tagB = DistrictTag::OldTown; break;
+                    case LandmarkKind::Market:     w.tagA = DistrictTag::OldTown; w.tagB = DistrictTag::Commercial; break;
+                    case LandmarkKind::Police:     w.minShort = 9.0; w.minArea = 140.0; break;
+                    case LandmarkKind::Fire:       w.minShort = 11.0; w.minArea = 220.0; w.tagB = DistrictTag::Industrial; break;
+                    case LandmarkKind::Library:    w.minShort = 12.0; w.minArea = 240.0; w.tagB = DistrictTag::Residential; break;
+                    case LandmarkKind::Hospital:   w.minShort = 15.0; w.minArea = 380.0; break;
+                    case LandmarkKind::University: w.minShort = 15.0; w.minArea = 380.0; w.tagA = DistrictTag::Residential; break;
+                    case LandmarkKind::Capitol:    w.minShort = 13.0; w.minArea = 300.0; w.wantCore = true; w.tagA = DistrictTag::Financial; break;
+                    case LandmarkKind::Courthouse: w.minShort = 12.0; w.minArea = 260.0; w.wantCore = true; w.tagA = w.tagB = DistrictTag::Financial; break;
+                    case LandmarkKind::Museum:     w.minShort = 14.0; w.minArea = 320.0; w.wantCore = true; w.tagA = DistrictTag::Financial; break;
+                    default: break;
+                }
+                wants.push_back(w);
+            }
+        } else if (cl == 0 || (own && own->civic)) {
             // The CITY keeps the full civic table (quotas as before).
             wants = {
                 {LandmarkKind::Capitol, (nFin + nCom) >= 6 ? 1 : 0, 13.0, 300.0,
@@ -2212,7 +2327,7 @@ std::vector<int> planLandmarks(const std::vector<LandmarkCand>& cands,
                             continue;
                         Real score = c.area;
                         if (w.wantCore) {
-                            const Real r = (c.pos - cityCenter).length();
+                            const Real r = (c.pos - centre).length();   // (its own place's centre)
                             score *= 0.4 + std::max(
                                 Real(0),
                                 1.0 - r / std::max(Real(1), innerRadius));

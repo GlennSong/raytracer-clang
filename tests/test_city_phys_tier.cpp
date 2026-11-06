@@ -517,7 +517,7 @@ TrafficLook watchTraffic(bool physicalTier, uint32_t seed = 7) {
                 const Agent& a = city.sim().agents()[static_cast<std::size_t>(ai)];
                 const Mat4& m = g->transforms[k];
                 for (const auto& w : wheels) {
-                    const Vec3 bottom = m.transformPoint(w.pos - Vec3(0, w.radius, 0));
+                    const Vec3 bottom = engine::instanceCentre(m, w.pos - Vec3(0, w.radius, 0));   // (affine: the bottom row is the lamp mask)
                     t.wheelMin = std::min(t.wheelMin, bottom.y);
                     t.wheelMax = std::max(t.wheelMax, bottom.y);
                     t.wheelAbsSum += std::fabs(bottom.y);
@@ -537,8 +537,7 @@ TrafficLook watchTraffic(bool physicalTier, uint32_t seed = 7) {
                     t.worstJump = std::max(t.worstJump, disp);
                 }
                 Real dy = yaw - it->second.yaw;
-                while (dy > PI) dy -= 2 * PI;
-                while (dy < -PI) dy += 2 * PI;
+                dy = wrapRadians(dy);
                 // A car's yaw rate is bounded by speed / min turn radius (~5 m)
                 // plus a margin; "on a dime" is turning with no speed to turn.
                 if (std::fabs(dy) / dt > a.speed / 4.0 + 0.8) ++t.pivots;
@@ -593,69 +592,49 @@ TEST_CASE(city_drawn_traffic_rolls_on_its_wheels) {
     }
 }
 
-// EVERY LIT LAMP IS ON ITS OWN CAR'S NOSE OR TAIL (Glenn, 2026-09-18: "when I'm
-// in the bus the tail lights show up inside of the bus"). The lamp pass chose a
-// car's markers by vehicle % fleet while the body was drawn from its own slot,
-// so a bus wore a sedan's lamps -- tail lights 2.3 m behind its centre, inside
-// the saloon -- and every other car another model's. Checked on the drawn
-// instances: each lit lens, in the frame of the nearest drawn body, sits at
-// that body's own end (|z| ~ half its length).
-TEST_CASE(city_lamps_sit_on_their_own_car_s_ends) {
+// (EVERY LIT LAMP ON ITS OWN CAR'S END -- the bus wearing a sedan's tail lights inside its saloon -- was checked here
+// on the overlay lamp boxes. The lamps are the body's own lenses since ADR-0342: test_vehicle_body's
+// every_fleet_body_carries_its_own_lit_lenses checks each body's lenses sit at its own ends.)
+
+// THE CABS DRIVE TAXIS (2026-11-06): the kit fleet's taxi slot is dealt to the cabs (CitySim::isTaxi) and to nobody
+// else -- every drawn cab is a taxi, every drawn taxi a cab -- and the off-roader and the moped are in the rotation.
+TEST_CASE(city_cabs_draw_as_taxis_and_only_cabs_do) {
     World world;
     world.add<RoadEntity>(world.create(), cityGrid());
     CityRenderParams params;
-    params.cars = 24;
+    params.cars = 40;
     params.pedestrians = 0;
-    params.seed = 7;
+    params.seed = 11;
     params.wander = true;
-    params.busRoutes = 1;
-    params.busStops = 6;
-    params.buses = 2;
-    params.busMaxWalk = 200;
+    params.taxiFraction = 0.25;
     params.vehicleScript = readAsset("vehicles.lua");
     CityRenderSystem city(params);
     StubUploader uploader;
     engine::AssetManager assets(uploader);
     CHECK(city.build(world, &assets));
-    const std::vector<Vec3> he = city.carGroupHalfExtents();
-    long lamps = 0, misplaced = 0;
-    Real worst = 0;
-    for (int i = 0; i < 60 * 40; ++i) {
+    CHECK(city.taxiVariant() >= 0);
+    long cabs = 0, taxisNotCabs = 0, cabsNotTaxis = 0, bikes = 0;
+    for (int i = 0; i < 60 * 20; ++i) {
         city.step(world, 1.0 / 60.0);
-        if (i % 15) continue;
-        for (Entity lg : {city.brakeLightGroup(), city.turnSignalGroup(), city.headlightGroup()}) {
-            const InstanceGroup* g = world.get<InstanceGroup>(lg);
-            if (!g) continue;
-            for (const Mat4& lm : g->transforms) {
-                const Vec3 lp(lm.m[0][3], lm.m[1][3], lm.m[2][3]);
-                // The body this lens belongs to: one whose box (a little
-                // grown) contains it, at an end. "Nearest centre" misassigns
-                // a bus's tail light (5.7 m out) to the car queued behind it.
-                Real off = 1e9;
-                for (std::size_t v = 0; v < city.carGroups().size(); ++v) {
-                    const InstanceGroup* cg = world.get<InstanceGroup>(city.carGroups()[v]);
-                    if (!cg || v >= he.size()) continue;
-                    for (const Mat4& cm : cg->transforms) {
-                        const Vec3 c(cm.m[0][3], cm.m[1][3], cm.m[2][3]);
-                        if ((c - lp).length() > he[v].z + 2.0) continue;
-                        const Vec3 local = cm.inverse().transformPoint(lp);
-                        if (std::fabs(local.x) > he[v].x + 0.3 ||
-                            std::fabs(local.y) > he[v].y + 0.5 ||
-                            std::fabs(local.z) > he[v].z + 0.3)
-                            continue;
-                        off = std::min(off, std::fabs(std::fabs(local.z) - he[v].z));
-                    }
-                }
-                ++lamps;
-                worst = std::max(worst, std::min(off, Real(99)));
-                if (off > 0.25) ++misplaced;
+        if (i % 30) continue;
+        const auto& ids = city.carAgentIds();
+        for (std::size_t v = 0; v < ids.size(); ++v)
+            for (int ai : ids[v]) {
+                if (ai < 0) continue;
+                const bool cab = city.sim().isTaxi(ai), taxi = static_cast<int>(v) == city.taxiVariant();
+                cabs += cab;
+                taxisNotCabs += taxi && !cab;
+                cabsNotTaxis += cab && !taxi;
+                const engine::PhysicsWorld::VehicleConfig* vc = city.carConfig(static_cast<int>(v));
+                bikes += vc && vc->twoWheeler;
             }
-        }
     }
-    std::printf("    [lamps] %ld lit lamps checked; %ld not at their own car's end (worst %.2f m)\n",
-                lamps, misplaced, worst);
-    CHECK(lamps > 50);
-    CHECK(misplaced == 0);
+    std::printf("    [cabs] %ld cab draws; %ld taxis that are no cab, %ld cabs that are no taxi; %ld bike draws\n", cabs,
+                taxisNotCabs, cabsNotTaxis, bikes);
+    CHECK(cabs > 0);
+    CHECK(taxisNotCabs == 0);
+    CHECK(cabsNotTaxis == 0);
+    CHECK(bikes > 0);
 }
 
 // #23 JUNCTION PILE-UPS (QA: "cars grinding against each other in packed intersections ... piled upon other
@@ -784,9 +763,9 @@ TEST_CASE(city_phys_tier_packed_junction_does_not_pile_up) {
             ++bodyTicks;
             minUp = std::min(minUp, up);
             if (up < 0.8) ++tipTicks;
-            // each car by its own FLOOR (centre less its half height): the physical tier drives every car as its
-            // own class now (item 23), and a bus rests ~0.8 m higher than a sedan without climbing anything
-            const Real floorY = bp.y - p.halfY;
+            // each car by its own FLOOR (centre less where it is put down over the road): the physical tier drives
+            // every car as its own class now (item 23), and a bus rests ~0.8 m higher than a sedan without climbing
+            const Real floorY = bp.y - p.spawnAbove;
             if (up > 0.98 && restN < 2000) { restY += floorY; ++restN; }
             const Real rest = restN ? restY / restN : floorY;
             const Real climb = floorY - rest;
@@ -901,4 +880,48 @@ TEST_CASE(every_fleet_car_launches_as_the_traffic_plan_asks) {
         fastest = std::max(fastest, can);
     }
     CHECK(fastest > 2.0 * slowest);    // a bus is not an SUV
+}
+
+// WHERE A CAR IS PUT DOWN (#172): every fleet slot, on its own handling, placed at PhysicsWorld::spawnHeight over flat
+// ground, touches its tyres from the first step and settles onto its springs -- no fall, whatever its travel. The city
+// spawn and the snap back onto a ghost used one 0.35 m drop for every car, a sedan's guess a bus or a truck does not
+// share.
+TEST_CASE(every_fleet_car_is_put_down_on_its_own_springs) {
+    World world;
+    world.add<RoadEntity>(world.create(), cityGrid());
+    CityRenderParams params;
+    params.cars = 4;
+    params.pedestrians = 0;
+    params.vehicleScript = readAsset("vehicles.lua");
+    CityRenderSystem city(params);
+    CHECK(city.build(world, nullptr));
+    const int slots = city.sim().fleetSize();
+    CHECK(slots >= 14);
+    for (int slot = 0; slot < slots; ++slot) {
+        const PhysicsWorld::VehicleConfig* cfg = city.carConfig(slot);
+        CHECK(cfg != nullptr);
+        if (!cfg) continue;
+        PhysicsWorld w;
+        CHECK(w.initialize());
+        w.addBox(Vec3(200, 1, 200), Vec3(0, -1, 0), Quat::identity(), BodyMotion::Static, 0.0, 0.85);
+        w.optimizeBroadPhase();
+        const Real at = PhysicsWorld::spawnHeight(*cfg);
+        const PhysicsWorld::VehicleId car = w.addVehicle(*cfg, Vec3(0, at, 0), Quat::identity());
+        CHECK(car != PhysicsWorld::INVALID_VEHICLE);
+        Real lowest = at, fastest = 0;
+        for (int i = 0; i < 120; ++i) {
+            w.update(1.0 / 60.0);
+            lowest = std::min(lowest, w.vehiclePosition(car).y);
+            fastest = std::max(fastest, std::fabs(w.vehicleVelocity(car).y));
+        }
+        const Real rest = w.vehiclePosition(car).y;
+        std::printf("    [put down] slot %2d at %.3f m: rests %.3f, lowest %.3f, fastest fall %.2f m/s\n", slot, at, rest,
+                    lowest, fastest);
+        CHECK(at >= cfg->chassisHalfExtent.y);
+        CHECK(at - rest < 0.12);       // settles onto its springs
+        CHECK(at - rest > -0.01);      // and was not put down under them
+        CHECK(fastest < 1.0);          // no fall (0.35 m is 2.6 m/s)
+        CHECK(rest - lowest < 0.05);   // one gentle bounce at most
+        w.shutdown();
+    }
 }

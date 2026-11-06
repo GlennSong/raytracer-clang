@@ -13,6 +13,7 @@
 #include "test_framework.h"
 
 #include "city_test_util.h"
+#include "../src/engine/procgen/city/polyline.h"   // distToSegment, distToPolyline
 #include "../src/apps/citysim/city_sim.h"
 #include "../src/engine/procgen/city/road_network.h"
 
@@ -67,18 +68,7 @@ int countTier(const CitySim& sim, Agent::Tier t) {
 
 // Distance from p to the polyline `path` (min over segments).
 Real distToPolyline(const std::vector<Vec2>& path, Vec2 p) {
-    if (path.empty()) return 1e30;
-    Real best = 1e30;
-    for (std::size_t k = 0; k + 1 < path.size(); ++k) {
-        const Vec2 s = path[k], e = path[k + 1];
-        const Vec2 d = e - s;
-        const Real l2 = d.lengthSquared();
-        Real t = l2 > 1e-12 ? dot(p - s, d) / l2 : 0.0;
-        t = t < 0 ? 0 : (t > 1 ? 1 : t);
-        best = std::min(best, (s + d * t - p).length());
-    }
-    if (path.size() == 1) best = (path[0] - p).length();
-    return best;
+    return path.size() == 1 ? (path[0] - p).length() : engine::distToPolyline(p, path);   // (polyline.h; one point: to it)
 }
 
 // A straight run with two degree-3 (unsignalled) tee junctions on the way —

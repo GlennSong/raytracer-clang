@@ -33,9 +33,9 @@
 
 agents = {}
 
--- The RESIDENTS' days (commuter, shopkeeper, stroller, student) are not tables here: each is built from its role's
--- parts in roles.lua (src/apps/citysim/city_roles.h, buildDayTable). A level's own agents script may still define
--- `schedule` (the working roles' day) and `stroller` to replace them outright.
+-- The RESIDENTS' days (worker, shopkeeper, student, child, at_home, retired, the staff) are not tables here: each is
+-- built from its role's parts in roles.lua (src/apps/citysim/city_roles.h, buildDayTable). A level's own agents
+-- script may still define `schedule` (the job roles' day) and `stroller` (the day out's) to replace them outright.
 
 agents.wander_driver = {
     entry = "Roam",

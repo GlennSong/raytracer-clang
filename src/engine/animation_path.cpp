@@ -6,20 +6,19 @@
 namespace engine {
 
 namespace {
-double vlen(const Vec3& v) { return std::sqrt(v.lengthSquared()); }
 
 // A rotation whose local +Z points along `fwd` and local +Y near `up`.
 Quat lookRotation(const Vec3& fwd, const Vec3& upHint) {
-    double fl = vlen(fwd);
+    double fl = fwd.length();
     if (fl < 1e-9) return Quat::identity();
     Vec3 f = fwd * (1.0 / fl);
     Vec3 up = upHint;
     Vec3 right = cross(up, f);
-    double rl = vlen(right);
+    double rl = right.length();
     if (rl < 1e-6) {                       // up parallel to forward: pick another reference
         up = (std::fabs(f.y) < 0.9) ? Vec3(0, 1, 0) : Vec3(1, 0, 0);
         right = cross(up, f);
-        rl = vlen(right);
+        rl = right.length();
     }
     right = right * (1.0 / rl);
     up = cross(f, right);                  // re-orthonormalize

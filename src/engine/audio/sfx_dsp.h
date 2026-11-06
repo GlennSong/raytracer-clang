@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <cmath>
 #include "../../proc_rng.h"
+#include "../../rt_math.h"   // TAU
 #include <utility>
 #include <vector>
 
@@ -15,7 +16,6 @@ namespace engine {
 namespace sfx {
 namespace dsp {
 
-constexpr double TWO_PI = 6.283185307179586;
 
 inline void normalizeTo(std::vector<float>& frames, float peak) {
     float maxAbs = 0.0f;
@@ -28,7 +28,7 @@ inline void normalizeTo(std::vector<float>& frames, float peak) {
 // One-pole filters with the cutoff in Hz, so a recipe sounds the same at any device rate.
 struct LowPass {
     double a = 0, y = 0;
-    LowPass(double hz, double rate) : a(1.0 - std::exp(-TWO_PI * hz / rate)) {}
+    LowPass(double hz, double rate) : a(1.0 - std::exp(-TAU * hz / rate)) {}
     double operator()(double x) { y += a * (x - y); return y; }
 };
 struct HighPass {
@@ -70,14 +70,14 @@ inline std::vector<double> circBand(const std::vector<double>& white, double rat
 // A smooth periodic random envelope: a few integer-cycle sines, >= 0.
 inline std::vector<double> circEnvelope(size_t count, ProcRng& rng, int minCycles, int maxCycles, int terms) {
     ProcUniformInt<int> cyc(minCycles, maxCycles);
-    ProcUniform<double> ph(0.0, TWO_PI), amp(0.4, 1.0);
+    ProcUniform<double> ph(0.0, TAU), amp(0.4, 1.0);
     std::vector<std::pair<int, std::pair<double, double>>> t;
     for (int k = 0; k < terms; ++k) t.push_back({cyc(rng), {ph(rng), amp(rng)}});
     std::vector<double> env(count);
     for (size_t i = 0; i < count; ++i) {
         const double p = static_cast<double>(i) / static_cast<double>(count);
         double v = 0;
-        for (const auto& [c, pa] : t) v += pa.second * std::sin(TWO_PI * c * p + pa.first);
+        for (const auto& [c, pa] : t) v += pa.second * std::sin(TAU * c * p + pa.first);
         env[i] = v;
     }
     return env;

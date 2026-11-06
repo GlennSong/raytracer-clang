@@ -6,7 +6,6 @@
 namespace engine {
 
 namespace {
-constexpr double kPi = 3.14159265358979323846;
 }
 
 double HeightRaster::at(double worldX, double worldZ) const {
@@ -73,7 +72,7 @@ HorizonMap computeHorizonMap(const HeightRaster& raster, double azimuthDeg,
     m.sinElevation.assign(static_cast<std::size_t>(m.size) * m.size, HorizonMap::encode(0.0));
 
     // Bearing: 0 north (-z), 90 east (+x).
-    const double a = azimuthDeg * kPi / 180.0;
+    const double a = azimuthDeg * PI / 180.0;
     const double dx = std::sin(a), dz = -std::cos(a);
     const double step = raster.texel();
     const int steps = std::max(1, static_cast<int>(maxDistance / step));

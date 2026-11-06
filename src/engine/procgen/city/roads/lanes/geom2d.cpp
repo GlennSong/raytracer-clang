@@ -94,20 +94,11 @@ PolySet offsetSet(const PolySet& a, double delta) {
 
 PolySet closing(const PolySet& a, double r) { return offsetSet(offsetSet(a, r), -r); }
 
-double ringArea(const Ring& r) {
-    double s = 0;
-    for (size_t i = 0, n = r.size(); i < n; ++i) {
-        const Vec2& p = r[i]; const Vec2& q = r[(i + 1) % n];
-        s += p.x * q.y - q.x * p.y;
-    }
-    return 0.5 * s;
-}
-
 double setArea(const PolySet& s) {
     double a = 0;
     for (const Polygon2& p : s) {
-        a += std::fabs(ringArea(p.outer));
-        for (const Ring& h : p.holes) a -= std::fabs(ringArea(h));
+        a += std::fabs(signedArea(p.outer));
+        for (const Ring& h : p.holes) a -= std::fabs(signedArea(h));
     }
     return a;
 }

@@ -1,4 +1,5 @@
 #include "hydrology.h"
+#include "city/polyline.h"   // stations
 #include "../mesh_builder.h"
 #include "city/roads/lanes/geom2d.h"   // union + constrained Delaunay: the water polygon
 
@@ -250,8 +251,10 @@ std::shared_ptr<const Hydrology> Hydrology::build(const std::function<double(dou
         if (p.widthVariation > 0.0 && r.nodes.size() >= 3) {
             const double v = p.widthVariation;
             const std::size_t n = r.nodes.size();
-            std::vector<double> st(n, 0.0), mul(n, 1.0);
-            for (std::size_t k = 1; k < n; ++k) st[k] = st[k - 1] + (r.nodes[k].p - r.nodes[k - 1].p).length();
+            std::vector<Vec2> along(n);
+            for (std::size_t k = 0; k < n; ++k) along[k] = r.nodes[k].p;
+            const std::vector<double> st = stations(along);   // (polyline.h)
+            std::vector<double> mul(n, 1.0);
             const double phase = 0.37 * static_cast<double>(found.size() + H.rivers_.size());
             for (std::size_t k = 0, a = 0, b = 0; k < n; ++k) {
                 while (a < k && st[k] - st[a] > 60.0) ++a;
@@ -461,14 +464,13 @@ bool Hydrology::isWet(double x, double z, double margin) const {
 
 double Hydrology::shore(double x, double z, double y, double* waterline) const {
     if (waterline) *waterline = 0.0;
-    auto sm = [](double a, double b, double v) { const double t = clampd((v - a) / (b - a), 0.0, 1.0); return t * t * (3.0 - 2.0 * t); };
     double best = 0.0, line = 0.0;
     double lvl = 0.0;
     const double d = distanceToRiver(x, z, 8.0, &lvl);
     if (d < 8.0 && lvl == lvl) {
         const double up = y - lvl;
-        best = (1.0 - sm(1.5, 5.0, d)) * (1.0 - sm(0.6, 1.3, up));
-        line = (1.0 - sm(0.2, 0.8, d)) * (1.0 - sm(0.1, 0.3, up));
+        best = (1.0 - smoothstep(1.5, 5.0, d)) * (1.0 - smoothstep(0.6, 1.3, up));
+        line = (1.0 - smoothstep(0.2, 0.8, d)) * (1.0 - smoothstep(0.1, 0.3, up));
     }
     // lakes: by height over the lake's level near its cells (a lake's edge is where its level meets the ground)
     if (inLake(x, z, 12.0))
@@ -476,8 +478,8 @@ double Hydrology::shore(double x, double z, double y, double* waterline) const {
             if (x < L.minX - 30.0 || x > L.maxX + 30.0 || z < L.minZ - 30.0 || z > L.maxZ + 30.0) continue;
             const double up = y - L.level;
             if (up < -0.5 || up > 2.0) continue;
-            best = std::max(best, 1.0 - sm(0.45, 1.0, up));
-            line = std::max(line, 1.0 - sm(0.06, 0.18, up));
+            best = std::max(best, 1.0 - smoothstep(0.45, 1.0, up));
+            line = std::max(line, 1.0 - smoothstep(0.06, 0.18, up));
         }
     if (waterline) *waterline = line;
     return best;

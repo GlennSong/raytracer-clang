@@ -16,6 +16,8 @@
 #include "city_dispatch.h"
 #include "city_transit.h"
 #include "places.h"
+#include "place_kinds.h"   // what kind each place is, and its tags (places.lua)
+#include "households.h"     // ages, life stages and households (people.lua)
 #include "relationships.h"
 #include "traffic_signal.h"
 #include <cstdint>
@@ -94,7 +96,17 @@ struct Agent {
     // A Student (campus milestone 4) lives in the university's residence hall and
     // spends the day between classes in the teaching hall and breaks on campus.
     // Its id in the role catalog (city_roles.h RoleId): a built-in, or a staff role assignStaff gave it.
-    RoleId role = kRoleCommuter;
+    RoleId role = 0;
+    // WHO THEY ARE (households.h, people.lua): their household in the sim's plan (-1: none -- a bus or cab driver, or
+    // more people than the housing holds), their age and their life stage (an index into the people catalog's
+    // stages; -1 with no household). Set in assignPlaces; time is frozen, so never again.
+    int32_t household = -1;
+    uint8_t age = 0;
+    int8_t stage = -1;
+    // AN EVENING JOB (roles.lua side_job; plan step 6): the venue they work at on shift nights (-1: none) and the
+    // shift's hours. Set by assignSideJobs; a shift night is their evening (eveningPlan).
+    int32_t sideVenue = -1;
+    float sideStart = 0, sideEnd = 0;
 
     // HOW THIS AGENT IS MOVING RIGHT NOW. Nearly everything that reads `mode`
     // is asking exactly this — which route space to plan in, whether to sample a
@@ -376,8 +388,12 @@ struct Agent {
 // varied by a Body component). Dimensions come from the shared fleet table below,
 // so the sim (following distance, colliders) and the renderer (mesh, lift) agree.
 // FireEngine: a fire station's (2026-10-13), stationed in its bays -- never dealt to ordinary traffic, like the bus.
-enum class VehicleType : uint8_t { Sedan, Hatchback, SUV, Pickup, Van, BoxTruck, Bus, FireEngine };
-inline bool serviceVehicle(VehicleType t) { return t == VehicleType::Bus || t == VehicleType::FireEngine; }
+enum class VehicleType : uint8_t { Sedan, Hatchback, SUV, Pickup, Van, BoxTruck, Bus, FireEngine, Taxi };
+// A SERVICE body is dealt to its service only, never to ambient traffic or a kerb bay: the bus to the routes, the fire
+// engine to its station, the taxi to the cabs (isTaxi)
+inline bool serviceVehicle(VehicleType t) {
+    return t == VehicleType::Bus || t == VehicleType::FireEngine || t == VehicleType::Taxi;
+}
 
 // A body's physical dimensions (metres) + its type. `length` is the travel axis;
 // car-following keeps cars a bumper apart from THIS, so a longer truck naturally
@@ -586,6 +602,14 @@ public:
     // restaurants, bars or clubs to home, in its own town, within 1.2 km and open when its evening starts -- which
     // one, from its own bits and the night's number (the same place all evening). -1: nowhere (a night in).
     int eveningVenue(const Agent& a, Real eveningStart) const;
+    // Whether tonight (noon to noon) is one of agent a's evening shifts (its role's side_job `nights`), and the shift's
+    // hours if so.
+    bool sideShiftTonight(const Agent& a, Real& start, Real& end) const;
+    int sideJobs() const { return sideJobs_; }   // agents holding an evening job
+    // ON A BOARD (activities.lua `ride`: a child skating round the block): what walker i rides on the trip it is on --
+    // Ride::None on foot -- and the pace it rides at, times its walking speed (1 on foot).
+    Ride rideOf(int agentIndex) const;
+    Real ridePace(const Agent& a) const;
     Real departWorkHour(const Agent& a) const {
         const Real travel = a.commuteSeconds * (hoursPerSecond_ > 0 ? hoursPerSecond_ : 0.0);
         Real h = std::fmod(a.departWork - travel, 24.0);
@@ -799,7 +823,7 @@ public:
             return false;
         Agent& a = agents_[static_cast<std::size_t>(agentIndex)];
         if (a.mode != Agent::Mode::Pedestrian || buses_.empty() ||
-            isBus(agentIndex) || isTaxi(agentIndex) || buses_.tripOf(agentIndex))
+            onService(agentIndex) || buses_.tripOf(agentIndex))
             return false;
         const int origin = nav_->nearestNode(a.pos);
         const int to = nav_->nearestNode(dest);
@@ -836,7 +860,7 @@ public:
     bool sendAgentByTrain(int agentIndex, engine::Vec2 dest) {
         if (!nav_ || !rail_.active() || agentIndex < 0 || agentIndex >= static_cast<int>(agents_.size())) return false;
         Agent& a = agents_[static_cast<std::size_t>(agentIndex)];
-        if (a.mode != Agent::Mode::Pedestrian || isBus(agentIndex) || isTaxi(agentIndex) || buses_.tripOf(agentIndex) ||
+        if (a.mode != Agent::Mode::Pedestrian || onService(agentIndex) || buses_.tripOf(agentIndex) ||
             rail_.tripOf(agentIndex))
             return false;
         const int origin = nav_->nearestNode(a.pos);
@@ -1310,6 +1334,26 @@ public:
     // (roles.lua at level load; defaultRoleCatalog otherwise). Re-seats every agent on its new table.
     void setRoleCatalog(RoleCatalog c);
     const RoleCatalog& roles() const { return roles_; }
+    // THE PLACE KINDS (place_kinds.h): places.lua at level load, defaultPlaceKindCatalog otherwise. The PlaceMap's kind
+    // indexes and tag bits are this catalog's: set it before the places are given their kinds.
+    void setPlaceKinds(PlaceKindCatalog c) { placeKinds_ = std::move(c); }
+    const PlaceKindCatalog& placeKinds() const { return placeKinds_; }
+    // WHO LIVES HERE (people.lua): ages, life stages and household types; assignPlaces fills the dwellings with them.
+    void setPeople(PeopleCatalog c) { people_ = std::move(c); }
+    const PeopleCatalog& people() const { return people_; }
+    // HOW TALL agent i is drawn against a grown adult (people.lua band heights, by age): 1 for anyone the plan did
+    // not make (a bus or cab driver)
+    Real bodyScale(int agentIndex) const {
+        if (agentIndex < 0 || agentIndex >= static_cast<int>(agents_.size())) return 1.0;
+        const Agent& a = agents_[static_cast<std::size_t>(agentIndex)];
+        return a.stage < 0 ? 1.0 : static_cast<Real>(people_.heightAt(a.age));
+    }
+    // The households assignPlaces housed the agents in (Agent::household indexes it), and what it came to.
+    const HouseholdPlan& households() const { return households_; }
+    std::string populationLine() const { return describePlan(people_, households_); }
+    // Agents assignPlaces could give no household (more people than the housing holds, an authored count), drivers
+    // of buses and cabs aside: they take a home by floor area, as everyone did before households.
+    int unhousedCount() const { return unhoused_; }
     // One role's table replaced outright (a level script's own day for it); false when the role is unknown.
     bool setRoleTable(const std::string& role, GoalTable t);
     // Places people go out to (everything but homes), for outings and lunch.
@@ -1318,7 +1362,8 @@ public:
         int node = -1;
         engine::Vec2 door;
         Real openHour = 0, closeHour = 24;
-        uint8_t campus = 0;   // Place::campus: 1 teaching hall, 2 library, 3 residence, 4 quad, 5 field
+        int16_t kind = -1;    // Place::kind (placeKinds()), and its tags
+        uint32_t tags = 0;
         PlaceId place = kNoPlace;
         // THE HOURS SOMEBODY WORKS THERE (bit h: someone hired there is at work at h:30; indexVenueStaffing). A shop,
         // cafe, restaurant, bar, club or supermarket nobody is on shift at is CLOSED to customers, whatever its hours
@@ -1335,6 +1380,15 @@ public:
     const std::vector<Venue>& venues() const { return venues_; }
     // How many agents assignPlaces made students (0 without a campus with a residence and a teaching hall).
     int studentCount() const { return students_; }
+    // Does this agent's role spend the day OUT, not at work (roles.lua `commute = false`: a child, someone at home,
+    // the retired)?
+    bool daysOut(const Agent& a) const {
+        return a.role < roles_.roles.size() && !roles_.roles[a.role].day.commute;
+    }
+    // A student: a resident of a hall's beds (people.lua's stage with beds) with a class to go to.
+    bool isStudent(const Agent& a) const {
+        return a.stage >= 0 && people_.stages[static_cast<std::size_t>(a.stage)].beds && a.workPlace != kNoPlace;
+    }
     void setActivityCatalog(ActivityCatalog c) { catalog_ = std::move(c); }
     const ActivityCatalog& activityCatalog() const { return catalog_; }
     // Debug: agent i's follow gap and its minimum (computeGaps), +inf with no leader.
@@ -1407,6 +1461,7 @@ public:
         Kind kind = Kind::Seat;
         engine::Vec2 pos, face{0, 1};
         Real hip = 0;
+        bool raised = false;   // Lie on furniture (a sun lounger): `hip` is its bed's height, not the ground
     };
     bool restPose(int agentIndex, RestPose& out) const;
     // EVERYTHING ABOUT ONE AGENT, on one line (the `who?` and `speeders?` debug commands): tier, where, how fast,
@@ -1418,7 +1473,7 @@ public:
     struct Census {
         int agents = 0, walkers = 0, drivers = 0;
         int walkersOutside = 0, walkersMoving = 0, driversMoving = 0, riding = 0, waiting = 0;
-        static constexpr int kRoles = 16;   // by role id (roles().roles: commuter, shopkeeper, stroller, student, the staff...)
+        static constexpr int kRoles = 16;   // by role id (roles().roles)
         int byRole[kRoles] = {}, outsideByRole[kRoles] = {};
         int atWorkByRole[kRoles] = {};   // resting in a state wearing AtWork (on shift, in class)
         int outing = 0;                   // wearing Outing: at or on the way to a stop, by day or by night
@@ -1475,6 +1530,11 @@ public:
         hailMinMetres_ = minMetres;
     }
     bool isTaxi(int i) const;
+    // ON A SERVICE (#172): drafted off the driver pool by a vehicle service -- the bus network (setBuses), the cab
+    // dispatch (setTaxis) -- to run the service's own table, not a day: no home or job of its own to hire from, no
+    // schedule, no bay, no ride on a bus or a train. Code that only needs "is this someone's day?" asks this, never
+    // which service; a new service (a train's crew, a ferry's) joins here and every such question follows.
+    bool onService(int i) const { return isBus(i) || isTaxi(i); }
 
     // Make agents LIVE in the city (ADR-0066 Phase 3). Assign each agent a home
     // (a Home place) and a job (a routable Shop/Office/Civic place), pin its
@@ -1599,15 +1659,15 @@ private:
         return roleTables_[static_cast<std::size_t>(dayRoleOf(a))];
     }
     GoalTable& tableFor(const Agent& a) { return const_cast<GoalTable&>(static_cast<const CitySim&>(*this).tableFor(a)); }
-    // The role whose day an agent runs: its own -- except a stroller with no day out to take (one who drives, or
-    // a city with nowhere to go), whose park is its "work": the commuter's day (the historical park-as-destination).
+    // The role whose day an agent runs: its own -- except a day out with none to take (one who drives, or a city
+    // with nowhere to go), whose park is its "work": the catch-all job's day (the historical park-as-destination).
     int dayRoleOf(const Agent& a) const {
         const int r = static_cast<int>(a.role);
-        if (r < 0 || r >= static_cast<int>(roleTables_.size())) return 0;
-        if (a.role == kRoleStroller && (a.archetype != Agent::Mode::Pedestrian || venues_.empty())) return 0;
+        if (r < 0 || r >= static_cast<int>(roleTables_.size())) return catchAllRole_;
+        if (daysOut(a) && (a.archetype != Agent::Mode::Pedestrian || venues_.empty())) return catchAllRole_;
         return r;
     }
-    bool outingStroller(const Agent& a) const { return !wander_ && a.role == kRoleStroller && dayRoleOf(a) != 0; }
+    bool outingStroller(const Agent& a) const { return !wander_ && daysOut(a) && dayRoleOf(a) == static_cast<int>(a.role); }
     int pickOuting(Agent& a, int origin);   // GoalTarget::Outing -> a node (sets tripVenue)
     int pickCampusBreak(Agent& a, int origin);   // GoalTarget::Campus -> a node (tripVenue / tripSeat)
     // Free seats near the campus (quad benches, bleachers): the seats within reach of a quad or field venue.
@@ -1890,6 +1950,12 @@ private:
     SignalTiming signalTiming_;
     // THE ROLES and each one's day (setRoleCatalog); the wanderers' tables (the agent lab) beside them.
     RoleCatalog roles_ = defaultRoleCatalog();
+    PlaceKindCatalog placeKinds_ = defaultPlaceKindCatalog();
+    PeopleCatalog people_ = defaultPeopleCatalog();
+    HouseholdPlan households_;
+    int unhoused_ = 0;
+    uint32_t seed_ = 1;   // build()'s: the households' order
+    int catchAllRole_ = 0;   // roles_.catchAllJobRole(), kept with the role tables
     std::vector<GoalTable> roleTables_ = [] {
         std::vector<GoalTable> v;
         for (const ResidentRole& r : defaultRoleCatalog().roles) v.push_back(buildDayTable(r.day));
@@ -1902,6 +1968,10 @@ private:
     // the night's venues (restaurants, bars, clubs) by 250 m cell, for eveningVenue (indexNightVenues)
     std::unordered_map<int64_t, std::vector<int>> nightVenues_;
     void indexNightVenues();
+    // THE EVENING JOBS (roles.lua side_job): each holder of a role with one, by its share, takes one of the four nearest
+    // venues of its kinds open through its shift, within reach of home. Before indexVenueStaffing: their shifts staff it.
+    void assignSideJobs();
+    int sideJobs_ = 0;
     // Venue::staffed from the hired staff's work windows (their schedules: at work from departHome + the commute to
     // their work departure). Counts of the result in venueStaffing_.
     void indexVenueStaffing();

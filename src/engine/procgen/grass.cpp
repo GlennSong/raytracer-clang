@@ -2,6 +2,7 @@
 #include "../../proc_rng.h"
 #include "../mesh_builder.h"
 
+#include <algorithm>
 #include <cstdio>
 #include <string>
 
@@ -84,23 +85,52 @@ RenderMesh grassClump(uint32_t seed, const GrassClumpParams& p) {
 }
 
 RenderMesh grassCardMesh(const GrassClumpParams& p) {
-    // a card is a patch of field about a metre across, a little taller than a clump (its tallest blades)
-    return MeshBuilder::crossCards(1.3, p.height * 1.25, 3);
+    // a card is a patch of field about a metre across, a little taller than a clump (its tallest blades): ONE
+    // plane, which mesh.vert turns to face the camera (crossed planes seen from above read as six-pointed stars
+    // -- Glenn, 2026-11-05: "I can still see the cards ... on the hilly parts of the terrain")
+    return MeshBuilder::crossCards(1.0, p.height * 1.25, 1);
 }
 
-TextureData grassCardTexture(uint32_t seed, const GrassClumpParams& p) {
-    char key[256];
-    std::snprintf(key, sizeof key, "grassCard/v2/%u/%.4f,%.4f,%.4f/%.4f,%.4f,%.4f/%.3f", seed, p.rootColor.x, p.rootColor.y,
-                  p.rootColor.z, p.tipColor.x, p.tipColor.y, p.tipColor.z, p.lean);
+TextureData grassCardTexture(uint32_t seed, const GrassClumpParams& p, const std::vector<Vec3>& flowerColors) {
+    // (a sparser layer bakes sparser cards: five blades a clump's blade, the 90 of a sward at most)
+    const int count = std::clamp(5 * p.blades, 20, 90);
+    const double crown = 0.45;   // a tussock's dome, not a flat-topped strip
+    std::vector<Vec3> heads = flowerColors;
+    if (p.flowers > 0 && heads.empty()) heads.push_back(p.flowerColor);
+    if (p.flowers <= 0) heads.clear();
+    std::string key = "grassCard/v4/" + std::to_string(seed);
+    char part[160];
+    std::snprintf(part, sizeof part, "/%.4f,%.4f,%.4f/%.4f,%.4f,%.4f/%.3f/%d", p.rootColor.x, p.rootColor.y, p.rootColor.z,
+                  p.tipColor.x, p.tipColor.y, p.tipColor.z, p.lean, count);
+    key += part;
+    for (const Vec3& c : heads) {
+        std::snprintf(part, sizeof part, "/f%.3f,%.3f,%.3f", c.x, c.y, c.z);
+        key += part;
+    }
     return bakeCached(key, [&] {
-        const int count = 90;
         const double width = 0.03, minHeight = 0.4;
-        const Field2 mask = fieldBlades(seed, count, width, p.lean, minHeight);
-        const Field2 tone = fieldBladeTone(seed, count, width, p.lean, minHeight);
-        // root to tip as the clumps' vertex colours run, each blade a little lighter or darker
-        const ColorField2 base = colorMixBy(colorConstant(p.rootColor), colorConstant(p.tipColor),
+        const Field2 mask = fieldBlades(seed, count, width, p.lean, minHeight, crown);
+        const Field2 tone = fieldBladeTone(seed, count, width, p.lean, minHeight, crown);
+        // root to tip as the clumps' vertex colours run, each blade a little lighter or darker -- but from halfway
+        // up: a card's coverage is mostly its dense foot, and a clump's dark root (its blades shading each other,
+        // seen between them up close) made every far card a dark dash on the ground
+        const Vec3 foot = p.rootColor + (p.tipColor - p.rootColor) * 0.55;
+        const ColorField2 base = colorMixBy(colorConstant(foot), colorConstant(p.tipColor),
                                             fieldSmoothstep(fieldGradientY(), 0.0, 1.0));
-        return bakeFieldRGBA(colorMul(base, fieldScaleBias(tone, 0.5, 0.75)), mask, 256, false);
+        const ColorField2 grass = colorMul(base, fieldScaleBias(tone, 0.5, 0.75));
+        if (heads.empty()) return bakeFieldRGBA(grass, mask, 256, false);
+        // FLOWERS in the far field (a flowering layer's clumps end at its fadeEnd; without them in its cards the
+        // meadow's colour ended at a line and grew in as you walked -- Glenn: "the flowers tend to pop in"): a head
+        // in about half the cells of an 8 x 8 lattice, high in the blades and away from the dome's short sides, in
+        // one of the layer's colours
+        const Field2 cell = fieldCells(seed ^ 0x5F1Du, 8), pick = fieldCellId(seed ^ 0x5F1Du, 8);
+        const Field2 head = fieldMul(fieldMul(fieldInvert(fieldSmoothstep(cell, 0.2, 0.3)),
+                                              fieldInvert(fieldSmoothstep(pick, 0.5, 0.52))),
+                                     fieldMul(fieldMul(fieldSmoothstep(fieldGradientY(), 0.45, 0.55),
+                                                       fieldInvert(fieldSmoothstep(fieldGradientY(), 0.82, 0.9))),
+                                              fieldSmoothstep(fieldStripes(0.5), 0.72, 0.8)));
+        const ColorField2 petals = colorPalette(fieldScaleBias(pick, 2.0, 0.0), heads);
+        return bakeFieldRGBA(colorMixBy(grass, petals, fieldSmoothstep(head, 0.3, 0.6)), fieldMax(mask, head), 256, false);
     });
 }
 

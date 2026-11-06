@@ -84,7 +84,7 @@ struct MaterialUniforms {
 struct GPUInstanceData {
     simd_float4x4 model;
     simd_float4x4 normalMatrix;
-    simd_float4   albedo;      // w unused
+    simd_float4   albedo;      // w: FLAG_LAMP_STATE's lit-lamp mask (ADR-0342), else 0
     float         metallic;
     float         roughness;
     float         opacity;

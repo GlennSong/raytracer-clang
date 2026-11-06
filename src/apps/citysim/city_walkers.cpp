@@ -3,6 +3,7 @@
 #include <cstdio>
 
 #include "../../engine/asset_manager.h"
+#include "../../engine/board_meshes.h"   // the skateboard and scooter a child rides
 #include "../../engine/components.h"
 #include "../../engine/mesh_builder.h"
 #include "../../engine/world.h"
@@ -74,13 +75,19 @@ void CityWalkerSystem::watchDrawn(Walker& w, Vec2 p, int path, Real dt, const Ci
 }
 
 engine::MeshHandle CityWalkerSystem::poseMesh(engine::AssetManager& assets,
-                                              int outfit, int pose) {
-    int key = outfit * kWalkPoses + pose;
+                                              int outfit, int pose, Real bodyScale) {
+    // A CHILD'S HEAD (Glenn, 2026-11-05: "Children tend to have slightly bigger heads and smaller bodies. Maybe their
+    // heads aren't the size of a full on adult's head but I think there's a proportion to keep in mind"): scaled with
+    // the body, a 1.15 m six-year-old's head came out 64 % of an adult's; a real one is about 90 %. Three heads, by
+    // how tall: an adult's, an older child's (x1.15 before the scale), a small child's (x1.4)
+    const int bin = bodyScale >= 0.88 ? 0 : bodyScale >= 0.7 ? 1 : 2;
+    static const Real kHead[3] = {1.0, 1.15, 1.4};
+    int key = (outfit * kWalkPoses + pose) * 3 + bin;
     auto it = poseMeshes_.find(key);
     if (it != poseMeshes_.end()) return it->second;
     engine::MeshHandle h = assets.acquireMesh(
-        buildPersonMesh(walkPoseSwing(pose), outfit),
-        "citywalk:person" + std::to_string(outfit) + ":" + std::to_string(pose));
+        buildPersonMesh(walkPoseSwing(pose), outfit, kHead[bin]),
+        "citywalk:person" + std::to_string(outfit) + ":" + std::to_string(pose) + (bin ? ":child" + std::to_string(bin) : ""));
     poseMeshes_[key] = h;
     return h;
 }
@@ -182,7 +189,7 @@ void CityWalkerSystem::spawnWalkers(engine::FrameContext& ctx) {
         int outfit = static_cast<int>((static_cast<uint32_t>(i) * 2654435761u >> 8) %
                                       static_cast<uint32_t>(personOutfitCount()));
         Renderable r;
-        r.mesh = poseMesh(ctx.assets, outfit, 0);
+        r.mesh = poseMesh(ctx.assets, outfit, 0, sim.bodyScale(static_cast<int>(i)));
         r.material.albedo = Vec3(1, 1, 1);
         r.material.metallic = 0.0f;
         r.material.roughness = 0.9f;
@@ -342,6 +349,26 @@ void CityWalkerSystem::driveWalkers(engine::FrameContext& ctx) {
 
     std::vector<CityRenderSystem::ExternalAgentPose> widgetPoses;
     widgetPoses.reserve(walkers_.size());
+    // THE BOARDS (a child skating round the block): made once, refilled below from the walkers riding one
+    engine::InstanceGroup* boards[2] = {nullptr, nullptr};
+    for (int k = 0; k < 2; ++k) {
+        if (!boardGroups_[k].valid()) {
+            boardGroups_[k] = world.create();
+            engine::InstanceGroup bg;
+            bg.mesh = ctx.assets.acquireMesh(k == 0 ? engine::buildSkateboard() : engine::buildScooter(),
+                                             k == 0 ? "citywalk:skateboard" : "citywalk:scooter");
+            bg.material.albedo = Vec3(1, 1, 1);
+            bg.material.roughness = 0.6f;
+            bg.renderLayer = engine::LayerSim;
+            bg.drawClass = engine::DrawClass::SimBody;
+            bg.boundsRadius = 1e7;   // (a handful of boards anywhere near the player: never culled as a group)
+            world.add<engine::InstanceGroup>(boardGroups_[k], bg);
+        }
+    }
+    for (int k = 0; k < 2; ++k) {   // (after both are made: adding one may move the other)
+        boards[k] = world.get<engine::InstanceGroup>(boardGroups_[k]);
+        if (boards[k]) boards[k]->transforms.clear();
+    }
 
     for (Walker& w : walkers_) {
         if (!world.alive(w.entity)) continue;
@@ -369,6 +396,8 @@ void CityWalkerSystem::driveWalkers(engine::FrameContext& ctx) {
                 pw.setCharacterPosition(cc->characterId, Vec3(rp.pos.x, gy + kCapsuleHalf + kCapsuleRadius, rp.pos.y));
             const Quat yaw = Quat::fromAxisAngle(Vec3(0, 1, 0), std::atan2(rp.face.x, rp.face.y));
             engine::MeshHandle mesh;
+            const Real s = sim.bodyScale(w.agentId);   // (how tall: about the hip on a seat, else the ground)
+            t->scale = Vec3(s, s, s);
             if (rp.kind == CitySim::RestPose::Kind::Seat) {
                 auto it = seatedMeshes_.find(w.outfit);
                 if (it == seatedMeshes_.end())
@@ -383,11 +412,16 @@ void CityWalkerSystem::driveWalkers(engine::FrameContext& ctx) {
                     it = groundSitMeshes_.emplace(w.outfit, ctx.assets.acquireMesh(buildGroundSittingPersonMesh(w.outfit),
                                                                                   "citywalk:groundsit" + std::to_string(w.outfit))).first;
                 mesh = it->second;
-                t->position = Vec3(rp.pos.x, gy + kGroundSitHip, rp.pos.y);
+                t->position = Vec3(rp.pos.x, gy + kGroundSitHip * s, rp.pos.y);
                 t->orientation = yaw;
-            } else {   // lying on its back, feet the way it faces
-                mesh = poseMesh(ctx.assets, w.outfit, 0);
-                t->position = Vec3(rp.pos.x, gy + kLieHalfDepth, rp.pos.y);
+            } else {   // lying on its back, feet the way it faces, in the pose the crowd draws it in (by its agent)
+                const int v = w.agentId % engine::kLiePoses, key = w.outfit * engine::kLiePoses + v;
+                auto it = lieMeshes_.find(key);
+                if (it == lieMeshes_.end())
+                    it = lieMeshes_.emplace(key, ctx.assets.acquireMesh(buildLyingPersonMesh(w.outfit, v),
+                                                                        "citywalk:lie" + std::to_string(key))).first;
+                mesh = it->second;
+                t->position = Vec3(rp.pos.x, (rp.raised ? rp.hip : gy) + kLieHalfDepth * s, rp.pos.y);
                 t->orientation = yaw * Quat::fromAxisAngle(Vec3(1, 0, 0), -engine::PI * 0.5);
             }
             if (Renderable* r = world.get<Renderable>(w.entity)) r->mesh = mesh;
@@ -429,7 +463,7 @@ void CityWalkerSystem::driveWalkers(engine::FrameContext& ctx) {
                 Vec3(0, 1, 0), std::atan2(w.facing.x, w.facing.y));
             const int pose = walkPoseIndex(w.stride, g.speed, dt);
             if (Renderable* r = world.get<Renderable>(w.entity))
-                r->mesh = poseMesh(ctx.assets, w.outfit, pose);
+                r->mesh = poseMesh(ctx.assets, w.outfit, pose, sim.bodyScale(w.agentId));
             watchDrawn(w, Vec2(t->position.x, t->position.z), 1, dt, sim);
             continue;
         }
@@ -486,8 +520,10 @@ void CityWalkerSystem::driveWalkers(engine::FrameContext& ctx) {
             Vec2 steer(0, 0);
             Vec2 to(g.pos.x - posXZ.x, g.pos.y - posXZ.y);
             Real d = to.length();
+            // (on a board the body keeps up with its ride: the ceiling scales with the pace)
+            const Real walkMax = kWalkMax * std::max(Real(1), sim.ridePace(g));
             if (d > kWalkStandoff) {
-                Real speed = std::min(kWalkMax, kWalkGain * (d - kWalkStandoff));
+                Real speed = std::min(walkMax, kWalkGain * (d - kWalkStandoff));
                 steer = Vec2(to.x / d * speed, to.y / d * speed);
             }
             for (std::size_t p = 0; p < people.size(); ++p) {
@@ -500,7 +536,7 @@ void CityWalkerSystem::driveWalkers(engine::FrameContext& ctx) {
                 }
             }
             Real sl = steer.length();
-            if (sl > kWalkMax) steer = steer * (kWalkMax / sl);
+            if (sl > walkMax) steer = steer * (walkMax / sl);
             desired = Vec3(steer.x, 0, steer.y);
             // Wants to walk but the body is pinned (crowd, parked car, wall):
             // stop trying for a beat — a standing person reads as "waiting", a
@@ -540,10 +576,11 @@ void CityWalkerSystem::driveWalkers(engine::FrameContext& ctx) {
         // WALK CYCLE: the stride phase advances with the body's REAL speed, so
         // the legs move exactly as fast as the ground goes by — a held body
         // stands (pose 0), a knocked-down one keeps whatever it fell in.
+        const Ride ride = sim.rideOf(w.agentId);   // on a board: standing on it, rolling
         if (!down) {
-            int pose = walkPoseIndex(w.stride, hSpeed, dt);
+            int pose = ride != Ride::None ? 0 : walkPoseIndex(w.stride, hSpeed, dt);
             if (Renderable* r = world.get<Renderable>(w.entity))
-                r->mesh = poseMesh(ctx.assets, w.outfit, pose);
+                r->mesh = poseMesh(ctx.assets, w.outfit, pose, sim.bodyScale(w.agentId));
         }
 
         // Pose write-back. Standing: the box rides the capsule centre. Down: lay
@@ -562,9 +599,15 @@ void CityWalkerSystem::driveWalkers(engine::FrameContext& ctx) {
             t->orientation = yawQ * Quat::fromAxisAngle(Vec3(1, 0, 0), engine::PI * 0.5);
             t->scale = Vec3(1, 1, 1);
         } else {
-            t->position = pos;
+            // HOW TALL (people.lua band heights by age): the body scaled about its feet, the capsule's foot
+            const Real s = sim.bodyScale(w.agentId);
+            const Real feet = pos.y - (kCapsuleHalf + kCapsuleRadius);
+            const Real deck = ride == Ride::Skateboard ? 0.12 : ride == Ride::Scooter ? 0.09 : 0.0;   // stood on its deck
+            t->position = Vec3(pos.x, pos.y - (kCapsuleHalf + kCapsuleRadius) * (1.0 - s) + deck, pos.z);
             t->orientation = yawQ;
-            t->scale = Vec3(1, 1, 1);
+            t->scale = Vec3(s, s, s);
+            engine::InstanceGroup* bg = ride == Ride::Skateboard ? boards[0] : ride == Ride::Scooter ? boards[1] : nullptr;
+            if (bg) bg->transforms.push_back(engine::Mat4::translate(pos.x, feet, pos.z) * engine::Mat4::rotateY(yaw));
         }
 
         // THE LEASH NEEDS A WAY OUT. The tether holds the plan back until the
@@ -701,7 +744,7 @@ void CityWalkerSystem::fixedUpdate(engine::FrameContext& ctx) {
             const int li = a.route.links[static_cast<std::size_t>(a.leg)];
             if (li < 0 || li >= ng.linkCount() || !ng.links[static_cast<std::size_t>(li)].footpath) continue;
             ++S.onWalks;
-            S.studentsOnWalks += a.role == kRoleStudent ? 1 : 0;
+            S.studentsOnWalks += sm.isStudent(a) ? 1 : 0;
             if (S.onWalks == 1 && std::getenv("RT_WALK_DEBUG")) {
                 const engine::NavLink& L0 = ng.links[static_cast<std::size_t>(li)];
                 const int ai = static_cast<int>(i);
@@ -807,6 +850,7 @@ void CityWalkerSystem::onStop(engine::FrameContext& ctx) {
     poseMeshes_.clear();
     seatedMeshes_.clear();
     groundSitMeshes_.clear();
+    lieMeshes_.clear();
 }
 
 }  // namespace citysim

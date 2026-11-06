@@ -1,5 +1,6 @@
 #include "island_scene.h"
 #include "../city/roads/lanes/road_graph_spec.h"   // the road class table (the mountain row)
+#include "../city/polyline.h"   // segmentsCross, nearestOnPolyline
 
 #include <algorithm>
 #include <cmath>
@@ -17,29 +18,6 @@ json pointsJson(const std::vector<Vec2>& pts) {
     json a = json::array();
     for (const Vec2& p : pts) a.push_back({p.x, p.y});
     return a;
-}
-
-double distToPolyline(const Vec2& p, const std::vector<Vec2>& P, Vec2* foot = nullptr) {
-    double best = 1e30;
-    for (std::size_t i = 0; i + 1 < P.size(); ++i) {
-        const Vec2 a = P[i], ab = P[i + 1] - a;
-        const double L2 = ab.x * ab.x + ab.y * ab.y;
-        const double t = L2 > 1e-12 ? std::clamp(((p - a).x * ab.x + (p - a).y * ab.y) / L2, 0.0, 1.0) : 0.0;
-        const Vec2 f = a + ab * t;
-        const double d = (p - f).length();
-        if (d < best) { best = d; if (foot) *foot = f; }
-    }
-    return best;
-}
-
-bool segCross(const Vec2& a, const Vec2& b, const Vec2& c, const Vec2& d, Vec2& x) {
-    const Vec2 r = b - a, s = d - c;
-    const double den = r.x * s.y - r.y * s.x;
-    if (std::fabs(den) < 1e-12) return false;
-    const double t = ((c - a).x * s.y - (c - a).y * s.x) / den, u = ((c - a).x * r.y - (c - a).y * r.x) / den;
-    if (t < 0 || t > 1 || u < 0 || u > 1) return false;
-    x = a + r * t;
-    return true;
 }
 
 }  // namespace
@@ -70,6 +48,12 @@ json islandLanesScene(const IslandWorld& w, const std::vector<json>& placeScenes
         if (scene.contains("classes") && scene["classes"].contains(k) && !(scene["classes"][k].contains("edges") &&
                                                                            scene["classes"][k]["edges"].contains("at_grade")))
             scene["classes"][k]["edges"]["at_grade"] = {{"kind", "guardrail"}, {"min_drop", 2.5}};
+    // a place's footways (a hill town's lanes down, ADR-0326): the island's class table is the first place's, so a
+    // footway class any place uses is added to it
+    for (const json& ps : placeScenes)
+        if (ps.is_object() && ps.contains("classes") && ps["classes"].contains("footway") && scene.contains("classes") &&
+            !scene["classes"].contains("footway"))
+            scene["classes"]["footway"] = ps["classes"]["footway"];
     json edges = json::array();
     const bool windowed = o.windowHalf > 0.0;
     auto inWin = [&](const Vec2& p, double margin) {
@@ -245,7 +229,7 @@ json islandLanesScene(const IslandWorld& w, const std::vector<json>& placeScenes
             for (std::size_t i = 0; i + 1 < rd.points.size(); ++i)
                 for (std::size_t j = 0; j + 1 < R0.size(); ++j) {
                     Vec2 x;
-                    if (segCross(rd.points[i], rd.points[i + 1], R0[j], R0[j + 1], x)) {
+                    if (segmentsCross(rd.points[i], rd.points[i + 1], R0[j], R0[j + 1], x)) {
                         crossings.push_back(x);
                         const Vec2 d = rd.points[i + 1] - rd.points[i];
                         crossDir.push_back(d * (1.0 / std::max(1e-9, d.length())));
@@ -278,14 +262,14 @@ json islandLanesScene(const IslandWorld& w, const std::vector<json>& placeScenes
                 const std::vector<Vec2>& P = chains[side][c];
                 json floors = json::array();
                 for (const json& f : sharedWater) {   // the other side's floors, where they reach this one
-                    Vec2 at;
-                    if (distToPolyline(Vec2(f[0].get<double>(), f[1].get<double>()), P, &at) > f[3].get<double>() + o.carriage) continue;
-                    floors.push_back({at.x, at.y, f[2], f[3]});
+                    const PolylineNearest at = nearestOnPolyline(Vec2(f[0].get<double>(), f[1].get<double>()), P);
+                    if (at.dist > f[3].get<double>() + o.carriage) continue;
+                    floors.push_back({at.foot.x, at.foot.y, f[2], f[3]});
                 }
                 for (const Vec2& x : crossings) {
-                    Vec2 f;
-                    if (distToPolyline(x, P, &f) > o.carriage + 20.0) continue;
-                    floors.push_back({f.x, f.y, underHigh(x) + o.underClearance, 30.0});
+                    const PolylineNearest f = nearestOnPolyline(x, P);
+                    if (f.dist > o.carriage + 20.0) continue;
+                    floors.push_back({f.foot.x, f.foot.y, underHigh(x) + o.underClearance, 30.0});
                 }
                 const std::vector<std::vector<Vec2>> pieces = clip(P);
                 for (std::size_t q = 0; q < pieces.size(); ++q) {
@@ -307,12 +291,11 @@ json islandLanesScene(const IslandWorld& w, const std::vector<json>& placeScenes
     std::vector<std::vector<Lookout>> lookouts(w.roads.size());
     for (std::size_t k = 0; k < w.roads.size(); ++k) {
         const IslandRoad& rd = w.roads[k];
-        if ((rd.kind != "pass" && rd.kind != "mountain") || rd.points.size() < 4) continue;
+        if ((rd.kind != "pass" && rd.kind != "mountain" && rd.kind != "coast") || rd.points.size() < 4) continue;
         std::vector<Vec2> targets;
         for (const auto& site : w.sites) targets.push_back(site.at);
         if (w.hydro) for (const Lake& lk : w.hydro->lakes()) targets.push_back(Vec2(0.5 * (lk.minX + lk.maxX), 0.5 * (lk.minZ + lk.maxZ)));
-        std::vector<double> st{0.0};
-        for (std::size_t i = 1; i < rd.points.size(); ++i) st.push_back(st.back() + (rd.points[i] - rd.points[i - 1]).length());
+        const std::vector<double> st = stations(rd.points);   // (polyline.h)
         auto at = [&](double s) {
             const std::size_t i = std::min<std::size_t>(rd.points.size() - 2, static_cast<std::size_t>(std::upper_bound(st.begin(), st.end(), s) - st.begin()) - 1);
             const double t = std::clamp((s - st[i]) / std::max(1e-9, st[i + 1] - st[i]), 0.0, 1.0);

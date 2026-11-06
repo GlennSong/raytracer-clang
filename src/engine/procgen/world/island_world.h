@@ -21,6 +21,7 @@
 
 #include "../city/polygon.h"   // Vec2
 #include "../hydrology.h"
+#include "settlements.h"
 
 #include <nlohmann/json.hpp>
 
@@ -33,7 +34,7 @@
 namespace engine {
 
 struct IslandSite {
-    std::string kind;          // "city", "town", "mountain town"
+    std::string kind;          // its kind (settlements.lua): "city", "town", "mountain town"
     std::string name;          // place_names.h: what the signs call it
     Vec2 at;
     double radius = 0.0;       // the flat ground it has (m): a city's footprint, a town's
@@ -42,6 +43,11 @@ struct IslandSite {
     bool coastal = false;
     std::vector<std::vector<Vec2>> limits;   // its planned limits (routeFreewayRoundCities), closed
     int population = 0;                      // estimated from its planned buildings (the town-limit sign)
+    // A STRIP town's (a beach town, addBeachTown): the road it grew along -- its seafront street -- and the way inland
+    std::vector<Vec2> spine;
+    Vec2 inland{0, 0};
+    Vec2 beach{0, 0};          // the beach it grew from (a re-plan grows it again from here, --keep-sites)
+    int rows = 0;              // its streets behind the seafront: as many of its kind's as stay clear of the freeway (0: the kind's)
 };
 
 // An INTERCHANGE on the island freeway: a diamond where a road crosses it (islandInterchanges).
@@ -97,6 +103,7 @@ struct IslandWorld {
     std::vector<uint8_t> buildable;
     std::shared_ptr<const Hydrology> hydro;
     std::vector<IslandSite> sites;
+    SettlementCatalog kinds = defaultSettlements();   // what each site's kind IS (settlements.h)
     std::vector<IslandRoad> roads;
     Vec2 axis{1, 0};           // the island's long axis (the range runs along it)
     std::vector<std::vector<Vec2>> ramps;   // the interchanges' ramps (islandInterchanges), centrelines
@@ -128,14 +135,146 @@ nlohmann::json islandTerrainBlock(uint32_t seed, double half = 10000.0);
 // `keep` (optional; Glenn, 2026-10-20, re-planning the island on new ground): the places to keep -- each its name and
 // kind ("city" / "town" / "mountain town") and where it was; it is re-sited on the best flat ground within 900 m of
 // there (the new ground's), and keeps its name. No other place is added. Empty: the sites found and named afresh.
+// `kinds` (settlements.lua; none: defaultSettlements) is what each kind of place is; the plan keeps it (w.kinds).
 IslandWorld planIsland(const nlohmann::json& terrainBlock, double half = 10000.0, double cell = 20.0,
-                       const std::vector<IslandSite>& keep = {});
+                       const std::vector<IslandSite>& keep = {}, const SettlementCatalog* kinds = nullptr);
 
 // HIKING TRAILS (ADR-0134): footpaths routed on the ground (gentle where they can, switchbacking where
 // they must, never over water) from each place's TRAILHEAD -- the edge of its limits facing the range --
 // to its nearest summits and mountain lakes, and between neighbouring places along the coast (a
 // long-distance path). Needs the places' limits (routeFreewayRoundCities). Fills w.trails.
 void planTrails(IslandWorld& w);
+
+// A SANDY SHORE FOR A BEACH TOWN (~/.claude/plans/beach-town.md; Glenn, 2026-11-01: "A beach town with shops and
+// nearby homes" / "Two beach towns if you can fit it"). A shore cell is land beside the sea; it is GENTLE when the
+// ground a little inland stays low (no cliff, no bluff), the sea a little out stays shallow (a shelving beach) and no
+// river meets the sea there. A candidate is a gentle stretch with buildable ground behind it, clear of the places;
+// its score is the stretch's length and the ground behind, less for one far from the freeway (the rail loop runs
+// beside it: a place within the station rule's reach gets its stop).
+struct ShoreRule {
+    double riseAt = 120.0, maxRise = 8.0;             // the ground this far inland no higher than this (m)
+    double offshoreAt = 150.0, minOffshore = -12.0;   // the sea this far out no deeper than this (m)
+    double shoreReach = 700.0;                        // the stretch measured round each shore cell (m, a radius)
+    double minShore = 600.0;                          // gentle coast within it, at least (m)
+    double backDepth = 400.0, minBack = 0.35;         // buildable ground behind, as a share of samples this far in
+    double clearOfPlaces = 1500.0;                    // from a place's edge (its radius)
+    double spacing = 1500.0;                          // between two candidates
+    double apart = 4000.0;                            // between the two picks
+    double freewayReach = 1200.0;                     // farther from the freeway than this scores less
+    int candidates = 6;
+};
+struct ShoreSite {
+    Vec2 at;                  // the middle of its shore
+    Vec2 inland;              // unit, away from the sea
+    double shore = 0.0;       // m of gentle coast round it
+    double back = 0.0;        // the share of buildable ground behind it
+    double toFreeway = 0.0;   // m to the freeway as routed
+    int side = 0;             // which side of the range (+1, -1)
+    double score = 0.0;       // 0..1
+    bool pick = false;        // one of the (up to) two recommended: the best each side, or the best two `apart`
+};
+std::vector<ShoreSite> findBeachSites(const IslandWorld& w, const ShoreRule& rule = {});
+
+// A FOOTHILL TOWN'S GROUND (~/.claude/plans/mountain-towns.md; Glenn, 2026-11-04: "a town at the base of the mountain
+// and then a road that goes into the mountains and a small hamlet or two up in the mountains and then have that road
+// continue across over the mountains and connect up with one of the cities"). The lower slopes inland of the ring:
+// between two heights, well back from the sea, the range rising behind. Nothing here is flat (ADR-0323: the town's
+// ground is regraded), so a candidate is scored by the broad GRADE over its disc and the ROUGHNESS the regrade must
+// cut and fill (the ground off its broad surface, mean), and by how far it is from the freeway. Its FAR CITY is the
+// city across the range from it, where its road over the mountains comes down.
+struct FoothillRule {
+    double minHeight = 50.0, maxHeight = 250.0;   // m above the sea
+    double radius = 300.0;                        // the disc a town is measured over (m)
+    double maxGrade = 0.18;                       // the broad grade over it, at most
+    double riseAt = 1500.0, minRise = 200.0;      // the range behind: this much higher this far uphill (m)
+    double minFromSea = 1500.0;                   // m
+    double clearOfPlaces = 1200.0;                // from a place's edge (its radius)
+    double freewayClear = 400.0;                  // off the freeway's line (m)
+    double freewayReach = 2500.0;                 // farther from the freeway than this scores less
+    double passClear = 1500.0;                    // off the pass (and any high road): its own way over, not the pass's
+    double spacing = 1500.0;                      // between two candidates
+    int candidates = 6;
+};
+struct FoothillSite {
+    Vec2 at;
+    Vec2 uphill;              // unit, toward the range
+    double height = 0.0, grade = 0.0, roughness = 0.0, rise = 0.0;   // m; broad grade; m off the broad surface; m behind
+    double toFreeway = 0.0;   // m
+    int side = 0;             // which side of the range (+1, -1)
+    int farCity = -1;         // the city across the range (a site index; -1: none)
+    double score = 0.0;       // 0..1
+    bool pick = false;        // the best each side
+};
+std::vector<FoothillSite> findFoothillSites(const IslandWorld& w, const FoothillRule& rule = {});
+
+// A PLACE'S GROUND LEVELLED (procgen/regrade.h, ADR-0323): `g` is appended to the terrain block's "regrade" -- so the
+// place's brief, which carries the block, is planned on the levelled ground, and the level built from it stands on it --
+// and the plan's own ground (height, heightSmooth) is sampled again where it changed. Its kind's regrade knobs, over
+// `outline`.
+void regradePlace(IslandWorld& w, const std::vector<Vec2>& outline, const SettlementKind& kind);
+
+// A FOOTHILL TOWN on candidate `c` (findFoothillSites): a site of `kind` (a high-road kind, settlements.lua) appended to
+// w.sites (every other place keeps its index), its disc regraded. Plan it, and its links, as any place; then its high
+// road. Returns the new site's index.
+int addFoothillTown(IslandWorld& w, const FoothillSite& c, const std::string& kind, const std::string& name = {});
+
+// THE HIGH ROAD (Glenn: "a road that goes into the mountains ... and then have that road continue across over the
+// mountains and connect up with one of the cities"): a second pass, from `fromSite`'s limits over a saddle of its own
+// (the range's lowest crossing near the line to the city, `passClear` m or more off the pass) and down to `toSite` --
+// cut where it meets the freeway, as the pass is, and run on into the city's streets by joinPassToTowns. Kind "pass",
+// from the town to the city. Returns its w.roads index; -1 and `why` when there is no way.
+int planHighRoad(IslandWorld& w, int fromSite, int toSite, double passClear = 1500.0, std::string* why = nullptr);
+
+// HAMLETS ON A HIGH ROAD (Glenn: "a handful of buildings... like a street with some buildings", "a small hamlet or two up
+// in the mountains"): up to `count` stretches of road `road`, each its kind's stripLength, chosen where the road runs
+// gentlest and straightest above `minHeight`, `spacing` apart and `endClear` off its ends. Each is a site of `kind` (a
+// strip kind along "high") appended to w.sites, its band regraded; the road becomes its legs. Returns the new sites.
+struct HamletRule {
+    int count = 2;
+    double minHeight = 200.0, spacing = 1500.0, endClear = 700.0;
+    double maxTurnDeg = 50.0;   // the street's bends, summed over its length, at most
+};
+std::vector<int> addHamlets(IslandWorld& w, int road, const std::string& kind, const HamletRule& rule = {});
+
+// How far `q` is from the freeway (m): its route once there is one (w.freewayRoute), else its roads as planned.
+double freewayDistance(const IslandWorld& w, const Vec2& q);
+// A STRIP TOWN'S GROUND (a beach town's): the outline of what it is built on -- from its promenade's sidewalk (or the
+// seafront's, with no promenade) inland to its last row's blocks -- closed. The ground cover draws no sand on it: its
+// blocks' yards sat below the beach band's height and read as holes in the paving. Empty for a place not a strip.
+std::vector<Vec2> stripGround(const IslandWorld& w, const IslandSite& s);
+
+// THE COAST ROAD (~/.claude/plans/beach-town.md; Glenn, 2026-11-01: "a coastal road between cities ... a road that rides
+// along the beach ... where the beach towns grow out of ... a scenic route"): from `fromSite`'s limits through `via`
+// (a beach, findBeachSites) to `toSite`'s. It follows a GUIDE line `guide` metres behind the shore, waypoint to
+// waypoint, routed on the ground in a BAND -- never on the sand (nearer the sea than `back`), never farther inland
+// than `reach`, out of the towns -- graded like a hill road so it may climb a headland. Near its ends it may leave the band to meet the town. Appends an IslandRoad of kind "coast"
+// and returns its index; -1 when the band has no way through (`why`: between which waypoints).
+struct CoastRoadRule {
+    double back = 60.0, reach = 700.0;     // the band: metres from the sea
+    double pinchedBack = 15.0;             // ...nearer the sea where the freeway pinches it, before it crosses the freeway
+    double guide = 150.0;                  // the line it RIDES, this far behind the shore (Glenn: "a road that rides along the beach")
+    double step = 300.0;                   // its waypoints along that line
+    double endFree = 250.0;                // within this of an end, the band does not hold
+    bool clearEnds = true;                 // each end on its place's limits clear of the freeway's corridor (the rail loop's side)
+    double freewayClear = 90.0;            // off the freeway's line by this (m): a scenic road, not its frontage; near an end it may cross
+    double riverWeight = 30.0, riverMargin = 6.0;   // each metre within a river's banks (+ margin) costs this many more: it crosses square (a run along one is no bridge, ADR-0310)
+    double railClear = 24.0;               // off the island loop's line by this (m), the end zones too: it runs beside the freeway on the
+                                           // towns' side, so a road weaving onto it bridged the line twice (outside Ivycombe). Where the
+                                           // shore pinches the road it holds just past it (the loop's line + this) before the freeway's
+    double cell = 16.0, maxGrade = 0.07, hardGrade = 0.12;
+};
+int planCoastRoad(IslandWorld& w, int fromSite, const Vec2& via, int toSite, const CoastRoadRule& rule = {}, std::string* why = nullptr);
+
+// NAMES (place_names.h) for every site that has none, in site order; the site shapes the name (the coast, a river
+// through it, the mountain). planIsland calls it; a site added later (a beach town) is named by it too.
+void nameSites(IslandWorld& w);
+
+// A BEACH TOWN (~/.claude/plans/beach-town.md; Glenn: the coast road "where the beach towns grow out of"): the coast
+// road through `beach` (planCoastRoad, from the nearest coastal place one way along the shore to the nearest the
+// other), and a site of `kind` (a strip kind, settlements.lua) appended to w.sites on its middle `stripLength` -- its
+// spine, the town's seafront street. The road becomes its two legs, each place to the town. Call once the places'
+// limits are known (routeFreewayRoundCities). Returns the new site's index; -1 and `why` when there is no road.
+int addBeachTown(IslandWorld& w, const Vec2& beach, const std::string& kind, const std::string& name = {}, std::string* why = nullptr);
 
 // The pass's (and mountain road's) ends run on into their towns: each end, trimmed at its town's limits,
 // joins the nearest of that town's arterial nodes (ADR-0135). Call after routeFreewayRoundCities.
@@ -199,6 +338,7 @@ struct IslandMapLayer {
     bool casing = false;                   // a dark edge round each line
     std::string dash;                      // an SVG stroke-dasharray over the line in white (a railway's ties); empty: solid
     std::string label;                     // its row in the map's legend; empty: none
+    std::vector<std::pair<Vec2, std::string>> tags;   // words written on the map at points (a candidate's letter)
 };
 struct IslandMapView {
     Vec2 centre{0, 0};

@@ -26,7 +26,7 @@ TEST_CASE(low_flat_roofed_buildings_carry_a_roof_ladder_on_their_back_wall) {
             for (const auto& sz : sizes) {
                 const Poly2 plan = {{0, 0}, {sz[0], 0}, {sz[0], sz[1]}, {0, sz[1]}};
                 BuildingRecipe rc;
-                if (!architectRecipeByName(rn, seed, 1.0, sz[1], sz[0] * sz[1], rc)) continue;
+                if (!architectRecipeByName(rn, seed, 0.0, sz[1], sz[0] * sz[1], rc)) continue;   // (at the rim: the flats stay low)
                 const BuildingParams& p = rc.params;
                 ++buildings;
                 const Real roof = 2.0 + p.groundHeight + p.floors * p.floorHeight;   // (base 2.0)

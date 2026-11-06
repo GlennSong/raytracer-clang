@@ -5,7 +5,7 @@
 namespace engine {
 
 SimClock::SimClock(double fixedStepSeconds)
-    : fixedStepSeconds(fixedStepSeconds > 0.0 ? fixedStepSeconds : 1.0 / 60.0),
+    : fixedStepSeconds(fixedStepSeconds > 0.0 ? fixedStepSeconds : kDefaultFixedStep),
       scale(1.0), accumulator(0.0), alpha(0.0), simTime(0.0) {}
 
 int SimClock::advance(double realDeltaSeconds) {

@@ -1,4 +1,5 @@
 #include "leaf_card.h"
+#include "../../hash.h"   // lowbias32
 
 #include "lsystem.h"
 
@@ -10,13 +11,8 @@ namespace engine {
 
 namespace {
 
-constexpr double kPi = 3.14159265358979323846;
 
-uint32_t mixHash(uint32_t h) {
-    h ^= h >> 16; h *= 0x7feb352du; h ^= h >> 15; h *= 0x846ca68bu; h ^= h >> 16;
-    return h;
-}
-double unit(uint32_t h) { return mixHash(h) / 4294967296.0; }
+double unit(uint32_t h) { return lowbias32(h) / 4294967296.0; }
 
 struct V2 {
     double x = 0, y = 0;
@@ -31,15 +27,15 @@ struct Leaf { V2 base; V2 dir; double len, wid, shade; bool flower = false; };
 // The leaf's half-width at t (0 the base, 1 the tip), a fraction of its full half-width, by shape.
 double halfWidth(const LeafCardSpec& s, double t) {
     if (t <= 0.0 || t >= 1.0) return 0.0;
-    const double sn = std::sin(kPi * t);
+    const double sn = std::sin(PI * t);
     if (s.shape == "needle") return (1.0 - 0.55 * t) * std::min(1.0, t * 10.0) * std::min(1.0, (1.0 - t) * 6.0);
     if (s.shape == "leaflet") return std::pow(sn, 0.55) * (1.0 - 0.3 * t);
     if (s.shape == "lobed") {
         const double env = std::pow(sn, 0.6) * (0.55 + 0.45 * t * (2.0 - t));
-        return env * (0.58 + 0.42 * std::fabs(std::sin(s.lobes * kPi * t)));
+        return env * (0.58 + 0.42 * std::fabs(std::sin(s.lobes * PI * t)));
     }
     if (s.shape == "serrate") {
-        const double env = std::pow(std::sin(kPi * std::pow(t, 0.7)), 0.85) * (1.08 - 0.42 * t);
+        const double env = std::pow(std::sin(PI * std::pow(t, 0.7)), 0.85) * (1.08 - 0.42 * t);
         const double saw = t * s.teeth - std::floor(t * s.teeth);
         return env * (1.0 - 0.10 * saw);
     }
@@ -51,32 +47,27 @@ double halfWidth(const LeafCardSpec& s, double t) {
 bool polarShape(const std::string& shape) {
     return shape == "palmate" || shape == "blossom" || shape == "daisy" || shape == "floret";
 }
-double wrapPi(double a) {
-    while (a > kPi) a -= 2.0 * kPi;
-    while (a < -kPi) a += 2.0 * kPi;
-    return a;
-}
 // Inside the outline at (rho, phi)? (rho a fraction of the radius)
 bool insidePolar(const std::string& shape, int lobes, int teeth, int petals, double notch, double eye, double rho,
                  double phi) {
     if (rho > 1.0) return false;
     if (shape == "palmate") {   // lobes fanned over +-140 deg, the middle one longest, toothed, deep sinuses
         const int n = std::max(3, lobes);
-        const double spread = 0.78 * kPi, step = 2.0 * spread / (n - 1), w = step * 0.62;
+        const double spread = 0.78 * PI, step = 2.0 * spread / (n - 1), w = step * 0.62;
         double r = 0.0;
         for (int k = 0; k < n; ++k) {
             const double pk = -spread + step * k;
             const double Lk = 1.0 - 0.32 * std::pow(std::fabs(pk) / spread, 1.5);
-            const double pointed = std::max(0.0, 1.0 - std::fabs(wrapPi(phi - pk)) / w);
+            const double pointed = std::max(0.0, 1.0 - std::fabs(wrapRadians(phi - pk)) / w);
             r = std::max(r, 0.26 + (Lk - 0.26) * std::pow(pointed, 0.7));
         }
-        const double saw = phi * std::max(1, teeth) * n / kPi;
+        const double saw = phi * std::max(1, teeth) * n / PI;
         r *= 1.0 - 0.06 * (saw - std::floor(saw));
         return rho <= r;
     }
     const int n = std::max(1, petals);
-    const double cell = 2.0 * kPi / n;
-    const double d = wrapPi(phi) - cell * std::round(wrapPi(phi) / cell);   // from the nearest petal's midline
+    const double cell = 2.0 * PI / n;
+    const double d = wrapRadians(phi) - cell * std::round(wrapRadians(phi) / cell);   // from the nearest petal's midline
     const double u = d / (0.5 * cell);                                      // -1 .. 1 across the petal
     if (rho <= eye) return true;
     if (shape == "blossom") {   // round petals, a notch at each tip
@@ -108,7 +99,7 @@ void drawTwig(const LeafCardSpec& s, uint32_t seed, int row, std::vector<Stem>& 
         grammar.rule(substituteVars(r.predecessor, vars), substituteVars(r.successor, vars), r.weight);
     const ModuleString mods = grammar.expand(parseModuleLiterals(substituteVars(s.axiom, vars)), s.iterations, seed);
     struct St { V2 p; double a; int depth; };
-    St st{{0, 0}, kPi * 0.5, 0};   // heading up the card (+y)
+    St st{{0, 0}, PI * 0.5, 0};   // heading up the card (+y)
     std::vector<St> stack;
     uint32_t h = seed * 2654435761u + 7u;
     for (const Module& m : mods) {
@@ -121,14 +112,14 @@ void drawTwig(const LeafCardSpec& s, uint32_t seed, int row, std::vector<Stem>& 
                 st.p = q;
                 break;
             }
-            case '+': st.a += arg * kPi / 180.0; break;
-            case '-': st.a -= arg * kPi / 180.0; break;
+            case '+': st.a += arg * PI / 180.0; break;
+            case '-': st.a -= arg * PI / 180.0; break;
             case '[': stack.push_back(st); ++st.depth; break;
             case ']': if (!stack.empty()) { st = stack.back(); stack.pop_back(); } break;
             case 'W': {   // a flower
                 if (!s.flower.set) break;
                 const double sc = m.params.empty() ? 1.0 : arg;
-                h = mixHash(h + 0x77u);
+                h = lowbias32(h + 0x77u);
                 Leaf lf;
                 lf.base = st.p;
                 lf.dir = {std::cos(st.a), std::sin(st.a)};
@@ -140,7 +131,7 @@ void drawTwig(const LeafCardSpec& s, uint32_t seed, int row, std::vector<Stem>& 
             }
             case 'L': {
                 const double sc = m.params.empty() ? 1.0 : arg;
-                h = mixHash(h + 0x51u);
+                h = lowbias32(h + 0x51u);
                 Leaf lf;
                 lf.base = st.p;
                 lf.dir = {std::cos(st.a), std::sin(st.a)};
@@ -276,8 +267,8 @@ LeafCardAtlas leafCardAtlas(const LeafCardSpec& spec, uint32_t seed, int tileW, 
                         tint = spec.leafTint;
                         // the veins: darker rays out from the stalk along each lobe
                         const int n = std::max(3, spec.lobes);
-                        const double step = 2.0 * 0.78 * kPi / (n - 1);
-                        const double dv = std::fabs(wrapPi(phi + 0.78 * kPi) - step * std::round(wrapPi(phi + 0.78 * kPi) / step));
+                        const double step = 2.0 * 0.78 * PI / (n - 1);
+                        const double dv = std::fabs(wrapRadians(phi + 0.78 * PI) - step * std::round(wrapRadians(phi + 0.78 * PI) / step));
                         b = static_cast<float>(l.shade * (0.86 + 0.14 * rho) * (dv * rho * R < 0.9 * SS ? 0.82 : 1.0));
                     }
                     const double cupk = (l.flower ? 0.6 : spec.cup) * rho;   // cupped: the normal tips out from the centre

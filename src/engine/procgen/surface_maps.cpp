@@ -10,13 +10,8 @@ using Surface = RenderMaterial::Surface;
 namespace {
 
 double clamp01(double x) { return x < 0 ? 0 : (x > 1 ? 1 : x); }
-double smooth(double e0, double e1, double x) {
-    double t = clamp01((x - e0) / (e1 - e0));
-    return t * t * (3 - 2 * t);
-}
 double frac(double x) { return x - std::floor(x); }
 double mixd(double a, double b, double t) { return a + (b - a) * t; }
-Vec3 mixv(const Vec3& a, const Vec3& b, double t) { return a + (b - a) * t; }
 
 // Integer hash -> [0,1], seeded. Stable across platforms (no std::sin reliance).
 double ihash(int x, int y, uint32_t seed) {
@@ -70,7 +65,7 @@ CellHit gridCell(double u, double v, int cellsU, int cellsV, bool runningBond,
     double fx = uu - cu, fy = v * cellsV - row;
     double joint = std::min(std::min(fx, 1 - fx), std::min(fy, 1 - fy));
     CellHit c;
-    c.joint = smooth(0.0, mortar, joint);   // 0 in joint .. 1 on the face
+    c.joint = smoothstep(0.0, mortar, joint);   // 0 in joint .. 1 on the face
     c.cu = ((static_cast<int>(cu) % cellsU) + cellsU) % cellsU;
     c.cv = static_cast<int>(row);
     c.fx = fx; c.fy = fy;
@@ -95,9 +90,9 @@ SurfSample evalBrick(double u, double v, uint32_t seed) {
     double brickV = 0.85 + 0.15 * ihash(c.cu, c.cv, seed) + 0.08 * bump;
     if (ihash(c.cu * 3 + 1, c.cv * 5 + 2, seed) < 0.12) brickV *= 0.7;   // burnt
     s.h = mixd(0.25, brickV, j);                       // mortar recessed
-    Vec3 brick = mixv(Vec3(0.50, 0.22, 0.16), Vec3(0.62, 0.40, 0.28),
+    Vec3 brick = lerp(Vec3(0.50, 0.22, 0.16), Vec3(0.62, 0.40, 0.28),
                       ihash(c.cu, c.cv, seed));
-    s.albedo = mixv(kMortarColor, brick * (0.85 + 0.25 * brickV), j);
+    s.albedo = lerp(kMortarColor, brick * (0.85 + 0.25 * brickV), j);
     s.rough = mixd(0.95, 0.82, j);                     // mortar matte
     return s;
 }
@@ -108,7 +103,7 @@ SurfSample evalConcrete(double u, double v, uint32_t seed) {
     // Control joints on a 2x2 grid.
     double gu = frac(u * 2) * 2 - 1, gv = frac(v * 2) * 2 - 1;
     double joint = std::min(1 - std::abs(gu), 1 - std::abs(gv));
-    double jt = smooth(0.0, 0.04, joint);
+    double jt = smoothstep(0.0, 0.04, joint);
     s.h = mixd(0.4, 0.5 + 0.4 * mott + 0.1 * fine, jt);
     double val = 0.86 + 0.16 * (mott - 0.5) + 0.05 * fine;
     s.albedo = Vec3(0.66, 0.66, 0.64) * val * mixd(0.8, 1.0, jt);
@@ -133,11 +128,11 @@ SurfSample evalRoofTile(double u, double v, uint32_t seed) {
     double uu = u * tilesU + off;
     double cu = std::floor(uu), fx = uu - cu, fy = v * rowsV - row;
     double barrel = std::sin(3.14159265 * fx);          // round pan
-    double lap = smooth(0.0, 0.18, fy);                 // shadow at head lap
-    double valley = smooth(0.0, 0.06, std::min(fx, 1 - fx));
+    double lap = smoothstep(0.0, 0.18, fy);                 // shadow at head lap
+    double valley = smoothstep(0.0, 0.06, std::min(fx, 1 - fx));
     s.h = (0.3 + 0.7 * barrel) * mixd(0.5, 1.0, lap) * mixd(0.4, 1.0, valley);
     double cv = ihash(static_cast<int>(cu), static_cast<int>(row), seed);
-    s.albedo = mixv(Vec3(0.52, 0.24, 0.16), Vec3(0.70, 0.42, 0.26), cv) *
+    s.albedo = lerp(Vec3(0.52, 0.24, 0.16), Vec3(0.70, 0.42, 0.26), cv) *
                mixd(0.7, 1.0, s.h);
     s.rough = 0.8;
     return s;
@@ -145,8 +140,8 @@ SurfSample evalRoofTile(double u, double v, uint32_t seed) {
 SurfSample evalShingle(double u, double v, uint32_t seed) {
     SurfSample s;
     CellHit c = gridCell(u, v, 5, 12, true, 0.06);
-    double tabKey = smooth(0.0, 0.04, std::min(c.fx, 1 - c.fx));
-    double drop = smooth(0.0, 0.12, c.fy);
+    double tabKey = smoothstep(0.0, 0.04, std::min(c.fx, 1 - c.fx));
+    double drop = smoothstep(0.0, 0.12, c.fy);
     double grit = wrapNoise(u, v, 90, seed) - 0.5;
     s.h = mixd(0.45, 0.75, drop) * mixd(0.6, 1.0, tabKey) + 0.05 * grit;
     double cv = ihash(c.cu, c.cv, seed);
@@ -160,9 +155,9 @@ SurfSample evalCorrugated(double u, double v, uint32_t seed) {
     double rib = std::cos(2 * 3.14159265 * u * 8.0);    // 8 ribs across the tile
     double rust = wrapFbm(u, v, 5, 4, seed);
     s.h = 0.5 + 0.5 * rib;
-    double rmask = smooth(0.62, 0.85, rust);
+    double rmask = smoothstep(0.62, 0.85, rust);
     Vec3 steel = Vec3(0.55, 0.58, 0.62) * (0.72 + 0.28 * (0.5 + 0.5 * rib));
-    s.albedo = mixv(steel, Vec3(0.40, 0.22, 0.12), rmask * 0.7);
+    s.albedo = lerp(steel, Vec3(0.40, 0.22, 0.12), rmask * 0.7);
     s.metal = mixd(0.85, 0.1, rmask);                   // rust isn't metallic
     s.rough = mixd(0.45, 0.85, rmask);
     return s;
@@ -210,11 +205,11 @@ SurfSample evalCobble(double u, double v, uint32_t seed) {
             if (d < best) { best = d; bh = ihash(wi + 7, wj + 3, seed); bc = wi; br = wj; }
         }
     double dist = std::sqrt(best);
-    double stone = smooth(0.55, 0.32, dist);            // 1 stone .. 0 gap
-    double dome = smooth(0.5, 0.0, dist);               // rounded top
+    double stone = smoothstep(0.55, 0.32, dist);            // 1 stone .. 0 gap
+    double dome = smoothstep(0.5, 0.0, dist);               // rounded top
     s.h = mixd(0.25, 0.7 + 0.3 * dome, stone);
-    Vec3 stoneCol = mixv(Vec3(0.42, 0.40, 0.38), Vec3(0.58, 0.55, 0.50), bh);
-    s.albedo = mixv(Vec3(0.34, 0.32, 0.30), stoneCol, stone);
+    Vec3 stoneCol = lerp(Vec3(0.42, 0.40, 0.38), Vec3(0.58, 0.55, 0.50), bh);
+    s.albedo = lerp(Vec3(0.34, 0.32, 0.30), stoneCol, stone);
     s.rough = mixd(0.95, 0.7, stone);
     (void)bc; (void)br;
     return s;
@@ -223,12 +218,12 @@ SurfSample evalWood(double u, double v, uint32_t seed) {
     SurfSample s;
     int boards = 6;
     double row = std::floor(v * boards), fy = v * boards - row;
-    double drop = smooth(0.0, 0.1, fy);
+    double drop = smoothstep(0.0, 0.1, fy);
     double grain = wrapNoise(u * 0.5, row * 3.1 + v, 40, seed) +
                    0.3 * (wrapNoise(u, v, 120, seed + 2u) - 0.5);
     double bv = ihash(0, static_cast<int>(row), seed);
     s.h = mixd(0.45, 0.7, drop) + 0.12 * (grain - 0.5);
-    s.albedo = mixv(Vec3(0.42, 0.29, 0.17), Vec3(0.56, 0.40, 0.24),
+    s.albedo = lerp(Vec3(0.42, 0.29, 0.17), Vec3(0.56, 0.40, 0.24),
                     clamp01(0.4 + 0.5 * bv + 0.5 * (grain - 0.5))) *
                mixd(0.7, 1.0, drop);
     s.rough = 0.8;
@@ -343,14 +338,14 @@ SurfSample evalMarble(double u, double v, uint32_t seed) {
     // field, each dark near its fbm midline) through a warm white, height
     // almost flat so the normal pass reads POLISHED, roughness low.
     double field = wrapFbm(u, v, 3, 4, seed);
-    double vein = smooth(0.0, 0.045, std::abs(field - 0.5));
+    double vein = smoothstep(0.0, 0.045, std::abs(field - 0.5));
     double field2 = wrapFbm(u, v, 7, 3, seed + 17u);
-    double vein2 = smooth(0.0, 0.03, std::abs(field2 - 0.5));
+    double vein2 = smoothstep(0.0, 0.03, std::abs(field2 - 0.5));
     double mott = wrapFbm(u, v, 5, 2, seed + 5u);
     Vec3 base = Vec3(0.86, 0.84, 0.81) * (0.96 + 0.07 * mott);
     Vec3 veinC(0.52, 0.52, 0.55);
     double open = std::min(vein, 0.45 + 0.55 * vein2);
-    s.albedo = mixv(veinC, base, open);
+    s.albedo = lerp(veinC, base, open);
     s.h = 0.5 + 0.015 * (mott - 0.5) - 0.012 * (1.0 - open);
     s.rough = 0.22 + 0.08 * (1.0 - open);
     return s;
@@ -377,8 +372,8 @@ SurfSample evalWoodGrain(double u, double v, uint32_t seed) {
     const double warp = 0.06 * (wrapFbm(u, v, 2, 3, seed + 9u) - 0.5);
     const double lines = wrapNoise(u + warp, v * 0.08, 64, seed);            // stretched along v: grain lines
     const double streak = wrapFbm(u + warp * 2.0, v * 0.1, 9, 2, seed + 4u);
-    const double fleck = smooth(0.82, 0.92, wrapNoise(u * 2.0, v * 6.0, 48, seed + 21u));
-    const double tone = 0.86 + 0.16 * (lines - 0.5) - 0.18 * smooth(0.55, 0.75, streak) + 0.06 * fleck;
+    const double fleck = smoothstep(0.82, 0.92, wrapNoise(u * 2.0, v * 6.0, 48, seed + 21u));
+    const double tone = 0.86 + 0.16 * (lines - 0.5) - 0.18 * smoothstep(0.55, 0.75, streak) + 0.06 * fleck;
     s.albedo = Vec3(1.0, 0.97, 0.92) * tone;
     s.h = 0.5 + 0.02 * (lines - 0.5);
     s.rough = 0.9 + 0.08 * (lines - 0.5);   // times the material's roughness (the shader multiplies): satin, not lacquer

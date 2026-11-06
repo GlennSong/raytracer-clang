@@ -100,7 +100,8 @@ building_uses = {
     teaching_hall  = "civic",
     university     = "civic",
 
-    -- parks
+    -- parks, and the open lots a mix or a level names
     pocket_park = "office",
+    car_park    = "none",
   },
 }

@@ -19,7 +19,6 @@ nlohmann::json pointList(const std::vector<Vec2>& xy) {
     return a;
 }
 
-double smoothStep(double t) { t = std::clamp(t, 0.0, 1.0); return t * t * (3 - 2 * t); }
 
 }  // namespace
 
@@ -147,8 +146,8 @@ DiamondResult diamondRamps(const std::vector<Vec2>& route, const std::vector<Ram
         const double dir = sTerm > sGore ? 1.0 : -1.0, span = std::fabs(sTerm - sGore);
         for (double d = 0; d < span - 2.0; d += 4.0) {
             const double st = sGore + dir * d;
-            double r = auxOff + (rBand - auxOff) * smoothStep(d / o.diverge);
-            if (rEnd != rBand) r += (rEnd - rBand) * smoothStep((d - (span - o.along - o.shift)) / o.shift);
+            double r = auxOff + (rBand - auxOff) * smoothstep01(d / o.diverge);
+            if (rEnd != rBand) r += (rEnd - rBand) * smoothstep01((d - (span - o.along - o.shift)) / o.shift);
             pts.push_back(atS(st) + nrmS(st) * (r * side));
         }
         pts.push_back(term);
@@ -173,7 +172,7 @@ DiamondResult diamondRamps(const std::vector<Vec2>& route, const std::vector<Ram
                 const double sx = project(sp, ss, x).station;
                 if (landsAtEnd ? sx > ss.back() - land : sx < land) continue;
                 const double run = std::max(ss.back() - arrive, 1.0);
-                const double z = zStart + (zEnd - zStart) * smoothStep(landsAtEnd ? sx / run : (sx - arrive) / run);
+                const double z = zStart + (zEnd - zStart) * smoothstep01(landsAtEnd ? sx / run : (sx - arrive) / run);
                 if (z - groundAt(x) < o.clearance - 0.2) {
                     if (streets[ci].closable && !used[ci]) { closing.push_back(ci); continue; }
                     if (std::getenv("RT_DIAMOND_WHY")) std::fprintf(stderr, "    spine meets %s at %.0f of %.0f m, %.1f m up\n", streets[ci].id.c_str(), sx, ss.back(), z - groundAt(x));
@@ -363,10 +362,9 @@ SystemResult systemInterchange(const SystemRoad& through, const SystemRoad& stem
     auto quadrant = [&](const Frame& f1, double sig1, const Frame& f2, double sig2) {
         return cross(rayOf(f1, sig1), rayOf(f2, sig2)) < 0 ? Quadrant{&f1, sig1, &f2, sig2} : Quadrant{&f2, sig2, &f1, sig1};
     };
-    auto smooth = [](double t) { t = std::clamp(t, 0.0, 1.0); return t * t * (3 - 2 * t); };
     // The auxiliary lane's offset from a road's CENTRELINE, on the quadrant side, for the
     // first/last `diverge` metres of a ramp, easing out to the band.
-    auto bandOff = [&](const Frame& f, double d) { return f.auxOff() + (rBand - f.auxOff()) * smooth(d / o.diverge); };
+    auto bandOff = [&](const Frame& f, double d) { return f.auxOff() + (rBand - f.auxOff()) * smoothstep01(d / o.diverge); };
 
     // The four quadrants by what they hold. r is the stem's outward ray; c1 the ring's ray to its right.
     const double sigC1 = cross(rayOf(S, outward), tT) < 0 ? 1.0 : -1.0;
@@ -389,7 +387,7 @@ SystemResult systemInterchange(const SystemRoad& through, const SystemRoad& stem
         const Vec2 own = f->at(sOf(f) + sig * dist, (onP ? -sig : sig) * off);
         if (f == &T) return own;
         const Vec2 ring = onP ? place(k, dist, off) : place(k, off, dist);
-        return ring + (own - ring) * smooth(w);
+        return ring + (own - ring) * smoothstep01(w);
     };
     auto emit = [&](const std::string& id, const std::vector<Vec2>& spine, nlohmann::json from, nlohmann::json to) {
         nlohmann::json e; e["id"] = id; e["class"] = "ramp"; e["from"] = std::move(from); e["to"] = std::move(to);

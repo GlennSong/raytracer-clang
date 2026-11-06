@@ -14,7 +14,6 @@ namespace engine {
 
 namespace {
 
-constexpr double kPi = 3.14159265358979323846;
 
 Real distToRay(Vec2 p, Vec2 o, Vec2 d, Real len) {
     const Vec2 v = p - o;
@@ -159,19 +158,19 @@ std::vector<StreetSignPost> planStreetSigns(const RoadGraph& g, const StreetNami
             const Arm& a = arms[i];
             const Arm& b = arms[(i + 1) % K];
             Real ang = b.angle - a.angle;
-            if (ang <= 0) ang += 2 * kPi;
+            if (ang <= 0) ang += 2 * PI;
             const Real half = ang * 0.5;
             const Vec2 bis(std::cos(a.angle + half), std::sin(a.angle + half));
             const Real hw = std::max(a.hw, b.hw);
-            Real d = (hw + p.kerbGap) / std::sin(std::min(half, kPi * 0.5));
+            Real d = (hw + p.kerbGap) / std::sin(std::min(half, PI * 0.5));
             Vec2 q = o + bis * d;
             int steps = 0;
             while (!clear(q) && steps < 16) { d += 0.5; q = o + bis * d; ++steps; }
             if (!clear(q)) continue;
             // Out of the sidewalk band into the block: no good.
-            if (d > (hw + p.sidewalkWidth + p.kerbGap) / std::sin(std::min(half, kPi * 0.5)) + 3.0)
+            if (d > (hw + p.sidewalkWidth + p.kerbGap) / std::sin(std::min(half, PI * 0.5)) + 3.0)
                 continue;
-            const bool trueCorner = ang > 60.0 * kPi / 180.0 && ang < 150.0 * kPi / 180.0;
+            const bool trueCorner = ang > 60.0 * PI / 180.0 && ang < 150.0 * PI / 180.0;
             const Real score = d + (trueCorner ? 0.0 : 50.0);
             if (score < bestScore) { bestScore = score; best = q; found = true; }
         }

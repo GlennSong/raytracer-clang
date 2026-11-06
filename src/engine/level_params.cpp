@@ -1,7 +1,9 @@
 #include "procgen/tree_recipe.h"
+#include "../hash.h"   // hashCell, unit24
 #include "level_params.h"
 #include "procgen/terrain_weather.h"   // the weathered ground (ADR-0126)
 #include "procgen/terrain_maps.h"      // its maps (ADR-0128)
+#include "procgen/regrade.h"            // a town's patch of mountain levelled (ADR-0323)
 #include "procgen/forest.h"            // its forest (ADR-0129)
 #include "procgen/trails.h"            // its trails (ADR-0134)
 #include "procgen/terrain_lod.h"   // kBakedCell0 (ADR-0095)
@@ -160,9 +162,31 @@ TerrainParams readTerrainParams(const json& t) {
         };
         col("grass", gp.grass); col("grassDry", gp.grassDry); col("dirt", gp.dirt);
         col("sand", gp.sand); col("rock", gp.rock); col("snow", gp.snow);
+        if (g.contains("heath") && g["heath"].is_object()) {   // ADR-0331 (not in the lots' key: it only paints and plants)
+            const json& hj = g["heath"];
+            if (hj.contains("color") && hj["color"].is_array() && hj["color"].size() == 3)
+                gp.heath = Vec3(hj["color"][0].get<double>(), hj["color"][1].get<double>(), hj["color"][2].get<double>());
+            gp.heathPatches = hj.value("patches", 0.4);
+            gp.heathFrom = hj.value("from", gp.heathFrom);
+            gp.heathScale = hj.value("scale", gp.heathScale);
+        }
         if (t.value("erode", false)) gp.maps = weatheredMapsFor(t);   // ADR-0128: nullptr unless weathered
         if (t.contains("trails") && t["trails"].is_array())                 // ADR-0134: the hiking trails
             gp.trails = std::make_shared<const TrailNetwork>(TrailNetwork::fromJson(t["trails"]));
+        if (t.contains("settled") && t["settled"].is_array()) {             // ADR-0313: a beach town's ground, not sand
+            std::vector<std::vector<Vec2>> polys;
+            for (const json& P : t["settled"]) {
+                std::vector<Vec2> poly;
+                for (const json& q : P) poly.push_back(Vec2(q[0].get<double>(), q[1].get<double>()));
+                if (poly.size() >= 3) polys.push_back(std::move(poly));
+            }
+            if (!polys.empty()) gp.settled = std::make_shared<const SettledGround>(std::move(polys));
+        }
+        if (const std::vector<Regrade> rg = regradesFromJson(t); !rg.empty()) {   // ADR-0323: levelled ground, plain soil
+            std::vector<std::vector<Vec2>> polys;
+            for (const Regrade& g : rg) polys.push_back(g.outline);
+            gp.levelled = std::make_shared<const SettledGround>(std::move(polys));
+        }
         if (t.contains("forest") && t["forest"].is_object())                // ADR-0129: litter under the canopy
             gp.forest = std::make_shared<const ForestParams>(forestFromJson(t["forest"]));
         p.cover = std::make_shared<const GroundCover>(gp);
@@ -174,7 +198,10 @@ TerrainParams readTerrainParams(const json& t) {
     if (t.contains("rivers") && t["rivers"].is_object()) {
         static std::mutex memoMutex;
         static std::map<std::string, std::shared_ptr<const Hydrology>> memo;
-        const std::string key = t.dump();
+        // the rivers run over the ground WITHOUT its regrades (ADR-0323): levelling a town's patch never moves a river
+        json unlevelled = t;
+        unlevelled.erase("regrade");
+        const std::string key = unlevelled.dump();
         std::lock_guard<std::mutex> lock(memoMutex);
         auto it = memo.find(key);
         if (it == memo.end()) {
@@ -220,7 +247,7 @@ TerrainParams readTerrainParams(const json& t) {
             // are where the rivers belong), else the raw relief
             std::function<double(double, double)> over = [base, n](double x, double z) { return terrainBaseHeight(base, n, x, z); };
             if (t.value("erode", false))
-                if (auto eb = erodedForTerrain(t)) over = [eb](double x, double z) { return (*eb)(x, z); };
+                if (auto eb = erodedForTerrain(unlevelled)) over = [eb](double x, double z) { return (*eb)(x, z); };
             auto hy = Hydrology::build(over, hp);
             LOG_INFO << "[hydrology] " << hy->rivers().size() << " rivers, " << hy->lakes().size() << " lakes on a "
                      << hy->gridSize() << "^2 grid (" << hp.cell << " m) in "
@@ -288,6 +315,18 @@ readErodedBase(const json& root) {
     return erodedForTerrain(root["terrain"]);
 }
 
+namespace {
+// THE REGRADE (procgen/regrade.h, ADR-0323): a town's patch of mountain levelled, laid on the weathered ground as it
+// is read; the weathered grid itself is the same (groundShapingBlock leaves "regrade" out of its key)
+std::shared_ptr<const std::function<double(double, double)>> regraded(const json& tj,
+                                                                      std::shared_ptr<const std::function<double(double, double)>> f) {
+    const std::vector<Regrade> rg = regradesFromJson(tj);
+    if (rg.empty() || !f) return f;
+    return std::make_shared<const std::function<double(double, double)>>(
+        regradeField([f](double x, double z) { return (*f)(x, z); }, rg));
+}
+}  // namespace
+
 std::shared_ptr<const std::function<double(double, double)>> erodedForTerrain(const json& tjIn) {
     // once per terrain block (a load reads it several times; the island planner and the level agree).
     // Its "rivers" are left out: they are computed ON this, and reading them here would recurse.
@@ -296,6 +335,19 @@ std::shared_ptr<const std::function<double(double, double)>> erodedForTerrain(co
     static std::mutex memoMutex;
     static std::map<std::string, std::shared_ptr<const std::function<double(double, double)>>> memo;
     const std::string key = tj.dump();
+    // A REGRADED block is its ground without the regrades (one weathered grid, however many places are levelled on it),
+    // levelled as it is read
+    if (tj.contains("regrade")) {
+        {
+            std::lock_guard<std::mutex> lock(memoMutex);
+            if (auto it = memo.find(key); it != memo.end()) return it->second;
+        }
+        json bare = tj;
+        bare.erase("regrade");
+        std::shared_ptr<const std::function<double(double, double)>> f = regraded(tj, erodedForTerrain(bare));
+        std::lock_guard<std::mutex> lock(memoMutex);
+        return memo.emplace(key, f).first->second;
+    }
     std::lock_guard<std::mutex> lock(memoMutex);
     if (auto it = memo.find(key); it != memo.end()) return it->second;
     // THE WEATHERED GROUND (ADR-0126): grown from uplift and weathered by water offline, cached on disk
@@ -333,10 +385,8 @@ std::shared_ptr<const std::function<double(double, double)>> erodedForTerrain(co
                     // face cut into Voronoi cells ~blockCell across -- each a flat block, the ground's own slope over
                     // it tilted its own way and stepped out or in by up to `amp`, a crack sunk along its edges. The
                     // face becomes a mosaic of blocks (an object laid on a smooth face read as rocks stuck on it)
-                    auto hsh = [](int64_t a, int64_t b, uint32_t s) {
-                        uint32_t q = static_cast<uint32_t>(a) * 0x9E3779B1u ^ static_cast<uint32_t>(b) * 0x85EBCA77u ^ s * 0xC2B2AE3Du;
-                        q ^= q >> 16; q *= 0x7FEB352Du; q ^= q >> 15; q *= 0x846CA68Bu; q ^= q >> 16;
-                        return (q & 0xFFFFFFu) / 16777216.0;
+                    auto hsh = [](int64_t a, int64_t b, uint32_t s) {   // (hash.h)
+                        return unit24(hashCell(static_cast<uint32_t>(a), static_cast<uint32_t>(b), s));
                     };
                     const double C = blockCell;
                     const int64_t cx = static_cast<int64_t>(std::floor(x / C)), cz = static_cast<int64_t>(std::floor(z / C));
@@ -457,6 +507,7 @@ void readLotGrowParams(const json& cityJson, LotParams& lots) {
                 return 2;                                  // an unknown quarter is housing
             };
             bool haveCore = false;
+            std::vector<std::string> landmarkPlaces(1);   // each landmark cluster's place (0: none)
             for (const auto& hj : dj["hubs"]) {
                 if (!hj.is_object() || !hj.contains("at") || !hj["at"].is_array() || hj["at"].size() < 2)
                     continue;
@@ -465,6 +516,84 @@ void readLotGrowParams(const json& cityJson, LotParams& lots) {
                                      ? hj.value("kind", 2)
                                      : kindOf(hj.value("kind", std::string("residential")));
                 lots.hubs.push_back({at, kind});
+                // ITS LANDMARKS (its settlement kind's, written by city_plan): the hubs of one place are one cluster
+                {
+                    int cl = 0;
+                    const bool own = hj.value("civic", false) || (hj.contains("landmarks") && hj["landmarks"].is_array());
+                    if (own) {
+                        const std::string place = hj.value("_place", std::string());
+                        if (lots.landmarkClusters.empty()) lots.landmarkClusters.resize(1);   // (0: the hubs with none, the city)
+                        for (std::size_t c = 1; c < lots.landmarkClusters.size() && cl == 0; ++c)
+                            if (!place.empty() && landmarkPlaces[c] == place) cl = static_cast<int>(c);
+                        if (cl == 0) {
+                            LandmarkCluster lc;
+                            lc.civic = hj.value("civic", false);
+                            lc.center = at;
+                            for (const auto& rj : hj.contains("limits") && hj["limits"].is_array() ? hj["limits"] : nlohmann::json::array()) {
+                                Poly2 ring;
+                                for (const auto& q : rj) if (q.is_array() && q.size() >= 2) ring.push_back(Vec2(q[0].get<double>(), q[1].get<double>()));
+                                if (ring.size() >= 3) lc.limits.push_back(std::move(ring));
+                            }
+                            for (const auto& lj : hj.contains("landmarks") && hj["landmarks"].is_array() ? hj["landmarks"] : nlohmann::json::array()) {
+                                LandmarkWant lw;
+                                if (!lj.is_object() || !landmarkKindNamed(lj.value("name", std::string()), lw.kind)) {
+                                    LOG_ERROR << "[districts] hub " << place << ": landmark " << lj.dump() << " REJECTED (no such landmark)";
+                                    continue;
+                                }
+                                lw.count = lj.value("count", 1);
+                                lw.minLots = lj.value("minLots", 0);
+                                lw.minOldTown = lj.value("minOldTown", 0);
+                                lw.anyDistrict = lj.value("any", false);
+                                lc.wants.push_back(lw);
+                            }
+                            lots.landmarkClusters.push_back(lc);
+                            landmarkPlaces.resize(lots.landmarkClusters.size());
+                            landmarkPlaces.back() = place;
+                            cl = static_cast<int>(lots.landmarkClusters.size()) - 1;
+                        }
+                    }
+                    lots.hubClusters.push_back(cl);
+                }
+                // A LINE hub (a beach town's seafront), its own reach and its own MIXES -- {district: [[recipe, weight]]},
+                // the archetype book's tables for the lots it is nearest (~/.claude/plans/beach-town.md)
+                {
+                    const std::size_t hi = lots.hubs.size() - 1;
+                    std::vector<Vec2> line;
+                    if (hj.contains("line") && hj["line"].is_array())
+                        for (const auto& q : hj["line"])
+                            if (q.is_array() && q.size() >= 2) line.push_back(Vec2(q[0].get<double>(), q[1].get<double>()));
+                    const Real reach = hj.value("radius", 0.0);
+                    ArchetypeBook hb;
+                    if (hj.contains("mixes") && hj["mixes"].is_object())
+                        for (const auto& [dname, entries] : hj["mixes"].items()) {
+                            const int tag = kindOf(dname);
+                            std::vector<std::pair<int, double>> es;
+                            bool ok = entries.is_array() && (dname == "residential" || tag != 2);
+                            for (const auto& e : entries.is_array() ? entries : nlohmann::json::array()) {
+                                const int ri = e.is_array() && e.size() >= 2 ? architectRecipeIndex(e[0].get<std::string>()) : -1;
+                                const double wgt = e.is_array() && e.size() >= 2 && e[1].is_number() ? e[1].get<double>() : 0.0;
+                                if (ri < 0 || !(wgt > 0)) { ok = false; break; }
+                                es.push_back({ri, wgt});
+                            }
+                            if (!ok || es.empty()) {   // never half a mix, never silently
+                                LOG_ERROR << "[districts] hub " << hj.value("_place", std::string("?")) << ": mix '" << dname
+                                          << "' REJECTED (an unknown district or recipe, or a weight <= 0)";
+                                continue;
+                            }
+                            archetypeThresholds(es, hb.tables[static_cast<std::size_t>(tag)]);
+                        }
+                    if (hj.contains("parking") && hj["parking"].is_array())   // its car-park blocks (a beach town's)
+                        for (const auto& q : hj["parking"])
+                            if (q.is_array() && q.size() >= 2) lots.parkingAt.push_back(Vec2(q[0].get<double>(), q[1].get<double>()));
+                    if (!line.empty() || reach > 0 || !hb.empty()) {
+                        lots.hubLines.resize(hi + 1);
+                        lots.hubRadii.resize(hi + 1, 0.0);
+                        lots.hubBooks.resize(hi + 1);
+                        lots.hubLines[hi] = line;
+                        lots.hubRadii[hi] = reach;
+                        lots.hubBooks[hi] = hb;
+                    }
+                }
                 // Coreness (height grading, landmark quotas) measures from `center`:
                 // the first financial hub is downtown, else the first hub at all.
                 if (!haveCore && (kind == 0 || lots.hubs.size() == 1)) {
@@ -503,6 +632,7 @@ WaterMeshParams readWaterParams(const json& w) {
         wp.hi = {w["hi"][0].get<double>(), w["hi"][1].get<double>()};
     wp.cell = w.value("cell", wp.cell);
     wp.foamBand = w.value("foamBand", wp.foamBand);
+    wp.surfBand = w.value("surfBand", wp.surfBand);
     return wp;
 }
 

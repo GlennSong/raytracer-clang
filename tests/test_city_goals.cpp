@@ -5,10 +5,18 @@
 #include "../src/apps/citysim/city_sim.h"
 
 #include <cstdio>
+#include <map>
 #include <vector>
 
 using namespace engine;
 using namespace citysim;
+
+// A place given a kind by name, from the built-in place kinds (places.lua's twin): its tags come with it.
+static void kindOf(PlaceMap& places, PlaceId id, const char* name) {
+    const PlaceKindCatalog c = defaultPlaceKindCatalog();
+    const int k = c.find(name);
+    places.setKind(id, k, k >= 0 ? c.kinds[static_cast<std::size_t>(k)].tags : 0u);
+}
 
 // The goal layer as DATA (ADR-0064): an agent's day is a GoalTable — states
 // binding the small C++ action vocabulary (Rest, GoTo work/home/random) with
@@ -22,7 +30,7 @@ using namespace citysim;
 // / work till 5pm / go shopping / go home"). It no longer mirrors the
 // pre-table control flow, which had no errand leg.
 TEST_CASE(goal_default_table_is_the_daily_round) {
-    GoalTable t = builtinDayTable("commuter");
+    GoalTable t = builtinDayTable("worker");
     int home = t.findState("AtHome");
     int commute = t.findState("ToWork");
     int work = t.findState("AtWork");
@@ -69,7 +77,7 @@ TEST_CASE(goal_default_table_is_the_daily_round) {
 
 TEST_CASE(goal_stroller_table_is_an_outing) {
     // A day OUT: from home, stop after stop until the window closes.
-    GoalTable t = builtinDayTable("stroller");
+    GoalTable t = builtinDayTable("at_home");
     const int home = t.findState("AtHome");
     const int go = t.findState("Outing");
     const int pause = t.findState("OutAndAbout");
@@ -122,7 +130,7 @@ TEST_CASE(installing_the_default_tables_changes_nothing) {
     CitySim a, b;
     a.build(nav, 16, 8, 17);
     b.build(nav, 16, 8, 17);
-    b.setGoalTables(builtinDayTable("commuter"), builtinDayTable("commuter"));
+    b.setGoalTables(builtinDayTable("worker"), builtinDayTable("worker"));
     bool same = true;
     for (int i = 0; i < 6000; ++i) {
         a.step(0.1, 0.5);
@@ -263,7 +271,7 @@ TEST_CASE(students_live_in_the_hall_and_spend_the_day_on_campus) {
     const PlaceId teach = places.add(PlaceType::Civic, Vec2(60, 120), nav);
     const PlaceId lib = places.add(PlaceType::Civic, Vec2(-40, 200), nav);
     const PlaceId quad = places.add(PlaceType::Park, Vec2(0, 130), nav);
-    places.setCampus(hall, 3); places.setCampus(teach, 1); places.setCampus(lib, 2); places.setCampus(quad, 4);
+    kindOf(places, hall, "residence"); kindOf(places, teach, "teaching"); kindOf(places, lib, "library"); kindOf(places, quad, "quad");
     std::vector<CitySim::SeatSpot> seats;
     for (int i = 0; i < 8; ++i) {   // benches round the quad
         CitySim::SeatSpot s;
@@ -280,7 +288,7 @@ TEST_CASE(students_live_in_the_hall_and_spend_the_day_on_campus) {
     const int hallNode = nav.nearestNode(places[hall].entrance);
     int homeless = 0, othersInHall = 0;
     for (const Agent& a : sim.agents()) {
-        if (a.role == kRoleStudent) homeless += a.home != hallNode || a.homePlace != hall;
+        if (sim.isStudent(a)) homeless += a.home != hallNode || a.homePlace != hall;
         else othersInHall += a.homePlace == hall;
     }
     CHECK(homeless == 0);
@@ -295,7 +303,7 @@ TEST_CASE(students_live_in_the_hall_and_spend_the_day_on_campus) {
         int out = 0;
         for (std::size_t k = 0; k < ag.size(); ++k) {
             const Agent& a = ag[k];
-            if (a.role != kRoleStudent) continue;
+            if (!sim.isStudent(a)) continue;
             if (a.indoors && a.restNode == teachNode && a.activity == Activity::AtWork) sawClass[k] = 1;
             if (sim.seatedOn(static_cast<int>(k))) { sawBreak[k] |= 1; }
             if (a.indoors && a.restNode == libNode) sawBreak[k] |= 2;
@@ -305,7 +313,7 @@ TEST_CASE(students_live_in_the_hall_and_spend_the_day_on_campus) {
     }
     for (std::size_t k = 0; k < sim.agents().size(); ++k) {
         const Agent& a = sim.agents()[k];
-        if (a.role != kRoleStudent) continue;
+        if (!sim.isStudent(a)) continue;
         inClass += sawClass[k];
         onBench += (sawBreak[k] & 1) ? 1 : 0;
         inLibrary += (sawBreak[k] & 2) ? 1 : 0;
@@ -334,11 +342,11 @@ TEST_CASE(students_fill_every_hall_and_take_classes_in_every_teaching_hall) {
     const PlaceId h2 = places.add(PlaceType::Home, Vec2(200, -150), nav, 0, 24, 20);
     const PlaceId t1 = places.add(PlaceType::Civic, Vec2(60, 120), nav);
     const PlaceId t2 = places.add(PlaceType::Civic, Vec2(-60, 200), nav);
-    places.setCampus(h1, 3); places.setCampus(h2, 3); places.setCampus(t1, 1); places.setCampus(t2, 1);
+    kindOf(places, h1, "residence"); kindOf(places, h2, "residence"); kindOf(places, t1, "teaching"); kindOf(places, t2, "teaching");
     sim.assignPlaces(places, nav);
     int in1 = 0, in2 = 0, at1 = 0, at2 = 0;
     for (const Agent& a : sim.agents()) {
-        if (a.role != kRoleStudent) continue;
+        if (!sim.isStudent(a)) continue;
         in1 += a.homePlace == h1; in2 += a.homePlace == h2;
         at1 += a.workPlace == t1; at2 += a.workPlace == t2;
     }
@@ -348,6 +356,262 @@ TEST_CASE(students_fill_every_hall_and_take_classes_in_every_teaching_hall) {
     CHECK(in1 + in2 == 50);
     CHECK(std::abs(in1 - 30) <= 1 && std::abs(in2 - 20) <= 1);
     CHECK(at1 >= 15 && at2 >= 15);
+}
+
+// HOUSEHOLDS IN THE DWELLINGS (households.h; Glenn, 2026-11-01: "a family would be expressed by like a unit"; "Do a
+// cap for now"). Every seed: one household to a dwelling at most; every member of one lives at its home; a child (or
+// any walk-only member) is a walker and holds no job; everyone has a home. With more people than the housing holds,
+// the rest are counted unhoused (and take a home by area, as before); with housing to spare, nobody is.
+TEST_CASE(households_fill_the_dwellings_one_to_each) {
+    for (int perBlock : {6, 40})
+        for (uint32_t seed = 1; seed <= 4; ++seed) {
+            NavGraph nav = citytest::cityNav(800.0, 80.0, seed);
+            CitySim sim;
+            sim.build(nav, 120, 360, seed);
+            PlaceMap places;
+            for (int i = 0; i < 24; ++i) {
+                const PlaceId h = places.add(PlaceType::Home, Vec2(-350 + (i % 12) * 60.0, i < 12 ? -330 : 330), nav);
+                std::vector<int> beds;
+                if (i % 3 == 0) beds = {i % 2 ? 3 : 5};   // a house
+                else for (int d = 0; d < perBlock; ++d) beds.push_back(d % 4);   // flats, studio to 3-bed
+                places.setDwellings(h, beds);
+            }
+            places.add(PlaceType::Office, Vec2(0, 0), nav, 9, 17);
+            places.add(PlaceType::Park, Vec2(150, 150), nav);
+            places.add(PlaceType::Cafe, Vec2(-150, 150), nav, 7, 19);
+            sim.assignPlaces(places, nav);
+            const HouseholdPlan& plan = sim.households();
+            std::vector<int> taken(places.dwellings().size(), 0);
+            for (const Household& h : plan.households)
+                if (h.dwelling != Household::kNoDwelling) ++taken[h.dwelling];
+            int twice = 0;
+            for (int t : taken) twice += t > 1 ? 1 : 0;
+            int housed = 0, service = 0, wrongHome = 0, kidsDriving = 0, kidsWorking = 0, homeless = 0, kids = 0;
+            for (int i = 0; i < static_cast<int>(sim.agents().size()); ++i) {
+                const Agent& a = sim.agents()[static_cast<std::size_t>(i)];
+                if (sim.onService(i)) { ++service; continue; }
+                homeless += a.homePlace == kNoPlace ? 1 : 0;
+                if (a.household < 0) continue;
+                ++housed;
+                const Household& h = plan.households[static_cast<std::size_t>(a.household)];
+                wrongHome += a.homePlace != h.place ? 1 : 0;
+                const LifeStage& st = sim.people().stages[static_cast<std::size_t>(a.stage)];
+                if (st.walks && h.type != Household::kHall) {
+                    ++kids;
+                    kidsDriving += a.archetype != Agent::Mode::Pedestrian ? 1 : 0;
+                    kidsWorking += a.workPlace != kNoPlace ? 1 : 0;
+                }
+            }
+            const int residents = static_cast<int>(sim.agents().size()) - service;
+            std::printf("    [households] %d a block, seed %u: %s; unhoused %d\n", perBlock, seed, sim.populationLine().c_str(),
+                        sim.unhousedCount());
+            CHECK(twice == 0);
+            CHECK(housed == static_cast<int>(plan.people.size()));
+            CHECK(sim.unhousedCount() == residents - housed);
+            CHECK(wrongHome == 0);
+            CHECK(kids > 0 && kidsDriving == 0 && kidsWorking == 0);
+            CHECK(homeless == 0);
+            CHECK(plan.capacity >= housed);
+            if (perBlock == 6) CHECK(sim.unhousedCount() > 0 && plan.dwellingsFilled >= plan.dwellings * 9 / 10);
+            else CHECK(sim.unhousedCount() == 0);
+        }
+    // the same city houses the same people the same way
+    auto who = [](uint32_t seed) {
+        NavGraph nav = citytest::cityNav(800.0, 80.0, seed);
+        CitySim sim;
+        sim.build(nav, 60, 200, seed);
+        PlaceMap places;
+        for (int i = 0; i < 12; ++i) places.setDwellings(places.add(PlaceType::Home, Vec2(-350 + i * 60.0, -330), nav), {0, 1, 2, 3, 2, 1});
+        places.add(PlaceType::Office, Vec2(0, 0), nav, 9, 17);
+        sim.assignPlaces(places, nav);
+        std::vector<int> out;
+        for (const Agent& a : sim.agents()) { out.push_back(a.household); out.push_back(a.age); out.push_back(a.stage); }
+        return out;
+    };
+    CHECK(who(7) == who(7));
+    CHECK(who(7) != who(8));
+}
+
+// EVENING JOBS (roles.lua side_job; plan step 6): about three students in ten hold a job at a cafe, bar or shop near
+// the hall, and on a shift night they are there through the shift -- walked to, worked, home after -- and the place
+// counts as staffed for those hours. Three seeds.
+TEST_CASE(students_work_their_evening_jobs_on_shift_nights) {
+    for (uint32_t seed = 3; seed <= 5; ++seed) {
+        NavGraph nav = citytest::cityNav(800.0, 80.0, seed);
+        CitySim sim;
+        sim.build(nav, 20, 400, seed);
+        PlaceMap places;
+        for (int i = 0; i < 10; ++i) places.add(PlaceType::Home, Vec2(-350 + i * 70.0, -330), nav);
+        for (int i = 0; i < 4; ++i) places.add(PlaceType::Office, Vec2(-300 + i * 160.0, 330), nav, 9, 17);
+        for (int i = 0; i < 3; ++i) places.add(PlaceType::Cafe, Vec2(-200 + i * 180.0, -40), nav, 7, 23);
+        for (int i = 0; i < 2; ++i) places.add(PlaceType::Bar, Vec2(-150 + i * 260.0, 260), nav, 16, 2);
+        const PlaceId hall = places.add(PlaceType::Home, Vec2(-120, 60), nav, 0, 24, 60);
+        const PlaceId teach = places.add(PlaceType::Civic, Vec2(60, 120), nav);
+        kindOf(places, hall, "residence"); kindOf(places, teach, "teaching");
+        sim.assignPlaces(places, nav);
+        sim.seedFromSchedule(15.0);
+        int holders = 0;
+        for (const Agent& a : sim.agents()) holders += a.sideVenue >= 0 ? 1 : 0;
+        // run the evening; at each holder's mid-shift on a shift night, are they at their job (in at its door)?
+        int checked = 0, there = 0;
+        std::vector<uint8_t> seen(sim.agents().size(), 0);
+        for (int i = 0; i < 40000 && sim.timeOfDay() < 23.9; ++i) {
+            sim.step(0.5, 0.0004);
+            const Real now = sim.timeOfDay();
+            for (std::size_t k = 0; k < sim.agents().size(); ++k) {
+                const Agent& a = sim.agents()[k];
+                Real ss = 0, se = 0;
+                if (seen[k] || a.sideVenue < 0 || !sim.sideShiftTonight(a, ss, se)) continue;
+                const Real mid = ss + 0.5 * (se - ss);
+                if (now < mid) continue;
+                seen[k] = 1;
+                ++checked;
+                const CitySim::Venue& v = sim.venues()[static_cast<std::size_t>(a.sideVenue)];
+                there += (!a.moving && (a.pos - v.door).length() < 15.0) ? 1 : 0;   // (inside: at its door)
+            }
+        }
+        std::printf("    [evening jobs] seed %u: %d of %d students hold one; mid-shift %d of %d at their job\n", seed, holders,
+                    sim.studentCount(), there, checked);
+        CHECK(holders > sim.studentCount() / 6 && holders < sim.studentCount() / 2);
+        CHECK(checked > 0);
+        CHECK(there >= checked * 9 / 10);
+    }
+}
+
+// A CHILD'S DAY (Glenn, 2026-11-02: "The kids should at least go and play. Roam around the neighborhood on skateboards
+// or play at parks and playgrounds"): children's days out come from kid_outing -- the playground, tag on a park's
+// lawn, a skateboard or a scooter round the block -- and never an adult's stop (a coffee, the shops, a meal out). A
+// rider rolls faster than a walk. Three seeds.
+TEST_CASE(children_play_skate_and_scoot) {
+    for (uint32_t seed = 2; seed <= 4; ++seed) {
+        NavGraph nav = citytest::cityNav(800.0, 80.0, seed);
+        CitySim sim;
+        sim.build(nav, 20, 500, seed);
+        PlaceMap places;
+        std::vector<int> beds;
+        for (int d = 0; d < 6; ++d) beds.push_back(2 + d % 3);   // family-sized flats
+        for (int i = 0; i < 20; ++i) places.setDwellings(places.add(PlaceType::Home, Vec2(-330 + (i % 10) * 70.0, -330 + (i / 10) * 600.0), nav), beds);
+        for (int i = 0; i < 4; ++i) places.add(PlaceType::Office, Vec2(-300 + i * 160.0, 200), nav, 9, 17);
+        for (int i = 0; i < 3; ++i) places.add(PlaceType::Cafe, Vec2(-200 + i * 180.0, -40), nav, 7, 19);
+        places.add(PlaceType::Shop, Vec2(60, -200), nav, 9, 19);
+        places.add(PlaceType::Restaurant, Vec2(-60, -200), nav, 11, 22);
+        const PlaceId park = places.add(PlaceType::Park, Vec2(0, 0), nav);
+        (void)park;
+        sim.assignPlaces(places, nav);
+        CitySim::ActivityArea lawn;
+        lawn.kind = "lawn"; lawn.center = Vec2(0, 0); lawn.axis = Vec2(1, 0); lawn.halfL = 22; lawn.halfW = 14;
+        CitySim::ActivityArea yard = lawn;
+        yard.kind = "playground"; yard.center = Vec2(-160, 120); yard.halfL = 12; yard.halfW = 9;
+        sim.setAreas({lawn, yard});
+        sim.seedFromSchedule(9.0);
+        const ActivityCatalog& cat = sim.activityCatalog();
+        std::map<std::string, int> kidDid;
+        int adultStops = 0, riders = 0, fastRiders = 0, kids = 0;
+        for (const Agent& a : sim.agents()) kids += a.stage >= 0 && sim.people().stages[static_cast<std::size_t>(a.stage)].name == "child";
+        std::vector<uint8_t> seen(sim.agents().size() * cat.defs.size(), 0);
+        for (int i = 0; i < 40000 && sim.timeOfDay() < 17.0; ++i) {
+            sim.step(0.5, 0.0004);
+            for (int k = 0; k < static_cast<int>(sim.agents().size()); ++k) {
+                const Agent& a = sim.agents()[static_cast<std::size_t>(k)];
+                if (a.stage < 0 || sim.people().stages[static_cast<std::size_t>(a.stage)].name != "child") continue;
+                const int d = a.tripActivity >= 0 ? a.tripActivity : a.atActivity;
+                if (d < 0 || d >= static_cast<int>(cat.defs.size())) continue;
+                uint8_t& once = seen[static_cast<std::size_t>(k) * cat.defs.size() + static_cast<std::size_t>(d)];
+                if (!once) {
+                    once = 1;
+                    const std::string& n = cat.defs[static_cast<std::size_t>(d)].name;
+                    ++kidDid[n];
+                    adultStops += (n == "coffee" || n == "browse" || n == "meal" || n == "groceries") ? 1 : 0;
+                }
+                if (sim.rideOf(k) != Ride::None && a.moving) {
+                    ++riders;
+                    fastRiders += a.speed > 1.9 ? 1 : 0;
+                }
+            }
+        }
+        std::string did;
+        for (const auto& [n, c] : kidDid) did += (did.empty() ? "" : ", ") + n + " " + std::to_string(c);
+        std::printf("    [kids] seed %u: %d children; did: %s; riding samples %d (%d faster than a walk); adult stops %d\n", seed, kids,
+                    did.c_str(), riders, fastRiders, adultStops);
+        CHECK(kids > 20);
+        CHECK(kidDid["play"] > 0);
+        CHECK(kidDid["skate"] + kidDid["scoot"] > 0);
+        CHECK(adultStops == 0);
+        CHECK(riders > 0 && fastRiders > riders / 2);
+    }
+}
+
+// THE HOUSEHOLDS' TIES (people.lua ties; Glenn's plan step 4): on every seed, every household's members are as old as
+// its ties need (a parent 18 years older than each child, a grandparent 36), and the sim ties its housemates -- each
+// pair a Household bond, a parent's child seeing them as its parent -- and nobody outside the dwelling.
+TEST_CASE(housemates_are_tied_as_their_household_says) {
+    const PeopleCatalog cat = defaultPeopleCatalog();
+    NavGraph nav = citytest::cityNav(800.0, 80.0, 3);
+    PlaceMap places;
+    std::vector<int> beds;
+    for (int d = 0; d < 12; ++d) beds.push_back(d % 6);
+    for (int i = 0; i < 200; ++i) places.setDwellings(places.add(PlaceType::Home, Vec2(-350 + (i % 20) * 35.0, -330 + (i / 20) * 60.0), nav), beds);
+    for (uint32_t seed = 1; seed <= 6; ++seed) {
+        const HouseholdPlan plan = planHouseholds(cat, places, 0, 6000, 3000, seed);
+        int checked = 0, wrong = 0;
+        for (const Household& hh : plan.households) {
+            if (hh.type >= cat.households.size()) continue;
+            for (const HouseholdTie& ht : cat.households[hh.type].ties) {
+                const int older = cat.ties[static_cast<std::size_t>(ht.tie)].older;
+                if (older <= 0) continue;
+                for (uint32_t i = hh.first; i < hh.first + hh.count; ++i)
+                    for (uint32_t j = hh.first; j < hh.first + hh.count; ++j)
+                        if (plan.people[i].group == ht.from && plan.people[j].group == ht.to) {
+                            ++checked;
+                            wrong += plan.people[i].age < plan.people[j].age + older ? 1 : 0;
+                        }
+            }
+        }
+        std::printf("    [ties] seed %u: %zu households, %d aged pairs, %d too close in age\n", seed, plan.households.size(), checked, wrong);
+        CHECK(checked > 0);
+        CHECK(wrong == 0);
+    }
+    // the sim: every Household bond is between agents of one household, and a parent / child pair reads both ways
+    CitySim sim;
+    sim.build(nav, 60, 240, 5);
+    places.add(PlaceType::Office, Vec2(0, 0), nav, 9, 17);
+    sim.assignPlaces(places, nav);
+    const RelationshipTable& rel = sim.relationships();
+    std::map<AgentId, int> hhOf;
+    for (const Agent& a : sim.agents()) hhOf[a.uid] = a.household;
+    int bonds = 0, across = 0, parents = 0, unanswered = 0;
+    for (const Agent& a : sim.agents())
+        for (const auto& [other, bond] : rel.relationsOf(a.uid)) {
+            if (bond != Relationship::Household) continue;
+            ++bonds;
+            across += hhOf[other] != a.household ? 1 : 0;
+            const int t = rel.tieOf(a.uid, other), back = rel.tieOf(other, a.uid);
+            if (t == cat.tie("parent")) ++parents;
+            unanswered += (t < 0 || back != cat.ties[static_cast<std::size_t>(t)].other) ? 1 : 0;
+        }
+    std::printf("    [ties] the sim: %d household bonds (%d a parent's), %d across dwellings, %d unanswered\n", bonds, parents, across, unanswered);
+    CHECK(bonds > 0);
+    CHECK(parents > 0);
+    CHECK(across == 0);
+    CHECK(unanswered == 0);
+}
+
+// HOUSEHOLDS AT ISLAND SCALE (Glenn, 2026-11-01: "How well does this scale to 300k people?"): the plan is sequential
+// -- one sort of the dwellings, one pass -- so 170,000 dwellings and 300,000 people must plan in well under a second.
+#include <chrono>
+TEST_CASE(households_plan_three_hundred_thousand_people_quickly) {
+    NavGraph nav = citytest::cityNav(800.0, 80.0, 3);
+    PlaceMap places;
+    std::vector<int> beds;
+    for (int d = 0; d < 170; ++d) beds.push_back(d % 4);
+    for (int i = 0; i < 1000; ++i) places.setDwellings(places.add(PlaceType::Home, Vec2(-350 + (i % 40) * 18.0, -330 + (i / 40) * 25.0), nav), beds);
+    const auto t0 = std::chrono::steady_clock::now();
+    const HouseholdPlan plan = planHouseholds(defaultPeopleCatalog(), places, 0, 300000, 240000, 9);
+    const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+    std::printf("    [households at scale] %zu dwellings, %zu households, %zu people in %.1f ms\n", places.dwellings().size(),
+                plan.households.size(), plan.people.size(), ms);
+    CHECK(plan.people.size() == 300000);
+    CHECK(ms < 2000.0);
 }
 
 // THE WALKS IN THE WALKING NETWORK (Glenn: students should cross the quad; and every park's paths): footpaths join the
@@ -427,7 +691,7 @@ TEST_CASE(an_activity_goal_takes_only_spots_of_its_kind_and_tags) {
     PlaceMap places;
     for (int i = 0; i < 6; ++i) places.add(PlaceType::Home, Vec2(-250 + i * 100.0, -250), nav);
     const PlaceId quad = places.add(PlaceType::Park, Vec2(0, 0), nav);
-    places.setCampus(quad, 4);
+    kindOf(places, quad, "quad");
     std::vector<CitySim::ActivitySpot> spots;
     auto spot = [&](Vec2 p, SpotKind k) { CitySim::ActivitySpot s; s.pos = p; s.face = Vec2(0, 1); s.kind = k; spots.push_back(s); };
     for (int i = 0; i < 6; ++i) spot(Vec2(-15.0 + i * 6.0, 8.0), SpotKind::Sit);          // the quad's benches
@@ -446,7 +710,7 @@ TEST_CASE(an_activity_goal_takes_only_spots_of_its_kind_and_tags) {
             if (owner[si] >= 0) ++shared;
             owner[si] = static_cast<int>(k);
             // the city's day-off strollers run their own outing table (any bench); judge only this table's agents
-            if (sim.agents()[k].role == kRoleStroller) continue;
+            if (sim.daysOut(sim.agents()[k])) continue;
             if (st->kind != SpotKind::Sit || !(st->tags & spot_tag::kCampus)) ++wrong;
             else ++campusSits;
         }
@@ -600,7 +864,7 @@ KickRun runKickabout(int walkers) {
     sim.setGoalTables(t, t);
     PlaceMap places;
     const PlaceId field = places.add(PlaceType::Park, Vec2(50, 50), nav);
-    places.setCampus(field, 5);
+    kindOf(places, field, "field");
     for (int i = 0; i < 4; ++i) places.add(PlaceType::Home, Vec2(-250 + i * 150.0, -250), nav);
     CitySim::ActivityArea pitch;
     pitch.kind = "pitch"; pitch.center = Vec2(50, 50); pitch.axis = Vec2(1, 0); pitch.halfL = 25; pitch.halfW = 15;
@@ -729,12 +993,18 @@ TEST_CASE(every_activity_in_the_catalog_keeps_the_rules) {
     // the night's places, with the night's hours (wrapping midnight)
     for (int i = 0; i < 3; ++i) places.add(PlaceType::Bar, Vec2(-300.0 + i * 260.0, -200.0), nav, 16, 2);
     for (int i = 0; i < 2; ++i) places.add(PlaceType::Club, Vec2(-200.0 + i * 380.0, 150.0), nav, 21, 3);
-    places.setCampus(quad, 4); places.setCampus(lib, 2); places.setCampus(field, 5);
+    // a residence hall: students, some with evening jobs (roles.lua side_job)
+    const PlaceId hall = places.add(PlaceType::Home, Vec2(-100, 60), nav, 0, 24, 60);
+    kindOf(places, quad, "quad"); kindOf(places, lib, "library"); kindOf(places, field, "field"); kindOf(places, hall, "residence");
     std::vector<CitySim::ActivitySpot> spots;
     auto spot = [&](Vec2 p, SpotKind kd) { CitySim::ActivitySpot sp; sp.pos = p; sp.face = Vec2(0, 1); sp.kind = kd; spots.push_back(sp); };
     for (int i = 0; i < 10; ++i) spot(Vec2(-20.0 + i * 4.0, 12.0), SpotKind::Sit);              // the quad's benches
     for (int i = 0; i < 12; ++i) spot(Vec2(225.0 + i * 4.0, 72.0), SpotKind::Sit);             // the stand
     for (int i = 0; i < 20; ++i) spot(Vec2(-400.0 + i * 40.0, 330.0), SpotKind::Sit);          // the town's benches
+    for (int i = 0; i < 10; ++i) {                                                               // the beach's loungers
+        spot(Vec2(-270.0 + i * 4.0, 100.0), SpotKind::Lie);
+        spots.back().tags = spot_tag::kBeach;
+    }
     std::vector<Vec2> loop;
     for (int i = 0; i < 40; ++i) { const Real a = 6.2831853 * i / 40; loop.push_back(Vec2(250.0 + 40.0 * std::cos(a), 50.0 + 25.0 * std::sin(a))); }
     sim.setLoops({loop});
@@ -749,7 +1019,13 @@ TEST_CASE(every_activity_in_the_catalog_keeps_the_rules) {
     lawnQ.kind = "lawn"; lawnQ.center = Vec2(0, -30); lawnQ.axis = Vec2(1, 0); lawnQ.halfL = 18; lawnQ.halfW = 10;
     CitySim::ActivityArea lawnP = lawnQ;   // a park's in town
     lawnP.center = Vec2(-330, 300); lawnP.halfL = 25; lawnP.halfW = 14;
-    sim.setAreas({pitch, lawnQ, lawnP});
+    CitySim::ActivityArea sand = lawnQ;   // a stretch of beach (a beach town's)
+    sand.kind = "beach"; sand.center = Vec2(-250, 120); sand.halfL = 26; sand.halfW = 18;
+    CitySim::ActivityArea shore = lawnQ;   // ...and its shore, the wet sand at the water's edge
+    shore.kind = "shore"; shore.center = Vec2(-250, 145); shore.halfL = 29; shore.halfW = 3.5;
+    CitySim::ActivityArea play = lawnQ;    // a playground (an open lot's)
+    play.kind = "playground"; play.center = Vec2(120, -120); play.halfL = 12; play.halfW = 8;
+    sim.setAreas({pitch, lawnQ, lawnP, sand, shore, play});
     sim.assignPlaces(places, nav);
     sim.seedFromSchedule(13.0);   // the afternoon into the night: the night's activities open from 16:30
 

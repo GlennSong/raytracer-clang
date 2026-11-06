@@ -1,4 +1,5 @@
 #include "cellular.h"
+#include "../../hash.h"   // lowbias32
 
 #include <cmath>
 
@@ -7,20 +8,12 @@ namespace engine {
 namespace {
 
 // A cheap integer avalanche (Murmur/`fmix`-style) so nearby cells decorrelate.
-inline uint32_t hashU32(uint32_t x) {
-    x ^= x >> 16;
-    x *= 0x7feb352du;
-    x ^= x >> 15;
-    x *= 0x846ca68bu;
-    x ^= x >> 16;
-    return x;
-}
 
 inline uint32_t hashCell(int ix, int iy, int iz, uint32_t seed) {
     uint32_t h = seed * 0x9e3779b1u + 0x1234567u;
-    h = hashU32(h ^ static_cast<uint32_t>(ix * 73856093));
-    h = hashU32(h ^ static_cast<uint32_t>(iy * 19349663));
-    h = hashU32(h ^ static_cast<uint32_t>(iz * 83492791));
+    h = lowbias32(h ^ static_cast<uint32_t>(ix * 73856093));
+    h = lowbias32(h ^ static_cast<uint32_t>(iy * 19349663));
+    h = lowbias32(h ^ static_cast<uint32_t>(iz * 83492791));
     return h;
 }
 
@@ -45,8 +38,8 @@ WorleyResult worley3(uint32_t seed, double x, double y, double z) {
                 const uint32_t h = hashCell(cx, cy, cz, seed);
                 // Jittered feature point inside this cell.
                 const double fx = cx + u01(h);
-                const double fy = cy + u01(hashU32(h + 0x9e3779b1u));
-                const double fz = cz + u01(hashU32(h + 0x85ebca6bu));
+                const double fy = cy + u01(lowbias32(h + 0x9e3779b1u));
+                const double fz = cz + u01(lowbias32(h + 0x85ebca6bu));
                 const double ex = fx - x, ey = fy - y, ez = fz - z;
                 const double d = std::sqrt(ex * ex + ey * ey + ez * ez);
                 if (d < f1) {

@@ -1,4 +1,5 @@
 #include "implicit.h"
+#include "polyline.h"   // douglasPeucker, distToSegment
 #include "section.h"
 #include <algorithm>
 #include <cmath>
@@ -49,26 +50,6 @@ Sdf sdfWave(Sdf field, Real amplitude, Real wavelength, const Vec2& alongIn, Rea
 
 namespace {
 
-Real dpDistance(const Vec2& p, const Vec2& a, const Vec2& b) {
-    const Vec2 ab = b - a;
-    const Real L2 = ab.lengthSquared();
-    const Real t = L2 > 1e-12 ? std::max(Real(0), std::min(Real(1), dot(p - a, ab) / L2)) : Real(0);
-    return (p - (a + ab * t)).length();
-}
-
-void dpOpen(const Poly2& pts, std::size_t i0, std::size_t i1, Real tol, std::vector<bool>& keep) {
-    if (i1 <= i0 + 1) return;
-    Real worst = -1;
-    std::size_t at = i0;
-    for (std::size_t i = i0 + 1; i < i1; ++i) {
-        const Real d = dpDistance(pts[i], pts[i0], pts[i1]);
-        if (d > worst) { worst = d; at = i; }
-    }
-    if (worst <= tol) return;
-    keep[at] = true;
-    dpOpen(pts, i0, at, tol, keep);
-    dpOpen(pts, at, i1, tol, keep);
-}
 
 }  // namespace
 
@@ -84,10 +65,11 @@ Poly2 simplifyLoop(const Poly2& loop, Real tol) {
     }
     Poly2 pts = loop;
     pts.push_back(loop[0]);   // closed as an open run 0..n
-    std::vector<bool> keep(n + 1, false);
-    keep[0] = keep[far] = keep[n] = true;
-    dpOpen(pts, 0, far, tol, keep);
-    dpOpen(pts, far, n, tol, keep);
+    std::vector<char> keep(n + 1, 0);
+    keep[0] = keep[far] = keep[n] = 1;
+    auto off = [&](std::size_t i, std::size_t a, std::size_t b) { return distToSegment(pts[i], pts[a], pts[b]); };
+    douglasPeucker(0, far, tol, off, keep);   // (polyline.h)
+    douglasPeucker(far, n, tol, off, keep);
     Poly2 out;
     for (std::size_t i = 0; i < n; ++i)
         if (keep[i]) out.push_back(pts[i]);

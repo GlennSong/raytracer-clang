@@ -2,6 +2,7 @@
 
 #include "jolt_job_adapter.h"
 #include "../../job_system.h"
+#include "../clock.h"   // kDefaultFixedStep
 
 #include <Jolt/Jolt.h>
 
@@ -256,6 +257,8 @@ struct PhysicsWorld::Impl {
         std::vector<char> diffFront;   // per differential: a front axle's?
         float frontShare = 0.5f;
         float dragArea = 0.0f;         // Cd x A (m^2); > 0 applies quadratic aero drag each step
+        float downforce = 0.0f;        // g at 100 km/h (VehicleConfig::downforce)
+        float mass = 1500.0f;
         float centerLimitedSlip = 1.4f; // the coupling between axles in 4WD (open in 2WD)
         bool tractionSplit = false;     // VehicleConfig::tractionSplit
         float appliedShare = -1.0f;     // the front share the differentials carry this step
@@ -886,16 +889,23 @@ Real PhysicsWorld::ragdollSpeed(RagdollId id) const {
 // tests/test_driving_lab.cpp (launch envelope, lane hold, kerb climb + its
 // no-clearance control, wall stop) — drive the gates there before tuning here.
 
+Real PhysicsWorld::spawnHeight(const VehicleConfig& config) {
+    Real h = config.chassisHalfExtent.y;
+    for (const VehicleWheel& w : config.wheels) h = std::max(h, w.suspensionMax + w.radius - w.position.y);
+    return h + 0.01;
+}
+
 Real PhysicsWorld::launchAccel(const VehicleConfig& config, Real friction, Real toSpeed) {
     PhysicsWorld w;
     if (!w.initialize()) return 0;
     w.addBox(Vec3(3000, 1, 3000), Vec3(0, -1, 0), Quat::identity(), BodyMotion::Static, 0.0, friction);
     w.optimizeBroadPhase();
-    const VehicleId car = w.addVehicle(config, Vec3(0, config.chassisHalfExtent.y + 0.35, 0), Quat::identity());
+    const VehicleId car = w.addVehicle(config, Vec3(0, spawnHeight(config), 0), Quat::identity());
     if (car == INVALID_VEHICLE) return 0;
-    const Real dt = 1.0 / 60.0;
-    for (int i = 0; i < 60; ++i) w.update(dt);   // settle on the springs
-    for (int i = 1; i <= 60 * 15; ++i) {
+    const Real dt = kDefaultFixedStep;   // (the step the city's cars drive on)
+    const int perSecond = static_cast<int>(std::lround(1.0 / dt));
+    for (int i = 0; i < perSecond; ++i) w.update(dt);   // settle on the springs
+    for (int i = 1; i <= perSecond * 15; ++i) {
         w.setVehicleInput(car, 1.0, 0, 0);
         w.update(dt);
         if (w.vehicleVelocity(car).length() >= toSpeed) return toSpeed / (i * dt);
@@ -1156,6 +1166,8 @@ PhysicsWorld::VehicleId PhysicsWorld::addVehicle(const VehicleConfig& cfg,
     v.frontShare = share;
     v.centerLimitedSlip = cfg.centerLimitedSlip >= 1e29 ? FLT_MAX : static_cast<float>(cfg.centerLimitedSlip);
     v.dragArea = static_cast<float>(std::max(Real(0), cfg.dragArea));
+    v.downforce = static_cast<float>(std::max(Real(0), cfg.downforce));
+    v.mass = static_cast<float>(cfg.mass);
     v.tractionSplit = cfg.tractionSplit;
     v.appliedShare = share;
     for (const VehicleWheel& w : cfg.wheels) v.wheelRear.push_back(w.position.z < zMid ? 1 : 0);   // (the drift's)
@@ -1493,12 +1505,30 @@ void PhysicsWorld::applyAeroDrag(std::size_t index) {
     bi.AddForce(v.body, vel * (-0.5f * 1.225f * v.dragArea * speed));
 }
 
+// DOWNFORCE (VehicleConfig::downforce): mass x g x downforce x (v / 100 km/h)^2, capped at 1 g, down the chassis' up
+// axis while a wheel touches -- so it presses the tyres onto the road, never pulls a car off a wall it climbs.
+void PhysicsWorld::applyDownforce(std::size_t index) {
+    Impl::Vehicle& v = impl->vehicles[index];
+    if (v.downforce <= 0.0f || !v.constraint) return;
+    bool grounded = false;
+    for (const JPH::Wheel* w : v.constraint->GetWheels())
+        if (w->HasContact()) { grounded = true; break; }
+    if (!grounded) return;
+    JPH::BodyInterface& bi = impl->bodies();
+    const float speed = bi.GetLinearVelocity(v.body).Length();
+    const float g = std::min(1.0f, v.downforce * (speed / 27.78f) * (speed / 27.78f));
+    if (g <= 0.0f) return;
+    const JPH::Vec3 up = bi.GetRotation(v.body) * JPH::Vec3(0, 1, 0);
+    bi.AddForce(v.body, up * (-v.mass * 9.81f * g));
+}
+
 void PhysicsWorld::update(Real deltaTime, int collisionSteps) {
     if (impl) {
         for (std::size_t i = 0; i < impl->vehicles.size(); ++i) {
             applyDrift(i, static_cast<float>(deltaTime));
             if (!impl->vehicles[i].drifting) applyYawAssist(i);   // the slide is the drift's to hold
             applyAeroDrag(i);
+            applyDownforce(i);
             applyTractionSplit(i);
         }
         impl->physicsSystem.Update(static_cast<float>(deltaTime), collisionSteps,

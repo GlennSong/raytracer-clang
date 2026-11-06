@@ -1,5 +1,6 @@
 #include "test_framework.h"
 
+#include "../src/engine/procgen/city/polyline.h"   // distToSegment, distToPolyline
 #include "../src/apps/citysim/city_render.h"
 #include "../src/apps/citysim/city_vehicles.h"   // promotedLamps (pure mapping)
 #include "../src/engine/asset_manager.h"
@@ -7,6 +8,7 @@
 #include "../src/engine/components.h"
 #include "../src/engine/mesh_uploader.h"
 #include "../src/engine/procgen/city/roads/road_entity.h"
+#include "../src/engine/vehicle_lamps.h"   // the lit-lamp mask bits (ADR-0342)
 #include "../src/engine/world.h"
 
 #include <algorithm>
@@ -393,7 +395,7 @@ TEST_CASE(city_render_signals_light_up_and_change_state) {
 // these are stable, not flaky.
 
 TEST_CASE(car_headlights_track_the_night_clock) {
-    // At deep night every car on the move wears both headlights (a parked one may stand dark), and by day none --
+    // At deep night every car on the move wears both headlights, a parked one none (ADR-0341), and by day none --
     // over six towns, every sample. (It asked for one sample with lamps on EVERY drawn car, parked ones too, and
     // passed on the moment all six were driving; one town can put none of its six on a night shift -- ADR-0265.)
     int nightSamples = 0, nightWrong = 0, daySamples = 0, dayWrong = 0;
@@ -412,18 +414,20 @@ TEST_CASE(car_headlights_track_the_night_clock) {
         for (int i = 0; i < 2000; ++i) {
             city.step(world, 0.1);
             const Real t = city.sim().timeOfDay();
-            const std::size_t heads = groupCount(world, city.headlightGroup());
+            const std::size_t heads = city.carsLit(world, engine::kLampMaskHead);   // (cars, each its own two lenses)
             const std::size_t cars = carTotal(world, city);
             if (cars == 0) continue;
-            std::size_t driving = 0;
+            std::size_t driving = 0, onTrip = 0;
             for (int ai : city.sim().nearAgents()) {
                 const Agent& a = city.sim().agents()[static_cast<std::size_t>(ai)];
                 driving += a.mode == Agent::Mode::Driver && a.moving && a.speed > 0.5 && !a.far();
+                onTrip += a.mode == Agent::Mode::Driver && a.moving && !a.far() && !a.released;
             }
-            if (t > 20.0 || t < 5.0) {          // deep night: BOTH headlights per car on the move
+            if (t > 20.0 || t < 5.0) {          // deep night: headlights on every car on the move, NONE on a parked one
                 if (driving == 0) continue;
                 ++nightSamples;
-                nightWrong += heads < driving * 2 || heads > cars * 2 || heads % 2 != 0;
+                // (a parked car is dark, ADR-0341: lamps on a car at rest hung over the kerb with no body under them)
+                nightWrong += heads < driving || heads > onTrip;
             } else if (t > 9.0 && t < 16.0) {   // midday: none
                 ++daySamples;
                 dayWrong += heads != 0;
@@ -431,7 +435,7 @@ TEST_CASE(car_headlights_track_the_night_clock) {
         }
     }
     std::printf("    [headlights] six towns: %d night samples (%d wrong), %d midday (%d wrong)\n", nightSamples, nightWrong, daySamples, dayWrong);
-    CHECK(nightSamples > 0 && nightWrong == 0);   // every drawn car lights two headlights at night
+    CHECK(nightSamples > 0 && nightWrong == 0);   // every drawn car on the move lights its headlights at night
     CHECK(daySamples > 0 && dayWrong == 0);       // and none by day
 }
 
@@ -449,7 +453,7 @@ TEST_CASE(car_brake_lights_come_on_when_holding) {
     bool sawBrake = false;
     for (int i = 0; i < 3000; ++i) {
         city.step(world, 0.1);
-        if (groupCount(world, city.brakeLightGroup()) > 0) sawBrake = true;
+        if (city.carsLit(world, engine::kLampMaskBrake) > 0) sawBrake = true;
     }
     CHECK(sawBrake);   // cars hold at the red / yield and light their brakes
 }
@@ -470,7 +474,7 @@ TEST_CASE(car_turn_signals_flash_on_turns) {
         city.step(world, 0.1);
         // A turning car's indicator flashes (sim-clock blink), so over many steps
         // a Turning-state car coincides with a blink-on window.
-        if (groupCount(world, city.turnSignalGroup()) > 0) sawTurn = true;
+        if (city.carsLit(world, engine::kLampMaskLeft | engine::kLampMaskRight) > 0) sawTurn = true;
     }
     CHECK(sawTurn);
 }
@@ -491,24 +495,11 @@ TEST_CASE(externally_owned_cars_draw_no_lamps) {
     bool everLit = false;
     for (int i = 0; i < 500; ++i) {
         city.step(world, 0.1);
-        if (groupCount(world, city.headlightGroup()) > 0 ||
-            groupCount(world, city.brakeLightGroup()) > 0 ||
-            groupCount(world, city.turnSignalGroup()) > 0)
-            everLit = true;
+        if (city.carsLit(world, ~0u) > 0) everLit = true;
     }
     CHECK(!everLit);   // no instanced lamps while the cars are externally owned
 }
 
-// Distance from point p to segment [a,b] (XZ).
-static double segDist(Vec2 p, Vec2 a, Vec2 b) {
-    Vec2 ab(b.x - a.x, b.y - a.y);
-    double L2 = ab.x * ab.x + ab.y * ab.y;
-    double t = L2 > 1e-9 ? ((p.x - a.x) * ab.x + (p.y - a.y) * ab.y) / L2 : 0.0;
-    if (t < 0) t = 0; else if (t > 1) t = 1;
-    double cx = a.x + ab.x * t, cy = a.y + ab.y * t;
-    double dx = p.x - cx, dy = p.y - cy;
-    return std::sqrt(dx * dx + dy * dy);
-}
 
 TEST_CASE(signal_poles_stand_outside_the_carriageway) {
     // A WIDE cross: a fixed pole setback would land inside the carriageway ("in
@@ -538,7 +529,7 @@ TEST_CASE(signal_poles_stand_outside_the_carriageway) {
         Vec2 p(t.m[0][3], t.m[2][3]);
         double dmin = 1e9;
         for (const auto& link : nav.links)
-            dmin = std::min(dmin, segDist(p, nav.nodes[link.from], nav.nodes[link.to]));
+            dmin = std::min(dmin, distToSegment(p, nav.nodes[link.from], nav.nodes[link.to]));
         CHECK(dmin > halfW * 0.9);   // clear of every carriageway (not in the road)
     }
 }
@@ -1155,7 +1146,8 @@ TEST_CASE(fleet_bridge_holds_a_promotable_body_per_variant) {
 
     for (int v = 0; v < static_cast<int>(city.carGroups().size()); ++v) {
         CHECK(city.carChassisMesh(v).valid());
-        CHECK(city.carWheels(v).size() == 4u);
+        const engine::PhysicsWorld::VehicleConfig* c = city.carConfig(v);   // (a motorcycle's slot: two wheels)
+        CHECK(city.carWheels(v).size() == (c && c->twoWheeler ? 2u : 4u));
     }
     // Slots wrap the way a driver's vehicle index does, so a car in any slot can
     // be promoted (the sim hands out indices unbounded by the fleet size).
@@ -1173,14 +1165,16 @@ TEST_CASE(fleet_bridge_holds_a_promotable_body_per_variant) {
         bool hasSeat = false;
         const std::vector<PromotedLamp> lamps =
             promotedLamps(city.carLamps(v), &seat, &hasSeat);
-        CHECK(lamps.size() == 4u);
+        const engine::PhysicsWorld::VehicleConfig* c = city.carConfig(v);
+        const bool bike = c && c->twoWheeler;   // one lamp each end, on its centre line
+        CHECK(lamps.size() == (bike ? 2u : 4u));
         int front = 0, left = 0;
         for (const PromotedLamp& l : lamps) {
             if (l.front) ++front;
             if (l.left) ++left;
         }
-        CHECK(front == 2);   // two at the nose...
-        CHECK(left == 2);    // ...and one of each pair per indicator side
+        CHECK(front == (bike ? 1 : 2));   // two at the nose...
+        CHECK(bike || left == 2);         // ...and one of each pair per indicator side
         // ON the bodywork, which is the whole difference from the corner guess:
         // that fallback puts its lenses at ±(halfLength + 0.05), i.e. floating
         // just PAST the tail. A real marker sits on the nose/tail ring itself

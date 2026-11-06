@@ -1,5 +1,6 @@
 #include <algorithm>
 #include "tree_recipe.h"
+#include "../../hash.h"   // lowbias32
 
 #include "lsystem.h"
 
@@ -58,10 +59,6 @@ const std::vector<Field>& fields() {
     return v;
 }
 
-uint32_t mix32(uint32_t h) {
-    h ^= h >> 16; h *= 0x7feb352du; h ^= h >> 15; h *= 0x846ca68bu; h ^= h >> 16;
-    return h;
-}
 uint32_t nameHash(const std::string& s) {
     uint32_t h = 2166136261u;
     for (unsigned char c : s) { h ^= c; h *= 16777619u; }
@@ -69,7 +66,7 @@ uint32_t nameHash(const std::string& s) {
 }
 // A number in [0,1) for this seed and this name: each range draws on its own, so adding one leaves the others alone
 double draw01(uint32_t seed, const std::string& name) {
-    return mix32(seed * 0x9E3779B9u ^ nameHash(name)) / 4294967296.0;
+    return lowbias32(seed * 0x9E3779B9u ^ nameHash(name)) / 4294967296.0;
 }
 
 }  // namespace

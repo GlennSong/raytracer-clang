@@ -21,7 +21,6 @@ using namespace engine;
 
 namespace {
 
-constexpr Real kPi = 3.14159265358979323846;
 
 // vehicles.lua, class sedan: 4.60 x 1.82 x 1.45 m, wheel 0.62 m, track 1.56,
 // wheelbase 4.35 wd, overhangs 1.45 / 1.61 wd, mass = volume * 120,
@@ -86,7 +85,7 @@ Vec2 forward2(const Quat& q) {
 
 Real headingDeg(const Quat& q) {
     const Vec2 f = forward2(q);
-    return std::atan2(f.x, f.y) * 180.0 / kPi;
+    return std::atan2(f.x, f.y) * 180.0 / PI;
 }
 
 // One sample of the probe from the car's state.
@@ -98,12 +97,12 @@ void sample(Probe& p, PhysicsWorld& w, PhysicsWorld::VehicleId car) {
     if (speed > 2.0) {
         const Real along = v.x * f.x + v.z * f.y;
         const Real across = v.x * f.y - v.z * f.x;
-        const Real slip = std::fabs(std::atan2(across, along)) * 180.0 / kPi;
+        const Real slip = std::fabs(std::atan2(across, along)) * 180.0 / PI;
         p.maxSlipDeg = std::max(p.maxSlipDeg, slip);
         p.endSlipDeg = slip;
     }
     const Vec3 right = q.rotate(Vec3(1, 0, 0));
-    const Real roll = std::fabs(std::asin(std::clamp(right.y, Real(-1), Real(1)))) * 180.0 / kPi;
+    const Real roll = std::fabs(std::asin(std::clamp(right.y, Real(-1), Real(1)))) * 180.0 / PI;
     p.maxRollDeg = std::max(p.maxRollDeg, roll);
     p.minUp = std::min(p.minUp, q.rotate(Vec3(0, 1, 0)).y);
     p.endSpeed = speed;
@@ -286,7 +285,7 @@ TEST_CASE(handling_probe_sweep_prints) {
         PhysicsWorld world;
         world.initialize();
         world.addBox(Vec3(3000, 1, 3000), Vec3(0, -1, 0), Quat::identity(), BodyMotion::Static, 0.0, 0.85);
-        const Quat kerbRot = Quat::fromAxisAngle(Vec3(0, 1, 0), 25.0 * kPi / 180.0);
+        const Quat kerbRot = Quat::fromAxisAngle(Vec3(0, 1, 0), 25.0 * PI / 180.0);
         world.addBox(Vec3(80, 0.075, 40), kerbRot.rotate(Vec3(0, 0, 40)) + Vec3(0, 0.075, 60), kerbRot,
                      BodyMotion::Static, 0.0, 0.85);
         world.optimizeBroadPhase();
@@ -406,7 +405,7 @@ TEST_CASE(handling_probe_turn_radius_prints) {
                 prev = h;
                 if (i >= 60) { total += d; vsum += fwdSpeed; ++n; }
             }
-            const Real yawRate = std::fabs(total) / (n / 60.0) * kPi / 180.0;   // rad/s
+            const Real yawRate = std::fabs(total) / (n / 60.0) * PI / 180.0;   // rad/s
             const Real vAvg = vsum / n;
             std::printf("[handling] radius %-14s at %4.1f m/s: v=%.1f yaw=%.2f rad/s radius=%.1f m\n",
                         mode ? "shaped+assist" : "raw", speed, vAvg, yawRate, yawRate > 1e-3 ? vAvg / yawRate : 0.0);
@@ -455,7 +454,7 @@ TEST_CASE(handling_slanted_kerb_at_65kmh_stays_upright) {
     PhysicsWorld world;
     world.initialize();
     world.addBox(Vec3(3000, 1, 3000), Vec3(0, -1, 0), Quat::identity(), BodyMotion::Static, 0.0, 0.85);
-    const Quat kerbRot = Quat::fromAxisAngle(Vec3(0, 1, 0), 25.0 * kPi / 180.0);
+    const Quat kerbRot = Quat::fromAxisAngle(Vec3(0, 1, 0), 25.0 * PI / 180.0);
     world.addBox(Vec3(80, 0.075, 40), kerbRot.rotate(Vec3(0, 0, 40)) + Vec3(0, 0.075, 60), kerbRot,
                  BodyMotion::Static, 0.0, 0.85);
     world.optimizeBroadPhase();

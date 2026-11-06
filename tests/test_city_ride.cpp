@@ -246,11 +246,7 @@ TEST_CASE(a_bus_glides_at_the_city_s_sim_rate) {
         yaw.push_back(std::atan2(pose.m[0][2], pose.m[2][2]));
         speed.push_back(city.sim().agents()[static_cast<std::size_t>(bus)].speed);
     }
-    auto wrap = [](Real d) {
-        while (d > PI) d -= 2 * PI;
-        while (d < -PI) d += 2 * PI;
-        return d;
-    };
+    auto wrap = [](Real d) { return wrapRadians(d); };
     Real jerkMax = 0, jerkSum = 0, yawJump = 0;
     int n = 0;
     for (std::size_t k = 1; k + 1 < p.size(); ++k) {

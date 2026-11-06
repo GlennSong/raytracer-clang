@@ -38,7 +38,6 @@ PolySet offsetSet(const PolySet& a, double delta);
 PolySet closing(const PolySet& a, double r);
 
 // --- queries -------------------------------------------------------------------------
-double ringArea(const Ring& r);             // signed (+ CCW)
 double setArea(const PolySet& s);
 bool contains(const Polygon2& p, const Vec2& q);   // holes excluded; boundary counts as inside
 bool contains(const PolySet& s, const Vec2& q);

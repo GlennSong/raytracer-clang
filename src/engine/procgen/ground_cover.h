@@ -15,14 +15,23 @@
 
 #include "../../rt_math.h"
 #include "noise.h"
+#include "city/polygon.h"   // Vec2 (the settled ground's outlines)
 
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <vector>
 
 namespace engine {
 
 struct TerrainMaps;
+// SETTLED GROUND (the terrain block's "settled": a beach town's outline, island_world.h stripGround): no beach sand
+struct SettledGround {
+    std::vector<std::vector<Vec2>> polys;
+    std::vector<Vec2> lo, hi;   // each one's box
+    explicit SettledGround(std::vector<std::vector<Vec2>> p);
+    bool covers(double x, double z) const;
+};
 struct ForestParams;
 class TrailNetwork;
 
@@ -45,6 +54,14 @@ struct GroundCoverParams {
     Vec3 sand{0.40, 0.34, 0.22};
     Vec3 rock{0.085, 0.080, 0.072};      // dark enough to sit beside stylized grass in full sun
     Vec3 snow{0.85, 0.88, 0.92};
+    // HEATH (ADR-0331; #187, the reference's red and orange hillsides): a share of the GRASS that is heath -- ling,
+    // bilberry, dwarf shrub -- in patches over the open upland. 0 patches: none. It thins the meadow's grass layers
+    // and feeds a layer that names it ("cover": "heath"); a flat-coloured ground tints toward `heath`. From
+    // `heathFrom` x the upland height up to the mountain's, a patch `heathScale` m across, more on dry convex ground.
+    Vec3 heath{0.11, 0.045, 0.02};
+    double heathPatches = 0.0;
+    double heathFrom = 0.5;
+    double heathScale = 220.0;
     // THE GROUND'S MAPS (ADR-0128, procgen/terrain_maps.h), when the terrain is a weathered one: rock where
     // the ground sheds soil (steep, convex, high), scree below cliffs, meadow in the hollows, snow held in
     // gullies and blown off ridges, washed gravel down the channels
@@ -54,10 +71,15 @@ struct GroundCoverParams {
     std::shared_ptr<const ForestParams> forest;
     // HIKING TRAILS (ADR-0134): bare earth along the terrain's "trails", about 1.5 m wide, ragged
     std::shared_ptr<const TrailNetwork> trails;
+    std::shared_ptr<const SettledGround> settled;
+    // LEVELLED GROUND (the terrain block's "regrade" outlines, ADR-0323): the maps' scree, washed gravel and thin soil are
+    // the ground's as it was before a town's patch was levelled; on it the cover reads plain soil
+    std::shared_ptr<const SettledGround> levelled;
 };
 
 struct Cover {
     double grass = 1, dirt = 0, sand = 0, rock = 0, snow = 0;   // sum to 1
+    double heath = 0;   // the share of `grass` that is heath (0..1)
     Biome biome = Biome::Lowland;
     Vec3 colour;
 };

@@ -55,10 +55,15 @@ engine::RenderMesh buildGroundSittingPersonMesh(int outfit) {
     op.skin = o.skin;
     return engine::buildSeatedOccupant(op);
 }
+engine::RenderMesh buildLyingPersonMesh(int outfit, int variant) {
+    return engine::buildPosedPerson(engine::lieBodyPose(variant), outfit);
+}
 int playerOutfit() { return kNumOutfits - 1; }
 
-engine::RenderMesh buildPersonMesh(Real swing, int outfit) {
-    return engine::buildPosedPerson(engine::walkBodyPose(swing), outfit);   // knees and elbows (block_body.h)
+engine::RenderMesh buildPersonMesh(Real swing, int outfit, Real headScale) {
+    engine::BodyPose pose = engine::walkBodyPose(swing);   // knees and elbows (block_body.h)
+    pose.headScale = headScale;
+    return engine::buildPosedPerson(pose, outfit);
 }
 
 engine::RenderMesh ringXZ(Real innerFrac, int segs) {
@@ -178,20 +183,6 @@ RenderMaterial widgetMaterial(Vec3 color) {
     // skipped by every backend's shadow pass, so gizmos cast no shadows.
     m.albedo = color * 0.15; m.metallic = 0.0f; m.roughness = 1.0f; m.opacity = 1.0f;
     m.emission = color * 1.7; m.flags = RenderMaterial::FLAG_OVERLAY;
-    return m;
-}
-
-// A car lamp lens: dark body so the housing reads when unlit, strong emission in
-// the lamp colour so it glows through daylight and bloom — the same recipe as
-// signalMaterial (FLAG none, regular depth), just parameterised by colour.
-RenderMaterial lampMaterial(Vec3 emission) {
-    RenderMaterial m;
-    m.albedo = emission * 0.12f;   // dark lens; the glow carries the hue
-    m.metallic = 0.0f;
-    m.roughness = 0.4f;
-    m.opacity = 1.0f;
-    m.emission = emission;
-    m.flags = 0;
     return m;
 }
 

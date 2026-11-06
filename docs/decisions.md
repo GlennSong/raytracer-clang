@@ -14082,3 +14082,1477 @@ Nothing in the world changes. Each item was checked for callers before it went:
 8. `KdTree` is renamed `TriangleBVH` (triangle_bvh.h): it splits triangles at the median centroid and its
    children overlap, so it is a BVH, not a k-d tree. `AABB` moves to its own header (aabb.h), shared by the
    triangle BVH and the instance BVH.
+
+## ADR-0295 — Place kinds and dwellings are data: places.lua
+
+#172 items 3 and 5, step 1 of the households plan (Glenn, 2026-11-01: residents get ages and households; "apartments,
+condos, family houses actually just house all family together and single people would have their own apartment").
+
+Before, the loader turned five recipe names into `campus` codes (1 teaching hall ... 5 sports field) with an
+if-chain, and the citysim read the numbers in 18 places. A home was a floor area: residents were drawn into it one
+at a time, so a family could not share one.
+
+**Decision.**
+- `assets/scripts/places.lua` lists the place KINDS: one named after each PlaceType, plus teaching, library,
+  residence, quad and field, each with the recipes that grow it and TAGS (campus, classes, library, beds, grounds,
+  sports). A recipe no kind lists takes its type's kind. The sim asks tags (`placeKinds().tag("beds")`), never a kind
+  number; `Place::campus` and the loader's if-chain are gone. AuthoredPlace carries the recipe and its unit count
+  instead.
+- A hall's beds come from its kind (`bed_m2`, 45 m² of floor a bed) instead of the loader. They are now counted on
+  the place's floor area (every storey of every unit) where the loader used the plan times height/3.3, so a hall's
+  bed count moves a little.
+- A HOME is cut into DWELLINGS, one household each, by the rule for its USE (building_uses.lua, the same answer its
+  interior is planned from): `house` makes each grown unit one dwelling, its bedrooms from `house_sizes` by floor
+  area; `apartments` cuts 75% of the floor into studios, 1-, 2- and 3-beds in shares 15/35/35/15 (largest remainder,
+  never none). PlaceMap keeps them (`dwellings()`); nothing places people by them yet (step 2).
+- `defaultPlaceKindCatalog` is the same catalog in C++; a test keeps the two describing identically, and the reader
+  refuses a type with no kind, a recipe two kinds claim, an unknown type and a mix with no shares.
+- The population cache key hashes the catalog and each place's kind name (kPopulationFormat 8).
+
+The building generator's own `BuildingParams::campus` (room plans, facades, the lot cache) is the building's shape,
+not who uses it, and stays.
+
+## ADR-0296 — Households in the dwellings: people.lua, and the population capped by the housing
+
+#172 items 3 and 5, step 2 of the households plan (Glenn, 2026-11-01: "a family would be expressed by like a unit";
+"single people would have their own apartment ... and single people could have roommates"; more people than homes:
+"Do a cap for now").
+
+Before, each resident drew a home by floor area on their own, with no limit, and a role by dice: about one in five a
+stroller, one in three walkers a day off. Nobody had an age, and nobody lived with anybody.
+
+**Decision.**
+- `assets/scripts/people.lua` (households.h `PeopleCatalog`; `defaultPeopleCatalog` the same in C++, kept equal by a
+  test) holds:
+  - LIFE STAGES with what they mean: `job` (looks for work), `walks` (never drives), `beds` (lives in a hall's beds);
+  - AGE BANDS (child 0-17, young 18-24, adult 25-64, senior 65-90), each with the stages its people lead, by share;
+  - HOUSEHOLD TYPES (single, couple, roommates, single parent, family, three generations, seniors), each with a share,
+    the bedrooms of the dwellings it fits and its members: groups of one band, `count` of them or one a bedroom;
+  - who fills the halls' beds (young students, at most a quarter of the walkers).
+  The reader refuses an unknown stage or band, a type without a share, and a dwelling size no type fits.
+- `planHouseholds` fills the halls' beds first, then every dwelling in an order of the seed's. Each dwelling draws a
+  type that fits its bedrooms, by share. If that type would need more people or more walk-only members than are left,
+  the dwelling tries its other fitting types; if none fits, it stays empty. One household to a dwelling, always.
+- assignPlaces plans households for its residents (the buses' and cabs' drivers aside). It matches each member to an
+  agent: a walk-only member to a walker, the adults to the rest, with the drivers spread evenly over the adults. Each
+  agent gets `household`, `age` and `stage`, and its home is its household's. The life stage, not dice, decides who
+  works: a child, a retiree or someone at home goes out on the day-off and park outings, never gets the job search
+  and is never hired as staff. The hall students are the plan's, not a draw of their own.
+- THE CAP: city_render runs the same plan on the density population before the sim builds. When the housing holds
+  fewer people than the streets ask for, cars and walkers are both cut to what is housed (walkers enough for the
+  children and students), and the shortfall is logged as more dwellings wanted. An AUTHORED car or walker count is
+  the level's word and is kept. Anyone past the housing is counted unhoused and takes a home by floor area, as before.
+- The log and `CitySim::populationLine()` report households by type, people by band and stage, dwellings filled, hall
+  beds, and anyone unhoused.
+- The population cache key hashes the people catalog, the seed and every dwelling (kPopulationFormat 9). The plan is
+  cheap and sequential, so it is made again on a cache hit. The cache keeps only what follows from it.
+
+Roles are still today's four built-ins and the staff (step 3 makes every job a place hiring and turns the life stages
+into roles). Within a home, the relationship tag is still Neighbor (step 4).
+
+## ADR-0297 — Roles from life stages and jobs: no built-in roles
+
+#172 items 3 and 5, step 3 of the households plan. Glenn, 2026-11-01: a commuter "as a role doesn't totally make
+entire sense since commuting is only a part of a role". Roles are what a person is; commuting and a day out are parts
+of a day.
+
+Before, the catalog had to lead with four built-ins (commuter, shopkeeper, stroller, student) that the sim named in
+C++ (`kRoleCommuter`... and `builtinRolesLead`). Dice made about one in five a stroller.
+
+**Decision.**
+- Nobody's role is named in C++. A resident holds one of:
+  - THEIR STAGE'S ROLE: people.lua gives each stage without a job a `role` (child, student, at_home, retired);
+  - THEIR JOB'S ROLE: roles.lua `job = { places, hours = "authored" }`. The first role in order that takes the place
+    the job search found: `shopkeeper` for a shop, cafe and the like whose hours the level wrote (on those hours),
+    else the catch-all `worker` (`job = {}`);
+  - A STAFF ROLE, hired by the places it staffs from the catch-all's holders, as before.
+- The job search itself (the threaded commute search, the bus and cross-town commutes) is unchanged. Only who goes
+  looking (the stage) and what the job makes them (the data) moved.
+- `commuter` became `worker`. `stroller` became three day-out roles: `child` (never out at night), `at_home` and
+  `retired`. A day-out role is any role with `commute = false`; code that asked "a stroller?" asks `daysOut`. A
+  level script's `stroller` table replaces every day-out role's day, and its `schedule` every job role's.
+- Anyone past the housing (a level's own count) is a LODGER, drawn from people.lua `lodgers` (bands with no walk-only
+  stage). The buses' and cabs' drivers have no stage and work. The role dice are gone.
+- RoleCatalog::check() replaces builtinRolesLead: a catalog needs a catch-all job role. PeopleCatalog::check() needs
+  every stage without a job to name a role.
+
+## ADR-0298 — Denser, taller housing; flats over shops are homes
+
+#172. Glenn, 2026-11-01: "build denser housing. See how much we can fit. Build up as well." The population cap
+(ADR-0296) showed the island's housing held 84k of the 238k its streets ask for.
+
+**What the audit found** (level_tests `housing_audit_prints`, RT_HOUSING=1):
+- Homes were 29% of the island's 15.3M m² of floor; the downtowns were all office.
+- Residential districts were 57% detached houses: 4,938 buildings and 11,410 dwellings.
+- Shop buildings with flats upstairs (mixed use, brick shop, corner shop) housed nobody: 15,658 dwellings.
+
+**Decision.**
+- FLATS OVER SHOPS (load time, no re-bake): a shop building whose units are `residential` adds a home place for the
+  storeys above the ground. The shop place keeps its ground floor.
+- THE MIXES (architectPick; lots tag 2026-11-01.1):
+  - residential: houses from 57% to 27% of the lots (duplexes 6%); rows 10%, courtyard blocks 8%, garden condos
+    12%, apartments 17%, walk-ups 10%;
+  - commercial: condo towers from 6% to 10%, walk-ups from 2% to 8%, mixed use 14%; fewer banks, office midrises
+    and plazas;
+  - financial: residential towers are 18% (pencil towers 8%, condo towers 10%), carved from the glass, podium,
+    slab and office shares.
+- BUILD UP:
+  - apartments 3-5 storeys plus up to 4 toward the town (slender 2.4);
+  - walk-ups 4-6 plus 2; garden condos 3-5 plus 2; courtyard blocks 5-7 plus 3;
+  - terrace condos 5-7; lofts 4-6; mixed use 3-6;
+  - condo towers 6-10 plus 14 at the core, their slenderness rising with it (a residential tower downtown).
+- "Toward the town" in a residential quarter is a new gradient, `suburbAt` in the lot pass: 1 at the downtown's rim,
+  0 at 2.5 times it. Coreness was 0 everywhere past the rim.
+
+metro_v2_test: 3,430 dwellings before ADR-0296 and this; 4,163 with the flats over shops; 8,970 now. Its streets'
+10,516 people are all housed.
+
+## ADR-0299 — Courtyard blocks uncapped; whole blocks of homes rise
+
+Glenn, 2026-11-01: "some of the buildings that take up a whole block are sometimes just a few stories high. Could
+those be converted to a taller skyscraper?"
+
+**Found.**
+- The courtyard block's slenderness of 1.2 was meant for its 15 m wings. But capFloors reads the LOT's short side,
+  so on a 12-16 m lot, where no court fits and it grows as a plan building, it was held to 4-5 storeys whatever it
+  drew. The island's courtyard blocks averaged 4.0-4.3 storeys.
+- On island_8_nature, only downtown (financial) blocks become whole-block buildings. The 16 large blocks elsewhere
+  are skipped for their slope. Downtown's whole blocks are towers already; the big low ones are the capitol, the
+  courthouse and parking garages, all deliberate.
+
+**Decision.**
+- The courtyard block's slenderness is 2.2. The island's courtyard blocks now average 6.7 storeys (commercial) and
+  7.4 (residential); 108,583 dwellings, up from 104,522.
+- A whole-block landmark (architectBlockLandmark) on its own dice: in a residential quarter at suburb coreness 0.5
+  or more (45%), or in a commercial one (25%), a residential condo tower in its plaza. It has 12-18 storeys, plus up
+  to 8 by coreness. Neither island_8_nature nor metro_v2_test has such a block today; it serves levels that do.
+- The housing audit lists the big low buildings (footprint 2,500 m² or more, under ten storeys).
+- Lots tag 2026-11-01.2.
+
+## ADR-0300 — The kinds of place on an island are data: settlements.lua
+
+Step 1 of the beach-town plan (~/.claude/plans/beach-town.md); AGENTS.md "Kinds Are Data": a new kind of place is a
+data edit, never a new C++ branch. Before, "city", "town" and "mountain town" were compared as strings in about 26
+places: the island planner, the road signs and `city_plan`.
+
+**Decision.**
+- `assets/scripts/settlements.lua` (procgen/world/settlements.h `SettlementCatalog`; `defaultSettlements` the same in
+  C++, kept equal by a test) says what each kind IS:
+  - its hub district and its radius rule from flat ground;
+  - its coast reach; whether the ring calls at it, the pass ends at it, or a mountain road climbs to it;
+  - its freeway diamonds, link candidates and their spacing, and its local buses;
+  - whether the island's far signs name it, its limit sign and how place_names names it;
+  - its street brief (the blocks, warp, rings and spokes) and how the map draws it.
+- WHERE a kind is found on new ground (the deepest plain each side, other deep flat ground, the highest good ground)
+  stays the planner's code. A kept place's kind comes from its hub: a hub may name its kind (`settlement`), else the
+  first kind of its district (financial: city, commercial: town). `city_plan` writes `settlement` only for a kind
+  that is not its district's first, so today's levels are unchanged.
+- The IslandWorld keeps its catalog (`w.kinds`); `planIsland` takes one, and `city_plan` loads the shipped file.
+- A limit sign's legend carries its title (`title`: the kind's limitSign); a legend without one reads as before.
+- PROOF: island 8 planned again from island_8_nature with `--keep-sites`. Its report and all eight briefs are byte
+  for byte the baseline's, and so are its signs, but for the limit signs' new title (9 signs; the map's hover text).
+
+## ADR-0301 — Beach towns: strips grown from a coast road, a seafront line hub, a town's own mixes
+
+Steps 2b-4 of the beach-town plan (~/.claude/plans/beach-town.md). Glenn, 2026-11-01: "A beach town with shops and
+nearby homes"; "a coastal road between cities ... where the beach towns grow out of ... a scenic route"; he picked
+three of the candidate shores (A, C, D).
+
+**Decision.**
+- THE COAST ROAD (planCoastRoad): a road of kind "coast" from a coastal place's limits to the next along the shore.
+  It follows a guide line 150 m behind the shoreline, waypoint to waypoint, routed in a band 60-700 m from the sea,
+  out of the towns. It is drawn on the map, written to the lanes scene as the other country roads are (class
+  "mountain", lookouts), and joined to the towns' streets at its ends.
+- THE BEACH TOWN (addBeachTown; settlements.lua kind "beach town", a STRIP): the coast road through the beach. Its
+  middle 900 m is the town's SPINE, and the town is appended as the last site, so every other place keeps its seed
+  and the freeway its route. The road becomes its two legs. The planner (world.strip) lays the town along the spine:
+  - the seafront an arterial;
+  - three rows behind it, 85 m apart, following its curve;
+  - cross streets every 100 m, every third a collector;
+  - limits the strip's outline, 30 m over the sea side.
+  Its land floor is 0.5 m (the seafront runs low beside the sand).
+- `city_plan island-cities ... --beach-towns ACD` adds them off the candidates. A level's own beach-town hubs
+  (`settlement`) are grown again from their coast road on --keep-sites, not re-sited inland.
+- A LINE HUB (DistrictMap::hubLines, hubRadii): a hub may be a line with its own reach. A strip town's hub is its
+  seafront at 60 m, so the seafront row is commercial and the rest residential. Point hubs zone exactly as before.
+- A TOWN'S OWN MIXES (LotParams::hubBooks; the hub's `mixes`, {district: [[recipe, weight]]}): archetype tables for
+  the lots whose nearest hub it is, in place of the district ladders. Any other place keeps the level's book or the
+  compiled ladders. An unknown recipe rejects that mix, loudly. The beach town's mixes:
+  - seafront: mixed use, brick shops, cafes, corner shops, a small hotel, terrace condos and walk-ups;
+  - behind: cottages, villas, modern houses, bungalows, duplexes, garden condos and walk-ups.
+  The thresholds come from one helper (archetypeThresholds), shared with the Lua book.
+
+Deerhaven (window level island_8_beach): 178 buildings, none over 8 storeys, 746 dwellings.
+- Seafront: 20 mixed use, 13 cafes, 11 small hotels, 9 corner shops, 8 brick shops.
+- Behind: 15 villas, 15 cottages, 11 bungalows, 10 duplexes, and walk-ups and condos.
+
+Owed: the landmark quotas put a hospital, police and a university in a beach town (a kind's landmarks are not data
+yet); a few cross streets end in stubs past the last row; the north leg crosses Saltwood's outer loop at grade.
+
+## ADR-0302 — The beach as a place: a beachfront row, beach car parks, a day at the beach
+
+Glenn, 2026-11-02, on Deerhaven's first shots: "buildings on the other side of that road that are along the beach.
+There might also be a parking lot so that people visiting the beach can park somewhere. It would be nice seeing people
+actually hanging out on the beach lounging and sunbathing."
+
+**Decision.**
+- THE BEACHFRONT ROW (world.strip `promenade`, settlements.lua strip.promenade = 55): a promenade street 55 m out
+  on the sand side of the seafront. The cross streets come down to it as local lanes, which keeps the seafront's
+  junctions T-like enough for the lanes builder to weld. The seafront's line hub reaches both sides, so the row
+  takes the seafront's commercial mix. The town's limits run 30 m past the promenade.
+- BEACH CAR PARKS: a hub may name `parking` points. The block holding each one becomes a whole-block lot
+  (Lot::carPark), paved by the open lots' car park (sculptCarPark), its stalls the sim's. A beach town's are the
+  first and last blocks of its beachfront row; city_plan writes them. A `car_park` recipe (the registry, a mix may
+  name it) routes a rolled lot the same way.
+  - A curved block's short edges flip under the open frame's 0.8 m inset: openFrameOf tries the outline simplified
+    (Douglas-Peucker, 0.4 m) when the inset fails. Lots that failed before may now open, so this is lots tag
+    2026-11-01.3.
+- THE SAND: the level loader cuts the sand along every line hub into "beach" activity areas (every 60 m, from 90 m
+  out to 12 m short of the waterline). "beach" is an area site kind (isAreaSiteKind, now also the Lua reader's one
+  list). Chat, picnic, sunbathe and catch take beaches as well as lawns.
+- A DAY AT THE BEACH (activities.lua beach_day): an hour or two lying out in fours, reached from up to 2 km. It is
+  tried first on the outing menu from 10:30 to 17:30 (35-40%) where a beach is in reach.
+
+Deerhaven at noon (window level island_8_beach): 54 people in 15 groups on the sand twelve minutes after 12:00;
+28 blocks, 884 dwellings; one beach car park (the second point fell outside a block).
+Owed: the rock scatter on the sand (the island's shore rock layers), which the next change clears.
+
+## ADR-0303 — Sun loungers, towels and umbrellas; sunbathers feet to the sea; a stroll along the shore
+
+Glenn, 2026-11-02, on the noon shots: "They should probably have a towel under them and an umbrella. Or lounge chairs —
+that would be a new type of chair that the agents and player can use." Then: "people walking around the beach too —
+on the sand", and "spread the sunbathers out and orient them 90 degrees so they have their feet to the ocean."
+
+**Decision.**
+- THREE KIT PIECES (furniture_kit `SunLounger`, `BeachUmbrella`, `BeachTowel`, appended so stored piece numbers
+  keep), coloured from a beach palette by the variant's low bits. furniture_library.lua: the lounger and the towel are
+  outdoor "beach" pieces with a `lie` verb (head at z = 0, feet toward +z); the umbrella is scenery. The player gets
+  "E lie down" from the interaction system like any bench.
+- THE LOUNGER ROWS: the level loader lays them where it cuts the beach areas (no bake: this is load-time), on two
+  stretches in three whose sand runs 34 m or more: an umbrella every 4.5 m, a lounger each side, feet to the sea, in
+  the stretch's colour. They join the lots' outdoor furniture cells (instanced, interactive). `posHash` and
+  `outdoorPiece` left city_lots' private namespace for this (city_lots.h).
+- PLACES TO LIE: the citysim gathers every outdoor piece's `lie` verb as one SpotKind::Lie spot (the middle of the
+  verb's spots, feet pointing away from its eye), carrying the library tags the catalog knows (`spotTagFromName`,
+  new `beach` = spot_tag::kBeach). RestPose for a Lie spot is Lie with `raised` (hip = the bed's height).
+- `lounger` (activities.lua / C++): a Spot activity on `bed` sites tagged beach, 60-150 min, 09-18, up to 2 km.
+- THE SHORE: a second area per stretch, "shore" (an area site kind), the wet sand 6 m from the water, 58 x 7 m.
+  `beach_stroll` is a Roam session of up to three on it (0.8-1.2 m/s, 15-40 min). It is its own area because a Roam
+  session claims a whole area and settled groups keep off one with a game on it.
+- FEET TO THE SEA: a beach area's long axis now points out to sea (halfL is its depth, halfW 26 along the shore), so a
+  Spread group lies side by side along the shore facing the water. Spread gaps: sunbathe 1.6 m, beach_day 2.0 m.
+  joinSettled keeps a spread's whole row on its area (reachW from the roles' size and the gap).
+- TOWELS AND UMBRELLAS for groups: CityRenderSystem::syncBeachThings draws a towel under every body lying on the
+  ground (lawns too), its colour by agent, and one umbrella per group lying on a beach: the furniture kit's own meshes
+  through spawnFurnitureGroups, transforms rewritten each sync.
+- Outing menu, 10:30-17:30: beach_day first (35/40%), then lounger 30%, then beach_stroll 20%.
+
+Deerhaven at noon (island_8_beach): 35 stretches, 510 loungers and umbrellas; after 12 minutes 62 lying out in 17
+groups, 34 on loungers, 9 strolling in 6 groups.
+Found on the way: a 1-minute gather window gave up a stroll before anyone had walked down to it, and the strollers
+stood about at the nearest crossing; 15 minutes, like the other beach groups.
+Owed: the lying figures are the box stand-in (a posed lying body); beach_day's 10-minute gather is short for a 2 km
+walk too.
+
+## ADR-0304 — Housemates are tied: partners, parents and children, siblings, roommates
+
+Plan step 4 (~/.claude/plans/kinds-are-data-assign-places.md): relationships inside a home, shown in the inspector.
+
+**Decision.**
+- THE TIES ARE DATA (people.lua `ties`): each tie names its other side (parent / child, partner / partner) and how
+  much older that side is at least (`older`: a parent 18, a grandparent 36). A household type lists its ties as
+  `{ from, "<tie>", to }` over its member groups: group `from` is the <tie> of group `to`; from == to ties every pair
+  in one group, and only a tie that is its own other side may. check() refuses an unanswered tie, an unknown group or
+  tie, a self-tie that is not symmetric, and a tie older on both sides. defaultPeopleCatalog matches by test.
+- THE PLANNER KEEPS THE AGES: each Resident carries its member group. After drawing a household, realize() makes the
+  younger side younger within its band, else the older side older, until nothing moves (three generations chain).
+  Six seeds: 0 of ~4,200 aged pairs too close.
+- THE SIM TIES HOUSEMATES: RelationshipTable gains `Household`, the strongest bond, and a directed tie per pair
+  (setTie / tieOf: what a is to b). assignPlaces ties each household's agents as its type says. `Neighbor` now means
+  the same building and another dwelling, since housemates hold the stronger bond and set() never downgrades.
+- THE INSPECTOR shows age and life stage, the household's type and size, and each housemate as "<tie>: UID, age",
+  then the others the agent knows.
+- No population-format bump: the population cache's key already hashes people_.describe(), which now includes the
+  ties, so every level's cache rebuilds once.
+
+Simplification: in three generations the grandparents are "parent" to both adults (one is an in-law).
+
+## ADR-0305 — People are drawn their age's height
+
+Plan step 5 (~/.claude/plans/kinds-are-data-assign-places.md): figure size by age.
+
+**Decision.**
+- people.lua bands gain `height` (against a grown adult; one number, or { at the band's youngest, at its oldest },
+  a line between). Children 0.62 at 5 to 0.97 at 17; adults 1 to 0.99; seniors 0.98 to 0.94. PeopleCatalog::heightAt
+  reads it; CitySim::bodyScale(i) is 1 for anyone the plan did not make (a bus or cab driver).
+- Every drawn body is scaled, its feet kept on the ground: the near walkers (about the capsule's foot), the crowd's
+  walking peds (agentPose stands a body half its height up), the far band, and the rest poses (seated about the hip
+  on the seat, sitting on the ground and lying at the scaled hip / half depth). Capsules stay adult-sized.
+- The child band is now 5-17: nobody carries a baby or walks a toddler yet (#174), and a two-year-old walking to the
+  park alone read wrong in the first look.
+- `who?` reports age, life stage, household and drawn height.
+
+Seen at noon in Deerhaven (island_8_beach): 54 children and 41 adults visible near the centre. With no schools
+(#173) children spend the day out, so they outnumber the working adults on the streets at midday.
+
+## ADR-0306 — A second work slot: students' evening jobs
+
+Plan step 6 (~/.claude/plans/kinds-are-data-assign-places.md): student evening jobs (a second work slot).
+
+**Decision.**
+- A ROLE MAY HAVE A SIDE JOB (roles.lua `side_job`; SideJobSpec): the share of its holders who take one, the kinds of
+  place, the shift's start and finish ranges, the share of nights worked, and how far from home. The student has one:
+  three in ten, at a cafe, restaurant, bar, shop or supermarket within 1.5 km, starting 17:30-18:30 and finishing
+  21:30-23:00, on three nights in five. defaultRoleCatalog matches by test.
+- assignSideJobs (every load, after the venues are known and before indexVenueStaffing): each holder, by its own
+  bits, takes one of the four nearest venues of those kinds open at the shift's start and an hour before its end.
+  Their shift hours count toward the venue's staffing, so a place a student works at opens for those hours.
+- A SHIFT NIGHT IS THEIR EVENING: sideShiftTonight (the role's `nights`, by the night's number) comes first in
+  eveningPlan, so the night-out machinery carries it unchanged. That covers the far tier's snapshot, the dormant
+  wake times and the Evening / EveningOver events. eveningVenue answers the job for the sleepers.
+- The live path goes through the activity catalog: a `side_job` activity (site `side_job`: the agent's own evening
+  job, on a shift night, from an hour before the shift until its end, open or not) heads the student's evening menu.
+  Its 600-minute stay outlasts the shift, so EveningOver ends it.
+- Test: three seeds, 14-20 of 60 students hold one; at mid-shift on a shift night every one of them is in at their
+  job's door. The every-activity catalog test gained a residence hall so side_job is taken up there too.
+
+Not done: daytime internships (a second slot that would compete with classes); the census does not count shifts as
+"at work" (the evening's label is Outing).
+
+## ADR-0307 — The people census, and a walker's job in reach on foot, by train or by bus
+
+The plan's proof (~/.claude/plans/kinds-are-data-assign-places.md): a census of the people on several levels and seeds.
+
+**Decision.**
+- `people_census_prints` (level_tests, print-only under RT_PEOPLE=1, RT_CENSUS_LEVEL): households by type, people by
+  band, stage and role, housemates' ties by kind (each side's), evening jobs. It CHECKS that no dwelling holds two
+  households, that every household shares one home, and that every job holder whose job is not at their own corner
+  has a commute measured. It replans the level's own dwellings at seeds 1-3.
+- WHAT IT FOUND: job holders with no commute (10 on metro_v2_test, 97 on river_town, 544 on metro_planned), all
+  walkers. Three causes:
+  - The job search asked whether home and job share a strongly connected component of the CAR graph, for walkers
+    too. A walker in another town, joined by road and by no footway, got the job.
+  - Bus commuters (walkers who ride to a job in another town, both trips planned at the pick) were timed on foot, so
+    their commute read 0 and fell back to the median.
+  - Staff hiring took walkers by walking distance and bus network, which can disagree with the footways.
+- THE FIX: a walker's job is in the walkable component of home, or in a rail planner's network a train line joins
+  (each pair of stations' networks asked once, keyed by RailRiders::networkOf so the check and the plan agree), or
+  the bus branch's job as before. A train commute is timed by RailRiders::plan. A bus commute is timed as the walks
+  to and from the stops, the ride round the loop at 8 m/s and a four-minute wait. Walking staff also need a footway
+  to the place. kPopulationFormat 11.
+
+After: metro_v2_test (10,251 people, 5,028 households), river_town (8,615 / 4,264) and metro_planned (22,140 /
+10,867): no shared dwellings, no split households, every job holder's commute measured; seeds 1-3 plan cleanly. The
+island and a campus level are left for the full-island build (campus_lab has no citysim block).
+
+## ADR-0308 — Children play: playgrounds, tag, skateboards and scooters
+
+Glenn, 2026-11-02: "The kids should at least go and play. Roam around the neighborhood on skateboards or play at parks
+and playgrounds."
+
+**Decision.**
+- A ROLE NAMES ITS DAY OUT'S MENU (roles.lua `day.outings`, RoleDay::outingMenu, default "outing"); pickOuting follows
+  it. The child's is `kid_outing`.
+- `kid_outing` (activities.lua): from 7:00 to 20:00 the playground first (30%), then a skateboard (15%) or a scooter
+  (10%) round the block, else the park, tag, catch, a ride, a walk round the block, a chat or a picnic. Never an
+  adult's stop (a coffee, the shops, a meal out).
+- THE ACTIVITIES: `play` (a Roam session of up to eight on a playground, 0.8-2.6 m/s, 30-75 min); `tag` (up to six on
+  a park's lawn, 1.2-3.2 m/s); `skate` and `scoot` (a wander round the block, ridden).
+- A RIDE IS DATA ON THE ACTIVITY (`ride = { kind = "skateboard" | "scooter", pace = { lo, hi } }`, Ride in
+  activities.h, checked by the reader). The sim moves a rider at its pace times walking speed (its own bits pick where
+  in the band), the near walker body's catch-up ceiling scales with it, and CitySim::rideOf answers what a walker
+  rides on the trip it is on.
+- THE BOARDS ARE DRAWN under the riders, standing on the deck in the standing pose: near walkers (CityWalkerSystem's
+  two board groups), the crowd and the far band (CityRenderSystem's). One maker for each board, engine/board_meshes
+  (moved out of the player body system, which now uses it too).
+- PLAYGROUNDS BECOME PLAY AREAS at load: an open lot of the playground recipe gives a "playground" area (its box, a
+  metre in off the fence). An area site kind. No bake change.
+- `who?` reports the ride.
+
+Test (three seeds, a town of families with a playground and a park lawn, 9:00-17:00): 126-137 children played 42-49
+times at the playground, rode 165-180 times, played tag, catch and picnicked; no adult stops; riders faster than a
+walk. Deerhaven at 11:00: 9 of 85 visible children riding; a skateboard and a scooter shot.
+
+## ADR-0309 — The coast road keeps off the freeway; a strip town stops short of it
+
+Glenn, 2026-11-02: "Okay do it" (the full island build with the three beach towns A, C and D). Re-planning the whole
+island with them against the same plan without them showed the beach towns moving the freeway: its profile rose up
+to 35 m over 1.4 km by Marlwick, where the coast road from Ivycombe wove across it twice, and 9.6 m by Heathholm,
+whose strip of blocks ran inland over it (its streets bridged across). The beach-town plan's rule is that the other
+places' roads stay as they were, apart from the new links.
+
+**Decision.**
+- THE COAST ROAD'S BAND KEEPS OFF THE FREEWAY: `CoastRoadRule::freewayClear` (90 m) either side of its line, on the
+  router's grid; where the shore pinches it, a leg tries `freewayHold` (70 m: still seaward of the rail loop, 45 m
+  off a carriageway), then crosses. Near an end (`endFree`) the band does not hold, as before. A guide waypoint that
+  falls in the corridor steps seaward out of it.
+- A STRIP TOWN TAKES AS MANY OF ITS KIND'S ROWS AS STAY CLEAR (`IslandSite::rows`, addBeachTown): its back (the last
+  row's blocks, 25 m on) at least `freewayClear` off the freeway along the whole seafront. Marlwick 2 rows, Heathholm 1,
+  Deerhaven its kind's 3.
+- `freewayDistance(w, q)` is the one measure of a point's distance to the freeway (findBeachSites' own copy went).
+- THE GUIDE WALK STOPS PACING: a step counts as getting on only when it is a quarter step nearer than the nearest yet;
+  three that do not end the walk at the last step that did. Heathholm's walk had paced back and forth across a bay
+  for twenty legs.
+
+Result (island 8, the full plan with `--keep-sites`, `--rail`, `--beach-towns ACD`, against the same without the
+towns): the four carriageways' profiles identical; nine town streets' profiles change where the coast roads join
+them; Marlwick and Heathholm get stations on the loop (Deerhaven is out of reach, as planned). Owed: just out of
+Ivycombe the coast road starts on the freeway's side of the rail loop and bridges the loop twice.
+
+## ADR-0310 — A coast road crosses a river square
+
+Glenn, 2026-11-02, walking the re-planned island: "the road runs under the river ... you may need to change how that
+road crosses the river." The coast road from Deerhaven toward Coldwell (coast14) ran 236 m inside a river's banks,
+up to 4.9 m under its water. The route-tightening step had pulled a 400 m straight line along the river, and a wet
+run longer than 200 m reads to island_scene's riverFloors as a road running beside a river, so it got no bridge.
+
+**Decision.**
+- THE TERRAIN ROUTER TAKES A PENALTY (`TerrainRouteParams::penalty`, an extra cost per metre of a move into a
+  point), sampled once per cell like `blocked`. Unset, every route is as before.
+- THE COAST ROAD PAYS `CoastRoadRule::riverWeight` (30) a metre within `riverMargin` (6 m) of a river's banks, so it
+  crosses square; and its tightening may not lay a straight line through a river (the existing crossings stay).
+- `level_print_roads_under_the_water` (level_tests, printed): every road in island_8_nature's graph, every 4 m,
+  where it is inside a river's banks below the water. `RT_UNDER_LEVEL=name` checks a re-plan before it is merged.
+
+Result: 0 roads under a river (was 1). coast14 moves up to 181 m and crosses on 4 bridge floors; coast12 moves up to
+44 m. Nothing else in the plan changes except three street profiles where those roads meet their towns; the freeway
+is identical. Re-planned from the pre-beach level (~/Claude/backups/island_8_nature_2026-11-01), as the first build
+was: re-planning from the level as it now stands reads its beach towns back in another order, and renames them.
+
+## ADR-0311 — Re-planning keeps the beach towns; a coast road's end is off the freeway's corridor
+
+Two gaps in ADR-0309/0310. First: re-planning island_8_nature from the level as it stands (`--keep-sites` the level
+itself) lost Heathholm and grew its beach again as "Fernby". A kept beach town was handed to addBeachTown at its
+hub's centre, which lies inland of the beach it grew from, and `--beach-towns ACD` added the same beaches a second time.
+Second: outside Ivycombe the coast road to Marlwick (coast9) bridged the island loop twice, 160 m apart. Its end was
+the point of Ivycombe's limits nearest the beach, and a town's limits run to the freeway, so that end was 10 m off
+the freeway's line. joinPassToTowns then ran a straight approach from Ivycombe's streets to that end across the rail,
+and the road left it across the rail again.
+
+**Decision.**
+- A STRIP TOWN REMEMBERS ITS BEACH (`IslandSite::beach`, the hub's `beach` in the level). `--keep-sites` regrows a kept
+  strip town from the beach candidate (findBeachSites) nearest its `beach`, or nearest its seafront point nearest
+  its centre for a level written before this. A `--beach-towns` letter within a strip's length of a kept town's beach
+  is that town's and is skipped. The same recipe now re-plans the same towns.
+- A COAST ROAD'S ENDS ARE CLEAR OF THE FREEWAY'S CORRIDOR (`CoastRoadRule::clearEnds`): each is the nearest point of its
+  place's limits at least `freewayHold` off the freeway's line. When that finds no way (the clear end lay on the
+  freeway's inland side, as Heathholm's neighbour's did), planCoastRoad tries once more with its ends as they were.
+- THE ISLAND LOOP'S LINE IS KEPT CLEAR, END ZONES TOO: the rail is laid after the roads, so the coast road predicts its
+  line from the scene's carriage offset and the rail's offset (IslandSceneOptions::carriage +
+  IslandRailOptions::offset, 57 m off the freeway's line) and keeps `railClear` (24 m) off it. `freewayHold`, the
+  pinched road's fallback, is that line + railClear (81 m, was a fixed 70 m: 13 m from the track). A pinched road may
+  also run nearer the sand (`pinchedBack`, 15 m) before it crosses the freeway.
+
+Result, re-planned from the level itself: Marlwick, Heathholm and Deerhaven come back under their own names, numbers
+(p8, p9, p10) and blocks. coast9 crosses the rail 0 times (was 2), and the island loop crosses 9 roads (was 11).
+The freeway is identical (max profile dz 0 on all four carriageways). 75 of 2519 edges change: coast9 and two more coast
+legs, Marlwick's streets that hang off coast9, the rail profiles, and three link profiles.
+
+## ADR-0312 — People lie down in a posed body
+
+The lying figures were stand-ins. A walker was the standing body turned onto its back, arms hanging straight past its
+hips, and the far crowd's lying group drew its plain standing block.
+
+**Decision.** `engine::lieBodyPose(variant)` (procgen/person.h) gives kLiePoses (3) lying poses in the jointed body's
+kit (block_body.h), set up in the standing frame so the existing turn onto the back still applies: hands behind the
+head with a knee up; arms at the sides; a forearm over the eyes with the other knee up. Hands and feet are placed by
+the kit's two-bone IK (reachTo). `buildLyingPersonMesh(outfit, variant)` builds it. Walkers cache one per outfit and
+pose. The crowd has one instance group per pose, and an agent's pose is its index mod 3 in both tiers, so a body
+keeps its pose between them.
+
+## ADR-0313 — A beach town stands on its own ground, not the beach's sand
+
+Deerhaven's beachfront blocks showed bare beach sand round their buildings, framed by the sidewalks, so the paving
+looked holed. The ground cover draws sand on anything lower than `beachHeight` (2.5 m) above the sea, and a strip town
+is built that low. An inland town's yards read as grass for the same reason.
+
+**Decision.** `stripGround(w, site)` (island_world.h) is a strip town's outline: from its promenade's sidewalk
+(the seafront's, with no promenade) inland to its last row's blocks (the depth addBeachTown fits). city_plan writes the
+outlines into the terrain block as `settled`, the way it writes `trails`, so the ground cover reads them with the rest
+of the terrain block. `GroundCoverParams::settled` (a `SettledGround`, boxed polygons) draws no sand inside them: the
+ground there is the lowland's grass and dirt. The beach beyond the promenade is unchanged, as are the activity areas
+on it (90 m out) and the town beach mask. Being in the terrain block, the outlines change the terrain's bake key,
+so no tag bump is needed.
+
+## ADR-0314 — Each place plans its own landmarks, by its kind; beach car parks from the plan's blocks
+
+Deerhaven was given a university, a hospital and police. The landmark planner runs its quotas per hub cluster,
+the city's full civic table for cluster 0 and a town's school and church for the rest, but nothing outside a unit
+test ever filled `LotParams::hubClusters`. So every planned level, the whole island included, planned as one city:
+one capitol, courthouse, hospital and university for the island, on its best lots wherever they were, and no town's
+guaranteed school or church.
+
+**Decision.**
+- A KIND NAMES ITS LANDMARKS (settlements.lua; SettlementKind::civic / ::landmarks, SettlementLandmark). The city is
+  `civic`: the full civic table. Any other kind lists `{ "landmark", count, min_lots, min_old_town, any }`. A field
+  left out is a town's: its school and church, and a market hall in an old town (the old town table, now data).
+  The beach town has a school, a church, a market hall and a police post.
+- city_plan writes the kind's landmarks into its hub (`civic`, or `landmarks`), as it does the mixes. level_params
+  makes the hubs of one `_place` one cluster (`LotParams::landmarkClusters`, 1 up). planLandmarks plans each from its
+  own list, or the civic table centred on its own hub (`landmarkKindNamed`). Every planned place gets its own
+  anchors: each island city its own capitol and courthouse.
+- A LOT IS THE PLACE'S WHOSE LIMITS HOLD IT (the hub's `limits`, simplified to 2 m). The nearest centre gave a city's
+  outskirts to the town beside it: Deerhaven's church stood in Saltwood's southern suburbs. A lot inside no place's
+  limits (a house on a country road between towns) is nobody's and gets no landmark; Deerhaven's school had been
+  planned 1.3 km out of town. A level whose hubs carry no limits keeps the nearest hub.
+- Hubs that carry neither stay cluster 0, planned as before.
+- A LOT THAT IS ALREADY SOMETHING (a big-box block's store, a campus, a bus depot, a car park) is no landmark
+  candidate. The planner takes the biggest lots, and a landmark it put on one was dropped afterwards, not moved:
+  the first island bake of this change gave each beach town its school and church, but its market hall and police
+  post went to its car-park blocks and vanished. This moves landmarks on every level where that happened: lots tag
+  2026-11-03.1.
+- THE BEACH CAR PARKS are now the first and last blocks of the plan's own beachfront row: the blocks seaward of the
+  seafront and short of the promenade, each named by its centroid. Before, they were points spaced along the
+  seafront by the strip's cross-street spacing, and one fell outside its block where the seafront curved.
+
+Test: `landmarks_by_each_places_kind` (two civic cities each get their own courthouse and capitol; a beach town gets
+its four and no university or hospital; country lots get none). `level_print_landmarks_by_place`
+(RT_PRINT_LANDMARKS=island_8_nature.json) counts a level's landmark buildings by place.
+
+island_8_nature after: Saltwood and Weyby each have a capitol, a courthouse, a university and a museum, with schools,
+churches and fire stations by their quarters (Saltwood 47 schools, by the city table's 1 + residential lots / 50).
+Each of the six towns has a school and a church. Each beach town has a school, a church, a market hall and a police
+post, all inside its limits. Before, the whole island was one city.
+
+## ADR-0315 — Walkers are parted again after the pushes off cars and poles
+
+metro_pedestrians_walk_and_keep_apart failed on this branch on Linux and macOS (main passes): 1–2 pairs of walkers
+closer than 0.45 m. A trace showed every such pair at least 0.5 m apart when the walker relaxation ended. The pushes
+after it (out of a signal pole's clearance, off the player, out of a moving or parked car's footprint, up to 1.5 m in
+a tick) set one walker down beside or onto another, coincident at worst, and nothing parted them. It surfaced now
+because the housing work put more people on metro_planned's streets, all at one place, about (-473, -170), where cars
+cross a busy footway.
+
+**Decision.** The relaxation is one lambda (`relaxWalkers(passes)`) over the neighbours gathered once a tick. It runs
+6 passes where it did, then 4 more after the pushes, each followed by the poles' clearance and the player's berth
+(`clearOfPolesAndPlayer`), so the two settle together and the berth holds last: they are hard rules, and the extra passes had pushed a walker back to 0.92 m from
+the player (walkers_keep_a_wide_berth_around_the_player asks 1.1 m). Car footprints are not re-applied: a car's push
+is what set walkers onto each other.
+
+Result: the test passes (0 overlapping pairs at its samples). Counted every tick, close pairs at that place fell from
+183 to 42, with none coincident. A few pairs pinned between a car and each other still come to 0.28–0.43 m. The
+fix for those is the car not stopping across the walkers' way, which is owed with the junction work (#145).
+
+## ADR-0316 — One segment and polyline kit: polyline.h
+
+Glenn, 2026-11-03, reading island_scene.cpp: "should those be utility functions?", then "we should put them into a
+shared utility file". The point-to-segment distance alone was written ten times across nine files under six names
+(segDist, pointSegDist ×2, distToSegment ×3, nearestParam, pointSegDistance, dpDistance, distToSeg). Each copy used the
+same arithmetic. The distance to a polyline was written four times, the crossing of two segments four times, and
+Douglas-Peucker seven times. Two of the polyline copies also lived on in tests.
+
+**Decision.** `engine/procgen/city/polyline.h` (header-only, beside polygon.h) holds them once:
+- `segmentParam`, `closestOnSegment`, `distToSegment`. A degenerate segment counts as its first point; the
+  threshold is `minL2` (the road twin's measures keep their 0 and 1e-18).
+- `lineCross` gives both fractions; each caller keeps its own rule for which ends count (island_scene both
+  ends; island_rail half-open, so a road through a vertex counts once; road_offset strictly inside). `segmentsCross`
+  is the ends-included case.
+- `nearestOnPolyline` (distance, foot, direction, segment, fraction, past-the-end; open or closed) and `distToPolyline`.
+  city_plan's `distToPolylineDir` is now an adapter over it.
+- `distToLine`, and `douglasPeucker(first, last, tol, off, [split], keep)`: one algorithm. What "off" means stays the
+  caller's: distance to the line, to the segment, plan and height in tolerances (the terrain router), or XZ of a Vec3
+  (terrain_field). `split` forces a split (the road twin's long runs). `simplifyRun` is the common open-run case.
+- polyline_ops.h (the road builder's toolkit) includes it, and its `project` uses it.
+- `distToRing` and `distToOutline` stay as thin adapters, keeping their own answer for an empty ring.
+
+**Proof (ADR-0174: identical, not "looks the same").** Re-planning island_8_nature from itself gives a
+byte-identical road graph, signs, hubs and terrain. rt_bake --force on river_town matches the pre-change bundle in
+every section but `city/e0/report` (it holds build timings). metro_v2_test matches a bake of the committed code in
+every section but the report.
+
+Found on the way: metro_v2_test's `city/e0/roads/twin` from a level-suite bake differs from an rt_bake of the same
+code (ece55808… vs d8bfe75d…). rt_bake is reproducible run to run. Resolved 2026-11-04: not a second build path. The cached bundle's city producer
+was copied from an Oct 30 bake (manifest `copiedFrom`), and the two twin sections differ in exactly one byte: the
+retired `perClassGrade` flag, which ADR-0278 writes as 0 where the older code wrote 1 and which the reader skips
+(bisected to 724941a9). The roads are identical; no tag bump is owed.
+
+AGENTS.md rule, restated for these: a segment, polyline or simplification helper goes in polyline.h, never a private
+copy. The wider inventory (smoothstep, angle wrap, hashes, area, bounds, stations, resampling...) is #117 wave 4.
+
+## ADR-0317 — #184 batch 1: smoothstep, the lowbias32 hash, lerp and the degree wrap, once
+
+#184 (Glenn, 2026-11-03: "build shared libraries of these functions to avoid having to do that work over and over"),
+the first batch: the copies that were bit-identical.
+
+**Decision.**
+- `smoothstep(e0, e1, x)` and `smoothstep01(t)` live in rt_math.h. They replace 13 three-argument copies (sstep,
+  surfStep, smoothstep ×2, smooth ×6 incl. lambdas, smooth01, sm) and 9 one-argument copies (smooth ×3, smoothStep,
+  smoothstep, smooth01 ×2, ease). All computed `clamp((x-e0)/(e1-e0), 0, 1)`, then `t*t*(3-2t)`. planet.cpp keeps its
+  equal-edges step as `edgeStep`, a wrapper over the shared one.
+- `wrapDegrees` (to [-180, 180]) lives in rt_math.h. It replaces riding's wrapDeg and the follow camera's wrapDegrees.
+- `lowbias32` lives in a new `src/hash.h` beside proc_rng.h (stateless hashes; proc_rng is the seeded stream).
+  It replaces nine copies: mix ×2, mixHash, mix32 ×3, hashU32, hash32, hashU. With it: `hashCell(a, b, seed)`
+  (a grid cell's bits) and `unit24(h)` (the low 24 bits as [0, 1)). They replace four inline cell hashes with the same
+  constants (level_params' rock facets, stream_power's stochastic routing, terrain_weather, rock_layers' beds, which
+  pass seed 0) and forest's `unit`.
+- `lerp(Vec3)` (rt_math.h) replaces mix3, mixv ×2 and lerp3. `Vec3::length()` replaces vlen ×2.
+
+**Proof.** river_town's and metro_v2_test's bakes match section for section, all but the timing report. The
+island re-planned from itself is byte-identical (graph, signs, hubs, terrain). The rest of the changed code runs at
+play time or grows trees (the vehicle sounds, locomotion, riding, the camera, the sky clock, forests, interior
+occupants, the tracer's scene), or only when a weather or erosion block is baked anew (stream_power,
+terrain_weather, rock_layers: the island reads its cached one). There the copies were the same arithmetic, operation for
+operation, and the commit tests pass, their erosion, rock and weather cases included.
+
+## ADR-0318 — #184 batch 2: one polygon area, one point-in-polygon, one bilinear sample, one station lookup
+
+**Decision.**
+- `signedArea` (polygon.h) replaces the road builder's `ringArea` (21 uses; the same shoelace sum, `0.5 * s` vs
+  `s * 0.5`, both exactly 0 under three points) and island_rail's `loopArea`. `area()` replaces floor_zones'
+  `ringAreaAbs`. pavement's `polyArea` (an outline less its holes) stays, built on it.
+- `pointInPolygon` (polygon.h) replaces polyline_ops' `pointInRing` (9 uses; the same ray cast. pointInRing's
+  comment claimed edge points count as inside; a ray cast does not promise that).
+- road_graph_spec's private `interpolateAt` was polyline_ops' `pointAt` line for line, and is gone. Its `tangentAt`
+  differed only in its threshold (any length above zero), so polyline_ops' `tangentAt` takes `minLen` (default 1e-12)
+  and road_graph_spec passes 0.
+- `bilinearGrid(nx, ny, gx, gy, at)` (rt_math.h) replaces five copies of the same sample: IslandWorld's heightAt and
+  smoothAt, LandShape's depthAt, the lots producer's ground lookup, and terrain_weather's facet source. Each clamped to
+  n - 1.001 and blended in the same order. Its caller still chooses its own grid coordinates and how it reads a sample.
+
+**Proof:** as ADR-0317. river_town and metro_v2_test bakes match section for section, all but the timing report;
+the island re-planned from itself is byte-identical; the gate passes.
+
+## ADR-0319 — #184 batch 3: π, τ and the degree factors once; the inline lowbias32 copies
+
+**Decision.**
+- rt_math.h adds `TAU = 2 * PI`, `DEG_TO_RAD = PI / 180` and `RAD_TO_DEG = 180 / PI` beside `PI`. Every local copy
+  with the SAME value goes:
+  - full-precision `kPi` ×11, terrain_field's local `PI` (which hid the shared one) and foliage_kit's two local `pi`s;
+  - `kTwoPi`, `kTau` ×5 and the audio's `TWO_PI` ×2. `6.283185307179586` is exactly `2 * PI`; checked in Python;
+  - `kDeg` where it was `kPi / 180` (×3), and `kRadToDeg` ×3 (`57.29577951308232` is exactly `180 / PI`).
+- The 15-digit copies (`3.14159265358979`, a different double: island_world, real_tree, stylized_tree,
+  street_furniture, locomotion's five `kDeg`, player_body's and driver_seat's `kDeg`, three tests) are NOT changed
+  here. Switching them changes output, so they wait for #184's output-changing batch.
+- hash.h adds `hashPair(a, b)` (the PCG-style multiply-add island_world's `rnd` and place_names' `mix` both used).
+  Seven inline copies of the lowbias32 steps become calls to it: places, households, city_sim ×2, level_loader's
+  scatter `unit`, island_world, place_names. The look-alikes in city_sim that stop after two steps or reorder
+  them are different functions and stay.
+
+**Proof:** as ADR-0317. The bakes match section for section, all but the timing report. The island re-plan is
+byte-identical, its signs (the place names) included. The gate passes.
+
+## ADR-0320 — #184 batch 4: stations once; the inline segment crossings
+
+**Decision.**
+- `stations(P)` (an open polyline's running length) moves from road_graph_spec into polyline.h, for every caller, not
+  only the road builder's. Hand-written copies become calls: lane_follow, hydrology's river smoothing, deck_mesh's
+  taper, terrain_route's resample, island_scene's road profile, road_entity's arc length. The closed-ring versions
+  (island_rail, polymesh) have one more entry and stay. So does branch_cards', which measures 3-D points.
+- Four more inline crossings become `lineCross`, each keeping its own rule for which ends count: road_twin's
+  `lineParams` (the same function), city_plan's road-against-lines walk and its street cuts, and island_world's
+  road-under-freeway search. One city_plan copy tested `|den| > 1e-12` where lineCross refuses `< 1e-12`. They
+  differ only at exactly 1e-12, and the proof below holds.
+
+**Proof:** as ADR-0317. The bakes match section for section, all but the timing report. The island re-plan is
+byte-identical. The gate passes.
+
+## ADR-0321 — #184 batch 5: the radian wrap and one ray-triangle test
+
+**Decision.**
+- `wrapRadians` (rt_math.h, beside wrapDegrees: to [-pi, pi] by whole turns) replaces leaf_card's `wrapPi` and the
+  same two while-loops in polymesh (with M_PI, the same double), terrain_field, street_kit and two tests.
+  island_rail's loop uses 15-digit constants (a different double) and waits for the output-changing batch.
+- `rayTriangle(o, d, a, b, c, t, edge)` (rt_math.h: Moller-Trumbore, two-sided, the caller bounds t) replaces three
+  identical copies in mesh_audit.h, the see-through probe among them (with its 1e-9 edge slack). The mesh audit's
+  fourth copy divides by the determinant instead of multiplying by its inverse (it rounds differently), and stays.
+  So do the other five copies (geometry.cpp's Triangle::intersect, polymesh, three tests), which use other
+  thresholds.
+
+**Proof:** the bakes match section for section, all but the timing report; the gate passes (the mesh audit's
+own cases included).
+
+## ADR-0322 — Motorcycles in the city: a fleet slot, a rider astride, and the M key
+
+**Status.** Accepted, 2026-11-04. Glenn: "motorcycles. We have one, can you make it available?" -- parked in the city,
+riding in traffic, and easier to pick.
+
+**Context.** The motorcycle (ADR-0235, `two_wheeler` in vehicles.lua) was only reachable through the car picker: cycle
+16 entries with - and =, then N. The city's fleet was cars and trucks only, and the one ambient occupant the city draws
+(the seated car driver) is a car-seat pose.
+
+**Decision.**
+1. A FLEET SLOT, as data: `{ bike = "motorcycle", color = ... }` in FLEET_SLOTS (and so in fleet_mixed). The catalogue
+   builds it from the drivable recipe with its wheels baked in (`bike_fleet`); its `handling` IS the drivable spec, so
+   the physical tier and a commandeered bike ride on Jolt's two-wheeler with the seat's bars and pegs. One slot in 15:
+   about one ordinary vehicle in 13. Parked bikes come from the same slot rotation as parked cars.
+2. A RIDER ASTRIDE, by the seat, not the kind: a slot whose handling's seat has bars (not a wheel) gets its own rider
+   group, posed by the player's seat rule (`seatedPose`: hands on the grips, feet on the pegs, the seat's lean) and
+   built by `buildPosedPerson`. The slot is `see_into`, so the rider is drawn whenever the bike is on a trip, near or
+   far; parked, nobody sits on it (the car rule).
+3. THE QUICK KEY: `vehicle_quick` (M, rebindable) drops the drivable entry marked `quick = true` -- the motorcycle. The
+   picker's hint names it from the data.
+4. `traffic?` reports the riders drawn and the nearest one, for probes.
+
+The fleet tests that held car invariants for every slot (four wheels, four corner lamps, glass, 1 m wide, 500 kg, lamps
+at the body's ends) now ask each slot what it is (`twoWheelSlot`, from its own handling): a bike has one wheel and one
+lamp per end, no glass, an open seat, and lamps a tyre's radius inside its ends. Runtime only: no bake change.
+
+**Verified.** run_tests 1505/1505, physics_tests 146/146, lanes_tests 50/50. river_town in the viewer: 20-21 riders in
+traffic, shot astride at a light; `tap M` logs "Dropped: Motorcycle". Not yet checked by hand: commandeering a parked bike
+and a physical-tier bike under the AI driver (Jolt's controller holds it up; untested at a junction).
+
+## ADR-0323 — The regrade: a town's patch of mountain levelled, its shape kept
+
+Glenn, 2026-11-04, on a mountain town: "you will need a way to terraform the mountain area. Not to make it entirely
+flat but to level it enough to place buildings and roads. And somewhat retain the mountain shape." The island planner's
+mountain town wants a flat patch (slope under 9 %) reaching 70 m in from its edge, 120 m up; since the rocky regen
+(ADR-0214) island 8's highland has none (even blurred over 100 m and allowed 15 %, one spot reaches 68 m in), so the
+island has never had its mountain town in 3D. The street and lot grading levels a street or a lot at a time; nothing
+reshaped a hillside.
+
+**Decision.** `procgen/regrade.h`: the terrain block's `"regrade": [{ "outline", "blur", "maxSlope", "terrace", "bank",
+"feather", "cell" }]`. Over the outline the ground is
+1. blurred over `blur` (100 m): the crags and gullies go, the shoulder and the fall of the hill stay;
+2. capped at `maxSlope` (12 %): the cut (the highest ground no steeper than that under it) and the fill (the lowest over
+   it) each finished by the other and averaged -- the earth off the knolls about fills the hollows, and the middle of a
+   hillside steeper than the cap stays where it was while the top is cut and the foot filled;
+3. optionally stepped into shelves `terrace` m apart, each easing up its last `bank` of the rise (`terraceHeight`, which
+   heightTerrace now calls with no bank);
+and eased back to the raw ground over `feather` (100 m) outside it. The patch is computed once on a `cell` (4 m) grid (a
+`roads::GroundGrid`) and blended over the ground as it is read.
+
+- It is GROUND: `erodedForTerrain` lays it on the weathered relief (after the rock relief), so the rivers, the island
+  planner, the road solve's natural ground, the lots and the drawn tiles all stand on it. The streets' and pads' own
+  cut and fill (ADR-0075, ADR-0221) come after, as on any ground.
+- The weathered grid is unchanged: `groundShapingBlock` leaves "regrade" out of the weather bake's key (as it does
+  "rockRelief"), so adding one never re-erodes the island. It is in the terrain block, so the pyramid and bundle keys
+  change with it; no tag bump.
+- THE SLOPE CAP is a chamfer sweep seeded with heights. The planner's two hand-written chamfer distance transforms
+  (depth into flat ground, distance from the sea) are now that one `chamferSweepGrid` (texture_field.h, beside
+  boxBlurGrid); island 8 plans byte for byte as before.
+- Test bed: `assets/levels/mountain_town_lab.json`, island 8's ground with no city and one regrade on the shoulder at
+  (1445, 2910), 196 m up.
+- Tests (run_tests, test_regrade.cpp): the sweep as a distance and as a cap; terraceHeight; a rough 10 % hillside
+  levelled with its fall kept, cut about filling, untouched past the feather; a 20 % one laid back to 12 % (cut above,
+  filled below, the middle in place); terraces (2/3 of the town on level shelves, banks ~48 %).
+
+**Next.** A mountain town ON it: candidates lettered on the island map (findMountainSites, as findBeachSites) and
+`--mountain-towns` to add one (its regrade written into the terrain block, its winding road, its streets on the
+shelves), then the island re-plan after PR #182 merges.
+
+## ADR-0324 — Foothill towns, the high road over the range, and hamlets on it
+
+Glenn, 2026-11-04: "a town at the base of the mountain and then a road that goes into the mountains and a small hamlet
+or two up in the mountains and then have that road continue across over the mountains and connect up with one of the
+cities"; a hamlet "could be a handful of buildings... like a street with some buildings". Plan:
+~/.claude/plans/mountain-towns.md. Built on the regrade (ADR-0323).
+
+**Decision.**
+- TWO KINDS, data (settlements.lua, with defaultSettlements kept equal): the FOOTHILL TOWN (`high_road`, a `regrade`,
+  links to the freeway, a bus loop) and the HAMLET (a `strip` `along = "high"`, `both_sides`, one row, 350 m, its own
+  small mix and a church, a `regrade`). New kind fields: `high_road`, `strip.along`, `strip.both_sides`, `regrade = {
+  blur, max_slope, terrace, bank, feather, margin }`.
+- CANDIDATES (`findFoothillSites`, lettered on the map by `city_plan island-cities --foothills`): the lower slopes 50-250 m
+  up, 1.5 km from the sea, the range 200 m higher 1.5 km uphill, off the freeway and 1.5 km off the pass; scored by the
+  broad grade and the roughness the regrade must cut and fill; the far city is the city across the range.
+- `--foothill-towns LETTERS`: `addFoothillTown` appends the site (every other place keeps its index), `regradePlace`
+  levels it -- a disc, then (city_plan) the town is planned once dry and its LIMITS + the kind's margin are levelled
+  before it is planned for real, so its blocks stand on the levelled ground -- and the plan's own ground is sampled
+  again where it changed.
+- THE HIGH ROAD (`planHighRoad`): a second road of kind "pass", from the town's limits over a saddle of its own (on the
+  range's spine near the line to the city, 1.5 km off the pass) to the city's limits, graded as the pass is; running
+  within 150 m of the pass costs a little (a corridor priced out wholly sent it 20 km round the pass's end). It is cut
+  where it meets the freeway (`cutAtFreeway`, the pass's own cut, now one function given its saddle) and joined into
+  the city's streets by joinPassToTowns.
+- HAMLETS (`addHamlets`): up to two 350 m stretches of the high road above 200 m, the gentlest and straightest, 1.5 km
+  apart; each a site whose spine is that stretch, its band regraded, the road split into its legs. A both-sided strip
+  has cross streets at its two ends too (its rows past the last cross street were dead ends the stub pruning took).
+- Buses: the legs of a pass with places on it are one line, X4 The High Road, stopping at each hamlet.
+- Rivers are computed on the ground WITHOUT the regrades (a town never moves a river), and a regraded block shares its
+  unregraded weathered ground (one grid, however many places are levelled). On a regrade's outline the ground cover
+  reads plain soil, not the weather maps' scree and wash (`GroundCoverParams::levelled`).
+- Island 8 without `--foothill-towns` plans byte for byte as before (briefs, signs).
+- Lab: `city_plan island-cities 8 OUT --terrain assets/levels/island_8_nature.json --keep-sites
+  assets/levels/island_8_nature.json --beach-towns ACD --foothill-towns A --level zz_mtn_window --template
+  assets/levels/island_8_nature.json --window -400 4300 2200`: Kingswood (25 blocks), the high road 16.8 km to Saltwood,
+  hamlets Larktop (349 m up) and Lintop (245 m), 6 blocks each.
+
+**Owed.** Kingswood's blocks build sparsely (why: the lot census); the levelled ground's cover meets the rock in a hard
+line (blend across the feather); an inn recipe (the hamlet's "hotel" was a city tower); street trees by height (palms on
+a hamlet 350 m up); the re-plan keeping a foothill town and its hamlets (--keep-sites); tests; then island_8_nature after
+PR #182.
+
+### ADR-0324 addendum (2026-11-04): connected streets, conifers on the high ground
+
+Glenn, of the first shots: "some of the streets don't really connect in one of those aerial views. Also, palm trees?
+That doesn't seem to make sense on a mountain. I would imagine we'd have more pine trees?"
+- The lab window had cut Kingswood off at x 1800 (its east ring ended in the air): now `--window -300 4300 2700`.
+- A ring the planner left 16 m short of itself (two collector ends facing, in line): `joinFacingEnds` lays the missing
+  piece, as the street it belongs to, for ends up to 20 m apart (6 m and under still merge). Every town gets it when it
+  is next planned.
+- STREET TREES BY HEIGHT: `StreetSpecies` gains pine, spruce and birch (real_tree / their recipes); `StreetCharacter`
+  gains `highland` (0 below the level's ground-cover upland line, 0.25 there, 1 at its mountain line). On high ground
+  no palm and no tropical tree, the palm and flowering schemes become avenues, and the higher the street the more of its
+  broadleaves are conifers. Planned at load: no re-bake; a lowland street plants as before.
+
+## ADR-0325 — Driving for play: thrown off only in a real crash, country roads with a shoulder
+
+Glenn, 2026-11-04, after driving the mountain lab: "for the 2 lane roads on the mountains and even on the ground we
+should give some more shoulder space because it's hard to drive when they're that narrow for a player. Also I think we
+should up the speed before we eject the player from the moving vehicle. Right now I feel like everything I hit causes me
+to eject out of the car. It's funny, but not useful. I don't think that tuning needs to be physically accurate, but there
+needs to be more balance ... Especially the motorcycle."
+
+**Decision.**
+- THE EJECT RULE (ADR-0252) is tuned for play: a seat's jolt throws its rider past 15 m/s on a two-wheeler (55 km/h
+  stopped dead; was 7), 19 in an open seat (was 11), 30 through a closed car's windscreen (was 22). `EjectRule`, and the
+  prefs `vehicle.ejectBike`, `vehicle.ejectOpen`, `vehicle.ejectCar` (m/s) retune them without a build.
+- A BIKE GOES DOWN only lying on its side (past 75 degrees) for 0.4 s; leant past its limit in a fast bend (its limit +
+  10 degrees) it no longer throws you.
+- THE RURAL CLASS (and the mountain class built from it: the pass, the high road, the coast road, the mountain roads)
+  has a 2.5 m shoulder each side, a ramp's, instead of 1.0: 12 m of deck for two 3.5 m lanes. Every shipped graph
+  carries its own class table, so no bake changes; new plans take it, island_8_nature at its next re-plan.
+- A strip's main street is the kind's (`strip.main`): a hamlet's is a local street, two lanes, not a four-lane
+  arterial; a place with no arterial offers all its junctions to the roads that run into it.
+- Tests: the wall test now keeps every rider in at 50 km/h, throws a bike at 60, a convertible at 75, a closed car only
+  through the windscreen at 120, and a rule of its own moves the line.
+
+## ADR-0326 — Terraced hill towns
+
+Glenn, 2026-11-04: "It would be interesting to see something more interesting on the mountain"; then "I'd like to have
+towns with terraces and other towns with winding roads".
+
+**Decision.**
+- A kind's LAYOUT is data (settlements.lua `layout`): "grown" (as before) or "terraces". The foothill town is terraced: its
+  regrade cuts shelves (`terrace = 6`, `bank = 0.3`), and its brief carries `world.terraces` (radius, step) with a land
+  rule that counts its banks as land.
+- THE LAYOUT (city_plan.cpp): on each shelf, a street along its BACK -- the contour where the bank above starts (step x k,
+  just over), set down the slope by the street's half width and sidewalk, so the carriageway stands on the flat -- clipped
+  to the town's disc. RAMPS from both ends of each shelf's longest street down to the next (a ladder: a shelf street open
+  at an end was a dead end the pruning ate whole). LANES DOWN every 140 m along each street to the nearest street below:
+  the shelves' long blocks cut into blocks, the shelves' other pieces joined to the town. Limits: the disc.
+- `dropHangingLoops` never drops the LARGEST block: a terraced town's streets are one block, and one stub off it read as
+  "the whole town hangs off one junction" (every town planned before had a larger network round its loops).
+- A kind's own MIXES reach the level for any kind (city_plan wrote them for strips only); the foothill town's are two to
+  four storeys -- shops, cafes, rowhouses, cottages -- not the town ladders' walk-ups.
+- Kingswood (candidate A): 6 shelves 103-139 m, 18 blocks, ~154 buildings, one network.
+
+**Next.** A steeper site shows the shelves (A rises 36 m across its town); the WINDING layout.
+
+## ADR-0327 — Drivable roads: rails outside the shoulder, paint on the drawn road, downforce, a hill town on foot
+
+Glenn, 2026-11-05, driving the mountain lab: "the shoulder is wider but the guardrails are right next to the road";
+"Street markings are floating above the street ... It has to match the geometry 1:1"; "the cars are also too light. They
+should hug the road a little more. The big yellow SUV topples over easily"; in Kingswood, "the road where I'm at is too
+steep for my car to go up ... the sidewalk is intersecting with the road. And NPCs are stuck in the grass".
+
+**Decision.**
+- THE BARRIER LINE is the lanes' outline AND their shoulder (`parapetRuns` unions `pavement.shoulder` in; the lane is
+  found up to 3.2 m in across it). The shoulder had been a band outside the lane footprints, so a guardrail stood on the
+  edge line with the shoulder paved beyond it.
+- PAINT ON THE DRAWN ROAD: every paint vertex is moved onto the road triangle drawn under it (asphalt or shoulder, the
+  one nearest its height -- never a sidewalk's), 2 cm up; lane lines are sampled every 1.5 m (was 4). Paint was laid on
+  the lanes' height model, which the triangulated deck meets only at its vertices (#142), and a stripe's two edges took
+  its centre's height.
+- DOWNFORCE (`VehicleConfig::downforce`, g at 100 km/h, rising with the square of the speed, capped at 1 g, while a
+  wheel touches): 0.4 for every four-wheeled recipe (class_handling, kit_handling); 0 by default in C++.
+- THE ROLLOVER PROBE (physics_tests, test_rollover.cpp): every four-wheeled drivable recipe at full lock through the
+  player's steering shaping at 40/60/80 km/h, slid sideways into a 0.15 m kerb at 8 m/s, and turned hard across a 12 %
+  side slope: none tips (the worst roll 9 degrees on the slope, the slope's own 7 of it). The SUV went over on the
+  broken ground of the terraced town's steep junctions, not in a turn.
+- THE HILL TOWN ON FOOT: its lanes down between shelves are FOOTWAYS (`CityPlan::footways`, written as "footway" edges,
+  stepped where steep; the island scene takes the class when a place uses it), not streets: as streets they crossed each
+  8 m bank at 28 %, and their sidewalks stood in flat slabs across the climbing road. Its car ramps run down the bank on
+  the slant, to the nearest point of the street below at least step / 0.09 + 30 m away.
+
+**Owed.** A lanes tag bump for the rails and the paint (every baked level's roads), with the post-#182 batch; the hill
+town's ramps cross its streets in a tangle (a layout rethink); the dust sprites' squares.
+
+### ADR-0327 addendum (2026-11-05): a child's head
+
+Glenn: "The children agents. They're scaled but I wonder if maybe their heads shouldn't scale down as much. Children tend
+to have slightly bigger heads and smaller bodies." `BodyPose::headScale` grows the DRAWN head block about the neck (the
+ragdoll and the joints keep the body's). The city's walkers take one of three heads by how tall they are
+(`CityWalkerSystem::poseMesh`): an adult's, x1.15 under 0.88 of an adult's height, x1.4 under 0.7 -- before the body is
+scaled down, so a 1.15 m six-year-old's head is about 90 % of an adult's, not 64 %. Owed: the seated, ground-sitting
+and lying walkers and the far crowd still draw an adult's proportions.
+
+### ADR-0327 addendum (2026-11-05): hairpins a car can turn, stairs that land
+
+Glenn: "the hairpins are undrivable. The corners are too sharp ... if the hairpins were more curved"; "some of them [the
+stairs] just end in the sky". The hill town's ramps are SWITCHBACK BENDS: from each end of a shelf's longest street, a
+cubic U-turn to the nearest end of the street below, each end's way leant out from the town's middle, handles grown until
+the bend holds 12 % over the step and a 15 m radius -- Kingswood's 18 bends hold 19-25 m at 4-9 %. A footway is kept only
+when both its ends land on a street the plan kept (the pruning after the stairs took some of their streets).
+
+## ADR-0328 — The clouds keep a history (#187 step 1, #59)
+
+#187 put the clouds first: Glenn sees them jitter, the march showing, and they "fall apart quickly". MEASURED first
+(tools/cloud_flicker.py: a burst of consecutive frames, the sky's high-frequency temporal noise -- each frame against
+its neighbours' mean, so a cloud drifting steadily scores near zero): still, the sky's p99 3.5 of 255 (mean 0.14);
+flown sideways at 15 m/s, p99 9.0 (mean 0.34), the clouds lit up in bands on the flicker map and the clear sky dark.
+The march's start offsets were a pattern FIXED TO THE SCREEN (stratified per 2x2 block, hashed per block, never moving
+in time): standing still it is invisible, and as the camera moves it crawls across the clouds.
+
+**Decision.**
+- The march's offsets (the view start, the sun march, the empty-ray probes) roll by a golden-ratio step each frame
+  (`CloudUniforms.frame.x`).
+- A RESOLVE pass (shaders/vulkan/clouds_resolve.frag; the march's own render pass and set layout) blends this frame's
+  march with last frame's resolve -- two half-res histories, ping-ponged -- reprojected through last frame's
+  view-projection to where the cloud was: the point along the ray at the deck's middle height, or the scene where it is
+  nearer. The history is clamped to this frame's 3x3 neighbourhood (no ghost at a moving silhouette) and kept at 0.9;
+  reset on new targets or a camera jump over 50 m. The composite reads the resolve. `RT_CLOUD_HISTORY=0` is the A/B
+  (the fixed offsets, no history); another number sets the weight.
+- `transitionImageLayout` gains UNDEFINED -> SHADER_READ (a target read before it is first drawn).
+- MEASURED after: still p99 1.0 (mean 0.04), flown p99 4.0 (mean 0.16) -- the moving shimmer halved. The cloud pass
+  0.61-0.71 ms against 0.60-0.62 (both runs beside another viewer on the GPU).
+- Metal (clouds.metal) keeps the old march; the history is a follow-up there (#71).
+
+**Seen, owed.** The clouds' sides still come out in slices (stepped shells along a deck's flank, in both modes); the far
+low clouds sit in faint hard-edged rectangles near the horizon.
+
+### ADR-0328 addendum (2026-11-05): sprites cast no shadow; the fixed shots
+
+- Glenn: the dust clouds show "the alpha channel space around them". Reproduced on the movement lab's steam: the
+  SPRITES (FLAG_ALPHA_FROM_MAP: particle puffs, beacon glows) cast their whole quad into the shadow maps -- a hard square
+  under every puff, and diagonal streaks where puffs shadowed each other. The Vulkan shadow pass now skips them with
+  the overlays, grass and impostor views. (Metal's shadow pass draws only opaque calls: sprites never reached it.)
+- #187 step 0, the fixed shots: `tools/ref_shots.py` -- four poses on the island mirroring Glenn's references (a beach
+  curving away from above the sea, a low eye on a hillside over the coast, straight down on the coast, a lake at eye
+  level), each at its own hour and its height above the ground under it. The planner prints its lakes under
+  RT_PLAN_WHY (where a pose or a trail can go).
+- THE FAR CLOUDS' PLATES (seen, not fixed): toward the horizon the clouds come out as slanted straight-edged plates. Not
+  the march's step (the same at 48 steps as at 96) and not the weather map's bilinear creases (a B-spline weather
+  changed nothing; reverted). Next suspect: the base noise's own 44 m trilinear cells through the steep coverage
+  threshold, bare where the far march fades the detail erosion out. A/B shots in
+  ~/Pictures/Raytracer/2026-11-05_ref_shots/baseline (cloud_crop.png).
+
+## ADR-0329 — Far grass: one camera-facing card, a tussock, a slope shear; flowers in the cards (#187)
+
+**Context.** Glenn, 2026-11-05: "I can still see the cards. It doesn't entirely look like grass when on the hilly parts
+of the terrain. Also the flowers tend to pop in as you traverse the terrain." Shot from 12-25 m above a hillside on
+island_8_nature, three faults showed:
+- **Stars.** A far card was three crossed quads; looked down on, each read as a six-pointed star.
+- **Boxes.** The tall grass's cards were flat-topped rectangles, and on a slope a card's straight foot floated at one
+  side and sank at the other.
+- **Dark dashes.** Most of a card's coverage is its dense foot, baked in the clump's dark root colour. Once the stars
+  were gone, every card read as a dark dash on the lighter ground.
+- **Flowers.** The flowering layers had `"cards": false`, so a meadow's colour ended where its clumps ended (fadeEnd
+  80 m) and grew in as you walked.
+
+**Decision.**
+- **One quad a card, turned to the camera.** `grassCardMesh` is `crossCards(1.0, h x 1.25, 1)`. mesh.vert turns it
+  about its planted origin's vertical to face the camera, for FLAG_GRASS + FLAG_ALPHA_TEST (not clutter). Half of the
+  cards are mirrored by rank. Grass casts no shadow, so the shadow pass is untouched.
+- **A slope shear.** For every grass vertex (clumps and cards, not clutter), mesh.vert lifts the vertex by the
+  ground's gradient times its horizontal offset from the origin. The ground normal already rides the instance's
+  bottom row. Blades stay vertical and the foot follows the hill. The shear runs after the wind, so the wind's weight
+  still measures height above the root.
+- **A tussock.** `fieldBlades`/`fieldBladeTone` take `crown` (default 0, so other callers are unchanged): each blade's
+  height × (1 − crown (2u − 1)²). The cards bake with crown 0.45. A layer with fewer blades bakes a sparser card
+  (5 × blades, 20..90).
+- **A lighter foot.** The card's colour runs from 55% of the way root → tip, not from the root. Up close, the clump's
+  dark root is its blades shading each other; at a card's distance it only made dashes.
+- **Flowers in the far field.** `grassCardTexture(seed, p, flowerColors)` bakes heads for a flowering layer: half the
+  cells of an 8 × 8 lattice, high in the blades, inside the dome, in the layer's colours. It uses the new
+  `colorPalette` colour-field word. Each level's flowering layers now say `"cards": true, cardRadius 140, cardSpacing
+  1.8` (island_8_nature/rocky/weathered, the labs, mountain_town_lab, zz_mtn_window; island_8_beach is Glenn's,
+  untouched). The grass is not in the bake key, so no re-bake.
+
+**Measured** (island_8_nature, RT_GPU_TIMES, two hillside views):
+- GPU 7.83 and 6.93 ms a frame.
+- With the flower cards off: 7.83 and 6.91 ms.
+- The flowers' cards cost about 0.02 ms. The single quad costs a third of the old card's fill.
+
+**Not done.**
+- Metal: its mesh vertex shader has neither the ground normal nor the billboard (Vulkan-only already, #71).
+- The near clumps keep their dark roots. That is right up close; check it at their fade band if it shows.
+
+## ADR-0330 — The surf: a signed waterline distance, breakers on it (#187)
+
+**Context.** The reference shots (ADR-0328's fixed shots) have white surf lines along every beach; ours had none, from
+the air or the shore. The sea had a shore-foam band (6-13 m), but its shore distance was the first of 15 m rings
+(cell 20 m) to reach land from a corner, and **0 on every land corner**. The band interpolated out from a corner that
+lay under the beach and never showed.
+
+**Decision.**
+- **The shore distance is signed and real.** buildWaterMesh measures it on its own corner grid: + offshore, −
+  inland, in metres from the WATERLINE.
+  - Each edge that crosses the waterline seeds both of its corners with the crossing's own distance.
+  - The shared `chamferSweepGrid` spreads it, and `boxBlurGrid` smooths it, except within a cell or two of the line,
+    which stays put. The chamfer's eight directions had drawn the crests as zigzags at the cell's scale.
+  - The cap is the wider of `foamBand` and the new `surfBand` (default 120 m; JSON `water.surfBand`).
+  - The depth in uv.u is signed too; the shaders clamp it.
+  - Pools set `surfBand` 0.
+- **The surf** (mesh.frag surfWater):
+  - Breakers roll in on the shore distance: a crest every ~24 m, one every ~8 s. Each is a sharp front with a foam
+    trail that thins to lace, widened to the pixel's footprint (`fwidth`) so far crests neither alias nor vanish.
+  - They break only in water under ~4 m (fully under 2 m), so a steep shore gets one line and a shelf several.
+  - Each crest is broken along the shore by its own noise (the wave's id seeds it), plus calmer stretches at a
+    300 m scale. A faint wash lies over the shallowest surf zone.
+- **Sea foam is opaque and matte** (`gSeaFoam` → the water composite's `waterFoam`, and roughness toward 0.6), as the
+  rivers' foam already was. The old band's foam joins it, so it no longer lets the sky's reflection through.
+
+**Measured** (island_8_nature, RT_GPU_TIMES):
+- beach_curve: 10.13 ms a frame (scene 8.19).
+- coast_aerial: 5.83 ms.
+- The surf's branch runs only where the water is under 4 m and within 110 m of the line.
+
+**Not done.**
+- The swash: the wash running up the sand. The water plane stops at the waterline, and the terrain shader has no sea
+  level.
+- Metal (#71): it reads the signed values safely (it saturates the depth and tests shore > 0) but has no surf.
+- A carved river-mouth channel's straight depth contours give straight crests.
+
+## ADR-0332 — The far clouds: each pixel's own march offset, inside every step; the cloud lab (#187)
+
+**Context.** Glenn, 2026-11-05: "the clouds look blocky". Far banks came out in shelves, stair-steps and plates. A
+cloud lab was built to test fixes on fixed skies:
+- `assets/levels/cloud_lab.json`: terrain_lab's island under island_8_nature's sky, without forest or grass, so it loads
+  in seconds.
+- `tools/cloud_lab.py`: ten fixed poses (near, mid, horizon, sunward, inside the deck, above it, the far deck to the four
+  quarters, and the island's beach_curve camera). Each pose gives a PNG and its RT_GPU_TIMES line. `--against` builds
+  side-by-side A/B sheets.
+- The wind is pinned by the new `RT_WIND_TIME=<s>` (vulkan_renderer endFrame), so every run draws the same sky.
+
+**Ruled out, each by an A/B in the lab or on the island** (each change reverted; none moved the blocks):
+- quintic-smoothed base-noise texels;
+- dropping the Worley remap;
+- forcing the weather to full;
+- detail noise off (blockier);
+- 384 steps on the island view;
+- a converged history (30 frames);
+- a band-limited base bake (no octave under 4 texels; Hillaire's TileableVolumeNoise advice; kept out, unproven);
+- mipmapped noise read by distance (Nubis-style LOD). Even with each level's contrast restretched, the far deck
+  emptied: the coverage cut lives on the noise's extremes;
+- extra steps for long rays;
+- a smoothed weather read.
+
+**Found** (lab debug outputs, unlit and sun-only): the far banks' outlines were notched row by row. A ray near the
+horizon crosses 10–30 km of the deck, and once its fine steps are spent its steps grow to hundreds of metres. The start
+offset (a 2×2 pattern plus a quarter-step hash) moved only the FIRST sample, by part of a 58 m step. So every pixel
+sampled the far deck at nearly the same distances, and each screen row, entering the deck a little further on, caught
+cloud edges at different places. At 400 steps the outlines came out round. That proved the cause, but it cost 1.2 ms.
+
+**Decision.**
+- Each pixel takes its own start offset from a hash, re-rolled every frame (`u.frame.x`).
+- Each sample sits at that offset WITHIN ITS OWN STEP: `t + (stepLen - ds) · jitter`.
+- The history (ADR-0328) averages the coarse steps to the right answer.
+- `RT_CLOUD_JITTER=coherent` brings back the old pattern, for the A/B (`u.detail.y`).
+- The noise reads are explicit `textureLod(…, 0)`: the march's derivatives are undefined inside its loops.
+
+**Measured** (lab, 17:12, the clouds pass):
+- The far views' outlines go from notched to rounded.
+- 0.23 → 0.23 ms overhead; 0.47 → 0.65 mid; 0.53 → 0.54 horizon; 0.38 → 0.44 far_s; 0.46 → 0.55 far_e.
+
+**Not done: the island's own blocks.**
+- At island_8_nature's beach camera, with the wind pinned, the lab draws the same clouds soft and wispy, and the
+  island draws them as coarse cubes with no detail.
+- On the island side, measured to be no different:
+  - every cloud uniform, identical (logged);
+  - no scene depth behind the sky;
+  - the history working (the lab without it is noisy, not blocky);
+  - the weather the same, and off doesn't help;
+  - GPU memory 2.6 / 10 GB.
+- Something the island level loads changes how the clouds read their noise. Next: bisect the island's blocks into lab
+  copies.
+
+### ADR-0332 addendum: the island's blocks were the RAY, not the clouds
+- **The bisection.** The lab plus the island's terrain block was blocky. The lab plus only the island's
+  `cdlod.worldHalf` (2200 → 10000) was blocky too. So the cause is the far plane: `worldViewFar` is 3.5 × worldHalf, so
+  8 km in the lab against 35 km on the island.
+- **The cause.** clouds.frag and clouds_resolve.frag built each pixel's ray from the NEAR plane: `invVP · (ndc, 1, 1)`
+  in reverse-Z, minus the camera. That is a ~10 cm vector made from two ~6.6 km float32 positions (half-millimetre
+  ulps), plus the inverse projection's own rounding at a 35 km far plane. Every pixel's direction snapped to a coarse
+  grid, and at 10–25 km a snapped step is tens of metres. That made the cubes, with no detail.
+- **Why every cloud-side experiment failed.** The noise, the march and the history were never the fault.
+- **Fix.** Both shaders build the ray from a point ~100 m out (`ndc z = 0.002`). The beach view comes out round and
+  detailed, at the same cost (the lab's cloud pass 0.44–0.55 ms).
+- **Owed.**
+  - Metal's clouds (#71) likely carry the same reconstruction.
+  - Any other pass that builds a direction from the near plane should be checked. ssao and ssr build from depth.
+  - The pale slab under the far banks remains.
+
+## ADR-0331 — Heath: a share of the grass, a layer that grows on it (#187)
+
+**Context.** The reference stills' hillsides are red, orange and brown heath; ours were one even green.
+
+**Decision.**
+- **Ground cover.** `GroundCoverParams` takes `heath {color, patches, from, scale}` (JSON `terrain.groundCover.heath`).
+  `Cover::heath` is the share of the grass that is heath:
+  - in patches about `scale` m across (220), `patches` of them (0.45);
+  - from `from` × the upland height up to the mountain's;
+  - more on dry, convex ground when the terrain has maps;
+  - a flat-coloured ground tints toward `color`.
+- **Grass layers.** A layer with `"cover": "heath"` grows on that share. Every other layer gives way there by
+  `underHeath` (default 0.75; a little grass threads the heather). Kinds stay data: no new `where` branch.
+- **island_8_nature:** heath patches, plus a heath layer:
+  - low (0.32 m) rust-brown clumps;
+  - a few heather heads;
+  - cards to 300 m, so the hillsides read brown from afar.
+- **Not in the lots' bake key.** lots_producer erases `groundCover.heath` only where it is present, so every level
+  without one keeps its key. The pyramid and weather keys already drop the whole `groundCover`. No re-bake.
+
+**Measured.** The hillside view: GPU 6.90 ms a frame, against 6.93 ms before.
+
+**Not done.**
+- The textured (layered) ground has no channel for a heath tint. Under the plants the soil stays the grass texture;
+  that needs a cover-map channel (a new binding, both renderers).
+- The colour is still more ochre than the reference's orange. It is a level value, tuned by eye.
+
+## ADR-0333 — Cloud haze on cloud only; the sun's cone (#187)
+
+**Context.** Glenn, 2026-11-05: "squares around the clouds ... they stand out as weird squares". He also saw stripes
+when he raised the cloud density.
+
+**Decision.**
+- **The far haze tints the cloud a ray found, in proportion to it** (`· (1 − transmittance)`). It used to be mixed into
+  every marched ray, empty ones too, while rays the weather probe skipped got none. So the weather map's 320 m texels
+  showed round far clouds as pale squares. In the lab the slab under the far banks is gone.
+- **The sun's light march is Nubis's cone** (Schneider 2015/2017):
+  - six samples at growing distances (about 10 m first, about 120 m last, jittered within each);
+  - each pushed off the line within a cone that widens toward the sun;
+  - the samples read the base shape only, with no detail erosion;
+  - plus one long sample at 3× for what lies far up-sun.
+  Lab debug outputs (unlit, sun-only, ambient-only) put the low-sun stripes in the SUN term: six samples on one
+  straight line through the full-detail noise had streaked every cloud along the light. `RT_CLOUD_JITTER=coherent`
+  brings back the old line too.
+
+**Measured** (lab, 17:12, the clouds pass): isle_beach 0.51 → 0.51 ms, mid 0.64 → 0.58, inside 0.52 → 0.65, above 0.74
+→ 0.70.
+
+**Not done.**
+- Regular horizontal ridges (~58 m apart in height) and a shelf across tall clouds remain in the sun term. Not yet
+  known whether they come from the noise or from sampling.
+- The history reprojects at the deck's mid-height, so layers slide when flying level with or above the deck. Owed: a
+  per-pixel cloud depth, as Decima does.
+- The faint horizontal bands across clear sky look like colour banding in the sky gradient, separate from the clouds.
+  To check.
+
+## ADR-0334 — The clouds' history reprojects by each pixel's cloud depth (#187)
+
+**Context.** Glenn, 2026-11-05: "some of the layers shift as you go above the clouds. Like they're not stable." The
+history (ADR-0328) reprojected every pixel as if its cloud stood at the deck's middle height. Seen from the ground
+that is close enough. Near the deck or above it, it is far off, so last frame's clouds were pasted in the wrong place
+and slid. Decima's clouds reproject by each pixel's own cloud distance.
+
+**Decision.**
+- **A second march target.** The march writes R32F: each pixel's distance to the cloud its ray found, weighted by what
+  each step added to the pixel (transmittance × (1 − the step's transmittance)), or −1 for none.
+  - Its own render pass, `cloudMarchRenderPass`, has two attachments. The history keeps the one-target `cloudRenderPass`.
+  - `makeFullscreen` takes a target count.
+  - The march / resolve set layout has a fifth binding: the march sets put a placeholder there (it never reads it), the
+    resolve sets the depth target.
+- **The resolve** reprojects at that depth, with the middle height only where a pixel has no cloud, and the scene's
+  depth when that is nearer.
+- **A/B:** `RT_CLOUD_DEPTH=0` reprojects by the middle height, as before (`u.detail.z`).
+
+**Measured** (cloud lab, coverage 0.55, density 0.6, wind pinned, flying 40 m/s):
+- Frames flying through the deck: the big near cloud is clean, where the middle height smeared and speckled it. Over
+  the deck: slightly crisper.
+- The flicker metric doesn't separate them: deck 1.30 against 1.45, over 0.54 against 0.48, under 2.00 against 1.78
+  (mean, 0..255). Flying, real parallax dominates it.
+- One mistake on the way: the history pass copied the march's begin info and so began the two-target pass on its
+  one-target framebuffer. The NVIDIA driver crashed in `vkCmdBeginRenderPass`.
+
+**Not done.**
+- The band of horizontal streaks along the deck's own level: rays nearly parallel to the layer cross tens of km of it.
+  The near and far steps are owed.
+- Metal (#71).
+
+## ADR-0335 — The clouds' rays and history camera-relative, in double (#187)
+
+**Context.** Glenn, 2026-11-05: "horizontal striping going through each cloud like you can see each layer". The lab's
+`near` pose (coverage 0.55, density 0.6) shows thin, wavy lines across every close cloud. A stripe score was used: the
+peak-to-median of the rows' high-passed spectrum over the cloud.
+- **The bisection.** A single frame with no history scores 8.7: no visible lines, only grain. The history at 0.9
+  scores 26.5. The history without reprojection (prevUV = uv, camera still) scores 11.6. So the history's
+  REPROJECTION was the amplifier.
+- **The cause.** The reprojection was `invVP · (ndc, z, 1) − camera`, then `prevVP · (camera + dir · t)`, all in
+  float, with km-scale positions. Every pixel's read landed a fraction of a texel off its own, a little differently in
+  bands across the screen, and resampling that frame after frame drew the lines.
+- **Earlier dead ends, kept for the record** (none moved the stripes): half view steps; 12 light steps; a smooth-F1
+  Worley bake; a 256³ base; quintic texel reads; the light cone against the line; a rounded coverage threshold; a
+  dither on the noise reads. A jittered in-cloud step length was tried after the fix and also made no change.
+
+**Decision.**
+- The cloud uniforms' `invViewProjection` is `(flipVP · T(eye))⁻¹`, composed and inverted in double: clip → the offset
+  from the camera.
+- `prevViewProjection` is `prevFlipVP · T(eye)`: the offset from this frame's camera → last frame's clip.
+- clouds.frag and clouds_resolve.frag use the offsets directly. The camera position no longer goes into the
+  reprojection. Nothing else reads these two uniforms.
+
+**Measured** (lab `near`):
+- Stripe score 26.5 → 15.1.
+- The cloud pass costs the same: 1.45 ms before and after.
+
+**Not done.**
+- A faint residue (no-reprojection floor 11.6, against 8.7 for one frame): a consistent pattern in the march's own
+  per-frame result, which the averaging reveals. Next: a per-sample numeric dump of the light march along a ray
+  through a line and one beside it.
+- Metal (#71).
+
+## ADR-0336 — The clouds' weather map and cloud types (#187, phase 2)
+
+**Context.** One height profile for every cloud, and a "weather map" that was a slice of the 3D shape noise, so every
+sky was the same kind of cloud at a different coverage. Decima drives its clouds from a 2D weather map with a type
+channel and per-type height profiles (Schneider 2015/2017). Glenn asked for this as the plan's phase 2.
+
+**Decision.**
+- **The weather map** (`cloudnoise::bakeWeather`): 512² RGBA8, tiling, one base tile (~41 km) across, built with the
+  noise set at load.
+  - R is coverage: the base volume's R at v = 0.37, bilinear as the hardware read it, so the sky keeps its layout.
+  - G is the cloud type: slow Perlin, ~14 km regions.
+  - B is wetness, for rain later.
+  - Bound at binding 5 of the march set.
+- **Cloud types** (`VolumetricCloudParams::types`, four along an axis):
+  - stratus, a low flat sheet;
+  - stratocumulus;
+  - cumulus, the old single profile exactly;
+  - cumulonimbus, the full deck with an anvil.
+  Each has a height profile (rise from / full by / full to / gone by, as fractions of the deck), a density, an erosion
+  and an anvil. The march blends neighbours along the axis at the map's G spread over the live `[typeLo, typeHi]`. The
+  anvil is Nubis's: coverage raised toward the top. The level's `environment.clouds.types` and `typeRange` override
+  them.
+- **Each weather state names its range** (`WeatherTargets.typeLo/Hi`, eased with the rest), so a front's puffs flatten
+  into a deck as it arrives:
+  - clear: cumulus;
+  - fair: stratocumulus to cumulus;
+  - overcast: stratus to stratocumulus;
+  - storm: cumulus to cumulonimbus.
+- **A/B:** `RT_CLOUD_TYPES=0` brings back the old slice and one profile.
+
+**Measured** (lab, `weather <state> now`, the clouds pass, types on vs off):
+- fair: mid 2.08 / 2.23, above 2.53 / 1.95, beach 1.46 / 1.11 ms;
+- storm: mid 1.75 / 1.55, above 2.15 / 2.08, beach 1.21 / 1.01 ms.
+- That is about +0.25 ms on average.
+
+**Not done.**
+- The deck is 900–1600 m, too thin for a real cumulonimbus. Its own taller deck, or a per-type top, is owed.
+- Metal (#71).
+- Wind: one weather wind for clouds, grass, trees, sea and players. Proposed to Glenn, not built.
+
+## ADR-0337 — One wind, from the weather, for everything the air moves (#187)
+
+**Context.** Glenn, 2026-11-05: "if this weather map has wind, can we use that to also manipulate things like players
+... the parachute and wing suit ... grass or trees ... the waves in the sea". "Wind" was three unrelated constants:
+- the clouds drifted along +x at the level's speed;
+- grass and trees swayed toward (0.85, 0.30) at a fixed strength (mesh.vert);
+- the sea's four wave trains had fixed headings and heights.
+Nothing in gameplay felt any.
+
+**Decision.**
+- **`engine/wind.h`:** a `Wind` (direction, speed at 10 m, gustiness, a clock) and one query,
+  `windAt(wind, position, groundY)`. It returns horizontal m/s, stronger aloft (power law, a = 0.14, held within 0.6–1.8
+  of the 10 m speed) and gusting. Gusts are value-noise patches about 120 m across, carried downwind at the wind's speed
+  (`windGustFactor`, 1 − gust/2 … 1 + gust).
+- **Set by the weather** (`WeatherTargets.windSpeed/windGust`, eased with the rest): clear 3 m/s / 0.2, fair 6 / 0.35,
+  overcast 9 / 0.4, storm 16 / 0.7. With the weather off: a moderate 6 / 0.35.
+  - DayNightSystem veers the direction slowly through the day: the seed's prevailing heading ± 30° over about 26
+    in-world hours.
+  - It publishes the state as the world's `Wind` component each fixed step, and as `Renderer::windDir/Speed/Gust`.
+- **Read by:**
+  - **The clouds:** their drift is integrated on the CPU along the wind (`cloudWindOffset`, so a veering wind turns the
+    drift instead of swinging the sky), scaled by the deck's own `wind` at 6 m/s. It reaches clouds.frag as `windOffset`.
+    With `RT_WIND_TIME` pinned, it is a fixed offset.
+  - **Grass and trees** (mesh.vert): they sway along the wind. The amplitude is 0.12 m at 6 m/s, as before, scaling with
+    speed; the frequency scales with √speed. Gust fronts are bands travelling downwind at the wind's speed, so a field
+    bows in waves. A mean downwind lean is added.
+  - **The sea** (mesh.frag): the four trains are turned so the first heads downwind. Their height scales by speed / 6
+    (0.35–2.3). Whitecaps run from none in a calm to many in a gale.
+  - **The glide and parachute** (GlideMode): they fly in the moving air. Ground motion is airspeed plus
+    `windAt(position)`, so a chute drifts downwind and is buffeted by gusts, and a suit makes little way into a gale.
+    The flight model and the touchdown still judge airspeed, so landings are judged as before.
+- **Tests:** `wind_rises_with_the_weather_and_keeps_its_bounds`. It checks that wind is horizontal, downwind and within
+  its gust bounds, stronger aloft, that a gust travels at the wind's speed, and that a calm is still.
+
+**Not done.**
+- The wind is one airmass: phase 3's simulation should vary it by place (lee, ridges, open sea).
+- Other gameplay: swings, ropes, boats, tall vehicles; and wind in the audio.
+- The glide uses height above the sea for the wind profile, not above the ground under it.
+- Metal (#71).
+
+## ADR-0338 — The launch's start time: now, an hour, or a moment (#187)
+
+**Context.** Glenn, 2026-11-05: "if I start the engine up at 8 PM here then it's 8 PM in the game and it's at night.
+Alternatively ... give a time of day and start the engine up at that point such as sunset". The clock restored its
+saved time. A level could ask for the wall clock's hour (`clockSource`), but only per level and without the date.
+
+**Decision.**
+- `applyStartTime(cycle, spec)` (day_night_cycle.h) takes:
+  - **"saved":** nothing; the default.
+  - **"now":** the machine's local time and today's date, at real speed (1440-minute day), unpaused.
+  - **An hour:** 0–24.
+  - **A moment:** dawn, sunrise, morning, noon, afternoon, golden (an hour before sunset), sunset (the sun just above
+    the horizon), dusk, night or midnight. Dawn, sunrise, golden, sunset and dusk come from the sun's own arc for the
+    cycle's day and latitude.
+- DayNightSystem applies it once, after the level's seeds, from `RT_TIME` for a run, else the saved preference
+  `daynight.start`.
+- The city simulation follows by its existing rule (`CityRenderSystem::setWorldClock`): it opens its day, or re-seeds
+  the population, at the sky's hour.
+- **Test:** `start_time_hours_moments_and_now`.
+
+**Not done.** The weather still restores the last session's state rather than the calendar's. Proposed to Glenn: a
+per-level climate, with weather from the in-game date.
+
+## ADR-0339 — The sky's horizon by direction: the sunset glow on the sun's side (#187)
+
+**Context.** Glenn, 2026-11-05: "sunset lighting though... the buildings seem to be illuminated all around? Should there
+not be a directional sunlight?" The day model's horizon is one colour all round, the dusk orange (0.95, 0.45, 0.18).
+The sky light (mesh.frag sampleSkyDome / sampleEnvironment) fills a vertical wall from the horizon it faces. So a wall
+facing away from the sun was filled as warm as one facing it.
+- **Measured** on a beach town at 18:20 (island_8_nature): the two faces of a building differed only 1.25–1.35×, both
+  the same orange.
+- That town was in fact in the mountains' shadow, the sun setting behind the range: the glow was all sky light.
+
+**Decision.**
+- **One shared function,** `skyHorizonToward(dir, horizon, zenith, sunDir)` in a new `shaders/vulkan/sky_common.glsl`.
+  - The horizon a direction sees keeps the warm glow toward the sun (×1.2).
+  - Away from the sun it goes to a cooler, dimmer blue-grey: the anti-twilight, the horizon's luminance tinted
+    (0.68, 0.73, 0.95), mixed half with the zenith, × 0.8.
+  - The tint fades in as the sun nears the horizon (gone above sinΘ = 0.35, and below −0.18).
+- **Used by both** sky.frag (the sky you see) and mesh.frag (the light it casts), so the two agree.
+- **The Vulkan shaders gain `#include`** (GL_GOOGLE_include_directive): glslc runs with `-I shaders/vulkan`, and every
+  shader depends on sky_common.glsl. This is the first shared GLSL source, a small step toward #141.
+
+**Measured** (same views):
+- The shaded town at sunset is now a cool, dim fill. Faces read about (64, 47, 45) and (57, 51, 56), where they were
+  (96, 56, 38) and (105, 71, 45).
+- The horizon is warm toward the sun and blue opposite.
+- At 17:30, with the sun clear of the range, the streets show long shadows and sun-facing fronts lit against darker
+  shadow sides.
+
+**Not done.**
+- The low sun's own colour is still near white an hour before sunset (`sunColor` warms only below sin 0.45, gently): an
+  artistic tune.
+- Metal (#71) has its own sky and IBL.
+
+## ADR-0340 — The weather follows the calendar and the level's climate (#187)
+
+**Context.** At startup the weather took, in order: the state the last session quit with (saved in settings.json);
+then the level's policy; then the day's roll. Every session saved its weather, so the first won almost every time and
+the day's roll almost never ran. The level-policy path also rolled with a hard-coded seed of 7 where the default path
+read `weather.seed`. The odds were the same everywhere and all year. Glenn, 2026-11-05: "I do like the idea of the
+game having its own weather state and calendar".
+
+**Decision.**
+- **Auto weather is the calendar's.** `weatherForDay(seed, day, year, climate, latitude)` draws a day's opening state
+  through the climate's odds. The walk within the day is seeded by the day (`weatherDaySeed`), so a given day always has
+  the same weather however it is reached.
+  - At each new in-world day, auto weather eases to the new day's state, and the walk starts afresh.
+  - `weather auto` returns to today's.
+- **Only a deliberate choice survives a restart.** A state chosen by hand (`weather storm`, the panel; saved with
+  `weather.auto` false) is restored as an explicit override. Saved auto weather is not.
+- **The climate is level data:** `"dayNight": {"climate": {"summer": [c, f, o, s], "winter": [...], "odds": [...]
+  (both), "prevailingFrom": deg, "windScale": x}}`.
+  - Midsummer and midwinter odds are blended by a cosine of the day (coldest about 15 January in the north, flipped
+    south of the equator).
+  - The prevailing wind's compass bearing aims the weather wind (ADR-0337; north −z, east +x), still veering ±30° through
+    the day. `windScale` scales its speed.
+  - The default is the old odds all year (30 / 42 / 20 / 8 %) and a south-westerly.
+- **The seed bug:** the level-policy path now uses the settings' seed.
+- **island_8_nature** gets a North Atlantic climate and `weather: auto` (it was fixed "fair"):
+  - summer 10 / 35 / 40 / 15;
+  - winter 5 / 20 / 45 / 30;
+  - wind from 245°, × 1.3.
+- **Test:** `weather_calendar_climate_and_season`. It checks reproducibility, that January storms outnumber July's in
+  the north and the reverse in the south, the default odds within sampling, and the day-seeded walk.
+
+**Not done.** Phase 3's simulation replaces the walk: fronts from the prevailing wind, the daily draw choosing what is
+coming.
+
+## ADR-0341 — A car at rest is dark (#187)
+
+**Context.** Glenn, 2026-11-05, at night on island_8_nature: "a lot of headlights sitting here but no cars". The city
+draws car bodies (`syncGroups`) and lamps (`syncCarLamps`) in two passes. The body pass skips a driver resting in a car
+parked OFF-street; the lamp pass skipped only far, commandeered and non-driver agents. At night, every car in a lot or
+a garage hung its pair of headlight boxes in the air by the kerb, with no body. The lamp code already noted the
+off-street rule, but applied it only to the bus's destination sign. A car parked at the kerb also kept its headlights
+on all night.
+
+**Decision.**
+- The lamp pass skips any driver not on a trip (`!a.moving`: arrived and parked, on the street or off it). A car held
+  at a light, or yielding, is still on its trip and keeps its lamps and brake lights.
+- The bus's destination sign keeps its own rule.
+- `car_headlights_track_the_night_clock` now also requires that no headlights belong to a car at rest: at most two per
+  car on a trip.
+
+## ADR-0342 — A vehicle's lamps are its own body's lenses (#186)
+
+**Context.** The city drew car lamps as separate emissive boxes, in three instance groups (head, brake, turn). Each lit
+box was pushed at a lamp marker in its own pass, and VehicleSystem gave the player's and promoted cars lens entities of
+their own. That second thing had to be kept in step with the body, and when it was not, the lamps showed it:
+- the floating headlights over parked cars (ADR-0341);
+- a bus's tail lights inside its saloon;
+- a second pair of tail lights at guessed chassis corners.
+
+The kit bodies already had real lens parts, but these were never lit. The two-wheelers and the semi trailer had no
+lamp geometry at all. Glenn, 2026-11-05: "why did we separate the light from the cars?"
+
+**Decision.**
+- **Lenses are tagged by role.** Each lens vertex carries its role in its texture slot: u = -1000 - role. The roles
+  (`engine/vehicle_lamps.h` `LensRole`) are head 1, tail 2, indicator 3 and marker 4.
+  - Lua has a new generic mesh word, `mesh.set_uv` (and `mesh.uv_by`).
+  - vehicles.lua tags parts by material: `lamp`, `lamp_red`, `lamp_amber`, `lamp_marker`.
+  - The classic `buildCarMesh` tags its own lenses.
+  - A lens's side comes from its model x (+x is the driver's left).
+- **The lit lamps are a mask on the instance.** The mask has bits for head 1, brake 2, left lit 4 and right lit 8
+  (`lampMask`; the blink is on the sim clock). It rides the instance matrix's bottom row, `m[3][0]`, under
+  `FLAG_LAMP_STATE` (bit 27). A Renderable gets the same slot through `Renderable::instanceData`, so the player's car
+  and promoted cars use it too.
+- **mesh.vert lights the tagged lenses.** A lit lens's colour goes out as colour × (2 + emission), and mesh.frag splits
+  the two:
+  - head: white;
+  - tail: red, dim with the headlights and bright on the brakes;
+  - an indicator flashes the head or tail lens on its own side amber, and lights the amber lenses;
+  - markers: amber, lit with the headlights.
+- **Metal.**
+  - Model matrices go up with the bottom row as (0, 0, 0, 1) (`toSimdModel`). Nothing on Metal stripped it before,
+    so grass and signals carried data there into w.
+  - The mask moves to `GPUInstanceData::albedo.w`.
+  - The lamp bit is stripped from the float flags, because past bit 24 a float drops the low flags.
+  - A lamp-state draw goes instanced even when it is alone.
+  - The instanced vertex lights the lenses the way mesh.vert does.
+  - **None of this has been compiled or run on a Mac yet.**
+- **New geometry.**
+  - Motorcycle and moped: a round headlamp on the fork crown, a tail lamp, and an indicator on a stalk at each corner.
+  - Semi trailer: stop/tail lamps and turn lamps; amber side markers at the front and middle, red at the back; clearance
+    lamps at the top corners (box trailer). All are lit from the tractor's mask; when #189 articulates the trailer, its
+    instance carries the same mask.
+  - The fire engine's roof light bar is `beacon`, not a tail lamp, and stays unlit for now.
+- **Removed.**
+  - The three lamp groups, `lampMaterial`, and syncCarLamps' boxes. syncCarLamps keeps the bus signs and the speed
+    history, and writes each driver's mask onto its body instance.
+  - VehicleSystem's lens entities. `Vehicle::lamps` keeps the positions for the headlight cones, with the corner guess
+    only for those.
+- **Tests.**
+  - New: `every_fleet_body_carries_its_own_lit_lenses` (the kit fleet, the classic set, both semis, both bikes: head
+    and tail lenses at their own ends, indicators a side, markers on the trailer).
+  - The night, brake, turn and external-ownership cases now read `CityRenderSystem::carsLit`.
+  - `city_lamps_sit_on_their_own_car_s_ends` is retired: a lens is part of the body, so it cannot be at another car's
+    end.
+
+- **The mask is written last** in the bake (syncCarLamps). Everything that copies a body's matrix (glass, cabin,
+  riders, the bus sign, the ride pose) copies it before then, so the copies carry no data. Two places had to keep or
+  skip it:
+  - The physics bridge overwrites a possessed car's matrix with its Jolt pose, and now keeps the mask.
+  - `city_drawn_traffic_rolls_on_its_wheels` measured wheels with `Mat4::transformPoint`, which DIVIDES by the bottom
+    row. It now uses `instanceCentre` (affine). Any new reader of a car's drawn matrix must too.
+
+**Consequences.** One thing to draw per car. A lamp is wherever its body is, never anywhere else. Kinds stay data: a new
+vehicle lights by naming its lens parts. Bodies with no tagged lens (a hand-built level body) drive dark until they tag
+theirs.
+
+## ADR-0343 — The taxi, the off-roader and the moped in traffic
+
+**Context.** The kit had a taxi, an off-roader and a moped, but none of them were in the city fleet. The sim already
+runs cabs (`CitySim::isTaxi`), and they drove whatever ordinary car they were dealt. Glenn, 2026-11-05: "I think there
+are some vehicles that don't show up in the world. Maybe it's time to add those too."
+
+**Decision.**
+- **Fleet slots.** `FLEET_SLOTS` gains the off-roader (sand) and the taxi (cab yellow) after the pickup, and the moped
+  (teal) after the motorcycle. That makes 18 kit slots, and `fleet_mixed` has 30. The moped goes through the
+  motorcycle's bike path, so its rider is drawn astride and it handles as a two-wheeler.
+- **The taxi is a service body,** like the bus and the fire engine (`serviceVehicle`). Ambient traffic and kerb bays
+  never get it.
+  - The renderer finds the slot by its class name (`taxiVariant_`), as it does the bus and the fire engine.
+  - `slotFor` draws every cab as it.
+  - `applyTaxiFraction` re-bodies each cab's own car as the taxi (its length for the gaps, its type), and puts a car
+    that stops being a cab back on its ordinary body.
+  - A parked cab draws as a taxi too.
+- **One slot rule.** syncGroups had its own copy of the bus and fire-engine slot rule, and now calls `drawSlotFor`.
+- **Test.** `city_cabs_draw_as_taxis_and_only_cabs_do` checks that every drawn cab is a taxi, no taxi is drawn without
+  a cab, and bikes are in the rotation.
+
+**Consequences.** Adding slots changes which model and colour each car index gets, but every car stays stable for the
+run. The semis wait for #189's articulation, and the bicycles for #190.

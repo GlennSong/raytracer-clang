@@ -22,10 +22,6 @@ namespace {
 constexpr const char* kMapsCodeTag = "2026-09-26.1";
 
 
-double smooth(double a, double b, double x) {
-    const double t = std::clamp((x - a) / (b - a), 0.0, 1.0);
-    return t * t * (3.0 - 2.0 * t);
-}
 uint8_t u8(double v) { return static_cast<uint8_t>(std::lround(std::clamp(v, 0.0, 1.0) * 255.0)); }
 }  // namespace
 
@@ -82,8 +78,8 @@ TerrainMaps computeTerrainMaps(const Heightmap& hmIn, double seaLevel) {
             const double cv = std::clamp(-lap * 25.0, -1.0, 1.0);   // a ridge of ~50 m radius reads +0.5
             convex[i] = static_cast<float>(cv);
             const bool sea = hmIn.h[i] < seaLevel;
-            wet[i] = sea ? 0.0f : static_cast<float>(smooth(3.3, 5.5, std::log10(std::max(1.0f, area[i]))));
-            soil[i] = sea ? 1.0f : static_cast<float>(std::clamp((1.0 - smooth(0.45, 0.85, s)) * (0.65 - 0.6 * cv) + 0.3 * wet[i], 0.0, 1.0));
+            wet[i] = sea ? 0.0f : static_cast<float>(smoothstep(3.3, 5.5, std::log10(std::max(1.0f, area[i]))));
+            soil[i] = sea ? 1.0f : static_cast<float>(std::clamp((1.0 - smoothstep(0.45, 0.85, s)) * (0.65 - 0.6 * cv) + 0.3 * wet[i], 0.0, 1.0));
         }
     });
     // scree: moderate slopes with cliffs close by (the fall zone), thicker in the hollows below them
@@ -99,7 +95,7 @@ TerrainMaps computeTerrainMaps(const Heightmap& hmIn, double seaLevel) {
             const std::size_t o = static_cast<std::size_t>(z) * m.n + x;
             const std::size_t i = static_cast<std::size_t>(std::min(n - 1, 2 * z)) * n + std::min(n - 1, 2 * x);
             const double s = slope[i];
-            const double scree = smooth(0.08, 0.3, cliffNear[i]) * smooth(0.3, 0.45, s) * (1.0 - smooth(0.78, 0.9, s)) * (0.7 - 0.5 * convex[i]);
+            const double scree = smoothstep(0.08, 0.3, cliffNear[i]) * smoothstep(0.3, 0.45, s) * (1.0 - smoothstep(0.78, 0.9, s)) * (0.7 - 0.5 * convex[i]);
             m.wet[o] = u8(wet[i]);
             m.scree[o] = u8(scree);
             m.soil[o] = u8(soil[i] * (1.0 - 0.7 * scree));

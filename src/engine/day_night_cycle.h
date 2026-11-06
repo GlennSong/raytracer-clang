@@ -3,6 +3,8 @@
 
 #include "../rt_math.h"
 
+#include <string>
+
 namespace engine {
 
 // Lighting + sky colors produced by the day/night model at a moment in time.
@@ -175,6 +177,17 @@ public:
 // -7 daylight) rather than a hardcoded assumption. Pure: no cycle state, so it
 // is testable on its own.
 double wallClockTimeOfDay(double utcOffsetHours = -1000.0);
+
+// THE START TIME a launch asks for (ADR-0338; Glenn, 2026-11-05: "if I start the engine up at 8 PM here then it's 8 PM
+// in the game ... or give a time of day and start the engine up at that point such as sunset"):
+//   "saved" or ""  -- nothing: the saved / level time stands;
+//   "now"          -- the machine's local time AND today's date, the clock at real speed and running;
+//   an hour        -- "17.5" (0..24), today's in-game day;
+//   a moment       -- "dawn", "sunrise", "morning", "noon", "afternoon", "golden" (an hour before sunset), "sunset",
+//                     "dusk", "night", "midnight"; dawn, sunrise, golden, sunset and dusk from the sun's own arc for the
+//                     cycle's day and latitude.
+// True when it set the clock; `what` says how (for the log). An unknown spec sets nothing and says so.
+bool applyStartTime(DayNightCycle& c, const std::string& spec, std::string* what = nullptr);
 
 }  // namespace engine
 

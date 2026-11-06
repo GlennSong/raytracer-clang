@@ -104,6 +104,7 @@ struct CityPlan {
     std::vector<std::vector<Vec2>> limits;   // world.land.shape: the city's limits, grown over its land (closed outlines)
     std::vector<Vec2> ringArc;         // world.land: the ring opened into a C where it met the sea (ring is then empty)
     std::vector<std::vector<Vec2>> spurs;   // the radial expressways, drawn from their far end in to midtown's boulevard
+    std::vector<std::vector<Vec2>> footways;   // paths on foot, not streets: a hill town's lanes down between its shelves (ADR-0326)
     // A TOWN at an expressway's far end, one per spur: a small grid square to the expressway, whose
     // main street crosses it at the GATE — where the expressway's boulevard pair meets it, as the
     // inner end meets midtown's boulevard. Not built where no site out there stands clear of the sea.

@@ -65,7 +65,7 @@ private:
     // THE CAR PICKER (Glenn: "cycle through all of them somehow and then select a car to drop. It should
     // tell me if the car is 2WD or 4WD"): the drivable catalogue (vehicles.lua), the pick, and a panel
     // shown for a few seconds after a pick, a drop or a 2WD/4WD switch.
-    struct Pick { std::string recipe, label, drive; };
+    struct Pick { std::string recipe, label, drive; bool quick = false; };
     std::vector<Pick> catalogue_;
     bool catalogueTried_ = false;
     int pick_ = 0;
@@ -78,12 +78,12 @@ private:
     bool wasDrifting_ = false;
     Real lastDriftTime_ = 0;
     bool bikeUpright_ = false;   // the ridden bike has stood up since you got on: only then can it go down
+    Real bikeDown_ = 0;          // how long it has lain on its side (s): down past 0.4 s
     std::string wantRecipe_;   // `vehicle_spawn <recipe>`: picked once the catalogue is loaded
     double clock_ = 0.0, panelUntil_ = 0.0;
     std::string panelText_;
     void loadCatalogue();
     MeshHandle wheelMesh;            // shared wheel cylinder, uploaded on first use
-    MeshHandle lensMesh;             // shared head/taillight lens box
     MeshHandle driverMesh;          // shared driver capsule
     Real enterRadius = 4.0;          // how close the player must be to board (m)
     int spawnCount_ = 0;             // debug-spawn seed counter

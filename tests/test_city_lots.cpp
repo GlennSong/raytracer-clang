@@ -1,5 +1,6 @@
 #include "test_framework.h"
 
+#include "../src/engine/procgen/city/polyline.h"   // distToSegment
 #include "../src/engine/procgen/city/architect.h"
 #include "../src/engine/level_params.h"   // readLotGrowParams (the alleys case)
 #include "../src/engine/procgen/city/city_lots.h"
@@ -312,7 +313,8 @@ TEST_CASE(architect_tables_are_coherent) {
         if (f.params.roofStyle != BuildingParams::RoofStyle::Flat) ++finPitched;
         BuildingRecipe r = architectPick(DistrictTag::Residential, 14, 220, s);
         if (r.massing != BuildingRecipe::Massing::Park) {
-            if (r.params.floors <= 4) ++resLow; else ++resTall;
+            if (r.params.floors <= 7) ++resLow;   // houses, rows, flats and walk-ups (denser housing, ADR-0298)
+            if (r.params.floors >= 10) ++resTall;
             if (r.params.roofStyle != BuildingParams::RoofStyle::Flat) ++resPitched;
         }
         BuildingRecipe ind = architectPick(DistrictTag::Industrial, 24, 500, s);
@@ -326,7 +328,7 @@ TEST_CASE(architect_tables_are_coherent) {
     CHECK(finPitched == 0);    // and never a cottage roof
     CHECK(resTall == 0);       // the outskirts never grow a tower
     CHECK(resLow >= 30);
-    CHECK(resPitched >= 12);   // pitched roofs are common out there
+    CHECK(resPitched >= 6);    // pitched roofs are common out there (a quarter of the lots are houses)
     CHECK(indSolid >= 20);     // the wedge is mostly sheds
 
     // The CORE is a SKYSCRAPER cluster: full coreness lifts the glass towers
@@ -363,6 +365,8 @@ TEST_CASE(every_registered_recipe_is_rolled_by_some_table) {
     static const std::set<std::string> placedByHand = {
         // the campus pass's halls and the big-box pass's store: placed by their own passes (city_lots), never rolled
         "teaching_hall", "campus_library", "residence_hall", "big_box",
+        // ...and a beach town's car parks: whole blocks the level names (LotParams::parkingAt), or a town's own mix
+        "car_park",
     };
     std::vector<std::string> silent;
     for (int i = 0; i < architectRecipeCount(); ++i) {
@@ -548,6 +552,65 @@ TEST_CASE(parcel_overrides_rescale_the_lot_grain) {
     CHECK(sameDbg.lots.size() == base.lots.size());
 }
 
+TEST_CASE(landmarks_by_each_places_kind) {
+    // A place's hub carries its kind's landmarks (settlements.lua): two cities each get their own civic table, centred
+    // on their own hub; a beach town its school, church, market hall and police post whatever its districts; a
+    // cluster no list covers plans as before
+    std::vector<LandmarkCand> cands;
+    auto addLots = [&](int cluster, DistrictTag tag, int n, Vec2 base) {
+        for (int i = 0; i < n; ++i) {
+            LandmarkCand c;
+            c.tag = tag;
+            c.shortSide = 16 + (i % 5);
+            c.area = 360 + 8 * i;
+            c.pos = base + Vec2((i % 6) * 40.0, (i / 6) * 40.0);
+            c.cluster = cluster;
+            cands.push_back(c);
+        }
+    };
+    for (int city : {1, 2}) {
+        const Vec2 at(city * 5000.0, 0.0);
+        addLots(city, DistrictTag::Financial, 8, at);
+        addLots(city, DistrictTag::Commercial, 12, at + Vec2(150, 0));
+        addLots(city, DistrictTag::Residential, 14, at + Vec2(0, 200));
+    }
+    addLots(3, DistrictTag::Commercial, 10, {0, 5000});    // a beach town: its seafront...
+    addLots(3, DistrictTag::Residential, 10, {0, 5200});   // ...and the homes behind
+    addLots(-1, DistrictTag::Residential, 30, {0, 9000});  // houses on a country road, no place's: bigger lots, none
+    std::vector<LandmarkCluster> cl(4);
+    cl[1].civic = cl[2].civic = true;
+    cl[1].center = Vec2(5000, 0);
+    cl[2].center = Vec2(10000, 0);
+    for (const char* n : {"school", "church", "market_hall", "police"}) {
+        LandmarkWant w;
+        CHECK(landmarkKindNamed(n, w.kind));
+        w.anyDistrict = true;
+        cl[3].wants.push_back(w);
+    }
+    LandmarkKind none;
+    CHECK(!landmarkKindNamed("lighthouse", none));
+    const std::vector<int> plan = planLandmarks(cands, Vec2(0, 0), 60.0, &cl);
+    auto countIn = [&](int cluster, LandmarkKind k) {
+        int n = 0;
+        for (std::size_t i = 0; i < plan.size(); ++i)
+            if (cands[i].cluster == cluster && plan[i] == static_cast<int>(k)) ++n;
+        return n;
+    };
+    for (int city : {1, 2}) {
+        CHECK(countIn(city, LandmarkKind::Courthouse) == 1);   // each city its own civic anchors
+        CHECK(countIn(city, LandmarkKind::Capitol) == 1);
+    }
+    CHECK(countIn(3, LandmarkKind::School) == 1);
+    CHECK(countIn(3, LandmarkKind::Church) == 1);
+    CHECK(countIn(3, LandmarkKind::Market) == 1);
+    CHECK(countIn(3, LandmarkKind::Police) == 1);
+    CHECK(countIn(3, LandmarkKind::University) == 0);   // (Deerhaven got one as "the city")
+    CHECK(countIn(3, LandmarkKind::Hospital) == 0);
+    for (std::size_t i = 0; i < plan.size(); ++i)
+        if (cands[i].cluster < 0) CHECK(plan[i] < 0);
+    CHECK(plan == planLandmarks(cands, Vec2(0, 0), 60.0, &cl));   // deterministic
+}
+
 TEST_CASE(landmark_quotas_run_per_hub_cluster) {
     // 8km-city P3: multi-site metros plan their civic anchors PER HUB CLUSTER
     // — the primary city (cluster 0) keeps the global table (one courthouse),
@@ -682,15 +745,6 @@ TEST_CASE(every_built_lot_touches_a_road) {
         // the lot's OBB to any road edge in the graph. The lot's rectangle is defined
         // by site (centroid), width, depth (half-extents), and yaw (rotation).
         //
-        // Helper: distance from a point to a line segment (a,b).
-        auto distPointToSegment = [](const Vec2& p, const Vec2& a, const Vec2& b) -> Real {
-            Vec2 ab = b - a;
-            Real len2 = ab.lengthSquared();
-            if (len2 < 1e-12) return (p - a).length();
-            Real t = std::clamp(dot(p - a, ab) / len2, 0.0, 1.0);
-            Vec2 closest = a + ab * t;
-            return (p - closest).length();
-        };
 
         // Helper: distance from the building's OBB CENTER to the nearest road
         // CENTRELINE. The ring parceler fronts every lot on a block edge, so a
@@ -701,7 +755,7 @@ TEST_CASE(every_built_lot_touches_a_road) {
             for (const RoadEdge& edge : roads.edges) {
                 Vec2 a = roads.nodes[edge.a].pos;
                 Vec2 b = roads.nodes[edge.b].pos;
-                minDist = std::min(minDist, distPointToSegment(lot.site, a, b));
+                minDist = std::min(minDist, distToSegment(lot.site, a, b));
             }
             return minDist;
         };

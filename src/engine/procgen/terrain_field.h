@@ -31,6 +31,9 @@ HeightField heightRidged(uint32_t seed, double freq, double amp, int octaves);
 HeightField heightWarp(HeightField base, HeightField by, double strength);
 // Quantise to flat steps of `step` metres (mesas / terraces / paddies).
 HeightField heightTerrace(HeightField base, double step);
+// One height on those steps. `bank` (0..1) is the fraction of each step's rise taken as a smooth bank up to the next
+// shelf, instead of a sheer one; 0 is heightTerrace's hard step. (The regrade's terraces, regrade.h.)
+double terraceHeight(double h, double step, double bank = 0.0);
 
 // --- combinators ---
 HeightField heightAdd(HeightField a, HeightField b);

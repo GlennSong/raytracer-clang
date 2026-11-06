@@ -9,6 +9,8 @@
 #include "places.h"        // PlaceMap (ADR-0066)
 #include "../../engine/control/city_requests.h"
 #include "../../engine/control/control_commands.h"
+#include "../../engine/player/seat_geometry.h"   // SeatGeometry (a rider astride)
+#include <array>
 #include <functional>
 #include <string>
 #include <unordered_map>
@@ -315,20 +317,15 @@ public:
     // Cars are split across several instance groups, one per body/colour variant
     // (an InstanceGroup shares one mesh, so variety needs multiple groups).
     const std::vector<engine::Entity>& carGroups() const { return carGroups_; }
+    int taxiVariant() const { return taxiVariant_; }   // the slot the cabs draw as (-1: the fleet has none)
     engine::Entity carGroup() const { return carGroups_.empty() ? engine::Entity{} : carGroups_[0]; }
     engine::Entity pedGroup() const { return pedGroup_; }
     engine::Entity signalGroup(SignalState s) const { return signalGroups_[static_cast<int>(s)]; }
     engine::Entity signalPostGroup() const { return signalPostGroup_; }
     engine::Entity crosswalkGroup() const { return crosswalkGroup_; }
-    // Car lamp instance groups (ADR-0065 follow-up): emissive headlights (white),
-    // brake lights (red), and turn signals (amber), rebuilt each step from each
-    // drawn car's carLampState — the same shape as the signal lenses (one group
-    // per lamp kind; a lit lamp pushes an emissive box at its body marker's world
-    // pose). Exposed so headless tests read the baked transforms (mirrors
-    // signalGroup()).
-    engine::Entity headlightGroup() const { return headlightGroup_; }
-    engine::Entity brakeLightGroup() const { return brakeLightGroup_; }
-    engine::Entity turnSignalGroup() const { return turnSignalGroup_; }
+    // How many drawn cars carry any of these lit-lamp bits this bake (engine::kLampMask*): the lamps are the body's
+    // own lenses, lit by a mask on its instance (ADR-0342). For the headless tests.
+    std::size_t carsLit(engine::World& world, uint32_t bits) const;
     const std::vector<engine::Vec2>& crosswalkCenters() const { return crosswalkCenters_; }
     // The painted curbside bay outlines (R6b). Exposed so the height gate (#25)
     // can check the paint lands on the asphalt instead of floating over it.
@@ -525,6 +522,7 @@ private:
     std::vector<engine::Entity> busStopProps_;
     int busVariant_ = -1;   // fleet slot that draws as a bus (-1 = none)
     int fireVariant_ = -1;  // ...and as a fire engine (a fire station's, stationed in its bays)
+    int taxiVariant_ = -1;  // ...and as a taxi (the cabs', CitySim::isTaxi)
     Real busPrintAcc_ = 0;  // RT_PRINT_BUSES cadence
     CitySim sim_;
     std::vector<engine::Entity> carGroups_;   // one per car variant (body + colour)
@@ -546,7 +544,13 @@ private:
     engine::Entity pedGroup_;
     engine::Entity pedSeatedGroup_;   // the drawn crowd's people sitting on benches and chairs (M5)
     engine::Entity pedGroundGroup_;   // ... sitting on the grass (a picnic)
-    engine::Entity pedLieGroup_;      // ... lying on it (in the sun)
+    std::array<engine::Entity, engine::kLiePoses> pedLieGroups_;   // ... lying on it (in the sun), one per pose
+    // THE BEACH'S THINGS (Glenn, 2026-11-02: "a towel under them and an umbrella"): a towel under everyone lying out
+    // on the ground, an umbrella over each group on the sand -- the furniture kit's pieces, one set of groups (one per
+    // finish) per colour, their transforms rewritten each sync
+    std::array<std::vector<engine::Entity>, 8> towelGroups_, umbrellaGroups_;
+    engine::Entity crowdBoardGroups_[2];   // the crowd's and the far band's riders' boards (skateboard, scooter)
+    void syncBeachThings(engine::World& world);
     // THE MID-RANGE BAND (the 100k plan's M band; Glenn: "increase the number of people throughout the island"):
     // far (V) agents within farCarRadius / farPedRadius, drawn from CitySim::farDrawPose as cheap stand-ins -- a
     // two-box car per body slot, the box person -- in groups of their own (no physics proxy, no lamps)
@@ -622,10 +626,6 @@ private:
     engine::Entity signalPostGroup_;   // the static pole+arm+head assemblies
     engine::Entity parkBayGroup_;      // curbside bay outline markings (R6b)
     engine::Entity crosswalkGroup_;    // baked zebra decals at junction mouths
-    // Car lamps (ADR-0065 follow-up): one emissive instance group per lamp kind.
-    engine::Entity headlightGroup_{};  // white, forward
-    engine::Entity brakeLightGroup_{}; // red, rear
-    engine::Entity turnSignalGroup_{}; // amber, blinks (render clock)
     // Retained lamp markers, one list per car variant (indexed like carGroups_):
     // the Lua fleet's headlight_l/r + taillight_l/r markers in body-local space,
     // or a synthesized default set for C++ fallback cars. An empty entry => that
@@ -638,6 +638,9 @@ private:
     std::vector<std::vector<CarWheel>> carWheels_;
     // ...and each slot's handling (carConfig), read with the catalogue: no geometry, so a headless sim has it.
     std::vector<engine::PhysicsWorld::VehicleConfig> carConfigs_;
+    // ...and its seat (the handling's `seat`): a seat with BARS, not a wheel, is ridden astride, so the slot draws
+    // its own rider (carRiderGroups_) posed by the player's seat rule instead of the car driver
+    std::vector<engine::SeatGeometry> carSeatGeom_;
     // SEE-INTO VEHICLES (the bus; Glenn: "we should see the npcs sitting on
     // the bus. There should be a driver"). Per variant, indexed like
     // carGroups_: a CLEAR glass group (invalid Entity when the slot's glass is
@@ -662,6 +665,7 @@ private:
     std::vector<char> carHasRear_;
     std::vector<char> carHasDriver_;
     engine::Entity busDriverGroup_{};
+    std::vector<engine::Entity> carRiderGroups_;   // per slot: its rider astride (invalid: a car's driver, if any)
     engine::Entity busRiderGroups_[3] = {};
     // The seat the PLAYER holds on the bus they ride (-1 none): NPC riders
     // are dealt round it, so nobody is drawn sitting in the player's lap.
@@ -696,7 +700,7 @@ private:
         c.used = drawBake_;
         return c;
     }
-    Real bakeDt_ = 1.0 / 60.0;                     // last step's dt (filter gain)   // last step's per-agent speed (brake decel)
+    Real bakeDt_ = engine::kDefaultFixedStep;                     // last step's dt (filter gain)   // last step's per-agent speed (brake decel)
     // debug ground rings, one per Agent::State (indexed by it)
     engine::Entity footprintGroups_[static_cast<int>(Agent::State::Count)]{};
     engine::Entity forwardGroup_{};          // debug forward-trajectory arrows

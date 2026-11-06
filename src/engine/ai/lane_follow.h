@@ -2,6 +2,7 @@
 #define RAYTRACER_ENGINE_AI_LANE_FOLLOW_H
 
 #include "driver_agent.h"   // DriverCommand (and Vec2/Real via polygon.h)
+#include "../procgen/city/polyline.h"   // stations
 
 #include <algorithm>
 #include <cmath>
@@ -33,9 +34,7 @@ public:
         for (const Vec2& p : pts)
             if (pts_.empty() || (p - pts_.back()).length() > 1e-6) pts_.push_back(p);
         if (pts_.size() < 2) { pts_.clear(); return; }
-        cum_.assign(pts_.size(), 0.0);
-        for (std::size_t i = 1; i < pts_.size(); ++i)
-            cum_[i] = cum_[i - 1] + (pts_[i] - pts_[i - 1]).length();
+        cum_ = stations(pts_);   // (polyline.h)
     }
 
     bool valid() const { return pts_.size() >= 2; }

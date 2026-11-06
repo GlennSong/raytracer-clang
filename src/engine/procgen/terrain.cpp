@@ -16,11 +16,6 @@ namespace engine {
 
 namespace {
 double clamp01(double x) { return x < 0.0 ? 0.0 : (x > 1.0 ? 1.0 : x); }
-double smoothstep(double e0, double e1, double x) {
-    double t = clamp01((x - e0) / (e1 - e0));
-    return t * t * (3.0 - 2.0 * t);
-}
-Vec3 mixv(const Vec3& a, const Vec3& b, double t) { return a + (b - a) * t; }
 }  // namespace
 
 namespace {
@@ -424,27 +419,27 @@ Vec3 terrainColorImpl(double height, double slope,
     // the poor man's drainage map.
     double lowAlt = clamp01(height / (rockLine * 3.4));
     double dry = clamp01(0.10 + 0.14 * dryN + 0.42 * lowAlt - 0.20 * clamp01(curv));
-    Vec3 greenMix = mixv(grass, grassDk, clamp01(0.5 + 0.5 * toneN));
-    Vec3 ground = dry < 0.5 ? mixv(greenMix, meadow, dry * 2.0)
-                            : mixv(meadow, dirt, (dry - 0.5) * 2.0);
+    Vec3 greenMix = lerp(grass, grassDk, clamp01(0.5 + 0.5 * toneN));
+    Vec3 ground = dry < 0.5 ? lerp(greenMix, meadow, dry * 2.0)
+                            : lerp(meadow, dirt, (dry - 0.5) * 2.0);
 
     // STONE: a mountain is stone-bodied. Exposed by ABSOLUTE altitude (massif above
     // the treeline) OR by slope (a cliff at any height), mottled across THREE tones
     // (dark / mid / light) so a cliff face reads as varied rock, not flat grey.
     // Convex breaks (curv < 0: ridge crests, spur noses) shed their soil a little
     // earlier than the surrounding face.
-    Vec3 stone = toneN < 0.0 ? mixv(darkRock, rock, clamp01(1.0 + toneN))
-                             : mixv(rock, rockLt, clamp01(toneN));
+    Vec3 stone = toneN < 0.0 ? lerp(darkRock, rock, clamp01(1.0 + toneN))
+                             : lerp(rock, rockLt, clamp01(toneN));
     double altRock   = smoothstep(rockLine, rockLine * 2.5,
                                   height + rockLine * 0.44 * snowN);
     double slopeRock = smoothstep(0.30, 0.55, slope + 0.10 * toneN - 0.08 * curv);
     double rockF = clamp01(std::max(altRock, slopeRock));
-    Vec3 c = mixv(ground, stone, rockF);
+    Vec3 c = lerp(ground, stone, rockF);
 
     // Pale scree only on the high benches (kept rare so it doesn't wash the body).
     double screeF = smoothstep(snowLine * 0.89, snowLine * 1.27, height) *
                     smoothstep(0.14, 0.34, slope);
-    c = mixv(c, scree, clamp01(screeF));
+    c = lerp(c, scree, clamp01(screeF));
 
     // Snow CAPS the peaks. The snowline is perturbed on THREE scales so the edge is
     // ragged, never a contour line: big lobes from the low-freq dryN (snow tongues
@@ -461,8 +456,8 @@ Vec3 terrainColorImpl(double height, double slope,
     double patch = smoothstep(-0.5, 0.5, snowN + 0.7 * toneN + 0.5 * detailN);
     double deepSnow = smoothstep(0.65, 1.0, snowF);   // 1 in the full snowfields
     snowF *= patch + (1.0 - patch) * deepSnow;         // patchy at the edge, solid up high
-    Vec3 snowTone = mixv(snowBlue, snow, clamp01(0.5 + 0.5 * detailN));
-    c = mixv(c, snowTone, clamp01(snowF));
+    Vec3 snowTone = lerp(snowBlue, snow, clamp01(0.5 + 0.5 * detailN));
+    c = lerp(c, snowTone, clamp01(snowF));
 
     // COAST (only when the level has a sea): band the shoreline by height ABOVE the
     // waterline — sea floor below, a sand/rock shore just above — so the ground reads
@@ -479,7 +474,7 @@ Vec3 terrainColorImpl(double height, double slope,
             // Sea FLOOR: darkens with depth (seen through the translucent water; also
             // what shows if the tide/level ever drops). Sandy near shore -> dark silt.
             double depth = -aboveSea;
-            c = mixv(bedShallow, bedDeep, clamp01(depth / 14.0));
+            c = lerp(bedShallow, bedDeep, clamp01(depth / 14.0));
         } else {
             // SHORE band in the first few metres above the water: sand on gentle
             // ground, wet rock where the coast is steep (a cliff foot / rocky shore).
@@ -487,8 +482,8 @@ Vec3 terrainColorImpl(double height, double slope,
             if (band > 1e-3) {
                 double rocky = smoothstep(0.24, 0.52, slope + 0.10 * toneN);
                 double tide  = 1.0 - smoothstep(0.0, 1.5, aboveSea);   // wetter at waterline
-                Vec3 beach = mixv(mixv(sand, wetSand, tide), shoreRock, rocky);
-                c = mixv(c, beach, clamp01(band));
+                Vec3 beach = lerp(lerp(sand, wetSand, tide), shoreRock, rocky);
+                c = lerp(c, beach, clamp01(band));
             }
         }
     }

@@ -55,8 +55,9 @@ std::vector<std::string> strings(lua_State* L, int t, const char* key) {
     return out;
 }
 bool knownSite(const std::string& k) {
+    if (citysim::isAreaSiteKind(k)) return true;   // a pitch, a lawn, a plaza, the beach, its shore, a playground: the one list
     static const char* kinds[] = {"cafe", "restaurant", "bar", "club", "shop", "supermarket", "civic", "park", "library", "teaching", "quad",
-                                  "field", "office", "seat", "bed", "stand", "loop", "pitch", "lawn", "plaza", "watch", "street"};
+                                  "field", "office", "seat", "bed", "stand", "loop", "watch", "street", "side_job"};
     for (const char* x : kinds) if (k == x) return true;
     return false;
 }
@@ -121,6 +122,21 @@ bool loadActivityCatalog(ScriptVM& vm, citysim::ActivityCatalog& out, std::strin
         else if (pf == "roam") d.perform = citysim::Perform::Roam;
         else { lua_settop(L, base); return fail(err, "activities." + name + ": unknown perform `" + pf + "`"); }
         if (d.sites.empty()) { lua_settop(L, base); return fail(err, "activities." + name + ": no sites"); }
+        // ON A BOARD: ride = { kind = "skateboard" | "scooter", pace = { lo, hi } } (times walking speed)
+        lua_getfield(L, dt, "ride");
+        if (lua_istable(L, -1)) {
+            const int rt = lua_gettop(L);
+            const std::string kind = str(L, rt, "kind");
+            if (!citysim::rideFromName(kind, d.ride) || d.ride == citysim::Ride::None) {
+                lua_settop(L, base);
+                return fail(err, "activities." + name + ": ride.kind is skateboard or scooter, not `" + kind + "`");
+            }
+            if (!pair(L, rt, "pace", d.paceLo, d.paceHi) || d.paceLo < 0.5 || d.paceHi < d.paceLo || d.paceHi > 5) {
+                lua_settop(L, base);
+                return fail(err, "activities." + name + ": ride.pace = { lo, hi }, 0.5..5 times walking");
+            }
+        }
+        lua_pop(L, 1);   // ride
         // A GROUP: roles = { { name, n, speed = { lo, hi }, zone }, ... }, min_players, gather_minutes, swap_at, during
         lua_getfield(L, dt, "roles");
         if (lua_istable(L, -1)) {
