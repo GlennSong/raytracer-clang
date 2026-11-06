@@ -317,6 +317,7 @@ public:
     // Cars are split across several instance groups, one per body/colour variant
     // (an InstanceGroup shares one mesh, so variety needs multiple groups).
     const std::vector<engine::Entity>& carGroups() const { return carGroups_; }
+    int taxiVariant() const { return taxiVariant_; }   // the slot the cabs draw as (-1: the fleet has none)
     engine::Entity carGroup() const { return carGroups_.empty() ? engine::Entity{} : carGroups_[0]; }
     engine::Entity pedGroup() const { return pedGroup_; }
     engine::Entity signalGroup(SignalState s) const { return signalGroups_[static_cast<int>(s)]; }
@@ -521,6 +522,7 @@ private:
     std::vector<engine::Entity> busStopProps_;
     int busVariant_ = -1;   // fleet slot that draws as a bus (-1 = none)
     int fireVariant_ = -1;  // ...and as a fire engine (a fire station's, stationed in its bays)
+    int taxiVariant_ = -1;  // ...and as a taxi (the cabs', CitySim::isTaxi)
     Real busPrintAcc_ = 0;  // RT_PRINT_BUSES cadence
     CitySim sim_;
     std::vector<engine::Entity> carGroups_;   // one per car variant (body + colour)

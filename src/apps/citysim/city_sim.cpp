@@ -4303,6 +4303,24 @@ void CitySim::setTaxiFraction(Real f) {
 void CitySim::applyTaxiFraction() {
     if (agents_.empty()) return;
     taxi_.assign(agents_.size(), 0);
+    // THE CAB'S CAR IS A TAXI (2026-11-06): a fleet with a taxi slot re-bodies each cab's own car as it -- its length
+    // for the gaps, its type for the draw (parked too) -- and a car that stops being a cab goes back to its ordinary
+    // body. (Without a taxi slot a cab keeps the car it was dealt.)
+    int taxiSlot = -1;
+    for (int fs = 0; fs < fleetSize(); ++fs)
+        if (fleetBody(fs).type == VehicleType::Taxi) { taxiSlot = fs; break; }
+    auto rebody = [&](int vi, int slot) {
+        if (vi < 0 || vi >= static_cast<int>(vehicles_.size())) return;
+        SimVehicle& v = vehicles_[static_cast<std::size_t>(vi)];
+        const VehicleBody& body = fleetBody(slot);
+        v.slot = slot;
+        v.length = body.length;
+        v.width = body.width;
+        v.height = body.height;
+        v.type = body.type;
+    };
+    for (int vi = 0; vi < static_cast<int>(vehicles_.size()); ++vi)
+        if (vehicles_[static_cast<std::size_t>(vi)].type == VehicleType::Taxi) rebody(vi, ambientSlotFor(vi));
     if (taxiFraction_ <= 0) return;
     if (taxiTable_.stateCount() == 0) taxiTable_ = taxiGoals();
     int drivers = 0;
@@ -4321,6 +4339,7 @@ void CitySim::applyTaxiFraction() {
             taxi_[i] = 1;
             agents_[i].goal = taxiTable_.entry();
             agents_[i].goalHours = 0;
+            if (taxiSlot >= 0) rebody(agents_[i].car, taxiSlot);
             ++made;
         }
     }

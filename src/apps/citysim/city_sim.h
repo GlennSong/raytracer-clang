@@ -388,8 +388,12 @@ struct Agent {
 // varied by a Body component). Dimensions come from the shared fleet table below,
 // so the sim (following distance, colliders) and the renderer (mesh, lift) agree.
 // FireEngine: a fire station's (2026-10-13), stationed in its bays -- never dealt to ordinary traffic, like the bus.
-enum class VehicleType : uint8_t { Sedan, Hatchback, SUV, Pickup, Van, BoxTruck, Bus, FireEngine };
-inline bool serviceVehicle(VehicleType t) { return t == VehicleType::Bus || t == VehicleType::FireEngine; }
+enum class VehicleType : uint8_t { Sedan, Hatchback, SUV, Pickup, Van, BoxTruck, Bus, FireEngine, Taxi };
+// A SERVICE body is dealt to its service only, never to ambient traffic or a kerb bay: the bus to the routes, the fire
+// engine to its station, the taxi to the cabs (isTaxi)
+inline bool serviceVehicle(VehicleType t) {
+    return t == VehicleType::Bus || t == VehicleType::FireEngine || t == VehicleType::Taxi;
+}
 
 // A body's physical dimensions (metres) + its type. `length` is the travel axis;
 // car-following keeps cars a bumper apart from THIS, so a longer truck naturally

@@ -703,9 +703,12 @@ local FLEET_SLOTS = {
     { kit = "jeep",        color = { 0.24, 0.30, 0.18 } },   -- jeep (olive)
     { kit = "convertible", color = { 0.80, 0.12, 0.10 } },   -- convertible (red)
     { kit = "pickup",      color = { 0.14, 0.30, 0.20 } },   -- pickup (green)
+    { kit = "offroad",     color = { 0.55, 0.42, 0.22 } },   -- off-roader (sand)
+    { kit = "taxi",        color = { 0.95, 0.74, 0.08 } },   -- TAXI (cab yellow): dealt to the cabs only, never ambient
     { kit = "step_van",    color = { 0.36, 0.22, 0.10 } },   -- parcel step van (brown)
     { kit = "small_truck", color = { 0.90, 0.90, 0.88 } },   -- small box truck (white cab)
     { bike = "motorcycle", color = { 0.75, 0.08, 0.06 } },   -- motorcycle (red): its rider drawn astride
+    { bike = "moped",      color = { 0.20, 0.55, 0.62 } },   -- moped (teal): its rider astride too
     { kit = "fire_engine", color = { 0.70, 0.05, 0.05 } },   -- FIRE ENGINE (fire-engine red): stationed, never traffic
     { class = "bus",       color = { 0.86, 0.62, 0.08 } },   -- CITY BUS (municipal yellow), mesh.car
 }

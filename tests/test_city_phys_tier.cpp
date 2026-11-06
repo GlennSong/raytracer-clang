@@ -596,6 +596,47 @@ TEST_CASE(city_drawn_traffic_rolls_on_its_wheels) {
 // on the overlay lamp boxes. The lamps are the body's own lenses since ADR-0342: test_vehicle_body's
 // every_fleet_body_carries_its_own_lit_lenses checks each body's lenses sit at its own ends.)
 
+// THE CABS DRIVE TAXIS (2026-11-06): the kit fleet's taxi slot is dealt to the cabs (CitySim::isTaxi) and to nobody
+// else -- every drawn cab is a taxi, every drawn taxi a cab -- and the off-roader and the moped are in the rotation.
+TEST_CASE(city_cabs_draw_as_taxis_and_only_cabs_do) {
+    World world;
+    world.add<RoadEntity>(world.create(), cityGrid());
+    CityRenderParams params;
+    params.cars = 40;
+    params.pedestrians = 0;
+    params.seed = 11;
+    params.wander = true;
+    params.taxiFraction = 0.25;
+    params.vehicleScript = readAsset("vehicles.lua");
+    CityRenderSystem city(params);
+    StubUploader uploader;
+    engine::AssetManager assets(uploader);
+    CHECK(city.build(world, &assets));
+    CHECK(city.taxiVariant() >= 0);
+    long cabs = 0, taxisNotCabs = 0, cabsNotTaxis = 0, bikes = 0;
+    for (int i = 0; i < 60 * 20; ++i) {
+        city.step(world, 1.0 / 60.0);
+        if (i % 30) continue;
+        const auto& ids = city.carAgentIds();
+        for (std::size_t v = 0; v < ids.size(); ++v)
+            for (int ai : ids[v]) {
+                if (ai < 0) continue;
+                const bool cab = city.sim().isTaxi(ai), taxi = static_cast<int>(v) == city.taxiVariant();
+                cabs += cab;
+                taxisNotCabs += taxi && !cab;
+                cabsNotTaxis += cab && !taxi;
+                const engine::PhysicsWorld::VehicleConfig* vc = city.carConfig(static_cast<int>(v));
+                bikes += vc && vc->twoWheeler;
+            }
+    }
+    std::printf("    [cabs] %ld cab draws; %ld taxis that are no cab, %ld cabs that are no taxi; %ld bike draws\n", cabs,
+                taxisNotCabs, cabsNotTaxis, bikes);
+    CHECK(cabs > 0);
+    CHECK(taxisNotCabs == 0);
+    CHECK(cabsNotTaxis == 0);
+    CHECK(bikes > 0);
+}
+
 // #23 JUNCTION PILE-UPS (QA: "cars grinding against each other in packed intersections ... piled upon other
 // cars ... tipped over ... then somehow the cars become non-physics objects and they can go through each
 // other"). An OVERSATURATED grid -- four times the soak's traffic -- with the player at an interior crossing,

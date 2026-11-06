@@ -15532,3 +15532,27 @@ lamp geometry at all. Glenn, 2026-11-05: "why did we separate the light from the
 **Consequences.** One thing to draw per car. A lamp is wherever its body is, never anywhere else. Kinds stay data: a new
 vehicle lights by naming its lens parts. Bodies with no tagged lens (a hand-built level body) drive dark until they tag
 theirs.
+
+## ADR-0343 — The taxi, the off-roader and the moped in traffic
+
+**Context.** The kit had a taxi, an off-roader and a moped, but none of them were in the city fleet. The sim already
+runs cabs (`CitySim::isTaxi`), and they drove whatever ordinary car they were dealt. Glenn, 2026-11-05: "I think there
+are some vehicles that don't show up in the world. Maybe it's time to add those too."
+
+**Decision.**
+- **Fleet slots.** `FLEET_SLOTS` gains the off-roader (sand) and the taxi (cab yellow) after the pickup, and the moped
+  (teal) after the motorcycle. That makes 18 kit slots, and `fleet_mixed` has 30. The moped goes through the
+  motorcycle's bike path, so its rider is drawn astride and it handles as a two-wheeler.
+- **The taxi is a service body,** like the bus and the fire engine (`serviceVehicle`). Ambient traffic and kerb bays
+  never get it.
+  - The renderer finds the slot by its class name (`taxiVariant_`), as it does the bus and the fire engine.
+  - `slotFor` draws every cab as it.
+  - `applyTaxiFraction` re-bodies each cab's own car as the taxi (its length for the gaps, its type), and puts a car
+    that stops being a cab back on its ordinary body.
+  - A parked cab draws as a taxi too.
+- **One slot rule.** syncGroups had its own copy of the bus and fire-engine slot rule, and now calls `drawSlotFor`.
+- **Test.** `city_cabs_draw_as_taxis_and_only_cabs_do` checks that every drawn cab is a taxi, no taxi is drawn without
+  a cab, and bikes are in the rotation.
+
+**Consequences.** Adding slots changes which model and colour each car index gets, but every car stays stable for the
+run. The semis wait for #189's articulation, and the bicycles for #190.

@@ -650,14 +650,15 @@ TEST_CASE(car_picker_catalogue_builds_and_says_the_true_drivetrain) {
 TEST_CASE(fleet_mixed_carries_kit_and_classic_bodies_and_one_bus) {
     VehiclesVM v;
     CHECK(v.loaded);
-    CHECK(fleetSlotCount(v.vm) == 15);   // the default: the kit fleet (the fire engine, 2026-10-13; the motorcycle, 2026-11-04)
+    CHECK(fleetSlotCount(v.vm) == 18);   // the default: the kit fleet (the fire engine, 2026-10-13; the motorcycle, 2026-11-04;
+                                         // the off-roader, the taxi and the moped, 2026-11-06)
     std::string err;
     CHECK(!selectFleet(v.vm, "no_such_fleet", &err));   // a bad name leaves the default...
-    CHECK(fleetSlotCount(v.vm) == 15);
+    CHECK(fleetSlotCount(v.vm) == 18);
     CHECK(selectFleet(v.vm, "fleet_mixed", &err));      // ...a good one switches it (the city bridge's call)
     const int n = fleetSlotCount(v.vm);
     std::printf("    fleet_mixed: %d slots\n", n);
-    CHECK(n == 27);   // (and the motorcycle, and the fire engine before the bus)
+    CHECK(n == 30);   // (and the two bikes, and the fire engine before the bus)
     int buses = 0, kitSedans = 0, classicSedans = 0, fireEngines = 0;
     for (int s = 0; s < n; ++s) {
         Vec3 size;

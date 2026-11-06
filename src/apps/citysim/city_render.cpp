@@ -171,6 +171,7 @@ int CityRenderSystem::slotFor(int ai, int variants) const {
     int v = sim_.ambientSlotFor(a.vehicle >= 0 ? a.vehicle : 0);
     if (v >= variants) v %= variants;
     if (busVariant_ >= 0 && sim_.isBus(ai) && busVariant_ < variants) v = busVariant_;
+    if (taxiVariant_ >= 0 && sim_.isTaxi(ai) && taxiVariant_ < variants) v = taxiVariant_;
     if (fireVariant_ >= 0 && fireVariant_ < variants && a.vehicle >= 0 &&
         a.vehicle < static_cast<int>(sim_.vehicles().size()) &&
         sim_.vehicles()[static_cast<std::size_t>(a.vehicle)].type == VehicleType::FireEngine) v = fireVariant_;
@@ -664,7 +665,9 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
                 // ...and the FIRE ENGINE, stationed in the fire stations' bays (never dealt to traffic), by its name
                 // too -- first, so the built-in table's type for its slot number (it stands where the bus did) is
                 // never read
+                // ...and the TAXI, dealt to the cabs alone (a yellow cab with nobody's fare is not ambient traffic)
                 if (className == "fire_engine") { fireVariant_ = v; body.type = VehicleType::FireEngine; }
+                else if (className == "taxi") { taxiVariant_ = v; body.type = VehicleType::Taxi; }
                 else if (className == "bus") { busVariant_ = v; body.type = VehicleType::Bus; }
                 else if (body.type == VehicleType::Bus) busVariant_ = v;
                 else if (body.type == VehicleType::FireEngine) body.type = VehicleType::BoxTruck;
@@ -2657,16 +2660,9 @@ void CityRenderSystem::syncGroups(World& world) {
             // A BUS draws as the bus slot, not as whatever body its vehicle
             // index happened to land on. Everything else keeps its stable
             // per-car variant.
-            int v = sim_.ambientSlotFor(a.vehicle >= 0 ? a.vehicle : 0);
-            if (v >= drawVariantCount()) v %= drawVariantCount();
-            if (busVariant_ >= 0 && sim_.isBus(static_cast<int>(ai)) &&
-                busVariant_ < drawVariantCount())
-                v = busVariant_;
-            if (fireVariant_ >= 0 && fireVariant_ < drawVariantCount() && a.vehicle >= 0 &&   // (someone took the engine)
-                a.vehicle < static_cast<int>(sim_.vehicles().size()) &&
-                sim_.vehicles()[static_cast<std::size_t>(a.vehicle)].type == VehicleType::FireEngine)
-                v = fireVariant_;
-            if (!cars[v]) continue;
+            // (one rule, drawSlotFor: the bus, the cab, the fire engine someone took, else the stable variant)
+            const int v = drawSlotFor(static_cast<int>(ai));
+            if (v < 0 || v >= static_cast<int>(cars.size()) || !cars[v]) continue;
             // R5: a physically-possessed agent renders its Jolt body's pose —
             // real suspension, pitch and roll — while the sim's kinematic
             // plan stays the brains' truth.
@@ -2772,6 +2768,7 @@ void CityRenderSystem::syncGroups(World& world) {
             if (v >= drawVariantCount()) v %= drawVariantCount();
             if (sv.type == VehicleType::Bus && busVariant_ >= 0 && busVariant_ < drawVariantCount()) v = busVariant_;   // a bus parked in its depot
             if (sv.type == VehicleType::FireEngine && fireVariant_ >= 0 && fireVariant_ < drawVariantCount()) v = fireVariant_;   // in its bay
+            if (sv.type == VehicleType::Taxi && taxiVariant_ >= 0 && taxiVariant_ < drawVariantCount()) v = taxiVariant_;   // a cab at the kerb
             if (!cars[v]) continue;
             // The ground sample is the per-frame cost the old one-shot bake
             // existed to avoid — but only a few dozen cars survive the cull, and
