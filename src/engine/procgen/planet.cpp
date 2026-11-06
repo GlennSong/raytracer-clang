@@ -160,7 +160,7 @@ RenderMesh generateOceanShell(const PlanetParams& p, uint32_t seed) {
     const double amp = static_cast<double>(p.radius) * p.reliefFraction;
     float seaRadius = static_cast<float>(static_cast<double>(p.radius) + amp * p.seaLevel);
     RenderMesh mesh = MeshBuilder::cubeSphere(seaRadius, std::max(24, p.faceRes / 2));
-    for (Vertex& v : mesh.vertices) v.color = clampVec(p.oceanColor, 0.0, 1.0);
+    MeshBuilder::paint(mesh, clampVec(p.oceanColor, 0.0, 1.0));
     return mesh;
 }
 

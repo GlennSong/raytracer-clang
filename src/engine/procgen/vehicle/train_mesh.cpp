@@ -31,7 +31,7 @@ void wheelset(RenderMesh& m, Real zc, Real gaugeHalf) {
     for (int side = -1; side <= 1; side += 2) {
         RenderMesh w = MeshBuilder::cylinder(0.46f, 0.14f, 18);
         MeshBuilder::transform(w, Mat4::translate(side * gaugeHalf, 0.46, zc) * Mat4::rotateZ(1.5707963267948966));
-        for (Vertex& v : w.vertices) v.color = kWheel;
+        MeshBuilder::paint(w, kWheel);
         MeshBuilder::append(m, w);
     }
     MeshBuilder::emitBox(m, {-gaugeHalf, 0.40, zc - 0.07}, {gaugeHalf, 0.52, zc + 0.07}, kBogie);   // the axle

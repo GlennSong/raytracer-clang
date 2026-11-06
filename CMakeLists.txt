@@ -66,6 +66,7 @@ add_library(engine_core STATIC
     src/engine/screenshot.cpp
     src/engine/mesh_shapes.cpp
     src/engine/mesh_words.cpp
+    src/engine/mesh_surfaces.cpp
     src/engine/mesh_builder.cpp
     src/engine/board_meshes.cpp          # the skateboard and scooter a body rides (player, citysim children)
     src/engine/bundle/bundle.cpp
@@ -745,6 +746,7 @@ add_executable(run_tests
     tests/test_path_tracer.cpp
     tests/test_asset_manager.cpp
     tests/test_mesh_builder.cpp
+    tests/test_mesh_surfaces.cpp
     tests/test_cube_sphere.cpp
     tests/test_noise.cpp
     tests/test_terrain.cpp

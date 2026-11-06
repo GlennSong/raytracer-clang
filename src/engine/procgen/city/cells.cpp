@@ -1,4 +1,5 @@
 #include "cells.h"
+#include "../../mesh_builder.h"   // deform, append
 #include <string>
 #include <algorithm>
 #include <cmath>
@@ -45,9 +46,9 @@ RenderMesh Complex::shell(int lod, const Vec3& colour) const {
     for (const CellFrame& c : cells) {
         if (!c.mass) continue;
         RenderMesh cm = c.mass->shell(lod, colour);
-        const uint32_t base = static_cast<uint32_t>(m.vertices.size());
-        for (Vertex v : cm.vertices) { v.position.y = static_cast<decltype(v.position.y)>(v.position.y + c.baseY); m.vertices.push_back(v); }
-        for (uint32_t i : cm.indices) m.indices.push_back(base + i);
+        const double y0 = c.baseY;
+        MeshBuilder::deform(cm, [y0](const Vec3& p) { return Vec3(p.x, p.y + y0, p.z); });
+        MeshBuilder::append(m, cm);
     }
     return m;
 }

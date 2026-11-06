@@ -15556,3 +15556,65 @@ are some vehicles that don't show up in the world. Maybe it's time to add those 
 
 **Consequences.** Adding slots changes which model and colour each car index gets, but every car stays stable for the
 run. The semis wait for #189's articulation, and the bicycles for #190.
+
+## ADR-0344 — Curves, profiles and the surfaces from them: the toolkit's first new words (#191)
+
+**Context.** #191 makes one geometry toolkit that everything uses. Glenn, 2026-11-06: "We need to be able to go further
+than a box for shapes. That's silly that we have 20 functions to make a box and literally nothing else?? I want to know
+how you're going to expand the capability of the mesh builder to incorporate curves, rounded objects, and more."
+`MeshBuilder` had fixed solids (box, sphere, cylinder, cone, torus, capsule, lathe, tube, rounded box). The engine's
+splines (`src/curve.h`: Hermite, Bezier, Catmull-Rom, centripetal, arc length, rotation-minimising frames) fed no mesh
+word at all.
+
+**Decision.**
+- **Profiles and paths** (`MeshProfile`, `MeshPath`, mesh_surfaces.cpp):
+  - Profiles: rect, rounded rect, circle, ellipse, superellipse, polygon and star; fillet, mitre offset and resample.
+    Closed profiles are kept counter-clockwise.
+  - Paths: line, arc, circle, helix, spline (the centripetal one in curve.h), Bezier, resample and length.
+- **Surfaces:**
+  - `sweep`: a profile along a path, with scale and twist along it; rotation-minimising frames seeded by an up hint;
+    the leftover twist on a closed path spread round it; flat end caps.
+  - `extrude`: a plan profile up +y, with quarter-round bevels from offset rings.
+  - `revolve`: full or partial turn, with the cut faces closed.
+  - `loft`: through point rings.
+  - `superquadric`.
+- **One grid builder** (`GridSurface`) serves every surface. A row or column is split where the faces either side part
+  by more than the crease angle, so a square tube keeps its edges and a round one is smooth. A pole takes the normal of
+  every face round it. A closed direction carries a UV seam. Every face is wound by `triFacing` to its word's outward
+  hint.
+- **Lua:** `mesh.profile.*`, `mesh.path.*`, `mesh.sweep`, `mesh.extrude`, `mesh.revolve`, `mesh.loft`,
+  `mesh.superquadric`, `mesh.section` (a profile stood in a plane, for lofts) and `mesh.paint`. A sweep's scale and twist
+  each take a number, a {from, to} pair, or a function of t.
+- **Modifiers:**
+  - `warp`: any position function, with normals and tangents carried through its Jacobian (finite differences, the
+    cofactors signed by the determinant). A crease stays a crease, and a warp that turns the mesh inside out flips the
+    winding with it.
+  - `bend`, `twist` and `taper`, all built on `warp`.
+  - `mirrored`, across any plane.
+  - `array`, by a repeated transform, and `arrayAlong`, evenly along a path in its frames.
+  - `extrude` gains side bands, so a warp has rings to bend. A twisted face is not flat: at 40 rings over 2 m the
+    volume error is 1.9 %, and it halves with the spacing.
+  - Lua: `mesh.warp/bend/twist/taper/mirror/array/array_along`.
+- **The shape lab** (`assets/levels/shape_lab.json`, `assets/scripts/shape_lab.lua`) shows every word in rows, and
+  ends with a chair, a round table and a lamp built with no box.
+- **First consolidation**, identical output by construction:
+  - `MeshBuilder::paint` replaces about 13 recolour loops, plus Lua's `bake_height_color(m, c, c)`, which with equal
+    colours is exactly a paint.
+  - Hand-written appends move onto `deform` / `paint` / `append` (foliage_kit, cells).
+  - `MeshCollider::append` replaces level_loader's five copies of a mesh into a collider.
+  - road_mesh's `triangulatePolygon` (a forwarder to earcut) is gone: its callers use `MeshBuilder::triangulate`.
+    pavement's CDT triangulator, which shared the name, is now `triangulateConstrained`.
+
+**Proof.**
+- The new words' tests check each surface's audit (wound out, no degenerate faces, unit normals) and its volume against
+  the shape's own formula: box, beveled box, capped rod, Pappus ring, helix coil, sphere, quarter annulus, frustum,
+  ellipsoid and the near-box superquadric. One test runs every word from Lua.
+- The consolidation is checked by `rt_bake --sections`: the suite's pre-edit bundles against a post-edit bake. On
+  river_town (1,631 sections) and light_rail_lab (135) every section is byte-identical except `city/e0/report`, which
+  holds the stage timings.
+- `geometryEqual` (`engine/mesh_compare.h`) is for the consolidations that will reorder triangles: are two meshes the
+  same triangles, each wound the same way, whatever order they come in.
+
+**Consequences.** The fixed solids can now be rebuilt as special cases: a box is an extruded rect, a cylinder an
+extruded circle, a sphere a revolved half circle. The ports (furniture's private `Maker` first) are phase 4, with a
+visual A/B. Still owed in the vocabulary: bevel and fillet on any edge, a lattice, booleans and a Coons patch.

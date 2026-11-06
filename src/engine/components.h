@@ -509,6 +509,14 @@ struct MeshCollider {
     Real friction = 0.6;
     ColliderSurface surface = ColliderSurface::Unknown;
     PhysicsBodyId bodyId = INVALID_PHYSICS_BODY;
+    // `m`'s triangles added (its positions; #191: the one copy from a drawn mesh, for the loops each loader wrote)
+    void append(const RenderMesh& m) {
+        const uint32_t base = static_cast<uint32_t>(vertices.size());
+        vertices.reserve(vertices.size() + m.vertices.size());
+        for (const Vertex& v : m.vertices) vertices.push_back(v.position);
+        indices.reserve(indices.size() + m.indices.size());
+        for (uint32_t ix : m.indices) indices.push_back(base + ix);
+    }
 };
 
 // A physics-driven car (ADR-0059). VehicleSystem creates the Jolt vehicle from

@@ -223,8 +223,8 @@ function flora.tree(seed, opts)
     local placements = lsystem.leaves(leafy, params)
     local lsize = pick("leaf_size")
     local leaf_color = pick("leaf")
-    local card = mesh.bake_height_color(
-        mesh.box({ lsize * 0.5, lsize * 1.6, lsize * 0.04 }), leaf_color, leaf_color)
+    local card = mesh.paint(
+        mesh.box({ lsize * 0.5, lsize * 1.6, lsize * 0.04 }), leaf_color)
 
     local cards = {}
     local step = opts.leaf_step or 1

@@ -12,7 +12,7 @@
 #include "room_plan.h"
 #include "furniture.h"   // the core: shafts, stairwells, the ground ceiling's holes (M5)
 
-#include "road_mesh.h"            // triangulatePolygon (floorplan roof/slab fill)
+#include "road_mesh.h"
 #include "triangulate.h"          // triangulateWithHoles (interior ceilings, ADR-0080)
 #include "../surface_maps.h"      // surfaceWorldTileSize (shingle slope UVs)
 #include "../../mesh_builder.h"
@@ -652,7 +652,7 @@ static void appendGlassParts(BuildingMesh& out, RenderMesh& glass, RenderMesh& g
     if (clearPanes) {
         // Clear lobby glass is see-through whatever the tower's tint: its own faint colour (the old grey pane).
         for (RenderMesh* m : {&glass, &glassLit})
-            for (Vertex& v : m->vertices) v.color = Vec3(0.18, 0.27, 0.34);
+            MeshBuilder::paint(*m, Vec3(0.18, 0.27, 0.34));
         appendToPart(out, PartId::GlassClear, glass);
         appendToPart(out, PartId::GlassClear, glassLit);
     } else {
@@ -6495,7 +6495,7 @@ BuildingMesh growPlanBuilding(const Poly2& planIn, const BuildingParams& params,
                                    Vec3(c.x, y + 0.07, c.y), Vec3(0, 1, 0), wcol, u0, v0, u1, v1, u2, v2);
         };
         if (pits.empty()) {
-            for (const auto& t : triangulatePolygon(plan)) woodTri(plan[t[0]], plan[t[1]], plan[t[2]]);
+            for (const auto& t : MeshBuilder::triangulate(plan)) woodTri(plan[t[0]], plan[t[1]], plan[t[2]]);
         } else {
             for (const auto& t : triangulateWithHoles(plan, pits)) woodTri(t[0], t[1], t[2]);
         }

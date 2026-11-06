@@ -38,6 +38,7 @@ being used. One row per capability; the "used by" column is the audit trail.
 | GLB writer | `engine/glb_export.h` (was lanelab-only) | `lanelab_tool`, bundle view | TANGENT + COLOR_0 + extras added on the move |
 | Bundle → GLB view | `engine/bundle/bundle_glb.h` | `rt_bake --glb`, editor | per material or per cell from section names alone |
 | `MeshBuilder::chunkByCell` | `engine/mesh_builder.h` (was `level_loader.cpp`) | loader chunking, city producer | a bundle cell is a render cell |
+| Curves and surfaces `MeshProfile` / `MeshPath`, `sweep` / `extrude` / `revolve` / `loft` / `superquadric` | `engine/mesh_builder.h`, `mesh_surfaces.cpp`; Lua `mesh.profile.*`, `mesh.path.*` | the shape lab (#191 ports next) | ADR-0344: one grid builder (creases, poles, seams), volumes tested against their formulas |
 
 
 ## City simulation scale (opened 2026-09-16 — Glenn: "a bustling urban environment")

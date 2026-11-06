@@ -230,14 +230,10 @@ void buildBladePlant(const BladeSpec& sp, uint32_t seed, RenderMesh& leaves, Ren
         addBlade(leaves, base, dir, across, b, col, sp.edgeColor.x < 0.0 ? col : sp.edgeColor);
     }
     // the crown: a low dark mound, so the blades rise out of something
-    const RenderMesh mound = MeshBuilder::sphere(static_cast<float>(sp.crown * 1.4), 6, 10);
-    const uint32_t base = static_cast<uint32_t>(crown.vertices.size());
-    for (Vertex v : mound.vertices) {
-        v.position = Vec3(v.position.x, std::max(-0.02, v.position.y * 0.45), v.position.z);
-        v.color = sp.color * 0.45;
-        crown.vertices.push_back(v);
-    }
-    for (uint32_t ix : mound.indices) crown.indices.push_back(base + ix);
+    RenderMesh mound = MeshBuilder::sphere(static_cast<float>(sp.crown * 1.4), 6, 10);
+    MeshBuilder::deform(mound, [](const Vec3& p) { return Vec3(p.x, std::max(-0.02, p.y * 0.45), p.z); });
+    MeshBuilder::paint(mound, sp.color * 0.45);
+    MeshBuilder::append(crown, mound);
 }
 
 void addFrondCrown(const FrondSpec& sp, const Vec3& top, const Vec3& upIn, float trunkRadius, uint32_t seed,
@@ -259,10 +255,9 @@ void addFrondCrown(const FrondSpec& sp, const Vec3& top, const Vec3& upIn, float
             const double swell = t < 0.35 ? t / 0.35 : 1.0 - 0.45 * (t - 0.35) / 0.65;
             radii.push_back(trunkRadius * (1.02 + (sp.crownshaftRadius - 1.02) * std::clamp(swell, 0.0, 1.0)));
         }
-        const RenderMesh tube = MeshBuilder::tube(pts, radii, 12);
-        const uint32_t b0 = static_cast<uint32_t>(wood.vertices.size());
-        for (Vertex v : tube.vertices) { v.color = sp.crownshaftColor; wood.vertices.push_back(v); }
-        for (uint32_t ix : tube.indices) wood.indices.push_back(b0 + ix);
+        RenderMesh tube = MeshBuilder::tube(pts, radii, 12);
+        MeshBuilder::paint(tube, sp.crownshaftColor);
+        MeshBuilder::append(wood, tube);
     }
     auto frond = [&](double pitchDeg, double az, double lengthScale, const Vec3& colour, bool dead) {
         const Vec3 out = e1 * std::cos(az) + e2 * std::sin(az);
@@ -282,10 +277,9 @@ void addFrondCrown(const FrondSpec& sp, const Vec3& top, const Vec3& upIn, float
         }
         std::vector<double> radii;
         for (int i = 0; i <= n; ++i) radii.push_back(sp.rachisRadius * (1.0 - 0.75 * i / n) * (sp.fan ? 1.3 : 1.0));
-        const RenderMesh tube = MeshBuilder::tube(pts, radii, 5);
-        const uint32_t b0 = static_cast<uint32_t>(wood.vertices.size());
-        for (Vertex v : tube.vertices) { v.color = dead ? sp.skirtColor * 0.8 : sp.rachisColor; wood.vertices.push_back(v); }
-        for (uint32_t ix : tube.indices) wood.indices.push_back(b0 + ix);
+        RenderMesh tube = MeshBuilder::tube(pts, radii, 5);
+        MeshBuilder::paint(tube, dead ? sp.skirtColor * 0.8 : sp.rachisColor);
+        MeshBuilder::append(wood, tube);
         if (!sp.fan) {   // PINNATE: leaflets down both sides, angled forward, hanging, longest mid-frond
             for (int k = 0; k < sp.leaflets; ++k) {
                 const double t = 0.08 + 0.9 * (k + 0.5) / sp.leaflets;

@@ -1,6 +1,7 @@
 #include "test_framework.h"
 
 #include "../src/engine/procgen/city/road_mesh.h"
+#include "../src/engine/mesh_builder.h"   // triangulate
 #include "../src/engine/procgen/city/triangulate.h"
 #include <cmath>
 
@@ -66,7 +67,7 @@ namespace {
 
 TEST_CASE(triangulate_convex_tiles_the_polygon) {
     std::vector<Vec2> sq = { Vec2(0, 0), Vec2(4, 0), Vec2(4, 4), Vec2(0, 4) };
-    auto tris = triangulatePolygon(sq);
+    auto tris = MeshBuilder::triangulate(sq);
     CHECK(tris.size() == 2);                                  // n-2 triangles
     CHECK_APPROX(sumTriAreas(sq, tris), 16.0, 1e-9);         // exact tiling, no overlap/gap
 }
@@ -75,7 +76,7 @@ TEST_CASE(triangulate_nonconvex_notch_tiles_without_overlap) {
     // A square with the top edge pushed into a V — (3,3) is a reflex vertex, exactly the
     // case where fanning from an interior point self-overlaps. Ear clipping must tile it.
     std::vector<Vec2> notch = { Vec2(0, 0), Vec2(6, 0), Vec2(6, 6), Vec2(3, 3), Vec2(0, 6) };
-    auto tris = triangulatePolygon(notch);
+    auto tris = MeshBuilder::triangulate(notch);
     CHECK(static_cast<int>(tris.size()) == static_cast<int>(notch.size()) - 2);
     CHECK_APPROX(sumTriAreas(notch, tris), shoelace(notch), 1e-9);   // tiles exactly (=27)
     for (const auto& t : tris)
@@ -87,7 +88,7 @@ TEST_CASE(triangulate_dedupes_a_ring_with_coincident_vertices) {
     // triangulator must dedupe and still tile the underlying square (covers the centre).
     std::vector<Vec2> ring = { Vec2(5, -5), Vec2(5, 5), Vec2(5, 5), Vec2(-5, 5),
                                Vec2(-5, 5), Vec2(-5, -5), Vec2(-5, -5), Vec2(5, -5) };
-    auto tris = triangulatePolygon(ring);
+    auto tris = MeshBuilder::triangulate(ring);
     CHECK(tris.size() == 2);                                  // dedups to a 4-vert square
     CHECK_APPROX(sumTriAreas(ring, tris), 100.0, 1e-9);     // tiles the full 10x10
 }
@@ -95,8 +96,8 @@ TEST_CASE(triangulate_dedupes_a_ring_with_coincident_vertices) {
 TEST_CASE(triangulate_handles_cw_and_degenerate) {
     // Clockwise input is normalized to CCW internally and still tiles.
     std::vector<Vec2> cw = { Vec2(0, 0), Vec2(0, 4), Vec2(4, 4), Vec2(4, 0) };
-    CHECK_APPROX(sumTriAreas(cw, triangulatePolygon(cw)), 16.0, 1e-9);
-    CHECK(triangulatePolygon({ Vec2(0, 0), Vec2(1, 1) }).empty());     // < 3 verts
+    CHECK_APPROX(sumTriAreas(cw, MeshBuilder::triangulate(cw)), 16.0, 1e-9);
+    CHECK(MeshBuilder::triangulate({ Vec2(0, 0), Vec2(1, 1) }).empty());     // < 3 verts
 }
 
 // A slab round a lift core: rectangular holes in rows, their edges on the same lines and 0.15 m apart -- in plan and

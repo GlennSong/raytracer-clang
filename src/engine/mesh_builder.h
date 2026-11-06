@@ -67,7 +67,116 @@ struct LatheStyle {
     Vec3 color{1, 1, 1};
 };
 
+// CURVES AND PROFILES (#191, Glenn 2026-11-06: "We need to be able to go further than a box ... curves, rounded
+// objects, and more"). A PROFILE is a 2-D section: points (x, y) in the plane it is swept or extruded in, closed
+// (a ring; any winding in, kept counter-clockwise) or open (a moulding's edge). A PATH is a 3-D polyline, open or closed
+// (a ring: the last point is NOT the first repeated). The curve words build them from the engine's splines
+// (src/curve.h); the surface words (sweep, extrude, revolve, loft, superquadric) turn them into meshes.
+struct MeshProfile {
+    std::vector<Vec2> pts;
+    bool closed = true;
+};
+struct MeshPath {
+    std::vector<Vec3> pts;
+    bool closed = false;
+};
+// A SWEEP's look: the profile scaled and turned along the path (`scaleAt` / `twistAt` take t in 0..1, the share of
+// the path's length; null: 1 and 0), the ends capped (a closed profile on an open path), smooth round the profile
+// where it bends less than `creaseDeg` (a square tube keeps its edges, a round one is smooth), and the frame's up
+// along `up` at the start (rotation-minimising after it, so a swept rail does not spiral). u runs round the profile
+// 0..1, v along the path in metres (bark, rails, cables tile at their real length).
+struct SweepStyle {
+    std::function<double(double)> scaleAt;
+    std::function<double(double)> twistAt;
+    bool caps = true;
+    double creaseDeg = 40.0;
+    Vec3 up{0, 1, 0};
+    Vec3 color{1, 1, 1};
+};
+
 struct MeshBuilder {
+    // --- PROFILES (mesh_surfaces.cpp): counter-clockwise, centred on the origin unless said ----------------------
+    static MeshProfile profileRect(double width, double height);
+    // a rectangle with every corner rounded to `radius` (clamped to half the shorter side) in `segs` steps
+    static MeshProfile profileRoundedRect(double width, double height, double radius, int segs = 4);
+    static MeshProfile profileCircle(double radius, int sides = 24);
+    static MeshProfile profileEllipse(double rx, double ry, int sides = 24);
+    // |x/rx|^n + |y/ry|^n = 1: n = 2 an ellipse, 4 a squircle, larger ever squarer, under 1 a star-cornered diamond
+    static MeshProfile profileSuperellipse(double rx, double ry, double n, int sides = 48);
+    // a regular `sides`-gon of circumradius `radius`, a corner on +x
+    static MeshProfile profilePolygon(int sides, double radius);
+    static MeshProfile profileStar(int points, double outer, double inner);
+    // every corner of `p` rounded to `radius` (each clamped to what its two edges allow) in `segs` steps
+    static MeshProfile profileFillet(const MeshProfile& p, double radius, int segs = 4);
+    // a closed profile grown by `d` (shrunk when negative), its edges kept parallel (the mitre offset: exact for convex
+    // profiles; empty when it collapses)
+    static MeshProfile profileOffset(const MeshProfile& p, double d);
+    // `count` points spaced evenly along the profile's length (corners are not kept)
+    static MeshProfile profileResample(const MeshProfile& p, int count);
+
+    // --- PATHS -------------------------------------------------------------------------------------------------
+    static MeshPath pathLine(const Vec3& a, const Vec3& b, int segs = 1);
+    // an arc round `centre` in the plane square to unit `normal`, from `from` (a vector from the centre, its length
+    // the radius) turning `angle` radians right-handed about `normal`
+    static MeshPath pathArc(const Vec3& centre, const Vec3& from, const Vec3& normal, double angle, int segs = 24);
+    static MeshPath pathCircle(const Vec3& centre, double radius, const Vec3& normal = Vec3(0, 1, 0), int segs = 32);
+    // a helix up +y round `centre`: `turns` turns of `radius`, rising `pitch` metres a turn
+    static MeshPath pathHelix(const Vec3& centre, double radius, double pitch, double turns, int segsPerTurn = 32);
+    // a smooth curve THROUGH `points` (centripetal Catmull-Rom: no cusps or overshoot), `count` points at even spacing
+    static MeshPath pathSpline(const std::vector<Vec3>& points, bool closed = false, int count = 64);
+    // a cubic Bezier from p0 to p3 pulled toward p1 and p2, `count` points at even spacing
+    static MeshPath pathBezier(const Vec3& p0, const Vec3& p1, const Vec3& p2, const Vec3& p3, int count = 32);
+    // the path again, its points `spacing` metres apart along it (ends kept)
+    static MeshPath pathResample(const MeshPath& p, double spacing);
+    // a path's length in metres
+    static double pathLength(const MeshPath& p);
+
+    // --- SURFACES ----------------------------------------------------------------------------------------------
+    // SWEEP the profile along the path: at each point the profile stands square to the path, x along the frame's
+    // right, y along its up. Rods, pipes, cables, rails, mouldings, handles, branches, a ring (a closed path).
+    static RenderMesh sweep(const MeshProfile& profile, const MeshPath& path, const SweepStyle& style = {});
+    // EXTRUDE a closed profile in plan (x -> world x, y -> world z) up +y from 0 to `height`, its top and bottom edges
+    // rounded to `bevel` in `bevelSegs` steps (0: sharp), its side in `heightSegs` bands (more for a warp to bend).
+    // A seat, a worktop, a plinth, a sign, a slab with soft edges.
+    static RenderMesh extrude(const MeshProfile& profile, double height, double bevel = 0.0, int bevelSegs = 3,
+                              const Vec3& color = Vec3(1, 1, 1), int heightSegs = 1);
+    // REVOLVE a profile of (r, y) points about +y from angle `from` to `to` (radians; a full turn unless less), in
+    // `segs` steps round; a part turn closes its cut faces when the profile is closed. Open profiles run bottom to
+    // top up the outside (as the lathe's). Vases, bowls, domes, finials, a wheel's tyre, a quarter-round moulding.
+    static RenderMesh revolve(const MeshProfile& profile, int segs = 32, double from = 0.0, double to = TAU,
+                              const Vec3& color = Vec3(1, 1, 1), double creaseDeg = 40.0);
+    // LOFT through `sections` (rings of 3-D points, the same count each, in order): a surface skinned through them,
+    // closed round each ring when `closedRings`, its ends capped when `caps`. Hulls, bodies, vases, a bottle from
+    // circles, a car's sections.
+    static RenderMesh loft(const std::vector<std::vector<Vec3>>& sections, bool closedRings = true, bool caps = true,
+                           const Vec3& color = Vec3(1, 1, 1), double creaseDeg = 40.0);
+    // A SUPERQUADRIC (Barr's superellipsoid): radii `r`; `e1` shapes it top to bottom and `e2` round it (1: round,
+    // under 1: squarer, 0.1 nearly a box; 2: a diamond). One word from a box with soft edges to a sphere to a cylinder
+    // with round ends: pebbles, cushions, buttons, soap-bar seats, rounded car parts.
+    static RenderMesh superquadric(const Vec3& r, double e1, double e2, int stacks = 24, int slices = 48,
+                                   const Vec3& color = Vec3(1, 1, 1));
+
+    // --- MODIFIERS (mesh_surfaces.cpp) --------------------------------------------------------------------------
+    // WARP: every vertex moved through `fn`, its normal and tangent carried through fn's Jacobian (measured by finite
+    // differences `h` apart), so a crease stays a crease and shading follows the new shape; a warp that turns the
+    // shape inside out (a mirror) flips the winding with it. Bend, twist and taper are warps.
+    static void warp(RenderMesh& mesh, const std::function<Vec3(const Vec3&)>& fn, double h = 1e-4);
+    // BEND the mesh's +y run [0, length] into an arc of `angle` radians toward +x (a rod into a hook, a sheet into a
+    // pipe); points below 0 or above `length` carry on straight from the arc's ends.
+    static void bend(RenderMesh& mesh, double angle, double length);
+    // TWIST about +y: `radiansPerMetre` turns per metre of height (a twisted column, a drill, a cable)
+    static void twist(RenderMesh& mesh, double radiansPerMetre);
+    // TAPER about +y: x and z scaled from 1 at y = 0 to `topScale` at y = `height` (a tapered leg, an obelisk)
+    static void taper(RenderMesh& mesh, double topScale, double height);
+    // MIRROR across the plane dot(n, p) = d (unit n): the mirrored copy, wound to face out
+    static RenderMesh mirrored(const RenderMesh& mesh, const Vec3& n, double d = 0.0);
+    // ARRAY: `count` copies, each the last moved by `step` (a row of posts, a stack, a spiral stair's treads)
+    static RenderMesh array(const RenderMesh& mesh, int count, const Mat4& step);
+    // ...along a path: `count` copies spaced evenly, each turned to the path's frame (x right, y up, z along it)
+    // when `align` (else only moved): fence posts on a curve, beads on a string, the teeth of a gear
+    static RenderMesh arrayAlong(const RenderMesh& mesh, const MeshPath& path, int count, bool align = true,
+                                 const Vec3& up = Vec3(0, 1, 0));
+
     // Level-format shape names ("box", "sphere", ...) -> mesh, with the same
     // size semantics as the level loader (x = radius for sphere/cylinder/...,
     // y = height where applicable). Empty mesh for unknown names.
@@ -264,6 +373,11 @@ struct MeshBuilder {
     static void leanNormals(RenderMesh& mesh, const Vec3& centre, const Vec3& radii, double t);
     // Move every vertex through a function of its position (squash, bend, taper, flatten a foot).
     static void deform(RenderMesh& mesh, const std::function<Vec3(const Vec3&)>& fn);
+    // PAINT: every vertex one colour (a part's flat colour; the white material shows it). (#191: the one recolour,
+    // for the loops each producer wrote and Lua's bake_height_color(m, c, c).)
+    static void paint(RenderMesh& mesh, const Vec3& color) {
+        for (Vertex& v : mesh.vertices) v.color = color;
+    }
     // Colour every vertex by a function of it (position, normal): gradients, moss by facing, AO.
     static void colorBy(RenderMesh& mesh, const std::function<Vec3(const Vertex&)>& fn);
     // A RIBBON along a curve: a strip through `points`, `halfWidths[i]` to each side, the side

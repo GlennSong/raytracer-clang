@@ -1545,8 +1545,8 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
             engine::RenderMesh cabin = MeshBuilder::box(Vec3(h.x * 1.7, h.y * 0.9, h.z * 1.0));
             MeshBuilder::transform(cabin, Mat4::translate(0, h.y * 0.55, -h.z * 0.1));
             const Vec3 paint = kPaint[v % 6];
-            for (engine::Vertex& vx : body.vertices) vx.color = paint;
-            for (engine::Vertex& vx : cabin.vertices) vx.color = Vec3(0.06, 0.07, 0.08);
+            MeshBuilder::paint(body, paint);
+            MeshBuilder::paint(cabin, Vec3(0.06, 0.07, 0.08));
             MeshBuilder::append(body, cabin);
             InstanceGroup g;
             g.mesh = assets->acquireMesh(body, "city:farcar" + std::to_string(v));

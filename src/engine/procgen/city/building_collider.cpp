@@ -1,6 +1,7 @@
 #include "building_collider.h"
 
-#include "road_mesh.h"       // triangulatePolygon
+#include "road_mesh.h"
+#include "../../mesh_builder.h"   // triangulate
 #include "shape_grammar.h"   // colliderTiers
 #include "triangulate.h"     // triangulateIndices (a cap with holes)
 #include <algorithm>
@@ -75,7 +76,7 @@ void appendBuildingPrism(std::vector<Vec3>& V, std::vector<uint32_t>& I,
                                    s + static_cast<uint32_t>(tri[2])});
             continue;
         }
-        for (const auto& tri : triangulatePolygon(plan)) {
+        for (const auto& tri : MeshBuilder::triangulate(plan)) {
             const uint32_t s = static_cast<uint32_t>(V.size());
             for (int k = 0; k < 3; ++k)
                 V.push_back(Vec3(plan[tri[k]].x, y, plan[tri[k]].y));

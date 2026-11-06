@@ -13,7 +13,7 @@
 #include "section.h"         // the toolkit's section massing (issue #105)
 #include "cells.h"           // the toolkit's complex: a bundle of tubes (issue #105 step 5)
 #include "shape_grammar.h"   // growPlanBuilding — REAL buildings
-#include "road_mesh.h"       // triangulatePolygon (lot-shaped park pads)
+#include "road_mesh.h"
 #include "street_kit.h"      // streetLamp (plaza lamp posts)
 #include "block_grade.h"     // gradeBlocks (in-pass block terracing)
 #include "site_plan.h"       // siteFrame + largestAlignedRect: the rectilinear buildable
@@ -1847,7 +1847,7 @@ static void sculptUnderPad(LotBuilding& g, const Poly2& poly,
     RenderMesh m;
     Poly2 pad = inset(poly, 1.4);
     if (pad.size() < 3) pad = poly;
-    for (const auto& t : triangulatePolygon(pad)) {                    // slab
+    for (const auto& t : MeshBuilder::triangulate(pad)) {                    // slab
         const Vec2& a = pad[t[0]]; const Vec2& b = pad[t[1]]; const Vec2& c = pad[t[2]];
         MeshBuilder::emitTri(m, Vec3(a.x, gy(a) + lift, a.y),
                              Vec3(b.x, gy(b) + lift, b.y),
@@ -2119,7 +2119,7 @@ void sculptPaving(const Poly2& lotIn, Real paveY,
     auto gy = [&](const Vec2& v) { return ground ? ground(v.x, v.y) : paveY; };
     const Vec3 up(0, 1, 0), white(1, 1, 1);
     RenderMesh deck, skirt;
-    for (const std::array<int, 3>& t : triangulatePolygon(lot))
+    for (const std::array<int, 3>& t : MeshBuilder::triangulate(lot))
         MeshBuilder::emitTri(deck, Vec3(lot[t[0]].x, paveY, lot[t[0]].y),
                              Vec3(lot[t[1]].x, paveY, lot[t[1]].y),
                              Vec3(lot[t[2]].x, paveY, lot[t[2]].y), up, white);
@@ -2448,7 +2448,7 @@ void sculptPlaza(LotBuilding& b, const Poly2& planIn,
     // so the reveal is constant); Pavement surface via PartId::Path.
     {
         RenderMesh deck;
-        for (const std::array<int, 3>& t : triangulatePolygon(plan))
+        for (const std::array<int, 3>& t : MeshBuilder::triangulate(plan))
             MeshBuilder::emitTri(deck,
                                  Vec3(plan[t[0]].x, slabY, plan[t[0]].y),
                                  Vec3(plan[t[1]].x, slabY, plan[t[1]].y),

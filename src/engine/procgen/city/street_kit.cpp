@@ -12,7 +12,7 @@ namespace {
 
 // Colour `m`, place it at `pos` rotated `yaw` about +Y, and merge into `out`.
 void place(RenderMesh& out, RenderMesh m, const Vec3& col, const Vec3& pos, Real yaw) {
-    for (Vertex& v : m.vertices) v.color = col;
+    MeshBuilder::paint(m, col);
     MeshBuilder::transform(m, Mat4::trs(pos, Quat::fromAxisAngle(Vec3(0, 1, 0), yaw),
                                         Vec3(1, 1, 1)));
     MeshBuilder::append(out, m);
@@ -149,7 +149,7 @@ RenderMesh trafficSignalProto(const SignalParams& p) {
 void emitStreetLamp(RenderMesh& out, const Vec3& base, const LampParams& p) {
     Real h = p.height;
     auto place = [&](RenderMesh m, const Vec3& col, Real y) {
-        for (Vertex& v : m.vertices) v.color = col;
+        MeshBuilder::paint(m, col);
         MeshBuilder::transform(m, Mat4::translate(base.x, base.y + y, base.z));
         MeshBuilder::append(out, m);
     };

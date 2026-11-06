@@ -36,7 +36,7 @@ local function lens_tag(m, mat)
 end
 local LENS_TINT = { lamp = { 0.95, 0.95, 0.90 }, lamp_red = { 0.75, 0.06, 0.05 },
                     lamp_amber = { 0.85, 0.42, 0.05 }, lamp_marker = { 0.85, 0.42, 0.05 } }
-local function lens(m, mat) local c = LENS_TINT[mat]; return lens_tag(mesh.bake_height_color(m, c, c), mat) end
+local function lens(m, mat) local c = LENS_TINT[mat]; return lens_tag(mesh.paint(m, c), mat) end
 
 -- A CLASS's HANDLING (item 23, #117: one handling builder): everything the C++ reader (vehicle_spec.cpp,
 -- readVehicleHandling) turns into a Jolt config, derived from the class package -- for a drivable spec
@@ -242,7 +242,7 @@ local function kit_drivable(specName, opts, h)
   for name, part in pairs(car.parts) do
     if name ~= "glass" then
       local col = name == "body" and P.color or (KIT_TINT[name] or LENS_TINT[name] or { 0.4, 0.4, 0.4 })
-      shell[#shell + 1] = lens_tag(mesh.bake_height_color(part, col, col), name)
+      shell[#shell + 1] = lens_tag(mesh.paint(part, col), name)
     end
   end
   local parts = {}
@@ -252,7 +252,7 @@ local function kit_drivable(specName, opts, h)
   local cabin = {}
   for name, part in pairs(car.cabin or {}) do
     local col = KIT_CABIN_TINT[name] or { 0.3, 0.3, 0.3 }
-    cabin[#cabin + 1] = mesh.bake_height_color(part, col, col)
+    cabin[#cabin + 1] = mesh.paint(part, col)
   end
   if #cabin > 0 then
     parts[#parts + 1] = { mesh = mesh.merge(cabin), albedo = { 1, 1, 1 }, metallic = 0.0, roughness = 0.9 }
@@ -308,7 +308,7 @@ function vehicle.offroad(seed, opts) return kit_drivable("offroad", opts, OFFROA
 -- leans these into a turn and holds them up (physics_world.h `two_wheeler`). Built from boxes on the centre line,
 -- +z ahead, the wheels' drawn centres at -H/2 + r. Engines are tiny in torque because Jolt multiplies them by the
 -- gear and a 3.42 final drive: the ratios set the top speed (rpm / 60 * 2 pi r / (gear * 3.42)).
-local function part(m, col) return mesh.bake_height_color(m, col, col) end
+local function part(m, col) return mesh.paint(m, col) end
 local function at(m, x, y, z) return mesh.translate(m, { x, y, z }) end
 local function two_wheeler(kind, opts)
   opts = opts or {}
@@ -543,11 +543,9 @@ local function fleet_car(class_name, color)
     local wheelParts = {}
     for _, p in ipairs(fleet_wheels(c, d)) do
         -- cylinder(radius, height) stands on +Y; roll it onto the lateral
-        -- axis so it spins the way the car drives. bake_height_color with
-        -- one colour top and bottom is a flat tint (the mesh API has no
-        -- separate vertex-paint call).
+        -- axis so it spins the way the car drives, painted the tyre's colour.
         local w = mesh.rotate_z(mesh.cylinder(p.radius, p.width), math.pi * 0.5)
-        w = mesh.bake_height_color(w, tyre, tyre)
+        w = mesh.paint(w, tyre)
         wheelParts[#wheelParts + 1] = mesh.translate(w, { p.x, p.y, p.z })
     end
 
@@ -625,13 +623,13 @@ local function kit_car(spec, color)
   for name, part in pairs(car.parts) do
     if name ~= "glass" then
       local col = name == "body" and color or (KIT_TINT[name] or LENS_TINT[name] or { 0.5, 0.5, 0.5 })
-      shell[#shell + 1] = lens_tag(mesh.bake_height_color(part, col, col), name)
+      shell[#shell + 1] = lens_tag(mesh.paint(part, col), name)
     end
   end
-  local glass = car.parts.glass and mesh.bake_height_color(car.parts.glass, KIT_TINT.glass, KIT_TINT.glass) or nil
+  local glass = car.parts.glass and mesh.paint(car.parts.glass, KIT_TINT.glass) or nil
   local w = kit.wheel(P.wheel_r, P.wheel_w, 0)
-  local tyre = mesh.bake_height_color(w.tyre, { 0.05, 0.05, 0.055 }, { 0.05, 0.05, 0.055 })
-  local rim = mesh.bake_height_color(w.rim, { 0.72, 0.73, 0.75 }, { 0.72, 0.73, 0.75 })
+  local tyre = mesh.paint(w.tyre, { 0.05, 0.05, 0.055 })
+  local rim = mesh.paint(w.rim, { 0.72, 0.73, 0.75 })
   local rimL = mesh.rotate_y(rim, math.pi)
   local wheelParts, layout = {}, {}
   for _, wh in ipairs(car.wheels) do
@@ -648,7 +646,7 @@ local function kit_car(spec, color)
   local cabinParts = {}
   for name, part in pairs(car.cabin or {}) do
     local col = KIT_CABIN[name] or { 0.3, 0.3, 0.3 }
-    cabinParts[#cabinParts + 1] = mesh.bake_height_color(part, col, col)
+    cabinParts[#cabinParts + 1] = mesh.paint(part, col)
   end
   local open = P.open_top or false
   local interior = nil
@@ -723,7 +721,7 @@ local function bike_fleet(kind, color)
   local wheelParts, layout = {}, {}
   for _, w in ipairs(spec.wheels) do
     local t = mesh.rotate_z(mesh.cylinder(spec.wheel.radius, spec.wheel.width), math.pi * 0.5)
-    wheelParts[#wheelParts + 1] = mesh.translate(mesh.bake_height_color(t, tyre, tyre), { w.x, w.y, w.z })
+    wheelParts[#wheelParts + 1] = mesh.translate(mesh.paint(t, tyre), { w.x, w.y, w.z })
     layout[#layout + 1] = { pos = { w.x, w.y, w.z }, radius = spec.wheel.radius, width = spec.wheel.width,
                             steered = w.steered, driven = w.driven, hand_brake = w.hand_brake }
   end

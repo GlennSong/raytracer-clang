@@ -26,13 +26,6 @@ constexpr double kRoadMarkLift = 0.02;
 std::vector<Vec2> fairHermite(const Vec2& p0, const Vec2& m0, const Vec2& p1, const Vec2& m1,
                               int segs, double minRadius);
 
-// Ear-clipping triangulation of a simple polygon (any winding; non-convex OK) into index
-// triples into `poly`. For the junction pad (ADR-0044): fanning from the node centre
-// assumes the ring is star-convex from it, which T-junctions, mixed-width arms and notched
-// rings violate — the fan then self-overlaps. Triangulating the ring boundary instead is
-// robust for any simple polygon. Returns no triangles for n < 3, or stops early on a
-// degenerate / self-intersecting ring it can't fully ear (covers what it can).
-std::vector<std::array<int, 3>> triangulatePolygon(const std::vector<Vec2>& poly);
 
 // Stroke a centerline polyline into a flat filled ribbon — path stroking (ADR-0048),
 // the back-to-basics primitive. Robust for ANY curve at ANY width including bends

@@ -22,8 +22,8 @@ std::vector<std::array<Vec2, 3>>
 triangulateWithHoles(const Poly2& outer, const std::vector<Poly2>& holes);
 
 // THE ENGINE'S ONE TRIANGULATOR, as index triples into the outer ring's points followed by each hole's (in order).
-// Every polygon fill goes through here (MeshBuilder::triangulate, emitPolygon, emitPlanPrism; road_mesh's
-// triangulatePolygon forwards to it). Winding of the triples: whatever earcut leaves -- wind them at emission
+// Every polygon fill goes through here (MeshBuilder::triangulate, emitPolygon, emitPlanPrism; road_mesh's own
+// triangulatePolygon, a forwarder, is gone, #191). Winding of the triples: whatever earcut leaves -- wind them at emission
 // (MeshBuilder::triFacing), never trust the order.
 std::vector<std::array<int, 3>> triangulateIndices(const Poly2& outer, const std::vector<Poly2>& holes);
 

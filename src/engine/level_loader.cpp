@@ -75,7 +75,7 @@
 #include "procgen/city/road_network.h" // extractBlocks (block grading)
 #include "procgen/city/city_svg.h"
 #include "procgen/city/architect.h"   // districtName (city map hub labels)
-#include "procgen/city/road_mesh.h"   // triangulatePolygon (building prism colliders)
+#include "procgen/city/road_mesh.h"
 #include "procgen/city/street_furniture.h"   // build-time signal/lamp placement
 #include "procgen/city/street_kit.h"  // trafficSignalProto, streetLamp
 #include "procgen/city/street_names.h"  // nameStreets
@@ -709,9 +709,7 @@ static void spawnRoadMeshes(const json& ent, std::vector<roads::RoadMesh>& meshe
         if (nightLamp) world.add<engine::NightGlow>(me, engine::NightGlow{Vec3(0.95, 0.97, 1.0) * 5.0});
         if (!rm.collidable) continue;
         MeshCollider mc;
-        mc.vertices.reserve(rm.mesh.vertices.size());
-        for (const Vertex& v : rm.mesh.vertices) mc.vertices.push_back(v.position);
-        mc.indices = rm.mesh.indices;
+        mc.append(rm.mesh);
         mc.friction = rm.friction;
         mc.surface = colliderSurfaceForRoadMaterial(rm.name);
         world.add<MeshCollider>(me, mc);
@@ -1737,9 +1735,7 @@ static void loadChunkedTerrain(const TerrainParams& p, const Noise& noise,
         world.add<PrevTransform>(e, PrevTransform{Transform{}});
         if (chunk.collider) {
             MeshCollider mc;
-            mc.vertices.reserve(chunk.mesh.vertices.size());
-            for (const Vertex& v : chunk.mesh.vertices) mc.vertices.push_back(v.position);
-            mc.indices = chunk.mesh.indices;
+            mc.append(chunk.mesh);
             mc.surface = ColliderSurface::Terrain;
             world.add<MeshCollider>(e, mc);
         }
@@ -2019,9 +2015,7 @@ static void loadTerrain(const TerrainParams& p, const Noise& noise, const json& 
     // terrain instead of falling through (PhysicsSystem makes one static mesh
     // body). Inert when physics is disabled.
     MeshCollider mc;
-    mc.vertices.reserve(terrainMesh.vertices.size());
-    for (const Vertex& v : terrainMesh.vertices) mc.vertices.push_back(v.position);
-    mc.indices = terrainMesh.indices;
+    mc.append(terrainMesh);
     mc.surface = ColliderSurface::Terrain;
     world.add<MeshCollider>(e, mc);
 
@@ -4801,12 +4795,8 @@ bool LevelLoader::load(const std::string& path,
                     // coping as one static mesh, as the road retaining walls have
                     {
                         MeshCollider mc;
-                        mc.vertices.reserve(qm.vertices.size() + coping.vertices.size());
-                        for (const Vertex& v : qm.vertices) mc.vertices.push_back(v.position);
-                        mc.indices = qm.indices;
-                        const uint32_t off = static_cast<uint32_t>(qm.vertices.size());
-                        for (const Vertex& v : coping.vertices) mc.vertices.push_back(v.position);
-                        for (uint32_t ix : coping.indices) mc.indices.push_back(ix + off);
+                        mc.append(qm);
+                        mc.append(coping);
                         mc.friction = 0.9;
                         mc.surface = ColliderSurface::Concrete;   // dressed stone underfoot: the pavement step
                         world.add<MeshCollider>(qe, mc);
@@ -6314,12 +6304,7 @@ bool LevelLoader::load(const std::string& path,
                     }
                     engine::RenderMesh blockMesh;
                     engine::MeshBuilder::emitBlock(blockMesh, foot, head, Vec3(1, 1, 1));
-                    const uint32_t s0 =
-                        static_cast<uint32_t>(buildingsMc.vertices.size());
-                    for (const engine::Vertex& vx : blockMesh.vertices)
-                        buildingsMc.vertices.push_back(vx.position);
-                    for (uint32_t ix : blockMesh.indices)
-                        buildingsMc.indices.push_back(s0 + ix);
+                    buildingsMc.append(blockMesh);
                 };
                 for (const auto& fs : lb.fenceSegs)
                     wall(fs.first, fs.second, 0.95, 0.14);

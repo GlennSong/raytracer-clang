@@ -29,7 +29,7 @@ inline Vec3 barWood(uint32_t variant) { return ((variant >> 3) & 1u) ? kWood[1] 
 struct Maker {
     FurniturePiece out;
     RenderMesh& m(FurnMat k) { return out.mesh[static_cast<int>(k)]; }
-    static void paint(RenderMesh& mm, const Vec3& col) { for (Vertex& v : mm.vertices) v.color = col; }
+    static void paint(RenderMesh& mm, const Vec3& col) { MeshBuilder::paint(mm, col); }
     // A rounded box centred at c.
     void box(FurnMat k, const Vec3& c, const Vec3& size, double r, const Vec3& col, int segs = 2) {
         // A bevel under 3 mm is invisible and costs ~100 triangles a box: those are sharp (12).

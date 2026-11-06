@@ -164,7 +164,7 @@ void emitSteeringWheel(RenderMesh& out, const Vec3& hub, const InteriorParams& p
     // own axis before the tilt — so it needs no extra rotation of its own.
     RenderMesh boss = MeshBuilder::cylinder(static_cast<float>(R * Real(0.22)),
                                             static_cast<float>(r * Real(1.4)), 12);
-    for (Vertex& v : boss.vertices) v.color = p.trimColor;
+    MeshBuilder::paint(boss, p.trimColor);
     MeshBuilder::appendTransformed(out, boss, Mat4::trs(hub, tilt, Vec3(1, 1, 1)));
 }
 

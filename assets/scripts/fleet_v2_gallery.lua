@@ -52,19 +52,19 @@ for i, name in ipairs(ORDER) do
   if name == "semi" or name == "semi_tanker" then zoff = car.length * 0.5 - 2.4 end   -- the tractor's nose in line with the others
   for part, mm in pairs(car.parts) do
     local col = part == "body" and (car.color or { 0.5, 0.5, 0.5 }) or (COLOR[part] or { 0.5, 0.5, 0.5 })
-    m:add(mesh.translate(mesh.bake_height_color(mm, col, col), { x, car.lift, zoff }), MATS[part] or MATS.trim)
+    m:add(mesh.translate(mesh.paint(mm, col), { x, car.lift, zoff }), MATS[part] or MATS.trim)
   end
   for part, mm in pairs(car.cabin or {}) do
     local col = COLOR[part] or { 0.4, 0.4, 0.4 }
-    m:add(mesh.translate(mesh.bake_height_color(mm, col, col), { x, car.lift, zoff }), MATS[part] or MATS.trim)
+    m:add(mesh.translate(mesh.paint(mm, col), { x, car.lift, zoff }), MATS[part] or MATS.trim)
   end
   if car.driver_seat and car.cabin then
     local ds = car.driver_seat
     m:add(mesh.translate(mesh.occupant{ back_angle = 22 }, { x + ds[1], ds[2] + car.lift, ds[3] + zoff }), MATS.seat)
   end
   local wheel = kit.wheel(P.wheel_r, P.wheel_w, level)
-  local tyre = mesh.bake_height_color(wheel.tyre, { 0.05, 0.05, 0.055 }, { 0.05, 0.05, 0.055 })
-  local rimR = mesh.bake_height_color(wheel.rim, { 0.75, 0.76, 0.78 }, { 0.75, 0.76, 0.78 })
+  local tyre = mesh.paint(wheel.tyre, { 0.05, 0.05, 0.055 })
+  local rimR = mesh.paint(wheel.rim, { 0.75, 0.76, 0.78 })
   local rimL = mesh.rotate_y(rimR, math.pi)
   for _, w in ipairs(car.wheels) do
     local at = { x + w.pos[1], w.pos[2] + car.lift, w.pos[3] + zoff }
