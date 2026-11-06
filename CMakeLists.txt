@@ -426,6 +426,7 @@ if(RT_ENABLE_SCRIPTING)
         src/engine/scripting/lua_json.cpp
         src/engine/scripting/vehicle_spec.cpp
         src/engine/scripting/furniture_library_lua.cpp
+        src/engine/scripting/furniture_models_lua.cpp
         src/engine/scripting/tree_recipes_lua.cpp
         src/engine/scripting/settlements_lua.cpp
         src/engine/scripting/particles_lua.cpp

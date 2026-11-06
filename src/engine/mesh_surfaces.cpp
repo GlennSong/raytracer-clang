@@ -47,6 +47,7 @@ struct GridSurface {
     std::function<Vec3(int, int)> hint;
     double creaseDeg = 40.0;
     Vec3 color{1, 1, 1};
+    bool swapUV = false;   // u from the rows, v from the columns (a revolve's: u round the turn, v along the profile)
 
     const Vec3& at(int r, int c) const { return p[static_cast<std::size_t>((r % rows) * cols + (c % cols))]; }
 
@@ -131,6 +132,7 @@ struct GridSurface {
             const Vec3 along = at(r, c + 1) - at(r, c > 0 ? c - 1 : (colsClosed ? cols - 1 : 0));
             Vertex vx(at(r, c), normalize(n), along.lengthSquared() > 1e-24 ? normalize(along) : Vec3(1, 0, 0),
                       static_cast<float>(u[static_cast<std::size_t>(c)]), static_cast<float>(v[static_cast<std::size_t>(r)]));
+            if (swapUV) std::swap(vx.u, vx.v);
             vx.color = color;
             const uint32_t idx = static_cast<uint32_t>(m.vertices.size());
             m.vertices.push_back(vx);
@@ -157,6 +159,14 @@ std::vector<double> profileU(const MeshProfile& p) {
     if (total > 1e-12)
         for (double& x : u) x /= total;
     return u;
+}
+
+// a profile's length round (or along, when open) in metres
+double profileLengthOf(const MeshProfile& p) {
+    const std::size_t n = p.pts.size();
+    double l = 0;
+    for (std::size_t i = 1; i < n + (p.closed ? 1 : 0); ++i) l += (p.pts[i % n] - p.pts[i - 1]).length();
+    return l;
 }
 
 // the outward normal of profile edge k..k+1 (counter-clockwise ring: to its right)
@@ -563,8 +573,12 @@ RenderMesh MeshBuilder::revolve(const MeshProfile& profileIn, int segs, double f
     g.colsClosed = prof.closed;
     g.creaseDeg = creaseDeg;
     g.color = color;
+    // uv as the lathe's: u round the turn 0..1, v the profile's length in metres (a texture tiles at its real size)
     g.u = profileU(prof);
+    const double profileLength = profileLengthOf(prof);
+    for (double& x : g.u) x *= profileLength;
     for (int i = 0; i < g.rows + (full ? 1 : 0); ++i) g.v.push_back(static_cast<double>(i) / segs);
+    g.swapUV = true;
     auto angle = [&](double i) { return from + span * i / segs; };
     for (int i = 0; i < g.rows; ++i) {
         const double a = angle(i), c = std::cos(a), sn = std::sin(a);

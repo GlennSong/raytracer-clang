@@ -9,6 +9,7 @@
 #include "../procgen/sdf.h"
 #include "../procgen/noise.h"
 #include "../procgen/lsystem.h"
+#include "../../proc_rng.h"
 #include "../procgen/tree.h"
 #include "../procgen/vehicle/car_mesh.h"
 #include "../procgen/vehicle/occupant.h"
@@ -1085,6 +1086,59 @@ int l_mesh_superquadric(lua_State* L) {
     pushMesh(L, std::make_shared<RenderMesh>(MeshBuilder::superquadric(checkVec3(L, 1), luaL_checknumber(L, 2), luaL_checknumber(L, 3),
                                                                        optIntField(L, 4, "stacks", 24), optIntField(L, 4, "slices", 48),
                                                                        optVec3Field(L, 4, "color", Vec3(1, 1, 1)))));
+    return 1;
+}
+
+// mesh.rounded_box({w, h, d}, radius, {segs = 2, uv = 1}): a box centred on the origin, every edge rounded (the
+// furniture's cushions, tops and panels; a radius under 3 mm is sharp)
+int l_mesh_rounded_box(lua_State* L) {
+    double r = luaL_optnumber(L, 2, 0.0);
+    if (r < 0.003) r = 0;
+    const int segs = optIntField(L, 3, "segs", 2);
+    pushMesh(L, std::make_shared<RenderMesh>(MeshBuilder::roundedBox(checkVec3(L, 1), r, r > 0 ? segs : 1, optNumField(L, 3, "uv", 1.0))));
+    return 1;
+}
+// mesh.move_by(mesh, fn(i, p, n) -> p): every vertex (i from 0) moved where fn says -- or left, when it returns nil;
+// normals kept. A cactus's ribs, a dent; fn may also just read (a closure gathering positions).
+int l_mesh_move_by(lua_State* L) {
+    auto m = std::make_shared<RenderMesh>(checkMesh(L, 1));
+    luaL_checktype(L, 2, LUA_TFUNCTION);
+    for (std::size_t i = 0; i < m->vertices.size(); ++i) {
+        Vertex& v = m->vertices[i];
+        lua_pushvalue(L, 2);
+        lua_pushinteger(L, static_cast<lua_Integer>(i));
+        pushVec3(L, v.position);
+        pushVec3(L, v.normal);
+        lua_call(L, 3, 1);
+        if (lua_istable(L, -1)) v.position = checkVec3(L, -1);
+        lua_pop(L, 1);
+    }
+    pushMesh(L, m);
+    return 1;
+}
+
+// --- rng.* : THE ENGINE'S ONE SEEDED STREAM (ProcRng, proc_rng.h) for Lua: the same seed draws the same numbers in a
+// recipe as in C++ (a shelf's stock, a bookcase's spines) ---
+constexpr const char* kRngMt = "engine.procgen.Rng";
+// rng.new(seed) -> r; r:next() in [0, 1), r:range(a, b), r:below(n) in 0 .. n-1. Seeds wrap to 32 bits.
+int l_rng_new(lua_State* L) {
+    const uint32_t seed = static_cast<uint32_t>(static_cast<uint64_t>(luaL_checkinteger(L, 1)) & 0xffffffffull);
+    void* mem = lua_newuserdatauv(L, sizeof(ProcRng), 0);
+    new (mem) ProcRng(seed);
+    luaL_setmetatable(L, kRngMt);
+    return 1;
+}
+ProcRng& checkRng(lua_State* L, int idx) { return *static_cast<ProcRng*>(luaL_checkudata(L, idx, kRngMt)); }
+int l_rng_next(lua_State* L) { lua_pushnumber(L, checkRng(L, 1).next()); return 1; }
+int l_rng_range(lua_State* L) {
+    ProcRng& r = checkRng(L, 1);
+    const double a = luaL_checknumber(L, 2), b = luaL_checknumber(L, 3);
+    lua_pushnumber(L, r.in(a, b));
+    return 1;
+}
+int l_rng_below(lua_State* L) {
+    ProcRng& r = checkRng(L, 1);
+    lua_pushinteger(L, r.below(static_cast<int>(luaL_checkinteger(L, 2))));
     return 1;
 }
 
@@ -4338,6 +4392,8 @@ void openProcgenLibrary(ScriptVM& vm) {
         {"revolve", l_mesh_revolve},
         {"loft", l_mesh_loft},
         {"superquadric", l_mesh_superquadric},
+        {"rounded_box", l_mesh_rounded_box},
+        {"move_by", l_mesh_move_by},
         {"annulus", l_mesh_annulus},
         {"band", l_mesh_band},
         {"fill", l_mesh_fill},
@@ -4436,6 +4492,18 @@ void openProcgenLibrary(ScriptVM& vm) {
     };
     luaL_newlib(L, kBuildingFns);
     lua_setglobal(L, "building");
+
+    if (luaL_newmetatable(L, kRngMt)) {   // ProcRng is trivially destructible: no __gc
+        lua_newtable(L);
+        lua_pushcfunction(L, l_rng_next);  lua_setfield(L, -2, "next");
+        lua_pushcfunction(L, l_rng_range); lua_setfield(L, -2, "range");
+        lua_pushcfunction(L, l_rng_below); lua_setfield(L, -2, "below");
+        lua_setfield(L, -2, "__index");
+    }
+    lua_pop(L, 1);
+    static const luaL_Reg kRngFns[] = {{"new", l_rng_new}, {nullptr, nullptr}};
+    luaL_newlib(L, kRngFns);
+    lua_setglobal(L, "rng");
 
     static const luaL_Reg kFurnitureFns[] = {
         {"lamp", l_furniture_lamp},

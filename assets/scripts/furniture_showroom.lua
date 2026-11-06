@@ -10,21 +10,20 @@ local MATS = {
   furniture         = material.new{ roughness = 0.55 },
   furniture_metal   = material.new{ roughness = 0.28, metallic = 0.85 },
   furniture_ceramic = material.new{ roughness = 0.12 },
+  lit_band          = material.new{ roughness = 0.5, emission = { 1, 0.95, 0.85 } },
   floor             = material.new{ surface = "woodgrain", roughness = 0.6 },
 }
 
-local ROWS = {
-  { "desk", "office_chair", "monitor", "filing_cabinet" },
-  { "bed", "nightstand", "wardrobe" },
-  { "sofa", "coffee_table", "tv_unit", "lounge_chair", "planter" },
-  { "kitchen_base", "kitchen_sink", "kitchen_hob", "kitchen_tall", "kitchen_wall", "dining_table", "dining_chair" },
-  { "bathtub", "toilet", "vanity" },
-  { "desk_pod", "cubicle", "meeting_table", "reception_desk", "water_cooler", "copier", "phone_booth" },
-}
+-- every piece in the kit, in the kit's order, nine to a row (the port's A/B: #191, the recipes in Lua)
+local ROWS, row = {}, nil
+for i, name in ipairs(furniture.pieces()) do
+  if (i - 1) % 9 == 0 then row = {}; ROWS[#ROWS + 1] = row end
+  row[#row + 1] = name
+end
 -- variant: bits 0-2 fabric, 3-4 wood, 5+ style
 local VARIANTS = { 0 + 0 * 8, 1 + 1 * 8 + 32, 3 + 2 * 8 + 64 }
 
-local z = 0
+local z, maxX = 0, 0
 for _, row in ipairs(ROWS) do
   local x = 0
   local depth = 0
@@ -41,8 +40,9 @@ for _, row in ipairs(ROWS) do
     end
     x = x + 0.8
   end
+  maxX = math.max(maxX, x)
   z = z + depth + 2.2
 end
 -- the showroom floor
-m:add(scope{ origin = {-2, -0.05, -2}, size = {40, 0.05, z + 2} }:box{ 0.80, 0.74, 0.66 }, MATS.floor)
+m:add(scope{ origin = {-2, -0.05, -2}, size = {maxX + 4, 0.05, z + 2} }:box{ 0.80, 0.74, 0.66 }, MATS.floor)
 return m

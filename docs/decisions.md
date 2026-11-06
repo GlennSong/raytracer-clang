@@ -15669,3 +15669,54 @@ Each one triangulated, or looped round a circle, on its own. Glenn OK'd the lots
   - Four before/after shots (`~/Pictures/Raytracer/2026-11-06_flat_shapes_ab_*`) show no change in shape; the pixel
     differences are traffic, wind and shadows.
 
+
+## ADR-0346 — The furniture kit's models are Lua recipes over the mesh words (#191)
+
+**Context.** The furniture kit (`procgen/furniture_kit.cpp`, ADR-0173's library) modelled all 92 pieces in C++: a
+1,560-line switch over a private `Maker` of rounded boxes, tubes and lathes. Glenn's rule since #182 is that data
+belongs in Lua and C++ is the language. On 2026-11-06 he asked for the port: "port the furniture to use the new
+meshbuilder in lua ... I assume as we build the new furniture we'll test it to make sure it looks like the old
+furniture."
+
+**Decision.**
+- **The recipes live in `assets/scripts/furniture_models.lua`.**
+  - One function per piece, keyed by the piece's name: `furniture_models[name](variant) -> piece`.
+  - A piece is `{size, solid, collider_h, colliders, parts}`, with `parts` a mesh per finish.
+  - Each recipe is the C++ one translated line for line, its comments carried over.
+- **The Lua maker builds on the toolkit's words:**
+  - `box` is `mesh.rounded_box`;
+  - `tilted` is a rounded box under `mesh.rotate_x`;
+  - `rod` is a circle swept along a line (`mesh.sweep`, open ends);
+  - `turned` is `mesh.revolve` of an open profile, squashed by `mesh.scale`;
+  - `leg` and `front` are compositions of those.
+  - The bar stool's foot ring, eight straight rods before, is one hoop swept round a circle.
+- **Three new Lua words:**
+  - `mesh.rounded_box`;
+  - `mesh.move_by(m, fn(i, p, n))`, for the cactus's ribs;
+  - `rng.new(seed)`: the engine's ProcRng, so a seeded shelf, bookcase or dance floor draws the same numbers in a
+    recipe as it did in C++.
+- **The C++ side:**
+  - `scripting/furniture_models_lua` runs the file once into a kept VM and reads a piece back.
+  - `furniturePiece` caches it per (piece, variant) as before.
+  - `furniture_kit.cpp` is the piece names and that cache: 57 lines, down from 1,695.
+  - A recipe that fails leaves its piece empty and logs why.
+- **The piece list stays the `Piece` enum for now.** The placers key on it. A new piece is still an enum entry plus a
+  recipe; naming pieces by data is the kinds-are-data follow-up (#172).
+
+**Proof.**
+- `furniture_pieces_dump_their_numbers` (run with `RT_FURNITURE_DUMP=<file>`) writes, for every piece in nine
+  variants, its footprint and flags and, per finish, its triangles, area, bounds and area-weighted colour.
+  `tools/furniture_ab.py` compares two dumps.
+- **Old C++ against new Lua, 828 piece variants:**
+  - Footprints and flags are identical.
+  - At 0.2 % area and 0.5 mm bounds, three pieces differ, each by millimetres: the potted plant's leaf cards (the
+    orientation's reference axis), the school chair's splayed legs and the vase's stems (a swept rod's rings turn
+    differently from the old tube's).
+  - Triangles went from 1,041,220 to 1,042,084 (+0.1 %).
+- The showroom (`furniture_showroom.json`, now every piece in three variants) was shot before and after, 33 frames
+  (`~/Pictures/Raytracer/2026-11-06_furniture_lua_ab_*`).
+  - The first after-shot caught a real difference: the beach umbrella's canopy and valance lost their fabric weave.
+    `revolve` laid uv 0..1 along the profile and 0..1 round the turn, so a texture stretched over each turned part.
+    It now lays uv as the lathe did: u round the turn 0..1, v along the profile in metres.
+  - After that fix, every frame matches but for the weave's phase on the umbrellas.
+- The existing footprint and mesh-audit tests cover every piece.

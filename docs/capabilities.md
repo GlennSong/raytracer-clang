@@ -40,6 +40,7 @@ being used. One row per capability; the "used by" column is the audit trail.
 | `MeshBuilder::chunkByCell` | `engine/mesh_builder.h` (was `level_loader.cpp`) | loader chunking, city producer | a bundle cell is a render cell |
 | Curves and surfaces `MeshProfile` / `MeshPath`, `sweep` / `extrude` / `revolve` / `loft` / `superquadric` | `engine/mesh_builder.h`, `mesh_surfaces.cpp`; Lua `mesh.profile.*`, `mesh.path.*` | the shape lab (#191 ports next) | ADR-0344: one grid builder (creases, poles, seams), volumes tested against their formulas |
 | Flat shapes `emitAnnulus` / `emitBand` / `emitFill` / `emitSkirt`, `MeshFrame::level`, `projectUV` | `engine/mesh_builder.h`, `mesh_words.cpp`; Lua `mesh.annulus/band/fill/skirt` | every disc, ring, paved plate, parapet, interior slab and collider cap | ADR-0345: areas and closed volumes tested; plan prisms' walls are skirts |
+| Furniture models in Lua: `furniture_models.lua` (92 pieces), Lua `mesh.rounded_box`, `mesh.move_by`, `rng.new` | `scripting/furniture_models_lua.h`; `procgen/furniture_kit.h` caches | every interior, the showroom | ADR-0346: dump + `tools/furniture_ab.py` against the old C++ |
 
 
 ## City simulation scale (opened 2026-09-16 — Glenn: "a bustling urban environment")

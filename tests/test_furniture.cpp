@@ -86,6 +86,44 @@ TEST_CASE(every_furniture_piece_is_modelled_inside_its_footprint) {
     }
 }
 
+// THE PIECES' NUMBERS, for a port's A/B (#191: the kit's recipes moved to Lua): with RT_FURNITURE_DUMP=<file> set,
+// every piece in a spread of variants writes its footprint, its flags and, per finish, its triangles, surface area,
+// bounds and area-weighted colour. Compare two dumps with tools/furniture_ab.py.
+TEST_CASE(furniture_pieces_dump_their_numbers) {
+    const char* path = std::getenv("RT_FURNITURE_DUMP");
+    if (!path) return;
+    std::FILE* f = std::fopen(path, "w");
+    CHECK(f != nullptr);
+    if (!f) return;
+    for (int i = 0; i < kPieceCount; ++i)
+        for (uint32_t variant : {0u, 9u, 42u, 101u, 37u, 74u, 160u, 203u, 255u}) {
+            const FurniturePiece& fp = furniturePiece(static_cast<Piece>(i), variant);
+            std::fprintf(f, "piece %s %u size %.4f %.4f %.4f solid %d colliderH %.4f colliders %zu\n",
+                         furniturePieceName(static_cast<Piece>(i)), variant, fp.size.x, fp.size.y, fp.size.z, fp.solid ? 1 : 0,
+                         fp.colliderH, fp.colliders.size());
+            for (int k = 0; k < kFurnMatCount; ++k) {
+                const RenderMesh& m = fp.mesh[static_cast<std::size_t>(k)];
+                if (m.indices.empty()) continue;
+                double area = 0;
+                Vec3 lo(1e9, 1e9, 1e9), hi(-1e9, -1e9, -1e9), col(0, 0, 0);
+                for (std::size_t t = 0; t + 2 < m.indices.size(); t += 3) {
+                    const Vertex &a = m.vertices[m.indices[t]], &b = m.vertices[m.indices[t + 1]], &c = m.vertices[m.indices[t + 2]];
+                    const double ar = 0.5 * cross(b.position - a.position, c.position - a.position).length();
+                    area += ar;
+                    col = col + (a.color + b.color + c.color) * (ar / 3.0);
+                }
+                for (const Vertex& v : m.vertices) {
+                    lo = Vec3(std::min(lo.x, v.position.x), std::min(lo.y, v.position.y), std::min(lo.z, v.position.z));
+                    hi = Vec3(std::max(hi.x, v.position.x), std::max(hi.y, v.position.y), std::max(hi.z, v.position.z));
+                }
+                if (area > 0) col = col * (1.0 / area);
+                std::fprintf(f, "  mat %d tris %zu area %.5f lo %.4f %.4f %.4f hi %.4f %.4f %.4f col %.4f %.4f %.4f\n", k,
+                             m.indices.size() / 3, area, lo.x, lo.y, lo.z, hi.x, hi.y, hi.z, col.x, col.y, col.z);
+            }
+        }
+    std::fclose(f);
+}
+
 // An office floor is furnished: workstations across the open plan and desks in the corner offices, every piece
 // inside the plate, none in a doorway's swing, drawn as placements (not merged triangles).
 TEST_CASE(office_rooms_are_furnished_with_placed_pieces) {

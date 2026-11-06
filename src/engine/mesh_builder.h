@@ -146,7 +146,8 @@ struct MeshBuilder {
                               const Vec3& color = Vec3(1, 1, 1), int heightSegs = 1);
     // REVOLVE a profile of (r, y) points about +y from angle `from` to `to` (radians; a full turn unless less), in
     // `segs` steps round; a part turn closes its cut faces when the profile is closed. Open profiles run bottom to
-    // top up the outside (as the lathe's). Vases, bowls, domes, finials, a wheel's tyre, a quarter-round moulding.
+    // top up the outside (as the lathe's); u runs round the turn 0..1, v along the profile in metres, as the lathe's.
+    // Vases, bowls, domes, finials, a wheel's tyre, a quarter-round moulding.
     static RenderMesh revolve(const MeshProfile& profile, int segs = 32, double from = 0.0, double to = TAU,
                               const Vec3& color = Vec3(1, 1, 1), double creaseDeg = 40.0);
     // LOFT through `sections` (rings of 3-D points, the same count each, in order): a surface skinned through them,
