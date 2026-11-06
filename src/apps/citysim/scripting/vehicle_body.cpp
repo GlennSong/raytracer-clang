@@ -268,6 +268,16 @@ bool loadFleetCarBody(ScriptVM& vm, int slot, CarBodyRecipe& out,
             lua_settop(L, base);
             return fail(err, where + ": `interior` is not a Mesh");
         }
+        // THE MID-RANGE BODY (`mid`, optional): the whole car (shell, dark glass, wheels) as a cheaper mesh drawn past
+        // `mid_from` metres -- the kit's faceted cage shaded with the smooth body's normals (vehicles.lua kit_car)
+        bool hasMid = false;
+        if (!optMeshField(L, rec, "mid", body.mid, hasMid)) {
+            lua_settop(L, base);
+            return fail(err, where + ": `mid` is not a Mesh");
+        }
+        lua_getfield(L, rec, "mid_from");
+        body.midFrom = lua_isnumber(L, -1) ? lua_tonumber(L, -1) : 0.0;
+        lua_pop(L, 1);
         lua_getfield(L, rec, "see_into");
         body.seeInto = lua_toboolean(L, -1) != 0;
         lua_pop(L, 1);

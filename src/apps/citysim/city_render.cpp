@@ -1271,6 +1271,7 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
     // skip the instanced kinematic car bodies entirely — otherwise every car draws
     // twice. The CitySim still runs as the planner; the bridge reads its ghosts.
     carGroups_.clear();
+    carMidGroups_.clear();
     carLights_.clear();
     carChassis_.clear();
     carWheels_.clear();
@@ -1299,7 +1300,8 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
             MeshHandle mh{}, chassisMh{};
             std::vector<LampMarker> lights;
             std::vector<CarWheel> wheels;
-            engine::RenderMesh glassMesh, interiorMesh;
+            engine::RenderMesh glassMesh, interiorMesh, midMesh;
+            Real midFrom = 0;
             bool seeInto = false;
             bool openSeat = false;
             std::vector<Vec3> seats, doors;
@@ -1338,6 +1340,8 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
                             lights.push_back({att.name, att.pos});
                         glassMesh = std::move(recipe.glass);
                         interiorMesh = std::move(recipe.interior);
+                        midMesh = std::move(recipe.mid);
+                        midFrom = static_cast<Real>(recipe.midFrom);
                         seeInto = recipe.seeInto;
                         openSeat = recipe.openSeat;
                         seats = recipe.seats;
@@ -1443,8 +1447,23 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
             g.material.flags |= engine::RenderMaterial::FLAG_LAMP_STATE;   // its lenses light by the mask (ADR-0342)
             g.renderLayer = engine::LayerSim;   // debug layer toggle
             g.drawClass = engine::DrawClass::SimBody;
+            // THE MID-RANGE FORM: past midFrom the cheaper whole car draws instead, and the near body, its glass and
+            // its cabin stop there (InstanceGroup's per-instance distances)
+            Entity me{};
+            if (assets && !midMesh.vertices.empty() && midFrom > 0) {
+                g.drawDistance = midFrom;
+                for (Entity ne : {carGlassGroups_.back(), carGlassOpaqueGroups_.back(), carInteriorGroups_.back()})
+                    if (InstanceGroup* ng = ne.valid() ? world.get<InstanceGroup>(ne) : nullptr) ng->drawDistance = midFrom;
+                me = world.create();
+                InstanceGroup mg = g;
+                mg.mesh = assets->acquireMesh(midMesh, "city:carmid" + std::to_string(v));
+                mg.drawDistance = 0;
+                mg.minDistance = midFrom;
+                world.add<InstanceGroup>(me, mg);
+            }
             world.add<InstanceGroup>(e, g);
             carGroups_.push_back(e);
+            carMidGroups_.push_back(me);
         }
 
         // PEOPLE ON THE BUS: seated figures posed from the same SAE manikin as
@@ -2421,6 +2440,24 @@ void CityRenderSystem::syncCarLamps(World& world) {
             }
         }
     for (Entity e : busSignGroups_) refreshBounds(world.get<InstanceGroup>(e));
+    copyMidBodies(world);
+}
+
+// The mid-range groups draw the same cars as the near ones: their poses, ids (the renderer's interpolation) and lamp
+// masks, copied after the bake is complete (the mask is written last, syncCarLamps).
+void CityRenderSystem::copyMidBodies(World& world) {
+    for (std::size_t v = 0; v < carMidGroups_.size() && v < carGroups_.size(); ++v) {
+        if (!carMidGroups_[v].valid()) continue;
+        const InstanceGroup* near = world.get<InstanceGroup>(carGroups_[v]);
+        InstanceGroup* mid = world.get<InstanceGroup>(carMidGroups_[v]);
+        if (!near || !mid) continue;
+        mid->transforms = near->transforms;
+        mid->ids = near->ids;
+        mid->prevTransforms = near->prevTransforms;
+        mid->prevIds = near->prevIds;
+        mid->boundsCenter = near->boundsCenter;
+        mid->boundsRadius = near->boundsRadius;
+    }
 }
 
 std::size_t CityRenderSystem::carsLit(World& world, uint32_t bits) const {

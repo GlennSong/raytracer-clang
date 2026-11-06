@@ -868,3 +868,31 @@ TEST_CASE(every_fleet_slot_drives_with_its_kit_s_drivable_handling) {
     }
     CHECK(selectFleet(v.vm, "fleet_kit"));
 }
+
+// THE MID-RANGE BODY (Glenn, 2026-11-06: "faceted lower poly cars with baked normals"): every smooth kit car in the
+// fleet carries a cheaper whole car for past `mid_from` -- under two thirds of the near body's triangles (the lenses,
+// grille and wheels are the same at both; the body shell itself is a quarter), its own wheels in it,
+// and no bigger than the near car (it replaces it on the same instance).
+TEST_CASE(every_smooth_fleet_car_carries_a_cheaper_mid_range_body) {
+    VehiclesVM a;
+    CHECK(a.loaded);
+    int withMid = 0;
+    for (int slot = 0; slot < fleetSlotCount(a.vm); ++slot) {
+        CarBodyRecipe body;
+        std::string err;
+        CHECK(loadFleetCarBody(a.vm, slot, body, &err));
+        if (twoWheelSlot(a.vm, slot) || body.className == "bus") continue;
+        const std::size_t nearTris = body.mesh.indices.size() / 3, midTris = body.mid.indices.size() / 3;
+        std::printf("    [%2d %-12s] near %zu tris, mid %zu tris from %.0f m\n", slot, body.className.c_str(), nearTris, midTris,
+                    body.midFrom);
+        CHECK(midTris > 0);
+        CHECK(body.midFrom > 0);
+        CHECK(midTris * 3 < nearTris * 2);
+        double nearR = 0, midR = 0;
+        for (const Vertex& v : body.mesh.vertices) nearR = std::max(nearR, static_cast<double>(v.position.length()));
+        for (const Vertex& v : body.mid.vertices) midR = std::max(midR, static_cast<double>(v.position.length()));
+        CHECK(midR < nearR * 1.05 + 0.05);
+        if (midTris > 0) ++withMid;
+    }
+    CHECK(withMid > 8);
+}

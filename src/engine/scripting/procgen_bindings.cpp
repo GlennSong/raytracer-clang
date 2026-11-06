@@ -1117,6 +1117,15 @@ int l_mesh_move_by(lua_State* L) {
     return 1;
 }
 
+// mesh.transfer_normals(dst, src, {radius = 0.08}) -> dst with each vertex's normal taken from the best-matching src
+// vertex (MeshBuilder::transferNormals): a faceted cage shaded like the smooth body subdivided from it.
+int l_mesh_transfer_normals(lua_State* L) {
+    auto m = std::make_shared<RenderMesh>(checkMesh(L, 1));
+    MeshBuilder::transferNormals(*m, checkMesh(L, 2), optNumField(L, 3, "radius", 0.08));
+    pushMesh(L, m);
+    return 1;
+}
+
 // --- rng.* : THE ENGINE'S ONE SEEDED STREAM (ProcRng, proc_rng.h) for Lua: the same seed draws the same numbers in a
 // recipe as in C++ (a shelf's stock, a bookcase's spines) ---
 constexpr const char* kRngMt = "engine.procgen.Rng";
@@ -4394,6 +4403,7 @@ void openProcgenLibrary(ScriptVM& vm) {
         {"superquadric", l_mesh_superquadric},
         {"rounded_box", l_mesh_rounded_box},
         {"move_by", l_mesh_move_by},
+        {"transfer_normals", l_mesh_transfer_normals},
         {"annulus", l_mesh_annulus},
         {"band", l_mesh_band},
         {"fill", l_mesh_fill},

@@ -238,6 +238,11 @@ struct MeshBuilder {
     // a hard edge stays hard and no face is shaded from behind (smoothing across a fold turns a small face's normals
     // away from it -- the mesh audit's "inward" triangles on the car shell's nose).
     static void autosmooth(RenderMesh& mesh, double creaseDeg = 50.0);
+    // NORMAL TRANSFER (Glenn, 2026-11-06: "faceted lower poly cars with baked normals"): each vertex of `dst` takes the
+    // normal of the `src` vertex that best matches it -- within `radius` metres, the nearest whose normal is closest to
+    // the dst vertex's own (so the two sides of a crease each find their own side). A coarse cage then shades like the
+    // smooth body it was subdivided into, at the cage's triangle count. A vertex with no candidate keeps its normal.
+    static void transferNormals(RenderMesh& dst, const RenderMesh& src, double radius = 0.08);
     // A triangle whose |cross(c - a, b - a)|^2 is under this (area under 0.1 mm^2) has NO AREA: the emitters skip it,
     // dropDegenerate removes it, and the mesh audit (tests/mesh_invariants.h) counts by the same number.
     static constexpr double kNoArea2 = 4e-14;

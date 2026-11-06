@@ -377,3 +377,27 @@ TEST_CASE(geometry_equal_ignores_order_and_catches_a_change) {
     MeshBuilder::paint(e, Vec3(0.5, 0.5, 0.5));
     CHECK(!geometryEqual(a, e).equal);
 }
+
+// NORMAL TRANSFER (the fleet's mid-range bodies): a flat-shaded sphere takes the smooth sphere's normals -- every
+// vertex then points out along its own radius as the smooth one does, and the positions do not move.
+TEST_CASE(mesh_transfer_normals_shades_a_cage_like_its_smooth_body) {
+    const RenderMesh smooth = MeshBuilder::sphere(1.0f, 12, 24);
+    RenderMesh faceted = smooth;
+    MeshBuilder::flatShade(faceted);
+    auto worstOffRadius = [](const RenderMesh& m) {
+        double worst = 1.0;
+        for (const Vertex& v : m.vertices) worst = std::min(worst, dot(normalize(v.position), v.normal));
+        return worst;
+    };
+    const double before = worstOffRadius(faceted);
+    const RenderMesh kept = faceted;
+    MeshBuilder::transferNormals(faceted, smooth, 0.05);
+    const double after = worstOffRadius(faceted);
+    std::printf("    worst cos(normal, radius): flat %.4f -> transferred %.4f\n", before, after);
+    CHECK(before < 0.995);
+    CHECK(after > 0.999);
+    bool samePositions = faceted.vertices.size() == kept.vertices.size();
+    for (std::size_t i = 0; samePositions && i < kept.vertices.size(); ++i)
+        samePositions = (faceted.vertices[i].position - kept.vertices[i].position).length() < 1e-9;
+    CHECK(samePositions);
+}

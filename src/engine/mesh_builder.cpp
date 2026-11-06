@@ -2,6 +2,7 @@
 #include "mesh_builder.h"
 #include "../renderer/cube_faces.h"   // cubeFaceDirection — the cubemap convention
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <map>
 #include <queue>
@@ -492,6 +493,41 @@ RenderMesh MeshBuilder::merged(const std::vector<RenderMesh>& parts) {
     if (!parts.empty()) out.materialIndex = parts.front().materialIndex;
     for (const RenderMesh& part : parts) append(out, part);
     return out;
+}
+
+void MeshBuilder::transferNormals(RenderMesh& dst, const RenderMesh& src, double radius) {
+    if (src.vertices.empty() || radius <= 0) return;
+    // the source's vertices in a hash grid of `radius` cells: a query reads its own cell and the 26 round it
+    const double cell = radius;
+    auto key = [cell](const Vec3& p) {
+        return std::array<long long, 3>{static_cast<long long>(std::floor(p.x / cell)),
+                                        static_cast<long long>(std::floor(p.y / cell)),
+                                        static_cast<long long>(std::floor(p.z / cell))};
+    };
+    std::map<std::array<long long, 3>, std::vector<uint32_t>> grid;
+    for (uint32_t i = 0; i < static_cast<uint32_t>(src.vertices.size()); ++i) grid[key(src.vertices[i].position)].push_back(i);
+    const double r2 = radius * radius;
+    for (Vertex& v : dst.vertices) {
+        const std::array<long long, 3> k = key(v.position);
+        double best = 1e30;
+        const Vertex* pick = nullptr;
+        for (long long dx = -1; dx <= 1; ++dx)
+            for (long long dy = -1; dy <= 1; ++dy)
+                for (long long dz = -1; dz <= 1; ++dz) {
+                    const auto it = grid.find({k[0] + dx, k[1] + dy, k[2] + dz});
+                    if (it == grid.end()) continue;
+                    for (uint32_t i : it->second) {
+                        const Vertex& s = src.vertices[i];
+                        const Vec3 d = s.position - v.position;
+                        const double d2 = dot(d, d);
+                        if (d2 > r2) continue;
+                        // near and facing the same way: distance as a share of the radius, plus the turn between them
+                        const double score = std::sqrt(d2) / radius + (1.0 - dot(s.normal, v.normal)) * 2.0;
+                        if (score < best) { best = score; pick = &s; }
+                    }
+                }
+        if (pick && dot(pick->normal, v.normal) > 0.0) v.normal = pick->normal;
+    }
 }
 
 void MeshBuilder::recomputeNormals(RenderMesh& mesh) {

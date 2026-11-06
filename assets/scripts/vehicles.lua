@@ -616,9 +616,27 @@ local KIT_CABIN = {
   liner = { 0.55, 0.53, 0.50 }, carpet = { 0.10, 0.10, 0.11 }, seat = { 0.22, 0.20, 0.19 },
   dash = { 0.08, 0.08, 0.09 }, steer = { 0.05, 0.05, 0.05 },
 }
+-- THE FLEET'S BODIES ARE SMOOTH (Glenn, 2026-11-06: "Smooth works"): one Catmull-Clark step over the cage, its
+-- character lines creased (vehicle_kit.lua kit.body). A spec can keep its own `level` (0: faceted).
+local FLEET_KIT_LEVEL = 1
+-- PAST THIS (m) A FLEET CAR DRAWS ITS MID-RANGE FORM (Glenn, 2026-11-06: "faceted lower poly cars with baked
+-- normals"): the faceted cage, a third of the smooth body's triangles, every vertex shaded with the smooth body's
+-- normal (mesh.transfer_normals), its glass dark and merged in, its wheels baked.
+local FLEET_MID_FROM = 50
+-- The mid-range car: the kit's level-0 parts painted like the near ones, normals from the near (smooth) parts
+local function kit_mid(P, color, near, wheels)
+  local car = kit.build(P, 0)
+  local parts = {}
+  for name, part in pairs(car.parts) do
+    local col = name == "body" and color or (KIT_TINT[name] or LENS_TINT[name] or { 0.5, 0.5, 0.5 })
+    parts[#parts + 1] = lens_tag(mesh.paint(part, col), name)
+  end
+  local m = mesh.transfer_normals(mesh.merge(parts), near, { radius = 0.08 })
+  return mesh.merge({ m, wheels })
+end
 local function kit_car(spec, color)
   local P = kit.SPECS[spec]()
-  local car = kit.build(P, 0)
+  local car = kit.build(P, P.level or FLEET_KIT_LEVEL)
   local shell = {}
   for name, part in pairs(car.parts) do
     if name ~= "glass" then
@@ -654,10 +672,18 @@ local function kit_car(spec, color)
     if open then for _, cp in ipairs(cabinParts) do shell[#shell + 1] = cp end
     else interior = mesh.merge(cabinParts) end
   end
+  -- (the parts' own normals, from P:to_parts' autosmooth: re-deriving them over the merged shell gave the lenses'
+  -- folded skirts vertices whose faces cancel -- zero normals, the mesh audit's "badnormal")
+  local body = mesh.merge(shell)
+  local wheels = mesh.merge(wheelParts)
+  local level = P.level or FLEET_KIT_LEVEL
+  local mid = level > 0 and kit_mid(P, color, glass and mesh.merge({ body, glass }) or body, wheels) or nil
   return {
     interior = interior,
-    body = mesh.recompute_normals(mesh.merge(shell)),
-    wheels = mesh.merge(wheelParts),
+    body = body,
+    wheels = wheels,
+    mid = mid,
+    mid_from = mid and FLEET_MID_FROM or nil,
     wheel_layout = layout,
     lights = car.lights,
     size = car.size,

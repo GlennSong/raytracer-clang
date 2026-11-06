@@ -526,6 +526,11 @@ private:
     Real busPrintAcc_ = 0;  // RT_PRINT_BUSES cadence
     CitySim sim_;
     std::vector<engine::Entity> carGroups_;   // one per car variant (body + colour)
+    // THE MID-RANGE BODIES (vehicles.lua `mid`): per variant, the cheaper whole car drawn from its `mid_from` out --
+    // the same instances as carGroups_ (copied once the bake is done, lamp masks and all), the near group stopping
+    // where this one starts. Invalid where the recipe has none.
+    std::vector<engine::Entity> carMidGroups_;
+    void copyMidBodies(engine::World& world);
     std::unordered_map<int, engine::Mat4> physPose_;      // R5: agent -> body pose
     std::vector<std::vector<int>> carAgentIds_;           // parallel to bakes
     // (The one-shot SceneryCar bake that used to live here is gone: parked cars

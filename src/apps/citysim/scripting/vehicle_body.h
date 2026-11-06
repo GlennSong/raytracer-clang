@@ -61,6 +61,10 @@ struct CarBodyRecipe {
     // The cabin, apart from the shell for ordinary traffic (drawn only near the player); a see-into
     // vehicle has it in `mesh` and leaves this empty.
     RenderMesh interior;
+    // The MID-RANGE form (`mid`): the whole car, shell + dark glass + wheels, cheaper, drawn from `midFrom` metres out
+    // (the near body, its glass and cabin stop there). Empty: the near body is drawn at every distance.
+    RenderMesh mid;
+    double midFrom = 0.0;
     bool seeInto = false;
     bool openSeat = false;   // `open_seat`: nothing round the driver (a convertible): a crash throws them (ADR-0252)
     // Seat hip points (body-local), for drawing people IN the vehicle: the

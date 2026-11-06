@@ -1,6 +1,7 @@
 -- fleet_v2_gallery.lua -- every fleet v2 body (vehicle_kit.lua, on the poly.* kit) in a row, 5 m apart
--- along x, noses toward +z, for judging shape and materials. opts.level = subdivision level (default 2),
--- opts.only = a list of spec names.
+-- along x, noses toward +z, for judging shape and materials. opts.level = subdivision level (default 0),
+-- opts.levels = several, a row each 9 m behind the last (faceted against smooth, side by side), opts.only = a list
+-- of spec names.
 
 local kit = require "vehicle_kit"
 local opts = args or {}
@@ -44,12 +45,13 @@ if #ORDER > 10 then SPACING = 5.0 end
 local n = #ORDER
 m:add(scope{ origin = { -6, -0.3, -24 }, size = { SPACING * n + 6, 0.3, 34 } }:box{ 0.30, 0.32, 0.34 })
 
+for row, level in ipairs(opts.levels or { level }) do
 for i, name in ipairs(ORDER) do
   local x = (i - 1) * SPACING
   local P = kit.SPECS[name]()
   local car = kit.build(P, level)
-  local zoff = 0
-  if name == "semi" or name == "semi_tanker" then zoff = car.length * 0.5 - 2.4 end   -- the tractor's nose in line with the others
+  local zoff = -(row - 1) * 9
+  if name == "semi" or name == "semi_tanker" then zoff = zoff + car.length * 0.5 - 2.4 end   -- the tractor's nose in line with the others
   for part, mm in pairs(car.parts) do
     local col = part == "body" and (car.color or { 0.5, 0.5, 0.5 }) or (COLOR[part] or { 0.5, 0.5, 0.5 })
     m:add(mesh.translate(mesh.paint(mm, col), { x, car.lift, zoff }), MATS[part] or MATS.trim)
@@ -79,5 +81,6 @@ for i, name in ipairs(ORDER) do
     local sp = mesh.rotate_y(tyre, math.pi * 0.5)
     m:add(mesh.translate(sp, { x + car.spare[1], car.spare[2] + car.lift, car.spare[3] + zoff }), MATS.rubber)
   end
+end
 end
 return m

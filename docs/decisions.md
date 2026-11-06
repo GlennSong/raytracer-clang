@@ -15781,3 +15781,63 @@ furniture. Let's see the changes in the lab as well."
   one per corner). The finer one tripled the sofa again (14k) with no difference at room distance.
 - **Showroom shots, before and after, of all ten pieces:** `~/Pictures/Raytracer/2026-11-06_furniture_upgrade_*`.
 - **The gate:** run_tests, physics_tests, lanes_tests.
+
+## ADR-0348 — Smooth fleet bodies: creased character lines, lenses shaped onto the body, a mid-range body (#191)
+
+**Context.** The kit's fleet bodies were faceted (level 0), Glenn's choice in September. On 2026-11-06 he asked for
+a visual upgrade, saw the two side by side and picked smooth ("Smooth works"). Plain subdivision bloated the
+bodies, because only the window outlines were creased. The lamps and grille were boxes set onto the nose and tail:
+Glenn, "Do they need to be floating cubes ... it would be better if it was on the actual surface of the car". A
+smooth body is about three times the triangles of a faceted one, and near-tier traffic is drawn out to 500-620 m.
+Glenn: "faceted lower poly cars with baked normals".
+
+**Decision.**
+- **Character lines on the cage** (`kit.body`). The flank's two long edges (shoulder and sill), the hood's and the
+  deck's panel edges, and the arches are creased. The nose and tail caps' rims are creased at 1.4, up from 0.3. A
+  faceted body never subdivides, so this changes nothing there. `P.lines = { flank, panel, arch }` tunes the
+  sharpness per spec; `false` turns it off.
+- **`kit.patch`: a panel shaped to the finished body.**
+  - A rounded-rectangle outline is laid on a plane and cast onto the subdivided body point by point, through
+    concentric rings, so it follows the surface.
+  - It stands a few millimetres proud along the cast and is domed in the middle; its edge sinks 12 mm into the body.
+  - Headlights, tail lights, the grille and its chrome bars all use it. Lamp markers sit at the centre's hit.
+  - Using one push-out direction, not each face's own normal, is what keeps a lens whole where it wraps over the
+    nose's edge.
+- **The fleet is smooth.** vehicles.lua `kit_car` builds at `FLEET_KIT_LEVEL = 1`; a spec's own `level` wins.
+- **A mid-range body.**
+  - `kit_mid` builds the same car at level 0, painted and lens-tagged the same.
+  - **`mesh.transfer_normals`** (`MeshBuilder::transferNormals`) gives each vertex the normal of the smooth body's
+    best-matching vertex. "Best" means within the radius, nearest, and facing most nearly the same way, so each side
+    of a crease finds its own side.
+  - The slot returns it as `mid` with `mid_from = 50`, matching the near swap's 50 m. It's the whole car: shell, dark
+    glass, wheels.
+- **The city draws it** (`CityRenderSystem`, `carMidGroups_`).
+  - Each variant with a `mid` gets a second instance group, its `minDistance` set to `mid_from`.
+  - The near body, its glass and its cabin get that number as their `drawDistance`.
+  - `copyMidBodies` copies the near group's poses, ids and lamp masks after the bake (the mask is written last).
+- **The fleet gallery** (`fleet_v2_gallery.lua`) takes `opts.levels` to show several levels in rows: the
+  side-by-side Glenn chose from.
+- **The off-roader gets steel bumpers and tow hooks** (its recipe's comment already named the hooks).
+  - The lamp boxes had stood 3-4 cm proud at each end, and the drivable hull is sized from the body's bounds, cut to
+    the approach angle. The shorter real nose (4.574 m against 4.660) let the 0.5 m ledge, taller than the 0.48 m
+    wheel, catch the bodywork: `offroader_drives_the_course...` stuck in lane +12.
+  - The bumpers make the nose meet the ledge's edge first, the way a trail truck's does. All four lanes pass again.
+
+**Proof.**
+- **Triangles per car:**
+  - near (smooth): 9-17k, avg 12.3k in wheel_lab, against 4.1k faceted;
+  - mid-range: 4.2-6.8k.
+- **Tests:**
+  - `mesh_transfer_normals_shades_a_cage_like_its_smooth_body`: a flat sphere ends with every normal radial, its
+    positions unmoved;
+  - `every_smooth_fleet_car_carries_a_cheaper_mid_range_body`: every kit car has one, under two thirds of the near
+    triangles, no bigger than the near car;
+  - `every_fleet_body_carries_its_own_lit_lenses` passes on the patched lenses.
+- **Shots:** faceted vs smooth with creases in the fleet gallery (`~/Pictures/Raytracer/2026-11-06_fleet_faceted_vs_smooth_*`),
+  and a wheel-lab A/B with the mid body forced near (all but identical at 8 m).
+
+**Owed.**
+- The island's frame-time cost, measured at a busy street.
+- Lighter lenses at mid range: they cost the same at both levels, so the mid body saves a third, not two thirds.
+- The far band's stand-ins from each car's own body (the car plan's step 2).
+- Some headlights' outer edge is ragged where it runs off the side of the nose.

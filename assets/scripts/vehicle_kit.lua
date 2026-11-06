@@ -75,7 +75,7 @@ function kit.body(P)
     assert(#sections[i] == n, "section " .. i .. " has " .. #sections[i] .. " points, not " .. n)
   end
   local B = poly.loft{ sections = sections, stations = stations, cap_start = true, cap_end = true,
-                       cap_crease = P.cap_crease or 0.3 }
+                       cap_crease = P.cap_crease or 1.4 }
 
   -- face index of the quad from ring k (1-based) point i (1-based): (k-1)*n + (i-1), 0-based
   local function face(k, i) return (k - 1) * n + (i - 1) end
@@ -162,6 +162,20 @@ function kit.body(P)
   local under = faces("bottom", function() return true end, true)
   B:assign(under, { mat = "trim", group = "underbody" })
 
+  -- CHARACTER LINES (Glenn, 2026-11-06: "Let's try smoother bodies"): the edges a subdivided body must keep or it
+  -- reads as a bar of soap -- the shoulder and the sill (the flank's two long edges), the hood's and the deck's
+  -- edges (the roof run ahead of the cowl and behind the deck), the arches (the underbody's outline). A faceted body
+  -- (level 0) never subdivides, so these change nothing there. P.lines = { flank, panel, arch } sharpness, or false.
+  if P.lines ~= false then
+    local ln = P.lines or {}
+    local all = function() return true end
+    B:crease_border(faces("side_r", all), ln.flank or 1.6)
+    B:crease_border(faces("side_l", all), ln.flank or 1.6)
+    local panel = faces("roof", function(zm) return zm > G.cowl or zm < G.deck end)
+    if #panel > 0 then B:crease_border(panel, ln.panel or 1.2) end
+    B:crease_border(under, ln.arch or 2.5)
+  end
+
   -- the recipe's own operations (a convertible's cockpit, a pickup's bed, a van's rear door)
   if P.post then P.post(B, { faces = faces, P = P }) end
   return B, { n = n, stations = stations }
@@ -182,7 +196,7 @@ function kit.profile(o)
   local L, W, H = o.L, o.W, o.H
   local half = L * 0.5
   local r = o.r
-  local P = { name = o.name, post = o.post, extras = o.extras, color = o.color, cap_crease = o.cap_crease,
+  local P = { name = o.name, lines = o.lines, post = o.post, extras = o.extras, color = o.color, cap_crease = o.cap_crease,
               windows = o.windows, lens = o.lens, lamps = o.lamps, grille = o.grille, grille_margin = o.grille_margin,
               rear_window = o.rear_window, level = o.level, grille_w = o.grille_w, open_top = o.open_top,
               cabin_back = o.cabin_back, rear_seat = o.rear_seat, truck_seating = o.truck_seating, cargo = o.cargo,
@@ -280,48 +294,91 @@ local function tub(B, ctx, z0, z1, depth, mat)
 end
 kit.tub = tub
 
--- LAMP LENSES: separate rounded parts set onto the nose and tail at the profile's lamp bands (a lens
--- reads as an object; carving it out of the body's faces gave a fang). P.lamps = false for none.
-function kit.lamps(P, car, S)
-  if P.lamps == false then return end
-  local half = P.length * 0.5
-  local function surfaceZ(x, front)   -- the nose / tail face where the body is at least |x| wide
-    local z = front and half or -half
-    local dz = front and -0.01 or 0.01
-    for _ = 1, 120 do
-      if P.half_width(z) * 0.97 >= math.abs(x) then return z end
-      z = z + dz
-    end
-    return z
+-- A PANEL SHAPED TO THE FINISHED BODY (Glenn, 2026-11-06: "can they actually be integrated into the model ... on the
+-- actual surface of the car"): a lens, a grille, a badge. Its outline (a rounded rectangle `size` {w, h}, corners
+-- `r`; r = h/2 a pill, r = min/2 round) is laid on a plane at rule.from square to rule.dir and cast onto S point by
+-- point, so it follows the surface wherever it lands -- `proud` (m) off it, its middle domed `dome` more, its edge
+-- sunk `sink` into the body (no gap shows at a grazing view, and it can never float off or bury itself, which the
+-- placed boxes did). Returns the part and the hit at its centre (the lamp marker), or nil when the centre misses.
+function kit.patch(S, rule)
+  local d = rule.dir
+  local dl = math.sqrt(d[1] ^ 2 + d[2] ^ 2 + d[3] ^ 2)
+  d = { d[1] / dl, d[2] / dl, d[3] / dl }
+  local out = { -d[1], -d[2], -d[3] }
+  local upw = math.abs(out[2]) > 0.9 and { 0, 0, 1 } or { 0, 1, 0 }
+  local function cross(a, b) return { a[2] * b[3] - a[3] * b[2], a[3] * b[1] - a[1] * b[3], a[1] * b[2] - a[2] * b[1] } end
+  local function unit(a) local l = math.sqrt(a[1] ^ 2 + a[2] ^ 2 + a[3] ^ 2); return { a[1] / l, a[2] / l, a[3] / l } end
+  local right = unit(cross(upw, out))             -- right x up = out: the loft's faces come out facing out
+  local up = cross(out, right)
+  local o = rule.from
+  local hit0 = S:raycast(o, d)
+  if not hit0 then return nil end
+  local t0 = (hit0[1] - o[1]) * d[1] + (hit0[2] - o[2]) * d[2] + (hit0[3] - o[3]) * d[3]
+  local w, h = rule.size[1] * 0.5, rule.size[2] * 0.5
+  local r = math.min(rule.r or 0.02, w * 0.999, h * 0.999)
+  -- the outline evenly spaced, then rings shrinking toward the middle: the patch has points inside its outline to
+  -- follow a curved surface (an outline and one cap spanned a lamp wrapping over the nose's edge with a flat
+  -- polygon, which cut into the body)
+  local ring = poly.resample(poly.section({ { -w, -h }, { w, -h }, { w, h }, { -w, h } }, r, rule.segs or 3),
+                             rule.points or 24)
+  local SCALE = { 1, 1, 0.72, 0.45, 0.18 }
+  local secs = {}
+  for k, s in ipairs(SCALE) do
+    local q = {}
+    for i, p in ipairs(ring) do q[i] = { p[1] * s, p[2] * s } end
+    secs[k] = q
   end
-  -- THE GRILLE: a separate panel on the flat nose cap, sized from the grille band and the nose, with
-  -- horizontal bars (a recess into the cap traced the cap's merged rim and sawed its edge)
+  local L = poly.loft{ sections = secs, stations = { 0, 1, 2, 3, 4 }, cap_start = false, cap_end = true, cap_crease = 0 }
+  L:assign(L:select{}, { mat = rule.mat or "lamp" })
+  local proud, dome, sink = rule.proud or 0.003, rule.dome or 0.004, rule.sink or 0.012
+  L:map(function(x, y, z)
+    local ro = { o[1] + right[1] * x + up[1] * y, o[2] + right[2] * x + up[2] * y, o[3] + right[3] * x + up[3] * y }
+    local p = S:raycast(ro, d)
+    if not p then   -- past the body's edge: on the plane through the centre's hit
+      p = { ro[1] + d[1] * t0, ro[2] + d[2] * t0, ro[3] + d[3] * t0 }
+    end
+    -- out along the cast (one direction for the whole patch: each hit's own face normal tore the outline apart where
+    -- a lamp wraps over an edge); the ring k's share of the dome by its scale
+    local s = SCALE[math.floor(z + 0.5) + 1]
+    local off = z < 0.5 and -sink or proud + dome * (1 - s * s)
+    return p[1] + out[1] * off, p[2] + out[2] * off, p[3] + out[3] * off
+  end)
+  return L, hit0
+end
+
+-- LAMP LENSES AND THE GRILLE, shaped to the finished body (kit.patch). P.lamps = false for none.
+function kit.lamps(P, car, S)
+  if P.lamps == false or not S then return end
+  local half = P.length * 0.5
+  car.markers = car.markers or {}
+  local lens = P.lens or {}
+  -- THE GRILLE: a dark panel on the nose within the grille band, a chrome bar across it every 6 cm
   if P.grille ~= false then
     local gy = P.grille_y
     local gw = (P.grille_w or 0.62) * P.half_width(half)
     local gh = gy[2] - gy[1]
     local cy = 0.5 * (gy[1] + gy[2])
-    car.polys[#car.polys + 1] = kit.box_part({ gw * 2, gh, 0.04 }, { 0, cy, half - 0.005 }, 2.5, "grille")
-    local bars = math.max(2, math.floor(gh / 0.06))
-    for i = 1, bars do
-      local y = gy[1] + gh * (i - 0.5) / bars
-      car.polys[#car.polys + 1] = kit.box_part({ gw * 2 - 0.04, 0.012, 0.03 }, { 0, y, half + 0.012 }, 2.5, "chrome")
+    local g = kit.patch(S, { from = { 0, cy, half + 1.0 }, dir = { 0, 0, -1 }, size = { gw * 2, gh }, r = 0.02,
+                             proud = 0.002, dome = 0, mat = "grille" })
+    if g then
+      car.polys[#car.polys + 1] = g
+      local bars = math.max(2, math.floor(gh / 0.06))
+      for i = 1, bars - 1 do
+        local y = gy[1] + gh * i / bars
+        local b = kit.patch(S, { from = { 0, y, half + 1.0 }, dir = { 0, 0, -1 }, size = { gw * 2 - 0.05, 0.012 },
+                                 r = 0.005, segs = 1, proud = 0.006, dome = 0, sink = 0.004, mat = "chrome" })
+        if b then car.polys[#car.polys + 1] = b end
+      end
     end
   end
-  -- LAMP LENSES, by the placement grammar (kit.attach): each is cast onto the FINISHED body and set into
-  -- the surface it meets, facing along that surface's normal -- never buried in, or floating off, a body
-  -- whose real shape differs from the profile's guess
-  if not S then return end
-  car.markers = car.markers or {}
-  local lens = P.lens or {}
   local hy, ty = P.lamp_y, P.tail_y
   local hx = (lens.head_x or 0.70) * P.half_width(half - 0.25)
   local hwid, hhei = lens.head_w or 0.34, math.min(hy[2] - hy[1], 0.14)
   -- SIDE NAMES ARE PHYSICAL (car_mesh.cpp): forward +Z, up +Y, the driver's LEFT is +X. These were swapped (+X
   -- tagged "_r"), so every kit body blinked the opposite indicator (Glenn, 2026-10-20: "It uses the opposite light").
   for _, sx in ipairs({ 1, -1 }) do
-    local part, at = kit.attach(S, { from = { sx * hx, hy[2] - hhei * 0.5, half + 1.0 }, dir = { 0, 0, -1 },
-                                     size = { hwid, hhei, 0.045 }, embed = 0.012, mat = "lamp" })
+    local part, at = kit.patch(S, { from = { sx * hx, hy[2] - hhei * 0.5, half + 1.0 }, dir = { 0, 0, -1 },
+                                    size = { hwid, hhei }, r = lens.head_r or hhei * 0.35, mat = "lamp" })
     if part then
       car.polys[#car.polys + 1] = part
       car.markers[#car.markers + 1] = { name = sx > 0 and "headlight_l" or "headlight_r", pos = at }
@@ -331,8 +388,8 @@ function kit.lamps(P, car, S)
     local tx = (lens.tail_x or 0.72) * P.half_width(-half + 0.25)
     local twid, thei = lens.tail_w or 0.36, math.min(ty[2] - ty[1], 0.14)
     for _, sx in ipairs({ 1, -1 }) do
-      local part, at = kit.attach(S, { from = { sx * tx, ty[2] - thei * 0.5, -half - 1.0 }, dir = { 0, 0, 1 },
-                                       size = { twid, thei, 0.045 }, embed = 0.012, mat = "lamp_red" })
+      local part, at = kit.patch(S, { from = { sx * tx, ty[2] - thei * 0.5, -half - 1.0 }, dir = { 0, 0, 1 },
+                                      size = { twid, thei }, r = lens.tail_r or thei * 0.25, mat = "lamp_red" })
       if part then
         car.polys[#car.polys + 1] = part
         car.markers[#car.markers + 1] = { name = sx > 0 and "taillight_l" or "taillight_r", pos = at }
@@ -520,6 +577,14 @@ S.offroad = function() return kit.profile{
     end
     -- a skid plate and tow hooks at the nose
     car.polys[#car.polys + 1] = kit.box_part({ 1.2, 0.05, 0.8 }, { 0, 0.40, 1.8 }, 3, "chassis")
+    -- STEEL BUMPERS standing proud of the body at each end, as a trail truck's do: the nose's is what meets a ledge's
+    -- edge first and rides the front up it (the collision hull is cut to the approach angle from the car's own length;
+    -- without them a 0.5 m step, taller than the wheel, caught the bodywork -- the lamp boxes had been doing it)
+    car.polys[#car.polys + 1] = kit.box_part({ 1.86, 0.16, 0.12 }, { 0, 0.74, 4.60 * 0.5 + 0.05 }, 3, "chassis")
+    car.polys[#car.polys + 1] = kit.box_part({ 1.80, 0.14, 0.10 }, { 0, 0.76, -(4.60 * 0.5) - 0.04 }, 3, "chassis")
+    for _, sx in ipairs({ 1, -1 }) do   -- the tow hooks
+      car.polys[#car.polys + 1] = kit.box_part({ 0.05, 0.08, 0.10 }, { sx * 0.55, 0.64, 4.60 * 0.5 + 0.10 }, 3, "chrome")
+    end
   end } end
 
 S.convertible = function() return kit.profile{
