@@ -15,13 +15,15 @@ local MATS = {
 }
 
 -- every piece in the kit, in the kit's order, nine to a row (the port's A/B: #191, the recipes in Lua)
+-- opts.pieces: only these, opts.per_row to a row (the furniture lab: a few pieces in every fabric)
 local ROWS, row = {}, nil
-for i, name in ipairs(furniture.pieces()) do
-  if (i - 1) % 9 == 0 then row = {}; ROWS[#ROWS + 1] = row end
+local perRow = opts.per_row or 9
+for i, name in ipairs(opts.pieces or furniture.pieces()) do
+  if (i - 1) % perRow == 0 then row = {}; ROWS[#ROWS + 1] = row end
   row[#row + 1] = name
 end
 -- variant: bits 0-2 fabric, 3-4 wood, 5+ style
-local VARIANTS = { 0 + 0 * 8, 1 + 1 * 8 + 32, 3 + 2 * 8 + 64 }
+local VARIANTS = opts.variants or { 0 + 0 * 8, 1 + 1 * 8 + 32, 3 + 2 * 8 + 64 }
 
 local z, maxX = 0, 0
 for _, row in ipairs(ROWS) do
@@ -41,7 +43,7 @@ for _, row in ipairs(ROWS) do
     x = x + 0.8
   end
   maxX = math.max(maxX, x)
-  z = z + depth + 2.2
+  z = z + depth + (opts.row_gap or 2.2)
 end
 -- the showroom floor
 m:add(scope{ origin = {-2, -0.05, -2}, size = {maxX + 4, 0.05, z + 2} }:box{ 0.80, 0.74, 0.66 }, MATS.floor)

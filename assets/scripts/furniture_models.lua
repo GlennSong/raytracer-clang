@@ -92,6 +92,145 @@ local function maker()
       k.rod("metal", V(hx - 0.09, hy, hz), V(hx + 0.09, hy, hz), 0.007, handle, 8)
     end
   end
+  -- A TAPERED POST from a (its foot) to b: a rounded square `w` wide at b, `wFoot` at a (a chair's or table's leg,
+  -- splayed when a and b do not stand over each other).
+  function k.post(part, a, b, w, wFoot, col)
+    local up = math.abs(b[2] - a[2]) > 0.5 * math.abs(b[1] - a[1]) + 0.5 * math.abs(b[3] - a[3]) and { 0, 0, 1 } or { 0, 1, 0 }
+    put(part, mesh.sweep(mesh.profile.rounded_rect(w, w, w * 0.18, 2), mesh.path.line(a, b),
+                         { scale = { wFoot / w, 1 }, up = up, color = col }))
+  end
+  -- A BENT MEMBER along a smooth curve THROUGH `pts` (a chair's back leg running on up into its back post; a bowed
+  -- rail): a rounded rectangle w (across) x h (along `up`), scaled along the curve by `scale` (k, {from, to} or fn(t)).
+  function k.bent(part, pts, w, h, col, o)
+    o = o or {}
+    put(part, mesh.sweep(mesh.profile.rounded_rect(w, h, math.min(w, h) * 0.25, 2), mesh.path.spline(pts, { count = o.count or 12 }),
+                         { scale = o.scale, up = o.up or { 0, 1, 0 }, color = col }))
+  end
+  -- A TURNED LEG standing at `foot`, h tall: r at the top tapering to rFoot (a sofa's, a bed's).
+  function k.turned_leg(part, foot, h, r, rFoot, col)
+    k.turned(part, foot, { { 0.0, 0.0 }, { rFoot, 0.0 }, { r, h }, { 0.0, h } }, col, 1, 12)
+  end
+  -- THE CAGE: rounded rectangles in plan, ring by ring up y, skinned (poly.loft) and subdivided -- a cushion, a tub,
+  -- a bowl. A ring is {w, d, r, y, dx, dz} (dx, dz its centre's offset); rings may run up the outside and back down
+  -- the inside (a basin). o: level (subdivision steps, 1), segs (each plan corner's steps, 2), seams = {{y, sharpness}}
+  -- (a piped seam, a crisp rim: 1 soft, 3 crisp), cap_start / cap_end (true), shape = fn(x, y, z) -> x, y, z (every
+  -- point moved after subdividing), tilt (radians about +x through c), smooth (the autosmooth angle, 50).
+  function k.cage(part, c, rings, col, o)
+    o = o or {}
+    local secs, st = {}, {}
+    for i, g in ipairs(rings) do
+      local hx, hz, dx, dz = g[1] * 0.5, g[2] * 0.5, g[5] or 0, g[6] or 0
+      -- the loft runs up its own z: a ring's plan z is the section's -y (a proper turn, so the faces stay outward)
+      secs[i] = poly.section({ { dx - hx, -dz - hz }, { dx + hx, -dz - hz }, { dx + hx, -dz + hz }, { dx - hx, -dz + hz } },
+                             g[3], o.segs or 2)
+      st[i] = g[4]
+    end
+    local P = poly.loft{ sections = secs, stations = st, cap_start = o.cap_start ~= false, cap_end = o.cap_end ~= false,
+                         cap_crease = 0 }
+    P:assign(P:select{}, { mat = part, color = col })
+    for _, s in ipairs(o.seams or {}) do P:crease_ring(s[1], s[2]) end
+    local S = (o.level or 1) > 0 and P:subdivide(o.level or 1) or P
+    local shape = o.shape
+    S:map(function(x, y, z)
+      if shape then return shape(x, z, -y) end
+      return x, z, -y
+    end)
+    local m = S:to_parts{ autosmooth = o.smooth or 50, uv_scale = 0.5 }[part]
+    if o.tilt then m = mesh.rotate_x(m, o.tilt) end
+    put(part, mesh.translate(m, c))
+  end
+  -- A CUSHION centred at c: a top and a bottom panel sewn to a band round the sides, the seams piped. size {x, y, z};
+  -- the panels face +-y, or +-z with face = "z" (a back cushion, a headboard). o: r (plan corner), roll (how far in
+  -- the panel's edge rolls over), crown (the top panel's rise at its middle; crown_under the bottom's), belly (the
+  -- sides bowing out), pinch (0..1, the edges squeezed thin: a pillow), bow (the whole cushion curved, its sides
+  -- toward +y / +z: an office chair's back wrapping round), piping (the seams' sharpness, 0 none), warp = fn(u, v, w)
+  -- -> dx, dy, dz in metres (u, v, w the point's place, -1..1, across, through the panels, along), tilt, level, segs.
+  function k.cushion(part, c, size, col, o)
+    o = o or {}
+    local up = o.face == "z"
+    local sx, sy, sz = size[1], up and size[3] or size[2], up and size[2] or size[3]
+    local hx, hy, hz = sx * 0.5, sy * 0.5, sz * 0.5
+    local roll = math.min(o.roll or hy * 0.7, hx * 0.45, hz * 0.45)
+    local r = math.min(o.r or 0.05, hx * 0.95, hz * 0.95)
+    local ri = math.max(r - roll, math.min(r, 0.012))
+    local seam = hy - math.min(roll, hy) * 0.45
+    local crown, under, belly, pinch, bow = o.crown or 0, o.crown_under or (o.crown or 0) * 0.3, o.belly or 0,
+                                            o.pinch or 0, o.bow or 0
+    local warp = o.warp
+    local piping = o.piping or 0
+    k.cage(part, c, { { sx - 2 * roll, sz - 2 * roll, ri, -hy }, { sx, sz, r, -seam }, { sx, sz, r, seam },
+                      { sx - 2 * roll, sz - 2 * roll, ri, hy } }, col, {
+      level = o.level or 1, segs = o.segs or 2, tilt = o.tilt,
+      seams = piping > 0 and { { -seam, piping }, { seam, piping } } or nil,
+      shape = function(x, y, z)
+        local u, v, w = x / hx, y / hy, z / hz
+        local flat = math.max(0, 1 - u * u) * math.max(0, 1 - w * w)
+        y = y + (v > 0 and crown or under) * v * flat
+        local side = math.max(0, 1 - v * v)
+        x, z = x + belly * u * side, z + belly * w * side
+        if pinch > 0 then y = y * (1 - pinch * math.max(u * u, w * w) ^ 2) end
+        y = y + bow * u * u
+        if warp then
+          local dx, dy, dz = warp(u, v, w)
+          x, y, z = x + dx, y + dy, z + dz
+        end
+        if up then return x, -z, y end
+        return x, y, z
+      end })
+  end
+  -- A CLOTH LAID OVER A SUPPORT (a duvet, a turned-down sheet, a bedspread): a slab o.t thick, its middle at height
+  -- o.top, lying flat over |x| <= o.hw from o.z0 to o.zfoot (or o.z1 with no foot fold), folding down over those
+  -- edges round radius o.rho and hanging o.hang below the fold, the hanging hem waved o.wave.
+  function k.drape(part, col, o)
+    local t, rho, hw, top = o.t, o.rho, o.hw, o.top
+    local arc = rho * PI * 0.5
+    local dmax = arc + o.hang
+    local function ticks(a, b, coarse, folds)
+      local raw = {}
+      for i = 0, math.ceil((b - a) / coarse) do raw[#raw + 1] = math.min(a + i * coarse, b) end
+      for _, f in ipairs(folds) do
+        for i = 0, 7 do raw[#raw + 1] = f[1] + (f[2] - f[1]) * i / 7 end
+      end
+      table.sort(raw)
+      local out = {}
+      for _, x in ipairs(raw) do
+        if x >= a - 1e-9 and x <= b + 1e-9 and (#out == 0 or x - out[#out] > 0.01) then out[#out + 1] = x end
+      end
+      if b - out[#out] > 1e-6 then out[#out] = b end
+      return out
+    end
+    local X = hw + dmax
+    local xs = ticks(-X, X, 0.12, { { -hw - arc - 0.03, -hw + 0.02 }, { hw - 0.02, hw + arc + 0.03 } })
+    local z1 = o.zfoot and (o.zfoot + dmax) or o.z1
+    local zs = ticks(o.z0, z1, 0.15, o.zfoot and { { o.zfoot - 0.02, o.zfoot + arc + 0.03 } } or {})
+    local ring = {}
+    for i = #xs, 1, -1 do ring[#ring + 1] = { xs[i], t * 0.5 } end
+    for i = 1, #xs do ring[#ring + 1] = { xs[i], -t * 0.5 } end
+    local secs = {}
+    for i = 1, #zs do secs[i] = ring end
+    local P = poly.loft{ sections = secs, stations = zs, cap_start = true, cap_end = true, cap_crease = 3 }
+    P:assign(P:select{}, { mat = part, color = col })
+    local wave = o.wave or 0
+    P:map(function(x, yl, z)
+      local ex = math.max(0, math.abs(x) - hw)
+      local ez = o.zfoot and math.max(0, z - o.zfoot) or 0
+      local d = math.sqrt(ex * ex + ez * ez)
+      if d < 1e-9 then return x, top + yl, z end
+      local dx, dz = (x < 0 and -ex or ex) / d, ez / d
+      local bx, bz = ex > 0 and (x < 0 and -hw or hw) or x, ez > 0 and o.zfoot or z
+      local h, y
+      if d <= arc then
+        local a = d / rho
+        h, y = (rho + yl) * math.sin(a), top - rho + (rho + yl) * math.cos(a)
+      else
+        h, y = rho + yl, top - rho - (d - arc)
+      end
+      local s = math.min(1, math.max(0, (d - arc) / math.max(o.hang, 1e-6)))
+      h = h + wave * s * (math.abs(dx) * math.sin(z * 11.0) + dz * math.sin(x * 11.0 + 1.3))
+      return bx + dx * h, y, bz + dz * h
+    end)
+    put(part, P:to_parts{ autosmooth = 60, uv_scale = 0.5 }[part])
+  end
   -- THE PIECE: each finish's parts merged into one mesh
   function k.done()
     local parts = {}
@@ -129,7 +268,8 @@ M.desk = function(v)
 end
 
 M.office_chair = function(v)
-  -- Five-star base on casters, a gas lift, a moulded seat and a reclined mesh back, armrests.
+  -- Five-star base on casters, a gas lift, a contoured seat with a waterfall front, a back that wraps round with a
+  -- lumbar swell, armrest pads.
   local k, fabric = maker(), fabricOf(v)
   k.size = V(0.66, 1.05, 0.66)
   k.solid = false
@@ -137,17 +277,29 @@ M.office_chair = function(v)
   for i = 0, 4 do
     local a = 2 * PI * i / 5 + 0.3
     local tip = c + V(0.30 * math.cos(a), 0.07, 0.30 * math.sin(a))
-    k.rod("metal", c + V(0, 0.10, 0), tip, 0.018, BLACK, 8)
+    k.bent("hard", { c + V(0, 0.10, 0), c + V(0.16 * math.cos(a), 0.095, 0.16 * math.sin(a)), tip }, 0.03, 0.026, BLACK,
+           { count = 6, scale = { 1.2, 0.8 } })                                       -- the star's arm
     k.turned("hard", tip - V(0, 0.07, 0), { { 0.0, 0.0 }, { 0.028, 0.008 }, { 0.032, 0.03 }, { 0.028, 0.055 }, { 0.0, 0.065 } },
              BLACK, 1, 10)   -- caster
   end
   k.turned("metal", c, { { 0.04, 0.08 }, { 0.04, 0.14 }, { 0.024, 0.15 }, { 0.024, 0.42 }, { 0.03, 0.44 } }, CHROME, 1, 16)
-  k.box("fabric", c + V(0, 0.48, 0.02), V(0.50, 0.08, 0.48), 0.035, fabric * 0.75)
-  k.tilted("fabric", c + V(0, 0.80, -0.22), V(0.46, 0.52, 0.06), 0.028, -0.18, fabric * 0.75)
-  k.rod("metal", c + V(0, 0.46, -0.20), c + V(0, 0.62, -0.25), 0.015, BLACK, 8)
+  k.box("hard", c + V(0, 0.445, 0.0), V(0.30, 0.03, 0.30), 0.01, BLACK, 1)          -- the seat's mechanism
+  k.cushion("fabric", c + V(0, 0.49, 0.02), V(0.50, 0.08, 0.48), fabric * 0.75,
+            { r = 0.08, roll = 0.03, crown = 0.012,
+              warp = function(u, v, w)                                                -- dished, the front rolled down
+                return 0, -0.012 * math.max(0, 1 - u * u) * math.max(0, 1 - w * w) * (v > 0 and 1 or 0)
+                          - 0.03 * math.max(0, w - 0.55) / 0.45 * (v + 1) * 0.5, 0
+              end })
+  k.cushion("fabric", c + V(0, 0.80, -0.21), V(0.46, 0.54, 0.07), fabric * 0.75,
+            { face = "z", r = 0.09, roll = 0.025, crown = 0.01, bow = 0.045, tilt = -0.18,
+              warp = function(u, v, w)                                                -- the lumbar swell low down
+                return 0, 0.02 * math.exp(-((w - 0.45) / 0.3) ^ 2), 0
+              end })
+  k.bent("hard", { c + V(0, 0.445, -0.10), c + V(0, 0.47, -0.22), c + V(0, 0.62, -0.25) }, 0.05, 0.016, BLACK,
+         { count = 8 })                                                              -- the back's spine
   for _, x in ipairs({ -0.27, 0.27 }) do
-    k.rod("metal", c + V(x, 0.46, 0.0), c + V(x, 0.64, 0.0), 0.012, BLACK, 8)
-    k.box("hard", c + V(x, 0.655, 0.02), V(0.07, 0.03, 0.24), 0.012, BLACK)
+    k.bent("hard", { c + V(x * 0.7, 0.45, 0.0), c + V(x, 0.50, 0.0), c + V(x, 0.64, 0.0) }, 0.03, 0.02, BLACK, { count = 8 })
+    k.cushion("hard", c + V(x, 0.655, 0.02), V(0.075, 0.03, 0.25), BLACK, { r = 0.03, roll = 0.012, crown = 0.004 })
   end
   return k.done()
 end
@@ -177,25 +329,44 @@ M.filing_cabinet = function(v)
   return k.done()
 end
 
+local function makeBed(k, w, top, z0, zf, duvetFrom, fabric, pillows, pz)
+  local mh = 0.22
+  k.cushion("fabric", V(0, top - mh * 0.5, (z0 + zf) * 0.5), V(w, mh, zf - z0), LINEN,
+            { r = 0.06, roll = 0.03, crown = 0.008, piping = 2.5 })                       -- the sheeted mattress
+  local t, rho = 0.045, 0.05
+  local hw = w * 0.5 - rho + t * 0.5 + 0.006
+  k.drape("fabric", fabric, { t = t, rho = rho, hw = hw, top = top + t * 0.5 + 0.004, z0 = duvetFrom,
+                              zfoot = zf - rho + t * 0.5 + 0.006, hang = 0.17, wave = 0.008 })   -- the duvet
+  local ts, rs = 0.022, rho + t + 0.01
+  k.drape("fabric", LINEN * 1.03, { t = ts, rho = rs, hw = hw - t * 0.5 - 0.006 + ts * 0.5,
+                                    top = top + t + 0.004 + ts * 0.5 + 0.003, z0 = duvetFrom - 0.004, z1 = duvetFrom + 0.26,
+                                    hang = 0.08 })                                      -- the turned-down sheet
+  for _, x in ipairs(pillows) do
+    k.cushion("fabric", V(x, top + 0.075, pz), V(w > 1.2 and 0.66 or 0.62, 0.15, 0.40), LINEN * 1.02,
+              { r = 0.07, roll = 0.04, crown = 0.02, pinch = 0.55, belly = 0.01, tilt = 0.22 })
+  end
+end
+
 M.bed = function(v)
-  -- A made double: a timber frame on legs, an upholstered headboard, the mattress, a turned-back duvet, two pillows.
+  -- A made double: a timber frame on legs, an upholstered headboard (plain, or channel-tufted by the style), the
+  -- mattress, the duvet draped over it, the turned-back sheet, two pillows (Glenn: "the beds don't have sheets on
+  -- them").
   local k, wood, fabric = maker(), woodOf(v), fabricOf(v)
   k.size = V(1.66, 1.05, 2.12)
   k.box("wood", V(0, 0.22, 1.06), V(1.66, 0.14, 2.10), 0.012, wood, 1)
   for _, x in ipairs({ -0.76, 0.76 }) do
-    for _, z in ipairs({ 0.08, 2.02 }) do k.leg("wood", V(x, 0, z), 0.16, 0.06, wood * 0.9) end
+    for _, z in ipairs({ 0.08, 2.02 }) do k.turned_leg("wood", V(x, 0, z), 0.16, 0.03, 0.02, wood * 0.9) end
   end
-  k.box("fabric", V(0, 0.60, 0.05), V(1.66, 0.96, 0.10), 0.04, fabric * 0.8)
-  -- MADE (Glenn: "the beds don't have sheets on them"): the fitted sheet over the mattress, the duvet lying ON it and
-  -- hanging down both sides and the foot, the top sheet turned back over the duvet's head, two pillows.
-  k.box("fabric", V(0, 0.40, 1.08), V(1.56, 0.22, 2.0), 0.06, LINEN)                  -- sheeted mattress
-  k.box("fabric", V(0, 0.545, 1.37), V(1.70, 0.07, 1.48), 0.03, fabric)               -- duvet, on top
-  for _, x in ipairs({ -0.85, 0.85 }) do
-    k.box("fabric", V(x, 0.43, 1.37), V(0.035, 0.30, 1.48), 0.015, fabric * 0.94)     -- hanging sides
+  if styleOf(v) % 2 == 1 then
+    for i = 0, 5 do
+      k.cushion("fabric", V(-0.83 + 0.1383 + i * 0.2767, 0.60, 0.05), V(0.2767, 0.96, 0.10), fabric * 0.8,
+                { face = "z", r = 0.03, roll = 0.03, crown = 0.02, segs = 1 })              -- channels
+    end
+  else
+    k.cushion("fabric", V(0, 0.60, 0.05), V(1.66, 0.96, 0.10), fabric * 0.8,
+              { face = "z", r = 0.05, roll = 0.04, crown = 0.012, piping = 1.5 })
   end
-  k.box("fabric", V(0, 0.43, 2.105), V(1.70, 0.30, 0.035), 0.015, fabric * 0.94)     -- and foot
-  k.box("fabric", V(0, 0.59, 0.72), V(1.70, 0.05, 0.26), 0.024, LINEN * 1.03)        -- turned-down sheet
-  for _, x in ipairs({ -0.38, 0.38 }) do k.box("fabric", V(x, 0.59, 0.33), V(0.66, 0.14, 0.40), 0.06, LINEN * 1.02) end
+  makeBed(k, 1.56, 0.51, 0.08, 2.06, 0.64, fabric, { -0.38, 0.38 }, 0.33)
   return k.done()
 end
 
@@ -225,19 +396,25 @@ M.wardrobe = function(v)
 end
 
 M.sofa = function(v)
-  -- Three seat cushions, three reclined back cushions, two rolled arms, a base on short legs.
+  -- Three seat cushions and three back cushions, crowned and piped, on an upholstered base with rolled arms and a
+  -- back, on turned legs (#191: soft shapes from the cushion cage).
   local k, wood, fabric = maker(), woodOf(v), fabricOf(v)
   k.size = V(2.16, 0.86, 0.94)
-  k.box("fabric", V(0, 0.24, 0.48), V(2.0, 0.22, 0.86), 0.03, fabric * 0.9)
-  for _, x in ipairs({ -1.0, 1.0 }) do k.box("fabric", V(x, 0.36, 0.47), V(0.18, 0.46, 0.92), 0.07, fabric * 0.95) end
+  k.cushion("fabric", V(0, 0.24, 0.48), V(2.0, 0.22, 0.86), fabric * 0.9, { r = 0.04, roll = 0.03, belly = 0.006 })
+  for _, x in ipairs({ -1.0, 1.0 }) do
+    k.cushion("fabric", V(x, 0.37, 0.47), V(0.18, 0.48, 0.92), fabric * 0.95,
+              { r = 0.06, roll = 0.07, crown = 0.015, piping = 1.5, segs = 2 })   -- the rolled arm
+  end
   for i = 0, 2 do
     local x = -0.62 + i * 0.62
-    k.box("fabric", V(x, 0.42, 0.55), V(0.60, 0.15, 0.66), 0.06, fabric)
-    k.tilted("fabric", V(x, 0.68, 0.18), V(0.60, 0.42, 0.18), 0.07, -0.16, fabric * 1.03)
+    k.cushion("fabric", V(x, 0.42, 0.55), V(0.60, 0.15, 0.66), fabric,
+              { r = 0.05, crown = 0.03, belly = 0.01, piping = 2 })
+    k.cushion("fabric", V(x, 0.68, 0.19), V(0.60, 0.42, 0.18), fabric * 1.03,
+              { face = "z", r = 0.06, crown = 0.035, belly = 0.01, piping = 2, tilt = -0.16 })
   end
-  k.box("fabric", V(0, 0.56, 0.08), V(2.0, 0.42, 0.14), 0.03, fabric * 0.9)   -- the back frame
+  k.cushion("fabric", V(0, 0.56, 0.08), V(2.0, 0.42, 0.14), fabric * 0.9, { face = "z", r = 0.04, roll = 0.04, crown = 0.01 })
   for _, x in ipairs({ -0.98, 0.98 }) do
-    for _, z in ipairs({ 0.08, 0.86 }) do k.leg("wood", V(x, 0, z), 0.13, 0.05, wood * 0.8) end
+    for _, z in ipairs({ 0.08, 0.86 }) do k.turned_leg("wood", V(x, 0, z), 0.13, 0.024, 0.015, wood * 0.8) end
   end
   return k.done()
 end
@@ -325,82 +502,153 @@ M.kitchen_wall = function(v)
 end
 
 M.dining_table = function(v)
+  -- A 1.4 x 0.85 top with a softened edge over an apron, on legs tapering to the floor.
   local k, wood = maker(), woodOf(v)
   k.size = V(1.4, 0.76, 0.85)
-  k.box("wood", V(0, 0.74, 0.425), V(1.4, 0.04, 0.85), 0.012, wood, 1)
-  k.box("wood", V(0, 0.68, 0.425), V(1.26, 0.08, 0.72), 0.0, wood * 0.9, 1)   -- the apron
+  k.put("wood", mesh.translate(mesh.extrude(mesh.profile.rounded_rect(1.4, 0.85, 0.03, 3), 0.04,
+                                            { bevel = 0.01, bevel_segs = 2, color = wood }), V(0, 0.72, 0.425)))
+  k.box("wood", V(0, 0.68, 0.425), V(1.26, 0.08, 0.72), 0.004, wood * 0.9, 1)   -- the apron
   for _, x in ipairs({ -0.64, 0.64 }) do
-    for _, z in ipairs({ 0.07, 0.78 }) do k.leg("wood", V(x, 0, z), 0.72, 0.055, wood * 0.95) end
+    for _, z in ipairs({ 0.07, 0.78 }) do k.post("wood", V(x, 0, z), V(x, 0.72, z), 0.058, 0.036, wood * 0.95) end
   end
   return k.done()
 end
 
 M.dining_chair = function(v)
+  -- Tapered front legs; the back legs run on up into the back posts, raked back; a drop-in seat pad on rails; the
+  -- back by the style: two bowed rails, three spindles, or an upholstered pad.
   local k, wood, fabric = maker(), woodOf(v), fabricOf(v)
   k.size = V(0.46, 0.88, 0.50)
   k.solid = false
-  k.box("fabric", V(0, 0.46, 0.27), V(0.44, 0.05, 0.42), 0.02, fabric)
+  local style = styleOf(v) % 3
   for _, x in ipairs({ -0.19, 0.19 }) do
-    k.leg("wood", V(x, 0, 0.45), 0.44, 0.035, wood)
-    k.leg("wood", V(x, 0, 0.06), 0.88, 0.035, wood)
+    k.post("wood", V(x, 0, 0.455), V(x, 0.44, 0.445), 0.036, 0.026, wood)
+    k.bent("wood", { V(x, 0, 0.035), V(x, 0.44, 0.065), V(x, 0.88, 0.02) }, 0.034, 0.036, wood,
+           { up = { 0, 0, 1 }, scale = function(t) return 0.8 + 0.2 * math.sin(t * PI) end })
+    k.rod("wood", V(x, 0.16, 0.07), V(x, 0.16, 0.43), 0.009, wood * 0.95, 8)      -- side stretchers
   end
-  for _, y in ipairs({ 0.62, 0.80 }) do k.box("wood", V(0, y, 0.06), V(0.36, 0.06, 0.02), 0.006, wood, 1) end
+  for _, s in ipairs({ { 0, 0.415, 0.45, 0.38, 0.02 }, { 0, 0.415, 0.065, 0.38, 0.02 } }) do
+    k.box("wood", V(s[1], s[2], s[3]), V(s[4], 0.06, s[5]), 0.004, wood * 0.97, 1)   -- front and back rails
+  end
+  for _, x in ipairs({ -0.19, 0.19 }) do k.box("wood", V(x, 0.415, 0.26), V(0.02, 0.06, 0.37), 0.004, wood * 0.97, 1) end
+  k.cushion("fabric", V(0, 0.465, 0.265), V(0.42, 0.045, 0.40), fabric, { r = 0.04, roll = 0.02, crown = 0.012, piping = 1 })
+  local function postZ(y) return 0.065 - 0.045 * (y - 0.44) / 0.44 end
+  local function rail(y, h)
+    local z = postZ(y)
+    k.bent("wood", { V(-0.19, y, z), V(0, y, z - 0.035), V(0.19, y, z) }, 0.02, h, wood, { count = 10 })
+  end
+  if style == 0 then
+    rail(0.62, 0.05); rail(0.81, 0.07)
+  elseif style == 1 then
+    rail(0.83, 0.07)
+    for _, x in ipairs({ -0.09, 0, 0.09 }) do
+      local zb = postZ(0.47) - 0.035 * (1 - (x / 0.19) ^ 2) + 0.005
+      local zt = postZ(0.80) - 0.035 * (1 - (x / 0.19) ^ 2)
+      k.rod("wood", V(x, 0.47, zb), V(x, 0.80, zt), 0.009, wood, 8)                -- spindles
+    end
+    rail(0.48, 0.03)
+  else
+    k.cushion("fabric", V(0, 0.70, postZ(0.70) + 0.01), V(0.38, 0.30, 0.04), fabric,
+              { face = "z", r = 0.04, roll = 0.015, crown = 0.008, bow = -0.02, piping = 1, tilt = -0.1 })
+  end
   return k.done()
 end
 
 M.bathtub = function(v)
-  -- A built-in tub: four rounded walls round a sunken floor, a chrome mixer at the wall end.
+  -- A built-in tub moulded in one piece: the apron up to a rolled rim, the basin sloping down from it to a flat floor,
+  -- the back end raked for lying in, the chrome mixer at the tap end.
   local k = maker()
   k.size = V(1.70, 0.70, 0.75)   -- to the mixer's top
   local W, D, H, t = 1.70, 0.75, 0.56, 0.07
-  k.box("ceramic", V(0, H * 0.5, t * 0.5), V(W, H, t), 0.02, PORCELAIN)
-  k.box("ceramic", V(0, H * 0.5, D - t * 0.5), V(W, H, t), 0.02, PORCELAIN)
-  k.box("ceramic", V(-W * 0.5 + t * 0.5, H * 0.5, D * 0.5), V(t, H, D - 2 * t + 0.01), 0.02, PORCELAIN)
-  k.box("ceramic", V(W * 0.5 - t * 0.5, H * 0.5, D * 0.5), V(t, H, D - 2 * t + 0.01), 0.02, PORCELAIN)
-  k.box("ceramic", V(0, 0.10, D * 0.5), V(W - 2 * t + 0.01, 0.20, D - 2 * t + 0.01), 0.04, PORCELAIN * 0.97)
-  k.turned("metal", V(-W * 0.5 + 0.12, H, D * 0.5), { { 0.02, 0.0 }, { 0.018, 0.12 }, { 0.0, 0.13 } }, CHROME, 1, 12)
-  k.rod("metal", V(-W * 0.5 + 0.12, H + 0.11, D * 0.5), V(-W * 0.5 + 0.26, H + 0.10, D * 0.5), 0.011, CHROME, 10)
+  local z = D * 0.5
+  k.cage("ceramic", V(0, 0, z), {
+    { W, D, 0.02, 0.0 }, { W, D, 0.02, H - 0.025 }, { W - 0.004, D - 0.004, 0.03, H },
+    { W - 2 * t, D - 2 * t, 0.13, H }, { W - 2 * t - 0.02, D - 2 * t - 0.02, 0.13, H - 0.04, -0.01 },
+    { W - 2 * t - 0.22, D - 2 * t - 0.08, 0.16, 0.25, -0.07 }, { W - 2 * t - 0.42, D - 2 * t - 0.16, 0.14, 0.07, -0.12 },
+  }, PORCELAIN, { level = 1, segs = 3, seams = { { 0.0, 1e6 }, { H - 0.025, 2 }, { H, 1 } } })
+  k.turned("metal", V(-W * 0.5 + 0.12, H, z), { { 0.02, 0.0 }, { 0.018, 0.12 }, { 0.0, 0.13 } }, CHROME, 1, 12)
+  k.bent("metal", { V(-W * 0.5 + 0.12, H + 0.11, z), V(-W * 0.5 + 0.2, H + 0.13, z), V(-W * 0.5 + 0.27, H + 0.08, z) },
+         0.02, 0.02, CHROME, { count = 8 })                                           -- the spout
+  k.turned("metal", V(-W * 0.5 + 0.30, 0.074, z), { { 0.0, 0.0 }, { 0.03, 0.0 }, { 0.03, 0.004 }, { 0.0, 0.005 } },
+           CHROME, 1, 12)                                                             -- the plug
   return k.done()
 end
 
 M.toilet = function(v)
+  -- A close-coupled WC: the pedestal narrowing to its foot and flaring to an egg-shaped bowl, hollow, its rim rolled;
+  -- the seat; a lid down by the style (or none: a public WC's open seat); the cistern with its lid and flush button.
   local k = maker()
   k.size = V(0.40, 0.80, 0.70)
   k.solid = false
-  k.box("ceramic", V(0, 0.60, 0.10), V(0.38, 0.36, 0.17), 0.025, PORCELAIN)   -- cistern
-  k.turned("ceramic", V(0, 0, 0.42), { { 0.12, 0.0 }, { 0.13, 0.05 }, { 0.15, 0.22 }, { 0.18, 0.38 }, { 0.17, 0.40 }, { 0.0, 0.40 } },
-           PORCELAIN, 1.3, 24)                                                 -- pedestal + bowl
-  k.turned("hard", V(0, 0.40, 0.42), { { 0.17, 0.0 }, { 0.175, 0.012 }, { 0.16, 0.025 }, { 0.0, 0.025 } }, WHITE, 1.3, 24)
-  k.box("metal", V(0.12, 0.79, 0.10), V(0.06, 0.01, 0.03), 0.003, CHROME, 1)   -- flush button
+  k.box("ceramic", V(0, 0.59, 0.10), V(0.37, 0.34, 0.16), 0.03, PORCELAIN, 2)        -- cistern
+  k.box("ceramic", V(0, 0.775, 0.10), V(0.385, 0.035, 0.175), 0.012, PORCELAIN, 2)   -- and its lid
+  k.turned("metal", V(0.0, 0.792, 0.10), { { 0.0, 0.0 }, { 0.025, 0.0 }, { 0.024, 0.008 }, { 0.0, 0.009 } }, CHROME, 1, 14)
+  local zb = 0.43
+  k.box("ceramic", V(0, 0.30, 0.20), V(0.20, 0.30, 0.10), 0.03, PORCELAIN, 2)        -- the neck to the cistern
+  k.cage("ceramic", V(0, 0, zb), {
+    { 0.22, 0.30, 0.10, 0.0, 0, -0.03 }, { 0.19, 0.27, 0.09, 0.15, 0, -0.04 }, { 0.33, 0.44, 0.16, 0.31, 0, 0.0 },
+    { 0.36, 0.48, 0.17, 0.385, 0, 0.0 }, { 0.36, 0.48, 0.17, 0.40, 0, 0.0 }, { 0.27, 0.37, 0.13, 0.40, 0, 0.005 },
+    { 0.23, 0.31, 0.11, 0.33, 0, 0.01 }, { 0.10, 0.12, 0.045, 0.20, 0, -0.02 },
+  }, PORCELAIN, { level = 1, segs = 3, seams = { { 0.0, 1e6 }, { 0.40, 1 } } })
+  k.cage("hard", V(0, 0, zb), {
+    { 0.25, 0.33, 0.12, 0.402, 0, 0.005 }, { 0.37, 0.47, 0.175, 0.402, 0, 0.0 }, { 0.37, 0.47, 0.175, 0.418, 0, 0.0 },
+    { 0.25, 0.33, 0.12, 0.418, 0, 0.005 }, { 0.25, 0.33, 0.12, 0.402, 0, 0.005 },
+  }, WHITE, { level = 1, segs = 3, cap_start = false, cap_end = false })              -- the seat
+  if styleOf(v) % 2 == 0 then
+    k.cage("hard", V(0, 0, zb), { { 0.37, 0.47, 0.175, 0.419, 0, 0.0 }, { 0.37, 0.47, 0.175, 0.428, 0, 0.0 },
+                                  { 0.35, 0.45, 0.165, 0.437, 0, 0.0 } }, WHITE,
+           { level = 1, segs = 3, seams = { { 0.419, 1 } } })                         -- the lid, down
+  end
   return k.done()
 end
 
 M.vanity = function(v)
+  -- The cabinet with a shaker door (a frame round a recessed panel), a ceramic top with a vessel basin and a tall
+  -- mixer, and above it a round-cornered mirror on a framed backing.
   local k, wood = maker(), woodOf(v)
   k.size = V(0.80, 1.95, 0.50)
   k.box("wood", V(0, 0.47, 0.24), V(0.80, 0.56, 0.48), 0.006, wood, 1)
-  k.front("wood", -0.4, 0.4, 0.20, 0.74, 0.48, wood * 1.04, CHROME)
+  local x0, x1, y0, y1, f = -0.395, 0.395, 0.20, 0.74, 0.055
+  k.box("wood", V(0, (y0 + y1) * 0.5, 0.484), V(x1 - x0 - 2 * f, y1 - y0 - 2 * f, 0.008), 0.002, wood * 1.02, 1)  -- panel
+  for _, s in ipairs({ { (x0 + x1) * 0.5, y0 + f * 0.5, x1 - x0, f }, { (x0 + x1) * 0.5, y1 - f * 0.5, x1 - x0, f },
+                       { x0 + f * 0.5, (y0 + y1) * 0.5, f, y1 - y0 - 2 * f }, { x1 - f * 0.5, (y0 + y1) * 0.5, f, y1 - y0 - 2 * f } }) do
+    k.box("wood", V(s[1], s[2], 0.491), V(s[3], s[4], 0.022), 0.003, wood * 1.04, 1)                     -- the frame
+  end
+  k.rod("metal", V(-0.09, y1 - 0.03, 0.52), V(0.09, y1 - 0.03, 0.52), 0.007, CHROME, 8)
   k.box("ceramic", V(0, 0.765, 0.25), V(0.80, 0.03, 0.50), 0.006, PORCELAIN, 1)
   k.turned("ceramic", V(0, 0.78, 0.27), { { 0.0, 0.0 }, { 0.18, 0.0 }, { 0.20, 0.09 }, { 0.19, 0.10 }, { 0.15, 0.03 }, { 0.0, 0.03 } },
            PORCELAIN, 0.8, 24)                                                  -- vessel basin
   k.turned("metal", V(0, 0.78, 0.05), { { 0.022, 0.0 }, { 0.018, 0.20 }, { 0.0, 0.21 } }, CHROME, 1, 12)
-  k.rod("metal", V(0, 0.98, 0.05), V(0, 0.96, 0.17), 0.011, CHROME, 10)
-  k.box("metal", V(0, 1.45, 0.012), V(0.72, 0.90, 0.012), 0.006, CHROME, 1)     -- the mirror
+  k.bent("metal", { V(0, 0.975, 0.05), V(0, 0.99, 0.11), V(0, 0.955, 0.17) }, 0.02, 0.02, CHROME, { count = 8 })
+  -- the mirror: a panel in the wall's plane, its corners rounded, laid flat and stood up (centred through its depth
+  -- so the turn's sense does not matter)
+  local function pane(w, h, r, d, col)
+    local m = mesh.extrude(mesh.profile.rounded_rect(w, h, r, 4), d, { color = col })
+    return mesh.rotate_x(mesh.translate(m, V(0, -d * 0.5, 0)), PI * 0.5)
+  end
+  k.put("hard", mesh.translate(pane(0.74, 0.92, 0.07, 0.016, BLACK), V(0, 1.45, 0.010)))
+  k.put("metal", mesh.translate(pane(0.69, 0.87, 0.05, 0.006, CHROME), V(0, 1.45, 0.021)))
   return k.done()
 end
 
 M.lounge_chair = function(v)
   local k, wood, fabric = maker(), woodOf(v), fabricOf(v)
   k.size = V(0.84, 0.80, 0.84)
-  k.box("fabric", V(0, 0.30, 0.44), V(0.84, 0.24, 0.80), 0.04, fabric)
-  k.box("fabric", V(0, 0.46, 0.50), V(0.56, 0.12, 0.62), 0.05, fabric * 1.04)
-  k.tilted("fabric", V(0, 0.58, 0.12), V(0.84, 0.48, 0.16), 0.06, -0.12, fabric * 0.96)
-  for _, x in ipairs({ -0.36, 0.36 }) do k.box("fabric", V(x, 0.50, 0.46), V(0.13, 0.24, 0.74), 0.05, fabric * 0.96) end
+  k.cushion("fabric", V(0, 0.30, 0.44), V(0.84, 0.24, 0.80), fabric, { r = 0.05, roll = 0.04, belly = 0.006 })
+  k.cushion("fabric", V(0, 0.46, 0.50), V(0.56, 0.12, 0.62), fabric * 1.04, { r = 0.05, crown = 0.03, belly = 0.01, piping = 2 })
+  k.cushion("fabric", V(0, 0.58, 0.12), V(0.84, 0.48, 0.16), fabric * 0.96,
+            { face = "z", r = 0.06, roll = 0.05, crown = 0.025, bow = 0.03, piping = 1.5, tilt = -0.12 })
   for _, x in ipairs({ -0.36, 0.36 }) do
-    for _, z in ipairs({ 0.10, 0.78 }) do k.leg("wood", V(x, 0, z), 0.18, 0.04, wood) end
+    k.cushion("fabric", V(x, 0.50, 0.46), V(0.13, 0.24, 0.74), fabric * 0.96, { r = 0.05, roll = 0.05, crown = 0.012, piping = 1.5 })
+  end
+  for _, x in ipairs({ -0.36, 0.36 }) do
+    for _, z in ipairs({ 0.10, 0.78 }) do k.turned_leg("wood", V(x, 0, z), 0.18, 0.02, 0.012, wood) end
   end
   return k.done()
 end
+
+-- A made bed's soft goods over a mattress `w` wide, its top at `top`, from z0 to zf (the foot): the sheeted mattress,
+-- the duvet draped over the sides and the foot, the top sheet turned back over the duvet's head, the pillows at `pz`.
 
 M.planter = function(v)
   local k = maker()
@@ -1076,18 +1324,16 @@ end
 -- THE UNIVERSITY CAMPUS: a dorm's single bed, a classroom's desk and stacking chair, a lecture hall's row of tip-up
 -- seats on its own riser, the lectern, a lab's bench, the library's long reading table.
 M.single_bed = function(v)
-  -- A made single, 0.95 x 2.05: the frame on legs, a low timber headboard, the duvet, one pillow.
+  -- A made single, 0.95 x 2.05: the frame on legs, a low timber headboard, the mattress, the duvet, one pillow.
   local k, wood, fabric = maker(), woodOf(v), fabricOf(v)
   k.size = V(0.95, 0.85, 2.05)
   k.box("wood", V(0, 0.22, 1.02), V(0.95, 0.12, 2.03), 0.01, wood, 1)
   for _, x in ipairs({ -0.42, 0.42 }) do
-    for _, z in ipairs({ 0.06, 1.98 }) do k.leg("wood", V(x, 0, z), 0.16, 0.05, wood * 0.9) end
+    for _, z in ipairs({ 0.06, 1.98 }) do k.turned_leg("wood", V(x, 0, z), 0.16, 0.026, 0.018, wood * 0.9) end
   end
-  k.box("wood", V(0, 0.52, 0.03), V(0.95, 0.66, 0.05), 0.01, wood * 0.95, 1)
-  k.box("fabric", V(0, 0.38, 1.04), V(0.88, 0.20, 1.94), 0.05, LINEN)
-  k.box("fabric", V(0, 0.51, 1.30), V(0.98, 0.06, 1.46), 0.03, fabric)
-  for _, x in ipairs({ -0.49, 0.49 }) do k.box("fabric", V(x, 0.40, 1.30), V(0.03, 0.26, 1.46), 0.012, fabric * 0.94) end
-  k.box("fabric", V(0, 0.55, 0.30), V(0.66, 0.13, 0.36), 0.05, LINEN * 1.02)
+  local hb = mesh.extrude(mesh.profile.rounded_rect(0.95, 0.05, 0.02, 3), 0.66, { bevel = 0.012, bevel_segs = 2, color = wood * 0.95 })
+  k.put("wood", mesh.translate(hb, V(0, 0.19, 0.03)))      -- the headboard, its top rounded
+  makeBed(k, 0.88, 0.48, 0.07, 1.99, 0.62, fabric, { 0 }, 0.30)
   return k.done()
 end
 

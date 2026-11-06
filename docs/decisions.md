@@ -15720,3 +15720,64 @@ furniture."
     It now lays uv as the lathe did: u round the turn 0..1, v along the profile in metres.
   - After that fix, every frame matches but for the weave's phase on the umbrellas.
 - The existing footprint and mesh-audit tests cover every piece.
+
+## ADR-0347 — Furniture upgraded with soft shapes: the cushion cage, the drape, bent members (#191)
+
+**Context.** After ADR-0346 every furniture piece was a Lua recipe, but the shapes were still the old C++ kit's:
+rounded boxes and straight rods. Glenn, 2026-11-06: "now that all of the furniture lives in Lua and we have better
+mesh tooling can we upgrade the look of some of that furniture?", then "I'd like you to direct and update the
+furniture. Let's see the changes in the lab as well."
+
+**Decision.**
+- **New maker words in `furniture_models.lua`.** Each is built on the shared toolkit, with no private geometry:
+  - `cage(part, c, rings, col, o)`: rounded rectangles in plan, ring by ring up y, skinned by `poly.loft` and
+    smoothed by `subdivide`, with seams creased by `crease_ring`. Rings may run up the outside and back down the
+    inside, so one cage makes a cushion, a bathtub's basin or a toilet's bowl.
+  - `cushion(part, c, size, col, o)`: a cage with a top and bottom panel sewn to a side band. Options:
+    - `crown`, `belly`, `pinch` (a pillow), `bow` (a back wrapping round) and `piping`;
+    - `face = "z"` for backs and headboards;
+    - `warp(u, v, w)` for anything else (a waterfall seat front, a lumbar swell).
+  - `drape(part, col, o)`: a cloth slab lying on a support and folding over its edges round a radius, hanging
+    below, with the hem waved. Used for the duvet and the turned-down sheet.
+  - `post`: a tapered leg (a rounded square swept with `scale`). `bent`: a member swept along `mesh.path.spline`
+    (a back leg running up into its post, a bowed rail, a spout, the office chair's star arms). `turned_leg`.
+- **Ten pieces upgraded:**
+  - **Sofa and lounge chair:** crowned, piped seat and back cushions, rolled arms, turned legs.
+  - **Double and single bed:** the duvet draped over the mattress's sides and foot as one cloth, the sheet folded
+    back over it, pinched pillows. The double's headboard is plain or channel-tufted by the style bits; the single's
+    is an extruded board with rounded edges.
+  - **Dining chair:** tapered legs; the back legs run on up into raked back posts. The back by the style bits: two
+    bowed rails, three spindles, or an upholstered pad.
+  - **Dining table:** an extruded top with a softened edge, on tapered legs.
+  - **Office chair:** a dished seat with a waterfall front, a back that wraps round with a lumbar swell, a curved
+    spine, bent arm posts and padded rests.
+  - **Bathtub:** one moulded shell. The apron rises to a rolled rim and the basin slopes to its floor, raked at the
+    back end. Spout and plug.
+  - **Toilet:** a hollow, egg-shaped bowl on a narrowing pedestal, a seat ring, the lid down or none by the style
+    bits, and the cistern with its lid.
+  - **Vanity:** a shaker door, and a round-cornered mirror on a framed backing.
+- **Nothing a placer reads changed.** Every piece keeps its size, `solid`, `collider_h` and colliders, so no room
+  layout or walkable space moves.
+- **The furniture lab** (`assets/levels/furniture_lab.json`) is the showroom script with
+  `opts = {pieces, per_row, variants, row_gap}`: the ten pieces in three variants each, rows spaced for close shots.
+
+**Proof.**
+- `tools/furniture_ab.py`, old dump against new, 828 piece variants: footprints and flags identical.
+- **Triangles, per piece at variant 0 (old → new):**
+
+  | Piece | Old | New |
+  |---|---|---|
+  | sofa | 3,432 | 4,832 |
+  | lounge chair | 1,932 | 2,512 |
+  | double bed | 3,240 | 4,858 |
+  | single bed | 1,764 | 3,639 |
+  | dining chair | 948 | 2,056 |
+  | office chair | 1,372 | 3,656 |
+  | toilet | 744 | ~2,900 |
+  | bathtub | 1,556 | 1,184 |
+  | dining table | 552 | 472 |
+
+  The cushion's default cage (one subdivision step, two steps per corner) was chosen over a finer one (two steps,
+  one per corner). The finer one tripled the sofa again (14k) with no difference at room distance.
+- **Showroom shots, before and after, of all ten pieces:** `~/Pictures/Raytracer/2026-11-06_furniture_upgrade_*`.
+- **The gate:** run_tests, physics_tests, lanes_tests.
