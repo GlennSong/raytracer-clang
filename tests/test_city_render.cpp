@@ -660,7 +660,7 @@ TEST_CASE(wedge_mesh_is_a_flat_outline_cone) {
     // like ringXZ so it draws with the same widgetMaterial ground-paint technique.
     RenderMesh w = wedgeXZ(0.45);
     CHECK(!w.vertices.empty());
-    CHECK(w.vertices.size() == (2u + 12u) * 4u);   // 2 edge quads + 12 arc quads
+    CHECK(w.vertices.size() == 2u * 4u + 13u * 2u);   // 2 edge quads + the arc's 12 quads on 13 shared pairs
     CHECK(w.indices.size() == (2u + 12u) * 6u);
     Real maxR = 0, minR = 1e9;
     bool flat = true;

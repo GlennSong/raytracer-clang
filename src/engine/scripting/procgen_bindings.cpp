@@ -1088,6 +1088,56 @@ int l_mesh_superquadric(lua_State* L) {
     return 1;
 }
 
+// FLAT SHAPES (#191) lie in the plan at `at` (the frame's origin: x, y, z) facing up, or down when `down`; a profile's
+// (x, y) are plan x and z.
+MeshFrame optLevelFrame(lua_State* L, int idx) {
+    const Vec3 at = optVec3Field(L, idx, "at", Vec3(0, 0, 0));
+    const bool down = lua_istable(L, idx) && optBoolField(L, idx, "down", false);
+    return MeshFrame::level(at.y, !down, Vec2(at.x, at.z));
+}
+// mesh.annulus(r_in, r_out, {sides = 32, from = 0, to = 2 pi, rings = 1, at, down, color}): r_in 0 a disc
+int l_mesh_annulus(lua_State* L) {
+    auto m = std::make_shared<RenderMesh>();
+    MeshBuilder::emitAnnulus(*m, optLevelFrame(L, 3), luaL_checknumber(L, 1), luaL_checknumber(L, 2),
+                             optVec3Field(L, 3, "color", Vec3(1, 1, 1)), optIntField(L, 3, "sides", 32), optNumField(L, 3, "from", 0.0),
+                             optNumField(L, 3, "to", TAU), optIntField(L, 3, "rings", 1));
+    pushMesh(L, m);
+    return 1;
+}
+// mesh.band(outer, inner, {at, down, color}): the strip between two profiles paired point for point
+int l_mesh_band(lua_State* L) {
+    auto m = std::make_shared<RenderMesh>();
+    MeshBuilder::emitBand(*m, optLevelFrame(L, 3), checkProfile(L, 1), checkProfile(L, 2), optVec3Field(L, 3, "color", Vec3(1, 1, 1)));
+    pushMesh(L, m);
+    return 1;
+}
+// mesh.fill(profile, {holes = {profile, ...}, at, down, color}): the profile laid flat and filled
+int l_mesh_fill(lua_State* L) {
+    std::vector<MeshProfile> holes;
+    if (lua_istable(L, 2) && lua_getfield(L, 2, "holes") == LUA_TTABLE) {
+        const lua_Integer n = luaL_len(L, -1);
+        for (lua_Integer i = 1; i <= n; ++i) {
+            lua_geti(L, -1, i);
+            holes.push_back(checkProfile(L, lua_gettop(L)));
+            lua_pop(L, 1);
+        }
+    }
+    if (lua_istable(L, 2)) lua_pop(L, 1);
+    auto m = std::make_shared<RenderMesh>();
+    MeshBuilder::emitFill(*m, optLevelFrame(L, 2), checkProfile(L, 1), optVec3Field(L, 2, "color", Vec3(1, 1, 1)), holes);
+    pushMesh(L, m);
+    return 1;
+}
+// mesh.skirt(profile, top, bottom, {inward = false, color}): a wall hung round a plan outline from y = top to bottom
+int l_mesh_skirt(lua_State* L) {
+    const double bottom = luaL_checknumber(L, 3);
+    auto m = std::make_shared<RenderMesh>();
+    MeshBuilder::emitSkirt(*m, checkProfile(L, 1).pts, luaL_checknumber(L, 2), [bottom](const Vec2&, const Vec2&) { return Vec2(bottom, bottom); },
+                           optVec3Field(L, 4, "color", Vec3(1, 1, 1)), lua_istable(L, 4) && optBoolField(L, 4, "inward", false));
+    pushMesh(L, m);
+    return 1;
+}
+
 // --- the SHAPE KIT (MeshBuilder, the flora plan): organic and mineral forms from Lua ---
 // mesh.icosphere(subdiv) -> unit icosphere
 int l_mesh_icosphere(lua_State* L) {
@@ -4288,6 +4338,10 @@ void openProcgenLibrary(ScriptVM& vm) {
         {"revolve", l_mesh_revolve},
         {"loft", l_mesh_loft},
         {"superquadric", l_mesh_superquadric},
+        {"annulus", l_mesh_annulus},
+        {"band", l_mesh_band},
+        {"fill", l_mesh_fill},
+        {"skirt", l_mesh_skirt},
         {"section", l_mesh_section},
         {"paint", l_mesh_paint},
         {"warp", l_mesh_warp},

@@ -766,6 +766,16 @@ void MeshBuilder::bakeHeightColor(RenderMesh& mesh, const Vec3& low, const Vec3&
     }
 }
 
+void MeshBuilder::projectUV(RenderMesh& mesh, std::size_t from, const Vec3& origin, const Vec3& uAxis, const Vec3& vAxis) {
+    const Vec3 t = uAxis.lengthSquared() > 1e-24 ? normalize(uAxis) : Vec3(1, 0, 0);
+    for (std::size_t i = from; i < mesh.vertices.size(); ++i) {
+        Vertex& v = mesh.vertices[i];
+        v.u = static_cast<float>(dot(v.position - origin, uAxis));
+        v.v = static_cast<float>(dot(v.position - origin, vAxis));
+        v.tangent = t;
+    }
+}
+
 void MeshBuilder::generatePlanarUVs(RenderMesh& mesh, int axis, float scale) {
     for (Vertex& v : mesh.vertices) {
         const Vec3& p = v.position;

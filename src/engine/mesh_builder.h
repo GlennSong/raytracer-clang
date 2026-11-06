@@ -38,6 +38,10 @@ struct MeshFrame {
     static MeshFrame aabb(const Vec3& lo, const Vec3& hi) {
         return {lo, Vec3(hi.x - lo.x, 0, 0), Vec3(0, hi.y - lo.y, 0), Vec3(0, 0, hi.z - lo.z)};
     }
+    // the world's plan at height y round (x, z) = `at`, metres, facing up (or down): where the flat shapes lie
+    static MeshFrame level(double y, bool up = true, const Vec2& at = Vec2(0, 0)) {
+        return {Vec3(at.x, y, at.y), Vec3(1, 0, 0), Vec3(0, up ? 1 : -1, 0), Vec3(0, 0, 1)};
+    }
     // `size` along unit axes `right`, `up`, `fwd` (default the world's), centred on `c`
     static MeshFrame centred(const Vec3& c, const Vec3& size, const Vec3& right = Vec3(1, 0, 0), const Vec3& up = Vec3(0, 1, 0),
                              const Vec3& fwd = Vec3(0, 0, 1)) {
@@ -350,6 +354,10 @@ struct MeshBuilder {
     // position components, scaled, become (u, v). A cheap default mapping for
     // terrain (axis=1) and generated geometry that ships without UVs.
     static void generatePlanarUVs(RenderMesh& mesh, int axis = 1, float scale = 1.0f);
+    // PLANAR UVs along any axes, on the vertices from index `from` on (what an emitter just added): u = dot(p - origin,
+    // uAxis), v = dot(p - origin, vAxis) -- the axes carry the scale (a direction over a tile size) -- and the tangent
+    // along uAxis. A floor's boards run along its grain; a plate's texture tiles at its real size.
+    static void projectUV(RenderMesh& mesh, std::size_t from, const Vec3& origin, const Vec3& uAxis, const Vec3& vAxis);
 
     // Tint per-vertex color by height: `low` at the mesh's lowest vertex, `high`
     // at its highest, linearly between. A cheap strata/canopy effect — e.g. a
@@ -442,10 +450,30 @@ struct MeshBuilder {
     // lip, a slab with a stair well. `faces`: kFaceTop, kFaceBottom, kFaceSides.
     static void emitPlanPrism(RenderMesh& mesh, const std::vector<Vec2>& outline, const std::vector<std::vector<Vec2>>& holes,
                               double y0, double y1, const Vec3& color, uint8_t faces = kFacesAll);
+    // A SKIRT hung from a flat outline's edge at `topY` down to `bottoms(a, b)` (the bottom's y at a and at b, per edge:
+    // the ground under a pad, a metre below it), each face facing out of the outline (into it when `facingIn`: a
+    // hole). A paved plate's kerb, the side of a slab on a slope, a plan prism's walls.
+    static void emitSkirt(RenderMesh& mesh, const std::vector<Vec2>& outline, double topY,
+                          const std::function<Vec2(const Vec2&, const Vec2&)>& bottoms, const Vec3& color,
+                          bool facingIn = false);
     // A CYLINDER standing on `base`: `sides` faces round, flat-faceted or smooth, capped top and bottom by `faces`
     // (kFaceTop, kFaceBottom; the side always).
     static void emitCylinder(RenderMesh& mesh, const Vec3& base, double radius, double height, int sides, const Vec3& color,
                              bool faceted = true, uint8_t faces = kFacesAll);
+    // FLAT SHAPES lie in a frame's x-z plane (a profile's (x, y) -> f.at(x, 0, y); unit axes for metres) and face
+    // along f.y (turn it over to face down). uv is the plane's metres.
+    // A BAND between two outlines paired point for point (outer.pts[k] with inner.pts[k]), round and closed when
+    // `outer` is closed: a coping's top, a track's lane, a ring drawn as paint.
+    static void emitBand(RenderMesh& mesh, const MeshFrame& f, const MeshProfile& outer, const MeshProfile& inner,
+                         const Vec3& color);
+    // A FILL: the profile (closed) and its holes, triangulated flat. A stadium's infield, a sign's plate.
+    static void emitFill(RenderMesh& mesh, const MeshFrame& f, const MeshProfile& outline, const Vec3& color,
+                         const std::vector<MeshProfile>& holes = {});
+    // AN ANNULUS round the frame's origin: radii rIn..rOut from angle a0 to a1 (radians from f.x toward f.z) in
+    // `sides` steps, in `rings` bands outward (more to drape it on ground). rIn 0: a DISC, fanned from its centre;
+    // a part turn: a SECTOR or an arc of ring. Paved rounds, roof pads, tank lids, a centre circle, a ring marker.
+    static void emitAnnulus(RenderMesh& mesh, const MeshFrame& f, double rIn, double rOut, const Vec3& color,
+                            int sides = 32, double a0 = 0.0, double a1 = TAU, int rings = 1);
     // THE ONE TRIANGULATOR: index triples into the outline's points followed by each hole's, any winding in, the
     // triples' order unspecified (wind them with triFacing). Earcut (procgen/city/triangulate.h).
     static std::vector<std::array<int, 3>> triangulate(const std::vector<Vec2>& outline,

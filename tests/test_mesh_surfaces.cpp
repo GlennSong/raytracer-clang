@@ -267,6 +267,87 @@ TEST_CASE(mesh_modifiers_bend_twist_taper_mirror_array) {
     CHECK(ring.indices.size() == 12 * MeshBuilder::extrude(MeshBuilder::profileRect(0.1, 0.3), 0.1).indices.size());
 }
 
+// THE FLAT SHAPES (mesh_words.cpp): an annulus, a band, a fill and a skirt lie in their frame's plane, face where it
+// says, and cover the area their outlines bound.
+namespace {
+// the area seen from +y: each triangle's, signed by the way it faces (front faces wind clockwise from their normal)
+double upArea(const RenderMesh& m) {
+    double a = 0;
+    for (std::size_t t = 0; t + 2 < m.indices.size(); t += 3) {
+        const Vec3 &p = m.vertices[m.indices[t]].position, &q = m.vertices[m.indices[t + 1]].position,
+                   &r = m.vertices[m.indices[t + 2]].position;
+        a += 0.5 * cross(r - p, q - p).y;
+    }
+    return a;
+}
+}  // namespace
+
+TEST_CASE(mesh_flat_shapes_cover_their_outlines) {
+    const double disc64 = areaOf(MeshBuilder::profileCircle(1.0, 64)), disc64h = areaOf(MeshBuilder::profileCircle(0.5, 64));
+    RenderMesh disc, ring, quarter, down, wedge;
+    MeshBuilder::emitAnnulus(disc, MeshFrame::level(2.0), 0, 1.0, Vec3(1, 1, 1), 64);
+    MeshBuilder::emitAnnulus(ring, MeshFrame::level(0.0), 0.5, 1.0, Vec3(1, 1, 1), 64, 0, TAU, 3);
+    MeshBuilder::emitAnnulus(quarter, MeshFrame::level(0.0, true, Vec2(5, 5)), 0, 1.0, Vec3(1, 1, 1), 16, 0, 0.5 * PI);
+    MeshBuilder::emitAnnulus(down, MeshFrame::level(1.0, false), 0, 1.0, Vec3(1, 1, 1), 64);
+    // axes swapped (angles from +z toward +x): still faces its frame's y
+    MeshBuilder::emitAnnulus(wedge, MeshFrame{Vec3(0, 0, 0), Vec3(0, 0, 1), Vec3(0, 1, 0), Vec3(1, 0, 0)}, 0.9, 1.0, Vec3(1, 1, 1), 12,
+                             -0.5, 0.5);
+    std::printf("    [flat] disc %.5f (want %.5f), ring %.5f (want %.5f), quarter %.5f (want %.5f), down %.5f, wedge %.5f\n",
+                upArea(disc), disc64, upArea(ring), disc64 - disc64h, upArea(quarter), disc64 / 4, upArea(down), upArea(wedge));
+    CHECK(std::fabs(upArea(disc) - disc64) < 1e-9);
+    CHECK(std::fabs(upArea(ring) - (disc64 - disc64h)) < 1e-9);
+    CHECK(std::fabs(upArea(quarter) - disc64 / 4) < 1e-9);
+    CHECK(std::fabs(upArea(down) + disc64) < 1e-9);
+    CHECK(upArea(wedge) > 0);
+    CHECK(clean("disc", disc) && clean("ring", ring) && clean("quarter", quarter) && clean("down", down) && clean("wedge", wedge));
+    CHECK(std::fabs(disc.vertices[0].position.y - 2.0) < 1e-12);
+    // a stadium's lane: the band between two rounded rectangles whose corners meet
+    auto stadium = [](double r) { return MeshBuilder::profileRoundedRect(10 + 2 * r, 2 * r, r, 14); };
+    RenderMesh lane, infield, holed;
+    MeshBuilder::emitBand(lane, MeshFrame::level(0.0), stadium(6.0), stadium(5.0), Vec3(1, 1, 1));
+    MeshBuilder::emitFill(infield, MeshFrame::level(0.0), stadium(5.0), Vec3(1, 1, 1));
+    MeshBuilder::emitFill(holed, MeshFrame::level(0.0), MeshBuilder::profileRect(4, 4), Vec3(1, 1, 1), {MeshBuilder::profileRect(1, 1)});
+    CHECK(std::fabs(upArea(lane) - (areaOf(stadium(6.0)) - areaOf(stadium(5.0)))) < 1e-9);
+    CHECK(std::fabs(upArea(infield) - areaOf(stadium(5.0))) < 1e-9);
+    CHECK(std::fabs(upArea(holed) - 15.0) < 1e-9);
+    CHECK(clean("lane", lane) && clean("infield", infield) && clean("holed", holed));
+    // a skirt round a fill, top and bottom, closes a solid of the outline's area times its height, either winding
+    for (bool reversed : {false, true}) {
+        MeshProfile pl = MeshBuilder::profileStar(5, 2.0, 1.0);
+        if (reversed) std::reverse(pl.pts.begin(), pl.pts.end());
+        RenderMesh solid;
+        MeshBuilder::emitFill(solid, MeshFrame::level(0.7), pl, Vec3(1, 1, 1));
+        MeshBuilder::emitFill(solid, MeshFrame::level(0.2, false), pl, Vec3(1, 1, 1));
+        MeshBuilder::emitSkirt(solid, pl.pts, 0.7, [](const Vec2&, const Vec2&) { return Vec2(0.2, 0.2); }, Vec3(1, 1, 1));
+        report("skirted star", solid, std::fabs(areaOf(pl)) * 0.5);
+        CHECK(std::fabs(volumeOf(solid) - std::fabs(areaOf(pl)) * 0.5) < 1e-9);
+        CHECK(clean("skirted star", solid));
+    }
+    // ...and the plan prism, whose walls are skirts: a slab with a well
+    RenderMesh slab;
+    MeshBuilder::emitPlanPrism(slab, MeshBuilder::profileRect(4, 4).pts, {MeshBuilder::profileRect(1, 1).pts}, 0.0, 0.25, Vec3(1, 1, 1));
+    CHECK(std::fabs(volumeOf(slab) - 15.0 * 0.25) < 1e-9);
+    CHECK(clean("slab with a well", slab));
+    // the Lua words
+    ScriptVM vm;
+    openProcgenLibrary(vm);
+    std::shared_ptr<RenderMesh> m;
+    std::string err;
+    const char* code = R"LUA(
+        local pad = mesh.annulus(0, 3, { sides = 24, rings = 3, at = {1, 0.1, 2} })
+        local arc = mesh.annulus(4.9, 5.1, { from = 0, to = math.pi, sides = 20, at = {0, 0.1, 0} })
+        local lid = mesh.annulus(0, 1, { down = true, at = {0, 2, 0} })
+        local coping = mesh.band(mesh.profile.rect(4, 4), mesh.profile.rect(3.6, 3.6), { at = {0, 1, 0} })
+        local plate = mesh.fill(mesh.profile.rect(2, 1), { holes = { mesh.profile.circle(0.2, 12) }, at = {0, 1.5, 0} })
+        local kerb = mesh.skirt(mesh.profile.rect(2, 1), 1.5, 1.2)
+        return mesh.merge{ pad, arc, lid, coping, plate, kerb }
+    )LUA";
+    const bool ok = runProcgenMesh(vm, code, m, &err);
+    if (!ok) std::printf("    lua: %s\n", err.c_str());
+    CHECK(ok);
+    if (m) CHECK(clean("lua flat shapes", *m));
+}
+
 TEST_CASE(geometry_equal_ignores_order_and_catches_a_change) {
     // the same box built twice: once as it comes, once with its triangles and vertices shuffled
     RenderMesh a = MeshBuilder::extrude(MeshBuilder::profileRoundedRect(1, 1, 0.2, 4), 0.5, 0.05, 2);

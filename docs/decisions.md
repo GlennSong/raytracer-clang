@@ -15618,3 +15618,54 @@ word at all.
 **Consequences.** The fixed solids can now be rebuilt as special cases: a box is an extruded rect, a cylinder an
 extruded circle, a sphere a revolved half circle. The ports (furniture's private `Maker` first) are phase 4, with a
 visual A/B. Still owed in the vocabulary: bevel and fillet on any edge, a lattice, booleans and a Coons patch.
+
+## ADR-0345 — Flat shapes: one annulus, band, fill and skirt for every disc, ring and paved plate (#191)
+
+**Context.** The inventory for #191 found six private discs and rings and nine hand-built plan slabs:
+- **Discs and rings:**
+  - the grammar's `emitDisc` and `ringCap`;
+  - city_lots' paved `discInto`, the track's `stadium` and the pitch's line `ring`;
+  - citysim's `ringXZ` and `wedgeXZ` markers.
+- **Slabs:** city_lots' pad, paving and plaza decks with their skirts, the grammar's four interior floors and ceilings,
+  mass.cpp's cap, and the building collider's three caps.
+
+Each one triangulated, or looped round a circle, on its own. Glenn OK'd the lots tag bump on 2026-11-06.
+
+**Decision.**
+- **Four flat words** (`mesh_words.cpp`). Each lies in a `MeshFrame`'s x-z plane, faces along its y, and takes uv in
+  the plane's metres.
+  - `emitBand`: the strip between two outlines paired point for point.
+  - `emitFill`: a profile and its holes, triangulated flat.
+  - `emitAnnulus`: radii rIn..rOut over any arc, in radial bands so it can drape on ground. With rIn 0 it is a disc
+    fanned from its centre, and over part of a turn a sector.
+  - `emitSkirt`: a wall hung from a plan outline down to a per-edge bottom, facing out of the outline (or into a hole).
+    `emitPlanPrism`'s walls are now skirts.
+- **Two helpers:**
+  - `MeshFrame::level(y, up, at)`: the world's plan at a height.
+  - `MeshBuilder::projectUV`: planar uv along any axes, for the floor's wood grain.
+- **Lua:** `mesh.annulus`, `mesh.band`, `mesh.fill` and `mesh.skirt`.
+- **Ports:**
+  - The parapet is two plan prisms with a hole: an upstand ring and its coping.
+  - The track's lanes are bands between two rounded rectangles whose corners meet, and its infield is a fill.
+  - The pitch's centre circle and arcs, the paved round and its inlaid bands, roof fan pads, tank lids, helipads
+    and drum caps are annuli.
+  - The lot decks are fills with skirts.
+  - The interior floors and ceilings are plan prisms, their well rims two-faced skirts.
+  - The collider's caps are one `planCap`.
+- **Side fixes:**
+  - The under-pad kerb's normal assumed a counter-clockwise pad. A skirt faces out whichever way an outline runs.
+  - Shared corners replace three vertices per triangle on every slab.
+
+**Proof.**
+- `mesh_flat_shapes_cover_their_outlines` checks each word against exact polygon formulas:
+  - the areas of a disc, a ring in three bands, a quarter sector, a down-facing lid, a stadium lane, an infield, and a
+    plate with a hole;
+  - the closed volume of a star skirted between two fills, either winding, and of a slab with a well;
+  - the audit of each;
+  - the Lua words.
+- **river_town, re-baked under lots tag 2026-11-06.1:**
+  - The mesh audit finds the same faults as the old bundle: 43 inward slivers and 2 open undersides, all already there.
+  - Triangles rose from 9,186,350 to 9,187,654 (+0.014 %): each disc is now fanned from its centre.
+  - Four before/after shots (`~/Pictures/Raytracer/2026-11-06_flat_shapes_ab_*`) show no change in shape; the pixel
+    differences are traffic, wind and shadows.
+

@@ -39,6 +39,7 @@ being used. One row per capability; the "used by" column is the audit trail.
 | Bundle → GLB view | `engine/bundle/bundle_glb.h` | `rt_bake --glb`, editor | per material or per cell from section names alone |
 | `MeshBuilder::chunkByCell` | `engine/mesh_builder.h` (was `level_loader.cpp`) | loader chunking, city producer | a bundle cell is a render cell |
 | Curves and surfaces `MeshProfile` / `MeshPath`, `sweep` / `extrude` / `revolve` / `loft` / `superquadric` | `engine/mesh_builder.h`, `mesh_surfaces.cpp`; Lua `mesh.profile.*`, `mesh.path.*` | the shape lab (#191 ports next) | ADR-0344: one grid builder (creases, poles, seams), volumes tested against their formulas |
+| Flat shapes `emitAnnulus` / `emitBand` / `emitFill` / `emitSkirt`, `MeshFrame::level`, `projectUV` | `engine/mesh_builder.h`, `mesh_words.cpp`; Lua `mesh.annulus/band/fill/skirt` | every disc, ring, paved plate, parapet, interior slab and collider cap | ADR-0345: areas and closed volumes tested; plan prisms' walls are skirts |
 
 
 ## City simulation scale (opened 2026-09-16 — Glenn: "a bustling urban environment")

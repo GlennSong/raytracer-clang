@@ -3,6 +3,7 @@
 #include "mesh_builder.h"
 #include "procgen/city/triangulate.h"
 
+#include <algorithm>
 #include <cmath>
 
 namespace engine {
@@ -101,26 +102,28 @@ void MeshBuilder::emitPlanPrism(RenderMesh& mesh, const std::vector<Vec2>& outli
     if (faces & kFaceTop) emitPolygon(mesh, top, topHoles, Vec3(0, 1, 0), color);
     if (faces & kFaceBottom) emitPolygon(mesh, bot, botHoles, Vec3(0, -1, 0), color);
     if (!(faces & kFaceSides)) return;
-    // walls: an edge's outward side is away from the polygon's area (the outline) or toward the hole's inside
-    auto signedArea = [](const std::vector<Vec2>& r) {
-        double a = 0;
-        for (std::size_t i = 0; i < r.size(); ++i) a += cross(r[i], r[(i + 1) % r.size()]);
-        return a * 0.5;
-    };
-    auto walls = [&](const std::vector<Vec2>& r, bool hole) {
-        const double ccw = signedArea(r) > 0 ? 1.0 : -1.0;   // CCW in (x, z): the interior on the left
-        for (std::size_t i = 0; i < r.size(); ++i) {
-            const Vec2 a = r[i], b = r[(i + 1) % r.size()], d = b - a;
-            const double l = d.length();
-            if (l < 1e-9) continue;
-            Vec2 out(d.y / l, -d.x / l);   // the right of a->b
-            out = out * ccw * (hole ? -1.0 : 1.0);
-            emitQuad(mesh, at(a, y0), at(b, y0), at(b, y1), at(a, y1), Vec3(out.x, 0, out.y), color);
-        }
-    };
-    walls(outline, false);
+    auto flat = [y0](const Vec2&, const Vec2&) { return Vec2(y0, y0); };
+    emitSkirt(mesh, outline, y1, flat, color);
     for (const auto& h : holes)
-        if (h.size() >= 3) walls(h, true);
+        if (h.size() >= 3) emitSkirt(mesh, h, y1, flat, color, true);
+}
+
+void MeshBuilder::emitSkirt(RenderMesh& mesh, const std::vector<Vec2>& outline, double topY,
+                            const std::function<Vec2(const Vec2&, const Vec2&)>& bottoms, const Vec3& color, bool facingIn) {
+    if (outline.size() < 3) return;
+    // an edge's outward side is away from the outline's area (toward a hole's inside when `facingIn`)
+    double area2 = 0;
+    for (std::size_t i = 0; i < outline.size(); ++i) area2 += cross(outline[i], outline[(i + 1) % outline.size()]);
+    const double side = (area2 > 0 ? 1.0 : -1.0) * (facingIn ? -1.0 : 1.0);   // CCW in (x, z): the interior on the left
+    for (std::size_t i = 0; i < outline.size(); ++i) {
+        const Vec2 a = outline[i], b = outline[(i + 1) % outline.size()], d = b - a;
+        const double l = d.length();
+        if (l < 1e-9) continue;
+        const Vec2 out = Vec2(d.y / l, -d.x / l) * side;   // the right of a->b
+        const Vec2 lo = bottoms(a, b);
+        emitQuad(mesh, Vec3(a.x, lo.x, a.y), Vec3(b.x, lo.y, b.y), Vec3(b.x, topY, b.y), Vec3(a.x, topY, a.y), Vec3(out.x, 0, out.y),
+                 color);
+    }
 }
 
 void MeshBuilder::emitCylinder(RenderMesh& mesh, const Vec3& base, double radius, double height, int sides, const Vec3& color,
@@ -150,6 +153,82 @@ void MeshBuilder::emitCylinder(RenderMesh& mesh, const Vec3& base, double radius
     }
     if (faces & kFaceTop) emitPolygon(mesh, ringHi, {}, Vec3(0, 1, 0), color);
     if (faces & kFaceBottom) emitPolygon(mesh, ringLo, {}, Vec3(0, -1, 0), color);
+}
+
+namespace {
+// one corner of a flat shape: at the plane point p of frame f, facing n, uv the plane's metres
+uint32_t flatVertex(RenderMesh& mesh, const MeshFrame& f, const Vec2& p, const Vec3& n, const Vec3& color) {
+    const uint32_t i = MeshBuilder::vertex(mesh, f.at(p.x, 0, p.y), n, color);
+    Vertex& v = mesh.vertices[i];
+    v.u = static_cast<float>(p.x);
+    v.v = static_cast<float>(p.y);
+    v.tangent = f.x.lengthSquared() > 1e-24 ? normalize(f.x) : Vec3(1, 0, 0);
+    return i;
+}
+}  // namespace
+
+void MeshBuilder::emitBand(RenderMesh& mesh, const MeshFrame& f, const MeshProfile& outer, const MeshProfile& inner,
+                           const Vec3& color) {
+    const std::size_t n = std::min(outer.pts.size(), inner.pts.size());
+    if (n < 2 || f.y.lengthSquared() < 1e-24) return;
+    const Vec3 up = normalize(f.y);
+    const uint32_t base = static_cast<uint32_t>(mesh.vertices.size());
+    for (std::size_t k = 0; k < n; ++k) {
+        flatVertex(mesh, f, outer.pts[k], up, color);
+        flatVertex(mesh, f, inner.pts[k], up, color);
+    }
+    const std::size_t spans = outer.closed ? n : n - 1;
+    for (std::size_t k = 0; k < spans; ++k) {
+        const uint32_t a = base + static_cast<uint32_t>(2 * k), b = base + static_cast<uint32_t>(2 * ((k + 1) % n));
+        quadFacing(mesh, a, b, b + 1, a + 1, up);
+    }
+}
+
+void MeshBuilder::emitFill(RenderMesh& mesh, const MeshFrame& f, const MeshProfile& outline, const Vec3& color,
+                           const std::vector<MeshProfile>& holes) {
+    if (outline.pts.size() < 3 || f.y.lengthSquared() < 1e-24) return;
+    const Vec3 up = normalize(f.y);
+    std::vector<std::vector<Vec2>> h2;
+    for (const MeshProfile& h : holes) h2.push_back(h.pts);
+    const uint32_t base = static_cast<uint32_t>(mesh.vertices.size());
+    for (const Vec2& p : outline.pts) flatVertex(mesh, f, p, up, color);
+    for (const std::vector<Vec2>& h : h2)
+        for (const Vec2& p : h) flatVertex(mesh, f, p, up, color);
+    for (const std::array<int, 3>& t : triangulate(outline.pts, h2))
+        triFacing(mesh, base + static_cast<uint32_t>(t[0]), base + static_cast<uint32_t>(t[1]), base + static_cast<uint32_t>(t[2]), up);
+}
+
+void MeshBuilder::emitAnnulus(RenderMesh& mesh, const MeshFrame& f, double rIn, double rOut, const Vec3& color, int sides,
+                              double a0, double a1, int rings) {
+    if (rOut <= rIn || f.y.lengthSquared() < 1e-24) return;
+    sides = std::max(3, sides);
+    rings = std::max(1, rings);
+    const bool whole = std::fabs(a1 - a0) >= TAU - 1e-9;
+    auto arc = [&](double r) {   // the ring at radius r: closed for a whole turn, else its sides + 1 points
+        MeshProfile p;
+        p.closed = whole;
+        const int pts = whole ? sides : sides + 1;
+        for (int k = 0; k < pts; ++k) {
+            const double a = a0 + (a1 - a0) * k / sides;
+            p.pts.push_back(Vec2(std::cos(a) * r, std::sin(a) * r));
+        }
+        return p;
+    };
+    const Vec3 up = normalize(f.y);
+    for (int ri = 0; ri < rings; ++ri) {
+        const double r0 = rIn + (rOut - rIn) * ri / rings, r1 = rIn + (rOut - rIn) * (ri + 1) / rings;
+        const MeshProfile outer = arc(r1);
+        if (r0 > 1e-12) {
+            emitBand(mesh, f, outer, arc(r0), color);
+            continue;
+        }
+        // the disc's middle: a fan from the centre
+        const uint32_t c = flatVertex(mesh, f, Vec2(0, 0), up, color), base = static_cast<uint32_t>(mesh.vertices.size());
+        for (const Vec2& p : outer.pts) flatVertex(mesh, f, p, up, color);
+        const std::size_t n = outer.pts.size(), spans = whole ? n : n - 1;
+        for (std::size_t k = 0; k < spans; ++k)
+            triFacing(mesh, c, base + static_cast<uint32_t>(k), base + static_cast<uint32_t>((k + 1) % n), up);
+    }
 }
 
 }  // namespace engine
