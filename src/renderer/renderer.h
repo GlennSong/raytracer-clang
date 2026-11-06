@@ -4,6 +4,7 @@
 #include "../rt_math.h"
 #include "../handle.h"
 #include "../lens_params.h"
+#include <array>
 #include <vector>
 #include <memory>
 #include <cstdint>
@@ -537,6 +538,19 @@ struct VolumetricCloudParams {
     // eats into cloud edges (0 = solid billows, ~0.6 = ragged wisps). Matches
     // the 0.35 the old inline-fbm erosion hardcoded.
     float detailStrength = 0.35f;
+    // CLOUD TYPES (ADR-0336; Schneider's Nubis): the weather map's G picks a type along an axis, the live weather's
+    // [typeLo, typeHi] spread over it. Each type: its HEIGHT PROFILE as fractions of the deck (density rises from 0 at
+    // profile[0] to full at [1], holds, and falls back to 0 between [2] and [3]), its density, how much the detail
+    // erodes it, and its anvil (the top spreading out, cumulonimbus). Ordered along the axis; neighbours blend.
+    // The level's "environment.clouds.types" replaces them, "typeRange" sets the range when the weather is off.
+    struct CloudType { float profile[4]; float density; float erosion; float anvil; };
+    std::array<CloudType, 4> types{{
+        {{0.00f, 0.08f, 0.22f, 0.34f}, 0.70f, 0.50f, 0.0f},   // stratus: a low flat sheet
+        {{0.00f, 0.14f, 0.42f, 0.62f}, 0.85f, 0.80f, 0.0f},   // stratocumulus: lumpy, low
+        {{0.00f, 0.15f, 0.55f, 1.00f}, 1.00f, 1.00f, 0.0f},   // cumulus: the deck's old single profile
+        {{0.00f, 0.05f, 0.85f, 1.00f}, 1.60f, 0.60f, 1.0f},   // cumulonimbus: the full deck, an anvil
+    }};
+    float typeLo = 0.40f, typeHi = 0.75f;   // Fair's: stratocumulus to cumulus
 };
 
 // Aerial-perspective fog (ADR-0016 environment). Lit color lerps toward `color`

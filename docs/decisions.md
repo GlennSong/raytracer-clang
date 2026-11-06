@@ -15281,3 +15281,43 @@ peak-to-median of the rows' high-passed spectrum over the cloud.
   per-frame result, which the averaging reveals. Next: a per-sample numeric dump of the light march along a ray
   through a line and one beside it.
 - Metal (#71).
+
+## ADR-0336 — The clouds' weather map and cloud types (#187, phase 2)
+
+**Context.** One height profile for every cloud, and a "weather map" that was a slice of the 3D shape noise, so every
+sky was the same kind of cloud at a different coverage. Decima drives its clouds from a 2D weather map with a type
+channel and per-type height profiles (Schneider 2015/2017). Glenn asked for this as the plan's phase 2.
+
+**Decision.**
+- **The weather map** (`cloudnoise::bakeWeather`): 512² RGBA8, tiling, one base tile (~41 km) across, built with the
+  noise set at load.
+  - R is coverage: the base volume's R at v = 0.37, bilinear as the hardware read it, so the sky keeps its layout.
+  - G is the cloud type: slow Perlin, ~14 km regions.
+  - B is wetness, for rain later.
+  - Bound at binding 5 of the march set.
+- **Cloud types** (`VolumetricCloudParams::types`, four along an axis):
+  - stratus, a low flat sheet;
+  - stratocumulus;
+  - cumulus, the old single profile exactly;
+  - cumulonimbus, the full deck with an anvil.
+  Each has a height profile (rise from / full by / full to / gone by, as fractions of the deck), a density, an erosion
+  and an anvil. The march blends neighbours along the axis at the map's G spread over the live `[typeLo, typeHi]`. The
+  anvil is Nubis's: coverage raised toward the top. The level's `environment.clouds.types` and `typeRange` override
+  them.
+- **Each weather state names its range** (`WeatherTargets.typeLo/Hi`, eased with the rest), so a front's puffs flatten
+  into a deck as it arrives:
+  - clear: cumulus;
+  - fair: stratocumulus to cumulus;
+  - overcast: stratus to stratocumulus;
+  - storm: cumulus to cumulonimbus.
+- **A/B:** `RT_CLOUD_TYPES=0` brings back the old slice and one profile.
+
+**Measured** (lab, `weather <state> now`, the clouds pass, types on vs off):
+- fair: mid 2.08 / 2.23, above 2.53 / 1.95, beach 1.46 / 1.11 ms;
+- storm: mid 1.75 / 1.55, above 2.15 / 2.08, beach 1.21 / 1.01 ms.
+- That is about +0.25 ms on average.
+
+**Not done.**
+- The deck is 900–1600 m, too thin for a real cumulonimbus. Its own taller deck, or a per-type top, is owed.
+- Metal (#71).
+- Wind: one weather wind for clouds, grass, trees, sea and players. Proposed to Glenn, not built.

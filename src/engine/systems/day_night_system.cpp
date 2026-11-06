@@ -450,6 +450,10 @@ void DayNightSystem::fixedUpdate(FrameContext& ctx) {
         cloudCoverage = weather.coverage;
         cloudDensity  = weather.density;
         cloudScale    = weather.scale;
+        cloudTypeLo   = weather.typeLo;
+        cloudTypeHi   = weather.typeHi;
+    } else {
+        cloudTypeLo = cloudTypeHi = -1.0f;   // (the level's own range)
     }
 }
 
@@ -698,6 +702,8 @@ void DayNightSystem::applyClouds(FrameContext& ctx) {
         vc.noiseScale =
             cloudBase_.noiseScale * (1.2f / std::max(cloudScale, 0.3f));
         vc.wind = cloudBase_.wind * cloudWindSpeed;
+        vc.typeLo = cloudTypeLo >= 0.0f ? cloudTypeLo : cloudBase_.typeLo;
+        vc.typeHi = cloudTypeHi >= 0.0f ? cloudTypeHi : cloudBase_.typeHi;
     }
 }
 

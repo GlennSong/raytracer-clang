@@ -169,6 +169,7 @@ private:
     float  cloudCoverage  = 0.35f;
     float  cloudDensity   = 0.55f;
     float  cloudScale     = 1.2f;
+    float  cloudTypeLo = -1.0f, cloudTypeHi = -1.0f;   // the weather's cloud types (ADR-0336); < 0: the level's
     float  cloudWindSpeed = 1.0f;
     double cloudPhase     = 0.0;   // accumulated drift, seconds
 

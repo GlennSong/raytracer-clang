@@ -27,11 +27,16 @@ layout(set = 0, binding = 0) uniform CloudUniforms {
     vec4 detail;          // x detailStrength (edge-erosion depth), y 1: the old coherent march offset (the A/B), z 1: the resolve reprojects by cloud depth, w unused
     mat4 prevViewProjection;   // last frame's (clouds_resolve.frag: the history's reprojection)
     vec4 frame;                // x this frame's dither offset in [0,1), y history weight (0: reset), zw unused
+    // THE CLOUD TYPES (ADR-0336): along the axis 0 stratus, 1/3 stratocumulus, 2/3 cumulus, 1 cumulonimbus
+    vec4 typeProfile[4];       // the height fractions: rise from x, full by y, full to z, gone by w
+    vec4 typeParams[4];        // x density, y erosion, z anvil
+    vec4 typeRange;            // x lo, y hi: the live weather's types
 } u;
 
 layout(set = 0, binding = 1) uniform sampler2D sceneDepth;
 layout(set = 0, binding = 2) uniform sampler3D baseNoise;    // repeat, linear
 layout(set = 0, binding = 3) uniform sampler3D detailNoise;  // repeat, linear
+layout(set = 0, binding = 5) uniform sampler2D weatherMap;   // R coverage, G cloud type, B wetness (ADR-0336)
 
 layout(location = 0) in vec2 inUV;
 layout(location = 0) out vec4 outColor;
@@ -75,9 +80,25 @@ float clLayerHeight(vec3 p) {
 // a cloud drifts across the sky as one body; the detail runs a little ahead, so its edges still evolve, slowly.
 vec3 clWind() { return vec3(u.params.w * u.skyAmbient.w, 0.0, 0.0); }
 
-float clWeather(vec2 xz) {
+// THE WEATHER MAP (ADR-0336): x the coverage field, y the cloud type at this point (the map's G spread over the live
+// weather's type range). Its own 2D texture, R the slice of the base volume the march used to read, so the sky keeps
+// its layout.
+vec2 clWeather(vec2 xz) {
     vec2 q = (xz + clWind().xz) * (u.params.z * 0.035);
-    return textureLod(baseNoise, vec3(q.x, 0.37, q.y), 0.0).r;   // (explicit: inside the march's loops the derivatives are undefined)
+    if (u.detail.w > 0.5) return vec2(textureLod(baseNoise, vec3(q.x, 0.37, q.y), 0.0).r, 2.0 / 3.0);   // (RT_CLOUD_TYPES=0: the old slice, cumulus)
+    const vec4 w = textureLod(weatherMap, q, 0.0);
+    return vec2(w.r, mix(u.typeRange.x, u.typeRange.y, w.g));
+}
+// The type's shape at this height: x density from its profile, y its density scale, z erosion, w anvil -- the four
+// types blended along the axis by where `type` falls between neighbours
+vec4 clTypeShape(float type, float hf) {
+    const float a = clamp(type, 0.0, 1.0) * 3.0;
+    const int i = min(int(a), 2);
+    const float f = a - float(i);
+    const vec4 P = mix(u.typeProfile[i], u.typeProfile[i + 1], f);
+    const vec4 Q = mix(u.typeParams[i], u.typeParams[i + 1], f);
+    const float prof = smoothstep(P.x, max(P.y, P.x + 1e-3), hf) * (1.0 - smoothstep(P.z, max(P.w, P.z + 1e-3), hf));
+    return vec4(prof, Q.x, Q.y, Q.z);
 }
 
 // Coverage after the weather map: fair skies carve banks with real gaps,
@@ -97,21 +118,27 @@ float clLocalCoverage(float weather) {
 float clDensity(vec3 p, float detailFade) {
     float hf = clLayerHeight(p);
     if (hf <= 0.0 || hf >= 1.0) return 0.0;
-    float profile = smoothstep(0.0, 0.15, hf) * smoothstep(1.0, 0.55, hf);
+    // the weather here, and its cloud type's shape at this height (ADR-0336)
+    const vec2 wx = clWeather(p.xz);
+    const vec4 shape = clTypeShape(wx.y, hf);
+    float profile = shape.x;
+    if (profile <= 0.0) return 0.0;
     vec3 wind = clWind();
     vec3 q = (p + wind) * u.params.z;
     // Base shape: R = perlin-worley, GBA = worley fBm at rising frequency.
     vec4 nse = textureLod(baseNoise, q * 0.25, 0.0);   // (explicit: one level, and the march's derivatives are undefined)
     float lowFbm = nse.g * 0.625 + nse.b * 0.25 + nse.a * 0.125;
     float base = clamp(clRemap(nse.r, lowFbm - 1.0, 1.0, 0.0, 1.0), 0.0, 1.0);
-    float cov = clLocalCoverage(clWeather(p.xz));
+    float cov = clLocalCoverage(wx.x);
+    // the ANVIL (Nubis): near the top a cumulonimbus's coverage grows, so the tower spreads into a shelf
+    cov = pow(cov, clRemap(clamp(hf, 0.7, 0.8), 0.7, 0.8, 1.0, mix(1.0, 0.5, shape.w)));
     float d = clamp((base - (1.0 - cov)) / max(1e-3, cov), 0.0, 1.0);
     // Edge erosion: subtract high-frequency worley scaled by (1 - d), so
     // interiors stay solid and edges wisp away.
     vec3 det = textureLod(detailNoise, (q + wind * (0.08 * u.params.z) + vec3(0.0, 0.002 * u.skyAmbient.w * u.params.z, 0.0)) * 2.0, 0.0).rgb;
     float detailFbm = det.r * 0.625 + det.g * 0.25 + det.b * 0.125;
-    d = clamp(d - detailFbm * u.detail.x * detailFade * (1.0 - d), 0.0, 1.0);
-    return d * profile * u.params.y;
+    d = clamp(d - detailFbm * u.detail.x * shape.z * detailFade * (1.0 - d), 0.0, 1.0);
+    return d * profile * shape.y * u.params.y;
 }
 
 // Henyey-Greenstein, normalised so isotropic (g = 0) returns 1 — the result
@@ -189,7 +216,7 @@ void main() {
         float cov = 0.0;
         for (int k = 0; k < 8 && cov < 0.02; ++k) {
             float f = (float(k) + fract(clDither(gl_FragCoord.xy) + u.frame.x)) / 8.0;
-            cov = max(cov, clLocalCoverage(clWeather((camPos + dir * mix(t0, t1, f)).xz)));
+            cov = max(cov, clLocalCoverage(clWeather((camPos + dir * mix(t0, t1, f)).xz).x));
         }
         if (cov < 0.02) { outColor = CLEAR; return; }
     }

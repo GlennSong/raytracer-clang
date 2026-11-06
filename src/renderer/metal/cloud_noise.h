@@ -251,7 +251,46 @@ struct NoiseSet {
     int detailSize = 32;
     std::vector<uint8_t> base;     // baseSize^3 RGBA8
     std::vector<uint8_t> detail;   // detailSize^3 RGBA8
+    // THE WEATHER MAP (ADR-0336): 2D, tiling, one base tile across (the march reads it at the deck's kilometres scale).
+    // R coverage -- the base volume's R at v = 0.37, exactly the slice the march read before, so the sky keeps its
+    // layout; G the CLOUD TYPE field (slow Perlin: regions some kilometres wide, the weather's type range spread over
+    // them); B wetness (Perlin, for rain); A unused.
+    int weatherSize = 512;
+    std::vector<uint8_t> weather;  // weatherSize^2 RGBA8
 };
+
+inline void bakeWeather(NoiseSet& s, uint32_t seed) {
+    const int n = s.weatherSize, b = s.baseSize;
+    s.weather.assign(static_cast<size_t>(n) * n * 4, 0);
+    // the slice between the two base layers v = 0.37 falls between, as the hardware's linear filter weighed them
+    const float vy = 0.37f * b - 0.5f;
+    const int y0 = static_cast<int>(std::floor(vy)), y1 = (y0 + 1) % b;
+    const float fy = vy - static_cast<float>(y0);
+    auto baseR = [&](int x, int y, int z) {
+        return static_cast<float>(s.base[((static_cast<size_t>(z) * b + y) * b + x) * 4]);
+    };
+    parallelSlices(n, [&](int j0, int j1) {
+        for (int j = j0; j < j1; ++j)
+            for (int i = 0; i < n; ++i) {
+                const float u = (i + 0.5f) / n, w = (j + 0.5f) / n;
+                // R: the base's slice, bilinear in x/z between its texels (the march's own filtering), wrapping
+                const float fx = u * b - 0.5f, fz = w * b - 0.5f;
+                const int x0 = static_cast<int>(std::floor(fx)), z0 = static_cast<int>(std::floor(fz));
+                const float ax = fx - x0, az = fz - z0;
+                float r = 0.0f;
+                for (int k = 0; k < 4; ++k) {
+                    const int xi = ((x0 + (k & 1)) % b + b) % b, zi = ((z0 + (k >> 1)) % b + b) % b;
+                    const float wk = ((k & 1) ? ax : 1.0f - ax) * ((k >> 1) ? az : 1.0f - az);
+                    r += wk * (baseR(xi, y0, zi) * (1.0f - fy) + baseR(xi, y1, zi) * fy);
+                }
+                const size_t o = (static_cast<size_t>(j) * n + i) * 4;
+                s.weather[o + 0] = static_cast<uint8_t>(std::lround(std::clamp(r, 0.0f, 255.0f)));
+                s.weather[o + 1] = toByte(perlinFbm(u, 0.71f, w, 3, 2, seed ^ 0x7e3aU));   // type: ~14 km regions
+                s.weather[o + 2] = toByte(perlinFbm(u, 0.23f, w, 6, 3, seed ^ 0x3b11U));   // wetness
+                s.weather[o + 3] = 255;
+            }
+    });
+}
 
 // Load the cached bake, or bake (a few hundred ms, threaded) and cache it.
 // The key hashes a descriptor of everything that shapes the bytes — bumping
@@ -281,10 +320,11 @@ inline NoiseSet generateOrLoad() {
             std::fread(s.base.data(), 1, baseBytes, fp) == baseBytes &&
             std::fread(s.detail.data(), 1, detailBytes, fp) == detailBytes;
         std::fclose(fp);
-        if (ok) return s;
+        if (ok) { bakeWeather(s, seed); return s; }
     }
     bakeBase(s.baseSize, seed, s.base);
     bakeDetail(s.detailSize, seed ^ 0xd317a115u, s.detail);
+    bakeWeather(s, seed);
     std::error_code ec;
     std::filesystem::create_directories("cache/clouds", ec);
     if (std::FILE* fp = std::fopen(path, "wb")) {

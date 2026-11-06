@@ -8441,6 +8441,23 @@ bool LevelLoader::load(const std::string& path,
             vc.farDistance = c.value("far", vc.farDistance);
             vc.ambient     = c.value("ambient", vc.ambient);
             vc.detailStrength = c.value("detailStrength", vc.detailStrength);
+            // the cloud types (ADR-0336): up to four, along the type axis; and the range when the weather is off
+            if (c.contains("types") && c["types"].is_array()) {
+                std::size_t k = 0;
+                for (const auto& tj : c["types"]) {
+                    if (k >= vc.types.size() || !tj.is_object()) break;
+                    auto& ty = vc.types[k++];
+                    if (tj.contains("profile") && tj["profile"].is_array() && tj["profile"].size() == 4)
+                        for (int i = 0; i < 4; ++i) ty.profile[i] = tj["profile"][i].get<float>();
+                    ty.density = tj.value("density", ty.density);
+                    ty.erosion = tj.value("erosion", ty.erosion);
+                    ty.anvil = tj.value("anvil", ty.anvil);
+                }
+            }
+            if (c.contains("typeRange") && c["typeRange"].is_array() && c["typeRange"].size() == 2) {
+                vc.typeLo = c["typeRange"][0].get<float>();
+                vc.typeHi = c["typeRange"][1].get<float>();
+            }
         }
         // Aerial-perspective fog (matches the offline tracer's Scene::fog). Lives
         // under "environment" alongside the sky; pushed to the renderer via the

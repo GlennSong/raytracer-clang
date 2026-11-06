@@ -204,6 +204,10 @@ struct CloudUniformsGPU {
     float detail[4];          // x detailStrength, y 1: the old coherent march offset (the A/B), z 1: reproject by cloud depth, w unused
     float prevViewProjection[16];   // last frame's (the history's reprojection, clouds_resolve.frag)
     float frame[4];                 // x dither offset in [0,1), y history weight (0: reset)
+    // THE CLOUD TYPES (ADR-0336): each type's height profile, and its density, erosion and anvil; the live type range
+    float typeProfile[4][4];
+    float typeParams[4][4];         // x density, y erosion, z anvil, w unused
+    float typeRange[4];             // x lo, y hi along the type axis (0 stratus .. 1 cumulonimbus), zw unused
 };
 
 // Per-draw push constants for the forward pass (120 <= 128 B).
@@ -463,6 +467,7 @@ struct VulkanRenderer::Impl {
     VkImage cloudDepthImage = VK_NULL_HANDLE;                // R32F: the distance to the ray's cloud (-1: none)
     VkDeviceMemory cloudDepthMemory = VK_NULL_HANDLE;
     VkImageView cloudDepthView = VK_NULL_HANDLE;
+    GpuTexture cloudWeatherTex;                              // the 2D weather map (cloudnoise::bakeWeather, ADR-0336)
     VkRenderPass cloudCompositeRenderPass = VK_NULL_HANDLE;  // HDR load+blend
     VkFramebuffer cloudFramebuffer = VK_NULL_HANDLE;
     VkFramebuffer cloudCompositeFramebuffer = VK_NULL_HANDLE;
@@ -1543,13 +1548,14 @@ bool VulkanRenderer::Impl::createCloudResources() {
         if (vkCreateRenderPass(device, &hrp, nullptr, &cloudCompositeRenderPass) != VK_SUCCESS)
             return false;
 
-        // Set layouts: march = UBO + depth + base + detail (+ the resolve's cloud depth); composite = cloud + depth.
-        std::array<VkDescriptorSetLayoutBinding, 5> mb{};
+        // Set layouts: march = UBO + depth + base + detail (+ the resolve's cloud depth) + the weather map; composite =
+        // cloud + depth.
+        std::array<VkDescriptorSetLayoutBinding, 6> mb{};
         mb[0].binding = 0;
         mb[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
         mb[0].descriptorCount = 1;
         mb[0].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
-        for (uint32_t i = 1; i < 5; ++i) {
+        for (uint32_t i = 1; i < 6; ++i) {
             mb[i].binding = i;
             mb[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
             mb[i].descriptorCount = 1;
@@ -1578,7 +1584,7 @@ bool VulkanRenderer::Impl::createCloudResources() {
         // (the march's sets, the resolve's -- one per frame and history -- and the composite's two)
         std::array<VkDescriptorPoolSize, 2> sizes{
             VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-                                 4 * MAX_FRAMES_IN_FLIGHT + 4 * 2 * MAX_FRAMES_IN_FLIGHT + 2 * 3},
+                                 5 * MAX_FRAMES_IN_FLIGHT + 5 * 2 * MAX_FRAMES_IN_FLIGHT + 2 * 3},
             VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, MAX_FRAMES_IN_FLIGHT + 2 * MAX_FRAMES_IN_FLIGHT}};
         VkDescriptorPoolCreateInfo pp{};
         pp.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
@@ -1624,7 +1630,9 @@ bool VulkanRenderer::Impl::createCloudResources() {
         if (!createImage3DRGBA8(static_cast<uint32_t>(nz.baseSize), nz.base.data(),
                                 cloudBaseImage, cloudBaseMemory, cloudBaseView) ||
             !createImage3DRGBA8(static_cast<uint32_t>(nz.detailSize), nz.detail.data(),
-                                cloudDetailImage, cloudDetailMemory, cloudDetailView))
+                                cloudDetailImage, cloudDetailMemory, cloudDetailView) ||
+            !createImageRGBA8(nz.weather.data(), static_cast<uint32_t>(nz.weatherSize),
+                              static_cast<uint32_t>(nz.weatherSize), cloudWeatherTex))
             return false;
 
         // March pipeline: fullscreen triangle, no blend, half-res target.
@@ -1795,14 +1803,15 @@ bool VulkanRenderer::Impl::createCloudResources() {
         imgs[1] = {textureSampler, cloudBaseView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
         imgs[2] = {textureSampler, cloudDetailView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
         imgs[3] = {textureSampler, cloudBaseView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};   // (binding 4: the resolve's; unread here)
-        std::array<VkWriteDescriptorSet, 5> writes{};
+        imgs[4] = {textureSampler, cloudWeatherTex.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};   // the weather map
+        std::array<VkWriteDescriptorSet, 6> writes{};
         writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         writes[0].dstSet = cloudMarchSets[i];
         writes[0].dstBinding = 0;
         writes[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
         writes[0].descriptorCount = 1;
         writes[0].pBufferInfo = &ubo;
-        for (uint32_t k = 0; k < 4; ++k) {
+        for (uint32_t k = 0; k < 5; ++k) {
             writes[k + 1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
             writes[k + 1].dstSet = cloudMarchSets[i];
             writes[k + 1].dstBinding = k + 1;
@@ -1840,8 +1849,9 @@ bool VulkanRenderer::Impl::createCloudResources() {
             ri[1] = {compositeSampler, cloudHistView[1 - h], VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
             ri[2] = {compositeSampler, depthView, VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL};
             ri[3] = {compositeSampler, cloudDepthView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};   // each pixel's cloud depth
-            std::array<VkWriteDescriptorSet, 5> rw{};
-            for (uint32_t k = 0; k < 5; ++k) {
+            ri[4] = {textureSampler, cloudWeatherTex.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};   // (unread by the resolve)
+            std::array<VkWriteDescriptorSet, 6> rw{};
+            for (uint32_t k = 0; k < 6; ++k) {
                 rw[k].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
                 rw[k].dstSet = cloudResolveSets[i][h];
                 rw[k].dstBinding = k;
@@ -6045,6 +6055,18 @@ void VulkanRenderer::Impl::drawFrame() {
         cu.march[2] = cp.phaseG;
         cu.march[3] = cp.farDistance;
         cu.detail[0] = cp.detailStrength;
+        for (int k = 0; k < 4; ++k) {   // the cloud types (ADR-0336)
+            for (int i = 0; i < 4; ++i) cu.typeProfile[k][i] = cp.types[static_cast<std::size_t>(k)].profile[i];
+            cu.typeParams[k][0] = cp.types[static_cast<std::size_t>(k)].density;
+            cu.typeParams[k][1] = cp.types[static_cast<std::size_t>(k)].erosion;
+            cu.typeParams[k][2] = cp.types[static_cast<std::size_t>(k)].anvil;
+            cu.typeParams[k][3] = 0.0f;
+        }
+        cu.typeRange[0] = cp.typeLo;
+        cu.typeRange[1] = cp.typeHi;
+        // RT_CLOUD_TYPES=0: the base volume's slice and one profile, as before (the A/B)
+        static const bool kNoTypes = [] { const char* e = std::getenv("RT_CLOUD_TYPES"); return e && e[0] == '0'; }();
+        cu.detail[3] = kNoTypes ? 1.0f : 0.0f;
         // each pixel's own march offset, each sample at it within its own step (clouds.frag, ADR-0332);
         // RT_CLOUD_JITTER=coherent the old 2x2 pattern, step-start samples and straight sun line (the A/B)
         static const bool kCoherentJitter = [] { const char* e = std::getenv("RT_CLOUD_JITTER"); return e && std::string(e) == "coherent"; }();
@@ -6400,6 +6422,7 @@ void VulkanRenderer::shutdown() {
     if (impl->cloudDetailView) vkDestroyImageView(impl->device, impl->cloudDetailView, nullptr);
     if (impl->cloudDetailImage) vkDestroyImage(impl->device, impl->cloudDetailImage, nullptr);
     if (impl->cloudDetailMemory) vkFreeMemory(impl->device, impl->cloudDetailMemory, nullptr);
+    impl->destroyTexture(impl->cloudWeatherTex);
     for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
         if (impl->occBuffers[i]) vkDestroyBuffer(impl->device, impl->occBuffers[i], nullptr);
         if (impl->occMemory[i]) vkFreeMemory(impl->device, impl->occMemory[i], nullptr);
