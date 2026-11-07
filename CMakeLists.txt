@@ -44,6 +44,7 @@ add_library(engine_core STATIC
     src/log.cpp
     src/job_system.cpp
     src/renderer/settings.cpp
+    src/renderer/light_clusters.cpp
     src/renderer/hosted_window.cpp
     src/renderer/debug_ui_clipboard.cpp
     src/engine/recent_scenes.cpp
@@ -760,6 +761,7 @@ add_executable(run_tests
     tests/test_carry_stow.cpp
     tests/test_camera_frame.cpp
     tests/test_trades.cpp
+    tests/test_light_clusters.cpp
     tests/test_danger_dodge.cpp
     tests/test_mesh_surfaces.cpp
     tests/test_cube_sphere.cpp

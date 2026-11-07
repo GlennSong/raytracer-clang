@@ -59,7 +59,14 @@ layout(set = 0, binding = 0) uniform Globals {
                               // z 1: no surface relief (RT_TERRAIN_DETAIL=0, ADR-0207)
     vec4  terrainSurface;     // the cover + macro maps (bindings 6, 7, ADR-0208): xy world origin, z 1/extent, w enabled
     vec4  terrainSurface2;    // x the camera distance the cover map blends in from, y 1/(the blend's length)
+    ivec4 clusterGrid;        // CLUSTERED LIGHTS (RT_CLUSTERED=1): x tilesX, y tilesY, z slices, w 1: on (bindings 8-10)
+    vec4  clusterDepth;       // x the slices' near depth, y 1/log(far/near), z framebuffer width, w height
 } g;
+// the clustered lights (light_clusters.h): every point and spot, each froxel's offset (low 24 bits) | count (high 8),
+// and the froxels' index lists
+layout(std430, set = 0, binding = 8) readonly buffer ClusterLightBuf { Light clusterLights[]; };
+layout(std430, set = 0, binding = 9) readonly buffer ClusterCellBuf { uint clusterCells[]; };
+layout(std430, set = 0, binding = 10) readonly buffer ClusterIndexBuf { uint clusterIndices[]; };
 
 layout(set = 0, binding = 1) uniform sampler2DArrayShadow shadowMap;
 layout(set = 0, binding = 2) uniform sampler2D envEquirect;   // HDR env (counts.z==1)
@@ -856,6 +863,40 @@ float computeShadow(vec3 worldPos, vec3 N, float viewDepth) {
 }
 
 // ---- main ------------------------------------------------------------------
+// One light's direct contribution (the GGX specular + Lambert diffuse, the sun's shadow on the sun only).
+vec3 shadeLight(Light light, vec3 worldPos, vec3 N, vec3 V, vec3 albedo, float metallic, vec3 f0, float a2,
+                float NdotV, vec3 sunShadow) {
+    int type = int(light.typeRange.x);
+    vec3 L;
+    float attenuation;
+    if (type == 1) {                       // directional
+        L = normalize(light.directionInner.xyz);
+        attenuation = light.positionIntensity.w;
+    } else {
+        L = light.positionIntensity.xyz - worldPos;
+        float dist = length(L);
+        L = normalize(L);
+        attenuation = light.positionIntensity.w * distanceAttenuation(dist, light.typeRange.y);
+        if (type == 2) {                   // spot
+            float theta = dot(-L, normalize(light.directionInner.xyz));
+            attenuation *= smoothstep(light.colorOuter.w, light.directionInner.w, theta);
+        }
+    }
+    float NdotL = max(dot(N, L), 0.0);
+    if (NdotL <= 0.0 || attenuation <= 0.0) return vec3(0.0);
+
+    vec3 H = normalize(L + V);
+    float NdotH = max(dot(N, H), 0.0);
+    float VdotH = max(dot(V, H), 0.0);
+    float D = distributionGGX(NdotH, a2);
+    float Vis = visibilitySmithGGX(NdotV, NdotL, a2);
+    vec3 F = fresnelSchlickVec(VdotH, f0);
+    vec3 specular = D * Vis * F;
+    vec3 diffuse = (1.0 - F) * (1.0 - metallic) * albedo / PI;
+    vec3 sh = (type == 1) ? sunShadow : vec3(1.0);   // only the sun casts shadows
+    return (diffuse + specular) * light.colorOuter.rgb * (attenuation * NdotL) * sh;
+}
+
 vec3 evaluateLighting(vec3 worldPos, vec3 N, vec3 V, vec3 albedo,
                       float metallic, float roughness, vec3 f0, vec3 sunShadow) {
     vec3 directLight = vec3(0.0);
@@ -864,38 +905,25 @@ vec3 evaluateLighting(vec3 worldPos, vec3 N, vec3 V, vec3 albedo,
     float NdotV = max(dot(N, V), 1e-4);
 
     int count = min(g.counts.x, 32);
-    for (int i = 0; i < count; ++i) {
-        Light light = g.lights[i];
-        int type = int(light.typeRange.x);
-        vec3 L;
-        float attenuation;
-        if (type == 1) {                       // directional
-            L = normalize(light.directionInner.xyz);
-            attenuation = light.positionIntensity.w;
-        } else {
-            L = light.positionIntensity.xyz - worldPos;
-            float dist = length(L);
-            L = normalize(L);
-            attenuation = light.positionIntensity.w * distanceAttenuation(dist, light.typeRange.y);
-            if (type == 2) {                   // spot
-                float theta = dot(-L, normalize(light.directionInner.xyz));
-                attenuation *= smoothstep(light.colorOuter.w, light.directionInner.w, theta);
-            }
-        }
-        float NdotL = max(dot(N, L), 0.0);
-        if (NdotL <= 0.0 || attenuation <= 0.0) continue;
-
-        vec3 H = normalize(L + V);
-        float NdotH = max(dot(N, H), 0.0);
-        float VdotH = max(dot(V, H), 0.0);
-        float D = distributionGGX(NdotH, a2);
-        float Vis = visibilitySmithGGX(NdotV, NdotL, a2);
-        vec3 F = fresnelSchlickVec(VdotH, f0);
-        vec3 specular = D * Vis * F;
-        vec3 diffuse = (1.0 - F) * (1.0 - metallic) * albedo / PI;
-        vec3 sh = (type == 1) ? sunShadow : vec3(1.0);   // only the sun casts shadows
-        directLight += (diffuse + specular) * light.colorOuter.rgb * (attenuation * NdotL) * sh;
+    if (g.clusterGrid.w != 0) {
+        // CLUSTERED: the sun (and the moon) from the 32, every other light from this pixel's froxel
+        for (int i = 0; i < count; ++i)
+            if (int(g.lights[i].typeRange.x) == 1)
+                directLight += shadeLight(g.lights[i], worldPos, N, V, albedo, metallic, f0, a2, NdotV, sunShadow);
+        float depth = -(g.view * vec4(worldPos, 1.0)).z;
+        int tx = clamp(int(gl_FragCoord.x / g.clusterDepth.z * float(g.clusterGrid.x)), 0, g.clusterGrid.x - 1);
+        int ty = clamp(g.clusterGrid.y - 1 - int(gl_FragCoord.y / g.clusterDepth.w * float(g.clusterGrid.y)), 0, g.clusterGrid.y - 1);
+        int sl = depth <= g.clusterDepth.x ? 0
+               : clamp(int(log(depth / g.clusterDepth.x) * g.clusterDepth.y * float(g.clusterGrid.z)), 0, g.clusterGrid.z - 1);
+        uint oc = clusterCells[(sl * g.clusterGrid.y + ty) * g.clusterGrid.x + tx];
+        uint off = oc & 0xFFFFFFu, n = oc >> 24;
+        for (uint k = 0u; k < n; ++k)
+            directLight += shadeLight(clusterLights[clusterIndices[off + k]], worldPos, N, V, albedo, metallic, f0, a2,
+                                      NdotV, sunShadow);
+        return directLight;
     }
+    for (int i = 0; i < count; ++i)
+        directLight += shadeLight(g.lights[i], worldPos, N, V, albedo, metallic, f0, a2, NdotV, sunShadow);
     return directLight;
 }
 

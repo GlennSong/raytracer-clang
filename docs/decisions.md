@@ -16463,3 +16463,52 @@ Adding a file to the key re-keys every level -- a full re-bake -- so it joins wi
 
 **Consequences.** A new trade is a row in trades.lua. Its furnishing is still the `switch (room.style)` in
 furniture.cpp: the next stage moves it to `furniture_rooms.lua` programs by trade.
+
+## ADR-0361 — Clustered lights on Vulkan (behind RT_CLUSTERED=1), and why not deferred
+
+**Context.** Glenn, 2026-11-07: "look into the deferred rendering so we could have many, many light sources. How
+possible is it to do that?" The renderer is forward, one pass: `mesh.frag` loops a 32-entry light array in the global
+UBO for every fragment (the sun, the nearest 20 lamps, 6 headlight cones, interior points, beacons -- at the cap the
+headlights drop first). The renderer-realism plan's phase 1 had already chosen clustered forward; ADR-0017 rejected
+deferred "for now", to revisit with many-light cities.
+
+**Measured first (river_town at 22:00, 2560 x 1405, RTX 3080, `RT_GPU_TIMES`; `RT_LIGHT_CAP` / `RT_LIGHT_FILL` pad or
+cut the list):** every light costs the scene pass ~0.1 ms wherever it is looked at -- towers 0.102, a park with trees
+and grass 0.103, a shop street 0.090 ms per light. The park, with the most overdraw, costs no more per light than the
+street: the depth test already throws away the hidden fragments, so each pixel is lit about once. Deferred's win --
+light each pixel once -- is one the forward pass mostly has. What a light costs is how many lights a pixel loops, and
+that is what clustering cuts. Forward at a thousand lights would be ~100 ms.
+
+**Decision (prototype, default off).**
+- `renderer/light_clusters.h` `buildClusters`: the view cut into 16 x 9 tiles x 24 exponential depth slices (0.5 m to
+  2 km); each light listed in every froxel its sphere reaches (sphere against the froxel's box), at most 64 a froxel
+  (the nearest its middle stay). CPU, a counting sort over (froxel, light) touches. Tests: no light that reaches a
+  point is missing from its froxel (3,475 points, 400 lights), none behind the camera, a 1,000-lamp street leaves
+  ~11 a froxel.
+- Vulkan: with `RT_CLUSTERED=1` every point and spot (up to 4,096) goes in a storage buffer (set 0 binding 8), the
+  froxels' offset|count (9) and index lists (10) beside it, rebuilt each frame in endFrame. `mesh.frag`'s
+  `evaluateLighting` then lights from the 32's sun and moon plus the pixel's froxel list (`shadeLight` is the one
+  light's maths both paths share). The 32 stay in the UBO for the loops still on them (grass and leaf transmission,
+  the water's glint, the viewer's room).
+- `RT_LAMP_LIGHTS` / `RT_LAMP_RADIUS` override the level's lamp count and reach (the producers are unchanged).
+
+**Results.**
+| view | forward, today's 23 | clustered, the same | clustered, every lamp in 800 m (~1,000) |
+|---|---|---|---|
+| street | 5.02 ms | 4.62 | 5.40 |
+| towers | 8.46 | 7.35 | 9.73 |
+Clustered with today's lights is the same picture (mean difference 0.04 / 255 on the street) and cheaper; with all
+the town's lamps lit the street glows to the end of the view for +1.3 ms over today. Binning ~0.5 ms on the CPU for
+the real lamps (0.56 ms for a 1,000-lamp street in the test). A thousand lights crowded within 60 m of the camera
+takes 11.5 ms: each touches most of the near froxels, so the sphere tests dominate -- the case for binning on the GPU.
+
+**Why not deferred (now).** No overdraw to save (above); a G-buffer of albedo, metallic, emission and a shading model
+on top of today's normal+roughness target, `mesh.frag` (1,722 lines, every surface) split into resolve and lighting
+halves with grass/leaf transmission and the impostors' self-shadow as special shading models, and three backends
+(Vulkan, Metal, WebGPU) restructured -- against clustered's light buffer and one loop. The froxel lists serve a
+deferred lighting pass unchanged if it comes. **Revisit deferred** for decals, AO on the ambient term only (today it
+darkens direct light and emission too), or if TAA's velocity target makes a G-buffer nearly free.
+
+**Owed (phase 1 proper).** Binning on the GPU (a compute pass); the producers past their caps (every car's head and
+tail lights, signs, shop fronts, lit windows as far-faded points); the 32-slot loops onto the lists; spot/point shadows
+(an atlas of 8); Metal and WebGPU; turning it on by default, with the level suite.

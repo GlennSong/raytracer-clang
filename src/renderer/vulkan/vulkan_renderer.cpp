@@ -15,6 +15,7 @@
 #include "../../log.h"
 #include "../../slot_map.h"
 #include "../../engine/vertex_pack.h"
+#include "../light_clusters.h"   // buildClusters (clustered lights, RT_CLUSTERED)
 
 #include <vulkan/vulkan.h>
 // GPU memory: AMD's Vulkan Memory Allocator (third_party/VulkanMemoryAllocator, compiled
@@ -187,6 +188,10 @@ struct GlobalsUBO {
     // camera distance the cover map blends in from, y 1/(the blend's length)
     float    terrainSurface[4];
     float    terrainSurface2[4];
+    // CLUSTERED LIGHTS (RT_CLUSTERED=1; renderer-realism phase 1): x tilesX, y tilesY, z slices, w 1: on (bindings 8-10);
+    // and x the slices' near depth, y 1/log(far/near), z the framebuffer's width, w its height
+    int32_t  clusterGrid[4];
+    float    clusterDepth[4];
 };
 
 // Volumetric-cloud uniforms (mirrors shader_types.h CloudUniforms; every
@@ -731,6 +736,19 @@ struct VulkanRenderer::Impl {
     std::array<VkBuffer, MAX_FRAMES_IN_FLIGHT> globalsBuffers{};
     std::array<VkDeviceMemory, MAX_FRAMES_IN_FLIGHT> globalsMemory{};
     std::array<void*, MAX_FRAMES_IN_FLIGHT> globalsMapped{};
+    // CLUSTERED LIGHTS: per frame in flight, the lights (GpuLight each), the froxels' offset|count, and the index lists
+    // (host-visible, written each frame from `clusterLights`); bindings 8, 9, 10
+    static constexpr uint32_t kClusterMaxLights = 4096, kClusterMaxIndices = 1u << 20;
+    std::array<VkBuffer, MAX_FRAMES_IN_FLIGHT> clusterBuf[3]{};
+    std::array<VkDeviceMemory, MAX_FRAMES_IN_FLIGHT> clusterMem[3]{};
+    std::array<void*, MAX_FRAMES_IN_FLIGHT> clusterMapped[3]{};
+    bool clustered = false;
+    std::vector<GpuLight> clusterLights;   // every point and spot this frame (the sun stays lights[0])
+    ClusterGrid clusterGrid;
+    ClusterLists clusterLists;
+    Mat4 camView;
+    float camTanHalfY = 0.577f, camAspect = 1.78f;
+    int clusterLogEvery = 0;
     VkPipelineLayout pipelineLayout = VK_NULL_HANDLE;
     VkPipeline meshPipeline = VK_NULL_HANDLE;          // two-sided (FLAG_TWO_SIDED batches)
     VkPipeline meshPipelineCulled = VK_NULL_HANDLE;    // back-face culled (the default)
@@ -3674,7 +3692,7 @@ bool VulkanRenderer::Impl::createSyncObjects() {
 }
 
 bool VulkanRenderer::Impl::createDescriptorSetLayout() {
-    std::array<VkDescriptorSetLayoutBinding, 8> bindings{};
+    std::array<VkDescriptorSetLayoutBinding, 11> bindings{};
     bindings[0].binding = 0;   // global UBO
     bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     bindings[0].descriptorCount = 1;
@@ -3695,6 +3713,12 @@ bool VulkanRenderer::Impl::createDescriptorSetLayout() {
     bindings[4].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     bindings[4].descriptorCount = 1;
     bindings[4].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    for (uint32_t b = 8; b < 11; ++b) {   // the clustered lights: lights, froxels, index lists (storage buffers)
+        bindings[b].binding = b;
+        bindings[b].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        bindings[b].descriptorCount = 1;
+        bindings[b].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    }
     for (uint32_t b = 5; b < 8; ++b) {   // terrain normal map (ADR-0205); cover and macro maps (ADR-0208)
         bindings[b].binding = b;
         bindings[b].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
@@ -3719,14 +3743,27 @@ bool VulkanRenderer::Impl::createGlobalsBuffers() {
                           globalsBuffers[i], globalsMemory[i]))
             return false;
         vkMapMemory(device, globalsMemory[i], 0, sizeof(GlobalsUBO), 0, &globalsMapped[i]);
+        const VkDeviceSize sizes[3] = {kClusterMaxLights * sizeof(GpuLight),
+                                       static_cast<VkDeviceSize>(ClusterGrid{}.cells()) * sizeof(uint32_t),
+                                       kClusterMaxIndices * sizeof(uint32_t)};
+        for (int k = 0; k < 3; ++k) {
+            if (!createBuffer(sizes[k], VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                              VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                              clusterBuf[k][i], clusterMem[k][i]))
+                return false;
+            vkMapMemory(device, clusterMem[k][i], 0, sizes[k], 0, &clusterMapped[k][i]);
+            std::memset(clusterMapped[k][i], 0, static_cast<std::size_t>(sizes[k]));
+        }
     }
     return true;
 }
 
 bool VulkanRenderer::Impl::createDescriptorPool() {
-    std::array<VkDescriptorPoolSize, 2> sizes{};
+    std::array<VkDescriptorPoolSize, 3> sizes{};
     sizes[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     sizes[0].descriptorCount = MAX_FRAMES_IN_FLIGHT;
+    sizes[2].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;   // the clustered lights' three buffers
+    sizes[2].descriptorCount = MAX_FRAMES_IN_FLIGHT * 3;
     sizes[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;   // shadow map + env + BRDF LUT + horizon + 3 terrain maps
     sizes[1].descriptorCount = MAX_FRAMES_IN_FLIGHT * 7;
     VkDescriptorPoolCreateInfo info{};
@@ -3793,6 +3830,18 @@ bool VulkanRenderer::Impl::createDescriptorSets() {
         writes[2].descriptorCount = 1;
         writes[2].pImageInfo = &lut;
         vkUpdateDescriptorSets(device, static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
+        VkDescriptorBufferInfo cb[3];
+        VkWriteDescriptorSet cw[3]{};
+        for (int k = 0; k < 3; ++k) {
+            cb[k] = {clusterBuf[k][i], 0, VK_WHOLE_SIZE};
+            cw[k].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            cw[k].dstSet = descriptorSets[i];
+            cw[k].dstBinding = 8 + static_cast<uint32_t>(k);
+            cw[k].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            cw[k].descriptorCount = 1;
+            cw[k].pBufferInfo = &cb[k];
+        }
+        vkUpdateDescriptorSets(device, 3, cw, 0, nullptr);
     }
 
     // Env equirect sampler (wrap-u/clamp-v, linear + mips for roughness LOD).
@@ -5963,10 +6012,11 @@ void VulkanRenderer::Impl::drawFrame() {
             if (++gpuFrames == 120) {
                 const double n = gpuFrames;
                 LOG_INFO("[gpu] ms per frame: shadows %.2f scene %.2f clouds %.2f bloom %.2f ssao %.2f ssr %.2f occlusion+dof %.2f "
-                         "composite+ui %.2f | total %.2f || cpu in endFrame: fence wait %.2f record %.2f submit+present %.2f",
+                         "composite+ui %.2f | total %.2f || cpu in endFrame: fence wait %.2f record %.2f submit+present %.2f"
+                         " | lights %d",
                          gpuAccumMs[1] / n, gpuAccumMs[2] / n, gpuAccumMs[3] / n, gpuAccumMs[4] / n, gpuAccumMs[5] / n,
                          gpuAccumMs[6] / n, gpuAccumMs[7] / n, gpuAccumMs[8] / n, gpuAccumMs[0] / n, cpuWaitMs / n,
-                         cpuRecordMs / n, cpuQueueMs / n);
+                         cpuRecordMs / n, cpuQueueMs / n, static_cast<int>(cpuGlobals.counts[0]));
                 for (double& m : gpuAccumMs) m = 0;
                 cpuWaitMs = cpuRecordMs = cpuQueueMs = 0;
                 gpuFrames = 0;
@@ -6014,6 +6064,37 @@ void VulkanRenderer::Impl::drawFrame() {
         return;
     }
 
+    // CLUSTERED LIGHTS: bin this frame's lights into the froxels and upload the three buffers
+    if (clustered) {
+        std::vector<ClusterLight> cl;
+        cl.reserve(clusterLights.size());
+        for (const GpuLight& l : clusterLights)
+            cl.push_back({Vec3(l.positionIntensity[0], l.positionIntensity[1], l.positionIntensity[2]), l.typeRange[1]});
+        const auto t0 = std::chrono::steady_clock::now();
+        buildClusters(clusterGrid, camView, camTanHalfY, camAspect, cl, clusterLists);
+        const double binMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+        const std::size_t nIdx = std::min<std::size_t>(clusterLists.indices.size(), kClusterMaxIndices);
+        std::memcpy(clusterMapped[0][currentFrame], clusterLights.data(), clusterLights.size() * sizeof(GpuLight));
+        std::memcpy(clusterMapped[1][currentFrame], clusterLists.offsetCount.data(), clusterLists.offsetCount.size() * sizeof(uint32_t));
+        std::memcpy(clusterMapped[2][currentFrame], clusterLists.indices.data(), nIdx * sizeof(uint32_t));
+        if (nIdx < clusterLists.indices.size())   // (a froxel whose list runs past the buffer: emptied, not read off the end)
+            for (uint32_t& oc : clusterLists.offsetCount) if ((oc & 0xFFFFFFu) + (oc >> 24) > nIdx) oc = 0;
+        if (++clusterLogEvery >= 240) {
+            clusterLogEvery = 0;
+            LOG_INFO("[clusters] %zu lights, %zu list entries, busiest froxel %d (%d capped), binned in %.2f ms",
+                     clusterLights.size(), clusterLists.indices.size(), clusterLists.maxInCell, clusterLists.capped, binMs);
+        }
+        cpuGlobals.clusterGrid[0] = clusterGrid.tilesX;
+        cpuGlobals.clusterGrid[1] = clusterGrid.tilesY;
+        cpuGlobals.clusterGrid[2] = clusterGrid.slices;
+        cpuGlobals.clusterGrid[3] = 1;
+        cpuGlobals.clusterDepth[0] = clusterGrid.zNear;
+        cpuGlobals.clusterDepth[1] = 1.0f / std::log(clusterGrid.zFar / clusterGrid.zNear);
+        cpuGlobals.clusterDepth[2] = static_cast<float>(swapchainExtent.width);
+        cpuGlobals.clusterDepth[3] = static_cast<float>(swapchainExtent.height);
+    } else {
+        cpuGlobals.clusterGrid[3] = 0;
+    }
     // Upload this frame's globals into its persistently mapped UBO.
     std::memcpy(globalsMapped[currentFrame], &cpuGlobals, sizeof(GlobalsUBO));
 
@@ -6330,6 +6411,11 @@ void VulkanRenderer::shutdown() {
         if (impl->globalsMemory[i]) vkUnmapMemory(impl->device, impl->globalsMemory[i]);
         if (impl->globalsBuffers[i]) vkDestroyBuffer(impl->device, impl->globalsBuffers[i], nullptr);
         if (impl->globalsMemory[i]) vkFreeMemory(impl->device, impl->globalsMemory[i], nullptr);
+        for (int k = 0; k < 3; ++k) {
+            if (impl->clusterMem[k][i]) vkUnmapMemory(impl->device, impl->clusterMem[k][i]);
+            if (impl->clusterBuf[k][i]) vkDestroyBuffer(impl->device, impl->clusterBuf[k][i], nullptr);
+            if (impl->clusterMem[k][i]) vkFreeMemory(impl->device, impl->clusterMem[k][i], nullptr);
+        }
     }
     impl->meshPipeline = VK_NULL_HANDLE;
     impl->meshPipelineCulled = VK_NULL_HANDLE;
@@ -6949,6 +7035,9 @@ void VulkanRenderer::setCamera(const CameraState& camera) {
 
     // Captured for the cascade fit in setLights (un-flipped, reverse-Z VP).
     impl->camViewProj = vp;
+    impl->camView = view;
+    impl->camTanHalfY = static_cast<float>(std::tan(camera.fovDegrees * 3.14159265358979 / 360.0));
+    impl->camAspect = aspect;
     impl->camPos = camera.position;
     impl->camNear = camera.nearPlane;
     impl->camFar = camera.farPlane;
@@ -7098,6 +7187,58 @@ void VulkanRenderer::setLights(const SceneLighting& lighting) {
         setColor(l.colorOuter, s.color, std::cos(s.outerConeAngle));
         l.typeRange[0] = 2.0f; l.typeRange[1] = s.range; l.typeRange[2] = 0.0f; l.typeRange[3] = 0.0f;
     }
+    // CLUSTERED (RT_CLUSTERED=1): every point and spot, past the 32, into the light buffer; the froxels pick for each
+    // pixel (endFrame bins them). The UBO's 32 stay as they were (the sun first) for the loops that read them still
+    // (grass and leaf transmission, the water's glint, the viewer's room).
+    static const bool clusteredOn = [] { const char* e = std::getenv("RT_CLUSTERED"); return e && std::string(e) != "0"; }();
+    impl->clustered = clusteredOn;
+    impl->clusterLights.clear();
+    if (impl->clustered) {
+        for (const PointLight& p : lighting.pointLights) {
+            if (impl->clusterLights.size() >= Impl::kClusterMaxLights) break;
+            GpuLight l{};
+            setColor(l.positionIntensity, p.position, p.intensity);
+            setColor(l.colorOuter, p.color, 0.0f);
+            l.typeRange[1] = p.range;
+            impl->clusterLights.push_back(l);
+        }
+        for (const SpotLight& sp : lighting.spotLights) {
+            if (impl->clusterLights.size() >= Impl::kClusterMaxLights) break;
+            GpuLight l{};
+            setColor(l.positionIntensity, sp.position, sp.intensity);
+            setColor(l.directionInner, normalize(sp.direction), std::cos(sp.innerConeAngle));
+            setColor(l.colorOuter, sp.color, std::cos(sp.outerConeAngle));
+            l.typeRange[0] = 2.0f; l.typeRange[1] = sp.range;
+            impl->clusterLights.push_back(l);
+        }
+    }
+    // RT_LIGHT_FILL=N (a measurement, not a look): pad the list to N lights -- faint points scattered within 25 m of
+    // the camera, every one in range of what it sees -- so the scene pass's cost per light can be timed
+    // (RT_GPU_TIMES) at 1 against 32 on the same view.
+    static const int lightFill = [] { const char* e = std::getenv("RT_LIGHT_FILL"); return e ? std::atoi(e) : 0; }();
+    for (int k = 0; impl->clustered && k < lightFill - 32 && impl->clusterLights.size() < Impl::kClusterMaxLights; ++k) {
+        // (clustered: the fill past the 32 goes into the light buffer only -- a thousand faint points round the camera)
+        GpuLight l{};
+        const float a = static_cast<float>(k) * 2.39996f, r = 4.0f + 60.0f * std::sqrt(static_cast<float>(k % 997) / 997.0f);
+        const float* c = impl->cpuGlobals.cameraPosition;
+        setColor(l.positionIntensity, Vec3(c[0] + r * std::cos(a), c[1] - 1.0f + static_cast<float>(k % 5), c[2] + r * std::sin(a)), 0.02f);
+        setColor(l.colorOuter, Vec3(1, 0.9, 0.8), 0.0f);
+        l.typeRange[1] = 20.0f;
+        impl->clusterLights.push_back(l);
+    }
+    for (int k = 0; n < std::min(lightFill, 32); ++k) {
+        GpuLight& l = impl->cpuGlobals.lights[n++];
+        const float a = static_cast<float>(k) * 2.39996f, r = 4.0f + 21.0f * static_cast<float>((k * 37) % 32) / 32.0f;
+        const float* c = impl->cpuGlobals.cameraPosition;
+        const Vec3 at(c[0] + r * std::cos(a), c[1] - 1.0f + static_cast<float>(k % 5), c[2] + r * std::sin(a));
+        setColor(l.positionIntensity, at, 0.02f);
+        setColor(l.directionInner, Vec3(0, 0, 0), 0.0f);
+        setColor(l.colorOuter, Vec3(1, 0.9, 0.8), 0.0f);
+        l.typeRange[0] = 0.0f; l.typeRange[1] = 34.0f; l.typeRange[2] = 0.0f; l.typeRange[3] = 0.0f;
+    }
+    // RT_LIGHT_CAP=N (a measurement): only the first N (the sun first) -- the 1-light baseline
+    static const int lightCap = [] { const char* e = std::getenv("RT_LIGHT_CAP"); return e ? std::atoi(e) : 32; }();
+    n = std::min(n, std::max(0, lightCap));
     impl->cpuGlobals.counts[0] = n;
 
     // ---- Cascaded shadow maps for the sun (port of the Metal cascade fit) ----

@@ -116,6 +116,12 @@ void RenderSystem::render(FrameContext& ctx) {
                 lampRadius = std::max(Real(10), Real(c.lampLightRadius));
                 lampRange = std::max(Real(2), Real(c.lampLightRange));
             });
+            // RT_LAMP_LIGHTS / RT_LAMP_RADIUS: the level's count and reach overridden (the clustered lights' trial: a
+            // thousand real lamps, RT_CLUSTERED=1 -- without it the renderer still keeps 32)
+            static const int envLamps = [] { const char* e = std::getenv("RT_LAMP_LIGHTS"); return e ? std::atoi(e) : 0; }();
+            static const double envRadius = [] { const char* e = std::getenv("RT_LAMP_RADIUS"); return e ? std::atof(e) : 0.0; }();
+            if (envLamps > 0) kMaxLampLights = envLamps;
+            if (envRadius > 0) lampRadius = envRadius;
             // the candidates: every street lamp's bulb (the first StreetFurniture's), and every station's canopy
             // lights (RailStop::lamps -- cooler, a shorter pool under a roof)
             struct Bulb { Real d2; Vec3 at; bool station; };
