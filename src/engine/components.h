@@ -769,6 +769,11 @@ struct CityMap {
 struct StreetNaming;
 struct StreetDirectory {
     std::shared_ptr<const StreetNaming> naming;
+    // each named street's centreline (its node chain's plan positions, in naming->streets order): what a place is
+    // looked up by -- the nearest street names a bus stop (the bus's next-stop display)
+    std::vector<std::vector<Vec2>> lines;
+    // The street nearest `p` (its name; empty when there is none within `reach` metres)
+    std::string nearestName(const Vec2& p, Real reach = 40.0) const;
     // How many signs stood up (the loader's census; 0 with signs off).
     int signPosts = 0;
 };

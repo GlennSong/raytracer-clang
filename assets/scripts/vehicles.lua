@@ -167,6 +167,7 @@ local KIT_HANDLING = {
   bus         = { drive = "rwd", drag_area = 6.0, torque_per_kg = 0.32, max_steer_deg = 38, suspension = street(1.2, 0.30, 0.5),
                   anti_roll = 6000, drift = { rear_grip = 0.85, slip_deg = 8, min_speed = 14 } },
 }
+KIT_HANDLING.bus_standing = KIT_HANDLING.bus   -- (the same bus, another saloon)
 KIT_HANDLING.jeep.anti_roll, KIT_HANDLING.jeep.drift = 1500, { rear_grip = 0.45, slip_deg = 26 }
 KIT_HANDLING.pickup.anti_roll, KIT_HANDLING.pickup.drift = 1800, { rear_grip = 0.42, slip_deg = 28 }
 OFFROAD.anti_roll, OFFROAD.drift = 1200, { rear_grip = 0.5, slip_deg = 22 }
@@ -503,6 +504,8 @@ local FLEET_SLOTS = {
     { bike = "moped",      color = { 0.20, 0.55, 0.62 } },   -- moped (teal): its rider astride too
     { kit = "fire_engine", color = { 0.70, 0.05, 0.05 } },   -- FIRE ENGINE (fire-engine red): stationed, never traffic
     { kit = "bus",         color = { 0.86, 0.62, 0.08 } },   -- CITY BUS (municipal yellow): the kit bus (ADR-0349)
+    -- ...and its STANDING-ROOM twin (benches along the walls): the routes are dealt round the bus bodies in turn
+    { kit = "bus_standing", color = { 0.86, 0.62, 0.08 } },
 }
 
 -- A TWO-WHEELER IN THE FLEET (Glenn, 2026-11-04: "motorcycles -- can you make it available"): the drivable recipe
@@ -575,9 +578,10 @@ end
 -- retired, the kit fleet ordered for the island -- the cars and trucks, the fire engine, the bus last.
 local MIXED_SLOTS = {}
 -- (Glenn, 2026-11-06: the classic cars retire; the mixed fleet is the kit fleet, the bus last)
-for _, s in ipairs(FLEET_SLOTS) do if s.kit ~= "bus" and s.kit ~= "fire_engine" then MIXED_SLOTS[#MIXED_SLOTS + 1] = s end end
+local function isBus(s) return s.kit == "bus" or s.kit == "bus_standing" end
+for _, s in ipairs(FLEET_SLOTS) do if not isBus(s) and s.kit ~= "fire_engine" then MIXED_SLOTS[#MIXED_SLOTS + 1] = s end end
 for _, s in ipairs(FLEET_SLOTS) do if s.kit == "fire_engine" then MIXED_SLOTS[#MIXED_SLOTS + 1] = s end end
-for _, s in ipairs(FLEET_SLOTS) do if s.kit == "bus" then MIXED_SLOTS[#MIXED_SLOTS + 1] = s end end
+for _, s in ipairs(FLEET_SLOTS) do if isBus(s) then MIXED_SLOTS[#MIXED_SLOTS + 1] = s end end
 
 -- The named fleets. A level picks one with `citysim.fleet` (level_loader points vehicle.fleet at it);
 -- without one it gets the kit fleet.

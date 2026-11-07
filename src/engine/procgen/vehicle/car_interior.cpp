@@ -249,8 +249,11 @@ RenderMesh buildBusInterior(const CabinSpace& cabin, const InteriorParams& p,
                     s.axis[kAft] = Vec3(1, 0, 0);
                     s.origin = Vec3(hw - depth, cabin.floorY, zw - seatW);
                 }
+                // (a wall bench's back is near upright: raked as a forward seat's it leaned out through the wall)
+                InteriorParams bench = p;
+                bench.backAngle = Real(6.0);
                 Vec3 hip;
-                emitSeat(bm, insetScope(s, Real(0.02)), p, &hip);
+                emitSeat(bm, insetScope(s, Real(0.02)), bench, &hip);
                 if (seatsOut) seatsOut->push_back(hip);
             }
         }

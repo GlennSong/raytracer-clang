@@ -13,6 +13,7 @@
 #include "car_lamps.h"                                // lamp decision core (ADR-0065)
 #include "screen_project.h"                           // worldToScreen (place labels)
 #include "../../engine/asset_manager.h"
+#include <cctype>
 #include "../../engine/components.h"
 #include "../../engine/mesh_builder.h"
 #include "../../engine/procgen/city/roads/road_entity.h"
@@ -170,7 +171,7 @@ int CityRenderSystem::slotFor(int ai, int variants) const {
     const Agent& a = sim_.agents()[static_cast<std::size_t>(ai)];
     int v = sim_.ambientSlotFor(a.vehicle >= 0 ? a.vehicle : 0);
     if (v >= variants) v %= variants;
-    if (busVariant_ >= 0 && sim_.isBus(ai) && busVariant_ < variants) v = busVariant_;
+    if (sim_.isBus(ai)) { const int bv = busVariantOf(ai); if (bv >= 0 && bv < variants) v = bv; }
     if (taxiVariant_ >= 0 && sim_.isTaxi(ai) && taxiVariant_ < variants) v = taxiVariant_;
     if (fireVariant_ >= 0 && fireVariant_ < variants && a.vehicle >= 0 &&
         a.vehicle < static_cast<int>(sim_.vehicles().size()) &&
@@ -641,6 +642,7 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
             // Now the asset simply says how many there are.
             fleetVariants = slots;
             std::vector<VehicleBody> catalogue;
+            busVariants_.clear();
             for (int v = 0; v < slots; ++v) {
                 VehicleBody body = vehicleFleetBody(v);
                 Vec3 size(0, 0, 0);
@@ -668,9 +670,10 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
                 // ...and the TAXI, dealt to the cabs alone (a yellow cab with nobody's fare is not ambient traffic)
                 if (className == "fire_engine") { fireVariant_ = v; body.type = VehicleType::FireEngine; }
                 else if (className == "taxi") { taxiVariant_ = v; body.type = VehicleType::Taxi; }
-                else if (className == "bus") { busVariant_ = v; body.type = VehicleType::Bus; }
-                else if (body.type == VehicleType::Bus) busVariant_ = v;
+                else if (className.rfind("bus", 0) == 0) { busVariants_.push_back(v); body.type = VehicleType::Bus; }
+                else if (body.type == VehicleType::Bus) busVariants_.push_back(v);
                 else if (body.type == VehicleType::FireEngine) body.type = VehicleType::BoxTruck;
+                busVariant_ = busVariants_.empty() ? -1 : busVariants_.front();
                 // its handling: what it drives with once physical (item 23)
                 engine::VehicleSpec handling;
                 std::string hErr;
@@ -681,7 +684,8 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
                 catalogue.push_back(body);
             }
             LOG_INFO << "[citysim] fleet: " << slots << " slots, bus variant "
-                     << busVariant_ << (busVariant_ < 0 ? " (NO BUS MESH)" : "");
+                     << busVariant_ << (busVariant_ < 0 ? " (NO BUS MESH)" : "") << " (" << busVariants_.size()
+                     << " bus bodies)";
             sim_.setFleet(std::move(catalogue));
             fleetScripted = true;
         }
@@ -2397,7 +2401,7 @@ void CityRenderSystem::syncCarLamps(World& world) {
         // (never without its body: the same off-street rule syncGroups draws the bus by)
         const bool putAway = !a.moving && a.vehicle >= 0 && a.vehicle < static_cast<int>(sim_.vehicles().size()) &&
                              sim_.vehicles()[static_cast<std::size_t>(a.vehicle)].offStreet;
-        if (v == busVariant_ && sim_.isBus(static_cast<int>(ai)) && !putAway && !busSignGroups_.empty()) {
+        if (isBusVariant(v) && sim_.isBus(static_cast<int>(ai)) && !putAway && !busSignGroups_.empty()) {
             const int row = busSignRowFor(static_cast<int>(ai));
             if (InstanceGroup* sg = row >= 0 ? world.get<InstanceGroup>(busSignGroups_[static_cast<std::size_t>(row)]) : nullptr) {
                 // THE BODY'S OWN POSE, as drawn this bake: agentPose(a) without the index skips the body's tilt
@@ -2406,9 +2410,19 @@ void CityRenderSystem::syncCarLamps(World& world) {
                 const auto drawn = busDrawnPose_.find(static_cast<int>(ai));
                 const auto po = physPose_.find(static_cast<int>(ai));
                 const Mat4 body = drawn != busDrawnPose_.end() ? drawn->second : po != physPose_.end() ? po->second : agentPose(a);
-                sg->push(body * busSignLocal_, movingId(a, 4));
+                std::size_t k = 0;
+                while (k < busVariants_.size() && busVariants_[k] != v) ++k;
+                const int stopRow = busStopRowFor(static_cast<int>(ai));
+                InstanceGroup* stopGroup = stopRow >= 0 ? world.get<InstanceGroup>(busSignGroups_[static_cast<std::size_t>(stopRow)]) : nullptr;
+                const std::vector<BusBoard> front{BusBoard{busSignLocal_, false}};
+                const std::vector<BusBoard>& boards = k < busBoards_.size() ? busBoards_[k] : front;
+                for (std::size_t b = 0; b < boards.size(); ++b) {
+                    InstanceGroup* g = boards[b].nextStop ? stopGroup : sg;
+                    if (!g) continue;
+                    g->push(body * boards[b].local, movingId(a, 4) + static_cast<uint32_t>(b));
+                    if (b == 0) busSignAt_ = g->transforms.back().transformPoint(Vec3(0, 0, 0));
+                }
                 ++busSignsDrawn_;
-                busSignAt_ = sg->transforms.back().transformPoint(Vec3(0, 0, 0));
             }
         }
         // A CAR AT REST is dark (ADR-0341): parked at the end of its trip, on the street or off it. The body skips one
@@ -2479,6 +2493,14 @@ std::size_t CityRenderSystem::carsLit(World& world, uint32_t bits) const {
 }
 
 // The row a bus's sign shows: its line, or NOT IN SERVICE while it deadheads to the depot or stands off duty.
+int CityRenderSystem::busStopRowFor(int ai) const {
+    if (!sim_.busInService(ai)) return busSignOff_;
+    const int r = sim_.busRouteOf(ai), si = sim_.busNextStopOf(ai);
+    if (r < 0 || r >= static_cast<int>(busStopRow_.size())) return busSignOff_;
+    const std::vector<int>& rows = busStopRow_[static_cast<std::size_t>(r)];
+    return si >= 0 && si < static_cast<int>(rows.size()) ? rows[static_cast<std::size_t>(si)] : busSignRowFor(ai);
+}
+
 int CityRenderSystem::busSignRowFor(int ai) const {
     if (!sim_.busInService(ai)) return busSignOff_;
     const int r = sim_.busRouteOf(ai);
@@ -2515,6 +2537,23 @@ void CityRenderSystem::makeBusSigns(engine::FrameContext& ctx) {
         busSignRow_[static_cast<std::size_t>(r)] = row(std::to_string(net.lineOf(r) + 1) + "|" + way);
     }
     busSignOff_ = row("NOT IN SERVICE");
+    // THE NEXT STOP, inside (Glenn, 2026-11-06: "an interior facing display that shows the stop that you're heading
+    // towards next"): each stop by the street it stands on, the nearest named one (StreetDirectory); one row per
+    // street, shared by every stop on it. A stop with no street in reach shows its line's label instead.
+    const engine::StreetDirectory* streets = nullptr;
+    ctx.world.each<engine::StreetDirectory>([&](Entity, engine::StreetDirectory& d) { streets = &d; });
+    busStopRow_.assign(static_cast<std::size_t>(net.routeCount()), {});
+    int named = 0;
+    for (int r = 0; r < net.routeCount(); ++r) {
+        const citysim::BusRoute& br = net.route(r);
+        std::vector<int>& rows = busStopRow_[static_cast<std::size_t>(r)];
+        for (const citysim::BusStop& st : br.stops) {
+            std::string name = streets ? streets->nearestName(st.pos) : std::string();
+            for (char& c : name) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+            rows.push_back(name.empty() ? busSignRow_[static_cast<std::size_t>(r)] : row("NEXT|" + name));
+            named += name.empty() ? 0 : 1;
+        }
+    }
     engine::TextImage day, lit;
     engine::busSignImages(*font, labels, day, lit);
     const engine::TextureHandle dayTex = ctx.renderer.uploadTexture(day.w, day.h, 4, day.rgba.data());
@@ -2539,13 +2578,29 @@ void CityRenderSystem::makeBusSigns(engine::FrameContext& ctx) {
     const std::vector<Vec3> he = carGroupHalfExtents();
     const Vec3 h = busVariant_ < static_cast<int>(he.size()) ? he[static_cast<std::size_t>(busVariant_)] : Vec3(1.275, 1.6, 5.7);
     busSignLocal_ = Mat4::translate(0, h.y * 2 * 0.90 - h.y, h.z * 2 * 0.4916 + 0.04);
-    // ...or where the bus's own recipe puts it (a `dest_sign` marker: the kit bus, ADR-0349)
-    if (busVariant_ >= 0 && busVariant_ < static_cast<int>(carLights_.size()))
-        for (const LampMarker& m : carLights_[static_cast<std::size_t>(busVariant_)])
-            if (m.name == "dest_sign") busSignLocal_ = Mat4::translate(m.pos.x, m.pos.y, m.pos.z);
+    // ...or where each bus's own recipe puts its boards (markers: the kit bus, ADR-0349). The board faces +Z; the
+    // rear one and the next-stop one over the saloon turn to face back, the side one faces out from its side.
+    constexpr Real kPi = 3.14159265358979;
+    busBoards_.assign(busVariants_.size(), {});
+    for (std::size_t k = 0; k < busVariants_.size(); ++k) {
+        const int bv = busVariants_[k];
+        std::vector<BusBoard>& boards = busBoards_[k];
+        boards.push_back(BusBoard{busSignLocal_, false});
+        if (bv < 0 || bv >= static_cast<int>(carLights_.size())) continue;
+        for (const LampMarker& m : carLights_[static_cast<std::size_t>(bv)]) {
+            const Mat4 at = Mat4::translate(m.pos.x, m.pos.y, m.pos.z);
+            if (m.name == "dest_sign") boards.front().local = at;
+            else if (m.name == "dest_sign_rear") boards.push_back(BusBoard{at * Mat4::rotateY(kPi), false});
+            // (the side board stands in a pane, the next-stop one hangs behind the cab: each half the front's width)
+            else if (m.name == "dest_sign_side")
+                boards.push_back(BusBoard{at * Mat4::rotateY(m.pos.x >= 0 ? kPi * 0.5 : -kPi * 0.5) * Mat4::scale(0.5, 1, 1), false});
+            else if (m.name == "stop_display") boards.push_back(BusBoard{at * Mat4::rotateY(kPi) * Mat4::scale(0.5, 1, 1), true});
+        }
+    }
     std::string all;
     for (const std::string& l : labels) all += (all.empty() ? "" : ", ") + l;
-    LOG_INFO << "[citysim] bus destination signs: " << labels.size() << " labels (" << all << ")";
+    LOG_INFO << "[citysim] bus destination signs: " << labels.size() << " labels (" << all << "); " << named
+             << " stops named for their street";
 }
 
 // Bake the CITY-PLAN outlines (ADR-0066), on first show (syncGroups).
@@ -4279,7 +4334,7 @@ void CityRenderSystem::update(engine::FrameContext& ctx) {
         if (built_ && parkingTick_ % 30 == 0) dealOpenSigns(ctx.world, ctx.view.camera.position);
         // THE BUS DEPOTS: `depots?` -- in service or not, buses on the road / heading in / parked in a depot bay, and the
         // depot nearest the camera
-        if (built_ && parkingTick_ % 30 == 0 && asked && sim_.depotCount() > 0) {
+        if (built_ && parkingTick_ % 30 == 0 && asked) {   // (no depots: still the buses and their signs)
             int driving = 0, toDepot = 0, offDuty = 0, inBay = 0, buses = 0;
             const auto& ag = sim_.agents();
             for (std::size_t i = 0; i < ag.size(); ++i) {
@@ -4317,11 +4372,11 @@ void CityRenderSystem::update(engine::FrameContext& ctx) {
                     if (vs[vi].driver >= 0 || vs[vi].offStreet || inDepot[vi]) continue;
                     int v = sim_.ambientSlotFor(static_cast<int>(vi));
                     if (drawVariantCount() > 0 && v >= drawVariantCount()) v %= drawVariantCount();
-                    if (v == busVariant_ || vs[vi].type == VehicleType::Bus) ++kerbBus;
+                    if (isBusVariant(v) || vs[vi].type == VehicleType::Bus) ++kerbBus;
                 }
                 for (std::size_t i = 0; i < ag.size(); ++i)
                     if (ag[i].mode == Agent::Mode::Driver && !sim_.isBus(static_cast<int>(i)) &&
-                        drawSlotFor(static_cast<int>(i)) == busVariant_)
+                        isBusVariant(drawSlotFor(static_cast<int>(i))))
                         ++wrongDriver;
                 // a bus being driven whose vehicle still says off-street: no body whenever it stands (the sign alone)
                 int putAway = 0;
@@ -4943,27 +4998,41 @@ bool CityRenderSystem::busFrame(int agent, Mat4* pose) const {
     return true;
 }
 
-const std::vector<Vec3>& CityRenderSystem::busSeats() const {
-    static const std::vector<Vec3> kNone;
-    if (busVariant_ < 0 || busVariant_ >= static_cast<int>(carSeats_.size())) return kNone;
-    return carSeats_[static_cast<std::size_t>(busVariant_)];
+// The bus body a bus agent wears: the first, or -- with several bus bodies in the fleet -- its route's, the routes
+// dealt round them in order (a route always runs the same bus)
+int CityRenderSystem::busVariantOf(int agent) const {
+    if (busVariants_.size() <= 1 || agent < 0) return busVariant_;
+    const int r = sim_.busRouteOf(agent);
+    const std::size_t n = busVariants_.size();
+    return busVariants_[r >= 0 ? static_cast<std::size_t>(r) % n : 0];
+}
+bool CityRenderSystem::isBusVariant(int v) const {
+    return v >= 0 && std::find(busVariants_.begin(), busVariants_.end(), v) != busVariants_.end();
 }
 
-const std::vector<Vec3>& CityRenderSystem::busDoors() const {
+const std::vector<Vec3>& CityRenderSystem::busSeats(int agent) const {
     static const std::vector<Vec3> kNone;
-    if (busVariant_ < 0 || busVariant_ >= static_cast<int>(carDoors_.size())) return kNone;
-    return carDoors_[static_cast<std::size_t>(busVariant_)];
+    const int bv = busVariantOf(agent);
+    if (bv < 0 || bv >= static_cast<int>(carSeats_.size())) return kNone;
+    return carSeats_[static_cast<std::size_t>(bv)];
 }
 
-Real CityRenderSystem::busFloorY() const {
-    const std::vector<Vec3>& doors = busDoors();
+const std::vector<Vec3>& CityRenderSystem::busDoors(int agent) const {
+    static const std::vector<Vec3> kNone;
+    const int bv = busVariantOf(agent);
+    if (bv < 0 || bv >= static_cast<int>(carDoors_.size())) return kNone;
+    return carDoors_[static_cast<std::size_t>(bv)];
+}
+
+Real CityRenderSystem::busFloorY(int agent) const {
+    const std::vector<Vec3>& doors = busDoors(agent);
     if (!doors.empty()) return doors.front().y;   // doors are floor points
-    const std::vector<Vec3>& seats = busSeats();
+    const std::vector<Vec3>& seats = busSeats(agent);
     return seats.empty() ? Real(0) : seats.front().y - Real(0.45);
 }
 
 bool CityRenderSystem::busSeatTaken(int agent, int seat) const {
-    const int n = static_cast<int>(busSeats().size());
+    const int n = static_cast<int>(busSeats(agent).size());
     if (n <= 0 || !sim_.isBus(agent)) return false;
     const int load = std::min(sim_.rides().load(agent), n);
     int placed = 0;

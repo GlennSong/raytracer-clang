@@ -16018,3 +16018,42 @@ His call #3 on #191 was to retire `mesh.car` once the classic fleet and the bus 
 - Construction UVs from the loft/sweep words.
 - A viewer UV-checker view.
 - GPU baking.
+
+## ADR-0351 — Two buses in traffic, and the bus's boards: destination front, back and side, the next stop inside
+
+**Context.** Glenn, 2026-11-06:
+- "two different bus interior one where it's all seats and one where they're standing room";
+- "we should have the display to show where the bus is going, and there should be an exterior facing display that
+  shows it and an interior facing display that shows the stop that you're heading towards next."
+
+ADR-0349 built `S.bus_standing`, but the city drew one bus body (`busVariant_`) for every bus, and bus stops had no
+names.
+
+**Decision.**
+- **Every bus body in the fleet runs.** Any slot whose class starts with `bus` is a bus variant (`busVariants_`).
+  - A bus wears the variant its route picks (`busVariantOf`: route mod the variant count), so a line keeps one kind
+    of bus.
+  - Its seats, doors and floor are its own variant's: `busSeats(agent)`, `busDoors(agent)` and `busFloorY(agent)`,
+    used by boarding, riding and the seat-taken check.
+  - `FLEET_SLOTS` adds `bus_standing` (same livery; `KIT_HANDLING.bus_standing` is the bus's). The mixed fleet
+    carries both buses last.
+- **Stops are named for their street.**
+  - `StreetDirectory` keeps each named street's centreline (`lines`, from its node chain).
+  - `nearestName(p, reach = 40 m)` returns the nearest street within reach. A stop with none in reach shows its
+    line's label instead.
+- **The boards are markers on the bus recipe** (`P.signs`, beside the front `sign`):
+  - `dest_sign_rear` over the back window, turned to face back;
+  - `dest_sign_side` centred in the kerb-side pane behind the front door (x > 0, the driver's left: the city drives on the
+    left), turned to face out, at half the front board's width;
+  - `stop_display` hung behind the cab, facing the saloon, half width.
+
+  Each variant's boards are a `BusBoard` list (`busBoards_`). The destination boards show the route's row and the
+  next-stop board shows `NEXT|<STREET>`. All of them are rows in the one LED atlas (rows shared by label), and NOT IN
+  SERVICE shows on every board on the way in.
+- **Housings.** The boards are lit both ways, so the next-stop and side boards get dark housings in the recipe
+  (`extras`). Without them their backs read mirrored through the windscreen and from the saloon.
+- `depots?` answers on a level with no depots (river_town), since it is also the buses' sign report.
+
+**Owed.**
+- The front and rear boards' backs can still be glimpsed through the glass edge from inside.
+- The doors opening at stops, and interior lights, wait on the model layer and the clustered lights.

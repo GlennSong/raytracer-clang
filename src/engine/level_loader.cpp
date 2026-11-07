@@ -7878,6 +7878,12 @@ bool LevelLoader::load(const std::string& path,
                 auto naming = std::make_shared<engine::StreetNaming>(engine::nameStreets(combined));
                 engine::StreetDirectory dir;
                 dir.naming = naming;
+                for (const engine::Street& st : naming->streets) {
+                    std::vector<Vec2> line;
+                    for (int n : st.nodes)
+                        if (n >= 0 && n < static_cast<int>(combined.nodes.size())) line.push_back(combined.nodes[static_cast<std::size_t>(n)].pos);
+                    dir.lines.push_back(std::move(line));
+                }
                 const engine::Font* font = engine::signFont();
                 const bool wantSigns = root["citysim"].value("streetSigns", true);
                 if (wantSigns && !font)

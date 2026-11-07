@@ -204,7 +204,7 @@ function kit.profile(o)
   local r = o.r
   local P = { name = o.name, lines = o.lines, post = o.post, extras = o.extras, color = o.color, cap_crease = o.cap_crease,
               windows = o.windows, lens = o.lens, lamps = o.lamps, grille = o.grille, grille_margin = o.grille_margin,
-              rear_window = o.rear_window, front_window = o.front_window, saloon = o.saloon, sign = o.sign,
+              rear_window = o.rear_window, front_window = o.front_window, saloon = o.saloon, sign = o.sign, signs = o.signs,
               level = o.level, grille_w = o.grille_w, open_top = o.open_top,
               cabin_back = o.cabin_back, rear_seat = o.rear_seat, truck_seating = o.truck_seating, cargo = o.cargo,
               hip_back = o.hip_back, interior = o.interior }
@@ -659,7 +659,19 @@ S.bus = function()
     interior = false, truck_seating = true,
     saloon = { floor_y = 0.36, seat_color = { 0.12, 0.18, 0.42 }, trim_color = { 0.55, 0.55, 0.52 } },
     sign = { 0, 2.98, half + 0.03 },
+    -- (Glenn, 2026-11-06: "an exterior facing display that shows it and an interior facing display that shows the
+    -- stop that you're heading towards next"): over the back window, in the kerb-side pane behind the front door
+    -- (x > 0, the driver's left: the city drives on the left), and hung from the ceiling behind the cab
+    signs = { { "dest_sign_rear", { 0, 2.98, -half - 0.03 } },
+              { "dest_sign_side", { 1.17, 2.55, half - 3.5 } },
+              { "stop_display", { 0, 2.78, half - 1.05 } } },
     color = { 0.86, 0.62, 0.08 },
+    -- the housings behind the next-stop board and the side one (each board is lit both ways; its back would read
+    -- mirrored through the windscreen, or from the saloon)
+    extras = function(car)
+      car.polys[#car.polys + 1] = kit.tilted_box({ 1.08, 0.26, 0.06 }, { 0, 2.78, half - 1.05 + 0.036 }, 0, "dash")
+      car.polys[#car.polys + 1] = kit.tilted_box({ 0.06, 0.26, 1.08 }, { 1.17 - 0.036, 2.55, half - 3.5 }, 0, "dash")
+    end,
   } end
 
 -- THE STANDING-ROOM BUS (Glenn, 2026-11-06: "one where it's all seats and one where they're standing room similar to
@@ -1105,6 +1117,8 @@ function kit.build(P, level, opts)
     seat = shifted(saloon.driver_seat)
   end
   if P.sign then lights[#lights + 1] = { name = "dest_sign", pos = shifted(P.sign) } end
+  -- the bus's other boards (city_render: the destination again on the back and the kerb side, the next stop inside)
+  for _, b in ipairs(P.signs or {}) do lights[#lights + 1] = { name = b[1], pos = shifted(b[2]) } end
   local seats, doors = nil, nil
   if saloon then
     seats, doors = {}, {}

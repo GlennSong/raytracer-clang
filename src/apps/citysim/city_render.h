@@ -265,9 +265,10 @@ public:
     // passenger's (the driver's mirrored), then the two rear seats when the body is long enough to have them.
     // False for a bus, a parked or released agent, or a body that publishes no driver seat.
     bool carSeatsOf(int agent, engine::Mat4* pose, std::vector<engine::Vec3>* seats) const;
-    const std::vector<engine::Vec3>& busSeats() const;
-    const std::vector<engine::Vec3>& busDoors() const;
-    engine::Real busFloorY() const;   // body-local floor height
+    // a bus's seats and doors (its own body's: `agent` -1, the first bus body)
+    const std::vector<engine::Vec3>& busSeats(int agent = -1) const;
+    const std::vector<engine::Vec3>& busDoors(int agent = -1) const;
+    engine::Real busFloorY(int agent = -1) const;   // body-local floor height
     // True if an NPC rider is drawn in `seat` on this bus right now.
     bool busSeatTaken(int agent, int seat) const;
     static int riderSeat(int agent, int j, int n);
@@ -520,7 +521,19 @@ private:
     // Bus-stop furniture entities, kept so a rebuild can remove the old set
     // rather than stacking a second pole on every stop.
     std::vector<engine::Entity> busStopProps_;
-    int busVariant_ = -1;   // fleet slot that draws as a bus (-1 = none)
+    int busVariant_ = -1;   // fleet slot that draws as a bus (-1 = none): the first of busVariants_
+    // EVERY BUS BODY (Glenn, 2026-11-06: two saloons, "one where it's all seats and one where they're standing room"):
+    // the fleet's slots whose class is a bus ("bus", "bus_standing"); each bus wears the one its route picks
+    std::vector<int> busVariants_;
+    int busVariantOf(int agent) const;
+    bool isBusVariant(int v) const;
+    // per busVariants_ entry: its boards, in the body's frame -- the destination on the front, rear and kerb side,
+    // and the next stop inside, over the saloon (markers dest_sign, dest_sign_rear, dest_sign_side, stop_display)
+    struct BusBoard {
+        engine::Mat4 local;
+        bool nextStop = false;
+    };
+    std::vector<std::vector<BusBoard>> busBoards_;
     int fireVariant_ = -1;  // ...and as a fire engine (a fire station's, stationed in its bays)
     int taxiVariant_ = -1;  // ...and as a taxi (the cabs', CitySim::isTaxi)
     Real busPrintAcc_ = 0;  // RT_PRINT_BUSES cadence
@@ -727,12 +740,14 @@ private:
     std::vector<engine::Entity> busSignGroups_;
     std::vector<int> busSignRow_;   // per route: its label's row
     int busSignOff_ = -1;           // the NOT IN SERVICE row
+    std::vector<std::vector<int>> busStopRow_;   // per route, per stop: its NEXT STOP row (the stop's street)
     int busSignsDrawn_ = 0;         // signs pushed this step (depots?)
     engine::Vec3 busSignAt_{0, 0, 0};   // ...the last one's world position
     bool busSignsTried_ = false;
     engine::Mat4 busSignLocal_;     // the board on the bus, in its body's frame
     void makeBusSigns(engine::FrameContext& ctx);
     int busSignRowFor(int agent) const;
+    int busStopRowFor(int agent) const;
     bool planBaked_ = false;                 // the plan outlines bake on first show
     void bakePlanOutlines(engine::World& world);
     std::vector<engine::Mat4> colliderStripBake_;  // prism rims (base + top loops)

@@ -218,9 +218,9 @@ void CityPlayerTransitSystem::step(World& world, Real dt, const RideInput& in) {
             riding_ = best;
             seatIdx_ = -1;
             // In through the MIDDLE DOOR, standing in the aisle beside it.
-            const std::vector<Vec3>& doors = city_.busDoors();
-            local_ = doors.size() >= 2 ? Vec3(0, city_.busFloorY(), doors[1].z)
-                                       : Vec3(0, city_.busFloorY(), -0.8);
+            const std::vector<Vec3>& doors = city_.busDoors(riding_);
+            local_ = doors.size() >= 2 ? Vec3(0, city_.busFloorY(riding_), doors[1].z)
+                                       : Vec3(0, city_.busFloorY(riding_), -0.8);
             if (!world.has<engine::Passenger>(player)) world.add<engine::Passenger>(player);
             LOG_INFO << "[transit] you boarded "
                      << (sim.isBus(best) ? "a bus" : "a cab") << " (agent "
@@ -356,9 +356,9 @@ void CityPlayerTransitSystem::rideBus(World& world, Real dt, const RideInput& in
                                       const engine::Mat4& pose, bool interact) {
     const CitySim& sim = city_.sim();
     const Agent& bus = sim.agents()[static_cast<std::size_t>(riding_)];
-    const std::vector<Vec3>& seats = city_.busSeats();
-    const std::vector<Vec3>& doors = city_.busDoors();
-    const Real floorY = city_.busFloorY();
+    const std::vector<Vec3>& seats = city_.busSeats(riding_);
+    const std::vector<Vec3>& doors = city_.busDoors(riding_);
+    const Real floorY = city_.busFloorY(riding_);
 
     auto flat = [](Vec3 v) {
         v.y = 0;

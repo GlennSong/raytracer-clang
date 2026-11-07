@@ -386,7 +386,7 @@ TEST_CASE(fleet_catalogue_is_the_size_the_car_is_built_at) {
         // fleet slot WAS a car. The transit slot is an 11.4 m bus, so the bound
         // is per-class now rather than being quietly loosened for everyone --
         // an 8 m "car" should still fail.
-        const bool transit = (className == "bus" || className == "fire_engine");   // (a 9.2 m fire engine too)
+        const bool transit = (className.rfind("bus", 0) == 0 || className == "fire_engine");   // (a 9.2 m fire engine too)
         const bool bike = twoWheelSlot(a.vm, slot);   // a motorcycle: 0.7 m over the bars, about 2 m long
         CHECK(size.x > (bike ? 0.4 : 1.0) && size.x < (bike ? 1.2 : 3.0));             // width
         CHECK(size.y > (bike ? 0.5 : 1.0) && size.y < (transit ? 4.0 : 3.5));          // height
@@ -532,7 +532,7 @@ TEST_CASE(fleet_bus_is_a_bus_you_can_see_into) {
         std::string err;
         CHECK(loadFleetCarBody(a.vm, slot, body, &err));
         CHECK(!body.glass.vertices.empty() || twoWheelSlot(a.vm, slot));   // (a bike has no glass)
-        if (body.className != "bus") {
+        if (body.className.rfind("bus", 0) != 0) {
             // an open seat (the convertible, a bike) is seen into like the bus; every other car shows its cabin only
             // near the player
             CHECK(!body.seeInto || body.openSeat);
@@ -569,7 +569,7 @@ TEST_CASE(fleet_bus_is_a_bus_you_can_see_into) {
                     body.driverSeat.z, widest);
         CHECK(widest > 1.1);                      // the middle door
     }
-    CHECK(buses == 1);
+    CHECK(buses == 2);   // (all seats and standing room)
 }
 
 // THE OFF-ROADER (#41): vehicle.offroad reads back as a part-time four-wheel-drive truck -- 2WD (rear) until
@@ -645,21 +645,21 @@ TEST_CASE(car_picker_catalogue_builds_and_says_the_true_drivetrain) {
 
 // THE MIXED FLEET (Glenn: "get the new cars into island 8 along with the classic cars"). Since the classic cars
 // retired (ADR-0349) vehicle.fleet_mixed is the kit fleet ordered for the island: every car and truck, the fire
-// engine, then ONE city bus; a level's `citysim.fleet` points vehicle.fleet at it (selectFleet, after the script runs
+// engine, then the city bus's two bodies (all seats, standing room); a level's `citysim.fleet` points vehicle.fleet at it (selectFleet, after the script runs
 // -- the first cut appended the switch to the script text, after vehicles.lua's `return`, and every such level drew no
 // cars), and the kit fleet stays the default.
-TEST_CASE(fleet_mixed_carries_the_kit_bodies_and_one_bus) {
+TEST_CASE(fleet_mixed_carries_the_kit_bodies_and_its_two_buses) {
     VehiclesVM v;
     CHECK(v.loaded);
-    CHECK(fleetSlotCount(v.vm) == 18);   // the default: the kit fleet (the fire engine, 2026-10-13; the motorcycle, 2026-11-04;
-                                         // the off-roader, the taxi and the moped, 2026-11-06)
+    CHECK(fleetSlotCount(v.vm) == 19);   // the default: the kit fleet (the fire engine, 2026-10-13; the motorcycle, 2026-11-04;
+                                         // the off-roader, the taxi and the moped, 2026-11-06; the standing-room bus)
     std::string err;
     CHECK(!selectFleet(v.vm, "no_such_fleet", &err));   // a bad name leaves the default...
-    CHECK(fleetSlotCount(v.vm) == 18);
+    CHECK(fleetSlotCount(v.vm) == 19);
     CHECK(selectFleet(v.vm, "fleet_mixed", &err));      // ...a good one switches it (the city bridge's call)
     const int n = fleetSlotCount(v.vm);
     std::printf("    fleet_mixed: %d slots\n", n);
-    CHECK(n == 18);
+    CHECK(n == 19);
     int buses = 0, sedans = 0, fireEngines = 0;
     for (int s = 0; s < n; ++s) {
         Vec3 size;
@@ -667,12 +667,12 @@ TEST_CASE(fleet_mixed_carries_the_kit_bodies_and_one_bus) {
         CHECK(loadFleetCatalogueEntry(v.vm, s, size, cls, &e));
         const bool bike = twoWheelSlot(v.vm, s);
         CHECK(size.x > (bike ? 0.4 : 1.0) && size.z > (bike ? 1.4 : 3.0));
-        if (cls == "bus") ++buses;
+        if (cls.rfind("bus", 0) == 0) ++buses;
         if (cls == "fire_engine") ++fireEngines;
         if (cls == "sedan") ++sedans;
-        if (s == n - 1) CHECK(cls == "bus");
+        if (s >= n - 2) CHECK(cls.rfind("bus", 0) == 0);   // the two bus bodies last
     }
-    CHECK(buses == 1);
+    CHECK(buses == 2);
     CHECK(fireEngines == 1);
     CHECK(sedans == 3);
     CarBodyRecipe kitBody, busBody;
@@ -882,7 +882,7 @@ TEST_CASE(every_smooth_fleet_car_carries_a_cheaper_mid_range_body) {
         CarBodyRecipe body;
         std::string err;
         CHECK(loadFleetCarBody(a.vm, slot, body, &err));
-        if (twoWheelSlot(a.vm, slot) || body.className == "bus") continue;
+        if (twoWheelSlot(a.vm, slot) || body.className.rfind("bus", 0) == 0) continue;
         const std::size_t nearTris = body.mesh.indices.size() / 3, midTris = body.mid.indices.size() / 3;
         std::printf("    [%2d %-12s] near %zu tris, mid %zu tris from %.0f m\n", slot, body.className.c_str(), nearTris, midTris,
                     body.midFrom);
