@@ -398,6 +398,49 @@ void RenderSystem::render(FrameContext& ctx) {
                          cellOk, encT1);
     }
 
+    // REFLECTION PROBES' FACES (ADR-0372, stage A's check: RT_PROBE_TEST=1 captures probe 0 at the camera, two faces a
+    // frame; the ProbeSystem places and schedules them in stage B). The static world only -- the structures, scenery,
+    // furniture and ground paint within the probe's reach, culled against the face's own frustum.
+    static const bool probeTest = std::getenv("RT_PROBE_TEST") != nullptr;
+    if (probeTest && ctx.renderer.supportsProbeCapture()) {
+        const Vec3 eye = cam.position;
+        const Real reach = 300.0;
+        for (int k = 0; k < 2; ++k) {
+            const int face = static_cast<int>((frameNo_ * 2 + static_cast<uint64_t>(k)) % 6);
+            Vec3 fwd, up;
+            probeFaceBasis(face, fwd, up);
+            const Frustum ff = Frustum::fromViewProjection(Mat4::perspective(degreesToRadians(90.0), 1.0, 0.1, reach) *
+                                                           Mat4::lookAt(eye, eye + fwd, up));
+            ctx.renderer.beginProbeFace(0, face, eye);
+            ctx.world.each<Transform, Renderable>([&](Entity, Transform& t, Renderable& r) {
+                if (r.drawClass == DrawClass::SimBody || r.drawClass == DrawClass::Effect || r.drawClass == DrawClass::Terrain) return;
+                if (r.renderLayer & ctx.renderer.hiddenLayers) return;
+                if (r.material.flags & (RenderMaterial::FLAG_SHADOW_ONLY | RenderMaterial::FLAG_OVERLAY | RenderMaterial::FLAG_GRASS)) return;
+                const Mat4 model = t.matrix();
+                const BoundingSphere b = ctx.renderer.getMeshBounds(r.mesh);
+                Vec3 lo, hi;
+                transformedAABB(model, b.boxMin, b.boxMax, lo, hi);
+                const Vec3 c = (lo + hi) * 0.5;
+                const Real d = (c - eye).length();
+                const Real dd = std::min(reach, resolveDistance(r.drawDistance, r.drawClass) > 0 ? resolveDistance(r.drawDistance, r.drawClass) : reach);
+                if (d > dd || (r.minDistance > 0 && d < r.minDistance)) return;
+                if (!ff.containsAABB(lo, hi)) return;
+                ctx.renderer.drawMesh(r.mesh, model, r.material);
+            });
+            ctx.world.each<InstanceGroup>([&](Entity, InstanceGroup& g) {
+                if (g.drawClass == DrawClass::SimBody || g.drawClass == DrawClass::Effect || g.transforms.empty()) return;
+                if (g.material.flags & (RenderMaterial::FLAG_SHADOW_ONLY | RenderMaterial::FLAG_OVERLAY | RenderMaterial::FLAG_GRASS)) return;
+                if ((g.boundsCenter - eye).length() - g.boundsRadius > reach) return;
+                if (!ff.containsSphere(g.boundsCenter, g.boundsRadius)) return;
+                const BoundingSphere mb = ctx.renderer.getMeshBounds(g.mesh);
+                const Real dd = std::min(reach, resolveDistance(g.drawDistance, g.drawClass) > 0 ? resolveDistance(g.drawDistance, g.drawClass) : reach);
+                frustumCullInstances(g.transforms, ff, mb.center, mb.radius, eye, dd, instanceScratch_, g.minDistance);
+                if (!instanceScratch_.empty()) ctx.renderer.drawMeshInstanced(g.mesh, instanceScratch_, g.material);
+            });
+            ctx.renderer.endProbeFace();
+        }
+    }
+
     if (encStats) {
         const auto encT2 = std::chrono::steady_clock::now();
         encEntMs += std::chrono::duration<double, std::milli>(encT1 - encT0).count();

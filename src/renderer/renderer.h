@@ -512,6 +512,16 @@ struct SkyScatteringParams {
     float sunAngularRadius = 0.0047f;     // radians (~0.27°, the real sun)
 };
 
+// A REFLECTION PROBE'S CUBE FACE (ADR-0372): where it looks and which way is up on it, in the cube-map convention the
+// shaders sample by (sky_cube.comp cubeDir). A camera built with Mat4::lookAt on these sees each face mirrored left to
+// right (cube maps are left-handed); the renderer flips it as it stores the face.
+inline void probeFaceBasis(int face, Vec3& forward, Vec3& up) {
+    static const Vec3 f[6] = {{1, 0, 0}, {-1, 0, 0}, {0, 1, 0}, {0, -1, 0}, {0, 0, 1}, {0, 0, -1}};
+    static const Vec3 u[6] = {{0, 1, 0}, {0, 1, 0}, {0, 0, -1}, {0, 0, 1}, {0, 1, 0}, {0, 1, 0}};
+    forward = f[face % 6];
+    up = u[face % 6];
+}
+
 // THE PHYSICAL SKY THIS FRAME (ADR-0367; engine/sky/sky_atmosphere.h): when on, the renderer draws the sky, its light
 // on surfaces and the haze from the atmosphere model -- a sky-view texture rebuilt each frame from the tables
 // setSkyTables gave it, lit by the active light (the sun by day, the moon by night: SceneLighting::sun) and the other
@@ -860,6 +870,13 @@ public:
     // [originX, originX + extent) x [originZ, originZ + extent), encoded
     // encodeLo..encodeHi. The lit pass shadows fragments whose light sits
     // below it. An invalid handle switches it off. No-op by default.
+    // REFLECTION PROBES (ADR-0372): the draws between beginProbeFace and endProbeFace are captured into probe `probe`'s
+    // cube face `face` (0..5: +X -X +Y -Y +Z -Z, probeFaceBasis) seen from `eye` -- what the surfaces are (albedo,
+    // normal, roughness, emission, distance), to be relit -- not drawn to the screen. A frame takes at most a couple of
+    // faces; the rest of the begins in it are dropped (their draws too). False: no probes on this renderer.
+    virtual bool supportsProbeCapture() const { return false; }
+    virtual void beginProbeFace(uint32_t /*probe*/, int /*face*/, const Vec3& /*eye*/) {}
+    virtual void endProbeFace() {}
     // THE FRAME'S MEASURED BRIGHTNESS (ADR-0368, auto exposure): the log2 of the scene's average luminance in engine
     // units (the middle of a histogram of the drawn frame, before exposure), a couple of frames old. False: no
     // measurement (a renderer that does not take one, or none yet).

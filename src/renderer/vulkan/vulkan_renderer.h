@@ -34,6 +34,9 @@ public:
     TextureHandle uploadTextureHDR(int width, int height, int channels,
                                    const float* data) override;
     void setEnvironmentMap(TextureHandle equirect) override;
+    bool supportsProbeCapture() const override { return true; }
+    void beginProbeFace(uint32_t probe, int face, const Vec3& eye) override;
+    void endProbeFace() override;
     bool measuredSceneLuminance(float& log2Units) const override;
     void setSkyTables(const float* transmittance, int tw, int th, const float* multiScatter, int mw, int mh) override;
     void setTerrainHorizon(TextureHandle map, float originX, float originZ, float extent,

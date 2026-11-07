@@ -751,6 +751,10 @@ struct VulkanRenderer::Impl {
     std::array<VkBuffer, MAX_FRAMES_IN_FLIGHT> globalsBuffers{};
     std::array<VkDeviceMemory, MAX_FRAMES_IN_FLIGHT> globalsMemory{};
     std::array<void*, MAX_FRAMES_IN_FLIGHT> globalsMapped{};
+    // THE GLOBALS' SLOTS (ADR-0372): binding 0 is a dynamic uniform -- slot 0 the frame's view, slots 1.. the reflection
+    // probe faces captured this frame (each its own view-projection and eye), at globalsStride apart
+    static constexpr uint32_t kGlobalsSlots = 3;
+    VkDeviceSize globalsStride = 0;
     // CLUSTERED LIGHTS: per frame in flight, the lights (GpuLight each), the froxels' offset|count, and the index lists
     // (host-visible, written each frame from `clusterLights`); bindings 8, 9, 10
     static constexpr uint32_t kClusterMaxLights = 4096, kClusterMaxIndices = 1u << 20;
@@ -949,6 +953,44 @@ struct VulkanRenderer::Impl {
 
     GlobalsUBO cpuGlobals{};
     std::vector<DrawItem> drawQueue;
+    // REFLECTION PROBES' CAPTURE (ADR-0372): a frame's probe faces, each its draws (routed here by queueDraw between
+    // beginProbeFace and endProbeFace), its view and its globals slot (1 + its index); drawn into the 64^2 G-buffer
+    // targets and blitted (mirrored: the cube convention) into the probes' G-buffer arrays, layer probe * 6 + face
+    static constexpr uint32_t kProbeFace = 64, kMaxProbes = 64;
+    struct ProbeCaptureSlot { uint32_t probe = 0; int face = 0; Vec3 eye; std::vector<DrawItem> items; float vp[16]{}, view[16]{}; };
+    std::array<ProbeCaptureSlot, kGlobalsSlots - 1> captures;
+    uint32_t captureCount = 0;
+    int captureActive = -1;   // -1 the frame's queue, >= 0 a capture slot, -2 dropped (no slot left)
+    VkImage probeTargetImage[3]{};
+    VkDeviceMemory probeTargetMemory[3]{};
+    VkImageView probeTargetView[3]{};
+    VkImage probeDepthImage = VK_NULL_HANDLE;
+    VkDeviceMemory probeDepthMemory = VK_NULL_HANDLE;
+    VkImageView probeDepthView = VK_NULL_HANDLE;
+    VkRenderPass probeRenderPass = VK_NULL_HANDLE;
+    VkFramebuffer probeFramebuffer = VK_NULL_HANDLE;
+    VkImage probeGbufImage[3]{};
+    VkDeviceMemory probeGbufMemory[3]{};
+    VkImageView probeGbufView[3]{};   // 2D arrays, kMaxProbes * 6 layers
+    bool probeGbufGeneral = false;
+    VkPipeline probeCulled = VK_NULL_HANDLE, probeCulledPacked = VK_NULL_HANDLE;
+    VkPipeline probeTwoSided = VK_NULL_HANDLE, probeTwoSidedPacked = VK_NULL_HANDLE;
+    VkPipeline probeTerrain = VK_NULL_HANDLE;
+    void queueDraw(const DrawItem& item) {
+        if (captureActive >= 0) captures[static_cast<std::size_t>(captureActive)].items.push_back(item);
+        else if (captureActive == -1) drawQueue.push_back(item);
+    }
+    DrawItem* lastQueued() {   // the item queueDraw just took (nullptr: dropped)
+        if (captureActive >= 0) {
+            std::vector<DrawItem>& v = captures[static_cast<std::size_t>(captureActive)].items;
+            return v.empty() ? nullptr : &v.back();
+        }
+        if (captureActive == -1) return drawQueue.empty() ? nullptr : &drawQueue.back();
+        return nullptr;
+    }
+    bool createProbeTargets();
+    void recordProbeCaptures(VkCommandBuffer cmd);
+    void dumpProbe(uint32_t probe, const std::string& path);
 
     // ---- bring-up ----
     bool createInstance();
@@ -2940,8 +2982,9 @@ void VulkanRenderer::Impl::recordSsao(VkCommandBuffer cmd) {
     vkCmdSetScissor(cmd, 0, 1, &sc);
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, ssaoPipeline);
     std::array<VkDescriptorSet, 2> sets{descriptorSets[currentFrame], gbufferSet};
+    const uint32_t frameSlot = 0;   // (set 0's globals: the frame's view, ADR-0372)
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, ssaoPipelineLayout, 0,
-                            static_cast<uint32_t>(sets.size()), sets.data(), 0, nullptr);
+                            static_cast<uint32_t>(sets.size()), sets.data(), 1, &frameSlot);
     SsaoPush push{ssaoRadius, ssaoBias, ssaoIntensity, 0.0f};
     vkCmdPushConstants(cmd, ssaoPipelineLayout, VK_SHADER_STAGE_FRAGMENT_BIT, 0,
                        sizeof(SsaoPush), &push);
@@ -3188,8 +3231,9 @@ void VulkanRenderer::Impl::recordSsr(VkCommandBuffer cmd) {
     vkCmdSetScissor(cmd, 0, 1, &sc);
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, ssrPipeline);
     std::array<VkDescriptorSet, 2> sets{descriptorSets[currentFrame], ssrSet};
+    const uint32_t frameSlot = 0;
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, ssrPipelineLayout, 0,
-                            static_cast<uint32_t>(sets.size()), sets.data(), 0, nullptr);
+                            static_cast<uint32_t>(sets.size()), sets.data(), 1, &frameSlot);
     SsrPush push{ssrMaxRayDist, ssrThickness, ssrMaxRoughness, ssrBlendStrength};
     vkCmdPushConstants(cmd, ssrPipelineLayout, VK_SHADER_STAGE_FRAGMENT_BIT, 0,
                        sizeof(SsrPush), &push);
@@ -3441,8 +3485,9 @@ void VulkanRenderer::Impl::recordDof(VkCommandBuffer cmd) {
     vkCmdSetScissor(cmd, 0, 1, &sc);
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, dofPipeline);
     std::array<VkDescriptorSet, 2> sets{descriptorSets[currentFrame], dofSet};
+    const uint32_t frameSlot = 0;
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, dofPipelineLayout, 0,
-                            static_cast<uint32_t>(sets.size()), sets.data(), 0, nullptr);
+                            static_cast<uint32_t>(sets.size()), sets.data(), 1, &frameSlot);
     DofPush push{dofFocusDistance, dofFocalLength, dofAperture,
                  dofExtent.height * 1000.0f / dofSensorHeight, 16.0f,
                  1.0f / float(dofExtent.width), 1.0f / float(dofExtent.height), 0.0f};
@@ -3811,7 +3856,7 @@ bool VulkanRenderer::Impl::createSyncObjects() {
 bool VulkanRenderer::Impl::createDescriptorSetLayout() {
     std::array<VkDescriptorSetLayoutBinding, 16> bindings{};
     bindings[0].binding = 0;   // global UBO
-    bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;   // (slots: the frame's, the probe faces': ADR-0372)
     bindings[0].descriptorCount = 1;
     bindings[0].stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
     bindings[1].binding = 1;   // cascaded shadow map (sampler2DArrayShadow)
@@ -3861,11 +3906,17 @@ bool VulkanRenderer::Impl::createDescriptorSetLayout() {
 
 bool VulkanRenderer::Impl::createGlobalsBuffers() {
     for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
-        if (!createBuffer(sizeof(GlobalsUBO), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+        if (globalsStride == 0) {   // (each slot on the device's uniform-offset alignment)
+            VkPhysicalDeviceProperties props;
+            vkGetPhysicalDeviceProperties(physicalDevice, &props);
+            const VkDeviceSize a = std::max<VkDeviceSize>(props.limits.minUniformBufferOffsetAlignment, 16);
+            globalsStride = (sizeof(GlobalsUBO) + a - 1) / a * a;
+        }
+        if (!createBuffer(globalsStride * kGlobalsSlots, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
                           VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
                           globalsBuffers[i], globalsMemory[i]))
             return false;
-        vkMapMemory(device, globalsMemory[i], 0, sizeof(GlobalsUBO), 0, &globalsMapped[i]);
+        vkMapMemory(device, globalsMemory[i], 0, globalsStride * kGlobalsSlots, 0, &globalsMapped[i]);
         const VkDeviceSize sizes[3] = {kClusterMaxLights * sizeof(GpuLight),
                                        static_cast<VkDeviceSize>(ClusterGrid{}.cells()) * sizeof(uint32_t),
                                        kClusterMaxIndices * sizeof(uint32_t)};
@@ -4043,7 +4094,7 @@ void VulkanRenderer::Impl::compareClusterCheck() {
 
 bool VulkanRenderer::Impl::createDescriptorPool() {
     std::array<VkDescriptorPoolSize, 3> sizes{};
-    sizes[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    sizes[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
     sizes[0].descriptorCount = MAX_FRAMES_IN_FLIGHT;
     sizes[2].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;   // the clustered lights' three buffers
     sizes[2].descriptorCount = MAX_FRAMES_IN_FLIGHT * 3;
@@ -4097,7 +4148,7 @@ bool VulkanRenderer::Impl::createDescriptorSets() {
         writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         writes[0].dstSet = descriptorSets[i];
         writes[0].dstBinding = 0;
-        writes[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        writes[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
         writes[0].descriptorCount = 1;
         writes[0].pBufferInfo = &buf;
         writes[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
@@ -4427,6 +4478,310 @@ void VulkanRenderer::Impl::recordSkyCube(VkCommandBuffer cmd) {
     }
     barrier(cubeOutImage, 0, kCubeOutMips, VK_ACCESS_SHADER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
             VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, false);
+}
+
+// THE PROBE CAPTURE'S TARGETS (ADR-0372): three 64^2 RGBA16F colour targets (albedo + metallic, normal + roughness,
+// emission + distance) and a depth, their render pass and framebuffer; and the probes' G-buffer arrays the faces are
+// blitted into (kMaxProbes * 6 layers each)
+bool VulkanRenderer::Impl::createProbeTargets() {
+    auto image = [&](VkFormat fmt, uint32_t layers, VkImageUsageFlags usage, VkImage& img, VkDeviceMemory& mem) {
+        VkImageCreateInfo ii{};
+        ii.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+        ii.imageType = VK_IMAGE_TYPE_2D;
+        ii.format = fmt;
+        ii.extent = {kProbeFace, kProbeFace, 1};
+        ii.mipLevels = 1;
+        ii.arrayLayers = layers;
+        ii.samples = VK_SAMPLE_COUNT_1_BIT;
+        ii.tiling = VK_IMAGE_TILING_OPTIMAL;
+        ii.usage = usage;
+        ii.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        if (vkCreateImage(device, &ii, nullptr, &img) != VK_SUCCESS) return false;
+        VkMemoryRequirements req;
+        vkGetImageMemoryRequirements(device, img, &req);
+        VkMemoryAllocateInfo ai{};
+        ai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+        ai.allocationSize = req.size;
+        ai.memoryTypeIndex = findMemoryType(req.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+        if (vkAllocateMemory(device, &ai, nullptr, &mem) != VK_SUCCESS) return false;
+        vkBindImageMemory(device, img, mem, 0);
+        return true;
+    };
+    auto view = [&](VkImage img, VkFormat fmt, VkImageAspectFlags aspect, uint32_t layers, VkImageView& out) {
+        VkImageViewCreateInfo vi{};
+        vi.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+        vi.image = img;
+        vi.viewType = layers > 1 ? VK_IMAGE_VIEW_TYPE_2D_ARRAY : VK_IMAGE_VIEW_TYPE_2D;
+        vi.format = fmt;
+        vi.subresourceRange = {aspect, 0, 1, 0, layers};
+        return vkCreateImageView(device, &vi, nullptr, &out) == VK_SUCCESS;
+    };
+    const VkFormat fmt = VK_FORMAT_R16G16B16A16_SFLOAT;
+    for (int k = 0; k < 3; ++k) {
+        if (!image(fmt, 1, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, probeTargetImage[k], probeTargetMemory[k]) ||
+            !view(probeTargetImage[k], fmt, VK_IMAGE_ASPECT_COLOR_BIT, 1, probeTargetView[k]))
+            return false;
+        if (!image(fmt, kMaxProbes * 6, VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
+                                            VK_IMAGE_USAGE_STORAGE_BIT,
+                   probeGbufImage[k], probeGbufMemory[k]) ||
+            !view(probeGbufImage[k], fmt, VK_IMAGE_ASPECT_COLOR_BIT, kMaxProbes * 6, probeGbufView[k]))
+            return false;
+    }
+    if (!image(kDepthFormat, 1, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT, probeDepthImage, probeDepthMemory) ||
+        !view(probeDepthImage, kDepthFormat, VK_IMAGE_ASPECT_DEPTH_BIT, 1, probeDepthView))
+        return false;
+    VkAttachmentDescription att[4]{};
+    for (int k = 0; k < 3; ++k) {
+        att[k].format = fmt;
+        att[k].samples = VK_SAMPLE_COUNT_1_BIT;
+        att[k].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+        att[k].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        att[k].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+        att[k].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+        att[k].initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        att[k].finalLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    }
+    att[3] = att[0];
+    att[3].format = kDepthFormat;
+    att[3].storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    att[3].finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+    VkAttachmentReference colors[3] = {{0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL}, {1, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL},
+                                       {2, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL}};
+    VkAttachmentReference depth{3, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL};
+    VkSubpassDescription sub{};
+    sub.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+    sub.colorAttachmentCount = 3;
+    sub.pColorAttachments = colors;
+    sub.pDepthStencilAttachment = &depth;
+    VkSubpassDependency deps[2]{};
+    deps[0].srcSubpass = VK_SUBPASS_EXTERNAL;
+    deps[0].dstSubpass = 0;
+    deps[0].srcStageMask = VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
+    deps[0].srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+    deps[0].dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
+    deps[0].dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+    deps[1].srcSubpass = 0;
+    deps[1].dstSubpass = VK_SUBPASS_EXTERNAL;
+    deps[1].srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+    deps[1].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    deps[1].dstStageMask = VK_PIPELINE_STAGE_TRANSFER_BIT;
+    deps[1].dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+    VkRenderPassCreateInfo rpi{};
+    rpi.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+    rpi.attachmentCount = 4;
+    rpi.pAttachments = att;
+    rpi.subpassCount = 1;
+    rpi.pSubpasses = &sub;
+    rpi.dependencyCount = 2;
+    rpi.pDependencies = deps;
+    if (vkCreateRenderPass(device, &rpi, nullptr, &probeRenderPass) != VK_SUCCESS) return false;
+    VkImageView fbViews[4] = {probeTargetView[0], probeTargetView[1], probeTargetView[2], probeDepthView};
+    VkFramebufferCreateInfo fbi{};
+    fbi.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+    fbi.renderPass = probeRenderPass;
+    fbi.attachmentCount = 4;
+    fbi.pAttachments = fbViews;
+    fbi.width = kProbeFace;
+    fbi.height = kProbeFace;
+    fbi.layers = 1;
+    return vkCreateFramebuffer(device, &fbi, nullptr, &probeFramebuffer) == VK_SUCCESS;
+}
+
+// This frame's probe faces (ADR-0372): each drawn into the targets with its own globals slot, then blitted, mirrored
+// left to right (the cube convention, probeFaceBasis), into its probe's layer of the three G-buffer arrays
+void VulkanRenderer::Impl::recordProbeCaptures(VkCommandBuffer cmd) {
+    if (captureCount == 0 || !probeRenderPass || !probeCulled) return;
+    const uint32_t layers = kMaxProbes * 6;
+    if (!probeGbufGeneral) {
+        VkImageMemoryBarrier b[3]{};   // (every layer: the helper's transition covers the first only)
+        for (int k = 0; k < 3; ++k) {
+            b[k].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+            b[k].dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT | VK_ACCESS_SHADER_READ_BIT;
+            b[k].oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+            b[k].newLayout = VK_IMAGE_LAYOUT_GENERAL;
+            b[k].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            b[k].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            b[k].image = probeGbufImage[k];
+            b[k].subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, layers};
+        }
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0,
+                             0, nullptr, 0, nullptr, 3, b);
+        probeGbufGeneral = true;
+    }
+    for (uint32_t c = 0; c < captureCount; ++c) {
+        const ProbeCaptureSlot& slot = captures[c];
+        std::array<VkClearValue, 4> clears{};
+        clears[0].color = {{0.0f, 0.0f, 0.0f, 0.0f}};    // (albedo alpha 0: nothing there -- the sky shows)
+        clears[1].color = {{0.5f, 0.5f, 0.5f, 1.0f}};
+        clears[2].color = {{0.0f, 0.0f, 0.0f, 1.0e4f}};  // (no surface: as far as the sky)
+        clears[3].depthStencil = {0.0f, 0};              // reverse-Z
+        VkRenderPassBeginInfo rp{};
+        rp.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+        rp.renderPass = probeRenderPass;
+        rp.framebuffer = probeFramebuffer;
+        rp.renderArea.extent = {kProbeFace, kProbeFace};
+        rp.clearValueCount = 4;
+        rp.pClearValues = clears.data();
+        vkCmdBeginRenderPass(cmd, &rp, VK_SUBPASS_CONTENTS_INLINE);
+        VkViewport vp{0.0f, 0.0f, static_cast<float>(kProbeFace), static_cast<float>(kProbeFace), 0.0f, 1.0f};
+        VkRect2D sc{{0, 0}, {kProbeFace, kProbeFace}};
+        vkCmdSetViewport(cmd, 0, 1, &vp);
+        vkCmdSetScissor(cmd, 0, 1, &sc);
+        const uint32_t slotOffset = static_cast<uint32_t>(globalsStride * (c + 1));
+        VkPipeline bound = VK_NULL_HANDLE;
+        for (const DrawItem& item : slot.items) {
+            GpuMesh* m = meshes.get(item.mesh);
+            if (!m || m->indexCount == 0 || item.terrain || item.crowd) continue;
+            if (item.push.surfaceFlags[1] & (RenderMaterial::FLAG_SHADOW_ONLY | RenderMaterial::FLAG_OVERLAY)) continue;
+            const bool two = (item.push.surfaceFlags[1] & RenderMaterial::FLAG_TWO_SIDED) || item.opacity < 1.0f;
+            const VkPipeline want = two ? (m->packed ? probeTwoSidedPacked : probeTwoSided) : (m->packed ? probeCulledPacked : probeCulled);
+            if (!want) continue;
+            if (want != bound) {
+                vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, want);
+                if (bound == VK_NULL_HANDLE)
+                    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout, 0, 1, &descriptorSets[currentFrame], 1,
+                                            &slotOffset);
+                bound = want;
+            }
+            const VkDescriptorSet matSet = allocMaterialSet(item);
+            if (matSet == VK_NULL_HANDLE) continue;
+            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout, 1, 1, &matSet, 0, nullptr);
+            vkCmdPushConstants(cmd, pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(MeshPush), &item.push);
+            const VkBuffer vbs[2] = {m->vertexBuffer, instanceBuffers[currentFrame]};
+            const VkDeviceSize offs[2] = {0, 0};
+            vkCmdBindVertexBuffers(cmd, 0, 2, vbs, offs);
+            vkCmdBindIndexBuffer(cmd, m->indexBuffer, 0, VK_INDEX_TYPE_UINT32);
+            vkCmdDrawIndexed(cmd, m->indexCount, item.instanceCount, 0, 0, item.firstInstance);
+        }
+        // the ground: the frame's own terrain draws (TerrainLodSystem selects them for the camera; a probe near it sees
+        // the same ground, if not all of it)
+        if (probeTerrain) {
+            bool boundT = false;
+            for (const DrawItem& item : drawQueue) {
+                if (!item.terrain) continue;
+                GpuMesh* m = meshes.get(item.mesh);
+                if (!m || m->indexCount == 0) continue;
+                if (!boundT) {
+                    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, probeTerrain);
+                    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout, 0, 1, &descriptorSets[currentFrame], 1,
+                                            &slotOffset);
+                    boundT = true;
+                }
+                const VkDescriptorSet matSet = allocMaterialSet(item);
+                if (matSet == VK_NULL_HANDLE) continue;
+                vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout, 1, 1, &matSet, 0, nullptr);
+                vkCmdPushConstants(cmd, pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(MeshPush), &item.push);
+                const VkBuffer vbs[2] = {m->vertexBuffer, instanceBuffers[currentFrame]};
+                const VkDeviceSize offs[2] = {0, 0};
+                vkCmdBindVertexBuffers(cmd, 0, 2, vbs, offs);
+                vkCmdBindIndexBuffer(cmd, m->indexBuffer, 0, VK_INDEX_TYPE_UINT32);
+                vkCmdDrawIndexed(cmd, m->indexCount, item.instanceCount, 0, 0, item.firstInstance);
+            }
+        }
+        vkCmdEndRenderPass(cmd);
+        // into the probe's layer, mirrored left to right
+        const uint32_t layer = std::min(slot.probe, kMaxProbes - 1) * 6 + static_cast<uint32_t>(slot.face % 6);
+        VkImageMemoryBarrier toDst[3]{};
+        for (int k = 0; k < 3; ++k) {
+            toDst[k].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+            toDst[k].srcAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_TRANSFER_WRITE_BIT;
+            toDst[k].dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+            toDst[k].oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+            toDst[k].newLayout = VK_IMAGE_LAYOUT_GENERAL;
+            toDst[k].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            toDst[k].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            toDst[k].image = probeGbufImage[k];
+            toDst[k].subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, layer, 1};
+        }
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT,
+                             VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 3, toDst);
+        for (int k = 0; k < 3; ++k) {
+            VkImageBlit bl{};
+            bl.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+            bl.srcOffsets[0] = {static_cast<int32_t>(kProbeFace), 0, 0};   // (x reversed: the mirror)
+            bl.srcOffsets[1] = {0, static_cast<int32_t>(kProbeFace), 1};
+            bl.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, layer, 1};
+            bl.dstOffsets[1] = {static_cast<int32_t>(kProbeFace), static_cast<int32_t>(kProbeFace), 1};
+            vkCmdBlitImage(cmd, probeTargetImage[k], VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, probeGbufImage[k], VK_IMAGE_LAYOUT_GENERAL, 1, &bl,
+                           VK_FILTER_NEAREST);
+        }
+        for (int k = 0; k < 3; ++k) {
+            toDst[k].srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+            toDst[k].dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_TRANSFER_READ_BIT;
+        }
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0,
+                             nullptr, 0, nullptr, 3, toDst);
+    }
+}
+
+// RT_PROBE_DUMP (a check of the capture): probe `probe`'s six albedo faces, read back and written as one PPM strip
+void VulkanRenderer::Impl::dumpProbe(uint32_t probe, const std::string& path) {
+    if (!probeGbufImage[0] || !probeGbufGeneral) return;
+    vkDeviceWaitIdle(device);
+    const VkDeviceSize faceBytes = static_cast<VkDeviceSize>(kProbeFace) * kProbeFace * 8;
+    VkBuffer buf = VK_NULL_HANDLE;
+    VkDeviceMemory mem = VK_NULL_HANDLE;
+    if (!createBuffer(faceBytes * 6 * 3, VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                      VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, buf, mem))
+        return;
+    VkCommandBufferAllocateInfo ai{};
+    ai.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+    ai.commandPool = commandPool;
+    ai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    ai.commandBufferCount = 1;
+    VkCommandBuffer cb;
+    vkAllocateCommandBuffers(device, &ai, &cb);
+    VkCommandBufferBeginInfo bi{};
+    bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    vkBeginCommandBuffer(cb, &bi);
+    for (int k = 0; k < 3; ++k) {
+        VkBufferImageCopy cp{};
+        cp.bufferOffset = faceBytes * 6 * static_cast<VkDeviceSize>(k);
+        cp.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, std::min(probe, kMaxProbes - 1) * 6, 6};
+        cp.imageExtent = {kProbeFace, kProbeFace, 1};
+        vkCmdCopyImageToBuffer(cb, probeGbufImage[k], VK_IMAGE_LAYOUT_GENERAL, buf, 1, &cp);
+    }
+    vkEndCommandBuffer(cb);
+    VkSubmitInfo si{};
+    si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    si.commandBufferCount = 1;
+    si.pCommandBuffers = &cb;
+    vkQueueSubmit(graphicsQueue, 1, &si, VK_NULL_HANDLE);
+    vkQueueWaitIdle(graphicsQueue);
+    void* mapped = nullptr;
+    vkMapMemory(device, mem, 0, faceBytes * 18, 0, &mapped);
+    const uint16_t* h = static_cast<const uint16_t*>(mapped);
+    auto half = [](uint16_t v) {
+        const uint32_t sgn = (v >> 15) & 1u, e = (v >> 10) & 31u, f = v & 1023u;
+        float r = e == 0 ? std::ldexp(static_cast<float>(f), -24) : e == 31 ? 65504.0f : std::ldexp(static_cast<float>(f | 1024u), static_cast<int>(e) - 25);
+        return sgn ? -r : r;
+    };
+    // three rows (albedo, normal, emission), six faces across
+    const uint32_t W = kProbeFace * 6, Hh = kProbeFace * 3;
+    std::vector<uint8_t> img(static_cast<std::size_t>(W) * Hh * 3);
+    for (uint32_t k = 0; k < 3; ++k)
+        for (uint32_t f = 0; f < 6; ++f)
+            for (uint32_t y = 0; y < kProbeFace; ++y)
+                for (uint32_t x = 0; x < kProbeFace; ++x) {
+                    const std::size_t src = ((k * 6 + f) * kProbeFace * kProbeFace + y * kProbeFace + x) * 4;
+                    const std::size_t dst = ((k * kProbeFace + y) * W + f * kProbeFace + x) * 3;
+                    for (int ch = 0; ch < 3; ++ch) {
+                        float v = half(h[src + ch]);
+                        if (k == 2) v = v * 50.0f;   // (emission is small in units)
+                        img[dst + ch] = static_cast<uint8_t>(std::clamp(std::pow(std::max(v, 0.0f), 1.0f / 2.2f), 0.0f, 1.0f) * 255.0f);
+                    }
+                }
+    vkUnmapMemory(device, mem);
+    if (FILE* fp = std::fopen(path.c_str(), "wb")) {
+        std::fprintf(fp, "P6\n%u %u\n255\n", W, Hh);
+        std::fwrite(img.data(), 1, img.size(), fp);
+        std::fclose(fp);
+        LOG_INFO("[probes] probe %u's faces written to %s", probe, path.c_str());
+    }
+    vkFreeCommandBuffers(device, commandPool, 1, &cb);
+    vkDestroyBuffer(device, buf, nullptr);
+    vkFreeMemory(device, mem, nullptr);
 }
 
 bool VulkanRenderer::Impl::createAerialImages() {
@@ -5191,6 +5546,27 @@ bool VulkanRenderer::Impl::createPipeline() {
     // shader modules are still alive.
     raster.cullMode = VK_CULL_MODE_BACK_BIT;
     VkResult resultCulled = createTwin(&meshPipelineCulled, &meshPipelineCulledPacked);
+    // THE PROBE CAPTURE'S PIPELINES (ADR-0372): the same state into the probe's three targets, mesh.frag compiled with
+    // PROBE_CAPTURE; culled and two-sided, each with its standard-vertex twin
+    if (!probeRenderPass && !createProbeTargets()) LOG_WARN("[vulkan] reflection probes: the capture targets failed");
+    if (probeRenderPass) {
+        VkShaderModule pfrag = loadShaderModule(std::string(RT_VULKAN_SHADER_DIR) + "/mesh_probe.frag.spv");
+        if (pfrag) {
+            stages[1].module = pfrag;
+            info.renderPass = probeRenderPass;
+            std::array<VkPipelineColorBlendAttachmentState, 3> pb{blendAttachment, blendAttachment, blendAttachment};
+            blend.attachmentCount = 3;
+            blend.pAttachments = pb.data();
+            if (createTwin(&probeCulled, &probeCulledPacked) != VK_SUCCESS) probeCulled = VK_NULL_HANDLE;
+            raster.cullMode = VK_CULL_MODE_NONE;
+            if (createTwin(&probeTwoSided, &probeTwoSidedPacked) != VK_SUCCESS) probeTwoSided = VK_NULL_HANDLE;
+            stages[1].module = frag;
+            info.renderPass = renderPass;
+            blend.attachmentCount = static_cast<uint32_t>(blendAttachments.size());
+            blend.pAttachments = blendAttachments.data();
+            vkDestroyShaderModule(device, pfrag, nullptr);
+        }
+    }
     raster.cullMode = VK_CULL_MODE_NONE;   // wire + transparent stay two-sided
     vkDestroyShaderModule(device, vert, nullptr);
     vkDestroyShaderModule(device, frag, nullptr);
@@ -5274,6 +5650,25 @@ bool VulkanRenderer::Impl::createPipeline() {
                                          VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
     info.pVertexInputState = &vertexInputTerrain;
     VkResult cresult = createTwin(&terrainPipeline, nullptr);
+    // ...and its reflection-probe capture twin (ADR-0372): the ground the probes see
+    if (probeRenderPass) {
+        if (VkShaderModule pfrag = loadShaderModule(std::string(RT_VULKAN_SHADER_DIR) + "/mesh_probe.frag.spv")) {
+            stages[1].module = pfrag;
+            info.renderPass = probeRenderPass;
+            VkPipelineColorBlendAttachmentState opaqueAll = blendAttachments[0];
+            std::array<VkPipelineColorBlendAttachmentState, 3> pb{opaqueAll, opaqueAll, opaqueAll};
+            const VkPipelineColorBlendAttachmentState* was = blend.pAttachments;
+            const uint32_t wasCount = blend.attachmentCount;
+            blend.attachmentCount = 3;
+            blend.pAttachments = pb.data();
+            if (createTwin(&probeTerrain, nullptr) != VK_SUCCESS) probeTerrain = VK_NULL_HANDLE;
+            blend.attachmentCount = wasCount;
+            blend.pAttachments = was;
+            info.renderPass = renderPass;
+            stages[1].module = cfrag;
+            vkDestroyShaderModule(device, pfrag, nullptr);
+        }
+    }
     info.pVertexInputState = &vertexInput;
     vkDestroyShaderModule(device, cvert, nullptr);
     vkDestroyShaderModule(device, cfrag, nullptr);
@@ -6587,6 +6982,7 @@ void VulkanRenderer::Impl::recordCommandBuffer(VkCommandBuffer cmd, uint32_t ima
     // Cascaded shadow maps first (writes the depth array the lit pass samples).
     recordShadowPass(cmd);
     gpuMark(cmd, 1);
+    recordProbeCaptures(cmd);   // this frame's reflection-probe faces (ADR-0372: after the shadows, which set 0 samples)
 
     // Scene pass → offscreen HDR + world-normal G-buffer (sky + geometry).
     std::array<VkClearValue, 3> clears{};
@@ -6617,8 +7013,9 @@ void VulkanRenderer::Impl::recordCommandBuffer(VkCommandBuffer cmd, uint32_t ima
 
     // Skybox first (fills the background; depth untouched), then geometry.
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, skyPipeline);
+    const uint32_t frameSlot = 0;   // (set 0's globals: the frame's view, ADR-0372)
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, skyPipelineLayout, 0, 1,
-                            &descriptorSets[currentFrame], 0, nullptr);
+                            &descriptorSets[currentFrame], 1, &frameSlot);
     vkCmdDraw(cmd, 3, 1, 0, 0);
 
     // Geometry. The wireframe debug view (Renderer::wireframe) shares the mesh
@@ -6673,7 +7070,7 @@ void VulkanRenderer::Impl::recordCommandBuffer(VkCommandBuffer cmd, uint32_t ima
                 vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, want);
                 if (bound == VK_NULL_HANDLE)
                     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout, 0, 1,
-                                            &descriptorSets[currentFrame], 0, nullptr);
+                                            &descriptorSets[currentFrame], 1, &frameSlot);
                 bound = want;
             }
 
@@ -6834,7 +7231,7 @@ void VulkanRenderer::Impl::recordCommandBuffer(VkCommandBuffer cmd, uint32_t ima
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, compositePipeline);
     const std::array<VkDescriptorSet, 2> compositeSets{descriptorSets[currentFrame], compositeSet};
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, compositePipelineLayout, 0,
-                            static_cast<uint32_t>(compositeSets.size()), compositeSets.data(), 0, nullptr);
+                            static_cast<uint32_t>(compositeSets.size()), compositeSets.data(), 1, &frameSlot);
     CompositePush cpush{};
     cpush.exposure = preExposureOn() ? 1.0f : sceneExposure;   // (pre-exposed: ADR-0366)
     cpush.tonemapOp = tonemapOp;          // mirrored from the Renderer in endFrame
@@ -7066,6 +7463,29 @@ void VulkanRenderer::Impl::drawFrame() {
     cpuGlobals.cameraPosition[3] = preExposure();
     // Upload this frame's globals into its persistently mapped UBO.
     std::memcpy(globalsMapped[currentFrame], &cpuGlobals, sizeof(GlobalsUBO));
+    // ...and each probe face's, in the slots after it (ADR-0372): its view and eye, no lights or shadows (the capture
+    // writes the surface, not its light)
+    for (uint32_t c = 0; c < captureCount; ++c) {
+        GlobalsUBO face = cpuGlobals;
+        std::memcpy(face.viewProjection, captures[c].vp, sizeof(face.viewProjection));
+        std::memcpy(face.view, captures[c].view, sizeof(face.view));
+        face.cameraPosition[0] = static_cast<float>(captures[c].eye.x);
+        face.cameraPosition[1] = static_cast<float>(captures[c].eye.y);
+        face.cameraPosition[2] = static_cast<float>(captures[c].eye.z);
+        face.cameraPosition[3] = 1.0f;
+        face.counts[0] = 0;
+        face.counts[1] = 0;
+        face.clusterGrid[3] = 0;
+        std::memcpy(static_cast<uint8_t*>(globalsMapped[currentFrame]) + globalsStride * (c + 1), &face, sizeof(GlobalsUBO));
+    }
+    // RT_PROBE_DUMP=<file.ppm>: probe 0's faces, rewritten every 600 of its faces captured (so the file follows the
+    // camera; a check)
+    {
+        static const char* dumpPath = std::getenv("RT_PROBE_DUMP");
+        static int captured = 0;
+        for (uint32_t c = 0; c < captureCount; ++c)
+            if (captures[c].probe == 0 && dumpPath && ++captured % 600 == 0) dumpProbe(0, dumpPath);
+    }
 
     // Volumetric-cloud uniforms (mirrors the Metal endFrame CloudUniforms fill;
     // the scattering-sky sun-transmittance tint is Metal-only until that sky is
@@ -7388,6 +7808,21 @@ void VulkanRenderer::shutdown() {
     if (impl->skyPipe) vkDestroyPipeline(impl->device, impl->skyPipe, nullptr);
     if (impl->aerialPipe) vkDestroyPipeline(impl->device, impl->aerialPipe, nullptr);
     if (impl->cubePipe) vkDestroyPipeline(impl->device, impl->cubePipe, nullptr);
+    for (VkPipeline pp : {impl->probeCulled, impl->probeCulledPacked, impl->probeTwoSided, impl->probeTwoSidedPacked, impl->probeTerrain})
+        if (pp) vkDestroyPipeline(impl->device, pp, nullptr);
+    if (impl->probeFramebuffer) vkDestroyFramebuffer(impl->device, impl->probeFramebuffer, nullptr);
+    if (impl->probeRenderPass) vkDestroyRenderPass(impl->device, impl->probeRenderPass, nullptr);
+    for (int k = 0; k < 3; ++k) {
+        if (impl->probeTargetView[k]) vkDestroyImageView(impl->device, impl->probeTargetView[k], nullptr);
+        if (impl->probeTargetImage[k]) vkDestroyImage(impl->device, impl->probeTargetImage[k], nullptr);
+        if (impl->probeTargetMemory[k]) vkFreeMemory(impl->device, impl->probeTargetMemory[k], nullptr);
+        if (impl->probeGbufView[k]) vkDestroyImageView(impl->device, impl->probeGbufView[k], nullptr);
+        if (impl->probeGbufImage[k]) vkDestroyImage(impl->device, impl->probeGbufImage[k], nullptr);
+        if (impl->probeGbufMemory[k]) vkFreeMemory(impl->device, impl->probeGbufMemory[k], nullptr);
+    }
+    if (impl->probeDepthView) vkDestroyImageView(impl->device, impl->probeDepthView, nullptr);
+    if (impl->probeDepthImage) vkDestroyImage(impl->device, impl->probeDepthImage, nullptr);
+    if (impl->probeDepthMemory) vkFreeMemory(impl->device, impl->probeDepthMemory, nullptr);
     if (impl->prefPipe) vkDestroyPipeline(impl->device, impl->prefPipe, nullptr);
     if (impl->cubeLayout) vkDestroyPipelineLayout(impl->device, impl->cubeLayout, nullptr);
     if (impl->prefLayout) vkDestroyPipelineLayout(impl->device, impl->prefLayout, nullptr);
@@ -7935,6 +8370,30 @@ void VulkanRenderer::setEnvironmentMap(TextureHandle equirect) {
     impl->updateGlobalEnvDescriptor();
 }
 
+// A REFLECTION PROBE'S FACE (ADR-0372): its camera (90 degrees, square, reverse-Z like the frame's) into the next free
+// capture slot; the draws until endProbeFace are its
+void VulkanRenderer::beginProbeFace(uint32_t probe, int face, const Vec3& eye) {
+    if (impl->captureCount >= impl->captures.size() || !impl->probeCulled) { impl->captureActive = -2; return; }
+    Impl::ProbeCaptureSlot& slot = impl->captures[impl->captureCount];
+    slot.probe = probe;
+    slot.face = face;
+    slot.eye = eye;
+    slot.items.clear();
+    Vec3 fwd, up;
+    probeFaceBasis(face, fwd, up);
+    const Mat4 view = Mat4::lookAt(eye, eye + fwd, up);
+    Mat4 proj = Mat4::perspective(3.14159265358979 * 0.5, 1.0, 0.1, 600.0);
+    Mat4 reverseZ;
+    reverseZ.m[2][2] = -1.0;
+    reverseZ.m[2][3] = 1.0;
+    proj = reverseZ * proj;
+    packMat4(proj * view, slot.vp, /*flipY=*/true);
+    packMat4(view, slot.view, /*flipY=*/false);
+    impl->captureActive = static_cast<int>(impl->captureCount++);
+}
+
+void VulkanRenderer::endProbeFace() { impl->captureActive = -1; }
+
 bool VulkanRenderer::measuredSceneLuminance(float& log2Units) const {
     if (!impl->lumValid) return false;
     log2Units = impl->lumLog2;
@@ -8045,6 +8504,8 @@ const OcclusionDepth* VulkanRenderer::occlusionDepth() const {
 void VulkanRenderer::beginFrame() {
     impl->stats = RenderStats{};
     impl->drawQueue.clear();
+    impl->captureCount = 0;     // (the probe faces: ADR-0372)
+    impl->captureActive = -1;
     impl->uiQuads.clear();   // (the systems submit theirs in render, after this)
     impl->instanceData.clear();
 #ifdef RT_ENABLE_IMGUI
@@ -8498,7 +8959,7 @@ void VulkanRenderer::drawMesh(MeshHandle handle, const Mat4& transform,
         item.worldCenter[2] = static_cast<float>(c.z);
         item.worldRadius = static_cast<float>(r);
     }
-    impl->drawQueue.push_back(item);
+    impl->queueDraw(item);
     impl->stats.entitiesSubmitted++;
 }
 
@@ -8520,7 +8981,9 @@ void VulkanRenderer::drawMeshInstanced(MeshHandle handle, const std::vector<Mat4
     // One draw for the whole set (ADR-0097): the material and the first transform (which the
     // transparent sort reads) as drawMesh makes them, then every matrix into the instance rows.
     drawMesh(handle, transforms.front(), material);
-    DrawItem& item = impl->drawQueue.back();
+    DrawItem* queued = impl->lastQueued();
+    if (!queued) return;   // (a probe face with no slot left this frame: dropped)
+    DrawItem& item = *queued;
     for (std::size_t i = 1; i < transforms.size(); ++i) impl->pushInstance(transforms[i]);
     item.instanceCount = static_cast<uint32_t>(transforms.size());
     if (const GpuMesh* gm = impl->meshes.get(handle); gm && gm->bounds.radius > 0) {
@@ -8578,7 +9041,7 @@ void VulkanRenderer::drawTerrain(MeshHandle handle, const RenderMaterial& materi
     item.push.morphEnd = morphEnd;
     item.terrain = true;
     item.firstInstance = impl->pushInstance(Mat4());   // identity: the shadow pass reads it
-    impl->drawQueue.push_back(item);
+    impl->queueDraw(item);
     impl->stats.entitiesSubmitted++;
 }
 

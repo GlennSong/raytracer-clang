@@ -16915,3 +16915,38 @@ first, then the probe, then the sky. Today's reflections are still the sky's alo
   `updateGlobalHorizonDescriptor`;
 - `terrain.vert` did not write `mesh.frag`'s locations 6–8;
 - the sky cube's first barrier waited on a read at TOP_OF_PIPE.
+
+## ADR-0372 — Reflection probes, stage A: capturing a probe's faces
+
+**Context.** Renderer-realism phase 3b (`~/.claude/plans/renderer-realism.md`). The sky cube (ADR-0371) reflects the
+sky alone. Local probes are to reflect the street and its neighbours. They are relightable: a probe keeps what its
+faces saw, not their light, so time of day costs no recapture. Glenn asked whether this is cached: the captures (what
+the surfaces are) will be baked with the level in stage B; only the relighting runs live.
+
+**Decision (stage A).**
+- **Globals in slots.** Set 0 binding 0 is a dynamic uniform. Slot 0 is the frame's view; slots 1 and 2 are the
+  probe faces captured this frame, each its own view-projection and eye (no lights or cascades: the capture writes
+  surfaces). Each slot sits on the device's uniform-offset alignment. The six set-0 binds pass offset 0. The proof is
+  the same picture, validation-clean.
+- **The capture.** `Renderer::beginProbeFace(probe, face, eye)` / `endProbeFace()`: the draws between them (routed by
+  `queueDraw`) go into that slot's queue.
+  - Recorded after the shadow pass (set 0 samples the shadow array) into three 64^2 RGBA16F targets and a depth,
+    through capture twins of the mesh pipelines (culled and two-sided, full and packed vertices).
+  - `mesh.frag` is compiled with `PROBE_CAPTURE` (`mesh_probe.frag.spv`): albedo + metallic, normal + roughness (as
+    the scene pass writes it), emission + distance from the probe.
+  - Transparent surfaces are captured as opaque.
+  - Each face is blitted, mirrored left to right, into its probe's layer (probe × 6 + face) of three G-buffer arrays
+    (64 probes). Cube maps are left-handed; `probeFaceBasis` gives each face's forward and up in the cube convention
+    the shaders sample by.
+- **The check.** `RT_PROBE_TEST=1` captures probe 0 at the camera, two faces a frame, from the static world only
+  (structures, scenery, furniture, ground paint within 300 m, each face's own frustum). `RT_PROBE_DUMP=<file.ppm>`
+  rewrites its six faces (albedo, normal and emission rows) every 600 of its faces, so the file follows the camera.
+  At a street corner at noon the faces show the paving and kerbs, palms, shop fronts and awnings, the road's markings,
+  and the towers down the street, with the right normals. (A first dump fired after 12 faces, at the spawn point
+  before the camera moved: hence the refresh.)
+- **The ground.** Terrain's capture twin (terrain.vert with the capture fragment shader) draws the frame's own
+  terrain into each face. TerrainLodSystem selects it for the camera, so a probe near the camera sees most of the same
+  ground, not all of it.
+
+**Owed:** stage B (placement, the nearest 64 resident,
+the capture schedule, baking the captures with the level); C (relight); D (use in the reflections).

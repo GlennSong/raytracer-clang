@@ -118,6 +118,12 @@ layout(location = 7) flat in vec4 inImpA;   // FLAG_IMPOSTOR_VIEWS (bit 24): the
 layout(location = 8) flat in vec4 inImpB;   // ...its window half extents Rb, Hh and its block's corner in the atlas
 
 layout(location = 0) out vec4 outColor;
+#ifdef PROBE_CAPTURE
+// A REFLECTION PROBE'S CAPTURE (ADR-0372; mesh_probe.frag.spv, this file with PROBE_CAPTURE): what the surface IS, not
+// how it is lit -- albedo and metallic (location 0), the world normal and roughness (1, as the scene pass writes it),
+// emission and the distance from the probe (2) -- so the probe can be relit as the day and the lamps change
+layout(location = 2) out vec4 outEmit;
+#endif
 layout(location = 1) out vec4 outNormal;   // world normal *0.5+0.5 (SSAO G-buffer)
 
 // ---- BRDF (ported from lighting.metal) ------------------------------------
@@ -1795,6 +1801,10 @@ void main() {
             outColor = vec4(color * opacity, opacity);
         }
         outColor.rgb *= g.cameraPosition.w;   // PRE-EXPOSED (ADR-0366): the camera's exposure, applied as it is drawn
+#ifdef PROBE_CAPTURE
+        outColor = vec4(albedo, metallic);
+        outEmit = vec4(emission * (skyIsPhysical() ? g.skyPhysical3.z : 1.0), length(inWorldPos - g.cameraPosition.xyz));
+#endif
     }
     outNormal = vec4(N * 0.5 + 0.5, roughness);   // world normal (SSAO) + roughness (SSR gate)
 }

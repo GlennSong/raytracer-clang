@@ -1162,6 +1162,15 @@ function(rt_build_vulkan_shaders)
             VERBATIM)
         list(APPEND VK_SPV_FILES ${VK_SHADER_OUT_DIR}/${shader}.spv)
     endforeach()
+    # the reflection probes' capture (ADR-0372): mesh.frag again, writing the surface rather than its light
+    add_custom_command(
+        OUTPUT ${VK_SHADER_OUT_DIR}/mesh_probe.frag.spv
+        COMMAND ${Vulkan_GLSLC_EXECUTABLE} ${VK_SHADER_SRC_DIR}/mesh.frag -DPROBE_CAPTURE -I ${VK_SHADER_SRC_DIR}
+                -o ${VK_SHADER_OUT_DIR}/mesh_probe.frag.spv
+        DEPENDS ${VK_SHADER_SRC_DIR}/mesh.frag ${VK_SHADER_SRC_DIR}/sky_common.glsl ${VK_SHADER_SRC_DIR}/sky_physical.glsl
+        COMMENT "glslc mesh.frag (PROBE_CAPTURE) -> mesh_probe.frag.spv"
+        VERBATIM)
+    list(APPEND VK_SPV_FILES ${VK_SHADER_OUT_DIR}/mesh_probe.frag.spv)
     # the erosion bake's kernels (ADR-0122): one GLSL source, one SPIR-V module per kernel
     foreach(kernel thermal apply)
         string(TOUPPER ${kernel} KERNEL_UP)
