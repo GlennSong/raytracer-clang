@@ -530,6 +530,7 @@ private:
     // the same instances as carGroups_ (copied once the bake is done, lamp masks and all), the near group stopping
     // where this one starts. Invalid where the recipe has none.
     std::vector<engine::Entity> carMidGroups_;
+    std::vector<engine::RenderMesh> carFarMesh_;   // per variant: the recipe's far stand-in (empty: the two boxes)
     void copyMidBodies(engine::World& world);
     std::unordered_map<int, engine::Mat4> physPose_;      // R5: agent -> body pose
     std::vector<std::vector<int>> carAgentIds_;           // parallel to bakes

@@ -41,7 +41,7 @@ struct VehiclesVM {
     ScriptVM vm;
     bool loaded = false;
     VehiclesVM() {
-        // vehicles.lua now `require`s vehicle_classes + vehicle_forms, so the VM
+        // vehicles.lua `require`s vehicle_kit, so the VM
         // needs the same surface the real hosts give it: the procgen bindings
         // plus a module loader rooted at the asset scripts. RT_SOURCE_DIR keeps
         // it resolving whatever the test's working directory is.
@@ -177,7 +177,7 @@ TEST_CASE(every_fleet_body_carries_its_own_lit_lenses) {
     std::string err;
     // (a drivable spec as a fleet slot: its body and lamps; the wheels are not what is checked)
     CHECK(a.vm.doString("function __asSlot(s) return { body = s.body, wheels = mesh.box({0.1, 0.1, 0.1}), lights = s.lights } end", &err));
-    for (const char* fleet : {"fleet_kit", "classic", "fleet_semis"}) {
+    for (const char* fleet : {"fleet_kit", "fleet_semis"}) {
         if (std::string(fleet) == "fleet_semis")
             CHECK(a.vm.doString("vehicle.fleet_semis = {"
                                 "  { class = 'semi', size = {2.6, 4.1, 22}, build = function() return __asSlot(vehicle.kit_drivable('semi', {}, {})) end },"
@@ -643,11 +643,12 @@ TEST_CASE(car_picker_catalogue_builds_and_says_the_true_drivetrain) {
     CHECK(driveLabel("fwd").find("2WD") != std::string::npos);
 }
 
-// THE MIXED FLEET (Glenn: "get the new cars into island 8 along with the classic cars"). vehicle.fleet_mixed
-// is every kit car and truck, then every classic one, then ONE city bus; a level's `citysim.fleet` points
-// vehicle.fleet at it (selectFleet, after the script runs -- the first cut appended the switch to the script
-// text, after vehicles.lua's `return`, and every such level drew no cars), and the kit fleet stays the default.
-TEST_CASE(fleet_mixed_carries_kit_and_classic_bodies_and_one_bus) {
+// THE MIXED FLEET (Glenn: "get the new cars into island 8 along with the classic cars"). Since the classic cars
+// retired (ADR-0349) vehicle.fleet_mixed is the kit fleet ordered for the island: every car and truck, the fire
+// engine, then ONE city bus; a level's `citysim.fleet` points vehicle.fleet at it (selectFleet, after the script runs
+// -- the first cut appended the switch to the script text, after vehicles.lua's `return`, and every such level drew no
+// cars), and the kit fleet stays the default.
+TEST_CASE(fleet_mixed_carries_the_kit_bodies_and_one_bus) {
     VehiclesVM v;
     CHECK(v.loaded);
     CHECK(fleetSlotCount(v.vm) == 18);   // the default: the kit fleet (the fire engine, 2026-10-13; the motorcycle, 2026-11-04;
@@ -658,8 +659,8 @@ TEST_CASE(fleet_mixed_carries_kit_and_classic_bodies_and_one_bus) {
     CHECK(selectFleet(v.vm, "fleet_mixed", &err));      // ...a good one switches it (the city bridge's call)
     const int n = fleetSlotCount(v.vm);
     std::printf("    fleet_mixed: %d slots\n", n);
-    CHECK(n == 30);   // (and the two bikes, and the fire engine before the bus)
-    int buses = 0, kitSedans = 0, classicSedans = 0, fireEngines = 0;
+    CHECK(n == 18);
+    int buses = 0, sedans = 0, fireEngines = 0;
     for (int s = 0; s < n; ++s) {
         Vec3 size;
         std::string cls, e;
@@ -668,15 +669,16 @@ TEST_CASE(fleet_mixed_carries_kit_and_classic_bodies_and_one_bus) {
         CHECK(size.x > (bike ? 0.4 : 1.0) && size.z > (bike ? 1.4 : 3.0));
         if (cls == "bus") ++buses;
         if (cls == "fire_engine") ++fireEngines;
-        if (cls == "sedan") (s < 12 ? kitSedans : classicSedans) += 1;
+        if (cls == "sedan") ++sedans;
+        if (s == n - 1) CHECK(cls == "bus");
     }
     CHECK(buses == 1);
     CHECK(fireEngines == 1);
-    CHECK(kitSedans == 3 && classicSedans == 3);
-    CarBodyRecipe kitBody, classicBody;
-    CHECK(loadFleetCarBody(v.vm, 0, kitBody, &err));        // a kit body
-    CHECK(loadFleetCarBody(v.vm, 12, classicBody, &err));   // a classic body
-    CHECK(!kitBody.mesh.vertices.empty() && !classicBody.mesh.vertices.empty());
+    CHECK(sedans == 3);
+    CarBodyRecipe kitBody, busBody;
+    CHECK(loadFleetCarBody(v.vm, 0, kitBody, &err));
+    CHECK(loadFleetCarBody(v.vm, n - 1, busBody, &err));
+    CHECK(!kitBody.mesh.vertices.empty() && !busBody.mesh.vertices.empty());
 }
 
 // #42 (Glenn, 2026-10-03: "I can see through the bottom of some cars and also the classic van/suv has a polygon
@@ -812,13 +814,12 @@ TEST_CASE(fleet_back_bench_is_inside_the_car) {
 
 // ONE HANDLING BUILDER (item 23, #117): a fleet slot's `handling` IS the drivable handling of its kit -- the config a
 // physical-tier traffic car and a commandeered one drive with is the one the player gets dropping the same car from
-// the menu. The kit slots match field for field, wheels and all; every slot (the classic cars and the bus too, on the
-// class handling) carries a whole car: four or more wheels on the ground datum, mass, torque and brakes.
+// the menu. The kit slots match field for field, wheels and all; every slot carries a whole car: four or more wheels on the ground datum, mass, torque and brakes.
 TEST_CASE(every_fleet_slot_drives_with_its_kit_s_drivable_handling) {
     VehiclesVM v;
     CHECK(v.loaded);
     if (!v.loaded) return;
-    for (const char* fleet : {"fleet_kit", "classic", "fleet_mixed"}) {
+    for (const char* fleet : {"fleet_kit", "fleet_mixed"}) {
         std::string err;
         CHECK(selectFleet(v.vm, fleet, &err));
         const int slots = fleetSlotCount(v.vm);
@@ -837,7 +838,7 @@ TEST_CASE(every_fleet_slot_drives_with_its_kit_s_drivable_handling) {
             CHECK(c.brakeTorque > c.mass);
             for (const PhysicsWorld::VehicleWheel& w : c.wheels)   // attach = drawn rest centre + the rig's drop
                 CHECK_APPROX(w.position.y, -c.chassisHalfExtent.y + w.radius + h.suspensionRestDrop, 1e-6);
-            // the slot's own drivable recipe (vehicles.lua catalogue `drivable`): kit_<kit>, or the classic class
+            // the slot's own drivable recipe (vehicles.lua catalogue `drivable`): kit_<kit>
             const std::string slotLua = "vehicle.fleet[" + std::to_string(i + 1) + "]";
             bool kitBody = false;   // (a classic slot's drawn wheels sit half a tyre inside its drivable spec's)
             CHECK(v.vm.doString("__kit_body = (" + slotLua + ".drivable or ''):sub(1, 4) == 'kit_'", &err));
@@ -864,7 +865,7 @@ TEST_CASE(every_fleet_slot_drives_with_its_kit_s_drivable_handling) {
             }
         }
         std::printf("    [handling] %s: %d slots, %d match their drivable recipe\n", fleet, slots, matched);
-        if (std::string(fleet) != "classic") CHECK(matched >= 10);
+        CHECK(matched >= 10);
     }
     CHECK(selectFleet(v.vm, "fleet_kit"));
 }

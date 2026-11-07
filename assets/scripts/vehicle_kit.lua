@@ -152,6 +152,12 @@ function kit.body(P)
 
   -- A REAR WINDOW in the tail (a boxy vehicle's back glass is on its vertical tail, not the roof run):
   -- the tail cap's ladder rungs within P.rear_window = { y0, y1 }
+  -- A FRONT WINDOW in the nose (a bus's flat face: its windscreen is the nose cap's rungs within P.front_window)
+  if P.front_window then
+    local fw = P.front_window
+    local front = B:select{ group = "cap_end", where = function(c) return c[2] > fw[1] and c[2] < fw[2] end }
+    window(front, "win_front", W.windshield)
+  end
   if P.rear_window then
     local rw = P.rear_window
     local rear = B:select{ group = "cap_start", where = function(c) return c[2] > rw[1] and c[2] < rw[2] end }
@@ -198,7 +204,8 @@ function kit.profile(o)
   local r = o.r
   local P = { name = o.name, lines = o.lines, post = o.post, extras = o.extras, color = o.color, cap_crease = o.cap_crease,
               windows = o.windows, lens = o.lens, lamps = o.lamps, grille = o.grille, grille_margin = o.grille_margin,
-              rear_window = o.rear_window, level = o.level, grille_w = o.grille_w, open_top = o.open_top,
+              rear_window = o.rear_window, front_window = o.front_window, saloon = o.saloon, sign = o.sign,
+              level = o.level, grille_w = o.grille_w, open_top = o.open_top,
               cabin_back = o.cabin_back, rear_seat = o.rear_seat, truck_seating = o.truck_seating, cargo = o.cargo,
               hip_back = o.hip_back, interior = o.interior }
   P.axles = o.axles or { -(half - o.ro), half - o.fo }
@@ -320,28 +327,45 @@ function kit.patch(S, rule)
   -- follow a curved surface (an outline and one cap spanned a lamp wrapping over the nose's edge with a flat
   -- polygon, which cut into the body)
   local ring = poly.resample(poly.section({ { -w, -h }, { w, -h }, { w, h }, { -w, h } }, r, rule.segs or 3),
-                             rule.points or 24)
-  local SCALE = { 1, 1, 0.72, 0.45, 0.18 }
+                             rule.points or (rule.coarse and 12 or 24))
+  -- (a coarse patch -- the mid-range body's -- has half the outline's points and one inner ring)
+  local SCALE = rule.coarse and { 1, 1, 0.45 } or { 1, 1, 0.72, 0.45, 0.18 }
   local secs = {}
   for k, s in ipairs(SCALE) do
     local q = {}
     for i, p in ipairs(ring) do q[i] = { p[1] * s, p[2] * s } end
     secs[k] = q
   end
-  local L = poly.loft{ sections = secs, stations = { 0, 1, 2, 3, 4 }, cap_start = false, cap_end = true, cap_crease = 0 }
+  local st = {}
+  for k = 1, #SCALE do st[k] = k - 1 end
+  local L = poly.loft{ sections = secs, stations = st, cap_start = false, cap_end = true, cap_crease = 0 }
   L:assign(L:select{}, { mat = rule.mat or "lamp" })
   local proud, dome, sink = rule.proud or 0.003, rule.dome or 0.004, rule.sink or 0.012
   L:map(function(x, y, z)
     local ro = { o[1] + right[1] * x + up[1] * y, o[2] + right[2] * x + up[2] * y, o[3] + right[3] * x + up[3] * y }
-    local p = S:raycast(ro, d)
-    if not p then   -- past the body's edge: on the plane through the centre's hit
-      p = { ro[1] + d[1] * t0, ro[2] + d[2] * t0, ro[3] + d[3] * t0 }
+    local p, n = S:raycast(ro, d)
+    -- past the body's edge (a lens running off the side of a rounded nose): drawn in toward the middle until it lands,
+    -- so the outline hugs the body's silhouette (a point left on a flat plane there made the ragged edge)
+    local k = 1.0
+    while not p and k > 0.35 do
+      k = k - 0.08
+      p, n = S:raycast({ o[1] + (right[1] * x + up[1] * y) * k, o[2] + (right[2] * x + up[2] * y) * k,
+                         o[3] + (right[3] * x + up[3] * y) * k }, d)
     end
-    -- out along the cast (one direction for the whole patch: each hit's own face normal tore the outline apart where
-    -- a lamp wraps over an edge); the ring k's share of the dome by its scale
+    if not p then p, n = { ro[1] + d[1] * t0, ro[2] + d[2] * t0, ro[3] + d[3] * t0 }, out end
+    -- off the surface along its own normal, turned toward the cast where it faces away (a hit near the silhouette):
+    -- along the cast alone, a lens lying over the hood's rounded edge barely cleared the paint and the paint showed
+    -- through it; the patch's inner rings keep neighbouring normals close, so the outline no longer tears
+    local nd = n[1] * out[1] + n[2] * out[2] + n[3] * out[3]
+    if nd < 0.3 then
+      local m = { n[1] + out[1] * (0.3 - nd), n[2] + out[2] * (0.3 - nd), n[3] + out[3] * (0.3 - nd) }
+      local ml = math.sqrt(m[1] ^ 2 + m[2] ^ 2 + m[3] ^ 2)
+      n = { m[1] / ml, m[2] / ml, m[3] / ml }
+    end
+    -- the ring k's share of the dome by its scale
     local s = SCALE[math.floor(z + 0.5) + 1]
     local off = z < 0.5 and -sink or proud + dome * (1 - s * s)
-    return p[1] + out[1] * off, p[2] + out[2] * off, p[3] + out[3] * off
+    return p[1] + n[1] * off, p[2] + n[2] * off, p[3] + n[3] * off
   end)
   return L, hit0
 end
@@ -349,6 +373,7 @@ end
 -- LAMP LENSES AND THE GRILLE, shaped to the finished body (kit.patch). P.lamps = false for none.
 function kit.lamps(P, car, S)
   if P.lamps == false or not S then return end
+  local coarse = car.coarse or false
   local half = P.length * 0.5
   car.markers = car.markers or {}
   local lens = P.lens or {}
@@ -359,26 +384,28 @@ function kit.lamps(P, car, S)
     local gh = gy[2] - gy[1]
     local cy = 0.5 * (gy[1] + gy[2])
     local g = kit.patch(S, { from = { 0, cy, half + 1.0 }, dir = { 0, 0, -1 }, size = { gw * 2, gh }, r = 0.02,
-                             proud = 0.002, dome = 0, mat = "grille" })
+                             proud = 0.002, dome = 0, mat = "grille", coarse = coarse })
     if g then
       car.polys[#car.polys + 1] = g
       local bars = math.max(2, math.floor(gh / 0.06))
       for i = 1, bars - 1 do
         local y = gy[1] + gh * i / bars
         local b = kit.patch(S, { from = { 0, y, half + 1.0 }, dir = { 0, 0, -1 }, size = { gw * 2 - 0.05, 0.012 },
-                                 r = 0.005, segs = 1, proud = 0.006, dome = 0, sink = 0.004, mat = "chrome" })
+                                 r = 0.005, segs = 1, proud = 0.006, dome = 0, sink = 0.004, mat = "chrome",
+                                 coarse = coarse })
         if b then car.polys[#car.polys + 1] = b end
       end
     end
   end
   local hy, ty = P.lamp_y, P.tail_y
   local hx = (lens.head_x or 0.70) * P.half_width(half - 0.25)
-  local hwid, hhei = lens.head_w or 0.34, math.min(hy[2] - hy[1], 0.14)
+  local hwid, hhei = lens.head_w or 0.34, math.min(hy[2] - hy[1], 0.12)
   -- SIDE NAMES ARE PHYSICAL (car_mesh.cpp): forward +Z, up +Y, the driver's LEFT is +X. These were swapped (+X
   -- tagged "_r"), so every kit body blinked the opposite indicator (Glenn, 2026-10-20: "It uses the opposite light").
   for _, sx in ipairs({ 1, -1 }) do
-    local part, at = kit.patch(S, { from = { sx * hx, hy[2] - hhei * 0.5, half + 1.0 }, dir = { 0, 0, -1 },
-                                    size = { hwid, hhei }, r = lens.head_r or hhei * 0.35, mat = "lamp" })
+    -- (centred in the band: a smooth body's nose rounds down into the band's top)
+    local part, at = kit.patch(S, { from = { sx * hx, 0.5 * (hy[1] + hy[2]), half + 1.0 }, dir = { 0, 0, -1 },
+                                    size = { hwid, hhei }, r = lens.head_r or hhei * 0.35, mat = "lamp", coarse = coarse })
     if part then
       car.polys[#car.polys + 1] = part
       car.markers[#car.markers + 1] = { name = sx > 0 and "headlight_l" or "headlight_r", pos = at }
@@ -388,8 +415,8 @@ function kit.lamps(P, car, S)
     local tx = (lens.tail_x or 0.72) * P.half_width(-half + 0.25)
     local twid, thei = lens.tail_w or 0.36, math.min(ty[2] - ty[1], 0.14)
     for _, sx in ipairs({ 1, -1 }) do
-      local part, at = kit.patch(S, { from = { sx * tx, ty[2] - thei * 0.5, -half - 1.0 }, dir = { 0, 0, 1 },
-                                      size = { twid, thei }, r = lens.tail_r or thei * 0.25, mat = "lamp_red" })
+      local part, at = kit.patch(S, { from = { sx * tx, 0.5 * (ty[1] + ty[2]), -half - 1.0 }, dir = { 0, 0, 1 },
+                                      size = { twid, thei }, r = lens.tail_r or thei * 0.25, mat = "lamp_red", coarse = coarse })
       if part then
         car.polys[#car.polys + 1] = part
         car.markers[#car.markers + 1] = { name = sx > 0 and "taillight_l" or "taillight_r", pos = at }
@@ -607,6 +634,41 @@ S.pickup = function() return kit.profile{
   color = { 0.14, 0.30, 0.20 },
   windows = { side = { edge = 1.5, corner = 1.5 }, windshield = { edge = 1.2, corner = 1.0 }, back = { edge = 2, corner = 2 } },
   post = function(B, ctx) kit.tub(B, ctx, -2.70, -0.74, 0.48, "bed") end } end
+
+-- THE CITY BUS (Glenn likes the classic one: "I do like how the city bus's low poly style looks"): its box, its flat
+-- face with the windscreen in it, the long run of side panes between pillars, the destination sign over the
+-- windscreen, and the saloon -- the cab, the seat pairs either side of the aisle, the doors, the stanchions -- seen
+-- through clear glass.
+S.bus = function()
+  local L = 11.40
+  local half = L * 0.5
+  local pillars = {}
+  for z = half - 1.55, -half + 0.9, -1.30 do pillars[#pillars + 1] = z end
+  return kit.profile{
+    name = "bus", L = L, W = 2.55, H = 3.20, clear = 0.30, r = 0.50, fo = 2.60, ro = 3.10, wheel_w = 0.30,
+    glass = { cowl = half + 0.2, a_top = half + 0.1, c_top = -half - 0.1, deck = -half - 0.2,
+              a_side = half - 0.30, c_side = -half + 0.45, pillars = pillars, pillar_half = 0.06 },
+    belt = { { -1, 1.05 }, { 1, 1.05 } }, roof_drop = { 0.0, 0.0 }, roof_arch = 0.02, roof_w = { 0.92, 0.92 },
+    glass_w = 0.98, taper = { 0.02, 0.02, 0.25 }, tuck = 0.04, arch_gap = 0.06, step = 0.5,
+    radii = { bottom = 0.04, side = 0.05, shoulder = 0.04, glass = 0.03, roof = 0.14 },
+    lamp_y = { 0.48, 0.62 }, tail_y = { 0.55, 0.85 }, grille = false, cap_crease = 2.0,
+    lens = { head_x = 0.72, head_w = 0.28, tail_x = 0.80, tail_w = 0.22 },
+    front_window = { 0.95, 2.85 }, rear_window = { 1.70, 2.85 },
+    windows = { side = { edge = 2.5, corner = 3, gasket = 0.03 }, windshield = { edge = 2.5, corner = 3, gasket = 0.04 },
+                back = { edge = 2.5, corner = 3 } },
+    interior = false, truck_seating = true,
+    saloon = { floor_y = 0.36, seat_color = { 0.12, 0.18, 0.42 }, trim_color = { 0.55, 0.55, 0.52 } },
+    sign = { 0, 2.98, half + 0.03 },
+    color = { 0.86, 0.62, 0.08 },
+  } end
+
+-- THE STANDING-ROOM BUS (Glenn, 2026-11-06: "one where it's all seats and one where they're standing room similar to
+-- what you have done for the local train"): the same bus, benches along the walls and the aisle to stand in
+S.bus_standing = function()
+  local P = S.bus()
+  P.saloon.layout = "standing"
+  return P
+end
 
 S.step_van = function() return kit.profile{
   name = "step_van", cabin_back = 1.25, rear_seat = false, truck_seating = true, cargo = true, hip_back = 0.95, L = 6.30, W = 2.30, H = 2.85, clear = 0.30, r = 0.42, fo = 0.85, ro = 1.35,
@@ -975,10 +1037,22 @@ function kit.build(P, level, opts)
   local S = kit.detail(level > 0 and B:subdivide(level) or B:copy(), P)
   local lo, hi = S:bounds()
   -- extras (boxes, trailer, sign) join before the centring, in ground space
-  local car = { polys = {}, height = hi[2] }
+  local car = { polys = {}, height = hi[2], coarse = opts.coarse }
   kit.lamps(P, car, S)
   local cabinPolys, hip, rearHip = {}, nil, nil
   if P.interior ~= false then cabinPolys, hip, rearHip = kit.interior(P, S) end
+  -- A BUS's SALOON (P.saloon, the cabin furniture's bus layout, mesh.cabin_interior): the hollow from just behind the
+  -- face to just ahead of the tail, its riders' seats and the doors they step off from
+  local saloon = nil
+  if P.saloon then
+    local half = P.length * 0.5
+    local sp = P.saloon
+    saloon = mesh.cabin_interior{ front_z = half - (sp.front or 0.35), rear_z = -half + (sp.rear or 0.30),
+                                  half_width = P.width * 0.5 - (sp.wall or 0.10), floor_y = sp.floor_y,
+                                  roof_y = P.height - (sp.roof or 0.18), rows = 0, seat_pitch = sp.pitch or 0.80,
+                                  hip_height = sp.hip or 0.45, seat_color = sp.seat_color, trim_color = sp.trim_color,
+                                  standing = sp.layout == "standing" }
+  end
   if P.extras then P.extras(car) end
   for _, x in ipairs(car.polys) do S:append(x) end
   lo, hi = S:bounds()
@@ -1025,7 +1099,20 @@ function kit.build(P, level, opts)
     local seatZ = (g.cowl or 0) - 1.15
     seat = { -P.width * 0.22, P.bottom(seatZ) + 0.39 - cy, seatZ - cz }
   end
-  return { parts = parts, wheels = wheels, size = { hi[1] - lo[1], hi[2], hi[3] - lo[3] }, lift = cy,
+  local function shifted(p) return { p[1], p[2] - cy, p[3] - cz } end
+  if saloon then
+    hip = nil
+    seat = shifted(saloon.driver_seat)
+  end
+  if P.sign then lights[#lights + 1] = { name = "dest_sign", pos = shifted(P.sign) } end
+  local seats, doors = nil, nil
+  if saloon then
+    seats, doors = {}, {}
+    for i, q in ipairs(saloon.seats) do seats[i] = shifted(q) end
+    for i, q in ipairs(saloon.doors) do doors[i] = shifted(q) end
+  end
+  return { saloon = saloon and mesh.translate(saloon.mesh, { 0, -cy, -cz }) or nil, seats = seats, doors = doors,
+           parts = parts, wheels = wheels, size = { hi[1] - lo[1], hi[2], hi[3] - lo[3] }, lift = cy,
            length = hi[3] - lo[3], spare = spare, color = P.color, lights = lights, driver_seat = seat,
            -- the back bench's hip point (its middle), when the cabin has one: where a back-seat rider sits
            rear_hip = rearHip and { rearHip[1], rearHip[2] - cy, rearHip[3] - cz } or nil,

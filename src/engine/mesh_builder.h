@@ -243,6 +243,11 @@ struct MeshBuilder {
     // the dst vertex's own (so the two sides of a crease each find their own side). A coarse cage then shades like the
     // smooth body it was subdivided into, at the cage's triangle count. A vertex with no candidate keeps its normal.
     static void transferNormals(RenderMesh& dst, const RenderMesh& src, double radius = 0.08);
+    // TANGENTS FROM THE UVs: each vertex's tangent the +u direction of its faces (dP/du, area-weighted), made square to
+    // its normal -- the frame a normal map laid on those uvs is read in (mesh.frag: B = cross(N, T), so a layout must
+    // not be mirrored for its bitangent to be +v). Faces through a TAGGED vertex (u <= -999: a lens's role) are left
+    // out and their vertices keep their tangents.
+    static void computeTangents(RenderMesh& mesh);
     // A triangle whose |cross(c - a, b - a)|^2 is under this (area under 0.1 mm^2) has NO AREA: the emitters skip it,
     // dropDegenerate removes it, and the mesh audit (tests/mesh_invariants.h) counts by the same number.
     static constexpr double kNoArea2 = 4e-14;

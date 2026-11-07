@@ -275,6 +275,11 @@ bool loadFleetCarBody(ScriptVM& vm, int slot, CarBodyRecipe& out,
             lua_settop(L, base);
             return fail(err, where + ": `mid` is not a Mesh");
         }
+        bool hasFar = false;
+        if (!optMeshField(L, rec, "far", body.far, hasFar)) {
+            lua_settop(L, base);
+            return fail(err, where + ": `far` is not a Mesh");
+        }
         lua_getfield(L, rec, "mid_from");
         body.midFrom = lua_isnumber(L, -1) ? lua_tonumber(L, -1) : 0.0;
         lua_pop(L, 1);

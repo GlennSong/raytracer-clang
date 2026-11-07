@@ -11,7 +11,9 @@
 #include "../procgen/lsystem.h"
 #include "../../proc_rng.h"
 #include "../procgen/tree.h"
-#include "../procgen/vehicle/car_mesh.h"
+#include "../mesh_bake.h"
+#include "../mesh_unwrap.h"
+#include "../procgen/vehicle/car_interior.h"
 #include "../procgen/vehicle/occupant.h"
 #include "../procgen/person.h"
 #include "../procgen/terrain.h"
@@ -293,85 +295,7 @@ int l_mesh_capsule(lua_State* L) {
     return 1;
 }
 
-// --- mesh.car -------------------------------------------------------------
-// The low-poly car generator. It returns PARTS, not one mesh:
-// Renderable/InstanceGroup each carry a single RenderMaterial, so transparent
-// glass physically cannot share a mesh with the painted body. Recipes live in
-// vehicles.lua over the class data in vehicle_classes.lua (ADR-0042: C++ owns
-// the vocabulary, Lua owns the recipe).
-
-// Read an optional array of {z, v} pairs into a key curve. Absent -> keep default.
-bool readKeys(lua_State* L, int idx, const char* key, std::vector<CarKey>* out) {
-    lua_getfield(L, idx, key);
-    if (!lua_istable(L, -1)) { lua_pop(L, 1); return false; }
-    const int n = static_cast<int>(lua_rawlen(L, -1));
-    std::vector<CarKey> keys;
-    for (int i = 1; i <= n; ++i) {
-        lua_rawgeti(L, -1, i);
-        if (lua_istable(L, -1) && lua_rawlen(L, -1) >= 2) {
-            lua_rawgeti(L, -1, 1);
-            lua_rawgeti(L, -2, 2);
-            keys.push_back({static_cast<Real>(lua_tonumber(L, -2)),
-                            static_cast<Real>(lua_tonumber(L, -1))});
-            lua_pop(L, 2);
-        }
-        lua_pop(L, 1);
-    }
-    lua_pop(L, 1);
-    if (keys.empty()) return false;
-    *out = keys;
-    return true;
-}
-
-bool readNumbers(lua_State* L, int idx, const char* key, std::vector<Real>* out) {
-    lua_getfield(L, idx, key);
-    if (!lua_istable(L, -1)) { lua_pop(L, 1); return false; }
-    const int n = static_cast<int>(lua_rawlen(L, -1));
-    std::vector<Real> v;
-    for (int i = 1; i <= n; ++i) {
-        lua_rawgeti(L, -1, i);
-        v.push_back(static_cast<Real>(lua_tonumber(L, -1)));
-        lua_pop(L, 1);
-    }
-    lua_pop(L, 1);
-    *out = v;
-    return true;
-}
-
-bool readBand(lua_State* L, int idx, const char* key, CarBand* out) {
-    lua_getfield(L, idx, key);
-    if (!lua_istable(L, -1) || lua_rawlen(L, -1) < 2) { lua_pop(L, 1); return false; }
-    lua_rawgeti(L, -1, 1);
-    lua_rawgeti(L, -2, 2);
-    Real a = static_cast<Real>(lua_tonumber(L, -2));
-    Real b = static_cast<Real>(lua_tonumber(L, -1));
-    lua_pop(L, 3);
-    *out = {std::min(a, b), std::max(a, b)};
-    return true;
-}
-
-bool readBands(lua_State* L, int idx, const char* key, std::vector<CarBand>* out) {
-    lua_getfield(L, idx, key);
-    if (!lua_istable(L, -1)) { lua_pop(L, 1); return false; }
-    const int n = static_cast<int>(lua_rawlen(L, -1));
-    std::vector<CarBand> v;
-    for (int i = 1; i <= n; ++i) {
-        lua_rawgeti(L, -1, i);
-        if (lua_istable(L, -1) && lua_rawlen(L, -1) >= 2) {
-            lua_rawgeti(L, -1, 1);
-            lua_rawgeti(L, -2, 2);
-            Real a = static_cast<Real>(lua_tonumber(L, -2));
-            Real b = static_cast<Real>(lua_tonumber(L, -1));
-            lua_pop(L, 2);
-            v.push_back({std::min(a, b), std::max(a, b)});
-        }
-        lua_pop(L, 1);
-    }
-    lua_pop(L, 1);
-    *out = v;
-    return true;
-}
-
+// An optional {r, g, b} field into *out (absent: left as it is).
 bool readColor(lua_State* L, int idx, const char* key, Vec3* out) {
     lua_getfield(L, idx, key);
     if (!lua_istable(L, -1)) { lua_pop(L, 1); return false; }
@@ -380,110 +304,6 @@ bool readColor(lua_State* L, int idx, const char* key, Vec3* out) {
     return true;
 }
 
-CarParams readCarParams(lua_State* L, int idx) {
-    CarParams p = defaultSedanParams();
-    if (!lua_istable(L, idx)) return p;
-
-    p.width           = static_cast<Real>(optField(L, idx, "width", p.width));
-    p.height          = static_cast<Real>(optField(L, idx, "height", p.height));
-    p.length          = static_cast<Real>(optField(L, idx, "length", p.length));
-    p.wheelDiameter   = static_cast<Real>(optField(L, idx, "wheel_diameter", p.wheelDiameter));
-    p.frontOverhang   = static_cast<Real>(optField(L, idx, "front_overhang", p.frontOverhang));
-    p.rearOverhang    = static_cast<Real>(optField(L, idx, "rear_overhang", p.rearOverhang));
-    p.groundClearance = static_cast<Real>(optField(L, idx, "ground_clearance", p.groundClearance));
-
-    p.chamfer         = static_cast<Real>(optField(L, idx, "chamfer", p.chamfer));
-    p.topPts          = static_cast<int>(optField(L, idx, "top_pts", p.topPts));
-    p.bottomPts       = static_cast<int>(optField(L, idx, "bottom_pts", p.bottomPts));
-    p.tumblehome      = static_cast<Real>(optField(L, idx, "tumblehome", p.tumblehome));
-    p.pillarHalfWidth = static_cast<Real>(optField(L, idx, "pillar_half_width", p.pillarHalfWidth));
-    p.glassHalfU      = static_cast<Real>(optField(L, idx, "glass_half_u", p.glassHalfU));
-    p.railDrop        = static_cast<Real>(optField(L, idx, "rail_drop", p.railDrop));
-    p.archHalfSpan    = static_cast<Real>(optField(L, idx, "arch_half_span", p.archHalfSpan));
-    p.archTop         = static_cast<Real>(optField(L, idx, "arch_top", p.archTop));
-    // Cabin furniture and the belt's shape: a bus needs its own (rows 0 is the
-    // bus saloon), and none of these reached Lua, so every class got a car's.
-    p.rows            = static_cast<int>(optField(L, idx, "rows", p.rows));
-    p.seatPitch       = static_cast<Real>(optField(L, idx, "seat_pitch", p.seatPitch));
-    p.backAngle       = static_cast<Real>(optField(L, idx, "back_angle", p.backAngle));
-    p.steerDiameter   = static_cast<Real>(optField(L, idx, "steer_diameter", p.steerDiameter));
-    p.hipHeight       = static_cast<Real>(optField(L, idx, "hip_height", p.hipHeight));
-    p.cabinFloor      = static_cast<Real>(optField(L, idx, "cabin_floor", p.cabinFloor));
-    p.beltKick        = static_cast<Real>(optField(L, idx, "belt_kick", p.beltKick));
-    p.beltKickStart   = static_cast<Real>(optField(L, idx, "belt_kick_start", p.beltKickStart));
-    p.beltKickEnd     = static_cast<Real>(optField(L, idx, "belt_kick_end", p.beltKickEnd));
-    p.shellThickness  = static_cast<Real>(optField(L, idx, "shell_thickness", p.shellThickness));
-    p.interior        = optField(L, idx, "interior", p.interior ? 1.0 : 0.0) != 0.0;
-
-    readNumbers(L, idx, "stations", &p.stations);
-    readKeys(L, idx, "roof", &p.roof);
-    readKeys(L, idx, "sill", &p.sill);
-    readKeys(L, idx, "plan", &p.plan);
-    readBand(L, idx, "windshield", &p.windshield);
-    readBand(L, idx, "backlight", &p.backlight);
-    readBands(L, idx, "side_windows", &p.sideWindows);
-    readNumbers(L, idx, "pillars", &p.pillars);
-    readColor(L, idx, "paint", &p.paint);
-    readColor(L, idx, "trim_color", &p.trimColor);
-    readColor(L, idx, "seat_color", &p.seatColor);
-    readColor(L, idx, "interior_color", &p.interiorColor);
-    readColor(L, idx, "pillar_color", &p.pillarColor);
-
-    lua_getfield(L, idx, "lod");
-    if (lua_isstring(L, -1)) {
-        const std::string lod = lua_tostring(L, -1);
-        if (lod == "mid") p.lod = CarLod::Mid;
-        else if (lod == "low") p.lod = CarLod::Low;
-        else if (lod == "proxy") p.lod = CarLod::Proxy;
-        else p.lod = CarLod::High;
-    }
-    lua_pop(L, 1);
-    return p;
-}
-
-// mesh.car(params) -> { body=, glass=, interior=, lamp=, wheel=,
-//                       lights = {{name=, pos={x,y,z}, normal={x,y,z}}, ...},
-//                       half_extent = {x,y,z} }
-// Empty parts are omitted, so `if c.glass then` is the natural test in Lua.
-int l_mesh_car(lua_State* L) {
-    const CarParams p = readCarParams(L, 1);
-    const CarMesh car = buildCarMesh(p);
-
-    static const char* kNames[kCarPartCount] = {"body", "glass", "interior",
-                                                "lamp", "wheel"};
-    lua_newtable(L);
-    for (int i = 0; i < kCarPartCount; ++i) {
-        if (car.parts[i].vertices.empty()) continue;
-        pushMesh(L, std::make_shared<RenderMesh>(car.parts[i]));
-        lua_setfield(L, -2, kNames[i]);
-    }
-
-    lua_newtable(L);
-    int n = 0;
-    for (const CarAttach& a : car.attaches) {
-        lua_newtable(L);
-        lua_pushstring(L, a.tag.c_str());
-        lua_setfield(L, -2, "name");
-        auto pushVec = [&](const Vec3& v, const char* field) {
-            lua_newtable(L);
-            lua_pushnumber(L, v.x); lua_rawseti(L, -2, 1);
-            lua_pushnumber(L, v.y); lua_rawseti(L, -2, 2);
-            lua_pushnumber(L, v.z); lua_rawseti(L, -2, 3);
-            lua_setfield(L, -2, field);
-        };
-        pushVec(a.position, "pos");
-        pushVec(a.normal, "normal");
-        lua_rawseti(L, -2, ++n);
-    }
-    lua_setfield(L, -2, "lights");
-
-    lua_newtable(L);
-    lua_pushnumber(L, car.halfExtent.x); lua_rawseti(L, -2, 1);
-    lua_pushnumber(L, car.halfExtent.y); lua_rawseti(L, -2, 2);
-    lua_pushnumber(L, car.halfExtent.z); lua_rawseti(L, -2, 3);
-    lua_setfield(L, -2, "half_extent");
-    return 1;
-}
 
 
 // mesh.occupant{ back_angle=, shirt={r,g,b}, trousers=, skin= } -> Mesh
@@ -926,6 +746,56 @@ int l_path_bezier(lua_State* L) {
 int l_path_resample(lua_State* L) { pushPath(L, MeshBuilder::pathResample(checkPath(L, 1), luaL_checknumber(L, 2))); return 1; }
 int l_path_length(lua_State* L) { lua_pushnumber(L, MeshBuilder::pathLength(checkPath(L, 1))); return 1; }
 
+// mesh.cabin_interior{ front_z, rear_z, half_width, floor_y, roof_y, rows = 2 (0: a city bus's saloon), seat_pitch,
+//   back_angle, hip_height, steer_diameter, trim_color, seat_color, driver_on_left = true, standing = false (a bus's
+//   standing-room layout: benches along the walls) }
+//   -> { mesh =, driver_seat = {x,y,z}, seats = { {x,y,z}... }, doors = { ... }, rear_hip = {x,y,z} | nil }
+// The cabin furniture (car_interior.h buildCarInterior) for a kit body's hollow: a car's seats, dash and wheel, or a
+// bus's saloon -- the driver's cab, the seat pairs either side of the aisle, the doors, the stanchions -- and the hip
+// and door points riders are posed from.
+int l_mesh_cabin_interior(lua_State* L) {
+    luaL_checktype(L, 1, LUA_TTABLE);
+    CabinSpace cabin;
+    cabin.frontZ = optNumField(L, 1, "front_z", 1.0);
+    cabin.rearZ = optNumField(L, 1, "rear_z", -1.0);
+    cabin.halfWidth = optNumField(L, 1, "half_width", 0.7);
+    cabin.floorY = optNumField(L, 1, "floor_y", 0.3);
+    cabin.roofY = optNumField(L, 1, "roof_y", 1.4);
+    InteriorParams ip;
+    ip.rows = optIntField(L, 1, "rows", ip.rows);
+    ip.seatPitch = optNumField(L, 1, "seat_pitch", ip.seatPitch);
+    ip.backAngle = optNumField(L, 1, "back_angle", ip.backAngle);
+    ip.cushionHeight = optNumField(L, 1, "hip_height", ip.cushionHeight);
+    ip.steerDiameter = optNumField(L, 1, "steer_diameter", ip.steerDiameter);
+    ip.trimColor = optVec3Field(L, 1, "trim_color", ip.trimColor);
+    ip.seatColor = optVec3Field(L, 1, "seat_color", ip.seatColor);
+    ip.driverOnLeft = optBoolField(L, 1, "driver_on_left", ip.driverOnLeft);
+    ip.busStanding = optBoolField(L, 1, "standing", ip.busStanding);
+    Vec3 sgrp(0, 0, 0);
+    std::vector<Vec3> seats, doors, rearHip;
+    auto m = std::make_shared<RenderMesh>(buildCarInterior(cabin, ip, &sgrp, &seats, &doors, &rearHip));
+    lua_createtable(L, 0, 5);
+    pushMesh(L, m);
+    lua_setfield(L, -2, "mesh");
+    pushVec3(L, sgrp);
+    lua_setfield(L, -2, "driver_seat");
+    auto list = [&](const std::vector<Vec3>& pts, const char* key) {
+        lua_createtable(L, static_cast<int>(pts.size()), 0);
+        for (std::size_t i = 0; i < pts.size(); ++i) {
+            pushVec3(L, pts[i]);
+            lua_rawseti(L, -2, static_cast<lua_Integer>(i + 1));
+        }
+        lua_setfield(L, -2, key);
+    };
+    list(seats, "seats");
+    list(doors, "doors");
+    if (!rearHip.empty()) {
+        pushVec3(L, rearHip.front());
+        lua_setfield(L, -2, "rear_hip");
+    }
+    return 1;
+}
+
 // mesh.paint(mesh, {r, g, b}) -> every vertex that colour (what bake_height_color(m, c, c) stood in for)
 int l_mesh_paint(lua_State* L) {
     auto m = std::make_shared<RenderMesh>(checkMesh(L, 1));
@@ -1124,6 +994,38 @@ int l_mesh_transfer_normals(lua_State* L) {
     MeshBuilder::transferNormals(*m, checkMesh(L, 2), optNumField(L, 3, "radius", 0.08));
     pushMesh(L, m);
     return 1;
+}
+
+// mesh.tangents(m) -> m with each vertex's tangent from its uvs (MeshBuilder::computeTangents)
+int l_mesh_tangents(lua_State* L) {
+    auto m = std::make_shared<RenderMesh>(checkMesh(L, 1));
+    MeshBuilder::computeTangents(*m);
+    pushMesh(L, m);
+    return 1;
+}
+// mesh.unwrap(m, {texels_per_metre = 128, padding = 4, max_size = 4096, chart_angle = 50}) -> mesh, report
+// A unique atlas layout for the mesh (engine/mesh_unwrap.h): its vertices split along the chart seams, u, v the atlas
+// coordinates; tagged faces (a lens's role) keep theirs. report = { charts, planar, lscm, splits, size, fill,
+// texels_per_metre, ok }.
+int l_mesh_unwrap(lua_State* L) {
+    auto m = std::make_shared<RenderMesh>(checkMesh(L, 1));
+    UnwrapOptions o;
+    o.texelsPerMetre = optNumField(L, 2, "texels_per_metre", o.texelsPerMetre);
+    o.padding = optIntField(L, 2, "padding", o.padding);
+    o.maxSize = optIntField(L, 2, "max_size", o.maxSize);
+    o.chartAngleDeg = optNumField(L, 2, "chart_angle", o.chartAngleDeg);
+    const UnwrapReport r = unwrapMesh(*m, o);
+    pushMesh(L, m);
+    lua_createtable(L, 0, 8);
+    lua_pushinteger(L, r.charts); lua_setfield(L, -2, "charts");
+    lua_pushinteger(L, r.planar); lua_setfield(L, -2, "planar");
+    lua_pushinteger(L, r.lscm); lua_setfield(L, -2, "lscm");
+    lua_pushinteger(L, r.splits); lua_setfield(L, -2, "splits");
+    lua_pushinteger(L, r.size); lua_setfield(L, -2, "size");
+    lua_pushnumber(L, r.fill); lua_setfield(L, -2, "fill");
+    lua_pushnumber(L, r.texelsPerMetre); lua_setfield(L, -2, "texels_per_metre");
+    lua_pushboolean(L, r.ok); lua_setfield(L, -2, "ok");
+    return 2;
 }
 
 // --- rng.* : THE ENGINE'S ONE SEEDED STREAM (ProcRng, proc_rng.h) for Lua: the same seed draws the same numbers in a
@@ -2943,6 +2845,119 @@ int l_tex_bake_normal(lua_State* L) {
     return 1;
 }
 
+// BAKE OPTIONS from a Lua table at `idx`: size, cage, samples, color, curvature, height, thickness, ao_rays,
+// ao_distance, thickness_max, dilate (engine/mesh_bake.h)
+BakeOptions readBakeOptions(lua_State* L, int idx) {
+    BakeOptions o;
+    o.size = optIntField(L, idx, "size", o.size);
+    o.cage = optNumField(L, idx, "cage", o.cage);
+    o.samples = optIntField(L, idx, "samples", o.samples);
+    o.color = optBoolField(L, idx, "color", o.color);
+    o.curvature = optBoolField(L, idx, "curvature", o.curvature);
+    o.height = optBoolField(L, idx, "height", o.height);
+    o.thickness = optBoolField(L, idx, "thickness", o.thickness);
+    o.aoRays = optIntField(L, idx, "ao_rays", o.aoRays);
+    o.aoDistance = optNumField(L, idx, "ao_distance", o.aoDistance);
+    o.thicknessMax = optNumField(L, idx, "thickness_max", o.thicknessMax);
+    o.dilate = optIntField(L, idx, "dilate", o.dilate);
+    return o;
+}
+// The maps a bake asked for, as Images in a table (normal and world always; the rest when asked)
+void pushBakedMaps(lua_State* L, const BakedMaps& m, const BakeOptions& o) {
+    auto image = [&](std::vector<uint8_t> px, int channels, const char* key) {
+        auto t = std::make_shared<TextureData>();
+        t->width = t->height = m.size;
+        t->channels = channels;
+        t->pixels = std::move(px);
+        pushImage(L, t);
+        lua_setfield(L, -2, key);
+    };
+    lua_createtable(L, 0, 10);
+    image(normalMapBytes(m), 3, "normal");
+    image(worldNormalMapBytes(m), 3, "world");
+    if (o.color) image(colorMapBytes(m), 3, "color");
+    if (o.aoRays > 0) image(aoMapBytes(m), 1, "ao");
+    if (o.curvature) image(curvatureMapBytes(m), 1, "curvature");
+    if (o.height) image(heightMapBytes(m, o.cage), 1, "height");
+    if (o.thickness) image(thicknessMapBytes(m, o.thicknessMax), 1, "thickness");
+    lua_pushinteger(L, m.texels); lua_setfield(L, -2, "texels");
+    lua_pushinteger(L, m.hits); lua_setfield(L, -2, "hits");
+    lua_pushinteger(L, m.size); lua_setfield(L, -2, "size");
+}
+// mesh.bake(low, high, {size = 512, cage = 0.05, samples = 1, color, curvature, height, thickness, ao_rays = 0,
+//   ao_distance = 0.5, thickness_max = 0.5, dilate = 4}) -> { normal = Image, world = Image, color, ao, curvature,
+//   height, thickness (those asked for), texels =, hits =, size = }
+// The detailed mesh `high` baked into the atlas of `low` (unwrapped by mesh.unwrap; engine/mesh_bake.h).
+int l_mesh_bake(lua_State* L) {
+    const RenderMesh& low = checkMesh(L, 1);
+    const RenderMesh& high = checkMesh(L, 2);
+    const BakeOptions o = readBakeOptions(L, 3);
+    pushBakedMaps(L, bakeMaps(low, high, o), o);
+    return 1;
+}
+// mesh.bake_parts({ { low =, high =, bake = true }, ... }, { texels_per_metre, padding, max_size, chart_angle },
+//   { bake options as mesh.bake }) -> mesh, maps, report, part_meshes (each part's slice of `mesh`, in order)
+// A MODEL baked part by part into one atlas (engine/mesh_bake.h bakeParts): each part's low unwrapped with the
+// others (no chart crossing parts) and baked from its own high only; a part with bake = false (glass, a lens) takes
+// no atlas space and keeps its uvs. `mesh` is the parts' lows merged in order.
+int l_mesh_bake_parts(lua_State* L) {
+    luaL_checktype(L, 1, LUA_TTABLE);
+    std::vector<BakePart> parts;
+    const lua_Integer n = luaL_len(L, 1);
+    for (lua_Integer i = 1; i <= n; ++i) {
+        lua_geti(L, 1, i);
+        const int t = lua_gettop(L);
+        BakePart p;
+        lua_getfield(L, t, "low");
+        p.low = checkMesh(L, -1);
+        lua_pop(L, 1);
+        lua_getfield(L, t, "high");
+        if (!lua_isnil(L, -1)) p.high = checkMesh(L, -1);
+        lua_pop(L, 1);
+        p.bake = optBoolField(L, t, "bake", true) && !p.high.indices.empty();
+        parts.push_back(std::move(p));
+        lua_pop(L, 1);
+    }
+    UnwrapOptions uo;
+    uo.texelsPerMetre = optNumField(L, 2, "texels_per_metre", uo.texelsPerMetre);
+    uo.padding = optIntField(L, 2, "padding", uo.padding);
+    uo.maxSize = optIntField(L, 2, "max_size", uo.maxSize);
+    uo.chartAngleDeg = optNumField(L, 2, "chart_angle", uo.chartAngleDeg);
+    const BakeOptions bo = readBakeOptions(L, 3);
+    BakedModel bm = bakeParts(parts, uo, bo);
+    // each part's own mesh (its slice of the merged one), so each is drawn with its own material: the body with its
+    // baked maps, the glass smooth
+    std::vector<RenderMesh> slices(parts.size());
+    for (std::size_t p = 0; p < parts.size(); ++p) {
+        const std::size_t i0 = bm.firstIndex[p], i1 = p + 1 < parts.size() ? bm.firstIndex[p + 1] : bm.mesh.indices.size();
+        std::unordered_map<uint32_t, uint32_t> remap;
+        for (std::size_t c = i0; c < i1; ++c) {
+            const uint32_t v = bm.mesh.indices[c];
+            auto it = remap.find(v);
+            if (it == remap.end()) {
+                it = remap.emplace(v, static_cast<uint32_t>(slices[p].vertices.size())).first;
+                slices[p].vertices.push_back(bm.mesh.vertices[v]);
+            }
+            slices[p].indices.push_back(it->second);
+        }
+    }
+    pushMesh(L, std::make_shared<RenderMesh>(std::move(bm.mesh)));
+    BakeOptions shown = bo;
+    shown.size = bm.unwrap.size;
+    pushBakedMaps(L, bm.maps, shown);
+    lua_createtable(L, 0, 4);
+    lua_pushinteger(L, bm.unwrap.charts); lua_setfield(L, -2, "charts");
+    lua_pushinteger(L, bm.unwrap.size); lua_setfield(L, -2, "size");
+    lua_pushnumber(L, bm.unwrap.fill); lua_setfield(L, -2, "fill");
+    lua_pushboolean(L, bm.unwrap.ok); lua_setfield(L, -2, "ok");
+    lua_createtable(L, static_cast<int>(slices.size()), 0);
+    for (std::size_t p = 0; p < slices.size(); ++p) {
+        pushMesh(L, std::make_shared<RenderMesh>(std::move(slices[p])));
+        lua_rawseti(L, -2, static_cast<lua_Integer>(p + 1));
+    }
+    return 4;
+}
+
 // --- terrain.* : compose a heightfield from primitives (ADR-0043) -------------
 // A HeightField is a world-space function (x,z)->height — the 2.5D sibling of the
 // texture Field. Build terrain from fbm + ridged ridges + domain warp + terraces,
@@ -4364,7 +4379,7 @@ void openProcgenLibrary(ScriptVM& vm) {
         {"plane", l_mesh_plane},
         {"torus", l_mesh_torus},
         {"capsule", l_mesh_capsule},
-        {"car", l_mesh_car},
+        {"cabin_interior", l_mesh_cabin_interior},
         {"occupant", l_mesh_occupant},
         {"person", l_mesh_person},
         {"merge", l_mesh_merge},
@@ -4404,6 +4419,10 @@ void openProcgenLibrary(ScriptVM& vm) {
         {"rounded_box", l_mesh_rounded_box},
         {"move_by", l_mesh_move_by},
         {"transfer_normals", l_mesh_transfer_normals},
+        {"unwrap", l_mesh_unwrap},
+        {"tangents", l_mesh_tangents},
+        {"bake", l_mesh_bake},
+        {"bake_parts", l_mesh_bake_parts},
         {"annulus", l_mesh_annulus},
         {"band", l_mesh_band},
         {"fill", l_mesh_fill},

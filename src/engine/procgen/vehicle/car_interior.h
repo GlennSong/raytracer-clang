@@ -51,6 +51,10 @@ struct InteriorParams {
     Real dashDepth = 0.34;
     Real dashHeight = 0.24;
     bool driverOnLeft = true;
+    // A BUS's STANDING-ROOM layout (Glenn, 2026-11-06: "one where it's all seats and one where they're standing room
+    // similar to what you have done for the local train"): benches along both walls facing the aisle, a wide aisle
+    // to stand in with a pole every metre; false: the seat pairs either side of a centre aisle.
+    bool busStanding = false;
     Vec3 trimColor{0.17, 0.17, 0.19};
     Vec3 seatColor{0.23, 0.21, 0.20};
 };

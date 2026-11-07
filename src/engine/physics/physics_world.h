@@ -320,6 +320,12 @@ public:
         Real engineDamping = 0.2;
         Real engineInertia = 0.5;
         Real antiRollStiffness = 0.0;
+        // THE DRIFT's FEEL, per car (Glenn, 2026-11-06: "a way tall delivery truck feels different from driving an SUV
+        // different from driving a sedan"; ADR-0236's numbers were one car's): the rear tyres' sideways grip in the
+        // slide (lower slides more), the slip angle full lock asks for, and the speed (m/s) it starts from.
+        Real driftRearGrip = 0.35;
+        Real driftSlipDegrees = 32.0;
+        Real driftMinSpeed = 11.0;
         // YAW ASSIST (the fishtail, measured in tests/test_vehicle_handling.cpp):
         // Jolt's tyre is a per-step impulse cap, so past a degree or two of
         // sideslip at speed all four tyres saturate at once and the net yaw
@@ -387,7 +393,8 @@ public:
     struct VehicleTelemetry { Real speed = 0, rpm = 0; int gear = 0; std::vector<Real> wheelSpin; std::vector<char> wheelContact; std::vector<Real> wheelSlip; };
     VehicleTelemetry vehicleTelemetry(VehicleId id) const;
     // DRIFT (ADR-0236; Glenn: "how hard is it to make a car drift? Something like burnout"): an arcade slide the
-    // player's car can be thrown into -- a handbrake tap while steering above 40 km/h. In the slide the rear
+    // player's car can be thrown into -- a handbrake tap while steering above 40 km/h, or the brake hard on with the
+    // wheel well over (Burnout's brake-and-turn). In the slide the rear
     // tyres keep a third of their sideways grip, the yaw assist stands aside, and a controller holds the slip
     // angle the steering asks for (up to 32°) and the speed the slide began with while the throttle is on;
     // straightened up, it hands back to grip. Drift time fills a boost (`boostVehicle` spends it).

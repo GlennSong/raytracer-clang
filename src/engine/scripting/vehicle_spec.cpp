@@ -30,6 +30,14 @@ void readVehicleHandling(lua_State* L, int t, VehicleSpec& out) {
     // The forgiving knobs (physics_world.h): a recipe may loosen or drop them.
     c.maxPitchRollDegrees = numField(L, t, "max_roll_deg", c.maxPitchRollDegrees);
     c.antiRollStiffness = numField(L, t, "anti_roll", c.antiRollStiffness);
+    lua_getfield(L, t, "drift");   // { rear_grip, slip_deg, min_speed }: the car's own drift (physics_world.h)
+    if (lua_istable(L, -1)) {
+        const int d = lua_gettop(L);
+        c.driftRearGrip = numField(L, d, "rear_grip", c.driftRearGrip);
+        c.driftSlipDegrees = numField(L, d, "slip_deg", c.driftSlipDegrees);
+        c.driftMinSpeed = numField(L, d, "min_speed", c.driftMinSpeed);
+    }
+    lua_pop(L, 1);
     c.yawAssist = numField(L, t, "yaw_assist", c.yawAssist);
     c.lateralGrip = numField(L, t, "grip", c.lateralGrip);
     lua_getfield(L, t, "pedals");   // true: pedalled (a bicycle) -- heard as a freewheel and tyres, not an engine

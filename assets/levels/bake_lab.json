@@ -31,24 +31,16 @@
       ],
       "shape": "box",
       "size": [
-        120.0,
+        200.0,
         0.4,
-        100.0
+        120.0
       ]
     },
     {
-      "file": "car_lab.lua",
+      "file": "bake_lab.lua",
       "id": 2,
-      "name": "car",
-      "opts": {
-        "lod": "high",
-        "paint": [
-          0.72,
-          0.1,
-          0.1
-        ],
-        "seed": 7
-      },
+      "name": "fleet_v2",
+      "opts": {},
       "position": [
         0.0,
         0.0,
@@ -93,9 +85,9 @@
     "position": [
       0.0,
       1.2,
-      9.0
+      16.0
     ]
   },
   "version": 1,
-  "watch_scripts": true
+  "name": "bake_lab"
 }

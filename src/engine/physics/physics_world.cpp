@@ -263,7 +263,7 @@ struct PhysicsWorld::Impl {
         bool tractionSplit = false;     // VehicleConfig::tractionSplit
         float appliedShare = -1.0f;     // the front share the differentials carry this step
         // drift (ADR-0236)
-        float throttle = 0.0f, handBrake = 0.0f;
+        float throttle = 0.0f, brake = 0.0f, handBrake = 0.0f;
         bool driftEnabled = false;
         std::vector<char> wheelRear;    // per wheel: behind the middle?
         float rearGrip = 1.0f, frontGrip = 1.0f;   // the tyres' sideways grip scale this step
@@ -271,6 +271,7 @@ struct PhysicsWorld::Impl {
         float driftTime = 0.0f, boost = 0.0f, boosting = 0.0f, holdSpeed = 0.0f;
         float slip = 0.0f, lastTravelYaw = 0.0f;
         bool haveTravel = false;
+        float driftRearGrip = 0.35f, driftSlipRad = 0.5585f, driftMinSpeed = 11.0f;   // VehicleConfig's drift feel
     };
     std::vector<Vehicle> vehicles;
 
@@ -1182,6 +1183,9 @@ PhysicsWorld::VehicleId PhysicsWorld::addVehicle(const VehicleConfig& cfg,
         }
         v.wheelbase = static_cast<float>(std::max(Real(1.0), zMax - zMin));
     }
+    v.driftRearGrip = static_cast<float>(cfg.driftRearGrip);
+    v.driftSlipRad = static_cast<float>(cfg.driftSlipDegrees * 3.14159265358979 / 180.0);
+    v.driftMinSpeed = static_cast<float>(cfg.driftMinSpeed);
     impl->vehicles.push_back(std::move(v));
     return static_cast<VehicleId>(impl->vehicles.size() - 1);
 }
@@ -1212,6 +1216,7 @@ void PhysicsWorld::setVehicleInput(VehicleId id, Real forward, Real right,
     impl->vehicles[id].steer = static_cast<float>(std::clamp(right, Real(-1), Real(1)));
     impl->vehicles[id].throttle = static_cast<float>(forward);
     impl->vehicles[id].handBrake = static_cast<float>(handBrake);
+    impl->vehicles[id].brake = static_cast<float>(brake);
     // Throttle/steer is meaningless on a sleeping body — wake it.
     if (forward != 0.0 || right != 0.0 || brake != 0.0 || handBrake != 0.0)
         impl->bodies().ActivateBody(impl->vehicles[id].body);
@@ -1285,8 +1290,11 @@ void PhysicsWorld::applyDrift(std::size_t index, float dt) {
         v.boosting = std::max(0.0f, v.boosting - dt);
         bi.AddForce(v.body, fwd * (m * 7.0f));
     }
-    // INTO A SLIDE: a handbrake tap while steering at speed
-    if (!v.drifting && v.handBrake > 0.5f && std::fabs(v.steer) > 0.3f && speed > 11.0f) {
+    // INTO A SLIDE: a handbrake tap while steering at speed -- or, Burnout-style (Glenn, 2026-11-06: "slam on the
+    // break and then simply turn your car into a drift"), the brake hard on with the wheel turned well over
+    const bool flick = v.handBrake > 0.5f && std::fabs(v.steer) > 0.3f;
+    const bool stab = v.brake > 0.6f && std::fabs(v.steer) > 0.45f;
+    if (!v.drifting && (flick || stab) && speed > v.driftMinSpeed) {
         v.drifting = true;
         v.driftTime = 0;
         v.holdSpeed = speed;
@@ -1301,10 +1309,10 @@ void PhysicsWorld::applyDrift(std::size_t index, float dt) {
         v.rearGrip = v.frontGrip = 1.0f;
         return;
     }
-    v.rearGrip = 0.35f;
+    v.rearGrip = v.driftRearGrip;
     v.frontGrip = 0.9f;
     // hold the slip the steering asks for: the body yaws at the travel's rate plus a pull toward the target
-    const float target = -v.steer * JPH::DegreesToRadians(32.0f);
+    const float target = -v.steer * v.driftSlipRad;
     const float wantRate = travelRate + 3.0f * wrap(target - v.slip);
     const JPH::Vec3 up(0, 1, 0);
     const float yawRate = bi.GetAngularVelocity(v.body).Dot(up);

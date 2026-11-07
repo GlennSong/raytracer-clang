@@ -228,7 +228,38 @@ RenderMesh buildBusInterior(const CabinSpace& cabin, const InteriorParams& p,
     // The middle door, kerb (right) side: no seats in front of it.
     const Real doorZ0 = len * Real(0.46), doorZ1 = len * Real(0.46) + Real(1.25);
     int row = 0;
-    for (Real z = firstZ; z + pitch <= lastZ; z += pitch, ++row) {
+    if (p.busStanding) {
+        // benches along the walls, each seat's frame turned to face the aisle (its aft axis into the wall it backs
+        // onto), the middle door's stretch of the kerb wall left clear
+        const Real depth = Real(0.46), seatW = Real(0.48);
+        for (int side = 0; side < 2; ++side) {
+            const bool kerbSide = side == 1;
+            for (Real z = firstZ; z + seatW <= lastZ; z += seatW) {
+                if (kerbSide && z + seatW > doorZ0 && z < doorZ1) continue;
+                Scope s;
+                s.axis[kUp] = Vec3(0, 1, 0);
+                s.size = Vec3(seatW, H, depth);
+                const Real zw = cabin.frontZ - z;   // the seat's front edge along the bus, in body space
+                if (!kerbSide) {
+                    s.axis[kRight] = Vec3(0, 0, -1);
+                    s.axis[kAft] = Vec3(-1, 0, 0);
+                    s.origin = Vec3(-hw + depth, cabin.floorY, zw);
+                } else {
+                    s.axis[kRight] = Vec3(0, 0, 1);
+                    s.axis[kAft] = Vec3(1, 0, 0);
+                    s.origin = Vec3(hw - depth, cabin.floorY, zw - seatW);
+                }
+                Vec3 hip;
+                emitSeat(bm, insetScope(s, Real(0.02)), p, &hip);
+                if (seatsOut) seatsOut->push_back(hip);
+            }
+        }
+        // a pole every metre down both edges of the standing aisle
+        for (Real z = firstZ; z <= lastZ; z += Real(1.0))
+            for (Real px : {depth + Real(0.12), hw * 2 - depth - Real(0.12)})
+                box(bm, at(px - Real(0.02), 0, z, Real(0.04), H, Real(0.04)), poleCol);
+    }
+    for (Real z = firstZ; !p.busStanding && z + pitch <= lastZ; z += pitch, ++row) {
         for (int side = 0; side < 2; ++side) {
             const bool kerbSide = side == 1;
             if (kerbSide && z + pitch > doorZ0 && z < doorZ1) continue;

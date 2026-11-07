@@ -1272,6 +1272,7 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
     // twice. The CitySim still runs as the planner; the bridge reads its ghosts.
     carGroups_.clear();
     carMidGroups_.clear();
+    carFarMesh_.clear();
     carLights_.clear();
     carChassis_.clear();
     carWheels_.clear();
@@ -1295,12 +1296,12 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
         // load, and a baked mesh is plain data — determinism is intact.
         const bool vehScript = assets && fleetScripted;
 #endif
-        int fleetTriangles = 0;
+        int fleetTriangles = 0, midTriangles = 0, midCount = 0;
         for (int v = 0; v < fleetVariants; ++v) {
             MeshHandle mh{}, chassisMh{};
             std::vector<LampMarker> lights;
             std::vector<CarWheel> wheels;
-            engine::RenderMesh glassMesh, interiorMesh, midMesh;
+            engine::RenderMesh glassMesh, interiorMesh, midMesh, farMesh;
             Real midFrom = 0;
             bool seeInto = false;
             bool openSeat = false;
@@ -1341,6 +1342,7 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
                         glassMesh = std::move(recipe.glass);
                         interiorMesh = std::move(recipe.interior);
                         midMesh = std::move(recipe.mid);
+                        farMesh = std::move(recipe.far);
                         midFrom = static_cast<Real>(recipe.midFrom);
                         seeInto = recipe.seeInto;
                         openSeat = recipe.openSeat;
@@ -1451,6 +1453,8 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
             // its cabin stop there (InstanceGroup's per-instance distances)
             Entity me{};
             if (assets && !midMesh.vertices.empty() && midFrom > 0) {
+                midTriangles += static_cast<int>(midMesh.indices.size() / 3);
+                ++midCount;
                 g.drawDistance = midFrom;
                 for (Entity ne : {carGlassGroups_.back(), carGlassOpaqueGroups_.back(), carInteriorGroups_.back()})
                     if (InstanceGroup* ng = ne.valid() ? world.get<InstanceGroup>(ne) : nullptr) ng->drawDistance = midFrom;
@@ -1464,6 +1468,7 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
             world.add<InstanceGroup>(e, g);
             carGroups_.push_back(e);
             carMidGroups_.push_back(me);
+            carFarMesh_.push_back(std::move(farMesh));
         }
 
         // PEOPLE ON THE BUS: seated figures posed from the same SAE manikin as
@@ -1540,7 +1545,8 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
                      << fleetVariants
                      << " scripted car bodies (vehicles.lua), "
                      << fleetTriangles / std::max(1, scriptedCount)
-                     << " tris/car avg";
+                     << " tris/car avg; " << midCount << " mid-range bodies, "
+                     << midTriangles / std::max(1, midCount) << " tris avg";
     }
     pedGroup_ = world.create();
     { InstanceGroup g; g.mesh = pedMesh; g.material = pedMaterial();
@@ -1558,15 +1564,18 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
                                        {0.14, 0.22, 0.42}, {0.82, 0.82, 0.80}, {0.30, 0.34, 0.30}};
         for (int v = 0; v < drawVariantCount(); ++v) {
             const Vec3 h = v < static_cast<int>(he.size()) ? he[static_cast<std::size_t>(v)] : Vec3(0.9, 0.7, 2.2);
-            // a body and a cabin, centred like the full model (it is placed half its height above the road)
-            engine::RenderMesh body = MeshBuilder::box(Vec3(h.x * 2, h.y * 1.1, h.z * 2));
-            MeshBuilder::transform(body, Mat4::translate(0, -h.y * 0.45, 0));
-            engine::RenderMesh cabin = MeshBuilder::box(Vec3(h.x * 1.7, h.y * 0.9, h.z * 1.0));
-            MeshBuilder::transform(cabin, Mat4::translate(0, h.y * 0.55, -h.z * 0.1));
-            const Vec3 paint = kPaint[v % 6];
-            MeshBuilder::paint(body, paint);
-            MeshBuilder::paint(cabin, Vec3(0.06, 0.07, 0.08));
-            MeshBuilder::append(body, cabin);
+            // THE CAR'S OWN SILHOUETTE when its recipe has one (vehicles.lua `far`), in its own colour; else a body and
+            // a cabin, centred like the full model (it is placed half its height above the road)
+            const bool own = v < static_cast<int>(carFarMesh_.size()) && !carFarMesh_[static_cast<std::size_t>(v)].vertices.empty();
+            engine::RenderMesh body = own ? carFarMesh_[static_cast<std::size_t>(v)] : MeshBuilder::box(Vec3(h.x * 2, h.y * 1.1, h.z * 2));
+            if (!own) {
+                MeshBuilder::transform(body, Mat4::translate(0, -h.y * 0.45, 0));
+                engine::RenderMesh cabin = MeshBuilder::box(Vec3(h.x * 1.7, h.y * 0.9, h.z * 1.0));
+                MeshBuilder::transform(cabin, Mat4::translate(0, h.y * 0.55, -h.z * 0.1));
+                MeshBuilder::paint(body, kPaint[v % 6]);
+                MeshBuilder::paint(cabin, Vec3(0.06, 0.07, 0.08));
+                MeshBuilder::append(body, cabin);
+            }
             InstanceGroup g;
             g.mesh = assets->acquireMesh(body, "city:farcar" + std::to_string(v));
             g.material.albedo = Vec3(1, 1, 1);
@@ -2526,10 +2535,14 @@ void CityRenderSystem::makeBusSigns(engine::FrameContext& ctx) {
         busSignGroups_.push_back(e);
     }
     // ON THE BUS: across the top of the windscreen, just proud of the glass (the face is at 0.4916 of the length there,
-    // vehicle_forms.lua's bus roofline), its middle at 0.90 of the height; the body is drawn centred
+    // the classic bus's roofline), its middle at 0.90 of the height; the body is drawn centred
     const std::vector<Vec3> he = carGroupHalfExtents();
     const Vec3 h = busVariant_ < static_cast<int>(he.size()) ? he[static_cast<std::size_t>(busVariant_)] : Vec3(1.275, 1.6, 5.7);
     busSignLocal_ = Mat4::translate(0, h.y * 2 * 0.90 - h.y, h.z * 2 * 0.4916 + 0.04);
+    // ...or where the bus's own recipe puts it (a `dest_sign` marker: the kit bus, ADR-0349)
+    if (busVariant_ >= 0 && busVariant_ < static_cast<int>(carLights_.size()))
+        for (const LampMarker& m : carLights_[static_cast<std::size_t>(busVariant_)])
+            if (m.name == "dest_sign") busSignLocal_ = Mat4::translate(m.pos.x, m.pos.y, m.pos.z);
     std::string all;
     for (const std::string& l : labels) all += (all.empty() ? "" : ", ") + l;
     LOG_INFO << "[citysim] bus destination signs: " << labels.size() << " labels (" << all << ")";

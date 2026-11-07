@@ -65,6 +65,9 @@ struct CarBodyRecipe {
     // (the near body, its glass and cabin stop there). Empty: the near body is drawn at every distance.
     RenderMesh mid;
     double midFrom = 0.0;
+    // The FAR stand-in (`far`): the car's own silhouette in a few hundred triangles, in its colour, for the city's far
+    // band and the GPU crowd. Empty: the band's two-box stand-in.
+    RenderMesh far;
     bool seeInto = false;
     bool openSeat = false;   // `open_seat`: nothing round the driver (a convertible): a crash throws them (ADR-0252)
     // Seat hip points (body-local), for drawing people IN the vehicle: the

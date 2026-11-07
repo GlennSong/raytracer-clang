@@ -68,6 +68,12 @@ add_library(engine_core STATIC
     src/engine/mesh_words.cpp
     src/engine/mesh_surfaces.cpp
     src/engine/mesh_builder.cpp
+    src/engine/mesh_unwrap.cpp
+    src/engine/mesh_bake.cpp
+    # the triangle BVH and its geometry, shared by the path tracer and the baker (mesh_bake.cpp)
+    src/geometry.cpp
+    src/aabb.cpp
+    src/triangle_bvh.cpp
     src/engine/board_meshes.cpp          # the skateboard and scooter a body rides (player, citysim children)
     src/engine/bundle/bundle.cpp
     src/engine/bundle/bake.cpp
@@ -99,7 +105,6 @@ add_library(engine_core STATIC
     src/engine/procgen/leaf_card.cpp
     src/engine/procgen/foliage_kit.cpp
     src/engine/procgen/surface_maps.cpp
-    src/engine/procgen/vehicle/car_mesh.cpp
     src/engine/procgen/vehicle/car_interior.cpp
     src/engine/procgen/vehicle/occupant.cpp
     src/engine/procgen/person.cpp
@@ -676,11 +681,8 @@ endif()
 set(CORE_SOURCES
     src/image.cpp
     src/camera.cpp
-    src/geometry.cpp
     src/material.cpp
     src/scene.cpp
-    src/aabb.cpp
-    src/triangle_bvh.cpp
     src/instance.cpp
     src/level_scene.cpp
     src/path_tracer.cpp
@@ -747,6 +749,8 @@ add_executable(run_tests
     tests/test_path_tracer.cpp
     tests/test_asset_manager.cpp
     tests/test_mesh_builder.cpp
+    tests/test_mesh_unwrap.cpp
+    tests/test_mesh_bake.cpp
     tests/test_mesh_surfaces.cpp
     tests/test_cube_sphere.cpp
     tests/test_noise.cpp
@@ -763,7 +767,6 @@ add_executable(run_tests
     tests/test_sdf.cpp
     tests/test_city.cpp
     tests/test_surface_maps.cpp
-    tests/test_car_mesh.cpp
     tests/test_vehicle_lamps.cpp
     tests/test_model_importer.cpp
     tests/test_instancing.cpp

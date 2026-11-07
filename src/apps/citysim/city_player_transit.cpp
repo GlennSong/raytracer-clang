@@ -399,7 +399,8 @@ void CityPlayerTransitSystem::rideBus(World& world, Real dt, const RideInput& in
                 busCands_.push_back({1, static_cast<int>(i), pose.transformPoint(doors[i]) + Vec3(0, 1.2, 0)});
     }
     // The broker's pick, if it named one: that seat, that door.
-    if (interact && seatIdx_ < 0 && chosenKind_ >= 0) {
+    const bool picked = interact && seatIdx_ < 0 && chosenKind_ >= 0;
+    if (picked) {
         if (chosenKind_ == 0 && chosenIdx_ < static_cast<int>(seats.size()) && !city_.busSeatTaken(riding_, chosenIdx_)) {
             nearSeat = chosenIdx_;
             nearDoor = -1;
@@ -409,6 +410,12 @@ void CityPlayerTransitSystem::rideBus(World& world, Real dt, const RideInput& in
     }
     chosenKind_ = chosenIdx_ = -1;
 
+    // a seat and a door both in reach: the NEARER one (the door used to win outright, and a passenger at the front
+    // row of the kit bus, 0.55 m from a free seat, tried to step off through the front door 1.4 m away)
+    if (nearSeat >= 0 && nearDoor >= 0 && !picked) {
+        if (seatD < doorD) nearDoor = -1;
+        else nearSeat = -1;
+    }
     if (interact) {
         if (seatIdx_ >= 0) {                                   // stand up
             local_ = Vec3(0, floorY, seats[static_cast<std::size_t>(seatIdx_)].z);

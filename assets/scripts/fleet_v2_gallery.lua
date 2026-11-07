@@ -45,6 +45,26 @@ if #ORDER > 10 then SPACING = 5.0 end
 local n = #ORDER
 m:add(scope{ origin = { -6, -0.3, -24 }, size = { SPACING * n + 6, 0.3, 34 } }:box{ 0.30, 0.32, 0.34 })
 
+-- opts.forms: each car's three drawn forms (vehicles.lua kit_forms) in rows 9 m apart -- near, mid-range, far -- in its
+-- fleet colour, the way the city draws them
+if opts.forms then
+  local vehicle = require "vehicles"
+  for i, name in ipairs(ORDER) do
+    local x = (i - 1) * SPACING
+    local P = kit.SPECS[name]()
+    local f = vehicle.kit_forms(name, P.color or { 0.5, 0.5, 0.5 })
+    for row, key in ipairs({ "near", "mid", "far" }) do
+      if f[key] then
+        local lift = 0
+        local lo, hi = nil, nil
+        mesh.move_by(f[key], function(_, p) if not lo or p[2] < lo then lo = p[2] end end)
+        m:add(mesh.translate(f[key], { x, -(lo or 0), -(row - 1) * 9 }), MATS.body)
+        print(string.format("[forms] %s %s %d tris", name, key, mesh.audit(f[key]).tris))
+      end
+    end
+  end
+  return m
+end
 for row, level in ipairs(opts.levels or { level }) do
 for i, name in ipairs(ORDER) do
   local x = (i - 1) * SPACING
@@ -60,6 +80,7 @@ for i, name in ipairs(ORDER) do
     local col = COLOR[part] or { 0.4, 0.4, 0.4 }
     m:add(mesh.translate(mesh.paint(mm, col), { x, car.lift, zoff }), MATS[part] or MATS.trim)
   end
+  if car.saloon then m:add(mesh.translate(car.saloon, { x, car.lift, zoff }), MATS.seat) end
   if car.driver_seat and car.cabin then
     local ds = car.driver_seat
     m:add(mesh.translate(mesh.occupant{ back_angle = 22 }, { x + ds[1], ds[2] + car.lift, ds[3] + zoff }), MATS.seat)

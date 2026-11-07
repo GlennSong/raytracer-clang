@@ -15841,3 +15841,180 @@ Glenn: "faceted lower poly cars with baked normals".
 - Lighter lenses at mid range: they cost the same at both levels, so the mid body saves a third, not two thirds.
 - The far band's stand-ins from each car's own body (the car plan's step 2).
 - Some headlights' outer edge is ragged where it runs off the side of the nose.
+
+## ADR-0349 — The classic cars retire: the kit bus, far stand-ins of each car's own body, per-car handling and drift
+
+**Context.** Glenn, 2026-11-06:
+- "we may also just need to drop those classic looking vehicles";
+- "better LOD models for the new cars ... so that we can see something in the distance that doesn't look like a cube
+  on a cube";
+- "different cars should have different forms of suspension ... codified in Lua or something so we can tune it";
+- "I would settle for arcade drifting like a burnout where you can slam on the break and then simply turn your car
+  into a drift";
+- for the bus: "one where it's all seats and one where they're standing room similar to what you have done for the
+  local train".
+
+His call #3 on #191 was to retire `mesh.car` once the classic fleet and the bus moved onto kit bodies.
+
+**Decision.**
+- **The kit bus** (`vehicle_kit.lua` `S.bus`):
+  - an 11.4 x 2.55 x 3.2 m box;
+  - its windscreen is the nose cap's rungs (`P.front_window`, the twin of `rear_window`), with the side panes between
+    pillars every 1.3 m;
+  - a `dest_sign` marker over the windscreen. The city places the destination sign there, and keeps its old
+    0.4916-of-the-length guess for a bus without one.
+  - **The saloon** is car_interior.cpp's bus layout, now a Lua word: `mesh.cabin_interior{...}` returns the mesh,
+    driver seat, seats and doors. It replaces mesh.car's private call.
+  - `kit_car` makes a body with a saloon see-into: the saloon rides in the shell, the glass stays clear, and its
+    seats and doors are published.
+  - `S.bus_standing` is the same bus with `saloon.layout = "standing"`: `InteriorParams::busStanding` builds benches
+    along both walls (each seat's frame turned to face the aisle), the middle door's stretch clear, and a pole every
+    metre down both edges of the aisle.
+- **The classic set is gone:**
+  - `car_mesh.cpp/h` and the `mesh.car` binding with its parameter readers;
+  - `test_car_mesh.cpp` and vehicle_forms.lua (vehicle_classes.lua stays: the SAE seating and package data the cabin
+    builder and the seated driver are measured from);
+  - the car_gallery and car_lab labs;
+  - `fleet_car`, `CLASSIC_SLOTS`, `vehicle.classic`, `from_class`, `class_handling`, and the picker's three "(classic)"
+    entries.
+  - `fleet_mixed` is the kit fleet ordered for the island (the cars and trucks, the fire engine, the bus last).
+  - `vehicle.sedan / hatchback / jeep / pickup / van` are the kit's cars, the names levels spawn the player's car
+    by (`van` is the parcel van).
+  - scale_block's reference sedan is the fleet's (`vehicle.kit_forms`).
+- **The far stand-in is each car's own body** (`kit_far`, the slot's `far`):
+  - the profile lofted through only its key stations (the ends, the arches, the glass keys), every corner sharp, the
+    glass dark, eight-sided wheels: 416-484 triangles;
+  - `CityRenderSystem` builds the far band's groups from it, in the slot's colour, which the GPU crowd draws too.
+    The two-box stand-in in one of six colours is the fallback for a body without one.
+- **Lighter mid-range lenses.** `kit.patch{coarse = true}` (12 outline points, one inner ring) for the level-0 build:
+  the mid bodies average 4,747 triangles, down from about 5,800.
+- **Lenses hug the body.** An outline point that misses is drawn in toward the centre until it lands, instead of
+  sitting on a flat plane: that was the ragged edge. The offset runs along the hit's own normal, turned toward the
+  cast where it faces away, so a lens over the hood's rounded edge clears the paint. Lamps sit at their band's middle.
+- **The handling table** (`vehicles.lua` `KIT_HANDLING`). Per kit car:
+  - springs: `street(freq, travel, damping)`, the rest drop being the travel less the static sag g / (2 pi f)^2;
+  - anti-roll bars (`anti_roll`, already read by vehicle_spec.cpp, now set);
+  - a drift profile.
+  - The numbers: sedan 1.8 Hz street rig, 3000 N/m, rear grip 0.35 at 32 degrees; SUV 1.5 Hz / 0.26 m, 0.48 at
+    24 degrees; parcel van 1.4 Hz, 0.65 at 14 degrees; box truck 1.3 Hz, 0.70 at 12 degrees; bus 1.2 Hz / 0.30 m,
+    6000 N/m, 0.85 at 8 degrees.
+- **The drift's feel is data:** `VehicleConfig::driftRearGrip / driftSlipDegrees / driftMinSpeed`, read from the
+  recipe's `drift = { rear_grip, slip_deg, min_speed }` (ADR-0236's constants were one car's).
+- **The gate caught two:**
+  - The box truck at 1.3 Hz went over on a kerb at 29 km/h. It now runs 1.6 Hz / 0.24 m with 6000 N/m bars and rolls
+    22 degrees.
+  - A rider pressing E in the kit bus's front row tried the front door, 1.4 m away, before the free seat 0.55 m away:
+    the door won outright. `CityPlayerTransitSystem` now takes the nearer of a seat and a door, unless the broker
+    named one.
+- **Brake-and-turn** (`PhysicsWorld::applyDrift`). The brake hard on (> 0.6) with the wheel past 45 % starts the
+  slide, as the handbrake flick does. The brake is Space and the handbrake Ctrl, and the drift used to start only on
+  Ctrl: why "it doesn't seem to work".
+
+**Proof.**
+- `slamming_the_brake_and_turning_throws_a_car_into_the_drift`: brake + turn slides at 31 degrees for 89 frames; a
+  straight stop does not drift.
+- The fleet tests on the kit-only fleets (`fleet_mixed_carries_the_kit_bodies_and_one_bus`: 18 slots, the bus last).
+- The gate.
+- **Shots:**
+  - the gallery's near / mid / far rows (`opts.forms`);
+  - the kit bus outside and inside, both layouts;
+  - the scale lab's sedan.
+
+**Owed.**
+- Several bus variants in the city (`busVariant_` is one), so a route can run the standing-room bus.
+- The bus's side and rear signs, and the next-stop display inside.
+- Doors that open (the model layer).
+- Glenn's own drive test of the per-car feel.
+- UV unwrapping waits on adding xatlas (the submodule needs Glenn's OK).
+
+## ADR-0350 — Our own UV unwrapper and atlas, a map baker, tangents from UVs, one triangle BVH (#191)
+
+**Context.** Glenn, 2026-11-06:
+- "Is there a way of building tooling to do uvs properly? Like projecting or unwrapping a mesh so we could bake
+  these maps?"
+- xatlas was weighed and declined: "let's build our own then and make a battle tested".
+- "keep building out the baker and let's add all of these mathematical tools into the engine";
+- "we should probably move that spatial partitioning stuff into the engine near the math library".
+- On the glass: "shouldn't that be smooth? Should there be a way for us to separate the glass from the rest of the
+  body if we consider the car as a model".
+
+**Decision.**
+- **`engine/mesh_unwrap.h` `unwrapMesh`: a unique atlas for any mesh.**
+  - **Charts.** Grown from the largest face across welded edges, each face within `chartAngleDeg` (50) of the seed's
+    normal, so a chart can never wrap round on itself. `faceGroups` keeps a chart within one part.
+  - **Flattening.** Each chart projected onto its area-weighted plane. A chart turned past `lscmBelowCos` (0.92) is
+    flattened by LSCM: angles kept, two points pinned, conjugate gradients on the normal equations, the projection as
+    the start.
+  - **Injectivity.** Every triangle's winding kept, and no two triangles share area: an exact pair test bucketed on a
+    grid. An outline that doesn't cross itself is not enough; a panel lying on a panel passed it. A chart that fails
+    is split at half the angle, down to single faces.
+  - **Packing.** Each chart scaled to its 3-D area (one texel density), turned to its least-area box (hull edge
+    directions), stood up tall, then skyline packed bottom-left with `padding` texels into the least power-of-two
+    square ≤ `maxSize`. The density shrinks until everything fits.
+  - **Output.** The vertices are split at the seams and u, v are atlas coordinates. Tagged faces (u ≤ −999, a lens's
+    role) keep theirs. Tangents follow the atlas. Deterministic.
+  - **`auditUv`:** rasterised overlap, faces outside [0, 1], density spread (area-weighted 5th / 95th percentile), and
+    worst anisotropy (Sander's stretch).
+- **`engine/mesh_bake.h` `bakeMaps`: a detailed mesh baked into a cheap mesh's atlas.**
+  - **The frame.** Each texel's point and frame on the cheap surface, built as the shader builds it: interpolated
+    vertex tangents, B = cross(N, T).
+  - **The surface found.** The NEAREST detailed surface within `cage` either way, facing the same way and, with part
+    ids, of the same PART. Taking the first surface met from outside found lens rims and window gaskets and speckled
+    the bake. A ray running along an edge is nudged and retried, and each cast starts a hair behind the point so a
+    coincident surface counts.
+  - **Maps:**
+    - tangent-space and object-space normals;
+    - colour;
+    - occlusion (cosine rays, seeded per texel);
+    - mean curvature (−2 n·d / |d|² over each welded point's edges, interpolated);
+    - height (the offset along n);
+    - thickness (a ray back through the surface, capped).
+  - **Quality.** `samples`² points per texel averaged, and `dilate` rings filled past each chart.
+- **`bakeParts`: a model baked part by part into one atlas.** The parts' cheap meshes are unwrapped together, no chart
+  crossing parts, and each is baked from its own detailed mesh only. A part with `bake = false` (glass, wheels) takes
+  no atlas space, keeps its uvs, and is drawn smooth by its own material.
+- **`MeshBuilder::computeTangents`:** each vertex's tangent is its faces' dP/du, area-weighted, square to its normal.
+  The unwrapper uses it. Lua `mesh.tangents`.
+- **One triangle BVH.** `src/geometry.cpp`, `aabb.cpp` and `triangle_bvh.cpp` move from the path tracer's
+  CORE_SOURCES into `engine_core`, beside the math library, shared by the path tracer and the baker.
+- **Lua words:**
+  - `mesh.unwrap(m, opts) -> mesh, report`
+  - `mesh.bake(low, high, opts) -> maps` (Images)
+  - `mesh.bake_parts(parts, unwrap, bake) -> mesh, maps, report, part_meshes`
+  - `mesh.tangents(m)`
+  - The bake lab (`bake_lab.lua`) shows each kit car's mid body three ways: plain, its body baked by part (glass and
+    wheels smooth), and the smooth body.
+
+**Proof.** `tests/test_mesh_unwrap.cpp` (9 cases) and `tests/test_mesh_bake.cpp` (13):
+- **Unwrap, known shapes:** a box in 6 charts at density 1.00; spheres, a torus, a cone, a superquadric, a rounded
+  box: overlap 0, density within 0.92-1.08, stretch ≤ 1.13.
+- **Unwrap, odd input:** empty, one triangle, zero-area and repeated-index faces, a non-manifold fin, a 20 m sliver.
+- **Unwrap, behaviour:** deterministic; tagged faces kept.
+- **Unwrap, corpus:** EVERY furniture piece in three variants (276 meshes) under the bar (overlap ≤ 0.2 %, density
+  0.7-1.4, stretch ≤ 6); 40 lumpy spheres and 40 triangle soups (crossing, nested, duplicated faces); a 65k-triangle
+  sphere in 1.5 s.
+- **Bake:**
+  - a smooth sphere onto a coarse one: every texel found, normals exactly radial;
+  - a bump onto a flat sheet: matches the analytic normal;
+  - colour exact;
+  - occlusion 0.59 by a wall against 1.00 in the open;
+  - curvature +1.000 / −1.000 per m on a unit sphere outside / in;
+  - height 2.00 cm;
+  - thickness 9.99 cm of a 10 cm slab;
+  - by part, the own surface (tangent z 1.0000) over a nearer one of another part (0.9701);
+  - 3×3 samples agree;
+  - `bakeParts` keeps the glass's uvs and gives it no texels;
+  - dilation and determinism.
+
+**Owed.**
+- A handedness sign per vertex (mirrored construction UVs).
+- An explicit cage mesh.
+- Seam stitching.
+- Per-chart mip limits.
+- Multi-mesh atlases across the fleet.
+- The maps cached and GPU-compressed.
+- Car instance groups with texture slots, so traffic draws its baked maps.
+- Lenses as their own unbaked part.
+- Construction UVs from the loft/sweep words.
+- A viewer UV-checker view.
+- GPU baking.

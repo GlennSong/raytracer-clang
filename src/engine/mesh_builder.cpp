@@ -495,6 +495,32 @@ RenderMesh MeshBuilder::merged(const std::vector<RenderMesh>& parts) {
     return out;
 }
 
+void MeshBuilder::computeTangents(RenderMesh& mesh) {
+    std::vector<Vec3> tan(mesh.vertices.size(), Vec3(0, 0, 0));
+    std::vector<char> used(mesh.vertices.size(), 0);
+    auto tagged = [](const Vertex& v) { return v.u <= -999.0f; };
+    for (std::size_t f = 0; f + 2 < mesh.indices.size(); f += 3) {
+        const uint32_t a = mesh.indices[f], b = mesh.indices[f + 1], c = mesh.indices[f + 2];
+        const Vertex &A = mesh.vertices[a], &B = mesh.vertices[b], &C = mesh.vertices[c];
+        if (tagged(A) || tagged(B) || tagged(C)) continue;
+        const Vec3 e1 = B.position - A.position, e2 = C.position - A.position;
+        const double du1 = B.u - A.u, dv1 = B.v - A.v, du2 = C.u - A.u, dv2 = C.v - A.v;
+        const double det = du1 * dv2 - du2 * dv1;
+        if (std::fabs(det) < 1e-24) continue;
+        // dP/du, weighted by the face's area: det's sign carries the winding, the area is |e1 x e2| / 2
+        const Vec3 dPdu = (e1 * dv2 - e2 * dv1) * (1.0 / det);
+        const double w = 0.5 * cross(e1, e2).length();
+        for (uint32_t v : {a, b, c}) { tan[v] = tan[v] + dPdu * w; used[v] = 1; }
+    }
+    for (std::size_t i = 0; i < mesh.vertices.size(); ++i) {
+        if (!used[i]) continue;
+        Vertex& v = mesh.vertices[i];
+        Vec3 t = tan[i] - v.normal * dot(v.normal, tan[i]);
+        if (t.lengthSquared() < 1e-24) t = cross(std::fabs(v.normal.x) < 0.6 ? Vec3(1, 0, 0) : Vec3(0, 1, 0), v.normal);
+        if (t.lengthSquared() > 1e-24) v.tangent = normalize(t);
+    }
+}
+
 void MeshBuilder::transferNormals(RenderMesh& dst, const RenderMesh& src, double radius) {
     if (src.vertices.empty() || radius <= 0) return;
     // the source's vertices in a hash grid of `radius` cells: a query reads its own cell and the 26 round it
