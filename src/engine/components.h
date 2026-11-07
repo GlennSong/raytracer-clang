@@ -586,6 +586,49 @@ struct Vehicle {
     // opacity < 1. Posed at chassis-local origin (0,0,0) every step, exactly like
     // the lamp lenses.
     std::vector<Entity> bodyParts;
+    // THE MOVING PANELS (ADR-0352): each door, the hood and the trunk turns about its hinge (chassis frame) by
+    // `angle`, which runs toward `target` (0 shut .. `open`); `hold` seconds until it swings shut by itself (a door
+    // the driver opens to get in or out). bodyPartPanel: per bodyParts entry, its panel or -1.
+    struct Panel {
+        std::string name;
+        Vec3 pivot{0, 0, 0};
+        Vec3 axis{0, 1, 0};
+        float open = 0.0f;               // radians, fully open
+        float angle = 0.0f, target = 0.0f;
+        float hold = 0.0f;
+        Vec3 centre{0, 0, 0};
+        Vec3 lo{0, 0, 0}, hi{0, 0, 0};   // its box, shut
+        float health = 1.0f;             // ADR-0353: at 0 it comes off
+        bool gone = false;
+        // where the part's points go: q (x - pivot) + pivot
+        Quat turn() const { return Quat::fromAxisAngle(axis, angle); }
+    };
+    std::vector<Panel> panels;
+    std::vector<int> bodyPartPanel;
+    // DAMAGE (ADR-0353, engine/vehicle_damage.h): each zone's health (DamageZone order: front, rear, left, right, roof,
+    // under); the nose at zero kills the engine. The meshes as drawn, kept on the CPU to dent: the body's and each
+    // bodyParts entry's (copied on the first dent; null until then), re-uploaded at most every `uploadEvery` s.
+    float zoneHealth[6] = {1, 1, 1, 1, 1, 1};
+    bool engineDead = false;
+    std::shared_ptr<RenderMesh> bodyMesh;
+    std::vector<std::shared_ptr<RenderMesh>> partMeshes;
+    bool bodyDented = false;                 // bodyMesh is this car's own copy
+    std::vector<char> partDented;            // ...and each part's
+    bool meshDirty = false;                  // dented since the last upload
+    float sinceUpload = 0.0f;
+    float scrapeSparkClock = 0.0f;
+    int panelIndex(const std::string& n) const {
+        for (std::size_t i = 0; i < panels.size(); ++i) if (panels[i].name == n) return static_cast<int>(i);
+        return -1;
+    }
+    // the driver's door: the front door on the side the driver sits (-X: the right, the world drives on the left)
+    int driverDoor() const { return panelIndex(hipPoint().x < 0 ? "door_front_r" : "door_front_l"); }
+    // swing a panel open, shutting again by itself after `hold` seconds (0: stays open)
+    void swingOpen(int i, float hold) {
+        if (i < 0 || i >= static_cast<int>(panels.size())) return;
+        panels[static_cast<std::size_t>(i)].target = panels[static_cast<std::size_t>(i)].open;
+        panels[static_cast<std::size_t>(i)].hold = hold;
+    }
 };
 
 // Marks a player entity currently seated in a vehicle (ADR-0059). PlayerSystem

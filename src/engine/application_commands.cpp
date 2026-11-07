@@ -542,6 +542,11 @@ void Application::registerPlayerVerbs() {
                      "The player's vehicle: speed, rpm, gear, drive mode, position, and the sim speed.",
                      unanswered("a VehicleSystem: play mode"));   // measured by it each frame
 
+    commandTable.add("panels", "panels open|shut|knock [name]",
+                     "Swing every drivable car's moving panels (doors, hood, trunk; ADR-0352) open or shut, or knock "
+                     "them off (ADR-0353); only those whose name holds `name` (door, hood, trunk, hatch, door_front_r ...).",
+                     unanswered("a VehicleSystem: play mode"));
+
     // FURNITURE INTERACTIONS (InteractionSystem): `interact` taps the interact key, `interact hold` holds it,
     // `interact stand` stands up, `interact next` moves the focus (Tab); `interact?` reports the focus.
     commandTable.add("interact", "interact [hold|stand|next]",

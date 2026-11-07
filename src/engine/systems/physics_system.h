@@ -19,6 +19,9 @@ struct Collision {
     Vec3 position;   // world-space contact point
     Vec3 normal;
     Real speed = 0;  // closing speed along the normal (m/s) — severity
+    // still touching (a vehicle's scrape, ADR-0353), and how fast the surfaces slide past each other
+    bool persisted = false;
+    Real slide = 0;
 };
 
 // Drives Jolt physics from the ECS (ADR-0012, ROADMAP 2.3 Step C). Creates a

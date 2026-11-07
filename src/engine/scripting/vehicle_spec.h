@@ -40,8 +40,20 @@ struct VehicleSpec {
         float roughness = 0.5f;
         float opacity = 1.0f;
         Vec3 emission{0, 0, 0};
+        int panel = -1;              // the moving panel it rides (panels[]), -1: fixed to the chassis
     };
     std::vector<Part> parts;
+    // THE MOVING PANELS (ADR-0352): a door, the hood, the trunk -- each turning about its hinge (chassis frame; a
+    // positive turn of `openDeg` about `axis` opens it). Parts name the panel they ride.
+    struct Panel {
+        std::string name;
+        Vec3 pivot{0, 0, 0};
+        Vec3 axis{0, 1, 0};
+        float openDeg = 0.0f;
+        Vec3 centre{0, 0, 0};        // the panel's middle (where its E prompt sits)
+        Vec3 lo{0, 0, 0}, hi{0, 0, 0};   // its box (chassis frame): what a touch is measured against
+    };
+    std::vector<Panel> panels;
 
     // Named lamp mount points from the recipe's `lights` array — the same marker
     // format citysim's traffic already uses, so one generator feeds both. Names

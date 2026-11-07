@@ -43,6 +43,7 @@
 #include <cstdarg>
 #include <cstdio>
 #include <mutex>
+#include <unordered_set>
 #include <string>
 
 namespace engine {
@@ -200,6 +201,36 @@ public:
         events.push_back(event);
     }
 
+    // A STILL-TOUCHING pair, only where a watched body (a vehicle's chassis) is one of them: a scrape along a wall,
+    // a car leaning on another -- the sparks' and the damage's (ADR-0353)
+    void OnContactPersisted(const JPH::Body& body1, const JPH::Body& body2, const JPH::ContactManifold& manifold,
+                            JPH::ContactSettings&) override {
+        const uint32_t a = body1.GetID().GetIndexAndSequenceNumber(), b = body2.GetID().GetIndexAndSequenceNumber();
+        {
+            std::lock_guard<std::mutex> lock(mutex);
+            if (!watched.count(a) && !watched.count(b)) return;
+        }
+        JPH::RVec3 point = manifold.GetWorldSpaceContactPointOn1(0);
+        JPH::Vec3 relVel = body2.GetPointVelocity(point) - body1.GetPointVelocity(point);
+        const JPH::Vec3 n = manifold.mWorldSpaceNormal;
+        const JPH::Vec3 slide = relVel - n * relVel.Dot(n);
+        ContactEvent event;
+        event.bodyA = a;
+        event.bodyB = b;
+        event.position = fromJolt(point);
+        event.normal = fromJolt(JPH::RVec3(n));
+        event.approachSpeed = std::fabs(relVel.Dot(n));
+        event.persisted = true;
+        event.slideSpeed = slide.Length();
+        std::lock_guard<std::mutex> lock(mutex);
+        events.push_back(event);
+    }
+
+    void watch(uint32_t body, bool on) {
+        std::lock_guard<std::mutex> lock(mutex);
+        if (on) watched.insert(body); else watched.erase(body);
+    }
+
     std::vector<ContactEvent> drain() {
         std::lock_guard<std::mutex> lock(mutex);
         std::vector<ContactEvent> out;
@@ -210,6 +241,7 @@ public:
 private:
     std::mutex mutex;
     std::vector<ContactEvent> events;
+    std::unordered_set<uint32_t> watched;
 };
 
 struct PhysicsWorld::Impl {
@@ -1168,6 +1200,7 @@ PhysicsWorld::VehicleId PhysicsWorld::addVehicle(const VehicleConfig& cfg,
     v.centerLimitedSlip = cfg.centerLimitedSlip >= 1e29 ? FLT_MAX : static_cast<float>(cfg.centerLimitedSlip);
     v.dragArea = static_cast<float>(std::max(Real(0), cfg.dragArea));
     v.downforce = static_cast<float>(std::max(Real(0), cfg.downforce));
+    impl->contacts.watch(chassis->GetID().GetIndexAndSequenceNumber(), true);   // its scrapes (ADR-0353)
     v.mass = static_cast<float>(cfg.mass);
     v.tractionSplit = cfg.tractionSplit;
     v.appliedShare = share;

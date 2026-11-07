@@ -1,5 +1,7 @@
 #include "vehicle_system.h"
 #include "../interact_broker.h"
+#include "../vehicle_damage.h"
+#include "../particles.h"
 #include "../interaction.h"   // Seated
 #ifdef RT_ENABLE_IMGUI
 #include <imgui.h>
@@ -49,6 +51,32 @@ void VehicleSystem::onStart(FrameContext& ctx) {
         spawnRecipe_ = r.recipe;
     });
     answers_.bind(ctx.commands, "VehicleSystem", "vehicle?");
+    // THE TOUCHES (ADR-0353): every contact a drivable car's chassis makes, kept for the next step's damage pass
+    onCollision_ = ctx.events.listen<Collision>([this](const Collision& c) {
+        Hit h;
+        h.at = c.position;
+        h.normal = c.normal;
+        h.speed = c.speed;
+        h.slide = c.slide;
+        h.persisted = c.persisted;
+        h.car = c.a;
+        h.other = c.b;
+        hits_.push_back(h);
+        if (c.b.valid()) {   // (either side may be the car; the pass sorts it out)
+            Hit g = h;
+            g.car = c.b;
+            g.other = c.a;
+            g.normal = c.normal * -1.0;
+            hits_.push_back(g);
+        }
+    });
+    if (ctx.commands != nullptr)
+        panelsCmd_ = ctx.commands->bind("panels", "VehicleSystem", [this](const ControlCommand& cmd) -> std::string {
+            if (cmd.args.empty() || (cmd.args[0] != "open" && cmd.args[0] != "shut" && cmd.args[0] != "knock"))
+                return "err panels open|shut|knock [name]";
+            panelsStaged_.push_back(cmd.args[0] + (cmd.args.size() >= 2 ? " " + cmd.args[1] : std::string()));
+            return "ok staged " + panelsStaged_.back();
+        });
     // Driving actions (global; single-player drive for now). Throttle/steer are
     // axes, brake/handbrake/enter are buttons. Gamepad face-button names may differ
     // per backend — adjust on a real build.
@@ -328,6 +356,7 @@ void VehicleSystem::driveVehicles(FrameContext& ctx) {
             // Nobody at the wheel: hold the brake so it doesn't creep on a slope.
             in.brake = 1.0;
         }
+        if (v.engineDead) in.throttle = 0.0;   // (ADR-0353: the nose spent -- it steers and brakes, it will not drive)
         v.throttle = in.throttle;
         v.steer = v.driver.valid() ? steer : in.steer;   // the driver's wheel, for the indicators
         v.steerApplied = in.steer;
@@ -389,7 +418,18 @@ void VehicleSystem::writeBack(FrameContext& ctx) {
             // Body parts (glass, interior) share the chassis frame exactly — they
             // were authored in the same space as the body mesh — so they ride at
             // local origin.
-            for (Entity part : v.bodyParts) place(part, Vec3(0, 0, 0));
+            // ...a part on a moving panel (ADR-0352) turns about its hinge: x -> q (x - pivot) + pivot
+            for (std::size_t k = 0; k < v.bodyParts.size(); ++k) {
+                const int pn = k < v.bodyPartPanel.size() ? v.bodyPartPanel[k] : -1;
+                if (pn < 0 || pn >= static_cast<int>(v.panels.size()) || v.panels[static_cast<std::size_t>(pn)].angle == 0.0f) {
+                    place(v.bodyParts[k], Vec3(0, 0, 0));
+                    continue;
+                }
+                const Vehicle::Panel& panel = v.panels[static_cast<std::size_t>(pn)];
+                const Quat q = panel.turn();
+                place(v.bodyParts[k], panel.pivot - q.rotate(panel.pivot));
+                if (Transform* ct = ctx.world.get<Transform>(v.bodyParts[k])) ct->orientation = t.orientation * q;
+            }
             // --- lamps -----------------------------------------------------
             // The player's car now runs the SAME predicate as city traffic
             // (engine::vehicleLampState): headlights at dusk, brake lights on
@@ -515,6 +555,14 @@ void VehicleSystem::handleEnterExit(FrameContext& ctx) {
             ctx.actions.injectPress("enter_vehicle");
             LOG_INFO << "[vehicle] E: getting in";
         }
+        if (p.valid() && takeInteractCommand(ctx.world, p, "vehicle_panel", cmd) && ctx.world.alive(cmd.entity)) {
+            if (Vehicle* v = ctx.world.get<Vehicle>(cmd.entity); v && cmd.key < v->panels.size()) {
+                Vehicle::Panel& panel = v->panels[static_cast<std::size_t>(cmd.key)];
+                panel.target = panel.target > 0.0f ? 0.0f : panel.open;
+                panel.hold = 0.0f;
+                LOG_INFO << "[vehicle] E: " << (panel.target > 0.0f ? "opening " : "shutting ") << panel.name;
+            }
+        }
         // The OFFER: the nearest unoccupied car in reach (an ambient city car is CityVehicleSystem's offer).
         if (p.valid() && !ctx.world.has<InVehicle>(p) && !ctx.world.has<Seated>(p)) {
             const Vec3 pp = ctx.world.get<Transform>(p)->position;
@@ -525,6 +573,27 @@ void VehicleSystem::handleEnterExit(FrameContext& ctx) {
                 if (v.driver.valid()) return;
                 const Real dx = t.position.x - pp.x, dz = t.position.z - pp.z;
                 if (dx * dx + dz * dz <= bestD2) { bestD2 = dx * dx + dz * dz; best = e; at = t.position; }
+            });
+            // THE HOOD AND THE TRUNK (ADR-0352): open or shut from beside them, on any parked car in reach
+            ctx.world.each<Transform, Vehicle>([&](Entity e, Transform& t, Vehicle& v) {
+                if (v.driver.valid()) return;
+                for (std::size_t i = 0; i < v.panels.size(); ++i) {
+                    const Vehicle::Panel& panel = v.panels[i];
+                    if (panel.gone || panel.name.rfind("door_", 0) == 0) continue;
+                    const Vec3 at = t.position + t.orientation.rotate(panel.centre);
+                    const Real dx = at.x - pp.x, dz = at.z - pp.z;
+                    if (dx * dx + dz * dz > 2.2 * 2.2) continue;
+                    InteractOffer o;
+                    o.provider = "vehicle_panel";
+                    o.entity = e;
+                    o.key = i;
+                    o.name = panel.name;
+                    o.tap = panel.target > 0.0f ? "close" : "open";
+                    o.anchor = at;
+                    o.reach = 2.2;
+                    o.needsSight = false;
+                    offerInteraction(ctx.world, p, o);
+                }
             });
             if (best.valid()) {
                 InteractOffer o;
@@ -552,8 +621,11 @@ void VehicleSystem::handleEnterExit(FrameContext& ctx) {
     if (ctx.world.has<InVehicle>(player)) {
         // --- get out ---
         Entity car = ctx.world.get<InVehicle>(player)->vehicle;
-        if (car.valid() && ctx.world.alive(car) && ctx.world.has<Vehicle>(car))
-            ctx.world.get<Vehicle>(car)->driver = Entity{};
+        if (car.valid() && ctx.world.alive(car) && ctx.world.has<Vehicle>(car)) {
+            Vehicle& out = *ctx.world.get<Vehicle>(car);
+            out.driver = Entity{};
+            out.swingOpen(out.driverDoor(), 0.9f);
+        }
         if (car.valid() && ctx.world.has<Transform>(car)) {
             const Transform& ct = *ctx.world.get<Transform>(car);
             // Step out well CLEAR of the car: up (world up, so a flipped car still
@@ -597,6 +669,7 @@ void VehicleSystem::handleEnterExit(FrameContext& ctx) {
             bikeUpright_ = false;
             bikeDown_ = 0;
             v.driver = player;
+            v.swingOpen(v.driverDoor(), 0.9f);   // the door opens for you and shuts behind you
             cameras.setFollowTarget(best);
             // a bike's chase sits closer than a car's (the car's 8 m left a motorcycle a speck)
             if (ctx.world.get<Vehicle>(best)->config.twoWheeler) cameras.setFollowFraming(4.0, 1.0);
@@ -802,6 +875,16 @@ void VehicleSystem::update(FrameContext& ctx) {
         std::snprintf(dr, sizeof(dr), " drift %d slip %.0f boost %.2f%s", d.drifting ? 1 : 0, d.slipDeg, d.boost,
                       d.boosting > 0 ? " BOOSTING" : "");
         telem += dr;
+        // ...and its damage (ADR-0353): each zone's health, the panels still on (weakest), the engine
+        char dm[192];
+        float weakest = 1.0f;
+        int on = 0;
+        for (const Vehicle::Panel& p : v->panels) if (!p.gone) { ++on; weakest = std::min(weakest, p.health); }
+        std::snprintf(dm, sizeof(dm), " damage f %.2f r %.2f l %.2f r %.2f roof %.2f under %.2f panels %d/%zu weakest %.2f%s%s",
+                      v->zoneHealth[0], v->zoneHealth[1], v->zoneHealth[2], v->zoneHealth[3], v->zoneHealth[4],
+                      v->zoneHealth[5], on, v->panels.size(), weakest, v->engineDead ? " ENGINE DEAD" : "",
+                      v->bodyDented ? " dented" : "");
+        telem += dm;
     });
     answers_.set("vehicle?", telem + " timescale " + std::to_string(ctx.clock.timeScale()));
 
@@ -997,9 +1080,245 @@ void VehicleSystem::updateHorn(FrameContext& ctx) {
         ctx.audio.setVoicePosition(hornVoice, ctx.world.get<Transform>(car)->position);
 }
 
+// THE PANELS SWING (ADR-0352): each toward its target, a door in about half a second, the hood and trunk slower; a
+// door opened for the driver shuts again by itself
+void VehicleSystem::swingPanels(FrameContext& ctx) {
+    const float dt = static_cast<float>(ctx.clock.fixedStep());
+    // the control channel's `panels open|shut|knock [name]`, in the order they came
+    std::vector<std::string> queue;
+    queue.swap(panelsStaged_);
+    for (const std::string& staged : queue) {
+        const bool knock = staged.rfind("knock", 0) == 0;
+        const bool open = staged.rfind("open", 0) == 0;
+        const std::size_t cut = staged.find(' ');
+        const std::string only = cut == std::string::npos ? std::string() : staged.substr(cut + 1);
+        auto named = [&](const Vehicle::Panel& p) { return only.empty() || p.name.find(only) != std::string::npos; };
+        if (knock) {   // the named panel off every car, as a spent one comes off (ADR-0353)
+            std::vector<std::pair<Entity, int>> off;
+            ctx.world.each<Vehicle>([&](Entity e, Vehicle& v) {
+                for (std::size_t i = 0; i < v.panels.size(); ++i)
+                    if (!v.panels[i].gone && named(v.panels[i])) off.emplace_back(e, static_cast<int>(i));
+            });
+            for (const auto& [e, i] : off)
+                if (Vehicle* v = ctx.world.get<Vehicle>(e)) detachPanel(ctx, e, *v, i, Vec3(0, 2.0, 0));
+            continue;
+        }
+        ctx.world.each<Vehicle>([&](Entity, Vehicle& v) {
+            for (Vehicle::Panel& p : v.panels)
+                if (named(p)) { p.target = open ? p.open : 0.0f; p.hold = 0.0f; }
+        });
+    }
+    ctx.world.each<Vehicle>([&](Entity, Vehicle& v) {
+        for (Vehicle::Panel& p : v.panels) {
+            if (p.hold > 0.0f) {
+                p.hold -= dt;
+                if (p.hold <= 0.0f) { p.hold = 0.0f; p.target = 0.0f; }
+            }
+            const bool door = p.name.rfind("door_", 0) == 0;
+            const float rate = p.open / (door ? 0.45f : 0.85f) * dt;
+            if (p.angle < p.target) p.angle = std::min(p.target, p.angle + rate);
+            else if (p.angle > p.target) p.angle = std::max(p.target, p.angle - rate);
+        }
+    });
+}
+
+// THE DAMAGE PASS (ADR-0353): each touch on a drivable car -- a knock by its closing speed, a scrape by its slide --
+// costs the zone it lands on and the panel nearest it, dents the meshes round the point, and sparks; a panel spent
+// comes off, the nose spent kills the engine. The dented meshes go up to the GPU a few times a second at most.
+void VehicleSystem::applyDamage(FrameContext& ctx) {
+    const float dt = static_cast<float>(ctx.clock.fixedStep());
+    PhysicsWorld& pw = physicsSys.physicsWorld();
+    // the loose parts' first push (their bodies exist one step after they are made)
+    for (std::size_t i = 0; i < looseKick_.size();) {
+        const RigidBody* rb = ctx.world.alive(looseKick_[i].first) ? ctx.world.get<RigidBody>(looseKick_[i].first) : nullptr;
+        if (rb && rb->bodyId != INVALID_PHYSICS_BODY) {
+            pw.setLinearVelocity(rb->bodyId, looseKick_[i].second);
+            looseKick_.erase(looseKick_.begin() + static_cast<std::ptrdiff_t>(i));
+        } else if (!rb) {
+            looseKick_.erase(looseKick_.begin() + static_cast<std::ptrdiff_t>(i));
+        } else {
+            ++i;
+        }
+    }
+    const DamageRule rule;
+    std::vector<Hit> hits;
+    hits.swap(hits_);
+    for (const Hit& h : hits) {
+        if (!h.car.valid() || !ctx.world.alive(h.car)) continue;
+        Vehicle* v = ctx.world.get<Vehicle>(h.car);
+        const Transform* t = ctx.world.get<Transform>(h.car);
+        if (!v || !t || v->vehicleId == PhysicsWorld::INVALID_VEHICLE) continue;
+        // (a scrape's sparks are a trickle: a few a tenth of a second, not every contact every step)
+        const int sparks = touchSparks(rule, h.persisted, h.speed, h.slide);
+        if (sparks > 0 && (!h.persisted || v->scrapeSparkClock <= 0.0f)) {
+            const Vec3 away = h.normal * -1.0;   // (the normal points from the car to what it hit)
+            requestParticles(ctx.world, "spark", h.at, away, sparks, std::min(Real(2), std::max(h.speed, h.slide) / 8.0));
+            if (h.persisted) v->scrapeSparkClock = 0.08f;
+        }
+        const Real harm = touchHarm(rule, h.persisted, h.speed, h.slide, dt, v->config.mass);
+        if (harm <= 0) continue;
+        const Quat inv = t->orientation.conjugate();
+        const Vec3 local = inv.rotate(h.at - t->position);
+        const Vec3 inward = inv.rotate(h.normal);   // into the car, chassis frame
+        const DamageZone zone = damageZone(local, v->config.chassisHalfExtent);
+        float& zh = v->zoneHealth[static_cast<int>(zone)];
+        zh = std::max(0.0f, zh - static_cast<float>(harm * 1.2));
+        if (zone == DamageZone::Front && zh <= 0.0f && !v->engineDead) {
+            v->engineDead = true;
+            LOG_INFO << "[vehicle] the engine is wrecked: undrivable";
+        }
+        // the panel the touch lands on (still on): the nearest by its box, within 0.35 m of it -- a bumper knock is
+        // the hood's, a door's edge its own
+        int near = -1;
+        Real nearD = 0.35;
+        for (std::size_t i = 0; i < v->panels.size(); ++i) {
+            const Vehicle::Panel& p = v->panels[i];
+            if (p.gone) continue;
+            const Vec3 c(std::clamp(local.x, p.lo.x, p.hi.x), std::clamp(local.y, p.lo.y, p.hi.y),
+                         std::clamp(local.z, p.lo.z, p.hi.z));
+            const Real d = (c - local).length();
+            if (d < nearD) { nearD = d; near = static_cast<int>(i); }
+        }
+        if (near >= 0) v->panels[static_cast<std::size_t>(near)].health -= static_cast<float>(harm * 1.6);
+        // THE DENT: a knock pushes the skin in round the point (a scrape only scuffs: no dent)
+        if (!h.persisted && harm > 0.015) {
+            const Real radius = 0.22 + 0.55 * std::min(Real(1), harm);
+            const Real depth = std::min(Real(0.14), 0.03 + 0.22 * harm);
+            if (v->bodyMesh) {
+                if (!v->bodyDented) { v->bodyMesh = std::make_shared<RenderMesh>(*v->bodyMesh); v->bodyDented = true; }
+                v->meshDirty |= dentMesh(*v->bodyMesh, local, inward, radius, depth);
+            }
+            for (std::size_t k = 0; k < v->partMeshes.size(); ++k) {
+                if (!v->partMeshes[k]) continue;
+                // a panel's part: the point in its own (hinged) frame
+                Vec3 at = local, dir = inward;
+                const int pn = k < v->bodyPartPanel.size() ? v->bodyPartPanel[k] : -1;
+                if (pn >= 0 && pn < static_cast<int>(v->panels.size())) {
+                    const Vehicle::Panel& p = v->panels[static_cast<std::size_t>(pn)];
+                    const Quat qi = p.turn().conjugate();
+                    at = qi.rotate(local - p.pivot) + p.pivot;
+                    dir = qi.rotate(inward);
+                }
+                if (!v->partDented[k]) {
+                    // copy only when the dent reaches it
+                    bool reaches = false;
+                    for (const Vertex& vx : v->partMeshes[k]->vertices)
+                        if ((vx.position - at).lengthSquared() < radius * radius) { reaches = true; break; }
+                    if (!reaches) continue;
+                    v->partMeshes[k] = std::make_shared<RenderMesh>(*v->partMeshes[k]);
+                    v->partDented[k] = 1;
+                }
+                v->meshDirty |= dentMesh(*v->partMeshes[k], at, dir, radius, depth);
+            }
+        }
+        if (near >= 0 && v->panels[static_cast<std::size_t>(near)].health <= 0.0f) {
+            const Vec3 vel = pw.vehicleVelocity(v->vehicleId);
+            detachPanel(ctx, h.car, *v, near, vel + h.normal * (-1.5) + Vec3(0, 1.5, 0));
+        }
+    }
+    // the dented meshes up to the GPU, at most every 0.15 s per car
+    ctx.world.each<Vehicle>([&](Entity e, Vehicle& v) {
+        v.scrapeSparkClock = std::max(0.0f, v.scrapeSparkClock - dt);
+        v.sinceUpload += dt;
+        if (!v.meshDirty || v.sinceUpload < 0.15f) return;
+        v.meshDirty = false;
+        v.sinceUpload = 0.0f;
+        if (v.bodyDented && v.bodyMesh)
+            if (Renderable* r = ctx.world.get<Renderable>(e)) {
+                const MeshHandle old = r->mesh;
+                r->mesh = ctx.assets.acquireMesh(*v.bodyMesh);
+                if (old.valid()) ctx.assets.releaseMesh(old);
+            }
+        for (std::size_t k = 0; k < v.bodyParts.size() && k < v.partMeshes.size(); ++k) {
+            if (!v.partDented[k] || !v.partMeshes[k]) continue;
+            if (Renderable* r = ctx.world.get<Renderable>(v.bodyParts[k])) {
+                const MeshHandle old = r->mesh;
+                r->mesh = ctx.assets.acquireMesh(*v.partMeshes[k]);
+                if (old.valid()) ctx.assets.releaseMesh(old);
+            }
+        }
+    });
+}
+
+// A SPENT PANEL COMES OFF (ADR-0353): its painted skin becomes a loose body tumbling from where it was, at the car's
+// speed and a knock's push; its glass and card go with it (the glass is gone -- shattered). The car keeps driving
+// with the hole. At most 24 loose parts lie about; the oldest goes when another falls.
+void VehicleSystem::detachPanel(FrameContext& ctx, Entity car, Vehicle& v, int pn, const Vec3& kick) {
+    if (pn < 0 || pn >= static_cast<int>(v.panels.size())) return;
+    Vehicle::Panel& panel = v.panels[static_cast<std::size_t>(pn)];
+    if (panel.gone) return;
+    panel.gone = true;
+    const Transform* ct = ctx.world.get<Transform>(car);
+    if (!ct) return;
+    const Quat q = panel.turn();
+    const Vec3 centreWorld = ct->position + ct->orientation.rotate(q.rotate(panel.centre - panel.pivot) + panel.pivot);
+    bool freed = false;
+    std::vector<Entity> keep;
+    std::vector<int> keepPanel;
+    std::vector<std::shared_ptr<RenderMesh>> keepMesh;
+    std::vector<char> keepDent;
+    for (std::size_t k = 0; k < v.bodyParts.size(); ++k) {
+        const int kp = k < v.bodyPartPanel.size() ? v.bodyPartPanel[k] : -1;
+        if (kp != pn) {
+            keep.push_back(v.bodyParts[k]);
+            keepPanel.push_back(kp);
+            keepMesh.push_back(k < v.partMeshes.size() ? v.partMeshes[k] : nullptr);
+            keepDent.push_back(k < v.partDented.size() ? v.partDented[k] : 0);
+            continue;
+        }
+        const Entity pe = v.bodyParts[k];
+        Renderable* r = ctx.world.get<Renderable>(pe);
+        const bool shell = r && r->material.opacity >= 1.0f && r->material.metallic > 0.05f;
+        if (freed || !shell || k >= v.partMeshes.size() || !v.partMeshes[k]) {
+            ctx.world.destroy(pe);   // the glass, the card
+            continue;
+        }
+        // the skin, re-centred on the panel's middle so the body tumbles about it
+        RenderMesh m = *v.partMeshes[k];
+        Vec3 lo(1e30, 1e30, 1e30), hi(-1e30, -1e30, -1e30);
+        for (Vertex& vx : m.vertices) {
+            vx.position = vx.position - panel.centre;
+            lo = Vec3(std::min(lo.x, vx.position.x), std::min(lo.y, vx.position.y), std::min(lo.z, vx.position.z));
+            hi = Vec3(std::max(hi.x, vx.position.x), std::max(hi.y, vx.position.y), std::max(hi.z, vx.position.z));
+        }
+        const MeshHandle old = r->mesh;
+        r->mesh = ctx.assets.acquireMesh(m);
+        if (old.valid()) ctx.assets.releaseMesh(old);
+        if (Transform* pt = ctx.world.get<Transform>(pe)) {
+            pt->position = centreWorld;
+            pt->orientation = ct->orientation * q;
+            if (PrevTransform* pp = ctx.world.get<PrevTransform>(pe)) pp->value = *pt;
+        }
+        Collider col;
+        col.shape = ColliderShape::Box;
+        col.halfExtent = Vec3(std::max(Real(0.03), (hi.x - lo.x) * 0.5), std::max(Real(0.03), (hi.y - lo.y) * 0.5),
+                              std::max(Real(0.03), (hi.z - lo.z) * 0.5));
+        col.friction = 0.6;
+        ctx.world.add<Collider>(pe, col);
+        RigidBody rb;
+        rb.motion = BodyMotion::Dynamic;
+        ctx.world.add<RigidBody>(pe, rb);
+        looseKick_.emplace_back(pe, kick);
+        loose_.push_back(pe);
+        freed = true;
+    }
+    v.bodyParts = keep;
+    v.bodyPartPanel = keepPanel;
+    v.partMeshes = keepMesh;
+    v.partDented = keepDent;
+    requestParticles(ctx.world, "spark", centreWorld, kick, 24, 1.2);
+    LOG_INFO << "[vehicle] " << panel.name << " came off";
+    while (loose_.size() > 24) {
+        if (ctx.world.alive(loose_.front())) ctx.world.destroy(loose_.front());
+        loose_.erase(loose_.begin());
+    }
+}
+
 void VehicleSystem::fixedUpdate(FrameContext& ctx) {
     createVehicles(ctx);
+    applyDamage(ctx);
     driveVehicles(ctx);
+    swingPanels(ctx);
     writeBack(ctx);
     stepSeat(ctx);
 }

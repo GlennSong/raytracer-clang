@@ -16057,3 +16057,100 @@ names.
 **Owed.**
 - The front and rear boards' backs can still be glimpsed through the glass edge from inside.
 - The doors opening at stops, and interior lights, wait on the model layer and the clustered lights.
+
+## ADR-0352 — Moving panels: doors, hood, trunk, hatch and tailgate on hinges, with thickness (#191 model layer)
+
+**Context.** Glenn, 2026-11-06:
+- "I'm wondering if the cars we can separate doors trunks hoods and add articulation points. The doors can actually
+  open and close";
+- after the first look: "the pickup is weird. The back flap should open downward on the truck. Also some doors and
+  hoods seem one sided and have no thickness."
+
+**Decision.**
+- **A third face tag, `panel`,** beside group and material (`PolyMesh::Face::panel`, `PolyMesh::panels`). It survives
+  subdivision, extrusion, insetting, append and `extractOffset`, as the other two do.
+  - The Lua words take it: `assign{panel}`, `select{panel}`, `to_parts{panel}` (only that panel's faces, its normals
+    still averaged across the seam so a shut door shades with the body), `panels()`.
+  - Also new: `bounds(sel)`, `solidify(sel, t, mat)` (a region's back and its edge walls, as a poly to append) and
+    `ring(sel)` (the faces round a region). The C++ is `solidify` and `ringAround` in polymesh.
+- **The kit tags the panels on the cage** (`kit.panel_plan`, used by `kit.body`; each seam is made a station by
+  `kit.seams` so a panel is whole rows):
+  - **Doors:** one or two a side; two when there is a B-pillar with room behind it. The seam steps like a real one:
+    below the belt it clears the wheel arch, above it the line runs at the pillar, so the window stays whole on the
+    door.
+  - **The hood:** the top between the belt corners, cowl to nose.
+  - **The back:** a trunk lid behind the deck; a sloped hatch when the backlight runs to the tail; a gate when the
+    tail is upright, defined geometrically as every rear-facing face at the tail above the lamps or the rear window's
+    foot (a van's back wall above the belt is the roof run falling sheer, not the tail cap); the pickup's tailgate
+    from the bed floor up (`panels = { trunk = "tailgate" }`).
+  - A recipe can opt out with `panels = false` (the semis, until #189's rig). A bus's saloon has its own doors.
+- **`kit.build(P, level, { panels = true })`** returns the body without them and `panels[name] = { parts, hinge, lo,
+  hi, cabin }`.
+  - Each panel gets **thickness**: its skin's back and edges, painted as a real shut face is (6 cm on a door, 3.5 cm on
+    a lid), and the body round each opening its **jamb**.
+  - A door's card (the cabin liner cast off its own faces) rides the door.
+  - **Hinges** (`kit.hinge`): a door on its front edge, outboard, 65 degrees out; the hood on its back edge, 55 up; a
+    lid or hatch on its front edge (62 and 80); the tailgate on its foot, 90 down.
+- **The player's car** (`kit_drivable`) carries them.
+  - `VehicleSpec::panels` and each part's `panel`; `Vehicle::Panel` keeps `angle` running toward `target`; writeBack
+    poses a panel's parts x -> q (x - pivot) + pivot.
+  - The driver's door (the right front: the city drives on the left) swings open as you get in or out and shuts
+    behind you.
+  - E beside a parked car opens or shuts its hood or trunk (provider `vehicle_panel`).
+  - `panels open|shut [name]` on the control channel.
+- Traffic is unchanged: its bodies build without panels. The seams add a few stations to every kit body.
+
+**Tests.** `kit_cars_carry_doors_hood_and_trunk_that_open_outward`, over the nine drivable bodies:
+- both front doors on every one, rear doors in pairs;
+- the panels and the body together are the whole cage;
+- every hinge opens out or up, and the tailgate drops back.
+
+**Owed.**
+- An engine block in the bay.
+- The bus's doors at stops (the fleet instance path).
+- A door you open by hand on foot.
+- Per-part colliders: the chassis stays one shape; damage measures a touch against each panel's box (ADR-0353).
+
+## ADR-0353 — Car damage: zones, dents, panels that come off, a dead engine, sparks on knocks and scrapes
+
+**Context.** Glenn, 2026-11-06:
+- "It would be interesting if you could damage the car and bits and pieces can fall off until it was undrivable";
+- "if you were to hit guard rails or other cars, the contact point might be a place where we could play some sparks."
+
+ADR-0071's contact stream reported only new touches, and a vehicle's chassis came out as no entity.
+
+**Decision.**
+- **Contacts.**
+  - Jolt's persisted contacts are now reported, but only for watched bodies. Every vehicle chassis is watched from
+    `addVehicle`. A persisted contact carries `persisted` and `slideSpeed`, the speed the surfaces slide past each
+    other.
+  - `PhysicsSystem::publishContacts` maps a chassis body to its Vehicle entity, which is ADR-0071's "who did I hit"
+    hook.
+  - The arena's knock sounds ignore scrapes.
+- **The rules** (`engine/vehicle_damage.h`, pure):
+  - `damageZone`: front, rear, left, right, roof or under, by the touch's place against the half-extents; a corner is
+    an end.
+  - `touchHarm`: a knock costs nothing below 3 m/s and a whole zone at 28; a scrape costs 0.004 per metre slid. Both
+    are shared out by mass against 1,500 kg.
+  - `touchSparks`: a knock from 4 m/s, a slide from 2.5.
+  - `dentMesh`: a smoothstep push inward round the point, normals recomputed.
+- **The pass** (`VehicleSystem::applyDamage`, each step, from the queued `Collision` events):
+  - sparks at the point (a scrape's trickle at most every 80 ms);
+  - the zone loses 1.2 x the harm, and the panel the touch lands on (its box within 0.35 m) 1.6 x;
+  - a knock over 1.5 % dents the body and the panels near it: radius 0.22-0.77 m, depth to 14 cm. Each mesh is copied
+    on its first dent, a panel's in its hinged frame, and re-uploaded at most every 0.15 s.
+  - A **panel at zero comes off** (`detachPanel`): its painted skin, re-centred, becomes a loose box body at the car's
+    speed plus a push; its glass and card go, with a burst of sparks. At most 24 loose parts stay about.
+  - The **nose at zero kills the engine**: the car steers and brakes but does not drive.
+- `vehicle?` reports the zones, the panels still on, the weakest, and ENGINE DEAD / dented; `panels knock <name>`
+  tears panels off for tests and shots.
+
+**Seen.** In car_drive, the off-roader rammed into the parked jeep at about 58 km/h came off with its nose at 0.65 and
+dented. `panels knock hood` dropped every hood onto the ground.
+
+**Owed.**
+- Scratches as a texture: the drivable body needs the unwrapper's UVs.
+- Repair: a garage or the gas station.
+- A HUD for the damage.
+- Smoke from a dead engine.
+- Traffic cars take no damage: they are kinematic.

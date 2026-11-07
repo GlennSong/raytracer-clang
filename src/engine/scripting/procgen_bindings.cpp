@@ -3960,9 +3960,12 @@ int l_poly_box(lua_State* L) {
 int l_poly_select(lua_State* L) {
     PolyMesh& m = checkPoly(L, 1);
     luaL_checktype(L, 2, LUA_TTABLE);
-    int group = -2, mat = -2;
+    int group = -2, mat = -2, panel = -2;
     lua_getfield(L, 2, "group");
     if (lua_isstring(L, -1)) group = m.findGroup(lua_tostring(L, -1));
+    lua_pop(L, 1);
+    lua_getfield(L, 2, "panel");
+    if (lua_isstring(L, -1)) panel = m.findPanel(lua_tostring(L, -1));
     lua_pop(L, 1);
     lua_getfield(L, 2, "mat");
     if (lua_isstring(L, -1)) mat = m.findMat(lua_tostring(L, -1));
@@ -3990,6 +3993,7 @@ int l_poly_select(lua_State* L) {
         const auto& face = m.faces[f];
         if (group == -1 || (group >= 0 && face.group != group)) continue;
         if (mat == -1 || (mat >= 0 && face.mat != mat)) continue;
+        if (panel == -1 || (panel >= 0 && face.panel != panel)) continue;
         const Vec3 c = m.faceCentroid(static_cast<int>(f));
         if (haveBox && (c.x < lo.x || c.y < lo.y || c.z < lo.z || c.x > hi.x || c.y > hi.y || c.z > hi.z)) continue;
         const Vec3 n = m.faceNormal(static_cast<int>(f));
@@ -4034,14 +4038,15 @@ int l_poly_inset_region(lua_State* L) {
     pushSel(L, insetRegion(m, sel, luaL_checknumber(L, 3)));
     return 1;
 }
-// P:assign(sel, { group=, mat=, color={r,g,b} })
+// P:assign(sel, { group=, mat=, panel=, color={r,g,b} })
 int l_poly_assign(lua_State* L) {
     PolyMesh& m = checkPoly(L, 1);
     const auto sel = checkSel(L, 2);
     checkSelRange(L, m, sel);
     luaL_checktype(L, 3, LUA_TTABLE);
-    int g = -1, k = -1;
+    int g = -1, k = -1, pn = -1;
     lua_getfield(L, 3, "group"); if (lua_isstring(L, -1)) g = m.groupId(lua_tostring(L, -1)); lua_pop(L, 1);
+    lua_getfield(L, 3, "panel"); if (lua_isstring(L, -1)) pn = m.panelId(lua_tostring(L, -1)); lua_pop(L, 1);
     lua_getfield(L, 3, "mat"); if (lua_isstring(L, -1)) k = m.matId(lua_tostring(L, -1)); lua_pop(L, 1);
     bool haveC = false;
     Vec3 col;
@@ -4050,6 +4055,7 @@ int l_poly_assign(lua_State* L) {
         auto& face = m.faces[static_cast<std::size_t>(f)];
         if (g >= 0) face.group = g;
         if (k >= 0) face.mat = k;
+        if (pn >= 0) face.panel = pn;
         if (haveC) face.color = col;
     }
     return 0;
@@ -4166,26 +4172,70 @@ int l_poly_extract(lua_State* L) {
     pushPoly(L, std::make_shared<PolyMesh>(extractOffset(m, sel, luaL_checknumber(L, 3), lua_toboolean(L, 4) != 0)));
     return 1;
 }
+// P:panels() -> { "body", "door_fl", ... }: the panels some face is on, body first
+int l_poly_panels(lua_State* L) {
+    const PolyMesh& m = checkPoly(L, 1);
+    std::vector<char> used(m.panels.size(), 0);
+    for (const auto& f : m.faces) used[static_cast<std::size_t>(f.panel)] = 1;
+    lua_newtable(L);
+    int k = 0;
+    for (std::size_t i = 0; i < m.panels.size(); ++i)
+        if (used[i]) { lua_pushstring(L, m.panels[i].c_str()); lua_rawseti(L, -2, ++k); }
+    return 1;
+}
+// P:solidify(sel, thickness, mat) -> Poly: the region's back and its edge walls (append it to give the skin depth)
+int l_poly_solidify(lua_State* L) {
+    const PolyMesh& m = checkPoly(L, 1);
+    const auto sel = checkSel(L, 2);
+    checkSelRange(L, m, sel);
+    pushPoly(L, std::make_shared<PolyMesh>(solidify(m, sel, luaL_checknumber(L, 3), luaL_optstring(L, 4, "trim"))));
+    return 1;
+}
+// P:ring(sel) -> sel: the faces round the region (sharing a corner with it)
+int l_poly_ring(lua_State* L) {
+    const PolyMesh& m = checkPoly(L, 1);
+    const auto sel = checkSel(L, 2);
+    checkSelRange(L, m, sel);
+    pushSel(L, ringAround(m, sel));
+    return 1;
+}
 int l_poly_closed(lua_State* L) { lua_pushboolean(L, isClosed(checkPoly(L, 1))); return 1; }
 int l_poly_volume(lua_State* L) { lua_pushnumber(L, signedVolume(checkPoly(L, 1))); return 1; }
 int l_poly_face_count(lua_State* L) { lua_pushinteger(L, static_cast<lua_Integer>(checkPoly(L, 1).faces.size())); return 1; }
+// P:bounds([sel]) -> lo, hi: every point's, or only the selected faces' corners
 int l_poly_bounds(lua_State* L) {
     const PolyMesh& m = checkPoly(L, 1);
     Vec3 lo(1e30, 1e30, 1e30), hi(-1e30, -1e30, -1e30);
-    for (const Vec3& p : m.pts) {
+    auto take = [&](const Vec3& p) {
         lo = Vec3(std::min(lo.x, p.x), std::min(lo.y, p.y), std::min(lo.z, p.z));
         hi = Vec3(std::max(hi.x, p.x), std::max(hi.y, p.y), std::max(hi.z, p.z));
+    };
+    if (lua_istable(L, 2)) {
+        const auto sel = checkSel(L, 2);
+        checkSelRange(L, m, sel);
+        for (int f : sel)
+            for (int v : m.faces[static_cast<std::size_t>(f)].v) take(m.pts[static_cast<std::size_t>(v)]);
+    } else {
+        for (const Vec3& p : m.pts) take(p);
     }
     pushVec3(L, lo);
     pushVec3(L, hi);
     return 2;
 }
-// P:to_parts{ autosmooth = 35, uv_scale = 1 } -> { [mat] = Mesh, ... }
+// P:to_parts{ autosmooth = 35, uv_scale = 1, panel = "door_fl" } -> { [mat] = Mesh, ... } (panel: only its faces;
+// a panel the mesh lacks gives an empty table)
 int l_poly_to_parts(lua_State* L) {
     const PolyMesh& m = checkPoly(L, 1);
     const double sm = lua_istable(L, 2) ? optField(L, 2, "autosmooth", 35.0) : 35.0;
     const double uv = lua_istable(L, 2) ? optField(L, 2, "uv_scale", 1.0) : 1.0;
-    const auto parts = toParts(m, sm, uv);
+    int panel = -1;
+    if (lua_istable(L, 2)) {
+        lua_getfield(L, 2, "panel");
+        if (lua_isstring(L, -1)) panel = m.findPanel(lua_tostring(L, -1));
+        if (lua_isstring(L, -1) && panel < 0) { lua_pop(L, 1); lua_newtable(L); return 1; }
+        lua_pop(L, 1);
+    }
+    const auto parts = toParts(m, sm, uv, panel);
     lua_createtable(L, 0, static_cast<int>(parts.size()));
     for (const auto& [name, rm] : parts) {
         pushMesh(L, std::make_shared<RenderMesh>(rm));
@@ -4209,6 +4259,7 @@ void registerPolyMetatable(lua_State* L) {
             {"append", l_poly_append}, {"translate", l_poly_translate}, {"scale", l_poly_scale},
             {"map", l_poly_map}, {"closed", l_poly_closed}, {"volume", l_poly_volume},
             {"face_count", l_poly_face_count}, {"bounds", l_poly_bounds}, {"to_parts", l_poly_to_parts},
+            {"panels", l_poly_panels}, {"solidify", l_poly_solidify}, {"ring", l_poly_ring},
             {nullptr, nullptr},
         };
         luaL_newlib(L, kMethods);

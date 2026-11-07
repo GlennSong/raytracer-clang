@@ -121,7 +121,7 @@ public:
                 // Gentle/resting touches stay silent; harder hits get louder
                 // and slightly brighter. The cue is deferred to the frame
                 // dispatch like every other reaction.
-                if (hit.speed < 2.0) return;
+                if (hit.persisted || hit.speed < 2.0) return;   // (a scrape is not a knock)
                 PlaySound cue;
                 cue.clip = "sfx/impact";
                 cue.spatial = true;

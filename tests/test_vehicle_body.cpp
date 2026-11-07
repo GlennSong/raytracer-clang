@@ -608,7 +608,11 @@ TEST_CASE(offroad_spec_is_a_part_time_4x4_on_long_travel) {
         tails += l.name.rfind("taillight", 0) == 0;
     }
     CHECK(heads == 2 && tails == 2);
-    CHECK(spec.parts.size() == 2);   // clear glass + the cabin
+    // clear glass + the cabin fixed to the chassis; the rest ride its doors, hood and hatch (ADR-0352)
+    int fixed = 0;
+    for (const auto& part : spec.parts) fixed += part.panel < 0;
+    CHECK(fixed == 2);
+    CHECK(spec.panels.size() >= 6);
 }
 
 // THE CAR PICKER (Glenn: "cycle through all of them ... It should tell me if the car is 2WD or 4WD"): every
@@ -896,4 +900,62 @@ TEST_CASE(every_smooth_fleet_car_carries_a_cheaper_mid_range_body) {
         if (midTris > 0) ++withMid;
     }
     CHECK(withMid > 8);
+}
+
+// THE MOVING PANELS (ADR-0352): every drivable kit car carries its doors (both sides), a hood unless the cab sits over
+// the engine, and a trunk, hatch or gate (a pickup's tailgate drops); the panels and the body are the whole car (no face lost
+// or doubled); and each hinge OPENS -- a door's middle swings out from the side, a lid's middle rises -- never into
+// the car.
+TEST_CASE(kit_cars_carry_doors_hood_and_trunk_that_open_outward) {
+    VehiclesVM a;
+    CHECK(a.loaded);
+    std::string err;
+    const bool ok = a.vm.doString(R"lua(
+      local kit = require "vehicle_kit"
+      local function turn(p, pivot, axis, deg)   -- Rodrigues: p about the line (pivot, axis)
+        local t = math.rad(deg)
+        local c, s = math.cos(t), math.sin(t)
+        local v = { p[1] - pivot[1], p[2] - pivot[2], p[3] - pivot[3] }
+        local k = axis
+        local kv = k[1] * v[1] + k[2] * v[2] + k[3] * v[3]
+        local x = { k[2] * v[3] - k[3] * v[2], k[3] * v[1] - k[1] * v[3], k[1] * v[2] - k[2] * v[1] }
+        local r = {}
+        for i = 1, 3 do r[i] = v[i] * c + x[i] * s + k[i] * kv * (1 - c) + pivot[i] end
+        return r
+      end
+      local bad = {}
+      local function fail(m) bad[#bad + 1] = m end
+      for _, name in ipairs({ "sedan", "taxi", "hatchback", "suv", "jeep", "offroad", "convertible", "pickup", "step_van" }) do
+        local P = kit.SPECS[name]()
+        local B = kit.body(P)
+        local have = {}
+        for _, pn in ipairs(B:panels()) do have[pn] = #B:select{ panel = pn } end
+        if not have.door_front_l or not have.door_front_r then fail(name .. ": no front doors") end
+        if (have.door_rear_l ~= nil) ~= (have.door_rear_r ~= nil) then fail(name .. ": rear doors on one side only") end
+        local total = 0
+        for _, n in pairs(have) do total = total + n end
+        if total ~= B:face_count() then fail(name .. ": panels + body " .. total .. " faces of " .. B:face_count()) end
+        local car = kit.build(P, 0, { panels = true })
+        local list = {}
+        for pn, panel in pairs(car.panels or {}) do
+          list[#list + 1] = pn
+          local c = { 0.5 * (panel.lo[1] + panel.hi[1]), 0.5 * (panel.lo[2] + panel.hi[2]), 0.5 * (panel.lo[3] + panel.hi[3]) }
+          local h = panel.hinge
+          local o = turn(c, h.pivot, h.axis, h.open)
+          if pn:sub(1, 5) == "door_" then
+            if math.abs(o[1]) < math.abs(c[1]) + 0.15 then fail(name .. " " .. pn .. ": swings in (x " .. c[1] .. " -> " .. o[1] .. ")") end
+          elseif pn == "tailgate" then
+            if o[2] > c[2] - 0.10 or o[3] > c[3] - 0.10 then fail(name .. " tailgate: does not drop back") end
+          elseif o[2] < c[2] + 0.10 then fail(name .. " " .. pn .. ": does not lift (y " .. c[2] .. " -> " .. o[2] .. ")") end
+          local n = 0
+          for _ in pairs(panel.parts) do n = n + 1 end
+          if n == 0 then fail(name .. " " .. pn .. ": no mesh") end
+        end
+        table.sort(list)
+        print("    [panels] " .. name .. ": " .. table.concat(list, " "))
+      end
+      if #bad > 0 then error(table.concat(bad, "; ")) end
+    )lua", &err);
+    if (!ok) std::printf("    %s\n", err.c_str());
+    CHECK(ok);
 }

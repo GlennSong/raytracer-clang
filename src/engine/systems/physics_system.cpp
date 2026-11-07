@@ -119,6 +119,10 @@ void PhysicsSystem::publishContacts(World& world, EventBus& events) {
     world.each<MeshCollider>([&](Entity e, MeshCollider& mc) {
         if (mc.bodyId != INVALID_PHYSICS_BODY) byBody[mc.bodyId] = e;
     });
+    // ...and a drivable vehicle's chassis (ADR-0071's "who did I hit" hook; ADR-0353 damage and sparks)
+    world.each<Vehicle>([&](Entity e, Vehicle& v) {
+        if (v.vehicleId != PhysicsWorld::INVALID_VEHICLE) byBody[physics.vehicleBody(v.vehicleId)] = e;
+    });
 
     for (const ContactEvent& contact : contacts) {
         Collision collision;
@@ -129,6 +133,8 @@ void PhysicsSystem::publishContacts(World& world, EventBus& events) {
         collision.position = contact.position;
         collision.normal = contact.normal;
         collision.speed = contact.approachSpeed;
+        collision.persisted = contact.persisted;
+        collision.slide = contact.slideSpeed;
         events.publish(collision);
     }
 }

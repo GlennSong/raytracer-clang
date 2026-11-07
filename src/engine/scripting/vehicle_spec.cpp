@@ -195,7 +195,33 @@ bool loadVehicleSpec(ScriptVM& vm, const std::string& recipe, uint32_t seed,
     out.metallic = static_cast<float>(numField(L, t, "metallic", out.metallic));
     out.roughness = static_cast<float>(numField(L, t, "roughness", out.roughness));
 
-    // parts = { { mesh=, albedo=, metallic=, roughness=, opacity=, emission= }, ... }
+    // panels = { { name=, pivot={x,y,z}, axis={x,y,z}, open=deg }, ... } (ADR-0352), before the parts that name them
+    lua_getfield(L, t, "panels");
+    if (lua_istable(L, -1)) {
+        const int nt = lua_gettop(L);
+        const int n = static_cast<int>(luaL_len(L, nt));
+        for (int i = 1; i <= n; ++i) {
+            lua_rawgeti(L, nt, i);
+            const int pi = lua_gettop(L);
+            if (lua_istable(L, pi)) {
+                VehicleSpec::Panel panel;
+                lua_getfield(L, pi, "name");
+                if (lua_isstring(L, -1)) panel.name = lua_tostring(L, -1);
+                lua_pop(L, 1);
+                panel.pivot = vec3Field(L, pi, "pivot", panel.pivot);
+                panel.axis = normalize(vec3Field(L, pi, "axis", panel.axis));
+                panel.openDeg = static_cast<float>(numField(L, pi, "open", panel.openDeg));
+                panel.centre = vec3Field(L, pi, "centre", panel.pivot);
+                panel.lo = vec3Field(L, pi, "lo", panel.centre);
+                panel.hi = vec3Field(L, pi, "hi", panel.centre);
+                if (!panel.name.empty()) out.panels.push_back(std::move(panel));
+            }
+            lua_pop(L, 1);
+        }
+    }
+    lua_pop(L, 1);
+
+    // parts = { { mesh=, albedo=, metallic=, roughness=, opacity=, emission=, panel= }, ... }
     // Each becomes a child Renderable so glass/interior keep their own material.
     lua_getfield(L, t, "parts");
     if (lua_istable(L, -1)) {
@@ -215,6 +241,13 @@ bool loadVehicleSpec(ScriptVM& vm, const std::string& recipe, uint32_t seed,
                     part.roughness = static_cast<float>(numField(L, pi, "roughness", part.roughness));
                     part.opacity = static_cast<float>(numField(L, pi, "opacity", part.opacity));
                     part.emission = vec3Field(L, pi, "emission", part.emission);
+                    lua_getfield(L, pi, "panel");
+                    if (lua_isstring(L, -1)) {
+                        const std::string pn = lua_tostring(L, -1);
+                        for (std::size_t k = 0; k < out.panels.size(); ++k)
+                            if (out.panels[k].name == pn) part.panel = static_cast<int>(k);
+                    }
+                    lua_pop(L, 1);
                     out.parts.push_back(std::move(part));
                 }
             }
@@ -291,6 +324,7 @@ Entity spawnVehicle(World& world, AssetManager& assets, const VehicleSpec& spec,
     v.hasDriverSeat = spec.hasDriverSeat;
     v.openSeat = spec.openSeat;
     v.seat = spec.seat;
+    v.bodyMesh = spec.body;   // (shared with the spec until the first dent copies it)
 
     // One child entity per extra part, rigidly pinned to the chassis by
     // VehicleSystem::writeBack. Separate entities because each carries its own
@@ -311,6 +345,20 @@ Entity spawnVehicle(World& world, AssetManager& assets, const VehicleSpec& spec,
         pr.material.emission = part.emission;
         world.add<Renderable>(pe, pr);
         v.bodyParts.push_back(pe);
+        v.bodyPartPanel.push_back(part.panel);
+        v.partMeshes.push_back(part.mesh);
+        v.partDented.push_back(0);
+    }
+    for (const VehicleSpec::Panel& sp : spec.panels) {
+        Vehicle::Panel panel;
+        panel.name = sp.name;
+        panel.pivot = sp.pivot;
+        panel.axis = sp.axis;
+        panel.open = sp.openDeg * static_cast<float>(3.14159265358979 / 180.0);
+        panel.centre = sp.centre;
+        panel.lo = sp.lo;
+        panel.hi = sp.hi;
+        v.panels.push_back(panel);
     }
     // Marker slots only: VehicleSystem creates the lens entities on its first
     // fixed step (it owns the shared mesh and the asset manager), so a car

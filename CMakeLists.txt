@@ -175,6 +175,7 @@ add_library(engine_core STATIC
     src/engine/interaction.cpp
     src/engine/interior_occupants.cpp
     src/engine/interact_broker.cpp
+    src/engine/vehicle_damage.cpp
     src/engine/furniture_draw.cpp
     src/engine/procgen/city/road_network.cpp
     src/engine/procgen/city/street_kit.cpp
@@ -751,6 +752,7 @@ add_executable(run_tests
     tests/test_mesh_builder.cpp
     tests/test_mesh_unwrap.cpp
     tests/test_mesh_bake.cpp
+    tests/test_vehicle_damage.cpp
     tests/test_mesh_surfaces.cpp
     tests/test_cube_sphere.cpp
     tests/test_noise.cpp

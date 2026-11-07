@@ -282,6 +282,12 @@
   "usage": "overlay <hud|ui|debug|lamplights|master|agents|cones|nav|plan> <on|off>"
  },
  {
+  "name": "panels",
+  "owner": "engine",
+  "summary": "Swing every drivable car's moving panels (doors, hood, trunk; ADR-0352) open or shut, or knock them off (ADR-0353); only those whose name holds `name` (door, hood, trunk, hatch, door_front_r ...).",
+  "usage": "panels open|shut|knock [name]"
+ },
+ {
   "name": "parking?",
   "owner": "engine",
   "summary": "Parking: kerb bays and garage stalls taken, and the nearest taken stall.",

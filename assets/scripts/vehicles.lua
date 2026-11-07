@@ -86,17 +86,47 @@ local function kit_drivable(specName, opts, h)
   local kit = require "vehicle_kit"
   local P = kit.SPECS[specName]()
   if opts.color then P.color = opts.color end
-  local car = kit.build(P, 0)
-  local shell = {}
-  for name, part in pairs(car.parts) do
-    if name ~= "glass" then
-      local col = name == "body" and P.color or (KIT_TINT[name] or LENS_TINT[name] or { 0.4, 0.4, 0.4 })
-      shell[#shell + 1] = lens_tag(mesh.paint(part, col), name)
+  local car = kit.build(P, 0, { panels = true })
+  -- a material set (kit.build's parts) as its painted shell and its glass
+  local function painted_set(set)
+    local out = {}
+    for name, part in pairs(set) do
+      if name ~= "glass" then
+        local col = name == "body" and P.color or (KIT_TINT[name] or LENS_TINT[name] or { 0.4, 0.4, 0.4 })
+        out[#out + 1] = lens_tag(mesh.paint(part, col), name)
+      end
     end
+    return out, set.glass
   end
+  local shell, glass = painted_set(car.parts)
   local parts = {}
-  if car.parts.glass then
-    parts[#parts + 1] = { mesh = car.parts.glass, albedo = { 1, 1, 1 }, metallic = 0.0, roughness = 0.06, opacity = 0.30 }
+  if glass then
+    parts[#parts + 1] = { mesh = glass, albedo = { 1, 1, 1 }, metallic = 0.0, roughness = 0.06, opacity = 0.30 }
+  end
+  -- THE MOVING PANELS (ADR-0352): each door, the hood, the trunk -- its painted shell and its glass, on its hinge
+  local panels = {}
+  local names = {}
+  for name in pairs(car.panels or {}) do names[#names + 1] = name end
+  table.sort(names)
+  for _, name in ipairs(names) do
+    local pn = car.panels[name]
+    local pshell, pglass = painted_set(pn.parts)
+    local pcabin = {}
+    for cname, part in pairs(pn.cabin or {}) do pcabin[#pcabin + 1] = mesh.paint(part, KIT_CABIN_TINT[cname] or { 0.3, 0.3, 0.3 }) end
+    if #pshell > 0 or pglass then
+      panels[#panels + 1] = { name = name, pivot = pn.hinge.pivot, axis = pn.hinge.axis, open = pn.hinge.open, lo = pn.lo, hi = pn.hi,
+                              centre = { 0.5 * (pn.lo[1] + pn.hi[1]), 0.5 * (pn.lo[2] + pn.hi[2]), 0.5 * (pn.lo[3] + pn.hi[3]) } }
+      if #pshell > 0 then
+        parts[#parts + 1] = { mesh = mesh.recompute_normals(mesh.merge(pshell)), albedo = { 1, 1, 1 },
+                              metallic = h.metallic or 0.5, roughness = h.roughness or 0.4, panel = name }
+      end
+      if pglass then
+        parts[#parts + 1] = { mesh = pglass, albedo = { 1, 1, 1 }, metallic = 0.0, roughness = 0.06, opacity = 0.30, panel = name }
+      end
+      if #pcabin > 0 then
+        parts[#parts + 1] = { mesh = mesh.merge(pcabin), albedo = { 1, 1, 1 }, metallic = 0.0, roughness = 0.9, panel = name }
+      end
+    end
   end
   local cabin = {}
   for name, part in pairs(car.cabin or {}) do
@@ -115,6 +145,7 @@ local function kit_drivable(specName, opts, h)
   spec.metallic = h.metallic or 0.5
   spec.roughness = h.roughness or 0.4
   spec.parts = parts
+  spec.panels = panels
   spec.lights = lights
   return spec
 end

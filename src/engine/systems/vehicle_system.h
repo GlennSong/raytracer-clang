@@ -13,6 +13,7 @@
 namespace engine {
 
 class PhysicsSystem;
+struct Vehicle;
 class CameraSystem;
 
 // Drives the player-controllable physics cars (ADR-0059). For every entity with
@@ -45,6 +46,21 @@ public:
     void render(FrameContext& ctx) override;        // the car picker / drive-mode panel
 
 private:
+    // `panels open|shut [name]` (ADR-0352): every car's panels, or the named one, staged for the next step
+    ControlCommands::Binding panelsCmd_;
+    std::vector<std::string> panelsStaged_;
+    EventBus::Subscription onCollision_;
+    struct Hit {
+        Entity car, other;
+        Vec3 at, normal;
+        Real speed = 0, slide = 0;
+        bool persisted = false;
+    };
+    std::vector<Hit> hits_;
+    // parts knocked off, waiting for their body (made on the next physics step) to be given the car's speed; and
+    // every loose part, oldest first (a cap keeps the street from filling up)
+    std::vector<std::pair<Entity, Vec3>> looseKick_;
+    std::vector<Entity> loose_;
     EventBus::Subscription onSpawn_;
     bool spawnPending_ = false;
     std::string spawnRecipe_;
@@ -52,6 +68,10 @@ private:
     void createVehicles(FrameContext& ctx);
     void driveVehicles(FrameContext& ctx);
     void writeBack(FrameContext& ctx);
+    void swingPanels(FrameContext& ctx);
+    // DAMAGE (ADR-0353): the step's touches (from the Collision events) spent on the cars they hit
+    void applyDamage(FrameContext& ctx);
+    void detachPanel(FrameContext& ctx, Entity car, Vehicle& v, int panel, const Vec3& kick);
     void handleEnterExit(FrameContext& ctx);
     void spawnInFront(FrameContext& ctx);   // debug: drop a car ahead of the player
     void updateHorn(FrameContext& ctx);     // hold-to-honk (H / L3) while driving

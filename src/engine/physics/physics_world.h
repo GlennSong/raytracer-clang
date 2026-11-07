@@ -42,6 +42,10 @@ struct ContactEvent {
     Vec3 position;       // world-space contact point
     Vec3 normal;         // world-space contact normal
     Real approachSpeed = 0;
+    // A SCRAPE (ADR-0353): the touch persists -- reported each step only for a WATCHED body (a vehicle's chassis),
+    // with the speed the two surfaces slide past each other at the point
+    bool persisted = false;
+    Real slideSpeed = 0;
 };
 
 class JobSystem;   // our thread pool (src/job_system.h)
