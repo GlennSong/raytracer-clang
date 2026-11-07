@@ -251,6 +251,7 @@ add_library(engine_core STATIC
     src/engine/systems/light_system.cpp
     src/engine/lights/light_kinds.cpp
     src/engine/lights/light_picker.cpp
+    src/engine/sky/sky_atmosphere.cpp
     src/engine/systems/xr_camera_system.cpp
     src/engine/systems/debug_draw_system.cpp
     src/engine/systems/dev_control_system.cpp
@@ -766,6 +767,7 @@ add_executable(run_tests
     tests/test_camera_frame.cpp
     tests/test_trades.cpp
     tests/test_lights.cpp
+    tests/test_sky_atmosphere.cpp
     tests/test_light_clusters.cpp
     tests/test_danger_dodge.cpp
     tests/test_mesh_surfaces.cpp
@@ -1146,7 +1148,7 @@ function(rt_build_vulkan_shaders)
                    sky.vert sky.frag composite.vert composite.frag bloom.frag
                    ssao.frag ssao_blur.frag ssr.frag dof.frag brdf_lut.frag
                    clouds.frag clouds_composite.frag clouds_resolve.frag
-                   ui.vert ui.frag occlusion_reduce.comp crowd.comp cluster_bin.comp)
+                   ui.vert ui.frag occlusion_reduce.comp crowd.comp cluster_bin.comp sky_view.comp lum_histogram.comp)
     set(VK_SPV_FILES "")
     foreach(shader ${VK_SHADERS})
         add_custom_command(
@@ -1155,7 +1157,7 @@ function(rt_build_vulkan_shaders)
                     ${VK_SHADER_SRC_DIR}/${shader}
                     -I ${VK_SHADER_SRC_DIR}
                     -o ${VK_SHADER_OUT_DIR}/${shader}.spv
-            DEPENDS ${VK_SHADER_SRC_DIR}/${shader} ${VK_SHADER_SRC_DIR}/sky_common.glsl
+            DEPENDS ${VK_SHADER_SRC_DIR}/${shader} ${VK_SHADER_SRC_DIR}/sky_common.glsl ${VK_SHADER_SRC_DIR}/sky_physical.glsl
             COMMENT "glslc ${shader} -> ${shader}.spv"
             VERBATIM)
         list(APPEND VK_SPV_FILES ${VK_SHADER_OUT_DIR}/${shader}.spv)

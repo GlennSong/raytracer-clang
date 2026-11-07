@@ -61,7 +61,11 @@ layout(set = 0, binding = 0) uniform Globals {
     vec4  terrainSurface2;    // x the camera distance the cover map blends in from, y 1/(the blend's length)
     ivec4 clusterGrid;        // CLUSTERED LIGHTS (RT_CLUSTERED=1): x tilesX, y tilesY, z slices, w 1: on (bindings 8-10)
     vec4  clusterDepth;       // x the slices' near depth, y 1/log(far/near), z framebuffer width, w height
+    vec4  skyPhysical;        // THE PHYSICAL SKY (ADR-0367; envMode 2): x ground radius, y camera height, z the active
+    vec4  skyPhysical2;       //   light's top illuminance, w cos(sun radius); x disc visibility, y the other light's,
+    vec4  skyPhysical3;       //   z top radius; x 1: the active light is the sun, y the celestial scale
 } g;
+#include "sky_physical.glsl"
 // the clustered lights (light_clusters.h): every point and spot, each froxel's offset (low 24 bits) | count (high 8),
 // and the froxels' index lists
 layout(std430, set = 0, binding = 8) readonly buffer ClusterLightBuf { Light clusterLights[]; };
@@ -1602,6 +1606,11 @@ void main() {
     if (g.counts.z == 1) {
         irradiance = sampleEquirect(N);
         prefiltered = mix(sampleEquirect(R), irradiance, roughness);
+    } else if (skyIsPhysical()) {
+        // THE PHYSICAL SKY's light (ADR-0367): the dome toward the normal stands for its irradiance / pi (no second
+        // sun: the disc is lit directly), and the dome (and the disc) in the reflection
+        irradiance = skyViewRadiance(N);
+        prefiltered = mix(skyViewRadiance(R) + skyLightDisc(R), irradiance, roughness);
     } else {
         irradiance = sampleSkyDome(N);   // (no second sun: see sampleSkyDome)
         prefiltered = mix(sampleEnvironment(R), irradiance, roughness);  // crude roughness blur; a mirror keeps the sun
@@ -1693,7 +1702,8 @@ void main() {
             vec3 rd = (inWorldPos - g.cameraPosition.xyz);
             float dist = length(rd);
             float f = 1.0 - exp(-g.fog.w * dist);
-            color = mix(color, sampleEnvironment(rd / max(dist, 1e-4)), f);
+            vec3 rdn = rd / max(dist, 1e-4);
+            color = mix(color, skyIsPhysical() ? skyViewRadiance(vec3(rdn.x, max(rdn.y, 0.02), rdn.z)) : sampleEnvironment(rdn), f);
         }
         // Opacity (float bits in the spare push slot) → output alpha for the
         // transparent blend pass; ignored by the opaque pipeline (blend off).

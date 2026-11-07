@@ -40,7 +40,23 @@ layout(set = 0, binding = 0) uniform Globals {
     vec4  skyCelZ;
     vec4  skyStars;        // x visibility (0 by day), y Milky Way strength
     vec4  skyCity;         // xy unit XZ toward the city, z light pollution (0..1)
+    // (the rest of the block as mesh.frag declares it, to reach the physical sky's uniforms)
+    vec4  terrainHorizon;
+    vec4  terrainHorizon2;
+    vec4  viewerBoxA;
+    vec4  viewerBoxB;
+    vec4  glassMode;
+    vec4  terrainNormal;
+    vec4  terrainNormal2;
+    vec4  terrainSurface;
+    vec4  terrainSurface2;
+    ivec4 clusterGrid;
+    vec4  clusterDepth;
+    vec4  skyPhysical;     // THE PHYSICAL SKY (ADR-0367): x ground radius, y camera height, z the active light's top
+    vec4  skyPhysical2;    //   illuminance, w cos(sun radius); x disc visibility, y the other light's, z top radius
+    vec4  skyPhysical3;    //   x 1: the active light is the sun, y the stars' / moon's / city glow's scale
 } g;
+#include "sky_physical.glsl"
 
 layout(set = 0, binding = 2) uniform sampler2D envEquirect;   // HDR env (counts.z==1)
 
@@ -228,6 +244,7 @@ vec3 applyClouds(vec3 baseSky, vec3 dir) {
     vec3 cloudDark = vec3(0.40, 0.42, 0.50);
     vec3 cloudColor = mix(cloudDark, cloudLit, pow(sunAmt, 1.5));
     cloudColor *= (0.25 + 0.75 * g.skySunDir.w);
+    if (skyIsPhysical()) cloudColor *= g.skyPhysical.z / 6.4;   // (lit by the light above the air: 6.4 units the sun's)
     return mix(baseSky, cloudColor, mask);
 }
 
@@ -236,6 +253,11 @@ void main() {
     vec3 col;
     if (g.counts.z == 1) {
         col = sampleEquirect(dir);   // HDR environment background (no clouds)
+    } else if (skyIsPhysical()) {
+        // THE PHYSICAL SKY (ADR-0367): the dome, the sun's disc through the air, and the night's bodies over it
+        col = skyViewRadiance(dir) + skyLightDisc(dir);
+        col += (starField(dir) + skyGlow(dir) + moonDisc(dir)) * g.skyPhysical3.y;
+        col = applyClouds(col, dir);
     } else {
         col = sampleEnvironment(dir);
         col = applyClouds(col, dir);

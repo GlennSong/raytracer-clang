@@ -7,6 +7,7 @@
 #include "../wind.h"
 #include "../weather_cycle.h"
 #include "../procgen/terrain_horizon.h"
+#include "../sky/sky_atmosphere.h"
 #include "../properties.h"
 #include "../control/control_commands.h"
 
@@ -220,6 +221,18 @@ private:
     void applyBeaconBlink(FrameContext& ctx);
     double blinkSeconds_ = 0.0;
     float nightAdapt_ = 1.0f;   // exposure / authored exposure this frame (1 by day, kNightAdapt at midnight)
+    // THE PHYSICAL SKY (ADR-0367; RT_SKY=physical): the atmosphere's tables (built from the level's scattering
+    // parameters, handed to the renderer once), and the last reading of the sky for the sun and the moon (taken again
+    // when either has moved or the camera has climbed)
+    void applyPhysicalSky(FrameContext& ctx, const DayNightState& st);
+    AtmosphereTables skyTables_;
+    bool skyTablesBuilt_ = false;
+    SkyReading sunReading_, moonReading_;
+    Vec3 readSunDir_{0, -2, 0}, readMoonDir_{0, -2, 0};
+    double readHeight_ = -1e9;
+    float readMoonTop_ = -1.0f;
+    float autoExposure_ = -1.0f;   // the adapted exposure (ADR-0368); -1: not yet
+    float lastDt_ = 0.0f;          // update's frame time, for the adaptation
 
     // The level's authored volumetric deck, captured on first sight: the
     // artistic knobs write ABSOLUTE values derived from this base each frame

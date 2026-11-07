@@ -193,6 +193,14 @@ struct GlobalsUBO {
     // and x the slices' near depth, y 1/log(far/near), z the framebuffer's width, w its height
     int32_t  clusterGrid[4];
     float    clusterDepth[4];
+    // THE PHYSICAL SKY (ADR-0367; envMode counts.z = 2): x the ground radius, y the camera's height above it, z the
+    // active light's illuminance above the air (units), w cos(the sun's angular radius); and x the disc's visibility,
+    // y the other light's illuminance above the air, z the top of the atmosphere's radius; and x 1 when the active light
+    // is the sun (its disc is drawn; the moon draws as itself), y the scale the stars, the moon's disc and the city's
+    // glow take into units
+    float    skyPhysical[4];
+    float    skyPhysical2[4];
+    float    skyPhysical3[4];
 };
 
 // Volumetric-cloud uniforms (mirrors shader_types.h CloudUniforms; every
@@ -770,6 +778,46 @@ struct VulkanRenderer::Impl {
     std::array<ClusterLists, MAX_FRAMES_IN_FLIGHT> checkCpu{};
     bool checkThisFrame = false;
     bool createBinPipeline();
+    // THE PHYSICAL SKY (ADR-0367): the CPU's two tables (setSkyTables), the sky view rebuilt each frame from them by
+    // sky_view.comp (192 x 108, kept in GENERAL layout: written by the compute, sampled by sky.frag and mesh.frag at
+    // set 0 binding 11; the transmittance at 12)
+    TextureHandle skyTransTex, skyMsTex;
+    VkImage skyViewImage = VK_NULL_HANDLE;
+    VkDeviceMemory skyViewMemory = VK_NULL_HANDLE;
+    VkImageView skyViewView = VK_NULL_HANDLE;
+    bool skyViewGeneral = false;
+    VkDescriptorSetLayout skySetLayout = VK_NULL_HANDLE;
+    VkDescriptorPool skyPool = VK_NULL_HANDLE;
+    VkDescriptorSet skySet = VK_NULL_HANDLE;
+    VkPipelineLayout skyLayout = VK_NULL_HANDLE;
+    VkPipeline skyPipe = VK_NULL_HANDLE;
+    PhysicalSkyFrame skyFrame;
+    bool skyPhysicalOn = false;
+    bool pendingSkyDescriptors = false;
+    // AUTO EXPOSURE's measurement (ADR-0368): lum_histogram.comp over the scene after the clouds, the bins read back when
+    // the frame's fence has passed
+    static constexpr float kLumLog2Min = -14.0f, kLumLog2Range = 22.0f;   // pre-exposed: 2^-14 .. 2^8
+    VkDescriptorSetLayout lumSetLayout = VK_NULL_HANDLE;
+    VkDescriptorPool lumPool = VK_NULL_HANDLE;
+    VkDescriptorSet lumSet = VK_NULL_HANDLE;
+    VkPipelineLayout lumLayout = VK_NULL_HANDLE;
+    VkPipeline lumPipe = VK_NULL_HANDLE;
+    bool lumFailed = false;
+    VkImageView lumBoundHdr = VK_NULL_HANDLE;   // the HDR view the set points at (it changes with the swapchain)
+    VkBuffer lumBuf = VK_NULL_HANDLE;
+    VkDeviceMemory lumMem = VK_NULL_HANDLE;
+    std::array<VkBuffer, MAX_FRAMES_IN_FLIGHT> lumRead{};
+    std::array<VkDeviceMemory, MAX_FRAMES_IN_FLIGHT> lumReadMem{};
+    std::array<void*, MAX_FRAMES_IN_FLIGHT> lumReadMapped{};
+    std::array<float, MAX_FRAMES_IN_FLIGHT> lumPre{};   // the pre-exposure that frame was drawn with (0: no reading)
+    float lumLog2 = 0.0f;
+    bool lumValid = false;
+    bool ensureLumPipeline();
+    void recordLumHistogram(VkCommandBuffer cmd);
+    void readLumHistogram();   // rewrite 11/12 once no frame is recording (the sky view's first frame)
+    bool ensureSkyView();
+    void updateSkyDescriptors();
+    void recordSkyView(VkCommandBuffer cmd);
     // PRE-EXPOSURE (ADR-0366): the exposure the scene passes draw with (1 with RT_PREEXPOSE=0)
     static bool preExposureOn() {
         static const bool on = [] { const char* e = std::getenv("RT_PREEXPOSE"); return !(e && std::string(e) == "0"); }();
@@ -3721,7 +3769,7 @@ bool VulkanRenderer::Impl::createSyncObjects() {
 }
 
 bool VulkanRenderer::Impl::createDescriptorSetLayout() {
-    std::array<VkDescriptorSetLayoutBinding, 11> bindings{};
+    std::array<VkDescriptorSetLayoutBinding, 13> bindings{};
     bindings[0].binding = 0;   // global UBO
     bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     bindings[0].descriptorCount = 1;
@@ -3745,6 +3793,12 @@ bool VulkanRenderer::Impl::createDescriptorSetLayout() {
     for (uint32_t b = 8; b < 11; ++b) {   // the clustered lights: lights, froxels, index lists (storage buffers)
         bindings[b].binding = b;
         bindings[b].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        bindings[b].descriptorCount = 1;
+        bindings[b].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    }
+    for (uint32_t b = 11; b < 13; ++b) {   // the physical sky's view and transmittance (ADR-0367)
+        bindings[b].binding = b;
+        bindings[b].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         bindings[b].descriptorCount = 1;
         bindings[b].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
     }
@@ -3954,7 +4008,7 @@ bool VulkanRenderer::Impl::createDescriptorPool() {
     sizes[2].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;   // the clustered lights' three buffers
     sizes[2].descriptorCount = MAX_FRAMES_IN_FLIGHT * 3;
     sizes[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;   // shadow map + env + BRDF LUT + horizon + 3 terrain maps
-    sizes[1].descriptorCount = MAX_FRAMES_IN_FLIGHT * 7;
+    sizes[1].descriptorCount = MAX_FRAMES_IN_FLIGHT * 9;                                  // + the sky view + transmittance
     VkDescriptorPoolCreateInfo info{};
     info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
     info.poolSizeCount = static_cast<uint32_t>(sizes.size());
@@ -4090,6 +4144,281 @@ void VulkanRenderer::Impl::updateGlobalTerrainNormalDescriptor() {
             write.pImageInfo = &img;
             vkUpdateDescriptorSets(device, 1, &write, 0, nullptr);
         }
+}
+
+// bindings 11 (the sky view, GENERAL) and 12 (the transmittance table): the default texture until the sky has them
+void VulkanRenderer::Impl::updateSkyDescriptors() {
+    if (!defaultTexture.view || !brdfLutSampler) return;
+    GpuTexture* tr = textures.get(skyTransTex);
+    const bool viewOn = skyViewView != VK_NULL_HANDLE && skyViewGeneral;
+    for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
+        for (uint32_t k = 0; k < 2; ++k) {
+            VkDescriptorImageInfo img{};
+            img.sampler = brdfLutSampler;   // linear, clamped
+            if (k == 0) {
+                img.imageView = viewOn ? skyViewView : defaultTexture.view;
+                img.imageLayout = viewOn ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            } else {
+                img.imageView = tr && tr->view ? tr->view : defaultTexture.view;
+                img.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            }
+            VkWriteDescriptorSet write{};
+            write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            write.dstSet = descriptorSets[i];
+            write.dstBinding = 11 + k;
+            write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            write.descriptorCount = 1;
+            write.pImageInfo = &img;
+            vkUpdateDescriptorSets(device, 1, &write, 0, nullptr);
+        }
+}
+
+// The sky view's image and the compute pipeline that fills it, made once the tables have come
+bool VulkanRenderer::Impl::ensureSkyView() {
+    if (skyPipe) return true;
+    if (!createColorTarget(192, 108, VK_FORMAT_R16G16B16A16_SFLOAT, VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                           skyViewImage, skyViewMemory, skyViewView))
+        return false;
+    VkDescriptorSetLayoutBinding b[3]{};
+    b[0].binding = 0; b[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE; b[0].descriptorCount = 1;
+    b[0].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    for (int k = 1; k < 3; ++k) {
+        b[k].binding = static_cast<uint32_t>(k);
+        b[k].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        b[k].descriptorCount = 1;
+        b[k].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    }
+    VkDescriptorSetLayoutCreateInfo li{};
+    li.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    li.bindingCount = 3;
+    li.pBindings = b;
+    if (vkCreateDescriptorSetLayout(device, &li, nullptr, &skySetLayout) != VK_SUCCESS) return false;
+    VkDescriptorPoolSize sz[2] = {{VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1}, {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 2}};
+    VkDescriptorPoolCreateInfo pi{};
+    pi.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    pi.maxSets = 1;
+    pi.poolSizeCount = 2;
+    pi.pPoolSizes = sz;
+    if (vkCreateDescriptorPool(device, &pi, nullptr, &skyPool) != VK_SUCCESS) return false;
+    VkDescriptorSetAllocateInfo a{};
+    a.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    a.descriptorPool = skyPool;
+    a.descriptorSetCount = 1;
+    a.pSetLayouts = &skySetLayout;
+    if (vkAllocateDescriptorSets(device, &a, &skySet) != VK_SUCCESS) return false;
+    VkPushConstantRange range{VK_SHADER_STAGE_COMPUTE_BIT, 0, 112};
+    VkPipelineLayoutCreateInfo pl{};
+    pl.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    pl.setLayoutCount = 1;
+    pl.pSetLayouts = &skySetLayout;
+    pl.pushConstantRangeCount = 1;
+    pl.pPushConstantRanges = &range;
+    if (vkCreatePipelineLayout(device, &pl, nullptr, &skyLayout) != VK_SUCCESS) return false;
+    VkShaderModule mod = loadShaderModule(std::string(RT_VULKAN_SHADER_DIR) + "/sky_view.comp.spv");
+    if (!mod) return false;
+    VkComputePipelineCreateInfo ci{};
+    ci.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+    ci.stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    ci.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+    ci.stage.module = mod;
+    ci.stage.pName = "main";
+    ci.layout = skyLayout;
+    const VkResult r = vkCreateComputePipelines(device, VK_NULL_HANDLE, 1, &ci, nullptr, &skyPipe);
+    vkDestroyShaderModule(device, mod, nullptr);
+    if (r != VK_SUCCESS) { skyPipe = VK_NULL_HANDLE; return false; }
+    LOG_INFO("[vulkan] physical sky: sky-view pipeline ready");
+    return true;
+}
+
+// The sky view for this frame (ADR-0367), before any pass samples it
+void VulkanRenderer::Impl::recordSkyView(VkCommandBuffer cmd) {
+    if (!skyPhysicalOn || !skyPipe || !skySet) return;
+    VkImageMemoryBarrier toWrite{};
+    toWrite.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    toWrite.srcAccessMask = skyViewGeneral ? VK_ACCESS_SHADER_READ_BIT : 0;
+    toWrite.dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+    toWrite.oldLayout = skyViewGeneral ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_UNDEFINED;
+    toWrite.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+    toWrite.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    toWrite.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    toWrite.image = skyViewImage;
+    toWrite.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    vkCmdPipelineBarrier(cmd, skyViewGeneral ? VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT : VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                         VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &toWrite);
+    const PhysicalSkyFrame& f = skyFrame;
+    struct Push { float planet[4], rayleigh[4], mie[4], sun[4], moon[4], ground[4], ozone[4]; } p{};
+    p.planet[0] = f.groundRadius; p.planet[1] = f.topRadius; p.planet[2] = f.cameraHeight; p.planet[3] = f.mieG;
+    p.rayleigh[0] = static_cast<float>(f.rayleigh.x); p.rayleigh[1] = static_cast<float>(f.rayleigh.y);
+    p.rayleigh[2] = static_cast<float>(f.rayleigh.z); p.rayleigh[3] = f.rayleighHeight;
+    p.mie[0] = f.mieScatter; p.mie[1] = f.mieExtinction; p.mie[2] = f.mieHeight;
+    p.sun[0] = static_cast<float>(f.lightDir.x); p.sun[1] = static_cast<float>(f.lightDir.y);
+    p.sun[2] = static_cast<float>(f.lightDir.z); p.sun[3] = f.lightTop;
+    p.moon[0] = static_cast<float>(f.otherDir.x); p.moon[1] = static_cast<float>(f.otherDir.y);
+    p.moon[2] = static_cast<float>(f.otherDir.z); p.moon[3] = f.otherTop;
+    p.ground[0] = static_cast<float>(f.groundAlbedo.x); p.ground[1] = static_cast<float>(f.groundAlbedo.y);
+    p.ground[2] = static_cast<float>(f.groundAlbedo.z);
+    p.ozone[0] = static_cast<float>(f.ozone.x); p.ozone[1] = static_cast<float>(f.ozone.y); p.ozone[2] = static_cast<float>(f.ozone.z);
+    static_assert(sizeof(Push) == 112, "sky_view.comp's push constants");
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, skyPipe);
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, skyLayout, 0, 1, &skySet, 0, nullptr);
+    vkCmdPushConstants(cmd, skyLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(p), &p);
+    vkCmdDispatch(cmd, (192 + 7) / 8, (108 + 7) / 8, 1);
+    VkImageMemoryBarrier toRead = toWrite;
+    toRead.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+    toRead.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    toRead.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0,
+                         nullptr, 1, &toRead);
+    if (!skyViewGeneral) {   // (the first frame: the sets now point at it, for the frames after; this one's are bound)
+        skyViewGeneral = true;
+        pendingSkyDescriptors = true;
+    }
+}
+
+bool VulkanRenderer::Impl::ensureLumPipeline() {
+    if (lumPipe) return true;
+    if (lumFailed) return false;
+    lumFailed = true;
+    VkDescriptorSetLayoutBinding b[2]{};
+    b[0].binding = 0; b[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; b[0].descriptorCount = 1;
+    b[0].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    b[1].binding = 1; b[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER; b[1].descriptorCount = 1;
+    b[1].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    VkDescriptorSetLayoutCreateInfo li{};
+    li.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    li.bindingCount = 2;
+    li.pBindings = b;
+    if (vkCreateDescriptorSetLayout(device, &li, nullptr, &lumSetLayout) != VK_SUCCESS) return false;
+    VkDescriptorPoolSize sz[2] = {{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1}, {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1}};
+    VkDescriptorPoolCreateInfo pi{};
+    pi.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    pi.maxSets = 1;
+    pi.poolSizeCount = 2;
+    pi.pPoolSizes = sz;
+    if (vkCreateDescriptorPool(device, &pi, nullptr, &lumPool) != VK_SUCCESS) return false;
+    VkDescriptorSetAllocateInfo a{};
+    a.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    a.descriptorPool = lumPool;
+    a.descriptorSetCount = 1;
+    a.pSetLayouts = &lumSetLayout;
+    if (vkAllocateDescriptorSets(device, &a, &lumSet) != VK_SUCCESS) return false;
+    if (!createBuffer(64 * sizeof(uint32_t), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
+                                                 VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                      VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, lumBuf, lumMem))
+        return false;
+    for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
+        if (!createBuffer(64 * sizeof(uint32_t), VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                          VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, lumRead[i], lumReadMem[i]))
+            return false;
+        vkMapMemory(device, lumReadMem[i], 0, 64 * sizeof(uint32_t), 0, &lumReadMapped[i]);
+    }
+    VkDescriptorBufferInfo bi{lumBuf, 0, VK_WHOLE_SIZE};
+    VkWriteDescriptorSet w{};
+    w.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    w.dstSet = lumSet;
+    w.dstBinding = 1;
+    w.descriptorCount = 1;
+    w.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    w.pBufferInfo = &bi;
+    vkUpdateDescriptorSets(device, 1, &w, 0, nullptr);
+    VkPushConstantRange range{VK_SHADER_STAGE_COMPUTE_BIT, 0, 32};
+    VkPipelineLayoutCreateInfo pl{};
+    pl.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    pl.setLayoutCount = 1;
+    pl.pSetLayouts = &lumSetLayout;
+    pl.pushConstantRangeCount = 1;
+    pl.pPushConstantRanges = &range;
+    if (vkCreatePipelineLayout(device, &pl, nullptr, &lumLayout) != VK_SUCCESS) return false;
+    VkShaderModule mod = loadShaderModule(std::string(RT_VULKAN_SHADER_DIR) + "/lum_histogram.comp.spv");
+    if (!mod) return false;
+    VkComputePipelineCreateInfo ci{};
+    ci.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+    ci.stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    ci.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+    ci.stage.module = mod;
+    ci.stage.pName = "main";
+    ci.layout = lumLayout;
+    const VkResult r = vkCreateComputePipelines(device, VK_NULL_HANDLE, 1, &ci, nullptr, &lumPipe);
+    vkDestroyShaderModule(device, mod, nullptr);
+    if (r != VK_SUCCESS) { lumPipe = VK_NULL_HANDLE; return false; }
+    lumFailed = false;
+    return true;
+}
+
+// The histogram of this frame's scene (after the clouds, before the post), copied out for this slot's next turn
+void VulkanRenderer::Impl::recordLumHistogram(VkCommandBuffer cmd) {
+    lumPre[currentFrame] = 0.0f;
+    if (!hdrView || !ensureLumPipeline()) return;
+    if (lumBoundHdr != hdrView) {   // (the swapchain's HDR target is new: point the set at it)
+        VkDescriptorImageInfo img{brdfLutSampler, hdrView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+        VkWriteDescriptorSet w{};
+        w.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        w.dstSet = lumSet;
+        w.dstBinding = 0;
+        w.descriptorCount = 1;
+        w.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        w.pImageInfo = &img;
+        vkDeviceWaitIdle(device);   // (the set may be in a frame still in flight)
+        vkUpdateDescriptorSets(device, 1, &w, 0, nullptr);
+        lumBoundHdr = hdrView;
+    }
+    vkCmdFillBuffer(cmd, lumBuf, 0, VK_WHOLE_SIZE, 0u);
+    VkMemoryBarrier toCompute{};
+    toCompute.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+    toCompute.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    toCompute.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+                         VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &toCompute, 0, nullptr, 0, nullptr);
+    const int stride = 4;
+    struct Push { float range[4]; int32_t size[4]; } p{};
+    p.range[0] = kLumLog2Min;
+    p.range[1] = 64.0f / kLumLog2Range;
+    p.size[0] = static_cast<int32_t>(swapchainExtent.width);
+    p.size[1] = static_cast<int32_t>(swapchainExtent.height);
+    p.size[2] = stride;
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, lumPipe);
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, lumLayout, 0, 1, &lumSet, 0, nullptr);
+    vkCmdPushConstants(cmd, lumLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(p), &p);
+    const uint32_t gx = (swapchainExtent.width / stride + 15) / 16, gy = (swapchainExtent.height / stride + 15) / 16;
+    vkCmdDispatch(cmd, gx, gy, 1);
+    VkMemoryBarrier toCopy{};
+    toCopy.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+    toCopy.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+    toCopy.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 1, &toCopy, 0, nullptr, 0, nullptr);
+    VkBufferCopy cp{0, 0, 64 * sizeof(uint32_t)};
+    vkCmdCopyBuffer(cmd, lumBuf, lumRead[currentFrame], 1, &cp);
+    VkMemoryBarrier toHost{};
+    toHost.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+    toHost.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    toHost.dstAccessMask = VK_ACCESS_HOST_READ_BIT;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_HOST_BIT, 0, 1, &toHost, 0, nullptr, 0, nullptr);
+    lumPre[currentFrame] = std::max(preExposure(), 1e-30f);
+}
+
+// This slot's last histogram (its fence has passed): the mean log2 luminance between the 35th and the 95th
+// percentiles (the dark half of a night street and the lamps themselves left out), back in scene units
+void VulkanRenderer::Impl::readLumHistogram() {
+    if (lumPre[currentFrame] <= 0.0f || !lumReadMapped[currentFrame]) return;
+    const uint32_t* bins = static_cast<const uint32_t*>(lumReadMapped[currentFrame]);
+    uint64_t total = 0;
+    for (int i = 0; i < 64; ++i) total += bins[i];
+    if (total == 0) return;
+    const double lo = 0.35 * static_cast<double>(total), hi = 0.95 * static_cast<double>(total);
+    double seen = 0, sum = 0, weight = 0;
+    for (int i = 0; i < 64; ++i) {
+        const double n = bins[i];
+        const double a = std::max(seen, lo), b = std::min(seen + n, hi);
+        if (b > a) {
+            const double centre = kLumLog2Min + (i + 0.5) * (kLumLog2Range / 64.0);
+            sum += centre * (b - a);
+            weight += b - a;
+        }
+        seen += n;
+    }
+    if (weight <= 0) return;
+    lumLog2 = static_cast<float>(sum / weight - std::log2(static_cast<double>(lumPre[currentFrame])));
+    lumValid = true;
 }
 
 void VulkanRenderer::Impl::updateGlobalHorizonDescriptor() {
@@ -5182,6 +5511,7 @@ bool VulkanRenderer::Impl::createMaterialResources() {
         return false;
     }
     updateGlobalTerrainNormalDescriptor();   // (binding 5 needs a view before the first frame: the default's)
+    updateSkyDescriptors();                  // (11, 12 likewise)
     return true;
 }
 
@@ -5840,6 +6170,7 @@ void VulkanRenderer::Impl::recordCommandBuffer(VkCommandBuffer cmd, uint32_t ima
     }
     gpuMark(cmd, 0);
     recordClusterBin(cmd);   // the froxels' light lists (ADR-0364), before the scene pass reads them
+    recordSkyView(cmd);      // the physical sky's view (ADR-0367), before the sky and the scene sample it
     recordCrowd(cmd);   // the far travellers' instances, before any pass draws them
 
     // Cascaded shadow maps first (writes the depth array the lit pass samples).
@@ -6062,6 +6393,7 @@ void VulkanRenderer::Impl::recordCommandBuffer(VkCommandBuffer cmd, uint32_t ima
         if (resolve) cloudHistCur = 1 - cloudHistCur;   // next frame writes the other, reading this one
     }
 
+    recordLumHistogram(cmd);   // the frame's brightness, for the auto exposure (ADR-0368)
     // Bloom + SSAO read the scene outputs (always run so their views stay
     // sampleable; composite gates whether they're applied).
     gpuMark(cmd, 3);
@@ -6184,6 +6516,12 @@ void VulkanRenderer::Impl::drawFrame() {
     using GpuClock = std::chrono::steady_clock;
     const auto cw0 = GpuClock::now();
     vkWaitForFences(device, 1, &inFlightFences[currentFrame], VK_TRUE, UINT64_MAX);
+    readLumHistogram();   // (this slot's last measurement, now its fence has passed: ADR-0368)
+    if (pendingSkyDescriptors) {   // the sky view's first frame is drawn: every frame's set 0 now samples it (ADR-0367)
+        vkDeviceWaitIdle(device);
+        updateSkyDescriptors();
+        pendingSkyDescriptors = false;
+    }
     if (crowdReadback[currentFrame].mapped && crowdReadKinds[currentFrame] > 0) {   // the crowd's emitted counts
         vmaInvalidateAllocation(allocator, crowdReadback[currentFrame].alloc, 0, VK_WHOLE_SIZE);
         const uint32_t* c = static_cast<const uint32_t*>(crowdReadback[currentFrame].mapped);
@@ -6625,6 +6963,24 @@ void VulkanRenderer::shutdown() {
     }
     if (impl->pipelineLayout) vkDestroyPipelineLayout(impl->device, impl->pipelineLayout, nullptr);
     if (impl->binPipe) vkDestroyPipeline(impl->device, impl->binPipe, nullptr);
+    if (impl->skyPipe) vkDestroyPipeline(impl->device, impl->skyPipe, nullptr);
+    if (impl->lumPipe) vkDestroyPipeline(impl->device, impl->lumPipe, nullptr);
+    if (impl->lumLayout) vkDestroyPipelineLayout(impl->device, impl->lumLayout, nullptr);
+    if (impl->lumPool) vkDestroyDescriptorPool(impl->device, impl->lumPool, nullptr);
+    if (impl->lumSetLayout) vkDestroyDescriptorSetLayout(impl->device, impl->lumSetLayout, nullptr);
+    if (impl->lumBuf) vkDestroyBuffer(impl->device, impl->lumBuf, nullptr);
+    if (impl->lumMem) vkFreeMemory(impl->device, impl->lumMem, nullptr);
+    for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
+        if (impl->lumReadMem[i]) vkUnmapMemory(impl->device, impl->lumReadMem[i]);
+        if (impl->lumRead[i]) vkDestroyBuffer(impl->device, impl->lumRead[i], nullptr);
+        if (impl->lumReadMem[i]) vkFreeMemory(impl->device, impl->lumReadMem[i], nullptr);
+    }
+    if (impl->skyLayout) vkDestroyPipelineLayout(impl->device, impl->skyLayout, nullptr);
+    if (impl->skyPool) vkDestroyDescriptorPool(impl->device, impl->skyPool, nullptr);
+    if (impl->skySetLayout) vkDestroyDescriptorSetLayout(impl->device, impl->skySetLayout, nullptr);
+    if (impl->skyViewView) vkDestroyImageView(impl->device, impl->skyViewView, nullptr);
+    if (impl->skyViewImage) vkDestroyImage(impl->device, impl->skyViewImage, nullptr);
+    if (impl->skyViewMemory) vkFreeMemory(impl->device, impl->skyViewMemory, nullptr);
     if (impl->binLayout) vkDestroyPipelineLayout(impl->device, impl->binLayout, nullptr);
     if (impl->binPool) vkDestroyDescriptorPool(impl->device, impl->binPool, nullptr);
     if (impl->binSetLayout) vkDestroyDescriptorSetLayout(impl->device, impl->binSetLayout, nullptr);
@@ -7133,6 +7489,48 @@ void VulkanRenderer::setEnvironmentMap(TextureHandle equirect) {
     impl->updateGlobalEnvDescriptor();
 }
 
+bool VulkanRenderer::measuredSceneLuminance(float& log2Units) const {
+    if (!impl->lumValid) return false;
+    log2Units = impl->lumLog2;
+    return true;
+}
+
+// THE PHYSICAL SKY's tables (ADR-0367): uploaded as RGBA16F, and the sky-view pass pointed at them
+void VulkanRenderer::setSkyTables(const float* transmittance, int tw, int th, const float* multiScatter, int mw, int mh) {
+    if (!impl->device || !transmittance || !multiScatter) return;
+    vkDeviceWaitIdle(impl->device);   // (the old tables may be in use)
+    if (impl->skyTransTex.valid()) removeTexture(impl->skyTransTex);
+    if (impl->skyMsTex.valid()) removeTexture(impl->skyMsTex);
+    impl->skyTransTex = uploadTextureHDR(tw, th, 3, transmittance);
+    impl->skyMsTex = uploadTextureHDR(mw, mh, 3, multiScatter);
+    GpuTexture* tr = impl->textures.get(impl->skyTransTex);
+    GpuTexture* ms = impl->textures.get(impl->skyMsTex);
+    if (!tr || !ms || !tr->view || !ms->view || !impl->ensureSkyView()) {
+        LOG_WARN("[vulkan] physical sky: the tables did not upload; the procedural sky stands");
+        return;
+    }
+    VkDescriptorImageInfo img[3]{};
+    img[0].imageView = impl->skyViewView;
+    img[0].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+    img[1].sampler = impl->brdfLutSampler;
+    img[1].imageView = tr->view;
+    img[1].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    img[2] = img[1];
+    img[2].imageView = ms->view;
+    VkWriteDescriptorSet w[3]{};
+    for (int k = 0; k < 3; ++k) {
+        w[k].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        w[k].dstSet = impl->skySet;
+        w[k].dstBinding = static_cast<uint32_t>(k);
+        w[k].descriptorCount = 1;
+        w[k].descriptorType = k == 0 ? VK_DESCRIPTOR_TYPE_STORAGE_IMAGE : VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        w[k].pImageInfo = &img[k];
+    }
+    vkUpdateDescriptorSets(impl->device, 3, w, 0, nullptr);
+    impl->updateSkyDescriptors();
+    LOG_INFO("[vulkan] physical sky: tables %dx%d and %dx%d uploaded", tw, th, mw, mh);
+}
+
 void VulkanRenderer::setTerrainHorizon(TextureHandle map, float originX, float originZ,
                                        float extent, float encodeLo, float encodeHi) {
     GpuTexture* t = impl->textures.get(map);
@@ -7382,6 +7780,23 @@ void VulkanRenderer::setLights(const SceneLighting& lighting) {
     impl->cpuGlobals.skyCloud[3] = sky.cloudTime;
     // envMode: 1 = HDR equirect (when bound and the live toggle is on), else 0 = procedural.
     impl->cpuGlobals.counts[2] = (impl->envBound && environmentMapEnabled) ? 1 : 0;
+    // THE PHYSICAL SKY (ADR-0367): envMode 2 once its view is being drawn and the sets point at it
+    impl->skyFrame = lighting.physicalSky;
+    impl->skyPhysicalOn = lighting.physicalSky.enabled && impl->skyPipe != VK_NULL_HANDLE && impl->cpuGlobals.counts[2] == 0;
+    if (impl->skyPhysicalOn && impl->skyViewGeneral && !impl->pendingSkyDescriptors) impl->cpuGlobals.counts[2] = 2;
+    {
+        const PhysicalSkyFrame& f = lighting.physicalSky;
+        impl->cpuGlobals.skyPhysical[0] = f.groundRadius;
+        impl->cpuGlobals.skyPhysical[1] = f.cameraHeight;
+        impl->cpuGlobals.skyPhysical[2] = f.lightTop;
+        impl->cpuGlobals.skyPhysical[3] = std::cos(f.sunAngularRadius);
+        impl->cpuGlobals.skyPhysical2[0] = f.sunDisc;
+        impl->cpuGlobals.skyPhysical2[1] = f.otherTop;
+        impl->cpuGlobals.skyPhysical2[2] = f.topRadius;
+        impl->cpuGlobals.skyPhysical2[3] = 0.0f;
+        impl->cpuGlobals.skyPhysical3[0] = f.lightIsSun ? 1.0f : 0.0f;
+        impl->cpuGlobals.skyPhysical3[1] = f.celestialScale;
+    }
     impl->sceneExposure = lighting.exposure;
 
     // Aerial-perspective fog (matches Metal's lightData.fog* + the offline tracer).

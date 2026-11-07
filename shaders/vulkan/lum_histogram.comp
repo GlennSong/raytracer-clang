@@ -1,0 +1,30 @@
+#version 450
+// THE FRAME'S BRIGHTNESS (ADR-0368: auto exposure): a histogram of the pre-exposed scene's log2 luminance, every
+// `stride`-th pixel, 64 bins over [log2 min, log2 min + range). Read back two frames later; the CPU takes the mean of
+// the middle of it (the darkest and the brightest pixels left out) and the exposure eases toward it.
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(set = 0, binding = 0) uniform sampler2D hdr;
+layout(std430, set = 0, binding = 1) buffer Hist { uint bins[64]; };
+
+layout(push_constant) uniform Push {
+    vec4 range;    // x log2 of the lowest bin, y 64 / the range in stops
+    ivec4 size;    // xy the image, z the stride
+} pc;
+
+shared uint local[64];
+
+void main() {
+    uint t = gl_LocalInvocationIndex;
+    if (t < 64u) local[t] = 0u;
+    barrier();
+    ivec2 px = ivec2(gl_GlobalInvocationID.xy) * pc.size.z;
+    if (px.x < pc.size.x && px.y < pc.size.y) {
+        vec3 c = texelFetch(hdr, px, 0).rgb;
+        float l = dot(c, vec3(0.2126, 0.7152, 0.0722));
+        int b = l > 1e-12 ? clamp(int((log2(l) - pc.range.x) * pc.range.y), 0, 63) : 0;
+        atomicAdd(local[b], 1u);
+    }
+    barrier();
+    if (t < 64u && local[t] > 0u) atomicAdd(bins[t], local[t]);
+}

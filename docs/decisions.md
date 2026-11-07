@@ -16711,3 +16711,74 @@ the scene was stored.
   - `RT_PREEXPOSE=0` keeps the old order for the A/B.
 - **Proof:** river_town towers and street at 22:00 and at noon, old order against new. Means equal (43.3/43.3,
   82.3/82.3, 45.5/45.7, 37.1/37.0); the differing pixels are palm fronds in the wind.
+
+## ADR-0367 — The physical sky on Vulkan (behind RT_SKY=physical)
+
+**Context.** Renderer-realism phase 2. Glenn: "We should probably do physical based lighting for the sky too". The
+Vulkan sky was a hand-made palette over the day (`day_night_cycle.cpp`). Metal had a Hillaire-style scattering sky,
+opt-in per level and tuned to the old exposure, with a uniform multiple-scattering stand-in and no test.
+
+**Decision.**
+- **One model, CPU first** (`engine/sky/sky_atmosphere.h`). Hillaire 2020:
+  - Rayleigh, Mie and ozone on a spherical planet;
+  - a transmittance table (Bruneton's mapping, 256 × 64);
+  - a multiple-scattering table (32 × 32, the second order's isotropic light and the series' 1 / (1 − f));
+  - `atmosphereSkyRadiance` marched from them; `atmosphereSkyIrradiance` cosine-weighted.
+
+  Radiance is per unit of illuminance above the air, times the sun's 128,000 lux or the moon's 0.32 × its lit
+  fraction, in engine units (ADR-0366).
+- **Tests** (`test_sky_atmosphere`):
+  - transmittance straight up is the closed form;
+  - the tables match the exact march;
+  - noon: 103,000 lux of sun on the ground, a blue zenith of 1,950 cd/m^2, 9,000 lux of sky light;
+  - sunset reddens the sun and the horizon toward it, and stays blue high up the other way;
+  - 4° below the horizon the zenith still glows (13 cd/m^2); at 20° below it is black.
+- **The GPU's sky view** (`sky_view.comp`, 192 × 108, Hillaire's sky-view mapping): the same march, reading the CPU's
+  two tables (uploaded by `Renderer::setSkyTables`).
+  - Rebuilt every frame, lit by the active light (the sun by day, the moon by night) and the other.
+  - Sampled at set 0 binding 11 (the transmittance at 12) by `sky_physical.glsl`, shared by `sky.frag` and `mesh.frag`.
+- **What reads it** (envMode 2):
+  - the sky you see, with the sun's disc through the air (capped to stay in fp16) and its aureole;
+  - the ambient and reflections (the dome toward the normal and the reflection);
+  - the fog's colour (the dome toward the far point);
+  - the stars, the moon's phased disc and the city glow, scaled into units (`celestialScale`, interim).
+- **`DayNightSystem` in physical mode** (`RT_SKY=physical`):
+  - The sun and the moon are read through the model (`readSky`: their colour and strength at the camera, the dome's
+    zenith, horizon and ground, the sky's irradiance), so the clouds, the underwater view and the glass's room read
+    physical colours.
+  - The active light is whichever lights the ground more.
+  - The ambient multiplier is 1: the sky's own light.
+- **Default off**: the night is not right until the emitters are physical (ADR-0368).
+
+**Seen** (river_town towers, `~/Pictures/Raytracer/2026-11-07_physical_sky_v1_old_meter_auto.png`): noon a deeper
+blue than the palette; 17:00 a real golden hour (warm light, lit clouds).
+
+## ADR-0368 — Auto exposure, from the frame
+
+**Context.** A physical sky spans 16 stops. The interim incident meter (ADR-0367: the light falling on the ground,
+EV100 = log2(E × 100 / 400), so a clear noon gives the level's 0.7) exposes a night street for its moonlight, as a
+long exposure would, and every lamp blows out.
+
+**Decision.**
+- **`lum_histogram.comp`**: a 64-bin histogram of the pre-exposed scene's log2 luminance (2^-14 .. 2^8), every fourth
+  pixel, after the clouds and before the post.
+  - It is copied out per frame in flight and read when that slot's fence passes (`readLumHistogram`).
+  - The mean between the 35th and 95th percentiles (a night street's dark half and the lamps themselves left out),
+    less the pre-exposure that frame was drawn with, is the scene's log2 luminance in units
+    (`Renderer::measuredSceneLuminance`).
+- **The eye** (`DayNightSystem`, physical mode):
+  - the target is key / L × the level's bias (its authored exposure / 0.7);
+  - the key is 0.18 above 100 cd/m^2, easing to a quarter of that by 0.01 cd/m^2, so a night street stays a night
+    street;
+  - eased toward with τ = 0.5 s into the light and 1.2 s into the dark, within EV100 −3 .. 17.
+- `RT_EXPOSURE=meter` keeps the meter (the A/B).
+
+**Seen.** Noon and 17:00 land where the meter put them. At dusk and night the eye adapts to the lamps and the lit
+windows, which are still tuned for the old ×6 night exposure (about 500× brighter than real). So it darkens until the
+sky is black and the lamp-lit facades look like day.
+
+**Next: the emitters' physical values.**
+- Street lamps about 1,600 cd, headlights about 20,000 cd in the beam, rooms 500 lux on a desk.
+- Lit windows about 200 cd/m^2, signs about 1,000.
+- The city's sky glow from the light the city sends up.
+- Then physical becomes the default and the palette, `kNightAdapt` and the emitters' night-exposure divisions go.

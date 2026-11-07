@@ -1,0 +1,129 @@
+#version 450
+// THE SKY VIEW (ADR-0367): the dome's radiance as seen from the camera's height, in Hillaire's sky-view mapping (u the
+// sqrt-warped azimuth from the sun, v the view zenith with the horizon fixed on the middle row), rebuilt every frame.
+// The same march as engine/sky/sky_atmosphere.cpp atmosphereSkyRadiance, reading the CPU's two tables
+// (transmittance, multiple scattering) -- one model, two sides. Lit by the sun and the moon both, each with its
+// illuminance at the top of the atmosphere in engine units (ADR-0366), so twilight and moonlight share one texture.
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(set = 0, binding = 0, rgba16f) uniform writeonly image2D skyView;
+layout(set = 0, binding = 1) uniform sampler2D transLut;   // RGB transmittance, Bruneton (r, mu)
+layout(set = 0, binding = 2) uniform sampler2D msLut;      // RGB multiple scattering, (muS, h)
+
+layout(push_constant) uniform Push {
+    vec4 planet;     // x ground radius, y top radius, z camera height (m), w Mie g
+    vec4 rayleigh;   // rgb scattering /m, w scale height
+    vec4 mie;        // x scattering, y extinction /m, z scale height, w 0
+    vec4 sun;        // xyz toward the sun, w its illuminance at the top (units)
+    vec4 moon;       // xyz toward the moon, w its illuminance at the top (units)
+    vec4 ground;     // rgb albedo
+    vec4 ozone;      // rgb absorption /m at its peak
+} pc;
+
+const float PI = 3.14159265;
+
+float distToTop(float r, float mu, float rt) {
+    float d = r * r * (mu * mu - 1.0) + rt * rt;
+    return max(-r * mu + sqrt(max(d, 0.0)), 0.0);
+}
+float distToGround(float r, float mu, float rg) {
+    float d = r * r * (mu * mu - 1.0) + rg * rg;
+    if (d < 0.0 || mu >= 0.0) return -1.0;
+    float t = -r * mu - sqrt(d);
+    return t > 0.0 ? t : -1.0;
+}
+vec3 transmittance(float r, float mu) {
+    float rg = pc.planet.x, rt = pc.planet.y;
+    r = clamp(r, rg, rt);
+    float horizonMu = -sqrt(max(1.0 - (rg * rg) / (r * r), 0.0));
+    if (mu < horizonMu) return vec3(0.0);
+    float H = sqrt(max(rt * rt - rg * rg, 0.0));
+    float rho = sqrt(max(r * r - rg * rg, 0.0));
+    float d = distToTop(r, mu, rt), dMin = rt - r, dMax = rho + H;
+    vec2 uv = vec2(clamp((d - dMin) / max(dMax - dMin, 1e-4), 0.0, 1.0), clamp(rho / max(H, 1e-4), 0.0, 1.0));
+    return textureLod(transLut, uv, 0.0).rgb;
+}
+vec3 multiScatter(float r, float muS) {
+    vec2 uv = vec2(clamp(muS * 0.5 + 0.5, 0.0, 1.0), clamp((r - pc.planet.x) / (pc.planet.y - pc.planet.x), 0.0, 1.0));
+    return textureLod(msLut, uv, 0.0).rgb;
+}
+float ozoneDensity(float h) { return max(0.0, 1.0 - abs(h - 25000.0) / 15000.0); }
+
+// the radiance toward `dir` from height r, lit from `light` (per unit of top illuminance)
+vec3 march(float r, vec3 dir, vec3 light) {
+    float rg = pc.planet.x, rt = pc.planet.y;
+    vec3 x0 = vec3(0.0, r, 0.0);
+    float tg = distToGround(r, dir.y, rg);
+    float tMax = tg > 0.0 ? tg : distToTop(r, dir.y, rt);
+    if (tMax <= 0.0) return vec3(0.0);
+    float nu = dot(dir, light);
+    float phaseR = 3.0 / (16.0 * PI) * (1.0 + nu * nu);
+    float g = pc.planet.w, g2 = g * g;
+    float phaseM = 3.0 / (8.0 * PI) * ((1.0 - g2) * (1.0 + nu * nu)) / ((2.0 + g2) * pow(1.0 + g2 - 2.0 * g * nu, 1.5));
+    const int STEPS = 32;
+    float ds = tMax / float(STEPS);
+    vec3 T = vec3(1.0), L = vec3(0.0);
+    for (int i = 0; i < STEPS; ++i) {
+        vec3 p = x0 + dir * ((float(i) + 0.5) * ds);
+        float rp = length(p);
+        float h = max(rp - rg, 0.0);
+        vec3 sR = pc.rayleigh.rgb * exp(-h / pc.rayleigh.w);
+        float sM = pc.mie.x * exp(-h / pc.mie.z);
+        vec3 ext = max(sR + vec3(pc.mie.y * exp(-h / pc.mie.z)) + pc.ozone.rgb * ozoneDensity(h), vec3(1e-12));
+        float muS = dot(p / rp, light);
+        vec3 S = transmittance(rp, muS) * (sR * phaseR + vec3(sM) * phaseM) + (sR + vec3(sM)) * multiScatter(rp, muS);
+        vec3 stepT = exp(-ext * ds);
+        L += T * (S - S * stepT) / ext;
+        T *= stepT;
+    }
+    if (tg > 0.0) {
+        vec3 p = x0 + dir * tg;
+        vec3 n = p / length(p);
+        float muG = dot(n, light);
+        L += T * transmittance(rg, muG) * pc.ground.rgb * (max(muG, 0.0) / PI);
+    }
+    return L;
+}
+
+void main() {
+    ivec2 size = imageSize(skyView);
+    ivec2 px = ivec2(gl_GlobalInvocationID.xy);
+    if (px.x >= size.x || px.y >= size.y) return;
+    vec2 uv = (vec2(px) + 0.5) / vec2(size);
+    float rg = pc.planet.x;
+    float r = rg + max(pc.planet.z, 0.5);
+    // Hillaire's mapping (sky_atmosphere.h, the sampler in sky.frag / mesh.frag): v < 0.5 above the horizon
+    float vHorizon = sqrt(max(r * r - rg * rg, 0.0));
+    float beta = acos(clamp(vHorizon / r, -1.0, 1.0));
+    float zenithHorizon = PI - beta;
+    float viewZenith;
+    if (uv.y < 0.5) {
+        float c = 1.0 - 2.0 * uv.y;
+        viewZenith = zenithHorizon * (1.0 - c * c);
+    } else {
+        float c = 2.0 * uv.y - 1.0;
+        viewZenith = zenithHorizon + beta * (c * c);
+    }
+    float azim = uv.x * uv.x * PI;   // from the sun, mirrored
+    float sz = sin(viewZenith);
+    // in the LUT's frame the sun lies along +x at its height; the moon keeps its azimuth from the sun
+    vec3 dir = vec3(sz * cos(azim), cos(viewZenith), sz * sin(azim));
+    vec3 sunH = vec3(pc.sun.x, 0.0, pc.sun.z);
+    float sunHl = length(sunH);
+    vec3 sun = vec3(sqrt(max(1.0 - pc.sun.y * pc.sun.y, 0.0)), pc.sun.y, 0.0);
+    vec3 L = pc.sun.w > 0.0 ? march(r, dir, sun) * pc.sun.w : vec3(0.0);
+    if (pc.moon.w > 0.0) {
+        // the moon's direction in the sun's frame: its azimuth relative to the sun's
+        vec3 mH = vec3(pc.moon.x, 0.0, pc.moon.z);
+        float a = 0.0;
+        if (sunHl > 1e-4 && length(mH) > 1e-4) {
+            vec3 s = sunH / sunHl, m = mH / length(mH);
+            a = atan(s.x * m.z - s.z * m.x, dot(s, m));
+        }
+        float mh = sqrt(max(1.0 - pc.moon.y * pc.moon.y, 0.0));
+        vec3 moon = vec3(mh * cos(a), pc.moon.y, mh * sin(a));
+        L += march(r, dir, moon) * pc.moon.w;
+    }
+    imageStore(skyView, px, vec4(L, 1.0));
+}

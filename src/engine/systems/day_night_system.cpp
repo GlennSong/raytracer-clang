@@ -519,6 +519,7 @@ void DayNightSystem::fixedUpdate(FrameContext& ctx) {
 }
 
 void DayNightSystem::update(FrameContext& ctx) {
+    lastDt_ = static_cast<float>(ctx.frameDelta);
 #ifdef __EMSCRIPTEN__
     // The web build has no Dear ImGui, so the page's debug panel drives the
     // cycle through settings instead (rt_web_env in web_main.cpp). Re-read them
@@ -653,6 +654,110 @@ void DayNightSystem::applyLighting(FrameContext& ctx) {
         std::min(1.0, std::max(0.0, (st.solarElevation + 0.10) / 0.30)));
     const float dayEase = dayF * dayF * (3.0f - 2.0f * dayF);
     lit.exposure = baseExposure_ * (1.0f + (kNightAdapt - 1.0f) * (1.0f - dayEase));
+    nightAdapt_ = baseExposure_ > 0.0f ? lit.exposure / baseExposure_ : 1.0f;
+
+    static const bool physical = [] { const char* e = std::getenv("RT_SKY"); return e && std::string(e) == "physical"; }();
+    if (physical) applyPhysicalSky(ctx, st);
+    else lit.physicalSky.enabled = false;
+}
+
+// THE PHYSICAL SKY (ADR-0367): the sun and the moon through the atmosphere model -- their colour and strength at the
+// camera, the sky's colours for everything that reads the day model's (the clouds, underwater, the glass's room), its
+// light as the ambient -- and the renderer's sky view fed. Exposure, until the eye adapts (ADR-0368): an incident light
+// meter on what falls on the ground, set so a clear noon gives the level's authored exposure.
+void DayNightSystem::applyPhysicalSky(FrameContext& ctx, const DayNightState& st) {
+    auto& lit = ctx.view.lighting;
+    if (!skyTablesBuilt_) {
+        buildAtmosphereTables(atmosphereFrom(lit.skyScattering), skyTables_);
+        ctx.renderer.setSkyTables(skyTables_.transmittance.data(), AtmosphereTables::kTransW, AtmosphereTables::kTransH,
+                                  skyTables_.multiScatter.data(), AtmosphereTables::kMsW, AtmosphereTables::kMsH);
+        skyTablesBuilt_ = true;
+    }
+    const double height = std::max(0.0, ctx.view.camera.position.y);
+    const double sunTop = kSunTopLux / kLuxPerUnit;
+    const float moonTop = static_cast<float>(kFullMoonTopLux * st.moonIllumination / kLuxPerUnit);
+    if ((st.sunDirection - readSunDir_).length() > 0.002 || std::fabs(height - readHeight_) > 50.0) {
+        sunReading_ = readSky(skyTables_, height, st.sunDirection, sunTop);
+        readSunDir_ = st.sunDirection;
+        readHeight_ = height;
+        readMoonDir_ = Vec3(0, -2, 0);   // (and the moon again, at this height)
+    }
+    if ((st.moonDirection - readMoonDir_).length() > 0.002 || std::fabs(moonTop - readMoonTop_) > 1e-9f) {
+        moonReading_ = readSky(skyTables_, height, st.moonDirection, moonTop);
+        readMoonDir_ = st.moonDirection;
+        readMoonTop_ = moonTop;
+    }
+    // the active light: whichever lights the ground more (the moon only once the sun is down)
+    const double sunGround = sunReading_.lightIntensity * std::max(0.0, st.sunDirection.y);
+    const double moonGround = moonReading_.lightIntensity * std::max(0.0, st.moonDirection.y);
+    const bool sunActive = sunGround >= moonGround;
+    const SkyReading& act = sunActive ? sunReading_ : moonReading_;
+    const float weatherSun = weatherActive ? weather.sunScale : 1.0f;
+    lit.sun.direction = sunActive ? st.sunDirection : st.moonDirection;
+    lit.sun.color = act.lightColor;
+    lit.sun.intensity = static_cast<float>(act.lightIntensity) * weatherSun;
+    lit.sky.sunDirection = lit.sun.direction;
+    lit.sky.sunColor = act.lightColor;
+    lit.sky.zenithColor = sunReading_.zenith + moonReading_.zenith;
+    lit.sky.horizonColor = sunReading_.horizon + moonReading_.horizon;
+    lit.sky.groundColor = sunReading_.ground + moonReading_.ground;
+    lit.ambientMultiplier = weatherActive ? weather.ambientScale : 1.0f;   // the sky's own light: no day-shape scale
+
+    PhysicalSkyFrame& f = lit.physicalSky;
+    const Atmosphere& a = skyTables_.atm;
+    f.enabled = true;
+    f.lightDir = lit.sun.direction;
+    f.lightTop = static_cast<float>(sunActive ? sunTop : moonTop) * weatherSun;
+    f.otherDir = sunActive ? st.moonDirection : st.sunDirection;
+    f.otherTop = static_cast<float>(sunActive ? moonTop : sunTop);
+    f.lightIsSun = sunActive;
+    f.cameraHeight = static_cast<float>(height);
+    f.groundRadius = static_cast<float>(a.groundRadius);
+    f.topRadius = static_cast<float>(a.topRadius);
+    f.rayleigh = a.rayleighScatter;
+    f.rayleighHeight = static_cast<float>(a.rayleighHeight);
+    f.mieScatter = static_cast<float>(a.mieScatter);
+    f.mieExtinction = static_cast<float>(a.mieExtinction);
+    f.mieHeight = static_cast<float>(a.mieHeight);
+    f.mieG = static_cast<float>(a.mieG);
+    f.ozone = a.ozoneAbsorb;
+    f.groundAlbedo = a.groundAlbedo;
+    f.sunAngularRadius = lit.skyScattering.sunAngularRadius;
+    f.sunDisc = lit.sky.sunDiscIntensity > 0.0f ? 1.0f : 0.0f;
+    f.celestialScale = 1.0e-5f;   // (the stars and the moon's disc were tuned at the old night exposure; ADR-0367)
+
+    // THE METER: incident light on the ground (sun or moon, and the sky), EV100 = log2(E * 100 / C), exposure =
+    // kLuxPerUnit / (1.2 * 2^EV); C = 400 puts a clear noon (~99,000 lux) at exposure 0.7. The level's authored
+    // exposure is the bias against that.
+    const double groundLux = (sunGround + moonGround + sunReading_.irradianceUp.y + moonReading_.irradianceUp.y) * kLuxPerUnit;
+    const double ev = std::log2(std::max(groundLux, 1e-4) * 100.0 / 400.0);
+    const double meter = kLuxPerUnit / (1.2 * std::exp2(ev));
+    const double bias = baseExposure_ / 0.7;
+    lit.exposure = static_cast<float>(meter * bias);
+
+    // THE EYE (ADR-0368): the renderer's measure of the frame (the middle of its luminance histogram), and the exposure
+    // that puts it at a key -- mid grey by day, lower in the dark, so a night street stays a night street -- eased
+    // toward over a second or so (faster into the light than out of it), within EV100 -3 .. 17.
+    // RT_EXPOSURE=meter: the meter alone (the A/B).
+    static const bool meterOnly = [] { const char* e = std::getenv("RT_EXPOSURE"); return e && std::string(e) == "meter"; }();
+    float log2L = 0.0f;
+    if (!meterOnly && ctx.renderer.measuredSceneLuminance(log2L)) {
+        const double L = std::exp2(static_cast<double>(log2L));   // units
+        const double nits = L * kLuxPerUnit;
+        const double s = std::clamp((std::log10(std::max(nits, 1e-6)) + 2.0) / 4.0, 0.0, 1.0);   // 0.01 .. 100 cd/m^2
+        const double key = 0.18 * (0.25 + 0.75 * s * s * (3.0 - 2.0 * s));
+        double target = key / std::max(L, 1e-12) * bias;
+        const double lo = kLuxPerUnit / (1.2 * std::exp2(17.0)), hi = kLuxPerUnit / (1.2 * std::exp2(-3.0));
+        target = std::clamp(target, lo, hi);
+        if (autoExposure_ <= 0.0f) {
+            autoExposure_ = static_cast<float>(target);
+        } else {
+            const double tau = target > autoExposure_ ? 1.2 : 0.5;   // into the dark slower, into the light faster
+            const double k = 1.0 - std::exp(-std::max(0.0f, std::min(lastDt_, 0.25f)) / tau);
+            autoExposure_ = static_cast<float>(std::exp(std::log(autoExposure_) + (std::log(target) - std::log(autoExposure_)) * k));
+        }
+        lit.exposure = autoExposure_;
+    }
     nightAdapt_ = baseExposure_ > 0.0f ? lit.exposure / baseExposure_ : 1.0f;
 }
 

@@ -512,6 +512,29 @@ struct SkyScatteringParams {
     float sunAngularRadius = 0.0047f;     // radians (~0.27°, the real sun)
 };
 
+// THE PHYSICAL SKY THIS FRAME (ADR-0367; engine/sky/sky_atmosphere.h): when on, the renderer draws the sky, its light
+// on surfaces and the haze from the atmosphere model -- a sky-view texture rebuilt each frame from the tables
+// setSkyTables gave it, lit by the active light (the sun by day, the moon by night: SceneLighting::sun) and the other
+// one -- in engine light units (ADR-0366). Off: the procedural sky (ProceduralSky) as before.
+struct PhysicalSkyFrame {
+    bool enabled = false;
+    Vec3 lightDir{0, 1, 0};   float lightTop = 0;    // the active light: toward it, its illuminance above the air
+    Vec3 otherDir{0, -1, 0};  float otherTop = 0;    // the other one (the moon by day, the sun by night)
+    float cameraHeight = 2;                          // m above the ground the atmosphere stands on
+    float groundRadius = 6360000, topRadius = 6460000;
+    Vec3 rayleigh{5.802e-6, 13.558e-6, 33.1e-6};
+    float rayleighHeight = 8000;
+    float mieScatter = 3.996e-6f, mieExtinction = 4.40e-6f, mieHeight = 1200, mieG = 0.8f;
+    Vec3 ozone{0.650e-6, 1.881e-6, 0.085e-6};
+    Vec3 groundAlbedo{0.3, 0.3, 0.3};
+    float sunAngularRadius = 0.0047f;
+    float sunDisc = 1.0f;     // the disc's visibility (a ridge in front of it: 0)
+    bool lightIsSun = true;   // the active light is the sun (its disc is drawn); else the moon, drawn as itself
+    // the stars, the moon's phased disc and the city's glow were tuned against the old night exposure; this takes
+    // them into units until they are physical too (ADR-0367)
+    float celestialScale = 1.0f;
+};
+
 // Volumetric cloud layer (cinematic-sky phase). Opt-in per level via
 // "environment": {"clouds": {...}}. A slab [bottom, top] of raymarched clouds
 // rendered at half resolution after the scene (depth-occluded) and upsampled
@@ -626,6 +649,7 @@ struct SceneLighting {
     FogParams fog;
     UnderwaterParams underwater;
     SkyScatteringParams skyScattering;      // cinematic-sky opt-in (per level)
+    PhysicalSkyFrame physicalSky;           // the physical sky (ADR-0367), written by DayNightSystem
     VolumetricCloudParams volumetricClouds; // cloud-slab opt-in (per level)
     float exposure = 1.0f;
     float ambientMultiplier = 0.3f;
@@ -826,6 +850,14 @@ public:
     // [originX, originX + extent) x [originZ, originZ + extent), encoded
     // encodeLo..encodeHi. The lit pass shadows fragments whose light sits
     // below it. An invalid handle switches it off. No-op by default.
+    // THE FRAME'S MEASURED BRIGHTNESS (ADR-0368, auto exposure): the log2 of the scene's average luminance in engine
+    // units (the middle of a histogram of the drawn frame, before exposure), a couple of frames old. False: no
+    // measurement (a renderer that does not take one, or none yet).
+    virtual bool measuredSceneLuminance(float& /*log2Units*/) const { return false; }
+    // THE PHYSICAL SKY's tables (ADR-0367: sky_atmosphere.h AtmosphereTables): transmittance and multiple scattering,
+    // RGB floats row by row. Uploaded when the atmosphere changes; the sky-view pass samples them each frame.
+    virtual void setSkyTables(const float* /*transmittance*/, int /*tw*/, int /*th*/, const float* /*multiScatter*/,
+                              int /*mw*/, int /*mh*/) {}
     virtual void setTerrainHorizon(TextureHandle /*map*/, float /*originX*/,
                                    float /*originZ*/, float /*extent*/,
                                    float /*encodeLo*/, float /*encodeHi*/) {}
