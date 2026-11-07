@@ -85,6 +85,12 @@ private:
     ControlCommands::Binding repairCmd_;
     bool repairStaged_ = false;
     UiText carHud_;
+    // THE PUMP (ADR-0357): the player's car stopped on a FuelStop -- hold R to fill the tank, and with it full, R once
+    // more has the station fix the car. atPump_ is the step's answer (the readout's prompt); filling_ the hold
+    void servicePumps(FrameContext& ctx);
+    bool atPump_ = false, filling_ = false, serviceWasHeld_ = false;
+    ControlCommands::Binding fuelCmd_;
+    Real fuelStaged_ = -1;   // `vehicle_fuel <litres>`: the tank set on the next step
     // DAMAGE (ADR-0353): the step's touches (from the Collision events) spent on the cars they hit
     void applyDamage(FrameContext& ctx);
     void detachPanel(FrameContext& ctx, Entity car, Vehicle& v, int panel, const Vec3& kick);

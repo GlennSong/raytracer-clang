@@ -6,6 +6,7 @@
 #include "../player/seat_geometry.h"    // SeatGeometry
 #include "../world.h"                    // Entity, World
 #include "../vehicle_damage.h"            // DamageRule
+#include "../vehicle_fuel.h"              // FuelRule
 #include <memory>
 #include <string>
 #include <vector>
@@ -59,6 +60,12 @@ struct VehicleSpec {
     std::vector<Panel> panels;
     // its damage tuning (ADR-0355): the spec's `damage` table (vehicles.lua KIT_DAMAGE), else the defaults
     DamageRule damage;
+    // its tank (ADR-0357): the spec's `fuel` table (vehicles.lua KIT_FUEL), else the defaults
+    FuelRule fuel;
+    // its cargo space (ADR-0358): the spec's `cargo = { lo = {x,y,z}, hi = {x,y,z}, panel = "trunk" }`, chassis frame
+    bool hasCargo = false;
+    Vec3 cargoLo{0, 0, 0}, cargoHi{0, 0, 0};
+    std::string cargoPanel;   // empty: open to the sky
 
     // Named lamp mount points from the recipe's `lights` array — the same marker
     // format citysim's traffic already uses, so one generator feeds both. Names

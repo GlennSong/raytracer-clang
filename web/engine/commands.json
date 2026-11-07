@@ -48,6 +48,12 @@
   "usage": "camera?"
  },
  {
+  "name": "carry_spawn",
+  "owner": "engine",
+  "summary": "Put a carry_items.lua thing (box, crate, ...) down in front of the player, to pick up and stow (ADR-0358).",
+  "usage": "carry_spawn [name]"
+ },
+ {
   "name": "citymap",
   "owner": "engine",
   "summary": "Write the running level's layered city map as SVG.",
@@ -174,6 +180,18 @@
   "usage": "fog?"
  },
  {
+  "name": "frame",
+  "owner": "engine",
+  "summary": "Put the free camera where a world box, or the n-th grown lot of a recipe (lots? names them), fills the view at that pitch and yaw (default -30, -45); read frame? for the box and the eye (ADR-0359).",
+  "usage": "frame <x0 y0 z0 x1 y1 z1> [pitch yaw] | frame lot <recipe> [n] [pitch yaw]"
+ },
+ {
+  "name": "frame?",
+  "owner": "engine",
+  "summary": "The last `frame`: what it found, its box and the eye it chose.",
+  "usage": "frame?"
+ },
+ {
   "name": "get",
   "owner": "engine",
   "summary": "Read any Settings key.",
@@ -256,6 +274,12 @@
   "owner": "engine",
   "summary": "What is actually here: the nearest road edge (and whether the point is in it), and the building records around, with their party walls.",
   "usage": "lot? <x> <z> [radius 40]"
+ },
+ {
+  "name": "lots?",
+  "owner": "engine",
+  "summary": "Every recipe the city grew, with how many lots of each (the names `frame lot` takes).",
+  "usage": "lots?"
  },
  {
   "name": "mem?",
@@ -484,6 +508,12 @@
   "owner": "engine",
   "summary": "The player's vehicle: speed, rpm, gear, drive mode, position, and the sim speed.",
   "usage": "vehicle?"
+ },
+ {
+  "name": "vehicle_fuel",
+  "owner": "engine",
+  "summary": "Set the tank of the car the player drives (0: empty, the engine dies; ADR-0357).",
+  "usage": "vehicle_fuel <litres>"
  },
  {
   "name": "vehicle_repair",

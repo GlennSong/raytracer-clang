@@ -981,6 +981,46 @@ TEST_CASE(drivable_spec_carries_its_damage_tuning) {
     CHECK_APPROX(soft.damage.dentDepthMax, base.dentDepthMax, 1e-9);   // (its other fields: the default's)
 }
 
+// ITS TANK (ADR-0357): vehicles.lua KIT_FUEL, the default under each car's own row -- a bus carries far more than a
+// hatchback, and a field a row leaves out is the default's
+TEST_CASE(drivable_spec_carries_its_tank) {
+    VehiclesVM v;
+    CHECK(v.loaded);
+    std::string err;
+    VehicleSpec sedan, hatch, bus;
+    CHECK(loadVehicleSpec(v.vm, "return vehicle.sedan(seed, {})", 1u, sedan, &err));
+    CHECK(loadVehicleSpec(v.vm, "return vehicle.kit_drivable('hatchback', {}, {})", 1u, hatch, &err) ||
+          loadVehicleSpec(v.vm, "return vehicle.hatchback(seed, {})", 1u, hatch, &err));
+    CHECK(loadVehicleSpec(v.vm, "return vehicle.kit_bus(seed, {})", 1u, bus, &err));
+    const FuelRule base;
+    CHECK_APPROX(sedan.fuel.tank, base.tank, 1e-9);
+    CHECK_APPROX(hatch.fuel.tank, 38.0, 1e-9);
+    CHECK_APPROX(hatch.fuel.pace, base.pace, 1e-9);
+    CHECK(bus.fuel.tank > 5 * hatch.fuel.tank);
+}
+
+// ITS CARGO SPACE (ADR-0358): a saloon's boot under its lid, a hatchback's floor behind its hatch, a pickup's bed
+// open to the sky -- each inside the car's own box, at its tail, with room for a box
+TEST_CASE(drivable_cars_carry_a_cargo_space_at_the_tail) {
+    VehiclesVM v;
+    CHECK(v.loaded);
+    std::string err;
+    struct Want { const char* recipe; const char* panel; };
+    for (const Want w : {Want{"sedan", "trunk"}, Want{"hatchback", "hatch"}, Want{"pickup", ""}}) {
+        VehicleSpec spec;
+        CHECK(loadVehicleSpec(v.vm, std::string("return vehicle.") + w.recipe + "(seed, {})", 1u, spec, &err));
+        std::printf("    [cargo] %s: %s, %.2f x %.2f x %.2f at z %.2f..%.2f (panel '%s')\n", w.recipe, spec.hasCargo ? "yes" : "NO",
+                    spec.cargoHi.x - spec.cargoLo.x, spec.cargoHi.y - spec.cargoLo.y, spec.cargoHi.z - spec.cargoLo.z,
+                    spec.cargoLo.z, spec.cargoHi.z, spec.cargoPanel.c_str());
+        CHECK(spec.hasCargo);
+        CHECK(spec.cargoPanel == w.panel);
+        CHECK(spec.cargoHi.x - spec.cargoLo.x > 0.8);
+        CHECK(spec.cargoHi.y - spec.cargoLo.y > 0.36);   // a 0.36 m box stands in it
+        CHECK(spec.cargoHi.z - spec.cargoLo.z > 0.4);
+        CHECK(spec.cargoHi.z < 0.0);                     // behind the middle: the tail end
+    }
+}
+
 // A BUS DRIVEN IS A BUS YOU CAN SEE INTO (Glenn: "the bus has no interior"): the drivable bus carries its saloon as a
 // part fixed to the chassis, as a car carries its cabin.
 TEST_CASE(drivable_bus_carries_its_saloon) {

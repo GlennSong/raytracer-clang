@@ -34,6 +34,7 @@ struct NatureCollider {
 };
 struct NatureColliders {
     struct PieceKind {
+        std::string name;         // what it is (street_props.lua's kind: "bin", "hydrant"), for the carry prompt
         MeshHandle mesh;          // centred on its box (the loose body's)
         RenderMaterial material;
         Real breaksAt = 2.0;

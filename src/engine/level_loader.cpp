@@ -6156,6 +6156,7 @@ bool LevelLoader::load(const std::string& path,
             std::vector<engine::ShopSign> shopSigns;   // ...and the boards that name them
             int depotYards = 0, depotBays = 0;          // the bus depots' bays, to the buses
             int surfaceLots = 0, surfaceStalls = 0;     // the big boxes' and malls' parking lots, to the drivers
+            int fuelStops = 0;                            // the gas stations' pump sides (ADR-0357)
             struct OpenSpot { Vec3 at; Vec2 n; int place; };
             std::vector<OpenSpot> openSpots;            // ...and the OPEN signs in their windows
             MeshHandle pad = assets.acquirePrimitive("box", Vec3(1, 1, 1));   // park pads
@@ -6280,6 +6281,26 @@ bool LevelLoader::load(const std::string& path,
                              << static_cast<int>(m0.m[1][3]) << " " << static_cast<int>(m0.m[2][3]);
                 }
             }
+            {   // THE GROWN LOTS by recipe, boxed (ADR-0359): what `frame lot` and `lots?` find
+                engine::LotSites ls;
+                for (const engine::LotBuilding& lb : grown.lots) {
+                    const engine::Poly2& ring = lb.plan.size() >= 3 ? lb.plan : lb.pad;
+                    if (ring.size() < 3) continue;
+                    engine::LotSites::Site site;
+                    site.recipe = lb.recipe;
+                    site.type = lb.type;
+                    double x0 = 1e30, z0 = 1e30, x1 = -1e30, z1 = -1e30;
+                    for (const engine::Vec2& q : lb.pad.size() >= 3 ? lb.pad : ring) {
+                        x0 = std::min(x0, q.x); x1 = std::max(x1, q.x);
+                        z0 = std::min(z0, q.y); z1 = std::max(z1, q.y);
+                    }
+                    const double y0 = lb.groundY, top = lb.height > 1.0 ? lb.height : 6.0;   // (an open lot: its canopy, its lamps)
+                    site.lo = Vec3(x0, y0, z0);
+                    site.hi = Vec3(x1, std::max(lb.baseY, lb.groundY) + top, z1);
+                    ls.sites.push_back(std::move(site));
+                }
+                world.add<engine::LotSites>(world.create(), std::move(ls));
+            }
             for (const engine::LotBuilding& lb : grown.lots) {
                 const double gy = entityGround ? entityGround(lb.site.x, lb.site.y) : 0.0;
                 // Park FENCES + TREE TRUNKS are solid (drive feedback: "Parks
@@ -6309,12 +6330,14 @@ bool LevelLoader::load(const std::string& path,
                 };
                 for (const auto& fs : lb.fenceSegs)
                     wall(fs.first, fs.second, 0.95, 0.14);
-                for (const engine::LotBuilding::Area& ar : lb.areas) {   // a bus depot's shed: its four walls
-                    if (ar.kind != "bus_shed") continue;
+                // a bus depot's shed, and a gas station's kiosk and pump islands (ADR-0357): their four walls
+                for (const engine::LotBuilding::Area& ar : lb.areas) {
+                    const double h = ar.kind == "bus_shed" ? 7.5 : ar.kind == "kiosk" ? 3.6 : ar.kind == "pump_island" ? 1.9 : 0.0;
+                    if (h <= 0.0) continue;
                     const engine::Vec2 au = ar.axis, av(-ar.axis.y, ar.axis.x);
                     const engine::Vec2 q[4] = {ar.center - au * ar.halfL - av * ar.halfW, ar.center + au * ar.halfL - av * ar.halfW,
                                                ar.center + au * ar.halfL + av * ar.halfW, ar.center - au * ar.halfL + av * ar.halfW};
-                    for (int k = 0; k < 4; ++k) wall(q[k], q[(k + 1) % 4], 7.5, 0.3);
+                    for (int k = 0; k < 4; ++k) wall(q[k], q[(k + 1) % 4], h, 0.3);
                 }
                 for (const Vec3& ts : lb.treeSpots) {
                     const engine::Vec2 t2(ts.x, ts.z);
@@ -6436,7 +6459,14 @@ bool LevelLoader::load(const std::string& path,
                 // A BUS DEPOT (sculptBusDepot): no place for the schedules, its bays a garage only buses use, anchored
                 // on the street in front of its gate
                 // ...and an OPEN LOT's CAR PARK (recipe "car_park", sculptCarPark): the same yard, its stalls a garage for cars
-                if (lb.type == "depot") {
+                // A GAS STATION's pumps (ADR-0357): a FuelStop per standing place, where the player's car fills
+                for (const engine::LotBuilding::Area& ar : lb.areas) {
+                    if (ar.kind != "fuel_pump") continue;
+                    const Entity fe = world.create();
+                    world.add<engine::FuelStop>(fe, {ar.center, ar.axis, ar.halfL, ar.halfW});
+                    ++fuelStops;
+                }
+                if (lb.type == "depot" && lb.recipe != "gas_station") {
                     engine::CitySimConfig::GarageSpec gs;
                     const bool carPark = lb.recipe == "car_park";
                     gs.buses = !carPark;
@@ -6878,6 +6908,7 @@ bool LevelLoader::load(const std::string& path,
                      << lotTreesOnRoad << " kept off the drawn road";
             if (depotYards) LOG_INFO << "[citylots] " << depotYards << " bus depots, " << depotBays << " bus bays";
             if (surfaceLots) LOG_INFO << "[citylots] " << surfaceLots << " parking lots, " << surfaceStalls << " stalls for the drivers";
+            if (fuelStops) LOG_INFO << "[citylots] " << fuelStops << " fuel stops at the gas stations";
             if (!tradePlaces.empty()) {
                 std::string line;
                 int all = 0;
@@ -8172,6 +8203,7 @@ bool LevelLoader::load(const std::string& path,
                     engine::RenderMesh centred = kindMesh[k];
                     for (engine::Vertex& v : centred.vertices) v.position.y -= kindBody[k].half.y;
                     engine::NatureColliders::PieceKind pk;
+                    pk.name = kindName[k];
                     pk.mesh = assets.acquireMesh(centred, "city:kerb:loose:" + kindName[k]);
                     pk.material = propMat[k];
                     pk.breaksAt = kindBody[k].breaksAt;

@@ -344,6 +344,48 @@ bool loadVehicleSpec(ScriptVM& vm, const std::string& recipe, uint32_t seed,
     }
     lua_pop(L, 1);
 
+    // fuel = { tank=, idle=, full=, pace=, start=, fill=, low= } (ADR-0357)
+    lua_getfield(L, t, "fuel");
+    if (lua_istable(L, -1)) {
+        const int d = lua_gettop(L);
+        FuelRule& r = out.fuel;
+        r.tank = numField(L, d, "tank", r.tank);
+        r.idle = numField(L, d, "idle", r.idle);
+        r.full = numField(L, d, "full", r.full);
+        r.pace = numField(L, d, "pace", r.pace);
+        r.start = numField(L, d, "start", r.start);
+        r.fill = numField(L, d, "fill", r.fill);
+        r.low = numField(L, d, "low", r.low);
+    }
+    lua_pop(L, 1);
+
+    // cargo = { lo = {x,y,z}, hi = {x,y,z}, panel = "trunk" } (ADR-0358)
+    lua_getfield(L, t, "cargo");
+    if (lua_istable(L, -1)) {
+        const int d = lua_gettop(L);
+        auto vec = [&](const char* name, Vec3& v) {
+            lua_getfield(L, d, name);
+            const bool ok = lua_istable(L, -1);
+            if (ok) {
+                const int x = lua_gettop(L);
+                Real c[3] = {0, 0, 0};
+                for (int i = 0; i < 3; ++i) {
+                    lua_rawgeti(L, x, i + 1);
+                    c[i] = lua_tonumber(L, -1);
+                    lua_pop(L, 1);
+                }
+                v = Vec3(c[0], c[1], c[2]);
+            }
+            lua_pop(L, 1);
+            return ok;
+        };
+        out.hasCargo = vec("lo", out.cargoLo) && vec("hi", out.cargoHi);
+        lua_getfield(L, d, "panel");
+        if (lua_isstring(L, -1)) out.cargoPanel = lua_tostring(L, -1);
+        lua_pop(L, 1);
+    }
+    lua_pop(L, 1);
+
     lua_pop(L, 1);   // the returned spec table
     return out.body != nullptr || !out.config.wheels.empty();
 }
@@ -379,6 +421,8 @@ Entity spawnVehicle(World& world, AssetManager& assets, const VehicleSpec& spec,
     v.bodyMesh = spec.body;   // (shared with the spec until the first dent copies it)
     v.bodyMeshBuilt = spec.body;
     v.damage = spec.damage;
+    v.fuelRule = spec.fuel;
+    v.fuel = static_cast<float>(spec.fuel.tank * std::clamp(spec.fuel.start, Real(0), Real(1)));
 
     // One child entity per extra part, rigidly pinned to the chassis by
     // VehicleSystem::writeBack. Separate entities because each carries its own
@@ -428,6 +472,11 @@ Entity spawnVehicle(World& world, AssetManager& assets, const VehicleSpec& spec,
         lamp.left = !m.name.empty() && m.name.back() == 'l';
         v.lamps.push_back(lamp);
     }
+    // its cargo space (ADR-0358), and the panel that opens it
+    v.hasCargo = spec.hasCargo;
+    v.cargoLo = spec.cargoLo;
+    v.cargoHi = spec.cargoHi;
+    v.cargoPanel = spec.cargoPanel.empty() ? -1 : v.panelIndex(spec.cargoPanel);
     world.add<Vehicle>(e, v);
     return e;
 }

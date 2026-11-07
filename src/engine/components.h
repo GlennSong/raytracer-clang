@@ -4,6 +4,7 @@
 #include "../rt_math.h"
 #include "../renderer/renderer.h"
 #include "vehicle_damage.h"   // DamageRule (a car's damage tuning)
+#include "vehicle_fuel.h"     // FuelRule (its tank)
 #include "ai/driver_agent.h"   // DriverCommand / DriverTuning (AgentDriver)
 #include "audio/audio_engine.h"
 #include "physics/physics_world.h"
@@ -530,6 +531,31 @@ struct MeshCollider {
 // a Renderable (body mesh) + Transform/PrevTransform so RenderSystem draws it;
 // `wheelEntities` are optional child Renderables whose transforms VehicleSystem
 // refreshes from the wheels. UNVERIFIED submodule-gated path (needs Jolt).
+// CARRYING (ADR-0358; Glenn, 2026-11-07: trunk carry). A loose thing light enough to lift -- a panel off a car, a
+// bin knocked off its post, a box -- is CARRYABLE: E picks it up (its body goes; it rides in front of the player),
+// E puts it down (a body again), and beside a car's open trunk, hatch or bed E puts it IN: STOWED, it rides the car
+// where it was laid until E takes it out again (CarrySystem).
+struct Carryable {
+    std::string name = "box";
+    float mass = 10.0f;    // kg (its body's, once it is put down)
+    Vec3 half{0.2, 0.2, 0.2};   // its box's half extents, its own frame
+};
+struct CarriedBy {
+    Entity holder;
+};
+struct Stowed {
+    Entity vehicle;
+    Vec3 local{0, 0, 0};   // its middle, the chassis frame
+    Quat turn;             // ...and its turn in it
+};
+
+// A FUEL STOP (ADR-0357): the standing place beside a gas station's pump (a lot's area
+// "fuel_pump"), world XZ -- a car stopped with its middle inside fills there (VehicleSystem::servicePumps)
+struct FuelStop {
+    Vec2 center, axis{1, 0};
+    Real halfL = 3.0, halfW = 1.5;
+};
+
 struct Vehicle {
     PhysicsWorld::VehicleConfig config;
     // A PART-TIME 4x4 (spec drive = "4wd"): the driver switches 2WD (rear) <-> 4WD (VehicleSystem, key
@@ -619,6 +645,18 @@ struct Vehicle {
     float zoneHealth[6] = {1, 1, 1, 1, 1, 1};
     DamageRule damage;                       // its tuning (vehicles.lua KIT_DAMAGE, ADR-0355)
     bool engineDead = false;
+    // FUEL (ADR-0357, engine/vehicle_fuel.h): litres in the tank (< 0: not filled yet -- the spawn fills it to its
+    // rule's `start`); at empty the engine dies as a spent nose's does, until a pump fills it
+    FuelRule fuelRule;
+    float fuel = -1.0f;
+    bool outOfFuel = false;
+    bool stalled() const { return engineDead || outOfFuel; }   // no engine: it steers, brakes and coasts
+    // ITS CARGO SPACE (ADR-0358, from the kit: vehicle_kit.lua `cargo`): the box things are laid in, chassis frame, and
+    // the panel that has to be open to reach it (-1: open to the sky, a pickup's bed); what is in it, by entity
+    Vec3 cargoLo{0, 0, 0}, cargoHi{0, 0, 0};
+    int cargoPanel = -1;
+    bool hasCargo = false;
+    std::vector<Entity> cargo;
     std::shared_ptr<RenderMesh> bodyMesh;
     std::vector<std::shared_ptr<RenderMesh>> partMeshes;
     // ...and as they were built: what a repair puts back (ADR-0356)
@@ -770,6 +808,16 @@ struct BeaconBlink {
 // checking that ground dressing stands on the drawn terrain needs exactly that.
 struct LotPartChunk {
     uint8_t part = 0;
+};
+
+// THE GROWN LOTS, for finding one (ADR-0359; the `frame lot` and `lots?` verbs): each lot the city grew -- a building,
+// a park, a car park, a gas station -- by its recipe, with the box round it (world; y from its ground to its top).
+struct LotSites {
+    struct Site {
+        std::string recipe, type;
+        Vec3 lo, hi;
+    };
+    std::vector<Site> sites;
 };
 
 // Level-authored city-simulation settings (ADR-0063): a top-level "citysim"

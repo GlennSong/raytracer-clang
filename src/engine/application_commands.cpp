@@ -119,6 +119,14 @@ void Application::registerCameraVerbs() {
         return publishRequest(eventBus, r, "camera", "ok camera staged");
     });
 
+    commandTable.add("frame", "frame <x0 y0 z0 x1 y1 z1> [pitch yaw] | frame lot <recipe> [n] [pitch yaw]",
+                     "Put the free camera where a world box, or the n-th grown lot of a recipe (lots? names them), fills "
+                     "the view at that pitch and yaw (default -30, -45); read frame? for the box and the eye (ADR-0359).",
+                     unanswered("a CameraSystem"));
+    commandTable.add("frame?", "frame?", "The last `frame`: what it found, its box and the eye it chose.",
+                     unanswered("a CameraSystem"));
+    commandTable.add("lots?", "lots?", "Every recipe the city grew, with how many lots of each (the names `frame lot` takes).",
+                     unanswered("a CameraSystem: a level that grew lots"));
     commandTable.add("camera?", "camera?",
                      "The camera's eye, pitch and yaw now, stamped with the frame number.",
                      [this](const ControlCommand&) -> std::string {
@@ -546,6 +554,13 @@ void Application::registerPlayerVerbs() {
                      "Repair the car the player drives, else the nearest: every zone whole, the engine running, dents, "
                      "glass and lamps as built (ADR-0356; a panel that came off stays off).",
                      unanswered("a VehicleSystem: play mode"));
+
+    commandTable.add("vehicle_fuel", "vehicle_fuel <litres>",
+                     "Set the tank of the car the player drives (0: empty, the engine dies; ADR-0357).",
+                     unanswered("a VehicleSystem: play mode"));
+    commandTable.add("carry_spawn", "carry_spawn [name]",
+                     "Put a carry_items.lua thing (box, crate, ...) down in front of the player, to pick up and stow (ADR-0358).",
+                     unanswered("a CarrySystem: play mode"));
 
     commandTable.add("pieces", "pieces knock",
                      "Knock the street piece nearest the player loose (a bin, a rack, news boxes, a hydrant; ADR-0354), "

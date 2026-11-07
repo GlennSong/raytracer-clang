@@ -431,6 +431,7 @@ if(RT_ENABLE_SCRIPTING)
         src/engine/scripting/script_system.cpp
         src/engine/scripting/lua_json.cpp
         src/engine/scripting/vehicle_spec.cpp
+        src/engine/scripting/carry_items.cpp
         src/engine/scripting/street_props_spec.cpp
         src/engine/scripting/furniture_library_lua.cpp
         src/engine/scripting/furniture_models_lua.cpp
@@ -754,6 +755,9 @@ add_executable(run_tests
     tests/test_mesh_unwrap.cpp
     tests/test_mesh_bake.cpp
     tests/test_vehicle_damage.cpp
+    tests/test_vehicle_fuel.cpp
+    tests/test_carry_stow.cpp
+    tests/test_camera_frame.cpp
     tests/test_danger_dodge.cpp
     tests/test_mesh_surfaces.cpp
     tests/test_cube_sphere.cpp
@@ -1033,6 +1037,7 @@ if(RT_ENABLE_PHYSICS)
         src/engine/systems/player_body_system.cpp   # the body posed in third person, and limp
         src/engine/systems/teleport_system.cpp
         src/engine/systems/vehicle_system.cpp
+        src/engine/systems/carry_system.cpp
         src/engine/systems/nature_collider_system.cpp   # trunk + rock colliders round the player (#55)
         src/engine/systems/footstep_system.cpp   # the player's feet, heard (#62/#63/#64)
         src/engine/systems/motion_audio_system.cpp   # the player's moves, heard: wind, grapple, canopy, boards

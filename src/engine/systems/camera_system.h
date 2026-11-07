@@ -7,6 +7,7 @@
 #include "../camera/follow_camera_controller.h"
 #include "../camera/scene_camera.h"
 #include "../properties.h"
+#include "../control/control_commands.h"
 
 namespace engine {
 
@@ -85,6 +86,13 @@ private:
     EventBus::Subscription onPose_, onDetach_;
     bool posePending_ = false;
     CameraPoseRequest pose_;
+    // FRAMING (ADR-0359, camera/camera_frame.h): `frame <x0 y0 z0 x1 y1 z1> [pitch yaw]` and `frame lot <recipe> [n]
+    // [pitch yaw]` put the fly camera where the box fills the view; `lots? [recipe]` lists the grown lots to frame
+    ControlCommands::Binding frameCmd_;
+    ControlAnswers answers_;
+    std::vector<std::string> frameStaged_;
+    std::string lotsAsked_;
+    bool lotsPending_ = false;
     int detachPending_ = -1;   // a CameraDetachRequest's mode, until update takes it
     void registerBindings(InputMap& actions) const;
     CameraInput gatherInput(FrameContext& ctx) const;

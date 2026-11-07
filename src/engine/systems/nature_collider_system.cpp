@@ -94,8 +94,12 @@ void NatureColliderSystem::breakPieces(FrameContext& ctx, NatureColliders& nc) {
         push = pl > 1e-6 ? push * (1.0 / pl) : Vec3(0, 0, 0);
         looseKick_.push_back({e, push * (k.speed * nc.knockPush) + Vec3(0, nc.knockUp + nc.knockUpPerSpeed * k.speed, 0), kind.mass});
         loose_.push_back(e);
-        while (loose_.size() > 40) {
-            if (ctx.world.alive(loose_.front())) ctx.world.destroy(loose_.front());
+        // loose, it can be picked up (ADR-0358; CarrySystem leaves what is over its weight limit)
+        ctx.world.add<Carryable>(e, Carryable{kind.name.empty() ? std::string("piece") : kind.name,
+                                             static_cast<float>(kind.mass), shape.half});
+        while (loose_.size() > 40) {   // (one carried or stowed is the player's now: it stays)
+            const Entity old = loose_.front();
+            if (ctx.world.alive(old) && !ctx.world.has<CarriedBy>(old) && !ctx.world.has<Stowed>(old)) ctx.world.destroy(old);
             loose_.erase(loose_.begin());
         }
         requestParticles(ctx.world, "spark", shape.centre, push, 10, 0.8);

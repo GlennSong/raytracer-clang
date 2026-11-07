@@ -1313,7 +1313,24 @@ function kit.build(P, level, opts)
     for i, q in ipairs(saloon.seats) do seats[i] = shifted(q) end
     for i, q in ipairs(saloon.doors) do doors[i] = shifted(q) end
   end
-  return { saloon = saloon and mesh.translate(saloon.mesh, { 0, -cy, -cz }) or nil, seats = seats, doors = doors,
+  -- ITS CARGO SPACE (ADR-0358): the box things are laid in, chassis frame, from the panel that opens it -- the boot
+  -- under a trunk lid, the floor behind a hatch, a pickup's bed in front of its tailgate (open to the sky)
+  local cargo = nil
+  for _, name in ipairs({ "trunk", "hatch", "tailgate" }) do
+    local pn = panels and panels[name]
+    if pn and not cargo then
+      local lo2, hi2 = pn.lo, pn.hi
+      local x0, x1 = lo2[1] + 0.15, hi2[1] - 0.15
+      if name == "trunk" then
+        cargo = { lo = { x0, lo2[2] - 0.50, lo2[3] + 0.05 }, hi = { x1, lo2[2] - 0.05, hi2[3] - 0.05 }, panel = name }
+      elseif name == "hatch" then
+        cargo = { lo = { x0, lo2[2] + 0.05, lo2[3] + 0.10 }, hi = { x1, lo2[2] + 0.65, lo2[3] + 0.95 }, panel = name }
+      else
+        cargo = { lo = { x0 + 0.05, lo2[2] + 0.02, hi2[3] + 0.08 }, hi = { x1 - 0.05, lo2[2] + 0.50, hi2[3] + 1.90 } }
+      end
+    end
+  end
+  return { saloon = saloon and mesh.translate(saloon.mesh, { 0, -cy, -cz }) or nil, seats = seats, doors = doors, cargo = cargo,
            parts = parts, wheels = wheels, size = { hi[1] - lo[1], hi[2], hi[3] - lo[3] }, lift = cy,
            length = hi[3] - lo[3], spare = spare, color = P.color, lights = lights, driver_seat = seat,
            -- the back bench's hip point (its middle), when the cabin has one: where a back-seat rider sits

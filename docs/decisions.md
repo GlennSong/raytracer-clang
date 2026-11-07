@@ -16360,3 +16360,77 @@ ends on NaN. A walker's ragdoll had been made at a NaN position, thrown at 107 m
   one over (taken, not drawn, its owner without it).
 - The viaduct's ramp (roads).
 - A crack texture on glass.
+
+## ADR-0357 — Fuel: a tank that burns, an engine that dies dry, and a pump that fills it
+
+**Context.** Glenn, 2026-11-07: "fuel and gas stations ... default when empty: engine dies, coast."
+
+**Decision.**
+- **The tank is data:** `KIT_FUEL` in vehicles.lua (a default, a row per kit) becomes each drivable spec's `fuel`
+  (`engine/vehicle_fuel.h` `FuelRule`): tank litres, idle and full-throttle burn, a game `pace` (12x: a 45 L tank
+  lasts 7.5 min flat out), the starting share, how fast a pump pours, and the share the readout warns below.
+- **The player's car burns** while its engine runs (`fuelBurn`, by throttle; reverse burns like forward). Dry, it is
+  `outOfFuel`. `Vehicle::stalled()` (a spent nose or a dry tank) is the one check the drive, the starter and the
+  engine's sound read: it steers, brakes and coasts, and the starter turns over and will not catch.
+- **The readout** gains a FUEL bar (amber under a quarter, red under the warning share, EMPTY when dry).
+- **A pump:** a `FuelStop` (a standing place, world XZ) the loader makes from each `fuel_pump` area a lot records.
+  Stopped with its middle on one, the player's car fills while R is held (pad A; R is the on-foot respawn, free in a
+  car), with a click as the nozzle goes in and out; full, a fresh R has the station repair it (ADR-0356).
+- `vehicle_fuel <litres>` sets the tank (a probe's empty tank).
+
+**The gas station is not in this ADR.** A first one was built as an open-lot sculpt (a kiosk box, pumps as boxes,
+type "depot": no place, nobody working there). Glenn: "someone also works in the station and there would be a shop
+... it should have an interior ... building grammar and furniture placement for the gas pumps?" It is being redone
+as a place (the `rt-new-place` skill; ADR-0360 onward), and the sculpt was not committed. The loader's `fuel_pump`
+area -> FuelStop path stays: it is what the redone station's pumps will feed.
+
+**Alternatives.** Burn by distance (a coasting car would burn); a real-time burn (a tank would last hours of play).
+
+**Consequences.** Only the player's car burns; the traffic has no tanks. Tests: `an_engine_burns_more_the_harder_it_is_pressed`,
+`a_pump_fills_the_tank_and_stops_at_full`, `drivable_spec_carries_its_tank`.
+
+**Revisit** when the traffic should run dry too, or fuel has a price.
+
+## ADR-0358 — Carrying things, and putting them in a car's trunk
+
+**Context.** The vehicle plan's "trunk carry", which Glenn took with "1, 2, 3".
+
+**Decision.**
+- **Carryable** is a component: a name, a weight and a box. Loose car panels (VehicleSystem::detachPanel) and street
+  pieces knocked loose (NatureColliderSystem) get one; `carry_spawn <name>` puts down a thing from
+  `carry_items.lua` (box, crate, cooler, suitcase, jerrycan; its `limit` is the heaviest a person lifts, 45 kg).
+- **CarrySystem** (after VehicleSystem): the broker's E on a carryable thing in reach picks it up -- its body goes,
+  it rides in front of the player (`CarriedBy`) -- and E puts it down, a body again with its weight.
+- **A car's cargo space is data from the kit:** `kit.build` returns `cargo = { lo, hi, panel }` from the panel that
+  opens it: the boot under a trunk lid, the floor behind a hatch, a pickup's bed in front of its tailgate (no panel:
+  open to the sky). Beside a car whose space is open (its panel 60% open), E puts the thing IN (held E: down): laid
+  where it fits (`engine/carry_stow.h` `stowSlot`: flattest side down, then its other sides, each turned a quarter;
+  packed from a corner, the row nearest the player first, the floor before a stack), `Stowed`, riding the car. An
+  open space offers what is in it: E takes it out.
+- The loose-part caps never destroy a thing carried or stowed.
+
+**Alternatives.** A physics bed (things rattle loose at speed; kept as pinned, which also keeps the car's handling).
+
+**Consequences.** Tests: `a_door_is_laid_flat_in_a_pickup_bed`, `boxes_fill_a_boot_then_stack_then_it_is_full`,
+`a_thing_bigger_than_the_space_is_refused`, `drivable_cars_carry_a_cargo_space_at_the_tail`.
+
+**Owed.** Arms posed holding it; a throw; things in a traffic car's trunk; a stowed thing's weight in the car's mass.
+
+## ADR-0359 — Framing a thing for a shot: `frame`, `lots?`
+
+**Context.** Glenn, 2026-11-07, after eight screenshots that missed a gas station: "find the bounding box of the gas
+station and then make sure it fits in the camera's frustum ... some kind of function in the code base to assist
+placing a camera for screenshots or even cinematic purposes?"
+
+**Decision.**
+- `engine/camera/camera_frame.h` `frameBox(lo, hi, pitch, yaw, vfov, aspect, fill)`: the eye that puts every corner
+  of a world box inside the view at that look (the fly camera's convention: yaw 0 down -Z), looking at its middle.
+- The loader records every grown lot by recipe with its box (`LotSites`).
+- `frame <x0 y0 z0 x1 y1 z1> [pitch yaw]` and `frame lot <recipe> [n] [pitch yaw]` (default a three-quarter view,
+  30 degrees down) put the fly camera there; `frame?` says what it found and the eye; `lots?` lists the recipes the
+  city grew with how many.
+
+**Consequences.** A shot of a kind is one command. Tests: `framing_puts_every_corner_in_view`,
+`fly_forward_is_the_fly_cameras_convention`.
+
+**Revisit** for cinematics: a path of frames, an orbit round a box, framing an entity.

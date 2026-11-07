@@ -82,6 +82,37 @@ local function kit_damage(name)
 end
 vehicle.kit_damage = kit_damage
 
+-- A CAR'S TANK (ADR-0357), read into its spec as `fuel` (engine/vehicle_fuel.h FuelRule); a name without a row takes
+-- the default, a row's fields over it.
+--   tank        litres
+--   idle / full litres an hour ticking over / at full throttle (reverse burns like forward)
+--   pace        game time: the burn runs this many times the real one (a tank is minutes of play)
+--   start       the share of the tank a car starts with
+--   fill        litres a second a pump pours
+--   low         the share the readout goes red below
+local KIT_FUEL = {
+  default = { tank = 45, idle = 1.2, full = 30, pace = 12, start = 1.0, fill = 9, low = 0.15 },
+  hatchback = { tank = 38, full = 24 },
+  convertible = { tank = 50, full = 36 },
+  suv = { tank = 60, full = 38 },
+  pickup = { tank = 70, full = 42 },
+  offroad = { tank = 75, full = 44 },
+  jeep = { tank = 55, full = 34 },
+  semi = { tank = 400, full = 90, fill = 25 },
+  step_van = { tank = 110, full = 48, fill = 14 },
+  small_truck = { tank = 120, full = 52, fill = 14 },
+  fire_engine = { tank = 250, full = 80, fill = 20 },
+  bus = { tank = 300, full = 70, fill = 20 },
+  bus_standing = { tank = 300, full = 70, fill = 20 },
+}
+local function kit_fuel(name)
+  local out = {}
+  for k, v in pairs(KIT_FUEL.default) do out[k] = v end
+  for k, v in pairs(KIT_FUEL[name] or {}) do out[k] = v end
+  return out
+end
+vehicle.kit_fuel = kit_fuel
+
 -- THE KIT's FINISHES: a part's colour by its material name (the paint is the slot's), and the drivable car's cabin
 local KIT_TINT = {
   glass = { 0.16, 0.20, 0.24 }, trim = { 0.04, 0.04, 0.045 }, gasket = { 0.025, 0.025, 0.028 },
@@ -207,6 +238,8 @@ local function kit_drivable(specName, opts, h)
   lights[#lights + 1] = { name = "driver_seat", pos = car.driver_seat }
   local spec = kit_handling(P, handled, h, opts)
   spec.damage = kit_damage(P.name)
+  spec.fuel = kit_fuel(P.name)
+  spec.cargo = car.cargo
   spec.body = mesh.recompute_normals(mesh.merge(shell))
   spec.albedo = { 1, 1, 1 }
   spec.metallic = h.metallic or 0.5

@@ -37,6 +37,7 @@
 #include "../apps/citysim/city_possess.h"
 #endif
 #include "../engine/systems/vehicle_system.h"
+#include "../engine/systems/carry_system.h"
 #include "../engine/systems/render_system.h"
 #include "../engine/systems/xr_camera_system.h"
 #include "../engine/systems/debug_draw_system.h"
@@ -223,6 +224,7 @@ ArenaState::ArenaState(Window& window, Renderer& renderer,
     // consumption) — and after PlayerSystem, so its chase-camera write wins.
     addSystem<citysim::CityPossessSystem>(citySys, physSys);
     addSystem<VehicleSystem>(physSys, camSys);   // drives real cars: player + promoted
+    addSystem<CarrySystem>(physSys);             // carry loose things, and put them in a car's trunk (ADR-0358)
     addSystem<FlashlightSystem>();               // the light (L / D-pad up): its beam, staged in render() before RenderSystem
     addSystem<WatchSystem>();                    // the watch (Q / D-pad down): compass, waypoint, time on the wrist
 #else

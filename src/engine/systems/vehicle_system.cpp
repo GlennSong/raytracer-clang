@@ -26,6 +26,7 @@
 #include "../../log.h"
 
 #include <algorithm>
+#include <cstdlib>
 #include <vector>
 
 #ifdef RT_ENABLE_SCRIPTING
@@ -76,6 +77,17 @@ void VehicleSystem::onStart(FrameContext& ctx) {
             repairStaged_ = true;
             return "ok staged";
         });
+    if (ctx.commands != nullptr)   // `vehicle_fuel <litres>`: the player's car's tank, set (a probe's empty tank, a top-up)
+        fuelCmd_ = ctx.commands->bind("vehicle_fuel", "VehicleSystem", [this](const ControlCommand& cmd) -> std::string {
+            if (cmd.args.empty()) return "err vehicle_fuel <litres>";
+            fuelStaged_ = std::max(0.0, std::atof(cmd.args[0].c_str()));
+            return "ok staged";
+        });
+    // AT A PUMP (ADR-0357): hold R to fill up, R again with the tank full for the station to fix the car (R is the
+    // on-foot respawn; in a car it is free, as T is the flip here and the teleport outside)
+    ctx.actions.bindButton("vehicle_service", KeyCode::R);
+    ctx.actions.bindButton("vehicle_service", GamepadButton::A);   // (the pad's jump on foot; D-pad up is the light)
+    ctx.actions.setActionContext("vehicle_service", engine::InputContext::InVehicle);
     if (ctx.commands != nullptr)
         panelsCmd_ = ctx.commands->bind("panels", "VehicleSystem", [this](const ControlCommand& cmd) -> std::string {
             if (cmd.args.empty() || (cmd.args[0] != "open" && cmd.args[0] != "shut" && cmd.args[0] != "knock"))
@@ -217,7 +229,7 @@ void VehicleSystem::loadCatalogue() {
 }
 
 // THE CAR's READOUT (ADR-0356; owed in ADR-0355): bottom right while driving -- ENGINE and a bar of the nose's health
-// (green, amber below 60, red below 25, ENGINE DEAD), and under it each zone's health. A car never hit shows the bar
+// (green, amber below 60, red below 25, ENGINE DEAD), the FUEL in the tank under it (ADR-0357), and each zone's health. A car never hit shows the bar
 // full: you can see what a knock cost.
 void VehicleSystem::drawCarHud(FrameContext& ctx) {
     const Vehicle* v = nullptr;
@@ -229,30 +241,46 @@ void VehicleSystem::drawCarHud(FrameContext& ctx) {
     const float W = static_cast<float>(ctx.framebufferWidth), H = static_cast<float>(ctx.framebufferHeight);
     const float k = ctx.windowWidth > 0 ? W / static_cast<float>(ctx.windowWidth) : 1.0f;
     const float fs = 16.0f * k, small = 13.0f * k;
-    const float panelW = 250.0f * k, x1 = W - 24.0f * k, x0 = x1 - panelW, y1 = H - 24.0f * k, y0 = y1 - 74.0f * k;
+    const float panelW = 250.0f * k, x1 = W - 24.0f * k, x0 = x1 - panelW, y1 = H - 24.0f * k, y0 = y1 - 96.0f * k;
     std::vector<Renderer::UiQuad> q;
     const float back[4] = {0, 0, 0, 0.55f}, white[4] = {1, 1, 1, 0.92f}, dim[4] = {0.72f, 0.72f, 0.72f, 0.85f},
                 track[4] = {1, 1, 1, 0.15f};
     UiText::rect(q, x0, y0, x1, y1, back);
-    const float nose = v->engineDead ? 0.0f : v->zoneHealth[static_cast<int>(DamageZone::Front)];
-    const float bar[4] = {nose < 0.25f ? 0.90f : nose < 0.6f ? 0.95f : 0.35f, nose < 0.25f ? 0.20f : nose < 0.6f ? 0.65f : 0.85f,
-                          nose < 0.25f ? 0.15f : 0.20f, 0.95f};
     const float pad = 12.0f * k;
-    carHud_.text(ctx.renderer, q, x0 + pad, y0 + 22.0f * k, v->engineDead ? "ENGINE DEAD" : "ENGINE", fs, v->engineDead ? bar : white);
-    const float bx0 = x0 + pad + 110.0f * k, bx1 = x1 - pad, by0 = y0 + 10.0f * k, by1 = y0 + 24.0f * k;
-    UiText::rect(q, bx0, by0, bx1, by1, track);
-    if (nose > 0.0f) UiText::rect(q, bx0, by0, bx0 + (bx1 - bx0) * nose, by1, bar);
+    const float bx0 = x0 + pad + 110.0f * k, bx1 = x1 - pad;
+    // a labelled bar: green, amber below `amber`, red below `red`; the label in the bar's colour when it is spent
+    auto meter = [&](float row, const char* label, float share, float amber, float red, bool spent) {
+        const float c[4] = {share < red ? 0.90f : share < amber ? 0.95f : 0.35f, share < red ? 0.20f : share < amber ? 0.65f : 0.85f,
+                            share < red ? 0.15f : 0.20f, 0.95f};
+        carHud_.text(ctx.renderer, q, x0 + pad, y0 + row + 12.0f * k, label, fs, spent ? c : white);
+        UiText::rect(q, bx0, y0 + row, bx1, y0 + row + 14.0f * k, track);
+        if (share > 0.0f) UiText::rect(q, bx0, y0 + row, bx0 + (bx1 - bx0) * std::min(1.0f, share), y0 + row + 14.0f * k, c);
+    };
+    const float nose = v->engineDead ? 0.0f : v->zoneHealth[static_cast<int>(DamageZone::Front)];
+    meter(10.0f * k, v->engineDead ? "ENGINE DEAD" : "ENGINE", nose, 0.6f, 0.25f, v->engineDead);
+    // THE TANK (ADR-0357): amber under a quarter, red under its warning share; EMPTY when it is dry
+    const float fuel = v->fuelRule.tank > 0 ? std::max(0.0f, v->fuel) / static_cast<float>(v->fuelRule.tank) : 0.0f;
+    meter(32.0f * k, v->outOfFuel ? "EMPTY" : "FUEL", fuel, 0.25f, static_cast<float>(v->fuelRule.low), v->outOfFuel);
     char zones[96];
     std::snprintf(zones, sizeof zones, "nose %d  tail %d  L %d  R %d  roof %d", static_cast<int>(v->zoneHealth[0] * 100 + 0.5f),
                   static_cast<int>(v->zoneHealth[1] * 100 + 0.5f), static_cast<int>(v->zoneHealth[2] * 100 + 0.5f),
                   static_cast<int>(v->zoneHealth[3] * 100 + 0.5f), static_cast<int>(v->zoneHealth[4] * 100 + 0.5f));
-    carHud_.text(ctx.renderer, q, x0 + pad, y0 + 50.0f * k, zones, small, dim);
+    carHud_.text(ctx.renderer, q, x0 + pad, y0 + 72.0f * k, zones, small, dim);
     int on = 0;
     for (const Vehicle::Panel& p : v->panels) on += !p.gone;
     if (!v->panels.empty() && on < static_cast<int>(v->panels.size())) {
         char lost[48];
         std::snprintf(lost, sizeof lost, "%d of %zu panels gone", static_cast<int>(v->panels.size()) - on, v->panels.size());
-        carHud_.text(ctx.renderer, q, x0 + pad, y0 + 67.0f * k, lost, small, dim);
+        carHud_.text(ctx.renderer, q, x0 + pad, y0 + 89.0f * k, lost, small, dim);
+    }
+    // AT A PUMP (ADR-0357): what R does here, above the readout
+    if (atPump_) {
+        bool hurt = v->engineDead;
+        for (float z : v->zoneHealth) hurt = hurt || z < 0.999f;
+        const bool full = v->fuel >= v->fuelRule.tank - 1e-3;
+        const char* say = filling_ ? "filling..." : !full ? "hold R  fill up" : hurt ? "R  fix the car" : "tank full";
+        UiText::rect(q, x0, y0 - 34.0f * k, x1, y0 - 6.0f * k, back);
+        carHud_.text(ctx.renderer, q, x0 + pad, y0 - 14.0f * k, say, fs, white);
     }
     if (!q.empty()) ctx.renderer.submitUi(q);
 }
@@ -405,7 +433,16 @@ void VehicleSystem::driveVehicles(FrameContext& ctx) {
             // Nobody at the wheel: hold the brake so it doesn't creep on a slope.
             in.brake = 1.0;
         }
-        if (v.engineDead) {   // (ADR-0353: the nose spent -- it steers and brakes, it will not drive)
+        // THE TANK (ADR-0357): the player's car burns while its engine runs; at empty it dies like a spent nose
+        if (v.fuel < 0) v.fuel = static_cast<float>(v.fuelRule.tank * std::clamp(v.fuelRule.start, Real(0), Real(1)));
+        if (v.driver.valid() && !v.pedalled && !v.stalled()) {
+            v.fuel = std::max(0.0f, v.fuel - static_cast<float>(fuelBurn(v.fuelRule, in.throttle, ctx.clock.fixedStep())));
+            if (v.fuel <= 0.0f) {
+                v.outOfFuel = true;
+                LOG_INFO << "[vehicle] out of fuel: the engine dies";
+            }
+        }
+        if (v.stalled()) {   // (ADR-0353: the nose spent, or ADR-0357 the tank dry -- it steers and brakes, it coasts)
             // the driver tries it: the starter turns it over and it will not catch (ADR-0355)
             if (v.driver.valid() && in.throttle > 0.3 && starterCooldown_ <= 0) {
                 if (const Transform* ct = ctx.world.get<Transform>(e)) panelSound(ctx, ct->position, 4, 0.7f);
@@ -961,6 +998,10 @@ void VehicleSystem::update(FrameContext& ctx) {
                       v->zoneHealth[5], on, v->panels.size(), weakest, v->engineDead ? " ENGINE DEAD" : "",
                       v->bodyDented ? " dented" : "");
         telem += dm;
+        char fu[96];   // ...and its tank (ADR-0357)
+        std::snprintf(fu, sizeof(fu), " fuel %.1f/%.0f%s%s", std::max(0.0f, v->fuel), v->fuelRule.tank,
+                      v->outOfFuel ? " EMPTY" : "", atPump_ ? " at_pump" : "");
+        telem += fu;
     });
     answers_.set("vehicle?", telem + " timescale " + std::to_string(ctx.clock.timeScale()));
 
@@ -979,7 +1020,7 @@ void VehicleSystem::updateEngines(FrameContext& ctx) {
     const Real range = engines_.range();
     ctx.world.each<Transform, Vehicle>([&](Entity e, Transform& t, Vehicle& v) {
         const bool running = v.driver.valid() || ctx.world.has<AgentDriver>(e);
-        if (!running || v.pedalled || v.engineDead) return;   // a bicycle has legs, not an engine; a dead one is silent
+        if (!running || v.pedalled || v.stalled()) return;   // a bicycle has legs, not an engine; a dead one is silent
         const Real d2 = (t.position - ear).lengthSquared();
         if (d2 > range * range) return;
         EngineVoicePool::Engine en{(static_cast<uint64_t>(e.generation) << 32) | e.index, t.position, v.speed, v.throttle,
@@ -1504,6 +1545,8 @@ void VehicleSystem::detachPanel(FrameContext& ctx, Entity car, Vehicle& v, int p
         ctx.world.add<RigidBody>(pe, rb);
         looseKick_.push_back({pe, kick, panel.mass});
         loose_.push_back(pe);
+        // loose, it can be picked up and put in a trunk (ADR-0358)
+        ctx.world.add<Carryable>(pe, Carryable{panel.name, panel.mass, col.halfExtent});
         freed = true;
     }
     v.bodyParts = keep;
@@ -1513,8 +1556,9 @@ void VehicleSystem::detachPanel(FrameContext& ctx, Entity car, Vehicle& v, int p
     v.partBuilt = keepBuilt;
     requestParticles(ctx.world, "spark", centreWorld, kick, 24, 1.2);
     LOG_INFO << "[vehicle] " << panel.name << " came off";
-    while (loose_.size() > 24) {
-        if (ctx.world.alive(loose_.front())) ctx.world.destroy(loose_.front());
+    while (loose_.size() > 24) {   // (one carried or stowed is the player's now: it stays)
+        const Entity old = loose_.front();
+        if (ctx.world.alive(old) && !ctx.world.has<CarriedBy>(old) && !ctx.world.has<Stowed>(old)) ctx.world.destroy(old);
         loose_.erase(loose_.begin());
     }
 }
@@ -1553,6 +1597,53 @@ void VehicleSystem::repair(FrameContext& ctx, Entity car, Vehicle& v) {
     LOG_INFO << "[vehicle] repaired";
 }
 
+// THE PUMP (ADR-0357): the player's car, stopped with its middle on a fuel stop (a gas station's pump side), fills
+// while R is held -- a click as the nozzle goes in, another as it shuts off full -- and the tank full, a fresh press of R
+// has the station fix it (repair, ADR-0356). A dry tank filled starts again; a dead nose stays dead until it is fixed.
+void VehicleSystem::servicePumps(FrameContext& ctx) {
+    Entity car;
+    ctx.world.each<ControlledBy, InVehicle>([&](Entity, ControlledBy&, InVehicle& iv) {
+        if (!car.valid() && iv.vehicle.valid() && ctx.world.alive(iv.vehicle)) car = iv.vehicle;
+    });
+    Vehicle* v = car.valid() ? ctx.world.get<Vehicle>(car) : nullptr;
+    const Transform* t = car.valid() ? ctx.world.get<Transform>(car) : nullptr;
+    if (v && fuelStaged_ >= 0) {
+        v->fuel = static_cast<float>(std::min(fuelStaged_, v->fuelRule.tank));
+        v->outOfFuel = v->fuel <= 0.0f;
+        fuelStaged_ = -1;
+    }
+    atPump_ = false;
+    if (!v || !t || v->pedalled) { filling_ = false; return; }
+    if (std::fabs(v->speed) < 0.6)
+        ctx.world.each<FuelStop>([&](Entity, FuelStop& s) {
+            if (atPump_) return;
+            const Vec2 d(t->position.x - s.center.x, t->position.z - s.center.y);
+            const Real along = d.x * s.axis.x + d.y * s.axis.y, across = -d.x * s.axis.y + d.y * s.axis.x;
+            atPump_ = std::fabs(along) <= s.halfL + 1.0 && std::fabs(across) <= s.halfW + 1.0;
+        });
+    const bool held = ctx.actions.held("vehicle_service");
+    const bool press = held && !serviceWasHeld_;
+    serviceWasHeld_ = held;
+    const bool full = v->fuel >= v->fuelRule.tank - 1e-3;
+    if (!atPump_ || !held || full) {
+        if (filling_ && full) panelSound(ctx, t->position, 2, 0.5f);   // the nozzle clicks off
+        filling_ = false;
+        if (atPump_ && press && full && !filling_) {
+            bool hurt = v->engineDead;
+            for (float z : v->zoneHealth) hurt = hurt || z < 0.999f;
+            if (hurt) {
+                repair(ctx, car, *v);
+                LOG_INFO << "[vehicle] fixed at the station";
+            }
+        }
+        return;
+    }
+    if (!filling_) panelSound(ctx, t->position, 3, 0.6f);   // the nozzle goes in
+    filling_ = true;
+    v->fuel = static_cast<float>(fuelPour(v->fuelRule, std::max(0.0f, v->fuel), ctx.clock.fixedStep()));
+    if (v->fuel > 0.0f) v->outOfFuel = false;
+}
+
 void VehicleSystem::fixedUpdate(FrameContext& ctx) {
     if (repairStaged_) {   // `vehicle_repair`: the car the player is in (or the nearest one)
         repairStaged_ = false;
@@ -1572,6 +1663,7 @@ void VehicleSystem::fixedUpdate(FrameContext& ctx) {
     createVehicles(ctx);
     applyDamage(ctx);
     driveVehicles(ctx);
+    servicePumps(ctx);
     swingPanels(ctx);
     writeBack(ctx);
     stepSeat(ctx);
