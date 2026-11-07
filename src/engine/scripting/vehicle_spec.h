@@ -54,6 +54,7 @@ struct VehicleSpec {
         Vec3 centre{0, 0, 0};        // the panel's middle (where its E prompt sits)
         Vec3 lo{0, 0, 0}, hi{0, 0, 0};   // its box (chassis frame): what a touch is measured against
         float mass = 20.0f;              // kg, once it comes off
+        Vec3 slide{0, 0, 0};             // chassis-frame travel at fully open (a bus's plug door slides; ADR-0356)
     };
     std::vector<Panel> panels;
     // its damage tuning (ADR-0355): the spec's `damage` table (vehicles.lua KIT_DAMAGE), else the defaults

@@ -14,6 +14,8 @@
 #include "screen_project.h"                           // worldToScreen (place labels)
 #include "../../engine/asset_manager.h"
 #include <cctype>
+#include "../../engine/audio/sfx.h"   // panelShut / panelOpen (a bus's doors)
+#include "../../engine/clock.h"   // kDefaultFixedStep (a bus's doors ease by the step)
 #include "../../engine/components.h"
 #include "../../engine/mesh_builder.h"
 #include "../../engine/procgen/city/roads/road_entity.h"
@@ -1295,6 +1297,8 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
     nearSwap_.clear();
     carSeats_.clear();
     carDoors_.clear();
+    carDoorLeaves_.clear();
+    busDoorOpen_.clear();
     carDriverSeat_.clear();
     carRearHip_.clear();
     carHasRear_.clear();
@@ -1317,6 +1321,7 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
             bool seeInto = false;
             bool openSeat = false;
             std::vector<Vec3> seats, doors;
+            std::vector<engine::CarBodyRecipe::DoorLeaf> doorLeaves;   // a bus's (ADR-0356)
             Vec3 driverSeat(0, 0, 0), rearHip(0, 0, 0);
             bool hasRear = false;
             bool hasDriver = false;
@@ -1359,6 +1364,7 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
                         openSeat = recipe.openSeat;
                         seats = recipe.seats;
                         doors = recipe.doors;
+                        doorLeaves = std::move(recipe.doorLeaves);
                         driverSeat = recipe.driverSeat;
                         hasDriver = recipe.hasDriverSeat;
                         rearHip = recipe.rearHip;
@@ -1447,6 +1453,37 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
                 carOpenSeat_.push_back(openSeat ? 1 : 0);
                 carSeats_.push_back(std::move(seats));
                 carDoors_.push_back(std::move(doors));
+                {   // A BUS's DOOR LEAVES (ADR-0356): a group for each leaf's paint and its glass, pushed per bus by
+                    // syncCarLamps slid open as it stands at a stop
+                    std::vector<DoorLeafGroups> leaves;
+                    for (std::size_t li = 0; assets && li < doorLeaves.size(); ++li) {
+                        DoorLeafGroups dl;
+                        dl.slide = doorLeaves[li].slide;
+                        dl.body = world.create();
+                        InstanceGroup bg;
+                        bg.mesh = assets->acquireMesh(doorLeaves[li].body, "city:busdoor" + std::to_string(v) + "_" + std::to_string(li));
+                        bg.material = carMaterial();
+                        bg.renderLayer = engine::LayerSim;
+                        bg.drawClass = engine::DrawClass::SimBody;
+                        world.add<InstanceGroup>(dl.body, bg);
+                        if (!doorLeaves[li].glass.vertices.empty()) {
+                            dl.glass = world.create();
+                            InstanceGroup gg;
+                            gg.mesh = assets->acquireMesh(doorLeaves[li].glass, "city:busdoorglass" + std::to_string(v) + "_" + std::to_string(li));
+                            engine::RenderMaterial gm;
+                            gm.albedo = Vec3(1, 1, 1);
+                            gm.metallic = 0.0f;
+                            gm.roughness = 0.06f;
+                            gm.opacity = 0.30f;
+                            gg.material = gm;
+                            gg.renderLayer = engine::LayerSim;
+                            gg.drawClass = engine::DrawClass::SimBody;
+                            world.add<InstanceGroup>(dl.glass, gg);
+                        }
+                        leaves.push_back(dl);
+                    }
+                    carDoorLeaves_.push_back(std::move(leaves));
+                }
                 carDriverSeat_.push_back(driverSeat);
                 carRearHip_.push_back(rearHip);
                 carHasRear_.push_back(hasRear ? 1 : 0);
@@ -2372,6 +2409,10 @@ int CityRenderSystem::carTurnDir(const Agent& a) const {
 void CityRenderSystem::syncCarLamps(World& world) {
     for (Entity e : busSignGroups_)
         if (InstanceGroup* sg = world.get<InstanceGroup>(e)) sg->beginStep();
+    for (const std::vector<DoorLeafGroups>& leaves : carDoorLeaves_)
+        for (const DoorLeafGroups& dl : leaves)
+            for (Entity e : {dl.body, dl.glass})
+                if (InstanceGroup* g = e.valid() ? world.get<InstanceGroup>(e) : nullptr) g->beginStep();
     busSignsDrawn_ = 0;
 
     const std::vector<Agent>& agents = sim_.agents();
@@ -2430,6 +2471,27 @@ void CityRenderSystem::syncCarLamps(World& world) {
                     if (b == 0) busSignAt_ = g->transforms.back().transformPoint(Vec3(0, 0, 0));
                 }
                 ++busSignsDrawn_;
+                // THE DOORS (ADR-0356; Glenn: "When the bus driver stops does the bus door open for passengers to get
+                // on?"): open while the bus stands at its stop (its dwell), shut a moment before it pulls away
+                if (v >= 0 && v < static_cast<int>(carDoorLeaves_.size()) && !carDoorLeaves_[static_cast<std::size_t>(v)].empty()) {
+                    float& open = busDoorOpen_[static_cast<int>(ai)];
+                    const float want = a.busDwell > 0.8f ? 1.0f : 0.0f;
+                    const float step = static_cast<float>(engine::kDefaultFixedStep / 0.45);
+                    const float was = open;
+                    open = want > open ? std::min(want, open + step) : std::max(want, open - step);
+                    // heard (the frame's update plays them): the latch as they start to open, the slam as they shut
+                    const Vec3 doorAt = body.transformPoint(Vec3(1.2, 0.0, 0.0));
+                    if (was == 0.0f && open > 0.0f) busDoorSounds_.push_back({doorAt, false});
+                    if (was > 0.0f && open == 0.0f) busDoorSounds_.push_back({doorAt, true});
+                    const std::vector<DoorLeafGroups>& leaves = carDoorLeaves_[static_cast<std::size_t>(v)];
+                    for (std::size_t li = 0; li < leaves.size(); ++li) {
+                        const Vec3 d = leaves[li].slide * static_cast<Real>(open);
+                        const Mat4 at = body * Mat4::translate(d.x, d.y, d.z);
+                        if (InstanceGroup* g = world.get<InstanceGroup>(leaves[li].body)) g->push(at, movingId(a, static_cast<uint32_t>(16 + 2 * li)));
+                        if (leaves[li].glass.valid())
+                            if (InstanceGroup* g = world.get<InstanceGroup>(leaves[li].glass)) g->push(at, movingId(a, static_cast<uint32_t>(17 + 2 * li)));
+                    }
+                }
             }
         }
         // A CAR AT REST is dark (ADR-0341): parked at the end of its trip, on the street or off it. The body skips one
@@ -2470,6 +2532,10 @@ void CityRenderSystem::syncCarLamps(World& world) {
             }
         }
     for (Entity e : busSignGroups_) refreshBounds(world.get<InstanceGroup>(e));
+    for (const std::vector<DoorLeafGroups>& leaves : carDoorLeaves_)
+        for (const DoorLeafGroups& dl : leaves)
+            for (Entity e : {dl.body, dl.glass})
+                if (e.valid()) refreshBounds(world.get<InstanceGroup>(e));
     copyMidBodies(world);
 }
 
@@ -4022,6 +4088,25 @@ void CityRenderSystem::measureJitter(engine::FrameContext& ctx) {
 
 void CityRenderSystem::update(engine::FrameContext& ctx) {
     feedGpuCrowd(ctx);
+    // A BUS's DOORS HEARD (ADR-0356): within earshot, the door generators the drivable car's panels use
+    if (!busDoorSounds_.empty() && ctx.audio.ready()) {
+        const Vec3 ear = ctx.view.camera.position;
+        for (const BusDoorSound& d : busDoorSounds_) {
+            if ((d.at - ear).lengthSquared() > 35.0 * 35.0) continue;
+            engine::AudioClipHandle& clip = d.shut ? busDoorShutClip_ : busDoorOpenClip_;
+            if (!clip.valid()) {
+                const uint32_t r = ctx.audio.sampleRate();
+                const std::vector<float> pcm = d.shut ? engine::sfx::panelShut(engine::sfx::PanelKind::Door, r, 3)
+                                                      : engine::sfx::panelOpen(r, 3);
+                clip = ctx.audio.createClip(pcm.data(), pcm.size(), 1, r);
+            }
+            if (!clip.valid()) continue;
+            engine::AudioPlayParams params;
+            params.volume = d.shut ? 0.7f : 0.5f;
+            ctx.audio.playAt(clip, d.at, 30.0, params);
+        }
+    }
+    busDoorSounds_.clear();
     // the OPEN signs' staff: a thirtieth of them asked "at work?" each frame (dealOpenSigns counts the flags)
     if (built_ && !signedStaff_.empty()) {
         const std::size_t n = (signedStaff_.size() + 29) / 30;

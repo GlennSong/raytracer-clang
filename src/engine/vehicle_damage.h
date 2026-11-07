@@ -43,6 +43,7 @@ struct DamageRule {
     Real steamBelow = 0.6, blackBelow = 0.25;   // the nose's health the hood steams below, then smokes black
     Real kickCar = 0.7, kickOut = 0.8, kickUp = 0.8;   // a panel coming off: of the car's speed, out, up (m/s)
     Real roughBelow = 0.6, roughWobble = 0.07, roughMisfire = 0.5;   // the engine's sound (vehicle_audio.h engineRough)
+    Real crackFrom = 0.04, smashFrom = 0.30;   // a knock's cost that crazes the glass by it / smashes a hole in it
 };
 
 // Health (0..1 of a zone) a touch costs: a new contact by `speed`, a persisting one by `slide` m/s for `dt` seconds.
@@ -55,6 +56,13 @@ int touchSparks(const DamageRule& r, bool persisted, Real speed, Real slide);
 // dark metal as deep as the dent goes (Glenn: "show the visual damage ... look damaged"), and a lamp lens crushed in
 // past half the dent's depth is broken: its lamp tag (u <= -1000, ADR-0342) goes and it darkens -- it no longer lights.
 bool dentMesh(RenderMesh& mesh, const Vec3& point, const Vec3& inward, Real radius, Real depth, Real scuff = 0);
+
+// GLASS (ADR-0356; owed in ADR-0355): a knock crazes the glass round the point -- its tint whitened toward the frosted
+// look of a cracked pane by `strength` (0..1), smooth to nothing at `radius` -- and a hard one smashes a hole: every
+// triangle whose middle lies within `radius` goes. The windows are one mesh, so a hole is the pane that was hit, not
+// every window. True when the mesh changed; `smashed` counts the triangles taken out.
+bool crackGlass(RenderMesh& mesh, const Vec3& point, Real radius, Real strength);
+int smashGlass(RenderMesh& mesh, const Vec3& point, Real radius);
 
 }  // namespace engine
 

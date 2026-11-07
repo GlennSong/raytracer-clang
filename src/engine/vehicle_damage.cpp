@@ -69,4 +69,38 @@ bool dentMesh(RenderMesh& mesh, const Vec3& point, const Vec3& inward, Real radi
     return moved;
 }
 
+bool crackGlass(RenderMesh& mesh, const Vec3& point, Real radius, Real strength) {
+    if (radius <= 0 || strength <= 0) return false;
+    bool changed = false;
+    const Real r2 = radius * radius;
+    const Vec3 frost(0.85, 0.87, 0.88);
+    for (Vertex& v : mesh.vertices) {
+        const Real dd = (v.position - point).lengthSquared();
+        if (dd >= r2) continue;
+        const Real t = 1.0 - std::sqrt(dd) / radius;
+        const Real a = std::min(Real(1), strength * t * t * (3.0 - 2.0 * t));
+        v.color = v.color * (1.0 - a) + frost * a;
+        changed = true;
+    }
+    return changed;
+}
+
+int smashGlass(RenderMesh& mesh, const Vec3& point, Real radius) {
+    if (radius <= 0 || mesh.indices.size() < 3) return 0;
+    const Real r2 = radius * radius;
+    std::vector<uint32_t> keep;
+    keep.reserve(mesh.indices.size());
+    int smashed = 0;
+    for (std::size_t i = 0; i + 2 < mesh.indices.size(); i += 3) {
+        const Vec3& a = mesh.vertices[mesh.indices[i]].position;
+        const Vec3& b = mesh.vertices[mesh.indices[i + 1]].position;
+        const Vec3& c = mesh.vertices[mesh.indices[i + 2]].position;
+        const Vec3 m = (a + b + c) * (1.0 / 3.0);
+        if ((m - point).lengthSquared() < r2) { ++smashed; continue; }
+        keep.insert(keep.end(), {mesh.indices[i], mesh.indices[i + 1], mesh.indices[i + 2]});
+    }
+    if (smashed > 0) mesh.indices.swap(keep);
+    return smashed;
+}
+
 }  // namespace engine

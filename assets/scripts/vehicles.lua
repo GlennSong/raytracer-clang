@@ -43,11 +43,12 @@ local function lens(m, mat) local c = LENS_TINT[mat]; return lens_tag(mesh.paint
 --   smoke = { steam_below, black_below }   the nose's health the hood steams below, then smokes black
 --   kick = { car, out, up }    a panel coming off: the share of the car's speed it keeps, and m/s out and up
 --   rough = { below, wobble, misfire }   the nose's health the engine runs rough below; pitch lurch; misfire share
+--   crack_from / smash_from    a knock's cost near glass that crazes it / smashes a hole in it (ADR-0356)
 local KIT_DAMAGE = {
   default = {
     knock_from = 3.0, knock_full = 40.0, scrape_per_metre = 0.004, ref_mass = 1500,
     spark_knock = 4.0, spark_slide = 2.5, crash_window = 0.33, ground_share = 0.33, break_share = 0.10,
-    zone_scale = 1.2, panel_scale = 1.6,
+    zone_scale = 1.2, panel_scale = 1.6, crack_from = 0.04, smash_from = 0.30,
     dent = { from = 0.01, radius_lo = 0.25, radius_hi = 0.90, depth_lo = 0.04, depth_per = 0.35, depth_max = 0.26,
              scuff_lo = 0.35, scuff_per = 1.2 },
     smoke = { steam_below = 0.6, black_below = 0.25 },
@@ -86,6 +87,7 @@ local KIT_TINT = {
   glass = { 0.16, 0.20, 0.24 }, trim = { 0.04, 0.04, 0.045 }, gasket = { 0.025, 0.025, 0.028 },
   grille = { 0.06, 0.06, 0.065 }, chrome = { 0.72, 0.73, 0.75 }, lamp = { 0.95, 0.95, 0.90 },
   lamp_red = { 0.75, 0.06, 0.05 }, interior = { 0.35, 0.26, 0.18 }, bed = { 0.08, 0.08, 0.09 },
+  liner = { 0.62, 0.61, 0.58 },   -- a bus's inside walls and ceiling (ADR-0356)
   box = { 0.90, 0.90, 0.88 }, chassis = { 0.07, 0.07, 0.08 }, door = { 0.80, 0.81, 0.82 },
   tank = { 0.78, 0.79, 0.80 }, trailer = { 0.86, 0.87, 0.88 }, sign = { 1.0, 0.85, 0.2 },
   beacon = { 0.80, 0.06, 0.05 },
@@ -173,7 +175,7 @@ local function kit_drivable(specName, opts, h)
     for cname, part in pairs(pn.cabin or {}) do pcabin[#pcabin + 1] = mesh.paint(part, KIT_CABIN_TINT[cname] or { 0.3, 0.3, 0.3 }) end
     if #pshell > 0 or pglass then
       panels[#panels + 1] = { name = name, pivot = pn.hinge.pivot, axis = pn.hinge.axis, open = pn.hinge.open, lo = pn.lo, hi = pn.hi,
-                              mass = pn.hinge.mass,
+                              mass = pn.hinge.mass, slide = pn.hinge.slide,
                               centre = { 0.5 * (pn.lo[1] + pn.hi[1]), 0.5 * (pn.lo[2] + pn.hi[2]), 0.5 * (pn.lo[3] + pn.hi[3]) } }
       if #pshell > 0 then
         parts[#parts + 1] = { mesh = mesh.recompute_normals(mesh.merge(pshell)), albedo = { 1, 1, 1 },
@@ -260,8 +262,11 @@ local KIT_HANDLING = {
   small_truck = { drive = "rwd", drag_area = 3.4, torque_per_kg = 0.40, suspension = street(1.6, 0.24, 0.55),
                   anti_roll = 6000, drift = { rear_grip = 0.70, slip_deg = 12, min_speed = 13 } },
   offroad     = OFFROAD,
-  bus         = { drive = "rwd", drag_area = 6.0, torque_per_kg = 0.32, max_steer_deg = 38, suspension = street(1.2, 0.30, 0.5),
-                  anti_roll = 6000, drift = { rear_grip = 0.85, slip_deg = 8, min_speed = 14 } },
+  -- (Glenn: "as a physics car the bus is too bouncy from side to side": 11 t on a car's bars rocked; air springs are
+  -- firm and well damped, and a bus's anti-roll bars are heavy -- but past ~25000 N/m Jolt's rig goes unstable: at
+  -- 30000 the bus would not pull away, at 60000 it was thrown 10 m when put down; the phys-tier tests hold this)
+  bus         = { drive = "rwd", drag_area = 6.0, torque_per_kg = 0.32, max_steer_deg = 38, suspension = street(1.5, 0.24, 0.8),
+                  anti_roll = 20000, drift = { rear_grip = 0.85, slip_deg = 8, min_speed = 14 } },
 }
 KIT_HANDLING.bus_standing = KIT_HANDLING.bus   -- (the same bus, another saloon)
 KIT_HANDLING.jeep.anti_roll, KIT_HANDLING.jeep.drift = 1500, { rear_grip = 0.45, slip_deg = 26 }
@@ -479,7 +484,8 @@ local function kit_far(P, color)
 end
 local function kit_car(spec, color)
   local P = kit.SPECS[spec]()
-  local car = kit.build(P, P.level or FLEET_KIT_LEVEL)
+  -- (a bus is built with its door panels apart: the city slides them open at its stops, ADR-0356)
+  local car = kit.build(P, P.level or FLEET_KIT_LEVEL, { panels = P.saloon ~= nil })
   local shell = {}
   for name, part in pairs(car.parts) do
     if name ~= "glass" then
@@ -488,6 +494,21 @@ local function kit_car(spec, color)
     end
   end
   local glass = car.parts.glass and mesh.paint(car.parts.glass, KIT_TINT.glass) or nil
+  -- A BUS's DOOR LEAVES (ADR-0356; Glenn: "When the bus driver stops does the bus door open for passengers to get
+  -- on?"): each leaf's paint and its glass, and its slide at fully open, for the city to draw apart from the body
+  local busDoors = {}
+  local doorNames = {}
+  for name in pairs(car.panels or {}) do if name:sub(1, 8) == "bus_door" then doorNames[#doorNames + 1] = name end end
+  table.sort(doorNames)
+  for _, name in ipairs(doorNames) do
+    local pn = car.panels[name]
+    local paint, leafGlass = {}, nil
+    for mname, part in pairs(pn.parts) do
+      if mname == "glass" then leafGlass = mesh.paint(part, KIT_TINT.glass)
+      else paint[#paint + 1] = lens_tag(mesh.paint(part, mname == "body" and color or (KIT_TINT[mname] or { 0.5, 0.5, 0.5 })), mname) end
+    end
+    if #paint > 0 then busDoors[#busDoors + 1] = { body = mesh.merge(paint), glass = leafGlass, slide = pn.hinge.slide } end
+  end
   local w = kit.wheel(P.wheel_r, P.wheel_w, 0)
   local tyre = mesh.paint(w.tyre, { 0.05, 0.05, 0.055 })
   local rim = mesh.paint(w.rim, { 0.72, 0.73, 0.75 })
@@ -545,6 +566,7 @@ local function kit_car(spec, color)
     rear_hip = car.rear_hip,
     seats = car.seats,
     doors = car.doors,
+    bus_doors = #busDoors > 0 and busDoors or nil,
   }
 end
 -- A KIT CAR AS PARTS for baking (Glenn, 2026-11-06: "Should there be a way for us to separate the glass from the rest

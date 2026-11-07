@@ -486,6 +486,12 @@
   "usage": "vehicle?"
  },
  {
+  "name": "vehicle_repair",
+  "owner": "engine",
+  "summary": "Repair the car the player drives, else the nearest: every zone whole, the engine running, dents, glass and lamps as built (ADR-0356; a panel that came off stays off).",
+  "usage": "vehicle_repair"
+ },
+ {
   "name": "vehicle_spawn",
   "owner": "engine",
   "summary": "Drop a vehicle in front of the player (the N key); e.g. vehicle_spawn moped.",

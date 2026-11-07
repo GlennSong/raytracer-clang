@@ -59,6 +59,13 @@ particles = {
     fade_in = 0.0, fade_out = 0.3, stretch = 0.02,
     count = 16, speed = 0, up = 2.5, spread = 1.4, jitter = 0.4,
   },
+  -- a window smashed (ADR-0356): small bright shards thrown out, tumbling down, glinting
+  glass = {
+    gravity = 9.81, drag = 0.4, life = {0.6, 1.2},
+    shape = "glow", colour = {0.75, 0.82, 0.85}, glow = {0.30, 0.34, 0.36}, size = {0.035, 0.03}, alpha = 0.9,
+    fade_in = 0.0, fade_out = 0.3, stretch = 0.0,
+    count = 24, speed = 2.5, up = 1.0, spread = 2.0, jitter = 0.1,
+  },
   -- a wrecked engine (ADR-0355): dark, oily puffs rolling up off the hood and hanging behind the car
   engine_smoke = {
     gravity = -1.6, drag = 1.4, life = {1.6, 3.2},

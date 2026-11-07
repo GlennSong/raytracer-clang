@@ -668,6 +668,17 @@ private:
     std::vector<engine::PhysicsWorld::VehicleConfig> carConfigs_;
     // per slot: the menu's recipe for it and its paint (loadFleetDrivable), what a taken car is built as
     std::vector<std::string> carDrivable_;
+    // per slot: a bus's door leaves (ADR-0356) -- each its paint's group and its glass's, and the slide at fully open;
+    // and per bus agent, how open its doors are (0 shut .. 1)
+    struct DoorLeafGroups {
+        engine::Entity body, glass;
+        engine::Vec3 slide{0, 0, 0};
+    };
+    std::vector<std::vector<DoorLeafGroups>> carDoorLeaves_;
+    std::unordered_map<int, float> busDoorOpen_;
+    struct BusDoorSound { engine::Vec3 at; bool shut = false; };
+    std::vector<BusDoorSound> busDoorSounds_;   // this step's, for the frame's update to play
+    engine::AudioClipHandle busDoorShutClip_, busDoorOpenClip_;
     std::vector<engine::Vec3> carPaint_;
     // ...and its seat (the handling's `seat`): a seat with BARS, not a wheel, is ridden astride, so the slot draws
     // its own rider (carRiderGroups_) posed by the player's seat rule instead of the car driver

@@ -215,6 +215,7 @@ bool loadVehicleSpec(ScriptVM& vm, const std::string& recipe, uint32_t seed,
                 panel.lo = vec3Field(L, pi, "lo", panel.centre);
                 panel.hi = vec3Field(L, pi, "hi", panel.centre);
                 panel.mass = static_cast<float>(numField(L, pi, "mass", panel.mass));
+                panel.slide = vec3Field(L, pi, "slide", panel.slide);
                 if (!panel.name.empty()) out.panels.push_back(std::move(panel));
             }
             lua_pop(L, 1);
@@ -309,6 +310,8 @@ bool loadVehicleSpec(ScriptVM& vm, const std::string& recipe, uint32_t seed,
         r.breakShare = numField(L, d, "break_share", r.breakShare);
         r.zoneScale = numField(L, d, "zone_scale", r.zoneScale);
         r.panelScale = numField(L, d, "panel_scale", r.panelScale);
+        r.crackFrom = numField(L, d, "crack_from", r.crackFrom);
+        r.smashFrom = numField(L, d, "smash_from", r.smashFrom);
         auto sub = [&](const char* name, auto&& read) {
             lua_getfield(L, d, name);
             if (lua_istable(L, -1)) read(lua_gettop(L));
@@ -374,6 +377,7 @@ Entity spawnVehicle(World& world, AssetManager& assets, const VehicleSpec& spec,
     v.openSeat = spec.openSeat;
     v.seat = spec.seat;
     v.bodyMesh = spec.body;   // (shared with the spec until the first dent copies it)
+    v.bodyMeshBuilt = spec.body;
     v.damage = spec.damage;
 
     // One child entity per extra part, rigidly pinned to the chassis by
@@ -397,6 +401,8 @@ Entity spawnVehicle(World& world, AssetManager& assets, const VehicleSpec& spec,
         v.bodyParts.push_back(pe);
         v.bodyPartPanel.push_back(part.panel);
         v.partMeshes.push_back(part.mesh);
+        v.partBuilt.push_back(static_cast<int>(v.partMeshesBuilt.size()));
+        v.partMeshesBuilt.push_back(part.mesh);
         v.partDented.push_back(0);
     }
     for (const VehicleSpec::Panel& sp : spec.panels) {
@@ -409,6 +415,7 @@ Entity spawnVehicle(World& world, AssetManager& assets, const VehicleSpec& spec,
         panel.lo = sp.lo;
         panel.hi = sp.hi;
         panel.mass = sp.mass;
+        panel.slide = sp.slide;
         v.panels.push_back(panel);
     }
     // Marker slots only: VehicleSystem creates the lens entities on its first

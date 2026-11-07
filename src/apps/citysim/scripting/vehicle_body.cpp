@@ -311,6 +311,29 @@ bool loadFleetCarBody(ScriptVM& vm, int slot, CarBodyRecipe& out,
         };
         readPoints("seats", body.seats);
         readPoints("doors", body.doors);
+        // bus_doors = { { body = Mesh, glass = Mesh, slide = {x,y,z} }, ... } (ADR-0356)
+        lua_getfield(L, rec, "bus_doors");
+        if (lua_istable(L, -1)) {
+            const int bt = lua_gettop(L);
+            const int n = static_cast<int>(luaL_len(L, bt));
+            for (int i = 1; i <= n; ++i) {
+                lua_rawgeti(L, bt, i);
+                const int di = lua_gettop(L);
+                if (lua_istable(L, di)) {
+                    CarBodyRecipe::DoorLeaf leaf;
+                    lua_getfield(L, di, "body");
+                    if (std::shared_ptr<RenderMesh> m = luaToMesh(L, -1)) leaf.body = *m;
+                    lua_pop(L, 1);
+                    lua_getfield(L, di, "glass");
+                    if (std::shared_ptr<RenderMesh> m = luaToMesh(L, -1)) leaf.glass = *m;
+                    lua_pop(L, 1);
+                    leaf.slide = vec3Field(L, di, "slide", leaf.slide);
+                    if (!leaf.body.vertices.empty()) body.doorLeaves.push_back(std::move(leaf));
+                }
+                lua_pop(L, 1);
+            }
+        }
+        lua_pop(L, 1);
         lua_getfield(L, rec, "driver_seat");
         body.hasDriverSeat = lua_istable(L, -1);
         lua_pop(L, 1);

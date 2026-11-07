@@ -16308,3 +16308,55 @@ ends on NaN. A walker's ragdoll had been made at a NaN position, thrown at 107 m
 - Repair.
 - A damage readout on the HUD.
 - Dodging seen in the city: the rules are tested; a probe drive met no walkers.
+
+## ADR-0356 — Buses that open their doors, glass that breaks, a damage readout, repair, and the steep viaduct measured
+
+**Context.** Glenn, 2026-11-06/07, playing river_town:
+- the bus "has no interior", "I am able to see inside of it and right out through the roof";
+- "the bus should open its doors when I stop";
+- "When the bus driver stops does the bus door open for passengers to get on?";
+- "the exterior facing sign is visible backwards from the inside";
+- "as a physics car the bus is too bouncy from side to side";
+- and the loose ends from ADR-0355: door sounds, cracked glass, a damage readout, parked cars you can open, repair,
+  "a crazy incline in that city that's undrivable".
+
+**Decision.**
+- **A bus's doors are panels.** `kit.panel_plan` gives a saloon bus its two kerb-side doorways (x > 0), at the places
+  car_interior.cpp's bus layout puts them. The plan copies its rule, and `bus_doors_stand_over_the_saloons_doorways`
+  holds the two together (z 4.32 / -0.20).
+  - A bus has no car doors, hood or trunk.
+  - Panels gain a slide (`Panel::slide`, `travel()`): a plug door stands out 9 cm and slides back along the side by
+    its width.
+- **The drivable bus** opens them after half a second standing still with its driver in, and shuts them on moving or
+  throttle. They have the door sounds and no E prompt.
+- **The traffic bus** is built with its doors apart (`kit_car`: `bus_doors`, each leaf's paint and glass and slide;
+  `CarBodyRecipe::doorLeaves`). CityRenderSystem draws each leaf as its own group per bus, slid by how open that bus's
+  doors are (`busDoorOpen_`). They open while its dwell runs (`Agent::busDwell` > 0.8 s) and shut before it pulls
+  away, with the latch and the slam heard within 35 m.
+- **A bus is lined inside:** its painted shell above the floor, offset in and turned (mat `liner`), as a car's
+  headliner is. The shell is one-sided, and from inside the roof was not there.
+- **The drivable bus carries its saloon** (seats, poles, cab).
+- **Boards backed:** the front and rear destination boards get a dark backing between the board and the glass, as the
+  side and next-stop boards have.
+- **The bus rolls less:** `street(1.5, 0.24, 0.8)` and 20000 N/m anti-roll bars, from `street(1.2, 0.30, 0.5)` and
+  6000. Past ~25000 Jolt's rig goes unstable: at 30000 it would not pull away, at 60000 it was thrown 10 m when put
+  down. The phys-tier tests hold this.
+- **Glass breaks** (`crackGlass`, `smashGlass`). A knock near glass crazes it (its tint whitened round the point) from
+  `crack_from`. From `smash_from` it smashes a hole: the triangles there go, with a burst of the new `glass` effect.
+  The fixed windows are one mesh, so the hole is the pane hit, not every window.
+- **The readout** (`drawCarHud`, the game UI layer): bottom right while driving. ENGINE and a bar of the nose's health
+  (green, amber below 60, red below 25, ENGINE DEAD), each zone's health, and the panels gone.
+- **Repair** (`VehicleSystem::repair`, `vehicle_repair`): every zone whole, the engine running, the smoke gone, and
+  each part's mesh back as built (`bodyMeshBuilt`, `partMeshesBuilt`, `partBuilt`, kept in step as panels come off). A
+  panel that came off stays off. The gas station's pump will offer it (fuel, next).
+- **A stopped city car's hood and trunk** open on foot: `CityVehicleSystem::promote` (the takeover, now its own
+  function) makes it the real car where it stands and swings the panel.
+- **The steep road, measured** (`level_river_town_streets_are_drivable_grades`): each street's own deck sampled every
+  4 m (`heightOn`, following it, not the bridge over it). The worst is 65.5 % at (393, 274), a viaduct coming down
+  into an at-grade junction in a few metres. That is the roads' to fix. The test is a ratchet at 70 %; 15 % is owed.
+
+**Owed.**
+- Truly parked cars (no driver: a `SimVehicle` with `driver < 0`) opened or taken on foot. The sim needs a way to hand
+  one over (taken, not drawn, its owner without it).
+- The viaduct's ramp (roads).
+- A crack texture on glass.

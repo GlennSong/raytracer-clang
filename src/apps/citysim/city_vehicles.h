@@ -87,6 +87,8 @@ private:
     // the ambient car offered to the interaction broker (rescanned four times a second)
     engine::Real scanT_ = 0;
     int ambientAgent_ = -1;   // the nearest ambient car in reach, rescanned four times a second
+    // (ADR-0356) make an ambient car a real Vehicle -- the takeover, and a parked car's hood or trunk opened on foot
+    engine::Entity promote(engine::FrameContext& ctx, int agent);
     bool haveAmbient_ = false;
     engine::Vec3 ambientAt_{0, 0, 0};
 };

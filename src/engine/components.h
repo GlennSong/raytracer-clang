@@ -604,10 +604,12 @@ struct Vehicle {
         Vec3 centre{0, 0, 0};
         Vec3 lo{0, 0, 0}, hi{0, 0, 0};   // its box, shut
         float mass = 20.0f;              // kg, loose
+        Vec3 slide{0, 0, 0};             // travel at fully open, on top of the turn (a bus's plug door, ADR-0356)
         float health = 1.0f;             // ADR-0353: at 0 it comes off
         bool gone = false;
-        // where the part's points go: q (x - pivot) + pivot
+        // where the part's points go: q (x - pivot) + pivot + slide x (how far open)
         Quat turn() const { return Quat::fromAxisAngle(axis, angle); }
+        Vec3 travel() const { return open > 0.0f ? slide * static_cast<Real>(angle / open) : Vec3(0, 0, 0); }
     };
     std::vector<Panel> panels;
     std::vector<int> bodyPartPanel;
@@ -619,12 +621,17 @@ struct Vehicle {
     bool engineDead = false;
     std::shared_ptr<RenderMesh> bodyMesh;
     std::vector<std::shared_ptr<RenderMesh>> partMeshes;
+    // ...and as they were built: what a repair puts back (ADR-0356)
+    std::shared_ptr<RenderMesh> bodyMeshBuilt;
+    std::vector<std::shared_ptr<RenderMesh>> partMeshesBuilt;
+    std::vector<int> partBuilt;              // per bodyParts entry: its index in partMeshesBuilt
     bool bodyDented = false;                 // bodyMesh is this car's own copy
     std::vector<char> partDented;            // ...and each part's
     bool meshDirty = false;                  // dented since the last upload
     float sinceUpload = 0.0f;
     float scrapeSparkClock = 0.0f;
     float age = 0.0f;                        // s since it was made (a car settling where it spawned is not hit)
+    float stoppedFor = 0.0f;                 // s standing still with its driver in (a bus's doors open, ADR-0356)
     // ONE CRASH IS ONE KNOCK (Glenn: "I hit a fence with my truck... is it dead?"): a fence is a dozen posts and rails,
     // each its own contact in the same instant; per zone, the knocks within a third of a second cost only the worst of them
     Entity engineSmoke;                      // the hood's steam, then smoke, once the nose is hurt (ADR-0355)

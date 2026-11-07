@@ -543,6 +543,9 @@ TEST_CASE(fleet_bus_is_a_bus_you_can_see_into) {
         }
         ++buses;
         CHECK(body.seeInto);
+        // its two door leaves apart from the body, each sliding back along the side (ADR-0356)
+        CHECK(body.doorLeaves.size() == 2);
+        for (const auto& leaf : body.doorLeaves) CHECK(leaf.slide.z < -0.8 && !leaf.body.vertices.empty());
         CHECK(body.interior.vertices.empty());   // the saloon rides in the shell
         const Real W = body.size.x, H = body.size.y, L = body.size.z;
         CHECK(!body.glass.vertices.empty());
@@ -993,4 +996,35 @@ TEST_CASE(drivable_bus_carries_its_saloon) {
         std::printf("    [bus] %s: %zu vertices of interior fixed to the chassis\n", bus, fixedVerts);
         CHECK(fixedVerts > 2000);   // the seats, the poles, the cab
     }
+}
+
+// A BUS's DOORS ARE WHERE ITS SALOON'S ARE (ADR-0356): the body's door panels (vehicle_kit.lua panel_plan, which
+// copies car_interior.cpp's bus layout) stand over the saloon's own door markers, on the kerb side, and slide open
+// along the side; the bus is lined inside.
+TEST_CASE(bus_doors_stand_over_the_saloons_doorways) {
+    VehiclesVM a;
+    CHECK(a.loaded);
+    std::string err;
+    const bool ok = a.vm.doString(R"lua(
+      local kit = require "vehicle_kit"
+      for _, name in ipairs({ "bus", "bus_standing" }) do
+        local car = kit.build(kit.SPECS[name](), 0, { panels = true })
+        assert(car.panels and car.panels.bus_door_1 and car.panels.bus_door_2, name .. ": no bus doors")
+        assert(car.doors and #car.doors >= 2, name .. ": no saloon doors")
+        for i = 1, 2 do
+          local p = car.panels["bus_door_" .. i]
+          local d = car.doors[i]
+          local mid = 0.5 * (p.lo[3] + p.hi[3])
+          assert(math.abs(mid - d[3]) < 0.35, name .. " door " .. i .. ": panel at z " .. mid .. ", doorway at " .. d[3])
+          assert(p.lo[1] > 0 and d[1] > 0, name .. " door " .. i .. ": not on the kerb side")
+          assert(p.hinge.slide and p.hinge.slide[3] < -0.8, name .. " door " .. i .. ": does not slide along")
+        end
+        assert(car.parts.liner, name .. ": not lined inside")
+        print(string.format("    [bus doors] %s: z %.2f / %.2f over doorways %.2f / %.2f", name,
+          0.5 * (car.panels.bus_door_1.lo[3] + car.panels.bus_door_1.hi[3]), 0.5 * (car.panels.bus_door_2.lo[3] + car.panels.bus_door_2.hi[3]),
+          car.doors[1][3], car.doors[2][3]))
+      end
+    )lua", &err);
+    if (!ok) std::printf("    %s\n", err.c_str());
+    CHECK(ok);
 }

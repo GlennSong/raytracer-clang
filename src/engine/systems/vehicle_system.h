@@ -6,6 +6,7 @@
 #include "../audio/engine_voices.h"   // EngineVoicePool
 #include "../properties.h"
 #include "../control/control_commands.h"
+#include "../ui/ui_text.h"
 #include <string>
 
 #include <vector>
@@ -75,6 +76,15 @@ private:
     void driveVehicles(FrameContext& ctx);
     void writeBack(FrameContext& ctx);
     void swingPanels(FrameContext& ctx);
+    // THE CAR's READOUT (ADR-0356): the engine's health as a bar and each zone's, bottom right while driving (the game
+    // UI layer, engine/ui/ui_text.h)
+    void drawCarHud(FrameContext& ctx);
+    // A REPAIR (ADR-0356): every zone whole, the engine running, the dents and broken glass and lamps put back as they
+    // were built; a panel that came off is a loose body by then and stays off
+    void repair(FrameContext& ctx, Entity car, Vehicle& v);
+    ControlCommands::Binding repairCmd_;
+    bool repairStaged_ = false;
+    UiText carHud_;
     // DAMAGE (ADR-0353): the step's touches (from the Collision events) spent on the cars they hit
     void applyDamage(FrameContext& ctx);
     void detachPanel(FrameContext& ctx, Entity car, Vehicle& v, int panel, const Vec3& kick);

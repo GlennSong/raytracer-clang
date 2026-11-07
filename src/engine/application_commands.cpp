@@ -542,6 +542,11 @@ void Application::registerPlayerVerbs() {
                      "The player's vehicle: speed, rpm, gear, drive mode, position, and the sim speed.",
                      unanswered("a VehicleSystem: play mode"));   // measured by it each frame
 
+    commandTable.add("vehicle_repair", "vehicle_repair",
+                     "Repair the car the player drives, else the nearest: every zone whole, the engine running, dents, "
+                     "glass and lamps as built (ADR-0356; a panel that came off stays off).",
+                     unanswered("a VehicleSystem: play mode"));
+
     commandTable.add("pieces", "pieces knock",
                      "Knock the street piece nearest the player loose (a bin, a rack, news boxes, a hydrant; ADR-0354), "
                      "as a car hitting it would.",

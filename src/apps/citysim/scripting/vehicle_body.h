@@ -74,6 +74,13 @@ struct CarBodyRecipe {
     // driver, and one per passenger seat. Empty when the recipe has none.
     std::vector<Vec3> seats;
     std::vector<Vec3> doors;   // floor points a passenger steps off from
+    // A BUS's DOOR LEAVES (ADR-0356): drawn apart from the body, each slid by `slide` (body frame) as the bus stands at
+    // its stop with its doors open -- its painted leaf and its glass
+    struct DoorLeaf {
+        RenderMesh body, glass;
+        Vec3 slide{0, 0, 0};
+    };
+    std::vector<DoorLeaf> doorLeaves;
     Vec3 driverSeat{0, 0, 0};
     bool hasDriverSeat = false;
     // `rear_hip`: the back bench's hip point (its middle), when the cabin has one. Without it a car has no back

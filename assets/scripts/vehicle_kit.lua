@@ -212,6 +212,11 @@ function kit.body(P)
         tag(sel, "door_" .. d.name .. "_" .. sd.tag)
       end
     end
+    for _, d in ipairs(plan.bus or {}) do   -- a bus's doors: the kerb side's flank, ledge and glass between the seams
+      local sel = rows(d.lo, d.hi, sides[1].low[1], sides[1].low[2])
+      for _, f in ipairs(rows(d.lo, d.hi, sides[1].up[1], sides[1].up[2])) do sel[#sel + 1] = f end
+      tag(sel, d.name)
+    end
     if plan.hood then tag(rows(plan.hood.lo, plan.hood.hi, first[4], first[9] - 1), "hood") end
     -- the tail above `y0`: every face at the back that faces back -- the cap and its window, and on a box whose
     -- roof meets the tail square (a van: its back wall above the belt is the roof run falling sheer) those rows too
@@ -243,7 +248,20 @@ end
 -- pillar (the glass keys), so the window stays whole on the door.
 function kit.panel_plan(P)
   local spec = P.panels
-  if spec == false or (spec == nil and P.saloon) then return nil end
+  if spec == false then return nil end
+  -- A BUS's DOORS (ADR-0356; Glenn: "the bus should open its doors when I stop"): its saloon's two doorways on the
+  -- kerb side (x > 0) -- the front one beside the driver's partition, the middle one where the seats leave its
+  -- stretch of wall clear -- at the places car_interior.cpp's bus layout puts them (a test holds the two together).
+  -- A bus has no car doors, hood or trunk.
+  if spec == nil and P.saloon then
+    local half = P.length * 0.5
+    local sp = P.saloon
+    local frontZ = half - (sp.front or 0.35)
+    local len = frontZ - (-half + (sp.rear or 0.30))
+    local d0 = len * 0.46
+    return { doors = {}, bus = { { name = "bus_door_1", lo = frontZ - 1.65, hi = frontZ - 0.45 },
+                                 { name = "bus_door_2", lo = frontZ - d0 - 1.25, hi = frontZ - d0 } } }
+  end
   spec = type(spec) == "table" and spec or {}
   local G, half = P.glass, P.length * 0.5
   local ra = P.wheel_r + 0.075
@@ -287,6 +305,7 @@ function kit.seams(P)
   if not plan then return out end
   local function add(z) if z then out[#out + 1] = z end end
   for _, d in ipairs(plan.doors) do add(d.hi_low); add(d.hi_up); add(d.lo); add(d.lo_low); add(d.lo_up) end
+  for _, d in ipairs(plan.bus or {}) do add(d.lo); add(d.hi) end
   if plan.hood then add(plan.hood.lo); add(plan.hood.hi) end
   if plan.trunk and plan.trunk.lo then add(plan.trunk.lo); add(plan.trunk.hi) end
   return out
@@ -786,6 +805,10 @@ S.bus = function()
     extras = function(car)
       car.polys[#car.polys + 1] = kit.tilted_box({ 1.08, 0.26, 0.06 }, { 0, 2.78, half - 1.05 + 0.036 }, 0, "dash")
       car.polys[#car.polys + 1] = kit.tilted_box({ 0.06, 0.26, 1.08 }, { 1.17 - 0.036, 2.55, half - 3.5 }, 0, "dash")
+      -- ...and behind the front and rear boards (Glenn: "the exterior facing sign is visible backwards from the
+      -- inside"): a backing between each board and the glass
+      car.polys[#car.polys + 1] = kit.tilted_box({ 2.06, 0.24, 0.02 }, { 0, 2.98, half + 0.015 }, 0, "dash")
+      car.polys[#car.polys + 1] = kit.tilted_box({ 2.06, 0.24, 0.02 }, { 0, 2.98, -half - 0.015 }, 0, "dash")
     end,
   } end
 
@@ -1181,6 +1204,18 @@ function kit.build(P, level, opts)
                                   hip_height = sp.hip or 0.45, seat_color = sp.seat_color, trim_color = sp.trim_color,
                                   standing = sp.layout == "standing" }
   end
+  -- A BUS's INSIDE (Glenn: "I am able to see inside of it and right out through the roof"): its painted shell, offset
+  -- in and turned to face the saloon, as a car's headliner and door cards are -- the shell is one-sided, and from in
+  -- the saloon (or a camera that clips in) the roof and walls were not there
+  if saloon then
+    local floorY = P.saloon.floor_y or 0.36
+    local sel = S:select{ mat = "body", where = function(c) return c[2] > floorY + 0.05 end }
+    if #sel > 0 then
+      local Lnr = S:extract(sel, -0.05, true)
+      Lnr:assign(Lnr:select{}, { mat = "liner" })
+      car.polys[#car.polys + 1] = Lnr
+    end
+  end
   if P.extras then P.extras(car) end
   for _, x in ipairs(car.polys) do S:append(x) end
   lo, hi = S:bounds()
@@ -1301,6 +1336,11 @@ function kit.hinge(name, lo, hi)
     return { pivot = { 0, hi[2], hi[3] }, axis = { 1, 0, 0 }, open = 62, mass = 12 }
   elseif name == "hatch" then
     return { pivot = { 0, hi[2], hi[3] }, axis = { 1, 0, 0 }, open = 80, mass = 18 }
+  elseif name:sub(1, 8) == "bus_door" then
+    -- a PLUG DOOR: it stands out from the side and slides back along it (a barely-there turn carries the progress;
+    -- `slide` is the travel at fully open, ADR-0356)
+    return { pivot = { hi[1], ym, hi[3] }, axis = { 0, 1, 0 }, open = 1, mass = 35,
+             slide = { 0.09, 0, -(hi[3] - lo[3]) * 0.95 } }
   elseif name == "tailgate" then   -- on its foot, the top dropping back to lie flat
     return { pivot = { 0, lo[2], hi[3] }, axis = { -1, 0, 0 }, open = 90, mass = 20 }
   end
