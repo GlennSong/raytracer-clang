@@ -195,6 +195,11 @@ local function kit_drivable(specName, opts, h)
   if #cabin > 0 then
     parts[#parts + 1] = { mesh = mesh.merge(cabin), albedo = { 1, 1, 1 }, metallic = 0.0, roughness = 0.9 }
   end
+  -- A BUS's SALOON (its seats, poles, cab: kit.build's `saloon`, already coloured) -- a bus has no car cabin, and one
+  -- taken from the traffic drove as an empty shell (Glenn: "the bus has no interior")
+  if car.saloon then
+    parts[#parts + 1] = { mesh = car.saloon, albedo = { 1, 1, 1 }, metallic = 0.0, roughness = 0.8 }
+  end
   local lights = {}
   for _, l in ipairs(car.lights) do lights[#lights + 1] = l end
   lights[#lights + 1] = { name = "driver_seat", pos = car.driver_seat }

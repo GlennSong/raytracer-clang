@@ -977,3 +977,20 @@ TEST_CASE(drivable_spec_carries_its_damage_tuning) {
     CHECK_APPROX(soft.damage.knockFull, 34.0, 1e-9);
     CHECK_APPROX(soft.damage.dentDepthMax, base.dentDepthMax, 1e-9);   // (its other fields: the default's)
 }
+
+// A BUS DRIVEN IS A BUS YOU CAN SEE INTO (Glenn: "the bus has no interior"): the drivable bus carries its saloon as a
+// part fixed to the chassis, as a car carries its cabin.
+TEST_CASE(drivable_bus_carries_its_saloon) {
+    VehiclesVM v;
+    CHECK(v.loaded);
+    std::string err;
+    for (const char* bus : {"kit_bus", "kit_bus_standing"}) {
+        VehicleSpec spec;
+        CHECK(loadVehicleSpec(v.vm, std::string("return vehicle.") + bus + "(seed, {})", 1u, spec, &err));
+        std::size_t fixedVerts = 0;
+        for (const auto& part : spec.parts)
+            if (part.panel < 0 && part.opacity >= 1.0f && part.mesh) fixedVerts += part.mesh->vertices.size();
+        std::printf("    [bus] %s: %zu vertices of interior fixed to the chassis\n", bus, fixedVerts);
+        CHECK(fixedVerts > 2000);   // the seats, the poles, the cab
+    }
+}
