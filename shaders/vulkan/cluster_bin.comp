@@ -1,0 +1,111 @@
+#version 450
+// THE LIGHTS BINNED ON THE GPU (ADR-0364): the froxel lists of light_clusters.cpp `buildClusters`, built here instead
+// of on the CPU. One workgroup a froxel; its 64 threads test every light's sphere against the froxel's box in view
+// space -- the same box and the same test as the CPU's -- gather the touching ones in shared memory, keep the 64
+// nearest the froxel's middle when there are more (the CPU's rule), and write them in light order. Each froxel owns a
+// fixed run of 64 slots, so no prefix sum: cells[c] = (c * 64) | count << 24, the format mesh.frag already reads.
+
+layout(local_size_x = 64) in;
+
+struct Light {
+    vec4 positionIntensity;
+    vec4 directionInner;
+    vec4 colorOuter;
+    vec4 typeRange;   // y range
+};
+layout(std430, set = 0, binding = 0) readonly buffer LightBuf { Light lights[]; };
+layout(std430, set = 0, binding = 1) writeonly buffer CellBuf { uint cells[]; };
+layout(std430, set = 0, binding = 2) writeonly buffer IndexBuf { uint indices[]; };
+
+layout(push_constant) uniform Push {
+    vec4 viewRow0;   // world -> view, the matrix's first three rows (view looks down -Z)
+    vec4 viewRow1;
+    vec4 viewRow2;
+    ivec4 grid;      // tilesX, tilesY, slices, light count
+    vec4 depth;      // zNear, zFar, tan(fovX / 2), tan(fovY / 2)
+} pc;
+
+const uint SLOTS = 64u;      // kept a froxel (ClusterGrid's cap)
+const uint GATHER = 256u;    // touching lights gathered a froxel; past this the rest are not seen (a crowd's worst)
+
+shared uint candIdx[GATHER];
+shared float candD2[GATHER];
+shared uint candKeep[GATHER];
+shared uint candCount;
+
+float sliceNear(int s) {
+    return pc.depth.x * pow(pc.depth.y / pc.depth.x, float(s) / float(pc.grid.z));
+}
+
+int sliceOf(float depth) {
+    if (depth <= pc.depth.x) return 0;
+    const float t = log(depth / pc.depth.x) / log(pc.depth.y / pc.depth.x);
+    return clamp(int(t * float(pc.grid.z)), 0, pc.grid.z - 1);
+}
+
+void main() {
+    const uint cell = gl_WorkGroupID.x;
+    const uint t = gl_LocalInvocationID.x;
+    const int tilesX = pc.grid.x, tilesY = pc.grid.y;
+    const int s = int(cell) / (tilesX * tilesY);
+    const int ty = (int(cell) / tilesX) % tilesY;
+    const int tx = int(cell) % tilesX;
+    // the froxel's box in view space (x right, y up, depth forward), as buildClusters makes it
+    const float zn = sliceNear(s), zf = sliceNear(s + 1);
+    const float c0 = pc.depth.z * (2.0 * float(tx) / float(tilesX) - 1.0), c1 = pc.depth.z * (2.0 * float(tx + 1) / float(tilesX) - 1.0);
+    const float e0 = pc.depth.w * (2.0 * float(ty) / float(tilesY) - 1.0), e1 = pc.depth.w * (2.0 * float(ty + 1) / float(tilesY) - 1.0);
+    const float xLo = min(c0 * zn, c0 * zf), xHi = max(c1 * zn, c1 * zf);
+    const float yLo = min(e0 * zn, e0 * zf), yHi = max(e1 * zn, e1 * zf);
+    const float zm = 0.5 * (zn + zf);
+    const vec3 mid = vec3(0.5 * (c0 + c1) * zm, 0.5 * (e0 + e1) * zm, zm);
+
+    if (t == 0u) candCount = 0u;
+    barrier();
+    for (uint i = t; i < uint(pc.grid.w); i += 64u) {
+        const Light L = lights[i];
+        const float r = L.typeRange.y;
+        if (r <= 0.0) continue;
+        const vec4 w = vec4(L.positionIntensity.xyz, 1.0);
+        const vec3 p = vec3(dot(pc.viewRow0, w), dot(pc.viewRow1, w), -dot(pc.viewRow2, w));
+        // buildClusters' first cut, so the lists are the CPU's: the sphere's depth span and the tiles its view-ratio
+        // span reaches (the froxel boxes overhang the frustum's wedge; this keeps a light out of the boxes it cannot
+        // reach through the view)
+        if (p.z + r < pc.depth.x || p.z - r > pc.depth.y) continue;
+        const float dMin = max(p.z - r, pc.depth.x), dMax = min(p.z + r, pc.depth.y);
+        const float rxLo = min((p.x - r) / dMin, (p.x - r) / dMax), rxHi = max((p.x + r) / dMin, (p.x + r) / dMax);
+        const float ryLo = min((p.y - r) / dMin, (p.y - r) / dMax), ryHi = max((p.y + r) / dMin, (p.y + r) / dMax);
+        if (rxHi < c0 || rxLo > c1 || ryHi < e0 || ryLo > e1) continue;
+        const int s0 = sliceOf(dMin), s1 = sliceOf(dMax);
+        if (s < s0 || s > s1) continue;
+        const vec3 q = vec3(clamp(p.x, xLo, xHi), clamp(p.y, yLo, yHi), clamp(p.z, zn, zf)) - p;
+        if (dot(q, q) > r * r) continue;
+        const uint slot = atomicAdd(candCount, 1u);
+        if (slot < GATHER) {
+            candIdx[slot] = i;
+            const vec3 d = p - mid;
+            candD2[slot] = dot(d, d);
+        }
+    }
+    barrier();
+    const uint n = min(candCount, GATHER);
+    const uint keep = min(n, SLOTS);
+    // over the cap: the nearest the middle stay (ties by light order, so the pick is the same every frame)
+    for (uint k = t; k < n; k += 64u) {
+        uint nearer = 0u;
+        if (n > SLOTS)
+            for (uint j = 0u; j < n; ++j)
+                if (candD2[j] < candD2[k] || (candD2[j] == candD2[k] && candIdx[j] < candIdx[k])) ++nearer;
+        candKeep[k] = nearer < SLOTS ? 1u : 0u;
+    }
+    barrier();
+    // the kept, written in light order (a deterministic list, like the CPU's)
+    const uint base = cell * SLOTS;
+    for (uint k = t; k < n; k += 64u) {
+        if (candKeep[k] == 0u) continue;
+        uint before = 0u;
+        for (uint j = 0u; j < n; ++j)
+            if (candKeep[j] != 0u && candIdx[j] < candIdx[k]) ++before;
+        indices[base + before] = candIdx[k];
+    }
+    if (t == 0u) cells[cell] = (base & 0xFFFFFFu) | (keep << 24);
+}

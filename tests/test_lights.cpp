@@ -136,3 +136,31 @@ TEST_CASE(light_picker_lights_a_pool_less_kind_always_and_rides_the_dusk) {
     pickLights(b, b.pools, c, Vec3(0, 0, 0), 0.0f, pts, sps);
     CHECK(pts.empty() && sps.size() == 1);
 }
+
+TEST_CASE(light_picker_trims_to_the_renderers_capacity_by_importance) {
+    const LightBook b = testBook();
+    std::vector<LightPool> pools = b.pools;
+    pools[0].count = 100;   // the street pool would light all of them
+    std::vector<LightCandidate> c;
+    for (int i = 0; i < 10; ++i) c.push_back(at(0, 5 + 8 * i));   // lamps at 5, 13, .. 77 m
+    c.push_back(at(2, 300, 0, true));                               // the player's torch, far off: still kept
+    std::vector<PointLight> pts;
+    std::vector<SpotLight> sps;
+    pickLights(b, pools, c, Vec3(0, 0, 0), 1.0f, pts, sps, 4);
+    CHECK(pts.size() + sps.size() == 4);
+    CHECK(sps.size() == 1);   // the player's own first
+    for (const PointLight& p : pts) CHECK(p.position.x <= 21.0);   // then the brightest where the camera is: the nearest
+    CHECK(lightImportance(10.0f, 30.0f, 31.0f) == 0.0f);          // past its reach it lights nothing here
+    CHECK(lightImportance(10.0f, 30.0f, 0.2f) == 10.0f);          // nearer than a metre counts as one
+}
+
+TEST_CASE(lights_lua_gives_every_pool_a_many_light_budget) {
+    LightBook book;
+    std::string err;
+    CHECK(loadLightsSource(readLightsFile(), book, &err));
+    for (const LightPool& p : book.pools) {
+        CHECK(p.hasMany);
+        CHECK(p.manyCount >= p.count);   // a clustered renderer never lights fewer than a forward one
+    }
+    for (const char* name : {"tail_light", "brake_light"}) CHECK(book.kind(name) >= 0);
+}

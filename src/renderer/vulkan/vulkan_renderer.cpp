@@ -31,6 +31,7 @@
 #endif
 
 #include <algorithm>
+#include <iterator>
 #include <array>
 #include <chrono>
 #include <cmath>
@@ -749,6 +750,28 @@ struct VulkanRenderer::Impl {
     Mat4 camView;
     float camTanHalfY = 0.577f, camAspect = 1.78f;
     int clusterLogEvery = 0;
+    // BINNED ON THE GPU (ADR-0364; RT_GPU_CLUSTERS=0 bins on the CPU as before): cluster_bin.comp writes bindings 9 and
+    // 10 into these device-local buffers (64 slots a froxel) from the lights in clusterBuf[0], before the scene pass.
+    // RT_CLUSTER_CHECK=1: every 120 frames the GPU's lists are read back and compared with buildClusters' on the same
+    // lights (logged).
+    bool gpuBin = false;
+    std::array<VkBuffer, MAX_FRAMES_IN_FLIGHT> binBuf[2]{};          // cells, indices
+    std::array<VkDeviceMemory, MAX_FRAMES_IN_FLIGHT> binMem[2]{};
+    VkDescriptorSetLayout binSetLayout = VK_NULL_HANDLE;
+    VkDescriptorPool binPool = VK_NULL_HANDLE;
+    std::array<VkDescriptorSet, MAX_FRAMES_IN_FLIGHT> binSets{};
+    VkPipelineLayout binLayout = VK_NULL_HANDLE;
+    VkPipeline binPipe = VK_NULL_HANDLE;
+    uint32_t binLightCount = 0;
+    std::array<VkBuffer, MAX_FRAMES_IN_FLIGHT> checkBuf[2]{};        // the read-back (host-visible)
+    std::array<VkDeviceMemory, MAX_FRAMES_IN_FLIGHT> checkMem[2]{};
+    std::array<void*, MAX_FRAMES_IN_FLIGHT> checkMapped[2]{};
+    std::array<bool, MAX_FRAMES_IN_FLIGHT> checkPending{};
+    std::array<ClusterLists, MAX_FRAMES_IN_FLIGHT> checkCpu{};
+    bool checkThisFrame = false;
+    bool createBinPipeline();
+    void recordClusterBin(VkCommandBuffer cmd);
+    void compareClusterCheck();
     VkPipelineLayout pipelineLayout = VK_NULL_HANDLE;
     VkPipeline meshPipeline = VK_NULL_HANDLE;          // two-sided (FLAG_TWO_SIDED batches)
     VkPipeline meshPipelineCulled = VK_NULL_HANDLE;    // back-face culled (the default)
@@ -3755,7 +3778,167 @@ bool VulkanRenderer::Impl::createGlobalsBuffers() {
             std::memset(clusterMapped[k][i], 0, static_cast<std::size_t>(sizes[k]));
         }
     }
+    // the GPU's own lists (ADR-0364): device-local, written by cluster_bin.comp
+    static const bool gpuWanted = [] { const char* e = std::getenv("RT_GPU_CLUSTERS"); return !(e && std::string(e) == "0"); }();
+    if (gpuWanted) {
+        const VkDeviceSize binSizes[2] = {static_cast<VkDeviceSize>(ClusterGrid{}.cells()) * sizeof(uint32_t),
+                                          static_cast<VkDeviceSize>(ClusterGrid{}.cells()) * 64u * sizeof(uint32_t)};
+        bool ok = true;
+        for (int i = 0; i < MAX_FRAMES_IN_FLIGHT && ok; ++i)
+            for (int k = 0; k < 2 && ok; ++k) {
+                ok = createBuffer(binSizes[k], VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                                  VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, binBuf[k][i], binMem[k][i]);
+                if (ok && std::getenv("RT_CLUSTER_CHECK")) {
+                    ok = createBuffer(binSizes[k], VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                                      VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                                      checkBuf[k][i], checkMem[k][i]);
+                    if (ok) vkMapMemory(device, checkMem[k][i], 0, binSizes[k], 0, &checkMapped[k][i]);
+                }
+            }
+        gpuBin = ok && createBinPipeline();
+        LOG_INFO("[vulkan] clustered lights binned on the %s", gpuBin ? "GPU (cluster_bin.comp)" : "CPU (the GPU path failed)");
+    }
     return true;
+}
+
+bool VulkanRenderer::Impl::createBinPipeline() {
+    VkDescriptorSetLayoutBinding b[3]{};
+    for (int k = 0; k < 3; ++k) {
+        b[k].binding = static_cast<uint32_t>(k);
+        b[k].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        b[k].descriptorCount = 1;
+        b[k].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    }
+    VkDescriptorSetLayoutCreateInfo li{};
+    li.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    li.bindingCount = 3;
+    li.pBindings = b;
+    if (vkCreateDescriptorSetLayout(device, &li, nullptr, &binSetLayout) != VK_SUCCESS) return false;
+    VkDescriptorPoolSize size{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 3 * MAX_FRAMES_IN_FLIGHT};
+    VkDescriptorPoolCreateInfo pi{};
+    pi.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    pi.maxSets = MAX_FRAMES_IN_FLIGHT;
+    pi.poolSizeCount = 1;
+    pi.pPoolSizes = &size;
+    if (vkCreateDescriptorPool(device, &pi, nullptr, &binPool) != VK_SUCCESS) return false;
+    for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
+        VkDescriptorSetAllocateInfo a{};
+        a.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+        a.descriptorPool = binPool;
+        a.descriptorSetCount = 1;
+        a.pSetLayouts = &binSetLayout;
+        if (vkAllocateDescriptorSets(device, &a, &binSets[i]) != VK_SUCCESS) return false;
+        const VkBuffer bufs[3] = {clusterBuf[0][i], binBuf[0][i], binBuf[1][i]};
+        VkDescriptorBufferInfo info[3];
+        VkWriteDescriptorSet w[3]{};
+        for (int k = 0; k < 3; ++k) {
+            info[k] = {bufs[k], 0, VK_WHOLE_SIZE};
+            w[k].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            w[k].dstSet = binSets[i];
+            w[k].dstBinding = static_cast<uint32_t>(k);
+            w[k].descriptorCount = 1;
+            w[k].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            w[k].pBufferInfo = &info[k];
+        }
+        vkUpdateDescriptorSets(device, 3, w, 0, nullptr);
+    }
+    VkPushConstantRange range{VK_SHADER_STAGE_COMPUTE_BIT, 0, 80};
+    VkPipelineLayoutCreateInfo pl{};
+    pl.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    pl.setLayoutCount = 1;
+    pl.pSetLayouts = &binSetLayout;
+    pl.pushConstantRangeCount = 1;
+    pl.pPushConstantRanges = &range;
+    if (vkCreatePipelineLayout(device, &pl, nullptr, &binLayout) != VK_SUCCESS) return false;
+    VkShaderModule mod = loadShaderModule(std::string(RT_VULKAN_SHADER_DIR) + "/cluster_bin.comp.spv");
+    if (!mod) return false;
+    VkComputePipelineCreateInfo ci{};
+    ci.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+    ci.stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    ci.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+    ci.stage.module = mod;
+    ci.stage.pName = "main";
+    ci.layout = binLayout;
+    const VkResult r = vkCreateComputePipelines(device, VK_NULL_HANDLE, 1, &ci, nullptr, &binPipe);
+    vkDestroyShaderModule(device, mod, nullptr);
+    if (r != VK_SUCCESS) { binPipe = VK_NULL_HANDLE; return false; }
+    return true;
+}
+
+// The froxel lists, built by cluster_bin.comp from this frame's lights (already in clusterBuf[0]), before any pass reads
+// them (ADR-0364)
+void VulkanRenderer::Impl::recordClusterBin(VkCommandBuffer cmd) {
+    if (!clustered || !gpuBin) return;
+    VkMemoryBarrier toCompute{};
+    toCompute.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+    toCompute.srcAccessMask = VK_ACCESS_HOST_WRITE_BIT | VK_ACCESS_SHADER_READ_BIT;
+    toCompute.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_HOST_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                         0, 1, &toCompute, 0, nullptr, 0, nullptr);
+    struct Push { float view[3][4]; int32_t grid[4]; float depth[4]; } push{};
+    for (int r = 0; r < 3; ++r)
+        for (int c = 0; c < 4; ++c) push.view[r][c] = static_cast<float>(camView.m[r][c]);
+    push.grid[0] = clusterGrid.tilesX;
+    push.grid[1] = clusterGrid.tilesY;
+    push.grid[2] = clusterGrid.slices;
+    push.grid[3] = static_cast<int32_t>(binLightCount);
+    push.depth[0] = clusterGrid.zNear;
+    push.depth[1] = clusterGrid.zFar;
+    push.depth[2] = camTanHalfY * camAspect;
+    push.depth[3] = camTanHalfY;
+    static_assert(sizeof(Push) == 80, "cluster_bin.comp's push constants");
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, binPipe);
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, binLayout, 0, 1, &binSets[currentFrame], 0, nullptr);
+    vkCmdPushConstants(cmd, binLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push), &push);
+    vkCmdDispatch(cmd, static_cast<uint32_t>(clusterGrid.cells()), 1, 1);
+    VkMemoryBarrier toRead{};
+    toRead.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+    toRead.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+    toRead.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_TRANSFER_READ_BIT;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                         VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 1, &toRead, 0, nullptr, 0, nullptr);
+    if (checkThisFrame && checkBuf[0][currentFrame]) {
+        for (int k = 0; k < 2; ++k) {
+            VkBufferCopy cp{0, 0, k == 0 ? static_cast<VkDeviceSize>(clusterGrid.cells()) * sizeof(uint32_t)
+                                         : static_cast<VkDeviceSize>(clusterGrid.cells()) * 64u * sizeof(uint32_t)};
+            vkCmdCopyBuffer(cmd, binBuf[k][currentFrame], checkBuf[k][currentFrame], 1, &cp);
+        }
+        VkMemoryBarrier toHost{};
+        toHost.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+        toHost.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        toHost.dstAccessMask = VK_ACCESS_HOST_READ_BIT;
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_HOST_BIT, 0, 1, &toHost, 0, nullptr, 0, nullptr);
+        checkPending[currentFrame] = true;
+    }
+}
+
+// RT_CLUSTER_CHECK: this slot's GPU lists (its fence has passed) against the CPU's from the same lights and camera
+void VulkanRenderer::Impl::compareClusterCheck() {
+    if (!checkPending[currentFrame]) return;
+    checkPending[currentFrame] = false;
+    const uint32_t* gc = static_cast<const uint32_t*>(checkMapped[0][currentFrame]);
+    const uint32_t* gi = static_cast<const uint32_t*>(checkMapped[1][currentFrame]);
+    const ClusterLists& cpu = checkCpu[currentFrame];
+    int differ = 0, differCapped = 0, missing = 0, extra = 0;
+    std::vector<uint32_t> a, b;
+    for (int c = 0; c < clusterGrid.cells(); ++c) {
+        const uint32_t oc = cpu.offsetCount[static_cast<std::size_t>(c)];
+        a.assign(cpu.indices.begin() + (oc & 0xFFFFFFu), cpu.indices.begin() + (oc & 0xFFFFFFu) + (oc >> 24));
+        b.assign(gi + (gc[c] & 0xFFFFFFu), gi + (gc[c] & 0xFFFFFFu) + (gc[c] >> 24));
+        std::sort(a.begin(), a.end());
+        std::sort(b.begin(), b.end());
+        if (a == b) continue;
+        if (a.size() >= 64 || b.size() >= 64) { ++differCapped; continue; }
+        ++differ;
+        std::vector<uint32_t> d;
+        std::set_difference(a.begin(), a.end(), b.begin(), b.end(), std::back_inserter(d));
+        missing += static_cast<int>(d.size());
+        d.clear();
+        std::set_difference(b.begin(), b.end(), a.begin(), a.end(), std::back_inserter(d));
+        extra += static_cast<int>(d.size());
+    }
+    LOG_INFO("[clusters] check: GPU against CPU over %d froxels: %d differ (%d lights missing, %d extra), %d at the cap differ",
+             clusterGrid.cells(), differ, missing, extra, differCapped);
 }
 
 bool VulkanRenderer::Impl::createDescriptorPool() {
@@ -3833,7 +4016,7 @@ bool VulkanRenderer::Impl::createDescriptorSets() {
         VkDescriptorBufferInfo cb[3];
         VkWriteDescriptorSet cw[3]{};
         for (int k = 0; k < 3; ++k) {
-            cb[k] = {clusterBuf[k][i], 0, VK_WHOLE_SIZE};
+            cb[k] = {k > 0 && gpuBin ? binBuf[k - 1][i] : clusterBuf[k][i], 0, VK_WHOLE_SIZE};   // (the GPU's lists, ADR-0364)
             cw[k].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
             cw[k].dstSet = descriptorSets[i];
             cw[k].dstBinding = 8 + static_cast<uint32_t>(k);
@@ -5650,6 +5833,7 @@ void VulkanRenderer::Impl::recordCommandBuffer(VkCommandBuffer cmd, uint32_t ima
         gpuTimeWritten[currentFrame] = true;
     }
     gpuMark(cmd, 0);
+    recordClusterBin(cmd);   // the froxels' light lists (ADR-0364), before the scene pass reads them
     recordCrowd(cmd);   // the far travellers' instances, before any pass draws them
 
     // Cascaded shadow maps first (writes the depth array the lit pass samples).
@@ -6064,8 +6248,33 @@ void VulkanRenderer::Impl::drawFrame() {
         return;
     }
 
-    // CLUSTERED LIGHTS: bin this frame's lights into the froxels and upload the three buffers
-    if (clustered) {
+    // CLUSTERED LIGHTS: bin this frame's lights into the froxels and upload the three buffers -- on the GPU (ADR-0364:
+    // the lights only; cluster_bin.comp writes the lists in recordCommandBuffer), else here
+    if (clustered && gpuBin) {
+        compareClusterCheck();   // (RT_CLUSTER_CHECK: this slot's last read-back, its fence passed)
+        std::memcpy(clusterMapped[0][currentFrame], clusterLights.data(), clusterLights.size() * sizeof(GpuLight));
+        binLightCount = static_cast<uint32_t>(clusterLights.size());
+        static int checkEvery = 0;
+        checkThisFrame = checkBuf[0][currentFrame] != VK_NULL_HANDLE && ++checkEvery % 120 == 0;
+        if (checkThisFrame) {
+            std::vector<ClusterLight> cl;
+            for (const GpuLight& l : clusterLights)
+                cl.push_back({Vec3(l.positionIntensity[0], l.positionIntensity[1], l.positionIntensity[2]), l.typeRange[1]});
+            buildClusters(clusterGrid, camView, camTanHalfY, camAspect, cl, checkCpu[currentFrame]);
+        }
+        if (++clusterLogEvery >= 240) {
+            clusterLogEvery = 0;
+            LOG_INFO("[clusters] %zu lights, binned on the GPU", clusterLights.size());
+        }
+        cpuGlobals.clusterGrid[0] = clusterGrid.tilesX;
+        cpuGlobals.clusterGrid[1] = clusterGrid.tilesY;
+        cpuGlobals.clusterGrid[2] = clusterGrid.slices;
+        cpuGlobals.clusterGrid[3] = 1;
+        cpuGlobals.clusterDepth[0] = clusterGrid.zNear;
+        cpuGlobals.clusterDepth[1] = 1.0f / std::log(clusterGrid.zFar / clusterGrid.zNear);
+        cpuGlobals.clusterDepth[2] = static_cast<float>(swapchainExtent.width);
+        cpuGlobals.clusterDepth[3] = static_cast<float>(swapchainExtent.height);
+    } else if (clustered) {
         std::vector<ClusterLight> cl;
         cl.reserve(clusterLights.size());
         for (const GpuLight& l : clusterLights)
@@ -6404,6 +6613,10 @@ void VulkanRenderer::shutdown() {
         *p = VK_NULL_HANDLE;
     }
     if (impl->pipelineLayout) vkDestroyPipelineLayout(impl->device, impl->pipelineLayout, nullptr);
+    if (impl->binPipe) vkDestroyPipeline(impl->device, impl->binPipe, nullptr);
+    if (impl->binLayout) vkDestroyPipelineLayout(impl->device, impl->binLayout, nullptr);
+    if (impl->binPool) vkDestroyDescriptorPool(impl->device, impl->binPool, nullptr);
+    if (impl->binSetLayout) vkDestroyDescriptorSetLayout(impl->device, impl->binSetLayout, nullptr);
     if (impl->descriptorPool) vkDestroyDescriptorPool(impl->device, impl->descriptorPool, nullptr);
     if (impl->descriptorSetLayout)
         vkDestroyDescriptorSetLayout(impl->device, impl->descriptorSetLayout, nullptr);
@@ -6415,6 +6628,13 @@ void VulkanRenderer::shutdown() {
             if (impl->clusterMem[k][i]) vkUnmapMemory(impl->device, impl->clusterMem[k][i]);
             if (impl->clusterBuf[k][i]) vkDestroyBuffer(impl->device, impl->clusterBuf[k][i], nullptr);
             if (impl->clusterMem[k][i]) vkFreeMemory(impl->device, impl->clusterMem[k][i], nullptr);
+        }
+        for (int k = 0; k < 2; ++k) {
+            if (impl->binBuf[k][i]) vkDestroyBuffer(impl->device, impl->binBuf[k][i], nullptr);
+            if (impl->binMem[k][i]) vkFreeMemory(impl->device, impl->binMem[k][i], nullptr);
+            if (impl->checkMem[k][i]) vkUnmapMemory(impl->device, impl->checkMem[k][i]);
+            if (impl->checkBuf[k][i]) vkDestroyBuffer(impl->device, impl->checkBuf[k][i], nullptr);
+            if (impl->checkMem[k][i]) vkFreeMemory(impl->device, impl->checkMem[k][i], nullptr);
         }
     }
     impl->meshPipeline = VK_NULL_HANDLE;
@@ -7057,6 +7277,13 @@ void VulkanRenderer::setCamera(const CameraState& camera) {
     impl->dofSensorHeight = static_cast<float>(camera.lens.sensorHeight);          // mm
 }
 
+// CLUSTERED LIGHTS (ADR-0361), on by default since ADR-0362's phase 2; RT_CLUSTERED=0 is the forward A/B (the fixed 32)
+static bool clusteredLights() {
+    static const bool on = [] { const char* e = std::getenv("RT_CLUSTERED"); return !(e && std::string(e) == "0"); }();
+    return on;
+}
+int VulkanRenderer::lightCapacity() const { return clusteredLights() ? static_cast<int>(Impl::kClusterMaxLights) : 31; }
+
 void VulkanRenderer::setLights(const SceneLighting& lighting) {
     float amb = lighting.ambientMultiplier;
     impl->cpuGlobals.ambient[0] = static_cast<float>(lighting.ambientTint.x) * amb;
@@ -7190,8 +7417,7 @@ void VulkanRenderer::setLights(const SceneLighting& lighting) {
     // CLUSTERED (RT_CLUSTERED=1): every point and spot, past the 32, into the light buffer; the froxels pick for each
     // pixel (endFrame bins them). The UBO's 32 stay as they were (the sun first) for the loops that read them still
     // (grass and leaf transmission, the water's glint, the viewer's room).
-    static const bool clusteredOn = [] { const char* e = std::getenv("RT_CLUSTERED"); return e && std::string(e) != "0"; }();
-    impl->clustered = clusteredOn;
+    impl->clustered = clusteredLights();
     impl->clusterLights.clear();
     if (impl->clustered) {
         for (const PointLight& p : lighting.pointLights) {

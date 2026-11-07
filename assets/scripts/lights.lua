@@ -18,6 +18,10 @@
 --   within     metres from the camera; 0: no limit
 --   fade       true: the set fades out toward its edge (the reach, or the farthest picked when `count` binds)
 --   groups     true: the emitters' groups are picked whole (a car's two headlights go together)
+--   many       { count, within, fade }: the budget where the renderer lights every pixel from its own short list
+--              (clustered, ADR-0361: thousands of lights) instead of looping a fixed 32. Unset fields keep the above.
+-- On a 32-light renderer the picked set is trimmed to fit by importance (the player's own first, then the brightest
+-- where they are), so no renderer drops lights in an order of its own.
 -- A level's light block sets the street and beacon pools (CitySimConfig: lampLightCount / lampLightRadius /
 -- lampLightRange, lightCount / lightRadius / lightRange).
 
@@ -39,6 +43,10 @@ return {
     room = { type = "point", color = { 1.0, 0.88, 0.70 }, intensity = 22, range = 20 },
     -- an elevator cab's ceiling light
     cab = { type = "point", color = { 1.0, 0.95, 0.86 }, intensity = 9, range = 6 },
+    -- city traffic's lamps, from each car's own markers (CityRenderSystem): a short red glow behind the tail lamps,
+    -- brighter while braking
+    tail_light = { type = "point", color = { 1.0, 0.08, 0.04 }, intensity = 0.8, range = 4, pool = "tails" },
+    brake_light = { type = "point", color = { 1.0, 0.08, 0.04 }, intensity = 3.0, range = 6, pool = "tails" },
     -- a roof's aviation beacon: a tight red pool on the roof and the plant under it (BeaconLightSystem gives the
     -- level's range, the intensity scaled to keep the pool's edge, and the flash)
     beacon = { type = "point", color = { 1.0, 0.06, 0.03 }, intensity = 64, range = 10,
@@ -46,8 +54,12 @@ return {
   },
 
   pools = {
-    street = { count = 20, within = 160, fade = true },
-    headlights = { count = 3, within = 0, fade = false, groups = true },
-    beacons = { count = 6, within = 60, fade = true },
+    -- every street lamp in sight lights its pool; a 32-light renderer keeps the nearest 20
+    street = { count = 20, within = 160, fade = true, many = { count = 2500, within = 800 } },
+    -- the player's car always, then the nearest lit cars, two beams each
+    headlights = { count = 3, within = 0, fade = false, groups = true,
+                   many = { count = 300, within = 400, fade = true } },
+    tails = { count = 0, within = 0, fade = true, groups = true, many = { count = 300, within = 200 } },
+    beacons = { count = 6, within = 60, fade = true, many = { count = 64, within = 250 } },
   },
 }

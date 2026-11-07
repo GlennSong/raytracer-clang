@@ -59,6 +59,7 @@ public:
     // the GPU crowd (crowd.comp)
     bool supportsGpuCrowd() const override;
     bool supportsLodBand() const override { return true; }
+    int lightCapacity() const override;
     void setCrowdKinds(const std::vector<CrowdKind>& kinds) override;
     void setCrowdLinks(const std::vector<float>& sixPerLink) override;
     void setCrowdRoutes(const std::vector<uint32_t>& pairs, std::size_t firstChanged) override;

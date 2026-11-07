@@ -837,6 +837,9 @@ private:
     // the documented fallback rather than every such context driving in the
     // dark with its headlights off.
     bool solarStaged_ = false;
+    // TRAFFIC'S LAMPS AS LIGHTS (ADR-0362): each lit drawn car's head and tail lamps from its own markers, gathered by
+    // syncCarLamps, published on the light board's traffic channel by update()
+    std::vector<engine::LightCandidate> trafficLights_;
     // THE WORLD CLOCK from a staged day/night cycle (lighting.clockHours),
     // via setWorldClock: the latest sky hour before build is where the city
     // opens; after build the rate is refreshed every step and a jump

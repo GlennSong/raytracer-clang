@@ -939,6 +939,10 @@ public:
     // FLAG_LOD_BAND drawn (the dithered band): without it a surface draws whole, so a caller crossfading two
     // models with it would draw both at once
     virtual bool supportsLodBand() const { return false; }
+    // How many point and spot lights a frame may hand setLights (besides the sun): a forward renderer loops a fixed
+    // 32 in every pixel (one slot is the sun's); a clustered one (ADR-0361) lights each pixel from its own short list,
+    // so thousands. LightSystem sizes its budgets to it (ADR-0362).
+    virtual int lightCapacity() const { return 31; }
     virtual void setCrowdKinds(const std::vector<CrowdKind>& /*kinds*/) {}
     virtual void setCrowdLinks(const std::vector<float>& /*sixPerLink*/) {}
     virtual void setCrowdRoutes(const std::vector<uint32_t>& /*pairs*/, std::size_t /*firstChanged*/) {}

@@ -24,8 +24,8 @@ struct LightCandidate {
     bool mine = false;             // the player's own: picked first, never faded
 };
 
-// The producers, one channel each (static emitters -- street lamps, station lamps -- are read by LightSystem itself).
-enum class LightChannel : int { Vehicles, Tool, Rooms, Cabs, Beacons, Count };
+// The producers, one channel each (Traffic: city cars' head and tail lamps, CityRenderSystem) (static emitters -- street lamps, station lamps -- are read by LightSystem itself).
+enum class LightChannel : int { Vehicles, Tool, Rooms, Cabs, Beacons, Traffic, Count };
 
 struct LightBoard {
     std::array<std::vector<LightCandidate>, static_cast<std::size_t>(LightChannel::Count)> channels;

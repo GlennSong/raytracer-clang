@@ -16583,3 +16583,83 @@ the lit pavement and facades match.
 - phase 5: a shadow atlas;
 - phase 5b: interiors (lights from the fittings, room-bounded, indoor sky light, sun through glass);
 - phase 6: Metal and WebGPU.
+
+## ADR-0363 — Many lights by default: budgets by renderer, the lamps in a grid, traffic's lamps lit
+
+**Context.** Phase 2 of the light-system plan (ADR-0362): the picker existed, but every budget was still the forward
+renderer's 32 and the clustered path (ADR-0361) was opt-in.
+
+**Decision.**
+- **Clustered is Vulkan's default;** `RT_CLUSTERED=0` is the forward A/B.
+- **`Renderer::lightCapacity()`:** how many points and spots a frame may hand over. It's 31 on a forward renderer
+  (Metal, WebGPU, Vulkan with clustering off), where one slot is the sun's, and 4,096 on clustered Vulkan.
+- **Each pool in `lights.lua` has a `many` budget** (count, reach, fade) for a renderer of many lights. Forward keeps
+  the pools' counts, which the level's light block still sets.
+
+  | pool | forward | many |
+  |---|---|---|
+  | street | 20 within 160 m | 2,500 within 800 m |
+  | headlights | 3 cars | 300 cars within 400 m, fading at the edge |
+  | tails | none | 300 cars within 200 m |
+  | beacons | 6 within 60 m | 64 within 250 m |
+
+  The `RT_LAMP_LIGHTS` / `RT_LAMP_RADIUS` trial switches are gone; the data replaces them.
+- **Over the capacity, the picked set is trimmed by importance** (`lightImportance`): the player's own first, then
+  the illuminance each light gives at the camera. A 32-light renderer now keeps the lights that matter instead of
+  cutting its list in arrival order (it used to drop the headlights first).
+- **The static lamps are held in a 64 m grid** (LightSystem, rebuilt when their count changes), and only the cells in
+  reach are read; before, every lamp on the map was tested every frame.
+- **City traffic's lamps are lights**, from each car's own markers (vehicles.lua `headlight_*` / `taillight_*`), on
+  the board's traffic channel: two headlight beams; a red `tail_light` glow behind each tail lamp after dark, and a
+  brighter `brake_light` while braking. A car's lamps are one group, so all of them go together.
+
+**Measured** (2560 x 1405, RTX 3080, 22:00, scene pass, the ADR-0361 poses, forward = `RT_CLUSTERED=0`):
+
+| view | forward (25 picked) | many | lights lit (published) |
+|---|---|---|---|
+| river_town street | 6.00 ms | 5.77 ms | 1,326 (2,104): 75 cars' beams |
+| river_town towers | 8.86 ms | 10.82 ms | 1,108 (1,971) |
+| island_8_nature, a town | 5.38 ms | 5.03 ms | 751 (885) |
+
+- Binning takes 0.3–0.5 ms of CPU.
+- The towers view looks across most of the town, so it pays about 2 ms for a lit town and traffic. The other two are
+  cheaper than forward: a pixel's list is shorter than the forward 25.
+
+**Owed (the plan):** GPU binning (phase 3); the far tier from `lights.lua` (phase 4); the shadow atlas (phase 5);
+interiors (5b); Metal and WebGPU clustering (phase 6). The room-reflection loop in `mesh.frag` (`roomRadiance`) still
+reads the UBO's 32, which hold the first lights picked, so LightSystem publishes the rooms and cabs first.
+
+## ADR-0364 — The light lists binned on the GPU
+
+**Context.** Phase 3 of the light-system plan. The froxel lists (ADR-0361) were built on the CPU every frame: 0.3–0.5 ms
+for real streets, but a light crowded near the camera touches most of the near froxels, and 1,000 within 60 m took
+6.8–12.6 ms of the main thread. The interiors (dozens of fittings a floor, round the player) and a junction full of
+headlights are that case.
+
+**Decision.**
+- **`shaders/vulkan/cluster_bin.comp`**: one workgroup a froxel (3,456), 64 threads.
+  - It makes the same first cut as `buildClusters` (the sphere's depth span and the tiles its view-ratio span reaches),
+    then the same sphere-against-box test.
+  - Touching lights gather in shared memory, up to 256. Over 64, the nearest to the froxel's middle stay, ties broken
+    by light order.
+  - The kept are written in light order into the froxel's own run of 64 slots: `cells[c] = (c * 64) | count << 24`,
+    the format `mesh.frag` already reads, so the scene pass is unchanged.
+- **Device-local list buffers** per frame in flight. The lights stay host-written (`clusterBuf[0]`). The dispatch runs
+  first in the frame's command buffer, with barriers from the host write and to the fragment reads. The lists' buffers
+  are bound to set 0 bindings 9/10 in place of the CPU's.
+- **`RT_GPU_CLUSTERS=0` bins on the CPU as before.**
+- **`RT_CLUSTER_CHECK=1`**: every 120 frames, the GPU's lists are read back (one frame slot later, after its fence)
+  and compared froxel by froxel with `buildClusters` run on the same lights and camera, and logged.
+  - The first version tested only the box and kept up to 1,555 extra lights in about 245 froxels, never one missing:
+    the boxes overhang the frustum's wedge. Adding the CPU's first cut made them equal.
+
+**Measured** (river_town, 22:00, `RT_GPU_TIMES`; the dispatch is counted in the `shadows` bucket):
+
+| view | CPU binning | GPU binning (the bucket's growth) | check |
+|---|---|---|---|
+| towers, 1,113 lights | 0.39–0.50 ms of CPU | ~0.1 ms of GPU | 20 of 20 equal |
+| street, 1,326 lights | 0.42–0.47 ms of CPU | ~0.05 ms | 22 of 22 equal |
+| 1,000 lights within 60 m (`RT_LIGHT_FILL`) | 6.8–12.6 ms of CPU | ~0.2 ms | 16 equal but one tie at the cap |
+
+**Owed:** a depth pre-pass to drop the froxels with nothing in them (empty sky, behind a wall). Metal and WebGPU
+(phase 6) bin on the CPU when they get clusters.

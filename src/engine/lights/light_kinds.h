@@ -30,6 +30,11 @@ struct LightPool {
     float within = 0.0f;    // metres from the camera; 0: no limit
     bool fade = false;      // fade toward the set's edge
     bool groups = false;    // pick the emitters' groups whole
+    // the budget on a renderer of many lights (clustered): `many` set, these replace the three above
+    bool hasMany = false;
+    int manyCount = 0;
+    float manyWithin = 0.0f;
+    bool manyFade = false;
 };
 
 struct LightBook {

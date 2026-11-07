@@ -62,7 +62,17 @@ bool loadLightsSource(const std::string& code, LightBook& out, std::string* err)
             pool.within = static_cast<float>(numField(L, p, "within", 0));
             pool.fade = boolField(L, p, "fade", false);
             pool.groups = boolField(L, p, "groups", false);
-            if (pool.count < 0 || pool.within < 0) return fail("pool `" + name + "`: count and within are >= 0");
+            lua_getfield(L, p, "many");
+            if (lua_istable(L, -1)) {
+                const int m = lua_gettop(L);
+                pool.hasMany = true;
+                pool.manyCount = static_cast<int>(numField(L, m, "count", pool.count));
+                pool.manyWithin = static_cast<float>(numField(L, m, "within", pool.within));
+                pool.manyFade = boolField(L, m, "fade", pool.fade);
+            }
+            lua_pop(L, 1);
+            if (pool.count < 0 || pool.within < 0 || pool.manyCount < 0 || pool.manyWithin < 0)
+                return fail("pool `" + name + "`: count and within are >= 0");
             book.pools.push_back(pool);
             lua_pop(L, 1);
         }

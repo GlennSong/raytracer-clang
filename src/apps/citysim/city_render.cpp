@@ -1,4 +1,5 @@
 #include "city_render.h"
+#include "../../engine/lights/light_kinds.h"   // lightKindId: traffic's lamps as lights (ADR-0362)
 
 #include "../../engine/procgen/person.h"   // buildStandingPerson (the far crowd)
 #include "../../engine/ladder.h"   // the fire engines' ladders
@@ -2416,6 +2417,10 @@ void CityRenderSystem::syncCarLamps(World& world) {
     busSignsDrawn_ = 0;
 
     const std::vector<Agent>& agents = sim_.agents();
+    trafficLights_.clear();
+    static const int headKind = engine::lightKindId("headlight");
+    static const int tailKind = engine::lightKindId("tail_light");
+    static const int brakeKind = engine::lightKindId("brake_light");
 
     // Externally-owned cars aren't drawn by this bridge (carGroups_ empty), so
     // their lamps aren't either. We still update prevCarSpeed_ below.
@@ -2519,6 +2524,30 @@ void CityRenderSystem::syncCarLamps(World& world) {
         const CarLamps lamps = carLampStateSolar(a.state, a.speed, prev, dark, turnDir);
         const uint32_t m = engine::lampMask(lamps, blinkOn);
         if (m) masks[static_cast<int>(ai)] = m;
+        // ...and its lamps as LIGHTS (ADR-0362): a beam from each headlight marker, a red glow behind each tail lamp
+        // (brighter braking); LightSystem picks which cars are lit
+        if (lamps.head || lamps.brake) {
+            const std::unordered_map<int, engine::Mat4>::const_iterator po = physPose_.find(static_cast<int>(ai));
+            const Mat4 body = po != physPose_.end() ? po->second : agentPose(a, static_cast<int>(ai));
+            const Vec3 fwd = normalize(body.transformDirection(Vec3(0, 0, 1)));
+            const Vec3 beamDir = normalize(fwd + Vec3(0, -0.14, 0));
+            const uint32_t group = 0x80000000u | static_cast<uint32_t>(ai);   // (the player's cars count up from 1)
+            for (const LampMarker& lm : carLights_[static_cast<std::size_t>(v)]) {
+                engine::LightCandidate c;
+                c.group = group;
+                if (lamps.head && lm.name.rfind("headlight", 0) == 0) {
+                    c.kind = headKind;
+                    c.position = body.transformPoint(lm.pos) + fwd * 0.25;
+                    c.direction = beamDir;
+                } else if (lm.name.rfind("taillight", 0) == 0) {
+                    c.kind = lamps.brake ? brakeKind : tailKind;
+                    c.position = body.transformPoint(lm.pos) - fwd * 0.3;
+                } else {
+                    continue;
+                }
+                trafficLights_.push_back(c);
+            }
+        }
     }
     // ...onto the body instances syncGroups drew this bake (carAgentIds_ runs beside each group's transforms)
     if (!masks.empty())
@@ -4119,6 +4148,7 @@ void CityRenderSystem::update(engine::FrameContext& ctx) {
     // Stage the sun for the bake's car lamps (see solarElevation_).
     solarElevation_ = ctx.view.lighting.solarElevation;
     solarStaged_ = true;
+    ctx.view.lights.channel(engine::LightChannel::Traffic) = trafficLights_;   // (ADR-0362; picked by LightSystem)
     if (built_ && !busSignsTried_ && busVariant_ >= 0 && sim_.buses().routeCount() > 0) makeBusSigns(ctx);
     // THE FIRE ENGINES' LADDERS (engine/ladder.h; Glenn, 2026-10-13: "use it on the fire engine"): the ladder up the
     // back of every parked fire engine near the player, for the LadderSystem to offer -- from the road behind it to
