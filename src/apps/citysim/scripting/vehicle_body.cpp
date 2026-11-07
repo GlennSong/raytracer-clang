@@ -386,4 +386,16 @@ bool loadFleetHandling(ScriptVM& vm, int slot, VehicleSpec& out, std::string* er
     return true;
 }
 
+bool loadFleetDrivable(ScriptVM& vm, int slot, std::string& recipe, Vec3& color) {
+    lua_State* L = luaState(vm);
+    const int base = lua_gettop(L);
+    const std::string where = "vehicle.fleet[" + std::to_string(slot + 1) + "]";
+    if (!pushFleetSlot(L, base, slot, where, nullptr)) return false;
+    const int e = lua_gettop(L);
+    recipe = strField(L, e, "drivable");
+    color = vec3Field(L, e, "color", Vec3(0.5, 0.5, 0.5));
+    lua_settop(L, base);
+    return !recipe.empty();
+}
+
 }  // namespace engine

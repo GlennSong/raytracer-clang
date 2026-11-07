@@ -23,7 +23,8 @@ TEST_CASE(a_knock_costs_by_its_speed_and_the_car_by_its_mass) {
     const Real mild = touchHarm(r, false, 8.0, 0, 1.0 / 60, 1500);
     const Real hard = touchHarm(r, false, 25.0, 0, 1.0 / 60, 1500);
     CHECK(mild > 0 && mild < 0.2);
-    CHECK(hard > 0.7 && hard <= 1.0);                                    // ~90 km/h into a wall spends a zone
+    CHECK(hard > 0.4 && hard < 0.8);                                     // ~90 km/h into a wall: badly hurt, not dead
+    CHECK(touchHarm(r, false, 40.0, 0, 1.0 / 60, 1500) > 0.99);          // 145 km/h spends a zone
     CHECK(touchHarm(r, false, 25.0, 0, 1.0 / 60, 12000) < hard * 0.2);   // a bus shrugs it off
     // a scrape: a few metres along a wall at speed costs a little, not a zone
     Real scraped = 0;

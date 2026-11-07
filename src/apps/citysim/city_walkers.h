@@ -1,6 +1,7 @@
 #ifndef RAYTRACER_APPS_CITYSIM_CITY_WALKERS_H
 #define RAYTRACER_APPS_CITYSIM_CITY_WALKERS_H
 
+#include "../../engine/ai/danger_dodge.h"
 #include "../../engine/system.h"
 #include "../../engine/ai/traffic_sense.h"   // KnockdownTimer
 #include "../../engine/systems/physics_system.h"
@@ -63,6 +64,7 @@ private:
     long unwedged_ = 0;
     WalkerRagdolls ragdolls_;   // the few knocked flying right now (walker_ragdolls.h)
     int knocks_ = 0;            // since start, for `walkers?`
+    int dodges_ = 0;            // ...and the times someone got out of a car's way (`knock?`)
     struct Telemetry {
         engine::Real maxSpeed = 0;
         engine::Vec2 maxAt{0, 0}, revAt{0, 0};
@@ -87,6 +89,8 @@ private:
         engine::Entity entity;             // the character-capsule entity
         int agentId = -1;                  // the CitySim ghost that plans for it
         engine::KnockdownTimer knock;      // down-and-recover state
+        engine::DodgeState dodge;          // a car coming at it (ADR-0355)
+        int dodgesSeen = 0;
         engine::StuckDetector blocked;     // wants to walk, body isn't moving
         engine::Real backoff = 0;          // blocked -> stand still this long
         engine::Vec2 facing{0, 1};         // last real travel direction (render yaw)

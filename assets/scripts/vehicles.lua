@@ -28,6 +28,59 @@ local LENS_TINT = { lamp = { 0.95, 0.95, 0.90 }, lamp_red = { 0.75, 0.06, 0.05 }
                     lamp_amber = { 0.85, 0.42, 0.05 }, lamp_marker = { 0.85, 0.42, 0.05 } }
 local function lens(m, mat) local c = LENS_TINT[mat]; return lens_tag(mesh.paint(m, c), mat) end
 
+-- A CAR'S DAMAGE (ADR-0353/0355; Glenn, 2026-11-06: "move the tuning to lua"): how hard it takes a knock, how it
+-- dents, when it smokes, how its panels leave, how a hurt engine sounds. `default` is every car's; a kit car's own
+-- entry overrides only what it names (a sub-table -- dent, smoke, kick, rough -- field by field). Read into the
+-- drivable spec as `damage` (vehicle_spec.cpp); a car dropped with N reads this file afresh, so a change shows on
+-- the next drop.
+--   knock_from / knock_full    m/s: a knock below the first leaves no mark; one at the second spends a whole zone
+--   scrape_per_metre           a zone's health a scrape takes per metre slid (at ref_mass kg; heavier takes less)
+--   spark_knock / spark_slide  m/s a knock / a scrape sparks from
+--   crash_window               s: knocks on one zone this close together are one crash (the worst of them counts)
+--   ground_share / break_share a knock from below (a hard landing) / knocking a street piece loose costs this share
+--   zone_scale / panel_scale   a knock's cost to the zone it lands on / the panel there (at 0 it comes off)
+--   dent = { from, radius_lo, radius_hi, depth_lo, depth_per, depth_max, scuff_lo, scuff_per }   (m)
+--   smoke = { steam_below, black_below }   the nose's health the hood steams below, then smokes black
+--   kick = { car, out, up }    a panel coming off: the share of the car's speed it keeps, and m/s out and up
+--   rough = { below, wobble, misfire }   the nose's health the engine runs rough below; pitch lurch; misfire share
+local KIT_DAMAGE = {
+  default = {
+    knock_from = 3.0, knock_full = 40.0, scrape_per_metre = 0.004, ref_mass = 1500,
+    spark_knock = 4.0, spark_slide = 2.5, crash_window = 0.33, ground_share = 0.33, break_share = 0.10,
+    zone_scale = 1.2, panel_scale = 1.6,
+    dent = { from = 0.01, radius_lo = 0.25, radius_hi = 0.90, depth_lo = 0.04, depth_per = 0.35, depth_max = 0.26,
+             scuff_lo = 0.35, scuff_per = 1.2 },
+    smoke = { steam_below = 0.6, black_below = 0.25 },
+    kick = { car = 0.7, out = 0.8, up = 0.8 },
+    rough = { below = 0.6, wobble = 0.07, misfire = 0.5 },
+  },
+  -- the big ones shrug more off and dent less deep; the soft-top folds easier
+  bus = { knock_full = 55.0, dent = { depth_per = 0.25 } },
+  bus_standing = { knock_full = 55.0, dent = { depth_per = 0.25 } },
+  fire_engine = { knock_full = 55.0, dent = { depth_per = 0.25 } },
+  small_truck = { knock_full = 48.0 },
+  step_van = { knock_full = 45.0 },
+  offroad = { knock_full = 46.0, dent = { depth_per = 0.28 } },   -- (steel bumpers)
+  convertible = { knock_full = 34.0 },
+}
+local function kit_damage(name)
+  local out = {}
+  for k, v in pairs(KIT_DAMAGE.default) do
+    if type(v) == "table" then
+      local t = {}
+      for k2, v2 in pairs(v) do t[k2] = v2 end
+      out[k] = t
+    else
+      out[k] = v
+    end
+  end
+  for k, v in pairs(KIT_DAMAGE[name] or {}) do
+    if type(v) == "table" then for k2, v2 in pairs(v) do out[k][k2] = v2 end else out[k] = v end
+  end
+  return out
+end
+vehicle.kit_damage = kit_damage
+
 -- THE KIT's FINISHES: a part's colour by its material name (the paint is the slot's), and the drivable car's cabin
 local KIT_TINT = {
   glass = { 0.16, 0.20, 0.24 }, trim = { 0.04, 0.04, 0.045 }, gasket = { 0.025, 0.025, 0.028 },
@@ -86,7 +139,12 @@ local function kit_drivable(specName, opts, h)
   local kit = require "vehicle_kit"
   local P = kit.SPECS[specName]()
   if opts.color then P.color = opts.color end
-  local car = kit.build(P, 0, { panels = true })
+  -- (subdivided once, as the traffic's near bodies are: a dent needs vertices to push -- the faceted body had a
+  -- handful per panel and a knock barely showed; ADR-0355)
+  local car = kit.build(P, P.level or 1, { panels = true })
+  -- (its handling from the faceted build, as the traffic's catalogue takes it: the subdivided body is a touch smaller,
+  -- and a commandeered car and the one N drops must drive as one)
+  local handled = kit.build(P, 0)
   -- a material set (kit.build's parts) as its painted shell and its glass
   local function painted_set(set)
     local out = {}
@@ -115,6 +173,7 @@ local function kit_drivable(specName, opts, h)
     for cname, part in pairs(pn.cabin or {}) do pcabin[#pcabin + 1] = mesh.paint(part, KIT_CABIN_TINT[cname] or { 0.3, 0.3, 0.3 }) end
     if #pshell > 0 or pglass then
       panels[#panels + 1] = { name = name, pivot = pn.hinge.pivot, axis = pn.hinge.axis, open = pn.hinge.open, lo = pn.lo, hi = pn.hi,
+                              mass = pn.hinge.mass,
                               centre = { 0.5 * (pn.lo[1] + pn.hi[1]), 0.5 * (pn.lo[2] + pn.hi[2]), 0.5 * (pn.lo[3] + pn.hi[3]) } }
       if #pshell > 0 then
         parts[#parts + 1] = { mesh = mesh.recompute_normals(mesh.merge(pshell)), albedo = { 1, 1, 1 },
@@ -139,7 +198,8 @@ local function kit_drivable(specName, opts, h)
   local lights = {}
   for _, l in ipairs(car.lights) do lights[#lights + 1] = l end
   lights[#lights + 1] = { name = "driver_seat", pos = car.driver_seat }
-  local spec = kit_handling(P, car, h, opts)
+  local spec = kit_handling(P, handled, h, opts)
+  spec.damage = kit_damage(P.name)
   spec.body = mesh.recompute_normals(mesh.merge(shell))
   spec.albedo = { 1, 1, 1 }
   spec.metallic = h.metallic or 0.5
@@ -588,6 +648,7 @@ local function catalogue(slots)
                 -- its handling IS the drivable spec: two wheels, the lean, the seat's bars and pegs
                 handling = spec,
                 drivable = slot.bike,
+                color = slot.color,
                 build = function() return bike_fleet(slot.bike, slot.color) end,
             }
         elseif slot.kit then
@@ -599,6 +660,7 @@ local function catalogue(slots)
                 -- what the physics tier and a commandeered car drive with: the kit's drivable handling
                 handling = kit_handling(P, car, KIT_HANDLING[slot.kit] or {}),
                 drivable = "kit_" .. slot.kit,   -- the menu's recipe for this car (nil: none)
+                color = slot.color,              -- ...and its paint: a car taken from the traffic is built as that
                 build = function() return kit_car(slot.kit, slot.color) end,
             }
         end

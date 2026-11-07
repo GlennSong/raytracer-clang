@@ -131,6 +131,11 @@ bool loadFleetCatalogueEntry(ScriptVM& vm, int slot, Vec3& size,
 // when the slot has none or it carries no wheels.
 bool loadFleetHandling(ScriptVM& vm, int slot, VehicleSpec& out, std::string* err = nullptr);
 
+// THE SLOT AS THE PLAYER'S CAR (ADR-0355; Glenn: "Why is an SUV in the world different than mine? I can't open the
+// hatch"): its `drivable` recipe (the menu's -- "kit_suv") and its paint `color`, so a car taken from the traffic is
+// built as the car N drops: panels, dents, its damage tuning. False when the slot names none.
+bool loadFleetDrivable(ScriptVM& vm, int slot, std::string& recipe, Vec3& color);
+
 }  // namespace engine
 
 #endif

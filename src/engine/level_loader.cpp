@@ -97,6 +97,7 @@
 #include "scripting/procgen_bindings.h"
 #include "scripting/vehicle_spec.h"
 #endif
+#include "scripting/street_props_spec.h"   // (plain data: the reader itself needs scripting)
 #include "model_importer.h"
 #include "../proc_rng.h"
 #include <sstream>
@@ -7622,9 +7623,22 @@ bool LevelLoader::load(const std::string& path,
         }
         if (!combined.edges.empty()) {
             const engine::NavGraph nav = engine::buildNavGraph(combined);
+            // THE KERB PROPS THAT ARE DATA (street_props.lua, ADR-0354): the hydrants and their kind, and the bodies
+            // of what the planner places
+            engine::StreetPropsSpec streetProps;
+#ifdef RT_ENABLE_SCRIPTING
+            {
+                std::string err;
+                if (!engine::loadStreetProps(levelDir, streetProps, &err)) LOG_WARN << "[street] " << err;
+                if (const std::string sp = resolveScriptPath("street_props.lua", levelDir); !sp.empty())
+                    g_loadedScriptFiles.push_back(sp);
+            }
+#endif
             const engine::StreetFurniturePlan fplan =
                 [&] {
                     engine::StreetFurnitureParams fp;
+                    for (const engine::StreetPropKind& k : streetProps.kinds)
+                        fp.kerbKinds.push_back({k.every, k.verge, k.junction, k.mainOnly});
                     world.each<engine::RoadEntity>(
                         [&](Entity, engine::RoadEntity& net) {
                             fp.sidewalkWidth = std::max(
@@ -8111,34 +8125,145 @@ bool LevelLoader::load(const std::string& path,
                     groupBounds(g, 1.0);
                     world.add<InstanceGroup>(world.create(), g);
                 }
-                const MeshHandle propMesh[3] = {assets.acquireMesh(engine::litterBinProto(), "city:litterbin"),
-                                                assets.acquireMesh(engine::bikeRackProto(), "city:bikerack"),
-                                                assets.acquireMesh(engine::newsBoxesProto(), "city:newsboxes")};
-                std::map<std::pair<int, int>, std::array<std::vector<Mat4>, 3>> propCells;
-                int nProp[3] = {0, 0, 0};
+                // THE KINDS: the planner's own three, then street_props.lua's (ADR-0354), each its mesh, its material,
+                // and the box it stands in as a body (a car knocks the light ones loose)
+                const std::size_t nKinds = 3 + streetProps.kinds.size();
+                std::vector<engine::RenderMesh> kindMesh = {engine::litterBinProto(), engine::bikeRackProto(), engine::newsBoxesProto()};
+                std::vector<std::string> kindName = {"bin", "bike_rack", "news_boxes"};
+                for (const engine::StreetPropKind& k : streetProps.kinds) { kindMesh.push_back(*k.mesh); kindName.push_back(k.name); }
+                std::vector<MeshHandle> propMesh;
+                std::vector<RenderMaterial> propMat;
+                for (std::size_t k = 0; k < nKinds; ++k) {
+                    propMesh.push_back(assets.acquireMesh(kindMesh[k], "city:kerb:" + kindName[k]));
+                    RenderMaterial m;
+                    m.albedo = Vec3(1, 1, 1);
+                    m.metallic = k == 1 ? 0.6f : 0.2f;
+                    m.roughness = 0.5f;
+                    propMat.push_back(m);
+                }
+                std::map<std::pair<int, int>, std::vector<std::vector<Mat4>>> propCells;
+                std::vector<int> nProp(nKinds, 0);
                 for (const engine::KerbProp& kp : fplan.props) {
+                    if (kp.kind >= nKinds) continue;
                     // the prototype's +Z out to the pavement: a yaw about +Y takes +Z to (sin, cos)
                     const Real yaw = std::atan2(kp.toPavement.x, kp.toPavement.y);
-                    propCells[cellOf(kp.base)][kp.kind % 3u].push_back(
-                        Mat4::trs(kp.base, Quat::fromAxisAngle(Vec3(0, 1, 0), yaw), Vec3(1, 1, 1)));
-                    ++nProp[kp.kind % 3u];
+                    auto& cell = propCells[cellOf(kp.base)];
+                    if (cell.empty()) cell.resize(nKinds);
+                    cell[kp.kind].push_back(Mat4::trs(kp.base, Quat::fromAxisAngle(Vec3(0, 1, 0), yaw), Vec3(1, 1, 1)));
+                    ++nProp[kp.kind];
+                }
+                // THE BODIES (ADR-0354): every kerb piece, tree trunk and lamp post a static shape the car meets,
+                // streamed round the player with the forests' (NatureColliderSystem); the pieces with a breaking speed
+                // are knocked loose
+                engine::NatureColliders streetBodies;
+                streetBodies.knockPush = streetProps.knockPush;
+                streetBodies.knockUp = streetProps.knockUp;
+                streetBodies.knockUpPerSpeed = streetProps.knockUpPerSpeed;
+                std::vector<engine::StreetPropCollider> kindBody(nKinds);
+                for (std::size_t k = 0; k < 3; ++k) {
+                    auto it = streetProps.legacy.find(kindName[k]);
+                    if (it != streetProps.legacy.end()) kindBody[k] = it->second;
+                }
+                for (std::size_t k = 3; k < nKinds; ++k) kindBody[k] = streetProps.kinds[k - 3].collider;
+                std::vector<int> pieceKindOf(nKinds, -1);
+                for (std::size_t k = 0; k < nKinds; ++k) {
+                    if (kindBody[k].breaksAt <= 0 || kindBody[k].half.y <= 0) continue;
+                    // the loose body's mesh: the prototype re-centred on its box
+                    engine::RenderMesh centred = kindMesh[k];
+                    for (engine::Vertex& v : centred.vertices) v.position.y -= kindBody[k].half.y;
+                    engine::NatureColliders::PieceKind pk;
+                    pk.mesh = assets.acquireMesh(centred, "city:kerb:loose:" + kindName[k]);
+                    pk.material = propMat[k];
+                    pk.breaksAt = kindBody[k].breaksAt;
+                    pk.mass = kindBody[k].mass;
+                    if (k >= 3) {
+                        pk.spray = streetProps.kinds[k - 3].sprayEffect;
+                        pk.sprayRate = streetProps.kinds[k - 3].sprayRate;
+                        pk.sprayUp = streetProps.kinds[k - 3].sprayUp;
+                    }
+                    pieceKindOf[k] = static_cast<int>(streetBodies.pieceKinds.size());
+                    streetBodies.pieceKinds.push_back(pk);
                 }
                 for (auto& [key, byKind] : propCells)
-                    for (int k = 0; k < 3; ++k) {
+                    for (std::size_t k = 0; k < nKinds; ++k) {
                         if (byKind[k].empty()) continue;
                         InstanceGroup g;
                         g.mesh = propMesh[k];
-                        g.material.albedo = Vec3(1, 1, 1);
-                        g.material.metallic = k == 1 ? 0.6f : 0.2f;
-                        g.material.roughness = 0.5f;
+                        g.material = propMat[k];
+                        // the bodies: a box standing where each one stands, turned as it is
+                        std::vector<engine::NatureCollider> shapes;
+                        if (kindBody[k].half.y > 0)
+                            for (const Mat4& m : byKind[k]) {
+                                engine::NatureCollider c;
+                                c.centre = m.transformPoint(Vec3(0, kindBody[k].half.y, 0));
+                                const Vec3 ax = m.transformPoint(Vec3(1, 0, 0)) - m.transformPoint(Vec3(0, 0, 0));
+                                c.orientation = Quat::fromAxisAngle(Vec3(0, 1, 0), std::atan2(-ax.z, ax.x));
+                                c.half = kindBody[k].half;
+                                shapes.push_back(c);
+                            }
                         g.transforms = std::move(byKind[k]);
                         g.drawDistance = kerbDist * 0.5;
                         g.drawClass = engine::DrawClass::Furniture;
                         groupBounds(g, 1.5);
-                        world.add<InstanceGroup>(world.create(), g);
+                        const Entity ge = world.create();
+                        world.add<InstanceGroup>(ge, g);
+                        for (std::size_t i = 0; i < shapes.size(); ++i) {
+                            if (pieceKindOf[k] >= 0) {
+                                shapes[i].piece = static_cast<int>(streetBodies.pieces.size());
+                                streetBodies.pieces.push_back({pieceKindOf[k], ge, i, false});
+                            }
+                            streetBodies.add(shapes[i]);
+                        }
                     }
-                LOG_INFO << "[furniture] kerb life: " << fplan.trees.size() << " street trees, " << nProp[0] << " litter bins, "
-                         << nProp[1] << " bike racks, " << nProp[2] << " news boxes";
+                // the trunks and the lamp posts: they stop the car
+                if (streetProps.trunkRadius > 0)
+                    for (const engine::StreetTree& st : fplan.trees) {
+                        engine::NatureCollider c;
+                        c.capsule = true;
+                        const Real r = streetProps.trunkRadius * st.scale, hh = streetProps.trunkHeight * 0.5;
+                        c.half = Vec3(r, std::max(Real(0.05), hh - r), r);
+                        c.centre = st.base + Vec3(0, hh, 0);
+                        streetBodies.add(c);
+                    }
+                if (streetProps.lampRadius > 0)
+                    for (const Vec3& b : fplan.lampBases) {
+                        engine::NatureCollider c;
+                        c.capsule = true;
+                        const Real hh = streetProps.lampHeight * 0.5;
+                        c.half = Vec3(streetProps.lampRadius, std::max(Real(0.05), hh - streetProps.lampRadius), streetProps.lampRadius);
+                        c.centre = b + Vec3(0, hh, 0);
+                        streetBodies.add(c);
+                    }
+                const std::size_t nBodies = streetBodies.shapes.size(), nPieces = streetBodies.pieces.size();
+                // into the level's one set of streamed bodies (a forest level already has one)
+                {
+                    engine::NatureColliders* into = nullptr;
+                    world.each<engine::NatureColliders>([&](Entity, engine::NatureColliders& nc) { if (!into) into = &nc; });
+                    if (!into) {
+                        world.add<engine::NatureColliders>(world.create(), std::move(streetBodies));
+                    } else {
+                        into->knockPush = streetBodies.knockPush;
+                        into->knockUp = streetBodies.knockUp;
+                        into->knockUpPerSpeed = streetBodies.knockUpPerSpeed;
+                        const int pieceBase = static_cast<int>(into->pieces.size());
+                        const int kindBase = static_cast<int>(into->pieceKinds.size());
+                        for (const auto& pk : streetBodies.pieceKinds) into->pieceKinds.push_back(pk);
+                        for (auto pc : streetBodies.pieces) { pc.kind += kindBase; into->pieces.push_back(pc); }
+                        for (auto c : streetBodies.shapes) { if (c.piece >= 0) c.piece += pieceBase; into->add(c); }
+                    }
+                }
+                std::string census;
+                for (std::size_t k = 0; k < nKinds; ++k) census += ", " + std::to_string(nProp[k]) + " " + kindName[k];
+                for (const engine::KerbProp& kp : fplan.props)   // (where to find the first of a data kind)
+                    if (kp.kind == engine::KerbProp::kFirstDataKind) {
+                        char at[160];
+                        std::snprintf(at, sizeof at, " (the first %s at %.1f %.1f %.1f, the pavement toward %.2f %.2f)", kindName[kp.kind].c_str(),
+                              kp.base.x, kp.base.y, kp.base.z, kp.toPavement.x, kp.toPavement.y);
+                        census += at;
+                        break;
+                    }
+                census += "; " + std::to_string(nBodies) + " bodies, " + std::to_string(nPieces) + " breakable";
+                LOG_INFO << "[furniture] kerb life: " << fplan.trees.size() << " street trees" << census;
             }
             LOG_INFO << "[furniture] " << sf.signalPoles.size() << " signals, "
                      << fplan.lampBases.size() << " street lamps";

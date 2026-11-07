@@ -45,10 +45,11 @@ void EngineVoicePool::update(AudioEngine& audio, std::vector<Engine>& heard, Rea
         }
         slot->prevSpeed = c.speed;
         const EngineSound s = engineSoundFor(c.speed, throttle, true);
-        slot->gain += (s.gain - slot->gain) * std::min(1.0f, 8.0f * dt);
+        const EngineRough rough = engineRough(simTime, c.phase, c.health, c.roughBelow, c.roughWobble, c.roughMisfire);
+        slot->gain += (s.gain * rough.gain - slot->gain) * std::min(1.0f, (rough.gain < 1.0f ? 40.0f : 8.0f) * dt);
         const float wobble = engineWobble(simTime, c.phase, engineRevFraction(c.speed));
         audio.setVoiceVolume(slot->voice, slot->gain);
-        audio.setVoicePitch(slot->voice, s.pitch * wobble);
+        audio.setVoicePitch(slot->voice, s.pitch * wobble * rough.pitch);
         audio.setVoicePosition(slot->voice, c.pos);
     }
 

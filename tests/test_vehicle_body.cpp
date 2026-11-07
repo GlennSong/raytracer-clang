@@ -959,3 +959,21 @@ TEST_CASE(kit_cars_carry_doors_hood_and_trunk_that_open_outward) {
     if (!ok) std::printf("    %s\n", err.c_str());
     CHECK(ok);
 }
+
+// A CAR'S DAMAGE IS DATA (ADR-0355): the drivable spec carries vehicles.lua's KIT_DAMAGE -- the default, equal to the
+// rule's, and a car's own overrides (the convertible folds easier; a sub-table overrides field by field).
+TEST_CASE(drivable_spec_carries_its_damage_tuning) {
+    VehiclesVM v;
+    CHECK(v.loaded);
+    std::string err;
+    VehicleSpec sedan, soft;
+    CHECK(loadVehicleSpec(v.vm, "return vehicle.sedan(seed, {})", 1u, sedan, &err));
+    CHECK(loadVehicleSpec(v.vm, "return vehicle.kit_drivable('convertible', {}, {})", 1u, soft, &err) ||
+          loadVehicleSpec(v.vm, "return vehicle.convertible(seed, {})", 1u, soft, &err));
+    const DamageRule base;
+    CHECK_APPROX(sedan.damage.knockFull, base.knockFull, 1e-9);
+    CHECK_APPROX(sedan.damage.dentDepthMax, base.dentDepthMax, 1e-9);
+    CHECK_APPROX(sedan.damage.roughMisfire, base.roughMisfire, 1e-9);
+    CHECK_APPROX(soft.damage.knockFull, 34.0, 1e-9);
+    CHECK_APPROX(soft.damage.dentDepthMax, base.dentDepthMax, 1e-9);   // (its other fields: the default's)
+}

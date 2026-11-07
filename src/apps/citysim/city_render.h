@@ -448,6 +448,15 @@ public:
     // THAT CAR's HANDLING (item 23, #117): the slot's Jolt config -- its kit's or class's drivable handling on
     // its drawn wheels, the fleet's `handling` read by the one handling reader -- for a physical-tier car and a
     // commandeered one alike. Null when the fleet published none for it (no vehicles script).
+    // THE SLOT AS THE PLAYER'S CAR (ADR-0355): its drivable recipe ("kit_suv") and paint; false when it has none
+    bool carDrivable(int slot, std::string& recipe, engine::Vec3& paint) const {
+        if (carDrivable_.empty()) return false;
+        const int n = static_cast<int>(carDrivable_.size());
+        const std::size_t i = static_cast<std::size_t>(((slot % n) + n) % n);
+        recipe = carDrivable_[i];
+        paint = i < carPaint_.size() ? carPaint_[i] : engine::Vec3(0.5, 0.5, 0.5);
+        return !recipe.empty();
+    }
     const engine::PhysicsWorld::VehicleConfig* carConfig(int slot) const {
         if (carConfigs_.empty()) return nullptr;
         const int n = static_cast<int>(carConfigs_.size());
@@ -657,6 +666,9 @@ private:
     std::vector<std::vector<CarWheel>> carWheels_;
     // ...and each slot's handling (carConfig), read with the catalogue: no geometry, so a headless sim has it.
     std::vector<engine::PhysicsWorld::VehicleConfig> carConfigs_;
+    // per slot: the menu's recipe for it and its paint (loadFleetDrivable), what a taken car is built as
+    std::vector<std::string> carDrivable_;
+    std::vector<engine::Vec3> carPaint_;
     // ...and its seat (the handling's `seat`): a seat with BARS, not a wheel, is ridden astride, so the slot draws
     // its own rider (carRiderGroups_) posed by the player's seat rule instead of the car driver
     std::vector<engine::SeatGeometry> carSeatGeom_;

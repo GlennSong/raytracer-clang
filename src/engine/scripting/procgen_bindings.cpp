@@ -4172,6 +4172,14 @@ int l_poly_extract(lua_State* L) {
     pushPoly(L, std::make_shared<PolyMesh>(extractOffset(m, sel, luaL_checknumber(L, 3), lua_toboolean(L, 4) != 0)));
     return 1;
 }
+// P:panel_of(face) -> its panel's name (the face index raycast returns)
+int l_poly_panel_of(lua_State* L) {
+    const PolyMesh& m = checkPoly(L, 1);
+    const lua_Integer f = luaL_checkinteger(L, 2);
+    if (f < 0 || f >= static_cast<lua_Integer>(m.faces.size())) return luaL_error(L, "panel_of: no face %d", static_cast<int>(f));
+    lua_pushstring(L, m.panels[static_cast<std::size_t>(m.faces[static_cast<std::size_t>(f)].panel)].c_str());
+    return 1;
+}
 // P:panels() -> { "body", "door_fl", ... }: the panels some face is on, body first
 int l_poly_panels(lua_State* L) {
     const PolyMesh& m = checkPoly(L, 1);
@@ -4259,7 +4267,7 @@ void registerPolyMetatable(lua_State* L) {
             {"append", l_poly_append}, {"translate", l_poly_translate}, {"scale", l_poly_scale},
             {"map", l_poly_map}, {"closed", l_poly_closed}, {"volume", l_poly_volume},
             {"face_count", l_poly_face_count}, {"bounds", l_poly_bounds}, {"to_parts", l_poly_to_parts},
-            {"panels", l_poly_panels}, {"solidify", l_poly_solidify}, {"ring", l_poly_ring},
+            {"panels", l_poly_panels}, {"solidify", l_poly_solidify}, {"ring", l_poly_ring}, {"panel_of", l_poly_panel_of},
             {nullptr, nullptr},
         };
         luaL_newlib(L, kMethods);

@@ -681,6 +681,13 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
                     LOG_WARN << "citysim vehicles fleet[" << v << "]: " << hErr << " (it cannot be made physical)";
                 carConfigs_.push_back(handling.config);
                 carSeatGeom_.push_back(handling.seat);
+                {   // what a car of this slot is built as once the player takes it (ADR-0355)
+                    std::string recipe;
+                    engine::Vec3 paint(0.5, 0.5, 0.5);
+                    if (!engine::loadFleetDrivable(fleetVM_, v, recipe, paint)) recipe.clear();
+                    carDrivable_.push_back(recipe);
+                    carPaint_.push_back(paint);
+                }
                 catalogue.push_back(body);
             }
             LOG_INFO << "[citysim] fleet: " << slots << " slots, bus variant "

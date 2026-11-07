@@ -11,6 +11,7 @@
 
 #include <chrono>
 #include <cmath>
+#include "../../engine/ai/danger_dodge.h"
 
 namespace citysim {
 
@@ -35,8 +36,6 @@ constexpr Real kWalkMax = 2.4;          // catch-up ceiling (a brisk jog)
 constexpr Real kTetherLead = 5.0;       // ghost may lead its walker by at most this
 constexpr Real kTetherGiveUp = 4.0;     // ...for at most this long while stuck
 constexpr Real kClosingRate = 0.20;     // closing slower than this is not closing
-constexpr Real kKnockRadius = 1.5;      // a vehicle centre this close...
-constexpr Real kKnockSpeed = 2.5;       // ...moving this fast -> knockdown
 constexpr Real kFaceSpeed = 0.3;        // turn to face travel above this speed
 constexpr Real kPersonalSpace = 1.3;    // 360-degree separation radius from people
 constexpr Real kSeparationGain = 1.8;   // push strength inside that radius
@@ -288,16 +287,23 @@ void CityWalkerSystem::driveWalkers(engine::FrameContext& ctx) {
     // Vehicle poses + speeds once for all walkers (the knockdown trigger): the
     // REAL vehicles (player's / promoted), plus the ambient planner cars — with
     // one motion authority their drawn pose IS the sim pose.
-    std::vector<Vec2> carPos;
-    std::vector<Real> carSpeed;
+    // ...each as its BOX and its velocity (engine/ai/danger_dodge.h, ADR-0355): the knockdown is the box reaching the
+    // walker (a centre-radius test let the nose shove people along first), the dodge its swept path
+    std::vector<engine::DangerCar> cars;
+    const engine::DodgeTuning& dodgeTuning = sim.people().dodge;   // people.lua `people.dodge`
     world.each<Transform, engine::Vehicle>([&](Entity, Transform& t, engine::Vehicle& v) {
-        carPos.push_back(Vec2(t.position.x, t.position.z));
-        Real s = 0;
+        engine::DangerCar c;
+        c.pos = Vec2(t.position.x, t.position.z);
+        const Vec3 f = t.orientation.rotate(Vec3(0, 0, 1));
+        const Real fl = std::sqrt(f.x * f.x + f.z * f.z);
+        c.fwd = fl > 1e-6 ? Vec2(f.x / fl, f.z / fl) : Vec2(0, 1);
+        c.halfW = v.config.chassisHalfExtent.x;
+        c.halfL = v.config.chassisHalfExtent.z;
         if (v.vehicleId != PhysicsWorld::INVALID_VEHICLE) {
-            Vec3 vel = pw.vehicleVelocity(v.vehicleId);
-            s = std::sqrt(vel.x * vel.x + vel.y * vel.y + vel.z * vel.z);
+            const Vec3 vel = pw.vehicleVelocity(v.vehicleId);
+            if (std::isfinite(vel.x) && std::isfinite(vel.z)) c.vel = Vec2(vel.x, vel.z);
         }
-        carSpeed.push_back(s);
+        cars.push_back(c);
     });
     for (int ni : sim.nearAgents()) {   // (the near list: a far car has no body -- see below)
         const Agent& a = sim.agents()[static_cast<std::size_t>(ni)];
@@ -308,8 +314,14 @@ void CityWalkerSystem::driveWalkers(engine::FrameContext& ctx) {
         // list). A car with no body, hundreds of metres away, was being
         // distance-tested against every walker on screen, every step.
         if (a.far()) continue;
-        carPos.push_back(a.pos);
-        carSpeed.push_back(a.speed);
+        engine::DangerCar c;
+        c.pos = a.pos;
+        const Real hl = a.heading.length();
+        c.fwd = hl > 1e-6 ? a.heading * (1.0 / hl) : Vec2(0, 1);
+        c.vel = c.fwd * a.speed;
+        c.halfW = 0.95;
+        c.halfL = sim.isBus(ni) ? 5.7 : 2.35;
+        cars.push_back(c);
     }
     // Every person (other walkers + the on-foot player) for 360° SEPARATION —
     // spatial awareness beyond the planner's forward cone, so a body squeezes
@@ -469,6 +481,14 @@ void CityWalkerSystem::driveWalkers(engine::FrameContext& ctx) {
         }
 
         Vec3 pos = pw.characterPosition(cc->characterId);
+        // (a walker knocked to NaN by a body gone bad: back where the sim has it, and never thrown from there -- a
+        // ragdoll made at NaN hung Jolt's joint solver)
+        if (!std::isfinite(pos.x) || !std::isfinite(pos.y) || !std::isfinite(pos.z)) {
+            const Vec2 sp = sim.agents()[static_cast<std::size_t>(w.agentId)].pos;
+            pos = Vec3(sp.x, city_.floorAt(w.agentId, sp.x, sp.y) + kCapsuleHalf + kCapsuleRadius, sp.y);
+            pw.setCharacterPosition(cc->characterId, pos);
+            LOG_WARN << "[walkers] agent " << w.agentId << " was not finite: put back at " << sp.x << " " << sp.y;
+        }
         Vec2 posXZ(pos.x, pos.z);
 
         // Knockdown: a vehicle moving through the walker's body floors it -- thrown away from the car as a
@@ -476,13 +496,14 @@ void CityWalkerSystem::driveWalkers(engine::FrameContext& ctx) {
         // throws it again.
         // (`knock` on the socket throws the walker nearest the player, for trying it without a car)
         const bool knockNearest = knockPending_;
-        for (std::size_t c = 0; c < carPos.size() + (knockNearest ? 1 : 0); ++c) {
+        for (std::size_t c = 0; c < cars.size() + (knockNearest ? 1 : 0); ++c) {
             Vec2 from;
             Real speed;
-            if (c < carPos.size()) {
-                from = carPos[c];
-                speed = carSpeed[c];
-                if ((from - posXZ).length() >= kKnockRadius || speed <= kKnockSpeed) continue;
+            if (c < cars.size()) {
+                // the car's box reaching the walker's body (its radius and a hand's width)
+                from = cars[c].pos;
+                speed = cars[c].vel.length();
+                if (speed <= dodgeTuning.knockSpeed || !engine::insideFootprint(cars[c], posXZ, kCapsuleRadius + 0.15)) continue;
             } else {
                 if (w.entity != nearestToPlayer) continue;
                 from = playerXZ;
@@ -492,6 +513,17 @@ void CityWalkerSystem::driveWalkers(engine::FrameContext& ctx) {
             }
             Vec2 away = posXZ - from;
             away = away.length() > 1e-3 ? away * (1.0 / away.length()) : w.facing;
+            // (hit by a moving car: thrown on the way it was going, and out to the side it was hit on)
+            if (c < cars.size() && cars[c].vel.length() > 1e-3) {
+                const Vec2 dir = cars[c].vel * (1.0 / cars[c].vel.length());
+                const Vec2 across(dir.y, -dir.x);
+                Vec2 t = dir + across * (dot(posXZ - from, across) >= 0 ? 0.6 : -0.6);
+                away = t * (1.0 / t.length());
+            }
+            // (a car's speed as physics reports it: a body that exploded reports hundreds of metres a second, and a
+            // ragdoll thrown at that went to NaN and hung Jolt's joint solver -- no car here throws faster than this)
+            if (!std::isfinite(speed)) continue;
+            speed = std::min(speed, dodgeTuning.throwCap);
             const Vec3 throwV(away.x * speed * 0.8, 2.0 + 0.15 * speed, away.y * speed * 0.8);
             if (ragdolls_.knock(world, ctx.assets, pw, w.agentId, pos, w.facing,
                                 (kCapsuleHalf + kCapsuleRadius) / engine::BlockBody::kHalfHeight, w.outfit, throwV) >= 0)
@@ -516,7 +548,24 @@ void CityWalkerSystem::driveWalkers(engine::FrameContext& ctx) {
         Vec3 desired;
         bool backingOff = w.backoff > 0;
         if (backingOff) w.backoff -= dt;
-        if (!down && !backingOff) {
+        // GETTING OUT OF THE WAY (ADR-0355): the nearest car coming at this walker, noticed after their own reaction
+        // time -- then a sprint (or a dive) straight out of its path, or, for a few, frozen to the spot
+        bool dodging = false;
+        if (!down) {
+            engine::Threat worst;
+            for (const engine::DangerCar& c : cars) {
+                const engine::Threat t = engine::assessThreat(c, posXZ, dodgeTuning);
+                if (t.coming && (!worst.coming || t.ttc < worst.ttc)) worst = t;
+            }
+            Vec2 dv;
+            if (engine::stepDodge(w.dodge, engine::dodgeTraits(static_cast<uint32_t>(w.agentId) + 77u, dodgeTuning), worst, dt, dv,
+                                  dodgeTuning)) {
+                if (w.dodge.left > 0 && w.dodge.dodges > w.dodgesSeen) { w.dodgesSeen = w.dodge.dodges; ++dodges_; }
+                desired = Vec3(dv.x, 0, dv.y);
+                dodging = true;
+            }
+        }
+        if (!down && !backingOff && !dodging) {
             Vec2 steer(0, 0);
             Vec2 to(g.pos.x - posXZ.x, g.pos.y - posXZ.y);
             Real d = to.length();
@@ -671,7 +720,8 @@ void CityWalkerSystem::driveWalkers(engine::FrameContext& ctx) {
     }
     city_.setExternalPedPoses(std::move(widgetPoses));
     knockPending_ = false;   // (one throw per request)
-    answers_.set("knock?", std::to_string(knocks_) + " thrown so far, " + ragdolls_.describe(pw));
+    answers_.set("knock?", std::to_string(knocks_) + " thrown so far, " + std::to_string(dodges_) + " got out of the way, " +
+                               ragdolls_.describe(pw));
 }
 
 void CityWalkerSystem::onStart(engine::FrameContext& ctx) {

@@ -16154,3 +16154,157 @@ dented. `panels knock hood` dropped every hood onto the ground.
 - A HUD for the damage.
 - Smoke from a dead engine.
 - Traffic cars take no damage: they are kinematic.
+
+## ADR-0354 — Street pieces as bodies: trunks and posts stop a car, bins and hydrants are knocked loose, a hydrant sprays
+
+**Context.** Glenn, 2026-11-06: "the things on the street such as mailboxes and even the trees should have some kind
+of collision ... if it was big enough, it might stop your car, but if it was a fire hydrant, you might knock a fire
+hydrant over and maybe it would spray water out." Kerb life (the city's next ten #3) was draw-only. The only street
+colliders were citysim's signal poles.
+
+**Decision.**
+- **The kerb props that are data** live in `assets/scripts/street_props.lua`. Each kind has:
+  - `name`, `every`, `verge`, `junction`, `main_only`;
+  - `mesh()`;
+  - `collider.half`, `breaks_at`;
+  - `spray = { effect, rate, up }`.
+
+  The hydrant is the first: red barrel, bonnet, hose and pumper outlets with their caps, every 90 m a side.
+  - The same file gives the bodies of what the planner already places: the bin, bike rack and news boxes (`legacy`), a
+    street tree's trunk and a lamp post.
+  - `loadStreetProps` (scripting/street_props_spec) reads it for the loader.
+  - The planner's own three kinds move into the list when the street kit does (#191). No new C++ kind.
+- **Placement.** `StreetFurnitureParams::kerbKinds`: the planner places the data kinds in a pass of their own after its
+  march, so every existing piece stands where it did. Each kind keeps its spacing a side and stays clear of trees,
+  lamps, poles, bins, racks and the other kinds. Their KerbProps carry kind 3 and up.
+- **Bodies.** Every kerb piece, trunk and lamp post is a static shape in the level's one `NatureColliders`, streamed
+  round the player with the forests' (the forest level's set is appended to, not duplicated). river_town has 4,403
+  bodies, 684 of them breakable.
+- **Breaking.**
+  - `PhysicsWorld::setBreakable(body, speed)`: a watched body (a car's chassis) meeting it at that closing speed or
+    more has the contact turned into a sensor (the car goes through) and is reported `broke`.
+  - `NatureColliderSystem` then removes the body, hides the piece's instance (scaled to nothing), drops a loose box
+    body of it (its mesh re-centred) pushed on along the knock, and sparks.
+  - A kind with a spray puts a ParticleEmitter on the stub for a minute: the hydrant's water column ("splash", 260 a
+    second at 7.5 m/s).
+  - A broken piece never streams back. At most 40 loose pieces stay about.
+  - The car's damage pass takes a break at a tenth of a knock.
+- `pieces knock` on the control channel breaks the piece nearest the player through the same path.
+- `Collision` now carries both body ids and `broke`, for owners of bodies outside the ECS.
+
+**Tests.** `a_car_knocks_a_breakable_piece_loose_and_stops_at_a_solid_one`:
+- a car drives through a hydrant-sized box marked breakable at 2 m/s (66 m on, `broke` reported);
+- the same box unmarked stops it at 17.8 m;
+- a scrape along a wall reports an 8.4 m/s slide.
+
+**Seen.** In river_town:
+- 186 hydrants;
+- a car driven along the pavement stopped at a street tree;
+- `pieces knock` beside the first hydrant threw it onto the lawn and left a water column at the stub.
+
+**Owed.**
+- Driving a car into a hydrant in the city, which wasn't reproduced headlessly: a car started in the kerb lane stopped
+  at a straight edge at x = -310 on two headings, most likely the kerb against the collision floor. Not confirmed.
+- Signal poles as these bodies too (citysim has its own).
+- Mailboxes and bollards (data entries).
+- A puddle under the spray.
+
+## ADR-0355 — Bodies gone bad, loose parts with weight, and walkers who get out of a car's way
+
+**Context.** Glenn, 2026-11-06, driving the first build of ADR-0353/0354 in river_town:
+- "I just smashed my car and the doors flew off and the game look like it crashed";
+- "Are parts of the car too light so they go flying off at high velocity? ... maybe they should be given more weight";
+- pedestrians "tend to just get pushed along with a vehicle and they don't ragdoll or they don't try to jump out of
+  the way even. Maybe they need some kind of new state where they are self-aware ... and will try and move out of the
+  way of danger."
+
+The hang: the main thread was in Jolt's `SwingTwistConstraintPart::ClampSwingTwist`. `Ellipse::GetClosestPoint` never
+ends on NaN. A walker's ragdoll had been made at a NaN position, thrown at 107 m/s by a car "moving" at 385 km/h.
+
+**Decision.**
+- **Never pushed off at birth.**
+  - `PhysicsWorld::ignoreContacts(a, b, grace)` rejects a pair in `OnContactValidate` while their boxes overlap, and
+    `grace` steps after.
+  - `RigidBody::ignore` applies it from a body's first step.
+  - A part knocked off a car ignores the car; a kerb piece knocked loose ignores the car passing through it.
+- **Thin boxes have bodies.** `addBox` gives a box a convex radius no more than half its thinnest side. Jolt refused a
+  door or hood under its default 5 cm, and the loose part never got a body.
+- **A body gone bad** (`PhysicsWorld::sanitize`, after every step): an active dynamic body not finite, or past
+  1,000 m/s (a car's chassis past 150; a bullet does 300), is parked below the world, still and asleep, and reported `[physics] a body gone bad`. It is not removed,
+  because a ragdoll's joints still hold it.
+  - A car's chassis is only stopped.
+  - A kinematic (driven) body is reported once and left alone. Its velocity is its owner's step (city traffic jumped
+    a long way reads as hundreds of m/s), and parking it fought its owner every step.
+- **Walkers.** One found NaN is put back where the sim has it. A ragdoll is never made from a NaN pose, and nobody is
+  thrown faster than 30 m/s. A car's first half second, and any knock past 60 m/s, cost it nothing: a car taken from
+  the traffic came with its engine already "wrecked".
+- **Weight** (data):
+  - panels' `mass` in `kit.hinge`: door 22 kg, hood 16, trunk 12, hatch 18, tailgate 20;
+  - kerb pieces' in street_props.lua: hydrant 90, bin 25, rack 35, news boxes 45.
+
+  `PhysicsWorld::setBodyMass` scales the shape's inertia to it and adds air drag (0.3 linear, 0.6 angular). A part
+  leaves at 0.7 of the car's speed with a small lift (it was the car's full speed plus 1.5 m/s up). A kerb piece leaves
+  at 0.6 of the knock.
+- **Out of the way** (`engine/ai/danger_dodge.h`, pure):
+  - A car is its box (`insideFootprint`). A walker is knocked down when the box reaches them; the old test was the
+    car's centre within 1.5 m, so the nose, 2 m ahead of it, shoved people along first. The throw follows the car's
+    travel, out to the side they were hit on.
+  - `assessThreat`: a car moving at someone, their place in its swept path (half width plus a metre), its front
+    within 1.8 s.
+  - `stepDodge`: each person notices after their own reaction time (0.25-0.65 s, from `dodgeTraits(agent)`). They then
+    sprint 4.5-6.5 m/s straight out of the path for 0.75 s, or dive faster and shorter when it is under 0.45 s off. One
+    in seven freezes.
+  - `knock?` counts the dodges.
+
+**Tests.**
+- `a_part_born_inside_its_car_does_not_fling_the_car` (physics).
+- danger_dodge's three:
+  - a nose hits before a centre would;
+  - threats ahead, beside, behind, far, creeping and reversing;
+  - of 70 people facing a 43 km/h car from 16 m, everyone who moves gets clear and about one in seven freezes.
+
+- **Damage that is fair** (the next drives):
+  - Glenn: "cars seem to lose power and then eventually become undrivable." The chassis box's bottom corners brushing
+    the road as a car pitched were scrapes on the nose and tail. A touch whose normal stands up (|n.y| > 0.7) is now
+    the ground: a scrape along it costs nothing and sparks only past 8 m/s; a knock from below is the underside's, at
+    a third.
+  - Glenn: "I hit a fence with my truck... is it dead?" A fence is a dozen contacts in one instant. Per zone, knocks
+    within a third of a second are one crash, costing only the worst (`crashHarm`/`crashClock`). One knock spends a
+    zone at 40 m/s (145 km/h), not 28.
+- **Damage you can see** (Glenn: "show the visual damage and maybe even show smoke and sparks and look damaged ... deform
+  the car dynamically"):
+  - The drivable body is built subdivided once, as the traffic's near bodies are, so a dent has vertices to push.
+  - Dents are deeper and wider: 0.25-0.9 m across, down to 26 cm.
+  - `dentMesh`'s `scuff` scrapes the paint toward dark bare metal as deep as the dent goes. A lamp lens crushed past
+    half the depth loses its lamp tag and darkens: the lamp is broken.
+  - The hood steams once the nose is under 60 % and smokes black (`engine_smoke`, particles.lua) under 25 % or dead,
+    trailing the car.
+
+- **Tuning is data** (Glenn: "move the tuning to lua"):
+  - A car's damage tuning is vehicles.lua's `KIT_DAMAGE`: a default and per-kit overrides (buses and the fire engine
+    take 55 m/s to spend a zone, the convertible 34). It is read into the drivable spec as `damage`, onto
+    `Vehicle::damage` (`DamageRule`, now carrying the dent, smoke, kick, crash-window and rough-engine numbers too). An N
+    drop reads it afresh.
+  - The dodge is people.lua's `people.dodge` (`DodgeTuning`, read into `PeopleCatalog::dodge`).
+  - A loose piece's throw is street_props.lua's `knock`.
+  - The C++ defaults equal the tables'. Tests hold that each is read and that an edit is what the game gets.
+- **A car taken from the traffic is the car N drops** (Glenn: "Why is an SUV in the world different than mine? I
+  can't open the hatch"):
+  - Each fleet entry carries its paint beside its `drivable` recipe (`loadFleetDrivable`).
+  - CityVehicleSystem builds the taken car from that recipe through `spawnVehicle` (panels, a body to dent, its
+    tuning), falling back to the traffic body only for a slot without one.
+  - The drivable car's handling comes from the faceted build, as the traffic's catalogue's does, so the two drive as
+    one. Its looks are from the subdivided build.
+- **Panels heard:** a latch as a panel opens, a shut by kind (door, hood, trunk: `sfx::panelShut`) as it closes.
+- **The driver gets out of the driver's door**, beside it at the seat. A car on its side or roof keeps the old up and
+  out.
+
+**Seen.** river_town at 75 km/h with every door and the hood knocked off mid-drive: no bodies gone bad, no hang.
+
+**Owed.**
+- Parked cars that open before they are taken (a near swap to the drivable).
+- Cracked and shattered glass (a crack texture).
+- Smoke from fire.
+- Repair.
+- A damage readout on the HUD.
+- Dodging seen in the city: the rules are tested; a probe drive met no walkers.

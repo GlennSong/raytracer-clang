@@ -431,7 +431,7 @@ function kit.patch(S, rule)
   local right = unit(cross(upw, out))             -- right x up = out: the loft's faces come out facing out
   local up = cross(out, right)
   local o = rule.from
-  local hit0 = S:raycast(o, d)
+  local hit0, _, face0 = S:raycast(o, d)
   if not hit0 then return nil end
   local t0 = (hit0[1] - o[1]) * d[1] + (hit0[2] - o[2]) * d[2] + (hit0[3] - o[3]) * d[3]
   local w, h = rule.size[1] * 0.5, rule.size[2] * 0.5
@@ -452,7 +452,9 @@ function kit.patch(S, rule)
   local st = {}
   for k = 1, #SCALE do st[k] = k - 1 end
   local L = poly.loft{ sections = secs, stations = st, cap_start = false, cap_end = true, cap_crease = 0 }
-  L:assign(L:select{}, { mat = rule.mat or "lamp" })
+  -- (on the panel it was cast onto: a tail lamp on a hatch rides the hatch up -- Glenn: "they should be anchored onto
+  -- the hatch and move with it and not float separately")
+  L:assign(L:select{}, { mat = rule.mat or "lamp", panel = S:panel_of(face0) })
   local proud, dome, sink = rule.proud or 0.003, rule.dome or 0.004, rule.sink or 0.012
   L:map(function(x, y, z)
     local ro = { o[1] + right[1] * x + up[1] * y, o[2] + right[2] * x + up[2] * y, o[3] + right[3] * x + up[3] * y }
@@ -1287,20 +1289,20 @@ end
 -- WHERE A PANEL HINGES, from its bounds (body-centre space: +z the nose, x > 0 the driver's left): a door on its
 -- front edge, outboard, swinging out; the hood on its back edge (at the windscreen), the front lifting; a trunk lid
 -- or a hatch on its front edge, the back lifting. { pivot, axis, open (degrees) }: a positive turn about `axis`
--- (right-handed) opens it.
+-- (right-handed) opens it; `mass` (kg) is what it weighs once it comes off (ADR-0355).
 function kit.hinge(name, lo, hi)
   local ym = 0.5 * (lo[2] + hi[2])
   if name:sub(1, 5) == "door_" then
     local left = name:sub(-2) == "_l"
-    return { pivot = { left and hi[1] or lo[1], ym, hi[3] }, axis = { 0, left and -1 or 1, 0 }, open = 65 }
+    return { pivot = { left and hi[1] or lo[1], ym, hi[3] }, axis = { 0, left and -1 or 1, 0 }, open = 65, mass = 22 }
   elseif name == "hood" then
-    return { pivot = { 0, hi[2], lo[3] }, axis = { -1, 0, 0 }, open = 55 }
+    return { pivot = { 0, hi[2], lo[3] }, axis = { -1, 0, 0 }, open = 55, mass = 16 }
   elseif name == "trunk" then
-    return { pivot = { 0, hi[2], hi[3] }, axis = { 1, 0, 0 }, open = 62 }
+    return { pivot = { 0, hi[2], hi[3] }, axis = { 1, 0, 0 }, open = 62, mass = 12 }
   elseif name == "hatch" then
-    return { pivot = { 0, hi[2], hi[3] }, axis = { 1, 0, 0 }, open = 80 }
+    return { pivot = { 0, hi[2], hi[3] }, axis = { 1, 0, 0 }, open = 80, mass = 18 }
   elseif name == "tailgate" then   -- on its foot, the top dropping back to lie flat
-    return { pivot = { 0, lo[2], hi[3] }, axis = { -1, 0, 0 }, open = 90 }
+    return { pivot = { 0, lo[2], hi[3] }, axis = { -1, 0, 0 }, open = 90, mass = 20 }
   end
   return { pivot = { 0, ym, 0.5 * (lo[3] + hi[3]) }, axis = { 0, 1, 0 }, open = 0 }
 end

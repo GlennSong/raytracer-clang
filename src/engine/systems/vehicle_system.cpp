@@ -59,6 +59,7 @@ void VehicleSystem::onStart(FrameContext& ctx) {
         h.speed = c.speed;
         h.slide = c.slide;
         h.persisted = c.persisted;
+        h.broke = c.broke;
         h.car = c.a;
         h.other = c.b;
         hits_.push_back(h);
@@ -313,6 +314,7 @@ void VehicleSystem::createVehicles(FrameContext& ctx) {
 }
 
 void VehicleSystem::driveVehicles(FrameContext& ctx) {
+    starterCooldown_ = std::max(Real(0), starterCooldown_ - ctx.clock.fixedStep());
     Real throttle = ctx.actions.axis("drive_throttle");
     Real steer = ctx.actions.axis("drive_steer");
     Real brake = ctx.actions.held("drive_brake") ? 1.0 : 0.0;
@@ -356,7 +358,14 @@ void VehicleSystem::driveVehicles(FrameContext& ctx) {
             // Nobody at the wheel: hold the brake so it doesn't creep on a slope.
             in.brake = 1.0;
         }
-        if (v.engineDead) in.throttle = 0.0;   // (ADR-0353: the nose spent -- it steers and brakes, it will not drive)
+        if (v.engineDead) {   // (ADR-0353: the nose spent -- it steers and brakes, it will not drive)
+            // the driver tries it: the starter turns it over and it will not catch (ADR-0355)
+            if (v.driver.valid() && in.throttle > 0.3 && starterCooldown_ <= 0) {
+                if (const Transform* ct = ctx.world.get<Transform>(e)) panelSound(ctx, ct->position, 4, 0.7f);
+                starterCooldown_ = 1.8;
+            }
+            in.throttle = 0.0;
+        }
         v.throttle = in.throttle;
         v.steer = v.driver.valid() ? steer : in.steer;   // the driver's wheel, for the indicators
         v.steerApplied = in.steer;
@@ -467,6 +476,13 @@ void VehicleSystem::writeBack(FrameContext& ctx) {
                 body->material.flags |= RenderMaterial::FLAG_LAMP_STATE;
                 body->instanceData = static_cast<float>(lampMask(lit, blink));
             }
+            // ...and a lens that rides a panel -- the SUV's tail lamps on its hatch (Glenn: "the lights should go with
+            // it") -- lights from the panel's part the same way
+            for (Entity part : v.bodyParts)
+                if (Renderable* pr = ctx.world.get<Renderable>(part)) {
+                    pr->material.flags |= RenderMaterial::FLAG_LAMP_STATE;
+                    pr->instanceData = static_cast<float>(lampMask(lit, blink));
+                }
 
             // Headlight CONES (WS3, the ADR-0065 deferred row): lit headlights
             // cast real SpotLights on the road, not just glowing lenses. Beam
@@ -631,11 +647,24 @@ void VehicleSystem::handleEnterExit(FrameContext& ctx) {
             // Step out well CLEAR of the car: up (world up, so a flipped car still
             // ejects you upward, never trapping you under it) plus a flattened
             // sideways nudge. You drop onto your feet beside the car.
-            Vec3 side = ct.orientation.rotate(Vec3(1, 0, 0));
+            // OUT OF THE DRIVER'S DOOR (Glenn: "when you get out of the car, it has to be on the side of the car you
+            // entered to match the door"): beside the door, level with the seat, standing -- the driver sits on the
+            // right (-X), the door that swings open is theirs. A car on its side or roof: up and out, as before.
+            const Vehicle* vv = ctx.world.get<Vehicle>(car);
+            const Vec3 hip = vv ? vv->hipPoint() : Vec3(-0.5, 0, 0);
+            const Real sx = hip.x < 0 ? -1.0 : 1.0;
+            Vec3 side = ct.orientation.rotate(Vec3(sx, 0, 0));
             side.y = 0;
             Real sl = side.length();
-            side = sl > 1e-3 ? side * (1.0 / sl) : Vec3(1, 0, 0);
+            side = sl > 1e-3 ? side * (1.0 / sl) : Vec3(sx, 0, 0);
+            const bool upright = ct.orientation.rotate(Vec3(0, 1, 0)).y > 0.7;
+            const Real halfW = vv ? vv->config.chassisHalfExtent.x : 0.9;
             Vec3 out = ct.position + Vec3(0, 2.5, 0) + side * 2.0;
+            if (upright) {
+                Vec3 along = ct.orientation.rotate(Vec3(0, 0, hip.z));
+                along.y = 0;
+                out = ct.position + along + side * (halfW + 0.65) + Vec3(0, 0.6, 0);
+            }
             if (Transform* pt = ctx.world.get<Transform>(player)) pt->position = out;
             if (CharacterController* cc = ctx.world.get<CharacterController>(player))
                 physicsSys.physicsWorld().setCharacterPosition(cc->characterId, out);
@@ -903,11 +932,16 @@ void VehicleSystem::updateEngines(FrameContext& ctx) {
     const Real range = engines_.range();
     ctx.world.each<Transform, Vehicle>([&](Entity e, Transform& t, Vehicle& v) {
         const bool running = v.driver.valid() || ctx.world.has<AgentDriver>(e);
-        if (!running || v.pedalled) return;   // a bicycle has legs, not an engine
+        if (!running || v.pedalled || v.engineDead) return;   // a bicycle has legs, not an engine; a dead one is silent
         const Real d2 = (t.position - ear).lengthSquared();
         if (d2 > range * range) return;
-        heard.push_back({(static_cast<uint64_t>(e.generation) << 32) | e.index, t.position, v.speed, v.throttle,
-                         static_cast<Real>(e.index % 17) * Real(0.37), d2});
+        EngineVoicePool::Engine en{(static_cast<uint64_t>(e.generation) << 32) | e.index, t.position, v.speed, v.throttle,
+                                   static_cast<Real>(e.index % 17) * Real(0.37), d2};
+        en.health = v.zoneHealth[static_cast<int>(DamageZone::Front)];
+        en.roughBelow = v.damage.roughBelow;
+        en.roughWobble = v.damage.roughWobble;
+        en.roughMisfire = v.damage.roughMisfire;
+        heard.push_back(en);
     });
     engines_.update(ctx.audio, heard, ctx.clock.simulatedTime(), ctx.frameDelta);
 }
@@ -1100,7 +1134,7 @@ void VehicleSystem::swingPanels(FrameContext& ctx) {
                     if (!v.panels[i].gone && named(v.panels[i])) off.emplace_back(e, static_cast<int>(i));
             });
             for (const auto& [e, i] : off)
-                if (Vehicle* v = ctx.world.get<Vehicle>(e)) detachPanel(ctx, e, *v, i, Vec3(0, 2.0, 0));
+                if (Vehicle* v = ctx.world.get<Vehicle>(e)) detachPanel(ctx, e, *v, i, Vec3(0, 1.0, 0));
             continue;
         }
         ctx.world.each<Vehicle>([&](Entity, Vehicle& v) {
@@ -1108,18 +1142,45 @@ void VehicleSystem::swingPanels(FrameContext& ctx) {
                 if (named(p)) { p.target = open ? p.open : 0.0f; p.hold = 0.0f; }
         });
     }
-    ctx.world.each<Vehicle>([&](Entity, Vehicle& v) {
+    struct Heard { Vec3 at; int kind; float volume; };
+    std::vector<Heard> heard;
+    ctx.world.each<Vehicle>([&](Entity e, Vehicle& v) {
+        const Transform* ct = ctx.world.get<Transform>(e);
         for (Vehicle::Panel& p : v.panels) {
+            if (p.gone) continue;
             if (p.hold > 0.0f) {
                 p.hold -= dt;
                 if (p.hold <= 0.0f) { p.hold = 0.0f; p.target = 0.0f; }
             }
             const bool door = p.name.rfind("door_", 0) == 0;
             const float rate = p.open / (door ? 0.45f : 0.85f) * dt;
+            const float was = p.angle;
             if (p.angle < p.target) p.angle = std::min(p.target, p.angle + rate);
             else if (p.angle > p.target) p.angle = std::max(p.target, p.angle - rate);
+            // heard (ADR-0355): the latch letting go as it opens, the panel slamming home as it shuts
+            if (!ct) continue;
+            const Vec3 at = ct->position + ct->orientation.rotate(p.centre);
+            if (was == 0.0f && p.angle > 0.0f) heard.push_back({at, 3, 0.5f});
+            if (was > 0.0f && p.angle == 0.0f)
+                heard.push_back({at, door ? 0 : p.name == "hood" ? 1 : 2, door ? 0.9f : 0.8f});
         }
     });
+    for (const Heard& h : heard) panelSound(ctx, h.at, h.kind, h.volume);
+}
+
+void VehicleSystem::panelSound(FrameContext& ctx, const Vec3& at, int kind, float volume) {
+    if (!ctx.audio.ready()) return;
+    AudioClipHandle* clip = kind < 3 ? &shutClip_[kind] : kind == 3 ? &openClip_ : &starterClip_;
+    if (!clip->valid()) {
+        const uint32_t r = ctx.audio.sampleRate();
+        const std::vector<float> pcm = kind < 3 ? sfx::panelShut(static_cast<sfx::PanelKind>(kind), r, 1)
+                                     : kind == 3 ? sfx::panelOpen(r, 1) : sfx::starterNoCatch(r, 1);
+        *clip = ctx.audio.createClip(pcm.data(), pcm.size(), 1, r);
+    }
+    if (!clip->valid()) return;
+    AudioPlayParams params;
+    params.volume = volume;
+    ctx.audio.playAt(*clip, at, 30.0, params);
 }
 
 // THE DAMAGE PASS (ADR-0353): each touch on a drivable car -- a knock by its closing speed, a scrape by its slide --
@@ -1130,9 +1191,11 @@ void VehicleSystem::applyDamage(FrameContext& ctx) {
     PhysicsWorld& pw = physicsSys.physicsWorld();
     // the loose parts' first push (their bodies exist one step after they are made)
     for (std::size_t i = 0; i < looseKick_.size();) {
-        const RigidBody* rb = ctx.world.alive(looseKick_[i].first) ? ctx.world.get<RigidBody>(looseKick_[i].first) : nullptr;
+        const RigidBody* rb = ctx.world.alive(looseKick_[i].e) ? ctx.world.get<RigidBody>(looseKick_[i].e) : nullptr;
         if (rb && rb->bodyId != INVALID_PHYSICS_BODY) {
-            pw.setLinearVelocity(rb->bodyId, looseKick_[i].second);
+            // its weight and the air on it (Glenn: "maybe they should be given more weight"), then its push
+            pw.setBodyMass(rb->bodyId, looseKick_[i].mass, 0.3, 0.6);
+            pw.setLinearVelocity(rb->bodyId, looseKick_[i].velocity);
             looseKick_.erase(looseKick_.begin() + static_cast<std::ptrdiff_t>(i));
         } else if (!rb) {
             looseKick_.erase(looseKick_.begin() + static_cast<std::ptrdiff_t>(i));
@@ -1140,7 +1203,6 @@ void VehicleSystem::applyDamage(FrameContext& ctx) {
             ++i;
         }
     }
-    const DamageRule rule;
     std::vector<Hit> hits;
     hits.swap(hits_);
     for (const Hit& h : hits) {
@@ -1148,24 +1210,60 @@ void VehicleSystem::applyDamage(FrameContext& ctx) {
         Vehicle* v = ctx.world.get<Vehicle>(h.car);
         const Transform* t = ctx.world.get<Transform>(h.car);
         if (!v || !t || v->vehicleId == PhysicsWorld::INVALID_VEHICLE) continue;
+        // THE GROUND IS NOT A CRASH (Glenn: "cars seem to lose power and then eventually become undrivable"): the
+        // chassis box's bottom corners brush the road as the car pitches over bumps and kerbs, and every such brush was
+        // a scrape on the nose or the tail until the engine died. A touch whose normal stands up is the ground: a
+        // scrape along it costs nothing (it sparks only bottoming out fast), a knock from below -- a hard landing --
+        // is the underside's, at a third.
+        const bool ground = std::fabs(h.normal.y) > 0.7;
+        if (ground && h.persisted) {
+            if (h.slide > 8.0 && v->scrapeSparkClock <= 0.0f) {
+                requestParticles(ctx.world, "spark", h.at, Vec3(0, 1, 0), 3, 0.8);
+                v->scrapeSparkClock = 0.15f;
+            }
+            continue;
+        }
         // (a scrape's sparks are a trickle: a few a tenth of a second, not every contact every step)
+        const DamageRule& rule = v->damage;
         const int sparks = touchSparks(rule, h.persisted, h.speed, h.slide);
         if (sparks > 0 && (!h.persisted || v->scrapeSparkClock <= 0.0f)) {
             const Vec3 away = h.normal * -1.0;   // (the normal points from the car to what it hit)
             requestParticles(ctx.world, "spark", h.at, away, sparks, std::min(Real(2), std::max(h.speed, h.slide) / 8.0));
             if (h.persisted) v->scrapeSparkClock = 0.08f;
         }
-        const Real harm = touchHarm(rule, h.persisted, h.speed, h.slide, dt, v->config.mass);
+        // (a piece knocked loose -- a hydrant, a bin -- weighs a few dozen kilos: a tenth of a wall's knock)
+        const Real harm = touchHarm(rule, h.persisted, h.speed, h.slide, dt, v->config.mass) * (h.broke ? rule.breakShare : 1.0) *
+                          (ground ? rule.groundShare : 1.0);
         if (harm <= 0) continue;
+        // NOT A CRASH: a car's first half second (made, or taken over from the city, on top of whatever it overlaps --
+        // a car taken from the traffic came with its engine already "wrecked"), or a knock faster than anything drives
+        // (a body gone bad, the physics sanitizer's to report)
+        if (v->age < 0.5f || h.speed > 60.0) continue;
         const Quat inv = t->orientation.conjugate();
         const Vec3 local = inv.rotate(h.at - t->position);
         const Vec3 inward = inv.rotate(h.normal);   // into the car, chassis frame
-        const DamageZone zone = damageZone(local, v->config.chassisHalfExtent);
+        const DamageZone zone = ground ? DamageZone::Under : damageZone(local, v->config.chassisHalfExtent);
         float& zh = v->zoneHealth[static_cast<int>(zone)];
-        zh = std::max(0.0f, zh - static_cast<float>(harm * 1.2));
+        // (a knock within a third of a second of the last on this zone is the same crash: it adds only what it
+        // exceeds the worst so far by; a scrape is its own, slow, cost)
+        Real cost = harm;
+        if (!h.persisted) {
+            const int zi = static_cast<int>(zone);
+            if (v->crashClock[zi] > 0.0f) cost = std::max(Real(0), harm - v->crashHarm[zi]);
+            v->crashHarm[zi] = v->crashClock[zi] > 0.0f ? std::max(v->crashHarm[zi], static_cast<float>(harm)) : static_cast<float>(harm);
+            v->crashClock[zi] = static_cast<float>(rule.crashWindow);
+        }
+        zh = std::max(0.0f, zh - static_cast<float>(cost * rule.zoneScale));
         if (zone == DamageZone::Front && zh <= 0.0f && !v->engineDead) {
             v->engineDead = true;
             LOG_INFO << "[vehicle] the engine is wrecked: undrivable";
+            // a crumpled hood springs its catch and stands ajar (Glenn: "this car still looks drivable")
+            const int hood = v->panelIndex("hood");
+            if (hood >= 0 && !v->panels[static_cast<std::size_t>(hood)].gone) {
+                Vehicle::Panel& p = v->panels[static_cast<std::size_t>(hood)];
+                p.target = p.open * 0.3f;
+                p.hold = 0.0f;
+            }
         }
         // the panel the touch lands on (still on): the nearest by its box, within 0.35 m of it -- a bumper knock is
         // the hood's, a door's edge its own
@@ -1179,14 +1277,17 @@ void VehicleSystem::applyDamage(FrameContext& ctx) {
             const Real d = (c - local).length();
             if (d < nearD) { nearD = d; near = static_cast<int>(i); }
         }
-        if (near >= 0) v->panels[static_cast<std::size_t>(near)].health -= static_cast<float>(harm * 1.6);
+        if (near >= 0) v->panels[static_cast<std::size_t>(near)].health -= static_cast<float>(cost * rule.panelScale);
         // THE DENT: a knock pushes the skin in round the point (a scrape only scuffs: no dent)
-        if (!h.persisted && harm > 0.015) {
-            const Real radius = 0.22 + 0.55 * std::min(Real(1), harm);
-            const Real depth = std::min(Real(0.14), 0.03 + 0.22 * harm);
+        if (!h.persisted && harm > rule.dentFrom) {
+            // deep enough to read (Glenn: "show the visual damage"): a wide shallow ding for a nudge, a crumple of a
+            // quarter metre for a wreck, the paint scraped toward the bottom of it
+            const Real radius = rule.dentRadiusLo + (rule.dentRadiusHi - rule.dentRadiusLo) * std::min(Real(1), harm);
+            const Real depth = std::min(rule.dentDepthMax, rule.dentDepthLo + rule.dentDepthPer * harm);
+            const Real scuff = std::min(Real(1), rule.scuffLo + rule.scuffPer * harm);
             if (v->bodyMesh) {
                 if (!v->bodyDented) { v->bodyMesh = std::make_shared<RenderMesh>(*v->bodyMesh); v->bodyDented = true; }
-                v->meshDirty |= dentMesh(*v->bodyMesh, local, inward, radius, depth);
+                v->meshDirty |= dentMesh(*v->bodyMesh, local, inward, radius, depth, scuff);
             }
             for (std::size_t k = 0; k < v->partMeshes.size(); ++k) {
                 if (!v->partMeshes[k]) continue;
@@ -1208,17 +1309,45 @@ void VehicleSystem::applyDamage(FrameContext& ctx) {
                     v->partMeshes[k] = std::make_shared<RenderMesh>(*v->partMeshes[k]);
                     v->partDented[k] = 1;
                 }
-                v->meshDirty |= dentMesh(*v->partMeshes[k], at, dir, radius, depth);
+                v->meshDirty |= dentMesh(*v->partMeshes[k], at, dir, radius, depth, scuff);
             }
         }
         if (near >= 0 && v->panels[static_cast<std::size_t>(near)].health <= 0.0f) {
+            // it leaves slower than the car (torn, it drags) and only just lifts
             const Vec3 vel = pw.vehicleVelocity(v->vehicleId);
-            detachPanel(ctx, h.car, *v, near, vel + h.normal * (-1.5) + Vec3(0, 1.5, 0));
+            detachPanel(ctx, h.car, *v, near, vel * rule.kickCar + h.normal * (-rule.kickOut) + Vec3(0, rule.kickUp, 0));
         }
     }
     // the dented meshes up to the GPU, at most every 0.15 s per car
     ctx.world.each<Vehicle>([&](Entity e, Vehicle& v) {
+        v.age += dt;
         v.scrapeSparkClock = std::max(0.0f, v.scrapeSparkClock - dt);
+        for (float& c : v.crashClock) c = std::max(0.0f, c - dt);
+        // THE HOOD SMOKES (Glenn: "maybe even show smoke and sparks and look damaged"): white steam from the radiator
+        // once the nose is hurt, thickening as it goes, then dark smoke near the end and once the engine is dead;
+        // trailing the car as it drives
+        const float nose = v.zoneHealth[static_cast<int>(DamageZone::Front)];
+        if (nose < v.damage.steamBelow || v.engineDead) {
+            const Transform* ct = ctx.world.get<Transform>(e);
+            if (ct && !(v.engineSmoke.valid() && ctx.world.alive(v.engineSmoke))) {
+                v.engineSmoke = ctx.world.create();
+                ctx.world.add<Transform>(v.engineSmoke, *ct);
+                ParticleEmitter em;
+                em.halfExtent = Vec3(0.25, 0.05, 0.2);
+                ctx.world.add<ParticleEmitter>(v.engineSmoke, em);
+            }
+            Transform* st = ctx.world.get<Transform>(v.engineSmoke);
+            ParticleEmitter* pe = ctx.world.get<ParticleEmitter>(v.engineSmoke);
+            if (ct && st && pe) {
+                const Vec3& hx = v.config.chassisHalfExtent;
+                st->position = ct->position + ct->orientation.rotate(Vec3(0, hx.y * 0.8, hx.z * 0.65));
+                const bool black = v.engineDead || nose < v.damage.blackBelow;
+                pe->effect = black ? "engine_smoke" : "steam";
+                pe->rate = black ? 28.0 : 4.0 + 30.0 * (v.damage.steamBelow - nose);
+                const Vec3 vel = v.vehicleId != PhysicsWorld::INVALID_VEHICLE ? pw.vehicleVelocity(v.vehicleId) : Vec3();
+                pe->velocity = vel * 0.6;
+            }
+        }
         v.sinceUpload += dt;
         if (!v.meshDirty || v.sinceUpload < 0.15f) return;
         v.meshDirty = false;
@@ -1297,8 +1426,10 @@ void VehicleSystem::detachPanel(FrameContext& ctx, Entity car, Vehicle& v, int p
         ctx.world.add<Collider>(pe, col);
         RigidBody rb;
         rb.motion = BodyMotion::Dynamic;
+        rb.ignore = physicsSys.physicsWorld().vehicleBody(v.vehicleId);   // (born inside the car's box: never pushed off it)
+        rb.ignoreGrace = 60;
         ctx.world.add<RigidBody>(pe, rb);
-        looseKick_.emplace_back(pe, kick);
+        looseKick_.push_back({pe, kick, panel.mass});
         loose_.push_back(pe);
         freed = true;
     }

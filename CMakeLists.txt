@@ -431,6 +431,7 @@ if(RT_ENABLE_SCRIPTING)
         src/engine/scripting/script_system.cpp
         src/engine/scripting/lua_json.cpp
         src/engine/scripting/vehicle_spec.cpp
+        src/engine/scripting/street_props_spec.cpp
         src/engine/scripting/furniture_library_lua.cpp
         src/engine/scripting/furniture_models_lua.cpp
         src/engine/scripting/tree_recipes_lua.cpp
@@ -753,6 +754,7 @@ add_executable(run_tests
     tests/test_mesh_unwrap.cpp
     tests/test_mesh_bake.cpp
     tests/test_vehicle_damage.cpp
+    tests/test_danger_dodge.cpp
     tests/test_mesh_surfaces.cpp
     tests/test_cube_sphere.cpp
     tests/test_noise.cpp

@@ -5,6 +5,7 @@
 #include "../physics/physics_world.h"   // PhysicsWorld::VehicleConfig
 #include "../player/seat_geometry.h"    // SeatGeometry
 #include "../world.h"                    // Entity, World
+#include "../vehicle_damage.h"            // DamageRule
 #include <memory>
 #include <string>
 #include <vector>
@@ -52,8 +53,11 @@ struct VehicleSpec {
         float openDeg = 0.0f;
         Vec3 centre{0, 0, 0};        // the panel's middle (where its E prompt sits)
         Vec3 lo{0, 0, 0}, hi{0, 0, 0};   // its box (chassis frame): what a touch is measured against
+        float mass = 20.0f;              // kg, once it comes off
     };
     std::vector<Panel> panels;
+    // its damage tuning (ADR-0355): the spec's `damage` table (vehicles.lua KIT_DAMAGE), else the defaults
+    DamageRule damage;
 
     // Named lamp mount points from the recipe's `lights` array — the same marker
     // format citysim's traffic already uses, so one generator feeds both. Names

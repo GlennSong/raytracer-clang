@@ -2,6 +2,7 @@
 
 #include "../components.h"
 #include "../../profile.h"
+#include "../../log.h"
 #include <unordered_map>
 #include <vector>
 
@@ -47,6 +48,9 @@ void PhysicsSystem::createBodies(World& world) {
                                                rb.continuousCollision);
                     break;
             }
+            // born overlapping a body it must not be pushed off (ADR-0353): ignored from its first step
+            if (rb.bodyId != INVALID_PHYSICS_BODY && rb.ignore != INVALID_PHYSICS_BODY)
+                physics.ignoreContacts(rb.bodyId, rb.ignore, rb.ignoreGrace);
             // If entity has a Velocity component, queue initial velocity
             auto* vel = world.get<Velocity>(e);
             if (vel && rb.bodyId != INVALID_PHYSICS_BODY) {
@@ -135,6 +139,9 @@ void PhysicsSystem::publishContacts(World& world, EventBus& events) {
         collision.speed = contact.approachSpeed;
         collision.persisted = contact.persisted;
         collision.slide = contact.slideSpeed;
+        collision.bodyA = contact.bodyA;
+        collision.bodyB = contact.bodyB;
+        collision.broke = contact.broke;
         events.publish(collision);
     }
 }
@@ -148,6 +155,10 @@ void PhysicsSystem::fixedUpdate(FrameContext& ctx) {
     RT_PROFILE_ZONE_NAMED("physicsStep");
     createBodies(ctx.world);
     step(ctx.world, ctx.clock.fixedStep());
+    for (const PhysicsWorld::SanitizedBody& b : physics.drainSanitized())
+        LOG_WARN << "[physics] a body gone bad (" << (b.finite ? "flung at " + std::to_string(b.speed) + " m/s" : std::string("not finite"))
+                 << (b.kinematic ? ", a driven body: its owner jumped it" : b.vehicle ? ", a car: stopped" : ", parked below the world")
+                 << ") body " << b.body << " at " << b.position.x << " " << b.position.y << " " << b.position.z;
     publishContacts(ctx.world, ctx.events);
 }
 

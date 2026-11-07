@@ -6,6 +6,13 @@
 #include "../../engine/components.h"       // Transform, Vehicle, Renderable, InVehicle
 #include "../../engine/physics/physics_world.h"   // VehicleConfig (was via the header)
 #include "../../engine/world.h"
+#include "../../engine/script_assets.h"   // loadScriptCode, makeModuleSource
+#ifdef RT_ENABLE_SCRIPTING
+#include "../../engine/scripting/procgen_bindings.h"
+#include "../../engine/scripting/script_modules.h"
+#include "../../engine/scripting/script_vm.h"
+#include "../../engine/scripting/vehicle_spec.h"
+#endif
 #include "../../log.h"
 #include "city_sim.h"                       // VehicleBody
 
@@ -171,6 +178,38 @@ void CityVehicleSystem::update(engine::FrameContext& ctx) {
     Vec3 groundPos;
     Vec2 groundHeading;
     if (!city_.agentWorldPose(bestAgent, groundPos, groundHeading)) return;
+
+    // THE SAME CAR THE MENU DROPS (ADR-0355; Glenn: "Why is an SUV in the world different than mine? I can't open
+    // the hatch"): the slot's drivable recipe in its paint -- panels on hinges, a body to dent, its damage tuning --
+    // built fresh (a rare action, as N's drop is). A slot without one keeps the traffic body below.
+#ifdef RT_ENABLE_SCRIPTING
+    {
+        std::string recipe;
+        Vec3 paint;
+        if (city_.carDrivable(slot, recipe, paint)) {
+            const std::string lib = engine::loadScriptCode("vehicles.lua", "");
+            engine::ScriptVM vm;
+            engine::openProcgenLibrary(vm);
+            engine::openModuleLoader(vm, engine::makeModuleSource(""));
+            std::string err;
+            engine::VehicleSpec spec;
+            char chunk[256];
+            std::snprintf(chunk, sizeof chunk, "return vehicle.%s(seed, { color = { %.4f, %.4f, %.4f } })", recipe.c_str(),
+                          paint.x, paint.y, paint.z);
+            if (!lib.empty() && vm.doString(lib, &err) && engine::loadVehicleSpec(vm, chunk, 1u, spec, &err)) {
+                const Vec3 at(groundPos.x, groundPos.y + spec.config.chassisHalfExtent.y + 0.35, groundPos.z);
+                const Real yawDeg = std::atan2(groundHeading.x, groundHeading.y) * 57.29577951308232;
+                const Entity car = engine::spawnVehicle(world, ctx.assets, spec, at, yawDeg);
+                LOG_INFO << "[cityveh] took agent " << bestAgent << "'s car as the drivable " << recipe << ": vehicle "
+                         << a.vehicle << ", model slot " << slot;
+                if (!city_.simMutable().ejectDriver(bestAgent)) city_.simMutable().releaseDriver(bestAgent);
+                promoted_.push_back(PromotedCar{car, bestAgent});
+                return;
+            }
+            LOG_WARN << "[cityveh] slot " << slot << "'s drivable " << recipe << ": " << err << " -- the traffic body instead";
+        }
+    }
+#endif
 
     Entity e = world.create();
     Transform t;

@@ -22,6 +22,10 @@ struct Collision {
     // still touching (a vehicle's scrape, ADR-0353), and how fast the surfaces slide past each other
     bool persisted = false;
     Real slide = 0;
+    // the two physics bodies (a body outside the ECS -- a streamed tree or hydrant -- is known by its id alone), and a
+    // breakable one knocked loose (ADR-0354)
+    PhysicsBodyId bodyA = INVALID_PHYSICS_BODY, bodyB = INVALID_PHYSICS_BODY;
+    bool broke = false;
 };
 
 // Drives Jolt physics from the ECS (ADR-0012, ROADMAP 2.3 Step C). Creates a

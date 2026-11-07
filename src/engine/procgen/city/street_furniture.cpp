@@ -648,6 +648,36 @@ StreetFurniturePlan planStreetFurniture(
             }
         }
     }
+    // THE DATA KINDS (street_props.lua, ADR-0354), in a pass of their own after the march above, so the planner's own
+    // pieces stand where they always did: each kind at its spacing a side, clear of everything placed
+    std::vector<Spaced> kinds;
+    for (const StreetFurnitureParams::KerbKind& kk : p.kerbKinds) kinds.push_back(Spaced{std::max(kk.every, Real(8)), {}});
+    for (std::size_t ki = 0; ki < p.kerbKinds.size(); ++ki) {
+        const StreetFurnitureParams::KerbKind& kk = p.kerbKinds[ki];
+        for (int li = 0; li < nav.linkCount(); ++li) {
+            const NavLink& L = nav.links[li];
+            if (!streetWithPavement(L) || (kk.mainOnly && L.klass == RoadClass::Local)) continue;
+            const Vec2 a = nav.nodes[L.from], b = nav.nodes[L.to];
+            const Real len = (b - a).length();
+            if (len < Real(0.5)) continue;
+            const Vec2 dir = (b - a) * (Real(1) / len);
+            const int steps = std::max(1, static_cast<int>(std::ceil(len / Real(1.5))));
+            for (int k = 0; k <= steps; ++k) {
+                const Real t = static_cast<Real>(k) / steps;
+                const Vec2 sp = kerbPoint(li, t, kk.verge);
+                if (distToJunction(L, sp) < kk.junction || !clearOfRoad(sp, 0.25)) continue;
+                bool crowded = near(kinds[ki], sp, dir, kk.every, true) || near(trees, sp, dir, 1.6, false) ||
+                               near(lamps, sp, dir, 1.4, false) || near(poles, sp, dir, 1.8, false) ||
+                               near(bins, sp, dir, 1.6, false) || near(props, sp, dir, 2.0, false);
+                for (std::size_t kj = 0; kj < kinds.size() && !crowded; ++kj)
+                    if (kj != ki) crowded = near(kinds[kj], sp, dir, 2.0, false);
+                if (crowded) continue;
+                out.props.push_back({Vec3(sp.x, gy(sp.x, sp.y), sp.y), normalize(sp - nav.pointOnLink(li, t)),
+                                     static_cast<uint8_t>(KerbProp::kFirstDataKind + ki)});
+                add(kinds[ki], sp, dir);
+            }
+        }
+    }
     return out;
 }
 

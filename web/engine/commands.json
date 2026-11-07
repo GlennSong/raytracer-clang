@@ -300,6 +300,12 @@
   "usage": "person first|third|toggle"
  },
  {
+  "name": "pieces",
+  "owner": "engine",
+  "summary": "Knock the street piece nearest the player loose (a bin, a rack, news boxes, a hydrant; ADR-0354), as a car hitting it would.",
+  "usage": "pieces knock"
+ },
+ {
   "name": "pin",
   "owner": "engine",
   "summary": "Follow an agent: it stays in the full sim however far it goes.",

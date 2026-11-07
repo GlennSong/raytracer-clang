@@ -3,6 +3,7 @@
 
 #include "../rt_math.h"
 #include "../renderer/renderer.h"
+#include "vehicle_damage.h"   // DamageRule (a car's damage tuning)
 #include "ai/driver_agent.h"   // DriverCommand / DriverTuning (AgentDriver)
 #include "audio/audio_engine.h"
 #include "physics/physics_world.h"
@@ -479,6 +480,10 @@ struct RigidBody {
     // fall, a bullet), so they don't tunnel through thin colliders. Capsule and
     // box bodies.
     bool continuousCollision = false;
+    // a body this one is born overlapping and must not be pushed off (a part knocked off a car, the car; ADR-0353):
+    // the pair ignores each other while they overlap and `ignoreGrace` steps after (PhysicsWorld::ignoreContacts)
+    PhysicsBodyId ignore = INVALID_PHYSICS_BODY;
+    int ignoreGrace = 30;
 };
 
 // A kinematic capsule character controller (ADR-0012). Unlike a dynamic
@@ -598,6 +603,7 @@ struct Vehicle {
         float hold = 0.0f;
         Vec3 centre{0, 0, 0};
         Vec3 lo{0, 0, 0}, hi{0, 0, 0};   // its box, shut
+        float mass = 20.0f;              // kg, loose
         float health = 1.0f;             // ADR-0353: at 0 it comes off
         bool gone = false;
         // where the part's points go: q (x - pivot) + pivot
@@ -609,6 +615,7 @@ struct Vehicle {
     // under); the nose at zero kills the engine. The meshes as drawn, kept on the CPU to dent: the body's and each
     // bodyParts entry's (copied on the first dent; null until then), re-uploaded at most every `uploadEvery` s.
     float zoneHealth[6] = {1, 1, 1, 1, 1, 1};
+    DamageRule damage;                       // its tuning (vehicles.lua KIT_DAMAGE, ADR-0355)
     bool engineDead = false;
     std::shared_ptr<RenderMesh> bodyMesh;
     std::vector<std::shared_ptr<RenderMesh>> partMeshes;
@@ -617,6 +624,12 @@ struct Vehicle {
     bool meshDirty = false;                  // dented since the last upload
     float sinceUpload = 0.0f;
     float scrapeSparkClock = 0.0f;
+    float age = 0.0f;                        // s since it was made (a car settling where it spawned is not hit)
+    // ONE CRASH IS ONE KNOCK (Glenn: "I hit a fence with my truck... is it dead?"): a fence is a dozen posts and rails,
+    // each its own contact in the same instant; per zone, the knocks within a third of a second cost only the worst of them
+    Entity engineSmoke;                      // the hood's steam, then smoke, once the nose is hurt (ADR-0355)
+    float crashHarm[6] = {0, 0, 0, 0, 0, 0};
+    float crashClock[6] = {0, 0, 0, 0, 0, 0};
     int panelIndex(const std::string& n) const {
         for (std::size_t i = 0; i < panels.size(); ++i) if (panels[i].name == n) return static_cast<int>(i);
         return -1;

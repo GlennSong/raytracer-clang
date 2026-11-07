@@ -123,6 +123,16 @@ struct StreetFurnitureParams {
     // The character of the street at a point (null: every street planted the one way, the three broadleaves at
     // treeSpacing, as before)
     std::function<StreetCharacter(Vec2)> character;
+    // THE KERB PROPS THAT ARE DATA (street_props.lua, ADR-0354): each placed along the kerbs in a pass after the
+    // planner's own, every `every` metres a side, `verge` out onto the pavement, `junction` clear of a corner. Their
+    // KerbProps carry kind kFirstDataKind + their index here.
+    struct KerbKind {
+        Real every = 90.0;
+        Real verge = 0.55;
+        Real junction = 6.0;
+        bool mainOnly = false;
+    };
+    std::vector<KerbKind> kerbKinds;
 };
 
 // A street tree (its pit's centre, on the pavement), its size and which of the tree kit's varieties it is.
@@ -130,7 +140,13 @@ struct StreetTree { Vec3 base; Real scale = 1; uint32_t variety = 0; StreetSpeci
 // A small kerb piece: where it stands, the street's direction there (+X of the prototype), and what it is.
 // `toPavement`: from the street's centre out to the piece (the prototype's +Z), so it faces the right way whichever
 // side of its link the pavement is.
-struct KerbProp { enum Kind : uint8_t { Bin, BikeRack, NewsBoxes }; Vec3 base; Vec2 toPavement{0, 1}; uint8_t kind = Bin; };
+struct KerbProp {
+    enum Kind : uint8_t { Bin, BikeRack, NewsBoxes };
+    static constexpr uint8_t kFirstDataKind = 3;   // kerbKinds[kind - 3] (street_props.lua)
+    Vec3 base;
+    Vec2 toPavement{0, 1};
+    uint8_t kind = Bin;
+};
 
 struct StreetFurniturePlan {
     std::vector<SignalSpot> signals;

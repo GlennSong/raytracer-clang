@@ -31,6 +31,8 @@ public:
         // speed is a car working: "pulling away from the lights" vs "coasting". (A flag, not a throttle value: full
         // reverse is -1.)
         bool estimate = false;
+        Real health = 1;      // the engine's (vehicle_audio.h engineRough): below `roughBelow` it runs rough (ADR-0355)
+        Real roughBelow = 0.6, roughWobble = 0.07, roughMisfire = 0.5;   // the car's own (KIT_DAMAGE)
     };
 
     EngineVoicePool(int maxVoices, Real range, int clipSeed) : maxVoices_(maxVoices), range_(range), seed_(clipSeed) {}

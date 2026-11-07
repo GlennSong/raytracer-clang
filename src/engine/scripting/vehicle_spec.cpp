@@ -214,6 +214,7 @@ bool loadVehicleSpec(ScriptVM& vm, const std::string& recipe, uint32_t seed,
                 panel.centre = vec3Field(L, pi, "centre", panel.pivot);
                 panel.lo = vec3Field(L, pi, "lo", panel.centre);
                 panel.hi = vec3Field(L, pi, "hi", panel.centre);
+                panel.mass = static_cast<float>(numField(L, pi, "mass", panel.mass));
                 if (!panel.name.empty()) out.panels.push_back(std::move(panel));
             }
             lua_pop(L, 1);
@@ -292,6 +293,54 @@ bool loadVehicleSpec(ScriptVM& vm, const std::string& recipe, uint32_t seed,
 
     readVehicleHandling(L, t, out);
 
+    // damage = { knock_from=, knock_full=, ..., dent = {...}, smoke = {...}, kick = {...}, rough = {...} } (ADR-0355)
+    lua_getfield(L, t, "damage");
+    if (lua_istable(L, -1)) {
+        const int d = lua_gettop(L);
+        DamageRule& r = out.damage;
+        r.knockFrom = numField(L, d, "knock_from", r.knockFrom);
+        r.knockFull = numField(L, d, "knock_full", r.knockFull);
+        r.scrapePerMetre = numField(L, d, "scrape_per_metre", r.scrapePerMetre);
+        r.refMass = numField(L, d, "ref_mass", r.refMass);
+        r.sparkKnock = numField(L, d, "spark_knock", r.sparkKnock);
+        r.sparkSlide = numField(L, d, "spark_slide", r.sparkSlide);
+        r.crashWindow = numField(L, d, "crash_window", r.crashWindow);
+        r.groundShare = numField(L, d, "ground_share", r.groundShare);
+        r.breakShare = numField(L, d, "break_share", r.breakShare);
+        r.zoneScale = numField(L, d, "zone_scale", r.zoneScale);
+        r.panelScale = numField(L, d, "panel_scale", r.panelScale);
+        auto sub = [&](const char* name, auto&& read) {
+            lua_getfield(L, d, name);
+            if (lua_istable(L, -1)) read(lua_gettop(L));
+            lua_pop(L, 1);
+        };
+        sub("dent", [&](int x) {
+            r.dentFrom = numField(L, x, "from", r.dentFrom);
+            r.dentRadiusLo = numField(L, x, "radius_lo", r.dentRadiusLo);
+            r.dentRadiusHi = numField(L, x, "radius_hi", r.dentRadiusHi);
+            r.dentDepthLo = numField(L, x, "depth_lo", r.dentDepthLo);
+            r.dentDepthPer = numField(L, x, "depth_per", r.dentDepthPer);
+            r.dentDepthMax = numField(L, x, "depth_max", r.dentDepthMax);
+            r.scuffLo = numField(L, x, "scuff_lo", r.scuffLo);
+            r.scuffPer = numField(L, x, "scuff_per", r.scuffPer);
+        });
+        sub("smoke", [&](int x) {
+            r.steamBelow = numField(L, x, "steam_below", r.steamBelow);
+            r.blackBelow = numField(L, x, "black_below", r.blackBelow);
+        });
+        sub("kick", [&](int x) {
+            r.kickCar = numField(L, x, "car", r.kickCar);
+            r.kickOut = numField(L, x, "out", r.kickOut);
+            r.kickUp = numField(L, x, "up", r.kickUp);
+        });
+        sub("rough", [&](int x) {
+            r.roughBelow = numField(L, x, "below", r.roughBelow);
+            r.roughWobble = numField(L, x, "wobble", r.roughWobble);
+            r.roughMisfire = numField(L, x, "misfire", r.roughMisfire);
+        });
+    }
+    lua_pop(L, 1);
+
     lua_pop(L, 1);   // the returned spec table
     return out.body != nullptr || !out.config.wheels.empty();
 }
@@ -325,6 +374,7 @@ Entity spawnVehicle(World& world, AssetManager& assets, const VehicleSpec& spec,
     v.openSeat = spec.openSeat;
     v.seat = spec.seat;
     v.bodyMesh = spec.body;   // (shared with the spec until the first dent copies it)
+    v.damage = spec.damage;
 
     // One child entity per extra part, rigidly pinned to the chassis by
     // VehicleSystem::writeBack. Separate entities because each carries its own
@@ -358,6 +408,7 @@ Entity spawnVehicle(World& world, AssetManager& assets, const VehicleSpec& spec,
         panel.centre = sp.centre;
         panel.lo = sp.lo;
         panel.hi = sp.hi;
+        panel.mass = sp.mass;
         v.panels.push_back(panel);
     }
     // Marker slots only: VehicleSystem creates the lens entities on its first

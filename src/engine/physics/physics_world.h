@@ -5,6 +5,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <unordered_set>
 #include <vector>
 
 namespace engine {
@@ -46,6 +47,9 @@ struct ContactEvent {
     // with the speed the two surfaces slide past each other at the point
     bool persisted = false;
     Real slideSpeed = 0;
+    // A BREAK (ADR-0354): a watched body (a car) met a BREAKABLE one at its breaking speed or more -- the touch was let
+    // through (no push back on the car) and the owner of the breakable knocks it loose
+    bool broke = false;
 };
 
 class JobSystem;   // our thread pool (src/job_system.h)
@@ -97,6 +101,9 @@ public:
     int bodyCount() const;
 
     void setLinearVelocity(PhysicsBodyId id, const Vec3& velocity);
+    // A dynamic body's weight (its inertia scaled to match) and its air drag (< 0: left as it is). A part knocked off a
+    // car is a box of the shape's density -- a door weighed what a slab of water would (ADR-0353).
+    void setBodyMass(PhysicsBodyId id, Real kg, Real linearDamping = -1, Real angularDamping = -1);
     Vec3 getLinearVelocity(PhysicsBodyId id) const;
 
     // Drive a KINEMATIC body toward a target pose over `dt` (Jolt MoveKinematic):
@@ -447,6 +454,24 @@ public:
     // update(); PhysicsSystem maps these to entities and publishes them on the
     // EventBus (ADR-0071).
     std::vector<ContactEvent> drainContactEvents();
+    // A body a car knocks loose rather than stops at (a hydrant, a bin, ADR-0354): from `speed` m/s of closing speed
+    // its contact with a watched body is let through and reported `broke`. speed <= 0 forgets it.
+    void setBreakable(PhysicsBodyId body, Real speed);
+    // Two bodies that must not touch while they overlap -- a part knocked off a car and the car (ADR-0353), a piece
+    // knocked loose and the car that hit it (ADR-0354) -- and for `graceSteps` after they last overlapped.
+    void ignoreContacts(PhysicsBodyId a, PhysicsBodyId b, int graceSteps = 30);
+    // Bodies the last steps found gone bad (not finite; a car past 150 m/s, anything else past 1000) and parked below the
+    // world (update() runs
+    // sanitize()); the caller reports them.
+    struct SanitizedBody {
+        PhysicsBodyId body = INVALID_PHYSICS_BODY;
+        bool finite = false;
+        bool vehicle = false;   // a car's chassis (stopped, not parked)
+        bool kinematic = false; // a driven body moved that far in a step (reported once, left alone)
+        Real speed = 0;
+        Vec3 position;
+    };
+    std::vector<SanitizedBody> drainSanitized();
 
     // Call once after the initial static bodies are added.
     void optimizeBroadPhase();
@@ -455,6 +480,10 @@ public:
     void update(Real deltaTime, int collisionSteps = 1);
 
 private:
+    void sanitize();
+    std::vector<SanitizedBody> sanitized_;
+    std::unordered_set<uint32_t> kinematicJumped_;
+
     struct Impl;
     std::unique_ptr<Impl> impl;
 

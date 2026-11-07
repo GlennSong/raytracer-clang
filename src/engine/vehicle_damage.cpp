@@ -42,10 +42,11 @@ int touchSparks(const DamageRule& r, bool persisted, Real speed, Real slide) {
     return speed >= r.sparkKnock ? std::min(40, static_cast<int>(speed * 1.5)) : 0;
 }
 
-bool dentMesh(RenderMesh& mesh, const Vec3& point, const Vec3& inward, Real radius, Real depth) {
+bool dentMesh(RenderMesh& mesh, const Vec3& point, const Vec3& inward, Real radius, Real depth, Real scuff) {
     if (radius <= 0 || depth <= 0) return false;
     bool moved = false;
     const Real r2 = radius * radius;
+    const Vec3 bare(0.30, 0.29, 0.28);   // scraped through to dark metal
     for (Vertex& v : mesh.vertices) {
         const Vec3 d = v.position - point;
         const Real dd = d.lengthSquared();
@@ -53,6 +54,15 @@ bool dentMesh(RenderMesh& mesh, const Vec3& point, const Vec3& inward, Real radi
         const Real t = 1.0 - std::sqrt(dd) / radius;   // 1 at the point, 0 at the rim
         const Real k = t * t * (3.0 - 2.0 * t);
         v.position = v.position + inward * (depth * k);
+        if (v.u <= -999.0f) {
+            if (k > 0.5) {   // a lens crushed in: the lamp is broken
+                v.u = 0.0f;
+                v.color = v.color * 0.25;
+            }
+        } else if (scuff > 0) {
+            const Real a = std::min(Real(1), k * scuff);
+            v.color = v.color * (1.0 - a) + bare * a;
+        }
         moved = true;
     }
     if (moved) MeshBuilder::recomputeNormals(mesh);

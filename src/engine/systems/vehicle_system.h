@@ -49,17 +49,23 @@ private:
     // `panels open|shut [name]` (ADR-0352): every car's panels, or the named one, staged for the next step
     ControlCommands::Binding panelsCmd_;
     std::vector<std::string> panelsStaged_;
+    // the panels' and the dead starter's sounds (sfx::panelShut / panelOpen / starterNoCatch, ADR-0355), made once
+    AudioClipHandle shutClip_[3], openClip_, starterClip_;
+    Real starterCooldown_ = 0;
+    void panelSound(FrameContext& ctx, const Vec3& at, int kind, float volume);   // kind 0..2 shut, 3 open, 4 starter
     EventBus::Subscription onCollision_;
     struct Hit {
         Entity car, other;
         Vec3 at, normal;
         Real speed = 0, slide = 0;
         bool persisted = false;
+        bool broke = false;   // it knocked a breakable piece loose (a hydrant, a bin): a light knock (ADR-0354)
     };
     std::vector<Hit> hits_;
     // parts knocked off, waiting for their body (made on the next physics step) to be given the car's speed; and
     // every loose part, oldest first (a cap keeps the street from filling up)
-    std::vector<std::pair<Entity, Vec3>> looseKick_;
+    struct LooseKick { Entity e; Vec3 velocity; Real mass = 20; };
+    std::vector<LooseKick> looseKick_;
     std::vector<Entity> loose_;
     EventBus::Subscription onSpawn_;
     bool spawnPending_ = false;

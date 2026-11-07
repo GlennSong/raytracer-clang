@@ -542,6 +542,11 @@ void Application::registerPlayerVerbs() {
                      "The player's vehicle: speed, rpm, gear, drive mode, position, and the sim speed.",
                      unanswered("a VehicleSystem: play mode"));   // measured by it each frame
 
+    commandTable.add("pieces", "pieces knock",
+                     "Knock the street piece nearest the player loose (a bin, a rack, news boxes, a hydrant; ADR-0354), "
+                     "as a car hitting it would.",
+                     unanswered("a NatureColliderSystem: play mode, a level with street pieces"));
+
     commandTable.add("panels", "panels open|shut|knock [name]",
                      "Swing every drivable car's moving panels (doors, hood, trunk; ADR-0352) open or shut, or knock "
                      "them off (ADR-0353); only those whose name holds `name` (door, hood, trunk, hatch, door_front_r ...).",

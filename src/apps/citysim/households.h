@@ -16,6 +16,7 @@
 // Authored in assets/scripts/people.lua (scripting/people_lua.h reads it); defaultPeopleCatalog is the same catalog
 // in C++ (a test keeps the two describing identically).
 
+#include "../../engine/ai/danger_dodge.h"   // DodgeTuning
 #include "places.h"
 
 #include <cstdint>
@@ -86,6 +87,8 @@ struct PeopleCatalog {
     // LODGERS: anyone past the housing (a level's authored count) is one of these bands, on their own. No band of
     // theirs may lead a walk-only stage (a lodger may be a driver).
     std::vector<std::pair<int, double>> lodgers;
+    // GETTING OUT OF A CAR'S WAY (ADR-0355): people.dodge, how they notice a car coming, dodge it, or go down
+    engine::DodgeTuning dodge;
 
     int stage(const std::string& name) const;
     int band(const std::string& name) const;
