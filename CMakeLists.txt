@@ -432,6 +432,7 @@ if(RT_ENABLE_SCRIPTING)
         src/engine/scripting/lua_json.cpp
         src/engine/scripting/vehicle_spec.cpp
         src/engine/scripting/carry_items.cpp
+        src/engine/scripting/trades_lua.cpp
         src/engine/scripting/street_props_spec.cpp
         src/engine/scripting/furniture_library_lua.cpp
         src/engine/scripting/furniture_models_lua.cpp
@@ -758,6 +759,7 @@ add_executable(run_tests
     tests/test_vehicle_fuel.cpp
     tests/test_carry_stow.cpp
     tests/test_camera_frame.cpp
+    tests/test_trades.cpp
     tests/test_danger_dodge.cpp
     tests/test_mesh_surfaces.cpp
     tests/test_cube_sphere.cpp

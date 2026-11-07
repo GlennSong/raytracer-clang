@@ -4569,7 +4569,7 @@ TEST_CASE(level_print_shop_interiors) {
                 spotted[f.trade] = true;
                 const Vec2 c = (f.a + f.b) * 0.5;
                 std::printf("    [shop spot] %d %s %.2f %.2f %.2f %.3f %.3f %.1f\n", f.trade,
-                            tradeById(f.trade) ? tradeById(f.trade)->name : "?", c.x, r.baseY, c.y, f.n.x, f.n.y, len);
+                            tradeById(f.trade) ? tradeById(f.trade)->name.c_str() : "?", c.x, r.baseY, c.y, f.n.x, f.n.y, len);
             }
         }
         if (good > 0) ++furnished; else {

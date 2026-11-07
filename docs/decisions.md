@@ -16434,3 +16434,32 @@ placing a camera for screenshots or even cinematic purposes?"
 `fly_forward_is_the_fly_cameras_convention`.
 
 **Revisit** for cinematics: a path of frames, an orbit round a box, framing an entity.
+
+## ADR-0360 — The trades are data: trades.lua
+
+**Context.** Glenn, 2026-11-07, on what a new kind of place needs: "it sounds like a lot of that should live in
+lua." The trades table (what a shop unit is: name, citysim place, hours, how common per shop mix, bays, fascia,
+terrace) and each trade's room finish were C++ (`trades.cpp` `kTrades`, `kRooms`). The first stage of moving a
+place kind's data to Lua (the `rt-new-place` skill's plan: trades, shop furnishing, sign names, place behaviour by
+tag, site area kinds).
+
+**Decision.**
+- `assets/scripts/trades.lua` is the table: the trades in dealing order, each with its `room`; the rooms that are not
+  trades (the malls' concourses) in `rooms`; the plain shop's finish as `plain_room`. Lights by name (panels, round,
+  dim, none).
+- `TradeBook` (`trades.h`) holds it; every reader (`pickTrade`, `tradeBays`, `tradeById`, `tradeByName`,
+  `tradeInterior`) goes through `tradeBook()`, which reads the file once (`ensureTradesLoaded`,
+  `engine/scripting/trades_lua.cpp`). `builtinTradeBook()` is the old table, the fallback when the file is absent;
+  `trades_lua_is_the_built_in_trades` keeps the two equal field for field, in order. A broken file is refused whole
+  (`a_broken_trades_file_is_refused`) and the built-in book stands.
+- `TradeInfo::name` / `placeType` are strings.
+
+**Proof.** `rt_bake metro_v2_test --producer city,lots` with the file and without it (the built-in book):
+`rt_bake --sections` equal in all 1,158 lots sections (the city report differs by its timing text).
+
+**The bake key.** The trades are baked (facades, fascia, unit widths), so trades.lua belongs in the lots bake key.
+Adding a file to the key re-keys every level -- a full re-bake -- so it joins with the next `kLotsBuildTag` bump
+(the gas station's), not on its own. Until then an edit to trades.lua needs that bump or `RT_NOCACHE=1`.
+
+**Consequences.** A new trade is a row in trades.lua. Its furnishing is still the `switch (room.style)` in
+furniture.cpp: the next stage moves it to `furniture_rooms.lua` programs by trade.

@@ -10,23 +10,29 @@
 //
 // Ids are the shop room's style: 0-6 as they always were, 13+ for the trades added since (7-12 are the big-box
 // store's rooms, room_plan bigBoxRoomPlan; 16 the konbini, 20-23 the malls' concourses).
+//
+// THE TABLE IS DATA (ADR-0360; Glenn, 2026-11-07: "a lot of that should live in lua"): assets/scripts/trades.lua,
+// read once (engine/scripting/trades_lua.h). builtinTradeBook() is the same table in C++ -- the fallback when the
+// file is absent -- and a test keeps the two equal. A new trade is a row in the file.
 
 #include "../../../rt_math.h"
 
 #include <cstdint>
+#include <string>
+#include <vector>
 
 namespace engine {
 
 struct TradeInfo {
-    uint8_t id;
-    const char* name;        // "cafe", "restaurant", ...
-    const char* placeType;   // the citysim place it is: cafe restaurant bar club shop supermarket
-    float openHour, closeHour;   // when customers come (wraps midnight: a bar opens 16, closes 2)
-    int weight[4];           // how common, among the trades, in each shop mix (BuildingParams::shopMix: everyday,
-                             // high street, nightlife, mall)
-    int minBays, maxBays;    // the unit's width in bays (a bar 2, a restaurant 2-4, a club 3-5)
-    Vec3 fascia;             // the sign band's lit colour
-    bool terrace;            // sets tables out on the pavement
+    uint8_t id = 0;
+    std::string name;        // "cafe", "restaurant", ...
+    std::string placeType;   // the citysim place it is: cafe restaurant bar club shop supermarket
+    float openHour = 9, closeHour = 18;   // when customers come (wraps midnight: a bar opens 16, closes 2)
+    int weight[4] = {0, 0, 0, 0};   // how common, among the trades, in each shop mix (BuildingParams::shopMix:
+                                    // everyday, high street, nightlife, mall)
+    int minBays = 2, maxBays = 3;   // the unit's width in bays (a bar 2, a restaurant 2-4, a club 3-5)
+    Vec3 fascia{0.9, 0.9, 0.9};     // the sign band's lit colour
+    bool terrace = false;           // sets tables out on the pavement
 };
 
 // HOW A TRADE'S ROOM IS FINISHED (Glenn: "white walls for a bar? Yikes"): the walls in one of three colours (by the
@@ -34,12 +40,26 @@ struct TradeInfo {
 // ceiling, and how it is lit.
 struct TradeInterior {
     Vec3 walls[3];
-    Real dadoH;  Vec3 dado;
-    Vec3 floorA, floorB;  Real tile;   // tile > 0: a checker of floorA / floorB, `tile` m squares
+    Real dadoH = 0;  Vec3 dado;
+    Vec3 floorA, floorB;  Real tile = 0;   // tile > 0: a checker of floorA / floorB, `tile` m squares
     Vec3 ceiling;
-    int lights;                        // 0 office panels, 1 round fittings (warm rooms), 2 few and dim (bars, clubs),
+    int lights = 0;                    // 0 office panels, 1 round fittings (warm rooms), 2 few and dim (bars, clubs),
                                        // 3 none (a mall's lower concourse: lit through the atrium)
 };
+
+// THE BOOK: the trades in table order (the order pickTrade deals them in), the rooms by style id (a trade's own, and
+// the rooms that are not trades -- the malls' concourses), and the plain shop's finish for a style with none.
+struct TradeBook {
+    std::vector<TradeInfo> trades;
+    struct Room { uint8_t id = 0; TradeInterior in; };
+    std::vector<Room> rooms;
+    TradeInterior plain;
+};
+const TradeBook& builtinTradeBook();
+// The book in use: trades.lua's once it has been read (ensureTradesLoaded), else the built-in one.
+const TradeBook& tradeBook();
+// Set the book in use (the scripting layer, after reading trades.lua; a test).
+void setTradeBook(const TradeBook& book);
 const TradeInterior& tradeInterior(uint8_t id);   // a trade with none of its own: plain shop
 
 int tradeCount();

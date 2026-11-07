@@ -1306,12 +1306,12 @@ TEST_CASE(every_trade_is_furnished_as_its_trade) {
         std::string line;
         int pieces = 0;
         for (const auto& kv : byTrade[t.id]) { line += " " + kv.first + "x" + std::to_string(kv.second); pieces += kv.second; }
-        std::printf("    [trade] %-11s %2d units:%s\n", t.name, units[t.id], line.c_str());
+        std::printf("    [trade] %-11s %2d units:%s\n", t.name.c_str(), units[t.id], line.c_str());
         if (units[t.id] > 0 && pieces == 0) ++empty;
         if (units[t.id] > 0 && byTrade[t.id]["shop_counter"] == 0 && t.id != 1 && t.id < 13) ++noCounter;
         if (auto it = signature.find(t.id); it != signature.end() && units[t.id] > 0)
             for (const std::string& pc : it->second)
-                if (byTrade[t.id][pc] == 0) { ++unlike; std::printf("    [trade] %s has no %s\n", t.name, pc.c_str()); }
+                if (byTrade[t.id][pc] == 0) { ++unlike; std::printf("    [trade] %s has no %s\n", t.name.c_str(), pc.c_str()); }
     }
     CHECK(unlike == 0);
     CHECK(static_cast<int>(units.size()) == tradeCount());   // every trade turned up
