@@ -32,16 +32,16 @@
   <div class="nav"><a href="index.html">← How the engine works</a> · <a href="spine.html">the spine</a> · <a href="../index.html">scenes</a></div>
   <h1>Control verbs</h1>
   <p class="lede">A running viewer listens on a local socket, and anything that can write a line of text can drive
-    it: a probe script, Claude through the MCP server, or you with <code>nc</code>. These are all 91 things
+    it: a probe script, Claude through the MCP server, or you with <code>nc</code>. These are all 96 things
     it can be told, straight from the engine's command table, where every verb is registered once with its usage
     and what it does.</p>
 
   <div class="tally">
-    <div><b>91</b><span>verbs in all</span></div>
-    <div><b>39</b><span>questions (ending in <code>?</code>)</span></div>
+    <div><b>96</b><span>verbs in all</span></div>
+    <div><b>41</b><span>questions (ending in <code>?</code>)</span></div>
     <div><b>32</b><span>act directly</span></div>
     <div><b>31</b><span>send a typed request</span></div>
-    <div><b>28</b><span>answered by their system</span></div>
+    <div><b>33</b><span>answered by their system</span></div>
   </div>
 
   <h2>How a line gets in</h2>
@@ -90,7 +90,7 @@
   <h2>What a verb looks like</h2>
   <div class="code">
     <div class="hd"><span>The teleport verb: its name, usage and summary, then the handler</span>
-      <a href="https://github.com/GlennSong/raytracer-clang/blob/5c1f3baccf27db3d631b6613ff44fa12f59f0649/src/engine/application_commands.cpp#L482-L498">src/engine/application_commands.cpp</a></div>
+      <a href="https://github.com/GlennSong/raytracer-clang/blob/d9f74b27a784a0998dbc0028f58999824c39d115/src/engine/application_commands.cpp#L490-L506">src/engine/application_commands.cpp</a></div>
 <pre>commandTable.add(<span class="s">"teleport"</span>, <span class="s">"teleport &lt;x y z [pitch yaw] | x z&gt; | open"</span>,
                  <span class="s">"Move the player (the camera when there is none); `x z` lands on the ground. Read the result with teleport?. `open` unfolds the Teleport panel."</span>,
                  [this](const ControlCommand&amp; cmd) -&gt; std::string {
@@ -268,12 +268,17 @@ printf 'teleport?\n' | nc -U /tmp/raytracer-viewer-*.sock</pre>
     <tr id="v-clip"><td><code>clip &lt;text&gt;</code></td><td>Set the debug UI&#x27;s clipboard.</td><td><span class="kind direct">acts directly</span></td></tr>
     <tr id="v-clip_q"><td><code>clip?</code></td><td>Read the debug UI&#x27;s clipboard.</td><td><span class="kind direct">acts directly</span></td></tr>
   </table>
-  <h2 id="other">Other <span class="count">3</span></h2>
+  <h2 id="other">Other <span class="count">8</span></h2>
   <p>Verbs not yet sorted into a family here (a new one, or one a script added).</p>
   <table class="verbs">
     <tr><th>Usage</th><th>What it does</th><th>How it gets there today</th></tr>
+    <tr id="v-carry_spawn"><td><code>carry_spawn [name]</code></td><td>Put a carry_items.lua thing (box, crate, ...) down in front of the player, to pick up and stow (ADR-0358).</td><td><span class="kind answered">a system answers</span></td></tr>
+    <tr id="v-frame"><td><code>frame &lt;x0 y0 z0 x1 y1 z1&gt; [pitch yaw] | frame lot &lt;recipe&gt; [n] [pitch yaw]</code></td><td>Put the free camera where a world box, or the n-th grown lot of a recipe (lots? names them), fills the view at that pitch and yaw (default -30, -45); read frame? for the box and the eye (ADR-0359).</td><td><span class="kind answered">a system answers</span></td></tr>
+    <tr id="v-frame_q"><td><code>frame?</code></td><td>The last `frame`: what it found, its box and the eye it chose.</td><td><span class="kind answered">a system answers</span></td></tr>
+    <tr id="v-lots_q"><td><code>lots?</code></td><td>Every recipe the city grew, with how many lots of each (the names `frame lot` takes).</td><td><span class="kind answered">a system answers</span></td></tr>
     <tr id="v-panels"><td><code>panels open|shut|knock [name]</code></td><td>Swing every drivable car&#x27;s moving panels (doors, hood, trunk; ADR-0352) open or shut, or knock them off (ADR-0353); only those whose name holds `name` (door, hood, trunk, hatch, door_front_r ...).</td><td><span class="kind answered">a system answers</span></td></tr>
     <tr id="v-pieces"><td><code>pieces knock</code></td><td>Knock the street piece nearest the player loose (a bin, a rack, news boxes, a hydrant; ADR-0354), as a car hitting it would.</td><td><span class="kind answered">a system answers</span></td></tr>
+    <tr id="v-vehicle_fuel"><td><code>vehicle_fuel &lt;litres&gt;</code></td><td>Set the tank of the car the player drives (0: empty, the engine dies; ADR-0357).</td><td><span class="kind answered">a system answers</span></td></tr>
     <tr id="v-vehicle_repair"><td><code>vehicle_repair</code></td><td>Repair the car the player drives, else the nearest: every zone whole, the engine running, dents, glass and lamps as built (ADR-0356; a panel that came off stays off).</td><td><span class="kind answered">a system answers</span></td></tr>
   </table>
 
@@ -286,7 +291,7 @@ printf 'teleport?\n' | nc -U /tmp/raytracer-viewer-*.sock</pre>
     <li><a href="https://github.com/GlennSong/raytracer-clang/blob/main/tests/test_control_channel.cpp">tests/test_control_channel.cpp</a> — the table's tests, and the check that this list matches it</li>
   </ul>
 
-  <footer>Generated by <code>tools/commands_page.py</code> from the command table at commit <code>5c1f3bac</code>.
+  <footer>Generated by <code>tools/commands_page.py</code> from the command table at commit <code>d9f74b27</code>.
     Drawn from ADR-0078 and ADR-0253 (<a href="https://github.com/GlennSong/raytracer-clang/blob/main/docs/decisions.md">docs/decisions.md</a>).</footer>
 </div>
 </body>
