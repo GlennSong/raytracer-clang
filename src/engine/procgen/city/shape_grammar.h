@@ -266,9 +266,20 @@ struct RoofItem {
     Real y0 = 0, h = 0;
 };
 
+// A ROOM'S LIGHT FITTING as lit (ADR-0365): where the light is, which fitting (0 an office panel, 1 a round flush
+// fitting, 2 a bar's pendant), and the room it lights -- its box (centre, axis u, half extents) and floor. The light
+// system lights it inside that box only.
+struct RoomLight {
+    Vec3 at;
+    int kind = 0;
+    Vec2 centre, u{1, 0};
+    Real halfU = 0, halfV = 0, floorY = 0;
+};
+
 struct BuildingMesh {
     std::vector<RenderMesh> parts;     // one per non-empty PartId, materialIndex set
     std::vector<PlacedPiece> furniture;   // the interior's pieces (growInterior only)
+    std::vector<RoomLight> roomLights;    // the ceiling fittings' lights (growInterior only)
     std::vector<FurnishedUnit> units;     // the shop rooms among them (PlacedPiece::unit)
     std::vector<AttachPoint> attaches;
     std::vector<RoofItem> roof;        // what stands on the roof (growPlanBuilding)

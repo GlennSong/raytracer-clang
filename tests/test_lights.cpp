@@ -49,7 +49,8 @@ TEST_CASE(lights_lua_reads_every_kind_the_producers_name) {
     std::string err;
     CHECK(loadLightsSource(readLightsFile(), book, &err));
     if (!err.empty()) std::printf("    %s\n", err.c_str());
-    for (const char* name : {"street_lamp", "station_lamp", "headlight", "flashlight", "room", "cab", "beacon"})
+    for (const char* name : {"street_lamp", "station_lamp", "headlight", "flashlight", "room_fill", "room_panel", "room_round",
+                             "room_pendant", "cab", "beacon"})
         CHECK(book.kind(name) >= 0);
     // the street pool's defaults are the ones the render system kept (20 within 160 m), the headlights' 3 cars
     const int street = book.pool("street"), heads = book.pool("headlights"), beacons = book.pool("beacons");

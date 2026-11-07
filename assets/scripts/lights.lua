@@ -39,8 +39,14 @@ return {
     -- the hand-held light (FlashlightSystem)
     flashlight = { type = "spot", color = { 1.0, 0.93, 0.8 }, intensity = 140, range = 60,
                    cone = { 0.2, 0.42 } },
-    -- a storey's ceiling light in the streamed interior (BuildingInteriorSystem gives the room's reach)
-    room = { type = "point", color = { 1.0, 0.88, 0.70 }, intensity = 22, range = 20 },
+    -- THE ROOMS (ADR-0365): each ceiling fitting the furniture hangs is a light kept to its own room's box (the walls
+    -- stop it), of its fitting's kind -- an office's recessed panel, a home's round flush fitting, a bar's pendant
+    room_panel = { type = "point", color = { 0.95, 0.96, 1.0 }, intensity = 4.5, range = 6, pool = "rooms" },
+    room_round = { type = "point", color = { 1.0, 0.86, 0.66 }, intensity = 6, range = 6, pool = "rooms" },
+    room_pendant = { type = "point", color = { 1.0, 0.72, 0.45 }, intensity = 2.5, range = 4, pool = "rooms" },
+    -- ...and a dim fill a storey (the nearest building, 4 storeys round the player; BuildingInteriorSystem gives the
+    -- building's reach): the light the rooms bounce about, and the corridors', which hang no fittings
+    room_fill = { type = "point", color = { 1.0, 0.88, 0.70 }, intensity = 5, range = 20 },
     -- an elevator cab's ceiling light
     cab = { type = "point", color = { 1.0, 0.95, 0.86 }, intensity = 9, range = 6 },
     -- city traffic's lamps, from each car's own markers (CityRenderSystem): a short red glow behind the tail lamps,
@@ -61,5 +67,7 @@ return {
                    many = { count = 300, within = 400, fade = true } },
     tails = { count = 0, within = 0, fade = true, groups = true, many = { count = 300, within = 200 } },
     beacons = { count = 6, within = 60, fade = true, many = { count = 64, within = 250 } },
+    -- the fittings of the streamed interiors round the player
+    rooms = { count = 8, within = 15, fade = true, many = { count = 600, within = 45 } },
   },
 }

@@ -366,6 +366,11 @@ struct PointLight {
     Vec3 color;
     float intensity;
     float range = 25.0f;    // falloff window radius (world units)
+    // A ROOM's light (ADR-0365): it lights only inside its room's box -- the walls stop it without a shadow map.
+    // The box: centre (x, z), its axis u (unit, xz), half extents along u and across it, and the floor it stands on.
+    // A renderer without the box test lights it as a plain point.
+    bool roomBox = false;
+    float boxCx = 0, boxCz = 0, boxUx = 1, boxUz = 0, boxHalfU = 0, boxHalfV = 0, boxFloorY = 0;
 
     PointLight() : color(1, 1, 1), intensity(1.0f) {}
     PointLight(const Vec3& pos, const Vec3& col, float intensity)

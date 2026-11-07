@@ -240,5 +240,5 @@ void main() {
         col = sampleEnvironment(dir);
         col = applyClouds(col, dir);
     }
-    outColor = vec4(col, 1.0);
+    outColor = vec4(col * g.cameraPosition.w, 1.0);   // pre-exposed (ADR-0366)
 }

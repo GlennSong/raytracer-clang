@@ -16663,3 +16663,51 @@ headlights are that case.
 
 **Owed:** a depth pre-pass to drop the froxels with nothing in them (empty sky, behind a wall). Metal and WebGPU
 (phase 6) bin on the CPU when they get clusters.
+
+## ADR-0365 — Room lights from the fittings, kept to their rooms
+
+**Context.** Glenn, 2026-11-07: "Buildings just seem bright all around." A streamed interior was lit by one warm point
+per storey at the building's centre, reaching twice the building's width, through every wall (local lights cast no
+shadows).
+
+**Decision.**
+- **Each fitting is a light.** Every ceiling fitting the furniture hangs (`emitFurniture`: an office's recessed panel,
+  a home's round flush fitting, a bar's pendant) records a `RoomLight` (`BuildingMesh::roomLights`): where the light
+  is, which fitting, and the room it lights (the room frame's centre, axis, half extents and floor).
+  - `BuildingInteriorSystem` keeps each resident's and publishes them on the light board.
+  - They are kinds `room_panel`, `room_round`, `room_pendant` in `lights.lua`, picked from the `rooms` pool (forward:
+    8 within 15 m; many: 600 within 45 m).
+- **Room-bounded.** The candidate and `PointLight` carry the room's box. Vulkan encodes such a light as type 3
+  (`directionInner` = centre x, z and axis; `colorOuter.w` the floor; `typeRange.zw` the half extents), and
+  `mesh.frag`'s `shadeLight` fades it to nothing within 0.12 m outside the box. The room's own walls are lit, the next
+  room's are not, with no shadow map. A renderer without the test lights it as a plain point.
+- **The storey light stays as a dim fill** (`room_fill`, 5 instead of 22): the light rooms bounce about, and what
+  lights the corridors, which hang no fittings, until light probes come.
+
+**Found on the way:** inside at 22:00 the rooms are brighter than at noon. The night exposure adaptation (×6) applies
+indoors too, so a lit room saturates to flat white and no fitting's pool can show. That is ADR-0366/0367's work
+(physical exposure, then auto exposure), not the lights'.
+
+## ADR-0366 — Engine light units, and the scene pre-exposed
+
+**Context.** Renderer-realism phase 2 (the physical sky and auto exposure, Glenn: "Yah do it"). A physical sky spans
+noon to moonlight, about 16 stops. The HDR targets are fp16, and today's exposure was applied in the composite, after
+the scene was stored.
+
+**Decision.**
+- **Units.** One engine light unit is `kLuxPerUnit` = 20,000 lux of illuminance (or cd/m^2 of luminance;
+  `engine/sky/sky_atmosphere.h`).
+  - The cycle's noon sun (5 units) is then 100,000 lux, clear-day sunlight at the ground.
+  - A level's typical exposure of 0.7 is EV100 14.5: exposure = kLuxPerUnit / (1.2 x 2^EV100), a camera in daylight
+    ("sunny 16" is EV 15).
+  - So the daytime look was already close to physical. Night was not: the lamps, windows and signs were tuned against
+    a ×6 night exposure, about 500× brighter than real.
+- **Pre-exposure.** `mesh.frag`, `sky.frag` and the clouds multiply their radiance by the camera's exposure as they
+  draw (it rides `GlobalsUBO::cameraPosition.w`, unused before), so the HDR targets hold values near 1 whatever the
+  scene's brightness.
+  - The composite exposes by 1.
+  - Bloom's threshold and knee are scaled into pre-exposed units.
+  - The underwater composite's sky terms are pre-exposed.
+  - `RT_PREEXPOSE=0` keeps the old order for the A/B.
+- **Proof:** river_town towers and street at 22:00 and at noon, old order against new. Means equal (43.3/43.3,
+  82.3/82.3, 45.5/45.7, 37.1/37.0); the differing pixels are palm fronds in the wind.

@@ -880,6 +880,12 @@ vec3 shadeLight(Light light, vec3 worldPos, vec3 N, vec3 V, vec3 albedo, float m
         if (type == 2) {                   // spot
             float theta = dot(-L, normalize(light.directionInner.xyz));
             attenuation *= smoothstep(light.colorOuter.w, light.directionInner.w, theta);
+        } else if (type == 3) {            // a room's light (ADR-0365): only inside its room's box
+            vec2 d = worldPos.xz - light.directionInner.xy;
+            vec2 u = light.directionInner.zw;
+            float out_ = max(max(abs(dot(d, u)) - light.typeRange.z, abs(dot(d, vec2(-u.y, u.x))) - light.typeRange.w),
+                             light.colorOuter.w - 0.05 - worldPos.y);
+            attenuation *= 1.0 - smoothstep(0.02, 0.12, out_);   // its own walls' inner faces lit, the next room's not
         }
     }
     float NdotL = max(dot(N, L), 0.0);
@@ -935,7 +941,8 @@ vec3 roomRadiance(vec3 worldPos) {
     int count = min(g.counts.x, 32);
     for (int i = 0; i < count; ++i) {
         Light light = g.lights[i];
-        if (int(light.typeRange.x) != 0) continue;   // point lights only (the sun and spots are not the room)
+        const int lt = int(light.typeRange.x);
+        if (lt != 0 && lt != 3) continue;   // point and room lights only (the sun and spots are not the room)
         float dist = length(light.positionIntensity.xyz - worldPos);
         e += light.colorOuter.rgb * light.positionIntensity.w * distanceAttenuation(dist, light.typeRange.y);
     }
@@ -1745,6 +1752,7 @@ void main() {
         } else {
             outColor = vec4(color * opacity, opacity);
         }
+        outColor.rgb *= g.cameraPosition.w;   // PRE-EXPOSED (ADR-0366): the camera's exposure, applied as it is drawn
     }
     outNormal = vec4(N * 0.5 + 0.5, roughness);   // world normal (SSAO) + roughness (SSR gate)
 }

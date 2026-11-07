@@ -5429,7 +5429,7 @@ BuildingMesh growInterior(const Poly2& planIn, const BuildingParams& params,
         // FURNITURE (buildings M4b): every named room gets the kit's pieces, placed for instanced drawing.
         // the ceiling's underside: the next storey's floor slab is 0.25 m deep
         const std::size_t firstPiece = out.furniture.size();
-        emitFurniture(out.furniture, colliderOut, rp, baseY + spk.y0, params.seed, baseY + spk.y0 + spk.h - 0.25);
+        emitFurniture(out.furniture, colliderOut, rp, baseY + spk.y0, params.seed, baseY + spk.y0 + spk.h - 0.25, &out.roomLights);
         // which SHOP UNIT each new piece furnishes (the room it stands in): whose people sit and serve there
         {
             std::vector<int16_t> unitOf(rp.rooms.size(), -1);

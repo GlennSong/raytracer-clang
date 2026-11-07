@@ -770,6 +770,12 @@ struct VulkanRenderer::Impl {
     std::array<ClusterLists, MAX_FRAMES_IN_FLIGHT> checkCpu{};
     bool checkThisFrame = false;
     bool createBinPipeline();
+    // PRE-EXPOSURE (ADR-0366): the exposure the scene passes draw with (1 with RT_PREEXPOSE=0)
+    static bool preExposureOn() {
+        static const bool on = [] { const char* e = std::getenv("RT_PREEXPOSE"); return !(e && std::string(e) == "0"); }();
+        return on;
+    }
+    float preExposure() const { return preExposureOn() ? sceneExposure : 1.0f; }
     void recordClusterBin(VkCommandBuffer cmd);
     void compareClusterCheck();
     VkPipelineLayout pipelineLayout = VK_NULL_HANDLE;
@@ -2509,7 +2515,7 @@ void VulkanRenderer::Impl::recordBloom(VkCommandBuffer cmd) {
     };
 
     // Bright-pass: HDR → bloomImage[0].
-    BloomPush bright{tx, ty, 0.0f, 0.0f, bloomThreshold, bloomKnee, 1.0f, 0.0f};
+    BloomPush bright{tx, ty, 0.0f, 0.0f, bloomThreshold * preExposure(), bloomKnee * preExposure(), 1.0f, 0.0f};   // (in pre-exposed units)
     pass(bloomFramebuffer[0], bloomSetBright, bright);
     // Blur H: bloomImage[0] → bloomImage[1].
     BloomPush bh{tx, ty, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f};
@@ -6087,7 +6093,7 @@ void VulkanRenderer::Impl::recordCommandBuffer(VkCommandBuffer cmd, uint32_t ima
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, compositePipelineLayout, 0,
                             static_cast<uint32_t>(compositeSets.size()), compositeSets.data(), 0, nullptr);
     CompositePush cpush{};
-    cpush.exposure = sceneExposure;
+    cpush.exposure = preExposureOn() ? 1.0f : sceneExposure;   // (pre-exposed: ADR-0366)
     cpush.tonemapOp = tonemapOp;          // mirrored from the Renderer in endFrame
     cpush.gradeContrast = gradeContrast;
     cpush.gradeSaturation = gradeSaturation;
@@ -6304,6 +6310,11 @@ void VulkanRenderer::Impl::drawFrame() {
     } else {
         cpuGlobals.clusterGrid[3] = 0;
     }
+    // PRE-EXPOSURE (ADR-0366): the scene is exposed as it is drawn -- mesh.frag, sky.frag and the clouds scale their
+    // radiance by it, rides cameraPosition.w -- so the HDR targets hold values near 1 whatever the units (physical
+    // light: a noon street ~10^4, a moonlit one ~10^-2, far past what fp16 keeps). The composite then exposes by 1.
+    // RT_PREEXPOSE=0: the old order (exposure in the composite), the A/B.
+    cpuGlobals.cameraPosition[3] = preExposure();
     // Upload this frame's globals into its persistently mapped UBO.
     std::memcpy(globalsMapped[currentFrame], &cpuGlobals, sizeof(GlobalsUBO));
 
@@ -6326,15 +6337,15 @@ void VulkanRenderer::Impl::drawFrame() {
             std::memcpy(cu.sunDirection, cpuGlobals.lights[0].directionInner,
                         3 * sizeof(float));
             std::memcpy(cu.sunColor, cpuGlobals.lights[0].colorOuter, 3 * sizeof(float));
-            cu.sunColor[3] = cpuGlobals.lights[0].positionIntensity[3];
+            cu.sunColor[3] = cpuGlobals.lights[0].positionIntensity[3] * preExposure();
         } else {
             std::memcpy(cu.sunDirection, cpuGlobals.skySunDir, 3 * sizeof(float));
             std::memcpy(cu.sunColor, cpuGlobals.skySunColor, 3 * sizeof(float));
-            cu.sunColor[3] = 1.0f;
+            cu.sunColor[3] = preExposure();
         }
-        for (int k = 0; k < 3; ++k)   // sky zenith/horizon mix reaching interiors
+        for (int k = 0; k < 3; ++k)   // sky zenith/horizon mix reaching interiors (pre-exposed, like the sun above)
             cu.skyAmbient[k] = (cpuGlobals.skyZenith[k] + cpuGlobals.skyHorizon[k]) *
-                               0.5f * cp.ambient;
+                               0.5f * cp.ambient * preExposure();
         cu.skyAmbient[3] = cpuGlobals.wind1[3];   // windTime drives the drift
         cu.layer[0] = cp.bottom;
         cu.layer[1] = cp.top;    // z planetRadius, w domainMode stay 0 (SLAB)
@@ -7397,6 +7408,14 @@ void VulkanRenderer::setLights(const SceneLighting& lighting) {
         l.typeRange[0] = 1.0f; l.typeRange[1] = 0.0f; l.typeRange[2] = 0.0f; l.typeRange[3] = 0.0f;
     }
     // Point lights (type 0).
+    // (a room's light, type 3, carries its box: directionInner = centre x, z, axis x, z; colorOuter.w its floor;
+    // typeRange.zw the half extents -- mesh.frag lights only inside it, ADR-0365)
+    auto roomBox = [](GpuLight& l, const PointLight& p) {
+        if (!p.roomBox) return;
+        l.directionInner[0] = p.boxCx; l.directionInner[1] = p.boxCz; l.directionInner[2] = p.boxUx; l.directionInner[3] = p.boxUz;
+        l.colorOuter[3] = p.boxFloorY;
+        l.typeRange[0] = 3.0f; l.typeRange[2] = p.boxHalfU; l.typeRange[3] = p.boxHalfV;
+    };
     for (const PointLight& p : lighting.pointLights) {
         if (n >= 32) break;
         GpuLight& l = impl->cpuGlobals.lights[n++];
@@ -7404,6 +7423,7 @@ void VulkanRenderer::setLights(const SceneLighting& lighting) {
         setColor(l.directionInner, Vec3(0, 0, 0), 0.0f);
         setColor(l.colorOuter, p.color, 0.0f);
         l.typeRange[0] = 0.0f; l.typeRange[1] = p.range; l.typeRange[2] = 0.0f; l.typeRange[3] = 0.0f;
+        roomBox(l, p);
     }
     // Spot lights (type 2): cones stored as cosines.
     for (const SpotLight& s : lighting.spotLights) {
@@ -7426,6 +7446,7 @@ void VulkanRenderer::setLights(const SceneLighting& lighting) {
             setColor(l.positionIntensity, p.position, p.intensity);
             setColor(l.colorOuter, p.color, 0.0f);
             l.typeRange[1] = p.range;
+            roomBox(l, p);
             impl->clusterLights.push_back(l);
         }
         for (const SpotLight& sp : lighting.spotLights) {

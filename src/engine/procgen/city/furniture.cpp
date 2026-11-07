@@ -570,7 +570,7 @@ struct ProgramRun {
 }  // namespace
 
 void emitFurniture(std::vector<PlacedPiece>& out, RenderMesh* colliderOut, const RoomPlan& rp, Real y0, uint32_t seed,
-                   Real ceilingY) {
+                   Real ceilingY, std::vector<RoomLight>* lightsOut) {
     std::vector<Vec2> doors;
     for (const RoomWall& w : rp.walls)
         if (w.doorAt >= 0) doors.push_back(w.a + (w.b - w.a) * w.doorAt);
@@ -914,6 +914,18 @@ void emitFurniture(std::vector<PlacedPiece>& out, RenderMesh* colliderOut, const
                 M.m[0][2] = Z.x; M.m[1][2] = 0; M.m[2][2] = Z.z;
                 M.m[0][3] = c.x; M.m[1][3] = ceilingY - h; M.m[2][3] = c.y;
                 out.push_back(pp);
+                if (lightsOut) {   // its light, kept inside this room (ADR-0365)
+                    RoomLight rl;
+                    const Vec2 lc = F.f.world(a, b);
+                    rl.at = Vec3(lc.x, ceilingY - h - (kind == 0 ? 0.05 : 0.12), lc.y);
+                    rl.kind = kind;
+                    rl.centre = F.f.world(F.f.W * 0.5, F.f.D * 0.5);
+                    rl.u = F.f.u;
+                    rl.halfU = F.f.W * 0.5;
+                    rl.halfV = F.f.D * 0.5;
+                    rl.floorY = y0;
+                    lightsOut->push_back(rl);
+                }
                 // RT_LIGHTS_WHY="x,z": which room hangs each light within 2 m of there
                 static const char* why = std::getenv("RT_LIGHTS_WHY");
                 if (why) {

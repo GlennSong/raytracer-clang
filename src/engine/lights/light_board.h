@@ -22,6 +22,9 @@ struct LightCandidate {
     float range = 0.0f;            // the falloff window, metres; 0: the kind's
     uint32_t group = 0;            // candidates sharing a group are picked whole (a car's two lamps); 0: alone
     bool mine = false;             // the player's own: picked first, never faded
+    // a room's light: lit only inside this box (PointLight::roomBox, ADR-0365)
+    bool roomBox = false;
+    float boxCx = 0, boxCz = 0, boxUx = 1, boxUz = 0, boxHalfU = 0, boxHalfV = 0, boxFloorY = 0;
 };
 
 // The producers, one channel each (Traffic: city cars' head and tail lamps, CityRenderSystem) (static emitters -- street lamps, station lamps -- are read by LightSystem itself).

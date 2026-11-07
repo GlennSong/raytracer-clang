@@ -118,6 +118,11 @@ void pickLights(const LightBook& book, const std::vector<LightPool>& pools, cons
         } else {
             PointLight pl(c.position + k.offset, k.color, intensity);
             pl.range = range;
+            if (c.roomBox) {
+                pl.roomBox = true;
+                pl.boxCx = c.boxCx; pl.boxCz = c.boxCz; pl.boxUx = c.boxUx; pl.boxUz = c.boxUz;
+                pl.boxHalfU = c.boxHalfU; pl.boxHalfV = c.boxHalfV; pl.boxFloorY = c.boxFloorY;
+            }
             points.push_back(pl);
         }
     }
