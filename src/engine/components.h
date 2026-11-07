@@ -786,6 +786,9 @@ struct NightGlow {
     // lit on its first frame, not left dark until the ramp next changes (Glenn's towers that went dark once he
     // had walked past them, 2026-09-30).
     float appliedRamp = -1.0f;
+    // ITS REAL LUMINANCE (cd/m^2, lights.lua glows; ADR-0369): what it glows at under the physical sky, in
+    // fullEmission's colour. 0: its old emission, scaled.
+    float nits = 0.0f;
 };
 
 // A FLASHING night light (skyscrapers v2 M4): with NightGlow on the same

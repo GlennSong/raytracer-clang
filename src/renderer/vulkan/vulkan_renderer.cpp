@@ -201,6 +201,10 @@ struct GlobalsUBO {
     float    skyPhysical[4];
     float    skyPhysical2[4];
     float    skyPhysical3[4];
+    // ...the air at sea level for the aerial perspective (ADR-0369): rgb Rayleigh scattering /m, w its scale height; and
+    // x Mie extinction /m, y its scale height, z the level's aerial density
+    float    skyPhysical4[4];
+    float    skyPhysical5[4];
 };
 
 // Volumetric-cloud uniforms (mirrors shader_types.h CloudUniforms; every
@@ -818,6 +822,22 @@ struct VulkanRenderer::Impl {
     bool ensureSkyView();
     void updateSkyDescriptors();
     void recordSkyView(VkCommandBuffer cmd);
+    // THE AERIAL PERSPECTIVE VOLUME (ADR-0370): aerial_volume.comp's in-scatter and transmittance, 32^3 each, made at init
+    // (set 0 bindings 13, 14 always have a 3D view), filled each frame the physical sky is on
+    static constexpr uint32_t kAerialSize = 32;
+    static constexpr float kAerialFar = 120000.0f;   // m
+    VkImage aerialImage[2]{};
+    VkDeviceMemory aerialMemory[2]{};
+    VkImageView aerialView[2]{};
+    bool aerialGeneral = false;
+    VkDescriptorSetLayout aerialSetLayout = VK_NULL_HANDLE;
+    VkDescriptorPool aerialPool = VK_NULL_HANDLE;
+    VkDescriptorSet aerialSet = VK_NULL_HANDLE;
+    VkPipelineLayout aerialLayout = VK_NULL_HANDLE;
+    VkPipeline aerialPipe = VK_NULL_HANDLE;
+    bool createAerialImages();
+    bool ensureAerialPipeline();
+    void recordAerial(VkCommandBuffer cmd);
     // PRE-EXPOSURE (ADR-0366): the exposure the scene passes draw with (1 with RT_PREEXPOSE=0)
     static bool preExposureOn() {
         static const bool on = [] { const char* e = std::getenv("RT_PREEXPOSE"); return !(e && std::string(e) == "0"); }();
@@ -3769,7 +3789,7 @@ bool VulkanRenderer::Impl::createSyncObjects() {
 }
 
 bool VulkanRenderer::Impl::createDescriptorSetLayout() {
-    std::array<VkDescriptorSetLayoutBinding, 13> bindings{};
+    std::array<VkDescriptorSetLayoutBinding, 15> bindings{};
     bindings[0].binding = 0;   // global UBO
     bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     bindings[0].descriptorCount = 1;
@@ -3796,7 +3816,7 @@ bool VulkanRenderer::Impl::createDescriptorSetLayout() {
         bindings[b].descriptorCount = 1;
         bindings[b].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
     }
-    for (uint32_t b = 11; b < 13; ++b) {   // the physical sky's view and transmittance (ADR-0367)
+    for (uint32_t b = 11; b < 15; ++b) {   // the physical sky's view and transmittance (ADR-0367); the aerial volume (0370)
         bindings[b].binding = b;
         bindings[b].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         bindings[b].descriptorCount = 1;
@@ -4008,7 +4028,7 @@ bool VulkanRenderer::Impl::createDescriptorPool() {
     sizes[2].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;   // the clustered lights' three buffers
     sizes[2].descriptorCount = MAX_FRAMES_IN_FLIGHT * 3;
     sizes[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;   // shadow map + env + BRDF LUT + horizon + 3 terrain maps
-    sizes[1].descriptorCount = MAX_FRAMES_IN_FLIGHT * 9;                                  // + the sky view + transmittance
+    sizes[1].descriptorCount = MAX_FRAMES_IN_FLIGHT * 11;   // + the sky view + transmittance + the aerial volume's two
     VkDescriptorPoolCreateInfo info{};
     info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
     info.poolSizeCount = static_cast<uint32_t>(sizes.size());
@@ -4171,6 +4191,171 @@ void VulkanRenderer::Impl::updateSkyDescriptors() {
             write.pImageInfo = &img;
             vkUpdateDescriptorSets(device, 1, &write, 0, nullptr);
         }
+    // 13, 14: the aerial volume (made at init, so always a 3D view; GENERAL once it has been written)
+    for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
+        for (uint32_t k = 0; k < 2; ++k) {
+            if (!aerialView[k]) continue;
+            VkDescriptorImageInfo img{brdfLutSampler, aerialView[k], VK_IMAGE_LAYOUT_GENERAL};
+            VkWriteDescriptorSet write{};
+            write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            write.dstSet = descriptorSets[i];
+            write.dstBinding = 13 + k;
+            write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            write.descriptorCount = 1;
+            write.pImageInfo = &img;
+            vkUpdateDescriptorSets(device, 1, &write, 0, nullptr);
+        }
+}
+
+bool VulkanRenderer::Impl::createAerialImages() {
+    for (int k = 0; k < 2; ++k) {
+        VkImageCreateInfo ii{};
+        ii.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+        ii.imageType = VK_IMAGE_TYPE_3D;
+        ii.format = VK_FORMAT_R16G16B16A16_SFLOAT;
+        ii.extent = {kAerialSize, kAerialSize, kAerialSize};
+        ii.mipLevels = 1;
+        ii.arrayLayers = 1;
+        ii.samples = VK_SAMPLE_COUNT_1_BIT;
+        ii.tiling = VK_IMAGE_TILING_OPTIMAL;
+        ii.usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+        ii.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        if (vkCreateImage(device, &ii, nullptr, &aerialImage[k]) != VK_SUCCESS) return false;
+        VkMemoryRequirements req;
+        vkGetImageMemoryRequirements(device, aerialImage[k], &req);
+        VkMemoryAllocateInfo ai{};
+        ai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+        ai.allocationSize = req.size;
+        ai.memoryTypeIndex = findMemoryType(req.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+        if (vkAllocateMemory(device, &ai, nullptr, &aerialMemory[k]) != VK_SUCCESS) return false;
+        vkBindImageMemory(device, aerialImage[k], aerialMemory[k], 0);
+        VkImageViewCreateInfo vi{};
+        vi.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+        vi.image = aerialImage[k];
+        vi.viewType = VK_IMAGE_VIEW_TYPE_3D;
+        vi.format = ii.format;
+        vi.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        if (vkCreateImageView(device, &vi, nullptr, &aerialView[k]) != VK_SUCCESS) return false;
+    }
+    return true;
+}
+
+bool VulkanRenderer::Impl::ensureAerialPipeline() {
+    if (aerialPipe) return true;
+    if (!aerialView[0] || !aerialView[1]) return false;
+    VkDescriptorSetLayoutBinding b[4]{};
+    for (int k = 0; k < 4; ++k) {
+        b[k].binding = static_cast<uint32_t>(k);
+        b[k].descriptorType = k < 2 ? VK_DESCRIPTOR_TYPE_STORAGE_IMAGE : VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        b[k].descriptorCount = 1;
+        b[k].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    }
+    VkDescriptorSetLayoutCreateInfo li{};
+    li.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    li.bindingCount = 4;
+    li.pBindings = b;
+    if (vkCreateDescriptorSetLayout(device, &li, nullptr, &aerialSetLayout) != VK_SUCCESS) return false;
+    VkDescriptorPoolSize sz[2] = {{VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 2}, {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 2}};
+    VkDescriptorPoolCreateInfo pi{};
+    pi.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    pi.maxSets = 1;
+    pi.poolSizeCount = 2;
+    pi.pPoolSizes = sz;
+    if (vkCreateDescriptorPool(device, &pi, nullptr, &aerialPool) != VK_SUCCESS) return false;
+    VkDescriptorSetAllocateInfo a{};
+    a.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    a.descriptorPool = aerialPool;
+    a.descriptorSetCount = 1;
+    a.pSetLayouts = &aerialSetLayout;
+    if (vkAllocateDescriptorSets(device, &a, &aerialSet) != VK_SUCCESS) return false;
+    GpuTexture* tr = textures.get(skyTransTex);
+    GpuTexture* ms = textures.get(skyMsTex);
+    if (!tr || !ms) return false;
+    VkDescriptorImageInfo img[4]{};
+    img[0] = {VK_NULL_HANDLE, aerialView[0], VK_IMAGE_LAYOUT_GENERAL};
+    img[1] = {VK_NULL_HANDLE, aerialView[1], VK_IMAGE_LAYOUT_GENERAL};
+    img[2] = {brdfLutSampler, tr->view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+    img[3] = {brdfLutSampler, ms->view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+    VkWriteDescriptorSet w[4]{};
+    for (int k = 0; k < 4; ++k) {
+        w[k].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        w[k].dstSet = aerialSet;
+        w[k].dstBinding = static_cast<uint32_t>(k);
+        w[k].descriptorCount = 1;
+        w[k].descriptorType = b[k].descriptorType;
+        w[k].pImageInfo = &img[k];
+    }
+    vkUpdateDescriptorSets(device, 4, w, 0, nullptr);
+    VkPushConstantRange range{VK_SHADER_STAGE_COMPUTE_BIT, 0, 128};
+    VkPipelineLayoutCreateInfo pl{};
+    pl.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    pl.setLayoutCount = 1;
+    pl.pSetLayouts = &aerialSetLayout;
+    pl.pushConstantRangeCount = 1;
+    pl.pPushConstantRanges = &range;
+    if (vkCreatePipelineLayout(device, &pl, nullptr, &aerialLayout) != VK_SUCCESS) return false;
+    VkShaderModule mod = loadShaderModule(std::string(RT_VULKAN_SHADER_DIR) + "/aerial_volume.comp.spv");
+    if (!mod) return false;
+    VkComputePipelineCreateInfo ci{};
+    ci.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+    ci.stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    ci.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+    ci.stage.module = mod;
+    ci.stage.pName = "main";
+    ci.layout = aerialLayout;
+    const VkResult r = vkCreateComputePipelines(device, VK_NULL_HANDLE, 1, &ci, nullptr, &aerialPipe);
+    vkDestroyShaderModule(device, mod, nullptr);
+    if (r != VK_SUCCESS) { aerialPipe = VK_NULL_HANDLE; return false; }
+    LOG_INFO("[vulkan] physical sky: aerial perspective volume ready");
+    return true;
+}
+
+// The aerial volume for this frame's camera (ADR-0370), before the scene samples it
+void VulkanRenderer::Impl::recordAerial(VkCommandBuffer cmd) {
+    if (!skyPhysicalOn || !ensureAerialPipeline()) return;
+    VkImageMemoryBarrier bars[2]{};
+    for (int k = 0; k < 2; ++k) {
+        bars[k].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        bars[k].srcAccessMask = aerialGeneral ? VK_ACCESS_SHADER_READ_BIT : 0;
+        bars[k].dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+        bars[k].oldLayout = aerialGeneral ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_UNDEFINED;
+        bars[k].newLayout = VK_IMAGE_LAYOUT_GENERAL;
+        bars[k].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        bars[k].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        bars[k].image = aerialImage[k];
+        bars[k].subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    }
+    vkCmdPipelineBarrier(cmd, aerialGeneral ? VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT : VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                         VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 2, bars);
+    aerialGeneral = true;
+    const PhysicalSkyFrame& f = skyFrame;
+    struct Push { float planet[4], rayleigh[4], mie[4], sun[4], ozone[4], right[4], up[4], fwd[4]; } p{};
+    p.planet[0] = f.groundRadius; p.planet[1] = f.topRadius; p.planet[2] = f.cameraHeight; p.planet[3] = f.mieG;
+    p.rayleigh[0] = static_cast<float>(f.rayleigh.x); p.rayleigh[1] = static_cast<float>(f.rayleigh.y);
+    p.rayleigh[2] = static_cast<float>(f.rayleigh.z); p.rayleigh[3] = f.rayleighHeight;
+    p.mie[0] = f.mieScatter; p.mie[1] = f.mieExtinction; p.mie[2] = f.mieHeight; p.mie[3] = kAerialFar;
+    p.sun[0] = static_cast<float>(f.lightDir.x); p.sun[1] = static_cast<float>(f.lightDir.y);
+    p.sun[2] = static_cast<float>(f.lightDir.z); p.sun[3] = f.lightTop;
+    p.ozone[0] = static_cast<float>(f.ozone.x); p.ozone[1] = static_cast<float>(f.ozone.y); p.ozone[2] = static_cast<float>(f.ozone.z);
+    p.ozone[3] = cpuGlobals.skyPhysical5[2];   // (the air's density scale, RT_AERIAL)
+    const float tanX = camTanHalfY * camAspect;
+    for (int c = 0; c < 3; ++c) {   // the view's rows: x right, y up, z back (it looks down -Z)
+        p.right[c] = static_cast<float>(camView.m[0][c]) * tanX;
+        p.up[c] = static_cast<float>(camView.m[1][c]) * camTanHalfY;
+        p.fwd[c] = -static_cast<float>(camView.m[2][c]);
+    }
+    static_assert(sizeof(Push) == 128, "aerial_volume.comp's push constants");
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, aerialPipe);
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, aerialLayout, 0, 1, &aerialSet, 0, nullptr);
+    vkCmdPushConstants(cmd, aerialLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(p), &p);
+    vkCmdDispatch(cmd, (kAerialSize + 7) / 8, (kAerialSize + 7) / 8, 1);
+    for (int k = 0; k < 2; ++k) {
+        bars[k].srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+        bars[k].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        bars[k].oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+    }
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0,
+                         nullptr, 2, bars);
 }
 
 // The sky view's image and the compute pipeline that fills it, made once the tables have come
@@ -5511,7 +5696,8 @@ bool VulkanRenderer::Impl::createMaterialResources() {
         return false;
     }
     updateGlobalTerrainNormalDescriptor();   // (binding 5 needs a view before the first frame: the default's)
-    updateSkyDescriptors();                  // (11, 12 likewise)
+    if (!aerialView[0]) createAerialImages();   // (13, 14 need 3D views from the start)
+    updateSkyDescriptors();                  // (11..14 likewise)
     return true;
 }
 
@@ -6171,6 +6357,7 @@ void VulkanRenderer::Impl::recordCommandBuffer(VkCommandBuffer cmd, uint32_t ima
     gpuMark(cmd, 0);
     recordClusterBin(cmd);   // the froxels' light lists (ADR-0364), before the scene pass reads them
     recordSkyView(cmd);      // the physical sky's view (ADR-0367), before the sky and the scene sample it
+    recordAerial(cmd);       // ...and the air between the camera and everything it sees (ADR-0370)
     recordCrowd(cmd);   // the far travellers' instances, before any pass draws them
 
     // Cascaded shadow maps first (writes the depth array the lit pass samples).
@@ -6681,6 +6868,17 @@ void VulkanRenderer::Impl::drawFrame() {
             std::memcpy(cu.sunColor, cpuGlobals.skySunColor, 3 * sizeof(float));
             cu.sunColor[3] = preExposure();
         }
+        if (skyPhysicalOn) {   // (the physical sky: the deck's own sun, from its height -- ADR-0367)
+            const Vec3 d = normalize(skyFrame.cloudLightDir);
+            const Vec3 c = skyFrame.cloudLightColor;
+            const double peak = std::max(c.x, std::max(c.y, c.z));
+            cu.sunDirection[0] = static_cast<float>(d.x); cu.sunDirection[1] = static_cast<float>(d.y);
+            cu.sunDirection[2] = static_cast<float>(d.z);
+            cu.sunColor[0] = static_cast<float>(peak > 0 ? c.x / peak : 0.0);
+            cu.sunColor[1] = static_cast<float>(peak > 0 ? c.y / peak : 0.0);
+            cu.sunColor[2] = static_cast<float>(peak > 0 ? c.z / peak : 0.0);
+            cu.sunColor[3] = static_cast<float>(peak) * preExposure();
+        }
         for (int k = 0; k < 3; ++k)   // sky zenith/horizon mix reaching interiors (pre-exposed, like the sun above)
             cu.skyAmbient[k] = (cpuGlobals.skyZenith[k] + cpuGlobals.skyHorizon[k]) *
                                0.5f * cp.ambient * preExposure();
@@ -6964,6 +7162,15 @@ void VulkanRenderer::shutdown() {
     if (impl->pipelineLayout) vkDestroyPipelineLayout(impl->device, impl->pipelineLayout, nullptr);
     if (impl->binPipe) vkDestroyPipeline(impl->device, impl->binPipe, nullptr);
     if (impl->skyPipe) vkDestroyPipeline(impl->device, impl->skyPipe, nullptr);
+    if (impl->aerialPipe) vkDestroyPipeline(impl->device, impl->aerialPipe, nullptr);
+    if (impl->aerialLayout) vkDestroyPipelineLayout(impl->device, impl->aerialLayout, nullptr);
+    if (impl->aerialPool) vkDestroyDescriptorPool(impl->device, impl->aerialPool, nullptr);
+    if (impl->aerialSetLayout) vkDestroyDescriptorSetLayout(impl->device, impl->aerialSetLayout, nullptr);
+    for (int k = 0; k < 2; ++k) {
+        if (impl->aerialView[k]) vkDestroyImageView(impl->device, impl->aerialView[k], nullptr);
+        if (impl->aerialImage[k]) vkDestroyImage(impl->device, impl->aerialImage[k], nullptr);
+        if (impl->aerialMemory[k]) vkFreeMemory(impl->device, impl->aerialMemory[k], nullptr);
+    }
     if (impl->lumPipe) vkDestroyPipeline(impl->device, impl->lumPipe, nullptr);
     if (impl->lumLayout) vkDestroyPipelineLayout(impl->device, impl->lumLayout, nullptr);
     if (impl->lumPool) vkDestroyDescriptorPool(impl->device, impl->lumPool, nullptr);
@@ -7793,9 +8000,22 @@ void VulkanRenderer::setLights(const SceneLighting& lighting) {
         impl->cpuGlobals.skyPhysical2[0] = f.sunDisc;
         impl->cpuGlobals.skyPhysical2[1] = f.otherTop;
         impl->cpuGlobals.skyPhysical2[2] = f.topRadius;
-        impl->cpuGlobals.skyPhysical2[3] = 0.0f;
+        impl->cpuGlobals.skyPhysical2[3] = static_cast<float>(impl->swapchainExtent.width);   // (the aerial volume's uv)
         impl->cpuGlobals.skyPhysical3[0] = f.lightIsSun ? 1.0f : 0.0f;
         impl->cpuGlobals.skyPhysical3[1] = f.celestialScale;
+        impl->cpuGlobals.skyPhysical3[2] = f.emissionScale;
+        impl->cpuGlobals.skyPhysical3[3] = f.cityGlowScale;
+        impl->cpuGlobals.skyPhysical4[0] = static_cast<float>(f.rayleigh.x);
+        impl->cpuGlobals.skyPhysical4[1] = static_cast<float>(f.rayleigh.y);
+        impl->cpuGlobals.skyPhysical4[2] = static_cast<float>(f.rayleigh.z);
+        impl->cpuGlobals.skyPhysical4[3] = f.rayleighHeight;
+        impl->cpuGlobals.skyPhysical5[0] = f.mieExtinction;
+        impl->cpuGlobals.skyPhysical5[1] = f.mieHeight;
+        // (the real air's own haze: the level's `aerial` was a multiplier tuned for the old Metal sky -- 4x drowned every
+        // range past ~20 km. RT_AERIAL=<x> scales it for an A/B.)
+        static const float aerialScale = [] { const char* e = std::getenv("RT_AERIAL"); return e ? static_cast<float>(std::atof(e)) : 1.0f; }();
+        impl->cpuGlobals.skyPhysical5[2] = aerialScale;
+        impl->cpuGlobals.skyPhysical5[3] = static_cast<float>(impl->swapchainExtent.height);
     }
     impl->sceneExposure = lighting.exposure;
 

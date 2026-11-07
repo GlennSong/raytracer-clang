@@ -5,6 +5,8 @@
 
 layout(set = 0, binding = 11) uniform sampler2D skyViewTex;   // RGB radiance (units)
 layout(set = 0, binding = 12) uniform sampler2D skyTransTex;  // RGB transmittance (Bruneton r, mu)
+layout(set = 0, binding = 13) uniform sampler3D aerialInscatter;   // the aerial volume (ADR-0370): the air's light
+layout(set = 0, binding = 14) uniform sampler3D aerialTransmit;    //   added, and what of the surface's gets through
 
 bool skyIsPhysical() { return g.counts.z == 2; }
 

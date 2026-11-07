@@ -3,6 +3,7 @@
 #include "../components.h"
 #include "../vehicle_lamps.h"   // duskRamp
 #include "../lights/light_picker.h"
+#include "../sky/sky_atmosphere.h"   // kLuxPerUnit
 #include "../../log.h"
 
 #include <cmath>
@@ -56,7 +57,17 @@ void LightSystem::render(FrameContext& ctx) {
     LightBoard& board = ctx.view.lights;
     board.points.clear();
     board.spots.clear();
-    const LightBook& book = lightBook();
+    const LightBook& loaded = lightBook();
+    // UNDER THE PHYSICAL SKY (ADR-0369) each kind lights at its real candela, in engine units
+    static LightBook physicalBook;
+    static bool physicalMade = false;
+    if (!physicalMade) {
+        physicalBook = loaded;
+        for (LightKind& k : physicalBook.kinds)
+            if (k.candela > 0.0f) k.intensity = static_cast<float>(k.candela / kLuxPerUnit);
+        physicalMade = true;
+    }
+    const LightBook& book = ctx.view.lighting.physicalSky.enabled ? physicalBook : loaded;
     static const int streetPool = book.pool("street");
     static const int beaconPool = book.pool("beacons");
     static const int streetLamp = lightKindId("street_lamp");

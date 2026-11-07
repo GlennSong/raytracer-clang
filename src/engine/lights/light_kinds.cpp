@@ -16,6 +16,14 @@ int LightBook::kind(const std::string& name) const {
     return -1;
 }
 
+float LightBook::glowNits(const std::string& name) const {
+    for (const Glow& g : glows)
+        if (g.name == name) return g.nits;
+    return 0.0f;
+}
+
+float lightGlowNits(const char* name) { return lightBook().glowNits(name); }
+
 int LightBook::pool(const std::string& name) const {
     for (std::size_t i = 0; i < pools.size(); ++i)
         if (pools[i].name == name) return static_cast<int>(i);

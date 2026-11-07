@@ -533,6 +533,14 @@ struct PhysicalSkyFrame {
     // the stars, the moon's phased disc and the city's glow were tuned against the old night exposure; this takes
     // them into units until they are physical too (ADR-0367)
     float celestialScale = 1.0f;
+    // every glowing surface's emission into engine units (lights.lua emission_scale, ADR-0369)
+    float emissionScale = 1.0f;
+    // the city's glow on the sky (light pollution) into units: its old shape times this (ADR-0369)
+    float cityGlowScale = 0.0f;
+    // THE CLOUDS' LIGHT (ADR-0367): the sun (or the moon) as the cloud deck sees it, from its own height -- after
+    // sunset at the street the deck is still in the sun, through the long reddening air: the red and pink undersides
+    Vec3 cloudLightDir{0, 1, 0};
+    Vec3 cloudLightColor{0, 0, 0};   // colour x illuminance (units)
 };
 
 // Volumetric cloud layer (cinematic-sky phase). Opt-in per level via

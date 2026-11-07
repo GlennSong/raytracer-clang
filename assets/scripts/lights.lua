@@ -12,6 +12,8 @@
 --   offset     { x, y, z } metres from the emitter's point (a lamp's bulb hangs under its head)
 --   dusk       true: rides the dusk ramp (dark by day, warming up through twilight)
 --   pool       which budget it is picked from (below); none: every one published is lit
+--   candela    its real luminous intensity (cd), what the physical sky's world lights it at (ADR-0369; RT_SKY=physical);
+--              `intensity` is the old night exposure's value, until the physical sky is the default
 --
 -- pools.<name>
 --   count      at most this many real lights (groups, when `groups`)
@@ -26,36 +28,58 @@
 -- lampLightRange, lightCount / lightRadius / lightRange).
 
 return {
+  -- THE GLOWS' WAY INTO REAL UNITS (ADR-0369): the emission of every glowing surface (lit windows, lamp heads, signs,
+  -- lit lenses) was tuned against the old x6 night exposure, about 250x its real luminance; under the physical sky it
+  -- is scaled by this until each class declares its own (a lit window, old 1.3, comes to ~100 cd/m^2)
+  emission_scale = 0.004,
+  -- the city's glow on the night sky (light pollution), low toward downtown, and the full moon's disc above the air
+  city_glow_nits = 2.0,
+  moon_nits = 2500,
+
+  -- THE GLOWS (ADR-0369): each class of glowing surface at its real luminance (cd/m^2) under the physical sky, in its
+  -- own colour; a class not here keeps its old emission scaled by emission_scale
+  glows = {
+    window_pane = { nits = 25 },          -- a lit room seen through its window (the room atlas: the fixture at full)
+    lit_band = { nits = 300 },            -- a tower's crown band, signage strip, podium uplight
+    far_city = { nits = 12 },             -- a far block's windows, averaged over the lit and the dark
+    street_lamp_head = { nits = 8000 },   -- a street lamp's lit head
+    station_lamp_head = { nits = 5000 },  -- a station canopy's fitting
+    sign = { nits = 400 },                -- a shop sign's lettering
+    beacon_bulb = { nits = 3000 },        -- an aviation beacon's lamp, its glow and its haze
+    beacon_glow = { nits = 2000 },
+    beacon_haze = { nits = 800 },
+  },
+
   kinds = {
     -- the street's lamps (StreetFurniture lamp heads): warm sodium-white pools that meet at 26 m spacing
-    street_lamp = { type = "point", color = { 1.0, 0.82, 0.55 }, intensity = 48, range = 34,
+    street_lamp = { candela = 1600, type = "point", color = { 1.0, 0.82, 0.55 }, intensity = 48, range = 34,
                     offset = { 0, -0.35, 0 }, dusk = true, pool = "street" },
     -- a station's canopy fittings (RailStop lamps, 12 m apart): cool white, a shorter pool under a roof
-    station_lamp = { type = "point", color = { 0.92, 0.96, 1.0 }, intensity = 26, range = 16,
+    station_lamp = { candela = 600, type = "point", color = { 0.92, 0.96, 1.0 }, intensity = 26, range = 16,
                      dusk = true, pool = "street" },
     -- a car's headlight: a cone pitched down onto the road ahead (the emitter aims it)
-    headlight = { type = "spot", color = { 1.0, 0.95, 0.82 }, intensity = 22, range = 45,
+    headlight = { candela = 15000, type = "spot", color = { 1.0, 0.95, 0.82 }, intensity = 22, range = 45,
                   cone = { 0.32, 0.55 }, pool = "headlights" },
     -- the hand-held light (FlashlightSystem)
-    flashlight = { type = "spot", color = { 1.0, 0.93, 0.8 }, intensity = 140, range = 60,
+    flashlight = { candela = 2000, type = "spot", color = { 1.0, 0.93, 0.8 }, intensity = 140, range = 60,
                    cone = { 0.2, 0.42 } },
     -- THE ROOMS (ADR-0365): each ceiling fitting the furniture hangs is a light kept to its own room's box (the walls
     -- stop it), of its fitting's kind -- an office's recessed panel, a home's round flush fitting, a bar's pendant
-    room_panel = { type = "point", color = { 0.95, 0.96, 1.0 }, intensity = 4.5, range = 6, pool = "rooms" },
-    room_round = { type = "point", color = { 1.0, 0.86, 0.66 }, intensity = 6, range = 6, pool = "rooms" },
-    room_pendant = { type = "point", color = { 1.0, 0.72, 0.45 }, intensity = 2.5, range = 4, pool = "rooms" },
+    room_panel = { candela = 1300, type = "point", color = { 0.95, 0.96, 1.0 }, intensity = 4.5, range = 6, pool = "rooms" },
+    room_round = { candela = 700, type = "point", color = { 1.0, 0.86, 0.66 }, intensity = 6, range = 6, pool = "rooms" },
+    room_pendant = { candela = 250, type = "point", color = { 1.0, 0.72, 0.45 }, intensity = 2.5, range = 4, pool = "rooms" },
     -- ...and a dim fill a storey (the nearest building, 4 storeys round the player; BuildingInteriorSystem gives the
     -- building's reach): the light the rooms bounce about, and the corridors', which hang no fittings
-    room_fill = { type = "point", color = { 1.0, 0.88, 0.70 }, intensity = 5, range = 20 },
+    room_fill = { candela = 250, type = "point", color = { 1.0, 0.88, 0.70 }, intensity = 5, range = 20 },
     -- an elevator cab's ceiling light
-    cab = { type = "point", color = { 1.0, 0.95, 0.86 }, intensity = 9, range = 6 },
+    cab = { candela = 300, type = "point", color = { 1.0, 0.95, 0.86 }, intensity = 9, range = 6 },
     -- city traffic's lamps, from each car's own markers (CityRenderSystem): a short red glow behind the tail lamps,
     -- brighter while braking
-    tail_light = { type = "point", color = { 1.0, 0.08, 0.04 }, intensity = 0.8, range = 4, pool = "tails" },
-    brake_light = { type = "point", color = { 1.0, 0.08, 0.04 }, intensity = 3.0, range = 6, pool = "tails" },
+    tail_light = { candela = 15, type = "point", color = { 1.0, 0.08, 0.04 }, intensity = 0.8, range = 4, pool = "tails" },
+    brake_light = { candela = 80, type = "point", color = { 1.0, 0.08, 0.04 }, intensity = 3.0, range = 6, pool = "tails" },
     -- a roof's aviation beacon: a tight red pool on the roof and the plant under it (BeaconLightSystem gives the
     -- level's range, the intensity scaled to keep the pool's edge, and the flash)
-    beacon = { type = "point", color = { 1.0, 0.06, 0.03 }, intensity = 64, range = 10,
+    beacon = { candela = 100, type = "point", color = { 1.0, 0.06, 0.03 }, intensity = 64, range = 10,
                dusk = true, pool = "beacons" },
   },
 

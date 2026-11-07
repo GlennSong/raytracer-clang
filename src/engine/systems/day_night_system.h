@@ -90,7 +90,9 @@ struct SimHourQuery {
 // "Day / Night" in debug mode.
 // Write every NightGlow entity's emission for `ramp` (0 day .. 1 night) -- each entity once per ramp value, so one
 // that streamed in since the last change is lit too.
-void applyNightGlowRamp(World& world, Real ramp);
+// `perNit` (the physical sky, ADR-0369): a glow with real luminance is lit at nits x perNit in fullEmission's colour;
+// 0: every glow at its fullEmission.
+void applyNightGlowRamp(World& world, Real ramp, double perNit = 0.0);
 
 class DayNightSystem : public System {
 public:
@@ -232,6 +234,7 @@ private:
     double readHeight_ = -1e9;
     float readMoonTop_ = -1.0f;
     float autoExposure_ = -1.0f;   // the adapted exposure (ADR-0368); -1: not yet
+    double glowPerNit_ = 0.0;      // the physical sky's glows: emission per cd/m^2 (ADR-0369); 0: the old values
     float lastDt_ = 0.0f;          // update's frame time, for the adaptation
 
     // The level's authored volumetric deck, captured on first sight: the

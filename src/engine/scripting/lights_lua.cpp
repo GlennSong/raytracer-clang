@@ -49,6 +49,9 @@ bool loadLightsSource(const std::string& code, LightBook& out, std::string* err)
     if (!lua_istable(L, -1)) return fail("returns no table");
     const int root = lua_gettop(L);
     LightBook book;
+    book.emissionScale = static_cast<float>(numField(L, root, "emission_scale", 1.0));
+    book.cityGlowNits = static_cast<float>(numField(L, root, "city_glow_nits", 0.0));
+    book.moonNits = static_cast<float>(numField(L, root, "moon_nits", 2500.0));
     lua_getfield(L, root, "pools");
     if (lua_istable(L, -1)) {
         const int pt = lua_gettop(L);
@@ -78,6 +81,21 @@ bool loadLightsSource(const std::string& code, LightBook& out, std::string* err)
         }
     }
     lua_pop(L, 1);
+    lua_getfield(L, root, "glows");
+    if (lua_istable(L, -1)) {
+        const int gt = lua_gettop(L);
+        for (const std::string& name : keysOf(L, gt)) {
+            lua_getfield(L, gt, name.c_str());
+            if (!lua_istable(L, -1)) return fail("glow `" + name + "` is not a table");
+            LightBook::Glow g;
+            g.name = name;
+            g.nits = static_cast<float>(numField(L, lua_gettop(L), "nits", 0.0));
+            if (g.nits < 0.0f) return fail("glow `" + name + "`: nits >= 0");
+            book.glows.push_back(g);
+            lua_pop(L, 1);
+        }
+    }
+    lua_pop(L, 1);
     lua_getfield(L, root, "kinds");
     if (!lua_istable(L, -1)) return fail("no `kinds` table");
     const int kt = lua_gettop(L);
@@ -99,6 +117,7 @@ bool loadLightsSource(const std::string& code, LightBook& out, std::string* err)
         k.inner = cone[0];
         k.outer = cone[1];
         k.intensity = static_cast<float>(numField(L, t, "intensity", 1.0));
+        k.candela = static_cast<float>(numField(L, t, "candela", 0.0));
         k.range = static_cast<float>(numField(L, t, "range", 25.0));
         k.dusk = boolField(L, t, "dusk", false);
         const std::string pool = strField(L, t, "pool");

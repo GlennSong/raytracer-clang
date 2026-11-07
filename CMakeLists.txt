@@ -1148,7 +1148,7 @@ function(rt_build_vulkan_shaders)
                    sky.vert sky.frag composite.vert composite.frag bloom.frag
                    ssao.frag ssao_blur.frag ssr.frag dof.frag brdf_lut.frag
                    clouds.frag clouds_composite.frag clouds_resolve.frag
-                   ui.vert ui.frag occlusion_reduce.comp crowd.comp cluster_bin.comp sky_view.comp lum_histogram.comp)
+                   ui.vert ui.frag occlusion_reduce.comp crowd.comp cluster_bin.comp sky_view.comp lum_histogram.comp aerial_volume.comp)
     set(VK_SPV_FILES "")
     foreach(shader ${VK_SHADERS})
         add_custom_command(

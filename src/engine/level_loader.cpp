@@ -1,4 +1,5 @@
 #include "level_loader.h"
+#include "lights/light_kinds.h"   // lightGlowNits: the glows' real luminance (ADR-0369)
 #include "../hash.h"   // lowbias32
 #include "particles.h"
 #ifdef RT_ENABLE_SCRIPTING
@@ -707,7 +708,11 @@ static void spawnRoadMeshes(const json& ent, std::vector<roads::RoadMesh>& meshe
         const bool nightLamp = rm.name == "station_lamp";
         if (nightLamp) mr.material.emission = Vec3(0, 0, 0);
         world.add<Renderable>(me, mr);
-        if (nightLamp) world.add<engine::NightGlow>(me, engine::NightGlow{Vec3(0.95, 0.97, 1.0) * 5.0});
+        if (nightLamp) {
+            engine::NightGlow ng{Vec3(0.95, 0.97, 1.0) * 5.0};
+            ng.nits = engine::lightGlowNits("station_lamp_head");
+            world.add<engine::NightGlow>(me, ng);
+        }
         if (!rm.collidable) continue;
         MeshCollider mc;
         mc.append(rm.mesh);
@@ -6953,7 +6958,9 @@ bool LevelLoader::load(const std::string& path,
                         g.drawClass = engine::DrawClass::Furniture;
                         const Entity signs = world.create();
                         world.add<InstanceGroup>(signs, g);
-                        world.add<engine::NightGlow>(signs, engine::NightGlow{Vec3(1.0, 1.0, 1.0) * glow});
+                        engine::NightGlow ng{Vec3(1.0, 1.0, 1.0) * glow};
+                        ng.nits = engine::lightGlowNits("sign");
+                        world.add<engine::NightGlow>(signs, ng);
                     }
                     return atlas;
                 };
@@ -7234,13 +7241,15 @@ bool LevelLoader::load(const std::string& path,
                     // equals Glass by day).
                     if (static_cast<PartId>(pi) == PartId::LitBand)
                         // Crown bands, signage, podium uplights: the vertex colour is the tint.
-                        world.add<engine::NightGlow>(e, engine::NightGlow{Vec3(1.0, 1.0, 1.0) * 1.3});
+                        world.add<engine::NightGlow>(e, engine::NightGlow{Vec3(1.0, 1.0, 1.0) * 1.3, 1.0f, Vec3(1.0, 1.0, 1.0), -1.0f,
+                                                                          engine::lightGlowNits("lit_band")});
                     if (static_cast<PartId>(pi) == PartId::GlassLit)
                         // White: the pane's vertex colour is its tint (litTint, FLAG_EMISSIVE_VERTEX_TINT);
                         // 0.5, not 1.3: the room atlas carries the contrast now (a fixture at 1, walls
                         // at ~0.6, floor ~0.25) and the night exposure lifts it, so the fixture clips
                         // to white and the walls keep their tint instead of the whole pane clipping.
-                        world.add<engine::NightGlow>(e, engine::NightGlow{Vec3(1.0, 1.0, 1.0) * 0.22});
+                        world.add<engine::NightGlow>(e, engine::NightGlow{Vec3(1.0, 1.0, 1.0) * 0.22, 1.0f, Vec3(1.0, 1.0, 1.0), -1.0f,
+                                                                          engine::lightGlowNits("window_pane")});
                     const bool beaconFamily = static_cast<PartId>(pi) == PartId::Beacon ||
                                               static_cast<PartId>(pi) == PartId::BeaconGlow ||
                                               static_cast<PartId>(pi) == PartId::BeaconHaze;
@@ -7262,7 +7271,10 @@ bool LevelLoader::load(const std::string& path,
                         // On screen through their opacity: bulb 0.55 x 3.0 = 1.65, haze 0.22 x 4.5 = 1.0.
                         const Real glow = static_cast<PartId>(pi) == PartId::BeaconGlow ? 3.0
                                         : static_cast<PartId>(pi) == PartId::BeaconHaze ? 4.5 : 1.3;
-                        world.add<engine::NightGlow>(e, engine::NightGlow{Vec3(1.0, 1.0, 1.0) * glow});
+                        const char* cls = static_cast<PartId>(pi) == PartId::BeaconGlow ? "beacon_glow"
+                                        : static_cast<PartId>(pi) == PartId::BeaconHaze ? "beacon_haze" : "beacon_bulb";
+                        world.add<engine::NightGlow>(e, engine::NightGlow{Vec3(1.0, 1.0, 1.0) * glow, 1.0f, Vec3(1.0, 1.0, 1.0), -1.0f,
+                                                                          engine::lightGlowNits(cls)});
                         world.add<engine::BeaconBlink>(e, bb);
                     }
                     return e;
@@ -7505,6 +7517,7 @@ bool LevelLoader::load(const std::string& path,
                     ng.fullEmission = Vec3(1.0, 0.82, 0.58) * 0.16;
                     ng.nightAlbedo = 0.08f;   // the body goes dark with dusk; the window glow carries it
                     ng.dayAlbedo = r.material.albedo;
+                    ng.nits = engine::lightGlowNits("far_city");
                     world.add<engine::NightGlow>(e, ng);
                 }
             }
@@ -7910,8 +7923,9 @@ bool LevelLoader::load(const std::string& path,
                     groupBounds(glow, lp.height + 1.0);
                     Entity glowE = world.create();
                     world.add<InstanceGroup>(glowE, glow);
-                    world.add<engine::NightGlow>(
-                        glowE, engine::NightGlow{Vec3(1.0, 0.85, 0.55) * 4.5});
+                    engine::NightGlow ng{Vec3(1.0, 0.85, 0.55) * 4.5};
+                    ng.nits = engine::lightGlowNits("street_lamp_head");
+                    world.add<engine::NightGlow>(glowE, ng);
                 }
             }
             // STREET NAME SIGNS (Glenn, 2026-09-19: "It would be nice to have

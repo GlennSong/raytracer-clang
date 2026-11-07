@@ -16782,3 +16782,94 @@ sky is black and the lamp-lit facades look like day.
 - Lit windows about 200 cd/m^2, signs about 1,000.
 - The city's sky glow from the light the city sends up.
 - Then physical becomes the default and the palette, `kNightAdapt` and the emitters' night-exposure divisions go.
+
+## ADR-0369 — The lights at their real candela, the glows into units, the clouds lit from their own height
+
+**Context.** ADR-0368's eye adapted to lamps and windows tuned for the old ×6 night exposure (about 500× real), so at
+dusk the sky went black and lamp-lit facades looked like day. Glenn: "Why is the city so bright at dusk?"
+
+**Decision** (physical mode, `RT_SKY=physical`).
+- **Lights.** Each kind in `lights.lua` gains `candela`, its real luminous intensity, which LightSystem lights it at
+  under the physical sky (`intensity` stays the old exposure's until physical is the default):
+
+  | kind | cd |
+  |---|---|
+  | street lamp | 1,600 |
+  | station lamp | 600 |
+  | headlight | 15,000 |
+  | flashlight | 2,000 |
+  | room panel | 1,300 |
+  | round fitting | 700 |
+  | pendant | 250 |
+  | room fill | 250 |
+  | cab | 300 |
+  | tail | 15 |
+  | brake | 80 |
+  | beacon | 100 |
+- **Glows.** `lights.lua` `emission_scale` (0.004) brings every glowing surface's old emission into engine units in
+  `mesh.frag` (a lit window, old 1.3, ~100 cd/m^2). The night-exposure compensation of the beacons and the lamp
+  sprites (`nightAdapt`) is 1. Each class declaring its own luminance is the next refinement.
+- **The clouds' light.** `PhysicalSkyFrame::cloudLight*`: the sun (or the moon) through the transmittance from the
+  middle of the cloud deck, not from the street. After sunset the deck is still in the sun, through the long
+  reddening air.
+
+**Seen** (river_town towers; `~/Pictures/Raytracer/2026-11-07_physical_sky_sunset_v{1,2}*.png`):
+- the sun 2° up: golden clouds;
+- just under the horizon: salmon-red clouds over a purple-pink sky and an orange horizon;
+- −3° to −5°: the twilight's purple light overhead;
+- −10°: an orange band under deep blue;
+- night: lamp pools on the street and warm windows.
+
+A low deck (0.9–1.6 km) passes into the Earth's shadow about 1° after the street does, so its red is brief, as it is.
+
+**Then, the same day:**
+- **Glow classes** (`lights.lua` `glows`, `NightGlow::nits`). Each class of glowing surface the loader tags declares
+  its real luminance, lit in its own colour; the rest keep the scaled old value.
+
+  | class | cd/m^2 |
+  |---|---|
+  | window pane | 25 |
+  | lit band | 300 |
+  | far city | 12 |
+  | street lamp head | 8,000 |
+  | station lamp head | 5,000 |
+  | sign | 400 |
+  | beacon bulb / glow / haze | 3,000 / 2,000 / 800 |
+- **The moon's disc** at 2,500 cd/m^2 through the air (`moon_nits`); **the city's glow** on the sky at 2 cd/m^2 low
+  toward downtown (`city_glow_nits`).
+- **Aerial perspective** (Glenn: "Oh are those the mountains? That looks weird"). The haze faded far terrain toward
+  the sky 1° up (the brightest band at sunset) at the level's fixed fog density, and the range read as a glowing pale
+  cut-out. Now it is the same air as the sky: the surface's light thinned per channel by Rayleigh and Mie extinction
+  along the path (at the path's mean height, times the level's `aerialDensity`), and the sky's radiance from that
+  direction put in its place. Mountains are blue with distance at noon and hazy blue-lavender silhouettes at dusk.
+
+**Still owed:**
+- At night the lit windows clip to white: the camera adapts to the lamp-lit street, ~10× darker than a window.
+  Calibrate against Glenn's night references.
+- The stars' real luminance.
+- Then physical becomes the default, and the palette, `kNightAdapt`, the `intensity` fields and `emission_scale`
+  go.
+
+## ADR-0370 — The aerial perspective volume
+
+**Context.** Glenn, on the sunset shots: "I'm still not sure about the haze near the mountains ... shouldn't the
+mountains block the haze?" ADR-0369's aerial perspective had two faults:
+- **It treated the air as uniform**, with the sky's radiance as the limit. At sunset that radiance is the horizon's
+  glow gathered over hundreds of kilometres, so the mountains' bases glowed as if the sky showed through them.
+- **It took river_town's `aerial: 4.0`**, a multiplier tuned for the old Metal sky, so every range past ~20 km
+  drowned.
+
+**Decision.**
+- **`aerial_volume.comp`** (Hillaire 2020's fourth table): for 32 × 32 screen tiles, the air marched from the camera
+  along each tile's ray, with in-scatter and transmittance stored at 32 distances (quadratic, out to 120 km). It uses
+  the same medium, phases, transmittance and multiple scattering as the sky view, lit by the active light. Two 32^3
+  RGBA16F images are made at init, so set 0 bindings 13 and 14 always hold a 3D view, and they are rebuilt every frame
+  the physical sky is on.
+- **`mesh.frag`** reads the volume at the fragment's tile and distance (from nothing to the first slice under 117 m):
+  colour × T + L.
+- **The level's `aerial` is not applied** to the physical air. `RT_AERIAL=<x>` scales the air for an A/B.
+
+**Seen** (`~/Pictures/Raytracer/2026-11-07_aerial_volume_vs_uniform.png`):
+- at sunset the range is a solid silhouette with only the haze in front of it;
+- at noon a light blue haze;
+- toward a low sun at golden hour, a warm haze with the range as a gold silhouette, as real air does.

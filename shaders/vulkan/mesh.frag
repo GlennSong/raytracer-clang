@@ -63,7 +63,10 @@ layout(set = 0, binding = 0) uniform Globals {
     vec4  clusterDepth;       // x the slices' near depth, y 1/log(far/near), z framebuffer width, w height
     vec4  skyPhysical;        // THE PHYSICAL SKY (ADR-0367; envMode 2): x ground radius, y camera height, z the active
     vec4  skyPhysical2;       //   light's top illuminance, w cos(sun radius); x disc visibility, y the other light's,
-    vec4  skyPhysical3;       //   z top radius; x 1: the active light is the sun, y the celestial scale
+    vec4  skyPhysical3;       //   z top radius; x 1: the active light is the sun, y the celestial scale, z the glows'
+                              //   emission into units (ADR-0369)
+    vec4  skyPhysical4;       // the air for the aerial perspective: rgb Rayleigh /m, w its scale height;
+    vec4  skyPhysical5;       //   x Mie extinction /m, y its scale height, z the level's aerial density
 } g;
 #include "sky_physical.glsl"
 // the clustered lights (light_clusters.h): every point and spot, each froxel's offset (low 24 bits) | count (high 8),
@@ -1660,7 +1663,8 @@ void main() {
         }
         outColor = vec4(tint, 1.0);
     } else {
-        vec3 color = direct + ambient + emission;
+        // (under the physical sky every glow's emission comes into engine units: ADR-0369)
+        vec3 color = direct + ambient + emission * (skyIsPhysical() ? g.skyPhysical3.z : 1.0);
         // WATER COMPOSITE. Over the bed the right result is
         //   F * sky + (1 - F) * (a_w * body + (1 - a_w) * bed)
         // with a_w the body's opacity from its depth (Beer-Lambert) and F the Fresnel reflectance:
@@ -1698,12 +1702,32 @@ void main() {
         // inscatters the live sky, so haze stays colour-correct at sunset and
         // under the moon. Vulkan faded toward the fixed fog.rgb, which turned
         // night distances WHITE. fog.rgb keeps its density-only role here.
-        if (g.fog.w > 0.0) {
+        if (skyIsPhysical()) {
+            // AERIAL PERSPECTIVE (ADR-0370): the air between the camera and this surface, from the volume aerial_volume.comp
+            // marched along this pixel's tile -- its light added, the surface's thinned (blue first) -- so a far range
+            // gets exactly the haze in front of it: a hazy silhouette, blue by day, purple at dusk, never the
+            // horizon's whole glow
+            float dist = length(inWorldPos - g.cameraPosition.xyz);
+            vec2 uvA = gl_FragCoord.xy / vec2(max(g.skyPhysical2.w, 1.0), max(g.skyPhysical5.w, 1.0));
+            const float S = 32.0, FAR = 120000.0;
+            float f = sqrt(clamp(dist / FAR, 0.0, 1.0));
+            vec3 aL, aT;
+            if (f * S < 1.0) {   // nearer than the first slice: from nothing to it
+                float a = f * S;
+                vec3 z0 = vec3(uvA, 0.5 / S);
+                aL = texture(aerialInscatter, z0).rgb * a;
+                aT = mix(vec3(1.0), texture(aerialTransmit, z0).rgb, a);
+            } else {
+                vec3 z = vec3(uvA, f - 0.5 / S);
+                aL = texture(aerialInscatter, z).rgb;
+                aT = texture(aerialTransmit, z).rgb;
+            }
+            color = color * aT + aL;
+        } else if (g.fog.w > 0.0) {
             vec3 rd = (inWorldPos - g.cameraPosition.xyz);
             float dist = length(rd);
             float f = 1.0 - exp(-g.fog.w * dist);
-            vec3 rdn = rd / max(dist, 1e-4);
-            color = mix(color, skyIsPhysical() ? skyViewRadiance(vec3(rdn.x, max(rdn.y, 0.02), rdn.z)) : sampleEnvironment(rdn), f);
+            color = mix(color, sampleEnvironment(rd / max(dist, 1e-4)), f);
         }
         // Opacity (float bits in the spare push slot) → output alpha for the
         // transparent blend pass; ignored by the opaque pipeline (blend off).

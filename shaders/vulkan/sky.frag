@@ -256,7 +256,7 @@ void main() {
     } else if (skyIsPhysical()) {
         // THE PHYSICAL SKY (ADR-0367): the dome, the sun's disc through the air, and the night's bodies over it
         col = skyViewRadiance(dir) + skyLightDisc(dir);
-        col += (starField(dir) + skyGlow(dir) + moonDisc(dir)) * g.skyPhysical3.y;
+        col += (starField(dir) + moonDisc(dir)) * g.skyPhysical3.y + skyGlow(dir) * g.skyPhysical3.w;
         col = applyClouds(col, dir);
     } else {
         col = sampleEnvironment(dir);

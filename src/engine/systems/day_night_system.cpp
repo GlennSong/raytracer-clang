@@ -4,6 +4,7 @@
 #include "../procgen/noise.h"
 #include "../procgen/terrain.h"          // terrainHeight: the horizon raster
 #include "../vehicle_lamps.h"   // duskRamp: night glow shares the lamp boundary
+#include "../lights/light_kinds.h"   // lightBook: the glows' emission scale (ADR-0369)
 
 #include "../../log.h"
 
@@ -725,6 +726,27 @@ void DayNightSystem::applyPhysicalSky(FrameContext& ctx, const DayNightState& st
     f.sunAngularRadius = lit.skyScattering.sunAngularRadius;
     f.sunDisc = lit.sky.sunDiscIntensity > 0.0f ? 1.0f : 0.0f;
     f.celestialScale = 1.0e-5f;   // (the stars and the moon's disc were tuned at the old night exposure; ADR-0367)
+    f.emissionScale = lightBook().emissionScale;   // (ADR-0369)
+    glowPerNit_ = 1.0 / (kLuxPerUnit * std::max(1e-6f, f.emissionScale));   // (the shader multiplies by the scale)
+    // THE MOON'S DISC at its real luminance through the air, and the CITY'S GLOW on the sky (sky.frag's shapes peak at
+    // 1 x the disc intensity and 0.06: ADR-0369)
+    {
+        const LightBook& lb = lightBook();
+        const Vec3 tm = sampleTransmittance(skyTables_, a.groundRadius + std::max(height, 0.5), st.moonDirection.y);
+        const double moonUnits = lb.moonNits / kLuxPerUnit * std::max(tm.x, std::max(tm.y, tm.z));
+        if (lit.sky.moonDiscIntensity > 0.0f)
+            lit.sky.moonDiscIntensity = static_cast<float>(moonUnits / std::max(1e-12f, f.celestialScale));
+        f.cityGlowScale = static_cast<float>(lb.cityGlowNits / kLuxPerUnit / 0.06);
+    }
+    {   // the deck's own sun: from the middle of the cloud layer, whichever of the sun and the moon lights it more
+        const VolumetricCloudParams& vc = lit.volumetricClouds;
+        const double r = a.groundRadius + std::max(height, 0.5 * (vc.bottom + vc.top));
+        const Vec3 tSun = sampleTransmittance(skyTables_, r, st.sunDirection.y) * sunTop;
+        const Vec3 tMoon = sampleTransmittance(skyTables_, r, st.moonDirection.y) * static_cast<double>(moonTop);
+        const bool sunLit = tSun.y >= tMoon.y;
+        f.cloudLightDir = sunLit ? st.sunDirection : st.moonDirection;
+        f.cloudLightColor = (sunLit ? tSun : tMoon) * static_cast<double>(weatherSun);
+    }
 
     // THE METER: incident light on the ground (sun or moon, and the sky), EV100 = log2(E * 100 / C), exposure =
     // kLuxPerUnit / (1.2 * 2^EV); C = 400 puts a clear noon (~99,000 lux) at exposure 0.7. The level's authored
@@ -758,19 +780,30 @@ void DayNightSystem::applyPhysicalSky(FrameContext& ctx, const DayNightState& st
         }
         lit.exposure = autoExposure_;
     }
-    nightAdapt_ = baseExposure_ > 0.0f ? lit.exposure / baseExposure_ : 1.0f;
+    // (the glows are in units now, scaled in the shader: no night-exposure compensation for the beacons and sprites)
+    nightAdapt_ = 1.0f;
 }
 
 // The glow at one ramp, per ENTITY (see NightGlow::appliedRamp): the ramp holds still for long stretches (a staged
 // hour, the cycle off) while building chunks stream in around the player; each is written once at the ramp it has
 // not seen yet.
-void applyNightGlowRamp(World& world, Real ramp) {
+namespace {
+// a glow's full emission: its real luminance in its colour under the physical sky, else its old value
+Vec3 glowEmission(const NightGlow& glow, double perNit) {
+    if (perNit <= 0.0 || glow.nits <= 0.0f) return glow.fullEmission;
+    const Vec3& c = glow.fullEmission;
+    const double peak = std::max(c.x, std::max(c.y, c.z));
+    return peak > 0.0 ? c * (glow.nits * perNit / peak) : Vec3(0, 0, 0);
+}
+}  // namespace
+
+void applyNightGlowRamp(World& world, Real ramp, double perNit) {
     const float rf = static_cast<float>(ramp);
     world.each<NightGlow, Renderable>(
         [&](Entity, NightGlow& glow, Renderable& r) {
             if (glow.appliedRamp == rf) return;
             glow.appliedRamp = rf;
-            r.material.emission = glow.fullEmission * ramp;
+            r.material.emission = glowEmission(glow, perNit) * ramp;
             if (glow.nightAlbedo < 1.0f)
                 r.material.albedo = glow.dayAlbedo * (1.0 - (1.0 - glow.nightAlbedo) * ramp);
         });
@@ -778,7 +811,7 @@ void applyNightGlowRamp(World& world, Real ramp) {
         [&](Entity, NightGlow& glow, InstanceGroup& g) {
             if (glow.appliedRamp == rf) return;
             glow.appliedRamp = rf;
-            g.material.emission = glow.fullEmission * ramp;
+            g.material.emission = glowEmission(glow, perNit) * ramp;
         });
 }
 
@@ -791,7 +824,7 @@ void applyNightGlowRamp(World& world, Real ramp) {
 void DayNightSystem::applyNightGlow(FrameContext& ctx) {
     const Real ramp = duskRamp(ctx.view.lighting.solarElevation);
     lastGlowRamp_ = ramp;
-    applyNightGlowRamp(ctx.world, ramp);
+    applyNightGlowRamp(ctx.world, ramp, glowPerNit_);
 }
 
 // BEACON FLASH: the aviation lamps on tall roofs. Their chunks carry NightGlow
@@ -816,7 +849,7 @@ void DayNightSystem::applyBeaconBlink(FrameContext& ctx) {
     ctx.world.each<NightGlow, BeaconBlink, Renderable>(
         [&](Entity, NightGlow& glow, BeaconBlink& b, Renderable& r) {
             const Real gate = ramp <= 0 ? Real(0) : beaconBlinkGate(blinkSeconds_, b.period, b.phase, b.duty);
-            r.material.emission = glow.fullEmission * (ramp * gate / adapt);
+            r.material.emission = glowEmission(glow, glowPerNit_) * (ramp * gate / adapt);
             if (b.baseOpacity < 1.0f) {
                 // The near tier: the translucent bulb and haze belong to the
                 // roof you are standing on; past ~20 m the sprite carries

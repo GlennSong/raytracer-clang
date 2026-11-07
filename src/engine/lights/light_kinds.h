@@ -17,6 +17,7 @@ struct LightKind {
     bool spot = false;
     Vec3 color{1, 1, 1};
     float intensity = 1.0f;
+    float candela = 0.0f;               // the real luminous intensity (cd); 0: none given (ADR-0369)
     float range = 25.0f;
     float inner = 0.3f, outer = 0.5f;   // a spot's cone (radians)
     Vec3 offset{0, 0, 0};               // from the emitter's point
@@ -40,6 +41,13 @@ struct LightPool {
 struct LightBook {
     std::vector<LightKind> kinds;
     std::vector<LightPool> pools;
+    float emissionScale = 1.0f;   // the glows' old emission into engine units under the physical sky (ADR-0369)
+    float cityGlowNits = 0.0f;    // the city's glow on the sky, low toward downtown (cd/m^2; ADR-0369)
+    float moonNits = 2500.0f;     // the full moon's disc above the air (cd/m^2)
+    // THE GLOWS (ADR-0369): a glowing surface's class and its real luminance (cd/m^2) under the physical sky
+    struct Glow { std::string name; float nits = 0.0f; };
+    std::vector<Glow> glows;
+    float glowNits(const std::string& name) const;   // 0: no such class
     int kind(const std::string& name) const;   // its index, -1 if none
     int pool(const std::string& name) const;
 };
@@ -50,6 +58,9 @@ void setLightBook(const LightBook& book);   // the scripting layer, a test
 // A kind's index by name, looked up once per call site: `static const int k = lightKindId("headlight");`. -1 (and a
 // warning, once) when lights.lua has no such kind: the emitter's lights are then skipped.
 int lightKindId(const char* name);
+// A glowing surface's real luminance (cd/m^2) by class (lights.lua glows); 0 when lights.lua has none (it keeps its old
+// emission scaled by emission_scale).
+float lightGlowNits(const char* name);
 
 }  // namespace engine
 
