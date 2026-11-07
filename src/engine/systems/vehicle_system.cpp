@@ -9,6 +9,7 @@
 #include "../vehicle_steering.h"
 
 #include "../vehicle_lamps.h"
+#include "../lights/light_kinds.h"   // lightKindId: the headlight kind (ADR-0362)
 #include "../vehicle_audio.h"
 #include "../audio/sfx.h"
 #include "../particles.h"
@@ -461,16 +462,11 @@ void VehicleSystem::driveVehicles(FrameContext& ctx) {
 
 void VehicleSystem::writeBack(FrameContext& ctx) {
     PhysicsWorld& pw = physicsSys.physicsWorld();
-    // Headlight cones (WS3): collect candidate SpotLight pairs from every
-    // vehicle whose headlights are lit this step, then keep the nearest few
-    // under the shared 32-light budget (player-driven car always first).
-    // Staged into lighting.vehicleSpots; RenderSystem merges on a copy.
-    struct ConeCand {
-        Real priority;   // 0 = player (wins), else camera distance
-        SpotLight left, right;
-    };
-    std::vector<ConeCand> cones;
-    const Vec3 camPos = ctx.view.camera.position;
+    // Headlight cones (WS3): every vehicle whose headlights are lit this step publishes its two lamps' beams on the
+    // light board (ADR-0362), the player's car marked as theirs; LightSystem picks which are lit (the headlights pool).
+    std::vector<LightCandidate>& cones = ctx.view.lights.channel(LightChannel::Vehicles);
+    cones.clear();
+    static const int headlightKind = lightKindId("headlight");
     ctx.world.each<Transform, PrevTransform, Vehicle>(
         [&](Entity e, Transform& t, PrevTransform& prev, Vehicle& v) {
             if (v.vehicleId == PhysicsWorld::INVALID_VEHICLE) return;
@@ -574,26 +570,21 @@ void VehicleSystem::writeBack(FrameContext& ctx) {
             // lands ahead of the bumper. Unshadowed (sun-only shadow maps) —
             // cones leak through walls; accepted v1, noted in the debt row.
             if (lit.head) {
-                ConeCand cand;
-                cand.priority = v.driver.valid()
-                                    ? Real(0)
-                                    : (t.position - camPos).length();
                 const Vec3 fwd = t.orientation.rotate(Vec3(0, 0, 1));
                 const Vec3 beamDir = normalize(fwd + Vec3(0, -0.14, 0));
-                const Vec3 warm(1.0, 0.95, 0.82);
                 int frontSeen = 0;
                 for (const Vehicle::Lamp& lamp : v.lamps) {
                     if (!lamp.front) continue;
-                    const Vec3 at =
-                        t.position + t.orientation.rotate(lamp.local) +
-                        fwd * 0.25;
-                    SpotLight beam(at, beamDir, warm, /*intensity=*/22.0f,
-                                   /*inner=*/0.32f, /*outer=*/0.55f);
-                    beam.range = 45.0f;
-                    (frontSeen == 0 ? cand.left : cand.right) = beam;
+                    LightCandidate beam;
+                    beam.kind = headlightKind;
+                    beam.position = t.position + t.orientation.rotate(lamp.local) + fwd * 0.25;
+                    beam.direction = beamDir;
+                    beam.group = e.index + 1u;   // the car's lamps are picked together
+                    beam.mine = v.driver.valid();
+                    cones.push_back(beam);
                     if (++frontSeen == 2) break;
                 }
-                if (frontSeen == 2) cones.push_back(std::move(cand));
+                if (frontSeen == 1) cones.pop_back();   // (a car shows both beams or none, as before)
             }
 
             // Driver capsule: in the seat when occupied — by a seated PLAYER or by
@@ -626,23 +617,6 @@ void VehicleSystem::writeBack(FrameContext& ctx) {
             }
         });
 
-    // Publish the nearest headlight cones (player first: priority 0). Three
-    // vehicles' worth = 6 spot slots — with the sun/moon, 14 street lamps and
-    // authored lights that stays comfortably inside the 32-light array.
-    auto& spots = ctx.view.lighting.vehicleSpots;
-    spots.clear();
-    constexpr size_t kMaxConeVehicles = 3;
-    if (cones.size() > kMaxConeVehicles) {
-        std::nth_element(cones.begin(), cones.begin() + kMaxConeVehicles,
-                         cones.end(), [](const ConeCand& a, const ConeCand& b) {
-                             return a.priority < b.priority;
-                         });
-        cones.resize(kMaxConeVehicles);
-    }
-    for (const ConeCand& c : cones) {
-        spots.push_back(c.left);
-        spots.push_back(c.right);
-    }
 }
 
 void VehicleSystem::handleEnterExit(FrameContext& ctx) {

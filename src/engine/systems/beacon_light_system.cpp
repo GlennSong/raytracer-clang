@@ -3,6 +3,7 @@
 
 #include "../components.h"
 #include "../vehicle_lamps.h"   // duskRamp, beaconBlinkGate, beaconCellPhase
+#include "../lights/light_kinds.h"   // lightKindId (ADR-0362)
 #include "../procgen/city/polygon.h"   // pointInPolygon
 #include "../world.h"
 #include "../../log.h"
@@ -95,7 +96,8 @@ void BeaconLightSystem::ensureLampGroup(FrameContext& ctx) {
 
 void BeaconLightSystem::update(FrameContext& ctx) {
     auto& lighting = ctx.view.lighting;
-    lighting.beaconPoints.clear();
+    std::vector<LightCandidate>& beaconLights = ctx.view.lights.channel(LightChannel::Beacons);
+    beaconLights.clear();
     // The street lamps' far sprites (gathered once from the furniture).
     {
         std::size_t heads = 0;
@@ -172,12 +174,10 @@ void BeaconLightSystem::update(FrameContext& ctx) {
 
     // The tier distances: the level's light LOD block, else the defaults.
     Real spriteIn = DEFAULT_SPRITE_IN, lightM = DEFAULT_LIGHT_M, lightRange = DEFAULT_LIGHT_RANGE;
-    int lightCount = DEFAULT_LIGHT_COUNT;
     ctx.world.each<CitySimConfig>([&](Entity, CitySimConfig& c) {
         spriteIn = c.lightSpriteIn;
         lightM = c.lightRadius;
         lightRange = c.lightRange;
-        lightCount = c.lightCount;
     });
     const Real spriteFade0 = spriteIn * 0.4;   // fades in over the last 60 % of spriteIn
     const Real ramp = duskRamp(lighting.solarElevation);
@@ -231,13 +231,11 @@ void BeaconLightSystem::update(FrameContext& ctx) {
         g->transforms.push_back(m);
     }
 
-    // The near tier: red point lights on the closest lamps.
-    std::sort(order_.begin(), order_.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
-    int lights = 0;
+    // The near tier: the lamps in reach published as red point lights (ADR-0362: LightSystem's beacons pool, which
+    // the level's lightCount / lightRadius set, picks the nearest and fades them at its edge).
+    static const int beaconKind = lightKindId("beacon");
     for (const auto& [d2, i] : order_) {
-        if (lights >= lightCount) break;
-        const Real d = std::sqrt(d2);
-        if (d > lightM) break;
+        if (d2 > lightM * lightM) continue;
         const Lamp& l = lamps_[i];
         // Point lights cast no shadows: a roof lamp lights the top floor
         // under it (Glenn's walk, 2026-09-14: "the red lights shining into
@@ -251,21 +249,21 @@ void BeaconLightSystem::update(FrameContext& ctx) {
                 continue;
         }
         const Real gate = beaconBlinkGate(seconds, l.period, l.phase);
-        Real fade = (lightM - d) / (0.25 * lightM);
-        fade = std::min(Real(1), std::max(Real(0), fade));
         // A tight pool: the shader's window is (1 - (d/range)^4)^2 / d^2, so a
         // short range with the intensity to match reads as a sharp red disc
         // instead of a fuzzy wash (Glenn, 2026-09-14).
         const Real k = (lightRange * lightRange) / (DEFAULT_LIGHT_RANGE * DEFAULT_LIGHT_RANGE);
-        PointLight pl(l.pos, Vec3(1.0, 0.06, 0.03), static_cast<float>(64.0 * k * ramp * gate * fade));
+        LightCandidate pl;
+        pl.kind = beaconKind;
+        pl.position = l.pos;
+        pl.scale = static_cast<float>(k * gate);
         pl.range = static_cast<float>(lightRange);
-        lighting.beaconPoints.push_back(pl);
-        ++lights;
+        beaconLights.push_back(pl);
     }
 }
 
 void BeaconLightSystem::onStop(FrameContext& ctx) {
-    ctx.view.lighting.beaconPoints.clear();
+    ctx.view.lights.channel(LightChannel::Beacons).clear();
     if (haveLampGroup_ && ctx.world.alive(lampGroup_)) ctx.world.destroy(lampGroup_);
     haveLampGroup_ = false;
     streetLamps_.clear();

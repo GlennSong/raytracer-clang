@@ -1,6 +1,5 @@
 #include "render_system.h"
 #include "../components.h"
-#include "../vehicle_lamps.h"   // duskRamp: street lights share the headlight boundary
 #include "../../profile.h"
 #include "../occlusion.h"
 
@@ -52,7 +51,6 @@ void RenderSystem::onStart(FrameContext& ctx) {
     // Adopt the level's exposure (set by the level loader from JSON) rather than
     // forcing our own value — other owners (level JSON, the ImGui slider) drive it.
     exposure = ctx.view.lighting.exposure;
-    onLampLights_ = ctx.events.listen<LampLightsRequest>([this](const LampLightsRequest& r) { lampLights_ = r.on; });
 }
 
 void tierFadeBand(RenderMaterial& m, double dist, float share, bool coming) {
@@ -84,149 +82,15 @@ void RenderSystem::update(FrameContext& ctx) {
 void RenderSystem::render(FrameContext& ctx) {
     RT_PROFILE_ZONE_NAMED("renderSubmit");
     ctx.renderer.setCamera(ctx.view.camera);
-    // Street lamps become REAL point lights near the camera (device: "working
-    // street lights"): the loader's StreetFurniture carries every bulb
-    // position; each frame the nearest few join the light list on a COPY, so
-    // level-authored point lights are never displaced or accumulated into.
-    // NIGHT-GATED (WS3): the dusk ramp fades them in as the sun sinks — they
-    // ran 24/7 before, invisible against daylight and stealing 14 of the 32
-    // light slots at noon for nothing.
-    {
-        // `overlay lamplights off` kills the lamp POINT LIGHTS while leaving
-        // their emissive heads lit — the live A/B for night artifacts.
-        const Real dusk =
-            lampLights_ ? duskRamp(ctx.view.lighting.solarElevation) : Real(0);
-        bool lit = false;
-        SceneLighting withLamps;
-        // Headlight cones staged by VehicleSystem merge on the same copy —
-        // they exist whenever headlights are lit (dusk by the shared ramp, or
-        // the player's manual L toggle at noon).
-        const auto& coneSpots = ctx.view.lighting.vehicleSpots;
-        if (dusk > 0.01) {
-            // The lamps' near tier from the level's light LOD block (defaults:
-            // 20 lights within 160 m, range 34). 20 of the 32 slots: more lamps
-            // only brighten the street if more of them are REAL lights, and 14
-            // ran out within half a block. Leaves the sun/moon, 6 headlight
-            // cones and authored lights room (the renderer loops every light
-            // per fragment, so this is the honest cost knob for night).
-            int kMaxLampLights = 20;
-            Real lampRadius = 160.0, lampRange = 34.0;
-            ctx.world.each<CitySimConfig>([&](Entity, CitySimConfig& c) {
-                kMaxLampLights = std::max(1, c.lampLightCount);
-                lampRadius = std::max(Real(10), Real(c.lampLightRadius));
-                lampRange = std::max(Real(2), Real(c.lampLightRange));
-            });
-            // RT_LAMP_LIGHTS / RT_LAMP_RADIUS: the level's count and reach overridden (the clustered lights' trial: a
-            // thousand real lamps, RT_CLUSTERED=1 -- without it the renderer still keeps 32)
-            static const int envLamps = [] { const char* e = std::getenv("RT_LAMP_LIGHTS"); return e ? std::atoi(e) : 0; }();
-            static const double envRadius = [] { const char* e = std::getenv("RT_LAMP_RADIUS"); return e ? std::atof(e) : 0.0; }();
-            if (envLamps > 0) kMaxLampLights = envLamps;
-            if (envRadius > 0) lampRadius = envRadius;
-            // the candidates: every street lamp's bulb (the first StreetFurniture's), and every station's canopy
-            // lights (RailStop::lamps -- cooler, a shorter pool under a roof)
-            struct Bulb { Real d2; Vec3 at; bool station; };
-            std::vector<Bulb> nearBulbs;
-            const Vec3 eye = ctx.view.camera.position;
-            const Real maxDist2 = lampRadius * lampRadius;   // beyond this a bulb is the sprite tier's
-            bool streetSeen = false;
-            ctx.world.each<StreetFurniture>([&](Entity, StreetFurniture& f) {
-                if (f.lampHeads.empty() || streetSeen) return;
-                streetSeen = true;
-                for (const Vec3& h : f.lampHeads) {
-                    const Real d2 = (h - eye).lengthSquared();
-                    if (d2 < maxDist2) nearBulbs.push_back({d2, h, false});
-                }
-            });
-            ctx.world.each<RailTracks>([&](Entity, RailTracks& rt) {
-                for (const RailTrack& t : rt.tracks)
-                    for (const RailStop& st : t.stops)
-                        for (const Vec3& h : st.lamps) {
-                            const Real d2 = (h - eye).lengthSquared();
-                            if (d2 < maxDist2) nearBulbs.push_back({d2, h, true});
-                        }
-            });
-            if (!nearBulbs.empty()) {
-                if (static_cast<int>(nearBulbs.size()) > kMaxLampLights) {
-                    std::nth_element(nearBulbs.begin(),
-                                     nearBulbs.begin() + kMaxLampLights,
-                                     nearBulbs.end(),
-                                     [](const Bulb& a, const Bulb& b) {
-                                         return a.d2 < b.d2;
-                                     });
-                    nearBulbs.resize(kMaxLampLights);
-                }
-                // FADE AT THE BOUNDARY. The set is a hard "nearest N within
-                // R" pick, so driving made lamps SNAP to full intensity the
-                // moment they entered it and vanish when they left — the
-                // "lights ahead turn on and it doesn't look seamless". Fade
-                // each lamp out toward whichever boundary it will cross
-                // first: the radius, or (when the count cap is binding) the
-                // distance of the farthest lamp currently selected, which is
-                // the edge that actually moves as the camera drives.
-                Real cutoff = lampRadius;
-                if (static_cast<int>(nearBulbs.size()) >= kMaxLampLights) {
-                    Real farthest = 0;
-                    for (const Bulb& bl : nearBulbs)
-                        farthest = std::max(farthest, bl.d2);
-                    cutoff = std::min(cutoff, std::sqrt(farthest));
-                }
-                withLamps = ctx.view.lighting;
-                // Range 34 against 26 m spacing, so consecutive pools MEET —
-                // at 30/34 they fell short and the pavement went dark between
-                // every pair of lamps. Intensity rides the dusk ramp so lamps
-                // warm up through twilight instead of popping.
-                for (const Bulb& bl : nearBulbs) {
-                    // 1 at the near end, easing to 0 across the last quarter
-                    // of the reach, so a lamp joins and leaves the set
-                    // invisibly instead of popping.
-                    const Real d = std::sqrt(bl.d2);
-                    const Real edge = std::max(Real(1), cutoff);
-                    Real fade = (edge - d) / (0.25 * edge);
-                    fade = std::min(Real(1), std::max(Real(0), fade));
-                    fade = fade * fade * (3.0 - 2.0 * fade);   // smoothstep
-                    if (bl.station) {   // a canopy fitting: cool white, a pool down the platform (12 m apart)
-                        PointLight lamp(bl.at, Vec3(0.92, 0.96, 1.0), 26.0f * static_cast<float>(dusk * fade));
-                        lamp.range = 16.0f;
-                        withLamps.pointLights.push_back(lamp);
-                        continue;
-                    }
-                    PointLight lamp(bl.at - Vec3(0, 0.35, 0),
-                                    Vec3(1.0, 0.82, 0.55),
-                                    48.0f * static_cast<float>(dusk * fade));
-                    lamp.range = static_cast<float>(lampRange);
-                    withLamps.pointLights.push_back(lamp);
-                }
-                lit = true;
-            }
-        }
-        if (!coneSpots.empty()) {
-            if (!lit) { withLamps = ctx.view.lighting; lit = true; }
-            for (const SpotLight& s : coneSpots)
-                withLamps.spotLights.push_back(s);
-        }
-        if (!ctx.view.lighting.toolSpots.empty()) {   // the flashlight (FlashlightSystem)
-            if (!lit) { withLamps = ctx.view.lighting; lit = true; }
-            for (const SpotLight& s : ctx.view.lighting.toolSpots)
-                withLamps.spotLights.push_back(s);
-        }
-        // Interior room lights (ADR-0080), staged by BuildingInteriorSystem
-        // for the streamed interior around the player — always on, not
-        // dusk-gated: a roofed room is sun-blind at noon too.
-        const auto& roomPoints = ctx.view.lighting.interiorPoints;
-        if (!roomPoints.empty()) {
-            if (!lit) { withLamps = ctx.view.lighting; lit = true; }
-            for (const PointLight& p : roomPoints)
-                withLamps.pointLights.push_back(p);
-        }
-        // Aviation-beacon lights (BeaconLightSystem): the nearest few lamps,
-        // red, flashing — the near tier's light on the roof and the HVACs.
-        const auto& beaconPoints = ctx.view.lighting.beaconPoints;
-        if (!beaconPoints.empty()) {
-            if (!lit) { withLamps = ctx.view.lighting; lit = true; }
-            for (const PointLight& p : beaconPoints)
-                withLamps.pointLights.push_back(p);
-        }
-        ctx.renderer.setLights(lit ? withLamps : ctx.view.lighting);
+    // THE FRAME'S LIGHTS (ADR-0362): the level's own, then what LightSystem picked from everything that gives off
+    // light (lamps, rooms, beacons, headlights, the flashlight), on a COPY so the level's are never displaced
+    if (ctx.view.lights.points.empty() && ctx.view.lights.spots.empty()) {
+        ctx.renderer.setLights(ctx.view.lighting);
+    } else {
+        SceneLighting withLights = ctx.view.lighting;
+        withLights.pointLights.insert(withLights.pointLights.end(), ctx.view.lights.points.begin(), ctx.view.lights.points.end());
+        withLights.spotLights.insert(withLights.spotLights.end(), ctx.view.lights.spots.begin(), ctx.view.lights.spots.end());
+        ctx.renderer.setLights(withLights);
     }
 
     const auto& cam = ctx.view.camera;

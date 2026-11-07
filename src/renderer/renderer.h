@@ -595,25 +595,8 @@ struct SceneLighting {
     // no cycle is staged. -1 = none staged.
     float clockHours = -1.0f;
     float clockHoursPerSecond = 0.0f;
-    // Transient headlight cones (WS3): VehicleSystem clears and refills this
-    // every fixed step for lit vehicles nearest the camera (player first);
-    // RenderSystem merges them into the frame's lights ON A COPY, like the
-    // street lamps, so authored spot lights are never displaced. Never saved.
-    std::vector<SpotLight> vehicleSpots;
-    // Spots a hand-held TOOL casts (the flashlight): owned and rebuilt every frame by the tool's own
-    // render() -- separate from vehicleSpots, which VehicleSystem rebuilds only in fixed steps (a frame
-    // with none kept the old list, and a beam appended to it every frame stacked up)
-    std::vector<SpotLight> toolSpots;
-    // Transient interior room lights (ADR-0080): BuildingInteriorSystem
-    // clears and refills this every fixed step with warm ceiling lights for
-    // the streamed interior nearest the player; RenderSystem merges them into
-    // the frame's lights ON A COPY, like the street lamps, so authored
-    // lights are never displaced. Always on (interiors are sun-blind by
-    // day too). Never saved.
-    std::vector<PointLight> interiorPoints;
-    // Aviation-beacon lights (BeaconLightSystem, every frame): the nearest
-    // few lamps as red points, flashing. Merged like interiorPoints.
-    std::vector<PointLight> beaconPoints;
+    // (the lights systems give off -- headlights, lamps, rooms, beacons, the flashlight -- are published on the
+    // engine's light board and picked by LightSystem, ADR-0362; these are the level's own)
     // THE VIEWER'S ENCLOSURE (AudioSystem, every frame; the same box the walls and cabins muffle sound by): the
     // cabin they ride in, else the building they stand in, as a box -- centre, its horizontal axis u, half
     // extents (along u, across it, up). Glass inside it is the viewer's own window and reflects the room, not

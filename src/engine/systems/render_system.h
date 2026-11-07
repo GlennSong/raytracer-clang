@@ -40,7 +40,7 @@ void tierFadeBand(RenderMaterial& m, double dist, float share, bool coming);
 // Application brackets render() with begin/endFrame, so this only emits draws.
 // LampLightsRequest: the street lamps' POINT LIGHTS on or off; their emissive heads stay lit either way, so it is
 // the A/B for whether a night artifact is the lights or something they merely reveal. The socket's
-// `overlay lamplights on|off`; RenderSystem hears it.
+// `overlay lamplights on|off`; LightSystem hears it (ADR-0362).
 struct LampLightsRequest {
     bool on = true;
 };
@@ -72,8 +72,6 @@ private:
     std::vector<TierFade> tierFade_;
     uint64_t frameNo_ = 0;
     std::chrono::steady_clock::time_point lastRender_;
-    bool lampLights_ = true;   // LampLightsRequest
-    EventBus::Subscription onLampLights_;
 };
 
 

@@ -2,6 +2,7 @@
 
 #include "physics_system.h"
 #include "../components.h"
+#include "../lights/light_kinds.h"   // lightKindId (ADR-0362)
 #include "../../log.h"
 #include "../../profile.h"
 #include "../world.h"
@@ -58,7 +59,8 @@ void BuildingInteriorSystem::fixedUpdate(FrameContext& ctx) {
     // NEAREST the player — one per storey, capped — staged transiently for
     // RenderSystem to merge (the street-lamp pattern). The shader already
     // loops point lights; interiors were the one place with none.
-    ctx.view.lighting.interiorPoints.clear();
+    std::vector<LightCandidate>& rooms = ctx.view.lights.channel(LightChannel::Rooms);
+    rooms.clear();
     ctx.view.lighting.viewerCeilingY = 0;
     if (!resident_.empty()) {
         const CityBuildings* cb = nullptr;
@@ -100,10 +102,12 @@ void BuildingInteriorSystem::fixedUpdate(FrameContext& ctx) {
                 const int lightCount = std::min(nSt, kFrom + 4);
                 for (int k = kFrom; k < lightCount; ++k) {
                     const StoreyPlan& sp = storeys[static_cast<std::size_t>(k)];
-                    PointLight pl(Vec3(c.x, r.baseY + sp.y0 + sp.h - 0.5, c.y),
-                                  Vec3(1.0, 0.88, 0.70), 22.0f);
+                    static const int roomKind = lightKindId("room");   // lights.lua (ADR-0362)
+                    LightCandidate pl;
+                    pl.kind = roomKind;
+                    pl.position = Vec3(c.x, r.baseY + sp.y0 + sp.h - 0.5, c.y);
                     pl.range = static_cast<float>(ext * 2.0 + sp.h);
-                    ctx.view.lighting.interiorPoints.push_back(pl);
+                    rooms.push_back(pl);
                 }
             }
         }
@@ -463,7 +467,7 @@ void BuildingInteriorSystem::release(World& world, PhysicsWorld* phys,
 }
 
 void BuildingInteriorSystem::onStop(FrameContext& ctx) {
-    ctx.view.lighting.interiorPoints.clear();
+    ctx.view.lights.channel(LightChannel::Rooms).clear();
     PhysicsWorld* phys = physics_ ? &physics_->physicsWorld() : nullptr;
     std::vector<std::size_t> keys;
     for (const auto& kv : resident_) keys.push_back(kv.first);

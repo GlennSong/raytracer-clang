@@ -10,6 +10,7 @@
 #include "input/player_input.h"
 #include "xr/xr_state.h"
 #include "../renderer/renderer.h"
+#include "lights/light_board.h"
 #include "../renderer/window.h"
 #include "../renderer/settings.h"
 #include "../job_system.h"
@@ -44,6 +45,9 @@ struct StateTransition {
 struct RenderView {
     CameraState camera;
     SceneLighting lighting;
+    // WHERE THE LIGHTS ARE (ADR-0362): the producers publish on their channels, LightSystem picks the frame's
+    // lights into it, RenderSystem draws with them
+    LightBoard lights;
     // The placed camera the view is rendered through, if any (invalid when the
     // editor controllers drive it). Lets the render system hide that entity's
     // gizmo — you don't draw the camera you are inside of.

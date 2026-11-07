@@ -248,6 +248,9 @@ add_library(engine_core STATIC
     src/engine/audio/sfx_motion.cpp
     src/engine/systems/audio_system.cpp
     src/engine/systems/render_system.cpp
+    src/engine/systems/light_system.cpp
+    src/engine/lights/light_kinds.cpp
+    src/engine/lights/light_picker.cpp
     src/engine/systems/xr_camera_system.cpp
     src/engine/systems/debug_draw_system.cpp
     src/engine/systems/dev_control_system.cpp
@@ -434,6 +437,7 @@ if(RT_ENABLE_SCRIPTING)
         src/engine/scripting/vehicle_spec.cpp
         src/engine/scripting/carry_items.cpp
         src/engine/scripting/trades_lua.cpp
+        src/engine/scripting/lights_lua.cpp
         src/engine/scripting/street_props_spec.cpp
         src/engine/scripting/furniture_library_lua.cpp
         src/engine/scripting/furniture_models_lua.cpp
@@ -761,6 +765,7 @@ add_executable(run_tests
     tests/test_carry_stow.cpp
     tests/test_camera_frame.cpp
     tests/test_trades.cpp
+    tests/test_lights.cpp
     tests/test_light_clusters.cpp
     tests/test_danger_dodge.cpp
     tests/test_mesh_surfaces.cpp

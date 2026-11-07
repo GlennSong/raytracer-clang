@@ -12,6 +12,7 @@
 #include "../systems/residency_system.h"
 #include "../systems/grass_system.h"
 #include "../systems/render_system.h"
+#include "../systems/light_system.h"
 #ifdef __EMSCRIPTEN__
 #include "../systems/day_night_system.h"
 #endif
@@ -36,6 +37,7 @@ EditorState::EditorState(Window& window, Renderer& renderer,
     addSystem<GrassSystem>();
     addSystem<ResidencySystem>();    // what is on the GPU, by where the camera is (ADR-0095)
     addSystem<TerrainLodSystem>();   // CDLOD terrain draws (ADR-0036)
+    addSystem<LightSystem>();        // the street lamps (ADR-0362)
     addSystem<RenderSystem>();
     addSystem<CameraPanelSystem>(camSys);
     addSystem<PlanetLabSystem>();     // Debug > Planet Lab (RT_ENABLE_IMGUI)

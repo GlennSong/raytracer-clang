@@ -22,11 +22,10 @@ namespace engine {
 //         (an instance group has one opacity), and it fades OUT inside
 //         NEAR_FADE1 m, where the grown bulb and haze spheres take over
 //         (their fade lives in DayNightSystem::applyBeaconBlink).
-//   NEAR  the nearest MAX_LIGHTS lamps within LIGHT_M become red point
-//         lights, flashing with their sprite, so the roof, the parapet and
-//         the HVAC casings pick up the red. Staged into
-//         lighting.beaconPoints; RenderSystem merges them under the shader's
-//         light cap.
+//   NEAR  the lamps within LIGHT_M are published as red point lights
+//         (the light board's beacon channel, ADR-0362), flashing with their
+//         sprite, so the roof, the parapet and the HVAC casings pick up the
+//         red; LightSystem's beacons pool picks the nearest.
 //
 // The flash phase comes from beaconCellPhase on the lamp's 24 m cell, the
 // same hash the loader gives the grown beacon chunks, so sprite, spheres,
@@ -45,7 +44,6 @@ public:
     static constexpr Real DEFAULT_SPRITE_IN = 20.0;
     static constexpr Real DEFAULT_LIGHT_M = 60.0;
     static constexpr Real DEFAULT_LIGHT_RANGE = 10.0;
-    static constexpr int DEFAULT_LIGHT_COUNT = 6;
 
     std::size_t lampCount() const { return lamps_.size(); }
     std::size_t streetLampCount() const { return streetLamps_.size(); }

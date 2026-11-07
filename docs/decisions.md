@@ -16512,3 +16512,74 @@ darkens direct light and emission too), or if TAA's velocity target makes a G-bu
 **Owed (phase 1 proper).** Binning on the GPU (a compute pass); the producers past their caps (every car's head and
 tail lights, signs, shop fronts, lit windows as far-faded points); the 32-slot loops onto the lists; spot/point shadows
 (an atlas of 8); Metal and WebGPU; turning it on by default, with the level suite.
+
+## ADR-0362 — One light system: lights are data, emitters publish, one picker chooses
+
+**Context.** Glenn, 2026-11-07, on the clustered prototype (ADR-0361) and a trial that lit city traffic's lamps: "are
+we patching things because it's a quick win instead of doing the right thing which is harder but better?" ... "Why are
+two separate places picking lights? Should this be a unified system?" Real lights were chosen in seven places, each
+with its own nearest-N cap and fade:
+- street lamps and station canopies: RenderSystem's merge, 20 within 160 m, smoothstep edge fade;
+- headlight cones: VehicleSystem, the 3 nearest lit cars, the player's first, no fade;
+- room lights: BuildingInteriorSystem, one per storey for 4 storeys;
+- elevator cab lights: ElevatorSystem, appended to the room lights' list, which depends on the systems' order;
+- beacons: BeaconLightSystem, 6 within 60 m, linear fade;
+- the flashlight: FlashlightSystem;
+- the level's authored lights.
+
+Every light's colour, brightness, reach and cone was a C++ constant. RenderSystem concatenated the lists and the
+renderer kept the first 32. Glenn: "What doing it properly looks like: one light system. Yeah I think this makes a lot
+of sense." The plan is `~/.claude/plans/light-system.md`; this ADR is its phase 1.
+
+**Decision.**
+- **Lights are data: `assets/scripts/lights.lua`.**
+  - `kinds`: per kind, the type (point or spot), colour, intensity, range, cone, an offset from the emitter's point,
+    whether it rides the dusk ramp, and its pool.
+  - `pools`: per pool, how many real lights it may have, within what distance, whether the set fades at its moving
+    edge, and whether it picks emitters in groups (a car's two headlights go together).
+  - `engine/lights/light_kinds.h`: `LightBook`, read once by `ensureLightsLoaded` (`scripting/lights_lua.cpp`). There
+    is no C++ copy of the catalogue: without the file, one plain white point kind stands and it warns.
+- **Emitters publish candidates; they don't pick.**
+  - `LightCandidate`: kind, position, direction, a scale (blink, flicker), an optional range override, a group, and
+    flags (`Mine`: the player's own lights, always first).
+  - Each producer owns one channel of `SceneLighting::emitters` (`LightBoard`) and replaces it at its own cadence:
+    VehicleSystem per fixed step, the flashlight per frame, rooms and cabs per step (two channels now, so there is no
+    order dependency).
+  - Static emitters (street lamps, station canopy lamps) are read by the light system itself from `StreetFurniture`
+    and `RailTracks`. A spatial grid over them is phase 2.
+- **One picker: `engine/lights/light_picker.h` `pickLights`** (pure, tested). Per pool:
+  - `Mine` candidates first, then the nearest groups within `within`, up to `count`;
+  - the edge fade: smoothstep over the last quarter of the reach, toward whichever edge comes first, the pool's
+    distance or the farthest light picked when the count is binding (the street lamps' rule since WS3, now every
+    pool's);
+  - the dusk ramp for kinds that ride it.
+- **`LightSystem`** runs in `render()` just before RenderSystem. It gathers the board and the static emitters, picks,
+  and writes the frame's lights. RenderSystem hands them to the renderer; its merge is deleted, as are VehicleSystem's
+  3-car cut and BeaconLightSystem's near tier.
+- **The level's light block still sets the pools:**
+  - `CitySimConfig` `lampLightCount` / `lampLightRadius` / `lampLightRange` set the street pool;
+  - `lightCount` / `lightRadius` / `lightRange` set the beacon pool;
+  - `RT_LAMP_LIGHTS` / `RT_LAMP_RADIUS` remain the trial's override of the street pool until phase 2.
+- **Order out:** the same as before (authored, street, rooms and cabs, beacons; then authored spots, headlights,
+  flashlight), so the forward renderer's 32 keep the same lights. Phase 2 orders by importance.
+
+**What changes on screen.** Nothing by design, except two things:
+- the beacons' red pools now fade with the shared smoothstep instead of linearly over the last 15 m of their 60 m;
+- a light that comes out dark (the street set's farthest lamp sits exactly on its moving edge) is left out instead of
+  taking one of the forward renderer's 32 slots: river_town's street view went from 23 lights to 22.
+
+**Proof** (river_town at 22:00, forward, the ADR-0361 poses, against shots from before):
+- street: mean difference 0.28 / 255, 0.97 % of pixels over 8;
+- towers: 0.62 / 255, 1.47 %.
+
+The differing pixels are things that move between two runs (palm fronds in the wind, beacon blinks, a tree's crown);
+the lit pavement and facades match.
+
+**Owed (the plan's later phases).**
+- phase 2: clustered by default, importance across pools, a grid over the static emitters, traffic's lamps from their
+  own markers;
+- phase 3: GPU binning;
+- phase 4: the far tier (sprites from `lights.lua`; BeaconLightSystem keeps only the blink);
+- phase 5: a shadow atlas;
+- phase 5b: interiors (lights from the fittings, room-bounded, indoor sky light, sun through glass);
+- phase 6: Metal and WebGPU.
