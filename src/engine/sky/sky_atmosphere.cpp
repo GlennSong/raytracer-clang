@@ -252,6 +252,44 @@ Vec3 atmosphereSkyIrradiance(const AtmosphereTables& t, double height, const Vec
     return sum * (kPi / samples);   // E = pi * the cosine-weighted mean radiance
 }
 
+namespace {
+void shBasis(const Vec3& d, double y[9]) {
+    y[0] = 0.282095;
+    y[1] = 0.488603 * d.y;
+    y[2] = 0.488603 * d.z;
+    y[3] = 0.488603 * d.x;
+    y[4] = 1.092548 * d.x * d.y;
+    y[5] = 1.092548 * d.y * d.z;
+    y[6] = 0.315392 * (3.0 * d.z * d.z - 1.0);
+    y[7] = 1.092548 * d.x * d.z;
+    y[8] = 0.546274 * (d.x * d.x - d.y * d.y);
+}
+}  // namespace
+
+void atmosphereIrradianceSH(const AtmosphereTables& t, double height, const Vec3& light, double topUnits, Vec3 out[9],
+                            int samples) {
+    for (int k = 0; k < 9; ++k) out[k] = Vec3(0, 0, 0);
+    double y[9];
+    for (int i = 0; i < samples; ++i) {
+        const Vec3 d = fibonacciDir(i, samples);
+        const Vec3 L = atmosphereSkyRadiance(t, height, d, light, 20) * topUnits;
+        shBasis(d, y);
+        for (int k = 0; k < 9; ++k) out[k] = out[k] + L * y[k];
+    }
+    // the radiance's coefficients (4 pi / N each), convolved with the clamped cosine (pi, 2 pi / 3, pi / 4 by band) and
+    // over pi: the radiance-like E / pi the shader's ambient takes
+    const double band[9] = {1.0, 2.0 / 3.0, 2.0 / 3.0, 2.0 / 3.0, 0.25, 0.25, 0.25, 0.25, 0.25};
+    for (int k = 0; k < 9; ++k) out[k] = out[k] * (4.0 * kPi / samples * band[k]);
+}
+
+Vec3 evalIrradianceSH(const Vec3 sh[9], const Vec3& n) {
+    double y[9];
+    shBasis(n, y);
+    Vec3 e(0, 0, 0);
+    for (int k = 0; k < 9; ++k) e = e + sh[k] * y[k];
+    return Vec3(std::max(0.0, e.x), std::max(0.0, e.y), std::max(0.0, e.z));
+}
+
 SkyReading readSky(const AtmosphereTables& t, double height, const Vec3& light, double topUnits) {
     SkyReading s;
     const double r = t.atm.groundRadius + std::max(height, 0.5);

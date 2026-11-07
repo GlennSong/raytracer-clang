@@ -679,12 +679,14 @@ void DayNightSystem::applyPhysicalSky(FrameContext& ctx, const DayNightState& st
     const float moonTop = static_cast<float>(kFullMoonTopLux * st.moonIllumination / kLuxPerUnit);
     if ((st.sunDirection - readSunDir_).length() > 0.002 || std::fabs(height - readHeight_) > 50.0) {
         sunReading_ = readSky(skyTables_, height, st.sunDirection, sunTop);
+        atmosphereIrradianceSH(skyTables_, height, st.sunDirection, sunTop, sunSH_);
         readSunDir_ = st.sunDirection;
         readHeight_ = height;
         readMoonDir_ = Vec3(0, -2, 0);   // (and the moon again, at this height)
     }
     if ((st.moonDirection - readMoonDir_).length() > 0.002 || std::fabs(moonTop - readMoonTop_) > 1e-9f) {
         moonReading_ = readSky(skyTables_, height, st.moonDirection, moonTop);
+        atmosphereIrradianceSH(skyTables_, height, st.moonDirection, moonTop, moonSH_, 64);
         readMoonDir_ = st.moonDirection;
         readMoonTop_ = moonTop;
     }
@@ -727,6 +729,14 @@ void DayNightSystem::applyPhysicalSky(FrameContext& ctx, const DayNightState& st
     f.sunDisc = lit.sky.sunDiscIntensity > 0.0f ? 1.0f : 0.0f;
     f.celestialScale = 1.0e-5f;   // (the stars and the moon's disc were tuned at the old night exposure; ADR-0367)
     f.emissionScale = lightBook().emissionScale;   // (ADR-0369)
+    for (int k = 0; k < 9; ++k) f.irradianceSH[k] = (sunSH_[k] + moonSH_[k]) * static_cast<double>(lit.ambientMultiplier);
+    {
+        static int dbg = 0;
+        if (std::getenv("RT_SKY_DEBUG") && ++dbg % 120 == 1)
+            LOG_INFO << "[sky] sh0 " << f.irradianceSH[0].x << " " << f.irradianceSH[0].y << " " << f.irradianceSH[0].z << " sh1 "
+                     << f.irradianceSH[1].y << " amb " << lit.ambientMultiplier << " exposure " << lit.exposure << " light "
+                     << lit.sun.intensity;
+    }
     glowPerNit_ = 1.0 / (kLuxPerUnit * std::max(1e-6f, f.emissionScale));   // (the shader multiplies by the scale)
     // THE MOON'S DISC at its real luminance through the air, and the CITY'S GLOW on the sky (sky.frag's shapes peak at
     // 1 x the disc intensity and 0.06: ADR-0369)

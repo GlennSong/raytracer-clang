@@ -63,6 +63,14 @@ Vec3 atmosphereSkyRadiance(const AtmosphereTables& t, double height, const Vec3&
 // illuminance at the top.
 Vec3 atmosphereSkyIrradiance(const AtmosphereTables& t, double height, const Vec3& normal, const Vec3& light, int samples = 64);
 
+// THE SKY'S LIGHT ON A SURFACE OF ANY FACING (ADR-0371), as nine spherical-harmonic coefficients (order 2, the basis
+// sky_physical.glsl skyIrradianceSH evaluates, Y up): E(n) / pi, in engine units for a light of `topUnits` -- the
+// diffuse fill a surface facing n takes from the whole sky, dome and ground bounce together (Ramamoorthi-Hanrahan).
+void atmosphereIrradianceSH(const AtmosphereTables& t, double height, const Vec3& light, double topUnits, Vec3 out[9],
+                            int samples = 192);
+// ...and evaluated, as the shader does (tests)
+Vec3 evalIrradianceSH(const Vec3 sh[9], const Vec3& n);
+
 // THE SKY AS THE ENGINE'S OTHER READERS WANT IT, in engine units for a light of `topUnits` at the top: the light's own
 // colour and strength at the camera (transmittance), and the dome's zenith, horizon (the average round it), ground and
 // up-facing irradiance.

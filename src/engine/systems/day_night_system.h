@@ -233,6 +233,7 @@ private:
     Vec3 readSunDir_{0, -2, 0}, readMoonDir_{0, -2, 0};
     double readHeight_ = -1e9;
     float readMoonTop_ = -1.0f;
+    Vec3 sunSH_[9], moonSH_[9];   // the sky's light on surfaces, per light (ADR-0371)
     float autoExposure_ = -1.0f;   // the adapted exposure (ADR-0368); -1: not yet
     double glowPerNit_ = 0.0;      // the physical sky's glows: emission per cd/m^2 (ADR-0369); 0: the old values
     float lastDt_ = 0.0f;          // update's frame time, for the adaptation

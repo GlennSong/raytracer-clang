@@ -16873,3 +16873,45 @@ mountains block the haze?" ADR-0369's aerial perspective had two faults:
 - at sunset the range is a solid silhouette with only the haze in front of it;
 - at noon a light blue haze;
 - toward a low sun at golden hour, a warm haze with the range as a gold silhouette, as real air does.
+
+## ADR-0371 — The sky as a cubemap and as spherical harmonics
+
+**Context.** Renderer-realism phase 3, the reflections (Glenn: "what about using a cubemap for reflections?"). Under
+the physical sky, a surface's ambient was the dome sampled once toward its normal, and its reflection was the dome
+toward R blended toward that ambient by roughness. A rough surface had no real blur, and a surface's sky light was one
+direction's radiance, not the sky's integral.
+
+**Decision** (physical mode).
+- **The sky cube.**
+  - `sky_cube.comp` draws the sky-view dome into a 128^2 cube each frame, with no sun disc: the sun is lit directly.
+  - Blits box-filter its 8 mips.
+  - `sky_prefilter.comp` GGX-filters the 6 output mips (roughness 0, 0.2 .. 1): 48 importance samples per texel, each
+    read at a mip matched to its solid angle (filtered importance sampling).
+  - The result is set 0 binding 15. `mesh.frag` reflects from mip roughness × 5, the BRDF LUT's split sum doing the
+    rest.
+- **The sky's light on surfaces** (`atmosphereIrradianceSH`): on the CPU, from the same model, when the sun or the
+  moon moves.
+  - 192 directions are projected onto order-2 spherical harmonics and convolved with the cosine: E / π, the
+    radiance-like value the ambient takes, sun and moon together.
+  - Nine coefficients go in `GlobalsUBO::skySH`.
+  - Test: within 7% of the exact cosine integral, up, sideways, down and oblique, at noon and with a low sun.
+  - It shows what one sample missed: at noon a face turned down takes more from the sunlit ground than a face turned
+    up takes from the sky.
+- **`RT_SKYCUBE`** is the A/B: 0 the old path, 1 the harmonics only, 2 the cube only.
+- **Found on the way:** at roughness ~0 the GGX sample's cosine rounded past 1, and sqrt(1 − cos²) went NaN; the NaN
+  spread through the cube to every reflective surface (and the exposure). The cosine is clamped, and a texel that
+  still comes out NaN or Inf is written black.
+
+**Seen** (`~/Pictures/Raytracer/2026-11-07_sky_cubemap_glass_towers_*.jpg`): glass towers reflecting a blue noon
+sky, and gold at golden hour.
+
+**Owed: the local probes.** Relightable box-projected cubes along the streets, in lobbies, shops and tunnels; SSR
+first, then the probe, then the sky. Today's reflections are still the sky's alone.
+
+**Validation-clean** (the Khronos layer on river_town under the physical sky, 0 messages). Fixed on the way:
+- the cloud resolve's image infos were a 4-array written at [4], a stack overwrite: the bad sType the layer reported;
+- the GPU crowd's draw-count buffer is copied back for telemetry but lacked TRANSFER_SRC;
+- the horizon map was written at init before the default texture existed (a null view), and is now left to
+  `updateGlobalHorizonDescriptor`;
+- `terrain.vert` did not write `mesh.frag`'s locations 6–8;
+- the sky cube's first barrier waited on a read at TOP_OF_PIPE.

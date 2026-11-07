@@ -205,6 +205,8 @@ struct GlobalsUBO {
     // x Mie extinction /m, y its scale height, z the level's aerial density
     float    skyPhysical4[4];
     float    skyPhysical5[4];
+    // THE SKY'S LIGHT ON SURFACES (ADR-0371): its E / pi as nine spherical-harmonic coefficients (rgb each; mesh.frag)
+    float    skySH[9][4];
 };
 
 // Volumetric-cloud uniforms (mirrors shader_types.h CloudUniforms; every
@@ -836,6 +838,24 @@ struct VulkanRenderer::Impl {
     VkPipelineLayout aerialLayout = VK_NULL_HANDLE;
     VkPipeline aerialPipe = VK_NULL_HANDLE;
     bool createAerialImages();
+    // THE SKY CUBEMAP (ADR-0371): sky_cube.comp draws the dome into skyCubeSrc's mip 0, blits box its mips, and
+    // sky_prefilter.comp GGX-filters skyCubeOut's 6 mips from it (roughness 0 .. 1); skyCubeOut is set 0 binding 15
+    static constexpr uint32_t kCubeSize = 128, kCubeSrcMips = 8, kCubeOutMips = 6;
+    VkImage cubeSrcImage = VK_NULL_HANDLE, cubeOutImage = VK_NULL_HANDLE;
+    VkDeviceMemory cubeSrcMemory = VK_NULL_HANDLE, cubeOutMemory = VK_NULL_HANDLE;
+    VkImageView cubeSrcView = VK_NULL_HANDLE, cubeSrcMip0 = VK_NULL_HANDLE, cubeOutView = VK_NULL_HANDLE;
+    VkImageView cubeOutMip[kCubeOutMips]{};
+    bool cubeGeneral = false;
+    VkDescriptorSetLayout cubeSetLayout = VK_NULL_HANDLE, prefSetLayout = VK_NULL_HANDLE;
+    VkDescriptorPool cubePool = VK_NULL_HANDLE;
+    VkDescriptorSet cubeSet = VK_NULL_HANDLE;
+    VkDescriptorSet prefSets[kCubeOutMips]{};
+    VkPipelineLayout cubeLayout = VK_NULL_HANDLE, prefLayout = VK_NULL_HANDLE;
+    VkPipeline cubePipe = VK_NULL_HANDLE, prefPipe = VK_NULL_HANDLE;
+    bool cubeFailed = false;
+    bool createSkyCubeImages();
+    bool ensureSkyCubePipelines();
+    void recordSkyCube(VkCommandBuffer cmd);
     bool ensureAerialPipeline();
     void recordAerial(VkCommandBuffer cmd);
     // PRE-EXPOSURE (ADR-0366): the exposure the scene passes draw with (1 with RT_PREEXPOSE=0)
@@ -1962,7 +1982,7 @@ bool VulkanRenderer::Impl::createCloudResources() {
         vkUpdateDescriptorSets(device, static_cast<uint32_t>(cw.size()), cw.data(), 0, nullptr);
         for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
             VkDescriptorBufferInfo ubo{cloudUboBuffers[i], 0, sizeof(CloudUniformsGPU)};
-            std::array<VkDescriptorImageInfo, 4> ri{};
+            std::array<VkDescriptorImageInfo, 5> ri{};   // (was 4: ri[4] below wrote past it -- a stack overwrite)
             ri[0] = {compositeSampler, cloudView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
             ri[1] = {compositeSampler, cloudHistView[1 - h], VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
             ri[2] = {compositeSampler, depthView, VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL};
@@ -3789,7 +3809,7 @@ bool VulkanRenderer::Impl::createSyncObjects() {
 }
 
 bool VulkanRenderer::Impl::createDescriptorSetLayout() {
-    std::array<VkDescriptorSetLayoutBinding, 15> bindings{};
+    std::array<VkDescriptorSetLayoutBinding, 16> bindings{};
     bindings[0].binding = 0;   // global UBO
     bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     bindings[0].descriptorCount = 1;
@@ -3816,7 +3836,7 @@ bool VulkanRenderer::Impl::createDescriptorSetLayout() {
         bindings[b].descriptorCount = 1;
         bindings[b].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
     }
-    for (uint32_t b = 11; b < 15; ++b) {   // the physical sky's view and transmittance (ADR-0367); the aerial volume (0370)
+    for (uint32_t b = 11; b < 16; ++b) {   // the physical sky's view, transmittance (0367), aerial volume (0370), cube (0371)
         bindings[b].binding = b;
         bindings[b].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         bindings[b].descriptorCount = 1;
@@ -4028,7 +4048,7 @@ bool VulkanRenderer::Impl::createDescriptorPool() {
     sizes[2].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;   // the clustered lights' three buffers
     sizes[2].descriptorCount = MAX_FRAMES_IN_FLIGHT * 3;
     sizes[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;   // shadow map + env + BRDF LUT + horizon + 3 terrain maps
-    sizes[1].descriptorCount = MAX_FRAMES_IN_FLIGHT * 11;   // + the sky view + transmittance + the aerial volume's two
+    sizes[1].descriptorCount = MAX_FRAMES_IN_FLIGHT * 12;   // + the sky view + transmittance + the aerial volume's two + the cube
     VkDescriptorPoolCreateInfo info{};
     info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
     info.poolSizeCount = static_cast<uint32_t>(sizes.size());
@@ -4092,7 +4112,8 @@ bool VulkanRenderer::Impl::createDescriptorSets() {
         writes[2].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         writes[2].descriptorCount = 1;
         writes[2].pImageInfo = &lut;
-        vkUpdateDescriptorSets(device, static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
+        // (the horizon map, writes[3], waits for the default texture: updateGlobalHorizonDescriptor writes it once it exists)
+        vkUpdateDescriptorSets(device, static_cast<uint32_t>(defaultTexture.view ? writes.size() : 3), writes.data(), 0, nullptr);
         VkDescriptorBufferInfo cb[3];
         VkWriteDescriptorSet cw[3]{};
         for (int k = 0; k < 3; ++k) {
@@ -4191,6 +4212,18 @@ void VulkanRenderer::Impl::updateSkyDescriptors() {
             write.pImageInfo = &img;
             vkUpdateDescriptorSets(device, 1, &write, 0, nullptr);
         }
+    // 15: the sky cube (made at init; GENERAL once written)
+    for (int i = 0; i < MAX_FRAMES_IN_FLIGHT && cubeOutView; ++i) {
+        VkDescriptorImageInfo img{brdfLutSampler, cubeOutView, VK_IMAGE_LAYOUT_GENERAL};
+        VkWriteDescriptorSet write{};
+        write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        write.dstSet = descriptorSets[i];
+        write.dstBinding = 15;
+        write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        write.descriptorCount = 1;
+        write.pImageInfo = &img;
+        vkUpdateDescriptorSets(device, 1, &write, 0, nullptr);
+    }
     // 13, 14: the aerial volume (made at init, so always a 3D view; GENERAL once it has been written)
     for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
         for (uint32_t k = 0; k < 2; ++k) {
@@ -4205,6 +4238,195 @@ void VulkanRenderer::Impl::updateSkyDescriptors() {
             write.pImageInfo = &img;
             vkUpdateDescriptorSets(device, 1, &write, 0, nullptr);
         }
+}
+
+bool VulkanRenderer::Impl::createSkyCubeImages() {
+    auto make = [&](uint32_t mips, VkImageUsageFlags usage, VkImage& img, VkDeviceMemory& mem) {
+        VkImageCreateInfo ii{};
+        ii.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+        ii.flags = VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT;
+        ii.imageType = VK_IMAGE_TYPE_2D;
+        ii.format = VK_FORMAT_R16G16B16A16_SFLOAT;
+        ii.extent = {kCubeSize, kCubeSize, 1};
+        ii.mipLevels = mips;
+        ii.arrayLayers = 6;
+        ii.samples = VK_SAMPLE_COUNT_1_BIT;
+        ii.tiling = VK_IMAGE_TILING_OPTIMAL;
+        ii.usage = usage;
+        ii.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        if (vkCreateImage(device, &ii, nullptr, &img) != VK_SUCCESS) return false;
+        VkMemoryRequirements req;
+        vkGetImageMemoryRequirements(device, img, &req);
+        VkMemoryAllocateInfo ai{};
+        ai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+        ai.allocationSize = req.size;
+        ai.memoryTypeIndex = findMemoryType(req.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+        if (vkAllocateMemory(device, &ai, nullptr, &mem) != VK_SUCCESS) return false;
+        vkBindImageMemory(device, img, mem, 0);
+        return true;
+    };
+    auto view = [&](VkImage img, uint32_t mip0, uint32_t mips, VkImageView& out) {
+        VkImageViewCreateInfo vi{};
+        vi.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+        vi.image = img;
+        vi.viewType = VK_IMAGE_VIEW_TYPE_CUBE;
+        vi.format = VK_FORMAT_R16G16B16A16_SFLOAT;
+        vi.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, mip0, mips, 0, 6};
+        return vkCreateImageView(device, &vi, nullptr, &out) == VK_SUCCESS;
+    };
+    if (!make(kCubeSrcMips, VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
+                                VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+              cubeSrcImage, cubeSrcMemory) ||
+        !make(kCubeOutMips, VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, cubeOutImage, cubeOutMemory))
+        return false;
+    if (!view(cubeSrcImage, 0, kCubeSrcMips, cubeSrcView) || !view(cubeSrcImage, 0, 1, cubeSrcMip0) ||
+        !view(cubeOutImage, 0, kCubeOutMips, cubeOutView))
+        return false;
+    for (uint32_t m = 0; m < kCubeOutMips; ++m)
+        if (!view(cubeOutImage, m, 1, cubeOutMip[m])) return false;
+    return true;
+}
+
+bool VulkanRenderer::Impl::ensureSkyCubePipelines() {
+    if (cubePipe && prefPipe) return true;
+    if (cubeFailed || !cubeOutView || !skyViewView) return false;
+    cubeFailed = true;
+    auto setLayout = [&](VkDescriptorType second, VkDescriptorSetLayout& out) {
+        VkDescriptorSetLayoutBinding b[2]{};
+        b[0].binding = 0; b[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE; b[0].descriptorCount = 1;
+        b[0].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+        b[1].binding = 1; b[1].descriptorType = second; b[1].descriptorCount = 1; b[1].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+        VkDescriptorSetLayoutCreateInfo li{};
+        li.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+        li.bindingCount = 2;
+        li.pBindings = b;
+        return vkCreateDescriptorSetLayout(device, &li, nullptr, &out) == VK_SUCCESS;
+    };
+    if (!setLayout(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, cubeSetLayout) ||
+        !setLayout(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, prefSetLayout))
+        return false;
+    VkDescriptorPoolSize sz[2] = {{VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1 + kCubeOutMips}, {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1 + kCubeOutMips}};
+    VkDescriptorPoolCreateInfo pi{};
+    pi.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    pi.maxSets = 1 + kCubeOutMips;
+    pi.poolSizeCount = 2;
+    pi.pPoolSizes = sz;
+    if (vkCreateDescriptorPool(device, &pi, nullptr, &cubePool) != VK_SUCCESS) return false;
+    auto alloc = [&](VkDescriptorSetLayout l, VkDescriptorSet& s) {
+        VkDescriptorSetAllocateInfo a{};
+        a.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+        a.descriptorPool = cubePool;
+        a.descriptorSetCount = 1;
+        a.pSetLayouts = &l;
+        return vkAllocateDescriptorSets(device, &a, &s) == VK_SUCCESS;
+    };
+    auto write = [&](VkDescriptorSet s, VkImageView storage, VkImageView sampled, VkImageLayout sampledLayout) {
+        VkDescriptorImageInfo img[2] = {{VK_NULL_HANDLE, storage, VK_IMAGE_LAYOUT_GENERAL}, {brdfLutSampler, sampled, sampledLayout}};
+        VkWriteDescriptorSet w[2]{};
+        for (int k = 0; k < 2; ++k) {
+            w[k].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            w[k].dstSet = s;
+            w[k].dstBinding = static_cast<uint32_t>(k);
+            w[k].descriptorCount = 1;
+            w[k].descriptorType = k == 0 ? VK_DESCRIPTOR_TYPE_STORAGE_IMAGE : VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            w[k].pImageInfo = &img[k];
+        }
+        vkUpdateDescriptorSets(device, 2, w, 0, nullptr);
+    };
+    if (!alloc(cubeSetLayout, cubeSet)) return false;
+    write(cubeSet, cubeSrcMip0, skyViewView, VK_IMAGE_LAYOUT_GENERAL);
+    for (uint32_t m = 0; m < kCubeOutMips; ++m) {
+        if (!alloc(prefSetLayout, prefSets[m])) return false;
+        write(prefSets[m], cubeOutMip[m], cubeSrcView, VK_IMAGE_LAYOUT_GENERAL);
+    }
+    auto pipe = [&](VkDescriptorSetLayout sl, uint32_t pushBytes, const char* spv, VkPipelineLayout& layout, VkPipeline& out) {
+        VkPushConstantRange range{VK_SHADER_STAGE_COMPUTE_BIT, 0, pushBytes};
+        VkPipelineLayoutCreateInfo pl{};
+        pl.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+        pl.setLayoutCount = 1;
+        pl.pSetLayouts = &sl;
+        pl.pushConstantRangeCount = 1;
+        pl.pPushConstantRanges = &range;
+        if (vkCreatePipelineLayout(device, &pl, nullptr, &layout) != VK_SUCCESS) return false;
+        VkShaderModule mod = loadShaderModule(std::string(RT_VULKAN_SHADER_DIR) + "/" + spv);
+        if (!mod) return false;
+        VkComputePipelineCreateInfo ci{};
+        ci.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+        ci.stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        ci.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+        ci.stage.module = mod;
+        ci.stage.pName = "main";
+        ci.layout = layout;
+        const VkResult r = vkCreateComputePipelines(device, VK_NULL_HANDLE, 1, &ci, nullptr, &out);
+        vkDestroyShaderModule(device, mod, nullptr);
+        return r == VK_SUCCESS;
+    };
+    if (!pipe(cubeSetLayout, 32, "sky_cube.comp.spv", cubeLayout, cubePipe) ||
+        !pipe(prefSetLayout, 16, "sky_prefilter.comp.spv", prefLayout, prefPipe))
+        return false;
+    cubeFailed = false;
+    LOG_INFO("[vulkan] physical sky: sky cubemap pipelines ready (%u^2, %u rough mips)", kCubeSize, kCubeOutMips);
+    return true;
+}
+
+// The sky cube for this frame (ADR-0371): mip 0 from the sky view, box mips by blits, then the GGX mips
+void VulkanRenderer::Impl::recordSkyCube(VkCommandBuffer cmd) {
+    if (!skyPhysicalOn || !skyViewGeneral || !ensureSkyCubePipelines()) return;
+    auto barrier = [&](VkImage img, uint32_t mip, uint32_t mips, VkAccessFlags src, VkAccessFlags dst, VkPipelineStageFlags s0,
+                       VkPipelineStageFlags s1, bool fromUndefined) {
+        VkImageMemoryBarrier b{};
+        b.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        b.srcAccessMask = src;
+        b.dstAccessMask = dst;
+        b.oldLayout = fromUndefined ? VK_IMAGE_LAYOUT_UNDEFINED : VK_IMAGE_LAYOUT_GENERAL;
+        b.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+        b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        b.image = img;
+        b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, mip, mips, 0, 6};
+        vkCmdPipelineBarrier(cmd, s0, s1, 0, 0, nullptr, 0, nullptr, 1, &b);
+    };
+    const bool fresh = !cubeGeneral;
+    const VkPipelineStageFlags prior = fresh ? VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT
+                                             : (VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
+    const VkAccessFlags priorRead = fresh ? 0 : VK_ACCESS_SHADER_READ_BIT;   // (nothing to wait on the first time)
+    barrier(cubeSrcImage, 0, kCubeSrcMips, priorRead, VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_TRANSFER_WRITE_BIT,
+            prior, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT, fresh);
+    barrier(cubeOutImage, 0, kCubeOutMips, priorRead, VK_ACCESS_SHADER_WRITE_BIT, prior,
+            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, fresh);
+    cubeGeneral = true;
+    struct CubePush { float sun[4], planet[4]; } cp{};
+    cp.sun[0] = static_cast<float>(skyFrame.lightDir.x); cp.sun[1] = static_cast<float>(skyFrame.lightDir.y);
+    cp.sun[2] = static_cast<float>(skyFrame.lightDir.z);
+    cp.planet[0] = skyFrame.groundRadius; cp.planet[1] = skyFrame.cameraHeight;
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, cubePipe);
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, cubeLayout, 0, 1, &cubeSet, 0, nullptr);
+    vkCmdPushConstants(cmd, cubeLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(cp), &cp);
+    vkCmdDispatch(cmd, kCubeSize / 8, kCubeSize / 8, 6);
+    // the box mips, each from the one above
+    for (uint32_t m = 1; m < kCubeSrcMips; ++m) {
+        barrier(cubeSrcImage, m - 1, 1, m == 1 ? VK_ACCESS_SHADER_WRITE_BIT : VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT,
+                m == 1 ? VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT : VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, false);
+        VkImageBlit bl{};
+        bl.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, m - 1, 0, 6};
+        bl.srcOffsets[1] = {static_cast<int32_t>(kCubeSize >> (m - 1)), static_cast<int32_t>(kCubeSize >> (m - 1)), 1};
+        bl.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, m, 0, 6};
+        bl.dstOffsets[1] = {static_cast<int32_t>(kCubeSize >> m), static_cast<int32_t>(kCubeSize >> m), 1};
+        vkCmdBlitImage(cmd, cubeSrcImage, VK_IMAGE_LAYOUT_GENERAL, cubeSrcImage, VK_IMAGE_LAYOUT_GENERAL, 1, &bl, VK_FILTER_LINEAR);
+    }
+    barrier(cubeSrcImage, 0, kCubeSrcMips, VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT,
+            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, false);
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, prefPipe);
+    for (uint32_t m = 0; m < kCubeOutMips; ++m) {
+        const float rough = static_cast<float>(m) / static_cast<float>(kCubeOutMips - 1);
+        const float push[4] = {rough, static_cast<float>(kCubeSize), static_cast<float>(kCubeSrcMips), 0.0f};
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, prefLayout, 0, 1, &prefSets[m], 0, nullptr);
+        vkCmdPushConstants(cmd, prefLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push), push);
+        const uint32_t s = std::max(1u, kCubeSize >> m);
+        vkCmdDispatch(cmd, (s + 7) / 8, (s + 7) / 8, 6);
+    }
+    barrier(cubeOutImage, 0, kCubeOutMips, VK_ACCESS_SHADER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+            VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, false);
 }
 
 bool VulkanRenderer::Impl::createAerialImages() {
@@ -5697,6 +5919,7 @@ bool VulkanRenderer::Impl::createMaterialResources() {
     }
     updateGlobalTerrainNormalDescriptor();   // (binding 5 needs a view before the first frame: the default's)
     if (!aerialView[0]) createAerialImages();   // (13, 14 need 3D views from the start)
+    if (!cubeOutView) createSkyCubeImages();    // (15 a cube view)
     updateSkyDescriptors();                  // (11..14 likewise)
     return true;
 }
@@ -6358,6 +6581,7 @@ void VulkanRenderer::Impl::recordCommandBuffer(VkCommandBuffer cmd, uint32_t ima
     recordClusterBin(cmd);   // the froxels' light lists (ADR-0364), before the scene pass reads them
     recordSkyView(cmd);      // the physical sky's view (ADR-0367), before the sky and the scene sample it
     recordAerial(cmd);       // ...and the air between the camera and everything it sees (ADR-0370)
+    recordSkyCube(cmd);      // ...and the sky as a cubemap for the reflections (ADR-0371)
     recordCrowd(cmd);   // the far travellers' instances, before any pass draws them
 
     // Cascaded shadow maps first (writes the depth array the lit pass samples).
@@ -7163,6 +7387,21 @@ void VulkanRenderer::shutdown() {
     if (impl->binPipe) vkDestroyPipeline(impl->device, impl->binPipe, nullptr);
     if (impl->skyPipe) vkDestroyPipeline(impl->device, impl->skyPipe, nullptr);
     if (impl->aerialPipe) vkDestroyPipeline(impl->device, impl->aerialPipe, nullptr);
+    if (impl->cubePipe) vkDestroyPipeline(impl->device, impl->cubePipe, nullptr);
+    if (impl->prefPipe) vkDestroyPipeline(impl->device, impl->prefPipe, nullptr);
+    if (impl->cubeLayout) vkDestroyPipelineLayout(impl->device, impl->cubeLayout, nullptr);
+    if (impl->prefLayout) vkDestroyPipelineLayout(impl->device, impl->prefLayout, nullptr);
+    if (impl->cubePool) vkDestroyDescriptorPool(impl->device, impl->cubePool, nullptr);
+    if (impl->cubeSetLayout) vkDestroyDescriptorSetLayout(impl->device, impl->cubeSetLayout, nullptr);
+    if (impl->prefSetLayout) vkDestroyDescriptorSetLayout(impl->device, impl->prefSetLayout, nullptr);
+    for (uint32_t m = 0; m < Impl::kCubeOutMips; ++m)
+        if (impl->cubeOutMip[m]) vkDestroyImageView(impl->device, impl->cubeOutMip[m], nullptr);
+    for (VkImageView v : {impl->cubeSrcView, impl->cubeSrcMip0, impl->cubeOutView})
+        if (v) vkDestroyImageView(impl->device, v, nullptr);
+    if (impl->cubeSrcImage) vkDestroyImage(impl->device, impl->cubeSrcImage, nullptr);
+    if (impl->cubeOutImage) vkDestroyImage(impl->device, impl->cubeOutImage, nullptr);
+    if (impl->cubeSrcMemory) vkFreeMemory(impl->device, impl->cubeSrcMemory, nullptr);
+    if (impl->cubeOutMemory) vkFreeMemory(impl->device, impl->cubeOutMemory, nullptr);
     if (impl->aerialLayout) vkDestroyPipelineLayout(impl->device, impl->aerialLayout, nullptr);
     if (impl->aerialPool) vkDestroyDescriptorPool(impl->device, impl->aerialPool, nullptr);
     if (impl->aerialSetLayout) vkDestroyDescriptorSetLayout(impl->device, impl->aerialSetLayout, nullptr);
@@ -8016,6 +8255,16 @@ void VulkanRenderer::setLights(const SceneLighting& lighting) {
         static const float aerialScale = [] { const char* e = std::getenv("RT_AERIAL"); return e ? static_cast<float>(std::atof(e)) : 1.0f; }();
         impl->cpuGlobals.skyPhysical5[2] = aerialScale;
         impl->cpuGlobals.skyPhysical5[3] = static_cast<float>(impl->swapchainExtent.height);
+        for (int k = 0; k < 9; ++k) {
+            impl->cpuGlobals.skySH[k][0] = static_cast<float>(f.irradianceSH[k].x);
+            impl->cpuGlobals.skySH[k][1] = static_cast<float>(f.irradianceSH[k].y);
+            impl->cpuGlobals.skySH[k][2] = static_cast<float>(f.irradianceSH[k].z);
+            impl->cpuGlobals.skySH[k][3] = 0.0f;
+        }
+        // RT_SKYCUBE: 0 the old path (the dome sampled toward N and R), 1 the harmonics only, 2 the cube only; else both
+        static const int cubeMode = [] { const char* e = std::getenv("RT_SKYCUBE"); return e ? std::atoi(e) : 3; }();
+        impl->cpuGlobals.skySH[0][3] = (cubeMode & 1) ? 1.0f : 0.0f;   // the harmonics
+        impl->cpuGlobals.skySH[1][3] = (cubeMode & 2) ? 1.0f : 0.0f;   // the cube
     }
     impl->sceneExposure = lighting.exposure;
 
@@ -8498,7 +8747,8 @@ bool VulkanRenderer::supportsGpuCrowd() const { return !std::getenv("RT_NO_GPU_C
 void VulkanRenderer::setCrowdKinds(const std::vector<CrowdKind>& kinds) {
     impl->crowdKinds = kinds;
     impl->crowdGrow(impl->crowdCmds, kinds.size() * 20 + 20,
-                    VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, false);
+                    VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT |
+                        VK_BUFFER_USAGE_TRANSFER_SRC_BIT, false);   // (SRC: its counts are copied back for the telemetry)
     impl->crowdGrow(impl->crowdKindBuf, kinds.size() * 16 + 16, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true);
 }
 

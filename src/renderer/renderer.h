@@ -541,6 +541,8 @@ struct PhysicalSkyFrame {
     // sunset at the street the deck is still in the sun, through the long reddening air: the red and pink undersides
     Vec3 cloudLightDir{0, 1, 0};
     Vec3 cloudLightColor{0, 0, 0};   // colour x illuminance (units)
+    // THE SKY'S LIGHT ON A SURFACE of any facing (ADR-0371): E / pi as order-2 spherical harmonics, sun and moon together
+    Vec3 irradianceSH[9];
 };
 
 // Volumetric cloud layer (cinematic-sky phase). Opt-in per level via

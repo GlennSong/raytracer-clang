@@ -75,6 +75,11 @@ layout(location = 2) out vec2 outTexcoord;
 layout(location = 3) out vec3 outColor;
 layout(location = 4) out vec3 outWorldTangent;
 layout(location = 5) flat out vec3 outInstanceOrigin;   // mesh.frag's (unused for terrain)
+// (mesh.frag's other inputs, unused for terrain: written zero so the stages agree -- the validation layer's interface
+// check, and no undefined values)
+layout(location = 6) out vec3 outUvBlend;
+layout(location = 7) flat out vec4 outImpA;
+layout(location = 8) flat out vec4 outImpB;
 
 void main() {
     float dist = distance(g.cameraPosition.xyz, inPosition);
@@ -95,4 +100,7 @@ void main() {
     outColor = inColor;
     gl_Position = g.viewProjection * vec4(worldPos, 1.0);
     outInstanceOrigin = vec3(0.0);
+    outUvBlend = vec3(0.0);
+    outImpA = vec4(0.0);
+    outImpB = vec4(0.0);
 }

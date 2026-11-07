@@ -87,3 +87,19 @@ TEST_CASE(sky_twilight_glows_and_night_is_dark) {
     const Vec3 ms = sampleMultiScatter(t, t.atm.groundRadius + 100.0, 0.5);
     CHECK(ms.z > ms.x && ms.x > 0.0);   // the multiple scattering is real and blue
 }
+
+TEST_CASE(sky_irradiance_harmonics_match_the_integral) {
+    // the nine coefficients stand for the cosine-weighted integral: up, sideways and down at noon and at a low sun
+    const AtmosphereTables& t = tables();
+    const double top = kSunTopLux / kLuxPerUnit;
+    for (double el : {60.0, 8.0}) {
+        Vec3 sh[9];
+        atmosphereIrradianceSH(t, 2.0, sunAt(el), top, sh);
+        for (const Vec3& n : {Vec3(0, 1, 0), Vec3(1, 0, 0), Vec3(-1, 0, 0), Vec3(0, 0.3, 0.95)}) {
+            const Vec3 viaSh = evalIrradianceSH(sh, normalize(n));
+            const Vec3 exact = atmosphereSkyIrradiance(t, 2.0, normalize(n), sunAt(el), 96) * (top / 3.14159265358979);
+            std::printf("    sun %.0f deg, n (%.1f %.1f %.1f): SH %.4f, integral %.4f\n", el, n.x, n.y, n.z, viaSh.y, exact.y);
+            CHECK(std::fabs(viaSh.y - exact.y) < 0.15 * exact.y + 1e-4);
+        }
+    }
+}

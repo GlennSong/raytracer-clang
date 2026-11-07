@@ -67,6 +67,7 @@ layout(set = 0, binding = 0) uniform Globals {
                               //   emission into units (ADR-0369)
     vec4  skyPhysical4;       // the air for the aerial perspective: rgb Rayleigh /m, w its scale height;
     vec4  skyPhysical5;       //   x Mie extinction /m, y its scale height, z the level's aerial density
+    vec4  skySH[9];           // the sky's light on surfaces: E / pi, order-2 spherical harmonics (ADR-0371)
 } g;
 #include "sky_physical.glsl"
 // the clustered lights (light_clusters.h): every point and spot, each froxel's offset (low 24 bits) | count (high 8),
@@ -1610,10 +1611,17 @@ void main() {
         irradiance = sampleEquirect(N);
         prefiltered = mix(sampleEquirect(R), irradiance, roughness);
     } else if (skyIsPhysical()) {
-        // THE PHYSICAL SKY's light (ADR-0367): the dome toward the normal stands for its irradiance / pi (no second
-        // sun: the disc is lit directly), and the dome (and the disc) in the reflection
-        irradiance = skyViewRadiance(N);
-        prefiltered = mix(skyViewRadiance(R) + skyLightDisc(R), irradiance, roughness);
+        // THE PHYSICAL SKY's light (ADR-0371): its irradiance / pi from the nine harmonics (the whole sky, cosine
+        // weighted: no second sun, the disc is lit directly), and the reflection from the sky cube's GGX mip for this
+        // roughness
+        vec3 d = N;
+        irradiance = g.skySH[0].w < 0.5 ? skyViewRadiance(N) : max(g.skySH[0].rgb * 0.282095 + g.skySH[1].rgb * (0.488603 * d.y) + g.skySH[2].rgb * (0.488603 * d.z) +
+                         g.skySH[3].rgb * (0.488603 * d.x) + g.skySH[4].rgb * (1.092548 * d.x * d.y) +
+                         g.skySH[5].rgb * (1.092548 * d.y * d.z) + g.skySH[6].rgb * (0.315392 * (3.0 * d.z * d.z - 1.0)) +
+                         g.skySH[7].rgb * (1.092548 * d.x * d.z) + g.skySH[8].rgb * (0.546274 * (d.x * d.x - d.y * d.y)),
+                         vec3(0.0));
+        prefiltered = g.skySH[1].w < 0.5 ? mix(skyViewRadiance(R), irradiance, roughness)
+                                         : textureLod(skyCubeTex, R, roughness * 5.0).rgb;
     } else {
         irradiance = sampleSkyDome(N);   // (no second sun: see sampleSkyDome)
         prefiltered = mix(sampleEnvironment(R), irradiance, roughness);  // crude roughness blur; a mirror keeps the sun
