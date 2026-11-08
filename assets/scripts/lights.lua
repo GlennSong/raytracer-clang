@@ -89,6 +89,10 @@ return {
     -- brighter while braking
     tail_light = { candela = 15, type = "point", color = { 1.0, 0.08, 0.04 }, intensity = 0.8, range = 4, pool = "tails" },
     brake_light = { candela = 80, type = "point", color = { 1.0, 0.08, 0.04 }, intensity = 3.0, range = 6, pool = "tails" },
+    -- a bus saloon's ceiling lights (ADR-0378; Glenn: "the bus interior is dark at night"): three down the saloon, a
+    -- cool white strip, lit with the street lamps
+    bus_cabin = { candela = 350, type = "point", color = { 0.96, 0.98, 1.0 }, intensity = 5, range = 7, dusk = true,
+                  pool = "cabins" },
     -- a roof's aviation beacon: a tight red pool on the roof and the plant under it (BeaconLightSystem gives the
     -- level's range, the intensity scaled to keep the pool's edge, and the flash)
     beacon = { candela = 100, type = "point", color = { 1.0, 0.06, 0.03 }, intensity = 64, range = 10,
@@ -105,5 +109,7 @@ return {
     beacons = { count = 6, within = 60, fade = true, many = { count = 64, within = 250 } },
     -- the fittings of the streamed interiors round the player
     rooms = { count = 8, within = 15, fade = true, many = { count = 600, within = 45 } },
+    -- the buses' saloons: the nearest bus's three (the one you ride), then every lit saloon near
+    cabins = { count = 3, within = 25, fade = true, groups = true, many = { count = 60, within = 150 } },
   },
 }

@@ -394,6 +394,15 @@ RenderMaterial materialFor(PartId id, const Vec3& wallColor) {
         default:
             m.albedo = wallColor; m.metallic = 0.0f; m.roughness = 0.75f; break;
     }
+    // INDOORS (ADR-0377): the rooms' surfaces never read the street's probes or the open sky
+    switch (id) {
+        case PartId::Interior: case PartId::InteriorFloor: case PartId::InteriorFloorTile: case PartId::InteriorFloorMarble:
+        case PartId::InteriorFloorCarpet: case PartId::Furniture: case PartId::FurnitureWood: case PartId::FurnitureFabric:
+        case PartId::FurnitureMetal: case PartId::FurnitureCeramic:
+            m.flags |= RenderMaterial::FLAG_INDOOR;
+            break;
+        default: break;
+    }
     return m;
 }
 

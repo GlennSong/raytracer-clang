@@ -192,7 +192,9 @@ local function kit_drivable(specName, opts, h)
   local shell, glass = painted_set(car.parts)
   local parts = {}
   if glass then
-    parts[#parts + 1] = { mesh = glass, albedo = { 1, 1, 1 }, metallic = 0.0, roughness = 0.06, opacity = 0.30 }
+    -- the glass's own colour is the kit's glass tint, not white: a pane's diffuse colour lies over everything seen
+    -- through it, and white was a milky veil from inside (Glenn: the bus's view out "almost all white"; ADR-0378)
+    parts[#parts + 1] = { mesh = glass, albedo = KIT_TINT.glass, metallic = 0.0, roughness = 0.06, opacity = 0.30 }
   end
   -- THE MOVING PANELS (ADR-0352): each door, the hood, the trunk -- its painted shell and its glass, on its hinge
   local panels = {}
@@ -213,7 +215,7 @@ local function kit_drivable(specName, opts, h)
                               metallic = h.metallic or 0.5, roughness = h.roughness or 0.4, panel = name }
       end
       if pglass then
-        parts[#parts + 1] = { mesh = pglass, albedo = { 1, 1, 1 }, metallic = 0.0, roughness = 0.06, opacity = 0.30, panel = name }
+        parts[#parts + 1] = { mesh = pglass, albedo = KIT_TINT.glass, metallic = 0.0, roughness = 0.06, opacity = 0.30, panel = name }
       end
       if #pcabin > 0 then
         parts[#parts + 1] = { mesh = mesh.merge(pcabin), albedo = { 1, 1, 1 }, metallic = 0.0, roughness = 0.9, panel = name }

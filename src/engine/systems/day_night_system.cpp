@@ -778,6 +778,14 @@ void DayNightSystem::applyPhysicalSky(FrameContext& ctx, const DayNightState& st
         const double s = std::clamp((std::log10(std::max(nits, 1e-6)) + 2.0) / 4.0, 0.0, 1.0);   // 0.01 .. 100 cd/m^2
         const double key = 0.18 * (0.25 + 0.75 * s * s * (3.0 - 2.0 * s));
         double target = key / std::max(L, 1e-12) * bias;
+        // HIGHLIGHT PROTECTION (ADR-0378; Glenn: the towers' lit windows "bright white and too harsh"): never brighter
+        // than puts the frame's brightest 3% at kHighlightCeiling before the tone curve -- by day that is the sky, which
+        // sits under it anyway; at night it is the lit windows, which a median-keyed eye pushed ~7 stops past white,
+        // every tint the same white. A night city exposes as it photographs (EV100 ~4-6), the windows keeping colour.
+        constexpr double kHighlightCeiling = 1.5;
+        float highLog2 = 0.0f;
+        if (ctx.renderer.measuredSceneHighlight(highLog2))
+            target = std::min(target, kHighlightCeiling / std::max(std::exp2(static_cast<double>(highLog2)), 1e-12) * bias);
         const double lo = kLuxPerUnit / (1.2 * std::exp2(17.0)), hi = kLuxPerUnit / (1.2 * std::exp2(-3.0));
         target = std::clamp(target, lo, hi);
         if (autoExposure_ <= 0.0f) {

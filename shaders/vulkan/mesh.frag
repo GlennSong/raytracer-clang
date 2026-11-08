@@ -186,9 +186,24 @@ vec3 surfCorrugated(vec3 base, float u, float v) {
     return base * shade * (1.0 - rmask) + vec3(0.40, 0.22, 0.12) * rmask;
 }
 vec3 surfAsphalt(vec3 base, float u, float v) {
+    // ASPHALT (ADR-0378; Glenn: "the roads probably also need some kind of asphalt texture"): the binder's dark field
+    // with its broad blotches; the AGGREGATE showing through it, light stone flecks a few centimetres across; a REPAIR
+    // here and there, a fresher black with a hard edge; and thin dark CRACK seams. The fine terms fade with distance
+    // (fwidth: what a pixel covers) so far road settles to its average instead of shimmering.
+    float px = max(fwidth(u), fwidth(v));
+    float fine = clamp(1.0 - px * 25.0, 0.0, 1.0);     // the flecks: gone by ~4 cm a pixel
+    float mid = clamp(1.0 - px * 4.0, 0.0, 1.0);       // the cracks: gone by ~25 cm a pixel
     float spk = vnoise2(u * 30.0, v * 30.0), blotch = fbm2(u * 0.4, v * 0.4);
-    float shade = clamp(0.86 + 0.20 * (spk - 0.5) + 0.10 * (blotch - 0.5), 0.6, 1.02);
-    return base * shade;
+    float shade = 0.86 + 0.20 * (spk - 0.5) * fine + 0.10 * (blotch - 0.5);
+    float stones = smoothstep(0.70, 0.88, vnoise2(u * 55.0 + 3.1, v * 55.0 - 1.7)) * fine;
+    shade *= 1.0 + 1.6 * stones;
+    float patchN = fbm2(u * 0.12 + 7.3, v * 0.12 - 2.9);
+    shade *= mix(1.0, 0.80, smoothstep(0.66, 0.67, patchN));
+    float seam = abs(fbm2(u * 0.7 + 1.1, v * 0.7 + 4.2) - 0.5);
+    float crack = (1.0 - smoothstep(0.0, 0.010 + px * 0.5, seam)) * smoothstep(0.35, 0.65, fbm2(u * 0.2 - 3.0, v * 0.2 + 1.0));
+    shade *= 1.0 - 0.45 * crack * mid;
+    // (x1.6: the bundle's 0.085 is fresh-laid black; a city's roads are a weathered grey, ~0.13)
+    return base * clamp(shade * 1.6, 0.8, 3.0);
 }
 vec3 surfPavement(vec3 base, float u, float v) {
     const float slab = 1.2;
@@ -458,6 +473,7 @@ float gRockTone = 0.5;
 // The rock and snow shares terrainLayers settled on, for the relief below (ADR-0120); and the blended layers' HEIGHT
 // in metres (each layer's alpha by its relief), the surface relief's bump (ADR-0207)
 float gTerrainRock = 0.0, gTerrainSnow = 0.0, gTerrainH = 0.0;
+float gNormalVariance = 0.0;   // a normal map's averaged-away bumps (Toksvig, ADR-0377)
 // each layer's relief, metres for its alpha 0..1: a grass sward's clumps, a pebble, a ripple, a slab's crack
 // (rock none: its texture bump outlined the sub-layers' block edges and the hex tiling's blend seams into a net of
 // stair-stepped lines over every face -- Glenn, 2026-10-20; the rock's shape is the ground's own, ADR-0213)
@@ -602,7 +618,7 @@ void surfaceReliefRoad(vec3 worldPos, inout vec3 normal, inout float rough) {
              + 0.3 * vnoise2(rx * 37.0, rz * 37.0 + 2.3) - b0;
     normal = normalize(normal + vec3(-bx, 0.0, -bz) * 0.35);
     float spk = vnoise2(rx * 23.0, rz * 23.0);
-    rough = clamp(rough + (spk - 0.5) * 0.25, 0.55, 1.0);
+    rough = clamp(rough + (spk - 0.5) * 0.25, 0.8, 1.0);   // (dry asphalt stays rough: never a mirror fleck)
 }
 
 // Natural ground micro-relief: slope-scaled normal perturbation (steep rock
@@ -701,7 +717,7 @@ void surfaceReliefWater(vec3 worldPos, vec2 meshUV, float time, vec3 cameraPos,
 // dispatcher in surfaces.metal.
 void applySurfaceRelief(uint id, vec3 worldPos, vec2 meshUV, float time,
                         vec3 cameraPos, inout vec3 normal, inout float rough) {
-    if (id == 11u)      surfaceReliefRoad(worldPos, normal, rough);
+    if (id == 11u || id == 7u) surfaceReliefRoad(worldPos, normal, rough);   // (asphalt too: ADR-0378)
     else if (id == 13u) surfaceReliefTerrain(worldPos, normal, rough);
     else if (id == 12u) surfaceReliefWater(worldPos, meshUV, time, cameraPos,
                                            normal, rough);
@@ -1111,6 +1127,13 @@ void main() {
             float slat = fract(inTexcoord.y * 12.0);
             roomLight *= 0.30 + 0.70 * smoothstep(0.30, 0.40, slat);
         }
+        // EACH ROOM ITS OWN LIGHT (ADR-0378; Glenn: the towers' lit windows "bright white and too harsh"): a tower at
+        // night is not every room at full -- about a fifth show only a desk lamp's warm pool, half are part-lit, a
+        // third full. And the room's tint counts twice, so a warm room and a fluorescent one keep their colour through
+        // the tone curve instead of all reading as the same white.
+        float rnd3 = fract(sin(dot(cellv, vec3(71.113, 23.917, 5.331))) * 15731.743);
+        float level = rnd3 < 0.18 ? 0.15 : rnd3 < 0.70 ? mix(0.45, 0.8, (rnd3 - 0.18) / 0.52) : 1.0;
+        roomLight *= level * (rnd3 < 0.18 ? vec3(1.0, 0.62, 0.32) : paneTint);
     }
     emission *= roomLight;
 
@@ -1156,7 +1179,11 @@ void main() {
     }
     if ((texFlags & 2u) != 0u) {
         vec2 mr = texture(metallicRoughnessMap, inTexcoord).gb;
-        roughness = clamp(roughness * mr.x, 0.04, 1.0);
+        // an INDOOR finish (polished tile, marble, a wood floor: FLAG_INDOOR) takes the bake's roughness variation at
+        // a quarter: the outdoor bakes' pores dropped scattered pixels of a 0.35 tile to ~0.1, each a mirror for a
+        // ceiling lamp -- the glitter Glenn saw on office floors at night (ADR-0377)
+        const bool indoorFinish = (pc.surfaceFlags.y & (1u << 28)) != 0u;
+        roughness = clamp(roughness * mix(1.0, mr.x, indoorFinish ? 0.25 : 1.0), 0.04, 1.0);
         metallic = clamp(metallic * mr.y, 0.0, 1.0);
     }
     if ((texFlags & 8u) != 0u) ao = texture(aoMap, inTexcoord).r;
@@ -1282,6 +1309,13 @@ void main() {
         vec3 T = normalize(inWorldTangent - N * dot(N, inWorldTangent));
         vec3 B = cross(N, T);
         vec3 tsN = texture(normalMap, inTexcoord).xyz * 2.0 - 1.0;
+        // an INDOOR finish is polished: the outdoor bake's relief at a fifth (its bumps broke every ceiling lamp's
+        // highlight into specks on an office floor; ADR-0377)
+        if ((pc.surfaceFlags.y & (1u << 28)) != 0u) tsN = vec3(tsN.xy * 0.2, tsN.z);
+        // TOKSVIG (ADR-0377): the map's mips average its bumps, and an averaged normal is SHORT -- the bumps the pixel
+        // covers. That shortness is the spread specular anti-aliasing widens the lobe by (below)
+        float len = clamp(length(tsN), 1e-3, 1.0);
+        gNormalVariance = (1.0 - len) / len;
         N = normalize(T * tsN.x + B * tsN.y + N * tsN.z);
         if (impostorCard) {
             if (cardBack) N -= 2.0 * dot(N, cardN) * cardN;   // the crown from behind: sides still out, top still up
@@ -1324,6 +1358,17 @@ void main() {
     applySurfaceRelief(pc.surfaceFlags.x, inWorldPos, inTexcoord, g.wind1.w,
                        g.cameraPosition.xyz, N, roughness);
     if (pc.surfaceFlags.x == 12u) roughness = mix(roughness, 0.6, gSeaFoam);
+    // SPECULAR ANTI-ALIASING (Kaplanyan & Hoffman, "Stable Specular Highlights", 2016; ADR-0377): a bumpy surface's
+    // normal turns within one pixel, so a narrow highlight lands on this pixel and misses the next -- the glitter
+    // Glenn saw on office floors under their ceiling lamps at night. The normal's spread across the pixel widens the
+    // lobe to what the pixel covers. A flat face (glass, a wall) has no spread and keeps its roughness.
+    {
+        vec3 dndx = dFdx(N), dndy = dFdy(N);
+        float variance = 0.25 * (dot(dndx, dndx) + dot(dndy, dndy));
+        float kernel = min(2.0 * variance + gNormalVariance, 0.25);
+        float a = roughness * roughness;
+        roughness = clamp(sqrt(sqrt(a * a + kernel)), roughness, 1.0);
+    }
 
     vec3 V = normalize(g.cameraPosition.xyz - inWorldPos);
     vec3 f0 = mix(vec3(0.04), albedo, metallic);
@@ -1420,7 +1465,17 @@ void main() {
         prefiltered = g.skySH[1].w < 0.5 ? mix(skyViewRadiance(R), irradiance, roughness)
                                          : textureLod(skyCubeTex, R, roughness * 5.0).rgb;
         // ...or the street's, where a reflection probe holds this surface (ADR-0373)
-        prefiltered = probeReflection(inWorldPos, R, roughness, prefiltered);
+        const bool indoor = (pc.surfaceFlags.y & (1u << 28)) != 0u;   // RenderMaterial::FLAG_INDOOR (ADR-0377)
+        if (indoor) {
+            // INDOORS the walls stand between a room and the street: no street probe, no open sky. The sky reaches
+            // a room only through its windows -- a dim, neutral share of the day's light (the room's own glow and
+            // its lamps do the rest), and the same for what its surfaces reflect, until a floor's own probes do
+            float daylight = dot(skyIrradianceSH(vec3(0.0, 1.0, 0.0)), vec3(0.2126, 0.7152, 0.0722));
+            irradiance = vec3(daylight * 0.30);
+            prefiltered = irradiance;
+        } else {
+            prefiltered = probeReflection(inWorldPos, R, roughness, prefiltered);
+        }
         // ...but near the camera the rays answer (ADR-0376, rt_reflect.comp): the probe's part fades out exactly as
         // theirs fades in, so the blurry reflection does not ghost under the sharp one
         if (probeGridSize.w > 0.0 && roughness <= probeGridSize.w) {

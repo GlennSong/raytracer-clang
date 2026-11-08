@@ -861,6 +861,7 @@ struct VulkanRenderer::Impl {
     std::array<void*, MAX_FRAMES_IN_FLIGHT> lumReadMapped{};
     std::array<float, MAX_FRAMES_IN_FLIGHT> lumPre{};   // the pre-exposure that frame was drawn with (0: no reading)
     float lumLog2 = 0.0f;
+    float lumHighLog2 = 0.0f;   // the 97th percentile (ADR-0378)
     bool lumValid = false;
     bool ensureLumPipeline();
     void recordLumHistogram(VkCommandBuffer cmd);
@@ -5571,6 +5572,16 @@ void VulkanRenderer::Impl::readLumHistogram() {
     }
     if (weight <= 0) return;
     lumLog2 = static_cast<float>(sum / weight - std::log2(static_cast<double>(lumPre[currentFrame])));
+    // the highlights: the bin the 97th percentile falls in
+    seen = 0;
+    for (int i = 0; i < 64; ++i) {
+        seen += bins[i];
+        if (seen >= 0.97 * static_cast<double>(total)) {
+            lumHighLog2 = static_cast<float>(kLumLog2Min + (i + 0.5) * (kLumLog2Range / 64.0) -
+                                             std::log2(static_cast<double>(lumPre[currentFrame])));
+            break;
+        }
+    }
     lumValid = true;
 }
 
@@ -9177,6 +9188,12 @@ void VulkanRenderer::endProbeFace() { impl->captureActive = -1; }
 bool VulkanRenderer::measuredSceneLuminance(float& log2Units) const {
     if (!impl->lumValid) return false;
     log2Units = impl->lumLog2;
+    return true;
+}
+
+bool VulkanRenderer::measuredSceneHighlight(float& log2Units) const {
+    if (!impl->lumValid) return false;
+    log2Units = impl->lumHighLog2;
     return true;
 }
 

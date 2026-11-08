@@ -17147,3 +17147,61 @@ everything does not. Glenn: close up ray traced, farther away faked.
     1 / (1 + luminance), so a lone bright hit cannot flash. The rays now also need the physical sky, the only branch
     that takes the probe out.
   - Cost on the bench: frame 11.0 ms (11.8 before). The probe capture keeps its own G-buffer layout.
+
+## ADR-0377 — Indoors: no street reflections, no open sky, and floors that do not glitter
+
+**Context.** Glenn, walking the offices: interior walls "occlude the outside but catch the color of the outside", and
+the wood and tile floors speckle at night.
+
+**Decision.**
+- **`RenderMaterial::FLAG_INDOOR` (bit 28).** `materialFor` sets it on drywall, every interior floor finish and all
+  furniture parts. It is set at load, so no re-bake.
+- **Indoor light** (mesh.frag, the physical-sky branch). An indoor surface never reads the street's reflection probes
+  or the open sky's directional light. It takes a dim, neutral share of the day's light (12% of the sky's up-facing
+  irradiance, grey), for both its fill and what it reflects. The room's own glow and its lamps do the rest, until a
+  floor's own probes do (owed: per-floor probes).
+- **The floor glitter** had three parts, found in turn:
+  - **Specular anti-aliasing** (Kaplanyan & Hoffman 2016): the normal's spread across a pixel widens the lobe. It
+    helps everywhere and leaves flat faces (glass, walls) alone.
+  - **Toksvig** on the mesh-UV normal map: a mip-averaged normal is short, and its shortness is extra variance.
+  - **The real cause:** indoor finishes borrow the outdoor bakes (the tile is the Concrete bake), whose relief and
+    pores broke every ceiling lamp's highlight into specks. An indoor finish now takes the bake's relief at a fifth
+    and its roughness variation at a quarter: polished, with the lamps as soft pools. Ruled out on the way: the rays
+    (off, unchanged) and the environment reflection (view 10, flat).
+- Seen in glass_tower #228 (river_town, `-2.5 27 701`), 22:00, before and after.
+
+**Owed:** per-floor interior probes; the white windows from inside (the window-light calibration).
+
+## ADR-0378 — Night windows with a light of their own, an eye that keeps highlights, vehicle glass, bus lights, asphalt
+
+**Context.** Glenn's walkthrough, continued:
+- the towers' windows are "bright white and too harsh";
+- the view out of a bus is "almost all white and just seems to show the ambient occlusion", and the saloon is dark
+  at night;
+- the roads need "some kind of asphalt texture".
+
+**Decision.**
+- **Highlight protection** (day_night_system.cpp; the renderer reports the frame's 97th-percentile luminance,
+  `Renderer::measuredSceneHighlight`). The eye's median key never exposes so far that the brightest 3% of the frame
+  pass 1.5 before the tone curve. By day that is the sky, which sits under it anyway. At night it is the lit windows,
+  which the median-keyed eye had pushed ~7 stops past white. In a dark saloon it is the street through the windows:
+  the "all white" view out of the bus.
+- **Each lit room its own light** (mesh.frag's interior-mapped pane): about a fifth show only a desk lamp's warm pool
+  (15%), half are part-lit (45-80%), a third are full. The room's tint counts twice, so warm and fluorescent rooms keep
+  their colour through the tone curve. Measured first: only 0.7% of night pixels were clipped. The harshness was
+  every room the same near-white at the same level, not overexposure alone.
+- **Vehicle glass:** the drivable car's panes were `albedo {1,1,1}` at 30% opacity, so a lit white veil lay over
+  everything seen through them. They take the kit's glass tint (`KIT_TINT.glass`), as the city's traffic glass
+  already did.
+- **Bus saloon lights:** lights.lua `bus_cabin` (cool white, on the dusk ramp) in a `cabins` pool (3, then 60 with
+  clustering). CityRenderSystem publishes three down each bus, under the roof its front sign marks, one group a bus.
+- **Asphalt:** the carriageway surface (`surfAsphalt`, under the lane paint too) gains:
+  - aggregate flecks, repair patches with hard edges, and thin crack seams, each fading with the pixel's footprint
+    so far road does not shimmer;
+  - a weathered lift (x1.6 over the bundle's 0.085);
+  - the road relief (it had none), with its roughness kept at 0.8 or above.
+- **Indoors** (ADR-0377): the daylight share is 30%, not 12%. At 12% a lobby's back wall seen through the glazing
+  went black.
+
+**Owed:** the bus view verified from inside a riding bus (the bench could not board one); per-floor probes; the
+asphalt albedo in the bake (a lanes tag bump, Glenn's call).

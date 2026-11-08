@@ -41,6 +41,7 @@ public:
     void beginProbeFace(uint32_t probe, int face, const Vec3& eye) override;
     void endProbeFace() override;
     bool measuredSceneLuminance(float& log2Units) const override;
+    bool measuredSceneHighlight(float& log2Units) const override;
     void setSkyTables(const float* transmittance, int tw, int th, const float* multiScatter, int mw, int mh) override;
     void setTerrainHorizon(TextureHandle map, float originX, float originZ, float extent,
                            float encodeLo, float encodeHi) override;

@@ -166,6 +166,10 @@ struct RenderMaterial {
     // (engine/vehicle_lamps.h LensRole), and the lamps lit ride each instance's bottom row as a mask (Mat4::m[3][0]):
     // mesh.vert lights the tagged lenses the mask names. Vulkan + Metal.
     static constexpr uint32_t FLAG_LAMP_STATE = 1u << 27;
+    // FLAG_INDOOR (bit 28, ADR-0377): a surface inside a building -- drywall, floors, furniture. It never takes the
+    // street's reflection probes or the open sky's light (Glenn: interior walls "occlude the outside but catch the
+    // color of the outside"); indoors the sky reaches it only as a dim, neutral share. Vulkan.
+    static constexpr uint32_t FLAG_INDOOR = 1u << 28;
     float lodIn0 = 0.0f, lodIn1 = 0.0f, lodOut0 = 0.0f, lodOut1 = 0.0f;
     float fadeStart = 0.0f, fadeEnd = 0.0f;   // FLAG_GRASS only
     // FLAG_GRASS: grows in over [fadeInStart, fadeInEnd] (the far field's cards, arriving as the
@@ -881,6 +885,9 @@ public:
     // units (the middle of a histogram of the drawn frame, before exposure), a couple of frames old. False: no
     // measurement (a renderer that does not take one, or none yet).
     virtual bool measuredSceneLuminance(float& /*log2Units*/) const { return false; }
+    // ...and its HIGHLIGHTS (ADR-0378): the log2 luminance the brightest 3% of the frame reaches (its 97th percentile),
+    // so the exposure can keep them from washing out to white -- a night tower's lit windows.
+    virtual bool measuredSceneHighlight(float& /*log2Units*/) const { return false; }
     // THE PHYSICAL SKY's tables (ADR-0367: sky_atmosphere.h AtmosphereTables): transmittance and multiple scattering,
     // RGB floats row by row. Uploaded when the atmosphere changes; the sky-view pass samples them each frame.
     virtual void setSkyTables(const float* /*transmittance*/, int /*tw*/, int /*th*/, const float* /*multiScatter*/,

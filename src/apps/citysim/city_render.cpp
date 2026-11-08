@@ -2476,6 +2476,22 @@ void CityRenderSystem::syncCarLamps(World& world) {
                     if (b == 0) busSignAt_ = g->transforms.back().transformPoint(Vec3(0, 0, 0));
                 }
                 ++busSignsDrawn_;
+                // THE SALOON'S LIGHTS (ADR-0378; Glenn: "The bus interior is dark at night so the bus will need
+                // interior lights"): three ceiling lights down the saloon, under the roof the front sign stands at --
+                // lights.lua bus_cabin, on the dusk ramp, one group a bus so the picker takes them whole
+                static const int cabinKind = engine::lightKindId("bus_cabin");
+                if (cabinKind >= 0) {
+                    const Real ceiling = busSignLocal_.m[1][3] - 0.25;   // (the sign's middle is near the roof)
+                    const Real half = busSignLocal_.m[2][3] * 0.6;        // (...and its z the saloon's front)
+                    for (int li = -1; li <= 1; ++li) {
+                        engine::LightCandidate c;
+                        c.kind = cabinKind;
+                        c.position = body.transformPoint(Vec3(0, ceiling, half * li));
+                        c.direction = body.transformPoint(Vec3(0, ceiling - 1, half * li)) - c.position;
+                        c.group = 0x40000000u + static_cast<uint32_t>(ai);
+                        trafficLights_.push_back(c);
+                    }
+                }
                 // THE DOORS (ADR-0356; Glenn: "When the bus driver stops does the bus door open for passengers to get
                 // on?"): open while the bus stands at its stop (its dwell), shut a moment before it pulls away
                 if (v >= 0 && v < static_cast<int>(carDoorLeaves_.size()) && !carDoorLeaves_[static_cast<std::size_t>(v)].empty()) {
