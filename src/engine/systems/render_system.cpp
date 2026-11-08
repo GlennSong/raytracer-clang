@@ -2,6 +2,7 @@
 #include "../components.h"
 #include "../../profile.h"
 #include "../occlusion.h"
+#include "../lights/light_kinds.h"   // lightBook().raytrace (ADR-0376)
 
 #include <chrono>
 #include <algorithm>
@@ -457,6 +458,55 @@ void RenderSystem::render(FrameContext& ctx) {
                 capFaces = 0;
             }
         }
+    }
+
+    // RAY-TRACED REFLECTIONS' NEAR SCENE (ADR-0376): what a reflection ray may hit -- the instances of lights.lua's
+    // raytrace `hits` classes within `near`, every way round (a reflection sees behind you), nearest first -- again once
+    // the camera has moved 5 m, or a second on. The renderer builds their structures within its memory budget.
+    if (ctx.renderer.supportsRayQuery() && ((cam.position - rayEye_).length() > 5.0 || frameNo_ >= rayFrame_ + 60)) {
+        rayEye_ = cam.position;
+        rayFrame_ = frameNo_;
+        const LightBook::RayTrace& rules = lightBook().raytrace;
+        bool hits[static_cast<int>(DrawClass::Count)] = {};
+        for (int c = 0; c < static_cast<int>(DrawClass::Count); ++c)
+            if (const char* name = drawClassName(static_cast<DrawClass>(c)))
+                hits[c] = std::find(rules.hits.begin(), rules.hits.end(), name) != rules.hits.end();
+        const Real near = rules.near;
+        const Vec3 eye = cam.position;
+        rayNear_.clear();
+        ctx.world.each<Transform, Renderable>([&](Entity, Transform& t, Renderable& r) {
+            if (!hits[static_cast<int>(r.drawClass)] || (r.renderLayer & ctx.renderer.hiddenLayers)) return;
+            if (r.material.flags & (RenderMaterial::FLAG_SHADOW_ONLY | RenderMaterial::FLAG_OVERLAY | RenderMaterial::FLAG_GRASS)) return;
+            const Mat4 model = t.matrix();
+            const BoundingSphere b = ctx.renderer.getMeshBounds(r.mesh);
+            Vec3 lo, hi;
+            transformedAABB(model, b.boxMin, b.boxMax, lo, hi);
+            const Real d = std::max<Real>(0.0, ((lo + hi) * 0.5 - eye).length() - (hi - lo).length() * 0.5);
+            // the tier you would see from here, as the draw picks it (a building's far models stay out)
+            const Real c = ((lo + hi) * 0.5 - eye).length();
+            const Real dd = resolveDistance(r.drawDistance, r.drawClass);
+            if ((dd > 0 && c > dd) || (r.minDistance > 0 && c < r.minDistance)) return;
+            if (d <= near) rayNear_.emplace_back(d, Renderer::RayInstance{r.mesh, model, r.material});
+        });
+        ctx.world.each<InstanceGroup>([&](Entity, InstanceGroup& g) {
+            if (!hits[static_cast<int>(g.drawClass)] || g.transforms.empty()) return;
+            if (g.material.flags & (RenderMaterial::FLAG_SHADOW_ONLY | RenderMaterial::FLAG_OVERLAY | RenderMaterial::FLAG_GRASS)) return;
+            if ((g.boundsCenter - eye).length() - g.boundsRadius > near) return;
+            const BoundingSphere mb = ctx.renderer.getMeshBounds(g.mesh);
+            const Real dd = resolveDistance(g.drawDistance, g.drawClass);
+            for (const Mat4& m : g.transforms) {
+                const Real c = (m.transformPoint(mb.center) - eye).length();
+                if ((dd > 0 && c > dd) || (g.minDistance > 0 && c < g.minDistance)) continue;
+                const Real d = std::max<Real>(0.0, c - mb.radius);
+                if (d <= near) rayNear_.emplace_back(d, Renderer::RayInstance{g.mesh, m, g.material});
+            }
+        });
+        std::sort(rayNear_.begin(), rayNear_.end(), [](const std::pair<Real, Renderer::RayInstance>& a,
+                                                       const std::pair<Real, Renderer::RayInstance>& b) { return a.first < b.first; });
+        rayList_.clear();
+        for (const std::pair<Real, Renderer::RayInstance>& p : rayNear_) rayList_.push_back(p.second);
+        const float rayRules[3] = {static_cast<float>(rules.near), static_cast<float>(rules.fade), static_cast<float>(rules.maxRoughness)};
+        ctx.renderer.setRayInstances(rayList_, static_cast<float>(rules.memoryShare), rayRules);
     }
 
     if (encStats) {

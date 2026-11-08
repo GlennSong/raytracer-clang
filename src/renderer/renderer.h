@@ -979,6 +979,17 @@ public:
         for (Mat4 m : transforms) { m.m[3][0] = m.m[3][1] = m.m[3][2] = 0; drawMesh(handle, m, material); }
     }
     virtual void setReflectionProbes(const std::vector<ReflectionProbe>& /*probes*/) {}
+    // RAY-TRACED REFLECTIONS (ADR-0376): what a reflection ray may hit -- the near instances, nearest first, as the
+    // engine picked them (raytrace rules, lights.lua) -- held until the next call. `memoryShare`: the most of the device
+    // memory free at the first call that the structures may ever take (Glenn: "not blow up my gpu"). `rules`: near,
+    // fade (m) and the roughest surface that casts a ray.
+    struct RayInstance {
+        MeshHandle mesh;
+        Mat4 transform;
+        RenderMaterial material;   // what the rays' hit shading lights it as
+    };
+    virtual bool supportsRayQuery() const { return false; }
+    virtual void setRayInstances(const std::vector<RayInstance>& /*nearestFirst*/, float /*memoryShare*/, const float /*rules*/[3]) {}
 
     // THE GPU CROWD (the 100k plan's mid-range band on compute): far travellers placed by a compute shader from their
     // route and clock -- see shaders/vulkan/crowd.comp. The caller keeps the data; a backend copies what changed.

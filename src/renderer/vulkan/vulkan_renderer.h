@@ -36,6 +36,8 @@ public:
     void setEnvironmentMap(TextureHandle equirect) override;
     bool supportsProbeCapture() const override { return true; }
     void setReflectionProbes(const std::vector<ReflectionProbe>& probes) override;
+    bool supportsRayQuery() const override;
+    void setRayInstances(const std::vector<RayInstance>& nearestFirst, float memoryShare, const float rules[3]) override;
     void beginProbeFace(uint32_t probe, int face, const Vec3& eye) override;
     void endProbeFace() override;
     bool measuredSceneLuminance(float& log2Units) const override;

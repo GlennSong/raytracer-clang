@@ -120,6 +120,20 @@ enum class DrawClass : uint8_t {
     Count
 };
 
+// A class's name in data (a level's drawDistances, lights.lua raytrace hits); null for Unset, Unlimited and Count
+inline const char* drawClassName(DrawClass c) {
+    switch (c) {
+        case DrawClass::Terrain: return "terrain";
+        case DrawClass::Structure: return "structure";
+        case DrawClass::Scenery: return "scenery";
+        case DrawClass::Furniture: return "furniture";
+        case DrawClass::GroundPaint: return "groundPaint";
+        case DrawClass::SimBody: return "simBody";
+        case DrawClass::Effect: return "effect";
+        default: return nullptr;
+    }
+}
+
 // The single owner of draw-distance policy: class -> metres (0 = unlimited).
 // One per level (a singleton component the loader stamps), so distances scale
 // with the world — 250 m of scenery is right for an 8 km city and absurd for a

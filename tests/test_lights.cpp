@@ -7,6 +7,7 @@
 #include "../src/engine/lights/light_picker.h"
 #include "../src/engine/lights/probe_sites.h"
 #include "../src/engine/procgen/city/road_network.h"
+#include "../src/engine/components.h"   // drawClassName
 #include "../src/engine/scripting/lights_lua.h"
 #include <cmath>
 #include <fstream>
@@ -170,6 +171,17 @@ TEST_CASE(lights_lua_gives_every_pool_a_many_light_budget) {
     CHECK(book.probes.spacing >= 5.0 && book.probes.height > 0.0 && book.probes.above > 0.0);
     LightBook bad;
     CHECK(!loadLightsSource("return { probes = { spacing = 1 } }", bad, &err));
+    // the ray-traced reflections' rules (ADR-0376): read, every hit a draw class's name, the memory share bounded
+    CHECK(book.raytrace.near > 0.0 && book.raytrace.fade <= book.raytrace.near);
+    CHECK(book.raytrace.memoryShare > 0.0 && book.raytrace.memoryShare <= 0.5);
+    CHECK(!book.raytrace.hits.empty());
+    for (const std::string& h : book.raytrace.hits) {
+        bool known = false;
+        for (int c = 0; c < static_cast<int>(DrawClass::Count); ++c)
+            known = known || (drawClassName(static_cast<DrawClass>(c)) && h == drawClassName(static_cast<DrawClass>(c)));
+        CHECK(known);
+    }
+    CHECK(!loadLightsSource("return { raytrace = { memory_share = 0.9 } }", bad, &err));
 }
 
 // THE REFLECTION PROBES' SITES (ADR-0374): along a street every `spacing` metres at `height` over the carriageway (a

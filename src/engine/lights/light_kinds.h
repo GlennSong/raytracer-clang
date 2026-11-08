@@ -49,6 +49,14 @@ struct LightBook {
     struct Glow { std::string name; float nits = 0.0f; };
     std::vector<Glow> glows;
     ProbeRules probes;   // the reflection probes along the streets (ADR-0374)
+    // RAY-TRACED REFLECTIONS (ADR-0376; Glenn: "close up raytraced, further away faked"): rays only from smooth surfaces
+    // (roughness under maxRoughness) within `near` m, faded into the probes over the last `fade`; they hit only the
+    // instances of these draw classes within `near`; the structures take at most `memoryShare` of the free GPU memory
+    struct RayTrace {
+        double near = 150.0, fade = 25.0, maxRoughness = 0.3, memoryShare = 0.25;
+        std::vector<std::string> hits{"structure", "furniture"};
+    };
+    RayTrace raytrace;
     float glowNits(const std::string& name) const;   // 0: no such class
     int kind(const std::string& name) const;   // its index, -1 if none
     int pool(const std::string& name) const;

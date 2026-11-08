@@ -52,6 +52,31 @@ bool loadLightsSource(const std::string& code, LightBook& out, std::string* err)
     book.emissionScale = static_cast<float>(numField(L, root, "emission_scale", 1.0));
     book.cityGlowNits = static_cast<float>(numField(L, root, "city_glow_nits", 0.0));
     book.moonNits = static_cast<float>(numField(L, root, "moon_nits", 2500.0));
+    lua_getfield(L, root, "raytrace");
+    if (lua_istable(L, -1)) {
+        const int t = lua_gettop(L);
+        LightBook::RayTrace& r = book.raytrace;
+        r.near = numField(L, t, "near", r.near);
+        r.fade = numField(L, t, "fade", r.fade);
+        r.maxRoughness = numField(L, t, "max_roughness", r.maxRoughness);
+        r.memoryShare = numField(L, t, "memory_share", r.memoryShare);
+        lua_getfield(L, t, "hits");
+        if (lua_istable(L, -1)) {
+            r.hits.clear();
+            const int h = lua_gettop(L);
+            for (int i = 1; ; ++i) {
+                lua_rawgeti(L, h, i);
+                if (!lua_isstring(L, -1)) { lua_pop(L, 1); break; }
+                r.hits.push_back(lua_tostring(L, -1));
+                lua_pop(L, 1);
+            }
+        }
+        lua_pop(L, 1);
+        if (r.near <= 0 || r.fade < 0 || r.fade > r.near || r.maxRoughness < 0 || r.maxRoughness > 1 || r.memoryShare < 0 ||
+            r.memoryShare > 0.5)
+            return fail("raytrace: near > 0, 0 <= fade <= near, max_roughness in 0..1, memory_share in 0..0.5");
+    }
+    lua_pop(L, 1);
     lua_getfield(L, root, "probes");
     if (lua_istable(L, -1)) {
         const int t = lua_gettop(L);

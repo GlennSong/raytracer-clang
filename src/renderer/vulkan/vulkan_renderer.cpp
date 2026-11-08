@@ -18,6 +18,7 @@
 #include "../light_clusters.h"   // buildClusters (clustered lights, RT_CLUSTERED)
 #include "../probe_grid.h"       // buildProbeGrid (ADR-0374)
 #include "rt_measure.h"           // RT_RT_MEASURE: what ray tracing would cost (phase 3c)
+#include "rt_scene.h"             // the near scene for rays (ADR-0376)
 
 #include <vulkan/vulkan.h>
 // GPU memory: AMD's Vulkan Memory Allocator (third_party/VulkanMemoryAllocator, compiled
@@ -453,6 +454,30 @@ struct VulkanRenderer::Impl {
     // mesh buffers carry device addresses so a bottom-level build can read them. Vulkan 1.2 and the extensions needed;
     // RT_RT_REFLECT=0 leaves it all off.
     bool rayQuery = false;
+    RtScene rt;                                  // the near acceleration structures (rt_scene.h)
+    std::vector<RtScene::Instance> rtInstances;  // what the engine last handed over, mesh buffers resolved
+    // ...and each one's row for the rays' hit shading (rt_reflect.comp RtInst: 64 bytes), by its custom index
+    struct RtInstGpu {
+        float albedoRough[4];
+        float emissionMetal[4];
+        VkDeviceAddress vertices, indices;
+        uint32_t strideWords, packed, flags, pad;
+    };
+    static_assert(sizeof(RtInstGpu) == 64, "rt_reflect.comp's RtInst");
+    std::vector<RtInstGpu> rtRows;
+    std::array<VkBuffer, MAX_FRAMES_IN_FLIGHT> rtRowBuf{};
+    std::array<VmaAllocation, MAX_FRAMES_IN_FLIGHT> rtRowAlloc{};
+    std::array<void*, MAX_FRAMES_IN_FLIGHT> rtRowMapped{};
+    std::array<VkDeviceSize, MAX_FRAMES_IN_FLIGHT> rtRowCap{};
+    VkDescriptorSetLayout rtSetLayout = VK_NULL_HANDLE;
+    VkDescriptorPool rtPool = VK_NULL_HANDLE;
+    std::array<VkDescriptorSet, MAX_FRAMES_IN_FLIGHT> rtSets{};
+    VkPipelineLayout rtLayout = VK_NULL_HANDLE;
+    VkPipeline rtPipe = VK_NULL_HANDLE;
+    bool rtPipeFailed = false;
+    float rtRules[4] = {150.0f, 25.0f, 0.3f, 1.0f};   // near, fade, max roughness, (the SSR blend strength, per frame)
+    float rtShare = 0.0f;
+    uint64_t rtLogged = 0;
     uint32_t graphicsFamily = 0;
     uint32_t presentFamily = 0;
     VkDevice device = VK_NULL_HANDLE;
@@ -1010,6 +1035,9 @@ struct VulkanRenderer::Impl {
     bool relightFailed = false;
     bool ensureRelightPipelines();
     void recordProbeRelight(VkCommandBuffer cmd);
+    void recordRayScene(VkCommandBuffer cmd);
+    bool ensureRtReflectPipeline();
+    void recordRtReflect(VkCommandBuffer cmd);
     void queueDraw(const DrawItem& item) {
         if (captureActive >= 0) captures[static_cast<std::size_t>(captureActive)].items.push_back(item);
         else if (captureActive == -1) drawQueue.push_back(item);
@@ -3164,7 +3192,8 @@ bool VulkanRenderer::Impl::createSsrResources() {
     ssrExtent = {std::max(1u, swapchainExtent.width / 2),
                  std::max(1u, swapchainExtent.height / 2)};
     if (!createColorTarget(ssrExtent.width, ssrExtent.height, kHdrFormat,
-                           VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                           VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
+                               (rayQuery ? VK_IMAGE_USAGE_STORAGE_BIT : 0),   // (the rays write into it: ADR-0376)
                            ssrImage, ssrMemory, ssrView))
         return false;
 
@@ -6423,6 +6452,7 @@ void VulkanRenderer::Impl::collectRetired(bool all) {
         else retiredTextures[keep++] = rt;
     }
     retiredTextures.resize(keep);
+    rt.collect(frameCounter, MAX_FRAMES_IN_FLIGHT, all);
 }
 
 void VulkanRenderer::Impl::destroyMesh(GpuMesh& m) {
@@ -7357,6 +7387,7 @@ void VulkanRenderer::Impl::recordCommandBuffer(VkCommandBuffer cmd, uint32_t ima
     gpuMark(cmd, 1);
     recordProbeCaptures(cmd);   // this frame's reflection-probe faces (ADR-0372: after the shadows, which set 0 samples)
     recordProbeRelight(cmd);    // ...and a few probes relit as the scene is now (ADR-0373)
+    recordRayScene(cmd);        // the near acceleration structures for the reflection rays (ADR-0376)
 
     // Scene pass → offscreen HDR + world-normal G-buffer (sky + geometry).
     std::array<VkClearValue, 3> clears{};
@@ -7584,6 +7615,7 @@ void VulkanRenderer::Impl::recordCommandBuffer(VkCommandBuffer cmd, uint32_t ima
     recordSsao(cmd);
     gpuMark(cmd, 5);
     recordSsr(cmd);
+    recordRtReflect(cmd);   // ...and, near the camera, the rays replace it (ADR-0376)
     gpuMark(cmd, 6);
     recordOcclusion(cmd);
     // DOF (off by default) blurs the HDR scene; composite reads dofView when on.
@@ -7847,6 +7879,12 @@ void VulkanRenderer::Impl::drawFrame() {
         pb[2] = probeGrid.originZ;
         pb[3] = probeGrid.cell;
         pb[4] = static_cast<float>(ProbeGrid::kSize);
+        // the reflection rays' rules, when they will run this frame (mesh.frag fades the probe out where they fade in)
+        static const bool rtOff = [] { const char* v = std::getenv("RT_RT_REFLECT"); return v && std::strcmp(v, "0") == 0; }();
+        const bool rays = !rtOff && rayQuery && rt.hasTopLevel() && !rtRows.empty();
+        pb[5] = rays ? rtRules[0] : 0.0f;
+        pb[6] = rays ? rtRules[1] : 0.0f;
+        pb[7] = rays ? rtRules[2] : 0.0f;
         std::memcpy(pb + 8 + kMaxProbes * 12, probeGrid.cells.data(), probeGrid.cells.size() * sizeof(uint32_t));
         for (uint32_t i = 0; i < n; ++i) {
             const ReflectionProbe& rp = probes[i];
@@ -8481,6 +8519,14 @@ void VulkanRenderer::shutdown() {
     impl->destroyInstanceBuffers();
     impl->destroyCrowd();
     impl->destroyUploads();
+    impl->rt.shutdown();
+    for (int f = 0; f < MAX_FRAMES_IN_FLIGHT; ++f)
+        if (impl->rtRowBuf[f]) { vmaDestroyBuffer(impl->allocator, impl->rtRowBuf[f], impl->rtRowAlloc[f]); impl->rtRowBuf[f] = VK_NULL_HANDLE; }
+    if (impl->rtPipe) vkDestroyPipeline(impl->device, impl->rtPipe, nullptr);
+    if (impl->rtLayout) vkDestroyPipelineLayout(impl->device, impl->rtLayout, nullptr);
+    if (impl->rtPool) vkDestroyDescriptorPool(impl->device, impl->rtPool, nullptr);
+    if (impl->rtSetLayout) vkDestroyDescriptorSetLayout(impl->device, impl->rtSetLayout, nullptr);
+    impl->rtPipe = VK_NULL_HANDLE; impl->rtLayout = VK_NULL_HANDLE; impl->rtPool = VK_NULL_HANDLE; impl->rtSetLayout = VK_NULL_HANDLE;
     if (impl->allocator) { vmaDestroyAllocator(impl->allocator); impl->allocator = nullptr; }
     vkDestroyDevice(impl->device, nullptr);
     impl->device = VK_NULL_HANDLE;
@@ -8657,8 +8703,13 @@ std::string VulkanRenderer::memoryReport() const {
 void VulkanRenderer::removeMesh(MeshHandle handle) {
     GpuMesh* m = impl->meshes.get(handle);
     if (!m) return;
-    // Retired, not destroyed: the frames in flight may still draw it (collectRetired).
+    // Retired, not destroyed: the frames in flight may still draw it (collectRetired). Its ray structure too.
     impl->retiredMeshes.push_back({*m, impl->frameCounter});
+    const uint64_t rtKey = (static_cast<uint64_t>(handle.generation) << 32) | handle.index;
+    impl->rt.forget(rtKey, impl->frameCounter);
+    // (its rows keep their custom indices: the instance leaves the list, its row stays unread until the next hand-over)
+    impl->rtInstances.erase(std::remove_if(impl->rtInstances.begin(), impl->rtInstances.end(),
+                                           [&](const RtScene::Instance& in) { return in.key == rtKey; }), impl->rtInstances.end());
     impl->meshes.erase(handle);
 }
 
@@ -8782,6 +8833,227 @@ void VulkanRenderer::setEnvironmentMap(TextureHandle equirect) {
 
 // THE REFLECTION PROBES (ADR-0373): slot i is probes[i]; one that moved (or is new) is unlit until its six faces are
 // captured again
+bool VulkanRenderer::supportsRayQuery() const { return impl->rayQuery; }
+
+// THE NEAR SCENE FOR RAYS (ADR-0376): the engine's near instances, their meshes' buffers resolved now (a mesh removed
+// before the frame records is simply not there). The budget is set at the first call, from what is free then.
+void VulkanRenderer::setRayInstances(const std::vector<RayInstance>& nearestFirst, float memoryShare, const float rules[3]) {
+    if (!impl->rayQuery) return;
+    if (!impl->rt.ready()) {
+        VkDeviceSize freeBytes = 0;
+        VmaBudget budgets[VK_MAX_MEMORY_HEAPS];
+        vmaGetHeapBudgets(impl->allocator, budgets);
+        const VkPhysicalDeviceMemoryProperties* props = nullptr;
+        vmaGetMemoryProperties(impl->allocator, &props);
+        for (uint32_t h = 0; props && h < props->memoryHeapCount; ++h)
+            if ((props->memoryHeaps[h].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) && budgets[h].budget > budgets[h].usage)
+                freeBytes = std::max<VkDeviceSize>(freeBytes, budgets[h].budget - budgets[h].usage);
+        // a share of what is free, and never more than 1.5 GB whatever the card
+        const VkDeviceSize budget = std::min<VkDeviceSize>(static_cast<VkDeviceSize>(static_cast<double>(freeBytes) *
+                                                                std::clamp(memoryShare, 0.0f, 0.5f)), VkDeviceSize(1536) << 20);
+        if (!impl->rt.init(impl->device, impl->allocator, impl->physicalDevice, budget)) {
+            LOG_WARN << "[rt] the acceleration-structure entry points are missing: no ray-traced reflections";
+            impl->rayQuery = false;
+            return;
+        }
+        LOG_INFO << "[rt] near scene: budget " << budget / 1048576.0 << " MB (" << memoryShare * 100.0f << "% of "
+                 << freeBytes / 1048576.0 << " MB free)";
+    }
+    for (int k = 0; k < 3; ++k) impl->rtRules[k] = rules[k];
+    impl->rtInstances.clear();
+    impl->rtInstances.reserve(nearestFirst.size());
+    impl->rtRows.clear();
+    for (const RayInstance& r : nearestFirst) {
+        GpuMesh* m = impl->meshes.get(r.mesh);
+        if (!m || m->indexCount == 0) continue;
+        RtScene::Instance in;
+        in.key = (static_cast<uint64_t>(r.mesh.generation) << 32) | r.mesh.index;
+        in.vertexBuffer = m->vertexBuffer;
+        in.indexBuffer = m->indexBuffer;
+        in.vertexCount = static_cast<uint32_t>(m->vertexCount);
+        in.indexCount = m->indexCount;
+        in.stride = m->packed ? 32u : 56u;
+        for (int row = 0; row < 3; ++row)
+            for (int col = 0; col < 4; ++col) in.transform[row * 4 + col] = static_cast<float>(r.transform.m[row][col]);
+        in.custom = static_cast<uint32_t>(impl->rtInstances.size());
+        impl->rtInstances.push_back(in);
+        Impl::RtInstGpu row{};
+        const RenderMaterial& mat = r.material;
+        row.albedoRough[0] = static_cast<float>(mat.albedo.x); row.albedoRough[1] = static_cast<float>(mat.albedo.y);
+        row.albedoRough[2] = static_cast<float>(mat.albedo.z); row.albedoRough[3] = mat.roughness;
+        row.emissionMetal[0] = static_cast<float>(mat.emission.x); row.emissionMetal[1] = static_cast<float>(mat.emission.y);
+        row.emissionMetal[2] = static_cast<float>(mat.emission.z); row.emissionMetal[3] = mat.metallic;
+        VkBufferDeviceAddressInfo ai{};
+        ai.sType = VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO;
+        ai.buffer = m->vertexBuffer;
+        row.vertices = vkGetBufferDeviceAddress(impl->device, &ai);
+        ai.buffer = m->indexBuffer;
+        row.indices = vkGetBufferDeviceAddress(impl->device, &ai);
+        row.strideWords = m->packed ? 8u : 14u;
+        row.packed = m->packed ? 1u : 0u;
+        row.flags = mat.flags;
+        impl->rtRows.push_back(row);
+    }
+}
+
+void VulkanRenderer::Impl::recordRayScene(VkCommandBuffer cmd) {
+    if (!rayQuery || !rt.ready()) return;
+    // (a mesh removed since the engine handed the list over has left it: removeMesh)
+    rt.record(cmd, currentFrame, frameCounter, rtInstances);
+    static const bool log = std::getenv("RT_DUMP_STATS") != nullptr;
+    if (log && frameCounter >= rtLogged + 300) {
+        rtLogged = frameCounter;
+        const RtScene::Stats st = rt.stats();
+        LOG_INFO << "[rt] near scene: " << st.instances << " instances in the top level (" << st.skipped << " left out), "
+                 << st.structures << " bottom levels, " << st.builtThisFrame << " built this frame; " << st.bytes / 1048576.0
+                 << " of " << st.budget / 1048576.0 << " MB (bottom levels " << st.bottomBytes / 1048576.0 << ", scratch "
+                 << st.scratchBytes / 1048576.0 << ")";
+    }
+}
+
+// THE REFLECTION RAYS' PASS (ADR-0376 step 3c): rt_reflect.comp, set 0 the frame's (dynamic offset 0), set 1 its own
+// per frame in flight -- depth, normal, the screen-space target as storage, the near scene, the hit-shading rows
+bool VulkanRenderer::Impl::ensureRtReflectPipeline() {
+    if (rtPipe) return true;
+    if (rtPipeFailed) return false;
+    rtPipeFailed = true;
+    VkDescriptorSetLayoutBinding b[5]{};
+    const VkDescriptorType types[5] = {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                                       VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR,
+                                       VK_DESCRIPTOR_TYPE_STORAGE_BUFFER};
+    for (int k = 0; k < 5; ++k) {
+        b[k].binding = static_cast<uint32_t>(k);
+        b[k].descriptorType = types[k];
+        b[k].descriptorCount = 1;
+        b[k].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    }
+    VkDescriptorSetLayoutCreateInfo li{};
+    li.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    li.bindingCount = 5;
+    li.pBindings = b;
+    if (vkCreateDescriptorSetLayout(device, &li, nullptr, &rtSetLayout) != VK_SUCCESS) return false;
+    VkDescriptorPoolSize sz[4] = {{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 2 * MAX_FRAMES_IN_FLIGHT},
+                                  {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, MAX_FRAMES_IN_FLIGHT},
+                                  {VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, MAX_FRAMES_IN_FLIGHT},
+                                  {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, MAX_FRAMES_IN_FLIGHT}};
+    VkDescriptorPoolCreateInfo pi{};
+    pi.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    pi.maxSets = MAX_FRAMES_IN_FLIGHT;
+    pi.poolSizeCount = 4;
+    pi.pPoolSizes = sz;
+    if (vkCreateDescriptorPool(device, &pi, nullptr, &rtPool) != VK_SUCCESS) return false;
+    for (int f = 0; f < MAX_FRAMES_IN_FLIGHT; ++f) {
+        VkDescriptorSetAllocateInfo a{};
+        a.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+        a.descriptorPool = rtPool;
+        a.descriptorSetCount = 1;
+        a.pSetLayouts = &rtSetLayout;
+        if (vkAllocateDescriptorSets(device, &a, &rtSets[f]) != VK_SUCCESS) return false;
+    }
+    const VkDescriptorSetLayout sls[2] = {descriptorSetLayout, rtSetLayout};
+    VkPushConstantRange range{VK_SHADER_STAGE_COMPUTE_BIT, 0, 16};
+    VkPipelineLayoutCreateInfo pl{};
+    pl.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    pl.setLayoutCount = 2;
+    pl.pSetLayouts = sls;
+    pl.pushConstantRangeCount = 1;
+    pl.pPushConstantRanges = &range;
+    if (vkCreatePipelineLayout(device, &pl, nullptr, &rtLayout) != VK_SUCCESS) return false;
+    VkShaderModule mod = loadShaderModule(std::string(RT_VULKAN_SHADER_DIR) + "/rt_reflect.comp.spv");
+    if (!mod) return false;
+    VkComputePipelineCreateInfo ci{};
+    ci.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+    ci.stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    ci.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+    ci.stage.module = mod;
+    ci.stage.pName = "main";
+    ci.layout = rtLayout;
+    const VkResult r = vkCreateComputePipelines(device, VK_NULL_HANDLE, 1, &ci, nullptr, &rtPipe);
+    vkDestroyShaderModule(device, mod, nullptr);
+    if (r != VK_SUCCESS) return false;
+    rtPipeFailed = false;
+    LOG_INFO << "[rt] reflection rays ready (rt_reflect.comp)";
+    return true;
+}
+
+void VulkanRenderer::Impl::recordRtReflect(VkCommandBuffer cmd) {
+    static const bool off = [] { const char* v = std::getenv("RT_RT_REFLECT"); return v && std::strcmp(v, "0") == 0; }();
+    if (off || !rayQuery || !rt.hasTopLevel() || rtRows.empty() || !ssrImage || !ensureRtReflectPipeline()) return;
+    const int f = currentFrame;
+    // this frame's hit-shading rows
+    const VkDeviceSize bytes = rtRows.size() * sizeof(RtInstGpu);
+    if (rtRowCap[f] < bytes) {
+        if (rtRowBuf[f]) vmaDestroyBuffer(allocator, rtRowBuf[f], rtRowAlloc[f]);   // (this slot's last frame has finished)
+        rtRowBuf[f] = VK_NULL_HANDLE;
+        rtRowCap[f] = 0;
+        VkBufferCreateInfo bi{};
+        bi.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+        bi.size = std::max<VkDeviceSize>(bytes * 2, 64 * 1024);
+        bi.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+        VmaAllocationCreateInfo ai{};
+        ai.usage = VMA_MEMORY_USAGE_AUTO;
+        ai.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT;
+        VmaAllocationInfo got{};
+        if (vmaCreateBuffer(allocator, &bi, &ai, &rtRowBuf[f], &rtRowAlloc[f], &got) != VK_SUCCESS) return;
+        rtRowMapped[f] = got.pMappedData;
+        rtRowCap[f] = bi.size;
+    }
+    std::memcpy(rtRowMapped[f], rtRows.data(), static_cast<std::size_t>(bytes));
+    vmaFlushAllocation(allocator, rtRowAlloc[f], 0, bytes);
+    // its set: the views of this frame (the targets are recreated on a resize), the near scene as it is now
+    VkDescriptorImageInfo img[3] = {{gbufferSampler, depthView, VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL},
+                                    {gbufferSampler, normalView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
+                                    {VK_NULL_HANDLE, ssrView, VK_IMAGE_LAYOUT_GENERAL}};
+    VkAccelerationStructureKHR tl = rt.topLevel();
+    VkWriteDescriptorSetAccelerationStructureKHR asw{};
+    asw.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET_ACCELERATION_STRUCTURE_KHR;
+    asw.accelerationStructureCount = 1;
+    asw.pAccelerationStructures = &tl;
+    VkDescriptorBufferInfo rows{rtRowBuf[f], 0, VK_WHOLE_SIZE};
+    VkWriteDescriptorSet w[5]{};
+    for (int k = 0; k < 5; ++k) {
+        w[k].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        w[k].dstSet = rtSets[f];
+        w[k].dstBinding = static_cast<uint32_t>(k);
+        w[k].descriptorCount = 1;
+    }
+    for (int k = 0; k < 3; ++k) {
+        w[k].descriptorType = k < 2 ? VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER : VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+        w[k].pImageInfo = &img[k];
+    }
+    w[3].descriptorType = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
+    w[3].pNext = &asw;
+    w[4].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    w[4].pBufferInfo = &rows;
+    vkUpdateDescriptorSets(device, 5, w, 0, nullptr);
+    // the screen-space target: from its pass's output to the rays' read-and-write, and back for the composite
+    VkImageMemoryBarrier ib{};
+    ib.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    ib.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    ib.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+    ib.oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    ib.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+    ib.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    ib.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    ib.image = ssrImage;
+    ib.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 0,
+                         nullptr, 1, &ib);
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, rtPipe);
+    const uint32_t frameSlot = 0;
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, rtLayout, 0, 1, &descriptorSets[currentFrame], 1, &frameSlot);
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, rtLayout, 1, 1, &rtSets[f], 0, nullptr);
+    const float push[4] = {rtRules[0], rtRules[1], rtRules[2], ssrBlendStrength};
+    vkCmdPushConstants(cmd, rtLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push), push);
+    vkCmdDispatch(cmd, (ssrExtent.width + 7) / 8, (ssrExtent.height + 7) / 8, 1);
+    ib.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+    ib.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    ib.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+    ib.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0,
+                         nullptr, 1, &ib);
+}
+
 void VulkanRenderer::setReflectionProbes(const std::vector<ReflectionProbe>& probes) {
     const std::size_t n = std::min<std::size_t>(probes.size(), Impl::kMaxProbes);
     for (std::size_t i = 0; i < n; ++i) {

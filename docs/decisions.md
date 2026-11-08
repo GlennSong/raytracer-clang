@@ -17078,3 +17078,39 @@ everything does not. Glenn: close up ray traced, farther away faked.
   chain), VMA takes buffer device addresses, and mesh vertex and index buffers are addressable build inputs (and
   storage, for hit shading). `RT_RT_REFLECT=0` leaves it all off. Validation-clean on river_town; the frame's cost
   unchanged (11.10 vs 11.21 ms).
+- **3b. The near scene** (`renderer/vulkan/rt_scene.h`). RenderSystem picks what a ray may hit, once the camera has
+  moved 5 m or a second on. These are the instances of lights.lua `raytrace.hits` (by default structure and furniture,
+  a level's drawDistances names via the one `drawClassName`) within `near` (150 m), every way round. Each is the tier
+  the draw would pick from here. They go nearest first through `Renderer::setRayInstances`.
+  - The renderer builds a bottom level per mesh, nearest first. Builds are spread over frames (600k triangles a frame).
+    A mesh no instance has used for 300 frames retires; a removed mesh's structure retires with it.
+  - A top level over the ready instances is rebuilt each frame.
+  - **The budget** is `memory_share` (25%) of the device memory free at the first call, never over 1.5 GB. It
+    covers the bottom levels, the scratch and the top level. A mesh that would pass it is left out (the probes answer
+    for it); nothing is allocated past it.
+  - river_town: ~600 instances, 115-155 MB of bottom levels, 12 MB of scratch, of a 1.37 GB budget. That is 3-4x
+    ADR-0375's measurement, which only counted what was drawn: buildings occluded from the camera were never drawn
+    there, but a reflection sees them. On the island the budget (25% of 1.2 GB) will bind near the towers, dropping
+    the farthest buildings.
+  - Cost: +0.14 ms GPU, +0.09 ms recording. Validation-clean.
+  - Owed: compaction (about half the bytes), cars (SimBody: every frame).
+- **3c. The rays** (`rt_reflect.comp`, after the screen-space pass, at its half resolution, into its target).
+  - Every pixel smoother than `max_roughness` (0.3) within `near` traces its reflection against the near scene.
+  - A hit is shaded from its own triangle, read through buffer addresses: its vertex colour, its material (each
+    instance's row: albedo, roughness, emission, metallic, and the emission tinted by the vertex colour where the
+    material says), and its geometric normal. The frame's lights light it as the scene pass would (`shadeLight`), the
+    sun's shadow by a second ray, plus the sky's harmonics. It is pre-exposed.
+  - A miss takes the probe's reflection: past the near scene it is faked.
+  - The confidence is the screen-space rule (`mix(0.2, 1, fresnel)` x roughness fade x blend strength), and the
+    result fades back to the screen-space one over the last `fade` (25 m).
+  - **No ghost:** mesh.frag fades the probe's reflection out where the rays fade in (the same near, fade and roughness
+    rule, in the probe buffer's spare header; zero when the rays are off). Without it, the blurry probe image showed
+    under the sharp one.
+  - **Seen** (`~/Pictures/Raytracer/2026-11-07_raytraced_reflections_first_light.jpg`, the river_town bench at
+    noon): the tower's panes show the building across the street window by window, and the white tower behind it,
+    where the probes gave a smear. Validation-clean.
+  - Cost: +0.56 ms GPU (the ssr slot 0.16 -> 0.72 ms); the frame 11.8 ms.
+  - `RT_RT_REFLECT=0` turns the rays and the ray device features off.
+  - Owed: compaction; cars and people in the near scene (SimBody, every frame); the brightness on glass checked
+    against the probes' split-sum reflectance (the screen-space confidence rule reads a little dark straight-on);
+    textures at hits (vertex colour and material only today); denoising if rougher surfaces ever take rays; Metal.

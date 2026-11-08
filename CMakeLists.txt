@@ -1165,6 +1165,15 @@ function(rt_build_vulkan_shaders)
             VERBATIM)
         list(APPEND VK_SPV_FILES ${VK_SHADER_OUT_DIR}/${shader}.spv)
     endforeach()
+    # the reflection rays (ADR-0376): ray queries need the Vulkan 1.2 target (SPIR-V 1.4+)
+    add_custom_command(
+        OUTPUT ${VK_SHADER_OUT_DIR}/rt_reflect.comp.spv
+        COMMAND ${Vulkan_GLSLC_EXECUTABLE} --target-env=vulkan1.2 ${VK_SHADER_SRC_DIR}/rt_reflect.comp -I ${VK_SHADER_SRC_DIR}
+                -o ${VK_SHADER_OUT_DIR}/rt_reflect.comp.spv
+        DEPENDS ${VK_SHADER_SRC_DIR}/rt_reflect.comp ${VK_SHADER_SRC_DIR}/sky_common.glsl ${VK_SHADER_SRC_DIR}/sky_physical.glsl ${VK_SHADER_SRC_DIR}/globals.glsl ${VK_SHADER_SRC_DIR}/lighting_common.glsl
+        COMMENT "glslc rt_reflect.comp (vulkan1.2) -> rt_reflect.comp.spv"
+        VERBATIM)
+    list(APPEND VK_SPV_FILES ${VK_SHADER_OUT_DIR}/rt_reflect.comp.spv)
     # the reflection probes' capture (ADR-0372): mesh.frag again, writing the surface rather than its light
     add_custom_command(
         OUTPUT ${VK_SHADER_OUT_DIR}/mesh_probe.frag.spv
@@ -1421,7 +1430,7 @@ else()
     # ADR-0057; see src/renderer/vulkan/AGENTS.md.
     find_package(Vulkan QUIET)
     if(Vulkan_FOUND)
-        list(APPEND VIEWER_SOURCES src/renderer/vulkan/vulkan_renderer.cpp src/renderer/vulkan/vma_impl.cpp src/renderer/vulkan/rt_measure.cpp)
+        list(APPEND VIEWER_SOURCES src/renderer/vulkan/vulkan_renderer.cpp src/renderer/vulkan/vma_impl.cpp src/renderer/vulkan/rt_measure.cpp src/renderer/vulkan/rt_scene.cpp)
         set(PLATFORM_LIBS Vulkan::Vulkan)
 
         # Compile the SPIR-V shaders (shared target; sets VK_SHADER_OUT_DIR).
@@ -1547,6 +1556,7 @@ if(Qt6_FOUND)
                 src/renderer/vulkan/vulkan_renderer.cpp
                 src/renderer/vulkan/vma_impl.cpp
                 src/renderer/vulkan/rt_measure.cpp
+                src/renderer/vulkan/rt_scene.cpp
                 src/editor_app/vulkan_viewport.cpp
             )
             target_include_directories(editor_app SYSTEM PRIVATE third_party/VulkanMemoryAllocator)

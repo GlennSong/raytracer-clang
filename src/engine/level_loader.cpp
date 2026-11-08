@@ -8529,16 +8529,8 @@ bool LevelLoader::load(const std::string& path,
         if (r.contains("drawDistances") && r["drawDistances"].is_object()) {
             const auto& d = r["drawDistances"];
             DrawPolicy p;
-            auto set = [&](DrawClass c, const char* key) {
-                p.distance[static_cast<int>(c)] = d.value(key, 0.0);
-            };
-            set(DrawClass::Terrain,     "terrain");
-            set(DrawClass::Structure,   "structure");
-            set(DrawClass::Scenery,     "scenery");
-            set(DrawClass::Furniture,   "furniture");
-            set(DrawClass::GroundPaint, "groundPaint");
-            set(DrawClass::SimBody,     "simBody");
-            set(DrawClass::Effect,      "effect");
+            for (int c = 0; c < static_cast<int>(DrawClass::Count); ++c)
+                if (const char* key = drawClassName(static_cast<DrawClass>(c))) p.distance[c] = d.value(key, 0.0);
             world.add<DrawPolicy>(world.create(), p);
         }
     }

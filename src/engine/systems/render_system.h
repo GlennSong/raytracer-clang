@@ -71,7 +71,12 @@ private:
     struct TierFade { float a = 0.0f; uint32_t mesh = ~0u; uint64_t seen = 0; };
     std::vector<TierFade> tierFade_;
     uint64_t frameNo_ = 0;
-    uint64_t probeRevision_ = 0;   // the probe board's slots last handed to the renderer (ADR-0374)
+    uint64_t probeRevision_ = 0;
+    // the ray-traced reflections' near scene (ADR-0376): where and when it was last picked, and the lists (reused)
+    Vec3 rayEye_{1e30, 0, 0};
+    uint64_t rayFrame_ = 0;
+    std::vector<std::pair<Real, Renderer::RayInstance>> rayNear_;
+    std::vector<Renderer::RayInstance> rayList_;   // the probe board's slots last handed to the renderer (ADR-0374)
     std::chrono::steady_clock::time_point lastRender_;
 };
 

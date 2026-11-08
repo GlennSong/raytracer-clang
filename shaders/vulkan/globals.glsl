@@ -78,7 +78,8 @@ layout(set = 0, binding = 7) uniform sampler2D terrainMacroMap;     // its conve
 
 // THE REFLECTION PROBES (ADR-0373): their count (x), then each one's position (w 1: relit), box min, box max; and their
 // relit cubes, a cube array with GGX mips (roughness 0 .. 1 over 5)
-// the probes (ADR-0373/0374): x count, yz the plan grid's min corner, w its cell (m); x its size in cells; each probe's
+// the probes (ADR-0373/0374): x count, yz the plan grid's min corner, w its cell (m); x its size in cells, yzw the
+// reflection rays' near, fade and roughest surface when they are on this frame (ADR-0376; w 0: off); each probe's
 // position (w 1: relit), box min, box max; the grid's cells, each the two probes to try, (first + 1) | (second + 1) << 8
 layout(std430, set = 0, binding = 16) readonly buffer ProbeBuf { vec4 probeCount; vec4 probeGridSize; vec4 probeData[192]; uint probeCells[]; };
 layout(set = 0, binding = 17) uniform samplerCubeArray probeRadiance;

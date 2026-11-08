@@ -1414,6 +1414,13 @@ void main() {
                                          : textureLod(skyCubeTex, R, roughness * 5.0).rgb;
         // ...or the street's, where a reflection probe holds this surface (ADR-0373)
         prefiltered = probeReflection(inWorldPos, R, roughness, prefiltered);
+        // ...but near the camera the rays answer (ADR-0376, rt_reflect.comp): the probe's part fades out exactly as
+        // theirs fades in, so the blurry reflection does not ghost under the sharp one
+        if (probeGridSize.w > 0.0 && roughness <= probeGridSize.w) {
+            float camDist = distance(inWorldPos, g.cameraPosition.xyz);
+            float nearFade = 1.0 - smoothstep(probeGridSize.y - probeGridSize.z, probeGridSize.y, camDist);
+            prefiltered *= 1.0 - nearFade * (1.0 - smoothstep(0.0, probeGridSize.w, roughness));
+        }
     } else {
         irradiance = sampleSkyDome(N);   // (no second sun: see sampleSkyDome)
         prefiltered = mix(sampleEnvironment(R), irradiance, roughness);  // crude roughness blur; a mirror keeps the sun
