@@ -723,9 +723,11 @@ void applySurfaceRelief(uint id, vec3 worldPos, vec2 meshUV, float time,
                                            normal, rough);
 }
 
+// (`indoor`: a room's surface, which takes its lights' bounce too -- roomBounce)
 vec3 evaluateLighting(vec3 worldPos, vec3 N, vec3 V, vec3 albedo,
-                      float metallic, float roughness, vec3 f0, vec3 sunShadow) {
+                      float metallic, float roughness, vec3 f0, vec3 sunShadow, bool indoor) {
     vec3 directLight = vec3(0.0);
+    vec3 bounce = vec3(0.0);
     float a = max(roughness * roughness, 0.002);
     float a2 = a * a;
     float NdotV = max(dot(N, V), 1e-4);
@@ -743,14 +745,18 @@ vec3 evaluateLighting(vec3 worldPos, vec3 N, vec3 V, vec3 albedo,
                : clamp(int(log(depth / g.clusterDepth.x) * g.clusterDepth.y * float(g.clusterGrid.z)), 0, g.clusterGrid.z - 1);
         uint oc = clusterCells[(sl * g.clusterGrid.y + ty) * g.clusterGrid.x + tx];
         uint off = oc & 0xFFFFFFu, n = oc >> 24;
-        for (uint k = 0u; k < n; ++k)
-            directLight += shadeLight(clusterLights[clusterIndices[off + k]], worldPos, N, V, albedo, metallic, f0, a2,
-                                      NdotV, sunShadow);
-        return directLight;
+        for (uint k = 0u; k < n; ++k) {
+            Light light = clusterLights[clusterIndices[off + k]];
+            directLight += shadeLight(light, worldPos, N, V, albedo, metallic, f0, a2, NdotV, sunShadow);
+            if (indoor) bounce += roomBounce(light, worldPos);
+        }
+        return directLight + bounce * albedo * (1.0 - metallic) / PI;
     }
-    for (int i = 0; i < count; ++i)
+    for (int i = 0; i < count; ++i) {
         directLight += shadeLight(g.lights[i], worldPos, N, V, albedo, metallic, f0, a2, NdotV, sunShadow);
-    return directLight;
+        if (indoor) bounce += roomBounce(g.lights[i], worldPos);
+    }
+    return directLight + bounce * albedo * (1.0 - metallic) / PI;
 }
 
 // THE ROOM A WINDOW REFLECTS (the viewer's own glass, at night a dark mirror of the lit room): the light the
@@ -1402,7 +1408,8 @@ void main() {
     vec3 directShadow  = mix(vec3(1.0), g.shadowTint.rgb, (1.0 - sunVis) * strength);
     vec3 ambientShadow = mix(vec3(1.0), g.shadowTint.rgb, (1.0 - sunVis) * g.shadowTint.w);
 
-    vec3 direct = evaluateLighting(inWorldPos, N, V, albedo, metallic, roughness, f0, directShadow);
+    vec3 direct = evaluateLighting(inWorldPos, N, V, albedo, metallic, roughness, f0, directShadow,
+                                   (pc.surfaceFlags.y & (1u << 28)) != 0u);
 
     // GRASS TRANSMISSION (FLAG_GRASS), the cheap stand-in for subsurface scattering: sunlight
     // through thin blades. Strongest looking toward the sun (the backlit glow of a field at
@@ -1637,9 +1644,15 @@ void main() {
             // like there's no glass there" at one face's 4 %)
             vec3 fs = own ? vec3(0.15) * brdf.x + brdf.y : f0 * brdf.x + brdf.y;   // the split-sum reflectance
             vec3 Rv = reflect(-V, dot(N, V) < 0.0 ? -N : N);
-            vec3 reflected = own ? fs * (g.ambient.rgb * 0.35 + roomRadiance(inWorldPos) + ceilingPanels(inWorldPos, Rv))
-                                 // (the room: by day its walls lit by the daylight through these windows -- the sky's
-                                 // light on a 0.7 wall, half of it; at night its lamps, the ceiling's panels in it)
+            // (the room: by day its walls lit by the daylight through these windows -- the indoor share of the sky's
+            // light on a 0.7 wall, as the room's own surfaces take it above; at night its lamps, the ceiling's panels
+            // in it. Under the physical sky both come in its units: the old unitless 0.35 of the ambient strength,
+            // pre-exposed for a night room, turned every window white -- Glenn, 2026-11-08)
+            float glowScale = skyIsPhysical() ? g.skyPhysical3.z : 1.0;
+            vec3 roomDay = skyIsPhysical()
+                ? vec3(dot(skyIrradianceSH(vec3(0.0, 1.0, 0.0)), vec3(0.2126, 0.7152, 0.0722)) * 0.30 * 0.7)
+                : g.ambient.rgb * 0.35;
+            vec3 reflected = own ? fs * (roomDay + roomRadiance(inWorldPos) + ceilingPanels(inWorldPos, Rv) * glowScale)
                                  : prefiltered * fs * g.ambient.rgb * ambientShadow;
             float F = clamp(max(fs.r, max(fs.g, fs.b)), 0.0, 1.0);
             float T = 1.0 - 0.4 * opacity;

@@ -102,6 +102,31 @@ float computeShadow(vec3 worldPos, vec3 N, float viewDepth) {
 }
 
 // ---- main ------------------------------------------------------------------
+// A room's light (ADR-0365) reaches only inside its room's box: 1 inside, 0 past its walls -- its own walls' inner
+// faces lit, the next room's not
+float roomLightInside(Light light, vec3 worldPos) {
+    vec2 d = worldPos.xz - light.directionInner.xy;
+    vec2 u = light.directionInner.zw;
+    float out_ = max(max(abs(dot(d, u)) - light.typeRange.z, abs(dot(d, vec2(-u.y, u.x))) - light.typeRange.w),
+                     light.colorOuter.w - 0.05 - worldPos.y);
+    return 1.0 - smoothstep(0.02, 0.12, out_);
+}
+
+// THE ROOM'S BOUNCE (Glenn, 2026-11-08: "lights in the interior at night are too dim"): a room's light reaches the
+// ceiling and the walls beside it mostly off the floor and the other walls -- in a pale room about as much again as
+// it gives directly. Each room light's irradiance at a distance softened by the room's height (the bounce comes from
+// everywhere round it), facing no way, at half (a room's average reflectance), kept to its room. Irradiance: the
+// caller takes albedo / pi of it.
+vec3 roomBounce(Light light, vec3 worldPos) {
+    if (int(light.typeRange.x) != 3) return vec3(0.0);
+    float dist = length(light.positionIntensity.xyz - worldPos);
+    float ratio2 = (dist * dist) / max(light.typeRange.y * light.typeRange.y, 1e-4);
+    float window = clamp(1.0 - ratio2 * ratio2, 0.0, 1.0);
+    const float kSoften2 = 2.5 * 2.5, kReflectance = 0.5;
+    return light.colorOuter.rgb * (light.positionIntensity.w * kReflectance * window * window / (dist * dist + kSoften2)) *
+           roomLightInside(light, worldPos);
+}
+
 // One light's direct contribution (the GGX specular + Lambert diffuse, the sun's shadow on the sun only).
 vec3 shadeLight(Light light, vec3 worldPos, vec3 N, vec3 V, vec3 albedo, float metallic, vec3 f0, float a2,
                 float NdotV, vec3 sunShadow) {
@@ -120,11 +145,7 @@ vec3 shadeLight(Light light, vec3 worldPos, vec3 N, vec3 V, vec3 albedo, float m
             float theta = dot(-L, normalize(light.directionInner.xyz));
             attenuation *= smoothstep(light.colorOuter.w, light.directionInner.w, theta);
         } else if (type == 3) {            // a room's light (ADR-0365): only inside its room's box
-            vec2 d = worldPos.xz - light.directionInner.xy;
-            vec2 u = light.directionInner.zw;
-            float out_ = max(max(abs(dot(d, u)) - light.typeRange.z, abs(dot(d, vec2(-u.y, u.x))) - light.typeRange.w),
-                             light.colorOuter.w - 0.05 - worldPos.y);
-            attenuation *= 1.0 - smoothstep(0.02, 0.12, out_);   // its own walls' inner faces lit, the next room's not
+            attenuation *= roomLightInside(light, worldPos);
         }
     }
     float NdotL = max(dot(N, L), 0.0);

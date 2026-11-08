@@ -17256,3 +17256,37 @@ ADR-0377 kept the street's probes out of rooms and left a flat neutral reflectio
 - Transparent parts (opacity under 1: a car's glass) stay out of the near scene, so a ray goes into the car.
 - lights.lua raytrace hits: structure, furniture, simBody.
 - river_town bench: 759 instances in the top level (583 without the cars). The frame is 10.6 ms.
+
+## ADR-0382 — Night windows from inside, a room's bounce, brighter buses
+
+**Context.** Glenn, 2026-11-08: at night every window seen from inside a building or a bus was white, "a shaded/AO
+only version of what's outside with no color"; interiors too dim ("an office would be bright"); bus lights "a bit dim".
+
+**Diagnosis.**
+- With the panes hidden (RT_GLASS=none) the night street showed through, dark, with its lit windows. The white was
+  the pane's own reflection.
+- A window of the viewer's own (mesh.frag's glass as a filter, SceneLighting::viewerBox) reflects the room behind
+  them. Its daylight term was `g.ambient.rgb * 0.35`, the unitless ambient strength. Under the physical sky the camera's
+  exposure is pre-applied (ADR-0366), and at night that is ~170x, so the constant came out white. The ceiling panels
+  in it were in the old units too.
+- The office's eye was keyed right: median 20 nits, at mid grey. The room lacked light: each fitting lit only what
+  faced it, so the ceiling between the panels and the far walls went dark.
+
+**Decision.**
+- **The own window's room** takes the room's real light: by day the indoor share of the sky's light (0.30, as an
+  indoor surface takes it, ADR-0377) on a 0.7 wall; at night its lamps; the ceiling panels at the glows' physical
+  scale. The old sky keeps the old term.
+- **A room's bounce** (lighting_common.glsl `roomBounce`): every room light (type 3) adds to an indoor surface
+  (FLAG_INDOOR) its irradiance at a distance softened by 2.5 m, facing no way, at half (a room's reflectance), kept to
+  its room's box as the light is. The room-box test is one function now, `roomLightInside`. The office's median went
+  20 -> 37 nits; the ceiling and walls are lit.
+- **Highlight protection** (ADR-0378) is off inside a viewer box: a room's brightest 3% is its own fittings, which
+  may clip.
+- **bus_cabin** 350 -> 800 cd.
+
+**Not seen on the bench:** the bus from inside (the bench rides with RT_AUDIO=null, which finds no cabin box) and a
+home's single-lamp room (no camera spot found); both take the same terms.
+
+**Owed:** the beacons' bulb and haze spheres (BeaconGlow, BeaconHaze) predate real beacon lights. Being transparent
+and not sprites, they draw through the glass path, which shows a pane's reflection and not its emission: grey-white
+shells. Removing them from the grammar is a lots tag bump.

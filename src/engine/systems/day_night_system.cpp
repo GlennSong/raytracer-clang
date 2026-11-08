@@ -782,9 +782,12 @@ void DayNightSystem::applyPhysicalSky(FrameContext& ctx, const DayNightState& st
         // than puts the frame's brightest 3% at kHighlightCeiling before the tone curve -- by day that is the sky, which
         // sits under it anyway; at night it is the lit windows, which a median-keyed eye pushed ~7 stops past white,
         // every tint the same white. A night city exposes as it photographs (EV100 ~4-6), the windows keeping colour.
+        // Not INSIDE (a building or a cabin: the viewer box, AudioSystem::publishViewerBox): there the brightest 3% is
+        // the room's own fittings, which may clip -- a room exposes for its walls, as a camera in one does (Glenn,
+        // 2026-11-08: "lights in the interior at night are too dim"; a lit office's median keys it anyway).
         constexpr double kHighlightCeiling = 1.5;
         float highLog2 = 0.0f;
-        if (ctx.renderer.measuredSceneHighlight(highLog2))
+        if (!lit.viewerBoxValid && ctx.renderer.measuredSceneHighlight(highLog2))
             target = std::min(target, kHighlightCeiling / std::max(std::exp2(static_cast<double>(highLog2)), 1e-12) * bias);
         const double lo = kLuxPerUnit / (1.2 * std::exp2(17.0)), hi = kLuxPerUnit / (1.2 * std::exp2(-3.0));
         target = std::clamp(target, lo, hi);
