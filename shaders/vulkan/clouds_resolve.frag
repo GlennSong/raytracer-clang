@@ -30,14 +30,20 @@ void main() {
     if (u.frame.y <= 0.0) { outColor = cur; return; }
     // the neighbourhood's range, this frame
     vec2 texel = 1.0 / vec2(textureSize(current, 0));
-    vec4 lo = cur, hi = cur;
+    vec4 lo = cur, hi = cur, sum = cur;
     for (int y = -1; y <= 1; ++y)
         for (int x = -1; x <= 1; ++x) {
             if (x == 0 && y == 0) continue;
             vec4 s = texture(current, inUV + vec2(x, y) * texel);
             lo = min(lo, s);
             hi = max(hi, s);
+            sum += s;
         }
+    // GRAIN IN LOW LIGHT (ADR-0379; Glenn: "Clouds are grainy in low light"): the march's per-frame noise is the same
+    // in the dark, but the night eye amplifies it several stops. What enters the history is the pixel taken most of
+    // the way to its 3 x 3 mean -- a cloud has no detail at half resolution that this blurs -- so ten frames of history
+    // average a third of the noise they did. (The clamp box above stays the raw neighbourhood's.)
+    cur = mix(cur, sum / 9.0, 0.7);
     // WHERE THIS PIXEL'S CLOUD WAS: the point along its ray at ITS cloud's depth (ADR-0334; the march's second target), or
     // with none, at the deck's middle height -- or the scene, nearer -- seen through last frame's camera (the flipped
     // convention of clouds.frag: ndc = uv * 2 - 1). By the middle height alone, clouds slid when the camera was near or

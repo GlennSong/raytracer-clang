@@ -17205,3 +17205,12 @@ the wood and tile floors speckle at night.
 
 **Owed:** the bus view verified from inside a riding bus (the bench could not board one); per-floor probes; the
 asphalt albedo in the bake (a lanes tag bump, Glenn's call).
+
+## ADR-0379 — Cloud grain in low light
+
+**Context.** Glenn: "Clouds are grainy in low light." The march's per-frame noise is the same at night, but the
+night eye amplifies it several stops, and ten frames of history (ADR-0328) did not average enough of it.
+
+**Decision.** In clouds_resolve.frag, the march's result enters the history taken 70% of the way to its 3 x 3 mean.
+A cloud has no detail at half resolution for this to blur. The clamp box stays the raw neighbourhood's, so edges
+still reject stale history. Seen at 20:30 from the river_town shore: smooth cloud edges at the night exposure.
