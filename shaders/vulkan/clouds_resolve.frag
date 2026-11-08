@@ -6,7 +6,7 @@
 // 1 - historyWeight of the new frame. Same set layout as the march: the uniforms, then three images.
 layout(set = 0, binding = 0) uniform CloudUniforms {
     mat4 invViewProjection;   // CAMERA-RELATIVE: clip -> the offset from the camera (ADR-0335)
-    vec4 cameraPosition;
+    vec4 cameraPosition;      // w the camera's exposure (pre-applied)
     vec4 sunDirection;
     vec4 sunColor;
     vec4 skyAmbient;
@@ -43,7 +43,11 @@ void main() {
     // in the dark, but the night eye amplifies it several stops. What enters the history is the pixel taken most of
     // the way to its 3 x 3 mean -- a cloud has no detail at half resolution that this blurs -- so ten frames of history
     // average a third of the noise they did. (The clamp box above stays the raw neighbourhood's.)
-    cur = mix(cur, sum / 9.0, 0.7);
+    // ...in low light only (ADR-0384): by day it took the wisps' edge detail with the grain (Glenn: "the clouds are
+    // very solid looking"). By the camera's exposure (cameraPosition.w, pre-applied: ~0.7 at noon, hundreds at
+    // night): none at 8 and under (EV100 ~11, early dusk), all of it from 64 (EV100 ~8).
+    float lowLight = smoothstep(3.0, 6.0, log2(max(u.cameraPosition.w, 1e-6)));
+    cur = mix(cur, sum / 9.0, 0.7 * lowLight);
     // WHERE THIS PIXEL'S CLOUD WAS: the point along its ray at ITS cloud's depth (ADR-0334; the march's second target), or
     // with none, at the deck's middle height -- or the scene, nearer -- seen through last frame's camera (the flipped
     // convention of clouds.frag: ndc = uv * 2 - 1). By the middle height alone, clouds slid when the camera was near or

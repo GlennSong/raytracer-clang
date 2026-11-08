@@ -8571,7 +8571,7 @@ bool LevelLoader::load(const std::string& path,
     //                         perspective (replaces exp fog while active).
     //   "environment.clouds" {coverage?, bottom?, top?, density?, noiseScale?,
     //                         wind?, steps?, lightSteps?, phaseG?, far?,
-    //                         ambient?, detailStrength?, enabled?} -> volumetric
+    //                         ambient?, detailStrength?, wisps?, cirrus?, enabled?} -> volumetric
     //                         cloud slab (retires the 2D FBM overlay while
     //                         active).
     view.lighting.skyScattering = SkyScatteringParams{};
@@ -8613,6 +8613,8 @@ bool LevelLoader::load(const std::string& path,
             vc.farDistance = c.value("far", vc.farDistance);
             vc.ambient     = c.value("ambient", vc.ambient);
             vc.detailStrength = c.value("detailStrength", vc.detailStrength);
+            vc.wisps = c.value("wisps", vc.wisps);
+            vc.cirrus = c.value("cirrus", vc.cirrus);
             // the cloud types (ADR-0336): up to four, along the type axis; and the range when the weather is off
             if (c.contains("types") && c["types"].is_array()) {
                 std::size_t k = 0;

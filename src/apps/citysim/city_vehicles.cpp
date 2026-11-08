@@ -323,7 +323,7 @@ Entity CityVehicleSystem::promote(engine::FrameContext& ctx, int bestAgent) {
         world.add<Renderable>(pe, pr);
         v.bodyParts.push_back(pe);
     };
-    addPart(city_.carGlassMesh(slot), 0.30f, 0.06f, 0.0f);
+    addPart(city_.carGlassMesh(slot), city_.carGlassOpacity(slot), 0.06f, 0.0f);
     addPart(city_.carCabinMesh(slot), 1.0f, 0.9f, 0.0f);
 
     // LAMPS from the recipe's markers, for the same reason the wheels come from

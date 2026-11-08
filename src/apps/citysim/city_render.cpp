@@ -1294,6 +1294,7 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
     carGlassOpaqueGroups_.clear();
     carInteriorGroups_.clear();
     carSeeInto_.clear();
+    carGlassOpacity_.clear();
     carOpenSeat_.clear();
     nearSwap_.clear();
     carSeats_.clear();
@@ -1321,6 +1322,7 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
             Real midFrom = 0;
             bool seeInto = false;
             bool openSeat = false;
+            float glassOpacity = 0.30f;
             std::vector<Vec3> seats, doors;
             std::vector<engine::CarBodyRecipe::DoorLeaf> doorLeaves;   // a bus's (ADR-0356)
             Vec3 driverSeat(0, 0, 0), rearHip(0, 0, 0);
@@ -1362,6 +1364,7 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
                         farMesh = std::move(recipe.far);
                         midFrom = static_cast<Real>(recipe.midFrom);
                         seeInto = recipe.seeInto;
+                        glassOpacity = static_cast<float>(recipe.glassOpacity);
                         openSeat = recipe.openSeat;
                         seats = recipe.seats;
                         doors = recipe.doors;
@@ -1410,7 +1413,7 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
                     gm.albedo = Vec3(1, 1, 1);
                     gm.metallic = 0.0f;
                     gm.roughness = 0.06f;
-                    gm.opacity = 0.30f;
+                    gm.opacity = glassOpacity;
                     gg.material = gm;
                     gg.renderLayer = engine::LayerSim;
                     gg.drawClass = engine::DrawClass::SimBody;
@@ -1431,7 +1434,9 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
                         world.add<InstanceGroup>(go, og);
                     }
                 }
-                if (assets && !seeInto && !interiorMesh.vertices.empty()) {
+                // (a see-into body's cabin too -- a bus's saloon, an open car's seats: drawn always, in this matte
+                // material, not in the chassis's paint)
+                if (assets && !interiorMesh.vertices.empty()) {
                     gi = world.create();
                     InstanceGroup ig;
                     ig.mesh = assets->acquireMesh(interiorMesh, "city:carcabin" + std::to_string(v));
@@ -1449,8 +1454,9 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
                 carGlassOpaqueGroups_.push_back(go);
                 carInteriorGroups_.push_back(gi);
                 carGlassMesh_.push_back(glassH);   // for a commandeered car (city_vehicles.cpp): its own glass + cabin
-                carCabinMesh_.push_back(cabinH);   // invalid for a see-into body, whose cabin is in its chassis
+                carCabinMesh_.push_back(cabinH);
                 carSeeInto_.push_back(seeInto ? 1 : 0);
+                carGlassOpacity_.push_back(glassOpacity);
                 carOpenSeat_.push_back(openSeat ? 1 : 0);
                 carSeats_.push_back(std::move(seats));
                 carDoors_.push_back(std::move(doors));
@@ -1475,7 +1481,7 @@ bool CityRenderSystem::build(World& world, AssetManager* assets,
                             gm.albedo = Vec3(1, 1, 1);
                             gm.metallic = 0.0f;
                             gm.roughness = 0.06f;
-                            gm.opacity = 0.30f;
+                            gm.opacity = glassOpacity;
                             gg.material = gm;
                             gg.renderLayer = engine::LayerSim;
                             gg.drawClass = engine::DrawClass::SimBody;

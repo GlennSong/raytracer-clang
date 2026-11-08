@@ -53,7 +53,7 @@ layout(push_constant) uniform Push {
     int   debugView;        // 0 normal; see the switch in main()
     int   dofEnabled;       // 1 → sample the DOF-blurred scene instead of HDR
     vec4  underwater;       // x active, y surface y, z visibility (m), w time (s)   (#58)
-    vec4  underwaterColor;  // rgb the water's colour
+    vec4  underwaterColor;  // rgb the water's colour, w the light coming down into it (units; 0: the old sky's colours)
 } pc;
 
 layout(location = 0) in vec2 inUV;
@@ -149,7 +149,11 @@ vec3 underwaterScene(vec3 hdr, vec2 uv) {
     float sunUp = max(g.skySunDir.y, 0.0);
     float sunLum = dot(g.skySunColor.rgb, luma) * sunUp * 0.08;
     float camDepth = max(0.0, surf - cam.y);
-    float light = (sky + sunLum) * exp(-camDepth / 22.0) * g.cameraPosition.w;   // (pre-exposed, ADR-0366)
+    // (under the physical sky, the light the renderer measured coming down: the sky colours are display values, which
+    // the night's pre-exposure turned white)
+    bool physical = pc.underwaterColor.w > 0.0;
+    float light = (physical ? pc.underwaterColor.w : sky + sunLum) * exp(-camDepth / 22.0) *
+                  g.cameraPosition.w;   // (pre-exposed, ADR-0366)
     vec3 water = pc.underwaterColor.rgb;
     vec3 scatter = water * light * 1.6;
     // absorption per channel: red dies in a few metres, blue-green carries
@@ -172,7 +176,9 @@ vec3 underwaterScene(vec3 hdr, vec2 uv) {
         float window = smoothstep(0.62, 0.70, dir.y);   // cos(48.6 deg) = 0.661
         // the sky and shore, through the window: the water mesh drawn over them from below reads dark, so
         // lean toward the sky's own light the way a diver sees the bright disc overhead
-        vec3 above = mix(g.skyHorizon.rgb, g.skyZenith.rgb, smoothstep(0.66, 1.0, dir.y)) * 1.1 * g.cameraPosition.w;
+        vec3 skyHue = mix(g.skyHorizon.rgb, g.skyZenith.rgb, smoothstep(0.66, 1.0, dir.y));
+        vec3 above = (physical ? skyHue / max(dot(skyHue, luma), 1e-4) * pc.underwaterColor.w : skyHue * 1.1) *
+                     g.cameraPosition.w;
         // the surface's ripples bend the disc: a little moving brightness across it
         above *= 0.9 + 0.2 * caustic(cam.xz + dir.xz / max(dir.y, 0.2) * (surf - cam.y), pc.underwater.w * 0.6);
         vec3 mirror = scatter * 0.55;                    // total internal reflection: the depths

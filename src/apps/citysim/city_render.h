@@ -423,6 +423,9 @@ public:
         return carOpenSeat_[static_cast<std::size_t>(((slot % n) + n) % n)] != 0;
     }
     engine::MeshHandle carCabinMesh(int slot) const { return slotOf(carCabinMesh_, slot); }
+    float carGlassOpacity(int slot) const {
+        return slot >= 0 && static_cast<std::size_t>(slot) < carGlassOpacity_.size() ? carGlassOpacity_[static_cast<std::size_t>(slot)] : 0.30f;
+    }
     // That car's lamp markers, for a promoted car's lenses. VehicleSystem falls
     // back to four lenses at GUESSED chassis corners when a Vehicle carries no
     // markers — which sat harmlessly on top of the old box car's baked lamp
@@ -697,6 +700,7 @@ private:
     std::vector<engine::Entity> carInteriorGroups_;
     std::vector<engine::MeshHandle> carGlassMesh_, carCabinMesh_;
     std::vector<char> carSeeInto_;
+    std::vector<float> carGlassOpacity_;
     std::vector<char> carOpenSeat_;   // nothing round the driver (a convertible), by slot
     // The agents drawn see-through this bake (nearest the player, with hysteresis).
     std::unordered_set<int> nearSwap_;

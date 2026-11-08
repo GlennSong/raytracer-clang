@@ -17290,3 +17290,62 @@ home's single-lamp room (no camera spot found); both take the same terms.
 **Owed:** the beacons' bulb and haze spheres (BeaconGlow, BeaconHaze) predate real beacon lights. Being transparent
 and not sprites, they draw through the glass path, which shows a pane's reflection and not its emission: grey-white
 shells. Removing them from the grammar is a lots tag bump.
+
+## ADR-0383 — Tinted bus and lobby glass, matte saloons, the window's room from the clusters, glass reflectance 2
+
+**Context.** Glenn, 2026-11-08, walking ADR-0382's build: the office and bus look good, but the bus windows should
+reflect the saloon; the bus seats "should probably be cloth or plastic and not reflect the surroundings"; bus and
+skyscraper-lobby glass should be tinted ("you can see straight through those windows"); the facade reflections "a
+bit overpowering on the buildings that reflect/raytrace them".
+
+**Diagnosis.**
+- The own window's room (mesh.frag `roomRadiance`) summed the 32-light list, which under clustered lights holds only
+  the sun: no lamp ever showed in a window from inside.
+- A see-into body (a bus, an open car) merged its saloon or cabin into the shell, so the seats wore the body's paint.
+
+**Decision.**
+- `roomRadiance` walks the pixel's cluster (`clusterCell`, now shared with evaluateLighting), and counts only lights
+  inside the viewer's box (`inViewerBox`, shared with the own-window test): the saloon's lamps, not the street's.
+- vehicles.lua puts a saloon and an open car's cabin in `interior`; the city draws a see-into body's interior group
+  always, in the cabin's matte material (roughness 0.9, not metallic).
+- `glass_opacity` per vehicle kind (vehicle_kit profile -> fleet record -> CarBodyRecipe::glassOpacity), used by the
+  city's clear glass, the bus door leaves and a commandeered car's glass. The bus: 0.95, ~62% through (cars keep
+  0.30, ~88%).
+- PartId::GlassClear (lobbies, storefronts, enterable buildings' panes) 0.24 -> 0.75: ~70% through. Applied at load,
+  no lots tag bump.
+- RT_GLASS_REFLECT default 3 -> 2: 3 was chosen when the glass reflected only the sky.
+- **Underwater at night** (Glenn: "the screen turns bright white"): composite.frag lit the water with the day model's
+  sky colours, display values the night's pre-exposure turned white. Under the physical sky the renderer pushes the
+  light coming down into the water (the harmonics' E/pi up, plus the sun's or moon's beam) in underwaterColor.w; the
+  water's scatter and the Snell window take their brightness from it, the window keeping the sky's hue.
+
+## ADR-0384 — Cloud wisps, a cirrus layer, the grain blur in low light only
+
+**Context.** Glenn, 2026-11-08: "the clouds are very solid looking and lack any of the wispiness of real clouds".
+
+**Decision** (clouds.frag, behind `wisps`; RT_CLOUD_WISPS=0 for the old clouds, no cirrus):
+- The detail's lookup is swirled by a low-frequency warp: a ~90 m-celled read of the detail volume, standing in for
+  Nubis' curl texture. It is strongest at the cloud's base.
+- The erosion is wispy at the base and billowy above (the fBm inverted over the lowest tenth, as Nubis), applied as a
+  remap so a thin edge is eaten whole.
+- Past where the fine detail fades (3.5-14 km), the warp's coarse read erodes the far banks.
+- Phase: a second, sharp forward lobe (g 0.8, a tenth) for the silver lining.
+- **Cirrus**: a thin sheet at 9 km, not marched, over the open sky only. Broad veils from the base volume, stretched
+  along one sweep and faintly streaked, drifting at 2.5x the deck's wind, at most half opaque. `cirrus` (0..1) is
+  the cover.
+- The level's `environment.clouds` takes `wisps` and `cirrus`; the day/night panel has sliders for both.
+- clouds_resolve.frag: ADR-0379's 3x3 grain blur fades in with the camera's exposure (none at 8, EV100 ~11; all of it
+  from 64, EV100 ~8). By day it was taking edge detail with the grain.
+
+**Tried and dropped:**
+- A smoothstep over the density, to make the fringe translucent. It only blurred the clouds.
+- Fine fibres alone for the cirrus. They came out as regular scratches.
+
+**Measured (river_town, 400 m, 10:00 and 17:30, old against new):**
+- The near cumulus edges are a little more broken. The change is modest.
+- Exaggerated values (swirl 0.25, erosion 2.5x) changed the shape little and added grain.
+- The cirrus is the most visible change, at its best lit by a low sun.
+
+**Owed:** the deck's outlines come from the base noise's ~1.4 km puffs. Erosion cuts only a thin band at their rim,
+so real wispiness needs the base shape itself (a finer, more broken base, or a higher-resolution detail volume and a
+true curl texture).

@@ -331,7 +331,7 @@ function kit.profile(o)
               rear_window = o.rear_window, front_window = o.front_window, saloon = o.saloon, sign = o.sign, signs = o.signs,
               level = o.level, grille_w = o.grille_w, open_top = o.open_top,
               cabin_back = o.cabin_back, rear_seat = o.rear_seat, truck_seating = o.truck_seating, cargo = o.cargo,
-              hip_back = o.hip_back, interior = o.interior, panels = o.panels }
+              hip_back = o.hip_back, interior = o.interior, panels = o.panels, glass_opacity = o.glass_opacity }
   P.axles = o.axles or { -(half - o.ro), half - o.fo }
   P.wheel_r = r
   P.clear = o.clear   -- the drawn ground clearance (vehicles.lua: the collision floor)
@@ -791,6 +791,9 @@ S.bus = function()
     windows = { side = { edge = 2.5, corner = 3, gasket = 0.03 }, windshield = { edge = 2.5, corner = 3, gasket = 0.04 },
                 back = { edge = 2.5, corner = 3 } },
     interior = false, truck_seating = true,
+    -- TINTED saloon glass (Glenn, 2026-11-08: "tint the bus windows a bit darker ... you can see straight through"):
+    -- ~60% of the view through, against a car's ~90% (mesh.frag's glass filter: 1 - 0.4 x opacity)
+    glass_opacity = 0.95,
     saloon = { floor_y = 0.36, seat_color = { 0.12, 0.18, 0.42 }, trim_color = { 0.55, 0.55, 0.52 } },
     sign = { 0, 2.98, half + 0.03 },
     -- (Glenn, 2026-11-06: "an exterior facing display that shows it and an interior facing display that shows the

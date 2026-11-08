@@ -280,8 +280,11 @@ RenderMaterial materialFor(PartId id, const Vec3& wallColor) {
             // behind it coming through (the transparent pass), both faces.
             // REFLECTIVE (Glenn, 2026-10-02): a little metal and a mirror-smooth face, so a pane catches the room
             // and the sky instead of vanishing -- still mostly see-through.
+            // TINTED like commercial glazing (Glenn, 2026-11-08: the skyscraper lobbies "you can see straight through
+            // those windows at the interior"): 0.75, read as absorption by mesh.frag's glass filter, passes ~70% (was
+            // 0.24, ~90%) -- a low-e storefront's light transmission
             m.albedo = {0.55, 0.66, 0.74}; m.metallic = 0.35f; m.roughness = 0.03f;
-            m.opacity = 0.24f; break;
+            m.opacity = 0.75f; break;
         case PartId::BeaconHaze:
             // The bulb's corona: larger, fainter, the soft red halo.
             m.albedo = {0.02, 0.02, 0.02}; m.metallic = 0.0f; m.roughness = 1.0f;

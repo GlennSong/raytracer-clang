@@ -7700,6 +7700,28 @@ void VulkanRenderer::Impl::recordCommandBuffer(VkCommandBuffer cmd, uint32_t ima
     cpush.underwaterColor[0] = static_cast<float>(underwater.color.x);
     cpush.underwaterColor[1] = static_cast<float>(underwater.color.y);
     cpush.underwaterColor[2] = static_cast<float>(underwater.color.z);
+    {
+        // THE LIGHT COMING DOWN INTO THE WATER, in engine units (E / pi on a level surface: the sky's harmonics up,
+        // and the sun's or the moon's beam), under the physical sky; 0: the old sky, whose colours are the light.
+        // composite.frag lit the water with the day model's sky colours, display values that the pre-applied night
+        // exposure turned white (Glenn, 2026-11-08: "going underwater at night the screen turns bright white")
+        float down = 0.0f;
+        if (cpuGlobals.counts[2] == 2) {
+            const float* s0 = cpuGlobals.skySH[0];
+            const float* s1 = cpuGlobals.skySH[1];
+            const float up[3] = {s0[0] * 0.282095f + s1[0] * 0.488603f, s0[1] * 0.282095f + s1[1] * 0.488603f,
+                                 s0[2] * 0.282095f + s1[2] * 0.488603f};
+            down = std::max(0.0f, 0.2126f * up[0] + 0.7152f * up[1] + 0.0722f * up[2]);
+            const GpuLight& l0 = cpuGlobals.lights[0];
+            if (cpuGlobals.counts[0] > 0 && static_cast<int>(l0.typeRange[0]) == 1) {
+                const float cosZ = std::max(0.0f, l0.directionInner[1]);
+                const float lum = 0.2126f * l0.colorOuter[0] + 0.7152f * l0.colorOuter[1] + 0.0722f * l0.colorOuter[2];
+                down += lum * l0.positionIntensity[3] * cosZ / 3.14159265f;
+            }
+            down = std::max(down, 1e-9f);
+        }
+        cpush.underwaterColor[3] = down;
+    }
     vkCmdPushConstants(cmd, compositePipelineLayout, VK_SHADER_STAGE_FRAGMENT_BIT,
                        0, sizeof(CompositePush), &cpush);
     vkCmdDraw(cmd, 3, 1, 0, 0);
@@ -8045,6 +8067,10 @@ void VulkanRenderer::Impl::drawFrame() {
         packMat4((cloudHistValid ? cloudPrevFlipVP : frameViewProj) * toCam, cu.prevViewProjection, /*flipY=*/false);
         cu.frame[0] = kHistory > 0.0f ? static_cast<float>(std::fmod(static_cast<double>(cloudFrames) * 0.6180339887, 1.0)) : 0.0f;
         cu.frame[1] = cloudHistValid && !jumped ? kHistory : 0.0f;
+        // the wisps and the cirrus (clouds.frag, ADR-0384); RT_CLOUD_WISPS=0 the old solid clouds, no cirrus (the A/B)
+        static const bool kNoWisps = [] { const char* e = std::getenv("RT_CLOUD_WISPS"); return e && e[0] == '0'; }();
+        cu.frame[2] = kNoWisps ? 0.0f : std::max(0.0f, cp.wisps);
+        cu.frame[3] = kNoWisps ? 0.0f : std::clamp(cp.cirrus, 0.0f, 1.0f);
         std::memcpy(cloudUboMapped[currentFrame], &cu, sizeof(cu));
         cloudPrevFlipVP = frameViewProj;
         std::memcpy(cloudPrevCam, cpuGlobals.cameraPosition, sizeof(cloudPrevCam));
@@ -9403,8 +9429,10 @@ void VulkanRenderer::setLights(const SceneLighting& lighting) {
     impl->cpuGlobals.ambient[0] = static_cast<float>(lighting.ambientTint.x) * amb;
     impl->cpuGlobals.ambient[1] = static_cast<float>(lighting.ambientTint.y) * amb;
     impl->cpuGlobals.ambient[2] = static_cast<float>(lighting.ambientTint.z) * amb;
-    // facade glass reflectance scale (mesh.frag): 3 by default, RT_GLASS_REFLECT=1 for the old glass
-    static const float glassReflect = [] { const char* e = std::getenv("RT_GLASS_REFLECT"); const float v = e ? static_cast<float>(std::atof(e)) : 3.0f; return v > 0.0f ? v : 3.0f; }();
+    // facade glass reflectance scale (mesh.frag): 2 by default, RT_GLASS_REFLECT=1 for the old glass. (3 was chosen
+    // when the reflections were the sky's alone; with the probes' and the rays' sharp street in it, Glenn, 2026-11-08:
+    // "a bit overpowering on the buildings that reflect/raytrace them")
+    static const float glassReflect = [] { const char* e = std::getenv("RT_GLASS_REFLECT"); const float v = e ? static_cast<float>(std::atof(e)) : 2.0f; return v > 0.0f ? v : 2.0f; }();
     impl->cpuGlobals.ambient[3] = glassReflect;
     // the far trees' self-shadow (mesh.frag impostorSelfShadow): RT_IMPOSTOR_SELF_SHADOW=0 for the A/B (z = 1: off)
     static const bool impSelfOff = [] { const char* e = std::getenv("RT_IMPOSTOR_SELF_SHADOW"); return e && std::string(e) == "0"; }();

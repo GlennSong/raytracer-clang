@@ -1162,6 +1162,8 @@ void DayNightSystem::render(FrameContext& ctx) {
                 ImGui::SliderFloat("Ambient##v", &vc.ambient, 0.0f, 2.0f);
                 ImGui::SliderFloat("Detail erosion##v", &vc.detailStrength,
                                    0.0f, 1.0f);
+                ImGui::SliderFloat("Wisps##v", &vc.wisps, 0.0f, 2.0f);       // (ADR-0384)
+                ImGui::SliderFloat("Cirrus##v", &vc.cirrus, 0.0f, 1.0f);
                 ImGui::SliderFloat("Phase g##v", &vc.phaseG, -0.9f, 0.9f);
                 ImGui::SliderFloat("Wind (m/s)##v", &vc.wind, 0.0f, 60.0f);
                 ImGui::SliderFloat("Noise scale##v", &vc.noiseScale,

@@ -546,7 +546,10 @@ TEST_CASE(fleet_bus_is_a_bus_you_can_see_into) {
         // its two door leaves apart from the body, each sliding back along the side (ADR-0356)
         CHECK(body.doorLeaves.size() == 2);
         for (const auto& leaf : body.doorLeaves) CHECK(leaf.slide.z < -0.8 && !leaf.body.vertices.empty());
-        CHECK(body.interior.vertices.empty());   // the saloon rides in the shell
+        // the saloon is its own matte part, not in the shell's paint (ADR-0383: the seats wore the clear coat), and its
+        // glass is tinted darker than a car's
+        CHECK(!body.interior.vertices.empty());
+        CHECK(body.glassOpacity > 0.5);
         const Real W = body.size.x, H = body.size.y, L = body.size.z;
         CHECK(!body.glass.vertices.empty());
         CHECK(body.hasDriverSeat);

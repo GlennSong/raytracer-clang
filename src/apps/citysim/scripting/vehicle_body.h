@@ -58,8 +58,8 @@ struct CarBodyRecipe {
     // THE GLASS, its own part for every slot. A see-into vehicle (the bus: `seeInto`) always draws it
     // clear; ordinary traffic draws it opaque and reflective, and clear only near the player (fleet v2).
     RenderMesh glass;
-    // The cabin, apart from the shell for ordinary traffic (drawn only near the player); a see-into
-    // vehicle has it in `mesh` and leaves this empty.
+    // The cabin, apart from the shell, in its own matte material: ordinary traffic's drawn only near the player, a
+    // see-into vehicle's (a bus's saloon, an open car's seats) always (ADR-0383).
     RenderMesh interior;
     // The MID-RANGE form (`mid`): the whole car, shell + dark glass + wheels, cheaper, drawn from `midFrom` metres out
     // (the near body, its glass and cabin stop there). Empty: the near body is drawn at every distance.
@@ -69,6 +69,9 @@ struct CarBodyRecipe {
     // band and the GPU crowd. Empty: the band's two-box stand-in.
     RenderMesh far;
     bool seeInto = false;
+    // `glass_opacity`: the clear glass's (a see-into or near car's), read as its absorption by mesh.frag's glass
+    // filter -- a bus's tinted saloon glass is darker than a car's clear side window
+    double glassOpacity = 0.30;
     bool openSeat = false;   // `open_seat`: nothing round the driver (a convertible): a crash throws them (ADR-0252)
     // Seat hip points (body-local), for drawing people IN the vehicle: the
     // driver, and one per passenger seat. Empty when the recipe has none.

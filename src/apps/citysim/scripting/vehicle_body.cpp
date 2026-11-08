@@ -1,4 +1,5 @@
 #include "vehicle_body.h"
+#include <algorithm>
 
 #include "../../../engine/scripting/lua_state.h"   // luaState() + the Lua C API (scripting-internal)
 #include "../../../engine/scripting/procgen_mesh.h"   // luaToMesh (mesh.car shells)
@@ -285,6 +286,9 @@ bool loadFleetCarBody(ScriptVM& vm, int slot, CarBodyRecipe& out,
         lua_pop(L, 1);
         lua_getfield(L, rec, "see_into");
         body.seeInto = lua_toboolean(L, -1) != 0;
+        lua_pop(L, 1);
+        lua_getfield(L, rec, "glass_opacity");
+        if (lua_isnumber(L, -1)) body.glassOpacity = std::clamp(lua_tonumber(L, -1), 0.0, 0.98);
         lua_pop(L, 1);
         lua_getfield(L, rec, "open_seat");
         body.openSeat = lua_toboolean(L, -1) != 0;

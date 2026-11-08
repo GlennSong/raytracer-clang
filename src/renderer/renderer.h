@@ -594,6 +594,11 @@ struct VolumetricCloudParams {
     // eats into cloud edges (0 = solid billows, ~0.6 = ragged wisps). Matches
     // the 0.35 the old inline-fbm erosion hardcoded.
     float detailStrength = 0.35f;
+    // WISPS (ADR-0384): how far the detail's lookup is swirled (Nubis' curl), with the wispy-to-billowy erosion, the
+    // translucent fringe, the far banks' coarse erosion and the silver-lining lobe; 0: the old solid edges
+    float wisps = 1.0f;
+    // THE CIRRUS (ADR-0384): the high ice layer's cover, 0..1 (0: none)
+    float cirrus = 0.35f;
     // CLOUD TYPES (ADR-0336; Schneider's Nubis): the weather map's G picks a type along an axis, the live weather's
     // [typeLo, typeHi] spread over it. Each type: its HEIGHT PROFILE as fractions of the deck (density rises from 0 at
     // profile[0] to full at [1], holds, and falls back to 0 between [2] and [3]), its density, how much the detail

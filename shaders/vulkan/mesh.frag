@@ -723,6 +723,18 @@ void applySurfaceRelief(uint id, vec3 worldPos, vec2 meshUV, float time,
                                            normal, rough);
 }
 
+// This pixel's froxel (clustered lights, ADR-0361): where its list of lights starts in clusterIndices, and how many
+void clusterCell(vec3 worldPos, out uint off, out uint n) {
+    float depth = -(g.view * vec4(worldPos, 1.0)).z;
+    int tx = clamp(int(gl_FragCoord.x / g.clusterDepth.z * float(g.clusterGrid.x)), 0, g.clusterGrid.x - 1);
+    int ty = clamp(g.clusterGrid.y - 1 - int(gl_FragCoord.y / g.clusterDepth.w * float(g.clusterGrid.y)), 0, g.clusterGrid.y - 1);
+    int sl = depth <= g.clusterDepth.x ? 0
+           : clamp(int(log(depth / g.clusterDepth.x) * g.clusterDepth.y * float(g.clusterGrid.z)), 0, g.clusterGrid.z - 1);
+    uint oc = clusterCells[(sl * g.clusterGrid.y + ty) * g.clusterGrid.x + tx];
+    off = oc & 0xFFFFFFu;
+    n = oc >> 24;
+}
+
 // (`indoor`: a room's surface, which takes its lights' bounce too -- roomBounce)
 vec3 evaluateLighting(vec3 worldPos, vec3 N, vec3 V, vec3 albedo,
                       float metallic, float roughness, vec3 f0, vec3 sunShadow, bool indoor) {
@@ -738,13 +750,8 @@ vec3 evaluateLighting(vec3 worldPos, vec3 N, vec3 V, vec3 albedo,
         for (int i = 0; i < count; ++i)
             if (int(g.lights[i].typeRange.x) == 1)
                 directLight += shadeLight(g.lights[i], worldPos, N, V, albedo, metallic, f0, a2, NdotV, sunShadow);
-        float depth = -(g.view * vec4(worldPos, 1.0)).z;
-        int tx = clamp(int(gl_FragCoord.x / g.clusterDepth.z * float(g.clusterGrid.x)), 0, g.clusterGrid.x - 1);
-        int ty = clamp(g.clusterGrid.y - 1 - int(gl_FragCoord.y / g.clusterDepth.w * float(g.clusterGrid.y)), 0, g.clusterGrid.y - 1);
-        int sl = depth <= g.clusterDepth.x ? 0
-               : clamp(int(log(depth / g.clusterDepth.x) * g.clusterDepth.y * float(g.clusterGrid.z)), 0, g.clusterGrid.z - 1);
-        uint oc = clusterCells[(sl * g.clusterGrid.y + ty) * g.clusterGrid.x + tx];
-        uint off = oc & 0xFFFFFFu, n = oc >> 24;
+        uint off, n;
+        clusterCell(worldPos, off, n);
         for (uint k = 0u; k < n; ++k) {
             Light light = clusterLights[clusterIndices[off + k]];
             directLight += shadeLight(light, worldPos, N, V, albedo, metallic, f0, a2, NdotV, sunShadow);
@@ -762,13 +769,37 @@ vec3 evaluateLighting(vec3 worldPos, vec3 N, vec3 V, vec3 albedo,
 // THE ROOM A WINDOW REFLECTS (the viewer's own glass, at night a dark mirror of the lit room): the light the
 // point lights near it throw (a floor's ceiling panels, staged as interiorPoints), as the radiance of the room's
 // surfaces they light -- irradiance times a room's average reflectance (0.6) over pi, half of it facing the glass.
+// (is p inside the viewer's box: the building they stand in, the cabin they ride; SceneLighting::viewerBox)
+bool inViewerBox(vec3 p) {
+    if (g.viewerBoxA.w <= 0.0) return false;
+    vec3 d = p - g.viewerBoxA.xyz;
+    vec2 u = g.viewerBoxB.xy;
+    return abs(dot(d.xz, u)) <= g.viewerBoxA.w && abs(dot(d.xz, vec2(-u.y, u.x))) <= g.viewerBoxB.z &&
+           abs(d.y) <= g.viewerBoxB.w;
+}
+
 vec3 roomRadiance(vec3 worldPos) {
+    // (the lights in the viewer's own box only -- a street lamp past a bus window is not the saloon; and from the
+    // pixel's cluster when the lights are clustered, where the 32 hold only the sun -- Glenn, 2026-11-08: "the bus
+    // windows should probably reflect the interior")
     vec3 e = vec3(0.0);
+    if (g.clusterGrid.w != 0) {
+        uint off, n;
+        clusterCell(worldPos, off, n);
+        for (uint k = 0u; k < n; ++k) {
+            Light light = clusterLights[clusterIndices[off + k]];
+            const int lt = int(light.typeRange.x);
+            if ((lt != 0 && lt != 3) || !inViewerBox(light.positionIntensity.xyz)) continue;
+            float dist = length(light.positionIntensity.xyz - worldPos);
+            e += light.colorOuter.rgb * light.positionIntensity.w * distanceAttenuation(dist, light.typeRange.y);
+        }
+        return e * (0.6 / PI) * 0.5;
+    }
     int count = min(g.counts.x, 32);
     for (int i = 0; i < count; ++i) {
         Light light = g.lights[i];
         const int lt = int(light.typeRange.x);
-        if (lt != 0 && lt != 3) continue;   // point and room lights only (the sun and spots are not the room)
+        if ((lt != 0 && lt != 3) || !inViewerBox(light.positionIntensity.xyz)) continue;   // point and room lights only
         float dist = length(light.positionIntensity.xyz - worldPos);
         e += light.colorOuter.rgb * light.positionIntensity.w * distanceAttenuation(dist, light.typeRange.y);
     }
@@ -1381,9 +1412,10 @@ void main() {
     // FACADE GLASS REFLECTS LIKE COATED CURTAIN-WALL GLASS (Glenn, 2026-10-16: the towers read dark and "a little
     // more matte rather than shiny"; he chose the 3x look from an A/B). The glass tints (curtainGlassColour,
     // glassGrey) are reflectances of 3-12% for the default pane; real office glass is 15-40%. Scaled here, not in
-    // the baked tints, so it rolls back without regrowing a city: RT_GLASS_REFLECT (default 3, 1 = the old glass)
-    // rides g.ambient.w. Only PartId::Glass/GlassLit are metallic 0.9 at roughness 0.08 (shape_grammar
-    // materialFor); car, train, water and interior glass are not metallic.
+    // the baked tints, so it rolls back without regrowing a city: RT_GLASS_REFLECT rides g.ambient.w (default 2 since
+    // the probes and rays put the sharp street in it, ADR-0383; 1 = the old glass). Only PartId::Glass/GlassLit are
+    // metallic 0.9 at roughness 0.08 (shape_grammar materialFor); car, train, water and interior glass are not
+    // metallic.
     if (metallic > 0.85 && roughness < 0.1) f0 = clamp(f0 * g.ambient.w, 0.0, 0.9);
 
     // Sun shadow (cascaded). viewDepth is the positive view-space depth; camera
@@ -1632,13 +1664,7 @@ void main() {
             // blue-grey and the sky's reflection laid over the rest -- a grey veil. And a window of the viewer's
             // own (the building they stand in, the train they ride: SceneLighting::viewerBox) reflects the dim
             // room behind them at clear glass's 4 %, not the bright sky outside.
-            bool own = false;
-            if (g.viewerBoxA.w > 0.0) {
-                vec3 d = inWorldPos - g.viewerBoxA.xyz;
-                vec2 u = g.viewerBoxB.xy;
-                own = abs(dot(d.xz, u)) <= g.viewerBoxA.w && abs(dot(d.xz, vec2(-u.y, u.x))) <= g.viewerBoxB.z &&
-                      abs(d.y) <= g.viewerBoxB.w;
-            }
+            bool own = inViewerBox(inWorldPos);
             // (an office window is DOUBLE GLAZED: four faces at 4 % each reflect about 15 % head-on -- what makes a
             // window read as glass from inside: the bright room and its lights faint in it; Glenn: "it just seems
             // like there's no glass there" at one face's 4 %)

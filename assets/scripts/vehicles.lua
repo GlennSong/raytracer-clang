@@ -568,15 +568,13 @@ local function kit_car(spec, color)
   local open = P.open_top or false
   -- A BUS IS MEANT TO BE SEEN INTO (Glenn: "we should see the npcs sitting on the bus. There should be a driver"): its
   -- saloon rides in the shell, its glass stays clear, its seats and doors are where riders are posed
+  -- ...in the CABIN's own matte material, never the shell's paint (Glenn, 2026-11-08: "the bus seats should probably
+  -- be cloth or plastic and not reflect the surroundings"): merged into the body they wore its clear coat
   if car.saloon then
-    shell[#shell + 1] = car.saloon
+    cabinParts[#cabinParts + 1] = car.saloon
     open = true
   end
-  local interior = nil
-  if #cabinParts > 0 then
-    if open then for _, cp in ipairs(cabinParts) do shell[#shell + 1] = cp end
-    else interior = mesh.merge(cabinParts) end
-  end
+  local interior = #cabinParts > 0 and mesh.merge(cabinParts) or nil
   -- (the parts' own normals, from P:to_parts' autosmooth: re-deriving them over the merged shell gave the lenses'
   -- folded skirts vertices whose faces cancel -- zero normals, the mesh audit's "badnormal")
   local body = mesh.merge(shell)
@@ -596,6 +594,7 @@ local function kit_car(spec, color)
     class = spec,
     glass = glass,
     see_into = open,
+    glass_opacity = P.glass_opacity,   -- (the kit's; nil: the city's clear 0.30)
     open_seat = open,   -- (ADR-0252: a crash throws a commandeered convertible's driver)
     driver_seat = car.driver_seat,
     rear_hip = car.rear_hip,
