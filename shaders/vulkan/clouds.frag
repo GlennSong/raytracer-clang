@@ -33,6 +33,10 @@ layout(set = 0, binding = 0) uniform CloudUniforms {
     vec4 typeParams[4];        // x density, y erosion, z anvil
     vec4 typeRange;            // x lo, y hi: the live weather's types
     vec4 windOffset;           // xy: the clouds' drift so far along the weather's wind (x, z m: ADR-0337)
+    // THE WEATHER MAP (ADR-0386): each type's heights, the map's square in the air, the shape noise's scale
+    vec4 typeHeights[4];       // x base, y top (m; top <= base: the deck's span)
+    vec4 mapRect;              // x originX, y originZ, z 1 / extent, w 1: the map places the clouds
+    vec4 shape;                // x the shape noise's frequency against noiseScale, yz the cirrus's sweep (x, z)
 } u;
 
 layout(set = 0, binding = 1) uniform sampler2D sceneDepth;
@@ -85,7 +89,38 @@ vec3 clWind() { return vec3(u.windOffset.x, 0.0, u.windOffset.y); }   // (the we
 // THE WEATHER MAP (ADR-0336): x the coverage field, y the cloud type at this point (the map's G spread over the live
 // weather's type range). Its own 2D texture, R the slice of the base volume the march used to read, so the sky keeps
 // its layout.
+// THE WEATHER MAP THAT PLACES THE CLOUDS (ADR-0386; engine/sky/cloud_map.h): x the footprint (the coverage here: 0
+// clear air .. 1 a cloud's heart), y the cell's type slot, z its own top as a fraction of its type's height; zero
+// past the map's square. Laid out in the air: the world plus the drift.
+vec3 clMap(vec2 xz) {
+    vec2 uv = (xz + clWind().xz - u.mapRect.xy) * u.mapRect.z;
+    if (any(lessThan(uv, vec2(0.0))) || any(greaterThan(uv, vec2(1.0)))) return vec3(0.0);
+    return textureLod(weatherMap, uv, 0.0).rgb;
+}
+bool clMapOn() { return u.mapRect.w > 0.5; }
+
+// A map cell's type at height y: x its profile's density there, y the type's density, z its erosion, w its anvil; and
+// `hf` the height within the cell (0 its base, 1 its own top). The slot is the cell's own (the map's G), between two
+// types only where the bilinear read crosses cells; its top shrinks with the cell (the map's B).
+vec4 clCellShape(float slot, float topFrac, float y, out float hf) {
+    const float a = clamp(slot, 0.0, 1.0) * 3.0;
+    const int i = min(int(a), 2);
+    const float f = a - float(i);
+    const vec4 P = mix(u.typeProfile[i], u.typeProfile[i + 1], f);
+    const vec4 Q = mix(u.typeParams[i], u.typeParams[i + 1], f);
+    const vec2 H = mix(u.typeHeights[i].xy, u.typeHeights[i + 1].xy, f);
+    const float top = H.x + (H.y - H.x) * clamp(topFrac, 0.05, 1.0);
+    hf = (y - H.x) / max(1.0, top - H.x);
+    if (hf <= 0.0 || hf >= 1.0) return vec4(0.0);
+    const float prof = smoothstep(P.x, max(P.y, P.x + 1e-3), hf) * (1.0 - smoothstep(P.z, max(P.w, P.z + 1e-3), hf));
+    return vec4(prof, Q.x, Q.y, Q.z);
+}
+
 vec2 clWeather(vec2 xz) {
+    if (clMapOn()) {
+        const vec3 m = clMap(xz);
+        return vec2(m.x, m.y);
+    }
     vec2 q = (xz + clWind().xz) * (u.params.z * 0.035);
     if (u.detail.w > 0.5) return vec2(textureLod(baseNoise, vec3(q.x, 0.37, q.y), 0.0).r, 2.0 / 3.0);   // (RT_CLOUD_TYPES=0: the old slice, cumulus)
     const vec4 w = textureLod(weatherMap, q, 0.0);
@@ -121,18 +156,40 @@ float clLocalCoverage(float weather) {
 float clDensity(vec3 p, float detailFade, float coarse) {
     float hf = clLayerHeight(p);
     if (hf <= 0.0 || hf >= 1.0) return 0.0;
-    // the weather here, and its cloud type's shape at this height (ADR-0336)
-    const vec2 wx = clWeather(p.xz);
-    const vec4 shape = clTypeShape(wx.y, hf);
+    // the weather here, and its cloud type's shape at this height (ADR-0336) -- with the map, the cell's own
+    // (ADR-0386): its footprint IS the coverage, its type and its height its own
+    vec4 shape;
+    float cov;
+    if (clMapOn()) {
+        const vec3 m = clMap(p.xz);
+        if (m.x <= 0.004) return 0.0;
+        shape = clCellShape(m.y, m.z, p.y, hf);
+        cov = m.x;
+    } else {
+        const vec2 wx = clWeather(p.xz);
+        shape = clTypeShape(wx.y, hf);
+        cov = clLocalCoverage(wx.x);
+    }
     float profile = shape.x;
     if (profile <= 0.0) return 0.0;
     vec3 wind = clWind();
-    vec3 q = (p + wind) * u.params.z;
+    vec3 q = (p + wind) * (u.params.z * max(u.shape.x, 1e-3));
     // Base shape: R = perlin-worley, GBA = worley fBm at rising frequency.
     vec4 nse = textureLod(baseNoise, q * 0.25, 0.0);   // (explicit: one level, and the march's derivatives are undefined)
     float lowFbm = nse.g * 0.625 + nse.b * 0.25 + nse.a * 0.125;
     float base = clamp(clRemap(nse.r, lowFbm - 1.0, 1.0, 0.0, 1.0), 0.0, 1.0);
-    float cov = clLocalCoverage(wx.x);
+    // THE HEIGHT PROFILE BEFORE THE COVERAGE (Nubis, with the map: ADR-0386): the noise thinned toward the cell's base
+    // and top, then cut by the footprint -- only the footprint's heart survives up there, so a cell rounds into a
+    // dome. Applied after, the cut was the same at every height: each cell stood as a cylinder, flat-sided.
+    if (clMapOn()) {
+        base *= profile;
+        profile = 1.0;
+        // ...and the footprint NARROWED as the cell rises (a cumulus is widest at its base and domes over, not a
+        // footprint stood up as a wall: Glenn, 2026-11-08, "the clouds still look boxy"): the soft footprint cut back
+        // by its height, so the sides lean in and the top is the heart's alone
+        const float narrow = 0.8 * smoothstep(0.0, 1.0, hf);
+        cov = clamp((cov - narrow) / max(1e-3, 1.0 - narrow), 0.0, 1.0);
+    }
     // the ANVIL (Nubis): near the top a cumulonimbus's coverage grows, so the tower spreads into a shelf
     cov = pow(cov, clRemap(clamp(hf, 0.7, 0.8), 0.7, 0.8, 1.0, mix(1.0, 0.5, shape.w)));
     float d = clamp((base - (1.0 - cov)) / max(1e-3, cov), 0.0, 1.0);
@@ -226,15 +283,31 @@ vec4 clCirrus(vec3 camPos, vec3 dir, vec3 sunDir) {
     const float kHeight = 9000.0;
     if (u.frame.w <= 0.0 || u.layer.w > 0.5 || dir.y < 0.02 || camPos.y > kHeight) return vec4(0.0);
     float t = (kHeight - camPos.y) / dir.y;
-    vec2 xz = (camPos + dir * t).xz + u.windOffset.xy * 2.5;
-    const vec2 a = vec2(0.8, 0.6);                               // the sweep the streaks lie along
-    vec2 uv = vec2(dot(xz, a), dot(xz, vec2(-a.y, a.x)));
-    vec4 pn = textureLod(baseNoise, vec3(uv.x / 24000.0, 0.61, uv.y / 9000.0), 0.0);       // the veils
-    float n = pn.r * 0.6 + pn.g * 0.25 + pn.b * 0.15;
-    float fib = textureLod(baseNoise, vec3(uv.x / 12000.0, 0.29, uv.y / 900.0), 0.0).r;    // the streaks in them
-    float cover = u.frame.w;
-    float c = smoothstep(1.0 - cover, 1.0 - cover + 0.45, n) * (0.6 + 0.4 * fib);
-    float alpha = c * 0.5 * (1.0 - smoothstep(60000.0, 140000.0, t));
+    vec3 P = camPos + dir * t;
+    float c, fade;
+    if (clMapOn()) {
+        // the VEILS from the weather map's A (ADR-0386: laid out with the clouds, nothing tiling), faded before the
+        // map's edge, faintly streaked along its sweep by a finer read
+        const vec2 a = u.shape.yz;
+        const vec2 xz = P.xz + u.windOffset.xy;
+        const vec2 uv = vec2(dot(xz, a), dot(xz, vec2(-a.y, a.x)));
+        const vec2 m = (xz - u.mapRect.xy) * u.mapRect.z;
+        const float veil = any(lessThan(m, vec2(0.0))) || any(greaterThan(m, vec2(1.0))) ? 0.0 : textureLod(weatherMap, m, 0.0).a;
+        const float fib = textureLod(baseNoise, vec3(uv.x / 12000.0, 0.29, uv.y / 900.0), 0.0).r;
+        c = veil * (0.55 + 0.45 * fib);
+        fade = 1.0 - smoothstep(24000.0, 38000.0, length(P.xz - camPos.xz));
+    } else {
+        vec2 xz = P.xz + u.windOffset.xy * 2.5;
+        const vec2 a = vec2(0.8, 0.6);                               // the sweep the streaks lie along
+        vec2 uv = vec2(dot(xz, a), dot(xz, vec2(-a.y, a.x)));
+        vec4 pn = textureLod(baseNoise, vec3(uv.x / 24000.0, 0.61, uv.y / 9000.0), 0.0);       // the veils
+        float n = pn.r * 0.6 + pn.g * 0.25 + pn.b * 0.15;
+        float fib = textureLod(baseNoise, vec3(uv.x / 12000.0, 0.29, uv.y / 900.0), 0.0).r;    // the streaks in them
+        float cover = u.frame.w;
+        c = smoothstep(1.0 - cover, 1.0 - cover + 0.45, n) * (0.6 + 0.4 * fib);
+        fade = 1.0 - smoothstep(60000.0, 140000.0, t);
+    }
+    float alpha = c * 0.5 * fade;
     vec3 sunLight = u.sunColor.rgb * u.sunColor.w;
     vec3 lit = sunLight * (0.6 * clPhase(dot(dir, sunDir), 0.6)) + u.skyAmbient.rgb;
     return vec4(lit * alpha, alpha);
@@ -278,7 +351,8 @@ void main() {
         float cov = 0.0;
         for (int k = 0; k < 8 && cov < 0.02; ++k) {
             float f = (float(k) + fract(clDither(gl_FragCoord.xy) + u.frame.x)) / 8.0;
-            cov = max(cov, clLocalCoverage(clWeather((camPos + dir * mix(t0, t1, f)).xz).x));
+            const vec2 wq = clWeather((camPos + dir * mix(t0, t1, f)).xz);
+            cov = max(cov, clMapOn() ? wq.x : clLocalCoverage(wq.x));
         }
         if (cov < 0.02) { outColor = CIRRUS_ONLY; return; }
     }
@@ -291,7 +365,9 @@ void main() {
     // times and the dither turns every mid-distance deck into weave.
     float budgetStep = (t1 - t0) / float(max(2, viewSteps));
     float slabThick = max(1.0, u.layer.y - u.layer.x);
-    float dsNear = min(budgetStep, slabThick / 12.0);
+    // (with the map the deck spans every type the weather has, up to the towers' 9 km: a twelfth of that is no step
+    // to resolve a cloud by, so the fine step stays a cloud's, ~40-120 m)
+    float dsNear = min(budgetStep, clMapOn() ? clamp(slabThick / 12.0, 40.0, 120.0) : slabThick / 12.0);
     float ds = dsNear;
     float mu = dot(dir, sunDir);
     float phase = clPhase(mu, u.march.z);

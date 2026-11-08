@@ -1432,12 +1432,14 @@ void main() {
     if (impViews && g.counts.x > 0 && g.terrainHorizon2.z < 0.5)   // (a far tree's own crown: its sun-side views, above)
         sunVis *= impostorSelfShadow(impFront, normalize(g.lights[0].directionInner.xyz), impLod);
     float strength = g.shadowParams.w;
-    float sunShadow = mix(1.0, sunVis, strength);   // scalar form for the shadow debug view (5)
+    // ...and the clouds' (ADR-0387): on the sun's light only, not the sky's -- a cloud's shadow is daylight still
+    float cloudVis = g.counts.x > 0 ? cloudShadow(inWorldPos, normalize(g.lights[0].directionInner.xyz)) : 1.0;
+    float sunShadow = mix(1.0, sunVis, strength) * cloudVis;   // scalar form for the shadow debug view (5)
     // Artistic shadow tint (ADR-0017): occluded direct light + ambient lerp toward
     // the tint; ambientStrength (shadowTint.w) controls how much the same shadow
     // darkens IBL (so a bright sky doesn't fill shadows back in). Tint 0 = plain
     // darkening, identical to the untinted scalar.
-    vec3 directShadow  = mix(vec3(1.0), g.shadowTint.rgb, (1.0 - sunVis) * strength);
+    vec3 directShadow  = mix(vec3(1.0), g.shadowTint.rgb, (1.0 - sunVis) * strength) * cloudVis;
     vec3 ambientShadow = mix(vec3(1.0), g.shadowTint.rgb, (1.0 - sunVis) * g.shadowTint.w);
 
     vec3 direct = evaluateLighting(inWorldPos, N, V, albedo, metallic, roughness, f0, directShadow,

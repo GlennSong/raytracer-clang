@@ -121,7 +121,8 @@ void main() {
         vec3 f0 = mix(vec3(0.04), albedo, metallic);
         vec3 sunShadow = vec3(1.0);
         if (g.counts.x > 0 && int(g.lights[0].typeRange.x) == 1 && dot(Nh, g.lights[0].directionInner.xyz) > 0.0)
-            sunShadow = vec3(sunVisible(H, Nh, normalize(g.lights[0].directionInner.xyz)));
+            sunShadow = vec3(sunVisible(H, Nh, normalize(g.lights[0].directionInner.xyz)) *
+                             cloudShadow(H, normalize(g.lights[0].directionInner.xyz)));   // (ADR-0387)
         vec3 direct = vec3(0.0);
         for (int i = 0; i < min(g.counts.x, 32); ++i)
             direct += shadeLight(g.lights[i], H, Nh, Vh, albedo, metallic, f0, a * a, NdotV, sunShadow);

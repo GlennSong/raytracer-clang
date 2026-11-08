@@ -26,7 +26,9 @@ namespace engine {
 enum class WeatherKind : int { Clear = 0, Fair = 1, Overcast = 2, Storm = 3 };
 
 struct WeatherTargets {
-    float coverage;   // fraction of the noise field above the cloud threshold
+    // the share of the sky under cloud: the weather map's (ADR-0386) -- it was the share of a noise field over a
+    // threshold, which read heavier than its number (fair's 0.32 filled the sky)
+    float coverage;
     float density;    // optical thickness (Beer term) — dark bases at 1.0
     float scale;      // noise domain scale — bigger cells for heavy decks
     float sunScale;   // multiplier on the sun's intensity (kills shadows too)
@@ -50,11 +52,13 @@ inline WeatherTargets weatherTargets(WeatherKind k) {
         // field, and 8 % still filled the sky with popcorn — a clear day is a
         // few wisps at most (Glenn, 2026-09-14: "can we see different weather?").
         case WeatherKind::Clear:    return {0.03f, 0.25f, 0.90f, 1.00f, 1.00f, 0.00f, 0.62f, 0.70f, 3.0f, 0.20f};   // fair-weather puffs, a light breeze
-        case WeatherKind::Overcast: return {0.80f, 0.60f, 1.90f, 0.55f, 1.35f, 0.60f, 0.00f, 0.40f, 9.0f, 0.40f};   // stratus deck, a fresh wind
+        case WeatherKind::Overcast: return {0.90f, 0.60f, 1.90f, 0.55f, 1.35f, 0.60f, 0.00f, 0.40f, 9.0f, 0.40f};   // stratus deck, a fresh wind
         case WeatherKind::Storm:    return {0.92f, 1.00f, 1.60f, 0.28f, 1.45f, 0.85f, 0.60f, 1.00f, 16.0f, 0.70f};   // towers, a gale gusting
         case WeatherKind::Fair:     break;
     }
-    return {0.32f, 0.45f, 1.10f, 1.00f, 1.05f, 0.08f, 0.40f, 0.75f, 6.0f, 0.35f};   // Fair — the everyday sky, a moderate breeze
+    // Fair -- the everyday sky, a moderate breeze: a fifth of it under cloud, as a fair-weather cumulus sky is
+    // (types 0.47..0.75: mostly cumulus, a little stratocumulus -- at 0.40 a sheet of stratocumulus hung overhead)
+    return {0.22f, 0.45f, 1.10f, 1.00f, 1.05f, 0.08f, 0.47f, 0.75f, 6.0f, 0.35f};
 }
 
 inline const char* weatherKindName(WeatherKind k) {
@@ -139,13 +143,13 @@ struct WeatherCycle {
     WeatherKind state = WeatherKind::Fair;
 
     // Live (eased) values — what the renderer shows THIS frame.
-    float coverage = 0.32f;
+    float coverage = 0.22f;
     float density  = 0.45f;
     float scale    = 1.10f;
     float sunScale = 1.00f;
     float ambientScale = 1.05f;
     float shadowSoften = 0.08f;
-    float typeLo = 0.40f, typeHi = 0.75f;
+    float typeLo = 0.47f, typeHi = 0.75f;
     float windSpeed = 6.0f, windGust = 0.35f;
 
     bool autoMode = false;

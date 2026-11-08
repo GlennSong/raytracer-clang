@@ -60,6 +60,21 @@ float terrainShadow(vec3 worldPos, vec3 L) {
     return smoothstep(h - 0.012, h + 0.012, L.y);
 }
 
+// THE CLOUDS' SHADOW (ADR-0387; Glenn, 2026-11-08, the weather plan's part B): the light's line from this point read
+// against the weather map where it crosses the deck's middle -- a cloud's footprint there takes up to `w` of the sun
+// (a heart ~85 %: the rest comes through and round it, scattered), less for a small shallow cell. Soft, as a
+// cloud's shadow on the ground is (the footprint's own edge, ~100 m). Above the deck, or past the map: none.
+float cloudShadow(vec3 worldPos, vec3 L) {
+    if (g.cloudShadow.w <= 0.0 || L.y <= 0.02) return 1.0;
+    float t = (g.cloudShadow2.z - worldPos.y) / L.y;
+    if (t <= 0.0) return 1.0;
+    vec2 uv = (worldPos.xz + L.xz * t + g.cloudShadow2.xy - g.cloudShadow.xy) * g.cloudShadow.z;
+    if (uv.x < 0.0 || uv.y < 0.0 || uv.x > 1.0 || uv.y > 1.0) return 1.0;
+    vec3 m = textureLod(cloudShadowMap, uv, 0.0).rgb;
+    float depth = 0.55 + 0.45 * clamp(m.b + m.g * 0.5, 0.0, 1.0);   // a deep or severe cell shades more
+    return 1.0 - g.cloudShadow.w * smoothstep(0.2, 0.7, m.r) * depth;
+}
+
 // THE TERRAIN NORMAL MAP (ADR-0205, engine/procgen/terrain_normal_map.h): beyond the distance where the CDLOD mesh
 // grows coarser than a texel, the ground lights by the baked slope of what it covers rather than its vertices' (16-64
 // m apart on a far tile) -- the erosion's gullies and spurs on the far mountains. Blended in over one level's range,

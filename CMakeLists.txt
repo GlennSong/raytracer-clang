@@ -251,10 +251,13 @@ add_library(engine_core STATIC
     src/engine/systems/render_system.cpp
     src/engine/systems/light_system.cpp
     src/engine/systems/probe_system.cpp
+    src/engine/systems/cloud_map_system.cpp
     src/engine/lights/light_kinds.cpp
     src/engine/lights/light_picker.cpp
     src/engine/lights/probe_sites.cpp
     src/engine/sky/sky_atmosphere.cpp
+    src/engine/sky/cloud_book.cpp
+    src/engine/sky/cloud_map.cpp
     src/engine/systems/xr_camera_system.cpp
     src/engine/systems/debug_draw_system.cpp
     src/engine/systems/dev_control_system.cpp
@@ -442,6 +445,7 @@ if(RT_ENABLE_SCRIPTING)
         src/engine/scripting/carry_items.cpp
         src/engine/scripting/trades_lua.cpp
         src/engine/scripting/lights_lua.cpp
+        src/engine/scripting/clouds_lua.cpp
         src/engine/scripting/street_props_spec.cpp
         src/engine/scripting/furniture_library_lua.cpp
         src/engine/scripting/furniture_models_lua.cpp
@@ -725,6 +729,7 @@ add_executable(run_tests
     tests/test_clock.cpp
     tests/test_control_channel.cpp
     tests/test_weather_cycle.cpp
+    tests/test_cloud_map.cpp
     tests/test_editor_home_view.cpp
     tests/test_vehicle_audio.cpp
     tests/test_particles.cpp

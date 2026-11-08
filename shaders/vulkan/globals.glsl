@@ -60,6 +60,9 @@ layout(set = 0, binding = 0) uniform Globals {
     vec4  skyPhysical4;       // the air for the aerial perspective: rgb Rayleigh /m, w its scale height;
     vec4  skyPhysical5;       //   x Mie extinction /m, y its scale height, z the level's aerial density
     vec4  skySH[9];           // the sky's light on surfaces: E / pi, order-2 spherical harmonics (ADR-0371)
+    vec4  cloudShadow;        // THE CLOUDS' SHADOW (ADR-0387; the weather map, binding 18): xy its corner in the air, z
+    vec4  cloudShadow2;       //   1/extent, w how much of the sun a cloud's heart takes (0: off); x, y the drift, z the
+                              //   height the sun's line is read at (the deck's middle)
 } g;
 #include "sky_physical.glsl"
 // the clustered lights (light_clusters.h): every point and spot, each froxel's offset (low 24 bits) | count (high 8),
@@ -74,7 +77,8 @@ layout(set = 0, binding = 3) uniform sampler2D brdfLut;       // split-sum BRDF 
 layout(set = 0, binding = 4) uniform sampler2D terrainHorizonMap;   // mountain shadows
 layout(set = 0, binding = 5) uniform sampler2D terrainNormalMap;    // the ground's slope per texel (ADR-0205)
 layout(set = 0, binding = 6) uniform sampler2D terrainCoverMap;     // its cover weights per texel (ADR-0208)
-layout(set = 0, binding = 7) uniform sampler2D terrainMacroMap;     // its convexity, wetness, rock tone, hardness (ADR-0208, -0209)
+layout(set = 0, binding = 7) uniform sampler2D terrainMacroMap;
+layout(set = 0, binding = 18) uniform sampler2D cloudShadowMap;     // the clouds' weather map (ADR-0386, -0387)     // its convexity, wetness, rock tone, hardness (ADR-0208, -0209)
 
 // THE REFLECTION PROBES (ADR-0373): their count (x), then each one's position (w 1: relit), box min, box max; and their
 // relit cubes, a cube array with GGX mips (roughness 0 .. 1 over 5)

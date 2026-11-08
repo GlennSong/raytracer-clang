@@ -58,7 +58,10 @@ void main() {
         // the sun's shadow where the frame's cascades reach (measured from the frame's camera), the mountains' beyond
         float viewDepth = -(g.view * vec4(P, 1.0)).z;
         float sv = g.counts.y > 0 ? computeShadow(P, N, viewDepth) : 1.0;
-        if (g.counts.x > 0) sv *= terrainShadow(P, normalize(g.lights[0].directionInner.xyz));
+        if (g.counts.x > 0) {
+            sv *= terrainShadow(P, normalize(g.lights[0].directionInner.xyz));
+            sv *= cloudShadow(P, normalize(g.lights[0].directionInner.xyz));   // (ADR-0387)
+        }
         vec3 direct = vec3(0.0);
         for (int i = 0; i < min(g.counts.x, 32); ++i)
             direct += shadeLight(g.lights[i], P, N, V, albedo, metallic, f0, a2, NdotV, vec3(sv));

@@ -45,6 +45,7 @@ public:
     void setSkyTables(const float* transmittance, int tw, int th, const float* multiScatter, int mw, int mh) override;
     void setTerrainHorizon(TextureHandle map, float originX, float originZ, float extent,
                            float encodeLo, float encodeHi) override;
+    void setCloudMap(TextureHandle map, double originX, double originZ, float extent) override;
     void setTerrainNormalMap(TextureHandle map, float originX, float originZ, float extent, float fadeStart,
                              float fadeEnd) override;
     void setTerrainSurfaceMaps(TextureHandle cover, TextureHandle macro, float originX, float originZ, float extent,

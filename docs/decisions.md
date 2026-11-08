@@ -17373,3 +17373,83 @@ the engine seems to save it".
 - The panel's Coverage and Density edit the knobs, greyed out while the weather runs, with a button to turn the
   weather off. Noise scale edits the authored value the weather's scale multiplies, so it holds under the weather.
   Edits stay session-only.
+
+## ADR-0386 — The weather map places the clouds (Nubis), cloud types as data
+
+**Context.** Glenn, 2026-11-08: "Clouds repeat too much and look dense in the sky ... What does a triple A game engine
+like RAGE or Decima do?" and "I would like to get us more in line with that Decima system". The weather map's
+coverage (ADR-0336) was a slice of the base noise. So the noise placed every cloud: each was a piece of the same
+5.7 km tile, as tall as the deck, and fair weather filled the sky. Plan: ~/.claude/plans/clouds-weather.md, part A.
+
+**Decision.**
+- **assets/scripts/clouds.lua** (CloudBook, sky/cloud_book.h; scripting/clouds_lua.cpp): the four types along the
+  axis, now each a kind of cloud. A type sets its base and top in metres, profile, density, erosion and anvil, a
+  cell's radius range and aspect, and how shallow its smallest cells are. It also sets the shape noise's scale and
+  the map's size. The level JSON's `types` override (no level used it) is gone.
+- **sky/cloud_map.h** bakes a map round the camera in the AIR (the world plus the drift; 80 km, 1024^2). Each type's
+  cells are scattered over its own grid by a hash of the square and the seed. A cell is a noise-warped soft
+  ellipse, its height growing with its size.
+  - The cells are a Poisson field: -ln(1 - coverage) footprints' worth per m^2, shared by the weather's type range.
+    So the share of the sky under cloud is the coverage asked (measured: 0.05 / 0.22 / 0.45 within a few points
+    on six seeds), and an overcast's stratus overlaps into a deck (0.84 at 0.85).
+  - Nothing tiles, and two bakes agree where they overlap (test_cloud_map).
+- **CloudMapSystem** (after DayNightSystem):
+  - It integrates the clouds' drift. The renderer used to, out of the engine's reach; RT_WIND_TIME still pins it.
+  - It copies the types onto the params and spans the deck over the weather's types.
+  - It rebakes the map on a worker when the camera drifts 8 km through the air or the weather moves, then hands
+    it over (Renderer::setCloudMap).
+  - Vulkan rewrites each frame's march set as that frame comes round. The old texture is retired four frames
+    later. (Fixed on the way: the march set's image array was 4 long with a fifth written past its end.)
+- **clouds.frag**, where the map is on:
+  - The footprint is the coverage, and the cell's type and own top set its height span.
+  - The height profile thins the noise before the coverage cut (Nubis), so a cell rounds into a dome. Cut first,
+    every cell stood as a flat-sided cylinder.
+  - The shape noise runs at shape_scale (3x), its lumps a cloud's.
+  - The fine step stays 40-120 m whatever the deck's span.
+- **Weather coverage is the share of the sky now:** fair 0.32 -> 0.22, overcast 0.80 -> 0.90.
+
+- **Domes, not boxes** (Glenn: "the clouds still look boxy"):
+  - In the march, the footprint narrows as the cell rises: up to 0.8 of it is cut by the top.
+  - The footprint's soft edge runs from a quarter of the radius out, so that narrowing curves the sides.
+  - Cumulus are full only to 30 % of their height.
+  - (The area share recalibrated to 0.41; up to 16 cells a square for an overcast.)
+- **The cirrus from the map** (its A channel): veils of value noise, stretched 4:1 along a sweep from the seed and
+  cut to the cirrus cover. They are faintly streaked by the base volume along that sweep and fade before the map's
+  edge. Nothing tiles.
+- **Fair** types 0.47..0.75 (mostly cumulus); stratocumulus radius 800-2000 m.
+- The grain blur (ADR-0384) starts from exposure 2: sunset's clouds were grainy.
+
+**Measured** (cloud lab, 11:00 and 17:20, against the old):
+- The sky reads as separate, rounded cumulus of many sizes over clear sky, with no repeat.
+- The clouds pass costs 0.7-2.5 ms (was 0.9-1.8). "above" is now inside the taller deck.
+- A bake takes 50-115 ms on a worker (half the cores), three times in a lab run. The lab's frame stalls are its
+  camera jumps (14 in the old run, 8 here).
+
+**Owed:**
+- A2: the weather presets as data.
+- Metal parity.
+
+## ADR-0387 — The clouds' shadow
+
+**Context.** The weather plan's part B (~/.claude/plans/clouds-weather.md): with the clouds placed by a map
+(ADR-0386), the physical sun can be shaded by them.
+
+**Decision.**
+- **lighting_common.glsl `cloudShadow`:** a point's line to the light (light 0: the sun, or the moon) is read
+  against the weather map where it crosses the deck's middle.
+  - A cloud's footprint there takes up to `shadow` of the light (clouds.lua, 0.85: a heart passes ~15 %), less for
+    a shallow or mild cell.
+  - It is soft by the footprint's own edge. There is none above the deck or past the map.
+  - It applies to the direct light only; a cloud's shadow is still daylight.
+- **Where:** mesh.frag (on top of the cascades and the mountains' horizon), the probes' relight, and the ray-traced
+  reflections' sun.
+- **Vulkan:** set 0 binding 18 is the weather map, rewritten per frame after its fence as the march's set is.
+  Globals cloudShadow/cloudShadow2 carry its square, the drift and the reading height. RT_CLOUD_SHADOW=0 turns it
+  off for the A/B.
+
+**Measured:** the lab's shadow debug view (5) shows soft cloud shadows across the island and the sea; the sea under
+the overhead cloud is in its shadow.
+
+**Owed:**
+- The sky's light under overcast: the deck's, not the clear sky's.
+- The exposure meter's ground reading under a cloud.

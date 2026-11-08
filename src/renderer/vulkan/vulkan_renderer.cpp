@@ -212,6 +212,8 @@ struct GlobalsUBO {
     float    skyPhysical5[4];
     // THE SKY'S LIGHT ON SURFACES (ADR-0371): its E / pi as nine spherical-harmonic coefficients (rgb each; mesh.frag)
     float    skySH[9][4];
+    float    cloudShadow[4];     // THE CLOUDS' SHADOW (ADR-0387, binding 18): xy the map's corner in the air, z 1/extent, w strength
+    float    cloudShadow2[4];    // xy the drift, z the height the sun's line is read at
 };
 
 // Volumetric-cloud uniforms (mirrors shader_types.h CloudUniforms; every
@@ -234,6 +236,10 @@ struct CloudUniformsGPU {
     float typeParams[4][4];         // x density, y erosion, z anvil, w unused
     float typeRange[4];             // x lo, y hi along the type axis (0 stratus .. 1 cumulonimbus), zw unused
     float wind[4];                  // xy the clouds' drift so far (x, z m: ADR-0337), zw unused
+    // THE WEATHER MAP (ADR-0386): each type's heights, the map's square in the air, the shape noise's scale
+    float typeHeights[4][4];        // x base, y top (m; top <= base: the deck's span)
+    float mapRect[4];               // x originX, y originZ, z 1 / extent, w 1: the map places the clouds
+    float shape[4];                 // x the shape noise's frequency against noiseScale, yz the cirrus's sweep
 };
 
 // Per-draw push constants for the forward pass (120 <= 128 B).
@@ -529,8 +535,14 @@ struct VulkanRenderer::Impl {
     VkDeviceMemory cloudDepthMemory = VK_NULL_HANDLE;
     VkImageView cloudDepthView = VK_NULL_HANDLE;
     GpuTexture cloudWeatherTex;
-    double cloudWindOffset[2] = {0.0, 0.0};   // the clouds' drift along the weather's wind (ADR-0337)
-    double cloudWindLast = 0.0;                              // the 2D weather map (cloudnoise::bakeWeather, ADR-0336)
+    // THE WEATHER MAP (ADR-0386, setCloudMap): its view (null: the baked static one), its square in the air, and the
+    // frames whose march set still binds the old one (rewritten as each frame comes round, after its fence)
+    VkImageView cloudMapView = VK_NULL_HANDLE;
+    float cloudMapRect[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+    bool cloudMapStale[MAX_FRAMES_IN_FLIGHT] = {};
+    bool cloudShadowStale[MAX_FRAMES_IN_FLIGHT] = {};   // ...and the globals' binding 18 (ADR-0387)
+    VkImageView cloudWeatherViewNow() const { return cloudMapView ? cloudMapView : cloudWeatherTex.view; }
+    // (the 2D weather map baked with the noise: cloudnoise::bakeWeather, ADR-0336 -- the static one, without a live map)
     VkRenderPass cloudCompositeRenderPass = VK_NULL_HANDLE;  // HDR load+blend
     VkFramebuffer cloudFramebuffer = VK_NULL_HANDLE;
     VkFramebuffer cloudCompositeFramebuffer = VK_NULL_HANDLE;
@@ -750,6 +762,8 @@ struct VulkanRenderer::Impl {
     // map's square). Default texture when none is bound, gated by the UBO's flag.
     VkImageView terrainNormalView = VK_NULL_HANDLE;
     void updateGlobalTerrainNormalDescriptor();
+    // binding 18, the clouds' map for their shadow (ADR-0387): one frame's set, after its fence
+    void writeGlobalCloudShadow(int frame);
     // ...and the cover and macro maps (bindings 6, 7; ADR-0208), the same way
     VkImageView terrainCoverView = VK_NULL_HANDLE, terrainMacroView = VK_NULL_HANDLE;
 
@@ -2130,12 +2144,13 @@ bool VulkanRenderer::Impl::createCloudResources() {
     // mip-aware REPEAT sampler; depth + the overlay use the CLAMP composite one.
     for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
         VkDescriptorBufferInfo ubo{cloudUboBuffers[i], 0, sizeof(CloudUniformsGPU)};
-        std::array<VkDescriptorImageInfo, 4> imgs{};
+        std::array<VkDescriptorImageInfo, 5> imgs{};   // (was 4, with imgs[4] written past its end)
         imgs[0] = {compositeSampler, depthView, VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL};
         imgs[1] = {textureSampler, cloudBaseView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
         imgs[2] = {textureSampler, cloudDetailView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
         imgs[3] = {textureSampler, cloudBaseView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};   // (binding 4: the resolve's; unread here)
-        imgs[4] = {textureSampler, cloudWeatherTex.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};   // the weather map
+        imgs[4] = {textureSampler, cloudWeatherViewNow(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};   // the weather map
+        cloudMapStale[i] = false;
         std::array<VkWriteDescriptorSet, 6> writes{};
         writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         writes[0].dstSet = cloudMarchSets[i];
@@ -4016,7 +4031,7 @@ bool VulkanRenderer::Impl::createSyncObjects() {
 }
 
 bool VulkanRenderer::Impl::createDescriptorSetLayout() {
-    std::array<VkDescriptorSetLayoutBinding, 18> bindings{};
+    std::array<VkDescriptorSetLayoutBinding, 19> bindings{};
     bindings[0].binding = 0;   // global UBO
     bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;   // (slots: the frame's, the probe faces': ADR-0372)
     bindings[0].descriptorCount = 1;
@@ -4062,6 +4077,10 @@ bool VulkanRenderer::Impl::createDescriptorSetLayout() {
     bindings[17].binding = 17;
     bindings[17].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     bindings[17].descriptorCount = 1;
+    // the clouds' weather map, for their shadow (ADR-0387)
+    bindings[18].binding = 18;
+    bindings[18].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    bindings[18].descriptorCount = 1;
     // every binding is the compute passes' too: probe_relight.comp lights a probe as mesh.frag lights a surface
     for (VkDescriptorSetLayoutBinding& b : bindings) b.stageFlags |= VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_COMPUTE_BIT;
     VkDescriptorSetLayoutCreateInfo info{};
@@ -4270,7 +4289,7 @@ bool VulkanRenderer::Impl::createDescriptorPool() {
     sizes[2].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;   // the clustered lights' three buffers, the probes'
     sizes[2].descriptorCount = MAX_FRAMES_IN_FLIGHT * 4;
     sizes[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;   // shadow map + env + BRDF LUT + horizon + 3 terrain maps
-    sizes[1].descriptorCount = MAX_FRAMES_IN_FLIGHT * 13;   // (+ the probes' cube array)   // + the sky view + transmittance + the aerial volume's two + the cube
+    sizes[1].descriptorCount = MAX_FRAMES_IN_FLIGHT * 14;   // (+ the clouds' map for their shadow, ADR-0387)   // (+ the probes' cube array)   // + the sky view + transmittance + the aerial volume's two + the cube
     VkDescriptorPoolCreateInfo info{};
     info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
     info.poolSizeCount = static_cast<uint32_t>(sizes.size());
@@ -4407,6 +4426,24 @@ void VulkanRenderer::Impl::updateGlobalTerrainNormalDescriptor() {
             write.pImageInfo = &img;
             vkUpdateDescriptorSets(device, 1, &write, 0, nullptr);
         }
+    for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) writeGlobalCloudShadow(i);   // (binding 18 needs a view too)
+}
+
+void VulkanRenderer::Impl::writeGlobalCloudShadow(int frame) {
+    if (!defaultTexture.view || !brdfLutSampler) return;
+    VkDescriptorImageInfo img{};
+    img.sampler = brdfLutSampler;   // clamp + linear
+    img.imageView = cloudMapView ? cloudMapView : defaultTexture.view;
+    img.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    VkWriteDescriptorSet write{};
+    write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    write.dstSet = descriptorSets[frame];
+    write.dstBinding = 18;
+    write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    write.descriptorCount = 1;
+    write.pImageInfo = &img;
+    vkUpdateDescriptorSets(device, 1, &write, 0, nullptr);
+    cloudShadowStale[frame] = false;
 }
 
 // bindings 11 (the sky view, GENERAL) and 12 (the transmittance table): the default texture until the sky has them
@@ -7927,6 +7964,22 @@ void VulkanRenderer::Impl::drawFrame() {
     // light: a noon street ~10^4, a moonlit one ~10^-2, far past what fp16 keeps). The composite then exposes by 1.
     // RT_PREEXPOSE=0: the old order (exposure in the composite), the A/B.
     cpuGlobals.cameraPosition[3] = preExposure();
+    // THE CLOUDS' SHADOW (ADR-0387): the weather map's square and the drift, read where the sun's line crosses the
+    // deck's middle; off without a map or the deck
+    {
+        const VolumetricCloudParams& cp = cloudParams;
+        static const bool kNoCloudShadow = [] { const char* e = std::getenv("RT_CLOUD_SHADOW"); return e && e[0] == '0'; }();
+        const bool on = cloudMapView && cloudMapRect[3] > 0.5f && cloudsActive && !kNoCloudShadow;   // (RT_CLOUD_SHADOW=0: the A/B)
+        cpuGlobals.cloudShadow[0] = cloudMapRect[0];
+        cpuGlobals.cloudShadow[1] = cloudMapRect[1];
+        cpuGlobals.cloudShadow[2] = cloudMapRect[2];
+        cpuGlobals.cloudShadow[3] = on ? cp.shadow : 0.0f;
+        cpuGlobals.cloudShadow2[0] = static_cast<float>(cp.driftX);
+        cpuGlobals.cloudShadow2[1] = static_cast<float>(cp.driftZ);
+        cpuGlobals.cloudShadow2[2] = 0.5f * (cp.bottom + cp.top);
+        cpuGlobals.cloudShadow2[3] = 0.0f;
+        if (cloudShadowStale[currentFrame]) writeGlobalCloudShadow(currentFrame);
+    }
     // Upload this frame's globals into its persistently mapped UBO.
     std::memcpy(globalsMapped[currentFrame], &cpuGlobals, sizeof(GlobalsUBO));
     // THE PROBES for mesh.frag (ADR-0373/0374): count and the plan grid's corner and cell, its size, then each one's
@@ -8041,8 +8094,31 @@ void VulkanRenderer::Impl::drawFrame() {
         }
         cu.typeRange[0] = cp.typeLo;
         cu.typeRange[1] = cp.typeHi;
-        cu.wind[0] = static_cast<float>(cloudWindOffset[0]);
-        cu.wind[1] = static_cast<float>(cloudWindOffset[1]);
+        cu.wind[0] = static_cast<float>(cp.driftX);   // (CloudMapSystem's, ADR-0386)
+        cu.wind[1] = static_cast<float>(cp.driftZ);
+        for (int k = 0; k < 4; ++k) {
+            cu.typeHeights[k][0] = cp.types[static_cast<std::size_t>(k)].base;
+            cu.typeHeights[k][1] = cp.types[static_cast<std::size_t>(k)].top;
+            cu.typeHeights[k][2] = cu.typeHeights[k][3] = 0.0f;
+        }
+        std::memcpy(cu.mapRect, cloudMapRect, sizeof(cu.mapRect));
+        cu.shape[0] = cp.shapeScale;
+        cu.shape[1] = cp.cirrusSweepX;
+        cu.shape[2] = cp.cirrusSweepZ;
+        cu.shape[3] = 0.0f;
+        // a new weather map: this frame's march set takes it now (its fence is behind us)
+        if (cloudMapStale[currentFrame]) {
+            VkDescriptorImageInfo wi{textureSampler, cloudWeatherViewNow(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+            VkWriteDescriptorSet wr{};
+            wr.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            wr.dstSet = cloudMarchSets[currentFrame];
+            wr.dstBinding = 5;
+            wr.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            wr.descriptorCount = 1;
+            wr.pImageInfo = &wi;
+            vkUpdateDescriptorSets(device, 1, &wr, 0, nullptr);
+            cloudMapStale[currentFrame] = false;
+        }
         // RT_CLOUD_TYPES=0: the base volume's slice and one profile, as before (the A/B)
         static const bool kNoTypes = [] { const char* e = std::getenv("RT_CLOUD_TYPES"); return e && e[0] == '0'; }();
         cu.detail[3] = kNoTypes ? 1.0f : 0.0f;
@@ -9277,6 +9353,18 @@ void VulkanRenderer::setTerrainHorizon(TextureHandle map, float originX, float o
     impl->updateGlobalHorizonDescriptor();
 }
 
+void VulkanRenderer::setCloudMap(TextureHandle map, double originX, double originZ, float extent) {
+    GpuTexture* t = impl->textures.get(map);
+    const bool on = t && t->view && extent > 0.0f;
+    impl->cloudMapView = on ? t->view : VK_NULL_HANDLE;
+    impl->cloudMapRect[0] = static_cast<float>(originX);
+    impl->cloudMapRect[1] = static_cast<float>(originZ);
+    impl->cloudMapRect[2] = on ? 1.0f / extent : 0.0f;
+    impl->cloudMapRect[3] = on ? 1.0f : 0.0f;
+    for (bool& s : impl->cloudMapStale) s = true;
+    for (bool& s : impl->cloudShadowStale) s = true;
+}
+
 void VulkanRenderer::setTerrainNormalMap(TextureHandle map, float originX, float originZ, float extent,
                                          float fadeStart, float fadeEnd) {
     GpuTexture* t = impl->textures.get(map);
@@ -10220,20 +10308,7 @@ void VulkanRenderer::endFrame() {
     impl->cpuGlobals.wind2[1] = 2.5f;   // height
     impl->cpuGlobals.wind2[2] = 0.12f * std::clamp(wspd / 6.0f, 0.25f, 2.6f);   // amplitude
     impl->cpuGlobals.wind2[3] = wspd;
-    // the clouds drift along the same wind, integrated so a veering wind turns the drift instead of swinging the sky
-    // (the deck's own `wind` is its speed at 6 m/s on the ground; with RT_WIND_TIME pinned, a fixed offset)
-    {
-        const double cloudSpeed = static_cast<double>(impl->cloudParams.wind) * (wspd / 6.0);
-        if (kPinnedWind >= 0.0f) {
-            impl->cloudWindOffset[0] = windDir[0] * cloudSpeed * kPinnedWind;
-            impl->cloudWindOffset[1] = windDir[1] * cloudSpeed * kPinnedWind;
-        } else {
-            const double dt = std::clamp(static_cast<double>(windTime) - impl->cloudWindLast, 0.0, 0.25);
-            impl->cloudWindOffset[0] += windDir[0] * cloudSpeed * dt;
-            impl->cloudWindOffset[1] += windDir[1] * cloudSpeed * dt;
-        }
-        impl->cloudWindLast = windTime;
-    }
+    // (the clouds' drift along the same wind is CloudMapSystem's now, ADR-0386: VolumetricCloudParams::driftX/Z)
 #ifdef RT_ENABLE_IMGUI
     // Finalize the ImGui draw data (built by systems during render) before the
     // command buffer records it inside the composite pass.

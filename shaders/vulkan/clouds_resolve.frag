@@ -45,8 +45,9 @@ void main() {
     // average a third of the noise they did. (The clamp box above stays the raw neighbourhood's.)
     // ...in low light only (ADR-0384): by day it took the wisps' edge detail with the grain (Glenn: "the clouds are
     // very solid looking"). By the camera's exposure (cameraPosition.w, pre-applied: ~0.7 at noon, hundreds at
-    // night): none at 8 and under (EV100 ~11, early dusk), all of it from 64 (EV100 ~8).
-    float lowLight = smoothstep(3.0, 6.0, log2(max(u.cameraPosition.w, 1e-6)));
+    // night): none at 2 and under (EV100 ~13, the afternoon), all of it from 32 (EV100 ~9) -- the sunset's clouds
+    // were grainy at 8 (ADR-0386).
+    float lowLight = smoothstep(1.0, 5.0, log2(max(u.cameraPosition.w, 1e-6)));
     cur = mix(cur, sum / 9.0, 0.7 * lowLight);
     // WHERE THIS PIXEL'S CLOUD WAS: the point along its ray at ITS cloud's depth (ADR-0334; the march's second target), or
     // with none, at the deck's middle height -- or the scene, nearer -- seen through last frame's camera (the flipped

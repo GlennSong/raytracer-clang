@@ -603,15 +603,27 @@ struct VolumetricCloudParams {
     // [typeLo, typeHi] spread over it. Each type: its HEIGHT PROFILE as fractions of the deck (density rises from 0 at
     // profile[0] to full at [1], holds, and falls back to 0 between [2] and [3]), its density, how much the detail
     // erodes it, and its anvil (the top spreading out, cumulonimbus). Ordered along the axis; neighbours blend.
-    // The level's "environment.clouds.types" replaces them, "typeRange" sets the range when the weather is off.
-    struct CloudType { float profile[4]; float density; float erosion; float anvil; };
+    // "typeRange" sets the range when the weather is off. With the weather map (ADR-0386) the types are clouds.lua's
+    // (CloudMapSystem copies them in) and stand at their own heights, base..top metres, the profile over that span;
+    // top <= base: the deck's (bottom..top) as before.
+    struct CloudType { float profile[4]; float density; float erosion; float anvil; float base = 0.0f, top = 0.0f; };
     std::array<CloudType, 4> types{{
         {{0.00f, 0.08f, 0.22f, 0.34f}, 0.70f, 0.50f, 0.0f},   // stratus: a low flat sheet
         {{0.00f, 0.14f, 0.42f, 0.62f}, 0.85f, 0.80f, 0.0f},   // stratocumulus: lumpy, low
         {{0.00f, 0.15f, 0.55f, 1.00f}, 1.00f, 1.00f, 0.0f},   // cumulus: the deck's old single profile
         {{0.00f, 0.05f, 0.85f, 1.00f}, 1.60f, 0.60f, 1.0f},   // cumulonimbus: the full deck, an anvil
     }};
-    float typeLo = 0.40f, typeHi = 0.75f;   // Fair's: stratocumulus to cumulus
+    float typeLo = 0.47f, typeHi = 0.75f;   // Fair's: mostly cumulus, a little stratocumulus
+    // THE CLOUDS' DRIFT so far along the weather's wind (x, z m; ADR-0337), integrated by CloudMapSystem: the march
+    // samples the air at the world plus this, and the weather map is laid out in that air (ADR-0386)
+    double driftX = 0.0, driftZ = 0.0;
+    // the shape noise's frequency against noiseScale (clouds.lua shape_scale with the map: the noise shapes a cell's
+    // inside, not the sky); 1 without
+    float shapeScale = 1.0f;
+    // the direction the cirrus streaks lie along (x, z; the weather map's, cloudCirrusSweep)
+    float cirrusSweepX = 0.8f, cirrusSweepZ = 0.6f;
+    // THE CLOUDS' SHADOW (ADR-0387): how much of the sun a cloud's heart takes (clouds.lua `shadow`; 0: none)
+    float shadow = 0.0f;
 };
 
 // Aerial-perspective fog (ADR-0016 environment). Lit color lerps toward `color`
@@ -898,6 +910,10 @@ public:
     // RGB floats row by row. Uploaded when the atmosphere changes; the sky-view pass samples them each frame.
     virtual void setSkyTables(const float* /*transmittance*/, int /*tw*/, int /*th*/, const float* /*multiScatter*/,
                               int /*mw*/, int /*mh*/) {}
+    // THE WEATHER MAP (ADR-0386, engine/sky/cloud_map.h): an RGBA8 texture -- footprint, type, the cell's height --
+    // over the square [originX, originX + extent) x [originZ, ...) of the AIR (the world plus the clouds' drift).
+    // The march places its clouds by it. An invalid handle: the noise places them, as before. No-op by default.
+    virtual void setCloudMap(TextureHandle /*map*/, double /*originX*/, double /*originZ*/, float /*extent*/) {}
     virtual void setTerrainHorizon(TextureHandle /*map*/, float /*originX*/,
                                    float /*originZ*/, float /*extent*/,
                                    float /*encodeLo*/, float /*encodeHi*/) {}

@@ -8615,19 +8615,7 @@ bool LevelLoader::load(const std::string& path,
             vc.detailStrength = c.value("detailStrength", vc.detailStrength);
             vc.wisps = c.value("wisps", vc.wisps);
             vc.cirrus = c.value("cirrus", vc.cirrus);
-            // the cloud types (ADR-0336): up to four, along the type axis; and the range when the weather is off
-            if (c.contains("types") && c["types"].is_array()) {
-                std::size_t k = 0;
-                for (const auto& tj : c["types"]) {
-                    if (k >= vc.types.size() || !tj.is_object()) break;
-                    auto& ty = vc.types[k++];
-                    if (tj.contains("profile") && tj["profile"].is_array() && tj["profile"].size() == 4)
-                        for (int i = 0; i < 4; ++i) ty.profile[i] = tj["profile"][i].get<float>();
-                    ty.density = tj.value("density", ty.density);
-                    ty.erosion = tj.value("erosion", ty.erosion);
-                    ty.anvil = tj.value("anvil", ty.anvil);
-                }
-            }
+            // the type range when the weather is off (ADR-0336; the types themselves are clouds.lua's, ADR-0386)
             if (c.contains("typeRange") && c["typeRange"].is_array() && c["typeRange"].size() == 2) {
                 vc.typeLo = c["typeRange"][0].get<float>();
                 vc.typeHi = c["typeRange"][1].get<float>();
